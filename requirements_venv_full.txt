@@ -1,0 +1,10 @@
+beautifulsoup4>=4.12
+lxml>=5.2
+numpy>=1.26
+pandas>=2.2
+requests>=2.31
+scipy>=1.11
+statsmodels>=0.14
+linearmodels>=5.4
+pyarrow>=15.0
+urllib3>=2.2

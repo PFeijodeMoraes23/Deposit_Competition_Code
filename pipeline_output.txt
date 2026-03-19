@@ -1,0 +1,1049 @@
+Starting COSIF Processing ...
+Reading 861 files with 8 threads ...
+  ... 100/861 files read
+  ... 200/861 files read
+  ... 300/861 files read
+  ... 400/861 files read
+  ... 500/861 files read
+  ... 600/861 files read
+  ... 700/861 files read
+  ... 800/861 files read
+Read complete: 24,123,319 rows in 89.3s
+Processing 29 taxonomy groups ...
+  [1/29] AGENCIAS DE FOMENTO OU DE DESENVOLVIMENTO: 268 rows
+  [2/29] ASSOCIACAO DE POUPANCA E EMPRESTIMOS: 142 rows
+  [3/29] BANCO DO BRASIL - BANCO MULTIPLO: 153 rows
+  [4/29] BANCO NACIONAL DE DESENVOLVIMENTO ECONOMICO SOCIAL: 153 rows
+  [5/29] BANCOS COMERCIAIS: 2,133 rows
+  [6/29] BANCOS COMERCIAIS COOPERATIVOS: 25 rows
+  [7/29] BANCOS COMERCIAIS ESTRAGEIROS - FILIAL PAIS: 601 rows
+  [8/29] BANCOS DE C┬MBIO: 349 rows
+  [9/29] BANCOS DE DESENVOLVIMENTO: 362 rows
+  [10/29] BANCOS DE INVESTIMENTO: 1,345 rows
+  [11/29] BANCOS MULTIPLOS: 18,571 rows
+  [12/29] BANCOS MULTIPLOS COOPERATIVOS: 256 rows
+  [13/29] CAIXA ECONOMICA FEDERAL: 153 rows
+  [14/29] COMPANHIAS HIPOTECARIAS: 426 rows
+  [15/29] CONGLOMERADO FINANCEIRO: 7,461 rows
+  [16/29] CONGLOMERADO PRUDENCIAL: 15,923 rows
+  [17/29] COOPERATIVAS DE CREDITO: 100,776 rows
+  [18/29] IF EM LIQUIDACAO EXTRAJUDICIAL: 190 rows
+  [19/29] INSTITUICOES DE PAGAMENTO: 3,938 rows
+  [20/29] SOC DISTRIBUIDORA DE TITULOS E VALORES MOBILIARIOS: 1,976 rows
+  [22/29] SOC. CORRETORA DE TITULOS E VALORES MOBILIARIOS: 2,793 rows
+  [23/29] SOC. DE CREDITO, FINANCIAMENTO E INVESTIMENTO: 7,294 rows
+  [24/29] SOCIEDADE DE CREDITO AO MICROEMPREENDEDOR: 526 rows
+  [25/29] SOCIEDADES DE ARRENDAMENTO MERCANTIL: 1,640 rows
+  [26/29] SOCIEDADES DE CREDITO IMOBILIARIO: 22 rows
+  [27/29] SOCIEDADES DE CREDITO IMOBILIARIO - REPASSADORA: 12 rows
+  [28/29] Sociedade de CrΘdito Direto: 1,749 rows
+  [29/29] Sociedade de EmprΘstimo entre Pessoas: 71 rows
+Done. Total time: 192.5s (read 89.3s + process 103.2s)
+C:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\Code\Egan_et_al_2025_Rep\cosif_process_2.py:126: FutureWarning: The behavior of DataFrame concatenation with empty or all-NA entries is deprecated. In a future version, this will no longer exclude empty or all-NA columns when determining the result dtypes. To retain the old behavior, exclude the relevant entries before the concat operation.
+  df_all = pd.concat(frames, ignore_index=True)
+C:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\Code\Egan_et_al_2025_Rep\cosif_process_2.py:176: FutureWarning: The default of observed=False is deprecated and will be changed to True in a future version of pandas. Pass observed=False to retain current behavior or observed=True to adopt the future default and silence this warning.
+  .groupby(["CNPJ", "AnoMes"])["Despesa_Captacao_Marginal"]
+C:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\Code\Egan_et_al_2025_Rep\cosif_process_2.py:188: FutureWarning: The default of observed=False is deprecated and will be changed to True in a future version of pandas. Pass observed=False to retain current behavior or observed=True to adopt the future default and silence this warning.
+  df_q.groupby("CNPJ")["Estoque_Total_Q"].shift(1)
+C:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\Code\Egan_et_al_2025_Rep\cosif_process_2.py:221: FutureWarning: The default of observed=False is deprecated and will be changed to True in a future version of pandas. Pass observed=False to retain current behavior or observed=True to adopt the future default and silence this warning.
+  .groupby(["CNPJ", "AnoMes"])["Desp_Prepago_Marginal"]
+C:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\Code\Egan_et_al_2025_Rep\cosif_process_2.py:233: FutureWarning: The default of observed=False is deprecated and will be changed to True in a future version of pandas. Pass observed=False to retain current behavior or observed=True to adopt the future default and silence this warning.
+  df_q.groupby("CNPJ")["Estoque_Prepago_Q"].shift(1)
+cosif_process_2.py -- Collapsing monthly COSIF to quarterly ...
+Done in 1.8s. Saved 55,210 obs to:
+  C:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\Egan_et_al_2025_Rep\processed\COSIF_PROCESSED\cosif_quarterly_institution.csv
+  C:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\Egan_et_al_2025_Rep\processed\COSIF_PROCESSED\cosif_quarterly_institution.parquet
+  Institutions: 1834
+  Quarters:     51
+  Rate coverage: 41,290
+C:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\Code\Egan_et_al_2025_Rep\egan_panel_build.py:456: FutureWarning: The behavior of DataFrame concatenation with empty or all-NA entries is deprecated. In a future version, this will no longer exclude empty or all-NA columns when determining the result dtypes. To retain the old behavior, exclude the relevant entries before the concat operation.
+  df_cosif = pd.concat(frames, ignore_index=True)
+Step 1/6: Loading IF-Data Prudential Conglomerates ...
+Step 2/6: Loading macro series (Selic, CDI, TR) ...
+Step 3/6: Loading conglomerate mapping (IF-Data List) ...
+Step 4/6: Loading COSIF processed data ...
+         Aggregating COSIF to conglomerate level ...
+Step 5/6: Building panel ...
+Step 6/6: Saving ...
+
+============================================================
+Panel saved: C:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\Egan_et_al_2025_Rep\processed\PANEL_INTERMED\egan_panel_deposits.csv
+  Shape         : 241,519 rows x 33 cols
+  Conglomerates : 1870
+  Quarters      : 39  (2016Q1 - 2025Q3)
+  Deposit types : 5
+  COSIF coverage: 118,913 / 241,519 (49.2%)
+============================================================
+
+--- Deposit Balance Summary (R$ thousands) ---
+                     count          mean           std  min  25%         50%          75%           max
+deposit_type_name                                                                                      
+demand             53032.0  2.933248e+08  4.209894e+09  0.0  0.0   1349642.7   38762504.4  1.585723e+11
+interbank          53032.0  1.070330e+08  1.761429e+09  0.0  0.0         0.0          0.0  1.144737e+11
+prepaid            29391.0  3.490308e+07  5.290086e+08  0.0  0.0         0.0          0.0  3.855953e+10
+savings            53032.0  6.629774e+08  1.184237e+10  0.0  0.0         0.0          0.0  3.919222e+11
+time               53032.0  1.687015e+09  2.092216e+10  0.0  0.0  14117971.6  156144304.6  7.472963e+11
+
+--- Rate Summary (% quarter-over-quarter) ---
+       risk_free_qoq  deposit_rate_qoq     spread_qoq  cosif_implicit_rate
+count  241519.000000     241519.000000  241519.000000        118913.000000
+mean        2.293909          3.771971      -1.478062            14.743814
+std         0.988987          7.883662       7.909868            12.633357
+min         0.486647          0.000000     -49.512245             0.000000
+25%         1.562957          0.486662      -0.000006             4.545966
+50%         2.543795          1.717450       0.003694            10.266598
+75%         3.216188          2.991918       1.239668            23.234633
+max         3.761789         49.999189       3.761789            49.999189
+
+Done.
+Step 1/6: Loading IF-Data Individual Institutions ...
+Step 2/6: Loading macro series (Selic, CDI, TR) ...
+Step 3/6: Loading institution info (segments) ...
+Step 4/6: Loading COSIF quarterly institution rates ...
+Step 5/6: Loading DRE labour-cost data ...
+Step 6/6: Building panel ...
+Saving ...
+
+============================================================
+Panel saved: C:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\Egan_et_al_2025_Rep\processed\PANEL_INTERMED\egan_panel_institution.csv
+  Shape         : 327,921 rows x 33 cols
+  Institutions  : 2227
+  Quarters      : 47  (2014Q1 - 2025Q3)
+  Deposit types : 5
+  COSIF coverage: 171,882 / 327,921 (52.4%)
+============================================================
+
+--- Deposit Balance Summary (R$ thousands) ---
+                     count          mean           std  min  25%        50%         75%           max
+deposit_type_name                                                                                    
+demand             73605.0  1.272360e+08  1.585125e+09  0.0  0.0    22920.0  22502289.0  5.731284e+10
+interbank          73605.0  3.306622e+08  3.710015e+09  0.0  0.0        0.0         0.0  1.696331e+11
+prepaid            33501.0  3.240763e+07  5.347938e+08  0.0  0.0        0.0         0.0  3.855953e+10
+savings            73605.0  4.202842e+08  9.295038e+09  0.0  0.0        0.0         0.0  3.919222e+11
+time               73605.0  1.006955e+09  1.373210e+10  0.0  0.0  3241831.3  98921300.0  5.898134e+11
+
+--- Rate Summary (% quarter-over-quarter) ---
+       risk_free_qoq  deposit_rate_qoq     spread_qoq  cosif_implicit_rate
+count  327921.000000     327921.000000  327921.000000        171882.000000
+mean        2.404562          3.768024      -1.363463            13.773615
+std         0.942436          7.784618       7.785044            12.443494
+min         0.486647          0.000000     -49.512245             0.000000
+25%         1.587962          0.455711      -0.000003             4.132624
+50%         2.707190          1.780000       0.013710             9.094179
+75%         3.216188          2.991918       1.284814            21.606655
+max         3.761789         49.999189       3.761789            49.999189
+
+Done.
+2026-03-02 20:41:28,407 - INFO - Loading panel ...
+2026-03-02 20:41:30,295 - INFO - Raw panel: 241,519 rows, 33 cols
+2026-03-02 20:41:30,295 - INFO -   total_assets coverage: 241,519 / 241,519
+2026-03-02 20:41:30,295 - INFO -   equity_ratio coverage: 239,294 / 241,519
+2026-03-02 20:41:30,306 - INFO -   segment coverage: 230,256 / 241,519
+2026-03-02 20:41:30,506 - INFO - log_total_assets: mean=19.79, sd=2.57 (standardized for estimation)
+2026-03-02 20:41:30,696 - INFO - Winsorized deposit_balance at [p1,p99]=[297.8,34626022396.7]: dropped 1,366 outliers
+2026-03-02 20:41:30,696 - INFO - Estimation sample: 66,903 rows
+2026-03-02 20:41:30,705 - INFO -   Banks:    1236
+2026-03-02 20:41:30,705 - INFO -   Quarters: 37
+2026-03-02 20:41:30,705 - INFO -   Types:    [np.int64(1), np.int64(2), np.int64(3), np.int64(4), np.int64(5)]
+2026-03-02 20:41:30,705 - INFO - Dep var (deposit_balance, levels) summary:
+2026-03-02 20:41:30,722 - INFO -   mean=470784318.3, sd=2003063602.1, p5=841909.3, p95=1711527799.3
+2026-03-02 20:41:30,722 - INFO - nr_lag (nr x D_{t-1}) summary:
+2026-03-02 20:41:30,722 - INFO -   mean=416390695.086520, sd=1847104374.609097
+2026-03-02 20:41:30,722 - INFO - Lagged Selic (p.a.) summary:
+2026-03-02 20:41:30,738 - INFO -   mean=9.29, sd=4.10, min=2.00, max=15.00
+2026-03-02 20:41:30,745 - INFO - Segment distribution: {'S5': 39798, 'S4': 18039, 'S3': 4787, 'S2': 986, 'S1': 392}
+2026-03-02 20:41:30,757 - INFO - ================================================================================
+2026-03-02 20:41:30,759 - INFO - STRUCTURAL ESTIMATION: deposit_balance = phi(S,X) x nr x D_{t-1}
+2026-03-02 20:41:30,765 - INFO -   phi(S,X) = Y'_1 S_t + Y'_2 X_jt  (Egan et al. 2025, Table 3)
+2026-03-02 20:41:30,772 - INFO - ================================================================================
+2026-03-02 20:41:33,287 - INFO - Dep var: Dep_jkt (levels)     
+2026-03-02 20:41:33,287 - INFO - ----------------------------------------------------------------------------------------------
+2026-03-02 20:41:33,287 - INFO -                                       (1) Natl       (2) +Bank         (3) +FE       (4) Clust
+2026-03-02 20:41:33,287 - INFO - ----------------------------------------------------------------------------------------------
+2026-03-02 20:41:33,425 - INFO -   Y_1,cons  (nr x D_{t-1})          1.0824***       1.0512***       1.4971***       1.4971*** 
+2026-03-02 20:41:33,426 - INFO -                                 (   0.0230)   (   0.2351)   (   0.1448)   (   0.1566) 
+2026-03-02 20:41:33,430 - INFO -   Y_1,RF   (selic x nr x D_{t-1})     -0.0021         -0.0062         -0.0014         -0.0014    
+2026-03-02 20:41:33,431 - INFO -                                 (   0.0029)   (   0.0039)   (   0.0018)   (   0.0020) 
+2026-03-02 20:41:33,434 - INFO -   Y_2,size (logA x nr x D_{t-1})                      0.0047         -0.1403***      -0.1403*** 
+2026-03-02 20:41:33,436 - INFO -                                                 (   0.0830)   (   0.0447)   (   0.0511) 
+2026-03-02 20:41:33,439 - INFO -   Y_2,eq   (E/A x nr x D_{t-1})                     -0.3255*        -1.4166***      -1.4166*** 
+2026-03-02 20:41:33,439 - INFO -                                                 (   0.1816)   (   0.4486)   (   0.4746) 
+2026-03-02 20:41:33,441 - INFO -   Y_2,S2  (seg_S2 x nr x D_{t-1})                      0.0960                                    
+2026-03-02 20:41:33,442 - INFO -                                                 (   0.0962)                                 
+2026-03-02 20:41:33,444 - INFO -   Y_2,S3  (seg_S3 x nr x D_{t-1})                      0.2165                                    
+2026-03-02 20:41:33,444 - INFO -                                                 (   0.1405)                                 
+2026-03-02 20:41:33,447 - INFO -   Y_2,S4  (seg_S4 x nr x D_{t-1})                      0.1936                                    
+2026-03-02 20:41:33,448 - INFO -                                                 (   0.1763)                                 
+2026-03-02 20:41:33,456 - INFO -   Y_2,S5  (seg_S5 x nr x D_{t-1})                      0.2624                                    
+2026-03-02 20:41:33,459 - INFO -                                                 (   0.2346)                                 
+2026-03-02 20:41:33,460 - INFO - ----------------------------------------------------------------------------------------------
+2026-03-02 20:41:33,461 - INFO -   N                                     66,903          66,901          66,903          66,903
+2026-03-02 20:41:33,464 - INFO -   R^2                                   0.9531          0.9588          0.8180          0.8180
+2026-03-02 20:41:33,467 - INFO -   BankxType FE                              No              No             Yes             Yes
+2026-03-02 20:41:33,470 - INFO -   Time FE                                   No              No             Yes             Yes
+2026-03-02 20:41:33,470 - INFO -   SE type                            HC-robust       HC-robust       HC-robust      Bank-clust
+2026-03-02 20:41:33,470 - INFO - ----------------------------------------------------------------------------------------------
+2026-03-02 20:41:33,470 - INFO - Interpretation guide:
+2026-03-02 20:41:33,470 - INFO -   Y_1,cons = coef on nr_lag = phi_cons (retention scaling factor)
+2026-03-02 20:41:33,470 - INFO -   Y_1,RF < 0 means depositors sleepier when rates are low
+2026-03-02 20:41:33,470 - INFO -   Y_2,size > 0 means larger banks retain more deposits
+2026-03-02 20:41:33,470 - INFO - Baseline retention coef on nr_lag (Spec 1): 1.0824
+2026-03-02 20:41:33,503 - INFO - Results exported to C:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\Egan_et_al_2025_Rep\processed\ESTIMATION_OUTPUT\estimation_results.csv
+2026-03-02 20:41:33,533 - INFO - LaTeX table exported to C:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\Egan_et_al_2025_Rep\processed\ESTIMATION_OUTPUT\estimation_table.tex
+2026-03-02 20:41:33,533 - INFO - ================================================================================
+2026-03-02 20:41:33,534 - INFO - CONTROL FUNCTION ESTIMATION (semi-parametric CF) [CONGLOMERATE]
+2026-03-02 20:41:33,535 - INFO -   Stage 1: spread_jkt ~ cost_shifters + type_dummies  -->  v_hat
+2026-03-02 20:41:33,536 - INFO -   Stage 2: deposit_balance = phi(S,X)*nr*D_{t-1} + b1*v + b2*v^2 + b3*v^3 + eps
+2026-03-02 20:41:33,537 - INFO -   All deposit types treated as potentially endogenous.
+2026-03-02 20:41:33,538 - INFO - ================================================================================
+2026-03-02 20:41:33,543 - INFO - First-stage cost shifters: ['cosif_lag', 'log_assets_std', 'equity_ratio', 'lagged_cdi', 'lagged_selic', 'personnel_cost_ratio_lag', 'admin_cost_ratio_lag']
+2026-03-02 20:41:33,675 - INFO - First-stage A -- N=48,572, R^2=0.5660
+2026-03-02 20:41:33,678 - INFO -   cosif_lag: coef=0.112836, p=0.0000
+2026-03-02 20:41:33,680 - INFO -   log_assets_std: coef=0.046831, p=0.4902
+2026-03-02 20:41:33,682 - INFO -   equity_ratio: coef=3.016783, p=0.0000
+2026-03-02 20:41:33,683 - INFO -   lagged_cdi: coef=-3.103593, p=0.0000
+2026-03-02 20:41:33,686 - INFO -   lagged_selic: coef=0.904159, p=0.0000
+2026-03-02 20:41:33,688 - INFO -   personnel_cost_ratio_lag: coef=-59.453711, p=0.0000
+2026-03-02 20:41:33,689 - INFO -   admin_cost_ratio_lag: coef=1.101676, p=0.1150
+2026-03-02 20:41:33,692 - INFO -   type2_d: coef=-1.396259, p=0.0000
+2026-03-02 20:41:33,693 - INFO -   type3_d: coef=-2.142413, p=0.0000
+2026-03-02 20:41:33,695 - INFO -   type4_d: coef=-20.541621, p=0.0000
+2026-03-02 20:41:33,695 - INFO -   type5_d: coef=-1.159271, p=0.0000
+2026-03-02 20:41:33,714 - INFO -   Joint F (cost vars): 317.81 (strong)
+2026-03-02 20:41:33,760 - INFO - Computing Hausman IV (leave-one-out spread mean by type x quarter) ...
+2026-03-02 20:41:33,908 - INFO - First-stage B -- N=48,572, R^2=0.6215
+2026-03-02 20:41:33,910 - INFO -   hausman_iv_spread: coef=1.495158, p=0.0000
+2026-03-02 20:41:33,912 - INFO -   cosif_lag: coef=-0.012449, p=0.0003
+2026-03-02 20:41:33,914 - INFO -   log_assets_std: coef=0.382303, p=0.0000
+2026-03-02 20:41:33,915 - INFO -   equity_ratio: coef=4.446583, p=0.0000
+2026-03-02 20:41:33,918 - INFO -   lagged_cdi: coef=-0.168771, p=0.4677
+2026-03-02 20:41:33,920 - INFO -   lagged_selic: coef=0.002775, p=0.9605
+2026-03-02 20:41:33,921 - INFO -   personnel_cost_ratio_lag: coef=-28.122371, p=0.0000
+2026-03-02 20:41:33,922 - INFO -   admin_cost_ratio_lag: coef=1.220726, p=0.1023
+2026-03-02 20:41:33,925 - INFO -   F (Hausman IV): 3802.07 (strong)
+2026-03-02 20:41:33,991 - INFO - CF residuals (Cost-only): N=48,572, mean=0.000000, sd=8.885243
+2026-03-02 20:41:33,997 - INFO - CF residuals (Hausman): N=48,572, mean=0.000000, sd=8.298001
+2026-03-02 20:41:34,104 - INFO -   CF-Cost(5) cf_resid: 1205653.061573 (p=0.0024) ***
+2026-03-02 20:41:34,107 - INFO -   CF-Cost(5) cf_resid_sq: 291795.432798 (p=0.0000) ***
+2026-03-02 20:41:34,110 - INFO -   CF-Cost(5) cf_resid_cu: 4012.034535 (p=0.0021) ***
+2026-03-02 20:41:34,119 - INFO -   CF-Cost(5) joint F on poly: 107.58 -> endogeneity
+2026-03-02 20:41:34,261 - INFO -   CF-Cost(6) cf_resid: 1366731.715739 (p=0.0000) ***
+2026-03-02 20:41:34,262 - INFO -   CF-Cost(6) cf_resid_sq: 156960.973712 (p=0.0000) ***
+2026-03-02 20:41:34,263 - INFO -   CF-Cost(6) cf_resid_cu: 840.494644 (p=0.4357) 
+2026-03-02 20:41:34,268 - INFO -   CF-Cost(6) joint F on poly: 21.85 -> endogeneity
+2026-03-02 20:41:35,136 - INFO -   CF+FE(7) cf_resid: 3303874.939207 (p=0.0000)
+2026-03-02 20:41:35,136 - INFO -   CF+FE(7) cf_resid_sq: -194492.937115 (p=0.0000)
+2026-03-02 20:41:35,136 - INFO -   CF+FE(7) cf_resid_cu: -9581.574873 (p=0.0000)
+2026-03-02 20:41:36,044 - INFO -   CF-Hausman(9) cf_resid_h: -3163326.777533 (p=0.0000) ***
+2026-03-02 20:41:36,044 - INFO -   CF-Hausman(9) cf_resid_h_sq: 305599.220671 (p=0.0000) ***
+2026-03-02 20:41:36,044 - INFO -   CF-Hausman(9) cf_resid_h_cu: 12351.810570 (p=0.0000) ***
+2026-03-02 20:41:36,044 - INFO -   CF-Hausman(9) joint F on poly: 99.64 -> endogeneity
+2026-03-02 20:41:36,185 - INFO -   CF-Hausman(10) cf_resid_h: -3235963.412975 (p=0.0000) ***
+2026-03-02 20:41:36,185 - INFO -   CF-Hausman(10) cf_resid_h_sq: 199469.385064 (p=0.0000) ***
+2026-03-02 20:41:36,200 - INFO -   CF-Hausman(10) cf_resid_h_cu: 11010.548739 (p=0.0000) ***
+2026-03-02 20:41:36,207 - INFO -   CF-Hausman(10) joint F on poly: 27.44 -> endogeneity
+2026-03-02 20:41:36,207 - INFO - Dep var: Dep_jkt (levels, CF) 
+2026-03-02 20:41:36,216 - INFO - ------------------------------------------------------------------------------------------------------------------------------
+2026-03-02 20:41:36,217 - INFO -                                    (5) CF Natl     (6) CF+Bank       (7) CF+FE    (8) CF+Clust     (9) CF-Haus  (10) CF-H+Bank
+2026-03-02 20:41:36,217 - INFO - ------------------------------------------------------------------------------------------------------------------------------
+2026-03-02 20:41:36,295 - INFO -   Y_1,cons  (nr x D_{t-1})          1.0636***       1.1643***       1.5592***       1.5592***       1.0637***       1.1690*** 
+2026-03-02 20:41:36,296 - INFO -                                 (   0.0302)   (   0.1647)   (   0.1461)   (   0.1970)   (   0.0300)   (   0.1634) 
+2026-03-02 20:41:36,308 - INFO -   Y_1,RF   (selic x nr x D_{t-1})      0.0036         -0.0004         -0.0010         -0.0010          0.0035         -0.0004    
+2026-03-02 20:41:36,308 - INFO -                                 (   0.0035)   (   0.0024)   (   0.0021)   (   0.0019)   (   0.0035)   (   0.0024) 
+2026-03-02 20:41:36,311 - INFO -   Y_2,size (logA x nr x D_{t-1})                     -0.0556         -0.1490***      -0.1490**                       -0.0568    
+2026-03-02 20:41:36,313 - INFO -                                                 (   0.0421)   (   0.0382)   (   0.0628)                   (   0.0417) 
+2026-03-02 20:41:36,321 - INFO -   Y_2,eq   (E/A x nr x D_{t-1})                     -0.0052         -1.0543**       -1.0543                         -0.0130    
+2026-03-02 20:41:36,323 - INFO -                                                 (   0.2320)   (   0.5376)   (   0.6579)                   (   0.2310) 
+2026-03-02 20:41:36,328 - INFO -   Y_2,S2  (seg_S2 x nr x D_{t-1})                      0.0452                                                          0.0429    
+2026-03-02 20:41:36,329 - INFO -                                                 (   0.0563)                                                   (   0.0558) 
+2026-03-02 20:41:36,333 - INFO -   Y_2,S3  (seg_S3 x nr x D_{t-1})                      0.2031***                                                       0.2001*** 
+2026-03-02 20:41:36,334 - INFO -                                                 (   0.0607)                                                   (   0.0602) 
+2026-03-02 20:41:36,338 - INFO -   Y_2,S4  (seg_S4 x nr x D_{t-1})                      0.0027                                                          0.0027    
+2026-03-02 20:41:36,340 - INFO -                                                 (   0.0970)                                                   (   0.0963) 
+2026-03-02 20:41:36,346 - INFO -   Y_2,S5  (seg_S5 x nr x D_{t-1})                      0.0302                                                          0.0436    
+2026-03-02 20:41:36,347 - INFO -                                                 (   0.0857)                                                   (   0.0851) 
+2026-03-02 20:41:36,351 - INFO -   beta_1 v^  (CF-cost, 1st)     1205653.0616***   1366731.7157***   3303874.9392***   3303874.9392***                                 
+2026-03-02 20:41:36,352 - INFO -                                 (396498.7728)   (332813.9507)   (369259.9663)   (634130.9740)                                 
+2026-03-02 20:41:36,356 - INFO -   beta_2 v^^2 (CF-cost, 2nd)    291795.4328***   156960.9737***   -194492.9371***   -194492.9371***                                 
+2026-03-02 20:41:36,357 - INFO -                                 (20918.8167)   (26440.5294)   (23507.5054)   (38628.4638)                                 
+2026-03-02 20:41:36,361 - INFO -   beta_3 v^^3 (CF-cost, 3rd)     4012.0345***     840.4946      -9581.5749***   -9581.5749***                                 
+2026-03-02 20:41:36,361 - INFO -                                 (1303.0970)   (1078.1922)   (1014.5229)   (1549.2888)                                 
+2026-03-02 20:41:36,365 - INFO -   beta_1 v^H (CF-Hausman, 1st)                                                                  -3163326.7775***   -3235963.4130*** 
+2026-03-02 20:41:36,366 - INFO -                                                                                                 (540350.5729)   (452128.6646) 
+2026-03-02 20:41:36,372 - INFO -   beta_2 v^H^2 (CF-Hausman, 2nd)                                                                  305599.2207***   199469.3851*** 
+2026-03-02 20:41:36,373 - INFO -                                                                                                 (20227.3056)   (25657.7744) 
+2026-03-02 20:41:36,380 - INFO -   beta_3 v^H^3 (CF-Hausman, 3rd)                                                                  12351.8106***   11010.5487*** 
+2026-03-02 20:41:36,381 - INFO -                                                                                                 (1579.2705)   (1420.8800) 
+2026-03-02 20:41:36,382 - INFO - ------------------------------------------------------------------------------------------------------------------------------
+2026-03-02 20:41:36,383 - INFO -   N                                     48,572          48,572          48,572          48,572          48,572          48,572
+2026-03-02 20:41:36,391 - INFO -   R^2                                   0.9576          0.9666          0.8701          0.8701          0.9580          0.9669
+2026-03-02 20:41:36,392 - INFO -   BankxType FE                              No              No             Yes             Yes              No              No
+2026-03-02 20:41:36,392 - INFO -   Time FE                                   No              No             Yes             Yes              No              No
+2026-03-02 20:41:36,393 - INFO -   SE type                            HC-robust       HC-robust       HC-robust      Bank-clust       HC-robust       HC-robust
+2026-03-02 20:41:36,396 - INFO - ------------------------------------------------------------------------------------------------------------------------------
+2026-03-02 20:41:36,496 - INFO - Results exported to C:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\Egan_et_al_2025_Rep\processed\ESTIMATION_OUTPUT\estimation_results_cf.csv
+2026-03-02 20:41:36,563 - INFO - LaTeX table exported to C:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\Egan_et_al_2025_Rep\processed\ESTIMATION_OUTPUT\estimation_table_cf.tex
+2026-03-02 20:41:36,660 - INFO - Results exported to C:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\Egan_et_al_2025_Rep\processed\ESTIMATION_OUTPUT\estimation_results_combined.csv
+2026-03-02 20:41:36,749 - INFO - LaTeX table exported to C:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\Egan_et_al_2025_Rep\processed\ESTIMATION_OUTPUT\estimation_table_combined.tex
+2026-03-02 20:41:36,750 - INFO - Done.
+INFO:root:Loading institution-level panel ...
+INFO:root:Loading from Parquet: C:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\Egan_et_al_2025_Rep\processed\PANEL_INTERMED\egan_panel_institution.parquet
+INFO:root:Raw panel: 327,921 rows, 33 cols
+INFO:root:  total_assets coverage: 327,921 / 327,921
+INFO:root:  equity_ratio coverage: 325,670 / 327,921
+INFO:root:  segment coverage: 305,121 / 327,921
+INFO:root:log_total_assets: mean=19.57, sd=2.58 (standardized)
+INFO:root:Winsorized deposit_balance at [p1,p99]=[22.2,27598806145.7]: dropped 1,758 outliers
+INFO:root:Estimation sample: 86,115 rows
+INFO:root:  Institutions: 1412
+INFO:root:  Quarters:     45
+INFO:root:  Types:        [np.int64(1), np.int64(2), np.int64(3), np.int64(4), np.int64(5)]
+INFO:root:Dep var (deposit_balance, levels): mean=468536318.9, sd=1898412194.9, p5=563389.0, p95=1867473043.7
+INFO:root:nr_lag (nr x D_{t-1}): mean=420942384.161615, sd=1796044812.444711
+INFO:root:Lagged Selic: mean=9.98, sd=3.98, min=2.00, max=15.00
+INFO:root:Segment distribution: {'S5': 48178, 'S4': 21516, 'S3': 6878, 'S2': 1707, 'S1': 1666}
+INFO:root:================================================================================
+INFO:root:INSTITUTION-LEVEL STRUCTURAL ESTIMATION
+INFO:root:  D_jkt = phi(S,X) * nr * D_jkt-1 + eps  (levels, no ratio)
+INFO:root:================================================================================
+INFO:root:Dep var: Dep_jkt (levels)     
+INFO:root:----------------------------------------------------------------------------------------------
+INFO:root:                                      (1) Natl       (2) +Bank         (3) +FE       (4) Clust
+INFO:root:----------------------------------------------------------------------------------------------
+INFO:root:  Y_1,cons  (nr x D_{t-1})          1.0195***       1.1671***       1.2977***       1.2977*** 
+INFO:root:                                (   0.0259)   (   0.0613)   (   0.0276)   (   0.1084) 
+INFO:root:  Y_1,RF   (selic x nr x D_{t-1})      0.0008         -0.0022          0.0016          0.0016    
+INFO:root:                                (   0.0026)   (   0.0020)   (   0.0024)   (   0.0080) 
+INFO:root:  Y_2,size (logA x nr x D_{t-1})                     -0.0578**       -0.1036***      -0.1036*** 
+INFO:root:                                                (   0.0229)   (   0.0040)   (   0.0154) 
+INFO:root:  Y_2,eq   (E/A x nr x D_{t-1})                     -0.5464**       -0.4328***      -0.4328*   
+INFO:root:                                                (   0.2716)   (   0.0832)   (   0.2577) 
+INFO:root:  Y_2,S2  (seg_S2 x nr x D_{t-1})                      0.0324                                    
+INFO:root:                                                (   0.0227)                                 
+INFO:root:  Y_2,S3  (seg_S3 x nr x D_{t-1})                      0.1511***                                 
+INFO:root:                                                (   0.0201)                                 
+INFO:root:  Y_2,S4  (seg_S4 x nr x D_{t-1})                      0.1470***                                 
+INFO:root:                                                (   0.0258)                                 
+INFO:root:  Y_2,S5  (seg_S5 x nr x D_{t-1})                      0.1669***                                 
+INFO:root:                                                (   0.0308)                                 
+INFO:root:----------------------------------------------------------------------------------------------
+INFO:root:  N                                     86,115          85,979          86,115          86,115
+INFO:root:  R^2                                   0.9392          0.9485          0.9862          0.9862
+INFO:root:  InstxType FE                              No              No             Yes             Yes
+INFO:root:  Time FE                                   No              No             Yes             Yes
+INFO:root:  SE type                            HC-robust       HC-robust       HC-robust      Inst-clust
+INFO:root:----------------------------------------------------------------------------------------------
+INFO:root:Interpretation guide:
+INFO:root:  Y_1,cons = coef on nr_lag = phi_cons (retention scaling factor)
+INFO:root:  Y_1,RF < 0  -> depositors sleepier when rates low
+INFO:root:  Y_2,size > 0 -> larger institutions retain more deposits
+INFO:root:Baseline retention coef on nr_lag (Spec 1): 1.0195
+INFO:root:Results exported to C:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\Egan_et_al_2025_Rep\processed\ESTIMATION_OUTPUT\estimation_results_institution.csv
+INFO:root:LaTeX table exported to C:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\Egan_et_al_2025_Rep\processed\ESTIMATION_OUTPUT\estimation_table_institution.tex
+INFO:root:================================================================================
+INFO:root:CONTROL FUNCTION ESTIMATION (semi-parametric CF) [INSTITUTION]
+INFO:root:  Stage 1: spread_jkt ~ cost_shifters + type_dummies  -->  v_hat
+INFO:root:  Stage 2: deposit_balance = phi(S,X)*nr*D_{t-1} + b1*v + b2*v^2 + b3*v^3 + eps
+INFO:root:  All deposit types treated as potentially endogenous.
+INFO:root:================================================================================
+INFO:root:First-stage cost shifters: ['cosif_lag', 'log_assets_std', 'equity_ratio', 'lagged_cdi', 'lagged_selic', 'personnel_cost_ratio_lag', 'admin_cost_ratio_lag']
+INFO:root:First-stage A -- N=61,765, R^2=0.5526
+INFO:root:  cosif_lag: coef=0.090799, p=0.0000
+INFO:root:  log_assets_std: coef=-0.439931, p=0.0000
+INFO:root:  equity_ratio: coef=3.670187, p=0.0000
+INFO:root:  lagged_cdi: coef=-4.291517, p=0.0000
+INFO:root:  lagged_selic: coef=1.227965, p=0.0000
+INFO:root:  personnel_cost_ratio_lag: coef=-31.083574, p=0.0007
+INFO:root:  admin_cost_ratio_lag: coef=-0.229375, p=0.6765
+INFO:root:  type2_d: coef=-1.498875, p=0.0000
+INFO:root:  type3_d: coef=-1.887540, p=0.0000
+INFO:root:  type4_d: coef=-20.129865, p=0.0000
+INFO:root:  type5_d: coef=-1.257307, p=0.0000
+INFO:root:  Joint F (cost vars): 342.13 (strong)
+INFO:root:Computing Hausman IV (leave-one-out spread mean by type x quarter) ...
+INFO:root:First-stage B -- N=61,765, R^2=0.6141
+INFO:root:  hausman_iv_spread: coef=1.526359, p=0.0000
+INFO:root:  cosif_lag: coef=-0.018378, p=0.0000
+INFO:root:  log_assets_std: coef=0.182293, p=0.0100
+INFO:root:  equity_ratio: coef=5.928644, p=0.0000
+INFO:root:  lagged_cdi: coef=0.191438, p=0.3693
+INFO:root:  lagged_selic: coef=-0.125114, p=0.0137
+INFO:root:  personnel_cost_ratio_lag: coef=-16.786400, p=0.0310
+INFO:root:  admin_cost_ratio_lag: coef=0.323975, p=0.4325
+INFO:root:  F (Hausman IV): 5096.61 (strong)
+INFO:root:CF residuals (Cost-only): N=61,765, mean=-0.000000, sd=8.986560
+INFO:root:CF residuals (Hausman): N=61,765, mean=-0.000000, sd=8.345911
+INFO:root:  CF-Cost(5) cf_resid: 662475.659542 (p=0.0024) ***
+INFO:root:  CF-Cost(5) cf_resid_sq: 119777.529066 (p=0.0000) ***
+INFO:root:  CF-Cost(5) cf_resid_cu: 638.260287 (p=0.3772) 
+INFO:root:  CF-Cost(5) joint F on poly: 55.47 -> endogeneity
+INFO:root:  CF-Cost(6) cf_resid: 489798.913121 (p=0.0013) ***
+INFO:root:  CF-Cost(6) cf_resid_sq: 28519.195065 (p=0.1093) 
+INFO:root:  CF-Cost(6) cf_resid_cu: -1032.610737 (p=0.0308) **
+INFO:root:  CF-Cost(6) joint F on poly: 15.33 -> endogeneity
+INFO:root:  CF-Cost+FE(7) cf_resid: -4906499.107142 (p=0.0000) ***
+INFO:root:  CF-Cost+FE(7) cf_resid_sq: 21592.161362 (p=0.0151) **
+INFO:root:  CF-Cost+FE(7) cf_resid_cu: 9181.972007 (p=0.0000) ***
+INFO:root:  CF-Cost+FE(7) joint F on poly: 344.39 -> endogeneity
+INFO:root:  CF-Hausman(9) cf_resid_h: -552793.076432 (p=0.2075) 
+INFO:root:  CF-Hausman(9) cf_resid_h_sq: 98892.146608 (p=0.0000) ***
+INFO:root:  CF-Hausman(9) cf_resid_h_cu: 1725.457131 (p=0.1262) 
+INFO:root:  CF-Hausman(9) joint F on poly: 76.72 -> endogeneity
+INFO:root:  CF-Hausman(10) cf_resid_h: -1405571.083593 (p=0.0033) ***
+INFO:root:  CF-Hausman(10) cf_resid_h_sq: 40656.995809 (p=0.0003) ***
+INFO:root:  CF-Hausman(10) cf_resid_h_cu: 2586.093434 (p=0.0236) **
+INFO:root:  CF-Hausman(10) joint F on poly: 39.46 -> endogeneity
+INFO:root:Dep var: Dep_jkt (levels, CF) 
+INFO:root:------------------------------------------------------------------------------------------------------------------------------
+INFO:root:                                   (5) CF Natl     (6) CF+Bank       (7) CF+FE    (8) CF+Clust     (9) CF-Haus  (10) CF-H+Bank
+INFO:root:------------------------------------------------------------------------------------------------------------------------------
+INFO:root:  Y_1,cons  (nr x D_{t-1})          1.1227***       1.2341***       1.2172***       1.2172***       1.1252***       1.2414*** 
+INFO:root:                                (   0.0255)   (   0.2678)   (   0.0119)   (   0.0584)   (   0.0257)   (   0.2639) 
+INFO:root:  Y_1,RF   (selic x nr x D_{t-1})     -0.0040         -0.0024          0.0016          0.0016         -0.0041         -0.0023    
+INFO:root:                                (   0.0027)   (   0.0020)   (   0.0012)   (   0.0061)   (   0.0027)   (   0.0020) 
+INFO:root:  Y_2,size (logA x nr x D_{t-1})                     -0.0744         -0.0883***      -0.0883***                      -0.0767    
+INFO:root:                                                (   0.0833)   (   0.0045)   (   0.0206)                   (   0.0820) 
+INFO:root:  Y_2,eq   (E/A x nr x D_{t-1})                     -0.2132          0.5946***       0.5946*                        -0.2200    
+INFO:root:                                                (   0.4430)   (   0.0701)   (   0.3479)                   (   0.4423) 
+INFO:root:  Y_2,S2  (seg_S2 x nr x D_{t-1})                      0.0050                                                          0.0029    
+INFO:root:                                                (   0.0807)                                                   (   0.0796) 
+INFO:root:  Y_2,S3  (seg_S3 x nr x D_{t-1})                      0.0636                                                          0.0605    
+INFO:root:                                                (   0.1327)                                                   (   0.1312) 
+INFO:root:  Y_2,S4  (seg_S4 x nr x D_{t-1})                      0.1028                                                          0.0999    
+INFO:root:                                                (   0.1331)                                                   (   0.1312) 
+INFO:root:  Y_2,S5  (seg_S5 x nr x D_{t-1})                      0.0579                                                          0.0593    
+INFO:root:                                                (   0.1532)                                                   (   0.1517) 
+INFO:root:  beta_1 v^  (CF-cost, 1st)     662475.6595***   489798.9131***   -4906499.1071***   -4906499.1071***                                 
+INFO:root:                                (217822.2883)   (152199.3062)   (414559.9395)   (1753384.6066)                                 
+INFO:root:  beta_2 v^^2 (CF-cost, 2nd)    119777.5291***   28519.1951      21592.1614**    21592.1614                                    
+INFO:root:                                (13816.7212)   (17808.5454)   (8882.9542)   (36690.5514)                                 
+INFO:root:  beta_3 v^^3 (CF-cost, 3rd)      638.2603      -1032.6107**     9181.9720***    9181.9720                                    
+INFO:root:                                ( 722.7079)   ( 478.0230)   (1387.4653)   (5831.2902)                                 
+INFO:root:  beta_1 v^H (CF-Hausman, 1st)                                                                  -552793.0764      -1405571.0836*** 
+INFO:root:                                                                                                (438555.8924)   (478663.6301) 
+INFO:root:  beta_2 v^H^2 (CF-Hausman, 2nd)                                                                  98892.1466***   40656.9958*** 
+INFO:root:                                                                                                (9933.0310)   (11305.5435) 
+INFO:root:  beta_3 v^H^3 (CF-Hausman, 3rd)                                                                   1725.4571       2586.0934**  
+INFO:root:                                                                                                (1128.2501)   (1142.7676) 
+INFO:root:------------------------------------------------------------------------------------------------------------------------------
+INFO:root:  N                                     61,765          61,670          61,765          61,765          61,765          61,670
+INFO:root:  R^2                                   0.9607          0.9655          0.9910          0.9910          0.9606          0.9656
+INFO:root:  InstxType FE                              No              No             Yes             Yes              No              No
+INFO:root:  Time FE                                   No              No             Yes             Yes              No              No
+INFO:root:  SE type                            HC-robust       HC-robust       HC-robust      Inst-clust       HC-robust       HC-robust
+INFO:root:------------------------------------------------------------------------------------------------------------------------------
+INFO:root:Results exported to C:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\Egan_et_al_2025_Rep\processed\ESTIMATION_OUTPUT\estimation_results_institution_cf.csv
+INFO:root:LaTeX table exported to C:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\Egan_et_al_2025_Rep\processed\ESTIMATION_OUTPUT\estimation_table_institution_cf.tex
+INFO:root:Results exported to C:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\Egan_et_al_2025_Rep\processed\ESTIMATION_OUTPUT\estimation_results_institution_combined.csv
+INFO:root:LaTeX table exported to C:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\Egan_et_al_2025_Rep\processed\ESTIMATION_OUTPUT\estimation_table_institution_combined.tex
+INFO:root:Done.
+2026-03-02 20:42:15,642 - INFO - ================================================================================
+2026-03-02 20:42:15,644 - INFO - DEMAND ESTIMATION -- CONGLOMERATE LEVEL
+2026-03-02 20:42:15,646 - INFO - Berry (1994) active market shares | estimation_demand_1.py
+2026-03-02 20:42:15,646 - INFO - ================================================================================
+2026-03-02 20:42:15,647 - INFO - 
+>>> Step 1: Loading panel and running supply estimation ...
+2026-03-02 20:42:15,649 - INFO - Loading panel ...
+2026-03-02 20:42:17,330 - INFO - Raw panel: 241,519 rows, 33 cols
+2026-03-02 20:42:17,332 - INFO -   total_assets coverage: 241,519 / 241,519
+2026-03-02 20:42:17,332 - INFO -   equity_ratio coverage: 239,294 / 241,519
+2026-03-02 20:42:17,348 - INFO -   segment coverage: 230,256 / 241,519
+2026-03-02 20:42:17,581 - INFO - log_total_assets: mean=19.79, sd=2.57 (standardized for estimation)
+2026-03-02 20:42:17,770 - INFO - Winsorized deposit_balance at [p1,p99]=[297.8,34626022396.7]: dropped 1,366 outliers
+2026-03-02 20:42:17,772 - INFO - Estimation sample: 66,903 rows
+2026-03-02 20:42:17,778 - INFO -   Banks:    1236
+2026-03-02 20:42:17,779 - INFO -   Quarters: 37
+2026-03-02 20:42:17,784 - INFO -   Types:    [np.int64(1), np.int64(2), np.int64(3), np.int64(4), np.int64(5)]
+2026-03-02 20:42:17,785 - INFO - Dep var (deposit_balance, levels) summary:
+2026-03-02 20:42:17,794 - INFO -   mean=470784318.3, sd=2003063602.1, p5=841909.3, p95=1711527799.3
+2026-03-02 20:42:17,796 - INFO - nr_lag (nr x D_{t-1}) summary:
+2026-03-02 20:42:17,798 - INFO -   mean=416390695.086520, sd=1847104374.609097
+2026-03-02 20:42:17,798 - INFO - Lagged Selic (p.a.) summary:
+2026-03-02 20:42:17,798 - INFO -   mean=9.29, sd=4.10, min=2.00, max=15.00
+2026-03-02 20:42:17,815 - INFO - Segment distribution: {'S5': 39798, 'S4': 18039, 'S3': 4787, 'S2': 986, 'S1': 392}
+2026-03-02 20:42:17,821 - INFO - ================================================================================
+2026-03-02 20:42:17,823 - INFO - STRUCTURAL ESTIMATION: deposit_balance = phi(S,X) x nr x D_{t-1}
+2026-03-02 20:42:17,824 - INFO -   phi(S,X) = Y'_1 S_t + Y'_2 X_jt  (Egan et al. 2025, Table 3)
+2026-03-02 20:42:17,825 - INFO - ================================================================================
+2026-03-02 20:42:20,113 - INFO - Dep var: Dep_jkt (levels)     
+2026-03-02 20:42:20,113 - INFO - ----------------------------------------------------------------------------------------------
+2026-03-02 20:42:20,113 - INFO -                                       (1) Natl       (2) +Bank         (3) +FE       (4) Clust
+2026-03-02 20:42:20,113 - INFO - ----------------------------------------------------------------------------------------------
+2026-03-02 20:42:20,146 - INFO -   Y_1,cons  (nr x D_{t-1})          1.0824***       1.0512***       1.4971***       1.4971*** 
+2026-03-02 20:42:20,146 - INFO -                                 (   0.0230)   (   0.2351)   (   0.1448)   (   0.1566) 
+2026-03-02 20:42:20,166 - INFO -   Y_1,RF   (selic x nr x D_{t-1})     -0.0021         -0.0062         -0.0014         -0.0014    
+2026-03-02 20:42:20,167 - INFO -                                 (   0.0029)   (   0.0039)   (   0.0018)   (   0.0020) 
+2026-03-02 20:42:20,172 - INFO -   Y_2,size (logA x nr x D_{t-1})                      0.0047         -0.1403***      -0.1403*** 
+2026-03-02 20:42:20,172 - INFO -                                                 (   0.0830)   (   0.0447)   (   0.0511) 
+2026-03-02 20:42:20,176 - INFO -   Y_2,eq   (E/A x nr x D_{t-1})                     -0.3255*        -1.4166***      -1.4166*** 
+2026-03-02 20:42:20,176 - INFO -                                                 (   0.1816)   (   0.4486)   (   0.4746) 
+2026-03-02 20:42:20,179 - INFO -   Y_2,S2  (seg_S2 x nr x D_{t-1})                      0.0960                                    
+2026-03-02 20:42:20,179 - INFO -                                                 (   0.0962)                                 
+2026-03-02 20:42:20,182 - INFO -   Y_2,S3  (seg_S3 x nr x D_{t-1})                      0.2165                                    
+2026-03-02 20:42:20,183 - INFO -                                                 (   0.1405)                                 
+2026-03-02 20:42:20,185 - INFO -   Y_2,S4  (seg_S4 x nr x D_{t-1})                      0.1936                                    
+2026-03-02 20:42:20,185 - INFO -                                                 (   0.1763)                                 
+2026-03-02 20:42:20,187 - INFO -   Y_2,S5  (seg_S5 x nr x D_{t-1})                      0.2624                                    
+2026-03-02 20:42:20,187 - INFO -                                                 (   0.2346)                                 
+2026-03-02 20:42:20,187 - INFO - ----------------------------------------------------------------------------------------------
+2026-03-02 20:42:20,188 - INFO -   N                                     66,903          66,901          66,903          66,903
+2026-03-02 20:42:20,191 - INFO -   R^2                                   0.9531          0.9588          0.8180          0.8180
+2026-03-02 20:42:20,192 - INFO -   BankxType FE                              No              No             Yes             Yes
+2026-03-02 20:42:20,193 - INFO -   Time FE                                   No              No             Yes             Yes
+2026-03-02 20:42:20,194 - INFO -   SE type                            HC-robust       HC-robust       HC-robust      Bank-clust
+2026-03-02 20:42:20,195 - INFO - ----------------------------------------------------------------------------------------------
+2026-03-02 20:42:20,198 - INFO - Interpretation guide:
+2026-03-02 20:42:20,199 - INFO -   Y_1,cons = coef on nr_lag = phi_cons (retention scaling factor)
+2026-03-02 20:42:20,200 - INFO -   Y_1,RF < 0 means depositors sleepier when rates are low
+2026-03-02 20:42:20,201 - INFO -   Y_2,size > 0 means larger banks retain more deposits
+2026-03-02 20:42:20,202 - INFO - Baseline retention coef on nr_lag (Spec 1): 1.0824
+2026-03-02 20:42:20,208 - INFO - ================================================================================
+2026-03-02 20:42:20,210 - INFO - CONTROL FUNCTION ESTIMATION (semi-parametric CF) [CONGLOMERATE]
+2026-03-02 20:42:20,212 - INFO -   Stage 1: spread_jkt ~ cost_shifters + type_dummies  -->  v_hat
+2026-03-02 20:42:20,214 - INFO -   Stage 2: deposit_balance = phi(S,X)*nr*D_{t-1} + b1*v + b2*v^2 + b3*v^3 + eps
+2026-03-02 20:42:20,216 - INFO -   All deposit types treated as potentially endogenous.
+2026-03-02 20:42:20,217 - INFO - ================================================================================
+2026-03-02 20:42:20,222 - INFO - First-stage cost shifters: ['cosif_lag', 'log_assets_std', 'equity_ratio', 'lagged_cdi', 'lagged_selic', 'personnel_cost_ratio_lag', 'admin_cost_ratio_lag']
+2026-03-02 20:42:20,323 - INFO - First-stage A -- N=48,572, R^2=0.5660
+2026-03-02 20:42:20,326 - INFO -   cosif_lag: coef=0.112836, p=0.0000
+2026-03-02 20:42:20,328 - INFO -   log_assets_std: coef=0.046831, p=0.4902
+2026-03-02 20:42:20,330 - INFO -   equity_ratio: coef=3.016783, p=0.0000
+2026-03-02 20:42:20,332 - INFO -   lagged_cdi: coef=-3.103593, p=0.0000
+2026-03-02 20:42:20,334 - INFO -   lagged_selic: coef=0.904159, p=0.0000
+2026-03-02 20:42:20,336 - INFO -   personnel_cost_ratio_lag: coef=-59.453711, p=0.0000
+2026-03-02 20:42:20,338 - INFO -   admin_cost_ratio_lag: coef=1.101676, p=0.1150
+2026-03-02 20:42:20,340 - INFO -   type2_d: coef=-1.396259, p=0.0000
+2026-03-02 20:42:20,342 - INFO -   type3_d: coef=-2.142413, p=0.0000
+2026-03-02 20:42:20,343 - INFO -   type4_d: coef=-20.541621, p=0.0000
+2026-03-02 20:42:20,343 - INFO -   type5_d: coef=-1.159271, p=0.0000
+2026-03-02 20:42:20,353 - INFO -   Joint F (cost vars): 317.81 (strong)
+2026-03-02 20:42:20,410 - INFO - Computing Hausman IV (leave-one-out spread mean by type x quarter) ...
+2026-03-02 20:42:20,556 - INFO - First-stage B -- N=48,572, R^2=0.6215
+2026-03-02 20:42:20,560 - INFO -   hausman_iv_spread: coef=1.495158, p=0.0000
+2026-03-02 20:42:20,562 - INFO -   cosif_lag: coef=-0.012449, p=0.0003
+2026-03-02 20:42:20,564 - INFO -   log_assets_std: coef=0.382303, p=0.0000
+2026-03-02 20:42:20,566 - INFO -   equity_ratio: coef=4.446583, p=0.0000
+2026-03-02 20:42:20,567 - INFO -   lagged_cdi: coef=-0.168771, p=0.4677
+2026-03-02 20:42:20,568 - INFO -   lagged_selic: coef=0.002775, p=0.9605
+2026-03-02 20:42:20,569 - INFO -   personnel_cost_ratio_lag: coef=-28.122371, p=0.0000
+2026-03-02 20:42:20,571 - INFO -   admin_cost_ratio_lag: coef=1.220726, p=0.1023
+2026-03-02 20:42:20,574 - INFO -   F (Hausman IV): 3802.07 (strong)
+2026-03-02 20:42:20,638 - INFO - CF residuals (Cost-only): N=48,572, mean=0.000000, sd=8.885243
+2026-03-02 20:42:20,640 - INFO - CF residuals (Hausman): N=48,572, mean=0.000000, sd=8.298001
+2026-03-02 20:42:20,736 - INFO -   CF-Cost(5) cf_resid: 1205653.061573 (p=0.0024) ***
+2026-03-02 20:42:20,738 - INFO -   CF-Cost(5) cf_resid_sq: 291795.432798 (p=0.0000) ***
+2026-03-02 20:42:20,740 - INFO -   CF-Cost(5) cf_resid_cu: 4012.034535 (p=0.0021) ***
+2026-03-02 20:42:20,748 - INFO -   CF-Cost(5) joint F on poly: 107.58 -> endogeneity
+2026-03-02 20:42:20,869 - INFO -   CF-Cost(6) cf_resid: 1366731.715739 (p=0.0000) ***
+2026-03-02 20:42:20,872 - INFO -   CF-Cost(6) cf_resid_sq: 156960.973712 (p=0.0000) ***
+2026-03-02 20:42:20,878 - INFO -   CF-Cost(6) cf_resid_cu: 840.494644 (p=0.4357) 
+2026-03-02 20:42:20,884 - INFO -   CF-Cost(6) joint F on poly: 21.85 -> endogeneity
+2026-03-02 20:42:21,861 - INFO -   CF+FE(7) cf_resid: 3303874.939207 (p=0.0000)
+2026-03-02 20:42:21,861 - INFO -   CF+FE(7) cf_resid_sq: -194492.937115 (p=0.0000)
+2026-03-02 20:42:21,861 - INFO -   CF+FE(7) cf_resid_cu: -9581.574873 (p=0.0000)
+2026-03-02 20:42:22,727 - INFO -   CF-Hausman(9) cf_resid_h: -3163326.777533 (p=0.0000) ***
+2026-03-02 20:42:22,727 - INFO -   CF-Hausman(9) cf_resid_h_sq: 305599.220671 (p=0.0000) ***
+2026-03-02 20:42:22,743 - INFO -   CF-Hausman(9) cf_resid_h_cu: 12351.810570 (p=0.0000) ***
+2026-03-02 20:42:22,743 - INFO -   CF-Hausman(9) joint F on poly: 99.64 -> endogeneity
+2026-03-02 20:42:22,886 - INFO -   CF-Hausman(10) cf_resid_h: -3235963.412975 (p=0.0000) ***
+2026-03-02 20:42:22,888 - INFO -   CF-Hausman(10) cf_resid_h_sq: 199469.385064 (p=0.0000) ***
+2026-03-02 20:42:22,889 - INFO -   CF-Hausman(10) cf_resid_h_cu: 11010.548739 (p=0.0000) ***
+2026-03-02 20:42:22,894 - INFO -   CF-Hausman(10) joint F on poly: 27.44 -> endogeneity
+2026-03-02 20:42:22,897 - INFO - Dep var: Dep_jkt (levels, CF) 
+2026-03-02 20:42:22,898 - INFO - ------------------------------------------------------------------------------------------------------------------------------
+2026-03-02 20:42:22,899 - INFO -                                    (5) CF Natl     (6) CF+Bank       (7) CF+FE    (8) CF+Clust     (9) CF-Haus  (10) CF-H+Bank
+2026-03-02 20:42:22,900 - INFO - ------------------------------------------------------------------------------------------------------------------------------
+2026-03-02 20:42:22,975 - INFO -   Y_1,cons  (nr x D_{t-1})          1.0636***       1.1643***       1.5592***       1.5592***       1.0637***       1.1690*** 
+2026-03-02 20:42:22,976 - INFO -                                 (   0.0302)   (   0.1647)   (   0.1461)   (   0.1970)   (   0.0300)   (   0.1634) 
+2026-03-02 20:42:22,985 - INFO -   Y_1,RF   (selic x nr x D_{t-1})      0.0036         -0.0004         -0.0010         -0.0010          0.0035         -0.0004    
+2026-03-02 20:42:22,986 - INFO -                                 (   0.0035)   (   0.0024)   (   0.0021)   (   0.0019)   (   0.0035)   (   0.0024) 
+2026-03-02 20:42:22,994 - INFO -   Y_2,size (logA x nr x D_{t-1})                     -0.0556         -0.1490***      -0.1490**                       -0.0568    
+2026-03-02 20:42:22,995 - INFO -                                                 (   0.0421)   (   0.0382)   (   0.0628)                   (   0.0417) 
+2026-03-02 20:42:22,999 - INFO -   Y_2,eq   (E/A x nr x D_{t-1})                     -0.0052         -1.0543**       -1.0543                         -0.0130    
+2026-03-02 20:42:22,999 - INFO -                                                 (   0.2320)   (   0.5376)   (   0.6579)                   (   0.2310) 
+2026-03-02 20:42:23,004 - INFO -   Y_2,S2  (seg_S2 x nr x D_{t-1})                      0.0452                                                          0.0429    
+2026-03-02 20:42:23,005 - INFO -                                                 (   0.0563)                                                   (   0.0558) 
+2026-03-02 20:42:23,007 - INFO -   Y_2,S3  (seg_S3 x nr x D_{t-1})                      0.2031***                                                       0.2001*** 
+2026-03-02 20:42:23,007 - INFO -                                                 (   0.0607)                                                   (   0.0602) 
+2026-03-02 20:42:23,010 - INFO -   Y_2,S4  (seg_S4 x nr x D_{t-1})                      0.0027                                                          0.0027    
+2026-03-02 20:42:23,010 - INFO -                                                 (   0.0970)                                                   (   0.0963) 
+2026-03-02 20:42:23,013 - INFO -   Y_2,S5  (seg_S5 x nr x D_{t-1})                      0.0302                                                          0.0436    
+2026-03-02 20:42:23,013 - INFO -                                                 (   0.0857)                                                   (   0.0851) 
+2026-03-02 20:42:23,013 - INFO -   beta_1 v^  (CF-cost, 1st)     1205653.0616***   1366731.7157***   3303874.9392***   3303874.9392***                                 
+2026-03-02 20:42:23,013 - INFO -                                 (396498.7728)   (332813.9507)   (369259.9663)   (634130.9740)                                 
+2026-03-02 20:42:23,025 - INFO -   beta_2 v^^2 (CF-cost, 2nd)    291795.4328***   156960.9737***   -194492.9371***   -194492.9371***                                 
+2026-03-02 20:42:23,026 - INFO -                                 (20918.8167)   (26440.5294)   (23507.5054)   (38628.4638)                                 
+2026-03-02 20:42:23,033 - INFO -   beta_3 v^^3 (CF-cost, 3rd)     4012.0345***     840.4946      -9581.5749***   -9581.5749***                                 
+2026-03-02 20:42:23,034 - INFO -                                 (1303.0970)   (1078.1922)   (1014.5229)   (1549.2888)                                 
+2026-03-02 20:42:23,036 - INFO -   beta_1 v^H (CF-Hausman, 1st)                                                                  -3163326.7775***   -3235963.4130*** 
+2026-03-02 20:42:23,037 - INFO -                                                                                                 (540350.5729)   (452128.6646) 
+2026-03-02 20:42:23,042 - INFO -   beta_2 v^H^2 (CF-Hausman, 2nd)                                                                  305599.2207***   199469.3851*** 
+2026-03-02 20:42:23,043 - INFO -                                                                                                 (20227.3056)   (25657.7744) 
+2026-03-02 20:42:23,045 - INFO -   beta_3 v^H^3 (CF-Hausman, 3rd)                                                                  12351.8106***   11010.5487*** 
+2026-03-02 20:42:23,045 - INFO -                                                                                                 (1579.2705)   (1420.8800) 
+2026-03-02 20:42:23,047 - INFO - ------------------------------------------------------------------------------------------------------------------------------
+2026-03-02 20:42:23,048 - INFO -   N                                     48,572          48,572          48,572          48,572          48,572          48,572
+2026-03-02 20:42:23,053 - INFO -   R^2                                   0.9576          0.9666          0.8701          0.8701          0.9580          0.9669
+2026-03-02 20:42:23,054 - INFO -   BankxType FE                              No              No             Yes             Yes              No              No
+2026-03-02 20:42:23,055 - INFO -   Time FE                                   No              No             Yes             Yes              No              No
+2026-03-02 20:42:23,056 - INFO -   SE type                            HC-robust       HC-robust       HC-robust      Bank-clust       HC-robust       HC-robust
+2026-03-02 20:42:23,058 - INFO - ------------------------------------------------------------------------------------------------------------------------------
+2026-03-02 20:42:23,068 - INFO - Supply specs available: ['(1) Natl', '(2) +Bank', '(3) +FE', '(4) Clust', '(5) CF Natl', '(6) CF+Bank', '(7) CF+FE', '(8) CF+Clust', '(9) CF-Haus', '(10) CF-H+Bank']
+2026-03-02 20:42:23,069 - INFO - 
+>>> Step 2: Computing structural sleeping-deposit predictions ...
+2026-03-02 20:42:23,116 - INFO -   Supply spec '(1) Natl': hat_Y computed for 66,903 obs (struct cols = ['nr_lag', 'selic_nr_lag'])
+2026-03-02 20:42:23,127 - INFO -   Supply spec '(2) +Bank': hat_Y computed for 66,901 obs (struct cols = ['nr_lag', 'selic_nr_lag', 'logA_nr_lag', 'eq_nr_lag', 'seg_S2_nr_lag', 'seg_S3_nr_lag', 'seg_S4_nr_lag', 'seg_S5_nr_lag'])
+2026-03-02 20:42:23,134 - INFO -   Supply spec '(3) +FE': hat_Y computed for 66,903 obs (struct cols = ['nr_lag', 'selic_nr_lag', 'logA_nr_lag', 'eq_nr_lag'])
+2026-03-02 20:42:23,140 - INFO -   Supply spec '(4) Clust': hat_Y computed for 66,903 obs (struct cols = ['nr_lag', 'selic_nr_lag', 'logA_nr_lag', 'eq_nr_lag'])
+2026-03-02 20:42:23,144 - INFO -   Supply spec '(5) CF Natl': hat_Y computed for 66,903 obs (struct cols = ['nr_lag', 'selic_nr_lag'])
+2026-03-02 20:42:23,153 - INFO -   Supply spec '(6) CF+Bank': hat_Y computed for 66,901 obs (struct cols = ['nr_lag', 'selic_nr_lag', 'logA_nr_lag', 'eq_nr_lag', 'seg_S2_nr_lag', 'seg_S3_nr_lag', 'seg_S4_nr_lag', 'seg_S5_nr_lag'])
+2026-03-02 20:42:23,159 - INFO -   Supply spec '(7) CF+FE': hat_Y computed for 66,903 obs (struct cols = ['nr_lag', 'selic_nr_lag', 'logA_nr_lag', 'eq_nr_lag'])
+2026-03-02 20:42:23,167 - INFO -   Supply spec '(8) CF+Clust': hat_Y computed for 66,903 obs (struct cols = ['nr_lag', 'selic_nr_lag', 'logA_nr_lag', 'eq_nr_lag'])
+2026-03-02 20:42:23,172 - INFO -   Supply spec '(9) CF-Haus': hat_Y computed for 66,903 obs (struct cols = ['nr_lag', 'selic_nr_lag'])
+2026-03-02 20:42:23,179 - INFO -   Supply spec '(10) CF-H+Bank': hat_Y computed for 66,901 obs (struct cols = ['nr_lag', 'selic_nr_lag', 'logA_nr_lag', 'eq_nr_lag', 'seg_S2_nr_lag', 'seg_S3_nr_lag', 'seg_S4_nr_lag', 'seg_S5_nr_lag'])
+2026-03-02 20:42:23,181 - INFO - 
+>>> Step 3: Active deposit diagnostics by supply spec ...
+2026-03-02 20:42:23,195 - INFO -   '(1) Natl': active>0=58.6%, active=0=41.4%, mean(active|active>0)=92419621.0
+2026-03-02 20:42:23,202 - INFO -   '(2) +Bank': active>0=52.8%, active=0=47.2%, mean(active|active>0)=88724951.7
+2026-03-02 20:42:23,210 - INFO -   '(3) +FE': active>0=68.7%, active=0=31.3%, mean(active|active>0)=132359717.0
+2026-03-02 20:42:23,217 - INFO -   '(4) Clust': active>0=68.7%, active=0=31.3%, mean(active|active>0)=132359717.0
+2026-03-02 20:42:23,222 - INFO -   '(5) CF Natl': active>0=52.0%, active=0=48.0%, mean(active|active>0)=90443262.4
+2026-03-02 20:42:23,229 - INFO -   '(6) CF+Bank': active>0=38.5%, active=0=61.5%, mean(active|active>0)=97793609.7
+2026-03-02 20:42:23,236 - INFO -   '(7) CF+FE': active>0=46.0%, active=0=54.0%, mean(active|active>0)=117134725.0
+2026-03-02 20:42:23,245 - INFO -   '(8) CF+Clust': active>0=46.0%, active=0=54.0%, mean(active|active>0)=117134725.0
+2026-03-02 20:42:23,252 - INFO -   '(9) CF-Haus': active>0=52.0%, active=0=48.0%, mean(active|active>0)=90456681.5
+2026-03-02 20:42:23,263 - INFO -   '(10) CF-H+Bank': active>0=37.3%, active=0=62.7%, mean(active|active>0)=99941592.3
+2026-03-02 20:42:23,264 - INFO - 
+>>> Step 4: Estimating Berry (1994) demand equation ...
+2026-03-02 20:42:23,280 - INFO - Demand -- type-interacted spread columns: ['spread_T1', 'spread_T2', 'spread_T3', 'spread_T4', 'spread_T5']
+2026-03-02 20:42:23,336 - INFO - Endogenous types [4, 5]: 31,941 obs (47.7% of full sample)
+2026-03-02 20:42:23,340 - INFO - Demand CF cost shifters (types 4-5): ['cosif_lag', 'log_assets_std', 'equity_ratio', 'lagged_cdi', 'lagged_selic', 'personnel_cost_ratio_lag', 'admin_cost_ratio_lag']
+2026-03-02 20:42:23,413 - INFO - Demand CF-A (types 4-5): N=22,822, R^2=0.1462
+2026-03-02 20:42:23,422 - INFO -   Joint F (cost vars): 257.33 (strong)
+2026-03-02 20:42:23,528 - INFO - Demand CF-B (types 4-5, +Hausman IV): N=22,822, R^2=0.2391
+2026-03-02 20:42:23,532 - INFO -   F (Hausman IV): 2110.56 (strong)
+2026-03-02 20:42:23,645 - INFO - 
+=== Demand: supply spec '(1) Natl' | N_valid=39,179, N_zero_active=27,724 / 66,903 ===
+2026-03-02 20:42:23,648 - INFO -   log(s_active): mean=-9.2894, sd=2.3683
+2026-03-02 20:42:23,771 - INFO -   D(1) Natl spread_T1: coef=-4.280347 (SE=0.016767, p=0.0000)***
+2026-03-02 20:42:23,776 - INFO -   D(1) Natl spread_T2: coef=-10.255791 (SE=0.100575, p=0.0000)***
+2026-03-02 20:42:23,778 - INFO -   D(1) Natl spread_T3: coef=-2009.740451 (SE=53.652821, p=0.0000)***
+2026-03-02 20:42:23,785 - INFO -   D(1) Natl spread_T4: coef=0.299279 (SE=0.001075, p=0.0000)***
+2026-03-02 20:42:23,788 - INFO -   D(1) Natl spread_T5: coef=-3.074834 (SE=0.372533, p=0.0000)***
+2026-03-02 20:42:23,903 - INFO - 
+=== Demand: supply spec '(2) +Bank' | N_valid=35,330, N_zero_active=31,571 / 66,903 ===
+2026-03-02 20:42:23,906 - INFO -   log(s_active): mean=-9.3743, sd=2.4742
+2026-03-02 20:42:24,017 - INFO -   D(2) +Bank spread_T1: coef=-4.306722 (SE=0.018373, p=0.0000)***
+2026-03-02 20:42:24,019 - INFO -   D(2) +Bank spread_T2: coef=-10.144823 (SE=0.109917, p=0.0000)***
+2026-03-02 20:42:24,023 - INFO -   D(2) +Bank spread_T3: coef=-2080.549724 (SE=55.464927, p=0.0000)***
+2026-03-02 20:42:24,028 - INFO -   D(2) +Bank spread_T4: coef=0.298689 (SE=0.001092, p=0.0000)***
+2026-03-02 20:42:24,032 - INFO -   D(2) +Bank spread_T5: coef=-3.224268 (SE=0.389028, p=0.0000)***
+2026-03-02 20:42:24,163 - INFO - 
+=== Demand: supply spec '(3) +FE' | N_valid=45,935, N_zero_active=20,968 / 66,903 ===
+2026-03-02 20:42:24,166 - INFO -   log(s_active): mean=-9.4541, sd=2.3194
+2026-03-02 20:42:29,775 - INFO -   D(3) +FE spread_T1: coef=-5.510166 (SE=0.011171, p=0.0000)***
+2026-03-02 20:42:29,778 - INFO -   D(3) +FE spread_T2: coef=-13.074244 (SE=0.094187, p=0.0000)***
+2026-03-02 20:42:29,781 - INFO -   D(3) +FE spread_T3: coef=-6598.497042 (SE=165.615959, p=0.0000)***
+2026-03-02 20:42:29,783 - INFO -   D(3) +FE spread_T4: coef=0.494602 (SE=0.001046, p=0.0000)***
+2026-03-02 20:42:29,787 - INFO -   D(3) +FE spread_T5: coef=-4.854639 (SE=0.618841, p=0.0000)***
+2026-03-02 20:42:29,955 - INFO - 
+=== Demand: supply spec '(4) Clust' | N_valid=45,935, N_zero_active=20,968 / 66,903 ===
+2026-03-02 20:42:29,961 - INFO -   log(s_active): mean=-9.4541, sd=2.3194
+2026-03-02 20:42:37,382 - INFO -   D(4) Clust spread_T1: coef=-5.510166 (SE=0.039294, p=0.0000)***
+2026-03-02 20:42:37,387 - INFO -   D(4) Clust spread_T2: coef=-13.074244 (SE=0.274878, p=0.0000)***
+2026-03-02 20:42:37,389 - INFO -   D(4) Clust spread_T3: coef=-6598.497042 (SE=404.261697, p=0.0000)***
+2026-03-02 20:42:37,391 - INFO -   D(4) Clust spread_T4: coef=0.494602 (SE=0.004866, p=0.0000)***
+2026-03-02 20:42:37,394 - INFO -   D(4) Clust spread_T5: coef=-4.854639 (SE=0.618941, p=0.0000)***
+2026-03-02 20:42:37,489 - INFO - 
+=== Demand: supply spec '(5) CF Natl' | N_valid=34,768, N_zero_active=32,135 / 66,903 ===
+2026-03-02 20:42:37,492 - INFO -   log(s_active): mean=-9.1724, sd=2.3478
+2026-03-02 20:42:37,595 - INFO -   D(5) CF Natl spread_T1: coef=-4.492170 (SE=0.021901, p=0.0000)***
+2026-03-02 20:42:37,600 - INFO -   D(5) CF Natl spread_T2: coef=-10.459701 (SE=0.109310, p=0.0000)***
+2026-03-02 20:42:37,606 - INFO -   D(5) CF Natl spread_T3: coef=-1994.846151 (SE=60.606982, p=0.0000)***
+2026-03-02 20:42:37,614 - INFO -   D(5) CF Natl spread_T4: coef=0.405989 (SE=0.002103, p=0.0000)***
+2026-03-02 20:42:37,617 - INFO -   D(5) CF Natl spread_T5: coef=-3.131353 (SE=0.318168, p=0.0000)***
+2026-03-02 20:42:37,696 - INFO - 
+=== Demand: supply spec '(6) CF+Bank' | N_valid=25,740, N_zero_active=41,161 / 66,903 ===
+2026-03-02 20:42:37,699 - INFO -   log(s_active): mean=-8.8598, sd=2.3692
+2026-03-02 20:42:37,800 - INFO -   D(6) CF+Bank spread_T1: coef=-4.255298 (SE=0.027059, p=0.0000)***
+2026-03-02 20:42:37,802 - INFO -   D(6) CF+Bank spread_T2: coef=-10.236377 (SE=0.113594, p=0.0000)***
+2026-03-02 20:42:37,806 - INFO -   D(6) CF+Bank spread_T3: coef=-1908.756121 (SE=62.073317, p=0.0000)***
+2026-03-02 20:42:37,816 - INFO -   D(6) CF+Bank spread_T4: coef=0.410287 (SE=0.002685, p=0.0000)***
+2026-03-02 20:42:37,819 - INFO -   D(6) CF+Bank spread_T5: coef=-3.218157 (SE=0.445522, p=0.0000)***
+2026-03-02 20:42:37,913 - INFO - 
+=== Demand: supply spec '(7) CF+FE' | N_valid=30,777, N_zero_active=36,126 / 66,903 ===
+2026-03-02 20:42:37,918 - INFO -   log(s_active): mean=-9.2609, sd=2.4851
+2026-03-02 20:42:46,508 - INFO -   D(7) CF+FE spread_T1: coef=-5.555407 (SE=0.016765, p=0.0000)***
+2026-03-02 20:42:46,512 - INFO -   D(7) CF+FE spread_T2: coef=-13.848464 (SE=0.133570, p=0.0000)***
+2026-03-02 20:42:46,515 - INFO -   D(7) CF+FE spread_T3: coef=-5043.371213 (SE=197.121075, p=0.0000)***
+2026-03-02 20:42:46,519 - INFO -   D(7) CF+FE spread_T4: coef=0.541776 (SE=0.002252, p=0.0000)***
+2026-03-02 20:42:46,525 - INFO -   D(7) CF+FE spread_T5: coef=-5.275345 (SE=0.817363, p=0.0000)***
+2026-03-02 20:42:46,595 - INFO - 
+=== Demand: supply spec '(8) CF+Clust' | N_valid=30,777, N_zero_active=36,126 / 66,903 ===
+2026-03-02 20:42:46,598 - INFO -   log(s_active): mean=-9.2609, sd=2.4851
+2026-03-02 20:42:51,891 - INFO -   D(8) CF+Clust spread_T1: coef=-5.555407 (SE=0.051813, p=0.0000)***
+2026-03-02 20:42:51,893 - INFO -   D(8) CF+Clust spread_T2: coef=-13.848464 (SE=0.372048, p=0.0000)***
+2026-03-02 20:42:51,893 - INFO -   D(8) CF+Clust spread_T3: coef=-5043.371213 (SE=436.756530, p=0.0000)***
+2026-03-02 20:42:51,893 - INFO -   D(8) CF+Clust spread_T4: coef=0.541776 (SE=0.006434, p=0.0000)***
+2026-03-02 20:42:51,898 - INFO -   D(8) CF+Clust spread_T5: coef=-5.275345 (SE=0.817295, p=0.0000)***
+2026-03-02 20:42:51,979 - INFO - 
+=== Demand: supply spec '(9) CF-Haus' | N_valid=34,793, N_zero_active=32,110 / 66,903 ===
+2026-03-02 20:42:51,984 - INFO -   log(s_active): mean=-9.1736, sd=2.3497
+2026-03-02 20:42:52,085 - INFO -   D(9) CF-Haus spread_T1: coef=-4.491727 (SE=0.021850, p=0.0000)***
+2026-03-02 20:42:52,087 - INFO -   D(9) CF-Haus spread_T2: coef=-10.456246 (SE=0.109211, p=0.0000)***
+2026-03-02 20:42:52,088 - INFO -   D(9) CF-Haus spread_T3: coef=-1993.790750 (SE=60.398623, p=0.0000)***
+2026-03-02 20:42:52,090 - INFO -   D(9) CF-Haus spread_T4: coef=0.410574 (SE=0.002349, p=0.0000)***
+2026-03-02 20:42:52,091 - INFO -   D(9) CF-Haus spread_T5: coef=-3.122746 (SE=0.318780, p=0.0000)***
+2026-03-02 20:42:52,147 - INFO - 
+=== Demand: supply spec '(10) CF-H+Bank' | N_valid=24,972, N_zero_active=41,929 / 66,903 ===
+2026-03-02 20:42:52,149 - INFO -   log(s_active): mean=-8.8502, sd=2.3885
+2026-03-02 20:42:52,213 - INFO -   D(10) CF-H+Bank spread_T1: coef=-4.245320 (SE=0.027855, p=0.0000)***
+2026-03-02 20:42:52,218 - INFO -   D(10) CF-H+Bank spread_T2: coef=-10.270386 (SE=0.114663, p=0.0000)***
+2026-03-02 20:42:52,223 - INFO -   D(10) CF-H+Bank spread_T3: coef=-1912.803508 (SE=62.998905, p=0.0000)***
+2026-03-02 20:42:52,227 - INFO -   D(10) CF-H+Bank spread_T4: coef=0.412242 (SE=0.002754, p=0.0000)***
+2026-03-02 20:42:52,228 - INFO -   D(10) CF-H+Bank spread_T5: coef=-3.218524 (SE=0.446311, p=0.0000)***
+2026-03-02 20:42:52,241 - INFO - 
+>>> Step 5: Exporting demand results ...
+2026-03-02 20:42:52,279 - INFO - Demand results exported to C:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\Egan_et_al_2025_Rep\processed\ESTIMATION_OUTPUT\demand_results_conglomerate.csv
+2026-03-02 20:42:52,339 - INFO - Demand LaTeX table exported to C:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\Egan_et_al_2025_Rep\processed\ESTIMATION_OUTPUT\demand_table_conglomerate.tex
+2026-03-02 20:42:52,340 - INFO - Demand specs estimated: ['D(1) Natl', 'D(2) +Bank', 'D(3) +FE', 'D(4) Clust', 'D(5) CF Natl', 'D(6) CF+Bank', 'D(7) CF+FE', 'D(8) CF+Clust', 'D(9) CF-Haus', 'D(10) CF-H+Bank']
+2026-03-02 20:42:52,341 - INFO - Done -- estimation_demand_1.py complete.
+2026-03-02 20:43:03,036 - INFO - ================================================================================
+2026-03-02 20:43:03,043 - INFO - DEMAND ESTIMATION -- INSTITUTION LEVEL
+2026-03-02 20:43:03,043 - INFO - Berry (1994) active market shares | estimation_demand_2.py
+2026-03-02 20:43:03,043 - INFO - ================================================================================
+2026-03-02 20:43:03,043 - INFO - 
+>>> Step 1: Loading panel and running supply estimation ...
+2026-03-02 20:43:03,043 - INFO - Loading institution-level panel ...
+2026-03-02 20:43:03,043 - INFO - Loading from Parquet: C:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\Egan_et_al_2025_Rep\processed\PANEL_INTERMED\egan_panel_institution.parquet
+2026-03-02 20:43:03,808 - INFO - Raw panel: 327,921 rows, 33 cols
+2026-03-02 20:43:03,808 - INFO -   total_assets coverage: 327,921 / 327,921
+2026-03-02 20:43:03,808 - INFO -   equity_ratio coverage: 325,670 / 327,921
+2026-03-02 20:43:03,860 - INFO -   segment coverage: 305,121 / 327,921
+2026-03-02 20:43:04,311 - INFO - log_total_assets: mean=19.57, sd=2.58 (standardized)
+2026-03-02 20:43:04,757 - INFO - Winsorized deposit_balance at [p1,p99]=[22.2,27598806145.7]: dropped 1,758 outliers
+2026-03-02 20:43:04,757 - INFO - Estimation sample: 86,115 rows
+2026-03-02 20:43:04,757 - INFO -   Institutions: 1412
+2026-03-02 20:43:04,773 - INFO -   Quarters:     45
+2026-03-02 20:43:04,773 - INFO -   Types:        [np.int64(1), np.int64(2), np.int64(3), np.int64(4), np.int64(5)]
+2026-03-02 20:43:04,790 - INFO - Dep var (deposit_balance, levels): mean=468536318.9, sd=1898412194.9, p5=563389.0, p95=1867473043.7
+2026-03-02 20:43:04,790 - INFO - nr_lag (nr x D_{t-1}): mean=420942384.161615, sd=1796044812.444711
+2026-03-02 20:43:04,790 - INFO - Lagged Selic: mean=9.98, sd=3.98, min=2.00, max=15.00
+2026-03-02 20:43:04,819 - INFO - Segment distribution: {'S5': 48178, 'S4': 21516, 'S3': 6878, 'S2': 1707, 'S1': 1666}
+2026-03-02 20:43:04,831 - INFO - ================================================================================
+2026-03-02 20:43:04,832 - INFO - INSTITUTION-LEVEL STRUCTURAL ESTIMATION
+2026-03-02 20:43:04,834 - INFO -   D_jkt = phi(S,X) * nr * D_jkt-1 + eps  (levels, no ratio)
+2026-03-02 20:43:04,835 - INFO - ================================================================================
+2026-03-02 20:43:14,715 - INFO - Dep var: Dep_jkt (levels)     
+2026-03-02 20:43:14,715 - INFO - ----------------------------------------------------------------------------------------------
+2026-03-02 20:43:14,715 - INFO -                                       (1) Natl       (2) +Bank         (3) +FE       (4) Clust
+2026-03-02 20:43:14,715 - INFO - ----------------------------------------------------------------------------------------------
+2026-03-02 20:43:14,731 - INFO -   Y_1,cons  (nr x D_{t-1})          1.0195***       1.1671***       1.2977***       1.2977*** 
+2026-03-02 20:43:14,731 - INFO -                                 (   0.0259)   (   0.0613)   (   0.0276)   (   0.1084) 
+2026-03-02 20:43:14,731 - INFO -   Y_1,RF   (selic x nr x D_{t-1})      0.0008         -0.0022          0.0016          0.0016    
+2026-03-02 20:43:14,731 - INFO -                                 (   0.0026)   (   0.0020)   (   0.0024)   (   0.0080) 
+2026-03-02 20:43:14,731 - INFO -   Y_2,size (logA x nr x D_{t-1})                     -0.0578**       -0.1036***      -0.1036*** 
+2026-03-02 20:43:14,746 - INFO -                                                 (   0.0229)   (   0.0040)   (   0.0154) 
+2026-03-02 20:43:14,749 - INFO -   Y_2,eq   (E/A x nr x D_{t-1})                     -0.5464**       -0.4328***      -0.4328*   
+2026-03-02 20:43:14,749 - INFO -                                                 (   0.2716)   (   0.0832)   (   0.2577) 
+2026-03-02 20:43:14,749 - INFO -   Y_2,S2  (seg_S2 x nr x D_{t-1})                      0.0324                                    
+2026-03-02 20:43:14,755 - INFO -                                                 (   0.0227)                                 
+2026-03-02 20:43:14,755 - INFO -   Y_2,S3  (seg_S3 x nr x D_{t-1})                      0.1511***                                 
+2026-03-02 20:43:14,755 - INFO -                                                 (   0.0201)                                 
+2026-03-02 20:43:14,765 - INFO -   Y_2,S4  (seg_S4 x nr x D_{t-1})                      0.1470***                                 
+2026-03-02 20:43:14,765 - INFO -                                                 (   0.0258)                                 
+2026-03-02 20:43:14,767 - INFO -   Y_2,S5  (seg_S5 x nr x D_{t-1})                      0.1669***                                 
+2026-03-02 20:43:14,768 - INFO -                                                 (   0.0308)                                 
+2026-03-02 20:43:14,769 - INFO - ----------------------------------------------------------------------------------------------
+2026-03-02 20:43:14,770 - INFO -   N                                     86,115          85,979          86,115          86,115
+2026-03-02 20:43:14,777 - INFO -   R^2                                   0.9392          0.9485          0.9862          0.9862
+2026-03-02 20:43:14,779 - INFO -   InstxType FE                              No              No             Yes             Yes
+2026-03-02 20:43:14,780 - INFO -   Time FE                                   No              No             Yes             Yes
+2026-03-02 20:43:14,782 - INFO -   SE type                            HC-robust       HC-robust       HC-robust      Inst-clust
+2026-03-02 20:43:14,783 - INFO - ----------------------------------------------------------------------------------------------
+2026-03-02 20:43:14,783 - INFO - Interpretation guide:
+2026-03-02 20:43:14,785 - INFO -   Y_1,cons = coef on nr_lag = phi_cons (retention scaling factor)
+2026-03-02 20:43:14,786 - INFO -   Y_1,RF < 0  -> depositors sleepier when rates low
+2026-03-02 20:43:14,787 - INFO -   Y_2,size > 0 -> larger institutions retain more deposits
+2026-03-02 20:43:14,789 - INFO - Baseline retention coef on nr_lag (Spec 1): 1.0195
+2026-03-02 20:43:14,795 - INFO - ================================================================================
+2026-03-02 20:43:14,796 - INFO - CONTROL FUNCTION ESTIMATION (semi-parametric CF) [INSTITUTION]
+2026-03-02 20:43:14,798 - INFO -   Stage 1: spread_jkt ~ cost_shifters + type_dummies  -->  v_hat
+2026-03-02 20:43:14,799 - INFO -   Stage 2: deposit_balance = phi(S,X)*nr*D_{t-1} + b1*v + b2*v^2 + b3*v^3 + eps
+2026-03-02 20:43:14,801 - INFO -   All deposit types treated as potentially endogenous.
+2026-03-02 20:43:14,801 - INFO - ================================================================================
+2026-03-02 20:43:14,807 - INFO - First-stage cost shifters: ['cosif_lag', 'log_assets_std', 'equity_ratio', 'lagged_cdi', 'lagged_selic', 'personnel_cost_ratio_lag', 'admin_cost_ratio_lag']
+2026-03-02 20:43:14,971 - INFO - First-stage A -- N=61,765, R^2=0.5526
+2026-03-02 20:43:14,973 - INFO -   cosif_lag: coef=0.090799, p=0.0000
+2026-03-02 20:43:14,975 - INFO -   log_assets_std: coef=-0.439931, p=0.0000
+2026-03-02 20:43:14,978 - INFO -   equity_ratio: coef=3.670187, p=0.0000
+2026-03-02 20:43:14,981 - INFO -   lagged_cdi: coef=-4.291517, p=0.0000
+2026-03-02 20:43:14,984 - INFO -   lagged_selic: coef=1.227965, p=0.0000
+2026-03-02 20:43:14,986 - INFO -   personnel_cost_ratio_lag: coef=-31.083574, p=0.0007
+2026-03-02 20:43:14,989 - INFO -   admin_cost_ratio_lag: coef=-0.229375, p=0.6765
+2026-03-02 20:43:14,992 - INFO -   type2_d: coef=-1.498875, p=0.0000
+2026-03-02 20:43:14,995 - INFO -   type3_d: coef=-1.887540, p=0.0000
+2026-03-02 20:43:14,998 - INFO -   type4_d: coef=-20.129865, p=0.0000
+2026-03-02 20:43:15,001 - INFO -   type5_d: coef=-1.257307, p=0.0000
+2026-03-02 20:43:15,009 - INFO -   Joint F (cost vars): 342.13 (strong)
+2026-03-02 20:43:15,070 - INFO - Computing Hausman IV (leave-one-out spread mean by type x quarter) ...
+2026-03-02 20:43:15,243 - INFO - First-stage B -- N=61,765, R^2=0.6141
+2026-03-02 20:43:15,245 - INFO -   hausman_iv_spread: coef=1.526359, p=0.0000
+2026-03-02 20:43:15,246 - INFO -   cosif_lag: coef=-0.018378, p=0.0000
+2026-03-02 20:43:15,248 - INFO -   log_assets_std: coef=0.182293, p=0.0100
+2026-03-02 20:43:15,250 - INFO -   equity_ratio: coef=5.928644, p=0.0000
+2026-03-02 20:43:15,251 - INFO -   lagged_cdi: coef=0.191438, p=0.3693
+2026-03-02 20:43:15,251 - INFO -   lagged_selic: coef=-0.125114, p=0.0137
+2026-03-02 20:43:15,253 - INFO -   personnel_cost_ratio_lag: coef=-16.786400, p=0.0310
+2026-03-02 20:43:15,256 - INFO -   admin_cost_ratio_lag: coef=0.323975, p=0.4325
+2026-03-02 20:43:15,262 - INFO -   F (Hausman IV): 5096.61 (strong)
+2026-03-02 20:43:15,343 - INFO - CF residuals (Cost-only): N=61,765, mean=-0.000000, sd=8.986560
+2026-03-02 20:43:15,346 - INFO - CF residuals (Hausman): N=61,765, mean=-0.000000, sd=8.345911
+2026-03-02 20:43:15,469 - INFO -   CF-Cost(5) cf_resid: 662475.659542 (p=0.0024) ***
+2026-03-02 20:43:15,471 - INFO -   CF-Cost(5) cf_resid_sq: 119777.529066 (p=0.0000) ***
+2026-03-02 20:43:15,473 - INFO -   CF-Cost(5) cf_resid_cu: 638.260287 (p=0.3772) 
+2026-03-02 20:43:15,481 - INFO -   CF-Cost(5) joint F on poly: 55.47 -> endogeneity
+2026-03-02 20:43:15,629 - INFO -   CF-Cost(6) cf_resid: 489798.913121 (p=0.0013) ***
+2026-03-02 20:43:15,631 - INFO -   CF-Cost(6) cf_resid_sq: 28519.195065 (p=0.1093) 
+2026-03-02 20:43:15,632 - INFO -   CF-Cost(6) cf_resid_cu: -1032.610737 (p=0.0308) **
+2026-03-02 20:43:15,637 - INFO -   CF-Cost(6) joint F on poly: 15.33 -> endogeneity
+2026-03-02 20:43:23,923 - INFO -   CF-Cost+FE(7) cf_resid: -4906499.107142 (p=0.0000) ***
+2026-03-02 20:43:23,923 - INFO -   CF-Cost+FE(7) cf_resid_sq: 21592.161362 (p=0.0151) **
+2026-03-02 20:43:23,923 - INFO -   CF-Cost+FE(7) cf_resid_cu: 9181.972007 (p=0.0000) ***
+2026-03-02 20:43:23,933 - INFO -   CF-Cost+FE(7) joint F on poly: 344.39 -> endogeneity
+2026-03-02 20:43:24,106 - INFO -   CF-Hausman(9) cf_resid_h: -552793.076432 (p=0.2075) 
+2026-03-02 20:43:24,106 - INFO -   CF-Hausman(9) cf_resid_h_sq: 98892.146608 (p=0.0000) ***
+2026-03-02 20:43:24,122 - INFO -   CF-Hausman(9) cf_resid_h_cu: 1725.457131 (p=0.1262) 
+2026-03-02 20:43:24,123 - INFO -   CF-Hausman(9) joint F on poly: 76.72 -> endogeneity
+2026-03-02 20:43:24,253 - INFO -   CF-Hausman(10) cf_resid_h: -1405571.083593 (p=0.0033) ***
+2026-03-02 20:43:24,254 - INFO -   CF-Hausman(10) cf_resid_h_sq: 40656.995809 (p=0.0003) ***
+2026-03-02 20:43:24,255 - INFO -   CF-Hausman(10) cf_resid_h_cu: 2586.093434 (p=0.0236) **
+2026-03-02 20:43:24,261 - INFO -   CF-Hausman(10) joint F on poly: 39.46 -> endogeneity
+2026-03-02 20:43:24,263 - INFO - Dep var: Dep_jkt (levels, CF) 
+2026-03-02 20:43:24,264 - INFO - ------------------------------------------------------------------------------------------------------------------------------
+2026-03-02 20:43:24,265 - INFO -                                    (5) CF Natl     (6) CF+Bank       (7) CF+FE    (8) CF+Clust     (9) CF-Haus  (10) CF-H+Bank
+2026-03-02 20:43:24,267 - INFO - ------------------------------------------------------------------------------------------------------------------------------
+2026-03-02 20:43:24,270 - INFO -   Y_1,cons  (nr x D_{t-1})          1.1227***       1.2341***       1.2172***       1.2172***       1.1252***       1.2414*** 
+2026-03-02 20:43:24,271 - INFO -                                 (   0.0255)   (   0.2678)   (   0.0119)   (   0.0584)   (   0.0257)   (   0.2639) 
+2026-03-02 20:43:24,276 - INFO -   Y_1,RF   (selic x nr x D_{t-1})     -0.0040         -0.0024          0.0016          0.0016         -0.0041         -0.0023    
+2026-03-02 20:43:24,277 - INFO -                                 (   0.0027)   (   0.0020)   (   0.0012)   (   0.0061)   (   0.0027)   (   0.0020) 
+2026-03-02 20:43:24,281 - INFO -   Y_2,size (logA x nr x D_{t-1})                     -0.0744         -0.0883***      -0.0883***                      -0.0767    
+2026-03-02 20:43:24,282 - INFO -                                                 (   0.0833)   (   0.0045)   (   0.0206)                   (   0.0820) 
+2026-03-02 20:43:24,286 - INFO -   Y_2,eq   (E/A x nr x D_{t-1})                     -0.2132          0.5946***       0.5946*                        -0.2200    
+2026-03-02 20:43:24,286 - INFO -                                                 (   0.4430)   (   0.0701)   (   0.3479)                   (   0.4423) 
+2026-03-02 20:43:24,289 - INFO -   Y_2,S2  (seg_S2 x nr x D_{t-1})                      0.0050                                                          0.0029    
+2026-03-02 20:43:24,290 - INFO -                                                 (   0.0807)                                                   (   0.0796) 
+2026-03-02 20:43:24,290 - INFO -   Y_2,S3  (seg_S3 x nr x D_{t-1})                      0.0636                                                          0.0605    
+2026-03-02 20:43:24,290 - INFO -                                                 (   0.1327)                                                   (   0.1312) 
+2026-03-02 20:43:24,290 - INFO -   Y_2,S4  (seg_S4 x nr x D_{t-1})                      0.1028                                                          0.0999    
+2026-03-02 20:43:24,290 - INFO -                                                 (   0.1331)                                                   (   0.1312) 
+2026-03-02 20:43:24,290 - INFO -   Y_2,S5  (seg_S5 x nr x D_{t-1})                      0.0579                                                          0.0593    
+2026-03-02 20:43:24,290 - INFO -                                                 (   0.1532)                                                   (   0.1517) 
+2026-03-02 20:43:24,290 - INFO -   beta_1 v^  (CF-cost, 1st)     662475.6595***   489798.9131***   -4906499.1071***   -4906499.1071***                                 
+2026-03-02 20:43:24,290 - INFO -                                 (217822.2883)   (152199.3062)   (414559.9395)   (1753384.6066)                                 
+2026-03-02 20:43:24,290 - INFO -   beta_2 v^^2 (CF-cost, 2nd)    119777.5291***   28519.1951      21592.1614**    21592.1614                                    
+2026-03-02 20:43:24,305 - INFO -                                 (13816.7212)   (17808.5454)   (8882.9542)   (36690.5514)                                 
+2026-03-02 20:43:24,307 - INFO -   beta_3 v^^3 (CF-cost, 3rd)      638.2603      -1032.6107**     9181.9720***    9181.9720                                    
+2026-03-02 20:43:24,307 - INFO -                                 ( 722.7079)   ( 478.0230)   (1387.4653)   (5831.2902)                                 
+2026-03-02 20:43:24,309 - INFO -   beta_1 v^H (CF-Hausman, 1st)                                                                  -552793.0764      -1405571.0836*** 
+2026-03-02 20:43:24,309 - INFO -                                                                                                 (438555.8924)   (478663.6301) 
+2026-03-02 20:43:24,310 - INFO -   beta_2 v^H^2 (CF-Hausman, 2nd)                                                                  98892.1466***   40656.9958*** 
+2026-03-02 20:43:24,311 - INFO -                                                                                                 (9933.0310)   (11305.5435) 
+2026-03-02 20:43:24,315 - INFO -   beta_3 v^H^3 (CF-Hausman, 3rd)                                                                   1725.4571       2586.0934**  
+2026-03-02 20:43:24,316 - INFO -                                                                                                 (1128.2501)   (1142.7676) 
+2026-03-02 20:43:24,317 - INFO - ------------------------------------------------------------------------------------------------------------------------------
+2026-03-02 20:43:24,318 - INFO -   N                                     61,765          61,670          61,765          61,765          61,765          61,670
+2026-03-02 20:43:24,326 - INFO -   R^2                                   0.9607          0.9655          0.9910          0.9910          0.9606          0.9656
+2026-03-02 20:43:24,327 - INFO -   InstxType FE                              No              No             Yes             Yes              No              No
+2026-03-02 20:43:24,327 - INFO -   Time FE                                   No              No             Yes             Yes              No              No
+2026-03-02 20:43:24,328 - INFO -   SE type                            HC-robust       HC-robust       HC-robust      Inst-clust       HC-robust       HC-robust
+2026-03-02 20:43:24,330 - INFO - ------------------------------------------------------------------------------------------------------------------------------
+2026-03-02 20:43:24,339 - INFO - Supply specs available: ['(1) Natl', '(2) +Bank', '(3) +FE', '(4) Clust', '(5) CF Natl', '(6) CF+Bank', '(7) CF+FE', '(8) CF+Clust', '(9) CF-Haus', '(10) CF-H+Bank']
+2026-03-02 20:43:24,339 - INFO - 
+>>> Step 2: Computing structural sleeping-deposit predictions ...
+2026-03-02 20:43:24,398 - INFO -   Supply spec '(1) Natl': hat_Y computed for 86,115 obs (struct cols = ['nr_lag', 'selic_nr_lag'])
+2026-03-02 20:43:24,408 - INFO -   Supply spec '(2) +Bank': hat_Y computed for 85,979 obs (struct cols = ['nr_lag', 'selic_nr_lag', 'logA_nr_lag', 'eq_nr_lag', 'seg_S2_nr_lag', 'seg_S3_nr_lag', 'seg_S4_nr_lag', 'seg_S5_nr_lag'])
+2026-03-02 20:43:24,414 - INFO -   Supply spec '(3) +FE': hat_Y computed for 86,115 obs (struct cols = ['nr_lag', 'selic_nr_lag', 'logA_nr_lag', 'eq_nr_lag'])
+2026-03-02 20:43:24,420 - INFO -   Supply spec '(4) Clust': hat_Y computed for 86,115 obs (struct cols = ['nr_lag', 'selic_nr_lag', 'logA_nr_lag', 'eq_nr_lag'])
+2026-03-02 20:43:24,425 - INFO -   Supply spec '(5) CF Natl': hat_Y computed for 86,115 obs (struct cols = ['nr_lag', 'selic_nr_lag'])
+2026-03-02 20:43:24,433 - INFO -   Supply spec '(6) CF+Bank': hat_Y computed for 85,979 obs (struct cols = ['nr_lag', 'selic_nr_lag', 'logA_nr_lag', 'eq_nr_lag', 'seg_S2_nr_lag', 'seg_S3_nr_lag', 'seg_S4_nr_lag', 'seg_S5_nr_lag'])
+2026-03-02 20:43:24,439 - INFO -   Supply spec '(7) CF+FE': hat_Y computed for 86,115 obs (struct cols = ['nr_lag', 'selic_nr_lag', 'logA_nr_lag', 'eq_nr_lag'])
+2026-03-02 20:43:24,447 - INFO -   Supply spec '(8) CF+Clust': hat_Y computed for 86,115 obs (struct cols = ['nr_lag', 'selic_nr_lag', 'logA_nr_lag', 'eq_nr_lag'])
+2026-03-02 20:43:24,451 - INFO -   Supply spec '(9) CF-Haus': hat_Y computed for 86,115 obs (struct cols = ['nr_lag', 'selic_nr_lag'])
+2026-03-02 20:43:24,462 - INFO -   Supply spec '(10) CF-H+Bank': hat_Y computed for 85,979 obs (struct cols = ['nr_lag', 'selic_nr_lag', 'logA_nr_lag', 'eq_nr_lag', 'seg_S2_nr_lag', 'seg_S3_nr_lag', 'seg_S4_nr_lag', 'seg_S5_nr_lag'])
+2026-03-02 20:43:24,465 - INFO - 
+>>> Step 3: Active deposit diagnostics by supply spec ...
+2026-03-02 20:43:24,474 - INFO -   '(1) Natl': active>0=65.0%, active=0=35.0%, mean(active|active>0)=92065707.3
+2026-03-02 20:43:24,475 - INFO -   '(2) +Bank': active>0=40.8%, active=0=59.0%, mean(active|active>0)=111701569.5
+2026-03-02 20:43:24,492 - INFO -   '(3) +FE': active>0=34.8%, active=0=65.2%, mean(active|active>0)=124880993.2
+2026-03-02 20:43:24,499 - INFO -   '(4) Clust': active>0=34.8%, active=0=65.2%, mean(active|active>0)=124880993.2
+2026-03-02 20:43:24,509 - INFO -   '(5) CF Natl': active>0=54.1%, active=0=45.9%, mean(active|active>0)=89486762.5
+2026-03-02 20:43:24,514 - INFO -   '(6) CF+Bank': active>0=33.4%, active=0=66.4%, mean(active|active>0)=120684685.9
+2026-03-02 20:43:24,522 - INFO -   '(7) CF+FE': active>0=24.2%, active=0=75.8%, mean(active|active>0)=145014740.2
+2026-03-02 20:43:24,531 - INFO -   '(8) CF+Clust': active>0=24.2%, active=0=75.8%, mean(active|active>0)=145014740.2
+2026-03-02 20:43:24,541 - INFO -   '(9) CF-Haus': active>0=53.8%, active=0=46.2%, mean(active|active>0)=89432274.7
+2026-03-02 20:43:24,549 - INFO -   '(10) CF-H+Bank': active>0=32.8%, active=0=67.0%, mean(active|active>0)=122339828.7
+2026-03-02 20:43:24,550 - INFO - 
+>>> Step 4: Estimating Berry (1994) demand equation ...
+2026-03-02 20:43:24,568 - INFO - Demand -- type-interacted spread columns: ['spread_T1', 'spread_T2', 'spread_T3', 'spread_T4', 'spread_T5']
+2026-03-02 20:43:24,661 - INFO - Endogenous types [4, 5]: 40,552 obs (47.1% of full sample)
+2026-03-02 20:43:24,666 - INFO - Demand CF cost shifters (types 4-5): ['cosif_lag', 'log_assets_std', 'equity_ratio', 'lagged_cdi', 'lagged_selic', 'personnel_cost_ratio_lag', 'admin_cost_ratio_lag']
+2026-03-02 20:43:24,761 - INFO - Demand CF-A (types 4-5): N=29,718, R^2=0.1168
+2026-03-02 20:43:24,774 - INFO -   Joint F (cost vars): 255.54 (strong)
+2026-03-02 20:43:24,936 - INFO - Demand CF-B (types 4-5, +Hausman IV): N=29,718, R^2=0.2231
+2026-03-02 20:43:24,939 - INFO -   F (Hausman IV): 2745.70 (strong)
+2026-03-02 20:43:25,114 - INFO - 
+=== Demand: supply spec '(1) Natl' | N_valid=55,989, N_zero_active=30,126 / 86,115 ===
+2026-03-02 20:43:25,117 - INFO -   log(s_active): mean=-9.5850, sd=2.4759
+2026-03-02 20:43:25,267 - INFO -   D(1) Natl spread_T1: coef=-4.132135 (SE=0.010883, p=0.0000)***
+2026-03-02 20:43:25,270 - INFO -   D(1) Natl spread_T2: coef=-10.417012 (SE=0.090745, p=0.0000)***
+2026-03-02 20:43:25,273 - INFO -   D(1) Natl spread_T3: coef=-709.802931 (SE=25.598131, p=0.0000)***
+2026-03-02 20:43:25,275 - INFO -   D(1) Natl spread_T4: coef=0.313655 (SE=0.000982, p=0.0000)***
+2026-03-02 20:43:25,279 - INFO -   D(1) Natl spread_T5: coef=-2.982550 (SE=0.052827, p=0.0000)***
+2026-03-02 20:43:25,389 - INFO - 
+=== Demand: supply spec '(2) +Bank' | N_valid=35,157, N_zero_active=50,822 / 86,115 ===
+2026-03-02 20:43:25,395 - INFO -   log(s_active): mean=-9.4750, sd=2.6969
+2026-03-02 20:43:25,481 - INFO -   D(2) +Bank spread_T1: coef=-4.169665 (SE=0.017401, p=0.0000)***
+2026-03-02 20:43:25,482 - INFO -   D(2) +Bank spread_T2: coef=-10.309729 (SE=0.120164, p=0.0000)***
+2026-03-02 20:43:25,484 - INFO -   D(2) +Bank spread_T3: coef=-654.225160 (SE=28.520620, p=0.0000)***
+2026-03-02 20:43:25,486 - INFO -   D(2) +Bank spread_T4: coef=0.314563 (SE=0.001194, p=0.0000)***
+2026-03-02 20:43:25,487 - INFO -   D(2) +Bank spread_T5: coef=-2.993007 (SE=0.068821, p=0.0000)***
+2026-03-02 20:43:25,561 - INFO - 
+=== Demand: supply spec '(3) +FE' | N_valid=29,934, N_zero_active=56,181 / 86,115 ===
+2026-03-02 20:43:25,565 - INFO -   log(s_active): mean=-9.1632, sd=2.6324
+2026-03-02 20:43:31,220 - INFO -   D(3) +FE spread_T1: coef=-5.486592 (SE=0.020214, p=0.0000)***
+2026-03-02 20:43:31,220 - INFO -   D(3) +FE spread_T2: coef=-13.509389 (SE=0.128426, p=0.0000)***
+2026-03-02 20:43:31,235 - INFO -   D(3) +FE spread_T3: coef=-1908.231773 (SE=88.102728, p=0.0000)***
+2026-03-02 20:43:31,237 - INFO -   D(3) +FE spread_T4: coef=0.508448 (SE=0.001177, p=0.0000)***
+2026-03-02 20:43:31,237 - INFO -   D(3) +FE spread_T5: coef=-5.044449 (SE=0.239315, p=0.0000)***
+2026-03-02 20:43:31,336 - INFO - 
+=== Demand: supply spec '(4) Clust' | N_valid=29,934, N_zero_active=56,181 / 86,115 ===
+2026-03-02 20:43:31,337 - INFO -   log(s_active): mean=-9.1632, sd=2.6324
+2026-03-02 20:43:37,079 - INFO -   D(4) Clust spread_T1: coef=-5.486592 (SE=0.059884, p=0.0000)***
+2026-03-02 20:43:37,079 - INFO -   D(4) Clust spread_T2: coef=-13.509389 (SE=0.280824, p=0.0000)***
+2026-03-02 20:43:37,085 - INFO -   D(4) Clust spread_T3: coef=-1908.231773 (SE=148.413530, p=0.0000)***
+2026-03-02 20:43:37,085 - INFO -   D(4) Clust spread_T4: coef=0.508448 (SE=0.005669, p=0.0000)***
+2026-03-02 20:43:37,085 - INFO -   D(4) Clust spread_T5: coef=-5.044449 (SE=0.361755, p=0.0000)***
+2026-03-02 20:43:37,198 - INFO - 
+=== Demand: supply spec '(5) CF Natl' | N_valid=46,557, N_zero_active=39,558 / 86,115 ===
+2026-03-02 20:43:37,200 - INFO -   log(s_active): mean=-9.3891, sd=2.4330
+2026-03-02 20:43:37,340 - INFO -   D(5) CF Natl spread_T1: coef=-4.052119 (SE=0.012251, p=0.0000)***
+2026-03-02 20:43:37,341 - INFO -   D(5) CF Natl spread_T2: coef=-10.451239 (SE=0.094774, p=0.0000)***
+2026-03-02 20:43:37,343 - INFO -   D(5) CF Natl spread_T3: coef=-660.214195 (SE=26.698558, p=0.0000)***
+2026-03-02 20:43:37,344 - INFO -   D(5) CF Natl spread_T4: coef=0.414003 (SE=0.002550, p=0.0000)***
+2026-03-02 20:43:37,345 - INFO -   D(5) CF Natl spread_T5: coef=-2.955924 (SE=0.055439, p=0.0000)***
+2026-03-02 20:43:37,441 - INFO - 
+=== Demand: supply spec '(6) CF+Bank' | N_valid=28,804, N_zero_active=57,175 / 86,115 ===
+2026-03-02 20:43:37,444 - INFO -   log(s_active): mean=-9.1180, sd=2.5799
+2026-03-02 20:43:37,531 - INFO -   D(6) CF+Bank spread_T1: coef=-4.050085 (SE=0.020669, p=0.0000)***
+2026-03-02 20:43:37,534 - INFO -   D(6) CF+Bank spread_T2: coef=-10.478236 (SE=0.122543, p=0.0000)***
+2026-03-02 20:43:37,537 - INFO -   D(6) CF+Bank spread_T3: coef=-627.869135 (SE=31.608310, p=0.0000)***
+2026-03-02 20:43:37,540 - INFO -   D(6) CF+Bank spread_T4: coef=0.415313 (SE=0.002905, p=0.0000)***
+2026-03-02 20:43:37,545 - INFO -   D(6) CF+Bank spread_T5: coef=-2.923411 (SE=0.069849, p=0.0000)***
+2026-03-02 20:43:37,603 - INFO - 
+=== Demand: supply spec '(7) CF+FE' | N_valid=20,810, N_zero_active=65,305 / 86,115 ===
+2026-03-02 20:43:37,604 - INFO -   log(s_active): mean=-8.6867, sd=2.5402
+2026-03-02 20:43:41,975 - INFO -   D(7) CF+FE spread_T1: coef=-4.710228 (SE=0.022276, p=0.0000)***
+2026-03-02 20:43:41,975 - INFO -   D(7) CF+FE spread_T2: coef=-13.880222 (SE=0.146740, p=0.0000)***
+2026-03-02 20:43:41,992 - INFO -   D(7) CF+FE spread_T3: coef=-1591.895936 (SE=64.261682, p=0.0000)***
+2026-03-02 20:43:41,992 - INFO -   D(7) CF+FE spread_T4: coef=0.517351 (SE=0.002130, p=0.0000)***
+2026-03-02 20:43:41,992 - INFO -   D(7) CF+FE spread_T5: coef=-4.339760 (SE=0.230341, p=0.0000)***
+2026-03-02 20:43:42,093 - INFO - 
+=== Demand: supply spec '(8) CF+Clust' | N_valid=20,810, N_zero_active=65,305 / 86,115 ===
+2026-03-02 20:43:42,095 - INFO -   log(s_active): mean=-8.6867, sd=2.5402
+2026-03-02 20:43:47,403 - INFO -   D(8) CF+Clust spread_T1: coef=-4.710228 (SE=0.054346, p=0.0000)***
+2026-03-02 20:43:47,420 - INFO -   D(8) CF+Clust spread_T2: coef=-13.880222 (SE=0.280434, p=0.0000)***
+2026-03-02 20:43:47,420 - INFO -   D(8) CF+Clust spread_T3: coef=-1591.895936 (SE=103.144784, p=0.0000)***
+2026-03-02 20:43:47,420 - INFO -   D(8) CF+Clust spread_T4: coef=0.517351 (SE=0.008842, p=0.0000)***
+2026-03-02 20:43:47,420 - INFO -   D(8) CF+Clust spread_T5: coef=-4.339760 (SE=0.354401, p=0.0000)***
+2026-03-02 20:43:47,569 - INFO - 
+=== Demand: supply spec '(9) CF-Haus' | N_valid=46,344, N_zero_active=39,771 / 86,115 ===
+2026-03-02 20:43:47,577 - INFO -   log(s_active): mean=-9.3855, sd=2.4329
+2026-03-02 20:43:47,757 - INFO -   D(9) CF-Haus spread_T1: coef=-4.050253 (SE=0.012278, p=0.0000)***
+2026-03-02 20:43:47,760 - INFO -   D(9) CF-Haus spread_T2: coef=-10.464437 (SE=0.095389, p=0.0000)***
+2026-03-02 20:43:47,763 - INFO -   D(9) CF-Haus spread_T3: coef=-659.958306 (SE=26.910025, p=0.0000)***
+2026-03-02 20:43:47,764 - INFO -   D(9) CF-Haus spread_T4: coef=0.408343 (SE=0.001731, p=0.0000)***
+2026-03-02 20:43:47,766 - INFO -   D(9) CF-Haus spread_T5: coef=-2.958746 (SE=0.055534, p=0.0000)***
+2026-03-02 20:43:47,878 - INFO - 
+=== Demand: supply spec '(10) CF-H+Bank' | N_valid=28,280, N_zero_active=57,699 / 86,115 ===
+2026-03-02 20:43:47,882 - INFO -   log(s_active): mean=-9.0997, sd=2.5755
+2026-03-02 20:43:47,987 - INFO -   D(10) CF-H+Bank spread_T1: coef=-4.040676 (SE=0.020909, p=0.0000)***
+2026-03-02 20:43:47,992 - INFO -   D(10) CF-H+Bank spread_T2: coef=-10.462621 (SE=0.122400, p=0.0000)***
+2026-03-02 20:43:47,994 - INFO -   D(10) CF-H+Bank spread_T3: coef=-627.015226 (SE=31.564851, p=0.0000)***
+2026-03-02 20:43:47,999 - INFO -   D(10) CF-H+Bank spread_T4: coef=0.415727 (SE=0.002936, p=0.0000)***
+2026-03-02 20:43:48,003 - INFO -   D(10) CF-H+Bank spread_T5: coef=-2.924624 (SE=0.070330, p=0.0000)***
+2026-03-02 20:43:48,024 - INFO - 
+>>> Step 5: Exporting demand results ...
+2026-03-02 20:43:48,056 - INFO - Demand results exported to C:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\Egan_et_al_2025_Rep\processed\ESTIMATION_OUTPUT\demand_results_institution.csv
+2026-03-02 20:43:48,122 - INFO - Demand LaTeX table exported to C:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\Egan_et_al_2025_Rep\processed\ESTIMATION_OUTPUT\demand_table_institution.tex
+2026-03-02 20:43:48,122 - INFO - Demand specs estimated: ['D(1) Natl', 'D(2) +Bank', 'D(3) +FE', 'D(4) Clust', 'D(5) CF Natl', 'D(6) CF+Bank', 'D(7) CF+FE', 'D(8) CF+Clust', 'D(9) CF-Haus', 'D(10) CF-H+Bank']
+2026-03-02 20:43:48,123 - INFO - Done -- estimation_demand_2.py complete.
+======================================================================
+  Egan et al. (2025) -- Full Replication Pipeline
+  Started at 2026-03-02 20:35:38
+  Running from stage 1
+======================================================================
+
+----------------------------------------------------------------------
+  1a  COSIF processing (monthly -> institution rates)
+  Script : cosif_process_1.py
+----------------------------------------------------------------------
+  OK  completed in 196.0s
+
+----------------------------------------------------------------------
+  2a  COSIF quarterly collapse (institution level)
+  Script : cosif_process_2.py
+----------------------------------------------------------------------
+  OK  completed in 3.9s
+
+----------------------------------------------------------------------
+  3a  Conglomerate panel construction
+  Script : egan_panel_build.py
+----------------------------------------------------------------------
+  OK  completed in 72.3s
+
+----------------------------------------------------------------------
+  3b  Institution panel construction
+  Script : egan_panel_build_2.py
+----------------------------------------------------------------------
+  OK  completed in 68.8s
+
+----------------------------------------------------------------------
+  4a  Structural estimation -- CONGLOMERATE level
+  Script : estimation_1.py
+----------------------------------------------------------------------
+  OK  completed in 17.7s
+
+----------------------------------------------------------------------
+  4b  Structural estimation -- INSTITUTION level
+  Script : estimation_2.py
+----------------------------------------------------------------------
+  OK  completed in 33.0s
+
+----------------------------------------------------------------------
+  5a  Demand estimation (Berry 1994) -- CONGLOMERATE level
+  Script : estimation_demand_1.py
+----------------------------------------------------------------------
+  OK  completed in 42.7s
+
+----------------------------------------------------------------------
+  5b  Demand estimation (Berry 1994) -- INSTITUTION level
+  Script : estimation_demand_2.py
+----------------------------------------------------------------------
+  OK  completed in 56.1s
+
+======================================================================
+  Summary
+----------------------------------------------------------------------
+  cosif_process_1.py                    196.0s
+  cosif_process_2.py                      3.9s
+  egan_panel_build.py                    72.3s
+  egan_panel_build_2.py                  68.8s
+  estimation_1.py                        17.7s
+  estimation_2.py                        33.0s
+  estimation_demand_1.py                 42.7s
+  estimation_demand_2.py                 56.1s
+----------------------------------------------------------------------
+  Total:  490.4s  (8.2 min)
+  Finished at 2026-03-02 20:43:48
+======================================================================
