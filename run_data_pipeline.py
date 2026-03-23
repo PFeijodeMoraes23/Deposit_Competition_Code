@@ -39,7 +39,7 @@ Notes
   * If any step exits with a non-zero return code the pipeline halts and prints
     the failed step.  Fix the issue and rerun with --from <stage> to resume.
   * Stage 2 sub-steps (2a-2e) are independent and could in principle be
-    parallelised; they are serialised here for simplicity and to avoid hitting
+    parallelized; they are serialized here for simplicity and to avoid hitting
     rate limits on BCB / ANATEL / SAGI APIs simultaneously.
   * Stage 4 requires ALL panels to exist.  If some stage-2 downloads failed
     (data source unavailable), build_market_panel.py handles missing files
@@ -158,7 +158,7 @@ def _banner(text: str, char: str = "-") -> None:
     print(char * _W)
 
 
-_print_lock = threading.Lock()  # serialise console output across parallel workers
+_print_lock = threading.Lock()  # serialize console output across parallel workers
 
 
 def run_step(step_id: str, script: str, description: str) -> float:

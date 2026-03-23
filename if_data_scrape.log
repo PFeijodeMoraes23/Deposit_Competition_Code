@@ -1595,3 +1595,634 @@
 2026-03-18 17:05:26,166 - INFO - Skipping existing ESTBAN file: 201303_ESTBAN_AG.CSV
 2026-03-18 17:05:26,167 - INFO - Skipping existing ESTBAN file: 201302_ESTBAN_AG.CSV
 2026-03-18 17:05:26,168 - INFO - Skipping existing ESTBAN file: 201301_ESTBAN_AG.CSV
+2026-03-23 17:11:52,672 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\List\IF_DATA_List_2016_3.csv
+2026-03-23 17:11:52,674 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\List\IF_DATA_List_2016_6.csv
+2026-03-23 17:11:52,676 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\List\IF_DATA_List_2016_9.csv
+2026-03-23 17:11:52,678 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\List\IF_DATA_List_2016_12.csv
+2026-03-23 17:11:52,681 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Prudential Conglomerates\IF_DATA_Values_2016_3.csv
+2026-03-23 17:11:52,683 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Individual Institutions\IF_DATA_Values_2016_3.csv
+2026-03-23 17:11:52,683 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Financial Conglomerates\IF_DATA_Values_2016_3.csv
+2026-03-23 17:11:52,688 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Prudential Conglomerates\IF_DATA_Values_2016_6.csv
+2026-03-23 17:11:52,689 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Individual Institutions\IF_DATA_Values_2016_6.csv
+2026-03-23 17:11:52,690 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Financial Conglomerates\IF_DATA_Values_2016_6.csv
+2026-03-23 17:11:52,694 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Prudential Conglomerates\IF_DATA_Values_2016_9.csv
+2026-03-23 17:11:52,696 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Financial Conglomerates\IF_DATA_Values_2016_9.csv
+2026-03-23 17:11:52,696 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Individual Institutions\IF_DATA_Values_2016_9.csv
+2026-03-23 17:11:52,700 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Prudential Conglomerates\IF_DATA_Values_2016_12.csv
+2026-03-23 17:11:52,702 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Individual Institutions\IF_DATA_Values_2016_12.csv
+2026-03-23 17:11:52,702 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Financial Conglomerates\IF_DATA_Values_2016_12.csv
+2026-03-23 17:11:52,704 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\List\IF_DATA_List_2017_3.csv
+2026-03-23 17:11:52,705 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\List\IF_DATA_List_2017_6.csv
+2026-03-23 17:11:52,706 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\List\IF_DATA_List_2017_9.csv
+2026-03-23 17:11:52,708 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\List\IF_DATA_List_2017_12.csv
+2026-03-23 17:11:52,711 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Prudential Conglomerates\IF_DATA_Values_2017_3.csv
+2026-03-23 17:11:52,711 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Individual Institutions\IF_DATA_Values_2017_3.csv
+2026-03-23 17:11:52,712 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Financial Conglomerates\IF_DATA_Values_2017_3.csv
+2026-03-23 17:11:52,716 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Prudential Conglomerates\IF_DATA_Values_2017_6.csv
+2026-03-23 17:11:52,717 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Individual Institutions\IF_DATA_Values_2017_6.csv
+2026-03-23 17:11:52,718 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Financial Conglomerates\IF_DATA_Values_2017_6.csv
+2026-03-23 17:11:52,722 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Prudential Conglomerates\IF_DATA_Values_2017_9.csv
+2026-03-23 17:11:52,723 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Individual Institutions\IF_DATA_Values_2017_9.csv
+2026-03-23 17:11:52,724 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Financial Conglomerates\IF_DATA_Values_2017_9.csv
+2026-03-23 17:11:52,727 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Prudential Conglomerates\IF_DATA_Values_2017_12.csv
+2026-03-23 17:11:52,729 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Individual Institutions\IF_DATA_Values_2017_12.csv
+2026-03-23 17:11:52,729 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Financial Conglomerates\IF_DATA_Values_2017_12.csv
+2026-03-23 17:11:52,733 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\List\IF_DATA_List_2018_3.csv
+2026-03-23 17:11:52,734 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\List\IF_DATA_List_2018_6.csv
+2026-03-23 17:11:52,735 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\List\IF_DATA_List_2018_9.csv
+2026-03-23 17:11:52,737 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\List\IF_DATA_List_2018_12.csv
+2026-03-23 17:11:52,739 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Prudential Conglomerates\IF_DATA_Values_2018_3.csv
+2026-03-23 17:11:52,740 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Individual Institutions\IF_DATA_Values_2018_3.csv
+2026-03-23 17:11:52,740 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Financial Conglomerates\IF_DATA_Values_2018_3.csv
+2026-03-23 17:11:52,743 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Prudential Conglomerates\IF_DATA_Values_2018_6.csv
+2026-03-23 17:11:52,744 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Individual Institutions\IF_DATA_Values_2018_6.csv
+2026-03-23 17:11:52,744 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Financial Conglomerates\IF_DATA_Values_2018_6.csv
+2026-03-23 17:11:52,748 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Prudential Conglomerates\IF_DATA_Values_2018_9.csv
+2026-03-23 17:11:52,748 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Individual Institutions\IF_DATA_Values_2018_9.csv
+2026-03-23 17:11:52,749 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Financial Conglomerates\IF_DATA_Values_2018_9.csv
+2026-03-23 17:11:52,752 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Prudential Conglomerates\IF_DATA_Values_2018_12.csv
+2026-03-23 17:11:52,753 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Financial Conglomerates\IF_DATA_Values_2018_12.csv
+2026-03-23 17:11:52,754 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Individual Institutions\IF_DATA_Values_2018_12.csv
+2026-03-23 17:11:52,756 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\List\IF_DATA_List_2019_3.csv
+2026-03-23 17:11:52,757 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\List\IF_DATA_List_2019_6.csv
+2026-03-23 17:11:52,759 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\List\IF_DATA_List_2019_9.csv
+2026-03-23 17:11:52,760 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\List\IF_DATA_List_2019_12.csv
+2026-03-23 17:11:52,762 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Prudential Conglomerates\IF_DATA_Values_2019_3.csv
+2026-03-23 17:11:52,763 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Individual Institutions\IF_DATA_Values_2019_3.csv
+2026-03-23 17:11:52,764 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Financial Conglomerates\IF_DATA_Values_2019_3.csv
+2026-03-23 17:11:52,767 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Financial Conglomerates\IF_DATA_Values_2019_6.csv
+2026-03-23 17:11:52,767 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Prudential Conglomerates\IF_DATA_Values_2019_6.csv
+2026-03-23 17:11:52,768 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Individual Institutions\IF_DATA_Values_2019_6.csv
+2026-03-23 17:11:52,771 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Prudential Conglomerates\IF_DATA_Values_2019_9.csv
+2026-03-23 17:11:52,772 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Financial Conglomerates\IF_DATA_Values_2019_9.csv
+2026-03-23 17:11:52,772 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Individual Institutions\IF_DATA_Values_2019_9.csv
+2026-03-23 17:11:52,775 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Prudential Conglomerates\IF_DATA_Values_2019_12.csv
+2026-03-23 17:11:52,776 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Financial Conglomerates\IF_DATA_Values_2019_12.csv
+2026-03-23 17:11:52,776 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Individual Institutions\IF_DATA_Values_2019_12.csv
+2026-03-23 17:11:52,778 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\List\IF_DATA_List_2020_3.csv
+2026-03-23 17:11:52,780 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\List\IF_DATA_List_2020_6.csv
+2026-03-23 17:11:52,781 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\List\IF_DATA_List_2020_9.csv
+2026-03-23 17:11:52,783 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\List\IF_DATA_List_2020_12.csv
+2026-03-23 17:11:52,785 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Prudential Conglomerates\IF_DATA_Values_2020_3.csv
+2026-03-23 17:11:52,786 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Individual Institutions\IF_DATA_Values_2020_3.csv
+2026-03-23 17:11:52,786 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Financial Conglomerates\IF_DATA_Values_2020_3.csv
+2026-03-23 17:11:52,789 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Prudential Conglomerates\IF_DATA_Values_2020_6.csv
+2026-03-23 17:11:52,790 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Individual Institutions\IF_DATA_Values_2020_6.csv
+2026-03-23 17:11:52,790 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Financial Conglomerates\IF_DATA_Values_2020_6.csv
+2026-03-23 17:11:52,792 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Prudential Conglomerates\IF_DATA_Values_2020_9.csv
+2026-03-23 17:11:52,793 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Financial Conglomerates\IF_DATA_Values_2020_9.csv
+2026-03-23 17:11:52,793 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Individual Institutions\IF_DATA_Values_2020_9.csv
+2026-03-23 17:11:52,796 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Prudential Conglomerates\IF_DATA_Values_2020_12.csv
+2026-03-23 17:11:52,798 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Individual Institutions\IF_DATA_Values_2020_12.csv
+2026-03-23 17:11:52,798 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Financial Conglomerates\IF_DATA_Values_2020_12.csv
+2026-03-23 17:11:52,801 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\List\IF_DATA_List_2021_3.csv
+2026-03-23 17:11:52,801 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\List\IF_DATA_List_2021_6.csv
+2026-03-23 17:11:52,802 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\List\IF_DATA_List_2021_9.csv
+2026-03-23 17:11:52,803 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\List\IF_DATA_List_2021_12.csv
+2026-03-23 17:11:52,805 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Prudential Conglomerates\IF_DATA_Values_2021_3.csv
+2026-03-23 17:11:52,806 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Financial Conglomerates\IF_DATA_Values_2021_3.csv
+2026-03-23 17:11:52,806 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Individual Institutions\IF_DATA_Values_2021_3.csv
+2026-03-23 17:11:52,809 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Prudential Conglomerates\IF_DATA_Values_2021_6.csv
+2026-03-23 17:11:52,809 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Financial Conglomerates\IF_DATA_Values_2021_6.csv
+2026-03-23 17:11:52,810 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Individual Institutions\IF_DATA_Values_2021_6.csv
+2026-03-23 17:11:52,812 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Prudential Conglomerates\IF_DATA_Values_2021_9.csv
+2026-03-23 17:11:52,813 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Individual Institutions\IF_DATA_Values_2021_9.csv
+2026-03-23 17:11:52,813 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Financial Conglomerates\IF_DATA_Values_2021_9.csv
+2026-03-23 17:11:52,816 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Prudential Conglomerates\IF_DATA_Values_2021_12.csv
+2026-03-23 17:11:52,818 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Financial Conglomerates\IF_DATA_Values_2021_12.csv
+2026-03-23 17:11:52,818 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Individual Institutions\IF_DATA_Values_2021_12.csv
+2026-03-23 17:11:52,820 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\List\IF_DATA_List_2022_3.csv
+2026-03-23 17:11:52,821 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\List\IF_DATA_List_2022_6.csv
+2026-03-23 17:11:52,822 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\List\IF_DATA_List_2022_9.csv
+2026-03-23 17:11:52,823 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\List\IF_DATA_List_2022_12.csv
+2026-03-23 17:11:52,824 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Prudential Conglomerates\IF_DATA_Values_2022_3.csv
+2026-03-23 17:11:52,825 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Financial Conglomerates\IF_DATA_Values_2022_3.csv
+2026-03-23 17:11:52,825 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Individual Institutions\IF_DATA_Values_2022_3.csv
+2026-03-23 17:11:52,828 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Prudential Conglomerates\IF_DATA_Values_2022_6.csv
+2026-03-23 17:11:52,829 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Individual Institutions\IF_DATA_Values_2022_6.csv
+2026-03-23 17:11:52,829 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Financial Conglomerates\IF_DATA_Values_2022_6.csv
+2026-03-23 17:11:52,831 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Prudential Conglomerates\IF_DATA_Values_2022_9.csv
+2026-03-23 17:11:52,832 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Individual Institutions\IF_DATA_Values_2022_9.csv
+2026-03-23 17:11:52,833 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Financial Conglomerates\IF_DATA_Values_2022_9.csv
+2026-03-23 17:11:52,835 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Prudential Conglomerates\IF_DATA_Values_2022_12.csv
+2026-03-23 17:11:52,836 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Individual Institutions\IF_DATA_Values_2022_12.csv
+2026-03-23 17:11:52,837 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Financial Conglomerates\IF_DATA_Values_2022_12.csv
+2026-03-23 17:11:52,838 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\List\IF_DATA_List_2023_3.csv
+2026-03-23 17:11:52,839 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\List\IF_DATA_List_2023_6.csv
+2026-03-23 17:11:52,841 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\List\IF_DATA_List_2023_9.csv
+2026-03-23 17:11:52,841 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\List\IF_DATA_List_2023_12.csv
+2026-03-23 17:11:52,844 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Prudential Conglomerates\IF_DATA_Values_2023_3.csv
+2026-03-23 17:11:52,845 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Financial Conglomerates\IF_DATA_Values_2023_3.csv
+2026-03-23 17:11:52,846 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Individual Institutions\IF_DATA_Values_2023_3.csv
+2026-03-23 17:11:52,849 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Prudential Conglomerates\IF_DATA_Values_2023_6.csv
+2026-03-23 17:11:52,850 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Individual Institutions\IF_DATA_Values_2023_6.csv
+2026-03-23 17:11:52,851 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Financial Conglomerates\IF_DATA_Values_2023_6.csv
+2026-03-23 17:11:52,854 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Prudential Conglomerates\IF_DATA_Values_2023_9.csv
+2026-03-23 17:11:52,855 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Financial Conglomerates\IF_DATA_Values_2023_9.csv
+2026-03-23 17:11:52,856 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Individual Institutions\IF_DATA_Values_2023_9.csv
+2026-03-23 17:11:52,858 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Prudential Conglomerates\IF_DATA_Values_2023_12.csv
+2026-03-23 17:11:52,860 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Individual Institutions\IF_DATA_Values_2023_12.csv
+2026-03-23 17:11:52,860 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Financial Conglomerates\IF_DATA_Values_2023_12.csv
+2026-03-23 17:11:52,863 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\List\IF_DATA_List_2024_3.csv
+2026-03-23 17:11:52,864 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\List\IF_DATA_List_2024_6.csv
+2026-03-23 17:11:52,865 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\List\IF_DATA_List_2024_9.csv
+2026-03-23 17:11:52,866 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\List\IF_DATA_List_2024_12.csv
+2026-03-23 17:11:52,867 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Prudential Conglomerates\IF_DATA_Values_2024_3.csv
+2026-03-23 17:11:52,868 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Financial Conglomerates\IF_DATA_Values_2024_3.csv
+2026-03-23 17:11:52,868 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Individual Institutions\IF_DATA_Values_2024_3.csv
+2026-03-23 17:11:52,872 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Prudential Conglomerates\IF_DATA_Values_2024_6.csv
+2026-03-23 17:11:52,872 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Individual Institutions\IF_DATA_Values_2024_6.csv
+2026-03-23 17:11:52,873 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Financial Conglomerates\IF_DATA_Values_2024_6.csv
+2026-03-23 17:11:52,877 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Prudential Conglomerates\IF_DATA_Values_2024_9.csv
+2026-03-23 17:11:52,878 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Financial Conglomerates\IF_DATA_Values_2024_9.csv
+2026-03-23 17:11:52,878 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Individual Institutions\IF_DATA_Values_2024_9.csv
+2026-03-23 17:11:52,882 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Prudential Conglomerates\IF_DATA_Values_2024_12.csv
+2026-03-23 17:11:52,884 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Individual Institutions\IF_DATA_Values_2024_12.csv
+2026-03-23 17:11:52,884 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Financial Conglomerates\IF_DATA_Values_2024_12.csv
+2026-03-23 17:11:52,887 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\List\IF_DATA_List_2025_3.csv
+2026-03-23 17:11:52,888 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\List\IF_DATA_List_2025_6.csv
+2026-03-23 17:11:52,890 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\List\IF_DATA_List_2025_9.csv
+2026-03-23 17:11:55,281 - INFO - Downloaded data for 2025-12
+2026-03-23 17:13:14,686 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Prudential Conglomerates\IF_DATA_Values_2025_3.csv
+2026-03-23 17:13:14,692 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Individual Institutions\IF_DATA_Values_2025_3.csv
+2026-03-23 17:13:14,693 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Financial Conglomerates\IF_DATA_Values_2025_3.csv
+2026-03-23 17:13:14,697 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Prudential Conglomerates\IF_DATA_Values_2025_6.csv
+2026-03-23 17:13:14,699 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Financial Conglomerates\IF_DATA_Values_2025_6.csv
+2026-03-23 17:13:14,699 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Individual Institutions\IF_DATA_Values_2025_6.csv
+2026-03-23 17:13:14,703 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Prudential Conglomerates\IF_DATA_Values_2025_9.csv
+2026-03-23 17:13:14,706 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Individual Institutions\IF_DATA_Values_2025_9.csv
+2026-03-23 17:13:14,706 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Financial Conglomerates\IF_DATA_Values_2025_9.csv
+2026-03-23 17:13:16,149 - WARNING - Empty data for 2025-12 (Type 2). Retrying.
+2026-03-23 17:13:16,151 - INFO - Waiting 30 seconds before retrying...
+2026-03-23 17:13:16,465 - WARNING - Empty data for 2025-12 (Type 3). Retrying.
+2026-03-23 17:13:16,466 - INFO - Waiting 30 seconds before retrying...
+2026-03-23 17:13:16,526 - WARNING - Empty data for 2025-12 (Type 1). Retrying.
+2026-03-23 17:13:16,527 - INFO - Waiting 30 seconds before retrying...
+2026-03-23 17:13:47,687 - WARNING - Empty data for 2025-12 (Type 1). Retrying.
+2026-03-23 17:13:47,690 - INFO - Waiting 60 seconds before retrying...
+2026-03-23 17:13:47,784 - WARNING - Empty data for 2025-12 (Type 2). Retrying.
+2026-03-23 17:13:47,786 - INFO - Waiting 60 seconds before retrying...
+2026-03-23 17:13:48,016 - WARNING - Empty data for 2025-12 (Type 3). Retrying.
+2026-03-23 17:13:48,018 - INFO - Waiting 60 seconds before retrying...
+2026-03-23 17:14:51,685 - WARNING - Empty data for 2025-12 (Type 1). Retrying.
+2026-03-23 17:14:51,687 - INFO - Waiting 120 seconds before retrying...
+2026-03-23 17:14:51,708 - WARNING - Empty data for 2025-12 (Type 3). Retrying.
+2026-03-23 17:14:51,711 - INFO - Waiting 120 seconds before retrying...
+2026-03-23 17:14:51,740 - WARNING - Empty data for 2025-12 (Type 2). Retrying.
+2026-03-23 17:14:51,743 - INFO - Waiting 120 seconds before retrying...
+2026-03-23 17:16:57,645 - INFO - ESTBAN listing (municipio): 447 files found
+2026-03-23 17:17:04,548 - INFO - ESTBAN listing (agencia): 447 files found
+2026-03-23 17:17:04,550 - INFO - Skipping existing ESTBAN file: 202509_ESTBAN.CSV
+2026-03-23 17:17:04,551 - INFO - Skipping existing ESTBAN file: 202508_ESTBAN.CSV
+2026-03-23 17:17:04,552 - INFO - Skipping existing ESTBAN file: 202507_ESTBAN.CSV
+2026-03-23 17:17:04,553 - INFO - Skipping existing ESTBAN file: 202506_ESTBAN.CSV
+2026-03-23 17:17:04,554 - INFO - Skipping existing ESTBAN file: 202505_ESTBAN.CSV
+2026-03-23 17:17:04,555 - INFO - Skipping existing ESTBAN file: 202504_ESTBAN.CSV
+2026-03-23 17:17:04,555 - INFO - Skipping existing ESTBAN file: 202503_ESTBAN.CSV
+2026-03-23 17:17:04,556 - INFO - Skipping existing ESTBAN file: 202502_ESTBAN.CSV
+2026-03-23 17:17:04,557 - INFO - Skipping existing ESTBAN file: 202501_ESTBAN.CSV
+2026-03-23 17:17:04,557 - INFO - Skipping existing ESTBAN file: 202412_ESTBAN.CSV
+2026-03-23 17:17:04,558 - INFO - Skipping existing ESTBAN file: 202411_ESTBAN.CSV
+2026-03-23 17:17:04,559 - INFO - Skipping existing ESTBAN file: 202410_ESTBAN.CSV
+2026-03-23 17:17:04,560 - INFO - Skipping existing ESTBAN file: 202409_ESTBAN.CSV
+2026-03-23 17:17:04,561 - INFO - Skipping existing ESTBAN file: 202408_ESTBAN.CSV
+2026-03-23 17:17:04,562 - INFO - Skipping existing ESTBAN file: 202407_ESTBAN.CSV
+2026-03-23 17:17:04,563 - INFO - Skipping existing ESTBAN file: 202406_ESTBAN.CSV
+2026-03-23 17:17:04,564 - INFO - Skipping existing ESTBAN file: 202405_ESTBAN.CSV
+2026-03-23 17:17:04,564 - INFO - Skipping existing ESTBAN file: 202404_ESTBAN.CSV
+2026-03-23 17:17:04,565 - INFO - Skipping existing ESTBAN file: 202403_ESTBAN.CSV
+2026-03-23 17:17:04,565 - INFO - Skipping existing ESTBAN file: 202402_ESTBAN.CSV
+2026-03-23 17:17:04,566 - INFO - Skipping existing ESTBAN file: 202401_ESTBAN.CSV
+2026-03-23 17:17:04,566 - INFO - Skipping existing ESTBAN file: 202312_ESTBAN.CSV
+2026-03-23 17:17:04,567 - INFO - Skipping existing ESTBAN file: 202311_ESTBAN.CSV
+2026-03-23 17:17:04,567 - INFO - Skipping existing ESTBAN file: 202310_ESTBAN.CSV
+2026-03-23 17:17:04,567 - INFO - Skipping existing ESTBAN file: 202309_ESTBAN.CSV
+2026-03-23 17:17:04,568 - INFO - Skipping existing ESTBAN file: 202308_ESTBAN.CSV
+2026-03-23 17:17:04,568 - INFO - Skipping existing ESTBAN file: 202307_ESTBAN.CSV
+2026-03-23 17:17:04,568 - INFO - Skipping existing ESTBAN file: 202306_ESTBAN.CSV
+2026-03-23 17:17:04,569 - INFO - Skipping existing ESTBAN file: 202305_ESTBAN.CSV
+2026-03-23 17:17:04,569 - INFO - Skipping existing ESTBAN file: 202304_ESTBAN.CSV
+2026-03-23 17:17:04,570 - INFO - Skipping existing ESTBAN file: 202303_ESTBAN.CSV
+2026-03-23 17:17:04,570 - INFO - Skipping existing ESTBAN file: 202302_ESTBAN.CSV
+2026-03-23 17:17:04,571 - INFO - Skipping existing ESTBAN file: 202301_ESTBAN.CSV
+2026-03-23 17:17:04,571 - INFO - Skipping existing ESTBAN file: 202212_ESTBAN.CSV
+2026-03-23 17:17:04,571 - INFO - Skipping existing ESTBAN file: 202211_ESTBAN.CSV
+2026-03-23 17:17:04,572 - INFO - Skipping existing ESTBAN file: 202210_ESTBAN.CSV
+2026-03-23 17:17:04,572 - INFO - Skipping existing ESTBAN file: 202209_ESTBAN.CSV
+2026-03-23 17:17:04,572 - INFO - Skipping existing ESTBAN file: 202208_ESTBAN.CSV
+2026-03-23 17:17:04,573 - INFO - Skipping existing ESTBAN file: 202207_ESTBAN.CSV
+2026-03-23 17:17:04,573 - INFO - Skipping existing ESTBAN file: 202206_ESTBAN.CSV
+2026-03-23 17:17:04,574 - INFO - Skipping existing ESTBAN file: 202205_ESTBAN.CSV
+2026-03-23 17:17:04,574 - INFO - Skipping existing ESTBAN file: 202204_ESTBAN.CSV
+2026-03-23 17:17:04,575 - INFO - Skipping existing ESTBAN file: 202203_ESTBAN.CSV
+2026-03-23 17:17:04,575 - INFO - Skipping existing ESTBAN file: 202202_ESTBAN.CSV
+2026-03-23 17:17:04,576 - INFO - Skipping existing ESTBAN file: 202201_ESTBAN.CSV
+2026-03-23 17:17:04,576 - INFO - Skipping existing ESTBAN file: 202112_ESTBAN.CSV
+2026-03-23 17:17:04,577 - INFO - Skipping existing ESTBAN file: 202111_ESTBAN.CSV
+2026-03-23 17:17:04,577 - INFO - Skipping existing ESTBAN file: 202110_ESTBAN.CSV
+2026-03-23 17:17:04,578 - INFO - Skipping existing ESTBAN file: 202109_ESTBAN.CSV
+2026-03-23 17:17:04,578 - INFO - Skipping existing ESTBAN file: 202108_ESTBAN.CSV
+2026-03-23 17:17:04,578 - INFO - Skipping existing ESTBAN file: 202107_ESTBAN.CSV
+2026-03-23 17:17:04,579 - INFO - Skipping existing ESTBAN file: 202106_ESTBAN.CSV
+2026-03-23 17:17:04,580 - INFO - Skipping existing ESTBAN file: 202105_ESTBAN.CSV
+2026-03-23 17:17:04,581 - INFO - Skipping existing ESTBAN file: 202104_ESTBAN.CSV
+2026-03-23 17:17:04,581 - INFO - Skipping existing ESTBAN file: 202103_ESTBAN.CSV
+2026-03-23 17:17:04,582 - INFO - Skipping existing ESTBAN file: 202102_ESTBAN.CSV
+2026-03-23 17:17:04,582 - INFO - Skipping existing ESTBAN file: 202101_ESTBAN.CSV
+2026-03-23 17:17:04,583 - INFO - Skipping existing ESTBAN file: 202012_ESTBAN.CSV
+2026-03-23 17:17:04,584 - INFO - Skipping existing ESTBAN file: 202011_ESTBAN.CSV
+2026-03-23 17:17:04,585 - INFO - Skipping existing ESTBAN file: 202010_ESTBAN.CSV
+2026-03-23 17:17:04,585 - INFO - Skipping existing ESTBAN file: 202009_ESTBAN.CSV
+2026-03-23 17:17:04,586 - INFO - Skipping existing ESTBAN file: 202008_ESTBAN.CSV
+2026-03-23 17:17:04,586 - INFO - Skipping existing ESTBAN file: 202007_ESTBAN.CSV
+2026-03-23 17:17:04,587 - INFO - Skipping existing ESTBAN file: 202006_ESTBAN.CSV
+2026-03-23 17:17:04,587 - INFO - Skipping existing ESTBAN file: 202005_ESTBAN.CSV
+2026-03-23 17:17:04,587 - INFO - Skipping existing ESTBAN file: 202004_ESTBAN.CSV
+2026-03-23 17:17:04,589 - INFO - Skipping existing ESTBAN file: 202003_ESTBAN.CSV
+2026-03-23 17:17:04,589 - INFO - Skipping existing ESTBAN file: 202002_ESTBAN.CSV
+2026-03-23 17:17:04,590 - INFO - Skipping existing ESTBAN file: 202001_ESTBAN.CSV
+2026-03-23 17:17:04,590 - INFO - Skipping existing ESTBAN file: 201912_ESTBAN.CSV
+2026-03-23 17:17:04,591 - INFO - Skipping existing ESTBAN file: 201911_ESTBAN.CSV
+2026-03-23 17:17:04,591 - INFO - Skipping existing ESTBAN file: 201910_ESTBAN.CSV
+2026-03-23 17:17:04,592 - INFO - Skipping existing ESTBAN file: 201909_ESTBAN.CSV
+2026-03-23 17:17:04,592 - INFO - Skipping existing ESTBAN file: 201908_ESTBAN.CSV
+2026-03-23 17:17:04,593 - INFO - Skipping existing ESTBAN file: 201907_ESTBAN.CSV
+2026-03-23 17:17:04,593 - INFO - Skipping existing ESTBAN file: 201906_ESTBAN.CSV
+2026-03-23 17:17:04,594 - INFO - Skipping existing ESTBAN file: 201905_ESTBAN.CSV
+2026-03-23 17:17:04,595 - INFO - Skipping existing ESTBAN file: 201904_ESTBAN.CSV
+2026-03-23 17:17:04,595 - INFO - Skipping existing ESTBAN file: 201903_ESTBAN.CSV
+2026-03-23 17:17:04,596 - INFO - Skipping existing ESTBAN file: 201902_ESTBAN.CSV
+2026-03-23 17:17:04,596 - INFO - Skipping existing ESTBAN file: 201901_ESTBAN.CSV
+2026-03-23 17:17:04,597 - INFO - Skipping existing ESTBAN file: 201812_ESTBAN.CSV
+2026-03-23 17:17:04,597 - INFO - Skipping existing ESTBAN file: 201811_ESTBAN.CSV
+2026-03-23 17:17:04,598 - INFO - Skipping existing ESTBAN file: 201810_ESTBAN.CSV
+2026-03-23 17:17:04,598 - INFO - Skipping existing ESTBAN file: 201809_ESTBAN.CSV
+2026-03-23 17:17:04,599 - INFO - Skipping existing ESTBAN file: 201808_ESTBAN.CSV
+2026-03-23 17:17:04,599 - INFO - Skipping existing ESTBAN file: 201807_ESTBAN.CSV
+2026-03-23 17:17:04,599 - INFO - Skipping existing ESTBAN file: 201806_ESTBAN.CSV
+2026-03-23 17:17:04,600 - INFO - Skipping existing ESTBAN file: 201805_ESTBAN.CSV
+2026-03-23 17:17:04,600 - INFO - Skipping existing ESTBAN file: 201804_ESTBAN.CSV
+2026-03-23 17:17:04,601 - INFO - Skipping existing ESTBAN file: 201803_ESTBAN.CSV
+2026-03-23 17:17:04,602 - INFO - Skipping existing ESTBAN file: 201802_ESTBAN.CSV
+2026-03-23 17:17:04,602 - INFO - Skipping existing ESTBAN file: 201801_ESTBAN.CSV
+2026-03-23 17:17:04,603 - INFO - Skipping existing ESTBAN file: 201712_ESTBAN.CSV
+2026-03-23 17:17:04,603 - INFO - Skipping existing ESTBAN file: 201711_ESTBAN.CSV
+2026-03-23 17:17:04,603 - INFO - Skipping existing ESTBAN file: 201710_ESTBAN.CSV
+2026-03-23 17:17:04,604 - INFO - Skipping existing ESTBAN file: 201709_ESTBAN.CSV
+2026-03-23 17:17:04,605 - INFO - Skipping existing ESTBAN file: 201708_ESTBAN.CSV
+2026-03-23 17:17:04,605 - INFO - Skipping existing ESTBAN file: 201707_ESTBAN.CSV
+2026-03-23 17:17:04,605 - INFO - Skipping existing ESTBAN file: 201706_ESTBAN.CSV
+2026-03-23 17:17:04,606 - INFO - Skipping existing ESTBAN file: 201705_ESTBAN.CSV
+2026-03-23 17:17:04,606 - INFO - Skipping existing ESTBAN file: 201704_ESTBAN.CSV
+2026-03-23 17:17:04,607 - INFO - Skipping existing ESTBAN file: 201703_ESTBAN.CSV
+2026-03-23 17:17:04,608 - INFO - Skipping existing ESTBAN file: 201702_ESTBAN.CSV
+2026-03-23 17:17:04,608 - INFO - Skipping existing ESTBAN file: 201701_ESTBAN.CSV
+2026-03-23 17:17:04,609 - INFO - Skipping existing ESTBAN file: 201612_ESTBAN.CSV
+2026-03-23 17:17:04,610 - INFO - Skipping existing ESTBAN file: 201611_ESTBAN.CSV
+2026-03-23 17:17:04,612 - INFO - Skipping existing ESTBAN file: 201610_ESTBAN.CSV
+2026-03-23 17:17:04,612 - INFO - Skipping existing ESTBAN file: 201609_ESTBAN.CSV
+2026-03-23 17:17:04,613 - INFO - Skipping existing ESTBAN file: 201608_ESTBAN.CSV
+2026-03-23 17:17:04,614 - INFO - Skipping existing ESTBAN file: 201607_ESTBAN.CSV
+2026-03-23 17:17:04,615 - INFO - Skipping existing ESTBAN file: 201606_ESTBAN.CSV
+2026-03-23 17:17:04,615 - INFO - Skipping existing ESTBAN file: 201605_ESTBAN.CSV
+2026-03-23 17:17:04,616 - INFO - Skipping existing ESTBAN file: 201604_ESTBAN.CSV
+2026-03-23 17:17:04,616 - INFO - Skipping existing ESTBAN file: 201603_ESTBAN.CSV
+2026-03-23 17:17:04,616 - INFO - Skipping existing ESTBAN file: 201602_ESTBAN.CSV
+2026-03-23 17:17:04,617 - INFO - Skipping existing ESTBAN file: 201601_ESTBAN.CSV
+2026-03-23 17:17:04,617 - INFO - Skipping existing ESTBAN file: 201512_ESTBAN.CSV
+2026-03-23 17:17:04,618 - INFO - Skipping existing ESTBAN file: 201511_ESTBAN.CSV
+2026-03-23 17:17:04,619 - INFO - Skipping existing ESTBAN file: 201510_ESTBAN.CSV
+2026-03-23 17:17:04,619 - INFO - Skipping existing ESTBAN file: 201509_ESTBAN.CSV
+2026-03-23 17:17:04,620 - INFO - Skipping existing ESTBAN file: 201508_ESTBAN.CSV
+2026-03-23 17:17:04,621 - INFO - Skipping existing ESTBAN file: 201507_ESTBAN.CSV
+2026-03-23 17:17:04,621 - INFO - Skipping existing ESTBAN file: 201506_ESTBAN.CSV
+2026-03-23 17:17:04,622 - INFO - Skipping existing ESTBAN file: 201505_ESTBAN.CSV
+2026-03-23 17:17:04,622 - INFO - Skipping existing ESTBAN file: 201504_ESTBAN.CSV
+2026-03-23 17:17:04,623 - INFO - Skipping existing ESTBAN file: 201503_ESTBAN.CSV
+2026-03-23 17:17:04,623 - INFO - Skipping existing ESTBAN file: 201502_ESTBAN.CSV
+2026-03-23 17:17:04,624 - INFO - Skipping existing ESTBAN file: 201501_ESTBAN.CSV
+2026-03-23 17:17:04,624 - INFO - Skipping existing ESTBAN file: 201412_ESTBAN.CSV
+2026-03-23 17:17:04,625 - INFO - Skipping existing ESTBAN file: 201411_ESTBAN.CSV
+2026-03-23 17:17:04,625 - INFO - Skipping existing ESTBAN file: 201410_ESTBAN.CSV
+2026-03-23 17:17:04,626 - INFO - Skipping existing ESTBAN file: 201409_ESTBAN.CSV
+2026-03-23 17:17:04,626 - INFO - Skipping existing ESTBAN file: 201408_ESTBAN.CSV
+2026-03-23 17:17:04,627 - INFO - Skipping existing ESTBAN file: 201407_ESTBAN.CSV
+2026-03-23 17:17:04,627 - INFO - Skipping existing ESTBAN file: 201406_ESTBAN.CSV
+2026-03-23 17:17:04,628 - INFO - Skipping existing ESTBAN file: 201405_ESTBAN.CSV
+2026-03-23 17:17:04,629 - INFO - Skipping existing ESTBAN file: 201404_ESTBAN.CSV
+2026-03-23 17:17:04,629 - INFO - Skipping existing ESTBAN file: 201403_ESTBAN.CSV
+2026-03-23 17:17:04,630 - INFO - Skipping existing ESTBAN file: 201402_ESTBAN.CSV
+2026-03-23 17:17:04,630 - INFO - Skipping existing ESTBAN file: 201401_ESTBAN.CSV
+2026-03-23 17:17:04,631 - INFO - Skipping existing ESTBAN file: 201312_ESTBAN.CSV
+2026-03-23 17:17:04,631 - INFO - Skipping existing ESTBAN file: 201311_ESTBAN.CSV
+2026-03-23 17:17:04,632 - INFO - Skipping existing ESTBAN file: 201310_ESTBAN.CSV
+2026-03-23 17:17:04,632 - INFO - Skipping existing ESTBAN file: 201309_ESTBAN.CSV
+2026-03-23 17:17:04,632 - INFO - Skipping existing ESTBAN file: 201308_ESTBAN.CSV
+2026-03-23 17:17:04,633 - INFO - Skipping existing ESTBAN file: 201307_ESTBAN.CSV
+2026-03-23 17:17:04,634 - INFO - Skipping existing ESTBAN file: 201306_ESTBAN.CSV
+2026-03-23 17:17:04,634 - INFO - Skipping existing ESTBAN file: 201305_ESTBAN.CSV
+2026-03-23 17:17:04,635 - INFO - Skipping existing ESTBAN file: 201304_ESTBAN.CSV
+2026-03-23 17:17:04,635 - INFO - Skipping existing ESTBAN file: 201303_ESTBAN.CSV
+2026-03-23 17:17:04,636 - INFO - Skipping existing ESTBAN file: 201302_ESTBAN.CSV
+2026-03-23 17:17:04,636 - INFO - Skipping existing ESTBAN file: 201301_ESTBAN.CSV
+2026-03-23 17:17:04,637 - INFO - Skipping existing ESTBAN file: 202509_ESTBAN_AG.CSV
+2026-03-23 17:17:04,637 - INFO - Skipping existing ESTBAN file: 202508_ESTBAN_AG.CSV
+2026-03-23 17:17:04,638 - INFO - Skipping existing ESTBAN file: 202507_ESTBAN_AG.CSV
+2026-03-23 17:17:04,639 - INFO - Skipping existing ESTBAN file: 202506_ESTBAN_AG.CSV
+2026-03-23 17:17:04,639 - INFO - Skipping existing ESTBAN file: 202505_ESTBAN_AG.CSV
+2026-03-23 17:17:04,640 - INFO - Skipping existing ESTBAN file: 202504_ESTBAN_AG.CSV
+2026-03-23 17:17:04,642 - INFO - Skipping existing ESTBAN file: 202503_ESTBAN_AG.CSV
+2026-03-23 17:17:04,642 - INFO - Skipping existing ESTBAN file: 202502_ESTBAN_AG.CSV
+2026-03-23 17:17:04,643 - INFO - Skipping existing ESTBAN file: 202501_ESTBAN_AG.CSV
+2026-03-23 17:17:04,644 - INFO - Skipping existing ESTBAN file: 202412_ESTBAN_AG.CSV
+2026-03-23 17:17:04,646 - INFO - Skipping existing ESTBAN file: 202411_ESTBAN_AG.CSV
+2026-03-23 17:17:04,646 - INFO - Skipping existing ESTBAN file: 202410_ESTBAN_AG.CSV
+2026-03-23 17:17:04,647 - INFO - Skipping existing ESTBAN file: 202409_ESTBAN_AG.CSV
+2026-03-23 17:17:04,648 - INFO - Skipping existing ESTBAN file: 202408_ESTBAN_AG.CSV
+2026-03-23 17:17:04,649 - INFO - Skipping existing ESTBAN file: 202407_ESTBAN_AG.CSV
+2026-03-23 17:17:04,651 - INFO - Skipping existing ESTBAN file: 202406_ESTBAN_AG.CSV
+2026-03-23 17:17:04,651 - INFO - Skipping existing ESTBAN file: 202405_ESTBAN_AG.CSV
+2026-03-23 17:17:04,652 - INFO - Skipping existing ESTBAN file: 202404_ESTBAN_AG.CSV
+2026-03-23 17:17:04,653 - INFO - Skipping existing ESTBAN file: 202403_ESTBAN_AG.CSV
+2026-03-23 17:17:04,654 - INFO - Skipping existing ESTBAN file: 202402_ESTBAN_AG.CSV
+2026-03-23 17:17:04,654 - INFO - Skipping existing ESTBAN file: 202401_ESTBAN_AG.CSV
+2026-03-23 17:17:04,655 - INFO - Skipping existing ESTBAN file: 202312_ESTBAN_AG.CSV
+2026-03-23 17:17:04,655 - INFO - Skipping existing ESTBAN file: 202311_ESTBAN_AG.CSV
+2026-03-23 17:17:04,656 - INFO - Skipping existing ESTBAN file: 202310_ESTBAN_AG.CSV
+2026-03-23 17:17:04,656 - INFO - Skipping existing ESTBAN file: 202309_ESTBAN_AG.CSV
+2026-03-23 17:17:04,656 - INFO - Skipping existing ESTBAN file: 202308_ESTBAN_AG.CSV
+2026-03-23 17:17:04,657 - INFO - Skipping existing ESTBAN file: 202307_ESTBAN_AG.CSV
+2026-03-23 17:17:04,657 - INFO - Skipping existing ESTBAN file: 202306_ESTBAN_AG.CSV
+2026-03-23 17:17:04,658 - INFO - Skipping existing ESTBAN file: 202305_ESTBAN_AG.CSV
+2026-03-23 17:17:04,658 - INFO - Skipping existing ESTBAN file: 202304_ESTBAN_AG.CSV
+2026-03-23 17:17:04,659 - INFO - Skipping existing ESTBAN file: 202303_ESTBAN_AG.CSV
+2026-03-23 17:17:04,660 - INFO - Skipping existing ESTBAN file: 202302_ESTBAN_AG.CSV
+2026-03-23 17:17:04,661 - INFO - Skipping existing ESTBAN file: 202301_ESTBAN_AG.CSV
+2026-03-23 17:17:04,662 - INFO - Skipping existing ESTBAN file: 202212_ESTBAN_AG.CSV
+2026-03-23 17:17:04,662 - INFO - Skipping existing ESTBAN file: 202211_ESTBAN_AG.CSV
+2026-03-23 17:17:04,663 - INFO - Skipping existing ESTBAN file: 202210_ESTBAN_AG.CSV
+2026-03-23 17:17:04,663 - INFO - Skipping existing ESTBAN file: 202209_ESTBAN_AG.CSV
+2026-03-23 17:17:04,664 - INFO - Skipping existing ESTBAN file: 202208_ESTBAN_AG.CSV
+2026-03-23 17:17:04,664 - INFO - Skipping existing ESTBAN file: 202207_ESTBAN_AG.CSV
+2026-03-23 17:17:04,664 - INFO - Skipping existing ESTBAN file: 202206_ESTBAN_AG.CSV
+2026-03-23 17:17:04,665 - INFO - Skipping existing ESTBAN file: 202205_ESTBAN_AG.CSV
+2026-03-23 17:17:04,665 - INFO - Skipping existing ESTBAN file: 202204_ESTBAN_AG.CSV
+2026-03-23 17:17:04,665 - INFO - Skipping existing ESTBAN file: 202203_ESTBAN_AG.CSV
+2026-03-23 17:17:04,666 - INFO - Skipping existing ESTBAN file: 202202_ESTBAN_AG.CSV
+2026-03-23 17:17:04,667 - INFO - Skipping existing ESTBAN file: 202201_ESTBAN_AG.CSV
+2026-03-23 17:17:04,667 - INFO - Skipping existing ESTBAN file: 202112_ESTBAN_AG.CSV
+2026-03-23 17:17:04,667 - INFO - Skipping existing ESTBAN file: 202111_ESTBAN_AG.CSV
+2026-03-23 17:17:04,668 - INFO - Skipping existing ESTBAN file: 202110_ESTBAN_AG.CSV
+2026-03-23 17:17:04,668 - INFO - Skipping existing ESTBAN file: 202109_ESTBAN_AG.CSV
+2026-03-23 17:17:04,670 - INFO - Skipping existing ESTBAN file: 202108_ESTBAN_AG.CSV
+2026-03-23 17:17:04,670 - INFO - Skipping existing ESTBAN file: 202107_ESTBAN_AG.CSV
+2026-03-23 17:17:04,671 - INFO - Skipping existing ESTBAN file: 202106_ESTBAN_AG.CSV
+2026-03-23 17:17:04,671 - INFO - Skipping existing ESTBAN file: 202105_ESTBAN_AG.CSV
+2026-03-23 17:17:04,671 - INFO - Skipping existing ESTBAN file: 202104_ESTBAN_AG.CSV
+2026-03-23 17:17:04,672 - INFO - Skipping existing ESTBAN file: 202103_ESTBAN_AG.CSV
+2026-03-23 17:17:04,672 - INFO - Skipping existing ESTBAN file: 202102_ESTBAN_AG.CSV
+2026-03-23 17:17:04,673 - INFO - Skipping existing ESTBAN file: 202101_ESTBAN_AG.CSV
+2026-03-23 17:17:04,674 - INFO - Skipping existing ESTBAN file: 202012_ESTBAN_AG.CSV
+2026-03-23 17:17:04,674 - INFO - Skipping existing ESTBAN file: 202011_ESTBAN_AG.CSV
+2026-03-23 17:17:04,675 - INFO - Skipping existing ESTBAN file: 202010_ESTBAN_AG.CSV
+2026-03-23 17:17:04,675 - INFO - Skipping existing ESTBAN file: 202009_ESTBAN_AG.CSV
+2026-03-23 17:17:04,676 - INFO - Skipping existing ESTBAN file: 202008_ESTBAN_AG.CSV
+2026-03-23 17:17:04,676 - INFO - Skipping existing ESTBAN file: 202007_ESTBAN_AG.CSV
+2026-03-23 17:17:04,677 - INFO - Skipping existing ESTBAN file: 202006_ESTBAN_AG.CSV
+2026-03-23 17:17:04,677 - INFO - Skipping existing ESTBAN file: 202005_ESTBAN_AG.CSV
+2026-03-23 17:17:04,678 - INFO - Skipping existing ESTBAN file: 202004_ESTBAN_AG.CSV
+2026-03-23 17:17:04,678 - INFO - Skipping existing ESTBAN file: 202003_ESTBAN_AG.CSV
+2026-03-23 17:17:04,679 - INFO - Skipping existing ESTBAN file: 202002_ESTBAN_AG.CSV
+2026-03-23 17:17:04,679 - INFO - Skipping existing ESTBAN file: 202001_ESTBAN_AG.CSV
+2026-03-23 17:17:04,680 - INFO - Skipping existing ESTBAN file: 201912_ESTBAN_AG.CSV
+2026-03-23 17:17:04,680 - INFO - Skipping existing ESTBAN file: 201911_ESTBAN_AG.CSV
+2026-03-23 17:17:04,681 - INFO - Skipping existing ESTBAN file: 201910_ESTBAN_AG.CSV
+2026-03-23 17:17:04,681 - INFO - Skipping existing ESTBAN file: 201909_ESTBAN_AG.CSV
+2026-03-23 17:17:04,682 - INFO - Skipping existing ESTBAN file: 201908_ESTBAN_AG.CSV
+2026-03-23 17:17:04,682 - INFO - Skipping existing ESTBAN file: 201907_ESTBAN_AG.CSV
+2026-03-23 17:17:04,682 - INFO - Skipping existing ESTBAN file: 201906_ESTBAN_AG.CSV
+2026-03-23 17:17:04,683 - INFO - Skipping existing ESTBAN file: 201905_ESTBAN_AG.CSV
+2026-03-23 17:17:04,683 - INFO - Skipping existing ESTBAN file: 201904_ESTBAN_AG.CSV
+2026-03-23 17:17:04,684 - INFO - Skipping existing ESTBAN file: 201903_ESTBAN_AG.CSV
+2026-03-23 17:17:04,685 - INFO - Skipping existing ESTBAN file: 201902_ESTBAN_AG.CSV
+2026-03-23 17:17:04,685 - INFO - Skipping existing ESTBAN file: 201901_ESTBAN_AG.CSV
+2026-03-23 17:17:04,686 - INFO - Skipping existing ESTBAN file: 201812_ESTBAN_AG.CSV
+2026-03-23 17:17:04,686 - INFO - Skipping existing ESTBAN file: 201811_ESTBAN_AG.CSV
+2026-03-23 17:17:04,687 - INFO - Skipping existing ESTBAN file: 201810_ESTBAN_AG.CSV
+2026-03-23 17:17:04,687 - INFO - Skipping existing ESTBAN file: 201809_ESTBAN_AG.CSV
+2026-03-23 17:17:04,687 - INFO - Skipping existing ESTBAN file: 201808_ESTBAN_AG.CSV
+2026-03-23 17:17:04,688 - INFO - Skipping existing ESTBAN file: 201807_ESTBAN_AG.CSV
+2026-03-23 17:17:04,688 - INFO - Skipping existing ESTBAN file: 201806_ESTBAN_AG.CSV
+2026-03-23 17:17:04,689 - INFO - Skipping existing ESTBAN file: 201805_ESTBAN_AG.CSV
+2026-03-23 17:17:04,689 - INFO - Skipping existing ESTBAN file: 201804_ESTBAN_AG.CSV
+2026-03-23 17:17:04,689 - INFO - Skipping existing ESTBAN file: 201803_ESTBAN_AG.CSV
+2026-03-23 17:17:04,689 - INFO - Skipping existing ESTBAN file: 201802_ESTBAN_AG.CSV
+2026-03-23 17:17:04,690 - INFO - Skipping existing ESTBAN file: 201801_ESTBAN_AG.CSV
+2026-03-23 17:17:04,690 - INFO - Skipping existing ESTBAN file: 201712_ESTBAN_AG.CSV
+2026-03-23 17:17:04,691 - INFO - Skipping existing ESTBAN file: 201711_ESTBAN_AG.CSV
+2026-03-23 17:17:04,691 - INFO - Skipping existing ESTBAN file: 201710_ESTBAN_AG.CSV
+2026-03-23 17:17:04,691 - INFO - Skipping existing ESTBAN file: 201709_ESTBAN_AG.CSV
+2026-03-23 17:17:04,692 - INFO - Skipping existing ESTBAN file: 201708_ESTBAN_AG.CSV
+2026-03-23 17:17:04,692 - INFO - Skipping existing ESTBAN file: 201707_ESTBAN_AG.CSV
+2026-03-23 17:17:04,693 - INFO - Skipping existing ESTBAN file: 201706_ESTBAN_AG.CSV
+2026-03-23 17:17:04,693 - INFO - Skipping existing ESTBAN file: 201705_ESTBAN_AG.CSV
+2026-03-23 17:17:04,694 - INFO - Skipping existing ESTBAN file: 201704_ESTBAN_AG.CSV
+2026-03-23 17:17:04,694 - INFO - Skipping existing ESTBAN file: 201703_ESTBAN_AG.CSV
+2026-03-23 17:17:04,695 - INFO - Skipping existing ESTBAN file: 201702_ESTBAN_AG.CSV
+2026-03-23 17:17:04,695 - INFO - Skipping existing ESTBAN file: 201701_ESTBAN_AG.CSV
+2026-03-23 17:17:04,696 - INFO - Skipping existing ESTBAN file: 201612_ESTBAN_AG.CSV
+2026-03-23 17:17:04,696 - INFO - Skipping existing ESTBAN file: 201611_ESTBAN_AG.CSV
+2026-03-23 17:17:04,696 - INFO - Skipping existing ESTBAN file: 201610_ESTBAN_AG.CSV
+2026-03-23 17:17:04,697 - INFO - Skipping existing ESTBAN file: 201609_ESTBAN_AG.CSV
+2026-03-23 17:17:04,697 - INFO - Skipping existing ESTBAN file: 201608_ESTBAN_AG.CSV
+2026-03-23 17:17:04,698 - INFO - Skipping existing ESTBAN file: 201607_ESTBAN_AG.CSV
+2026-03-23 17:17:04,698 - INFO - Skipping existing ESTBAN file: 201606_ESTBAN_AG.CSV
+2026-03-23 17:17:04,699 - INFO - Skipping existing ESTBAN file: 201605_ESTBAN_AG.CSV
+2026-03-23 17:17:04,699 - INFO - Skipping existing ESTBAN file: 201604_ESTBAN_AG.CSV
+2026-03-23 17:17:04,700 - INFO - Skipping existing ESTBAN file: 201603_ESTBAN_AG.CSV
+2026-03-23 17:17:04,700 - INFO - Skipping existing ESTBAN file: 201602_ESTBAN_AG.CSV
+2026-03-23 17:17:04,701 - INFO - Skipping existing ESTBAN file: 201601_ESTBAN_AG.CSV
+2026-03-23 17:17:04,702 - INFO - Skipping existing ESTBAN file: 201512_ESTBAN_AG.CSV
+2026-03-23 17:17:04,702 - INFO - Skipping existing ESTBAN file: 201511_ESTBAN_AG.CSV
+2026-03-23 17:17:04,702 - INFO - Skipping existing ESTBAN file: 201510_ESTBAN_AG.CSV
+2026-03-23 17:17:04,703 - INFO - Skipping existing ESTBAN file: 201509_ESTBAN_AG.CSV
+2026-03-23 17:17:04,703 - INFO - Skipping existing ESTBAN file: 201508_ESTBAN_AG.CSV
+2026-03-23 17:17:04,704 - INFO - Skipping existing ESTBAN file: 201507_ESTBAN_AG.CSV
+2026-03-23 17:17:04,704 - INFO - Skipping existing ESTBAN file: 201506_ESTBAN_AG.CSV
+2026-03-23 17:17:04,704 - INFO - Skipping existing ESTBAN file: 201505_ESTBAN_AG.CSV
+2026-03-23 17:17:04,705 - INFO - Skipping existing ESTBAN file: 201504_ESTBAN_AG.CSV
+2026-03-23 17:17:04,706 - INFO - Skipping existing ESTBAN file: 201503_ESTBAN_AG.CSV
+2026-03-23 17:17:04,706 - INFO - Skipping existing ESTBAN file: 201502_ESTBAN_AG.CSV
+2026-03-23 17:17:04,707 - INFO - Skipping existing ESTBAN file: 201501_ESTBAN_AG.CSV
+2026-03-23 17:17:04,707 - INFO - Skipping existing ESTBAN file: 201412_ESTBAN_AG.CSV
+2026-03-23 17:17:04,708 - INFO - Skipping existing ESTBAN file: 201411_ESTBAN_AG.CSV
+2026-03-23 17:17:04,708 - INFO - Skipping existing ESTBAN file: 201410_ESTBAN_AG.CSV
+2026-03-23 17:17:04,708 - INFO - Skipping existing ESTBAN file: 201409_ESTBAN_AG.CSV
+2026-03-23 17:17:04,709 - INFO - Skipping existing ESTBAN file: 201408_ESTBAN_AG.CSV
+2026-03-23 17:17:04,710 - INFO - Skipping existing ESTBAN file: 201407_ESTBAN_AG.CSV
+2026-03-23 17:17:04,710 - INFO - Skipping existing ESTBAN file: 201406_ESTBAN_AG.CSV
+2026-03-23 17:17:04,710 - INFO - Skipping existing ESTBAN file: 201405_ESTBAN_AG.CSV
+2026-03-23 17:17:04,711 - INFO - Skipping existing ESTBAN file: 201404_ESTBAN_AG.CSV
+2026-03-23 17:17:04,711 - INFO - Skipping existing ESTBAN file: 201403_ESTBAN_AG.CSV
+2026-03-23 17:17:04,711 - INFO - Skipping existing ESTBAN file: 201402_ESTBAN_AG.CSV
+2026-03-23 17:17:04,712 - INFO - Skipping existing ESTBAN file: 201401_ESTBAN_AG.CSV
+2026-03-23 17:17:04,712 - INFO - Skipping existing ESTBAN file: 201312_ESTBAN_AG.CSV
+2026-03-23 17:17:04,713 - INFO - Skipping existing ESTBAN file: 201311_ESTBAN_AG.CSV
+2026-03-23 17:17:04,713 - INFO - Skipping existing ESTBAN file: 201310_ESTBAN_AG.CSV
+2026-03-23 17:17:04,714 - INFO - Skipping existing ESTBAN file: 201309_ESTBAN_AG.CSV
+2026-03-23 17:17:04,714 - INFO - Skipping existing ESTBAN file: 201308_ESTBAN_AG.CSV
+2026-03-23 17:17:04,715 - INFO - Skipping existing ESTBAN file: 201307_ESTBAN_AG.CSV
+2026-03-23 17:17:04,715 - INFO - Skipping existing ESTBAN file: 201306_ESTBAN_AG.CSV
+2026-03-23 17:17:04,716 - INFO - Skipping existing ESTBAN file: 201305_ESTBAN_AG.CSV
+2026-03-23 17:17:04,716 - INFO - Skipping existing ESTBAN file: 201304_ESTBAN_AG.CSV
+2026-03-23 17:17:04,717 - INFO - Skipping existing ESTBAN file: 201303_ESTBAN_AG.CSV
+2026-03-23 17:17:04,717 - INFO - Skipping existing ESTBAN file: 201302_ESTBAN_AG.CSV
+2026-03-23 17:17:04,718 - INFO - Skipping existing ESTBAN file: 201301_ESTBAN_AG.CSV
+2026-03-23 17:22:50,741 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\List\IF_DATA_List_2016_3.csv
+2026-03-23 17:22:50,742 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\List\IF_DATA_List_2016_6.csv
+2026-03-23 17:22:50,742 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\List\IF_DATA_List_2016_9.csv
+2026-03-23 17:22:50,743 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\List\IF_DATA_List_2016_12.csv
+2026-03-23 17:22:50,744 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Prudential Conglomerates\IF_DATA_Values_2016_3.csv
+2026-03-23 17:22:50,745 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Financial Conglomerates\IF_DATA_Values_2016_3.csv
+2026-03-23 17:22:50,745 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Individual Institutions\IF_DATA_Values_2016_3.csv
+2026-03-23 17:22:50,748 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Prudential Conglomerates\IF_DATA_Values_2016_6.csv
+2026-03-23 17:22:50,748 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Financial Conglomerates\IF_DATA_Values_2016_6.csv
+2026-03-23 17:22:50,749 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Individual Institutions\IF_DATA_Values_2016_6.csv
+2026-03-23 17:22:50,751 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Prudential Conglomerates\IF_DATA_Values_2016_9.csv
+2026-03-23 17:22:50,752 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Financial Conglomerates\IF_DATA_Values_2016_9.csv
+2026-03-23 17:22:50,752 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Individual Institutions\IF_DATA_Values_2016_9.csv
+2026-03-23 17:22:50,755 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Prudential Conglomerates\IF_DATA_Values_2016_12.csv
+2026-03-23 17:22:50,756 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Individual Institutions\IF_DATA_Values_2016_12.csv
+2026-03-23 17:22:50,756 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Financial Conglomerates\IF_DATA_Values_2016_12.csv
+2026-03-23 17:22:50,759 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\List\IF_DATA_List_2017_3.csv
+2026-03-23 17:22:50,761 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\List\IF_DATA_List_2017_6.csv
+2026-03-23 17:22:50,761 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\List\IF_DATA_List_2017_9.csv
+2026-03-23 17:22:50,762 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\List\IF_DATA_List_2017_12.csv
+2026-03-23 17:22:50,763 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Prudential Conglomerates\IF_DATA_Values_2017_3.csv
+2026-03-23 17:22:50,763 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Individual Institutions\IF_DATA_Values_2017_3.csv
+2026-03-23 17:22:50,763 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Financial Conglomerates\IF_DATA_Values_2017_3.csv
+2026-03-23 17:22:50,765 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Prudential Conglomerates\IF_DATA_Values_2017_6.csv
+2026-03-23 17:22:50,766 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Individual Institutions\IF_DATA_Values_2017_6.csv
+2026-03-23 17:22:50,766 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Financial Conglomerates\IF_DATA_Values_2017_6.csv
+2026-03-23 17:22:50,768 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Prudential Conglomerates\IF_DATA_Values_2017_9.csv
+2026-03-23 17:22:50,769 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Financial Conglomerates\IF_DATA_Values_2017_9.csv
+2026-03-23 17:22:50,769 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Individual Institutions\IF_DATA_Values_2017_9.csv
+2026-03-23 17:22:50,771 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Prudential Conglomerates\IF_DATA_Values_2017_12.csv
+2026-03-23 17:22:50,772 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Individual Institutions\IF_DATA_Values_2017_12.csv
+2026-03-23 17:22:50,772 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Financial Conglomerates\IF_DATA_Values_2017_12.csv
+2026-03-23 17:22:50,773 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\List\IF_DATA_List_2018_3.csv
+2026-03-23 17:22:50,774 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\List\IF_DATA_List_2018_6.csv
+2026-03-23 17:22:50,774 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\List\IF_DATA_List_2018_9.csv
+2026-03-23 17:22:50,775 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\List\IF_DATA_List_2018_12.csv
+2026-03-23 17:22:50,777 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Prudential Conglomerates\IF_DATA_Values_2018_3.csv
+2026-03-23 17:22:50,777 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Financial Conglomerates\IF_DATA_Values_2018_3.csv
+2026-03-23 17:22:50,777 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Individual Institutions\IF_DATA_Values_2018_3.csv
+2026-03-23 17:22:50,779 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Prudential Conglomerates\IF_DATA_Values_2018_6.csv
+2026-03-23 17:22:50,779 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Individual Institutions\IF_DATA_Values_2018_6.csv
+2026-03-23 17:22:50,780 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Financial Conglomerates\IF_DATA_Values_2018_6.csv
+2026-03-23 17:22:50,781 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Prudential Conglomerates\IF_DATA_Values_2018_9.csv
+2026-03-23 17:22:50,782 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Individual Institutions\IF_DATA_Values_2018_9.csv
+2026-03-23 17:22:50,782 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Financial Conglomerates\IF_DATA_Values_2018_9.csv
+2026-03-23 17:22:50,785 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Prudential Conglomerates\IF_DATA_Values_2018_12.csv
+2026-03-23 17:22:50,786 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Financial Conglomerates\IF_DATA_Values_2018_12.csv
+2026-03-23 17:22:50,786 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Individual Institutions\IF_DATA_Values_2018_12.csv
+2026-03-23 17:22:50,787 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\List\IF_DATA_List_2019_3.csv
+2026-03-23 17:22:50,788 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\List\IF_DATA_List_2019_6.csv
+2026-03-23 17:22:50,789 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\List\IF_DATA_List_2019_9.csv
+2026-03-23 17:22:50,790 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\List\IF_DATA_List_2019_12.csv
+2026-03-23 17:22:50,791 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Prudential Conglomerates\IF_DATA_Values_2019_3.csv
+2026-03-23 17:22:50,792 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Financial Conglomerates\IF_DATA_Values_2019_3.csv
+2026-03-23 17:22:50,792 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Individual Institutions\IF_DATA_Values_2019_3.csv
+2026-03-23 17:22:50,794 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Prudential Conglomerates\IF_DATA_Values_2019_6.csv
+2026-03-23 17:22:50,795 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Financial Conglomerates\IF_DATA_Values_2019_6.csv
+2026-03-23 17:22:50,796 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Individual Institutions\IF_DATA_Values_2019_6.csv
+2026-03-23 17:22:50,799 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Prudential Conglomerates\IF_DATA_Values_2019_9.csv
+2026-03-23 17:22:50,800 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Financial Conglomerates\IF_DATA_Values_2019_9.csv
+2026-03-23 17:22:50,801 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Individual Institutions\IF_DATA_Values_2019_9.csv
+2026-03-23 17:22:50,805 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Prudential Conglomerates\IF_DATA_Values_2019_12.csv
+2026-03-23 17:22:50,805 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Financial Conglomerates\IF_DATA_Values_2019_12.csv
+2026-03-23 17:22:50,807 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Individual Institutions\IF_DATA_Values_2019_12.csv
+2026-03-23 17:22:50,811 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\List\IF_DATA_List_2020_3.csv
+2026-03-23 17:22:50,811 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\List\IF_DATA_List_2020_6.csv
+2026-03-23 17:22:50,813 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\List\IF_DATA_List_2020_9.csv
+2026-03-23 17:22:50,815 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\List\IF_DATA_List_2020_12.csv
+2026-03-23 17:22:50,818 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Prudential Conglomerates\IF_DATA_Values_2020_3.csv
+2026-03-23 17:22:50,821 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Financial Conglomerates\IF_DATA_Values_2020_3.csv
+2026-03-23 17:22:50,822 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Individual Institutions\IF_DATA_Values_2020_3.csv
+2026-03-23 17:22:50,827 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Prudential Conglomerates\IF_DATA_Values_2020_6.csv
+2026-03-23 17:22:50,829 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Financial Conglomerates\IF_DATA_Values_2020_6.csv
+2026-03-23 17:22:50,829 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Individual Institutions\IF_DATA_Values_2020_6.csv
+2026-03-23 17:22:50,836 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Prudential Conglomerates\IF_DATA_Values_2020_9.csv
+2026-03-23 17:22:50,838 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Financial Conglomerates\IF_DATA_Values_2020_9.csv
+2026-03-23 17:22:50,839 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Individual Institutions\IF_DATA_Values_2020_9.csv
+2026-03-23 17:22:50,845 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Prudential Conglomerates\IF_DATA_Values_2020_12.csv
+2026-03-23 17:22:50,846 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Financial Conglomerates\IF_DATA_Values_2020_12.csv
+2026-03-23 17:22:50,847 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Individual Institutions\IF_DATA_Values_2020_12.csv
+2026-03-23 17:22:50,852 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\List\IF_DATA_List_2021_3.csv
+2026-03-23 17:22:50,854 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\List\IF_DATA_List_2021_6.csv
+2026-03-23 17:22:50,856 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\List\IF_DATA_List_2021_9.csv
+2026-03-23 17:22:50,858 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\List\IF_DATA_List_2021_12.csv
+2026-03-23 17:22:50,862 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Prudential Conglomerates\IF_DATA_Values_2021_3.csv
+2026-03-23 17:22:50,864 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Financial Conglomerates\IF_DATA_Values_2021_3.csv
+2026-03-23 17:22:50,864 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Individual Institutions\IF_DATA_Values_2021_3.csv
+2026-03-23 17:22:50,869 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Prudential Conglomerates\IF_DATA_Values_2021_6.csv
+2026-03-23 17:22:50,870 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Financial Conglomerates\IF_DATA_Values_2021_6.csv
+2026-03-23 17:22:50,872 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Individual Institutions\IF_DATA_Values_2021_6.csv
+2026-03-23 17:22:50,876 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Prudential Conglomerates\IF_DATA_Values_2021_9.csv
+2026-03-23 17:22:50,878 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Financial Conglomerates\IF_DATA_Values_2021_9.csv
+2026-03-23 17:22:50,878 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Individual Institutions\IF_DATA_Values_2021_9.csv
+2026-03-23 17:22:50,883 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Prudential Conglomerates\IF_DATA_Values_2021_12.csv
+2026-03-23 17:22:50,884 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Financial Conglomerates\IF_DATA_Values_2021_12.csv
+2026-03-23 17:22:50,885 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Individual Institutions\IF_DATA_Values_2021_12.csv
+2026-03-23 17:22:50,889 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\List\IF_DATA_List_2022_3.csv
+2026-03-23 17:22:50,890 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\List\IF_DATA_List_2022_6.csv
+2026-03-23 17:22:50,892 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\List\IF_DATA_List_2022_9.csv
+2026-03-23 17:22:50,893 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\List\IF_DATA_List_2022_12.csv
+2026-03-23 17:22:50,897 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Prudential Conglomerates\IF_DATA_Values_2022_3.csv
+2026-03-23 17:22:50,898 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Financial Conglomerates\IF_DATA_Values_2022_3.csv
+2026-03-23 17:22:50,899 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Individual Institutions\IF_DATA_Values_2022_3.csv
+2026-03-23 17:22:50,904 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Prudential Conglomerates\IF_DATA_Values_2022_6.csv
+2026-03-23 17:22:50,905 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Financial Conglomerates\IF_DATA_Values_2022_6.csv
+2026-03-23 17:22:50,906 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Individual Institutions\IF_DATA_Values_2022_6.csv
+2026-03-23 17:22:50,911 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Prudential Conglomerates\IF_DATA_Values_2022_9.csv
+2026-03-23 17:22:50,912 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Financial Conglomerates\IF_DATA_Values_2022_9.csv
+2026-03-23 17:22:50,913 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Individual Institutions\IF_DATA_Values_2022_9.csv
+2026-03-23 17:22:50,919 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Prudential Conglomerates\IF_DATA_Values_2022_12.csv
+2026-03-23 17:22:50,920 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Financial Conglomerates\IF_DATA_Values_2022_12.csv
+2026-03-23 17:22:50,920 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Individual Institutions\IF_DATA_Values_2022_12.csv
+2026-03-23 17:22:50,925 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\List\IF_DATA_List_2023_3.csv
+2026-03-23 17:22:50,926 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\List\IF_DATA_List_2023_6.csv
+2026-03-23 17:22:50,928 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\List\IF_DATA_List_2023_9.csv
+2026-03-23 17:22:50,930 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\List\IF_DATA_List_2023_12.csv
+2026-03-23 17:22:50,933 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Prudential Conglomerates\IF_DATA_Values_2023_3.csv
+2026-03-23 17:22:50,934 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Financial Conglomerates\IF_DATA_Values_2023_3.csv
+2026-03-23 17:22:50,935 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Individual Institutions\IF_DATA_Values_2023_3.csv
+2026-03-23 17:22:50,941 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Prudential Conglomerates\IF_DATA_Values_2023_6.csv
+2026-03-23 17:22:50,942 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Individual Institutions\IF_DATA_Values_2023_6.csv
+2026-03-23 17:22:50,942 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Financial Conglomerates\IF_DATA_Values_2023_6.csv
+2026-03-23 17:22:50,947 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Prudential Conglomerates\IF_DATA_Values_2023_9.csv
+2026-03-23 17:22:50,949 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Financial Conglomerates\IF_DATA_Values_2023_9.csv
+2026-03-23 17:22:50,950 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Individual Institutions\IF_DATA_Values_2023_9.csv
+2026-03-23 17:22:50,955 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Prudential Conglomerates\IF_DATA_Values_2023_12.csv
+2026-03-23 17:22:50,957 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Financial Conglomerates\IF_DATA_Values_2023_12.csv
+2026-03-23 17:22:50,957 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Individual Institutions\IF_DATA_Values_2023_12.csv
+2026-03-23 17:22:50,961 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\List\IF_DATA_List_2024_3.csv
+2026-03-23 17:22:50,962 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\List\IF_DATA_List_2024_6.csv
+2026-03-23 17:22:50,964 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\List\IF_DATA_List_2024_9.csv
+2026-03-23 17:22:50,966 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\List\IF_DATA_List_2024_12.csv
+2026-03-23 17:22:50,969 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Prudential Conglomerates\IF_DATA_Values_2024_3.csv
+2026-03-23 17:22:50,970 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Financial Conglomerates\IF_DATA_Values_2024_3.csv
+2026-03-23 17:22:50,970 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Individual Institutions\IF_DATA_Values_2024_3.csv
+2026-03-23 17:22:50,976 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Prudential Conglomerates\IF_DATA_Values_2024_6.csv
+2026-03-23 17:22:50,978 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Financial Conglomerates\IF_DATA_Values_2024_6.csv
+2026-03-23 17:22:50,979 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Individual Institutions\IF_DATA_Values_2024_6.csv
+2026-03-23 17:22:50,983 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Prudential Conglomerates\IF_DATA_Values_2024_9.csv
+2026-03-23 17:22:50,984 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Financial Conglomerates\IF_DATA_Values_2024_9.csv
+2026-03-23 17:22:50,985 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Individual Institutions\IF_DATA_Values_2024_9.csv
+2026-03-23 17:22:50,991 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Prudential Conglomerates\IF_DATA_Values_2024_12.csv
+2026-03-23 17:22:50,993 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Financial Conglomerates\IF_DATA_Values_2024_12.csv
+2026-03-23 17:22:50,994 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\Individual Institutions\IF_DATA_Values_2024_12.csv
+2026-03-23 17:22:50,998 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\List\IF_DATA_List_2025_3.csv
+2026-03-23 17:22:51,000 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\List\IF_DATA_List_2025_6.csv
+2026-03-23 17:22:51,001 - INFO - File already exists, skipping: c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\IF Data\List\IF_DATA_List_2025_9.csv
+2026-03-23 17:22:52,779 - INFO - Downloaded data for 2025-12
