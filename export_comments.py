@@ -402,10 +402,10 @@ def main():
         iv_spec3 = iv_spec2 + ['leave_one_out_mean_spread']
 
         specs = [
-            ('OLS (No IV)',         iv_spec0),
-            ('IV: Cost Shifters',   iv_spec1),
-            ('IV: Wholesale+Capital', iv_spec2),
-            ('IV: Hausman Full',    iv_spec3),
+            ('Spec1-OLS',             iv_spec0),
+            ('Spec2-IV_CostShifters', iv_spec1),
+            ('Spec3-IV_Wholesale',    iv_spec2),
+            ('Spec4-IV_HausmanFull',  iv_spec3),
         ]
         state_blocks = [
             ('Base',  s_base),
