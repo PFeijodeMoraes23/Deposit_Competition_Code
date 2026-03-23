@@ -195,25 +195,22 @@ def run_first_stage(df, spec_instruments):
     if len(df_fs) == 0:
         print("No valid rows for first stage with these instruments.")
         df['v_hat'] = 0.0
-        return df
-        
+        return df, None
+
     y = df_fs['spread_qoq']
     X = sm.add_constant(df_fs[spec_instruments])
-    
+
     mod = sm.OLS(y, X)
     res = mod.fit(cov_type='HC1')
-    
-    # Deposit buckets 1-3 receive zero latency 
-    df['v_hat'] = 0.0 
+
+    # Deposit buckets 1-3 receive zero latency
+    df['v_hat'] = 0.0
     df.loc[valid_mask, 'v_hat'] = res.resid
-    
+
     # Assemble orthogonal polynomial space
     df['v_hat_2'] = df['v_hat'] ** 2
     df['v_hat_3'] = df['v_hat'] ** 3
-    return df
-
-
-# ==============================================================================
+    return df, res
 # Helper for Multiprocessing
 # ==============================================================================
 def execute_specification(args):
@@ -230,30 +227,30 @@ def execute_specification(args):
     sys.stdout = new_stdout
     
     res = None
+    res_fs = None
     try:
         has_cf = len(iv_cols) > 0
         spec_name = f"{iv_name} x {s_name}"
         print(f"\n=====================================================================")
         print(f" RUNNING: {spec_name}")
         print(f"=====================================================================")
-        
+
         df_target = df.copy()
-        
+
         if has_cf:
             iv_cols_act = [c for c in iv_cols if c in df_target.columns and df_target[c].notnull().sum() > 0]
             if len(iv_cols_act) == 0:
                 print(f"Skipping {spec_name} - none of the IVs are populated in the dataset.")
-                return new_stdout.getvalue(), None, spec_name
-            df_target = run_first_stage(df_target, iv_cols_act)
-            
+                return new_stdout.getvalue(), None, spec_name, None
+            df_target, res_fs = run_first_stage(df_target, iv_cols_act)
+
         res = run_second_stage(df_target, s_cols, has_cf=has_cf, spec_name=spec_name)
     except Exception as e:
         print(f"Estimation Failed for {spec_name} - {str(e)}")
     finally:
         sys.stdout = old_stdout
-        
-    return new_stdout.getvalue(), res, spec_name
 
+    return new_stdout.getvalue(), res, spec_name, res_fs
 
 # ==============================================================================
 # Section 3 - Second Stage (Sleepiness Regression) UPDATED
@@ -404,20 +401,26 @@ def main():
             
     # Process Results and Save Stargazer-Compatible Tables + Pickle Results
     results_dict = {}
-    for stdout_text, res, spec_name in out_results:
+    for stdout_text, res_ss, spec_name, res_fs in out_results:
         print(stdout_text)
-        if res is not None:
+        if res_ss is not None:
             safe_name = spec_name.replace(" ", "_").replace("/", "").replace(":", "")
             tex_file = output_dir / f"{safe_name}.tex"
-            
+
             # Using statsmodels native latex export, which mimics Stargazer functionality
             with open(tex_file, 'w') as f:
-                f.write(res.summary().as_latex())
-            
+                f.write(res_ss.summary().as_latex())
+
+            if res_fs is not None:
+                tex_file_fs = output_dir / f"{safe_name}_FirstStage.tex"
+                with open(tex_file_fs, 'w') as f:
+                    f.write(res_fs.summary().as_latex())
+
             # Store result for pickle export
-            results_dict[spec_name] = res
-    
-    # Save cluster diagnostics to JSON
+            results_dict[spec_name] = {
+                'second_stage': res_ss,
+                'first_stage': res_fs
+            }
     cluster_diagnostics = {
         'G_nominal': int(G_nominal),
         'G_star': float(G_star),
