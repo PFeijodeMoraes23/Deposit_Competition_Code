@@ -50,6 +50,14 @@
 
 ## 1) Load necessary packages and set folders up:
 
+try:
+    from utils.venv_guard import ensure_project_venv
+except Exception:
+    ensure_project_venv = None
+
+if ensure_project_venv is not None:
+    ensure_project_venv(__file__)
+
 import pandas as pd
 import numpy as np
 import logging

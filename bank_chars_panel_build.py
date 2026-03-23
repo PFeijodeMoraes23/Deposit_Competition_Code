@@ -1,25 +1,13 @@
-"""
-bank_chars_panel_build.py
-=========================
-Builds the bank characteristics panel containing size and solvency variables
-(total assets, equity, equity ratio, log total assets) from IF Data reports,
-and market segment + IP subsidiary indicators from IF Data List files.
-
-This script processes:
-  - IF_DATA_type_1_report_1.csv (for financial variables like Total Assets and Equity)
-
-The resulting panel is saved to Panel/bank_chars_panel.csv.
-
-Key design note:
-  The CodConglomeradoPrudencial column is read DIRECTLY from Report 1 (it is
-  already present on every row).  This ensures codes are the same as those
-  used by deposits_panel.csv, which is critical for the downstream merge in
-  build_market_panel.py.  Only rows with a blank conglomerate code (rare)
-  fall back to a 'CNPJ_<value>' sentinel.
-"""
-
 import os
 import logging
+try:
+    from utils.venv_guard import ensure_project_venv
+except Exception:
+    ensure_project_venv = None
+
+if ensure_project_venv is not None:
+    ensure_project_venv(__file__)
+
 import numpy as np
 import pandas as pd
 
@@ -28,159 +16,195 @@ try:
 except Exception:
     resolve_script_paths = None
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
 
-# -----------------------------------------------------------------------------
-# 1) PATHS & CONSTANTS
-# -----------------------------------------------------------------------------
-BASE = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))
-
-IF_AGG_DIR  = os.path.join(BASE, "BCB", "IF Data", "Aggregated Data")
-OUTPUT_DIR  = os.path.join(BASE, "BCB", "Egan_et_al_2025_Rep", "processed")
-
-REPORT_1_CSV = os.path.join(IF_AGG_DIR, "IF_DATA_type_1_report_1.csv")
-OUT_CSV      = os.path.join(OUTPUT_DIR, "bank_chars_panel.csv")
+BASE = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..'))
+IF_AGG_DIR  = os.path.join(BASE, 'BCB', 'IF Data', 'Aggregated Data')
+OUTPUT_DIR  = os.path.join(BASE, 'BCB', 'Egan_et_al_2025_Rep', 'processed')
+OUT_CSV     = os.path.join(OUTPUT_DIR, 'bank_chars_panel.csv')
 
 if resolve_script_paths is not None:
     _paths = resolve_script_paths(
-        "bank_chars_panel_build",
+        'bank_chars_panel_build',
         {
-            "if_agg_dir": IF_AGG_DIR,
-            "output_dir": OUTPUT_DIR,
-            "report_1_csv": REPORT_1_CSV,
-            "out_csv": OUT_CSV,
+            'if_agg_dir': IF_AGG_DIR,
+            'output_dir': OUTPUT_DIR,
+            'out_csv': OUT_CSV,
         },
         script_dir=os.path.dirname(os.path.abspath(__file__)),
     )
-    IF_AGG_DIR = _paths["if_agg_dir"]
-    OUTPUT_DIR = _paths["output_dir"]
-    REPORT_1_CSV = _paths["report_1_csv"]
-    OUT_CSV = _paths["out_csv"]
+    IF_AGG_DIR = _paths['if_agg_dir']
+    OUTPUT_DIR = _paths['output_dir']
+    OUT_CSV = _paths['out_csv']
 
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-
-# -----------------------------------------------------------------------------
-# 2) PANEL BUILD
-# -----------------------------------------------------------------------------
-def build_panel() -> pd.DataFrame:
-    """
-    Process IF Data Report 1 to build the bank characteristics panel.
-
-    Conglomerate codes are taken directly from the CodConglomeradoPrudencial
-    column that already exists in Report 1.  This is the same coding scheme
-    used by the deposits panel, ensuring a clean merge in build_market_panel.py.
-    """
-    # --- 2.1) Load Report 1 --------------------------------------------------
-    if not os.path.exists(REPORT_1_CSV):
-        logging.error(f"IF Data report 1 not found: {REPORT_1_CSV}")
+def load_and_pivot(report_num, accounts_dict):
+    csv_path = os.path.join(IF_AGG_DIR, f'IF_DATA_type_1_report_{report_num}.csv')
+    if not os.path.exists(csv_path):
+        logging.warning(f'IF Data report {report_num} not found: {csv_path}')
         return pd.DataFrame()
 
-    logging.info("Loading IF Data Report 1 ...")
-    df = pd.read_csv(REPORT_1_CSV, encoding="latin1", low_memory=False)
+    logging.info(f'Loading IF Data Report {report_num} ...')
+    df = pd.read_csv(csv_path, encoding='latin1', low_memory=False)
 
-    if "CodConglomeradoPrudencial" not in df.columns:
-        logging.error("CodConglomeradoPrudencial column missing from Report 1.")
+    if 'CodConglomeradoPrudencial' not in df.columns:
         return pd.DataFrame()
 
-    # Fill any blank conglomerate codes with a CNPJ-based fallback sentinel
-    mask_no_cong = (
-        df["CodConglomeradoPrudencial"].isna() |
-        (df["CodConglomeradoPrudencial"].astype(str).str.strip() == "")
-    )
+    # Fallback to CNPJ if missing
+    mask_no_cong = df['CodConglomeradoPrudencial'].isna() | (df['CodConglomeradoPrudencial'].astype(str).str.strip() == '')
     if mask_no_cong.any():
-        df.loc[mask_no_cong, "CodConglomeradoPrudencial"] = (
-            "CNPJ_" + df.loc[mask_no_cong, "CNPJ"].astype(str)
-        )
+        df.loc[mask_no_cong, 'CodConglomeradoPrudencial'] = 'CNPJ_' + df.loc[mask_no_cong, 'CNPJ'].astype(str)
+    
+    # Strip .0 if parsed as float string
+    df['CodConglomeradoPrudencial'] = df['CodConglomeradoPrudencial'].astype(str).str.replace(r'\.0$', '', regex=True)
 
-    # --- 2.2) Time variables -------------------------------------------------
-    df["Month"] = pd.to_numeric(df.get("Month"), errors="coerce")
-    df["Year"]  = pd.to_numeric(df.get("Year"),  errors="coerce")
-    df = df.dropna(subset=["Month", "Year"]).copy()
+    # Time variables
+    df['Month'] = pd.to_numeric(df.get('Month'), errors='coerce')
+    df['Year']  = pd.to_numeric(df.get('Year'),  errors='coerce')
+    df = df.dropna(subset=['Month', 'Year']).copy()
+    df['Quarter'] = df['Month'].map({3: 1, 6: 2, 9: 3, 12: 4})
+    df = df.dropna(subset=['Quarter']).copy()
+    df['Quarter'] = df['Quarter'].astype(int)
+    df['Year']    = df['Year'].astype(int)
 
-    df["Quarter"] = df["Month"].map({3: 1, 6: 2, 9: 3, 12: 4})
-    df = df.dropna(subset=["Quarter"]).copy()
-    df["Quarter"] = df["Quarter"].astype(int)
-    df["Year"]    = df["Year"].astype(int)
+    # Filter needed accounts
+    df['Conta'] = pd.to_numeric(df.get('NumeroConta'), errors='coerce').astype('Int64')
+    df['Value'] = pd.to_numeric(df.get('Value'), errors='coerce')
+    df_sub = df[df['Conta'].isin(accounts_dict.keys())].copy()
 
-    # --- 2.3) Segment and IP status ------------------------------------------
-    if "SegmentoTb" in df.columns:
-        df["is_ip"] = (
-            df["SegmentoTb"].astype(str).str.contains("Institu", case=False, na=False) &
-            df["SegmentoTb"].astype(str).str.contains("Pagamento", case=False, na=False)
-        )
-    else:
-        df["is_ip"] = False
+    if df_sub.empty:
+        return pd.DataFrame()
 
-    if "Sr" in df.columns:
-        df["segment_raw"] = df["Sr"].astype(str).str.strip().str.upper()
-        df["segment_raw"] = df["segment_raw"].where(
-            df["segment_raw"].isin(["S1", "S2", "S3", "S4", "S5"]), np.nan
-        )
-    else:
-        df["segment_raw"] = np.nan
+    df_sub['prop_name'] = df_sub['Conta'].map(accounts_dict)
 
-    cat_agg = (
-        df.groupby(["CodConglomeradoPrudencial", "Year", "Quarter"])
-        .agg(has_ip=("is_ip", "max"), segment=("segment_raw", "first"))
-        .reset_index()
-    )
-
-    # --- 2.4) Financial variables (accounts 78182 = total assets, 78186 = equity) ---
-    df["Conta"] = pd.to_numeric(df.get("NumeroConta"), errors="coerce").astype("Int64")
-    df["Value"] = pd.to_numeric(df.get("Value"),       errors="coerce")
-
-    df_fin = df[df["Conta"].isin([78182, 78186])].copy()
-    df_fin["prop_name"] = df_fin["Conta"].map({78182: "total_assets", 78186: "equity"})
-
+    # Pivot accounts
     pivot = (
-        df_fin.groupby(["CodConglomeradoPrudencial", "Year", "Quarter", "prop_name"])["Value"]
-        .sum().unstack("prop_name").reset_index()
+        df_sub.groupby(['CodConglomeradoPrudencial', 'Year', 'Quarter', 'prop_name'])['Value']
+        .sum().unstack('prop_name').reset_index()
     )
     pivot.columns.name = None
 
-    for col in ["total_assets", "equity"]:
-        if col not in pivot.columns:
-            pivot[col] = np.nan
+    # For Report 1, also keep segment details
+    if report_num == 1:
+        if 'SegmentoTb' in df.columns:
+            df['is_ip'] = (
+                df['SegmentoTb'].astype(str).str.contains('Institu', case=False, na=False) &
+                df['SegmentoTb'].astype(str).str.contains('Pagamento', case=False, na=False)
+            )
+        else:
+            df['is_ip'] = False
 
-    # Merge category info
-    pivot = pivot.merge(cat_agg, on=["CodConglomeradoPrudencial", "Year", "Quarter"], how="right")
+        if 'Sr' in df.columns:
+            df['segment_raw'] = df['Sr'].astype(str).str.strip().str.upper()
+            df['segment_raw'] = df['segment_raw'].where(df['segment_raw'].isin(['S1', 'S2', 'S3', 'S4', 'S5']), np.nan)
+        else:
+            df['segment_raw'] = np.nan
 
-    # Derived metrics
-    pivot["equity_ratio"]     = pivot["equity"] / pivot["total_assets"]
-    pivot["log_total_assets"] = np.log(pivot["total_assets"].clip(lower=1))
+        cat_agg = (
+            df.groupby(['CodConglomeradoPrudencial', 'Year', 'Quarter'])
+            .agg(has_ip=('is_ip', 'max'), segment=('segment_raw', 'first'))
+            .reset_index()
+        )
+        pivot = pivot.merge(cat_agg, on=['CodConglomeradoPrudencial', 'Year', 'Quarter'], how='right')
 
-    # --- 2.5) Lag the financial variables (use *previous* quarter's values) ---
-    pivot = pivot.sort_values(["CodConglomeradoPrudencial", "Year", "Quarter"])
-    for col in ["total_assets", "equity", "equity_ratio", "log_total_assets"]:
-        pivot[col] = pivot.groupby("CodConglomeradoPrudencial")[col].shift(1)
-
-    # Segment dummies
-    for s in ["S2", "S3", "S4", "S5"]:
-        pivot[f"seg_{s}"] = (pivot["segment"] == s).astype(int)
-
-    pivot.rename(columns={"Year": "year", "Quarter": "quarter"}, inplace=True)
-    pivot.sort_values(["CodConglomeradoPrudencial", "year", "quarter"], inplace=True)
-
-    logging.info(
-        f"Bank chars panel: {len(pivot):,} rows | "
-        f"{pivot['CodConglomeradoPrudencial'].nunique()} conglomerates | "
-        f"total_assets non-null (lagged): {pivot['total_assets'].notna().sum():,}"
-    )
     return pivot
 
+def build_panel() -> pd.DataFrame:
+    # 1. Base (Resumo) size attributes
+    p1 = load_and_pivot(1, {78182: 'total_assets', 78186: 'equity'})
+    if p1.empty: return pd.DataFrame()
+    for col in ['total_assets', 'equity']:
+        if col not in p1.columns: p1[col] = np.nan
 
-# -----------------------------------------------------------------------------
-# 3) MAIN
-# -----------------------------------------------------------------------------
+    # 3. Wholesale (Passivo)
+    p3 = load_and_pivot(3, {
+        78288: 'repos', 78289: 'lci', 78290: 'lca', 
+        78291: 'letras_financeiras', 78295: 'emprestimos_repasses'
+    })
+
+    # 4. Costs (DRE)
+    p4 = load_and_pivot(4, {
+        78218: 'personnel_expenses',
+        78219: 'admin_expenses', 
+        78220: 'tax_expenses'
+    })
+
+    # 5. Capital (Informacoes de Capital)
+    p5 = load_and_pivot(5, {79664: 'indice_basileia_raw'})
+
+    # Merge everything
+    panel = p1
+    if not p3.empty: panel = panel.merge(p3, on=['CodConglomeradoPrudencial', 'Year', 'Quarter'], how='left')
+    if not p4.empty: panel = panel.merge(p4, on=['CodConglomeradoPrudencial', 'Year', 'Quarter'], how='left')
+    if not p5.empty: panel = panel.merge(p5, on=['CodConglomeradoPrudencial', 'Year', 'Quarter'], how='left')
+
+    panel.sort_values(['CodConglomeradoPrudencial', 'Year', 'Quarter'], inplace=True)
+
+    # Note: IF Data DRE is reported cumulatively by year. Standardize to quarter flows.
+    if not p4.empty:
+        for cost_col in ['personnel_expenses', 'admin_expenses', 'tax_expenses']:
+            if cost_col in panel.columns:
+                panel[cost_col] = panel[cost_col].fillna(0)
+                # Group differencing by Conglomerate-Year
+                val_diff = panel.groupby(['CodConglomeradoPrudencial', 'Year'])[cost_col].diff()
+                panel[cost_col] = val_diff.fillna(panel[cost_col])
+
+    # Core characteristics
+    total_assets_no0 = panel['total_assets'].replace(0, np.nan)
+    panel['equity_ratio'] = panel['equity'] / total_assets_no0
+    panel['log_total_assets'] = np.log(panel['total_assets'].clip(lower=1))
+
+    # Segment defaults
+    for s in ['S2', 'S3', 'S4', 'S5']:
+        panel[f'seg_{s}'] = (panel.get('segment') == s).astype(int)
+
+    # Wholesale ratios
+    if 'lci' in panel.columns and 'lca' in panel.columns:
+        panel['lci_lca_ratio'] = panel[['lci', 'lca']].sum(axis=1) / total_assets_no0
+    else:
+        panel['lci_lca_ratio'] = np.nan
+
+    wholesale_cols = [c for c in ['repos', 'lci', 'lca', 'letras_financeiras', 'emprestimos_repasses'] if c in panel.columns]
+    panel['wholesale_ratio'] = panel[wholesale_cols].sum(axis=1) / total_assets_no0 if wholesale_cols else np.nan
+
+    # Cost ratios (take absolute value since DRE sums are negative expenses)
+    if not p4.empty:
+        for c, out_n in [('personnel_expenses', 'personnel_cost_ratio'), 
+                         ('admin_expenses', 'admin_cost_ratio'), 
+                         ('tax_expenses', 'tax_cost_ratio')]:
+            if c in panel.columns:
+                panel[out_n] = panel[c].abs() / total_assets_no0
+            else:
+                panel[out_n] = np.nan
+    else:
+        for c in ['personnel_cost_ratio', 'admin_cost_ratio', 'tax_cost_ratio']:
+            panel[c] = np.nan
+
+    if 'indice_basileia_raw' in panel.columns:
+        panel['indice_basileia'] = panel['indice_basileia_raw']
+    else:
+        panel['indice_basileia'] = np.nan
+
+    # FINALLY, Lag all variables to be used cleanly in regressions
+    lag_cols = ['total_assets', 'equity', 'equity_ratio', 'log_total_assets',
+                'lci_lca_ratio', 'wholesale_ratio', 'indice_basileia',
+                'personnel_cost_ratio', 'admin_cost_ratio', 'tax_cost_ratio']
+    
+    for col in lag_cols:
+        if col in panel.columns:
+            panel[col + '_lag'] = panel.groupby('CodConglomeradoPrudencial')[col].shift(1)
+
+    panel.rename(columns={'Year': 'year', 'Quarter': 'quarter'}, inplace=True)
+    return panel
+
 def main() -> None:
     panel = build_panel()
     if not panel.empty:
         panel.to_csv(OUT_CSV, index=False)
-        logging.info(f"Saved bank characteristics panel to {OUT_CSV}")
+        logging.info(f'Saved bank characteristics panel to {OUT_CSV}')
     else:
-        logging.warning("Build returned an empty panel.")
+        logging.warning('Build returned an empty panel.')
 
-
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()

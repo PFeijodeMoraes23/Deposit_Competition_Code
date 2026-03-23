@@ -46,9 +46,6 @@ import sys
 import subprocess
 import json
 import pickle
-import numpy as np
-from pathlib import Path
-
 try:
     from utils.venv_guard import ensure_project_venv
 except Exception:
@@ -56,6 +53,10 @@ except Exception:
 
 if ensure_project_venv is not None:
     ensure_project_venv(__file__)
+
+import numpy as np
+from pathlib import Path
+
 
 # ---------------------------------------------------------------------------
 # Allow import of sibling module estimation_1_sleep

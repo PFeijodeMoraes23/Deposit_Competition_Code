@@ -7,7 +7,7 @@
 #          combining two data sources:
 #
 #   TIER 1 – ESTBAN (BCB): banking institutions with branch networks.
-#            Source: BCB/ESTBAN/ESTBAN.csv (2016–2024, processed by ESTBAN_Process_1.R)
+#            Source: BCB/ESTBAN/ESTBAN.csv 
 #                    + raw monthly CSVs in BCB/ESTBAN/Relatório por município/ (for 2013–2015).
 #            Granularity: institution × municipality × month  →  conglomerate × municipality × quarter.
 #            Deposit columns: dep_a1 (V400_401), dep_a2 (V420), dep_a3 (V431), dep_a4 (V432).
@@ -44,6 +44,14 @@ import re
 import unicodedata
 import string
 import logging
+try:
+    from utils.venv_guard import ensure_project_venv
+except Exception:
+    ensure_project_venv = None
+
+if ensure_project_venv is not None:
+    ensure_project_venv(__file__)
+
 import pandas as pd
 import numpy as np
 

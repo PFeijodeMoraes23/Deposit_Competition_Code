@@ -1,11 +1,11 @@
-## estimation_demand_1.py
+## estimation_demand_2.py
 # Author: Pedro Feijo de Moraes
 # Last edited: 2026-03-06
 #
 # Objective: Berry (1994) demand estimation using ACTIVE market shares,
-#            at the CONGLOMERATE level. Parallels estimation_1.py.
+#            at the INSTITUTION (CNPJ) level. Parallels estimation_2.py.
 #
-# For each of the 10 supply-side specifications from estimation_1.py:
+# For each of the 10 supply-side specifications from estimation_2.py:
 #   1. Extract the structural (sleeping-deposit) prediction:
 #         hat_Y_jkt = Upsilon' * phi(S,X) * nr * D_{jkt-1}
 #      CF polynomial terms (v_hat, v_hat^2, v_hat^3) are EXCLUDED from the
@@ -21,7 +21,7 @@
 #         log(s_active_jkt) = alpha_k * sigma_jkt + delta_j + mu_kt + e_jkt
 #      where:
 #         alpha_k   = type-specific deposit-spread coefficient (spread_T1...spread_T5)
-#         delta_j   = conglomerate x type entity FE  (entity = CodConglPrud_type)
+#         delta_j   = institution x type entity FE  (entity = CNPJ_type)
 #         mu_t      = plain quarter time FE  (time_idx = dense rank of AnoMes)
 #         sigma_jkt = spread_qoq  (= risk_free_qoq - deposit_rate_qoq, opportunity cost >= 0)
 #
@@ -33,7 +33,7 @@
 #
 # Endogeneity:
 #   Types 1-3: rates are regulated or market-determined -> exogenous. OLS only.
-#   Types 4 (CDB) and 5 (prepaid): rates set by each conglomerate -> endogenous.
+#   Types 4 (CDB) and 5 (prepaid): rates set by each institution -> endogenous.
 #   CF correction is applied to types 4-5 only; the CF residual is set to 0 for
 #   types 1-3 so those observations are included but receive no CF adjustment.
 #
@@ -43,26 +43,34 @@
 #   CF specs 9-10  -> CF: Hausman IV + costs first stage on spread_qoq (types 4-5)
 #
 # NOTE on FE identification (Frisch-Waugh):
-#   Supply-side models 3, 4, 7, 8 are fit with entity+time FE absorbed via
-#   linearmodels.PanelOLS (which internally demeans; NOT explicit pre-demeaning).
-#   By the Frisch-Waugh theorem the within-estimator coefficients equal those
-#   from a specification with full dummy variables; applying them to the
-#   ORIGINAL (undemeaned) regressors recovers hat_Y_jkt correctly.
+#   Supply-side models 3, 4, 7, 8 are estimated on two-way-demeaned data.
+#   Their structural coefficients are nonetheless unbiased for Upsilon' under
+#   the FW theorem; applying them to the ORIGINAL (undemeaned) regressors
+#   recovers hat_Y_jkt correctly.
 #
-# Input:  BCB/Egan_et_al_2025_Rep/processed/PANEL_INTERMED/egan_panel_deposits.csv
-#         (loaded via estimation_1.load_and_prepare())
+# Input:  BCB/Egan_et_al_2025_Rep/processed/PANEL_INTERMED/egan_panel_institution.parquet
+#         (loaded via estimation_2.load_and_prepare())
 # Output: BCB/Egan_et_al_2025_Rep/processed/ESTIMATION_OUTPUT/
-#             demand_results_conglomerate.csv
-#             demand_table_conglomerate.tex
+#             demand_results_institution.csv
+#             demand_table_institution.tex
 ## ---------------------------------------------------------------------------
 
 ## 1) Imports and paths:
 
+# Packages:
 import os
 import sys
 import warnings
 import logging
 from logging.handlers import RotatingFileHandler
+
+try:
+    from utils.venv_guard import ensure_project_venv
+except Exception:
+    ensure_project_venv = None
+
+if ensure_project_venv is not None:
+    ensure_project_venv(__file__)
 
 import numpy as np
 import pandas as pd
@@ -79,7 +87,7 @@ OUTPUT_DIR = os.path.join(EGAN_PATH, "processed", "ESTIMATION_OUTPUT")
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 # -- Logging ----------------------------------------------------------------
-_log_file = os.path.join(SCRIPT_DIR, "estimation_demand_1.log")
+_log_file = os.path.join(SCRIPT_DIR, "estimation_demand_2.log")
 _fh = RotatingFileHandler(_log_file, maxBytes=5 * 1024 * 1024, backupCount=3, encoding="utf-8")
 _ch = logging.StreamHandler()
 _ch.setLevel(logging.INFO)
@@ -89,9 +97,9 @@ logging.basicConfig(
     format="%(asctime)s - %(levelname)s - %(message)s",
 )
 
-# -- Import supply estimation functions from estimation_1.py ----------------
+# -- Import supply estimation functions from estimation_2.py ----------------
 sys.path.insert(0, SCRIPT_DIR)
-import estimation_1 as e1  # noqa: E402
+import estimation_2 as e2  # noqa: E402
 
 # -- Constants --------------------------------------------------------------
 # CF polynomial column names -- excluded from structural (sleeping) predictions
@@ -100,8 +108,8 @@ _CF_POLY = frozenset([
     "cf_resid_h", "cf_resid_h_sq", "cf_resid_h_cu",
 ])
 
-LEVEL_LABEL = "Conglomerate"
-ENTITY_ID   = "CodConglPrud"  # primary entity column in estimation_1 panel
+LEVEL_LABEL = "Institution"
+ENTITY_ID   = "CNPJ"  # primary entity column in estimation_2 panel
 
 
 ## 2) User-defined functions:
@@ -204,28 +212,30 @@ def compute_active_shares(df: pd.DataFrame, spec_name: str) -> pd.Series:
     total  = active.groupby(df["AnoMes"]).transform("sum")
     return active / total.replace(0, np.nan)
 
-# 2.3) Demand estimation:
+# 2.3) Demand estimation: 
 
 def run_demand_estimation(df: pd.DataFrame, supply_results: dict) -> dict:
     """
     Estimate the Berry (1994) demand equation for each supply-side spec:
 
-        log(s_active_jkt) = alpha_k * rho_jkt + delta_j + mu_kt + e_jkt
+        log(s_active_jkt) = alpha_k * sigma_jkt + delta_j + mu_t + e_jkt
 
     Price sensitivity alpha_k is type-specific, implemented via type-interacted
-    deposit rates (rate_T1 ... rate_T5).  delta_j is absorbed as entity FE and
-    mu_t as a plain quarter time FE (time_idx = AnoMes rank) where applicable.
+    deposit spreads (spread_T1 ... spread_T5).  delta_j is absorbed as entity FE
+    (entity = CNPJ_type, i.e. bank x type) and mu_t as a PLAIN quarter time FE
+    (time_idx = AnoMes rank) where applicable.  The time FE is NOT interacted
+    with deposit_type.
 
     Endogeneity:
       - Types 1-3: rates are regulated or market-determined -> exogenous. No CF.
-      - Types 4 (CDB) and 5 (prepaid): rates set by each conglomerate -> endogenous.
+      - Types 4 (CDB) and 5 (prepaid): rates set by each institution -> endogenous.
         A control function is applied to types 4-5 only. The CF residual is set to
         zero for types 1-3 so those observations require no correction.
 
     Estimation strategy mirrors the supply side:
       - OLS specs  (no CF) -> plain OLS, HC-robust / clustered SE
-      - CF-Cost specs      -> demand CF with cost-only FS on deposit_rate_qoq (types 4-5)
-      - CF-Hausman specs   -> demand CF with Hausman IV + costs FS (types 4-5)
+      - CF-Cost specs      -> demand CF with cost-only FS on spread_qoq (types 4-5)
+      - CF-Hausman specs   -> demand CF with Hausman IV + costs FS on spread_qoq (types 4-5)
 
     Returns
     -------
@@ -253,7 +263,7 @@ def run_demand_estimation(df: pd.DataFrame, supply_results: dict) -> dict:
 
     # -- Endogenous deposit types requiring CF correction ----------------
     # Types 1-3: regulated or market-determined rates -> exogenous, no CF needed.
-    # Types 4 (CDB) and 5 (prepaid): conglomerate-set rates -> endogenous.
+    # Types 4 (CDB) and 5 (prepaid): institution-set rates -> endogenous.
     # CF residuals are set to 0 for types 1-3 so no correction is applied there.
     ENDO_TYPES = [4, 5]
     df_endo = df[df["deposit_type"].isin(ENDO_TYPES)].copy()
@@ -444,7 +454,7 @@ def run_demand_estimation(df: pd.DataFrame, supply_results: dict) -> dict:
                 demand_results[demand_key] = {
                     "model": m, "type": "sm",
                     "entity_fe": "Yes", "time_fe": "Yes",
-                    "se_type": "Cong-clust" if is_clust else "HC-robust",
+                    "se_type": "Inst-clust" if is_clust else "HC-robust",
                     "supply_spec": spec_name,
                     "n_active_zeros": n_zero,
                 }
@@ -489,7 +499,7 @@ def run_demand_estimation(df: pd.DataFrame, supply_results: dict) -> dict:
                 demand_results[demand_key] = {
                     "model": m, "type": "sm",
                     "entity_fe": "Yes", "time_fe": "Yes",
-                    "se_type": "Cong-clust" if is_clust else "HC-robust",
+                    "se_type": "Inst-clust" if is_clust else "HC-robust",
                     "supply_spec": spec_name,
                     "n_active_zeros": n_zero,
                 }
@@ -501,7 +511,7 @@ def run_demand_estimation(df: pd.DataFrame, supply_results: dict) -> dict:
 
     return demand_results
 
-# 2.4) Export results:
+# 2.4) Export:
 
 def export_demand_results(
     demand_results: dict,
@@ -537,7 +547,7 @@ def export_demand_results(
             })
 
     df_out = pd.DataFrame(rows)
-    fname  = f"demand_results_conglomerate{suffix}.csv"
+    fname  = f"demand_results_institution{suffix}.csv"
     path   = os.path.join(output_dir, fname)
     df_out.to_csv(path, index=False)
     logging.info(f"Demand results exported to {path}")
@@ -546,9 +556,9 @@ def export_demand_results(
 def export_demand_latex(
     demand_results: dict,
     output_dir: str,
-    caption: str = "Demand Estimation: Berry (1994) Active Market Shares (Conglomerate Level)",
-    label: str   = "tab:demand_conglom",
-    filename: str = "demand_table_conglomerate.tex",
+    caption: str = "Demand Estimation: Berry (1994) Active Market Shares (Institution Level)",
+    label: str   = "tab:demand_inst",
+    filename: str = "demand_table_institution.tex",
 ) -> str:
     r"""
     Export a LaTeX table of demand (alpha_k) estimates.
@@ -674,7 +684,7 @@ def export_demand_latex(
         r"CF corrections (cost shifters / Hausman IV on leave-one-out mean spread) "
         r"applied to endogenous Types 4--5 only; "
         r"Types 1--3 spreads are exogenous and require no correction. "
-        r"Panel unit: conglomerate (CodConglPrud) $\times$ deposit type."
+        r"Panel unit: individual institution (CNPJ) $\times$ deposit type."
     )
     L.append(r"\end{tablenotes}")
     L.append(r"\end{threeparttable}")
@@ -686,20 +696,21 @@ def export_demand_latex(
     logging.info(f"Demand LaTeX table exported to {tex_path}")
     return tex_path
 
+
 ## 3) Main execution:
 
 if __name__ == "__main__":
     logging.info("=" * 80)
-    logging.info("DEMAND ESTIMATION -- CONGLOMERATE LEVEL")
-    logging.info("Berry (1994) active market shares | estimation_demand_1.py")
+    logging.info("DEMAND ESTIMATION -- INSTITUTION LEVEL")
+    logging.info("Berry (1994) active market shares | estimation_demand_2.py")
     logging.info("=" * 80)
 
     # 3.1) Load panel and run supply estimation -----------------------
     logging.info("\n>>> Step 1: Loading panel and running supply estimation ...")
-    df_est = e1.load_and_prepare()
+    df_est = e2.load_and_prepare()
 
-    results_ols = e1.run_structural_estimation(df_est)
-    results_cf  = e1.run_control_function_estimation(df_est)
+    results_ols = e2.run_structural_estimation(df_est)
+    results_cf  = e2.run_control_function_estimation(df_est)
     # NOTE: run_control_function_estimation adds cf_resid* and hausman_iv_spread
     # columns directly to df_est (pandas pass-by-reference).
 
@@ -746,4 +757,4 @@ if __name__ == "__main__":
     else:
         logging.warning("No demand results produced.")
 
-    logging.info("Done -- estimation_demand_1.py complete.")
+    logging.info("Done -- estimation_demand_2.py complete.")

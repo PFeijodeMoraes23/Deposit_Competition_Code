@@ -70,6 +70,14 @@ import logging
 import os
 from pathlib import Path
 
+try:
+    from utils.venv_guard import ensure_project_venv
+except Exception:
+    ensure_project_venv = None
+
+if ensure_project_venv is not None:
+    ensure_project_venv(__file__)
+
 import numpy as np
 import pandas as pd
 from logging.handlers import RotatingFileHandler

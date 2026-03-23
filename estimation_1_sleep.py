@@ -40,10 +40,9 @@ import sys
 import os
 import json
 import pickle
-import pandas as pd
-import numpy as np
-import statsmodels.api as sm
 from pathlib import Path
+import concurrent.futures
+
 
 try:
     from utils.venv_guard import ensure_project_venv
@@ -52,6 +51,11 @@ except Exception:
 
 if ensure_project_venv is not None:
     ensure_project_venv(__file__)
+
+import pandas as pd
+import numpy as np
+import statsmodels.api as sm
+from scipy import stats
 
 try:
     from utils.toon_parser import get_script_config, load_default_toon_context
@@ -161,9 +165,9 @@ def build_data():
     # Base Regressor: (1 + r^f_{t-1} - \rho_{t-1}) * Dep_{t-1}
     df['nr_lagged_dep'] = (1 + df['risk_free_qoq_lag'] - df['spread_qoq_lag']) * df['lagged_deposits']
     
+    # Only keep the Hausman IV that is actually created in market_panel.csv
+    # other cost shifters are not in this pipeline's output. 
     required_cols = [
-        'personnel_cost_ratio_lag', 'admin_cost_ratio_lag', 'tax_cost_ratio_lag',
-        'wholesale_ratio_lag', 'indice_basileia_lag', 'lci_lca_ratio_lag', 
         'leave_one_out_mean_spread'
     ]
     for col in required_cols:
@@ -306,7 +310,6 @@ def run_second_stage(df, state_vars, has_cf=False, spec_name=""):
     # and strictly evaluate inference parameters against the Satterthwaite G* penalty.
     res.df_resid = G_star
     
-    from scipy import stats
     # Recalculate robust P-values dynamically
     t_dist = stats.t(df=G_star)
     new_pvals = t_dist.sf(np.abs(res.tvalues)) * 2
@@ -325,7 +328,6 @@ def run_second_stage(df, state_vars, has_cf=False, spec_name=""):
 # Section 4 - Global Execution Routine
 # ==============================================================================
 def main():
-    import concurrent.futures
 
     _, output_dir = _resolve_runtime_paths()
 
@@ -374,14 +376,14 @@ def main():
     iv_spec1 = ['personnel_cost_ratio_lag', 'admin_cost_ratio_lag', 'tax_cost_ratio_lag']
     iv_spec2 = iv_spec1 + ['lci_lca_ratio_lag', 'wholesale_ratio_lag', 'indice_basileia_lag']
     iv_spec3 = iv_spec2 + ['leave_one_out_mean_spread']
-    
+
     specs = {
         'Spec1-OLS': iv_spec0,
-        'Spec2-IV_CostShifts': iv_spec1,
+        'Spec2-IV_CostShifters': iv_spec1,
         'Spec3-IV_Wholesale': iv_spec2,
         'Spec4-IV_HausmanFull': iv_spec3
     }
-    
+
     state_blocks = {
         'Base': s_base,
         'Macro': s_macro,

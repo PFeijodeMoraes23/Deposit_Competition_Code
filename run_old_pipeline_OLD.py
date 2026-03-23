@@ -62,6 +62,14 @@ import sys
 import time
 import os
 import argparse
+try:
+    from utils.venv_guard import ensure_project_venv
+except Exception:
+    ensure_project_venv = None
+
+if ensure_project_venv is not None:
+    ensure_project_venv(__file__)
+
 
 # Force UTF-8 output so box-drawing characters print on Windows consoles
 if hasattr(sys.stdout, "reconfigure"):

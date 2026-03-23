@@ -48,6 +48,14 @@ import os
 import time
 import zipfile
 import logging
+try:
+    from utils.venv_guard import ensure_project_venv
+except Exception:
+    ensure_project_venv = None
+
+if ensure_project_venv is not None:
+    ensure_project_venv(__file__)
+
 import requests
 import numpy as np
 import pandas as pd
