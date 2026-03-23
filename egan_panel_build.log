@@ -2928,3 +2928,18 @@
 2026-03-23 17:20:50,520 - INFO - IP prepaid rate coverage: 211 / 38,065 congl×quarter obs (zero for pre-2025 months, ~CDI for 2025+ reporters)
 2026-03-23 17:20:50,557 - INFO - COSIF conglomerate panel: 38,065 obs | 1544 conglomerates | 51 quarters
 2026-03-23 17:21:05,670 - INFO - Updated c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\Egan_et_al_2025_Rep\processed\deposits_panel.csv with rates and spreads.
+2026-03-23 17:28:38,027 - INFO - Adding rates and spreads to c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\Egan_et_al_2025_Rep\processed\deposits_panel.csv...
+2026-03-23 17:28:39,207 - INFO - Macro series loaded from c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\Egan_et_al_2025_Rep\raw\SGS_RAW\macro_series_full.csv (4836 days)
+2026-03-23 17:28:39,298 - INFO - Quarterly macro rates computed: 52 quarters
+2026-03-23 17:28:39,300 - INFO - Loading conglomerate mapping from 40 List files ...
+2026-03-23 17:28:40,765 - INFO - Payment Institutions identified: 197 IPs out of 2943 unique CNPJs
+2026-03-23 17:28:40,796 - INFO - Conglomerate mapping loaded: 76,826 CNPJ-month obs | 2943 unique CNPJs | 765 conglomerates + 1132 standalones
+2026-03-23 17:28:40,803 - INFO - Loading 29 COSIF processed files ...
+2026-03-23 17:28:41,466 - INFO - COSIF loaded: 169,308 rows | 1851 institutions
+2026-03-23 17:28:41,611 - INFO - COSIF separation: 145,924 institution-level rows kept, 23,384 pre-aggregated rows excluded (avoid double-counting)
+2026-03-23 17:28:41,785 - INFO - Fallback mapping added 1,336 rows for 144 CNPJs outside List date range
+2026-03-23 17:28:41,795 - INFO - COSIF-conglomerate merge: 41,461 rows | 481 conglomerates + 1066 standalones
+2026-03-23 17:28:41,860 - INFO - IP prepaid aggregation: 1,276 congl×month obs from 133 IP CNPJs in 129 conglomerates
+2026-03-23 17:28:41,988 - INFO - IP prepaid rate coverage: 211 / 38,065 congl×quarter obs (zero for pre-2025 months, ~CDI for 2025+ reporters)
+2026-03-23 17:28:42,016 - INFO - COSIF conglomerate panel: 38,065 obs | 1544 conglomerates | 51 quarters
+2026-03-23 17:28:53,550 - INFO - Updated c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\Egan_et_al_2025_Rep\processed\deposits_panel.csv with rates and spreads.
