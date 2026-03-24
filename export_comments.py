@@ -93,88 +93,123 @@ def stars(p):
     return ''
 
 def clean_name(v):
-    if v == 'nr_lagged_dep': return 'Lagged Deposits'
-    return str(v).replace('interaction_', '').replace('_', '\\_')
+    v = str(v).replace('interaction_', '')
+    labels = {
+        'nr_lagged_dep': 'Lagged Deposits',
+        'gdp_per_capita': 'GDP per Capita (10k R\\$)',
+        'cadunico_families_per1000': 'CadUnico Families (100s per 1k)',
+        'fraction_65plus': 'Fraction 65+',
+        'fraction_young': 'Fraction Young',
+        'pix_users_pf_per1000': 'Pix Users (100s per 1k)',
+        'connections_per100': 'Broadband Connections (per capita)',
+        'branches_per1000': 'Branches per 1k',
+        'const': 'Constant'
+    }
+    return labels.get(v, v.replace('_', '\\_'))
 
 def build_first_stage_table(results_dict, G, G_star):
-    columns = [
+    ivs = [
         ('Spec2-IV_CostShifters', 'IV Cost'), 
         ('Spec3-IV_Wholesale', 'IV Wholesale'), 
         ('Spec4-IV_HausmanFull', 'Hausman')
     ]
+    panels = ['Base', 'Macro', 'Tech']
     
     vs = []
-    for col_key, _ in columns:
-        res = results_dict[f"{col_key} x Base"]['first_stage']
-        for v in res.params.index:
-            if v not in vs: vs.append(v)
+    for p in panels:
+        for iv_key, _ in ivs:
+            res = results_dict[f"{iv_key} x {p}"]['first_stage']
+            for v in res.params.index:
+                if v not in vs and v != 'const': 
+                    vs.append(v)
             
     out = []
+    out.append("\\begin{landscape}")
     out.append("\\begin{table}[htbp]\\centering")
     out.append("\\caption{First Stage Estimation (Control Function)}")
-    out.append("\\begin{tabular}{l" + "c"*3 + "}\\toprule")
-    out.append(" & " + " & ".join([n for _, n in columns]) + " \\\\ \\midrule")
+    out.append("\\resizebox{\\linewidth}{!}{")
+    out.append("\\begin{tabular}{l" + "c"*9 + "}\\toprule")
+    
+    out.append(" & \\multicolumn{3}{c}{\\textbf{Base}} & \\multicolumn{3}{c}{\\textbf{Macro}} & \\multicolumn{3}{c}{\\textbf{Tech}} \\\\ \\cmidrule(lr){2-4} \\cmidrule(lr){5-7} \\cmidrule(lr){8-10}")
+    
+    col_names = [n for _, n in ivs] * 3
+    out.append(" & " + " & ".join(col_names) + " \\\\ \\midrule")
     
     for var in vs:
-        if var == 'const': continue
         coef_strs, se_strs = [], []
-        for col_key, _ in columns:
-            res = results_dict[f"{col_key} x Base"]['first_stage']
-            if var in res.params:
-                c, se, p = res.params[var], res.bse[var], res.pvalues[var]
-                coef_strs.append(f"${c:.4f}^{{{stars(p)}}}$")
-                se_strs.append(f"$({se:.4f})$")
-            else:
-                coef_strs.append("")
-                se_strs.append("")
-        out.append(f"{clean_name(var)} & " + " & ".join(coef_strs) + " \\\\")
-        out.append(f" & " + " & ".join(se_strs) + " \\\\")
+        has_val = False
+        for p in panels:
+            for iv_key, _ in ivs:
+                res = results_dict[f"{iv_key} x {p}"]['first_stage']
+                if var in res.params:
+                    has_val = True
+                    c, se, pval = res.params[var], res.bse[var], res.pvalues[var]
+                    coef_strs.append(f"${c:.4f}^{{{stars(pval)}}}$")
+                    se_strs.append(f"$({se:.4f})$")
+                else:
+                    coef_strs.append("")
+                    se_strs.append("")
+                    
+        if has_val:
+            out.append(f"{clean_name(var)} & " + " & ".join(coef_strs) + " \\\\")
+            out.append(f" & " + " & ".join(se_strs) + " \\\\")
         
     obs_strs = []
     rsq_strs = []
-    for col_key, _ in columns:
-        res = results_dict[f"{col_key} x Base"]['first_stage']
-        obs_strs.append(f"{int(res.nobs):,}")
-        rsq_strs.append(f"{res.rsquared:.4f}")
-        
+    fstat_strs = []
+    for p in panels:
+        for iv_key, _ in ivs:
+            res = results_dict[f"{iv_key} x {p}"]['first_stage']
+            obs_strs.append(f"{int(res.nobs):,}")
+            rsq_strs.append(f"{res.rsquared:.4f}")
+            fstat_val = getattr(res, 'fvalue', None)
+            fstat_pval = getattr(res, 'f_pvalue', 1.0)
+            if fstat_val is not None:
+                fstat_strs.append(f"${fstat_val:.2f}^{{{stars(fstat_pval)}}}$")
+            else:
+                fstat_strs.append("")
+
     out.append("\\midrule")
     out.append("Obs & " + " & ".join(obs_strs) + " \\\\")
     out.append("$R^2$ & " + " & ".join(rsq_strs) + " \\\\")
-    out.append("Fixed Effects & No & No & No \\\\")
-    out.append(f"Clusters (G) & {G} & {G} & {G} \\\\")
-    out.append(f"Effective Clusters ($G^*$) & {G_star:.2f} & {G_star:.2f} & {G_star:.2f} \\\\")
+    out.append("F-Statistic & " + " & ".join(fstat_strs) + " \\\\")
+    out.append("Fixed Effects & " + " & ".join(["No"]*9) + " \\\\")
+    out.append(f"Clusters (G) & " + " & ".join([str(G)]*9) + " \\\\")
+    out.append(f"Effective Clusters ($G^*$) & " + " & ".join([f"{G_star:.2f}"]*9) + " \\\\")
     
     out.append("\\bottomrule")
-    out.append("\\end{tabular}\\end{table}")
+    out.append("\\end{tabular}}")
+    out.append("\\end{table}")
+    out.append("\\end{landscape}")
     return "\n".join(out)
 
 def build_second_stage_table(results_dict, G, G_star):
-    columns = [
+    estimators = [
         ('Spec1-OLS', 'OLS'), 
         ('Spec2-IV_CostShifters', 'IV Cost'), 
         ('Spec3-IV_Wholesale', 'IV Wholesale'), 
         ('Spec4-IV_HausmanFull', 'Hausman')
     ]
-    panels = [
-        ('Base', ['nr_lagged_dep']), 
-        ('Macro', ['nr_lagged_dep', 'gdp_per_capita', 'cadunico_families_per1000', 'fraction_65plus', 'fraction_young']), 
-        ('Tech', ['nr_lagged_dep', 'gdp_per_capita', 'cadunico_families_per1000', 'fraction_65plus', 'fraction_young', 'pix_users_pf_per1000', 'connections_per100', 'branches_per1000'])
-    ]
+    panels = ['Base', 'Macro', 'Tech']
+    
+    all_vars = ['nr_lagged_dep', 'gdp_per_capita', 'cadunico_families_per1000', 'fraction_65plus', 'fraction_young', 'pix_users_pf_per1000', 'connections_per100', 'branches_per1000']
     
     out = []
+    out.append("\\begin{landscape}")
     out.append("\\begin{table}[htbp]\\centering")
     out.append("\\caption{Second Stage Estimation}")
-    out.append("\\resizebox{\\textwidth}{!}{")
-    out.append("\\begin{tabular}{l" + "c"*4 + "}\\toprule")
-    out.append(" & " + " & ".join([n for _, n in columns]) + " \\\\ \\midrule")
+    out.append("\\resizebox{\\linewidth}{!}{")
+    out.append("\\begin{tabular}{l" + "c"*12 + "}\\toprule")
     
-    for p_name, p_vars in panels:
-        out.append(f"\\multicolumn{{5}}{{l}}{{\\textbf{{Panel: {p_name}}}}} \\\\ \\midrule")
-        
-        for vshort in p_vars:
-            coef_strs, se_strs = [], []
-            for col_key, _ in columns:
-                spec_key = f"{col_key} x {p_name}"
+    out.append(" & \\multicolumn{4}{c}{\\textbf{Base}} & \\multicolumn{4}{c}{\\textbf{Macro}} & \\multicolumn{4}{c}{\\textbf{Tech}} \\\\ \\cmidrule(lr){2-5} \\cmidrule(lr){6-9} \\cmidrule(lr){10-13}")
+    col_names = [n for _, n in estimators] * 3
+    out.append(" & " + " & ".join(col_names) + " \\\\ \\midrule")
+    
+    for vshort in all_vars:
+        coef_strs, se_strs = [], []
+        for p_name in panels:
+            for est_key, _ in estimators:
+                spec_key = f"{est_key} x {p_name}"
                 res = results_dict[spec_key]['second_stage']
                 
                 var = vshort
@@ -182,35 +217,35 @@ def build_second_stage_table(results_dict, G, G_star):
                     var = f"interaction_{var}"
                     
                 if var in res.params:
-                    c, se, p = res.params[var], res.bse[var], res.pvalues[var]
-                    coef_strs.append(f"${c:.4f}^{{{stars(p)}}}$")
+                    c, se, pval = res.params[var], res.bse[var], res.pvalues[var]
+                    coef_strs.append(f"${c:.4f}^{{{stars(pval)}}}$")
                     se_strs.append(f"$({se:.4f})$")
                 else:
                     coef_strs.append("")
                     se_strs.append("")
                     
-            out.append(f"{clean_name(vshort)} & " + " & ".join(coef_strs) + " \\\\")
-            out.append(f" & " + " & ".join(se_strs) + " \\\\")
-            
-        obs_strs = []
-        rsq_strs = []
-        for col_key, _ in columns:
-            res = results_dict[f"{col_key} x {p_name}"]['second_stage']
+        out.append(f"{clean_name(vshort)} & " + " & ".join(coef_strs) + " \\\\")
+        out.append(f" & " + " & ".join(se_strs) + " \\\\")
+        
+    obs_strs = []
+    rsq_strs = []
+    for p_name in panels:
+        for est_key, _ in estimators:
+            res = results_dict[f"{est_key} x {p_name}"]['second_stage']
             obs_strs.append(f"{int(res.nobs):,}")
             rsq_strs.append(f"{res.rsquared:.4f}")
             
-        out.append("\\midrule")
-        out.append("Obs & " + " & ".join(obs_strs) + " \\\\")
-        out.append("$R^2$ & " + " & ".join(rsq_strs) + " \\\\")
-        out.append("Fixed Effects & Yes & Yes & Yes & Yes \\\\")
-        out.append(f"Clusters (G) & {G} & {G} & {G} & {G} \\\\")
-        out.append(f"Effective Clusters ($G^*$) & {G_star:.2f} & {G_star:.2f} & {G_star:.2f} & {G_star:.2f} \\\\")
-        if p_name != 'Tech':
-            out.append("\\midrule")
+    out.append("\\midrule")
+    out.append("Obs & " + " & ".join(obs_strs) + " \\\\")
+    out.append("$R^2$ & " + " & ".join(rsq_strs) + " \\\\")
+    out.append("Fixed Effects & " + " & ".join(["Yes"]*12) + " \\\\")
+    out.append(f"Clusters (G) & " + " & ".join([str(G)]*12) + " \\\\")
+    out.append(f"Effective Clusters ($G^*$) & " + " & ".join([f"{G_star:.2f}"]*12) + " \\\\")
 
     out.append("\\bottomrule")
     out.append("\\end{tabular}}")
     out.append("\\end{table}")
+    out.append("\\end{landscape}")
     return "\n".join(out)
 
 def main():
@@ -280,6 +315,7 @@ def main():
 \geometry{letterpaper, margin=1in}
 \usepackage{caption}
 \usepackage{longtable}
+\usepackage{pdflscape}
 \usepackage{float}
 \usepackage{hyperref}
 \usepackage{graphicx}

@@ -359,8 +359,19 @@ def main():
     
     # Establish Output Directory
     output_dir.mkdir(parents=True, exist_ok=True)
-    
+
     df['constant'] = 1.0
+
+    # Scale large-magnitude variables so coefficients are readable
+    if 'gdp_per_capita' in df.columns:
+        df['gdp_per_capita'] = df['gdp_per_capita'] / 10000.0
+    if 'cadunico_families_per1000' in df.columns:
+        df['cadunico_families_per1000'] = df['cadunico_families_per1000'] / 100.0
+    if 'pix_users_pf_per1000' in df.columns:
+        df['pix_users_pf_per1000'] = df['pix_users_pf_per1000'] / 100.0
+    if 'connections_per100' in df.columns:
+        df['connections_per100'] = df['connections_per100'] / 100.0
+
     s_base = ['constant']
     s_macro = s_base + ['gdp_per_capita', 'cadunico_families_per1000', 'fraction_65plus', 'fraction_young']
     s_tech_finance = s_macro + ['pix_users_pf_per1000', 'connections_per100', 'branches_per1000']
