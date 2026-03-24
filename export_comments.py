@@ -114,15 +114,15 @@ def build_first_stage_table(results_dict, G, G_star):
         ('Spec4-IV_HausmanFull', 'Hausman')
     ]
     panels = ['Base', 'Macro', 'Tech']
-    
+
     vs = []
     for p in panels:
         for iv_key, _ in ivs:
             res = results_dict[f"{iv_key} x {p}"]['first_stage']
             for v in res.params.index:
-                if v not in vs and v != 'const': 
+                if v not in vs and v != 'const':
                     vs.append(v)
-            
+
     out = []
     out.append("\\begin{landscape}")
     out.append("\\begin{table}[htbp]\\centering")

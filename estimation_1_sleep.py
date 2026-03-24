@@ -181,7 +181,7 @@ def build_data():
 # ==============================================================================
 # Section 2 - First Stage (Control Function Estimator)
 # ==============================================================================
-def run_first_stage(df, spec_instruments):
+def run_first_stage(df, spec_instruments, exogenous_controls):
     """
     Executes the Egan et al control function to purge endogenous spread-setting latency
     by projecting spreads against operating cost shifters. Only operates on endogenous
@@ -189,7 +189,13 @@ def run_first_stage(df, spec_instruments):
     """
     print(f"\n--- First Stage (Endogenous types 4 & 5) ---")
     endog_mask = df['deposit_type'].isin([4, 5])
-    valid_mask = endog_mask & df[spec_instruments].notnull().all(axis=1)
+    
+    # Merge excluded instruments and included exogenous state variables
+    first_stage_vars = list(set(spec_instruments + exogenous_controls))
+    if 'constant' in first_stage_vars:
+        first_stage_vars.remove('constant')
+
+    valid_mask = endog_mask & df[first_stage_vars].notnull().all(axis=1)
     df_fs = df[valid_mask].copy()
     
     if len(df_fs) == 0:
@@ -198,7 +204,7 @@ def run_first_stage(df, spec_instruments):
         return df, None
 
     y = df_fs['spread_qoq']
-    X = sm.add_constant(df_fs[spec_instruments])
+    X = sm.add_constant(df_fs[first_stage_vars])
 
     mod = sm.OLS(y, X)
     res = mod.fit(cov_type='HC1')
@@ -239,10 +245,11 @@ def execute_specification(args):
 
         if has_cf:
             iv_cols_act = [c for c in iv_cols if c in df_target.columns and df_target[c].notnull().sum() > 0]
+            exog_cols_act = [c for c in s_cols if c in df_target.columns and df_target[c].notnull().sum() > 0]
             if len(iv_cols_act) == 0:
                 print(f"Skipping {spec_name} - none of the IVs are populated in the dataset.")
                 return new_stdout.getvalue(), None, spec_name, None
-            df_target, res_fs = run_first_stage(df_target, iv_cols_act)
+            df_target, res_fs = run_first_stage(df_target, iv_cols_act, exog_cols_act)
 
         res = run_second_stage(df_target, s_cols, has_cf=has_cf, spec_name=spec_name)
     except Exception as e:
