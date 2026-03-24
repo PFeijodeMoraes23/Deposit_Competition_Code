@@ -1,5 +1,4 @@
 hello 5
 hello 6
 hello 7
-learning to alter commit
-hello 8
+Aprendendo sobre github
