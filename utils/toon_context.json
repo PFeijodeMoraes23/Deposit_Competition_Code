@@ -1,1 +1,21 @@
-{}
+{
+  "project_paths": {
+    "data_dir": "../../BCB/Egan_et_al_2025_Rep/processed",
+    "drafts_dir": "../../Drafts/Deposit Competition",
+    "bibliography_dir": "../../../Bibliography",
+    "main_tex": "../../Drafts/Deposit Competition/V_Main.tex",
+    "read_only": ["V_Main.tex"]
+  },
+  "data_probe": {
+    "paths": {
+      "market_panel_csv": "../../BCB/Egan_et_al_2025_Rep/processed/market_panel.csv",
+      "deposits_panel_csv": "../../BCB/Egan_et_al_2025_Rep/processed/deposits_panel.csv",
+      "bank_chars_panel_csv": "../../BCB/Egan_et_al_2025_Rep/processed/bank_chars_panel.csv"
+    }
+  },
+  "conventions": {
+    "script_style": "run_data_pipeline.py",
+    "venv": ".venv",
+    "read_only": ["V_Main.tex"]
+  }
+}

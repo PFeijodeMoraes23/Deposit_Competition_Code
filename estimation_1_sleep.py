@@ -225,7 +225,7 @@ def execute_specification(args):
     the captured print output as a string to avoid stdout race conditions.
     Also returns the statsmodels RegressionResults object to be formatted as latex.
     """
-    df, iv_name, iv_cols, s_name, s_cols = args
+    df, iv_name, iv_cols, s_name, s_cols, spec_number = args
     import io, sys
     
     old_stdout = sys.stdout
@@ -237,8 +237,9 @@ def execute_specification(args):
     try:
         has_cf = len(iv_cols) > 0
         spec_name = f"{iv_name} x {s_name}"
+        spec_label = f"({spec_number}) {spec_name}"
         print(f"\n=====================================================================")
-        print(f" RUNNING: {spec_name}")
+        print(f" RUNNING: {spec_label}")
         print(f"=====================================================================")
 
         df_target = df.copy()
@@ -247,17 +248,17 @@ def execute_specification(args):
             iv_cols_act = [c for c in iv_cols if c in df_target.columns and df_target[c].notnull().sum() > 0]
             exog_cols_act = [c for c in s_cols if c in df_target.columns and df_target[c].notnull().sum() > 0]
             if len(iv_cols_act) == 0:
-                print(f"Skipping {spec_name} - none of the IVs are populated in the dataset.")
-                return new_stdout.getvalue(), None, spec_name, None
+                print(f"Skipping {spec_label} - none of the IVs are populated in the dataset.")
+                return new_stdout.getvalue(), None, spec_name, None, spec_number
             df_target, res_fs = run_first_stage(df_target, iv_cols_act, exog_cols_act)
 
         res = run_second_stage(df_target, s_cols, has_cf=has_cf, spec_name=spec_name)
     except Exception as e:
-        print(f"Estimation Failed for {spec_name} - {str(e)}")
+        print(f"Estimation Failed for {spec_label} - {str(e)}")
     finally:
         sys.stdout = old_stdout
 
-    return new_stdout.getvalue(), res, spec_name, res_fs
+    return new_stdout.getvalue(), res, spec_name, res_fs, spec_number
 
 # ==============================================================================
 # Section 3 - Second Stage (Sleepiness Regression) UPDATED
@@ -393,10 +394,10 @@ def main():
     iv_spec3 = iv_spec2 + ['leave_one_out_mean_spread']
 
     specs = {
-        'Spec1-OLS': iv_spec0,
-        'Spec2-IV_CostShifters': iv_spec1,
-        'Spec3-IV_Wholesale': iv_spec2,
-        'Spec4-IV_HausmanFull': iv_spec3
+        'OLS': iv_spec0,
+        'IV_CostShifters': iv_spec1,
+        'IV_Wholesale': iv_spec2,
+        'IV_HausmanFull': iv_spec3
     }
 
     state_blocks = {
@@ -405,10 +406,20 @@ def main():
         'Tech': s_tech_finance
     }
     
+    # Canonical order from V_Main.tex (Section Estimation_Sleepiness):
+    # Base: (1)-(4), Macro: (5)-(8), Tech: (9)-(12),
+    # with estimator order OLS, IV Cost, IV Wholesale, Hausman.
+    iv_order = ['OLS', 'IV_CostShifters', 'IV_Wholesale', 'IV_HausmanFull']
+    state_order = ['Base', 'Macro', 'Tech']
+
     tasks = []
-    for iv_name, iv_cols in specs.items():
-        for s_name, s_cols in state_blocks.items():
-            tasks.append((df, iv_name, iv_cols, s_name, s_cols))
+    spec_number = 1
+    for s_name in state_order:
+        for iv_name in iv_order:
+            iv_cols = specs[iv_name]
+            s_cols = state_blocks[s_name]
+            tasks.append((df, iv_name, iv_cols, s_name, s_cols, spec_number))
+            spec_number += 1
             
     print(f"Starting parallel execution of {len(tasks)} specifications...")
     
@@ -419,10 +430,10 @@ def main():
             
     # Process Results and Save Stargazer-Compatible Tables + Pickle Results
     results_dict = {}
-    for stdout_text, res_ss, spec_name, res_fs in out_results:
+    for stdout_text, res_ss, spec_name, res_fs, spec_number in out_results:
         print(stdout_text)
         if res_ss is not None:
-            safe_name = spec_name.replace(" ", "_").replace("/", "").replace(":", "")
+            safe_name = f"Spec{spec_number:02d}_" + spec_name.replace(" ", "_").replace("/", "").replace(":", "")
             tex_file = output_dir / f"{safe_name}.tex"
 
             # Using statsmodels native latex export, which mimics Stargazer functionality
@@ -436,6 +447,8 @@ def main():
 
             # Store result for pickle export
             results_dict[spec_name] = {
+                'spec_number': spec_number,
+                'spec_label': f"({spec_number}) {spec_name}",
                 'second_stage': res_ss,
                 'first_stage': res_fs
             }

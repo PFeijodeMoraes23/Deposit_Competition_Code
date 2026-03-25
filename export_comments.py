@@ -109,11 +109,22 @@ def clean_name(v):
 
 def build_first_stage_table(results_dict, G, G_star):
     ivs = [
-        ('Spec2-IV_CostShifters', 'IV Cost'), 
-        ('Spec3-IV_Wholesale', 'IV Wholesale'), 
-        ('Spec4-IV_HausmanFull', 'Hausman')
+        ('IV_CostShifters', 'IV Cost'), 
+        ('IV_Wholesale', 'IV Wholesale'), 
+        ('IV_HausmanFull', 'Hausman')
     ]
     panels = ['Base', 'Macro', 'Tech']
+    fs_spec_numbers = {
+        ('Base', 'IV_CostShifters'): 2,
+        ('Base', 'IV_Wholesale'): 3,
+        ('Base', 'IV_HausmanFull'): 4,
+        ('Macro', 'IV_CostShifters'): 6,
+        ('Macro', 'IV_Wholesale'): 7,
+        ('Macro', 'IV_HausmanFull'): 8,
+        ('Tech', 'IV_CostShifters'): 10,
+        ('Tech', 'IV_Wholesale'): 11,
+        ('Tech', 'IV_HausmanFull'): 12,
+    }
 
     vs = []
     for p in panels:
@@ -132,7 +143,11 @@ def build_first_stage_table(results_dict, G, G_star):
     
     out.append(" & \\multicolumn{3}{c}{\\textbf{Base}} & \\multicolumn{3}{c}{\\textbf{Macro}} & \\multicolumn{3}{c}{\\textbf{Tech}} \\\\ \\cmidrule(lr){2-4} \\cmidrule(lr){5-7} \\cmidrule(lr){8-10}")
     
-    col_names = [n for _, n in ivs] * 3
+    col_names = []
+    for p in panels:
+        for iv_key, iv_label in ivs:
+            n = fs_spec_numbers[(p, iv_key)]
+            col_names.append(f"{iv_label} ({n})")
     out.append(" & " + " & ".join(col_names) + " \\\\ \\midrule")
     
     for var in vs:
@@ -185,12 +200,26 @@ def build_first_stage_table(results_dict, G, G_star):
 
 def build_second_stage_table(results_dict, G, G_star):
     estimators = [
-        ('Spec1-OLS', 'OLS'), 
-        ('Spec2-IV_CostShifters', 'IV Cost'), 
-        ('Spec3-IV_Wholesale', 'IV Wholesale'), 
-        ('Spec4-IV_HausmanFull', 'Hausman')
+        ('OLS', 'OLS'), 
+        ('IV_CostShifters', 'IV Cost'), 
+        ('IV_Wholesale', 'IV Wholesale'), 
+        ('IV_HausmanFull', 'Hausman')
     ]
     panels = ['Base', 'Macro', 'Tech']
+    ss_spec_numbers = {
+        ('Base', 'OLS'): 1,
+        ('Base', 'IV_CostShifters'): 2,
+        ('Base', 'IV_Wholesale'): 3,
+        ('Base', 'IV_HausmanFull'): 4,
+        ('Macro', 'OLS'): 5,
+        ('Macro', 'IV_CostShifters'): 6,
+        ('Macro', 'IV_Wholesale'): 7,
+        ('Macro', 'IV_HausmanFull'): 8,
+        ('Tech', 'OLS'): 9,
+        ('Tech', 'IV_CostShifters'): 10,
+        ('Tech', 'IV_Wholesale'): 11,
+        ('Tech', 'IV_HausmanFull'): 12,
+    }
     
     all_vars = ['nr_lagged_dep', 'gdp_per_capita', 'cadunico_families_per1000', 'fraction_65plus', 'fraction_young', 'pix_users_pf_per1000', 'connections_per100', 'branches_per1000']
     
@@ -202,7 +231,11 @@ def build_second_stage_table(results_dict, G, G_star):
     out.append("\\begin{tabular}{l" + "c"*12 + "}\\toprule")
     
     out.append(" & \\multicolumn{4}{c}{\\textbf{Base}} & \\multicolumn{4}{c}{\\textbf{Macro}} & \\multicolumn{4}{c}{\\textbf{Tech}} \\\\ \\cmidrule(lr){2-5} \\cmidrule(lr){6-9} \\cmidrule(lr){10-13}")
-    col_names = [n for _, n in estimators] * 3
+    col_names = []
+    for p in panels:
+        for est_key, est_label in estimators:
+            n = ss_spec_numbers[(p, est_key)]
+            col_names.append(f"{est_label} ({n})")
     out.append(" & " + " & ".join(col_names) + " \\\\ \\midrule")
     
     for vshort in all_vars:
