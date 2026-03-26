@@ -132,6 +132,10 @@ def build_base_panel(panel_csv: Path) -> pd.DataFrame:
         if 'is_B' not in df.columns:
             df['is_B'] = (df['CODMUN_IBGE'].astype(str) != '0')
             
+    # Drop interbank deposits (k=3) from estimation
+    if 'deposit_type' in df.columns:
+        df = df[df['deposit_type'] != 3].copy()
+            
     # -------------------------------------------------------------
     # 2. Assign Keys & Shifts
     # -------------------------------------------------------------

@@ -147,6 +147,10 @@ def build_data():
     else:
         df = df_raw.copy()
 
+    # Drop interbank deposits (k=3) from estimation
+    if 'deposit_type' in df.columns:
+        df = df[df['deposit_type'] != 3].copy()
+
     # -------------------------------------------------------------
     # 1b. Assign Unique Fixed Effect Keys & Apply Temporal Shifts
     # -------------------------------------------------------------

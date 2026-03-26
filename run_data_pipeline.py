@@ -128,6 +128,8 @@ STEPS = [
     # Stage 4 -- master analysis panel
     (4, "4a", "build_market_panel.py",
      "Merge all MCA panels + deposit panel -> master analysis dataset"),
+    (4, "4b", "build_market_panel_instruments.py",
+     "Compute LOO instruments and FGC dummy -> overwrites market_panel.csv"),
 ]
 
 
