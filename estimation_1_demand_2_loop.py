@@ -801,6 +801,18 @@ def run_blp_for_spec(spec_id: int, df_panel: pd.DataFrame, args) -> dict:
     return results
 
 
+def worker_blp(task):
+    """Isolated worker for multiprocessing."""
+    sp, df_panel, args = task
+    try:
+        res = run_blp_for_spec(sp, df_panel, args)
+        return sp, res, None
+    except Exception as e:
+        import traceback
+        tb = traceback.format_exc()
+        return sp, None, f"{e}\n{tb}"
+
+
 # ==============================================================================
 # 9. Main
 # ==============================================================================
@@ -842,11 +854,20 @@ def main():
     BLP_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
     all_results = {}
-    for sp in spec_ids:
-        try:
-            res = run_blp_for_spec(sp, df_panel, args)
-            if res is not None:
-                # Save per-spec
+    tasks = [(sp, df_panel, args) for sp in spec_ids]
+    
+    import multiprocessing
+    import concurrent.futures
+    max_w = min(len(spec_ids), multiprocessing.cpu_count() - 1, 6)
+    if max_w < 1: max_w = 1
+    
+    print(f"  Starting parallel execution of {len(spec_ids)} specs with {max_w} workers...")
+    
+    with concurrent.futures.ProcessPoolExecutor(max_workers=max_w) as executor:
+        for sp, res, err in executor.map(worker_blp, tasks):
+            if err is not None:
+                print(f"  [!] Spec {sp} failed:\n{err}")
+            elif res is not None:
                 out_pkl = BLP_OUTPUT_DIR / f"blp_results_spec_{sp}_{args.stage}.pkl"
                 with open(out_pkl, 'wb') as f:
                     pickle.dump(res, f)
@@ -858,10 +879,6 @@ def main():
                     'theta2': res['theta2'].tolist() if len(res['theta2']) > 0 else [],
                     'stage': args.stage
                 }
-        except Exception as e:
-            print(f"  [!] Spec {sp} failed: {e}")
-            import traceback
-            traceback.print_exc()
 
     # Summary JSON
     summary_path = BLP_OUTPUT_DIR / f"blp_summary_{args.stage}.json"
