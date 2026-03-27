@@ -347,8 +347,7 @@ def scrape_all_tariffs(
             log.info("  [%d / %d] %s (%s)", i, n_inst, inst_name, cnpj)
 
         for ct in CUSTOMER_TYPES:
-            records = fetch_tariffs_for_institution(cnpj, ct)
-            if records:
+            if records := fetch_tariffs_for_institution(cnpj, ct):
                 for r in records:
                     r["NomeInstituicao"] = inst_name
                     r["grupo_nome"]      = grupo
@@ -554,8 +553,7 @@ def build_conglomerate_panels(
         how="left",
     )
 
-    unmapped = df["cod_cong_prudencial"].isna().sum()
-    if unmapped:
+    if unmapped := df["cod_cong_prudencial"].isna().sum():
         log.info(
             "  %d tariff rows (%d unique CNPJs) not matched to a conglomerate -- kept with cod_cong=NaN",
             unmapped,
@@ -659,6 +657,13 @@ def build_fee_summary(long_cong: pd.DataFrame) -> pd.DataFrame:
 # ==============================================================================
 
 
+def _save_panel_if_not_empty(df: pd.DataFrame, filename: str, label: str) -> None:
+    """Save a DataFrame to CSV if it is not empty, logging the operation."""
+    if not df.empty:
+        path = PROC_DIR / filename
+        df.to_csv(path, index=False)
+        log.info(f"{label}: {len(df)} rows x {len(df.columns)} cols -> {path}")
+
 def main(test_n: int | None = None) -> None:
     today = date.today().isoformat()  # e.g. "2026-02-26"
     today_tag = today.replace("-", "")  # e.g. "20260226"
@@ -753,29 +758,13 @@ def main(test_n: int | None = None) -> None:
     log.info("=== Step 4c: conglomerate panels ===")
     cong_long, cong_wide = build_conglomerate_panels(inst_long, cong_map)
 
-    if not cong_long.empty:
-        cong_long_path = PROC_DIR / "tarifas_panel_conglomerate_long.csv"
-        cong_long.to_csv(cong_long_path, index=False)
-        log.info("Conglomerate long panel: %d rows -> %s", len(cong_long), cong_long_path)
-
-    if not cong_wide.empty:
-        cong_wide_path = PROC_DIR / "tarifas_panel_conglomerate_wide.csv"
-        cong_wide.to_csv(cong_wide_path, index=False)
-        log.info(
-            "Conglomerate wide panel: %d rows x %d cols -> %s",
-            len(cong_wide), len(cong_wide.columns), cong_wide_path,
-        )
+    _save_panel_if_not_empty(cong_long, "tarifas_panel_conglomerate_long.csv", "Conglomerate long panel")
+    _save_panel_if_not_empty(cong_wide, "tarifas_panel_conglomerate_wide.csv", "Conglomerate wide panel")
 
     # -- Step 5: key-fee summary panel -----------------------------------------
     log.info("=== Step 5: building fee summary panel ===")
     fee_summary = build_fee_summary(cong_long)
-    if not fee_summary.empty:
-        fee_path = PROC_DIR / "tarifas_fee_summary.csv"
-        fee_summary.to_csv(fee_path, index=False)
-        log.info(
-            "Fee summary: %d rows x %d cols -> %s",
-            len(fee_summary), len(fee_summary.columns), fee_path,
-        )
+    _save_panel_if_not_empty(fee_summary, "tarifas_fee_summary.csv", "Fee summary")
 
     # -- Summary ----------------------------------------------------------------
     n_scrapes = inst_long["data_coleta"].nunique()

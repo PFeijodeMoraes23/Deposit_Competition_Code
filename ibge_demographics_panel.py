@@ -136,6 +136,62 @@ def _save_age_cache(df: pd.DataFrame, tabela: int, year: int) -> None:
     logging.info(f"Saved census age cache: {path}")
 
 
+def _parse_sidra_classified_response(data: list[dict], year: int, class_id: int) -> list[dict]:
+    """Parse JSON response from SIDRA API for age-group data."""
+    rows = []
+    for obj in data:
+        for resultado in obj.get("resultados", []):
+            age_label = ""
+            for cl in resultado.get("classificacoes", []):
+                if str(cl.get("id", "")) == str(class_id):
+                    cats_dict = cl.get("categoria", {})
+                    age_label = next(iter(cats_dict.values()), "")
+                    break
+            
+            for series_item in resultado.get("series", []):
+                try:
+                    mun_code = int(series_item["localidade"]["id"])
+                except ValueError:
+                    continue
+                
+                val_str = series_item["serie"].get(str(year), "")
+                try:
+                    val = float(val_str)
+                except (ValueError, TypeError):
+                    val = np.nan
+                
+                rows.append({
+                    "municipio_code": mun_code,
+                    "age_label": age_label,
+                    "value": val,
+                })
+    return rows
+
+
+def _make_sidra_request(url: str, retries: int, pause: float, context: str) -> requests.Response:
+    """Helper to perform requests with exponential backoff for common IBGE errors."""
+    for attempt in range(retries):
+        try:
+            resp = requests.get(url, headers=HEADERS, timeout=120)
+            if resp.status_code in {429, 500, 503}:
+                wait = (2 ** attempt) * pause
+                logging.warning(
+                    f"HTTP {resp.status_code} {context} "
+                    f"(attempt {attempt+1}/{retries}); waiting {wait:.0f}s ..."
+                )
+                time.sleep(wait)
+                continue
+            resp.raise_for_status()
+            return resp
+        except requests.RequestException as exc:
+            if attempt == retries - 1:
+                logging.error(f"Failed {context}: {exc}")
+                raise
+            time.sleep((2 ** attempt) * pause)
+    
+    raise requests.HTTPError(f"Failed {context} after {retries} attempts")
+
+
 def _fetch_valid_munis(tabela: int) -> set[int]:
     """
     Return the set of municipality codes that are present in the given SIDRA table.
@@ -162,58 +218,10 @@ def _fetch_age_batch(mun_batch: list[int], tabela: int, year: int, variavel: int
         f"{SIDRA_BASE}/{tabela}/periodos/{year}/variaveis/{variavel}"
         f"?localidades=N6[{mun_str}]&classificacao={class_id}[{categories}]"
     )
-    for attempt in range(retries):
-        try:
-            resp = requests.get(url, headers=HEADERS, timeout=120)
-            if resp.status_code in (429, 500, 503):
-                wait = (2 ** attempt) * pause
-                logging.warning(
-                    f"HTTP {resp.status_code} table {tabela} year {year} "
-                    f"(attempt {attempt+1}/{retries}); waiting {wait:.0f}s ..."
-                )
-                time.sleep(wait)
-                continue
-            resp.raise_for_status()
-            break
-        except requests.RequestException as exc:
-            if attempt == retries - 1:
-                raise
-            time.sleep((2 ** attempt) * pause)
+    context = f"table {tabela} year {year}"
+    resp = _make_sidra_request(url, retries, pause, context)
 
-    # After the retry loop, resp holds the last response. If it was never
-    # successful (i.e. we never hit `break`), raise so the caller skips the batch.
-    if resp.status_code != 200:
-        raise requests.HTTPError(
-            f"HTTP {resp.status_code} for table {tabela} year {year} "
-            f"after {retries} attempts",
-            response=resp,
-        )
-
-    rows = []
-    for obj in resp.json():
-        for resultado in obj.get("resultados", []):
-            age_label = ""
-            for cl in resultado.get("classificacoes", []):
-                if str(cl.get("id", "")) == str(class_id):
-                    cats_dict = cl.get("categoria", {})
-                    age_label = next(iter(cats_dict.values()), "")
-                    break
-            for series_item in resultado.get("series", []):
-                mun_code_str = series_item["localidade"]["id"]
-                try:
-                    mun_code = int(mun_code_str)
-                except ValueError:
-                    continue
-                val_str = series_item["serie"].get(str(year), "")
-                try:
-                    val = float(val_str)
-                except (ValueError, TypeError):
-                    val = np.nan   # "-" or blank -> treat as NaN (zero / suppressed)
-                rows.append({
-                    "municipio_code": mun_code,
-                    "age_label":      age_label,
-                    "value":          val,
-                })
+    rows = _parse_sidra_classified_response(resp.json(), year, class_id)
     return (pd.DataFrame(rows) if rows
             else pd.DataFrame(columns=["municipio_code", "age_label", "value"]))
 
@@ -226,6 +234,28 @@ def _sidra_url(tabela: int, periodos: str, variavel: int) -> str:
         f"{SIDRA_BASE}/{tabela}/periodos/{periodos}"
         f"/variaveis/{variavel}?localidades=N6[all]"
     )
+
+
+def _parse_sidra_response(data: list[dict], frames: list[dict]) -> None:
+    """Parse JSON response from SIDRA API for simple variables."""
+    for obj in data:
+        for result in obj.get("resultados", []):
+            for series_item in result.get("series", []):
+                try:
+                    mun_code = int(series_item["localidade"]["id"])
+                except ValueError:
+                    continue
+
+                for periodo, val_str in series_item["serie"].items():
+                    try:
+                        val = float(val_str)
+                    except (ValueError, TypeError):
+                        val = np.nan
+                    frames.append({
+                        "municipio_code": mun_code,
+                        "year": int(periodo),
+                        "value": val,
+                    })
 
 
 def fetch_sidra(tabela: int, years: list[int], variavel: int,
@@ -244,42 +274,11 @@ def fetch_sidra(tabela: int, years: list[int], variavel: int,
         periodos = "|".join(str(y) for y in batch)
         url = _sidra_url(tabela, periodos, variavel)
 
-        for attempt in range(retries):
-            try:
-                resp = requests.get(url, headers=HEADERS, timeout=120)
-                if resp.status_code == 429 or resp.status_code == 503:
-                    wait = (2 ** attempt) * pause
-                    logging.warning(f"HTTP {resp.status_code}; waiting {wait:.0f}s ...")
-                    time.sleep(wait)
-                    continue
-                resp.raise_for_status()
-                break
-            except requests.RequestException as exc:
-                if attempt == retries - 1:
-                    logging.error(f"Failed fetching table {tabela} years {batch}: {exc}")
-                    raise
-                time.sleep((2 ** attempt) * pause)
+        context = f"fetching table {tabela} years {batch}"
+        resp = _make_sidra_request(url, retries, pause, context)
 
         data = resp.json()
-        # SIDRA v3 returns a list of result objects; iterate each variable result
-        for obj in data:
-            for result in obj.get("resultados", []):
-                period_series = result.get("series", [])
-                for series_item in period_series:
-                    mun_code_str = series_item["localidade"]["id"]
-                    try:
-                        mun_code = int(mun_code_str)
-                    except ValueError:
-                        continue
-
-                    for periodo, val_str in series_item["serie"].items():
-                        try:
-                            val = float(val_str)
-                        except (ValueError, TypeError):
-                            val = np.nan
-                        frames.append({"municipio_code": mun_code,
-                                       "year": int(periodo),
-                                       "value": val})
+        _parse_sidra_response(data, frames)
 
         logging.info(f"Table {tabela} var {variavel} years {batch}: {len(frames)} cumulative rows")
         time.sleep(pause)   # polite pacing between batches
@@ -312,9 +311,8 @@ def fetch_population(years: list[int]) -> pd.DataFrame:
     pop_6579["source"] = "6579"
 
     found_years = set(pop_6579["year"].unique())
-    missing     = [y for y in years if y not in found_years]
 
-    if missing:
+    if missing := [y for y in years if y not in found_years]:
         logging.info(f"Population missing for {missing}; trying Table 9514/4714 ...")
         try:
             pop_ext = fetch_sidra(tabela=4714, years=missing, variavel=93)
@@ -332,8 +330,9 @@ def fetch_population(years: list[int]) -> pd.DataFrame:
 
     # Carry forward last known population for any years still missing
     # (IBGE publishes estimates with a lag; e.g. 2023 may not yet be in any table)
-    still_missing = [y for y in years if y not in set(pop["year"].unique())]
-    if still_missing:
+    if still_missing := [
+        y for y in years if y not in set(pop["year"].unique())
+    ]:
         last_known_year = int(pop.dropna(subset=["population"])["year"].max())
         logging.info(
             f"Population still missing for {still_missing}; "
@@ -371,9 +370,8 @@ def fetch_gdp(years: list[int]) -> pd.DataFrame:
 
     # Identify the highest published year with real data
     max_real_year = gdp_raw.dropna(subset=["gdp_total_r1000"])["year"].max()
-    missing_gdp_years = [y for y in years if y > max_real_year]
 
-    if missing_gdp_years:
+    if missing_gdp_years := [y for y in years if y > max_real_year]:
         logging.info(
             f"GDP data not available for {missing_gdp_years}; "
             f"carrying forward from {max_real_year}."
@@ -417,54 +415,10 @@ def fetch_sidra_classified(tabela: int, year: int, variavel: int, class_id: int,
         f"{SIDRA_BASE}/{tabela}/periodos/{year}/variaveis/{variavel}"
         f"?localidades=N6[all]&classificacao={class_id}[all]"
     )
-    for attempt in range(retries):
-        try:
-            resp = requests.get(url, headers=HEADERS, timeout=300)
-            # Retry on rate-limit, service unavailable, AND server error (500)
-            if resp.status_code in (429, 500, 503):
-                wait = (2 ** attempt) * pause
-                logging.warning(
-                    f"HTTP {resp.status_code} on table {tabela} (attempt {attempt+1}/{retries}); "
-                    f"waiting {wait:.0f}s ..."
-                )
-                time.sleep(wait)
-                continue
-            resp.raise_for_status()
-            break
-        except requests.RequestException as exc:
-            if attempt == retries - 1:
-                logging.error(f"Failed fetching table {tabela} age classification: {exc}")
-                raise
-            time.sleep((2 ** attempt) * pause)
+    context = f"table {tabela} age classification"
+    resp = _make_sidra_request(url, retries, pause, context)
 
-    data = resp.json()
-    rows = []
-    for obj in data:
-        for resultado in obj.get("resultados", []):
-            # Extract the category label for this resultado
-            classifs = resultado.get("classificacoes", [])
-            age_label = ""
-            for cl in classifs:
-                if str(cl.get("id", "")) == str(class_id):
-                    cats = cl.get("categoria", {})
-                    # categoria is {cat_id: cat_name}
-                    age_label = next(iter(cats.values()), "")
-                    break
-
-            for series_item in resultado.get("series", []):
-                mun_str = series_item["localidade"]["id"]
-                try:
-                    mun_code = int(mun_str)
-                except ValueError:
-                    continue
-                val_str = series_item["serie"].get(str(year), "")
-                try:
-                    val = float(val_str)
-                except (ValueError, TypeError):
-                    val = np.nan
-                rows.append({"municipio_code": mun_code,
-                             "age_label": age_label,
-                             "value": val})
+    rows = _parse_sidra_classified_response(resp.json(), year, class_id)
 
     logging.info(f"Table {tabela} year {year}: {len(rows):,} age x municipality rows")
     return pd.DataFrame(rows)
@@ -484,9 +438,8 @@ def _classify_age_bucket(label: str) -> str | None:
         if f"{age_start} a " in lbl or f"{age_start} anos" in lbl:
             return "senior"
     # Young: 0-14
-    for bracket in ("0 a 4", "5 a 9", "10 a 14"):
-        if bracket in lbl:
-            return "young"
+    if any(bracket in lbl for bracket in ("0 a 4", "5 a 9", "10 a 14")):
+        return "young"
     return None
 
 
@@ -588,7 +541,7 @@ def fetch_age_structure() -> pd.DataFrame:
     # Identify the "Total" row (label is blank or exactly "Total")
     def is_total(lbl: str) -> bool:
         l = lbl.lower().strip()
-        return l in ("", "total", "total da população")
+        return l in {"", "total", "total da população"}
 
     census_df["is_total"] = census_df["age_label"].apply(is_total)
 
@@ -667,13 +620,10 @@ def interpolate_age_structure(age_census: pd.DataFrame,
             tmp["age_interpolated"] = False
         else:
             # Linear interpolation weight
-            y_lo_c = max([cy for cy in census_years if cy <= yr], default=y_lo)
-            y_hi_c = min([cy for cy in census_years if cy >= yr], default=y_hi)
+            y_lo_c = max((cy for cy in census_years if cy <= yr), default=y_lo)
+            y_hi_c = min((cy for cy in census_years if cy >= yr), default=y_hi)
 
-            if y_lo_c == y_hi_c:
-                w = 1.0
-            else:
-                w = (yr - y_lo_c) / (y_hi_c - y_lo_c)   # weight on y_hi_c
+            w = 1.0 if y_lo_c == y_hi_c else (yr - y_lo_c) / (y_hi_c - y_lo_c)  # weight on y_hi_c
 
             col_lo_65 = f"fraction_65plus_{y_lo_c}"
             col_hi_65 = f"fraction_65plus_{y_hi_c}"

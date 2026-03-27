@@ -55,6 +55,7 @@ import io
 import os
 import time
 import logging
+import contextlib
 try:
     from utils.venv_guard import ensure_project_venv
 except Exception:
@@ -145,12 +146,10 @@ def fetch_sagi_period(year: int, month: int,
     dest_csv   = os.path.join(RAW_DIR, f"cadunico_{period_str}.csv")
 
     if os.path.exists(dest_csv):
-        try:
+        with contextlib.suppress(Exception):
             df = pd.read_csv(dest_csv, dtype=str, encoding="utf-8")
             logging.info(f"  {year}-{month:02d}: loaded from cache ({len(df):,} rows)")
             return _coerce_solr_types(df, year, month)
-        except Exception:
-            pass  # re-fetch on corruption
 
     params = {
         "q":    f"tipo_s:mes_mu AND anomes_s:{period_str}",
@@ -163,7 +162,7 @@ def fetch_sagi_period(year: int, month: int,
         try:
             resp = requests.get(SAGI_SOLR_URL, params=params, headers=HEADERS,
                                 timeout=90)
-            if resp.status_code in (429, 503):
+            if resp.status_code in {429, 503}:
                 wait = (2 ** attempt) * pause
                 logging.warning(
                     f"HTTP {resp.status_code} for {year}-{month:02d}; "
@@ -197,10 +196,8 @@ def fetch_sagi_period(year: int, month: int,
     df = pd.DataFrame(docs)
 
     # Cache for future runs
-    try:
+    with contextlib.suppress(Exception):
         df.to_csv(dest_csv, index=False, encoding="utf-8")
-    except Exception:
-        pass
 
     return _coerce_solr_types(df, year, month)
 
@@ -216,8 +213,7 @@ def _coerce_solr_types(df: pd.DataFrame, year: int, month: int) -> pd.DataFrame 
         "cadun_qtde_fam_sit_extrema_pobreza_s": "families_extreme",
         "cadun_qtde_fam_sit_pobreza_s":         "families_poverty",
     }
-    df.rename(columns={k: v for k, v in rename.items() if k in df.columns},
-              inplace=True)
+    df = df.rename(columns={k: v for k, v in rename.items() if k in df.columns})
 
     if not {"cod_ibge6", "families_total"}.issubset(df.columns):
         logging.error(
@@ -239,7 +235,7 @@ def _coerce_solr_types(df: pd.DataFrame, year: int, month: int) -> pd.DataFrame 
     result["month"]   = month
     result["quarter"] = (month - 1) // 3 + 1
 
-    result.dropna(subset=["cod_ibge6", "families_total"], inplace=True)
+    result = result.dropna(subset=["cod_ibge6", "families_total"])
     result["cod_ibge6"] = result["cod_ibge6"].astype(int)
     return result
 
@@ -261,7 +257,7 @@ def download_all_periods() -> pd.DataFrame:
         (y, m)
         for y in range(PANEL_START_YEAR, PANEL_END_YEAR + 1)
         for m in FETCH_MONTHS
-        if not (y == PANEL_END_YEAR and m > 9)
+        if y != PANEL_END_YEAR or m <= 9
     ]
 
     logging.info(

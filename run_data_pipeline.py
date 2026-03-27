@@ -54,6 +54,7 @@ import subprocess
 import sys
 import threading
 import time
+import contextlib
 from pathlib import Path
 try:
     from utils.venv_guard import ensure_project_venv
@@ -147,10 +148,8 @@ def _kill_running_procs(exclude_sid: str | None = None) -> None:
         for sid, proc in list(_running_procs.items()):
             if sid == exclude_sid:
                 continue
-            try:
+            with contextlib.suppress(Exception):
                 proc.kill()
-            except Exception:
-                pass
 
 _W = 72   # display width
 
@@ -180,8 +179,7 @@ def run_step(step_id: str, script: str, description: str) -> float:
 
     t0   = time.perf_counter()
     env = os.environ.copy()
-    toon_ctx_path = os.environ.get("TOON_CONTEXT_PATH", "").strip()
-    if toon_ctx_path:
+    if toon_ctx_path := os.environ.get("TOON_CONTEXT_PATH", "").strip():
         env["TOON_CONTEXT_PATH"] = toon_ctx_path
 
     proc = subprocess.Popen(
@@ -383,8 +381,9 @@ def main() -> None:
     # Filter WAVES to only include steps whose stage is active
     filtered_waves: list[list[str]] = []
     for wave in WAVES:
-        filtered = [sid for sid in wave if stage_of.get(sid, -1) in active_stages]
-        if filtered:
+        if filtered := [
+            sid for sid in wave if stage_of.get(sid, -1) in active_stages
+        ]:
             filtered_waves.append(filtered)
 
     t_start = time.perf_counter()
@@ -403,7 +402,7 @@ def main() -> None:
     all_timings: dict[str, float] = {}
     for wave_steps in filtered_waves:
         wave_timings = run_wave(wave_steps, steps_dict, skip_set)
-        all_timings.update(wave_timings)
+        all_timings |= wave_timings
 
     total = time.perf_counter() - t_start
     print(f"\n{'=' * _W}")

@@ -218,7 +218,7 @@ def load_if_data(source_dir: str = IF_DATA_DIR) -> pd.DataFrame:
                 on_bad_lines="skip",
             )
             df.columns = [c.strip() for c in df.columns]
-            df.dropna(how="all", inplace=True)
+            df = df.dropna(how="all")
 
             # Keep only the three reports we need
             df = df[
@@ -543,6 +543,122 @@ def _collapse_monthly_to_quarterly(
     return df_agg
 
 
+def _map_cosif_to_congl(df_indiv: pd.DataFrame, df_map: pd.DataFrame) -> pd.DataFrame:
+    map_cols = ["CNPJ", "AnoMes_list", "CodConglomeradoPrudencial"]
+    if "is_ip" in df_map.columns:
+        map_cols.append("is_ip")
+
+    merged = df_indiv.merge(
+        df_map[map_cols],
+        left_on=["CNPJ", "AnoMes_cosif"],
+        right_on=["CNPJ", "AnoMes_list"],
+        how="inner",
+    )
+
+    if unmerged_cnpjs := set(df_indiv["CNPJ"].unique()) - set(merged["CNPJ"].unique()):
+        latest_map = (
+            df_map
+            .sort_values("AnoMes_list")
+            .drop_duplicates(subset=["CNPJ"], keep="last")
+            [["CNPJ", "CodConglomeradoPrudencial"]
+             + (["is_ip"] if "is_ip" in df_map.columns else [])]
+        )
+        df_unmerged = df_indiv[df_indiv["CNPJ"].isin(unmerged_cnpjs)]
+        fallback = df_unmerged.merge(latest_map, on="CNPJ", how="inner")
+        if not fallback.empty:
+            merged = pd.concat([merged, fallback], ignore_index=True)
+            logging.info(
+                f"Fallback mapping added {len(fallback):,} rows for "
+                f"{fallback['CNPJ'].nunique()} CNPJs outside List date range"
+            )
+
+    is_ccode = merged["CodConglomeradoPrudencial"].str.startswith("C", na=False)
+    n_congl = merged.loc[is_ccode, "CodConglomeradoPrudencial"].nunique()
+    n_standalone = merged.loc[~is_ccode, "CodConglomeradoPrudencial"].nunique()
+    logging.info(
+        f"COSIF-conglomerate merge: {len(merged):,} rows | "
+        f"{n_congl} conglomerates + {n_standalone} standalones"
+    )
+
+    return merged
+
+def _map_cosif_to_congl(df_indiv: pd.DataFrame, df_map: pd.DataFrame) -> pd.DataFrame:
+    map_cols = ["CNPJ", "AnoMes_list", "CodConglomeradoPrudencial"]
+    if "is_ip" in df_map.columns:
+        map_cols.append("is_ip")
+
+    merged = df_indiv.merge(
+        df_map[map_cols],
+        left_on=["CNPJ", "AnoMes_cosif"],
+        right_on=["CNPJ", "AnoMes_list"],
+        how="inner",
+    )
+
+    if unmerged_cnpjs := set(df_indiv["CNPJ"].unique()) - set(merged["CNPJ"].unique()):
+        latest_map = (
+            df_map
+            .sort_values("AnoMes_list")
+            .drop_duplicates(subset=["CNPJ"], keep="last")
+            [["CNPJ", "CodConglomeradoPrudencial"]
+             + (["is_ip"] if "is_ip" in df_map.columns else [])]
+        )
+        df_unmerged = df_indiv[df_indiv["CNPJ"].isin(unmerged_cnpjs)]
+        fallback = df_unmerged.merge(latest_map, on="CNPJ", how="inner")
+        if not fallback.empty:
+            merged = pd.concat([merged, fallback], ignore_index=True)
+            logging.info(
+                f"Fallback mapping added {len(fallback):,} rows for "
+                f"{fallback['CNPJ'].nunique()} CNPJs outside List date range"
+            )
+
+    is_ccode = merged["CodConglomeradoPrudencial"].str.startswith("C", na=False)
+    n_congl = merged.loc[is_ccode, "CodConglomeradoPrudencial"].nunique()
+    n_standalone = merged.loc[~is_ccode, "CodConglomeradoPrudencial"].nunique()
+    logging.info(
+        f"COSIF-conglomerate merge: {len(merged):,} rows | "
+        f"{n_congl} conglomerates + {n_standalone} standalones"
+    )
+
+    return merged
+
+def _aggregate_ip_prepaid_data(merged: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame, bool]:
+    has_ip_flag = "is_ip" in merged.columns and (merged["is_ip"] == 1).any()
+    df_ip_monthly = pd.DataFrame()
+    congl_has_ip = pd.DataFrame()
+    
+    if has_ip_flag:
+        ip_rows = merged[merged["is_ip"] == 1]
+        if not ip_rows.empty:
+            if prepaid_agg_cols := [
+                c for c in ["Estoque_Prepago", "Desp_Prepago_Marginal"]
+                if c in ip_rows.columns
+            ]:
+                df_ip_monthly = (
+                    ip_rows
+                    .groupby(["CodConglomeradoPrudencial", "year", "month"])
+                    [prepaid_agg_cols]
+                    .sum(min_count=1)
+                    .reset_index()
+                )
+                df_ip_monthly.rename(columns={
+                    "Estoque_Prepago":      "Estoque_Prepago_IP",
+                    "Desp_Prepago_Marginal": "Desp_Prepago_IP",
+                }, inplace=True)
+                logging.info(
+                    f"IP prepaid aggregation: {len(df_ip_monthly):,} congl×month obs "
+                    f"from {ip_rows['CNPJ'].nunique()} IP CNPJs in "
+                    f"{df_ip_monthly['CodConglomeradoPrudencial'].nunique()} conglomerates"
+                )
+
+        congl_has_ip = (
+            merged[merged["is_ip"] == 1]
+            .drop_duplicates(subset=["CodConglomeradoPrudencial"])
+            [["CodConglomeradoPrudencial"]]
+            .assign(has_ip=1)
+        )
+        
+    return df_ip_monthly, congl_has_ip, has_ip_flag
+
 def aggregate_cosif_to_conglomerates(
     df_cosif: pd.DataFrame,
     df_map: pd.DataFrame,
@@ -587,50 +703,11 @@ def aggregate_cosif_to_conglomerates(
         logging.info("No cosif_taxonomy column -- using all rows as institution-level")
 
     # ---- 2. Map institution-level COSIF CNPJs to conglomerates ----
-    # Also carry the is_ip flag so we can identify IP members
-    map_cols = ["CNPJ", "AnoMes_list", "CodConglomeradoPrudencial"]
-    if "is_ip" in df_map.columns:
-        map_cols.append("is_ip")
-
-    # Try exact month match first
-    merged = df_indiv.merge(
-        df_map[map_cols],
-        left_on=["CNPJ", "AnoMes_cosif"],
-        right_on=["CNPJ", "AnoMes_list"],
-        how="inner",
-    )
-
-    # For COSIF rows outside the List date range, fall back to latest mapping
-    unmerged_cnpjs = set(df_indiv["CNPJ"].unique()) - set(merged["CNPJ"].unique())
-    if unmerged_cnpjs:
-        latest_map = (
-            df_map
-            .sort_values("AnoMes_list")
-            .drop_duplicates(subset=["CNPJ"], keep="last")
-            [["CNPJ", "CodConglomeradoPrudencial"]
-             + (["is_ip"] if "is_ip" in df_map.columns else [])]
-        )
-        df_unmerged = df_indiv[df_indiv["CNPJ"].isin(unmerged_cnpjs)]
-        fallback = df_unmerged.merge(latest_map, on="CNPJ", how="inner")
-        if not fallback.empty:
-            merged = pd.concat([merged, fallback], ignore_index=True)
-            logging.info(
-                f"Fallback mapping added {len(fallback):,} rows for "
-                f"{fallback['CNPJ'].nunique()} CNPJs outside List date range"
-            )
+    merged = _map_cosif_to_congl(df_indiv, df_map)
 
     if merged.empty:
         logging.warning("COSIF-conglomerate merge produced 0 rows.")
         return pd.DataFrame()
-
-    # Log coverage
-    is_ccode = merged["CodConglomeradoPrudencial"].str.startswith("C", na=False)
-    n_congl = merged.loc[is_ccode, "CodConglomeradoPrudencial"].nunique()
-    n_standalone = merged.loc[~is_ccode, "CodConglomeradoPrudencial"].nunique()
-    logging.info(
-        f"COSIF-conglomerate merge: {len(merged):,} rows | "
-        f"{n_congl} conglomerates + {n_standalone} standalones"
-    )
 
     # ---- 3. Aggregate to conglomerate x month ----
     #   Core value columns: Estoque_Total (total deposit stock) and
@@ -650,55 +727,7 @@ def aggregate_cosif_to_conglomerates(
         .reset_index()
     )
 
-    # ---- 3b. IP-only aggregation for prepaid rate ----
-    # For conglomerates that contain Payment Institutions (IPs), compute
-    # ip_prepaid_rate from the dedicated prepaid COSIF accounts (2025+):
-    #   Estoque_Prepago   = 4.1.9.3 Conta de Pagamento Pré-Paga
-    #   Desp_Prepago      = 8.1.1.9.8 Remuneração Conta Pagamento Pré-Paga
-    # Pre-2025 these are both zero, so ip_prepaid_rate will be NaN and T5
-    # falls back to CDI -- a conservative, legally defensible choice
-    # (Lei 12.865/2013 requires IPs to hold prepaid balances in SELIC bonds).
-    has_ip_flag = "is_ip" in merged.columns and (merged["is_ip"] == 1).any()
-    df_ip_monthly = pd.DataFrame()
-    if has_ip_flag:
-        ip_rows = merged[merged["is_ip"] == 1]
-        if not ip_rows.empty:
-            prepaid_agg_cols = [
-                c for c in ["Estoque_Prepago", "Desp_Prepago_Marginal"]
-                if c in ip_rows.columns
-            ]
-            if prepaid_agg_cols:
-                df_ip_monthly = (
-                    ip_rows
-                    .groupby(["CodConglomeradoPrudencial", "year", "month"])
-                    [prepaid_agg_cols]
-                    # min_count=1: keeps NaN for pre-2025 months where the
-                    # dedicated accounts did not exist (rather than forcing 0),
-                    # so the quarterly collapse produces NaN → CDI fallback.
-                    .sum(min_count=1)
-                    .reset_index()
-                )
-                df_ip_monthly.rename(columns={
-                    "Estoque_Prepago":      "Estoque_Prepago_IP",
-                    "Desp_Prepago_Marginal": "Desp_Prepago_IP",
-                }, inplace=True)
-                logging.info(
-                    f"IP prepaid aggregation: {len(df_ip_monthly):,} congl×month obs "
-                    f"from {ip_rows['CNPJ'].nunique()} IP CNPJs in "
-                    f"{df_ip_monthly['CodConglomeradoPrudencial'].nunique()} "
-                    f"conglomerates"
-                )
-
-    # ---- 3c. Flag which conglomerates contain at least one IP ----
-    congl_has_ip = pd.DataFrame()
-    if has_ip_flag:
-        _ip_latest = (
-            merged[merged["is_ip"] == 1]
-            .drop_duplicates(subset=["CodConglomeradoPrudencial"])
-            [["CodConglomeradoPrudencial"]]
-            .assign(has_ip=1)
-        )
-        congl_has_ip = _ip_latest
+    df_ip_monthly, congl_has_ip, has_ip_flag = _aggregate_ip_prepaid_data(merged)
 
     # ---- 4. Collapse to quarterly and compute rates ----
     df_agg = _collapse_monthly_to_quarterly(df_monthly)
@@ -782,7 +811,7 @@ def make_bank_chars_panel(df_ifdata: pd.DataFrame) -> pd.DataFrame:
     ).reset_index()
     piv.columns.name = None
     piv.rename(
-        columns={k: v for k, v in RESUMO_ACCOUNTS.items()},
+        columns=RESUMO_ACCOUNTS,
         inplace=True,
     )
 
@@ -848,7 +877,7 @@ def make_dre_panel(
         columns="Conta", values="Saldo", aggfunc="sum",
     ).reset_index()
     piv.columns.name = None
-    piv.rename(columns={k: v for k, v in DRE_ACCOUNTS.items()}, inplace=True)
+    piv.rename(columns=dict(DRE_ACCOUNTS), inplace=True)
 
     # DRE cumulative flows reset each calendar year (Jan = quarterly value,
     # Dec = full-year cumulative).  Convert to pure quarterly flows by
@@ -1082,6 +1111,230 @@ def make_quarterly_macro(df_macro: pd.DataFrame) -> pd.DataFrame:
 
 ## 3.4) Main panel-building function:
 
+def _map_ifdata_to_congl(df_ifdata: pd.DataFrame, df_congl_map: pd.DataFrame) -> pd.DataFrame:
+    """
+    Map IF-Data CodInst to prudential conglomerates using List crosswalk.
+    """
+    if df_congl_map is not None and not df_congl_map.empty:
+        logging.info("Mapping IF-Data CodInst to prudential conglomerates ...")
+
+        unique_codinst = df_ifdata["CodInst"].unique()
+        is_ccode = pd.Series(unique_codinst).str.startswith("C")
+        ccode_map = pd.DataFrame({
+            "CodInst": pd.Series(unique_codinst)[is_ccode],
+            "CodConglPrud": pd.Series(unique_codinst)[is_ccode],
+        })
+
+        numeric_codinst = pd.Series(unique_codinst)[~is_ccode]
+        if len(numeric_codinst) > 0:
+            latest = (
+                df_congl_map
+                .sort_values("AnoMes_list")
+                .drop_duplicates(subset=["CNPJ"], keep="last")
+            )
+            num_map = (
+                numeric_codinst
+                .to_frame("CodInst")
+                .assign(CNPJ=lambda x: x["CodInst"].str.strip().str.zfill(8))
+                .merge(
+                    latest[["CNPJ", "CodConglomeradoPrudencial"]],
+                    on="CNPJ", how="left",
+                )
+                .rename(columns={"CodConglomeradoPrudencial": "CodConglPrud"})
+                [["CodInst", "CodConglPrud"]]
+            )
+            num_map["CodConglPrud"] = num_map["CodConglPrud"].fillna(
+                num_map["CodInst"]
+            )
+            codinst_to_congl = pd.concat(
+                [ccode_map, num_map], ignore_index=True
+            )
+        else:
+            codinst_to_congl = ccode_map
+
+        df_ifdata = df_ifdata.merge(codinst_to_congl, on="CodInst", how="left")
+        df_ifdata["CodConglPrud"] = df_ifdata["CodConglPrud"].fillna(
+            df_ifdata["CodInst"]
+        )
+    else:
+        df_ifdata["CodConglPrud"] = df_ifdata["CodInst"]
+
+    return df_ifdata
+
+def _map_ifdata_to_congl(df_ifdata: pd.DataFrame, df_congl_map: pd.DataFrame) -> pd.DataFrame:
+    """
+    Map IF-Data CodInst to prudential conglomerates using List crosswalk.
+    """
+    if df_congl_map is not None and not df_congl_map.empty:
+        logging.info("Mapping IF-Data CodInst to prudential conglomerates ...")
+
+        unique_codinst = df_ifdata["CodInst"].unique()
+        is_ccode = pd.Series(unique_codinst).str.startswith("C")
+        ccode_map = pd.DataFrame({
+            "CodInst": pd.Series(unique_codinst)[is_ccode],
+            "CodConglPrud": pd.Series(unique_codinst)[is_ccode],
+        })
+
+        numeric_codinst = pd.Series(unique_codinst)[~is_ccode]
+        if len(numeric_codinst) > 0:
+            latest = (
+                df_congl_map
+                .sort_values("AnoMes_list")
+                .drop_duplicates(subset=["CNPJ"], keep="last")
+            )
+            num_map = (
+                numeric_codinst
+                .to_frame("CodInst")
+                .assign(CNPJ=lambda x: x["CodInst"].str.strip().str.zfill(8))
+                .merge(
+                    latest[["CNPJ", "CodConglomeradoPrudencial"]],
+                    on="CNPJ", how="left",
+                )
+                .rename(columns={"CodConglomeradoPrudencial": "CodConglPrud"})
+                [["CodInst", "CodConglPrud"]]
+            )
+            num_map["CodConglPrud"] = num_map["CodConglPrud"].fillna(
+                num_map["CodInst"]
+            )
+            codinst_to_congl = pd.concat(
+                [ccode_map, num_map], ignore_index=True
+            )
+        else:
+            codinst_to_congl = ccode_map
+
+        df_ifdata = df_ifdata.merge(codinst_to_congl, on="CodInst", how="left")
+        df_ifdata["CodConglPrud"] = df_ifdata["CodConglPrud"].fillna(
+            df_ifdata["CodInst"]
+        )
+    else:
+        df_ifdata["CodConglPrud"] = df_ifdata["CodInst"]
+
+    return df_ifdata
+
+def _merge_bank_features(panel: pd.DataFrame, df_bank_chars: pd.DataFrame, df_dre_ratios: pd.DataFrame, df_segments: pd.DataFrame) -> pd.DataFrame:
+    if not df_bank_chars.empty:
+        panel = panel.merge(
+            df_bank_chars[["CodConglPrud", "AnoMes",
+                          "total_assets", "equity", "equity_ratio",
+                          "log_total_assets"]],
+            on=["CodConglPrud", "AnoMes"], how="left",
+        )
+        logging.info(
+            f"Bank chars coverage: "
+            f"{panel['total_assets'].notna().sum():,} / "
+            f"{len(panel):,} obs have total_assets"
+        )
+    else:
+        for col in ["total_assets", "equity", "equity_ratio", "log_total_assets"]:
+            panel[col] = np.nan
+
+    if df_dre_ratios is not None and not df_dre_ratios.empty:
+        panel = panel.merge(
+            df_dre_ratios[["CodConglPrud", "AnoMes",
+                           "personnel_cost_ratio_lag", "admin_cost_ratio_lag"]],
+            on=["CodConglPrud", "AnoMes"], how="left",
+        )
+        logging.info(
+            f"DRE cost ratio coverage: "
+            f"personnel={panel['personnel_cost_ratio_lag'].notna().sum():,} "
+            f"/ {len(panel):,}"
+        )
+    else:
+        panel["personnel_cost_ratio_lag"] = np.nan
+        panel["admin_cost_ratio_lag"]     = np.nan
+        logging.info("No DRE ratios available -- labour-cost columns will be NaN.")
+
+    if not df_segments.empty:
+        panel = panel.merge(df_segments, on="CodConglPrud", how="left")
+        logging.info(
+            f"Segment coverage: "
+            f"{panel['segment'].notna().sum():,} / "
+            f"{len(panel):,} obs have segment"
+        )
+    else:
+        panel["segment"] = np.nan
+        for s in ["S2", "S3", "S4", "S5"]:
+            panel[f"seg_{s}"] = np.nan
+        
+    return panel
+
+def _calculate_residual_type4_rate(panel: pd.DataFrame) -> pd.DataFrame:
+    """
+    F4b. Residual COSIF rate for Type 4 (time / CDB)
+    --------------------------------------------------
+    The public COSIF 8.1.1 blends expenses across ALL deposit types.
+    """
+    _lag_wide = (
+        panel[["CodConglPrud", "AnoMes", "deposit_type", "lagged_deposits"]]
+        .pivot_table(
+            index=["CodConglPrud", "AnoMes"],
+            columns="deposit_type",
+            values="lagged_deposits",
+            aggfunc="first",
+        )
+        .reset_index()
+    )
+    _lag_wide.columns.name = None
+    _lag_wide = _lag_wide.rename(
+        columns={t: f"_lag_t{t}" for t in [1, 2, 3, 4, 5] if t in _lag_wide.columns}
+    )
+    panel = panel.merge(_lag_wide, on=["CodConglPrud", "AnoMes"], how="left")
+
+    for _t in [2, 3, 4, 5]:
+        col = f"_lag_t{_t}"
+        panel[col] = 0.0 if col not in panel.columns else panel[col].fillna(0.0)
+
+    _imputed_t2 = panel["savings_rate_qoq"].fillna(0.0) * panel["_lag_t2"]
+    _imputed_t3 = panel["cdi_qoq"].fillna(0.0)          * panel["_lag_t3"]
+    
+    _residual   = (panel["cosif_desp_captacao"] - _imputed_t2 - _imputed_t3).clip(lower=0.0)
+    _denom_t45  = panel["_lag_t4"] + panel["_lag_t5"]
+
+    _type4_raw = _residual / _denom_t45
+    _type4_raw[~np.isfinite(_type4_raw)] = np.nan
+    _type4_raw[_type4_raw > 0.5] = np.nan   
+    panel["cosif_type4_rate"] = _type4_raw
+
+    panel.drop(columns=[c for c in panel.columns if c.startswith("_lag_t")], inplace=True)
+    logging.info(
+        f"Residual Type-4 rate coverage: "
+        f"{panel['cosif_type4_rate'].notna().sum():,} / {len(panel):,} obs"
+    )
+    return panel
+
+def _compute_median_ip_rate(panel: pd.DataFrame) -> pd.DataFrame:
+    _ip_mask = (
+        panel["ip_prepaid_rate"].notna()
+        & (panel["ip_prepaid_rate"] > 0)
+    )
+    if _ip_mask.any():
+        _uniq_ip = (
+            panel.loc[_ip_mask]
+            .drop_duplicates(subset=["CodConglPrud", "AnoMes"])
+        )
+        _ip_count = _uniq_ip.groupby("AnoMes")["ip_prepaid_rate"].count()
+        _valid_q  = _ip_count[_ip_count >= 2].index
+        _uniq_ip_valid = _uniq_ip.loc[_uniq_ip["AnoMes"].isin(_valid_q)]
+        if not _uniq_ip_valid.empty:
+            median_ip_rate_q = (
+                _uniq_ip_valid
+                .groupby("AnoMes")["ip_prepaid_rate"]
+                .median()
+                .rename("median_ip_rate")
+            )
+            panel = panel.merge(median_ip_rate_q, on="AnoMes", how="left")
+            logging.info(
+                f"Median IP rate computed for {len(median_ip_rate_q)} quarters "
+                f"(>=2 reporters) | overall median = {median_ip_rate_q.median():.6f}"
+            )
+        else:
+            panel["median_ip_rate"] = np.nan
+            logging.warning("No quarters with >=2 IP reporters -- median_ip_rate will be NaN")
+    else:
+        panel["median_ip_rate"] = np.nan
+        logging.warning("No IP prepaid rates -- median_ip_rate will be NaN")
+    return panel
+
 def build_panel(df_ifdata: pd.DataFrame,
                 df_macro: pd.DataFrame,
                 df_cosif_congl: pd.DataFrame = None,
@@ -1103,60 +1356,7 @@ def build_panel(df_ifdata: pd.DataFrame,
     # ------------------------------------------------------------------
     # 0. Map IF-Data CodInst -> CodConglomeradoPrudencial
     # ------------------------------------------------------------------
-    # IF-Data Prudential Conglomerates uses a mix of C-codes and numeric
-    # CNPJs as CodInst.  We build a crosswalk from the List files so that
-    # every row carries a prudential conglomerate identifier.
-    if df_congl_map is not None and not df_congl_map.empty:
-        logging.info("Mapping IF-Data CodInst to prudential conglomerates ...")
-
-        # Build a CodInst -> CodConglPrud lookup from the List.
-        # For C-codes in IF-Data, the CodInst IS the conglomerate code.
-        # For numeric CNPJs, we look them up in the List.
-        unique_codinst = df_ifdata["CodInst"].unique()
-
-        # C-codes: already a conglomerate
-        is_ccode = pd.Series(unique_codinst).str.startswith("C")
-        ccode_map = pd.DataFrame({
-            "CodInst": pd.Series(unique_codinst)[is_ccode],
-            "CodConglPrud": pd.Series(unique_codinst)[is_ccode],
-        })
-
-        # Numeric CNPJs: look up via latest List snapshot
-        numeric_codinst = pd.Series(unique_codinst)[~is_ccode]
-        if len(numeric_codinst) > 0:
-            latest = (
-                df_congl_map
-                .sort_values("AnoMes_list")
-                .drop_duplicates(subset=["CNPJ"], keep="last")
-            )
-            num_map = (
-                numeric_codinst
-                .to_frame("CodInst")
-                .assign(CNPJ=lambda x: x["CodInst"].str.strip().str.zfill(8))
-                .merge(
-                    latest[["CNPJ", "CodConglomeradoPrudencial"]],
-                    on="CNPJ", how="left",
-                )
-                .rename(columns={"CodConglomeradoPrudencial": "CodConglPrud"})
-                [["CodInst", "CodConglPrud"]]
-            )
-            # Institutions not in any conglomerate -> standalone (use CodInst)
-            num_map["CodConglPrud"] = num_map["CodConglPrud"].fillna(
-                num_map["CodInst"]
-            )
-            codinst_to_congl = pd.concat(
-                [ccode_map, num_map], ignore_index=True
-            )
-        else:
-            codinst_to_congl = ccode_map
-
-        df_ifdata = df_ifdata.merge(codinst_to_congl, on="CodInst", how="left")
-        df_ifdata["CodConglPrud"] = df_ifdata["CodConglPrud"].fillna(
-            df_ifdata["CodInst"]
-        )
-    else:
-        # No mapping available -> use CodInst as-is
-        df_ifdata["CodConglPrud"] = df_ifdata["CodInst"]
+    df_ifdata = _map_ifdata_to_congl(df_ifdata, df_congl_map)
 
     # ------------------------------------------------------------------
     # A. Split IF-Data once (instead of scanning 2.8M rows 3 times)
@@ -1206,52 +1406,7 @@ def build_panel(df_ifdata: pd.DataFrame,
     panel = panel.merge(df_macro_q,  on="AnoMes",                     how="left")
     panel = panel.merge(df_total,    on=["CodConglPrud", "AnoMes"], how="left")
 
-    # F2. Merge bank characteristics (total assets, equity)
-    if not df_bank_chars.empty:
-        panel = panel.merge(
-            df_bank_chars[["CodConglPrud", "AnoMes",
-                          "total_assets", "equity", "equity_ratio",
-                          "log_total_assets"]],
-            on=["CodConglPrud", "AnoMes"], how="left",
-        )
-        logging.info(
-            f"Bank chars coverage: "
-            f"{panel['total_assets'].notna().sum():,} / "
-            f"{len(panel):,} obs have total_assets"
-        )
-    else:
-        for col in ["total_assets", "equity", "equity_ratio", "log_total_assets"]:
-            panel[col] = np.nan
-
-    # F2b. Merge DRE labour-cost ratios (lagged)
-    if df_dre_ratios is not None and not df_dre_ratios.empty:
-        panel = panel.merge(
-            df_dre_ratios[["CodConglPrud", "AnoMes",
-                           "personnel_cost_ratio_lag", "admin_cost_ratio_lag"]],
-            on=["CodConglPrud", "AnoMes"], how="left",
-        )
-        logging.info(
-            f"DRE cost ratio coverage: "
-            f"personnel={panel['personnel_cost_ratio_lag'].notna().sum():,} "
-            f"/ {len(panel):,}"
-        )
-    else:
-        panel["personnel_cost_ratio_lag"] = np.nan
-        panel["admin_cost_ratio_lag"]     = np.nan
-        logging.info("No DRE ratios available -- labour-cost columns will be NaN.")
-
-    # F3. Merge prudential segments
-    if not df_segments.empty:
-        panel = panel.merge(df_segments, on="CodConglPrud", how="left")
-        logging.info(
-            f"Segment coverage: "
-            f"{panel['segment'].notna().sum():,} / "
-            f"{len(panel):,} obs have segment"
-        )
-    else:
-        panel["segment"] = np.nan
-        for s in ["S2", "S3", "S4", "S5"]:
-            panel[f"seg_{s}"] = np.nan
+    panel = _merge_bank_features(panel, df_bank_chars, df_dre_ratios, df_segments)
 
     # F4. Merge COSIF implicit rates (conglomerate level)
     if df_cosif_congl is not None and not df_cosif_congl.empty:
@@ -1280,96 +1435,10 @@ def build_panel(df_ifdata: pd.DataFrame,
         logging.info("No COSIF rates available -- using market proxies only.")
 
     # F4b. Residual COSIF rate for Type 4 (time / CDB)
-    # --------------------------------------------------
-    # The public COSIF 8.1.1 blends expenses across ALL deposit types.
-    # Types 1-3 have known formula rates, so we subtract their imputed
-    # costs from total expense; the residual approximates T4+T5 expense.
-    #
-    #   residual = |Desp_Cap| - r^savings * B_t2 - r^CDI * B_t3
-    #   cosif_type4_rate = max(residual, 0) / (B_t4 + B_t5)
-    #
-    # Pivot lagged_deposits to wide (one column per deposit_type)
-    _lag_wide = (
-        panel[["CodConglPrud", "AnoMes", "deposit_type", "lagged_deposits"]]
-        .pivot_table(
-            index=["CodConglPrud", "AnoMes"],
-            columns="deposit_type",
-            values="lagged_deposits",
-            aggfunc="first",
-        )
-        .reset_index()
-    )
-    # Rename columns: {1: lag_t1, 2: lag_t2, ...}
-    _lag_wide.columns.name = None
-    _lag_wide = _lag_wide.rename(
-        columns={t: f"_lag_t{t}" for t in [1, 2, 3, 4, 5] if t in _lag_wide.columns}
-    )
-    panel = panel.merge(_lag_wide, on=["CodConglPrud", "AnoMes"], how="left")
+    panel = _calculate_residual_type4_rate(panel)
 
-    for _t in [2, 3, 4, 5]:
-        col = f"_lag_t{_t}"
-        if col not in panel.columns:
-            panel[col] = 0.0
-        else:
-            panel[col] = panel[col].fillna(0.0)
-
-    # Imputed expenses for known-rate types (same R$ units as cosif_desp_captacao)
-    _imputed_t2 = panel["savings_rate_qoq"].fillna(0.0) * panel["_lag_t2"]
-    _imputed_t3 = panel["cdi_qoq"].fillna(0.0)          * panel["_lag_t3"]
-    # Keep NaN when COSIF expense is absent (don't substitute 0 -- would give rate=0
-    # and override CDI fallback for institutions with no COSIF coverage)
-    _residual   = (panel["cosif_desp_captacao"] - _imputed_t2 - _imputed_t3).clip(lower=0.0)
-    _denom_t45  = panel["_lag_t4"] + panel["_lag_t5"]
-
-    _type4_raw = _residual / _denom_t45
-    _type4_raw[~np.isfinite(_type4_raw)] = np.nan
-    _type4_raw[_type4_raw > 0.5] = np.nan   # same 50 % implausibility cap as COSIF
-    panel["cosif_type4_rate"] = _type4_raw
-
-    # Drop the temporary wide-balance columns
-    panel.drop(columns=[c for c in panel.columns if c.startswith("_lag_t")], inplace=True)
-
-    logging.info(
-        f"Residual Type-4 rate coverage: "
-        f"{panel['cosif_type4_rate'].notna().sum():,} / {len(panel):,} obs"
-    )
-
-    # G0. Compute median IP prepaid rate per quarter (cross-conglomerate)
-    #     Used as fallback for conglomerates without an IP subsidiary.
-    #     Require >=2 reporters so a single outlier doesn't set the median
-    #     for all other conglomerates in that quarter.
-    _ip_mask = (
-        panel["ip_prepaid_rate"].notna()
-        & (panel["ip_prepaid_rate"] > 0)
-    )
-    if _ip_mask.any():
-        # Use unique conglomerate-quarter pairs to avoid counting
-        # the same conglomerate's rate 5 times (once per deposit_type)
-        _uniq_ip = (
-            panel.loc[_ip_mask]
-            .drop_duplicates(subset=["CodConglPrud", "AnoMes"])
-        )
-        _ip_count = _uniq_ip.groupby("AnoMes")["ip_prepaid_rate"].count()
-        _valid_q  = _ip_count[_ip_count >= 2].index
-        _uniq_ip_valid = _uniq_ip.loc[_uniq_ip["AnoMes"].isin(_valid_q)]
-        if not _uniq_ip_valid.empty:
-            median_ip_rate_q = (
-                _uniq_ip_valid
-                .groupby("AnoMes")["ip_prepaid_rate"]
-                .median()
-                .rename("median_ip_rate")
-            )
-            panel = panel.merge(median_ip_rate_q, on="AnoMes", how="left")
-            logging.info(
-                f"Median IP rate computed for {len(median_ip_rate_q)} quarters "
-                f"(>=2 reporters) | overall median = {median_ip_rate_q.median():.6f}"
-            )
-        else:
-            panel["median_ip_rate"] = np.nan
-            logging.warning("No quarters with >=2 IP reporters -- median_ip_rate will be NaN")
-    else:
-        panel["median_ip_rate"] = np.nan
-        logging.warning("No IP prepaid rates -- median_ip_rate will be NaN")
+    # G0. Compute median IP prepaid rate per quarter
+    panel = _compute_median_ip_rate(panel)
 
     # G. Assign deposit rates by type
     #    Type 4 (time/CDB): residual COSIF rate (strips T1-T3 contamination)
@@ -1535,7 +1604,7 @@ if __name__ == "__main__":
     print("Step 5/6: Building panel ...")
     panel = build_panel(
         df_ifdata, df_macro,
-        df_cosif_congl=df_cosif_congl if not df_cosif_congl.empty else None,
+        df_cosif_congl=None if df_cosif_congl.empty else df_cosif_congl,
         df_congl_map=df_congl_map,
     )
 

@@ -127,7 +127,7 @@ def load_estban() -> pd.DataFrame:
     df["YEAR"]             = pd.to_numeric(df["YEAR"],             errors="coerce")
     df["MONTH"]            = pd.to_numeric(df["MONTH"],            errors="coerce")
     df["AGEN_PROCESSADAS"] = pd.to_numeric(df["AGEN_PROCESSADAS"], errors="coerce").fillna(0)
-    df.dropna(subset=["CODMUN_IBGE", "YEAR", "MONTH"], inplace=True)
+    df = df.dropna(subset=["CODMUN_IBGE", "YEAR", "MONTH"])
     df["CODMUN_IBGE"] = df["CODMUN_IBGE"].astype(int)
     df["YEAR"]        = df["YEAR"].astype(int)
     df["MONTH"]       = df["MONTH"].astype(int)
@@ -163,10 +163,9 @@ def build_branch_panel() -> pd.DataFrame:
 ## ─────────────────────────────────────────────────────────────────────────────
 
 def load_mca_crosswalk() -> pd.DataFrame:
-    mca = pd.read_csv(MCA_CSV,
+    return pd.read_csv(MCA_CSV,
                       usecols=["municipality_code", "mca_code", "year"],
                       dtype={"municipality_code": int, "mca_code": str, "year": int})
-    return mca
 
 
 def aggregate_to_mca_year(incl: pd.DataFrame,

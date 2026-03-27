@@ -230,7 +230,7 @@ def compute_mu(prod_vec: np.ndarray, nu_draws: np.ndarray,
     mu = np.dot(prod_vec, sigma_nu.T)  # (N, R)
     
     # 2. Pi term:
-    if len(pi_interactions) > 0:
+    if pi_interactions:
         D = aligned_demo_draws.shape[2]
         for pi_idx, (coef_idx, demo_idx) in enumerate(pi_interactions):
             if coef_idx < coef_dim and demo_idx < D:
@@ -243,6 +243,23 @@ def compute_mu(prod_vec: np.ndarray, nu_draws: np.ndarray,
 # ==============================================================================
 # 5. Inner Loop: BLP Contraction (Eq-A4)
 # ==============================================================================
+def _compute_omega(s_model: np.ndarray, is_B: np.ndarray, time_ids: np.ndarray, deposit_types: np.ndarray) -> np.ndarray:
+    N = len(s_model)
+    omega_mt = np.ones(N)
+    if not is_B.any():
+        return omega_mt
+
+    nb_mask = ~is_B
+    unique_times, t_enc = np.unique(time_ids, return_inverse=True)
+    unique_dtypes, k_enc = np.unique(deposit_types, return_inverse=True)
+    n_t = len(unique_times)
+    group_idx = t_enc * len(unique_dtypes) + k_enc  # (N,)
+    n_groups = n_t * len(unique_dtypes)
+
+    nb_shares_in_group = np.bincount(group_idx, weights=s_model * nb_mask, minlength=n_groups)
+    omega_mt_per_group = np.maximum(1e-10, 1.0 - nb_shares_in_group)
+    return omega_mt_per_group[group_idx]
+
 def compute_model_shares(delta: np.ndarray, mu: np.ndarray,
                          df: pd.DataFrame, R: int) -> tuple:
     """Compute model-implied shares s^B and s^NB from (delta, mu).
@@ -296,20 +313,7 @@ def compute_model_shares(delta: np.ndarray, mu: np.ndarray,
     s_model = q_avg / R  # (N,)
 
     # Compute Omega vectorized with bincount
-    nb_mask = ~is_B
-    omega_mt = np.ones(N)
-    if is_B.any():
-        unique_times, t_enc = np.unique(time_ids, return_inverse=True)
-        unique_dtypes, k_enc = np.unique(deposit_types, return_inverse=True)
-        n_t = len(unique_times)
-        group_idx = t_enc * len(unique_dtypes) + k_enc  # (N,)
-        n_groups = n_t * len(unique_dtypes)
-
-        nb_shares_in_group = np.bincount(group_idx, weights=s_model * nb_mask, minlength=n_groups)
-        omega_mt_per_group = np.maximum(1e-10, 1.0 - nb_shares_in_group)
-        omega_mt = omega_mt_per_group[group_idx]
-
-    return s_model, omega_mt
+    return s_model, _compute_omega(s_model, is_B, time_ids, deposit_types)
 
 def blp_contraction(df: pd.DataFrame, mu: np.ndarray, R: int,
                     tol: float = 1e-14, max_iter: int = 2000) -> tuple:
@@ -368,6 +372,55 @@ def blp_contraction(df: pd.DataFrame, mu: np.ndarray, R: int,
 # ==============================================================================
 # 6. Linear IV for theta_1 (Eq-A5)
 # ==============================================================================
+def _build_regressor_matrices(df: pd.DataFrame, deposit_types: np.ndarray, N: int) -> tuple:
+    spread_cols = np.zeros((N, K_TYPES))
+    for idx, k in enumerate(K_LIST):
+        mask = deposit_types == k
+        spread_cols[mask, idx] = df.loc[mask, 'spread_qoq'].values
+
+    x_mat = np.zeros((N, L_PROD))
+    for i, col in enumerate(X_COLS):
+        if col in df.columns:
+            x_mat[:, i] = df[col].fillna(0).values
+
+    iv_cols_avail = [c for c in IV_BLP_LOO + IV_COST + IV_CAPITAL if c in df.columns]
+    Z_mat = np.zeros((N, len(iv_cols_avail)))
+    for i, col in enumerate(iv_cols_avail):
+        if col in df.columns:
+            Z_mat[:, i] = df[col].fillna(0).values
+            
+    return spread_cols, x_mat, Z_mat
+
+def _project_endogenous_spreads(spread_cols: np.ndarray, H: np.ndarray, deposit_types: np.ndarray) -> np.ndarray:
+    spread_hat = spread_cols.copy()
+    for k_idx, k_val in enumerate(K_LIST):
+        if k_val in [4, 5]:
+            k_mask = deposit_types == k_val
+            if k_mask.any():
+                H_k = H[k_mask]
+                spread_k = spread_cols[k_mask, k_idx]
+                valid = np.isfinite(H_k).all(axis=1) & np.isfinite(spread_k)
+                if valid.sum() > H_k.shape[1]:
+                    import contextlib
+                    with contextlib.suppress(np.linalg.LinAlgError):
+                        beta_fs = np.linalg.lstsq(H_k[valid], spread_k[valid], rcond=None)[0]
+                        spread_hat[k_mask, k_idx] = H_k @ beta_fs
+    return spread_hat
+
+def _compute_cluster_robust_se(delta_v: np.ndarray, X_v: np.ndarray, n_cols: int, clusters: np.ndarray) -> np.ndarray:
+    unique_cl = np.unique(clusters)
+    G = len(unique_cl)
+    sizes = np.array([np.sum(clusters == c) for c in unique_cl])
+    cv_Ng = np.std(sizes) / np.mean(sizes) if np.mean(sizes) > 0 else 0
+    
+    try:
+        model = sm.OLS(delta_v, X_v)
+        res = model.fit(cov_type='cluster', cov_kwds={'groups': clusters}, use_t=True)
+        res.df_resid = max(1.0, G / (1 + cv_Ng ** 2))
+        return res.bse
+    except Exception:
+        return np.full(n_cols, np.nan)
+
 def estimate_theta1(df: pd.DataFrame, delta: np.ndarray) -> tuple:
     """Regress delta on (rho, x) via OLS (k=1,2,3) and 2SLS (k=4,5).
 
@@ -376,63 +429,14 @@ def estimate_theta1(df: pd.DataFrame, delta: np.ndarray) -> tuple:
     N = len(df)
     deposit_types = df['deposit_type'].values
 
-    # Build regressor matrix: deposit-type-specific spread + x_jt
-    # Spreads: K_TYPES columns (one per active type, zero elsewhere)
-    spread_cols = np.zeros((N, K_TYPES))
-    for idx, k in enumerate(K_LIST):
-        mask = deposit_types == k
-        spread_cols[mask, idx] = df.loc[mask, 'spread_qoq'].values
-
-    # x columns
-    x_mat = np.zeros((N, L_PROD))
-    for i, col in enumerate(X_COLS):
-        if col in df.columns:
-            x_mat[:, i] = df[col].fillna(0).values
+    spread_cols, x_mat, Z_mat = _build_regressor_matrices(df, deposit_types, N)
 
     X_full = np.hstack([spread_cols, x_mat])  # (N, 5+L)
-
-    # IVs for k=4,5: replace endogenous spread with instruments
-    iv_cols_avail = [c for c in IV_BLP_LOO + IV_COST + IV_CAPITAL if c in df.columns]
-
-    # Separate exogenous (k=1,2,3) and endogenous (k=4,5) observations
-    exog_mask = np.isin(deposit_types, [1, 2, 3])
-    endog_mask = np.isin(deposit_types, [4, 5])
-
-    # IV matrix: for endog obs, use instruments; for exog, use spreads themselves
-    Z_mat = np.zeros((N, len(iv_cols_avail)))
-    for i, col in enumerate(iv_cols_avail):
-        if col in df.columns:
-            Z_mat[:, i] = df[col].fillna(0).values
-
-    # Full instrument matrix: [x, iv_for_endogenous_spread]
-    # For 2SLS: Z = [x_mat, spread_exog_dummies, Z_instruments]
-    # Construct H = [included exogenous, excluded instruments]
     H = np.hstack([x_mat, Z_mat])  # (N, L + n_iv)
 
-    # Cluster variable for SEs
-    clusters = df['CodConglomeradoPrudencial'].values
-
-    # Simple 2SLS implementation
-    # First stage: project endogenous spreads on H
-    spread_hat = spread_cols.copy()
-    for k_idx, k_val in enumerate(K_LIST):
-        if k_val in [4, 5]:  # Endogenous types
-            k_mask = deposit_types == k_val
-            if k_mask.any():
-                H_k = H[k_mask]
-                spread_k = spread_cols[k_mask, k_idx]
-                valid = np.isfinite(H_k).all(axis=1) & np.isfinite(spread_k)
-                if valid.sum() > H_k.shape[1]:
-                    H_valid = H_k[valid]
-                    try:
-                        beta_fs = np.linalg.lstsq(H_valid, spread_k[valid], rcond=None)[0]
-                        spread_hat[k_mask, k_idx] = H_k @ beta_fs
-                    except np.linalg.LinAlgError:
-                        pass  # Keep original if projection fails
-
+    spread_hat = _project_endogenous_spreads(spread_cols, H, deposit_types)
     X_hat = np.hstack([spread_hat, x_mat])
 
-    # Second stage: regress delta on X_hat
     valid = np.isfinite(X_hat).all(axis=1) & np.isfinite(delta)
     X_v = X_hat[valid]
     delta_v = delta[valid]
@@ -444,23 +448,7 @@ def estimate_theta1(df: pd.DataFrame, delta: np.ndarray) -> tuple:
 
     xi = delta - X_full @ theta1  # Residuals using original X
 
-    # SEs with IK2016 cluster correction
-    cluster_v = clusters[valid]
-    unique_cl = np.unique(cluster_v)
-    G = len(unique_cl)
-    sizes = np.array([np.sum(cluster_v == c) for c in unique_cl])
-    cv_Ng = np.std(sizes) / np.mean(sizes) if np.mean(sizes) > 0 else 0
-    G_star = max(1.0, G / (1 + cv_Ng ** 2))
-
-    # Cluster-robust covariance
-    try:
-        model = sm.OLS(delta_v, X_v)
-        res = model.fit(cov_type='cluster',
-                        cov_kwds={'groups': cluster_v}, use_t=True)
-        res.df_resid = G_star
-        theta1_se = res.bse
-    except Exception:
-        theta1_se = np.full(X_hat.shape[1], np.nan)
+    theta1_se = _compute_cluster_robust_se(delta_v, X_v, X_hat.shape[1], df['CodConglomeradoPrudencial'].values[valid])
 
     return theta1, xi, theta1_se
 
@@ -479,8 +467,7 @@ def compute_gmm_moments(xi: np.ndarray, df: pd.DataFrame) -> np.ndarray:
         Z[:, i] = df[col].fillna(0).values
 
     N = len(df)
-    G = (xi[:, np.newaxis] * Z).mean(axis=0)  # (n_iv,)
-    return G
+    return (xi[:, np.newaxis] * Z).mean(axis=0)  # (n_iv,)
 
 
 def gmm_objective(theta2_vec: np.ndarray, df: pd.DataFrame,
@@ -511,8 +498,7 @@ def gmm_objective(theta2_vec: np.ndarray, df: pd.DataFrame,
     G = compute_gmm_moments(xi, df)
 
     # Objective
-    Q = G @ W @ G
-    return Q
+    return G @ W @ G
 
 
 # ==============================================================================
@@ -533,7 +519,7 @@ def run_blp_for_spec(spec_id: int, args) -> dict:
         return None
 
     if len(df) == 0:
-        print(f"  [!] No observations after merge. Skipping.")
+        print("  [!] No observations after merge. Skipping.")
         return None
 
     # Build theta2 structure
@@ -744,12 +730,9 @@ def main():
     args = parser.parse_args()
 
     # Determine specs to run
-    if args.spec == 'all':
-        spec_ids = list(range(1, 13))
-    else:
-        spec_ids = [int(args.spec)]
+    spec_ids = list(range(1, 13)) if args.spec == 'all' else [int(args.spec)]
 
-    print(f"BLP Demand Estimation Loop")
+    print("BLP Demand Estimation Loop")
     print(f"  Stage: {args.stage} | Specs: {spec_ids}")
     print(f"  R={args.R} | seed={args.seed} | method={args.method}")
     print(f"  tol_inner={args.tol_inner} | tol_outer={args.tol_outer}")
@@ -759,8 +742,7 @@ def main():
 
     import multiprocessing
     import concurrent.futures
-    max_w = min(len(spec_ids), multiprocessing.cpu_count() - 1, 6)
-    if max_w < 1: max_w = 1
+    max_w = max(1, min(len(spec_ids), multiprocessing.cpu_count() - 1, 6))
     
     stages_to_run = ['logit', 'sigma', 'full', 'extended'] if args.stage == 'sequence' else [args.stage]
     

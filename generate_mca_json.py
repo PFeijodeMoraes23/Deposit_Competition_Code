@@ -40,9 +40,7 @@ def get_closest_predecessor(target_year, available_years, classification_name):
     """
     Returns most recent available year less than or equal target_year from the list of available years.
     """
-    valid_years = [y for y in available_years if y <= target_year]
-    
-    if valid_years:
+    if valid_years := [y for y in available_years if y <= target_year]:
         closest_year = max(valid_years)
         if closest_year < target_year:
             # Provide a warning only if we are actually using a predecessor year
@@ -202,10 +200,10 @@ for year in YEARS:
         low_cols = [f'code_{low_col_root}', f'name_{low_col_root}', 'geometry']
         high_cols = [f'code_{high_col_root}', f'name_{high_col_root}', 'geometry']
         
-        if not all(col in low_level_df.columns for col in low_cols):
+        if any(col not in low_level_df.columns for col in low_cols):
              print(f"  > Warning: Missing columns in low_level_df for {year}. Expected: {low_cols}")
              continue
-        if not all(col in high_level_df.columns for col in high_cols):
+        if any(col not in high_level_df.columns for col in high_cols):
              print(f"  > Warning: Missing columns in high_level_df for {year}. Expected: {high_cols}")
              continue
 

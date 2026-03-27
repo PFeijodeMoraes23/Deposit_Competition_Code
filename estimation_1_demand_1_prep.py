@@ -93,6 +93,39 @@ def extract_upsilon_terms(res_ss):
             
     return upsilon
 
+def _reshape_panel_from_wide(df_raw: pd.DataFrame) -> pd.DataFrame:
+    print("Reshaping panel from wide to long...")
+    id_vars = ['CodConglomeradoPrudencial', 'mca_code', 'year', 'quarter']
+    df_raw = df_raw.drop_duplicates(subset=id_vars)
+    df_raw['is_B'] = (df_raw['CODMUN_IBGE'].astype(str) != '0')
+    
+    df = pd.wide_to_long(
+        df_raw, 
+        stubnames=['dep_a', 'spread_a'], 
+        i=id_vars, 
+        j='deposit_type'
+    ).reset_index()
+    
+    return df.rename(columns={
+        'dep_a': 'deposit_balance', 
+        'spread_a': 'spread_qoq'
+    })
+
+def _reshape_panel(df_raw: pd.DataFrame) -> pd.DataFrame:
+    df_raw['mca_code'] = df_raw['mca_code'].astype(str)
+    
+    if 'dep_a1' in df_raw.columns:
+        df = _reshape_panel_from_wide(df_raw)
+    else:
+        df = df_raw.copy()
+        if 'is_B' not in df.columns:
+            df['is_B'] = (df['CODMUN_IBGE'].astype(str) != '0')
+            
+    if 'deposit_type' in df.columns:
+        df = df[df['deposit_type'] != 3].copy()
+        
+    return df
+
 def build_base_panel(panel_csv: Path) -> pd.DataFrame:
     """
     Reads and pivots wide format to long format, applying the necessary standardizations
@@ -101,40 +134,7 @@ def build_base_panel(panel_csv: Path) -> pd.DataFrame:
     print(f"Loading {panel_csv}...")
     df_raw = pd.read_csv(panel_csv)
     
-    # -------------------------------------------------------------
-    # 1. Reshape wide deposit columns to long-format
-    # -------------------------------------------------------------
-    df_raw['mca_code'] = df_raw['mca_code'].astype(str)
-    
-    if 'dep_a1' in df_raw.columns:
-        print("Reshaping panel from wide to long...")
-        id_vars = ['CodConglomeradoPrudencial', 'mca_code', 'year', 'quarter']
-        # We need to maintain all instances, not just B-types, because the BLP step
-        # operates concurrently on B and NB types in the national aggregations.
-        df_raw = df_raw.drop_duplicates(subset=id_vars)
-        
-        # B/NB Flag
-        df_raw['is_B'] = (df_raw['CODMUN_IBGE'].astype(str) != '0')
-        
-        df = pd.wide_to_long(
-            df_raw, 
-            stubnames=['dep_a', 'spread_a'], 
-            i=id_vars, 
-            j='deposit_type'
-        ).reset_index()
-        
-        df = df.rename(columns={
-            'dep_a': 'deposit_balance', 
-            'spread_a': 'spread_qoq'
-        })
-    else:
-        df = df_raw.copy()
-        if 'is_B' not in df.columns:
-            df['is_B'] = (df['CODMUN_IBGE'].astype(str) != '0')
-            
-    # Drop interbank deposits (k=3) from estimation
-    if 'deposit_type' in df.columns:
-        df = df[df['deposit_type'] != 3].copy()
+    df = _reshape_panel(df_raw)
             
     # -------------------------------------------------------------
     # 2. Assign Keys & Shifts
@@ -229,9 +229,7 @@ def process_specification(args):
     
     def weighted_mean(g):
         v, w = g['phi_mt'], g['pop_total']
-        if w.sum() == 0:
-            return v.mean()
-        return np.average(v, weights=w)
+        return v.mean() if w.sum() == 0 else np.average(v, weights=w)
         
     phi_t_map = df_mca_level.groupby('time_id').apply(weighted_mean, include_groups=False).rename("phi_t")
     df_spec = df_spec.join(phi_t_map, on='time_id')

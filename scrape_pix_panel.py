@@ -170,7 +170,7 @@ def read_pix_file(filepath: str) -> pd.DataFrame | None:
             df["AnoMes"]       = pd.to_numeric(df["AnoMes"],       errors="coerce").astype("Int64")
             df["Municipio_Ibge"] = pd.to_numeric(df["Municipio_Ibge"], errors="coerce").astype("Int64")
 
-            df.dropna(subset=["AnoMes", "Municipio_Ibge"], inplace=True)
+            df = df.dropna(subset=["AnoMes", "Municipio_Ibge"])
             return df
 
         except Exception as exc:
@@ -238,10 +238,9 @@ def load_mca_crosswalk() -> pd.DataFrame:
     Load the MCA crosswalk. Returns DataFrame:
       municipality_code (int), mca_code (str), year (int)
     """
-    mca = pd.read_csv(MCA_CSV,
+    return pd.read_csv(MCA_CSV,
                       usecols=["municipality_code", "mca_code", "year"],
                       dtype={"municipality_code": int, "mca_code": str, "year": int})
-    return mca
 
 
 def merge_mca(pix: pd.DataFrame, crosswalk: pd.DataFrame) -> pd.DataFrame:
@@ -313,7 +312,7 @@ def build_full_panel(pix_agg: pd.DataFrame) -> pd.DataFrame:
     quarters  = [(y, q)
                  for y in range(PANEL_START_YEAR, PANEL_END_YEAR + 1)
                  for q in range(1, 5)
-                 if not (y == PANEL_END_YEAR and q == 4)]  # stop at 2024-Q3
+                 if y != PANEL_END_YEAR or q != 4]
 
     rows = [{"mca_code": m, "year": y, "quarter": q}
             for m in all_mcas for y, q in quarters]
