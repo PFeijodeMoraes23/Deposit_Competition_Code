@@ -98,9 +98,23 @@ def clean_name(v):
         'connections_per100': 'Broadband Connections (per capita)',
         'branches_per1000': 'Branches per 1k',
         'post_2020': 'Post 2020 Dummy',
-        'const': 'Constant'
+        'const': 'Constant',
+        'pca_index': 'PCA Index',
+        'admin_cost_ratio_lag': 'Admin Cost Ratio (Lag)',
+        'tax_cost_ratio_lag': 'Tax Cost Ratio (Lag)',
+        'personnel_cost_ratio_lag': 'Personnel Cost Ratio (Lag)',
+        'lci_lca_ratio_lag': 'LCI/LCA Ratio (Lag)',
+        'wholesale_ratio_lag': 'Wholesale Ratio (Lag)',
+        'indice_basileia_lag': 'Basel Index (Lag)',
+        'leave_one_out_mean_spread': 'LOO Mean Spread (Hausman)',
     }
-    return labels.get(v, v.replace('_', '\\_'))
+    if v in labels:
+        return labels[v]
+    if v.endswith('_x_assets'):
+        base = v.replace('_x_assets', '')
+        if base in labels:
+            return labels[base] + ' $\\times$ log(Assets)'
+    return v.replace('_', '\\_')
 
 def _get_first_stage_row_strings(var, panels, ivs, results_dict, opt):
     coef_strs, se_strs = [], []
@@ -235,14 +249,18 @@ def build_second_stage_table(results_dict, G, G_star, opt):
         ('Tech', 'IV_HausmanFull'): 12,
     }
 
-    all_vars = ['nr_lagged_dep', 'post_2020', 'gdp_per_capita', 'cadunico_families_per1000', 'fraction_65plus', 'fraction_young', 'pix_users_pf_per1000', 'connections_per100', 'branches_per1000']
-
     estimators = [
         ('OLS', 'OLS'),
         ('IV_CostShifters', 'IV Cost'),
         ('IV_Wholesale', 'IV Wholesale'),
         ('IV_HausmanFull', 'Hausman')
     ]
+
+    all_vars = list(dict.fromkeys(
+        v.replace('interaction_', '') for p, (est_key, _) in itertools.product(panels, estimators)
+        for v in results_dict[f"Option_{opt}_{est_key}_{p}"]['second_stage'].params.index
+        if v not in ['v_hat', 'v_hat_2', 'v_hat_3']
+    ))
 
     col_names = []
     for p, (est_key, est_label) in itertools.product(panels, estimators):       
@@ -262,12 +280,13 @@ def build_second_stage_table(results_dict, G, G_star, opt):
     for vshort in all_vars:
         coef_strs, se_strs = _get_second_stage_row_strings(vshort, panels, estimators, results_dict, opt)
 
-        out.extend(
-            (
-                f"{clean_name(vshort)} & " + " & ".join(coef_strs) + " \\\\",
-                " & " + " & ".join(se_strs) + " \\\\"
+        if any(c != "" for c in coef_strs):
+            out.extend(
+                (
+                    f"{clean_name(vshort)} & " + " & ".join(coef_strs) + " \\\\",
+                    " & " + " & ".join(se_strs) + " \\\\"
+                )
             )
-        )
 
     obs_strs = []
     rsq_strs = []
