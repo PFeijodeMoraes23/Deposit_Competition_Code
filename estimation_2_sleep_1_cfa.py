@@ -265,7 +265,7 @@ def main():
     
     s_base = ['constant', 'post_2020']
     s_macro = s_base + ['gdp_per_capita', 'cadunico_families_per1000', 'fraction_65plus', 'fraction_young']
-    s_tech = s_macro + ['pix_users_pf_per1000', 'connections_per100', 'branches_per_1000'] # Using a proxy if available
+    s_tech = s_macro + ['pix_users_pf_per1000', 'branches_per_1000'] # Removed connections_per100 because it is NaN after 2018
     s_tech = [c for c in s_tech if c in df.columns] # safeguard
     
     state_blocks = {
@@ -294,7 +294,7 @@ def main():
         exog_cols_act = [c for c in s_cols if c in df.columns and df[c].notnull().sum() > 0]
         iv_cols_act = [c for c in iv_cols if c in df.columns and df[c].notnull().sum() > 0]
 
-        if len(iv_cols_act) > 0:
+        if iv_cols_act:
             df_target, res_fs = first_stage_cf(df.copy(), iv_cols_act, exog_cols_act)
             has_cf = True
         else:
