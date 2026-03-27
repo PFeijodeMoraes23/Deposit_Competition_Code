@@ -169,6 +169,8 @@ def build_first_stage_table(results_dict, G, G_star):
     obs_strs = []
     rsq_strs = []
     fstat_strs = []
+    g_strs = []
+    g_star_strs = []
     for p, (iv_key, _) in itertools.product(panels, ivs):
         res = results_dict[f"{iv_key} x {p}"]['first_stage']
         obs_strs.append(f"{int(res.nobs):,}")
@@ -176,6 +178,9 @@ def build_first_stage_table(results_dict, G, G_star):
         fstat_val = getattr(res, 'fvalue', None)
         fstat_pval = getattr(res, 'f_pvalue', 1.0)
         fstat_strs.append(f"${fstat_val:.2f}^{{{stars(fstat_pval)}}}$" if fstat_val is not None else "")
+        g_strs.append(str(getattr(res, 'G_nominal', '\\text{N/A}')))
+        g_star_val = getattr(res, 'G_star', None)
+        g_star_strs.append(f"{g_star_val:.2f}" if g_star_val is not None else "\\text{N/A}")
 
     out.extend(
         (
@@ -184,8 +189,8 @@ def build_first_stage_table(results_dict, G, G_star):
             "$R^2$ & " + " & ".join(rsq_strs) + " \\\\",
             "F-Statistic & " + " & ".join(fstat_strs) + " \\\\",
             "Fixed Effects & " + " & ".join(["No"]*9) + " \\\\",
-            "Clusters (G) & " + " & ".join([str(G)]*9) + " \\\\",
-            "Effective Clusters ($G^*$) & " + " & ".join([f"{G_star:.2f}"]*9) + " \\\\",
+            "Clusters (G) & " + " & ".join(g_strs) + " \\\\",
+            "Effective Clusters ($G^*$) & " + " & ".join(g_star_strs) + " \\\\",
             "\\bottomrule",
             "\\end{tabular}}",
             "\\end{table}",
@@ -266,10 +271,15 @@ def build_second_stage_table(results_dict, G, G_star):
 
     obs_strs = []
     rsq_strs = []
+    g_strs = []
+    g_star_strs = []
     for p_name, (est_key, _) in itertools.product(panels, estimators):
         res = results_dict[f"{est_key} x {p_name}"]['second_stage']
         obs_strs.append(f"{int(res.nobs):,}")
         rsq_strs.append(f"{res.rsquared:.4f}")
+        g_strs.append(str(getattr(res, 'G_nominal', '\\text{N/A}')))
+        g_star_val = getattr(res, 'G_star', None)
+        g_star_strs.append(f"{g_star_val:.2f}" if g_star_val is not None else "\\text{N/A}")
             
     out.extend(
         (
@@ -277,8 +287,8 @@ def build_second_stage_table(results_dict, G, G_star):
             "Obs & " + " & ".join(obs_strs) + " \\\\",
             "$R^2$ & " + " & ".join(rsq_strs) + " \\\\",
             "Fixed Effects & " + " & ".join(["Yes"]*12) + " \\\\",
-            "Clusters (G) & " + " & ".join([str(G)]*12) + " \\\\",
-            "Effective Clusters ($G^*$) & " + " & ".join([f"{G_star:.2f}"]*12) + " \\\\",
+            "Clusters (G) & " + " & ".join(g_strs) + " \\\\",
+            "Effective Clusters ($G^*$) & " + " & ".join(g_star_strs) + " \\\\",
             "\\bottomrule",
             "\\end{tabular}}",
             "\\end{table}",

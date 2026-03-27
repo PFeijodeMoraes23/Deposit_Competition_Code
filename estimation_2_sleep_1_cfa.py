@@ -37,6 +37,26 @@ if ensure_project_venv is not None:
 import pandas as pd
 import numpy as np
 import statsmodels.api as sm
+
+from scipy import stats
+def apply_imbalanced_cluster_correction(res, cluster_series):
+    import numpy as np
+    
+    sizes = cluster_series.value_counts()
+    G_nominal = len(sizes)
+    cv_Ng = np.std(sizes, ddof=0) / np.mean(sizes) if np.mean(sizes) > 0 else 0
+    G_star = max(1.0, G_nominal / (1 + (cv_Ng ** 2)))
+    
+    res.G_nominal = G_nominal
+    res.G_star = G_star
+
+    res.df_resid = G_star
+    t_dist = stats.t(df=G_star)
+    new_pvals = t_dist.sf(np.abs(res.tvalues)) * 2
+    res._results.__dict__['pvalues'] = new_pvals
+    
+    return res
+
 from sklearn.decomposition import PCA
 
 # ==============================================================================
@@ -137,7 +157,9 @@ def run_model_option1(df, state_vars, has_cf=False):
     X_dm = demean_variables(df_ss, X_cols, 'entity_id')[X_cols].astype(float)
 
     mod = sm.OLS(y_dm, X_dm)
-    return mod.fit(cov_type='cluster', cov_kwds={'groups': df_ss['CodConglomeradoPrudencial']}, use_t=True)
+    cluster_series = df_ss['CodConglomeradoPrudencial']
+    res = mod.fit(cov_type='cluster', cov_kwds={'groups': cluster_series}, use_t=True)
+    return apply_imbalanced_cluster_correction(res, cluster_series)
 
 def run_model_option2(df, state_vars, has_cf=False):
     """
@@ -172,7 +194,9 @@ def run_model_option2(df, state_vars, has_cf=False):
     X_dm = demean_variables(df_ss, X_cols, 'entity_id')[X_cols].astype(float)
 
     mod = sm.OLS(y_dm, X_dm)
-    return mod.fit(cov_type='cluster', cov_kwds={'groups': df_ss['CodConglomeradoPrudencial']}, use_t=True)
+    cluster_series = df_ss['CodConglomeradoPrudencial']
+    res = mod.fit(cov_type='cluster', cov_kwds={'groups': cluster_series}, use_t=True)
+    return apply_imbalanced_cluster_correction(res, cluster_series)
 
 def run_model_option3(df, state_vars, has_cf=False):
     """
@@ -221,7 +245,9 @@ def run_model_option3(df, state_vars, has_cf=False):
     X_dm = demean_variables(df_ss, X_cols, 'entity_id')[X_cols].astype(float)
 
     mod = sm.OLS(y_dm, X_dm)
-    return mod.fit(cov_type='cluster', cov_kwds={'groups': df_ss['CodConglomeradoPrudencial']}, use_t=True)
+    cluster_series = df_ss['CodConglomeradoPrudencial']
+    res = mod.fit(cov_type='cluster', cov_kwds={'groups': cluster_series}, use_t=True)
+    return apply_imbalanced_cluster_correction(res, cluster_series)
 
 def first_stage_cf(df, spec_instruments, exogenous_controls):
     """
@@ -243,8 +269,11 @@ def first_stage_cf(df, spec_instruments, exogenous_controls):
     X = sm.add_constant(df_fs[first_stage_vars])
 
     mod = sm.OLS(y, X)
-    res = mod.fit(cov_type='HC1')
-    
+    cluster_series = df_fs['CodConglomeradoPrudencial']
+    res = mod.fit(cov_type='cluster', cov_kwds={'groups': cluster_series}, use_t=True)
+    res = apply_imbalanced_cluster_correction(res, cluster_series)
+    res = apply_imbalanced_cluster_correction(res, cluster_series)
+
     df['v_hat'] = 0.0
     df.loc[valid_mask, 'v_hat'] = res.resid
     valid_mask_all = df['v_hat'].notnull()

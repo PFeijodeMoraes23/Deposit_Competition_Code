@@ -55,6 +55,26 @@ if ensure_project_venv is not None:
 import pandas as pd
 import numpy as np
 import statsmodels.api as sm
+
+from scipy import stats
+def apply_imbalanced_cluster_correction(res, cluster_series):
+    import numpy as np
+    
+    sizes = cluster_series.value_counts()
+    G_nominal = len(sizes)
+    cv_Ng = np.std(sizes, ddof=0) / np.mean(sizes) if np.mean(sizes) > 0 else 0
+    G_star = max(1.0, G_nominal / (1 + (cv_Ng ** 2)))
+    
+    res.G_nominal = G_nominal
+    res.G_star = G_star
+
+    res.df_resid = G_star
+    t_dist = stats.t(df=G_star)
+    new_pvals = t_dist.sf(np.abs(res.tvalues)) * 2
+    res._results.__dict__['pvalues'] = new_pvals
+    
+    return res
+
 from scipy import stats
 
 try:
@@ -212,7 +232,10 @@ def run_first_stage(df, spec_instruments, exogenous_controls):
     X = sm.add_constant(df_fs[first_stage_vars])
 
     mod = sm.OLS(y, X)
-    res = mod.fit(cov_type='HC1')
+    cluster_series = df_fs['CodConglomeradoPrudencial']
+    res = mod.fit(cov_type='cluster', cov_kwds={'groups': cluster_series}, use_t=True)
+    res = apply_imbalanced_cluster_correction(res, cluster_series)
+    res = apply_imbalanced_cluster_correction(res, cluster_series)
 
     # Deposit buckets 1-3 receive zero latency
     df['v_hat'] = 0.0
@@ -308,28 +331,12 @@ def run_second_stage(df, state_vars, has_cf=False, spec_name=""):
     # a t-distribution parameterized entirely by the true Effective Clusters (G*).
     
     cluster_series = df_ss['CodConglomeradoPrudencial']
-    sizes = cluster_series.value_counts()
-    G_nominal = len(sizes)
-    
-    cv_Ng = np.std(sizes, ddof=0) / np.mean(sizes) if np.mean(sizes) > 0 else 0
-    G_star = max(1.0, G_nominal / (1 + (cv_Ng ** 2))) 
-    
     res = mod.fit(cov_type='cluster', cov_kwds={'groups': cluster_series}, use_t=True)
-    
-    # Force statsmodels to drop the naive (G-1) degrees of freedom approximation 
-    # and strictly evaluate inference parameters against the Satterthwaite G* penalty.
-    res.df_resid = G_star
-    
-    # Recalculate robust P-values dynamically
-    t_dist = stats.t(df=G_star)
-    new_pvals = t_dist.sf(np.abs(res.tvalues)) * 2
-    
-    # Bypass the restrictive @cache_readonly property lock natively inside statsmodels wrapper
-    res._results.__dict__['pvalues'] = new_pvals
-    
-    print(f"\n *** IK2016 Bounds Applied: Nominal G = {G_nominal} -> Effective G* = {G_star:.2f} ***\n")
+    res = apply_imbalanced_cluster_correction(res, cluster_series)
+
+    print(f"\n *** IK2016 Bounds Applied: Nominal G = {res.G_nominal} -> Effective G* = {res.G_star:.2f} ***\n")
     print(res.summary().tables[1])
-    print(f"Obs: {int(res.nobs)} | Clusters: {G_nominal} | G*: {G_star:.2f} | FE Groups: {df_ss['entity_id'].nunique()}")
+    print(f"Obs: {int(res.nobs)} | Clusters: {res.G_nominal} | G*: {res.G_star:.2f} | FE Groups: {df_ss['entity_id'].nunique()}")
     
     return res
 

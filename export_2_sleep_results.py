@@ -169,6 +169,8 @@ def build_first_stage_table(results_dict, G, G_star, opt):
     obs_strs = []
     rsq_strs = []
     fstat_strs = []
+    g_strs = []
+    g_star_strs = []
     for p, (iv_key, _) in itertools.product(panels, ivs):
         res = results_dict[f"Option_{opt}_{iv_key}_{p}"]['first_stage']
         obs_strs.append(f"{int(res.nobs):,}")
@@ -176,6 +178,9 @@ def build_first_stage_table(results_dict, G, G_star, opt):
         fstat_val = getattr(res, 'fvalue', None)
         fstat_pval = getattr(res, 'f_pvalue', 1.0)
         fstat_strs.append(f"${fstat_val:.2f}^{{{stars(fstat_pval)}}}$" if fstat_val is not None else "")
+        g_strs.append(str(getattr(res, 'G_nominal', '\\text{N/A}')))
+        g_star_val = getattr(res, 'G_star', None)
+        g_star_strs.append(f"{g_star_val:.2f}" if g_star_val is not None else "\\text{N/A}")
 
     out.extend(
         (
@@ -184,8 +189,8 @@ def build_first_stage_table(results_dict, G, G_star, opt):
             "$R^2$ & " + " & ".join(rsq_strs) + " \\\\",
             "F-Statistic & " + " & ".join(fstat_strs) + " \\\\",
             "Fixed Effects & " + " & ".join(["No"]*9) + " \\\\",
-            "Clusters (G) & " + " & ".join([str(G)]*9) + " \\\\",
-            "Effective Clusters ($G^*$) & " + " & ".join([f"{G_star}"]*9) + " \\\\",
+            "Clusters (G) & " + " & ".join(g_strs) + " \\\\",
+            "Effective Clusters ($G^*$) & " + " & ".join(g_star_strs) + " \\\\",
             "\\bottomrule",
             "\\end{tabular}}",
             "\\end{table}",
@@ -266,10 +271,15 @@ def build_second_stage_table(results_dict, G, G_star, opt):
 
     obs_strs = []
     rsq_strs = []
+    g_strs = []
+    g_star_strs = []
     for p_name, (est_key, _) in itertools.product(panels, estimators):
         res = results_dict[f"Option_{opt}_{est_key}_{p_name}"]['second_stage']
         obs_strs.append(f"{int(res.nobs):,}")
         rsq_strs.append(f"{res.rsquared:.4f}")
+        g_strs.append(str(getattr(res, 'G_nominal', '\\text{N/A}')))
+        g_star_val = getattr(res, 'G_star', None)
+        g_star_strs.append(f"{g_star_val:.2f}" if g_star_val is not None else "\\text{N/A}")
             
     out.extend(
         (
@@ -277,8 +287,8 @@ def build_second_stage_table(results_dict, G, G_star, opt):
             "Obs & " + " & ".join(obs_strs) + " \\\\",
             "$R^2$ & " + " & ".join(rsq_strs) + " \\\\",
             "Fixed Effects & " + " & ".join(["Yes"]*12) + " \\\\",
-            "Clusters (G) & " + " & ".join([str(G)]*12) + " \\\\",
-            "Effective Clusters ($G^*$) & " + " & ".join([f"{G_star}"]*12) + " \\\\",
+            "Clusters (G) & " + " & ".join(g_strs) + " \\\\",
+            "Effective Clusters ($G^*$) & " + " & ".join(g_star_strs) + " \\\\",
             "\\bottomrule",
             "\\end{tabular}}",
             "\\end{table}",
@@ -329,7 +339,26 @@ The primary dataset is derived from systems within the data pipeline architectur
 
 The estimation dataset focuses deliberately on "B-Type" Institutions, defined as banks with local presence via physical branches. Purely fintech operations that map identically to national levels ($CODMUN\_IBGE = 0$) are excluded from this empirical section to prevent structural bias stemming from their unique operational structures. Variables generated upstream in wide formatting are pivoted into a long matrix locally inside the execution script to systematically construct the high-dimensional spatial-entity effects ($CodConglomeradoPrudencial \times deposit\_type \times mca\_code$).
 
-## 2. Estimation Architecture: The 12 Specifications
+## 2. Estimation Architecture: The Three Options and 12 Specifications
+
+The calculation for depositor sleepiness hinges heavily on mapping the state variables directly into interactions with lagged volume ratios. We present three formal methodological options estimating variations of state vector ($S_{mt}$):
+
+1. **Option 1 (Brute Force Time-Series)**: Directly leverages full arrays of vectors ($S_{mt}$) natively to absorb unobservable shifts linearly against lagged interest ratios. 
+   - *Pros*: Simple, full information retention.
+   - *Cons*: High risk of multicollinearity and overfitting; low statistical power when clustering with small effective sample sizes ($G^*$).
+   - *Reference*: Berry, Levinsohn, & Pakes (1995) standard demand instrumentation models.
+
+2. **Option 2 (Firm-Targeting State Interactions)**: Resolves homogeneity concerns by scaling the unobserved state variances individually against each conglomerate's log-transformed Total Asset mass lag ($X_j = \log(\text{Total Assets}_{j, t-1})$). This allows elasticity conditions to shift heterogeneously across mega-banks.
+   - *Pros*: Captures heterogeneous firm-level responses reflecting true economic realism (larger banks natively exhibit different elasticities).
+   - *Cons*: Potential endogeneity of firm characteristics, and assumes strict linearity in size characteristics.
+   - *Reference*: Nevo (2001) measuring market power with heterogeneous characteristics.
+
+3. **Option 3 (Dimensionality Reduction Indexing)**: Replaces the dense matrix of state vectors with an empirically scaled linear combination via Principal Component Analysis (PCA($S_t$)), efficiently isolating the primary variance eigenvector.
+   - *Pros*: Effectively solves multicollinearity by reducing high-dimensional macroeconomic states, preserving critical degrees of freedom in small-$G^*$ clusters while trapping maximum variance.
+   - *Cons*: Loss of distinct economic interpretability for individual macroeconomic variables, projecting a generalized "index" of state characteristics instead.
+   - *Reference*: Stock and Watson (2002) macroeconomic forecasting using principal components.
+
+### 2.0 Base Specification Architecture
 To calculate the state-dependent elasticity parameters inherent to the Depositor Sleepiness Function, the empirical design crosses 4 Instrument Specifications with 3 Vector State Subsets, generating a 12-specification empirical layout.
 
 Deposit buckets $k=4, 5$ face endogeneity concerns driven by unobserved latency in spread-setting. To address this, the script runs a Control Function estimator, where a first-stage Ordinary Least Squares (OLS) model projects observed spreads onto subsets of the proposed Instruments. The polynomial control parameters ($\hat{v}, \hat{v}^2, \hat{v}^3$) are subsequently fed into the second-stage estimation.
