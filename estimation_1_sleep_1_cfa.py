@@ -177,10 +177,11 @@ def build_data():
     for col in required_cols:
         if col not in df.columns:
             df[col] = np.nan
-            
+
+    df['post_2020'] = (df['year'] >= 2020).astype(int)
+
     df = df.dropna(subset=['deposit_balance', 'nr_lagged_dep', 'spread_qoq', 'entity_id', 'time_id'])
     return df
-
 
 # ==============================================================================
 # Section 2 - First Stage (Control Function Estimator)
@@ -242,16 +243,16 @@ def execute_specification(args):
         has_cf = len(iv_cols) > 0
         spec_name = f"{iv_name} x {s_name}"
         spec_label = f"({spec_number}) {spec_name}"
-        print(f"\n=====================================================================")
+        print("\n=====================================================================")
         print(f" RUNNING: {spec_label}")
-        print(f"=====================================================================")
+        print("=====================================================================")
 
         df_target = df.copy()
 
         if has_cf:
             iv_cols_act = [c for c in iv_cols if c in df_target.columns and df_target[c].notnull().sum() > 0]
             exog_cols_act = [c for c in s_cols if c in df_target.columns and df_target[c].notnull().sum() > 0]
-            if len(iv_cols_act) == 0:
+            if not iv_cols_act:
                 print(f"Skipping {spec_label} - none of the IVs are populated in the dataset.")
                 return new_stdout.getvalue(), None, spec_name, None, spec_number
             df_target, res_fs = run_first_stage(df_target, iv_cols_act, exog_cols_act)
@@ -334,18 +335,9 @@ def run_second_stage(df, state_vars, has_cf=False, spec_name=""):
 
 
 # ==============================================================================
-# Section 4 - Global Execution Routine
+# Helper for formatting clusters
 # ==============================================================================
-def main():
-
-    _, output_dir = _resolve_runtime_paths()
-
-    df = build_data()
-    print(f"Panel size after cleaning: {len(df)} rows")
-    
-    # --------------------------------------------------------------------------
-    # Effective Clusters Diagnostic (Imbens & Kolesar 2016 / Carter et al. 2017)
-    # --------------------------------------------------------------------------
+def print_cluster_diagnostics(df):
     print("\n=====================================================================")
     print(" CLUSTER HOMOGENEITY DIAGNOSTICS")
     print("=====================================================================")
@@ -356,42 +348,60 @@ def main():
     std_Ng = np.std(Ns, ddof=0)
     cv_Ng = std_Ng / mean_Ng if mean_Ng > 0 else 0
     G_star = max(1.0, G_nominal / (1 + (cv_Ng ** 2)))
-    
+
     print(f"Total Nominal Clusters (G)      = {G_nominal}")
     print(f"Mean Obs per Cluster            = {mean_Ng:.2f}")
     print(f"Std Dev of Obs per Cluster      = {std_Ng:.2f}")
     print(f"Coefficient of Variation (cv)   = {cv_Ng:.2f}")
     print(f"Effective Clusters (G*)         = {G_star:.2f}")
-    
-    print("\nTop 5 Cluster Observation Shares (Oligopolistic Imbalance):")
+
+    print("\nTop 5 Cluster Observation Shares (Oligopolistic Imbalance):")      
     total_obs = len(df)
     for c, n in Ns.sort_values(ascending=False).head(5).items():
-        print(f" - Cluster {c}: {n} obs ({(n / total_obs) * 100:.2f}%)")
+        print(f" - Cluster {c}: {n} obs ({(n / total_obs) * 100:.2f}%)")        
     print("=====================================================================\n")
-    
-    # Establish Output Directory
-    output_dir.mkdir(parents=True, exist_ok=True)
+    return G_nominal, G_star, mean_Ng, std_Ng, cv_Ng, total_obs, Ns
 
-    df['constant'] = 1.0
+def save_latex_summaries(output_dir, out_results, results_dict):
+    for res in out_results:
+        stdout_text, res_ss, spec_name, res_fs, spec_number = res
+        print(stdout_text)
+        if res_ss is not None:
+            safe_name = f"Spec{spec_number:02d}_" + spec_name.replace(" ", "_").replace("/", "").replace(":", "")
+            tex_file = output_dir / f"{safe_name}.tex"
 
-    # Scale large-magnitude variables so coefficients are readable
-    if 'gdp_per_capita' in df.columns:
-        df['gdp_per_capita'] = df['gdp_per_capita'] / 10000.0
-    if 'cadunico_families_per1000' in df.columns:
-        df['cadunico_families_per1000'] = df['cadunico_families_per1000'] / 100.0
-    if 'pix_users_pf_per1000' in df.columns:
-        df['pix_users_pf_per1000'] = df['pix_users_pf_per1000'] / 100.0
-    if 'connections_per100' in df.columns:
-        df['connections_per100'] = df['connections_per100'] / 100.0
+            with open(tex_file, 'w') as f:
+                f.write(res_ss.summary().as_latex())
 
-    s_base = ['constant']
+            if res_fs is not None:
+                tex_file_fs = output_dir / f"{safe_name}_FirstStage.tex"        
+                with open(tex_file_fs, 'w') as f:
+                    f.write(res_fs.summary().as_latex())
+
+            results_dict[spec_name] = {
+                'spec_number': spec_number,
+                'spec_label': f"({spec_number}) {spec_name}",
+                'second_stage': res_ss,
+                'first_stage': res_fs
+            }
+
+def scale_magnitudes(df):
+    scale_cols = {
+        'gdp_per_capita': 10000.0,
+        'cadunico_families_per1000': 100.0,
+        'pix_users_pf_per1000': 100.0,
+        'connections_per100': 100.0
+    }
+    for col, factor in scale_cols.items():
+        if col in df.columns:
+            df[col] /= factor
+    return df
+
+def define_specifications():
+    s_base = ['constant', 'post_2020']
     s_macro = s_base + ['gdp_per_capita', 'cadunico_families_per1000', 'fraction_65plus', 'fraction_young']
     s_tech_finance = s_macro + ['pix_users_pf_per1000', 'connections_per100', 'branches_per1000']
-    
-    for col in s_tech_finance:
-        if col != 'constant' and col in df.columns:
-            df[col] = df[col].fillna(df[col].median())
-            
+
     iv_spec0 = []
     iv_spec1 = ['personnel_cost_ratio_lag', 'admin_cost_ratio_lag', 'tax_cost_ratio_lag']
     iv_spec2 = iv_spec1 + ['lci_lca_ratio_lag', 'wholesale_ratio_lag', 'indice_basileia_lag']
@@ -409,6 +419,35 @@ def main():
         'Macro': s_macro,
         'Tech': s_tech_finance
     }
+
+    return s_tech_finance, specs, state_blocks
+
+# ==============================================================================
+# Section 4 - Global Execution Routine
+# ==============================================================================
+def main():
+
+    _, output_dir = _resolve_runtime_paths()
+
+    df = build_data()
+    print(f"Panel size after cleaning: {len(df)} rows")
+
+    # --------------------------------------------------------------------------
+    # Effective Clusters Diagnostic (Imbens & Kolesar 2016 / Carter et al. 2017)
+    # --------------------------------------------------------------------------
+    G_nominal, G_star, mean_Ng, std_Ng, cv_Ng, total_obs, Ns = print_cluster_diagnostics(df)
+    # Establish Output Directory
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    df['constant'] = 1.0
+
+    df = scale_magnitudes(df)
+
+    s_tech_finance, specs, state_blocks = define_specifications()
+
+    for col in s_tech_finance:
+        if col != 'constant' and col in df.columns:
+            df[col] = df[col].fillna(df[col].median())
     
     # Canonical order from V_Main.tex (Section Estimation_Sleepiness):
     # Base: (1)-(4), Macro: (5)-(8), Tech: (9)-(12),
@@ -416,25 +455,21 @@ def main():
     iv_order = ['OLS', 'IV_CostShifters', 'IV_Wholesale', 'IV_HausmanFull']
     state_order = ['Base', 'Macro', 'Tech']
 
-    tasks = []
-    spec_number = 1
-    for s_name in state_order:
-        for iv_name in iv_order:
-            iv_cols = specs[iv_name]
-            s_cols = state_blocks[s_name]
-            tasks.append((df, iv_name, iv_cols, s_name, s_cols, spec_number))
-            spec_number += 1
-            
-    print(f"Starting parallel execution of {len(tasks)} specifications...")
-    
+    import itertools
+    tasks = [
+        (df, iv_name, specs[iv_name], s_name, state_blocks[s_name], i)
+        for i, (s_name, iv_name) in enumerate(itertools.product(state_order, iv_order), start=1)
+    ]
+
+    print(f"Starting parallel execution of {len(tasks)} specifications...")     
+
+    results_dict = {}
     out_results = []
     with concurrent.futures.ProcessPoolExecutor() as executor:
-        for output in executor.map(execute_specification, tasks):
-            out_results.append(output)
-            
-    # Process Results and Save Stargazer-Compatible Tables + Pickle Results
-    results_dict = {}
-    for stdout_text, res_ss, spec_name, res_fs, spec_number in out_results:
+        out_results.extend(executor.map(execute_specification, tasks))
+        
+    for res in out_results:
+        stdout_text, res_ss, spec_name, res_fs, spec_number = res
         print(stdout_text)
         if res_ss is not None:
             safe_name = f"Spec{spec_number:02d}_" + spec_name.replace(" ", "_").replace("/", "").replace(":", "")
@@ -457,33 +492,35 @@ def main():
                 'first_stage': res_fs
             }
     cluster_diagnostics = {
-        'G_nominal': int(G_nominal),
+        'G_nominal': G_nominal,
         'G_star': float(G_star),
         'mean_obs_per_cluster': float(mean_Ng),
         'std_obs_per_cluster': float(std_Ng),
         'coefficient_variation': float(cv_Ng),
-        'total_observations': int(total_obs),
+        'total_observations': total_obs,
         'top_5_clusters': {
             str(c): {
-                'observations': int(n),
+                'observations': n,
                 'share_pct': float((n / total_obs) * 100)
             }
             for c, n in Ns.sort_values(ascending=False).head(5).items()
         }
     }
-    
+    save_outputs(cluster_diagnostics, results_dict, output_dir)
+
+def save_outputs(cluster_diagnostics, results_dict, output_dir):
     diag_file = output_dir / "cluster_diagnostics.json"
     with open(diag_file, 'w') as f:
         json.dump(cluster_diagnostics, f, indent=2)
-    
-    # Save all results to pickle file
+
     results_pickle = output_dir / "estimation_results.pkl"
     with open(results_pickle, 'wb') as f:
         pickle.dump(results_dict, f)
-    
+
     print(f"Estimation outputs successfully saved in: {output_dir}")
     print(f" - Cluster diagnostics: {diag_file}")
     print(f" - Estimation results (pickle): {results_pickle}")
+
 
 if __name__ == '__main__':
     pd.options.mode.chained_assignment = None

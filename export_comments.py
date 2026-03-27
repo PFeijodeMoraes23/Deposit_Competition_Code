@@ -1,6 +1,7 @@
 import os
 import sys
 import json
+import itertools
 import pickle
 from pathlib import Path
 import subprocess
@@ -96,16 +97,27 @@ def clean_name(v):
         'pix_users_pf_per1000': 'Pix Users (100s per 1k)',
         'connections_per100': 'Broadband Connections (per capita)',
         'branches_per1000': 'Branches per 1k',
+        'post_2020': 'Post 2020 Dummy',
         'const': 'Constant'
     }
     return labels.get(v, v.replace('_', '\\_'))
 
+def _get_first_stage_row_strings(var, panels, ivs, results_dict):
+    coef_strs, se_strs = [], []
+    has_val = False
+    for p, (iv_key, _) in itertools.product(panels, ivs):
+        res = results_dict[f"{iv_key} x {p}"]['first_stage']
+        if var in res.params:
+            has_val = True
+            c, se, pval = res.params[var], res.bse[var], res.pvalues[var]
+            coef_strs.append(f"${c:.4f}^{{{stars(pval)}}}$")
+            se_strs.append(f"$({se:.4f})$")
+        else:
+            coef_strs.append("")
+            se_strs.append("")
+    return coef_strs, se_strs, has_val
+
 def build_first_stage_table(results_dict, G, G_star):
-    ivs = [
-        ('IV_CostShifters', 'IV Cost'), 
-        ('IV_Wholesale', 'IV Wholesale'), 
-        ('IV_HausmanFull', 'Hausman')
-    ]
     panels = ['Base', 'Macro', 'Tech']
     fs_spec_numbers = {
         ('Base', 'IV_CostShifters'): 2,
@@ -119,85 +131,89 @@ def build_first_stage_table(results_dict, G, G_star):
         ('Tech', 'IV_HausmanFull'): 12,
     }
 
-    vs = []
-    for p in panels:
-        for iv_key, _ in ivs:
-            res = results_dict[f"{iv_key} x {p}"]['first_stage']
-            for v in res.params.index:
-                if v not in vs and v != 'const':
-                    vs.append(v)
+    ivs = [
+        ('IV_CostShifters', 'IV Cost'),
+        ('IV_Wholesale', 'IV Wholesale'),
+        ('IV_HausmanFull', 'Hausman')
+    ]
 
-    out = []
-    out.append("\\begin{landscape}")
-    out.append("\\begin{table}[htbp]\\centering")
-    out.append("\\caption{First Stage Estimation (Control Function)}")
-    out.append("\\resizebox{\\linewidth}{!}{")
-    out.append("\\begin{tabular}{l" + "c"*9 + "}\\toprule")
-    
-    out.append(" & \\multicolumn{3}{c}{\\textbf{Base}} & \\multicolumn{3}{c}{\\textbf{Macro}} & \\multicolumn{3}{c}{\\textbf{Tech}} \\\\ \\cmidrule(lr){2-4} \\cmidrule(lr){5-7} \\cmidrule(lr){8-10}")
-    
-    col_names = []
-    for p in panels:
-        for iv_key, iv_label in ivs:
-            n = fs_spec_numbers[(p, iv_key)]
-            col_names.append(f"{iv_label} ({n})")
-    out.append(" & " + " & ".join(col_names) + " \\\\ \\midrule")
+    vs = list(dict.fromkeys(
+        v for p, (iv_key, _) in itertools.product(panels, ivs)
+        for v in results_dict[f"{iv_key} x {p}"]['first_stage'].params.index
+        if v != 'const'
+    ))
+
+    col_names = [f"{iv_label} ({fs_spec_numbers[(p, iv_key)]})" for p, (iv_key, iv_label) in itertools.product(panels, ivs)]
+
+    out = [
+        "\\begin{landscape}",
+        "\\begin{table}[htbp]\\centering",
+        "\\caption{First Stage Estimation (Control Function)}",
+        "\\resizebox{\\linewidth}{!}{",
+        "\\begin{tabular}{l" + "c"*9 + "}\\toprule",
+        " & \\multicolumn{3}{c}{\\textbf{Base}} & \\multicolumn{3}{c}{\\textbf{Macro}} & \\multicolumn{3}{c}{\\textbf{Tech}} \\\\ \\cmidrule(lr){2-4} \\cmidrule(lr){5-7} \\cmidrule(lr){8-10}",
+        " & " + " & ".join(col_names) + " \\\\ \\midrule"
+    ]
     
     for var in vs:
-        coef_strs, se_strs = [], []
-        has_val = False
-        for p in panels:
-            for iv_key, _ in ivs:
-                res = results_dict[f"{iv_key} x {p}"]['first_stage']
-                if var in res.params:
-                    has_val = True
-                    c, se, pval = res.params[var], res.bse[var], res.pvalues[var]
-                    coef_strs.append(f"${c:.4f}^{{{stars(pval)}}}$")
-                    se_strs.append(f"$({se:.4f})$")
-                else:
-                    coef_strs.append("")
-                    se_strs.append("")
+        coef_strs, se_strs, has_val = _get_first_stage_row_strings(var, panels, ivs, results_dict)
                     
         if has_val:
-            out.append(f"{clean_name(var)} & " + " & ".join(coef_strs) + " \\\\")
-            out.append(f" & " + " & ".join(se_strs) + " \\\\")
-        
+            out.extend(
+                (
+                    f"{clean_name(var)} & " + " & ".join(coef_strs) + " \\\\",
+                    " & " + " & ".join(se_strs) + " \\\\"
+                )
+            )
+
     obs_strs = []
     rsq_strs = []
     fstat_strs = []
-    for p in panels:
-        for iv_key, _ in ivs:
-            res = results_dict[f"{iv_key} x {p}"]['first_stage']
-            obs_strs.append(f"{int(res.nobs):,}")
-            rsq_strs.append(f"{res.rsquared:.4f}")
-            fstat_val = getattr(res, 'fvalue', None)
-            fstat_pval = getattr(res, 'f_pvalue', 1.0)
-            if fstat_val is not None:
-                fstat_strs.append(f"${fstat_val:.2f}^{{{stars(fstat_pval)}}}$")
-            else:
-                fstat_strs.append("")
+    for p, (iv_key, _) in itertools.product(panels, ivs):
+        res = results_dict[f"{iv_key} x {p}"]['first_stage']
+        obs_strs.append(f"{int(res.nobs):,}")
+        rsq_strs.append(f"{res.rsquared:.4f}")
+        fstat_val = getattr(res, 'fvalue', None)
+        fstat_pval = getattr(res, 'f_pvalue', 1.0)
+        fstat_strs.append(f"${fstat_val:.2f}^{{{stars(fstat_pval)}}}$" if fstat_val is not None else "")
 
-    out.append("\\midrule")
-    out.append("Obs & " + " & ".join(obs_strs) + " \\\\")
-    out.append("$R^2$ & " + " & ".join(rsq_strs) + " \\\\")
-    out.append("F-Statistic & " + " & ".join(fstat_strs) + " \\\\")
-    out.append("Fixed Effects & " + " & ".join(["No"]*9) + " \\\\")
-    out.append(f"Clusters (G) & " + " & ".join([str(G)]*9) + " \\\\")
-    out.append(f"Effective Clusters ($G^*$) & " + " & ".join([f"{G_star:.2f}"]*9) + " \\\\")
-    
-    out.append("\\bottomrule")
-    out.append("\\end{tabular}}")
-    out.append("\\end{table}")
-    out.append("\\end{landscape}")
+    out.extend(
+        (
+            "\\midrule",
+            "Obs & " + " & ".join(obs_strs) + " \\\\",
+            "$R^2$ & " + " & ".join(rsq_strs) + " \\\\",
+            "F-Statistic & " + " & ".join(fstat_strs) + " \\\\",
+            "Fixed Effects & " + " & ".join(["No"]*9) + " \\\\",
+            "Clusters (G) & " + " & ".join([str(G)]*9) + " \\\\",
+            "Effective Clusters ($G^*$) & " + " & ".join([f"{G_star:.2f}"]*9) + " \\\\",
+            "\\bottomrule",
+            "\\end{tabular}}",
+            "\\end{table}",
+            "\\end{landscape}"
+        )
+    )
     return "\n".join(out)
 
+def _get_second_stage_row_strings(vshort, panels, estimators, results_dict):
+    coef_strs, se_strs = [], []
+    for p_name, (est_key, _) in itertools.product(panels, estimators):
+        spec_key = f"{est_key} x {p_name}"
+        res = results_dict[spec_key]['second_stage']
+
+        var = vshort
+        if var not in res.params and f"interaction_{var}" in res.params:
+            var = f"interaction_{var}"
+
+        if var in res.params:
+            c, se, pval = res.params[var], res.bse[var], res.pvalues[var]
+            coef_strs.append(f"${c:.4f}^{{{stars(pval)}}}$")
+            se_strs.append(f"$({se:.4f})$")
+        else:
+            coef_strs.append("")
+            se_strs.append("")
+    return coef_strs, se_strs
+
 def build_second_stage_table(results_dict, G, G_star):
-    estimators = [
-        ('OLS', 'OLS'), 
-        ('IV_CostShifters', 'IV Cost'), 
-        ('IV_Wholesale', 'IV Wholesale'), 
-        ('IV_HausmanFull', 'Hausman')
-    ]
     panels = ['Base', 'Macro', 'Tech']
     ss_spec_numbers = {
         ('Base', 'OLS'): 1,
@@ -213,65 +229,62 @@ def build_second_stage_table(results_dict, G, G_star):
         ('Tech', 'IV_Wholesale'): 11,
         ('Tech', 'IV_HausmanFull'): 12,
     }
-    
-    all_vars = ['nr_lagged_dep', 'gdp_per_capita', 'cadunico_families_per1000', 'fraction_65plus', 'fraction_young', 'pix_users_pf_per1000', 'connections_per100', 'branches_per1000']
-    
-    out = []
-    out.append("\\begin{landscape}")
-    out.append("\\begin{table}[htbp]\\centering")
-    out.append("\\caption{Second Stage Estimation}")
-    out.append("\\resizebox{\\linewidth}{!}{")
-    out.append("\\begin{tabular}{l" + "c"*12 + "}\\toprule")
-    
-    out.append(" & \\multicolumn{4}{c}{\\textbf{Base}} & \\multicolumn{4}{c}{\\textbf{Macro}} & \\multicolumn{4}{c}{\\textbf{Tech}} \\\\ \\cmidrule(lr){2-5} \\cmidrule(lr){6-9} \\cmidrule(lr){10-13}")
+
+    all_vars = ['nr_lagged_dep', 'post_2020', 'gdp_per_capita', 'cadunico_families_per1000', 'fraction_65plus', 'fraction_young', 'pix_users_pf_per1000', 'connections_per100', 'branches_per1000']
+
+    estimators = [
+        ('OLS', 'OLS'),
+        ('IV_CostShifters', 'IV Cost'),
+        ('IV_Wholesale', 'IV Wholesale'),
+        ('IV_HausmanFull', 'Hausman')
+    ]
+
     col_names = []
-    for p in panels:
-        for est_key, est_label in estimators:
-            n = ss_spec_numbers[(p, est_key)]
-            col_names.append(f"{est_label} ({n})")
-    out.append(" & " + " & ".join(col_names) + " \\\\ \\midrule")
+    for p, (est_key, est_label) in itertools.product(panels, estimators):       
+        n = ss_spec_numbers[(p, est_key)]
+        col_names.append(f"{est_label} ({n})")
+
+    out = [
+        "\\begin{landscape}",
+        "\\begin{table}[htbp]\\centering",
+        "\\caption{Second Stage Estimation}",
+        "\\resizebox{\\linewidth}{!}{",
+        "\\begin{tabular}{l" + "c"*12 + "}\\toprule",
+        " & \\multicolumn{4}{c}{\\textbf{Base}} & \\multicolumn{4}{c}{\\textbf{Macro}} & \\multicolumn{4}{c}{\\textbf{Tech}} \\\\ \\cmidrule(lr){2-5} \\cmidrule(lr){6-9} \\cmidrule(lr){10-13}",
+        " & " + " & ".join(col_names) + " \\\\ \\midrule"
+    ]
     
     for vshort in all_vars:
-        coef_strs, se_strs = [], []
-        for p_name in panels:
-            for est_key, _ in estimators:
-                spec_key = f"{est_key} x {p_name}"
-                res = results_dict[spec_key]['second_stage']
-                
-                var = vshort
-                if var not in res.params and f"interaction_{var}" in res.params:
-                    var = f"interaction_{var}"
-                    
-                if var in res.params:
-                    c, se, pval = res.params[var], res.bse[var], res.pvalues[var]
-                    coef_strs.append(f"${c:.4f}^{{{stars(pval)}}}$")
-                    se_strs.append(f"$({se:.4f})$")
-                else:
-                    coef_strs.append("")
-                    se_strs.append("")
-                    
-        out.append(f"{clean_name(vshort)} & " + " & ".join(coef_strs) + " \\\\")
-        out.append(f" & " + " & ".join(se_strs) + " \\\\")
-        
+        coef_strs, se_strs = _get_second_stage_row_strings(vshort, panels, estimators, results_dict)
+
+        out.extend(
+            (
+                f"{clean_name(vshort)} & " + " & ".join(coef_strs) + " \\\\",
+                " & " + " & ".join(se_strs) + " \\\\"
+            )
+        )
+
     obs_strs = []
     rsq_strs = []
-    for p_name in panels:
-        for est_key, _ in estimators:
-            res = results_dict[f"{est_key} x {p_name}"]['second_stage']
-            obs_strs.append(f"{int(res.nobs):,}")
-            rsq_strs.append(f"{res.rsquared:.4f}")
+    for p_name, (est_key, _) in itertools.product(panels, estimators):
+        res = results_dict[f"{est_key} x {p_name}"]['second_stage']
+        obs_strs.append(f"{int(res.nobs):,}")
+        rsq_strs.append(f"{res.rsquared:.4f}")
             
-    out.append("\\midrule")
-    out.append("Obs & " + " & ".join(obs_strs) + " \\\\")
-    out.append("$R^2$ & " + " & ".join(rsq_strs) + " \\\\")
-    out.append("Fixed Effects & " + " & ".join(["Yes"]*12) + " \\\\")
-    out.append(f"Clusters (G) & " + " & ".join([str(G)]*12) + " \\\\")
-    out.append(f"Effective Clusters ($G^*$) & " + " & ".join([f"{G_star:.2f}"]*12) + " \\\\")
-
-    out.append("\\bottomrule")
-    out.append("\\end{tabular}}")
-    out.append("\\end{table}")
-    out.append("\\end{landscape}")
+    out.extend(
+        (
+            "\\midrule",
+            "Obs & " + " & ".join(obs_strs) + " \\\\",
+            "$R^2$ & " + " & ".join(rsq_strs) + " \\\\",
+            "Fixed Effects & " + " & ".join(["Yes"]*12) + " \\\\",
+            "Clusters (G) & " + " & ".join([str(G)]*12) + " \\\\",
+            "Effective Clusters ($G^*$) & " + " & ".join([f"{G_star:.2f}"]*12) + " \\\\",
+            "\\bottomrule",
+            "\\end{tabular}}",
+            "\\end{table}",
+            "\\end{landscape}"
+        )
+    )
     return "\n".join(out)
 
 def build_cluster_table(cluster_data):
@@ -279,15 +292,16 @@ def build_cluster_table(cluster_data):
     G_star = cluster_data['G_star']
     total_obs = cluster_data['total_observations']
     
-    out = []
-    out.append("\\begin{table}[htbp]\\centering")
-    out.append("\\caption{Cluster Diagnostics and Top 5 Conglomerates}")
-    out.append("\\begin{tabular}{lcc}\\toprule")
-    out.append("\\textbf{Statistic} & \\textbf{Value} & \\textbf{Share of Total} \\\\ \\midrule")
-    out.append(f"Nominal Clusters ($G$) & \\multicolumn{{2}}{{c}}{{{G_nominal}}} \\\\")
-    out.append(f"Effective Clusters ($G^*$) & \\multicolumn{{2}}{{c}}{{{G_star:.2f}}} \\\\")
-    out.append(f"Total Observations & \\multicolumn{{2}}{{c}}{{{total_obs:,}}} \\\\ \\midrule")
-    out.append("\\textbf{Top 5 Clusters (Conglomerates)} & \\textbf{Observations} & \\textbf{\\% Share} \\\\ \\midrule")
+    out = [
+        "\\begin{table}[htbp]\\centering",
+        "\\caption{Cluster Diagnostics and Top 5 Conglomerates}",
+        "\\begin{tabular}{lcc}\\toprule",
+        "\\textbf{Statistic} & \\textbf{Value} & \\textbf{Share of Total} \\\\ \\midrule",
+        f"Nominal Clusters ($G$) & \\multicolumn{{2}}{{c}}{{{G_nominal}}} \\\\",
+        f"Effective Clusters ($G^*$) & \\multicolumn{{2}}{{c}}{{{G_star:.2f}}} \\\\",
+        f"Total Observations & \\multicolumn{{2}}{{c}}{{{total_obs:,}}} \\\\ \\midrule",
+        "\\textbf{Top 5 Clusters (Conglomerates)} & \\textbf{Observations} & \\textbf{\\% Share} \\\\ \\midrule"
+    ]
     
     top5 = cluster_data.get('top_5_clusters', {})
     for c_id, stats in top5.items():
@@ -295,16 +309,14 @@ def build_cluster_table(cluster_data):
         share = stats['share_pct']
         out.append(f"{c_id} & {obs:,} & {share:.2f}\\% \\\\")
         
-    out.append("\\bottomrule")
-    out.append("\\end{tabular}")
-    out.append("\\end{table}")
+    out.extend(("\\bottomrule", "\\end{tabular}", "\\end{table}"))
     return "\n".join(out)
 
 def main():
     print("=====================================================================")
     print(" INITIATING PDFLATEX COMPILATION PIPELINE")
     print("=====================================================================")
-
+    
     summary_text = r"""# Estimation Summary: Sleepiness Function Metrics
 
 This document provides a detailed breakdown of the assumptions, data preparations, specifications, and the econometric safeguards implemented during the execution of the sleepiness function estimation detailed in Egan et al. (2025).

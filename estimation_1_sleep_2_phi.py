@@ -65,10 +65,7 @@ def calculate_phis(df, res_dict, state_blocks):
             col_name = f"interaction_{sv}" if sv != 'constant' else "nr_lagged_dep"
             if col_name in ss_res.params:
                 c = ss_res.params[col_name]
-                if sv == 'constant':
-                    phi_mt += c
-                else: 
-                    phi_mt += c * filled_cols[sv]
+                phi_mt += c if sv == 'constant' else c * filled_cols[sv]
         
         # Save phi_mt local parameters
         df[f'phi_mt_{spec_name}'] = phi_mt
@@ -91,20 +88,28 @@ def calculate_phis(df, res_dict, state_blocks):
         
     return df, phi_results
 
+def export_dataframe(df_to_export, file_name, dict_name, output_dir):
+    out_path = output_dir / file_name
+    df_to_export.to_csv(out_path, index=False)
+    print(f"Exported {dict_name} to {out_path}")
+
 def main():
     panel_csv_path, results_pickle_path, output_dir = resolve_paths()
     
     print(f"Loading data from {panel_csv_path}")
     df = pd.read_csv(panel_csv_path, low_memory=False)
     
+    if 'year' in df.columns:
+        df['post_2020'] = (df['year'] >= 2020).astype(int)
+
     print(f"Loading results from {results_pickle_path}")
     with open(results_pickle_path, 'rb') as f:
         res_dict = pickle.load(f)
-        
-    s_base = ['constant']
+
+    s_base = ['constant', 'post_2020']
     s_macro = s_base + ['gdp_per_capita', 'cadunico_families_per1000', 'fraction_65plus', 'fraction_young']
-    s_tech_finance = s_macro + ['pix_users_pf_per1000', 'connections_per100', 'branches_per1000']
-    
+    s_tech_finance = s_macro + ['pix_users_pf_per1000', 'branches_per1000'] # dropped connections_per100
+
     state_blocks = {
         'Base': s_base,
         'Macro': s_macro,
@@ -113,19 +118,14 @@ def main():
 
     df, national_phis = calculate_phis(df, res_dict, state_blocks)
     
-    # Save the expanded panel data locally 
-    phi_df_path = output_dir / "market_panel_phis.csv"
-    df.to_csv(phi_df_path, index=False)
-    print(f"Exported panel data with computed phi_mt to {phi_df_path}")
-    
+    export_dataframe(df, "market_panel_phis.csv", "panel data with computed phi_mt", output_dir)
+
     # Output to pickle or CSV for subsequent usage
     from functools import reduce
-    
+
     if national_phis:
         agg_df = reduce(lambda left, right: pd.merge(left, right, on='year_quarter', how='outer'), national_phis.values())
-        agg_path = output_dir / "national_phi_t.csv"
-        agg_df.to_csv(agg_path, index=False)
-        print(f"Exported National Phi_t to {agg_path}")
+        export_dataframe(agg_df, "national_phi_t.csv", "National Phi_t", output_dir)
         
     print("Done!")
 

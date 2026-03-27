@@ -6,9 +6,4 @@ def compute_phi(df, res, s_cols):
     for v in s_cols:
         col_name = f"interaction_{v}" if v != "constant" else "nr_lagged_dep"
         c = res.params[col_name]
-        if v == "constant":
-            phi += c
-        else:
-            phi += c * df[v]
-        
-    return phi
+        phi += c if v == "constant" else c * df[v]
