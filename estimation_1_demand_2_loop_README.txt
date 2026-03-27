@@ -25,7 +25,7 @@ The estimation employs sequential build-up to aid the non-linear optimizer:
 
 Other CLI flags:
   - `--spec`: Chooses the sleepiness specification (1-12) to estimate.
-  - `--R`: Number of Monte Carlo draws for the integrals (default: 200). 
+  - `--R`: Number of Monte Carlo draws for the integrals (default: 500). 
   - `--tol-inner`: Strict tolerance for contraction (default: 1e-14).
   - `--method`: scipy minimize routine (L-BFGS-B or Nelder-Mead).
 

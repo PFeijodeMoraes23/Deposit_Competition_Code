@@ -10,13 +10,13 @@ and theta_1* via linear IV (Eq-A5) for each sleepiness specification.
 Usage
 -----
   python estimation_1_demand_2_loop.py --spec 1 --stage logit
-  python estimation_1_demand_2_loop.py --spec all --stage full --R 200
+  python estimation_1_demand_2_loop.py --spec all --stage full --R 500
 
 CLI Flags
 ---------
-  --spec {1..12|all}        Single spec for testing; default=all
+  --spec {1..12|all}        Single spec for testing; default=12
   --stage {logit|sigma|full|extended}  Sequential CG2020 build-up
-  --R {int}                 Simulation draws (default=200)
+  --R {int}                 Simulation draws (default=500)
   --seed {int}              RNG seed (default=42)
   --tol-inner {float}       Inner contraction tolerance (default=1e-14)
   --max-inner {int}         Max inner iterations (default=2000)
@@ -283,73 +283,30 @@ def unpack_theta2(theta2_vec: np.ndarray, sigma_indices: list,
 # ==============================================================================
 # 4. Compute mu_rjkmt (Eq-A2)
 # ==============================================================================
-def compute_mu(df: pd.DataFrame, nu_draws: np.ndarray,
-               demo_draws: dict, sigma_vals: np.ndarray,
+def compute_mu(prod_vec: np.ndarray, nu_draws: np.ndarray,
+               aligned_demo_draws: np.ndarray, sigma_vals: np.ndarray,
                sigma_indices: list, pi_vals: np.ndarray,
-               pi_interactions: list, R: int) -> np.ndarray:
-    """Compute mu_rjkmt for all (r, j, k, m, t) using T_k selector.
-
-    Returns (N, R) array where N = len(df).
-    """
-    N = len(df)
-    coef_dim = K_TYPES + L_PROD  # 5 + 8 = 13
-
-    # Build the product-side vector for each observation: [rho_k, x_jt]
-    # T_k selects the k-th spread entry
-    prod_vec = np.zeros((N, coef_dim))
-    deposit_types = df['deposit_type'].values
-    spreads = df['spread_qoq'].values
-
-    for idx, k in enumerate(K_LIST):
-        mask = deposit_types == k
-        prod_vec[mask, idx] = spreads[mask]
-
-    # Fill x columns
-    for i, col in enumerate(X_COLS):
-        if col in df.columns:
-            prod_vec[:, K_TYPES + i] = df[col].fillna(0).values
-
-    # Build Sigma diagonal vector (full coef_dim)
+               pi_interactions: list, R: int, coef_dim: int) -> np.ndarray:
+    """Compute mu_rjkmt efficiently using vectorized array ops."""
+    
+    # 1. Sigma term:
     sigma_diag = np.zeros(coef_dim)
     for idx_pos, coef_idx in enumerate(sigma_indices):
         if coef_idx < coef_dim:
             sigma_diag[coef_idx] = sigma_vals[idx_pos]
-
-    # Build demographic vectors for each observation
-    d_cols_avail = [c for c in D_COLS if c in df.columns]
-    D = len(d_cols_avail)
-
-    # Construct mu: mu_rjkmt = prod_vec' * (Pi * d_r + Sigma * nu_r)
-    # For efficiency, compute in chunks
-    mu = np.zeros((N, R))
-
-    # Get demo draws per observation
-    mca_codes = df['mca_code'].values
-    time_ids = df['time_id'].values
-
-    for r in range(R):
-        nu_r = nu_draws[r, :coef_dim]  # (coef_dim,)
-
-        # Sigma contribution: Sigma * nu_r (broadcast across N)
-        sigma_nu = sigma_diag * nu_r  # (coef_dim,)
-
-        # Pi contribution: for each obs, Pi * d_rmt
-        pi_contrib = np.zeros((N, coef_dim))
-        if len(pi_interactions) > 0:
-            for obs_idx in range(N):
-                key = (mca_codes[obs_idx], time_ids[obs_idx])
-                if key in demo_draws:
-                    d_r = demo_draws[key][r % len(demo_draws[key])]
-                else:
-                    d_r = np.zeros(D)
-                for pi_idx, (coef_idx, demo_idx) in enumerate(pi_interactions):
-                    if coef_idx < coef_dim and demo_idx < D:
-                        pi_contrib[obs_idx, coef_idx] += pi_vals[pi_idx] * d_r[demo_idx]
-
-        # mu_r = prod_vec' * (sigma_nu + pi_contrib)
-        heterogeneity = sigma_nu[np.newaxis, :] + pi_contrib  # (N, coef_dim)
-        mu[:, r] = np.sum(prod_vec * heterogeneity, axis=1)
-
+            
+    sigma_nu = sigma_diag * nu_draws[:, :coef_dim]  # (R, coef_dim)
+    mu = np.dot(prod_vec, sigma_nu.T)  # (N, R)
+    
+    # 2. Pi term:
+    if len(pi_interactions) > 0:
+        D = aligned_demo_draws.shape[2]
+        for pi_idx, (coef_idx, demo_idx) in enumerate(pi_interactions):
+            if coef_idx < coef_dim and demo_idx < D:
+                p_v = prod_vec[:, coef_idx]  # (N,)
+                d_v = aligned_demo_draws[:, :, demo_idx]  # (N, R)
+                mu += pi_vals[pi_idx] * p_v[:, np.newaxis] * d_v
+                
     return mu
 
 # ==============================================================================
@@ -608,21 +565,18 @@ def compute_gmm_moments(xi: np.ndarray, df: pd.DataFrame) -> np.ndarray:
 
 
 def gmm_objective(theta2_vec: np.ndarray, df: pd.DataFrame,
-                   mu_cache: dict, nu_draws: np.ndarray,
-                   demo_draws: dict, sigma_indices: list,
-                   pi_interactions: list, R: int,
+                   prod_vec: np.ndarray, nu_draws: np.ndarray,
+                   aligned_demo_draws: np.ndarray, sigma_indices: list,
+                   pi_interactions: list, R: int, coef_dim: int,
                    W: np.ndarray, tol_inner: float,
                    max_inner: int) -> float:
-    """Evaluate Q(theta2) = G(theta2)' W G(theta2).
-
-    This is the function minimised by the outer loop.
-    """
+    """Evaluate Q(theta2) = G(theta2)' W G(theta2)."""
     sigma_vals, pi_vals = unpack_theta2(theta2_vec, sigma_indices,
                                          pi_interactions)
 
     # Compute mu
-    mu = compute_mu(df, nu_draws, demo_draws, sigma_vals,
-                    sigma_indices, pi_vals, pi_interactions, R)
+    mu = compute_mu(prod_vec, nu_draws, aligned_demo_draws, sigma_vals,
+                    sigma_indices, pi_vals, pi_interactions, R, coef_dim)
 
     # Inner loop: contraction
     delta, converged, n_iter, _ = blp_contraction(df, mu, R,
@@ -704,7 +658,31 @@ def run_blp_for_spec(spec_id: int, df_panel: pd.DataFrame, args) -> dict:
         # ---- STAGES 2-4: BLP with theta2 != 0 ----
         print(f"  Stage: {args.stage.upper()} ({n_params} parameters)")
 
+        print("  Precomputing arrays for vectorized logic...")
         demo_draws = generate_demographic_draws(df, args.R, args.seed)
+        d_cols_avail = [c for c in D_COLS if c in df.columns]
+        D_dim = len(d_cols_avail)
+        N_obs = len(df)
+        
+        aligned_demo_draws = np.zeros((N_obs, args.R, D_dim))
+        mca_codes = df['mca_code'].values
+        time_ids = df['time_id'].values
+        for obs_idx in range(N_obs):
+            key = (mca_codes[obs_idx], time_ids[obs_idx])
+            if key in demo_draws:
+                aligned_demo_draws[obs_idx, :, :] = demo_draws[key]
+                
+        # Build prod_vec
+        coef_dim = K_TYPES + L_PROD
+        prod_vec = np.zeros((N_obs, coef_dim))
+        deposit_types = df['deposit_type'].values
+        spreads = df['spread_qoq'].values
+        for idx, k in enumerate(K_LIST):
+            mask = deposit_types == k
+            prod_vec[mask, idx] = spreads[mask]
+        for i, col in enumerate(X_COLS):
+            if col in df.columns:
+                prod_vec[:, K_TYPES + i] = df[col].fillna(0).values
 
         # Initial weighting matrix W = (Z'Z)^-1
         iv_avail = [c for c in IV_BLP_LOO + IV_COST + IV_CAPITAL if c in df.columns]
@@ -725,8 +703,8 @@ def run_blp_for_spec(spec_id: int, df_panel: pd.DataFrame, args) -> dict:
 
         # Minimise
         obj_fn = lambda t2: gmm_objective(
-            t2, df, {}, nu_draws, demo_draws,
-            sigma_indices, pi_interactions, args.R,
+            t2, df, prod_vec, nu_draws, aligned_demo_draws,
+            sigma_indices, pi_interactions, args.R, coef_dim,
             W, args.tol_inner, args.max_inner)
 
         if args.method == 'l-bfgs-b':
@@ -746,8 +724,8 @@ def run_blp_for_spec(spec_id: int, df_panel: pd.DataFrame, args) -> dict:
         # Recover theta1 at theta2*
         sigma_vals, pi_vals = unpack_theta2(theta2_star, sigma_indices,
                                              pi_interactions)
-        mu_star = compute_mu(df, nu_draws, demo_draws, sigma_vals,
-                             sigma_indices, pi_vals, pi_interactions, args.R)
+        mu_star = compute_mu(prod_vec, nu_draws, aligned_demo_draws, sigma_vals,
+                             sigma_indices, pi_vals, pi_interactions, args.R, coef_dim)
         delta_star, conv, n_it, _ = blp_contraction(df, mu_star, args.R,
                                                      tol=args.tol_inner,
                                                      max_iter=args.max_inner)
@@ -756,8 +734,8 @@ def run_blp_for_spec(spec_id: int, df_panel: pd.DataFrame, args) -> dict:
         # Theta2 SEs: GMM sandwich with numerical Jacobian
         def moment_fn(t2):
             sv, pv = unpack_theta2(t2, sigma_indices, pi_interactions)
-            mu_t = compute_mu(df, nu_draws, demo_draws, sv, sigma_indices,
-                              pv, pi_interactions, args.R)
+            mu_t = compute_mu(prod_vec, nu_draws, aligned_demo_draws, sv, sigma_indices,
+                              pv, pi_interactions, args.R, coef_dim)
             d_t, _, _, _ = blp_contraction(df, mu_t, args.R,
                                            tol=args.tol_inner,
                                            max_iter=args.max_inner)
@@ -819,11 +797,11 @@ def worker_blp(task):
 def main():
     parser = argparse.ArgumentParser(
         description="BLP Demand Estimation Loop (Appendix-BLP)")
-    parser.add_argument('--spec', type=str, default='all',
+    parser.add_argument('--spec', type=str, default='12',
                         help='Specification ID (1-12) or "all"')
     parser.add_argument('--stage', type=str, default='logit',
-                        choices=['logit', 'sigma', 'full', 'extended'])
-    parser.add_argument('--R', type=int, default=200,
+                        choices=['logit', 'sigma', 'full', 'extended', 'sequence'])
+    parser.add_argument('--R', type=int, default=500,
                         help='Number of simulation draws')
     parser.add_argument('--seed', type=int, default=42)
     parser.add_argument('--tol-inner', type=float, default=1e-14,
@@ -853,39 +831,43 @@ def main():
     # Output directory
     BLP_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
-    all_results = {}
-    tasks = [(sp, df_panel, args) for sp in spec_ids]
-    
     import multiprocessing
     import concurrent.futures
     max_w = min(len(spec_ids), multiprocessing.cpu_count() - 1, 6)
     if max_w < 1: max_w = 1
     
-    print(f"  Starting parallel execution of {len(spec_ids)} specs with {max_w} workers...")
+    stages_to_run = ['logit', 'sigma', 'full', 'extended'] if args.stage == 'sequence' else [args.stage]
     
-    with concurrent.futures.ProcessPoolExecutor(max_workers=max_w) as executor:
-        for sp, res, err in executor.map(worker_blp, tasks):
-            if err is not None:
-                print(f"  [!] Spec {sp} failed:\n{err}")
-            elif res is not None:
-                out_pkl = BLP_OUTPUT_DIR / f"blp_results_spec_{sp}_{args.stage}.pkl"
-                with open(out_pkl, 'wb') as f:
-                    pickle.dump(res, f)
-                print(f"  Saved: {out_pkl.name}")
-                all_results[sp] = {
-                    'Q_value': float(res['Q_value']),
-                    'converged': bool(res['converged']),
-                    'theta1_alpha': res['theta1'][:K_TYPES].tolist(),
-                    'theta2': res['theta2'].tolist() if len(res['theta2']) > 0 else [],
-                    'stage': args.stage
-                }
+    for current_stage in stages_to_run:
+        args.stage = current_stage
+        all_results = {}
+        tasks = [(sp, df_panel, args) for sp in spec_ids]
+        
+        print(f"  Starting parallel execution of {len(spec_ids)} specs for stage '{current_stage}' with {max_w} workers...")
+        
+        with concurrent.futures.ProcessPoolExecutor(max_workers=max_w) as executor:
+            for sp, res, err in executor.map(worker_blp, tasks):
+                if err is not None:
+                    print(f"  [!] Spec {sp} failed:\n{err}")
+                elif res is not None:
+                    out_pkl = BLP_OUTPUT_DIR / f"blp_results_spec_{sp}_{args.stage}.pkl"
+                    with open(out_pkl, 'wb') as f:
+                        pickle.dump(res, f)
+                    print(f"  Saved: {out_pkl.name}")
+                    all_results[sp] = {
+                        'Q_value': float(res['Q_value']),
+                        'converged': bool(res['converged']),
+                        'theta1_alpha': res['theta1'][:K_TYPES].tolist(),
+                        'theta2': res['theta2'].tolist() if len(res['theta2']) > 0 else [],
+                        'stage': args.stage
+                    }
 
-    # Summary JSON
-    summary_path = BLP_OUTPUT_DIR / f"blp_summary_{args.stage}.json"
-    with open(summary_path, 'w') as f:
-        json.dump(all_results, f, indent=2)
-    print(f"\nSummary saved to: {summary_path}")
-    print(f"[DONE] BLP Estimation ({args.stage}) complete for specs {spec_ids}.")
+        # Summary JSON
+        summary_path = BLP_OUTPUT_DIR / f"blp_summary_{args.stage}.json"
+        with open(summary_path, 'w') as f:
+            json.dump(all_results, f, indent=2)
+        print(f"\nSummary saved to: {summary_path}")
+        print(f"[DONE] BLP Estimation ({args.stage}) complete for specs {spec_ids}.")
 
 
 if __name__ == '__main__':
