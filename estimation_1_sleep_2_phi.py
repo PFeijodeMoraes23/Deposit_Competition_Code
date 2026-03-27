@@ -22,17 +22,33 @@ def calculate_phis(df, res_dict, state_blocks):
     df['constant'] = 1.0
     
     # Same scaling configuration as in estimation 1
-    if 'gdp_per_capita' in df.columns:
-        df['gdp_per_capita'] = df['gdp_per_capita'] / 10000.0
-    if 'cadunico_families_per1000' in df.columns:
-        df['cadunico_families_per1000'] = df['cadunico_families_per1000'] / 100.0
-    if 'pix_users_pf_per1000' in df.columns:
-        df['pix_users_pf_per1000'] = df['pix_users_pf_per1000'] / 100.0
-    if 'connections_per100' in df.columns:
-        df['connections_per100'] = df['connections_per100'] / 100.0
+    scale_cols = {
+        'gdp_per_capita': 10000.0,
+        'cadunico_families_per1000': 100.0,
+        'pix_users_pf_per1000': 100.0,
+        'connections_per100': 100.0
+    }
+    for col, factor in scale_cols.items():
+        if col in df.columns:
+            df[col] /= factor
 
     phi_results = {}
     
+    # Precompute medians and filled series to avoid redundant computation in loop
+    all_s_cols = {col for cols in state_blocks.values() for col in cols if col != 'constant'}
+    filled_cols = {
+        sv: df[sv].fillna(df[sv].median()) if sv in df.columns else np.zeros(len(df))
+        for sv in all_s_cols
+    }
+
+    # Calculate market size M_mt (total deposits)
+    if 'lagged_deposits' in df.columns:
+        df['market_size'] = df['lagged_deposits']
+    elif 'deposit_balance' in df.columns:
+        df['market_size'] = df['deposit_balance']
+    else:
+        df['market_size'] = 1.0 # fallback
+
     for spec_name, s_cols in state_blocks.items():
         # Using Hausman (Full) specification as the canonical parameter
         model_key = f"Spec4-IV_HausmanFull x {spec_name}"
@@ -52,34 +68,24 @@ def calculate_phis(df, res_dict, state_blocks):
                 if sv == 'constant':
                     phi_mt += c
                 else: 
-                    # use the appropriate variable (imputed where necessary as in first stage)
-                    med_val = df[sv].median() if sv in df.columns else 0
-                    local_s = df[sv].fillna(med_val) if sv in df.columns else 0
-                    phi_mt += c * local_s
+                    phi_mt += c * filled_cols[sv]
         
         # Save phi_mt local parameters
         df[f'phi_mt_{spec_name}'] = phi_mt
         
-        # Calculate market size M_mt (total deposits)
-        temp_df = df.copy()
-        # Ensure correct column
-        if 'lagged_deposits' in temp_df.columns:
-            temp_df['market_size'] = temp_df['lagged_deposits']
-        elif 'deposit_balance' in temp_df.columns:
-            temp_df['market_size'] = temp_df['deposit_balance']
-        else:
-            temp_df['market_size'] = 1.0 # fallback
-            
         # We need sum by market 
-        market_agg = temp_df.groupby(['year_quarter', 'CodIbge']).agg(
+        market_agg = df.groupby(['year_quarter', 'CodIbge'], observed=True).agg(
             phi_mt=(f'phi_mt_{spec_name}', 'mean'),
             M_mt=('market_size', 'sum')
         ).reset_index()
 
         # National aggregate (\phi_t) = sum(phi_mt * M_mt) / sum(M_mt)
-        national_agg = market_agg.groupby('year_quarter').apply(
-            lambda x: np.sum(x['phi_mt'] * x['M_mt']) / np.sum(x['M_mt']) if np.sum(x['M_mt']) > 0 else 0
-        ).reset_index(name=f'phi_t_{spec_name}')
+        weighted_phi = market_agg['phi_mt'] * market_agg['M_mt']
+        sum_weighted = weighted_phi.groupby(market_agg['year_quarter']).sum()
+        sum_m_mt = market_agg['M_mt'].groupby(market_agg['year_quarter']).sum()
+        
+        # Vectorized aggregation and division
+        national_agg = (sum_weighted / sum_m_mt.replace(0, np.nan)).fillna(0).reset_index(name=f'phi_t_{spec_name}')
         
         phi_results[spec_name] = national_agg
         
@@ -89,7 +95,7 @@ def main():
     panel_csv_path, results_pickle_path, output_dir = resolve_paths()
     
     print(f"Loading data from {panel_csv_path}")
-    df = pd.read_csv(panel_csv_path)
+    df = pd.read_csv(panel_csv_path, low_memory=False)
     
     print(f"Loading results from {results_pickle_path}")
     with open(results_pickle_path, 'rb') as f:
@@ -113,14 +119,10 @@ def main():
     print(f"Exported panel data with computed phi_mt to {phi_df_path}")
     
     # Output to pickle or CSV for subsequent usage
-    agg_df = None
-    for name, nat_df in national_phis.items():
-        if agg_df is None:
-            agg_df = nat_df
-        else:
-            agg_df = agg_df.merge(nat_df, on='year_quarter', how='outer')
-            
-    if agg_df is not None:
+    from functools import reduce
+    
+    if national_phis:
+        agg_df = reduce(lambda left, right: pd.merge(left, right, on='year_quarter', how='outer'), national_phis.values())
         agg_path = output_dir / "national_phi_t.csv"
         agg_df.to_csv(agg_path, index=False)
         print(f"Exported National Phi_t to {agg_path}")

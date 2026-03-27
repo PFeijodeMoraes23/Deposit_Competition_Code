@@ -1,11 +1,42 @@
+"""
+estimation_2_sleep_1_cfa.py
+==============================
+Direct time-series estimation of the sleepiness parameter phi_t for National (NB) digital/wholesale banks
+(Appendix/V_Main.tex section on extending local estimates to national aggregates).
+
+Takes the main processed market panel, filters for 'IFDATA' (NB-type firms), and provides 
+three econometric strategies to avoid rank-deficiency caused by purely deterministic time-series trends:
+  1. Option 1: Direct Macro Time-Series Estimation (Baseline)
+  2. Option 2: Interactions with Firm Heterogeneity (lagged Total Assets)
+  3. Option 3: Latent Index via Principal Component Analysis (PCA)
+
+Usage
+-----
+  python estimation_2_sleep_1_cfa.py --option 1
+  python estimation_2_sleep_1_cfa.py --run-all
+
+CLI Flags
+---------
+  --option {1|2|3}    Run specifically one of the options above.
+  --run-all           Loop over all three options sequentially for comparative output.
+"""
 import argparse
-import pandas as pd
-import numpy as np
-import statsmodels.api as sm
 from pathlib import Path
 import sys
 import io
 import pickle
+
+try:
+    from utils.venv_guard import ensure_project_venv
+except Exception:
+    ensure_project_venv = None
+
+if ensure_project_venv is not None:
+    ensure_project_venv(__file__)
+
+import pandas as pd
+import numpy as np
+import statsmodels.api as sm
 from sklearn.decomposition import PCA
 
 # ==============================================================================
@@ -20,9 +51,11 @@ def _resolve_runtime_paths() -> tuple[Path, Path]:
     return PANEL_CSV, OUTPUT_DIR
 
 def demean_variables(df, cols, entity_col):
+    # Optimized vectorized demeaning
     df_out = df.copy()
     for col in cols:
-        df_out[col] -= df_out.groupby(entity_col)[col].transform('mean')
+        df_out[col] = pd.to_numeric(df_out[col], errors='coerce')
+    df_out[cols] = df_out[cols] - df_out.groupby(entity_col)[cols].transform('mean')
     return df_out
 
 def build_data():
@@ -32,10 +65,13 @@ def build_data():
     # We only want NB firms (IFDATA source)
     df = df_raw[df_raw['Source'] == 'IFDATA'].copy()
     
+    # NB-type firms do not vary by region, so safely drop duplicates
+    df = df.drop_duplicates(subset=['CodConglomeradoPrudencial', 'year', 'quarter'])
+
     if 'deposit_balance' not in df.columns:
         id_vars = [c for c in df.columns if not c.startswith('dep_a') and not c.startswith('spread_a') and not c.startswith('leave_one_out')]
         df = pd.wide_to_long(
-            df_raw,
+            df,
             stubnames=['dep_a', 'spread_a', 'leave_one_out_mean_spread_a'],
             i=id_vars,
             j='deposit_type'
@@ -49,14 +85,21 @@ def build_data():
         df = df[df['Source'] == 'IFDATA'].copy()
     
     if 'deposit_type' in df.columns:
-        df = df[df['deposit_type'] != 3].copy()
-        
+        df = df[~df['deposit_type'].astype(str).str.contains('3')].copy()
     df['entity_id'] = df['CodConglomeradoPrudencial'].astype(str) + "_" + df['deposit_type'].astype(str)
     
+    # Sort to ensure lags are correct
+    df = df.sort_values(by=['entity_id', 'year', 'quarter'])
+
+    if 'year_quarter' not in df.columns:
+        df['year_quarter'] = df['year'].astype(str) + "Q" + df['quarter'].astype(str)
+
+    df['lagged_deposits'] = df.groupby('entity_id')['deposit_balance'].shift(1)
+    df['spread_qoq_lag'] = df.groupby('entity_id')['spread_qoq'].shift(1)
+    df['risk_free_qoq_lag'] = df.groupby('entity_id')['risk_free_qoq'].shift(1)
+
     df['nr_lagged_dep'] = (1 + df['risk_free_qoq_lag'] - df['spread_qoq_lag']) * df['lagged_deposits']
-    
-    df = df.dropna(subset=['deposit_balance', 'nr_lagged_dep', 'spread_qoq', 'entity_id', 'year_quarter'])
-    
+
     # Scale massive variables
     if 'gdp_per_capita' in df.columns:
         df['gdp_per_capita'] = df['gdp_per_capita'] / 10000.0
@@ -79,16 +122,10 @@ def run_model_option1(df, state_vars, has_cf=False):
     Option 1: Brute Force Time-Series.
     y_dm ~ nr_lagged_dep * S_t
     """
-    print("\n--- Option 1: Direct Time-Series Estimation ---")
-    
-    # NB firms have no local variation, so S_mt is actually S_t
-    # In IFDATA, the variables are nationally aggregated already in market_panel.csv
     X_cols = []
     for sv in state_vars:
         col_name = f"interaction_{sv}" if sv != 'constant' else "nr_lagged_dep"
-        if sv == 'constant':
-            pass
-        else:
+        if sv != 'constant':
             df[col_name] = df[sv] * df['nr_lagged_dep']
         X_cols.append(col_name)
 
@@ -96,12 +133,11 @@ def run_model_option1(df, state_vars, has_cf=False):
         X_cols.extend(['v_hat', 'v_hat_2', 'v_hat_3'])
 
     df_ss = df.dropna(subset=X_cols + ['deposit_balance']).copy()
-    y_dm = demean_variables(df_ss, ['deposit_balance'], 'entity_id')['deposit_balance']
-    X_dm = demean_variables(df_ss, X_cols, 'entity_id')
+    y_dm = demean_variables(df_ss, ['deposit_balance'], 'entity_id')['deposit_balance'].astype(float)
+    X_dm = demean_variables(df_ss, X_cols, 'entity_id')[X_cols].astype(float)
 
     mod = sm.OLS(y_dm, X_dm)
-    res = mod.fit(cov_type='cluster', cov_kwds={'groups': df_ss['CodConglomeradoPrudencial']}, use_t=True)
-    return res
+    return mod.fit(cov_type='cluster', cov_kwds={'groups': df_ss['CodConglomeradoPrudencial']}, use_t=True)
 
 def run_model_option2(df, state_vars, has_cf=False):
     """
@@ -109,7 +145,6 @@ def run_model_option2(df, state_vars, has_cf=False):
     y_dm ~ nr_lagged_dep * S_t * X_j
     X_j = log_total_assets_lag
     """
-    print("\n--- Option 2: Firm Characteristic Interactions ---")
     X_cols = []
     
     # Fill in missing lag assets carefully just in case
@@ -126,32 +161,28 @@ def run_model_option2(df, state_vars, has_cf=False):
             
             df[col_name_base] = df[sv] * df['nr_lagged_dep']
             df[col_name_cross] = df[sv] * df['log_total_assets_lag'] * df['nr_lagged_dep']
-            
-            X_cols.append(col_name_base)
-            X_cols.append(col_name_cross)
+
+            X_cols.extend([col_name_base, col_name_cross])
 
     if has_cf:
         X_cols.extend(['v_hat', 'v_hat_2', 'v_hat_3'])
 
     df_ss = df.dropna(subset=X_cols + ['deposit_balance']).copy()
-    y_dm = demean_variables(df_ss, ['deposit_balance'], 'entity_id')['deposit_balance']
-    X_dm = demean_variables(df_ss, X_cols, 'entity_id')
+    y_dm = demean_variables(df_ss, ['deposit_balance'], 'entity_id')['deposit_balance'].astype(float)
+    X_dm = demean_variables(df_ss, X_cols, 'entity_id')[X_cols].astype(float)
 
     mod = sm.OLS(y_dm, X_dm)
-    res = mod.fit(cov_type='cluster', cov_kwds={'groups': df_ss['CodConglomeradoPrudencial']}, use_t=True)
-    return res
+    return mod.fit(cov_type='cluster', cov_kwds={'groups': df_ss['CodConglomeradoPrudencial']}, use_t=True)
 
 def run_model_option3(df, state_vars, has_cf=False):
     """
     Option 3: Dimensionality Reduction (PCA Indexing).
     y_dm ~ nr_lagged_dep * PCA(S_t)
     """
-    print("\n--- Option 3: PCA Environment Index ---")
-    
-    # We only run PCA on non-constant state variables
+# Remove print statements to avoid terminal clutter
     sv_dynamic = [sv for sv in state_vars if sv != 'constant']
     
-    if len(sv_dynamic) == 0:
+    if not sv_dynamic:
         # Falls back to option 1 if only constant
         return run_model_option1(df, state_vars, has_cf)
         
@@ -186,12 +217,11 @@ def run_model_option3(df, state_vars, has_cf=False):
         
     df_ss = df_ss.dropna(subset=X_cols + ['deposit_balance']).copy()
     
-    y_dm = demean_variables(df_ss, ['deposit_balance'], 'entity_id')['deposit_balance']
-    X_dm = demean_variables(df_ss, X_cols, 'entity_id')
+    y_dm = demean_variables(df_ss, ['deposit_balance'], 'entity_id')['deposit_balance'].astype(float)
+    X_dm = demean_variables(df_ss, X_cols, 'entity_id')[X_cols].astype(float)
 
     mod = sm.OLS(y_dm, X_dm)
-    res = mod.fit(cov_type='cluster', cov_kwds={'groups': df_ss['CodConglomeradoPrudencial']}, use_t=True)
-    return res
+    return mod.fit(cov_type='cluster', cov_kwds={'groups': df_ss['CodConglomeradoPrudencial']}, use_t=True)
 
 def first_stage_cf(df, spec_instruments, exogenous_controls):
     """
@@ -224,6 +254,7 @@ def first_stage_cf(df, spec_instruments, exogenous_controls):
     return df, res
 
 def main():
+    _, output_dir = _resolve_runtime_paths()
     parser = argparse.ArgumentParser(description="Estimate National Phi for NB firms")
     parser.add_argument("--option", type=int, choices=[1, 2, 3], help="1: Brute Force, 2: X_j Interactions, 3: PCA Index")
     parser.add_argument("--run-all", action="store_true", help="Run all options sequentially and print results")
@@ -250,27 +281,66 @@ def main():
     if not options_to_run:
         print("Please specify --option {1,2,3} or --run-all.")
         return
-        
-    for opt in options_to_run:
-        for b_name, s_cols in state_blocks.items():
-            print(f"\n=========================================================")
-            print(f" OPTION {opt} - Specification: Hausman x {b_name} ")
-            print(f"=========================================================")
-            
-            exog_cols_act = [c for c in s_cols if c in df.columns and df[c].notnull().sum() > 0]
-            df_target, res_fs = first_stage_cf(df.copy(), iv_cols_act, exog_cols_act)
-            
-            has_cf = res_fs is not None
-            
-            if opt == 1:
-                res_ss = run_model_option1(df_target, exog_cols_act, has_cf)
-            elif opt == 2:
-                res_ss = run_model_option2(df_target, exog_cols_act, has_cf)
-            elif opt == 3:
-                res_ss = run_model_option3(df_target, exog_cols_act, has_cf)
-                
+
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    tasks = []
+    
+    def process_task(opt, b_name, s_cols):
+        exog_cols_act = [c for c in s_cols if c in df.columns and df[c].notnull().sum() > 0]
+        df_target, res_fs = first_stage_cf(df.copy(), iv_cols_act, exog_cols_act)
+        has_cf = res_fs is not None
+
+        if opt == 1:
+            res_ss = run_model_option1(df_target, exog_cols_act, has_cf)
+        elif opt == 2:
+            res_ss = run_model_option2(df_target, exog_cols_act, has_cf)
+        elif opt == 3:
+            res_ss = run_model_option3(df_target, exog_cols_act, has_cf)
+        else:
+            res_ss = None
+
+        return opt, b_name, res_ss, res_fs
+
+    import concurrent.futures
+    results_dict = {}
+    with concurrent.futures.ThreadPoolExecutor() as executor:
+        for opt in options_to_run:
+            for b_name, s_cols in state_blocks.items():
+                tasks.append(executor.submit(process_task, opt, b_name, s_cols))
+
+        for future in concurrent.futures.as_completed(tasks):
+            opt, b_name, res_ss, res_fs = future.result()
+            print(f"Processed OPTION {opt} - Specification: Hausman x {b_name} ")
+
+            # Store result for pickle export
+            spec_name = f"Option_{opt}_{b_name}"
+            results_dict[spec_name] = {
+                'option': opt,
+                'block': b_name,
+                'second_stage': res_ss,
+                'first_stage': res_fs
+            }
+
             if res_ss is not None:
-                print(res_ss.summary().tables[1])
+                # Same logic to save tables 
+                safe_name = f"Option_{opt}_" + b_name.replace(" ", "_").replace("/", "").replace(":", "")                                            
+                tex_file = output_dir / f"{safe_name}.tex"
+                with open(tex_file, 'w') as f:
+                    f.write(res_ss.summary().as_latex())
+
+                if res_fs is not None:
+                    tex_file_fs = output_dir / f"{safe_name}_FirstStage.tex"    
+                    with open(tex_file_fs, 'w') as f:
+                        f.write(res_fs.summary().as_latex())
+    
+    # Save all results to pickle file
+    results_pickle = output_dir / "estimation_results.pkl"
+    with open(results_pickle, 'wb') as f:
+        pickle.dump(results_dict, f)
+        
+    print(f"\nEstimation outputs successfully saved in: {output_dir}")        
+    print(f" - Estimation results (pickle): {results_pickle}")
 
 if __name__ == "__main__":
     main()
