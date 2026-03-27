@@ -69,6 +69,11 @@ def build_data(panel_csv):
             df_raw[col] /= factor
             
     df_raw['constant'] = 1.0
+    if 'year' in df_raw.columns:
+        df_raw['post_2020'] = (df_raw['year'] >= 2020).astype(int)
+    else:
+        df_raw['post_2020'] = (df_raw['year_quarter'].str.extract('(\d{4})')[0].astype(float) >= 2020).astype(int)
+
     if 'lagged_deposits' in df_raw.columns:
         df_raw['market_size'] = df_raw['lagged_deposits']
     elif 'deposit_balance' in df_raw.columns:
@@ -122,8 +127,8 @@ def main():
         nat_res = pickle.load(f)
         
     yq_list = sorted(df['year_quarter'].dropna().unique())
-    
-    s_base = ['constant']
+
+    s_base = ['constant', 'post_2020']
     s_macro = s_base + ['gdp_per_capita', 'cadunico_families_per1000', 'fraction_65plus', 'fraction_young']
     s_tech = s_macro + ['pix_users_pf_per1000', 'connections_per100', 'branches_per_1000']
     s_tech = [c for c in s_tech if c in df.columns]
@@ -162,9 +167,9 @@ def main():
             
             # Models
             loc_key = f"{iv_name} x {s_name}"
-            nat_key_1 = f"Option_1_{s_name}"
-            nat_key_2 = f"Option_2_{s_name}"
-            nat_key_3 = f"Option_3_{s_name}"
+            nat_key_1 = f"Option_1_{iv_name}_{s_name}"
+            nat_key_2 = f"Option_2_{iv_name}_{s_name}"
+            nat_key_3 = f"Option_3_{iv_name}_{s_name}"
             
             model_loc = loc_res.get(loc_key, {}).get('second_stage', None)
             model_n1 = nat_res.get(nat_key_1, {}).get('second_stage', None)
@@ -222,14 +227,12 @@ def main():
             
             # --- PLOTTING ---
             fig, ax = plt.subplots(figsize=(10, 6))
-            
+
             configs = [
                 ('loc', 'Local Implied \phi_t', 'blue'),
-                ('n1', 'Direct National (Opt 1)', 'green'),
-                ('n2', 'Direct National (Opt 2)', 'red'),
                 ('n3', 'Direct National (Opt 3)', 'purple')
             ]
-            
+
             for pfx, label, color in configs:
                 est = res_df[f'{pfx}_est']
                 se = res_df[f'{pfx}_se']

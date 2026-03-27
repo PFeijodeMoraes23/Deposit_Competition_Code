@@ -111,7 +111,7 @@ def build_data():
         df['connections_per100'] = df['connections_per100'] / 100.0
         
     df['constant'] = 1.0
-        
+    df['post_2020'] = (df['year'] >= 2020).astype(int)
     return df
 
 # ==============================================================================
@@ -263,19 +263,23 @@ def main():
     df = build_data()
     print(f"Panel size for IFDATA NB banks: {len(df)} rows")
     
-    s_base = ['constant']
+    s_base = ['constant', 'post_2020']
     s_macro = s_base + ['gdp_per_capita', 'cadunico_families_per1000', 'fraction_65plus', 'fraction_young']
     s_tech = s_macro + ['pix_users_pf_per1000', 'connections_per100', 'branches_per_1000'] # Using a proxy if available
     s_tech = [c for c in s_tech if c in df.columns] # safeguard
     
     state_blocks = {
+        'Base': s_base,
         'Macro': s_macro,
         'Tech': s_tech
     }
-    
-    iv_cols = ['personnel_cost_ratio_lag', 'admin_cost_ratio_lag', 'tax_cost_ratio_lag', 'lci_lca_ratio_lag', 'wholesale_ratio_lag', 'indice_basileia_lag', 'leave_one_out_mean_spread']
-    iv_cols_act = [c for c in iv_cols if c in df.columns and df[c].notnull().sum() > 0]
-    
+
+    iv_specs = {
+        'OLS': [],
+        'IV_CostShifters': ['personnel_cost_ratio_lag', 'admin_cost_ratio_lag', 'tax_cost_ratio_lag'],
+        'IV_Wholesale': ['wholesale_ratio_lag', 'indice_basileia_lag', 'leave_one_out_mean_spread'],
+        'IV_HausmanFull': ['personnel_cost_ratio_lag', 'admin_cost_ratio_lag', 'tax_cost_ratio_lag', 'lci_lca_ratio_lag', 'wholesale_ratio_lag', 'indice_basileia_lag', 'leave_one_out_mean_spread']
+    }
     options_to_run = [args.option] if args.option else ([1, 2, 3] if args.run_all else [])
     
     if not options_to_run:
@@ -286,10 +290,17 @@ def main():
 
     tasks = []
     
-    def process_task(opt, b_name, s_cols):
+    def process_task(opt, b_name, s_cols, iv_name, iv_cols):
         exog_cols_act = [c for c in s_cols if c in df.columns and df[c].notnull().sum() > 0]
-        df_target, res_fs = first_stage_cf(df.copy(), iv_cols_act, exog_cols_act)
-        has_cf = res_fs is not None
+        iv_cols_act = [c for c in iv_cols if c in df.columns and df[c].notnull().sum() > 0]
+
+        if len(iv_cols_act) > 0:
+            df_target, res_fs = first_stage_cf(df.copy(), iv_cols_act, exog_cols_act)
+            has_cf = True
+        else:
+            df_target = df.copy()
+            res_fs = None
+            has_cf = False
 
         if opt == 1:
             res_ss = run_model_option1(df_target, exog_cols_act, has_cf)
@@ -300,21 +311,22 @@ def main():
         else:
             res_ss = None
 
-        return opt, b_name, res_ss, res_fs
+        return opt, b_name, iv_name, res_ss, res_fs
 
     import concurrent.futures
     results_dict = {}
-    with concurrent.futures.ThreadPoolExecutor() as executor:
+    with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
         for opt in options_to_run:
             for b_name, s_cols in state_blocks.items():
-                tasks.append(executor.submit(process_task, opt, b_name, s_cols))
+                for iv_name, iv_cols in iv_specs.items():
+                    tasks.append(executor.submit(process_task, opt, b_name, s_cols, iv_name, iv_cols))
 
         for future in concurrent.futures.as_completed(tasks):
-            opt, b_name, res_ss, res_fs = future.result()
-            print(f"Processed OPTION {opt} - Specification: Hausman x {b_name} ")
+            opt, b_name, iv_name, res_ss, res_fs = future.result()
+            print(f"Processed OPTION {opt} - Specification: {iv_name} x {b_name} ")
 
             # Store result for pickle export
-            spec_name = f"Option_{opt}_{b_name}"
+            spec_name = f"Option_{opt}_{iv_name}_{b_name}"
             results_dict[spec_name] = {
                 'option': opt,
                 'block': b_name,
@@ -323,8 +335,8 @@ def main():
             }
 
             if res_ss is not None:
-                # Same logic to save tables 
-                safe_name = f"Option_{opt}_" + b_name.replace(" ", "_").replace("/", "").replace(":", "")                                            
+                # Same logic to save tables
+                safe_name = f"Option_{opt}_{iv_name}_" + b_name.replace(" ", "_").replace("/", "").replace(":", "")
                 tex_file = output_dir / f"{safe_name}.tex"
                 with open(tex_file, 'w') as f:
                     f.write(res_ss.summary().as_latex())
