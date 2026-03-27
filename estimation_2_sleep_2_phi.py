@@ -7,6 +7,15 @@ For each specification, plots the aggregated national \phi_t derived from:
 - Estimation 2, Option 1 (Direct Macro Time-Series Baseline)
 - Estimation 2, Option 2 (Firm-Targeting State Interactions)
 - Estimation 2, Option 3 (PCA Indexing)
+
+Usage Instructions:
+-------------------
+To run both plot alternatives (generating all 24 plots):
+  python estimation_2_sleep_2_phi.py
+  (or use `python estimation_2_sleep_2_phi.py --all-options`)
+
+To only generate the 12 default baseline plots:
+  python estimation_2_sleep_2_phi.py --default-only
 """
 import argparse
 from pathlib import Path
