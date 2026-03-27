@@ -8,8 +8,8 @@ For each specification, plots the aggregated national \phi_t derived from:
 - Estimation 2, Option 2 (Firm-Targeting State Interactions)
 - Estimation 2, Option 3 (PCA Indexing)
 """
+import argparse
 from pathlib import Path
-import sys
 from contextlib import suppress
 
 try:
@@ -22,7 +22,6 @@ if ensure_project_venv is not None:
 
 import pandas as pd
 import numpy as np
-import statsmodels.api as sm
 import pickle
 import matplotlib.pyplot as plt
 from sklearn.decomposition import PCA
@@ -129,13 +128,23 @@ def get_base_vector(s_cols, s_vals):
         vec[nm] = s_vals[sv]
     return vec
 
-def generate_phi_plot(res_df, iv_name, s_name, spec_number, out_dir):
+def generate_phi_plot(res_df, iv_name, s_name, spec_number, out_dir, all_options=False):
     fig, ax = plt.subplots(figsize=(10, 6))
 
-    configs = [
-        ('loc', 'Local Implied \phi_t', 'blue'),
-        ('n3', 'Direct National (Opt 3)', 'purple')
-    ]
+    if all_options:
+        configs = [
+            ('loc', r'Local Implied $\phi_t$ (Est 1)', 'blue'),
+            ('n1', 'Direct National (Opt 1)', 'green'),
+            ('n2', 'Direct National (Opt 2)', 'orange'),
+            ('n3', 'Direct National (Opt 3 - PCA)', 'purple')
+        ]
+        suffix = "_All"
+    else:
+        configs = [
+            ('loc', r'Local Implied $\phi_t$ (Est 1)', 'blue'),
+            ('n3', 'Direct National (Opt 3 - PCA)', 'purple')
+        ]
+        suffix = ""
 
     for pfx, label, color in configs:
         est = res_df[f'{pfx}_est']
@@ -145,13 +154,13 @@ def generate_phi_plot(res_df, iv_name, s_name, spec_number, out_dir):
             ax.fill_between(res_df['date'], est - 1.96*se, est + 1.96*se, color=color, alpha=0.15)
 
     ax.set_title(f"Specification {spec_number:02d}: {iv_name} x {s_name}", fontsize=14)
-    ax.set_ylabel("National \phi_t")
+    ax.set_ylabel(r"National $\phi_t$")
     ax.set_xlabel("Year-Quarter")
     ax.legend(loc='best')
     ax.grid(True, linestyle='--', alpha=0.6)
 
     fig.tight_layout()
-    safe_name = f"Spec{spec_number:02d}_{iv_name}_{s_name}".replace(" ", "_").replace("/", "")
+    safe_name = f"Spec{spec_number:02d}_{iv_name}_{s_name}{suffix}".replace(" ", "_").replace("/", "")
     plt.savefig(out_dir / f"{safe_name}.png", dpi=300)
     plt.close(fig)
 
@@ -200,61 +209,75 @@ def process_specification_phi(
     res_df['date'] = pd.PeriodIndex(res_df['year_quarter'].str.replace('_', 'Q'), freq='Q').to_timestamp()
     res_df = res_df.sort_values('date')
 
-    generate_phi_plot(res_df, iv_name, s_name, spec_number, out_dir)
+    return res_df
 
-def main():
-    panel_csv, local_pkl, nat_pkl, out_dir = resolve_paths()
-    
-    df = build_data(panel_csv)
-    
-    with open(local_pkl, 'rb') as f:
-        loc_res = pickle.load(f)
-        
-    with open(nat_pkl, 'rb') as f:
-        nat_res = pickle.load(f)
-        
-    yq_list = sorted(df['year_quarter'].dropna().unique())
+def parse_arguments():
+    parser = argparse.ArgumentParser(description="Generate sleepiness plots for National Phi.")
+    parser.add_argument("--all-options", action="store_true", help="Generate single plot with all 4 model variants superimposed.")
+    parser.add_argument("--default-only", action="store_true", help="Generate single plot with Local + Opt 3 PCA.")
+    args = parser.parse_args()
+    return args.all_options or not args.default_only, args.default_only or not args.all_options
 
-    s_base = ['constant', 'post_2020']
-    s_macro = s_base + ['gdp_per_capita', 'cadunico_families_per1000', 'fraction_65plus', 'fraction_young']
-    s_tech = s_macro + ['pix_users_pf_per1000', 'branches_per_1000']
-    s_tech = [c for c in s_tech if c in df.columns]
-
-    # Pre-calculate assets averages for Option 2 per quarter
-    # We need sum(M_jt * Assets) / sum(M_jt)
+def calculate_assets_agg(df, yq_list):
     assets_agg = {}
     for yq in yq_list:
         sub = df[df['year_quarter'] == yq]
         m_tot = sub['market_size'].sum()
         if m_tot > 0:
-            avg_a = (sub['log_total_assets_lag'] * sub['market_size']).sum() / m_tot
+            assets_agg[yq] = (sub['log_total_assets_lag'] * sub['market_size']).sum() / m_tot
         else:
-            avg_a = 0
-        assets_agg[yq] = avg_a
+            assets_agg[yq] = 0
+    return assets_agg
 
-    pca_base = get_pca_index(df, s_base)
-    pca_macro = get_pca_index(df, s_macro)
-    pca_tech = get_pca_index(df, s_tech)
+def load_models(local_pkl, nat_pkl):
+    with open(local_pkl, 'rb') as f:
+        loc_res = pickle.load(f)
+    with open(nat_pkl, 'rb') as f:
+        nat_res = pickle.load(f)
+    return loc_res, nat_res
+
+def define_state_blocks(df):
+    s_base = ['constant', 'post_2020']
+    s_macro = s_base + ['gdp_per_capita', 'cadunico_families_per1000', 'fraction_65plus', 'fraction_young']
+    s_tech = s_macro + ['pix_users_pf_per1000', 'branches_per_1000']
+    s_tech = [c for c in s_tech if c in df.columns]
+    return {'Base': s_base, 'Macro': s_macro, 'Tech': s_tech}
+
+def main():
+    gen_all, gen_default = parse_arguments()
+    panel_csv, local_pkl, nat_pkl, out_dir = resolve_paths()
+    df = build_data(panel_csv)
+    loc_res, nat_res = load_models(local_pkl, nat_pkl)
+    
+    yq_list = sorted(df['year_quarter'].dropna().unique())
+    state_blocks = define_state_blocks(df)
+    assets_agg = calculate_assets_agg(df, yq_list)
+
+    pca_dict_map = {
+        'Base': get_pca_index(df, state_blocks['Base']),
+        'Macro': get_pca_index(df, state_blocks['Macro']),
+        'Tech': get_pca_index(df, state_blocks['Tech'])
+    }
 
     iv_order = ['OLS', 'IV_CostShifters', 'IV_Wholesale', 'IV_HausmanFull']
     state_order = ['Base', 'Macro', 'Tech']
     
-    state_blocks = {
-        'Base': s_base,
-        'Macro': s_macro,
-        'Tech': s_tech
-    }
-    
     spec_number = 1
     for s_name in state_order:
         s_cols = state_blocks[s_name]
-        pca_dict = pca_tech if s_name == 'Tech' else (pca_macro if s_name == 'Macro' else None)
+        pca_dict = pca_dict_map[s_name] if s_name in ['Macro', 'Tech'] else None
         
         for iv_name in iv_order:
-            process_specification_phi(
+            res_df = process_specification_phi(
                 df, yq_list, s_cols, pca_dict, assets_agg, iv_name, s_name, 
                 spec_number, loc_res, nat_res, out_dir
             )
+            
+            if gen_default:
+                generate_phi_plot(res_df, iv_name, s_name, spec_number, out_dir, all_options=False)
+            if gen_all:
+                generate_phi_plot(res_df, iv_name, s_name, spec_number, out_dir, all_options=True)
+            
             spec_number += 1
 
 if __name__ == '__main__':

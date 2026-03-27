@@ -129,6 +129,10 @@ def build_data():
         df['pix_users_pf_per1000'] = df['pix_users_pf_per1000'] / 100.0
     if 'connections_per100' in df.columns:
         df['connections_per100'] = df['connections_per100'] / 100.0
+    if 'deposit_balance' in df.columns:
+        df['deposit_balance'] = df['deposit_balance'] / 1e9
+        df['nr_lagged_dep'] = df['nr_lagged_dep'] / 1e9
+        df['lagged_deposits'] = df['lagged_deposits'] / 1e9
         
     df['constant'] = 1.0
     df['post_2020'] = (df['year'] >= 2020).astype(int)
@@ -271,7 +275,6 @@ def first_stage_cf(df, spec_instruments, exogenous_controls):
     mod = sm.OLS(y, X)
     cluster_series = df_fs['CodConglomeradoPrudencial']
     res = mod.fit(cov_type='cluster', cov_kwds={'groups': cluster_series}, use_t=True)
-    res = apply_imbalanced_cluster_correction(res, cluster_series)
     res = apply_imbalanced_cluster_correction(res, cluster_series)
 
     df['v_hat'] = 0.0

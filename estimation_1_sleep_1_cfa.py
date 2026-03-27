@@ -235,7 +235,6 @@ def run_first_stage(df, spec_instruments, exogenous_controls):
     cluster_series = df_fs['CodConglomeradoPrudencial']
     res = mod.fit(cov_type='cluster', cov_kwds={'groups': cluster_series}, use_t=True)
     res = apply_imbalanced_cluster_correction(res, cluster_series)
-    res = apply_imbalanced_cluster_correction(res, cluster_series)
 
     # Deposit buckets 1-3 receive zero latency
     df['v_hat'] = 0.0
@@ -397,7 +396,10 @@ def scale_magnitudes(df):
         'gdp_per_capita': 10000.0,
         'cadunico_families_per1000': 100.0,
         'pix_users_pf_per1000': 100.0,
-        'connections_per100': 100.0
+        'connections_per100': 100.0,
+        'deposit_balance': 1000000000.0,
+        'nr_lagged_dep': 1000000000.0,
+        'lagged_deposits': 1000000000.0
     }
     for col, factor in scale_cols.items():
         if col in df.columns:
