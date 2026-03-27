@@ -111,7 +111,15 @@ def main():
     args = parser.parse_args()
 
     if args.spec.lower() == 'all':
-        spec_ids = list(range(1, 13))
+        import re
+        spec_ids = []
+        if DEMAND_PREP_DIR.exists():
+            for f in DEMAND_PREP_DIR.glob("demand_prep_spec_*.csv"):
+                if m := re.search(r'demand_prep_spec_(\d+)\.csv', f.name):
+                    spec_ids.append(int(m.group(1)))
+        spec_ids.sort()
+        if not spec_ids:
+            spec_ids = list(range(1, 13))
     elif '-' in args.spec:
         start, end = map(int, args.spec.split('-'))
         spec_ids = list(range(start, end + 1))

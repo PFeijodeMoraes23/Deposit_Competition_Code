@@ -159,6 +159,8 @@ def build_base_panel(panel_csv: Path) -> pd.DataFrame:
     
     # Scale State Variables (Matching exactly estimation_1_sleep)
     df['constant'] = 1.0
+    if 'year' in df.columns:
+        df['post_2020'] = (df['year'] >= 2020).astype(int)
     if 'gdp_per_capita' in df.columns:
         df['gdp_per_capita'] = df['gdp_per_capita'] / 10000.0
     if 'cadunico_families_per1000' in df.columns:
