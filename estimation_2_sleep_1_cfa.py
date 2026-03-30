@@ -1,10 +1,10 @@
 """
 estimation_2_sleep_1_cfa.py
 ==============================
-Direct time-series estimation of the sleepiness parameter phi_t for National (NB) digital/wholesale banks
+Direct time-series estimation of the sleepiness parameter phi_t for National (D) digital/wholesale banks
 (Appendix/V_Main.tex section on extending local estimates to national aggregates).
 
-Takes the main processed market panel, filters for 'IFDATA' (NB-type firms), and provides 
+Takes the main processed market panel, filters for 'IFDATA' (D-type firms), and provides 
 three econometric strategies to avoid rank-deficiency caused by purely deterministic time-series trends:
   1. Option 1: Direct Macro Time-Series Estimation (Baseline)
   2. Option 2: Interactions with Firm Heterogeneity (lagged Total Assets)
@@ -82,10 +82,10 @@ def build_data():
     panel_csv, _ = _resolve_runtime_paths()
     df_raw = pd.read_csv(panel_csv, dtype={'year_quarter': str, 'CodIbge': str})
     
-    # We only want NB firms (IFDATA source)
+    # We only want D firms (IFDATA source)
     df = df_raw[df_raw['Source'] == 'IFDATA'].copy()
     
-    # NB-type firms do not vary by region, so safely drop duplicates
+    # D-type firms do not vary by region, so safely drop duplicates
     df = df.drop_duplicates(subset=['CodConglomeradoPrudencial', 'year', 'quarter'])
 
     if 'deposit_balance' not in df.columns:
@@ -287,13 +287,13 @@ def first_stage_cf(df, spec_instruments, exogenous_controls):
 
 def main():
     _, output_dir = _resolve_runtime_paths()
-    parser = argparse.ArgumentParser(description="Estimate National Phi for NB firms")
+    parser = argparse.ArgumentParser(description="Estimate National Phi for D firms")
     parser.add_argument("--option", type=int, choices=[1, 2, 3], help="1: Brute Force, 2: X_j Interactions, 3: PCA Index")
     parser.add_argument("--run-all", action="store_true", help="Run all options sequentially and print results")
     args = parser.parse_args()
     
     df = build_data()
-    print(f"Panel size for IFDATA NB banks: {len(df)} rows")
+    print(f"Panel size for IFDATA D banks: {len(df)} rows")
     
     s_base = ['constant', 'post_2020']
     s_macro = s_base + ['gdp_per_capita', 'cadunico_families_per1000', 'fraction_65plus', 'fraction_young']

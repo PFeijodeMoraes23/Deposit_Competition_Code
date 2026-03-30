@@ -63,7 +63,7 @@ def compute_loo_instruments(df: pd.DataFrame) -> pd.DataFrame:
 
     logging.info("Computing BLP LOO instruments for each mca_code-quarter...")
 
-    # We only compute LOO for B-type (local) markets. National (NB) is a single market
+    # We only compute LOO for B-type (local) markets. National (D) is a single market
     # per quarter. We'll compute it universally grouping by (mca_code, year, quarter).
     
     # We only want to count active rivals in the market. Since an institution's presence 

@@ -7,7 +7,7 @@ This script reads the output of `estimation_1_sleep.py` (which contains 12 speci
 for the depositor sleepiness function phi_mt) and the raw market panel. For each 
 specification, it computes the implied phi_mt, aggregates it to the national level phi_t,
 computes "Active Deposits" (Dep^Act) deducting the slept-on balances, and finally 
-computes the data-implied conditional market shares for B-type and NB-type institutions.
+computes the data-implied conditional market shares for B-type and D-type institutions.
 
 Outputs a consolidated long panel to be ingested by the BLP fixed-point contraction.
 """
@@ -244,14 +244,14 @@ def process_specification(args):
     val_B = df_spec['deposit_balance'] - df_spec['phi_mt'] * df_spec['gross_return_lag'] * df_spec['lagged_deposits']
     df_spec.loc[df_spec['is_B'], 'Dep_Act'] = np.maximum(0.0, val_B[df_spec['is_B']])
     
-    # NB-type
-    val_NB = df_spec['deposit_balance'] - df_spec['phi_t'] * df_spec['gross_return_lag'] * df_spec['lagged_deposits']
-    df_spec.loc[~df_spec['is_B'], 'Dep_Act'] = np.maximum(0.0, val_NB[~df_spec['is_B']])
+    # D-type
+    val_D = df_spec['deposit_balance'] - df_spec['phi_t'] * df_spec['gross_return_lag'] * df_spec['lagged_deposits']
+    df_spec.loc[~df_spec['is_B'], 'Dep_Act'] = np.maximum(0.0, val_D[~df_spec['is_B']])
     
     # 5. Compute Data-Implied Shares
     nat_active = df_spec.groupby(['time_id', 'deposit_type'])['Dep_Act'].transform('sum')
     df_spec['nat_active'] = nat_active
-    df_spec['share_NB'] = np.where(~df_spec['is_B'], df_spec['Dep_Act'] / nat_active, np.nan)
+    df_spec['share_D'] = np.where(~df_spec['is_B'], df_spec['Dep_Act'] / nat_active, np.nan)
     
     local_B_active = df_spec[df_spec['is_B']].groupby(['mca_code', 'time_id', 'deposit_type'])['Dep_Act'].transform('sum')
     
@@ -283,17 +283,17 @@ def process_specification(args):
     df_spec['Spec_ID'] = spec_id
     
     b_count = df_spec['is_B'].sum()
-    nb_count = (~df_spec['is_B']).sum()
+    d_count = (~df_spec['is_B']).sum()
     summary = {
         "Name": spec_name,
         "Spec_ID": spec_id,
         "Rows": len(df_spec),
         "B_firms": int(b_count),
-        "NB_firms": int(nb_count),
+        "D_firms": int(d_count),
         "Mean_phi_mt": float(df_spec['phi_mt'].mean()),
         "Mean_phi_t": float(df_spec['phi_t'].mean()),
         "B_Cond_Share_NaNs": int(df_spec[df_spec['is_B']]['share_B_cond'].isna().sum()),
-        "NB_Share_NaNs": int(df_spec[~df_spec['is_B']]['share_NB'].isna().sum())
+        "D_Share_NaNs": int(df_spec[~df_spec['is_B']]['share_D'].isna().sum())
     }
     
     return df_spec, summary, spec_id

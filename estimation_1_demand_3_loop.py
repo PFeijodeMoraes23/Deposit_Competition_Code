@@ -249,20 +249,20 @@ def _compute_omega(s_model: np.ndarray, is_B: np.ndarray, time_ids: np.ndarray, 
     if not is_B.any():
         return omega_mt
 
-    nb_mask = ~is_B
+    d_mask = ~is_B
     unique_times, t_enc = np.unique(time_ids, return_inverse=True)
     unique_dtypes, k_enc = np.unique(deposit_types, return_inverse=True)
     n_t = len(unique_times)
     group_idx = t_enc * len(unique_dtypes) + k_enc  # (N,)
     n_groups = n_t * len(unique_dtypes)
 
-    nb_shares_in_group = np.bincount(group_idx, weights=s_model * nb_mask, minlength=n_groups)
+    nb_shares_in_group = np.bincount(group_idx, weights=s_model * d_mask, minlength=n_groups)
     omega_mt_per_group = np.maximum(1e-10, 1.0 - nb_shares_in_group)
     return omega_mt_per_group[group_idx]
 
 def compute_model_shares(delta: np.ndarray, mu: np.ndarray,
                          df: pd.DataFrame, R: int) -> tuple:
-    """Compute model-implied shares s^B and s^NB from (delta, mu).
+    """Compute model-implied shares s^B and s^D from (delta, mu).
 
     Returns (s_model, omega_mt).
     - s_model: (N,) array of model-implied shares for each obs.
@@ -283,7 +283,7 @@ def compute_model_shares(delta: np.ndarray, mu: np.ndarray,
     else:
         b_market_key = np.array([''] * N)
 
-    # NB-type: market = time_id only
+    # D-type: market = time_id only
     nb_market_key = time_ids.copy()
 
     # Combined market key for softmax computation
@@ -317,7 +317,7 @@ def compute_model_shares(delta: np.ndarray, mu: np.ndarray,
 
 def blp_contraction(df: pd.DataFrame, mu: np.ndarray, R: int,
                     tol: float = 1e-14, max_iter: int = 2000) -> tuple:
-    """BLP inner fixed-point contraction (Eq-A4-B and Eq-A4-NB).
+    """BLP inner fixed-point contraction (Eq-A4-B and Eq-A4-D).
 
     Returns (delta, converged, n_iter, norm_history).
     """
@@ -325,18 +325,18 @@ def blp_contraction(df: pd.DataFrame, mu: np.ndarray, R: int,
     is_B = df['is_B'].values
 
     # Data-implied shares (precomputed in demand prep)
-    s_data_NB = df['share_NB'].values.copy()
+    s_data_D = df['share_D'].values.copy()
     s_data_B_cond = df['share_B_cond'].values.copy()
 
     # Clamp to avoid log(0)
-    s_data_NB = np.clip(s_data_NB, 1e-15, None)
+    s_data_D = np.clip(s_data_D, 1e-15, None)
     s_data_B_cond = np.clip(s_data_B_cond, 1e-15, None)
-    ln_s_data_NB = np.log(s_data_NB)
+    ln_s_data_D = np.log(s_data_D)
     ln_s_data_B_cond = np.log(s_data_B_cond)
 
     # Initialize delta
     delta = np.zeros(N)
-    delta[~is_B] = ln_s_data_NB[~is_B]
+    delta[~is_B] = ln_s_data_D[~is_B]
     delta[is_B] = ln_s_data_B_cond[is_B]
 
     norm_history = []
@@ -347,11 +347,11 @@ def blp_contraction(df: pd.DataFrame, mu: np.ndarray, R: int,
         ln_omega = np.log(np.clip(omega_mt, 1e-15, None))
 
         delta_new = delta.copy()
-        # NB update (Eq-A4-B label in tex, but conceptually NB)
-        nb_mask = ~is_B
-        delta_new[nb_mask] = delta[nb_mask] + ln_s_data_NB[nb_mask] - ln_s_model[nb_mask]
+        # D update (Eq-A4-B label in tex, but conceptually D)
+        d_mask = ~is_B
+        delta_new[d_mask] = delta[d_mask] + ln_s_data_D[d_mask] - ln_s_model[d_mask]
 
-        # B update (Eq-A4-NB label in tex, but conceptually B)
+        # B update (Eq-A4-D label in tex, but conceptually B)
         b_mask = is_B
         delta_new[b_mask] = (delta[b_mask]
                              + ln_s_data_B_cond[b_mask]
@@ -536,9 +536,9 @@ def run_blp_for_spec(spec_id: int, args) -> dict:
         # delta = ln(s_data) directly
         is_B = df['is_B'].values
         delta = np.zeros(len(df))
-        s_NB = np.clip(df['share_NB'].values, 1e-15, None)
+        s_D = np.clip(df['share_D'].values, 1e-15, None)
         s_B = np.clip(df['share_B_cond'].values, 1e-15, None)
-        delta[~is_B] = np.log(s_NB[~is_B])
+        delta[~is_B] = np.log(s_D[~is_B])
         delta[is_B] = np.log(s_B[is_B])
 
         theta1, xi, theta1_se = estimate_theta1(df, delta)

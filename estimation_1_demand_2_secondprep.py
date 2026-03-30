@@ -86,7 +86,7 @@ def load_demand_prep(spec_id: int) -> pd.DataFrame:
     return pd.read_csv(csv_path, dtype={'mca_code': str})
 
 def merge_panel_with_prep(df_panel: pd.DataFrame, df_prep: pd.DataFrame) -> pd.DataFrame:
-    prep_cols = ['entity_id', 'time_id', 'Dep_Act', 'share_NB', 'share_B_cond',
+    prep_cols = ['entity_id', 'time_id', 'Dep_Act', 'share_D', 'share_B_cond',
                  'phi_mt', 'phi_t', 'is_B', 'local_B_active', 'nat_active']
     df_prep_slim = df_prep[prep_cols].copy()
 

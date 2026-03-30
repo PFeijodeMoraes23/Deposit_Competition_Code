@@ -125,6 +125,8 @@ STEPS = [
      "Compute and append deposit rates/spreads (COSIF + SGS) to deposit panel"),
     (3, "3c", "bank_chars_panel_build.py",
      "IF Data -> conglomerate x quarter bank size and solvency characteristics panel"),
+    (3, "3d", "flag_digital_banks.py",
+     "Analyze raw ESTBAN to identify purely digital banks -> PANEL_INTERMED"),
 
     # Stage 4 -- master analysis panel
     (4, "4a", "build_market_panel.py",
@@ -238,7 +240,7 @@ def run_step(step_id: str, script: str, description: str) -> float:
 WAVES: list[list[str]] = [
     ["0a"],                                     # Wave 1: ESTBAN + IF Data raw download
     ["1a", "2a", "2b", "2d", "2e", "2f", "3a"], # Wave 2: all characteristic panels + deposits
-    ["3b", "3c"],                               # Wave 3: deposit rates/spreads + bank chars (parallel)
+    ["3b", "3c", "3d"],                         # Wave 3: deposit rates/spreads + bank chars + digital flags (parallel)
     ["4a"],                                     # Wave 4: master merge
 ]
 

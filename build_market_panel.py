@@ -217,6 +217,15 @@ def attach_mca_code(dep: pd.DataFrame) -> pd.DataFrame:
     # Tier-2 sentinel
     dep["mca_code"] = "NATIONAL"
 
+    digital_flags = os.path.join(PANEL_DIR, "PANEL_INTERMED", "digital_banks_diagnostic.csv")
+    if os.path.exists(digital_flags):
+        df_flags = pd.read_csv(digital_flags)
+        dig_cands = set(df_flags[df_flags["is_digital_candidate"] == True]["CNPJ_root"].astype(str).str.zfill(8))
+        dep_cnpj8 = dep["CNPJ_Lider"].astype(str).str[:8].str.zfill(8)
+        mask_dig = dep_cnpj8.isin(dig_cands)
+        dep.loc[mask_dig, "CODMUN_IBGE"] = 0
+        logging.info(f"Overwrote CODMUN_IBGE=0 for {mask_dig.sum()} rows of ESTBAN retail digital candidates.")
+
     # Merge mca_code for Tier-1 rows (CODMUN_IBGE is a real 7-digit code)
     tier1_mask = dep["CODMUN_IBGE"].notna() & (dep["CODMUN_IBGE"] != 0)
 

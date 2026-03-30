@@ -11,9 +11,9 @@ Parallelize and optimize for performance and to reduce memory usage. Clear memor
 		2.3.2) for each rjkmt, get \mu_{rjkmt}(\theta_2) (see Appendix-BLP in V_Main.tex for details)
 		2.3.3) Initiate contraction routine for \delta (BLP inner fixed-point, contraction) - for each candidate delta:
 			2.3.3.1) Construct q_{rjkmt}(\delta,\theta_2)
-			2.3.3.2) Construct model-implied shares Eq-A3-B and Eq-A3-NB and model-implied omega Eq-14
-			2.3.3.3) Run joint fixed point contractions for \delta, to obtain \delta(\theta_2), as in Eq-A4-B and Eq-A4-NB
-		2.3.4) Regress Eq-A-5-B and Eq-A-5-NB to recover \theta_1(\theta_2) and unobserved product characteristics \xi(\theta_2), as in Eq-A5-B and Eq-A5-NB
+			2.3.3.2) Construct model-implied shares Eq-A3-B and Eq-A3-D and model-implied omega Eq-14
+			2.3.3.3) Run joint fixed point contractions for \delta, to obtain \delta(\theta_2), as in Eq-A4-B and Eq-A4-D
+		2.3.4) Regress Eq-A-5-B and Eq-A-5-D to recover \theta_1(\theta_2) and unobserved product characteristics \xi(\theta_2), as in Eq-A5-B and Eq-A5-D
 		2.3.5) Construct G(\theta_2) using the residuals and BLP instruments (provide me also ideas for using other instruments, like cost shifters, with pros and cons - do that in the implementation plan)
 		2.3.6) Solve the minimization GMM problem in Eq-A1.
 	2.4) save output for \theta_2^* and \theta_1^* = \theta_1(\theta_2^*) (Can we also save standard errors of the estimates here? I don't recall what is done in the BLP or the subsequent papers. In particular standard errors of the \theta_1 results would be ideal, with standard errors of the \theta_2 results good as well)
