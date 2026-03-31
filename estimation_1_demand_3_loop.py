@@ -37,15 +37,6 @@ import json
 import pickle
 import argparse
 from pathlib import Path
-
-try:
-    from utils.venv_guard import ensure_project_venv
-except Exception:
-    ensure_project_venv = None
-
-if ensure_project_venv is not None:
-    ensure_project_venv(__file__)
-
 import numpy as np
 import pandas as pd
 from scipy import stats
@@ -56,11 +47,18 @@ import statsmodels.api as sm
 # ==============================================================================
 # 0. Paths & Constants
 # ==============================================================================
-_ROOT = Path(__file__).resolve().parents[2]
-DATA_DIR = _ROOT / "BCB" / "Egan_et_al_2025_Rep" / "processed"
-PANEL_CSV = DATA_DIR / "market_panel.csv"
-DEMAND_PREP_DIR = DATA_DIR / "ESTIMATION_OUTPUT" / "DEMAND_PREP"
-BLP_OUTPUT_DIR = DATA_DIR / "ESTIMATION_OUTPUT" / "BLP_RESULTS"
+
+def get_paths(is_hpc: bool) -> tuple:
+    """Return (input_dir, output_dir) based on environment."""
+    if is_hpc:
+        input_dir = Path("/home/pf382/dep_comp/data/input")
+        output_dir = Path("/home/pf382/dep_comp/data/output")
+    else:
+        _ROOT = Path(__file__).resolve().parents[2]
+        DATA_DIR = _ROOT / "BCB" / "Egan_et_al_2025_Rep" / "processed"
+        input_dir = DATA_DIR / "ESTIMATION_OUTPUT" / "DEMAND_PREP"
+        output_dir = DATA_DIR / "ESTIMATION_OUTPUT" / "BLP_RESULTS"
+    return input_dir, output_dir
 
 # Product characteristics (non-price) entering the utility function
 X_COLS = ['fgc_covered', 'has_ip', 'seg_S2', 'seg_S3', 'seg_S4', 'seg_S5',
@@ -104,9 +102,10 @@ MP_KEEP_COLS = (
 # ==============================================================================
 # 1. Data Loading
 # ==============================================================================
-def load_merged_spec_data(spec_id: int) -> pd.DataFrame:
+def load_merged_spec_data(spec_id: int, is_hpc: bool = False) -> pd.DataFrame:
     '''Load the per-spec pre-merged dataframe created by estimation_1_demand_2_secondprep.py'''
-    pkl_path = DEMAND_PREP_DIR / f"demand_final_spec_{spec_id}.pkl"
+    input_dir, _ = get_paths(is_hpc)
+    pkl_path = input_dir / f"demand_final_spec_{spec_id}.pkl"
     if not pkl_path.exists():
         raise FileNotFoundError(f"Missing {pkl_path}")
     return pd.read_pickle(pkl_path)
@@ -215,9 +214,10 @@ def unpack_theta2(theta2_vec: np.ndarray, sigma_indices: list,
 # 4. Compute mu_rjkmt (Eq-A2)
 # ==============================================================================
 def compute_mu(prod_vec: np.ndarray, nu_draws: np.ndarray,
-               aligned_demo_draws: np.ndarray, sigma_vals: np.ndarray,
-               sigma_indices: list, pi_vals: np.ndarray,
-               pi_interactions: list, R: int, coef_dim: int) -> np.ndarray:
+               stacked_draws: np.ndarray, obs_key_idx: np.ndarray,
+               sigma_vals: np.ndarray, sigma_indices: list,
+               pi_vals: np.ndarray, pi_interactions: list,
+               R: int, coef_dim: int) -> np.ndarray:
     """Compute mu_rjkmt efficiently using vectorized array ops."""
     
     # 1. Sigma term:
@@ -231,11 +231,11 @@ def compute_mu(prod_vec: np.ndarray, nu_draws: np.ndarray,
     
     # 2. Pi term:
     if pi_interactions:
-        D = aligned_demo_draws.shape[2]
+        D = stacked_draws.shape[2]
         for pi_idx, (coef_idx, demo_idx) in enumerate(pi_interactions):
             if coef_idx < coef_dim and demo_idx < D:
                 p_v = prod_vec[:, coef_idx]  # (N,)
-                d_v = aligned_demo_draws[:, :, demo_idx]  # (N, R)
+                d_v = stacked_draws[obs_key_idx, :, demo_idx]  # (N, R)
                 mu += pi_vals[pi_idx] * p_v[:, np.newaxis] * d_v
                 
     return mu
@@ -472,7 +472,8 @@ def compute_gmm_moments(xi: np.ndarray, df: pd.DataFrame) -> np.ndarray:
 
 def gmm_objective(theta2_vec: np.ndarray, df: pd.DataFrame,
                    prod_vec: np.ndarray, nu_draws: np.ndarray,
-                   aligned_demo_draws: np.ndarray, sigma_indices: list,
+                   stacked_draws: np.ndarray, obs_key_idx: np.ndarray,
+                   sigma_indices: list,
                    pi_interactions: list, R: int, coef_dim: int,
                    W: np.ndarray, tol_inner: float,
                    max_inner: int) -> float:
@@ -481,7 +482,7 @@ def gmm_objective(theta2_vec: np.ndarray, df: pd.DataFrame,
                                          pi_interactions)
 
     # Compute mu
-    mu = compute_mu(prod_vec, nu_draws, aligned_demo_draws, sigma_vals,
+    mu = compute_mu(prod_vec, nu_draws, stacked_draws, obs_key_idx, sigma_vals,
                     sigma_indices, pi_vals, pi_interactions, R, coef_dim)
 
     # Inner loop: contraction
@@ -512,7 +513,7 @@ def run_blp_for_spec(spec_id: int, args) -> dict:
 
     # Load pre-merged spec dataframe
     try:
-        df = load_merged_spec_data(spec_id)
+        df = load_merged_spec_data(spec_id, getattr(args, 'hpc', False))
         print(f"  Merged panel loaded: {len(df)} observations")
     except FileNotFoundError:
         print(f"  [!] No merged data for spec {spec_id}. Skipping.")
@@ -578,13 +579,14 @@ def run_blp_for_spec(spec_id: int, args) -> dict:
         key_to_idx = {k: i for i, k in enumerate(unique_keys)}
         # Stack all demo draw matrices -> (n_unique, R, D)
         stacked_draws = np.stack([demo_draws[k] for k in unique_keys], axis=0)
-        # Map each observation to its key index
-        obs_key_idx = np.array([key_to_idx.get((mca_codes[i], time_ids[i]), -1)
+        # Map each observation to its key index, tracking missing inputs to a null zero lookup index
+        zero_draws = np.zeros((args.R, D_dim))
+        stacked_draws_padded = np.concatenate([stacked_draws, zero_draws[np.newaxis, :, :]], axis=0)
+        padding_idx = stacked_draws.shape[0]
+        
+        obs_key_idx = np.array([key_to_idx.get((mca_codes[i], time_ids[i]), padding_idx)
                                  for i in range(N_obs)])
-        # Observations with no key get zero draws
-        valid = obs_key_idx >= 0
-        aligned_demo_draws = np.zeros((N_obs, args.R, D_dim))
-        aligned_demo_draws[valid] = stacked_draws[obs_key_idx[valid]]
+        # Eliminated `aligned_demo_draws` allocation: Memory-efficient broadcasts will utilize stacked_draws_padded.
                 
         # Build prod_vec
         coef_dim = K_TYPES + L_PROD
@@ -616,10 +618,14 @@ def run_blp_for_spec(spec_id: int, args) -> dict:
         print(f"  Inner tolerance: {args.tol_inner}")
 
         # Minimise
-        obj_fn = lambda t2: gmm_objective(
-            t2, df, prod_vec, nu_draws, aligned_demo_draws,
-            sigma_indices, pi_interactions, args.R, coef_dim,
-            W, args.tol_inner, args.max_inner)
+        import gc
+        def obj_fn(t2):
+            val = gmm_objective(
+                t2, df, prod_vec, nu_draws, stacked_draws_padded, obs_key_idx,
+                sigma_indices, pi_interactions, args.R, coef_dim,
+                W, args.tol_inner, args.max_inner)
+            gc.collect()
+            return val
 
         if args.method == 'l-bfgs-b':
             result = minimize(obj_fn, theta2_0, method='L-BFGS-B',
@@ -638,7 +644,7 @@ def run_blp_for_spec(spec_id: int, args) -> dict:
         # Recover theta1 at theta2*
         sigma_vals, pi_vals = unpack_theta2(theta2_star, sigma_indices,
                                              pi_interactions)
-        mu_star = compute_mu(prod_vec, nu_draws, aligned_demo_draws, sigma_vals,
+        mu_star = compute_mu(prod_vec, nu_draws, stacked_draws_padded, obs_key_idx, sigma_vals,
                              sigma_indices, pi_vals, pi_interactions, args.R, coef_dim)
         delta_star, conv, n_it, _ = blp_contraction(df, mu_star, args.R,
                                                      tol=args.tol_inner,
@@ -648,7 +654,7 @@ def run_blp_for_spec(spec_id: int, args) -> dict:
         # Theta2 SEs: GMM sandwich with numerical Jacobian
         def moment_fn(t2):
             sv, pv = unpack_theta2(t2, sigma_indices, pi_interactions)
-            mu_t = compute_mu(prod_vec, nu_draws, aligned_demo_draws, sv, sigma_indices,
+            mu_t = compute_mu(prod_vec, nu_draws, stacked_draws_padded, obs_key_idx, sv, sigma_indices,
                               pv, pi_interactions, args.R, coef_dim)
             d_t, _, _, _ = blp_contraction(df, mu_t, args.R,
                                            tol=args.tol_inner,
@@ -727,22 +733,38 @@ def main():
                         dest='tol_outer')
     parser.add_argument('--method', type=str, default='l-bfgs-b',
                         choices=['l-bfgs-b', 'nelder-mead'])
+    parser.add_argument('--workers', type=int, default=4,
+                        help='Number of simultaneous multiprocessing workers')
+    parser.add_argument('--hpc', action='store_true',
+                        help='Use HPC cluster path structure')
     args = parser.parse_args()
 
     # Determine specs to run
     spec_ids = list(range(1, 13)) if args.spec == 'all' else [int(args.spec)]
 
-    print("BLP Demand Estimation Loop")
-    print(f"  Stage: {args.stage} | Specs: {spec_ids}")
-    print(f"  R={args.R} | seed={args.seed} | method={args.method}")
-    print(f"  tol_inner={args.tol_inner} | tol_outer={args.tol_outer}")
+    print("BLP Demand Estimation Loop", flush=True)
+    print(f"  Stage: {args.stage} | Specs: {spec_ids}", flush=True)
+    print(f"  R={args.R} | seed={args.seed} | method={args.method} | HPC={args.hpc}", flush=True)
+    print(f"  tol_inner={args.tol_inner} | tol_outer={args.tol_outer}", flush=True)
 
-    # Output directory
+    # Directories
+    input_dir, BLP_OUTPUT_DIR = get_paths(args.hpc)
+    print(f"\n  [DIAGNOSTIC] Input Directory: {input_dir}", flush=True)
+    print(f"  [DIAGNOSTIC] Output Directory: {BLP_OUTPUT_DIR}", flush=True)
+    
+    if not input_dir.exists():
+        print(f"  [FATAL] Input directory DOES NOT EXIST: {input_dir}", flush=True)
+    else:
+        pkl_files = list(input_dir.glob('demand_final_spec_*.pkl'))
+        print(f"  [DIAGNOSTIC] Found {len(pkl_files)} matched .pkl files in input directory.", flush=True)
+
     BLP_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
     import multiprocessing
     import concurrent.futures
-    max_w = max(1, min(len(spec_ids), multiprocessing.cpu_count() - 1, 6))
+    import gc
+    
+    max_w = args.workers
     
     stages_to_run = ['logit', 'sigma', 'full', 'extended'] if args.stage == 'sequence' else [args.stage]
     
