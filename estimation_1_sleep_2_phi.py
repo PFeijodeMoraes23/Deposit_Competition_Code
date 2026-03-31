@@ -102,12 +102,18 @@ def main():
     if 'year' in df.columns:
         df['post_2020'] = (df['year'] >= 2020).astype(int)
 
+    # Recreate entity_id to accurately shift the risk-free rate
+    df['entity_id'] = df['CodConglomeradoPrudencial'].astype(str) + "_" + \
+                      df['mca_code'].astype(str)
+    df.sort_values(by=['entity_id', 'year', 'quarter'], inplace=True)
+    df['risk_free_qoq_lag'] = df.groupby('entity_id')['risk_free_qoq'].shift(1)
+
     print(f"Loading results from {results_pickle_path}")
     with open(results_pickle_path, 'rb') as f:
         res_dict = pickle.load(f)
 
     s_base = ['constant', 'post_2020']
-    s_macro = s_base + ['gdp_per_capita', 'cadunico_families_per1000', 'fraction_65plus', 'fraction_young']
+    s_macro = s_base + ['gdp_per_capita', 'cadunico_families_per1000', 'fraction_65plus', 'fraction_young', 'risk_free_qoq_lag']
     s_tech_finance = s_macro + ['pix_users_pf_per1000', 'branches_per1000'] # dropped connections_per100
 
     state_blocks = {

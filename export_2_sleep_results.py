@@ -94,6 +94,7 @@ def clean_name(v):
         'cadunico_families_per1000': 'CadUnico Families (100s per 1k)',
         'fraction_65plus': 'Fraction 65+',
         'fraction_young': 'Fraction Young',
+        'risk_free_qoq_lag': 'Lagged Selic Rate',
         'pix_users_pf_per1000': 'Pix Users (100s per 1k)',
         'connections_per100': 'Broadband Connections (per capita)',
         'branches_per1000': 'Branches per 1k',

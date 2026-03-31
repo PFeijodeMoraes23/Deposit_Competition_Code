@@ -50,7 +50,8 @@ def resolve_paths():
 def build_data(panel_csv):
     s_macro = ['gdp_per_capita', 'cadunico_families_per1000', 'fraction_65plus', 'fraction_young']
     s_tech = ['pix_users_pf_per1000', 'connections_per100', 'branches_per_1000']
-    use_cols = ['year', 'quarter', 'year_quarter', 'lagged_deposits', 'deposit_balance', 'log_total_assets_lag'] + s_macro + s_tech
+    use_cols = ['year', 'quarter', 'year_quarter', 'lagged_deposits', 'deposit_balance', 'log_total_assets_lag', 
+                'risk_free_qoq', 'CodConglomeradoPrudencial', 'mca_code', 'deposit_type'] + s_macro + s_tech
     
     # Check which columns actually exist first without loading whole file
     with suppress(Exception):
@@ -88,6 +89,15 @@ def build_data(panel_csv):
         df_raw['market_size'] = 1.0
         
     df_raw['log_total_assets_lag'] = df_raw['log_total_assets_lag'].fillna(df_raw['log_total_assets_lag'].median())
+    
+    # Recreate entity_id to accurately shift the risk-free rate
+    if 'mca_code' in df_raw.columns:
+        df_raw['entity_id'] = df_raw['CodConglomeradoPrudencial'].astype(str) + "_" + df_raw['mca_code'].astype(str)
+    else:
+        df_raw['entity_id'] = df_raw['CodConglomeradoPrudencial'].astype(str)
+    df_raw = df_raw.sort_values(by=['entity_id', 'year', 'quarter'])
+    df_raw['risk_free_qoq_lag'] = df_raw.groupby('entity_id')['risk_free_qoq'].shift(1)
+
     return df_raw
 
 def get_pca_index(df_q, s_cols):
@@ -247,7 +257,7 @@ def load_models(local_pkl, nat_pkl):
 
 def define_state_blocks(df):
     s_base = ['constant', 'post_2020']
-    s_macro = s_base + ['gdp_per_capita', 'cadunico_families_per1000', 'fraction_65plus', 'fraction_young']
+    s_macro = s_base + ['gdp_per_capita', 'cadunico_families_per1000', 'fraction_65plus', 'fraction_young', 'risk_free_qoq_lag']
     s_tech = s_macro + ['pix_users_pf_per1000', 'branches_per_1000']
     s_tech = [c for c in s_tech if c in df.columns]
     return {'Base': s_base, 'Macro': s_macro, 'Tech': s_tech}

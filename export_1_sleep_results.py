@@ -94,6 +94,7 @@ def clean_name(v):
         'cadunico_families_per1000': 'CadUnico Families (100s per 1k)',
         'fraction_65plus': 'Fraction 65+',
         'fraction_young': 'Fraction Young',
+        'risk_free_qoq_lag': 'Lagged Selic Rate',
         'pix_users_pf_per1000': 'Pix Users (100s per 1k)',
         'connections_per100': 'Broadband Connections (per capita)',
         'branches_per1000': 'Branches per 1k',
@@ -235,7 +236,7 @@ def build_second_stage_table(results_dict, G, G_star):
         ('Tech', 'IV_HausmanFull'): 12,
     }
 
-    all_vars = ['nr_lagged_dep', 'post_2020', 'gdp_per_capita', 'cadunico_families_per1000', 'fraction_65plus', 'fraction_young', 'pix_users_pf_per1000', 'connections_per100', 'branches_per1000']
+    all_vars = ['nr_lagged_dep', 'post_2020', 'gdp_per_capita', 'cadunico_families_per1000', 'fraction_65plus', 'fraction_young', 'pix_users_pf_per1000', 'connections_per100', 'branches_per1000', 'risk_free_qoq_lag']
 
     estimators = [
         ('OLS', 'OLS'),

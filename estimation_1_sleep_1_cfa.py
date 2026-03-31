@@ -408,7 +408,7 @@ def scale_magnitudes(df):
 
 def define_specifications():
     s_base = ['constant', 'post_2020']
-    s_macro = s_base + ['gdp_per_capita', 'cadunico_families_per1000', 'fraction_65plus', 'fraction_young']
+    s_macro = s_base + ['gdp_per_capita', 'cadunico_families_per1000', 'fraction_65plus', 'fraction_young', 'risk_free_qoq_lag']
     s_tech_finance = s_macro + ['pix_users_pf_per1000', 'connections_per100', 'branches_per1000']
 
     iv_spec0 = []
