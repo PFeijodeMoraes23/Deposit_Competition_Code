@@ -36,6 +36,10 @@ import sys
 import json
 import pickle
 import argparse
+import smtplib
+import threading
+import datetime
+from email.mime.text import MIMEText
 from pathlib import Path
 import numpy as np
 import pandas as pd
@@ -97,6 +101,52 @@ MP_KEEP_COLS = (
     + IV_BLP_LOO + IV_COST + IV_CAPITAL
     + ['segment']
 )
+
+
+# ==============================================================================
+# 0b. Email Status Notifications
+# ==============================================================================
+EMAIL_TO   = "pedro.feijodemoraes@yale.edu"
+EMAIL_FROM = "pedro.feijodemoraes@yale.edu"
+_SMTP_HOST = "smtp.yale.edu"   # Yale unauthenticated relay available on HPC nodes
+_SMTP_PORT = 25
+
+_email_log: list = []          # accumulates status lines throughout the run
+_email_lock = threading.Lock()
+
+
+def _log_status(msg: str) -> None:
+    """Append a timestamped status line to the in-memory log and print it."""
+    stamped = f"[{datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] {msg}"
+    with _email_lock:
+        _email_log.append(stamped)
+    print(stamped, flush=True)
+
+
+def _send_status_email(subject: str, body: str) -> None:
+    """Send a plain-text email via Yale SMTP relay (no authentication required)."""
+    msg = MIMEText(body)
+    msg["Subject"] = subject
+    msg["From"]    = EMAIL_FROM
+    msg["To"]      = EMAIL_TO
+    try:
+        with smtplib.SMTP(_SMTP_HOST, _SMTP_PORT, timeout=15) as server:
+            server.sendmail(EMAIL_FROM, [EMAIL_TO], msg.as_string())
+    except Exception as exc:
+        print(f"  [EMAIL-WARN] Could not send email: {exc}", flush=True)
+
+
+def _hourly_email_worker(job_id: str, stop_event: threading.Event) -> None:
+    """Background thread: every hour during 07:00-21:00 send a status digest."""
+    while not stop_event.wait(timeout=3600):
+        hour = datetime.datetime.now().hour
+        if 7 <= hour < 21:
+            with _email_lock:
+                recent = list(_email_log[-200:])
+            body = "\n".join(recent) if recent else "No status lines yet."
+            subject = (f"[BLP-HPC] Hourly Status | Job {job_id} | "
+                       f"{datetime.datetime.now().strftime('%Y-%m-%d %H:%M')}")
+            _send_status_email(subject, body)
 
 
 # ==============================================================================
@@ -243,120 +293,285 @@ def compute_mu(prod_vec: np.ndarray, nu_draws: np.ndarray,
 # ==============================================================================
 # 5. Inner Loop: BLP Contraction (Eq-A4)
 # ==============================================================================
-def _compute_omega(s_model: np.ndarray, is_B: np.ndarray, time_ids: np.ndarray, deposit_types: np.ndarray) -> np.ndarray:
-    N = len(s_model)
-    omega_mt = np.ones(N)
-    if not is_B.any():
-        return omega_mt
+def _build_market_indices(mca_codes: np.ndarray, time_ids: np.ndarray,
+                          is_B: np.ndarray) -> tuple:
+    """Build unified (mca, time) market group indices for ALL products.
 
+    Per Eq-4 / Eq-13-B, the softmax denominator sums over J_mt = J^B_mt ∪ J^D_t.
+    D-firms (is_B=False) appear in every local market because they operate
+    nationally; their rows in the panel carry mca_code='0'. We assign them
+    the per-time-id market index for each (mca, time) market by broadcasting
+    their contributions separately (see compute_model_shares).
+
+    Returns
+    -------
+    b_mkt_idx : (N_B,) int  — market index for each B-firm row
+    d_time_enc : (N_D,) int — time-period encoding for each D-firm row
+    mca_time_pairs : list of (mca, time) tuples, one per unique B-market
+    unique_times : array of unique time_ids
+    """
+    b_mask = is_B
     d_mask = ~is_B
-    unique_times, t_enc = np.unique(time_ids, return_inverse=True)
-    unique_dtypes, k_enc = np.unique(deposit_types, return_inverse=True)
-    n_t = len(unique_times)
-    group_idx = t_enc * len(unique_dtypes) + k_enc  # (N,)
-    n_groups = n_t * len(unique_dtypes)
 
-    nb_shares_in_group = np.bincount(group_idx, weights=s_model * d_mask, minlength=n_groups)
-    omega_mt_per_group = np.maximum(1e-10, 1.0 - nb_shares_in_group)
-    return omega_mt_per_group[group_idx]
+    # Unique (mca, time) B-markets
+    b_mca  = mca_codes[b_mask]
+    b_time = time_ids[b_mask]
+    raw_pairs = list(zip(b_mca.tolist(), b_time.tolist()))
+    unique_pairs = sorted(set(raw_pairs))
+    pair_to_idx  = {p: i for i, p in enumerate(unique_pairs)}
+    b_mkt_idx    = np.array([pair_to_idx[(m, t)] for m, t in raw_pairs], dtype=np.int64)
+
+    # Time encoding for D-firms (they contribute to every B-market in their period)
+    unique_times, d_time_enc = np.unique(time_ids[d_mask], return_inverse=True)
+
+    return b_mkt_idx, d_time_enc, unique_pairs, unique_times
+
 
 def compute_model_shares(delta: np.ndarray, mu: np.ndarray,
-                         df: pd.DataFrame, R: int) -> tuple:
-    """Compute model-implied shares s^B and s^D from (delta, mu).
+                         df: pd.DataFrame, R: int,
+                         precomp: dict | None = None) -> tuple:
+    """Compute model-implied shares s^{Act,B} and s^{Act,D} (Eq-13-B/D).
 
-    Returns (s_model, omega_mt).
-    - s_model: (N,) array of model-implied shares for each obs.
-    - omega_mt: (N,) array of Omega_mt values for B-type obs.
+    All products — B and D — compete in the same softmax denominator for
+    each (mca, time) market, consistent with Eq-4 of V_Main.tex.
+
+    D-firms are national (single row per time period) but participate in
+    every local (mca, time) market. Their exp(δ+μ) sum is computed once per
+    time period and added to every corresponding market's denominator.
+
+    Returns
+    -------
+    s_B     : (N_B,)  model-implied local share for B-firm rows (Eq-13-B avg)
+    s_D_nat : (N_D,)  model-implied national share for D-firm rows (Eq-13-D)
+    omega   : (N_B,)  Ω_mt per B-firm row (Eq-14)
+    is_B    : (N,)    boolean mask (B-type rows)
     """
-    N = len(df)
-    is_B = df['is_B'].values
-    mca_codes = df['mca_code'].values
-    time_ids = df['time_id'].values
+    N     = len(df)
+    is_B  = df['is_B'].values
+    mca_codes    = df['mca_code'].values
+    time_ids     = df['time_id'].values
     deposit_types = df['deposit_type'].values
-    pop_total = df['pop_total'].fillna(0).values
+    pop_total    = df['pop_total'].fillna(0).values
 
-    # For each r, compute q_rjkmt = softmax(delta + mu_r) within each market
-    # Build market group indices
-    if is_B.any():
-        # B-type: market = (mca_code, time_id)
-        b_market_key = np.array([f"{m}_{t}" for m, t in zip(mca_codes, time_ids)])
+    b_mask = is_B
+    d_mask = ~is_B
+    N_B    = b_mask.sum()
+    N_D    = d_mask.sum()
+
+    # --- Pull precomputed indices or build them ---
+    if precomp is not None:
+        b_mkt_idx   = precomp['b_mkt_idx']
+        d_time_enc  = precomp['d_time_enc']
+        unique_pairs = precomp['unique_pairs']
+        unique_times = precomp['unique_times']
+        pair_time_enc = precomp['pair_time_enc']   # (n_pairs,) maps each B-market to its time index
+        pop_weights   = precomp['pop_weights']     # (n_pairs,) population weight per B-market
     else:
-        b_market_key = np.array([''] * N)
+        b_mkt_idx, d_time_enc, unique_pairs, unique_times = _build_market_indices(
+            mca_codes, time_ids, is_B)
+        pair_times   = np.array([p[1] for p in unique_pairs])
+        ut_map       = {t: i for i, t in enumerate(unique_times.tolist())}
+        pair_time_enc = np.array([ut_map[t] for t in pair_times.tolist()], dtype=np.int64)
+        # Population weight for each B-market (for D-type national share aggregation, Eq-13-D)
+        pop_b        = pop_total[b_mask]
+        pair_pop     = np.bincount(b_mkt_idx, weights=pop_b, minlength=len(unique_pairs))
+        time_pop     = np.bincount(pair_time_enc, weights=pair_pop, minlength=len(unique_times))
+        pair_pop_norm = pair_pop / np.maximum(time_pop[pair_time_enc], 1e-30)
+        pop_weights   = pair_pop_norm   # (n_pairs,) sums to 1 within each time period
 
-    # D-type: market = time_id only
-    nb_market_key = time_ids.copy()
+    n_pairs  = len(unique_pairs)
+    n_times  = len(unique_times)
 
-    # Combined market key for softmax computation
-    # All products in the same market compete
-    market_key = np.where(is_B, b_market_key, nb_market_key)
+    # --- Slice delta and mu for B and D rows ---
+    delta_B = delta[b_mask]   # (N_B,)
+    delta_D = delta[d_mask]   # (N_D,)
+    mu_B    = mu[b_mask, :]   # (N_B, R)
+    mu_D    = mu[d_mask, :]   # (N_D, R)
 
-    # Identify unique markets and build group indices
-    unique_markets = np.unique(market_key)
-    market_to_idx = {m: i for i, m in enumerate(unique_markets)}
-    market_indices = np.array([market_to_idx[m] for m in market_key])
+    # --- Vectorised over R: allocate (N_B, R) and (N_D, R) ---
+    V_B = delta_B[:, np.newaxis] + mu_B   # (N_B, R)
+    V_D = delta_D[:, np.newaxis] + mu_D   # (N_D, R)
 
-    # Memory-efficient loop over R draws to avoid 1.3GB RAM allocation per step
-    q_avg = np.zeros(N)
-    for r in range(R):
-        v = delta + mu[:, r]  # (N,)
-        max_v = np.full(len(unique_markets), -np.inf)
-        np.maximum.at(max_v, market_indices, v)
-        v_shifted = v - max_v[market_indices]
-        
-        exp_v = np.exp(v_shifted)
-        sum_exp = np.zeros(len(unique_markets))
-        np.add.at(sum_exp, market_indices, exp_v)
-        
-        q_r = exp_v / sum_exp[market_indices]
-        q_avg += q_r
+    # For each (time, R), sum exp(V_D) over all D-products in that time period
+    # Shape: (n_times, R)
+    sum_exp_D_time = np.zeros((n_times, R))
+    # d_time_enc is (N_D,)
+    for i in range(n_times):
+        mask_t = d_time_enc == i
+        if mask_t.any():
+            # log-sum-exp for numerical stability
+            V_D_t  = V_D[mask_t, :]         # (n_D_t, R)
+            max_vd = V_D_t.max(axis=0)      # (R,)
+            sum_exp_D_time[i, :] = np.exp(V_D_t - max_vd).sum(axis=0) * np.exp(max_vd)
 
-    s_model = q_avg / R  # (N,)
+    # For each B-market (n_pairs), the D-firm denominator contribution is sum_exp_D_time[pair_time_enc]
+    D_contrib_per_pair = sum_exp_D_time[pair_time_enc, :]   # (n_pairs, R)
 
-    # Compute Omega vectorized with bincount
-    return s_model, _compute_omega(s_model, is_B, time_ids, deposit_types)
+    # For each B-firm row, the D contribution from its market
+    D_contrib_B = D_contrib_per_pair[b_mkt_idx, :]           # (N_B, R)
+
+    # Stable softmax denominator for B-products within each market + D contribution
+    # Step 1: per-market max over B-products (for numerical stability)
+    max_VB_per_mkt = np.full((n_pairs, R), -np.inf)
+    np.maximum.at(max_VB_per_mkt, b_mkt_idx, V_B)            # scatter-max
+
+    # Step 2: exp(V_B - max) and sum per market
+    V_B_shifted  = V_B - max_VB_per_mkt[b_mkt_idx, :]        # (N_B, R)  stable
+    exp_VB       = np.exp(V_B_shifted)                       # (N_B, R)
+    sum_exp_B_per_mkt = np.zeros((n_pairs, R))
+    np.add.at(sum_exp_B_per_mkt, b_mkt_idx, exp_VB)          # (n_pairs, R)
+
+    # The D contribution must be shifted by the same per-market max
+    # D_contrib already in raw exp scale; divide out the max
+    D_contrib_shifted = D_contrib_B * np.exp(-max_VB_per_mkt[b_mkt_idx, :])  # (N_B, R)
+
+    total_denom_B = sum_exp_B_per_mkt[b_mkt_idx, :] + D_contrib_shifted       # (N_B, R)
+
+    # B-firm individual softmax probabilities: Eq-13-B averaged over R
+    q_B           = exp_VB / np.maximum(total_denom_B, 1e-300)  # (N_B, R)
+    s_B           = q_B.mean(axis=1)                             # (N_B,)
+
+    # --- D-firm national shares: Eq-13-D  s^{Act,D} = Σ_m (M_mt/M_t) * q_D_m ---
+    # For each D-firm row d and each B-market p, compute q_D_d_p = exp(V_D_d) / denom_p
+    # denom_p = sum_exp_B_per_mkt[p] * exp(max_VB_per_mkt[p]) + D_contrib[p]
+    # = (sum_exp_B_per_mkt[p] + D_contrib_shifted[p,0...]) * exp(max_VB_per_mkt[p])
+    # Since pop_weights already sum to 1 per time period we can do:
+    #   s^{Act,D}_{jkt} = Σ_p pop_weights[p] * (exp(V_D_d) / total_denom_raw_p)
+    # total_denom_raw_p = (sum_exp_B_per_mkt[p] + D_contrib_shifted averaged per pair) * exp(max_VB_per_mkt[p])
+    # Use per-pair average max to get raw denom:
+    avg_max_B    = max_VB_per_mkt.mean(axis=1)                           # (n_pairs,)
+    raw_denom_B  = (sum_exp_B_per_mkt + D_contrib_per_pair * np.exp(-max_VB_per_mkt)).mean(axis=1)  # (n_pairs,) R-averaged in shifted space
+    # That is: E_r[sum_B_shifted + D_shifted] — we average the denominator over R
+    # Then scale back: raw_denom[p] * exp(avg_max_B[p]) ≈ avg raw denominator (approx; exact if max stable)
+    # For the D share computation we work with per-draw to be exact:
+    # s_D_jkt = Σ_p pop_w[p] * mean_r(exp(V_D_d,r) / total_raw_p_r)
+    # Expand: (N_D, n_pairs, R) is too large for 500GB mode, so we loop over n_pairs batches
+    # n_pairs can be ~200k (465 MCAs × ~500 time periods) — iterate over times instead:
+    s_D_nat = np.zeros(N_D)   # (N_D,)
+    exp_VD  = np.exp(V_D)     # (N_D, R)  — exp of un-shifted V_D values
+
+    for t_idx in range(n_times):
+        # Which B-markets belong to this time period?
+        pair_mask_t = pair_time_enc == t_idx    # (n_pairs,) bool
+        if not pair_mask_t.any():
+            continue
+        # Which D-firms operate in this time period?
+        d_mask_t = d_time_enc == t_idx          # (N_D,) bool
+        if not d_mask_t.any():
+            continue
+
+        pw_t     = pop_weights[pair_mask_t]                    # (n_p_t,)
+        pairs_t  = np.where(pair_mask_t)[0]                   # indices into unique_pairs
+        n_pt     = pairs_t.size
+
+        # Per-market total denominator in raw (un-shifted) space: (n_pt, R)
+        max_t     = max_VB_per_mkt[pairs_t, :]                # (n_pt, R)
+        se_B_t    = sum_exp_B_per_mkt[pairs_t, :]             # (n_pt, R)
+        dc_t      = D_contrib_per_pair[pairs_t, :]            # (n_pt, R)
+        # raw denom = (se_B_shifted + dc_shifted) * exp(max)
+        # = (se_B_t + dc_t * exp(-max_t)) * exp(max_t)
+        denom_raw_t = (se_B_t + dc_t * np.exp(-max_t)) * np.exp(max_t)   # (n_pt, R)
+
+        # D-firm exp values for this time period: (n_dt, R)
+        exp_VD_t  = exp_VD[d_mask_t, :]                       # (n_dt, R)
+        n_dt      = exp_VD_t.shape[0]
+
+        # For each D-firm d and market p: q_D_d_p_r = exp_VD_t[d,r] / denom_raw_t[p,r]
+        # s_D_d = Σ_p pw_t[p] * mean_r(q_D_d_p_r)
+        # = Σ_p pw_t[p] * mean_r(exp_VD_t[d,r] / denom_raw_t[p,r])
+        # Shape trick: (n_dt, 1, R) / (1, n_pt, R) -> (n_dt, n_pt, R)
+        # Then mean over R -> (n_dt, n_pt), then dot pw_t -> (n_dt,)
+        # If n_dt * n_pt * R is huge, chunk over p:
+        q_sum = np.zeros(n_dt)  # accumulate Σ_p pw_t[p] * mean_r(...)
+        CHUNK = max(1, 500 // max(n_dt, 1))   # tune chunk size
+        for p_start in range(0, n_pt, CHUNK):
+            p_end   = min(p_start + CHUNK, n_pt)
+            d_t_p_r  = exp_VD_t[:, np.newaxis, :] / denom_raw_t[np.newaxis, p_start:p_end, :]  # (n_dt,chunk,R)
+            d_t_p    = d_t_p_r.mean(axis=2)     # (n_dt, chunk)
+            q_sum   += d_t_p @ pw_t[p_start:p_end]   # (n_dt,)
+
+        s_D_nat[d_mask_t] = q_sum   # model-implied national share for D-firm rows in time t
+
+    # --- Ω_mt: Eq-14 = 1 - Σ_{j∈J^D_t, k} s^{Act,D}_{jk,local,mt} ---
+    # For each B-market p and draw r: D share in that market = Σ_d exp(V_D_d,r) / denom_raw_p_r
+    # Ω_mt[p] = 1 - mean_r( Σ_d exp(V_D_d,r) / denom_raw_p_r )
+    # = 1 - mean_r( sum_exp_D_time[t(p),r] / denom_raw_p_r )
+    # denom_raw[p,r] = (se_B_per_mkt[p,r] + D_contrib_shifted[p,r]) * exp(max_VB[p,r])
+    # We already have sum_exp_D_time and max_VB_per_mkt, sum_exp_B_per_mkt:
+    D_total_per_pair = D_contrib_per_pair                             # (n_pairs, R) = Σ_d exp(V_D_d)
+    raw_denom_all    = (sum_exp_B_per_mkt
+                         + D_total_per_pair * np.exp(-max_VB_per_mkt)) * np.exp(max_VB_per_mkt)  # (n_pairs, R)
+    local_D_share    = D_total_per_pair / np.maximum(raw_denom_all, 1e-300)  # (n_pairs, R)
+    omega_per_pair   = np.maximum(1e-10, 1.0 - local_D_share.mean(axis=1))  # (n_pairs,)
+    omega_B          = omega_per_pair[b_mkt_idx]                              # (N_B,)
+
+    return s_B, s_D_nat, omega_B, is_B
 
 def blp_contraction(df: pd.DataFrame, mu: np.ndarray, R: int,
-                    tol: float = 1e-14, max_iter: int = 2000) -> tuple:
+                    tol: float = 1e-14, max_iter: int = 2000,
+                    delta_init: np.ndarray | None = None,
+                    precomp: dict | None = None) -> tuple:
     """BLP inner fixed-point contraction (Eq-A4-B and Eq-A4-D).
 
-    Returns (delta, converged, n_iter, norm_history).
+    Implements the contraction simultaneously for D-type firms (Eq-A4-B in
+    V_Main.tex) and B-type firms (Eq-A4-D). Both use the same unified
+    (mca, time) softmax denominator per Eq-4 / Eq-13-B/D.
+
+    Parameters
+    ----------
+    delta_init : optional warm-start vector (from previous outer iteration).
+    precomp    : optional dict of pre-built market-index arrays (avoids
+                 rebuilding on every contraction call).
+
+    Returns
+    -------
+    (delta, converged, n_iter, norm_history)
     """
-    N = len(df)
+    N    = len(df)
     is_B = df['is_B'].values
+    b_mask = is_B
+    d_mask = ~is_B
 
-    # Data-implied shares (precomputed in demand prep)
-    s_data_D = df['share_D'].values.copy()
-    s_data_B_cond = df['share_B_cond'].values.copy()
-
-    # Clamp to avoid log(0)
-    s_data_D = np.clip(s_data_D, 1e-15, None)
-    s_data_B_cond = np.clip(s_data_B_cond, 1e-15, None)
-    ln_s_data_D = np.log(s_data_D)
+    # Data-implied shares (Eq-16-D and Eq-16-B, precomputed in demand prep)
+    s_data_D      = np.clip(df['share_D'].values.copy(),      1e-15, None)
+    s_data_B_cond = np.clip(df['share_B_cond'].values.copy(), 1e-15, None)
+    ln_s_data_D      = np.log(s_data_D)
     ln_s_data_B_cond = np.log(s_data_B_cond)
 
-    # Initialize delta
-    delta = np.zeros(N)
-    delta[~is_B] = ln_s_data_D[~is_B]
-    delta[is_B] = ln_s_data_B_cond[is_B]
+    # Population weights for national D-share data (Eq-16-D denominator is
+    # global active deposits, handled in prep; here we just use share_D directly)
+
+    # Initialise delta: warm-start if available, otherwise use log data shares
+    if delta_init is not None and delta_init.shape == (N,):
+        delta = delta_init.copy()
+    else:
+        delta = np.zeros(N)
+        delta[d_mask] = ln_s_data_D[d_mask]
+        delta[b_mask] = ln_s_data_B_cond[b_mask]
 
     norm_history = []
     for h in range(max_iter):
-        s_model, omega_mt = compute_model_shares(delta, mu, df, R)
-        s_model = np.clip(s_model, 1e-15, None)
-        ln_s_model = np.log(s_model)
-        ln_omega = np.log(np.clip(omega_mt, 1e-15, None))
+        # Compute model shares via unified (mca,time) softmax
+        s_B, s_D_nat, omega_B, _ = compute_model_shares(delta, mu, df, R, precomp=precomp)
+
+        s_B_clp    = np.clip(s_B,    1e-15, None)
+        s_D_clp    = np.clip(s_D_nat, 1e-15, None)
+        omega_B_clp = np.clip(omega_B, 1e-15, None)
 
         delta_new = delta.copy()
-        # D update (Eq-A4-B label in tex, but conceptually D)
-        d_mask = ~is_B
-        delta_new[d_mask] = delta[d_mask] + ln_s_data_D[d_mask] - ln_s_model[d_mask]
 
-        # B update (Eq-A4-D label in tex, but conceptually B)
-        b_mask = is_B
+        # --- Eq-A4-B: D-type contraction (national shares) ---
+        # δ^{D,h+1}_{jkt} = δ^{D,h}_{jkt} + ln ŝ^{Act,D}_{jkt} - ln s^{Act,D}_{jkt}(δ^h,θ_2)
+        delta_new[d_mask] = (delta[d_mask]
+                             + ln_s_data_D[d_mask]
+                             - np.log(s_D_clp))
+
+        # --- Eq-A4-D: B-type contraction (local conditional shares + Ω) ---
+        # δ^{B,h+1}_{jkmt} = δ^{B,h}_{jkmt} + ln ŝ^{Act,B|B}_{jkmt} + ln Ω_mt - ln s^{Act,B}_{jkmt}
         delta_new[b_mask] = (delta[b_mask]
                              + ln_s_data_B_cond[b_mask]
-                             + ln_omega[b_mask]
-                             - ln_s_model[b_mask])
+                             + np.log(omega_B_clp)
+                             - np.log(s_B_clp))
 
         norm = np.max(np.abs(delta_new - delta))
         norm_history.append(norm)
@@ -476,7 +691,9 @@ def gmm_objective(theta2_vec: np.ndarray, df: pd.DataFrame,
                    sigma_indices: list,
                    pi_interactions: list, R: int, coef_dim: int,
                    W: np.ndarray, tol_inner: float,
-                   max_inner: int) -> float:
+                   max_inner: int,
+                   delta_cache: dict | None = None,
+                   precomp: dict | None = None) -> float:
     """Evaluate Q(theta2) = G(theta2)' W G(theta2)."""
     sigma_vals, pi_vals = unpack_theta2(theta2_vec, sigma_indices,
                                          pi_interactions)
@@ -485,12 +702,17 @@ def gmm_objective(theta2_vec: np.ndarray, df: pd.DataFrame,
     mu = compute_mu(prod_vec, nu_draws, stacked_draws, obs_key_idx, sigma_vals,
                     sigma_indices, pi_vals, pi_interactions, R, coef_dim)
 
+    # Warm-start delta from previous outer iteration if available
+    delta_init = delta_cache.get('last_delta') if delta_cache is not None else None
+
     # Inner loop: contraction
-    delta, converged, n_iter, _ = blp_contraction(df, mu, R,
-                                                   tol=tol_inner,
-                                                   max_iter=max_inner)
+    delta, converged, n_iter, _ = blp_contraction(
+        df, mu, R, tol=tol_inner, max_iter=max_inner,
+        delta_init=delta_init, precomp=precomp)
     if not converged:
-        print(f"  [!] Inner loop did not converge in {n_iter} iterations")
+        print(f"  [!] Inner loop did not converge in {n_iter} iterations", flush=True)
+    elif delta_cache is not None:
+        delta_cache['last_delta'] = delta.copy()   # cache converged delta
 
     # Linear IV
     theta1, xi, _ = estimate_theta1(df, delta)
@@ -614,27 +836,56 @@ def run_blp_for_spec(spec_id: int, args) -> dict:
         rng = np.random.default_rng(args.seed)
         theta2_0 = rng.normal(0, 0.01, size=n_params)
 
-        print(f"  Outer minimisation: {args.method}")
-        print(f"  Inner tolerance: {args.tol_inner}")
+        print(f"  Outer minimisation: {args.method}", flush=True)
+        print(f"  Inner tolerance: {args.tol_inner}", flush=True)
 
-        # Minimise
-        import gc
+        # Pre-build market index arrays once (reused across all contraction calls)
+        mca_codes_arr = df['mca_code'].values
+        time_ids_arr  = df['time_id'].values
+        is_B_arr      = df['is_B'].values
+        b_mkt_idx, d_time_enc, unique_pairs, unique_times = _build_market_indices(
+            mca_codes_arr, time_ids_arr, is_B_arr)
+        pair_times    = np.array([p[1] for p in unique_pairs])
+        ut_map        = {t: i for i, t in enumerate(unique_times.tolist())}
+        pair_time_enc = np.array([ut_map[t] for t in pair_times.tolist()], dtype=np.int64)
+        pop_b         = df['pop_total'].fillna(0).values[is_B_arr]
+        pair_pop      = np.bincount(b_mkt_idx, weights=pop_b, minlength=len(unique_pairs))
+        time_pop      = np.bincount(pair_time_enc, weights=pair_pop, minlength=len(unique_times))
+        pair_pop_norm = pair_pop / np.maximum(time_pop[pair_time_enc], 1e-30)
+        precomp_idx   = {
+            'b_mkt_idx':    b_mkt_idx,
+            'd_time_enc':   d_time_enc,
+            'unique_pairs': unique_pairs,
+            'unique_times': unique_times,
+            'pair_time_enc': pair_time_enc,
+            'pop_weights':   pair_pop_norm,
+        }
+
+        # Delta warm-start cache (shared across outer iterations)
+        delta_cache: dict = {}
+
+        # Outer callback for progress logging (replaces deprecated disp=True)
+        _outer_iter = [0]
+        def _outer_callback(xk):
+            _outer_iter[0] += 1
+            _log_status(f"  [OUTER iter={_outer_iter[0]}] theta2={np.round(xk, 4)}")
+
         def obj_fn(t2):
-            val = gmm_objective(
+            return gmm_objective(
                 t2, df, prod_vec, nu_draws, stacked_draws_padded, obs_key_idx,
                 sigma_indices, pi_interactions, args.R, coef_dim,
-                W, args.tol_inner, args.max_inner)
-            gc.collect()
-            return val
+                W, args.tol_inner, args.max_inner,
+                delta_cache=delta_cache, precomp=precomp_idx)
 
         if args.method == 'l-bfgs-b':
             result = minimize(obj_fn, theta2_0, method='L-BFGS-B',
-                              options={'maxiter': 500, 'ftol': args.tol_outer,
-                                       'disp': True})
+                              options={'maxiter': 500, 'ftol': args.tol_outer},
+                              callback=_outer_callback)
         else:
             result = minimize(obj_fn, theta2_0, method='Nelder-Mead',
                               options={'maxiter': 1000, 'xatol': args.tol_outer,
-                                       'fatol': args.tol_outer, 'disp': True})
+                                       'fatol': args.tol_outer},
+                              callback=_outer_callback)
 
         theta2_star = result.x
         print(f"  Optimiser converged: {result.success}")
@@ -648,7 +899,9 @@ def run_blp_for_spec(spec_id: int, args) -> dict:
                              sigma_indices, pi_vals, pi_interactions, args.R, coef_dim)
         delta_star, conv, n_it, _ = blp_contraction(df, mu_star, args.R,
                                                      tol=args.tol_inner,
-                                                     max_iter=args.max_inner)
+                                                     max_iter=args.max_inner,
+                                                     delta_init=delta_cache.get('last_delta'),
+                                                     precomp=precomp_idx)
         theta1_star, xi_star, theta1_se = estimate_theta1(df, delta_star)
 
         # Theta2 SEs: GMM sandwich with numerical Jacobian
@@ -666,11 +919,11 @@ def run_blp_for_spec(spec_id: int, args) -> dict:
             D_jac = np.zeros((len(iv_avail), n_params))
             eps = 1e-5
             G_base = moment_fn(theta2_star)
-            for p in range(n_params):
+            for p_idx in range(n_params):
                 t2_up = theta2_star.copy()
-                t2_up[p] += eps
+                t2_up[p_idx] += eps
                 G_up = moment_fn(t2_up)
-                D_jac[:, p] = (G_up - G_base) / eps
+                D_jac[:, p_idx] = (G_up - G_base) / eps
 
             bread = np.linalg.inv(D_jac.T @ W @ D_jac)
             meat_inner = D_jac.T @ W
@@ -733,7 +986,7 @@ def main():
                         dest='tol_outer')
     parser.add_argument('--method', type=str, default='l-bfgs-b',
                         choices=['l-bfgs-b', 'nelder-mead'])
-    parser.add_argument('--workers', type=int, default=4,
+    parser.add_argument('--workers', type=int, default=8,
                         help='Number of simultaneous multiprocessing workers')
     parser.add_argument('--hpc', action='store_true',
                         help='Use HPC cluster path structure')
@@ -742,10 +995,22 @@ def main():
     # Determine specs to run
     spec_ids = list(range(1, 13)) if args.spec == 'all' else [int(args.spec)]
 
-    print("BLP Demand Estimation Loop", flush=True)
-    print(f"  Stage: {args.stage} | Specs: {spec_ids}", flush=True)
-    print(f"  R={args.R} | seed={args.seed} | method={args.method} | HPC={args.hpc}", flush=True)
-    print(f"  tol_inner={args.tol_inner} | tol_outer={args.tol_outer}", flush=True)
+    _log_status("BLP Demand Estimation Loop \u2014 START")
+    _log_status(f"  Stage: {args.stage} | Specs: {spec_ids}")
+    _log_status(f"  R={args.R} | seed={args.seed} | method={args.method} | HPC={args.hpc}")
+    _log_status(f"  tol_inner={args.tol_inner} | tol_outer={args.tol_outer} | workers={args.workers}")
+
+    # --- Launch hourly email status thread ---
+    job_id   = os.environ.get('SLURM_JOB_ID', 'LOCAL')
+    _stop_email = threading.Event()
+    _email_thread = threading.Thread(
+        target=_hourly_email_worker, args=(job_id, _stop_email), daemon=True)
+    _email_thread.start()
+    # Send an immediate start notification
+    _send_status_email(
+        f"[BLP-HPC] Job {job_id} STARTED — {datetime.datetime.now().strftime('%Y-%m-%d %H:%M')}",
+        f"Estimation started.\nStage={args.stage} | Specs={spec_ids} | R={args.R} | workers={args.workers}"
+    )
 
     # Directories
     input_dir, BLP_OUTPUT_DIR = get_paths(args.hpc)
@@ -796,8 +1061,15 @@ def main():
         summary_path = BLP_OUTPUT_DIR / f"blp_summary_{args.stage}.json"
         with open(summary_path, 'w') as f:
             json.dump(all_results, f, indent=2)
-        print(f"\nSummary saved to: {summary_path}")
-        print(f"[DONE] BLP Estimation ({args.stage}) complete for specs {spec_ids}.")
+        _log_status(f"Summary saved to: {summary_path}")
+        _log_status(f"[DONE] BLP Estimation ({current_stage}) complete for specs {spec_ids}.")
+
+    # --- Finalise ---
+    _stop_email.set()
+    _send_status_email(
+        f"[BLP-HPC] Job {job_id} FINISHED — {datetime.datetime.now().strftime('%Y-%m-%d %H:%M')}",
+        "\n".join(_email_log[-300:])
+    )
 
 
 if __name__ == '__main__':

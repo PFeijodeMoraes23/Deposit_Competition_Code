@@ -132,7 +132,7 @@ def build_base_panel(panel_csv: Path) -> pd.DataFrame:
     and lags consistent with the first stage.
     """
     print(f"Loading {panel_csv}...")
-    df_raw = pd.read_csv(panel_csv)
+    df_raw = pd.read_csv(panel_csv, dtype={'mca_code': str}, low_memory=False)
     
     df = _reshape_panel(df_raw)
             
@@ -323,17 +323,18 @@ def main():
     tasks = [(name, res, df_base) for name, res in results_dict.items()]
     
     n_saved = 0
-    with concurrent.futures.ProcessPoolExecutor() as executor:
-        for df_spec, summary, spec_id in executor.map(process_specification, tasks):
-            if df_spec is not None:
-                # Save per-spec CSV
-                out_csv = demand_output_dir / f"demand_prep_spec_{spec_id}.csv"
-                df_spec.to_csv(out_csv, index=False, float_format='%.6f')
-                print(f" > Saved Spec {spec_id} -> {out_csv.name} ({len(df_spec)} rows)")
-                spec_summaries[str(spec_id)] = summary
-                n_saved += 1
-            else:
-                print(f"   [!] Failed or skipped Spec: {spec_id}")
+    # Process sequentially instead of sending large df back and forth over IPC
+    for task in tasks:
+        df_spec, summary, spec_id = process_specification(task)
+        if df_spec is not None:
+            # Save per-spec CSV
+            out_csv = demand_output_dir / f"demand_prep_spec_{spec_id}.csv"
+            df_spec.to_csv(out_csv, index=False, float_format='%.6f')
+            print(f" > Saved Spec {spec_id} -> {out_csv.name} ({len(df_spec)} rows)")
+            spec_summaries[str(spec_id)] = summary
+            n_saved += 1
+        else:
+            print(f"   [!] Failed or skipped Spec: {spec_id}")
 
     if n_saved == 0:
         print("No valid specifications were processed.")
