@@ -121,10 +121,21 @@ def _log_status(msg: str) -> None:
     with _email_lock:
         _email_log.append(stamped)
     print(stamped, flush=True)
+    # Also write to file
+    try:
+        is_hpc = '--hpc' in sys.argv
+        _, out_dir = get_paths(is_hpc)
+        out_dir.mkdir(parents=True, exist_ok=True)
+        with open(out_dir / "blp_progress.log", "a") as f:
+            f.write(stamped + "\\n")
+    except Exception:
+        pass
 
 
 def _send_status_email(subject: str, body: str) -> None:
     """Send a plain-text email via Yale SMTP relay (no authentication required)."""
+    if '--hpc' in sys.argv:
+        return  # Suppress SMTP on HPC nodes where it fails. Rely on SLURM logs.
     msg = MIMEText(body)
     msg["Subject"] = subject
     msg["From"]    = EMAIL_FROM
@@ -393,24 +404,27 @@ def compute_model_shares(delta: np.ndarray, mu: np.ndarray,
     V_D = delta_D[:, np.newaxis] + mu_D   # (N_D, R)
 
     # For each (time, R), sum exp(V_D) over all D-products in that time period
-    # Shape: (n_times, R)
-    sum_exp_D_time = np.zeros((n_times, R))
+    # We keep this in log-space: max_VD_time and log_sum_D_shifted
+    log_sum_D_shifted = np.zeros((n_times, R))
+    max_VD_time       = np.full((n_times, R), -np.inf)
+    
     # d_time_enc is (N_D,)
     for i in range(n_times):
         mask_t = d_time_enc == i
         if mask_t.any():
-            # log-sum-exp for numerical stability
             V_D_t  = V_D[mask_t, :]         # (n_D_t, R)
-            max_vd = V_D_t.max(axis=0)      # (R,)
-            sum_exp_D_time[i, :] = np.exp(V_D_t - max_vd).sum(axis=0) * np.exp(max_vd)
+            m_vd   = V_D_t.max(axis=0)      # (R,)
+            
+            log_s  = np.log(np.maximum(1e-300, np.exp(V_D_t - m_vd).sum(axis=0)))
+            log_sum_D_shifted[i, :] = log_s
+            max_VD_time[i, :]       = m_vd
 
-    # For each B-market (n_pairs), the D-firm denominator contribution is sum_exp_D_time[pair_time_enc]
-    D_contrib_per_pair = sum_exp_D_time[pair_time_enc, :]   # (n_pairs, R)
+    # For each B-market, fetch the D elements
+    max_VD_per_pair = max_VD_time[pair_time_enc, :]               # (n_pairs, R)
+    log_sum_D_per_pair = log_sum_D_shifted[pair_time_enc, :]      # (n_pairs, R)
+    log_D_sum = max_VD_per_pair + log_sum_D_per_pair
 
-    # For each B-firm row, the D contribution from its market
-    D_contrib_B = D_contrib_per_pair[b_mkt_idx, :]           # (N_B, R)
-
-    # Stable softmax denominator for B-products within each market + D contribution
+    # Stable softmax denominator for B-products within each market
     # Step 1: per-market max over B-products (for numerical stability)
     max_VB_per_mkt = np.full((n_pairs, R), -np.inf)
     np.maximum.at(max_VB_per_mkt, b_mkt_idx, V_B)            # scatter-max
@@ -420,35 +434,23 @@ def compute_model_shares(delta: np.ndarray, mu: np.ndarray,
     exp_VB       = np.exp(V_B_shifted)                       # (N_B, R)
     sum_exp_B_per_mkt = np.zeros((n_pairs, R))
     np.add.at(sum_exp_B_per_mkt, b_mkt_idx, exp_VB)          # (n_pairs, R)
-
-    # The D contribution must be shifted by the same per-market max
-    # D_contrib already in raw exp scale; divide out the max
-    D_contrib_shifted = D_contrib_B * np.exp(-max_VB_per_mkt[b_mkt_idx, :])  # (N_B, R)
-
-    total_denom_B = sum_exp_B_per_mkt[b_mkt_idx, :] + D_contrib_shifted       # (N_B, R)
+    
+    log_B_sum = max_VB_per_mkt + np.log(np.maximum(1e-300, sum_exp_B_per_mkt))
+    
+    # Joint log-denominator using log-sum-exp
+    joint_max = np.maximum(log_B_sum, log_D_sum)
+    # (exp(log_B - max) + exp(log_D - max)) ensures no overflow
+    log_denom = joint_max + np.log(np.maximum(1e-300, np.exp(log_B_sum - joint_max) + np.exp(log_D_sum - joint_max)))
 
     # B-firm individual softmax probabilities: Eq-13-B averaged over R
-    q_B           = exp_VB / np.maximum(total_denom_B, 1e-300)  # (N_B, R)
-    s_B           = q_B.mean(axis=1)                             # (N_B,)
+    # q_B = exp(V_B - log_denom)
+    log_denom_B = log_denom[b_mkt_idx, :]
+    q_B         = np.exp(V_B - log_denom_B)                     # (N_B, R)
+    s_B         = q_B.mean(axis=1)                              # (N_B,)
 
     # --- D-firm national shares: Eq-13-D  s^{Act,D} = Σ_m (M_mt/M_t) * q_D_m ---
-    # For each D-firm row d and each B-market p, compute q_D_d_p = exp(V_D_d) / denom_p
-    # denom_p = sum_exp_B_per_mkt[p] * exp(max_VB_per_mkt[p]) + D_contrib[p]
-    # = (sum_exp_B_per_mkt[p] + D_contrib_shifted[p,0...]) * exp(max_VB_per_mkt[p])
-    # Since pop_weights already sum to 1 per time period we can do:
-    #   s^{Act,D}_{jkt} = Σ_p pop_weights[p] * (exp(V_D_d) / total_denom_raw_p)
-    # total_denom_raw_p = (sum_exp_B_per_mkt[p] + D_contrib_shifted averaged per pair) * exp(max_VB_per_mkt[p])
-    # Use per-pair average max to get raw denom:
-    avg_max_B    = max_VB_per_mkt.mean(axis=1)                           # (n_pairs,)
-    raw_denom_B  = (sum_exp_B_per_mkt + D_contrib_per_pair * np.exp(-max_VB_per_mkt)).mean(axis=1)  # (n_pairs,) R-averaged in shifted space
-    # That is: E_r[sum_B_shifted + D_shifted] — we average the denominator over R
-    # Then scale back: raw_denom[p] * exp(avg_max_B[p]) ≈ avg raw denominator (approx; exact if max stable)
-    # For the D share computation we work with per-draw to be exact:
-    # s_D_jkt = Σ_p pop_w[p] * mean_r(exp(V_D_d,r) / total_raw_p_r)
-    # Expand: (N_D, n_pairs, R) is too large for 500GB mode, so we loop over n_pairs batches
-    # n_pairs can be ~200k (465 MCAs × ~500 time periods) — iterate over times instead:
+    # q_D_d_p_r = exp(V_D_d,r - log_denom_p,r)
     s_D_nat = np.zeros(N_D)   # (N_D,)
-    exp_VD  = np.exp(V_D)     # (N_D, R)  — exp of un-shifted V_D values
 
     for t_idx in range(n_times):
         # Which B-markets belong to this time period?
@@ -464,46 +466,32 @@ def compute_model_shares(delta: np.ndarray, mu: np.ndarray,
         pairs_t  = np.where(pair_mask_t)[0]                   # indices into unique_pairs
         n_pt     = pairs_t.size
 
-        # Per-market total denominator in raw (un-shifted) space: (n_pt, R)
-        max_t     = max_VB_per_mkt[pairs_t, :]                # (n_pt, R)
-        se_B_t    = sum_exp_B_per_mkt[pairs_t, :]             # (n_pt, R)
-        dc_t      = D_contrib_per_pair[pairs_t, :]            # (n_pt, R)
-        # raw denom = (se_B_shifted + dc_shifted) * exp(max)
-        # = (se_B_t + dc_t * exp(-max_t)) * exp(max_t)
-        denom_raw_t = (se_B_t + dc_t * np.exp(-max_t)) * np.exp(max_t)   # (n_pt, R)
+        # Per-market log denominator: (n_pt, R)
+        log_denom_t = log_denom[pairs_t, :]                   # (n_pt, R)
 
-        # D-firm exp values for this time period: (n_dt, R)
-        exp_VD_t  = exp_VD[d_mask_t, :]                       # (n_dt, R)
-        n_dt      = exp_VD_t.shape[0]
+        # D-firm V values for this time period: (n_dt, R)
+        V_D_t = V_D[d_mask_t, :]                              # (n_dt, R)
+        n_dt  = V_D_t.shape[0]
 
-        # For each D-firm d and market p: q_D_d_p_r = exp_VD_t[d,r] / denom_raw_t[p,r]
-        # s_D_d = Σ_p pw_t[p] * mean_r(q_D_d_p_r)
-        # = Σ_p pw_t[p] * mean_r(exp_VD_t[d,r] / denom_raw_t[p,r])
-        # Shape trick: (n_dt, 1, R) / (1, n_pt, R) -> (n_dt, n_pt, R)
-        # Then mean over R -> (n_dt, n_pt), then dot pw_t -> (n_dt,)
-        # If n_dt * n_pt * R is huge, chunk over p:
-        q_sum = np.zeros(n_dt)  # accumulate Σ_p pw_t[p] * mean_r(...)
-        CHUNK = max(1, 500 // max(n_dt, 1))   # tune chunk size
+        # For each D-firm d and market p: q_D_d_p_r = exp(V_D_t[d,r] - log_denom_t[p,r])
+        # Expand: (n_dt, n_pt, R)
+        q_sum = np.zeros(n_dt)
+        CHUNK = max(1, 500 // max(n_dt, 1))
         for p_start in range(0, n_pt, CHUNK):
             p_end   = min(p_start + CHUNK, n_pt)
-            d_t_p_r  = exp_VD_t[:, np.newaxis, :] / denom_raw_t[np.newaxis, p_start:p_end, :]  # (n_dt,chunk,R)
-            d_t_p    = d_t_p_r.mean(axis=2)     # (n_dt, chunk)
-            q_sum   += d_t_p @ pw_t[p_start:p_end]   # (n_dt,)
+            # Shapes: V_D_t is (n_dt, 1, R), log_denom_t slice is (1, chunk, R)
+            v_diff  = V_D_t[:, np.newaxis, :] - log_denom_t[np.newaxis, p_start:p_end, :]
+            d_t_p_r = np.exp(v_diff)                            # (n_dt, chunk, R)
+            d_t_p   = d_t_p_r.mean(axis=2)                      # (n_dt, chunk)
+            q_sum  += d_t_p @ pw_t[p_start:p_end]               # (n_dt,)
 
         s_D_nat[d_mask_t] = q_sum   # model-implied national share for D-firm rows in time t
 
     # --- Ω_mt: Eq-14 = 1 - Σ_{j∈J^D_t, k} s^{Act,D}_{jk,local,mt} ---
-    # For each B-market p and draw r: D share in that market = Σ_d exp(V_D_d,r) / denom_raw_p_r
-    # Ω_mt[p] = 1 - mean_r( Σ_d exp(V_D_d,r) / denom_raw_p_r )
-    # = 1 - mean_r( sum_exp_D_time[t(p),r] / denom_raw_p_r )
-    # denom_raw[p,r] = (se_B_per_mkt[p,r] + D_contrib_shifted[p,r]) * exp(max_VB[p,r])
-    # We already have sum_exp_D_time and max_VB_per_mkt, sum_exp_B_per_mkt:
-    D_total_per_pair = D_contrib_per_pair                             # (n_pairs, R) = Σ_d exp(V_D_d)
-    raw_denom_all    = (sum_exp_B_per_mkt
-                         + D_total_per_pair * np.exp(-max_VB_per_mkt)) * np.exp(max_VB_per_mkt)  # (n_pairs, R)
-    local_D_share    = D_total_per_pair / np.maximum(raw_denom_all, 1e-300)  # (n_pairs, R)
-    omega_per_pair   = np.maximum(1e-10, 1.0 - local_D_share.mean(axis=1))  # (n_pairs,)
-    omega_B          = omega_per_pair[b_mkt_idx]                              # (N_B,)
+    # D_share_p_r = exp(log_D_sum_p,r - log_denom_p,r)
+    local_D_share  = np.exp(log_D_sum - log_denom)                # (n_pairs, R)
+    omega_per_pair = np.maximum(1e-10, 1.0 - local_D_share.mean(axis=1))  # (n_pairs,)
+    omega_B        = omega_per_pair[b_mkt_idx]                    # (N_B,)
 
     return s_B, s_D_nat, omega_B, is_B
 
