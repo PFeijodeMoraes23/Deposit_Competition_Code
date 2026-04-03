@@ -115,29 +115,33 @@ def get_pca_index(df_q, s_cols):
     ts_df['pca_index'] = ts_pca[:, 0]
     return ts_df.set_index('year_quarter')['pca_index'].to_dict()
 
-def predict_phi(model, param_vector):
+def predict_phi(params, cov_params, param_vector):
     """
     Given a fitted statsmodels result and a dictionary of mapping {param_name: value},
     compute the point estimate and the standard error.
     """
-    if model is None: return np.nan, np.nan
-    p_names = model.params.index
+    if params is None or cov_params is None: return np.nan, np.nan
+    p_names = params.index
     V = np.zeros(len(p_names))
     for i, name in enumerate(p_names):
         if name in param_vector:
             V[i] = param_vector[name]
     
-    est = V.dot(model.params)
-    var = V.dot(model.cov_params()).dot(V)
+    est = V.dot(params)
+    var = V.dot(cov_params).dot(V)
     return est, np.sqrt(var)
 
 def get_models_for_spec(iv_name, s_name, loc_res, nat_res):
     loc_key = f"{iv_name} x {s_name}"
+    def ext(m):
+        if m is None: return None, None
+        return m.params, m.cov_params()
+        
     return {
-        'loc': loc_res.get(loc_key, {}).get('second_stage', None),
-        'n1': nat_res.get(f"Option_1_{iv_name}_{s_name}", {}).get('second_stage', None),
-        'n2': nat_res.get(f"Option_2_{iv_name}_{s_name}", {}).get('second_stage', None),
-        'n3': nat_res.get(f"Option_3_{iv_name}_{s_name}", {}).get('second_stage', None)
+        'loc': ext(loc_res.get(loc_key, {}).get('second_stage', None)),
+        'n1': ext(nat_res.get(f"Option_1_{iv_name}_{s_name}", {}).get('second_stage', None)),
+        'n2': ext(nat_res.get(f"Option_2_{iv_name}_{s_name}", {}).get('second_stage', None)),
+        'n3': ext(nat_res.get(f"Option_3_{iv_name}_{s_name}", {}).get('second_stage', None))
     }
 
 def get_base_vector(s_cols, s_vals):
@@ -152,16 +156,16 @@ def generate_phi_plot(res_df, iv_name, s_name, spec_number, out_dir, all_options
 
     if all_options:
         configs = [
-            ('loc', r'Local Implied $\phi_t$ (Est 1)', 'blue'),
-            ('n1', 'Direct National (Opt 1)', 'green'),
-            ('n2', 'Direct National (Opt 2)', 'orange'),
-            ('n3', 'Direct National (Opt 3 - PCA)', 'purple')
+            ('loc', r'Local Implied $\hat{\phi}_t^{\mathrm{Loc}}$', 'blue'),
+            ('n1', r'Direct National $\hat{\phi}_t^{\mathrm{Nat},1}$', 'green'),
+            ('n2', r'Direct National $\hat{\phi}_t^{\mathrm{Nat},2}$', 'orange'),
+            ('n3', r'Direct National $\hat{\phi}_t^{\mathrm{Nat},3}$', 'purple')
         ]
         suffix = "_All"
     else:
         configs = [
-            ('loc', r'Local Implied $\phi_t$ (Est 1)', 'blue'),
-            ('n3', 'Direct National (Opt 3 - PCA)', 'purple')
+            ('loc', r'Local Implied $\hat{\phi}_t^{\mathrm{Loc}}$', 'blue'),
+            ('n3', r'Direct National $\hat{\phi}_t^{\mathrm{Nat},3}$', 'purple')
         ]
         suffix = ""
 
@@ -173,7 +177,7 @@ def generate_phi_plot(res_df, iv_name, s_name, spec_number, out_dir, all_options
             ax.fill_between(res_df['date'], est - 1.96*se, est + 1.96*se, color=color, alpha=0.15)
 
     ax.set_title(f"Specification {spec_number:02d}: {iv_name} x {s_name}", fontsize=14)
-    ax.set_ylabel(r"National $\phi_t$")
+    ax.set_ylabel(r"National $\hat{\phi}_t^{\mathrm{Nat},3}$")
     ax.set_xlabel("Year-Quarter")
     ax.legend(loc='best')
     ax.grid(True, linestyle='--', alpha=0.6)
@@ -185,7 +189,7 @@ def generate_phi_plot(res_df, iv_name, s_name, spec_number, out_dir, all_options
 
 def process_specification_phi(
     df, yq_list, s_cols, pca_dict, assets_agg, iv_name, s_name, spec_number, 
-    loc_res, nat_res, out_dir
+    loc_res, nat_res
 ):
     print(f"Generating plot for Specification {spec_number:02d}: {iv_name} x {s_name}")
 
@@ -199,22 +203,22 @@ def process_specification_phi(
         s_vals = {sv: sub[sv].median() for sv in s_cols}
 
         vec_loc = get_base_vector(s_cols, s_vals)
-        e_loc, se_loc = predict_phi(models['loc'], vec_loc)
+        e_loc, se_loc = predict_phi(models['loc'][0], models['loc'][1], vec_loc)
 
         vec_n1 = vec_loc.copy()
-        e_n1, se_n1 = predict_phi(models['n1'], {**vec_n1, 'constant': 1})  
+        e_n1, se_n1 = predict_phi(models['n1'][0], models['n1'][1], {**vec_n1, 'constant': 1})  
 
         vec_n2 = vec_loc.copy()
         a_lag = assets_agg.get(yq, 0)
         for sv in s_cols:
             if sv != 'constant':
                 vec_n2[f"interaction_{sv}_x_assets"] = s_vals[sv] * a_lag
-        e_n2, se_n2 = predict_phi(models['n2'], {**vec_n2, 'constant': 1})  
+        e_n2, se_n2 = predict_phi(models['n2'][0], models['n2'][1], {**vec_n2, 'constant': 1})  
 
         e_n3, se_n3 = np.nan, np.nan
-        if models['n3'] is not None and pca_dict is not None and yq in pca_dict:
+        if models['n3'][0] is not None and pca_dict is not None and yq in pca_dict:
             vec_n3 = {'nr_lagged_dep': 1.0, 'interaction_pca_index': pca_dict[yq]}
-            e_n3, se_n3 = predict_phi(models['n3'], {**vec_n3, 'constant': 1})
+            e_n3, se_n3 = predict_phi(models['n3'][0], models['n3'][1], {**vec_n3, 'constant': 1})
 
         res_df.append({
             'year_quarter': yq,
@@ -289,7 +293,7 @@ def main():
         for iv_name in iv_order:
             res_df = process_specification_phi(
                 df, yq_list, s_cols, pca_dict, assets_agg, iv_name, s_name, 
-                spec_number, loc_res, nat_res, out_dir
+                spec_number, loc_res, nat_res
             )
             
             if gen_default:

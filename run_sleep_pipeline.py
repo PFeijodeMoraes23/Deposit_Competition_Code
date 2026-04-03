@@ -17,7 +17,8 @@ def main():
         {"file": "export_1_sleep_results.py", "desc": "Export National Sleepiness LaTeX Tables & PDF"},
         {"file": "export_2_sleep_results.py", "desc": "Export Firm Level Sleepiness LaTeX Tables & PDF"},
         {"file": "estimation_1_demand_1_prep.py", "desc": "Demand Estimation Data Preparation (Eq-A4-B/D)"},
-        {"file": "estimation_1_demand_2_secondprep.py", "args": ["--spec", "all"], "desc": "High-Efficiency Demand Panel Serialization"}
+        {"file": "estimation_1_demand_2_secondprep.py", "args": ["--spec", "all"], "desc": "High-Efficiency Demand Panel Serialization"},
+        {"file": "estimation_2_demand_1_prep.py", "args": ["--spec", "all"], "desc": "Hybrid Demand Prep: B-type Local Phi + D-type PCA Phi"}
     ]
 
     cwd = Path(__file__).resolve().parent
