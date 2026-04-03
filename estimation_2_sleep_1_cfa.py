@@ -167,7 +167,7 @@ def run_model_option1(df, state_vars, has_cf=False):
     X_dm = demean_variables(df_ss, X_cols, 'entity_id')[X_cols].astype(float)
 
     mod = sm.OLS(y_dm, X_dm)
-    cluster_series = df_ss['bank_year']
+    cluster_series = df_ss['CodConglomeradoPrudencial'].astype(str)
     res = mod.fit(cov_type='cluster', cov_kwds={'groups': cluster_series}, use_t=True)
     return apply_imbalanced_cluster_correction(res, cluster_series)
 
@@ -204,7 +204,7 @@ def run_model_option2(df, state_vars, has_cf=False):
     X_dm = demean_variables(df_ss, X_cols, 'entity_id')[X_cols].astype(float)
 
     mod = sm.OLS(y_dm, X_dm)
-    cluster_series = df_ss['bank_year']
+    cluster_series = df_ss['CodConglomeradoPrudencial'].astype(str)
     res = mod.fit(cov_type='cluster', cov_kwds={'groups': cluster_series}, use_t=True)
     return apply_imbalanced_cluster_correction(res, cluster_series)
 
@@ -255,7 +255,7 @@ def run_model_option3(df, state_vars, has_cf=False):
     X_dm = demean_variables(df_ss, X_cols, 'entity_id')[X_cols].astype(float)
 
     mod = sm.OLS(y_dm, X_dm)
-    cluster_series = df_ss['bank_year']
+    cluster_series = df_ss['CodConglomeradoPrudencial'].astype(str)
     res = mod.fit(cov_type='cluster', cov_kwds={'groups': cluster_series}, use_t=True)
     return apply_imbalanced_cluster_correction(res, cluster_series)
 
@@ -279,7 +279,7 @@ def first_stage_cf(df, spec_instruments, exogenous_controls):
     X = sm.add_constant(df_fs[first_stage_vars])
 
     mod = sm.OLS(y, X)
-    cluster_series = df_fs['bank_year']
+    cluster_series = df_fs['CodConglomeradoPrudencial'].astype(str)
     res = mod.fit(cov_type='cluster', cov_kwds={'groups': cluster_series}, use_t=True)
     res = apply_imbalanced_cluster_correction(res, cluster_series)
 

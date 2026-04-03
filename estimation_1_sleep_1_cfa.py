@@ -237,7 +237,7 @@ def run_first_stage(df, spec_instruments, exogenous_controls):
     X = sm.add_constant(df_fs[first_stage_vars])
 
     mod = sm.OLS(y, X)
-    cluster_series = df_fs['bank_year']
+    cluster_series = df_fs['CodConglomeradoPrudencial'].astype(str)
     res = mod.fit(cov_type='cluster', cov_kwds={'groups': cluster_series}, use_t=True)
     res = apply_imbalanced_cluster_correction(res, cluster_series)
 
@@ -334,7 +334,7 @@ def run_second_stage(df, state_vars, has_cf=False, spec_name=""):
     # we simulate IK2016 bounds by mapping unadjusted CR1 variances strictly against 
     # a t-distribution parameterized entirely by the true Effective Clusters (G*).
     
-    cluster_series = df_ss['bank_year']
+    cluster_series = df_ss['CodConglomeradoPrudencial'].astype(str)
     res = mod.fit(cov_type='cluster', cov_kwds={'groups': cluster_series}, use_t=True)
     res = apply_imbalanced_cluster_correction(res, cluster_series)
 
@@ -352,7 +352,7 @@ def print_cluster_diagnostics(df):
     print("\n=====================================================================")
     print(" CLUSTER HOMOGENEITY DIAGNOSTICS")
     print("=====================================================================")
-    cluster_var = 'bank_year'
+    cluster_var = 'CodConglomeradoPrudencial'
     Ns = df.groupby(cluster_var).size()
     G_nominal = len(Ns)
     mean_Ng = np.mean(Ns)

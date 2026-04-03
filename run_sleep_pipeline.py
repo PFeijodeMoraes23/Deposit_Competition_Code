@@ -15,7 +15,9 @@ def main():
         {"file": "estimation_2_sleep_1_cfa.py", "args": ["--run-all"], "desc": "Firm Level First-Stage & Second-Stage (CFA)"},
         {"file": "estimation_2_sleep_2_phi.py", "args": ["--all-options"], "desc": "Firm Level Direct Phi Estimations and PCA Options"},
         {"file": "export_1_sleep_results.py", "desc": "Export National Sleepiness LaTeX Tables & PDF"},
-        {"file": "export_2_sleep_results.py", "desc": "Export Firm Level Sleepiness LaTeX Tables & PDF"}
+        {"file": "export_2_sleep_results.py", "desc": "Export Firm Level Sleepiness LaTeX Tables & PDF"},
+        {"file": "estimation_1_demand_1_prep.py", "desc": "Demand Estimation Data Preparation (Eq-A4-B/D)"},
+        {"file": "estimation_1_demand_2_secondprep.py", "args": ["--spec", "all"], "desc": "High-Efficiency Demand Panel Serialization"}
     ]
 
     cwd = Path(__file__).resolve().parent
