@@ -37,6 +37,10 @@ if ensure_project_venv is not None:
 import pandas as pd
 import numpy as np
 import statsmodels.api as sm
+import warnings
+
+# Suppress statsmodels rank-deficiency warnings due to cluster corrections
+warnings.filterwarnings("ignore", message="covariance of constraints does not have full rank")
 
 from scipy import stats
 def apply_imbalanced_cluster_correction(res, cluster_series):
@@ -114,6 +118,8 @@ def build_data():
     if 'year_quarter' not in df.columns:
         df['year_quarter'] = df['year'].astype(str) + "Q" + df['quarter'].astype(str)
 
+    df['bank_year'] = df['CodConglomeradoPrudencial'].astype(str) + "_" + df['year'].astype(str)
+
     df['lagged_deposits'] = df.groupby('entity_id')['deposit_balance'].shift(1)
     df['spread_qoq_lag'] = df.groupby('entity_id')['spread_qoq'].shift(1)
     df['risk_free_qoq_lag'] = df.groupby('entity_id')['risk_free_qoq'].shift(1)
@@ -161,7 +167,7 @@ def run_model_option1(df, state_vars, has_cf=False):
     X_dm = demean_variables(df_ss, X_cols, 'entity_id')[X_cols].astype(float)
 
     mod = sm.OLS(y_dm, X_dm)
-    cluster_series = df_ss['CodConglomeradoPrudencial']
+    cluster_series = df_ss['bank_year']
     res = mod.fit(cov_type='cluster', cov_kwds={'groups': cluster_series}, use_t=True)
     return apply_imbalanced_cluster_correction(res, cluster_series)
 
@@ -198,7 +204,7 @@ def run_model_option2(df, state_vars, has_cf=False):
     X_dm = demean_variables(df_ss, X_cols, 'entity_id')[X_cols].astype(float)
 
     mod = sm.OLS(y_dm, X_dm)
-    cluster_series = df_ss['CodConglomeradoPrudencial']
+    cluster_series = df_ss['bank_year']
     res = mod.fit(cov_type='cluster', cov_kwds={'groups': cluster_series}, use_t=True)
     return apply_imbalanced_cluster_correction(res, cluster_series)
 
@@ -249,7 +255,7 @@ def run_model_option3(df, state_vars, has_cf=False):
     X_dm = demean_variables(df_ss, X_cols, 'entity_id')[X_cols].astype(float)
 
     mod = sm.OLS(y_dm, X_dm)
-    cluster_series = df_ss['CodConglomeradoPrudencial']
+    cluster_series = df_ss['bank_year']
     res = mod.fit(cov_type='cluster', cov_kwds={'groups': cluster_series}, use_t=True)
     return apply_imbalanced_cluster_correction(res, cluster_series)
 
@@ -273,7 +279,7 @@ def first_stage_cf(df, spec_instruments, exogenous_controls):
     X = sm.add_constant(df_fs[first_stage_vars])
 
     mod = sm.OLS(y, X)
-    cluster_series = df_fs['CodConglomeradoPrudencial']
+    cluster_series = df_fs['bank_year']
     res = mod.fit(cov_type='cluster', cov_kwds={'groups': cluster_series}, use_t=True)
     res = apply_imbalanced_cluster_correction(res, cluster_series)
 
