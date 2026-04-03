@@ -49,7 +49,7 @@ def resolve_paths():
 
 def build_data(panel_csv):
     s_macro = ['gdp_per_capita', 'cadunico_families_per1000', 'fraction_65plus', 'fraction_young']
-    s_tech = ['pix_users_pf_per1000', 'connections_per100', 'branches_per_1000']
+    s_tech = ['pix_users_pf_per1000', 'connections_per100', 'branches_per1000']
     use_cols = ['year', 'quarter', 'year_quarter', 'lagged_deposits', 'deposit_balance', 'log_total_assets_lag', 
                 'risk_free_qoq', 'CodConglomeradoPrudencial', 'mca_code', 'deposit_type'] + s_macro + s_tech
     
@@ -262,7 +262,7 @@ def load_models(local_pkl, nat_pkl):
 def define_state_blocks(df):
     s_base = ['constant', 'post_2020']
     s_macro = s_base + ['gdp_per_capita', 'cadunico_families_per1000', 'fraction_65plus', 'fraction_young', 'risk_free_qoq_lag']
-    s_tech = s_macro + ['pix_users_pf_per1000', 'branches_per_1000']
+    s_tech = s_macro + ['pix_users_pf_per1000', 'connections_per100', 'branches_per1000']
     s_tech = [c for c in s_tech if c in df.columns]
     return {'Base': s_base, 'Macro': s_macro, 'Tech': s_tech}
 

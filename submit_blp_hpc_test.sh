@@ -2,7 +2,7 @@
 #SBATCH --job-name=blp_test
 #SBATCH --output=blp_test_output_%j.log
 #SBATCH --error=blp_test_error_%j.log
-#SBATCH --time=04:00:00              # 4 hours is plenty for R=100
+#SBATCH --time=12:00:00              # Increased time limit for testing
 #SBATCH --partition=day              # 'day' queues faster for small tests
 #SBATCH --nodes=1
 #SBATCH --ntasks=1

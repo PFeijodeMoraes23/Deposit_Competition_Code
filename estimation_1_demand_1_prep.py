@@ -169,7 +169,7 @@ def build_base_panel(panel_csv: Path) -> pd.DataFrame:
         df['pix_users_pf_per1000'] = df['pix_users_pf_per1000'] / 100.0
     if 'connections_per100' in df.columns:
         df['connections_per100'] = df['connections_per100'] / 100.0
-        
+
     s_tech_finance = ['pix_users_pf_per1000', 'connections_per100', 'branches_per1000']
     for col in s_tech_finance:
         if col in df.columns:
