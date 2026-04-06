@@ -21,6 +21,23 @@ CLI Flags
   Pipeline Control:
   --skip-estimation   Skip the estimation phase, only generate plots using existing pickle outputs.
   --skip-plots        Skip the plotting phase, only generate regression tables and pickles.
+
+CLI Options:
+------------
+usage: estimation_2_sleep.py [-h] [--option {1,2,3}] [--run-all]
+                             [--all-options] [--default-only]
+                             [--skip-estimation] [--skip-plots]
+
+Unified script: Estimate National Phi and generate plots.
+
+options:
+  -h, --help         show this help message and exit
+  --option {1,2,3}   Estimation: Run specifically one option.
+  --run-all          Estimation: Run all 3 regression options.
+  --all-options      Plotting: Generate plots with all 4 variants.
+  --default-only     Plotting: Generate default plots only.
+  --skip-estimation  Skip the regression phase.
+  --skip-plots       Skip the plotting phase.
 """
 import argparse
 from pathlib import Path

@@ -36,6 +36,16 @@ References
 ----------
   Egan, Hortacsu & Matvos (2025, NBER WP)
   Conlon & Gortmaker (2020, RAND J. Econ.)
+
+CLI Options:
+------------
+usage: estimation_2_demand_1_prep.py [-h] [--spec SPEC]
+
+Hybrid demand prep: B-type local phi + D-type PCA phi
+
+options:
+  -h, --help   show this help message and exit
+  --spec SPEC  Specification ID (1-12) or "all"
 """
 
 import sys

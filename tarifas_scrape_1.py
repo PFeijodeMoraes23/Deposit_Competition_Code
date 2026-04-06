@@ -42,6 +42,17 @@ Conglomerate mapping
 --------------------
 Uses the most recent IF-Data/List/IF_DATA_List_*.csv file, joining on the
 8-digit CNPJ root (tarifas `Cnpj` ↔ IF-Data `CodInst` when CodInst is numeric).
+
+CLI Options:
+------------
+usage: tarifas_scrape_1.py [-h] [--test N]
+
+BCB Tarifas Bancárias scraper
+
+options:
+  -h, --help  show this help message and exit
+  --test N    TEST MODE: scrape only the first N institutions (skips raw file
+              guard).
 """
 
 # -- stdlib ---------------------------------------------------------------------

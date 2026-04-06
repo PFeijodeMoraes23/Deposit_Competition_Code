@@ -11,6 +11,16 @@ This script sequentially runs:
   4. Plots containing these robustness bounds
 
 Outputs are directed to ESTIMATION_OUTPUT/SLEEPINESS/SLEEPINESS_NO_BREAK
+
+CLI Options:
+------------
+usage: estimation_3_sleep.py [-h] [--spec12]
+
+Estimation 3: Sleepiness Robustness
+
+options:
+  -h, --help  show this help message and exit
+  --spec12    Only run spec 12 (Tech x IV_HausmanFull)
 """
 import argparse
 from pathlib import Path

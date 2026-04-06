@@ -4,6 +4,18 @@ descriptive_1.py
 Generates summary statistics for the Egan et al. market panel setup.
 Outputs are saved as CSV and LaTeX tables partitioned by overall, bank type, and region,
 as well as broken down by year.
+
+CLI Options:
+------------
+usage: descriptive_1.py [-h] [--weight-col WEIGHT_COL]
+
+Generate descriptive statistics for the market panel.
+
+options:
+  -h, --help            show this help message and exit
+  --weight-col WEIGHT_COL
+                        Column to use for market-weighted statistics (e.g.,
+                        pop_total)
 """
 import argparse
 from pathlib import Path

@@ -24,6 +24,17 @@ CLI Flags
 ---------
   --skip-estimation   Skip the regression phase, only compute Phi outputs using existing pickle.
   --skip-phi          Skip the Phi construction phase, only generate regressions.
+
+CLI Options:
+------------
+usage: estimation_1_sleep.py [-h] [--skip-estimation] [--skip-phi]
+
+Unified Estimation 1 Sleep script.
+
+options:
+  -h, --help         show this help message and exit
+  --skip-estimation  Skip the first/second stage estimation phase.
+  --skip-phi         Skip the phi generation phase.
 """
 
 import sys

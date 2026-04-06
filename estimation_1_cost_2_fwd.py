@@ -1,3 +1,20 @@
+"""
+estimation_1_cost_2_fwd.py
+
+CLI Options:
+------------
+usage: estimation_1_cost_2_fwd.py [-h] [--spec SPEC]
+                                  [--shocks {20,50,100,200}] [--beta BETA]
+
+Forward Simulation for BBL Cost estimation.
+
+options:
+  -h, --help            show this help message and exit
+  --spec SPEC           Specification ID to run (e.g. 1)
+  --shocks {20,50,100,200}
+                        Number of policy violations (tilde sigma) to draw.
+  --beta BETA           Discount factor (beta) - typically 0.90 or 0.95.
+"""
 import argparse
 import pickle
 import numpy as np

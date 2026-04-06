@@ -40,6 +40,18 @@ References
   Egan, Hortacsu & Matvos (2025, NBER WP)
   Matvos & Seru (2014, AER)
   Ryan (2012, Econometrica)
+
+CLI Options:
+------------
+usage: estimation_1_cost_1_polfunc.py [-h] [--spec SPEC]
+
+Policy Function Estimation for Deposit Types k=4,5 (BBL Step 1)
+
+options:
+  -h, --help   show this help message and exit
+  --spec SPEC  Sleepiness specification label (1-12 or "all") for output
+               naming. The policy function estimation itself is spec-
+               invariant.
 """
 
 import sys

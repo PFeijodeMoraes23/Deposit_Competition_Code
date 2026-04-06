@@ -44,6 +44,40 @@ Notes
   * Stage 4 requires ALL panels to exist.  If some stage-2 downloads failed
     (data source unavailable), build_market_panel.py handles missing files
     gracefully (those columns will be NaN).
+
+
+
+
+
+CLI Options:
+------------
+usage: run_data_pipeline.py [-h] [--from N] [--only N] [--skip IDs] [--list]
+
+Run the full Brazilian Open Finance data pipeline.
+
+options:
+  -h, --help  show this help message and exit
+  --from N    Start from this stage number (0-4). Skips all earlier stages.
+  --only N    Run only this stage number (0-4). All others are skipped.
+  --skip IDs  Comma-separated list of step IDs to skip (e.g. '2b,2c').
+  --list      Print the pipeline steps and exit.
+
+Scripts called by the data pipeline:
+------------------------------------
+[1] if_data_scrape_1.py
+[2] ibge_demographics_panel.py
+[3] scrape_pix_panel.py
+[4] scrape_anatel.py
+[5] scrape_bcb_inclusion.py
+[6] scrape_cadunico.py
+[7] tarifas_scrape_1.py
+[8] deposits_panel_build.py
+[9] append_rates.py
+[10] bank_chars_panel_build.py
+[11] flag_digital_banks.py
+[12] build_market_panel.py
+[13] build_market_panel_instruments.py
+[14] descriptive_1.py
 """
 
 import argparse
@@ -322,6 +356,24 @@ def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(
         description="Run the full Brazilian Open Finance data pipeline.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Scripts called by the data pipeline:
+------------------------------------
+[1] if_data_scrape_1.py
+[2] ibge_demographics_panel.py
+[3] scrape_pix_panel.py
+[4] scrape_anatel.py
+[5] scrape_bcb_inclusion.py
+[6] scrape_cadunico.py
+[7] tarifas_scrape_1.py
+[8] deposits_panel_build.py
+[9] append_rates.py
+[10] bank_chars_panel_build.py
+[11] flag_digital_banks.py
+[12] build_market_panel.py
+[13] build_market_panel_instruments.py
+[14] descriptive_1.py
+"""
     )
     p.add_argument(
         "--from", dest="from_stage", type=int, default=0, metavar="N",

@@ -29,6 +29,33 @@ References
   Conlon & Gortmaker (2020, RAND J. Econ.)
   Egan, Hortacsu & Matvos (2017, AER)
   Nevo (2001, Econometrica)
+
+CLI Options:
+------------
+usage: estimation_1_demand_2_loop.py [-h] [--spec SPEC]
+                                     [--stage {logit,sigma,full,extended,sequence}]
+                                     [--R {100,500,1000}] [--seed SEED]
+                                     [--tol-inner TOL_INNER]
+                                     [--max-inner MAX_INNER]
+                                     [--tol-outer TOL_OUTER]
+                                     [--method {l-bfgs-b,nelder-mead}]
+                                     [--workers WORKERS] [--hpc]
+
+BLP Demand Estimation Loop (Appendix-BLP)
+
+options:
+  -h, --help            show this help message and exit
+  --spec SPEC           Specification ID (1-12) or "all"
+  --stage {logit,sigma,full,extended,sequence}
+  --R {100,500,1000}    Number of simulation draws (CG2020: 100 for testing,
+                        1000 for final)
+  --seed SEED
+  --tol-inner TOL_INNER
+  --max-inner MAX_INNER
+  --tol-outer TOL_OUTER
+  --method {l-bfgs-b,nelder-mead}
+  --workers WORKERS     Number of simultaneous multiprocessing workers
+  --hpc                 Use HPC cluster path structure
 """
 
 import os
