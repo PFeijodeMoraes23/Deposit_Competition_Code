@@ -370,6 +370,9 @@ def do_phi_generation():
     results_pickle_path = output_dir / "estimation_results.pkl"
     
     df = pd.read_csv(panel_csv, low_memory=False)
+    if 'year_quarter' not in df.columns and 'year' in df.columns:
+        df['year_quarter'] = df['year'].astype(int).astype(str) + "Q" + df['quarter'].astype(int).astype(str)
+    
     if 'year' in df.columns: df['post_2020'] = (df['year'] >= 2020).astype(int)
 
     df['entity_id'] = df['CodConglomeradoPrudencial'].astype(str) + "_" + df['mca_code'].astype(str)

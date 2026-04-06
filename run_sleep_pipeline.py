@@ -29,6 +29,30 @@ import sys
 import time
 from pathlib import Path
 
+def send_notification_email(finished_step, elapsed_seconds, next_step):
+    try:
+        import win32com.client
+        outlook = win32com.client.Dispatch('outlook.application')
+        mail = outlook.CreateItem(0)
+        mail.To = "pedro.feijodemoraes@yale.edu"
+        
+        mins, secs = divmod(int(elapsed_seconds), 60)
+        mail.Subject = f"[Sleep Pipeline] Finished: {finished_step}"
+        
+        body = f"The sleep pipeline has successfully completed {finished_step}.\n"
+        body += f"Duration: {mins} minutes and {secs} seconds.\n\n"
+        
+        if next_step:
+            body += f"Next step starting now: {next_step}\n"
+        else:
+            body += "This was the last step. The pipeline is fully complete!\n"
+            
+        mail.Body = body
+        mail.Send()
+        print("  -> Notification email sent via Outlook!")
+    except Exception as e:
+        print(f"  -> Could not send Outlook notification: {e}")
+
 def main():
     parser = argparse.ArgumentParser(
         description="Run the full Sleepiness Estimation Pipeline.",
@@ -99,6 +123,13 @@ This script sequentially runs the following steps:
         if result.returncode != 0:
             print(f"\n[ERROR] Pipeline aborted. Script '{script}' failed with exit code: {result.returncode}")
             sys.exit(result.returncode)
+
+        # Notify via Email
+        if idx < len(scripts_to_run):
+            next_s = scripts_to_run[idx]["file"]
+        else:
+            next_s = None
+        send_notification_email(script, elapsed_script, next_s)
 
     elapsed_all = time.time() - start_time_all
     print("\n=====================================================================")
