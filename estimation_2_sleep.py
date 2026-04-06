@@ -72,7 +72,7 @@ def _resolve_estimation_paths():
     _ROOT = Path(__file__).resolve().parents[2]
     DATA_DIR = _ROOT / "BCB" / "Egan_et_al_2025_Rep" / "processed"
     PANEL_CSV = DATA_DIR / "market_panel.csv"
-    OUTPUT_DIR = DATA_DIR / "ESTIMATION_OUTPUT" / "SLEEPINESS_NATIONAL"
+    OUTPUT_DIR = DATA_DIR / "ESTIMATION_OUTPUT" / "SLEEPINESS" / "SLEEPINESS_NATIONAL"
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     return PANEL_CSV, OUTPUT_DIR
 
@@ -85,7 +85,7 @@ def demean_variables(df, cols, entity_col):
 
 def build_estimation_data():
     panel_csv, _ = _resolve_estimation_paths()
-    df_raw = pd.read_csv(panel_csv, dtype={'year_quarter': str, 'CodIbge': str})
+    df_raw = pd.read_csv(panel_csv, dtype={'year_quarter': str, 'CODMUN_IBGE': str})
     df = df_raw[df_raw['Source'] == 'IFDATA'].copy()
     df = df.drop_duplicates(subset=['CodConglomeradoPrudencial', 'year', 'quarter'])
 
@@ -322,8 +322,8 @@ def resolve_plot_paths():
     DATA_DIR = _ROOT / "BCB" / "Egan_et_al_2025_Rep" / "processed"
     PANEL_CSV = DATA_DIR / "market_panel.csv"
     
-    LOCAL_RESULTS_PICKLE = DATA_DIR / "ESTIMATION_OUTPUT" / "SLEEPINESS_NEW" / "estimation_results.pkl"
-    NATIONAL_RESULTS_PICKLE = DATA_DIR / "ESTIMATION_OUTPUT" / "SLEEPINESS_NATIONAL" / "estimation_results.pkl"
+    LOCAL_RESULTS_PICKLE = DATA_DIR / "ESTIMATION_OUTPUT" / "SLEEPINESS" / "SLEEPINESS_NEW" / "estimation_results.pkl"
+    NATIONAL_RESULTS_PICKLE = DATA_DIR / "ESTIMATION_OUTPUT" / "SLEEPINESS" / "SLEEPINESS_NATIONAL" / "estimation_results.pkl"
     
     OUTPUT_DIR = DATA_DIR / "ESTIMATION_OUTPUT" / "PLOTS"
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)

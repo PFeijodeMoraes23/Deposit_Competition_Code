@@ -61,7 +61,7 @@ def _resolve_runtime_paths() -> tuple[Path, Path]:
     _ROOT = Path(__file__).resolve().parents[2]
     DATA_DIR = _ROOT / "BCB" / "Egan_et_al_2025_Rep" / "processed"
     PANEL_CSV = DATA_DIR / "market_panel.csv"
-    OUTPUT_DIR = DATA_DIR / "ESTIMATION_OUTPUT" / "SLEEPINESS_NEW"
+    OUTPUT_DIR = DATA_DIR / "ESTIMATION_OUTPUT" / "SLEEPINESS" / "SLEEPINESS_NEW"
 
     if load_default_toon_context is None or get_script_config is None:
         return PANEL_CSV, OUTPUT_DIR
@@ -344,7 +344,7 @@ def calculate_phis(df, res_dict, state_blocks):
                 phi_mt += c if sv == 'constant' else c * filled_cols[sv]
         
         df[f'phi_mt_{spec_name}'] = phi_mt
-        market_agg = df.groupby(['year_quarter', 'CodIbge'], observed=True).agg(phi_mt=(f'phi_mt_{spec_name}', 'mean'), M_mt=('market_size', 'sum')).reset_index()
+        market_agg = df.groupby(['year_quarter', 'CODMUN_IBGE'], observed=True).agg(phi_mt=(f'phi_mt_{spec_name}', 'mean'), M_mt=('market_size', 'sum')).reset_index()
         weighted_phi = market_agg['phi_mt'] * market_agg['M_mt']
         sum_weighted = weighted_phi.groupby(market_agg['year_quarter']).sum()
         sum_m_mt = market_agg['M_mt'].groupby(market_agg['year_quarter']).sum()

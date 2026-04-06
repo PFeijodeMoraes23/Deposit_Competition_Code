@@ -4,7 +4,7 @@ from pathlib import Path
 
 code_dir = Path(r'C:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\Code\Egan_et_al_2025_Rep')
 DATA_DIR = code_dir.parents[1] / 'BCB' / 'Egan_et_al_2025_Rep' / 'processed'
-OUTPUT_DIR = DATA_DIR / 'ESTIMATION_OUTPUT' / 'SLEEPINESS_NEW'
+OUTPUT_DIR = DATA_DIR / 'ESTIMATION_OUTPUT' / 'SLEEPINESS' / 'SLEEPINESS_NEW'
 
 with open(OUTPUT_DIR / 'estimation_results.pkl', 'rb') as f:
     results_dict = pickle.load(f)
