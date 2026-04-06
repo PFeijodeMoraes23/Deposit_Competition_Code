@@ -2,7 +2,7 @@
 #SBATCH --job-name=blp_test
 #SBATCH --output=blp_test_output_%j.log
 #SBATCH --error=blp_test_error_%j.log
-#SBATCH --time=12:00:00              # Increased time limit for testing
+#SBATCH --time=04:00:00              # 4 hours is plenty for R=100
 #SBATCH --partition=day              # 'day' queues faster for small tests
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
@@ -15,9 +15,10 @@ module load miniconda
 conda activate dep_comp_blp
 cd /home/pf382/dep_comp/scripts
 
-python -u estimation_1_demand_3_loop.py \
-    --spec 1 \
+python -u estimation_1_demand_2_loop.py \
+    --spec 12 \
     --stage sigma \
     --R 100 \
     --workers 4 \
+    --max-inner 5000 \
     --hpc

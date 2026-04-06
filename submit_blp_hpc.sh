@@ -15,9 +15,10 @@
 module load miniconda
 conda activate dep_comp_blp
 cd /home/pf382/dep_comp/scripts
-python -u estimation_1_demand_3_loop.py \
-    --spec all \
+python -u estimation_1_demand_2_loop.py \
+    --spec 12 \
     --stage sequence \
     --R 1000 \
     --workers 8 \
+    --max-inner 5000 \
     --hpc

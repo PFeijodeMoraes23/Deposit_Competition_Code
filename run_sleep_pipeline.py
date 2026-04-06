@@ -10,14 +10,11 @@ def main():
 
     # Define the scripts and their arguments precisely as requested
     scripts_to_run = [
-        {"file": "estimation_1_sleep_1_cfa.py", "desc": "National Level First-Stage & Second-Stage (CFA)"},
-        {"file": "estimation_1_sleep_2_phi.py", "desc": "National Level Implied Phi Generation"},
-        {"file": "estimation_2_sleep_1_cfa.py", "args": ["--run-all"], "desc": "Firm Level First-Stage & Second-Stage (CFA)"},
-        {"file": "estimation_2_sleep_2_phi.py", "args": ["--all-options"], "desc": "Firm Level Direct Phi Estimations and PCA Options"},
+        {"file": "estimation_1_sleep.py", "desc": "Local Estimation of Sleepness"},
+        {"file": "estimation_2_sleep.py", "args": ["--run-all", "--all-options"], "desc": "National Level Phi for D firms + Plots"},
         {"file": "export_1_sleep_results.py", "desc": "Export National Sleepiness LaTeX Tables & PDF"},
         {"file": "export_2_sleep_results.py", "desc": "Export Firm Level Sleepiness LaTeX Tables & PDF"},
-        {"file": "estimation_1_demand_1_prep.py", "desc": "Demand Estimation Data Preparation (Eq-A4-B/D)"},
-        {"file": "estimation_1_demand_2_secondprep.py", "args": ["--spec", "all"], "desc": "High-Efficiency Demand Panel Serialization"},
+        {"file": "estimation_1_demand_1_prep.py", "args": ["--spec", "all"], "desc": "Demand Data Preparation & Panel Serialization"},
         {"file": "estimation_2_demand_1_prep.py", "args": ["--spec", "all"], "desc": "Hybrid Demand Prep: B-type Local Phi + D-type PCA Phi"}
     ]
 

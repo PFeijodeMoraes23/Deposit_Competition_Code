@@ -651,7 +651,7 @@ def estimate_theta1(df: pd.DataFrame, delta: np.ndarray) -> tuple:
 
     xi = delta - X_full @ theta1  # Residuals using original X
 
-    theta1_se = _compute_cluster_robust_se(delta_v, X_v, X_hat.shape[1], (df['CodConglomeradoPrudencial'].astype(str) + "_" + df['year'].astype(str)).values[valid])
+    theta1_se = _compute_cluster_robust_se(delta_v, X_v, X_hat.shape[1], (df['CodConglomeradoPrudencial'].astype(str) + "_" + df['time_id'].str.split('Q').str[0]).values[valid])
 
     return theta1, xi, theta1_se
 
