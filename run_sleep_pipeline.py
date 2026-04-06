@@ -17,10 +17,11 @@ This script sequentially runs the following steps:
   2. estimation_2_sleep.py         (National Level Phi for D firms + Plots)
   3. estimation_3_sleep.py         (Robustness bounds for B-firms)
   4. estimation_4_sleep.py         (Robustness bounds for pooled B and D firms)
-  5. export_1_sleep_results.py     (Export National Sleepiness LaTeX Tables & PDF)
-  6. export_2_sleep_results.py     (Export Firm Level Sleepiness LaTeX Tables & PDF)
-  7. estimation_1_demand_1_prep.py (Demand Data Preparation & Panel Serialization)
-  8. estimation_2_demand_1_prep.py (Hybrid Demand Prep: B-type Local Phi + D-type PCA Phi)
+  5. estimation_5_sleep.py         (NLLS logistic structural estimation)
+  6. export_1_sleep_results.py     (Export National Sleepiness LaTeX Tables & PDF)
+  7. export_2_sleep_results.py     (Export Firm Level Sleepiness LaTeX Tables & PDF)
+  8. estimation_1_demand_1_prep.py (Demand Data Preparation & Panel Serialization)
+  9. estimation_2_demand_1_prep.py (Hybrid Demand Prep: B-type Local Phi + D-type PCA Phi)
 """
 import argparse
 import subprocess
@@ -37,10 +38,11 @@ This script sequentially runs the following steps:
   2. estimation_2_sleep.py         (National Level Phi for D firms + Plots)
   3. estimation_3_sleep.py         (Robustness bounds for B-firms)
   4. estimation_4_sleep.py         (Robustness bounds for pooled B and D firms)
-  5. export_1_sleep_results.py     (Export National Sleepiness LaTeX Tables & PDF)
-  6. export_2_sleep_results.py     (Export Firm Level Sleepiness LaTeX Tables & PDF)
-  7. estimation_1_demand_1_prep.py (Demand Data Preparation & Panel Serialization)
-  8. estimation_2_demand_1_prep.py (Hybrid Demand Prep: B-type Local Phi + D-type PCA Phi)
+  5. estimation_5_sleep.py         (NLLS logistic structural estimation)
+  6. export_1_sleep_results.py     (Export National Sleepiness LaTeX Tables & PDF)
+  7. export_2_sleep_results.py     (Export Firm Level Sleepiness LaTeX Tables & PDF)
+  8. estimation_1_demand_1_prep.py (Demand Data Preparation & Panel Serialization)
+  9. estimation_2_demand_1_prep.py (Hybrid Demand Prep: B-type Local Phi + D-type PCA Phi)
         """,
         formatter_class=argparse.RawDescriptionHelpFormatter
     )
@@ -66,6 +68,7 @@ This script sequentially runs the following steps:
         {"file": "estimation_2_sleep.py", "args": ["--run-all", "--all-options"], "desc": "National Level Phi for D firms + Plots"},
         {"file": "estimation_3_sleep.py", "args": spec12_arg, "desc": "Robustness bounds for B-firms"},
         {"file": "estimation_4_sleep.py", "args": spec12_arg, "desc": "Robustness bounds for pooled B and D firms"},
+        {"file": "estimation_5_sleep.py", "args": spec12_arg, "desc": "NLLS logistic structural estimation"},
         {"file": "export_1_sleep_results.py", "desc": "Export National Sleepiness LaTeX Tables & PDF"},
         {"file": "export_2_sleep_results.py", "desc": "Export Firm Level Sleepiness LaTeX Tables & PDF"},
         {"file": "estimation_1_demand_1_prep.py", "args": ["--spec", spec_arg], "desc": "Demand Data Preparation & Panel Serialization"},
