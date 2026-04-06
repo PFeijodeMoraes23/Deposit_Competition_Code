@@ -133,6 +133,12 @@ STEPS = [
      "Merge all MCA panels + deposit panel -> master analysis dataset"),
     (4, "4b", "build_market_panel_instruments.py",
      "Compute LOO instruments and FGC dummy -> overwrites market_panel.csv"),
+
+    # Stage 5 -- descriptive statistics
+    (5, "5a", "descriptive_1.py",
+     "Generate unweighted overview descriptive tables"),
+    (5, "5b", "descriptive_1.py --weight-col pop_total",
+     "Generate market-weighted descriptive tables"),
 ]
 
 
@@ -242,6 +248,8 @@ WAVES: list[list[str]] = [
     ["1a", "2a", "2b", "2d", "2e", "2f", "3a"], # Wave 2: all characteristic panels + deposits
     ["3b", "3c", "3d"],                         # Wave 3: deposit rates/spreads + bank chars + digital flags (parallel)
     ["4a"],                                     # Wave 4: master merge
+    ["4b"],                                     # Wave 5: instrumental variables
+    ["5a", "5b"],                               # Wave 6: descriptive statistics
 ]
 
 def run_wave(
