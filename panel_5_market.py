@@ -674,7 +674,7 @@ _COL_ORDER = [
     "cadunico_families_per1000", "cadunico_extreme_poverty", "cadunico_poverty",
     # Bank characteristics
     "total_assets", "log_total_assets", "equity", "equity_ratio",
-    "has_ip", "segment", "seg_S2", "seg_S3", "seg_S4", "seg_S5",
+    "has_ip", "is_coop", "is_state_owned", "is_captive", "segment", "seg_S2", "seg_S3", "seg_S4", "seg_S5",
 ]
 
 
@@ -719,6 +719,13 @@ def main() -> None:
     # D3. Merge bank characteristics (total assets, etc.)
     bank_chars = load_bank_chars()
     panel = merge_bank_chars(panel, bank_chars)
+
+    # Drop Captive Financiers (auto/mutuos PF) from the estimation pool
+    before_drop = len(panel)
+    panel = panel[panel['is_captive'] != True]
+    after_drop = len(panel)
+    if before_drop > after_drop:
+        logging.info(f"Dropped {before_drop - after_drop} observations belonging to Captive Financiers.")
 
     # D4. Calculate the Leave-One-Out Mean Spread (Hausman IV) natively over wide format deposit columns
     panel = calculate_hausman_iv_wide(panel)

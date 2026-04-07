@@ -161,7 +161,7 @@ def main():
         ativ = str(info.get('Atividade', '')).strip().lower()
         seg = str(info.get('SegmentoTb', '')).strip().lower()
         
-        whitelist_names = ['nupagamentos', 'inter', 'c6', 'nubank', 'picpay', 'pagseguro', 'mercadopago']
+        whitelist_names = ['nupagamentos', 'inter', 'c6', 'nubank', 'picpay', 'pagseguro', 'mercadopago', 'btg', 'bs2', 'genial', 'sofisa', 'rendimento']
         blacklist_ativ = ['tesouraria e negócios', 'crédito atacado', 'filial estrangeiro', 'câmbio', 'tesouraria e negocios', 'credito atacado', 'cambio']
         blacklist_seg = ['banco comercial estrangeiro', 'sociedade distribuidora de tvm', 'banco de investimento', 'sociedade corretora de tvm', 'sociedade corretora de câmbio', 'agência de fomento']
         

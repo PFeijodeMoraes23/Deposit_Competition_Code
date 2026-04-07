@@ -4,7 +4,7 @@
 This project implements a large-scale data pipeline and economic estimation framework focusing on the Brazilian banking sector (Open Finance, PIX, deposits, banking access). It replicates and extends models (e.g., Egan et al., BLP logit demand) to analyze consumer "sleepiness" (inertia) and deposit elasticity.
 
 - **Data Gathering**: Scrapers (`scrape_*.py`, `if_data_scrape_1.py`) for Brazilian APIs (BCB Olinda, CadUnico, Anatel).
-- **Panel Building**: Generates intermediate datasets and merges them into a master 1.4GB `market_panel.csv` (`build_market_panel.py`).
+- **Panel Building**: Generates intermediate datasets and merges them into a master 1.4GB `market_panel.csv` (`panel_5_market.py`).
 - **Sleepiness Pipeline**: Estimates consumer inertia at national and firm levels (`run_sleep_pipeline.py`).
 - **BLP Estimation**: Partitioned between local prep and HPC parallel loop execution to protect against RAM exhaustion. See `HPC_README.md` for full HPC execution instructions.
 

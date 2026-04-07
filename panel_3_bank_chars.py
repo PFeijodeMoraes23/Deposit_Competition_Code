@@ -92,8 +92,23 @@ def load_and_pivot(report_num, accounts_dict):
                 df['SegmentoTb'].astype(str).str.contains('Institu', case=False, na=False) &
                 df['SegmentoTb'].astype(str).str.contains('Pagamento', case=False, na=False)
             )
+            df['is_coop'] = df['SegmentoTb'].astype(str).str.contains('Cooperativa', case=False, na=False)
         else:
             df['is_ip'] = False
+            df['is_coop'] = False
+
+        if 'NomeInstituicao' in df.columns:
+            df['is_state_owned'] = (
+                df['SegmentoTb'].astype(str).str.contains('Caixa Econômica', case=False, na=False) |
+                df['NomeInstituicao'].astype(str).str.contains('Banco do Brasil|BNDES|BANRISUL|NORDESTE|AMAZONIA|BANZ|BANPARA|BANESE|BRB|BANDES', case=False, na=False)
+            )
+        else:
+            df['is_state_owned'] = False
+
+        if 'Atividade' in df.columns:
+            df['is_captive'] = df['Atividade'].astype(str).str.contains('Mútuo PF sem conta corrente', case=False, na=False)
+        else:
+            df['is_captive'] = False
 
         if 'Sr' in df.columns:
             df['segment_raw'] = df['Sr'].astype(str).str.strip().str.upper()
@@ -103,7 +118,11 @@ def load_and_pivot(report_num, accounts_dict):
 
         cat_agg = (
             df.groupby(['CodConglomeradoPrudencial', 'Year', 'Quarter'])
-            .agg(has_ip=('is_ip', 'max'), segment=('segment_raw', 'first'))
+            .agg(has_ip=('is_ip', 'max'), 
+                 is_coop=('is_coop', 'max'),
+                 is_state_owned=('is_state_owned', 'max'),
+                 is_captive=('is_captive', 'max'),
+                 segment=('segment_raw', 'first'))
             .reset_index()
         )
         pivot = pivot.merge(cat_agg, on=['CodConglomeradoPrudencial', 'Year', 'Quarter'], how='right')
