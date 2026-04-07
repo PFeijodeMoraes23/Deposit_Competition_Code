@@ -159,43 +159,43 @@ def _load_toon_runtime_context() -> dict:
 # Each entry: (stage_int, step_id_str, script_filename, description)
 STEPS = [
     # Stage 0 -- raw downloads
-    (0, "0a", "scrape_1_bcb_estban_if_data.py",
+    (0, "1", "scrape_1_bcb_estban_if_data.py",
      "ESTBAN monthly files + IF Data (Olinda API)"),
 
     # Stage 1 -- IBGE demographics
-    (1, "1a", "scrape_2_ibge_demographics.py",
+    (1, "2", "scrape_2_ibge_demographics.py",
      "IBGE population, GDP, age structure -> MCA demographics panel"),
 
     # Stage 2 -- market characteristic panels
-    (2, "2a", "scrape_3_pix_panel.py",
+    (2, "3", "scrape_3_pix_panel.py",
      "Process BCB PIX municipality files -> MCA PIX adoption panel"),
-    (2, "2b", "scrape_4_anatel.py",
+    (2, "4", "scrape_4_anatel.py",
      "Download ANATEL mobile connections -> MCA connectivity panel"),
-    (2, "2d", "scrape_5_bcb_inclusion.py",
+    (2, "5", "scrape_5_bcb_inclusion.py",
      "BCB banking access-points (branches + correspondents) -> MCA inclusion panel"),
-    (2, "2e", "scrape_6_cadunico.py",
+    (2, "6", "scrape_6_cadunico.py",
      "CadUnico low-income families -> MCA poverty panel"),
-    (2, "2f", "scrape_7_fees.py",
+    (2, "7", "scrape_7_fees.py",
      "BCB bank fee schedules (PF + PJ) -> tarifas conglomerate panel + fee summary"),
-    (3, "3a", "panel_1_deposits.py",
+    (3, "8", "panel_1_deposits.py",
      "ESTBAN + IF Data -> conglomerate x municipality x quarter deposit panel"),
-    (3, "3b", "panel_2_rates.py",
+    (3, "9", "panel_2_rates.py",
      "Compute and append deposit rates/spreads (COSIF + SGS) to deposit panel"),
-    (3, "3c", "panel_3_bank_chars.py",
+    (3, "10", "panel_3_bank_chars.py",
      "IF Data -> conglomerate x quarter bank size and solvency characteristics panel"),
-    (3, "3d", "panel_4_flag_digital.py",
+    (3, "11", "panel_4_flag_digital.py",
      "Analyze raw ESTBAN to identify purely digital banks -> PANEL_INTERMED"),
 
     # Stage 4 -- master analysis panel
-    (4, "4a", "panel_5_market.py",
+    (4, "12", "panel_5_market.py",
      "Merge all MCA panels + deposit panel -> master analysis dataset"),
-    (4, "4b", "panel_6_instruments.py",
+    (4, "13", "panel_6_instruments.py",
      "Compute LOO instruments and FGC dummy -> overwrites market_panel.csv"),
 
     # Stage 5 -- descriptive statistics
-    (5, "5a", "desc_1.py",
+    (5, "14", "desc_1.py",
      "Generate unweighted overview descriptive tables"),
-    (5, "5b", "desc_1.py --weight-col pop_total",
+    (5, "15", "desc_1.py --weight-col pop_total",
      "Generate market-weighted descriptive tables"),
 ]
 
@@ -302,12 +302,12 @@ def run_step(step_id: str, script: str, description: str) -> float:
 #   Wave 3 -- 3b (deposit rates) runs after 3a constructs the deposit panel.
 #   Wave 4 -- 4a (master merge) needs everything above -> serial.
 WAVES: list[list[str]] = [
-    ["0a"],                                     # Wave 1: ESTBAN + IF Data raw download
-    ["1a", "2a", "2b", "2d", "2e", "2f", "3a"], # Wave 2: all characteristic panels + deposits
-    ["3b", "3c", "3d"],                         # Wave 3: deposit rates/spreads + bank chars + digital flags (parallel)
-    ["4a"],                                     # Wave 4: master merge
-    ["4b"],                                     # Wave 5: instrumental variables
-    ["5a", "5b"],                               # Wave 6: descriptive statistics
+    ["1"],                                     # Wave 1: ESTBAN + IF Data raw download
+    ["2", "3", "4", "5", "6", "7", "8"],       # Wave 2: all characteristic panels + deposits
+    ["9", "10", "11"],                         # Wave 3: deposit rates/spreads + bank chars + digital flags (parallel)
+    ["12"],                                    # Wave 4: master merge
+    ["13"],                                    # Wave 5: instrumental variables
+    ["14", "15"],                              # Wave 6: descriptive statistics
 ]
 
 def run_wave(
