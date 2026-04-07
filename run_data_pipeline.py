@@ -303,7 +303,13 @@ def run_step(step_id: str, script: str, description: str) -> float:
 #   Wave 4 -- 4a (master merge) needs everything above -> serial.
 WAVES: list[list[str]] = [
     ["1"],                                     # Wave 1: ESTBAN + IF Data raw download
-    ["2", "3", "4", "5", "6", "7", "8"],       # Wave 2: all characteristic panels + deposits
+    ["2"],                                     # Wave 2a: IBGE
+    ["3"],                                     # Wave 2b: Stage 2 scrapers CANNOT be parallelized
+    ["4"],                                     # Wave 2c: ANATEL
+    ["5"],                                     # Wave 2d: BCB inclusion
+    ["6"],                                     # Wave 2e: CadUnico
+    ["7"],                                     # Wave 2f: fees
+    ["8"],                                     # Wave 2g: characteristic panels + deposits
     ["9", "10", "11"],                         # Wave 3: deposit rates/spreads + bank chars + digital flags (parallel)
     ["12"],                                    # Wave 4: master merge
     ["13"],                                    # Wave 5: instrumental variables

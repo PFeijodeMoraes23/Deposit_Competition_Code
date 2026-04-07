@@ -40,7 +40,7 @@ def send_notification_email(finished_step, elapsed_seconds, next_step):
     # $env:SYS_EMAIL_USER="your-email@gmail.com"
     # $env:SYS_EMAIL_PWD="your-16-digit-app-password"
     
-    sender = os.environ.get("SYS_EMAIL_USER", "pedro.feijodemoraes@yale.edu")
+    sender = os.environ.get("SYS_EMAIL_USER", "pedro.feijo25@gmail.com")
     pwd = os.environ.get("SYS_EMAIL_PWD")
     recipient = "pedro.feijodemoraes@yale.edu"
 
