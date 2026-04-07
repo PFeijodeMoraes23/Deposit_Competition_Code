@@ -13,10 +13,7 @@ Pipeline stages
     0a. if_data_scrape_1.py          ESTBAN monthly files + IF Data via Olinda API
 
   Stage 1 - IBGE demographics
-    1a. ibge_demographics_panel.py   Municipal population, GDP, age structure -> MCA panel
-
-  Stage 2 - Market-characteristic panels  (independent; can be run in any order)
-    2a. scrape_pix_panel.py          Process existing BCB PIX municipality files -> MCA panel
+      1a. scrape_2_ibge_demographics.py   Municipal population, GDP, age structure -> MCA panel
     2b. scrape_anatel.py             Download ANATEL mobile connections -> MCA panel
     2d. scrape_bcb_inclusion.py      BCB banking access-points (branches, correspondents) -> MCA panel
     2e. scrape_cadunico.py           CadUnico low-income families -> MCA panel
@@ -45,10 +42,6 @@ Notes
     (data source unavailable), build_market_panel.py handles missing files
     gracefully (those columns will be NaN).
 
-
-
-
-
 CLI Options:
 ------------
 usage: run_data_pipeline.py [-h] [--from N] [--only N] [--skip IDs] [--list]
@@ -64,7 +57,7 @@ options:
 
 Scripts called by the data pipeline:
 ------------------------------------
-[1] if_data_scrape_1.py
+[1] scrape_1_estban_if_data.py
 [2] ibge_demographics_panel.py
 [3] scrape_pix_panel.py
 [4] scrape_anatel.py
@@ -135,11 +128,11 @@ def _load_toon_runtime_context() -> dict:
 # Each entry: (stage_int, step_id_str, script_filename, description)
 STEPS = [
     # Stage 0 -- raw downloads
-    (0, "0a", "if_data_scrape_1.py",
+    (0, "0a", "scrape_1_estban_if_data.py",
      "ESTBAN monthly files + IF Data (Olinda API)"),
 
     # Stage 1 -- IBGE demographics
-    (1, "1a", "ibge_demographics_panel.py",
+    (1, "1a", "scrape_2_ibge_demographics.py",
      "IBGE population, GDP, age structure -> MCA demographics panel"),
 
     # Stage 2 -- market characteristic panels
@@ -359,8 +352,8 @@ def parse_args() -> argparse.Namespace:
         epilog="""
 Scripts called by the data pipeline:
 ------------------------------------
-[1] if_data_scrape_1.py
-[2] ibge_demographics_panel.py
+[1] scrape_1_estban_if_data.py
+[2] scrape_2_ibge_demographics.py
 [3] scrape_pix_panel.py
 [4] scrape_anatel.py
 [5] scrape_bcb_inclusion.py

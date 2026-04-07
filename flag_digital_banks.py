@@ -126,10 +126,65 @@ def main():
             return "Traditional / Other"
             
     metrics["Flag"] = metrics.apply(flag_digital, axis=1)
-    metrics["is_digital_candidate"] = metrics["Flag"] == "Retail Digital Bank (Geo-Heuristic)"
+    
+    # Enhance heuristic with BCB Regulatory Categorization
+    import glob
+    if_files = sorted(glob.glob(os.path.normpath(os.path.join(BASE, "BCB", "IF Data", "List", "IF_DATA_List*.csv"))))
+    
+    cnpj_map = {}
+    for f in if_files:
+        try:
+            temp = pd.read_csv(f, sep=None, engine='python')
+            if 'CnpjInstituicaoLider' not in temp.columns: continue
+            temp['Cnpj_8'] = temp['CnpjInstituicaoLider'].astype(str).str.replace(r'\.0$', '', regex=True).str.zfill(8)
+            subset = temp[['Cnpj_8']].copy()
+            if 'Atividade' in temp.columns: subset['Atividade'] = temp['Atividade']
+            else: subset['Atividade'] = np.nan
+            if 'SegmentoTb' in temp.columns: subset['SegmentoTb'] = temp['SegmentoTb']
+            else: subset['SegmentoTb'] = np.nan
+            
+            subset = subset.dropna(how='all', subset=['Atividade', 'SegmentoTb'])
+            subset = subset.drop_duplicates('Cnpj_8', keep='last')
+            for _, r in subset.iterrows():
+                if r['Cnpj_8'] not in cnpj_map: cnpj_map[r['Cnpj_8']] = {}
+                if pd.notna(r['Atividade']): cnpj_map[r['Cnpj_8']]['Atividade'] = r['Atividade']
+                if pd.notna(r['SegmentoTb']): cnpj_map[r['Cnpj_8']]['SegmentoTb'] = r['SegmentoTb']
+        except Exception as e:
+            logging.warning(f"Failed to read {f}: {e}")
+
+    metrics['Cnpj_str_8'] = metrics['CNPJ_root'].astype(str).str.zfill(8)
+    def apply_regulatory_rules(row):
+        flag = row["Flag"]
+        if flag != "Retail Digital Bank (Geo-Heuristic)": return flag
+        
+        info = cnpj_map.get(row['Cnpj_str_8'], {})
+        ativ = str(info.get('Atividade', '')).strip().lower()
+        seg = str(info.get('SegmentoTb', '')).strip().lower()
+        
+        whitelist_names = ['nupagamentos', 'inter', 'c6', 'nubank', 'picpay', 'pagseguro', 'mercadopago']
+        blacklist_ativ = ['tesouraria e negócios', 'crédito atacado', 'filial estrangeiro', 'câmbio', 'tesouraria e negocios', 'credito atacado', 'cambio']
+        blacklist_seg = ['banco comercial estrangeiro', 'sociedade distribuidora de tvm', 'banco de investimento', 'sociedade corretora de tvm', 'sociedade corretora de câmbio', 'agência de fomento']
+        
+        for w in whitelist_names:
+            if w in str(row['NOME_INSTITUICAO']).lower():
+                return "True Digital Retail Bank"
+                
+        for bd in blacklist_ativ:
+            if bd in ativ:
+                return "Wholesale/Investment Bank (Regulatory Filtered)"
+        for bs in blacklist_seg:
+            if bs in seg:
+                return "Wholesale/Investment Bank (Regulatory Filtered)"
+                
+        # Additionally, if they report NO Savings AND they are not a clearly massive retail operation, we could flag them but let's rely strictly on regulatory tags.
+        return "True Digital Retail Bank"
+        
+    metrics["Flag"] = metrics.apply(apply_regulatory_rules, axis=1)
+    metrics["is_digital_candidate"] = metrics["Flag"] == "True Digital Retail Bank"
+
     
     # Reorder and Sort
-    out_cols = ["CNPJ_root", "NOME_INSTITUICAO", "Inst_Total_Dep", "Retail_Dep", "Time_Dep", "Max_Mun_Dep", "N_mun", "Max_Share", "Flag", "is_digital_candidate"]
+    out_cols = ["CNPJ_root", "NOME_INSTITUICAO", "Inst_Total_Dep", "Demand_Dep", "Savings_Dep", "Retail_Dep", "Time_Dep", "Max_Mun_Dep", "N_mun", "Max_Share", "Flag", "is_digital_candidate"]
     out_df = metrics[out_cols].sort_values(by=["is_digital_candidate", "Inst_Total_Dep"], ascending=[False, False])
     
     # Drop zero-deposit ones visually to clear noise

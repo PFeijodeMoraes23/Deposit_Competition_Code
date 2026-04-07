@@ -1,3 +1,437 @@
+# COMBINED SCRIPT: generate_mca_json.py -> rectangularize_mca_json.py -> ibge_demographics_panel.py
+
+# --- FROM generate_mca_json.py ---
+# generate_mca_json.py
+# This script defines the microregions and immediate regions of Brazil as per IBGE classification.
+# Author: Pedro Feijo de Moraes
+# Last Edited: 2025-11-12
+# -----------------------------------------------------------------------------------------------
+
+# 1) Import necessary libraries and set directories:
+
+try:
+    from utils.venv_guard import ensure_project_venv
+except Exception:
+    ensure_project_venv = None
+
+if ensure_project_venv is not None:
+    ensure_project_venv(__file__)
+
+import pandas as pd
+import geopandas as gpd
+import geobr
+from pathlib import Path
+import sys
+import json 
+import warnings
+
+# Suppress warnings from geopandas/shapely during buffer operation and sjoin
+warnings.filterwarnings('ignore', 'The CRS of the two GeoSeries', UserWarning)
+warnings.filterwarnings('ignore', '.*Initializing tools.', UserWarning)
+
+try:
+    root_dir = Path(__file__).parent.parent
+except NameError:
+    root_dir = Path.cwd()
+output_dir = root_dir / "IBGE"
+
+output_dir.mkdir(parents = True, exist_ok=True)
+
+# 2) User-defined functions:
+
+def get_closest_predecessor(target_year, available_years, classification_name):
+    """
+    Returns most recent available year less than or equal target_year from the list of available years.
+    """
+    if valid_years := [y for y in available_years if y <= target_year]:
+        closest_year = max(valid_years)
+        if closest_year < target_year:
+            # Provide a warning only if we are actually using a predecessor year
+            print(f"  > Warning: Data for {classification_name} in {target_year} is not available. Using {closest_year}.")
+        return closest_year
+    
+    else:
+        # Fallback only executed if target is less than all available years 
+        # # Use oldest available year as a last resort
+        oldest_available = min(available_years)
+        print(f"  > Warning: Target year {target_year} is older than oldest data for {classification_name}. Using {oldest_available}.")
+        return oldest_available
+
+def safe_mode(series):
+    """ Safely calculates mode, handles NaN, convert to integer string, or returns None if no mode exists. """
+    valid_series = series.dropna() # Drop NaNs before calculating mode
+    
+    if valid_series.empty: # sjon failed for the whole MCA area
+        return 'N/A'
+    
+    mode_value = valid_series.mode()
+    if mode_value.empty:
+        return 'N/A'
+    
+    mode_val = mode_value[0]
+    
+    if pd.isna(mode_val):
+        return 'N/A'
+    
+    try:
+        return str(int(float(mode_val)))
+    except ValueError:
+        return mode_val
+
+def copy_predecessor_data(target_year, predecessor_year, final_data):
+    """
+    Copies regional data from predecessor_year to target_year in final_data dictionary for all MCAs as needed.
+    This is for the case of 2011 and 2012 where no new data is available.
+    """
+    print(f" > Imputing data for {target_year} from predecessor year {predecessor_year}.")
+    
+    pred_year_str = str(predecessor_year)
+    target_year_str = str(target_year)
+    
+    for mca_code, data in final_data.items():
+        if pred_year_str in data['regions'] and target_year_str not in data['regions']:
+            data['regions'][target_year_str] = data['regions'][pred_year_str].copy()
+         
+# 3) Data Preparation:
+
+START_YEAR = 2010
+END_YEAR = 2024
+MCA_REFERENCE = 2010
+YEARS = list(range(START_YEAR, END_YEAR + 1))
+final_json_file = output_dir / f"muni_mca_regions_{START_YEAR}_{END_YEAR}.json"
+
+REGION_YEARS = [2017, 2019, 2020]
+MICRO_MESO_YEARS = [2010, 2013, 2014, 2015, 2016]
+ALL_REGION_YEARS = set(MICRO_MESO_YEARS) | set(REGION_YEARS)
+
+# Caching for efficiency
+REGION_CACHE = {}
+MUNI_CACHE = {}
+
+print(f"MCA-based Mapping from {START_YEAR} to {END_YEAR} with Closest Year Logic.")
+print(f"Using {MCA_REFERENCE} boundaries as the reference for Minimum Comparable Areas (MCA).")
+
+# Step 1: Load MCA Crosswalk Table (2010 boundaries):
+try:
+    # load the polygons defined by the old/newest year combination available and rename for clarity
+    mca_geo_df = geobr.read_comparable_areas(start_year = 1872, end_year = MCA_REFERENCE)
+    
+    mca_geo_df.rename(columns = {'code_amc': 'mca_code', 'list_name_muni_2010': 'mca_name'}, inplace = True)
+    
+    mca_geo_df = mca_geo_df[['mca_code', 'mca_name','geometry', 'list_code_muni_2010']].drop_duplicates(subset='mca_code')
+    mca_geo_df.geometry = mca_geo_df.geometry.buffer(0) # Resolves potential issues
+    mca_crs = mca_geo_df.crs
+    print(f"  > Successfully loaded MCA data for {MCA_REFERENCE} with {len(mca_geo_df)} areas.")
+except Exception as e:
+    if 'mca_geo_df' in locals():
+        print(f"Available columns in MCA DataFrame: {mca_geo_df.columns.tolist()}")
+    print(f"!!! FATAL ERROR: Unable to load Comparable Areas (MCA). Error: {e}.")
+    sys.exit(1)
+               
+# Step 2: Cache all necessary regional boundaries:
+print("Caching Regional Boundaries for all relevant years.")
+for year in ALL_REGION_YEARS:
+    try:
+        if year < 2017:
+            # Micro and Meso Regions
+            REGION_CACHE[('micro', year)] = geobr.read_micro_region(year = year)
+            REGION_CACHE[('meso', year)] = geobr.read_meso_region(year = year)
+        else:
+            # Immediate and Intermediate Regions
+            REGION_CACHE[('immgr', year)] = geobr.read_immediate_region(year = year)
+            REGION_CACHE[('intgr', year)] = geobr.read_intermediate_region(year = year)
+    except Exception as e:
+        print(f"!!! ERROR caching regions for year {year}: {e}. Continuing.")
+  
+# 4) Main Processing Loop:
+
+# Masters and targets:
+final_data = {}
+TARGET_CRS = None
+
+for year in YEARS:
+    print(f"\nProcessing year: {year}.")
+    
+    # A. Check 2011, 2012 issue:
+    if year in [2011, 2012]: 
+        if 2010 in YEARS and next(iter(final_data.values()), {}).get('regions', {}).get(str(2010)):
+            copy_predecessor_data(year, 2010, final_data)
+            print(f"  > Data for {year} imputed from 2010.")
+        else: 
+            print(f"  > No data available to impute for {year}. Predecessor (2010) not yet available or failed to process. Skipping.")
+    
+        continue
+
+    try:
+        # B. Download Dynamic Muni Boundaries:
+        if year not in MUNI_CACHE:
+            muni_df = geobr.read_municipality(year = year)
+            MUNI_CACHE[year] = muni_df
+        else:
+            muni_df = MUNI_CACHE[year]
+        
+        target_crs = muni_df.crs
+        
+        # C. Optimize CRS transformation (only transforms MCA once):
+        if TARGET_CRS is None:
+            TARGET_CRS = target_crs
+            if mca_crs != TARGET_CRS:
+                mca_geo_df = mca_geo_df.to_crs(TARGET_CRS)
+            print(f"  > Set TARGET_CRS to {TARGET_CRS.to_string()}.")
+        
+        # D. Assign MCA code to Current Municipality Set:
+        muni_with_mca = gpd.sjoin(
+                muni_df[['code_muni', 'name_muni', 'geometry']],
+                mca_geo_df[['mca_code', 'mca_name', 'geometry']],
+                how = 'inner',
+                predicate = 'intersects'
+            ).drop_duplicates(subset =['code_muni']).reset_index(drop = True)
+        print(f"  > Mapped {len(muni_with_mca)} municipalities to MCA codes for {year}.")
+        
+        # E. Closest year and state data
+        region_years_to_use = MICRO_MESO_YEARS if year < 2017 else REGION_YEARS
+        closest_regional_year = get_closest_predecessor(year, region_years_to_use, "Regional")
+                     
+        # F. Conditional Region Selection and Join w Closest Year:     
+        low_prefix, high_prefix = ('micro', 'meso') if year < 2017 else ('immgr', 'intgr')
+        
+        low_level_df = REGION_CACHE.get((low_prefix, closest_regional_year)).to_crs(target_crs)
+        high_level_df = REGION_CACHE.get((high_prefix, closest_regional_year)).to_crs(target_crs)
+        
+        low_col_root, high_col_root = ('micro', 'meso') if year < 2017 else ('immediate', 'intermediate')
+        
+        low_cols = [f'code_{low_col_root}', f'name_{low_col_root}', 'geometry']
+        high_cols = [f'code_{high_col_root}', f'name_{high_col_root}', 'geometry']
+        
+        if any(col not in low_level_df.columns for col in low_cols):
+             print(f"  > Warning: Missing columns in low_level_df for {year}. Expected: {low_cols}")
+             continue
+        if any(col not in high_level_df.columns for col in high_cols):
+             print(f"  > Warning: Missing columns in high_level_df for {year}. Expected: {high_cols}")
+             continue
+
+        low_level_df = low_level_df[low_cols].rename(
+            columns={low_cols[0]: f'{low_prefix}_code', low_cols[1]: f'{low_prefix}_name'}
+        )
+        high_level_df = high_level_df[high_cols].rename(
+            columns={high_cols[0]: f'{high_prefix}_code', high_cols[1]: f'{high_prefix}_name'}
+        )
+        
+        # G. Spatial Join and Aggregation:
+        low_join = gpd.sjoin(muni_with_mca[['code_muni', 'mca_code', 'geometry']], low_level_df, how='left', predicate='intersects').drop(columns=['geometry', 'index_right'], errors='ignore')
+        low_join = low_join[['code_muni', f'{low_prefix}_code', f'{low_prefix}_name']].drop_duplicates(subset=['code_muni'])
+        
+        high_join = gpd.sjoin(muni_with_mca[['code_muni', 'mca_code', 'geometry']], high_level_df, how='left', predicate='intersects').drop(columns=['geometry', 'index_right'], errors='ignore')
+        high_join = high_join[['code_muni', f'{high_prefix}_code', f'{high_prefix}_name']].drop_duplicates(subset=['code_muni'])
+        
+        # Merge all regional data with MCA code
+        mapping_table = muni_with_mca[['code_muni', 'mca_code']].merge(
+            low_join, on='code_muni', how='left'
+        ).merge(
+            high_join, on='code_muni', how='left'
+        )
+        
+        # H. Aggregate Regional Codes by MCA (Predecessor Logic):
+        agg_map = {
+            'mca_name': ('mca_code', 'size'), 
+            f'{low_prefix}_code': (f'{low_prefix}_code', safe_mode),
+            f'{low_prefix}_name': (f'{low_prefix}_name', safe_mode),
+            f'{high_prefix}_code': (f'{high_prefix}_code', safe_mode),
+            f'{high_prefix}_name': (f'{high_prefix}_name', safe_mode)
+        }
+
+        mca_aggregated = mapping_table.groupby('mca_code').agg(
+            **{k: v for k, v in agg_map.items() if k != 'mca_name'}
+        ).reset_index()
+                
+        mca_name_lookup = mca_geo_df.set_index('mca_code')['mca_name'].to_dict()
+        mca_aggregated['mca_name'] = mca_aggregated['mca_code'].apply(lambda x: mca_name_lookup.get(x, 'N/A'))
+        
+        # I. Populate final df
+        for index, row in mca_aggregated.iterrows():
+            mca_code = str(int(row['mca_code']))
+            
+            if mca_code not in final_data:
+                final_data[mca_code] = {
+                    'name': row['mca_name'],
+                    'geocode': mca_code,
+                    'regions': {}
+                }
+                muni_list_str = mca_geo_df.loc[mca_geo_df['mca_code'] == row['mca_code'], 'list_code_muni_2010'].iloc[0]
+                final_data[mca_code]['muni_codes_list'] = muni_list_str
+            
+            final_data[mca_code]['regions'][str(year)] = {
+                f'{low_prefix}_code': row[f'{low_prefix}_code'],
+                f'{low_prefix}_name': row[f'{low_prefix}_name'],
+                f'{high_prefix}_code': row[f'{high_prefix}_code'],
+                f'{high_prefix}_name': row[f'{high_prefix}_name']
+            }
+        print(f"  > Aggregated regional data for {len(mca_aggregated)} MCAs for {year}.") 
+        
+    except Exception as e:
+        print(f"!!! ERROR processing year {year}: {e}. Continuing to next year.")
+
+print("\nProcessing Complete.")
+            
+# 5) Save final JSON output:
+if final_data:
+    for data in final_data.values():
+        data['name'] = data.pop('muni_codes_list') # Rename for clarity in output
+    
+    json_list = list(final_data.values())
+    
+    with open(final_json_file, 'w', encoding='utf-8') as f:
+        
+        json.dump(json_list, f, indent=4, ensure_ascii=False)
+    
+    print(f'Data for {len(final_data)} MCAs saved to {final_json_file}.')
+    print("JSON encoding used: UTF-8 to correctly preserve Portuguese characters.")
+else:
+    print("No data to save. Final data dictionary is empty.") 
+
+# --- FROM rectangularize_mca_json.py ---
+# rectangularize_mca_json.py
+# This script rectangularizes the output of generate_mca_json.py.
+# Author: Pedro Feijo de Moraes
+# Last Edited: 2025-11-12
+# -----------------------------------------------------------------------------------------------
+
+# 1) Import necessary libraries and set directories:
+try:
+    from utils.venv_guard import ensure_project_venv
+except Exception:
+    ensure_project_venv = None
+
+if ensure_project_venv is not None:
+    ensure_project_venv(__file__)
+
+import pandas as pd
+import json
+from pathlib import Path
+import geobr
+
+try:
+    root_dir = Path(__file__).parent.parent
+except NameError:
+    root_dir = Path.cwd()
+output_dir = root_dir / "IBGE"
+output_dir.mkdir(parents = True, exist_ok=True)
+
+# 2) User-defined functions:
+def load_uf_lookup():
+    """
+    Loads a lookup table for Brazilian states (UFs) with their codes, abbreviations, and names.
+    """
+    print("Loading state metadata from geobr.")
+    
+    try: 
+        state_df_meta = geobr.read_state(year = 2020) # Most recent state data
+        state_df_meta = state_df_meta[['code_state', 'abbrev_state', 'name_state']].drop_duplicates()
+        state_df_meta['code_state'] = state_df_meta['code_state'].astype(float).astype(int).astype(str) # ensure key is a string
+        lookup = state_df_meta.set_index('code_state').to_dict(orient = 'index')
+        print(" > State metadata lookup created successfully.")
+        return lookup
+    except Exception as e:
+        print(f"Error loading state metadata: {e}. State information will be incomplete.")
+        return {}
+    
+def load_municipality_lookup():
+    """
+    Loads a lookup dictionary for municipality codes to names.
+    We use year = 2010 as it matches the MCA reference year.
+    """
+    print("Loading municipality metadata from geobr.")
+    try:
+        muni_df_meta = geobr.read_municipality(year = 2010)
+        muni_df_meta = muni_df_meta[['code_muni', 'name_muni']].drop_duplicates()
+        muni_df_meta['code_muni'] = muni_df_meta['code_muni'].astype(float).astype(int).astype(str) # ensure key is a string
+        lookup = muni_df_meta.set_index('code_muni')['name_muni'].to_dict()
+        print(" > Municipality metadata lookup created successfully.")
+        return lookup
+    except Exception as e:
+        print(f"Error loading municipality metadata: {e}. Municipality names will be incomplete.")
+        return {}
+
+def rectangularize_mca_json(json_file, state_lookup, muni_lookup):
+    """
+    Converts the nested MCA-year JSON into a flat muncipiality-year panel DataFrame.
+    
+    Args:
+        json_file (Path): The path to the input JSON file.
+        state_lookup (dict): The pre-loaded dictionary of state metadata.
+        muni_lookup (dict): The pre-loaded dictionary of municipality metadata.
+    """
+    
+    print(f"Loading data from {json_file}.")
+    
+    with open(json_file, 'r', encoding = 'utf-8') as f:
+        data_json = json.load(f)
+    
+    all_rows = []
+    
+    # Iterate through MCA (each item in top-level list)
+    for mca_entry in data_json:
+        
+        # A. Extract static MCA-lvl data:
+        mca_static_data = {'mca_code': mca_entry.get('geocode')}
+        muni_codes_str = mca_entry.get('name', '') 
+        muni_codes_list = [code.strip() for code in muni_codes_str.split(',') if code.strip()]
+                
+        # B. Iterate over each year's data for this MCA
+        for year, region_data in mca_entry.get('regions', {}).items():
+            year_region_data = {
+                'year': int(year),
+                'micro_code': region_data.get('micro_code'),
+                'micro_name': region_data.get('micro_name'),
+                'meso_code': region_data.get('meso_code'),
+                'meso_name': region_data.get('meso_name'),
+                'immgr_code': region_data.get('immgr_code'),
+                'immgr_name': region_data.get('immgr_name'),
+                'intgr_code': region_data.get('intgr_code'),
+                'intgr_name': region_data.get('intgr_name')
+            }
+            
+            for muni_code in muni_codes_list:
+                row = {
+                    'municipality_code': muni_code,
+                    **mca_static_data,
+                    **year_region_data
+                }
+                all_rows.append(row)
+    
+    print(f"Total panel rows created: {len(all_rows)}")
+    
+    # D. Convert list to a DataFrame:
+    df_panel = pd.DataFrame(all_rows)
+    
+    df_panel['municipality_code'] = df_panel['municipality_code'].astype(str).str.strip()
+    df_panel['year'] = df_panel['year'].astype(int)
+    
+    # E. Add State information:
+    print("Deriving state information from municipality codes...")
+    df_panel['municipality_code'] = df_panel['municipality_code'].astype(str).str.strip()
+    df_panel['state_code'] = df_panel['municipality_code'].str[:2]
+    df_panel['state_uf'] = df_panel['state_code'].map(lambda x: state_lookup.get(x, {}).get('abbrev_state', 'N/A'))
+    df_panel['state_name'] = df_panel['state_code'].map(lambda x: state_lookup.get(x, {}).get('name_state', 'N/A'))
+    df_panel['municipality_name'] = df_panel['municipality_code'].map(muni_lookup).fillna('N/A')
+    
+    # F. Sort and reset index:
+    cols_order = [
+        'municipality_code', 'municipality_name', 
+        'state_code', 'state_uf', 'state_name', 
+        'mca_code', 'year', 
+        'micro_code', 'micro_name', 'meso_code', 'meso_name',
+        'immgr_code', 'immgr_name', 'intgr_code', 'intgr_name'
+    ]
+    final_cols = [col for col in cols_order if col in df_panel.columns]
+    df_panel = df_panel[final_cols].sort_values(by=['municipality_code', 'year']).reset_index(drop=True)
+
+    return df_panel
+
+# 3) Main execution:
+
+
+# --- FROM ibge_demographics_panel.py ---
 ## ibge_demographics_panel.py
 # Author: Pedro Feijó de Moraes
 #
@@ -808,5 +1242,54 @@ def main():
     print(panel.head(10).to_string(index=False))
 
 
-if __name__ == "__main__":
+
+# --- MAIN FUNCTIONS ---
+
+
+def rectangularize_mca_main():
+    input_json_file = output_dir / "muni_mca_regions_2010_2024.json"
+    output_csv_file = output_dir / "muni_mca_regions_2010_2024_panel.csv"
+    
+    state_look_up_dict = load_uf_lookup()
+    municipality_lookup_dict = load_municipality_lookup()
+    
+    if state_look_up_dict and municipality_lookup_dict: # Only proceed if lookup was created.
+        panel_df = rectangularize_mca_json(input_json_file, state_look_up_dict, municipality_lookup_dict)
+
+        print("\nSuccessfully created rectangular panel DataFrame.")
+        print("DataFrame Head:")
+        print(panel_df.head())
+        
+        print("\nDataFrame Info:")
+        panel_df.info()
+        
+        # Save to CSV
+        panel_df.to_csv(output_csv_file, index=False, encoding='utf-8-sig')
+        print(f"\nPanel data successfully saved to {output_csv_file}")
+    else:
+        print("State lookup failed. Panel DataFrame not created.")
+
+def ibge_demographics_main():
     main()
+
+
+if __name__ == "__main__":
+    from pathlib import Path
+    try:
+        root_dir = Path(__file__).parent.parent
+    except NameError:
+        root_dir = Path.cwd()
+    
+    output_dir = root_dir / "IBGE"
+    output_csv_file = output_dir / "muni_mca_regions_2010_2024_panel.csv"
+    
+    if output_csv_file.exists():
+        print(f"\n--- SKIPPING MCA JSON PREP: {output_csv_file.name} already exists ---")
+    else:
+        print("\n--- GENERATING MCA JSON ---")
+        generate_mca_main()
+        print("\n--- RECTANGULARIZING JSON ---")
+        rectangularize_mca_main()
+
+    print("\n--- BUILDING DEMOGRAPHICS PANEL ---")
+    ibge_demographics_main()

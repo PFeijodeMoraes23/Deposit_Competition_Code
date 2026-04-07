@@ -271,10 +271,18 @@ def calculate_pooled_phis(df, res_dict, state_blocks):
     else:
         df['market_size'] = df['deposit_balance'] if 'deposit_balance' in df.columns else 1.0
         
-    for spec_name, s_cols in state_blocks.items():
-        model_key = f"IV_HausmanFull x {spec_name}"
-        if model_key not in res_dict or res_dict[model_key]['second_stage'] is None: continue
-        ss_res = res_dict[model_key]['second_stage']
+    for model_key, res_item in res_dict.items():
+        if res_item['second_stage'] is None: continue
+        ss_res = res_item['second_stage']
+        
+        # Determine spec name (e.g. from "OLS x Base" -> "Base")
+        try:
+            m_type, spec_name = model_key.split(' x ')
+        except ValueError: continue
+            
+        s_cols = state_blocks.get(spec_name, [])
+        if not s_cols: continue
+        
         X_theta = np.zeros(len(df))
         for sv in s_cols:
             col_name = f"interaction_{sv}" if sv != 'constant' else "nr_lagged_dep"
@@ -286,12 +294,13 @@ def calculate_pooled_phis(df, res_dict, state_blocks):
                     X_theta += c * df[sv].fillna(0)
                     
         phi_mt = 1.0 / (1.0 + np.exp(-np.clip(X_theta, -700, 700)))
-        df[f'phi_mt_{spec_name}'] = phi_mt
+        safe_key = model_key.replace(' ', '_').replace('.', '')
+        df[f'phi_mt_{safe_key}'] = phi_mt
         
-        market_agg = df.groupby(['year_quarter', 'CODMUN_IBGE'], observed=True).agg(phi_mt=(f'phi_mt_{spec_name}', 'mean'), M_mt=('market_size', 'sum')).reset_index()
+        market_agg = df.groupby(['year_quarter', 'CODMUN_IBGE'], observed=True).agg(phi_mt=(f'phi_mt_{safe_key}', 'mean'), M_mt=('market_size', 'sum')).reset_index()
         weighted_phi = market_agg['phi_mt'] * market_agg['M_mt']
-        national_agg = (weighted_phi.groupby(market_agg['year_quarter']).sum() / market_agg['M_mt'].groupby(market_agg['year_quarter']).sum().replace(0, np.nan)).fillna(0).reset_index(name=f'phi_t_{spec_name}')
-        phi_results[spec_name] = national_agg
+        national_agg = (weighted_phi.groupby(market_agg['year_quarter']).sum() / market_agg['M_mt'].groupby(market_agg['year_quarter']).sum().replace(0, np.nan)).fillna(0).reset_index(name=f'phi_t_{safe_key}')
+        phi_results[safe_key] = national_agg
         
     return df, phi_results
 
@@ -335,12 +344,11 @@ def run_plotting_phase(spec12_only=False):
         return
         
     _, iv_specs, state_blocks = define_specifications()
-    states_to_run = ['Tech'] if spec12_only else state_blocks.keys()
-    
-    for s_name in states_to_run:
-        col_name = f'phi_mt_{s_name}'
-        if col_name not in df.columns: 
-            continue
+    cols_to_plot = [c for c in df.columns if c.startswith('phi_mt_OLS') or c.startswith('phi_mt_IV')]
+    if spec12_only:
+        cols_to_plot = [c for c in cols_to_plot if 'Tech' in c]
+        
+    for col_name in cols_to_plot:
             
         fig, ax = plt.subplots(figsize=(10, 6))
         
@@ -363,12 +371,12 @@ def run_plotting_phase(spec12_only=False):
                 d_agg['date'] = pd.PeriodIndex(d_agg['year_quarter'].str.replace('_', 'Q'), freq='Q').to_timestamp()
                 ax.plot(d_agg['date'], d_agg['phi_d'], label=f'D-Type (Digital/National) $\hat{{\phi}}$', color='red', linewidth=2)
         
-        ax.set_title(f"Pooled Sleepiness Estimate: {s_name}", fontsize=14)
+        ax.set_title(f"Pooled Sleepiness Estimate: {col_name.replace('phi_mt_', '')}", fontsize=14)
         ax.set_ylabel(r"National $\hat{\phi}_t$")
         ax.grid()
         ax.legend(loc='best')
         fig.tight_layout()
-        plt.savefig(PLOTS_DIR / f"Pooled_Robustness_{s_name}.png", dpi=300)
+        plt.savefig(PLOTS_DIR / f"Pooled_Robustness_{col_name.replace('phi_mt_', '')}.png", dpi=300)
         plt.close(fig)
         
     print("Plots generated.\n")

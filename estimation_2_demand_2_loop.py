@@ -59,8 +59,11 @@ options:
 """
 import os
 import sys
-from utils.venv_guard import ensure_project_venv
-ensure_project_venv(__file__)
+try:
+    from utils.venv_guard import ensure_project_venv
+    ensure_project_venv(__file__)
+except ImportError:
+    pass
 
 import json
 import pickle

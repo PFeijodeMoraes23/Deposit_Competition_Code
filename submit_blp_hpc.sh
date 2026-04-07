@@ -13,7 +13,7 @@
 #SBATCH --mail-user=pedro.feijodemoraes@yale.edu
 
 module load miniconda
-conda activate dep_comp_blp
+source activate dep_comp_blp
 cd /home/pf382/dep_comp/scripts
 python -u estimation_1_demand_2_loop.py \
     --spec 12 \
