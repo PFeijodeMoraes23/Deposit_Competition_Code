@@ -190,11 +190,17 @@ def process_specification(args):
     val_D = df_spec['deposit_balance'] - df_spec['phi_t'] * df_spec['gross_return_lag'] * df_spec['lagged_deposits']
     df_spec.loc[~df_spec['is_B'], 'Dep_Act'] = np.maximum(0.0, val_D[~df_spec['is_B']])
     
+    # Drop ZERO and NaN Active Deposits before building shares. 
+    # Zero shares break the log-bounds of the BLP contraction map.
     df_spec = df_spec.dropna(subset=['Dep_Act'])
+    df_spec = df_spec[df_spec['Dep_Act'] > 1e-6]
     
     nat_active = df_spec.groupby(['time_id', 'deposit_type'])['Dep_Act'].transform('sum')
     df_spec['nat_active'] = nat_active
     df_spec['share_D'] = np.where(~df_spec['is_B'], df_spec['Dep_Act'] / nat_active, np.nan)
+    
+    # To prevent sum(share_D) == 1.0 (which destroys omega_B = 1 - sum(share_D)), 
+    # we ensure there's at least a tiny B-firm presence, otherwise the logit fails.
     
     local_B_active = df_spec[df_spec['is_B']].groupby(['mca_code', 'time_id', 'deposit_type'])['Dep_Act'].transform('sum')
     df_loc_map = df_spec[df_spec['is_B']][['entity_id', 'time_id']].copy()

@@ -377,7 +377,9 @@ def _build_market_indices(mca_codes: np.ndarray, time_ids: np.ndarray,
     b_mkt_idx    = np.array([pair_to_idx[(m, t)] for m, t in raw_pairs], dtype=np.int64)
 
     # Time encoding for D-firms (they contribute to every B-market in their period)
-    unique_times, d_time_enc = np.unique(time_ids[d_mask], return_inverse=True)
+    unique_times = np.unique(time_ids)
+    time_to_idx  = {t: i for i, t in enumerate(unique_times.tolist())}
+    d_time_enc   = np.array([time_to_idx[t] for t in time_ids[d_mask].tolist()], dtype=np.int64)
 
     return b_mkt_idx, d_time_enc, unique_pairs, unique_times
 
