@@ -212,7 +212,7 @@ def run_pooled_first_stage(df, spec_instruments, exogenous_controls):
         df['v_hat'] = 0.0
         return df, None
 
-    mod = sm.OLS(df_fs['spread_qoq'], sm.add_constant(df_fs[first_stage_vars]))
+    mod = sm.OLS(df_fs['spread_qoq'].astype(float), sm.add_constant(df_fs[first_stage_vars].astype(float)))
     cluster_series = df_fs['CodConglomeradoPrudencial'].astype(str)
     res = mod.fit(cov_type='cluster', cov_kwds={'groups': cluster_series}, use_t=True)
     res = apply_imbalanced_cluster_correction(res, cluster_series)
@@ -235,8 +235,8 @@ def run_pooled_second_stage_linear(df, state_vars, has_cf=False):
     df_ss = df.dropna(subset=X_cols + ['deposit_balance']).copy()
     if len(df_ss) == 0: return None
         
-    y_dm = demean_variables(df_ss, ['deposit_balance'], 'entity_id')['deposit_balance']
-    X_dm = demean_variables(df_ss, X_cols, 'entity_id')
+    y_dm = demean_variables(df_ss, ['deposit_balance'], 'entity_id')['deposit_balance'].astype(float)
+    X_dm = demean_variables(df_ss, X_cols, 'entity_id').astype(float)
     
     mod = sm.OLS(y_dm, X_dm)
     cluster_series = df_ss['CodConglomeradoPrudencial'].astype(str)
@@ -275,10 +275,10 @@ def run_pooled_second_stage_logistic(df, state_vars, has_cf=False):
     entity_map = {e: i for i, e in enumerate(entities)}
     entity_idx = df_ss['entity_id'].map(entity_map).values
     
-    y_dm = demean_variables(df_ss, ['deposit_balance'], 'entity_id')['deposit_balance'].values
-    X = df_ss[state_vars].values
-    Z = df_ss['nr_lagged_dep'].values
-    CF = df_ss[CF_cols].values if has_cf else np.empty((len(df_ss), 0))
+    y_dm = demean_variables(df_ss, ['deposit_balance'], 'entity_id')['deposit_balance'].values.astype(float)
+    X = df_ss[state_vars].values.astype(float)
+    Z = df_ss['nr_lagged_dep'].values.astype(float)
+    CF = df_ss[CF_cols].values.astype(float) if has_cf else np.empty((len(df_ss), 0), dtype=float)
     
     init_params = np.zeros(X.shape[1] + CF.shape[1])
     res_lsq = least_squares(nlls_objective, init_params, args=(y_dm, X, Z, CF, entity_idx), method='lm', max_nfev=500)
@@ -346,10 +346,10 @@ def calculate_pooled_phis(df, res_dict, state_blocks):
             if col_name in ss_res.params:
                 c = ss_res.params[col_name]
                 if sv == 'constant': X_theta += c
-                else: X_theta += c * df[sv].fillna(0)
+                else: X_theta += c * df[sv].astype(float).fillna(0)
                     
         if model_type == 'logistic':
-            phi_mt = 1.0 / (1.0 + np.exp(-np.clip(X_theta, -700, 700)))
+            phi_mt = 1.0 / (1.0 + np.exp(-np.clip(X_theta.astype(float), -700, 700)))
         else:
             phi_mt = X_theta # linear representation
             

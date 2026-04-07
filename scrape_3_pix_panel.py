@@ -180,6 +180,45 @@ def read_pix_file(filepath: str) -> pd.DataFrame | None:
     return None
 
 
+def download_missing_pix_files():
+    import urllib.request
+    import time
+    import ssl
+
+    start = pd.Period("2020-11", "M")
+    end = pd.Period(pd.Timestamp("today").replace(day=1) + pd.DateOffset(months=1), "M")
+    
+    context = ssl.create_default_context()
+    context.check_hostname = False
+    context.verify_mode = ssl.CERT_NONE
+    
+    for p in pd.period_range(start, end):
+        yyyymm = p.strftime("%Y%m")
+        filepath = os.path.join(PIX_DIR, f"TransacoesPixMunicipio_{yyyymm}.csv")
+        if os.path.exists(filepath):
+            continue
+            
+        url = f"https://olinda.bcb.gov.br/olinda/servico/Pix_DadosAbertos/versao/v1/odata/TransacoesPixPorMunicipio(DataBase=@DataBase)?@DataBase=%27{yyyymm}%27&%24filter=AnoMes%20eq%20{yyyymm}&%24top=100000&%24format=text/csv"
+        
+        logging.info(f"Downloading PIX municipality data for {yyyymm}...")
+        for attempt in range(4):
+            try:
+                req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+                with urllib.request.urlopen(req, timeout=45, context=context) as response:
+                    content = response.read().decode('utf-8', errors='replace')
+                if len(content.splitlines()) < 2:
+                    logging.info(f"No PIX data found for {yyyymm} (reached end?).")
+                    break
+                with open(filepath, "w", encoding="utf-8") as f:
+                    f.write(content)
+                logging.info(f"Successfully downloaded {yyyymm}")
+                break
+            except Exception as e:
+                if attempt == 3:
+                    logging.error(f"Failed to download PIX data for {yyyymm} after 4 attempts: {e}")
+                else:
+                    time.sleep(2)
+
 def load_all_pix_files() -> pd.DataFrame:
     """
     Load and concatenate all TransacoesPixMunicipio_*.csv files in PIX_DIR.
@@ -372,6 +411,9 @@ def merge_population(panel: pd.DataFrame) -> pd.DataFrame:
 ## ─────────────────────────────────────────────────────────────────────────────
 
 def main():
+    # 0. Download any missing files from BCB Olinda directly
+    download_missing_pix_files()
+
     # 1. Load all raw PIX municipality files
     pix_raw = load_all_pix_files()
 
