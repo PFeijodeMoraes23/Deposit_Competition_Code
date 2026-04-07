@@ -57,15 +57,19 @@ options:
   --workers WORKERS     Number of simultaneous multiprocessing workers
   --hpc                 Use HPC cluster path structure
 """
-
 import os
 import sys
+from utils.venv_guard import ensure_project_venv
+ensure_project_venv(__file__)
+
 import json
 import pickle
 import argparse
 import smtplib
 import threading
 import datetime
+import time
+import copy
 from email.mime.text import MIMEText
 from pathlib import Path
 import numpy as np
@@ -85,8 +89,18 @@ def get_paths(is_hpc: bool) -> tuple:
         input_dir = Path("/home/pf382/dep_comp/data/input")
         output_dir = Path("/home/pf382/dep_comp/data/output")
     else:
-        _ROOT = Path(__file__).resolve().parents[2]
-        DATA_DIR = _ROOT / "BCB" / "Egan_et_al_2025_Rep" / "processed"
+        local_dir_arg = None
+        for i, a in enumerate(sys.argv):
+            if a == '--local-dir' and i + 1 < len(sys.argv):
+                local_dir_arg = sys.argv[i + 1]
+                break
+                
+        if local_dir_arg:
+            DATA_DIR = Path(local_dir_arg).resolve()
+        else:
+            _ROOT = Path(__file__).resolve().parents[2]
+            DATA_DIR = _ROOT / "BCB" / "Egan_et_al_2025_Rep" / "processed"
+            
         input_dir = DATA_DIR / "ESTIMATION_OUTPUT" / "DEMAND_PREP"
         output_dir = DATA_DIR / "ESTIMATION_OUTPUT" / "BLP_RESULTS"
     return input_dir, output_dir
@@ -476,43 +490,24 @@ def compute_model_shares(delta: np.ndarray, mu: np.ndarray,
     s_B         = q_B.mean(axis=1)                              # (N_B,)
 
     # --- D-firm national shares: Eq-13-D  s^{Act,D} = Σ_m (M_mt/M_t) * q_D_m ---
-    # q_D_d_p_r = exp(V_D_d,r - log_denom_p,r)
-    s_D_nat = np.zeros(N_D)   # (N_D,)
+    # Vectorised approach: s_D_nat[d] = mean_r[ exp(V_D_d,r) * sum_m (w_m * exp(-log_denom_m,r)) ]
+    
+    neg_log_denom = -log_denom
+    max_neg_ld = np.full((n_times, R), -np.inf)
+    np.maximum.at(max_neg_ld, pair_time_enc, neg_log_denom)
+    
+    shifted_inv_denom = np.exp(neg_log_denom - max_neg_ld[pair_time_enc])    # (n_pairs, R)
+    wtd_shifted_inv_denom = shifted_inv_denom * pop_weights[:, np.newaxis]   # (n_pairs, R)
+    
+    sum_wtd_inv_denom = np.zeros((n_times, R))
+    np.add.at(sum_wtd_inv_denom, pair_time_enc, wtd_shifted_inv_denom)       # (n_times, R)
+    
+    log_inv_denom_wtd = max_neg_ld + np.log(np.maximum(1e-300, sum_wtd_inv_denom)) # (n_times, R)
+    
+    log_s_D_r = V_D + log_inv_denom_wtd[d_time_enc, :]                         # (N_D, R)
+    row_max_s_D = log_s_D_r.max(axis=1, keepdims=True)
+    s_D_nat = np.exp(log_s_D_r - row_max_s_D).mean(axis=1) * np.exp(row_max_s_D.squeeze()) # (N_D,)
 
-    for t_idx in range(n_times):
-        # Which B-markets belong to this time period?
-        pair_mask_t = pair_time_enc == t_idx    # (n_pairs,) bool
-        if not pair_mask_t.any():
-            continue
-        # Which D-firms operate in this time period?
-        d_mask_t = d_time_enc == t_idx          # (N_D,) bool
-        if not d_mask_t.any():
-            continue
-
-        pw_t     = pop_weights[pair_mask_t]                    # (n_p_t,)
-        pairs_t  = np.where(pair_mask_t)[0]                   # indices into unique_pairs
-        n_pt     = pairs_t.size
-
-        # Per-market log denominator: (n_pt, R)
-        log_denom_t = log_denom[pairs_t, :]                   # (n_pt, R)
-
-        # D-firm V values for this time period: (n_dt, R)
-        V_D_t = V_D[d_mask_t, :]                              # (n_dt, R)
-        n_dt  = V_D_t.shape[0]
-
-        # For each D-firm d and market p: q_D_d_p_r = exp(V_D_t[d,r] - log_denom_t[p,r])
-        # Expand: (n_dt, n_pt, R)
-        q_sum = np.zeros(n_dt)
-        CHUNK = max(1, 500 // max(n_dt, 1))
-        for p_start in range(0, n_pt, CHUNK):
-            p_end   = min(p_start + CHUNK, n_pt)
-            # Shapes: V_D_t is (n_dt, 1, R), log_denom_t slice is (1, chunk, R)
-            v_diff  = V_D_t[:, np.newaxis, :] - log_denom_t[np.newaxis, p_start:p_end, :]
-            d_t_p_r = np.exp(v_diff)                            # (n_dt, chunk, R)
-            d_t_p   = d_t_p_r.mean(axis=2)                      # (n_dt, chunk)
-            q_sum  += d_t_p @ pw_t[p_start:p_end]               # (n_dt,)
-
-        s_D_nat[d_mask_t] = q_sum   # model-implied national share for D-firm rows in time t
 
     # --- Ω_mt: Eq-14 = 1 - Σ_{j∈J^D_t, k} s^{Act,D}_{jk,local,mt} ---
     # D_share_p_r = exp(log_D_sum_p,r - log_denom_p,r)
@@ -582,7 +577,6 @@ def blp_contraction(df: pd.DataFrame, mu: np.ndarray, R: int,
                              - np.log(s_D_clp))
 
         # --- Eq-A4-D: B-type contraction (local conditional shares + Ω) ---
-        # δ^{B,h+1}_{jkmt} = δ^{B,h}_{jkmt} + ln ŝ^{Act,B|B}_{jkmt} + ln Ω_mt - ln s^{Act,B}_{jkmt}
         delta_new[b_mask] = (delta[b_mask]
                              + ln_s_data_B_cond[b_mask]
                              + np.log(omega_B_clp)
@@ -591,8 +585,17 @@ def blp_contraction(df: pd.DataFrame, mu: np.ndarray, R: int,
         norm = np.max(np.abs(delta_new - delta))
         norm_history.append(norm)
 
+        if h % 50 == 0 or h == max_iter - 1:
+            print(f"    [contraction iter={h+1}/{max_iter}] norm={norm:.3e}", flush=True)
+
+        # Stall detection
+        if h > 200 and (norm_history[-200] / np.maximum(norm, 1e-30)) < 2.0:
+            print(f"    [contraction STALL] norm plateaued near {norm:.3e}. Breaking.", flush=True)
+            return delta_new, False, h + 1, norm_history
+
         if norm < tol:
             return delta_new, True, h + 1, norm_history
+
 
         delta = delta_new
 
@@ -879,6 +882,21 @@ def run_blp_for_spec(spec_id: int, args) -> dict:
         # Delta warm-start cache (shared across outer iterations)
         delta_cache: dict = {}
 
+        # DRY RUN LOGIC
+        if getattr(args, 'dry_run', False):
+            print(f"  [DRY RUN] Running 10 contraction iterations for timing...")
+            sigma_vals, pi_vals = unpack_theta2(theta2_0, sigma_indices, pi_interactions)
+            mu_t = compute_mu(prod_vec, nu_draws, stacked_draws_padded, obs_key_idx, sigma_vals,
+                              sigma_indices, pi_vals, pi_interactions, args.R, coef_dim)
+            t0 = time.time()
+            d_t, conv, n_it, n_hist = blp_contraction(df, mu_t, args.R,
+                                           tol=args.tol_inner, max_iter=10, precomp=precomp_idx)
+            t1 = time.time()
+            elapsed = t1 - t0
+            print(f"  [DRY RUN] 10 iterations in {elapsed:.2f}s ({elapsed/10:.3f} s/iter).")
+            print(f"  [DRY RUN] Exiting early.")
+            return {'dry_run': True}
+
         # Outer callback for progress logging (replaces deprecated disp=True)
         _outer_iter = [0]
         def _outer_callback(xk):
@@ -990,12 +1008,12 @@ def main():
     parser.add_argument('--stage', type=str, default='logit',
                         choices=['logit', 'sigma', 'full', 'extended', 'sequence'])
     parser.add_argument('--R', type=int, default=100,
-                        choices=[100, 500, 1000],
+                        choices=[10, 100, 500, 1000],
                         help='Number of simulation draws (CG2020: 100 for testing, 1000 for final)')
     parser.add_argument('--seed', type=int, default=42)
-    parser.add_argument('--tol-inner', type=float, default=1e-14,
+    parser.add_argument('--tol-inner', type=float, default=1e-12,
                         dest='tol_inner')
-    parser.add_argument('--max-inner', type=int, default=2000,
+    parser.add_argument('--max-inner', type=int, default=1000,
                         dest='max_inner')
     parser.add_argument('--tol-outer', type=float, default=1e-6,
                         dest='tol_outer')
@@ -1005,6 +1023,10 @@ def main():
                         help='Number of simultaneous multiprocessing workers')
     parser.add_argument('--hpc', action='store_true',
                         help='Use HPC cluster path structure')
+    parser.add_argument('--local-dir', type=str, default=None,
+                        help='Local path to the "processed" directory where ESTIMATION_OUTPUT is located')
+    parser.add_argument('--dry-run', action='store_true',
+                        help='Run 10 contraction iters and exist for timing')
     args = parser.parse_args()
 
     # Determine specs to run
@@ -1050,8 +1072,22 @@ def main():
     
     for current_stage in stages_to_run:
         args.stage = current_stage
+        
+        # In sequence mode, use R=100 for sigma to save time (sufficient per CG2020)
+        if hasattr(args, '_orig_R') is False:
+            args._orig_R = args.R
+        
+        if args.stage == 'sequence' and current_stage == 'sigma':
+            pass # handled above, sequence doesn't equal sigma
+            
+        if current_stage == 'sigma' and 'sequence' in sys.argv: # user passed --stage sequence
+            args.R = 100
+            print(f"  [SEQUENCE] Overriding R=100 for sigma stage per CG2020.")
+        else:
+            args.R = args._orig_R
+            
         all_results = {}
-        tasks = [(sp, args) for sp in spec_ids]
+        tasks = [(sp, copy.copy(args)) for sp in spec_ids]
         
         print(f"  Starting parallel execution of {len(spec_ids)} specs for stage '{current_stage}' with {max_w} workers...")
         
@@ -1065,10 +1101,10 @@ def main():
                         pickle.dump(res, f)
                     print(f"  Saved: {out_pkl.name}")
                     all_results[sp] = {
-                        'Q_value': float(res['Q_value']),
-                        'converged': bool(res['converged']),
-                        'theta1_alpha': res['theta1'][:K_TYPES].tolist(),
-                        'theta2': res['theta2'].tolist() if len(res['theta2']) > 0 else [],
+                        'Q_value': float(res.get('Q_value', 0.0)),
+                        'converged': bool(res.get('converged', True)),
+                        'theta1_alpha': res.get('theta1', np.zeros(K_TYPES))[:K_TYPES].tolist(),
+                        'theta2': res['theta2'].tolist() if 'theta2' in res and len(res['theta2']) > 0 else [],
                         'stage': args.stage
                     }
 

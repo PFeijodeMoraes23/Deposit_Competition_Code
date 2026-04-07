@@ -829,7 +829,7 @@ class StringArray(BaseStringArray, NumpyExtensionArray):  # type: ignore[misc]
         return arr, self.dtype.na_value
 
     def _maybe_convert_setitem_value(self, value):
-        """Maybe convert value to be pyarrow compatible."""
+        """Maybe convert value to be StringArray compatible."""
         if lib.is_scalar(value):
             if isna(value):
                 value = self.dtype.na_value
@@ -1078,7 +1078,11 @@ class StringArray(BaseStringArray, NumpyExtensionArray):  # type: ignore[misc]
     ) -> Scalar:
         nv.validate_sum((), kwargs)
         result = masked_reductions.sum(
-            values=self._ndarray, mask=self.isna(), skipna=skipna
+            values=self._ndarray,
+            mask=self.isna(),
+            skipna=skipna,
+            min_count=min_count,
+            initial="",
         )
         return self._wrap_reduction_result(axis, result)
 

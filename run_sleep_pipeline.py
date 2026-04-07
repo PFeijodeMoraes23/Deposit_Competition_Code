@@ -30,15 +30,31 @@ import time
 from pathlib import Path
 
 def send_notification_email(finished_step, elapsed_seconds, next_step):
+    import os
+    import smtplib
+    from email.message import EmailMessage
+
+    # To use this without prompts, you must set an App Password in your environment variables.
+    # For example: 
+    # $env:SYS_EMAIL_USER="your-email@gmail.com"
+    # $env:SYS_EMAIL_PWD="your-16-digit-app-password"
+    
+    sender = os.environ.get("SYS_EMAIL_USER", "pedro.feijodemoraes@yale.edu")
+    pwd = os.environ.get("SYS_EMAIL_PWD")
+    recipient = "pedro.feijodemoraes@yale.edu"
+
+    if not pwd:
+        print("  -> Skipped email notification: 'SYS_EMAIL_PWD' environment variable is not set.")
+        return
+
     try:
-        import win32com.client
-        outlook = win32com.client.Dispatch('outlook.application')
-        mail = outlook.CreateItem(0)
-        mail.To = "pedro.feijodemoraes@yale.edu"
-        
+        msg = EmailMessage()
         mins, secs = divmod(int(elapsed_seconds), 60)
-        mail.Subject = f"[Sleep Pipeline] Finished: {finished_step}"
         
+        msg['Subject'] = f"[Sleep Pipeline] Finished: {finished_step}"
+        msg['From'] = sender
+        msg['To'] = recipient
+
         body = f"The sleep pipeline has successfully completed {finished_step}.\n"
         body += f"Duration: {mins} minutes and {secs} seconds.\n\n"
         
@@ -47,11 +63,17 @@ def send_notification_email(finished_step, elapsed_seconds, next_step):
         else:
             body += "This was the last step. The pipeline is fully complete!\n"
             
-        mail.Body = body
-        mail.Send()
-        print("  -> Notification email sent via Outlook!")
+        msg.set_content(body)
+
+        # Assuming Gmail for defaults, but this applies to Yale/Office365 with correct SMTP
+        with smtplib.SMTP("smtp.gmail.com", 587) as server:
+            server.starttls()
+            server.login(sender, pwd)
+            server.send_message(msg)
+            
+        print("  -> Notification email sent via SMTP!")
     except Exception as e:
-        print(f"  -> Could not send Outlook notification: {e}")
+        print(f"  -> Could not send SMTP notification: {e}")
 
 def main():
     parser = argparse.ArgumentParser(

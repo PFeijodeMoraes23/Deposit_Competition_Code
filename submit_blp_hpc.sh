@@ -20,5 +20,6 @@ python -u estimation_1_demand_2_loop.py \
     --stage sequence \
     --R 1000 \
     --workers 8 \
-    --max-inner 5000 \
+    --max-inner 1500 \
+    --tol-inner 1e-12 \
     --hpc
