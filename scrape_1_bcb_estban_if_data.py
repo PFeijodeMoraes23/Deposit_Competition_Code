@@ -61,8 +61,6 @@ os.makedirs(output_dir, exist_ok=True)
 
 output_type_1 = os.path.join(_BCB, "IF Data", "Prudential Conglomerates")
 os.makedirs(output_type_1, exist_ok=True)
-output_type_2 = os.path.join(_BCB, "IF Data", "Financial Conglomerates")
-os.makedirs(output_type_2, exist_ok=True)
 output_type_3 = os.path.join(_BCB, "IF Data", "Individual Institutions")
 os.makedirs(output_type_3, exist_ok=True)
 
@@ -88,7 +86,6 @@ if resolve_script_paths is not None:
         {
             "if_list_output_dir": output_dir,
             "if_type1_output_dir": output_type_1,
-            "if_type2_output_dir": output_type_2,
             "if_type3_output_dir": output_type_3,
             "estban_mun_output_dir": output_estban_mun,
             "estban_ag_output_dir": output_estban_ag,
@@ -97,7 +94,6 @@ if resolve_script_paths is not None:
     )
     output_dir = _paths["if_list_output_dir"]
     output_type_1 = _paths["if_type1_output_dir"]
-    output_type_2 = _paths["if_type2_output_dir"]
     output_type_3 = _paths["if_type3_output_dir"]
     output_estban_mun = _paths["estban_mun_output_dir"]
     output_estban_ag = _paths["estban_ag_output_dir"]
@@ -178,8 +174,6 @@ def download_values(year, quarter, tipo, retries_number):
     # Skip if file already exists and is non-empty
     if tipo == '1':
         output_dir = output_type_1
-    elif tipo == '2':
-        output_dir = output_type_2
     else:
         output_dir = output_type_3
     file_path = os.path.join(output_dir, f"IF_DATA_Values_{year}_{quarter}.csv")
@@ -266,8 +260,8 @@ def download_all_values(year,quarter, retries_number):
     
     any_fetched = False
     with ThreadPoolExecutor() as executor:
-        futures = [executor.submit(download_values, year, quarter, tipo, retries_number) for tipo in ['1', '2', '3']]
-        # 1 = Prudential Conglomerates, 2 = Financial Conglomerates, 3 = Individual Institutions
+        futures = [executor.submit(download_values, year, quarter, tipo, retries_number) for tipo in ['1', '3']]
+        # 1 = Prudential Conglomerates, 3 = Individual Institutions
         for future in futures:
             try:
                 result = future.result()  # Wait for each future to complete

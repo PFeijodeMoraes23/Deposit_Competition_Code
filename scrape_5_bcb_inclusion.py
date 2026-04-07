@@ -50,9 +50,7 @@
 #                n_municipalities
 ###─────────────────────────────────────────────────────────────────────────────
 
-import concurrent.futures
 import os
-import time
 import logging
 try:
     from utils.venv_guard import ensure_project_venv
@@ -62,7 +60,6 @@ except Exception:
 if ensure_project_venv is not None:
     ensure_project_venv(__file__)
 
-import requests
 import numpy as np
 import pandas as pd
 

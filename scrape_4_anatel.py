@@ -45,7 +45,6 @@
 
 import gc
 import os
-import time
 import zipfile
 import logging
 try:
