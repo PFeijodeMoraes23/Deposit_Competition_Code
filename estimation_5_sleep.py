@@ -80,8 +80,15 @@ def demean_variables(df, cols, entity_col):
 
 def define_specifications():
     s_base = ['constant', 'dummy_D_type', 'pix_exists']
+    
+    # Base Selic (Interest Rate interactions)
     s_base_selic = ['constant', 'dummy_D_type', 'pix_exists', 'risk_free_qoq_lag', 'dummy_D_type_x_risk_free_qoq_lag']
+    
+    # Macro (Demographics and Income)
     s_macro = s_base_selic + ['gdp_per_capita', 'cadunico_families_per1000', 'fraction_65plus', 'fraction_young']
+    s_macro += ['dummy_D_type_x_fraction_65plus', 'dummy_D_type_x_fraction_young']
+    
+    # Tech (Digital and Physical infrastructure)
     s_tech = s_macro + ['pix_users_pf_per1000', 'connections_per100', 'branches_per1000']
 
     iv_specs = {'OLS': [], 'IV_CostShifters': ['personnel_cost_ratio_lag', 'admin_cost_ratio_lag', 'tax_cost_ratio_lag'],
@@ -118,6 +125,8 @@ def build_pooled_data():
     df['lagged_deposits'] = df.groupby('entity_id')['deposit_balance'].shift(1)
     df['nr_lagged_dep'] = (1 + df['risk_free_qoq_lag'] - df['spread_qoq_lag']) * df['lagged_deposits']
     df['dummy_D_type_x_risk_free_qoq_lag'] = df['dummy_D_type'] * df['risk_free_qoq_lag']
+    df['dummy_D_type_x_fraction_65plus'] = df['dummy_D_type'] * df['fraction_65plus']
+    df['dummy_D_type_x_fraction_young'] = df['dummy_D_type'] * df['fraction_young']
     
     if 'leave_one_out_mean_spread' not in df.columns: df['leave_one_out_mean_spread'] = np.nan
 
