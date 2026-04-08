@@ -140,10 +140,9 @@ def download_list(year,month, retries_number):
             break # to stop the retries if successful
         except requests.exceptions.HTTPError as err:
             if response.status_code == 500:
-                logging.error(f"Server error 500 for {year}--{month}. Restarting program in 1hour...")
-                print(f"Server error 500 for {year}--{month}. Restarting program in 1hour...")
-                time.sleep(60*60)
-                return(download_list(year,month, retries_number)) # restart function
+                logging.error(f"Server error 500 for {year}--{month}. Treating as unavailable and skipping.")
+                print(f"Server error 500 for {year}--{month}. Treating as unavailable and skipping.")
+                return False
             else:
                 logging.error(f"HTTP error for {year}--{month}: {err}")
                 print(f"HTTP error for {year}--{month}: {err}")
@@ -211,12 +210,9 @@ def download_values(year, quarter, tipo, retries_number):
             break # to stop the retries if successful
         except requests.exceptions.HTTPError as err:
             if response.status_code == 500:
-                logging.error(f"Server error 500 for {year}-{quarter} (Type {tipo}). Restarting program in 1hour...")
-                print(f"Server error 500 for {year}-{quarter} (Type {tipo}). Restarting program in 1hour...")
-                stop_event.set()
-                time.sleep(60*60)
-                stop_event.clear()
-                return
+                logging.error(f"Server error 500 for {year}-{quarter} (Type {tipo}). Treating as unavailable and skipping.")
+                print(f"Server error 500 for {year}-{quarter} (Type {tipo}). Treating as unavailable and skipping.")
+                return False
             else:
                 logging.error(f"HTTP error for {year}-{quarter} (Type {tipo}): {err}")
                 print(f"HTTP error for {year}-{quarter} (Type {tipo}): {err}")
@@ -363,9 +359,8 @@ def download_estban(yyyymm, url_path, out_dir, csv_fname, retries_number):
 
         except requests.exceptions.HTTPError as err:
             if response.status_code == 500:
-                logging.error(f"Server error 500 for ESTBAN {yyyymm}. Sleeping 1h.")
-                print(f"  Server 500. Sleeping 1h.")
-                time.sleep(3600)
+                logging.error(f"Server error 500 for ESTBAN {yyyymm}. Treating as unavailable and skipping.")
+                print(f"  Server 500. Treating as unavailable and skipping.")
                 return False
             logging.error(f"HTTP error ESTBAN {yyyymm}: {err}")
             print(f"  HTTP error: {err}")
