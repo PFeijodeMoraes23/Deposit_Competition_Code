@@ -734,8 +734,9 @@ def gmm_objective(theta2_vec: np.ndarray, df: pd.DataFrame,
         delta_init=delta_init, precomp=precomp)
     if not converged:
         print(f"  [!] Inner loop did not converge in {n_iter} iterations", flush=True)
-    elif delta_cache is not None:
-        delta_cache['last_delta'] = delta.copy()   # cache converged delta
+    # Always cache latest delta for warm-starting (CG2020 §3.2)
+    if delta_cache is not None:
+        delta_cache['last_delta'] = delta.copy()
 
     # Linear IV
     theta1, xi, _ = estimate_theta1(df, delta)

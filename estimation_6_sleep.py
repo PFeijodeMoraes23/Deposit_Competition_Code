@@ -121,8 +121,15 @@ def build_pooled_data(alt):
     df_raw['pix_exists'] = ((df_raw['year'] > 2020) | ((df_raw['year'] == 2020) & (df_raw['quarter'] == 4))).astype(float)
     
     # Fill defaults for ownership types if missing
-    if 'is_coop' not in df_raw.columns: df_raw['is_coop'] = 0.0
-    if 'is_state_owned' not in df_raw.columns: df_raw['is_state_owned'] = 0.0
+    if 'is_coop' in df_raw.columns:
+        df_raw['is_coop'] = df_raw['is_coop'].fillna(0.0)
+    else:
+        df_raw['is_coop'] = 0.0
+        
+    if 'is_state_owned' in df_raw.columns:
+        df_raw['is_state_owned'] = df_raw['is_state_owned'].fillna(0.0)
+    else:
+        df_raw['is_state_owned'] = 0.0
     
     if 'dep_a1' in df_raw.columns:
         id_vars = ['CodConglomeradoPrudencial', 'mca_code', 'year', 'quarter']

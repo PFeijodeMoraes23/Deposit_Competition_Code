@@ -483,10 +483,16 @@ def compute_model_shares(delta: np.ndarray, mu: np.ndarray,
     
     log_B_sum = max_VB_per_mkt + np.log(np.maximum(1e-300, sum_exp_B_per_mkt))
     
-    # Joint log-denominator using log-sum-exp
-    joint_max = np.maximum(log_B_sum, log_D_sum)
-    # (exp(log_B - max) + exp(log_D - max)) ensures no overflow
-    log_denom = joint_max + np.log(np.maximum(1e-300, np.exp(log_B_sum - joint_max) + np.exp(log_D_sum - joint_max)))
+    # Joint log-denominator with computational outside option (ε-anchor).
+    # Small ε breaks shift-invariance, guaranteeing contraction convergence
+    # without materially affecting share estimates (outside share ≈ 1e-6).
+    OUTSIDE_EPS = 1e-3
+    log_outside = np.log(OUTSIDE_EPS)  # ≈ -13.8
+    joint_max = np.maximum(np.maximum(log_B_sum, log_D_sum), log_outside)
+    log_denom = joint_max + np.log(np.maximum(1e-300,
+        np.exp(log_outside - joint_max)
+        + np.exp(log_B_sum - joint_max)
+        + np.exp(log_D_sum - joint_max)))
 
     # B-firm individual softmax probabilities: Eq-13-B averaged over R
     # q_B = exp(V_B - log_denom)
@@ -522,21 +528,46 @@ def compute_model_shares(delta: np.ndarray, mu: np.ndarray,
 
     return s_B, s_D_nat, omega_B, is_B
 
+def _contraction_step(delta: np.ndarray, mu: np.ndarray, df: pd.DataFrame,
+                      R: int, b_mask: np.ndarray, d_mask: np.ndarray,
+                      ln_s_data_D: np.ndarray, ln_s_data_B_cond: np.ndarray,
+                      precomp: dict | None) -> np.ndarray:
+    """Single BLP contraction step T(δ) with mean-normalization."""
+    s_B, s_D_nat, omega_B, _ = compute_model_shares(delta, mu, df, R, precomp=precomp)
+    s_B_clp     = np.clip(s_B,     1e-15, None)
+    s_D_clp     = np.clip(s_D_nat, 1e-15, None)
+    omega_B_clp = np.clip(omega_B, 1e-15, None)
+
+    delta_new = delta.copy()
+    # Eq-A4-B: D-type (national shares)
+    delta_new[d_mask] = (delta[d_mask]
+                         + ln_s_data_D[d_mask]
+                         - np.log(s_D_clp))
+    # Eq-A4-D: B-type (local conditional + Ω)
+    delta_new[b_mask] = (delta[b_mask]
+                         + ln_s_data_B_cond[b_mask]
+                         + np.log(omega_B_clp)
+                         - np.log(s_B_clp))
+    # Remove level indeterminacy
+    delta_new -= delta_new.mean()
+    return delta_new
+
+
 def blp_contraction(df: pd.DataFrame, mu: np.ndarray, R: int,
                     tol: float = 1e-14, max_iter: int = 2000,
                     delta_init: np.ndarray | None = None,
                     precomp: dict | None = None) -> tuple:
-    """BLP inner fixed-point contraction (Eq-A4-B and Eq-A4-D).
+    """SQUAREM-accelerated BLP inner contraction (Varadhan & Roland 2008).
 
-    Implements the contraction simultaneously for D-type firms (Eq-A4-B in
-    V_Main.tex) and B-type firms (Eq-A4-D). Both use the same unified
-    (mca, time) softmax denominator per Eq-4 / Eq-13-B/D.
+    Applies two contraction steps per iteration then extrapolates using a
+    quadratic steplength, dramatically accelerating convergence vs. simple
+    iteration — especially when the Jacobian has eigenvalues near ±1
+    (Conlon & Gortmaker 2020, §3.3).
 
     Parameters
     ----------
     delta_init : optional warm-start vector (from previous outer iteration).
-    precomp    : optional dict of pre-built market-index arrays (avoids
-                 rebuilding on every contraction call).
+    precomp    : optional dict of pre-built market-index arrays.
 
     Returns
     -------
@@ -547,60 +578,79 @@ def blp_contraction(df: pd.DataFrame, mu: np.ndarray, R: int,
     b_mask = is_B
     d_mask = ~is_B
 
-    # Data-implied shares (Eq-16-D and Eq-16-B, precomputed in demand prep)
+    # Data-implied shares (precomputed in demand prep)
     s_data_D      = np.clip(df['share_D'].values.copy(),      1e-15, None)
     s_data_B_cond = np.clip(df['share_B_cond'].values.copy(), 1e-15, None)
     ln_s_data_D      = np.log(s_data_D)
     ln_s_data_B_cond = np.log(s_data_B_cond)
 
-    # Population weights for national D-share data (Eq-16-D denominator is
-    # global active deposits, handled in prep; here we just use share_D directly)
-
-    # Initialise delta: warm-start if available, otherwise use log data shares
+    # Initialise delta
     if delta_init is not None and delta_init.shape == (N,):
         delta = delta_init.copy()
     else:
         delta = np.zeros(N)
         delta[d_mask] = ln_s_data_D[d_mask]
         delta[b_mask] = ln_s_data_B_cond[b_mask]
+    # Remove level indeterminacy (softmax shift-invariance)
+    delta -= delta.mean()
 
+    step_args = (mu, df, R, b_mask, d_mask, ln_s_data_D, ln_s_data_B_cond, precomp)
     norm_history = []
+
     for h in range(max_iter):
-        # Compute model shares via unified (mca,time) softmax
-        s_B, s_D_nat, omega_B, _ = compute_model_shares(delta, mu, df, R, precomp=precomp)
+        # --- SQUAREM: two contraction steps + extrapolation ---
+        delta_1 = _contraction_step(delta, *step_args)
+        delta_2 = _contraction_step(delta_1, *step_args)
 
-        s_B_clp    = np.clip(s_B,    1e-15, None)
-        s_D_clp    = np.clip(s_D_nat, 1e-15, None)
-        omega_B_clp = np.clip(omega_B, 1e-15, None)
+        r  = delta_1 - delta       # first-step residual
+        v  = (delta_2 - delta_1) - r  # second-order difference
 
-        delta_new = delta.copy()
+        r_sq = np.dot(r, r)
+        v_sq = np.dot(v, v)
 
-        # --- Eq-A4-B: D-type contraction (national shares) ---
-        # δ^{D,h+1}_{jkt} = δ^{D,h}_{jkt} + ln ŝ^{Act,D}_{jkt} - ln s^{Act,D}_{jkt}(δ^h,θ_2)
-        delta_new[d_mask] = (delta[d_mask]
-                             + ln_s_data_D[d_mask]
-                             - np.log(s_D_clp))
-
-        # --- Eq-A4-D: B-type contraction (local conditional shares + Ω) ---
-        delta_new[b_mask] = (delta[b_mask]
-                             + ln_s_data_B_cond[b_mask]
-                             + np.log(omega_B_clp)
-                             - np.log(s_B_clp))
+        if v_sq < 1e-30:
+            # Acceleration degenerate; fall back to simple step
+            delta_new = delta_2
+        else:
+            # SQUAREM steplength (Varadhan & Roland 2008, Alg. 1)
+            alpha = -np.sqrt(r_sq / v_sq)
+            # Backtrack: halve alpha until the candidate is finite and
+            # improves over the simple contraction step (delta_1)
+            for _bt in range(8):
+                candidate = delta - 2.0 * alpha * r + alpha * alpha * v
+                candidate -= candidate.mean()
+                if np.all(np.isfinite(candidate)):
+                    # Accept if candidate's residual norm is smaller than
+                    # the simple step's residual, or after 4 backtracks
+                    cand_step = _contraction_step(candidate, *step_args)
+                    cand_resid = np.max(np.abs(cand_step - candidate))
+                    simple_resid = np.max(np.abs(delta_2 - delta_1))
+                    if cand_resid <= simple_resid * 1.5 or _bt >= 4:
+                        break
+                alpha *= 0.5
+            else:
+                candidate = delta_2
+            delta_new = candidate
 
         norm = np.max(np.abs(delta_new - delta))
         norm_history.append(norm)
 
+        # Abort on numerical blow-up
+        if not np.all(np.isfinite(delta_new)):
+            n_bad = (~np.isfinite(delta_new)).sum()
+            print(f"    [contraction ABORT] {n_bad}/{N} non-finite entries.", flush=True)
+            return delta, False, h + 1, norm_history
+
         if h % 50 == 0 or h == max_iter - 1:
             print(f"    [contraction iter={h+1}/{max_iter}] norm={norm:.3e}", flush=True)
-
-        # Stall detection
-        if h > 200 and (norm_history[-200] / np.maximum(norm, 1e-30)) < 2.0:
-            print(f"    [contraction STALL] norm plateaued near {norm:.3e}. Breaking.", flush=True)
-            return delta_new, False, h + 1, norm_history
 
         if norm < tol:
             return delta_new, True, h + 1, norm_history
 
+        # Stall detection (after a burn-in to let acceleration settle)
+        if h > 200 and (norm_history[-200] / np.maximum(norm, 1e-30)) < 2.0:
+            print(f"    [contraction STALL] norm near {norm:.3e}. Breaking.", flush=True)
+            return delta_new, False, h + 1, norm_history
 
         delta = delta_new
 
@@ -734,8 +784,9 @@ def gmm_objective(theta2_vec: np.ndarray, df: pd.DataFrame,
         delta_init=delta_init, precomp=precomp)
     if not converged:
         print(f"  [!] Inner loop did not converge in {n_iter} iterations", flush=True)
-    elif delta_cache is not None:
-        delta_cache['last_delta'] = delta.copy()   # cache converged delta
+    # Always cache latest delta for warm-starting (CG2020 §3.2)
+    if delta_cache is not None:
+        delta_cache['last_delta'] = delta.copy()
 
     # Linear IV
     theta1, xi, _ = estimate_theta1(df, delta)

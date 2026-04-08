@@ -622,11 +622,20 @@ def merge_bank_chars(panel: pd.DataFrame, bank_chars: pd.DataFrame | None) -> pd
     """Left-join bank sizes and characteristics onto the panel on CodConglomeradoPrudencial x year x quarter."""
     if bank_chars is None or bank_chars.empty:
         return panel
-    return panel.merge(
+    
+    panel = panel.merge(
         bank_chars,
         on=["CodConglomeradoPrudencial", "year", "quarter"],
         how="left"
     )
+
+    # Co-ops and state-owned banks are strictly identified. Missing merges default to 0.0 (private/standard)
+    if 'is_coop' in panel.columns:
+        panel['is_coop'] = panel['is_coop'].fillna(0.0).astype(float)
+    if 'is_state_owned' in panel.columns:
+        panel['is_state_owned'] = panel['is_state_owned'].fillna(0.0).astype(float)
+
+    return panel
 
 ## -----------------------------------------------------------------------------
 ## 8) FINAL COLUMN ORDERING & SAVE
@@ -730,7 +739,21 @@ def main() -> None:
     # D4. Calculate the Leave-One-Out Mean Spread (Hausman IV) natively over wide format deposit columns
     panel = calculate_hausman_iv_wide(panel)
 
-    # E. Save
+    # E. Enforce Global Data Exclusions
+    # 1. D-type firms (digital, without physical branch network) should launch strictly > 2013
+    d_type_early_mask = (panel['CODMUN_IBGE'].astype(str) == '0') & (panel['year'] <= 2013)
+    before_d_drop = len(panel)
+    panel = panel[~d_type_early_mask].copy()
+    after_d_drop = len(panel)
+    if before_d_drop > after_d_drop:
+        logging.info(f"Dropped {before_d_drop - after_d_drop} early D-type firm observations (year <= 2013).")
+
+    # 2. Exclude deposit type 3 (Interbank/CDI) completely from the dataset 
+    cols_to_drop = [c for c in panel.columns if c.endswith("_a3")]
+    panel.drop(columns=cols_to_drop, inplace=True, errors="ignore")
+    logging.info(f"Dropped deposit type 3 columns: {cols_to_drop}")
+
+    # F. Save
     save(panel)
 
     # -- Summary ----------------------------------------------------------------

@@ -141,7 +141,18 @@ def build_base_panel(panel_csv: Path) -> pd.DataFrame:
         
     if 'CODMUN_IBGE' in df.columns:
         df['dummy_D_type'] = (df['CODMUN_IBGE'].astype(str) == '0').astype(float)
+
+    # Fill defaults for ownership types if missing or NaN
+    if 'is_coop' in df.columns:
+        df['is_coop'] = df['is_coop'].fillna(0.0)
+    else:
+        df['is_coop'] = 0.0
         
+    if 'is_state_owned' in df.columns:
+        df['is_state_owned'] = df['is_state_owned'].fillna(0.0)
+    else:
+        df['is_state_owned'] = 0.0
+
     if 'dummy_D_type' in df.columns:
         if 'risk_free_qoq_lag' in df.columns:
             df['dummy_D_type_x_risk_free_qoq_lag'] = df['dummy_D_type'] * df['risk_free_qoq_lag']
