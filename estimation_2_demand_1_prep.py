@@ -23,7 +23,7 @@ estimation_1_sleep pipeline, unchanged across all 12 specifications.
 
 Outputs
 -------
-  demand_final_2_spec_{spec_id}.pkl    (one per specification, in DEMAND_PREP)
+  demand_2_final_spec_{spec_id}.pkl    (one per specification, in DEMAND_PREP)
   demand_prep_2_summary.json           (summary diagnostics)
 
 Usage
@@ -606,7 +606,7 @@ def main():
         df_final = merge_panel_with_prep(df_panel, df_spec)
 
         # Serialize
-        out_path = DEMAND_PREP_DIR / f"demand_final_2_spec_{spec_id}.pkl"
+        out_path = DEMAND_PREP_DIR / f"demand_2_final_spec_{spec_id}.pkl"
         df_final.to_pickle(out_path)
         print(f"  -> Saved {out_path.name} with {len(df_final)} rows")
 

@@ -382,6 +382,7 @@ def run_plotting_phase(spec12_only=False):
         
         ax.set_title(f"Pooled Sleepiness Estimate: {col_name.replace('phi_mt_', '')}", fontsize=14)
         ax.set_ylabel(r"National $\hat{\phi}_t$")
+        ax.set_ylim(bottom=0)
         ax.grid()
         ax.legend(loc='best')
         fig.tight_layout()

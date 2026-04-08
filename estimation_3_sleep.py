@@ -545,6 +545,7 @@ def run_plotting_phase(spec12_only=False):
                 if plotted:
                     ax.set_title(f"Robustness: {iv_name} x {s_name}", fontsize=14)
                     ax.set_ylabel(r"National $\hat{\phi}_t$")
+                    ax.set_ylim(bottom=0)
                     ax.grid()
                     ax.legend(loc='best')
                     fig.tight_layout()

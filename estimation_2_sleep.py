@@ -461,6 +461,7 @@ def generate_phi_plot(res_df, iv_name, s_name, spec_number, out_dir, all_options
 
     ax.set_title(f"Specification {spec_number:02d}: {iv_name} x {s_name}", fontsize=14)
     ax.set_ylabel(r"National $\hat{\phi}_t^{\mathrm{Nat}}$")
+    ax.set_ylim(bottom=0)
     ax.set_xlabel("Year-Quarter")
     ax.legend(loc='best')
     ax.grid(True, linestyle='--', alpha=0.6)

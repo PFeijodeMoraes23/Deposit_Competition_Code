@@ -102,6 +102,12 @@ This script sequentially runs the following steps:
         action="store_true",
         help="Skip executing sleepiness estimators 1-6 and only run exports and demand prep."
     )
+    
+    parser.add_argument(
+        "--sleep-only",
+        action="store_true",
+        help="Only execute the first 6 sleepiness estimation steps and plot scripts, skipping exports and demand prep."
+    )
     args = parser.parse_args()
 
 
@@ -110,23 +116,28 @@ This script sequentially runs the following steps:
     spec_arg = "12" if args.only_spec_12 else "all"
     spec12_arg = ["--spec12"] if args.only_spec_12 else []
 
+    if getattr(args, 'skip_sleep', False) and getattr(args, 'sleep_only', False):
+        print("[ERROR] Cannot use both --skip-sleep and --sleep-only simultaneously.")
+        sys.exit(1)
+
     # Define the scripts and their arguments precisely as requested
-    scripts_to_run = [
-        {"file": "estimation_1_sleep.py", "desc": "Local Estimation of Sleepness"},
-        {"file": "estimation_2_sleep.py", "args": ["--run-all", "--all-options"], "desc": "National Level Phi for D firms + Plots"},
-        {"file": "estimation_3_sleep.py", "args": spec12_arg, "desc": "Robustness bounds for B-firms"},
-        {"file": "estimation_4_sleep.py", "args": spec12_arg, "desc": "Robustness bounds for pooled B and D firms"},
-        {"file": "estimation_5_sleep.py", "args": spec12_arg, "desc": "NLLS logistic structural estimation"},
-        {"file": "estimation_6_sleep.py", "args": ["--model-type", "both", "--alt", "both"] + (["--spec12-only"] if args.only_spec_12 else []), "desc": "Robustness bounds with cooperative/state controls"},
-    ]
+    scripts_to_run = []
+    
+    if not getattr(args, 'skip_sleep', False):
+        scripts_to_run.extend([
+            {"file": "estimation_1_sleep.py", "desc": "Local Estimation of Sleepness"},
+            {"file": "estimation_2_sleep.py", "args": ["--run-all", "--all-options"], "desc": "National Level Phi for D firms + Plots"},
+            {"file": "estimation_3_sleep.py", "args": spec12_arg, "desc": "Robustness bounds for B-firms"},
+            {"file": "estimation_4_sleep.py", "args": spec12_arg, "desc": "Robustness bounds for pooled B and D firms"},
+            {"file": "estimation_5_sleep.py", "args": spec12_arg, "desc": "NLLS logistic structural estimation"},
+            {"file": "estimation_6_sleep.py", "args": ["--model-type", "both", "--alt", "both"] + (["--spec12-only"] if args.only_spec_12 else []), "desc": "Robustness bounds with cooperative/state controls"},
+        ])
 
-    if getattr(args, 'skip_sleep', False):
-        scripts_to_run = []
-
-    scripts_to_run.extend([
-        {"file": "export_results.py", "args": ["--estimation", "all"], "desc": "Export 1st/2nd Stage Summaries across all estimators"},
-        {"file": "estimation_demand_1_prep.py", "args": ["--estimation", "all", "--spec", spec_arg], "desc": "Universal Demand Prep Orchestrator & Panel Serialization"}
-    ])
+    if not getattr(args, 'sleep_only', False):
+        scripts_to_run.extend([
+            {"file": "export_results.py", "args": ["--estimation", "all"], "desc": "Export 1st/2nd Stage Summaries across all estimators"},
+            {"file": "estimation_demand_1_prep.py", "args": ["--estimation", "all", "--spec", spec_arg], "desc": "Universal Demand Prep Orchestrator & Panel Serialization"}
+        ])
 
     cwd = Path(__file__).resolve().parent
     start_time_all = time.time()
