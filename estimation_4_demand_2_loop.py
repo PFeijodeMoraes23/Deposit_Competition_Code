@@ -548,15 +548,14 @@ def blp_contraction(df: pd.DataFrame, mu: np.ndarray, R: int,
     d_mask = ~is_B
 
     # Data-implied shares (Eq-16-D and Eq-16-B, precomputed in demand prep)
+    # Data-implied shares (precomputed in demand prep)
+    # Data-implied shares (precomputed in demand prep)
     s_data_D      = np.clip(df['share_D'].values.copy(),      1e-15, None)
     s_data_B_cond = np.clip(df['share_B_cond'].values.copy(), 1e-15, None)
     ln_s_data_D      = np.log(s_data_D)
     ln_s_data_B_cond = np.log(s_data_B_cond)
 
-    # Population weights for national D-share data (Eq-16-D denominator is
-    # global active deposits, handled in prep; here we just use share_D directly)
-
-    # Initialise delta: warm-start if available, otherwise use log data shares
+    # Initialise delta
     if delta_init is not None and delta_init.shape == (N,):
         delta = delta_init.copy()
     else:
@@ -576,31 +575,36 @@ def blp_contraction(df: pd.DataFrame, mu: np.ndarray, R: int,
         delta_new = delta.copy()
 
         # --- Eq-A4-B: D-type contraction (national shares) ---
-        # δ^{D,h+1}_{jkt} = δ^{D,h}_{jkt} + ln ŝ^{Act,D}_{jkt} - ln s^{Act,D}_{jkt}(δ^h,θ_2)
         delta_new[d_mask] = (delta[d_mask]
                              + ln_s_data_D[d_mask]
                              - np.log(s_D_clp))
 
-        # --- Eq-A4-D: B-type contraction (local conditional shares + Ω) ---
+        # --- Eq-A4-D: B-type contraction (local conditional shares + O) ---
         delta_new[b_mask] = (delta[b_mask]
                              + ln_s_data_B_cond[b_mask]
                              + np.log(omega_B_clp)
                              - np.log(s_B_clp))
 
+        # Damping: convex combination to break 2-cycles (spectral radius near -1).
+        DAMP = 0.5
+        delta_new = DAMP * delta_new + (1.0 - DAMP) * delta
+        
+        # NOTE: No mean-normalization here. OUTSIDE_EPS anchors the level.
+
         norm = np.max(np.abs(delta_new - delta))
         norm_history.append(norm)
 
-        if h % 50 == 0 or h == max_iter - 1:
-            print(f"    [contraction iter={h+1}/{max_iter}] norm={norm:.3e}", flush=True)
+        # Abort on numerical blow-up
+        if not np.all(np.isfinite(delta_new)):
+            n_bad = (~np.isfinite(delta_new)).sum()
+            print(f"    [contraction ABORT] {n_bad}/{N} non-finite entries.", flush=True)
+            return delta, False, h + 1, norm_history
 
-        # Stall detection
-        if h > 200 and (norm_history[-200] / np.maximum(norm, 1e-30)) < 2.0:
-            print(f"    [contraction STALL] norm plateaued near {norm:.3e}. Breaking.", flush=True)
-            return delta_new, False, h + 1, norm_history
+        if h % 100 == 0 or h == max_iter - 1:
+            print(f"    [contraction iter={h+1}/{max_iter}] norm={norm:.3e}", flush=True)
 
         if norm < tol:
             return delta_new, True, h + 1, norm_history
-
 
         delta = delta_new
 
@@ -1019,7 +1023,7 @@ def main():
     parser.add_argument('--seed', type=int, default=42)
     parser.add_argument('--tol-inner', type=float, default=1e-12,
                         dest='tol_inner')
-    parser.add_argument('--max-inner', type=int, default=1000,
+    parser.add_argument('--max-inner', type=int, default=2000,
                         dest='max_inner')
     parser.add_argument('--tol-outer', type=float, default=1e-6,
                         dest='tol_outer')
