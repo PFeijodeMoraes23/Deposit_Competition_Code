@@ -228,16 +228,20 @@ def _banner(text: str, char: str = "-") -> None:
 _print_lock = threading.Lock()  # serialize console output across parallel workers
 
 
+import shlex
+
 def run_step(step_id: str, script: str, description: str) -> float:
     """
     Run one pipeline script as a subprocess, capturing its output so that
     parallel runs don't interleave on the console.  Raises RuntimeError on
     failure (safe to use inside ThreadPoolExecutor worker threads).
     """
-    path = os.path.join(SCRIPT_DIR, script)
+    script_args = shlex.split(script)
+    script_file = script_args[0]
+    path = os.path.join(SCRIPT_DIR, script_file)
     if not os.path.exists(path):
         with _print_lock:
-            print(f"  [SKIP] {step_id} -- script not found: {script}", flush=True)
+            print(f"  [SKIP] {step_id} -- script not found: {script_file}", flush=True)
         return 0.0
 
     with _print_lock:
@@ -249,7 +253,7 @@ def run_step(step_id: str, script: str, description: str) -> float:
         env["TOON_CONTEXT_PATH"] = toon_ctx_path
 
     proc = subprocess.Popen(
-        [PYTHON, path], cwd=SCRIPT_DIR,
+        [PYTHON, path] + script_args[1:], cwd=SCRIPT_DIR,
         stdout=subprocess.PIPE, stderr=subprocess.PIPE,
         env=env,
     )

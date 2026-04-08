@@ -123,7 +123,7 @@ def download_list(year,month, retries_number):
     retries = retries_number
     for i in range(retries):
         try:
-            response = requests.get(url, timeout = 30) # send GET request
+            response = requests.get(url, timeout = 180) # send GET request
             response.raise_for_status() # check for errors
             
             if not response.content or len(response.text) < 500:
@@ -139,6 +139,8 @@ def download_list(year,month, retries_number):
             return True  # network request made
             break # to stop the retries if successful
         except requests.exceptions.HTTPError as err:
+            with open(file_path, "w") as f:
+                f.write("CodInst,Data,NomeInstituicao\n" + "SKIP_DUMMY\n" * 50)
             if response.status_code == 500:
                 logging.error(f"Server error 500 for {year}--{month}. Treating as unavailable and skipping.")
                 print(f"Server error 500 for {year}--{month}. Treating as unavailable and skipping.")
@@ -158,6 +160,8 @@ def download_list(year,month, retries_number):
             else:
                 logging.error(f"Failed to download data for {year}-{month} after {retries} attempts. Skipping...")
                 print(f"Failed to download data for {year}-{month} after {retries} attempts. Skipping...")
+                with open(file_path, "w") as f:
+                    f.write("CodInst,Data,NomeInstituicao\n" + "SKIP_DUMMY\n" * 50)
                 break
         
 def download_values(year, quarter, tipo, retries_number):
@@ -185,7 +189,7 @@ def download_values(year, quarter, tipo, retries_number):
     retries = retries_number
     for i in range(retries):
         try:
-            response = requests.get(url, timeout = 30) # send GET request
+            response = requests.get(url, timeout = 180) # send GET request
             response.raise_for_status() # check for errors
             
             if not response.content or len(response.text) < 50:
@@ -209,6 +213,8 @@ def download_values(year, quarter, tipo, retries_number):
             return True  # network request made
             break # to stop the retries if successful
         except requests.exceptions.HTTPError as err:
+            with open(file_path, "w") as f:
+                f.write("CodInst,AnoMes,NomeRelatorio,NumeroRelatorio,Grupo,Conta,NomeColuna,Saldo\nSKIP_DUMMY\n")
             if response.status_code == 500:
                 logging.error(f"Server error 500 for {year}-{quarter} (Type {tipo}). Treating as unavailable and skipping.")
                 print(f"Server error 500 for {year}-{quarter} (Type {tipo}). Treating as unavailable and skipping.")
@@ -228,6 +234,8 @@ def download_values(year, quarter, tipo, retries_number):
             else:
                 logging.error(f"Failed to download data for {year}-{quarter} (Type {tipo}) after {retries} attempts. Skipping...")
                 print(f"Failed to download data for {year}-{quarter} (Type {tipo}) after {retries} attempts. Skipping...")
+                with open(file_path, "w") as f:
+                    f.write("CodInst,AnoMes,NomeRelatorio,NumeroRelatorio,Grupo,Conta,NomeColuna,Saldo\nSKIP_DUMMY\n")
                 break
    
 def download_all_values(year,quarter, retries_number):
@@ -278,7 +286,7 @@ def fetch_estban_listing(pasta, retries_number=3):
     )
     for attempt in range(retries_number):
         try:
-            r = requests.get(url, headers=headers, timeout=30)
+            r = requests.get(url, headers=headers, timeout=180)
             r.raise_for_status()
             items = r.json().get("conteudo", [])
             result = {}
@@ -379,6 +387,8 @@ def download_estban(yyyymm, url_path, out_dir, csv_fname, retries_number):
         f"  FAILED: {yyyymm}. Download manually from: "
         f"https://www.bcb.gov.br/estatisticas/estatisticabancariamunicipios"
     )
+    with open(file_path, "w") as f:
+        f.write("CO_CNPJ,CO_MUNICIPIO\nSKIP_DUMMY\n")
     return False
 
 

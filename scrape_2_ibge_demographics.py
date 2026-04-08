@@ -308,6 +308,8 @@ if ensure_project_venv is not None:
     ensure_project_venv(__file__)
 
 import warnings
+try:
+    root_dir = Path(__file__).parent.parent
 except NameError:
     root_dir = Path.cwd()
 output_dir = root_dir / "IBGE"
