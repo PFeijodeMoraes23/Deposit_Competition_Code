@@ -176,7 +176,7 @@ def build_latex_table(results_dict, order_keys, target_vars, out_path, title="")
         # If NLLS/Logistic, copy the missing metrics from the counterpart Linear model
         if pd.isna(nobs) or pd.isna(r2):
             fallback_col = None
-            if col == '5 Pooled NLLS': fallback_col = '4 Pooled'
+            if col == '5 Pooled Logistic': fallback_col = '4 Pooled'
             elif "Logistic" in col: fallback_col = col.replace("Logistic", "Linear")
             
             if fallback_col and fallback_col in results_dict:
@@ -195,7 +195,7 @@ def build_latex_table(results_dict, order_keys, target_vars, out_path, title="")
         else:
             # Fallback to linear
             fallback_col = None
-            if col == '5 Pooled NLLS': fallback_col = '4 Pooled'
+            if col == '5 Pooled Logistic': fallback_col = '4 Pooled'
             elif "Logistic" in col: fallback_col = col.replace("Logistic", "Linear")
             
             if fallback_col and fallback_col in results_dict:
@@ -246,9 +246,9 @@ def main():
         '2 D firms Break': SLEEP_DIR / "rout_2",
         '3 B firms Robust': SLEEP_DIR / "rout_3" / "LOCAL", 
         '4 Pooled': SLEEP_DIR / "rout_4" / "POOLED",
-        '5 Pooled NLLS': SLEEP_DIR / "rout_5" / "POOLED",
-        '6 Alt2 Linear': SLEEP_DIR / "rout_6" / "POOLED" / "ALT_2",
-        '6 Alt2 Logistic': SLEEP_DIR / "rout_6" / "POOLED" / "ALT_2",
+        '5 Pooled Logistic': SLEEP_DIR / "rout_5" / "POOLED",
+        '6 Dummies Linear': SLEEP_DIR / "rout_6" / "POOLED" / "ALT_2",
+        '6 Dummies Logistic': SLEEP_DIR / "rout_6" / "POOLED" / "ALT_2",
     }
 
     if getattr(args, 'skip_est2', False):
@@ -277,9 +277,9 @@ def main():
             '2 D firms Break': 'Option_2_IV_HausmanFull_Tech',
             '3 B firms Robust': 'IV_HausmanFull x Tech',
             '4 Pooled': 'IV_HausmanFull x Tech',
-            '5 Pooled NLLS': 'IV_HausmanFull x Tech',
-            '6 Alt2 Linear': 'IV_HausmanFull x Tech x linear', 
-            '6 Alt2 Logistic': 'IV_HausmanFull x Tech x logistic',
+            '5 Pooled Logistic': 'IV_HausmanFull x Tech',
+            '6 Dummies Linear': 'IV_HausmanFull x Tech x linear', 
+            '6 Dummies Logistic': 'IV_HausmanFull x Tech x logistic',
         }
 
         # Fallback if the script saved differently (linear vs logistic)
@@ -331,6 +331,12 @@ def main():
     # ---- 3) Plot Implied National Phi_t ----
     fig, axes = plt.subplots(1, 2, figsize=(16, 6), sharey=True)
     
+    # Pre-define a color map for consistent colors across both subplots
+    base_colors = plt.rcParams['axes.prop_cycle'].by_key()['color']
+    color_map = {lbl: base_colors[i % len(base_colors)] for i, lbl in enumerate(phi_data.keys())}
+    
+    label_rename_map = {}
+    
     for label, df_phi in phi_data.items():
         if 'year_quarter' not in df_phi.columns:
             continue
@@ -339,45 +345,64 @@ def main():
         phi_col_d = f"phi_d" if "phi_d" in df_phi.columns else None
         
         if 'dummy_D_type' in df_phi.columns:
+            # When pooled and has the dummy, we can separate
             df_b = df_phi[df_phi['dummy_D_type'] == 0]
             df_d = df_phi[df_phi['dummy_D_type'] == 1]
-        elif "2_D_firms" in label:
+        elif "2 D firms" in label:
             df_b = pd.DataFrame(columns=df_phi.columns)
             df_d = df_phi
         else:
-            df_b = df_phi
-            df_d = pd.DataFrame(columns=df_phi.columns)
+            # Assume everything else is B firms entirely, EXCEPT pooled where dummy_D_type might be missing but we know it's pooled?
+            # Actually, Alt2 Logistic might apply to both but missing dummy?
+            # Let's check if the dataframe has 'is_B' instead.
+            if 'is_B' in df_phi.columns:
+                df_b = df_phi[df_phi['is_B'] == 1]
+                df_d = df_phi[df_phi['is_B'] == 0]
+            else:
+                # Default fallback
+                df_b = df_phi
+                df_d = pd.DataFrame(columns=df_phi.columns)
 
         def calc_agg(d_sub, col):
             if len(d_sub) == 0: return pd.Series(dtype=float)
-            w = d_sub['market_size'] if 'market_size' in d_sub.columns else pd.Series(1.0, index=d_sub.index)
+            w = d_sub.get('market_size', pd.Series(1.0, index=d_sub.index))
             num = (d_sub[col] * w).groupby(d_sub['year_quarter']).sum()
             den = w.groupby(d_sub['year_quarter']).sum()
             return num / den
         
         tar_col = "phi_mt_IV_HausmanFull_x_Tech"
-        possible_cols = [
-            "phi_mt_IV_HausmanFull_x_Tech", 
-            "phi_mt_Option_2_IV_HausmanFull_Tech",
-            "phi_mt_IV_HausmanFull_x_Tech_x_logistic",
-            "phi_mt_Tech"
-        ]
+        
+        # Explicitly map target columns based on spec label to prevent collisions
+        if "Linear" in label:
+            possible_cols = ["phi_mt_IV_HausmanFull_x_Tech_x_linear", "phi_mt_IV_HausmanFull_x_Tech_linear"]
+        elif "Logistic" in label:
+            possible_cols = ["phi_mt_IV_HausmanFull_x_Tech_x_logistic", "phi_mt_IV_HausmanFull_x_Tech_logistic"]
+        elif "2 D firms" in label:
+            possible_cols = ["phi_mt_Option_2_IV_HausmanFull_Tech"]
+        else:
+            possible_cols = ["phi_mt_IV_HausmanFull_x_Tech"]
+            
+        # Fallback search if the precise requested column is missing
+        possible_cols += ["phi_mt_IV_HausmanFull_x_Tech", "phi_mt_Option_2_IV_HausmanFull_Tech", "phi_mt_Tech"]
         
         for p_col in possible_cols:
             if p_col in df_phi.columns:
                 tar_col = p_col
                 break
                 
+        plot_label = label_rename_map.get(label, label)
+        c = color_map[label]
+        
         if tar_col in df_phi.columns:
             agg_b = calc_agg(df_b, tar_col)
             agg_d = calc_agg(df_d, tar_col)
             
             if not agg_b.empty:
                 idx_dates = pd.PeriodIndex(agg_b.index.str.replace('_', 'Q'), freq='Q').to_timestamp()
-                axes[0].plot(idx_dates, agg_b.values, label=label, linewidth=2)
+                axes[0].plot(idx_dates, agg_b.values, label=plot_label, color=c, linewidth=2)
             if not agg_d.empty:
                 idx_dates = pd.PeriodIndex(agg_d.index.str.replace('_', 'Q'), freq='Q').to_timestamp()
-                axes[1].plot(idx_dates, agg_d.values, label=label, linewidth=2)
+                axes[1].plot(idx_dates, agg_d.values, label=plot_label, color=c, linewidth=2)
                 
     axes[0].set_title("B-Type Firms (Spec 12)", fontsize=14)
     axes[0].set_ylabel(r"National $\hat{\phi}_t$")
