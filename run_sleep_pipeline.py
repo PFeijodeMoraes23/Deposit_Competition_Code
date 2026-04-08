@@ -19,10 +19,8 @@ This script sequentially runs the following steps:
   4. estimation_4_sleep.py         (Robustness bounds for pooled B and D firms)
   5. estimation_5_sleep.py         (NLLS logistic structural estimation)
   6. estimation_6_sleep.py         (Robustness bounds with cooperative/state controls)
-  7. export_1_sleep_results.py     (Export National Sleepiness LaTeX Tables & PDF)
-  8. export_2_sleep_results.py     (Export Firm Level Sleepiness LaTeX Tables & PDF)
-  9. estimation_1_demand_1_prep.py (Demand Data Preparation & Panel Serialization)
-  10. estimation_2_demand_1_prep.py (Hybrid Demand Prep: B-type Local Phi + D-type PCA Phi)
+  7. export_results.py             (Export 1st/2nd Stage Summaries across all estimators)
+  8. estimation_demand_1_prep.py   (Universal Demand Prep Orchestrator & Panel Serialization)
 """
 import argparse
 import subprocess
@@ -87,10 +85,8 @@ This script sequentially runs the following steps:
   4. estimation_4_sleep.py         (Robustness bounds for pooled B and D firms)
   5. estimation_5_sleep.py         (NLLS logistic structural estimation)
   6. estimation_6_sleep.py         (Robustness bounds with cooperative/state controls)
-  7. export_1_sleep_results.py     (Export National Sleepiness LaTeX Tables & PDF)
-  8. export_2_sleep_results.py     (Export Firm Level Sleepiness LaTeX Tables & PDF)
-  9. estimation_1_demand_1_prep.py (Demand Data Preparation & Panel Serialization)
-  10. estimation_2_demand_1_prep.py (Hybrid Demand Prep: B-type Local Phi + D-type PCA Phi)
+  7. export_results.py             (Export 1st/2nd Stage Summaries across all estimators)
+  8. estimation_demand_1_prep.py   (Universal Demand Prep Orchestrator & Panel Serialization)
         """,
         formatter_class=argparse.RawDescriptionHelpFormatter
     )
@@ -101,11 +97,15 @@ This script sequentially runs the following steps:
         help="Only run specification 12 for the demand prep scripts instead of all specifications."
     )
     
+    parser.add_argument(
+        "--skip-sleep",
+        action="store_true",
+        help="Skip executing sleepiness estimators 1-6 and only run exports and demand prep."
+    )
     args = parser.parse_args()
 
-    print("=====================================================================")
-    print(" INITIATING SLEEPINESS ESTIMATION PIPELINE")
-    print("=====================================================================")
+
+    
 
     spec_arg = "12" if args.only_spec_12 else "all"
     spec12_arg = ["--spec12"] if args.only_spec_12 else []
@@ -118,11 +118,15 @@ This script sequentially runs the following steps:
         {"file": "estimation_4_sleep.py", "args": spec12_arg, "desc": "Robustness bounds for pooled B and D firms"},
         {"file": "estimation_5_sleep.py", "args": spec12_arg, "desc": "NLLS logistic structural estimation"},
         {"file": "estimation_6_sleep.py", "args": ["--model-type", "both", "--alt", "both"] + (["--spec12-only"] if args.only_spec_12 else []), "desc": "Robustness bounds with cooperative/state controls"},
-        {"file": "export_1_sleep_results.py", "desc": "Export National Sleepiness LaTeX Tables & PDF"},
-        {"file": "export_2_sleep_results.py", "desc": "Export Firm Level Sleepiness LaTeX Tables & PDF"},
-        {"file": "estimation_1_demand_1_prep.py", "args": ["--spec", spec_arg], "desc": "Demand Data Preparation & Panel Serialization"},
-        {"file": "estimation_2_demand_1_prep.py", "args": ["--spec", spec_arg], "desc": "Hybrid Demand Prep: B-type Local Phi + D-type PCA Phi"}
     ]
+
+    if getattr(args, 'skip_sleep', False):
+        scripts_to_run = []
+
+    scripts_to_run.extend([
+        {"file": "export_results.py", "args": ["--estimation", "all"], "desc": "Export 1st/2nd Stage Summaries across all estimators"},
+        {"file": "estimation_demand_1_prep.py", "args": ["--estimation", "all", "--spec", spec_arg], "desc": "Universal Demand Prep Orchestrator & Panel Serialization"}
+    ])
 
     cwd = Path(__file__).resolve().parent
     start_time_all = time.time()
@@ -159,6 +163,8 @@ This script sequentially runs the following steps:
     elapsed_all = time.time() - start_time_all
     print("\n=====================================================================")
     print(f" SLEEPINESS PIPELINE COMPLETED SUCCESSFULLY IN {elapsed_all:.2f} SECONDS")
+    args = parser.parse_args()
+
     print("=====================================================================")
 
 if __name__ == "__main__":

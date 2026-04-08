@@ -1,16 +1,16 @@
 """
-estimation_2_demand_2_loop.py
+estimation_1_demand_2_loop.py
 ==============================
 BLP outer-inner demand estimation loop (Appendix-BLP, V_Main.tex).
 
-Takes per-spec demand prep pkls from estimation_2_demand_1_prep.py and
+Takes per-spec demand prep CSVs from estimation_1_demand_1_prep.py and
 the market panel, then recovers theta_2* = (Pi*, Sigma*) via GMM (Eq-A1)
 and theta_1* via linear IV (Eq-A5) for each sleepiness specification.
 
 Usage
 -----
-  python estimation_2_demand_2_loop.py --spec 1 --stage logit
-  python estimation_2_demand_2_loop.py --spec all --stage full --R 500
+  python estimation_1_demand_2_loop.py --spec 1 --stage logit
+  python estimation_1_demand_2_loop.py --spec all --stage full --R 500
 
 CLI Flags
 ---------
@@ -32,7 +32,7 @@ References
 
 CLI Options:
 ------------
-usage: estimation_2_demand_2_loop.py [-h] [--spec SPEC]
+usage: estimation_1_demand_2_loop.py [-h] [--spec SPEC]
                                      [--stage {logit,sigma,full,extended,sequence}]
                                      [--R {100,500,1000}] [--seed SEED]
                                      [--tol-inner TOL_INNER]
@@ -210,7 +210,7 @@ def _hourly_email_worker(job_id: str, stop_event: threading.Event) -> None:
 def load_merged_spec_data(spec_id: int, is_hpc: bool = False) -> pd.DataFrame:
     '''Load the per-spec pre-merged dataframe created by estimation_1_demand_2_secondprep.py'''
     input_dir, _ = get_paths(is_hpc)
-    pkl_path = input_dir / f"demand_2_final_spec_{spec_id}.pkl"
+    pkl_path = input_dir / f"demand_3_final_spec_{spec_id}.pkl"
     if not pkl_path.exists():
         raise FileNotFoundError(f"Missing {pkl_path}")
     return pd.read_pickle(pkl_path)
@@ -686,7 +686,7 @@ def estimate_theta1(df: pd.DataFrame, delta: np.ndarray) -> tuple:
 
     xi = delta - X_full @ theta1  # Residuals using original X
 
-    theta1_se = _compute_cluster_robust_se(delta_v, X_v, X_hat.shape[1], (df['CodConglomeradoPrudencial'].astype(str) + "_" + df['year'].astype(str)).values[valid])
+    theta1_se = _compute_cluster_robust_se(delta_v, X_v, X_hat.shape[1], (df['CodConglomeradoPrudencial'].astype(str) + "_" + df['time_id'].str.split('Q').str[0]).values[valid])
 
     return theta1, xi, theta1_se
 
@@ -1037,7 +1037,7 @@ def main():
     # Determine specs to run
     spec_ids = list(range(1, 13)) if args.spec == 'all' else [int(args.spec)]
 
-    _log_status("BLP Demand Estimation Loop — START")
+    _log_status("BLP Demand Estimation Loop \u2014 START")
     _log_status(f"  Stage: {args.stage} | Specs: {spec_ids}")
     _log_status(f"  R={args.R} | seed={args.seed} | method={args.method} | HPC={args.hpc}")
     _log_status(f"  tol_inner={args.tol_inner} | tol_outer={args.tol_outer} | workers={args.workers}")
@@ -1062,7 +1062,7 @@ def main():
     if not input_dir.exists():
         print(f"  [FATAL] Input directory DOES NOT EXIST: {input_dir}", flush=True)
     else:
-        pkl_files = list(input_dir.glob('demand_2_final_spec_*.pkl'))
+        pkl_files = list(input_dir.glob('demand_3_final_spec_*.pkl'))
         print(f"  [DIAGNOSTIC] Found {len(pkl_files)} matched .pkl files in input directory.", flush=True)
 
     BLP_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -1101,7 +1101,7 @@ def main():
                 if err is not None:
                     print(f"  [!] Spec {sp} failed:\n{err}")
                 elif res is not None:
-                    out_pkl = BLP_OUTPUT_DIR / f"blp_results_2_spec_{sp}_{args.stage}.pkl"
+                    out_pkl = BLP_OUTPUT_DIR / f"blp_results_spec_3_{sp}_{args.stage}.pkl"
                     with open(out_pkl, 'wb') as f:
                         pickle.dump(res, f)
                     print(f"  Saved: {out_pkl.name}")
@@ -1114,7 +1114,7 @@ def main():
                     }
 
         # Summary JSON
-        summary_path = BLP_OUTPUT_DIR / f"blp_summary_2_{args.stage}.json"
+        summary_path = BLP_OUTPUT_DIR / f"blp_summary_{args.stage}.json"
         with open(summary_path, 'w') as f:
             json.dump(all_results, f, indent=2)
         _log_status(f"Summary saved to: {summary_path}")

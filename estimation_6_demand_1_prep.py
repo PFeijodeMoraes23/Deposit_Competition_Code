@@ -75,7 +75,7 @@ EXTRA_KEEP_COLS = X_COLS + D_COLS + IV_BLP_LOO + IV_COST + IV_CAPITAL + ['segmen
 
 def _resolve_runtime_paths() -> tuple[Path, Path, Path]:
     panel_csv = PANEL_CSV
-    sleep_output_dir = DATA_DIR / "ESTIMATION_OUTPUT" / "SLEEPINESS" / "SLEEPINESS_NEW"
+    sleep_output_dir = DATA_DIR / "ESTIMATION_OUTPUT" / "SLEEPINESS" / "SLEEPINESS_6" / "POOLED" / "ALT_1"
     demand_output_dir = DATA_DIR / "ESTIMATION_OUTPUT" / "DEMAND_PREP"
     return panel_csv, sleep_output_dir, demand_output_dir
 
@@ -238,7 +238,7 @@ def main():
     panel_csv, sleep_output_dir, demand_output_dir = _resolve_runtime_paths()
     results_pickle = sleep_output_dir / "estimation_results.pkl"
     if not results_pickle.exists():
-        print(f"ERROR: Pickle file missing at {results_pickle}. Run estimation_1_sleep.py first.")
+        print(f"ERROR: Pickle file missing at {results_pickle}. Run estimation_6_sleep.py first.")
         sys.exit(1)
         
     print(f"Loading estimation results from {results_pickle}...")
@@ -279,7 +279,7 @@ def main():
         task = (actual_key, results_dict[actual_key], df_base)
         df_spec, summary, spec_id = process_specification(task)
         if df_spec is not None:
-             out_pkl = demand_output_dir / f"demand_1_final_spec_{target_id}.pkl"
+             out_pkl = demand_output_dir / f"demand_6_final_spec_{target_id}.pkl"
              df_spec.to_pickle(out_pkl)
              print(f" > Saved Spec {target_id} -> {out_pkl.name} ({len(df_spec)} rows)")
              spec_summaries[str(target_id)] = summary
