@@ -89,7 +89,7 @@ def _resolve_estimation_paths():
     _ROOT = Path(__file__).resolve().parents[2]
     DATA_DIR = _ROOT / "BCB" / "Egan_et_al_2025_Rep" / "processed"
     PANEL_CSV = DATA_DIR / "market_panel.csv"
-    OUTPUT_DIR = DATA_DIR / "ESTIMATION_OUTPUT" / "SLEEPINESS" / "SLEEPINESS_NATIONAL"
+    OUTPUT_DIR = DATA_DIR / "ESTIMATION_OUTPUT" / "rout_2"
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     return PANEL_CSV, OUTPUT_DIR
 
@@ -339,8 +339,8 @@ def resolve_plot_paths():
     DATA_DIR = _ROOT / "BCB" / "Egan_et_al_2025_Rep" / "processed"
     PANEL_CSV = DATA_DIR / "market_panel.csv"
     
-    LOCAL_RESULTS_PICKLE = DATA_DIR / "ESTIMATION_OUTPUT" / "SLEEPINESS" / "SLEEPINESS_NEW" / "estimation_results.pkl"
-    NATIONAL_RESULTS_PICKLE = DATA_DIR / "ESTIMATION_OUTPUT" / "SLEEPINESS" / "SLEEPINESS_NATIONAL" / "estimation_results.pkl"
+    LOCAL_RESULTS_PICKLE = DATA_DIR / "ESTIMATION_OUTPUT" / "rout_1" / "estimation_results.pkl"
+    NATIONAL_RESULTS_PICKLE = DATA_DIR / "ESTIMATION_OUTPUT" / "rout_2" / "estimation_results.pkl"
     
     OUTPUT_DIR = DATA_DIR / "ESTIMATION_OUTPUT" / "PLOTS"
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)

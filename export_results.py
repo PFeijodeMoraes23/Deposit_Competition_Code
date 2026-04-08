@@ -34,17 +34,17 @@ except ImportError:
 
 def get_estimation_directories(estimation_number: int, base_dir: Path) -> list[Path]:
     """Returns the list of output directories for the given estimation step."""
-    sleep_dir = base_dir / "ESTIMATION_OUTPUT" / "SLEEPINESS"
+    sleep_dir = base_dir / "ESTIMATION_OUTPUT"
     
     mapping = {
-        1: [sleep_dir / "SLEEPINESS_NEW"],
-        2: [sleep_dir / "SLEEPINESS_NATIONAL"],
-        3: [sleep_dir / "SLEEPINESS_NO_BREAK" / "LOCAL", 
-            sleep_dir / "SLEEPINESS_NO_BREAK" / "NATIONAL"],
-        4: [sleep_dir / "SLEEPINESS_4" / "POOLED"],
-        5: [sleep_dir / "SLEEPINESS_5" / "POOLED"],
-        6: [sleep_dir / "SLEEPINESS_6" / "POOLED" / "ALT_1",
-            sleep_dir / "SLEEPINESS_6" / "POOLED" / "ALT_2"],
+        1: [sleep_dir / "rout_1"],
+        2: [sleep_dir / "rout_2"],
+        3: [sleep_dir / "rout_3" / "LOCAL", 
+            sleep_dir / "rout_3" / "NATIONAL"],
+        4: [sleep_dir / "rout_4" / "POOLED"],
+        5: [sleep_dir / "rout_5" / "POOLED"],
+        6: [sleep_dir / "rout_6" / "POOLED" / "ALT_1",
+            sleep_dir / "rout_6" / "POOLED" / "ALT_2"],
     }
     
     if estimation_number not in mapping:
@@ -110,10 +110,14 @@ def export_specification_results(results_dict, output_folder: Path):
             ss_path_txt = export_dir / f"{safe_name}_SecondStage.txt"
             ss_path_csv = export_dir / f"{safe_name}_SecondStage.csv"
             
-            with open(ss_path_txt, "w") as f:
+            # Windows MAX_PATH bypass
+            ss_txt_out = "\\\\?\\" + str(ss_path_txt.resolve()) if os.name == 'nt' else str(ss_path_txt)
+            ss_csv_out = "\\\\?\\" + str(ss_path_csv.resolve()) if os.name == 'nt' else str(ss_path_csv)
+            
+            with open(ss_txt_out, "w") as f:
                 f.write(ss_res.summary().as_text() if hasattr(ss_res, 'summary') else get_fallback_summary_text(ss_res))
                 
-            with open(ss_path_csv, "w") as f:
+            with open(ss_csv_out, "w") as f:
                 f.write(ss_res.summary().as_csv() if hasattr(ss_res, 'summary') else get_fallback_summary_csv(ss_res))
                 
             print(f"  -> Exported 2nd Stage: {ss_path_txt.name}")
@@ -124,10 +128,14 @@ def export_specification_results(results_dict, output_folder: Path):
             fs_path_txt = export_dir / f"{safe_name}_FirstStage.txt"
             fs_path_csv = export_dir / f"{safe_name}_FirstStage.csv"
             
-            with open(fs_path_txt, "w") as f:
+            # Windows MAX_PATH bypass
+            fs_txt_out = "\\\\?\\" + str(fs_path_txt.resolve()) if os.name == 'nt' else str(fs_path_txt)
+            fs_csv_out = "\\\\?\\" + str(fs_path_csv.resolve()) if os.name == 'nt' else str(fs_path_csv)
+            
+            with open(fs_txt_out, "w") as f:
                 f.write(fs_res.summary().as_text() if hasattr(fs_res, 'summary') else get_fallback_summary_text(fs_res))
                 
-            with open(fs_path_csv, "w") as f:
+            with open(fs_csv_out, "w") as f:
                 f.write(fs_res.summary().as_csv() if hasattr(fs_res, 'summary') else get_fallback_summary_csv(fs_res))
                 
             print(f"  -> Exported 1st Stage: {fs_path_txt.name}")

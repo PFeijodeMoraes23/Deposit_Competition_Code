@@ -54,7 +54,7 @@ warnings.filterwarnings("ignore", message="covariance of constraints does not ha
 _ROOT = Path(__file__).resolve().parents[2]
 DATA_DIR = _ROOT / "BCB" / "Egan_et_al_2025_Rep" / "processed"
 PANEL_CSV = DATA_DIR / "market_panel.csv"
-OUTPUT_DIR = DATA_DIR / "ESTIMATION_OUTPUT" / "SLEEPINESS" / "SLEEPINESS_NO_BREAK"
+OUTPUT_DIR = DATA_DIR / "ESTIMATION_OUTPUT" / "rout_3"
 
 LOCAL_DIR = OUTPUT_DIR / "LOCAL"
 NATIONAL_DIR = OUTPUT_DIR / "NATIONAL"

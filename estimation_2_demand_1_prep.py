@@ -74,8 +74,8 @@ _ROOT = Path(__file__).resolve().parents[2]
 DATA_DIR = _ROOT / "BCB" / "Egan_et_al_2025_Rep" / "processed"
 PANEL_CSV = DATA_DIR / "market_panel.csv"
 
-SLEEP_LOCAL_DIR = DATA_DIR / "ESTIMATION_OUTPUT" / "SLEEPINESS" / "SLEEPINESS_NEW"
-SLEEP_NATIONAL_DIR = DATA_DIR / "ESTIMATION_OUTPUT" / "SLEEPINESS" / "SLEEPINESS_NATIONAL"
+SLEEP_LOCAL_DIR = DATA_DIR / "ESTIMATION_OUTPUT" / "rout_1"
+SLEEP_NATIONAL_DIR = DATA_DIR / "ESTIMATION_OUTPUT" / "rout_2"
 DEMAND_PREP_DIR = DATA_DIR / "ESTIMATION_OUTPUT" / "DEMAND_PREP"
 
 # Product characteristics and instrument columns (shared with BLP loop)
