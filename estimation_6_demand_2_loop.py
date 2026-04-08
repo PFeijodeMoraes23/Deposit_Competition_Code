@@ -207,7 +207,7 @@ def _hourly_email_worker(job_id: str, stop_event: threading.Event) -> None:
 # ==============================================================================
 # 1. Data Loading
 # ==============================================================================
-def load_merged_spec_data(spec_id: int, is_hpc: bool = False, alt: str = "alt1") -> pd.DataFrame:
+def load_merged_spec_data(spec_id: int, is_hpc: bool = False, alt: str = "alt2logistic") -> pd.DataFrame:
     '''Load the per-spec pre-merged dataframe created by estimation_6_demand_1_prep.py'''
     input_dir, _ = get_paths(is_hpc)
     pkl_path = input_dir / f"demand_6_{alt}_final_spec_{spec_id}.pkl"
@@ -758,7 +758,7 @@ def run_blp_for_spec(spec_id: int, args) -> dict:
 
     # Load pre-merged spec dataframe
     try:
-        df = load_merged_spec_data(spec_id, getattr(args, 'hpc', False))
+        df = load_merged_spec_data(spec_id, getattr(args, 'hpc', False), getattr(args, 'alt', 'alt2logistic'))
         print(f"  Merged panel loaded: {len(df)} observations")
     except FileNotFoundError:
         print(f"  [!] No merged data for spec {spec_id}. Skipping.")
@@ -1010,8 +1010,8 @@ def main():
         description="BLP Demand Estimation Loop (Appendix-BLP)")
     parser.add_argument('--spec', type=str, default='12',
                         help='Specification ID (1-12) or "all"')
-    parser.add_argument('--alt', type=str, default='all', choices=['alt1', 'alt2', 'all'],
-                        help='Alternative variant to run (alt1, alt2, or all)')
+    parser.add_argument('--alt', type=str, default='alt2logistic', choices=['alt1', 'alt2', 'alt2linear', 'alt2logistic', 'all'],
+                        help='Alternative variant to run (alt1, alt2, alt2linear, alt2logistic, or all)')
     parser.add_argument('--stage', type=str, default='logit',
                         choices=['logit', 'sigma', 'full', 'extended', 'sequence'])
     parser.add_argument('--R', type=int, default=100,
@@ -1077,7 +1077,7 @@ def main():
     
     stages_to_run = ['logit', 'sigma', 'full', 'extended'] if args.stage == 'sequence' else [args.stage]
     
-    alts_to_process = ['alt1', 'alt2'] if args.alt == 'all' else [args.alt]
+    alts_to_process = ['alt1', 'alt2linear', 'alt2logistic'] if args.alt == 'all' else [args.alt]
     for current_alt in alts_to_process:
         args.alt = current_alt
         

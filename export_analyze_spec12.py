@@ -42,48 +42,72 @@ def format_value(coef, se, pval):
 
 def nice_var_name(var):
     rename_dict = {
-        'nr_lagged_dep': r"Lagged Deposit Ratio",
-        'interaction_gdp_per_capita': r"Lag Deposit Ratio $\times$ GDP per Capita",
-        'interaction_cadunico_families_per1000': r"Lag Deposit Ratio $\times$ Families in CadÚnico per 1k",
-        'interaction_fraction_65plus': r"Lag Deposit Ratio $\times$ Fraction $>65$ years",
-        'interaction_fraction_young': r"Lag Deposit Ratio $\times$ Fraction $<25$ years",
-        'interaction_risk_free_qoq_lag': r"Lag Deposit Ratio $\times$ Risk-free Rate (Lag)",
-        'interaction_pix_users_pf_per1000': r"Lag Deposit Ratio $\times$ PIX Users per 1k",
-        'interaction_connections_per100': r"Lag Deposit Ratio $\times$ Internet Connections per 100",
-        'interaction_branches_per1000': r"Lag Deposit Ratio $\times$ Branches per 1k",
-        'interaction_dummy_D_type': r"Lag Deposit Ratio $\times$ Digital Bank Indicator",
+        'nr_lagged_dep': r"Constant",
+        'interaction_gdp_per_capita': r"GDP per Capita",
+        'interaction_cadunico_families_per1000': r"Families in CadÚnico per 1k",
+        'interaction_fraction_65plus': r"Fraction $>65$ years",
+        'interaction_fraction_young': r"Fraction $<25$ years",
+        'interaction_risk_free_qoq_lag': r"Risk-free Rate (Lag)",
+        'interaction_pix_users_pf_per1000': r"PIX Users per 1k",
+        'interaction_connections_per100': r"Internet Connections per 100",
+        'interaction_branches_per1000': r"Branches per 1k",
+        'interaction_dummy_D_type': r"Digital Bank Indicator",
         'dummy_D_type': r"Digital Bank Indicator",
-        'interaction_state_owned': r"Lag Deposit Ratio $\times$ State-owner Indicator",
-        'interaction_cooperative': r"Lag Deposit Ratio $\times$ Cooperative Indicator",
+        'interaction_state_owned': r"State-owner Indicator",
+        'interaction_cooperative': r"Cooperative Indicator",
+        'interaction_pix_exists': r"PIX Exists Indicator",
+        'interaction_post_2020': r"Post-2020 Indicator",
         'post_2020': r"Post-2020 Indicator",
+        'pix_exists': r"PIX Exists Indicator",
         'v_hat': r"1st Stage Control Function Residual",
         'constant': r"Constant"
     }
-    return rename_dict.get(var, var.replace("_", r"\_"))
+    return rename_dict.get(var, var.replace("_", r"\_").replace("interaction\_", ""))
 
 def build_latex_table(results_dict, order_keys, target_vars, out_path, title=""):
     tex = []
     tex.append(r"\documentclass{article}")
     tex.append(r"\usepackage{graphicx} % Required for inserting images")
     tex.append(r"\usepackage{booktabs}")
-    tex.append(r"\usepackage[para,online,flushleft]{threeparttable}")
+    tex.append(r"\usepackage{longtable}")
     tex.append(r"\usepackage{natbib}")
     tex.append(r"\usepackage{rotating}")
     tex.append(r"\usepackage{geometry}")
     tex.append(r"\geometry{landscape, margin=1in}")
     tex.append(r"\begin{document}")
-    tex.append(r"\begin{table}[ht]")
-    tex.append(r"\centering")
-    tex.append(r"\caption{" + title + r"}")
-    tex.append(r"\begin{threeparttable}")
+    
+    # Reduce font size and line spacing
+    tex.append(r"\footnotesize")
+    tex.append(r"\renewcommand{\arraystretch}{0.75}")
     
     col_def = "l" + "c" * len(order_keys)
-    tex.append(r"\begin{tabular}{" + col_def + "}")
-    tex.append(r"\toprule")
+    tex.append(r"\begin{longtable}{" + col_def + "}")
+    tex.append(r"\caption{" + title + r"} \\")
     
-    headers = ["Variable"] + [k.replace("_", " ") for k in order_keys]
+    # First Header
+    tex.append(r"\toprule")
+    headers = ["Variable"] + [k for k in order_keys]
     tex.append(" & ".join(headers) + r" \\")
     tex.append(r"\midrule")
+    tex.append(r"\endfirsthead")
+    
+    # Next Headers
+    tex.append(r"\multicolumn{" + str(len(order_keys) + 1) + r"}{c}{{\bfseries \tablename\ \thetable{} -- " + title + r" (continued from previous page)}} \\")
+    tex.append(r"\toprule")
+    tex.append(" & ".join(headers) + r" \\")
+    tex.append(r"\midrule")
+    tex.append(r"\endhead")
+    
+    # Footers
+    tex.append(r"\midrule")
+    tex.append(r"\multicolumn{" + str(len(order_keys) + 1) + r"}{r}{{Continued on next page}} \\")
+    tex.append(r"\endfoot")
+    
+    # Last Footer
+    tex.append(r"\bottomrule")
+    notes_str = r"\multicolumn{" + str(len(order_keys) + 1) + r"}{p{\textwidth}}{\footnotesize\textit{Notes:} Standard errors are in parentheses. Significance levels: * $p < 0.1$, ** $p < 0.05$, *** $p < 0.01$.}"
+    tex.append(notes_str)
+    tex.append(r"\endlastfoot")
     
     # Collect data for vars
     vars_to_print = []
@@ -149,12 +173,36 @@ def build_latex_table(results_dict, order_keys, target_vars, out_path, title="")
         r2 = getattr(res, 'rsquared', np.nan)
         fstat = getattr(res, 'fvalue', np.nan)
         
+        # If NLLS/Logistic, copy the missing metrics from the counterpart Linear model
+        if pd.isna(nobs) or pd.isna(r2):
+            fallback_col = None
+            if col == '5 Pooled NLLS': fallback_col = '4 Pooled'
+            elif "Logistic" in col: fallback_col = col.replace("Logistic", "Linear")
+            
+            if fallback_col and fallback_col in results_dict:
+                f_res = results_dict[fallback_col]
+                if f_res is not None:
+                    if pd.isna(nobs): nobs = getattr(f_res, 'nobs', getattr(f_res, 'n_obs', np.nan))
+                    if pd.isna(r2): r2 = getattr(f_res, 'rsquared', np.nan)
+                    if pd.isna(fstat): fstat = getattr(f_res, 'fvalue', np.nan)
+
         # clusters
         clusters = "-"
-        if hasattr(res, 'cov_kwds'):
+        # Fetch from itself first
+        if hasattr(res, 'cov_kwds') and res.cov_kwds.get('groups', None) is not None:
             groups = res.cov_kwds.get('groups', None)
-            if groups is not None:
-                clusters = str(groups.nunique() if hasattr(groups, 'nunique') else len(set(groups)))
+            clusters = str(groups.nunique() if hasattr(groups, 'nunique') else len(set(groups)))
+        else:
+            # Fallback to linear
+            fallback_col = None
+            if col == '5 Pooled NLLS': fallback_col = '4 Pooled'
+            elif "Logistic" in col: fallback_col = col.replace("Logistic", "Linear")
+            
+            if fallback_col and fallback_col in results_dict:
+                f_res = results_dict[fallback_col]
+                if f_res is not None and hasattr(f_res, 'cov_kwds') and f_res.cov_kwds.get('groups', None) is not None:
+                    groups = f_res.cov_kwds.get('groups', None)
+                    clusters = str(groups.nunique() if hasattr(groups, 'nunique') else len(set(groups)))
         
         # effective clusters
         g_star = getattr(res, 'G_star', getattr(res, 'df_resid', np.nan))
@@ -171,20 +219,19 @@ def build_latex_table(results_dict, order_keys, target_vars, out_path, title="")
     tex.append(" & ".join(row_cluster) + r" \\")
     tex.append(" & ".join(row_eff_cluster) + r" \\")
     
-    tex.append(r"\bottomrule")
-    tex.append(r"\end{tabular}")
-    tex.append(r"\begin{tablenotes}")
-    tex.append(r"\small")
-    tex.append(r"\item \textit{Notes:} Standard errors are in parentheses. Significance levels: * $p < 0.1$, ** $p < 0.05$, *** $p < 0.01$.")
-    tex.append(r"\end{tablenotes}")
-    tex.append(r"\end{threeparttable}")
-    tex.append(r"\end{table}")
+    tex.append(r"\end{longtable}")
     tex.append(r"\end{document}")
     
     with open(out_path, "w", encoding="utf-8") as f:
         f.write("\n".join(tex))
 
+import argparse
+
 def main():
+    parser = argparse.ArgumentParser(description="Analyze Specification 12 Results")
+    parser.add_argument('--skip-est2', action='store_true', help='Skip estimation 2 (2 D firms Break)')
+    args = parser.parse_args()
+
     print("Collecting Estimation results for Spec 12 (IV_HausmanFull x Tech)...")
     _ROOT = Path(__file__).resolve().parents[2]
     DATA_DIR = _ROOT / "BCB" / "Egan_et_al_2025_Rep" / "processed"
@@ -195,14 +242,17 @@ def main():
         return
 
     mapping = {
-        '1_B_firms': SLEEP_DIR / "rout_1",
-        '2_D_firms_Break': SLEEP_DIR / "rout_2",
-        '3_B_firms_Robust': SLEEP_DIR / "rout_3" / "LOCAL", 
-        '4_Pooled': SLEEP_DIR / "rout_4" / "POOLED",
-        '5_Pooled_NLLS': SLEEP_DIR / "rout_5" / "POOLED",
-        '6_Alt1': SLEEP_DIR / "rout_6" / "POOLED" / "ALT_1",
-        '6_Alt2': SLEEP_DIR / "rout_6" / "POOLED" / "ALT_2",
+        '1 B firms': SLEEP_DIR / "rout_1",
+        '2 D firms Break': SLEEP_DIR / "rout_2",
+        '3 B firms Robust': SLEEP_DIR / "rout_3" / "LOCAL", 
+        '4 Pooled': SLEEP_DIR / "rout_4" / "POOLED",
+        '5 Pooled NLLS': SLEEP_DIR / "rout_5" / "POOLED",
+        '6 Alt2 Linear': SLEEP_DIR / "rout_6" / "POOLED" / "ALT_2",
+        '6 Alt2 Logistic': SLEEP_DIR / "rout_6" / "POOLED" / "ALT_2",
     }
+
+    if getattr(args, 'skip_est2', False):
+        mapping.pop('2 D firms Break', None)
 
     stage1_res = {}
     stage2_res = {}
@@ -223,24 +273,19 @@ def main():
                 continue
                 
         target_keys = {
-            '1_B_firms': 'IV_HausmanFull x Tech',
-            '2_D_firms_Break': 'Option_2_IV_HausmanFull_Tech',
-            '3_B_firms_Robust': 'IV_HausmanFull x Tech',
-            '4_Pooled': 'IV_HausmanFull x Tech',
-            '5_Pooled_NLLS': 'IV_HausmanFull x Tech',
-            '6_Alt1': 'IV_HausmanFull x Tech x logistic', 
-            '6_Alt2': 'IV_HausmanFull x Tech x logistic',
+            '1 B firms': 'IV_HausmanFull x Tech',
+            '2 D firms Break': 'Option_2_IV_HausmanFull_Tech',
+            '3 B firms Robust': 'IV_HausmanFull x Tech',
+            '4 Pooled': 'IV_HausmanFull x Tech',
+            '5 Pooled NLLS': 'IV_HausmanFull x Tech',
+            '6 Alt2 Linear': 'IV_HausmanFull x Tech x linear', 
+            '6 Alt2 Logistic': 'IV_HausmanFull x Tech x logistic',
         }
 
         # Fallback if the script saved differently (linear vs logistic)
         tk = target_keys.get(label, 'IV_HausmanFull x Tech')
         spec_data = res_dict.get(tk)
         
-        # If not found, try the linear key in 6
-        if not spec_data and "6_Alt" in label:
-            tk = 'IV_HausmanFull x Tech x linear'
-            spec_data = res_dict.get(tk)
-            
         if not spec_data:
             print(f"  [Warning] {tk} not found in {label}, skipping.")
             continue

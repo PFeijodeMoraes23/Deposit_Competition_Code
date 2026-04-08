@@ -208,6 +208,11 @@ def process_specification(args):
     if missing_sv: return None, None, spec_name
         
     df_spec = df_spec.dropna(subset=['phi_mt', 'spread_qoq'])
+    
+    # Properly apply inverse-logit/sigmoid transformation if the spec is logistic
+    if 'logistic' in spec_name.lower():
+        df_spec['phi_mt'] = 1.0 / (1.0 + np.exp(-df_spec['phi_mt'].astype(float)))
+        
     df_spec['phi_mt'] = df_spec['phi_mt'].clip(lower=0.0, upper=1.0)
     
     df_mca_level = df_spec[['mca_code', 'time_id', 'phi_mt', 'pop_total']].drop_duplicates()
@@ -320,23 +325,24 @@ def main():
             target_name = SPEC_MAP.get(target_id)
             if not target_name: continue
             
-            actual_key = next((k for k in results_dict.keys() if target_name in k), None)
-            if not actual_key:
-                print(f"   [!] Results for Spec {target_id} not found in {alt} pickle.")
-                continue
+            # Find both linear and logistic versions specifically
+            for model_type in ['linear', 'logistic']:
+                actual_key = next((k for k in results_dict.keys() if (target_name in k) and (model_type in k)), None)
+                if not actual_key:
+                    continue # Try the next type
                 
-            task = (actual_key, results_dict[actual_key], df_base)
-            df_spec, summary, spec_id = process_specification(task)
-            
-            if df_spec is not None:
-                 alt_label = alt.lower().replace("_", "")
-                 out_pkl = demand_output_dir / f"demand_6_{alt_label}_final_spec_{target_id}.pkl"
-                 df_spec.to_pickle(out_pkl)
-                 print(f" > Saved Spec {target_id} ({alt}) -> {out_pkl.name} ({len(df_spec)} rows)")
-                 spec_summaries[f"6_{alt}_{target_id}"] = summary
-                 total_saved += 1
-            else:
-                 print(f"   [!] Failed or skipped Spec: {target_id} in {alt}")
+                task = (actual_key, results_dict[actual_key], df_base)
+                df_spec, summary, spec_id = process_specification(task)
+                
+                if df_spec is not None:
+                    alt_label = f"{alt.lower().replace('_', '')}{model_type}"
+                    out_pkl = demand_output_dir / f"demand_6_{alt_label}_final_spec_{target_id}.pkl"
+                    df_spec.to_pickle(out_pkl)
+                    print(f" > Saved Spec {target_id} ({alt} {model_type}) -> {out_pkl.name} ({len(df_spec)} rows)")
+                    spec_summaries[f"6_{alt_label}_{target_id}"] = summary
+                    total_saved += 1
+                else:
+                    print(f"   [!] Failed or skipped Spec: {target_id} {model_type} in {alt}")
 
     if total_saved > 0:
         summary_file = demand_output_dir / "demand_prep_summary.json"

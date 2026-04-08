@@ -17,6 +17,7 @@ cd /home/pf382/dep_comp/scripts
 
 python -u estimation_6_demand_2_loop.py \
     --spec 12 \
+    --alt all \
     --stage sigma \
     --R 100 \
     --workers 4 \
