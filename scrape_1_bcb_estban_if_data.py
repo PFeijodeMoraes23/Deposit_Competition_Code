@@ -126,14 +126,10 @@ def download_list(year,month, retries_number):
             response = requests.get(url, timeout = 30) # send GET request
             response.raise_for_status() # check for errors
             
-            if not response.content:
-                logging.warning(f"No data received for {year}--{month}. Retrying.")
-                print(f"No data received for {year}--{month}. Retrying.")
-                wait_time = 30*(2**i)
-                logging.info(f"Waiting {wait_time} seconds before retrying...")
-                print(f"Waiting {wait_time} seconds before retrying...")
-                time.sleep(wait_time)
-                continue
+            if not response.content or len(response.text) < 500:
+                logging.warning(f"No data (or only stub) received for {year}--{month}. Skipping.")
+                print(f"No data received for {year}--{month}. Skipping.")
+                return False
 
             file_path = os.path.join(output_dir, f"IF_DATA_List_{year}_{month}.csv") # file path
             with open(file_path, "wb") as file:
@@ -193,14 +189,10 @@ def download_values(year, quarter, tipo, retries_number):
             response = requests.get(url, timeout = 30) # send GET request
             response.raise_for_status() # check for errors
             
-            if not response.content:
-                logging.warning(f"No data received for {year}-{quarter} (Type {tipo}). Retrying.")
-                print(f"No data received for {year}-{quarter} (Type {tipo}). Retrying.")
-                wait_time = 30*(2**i)
-                logging.info(f"Waiting {wait_time} seconds before retrying...")
-                print(f"Waiting {wait_time} seconds before retrying...")
-                time.sleep(wait_time)
-                continue # Retry if no data received
+            if not response.content or len(response.text) < 50:
+                logging.warning(f"No data received for {year}-{quarter} (Type {tipo}). Skipping.")
+                print(f"No data received for {year}-{quarter} (Type {tipo}). Skipping.")
+                return False
         
             file_path = os.path.join(output_dir, f"IF_DATA_Values_{year}_{quarter}.csv") # file path
             with open(file_path, "w") as file:
@@ -209,18 +201,9 @@ def download_values(year, quarter, tipo, retries_number):
             # check if file is empty (contains only headers)
             df = pd.read_csv(file_path, sep = ",", encoding = "latin1")
             if df.empty or len(df) == 0:
-                logging.warning(f"Empty data for {year}-{quarter} (Type {tipo}). Retrying.")
-                print(f"Empty data for {year}-{quarter} (Type {tipo}). Retrying.")
-                try:
-                    os.remove(file_path) # remove empty file
-                except OSError as e:
-                    logging.error(f"Error removing empty file: {e}")
-                    print(f"Error removing empty file: {e}")
-                wait_time = 30*(2**i)
-                logging.info(f"Waiting {wait_time} seconds before retrying...")
-                print(f"Waiting {wait_time} seconds before retrying...")
-                time.sleep(wait_time)
-                continue
+                logging.warning(f"Empty data for {year}-{quarter} (Type {tipo}) – treating as unavailable. Skipping further retries.")
+                print(f"Empty data for {year}-{quarter} (Type {tipo}). Skipping.")
+                return False
                 
             print(f"Downloaded data for {year}-{quarter} (Type {tipo})")
             logging.info(f"Downloaded data for {year}-{quarter} (Type {tipo})")
