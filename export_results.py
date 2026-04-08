@@ -25,6 +25,15 @@ import pickle
 import argparse
 from pathlib import Path
 
+class NonLinearResults:
+    def __init__(self, params, bse, tvalues, pvalues, df_resid):
+        self.params = params
+        self.bse = bse
+        self.tvalues = tvalues
+        self.pvalues = pvalues
+        self.df_resid = df_resid
+        self.G_star = df_resid
+
 # Try to respect the project's venv guard
 try:
     from utils.venv_guard import ensure_project_venv
