@@ -483,10 +483,15 @@ def compute_model_shares(delta: np.ndarray, mu: np.ndarray,
     
     log_B_sum = max_VB_per_mkt + np.log(np.maximum(1e-300, sum_exp_B_per_mkt))
     
-    # Joint log-denominator using log-sum-exp
-    joint_max = np.maximum(log_B_sum, log_D_sum)
-    # (exp(log_B - max) + exp(log_D - max)) ensures no overflow
-    log_denom = joint_max + np.log(np.maximum(1e-300, np.exp(log_B_sum - joint_max) + np.exp(log_D_sum - joint_max)))
+    # Joint log-denominator with true outside option
+    # OUTSIDE_EPS = 1.0 corresponds to V_0 = 0 -> exp(0) = 1.0
+    OUTSIDE_EPS = 1.0
+    log_outside = np.log(OUTSIDE_EPS)  # 0.0
+    joint_max = np.maximum(np.maximum(log_B_sum, log_D_sum), log_outside)
+    log_denom = joint_max + np.log(np.maximum(1e-300,
+        np.exp(log_outside - joint_max)
+        + np.exp(log_B_sum - joint_max)
+        + np.exp(log_D_sum - joint_max)))
 
     # B-firm individual softmax probabilities: Eq-13-B averaged over R
     # q_B = exp(V_B - log_denom)
@@ -610,12 +615,7 @@ def blp_contraction(df: pd.DataFrame, mu: np.ndarray, R: int,
                              + np.log(omega_B_clp)
                              - np.log(s_B_clp))
 
-        # Damping: convex combination to break 2-cycles (spectral radius near -1).
-        DAMP = 0.5
-        delta_new = DAMP * delta_new + (1.0 - DAMP) * delta
-        
-        # NOTE: No mean-normalization here. OUTSIDE_EPS anchors the level.
-
+        # NOTE: Pure contraction mapping. True outside option guarantees spectral radius < 1.
         norm = np.max(np.abs(delta_new - delta))
         norm_history.append(norm)
 

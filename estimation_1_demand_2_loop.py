@@ -486,7 +486,7 @@ def compute_model_shares(delta: np.ndarray, mu: np.ndarray,
     # Joint log-denominator with computational outside option (ε-anchor).
     # Small ε breaks shift-invariance, guaranteeing contraction convergence
     # without materially affecting share estimates (outside share ≈ 1e-6).
-    OUTSIDE_EPS = 1e-2
+    OUTSIDE_EPS = 1.0
     log_outside = np.log(OUTSIDE_EPS)  # ≈ -13.8
     joint_max = np.maximum(np.maximum(log_B_sum, log_D_sum), log_outside)
     log_denom = joint_max + np.log(np.maximum(1e-300,
@@ -610,18 +610,13 @@ def blp_contraction(df: pd.DataFrame, mu: np.ndarray, R: int,
                              + ln_s_data_D[d_mask]
                              - np.log(s_D_clp))
 
-        # --- Eq-A4-D: B-type contraction (local conditional shares + O) ---
+        # --- Eq-A4-D: B-type contraction (local conditional shares + Ω) ---
         delta_new[b_mask] = (delta[b_mask]
                              + ln_s_data_B_cond[b_mask]
                              + np.log(omega_B_clp)
                              - np.log(s_B_clp))
-
-        # Damping: convex combination to break 2-cycles (spectral radius near -1).
-        DAMP = 0.5
-        delta_new = DAMP * delta_new + (1.0 - DAMP) * delta
-        
-        # NOTE: No mean-normalization here. OUTSIDE_EPS anchors the level.
-
+                             
+        # NOTE: Pure contraction mapping. True outside option guarantees spectral radius < 1.
         norm = np.max(np.abs(delta_new - delta))
         norm_history.append(norm)
 

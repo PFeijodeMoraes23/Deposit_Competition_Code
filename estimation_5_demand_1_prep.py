@@ -236,21 +236,27 @@ def process_specification(args):
     df_spec = df_spec.dropna(subset=['Dep_Act'])
     df_spec = df_spec[df_spec['Dep_Act'] > 1e-6]
     
-    nat_active = df_spec.groupby(['time_id', 'deposit_type'])['Dep_Act'].transform('sum')
-    df_spec['nat_active'] = nat_active
-    df_spec['share_D'] = np.where(~df_spec['is_B'], df_spec['Dep_Act'] / nat_active, np.nan)
+    # ---------------------------------------------------------
+    # Option 1: Global Per-Capita Potential Gamma
+    # Construct an outside option based on population
+    # ---------------------------------------------------------
     
-    # To prevent sum(share_D) == 1.0 (which destroys omega_B = 1 - sum(share_D)), 
-    # we ensure there's at least a tiny B-firm presence, otherwise the logit fails.
+    # 1. Empirically find max active deposits per capita across all markets/times
+    mkt_totals = df_spec.groupby(['mca_code', 'time_id'])['Dep_Act'].transform('sum')
+    dep_per_capita = mkt_totals / df_spec['pop_total']
     
-    local_B_active = df_spec[df_spec['is_B']].groupby(['mca_code', 'time_id', 'deposit_type'])['Dep_Act'].transform('sum')
-    df_loc_map = df_spec[df_spec['is_B']][['entity_id', 'time_id']].copy()
-    df_loc_map['local_B_active'] = local_B_active
-    df_spec = pd.merge(df_spec, df_loc_map, on=['entity_id', 'time_id'], how='left')
+    # Pad by 10% to guarantee outside option > 0 everywhere
+    gamma = dep_per_capita.max() * 1.1
+
+    # 2. National Population (sum of unique local populations per time period)
+    df_unique_mkt = df_spec[['mca_code', 'time_id', 'pop_total']].drop_duplicates()
+    nat_pop = df_unique_mkt.groupby('time_id')['pop_total'].sum()
+    nat_pop_map = df_spec['time_id'].map(nat_pop)
+
+    # 3. Construct Model-Consistent Shares (summing to < 1)
+    df_spec['share_D'] = np.where(~df_spec['is_B'], df_spec['Dep_Act'] / (gamma * nat_pop_map), np.nan)
     
-    mask_valid_denom = (df_spec['is_B']) & (df_spec['local_B_active'] > 0)
-    df_spec['share_B_cond'] = np.where(mask_valid_denom, df_spec['Dep_Act'] / df_spec['local_B_active'], np.nan)
-    df_spec.loc[(df_spec['is_B']) & ~mask_valid_denom, 'share_B_cond'] = 0.0
+    df_spec['share_B_cond'] = np.where(df_spec['is_B'], df_spec['Dep_Act'] / (gamma * df_spec['pop_total']), np.nan)
 
     SPEC_MAP = {
         'OLS x Base': 1, 'IV_CostShifters x Base': 2, 'IV_Wholesale x Base': 3, 'IV_HausmanFull x Base': 4,

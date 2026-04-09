@@ -14,13 +14,12 @@ options:
 
 This script sequentially runs the following steps:
   1. estimation_1_sleep.py         (Local Estimation of Sleepness)
-  2. estimation_2_sleep.py         (National Level Phi for D firms + Plots)
-  3. estimation_3_sleep.py         (Robustness bounds for B-firms)
-  4. estimation_4_sleep.py         (Robustness bounds for pooled B and D firms)
-  5. estimation_5_sleep.py         (NLLS logistic structural estimation)
-  6. estimation_6_sleep.py         (Robustness bounds with cooperative/state controls)
-  7. export_results.py             (Export 1st/2nd Stage Summaries across all estimators)
-  8. estimation_demand_1_prep.py   (Universal Demand Prep Orchestrator & Panel Serialization)
+  2. estimation_3_sleep.py         (Robustness bounds for B-firms)
+  3. estimation_4_sleep.py         (Robustness bounds for pooled B and D firms)
+  4. estimation_5_sleep.py         (NLLS logistic structural estimation)
+  5. estimation_6_sleep.py         (Robustness bounds with cooperative/state controls)
+  6. export_results.py             (Export 1st/2nd Stage Summaries across all estimators)
+  7. estimation_demand_1_prep.py   (Universal Demand Prep Orchestrator & Panel Serialization)
 """
 import argparse
 import subprocess
@@ -80,13 +79,12 @@ def main():
         epilog="""
 This script sequentially runs the following steps:
   1. estimation_1_sleep.py         (Local Estimation of Sleepness)
-  2. estimation_2_sleep.py         (National Level Phi for D firms + Plots)
-  3. estimation_3_sleep.py         (Robustness bounds for B-firms)
-  4. estimation_4_sleep.py         (Robustness bounds for pooled B and D firms)
-  5. estimation_5_sleep.py         (NLLS logistic structural estimation)
-  6. estimation_6_sleep.py         (Robustness bounds with cooperative/state controls)
-  7. export_results.py             (Export 1st/2nd Stage Summaries across all estimators)
-  8. estimation_demand_1_prep.py   (Universal Demand Prep Orchestrator & Panel Serialization)
+  2. estimation_3_sleep.py         (Robustness bounds for B-firms)
+  3. estimation_4_sleep.py         (Robustness bounds for pooled B and D firms)
+  4. estimation_5_sleep.py         (NLLS logistic structural estimation)
+  5. estimation_6_sleep.py         (Robustness bounds with cooperative/state controls)
+  6. export_results.py             (Export 1st/2nd Stage Summaries across all estimators)
+  7. estimation_demand_1_prep.py   (Universal Demand Prep Orchestrator & Panel Serialization)
         """,
         formatter_class=argparse.RawDescriptionHelpFormatter
     )
@@ -126,7 +124,6 @@ This script sequentially runs the following steps:
     if not getattr(args, 'skip_sleep', False):
         scripts_to_run.extend([
             {"file": "estimation_1_sleep.py", "desc": "Local Estimation of Sleepness"},
-            {"file": "estimation_2_sleep.py", "args": ["--run-all", "--all-options"], "desc": "National Level Phi for D firms + Plots"},
             {"file": "estimation_3_sleep.py", "args": spec12_arg, "desc": "Robustness bounds for B-firms"},
             {"file": "estimation_4_sleep.py", "args": spec12_arg, "desc": "Robustness bounds for pooled B and D firms"},
             {"file": "estimation_5_sleep.py", "args": spec12_arg, "desc": "NLLS logistic structural estimation"},

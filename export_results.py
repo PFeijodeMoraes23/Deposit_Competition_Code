@@ -160,7 +160,7 @@ def main():
     _ROOT = Path(__file__).resolve().parents[2]
     DATA_DIR = _ROOT / "BCB" / "Egan_et_al_2025_Rep" / "processed"
     
-    est_list = [1, 2, 3, 4, 5, 6] if args.estimation == 'all' else [int(args.estimation)]
+    est_list = [1, 3, 4, 5, 6] if args.estimation == 'all' else [int(args.estimation)]
     
     target_dirs = []
     try:
