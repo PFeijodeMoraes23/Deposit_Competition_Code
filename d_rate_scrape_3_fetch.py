@@ -33,14 +33,18 @@ PAGES_DIR.mkdir(exist_ok=True)
 PDFS_DIR = ip_scrape_dir / 'archive_pdfs'
 PDFS_DIR.mkdir(exist_ok=True)
 
-MAX_CONCURRENT = 5 # don't hammer the fragile Internet Archive too hard!
-timeout = aiohttp.ClientTimeout(total=45)
+MAX_CONCURRENT = 2 # lowered to prevent blocking
+timeout = aiohttp.ClientTimeout(total=60)
 
 async def fetch_snapshot(session, item, prefix_dir):
     ts = item['timestamp']
     firm_cod = item['cod_conglomerado']
     mime = item['mimetype']
     wb_url = item['wayback_url']
+    
+    # Enforce HTTPS instead of HTTP to prevent port 80 SSL redirect issues
+    if wb_url.startswith("http://"):
+        wb_url = wb_url.replace("http://", "https://", 1)
     
     sanitized_url = "".join(c for c in item['original_url'] if c.isalnum() or c in '-_.')[:50]
     filename = f"{firm_cod}_{ts}_{sanitized_url}"
@@ -98,16 +102,19 @@ async def worker(queue, session, pbar):
             break
             
         await fetch_snapshot(session, task, PAGES_DIR)
-        await asyncio.sleep(random.uniform(0.5, 1.5)) # Random spread avoids ban
+        await asyncio.sleep(random.uniform(1.5, 3.5)) # Increased random spread to avoid ban
         
         queue.task_done()
 
 async def main():
     queue = asyncio.Queue()
-    for u in urls_to_fetch:
+    valid_mimes = ['text/html', 'application/pdf']
+    valid_urls = [u for u in urls_to_fetch if u.get('mimetype') in valid_mimes or str(u.get('wayback_url', '')).endswith('.pdf')]
+    
+    for u in valid_urls:
         queue.put_nowait(u)
         
-    logging.info(f"Loaded {len(urls_to_fetch)} snapshot requests into queue. Launching {MAX_CONCURRENT} workers.")
+    logging.info(f"Loaded {len(valid_urls)} valid HTML/PDF snapshot requests into queue. Launching {MAX_CONCURRENT} workers.")
         
     # We add None objects to stop the workers
     for _ in range(MAX_CONCURRENT):

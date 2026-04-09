@@ -17,7 +17,7 @@ source activate dep_comp_blp
 cd /home/pf382/dep_comp/scripts
 python -u estimation_6_demand_2_loop.py \
     --spec 12 \
-    --alt all \
+    --alt alt2logistic \
     --stage sequence \
     --R 1000 \
     --workers 8 \
