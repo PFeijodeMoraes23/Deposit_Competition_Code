@@ -114,6 +114,11 @@ def _reshape_panel(df_raw: pd.DataFrame) -> pd.DataFrame:
     df = df_raw.copy()
     if 'is_B' not in df.columns: df['is_B'] = (df['CODMUN_IBGE'].astype(str) != '0')
     if 'deposit_type' in df.columns: df = df[df['deposit_type'] != 3].copy()
+    # Prepaid accounts (k=5) did not exist before 2020Q2; drop prior rows
+    pre_k5_mask = (df['deposit_type'] == 5) & ((df['year'] < 2020) | ((df['year'] == 2020) & (df['quarter'] < 2)))
+    if pre_k5_mask.any():
+        logging.info(f"  Dropped {pre_k5_mask.sum()} k=5 rows before 2020Q2 (product did not exist).")
+        df = df[~pre_k5_mask].copy()
     return df
 
 def build_base_panel(panel_csv: Path) -> pd.DataFrame:

@@ -252,12 +252,13 @@ def run_pooled_second_stage_linear(df, state_vars, has_cf=False):
 
 # --- Logistic (From Est 5) ---
 class NonLinearResults:
-    def __init__(self, params, bse, tvalues, pvalues, df_resid):
+    def __init__(self, params, bse, tvalues, pvalues, df_resid, params_native=None):
         self.params = params
         self.bse = bse
         self.tvalues = tvalues
         self.pvalues = pvalues
         self.df_resid = df_resid
+        self.params_native = params_native if params_native is not None else params
         self.G_star = df_resid
 
 def nlls_objective(params, y_dm, X, Z, CF, entity_idx):
@@ -271,6 +272,80 @@ def nlls_objective(params, y_dm, X, Z, CF, entity_idx):
     counts = np.bincount(entity_idx)
     Y_hat_dm = Y_hat - (sums / counts)[entity_idx]
     return y_dm - Y_hat_dm
+
+def get_nlls_ame_and_se(theta_full_hat, cov_full_hat, X, CF_shape):
+    import numpy as np
+    
+    K = X.shape[1]
+    G = CF_shape
+    total_len = K + G
+    
+    AME = np.zeros(total_len)
+    
+    theta_X = theta_full_hat[:K]
+    X_disp = np.clip(np.dot(X, theta_X), -700, 700)
+    P_base = 1.0 / (1.0 + np.exp(-X_disp))
+    
+    for k in range(K):
+        col_vals = X[:, k]
+        valid_vals = col_vals[~np.isnan(col_vals)]
+        if len(valid_vals) == 0: continue
+            
+        unique_vals = np.unique(valid_vals)
+        is_dummy = (len(unique_vals) == 2) and (0.0 in unique_vals) and (1.0 in unique_vals)
+        
+        if is_dummy:
+            X1 = X.copy(); X1[:, k] = 1.0
+            P1 = 1.0 / (1.0 + np.exp(-np.clip(np.dot(X1, theta_X), -700, 700)))
+            
+            X0 = X.copy(); X0[:, k] = 0.0
+            P0 = 1.0 / (1.0 + np.exp(-np.clip(np.dot(X0, theta_X), -700, 700)))
+            
+            AME[k] = np.mean(P1 - P0)
+        else:
+            dP_dk = P_base * (1.0 - P_base) * theta_X[k]
+            AME[k] = np.mean(dP_dk)
+            
+    if G > 0: AME[K:] = theta_full_hat[K:]
+        
+    J = np.zeros((total_len, total_len))
+    h = 1e-5
+    
+    for i in range(total_len):
+        theta_step = theta_full_hat.copy()
+        theta_step[i] += h
+        
+        ame_step = np.zeros(total_len)
+        t_X_step = theta_step[:K]
+        X_disp_s = np.clip(np.dot(X, t_X_step), -700, 700)
+        P_base_s = 1.0 / (1.0 + np.exp(-X_disp_s))
+        
+        for k in range(K):
+            col_vals = X[:, k]
+            valid_vals = col_vals[~np.isnan(col_vals)]
+            if len(valid_vals) == 0: continue
+            
+            unique_vals = np.unique(valid_vals)
+            is_dummy = (len(unique_vals) == 2) and (0.0 in unique_vals) and (1.0 in unique_vals)
+            
+            if is_dummy:
+                X1 = X.copy(); X1[:, k] = 1.0
+                P1 = 1.0 / (1.0 + np.exp(-np.clip(np.dot(X1, t_X_step), -700, 700)))
+                X0 = X.copy(); X0[:, k] = 0.0
+                P0 = 1.0 / (1.0 + np.exp(-np.clip(np.dot(X0, t_X_step), -700, 700)))
+                ame_step[k] = np.mean(P1 - P0)
+            else:
+                dP_dk_s = P_base_s * (1.0 - P_base_s) * t_X_step[k]
+                ame_step[k] = np.mean(dP_dk_s)
+                
+        if G > 0: ame_step[K:] = theta_step[K:]
+        J[:, i] = (ame_step - AME) / h
+        
+    cov_AME = J @ cov_full_hat @ J.T
+    bse_AME = np.sqrt(np.abs(np.diag(cov_AME)))
+    
+    return AME, bse_AME
+
 
 def run_pooled_second_stage_logistic(df, state_vars, has_cf=False):
     cols = state_vars + ['deposit_balance', 'nr_lagged_dep', 'entity_id']
@@ -293,10 +368,12 @@ def run_pooled_second_stage_logistic(df, state_vars, has_cf=False):
     J = res_lsq.jac
     try: cov = np.linalg.pinv(J.T.dot(J)) * (np.sum(res_lsq.fun**2) / (len(y_dm) - len(init_params)))
     except: cov = np.eye(len(init_params))
-    bse = np.sqrt(np.abs(np.diag(cov)))
+    
+    # Calculate Average Marginal Effects and adjust SEs
+    ps_ame, bse = get_nlls_ame_and_se(res_lsq.x, cov, X, CF.shape[1] if has_cf else 0)
     
     idx = [f'interaction_{sv}' if sv != 'constant' else 'nr_lagged_dep' for sv in state_vars] + CF_cols
-    ps = pd.Series(index=idx, data=res_lsq.x)
+    ps = pd.Series(index=idx, data=ps_ame)
     bs = pd.Series(index=idx, data=bse)
     tvals = ps / bs
     
@@ -305,7 +382,8 @@ def run_pooled_second_stage_logistic(df, state_vars, has_cf=False):
     G_star = max(1.0, len(sizes) / (1 + (np.std(sizes)/np.mean(sizes))**2 if np.mean(sizes)>0 else 1))
     pvals = pd.Series(stats.t.sf(np.abs(tvals), df=G_star) * 2, index=idx)
     
-    return NonLinearResults(ps, bs, tvals, pvals, G_star)
+    ps_native = pd.Series(index=idx, data=res_lsq.x)
+    return NonLinearResults(ps, bs, tvals, pvals, G_star, params_native=ps_native)
 
 # ==============================================================================
 # PIPELINE EXECUTION
@@ -350,8 +428,12 @@ def calculate_pooled_phis(df, res_dict, state_blocks):
         X_theta = np.zeros(len(df))
         for sv in s_cols:
             col_name = f"interaction_{sv}" if sv != 'constant' else "nr_lagged_dep"
-            if col_name in ss_res.params:
-                c = ss_res.params[col_name]
+            if hasattr(ss_res, 'params_native'):
+                param_dict = ss_res.params_native
+            else:
+                param_dict = ss_res.params
+            if col_name in param_dict:
+                c = param_dict[col_name]
                 if sv == 'constant': X_theta += c
                 else: X_theta += c * df[sv].astype(float).fillna(0)
                     

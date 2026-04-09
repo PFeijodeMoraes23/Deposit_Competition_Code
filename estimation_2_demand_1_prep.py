@@ -88,8 +88,8 @@ D_COLS = ['gdp_per_capita', 'fraction_65plus', 'fraction_young',
           'branches_per1000', 'cadunico_families_per1000']
 
 IV_BLP_LOO = ['loo_log_assets', 'mean_loo_log_assets',
-              'loo_equity_assets', 'mean_loo_equity_ratio',
-              'loo_indice_basileia', 'mean_loo_basileia',
+              'loo_equity_ratio', 'mean_loo_equity_ratio',
+              'loo_basileia', 'mean_loo_basileia',
               'loo_credit_assets', 'mean_loo_credit_assets',
               'loo_npl_provision', 'mean_loo_npl_provision',
               'n_rivals']
@@ -164,6 +164,11 @@ def build_base_panel(panel_csv: Path) -> pd.DataFrame:
     # Drop interbank deposits (k=3)
     if 'deposit_type' in df.columns:
         df = df[df['deposit_type'] != 3].copy()
+    # Prepaid accounts (k=5) did not exist before 2020Q2; drop prior rows
+    pre_k5_mask = (df['deposit_type'] == 5) & ((df['year'] < 2020) | ((df['year'] == 2020) & (df['quarter'] < 2)))
+    if pre_k5_mask.any():
+        print(f"  Dropped {pre_k5_mask.sum()} k=5 rows before 2020Q2 (product did not exist).")
+        df = df[~pre_k5_mask].copy()
 
     # Entity key & temporal lags
     df['entity_id'] = (df['CodConglomeradoPrudencial'].astype(str) + "_"

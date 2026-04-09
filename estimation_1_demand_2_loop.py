@@ -1,4 +1,4 @@
-﻿"""
+"""
 estimation_1_demand_2_loop.py
 ==============================
 BLP outer-inner demand estimation loop (Appendix-BLP, V_Main.tex).
@@ -123,8 +123,8 @@ D_DIM = len(D_COLS)   # 8
 
 # BLP LOO instruments (demand-side)
 IV_BLP_LOO = ['loo_log_assets', 'mean_loo_log_assets',
-              'loo_equity_assets', 'mean_loo_equity_ratio',
-              'loo_indice_basileia', 'mean_loo_basileia',
+              'loo_equity_ratio', 'mean_loo_equity_ratio',
+              'loo_basileia', 'mean_loo_basileia',
               'loo_credit_assets', 'mean_loo_credit_assets',
               'loo_npl_provision', 'mean_loo_npl_provision',
               'n_rivals']
@@ -539,17 +539,15 @@ def _contraction_step(delta: np.ndarray, mu: np.ndarray, df: pd.DataFrame,
     omega_B_clp = np.clip(omega_B, 1e-15, None)
 
     delta_new = delta.copy()
-    # Eq-A4-B: D-type (national shares)
+    # Eq-A4-D: D-type contraction (national shares)
     delta_new[d_mask] = (delta[d_mask]
                          + ln_s_data_D[d_mask]
                          - np.log(s_D_clp))
-    # Eq-A4-D: B-type (local conditional + Î©)
+    # Eq-A4-B: B-type contraction (local conditional + Ω)
     delta_new[b_mask] = (delta[b_mask]
                          + ln_s_data_B_cond[b_mask]
                          + np.log(omega_B_clp)
                          - np.log(s_B_clp))
-    # Remove level indeterminacy
-    delta_new -= delta_new.mean()
     return delta_new
 
 
@@ -595,45 +593,51 @@ def blp_contraction(df: pd.DataFrame, mu: np.ndarray, R: int,
         delta[b_mask] = ln_s_data_B_cond[b_mask]
 
     norm_history = []
-    for h in range(max_iter):
-        # Compute model shares via unified (mca,time) softmax
-        s_B, s_D_nat, omega_B, _ = compute_model_shares(delta, mu, df, R, precomp=precomp)
-
-        s_B_clp    = np.clip(s_B,    1e-15, None)
-        s_D_clp    = np.clip(s_D_nat, 1e-15, None)
-        omega_B_clp = np.clip(omega_B, 1e-15, None)
-
-        delta_new = delta.copy()
-
-        # --- Eq-A4-B: D-type contraction (national shares) ---
-        delta_new[d_mask] = (delta[d_mask]
-                             + ln_s_data_D[d_mask]
-                             - np.log(s_D_clp))
-
-        # --- Eq-A4-D: B-type contraction (local conditional shares + Î©) ---
-        delta_new[b_mask] = (delta[b_mask]
-                             + ln_s_data_B_cond[b_mask]
-                             + np.log(omega_B_clp)
-                             - np.log(s_B_clp))
-
-        # Remove level indeterminacy (prevent drift)
-        delta_new -= delta_new.mean()
-                             
-        # NOTE: Pure contraction mapping. True outside option guarantees spectral radius < 1.
-        norm = np.max(np.abs(delta_new - delta))
-        norm_history.append(norm)
-
-        # Abort on numerical blow-up
-        if not np.all(np.isfinite(delta_new)):
-            n_bad = (~np.isfinite(delta_new)).sum()
-            print(f"    [contraction ABORT] {n_bad}/{N} non-finite entries.", flush=True)
+    # SQUAREM acceleration (Varadhan & Roland 2008; CG2020 §3.3)
+    h = 0
+    while h < max_iter:
+        # Step 1: delta_1 = T(delta_0)
+        delta_1 = _contraction_step(delta, mu, df, R, b_mask, d_mask,
+                                    ln_s_data_D, ln_s_data_B_cond, precomp)
+        if not np.all(np.isfinite(delta_1)):
+            print(f"    [contraction ABORT] non-finite at step 1, iter {h+1}.", flush=True)
             return delta, False, h + 1, norm_history
 
-        if h % 100 == 0 or h == max_iter - 1:
-            print(f"    [contraction iter={h+1}/{max_iter}] norm={norm:.3e}", flush=True)
+        # Step 2: delta_2 = T(delta_1)
+        delta_2 = _contraction_step(delta_1, mu, df, R, b_mask, d_mask,
+                                    ln_s_data_D, ln_s_data_B_cond, precomp)
+        if not np.all(np.isfinite(delta_2)):
+            print(f"    [contraction ABORT] non-finite at step 2, iter {h+1}.", flush=True)
+            return delta_1, False, h + 1, norm_history
+
+        # Extrapolation
+        r  = delta_1 - delta
+        v  = delta_2 - 2.0 * delta_1 + delta
+        r_norm = np.sqrt(r @ r)
+        v_norm = np.sqrt(v @ v)
+
+        if v_norm > 1e-30:
+            alpha = max(-1.0, -r_norm / v_norm)
+            delta_s = delta - 2.0 * alpha * r + alpha * alpha * v
+            # Safeguard: apply one contraction to the extrapolated point
+            delta_s = _contraction_step(delta_s, mu, df, R, b_mask, d_mask,
+                                        ln_s_data_D, ln_s_data_B_cond, precomp)
+            if np.all(np.isfinite(delta_s)):
+                delta_new = delta_s
+            else:
+                delta_new = delta_2   # fallback
+        else:
+            delta_new = delta_2
+
+        norm = np.max(np.abs(delta_new - delta))
+        norm_history.append(norm)
+        h += 1  # each SQUAREM iteration uses 3 contraction evaluations
+
+        if h % 50 == 0 or h == max_iter - 1 or norm < tol:
+            print(f"    [SQUAREM iter={h}/{max_iter}] norm={norm:.3e}", flush=True)
 
         if norm < tol:
-            return delta_new, True, h + 1, norm_history
+            return delta_new, True, h, norm_history
 
         delta = delta_new
 
@@ -881,6 +885,8 @@ def run_blp_for_spec(spec_id: int, args) -> dict:
 
         # Initial weighting matrix W = (Z'Z)^-1
         iv_avail = [c for c in IV_BLP_LOO + IV_COST + IV_CAPITAL if c in df.columns]
+        # Drop zero-variance IVs to prevent singular Z'Z
+        iv_avail = [c for c in iv_avail if df[c].replace([np.inf, -np.inf], np.nan).fillna(0).std() > 1e-10]
         Z = np.zeros((len(df), len(iv_avail)))
         for i, col in enumerate(iv_avail):
             Z[:, i] = df[col].replace([np.inf, -np.inf], np.nan).fillna(0).values

@@ -58,6 +58,10 @@ def compute_loo_instruments(df: pd.DataFrame) -> pd.DataFrame:
         df['credit_assets_lag'] = df['emprestimos_repasses'] / df['total_assets_lag']
         chars.append(('credit_assets', 'credit_assets_lag'))
 
+    # NPL provision ratio (already lagged in bank_chars_panel)
+    if 'npl_provision_ratio_lag' in df.columns:
+        chars.append(('npl_provision', 'npl_provision_ratio_lag'))
+
     # FGC covered is 1 for all institutions in our sample (universal coverage up to 250k)
     df['fgc_covered'] = 1
 

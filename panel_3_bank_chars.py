@@ -136,6 +136,9 @@ def build_panel() -> pd.DataFrame:
     for col in ['total_assets', 'equity']:
         if col not in p1.columns: p1[col] = np.nan
 
+    # 2. Asset quality (Ativo) — NPL provision
+    p2 = load_and_pivot(2, {78192: 'npl_provision'})
+
     # 3. Wholesale (Passivo)
     p3 = load_and_pivot(3, {
         78288: 'repos', 78289: 'lci', 78290: 'lca', 
@@ -154,6 +157,7 @@ def build_panel() -> pd.DataFrame:
 
     # Merge everything
     panel = p1
+    if not p2.empty: panel = panel.merge(p2, on=['CodConglomeradoPrudencial', 'Year', 'Quarter'], how='left')
     if not p3.empty: panel = panel.merge(p3, on=['CodConglomeradoPrudencial', 'Year', 'Quarter'], how='left')
     if not p4.empty: panel = panel.merge(p4, on=['CodConglomeradoPrudencial', 'Year', 'Quarter'], how='left')
     if not p5.empty: panel = panel.merge(p5, on=['CodConglomeradoPrudencial', 'Year', 'Quarter'], how='left')
@@ -173,6 +177,12 @@ def build_panel() -> pd.DataFrame:
     total_assets_no0 = panel['total_assets'].replace(0, np.nan)
     panel['equity_ratio'] = panel['equity'] / total_assets_no0
     panel['log_total_assets'] = np.log(panel['total_assets'].clip(lower=1))
+
+    # NPL provision ratio (provision is reported as negative; take abs)
+    if 'npl_provision' in panel.columns:
+        panel['npl_provision_ratio'] = panel['npl_provision'].abs() / total_assets_no0
+    else:
+        panel['npl_provision_ratio'] = np.nan
 
     # Segment defaults
     for s in ['S2', 'S3', 'S4', 'S5']:
@@ -208,7 +218,8 @@ def build_panel() -> pd.DataFrame:
     # FINALLY, Lag all variables to be used cleanly in regressions
     lag_cols = ['total_assets', 'equity', 'equity_ratio', 'log_total_assets',
                 'lci_lca_ratio', 'wholesale_ratio', 'indice_basileia',
-                'personnel_cost_ratio', 'admin_cost_ratio', 'tax_cost_ratio']
+                'personnel_cost_ratio', 'admin_cost_ratio', 'tax_cost_ratio',
+                'npl_provision_ratio']
     
     for col in lag_cols:
         if col in panel.columns:

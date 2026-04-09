@@ -123,8 +123,8 @@ D_DIM = len(D_COLS)   # 8
 
 # BLP LOO instruments (demand-side)
 IV_BLP_LOO = ['loo_log_assets', 'mean_loo_log_assets',
-              'loo_equity_assets', 'mean_loo_equity_ratio',
-              'loo_indice_basileia', 'mean_loo_basileia',
+              'loo_equity_ratio', 'mean_loo_equity_ratio',
+              'loo_basileia', 'mean_loo_basileia',
               'loo_credit_assets', 'mean_loo_credit_assets',
               'loo_npl_provision', 'mean_loo_npl_provision',
               'n_rivals']
@@ -538,17 +538,15 @@ def _contraction_step(delta: np.ndarray, mu: np.ndarray, df: pd.DataFrame,
     omega_B_clp = np.clip(omega_B, 1e-15, None)
 
     delta_new = delta.copy()
-    # Eq-A4-B: D-type (national shares)
+    # Eq-A4-D: D-type (national shares)
     delta_new[d_mask] = (delta[d_mask]
                          + ln_s_data_D[d_mask]
                          - np.log(s_D_clp))
-    # Eq-A4-D: B-type (local conditional + Î©)
+    # Eq-A4-B: B-type (local conditional + Î©)
     delta_new[b_mask] = (delta[b_mask]
                          + ln_s_data_B_cond[b_mask]
                          + np.log(omega_B_clp)
                          - np.log(s_B_clp))
-    # Remove level indeterminacy
-    delta_new -= delta_new.mean()
     return delta_new
 
 
@@ -604,20 +602,16 @@ def blp_contraction(df: pd.DataFrame, mu: np.ndarray, R: int,
 
         delta_new = delta.copy()
 
-        # --- Eq-A4-B: D-type contraction (national shares) ---
+        # --- Eq-A4-D: D-type contraction (national shares) ---
         delta_new[d_mask] = (delta[d_mask]
                              + ln_s_data_D[d_mask]
                              - np.log(s_D_clp))
 
-        # --- Eq-A4-D: B-type contraction (local conditional shares + O) ---
+        # --- Eq-A4-B: B-type contraction (local conditional shares + O) ---
         delta_new[b_mask] = (delta[b_mask]
                              + ln_s_data_B_cond[b_mask]
                              + np.log(omega_B_clp)
                              - np.log(s_B_clp))
-
-        # Remove level indeterminacy (prevent drift)
-        delta_new -= delta_new.mean()
-
         # NOTE: Pure contraction mapping. True outside option guarantees spectral radius < 1.
         norm = np.max(np.abs(delta_new - delta))
         norm_history.append(norm)
