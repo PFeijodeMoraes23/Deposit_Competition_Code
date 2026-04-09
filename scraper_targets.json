@@ -1,0 +1,322 @@
+[
+    {
+        "cod_conglomerado": "C0081847",
+        "name": "BNDES  PRUDENCIAL",
+        "asset_size": "959.70 B",
+        "native_k5_rate": "No (COSIF Fallback)",
+        "domain": "bndes.com.br",
+        "first_year": "2016"
+    },
+    {
+        "cod_conglomerado": "C0080336",
+        "name": "ARAMA DISTRIBUIDORA DE TATULOS E VALORES MOBILIARIOS SA",
+        "asset_size": "588.59 B",
+        "native_k5_rate": "No (COSIF Fallback)",
+        "domain": "aramadistribuidoradetatulosevaloresmobiliarios.com.br",
+        "first_year": "2014"
+    },
+    {
+        "cod_conglomerado": "C0084693",
+        "name": "NU PAGAMENTOS  PRUDENCIAL",
+        "asset_size": "241.17 B",
+        "native_k5_rate": "Yes (IP Rates)",
+        "domain": "nubank.com.br",
+        "first_year": "2017"
+    },
+    {
+        "cod_conglomerado": "C0084693",
+        "name": "NUBANK",
+        "asset_size": "241.17 B",
+        "native_k5_rate": "Yes (IP Rates)",
+        "domain": "nubank.com.br",
+        "first_year": "2022"
+    },
+    {
+        "cod_conglomerado": "C0084693",
+        "name": "NU FINANCEIRA SA  SOCIEDADE DE CRADITO FINANCIAMENTO E INVESTIMENTO",
+        "asset_size": "190.62 B",
+        "native_k5_rate": "Yes (IP Rates)",
+        "domain": "nubank.com.br",
+        "first_year": "2018"
+    },
+    {
+        "cod_conglomerado": "C0080484",
+        "name": "VOTORANTIM ASSET MANAGEMENT DISTRIBUIDORA DE TATULOS E VALORES MOBILIARIOS LTDA",
+        "asset_size": "143.49 B",
+        "native_k5_rate": "No (COSIF Fallback)",
+        "domain": "votorantimassetmanagementdistribuidoradetatulosevaloresmobiliarios.com.br",
+        "first_year": "2014"
+    },
+    {
+        "cod_conglomerado": "C0080484",
+        "name": "BANCO BV SA",
+        "asset_size": "143.49 B",
+        "native_k5_rate": "No (COSIF Fallback)",
+        "domain": "bv.com.br",
+        "first_year": "2021"
+    },
+    {
+        "cod_conglomerado": "C0084710",
+        "name": "CIELO IP  PRUDENCIAL",
+        "asset_size": "110.24 B",
+        "native_k5_rate": "Yes (IP Rates)",
+        "domain": "cielo.com.br",
+        "first_year": "2017"
+    },
+    {
+        "cod_conglomerado": "C0084844",
+        "name": "C6 CORRETORA DE TATULOS E VALORES MOBILIARIOS LTDA",
+        "asset_size": "98.56 B",
+        "native_k5_rate": "No (COSIF Fallback)",
+        "domain": "c6bank.com.br",
+        "first_year": "2019"
+    },
+    {
+        "cod_conglomerado": "C0084820",
+        "name": "MERCADO PAGO IP  PRUDENCIAL",
+        "asset_size": "51.79 B",
+        "native_k5_rate": "Yes (IP Rates)",
+        "domain": "mercadopago.com.br",
+        "first_year": "2022"
+    },
+    {
+        "cod_conglomerado": "C0080903",
+        "name": "PICPAY SERVICOS SA",
+        "asset_size": "49.94 B",
+        "native_k5_rate": "No (COSIF Fallback)",
+        "domain": "picpay.com",
+        "first_year": "2014"
+    },
+    {
+        "cod_conglomerado": "C0080202",
+        "name": "VOLKSWAGEN  PRUDENCIAL",
+        "asset_size": "48.92 B",
+        "native_k5_rate": "No (COSIF Fallback)",
+        "domain": "volkswagen.com.br",
+        "first_year": "2016"
+    },
+    {
+        "cod_conglomerado": "C0084686",
+        "name": "STONE IP  PRUDENCIAL",
+        "asset_size": "43.28 B",
+        "native_k5_rate": "Yes (IP Rates)",
+        "domain": "stone.com.br",
+        "first_year": "2022"
+    },
+    {
+        "cod_conglomerado": "C0080257",
+        "name": "SS",
+        "asset_size": "38.84 B",
+        "native_k5_rate": "No (COSIF Fallback)",
+        "domain": "ss.com.br",
+        "first_year": "2014"
+    },
+    {
+        "cod_conglomerado": "C0084686",
+        "name": "STONE SOCIEDADE DE CRADITO DIRETO SA",
+        "asset_size": "31.03 B",
+        "native_k5_rate": "Yes (IP Rates)",
+        "domain": "stone.com.br",
+        "first_year": "2019"
+    },
+    {
+        "cod_conglomerado": "C0084820",
+        "name": "MERCADO CRADITO SOCIEDADE DE CRADITO FINANCIAMENTO E INVESTIMENTO SA",
+        "asset_size": "30.96 B",
+        "native_k5_rate": "Yes (IP Rates)",
+        "domain": "mercadopago.com.br",
+        "first_year": "2020"
+    },
+    {
+        "cod_conglomerado": "C0084686",
+        "name": "STONE PAGAMENTOS  PRUDENCIAL",
+        "asset_size": "30.09 B",
+        "native_k5_rate": "Yes (IP Rates)",
+        "domain": "stone.com.br",
+        "first_year": "2017"
+    },
+    {
+        "cod_conglomerado": "C0081407",
+        "name": "BANCO CNH INDUSTRIAL CAPITAL SA  PRUDENCIAL",
+        "asset_size": "27.21 B",
+        "native_k5_rate": "No (COSIF Fallback)",
+        "domain": "cnhindustrialcapital.com.br",
+        "first_year": "2016"
+    },
+    {
+        "cod_conglomerado": "C0083694",
+        "name": "AGIBANK  PRUDENCIAL",
+        "asset_size": "26.18 B",
+        "native_k5_rate": "No (COSIF Fallback)",
+        "domain": "agibank.com.br",
+        "first_year": "2018"
+    },
+    {
+        "cod_conglomerado": "C0080570",
+        "name": "ALFA  PRUDENCIAL",
+        "asset_size": "24.17 B",
+        "native_k5_rate": "No (COSIF Fallback)",
+        "domain": "alfa.com.br",
+        "first_year": "2016"
+    },
+    {
+        "cod_conglomerado": "C0081311",
+        "name": "BD REGIONAL DO EXTREMO SUL  PRUDENCIAL",
+        "asset_size": "24.14 B",
+        "native_k5_rate": "No (COSIF Fallback)",
+        "domain": "bdregionaldoextremosul.com.br",
+        "first_year": "2016"
+    },
+    {
+        "cod_conglomerado": "C0080563",
+        "name": "MERCEDESBENZ  PRUDENCIAL",
+        "asset_size": "20.59 B",
+        "native_k5_rate": "No (COSIF Fallback)",
+        "domain": "mercedesbenz.com.br",
+        "first_year": "2016"
+    },
+    {
+        "cod_conglomerado": "C0081610",
+        "name": "BCO CSF SA  PRUDENCIAL",
+        "asset_size": "19.67 B",
+        "native_k5_rate": "No (COSIF Fallback)",
+        "domain": "bcocsf.com.br",
+        "first_year": "2016"
+    },
+    {
+        "cod_conglomerado": "C0080642",
+        "name": "PORTO SEGURO  PRUDENCIAL",
+        "asset_size": "19.32 B",
+        "native_k5_rate": "No (COSIF Fallback)",
+        "domain": "portoseguro.com.br",
+        "first_year": "2016"
+    },
+    {
+        "cod_conglomerado": "C0084820",
+        "name": "MERCADOPAGO PRUDENCIAL",
+        "asset_size": "18.53 B",
+        "native_k5_rate": "Yes (IP Rates)",
+        "domain": "mercadopago.com.br",
+        "first_year": "2018"
+    },
+    {
+        "cod_conglomerado": "C0081421",
+        "name": "BCO DE LAGE LANDEN BRASIL SA  PRUDENCIAL",
+        "asset_size": "16.75 B",
+        "native_k5_rate": "No (COSIF Fallback)",
+        "domain": "bcodelagelandenbrasil.com.br",
+        "first_year": "2016"
+    },
+    {
+        "cod_conglomerado": "C0087298",
+        "name": "STELLANTIS  PRUDENCIAL",
+        "asset_size": "16.64 B",
+        "native_k5_rate": "No (COSIF Fallback)",
+        "domain": "stellantis.com.br",
+        "first_year": "2023"
+    },
+    {
+        "cod_conglomerado": "C0080769",
+        "name": "VOLVO  PRUDENCIAL",
+        "asset_size": "16.52 B",
+        "native_k5_rate": "No (COSIF Fallback)",
+        "domain": "volvo.com.br",
+        "first_year": "2016"
+    },
+    {
+        "cod_conglomerado": "C0080776",
+        "name": "SCANIA  PRUDENCIAL",
+        "asset_size": "16.21 B",
+        "native_k5_rate": "No (COSIF Fallback)",
+        "domain": "scania.com.br",
+        "first_year": "2016"
+    },
+    {
+        "cod_conglomerado": "C0080422",
+        "name": "GRUPO BONSUCESSO  BS2",
+        "asset_size": "15.54 B",
+        "native_k5_rate": "No (COSIF Fallback)",
+        "domain": "bs2.com",
+        "first_year": "2014"
+    },
+    {
+        "cod_conglomerado": "C0080848",
+        "name": "GM  PRUDENCIAL",
+        "asset_size": "15.13 B",
+        "native_k5_rate": "No (COSIF Fallback)",
+        "domain": "gm.com.br",
+        "first_year": "2017"
+    },
+    {
+        "cod_conglomerado": "C0080611",
+        "name": "HONDA  PRUDENCIAL",
+        "asset_size": "13.18 B",
+        "native_k5_rate": "No (COSIF Fallback)",
+        "domain": "honda.com.br",
+        "first_year": "2016"
+    },
+    {
+        "cod_conglomerado": "C0080848",
+        "name": "GMAC  PRUDENCIAL",
+        "asset_size": "12.69 B",
+        "native_k5_rate": "No (COSIF Fallback)",
+        "domain": "gmac.com.br",
+        "first_year": "2016"
+    },
+    {
+        "cod_conglomerado": "C0084600",
+        "name": "WILL IP  PRUDENCIAL",
+        "asset_size": "12.48 B",
+        "native_k5_rate": "Yes (IP Rates)",
+        "domain": "willbank.com.br",
+        "first_year": "2022"
+    },
+    {
+        "cod_conglomerado": "C0081562",
+        "name": "BCO TOYOTA DO BRASIL SA  PRUDENCIAL",
+        "asset_size": "12.46 B",
+        "native_k5_rate": "No (COSIF Fallback)",
+        "domain": "bcotoyotadobrasil.com.br",
+        "first_year": "2016"
+    },
+    {
+        "cod_conglomerado": "C0086581",
+        "name": "CLOUDWALK IP  PRUDENCIAL",
+        "asset_size": "12.44 B",
+        "native_k5_rate": "Yes (IP Rates)",
+        "domain": "cloudwalk.io",
+        "first_year": "2022"
+    },
+    {
+        "cod_conglomerado": "C0084600",
+        "name": "WILL FINANCEIRA SA CRADITO FINANCIAMENTO E INVESTIMENTO",
+        "asset_size": "12.28 B",
+        "native_k5_rate": "Yes (IP Rates)",
+        "domain": "willbank.com.br",
+        "first_year": "2022"
+    },
+    {
+        "cod_conglomerado": "C0081184",
+        "name": "APE POUPEX  PRUDENCIAL",
+        "asset_size": "11.64 B",
+        "native_k5_rate": "No (COSIF Fallback)",
+        "domain": "apepoupex.com.br",
+        "first_year": "2016"
+    },
+    {
+        "cod_conglomerado": "C0081328",
+        "name": "BCO DES DE MG SA  PRUDENCIAL",
+        "asset_size": "9.68 B",
+        "native_k5_rate": "No (COSIF Fallback)",
+        "domain": "bcodesdemg.com.br",
+        "first_year": "2016"
+    },
+    {
+        "cod_conglomerado": "C0085702",
+        "name": "NEON PAGAMENTOS IP  PRUDENCIAL",
+        "asset_size": "9.18 B",
+        "native_k5_rate": "Yes (IP Rates)",
+        "domain": "neonpagamentosip.com.br",
+        "first_year": "2021"
+    }
+]
