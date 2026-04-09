@@ -704,6 +704,49 @@ def save(panel: pd.DataFrame) -> None:
     logging.info(f"Saved market panel to {OUTPUT_CSV}")
 
 
+def get_pure_wholesale_cnpjs() -> set:
+    import glob
+    if_files = sorted(glob.glob(os.path.normpath(os.path.join(BCB_DIR, "IF Data", "List", "IF_DATA_List*.csv"))))
+    
+    cong_tags = {}
+    for f in if_files:
+        df = pd.read_csv(f, sep=None, engine='python')
+        if 'CodConglomeradoPrudencial' not in df.columns: continue
+        df = df.dropna(subset=['CodConglomeradoPrudencial'])
+        
+        for _, r in df.iterrows():
+            cp = str(r['CodConglomeradoPrudencial']).strip().replace('.0', '')
+            if cp not in cong_tags:
+                cong_tags[cp] = {'ativ': set(), 'seg': set(), 'nomes': set()}
+                
+            if 'Atividade' in df.columns and pd.notna(r['Atividade']):
+                cong_tags[cp]['ativ'].add(str(r['Atividade']).strip().lower())
+            if 'SegmentoTb' in df.columns and pd.notna(r['SegmentoTb']):
+                cong_tags[cp]['seg'].add(str(r['SegmentoTb']).strip().lower())
+            if 'NomeInstituicao' in df.columns and pd.notna(r['NomeInstituicao']):
+                cong_tags[cp]['nomes'].add(str(r['NomeInstituicao']).strip().lower())
+                
+    blacklist_seg = ['banco comercial estrangeiro', 'sociedade distribuidora de tvm', 'banco de investimento', 'sociedade corretora de tvm', 'sociedade corretora de câmbio', 'agência de fomento']
+    blacklist_ativ = ['tesouraria e negócios', 'crédito atacado', 'filial estrangeiro', 'câmbio', 'tesouraria e negocios', 'credito atacado', 'cambio']
+    whitelist_names = ['nupagamentos', 'inter', 'c6', 'nubank', 'picpay', 'pagseguro', 'mercadopago', 'btg', 'bs2', 'genial', 'sofisa', 'rendimento']
+    
+    def is_pure_investment(cp):
+        tags = cong_tags[cp]
+        for nm in tags['nomes']:
+            for w in whitelist_names:
+                if w in nm: return False
+                
+        segs = tags['seg']
+        ativs = tags['ativ']
+        
+        if not segs and not ativs: return False
+        
+        all_black_seg = all(any(bad in s for bad in blacklist_seg) for s in segs) if segs else False
+        all_black_ativ = all(any(bad in a for bad in blacklist_ativ) for a in ativs) if ativs else False
+        return all_black_seg or all_black_ativ
+
+    return {k for k in cong_tags if is_pure_investment(k)}
+
 ## -----------------------------------------------------------------------------
 ## 9) MAIN
 ## -----------------------------------------------------------------------------
@@ -752,6 +795,15 @@ def main() -> None:
     cols_to_drop = [c for c in panel.columns if c.endswith("_a3")]
     panel.drop(columns=cols_to_drop, inplace=True, errors="ignore")
     logging.info(f"Dropped deposit type 3 columns: {cols_to_drop}")
+
+    # 3. Exclude strictly wholesale / investment / asset management firms 
+    # that never branch into retail universal banking across their entire reporting history.
+    before_wholesale_drop = len(panel)
+    pure_wholesale = get_pure_wholesale_cnpjs()
+    panel = panel[~panel['CodConglomeradoPrudencial'].isin(pure_wholesale)].copy()
+    after_wholesale_drop = len(panel)
+    if before_wholesale_drop > after_wholesale_drop:
+        logging.info(f"Dropped {before_wholesale_drop - after_wholesale_drop} observations belonging to strictly wholesale/investment/asset-management firms.")
 
     # F. Save
     save(panel)

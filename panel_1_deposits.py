@@ -515,8 +515,10 @@ def build_estban_panel(cnpj_map: dict) -> pd.DataFrame:
     estban["Quarter"] = estban["Quarter"].astype(int)
 
     # --- Aggregate: conglomerate × municipality × quarter ---
-    # Fill NaN CODMUN_IBGE with 0
-    estban["CODMUN_IBGE"] = estban["CODMUN_IBGE"].fillna(0).astype(int)
+    # Drop rows where CODMUN_IBGE is missing or 0 to prevent glitchy D-type firm classification
+    estban = estban.dropna(subset=["CODMUN_IBGE"])
+    estban["CODMUN_IBGE"] = estban["CODMUN_IBGE"].astype(int)
+    estban = estban[estban["CODMUN_IBGE"] != 0]
 
     agg_cols = {col: "sum" for col in ESTBAN_DEPOSIT_COLS if col in estban.columns}
     group_cols = ["CodConglomeradoPrudencial", "CNPJ_Lider", "NomeInstituicao","CODMUN_IBGE", "YEAR", "Quarter"]

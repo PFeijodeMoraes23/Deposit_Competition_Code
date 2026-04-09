@@ -186,6 +186,40 @@ def main():
     save_output(sum_reg, "Summary_Region")
     save_output(sum_reg_yr, "Summary_Region_by_Year")
 
+    print("Generating D-Type firm summary...")
+    d_firms = df_b[df_b["CODMUN_IBGE"].astype(str) == "0"].copy()
+    d_firms["cnpj_8"] = pd.to_numeric(d_firms["CNPJ_Lider"], errors="coerce").astype("Int64").astype(str).str.zfill(8)
+
+    path_flags = list(_ROOT.glob("**/digital_banks_diagnostic.csv"))[0]
+    df_flags = pd.read_csv(path_flags)
+    dig_cands = set(df_flags[df_flags["is_digital_candidate"] == True]["CNPJ_root"].astype(str).str.zfill(8))
+    d_firms = d_firms[(d_firms["Source"] == "IFDATA") | (d_firms["cnpj_8"].isin(dig_cands))]
+
+    path_ip = list(_ROOT.glob("**/ip_rates_quarterly.csv"))[0]
+    df_ip = pd.read_csv(path_ip, low_memory=False)
+    cnpjs_with_ip_rates = set(df_ip["CNPJ"].astype(str).str.zfill(8).unique())
+
+    d_summ = d_firms.groupby(["CodConglomeradoPrudencial", "NomeInstituicao"]).agg(
+        total_assets=("total_assets", "max"),
+        first_year=("year", "min"),
+        first_quarter=("quarter", "min"),
+        obs=("year", "count")
+    ).reset_index()
+
+    d_summ = d_summ.sort_values(["total_assets", "first_year", "first_quarter"], ascending=[False, True, True])
+
+    for idx, row in d_summ.iterrows():
+        cp = row["CodConglomeradoPrudencial"]
+        f_rows = d_firms[d_firms["CodConglomeradoPrudencial"] == cp]
+        matches = f_rows["cnpj_8"].isin(cnpjs_with_ip_rates).any()
+        d_summ.at[idx, "native_k5_rate"] = "Yes (IP Rates)" if matches else "No (COSIF Fallback)"
+
+    d_summ["Asset_Size"] = d_summ["total_assets"].apply(lambda x: f"{x/1e9:.2f} B" if pd.notna(x) else "Unknown")
+    
+    out_csv = OUTPUT_DIR / "d_type_firms_summary_final.csv"
+    d_summ.to_csv(out_csv, index=False)
+    print(f"Saved D-Type summary to: {out_csv}")
+
     print(f"Descriptive statistics successfully saved to: {OUTPUT_DIR}")
 
 if __name__ == '__main__':

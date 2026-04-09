@@ -43,13 +43,14 @@ Pipeline stages
 
   Stage 3 - Deposit panel, characteristics & instruments
     3a. panel_1_deposits.py                 ESTBAN + IF Data -> conglomerate x municipality x quarter deposit panel
-    3b. panel_2_rates.py                         Compute and append deposit rates/spreads (COSIF + SGS) to deposit panel
-    3c. panel_3_bank_chars.py               IF Data -> conglomerate x quarter bank size and solvency characteristics panel
-    3d. panel_4_flag_digital.py                   Analyze raw ESTBAN to identify purely digital banks -> PANEL_INTERMED
+    3b. panel_2_rates_ip.py         Extract IP explicit deposit rates from raw COSIF (parallel to deposits)
+    3c. panel_3_rates.py                         Compute and append deposit rates/spreads (COSIF + SGS) to deposit panel
+    3d. panel_4_bank_chars.py               IF Data -> conglomerate x quarter bank size and solvency characteristics panel
+    3e. panel_5_flag_digital.py                   Analyze raw ESTBAN to identify purely digital banks -> PANEL_INTERMED
 
   Stage 4 - Master analysis panel
-    4a. panel_5_market.py                   Merge all MCA panels + deposit panel -> master analysis dataset
-    4b. panel_6_instruments.py       Compute LOO instruments and FGC dummy -> overwrites market_panel.csv
+    4a. panel_6_market.py                   Merge all MCA panels + deposit panel -> master analysis dataset
+    4b. panel_7_instruments.py       Compute LOO instruments and FGC dummy -> overwrites market_panel.csv
 
   Stage 5 - Descriptive statistics
     5a. desc_1.py                        Generate unweighted overview descriptive tables
@@ -70,7 +71,7 @@ Notes
     parallelized; they are serialized here for simplicity and to avoid hitting
     rate limits on BCB / ANATEL / SAGI APIs simultaneously.
   * Stage 4 requires ALL panels to exist.  If some stage-2 downloads failed
-    (data source unavailable), panel_5_market.py handles missing files
+    (data source unavailable), panel_6_market.py handles missing files
     gracefully (those columns will be NaN).
 
 CLI Options:
@@ -96,11 +97,12 @@ Scripts called by the data pipeline:
 [6] scrape_6_cadunico.py
 [7] scrape_7_fees.py
 [8] panel_1_deposits.py
-[9] panel_2_rates.py
-[10] panel_3_bank_chars.py
-[11] panel_4_flag_digital.py
-[12] panel_5_market.py
-[13] panel_6_instruments.py
+[8b] panel_2_rates_ip.py
+[9] panel_3_rates.py
+[10] panel_4_bank_chars.py
+[11] panel_5_flag_digital.py
+[12] panel_6_market.py
+[13] panel_7_instruments.py
 [14] desc_1.py
 """
 
@@ -179,17 +181,19 @@ STEPS = [
      "BCB bank fee schedules (PF + PJ) -> tarifas conglomerate panel + fee summary"),
     (3, "8", "panel_1_deposits.py",
      "ESTBAN + IF Data -> conglomerate x municipality x quarter deposit panel"),
-    (3, "9", "panel_2_rates.py",
+    (3, "8b", "panel_2_rates_ip.py",
+     "Extract IP explicit deposit rates from raw COSIF (parallel to deposits)"),
+    (3, "9", "panel_3_rates.py",
      "Compute and append deposit rates/spreads (COSIF + SGS) to deposit panel"),
-    (3, "10", "panel_3_bank_chars.py",
+    (3, "10", "panel_4_bank_chars.py",
      "IF Data -> conglomerate x quarter bank size and solvency characteristics panel"),
-    (3, "11", "panel_4_flag_digital.py",
+    (3, "11", "panel_5_flag_digital.py",
      "Analyze raw ESTBAN to identify purely digital banks -> PANEL_INTERMED"),
 
     # Stage 4 -- master analysis panel
-    (4, "12", "panel_5_market.py",
+    (4, "12", "panel_6_market.py",
      "Merge all MCA panels + deposit panel -> master analysis dataset"),
-    (4, "13", "panel_6_instruments.py",
+    (4, "13", "panel_7_instruments.py",
      "Compute LOO instruments and FGC dummy -> overwrites market_panel.csv"),
 
     # Stage 5 -- descriptive statistics
@@ -298,12 +302,13 @@ def run_step(step_id: str, script: str, description: str) -> float:
 #   Wave 1 -- 0a alone: downloads ESTBAN + IF Data raw files from BCB Olinda.
 #             1a is NOT here because it takes ~700s and would block Wave 2 from
 #             starting until IBGE finishes. 1a has no dependency on 0a.
-#   Wave 2 -- After 0a completes: all characteristic panels run in parallel.
+#   Wave 2 -- After 0a completes: all characteristic panels run in stages.
 #             1a=IBGE SIDRA (long, ~700s but independent of 0a),
 #             2a=PIX (local files), 2b=ANATEL, 2d=BCB Olinda inclusion,
-#             2e=SAGI CadUnico, 2f=BCB tarifas, 3a=deposits (reads 0a output).
-#             All are mutually independent -> run in parallel.
-#   Wave 3 -- 3b (deposit rates) runs after 3a constructs the deposit panel.
+#             2e=SAGI CadUnico, 2f=BCB tarifas, 3a=deposits (reads 0a output),
+#             and 3b=IP rates (reads raw COSIF).
+#             These are mutually independent -> run in stages.
+#   Wave 3 -- 3c (deposit rates) runs after 3a constructs the deposit panel and 3b extracts IP rates.
 #   Wave 4 -- 4a (master merge) needs everything above -> serial.
 WAVES: list[list[str]] = [
     ["1"],                                     # Wave 1: ESTBAN + IF Data raw download
@@ -313,7 +318,7 @@ WAVES: list[list[str]] = [
     ["5"],                                     # Wave 2d: BCB inclusion
     ["6"],                                     # Wave 2e: CadUnico
     ["7"],                                     # Wave 2f: fees
-    ["8"],                                     # Wave 2g: characteristic panels + deposits
+    ["8", "8b"],                               # Wave 2g: characteristic panels + deposits + IP rates
     ["9", "10", "11"],                         # Wave 3: deposit rates/spreads + bank chars + digital flags (parallel)
     ["12"],                                    # Wave 4: master merge
     ["13"],                                    # Wave 5: instrumental variables
@@ -401,11 +406,12 @@ Scripts called by the data pipeline:
 [6] scrape_6_cadunico.py
 [7] scrape_7_fees.py
 [8] panel_1_deposits.py
-[9] panel_2_rates.py
-[10] panel_3_bank_chars.py
-[11] panel_4_flag_digital.py
-[12] panel_5_market.py
-[13] panel_6_instruments.py
+[8b] panel_2_rates_ip.py
+[9] panel_3_rates.py
+[10] panel_4_bank_chars.py
+[11] panel_5_flag_digital.py
+[12] panel_6_market.py
+[13] panel_7_instruments.py
 [14] desc_1.py
 """
     )
