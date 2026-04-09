@@ -185,6 +185,10 @@ def build_base_panel(panel_csv: Path) -> pd.DataFrame:
     df['deposit_rate_lag'] = df['risk_free_qoq_lag'] - df['spread_qoq_lag']
     df['gross_return_lag'] = 1 + df['deposit_rate_lag']
 
+    # Convert spread to basis points (×10,000) for numerical stability in BLP.
+    # deposit_rate_lag and gross_return_lag remain in decimal (needed for sleepiness).
+    df['spread_qoq'] = df['spread_qoq'] * 10_000
+
     df = df.dropna(subset=['deposit_balance', 'lagged_deposits',
                            'spread_qoq', 'entity_id', 'time_id'])
 

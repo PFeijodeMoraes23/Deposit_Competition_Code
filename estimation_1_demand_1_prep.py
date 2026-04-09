@@ -64,8 +64,8 @@ D_COLS = ['gdp_per_capita', 'fraction_65plus', 'fraction_young',
           'pix_users_pf_per1000', 'connections_per100', 'frac_4g5g',
           'branches_per1000', 'cadunico_families_per1000']
 IV_BLP_LOO = ['loo_log_assets', 'mean_loo_log_assets',
-              'loo_equity_assets', 'mean_loo_equity_ratio',
-              'loo_indice_basileia', 'mean_loo_basileia',
+              'loo_equity_ratio', 'mean_loo_equity_ratio',
+              'loo_basileia', 'mean_loo_basileia',
               'loo_credit_assets', 'mean_loo_credit_assets',
               'loo_npl_provision', 'mean_loo_npl_provision',
               'n_rivals']
@@ -128,7 +128,11 @@ def build_base_panel(panel_csv: Path) -> pd.DataFrame:
     
     df['deposit_rate_lag'] = df['risk_free_qoq_lag'] - df['spread_qoq_lag']
     df['gross_return_lag'] = 1 + df['deposit_rate_lag']
-    
+
+    # Convert spread to basis points (×10,000) for numerical stability in BLP.
+    # deposit_rate_lag and gross_return_lag remain in decimal (needed for sleepiness).
+    df['spread_qoq'] = df['spread_qoq'] * 10_000
+
     df = df.dropna(subset=['deposit_balance', 'lagged_deposits', 'spread_qoq', 'entity_id', 'time_id'])
     
     df['constant'] = 1.0
