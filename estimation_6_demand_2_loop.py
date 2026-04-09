@@ -1,4 +1,4 @@
-"""
+﻿"""
 estimation_1_demand_2_loop.py
 ==============================
 BLP outer-inner demand estimation loop (Appendix-BLP, V_Main.tex).
@@ -352,7 +352,7 @@ def _build_market_indices(mca_codes: np.ndarray, time_ids: np.ndarray,
                           is_B: np.ndarray) -> tuple:
     """Build unified (mca, time) market group indices for ALL products.
 
-    Per Eq-4 / Eq-13-B, the softmax denominator sums over J_mt = J^B_mt ∪ J^D_t.
+    Per Eq-4 / Eq-13-B, the softmax denominator sums over J_mt = J^B_mt âˆª J^D_t.
     D-firms (is_B=False) appear in every local market because they operate
     nationally; their rows in the panel carry mca_code='0'. We assign them
     the per-time-id market index for each (mca, time) market by broadcasting
@@ -360,8 +360,8 @@ def _build_market_indices(mca_codes: np.ndarray, time_ids: np.ndarray,
 
     Returns
     -------
-    b_mkt_idx : (N_B,) int  — market index for each B-firm row
-    d_time_enc : (N_D,) int — time-period encoding for each D-firm row
+    b_mkt_idx : (N_B,) int  â€” market index for each B-firm row
+    d_time_enc : (N_D,) int â€” time-period encoding for each D-firm row
     mca_time_pairs : list of (mca, time) tuples, one per unique B-market
     unique_times : array of unique time_ids
     """
@@ -389,18 +389,18 @@ def compute_model_shares(delta: np.ndarray, mu: np.ndarray,
                          precomp: dict | None = None) -> tuple:
     """Compute model-implied shares s^{Act,B} and s^{Act,D} (Eq-13-B/D).
 
-    All products — B and D — compete in the same softmax denominator for
+    All products â€” B and D â€” compete in the same softmax denominator for
     each (mca, time) market, consistent with Eq-4 of V_Main.tex.
 
     D-firms are national (single row per time period) but participate in
-    every local (mca, time) market. Their exp(δ+μ) sum is computed once per
+    every local (mca, time) market. Their exp(Î´+Î¼) sum is computed once per
     time period and added to every corresponding market's denominator.
 
     Returns
     -------
     s_B     : (N_B,)  model-implied local share for B-firm rows (Eq-13-B avg)
     s_D_nat : (N_D,)  model-implied national share for D-firm rows (Eq-13-D)
-    omega   : (N_B,)  Ω_mt per B-firm row (Eq-14)
+    omega   : (N_B,)  Î©_mt per B-firm row (Eq-14)
     is_B    : (N,)    boolean mask (B-type rows)
     """
     N     = len(df)
@@ -499,7 +499,7 @@ def compute_model_shares(delta: np.ndarray, mu: np.ndarray,
     q_B         = np.exp(V_B - log_denom_B)                     # (N_B, R)
     s_B         = q_B.mean(axis=1)                              # (N_B,)
 
-    # --- D-firm national shares: Eq-13-D  s^{Act,D} = Σ_m (M_mt/M_t) * q_D_m ---
+    # --- D-firm national shares: Eq-13-D  s^{Act,D} = Î£_m (M_mt/M_t) * q_D_m ---
     # Vectorised approach: s_D_nat[d] = mean_r[ exp(V_D_d,r) * sum_m (w_m * exp(-log_denom_m,r)) ]
     
     neg_log_denom = -log_denom
@@ -519,7 +519,7 @@ def compute_model_shares(delta: np.ndarray, mu: np.ndarray,
     s_D_nat = np.exp(log_s_D_r - row_max_s_D).mean(axis=1) * np.exp(row_max_s_D.squeeze()) # (N_D,)
 
 
-    # --- Ω_mt: Eq-14 = 1 - Σ_{j∈J^D_t, k} s^{Act,D}_{jk,local,mt} ---
+    # --- Î©_mt: Eq-14 = 1 - Î£_{jâˆˆJ^D_t, k} s^{Act,D}_{jk,local,mt} ---
     # D_share_p_r = exp(log_D_sum_p,r - log_denom_p,r)
     local_D_share  = np.exp(log_D_sum - log_denom)                # (n_pairs, R)
     omega_per_pair = np.maximum(1e-10, 1.0 - local_D_share.mean(axis=1))  # (n_pairs,)
@@ -531,7 +531,7 @@ def _contraction_step(delta: np.ndarray, mu: np.ndarray, df: pd.DataFrame,
                       R: int, b_mask: np.ndarray, d_mask: np.ndarray,
                       ln_s_data_D: np.ndarray, ln_s_data_B_cond: np.ndarray,
                       precomp: dict | None) -> np.ndarray:
-    """Single BLP contraction step T(δ) with mean-normalization."""
+    """Single BLP contraction step T(Î´) with mean-normalization."""
     s_B, s_D_nat, omega_B, _ = compute_model_shares(delta, mu, df, R, precomp=precomp)
     s_B_clp     = np.clip(s_B,     1e-15, None)
     s_D_clp     = np.clip(s_D_nat, 1e-15, None)
@@ -542,7 +542,7 @@ def _contraction_step(delta: np.ndarray, mu: np.ndarray, df: pd.DataFrame,
     delta_new[d_mask] = (delta[d_mask]
                          + ln_s_data_D[d_mask]
                          - np.log(s_D_clp))
-    # Eq-A4-D: B-type (local conditional + Ω)
+    # Eq-A4-D: B-type (local conditional + Î©)
     delta_new[b_mask] = (delta[b_mask]
                          + ln_s_data_B_cond[b_mask]
                          + np.log(omega_B_clp)
@@ -560,8 +560,8 @@ def blp_contraction(df: pd.DataFrame, mu: np.ndarray, R: int,
 
     Applies two contraction steps per iteration then extrapolates using a
     quadratic steplength, dramatically accelerating convergence vs. simple
-    iteration — especially when the Jacobian has eigenvalues near ±1
-    (Conlon & Gortmaker 2020, §3.3).
+    iteration â€” especially when the Jacobian has eigenvalues near Â±1
+    (Conlon & Gortmaker 2020, ÂSection 3.3).
 
     Parameters
     ----------
@@ -614,6 +614,9 @@ def blp_contraction(df: pd.DataFrame, mu: np.ndarray, R: int,
                              + ln_s_data_B_cond[b_mask]
                              + np.log(omega_B_clp)
                              - np.log(s_B_clp))
+
+        # Remove level indeterminacy (prevent drift)
+        delta_new -= delta_new.mean()
 
         # NOTE: Pure contraction mapping. True outside option guarantees spectral radius < 1.
         norm = np.max(np.abs(delta_new - delta))
@@ -731,7 +734,7 @@ def compute_gmm_moments(xi: np.ndarray, df: pd.DataFrame) -> np.ndarray:
     iv_cols_avail = [c for c in IV_BLP_LOO + IV_COST + IV_CAPITAL if c in df.columns]
     Z = np.zeros((len(df), len(iv_cols_avail)))
     for i, col in enumerate(iv_cols_avail):
-        Z[:, i] = df[col].fillna(0).values
+        Z[:, i] = df[col].replace([np.inf, -np.inf], np.nan).fillna(0).values
 
     N = len(df)
     return (xi[:, np.newaxis] * Z).mean(axis=0)  # (n_iv,)
@@ -763,7 +766,7 @@ def gmm_objective(theta2_vec: np.ndarray, df: pd.DataFrame,
         delta_init=delta_init, precomp=precomp)
     if not converged:
         print(f"  [!] Inner loop did not converge in {n_iter} iterations", flush=True)
-    # Always cache latest delta for warm-starting (CG2020 §3.2)
+    # Always cache latest delta for warm-starting (CG2020 ÂSection 3.2)
     if delta_cache is not None:
         delta_cache['last_delta'] = delta.copy()
 
@@ -879,7 +882,7 @@ def run_blp_for_spec(spec_id: int, args) -> dict:
         iv_avail = [c for c in IV_BLP_LOO + IV_COST + IV_CAPITAL if c in df.columns]
         Z = np.zeros((len(df), len(iv_avail)))
         for i, col in enumerate(iv_avail):
-            Z[:, i] = df[col].fillna(0).values
+            Z[:, i] = df[col].replace([np.inf, -np.inf], np.nan).fillna(0).values
         try:
             W = np.linalg.inv(Z.T @ Z / len(df))
         except np.linalg.LinAlgError:
@@ -945,8 +948,11 @@ def run_blp_for_spec(spec_id: int, args) -> dict:
                 W, args.tol_inner, args.max_inner,
                 delta_cache=delta_cache, precomp=precomp_idx)
 
+        # Bounds to prevent float64 overflow during line search
+        bnds = [(-15.0, 15.0)] * n_params
         if args.method == 'l-bfgs-b':
             result = minimize(obj_fn, theta2_0, method='L-BFGS-B',
+                              bounds=bnds,
                               options={'maxiter': 500, 'ftol': args.tol_outer},
                               callback=_outer_callback)
         else:
@@ -1082,7 +1088,7 @@ def main():
     _email_thread.start()
     # Send an immediate start notification
     _send_status_email(
-        f"[BLP-HPC] Job {job_id} STARTED — {datetime.datetime.now().strftime('%Y-%m-%d %H:%M')}",
+        f"[BLP-HPC] Job {job_id} STARTED â€” {datetime.datetime.now().strftime('%Y-%m-%d %H:%M')}",
         f"Estimation started.\nStage={args.stage} | Specs={spec_ids} | R={args.R} | workers={args.workers}"
     )
 
@@ -1160,7 +1166,7 @@ def main():
     # --- Finalise ---
     _stop_email.set()
     _send_status_email(
-        f"[BLP-HPC] Job {job_id} FINISHED — {datetime.datetime.now().strftime('%Y-%m-%d %H:%M')}",
+        f"[BLP-HPC] Job {job_id} FINISHED â€” {datetime.datetime.now().strftime('%Y-%m-%d %H:%M')}",
         "\n".join(_email_log[-300:])
     )
 

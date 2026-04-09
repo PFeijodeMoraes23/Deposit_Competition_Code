@@ -452,26 +452,32 @@ def process_specification(spec_id: int, df_base: pd.DataFrame,
         0.0, val_D[~df_spec['is_B']])
 
     # ----- Data-Implied Shares (Eq-16) --------------------------------------
-    nat_active = df_spec.groupby(
-        ['time_id', 'deposit_type'])['Dep_Act'].transform('sum')
-    df_spec['nat_active'] = nat_active
-    df_spec['share_D'] = np.where(~df_spec['is_B'],
-                                  df_spec['Dep_Act'] / nat_active, np.nan)
+    # Drop ZERO and NaN Active Deposits before building shares. 
+    # Zero shares break the log-bounds of the BLP contraction map.
+    df_spec = df_spec.dropna(subset=['Dep_Act'])
+    df_spec = df_spec[df_spec['Dep_Act'] > 1e-6]
+    
+    # ---------------------------------------------------------
+    # Option 1: Global Per-Capita Potential Gamma
+    # Construct an outside option based on population
+    # ---------------------------------------------------------
+    
+    # 1. Empirically find max active deposits per capita across all markets/times
+    mkt_totals = df_spec.groupby(['mca_code', 'time_id'])['Dep_Act'].transform('sum')
+    dep_per_capita = mkt_totals / df_spec['pop_total']
+    
+    # Pad by 10% to guarantee outside option > 0 everywhere
+    gamma = dep_per_capita.max() * 1.1
 
-    local_B_active = (df_spec[df_spec['is_B']]
-                      .groupby(['mca_code', 'time_id', 'deposit_type'])
-                      ['Dep_Act'].transform('sum'))
+    # 2. National Population (sum of unique local populations per time period)
+    df_unique_mkt = df_spec[['mca_code', 'time_id', 'pop_total']].drop_duplicates()
+    nat_pop = df_unique_mkt.groupby('time_id')['pop_total'].sum()
+    nat_pop_map = df_spec['time_id'].map(nat_pop)
 
-    df_loc_map = df_spec[df_spec['is_B']][['entity_id', 'time_id']].copy()
-    df_loc_map['local_B_active'] = local_B_active
-    df_spec = pd.merge(df_spec, df_loc_map,
-                       on=['entity_id', 'time_id'], how='left')
-
-    mask_valid_denom = (df_spec['is_B']) & (df_spec['local_B_active'] > 0)
-    df_spec['share_B_cond'] = np.where(
-        mask_valid_denom,
-        df_spec['Dep_Act'] / df_spec['local_B_active'], np.nan)
-    df_spec.loc[(df_spec['is_B']) & ~mask_valid_denom, 'share_B_cond'] = 0.0
+    # 3. Construct Model-Consistent Shares (summing to < 1)
+    df_spec['share_D'] = np.where(~df_spec['is_B'], df_spec['Dep_Act'] / (gamma * nat_pop_map), np.nan)
+    
+    df_spec['share_B_cond'] = np.where(df_spec['is_B'], df_spec['Dep_Act'] / (gamma * df_spec['pop_total']), np.nan)
 
     df_spec['Spec_ID'] = spec_id
 
