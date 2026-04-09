@@ -701,6 +701,10 @@ def main():
         inplace=True, na_position="last"
     )
     panel.reset_index(drop=True, inplace=True)
+    
+    # Filter out BNDES (Development Bank, should not be in the sample)
+    panel = panel[~panel["NomeInstituicao"].astype(str).str.contains("BNDES", case=False, na=False)]
+    panel.reset_index(drop=True, inplace=True)
 
     # Save
     out_path = os.path.join(OUTPUT_DIR, "deposits_panel.csv")

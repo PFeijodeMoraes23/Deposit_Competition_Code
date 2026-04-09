@@ -16,18 +16,21 @@ import os
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s')
 
-urls_file = Path('scraper_urls.json')
+root = Path('.').resolve().parents[2]
+ip_scrape_dir = root / 'BCB' / 'Egan_et_al_2025_Rep' / 'processed' / 'IP_SCRAPE'
+
+urls_file = ip_scrape_dir / 'scraper_urls.json'
 if not urls_file.exists():
-    print("scraper_urls.json not found! Run d_rate_scrape_2_cdx.py first.")
+    print(f"{urls_file} not found! Run d_rate_scrape_2_cdx.py first.")
     exit(1)
 
 with open(urls_file, 'r', encoding='utf-8') as f:
     urls_to_fetch = json.load(f)
 
-# output directories based on type
-PAGES_DIR = Path('archive_html')
+# output directories based on type inside IP_SCRAPE
+PAGES_DIR = ip_scrape_dir / 'archive_html'
 PAGES_DIR.mkdir(exist_ok=True)
-PDFS_DIR = Path('archive_pdfs')
+PDFS_DIR = ip_scrape_dir / 'archive_pdfs'
 PDFS_DIR.mkdir(exist_ok=True)
 
 MAX_CONCURRENT = 5 # don't hammer the fragile Internet Archive too hard!

@@ -19,8 +19,8 @@ if not summary_path.exists():
 
 df = pd.read_csv(summary_path)
 
-# 2. Filter the top targets (Top 40 by default)
-# We want to focus on D-type firms, especially those with IP Rates or large asset sizes.
+# 2. Filter the top targets (Top 40 by default), excluding development banks like BNDES
+df = df[~df['NomeInstituicao'].str.contains('BNDES', case=False, na=False)]
 top_targets = df.head(40).copy()
 
 # Known domains dictionary for quick start - manually map the most obvious ones
@@ -67,7 +67,10 @@ for _, row in top_targets.iterrows():
     })
 
 # 3. Save to a JSON for the next pipeline step
-out_path = Path('scraper_targets.json')
+out_dir = root / 'BCB' / 'Egan_et_al_2025_Rep' / 'processed' / 'IP_SCRAPE'
+out_dir.mkdir(parents=True, exist_ok=True)
+out_path = out_dir / 'scraper_targets.json'
+
 with open(out_path, 'w', encoding='utf-8') as f:
     json.dump(targets, f, indent=4, ensure_ascii=False)
 

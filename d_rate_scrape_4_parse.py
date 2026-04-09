@@ -13,8 +13,11 @@ from pathlib import Path
 from bs4 import BeautifulSoup
 import pdfplumber
 
-PAGES_DIR = Path('archive_html')
-PDFS_DIR = Path('archive_pdfs')
+root = Path('.').resolve().parents[2]
+ip_scrape_dir = root / 'BCB' / 'Egan_et_al_2025_Rep' / 'processed' / 'IP_SCRAPE'
+
+PAGES_DIR = ip_scrape_dir / 'archive_html'
+PDFS_DIR = ip_scrape_dir / 'archive_pdfs'
 
 # Regexes for common deposit rate phrasing in Brazil
 # Looks for "100% do CDI", "rende 100% CDI", "Rendimento: 105% do CDI", "100% ao CDI"
@@ -97,9 +100,10 @@ def main():
     if not df.empty:
         df = df.sort_values(by=['CodConglomerado', 'Snapshot_Date'])
         
-    df.to_csv('extracted_historical_rates.csv', index=False)
+    out_path = ip_scrape_dir / 'extracted_historical_rates.csv'
+    df.to_csv(out_path, index=False)
     print(f"Extraction complete. Found {len(final_list)} distinct rate mentions.")
-    print("Saved to extracted_historical_rates.csv. Manual review is STRONGLY advised to filter out loan rates.")
+    print(f"Saved to {out_path.resolve()}. Manual review is STRONGLY advised to filter out loan rates.")
 
 if __name__ == '__main__':
     main()

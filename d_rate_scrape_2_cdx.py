@@ -12,9 +12,13 @@ from pathlib import Path
 from urllib.parse import urlencode
 
 # 1. Load targets
-targets_file = Path('scraper_targets.json')
+# Ensure we can find the targets from step 1
+root = Path('.').resolve().parents[2]
+ip_scrape_dir = root / 'BCB' / 'Egan_et_al_2025_Rep' / 'processed' / 'IP_SCRAPE'
+
+targets_file = ip_scrape_dir / 'scraper_targets.json'
 if not targets_file.exists():
-    print("scraper_targets.json not found! Run d_rate_scrape_1_targets.py first.")
+    print(f"{targets_file} not found! Run d_rate_scrape_1_targets.py first.")
     exit(1)
 
 with open(targets_file, 'r', encoding='utf-8') as f:
@@ -91,7 +95,7 @@ for target in targets:
     time.sleep(3)
 
 # 2. Save Results
-out_path = Path('scraper_urls.json')
+out_path = ip_scrape_dir / 'scraper_urls.json'
 with open(out_path, 'w', encoding='utf-8') as f:
     json.dump(result_urls, f, indent=4, ensure_ascii=False)
 
