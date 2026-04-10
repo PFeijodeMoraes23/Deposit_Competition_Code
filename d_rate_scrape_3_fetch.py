@@ -57,42 +57,49 @@ async def fetch_snapshot(session, item, prefix_dir):
     if filepath.exists():
         return # Skip
 
-    try:
-        async with session.get(wb_url) as response:
-            if response.status == 200:
-                content = await response.read()
-                
-                # if html, clean out wayback toolbar bloat
-                if not filepath.name.endswith('.pdf'):
-                    try:
-                        soup = BeautifulSoup(content, 'html.parser')
-                        for script in soup(['script', 'style', 'iframe', 'svg', 'noscript']):
-                            script.decompose()
-                        
-                        # Remove the annoying IA toolbar injections so we only store the actual text DOM
-                        for ia in soup.find_all('div', id="wm-ipp-base"):
-                            ia.decompose()
+    for attempt in range(5): # Up to 5 retries to ride out IP bans
+        try:
+            async with session.get(wb_url) as response:
+                if response.status == 200:
+                    content = await response.read()
+                    
+                    # if html, clean out wayback toolbar bloat
+                    if not filepath.name.endswith('.pdf'):
+                        try:
+                            soup = BeautifulSoup(content, 'html.parser')
+                            for script in soup(['script', 'style', 'iframe', 'svg', 'noscript']):
+                                script.decompose()
                             
-                        # Save
-                        with open(filepath, 'w', encoding='utf-8') as f:
-                            f.write(str(soup))
-                    except Exception as e:
-                        # Fallback raw write
-                        print(f"Parse error for {wb_url}, falling back to raw save. {e}")
+                            # Remove the annoying IA toolbar injections so we only store the actual text DOM
+                            for ia in soup.find_all('div', id="wm-ipp-base"):
+                                ia.decompose()
+                                
+                            # Save
+                            with open(filepath, 'w', encoding='utf-8') as f:
+                                f.write(str(soup))
+                        except Exception as e:
+                            # Fallback raw write
+                            print(f"Parse error for {wb_url}, falling back to raw save. {e}")
+                            with open(filepath, 'wb') as f:
+                                f.write(content)
+                    else:
+                        # PDF Binary 
                         with open(filepath, 'wb') as f:
                             f.write(content)
-                else:
-                    # PDF Binary 
-                    with open(filepath, 'wb') as f:
-                        f.write(content)
 
-                return True
+                    return True
+                else:
+                    logging.warning(f"Status {response.status} for {wb_url}")
+                    return False
+        except Exception as e:
+            if "Connect call failed" in str(e) or "ssl" in str(e).lower() or "443" in str(e):
+                logging.error(f"Ban detected on {wb_url}, sleeping 60 seconds... (Attempt {attempt+1}/5)")
+                await asyncio.sleep(60) # Sleep off the soft-ban
             else:
-                logging.warning(f"Status {response.status} for {wb_url}")
+                logging.error(f"Error fetching {wb_url}: {e}")
                 return False
-    except Exception as e:
-        logging.error(f"Error fetching {wb_url}: {e}")
-        return False
+                
+    return False # Failed all attempts
 
 async def worker(queue, session, pbar):
     while True:
