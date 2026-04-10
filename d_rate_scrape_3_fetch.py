@@ -33,7 +33,7 @@ PAGES_DIR.mkdir(exist_ok=True)
 PDFS_DIR = ip_scrape_dir / 'archive_pdfs'
 PDFS_DIR.mkdir(exist_ok=True)
 
-MAX_CONCURRENT = 2 # lowered to prevent blocking
+MAX_CONCURRENT = 1 # extremely conservative to prevent Port 443 connection drops
 timeout = aiohttp.ClientTimeout(total=60)
 
 async def fetch_snapshot(session, item, prefix_dir):
@@ -102,7 +102,7 @@ async def worker(queue, session, pbar):
             break
             
         await fetch_snapshot(session, task, PAGES_DIR)
-        await asyncio.sleep(random.uniform(1.5, 3.5)) # Increased random spread to avoid ban
+        await asyncio.sleep(random.uniform(2.5, 4.5)) # Massive random spread to mimic real browser
         
         queue.task_done()
 
