@@ -364,11 +364,32 @@ def main():
                 df_d = pd.DataFrame(columns=df_phi.columns)
 
         def calc_agg(d_sub, col):
-            if len(d_sub) == 0: return pd.Series(dtype=float)
+            if len(d_sub) == 0: return pd.Series(dtype=float), pd.Series(dtype=float)
             w = d_sub.get('market_size', pd.Series(1.0, index=d_sub.index))
             num = (d_sub[col] * w).groupby(d_sub['year_quarter']).sum()
             den = w.groupby(d_sub['year_quarter']).sum()
-            return num / den
+            mean = num / den
+            
+            # Compute weighted variance and standard error of the mean
+            if len(d_sub) > 1:
+                # Merge mean back to compute variance
+                merged = d_sub[['year_quarter', col]].copy()
+                merged['w'] = w
+                merged['mean'] = merged['year_quarter'].map(mean)
+                # Weighted variance
+                var_num = (merged['w'] * (merged[col] - merged['mean'])**2).groupby(merged['year_quarter']).sum()
+                # Unbiased weighted variance (reliability weights)
+                v1 = merged['w'].groupby(merged['year_quarter']).sum()
+                v2 = (merged['w']**2).groupby(merged['year_quarter']).sum()
+                var = var_num / (v1 - (v2 / v1))
+                
+                # Standard error of the mean (weighted)
+                n = d_sub.groupby('year_quarter').size()
+                se = np.sqrt(var / n)
+            else:
+                se = pd.Series(0.0, index=mean.index)
+                
+            return mean, se
         
         tar_col = "phi_mt_IV_HausmanFull_x_Tech"
         
@@ -394,15 +415,19 @@ def main():
         c = color_map[label]
         
         if tar_col in df_phi.columns:
-            agg_b = calc_agg(df_b, tar_col)
-            agg_d = calc_agg(df_d, tar_col)
+            agg_b, se_b = calc_agg(df_b, tar_col)
+            agg_d, se_d = calc_agg(df_d, tar_col)
             
+            # Use 1.96 standard errors for approx 95% CI
             if not agg_b.empty:
                 idx_dates = pd.PeriodIndex(agg_b.index.str.replace('_', 'Q'), freq='Q').to_timestamp()
                 axes[0].plot(idx_dates, agg_b.values, label=plot_label, color=c, linewidth=2)
+                axes[0].fill_between(idx_dates, agg_b.values - (1.96*se_b.values), agg_b.values + (1.96*se_b.values), color=c, alpha=0.2)
+                
             if not agg_d.empty:
                 idx_dates = pd.PeriodIndex(agg_d.index.str.replace('_', 'Q'), freq='Q').to_timestamp()
                 axes[1].plot(idx_dates, agg_d.values, label=plot_label, color=c, linewidth=2)
+                axes[1].fill_between(idx_dates, agg_d.values - (1.96*se_d.values), agg_d.values + (1.96*se_d.values), color=c, alpha=0.2)
                 
     axes[0].set_title("B-Type Firms (Spec 12)", fontsize=14)
     axes[0].set_ylabel(r"National $\hat{\phi}_t$")
