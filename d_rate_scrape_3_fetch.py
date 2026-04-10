@@ -101,8 +101,12 @@ async def worker(queue, session, pbar):
             queue.task_done()
             break
             
-        await fetch_snapshot(session, task, PAGES_DIR)
-        await asyncio.sleep(random.uniform(2.5, 4.5)) # Massive random spread to mimic real browser
+        res = await fetch_snapshot(session, task, PAGES_DIR)
+        
+        # Only sleep if we actually made a network request (res is not None).
+        # We don't want to sleep when skipping files that are already downloaded!
+        if res is not None:
+            await asyncio.sleep(random.uniform(2.5, 4.5)) # Massive random spread to mimic real browser
         
         queue.task_done()
 
