@@ -311,7 +311,8 @@ def run_pooled_second_stage(df, state_vars, has_cf=False):
     CF = df_ss[CF_cols].values if has_cf else np.empty((len(df_ss), 0))
     
     init_params = np.zeros(X.shape[1] + CF.shape[1])
-    res_lsq = least_squares(nlls_objective, init_params, args=(y_dm, X, Z, CF, entity_idx), method='lm', max_nfev=500)
+    # Reduced max_nfev to 150. Switched to Trust Region Reflective (trf) with robust cauchy loss to cut outliers.
+    res_lsq = least_squares(nlls_objective, init_params, args=(y_dm, X, Z, CF, entity_idx), method='trf', loss='cauchy', max_nfev=150)
     
     J = res_lsq.jac
     try: cov = np.linalg.pinv(J.T.dot(J)) * (np.sum(res_lsq.fun**2) / (len(y_dm) - len(init_params)))
@@ -406,12 +407,16 @@ def run_pooled_phase(spec12_only=False):
         tasks = [(df, iv_name, iv_specs[iv_name], s_name, state_blocks[s_name])
                  for s_name in state_blocks.keys() for iv_name in ['OLS', 'IV_CostShifters', 'IV_Wholesale', 'IV_HausmanFull']]
     
+    from joblib import Parallel, delayed
     results_dict = {}
-    with concurrent.futures.ProcessPoolExecutor() as executor:
-        for res_ss, spec_name, res_fs in executor.map(exec_pooled_spec, tasks):
-            if res_ss is not None:
-                results_dict[spec_name] = {'second_stage': res_ss, 'first_stage': res_fs}
-                print(f"Local Computed: {spec_name}")
+    
+    # Process 4 models at a time to stay deep within 32GB bounds while crushing latency
+    results = Parallel(n_jobs=4)(delayed(exec_pooled_spec)(t) for t in tasks)
+    
+    for res_ss, spec_name, res_fs in results:
+        if res_ss is not None:
+            results_dict[spec_name] = {'second_stage': res_ss, 'first_stage': res_fs}
+            print(f"Local Computed: {spec_name}")
 
     with open(POOLED_DIR / "estimation_results.pkl", 'wb') as f: pickle.dump(results_dict, f)
     
