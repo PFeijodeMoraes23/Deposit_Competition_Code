@@ -334,9 +334,13 @@ def calculate_phis(df, res_dict, state_blocks):
     all_s_cols = {col for cols in state_blocks.values() for col in cols if col != 'constant'}
     filled_cols = {sv: df[sv].fillna(df[sv].median()) if sv in df.columns else np.zeros(len(df)) for sv in all_s_cols}
 
-    if 'lagged_deposits' in df.columns: df['market_size'] = df['lagged_deposits']
-    elif 'deposit_balance' in df.columns: df['market_size'] = df['deposit_balance']
-    else: df['market_size'] = 1.0
+    # Use population as market-size weight for phi aggregation.
+    # Under the constant-fraction assumption (M_mt = c * pop_mt), c cancels
+    # in the ratio Σ(phi * M) / Σ(M), making pop_total the correct weight.
+    if 'pop_total' in df.columns:
+        df['market_size'] = df['pop_total'].fillna(0)
+    else:
+        df['market_size'] = 1.0
 
     for spec_name, s_cols in state_blocks.items():
         model_key = f"IV_HausmanFull x {spec_name}"

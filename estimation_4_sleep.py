@@ -228,9 +228,13 @@ def exec_pooled_spec(args):
 
 def calculate_pooled_phis(df, res_dict, state_blocks):
     phi_results = {}
-    if 'lagged_deposits' in df.columns: df['market_size'] = df['lagged_deposits']
-    elif 'deposit_balance' in df.columns: df['market_size'] = df['deposit_balance']
-    else: df['market_size'] = 1.0
+    # Use population as market-size weight for phi aggregation.
+    # Under the constant-fraction assumption (M_mt = c * pop_mt), c cancels
+    # in the ratio Σ(phi * M) / Σ(M), making pop_total the correct weight.
+    if 'pop_total' in df.columns:
+        df['market_size'] = df['pop_total'].fillna(0)
+    else:
+        df['market_size'] = 1.0
 
     for model_key, res_item in res_dict.items():
         if res_item['second_stage'] is None: continue

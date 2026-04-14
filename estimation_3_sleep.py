@@ -202,9 +202,13 @@ def exec_local_spec(args):
 
 def calculate_local_phis(df, res_dict, state_blocks):
     phi_results = {}
-    if 'lagged_deposits' in df.columns: df['market_size'] = df['lagged_deposits']
-    elif 'deposit_balance' in df.columns: df['market_size'] = df['deposit_balance']
-    else: df['market_size'] = 1.0
+    # Use population as market-size weight for phi aggregation.
+    # Under the constant-fraction assumption (M_mt = c * pop_mt), c cancels
+    # in the ratio Σ(phi * M) / Σ(M), making pop_total the correct weight.
+    if 'pop_total' in df.columns:
+        df['market_size'] = df['pop_total'].fillna(0)
+    else:
+        df['market_size'] = 1.0
 
     for spec_name, s_cols in state_blocks.items():
         model_key = f"IV_HausmanFull x {spec_name}"
@@ -444,7 +448,8 @@ def run_plotting_phase(spec12_only=False):
 
     df = pd.read_csv(PANEL_CSV, low_memory=False)
     df['year_quarter'] = df['year'].astype(int).astype(str) + "Q" + df['quarter'].astype(int).astype(str)
-    df['market_size'] = df.get('lagged_deposits', df.get('deposit_balance', pd.Series(1.0, index=df.index)))
+    # Population weights for plotting aggregation (consistent with phi construction)
+    df['market_size'] = df['pop_total'].fillna(0) if 'pop_total' in df.columns else 1.0
     df['entity_id'] = df['CodConglomeradoPrudencial'].astype(str) + "_" + df['mca_code'].astype(str)
     df = df.sort_values(by=['entity_id', 'year', 'quarter'])
     df['risk_free_qoq_lag'] = df.groupby('entity_id')['risk_free_qoq'].shift(1)
