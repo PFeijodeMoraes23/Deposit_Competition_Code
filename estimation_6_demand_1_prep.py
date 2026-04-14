@@ -362,8 +362,8 @@ def main():
                 
                 if df_spec is not None:
                     alt_label = f"{alt.lower().replace('_', '')}{model_type}"
-                    out_pkl = demand_output_dir / f"demand_6_{alt_label}_final_spec_{target_id}.pkl"
-                    df_spec.to_pickle(out_pkl)
+                    out_pkl = demand_output_dir / f"demand_6_{alt_label}_final_spec_{target_id}.parquet"
+                    df_spec.to_parquet(out_pkl, engine='pyarrow')
                     print(f" > Saved Spec {target_id} ({alt} {model_type}) -> {out_pkl.name} ({len(df_spec)} rows)")
                     spec_summaries[f"6_{alt_label}_{target_id}"] = summary
                     total_saved += 1

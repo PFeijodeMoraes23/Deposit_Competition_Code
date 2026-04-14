@@ -499,51 +499,53 @@ def run_plotting_phase(alt_list, spec12_only):
             
         for col_name in cols_to_plot:
             fig, ax = plt.subplots(figsize=(10, 6))
+            
+            def get_agg_with_se(d_sub, col):
+                import scipy.stats as stats
+                if len(d_sub) == 0: return pd.DataFrame()
+                w = d_sub['market_size']
+                num = (d_sub[col] * w).groupby(d_sub['year_quarter']).sum()
+                den = w.groupby(d_sub['year_quarter']).sum()
+                mean = num / den
                 
-                def get_agg_with_se(d_sub, col):
-                    import scipy.stats as stats
-                    if len(d_sub) == 0: return pd.DataFrame()
-                    w = d_sub['market_size']
-                    num = (d_sub[col] * w).groupby(d_sub['year_quarter']).sum()
-                    den = w.groupby(d_sub['year_quarter']).sum()
-                    mean = num / den
-                    
-                    merged = d_sub[['year_quarter', col]].copy()
-                    merged['w'] = w
-                    merged['mean'] = merged['year_quarter'].map(mean)
-                    
-                    var_num = (merged['w'] * (merged[col] - merged['mean'])**2).groupby(merged['year_quarter']).sum()
-                    v1 = merged['w'].groupby(merged['year_quarter']).sum()
-                    v2 = (merged['w']**2).groupby(merged['year_quarter']).sum()
-                    
-                    var = var_num / (v1 - (v2 / v1))
-                    
-                    # Use effective sample size for n
-                    n_eff = (v1**2) / v2
-                    
-                    se = (var / n_eff).apply(lambda x: x**0.5 if pd.notnull(x) and x > 0 else 0.0)
-                    
-                    # Compute critical value from t-distribution based on effective df
-                    df_res = pd.DataFrame({'phi': mean, 'se': se, 'n_eff': n_eff}).reset_index()
-                    df_res['cv'] = df_res['n_eff'].apply(lambda n: stats.t.ppf(0.975, max(1, n - 1)) if pd.notnull(n) and n > 1 else 1.96)
-                    
-                    df_res['date'] = pd.PeriodIndex(df_res['year_quarter'].str.replace('_', 'Q'), freq='Q').to_timestamp()
-                    return df_res
+                merged = d_sub[['year_quarter', col]].copy()
+                merged['w'] = w
+                merged['mean'] = merged['year_quarter'].map(mean)
+                
+                var_num = (merged['w'] * (merged[col] - merged['mean'])**2).groupby(merged['year_quarter']).sum()
+                v1 = merged['w'].groupby(merged['year_quarter']).sum()
+                v2 = (merged['w']**2).groupby(merged['year_quarter']).sum()
+                
+                var = var_num / (v1 - (v2 / v1))
+                
+                # Use effective sample size for n
+                n_eff = (v1**2) / v2
+                
+                se = (var / n_eff).apply(lambda x: x**0.5 if pd.notnull(x) and x > 0 else 0.0)
+                
+                # Compute critical value from t-distribution based on effective df
+                df_res = pd.DataFrame({'phi': mean, 'se': se, 'n_eff': n_eff}).reset_index()
+                df_res['cv'] = df_res['n_eff'].apply(lambda n: stats.t.ppf(0.975, max(1, n - 1)) if pd.notnull(n) and n > 1 else 1.96)
+                
+                df_res['date'] = pd.PeriodIndex(df_res['year_quarter'].str.replace('_', 'Q'), freq='Q').to_timestamp()
+                return df_res
 
-                df_b = df[df['dummy_D_type'] == 0]
-                df_d = df[df['dummy_D_type'] == 1]
+            df_b = df[df['dummy_D_type'] == 0]
+            df_d = df[df['dummy_D_type'] == 1]
+            
+            b_agg = get_agg_with_se(df_b, col_name)
+            if not b_agg.empty:
+                ax.plot(b_agg['date'], b_agg['phi'], label=f'B-Type (National Avg) $\hat{{\phi}}$', color='blue', linewidth=2)
+                ax.fill_between(b_agg['date'], b_agg['phi'] - b_agg['cv']*b_agg['se'], b_agg['phi'] + b_agg['cv']*b_agg['se'], color='blue', alpha=0.15)
                 
-                b_agg = get_agg_with_se(df_b, col_name)
-                if not b_agg.empty:
-                    ax.plot(b_agg['date'], b_agg['phi'], label=f'B-Type (National Avg) $\hat{{\phi}}$', color='blue', linewidth=2)
-                    ax.fill_between(b_agg['date'], b_agg['phi'] - b_agg['cv']*b_agg['se'], b_agg['phi'] + b_agg['cv']*b_agg['se'], color='blue', alpha=0.15)
-                    
-                if len(df_d) > 0:
-                    df_d_active = df_d[df_d['market_size'] > 0]
-                    d_agg = get_agg_with_se(df_d_active, col_name)
-                    if not d_agg.empty:
-                        ax.plot(d_agg['date'], d_agg['phi'], label=f'D-Type (Digital/National) $\hat{{\phi}}$', color='red', linewidth=2)
-                        ax.fill_between(d_agg['date'], d_agg['phi'] - d_agg['cv']*d_agg['se'], d_agg['phi'] + d_agg['cv']*d_agg['se'], color='red', alpha=0.15)
+            if len(df_d) > 0:
+                df_d_active = df_d[df_d['market_size'] > 0]
+                d_agg = get_agg_with_se(df_d_active, col_name)
+                if not d_agg.empty:
+                    ax.plot(d_agg['date'], d_agg['phi'], label=f'D-Type (Digital/National) $\hat{{\phi}}$', color='red', linewidth=2)
+                    ax.fill_between(d_agg['date'], d_agg['phi'] - d_agg['cv']*d_agg['se'], d_agg['phi'] + d_agg['cv']*d_agg['se'], color='red', alpha=0.15)
+            
+            
             ax.set_ylabel(r"National $\hat{\phi}_t$")
             ax.set_ylim(bottom=0)
             ax.grid()

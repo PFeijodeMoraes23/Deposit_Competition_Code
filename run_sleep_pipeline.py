@@ -127,7 +127,7 @@ This script sequentially runs the following steps:
             {"file": "estimation_3_sleep.py", "args": spec12_arg, "desc": "Robustness bounds for B-firms"},
             {"file": "estimation_4_sleep.py", "args": spec12_arg, "desc": "Robustness bounds for pooled B and D firms"},
             {"file": "estimation_5_sleep.py", "args": spec12_arg, "desc": "NLLS logistic structural estimation"},
-            {"file": "estimation_6_sleep.py", "args": ["--model-type", "both", "--alt", "both"] + (["--spec12-only"] if args.only_spec_12 else []), "desc": "Robustness bounds with cooperative/state controls"},
+            {"file": "estimation_6_sleep.py", "args": ["--model-type", "both", "--alt", "2"] + (["--spec12-only"] if args.only_spec_12 else []), "desc": "Robustness bounds with cooperative/state controls"},
         ])
 
     if not getattr(args, 'sleep_only', False):
@@ -137,44 +137,69 @@ This script sequentially runs the following steps:
             {"file": "export_analyze_spec12.py", "args": ["--skip-est2"], "desc": "Analyze Specification 12 Results"}
         ])
 
+    import concurrent.futures
+    import os
+
+    import concurrent.futures
+    import os
+
     cwd = Path(__file__).resolve().parent
     start_time_all = time.time()
 
-    for idx, step in enumerate(scripts_to_run, 1):
-        script = step["file"]
-        desc = step["desc"]
-        args = step.get("args", [])
-        
-        print("\n" + "-"*70)
-        print(f"[{idx}/{len(scripts_to_run)}] Executing: {script}")
-        print(f"Task: {desc}")
-        print("-" * 70)
+    sleep_scripts = []
+    post_scripts = []
+    
+    # Split into sleep estimators and post-processors
+    for s in scripts_to_run:
+        if s['file'].startswith('estimation_') and s['file'].endswith('_sleep.py'):
+            sleep_scripts.append(s)
+        else:
+            post_scripts.append(s)
 
+    def run_script(step, total_count):
+        script = step['file']
+        desc = step['desc']
+        args = step.get('args', [])
+        
+        print(f"\n[STARTING] {script}: {desc}")
         cmd = [sys.executable, script] + args
         start_time_script = time.time()
         
-        result = subprocess.run(cmd, cwd=cwd)
-
+        # Limit numpy/scipy core thrashing so multiple heavy processes don't freeze the OS
+        env = os.environ.copy()
+        for v in ["OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS", "VECLIB_MAXIMUM_THREADS", "NUMEXPR_NUM_THREADS"]:
+            env[v] = "2" # Keep heavily numeric compute per process down to ~2 threads
+            
+        result = subprocess.run(cmd, cwd=cwd, env=env)
+        
         elapsed_script = time.time() - start_time_script
-        print(f"-> Finished {script} in {elapsed_script:.2f} seconds.")
-
+        print(f"\n-> Finished {script} in {elapsed_script:.2f} seconds.")
+        
         if result.returncode != 0:
             print(f"\n[ERROR] Pipeline aborted. Script '{script}' failed with exit code: {result.returncode}")
             sys.exit(result.returncode)
+            
+        send_notification_email(script, elapsed_script, "Next in queue")
+        return script, elapsed_script
 
-        # Notify via Email
-        if idx < len(scripts_to_run):
-            next_s = scripts_to_run[idx]["file"]
-        else:
-            next_s = None
-        send_notification_email(script, elapsed_script, next_s)
+    print("\n=====================================================================")
+    # Run sleep estimators in parallel (max 3 at a time to save RAM footprint on a 32GB machine)
+    if sleep_scripts:
+        print("====== Running Sleep Estimations in Parallel (max 3 concurrent) ======")
+        with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
+            futures = [executor.submit(run_script, s, len(sleep_scripts)) for s in sleep_scripts]
+            for future in concurrent.futures.as_completed(futures):
+                future.result() # Will raise if sys.exit was called
+
+    # Run post-processors sequentially because they aggregate the results from the estimations
+    if post_scripts:
+        print("\n====== Running Post-Processing Sequentially ======")
+        for idx, step in enumerate(post_scripts, 1):
+            run_script(step, len(post_scripts))
 
     elapsed_all = time.time() - start_time_all
     print("\n=====================================================================")
     print(f" SLEEPINESS PIPELINE COMPLETED SUCCESSFULLY IN {elapsed_all:.2f} SECONDS")
-    args = parser.parse_args()
-
     print("=====================================================================")
-
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()

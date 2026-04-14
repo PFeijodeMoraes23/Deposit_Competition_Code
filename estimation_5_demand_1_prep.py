@@ -335,8 +335,8 @@ def main():
         task = (actual_key, results_dict[actual_key], df_base)
         df_spec, summary, spec_id = process_specification(task)
         if df_spec is not None:
-             out_pkl = demand_output_dir / f"demand_5_final_spec_{target_id}.pkl"
-             df_spec.to_pickle(out_pkl)
+             out_pkl = demand_output_dir / f"demand_5_final_spec_{target_id}.parquet"
+             df_spec.to_parquet(out_pkl, engine='pyarrow')
              print(f" > Saved Spec {target_id} -> {out_pkl.name} ({len(df_spec)} rows)")
              spec_summaries[str(target_id)] = summary
              n_saved += 1

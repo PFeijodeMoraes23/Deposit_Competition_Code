@@ -360,10 +360,12 @@ def run_wave(
 
     with _print_lock:
         ids_str = ", ".join(sid for sid, *_ in active)
-        print(f"\n  Wave (parallel x{len(active)}): {ids_str}", flush=True)
+        # Cap workers to 6 to safely parallelize heavily across 32GB RAM machines, keeping 4-6GB headroom for TeXStudio
+        workers = min(len(active), 6)
+        print(f"\n  Wave (concurrency: {workers}): {ids_str}", flush=True)
 
     errors: list[str] = []
-    with concurrent.futures.ThreadPoolExecutor(max_workers=len(active)) as pool:
+    with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
         future_map = {
             pool.submit(run_step, sid, script, desc): (sid, script)
             for sid, script, desc in active
