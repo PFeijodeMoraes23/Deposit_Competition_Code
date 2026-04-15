@@ -207,10 +207,10 @@ def _hourly_email_worker(job_id: str, stop_event: threading.Event) -> None:
 # ==============================================================================
 # 1. Data Loading
 # ==============================================================================
-def load_merged_spec_data(spec_id: int, is_hpc: bool = False) -> pd.DataFrame:
-    '''Load the per-spec pre-merged dataframe created by estimation_1_demand_2_secondprep.py'''
+def load_merged_spec_data(spec_id: int, is_hpc: bool = False, alt: str = "alt2logistic") -> pd.DataFrame:
+    '''Load the per-spec pre-merged dataframe created by estimation_4_demand_1_prep.py'''
     input_dir, _ = get_paths(is_hpc)
-    pkl_path = input_dir / f"demand_5_final_spec_{spec_id}.parquet"
+    pkl_path = input_dir / f"demand_6_{alt}_final_spec_{spec_id}.parquet"
     if not pkl_path.exists():
         raise FileNotFoundError(f"Missing {pkl_path}")
     return pd.read_parquet(pkl_path, engine='pyarrow')
@@ -760,7 +760,7 @@ def gmm_objective(theta2_vec: np.ndarray, df: pd.DataFrame,
         delta_init=delta_init, precomp=precomp)
     if not converged:
         print(f"  [!] Inner loop did not converge in {n_iter} iterations", flush=True)
-    # Always cache latest delta for warm-starting (CG2020 Section 3.2)
+    # Always cache latest delta for warm-starting (CG2020 ÂSection 3.2)
     if delta_cache is not None:
         delta_cache['last_delta'] = delta.copy()
 
@@ -785,7 +785,7 @@ def run_blp_for_spec(spec_id: int, args) -> dict:
 
     # Load pre-merged spec dataframe
     try:
-        df = load_merged_spec_data(spec_id, getattr(args, 'hpc', False))
+        df = load_merged_spec_data(spec_id, getattr(args, 'hpc', False), getattr(args, 'alt', 'alt2logistic'))
         print(f"  Merged panel loaded: {len(df)} observations")
     except FileNotFoundError:
         print(f"  [!] No merged data for spec {spec_id}. Skipping.")
@@ -1072,6 +1072,8 @@ def main():
         description="BLP Demand Estimation Loop (Appendix-BLP)")
     parser.add_argument('--spec', type=str, default='12',
                         help='Specification ID (1-12) or "all"')
+    parser.add_argument('--alt', type=str, default='alt2logistic', choices=['alt1', 'alt2', 'alt2linear', 'alt2logistic', 'all'],
+                        help='Alternative variant to run (alt1, alt2, alt2linear, alt2logistic, or all)')
     parser.add_argument('--stage', type=str, default='logit',
                         choices=['logit', 'sigma', 'full', 'extended', 'sequence'])
     parser.add_argument('--R', type=int, default=100,
@@ -1124,7 +1126,7 @@ def main():
     if not input_dir.exists():
         print(f"  [FATAL] Input directory DOES NOT EXIST: {input_dir}", flush=True)
     else:
-        pkl_files = list(input_dir.glob('demand_5_final_spec_*.parquet'))
+        pkl_files = list(input_dir.glob('demand_6_*_final_spec_*.parquet'))
         print(f"  [DIAGNOSTIC] Found {len(pkl_files)} matched .pkl files in input directory.", flush=True)
 
     BLP_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -1137,50 +1139,55 @@ def main():
     
     stages_to_run = ['logit', 'sigma', 'full', 'extended'] if args.stage == 'sequence' else [args.stage]
     
-    for current_stage in stages_to_run:
-        args.stage = current_stage
+    alts_to_process = ['alt1', 'alt2linear', 'alt2logistic'] if args.alt == 'all' else [args.alt]
+    for current_alt in alts_to_process:
+        args.alt = current_alt
         
-        # In sequence mode, use R=100 for sigma to save time (sufficient per CG2020)
-        if hasattr(args, '_orig_R') is False:
-            args._orig_R = args.R
-        
-        if args.stage == 'sequence' and current_stage == 'sigma':
-            pass # handled above, sequence doesn't equal sigma
+        for current_stage in stages_to_run:
+            args.stage = current_stage
             
-        if current_stage == 'sigma' and 'sequence' in sys.argv: # user passed --stage sequence
-            args.R = 100
-            print(f"  [SEQUENCE] Overriding R=100 for sigma stage per CG2020.")
-        else:
-            args.R = args._orig_R
+            # In sequence mode, use R=100 for sigma to save time (sufficient per CG2020)
+            if hasattr(args, '_orig_R') is False:
+                args._orig_R = args.R
             
-        all_results = {}
-        tasks = [(sp, copy.copy(args)) for sp in spec_ids]
-        
-        print(f"  Starting parallel execution of {len(spec_ids)} specs for stage '{current_stage}' with {max_w} workers...")
-        
-        with concurrent.futures.ProcessPoolExecutor(max_workers=max_w) as executor:
-            for sp, res, err in executor.map(worker_blp, tasks):
-                if err is not None:
-                    print(f"  [!] Spec {sp} failed:\n{err}")
-                elif res is not None:
-                    out_pkl = BLP_OUTPUT_DIR / f"blp_results_spec_5_{sp}_{args.stage}.pkl"
-                    with open(out_pkl, 'wb') as f:
-                        pickle.dump(res, f)
-                    print(f"  Saved: {out_pkl.name}")
-                    all_results[sp] = {
-                        'Q_value': float(res.get('Q_value', 0.0)),
-                        'converged': bool(res.get('converged', True)),
-                        'theta1_alpha': res.get('theta1', np.zeros(K_TYPES))[:K_TYPES].tolist(),
-                        'theta2': res['theta2'].tolist() if 'theta2' in res and len(res['theta2']) > 0 else [],
-                        'stage': args.stage
-                    }
+            if args.stage == 'sequence' and current_stage == 'sigma':
+                pass # handled above, sequence doesn't equal sigma
+                
+            if current_stage == 'sigma' and 'sequence' in sys.argv: # user passed --stage sequence
+                args.R = 100
+                print(f"  [SEQUENCE] Overriding R=100 for sigma stage per CG2020.")
+            else:
+                args.R = args._orig_R
+                
+            all_results = {}
+            tasks = [(sp, copy.copy(args)) for sp in spec_ids]
+            
+            print(f"  Starting parallel execution of {len(spec_ids)} specs for stage '{current_stage}' with alt '{current_alt}' using {max_w} workers...")
+            
+            with concurrent.futures.ProcessPoolExecutor(max_workers=max_w) as executor:
+                for sp, res, err in executor.map(worker_blp, tasks):
+                    if err is not None:
+                        print(f"  [!] Spec {sp} failed:\\n{err}")
+                    elif res is not None:
+                        out_pkl = BLP_OUTPUT_DIR / f"blp_results_spec_6_{current_alt}_{sp}_{args.stage}.pkl"
+                        with open(out_pkl, 'wb') as f:
+                            pickle.dump(res, f)
+                        print(f"  Saved: {out_pkl.name}")
+                        all_results[sp] = {
+                            'Q_value': float(res.get('Q_value', 0.0)),
+                            'converged': bool(res.get('converged', True)),
+                            'theta1_alpha': res.get('theta1', np.zeros(K_TYPES))[:K_TYPES].tolist(),
+                            'theta2': res['theta2'].tolist() if 'theta2' in res and len(res['theta2']) > 0 else [],
+                            'stage': args.stage,
+                            'alt': current_alt
+                        }
 
-        # Summary JSON
-        summary_path = BLP_OUTPUT_DIR / f"blp_summary_{args.stage}.json"
-        with open(summary_path, 'w') as f:
-            json.dump(all_results, f, indent=2)
-        _log_status(f"Summary saved to: {summary_path}")
-        _log_status(f"[DONE] BLP Estimation ({current_stage}) complete for specs {spec_ids}.")
+            # Summary JSON
+            summary_path = BLP_OUTPUT_DIR / f"blp_summary_{current_alt}_6_{args.stage}.json"
+            with open(summary_path, 'w') as f:
+                json.dump(all_results, f, indent=2)
+            _log_status(f"Summary saved to: {summary_path}")
+            _log_status(f"[DONE] BLP Estimation ({current_stage}) complete for alt {current_alt} specs {spec_ids}.")
 
     # --- Finalise ---
     _stop_email.set()

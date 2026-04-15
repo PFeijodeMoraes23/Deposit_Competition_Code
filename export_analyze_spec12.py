@@ -17,8 +17,8 @@ class NonLinearResults:
         self.G_star = df_resid
 
 # Register fake module for unpickling
-sys.modules['estimation_5_sleep'] = type('FakeModule', (), {'NonLinearResults': NonLinearResults})
-sys.modules['estimation_6_sleep'] = type('FakeModule', (), {'NonLinearResults': NonLinearResults})
+sys.modules['estimation_2_sleep'] = type('FakeModule', (), {'NonLinearResults': NonLinearResults})
+sys.modules['estimation_4_sleep'] = type('FakeModule', (), {'NonLinearResults': NonLinearResults})
 
 # Try to respect the project's venv guard
 try:
@@ -243,12 +243,11 @@ def main():
 
     mapping = {
         '1 B firms': SLEEP_DIR / "rout_1",
-        '2 D firms Break': SLEEP_DIR / "rout_2",
-        '3 B firms Robust': SLEEP_DIR / "rout_3" / "LOCAL", 
-        '4 Pooled': SLEEP_DIR / "rout_4" / "POOLED",
-        '5 Pooled Logistic': SLEEP_DIR / "rout_5" / "POOLED",
-        '6 Dummies Linear': SLEEP_DIR / "rout_6" / "POOLED" / "ALT_2",
-        '6 Dummies Logistic': SLEEP_DIR / "rout_6" / "POOLED" / "ALT_2",
+        '2 B firms Robust': SLEEP_DIR / "rout_2" / "LOCAL", 
+        '3 Pooled': SLEEP_DIR / "rout_3" / "POOLED",
+        '4 Pooled Logistic': SLEEP_DIR / "rout_4" / "POOLED",
+        '5 Dummies Linear': SLEEP_DIR / "rout_5" / "POOLED" / "ALT_2",
+        '5 Dummies Logistic': SLEEP_DIR / "rout_5" / "POOLED" / "ALT_2",
     }
 
     if getattr(args, 'skip_est2', False):
@@ -448,3 +447,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+
+

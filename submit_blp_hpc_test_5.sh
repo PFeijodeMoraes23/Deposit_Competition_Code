@@ -1,7 +1,7 @@
 #!/bin/bash
-#SBATCH --job-name=blp_test_5
-#SBATCH --output=blp_test_5_output_%j.log
-#SBATCH --error=blp_test_5_error_%j.log
+#SBATCH --job-name=blp_test_6
+#SBATCH --output=blp_test_6_output_%j.log
+#SBATCH --error=blp_test_6_error_%j.log
 #SBATCH --time=04:00:00              # 4 hours is plenty for R=100
 #SBATCH --partition=day              # 'day' queues faster for small tests
 #SBATCH --nodes=1
@@ -15,8 +15,9 @@ module load miniconda
 source activate dep_comp_blp
 cd /home/pf382/dep_comp/scripts
 
-python -u estimation_5_demand_2_loop.py \
+python -u estimation_4_demand_2_loop.py \
     --spec 12 \
+    --alt alt2logistic \
     --stage sigma \
     --R 100 \
     --workers 4 \

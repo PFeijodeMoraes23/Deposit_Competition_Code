@@ -1,20 +1,20 @@
 """
-estimation_4_sleep.py
+estimation_2_sleep.py
 ==============================
-Robustness check: Estimates the depositor sleepiness function using pooled B and D-type firms.
-D-firms use national population-weighted average states. A D-type dummy is included.
-A PIX exists dummy (post-2020Q3) is included.
+Robustness check: Estimates the depositor sleepiness function using pooled B and D-type firms,
+but implements a logistic link function to bound predicted phi values to [0,1].
 
-This script sequentially runs:
-  1. Pooled (B-type & D-type) CFA estimation (Base, Base_Selic, Macro, Tech)
-  2. Implied Phi_mt generation
-  3. Plots containing these robustness bounds
+This employs a Non-Linear Least Squares (NLLS) optimization for the second stage,
+using a logistic transform: phi = exp(X*Beta) / (1 + exp(X*Beta)).
 
-Outputs are directed to ESTIMATION_OUTPUT/SLEEPINESS/SLEEPINESS_4
+Like estimation 4, D-firms use national population-weighted average states, and
+a D-type dummy and PIX existence dummy are included.
+
+Outputs are directed to ESTIMATION_OUTPUT/SLEEPINESS/SLEEPINESS_5
 
 CLI Options:
 ------------
-usage: estimation_4_sleep.py [-h] [--spec12]
+usage: estimation_2_sleep.py [-h] [--spec12]
 
 Estimation 3: Sleepiness Robustness
 
@@ -23,6 +23,13 @@ options:
   --spec12    Only run spec 12 (Tech x IV_HausmanFull)
 """
 import argparse
+import os
+os.environ["OMP_NUM_THREADS"] = "1"
+os.environ["OPENBLAS_NUM_THREADS"] = "1"
+os.environ["MKL_NUM_THREADS"] = "1"
+os.environ["VECLIB_MAXIMUM_THREADS"] = "1"
+os.environ["NUMEXPR_NUM_THREADS"] = "1"
+
 from pathlib import Path
 import pickle
 import warnings
@@ -40,6 +47,7 @@ import pandas as pd
 import numpy as np
 import statsmodels.api as sm
 from scipy import stats
+from scipy.optimize import least_squares
 import matplotlib.pyplot as plt
 
 warnings.filterwarnings("ignore", message="covariance of constraints does not have full rank")
@@ -50,7 +58,7 @@ warnings.filterwarnings("ignore", message="covariance of constraints does not ha
 _ROOT = Path(__file__).resolve().parents[2]
 DATA_DIR = _ROOT / "BCB" / "Egan_et_al_2025_Rep" / "processed"
 PANEL_CSV = DATA_DIR / "market_panel.csv"
-OUTPUT_DIR = DATA_DIR / "ESTIMATION_OUTPUT" / "rout_4"
+OUTPUT_DIR = DATA_DIR / "ESTIMATION_OUTPUT" / "rout_2"
 
 POOLED_DIR = OUTPUT_DIR / "POOLED"
 PLOTS_DIR = OUTPUT_DIR / "PLOTS"
@@ -191,24 +199,147 @@ def run_pooled_first_stage(df, spec_instruments, exogenous_controls):
     df['v_hat_3'] = df['v_hat'] ** 3
     return df, res
 
-def run_pooled_second_stage(df, state_vars, has_cf=False):
-    X_cols = []
-    for sv in state_vars:
-        col_name = f"interaction_{sv}" if sv != 'constant' else "nr_lagged_dep"
-        df[col_name] = df[sv] * df['nr_lagged_dep'] if sv != 'constant' else df['nr_lagged_dep']
-        X_cols.append(col_name)
-    if has_cf: X_cols.extend(['v_hat', 'v_hat_2', 'v_hat_3'])
-        
-    df_ss = df.dropna(subset=X_cols + ['deposit_balance']).copy()
-    if len(df_ss) == 0: return None
-        
-    y_dm = demean_variables(df_ss, ['deposit_balance'], 'entity_id')['deposit_balance']
-    X_dm = demean_variables(df_ss, X_cols, 'entity_id')
+
+class NonLinearResults:
+    def __init__(self, params, bse, tvalues, pvalues, df_resid, params_native=None):
+        self.params = params
+        self.bse = bse
+        self.tvalues = tvalues
+        self.pvalues = pvalues
+        self.df_resid = df_resid
+        self.params_native = params_native if params_native is not None else params
+        self.G_star = df_resid
+
+def nlls_objective(params, y_dm, X, Z, CF, entity_idx):
+    import numpy as np
+    theta = params[:X.shape[1]]
+    gamma = params[X.shape[1]:] if CF.shape[1] > 0 else []
+    X_disp = np.clip(np.dot(X, theta), -700, 700)
+    phi = 1.0 / (1.0 + np.exp(-X_disp))
+    Y_hat = phi * Z
+    if CF.shape[1] > 0: Y_hat += np.dot(CF, gamma)
+    sums = np.bincount(entity_idx, weights=Y_hat)
+    counts = np.bincount(entity_idx)
+    Y_hat_dm = Y_hat - (sums / counts)[entity_idx]
+    return y_dm - Y_hat_dm
+
+def get_nlls_ame_and_se(theta_full_hat, cov_full_hat, X, CF_shape):
+    import numpy as np
     
-    mod = sm.OLS(y_dm, X_dm)
-    cluster_series = df_ss['CodConglomeradoPrudencial'].astype(str)
-    res = mod.fit(cov_type='cluster', cov_kwds={'groups': cluster_series}, use_t=True)
-    return apply_imbalanced_cluster_correction(res, cluster_series)
+    K = X.shape[1]
+    G = CF_shape
+    total_len = K + G
+    
+    AME = np.zeros(total_len)
+    
+    theta_X = theta_full_hat[:K]
+    X_disp = np.clip(np.dot(X, theta_X), -700, 700)
+    P_base = 1.0 / (1.0 + np.exp(-X_disp))
+    
+    for k in range(K):
+        col_vals = X[:, k]
+        valid_vals = col_vals[~np.isnan(col_vals)]
+        if len(valid_vals) == 0: continue
+            
+        unique_vals = np.unique(valid_vals)
+        is_dummy = (len(unique_vals) == 2) and (0.0 in unique_vals) and (1.0 in unique_vals)
+        
+        if is_dummy:
+            X1 = X.copy(); X1[:, k] = 1.0
+            P1 = 1.0 / (1.0 + np.exp(-np.clip(np.dot(X1, theta_X), -700, 700)))
+            
+            X0 = X.copy(); X0[:, k] = 0.0
+            P0 = 1.0 / (1.0 + np.exp(-np.clip(np.dot(X0, theta_X), -700, 700)))
+            
+            AME[k] = np.mean(P1 - P0)
+        else:
+            dP_dk = P_base * (1.0 - P_base) * theta_X[k]
+            AME[k] = np.mean(dP_dk)
+            
+    if G > 0: AME[K:] = theta_full_hat[K:]
+        
+    J = np.zeros((total_len, total_len))
+    h = 1e-5
+    
+    for i in range(total_len):
+        theta_step = theta_full_hat.copy()
+        theta_step[i] += h
+        
+        ame_step = np.zeros(total_len)
+        t_X_step = theta_step[:K]
+        X_disp_s = np.clip(np.dot(X, t_X_step), -700, 700)
+        P_base_s = 1.0 / (1.0 + np.exp(-X_disp_s))
+        
+        for k in range(K):
+            col_vals = X[:, k]
+            valid_vals = col_vals[~np.isnan(col_vals)]
+            if len(valid_vals) == 0: continue
+            
+            unique_vals = np.unique(valid_vals)
+            is_dummy = (len(unique_vals) == 2) and (0.0 in unique_vals) and (1.0 in unique_vals)
+            
+            if is_dummy:
+                X1 = X.copy(); X1[:, k] = 1.0
+                P1 = 1.0 / (1.0 + np.exp(-np.clip(np.dot(X1, t_X_step), -700, 700)))
+                X0 = X.copy(); X0[:, k] = 0.0
+                P0 = 1.0 / (1.0 + np.exp(-np.clip(np.dot(X0, t_X_step), -700, 700)))
+                ame_step[k] = np.mean(P1 - P0)
+            else:
+                dP_dk_s = P_base_s * (1.0 - P_base_s) * t_X_step[k]
+                ame_step[k] = np.mean(dP_dk_s)
+                
+        if G > 0: ame_step[K:] = theta_step[K:]
+        J[:, i] = (ame_step - AME) / h
+        
+    cov_AME = J @ cov_full_hat @ J.T
+    bse_AME = np.sqrt(np.abs(np.diag(cov_AME)))
+    
+    return AME, bse_AME
+
+
+def run_pooled_second_stage(df, state_vars, has_cf=False):
+    import numpy as np
+    import pandas as pd
+    from scipy.optimize import least_squares
+    from scipy import stats
+    
+    cols = state_vars + ['deposit_balance', 'nr_lagged_dep', 'entity_id']
+    CF_cols = ['v_hat', 'v_hat_2', 'v_hat_3'] if has_cf else []
+    df_ss = df.dropna(subset=cols + CF_cols).copy()
+    if len(df_ss) == 0: return None
+    
+    entities = df_ss['entity_id'].unique()
+    entity_map = {e: i for i, e in enumerate(entities)}
+    entity_idx = df_ss['entity_id'].map(entity_map).values
+    
+    y_dm = demean_variables(df_ss, ['deposit_balance'], 'entity_id')['deposit_balance'].values
+    X = df_ss[state_vars].values
+    Z = df_ss['nr_lagged_dep'].values
+    CF = df_ss[CF_cols].values if has_cf else np.empty((len(df_ss), 0))
+    
+    init_params = np.zeros(X.shape[1] + CF.shape[1])
+    # Reduced max_nfev to 150. Switched to Trust Region Reflective (trf) with robust cauchy loss to cut outliers.
+    res_lsq = least_squares(nlls_objective, init_params, args=(y_dm, X, Z, CF, entity_idx), method='trf', loss='cauchy', max_nfev=150)
+    
+    J = res_lsq.jac
+    try: cov = np.linalg.pinv(J.T.dot(J)) * (np.sum(res_lsq.fun**2) / (len(y_dm) - len(init_params)))
+    except: cov = np.eye(len(init_params))
+    
+    # Calculate Average Marginal Effects and adjust SEs
+    ps_ame, bse = get_nlls_ame_and_se(res_lsq.x, cov, X, CF.shape[1] if has_cf else 0)
+    
+    idx = [f'interaction_{sv}' if sv != 'constant' else 'nr_lagged_dep' for sv in state_vars] + CF_cols
+    ps = pd.Series(index=idx, data=ps_ame)
+    bs = pd.Series(index=idx, data=bse)
+    tvals = ps / bs
+    
+    cluster_series = df_ss['CodConglomeradoPrudencial']
+    sizes = cluster_series.value_counts()
+    G_star = max(1.0, len(sizes) / (1 + (np.std(sizes)/np.mean(sizes))**2 if np.mean(sizes)>0 else 1))
+    pvals = pd.Series(stats.t.sf(np.abs(tvals), df=G_star) * 2, index=idx)
+    
+    ps_native = pd.Series(index=idx, data=res_lsq.x)
+    return NonLinearResults(ps, bs, tvals, pvals, G_star, params_native=ps_native)
 
 def exec_pooled_spec(args):
     df, iv_name, iv_cols, s_name, s_cols = args
@@ -227,7 +358,9 @@ def exec_pooled_spec(args):
     return res_ss, spec_name, res_fs
 
 def calculate_pooled_phis(df, res_dict, state_blocks):
+    import numpy as np
     phi_results = {}
+    
     # Use population as market-size weight for phi aggregation.
     # Under the constant-fraction assumption (M_mt = c * pop_mt), c cancels
     # in the ratio Σ(phi * M) / Σ(M), making pop_total the correct weight.
@@ -235,31 +368,42 @@ def calculate_pooled_phis(df, res_dict, state_blocks):
         df['market_size'] = df['pop_total'].fillna(0)
     else:
         df['market_size'] = 1.0
-
+        
     for model_key, res_item in res_dict.items():
         if res_item['second_stage'] is None: continue
+        ss_res = res_item['second_stage']
         
+        # Determine spec name (e.g. from "OLS x Base" -> "Base")
         try:
             m_type, spec_name = model_key.split(' x ')
         except ValueError: continue
             
         s_cols = state_blocks.get(spec_name, [])
         if not s_cols: continue
-            
-        ss_res = res_item['second_stage']
-        phi_mt = np.zeros(len(df))
+        
+        X_theta = np.zeros(len(df))
         for sv in s_cols:
             col_name = f"interaction_{sv}" if sv != 'constant' else "nr_lagged_dep"
-            if col_name in ss_res.params:
-                c = ss_res.params[col_name]
-                phi_mt += c if sv == 'constant' else c * df[sv].fillna(0)
-        
+            if hasattr(ss_res, 'params_native'):
+                param_dict = ss_res.params_native
+            else:
+                param_dict = ss_res.params
+            if col_name in param_dict:
+                c = param_dict[col_name]
+                if sv == 'constant':
+                    X_theta += c
+                else:
+                    X_theta += c * df[sv].fillna(0)
+                    
+        phi_mt = 1.0 / (1.0 + np.exp(-np.clip(X_theta, -700, 700)))
         safe_key = model_key.replace(' ', '_').replace('.', '')
         df[f'phi_mt_{safe_key}'] = phi_mt
+        
         market_agg = df.groupby(['year_quarter', 'CODMUN_IBGE'], observed=True).agg(phi_mt=(f'phi_mt_{safe_key}', 'mean'), M_mt=('market_size', 'sum')).reset_index()
         weighted_phi = market_agg['phi_mt'] * market_agg['M_mt']
         national_agg = (weighted_phi.groupby(market_agg['year_quarter']).sum() / market_agg['M_mt'].groupby(market_agg['year_quarter']).sum().replace(0, np.nan)).fillna(0).reset_index(name=f'phi_t_{safe_key}')
         phi_results[safe_key] = national_agg
+        
     return df, phi_results
 
 def run_pooled_phase(spec12_only=False):
@@ -273,12 +417,16 @@ def run_pooled_phase(spec12_only=False):
         tasks = [(df, iv_name, iv_specs[iv_name], s_name, state_blocks[s_name])
                  for s_name in state_blocks.keys() for iv_name in ['OLS', 'IV_CostShifters', 'IV_Wholesale', 'IV_HausmanFull']]
     
+    from joblib import Parallel, delayed
     results_dict = {}
-    with concurrent.futures.ProcessPoolExecutor() as executor:
-        for res_ss, spec_name, res_fs in executor.map(exec_pooled_spec, tasks):
-            if res_ss is not None:
-                results_dict[spec_name] = {'second_stage': res_ss, 'first_stage': res_fs}
-                print(f"Local Computed: {spec_name}")
+    
+    # Process 4 models at a time to stay deep within 32GB bounds while crushing latency
+    results = Parallel(n_jobs=4)(delayed(exec_pooled_spec)(t) for t in tasks)
+    
+    for res_ss, spec_name, res_fs in results:
+        if res_ss is not None:
+            results_dict[spec_name] = {'second_stage': res_ss, 'first_stage': res_fs}
+            print(f"Local Computed: {spec_name}")
 
     with open(POOLED_DIR / "estimation_results.pkl", 'wb') as f: pickle.dump(results_dict, f)
     
@@ -374,3 +522,7 @@ if __name__ == "__main__":
     pd.options.mode.chained_assignment = None
     run_pooled_phase(spec12_only=args.spec12)
     run_plotting_phase(spec12_only=args.spec12)
+
+
+
+

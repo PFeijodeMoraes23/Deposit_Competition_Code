@@ -73,9 +73,9 @@ IV_COST = ['personnel_cost_ratio_lag', 'admin_cost_ratio_lag', 'tax_cost_ratio_l
 IV_CAPITAL = ['indice_basileia_lag']
 EXTRA_KEEP_COLS = X_COLS + D_COLS + IV_BLP_LOO + IV_COST + IV_CAPITAL + ['segment', 'spread_qoq']
 
-def _resolve_runtime_paths() -> tuple[Path, Path, Path]:
+def _resolve_runtime_paths(alt: str = "ALT_1") -> tuple[Path, Path, Path]:
     panel_csv = PANEL_CSV
-    sleep_output_dir = DATA_DIR / "ESTIMATION_OUTPUT" / "rout_5" / "POOLED"
+    sleep_output_dir = DATA_DIR / "ESTIMATION_OUTPUT" / "rout_4" / "POOLED" / alt
     demand_output_dir = DATA_DIR / "ESTIMATION_OUTPUT" / "DEMAND_PREP"
     return panel_csv, sleep_output_dir, demand_output_dir
 
@@ -150,7 +150,18 @@ def build_base_panel(panel_csv: Path) -> pd.DataFrame:
         
     if 'CODMUN_IBGE' in df.columns:
         df['dummy_D_type'] = (df['CODMUN_IBGE'].astype(str) == '0').astype(float)
+
+    # Fill defaults for ownership types if missing or NaN
+    if 'is_coop' in df.columns:
+        df['is_coop'] = df['is_coop'].fillna(0.0)
+    else:
+        df['is_coop'] = 0.0
         
+    if 'is_state_owned' in df.columns:
+        df['is_state_owned'] = df['is_state_owned'].fillna(0.0)
+    else:
+        df['is_state_owned'] = 0.0
+
     if 'dummy_D_type' in df.columns:
         if 'risk_free_qoq_lag' in df.columns:
             df['dummy_D_type_x_risk_free_qoq_lag'] = df['dummy_D_type'] * df['risk_free_qoq_lag']
@@ -218,8 +229,10 @@ def process_specification(args):
         
     df_spec = df_spec.dropna(subset=['phi_mt', 'spread_qoq'])
     
-    # Apply estimation 5 NLLS structural logit operator
-    df_spec['phi_mt'] = 1.0 / (1.0 + np.exp(-df_spec['phi_mt'].astype(float)))
+    # Properly apply inverse-logit/sigmoid transformation if the spec is logistic
+    if 'logistic' in spec_name.lower():
+        df_spec['phi_mt'] = 1.0 / (1.0 + np.exp(-df_spec['phi_mt'].astype(float)))
+        
     df_spec['phi_mt'] = df_spec['phi_mt'].clip(lower=0.0, upper=1.0)
     
     df_mca_level = df_spec[['mca_code', 'time_id', 'phi_mt', 'pop_total']].drop_duplicates()
@@ -296,18 +309,9 @@ def process_specification(args):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--spec', type=str, default='12', help='Specification ID (1-12) or "all"')
+    parser.add_argument('--spec', type=str, default='all', help='Specification ID (1-12) or "all"')
     args = parser.parse_args()
 
-    panel_csv, sleep_output_dir, demand_output_dir = _resolve_runtime_paths()
-    results_pickle = sleep_output_dir / "estimation_results.pkl"
-    if not results_pickle.exists():
-        print(f"ERROR: Pickle file missing at {results_pickle}. Run estimation_5_sleep.py first.")
-        sys.exit(1)
-        
-    print(f"Loading estimation results from {results_pickle}...")
-    with open(results_pickle, 'rb') as f: results_dict = pickle.load(f)
-        
     if args.spec.lower() == 'all':
         spec_ids_to_run = list(range(1, 13))
     elif '-' in args.spec:
@@ -316,49 +320,82 @@ def main():
     else:
         spec_ids_to_run = [int(args.spec)]
 
+    from pathlib import Path
+    import json
+    import pickle
+
+    alts_to_process = ['ALT_1', 'ALT_2']
+    
+    # We only load the base panel once to save memory and time
+    panel_csv, _, demand_output_dir = _resolve_runtime_paths('ALT_1')
+    
+    print(f"Loading Base Panel {panel_csv}...")
     df_base = build_base_panel(panel_csv)
     print(f"Base Panel rows (with valid lagged structure): {len(df_base)}")
+
     demand_output_dir.mkdir(parents=True, exist_ok=True)
     
+    total_saved = 0
     spec_summaries = {}
-    print("\n--- Processing Specifications sequentially ---")
-    
+
     SPEC_MAP = {
         1: 'OLS x Base', 2: 'IV_CostShifters x Base', 3: 'IV_Wholesale x Base', 4: 'IV_HausmanFull x Base',
         5: 'OLS x Macro', 6: 'IV_CostShifters x Macro', 7: 'IV_Wholesale x Macro', 8: 'IV_HausmanFull x Macro',
         9: 'OLS x Tech', 10: 'IV_CostShifters x Tech', 11: 'IV_Wholesale x Tech', 12: 'IV_HausmanFull x Tech'
     }
 
-    n_saved = 0
-    for target_id in spec_ids_to_run:
-        target_name = SPEC_MAP.get(target_id)
-        if not target_name: continue
+    for alt in alts_to_process:
+        _, sleep_output_dir, _ = _resolve_runtime_paths(alt)
+        results_pickle = sleep_output_dir / "estimation_results.pkl"
         
-        # We need to search the exact key in results_dict
-        actual_key = next((k for k in results_dict.keys() if target_name in k), None)
-        if not actual_key: 
-            print(f"   [!] Results for Spec {target_id} not found in pickle.")
+        if not results_pickle.exists():
+            print(f"\n[!] Skipping {alt} (No pickle found at {results_pickle})")
             continue
             
-        task = (actual_key, results_dict[actual_key], df_base)
-        df_spec, summary, spec_id = process_specification(task)
-        if df_spec is not None:
-             out_pkl = demand_output_dir / f"demand_5_final_spec_{target_id}.parquet"
-             df_spec.to_parquet(out_pkl, engine='pyarrow')
-             print(f" > Saved Spec {target_id} -> {out_pkl.name} ({len(df_spec)} rows)")
-             spec_summaries[str(target_id)] = summary
-             n_saved += 1
-        else:
-             print(f"   [!] Failed or skipped Spec: {target_id}")
-
-    if n_saved == 0:
-        print("No valid specifications were processed.")
-        sys.exit(1)
+        print(f"\n=== Processing {alt} from {results_pickle} ===")
+        with open(results_pickle, 'rb') as f: results_dict = pickle.load(f)
         
-    out_json = demand_output_dir / "demand_prep_summary.json"
-    with open(out_json, "w") as f: json.dump(spec_summaries, f, indent=4)
-    print(f"\nSummary saved to: {out_json}")
-    print(f"[SUCCESS] {n_saved} per-spec Pickles written to {demand_output_dir}.")
+        for target_id in spec_ids_to_run:
+            target_name = SPEC_MAP.get(target_id)
+            if not target_name: continue
+            
+            # Find both linear and logistic versions specifically
+            for model_type in ['linear', 'logistic']:
+                actual_key = next((k for k in results_dict.keys() if (target_name in k) and (model_type in k)), None)
+                if not actual_key:
+                    continue # Try the next type
+                
+                task = (actual_key, results_dict[actual_key], df_base)
+                df_spec, summary, spec_id = process_specification(task)
+                
+                if df_spec is not None:
+                    alt_label = f"{alt.lower().replace('_', '')}{model_type}"
+                    out_pkl = demand_output_dir / f"demand_6_{alt_label}_final_spec_{target_id}.parquet"
+                    df_spec.to_parquet(out_pkl, engine='pyarrow')
+                    print(f" > Saved Spec {target_id} ({alt} {model_type}) -> {out_pkl.name} ({len(df_spec)} rows)")
+                    spec_summaries[f"6_{alt_label}_{target_id}"] = summary
+                    total_saved += 1
+                else:
+                    print(f"   [!] Failed or skipped Spec: {target_id} {model_type} in {alt}")
+
+    if total_saved > 0:
+        summary_file = demand_output_dir / "demand_prep_summary.json"
+        
+        # Load existing if it exists
+        if summary_file.exists():
+            try:
+                with open(summary_file, 'r', encoding='utf-8') as f:
+                    existing_data = json.load(f)
+                    existing_data.update(spec_summaries)
+                    spec_summaries = existing_data
+            except Exception: pass
+            
+        with open(summary_file, 'w', encoding='utf-8') as f:
+            json.dump(spec_summaries, f, indent=4)
+        print(f"\nSummary saved to: {summary_file}")
+        print(f"[SUCCESS] {total_saved} per-spec Pickles written to {demand_output_dir}")
+    else:
+        print(f"\n[WARNING] No Pickles written for Estimation 6")
 
 if __name__ == "__main__":
     pd.options.mode.chained_assignment = None

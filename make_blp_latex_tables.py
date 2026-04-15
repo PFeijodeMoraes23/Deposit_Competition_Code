@@ -414,12 +414,12 @@ def process_estimation(est_id: int):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Create BLP LaTeX Tables")
-    parser.add_argument('--est', type=int, choices=[1, 3, 4, 5, 6], help='Estimation routine ID to process')
+    parser.add_argument('--est', type=int, choices=[1, 2, 3, 4, 5], help='Estimation routine ID to process')
     args = parser.parse_args()
     
     if args.est:
         process_estimation(args.est)
     else:
         # Fallback to sequential if no arg given
-        for i in [1, 3, 4, 5, 6]:
+        for i in [1, 2, 3, 4, 5]:
             process_estimation(i)

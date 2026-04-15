@@ -1,7 +1,7 @@
 #!/bin/bash
-#SBATCH --job-name=blp_estim_loop_5            # Job name
-#SBATCH --output=blp_hpc_5_output_%j.log       # Standard output log (%j = job id)
-#SBATCH --error=blp_hpc_5_error_%j.log         # Standard error log
+#SBATCH --job-name=blp_estim_loop_6            # Job name
+#SBATCH --output=blp_hpc_6_output_%j.log       # Standard output log (%j = job id)
+#SBATCH --error=blp_hpc_6_error_%j.log         # Standard error log
 #SBATCH --time=48:00:00                         # Wall time limit. Max for 'week' partition is 7d.
 #SBATCH --partition=week                        # Partition (queue) name
 #SBATCH --nodes=1                               # Single node
@@ -15,8 +15,9 @@
 module load miniconda
 source activate dep_comp_blp
 cd /home/pf382/dep_comp/scripts
-python -u estimation_5_demand_2_loop.py \
+python -u estimation_4_demand_2_loop.py \
     --spec 12 \
+    --alt alt2logistic \
     --stage sequence \
     --R 1000 \
     --workers 8 \

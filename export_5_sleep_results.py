@@ -16,7 +16,7 @@ if _THIS_DIR not in sys.path:
 # Paths
 _ROOT = Path(__file__).resolve().parents[2]
 DATA_DIR = _ROOT / "BCB" / "Egan_et_al_2025_Rep" / "processed"
-OUTPUT_DIR = DATA_DIR / "ESTIMATION_OUTPUT" / "rout_1"
+OUTPUT_DIR = DATA_DIR / "ESTIMATION_OUTPUT" / "rout_5"
 RESULTS_PICKLE = OUTPUT_DIR / "estimation_results.pkl"
 CLUSTER_JSON = OUTPUT_DIR / "cluster_diagnostics.json"
 
@@ -99,15 +99,29 @@ def clean_name(v):
         'connections_per100': 'Broadband Connections (per capita)',
         'branches_per1000': 'Branches per 1k',
         'post_2020': 'Post 2020 Dummy',
-        'const': 'Constant'
+        'const': 'Constant',
+        'pca_index': 'PCA Index',
+        'admin_cost_ratio_lag': 'Admin Cost Ratio (Lag)',
+        'tax_cost_ratio_lag': 'Tax Cost Ratio (Lag)',
+        'personnel_cost_ratio_lag': 'Personnel Cost Ratio (Lag)',
+        'lci_lca_ratio_lag': 'LCI/LCA Ratio (Lag)',
+        'wholesale_ratio_lag': 'Wholesale Ratio (Lag)',
+        'indice_basileia_lag': 'Basel Index (Lag)',
+        'leave_one_out_mean_spread': 'LOO Mean Spread (Hausman)',
     }
-    return labels.get(v, v.replace('_', '\\_'))
+    if v in labels:
+        return labels[v]
+    if v.endswith('_x_assets'):
+        base = v.replace('_x_assets', '')
+        if base in labels:
+            return labels[base] + ' $\\times$ log(Assets)'
+    return v.replace('_', '\\_')
 
-def _get_first_stage_row_strings(var, panels, ivs, results_dict):
+def _get_first_stage_row_strings(var, panels, ivs, results_dict, opt):
     coef_strs, se_strs = [], []
     has_val = False
     for p, (iv_key, _) in itertools.product(panels, ivs):
-        res = results_dict[f"{iv_key} x {p}"]['first_stage']
+        res = results_dict[f"Option_{opt}_{iv_key}_{p}"]['first_stage']
         if var in res.params:
             has_val = True
             c, se, pval = res.params[var], res.bse[var], res.pvalues[var]
@@ -118,7 +132,7 @@ def _get_first_stage_row_strings(var, panels, ivs, results_dict):
             se_strs.append("")
     return coef_strs, se_strs, has_val
 
-def build_first_stage_table(results_dict, G, G_star):
+def build_first_stage_table(results_dict, G, G_star, opt):
     panels = ['Base', 'Macro', 'Tech']
     fs_spec_numbers = {
         ('Base', 'IV_CostShifters'): 2,
@@ -140,7 +154,7 @@ def build_first_stage_table(results_dict, G, G_star):
 
     vs = list(dict.fromkeys(
         v for p, (iv_key, _) in itertools.product(panels, ivs)
-        for v in results_dict[f"{iv_key} x {p}"]['first_stage'].params.index
+        for v in results_dict[f"Option_{opt}_{iv_key}_{p}"]['first_stage'].params.index
         if v != 'const'
     ))
 
@@ -149,7 +163,7 @@ def build_first_stage_table(results_dict, G, G_star):
     out = [
         "\\begin{landscape}",
         "\\begin{table}[htbp]\\centering",
-        "\\caption{First Stage Estimation (Control Function)}",
+        "\\caption{First Stage Estimation (Option {opt})}",
         "\\resizebox{\\linewidth}{!}{",
         "\\begin{tabular}{l" + "c"*9 + "}\\toprule",
         " & \\multicolumn{3}{c}{\\textbf{Base}} & \\multicolumn{3}{c}{\\textbf{Macro}} & \\multicolumn{3}{c}{\\textbf{Tech}} \\\\ \\cmidrule(lr){2-4} \\cmidrule(lr){5-7} \\cmidrule(lr){8-10}",
@@ -157,7 +171,7 @@ def build_first_stage_table(results_dict, G, G_star):
     ]
     
     for var in vs:
-        coef_strs, se_strs, has_val = _get_first_stage_row_strings(var, panels, ivs, results_dict)
+        coef_strs, se_strs, has_val = _get_first_stage_row_strings(var, panels, ivs, results_dict, opt)
                     
         if has_val:
             out.extend(
@@ -173,7 +187,7 @@ def build_first_stage_table(results_dict, G, G_star):
     g_strs = []
     g_star_strs = []
     for p, (iv_key, _) in itertools.product(panels, ivs):
-        res = results_dict[f"{iv_key} x {p}"]['first_stage']
+        res = results_dict[f"Option_{opt}_{iv_key}_{p}"]['first_stage']
         obs_strs.append(f"{int(res.nobs):,}")
         rsq_strs.append(f"{res.rsquared:.4f}")
         fstat_val = getattr(res, 'fvalue', None)
@@ -200,10 +214,10 @@ def build_first_stage_table(results_dict, G, G_star):
     )
     return "\n".join(out)
 
-def _get_second_stage_row_strings(vshort, panels, estimators, results_dict):
+def _get_second_stage_row_strings(vshort, panels, estimators, results_dict, opt):
     coef_strs, se_strs = [], []
     for p_name, (est_key, _) in itertools.product(panels, estimators):
-        spec_key = f"{est_key} x {p_name}"
+        spec_key = f"Option_{opt}_{est_key}_{p_name}"
         res = results_dict[spec_key]['second_stage']
 
         var = vshort
@@ -219,7 +233,7 @@ def _get_second_stage_row_strings(vshort, panels, estimators, results_dict):
             se_strs.append("")
     return coef_strs, se_strs
 
-def build_second_stage_table(results_dict, G, G_star):
+def build_second_stage_table(results_dict, G, G_star, opt):
     panels = ['Base', 'Macro', 'Tech']
     ss_spec_numbers = {
         ('Base', 'OLS'): 1,
@@ -236,14 +250,18 @@ def build_second_stage_table(results_dict, G, G_star):
         ('Tech', 'IV_HausmanFull'): 12,
     }
 
-    all_vars = ['nr_lagged_dep', 'post_2020', 'gdp_per_capita', 'cadunico_families_per1000', 'fraction_65plus', 'fraction_young', 'pix_users_pf_per1000', 'connections_per100', 'branches_per1000', 'risk_free_qoq_lag']
-
     estimators = [
         ('OLS', 'OLS'),
         ('IV_CostShifters', 'IV Cost'),
         ('IV_Wholesale', 'IV Wholesale'),
         ('IV_HausmanFull', 'Hausman')
     ]
+
+    all_vars = list(dict.fromkeys(
+        v.replace('interaction_', '') for p, (est_key, _) in itertools.product(panels, estimators)
+        for v in results_dict[f"Option_{opt}_{est_key}_{p}"]['second_stage'].params.index
+        if v not in ['v_hat', 'v_hat_2', 'v_hat_3']
+    ))
 
     col_names = []
     for p, (est_key, est_label) in itertools.product(panels, estimators):       
@@ -261,21 +279,22 @@ def build_second_stage_table(results_dict, G, G_star):
     ]
     
     for vshort in all_vars:
-        coef_strs, se_strs = _get_second_stage_row_strings(vshort, panels, estimators, results_dict)
+        coef_strs, se_strs = _get_second_stage_row_strings(vshort, panels, estimators, results_dict, opt)
 
-        out.extend(
-            (
-                f"{clean_name(vshort)} & " + " & ".join(coef_strs) + " \\\\",
-                " & " + " & ".join(se_strs) + " \\\\"
+        if any(c != "" for c in coef_strs):
+            out.extend(
+                (
+                    f"{clean_name(vshort)} & " + " & ".join(coef_strs) + " \\\\",
+                    " & " + " & ".join(se_strs) + " \\\\"
+                )
             )
-        )
 
     obs_strs = []
     rsq_strs = []
     g_strs = []
     g_star_strs = []
     for p_name, (est_key, _) in itertools.product(panels, estimators):
-        res = results_dict[f"{est_key} x {p_name}"]['second_stage']
+        res = results_dict[f"Option_{opt}_{est_key}_{p_name}"]['second_stage']
         obs_strs.append(f"{int(res.nobs):,}")
         rsq_strs.append(f"{res.rsquared:.4f}")
         g_strs.append(str(getattr(res, 'G_nominal', '\\text{N/A}')))
@@ -299,8 +318,8 @@ def build_second_stage_table(results_dict, G, G_star):
     return "\n".join(out)
 
 def build_cluster_table(cluster_data):
-    G_nominal = cluster_data['G_nominal']
-    G_star = cluster_data['G_star']
+    G_nominal = '\\text{N/A}'
+    G_star = '\\text{N/A}'
     total_obs = cluster_data['total_observations']
     
     out = [
@@ -309,7 +328,7 @@ def build_cluster_table(cluster_data):
         "\\begin{tabular}{lcc}\\toprule",
         "\\textbf{Statistic} & \\textbf{Value} & \\textbf{Share of Total} \\\\ \\midrule",
         f"Nominal Clusters ($G$) & \\multicolumn{{2}}{{c}}{{{G_nominal}}} \\\\",
-        f"Effective Clusters ($G^*$) & \\multicolumn{{2}}{{c}}{{{G_star:.2f}}} \\\\",
+        f"Effective Clusters ($G^*$) & \\multicolumn{{2}}{{c}}{{{G_star}}} \\\\",
         f"Total Observations & \\multicolumn{{2}}{{c}}{{{total_obs:,}}} \\\\ \\midrule",
         "\\textbf{Top 5 Clusters (Conglomerates)} & \\textbf{Observations} & \\textbf{\\% Share} \\\\ \\midrule"
     ]
@@ -340,7 +359,26 @@ The primary dataset is derived from systems within the data pipeline architectur
 
 The estimation dataset focuses deliberately on "B-Type" Institutions, defined as banks with local presence via physical branches. Purely fintech operations that map identically to national levels ($CODMUN\_IBGE = 0$) are excluded from this empirical section to prevent structural bias stemming from their unique operational structures. Variables generated upstream in wide formatting are pivoted into a long matrix locally inside the execution script to systematically construct the high-dimensional spatial-entity effects ($CodConglomeradoPrudencial \times deposit\_type \times mca\_code$).
 
-## 2. Estimation Architecture: The 12 Specifications
+## 2. Estimation Architecture: The Three Options and 12 Specifications
+
+The calculation for depositor sleepiness hinges heavily on mapping the state variables directly into interactions with lagged volume ratios. We present three formal methodological options estimating variations of state vector ($S_{mt}$):
+
+1. **Option 1 (Brute Force Time-Series)**: Directly leverages full arrays of vectors ($S_{mt}$) natively to absorb unobservable shifts linearly against lagged interest ratios. 
+   - *Pros*: Simple, full information retention.
+   - *Cons*: High risk of multicollinearity and overfitting; low statistical power when clustering with small effective sample sizes ($G^*$).
+   - *Reference*: Berry, Levinsohn, & Pakes (1995) standard demand instrumentation models.
+
+2. **Option 2 (Firm-Targeting State Interactions)**: Resolves homogeneity concerns by scaling the unobserved state variances individually against each conglomerate's log-transformed Total Asset mass lag ($X_j = \log(\text{Total Assets}_{j, t-1})$). This allows elasticity conditions to shift heterogeneously across mega-banks.
+   - *Pros*: Captures heterogeneous firm-level responses reflecting true economic realism (larger banks natively exhibit different elasticities).
+   - *Cons*: Potential endogeneity of firm characteristics, and assumes strict linearity in size characteristics.
+   - *Reference*: Nevo (2001) measuring market power with heterogeneous characteristics.
+
+3. **Option 3 (Dimensionality Reduction Indexing)**: Replaces the dense matrix of state vectors with an empirically scaled linear combination via Principal Component Analysis (PCA($S_t$)), efficiently isolating the primary variance eigenvector.
+   - *Pros*: Effectively solves multicollinearity by reducing high-dimensional macroeconomic states, preserving critical degrees of freedom in small-$G^*$ clusters while trapping maximum variance.
+   - *Cons*: Loss of distinct economic interpretability for individual macroeconomic variables, projecting a generalized "index" of state characteristics instead.
+   - *Reference*: Stock and Watson (2002) macroeconomic forecasting using principal components.
+
+### 2.0 Base Specification Architecture
 To calculate the state-dependent elasticity parameters inherent to the Depositor Sleepiness Function, the empirical design crosses 4 Instrument Specifications with 3 Vector State Subsets, generating a 12-specification empirical layout.
 
 Deposit buckets $k=4, 5$ face endogeneity concerns driven by unobserved latency in spread-setting. To address this, the script runs a Control Function estimator, where a first-stage Ordinary Least Squares (OLS) model projects observed spreads onto subsets of the proposed Instruments. The polynomial control parameters ($\hat{v}, \hat{v}^2, \hat{v}^3$) are subsequently fed into the second-stage estimation.
@@ -399,24 +437,30 @@ To resolve extreme small-$G^*$ parameter bias natively, the econometric benchmar
     print(" - Translating markdown to LaTeX...")
     tex_body_md = (md_to_tex_string(summary_text) + "\n\n\\newpage\n" + md_to_tex_string(se_text))
 
-    if not RESULTS_PICKLE.exists() or not CLUSTER_JSON.exists():
-        print("Results not found. Run estimation_1_sleep.py first.")
+    if not RESULTS_PICKLE.exists():
+        print("Results not found.")
         return
 
     print(" - Reading pickled model estimates...")
     with open(RESULTS_PICKLE, 'rb') as f:
         results_dict = pickle.load(f)
         
-    with open(CLUSTER_JSON, 'r') as f:
-        cluster_data = json.load(f)
+    cluster_data = None
 
-    G_nominal = cluster_data['G_nominal']
-    G_star = cluster_data['G_star']
+    G_nominal = '\\text{N/A}'
+    G_star = '\\text{N/A}'
 
     print(" - Generating strict regression tables...")
-    cluster_table_tex = build_cluster_table(cluster_data)
-    fs_table_tex = build_first_stage_table(results_dict, G_nominal, G_star)
-    ss_table_tex = build_second_stage_table(results_dict, G_nominal, G_star)
+    cluster_table_tex = ''
+    
+    fs_tables = []
+    ss_tables = []
+    for opt in [1, 2, 3]:
+        fs_tables.append("\\subsection*{Option " + str(opt) + "}\n" + build_first_stage_table(results_dict, G_nominal, G_star, opt))
+        ss_tables.append("\\subsection*{Option " + str(opt) + "}\n" + build_second_stage_table(results_dict, G_nominal, G_star, opt))
+        
+    fs_table_tex = "\\newpage\\clearpage\n".join(fs_tables)
+    ss_table_tex = "\\newpage\\clearpage\n".join(ss_tables)
 
     preamble = r"""\documentclass[11pt]{article}
 \usepackage[utf8]{inputenc}
@@ -461,19 +505,19 @@ To resolve extreme small-$G^*$ parameter bias natively, the econometric benchmar
     )
 
     os.makedirs(OUT_DIR, exist_ok=True)
-    temp_tex = os.path.join(OUT_DIR, "Agent_Comments_Export.tex")
+    temp_tex = os.path.join(OUT_DIR, "National_Sleepiness_Export.tex")
     print(f" - Writing single LaTeX file to {temp_tex} ...")
     with open(temp_tex, 'w', encoding='utf-8') as f:
         f.write(tex_doc)
     
     print("\n - Compiling...")
     try:
-        subprocess.run(["pdflatex", "-interaction=nonstopmode", "Agent_Comments_Export.tex"],
+        subprocess.run(["pdflatex", "-interaction=nonstopmode", "National_Sleepiness_Export.tex"],
                        cwd=OUT_DIR, capture_output=True, text=True)
-        res_final = subprocess.run(["pdflatex", "-interaction=nonstopmode", "Agent_Comments_Export.tex"],
+        res_final = subprocess.run(["pdflatex", "-interaction=nonstopmode", "National_Sleepiness_Export.tex"],
                        cwd=OUT_DIR, capture_output=True, text=True) 
 
-        pdf_path = os.path.join(OUT_DIR, "Agent_Comments_Export.pdf")       
+        pdf_path = os.path.join(OUT_DIR, "National_Sleepiness_Export.pdf")       
         if os.path.exists(pdf_path) and os.path.getsize(pdf_path) > 0:
             print("\n *** PDF SUCCESSFULLY GENERATED. ***\n")
         else:

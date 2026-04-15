@@ -75,9 +75,17 @@ EXTRA_KEEP_COLS = X_COLS + D_COLS + IV_BLP_LOO + IV_COST + IV_CAPITAL + ['segmen
 
 def _resolve_runtime_paths() -> tuple[Path, Path, Path]:
     panel_csv = PANEL_CSV
-    sleep_output_dir = DATA_DIR / "ESTIMATION_OUTPUT" / "rout_4" / "POOLED"
+    sleep_output_dir = DATA_DIR / "ESTIMATION_OUTPUT" / "rout_2" / "POOLED"
     demand_output_dir = DATA_DIR / "ESTIMATION_OUTPUT" / "DEMAND_PREP"
     return panel_csv, sleep_output_dir, demand_output_dir
+
+class NonLinearResults:
+    def __init__(self, params, bse, tvalues, pvalues, G_star):
+        self.params = params
+        self.bse = bse
+        self.tvalues = tvalues
+        self.pvalues = pvalues
+        self.df_resid = G_star
 
 def extract_upsilon_terms(res_ss):
     params = res_ss.params
@@ -209,6 +217,9 @@ def process_specification(args):
     if missing_sv: return None, None, spec_name
         
     df_spec = df_spec.dropna(subset=['phi_mt', 'spread_qoq'])
+    
+    # Apply estimation 5 NLLS structural logit operator
+    df_spec['phi_mt'] = 1.0 / (1.0 + np.exp(-df_spec['phi_mt'].astype(float)))
     df_spec['phi_mt'] = df_spec['phi_mt'].clip(lower=0.0, upper=1.0)
     
     df_mca_level = df_spec[['mca_code', 'time_id', 'phi_mt', 'pop_total']].drop_duplicates()
@@ -227,7 +238,7 @@ def process_specification(args):
     df_spec.loc[df_spec['is_B'], 'Dep_Act'] = np.maximum(0.0, val_B[df_spec['is_B']]).astype(float).values
     
     val_D = df_spec['deposit_balance'] - df_spec['phi_t'] * df_spec['gross_return_lag'] * df_spec['lagged_deposits']
-    df_spec.loc[~df_spec['is_B'], 'Dep_Act'] = np.maximum(0.0, val_D[~df_spec['is_B']])
+    df_spec.loc[~df_spec['is_B'], 'Dep_Act'] = np.maximum(0.0, val_D[~df_spec['is_B']]).astype(float).values
     
     # Drop ZERO and NaN Active Deposits before building shares. 
     # Zero shares break the log-bounds of the BLP contraction map.
@@ -291,7 +302,7 @@ def main():
     panel_csv, sleep_output_dir, demand_output_dir = _resolve_runtime_paths()
     results_pickle = sleep_output_dir / "estimation_results.pkl"
     if not results_pickle.exists():
-        print(f"ERROR: Pickle file missing at {results_pickle}. Run estimation_4_sleep.py first.")
+        print(f"ERROR: Pickle file missing at {results_pickle}. Run estimation_2_sleep.py first.")
         sys.exit(1)
         
     print(f"Loading estimation results from {results_pickle}...")
@@ -332,7 +343,7 @@ def main():
         task = (actual_key, results_dict[actual_key], df_base)
         df_spec, summary, spec_id = process_specification(task)
         if df_spec is not None:
-             out_pkl = demand_output_dir / f"demand_4_final_spec_{target_id}.parquet"
+             out_pkl = demand_output_dir / f"demand_5_final_spec_{target_id}.parquet"
              df_spec.to_parquet(out_pkl, engine='pyarrow')
              print(f" > Saved Spec {target_id} -> {out_pkl.name} ({len(df_spec)} rows)")
              spec_summaries[str(target_id)] = summary
@@ -352,3 +363,7 @@ def main():
 if __name__ == "__main__":
     pd.options.mode.chained_assignment = None
     main()
+
+
+
+

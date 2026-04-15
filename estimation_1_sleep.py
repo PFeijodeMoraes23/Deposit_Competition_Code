@@ -42,6 +42,13 @@ import os
 import json
 import pickle
 import argparse
+import os
+os.environ["OMP_NUM_THREADS"] = "1"
+os.environ["OPENBLAS_NUM_THREADS"] = "1"
+os.environ["MKL_NUM_THREADS"] = "1"
+os.environ["VECLIB_MAXIMUM_THREADS"] = "1"
+os.environ["NUMEXPR_NUM_THREADS"] = "1"
+
 from pathlib import Path
 import concurrent.futures
 
@@ -294,7 +301,7 @@ def do_estimation():
     results_dict = {}
     out_results = []
     
-    with concurrent.futures.ProcessPoolExecutor() as executor:
+    with concurrent.futures.ProcessPoolExecutor(max_workers=max(1, (os.cpu_count() or 2) - 1)) as executor:
         out_results.extend(executor.map(execute_specification, tasks))
         
     for res in out_results:
@@ -302,11 +309,16 @@ def do_estimation():
         print(stdout_text)
         if res_ss is not None:
             safe_name = f"Spec{spec_number:02d}_" + spec_name.replace(" ", "_").replace("/", "").replace(":", "")
-            tex_file = output_dir / f"{safe_name}.tex"
-            with open(tex_file, 'w') as f: f.write(res_ss.summary().as_latex())
+
+            drafts_dir = _ROOT / "Drafts" / "Deposit Competition"
+            drafts_dir.mkdir(parents=True, exist_ok=True)
+            rout_level = "rout_1"
+            tex_file = drafts_dir / f"{rout_level}_{safe_name}.tex"
+            from utils.tex_preamble import wrap_table
+            with open(tex_file, 'w', encoding='utf-8') as f: f.write(wrap_table(res_ss.summary().as_latex()))
             if res_fs is not None:
-                tex_file_fs = output_dir / f"{safe_name}_FirstStage.tex"
-                with open(tex_file_fs, 'w') as f: f.write(res_fs.summary().as_latex())
+                tex_file_fs = drafts_dir / f"{rout_level}_{safe_name}_FirstStage.tex"
+                with open(tex_file_fs, 'w', encoding='utf-8') as f: f.write(wrap_table(res_fs.summary().as_latex()))
             results_dict[spec_name] = {'spec_number': spec_number, 'spec_label': f"({spec_number}) {spec_name}", 'second_stage': res_ss, 'first_stage': res_fs}
             
     cluster_diagnostics = {

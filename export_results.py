@@ -47,17 +47,16 @@ def get_estimation_directories(estimation_number: int, base_dir: Path) -> list[P
     
     mapping = {
         1: [sleep_dir / "rout_1"],
-        2: [sleep_dir / "rout_2"],
-        3: [sleep_dir / "rout_3" / "LOCAL", 
-            sleep_dir / "rout_3" / "NATIONAL"],
+        2: [sleep_dir / "rout_2" / "LOCAL", 
+            sleep_dir / "rout_2" / "NATIONAL"],
+        3: [sleep_dir / "rout_3" / "POOLED"],
         4: [sleep_dir / "rout_4" / "POOLED"],
-        5: [sleep_dir / "rout_5" / "POOLED"],
-        6: [sleep_dir / "rout_6" / "POOLED" / "ALT_1",
-            sleep_dir / "rout_6" / "POOLED" / "ALT_2"],
+        5: [sleep_dir / "rout_5" / "POOLED" / "ALT_1",
+            sleep_dir / "rout_5" / "POOLED" / "ALT_2"],
     }
     
     if estimation_number not in mapping:
-        raise ValueError(f"Invalid estimation number: {estimation_number}. Must be between 1 and 6.")
+        raise ValueError(f"Invalid estimation number: {estimation_number}. Must be between 1 and 5.")
         
     return mapping[estimation_number]
 
@@ -160,7 +159,7 @@ def main():
     _ROOT = Path(__file__).resolve().parents[2]
     DATA_DIR = _ROOT / "BCB" / "Egan_et_al_2025_Rep" / "processed"
     
-    est_list = [1, 3, 4, 5, 6] if args.estimation == 'all' else [int(args.estimation)]
+    est_list = [1, 2, 3, 4, 5] if args.estimation == 'all' else [int(args.estimation)]
     
     target_dirs = []
     try:
@@ -198,3 +197,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+

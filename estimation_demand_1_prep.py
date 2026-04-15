@@ -11,7 +11,7 @@ def main():
     
     args = parser.parse_args()
     
-    EST_LIST = [1, 3, 4, 5, 6] if args.estimation == 'all' else [int(args.estimation)]
+    EST_LIST = [1, 2, 3, 4, 5] if args.estimation == 'all' else [int(args.estimation)]
     
     for est in EST_LIST:
         script_name = f"estimation_{est}_demand_1_prep.py"

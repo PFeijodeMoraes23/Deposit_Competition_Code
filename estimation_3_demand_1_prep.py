@@ -75,7 +75,7 @@ EXTRA_KEEP_COLS = X_COLS + D_COLS + IV_BLP_LOO + IV_COST + IV_CAPITAL + ['segmen
 
 def _resolve_runtime_paths() -> tuple[Path, Path, Path]:
     panel_csv = PANEL_CSV
-    sleep_output_dir = DATA_DIR / "ESTIMATION_OUTPUT" / "rout_3" / "LOCAL"
+    sleep_output_dir = DATA_DIR / "ESTIMATION_OUTPUT" / "rout_2" / "POOLED"
     demand_output_dir = DATA_DIR / "ESTIMATION_OUTPUT" / "DEMAND_PREP"
     return panel_csv, sleep_output_dir, demand_output_dir
 
@@ -136,7 +136,21 @@ def build_base_panel(panel_csv: Path) -> pd.DataFrame:
     df = df.dropna(subset=['deposit_balance', 'lagged_deposits', 'spread_qoq', 'entity_id', 'time_id'])
     
     df['constant'] = 1.0
-    if 'year' in df.columns: df['post_2020'] = (df['year'] >= 2020).astype(int)
+    if 'year' in df.columns: 
+        df['post_2020'] = (df['year'] >= 2020).astype(int)
+        df['pix_exists'] = ((df['year'] > 2020) | ((df['year'] == 2020) & (df['quarter'] == 4))).astype(float)
+        
+    if 'CODMUN_IBGE' in df.columns:
+        df['dummy_D_type'] = (df['CODMUN_IBGE'].astype(str) == '0').astype(float)
+        
+    if 'dummy_D_type' in df.columns:
+        if 'risk_free_qoq_lag' in df.columns:
+            df['dummy_D_type_x_risk_free_qoq_lag'] = df['dummy_D_type'] * df['risk_free_qoq_lag']
+        if 'fraction_65plus' in df.columns:
+            df['dummy_D_type_x_fraction_65plus'] = df['dummy_D_type'] * df['fraction_65plus']
+        if 'fraction_young' in df.columns:
+            df['dummy_D_type_x_fraction_young'] = df['dummy_D_type'] * df['fraction_young']
+            
     if 'gdp_per_capita' in df.columns: df['gdp_per_capita'] /= 10000.0
     if 'cadunico_families_per1000' in df.columns: df['cadunico_families_per1000'] /= 100.0
     if 'pix_users_pf_per1000' in df.columns: df['pix_users_pf_per1000'] /= 100.0
@@ -166,16 +180,32 @@ def process_specification(args):
     
     keep_cols = list(set(base_cols + [c for c in EXTRA_KEEP_COLS if c in df_base.columns]))
     df_spec = df_base[keep_cols].copy()
+    if 'is_B' in df_spec.columns: df_spec['is_B'] = df_spec['is_B'].astype(bool)
     
     df_spec['phi_mt'] = 0.0
     missing_sv = False
     
     for sv_name, beta in upsilon.items():
         if sv_name not in df_base.columns:
-            missing_sv = True
-            break
-        df_spec['phi_mt'] += beta * df_base[sv_name]
-        
+            if sv_name == 'is_coop': df_spec[sv_name] = df_base.get('is_coop', 0.0)
+            elif sv_name == 'is_state_owned': df_spec[sv_name] = df_base.get('is_state_owned', 0.0)
+            elif '_x_' in sv_name:
+                parts = sv_name.split('_x_')
+                p1, p2 = parts[0], parts[1]
+                v1 = df_spec[p1] if p1 in df_spec.columns else df_base.get(p1, None)
+                v2 = df_spec[p2] if p2 in df_spec.columns else df_base.get(p2, None)
+                if v1 is not None and v2 is not None:
+                    df_spec[sv_name] = v1 * v2
+                else:
+                    missing_sv = True
+                    break
+            else:
+                missing_sv = True
+                break
+        else:
+            if sv_name not in df_spec.columns: df_spec[sv_name] = df_base[sv_name]
+            
+        df_spec['phi_mt'] += beta * df_spec[sv_name]
     if missing_sv: return None, None, spec_name
         
     df_spec = df_spec.dropna(subset=['phi_mt', 'spread_qoq'])
@@ -194,7 +224,7 @@ def process_specification(args):
     
     df_spec['Dep_Act'] = 0.0
     val_B = df_spec['deposit_balance'] - df_spec['phi_mt'] * df_spec['gross_return_lag'] * df_spec['lagged_deposits']
-    df_spec.loc[df_spec['is_B'], 'Dep_Act'] = np.maximum(0.0, val_B[df_spec['is_B']])
+    df_spec.loc[df_spec['is_B'], 'Dep_Act'] = np.maximum(0.0, val_B[df_spec['is_B']]).astype(float).values
     
     val_D = df_spec['deposit_balance'] - df_spec['phi_t'] * df_spec['gross_return_lag'] * df_spec['lagged_deposits']
     df_spec.loc[~df_spec['is_B'], 'Dep_Act'] = np.maximum(0.0, val_D[~df_spec['is_B']])
@@ -261,7 +291,7 @@ def main():
     panel_csv, sleep_output_dir, demand_output_dir = _resolve_runtime_paths()
     results_pickle = sleep_output_dir / "estimation_results.pkl"
     if not results_pickle.exists():
-        print(f"ERROR: Pickle file missing at {results_pickle}. Run estimation_3_sleep.py first.")
+        print(f"ERROR: Pickle file missing at {results_pickle}. Run estimation_2_sleep.py first.")
         sys.exit(1)
         
     print(f"Loading estimation results from {results_pickle}...")
@@ -302,7 +332,7 @@ def main():
         task = (actual_key, results_dict[actual_key], df_base)
         df_spec, summary, spec_id = process_specification(task)
         if df_spec is not None:
-             out_pkl = demand_output_dir / f"demand_3_final_spec_{target_id}.parquet"
+             out_pkl = demand_output_dir / f"demand_4_final_spec_{target_id}.parquet"
              df_spec.to_parquet(out_pkl, engine='pyarrow')
              print(f" > Saved Spec {target_id} -> {out_pkl.name} ({len(df_spec)} rows)")
              spec_summaries[str(target_id)] = summary
@@ -322,3 +352,5 @@ def main():
 if __name__ == "__main__":
     pd.options.mode.chained_assignment = None
     main()
+
+

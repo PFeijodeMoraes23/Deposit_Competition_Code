@@ -1,6 +1,6 @@
 """
 Parallel executing pipeline that compiles the BLP estimation results into LaTeX tables.
-Launches the generation of tables for routines 1, 3, 4, 5, and 6 concurrently.
+Launches the generation of tables for routines 1, 2, 3, 4, and 5 concurrently.
 Output tables are exported back to the BLP_RESULTS directory.
 """
 import subprocess
@@ -22,7 +22,7 @@ def run_latex_for_est(est_id: int):
         return (est_id, False, f"Error:\n{e.stderr}\n{e.stdout}")
 
 def main():
-    routines = [1, 3, 4, 5, 6]
+    routines = [1, 2, 3, 4, 5]
     
     if not LATEX_SCRIPT.exists():
         print(f"Cannot find script at: {LATEX_SCRIPT}")
