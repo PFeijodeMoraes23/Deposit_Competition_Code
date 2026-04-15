@@ -521,23 +521,23 @@ def compute_model_shares(delta: np.ndarray, mu: np.ndarray,
 
     # --- Î©_mt: Eq-14 = 1 - Î£_{jâˆˆJ^D_t, k} s^{Act,D}_{jk,local,mt} ---
     # D_share_p_r = exp(log_D_sum_p,r - log_denom_p,r)
-    local_D_share  = np.exp(log_D_sum - log_denom)                # (n_pairs, R)
-    omega_per_pair = np.maximum(1e-10, 1.0 - local_D_share.mean(axis=1))  # (n_pairs,)
-    omega_B        = omega_per_pair[b_mkt_idx]                    # (N_B,)
+    # Omega correction removed: share_B_cond = Dep_Act / (d_bar * pop) is already
+    # an unconditional share; ln(Omega) double-corrected and biased delta_B downward.
 
-    return s_B, s_D_nat, omega_B, is_B
+    return s_B, s_D_nat, is_B
 
 def _contraction_step(delta, mu, df, R, b_mask, d_mask,
                       ln_s_data_D, ln_s_data_B_cond, precomp):
-    """Single BLP contraction step T(delta) called by Anderson loop (Fix 1)."""
-    s_B, s_D_nat, omega_B, _ = compute_model_shares(delta, mu, df, R, precomp=precomp)
+    """Standard BLP contraction T(delta) = delta + ln(s_data) - ln(s_model).
+    share_B_cond is unconditional (Dep_Act / (d_bar * pop)); no Omega term needed.
+    """
+    s_B, s_D_nat, _ = compute_model_shares(delta, mu, df, R, precomp=precomp)
     delta_new = delta.copy()
     delta_new[d_mask] = (delta[d_mask]
                          + ln_s_data_D[d_mask]
                          - np.log(np.clip(s_D_nat, 1e-15, None)))
     delta_new[b_mask] = (delta[b_mask]
                          + ln_s_data_B_cond[b_mask]
-                         + np.log(np.clip(omega_B, 1e-15, None))
                          - np.log(np.clip(s_B, 1e-15, None)))
     return np.clip(delta_new, -500.0, 500.0)
 
@@ -666,7 +666,9 @@ def _project_endogenous_spreads(spread_cols: np.ndarray, H: np.ndarray, deposit_
                     import contextlib
                     with contextlib.suppress(np.linalg.LinAlgError):
                         beta_fs = np.linalg.lstsq(H_k[valid], spread_k[valid], rcond=None)[0]
-                        spread_hat[k_mask, k_idx] = H_k @ beta_fs
+                        k_spread_hat = spread_k.copy()
+                        k_spread_hat[valid] = H_k[valid] @ beta_fs
+                        spread_hat[k_mask, k_idx] = k_spread_hat
     return spread_hat
 
 def _compute_cluster_robust_se(delta_v: np.ndarray, X_v: np.ndarray, n_cols: int, clusters: np.ndarray) -> np.ndarray:

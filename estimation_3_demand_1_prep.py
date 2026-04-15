@@ -205,26 +205,34 @@ def process_specification(args):
     df_spec = df_spec[df_spec['Dep_Act'] > 1e-6]
     
     # ---------------------------------------------------------
-    # Option 1: Global Per-Capita Potential Gamma
-    # Construct an outside option based on population
+    # Per-capita deposit ceiling d_bar (V_Main.tex, before Eq-15)
+    # d_bar = c * max(local B per-capita, national B+D per-capita)
+    # Ensures outside option share > 0 for both local and national markets.
     # ---------------------------------------------------------
-    
-    # 1. Empirically find max active deposits per capita across all markets/times
-    mkt_totals = df_spec.groupby(['mca_code', 'time_id'])['Dep_Act'].transform('sum')
-    dep_per_capita = mkt_totals / df_spec['pop_total']
-    
-    # Pad by 10% to guarantee outside option > 0 everywhere
-    gamma = dep_per_capita.max() * 1.1
+    CEILING_MULT = 1.1  # c: buffer to guarantee s_0 > 0
 
-    # 2. National Population (sum of unique local populations per time period)
-    df_unique_mkt = df_spec[['mca_code', 'time_id', 'pop_total']].drop_duplicates()
+    # 1. National Population (sum of unique local populations per time period)
+    # Computed first; reused for both ceiling and D-firm share denominator.
+    df_unique_mkt = df_spec[df_spec['is_B']][['mca_code', 'time_id', 'pop_total']].drop_duplicates()
     nat_pop = df_unique_mkt.groupby('time_id')['pop_total'].sum()
     nat_pop_map = df_spec['time_id'].map(nat_pop)
 
+    # 2a. Local B-firm active deposits per capita: max over (m, t)
+    b_mkt_totals = df_spec[df_spec['is_B']].groupby(['mca_code', 'time_id'])['Dep_Act'].sum()
+    b_pop        = df_spec[df_spec['is_B']].groupby(['mca_code', 'time_id'])['pop_total'].first()
+    local_b_pc   = (b_mkt_totals / b_pop.replace(0, np.nan)).max()
+
+    # 2b. National active deposits (B + D) per capita: max over t
+    nat_dep_t   = df_spec.groupby('time_id')['Dep_Act'].sum()
+    national_pc = (nat_dep_t / nat_pop.replace(0, np.nan)).max()
+
+    # d_bar: take the more demanding of the two legs, then pad by c
+    d_bar = CEILING_MULT * max(local_b_pc, national_pc)
+
     # 3. Construct Model-Consistent Shares (summing to < 1)
-    df_spec['share_D'] = np.where(~df_spec['is_B'], df_spec['Dep_Act'] / (gamma * nat_pop_map), np.nan)
-    
-    df_spec['share_B_cond'] = np.where(df_spec['is_B'], df_spec['Dep_Act'] / (gamma * df_spec['pop_total']), np.nan)
+    df_spec['share_D'] = np.where(~df_spec['is_B'], df_spec['Dep_Act'] / (d_bar * nat_pop_map), np.nan)
+
+    df_spec['share_B_cond'] = np.where(df_spec['is_B'], df_spec['Dep_Act'] / (d_bar * df_spec['pop_total']), np.nan)
 
     SPEC_MAP = {
         'OLS x Base': 1, 'IV_CostShifters x Base': 2, 'IV_Wholesale x Base': 3, 'IV_HausmanFull x Base': 4,
