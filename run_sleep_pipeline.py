@@ -15,9 +15,9 @@ options:
 This script sequentially runs the following steps:
   1. estimation_1_sleep.py         (Local Estimation of Sleepness)
   2. estimation_2_sleep.py         (Robustness bounds for B-firms)
-  3. estimation_2_sleep.py         (Robustness bounds for pooled B and D firms)
-  4. estimation_2_sleep.py         (NLLS logistic structural estimation)
-  5. estimation_2_sleep.py         (Robustness bounds with cooperative/state controls)
+  3. estimation_3_sleep.py         (Robustness bounds for pooled B and D firms)
+  4. estimation_4_sleep.py         (NLLS logistic structural estimation)
+  5. estimation_5_sleep.py         (Robustness bounds with cooperative/state controls)
   6. export_results.py             (Export 1st/2nd Stage Summaries across all estimators)
   7. estimation_demand_1_prep.py   (Universal Demand Prep Orchestrator & Panel Serialization)
 """
@@ -80,9 +80,9 @@ def main():
 This script sequentially runs the following steps:
   1. estimation_1_sleep.py         (Local Estimation of Sleepness)
   2. estimation_2_sleep.py         (Robustness bounds for B-firms)
-  3. estimation_2_sleep.py         (Robustness bounds for pooled B and D firms)
-  4. estimation_2_sleep.py         (NLLS logistic structural estimation)
-  5. estimation_2_sleep.py         (Robustness bounds with cooperative/state controls)
+  3. estimation_3_sleep.py         (Robustness bounds for pooled B and D firms)
+  4. estimation_4_sleep.py         (NLLS logistic structural estimation)
+  5. estimation_5_sleep.py         (Robustness bounds with cooperative/state controls)
   6. export_results.py             (Export 1st/2nd Stage Summaries across all estimators)
   7. estimation_demand_1_prep.py   (Universal Demand Prep Orchestrator & Panel Serialization)
         """,
@@ -106,6 +106,13 @@ This script sequentially runs the following steps:
         action="store_true",
         help="Only execute the first 6 sleepiness estimation steps and plot scripts, skipping exports and demand prep."
     )
+    parser.add_argument(
+        "--skip-steps",
+        nargs="+",
+        type=int,
+        default=[],
+        help="Skip executing specific steps (1-7). E.g., --skip-steps 1 2"
+    )
     args = parser.parse_args()
 
 
@@ -123,25 +130,25 @@ This script sequentially runs the following steps:
     
     if not getattr(args, 'skip_sleep', False):
         scripts_to_run.extend([
-            {"file": "estimation_1_sleep.py", "desc": "Local Estimation of Sleepness"},
-            {"file": "estimation_2_sleep.py", "args": spec12_arg, "desc": "Robustness bounds for B-firms"},
-            {"file": "estimation_2_sleep.py", "args": spec12_arg, "desc": "Robustness bounds for pooled B and D firms"},
-            {"file": "estimation_2_sleep.py", "args": spec12_arg, "desc": "NLLS logistic structural estimation"},
-            {"file": "estimation_2_sleep.py", "args": ["--model-type", "both", "--alt", "2"] + (["--spec12-only"] if args.only_spec_12 else []), "desc": "Robustness bounds with cooperative/state controls"},
+            {"id": 1, "file": "estimation_1_sleep.py", "desc": "Local Estimation of Sleepness"},
+            {"id": 2, "file": "estimation_2_sleep.py", "args": spec12_arg, "desc": "Robustness bounds for B-firms"},
+            {"id": 3, "file": "estimation_3_sleep.py", "args": spec12_arg, "desc": "Robustness bounds for pooled B and D firms"},
+            {"id": 4, "file": "estimation_4_sleep.py", "args": spec12_arg, "desc": "NLLS logistic structural estimation"},
+            {"id": 5, "file": "estimation_5_sleep.py", "args": ["--model-type", "both", "--alt", "2"] + (["--spec12-only"] if args.only_spec_12 else []), "desc": "Robustness bounds with cooperative/state controls"},
         ])
 
     if not getattr(args, 'sleep_only', False):
         scripts_to_run.extend([
-            {"file": "export_results.py", "args": ["--estimation", "all"], "desc": "Export 1st/2nd Stage Summaries across all estimators"},
-            {"file": "estimation_demand_1_prep.py", "args": ["--estimation", "all", "--spec", spec_arg], "desc": "Universal Demand Prep Orchestrator & Panel Serialization"},
-            {"file": "export_analyze_spec12.py", "args": ["--skip-est2"], "desc": "Analyze Specification 12 Results"}
+            {"id": 6, "file": "export_results.py", "args": ["--estimation", "all"], "desc": "Export 1st/2nd Stage Summaries across all estimators"},
+            {"id": 7, "file": "estimation_demand_1_prep.py", "args": ["--estimation", "all", "--spec", spec_arg], "desc": "Universal Demand Prep Orchestrator & Panel Serialization"},
+            {"id": 6, "file": "export_analyze_spec12.py", "args": ["--skip-est2"], "desc": "Analyze Specification 12 Results"}
         ])
 
     import concurrent.futures
     import os
 
-    import concurrent.futures
-    import os
+    # Filter skipped steps
+    scripts_to_run = [s for s in scripts_to_run if s.get('id') not in args.skip_steps]
 
     cwd = Path(__file__).resolve().parent
     start_time_all = time.time()
