@@ -92,7 +92,7 @@ EXTRA_KEEP_COLS = X_COLS + D_COLS + IV_BLP_LOO + IV_COST + IV_CAPITAL + ['segmen
 
 def _resolve_runtime_paths() -> tuple[Path, Path, Path]:
     panel_csv = PANEL_CSV
-    sleep_output_dir = DATA_DIR / "ESTIMATION_OUTPUT" / "rout_2" / "LOCAL"
+    sleep_output_dir = DATA_DIR / "ESTIMATION_OUTPUT" / "DEMAND_PREP" / "rout_2" / "LOCAL"
     demand_output_dir = DATA_DIR / "ESTIMATION_OUTPUT" / "DEMAND_PREP"
     return panel_csv, sleep_output_dir, demand_output_dir
 
@@ -319,7 +319,7 @@ def main():
         task = (actual_key, results_dict[actual_key], df_base)
         df_spec, summary, spec_id = process_specification(task)
         if df_spec is not None:
-             out_pkl = demand_output_dir / f"demand_3_final_spec_{target_id}.parquet"
+             out_pkl = demand_output_dir / f"demand_2_final_spec_{target_id}.parquet"
              df_spec.to_parquet(out_pkl, engine='pyarrow')
              print(f" > Saved Spec {target_id} -> {out_pkl.name} ({len(df_spec)} rows)")
              spec_summaries[str(target_id)] = summary

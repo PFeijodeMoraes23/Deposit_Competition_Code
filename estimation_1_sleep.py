@@ -79,7 +79,7 @@ def _resolve_runtime_paths() -> tuple[Path, Path]:
     _ROOT = Path(__file__).resolve().parents[2]
     DATA_DIR = _ROOT / "BCB" / "Egan_et_al_2025_Rep" / "processed"
     PANEL_CSV = DATA_DIR / "market_panel.csv"
-    OUTPUT_DIR = DATA_DIR / "ESTIMATION_OUTPUT" / "rout_1"
+    OUTPUT_DIR = DATA_DIR / "ESTIMATION_OUTPUT" / "DEMAND_PREP" / "rout_1"
 
     if load_default_toon_context is None or get_script_config is None:
         return PANEL_CSV, OUTPUT_DIR

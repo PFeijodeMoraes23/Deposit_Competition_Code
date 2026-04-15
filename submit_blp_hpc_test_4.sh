@@ -15,7 +15,7 @@ module load miniconda
 source activate dep_comp_blp
 cd /home/pf382/dep_comp/scripts
 
-python -u estimation_2_demand_2_loop.py \
+python -u estimation_4_demand_2_loop.py \
     --spec 12 \
     --stage sigma \
     --R 100 \

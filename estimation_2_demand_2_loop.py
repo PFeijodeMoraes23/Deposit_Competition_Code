@@ -210,7 +210,7 @@ def _hourly_email_worker(job_id: str, stop_event: threading.Event) -> None:
 def load_merged_spec_data(spec_id: int, is_hpc: bool = False) -> pd.DataFrame:
     '''Load the per-spec pre-merged dataframe created by estimation_1_demand_2_secondprep.py'''
     input_dir, _ = get_paths(is_hpc)
-    pkl_path = input_dir / f"demand_3_final_spec_{spec_id}.parquet"
+    pkl_path = input_dir / f"demand_2_final_spec_{spec_id}.parquet"
     if not pkl_path.exists():
         raise FileNotFoundError(f"Missing {pkl_path}")
     return pd.read_parquet(pkl_path, engine='pyarrow')
@@ -1124,7 +1124,7 @@ def main():
     if not input_dir.exists():
         print(f"  [FATAL] Input directory DOES NOT EXIST: {input_dir}", flush=True)
     else:
-        pkl_files = list(input_dir.glob('demand_3_final_spec_*.parquet'))
+        pkl_files = list(input_dir.glob('demand_2_final_spec_*.parquet'))
         print(f"  [DIAGNOSTIC] Found {len(pkl_files)} matched .pkl files in input directory.", flush=True)
 
     BLP_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)

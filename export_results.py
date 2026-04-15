@@ -46,13 +46,13 @@ def get_estimation_directories(estimation_number: int, base_dir: Path) -> list[P
     sleep_dir = base_dir / "ESTIMATION_OUTPUT"
     
     mapping = {
-        1: [sleep_dir / "rout_1"],
-        2: [sleep_dir / "rout_2" / "LOCAL", 
-            sleep_dir / "rout_2" / "NATIONAL"],
-        3: [sleep_dir / "rout_2" / "POOLED"],
-        4: [sleep_dir / "rout_2" / "POOLED"],
-        5: [sleep_dir / "rout_2" / "POOLED" / "ALT_1",
-            sleep_dir / "rout_2" / "POOLED" / "ALT_2"],
+        1: [sleep_dir / "DEMAND_PREP" / "rout_1"],
+        2: [sleep_dir / "DEMAND_PREP" / "rout_2" / "LOCAL", 
+            sleep_dir / "DEMAND_PREP" / "rout_2" / "NATIONAL"],
+        3: [sleep_dir / "DEMAND_PREP" / "rout_2" / "POOLED"],
+        4: [sleep_dir / "DEMAND_PREP" / "rout_2" / "POOLED"],
+        5: [sleep_dir / "DEMAND_PREP" / "rout_2" / "POOLED" / "ALT_1",
+            sleep_dir / "DEMAND_PREP" / "rout_2" / "POOLED" / "ALT_2"],
     }
     
     if estimation_number not in mapping:
