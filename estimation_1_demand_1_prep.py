@@ -27,11 +27,28 @@ options:
 
 import os
 import sys
+import logging
+import logging
 import json
 import pickle
 import argparse
 import re
 from pathlib import Path
+
+# Mock NonLinearResults class for unpickling
+class NonLinearResults:
+    def __init__(self, params, bse, tvalues, pvalues, G_star, params_native=None):
+        self.params = params
+        self.bse = bse
+        self.tvalues = tvalues
+        self.pvalues = pvalues
+        self.G_star = G_star
+
+# Force __main__ proxy for pickling backwards compatibility
+sys.modules["estimation_1_sleep"] = type("FakeModule", (), {"NonLinearResults": NonLinearResults})
+
+
+
 
 try:
     from utils.venv_guard import ensure_project_venv

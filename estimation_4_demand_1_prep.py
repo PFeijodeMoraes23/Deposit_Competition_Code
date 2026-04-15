@@ -27,6 +27,8 @@ options:
 
 import os
 import sys
+import logging
+import logging
 import json
 import pickle
 import argparse
@@ -80,12 +82,16 @@ def _resolve_runtime_paths() -> tuple[Path, Path, Path]:
     return panel_csv, sleep_output_dir, demand_output_dir
 
 class NonLinearResults:
-    def __init__(self, params, bse, tvalues, pvalues, G_star):
+    def __init__(self, params, bse, tvalues, pvalues, G_star, params_native=None):
         self.params = params
         self.bse = bse
         self.tvalues = tvalues
         self.pvalues = pvalues
+        self.G_star = G_star
         self.df_resid = G_star
+
+# Force __main__ proxy for pickling backwards compatibility
+sys.modules['estimation_4_sleep'] = type('FakeModule', (), {'NonLinearResults': NonLinearResults})
 
 def extract_upsilon_terms(res_ss):
     params = res_ss.params
