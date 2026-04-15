@@ -208,7 +208,7 @@ def _hourly_email_worker(job_id: str, stop_event: threading.Event) -> None:
 # 1. Data Loading
 # ==============================================================================
 def load_merged_spec_data(spec_id: int, is_hpc: bool = False, alt: str = "alt2logistic") -> pd.DataFrame:
-    '''Load the per-spec pre-merged dataframe created by estimation_3_demand_1_prep.py'''
+    '''Load the per-spec pre-merged dataframe created by estimation_2_demand_1_prep.py'''
     input_dir, _ = get_paths(is_hpc)
     pkl_path = input_dir / f"demand_6_{alt}_final_spec_{spec_id}.parquet"
     if not pkl_path.exists():
@@ -1200,4 +1200,5 @@ def main():
 if __name__ == '__main__':
     pd.options.mode.chained_assignment = None
     main()
+
 
