@@ -75,7 +75,7 @@ EXTRA_KEEP_COLS = X_COLS + D_COLS + IV_BLP_LOO + IV_COST + IV_CAPITAL + ['segmen
 
 def _resolve_runtime_paths(alt: str = "ALT_1") -> tuple[Path, Path, Path]:
     panel_csv = PANEL_CSV
-    sleep_output_dir = DATA_DIR / "ESTIMATION_OUTPUT" / "rout_3" / "POOLED" / alt
+    sleep_output_dir = DATA_DIR / "ESTIMATION_OUTPUT" / "rout_2" / "POOLED" / alt
     demand_output_dir = DATA_DIR / "ESTIMATION_OUTPUT" / "DEMAND_PREP"
     return panel_csv, sleep_output_dir, demand_output_dir
 
@@ -400,4 +400,5 @@ def main():
 if __name__ == "__main__":
     pd.options.mode.chained_assignment = None
     main()
+
 
