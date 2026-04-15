@@ -310,6 +310,7 @@ def do_estimation():
         if res_ss is not None:
             safe_name = f"Spec{spec_number:02d}_" + spec_name.replace(" ", "_").replace("/", "").replace(":", "")
 
+            _ROOT = Path(__file__).resolve().parents[2]
             drafts_dir = _ROOT / "Drafts" / "Deposit Competition"
             drafts_dir.mkdir(parents=True, exist_ok=True)
             rout_level = "rout_1"

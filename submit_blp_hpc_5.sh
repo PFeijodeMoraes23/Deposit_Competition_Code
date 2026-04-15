@@ -15,7 +15,7 @@
 module load miniconda
 source activate dep_comp_blp
 cd /home/pf382/dep_comp/scripts
-python -u estimation_4_demand_2_loop.py \
+python -u estimation_3_demand_2_loop.py \
     --spec 12 \
     --alt alt2logistic \
     --stage sequence \
@@ -24,3 +24,4 @@ python -u estimation_4_demand_2_loop.py \
     --max-inner 1500 \
     --tol-inner 1e-12 \
     --hpc
+

@@ -1,5 +1,5 @@
 """
-estimation_4_sleep.py
+estimation_3_sleep.py
 ==============================
 Robustness check: Estimates the depositor sleepiness function using pooled B and D-type firms.
 Extends the analysis by introducing controls and interactions for cooperative ('is_coop')
@@ -47,7 +47,7 @@ warnings.filterwarnings("ignore", message="covariance of constraints does not ha
 _ROOT = Path(__file__).resolve().parents[2]
 DATA_DIR = _ROOT / "BCB" / "Egan_et_al_2025_Rep" / "processed"
 PANEL_CSV = DATA_DIR / "market_panel.csv"
-OUTPUT_DIR = DATA_DIR / "ESTIMATION_OUTPUT" / "rout_4"
+OUTPUT_DIR = DATA_DIR / "ESTIMATION_OUTPUT" / "rout_3"
 
 POOLED_DIR = OUTPUT_DIR / "POOLED"
 PLOTS_DIR = OUTPUT_DIR / "PLOTS"
@@ -588,3 +588,5 @@ if __name__ == "__main__":
         
     run_plotting_phase(alts_to_run, args.spec12_only)
     print("\n--- Pipeline 6 Completed ---")
+
+
