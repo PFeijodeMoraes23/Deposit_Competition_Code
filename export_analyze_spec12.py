@@ -229,7 +229,7 @@ import argparse
 
 def main():
     parser = argparse.ArgumentParser(description="Analyze Specification 12 Results")
-    parser.add_argument('--skip-est2', action='store_true', help='Skip estimation 2 (2 D firms Break)')
+    parser.add_argument('--skip-est2', action='store_true', help='Skip estimation 2 (B firms Robust)')
     args = parser.parse_args()
 
     print("Collecting Estimation results for Spec 12 (IV_HausmanFull x Tech)...")
@@ -251,7 +251,7 @@ def main():
     }
 
     if getattr(args, 'skip_est2', False):
-        mapping.pop('2 D firms Break', None)
+        mapping.pop('2 B firms Robust', None)
 
     stage1_res = {}
     stage2_res = {}
@@ -273,12 +273,11 @@ def main():
                 
         target_keys = {
             '1 B firms': 'IV_HausmanFull x Tech',
-            '2 D firms Break': 'Option_2_IV_HausmanFull_Tech',
-            '3 B firms Robust': 'IV_HausmanFull x Tech',
-            '4 Pooled': 'IV_HausmanFull x Tech',
-            '5 Pooled Logistic': 'IV_HausmanFull x Tech',
-            '6 Dummies Linear': 'IV_HausmanFull x Tech x linear', 
-            '6 Dummies Logistic': 'IV_HausmanFull x Tech x logistic',
+            '2 B firms Robust': 'IV_HausmanFull x Tech',
+            '3 Pooled': 'IV_HausmanFull x Tech',
+            '4 Pooled Logistic': 'IV_HausmanFull x Tech',
+            '5 Dummies Linear': 'IV_HausmanFull x Tech x linear', 
+            '5 Dummies Logistic': 'IV_HausmanFull x Tech x logistic',
         }
 
         # Fallback if the script saved differently (linear vs logistic)
