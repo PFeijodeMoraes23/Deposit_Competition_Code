@@ -20,9 +20,10 @@ OUTPUT_DIR = DATA_DIR / "ESTIMATION_OUTPUT" / "DEMAND_PREP" / "rout_1"
 RESULTS_PICKLE = OUTPUT_DIR / "estimation_results.pkl"
 CLUSTER_JSON = OUTPUT_DIR / "cluster_diagnostics.json"
 
-OUT_DIR = (r"C:\Users\pedro\OneDrive\Documentos\Yale"
-           r"\Year 3 (2024 - 2025)\Open Finance\Open-Finance"
-           r"\Drafts\Deposit Competition")
+TEX_OUT_DIR = _ROOT / "Drafts" / "Deposit Competition" / "Rout"
+OUT_DIR = str(TEX_OUT_DIR)
+OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+TEX_OUT_DIR.mkdir(parents=True, exist_ok=True)
 
 def md_to_tex_string(md_text):
     blocks = md_text.split('$$')

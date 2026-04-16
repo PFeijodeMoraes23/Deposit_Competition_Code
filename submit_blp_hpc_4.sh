@@ -1,7 +1,7 @@
 #!/bin/bash
-#SBATCH --job-name=blp_estim_loop_5            # Job name
-#SBATCH --output=blp_hpc_5_output_%j.log       # Standard output log (%j = job id)
-#SBATCH --error=blp_hpc_5_error_%j.log         # Standard error log
+#SBATCH --job-name=blp_estim_loop_4            # Job name
+#SBATCH --output=blp_hpc_4_output_%j.log       # Standard output log (%j = job id)
+#SBATCH --error=blp_hpc_4_error_%j.log         # Standard error log
 #SBATCH --time=48:00:00                         # Wall time limit. Max for 'week' partition is 7d.
 #SBATCH --partition=week                        # Partition (queue) name
 #SBATCH --nodes=1                               # Single node

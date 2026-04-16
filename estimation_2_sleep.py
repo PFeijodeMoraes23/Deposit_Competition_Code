@@ -67,6 +67,7 @@ LOCAL_DIR = OUTPUT_DIR / "LOCAL"
 NATIONAL_DIR = OUTPUT_DIR / "NATIONAL"
 PLOTS_DIR = OUTPUT_DIR / "PLOTS"
 
+OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 LOCAL_DIR.mkdir(parents=True, exist_ok=True)
 NATIONAL_DIR.mkdir(parents=True, exist_ok=True)
 PLOTS_DIR.mkdir(parents=True, exist_ok=True)

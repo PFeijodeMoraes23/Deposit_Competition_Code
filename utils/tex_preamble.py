@@ -141,5 +141,5 @@ BASELINE_POSTAMBLE = r"""\end{document}
 DRAFTS_DIR = r"C:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\Drafts\Deposit Competition"
 
 def wrap_table(latex_table_str: str) -> str:
-    \"\"\"Wraps a raw latex table string inside the baseline preamble document wrapper.\"\"\"
+    """Wraps a raw latex table string inside the baseline preamble document wrapper."""
     return BASELINE_PREAMBLE + "\n" + latex_table_str + "\n" + BASELINE_POSTAMBLE

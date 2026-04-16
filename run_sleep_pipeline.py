@@ -141,7 +141,7 @@ This script sequentially runs the following steps:
         scripts_to_run.extend([
             {"id": 6, "file": "export_results.py", "args": ["--estimation", "all"], "desc": "Export 1st/2nd Stage Summaries across all estimators"},
             {"id": 7, "file": "estimation_demand_1_prep.py", "args": ["--estimation", "all", "--spec", spec_arg], "desc": "Universal Demand Prep Orchestrator & Panel Serialization"},
-            {"id": 6, "file": "export_analyze_spec12.py", "args": ["--skip-est2"], "desc": "Analyze Specification 12 Results"}
+            {"id": 8, "file": "export_analyze_spec12.py", "args": ["--skip-est2"], "desc": "Analyze Specification 12 Results"}
         ])
 
     import concurrent.futures
@@ -183,8 +183,8 @@ This script sequentially runs the following steps:
         print(f"\n-> Finished {script} in {elapsed_script:.2f} seconds.")
         
         if result.returncode != 0:
-            print(f"\n[ERROR] Pipeline aborted. Script '{script}' failed with exit code: {result.returncode}")
-            sys.exit(result.returncode)
+            print(f"\n[ERROR] Script '{script}' failed with exit code: {result.returncode}")
+            raise RuntimeError(f"'{script}' exited with code {result.returncode}")
             
         send_notification_email(script, elapsed_script, "Next in queue")
         return script, elapsed_script
