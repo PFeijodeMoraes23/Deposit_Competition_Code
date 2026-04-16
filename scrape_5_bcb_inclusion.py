@@ -255,7 +255,9 @@ def main():
     panel.sort_values(["mca_code", "year"], inplace=True)
     panel.reset_index(drop=True, inplace=True)
 
-    panel.to_csv(OUTPUT_CSV, index=False, encoding="latin-1")
+    import pyarrow as pa
+    import pyarrow.csv as pa_csv
+    pa_csv.write_csv(pa.Table.from_pandas(panel, preserve_index=False), OUTPUT_CSV)
     logging.info(f"Saved BCB inclusion panel to {OUTPUT_CSV}")
 
     print(

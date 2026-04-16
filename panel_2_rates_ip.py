@@ -166,7 +166,9 @@ def main():
     
     logging.info(f"Final Quarterly Panel: {len(ip_q)} rows, {ip_q['ip_implicit_rate'].notna().sum()} explicit rate obs.")
     
-    ip_q.to_csv(OUT_CSV, index=False)
+    import pyarrow as pa
+    import pyarrow.csv as pa_csv
+    pa_csv.write_csv(pa.Table.from_pandas(ip_q, preserve_index=False), OUT_CSV)
     logging.info(f"Saved -> {OUT_CSV}")
 
 if __name__ == "__main__":

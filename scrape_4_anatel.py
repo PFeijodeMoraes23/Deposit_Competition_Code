@@ -347,14 +347,14 @@ def aggregate_to_mca_quarter(anatel: pd.DataFrame,
     if n_miss > 0:
         logging.warning(f"{n_miss:,} ANATEL rows unmatched to MCA — dropped.")
     anatel = anatel.dropna(subset=["mca_code"])
+    anatel["acessos_fast"] = anatel["acessos"].where(anatel["is_fast"] == 1, 0)
 
     agg = (
         anatel.groupby(["mca_code", "year", "quarter"])
               .agg(
-                  connections_total = ("acessos",         "sum"),
-                  connections_4g5g  = ("acessos",
-                                       lambda x: x[anatel.loc[x.index, "is_fast"] == 1].sum()),
-                  n_municipalities  = ("mun_code",        "nunique"),
+                  connections_total = ("acessos",      "sum"),
+                  connections_4g5g  = ("acessos_fast", "sum"),
+                  n_municipalities  = ("mun_code",     "nunique"),
               )
               .reset_index()
     )
@@ -793,7 +793,9 @@ def main():
     panel.sort_values(["mca_code", "year", "quarter"], inplace=True)
     panel.reset_index(drop=True, inplace=True)
 
-    panel.to_csv(OUTPUT_CSV, index=False, encoding="latin-1")
+    import pyarrow as pa
+    import pyarrow.csv as pa_csv
+    pa_csv.write_csv(pa.Table.from_pandas(panel, preserve_index=False), OUTPUT_CSV)
     logging.info(f"Saved ANATEL panel to {OUTPUT_CSV}")
 
     print(

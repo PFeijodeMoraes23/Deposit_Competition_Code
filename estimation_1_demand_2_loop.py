@@ -80,6 +80,7 @@ import pandas as pd
 from scipy import stats
 from scipy.optimize import minimize, approx_fprime
 from scipy.stats.qmc import Halton
+from scipy.sparse import csr_matrix
 import statsmodels.api as sm
 
 # ==============================================================================
@@ -267,8 +268,8 @@ def build_theta2_structure(stage: str):
       get a sigma parameter.
     - pi_interactions: list of (coef_idx, demo_idx) pairs for Pi entries.
     """
-    # Coefficient vector: [spread_1, ..., spread_5, x_1, ..., x_L]
-    # spread indices: 0..K_TYPES-1, x indices: K_TYPES..K_TYPES+L-1
+    # Coefficient vector: [spread, x_1, ..., x_L]
+    # spread index: 0, x indices: 1..L_PROD
 
     if stage == 'logit':
         return [], [], 0
@@ -278,8 +279,8 @@ def build_theta2_structure(stage: str):
         return [0], [], 1
 
     elif stage == 'full':
-        # Sigma: spread (idx 0), log_total_assets (idx K_TYPES + idx in coef vector)
-        sigma_idx = [0, K_TYPES + X_COLS.index('log_total_assets_lag')]
+        # Sigma: spread (idx 0), log_total_assets (idx 1 + idx in coef vector)
+        sigma_idx = [0, 1 + X_COLS.index('log_total_assets_lag')]
         # Pi: spread(0) x gdp(0), spread(0) x age(1), spread(0) x connections(4)
         pi_inter = [(0, D_COLS.index('gdp_per_capita')),
                      (0, D_COLS.index('fraction_65plus')),
@@ -288,16 +289,16 @@ def build_theta2_structure(stage: str):
 
     elif stage == 'extended':
         # Stage 3 params + product x demographic interactions
-        sigma_idx = [0, K_TYPES + X_COLS.index('log_total_assets_lag')]
+        sigma_idx = [0, 1 + X_COLS.index('log_total_assets_lag')]
         pi_inter = [
             # Spread interactions (from stage 3)
             (0, D_COLS.index('gdp_per_capita')),
             (0, D_COLS.index('fraction_65plus')),
             (0, D_COLS.index('connections_per100')),
             # Product x demographic
-            (K_TYPES + X_COLS.index('log_total_assets_lag'), D_COLS.index('gdp_per_capita')),
-            (K_TYPES + X_COLS.index('fgc_covered'), D_COLS.index('fraction_65plus')),
-            (K_TYPES + X_COLS.index('equity_ratio_lag'), D_COLS.index('cadunico_families_per1000')),
+            (1 + X_COLS.index('log_total_assets_lag'), D_COLS.index('gdp_per_capita')),
+            (1 + X_COLS.index('fgc_covered'), D_COLS.index('fraction_65plus')),
+            (1 + X_COLS.index('equity_ratio_lag'), D_COLS.index('cadunico_families_per1000')),
         ]
         return sigma_idx, pi_inter, len(sigma_idx) + len(pi_inter)
 
@@ -449,37 +450,42 @@ def compute_model_shares(delta: np.ndarray, mu: np.ndarray,
     V_B = np.clip(delta_B[:, np.newaxis] + mu_B, -500.0, 500.0)   # (N_B, R)
     V_D = np.clip(delta_D[:, np.newaxis] + mu_D, -500.0, 500.0)   # (N_D, R)
 
-    # For each (time, R), sum exp(V_D) over all D-products in that time period
-    # We keep this in log-space: max_VD_time and log_sum_D_shifted
-    log_sum_D_shifted = np.zeros((n_times, R))
-    max_VD_time       = np.full((n_times, R), -np.inf)
-    
-    # d_time_enc is (N_D,)
-    for i in range(n_times):
-        mask_t = d_time_enc == i
-        if mask_t.any():
-            V_D_t  = V_D[mask_t, :]         # (n_D_t, R)
-            m_vd   = V_D_t.max(axis=0)      # (R,)
-            
-            log_s  = np.log(np.maximum(1e-300, np.exp(V_D_t - m_vd).sum(axis=0)))
-            log_sum_D_shifted[i, :] = log_s
-            max_VD_time[i, :]       = m_vd
+    # --- Fast-path sparse structures (populated from precomp when built by run_blp_for_spec) ---
+    if precomp is not None and 'sort_b' in precomp:
+        sort_b = precomp['sort_b'];   b_grp_start = precomp['b_grp_start'];  B_agg = precomp['B_agg']
+        sort_d = precomp['sort_d'];   d_uval = precomp['d_uval'];   d_grp_start = precomp['d_grp_start'];  D_agg = precomp['D_agg']
+        sort_pt = precomp['sort_pt']; pt_uval = precomp['pt_uval']; pt_grp_start = precomp['pt_grp_start']; PT_agg = precomp['PT_agg']
+    else:
+        _NB = b_mkt_idx.shape[0]; _ND = d_time_enc.shape[0]
+        sort_b       = np.argsort(b_mkt_idx, kind='stable')
+        _, b_grp_start = np.unique(b_mkt_idx[sort_b], return_index=True)
+        B_agg        = csr_matrix((np.ones(_NB), (b_mkt_idx, np.arange(_NB))), shape=(n_pairs, _NB))
+        sort_d       = np.argsort(d_time_enc, kind='stable')
+        d_uval, d_grp_start = np.unique(d_time_enc[sort_d], return_index=True)
+        D_agg        = csr_matrix((np.ones(_ND), (d_time_enc, np.arange(_ND))), shape=(n_times, _ND))
+        sort_pt      = np.argsort(pair_time_enc, kind='stable')
+        pt_uval, pt_grp_start = np.unique(pair_time_enc[sort_pt], return_index=True)
+        PT_agg       = csr_matrix((pop_weights, (pair_time_enc, np.arange(n_pairs))), shape=(n_times, n_pairs))
+
+    # D-firm: per-time max (scatter reduceat into dense buffer to handle time-period gaps) + BLAS sum
+    _max_VD_raw             = np.maximum.reduceat(V_D[sort_d, :], d_grp_start, axis=0)  # (n_D_uniq, R)
+    max_VD_time             = np.full((n_times, R), -np.inf)
+    max_VD_time[d_uval, :]  = _max_VD_raw                                               # scatter into dense
+    log_sum_D_shifted = np.log(np.maximum(1e-300,
+        D_agg.dot(np.exp(V_D - max_VD_time[d_time_enc, :]))))                           # (n_times, R)
 
     # For each B-market, fetch the D elements
     max_VD_per_pair = max_VD_time[pair_time_enc, :]               # (n_pairs, R)
     log_sum_D_per_pair = log_sum_D_shifted[pair_time_enc, :]      # (n_pairs, R)
     log_D_sum = max_VD_per_pair + log_sum_D_per_pair
 
-    # Stable softmax denominator for B-products within each market
-    # Step 1: per-market max over B-products (for numerical stability)
-    max_VB_per_mkt = np.full((n_pairs, R), -np.inf)
-    np.maximum.at(max_VB_per_mkt, b_mkt_idx, V_B)            # scatter-max
+    # Stable softmax denominator: reduceat for per-market max, B_agg.dot for scatter-sum (BLAS)
+    max_VB_per_mkt    = np.maximum.reduceat(V_B[sort_b, :], b_grp_start, axis=0)        # (n_pairs, R)
 
     # Step 2: exp(V_B - max) and sum per market
     V_B_shifted  = V_B - max_VB_per_mkt[b_mkt_idx, :]        # (N_B, R)  stable
-    exp_VB       = np.exp(V_B_shifted)                       # (N_B, R)
-    sum_exp_B_per_mkt = np.zeros((n_pairs, R))
-    np.add.at(sum_exp_B_per_mkt, b_mkt_idx, exp_VB)          # (n_pairs, R)
+    exp_VB       = np.exp(V_B_shifted)                        # (N_B, R)
+    sum_exp_B_per_mkt = B_agg.dot(exp_VB)                     # (n_pairs, R) BLAS
     
     log_B_sum = max_VB_per_mkt + np.log(np.maximum(1e-300, sum_exp_B_per_mkt))
     
@@ -503,15 +509,15 @@ def compute_model_shares(delta: np.ndarray, mu: np.ndarray,
     # --- D-firm national shares: Eq-13-D  s^{Act,D} = Î£_m (M_mt/M_t) * q_D_m ---
     # Vectorised approach: s_D_nat[d] = mean_r[ exp(V_D_d,r) * sum_m (w_m * exp(-log_denom_m,r)) ]
     
-    neg_log_denom = -log_denom
-    max_neg_ld = np.full((n_times, R), -np.inf)
-    np.maximum.at(max_neg_ld, pair_time_enc, neg_log_denom)
-    
-    shifted_inv_denom = np.exp(neg_log_denom - max_neg_ld[pair_time_enc])    # (n_pairs, R)
-    wtd_shifted_inv_denom = shifted_inv_denom * pop_weights[:, np.newaxis]   # (n_pairs, R)
-    
-    sum_wtd_inv_denom = np.zeros((n_times, R))
-    np.add.at(sum_wtd_inv_denom, pair_time_enc, wtd_shifted_inv_denom)       # (n_times, R)
+    neg_log_denom        = -log_denom
+    neg_ld_sorted        = neg_log_denom[sort_pt, :]                                     # (n_pairs, R) sorted
+    _max_neg_ld_raw      = np.maximum.reduceat(neg_ld_sorted, pt_grp_start, axis=0)      # (n_pt_uniq, R)
+    max_neg_ld           = np.full((n_times, R), -np.inf)
+    max_neg_ld[pt_uval, :] = _max_neg_ld_raw                                             # scatter into dense
+
+    shifted_inv_denom    = np.exp(neg_log_denom - max_neg_ld[pair_time_enc])             # (n_pairs, R)
+    # PT_agg has pop_weights baked into values → single dot = weighted scatter-sum
+    sum_wtd_inv_denom    = PT_agg.dot(shifted_inv_denom)                                 # (n_times, R) BLAS
     
     log_inv_denom_wtd = max_neg_ld + np.log(np.maximum(1e-300, sum_wtd_inv_denom)) # (n_times, R)
     
@@ -560,14 +566,20 @@ def blp_contraction(df, mu, R, tol=1e-12, max_iter=1500,
     (delta, converged, n_iter, norm_history)
     """
     N      = len(df)
-    is_B   = df['is_B'].values
-    b_mask = is_B
-    d_mask = ~is_B
-
-    s_data_D      = np.clip(df['share_D'].values.copy(),      1e-15, None)
-    s_data_B_cond = np.clip(df['share_B_cond'].values.copy(), 1e-15, None)
-    ln_s_data_D      = np.log(s_data_D)
-    ln_s_data_B_cond = np.log(s_data_B_cond)
+    # Pull fixed arrays from precomp when available (built once per spec)
+    if precomp is not None and 'b_mask' in precomp:
+        b_mask           = precomp['b_mask']
+        d_mask           = precomp['d_mask']
+        ln_s_data_D      = precomp['ln_s_data_D']
+        ln_s_data_B_cond = precomp['ln_s_data_B_cond']
+    else:
+        is_B   = df['is_B'].values
+        b_mask = is_B
+        d_mask = ~is_B
+        s_data_D      = np.clip(df['share_D'].values.copy(),      1e-15, None)
+        s_data_B_cond = np.clip(df['share_B_cond'].values.copy(), 1e-15, None)
+        ln_s_data_D      = np.log(s_data_D)
+        ln_s_data_B_cond = np.log(s_data_B_cond)
 
     if delta_init is not None and delta_init.shape == (N,):
         delta = delta_init.copy()
@@ -629,15 +641,137 @@ def blp_contraction(df, mu, R, tol=1e-12, max_iter=1500,
     return delta, False, max_iter, norm_history
 
 
+def blp_contraction_draws(df, R,
+                           prod_vec, nu_draws, stacked_draws_padded,
+                           obs_key_idx, sigma_vals, sigma_indices,
+                           pi_vals, pi_interactions, coef_dim,
+                           tol=1e-12, max_iter=1500,
+                           delta_init=None, precomp=None, chunk_size=None):
+    """Anderson(m=5)-accelerated BLP contraction with optional chunked-R.
+
+    When chunk_size < R, mu is never fully materialized as (N, R):
+    each contraction step accumulates model shares over R-chunks, keeping
+    peak per-worker RAM proportional to chunk_size rather than R.
+
+    Parameters
+    ----------
+    chunk_size : int or None. If None or >= R, falls back to full-mu path.
+    """
+    if chunk_size is None or chunk_size >= R:
+        # Full-mu fast path — identical to blp_contraction
+        mu = compute_mu(prod_vec, nu_draws, stacked_draws_padded, obs_key_idx,
+                        sigma_vals, sigma_indices, pi_vals, pi_interactions, R, coef_dim)
+        return blp_contraction(df, mu, R, tol=tol, max_iter=max_iter,
+                               delta_init=delta_init, precomp=precomp)
+
+    # ---- Chunked path ----
+    N = len(df)
+    if precomp is not None and 'b_mask' in precomp:
+        b_mask           = precomp['b_mask']
+        d_mask           = precomp['d_mask']
+        ln_s_data_D      = precomp['ln_s_data_D']
+        ln_s_data_B_cond = precomp['ln_s_data_B_cond']
+    else:
+        is_B             = df['is_B'].values
+        b_mask           = is_B.astype(bool)
+        d_mask           = ~b_mask
+        ln_s_data_D      = np.log(np.clip(df['share_D'].values,      1e-15, None))
+        ln_s_data_B_cond = np.log(np.clip(df['share_B_cond'].values, 1e-15, None))
+
+    N_B = int(b_mask.sum())
+    N_D = int(d_mask.sum())
+
+    if delta_init is not None and delta_init.shape == (N,):
+        delta = delta_init.copy()
+    else:
+        delta = np.zeros(N)
+        delta[d_mask] = ln_s_data_D[d_mask]
+        delta[b_mask] = ln_s_data_B_cond[b_mask]
+
+    m_aa     = 5
+    F_hist   = np.zeros((N, m_aa))
+    X_hist   = np.zeros((N, m_aa))
+    ptr      = 0
+    hist_len = 0
+    norm_history = []
+
+    for h in range(max_iter):
+        # Accumulate model shares over R-chunks (no full (N,R) alloc)
+        s_B_acc = np.zeros(N_B)
+        s_D_acc = np.zeros(N_D)
+        for r0 in range(0, R, chunk_size):
+            r1  = min(r0 + chunk_size, R)
+            rc  = r1 - r0
+            nu_chunk = nu_draws[r0:r1]                        # (rc, coef_dim)
+            sd_chunk = stacked_draws_padded[:, r0:r1, :]      # (n_keys+1, rc, D)
+            mu_chunk = compute_mu(prod_vec, nu_chunk, sd_chunk, obs_key_idx,
+                                  sigma_vals, sigma_indices, pi_vals, pi_interactions,
+                                  rc, coef_dim)               # (N, rc)
+            s_B_c, s_D_c, _ = compute_model_shares(delta, mu_chunk, df, rc,
+                                                    precomp=precomp)
+            s_B_acc += s_B_c * rc
+            s_D_acc += s_D_c * rc
+
+        s_B = s_B_acc / R   # (N_B,)
+        s_D = s_D_acc / R   # (N_D,)
+
+        delta_new = delta.copy()
+        delta_new[d_mask] = (delta[d_mask]
+                             + ln_s_data_D[d_mask]
+                             - np.log(np.clip(s_D, 1e-15, None)))
+        delta_new[b_mask] = (delta[b_mask]
+                             + ln_s_data_B_cond[b_mask]
+                             - np.log(np.clip(s_B, 1e-15, None)))
+        delta_new = np.clip(delta_new, -500.0, 500.0)
+
+        if not np.all(np.isfinite(delta_new)):
+            n_bad = (~np.isfinite(delta_new)).sum()
+            print(f"    [contraction ABORT] {n_bad}/{N} non-finite entries.", flush=True)
+            return delta, False, h + 1, norm_history
+
+        f    = delta_new - delta
+        norm = np.max(np.abs(f))
+        norm_history.append(norm)
+
+        if h % 50 == 0 or norm < tol:
+            print(f"    [Anderson iter={h+1}/{max_iter}] norm={norm:.3e}", flush=True)
+
+        if norm < tol:
+            return delta_new, True, h + 1, norm_history
+
+        F_hist[:, ptr] = f
+        X_hist[:, ptr] = delta
+        ptr      = (ptr + 1) % m_aa
+        hist_len = min(hist_len + 1, m_aa)
+
+        if hist_len > 1:
+            F_k = F_hist[:, :hist_len]
+            dF  = F_k[:, 1:] - F_k[:, [0]]
+            try:
+                rhs   = -dF.T @ F_k[:, 0]
+                A_aa  = dF.T @ dF + 1e-10 * np.eye(hist_len - 1)
+                c_bar = np.linalg.solve(A_aa, rhs)
+                c     = np.empty(hist_len)
+                c[0]  = 1.0 - c_bar.sum()
+                c[1:] = c_bar
+                d_aa  = (X_hist[:, :hist_len] + F_hist[:, :hist_len]) @ c
+                delta = (np.clip(d_aa, -500.0, 500.0)
+                         if np.all(np.isfinite(d_aa)) else delta_new)
+            except np.linalg.LinAlgError:
+                delta = delta_new
+        else:
+            delta = delta_new
+
+    return delta, False, max_iter, norm_history
+
+
 
 # ==============================================================================
 # 6. Linear IV for theta_1 (Eq-A5)
 # ==============================================================================
 def _build_regressor_matrices(df: pd.DataFrame, deposit_types: np.ndarray, N: int) -> tuple:
-    spread_cols = np.zeros((N, K_TYPES))
-    for idx, k in enumerate(K_LIST):
-        mask = deposit_types == k
-        spread_cols[mask, idx] = df.loc[mask, 'spread_qoq'].values
+    # Single spread column — alpha is common across deposit types (α_{imt}, not α_{ikmt})
+    spread_cols = df['spread_qoq'].fillna(0).values.reshape(-1, 1)  # (N, 1)
 
     x_mat = np.zeros((N, L_PROD))
     for i, col in enumerate(X_COLS):
@@ -654,20 +788,19 @@ def _build_regressor_matrices(df: pd.DataFrame, deposit_types: np.ndarray, N: in
 
 def _project_endogenous_spreads(spread_cols: np.ndarray, H: np.ndarray, deposit_types: np.ndarray) -> np.ndarray:
     spread_hat = spread_cols.copy()
-    for k_idx, k_val in enumerate(K_LIST):
-        if k_val in [4, 5]:
-            k_mask = deposit_types == k_val
-            if k_mask.any():
-                H_k = H[k_mask]
-                spread_k = spread_cols[k_mask, k_idx]
-                valid = np.isfinite(H_k).all(axis=1) & np.isfinite(spread_k)
-                if valid.sum() > H_k.shape[1]:
-                    import contextlib
-                    with contextlib.suppress(np.linalg.LinAlgError):
-                        beta_fs = np.linalg.lstsq(H_k[valid], spread_k[valid], rcond=None)[0]
-                        k_spread_hat = spread_k.copy()
-                        k_spread_hat[valid] = H_k[valid] @ beta_fs
-                        spread_hat[k_mask, k_idx] = k_spread_hat
+    for k_val in [4, 5]:
+        k_mask = deposit_types == k_val
+        if k_mask.any():
+            H_k = H[k_mask]
+            spread_k = spread_cols[k_mask, 0]  # single column
+            valid = np.isfinite(H_k).all(axis=1) & np.isfinite(spread_k)
+            if valid.sum() > H_k.shape[1]:
+                import contextlib
+                with contextlib.suppress(np.linalg.LinAlgError):
+                    beta_fs = np.linalg.lstsq(H_k[valid], spread_k[valid], rcond=None)[0]
+                    k_spread_hat = spread_k.copy()
+                    k_spread_hat[valid] = H_k[valid] @ beta_fs
+                    spread_hat[k_mask, 0] = k_spread_hat  # single column
     return spread_hat
 
 def _compute_cluster_robust_se(delta_v: np.ndarray, X_v: np.ndarray, n_cols: int, clusters: np.ndarray) -> np.ndarray:
@@ -684,25 +817,32 @@ def _compute_cluster_robust_se(delta_v: np.ndarray, X_v: np.ndarray, n_cols: int
     except Exception:
         return np.full(n_cols, np.nan)
 
-def estimate_theta1(df: pd.DataFrame, delta: np.ndarray) -> tuple:
+def estimate_theta1(df: pd.DataFrame, delta: np.ndarray,
+                    precomp: dict | None = None) -> tuple:
     """Regress delta on (rho, x) via OLS (k=1,2,3) and 2SLS (k=4,5).
 
     Returns (theta1, xi_residuals, theta1_se).
     """
-    N = len(df)
-    deposit_types = df['deposit_type'].values
-
-    spread_cols, x_mat, Z_mat = _build_regressor_matrices(df, deposit_types, N)
-
-    X_full = np.hstack([spread_cols, x_mat])  # (N, 5+L)
-    H = np.hstack([x_mat, Z_mat])  # (N, L + n_iv)
-
-    spread_hat = _project_endogenous_spreads(spread_cols, H, deposit_types)
-    X_hat = np.hstack([spread_hat, x_mat])
-
-    valid = np.isfinite(X_hat).all(axis=1) & np.isfinite(delta)
-    X_v = X_hat[valid]
-    delta_v = delta[valid]
+    # Pull fixed matrices from precomp when available (avoids rebuild on every GMM call)
+    if precomp is not None and 'X_full' in precomp:
+        X_full    = precomp['X_full']
+        X_hat     = precomp['X_hat']
+        valid     = precomp['theta1_valid'] & np.isfinite(delta)
+        X_v       = X_hat[valid]
+        delta_v   = delta[valid]
+        clusters  = precomp['clusters'][valid]
+    else:
+        N = len(df)
+        deposit_types = df['deposit_type'].values
+        spread_cols, x_mat, Z_mat = _build_regressor_matrices(df, deposit_types, N)
+        X_full = np.hstack([spread_cols, x_mat])
+        H = np.hstack([x_mat, Z_mat])
+        spread_hat = _project_endogenous_spreads(spread_cols, H, deposit_types)
+        X_hat = np.hstack([spread_hat, x_mat])
+        valid = np.isfinite(X_hat).all(axis=1) & np.isfinite(delta)
+        X_v = X_hat[valid]
+        delta_v = delta[valid]
+        clusters = (df['CodConglomeradoPrudencial'].astype(str) + "_" + df['time_id'].str.split('Q').str[0]).values[valid]
 
     try:
         theta1 = np.linalg.lstsq(X_v, delta_v, rcond=None)[0]
@@ -711,7 +851,7 @@ def estimate_theta1(df: pd.DataFrame, delta: np.ndarray) -> tuple:
 
     xi = delta - X_full @ theta1  # Residuals using original X
 
-    theta1_se = _compute_cluster_robust_se(delta_v, X_v, X_hat.shape[1], (df['CodConglomeradoPrudencial'].astype(str) + "_" + df['time_id'].str.split('Q').str[0]).values[valid])
+    theta1_se = _compute_cluster_robust_se(delta_v, X_v, X_hat.shape[1], clusters)
 
     return theta1, xi, theta1_se
 
@@ -719,17 +859,19 @@ def estimate_theta1(df: pd.DataFrame, delta: np.ndarray) -> tuple:
 # ==============================================================================
 # 7. GMM Objective (Eq-A1)
 # ==============================================================================
-def compute_gmm_moments(xi: np.ndarray, df: pd.DataFrame) -> np.ndarray:
+def compute_gmm_moments(xi: np.ndarray, df: pd.DataFrame,
+                        precomp: dict | None = None) -> np.ndarray:
     """Compute G(theta2) = (1/N) * sum xi * h(Z).
 
     Returns moment vector G of dimension n_instruments.
     """
-    iv_cols_avail = [c for c in IV_BLP_LOO + IV_COST + IV_CAPITAL if c in df.columns]
-    Z = np.zeros((len(df), len(iv_cols_avail)))
-    for i, col in enumerate(iv_cols_avail):
-        Z[:, i] = df[col].replace([np.inf, -np.inf], np.nan).fillna(0).values
-
-    N = len(df)
+    if precomp is not None and 'Z_moments' in precomp:
+        Z = precomp['Z_moments']
+    else:
+        iv_cols_avail = [c for c in IV_BLP_LOO + IV_COST + IV_CAPITAL if c in df.columns]
+        Z = np.zeros((len(df), len(iv_cols_avail)))
+        for i, col in enumerate(iv_cols_avail):
+            Z[:, i] = df[col].replace([np.inf, -np.inf], np.nan).fillna(0).values
     return (xi[:, np.newaxis] * Z).mean(axis=0)  # (n_iv,)
 
 
@@ -741,22 +883,21 @@ def gmm_objective(theta2_vec: np.ndarray, df: pd.DataFrame,
                    W: np.ndarray, tol_inner: float,
                    max_inner: int,
                    delta_cache: dict | None = None,
-                   precomp: dict | None = None) -> float:
+                   precomp: dict | None = None,
+                   chunk_size: int | None = None) -> float:
     """Evaluate Q(theta2) = G(theta2)' W G(theta2)."""
     sigma_vals, pi_vals = unpack_theta2(theta2_vec, sigma_indices,
                                          pi_interactions)
 
-    # Compute mu
-    mu = compute_mu(prod_vec, nu_draws, stacked_draws, obs_key_idx, sigma_vals,
-                    sigma_indices, pi_vals, pi_interactions, R, coef_dim)
-
     # Warm-start delta from previous outer iteration if available
     delta_init = delta_cache.get('last_delta') if delta_cache is not None else None
 
-    # Inner loop: contraction
-    delta, converged, n_iter, _ = blp_contraction(
-        df, mu, R, tol=tol_inner, max_iter=max_inner,
-        delta_init=delta_init, precomp=precomp)
+    # Inner loop: contraction (chunked-R when chunk_size is set)
+    delta, converged, n_iter, _ = blp_contraction_draws(
+        df, R, prod_vec, nu_draws, stacked_draws, obs_key_idx,
+        sigma_vals, sigma_indices, pi_vals, pi_interactions, coef_dim,
+        tol=tol_inner, max_iter=max_inner,
+        delta_init=delta_init, precomp=precomp, chunk_size=chunk_size)
     if not converged:
         print(f"  [!] Inner loop did not converge in {n_iter} iterations", flush=True)
     # Always cache latest delta for warm-starting (CG2020 ÂSection 3.2)
@@ -764,10 +905,10 @@ def gmm_objective(theta2_vec: np.ndarray, df: pd.DataFrame,
         delta_cache['last_delta'] = delta.copy()
 
     # Linear IV
-    theta1, xi, _ = estimate_theta1(df, delta)
+    theta1, xi, _ = estimate_theta1(df, delta, precomp=precomp)
 
     # GMM moments
-    G = compute_gmm_moments(xi, df)
+    G = compute_gmm_moments(xi, df, precomp=precomp)
 
     # Objective
     return G @ W @ G
@@ -798,7 +939,7 @@ def run_blp_for_spec(spec_id: int, args) -> dict:
     sigma_indices, pi_interactions, n_params = build_theta2_structure(args.stage)
 
     # Simulation draws (shared across specs but must index by this df's markets)
-    nu_draws = generate_halton_draws(args.R, K_TYPES + L_PROD, args.seed)
+    nu_draws = generate_halton_draws(args.R, 1 + L_PROD, args.seed)
 
     results = {'spec_id': spec_id, 'stage': args.stage}
 
@@ -828,9 +969,9 @@ def run_blp_for_spec(spec_id: int, args) -> dict:
             'xi': xi,
             'Q_value': Q,
             'converged': True,
-            'param_names_theta1': [f'alpha_{k}' for k in K_LIST] + X_COLS
+            'param_names_theta1': ['alpha'] + X_COLS
         })
-        print(f"  theta1 (alpha_k): {theta1[:K_TYPES]}")
+        print(f"  theta1 (alpha): {theta1[0]:.6f}")
         print(f"  Q(0) = {Q:.6e}")
 
     else:
@@ -859,17 +1000,14 @@ def run_blp_for_spec(spec_id: int, args) -> dict:
                                  for i in range(N_obs)])
         # Eliminated `aligned_demo_draws` allocation: Memory-efficient broadcasts will utilize stacked_draws_padded.
                 
-        # Build prod_vec
-        coef_dim = K_TYPES + L_PROD
+        # Build prod_vec — single spread column (α common across deposit types)
+        coef_dim = 1 + L_PROD
         prod_vec = np.zeros((N_obs, coef_dim))
-        deposit_types = df['deposit_type'].values
-        spreads = df['spread_qoq'].values
-        for idx, k in enumerate(K_LIST):
-            mask = deposit_types == k
-            prod_vec[mask, idx] = spreads[mask]
+        spreads = df['spread_qoq'].fillna(0).values
+        prod_vec[:, 0] = spreads
         for i, col in enumerate(X_COLS):
             if col in df.columns:
-                prod_vec[:, K_TYPES + i] = df[col].fillna(0).values
+                prod_vec[:, 1 + i] = df[col].fillna(0).values
 
         # Initial weighting matrix W = (Z'Z)^-1
         iv_avail = [c for c in IV_BLP_LOO + IV_COST + IV_CAPITAL if c in df.columns]
@@ -882,6 +1020,25 @@ def run_blp_for_spec(spec_id: int, args) -> dict:
             W = np.linalg.inv(Z.T @ Z / len(df))
         except np.linalg.LinAlgError:
             W = np.eye(len(iv_avail))
+
+        # --- Pre-build static arrays for estimate_theta1 and compute_gmm_moments ---
+        # These are fixed per spec: build once, reuse across all gmm_objective calls.
+        _deposit_types_pc = df['deposit_type'].values
+        _spread_cols_pc, _x_mat_pc, _Z_mat_pc = _build_regressor_matrices(df, _deposit_types_pc, N_obs)
+        _X_full_pc  = np.hstack([_spread_cols_pc, _x_mat_pc])
+        _H_pc       = np.hstack([_x_mat_pc, _Z_mat_pc])
+        _spread_hat_pc = _project_endogenous_spreads(_spread_cols_pc, _H_pc, _deposit_types_pc)
+        _X_hat_pc   = np.hstack([_spread_hat_pc, _x_mat_pc])
+        _valid_pc   = np.isfinite(_X_hat_pc).all(axis=1)  # delta-independent part; delta part added in estimate_theta1
+        _clusters_pc = (df['CodConglomeradoPrudencial'].astype(str) + "_" + df['time_id'].str.split('Q').str[0]).values
+        # Z for GMM moments (same IV set as W construction; already cleaned)
+        _Z_moments_pc = Z.copy()
+        # Contraction static arrays
+        _is_B_arr_pc  = df['is_B'].values
+        _b_mask_pc    = _is_B_arr_pc.astype(bool)
+        _d_mask_pc    = ~_b_mask_pc
+        _ln_s_d_pc    = np.log(np.clip(df['share_D'].values,      1e-15, None))
+        _ln_s_b_pc    = np.log(np.clip(df['share_B_cond'].values, 1e-15, None))
 
         # Starting values: warm-start from previous-stage checkpoint if available (Fix 3).
         # Saves 10+ hours when full/extended start from sigma*/full* instead of N(0,0.01).
@@ -924,6 +1081,23 @@ def run_blp_for_spec(spec_id: int, args) -> dict:
         pair_pop      = np.bincount(b_mkt_idx, weights=pop_b, minlength=len(unique_pairs))
         time_pop      = np.bincount(pair_time_enc, weights=pair_pop, minlength=len(unique_times))
         pair_pop_norm = pair_pop / np.maximum(time_pop[pair_time_enc], 1e-30)
+
+        # --- Phase 1: build sparse aggregation matrices (computed once per spec) ---
+        N_B_pc  = len(b_mkt_idx);  N_D_pc  = len(d_time_enc)
+        n_pr_pc = len(unique_pairs); n_ti_pc = len(unique_times)
+        sort_b_pc    = np.argsort(b_mkt_idx, kind='stable')
+        _, b_grp_pc  = np.unique(b_mkt_idx[sort_b_pc], return_index=True)
+        B_agg_pc     = csr_matrix((np.ones(N_B_pc),  (b_mkt_idx, np.arange(N_B_pc))),
+                                  shape=(n_pr_pc, N_B_pc))
+        sort_d_pc    = np.argsort(d_time_enc, kind='stable')
+        d_uval_pc, d_grp_pc  = np.unique(d_time_enc[sort_d_pc], return_index=True)
+        D_agg_pc     = csr_matrix((np.ones(N_D_pc),  (d_time_enc, np.arange(N_D_pc))),
+                                  shape=(n_ti_pc, N_D_pc))
+        sort_pt_pc   = np.argsort(pair_time_enc, kind='stable')
+        pt_uval_pc, pt_grp_pc = np.unique(pair_time_enc[sort_pt_pc], return_index=True)
+        PT_agg_pc    = csr_matrix((pair_pop_norm, (pair_time_enc, np.arange(n_pr_pc))),
+                                  shape=(n_ti_pc, n_pr_pc))
+
         precomp_idx   = {
             'b_mkt_idx':    b_mkt_idx,
             'd_time_enc':   d_time_enc,
@@ -931,7 +1105,35 @@ def run_blp_for_spec(spec_id: int, args) -> dict:
             'unique_times': unique_times,
             'pair_time_enc': pair_time_enc,
             'pop_weights':   pair_pop_norm,
+            # sparse fast-path structures
+            'sort_b':       sort_b_pc,
+            'b_grp_start':  b_grp_pc,
+            'B_agg':        B_agg_pc,
+            'sort_d':       sort_d_pc,
+            'd_uval':       d_uval_pc,
+            'd_grp_start':  d_grp_pc,
+            'D_agg':        D_agg_pc,
+            'sort_pt':      sort_pt_pc,
+            'pt_uval':      pt_uval_pc,
+            'pt_grp_start': pt_grp_pc,
+            'PT_agg':       PT_agg_pc,
+            # --- static per-spec arrays (avoid rebuild on every gmm_objective call) ---
+            'b_mask':            _b_mask_pc,
+            'd_mask':            _d_mask_pc,
+            'ln_s_data_D':       _ln_s_d_pc,
+            'ln_s_data_B_cond':  _ln_s_b_pc,
+            'Z_moments':         _Z_moments_pc,
+            'X_full':            _X_full_pc,
+            'X_hat':             _X_hat_pc,
+            'theta1_valid':      _valid_pc,
+            'clusters':          _clusters_pc,
         }
+
+        # Effective R-chunk size (0 means full R — no chunking)
+        chunk_size = getattr(args, 'chunk_size', 0) or None
+        if chunk_size is not None:
+            print(f"  Chunked-R: chunk_size={chunk_size} (R={args.R}, "
+                  f"{-(-args.R // chunk_size)} chunks/iter)", flush=True)
 
         # Delta warm-start cache (shared across outer iterations)
         delta_cache: dict = {}
@@ -940,11 +1142,12 @@ def run_blp_for_spec(spec_id: int, args) -> dict:
         if getattr(args, 'dry_run', False):
             print(f"  [DRY RUN] Running 10 contraction iterations for timing...")
             sigma_vals, pi_vals = unpack_theta2(theta2_0, sigma_indices, pi_interactions)
-            mu_t = compute_mu(prod_vec, nu_draws, stacked_draws_padded, obs_key_idx, sigma_vals,
-                              sigma_indices, pi_vals, pi_interactions, args.R, coef_dim)
             t0 = time.time()
-            d_t, conv, n_it, n_hist = blp_contraction(df, mu_t, args.R,
-                                           tol=args.tol_inner, max_iter=10, precomp=precomp_idx)
+            d_t, conv, n_it, n_hist = blp_contraction_draws(
+                df, args.R, prod_vec, nu_draws, stacked_draws_padded, obs_key_idx,
+                sigma_vals, sigma_indices, pi_vals, pi_interactions, coef_dim,
+                tol=args.tol_inner, max_iter=10, precomp=precomp_idx,
+                chunk_size=chunk_size)
             t1 = time.time()
             elapsed = t1 - t0
             print(f"  [DRY RUN] 10 iterations in {elapsed:.2f}s ({elapsed/10:.3f} s/iter).")
@@ -962,7 +1165,7 @@ def run_blp_for_spec(spec_id: int, args) -> dict:
                 t2, df, prod_vec, nu_draws, stacked_draws_padded, obs_key_idx,
                 sigma_indices, pi_interactions, args.R, coef_dim,
                 W, args.tol_inner, args.max_inner,
-                delta_cache=delta_cache, precomp=precomp_idx)
+                delta_cache=delta_cache, precomp=precomp_idx, chunk_size=chunk_size)
 
         # Bounds to prevent float64 overflow during line search
         bnds = [(-15.0, 15.0)] * n_params
@@ -985,13 +1188,12 @@ def run_blp_for_spec(spec_id: int, args) -> dict:
         # Recover theta1 at theta2*
         sigma_vals, pi_vals = unpack_theta2(theta2_star, sigma_indices,
                                              pi_interactions)
-        mu_star = compute_mu(prod_vec, nu_draws, stacked_draws_padded, obs_key_idx, sigma_vals,
-                             sigma_indices, pi_vals, pi_interactions, args.R, coef_dim)
-        delta_star, conv, n_it, _ = blp_contraction(df, mu_star, args.R,
-                                                     tol=args.tol_inner,
-                                                     max_iter=args.max_inner,
-                                                     delta_init=delta_cache.get('last_delta'),
-                                                     precomp=precomp_idx)
+        delta_star, conv, n_it, _ = blp_contraction_draws(
+            df, args.R, prod_vec, nu_draws, stacked_draws_padded, obs_key_idx,
+            sigma_vals, sigma_indices, pi_vals, pi_interactions, coef_dim,
+            tol=args.tol_inner, max_iter=args.max_inner,
+            delta_init=delta_cache.get('last_delta'),
+            precomp=precomp_idx, chunk_size=chunk_size)
         theta1_star, xi_star, theta1_se = estimate_theta1(df, delta_star)
 
         # Theta2 SEs: GMM sandwich with numerical Jacobian
@@ -1033,11 +1235,11 @@ def run_blp_for_spec(spec_id: int, args) -> dict:
             'Q_value': result.fun,
             'converged': result.success,
             'n_outer_iter': result.nit,
-            'param_names_theta1': [f'alpha_{k}' for k in K_LIST] + X_COLS,
+            'param_names_theta1': ['alpha'] + X_COLS,
             'sigma_indices': sigma_indices,
             'pi_interactions': pi_interactions
         })
-        print(f"  theta1 (alpha_k): {theta1_star[:K_TYPES]}")
+        print(f"  theta1 (alpha): {theta1_star[0]:.6f}")
         # Save stage checkpoint so next stage can warm-start (Fix 3)
         try:
             _chk_dir = get_paths(getattr(args, 'hpc', False))[1]
@@ -1087,7 +1289,7 @@ def main():
                         dest='tol_outer')
     parser.add_argument('--method', type=str, default='l-bfgs-b',
                         choices=['l-bfgs-b', 'nelder-mead'])
-    parser.add_argument('--workers', type=int, default=8,
+    parser.add_argument('--workers', type=int, default=min(12, os.cpu_count() or 8),
                         help='Number of simultaneous multiprocessing workers')
     parser.add_argument('--hpc', action='store_true',
                         help='Use HPC cluster path structure')
@@ -1095,6 +1297,9 @@ def main():
                         help='Local path to the "processed" directory where ESTIMATION_OUTPUT is located')
     parser.add_argument('--dry-run', action='store_true',
                         help='Run 10 contraction iters and exist for timing')
+    parser.add_argument('--chunk-size', type=int, default=0, dest='chunk_size',
+                        help='R-chunk size for memory-efficient share computation '
+                             '(0 = no chunking, use full R at once)')
     args = parser.parse_args()
 
     # Determine specs to run

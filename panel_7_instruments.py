@@ -134,7 +134,10 @@ def main():
     
     # Overwrite the panel
     logging.info(f"Saving augmented panel back to {PANEL_CSV}")
-    df_aug.to_csv(PANEL_CSV, index=False)
+    import pyarrow as pa
+    import pyarrow.csv as pa_csv
+    table = pa.Table.from_pandas(df_aug, preserve_index=False)
+    pa_csv.write_csv(table, str(PANEL_CSV))
     logging.info("Done.")
 
 if __name__ == '__main__':

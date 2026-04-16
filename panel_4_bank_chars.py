@@ -221,9 +221,8 @@ def build_panel() -> pd.DataFrame:
                 'personnel_cost_ratio', 'admin_cost_ratio', 'tax_cost_ratio',
                 'npl_provision_ratio']
     
-    for col in lag_cols:
-        if col in panel.columns:
-            panel[col + '_lag'] = panel.groupby('CodConglomeradoPrudencial')[col].shift(1)
+    present_lag_cols = [c for c in lag_cols if c in panel.columns]
+    panel[[c + '_lag' for c in present_lag_cols]] = panel.groupby('CodConglomeradoPrudencial')[present_lag_cols].shift(1)
 
     panel.rename(columns={'Year': 'year', 'Quarter': 'quarter'}, inplace=True)
     return panel
@@ -231,7 +230,9 @@ def build_panel() -> pd.DataFrame:
 def main() -> None:
     panel = build_panel()
     if not panel.empty:
-        panel.to_csv(OUT_CSV, index=False)
+        import pyarrow as pa
+        import pyarrow.csv as pa_csv
+        pa_csv.write_csv(pa.Table.from_pandas(panel, preserve_index=False), OUT_CSV)
         logging.info(f'Saved bank characteristics panel to {OUT_CSV}')
     else:
         logging.warning('Build returned an empty panel.')

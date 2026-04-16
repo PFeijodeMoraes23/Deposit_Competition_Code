@@ -1633,7 +1633,9 @@ def __egan_aux_main__():
             panel[col] = panel[col] * 100
 
     panel_path = os.path.join(OUTPUT_PATH, "egan_panel_deposits.csv")
-    panel.to_csv(panel_path, index=False)
+    import pyarrow as pa
+    import pyarrow.csv as pa_csv
+    pa_csv.write_csv(pa.Table.from_pandas(panel, preserve_index=False), panel_path)
     logging.info(f"Panel saved to {panel_path}")
 
     # Also save the quarterly macro rates for reference (convert to %)
@@ -1644,7 +1646,7 @@ def __egan_aux_main__():
         if col in df_macro_q.columns:
             df_macro_q[col] = df_macro_q[col] * 100
     macro_path = os.path.join(OUTPUT_PATH, "quarterly_macro_rates.csv")
-    df_macro_q.to_csv(macro_path, index=False)
+    pa_csv.write_csv(pa.Table.from_pandas(df_macro_q, preserve_index=False), macro_path)
     logging.info(f"Quarterly macro rates saved to {macro_path}")
 
     # ---- Summary ----
@@ -1843,7 +1845,7 @@ def append_rates_to_panel():
     df = df.merge(aux[cols_to_merge], on=["CodConglomeradoPrudencial", "AnoMes"], how="left")
     df = df.drop(columns=["AnoMes"])
     
-    df.to_csv(DEPOSITS_CSV, index=False)
+    pa_csv.write_csv(pa.Table.from_pandas(df, preserve_index=False), DEPOSITS_CSV)
     logging.info(f"Updated {DEPOSITS_CSV} with rates and spreads.")
 
 if __name__ == "__main__":

@@ -513,7 +513,9 @@ def append_to_long_panel(new_df: pd.DataFrame, panel_path: Path) -> pd.DataFrame
     before = len(combined)
     combined = combined.drop_duplicates(subset=dedup_cols, keep="last")
     log.info("Long panel: %d rows after dedup (was %d)", len(combined), before)
-    combined.to_csv(panel_path, index=False)
+    import pyarrow as pa
+    import pyarrow.csv as pa_csv
+    pa_csv.write_csv(pa.Table.from_pandas(combined, preserve_index=False), str(panel_path))
     return combined
 
 
@@ -670,8 +672,10 @@ def build_fee_summary(long_cong: pd.DataFrame) -> pd.DataFrame:
 def _save_panel_if_not_empty(df: pd.DataFrame, filename: str, label: str) -> None:
     """Save a DataFrame to CSV if it is not empty, logging the operation."""
     if not df.empty:
+        import pyarrow as pa
+        import pyarrow.csv as pa_csv
         path = PROC_DIR / filename
-        df.to_csv(path, index=False)
+        pa_csv.write_csv(pa.Table.from_pandas(df, preserve_index=False), str(path))
         log.info(f"{label}: {len(df)} rows x {len(df.columns)} cols -> {path}")
 
 def main(test_n: int | None = None) -> None:
@@ -724,11 +728,13 @@ def main(test_n: int | None = None) -> None:
 
         # -- Save raw snapshot -------------------------------------------------
         if test_n is None:
+            import pyarrow as pa
+            import pyarrow.csv as pa_csv
             raw_pj = RAW_DIR / f"tarifas_raw_{today_tag}_pj.csv"
             for ct, path in [("F", raw_pf), ("J", raw_pj)]:
                 subset = new_rows[new_rows["customer_type"] == ct]
                 if not subset.empty:
-                    subset.to_csv(path, index=False)
+                    pa_csv.write_csv(pa.Table.from_pandas(subset, preserve_index=False), str(path))
                     log.info("Saved raw %s: %d rows -> %s", ct, len(subset), path.name)
 
     # -- Step 3: load conglomerate map ------------------------------------------
@@ -758,7 +764,9 @@ def main(test_n: int | None = None) -> None:
 
     wide_inst = build_wide_panel(inst_long_latest)
     inst_wide_path = PROC_DIR / "tarifas_panel_institution_wide.csv"
-    wide_inst.to_csv(inst_wide_path, index=False)
+    import pyarrow as pa
+    import pyarrow.csv as pa_csv
+    pa_csv.write_csv(pa.Table.from_pandas(wide_inst, preserve_index=False), str(inst_wide_path))
     log.info(
         "Institution wide panel: %d rows x %d cols -> %s",
         len(wide_inst), len(wide_inst.columns), inst_wide_path,

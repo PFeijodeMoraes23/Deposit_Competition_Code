@@ -162,27 +162,25 @@ def build_cnpj_conglomerate_map() -> dict:
 
     # Strategy 2: numeric CodInst entries (individual institution CNPJs)
     lf["codinst_int"] = coerce_cnpj(lf["CodInst"])
-    strat2 = lf.dropna(subset=["codinst_int"])
-    for _, row in strat2.iterrows():
-        cnpj = int(row["codinst_int"])
-        mapping[cnpj] = (
-            row["CodConglomeradoPrudencial"],
-            int(row["lider_int"]) if pd.notna(row["lider_int"]) else None,
-            normalize_str(row["NomeInstituicao"]),
-        )
+    strat2 = lf.dropna(subset=["codinst_int"]).copy()
+    strat2["_cnpj_k"] = strat2["codinst_int"].astype(int)
+    strat2["_name"]   = strat2["NomeInstituicao"].map(normalize_str)
+    strat2["_lider"]  = strat2["lider_int"].where(strat2["lider_int"].notna()).map(
+        lambda v: int(v) if pd.notna(v) else None
+    )
+    for row in strat2[["_cnpj_k", "CodConglomeradoPrudencial", "_lider", "_name"]].itertuples(index=False):
+        mapping[row._cnpj_k] = (row.CodConglomeradoPrudencial, row._lider, row._name)
 
     # Strategy 1: CnpjInstituicaoLider (overrides – leaders take precedence)
     strat1 = lf.dropna(subset=["lider_int"])
     # Use the most recent name for each leader
     name_map = (strat1.sort_values("NomeInstituicao")
                       .drop_duplicates(subset=["lider_int"], keep="last"))
-    for _, row in name_map.iterrows():
-        cnpj = int(row["lider_int"])
-        mapping[cnpj] = (
-            row["CodConglomeradoPrudencial"],
-            cnpj,
-            normalize_str(row["NomeInstituicao"]),
-        )
+    name_map = name_map.copy()
+    name_map["_cnpj_k"] = name_map["lider_int"].astype(int)
+    name_map["_name"]   = name_map["NomeInstituicao"].map(normalize_str)
+    for row in name_map[["_cnpj_k", "CodConglomeradoPrudencial", "_name"]].itertuples(index=False):
+        mapping[row._cnpj_k] = (row.CodConglomeradoPrudencial, row._cnpj_k, row._name)
 
     logging.info(f"CNPJ→conglomerate map: {len(mapping)} entries")
     return mapping
@@ -708,7 +706,9 @@ def main():
 
     # Save
     out_path = os.path.join(OUTPUT_DIR, "deposits_panel.csv")
-    panel.to_csv(out_path, index=False, encoding="utf-8")
+    import pyarrow as pa
+    import pyarrow.csv as pa_csv
+    pa_csv.write_csv(pa.Table.from_pandas(panel, preserve_index=False), out_path)
     logging.info(f"Saved panel to {out_path}  ({len(panel):,} rows)")
 
     # Summary

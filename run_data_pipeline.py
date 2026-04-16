@@ -38,6 +38,7 @@ Pipeline stages
     2a. scrape_3_pix_panel.py                   Process BCB PIX municipality files -> MCA PIX adoption panel
     2b. scrape_4_anatel.py                      Download ANATEL mobile connections -> MCA connectivity panel
     2d. scrape_5_bcb_inclusion.py               BCB banking access-points (branches + correspondents) -> MCA inclusion panel
+    2d2. scrape_8_bcb_banked.py                 BCB ESTBAN deposit balances (Dec snapshot) + WB Findex -> MCA banked-fraction proxy panel
     2e. scrape_6_cadunico.py                    CadUnico low-income families -> MCA poverty panel
     2f. scrape_7_fees.py                        BCB bank fee schedules (PF + PJ) -> tarifas conglomerate panel + fee summary
 
@@ -94,6 +95,7 @@ Scripts called by the data pipeline:
 [3] scrape_3_pix_panel.py
 [4] scrape_4_anatel.py
 [5] scrape_5_bcb_inclusion.py
+[5b] scrape_8_bcb_banked.py
 [6] scrape_6_cadunico.py
 [7] scrape_7_fees.py
 [8] panel_1_deposits.py
@@ -175,6 +177,8 @@ STEPS = [
      "Download ANATEL mobile connections -> MCA connectivity panel"),
     (2, "5", "scrape_5_bcb_inclusion.py",
      "BCB banking access-points (branches + correspondents) -> MCA inclusion panel"),
+    (2, "5b", "scrape_8_bcb_banked.py",
+     "BCB ESTBAN deposit balances (Dec snapshot) + WB Findex -> MCA banked-fraction proxy panel"),
     (2, "6", "scrape_6_cadunico.py",
      "CadUnico low-income families -> MCA poverty panel"),
     (2, "7", "scrape_7_fees.py",
@@ -316,6 +320,7 @@ WAVES: list[list[str]] = [
     ["3"],                                     # Wave 2b: Stage 2 scrapers CANNOT be parallelized
     ["4"],                                     # Wave 2c: ANATEL
     ["5"],                                     # Wave 2d: BCB inclusion
+    ["5b"],                                    # Wave 2d2: BCB ESTBAN banked-fraction proxy
     ["6"],                                     # Wave 2e: CadUnico
     ["7"],                                     # Wave 2f: fees
     ["8", "8b"],                               # Wave 2g: characteristic panels + deposits + IP rates
@@ -405,6 +410,7 @@ Scripts called by the data pipeline:
 [3] scrape_3_pix_panel.py
 [4] scrape_4_anatel.py
 [5] scrape_5_bcb_inclusion.py
+[5b] scrape_8_bcb_banked.py
 [6] scrape_6_cadunico.py
 [7] scrape_7_fees.py
 [8] panel_1_deposits.py

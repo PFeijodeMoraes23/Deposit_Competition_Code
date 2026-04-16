@@ -1224,7 +1224,9 @@ def main():
     panel = aggregate_to_mca(pop, gdp, age)
     logging.info(f"MCA panel: {len(panel):,} rows  ({panel['mca_code'].nunique()} MCAs)")
 
-    panel.to_csv(OUTPUT, index=False, encoding="latin-1")
+    import pyarrow as pa
+    import pyarrow.csv as pa_csv
+    pa_csv.write_csv(pa.Table.from_pandas(panel, preserve_index=False), OUTPUT)
     logging.info(f"Saved to {OUTPUT}")
 
     print(
