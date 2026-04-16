@@ -38,7 +38,7 @@ warnings.filterwarnings("ignore")
 _ROOT = Path(__file__).resolve().parents[2]
 DATA_DIR = _ROOT / "BCB" / "Egan_et_al_2025_Rep" / "processed"
 PANEL_CSV = DATA_DIR / "market_panel.csv"
-OUTPUT_DIR = DATA_DIR / "ESTIMATION_OUTPUT" / "DESCRIPTIVES"
+OUTPUT_DIR = _ROOT / "Drafts" / "Deposit Competition" / "Rout"
 
 # Map exactly to the 5 macro-regions of Brazil using the 1st digit of CODMUN_IBGE
 REGION_MAPPING = {

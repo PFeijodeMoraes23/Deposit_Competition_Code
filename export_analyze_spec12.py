@@ -305,7 +305,7 @@ def main():
                 print(f"  [Warning] Could not load phi CSV for {label}: {e}")
 
     # ---- 1) Generate DataFrames & Export LaTeX Tables ----
-    out_dir = DATA_DIR / "ANALYSIS" / "Spec12"
+    out_dir = _ROOT / "Drafts" / "Deposit Competition" / "Rout"
     out_dir.mkdir(parents=True, exist_ok=True)
     
     order = list(mapping.keys())
