@@ -20,7 +20,7 @@ OUTPUT_DIR = DATA_DIR / "ESTIMATION_OUTPUT" / "DEMAND_PREP" / "rout_1"
 RESULTS_PICKLE = OUTPUT_DIR / "estimation_results.pkl"
 CLUSTER_JSON = OUTPUT_DIR / "cluster_diagnostics.json"
 
-TEX_OUT_DIR = _ROOT / "Drafts" / "Deposit Competition" / "Rout"
+TEX_OUT_DIR = DATA_DIR / "ESTIMATION_OUTPUT" / "Rout"
 OUT_DIR = str(TEX_OUT_DIR)
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 TEX_OUT_DIR.mkdir(parents=True, exist_ok=True)

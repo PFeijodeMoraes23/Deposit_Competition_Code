@@ -14,7 +14,7 @@ ROOT = pathlib.Path(__file__).resolve().parent
 # Match get_paths() logic from estimation loop scripts (locating the BCB data folder)
 DATA_DIR = ROOT.parents[1] / "BCB" / "Egan_et_al_2025_Rep" / "processed"
 RESULTS_DIR = DATA_DIR / "ESTIMATION_OUTPUT" / "BLP_RESULTS"
-TABLES_DIR = ROOT.parents[1] / "Drafts" / "Deposit Competition" / "Rout"
+TABLES_DIR = DATA_DIR / "ESTIMATION_OUTPUT" / "Rout"
 
 TABLES_DIR.mkdir(parents=True, exist_ok=True)
 

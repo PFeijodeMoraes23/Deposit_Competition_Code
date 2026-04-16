@@ -5,7 +5,7 @@ Orchestrator: dispatches to individual export_*_sleep_results.py scripts in para
 
 Each individual script writes:
   - Data/summaries (txt, csv): DEMAND_PREP/rout_*/EXPORTS/
-  - TeX tables:                Drafts/Deposit Competition/Rout/
+  - TeX tables:                ESTIMATION_OUTPUT/Rout/
 
 CLI Usage Examples:
 -------------------
