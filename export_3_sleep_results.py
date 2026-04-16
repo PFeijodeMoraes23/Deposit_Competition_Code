@@ -118,11 +118,16 @@ def clean_name(v):
             return labels[base] + ' $\\times$ log(Assets)'
     return v.replace('_', '\\_')
 
-def _get_first_stage_row_strings(var, panels, ivs, results_dict, opt):
+def _get_first_stage_row_strings(var, panels, ivs, results_dict):
     coef_strs, se_strs = [], []
     has_val = False
     for p, (iv_key, _) in itertools.product(panels, ivs):
-        res = results_dict[f"Option_{opt}_{iv_key}_{p}"]['first_stage']
+        entry = results_dict.get(f"{iv_key} x {p}", {})
+        res = entry.get('first_stage') if entry else None
+        if res is None:
+            coef_strs.append("")
+            se_strs.append("")
+            continue
         if var in res.params:
             has_val = True
             c, se, pval = res.params[var], res.bse[var], res.pvalues[var]
@@ -133,7 +138,7 @@ def _get_first_stage_row_strings(var, panels, ivs, results_dict, opt):
             se_strs.append("")
     return coef_strs, se_strs, has_val
 
-def build_first_stage_table(results_dict, G, G_star, opt):
+def build_first_stage_table(results_dict, G, G_star):
     panels = ['Base', 'Macro', 'Tech']
     fs_spec_numbers = {
         ('Base', 'IV_CostShifters'): 2,
@@ -155,7 +160,9 @@ def build_first_stage_table(results_dict, G, G_star, opt):
 
     vs = list(dict.fromkeys(
         v for p, (iv_key, _) in itertools.product(panels, ivs)
-        for v in results_dict[f"Option_{opt}_{iv_key}_{p}"]['first_stage'].params.index
+        for entry in [results_dict.get(f"{iv_key} x {p}")]
+        if entry and entry.get('first_stage') is not None
+        for v in entry['first_stage'].params.index
         if v != 'const'
     ))
 
@@ -164,7 +171,7 @@ def build_first_stage_table(results_dict, G, G_star, opt):
     out = [
         "\\begin{landscape}",
         "\\begin{table}[htbp]\\centering",
-        "\\caption{First Stage Estimation (Option {opt})}",
+        "\\caption{First Stage Estimation --- Pooled}",
         "\\resizebox{\\linewidth}{!}{",
         "\\begin{tabular}{l" + "c"*9 + "}\\toprule",
         " & \\multicolumn{3}{c}{\\textbf{Base}} & \\multicolumn{3}{c}{\\textbf{Macro}} & \\multicolumn{3}{c}{\\textbf{Tech}} \\\\ \\cmidrule(lr){2-4} \\cmidrule(lr){5-7} \\cmidrule(lr){8-10}",
@@ -172,7 +179,7 @@ def build_first_stage_table(results_dict, G, G_star, opt):
     ]
     
     for var in vs:
-        coef_strs, se_strs, has_val = _get_first_stage_row_strings(var, panels, ivs, results_dict, opt)
+        coef_strs, se_strs, has_val = _get_first_stage_row_strings(var, panels, ivs, results_dict)
                     
         if has_val:
             out.extend(
@@ -188,7 +195,12 @@ def build_first_stage_table(results_dict, G, G_star, opt):
     g_strs = []
     g_star_strs = []
     for p, (iv_key, _) in itertools.product(panels, ivs):
-        res = results_dict[f"Option_{opt}_{iv_key}_{p}"]['first_stage']
+        entry = results_dict.get(f"{iv_key} x {p}", {})
+        res = entry.get('first_stage') if entry else None
+        if res is None:
+            obs_strs.append(""); rsq_strs.append(""); fstat_strs.append("")
+            g_strs.append(""); g_star_strs.append("")
+            continue
         obs_strs.append(f"{int(res.nobs):,}")
         rsq_strs.append(f"{res.rsquared:.4f}")
         fstat_val = getattr(res, 'fvalue', None)
@@ -215,11 +227,15 @@ def build_first_stage_table(results_dict, G, G_star, opt):
     )
     return "\n".join(out)
 
-def _get_second_stage_row_strings(vshort, panels, estimators, results_dict, opt):
+def _get_second_stage_row_strings(vshort, panels, estimators, results_dict):
     coef_strs, se_strs = [], []
     for p_name, (est_key, _) in itertools.product(panels, estimators):
-        spec_key = f"Option_{opt}_{est_key}_{p_name}"
-        res = results_dict[spec_key]['second_stage']
+        entry = results_dict.get(f"{est_key} x {p_name}", {})
+        res = entry.get('second_stage') if entry else None
+        if res is None:
+            coef_strs.append("")
+            se_strs.append("")
+            continue
 
         var = vshort
         if var not in res.params and f"interaction_{var}" in res.params:
@@ -234,7 +250,7 @@ def _get_second_stage_row_strings(vshort, panels, estimators, results_dict, opt)
             se_strs.append("")
     return coef_strs, se_strs
 
-def build_second_stage_table(results_dict, G, G_star, opt):
+def build_second_stage_table(results_dict, G, G_star):
     panels = ['Base', 'Macro', 'Tech']
     ss_spec_numbers = {
         ('Base', 'OLS'): 1,
@@ -260,7 +276,9 @@ def build_second_stage_table(results_dict, G, G_star, opt):
 
     all_vars = list(dict.fromkeys(
         v.replace('interaction_', '') for p, (est_key, _) in itertools.product(panels, estimators)
-        for v in results_dict[f"Option_{opt}_{est_key}_{p}"]['second_stage'].params.index
+        for entry in [results_dict.get(f"{est_key} x {p}")]
+        if entry and entry.get('second_stage') is not None
+        for v in entry['second_stage'].params.index
         if v not in ['v_hat', 'v_hat_2', 'v_hat_3']
     ))
 
@@ -272,7 +290,7 @@ def build_second_stage_table(results_dict, G, G_star, opt):
     out = [
         "\\begin{landscape}",
         "\\begin{table}[htbp]\\centering",
-        "\\caption{Second Stage Estimation}",
+        "\\caption{Second Stage Estimation --- Pooled}",
         "\\resizebox{\\linewidth}{!}{",
         "\\begin{tabular}{l" + "c"*12 + "}\\toprule",
         " & \\multicolumn{4}{c}{\\textbf{Base}} & \\multicolumn{4}{c}{\\textbf{Macro}} & \\multicolumn{4}{c}{\\textbf{Tech}} \\\\ \\cmidrule(lr){2-5} \\cmidrule(lr){6-9} \\cmidrule(lr){10-13}",
@@ -280,7 +298,7 @@ def build_second_stage_table(results_dict, G, G_star, opt):
     ]
     
     for vshort in all_vars:
-        coef_strs, se_strs = _get_second_stage_row_strings(vshort, panels, estimators, results_dict, opt)
+        coef_strs, se_strs = _get_second_stage_row_strings(vshort, panels, estimators, results_dict)
 
         if any(c != "" for c in coef_strs):
             out.extend(
@@ -295,7 +313,12 @@ def build_second_stage_table(results_dict, G, G_star, opt):
     g_strs = []
     g_star_strs = []
     for p_name, (est_key, _) in itertools.product(panels, estimators):
-        res = results_dict[f"Option_{opt}_{est_key}_{p_name}"]['second_stage']
+        entry = results_dict.get(f"{est_key} x {p_name}", {})
+        res = entry.get('second_stage') if entry else None
+        if res is None:
+            obs_strs.append(""); rsq_strs.append("")
+            g_strs.append(""); g_star_strs.append("")
+            continue
         obs_strs.append(f"{int(res.nobs):,}")
         rsq_strs.append(f"{res.rsquared:.4f}")
         g_strs.append(str(getattr(res, 'G_nominal', '\\text{N/A}')))
@@ -456,9 +479,8 @@ To resolve extreme small-$G^*$ parameter bias natively, the econometric benchmar
     
     fs_tables = []
     ss_tables = []
-    for opt in [1, 2, 3]:
-        fs_tables.append("\\subsection*{Option " + str(opt) + "}\n" + build_first_stage_table(results_dict, G_nominal, G_star, opt))
-        ss_tables.append("\\subsection*{Option " + str(opt) + "}\n" + build_second_stage_table(results_dict, G_nominal, G_star, opt))
+    fs_tables.append(build_first_stage_table(results_dict, G_nominal, G_star))
+    ss_tables.append(build_second_stage_table(results_dict, G_nominal, G_star))
         
     fs_table_tex = "\\newpage\\clearpage\n".join(fs_tables)
     ss_table_tex = "\\newpage\\clearpage\n".join(ss_tables)

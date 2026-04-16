@@ -60,7 +60,7 @@ DATA_DIR = _ROOT / "BCB" / "Egan_et_al_2025_Rep" / "processed"
 PANEL_CSV = DATA_DIR / "market_panel.csv"
 OUTPUT_DIR = DATA_DIR / "ESTIMATION_OUTPUT" / "DEMAND_PREP" / "rout_2"
 
-POOLED_DIR = OUTPUT_DIR / "POOLED"
+POOLED_DIR = OUTPUT_DIR / "POOLED_NLLS"
 PLOTS_DIR = OUTPUT_DIR / "PLOTS"
 
 POOLED_DIR.mkdir(parents=True, exist_ok=True)

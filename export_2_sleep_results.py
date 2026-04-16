@@ -122,7 +122,12 @@ def _get_first_stage_row_strings(var, panels, ivs, results_dict, opt):
     coef_strs, se_strs = [], []
     has_val = False
     for p, (iv_key, _) in itertools.product(panels, ivs):
-        res = results_dict[f"Option_{opt}_{iv_key}_{p}"]['first_stage']
+        entry = results_dict.get(f"Option_{opt}_{iv_key}_{p}", {})
+        res = entry.get('first_stage') if entry else None
+        if res is None:
+            coef_strs.append("")
+            se_strs.append("")
+            continue
         if var in res.params:
             has_val = True
             c, se, pval = res.params[var], res.bse[var], res.pvalues[var]
@@ -155,7 +160,9 @@ def build_first_stage_table(results_dict, G, G_star, opt):
 
     vs = list(dict.fromkeys(
         v for p, (iv_key, _) in itertools.product(panels, ivs)
-        for v in results_dict[f"Option_{opt}_{iv_key}_{p}"]['first_stage'].params.index
+        for entry in [results_dict.get(f"Option_{opt}_{iv_key}_{p}")]
+        if entry and entry.get('first_stage') is not None
+        for v in entry['first_stage'].params.index
         if v != 'const'
     ))
 
@@ -188,7 +195,12 @@ def build_first_stage_table(results_dict, G, G_star, opt):
     g_strs = []
     g_star_strs = []
     for p, (iv_key, _) in itertools.product(panels, ivs):
-        res = results_dict[f"Option_{opt}_{iv_key}_{p}"]['first_stage']
+        entry = results_dict.get(f"Option_{opt}_{iv_key}_{p}", {})
+        res = entry.get('first_stage') if entry else None
+        if res is None:
+            obs_strs.append(""); rsq_strs.append(""); fstat_strs.append("")
+            g_strs.append(""); g_star_strs.append("")
+            continue
         obs_strs.append(f"{int(res.nobs):,}")
         rsq_strs.append(f"{res.rsquared:.4f}")
         fstat_val = getattr(res, 'fvalue', None)
@@ -219,7 +231,12 @@ def _get_second_stage_row_strings(vshort, panels, estimators, results_dict, opt)
     coef_strs, se_strs = [], []
     for p_name, (est_key, _) in itertools.product(panels, estimators):
         spec_key = f"Option_{opt}_{est_key}_{p_name}"
-        res = results_dict[spec_key]['second_stage']
+        entry = results_dict.get(spec_key, {})
+        res = entry.get('second_stage') if entry else None
+        if res is None:
+            coef_strs.append("")
+            se_strs.append("")
+            continue
 
         var = vshort
         if var not in res.params and f"interaction_{var}" in res.params:
@@ -260,7 +277,9 @@ def build_second_stage_table(results_dict, G, G_star, opt):
 
     all_vars = list(dict.fromkeys(
         v.replace('interaction_', '') for p, (est_key, _) in itertools.product(panels, estimators)
-        for v in results_dict[f"Option_{opt}_{est_key}_{p}"]['second_stage'].params.index
+        for entry in [results_dict.get(f"Option_{opt}_{est_key}_{p}")]
+        if entry and entry.get('second_stage') is not None
+        for v in entry['second_stage'].params.index
         if v not in ['v_hat', 'v_hat_2', 'v_hat_3']
     ))
 
@@ -295,7 +314,12 @@ def build_second_stage_table(results_dict, G, G_star, opt):
     g_strs = []
     g_star_strs = []
     for p_name, (est_key, _) in itertools.product(panels, estimators):
-        res = results_dict[f"Option_{opt}_{est_key}_{p_name}"]['second_stage']
+        entry = results_dict.get(f"Option_{opt}_{est_key}_{p_name}", {})
+        res = entry.get('second_stage') if entry else None
+        if res is None:
+            obs_strs.append(""); rsq_strs.append("")
+            g_strs.append(""); g_star_strs.append("")
+            continue
         obs_strs.append(f"{int(res.nobs):,}")
         rsq_strs.append(f"{res.rsquared:.4f}")
         g_strs.append(str(getattr(res, 'G_nominal', '\\text{N/A}')))

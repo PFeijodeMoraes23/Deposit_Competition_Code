@@ -16,7 +16,7 @@ if _THIS_DIR not in sys.path:
 # Paths
 _ROOT = Path(__file__).resolve().parents[2]
 DATA_DIR = _ROOT / "BCB" / "Egan_et_al_2025_Rep" / "processed"
-OUTPUT_DIR = DATA_DIR / "ESTIMATION_OUTPUT" / "DEMAND_PREP" / "rout_2" / "POOLED"
+OUTPUT_DIR = DATA_DIR / "ESTIMATION_OUTPUT" / "DEMAND_PREP" / "rout_2" / "POOLED_NLLS"
 RESULTS_PICKLE = OUTPUT_DIR / "estimation_results.pkl"
 CLUSTER_JSON = OUTPUT_DIR / "cluster_diagnostics.json"
 
@@ -118,12 +118,13 @@ def clean_name(v):
             return labels[base] + ' $\\times$ log(Assets)'
     return v.replace('_', '\\_')
 
-def _get_first_stage_row_strings(var, panels, ivs, results_dict, opt):
+def _get_first_stage_row_strings(var, panels, ivs, results_dict):
     coef_strs, se_strs = [], []
     has_val = False
     for p, (iv_key, _) in itertools.product(panels, ivs):
-        res = results_dict[f"Option_{opt}_{iv_key}_{p}"]['first_stage']
-        if var in res.params:
+        entry = results_dict.get(f"{iv_key} x {p}", {})
+        res = entry.get('first_stage') if isinstance(entry, dict) else None
+        if res is not None and var in res.params:
             has_val = True
             c, se, pval = res.params[var], res.bse[var], res.pvalues[var]
             coef_strs.append(f"${c:.4f}^{{{stars(pval)}}}$")
@@ -133,98 +134,96 @@ def _get_first_stage_row_strings(var, panels, ivs, results_dict, opt):
             se_strs.append("")
     return coef_strs, se_strs, has_val
 
-def build_first_stage_table(results_dict, G, G_star, opt):
-    panels = ['Base', 'Macro', 'Tech']
-    fs_spec_numbers = {
-        ('Base', 'IV_CostShifters'): 2,
-        ('Base', 'IV_Wholesale'): 3,
-        ('Base', 'IV_HausmanFull'): 4,
-        ('Macro', 'IV_CostShifters'): 6,
-        ('Macro', 'IV_Wholesale'): 7,
-        ('Macro', 'IV_HausmanFull'): 8,
-        ('Tech', 'IV_CostShifters'): 10,
-        ('Tech', 'IV_Wholesale'): 11,
-        ('Tech', 'IV_HausmanFull'): 12,
-    }
-
+def build_first_stage_table(results_dict, G, G_star):
+    panels = ['Base', 'Base_Selic', 'Macro', 'Tech']
+    n_panels = len(panels)
     ivs = [
         ('IV_CostShifters', 'IV Cost'),
         ('IV_Wholesale', 'IV Wholesale'),
         ('IV_HausmanFull', 'Hausman')
     ]
+    n_ivs = len(ivs)
+    n_cols = n_panels * n_ivs
 
     vs = list(dict.fromkeys(
-        v for p, (iv_key, _) in itertools.product(panels, ivs)
-        for v in results_dict[f"Option_{opt}_{iv_key}_{p}"]['first_stage'].params.index
+        v
+        for p, (iv_key, _) in itertools.product(panels, ivs)
+        for entry in [results_dict.get(f"{iv_key} x {p}", {})]
+        if isinstance(entry, dict) and entry.get('first_stage') is not None
+        for v in entry['first_stage'].params.index
         if v != 'const'
     ))
 
-    col_names = [f"{iv_label} ({fs_spec_numbers[(p, iv_key)]})" for p, (iv_key, iv_label) in itertools.product(panels, ivs)]
+    col_names = [f"{iv_label}" for p, (iv_key, iv_label) in itertools.product(panels, ivs)]
+    panel_headers = " & ".join(
+        f"\\multicolumn{{{n_ivs}}}{{c}}{{\\textbf{{{p}}}}}" for p in panels
+    )
+    cmidrules = " ".join(
+        f"\\cmidrule(lr){{{2 + i*n_ivs}-{1 + (i+1)*n_ivs}}}" for i in range(n_panels)
+    )
 
     out = [
         "\\begin{landscape}",
         "\\begin{table}[htbp]\\centering",
-        "\\caption{First Stage Estimation (Option {opt})}",
+        "\\caption{First Stage Estimation --- Pooled NLLS}",
         "\\resizebox{\\linewidth}{!}{",
-        "\\begin{tabular}{l" + "c"*9 + "}\\toprule",
-        " & \\multicolumn{3}{c}{\\textbf{Base}} & \\multicolumn{3}{c}{\\textbf{Macro}} & \\multicolumn{3}{c}{\\textbf{Tech}} \\\\ \\cmidrule(lr){2-4} \\cmidrule(lr){5-7} \\cmidrule(lr){8-10}",
+        "\\begin{tabular}{l" + "c"*n_cols + "}\\toprule",
+        f" & {panel_headers} \\\\ {cmidrules}",
         " & " + " & ".join(col_names) + " \\\\ \\midrule"
     ]
-    
-    for var in vs:
-        coef_strs, se_strs, has_val = _get_first_stage_row_strings(var, panels, ivs, results_dict, opt)
-                    
-        if has_val:
-            out.extend(
-                (
-                    f"{clean_name(var)} & " + " & ".join(coef_strs) + " \\\\",
-                    " & " + " & ".join(se_strs) + " \\\\"
-                )
-            )
 
-    obs_strs = []
-    rsq_strs = []
-    fstat_strs = []
-    g_strs = []
-    g_star_strs = []
+    for var in vs:
+        coef_strs, se_strs, has_val = _get_first_stage_row_strings(var, panels, ivs, results_dict)
+        if has_val:
+            out.extend((
+                f"{clean_name(var)} & " + " & ".join(coef_strs) + " \\\\",
+                " & " + " & ".join(se_strs) + "\\\\"
+            ))
+
+    obs_strs, rsq_strs, fstat_strs, g_strs, g_star_strs = [], [], [], [], []
     for p, (iv_key, _) in itertools.product(panels, ivs):
-        res = results_dict[f"Option_{opt}_{iv_key}_{p}"]['first_stage']
+        entry = results_dict.get(f"{iv_key} x {p}", {})
+        res = entry.get('first_stage') if isinstance(entry, dict) else None
+        if res is None:
+            obs_strs.append("---"); rsq_strs.append("---"); fstat_strs.append("---")
+            g_strs.append("---"); g_star_strs.append("---")
+            continue
         obs_strs.append(f"{int(res.nobs):,}")
         rsq_strs.append(f"{res.rsquared:.4f}")
         fstat_val = getattr(res, 'fvalue', None)
         fstat_pval = getattr(res, 'f_pvalue', 1.0)
-        fstat_strs.append(f"${fstat_val:.2f}^{{{stars(fstat_pval)}}}$" if fstat_val is not None else "")
-        g_strs.append(str(getattr(res, 'G_nominal', '\\text{N/A}')))
+        fstat_strs.append(f"${fstat_val:.2f}^{{{stars(fstat_pval)}}}$" if fstat_val is not None else "---")
+        g_strs.append(str(getattr(res, 'G_nominal', '---')))
         g_star_val = getattr(res, 'G_star', None)
-        g_star_strs.append(f"{g_star_val:.2f}" if g_star_val is not None else "\\text{N/A}")
+        g_star_strs.append(f"{g_star_val:.2f}" if g_star_val is not None else "---")
 
-    out.extend(
-        (
-            "\\midrule",
-            "Obs & " + " & ".join(obs_strs) + " \\\\",
-            "$R^2$ & " + " & ".join(rsq_strs) + " \\\\",
-            "F-Statistic & " + " & ".join(fstat_strs) + " \\\\",
-            "Fixed Effects & " + " & ".join(["No"]*9) + " \\\\",
-            "Clusters (G) & " + " & ".join(g_strs) + " \\\\",
-            "Effective Clusters ($G^*$) & " + " & ".join(g_star_strs) + " \\\\",
-            "\\bottomrule",
-            "\\end{tabular}}",
-            "\\end{table}",
-            "\\end{landscape}"
-        )
-    )
+    out.extend((
+        "\\midrule",
+        "Obs & " + " & ".join(obs_strs) + " \\\\",
+        "$R^2$ & " + " & ".join(rsq_strs) + " \\\\",
+        "F-Statistic & " + " & ".join(fstat_strs) + " \\\\",
+        "Fixed Effects & " + " & ".join(["No"]*n_cols) + " \\\\",
+        "Clusters (G) & " + " & ".join(g_strs) + " \\\\",
+        "Effective Clusters ($G^*$) & " + " & ".join(g_star_strs) + " \\\\",
+        "\\bottomrule",
+        "\\end{tabular}}",
+        "\\end{table}",
+        "\\end{landscape}"
+    ))
     return "\n".join(out)
 
-def _get_second_stage_row_strings(vshort, panels, estimators, results_dict, opt):
+def _get_second_stage_row_strings(vshort, panels, estimators, results_dict):
     coef_strs, se_strs = [], []
     for p_name, (est_key, _) in itertools.product(panels, estimators):
-        spec_key = f"Option_{opt}_{est_key}_{p_name}"
-        res = results_dict[spec_key]['second_stage']
-
+        entry = results_dict.get(f"{est_key} x {p_name}", {})
+        res = entry.get('second_stage') if isinstance(entry, dict) else None
+        if res is None:
+            coef_strs.append("")
+            se_strs.append("")
+            continue
         var = vshort
         if var not in res.params and f"interaction_{var}" in res.params:
             var = f"interaction_{var}"
-
         if var in res.params:
             c, se, pval = res.params[var], res.bse[var], res.pvalues[var]
             coef_strs.append(f"${c:.4f}^{{{stars(pval)}}}$")
@@ -443,6 +442,16 @@ To resolve extreme small-$G^*$ parameter bias natively, the econometric benchmar
         return
 
     print(" - Reading pickled model estimates...")
+    # NonLinearResults must be in scope before pickle.load restores the objects.
+    class NonLinearResults:
+        def __init__(self, params, bse, tvalues, pvalues, df_resid, params_native=None):
+            self.params = params
+            self.bse = bse
+            self.tvalues = tvalues
+            self.pvalues = pvalues
+            self.df_resid = df_resid
+            self.params_native = params_native if params_native is not None else params
+            self.G_star = df_resid
     with open(RESULTS_PICKLE, 'rb') as f:
         results_dict = pickle.load(f)
         
@@ -454,14 +463,8 @@ To resolve extreme small-$G^*$ parameter bias natively, the econometric benchmar
     print(" - Generating strict regression tables...")
     cluster_table_tex = ''
     
-    fs_tables = []
-    ss_tables = []
-    for opt in [1, 2, 3]:
-        fs_tables.append("\\subsection*{Option " + str(opt) + "}\n" + build_first_stage_table(results_dict, G_nominal, G_star, opt))
-        ss_tables.append("\\subsection*{Option " + str(opt) + "}\n" + build_second_stage_table(results_dict, G_nominal, G_star, opt))
-        
-    fs_table_tex = "\\newpage\\clearpage\n".join(fs_tables)
-    ss_table_tex = "\\newpage\\clearpage\n".join(ss_tables)
+    fs_table_tex = build_first_stage_table(results_dict, G_nominal, G_star)
+    ss_table_tex = build_second_stage_table(results_dict, G_nominal, G_star)
 
     preamble = r"""\documentclass[11pt]{article}
 \usepackage[utf8]{inputenc}
