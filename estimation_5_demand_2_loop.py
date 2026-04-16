@@ -1169,7 +1169,7 @@ def main():
                     if err is not None:
                         print(f"  [!] Spec {sp} failed:\\n{err}")
                     elif res is not None:
-                        out_pkl = BLP_OUTPUT_DIR / f"blp_results_spec_6_{current_alt}_{sp}_{args.stage}.pkl"
+                        out_pkl = BLP_OUTPUT_DIR / f"blp_results_spec_5_{current_alt}_{sp}_{args.stage}.pkl"
                         with open(out_pkl, 'wb') as f:
                             pickle.dump(res, f)
                         print(f"  Saved: {out_pkl.name}")
@@ -1183,7 +1183,7 @@ def main():
                         }
 
             # Summary JSON
-            summary_path = BLP_OUTPUT_DIR / f"blp_summary_{current_alt}_6_{args.stage}.json"
+            summary_path = BLP_OUTPUT_DIR / f"blp_summary_{current_alt}_5_{args.stage}.json"
             with open(summary_path, 'w') as f:
                 json.dump(all_results, f, indent=2)
             _log_status(f"Summary saved to: {summary_path}")

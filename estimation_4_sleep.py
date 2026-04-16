@@ -10,13 +10,13 @@ using a logistic transform: phi = exp(X*Beta) / (1 + exp(X*Beta)).
 Like estimation 4, D-firms use national population-weighted average states, and
 a D-type dummy and PIX existence dummy are included.
 
-Outputs are directed to ESTIMATION_OUTPUT/SLEEPINESS/SLEEPINESS_5
+Outputs are directed to ESTIMATION_OUTPUT/SLEEPINESS/SLEEPINESS_4
 
 CLI Options:
 ------------
-usage: estimation_2_sleep.py [-h] [--spec12]
+usage: estimation_4_sleep.py [-h] [--spec12]
 
-Estimation 3: Sleepiness Robustness
+Estimation 4: Sleepiness Robustness
 
 options:
   -h, --help  show this help message and exit
@@ -515,7 +515,7 @@ def run_plotting_phase(spec12_only=False):
     print("Plots generated.\n")
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Estimation 3: Sleepiness Robustness")
+    parser = argparse.ArgumentParser(description="Estimation 4: Sleepiness Robustness")
     parser.add_argument('--spec12', action='store_true', help='Only run spec 12 (Tech x IV_HausmanFull)')
     args = parser.parse_args()
 

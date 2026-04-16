@@ -379,7 +379,7 @@ def main():
                     out_pkl = demand_output_dir / f"demand_5_{alt_label}_final_spec_{target_id}.parquet"
                     df_spec.to_parquet(out_pkl, engine='pyarrow')
                     print(f" > Saved Spec {target_id} ({alt} {model_type}) -> {out_pkl.name} ({len(df_spec)} rows)")
-                    spec_summaries[f"6_{alt_label}_{target_id}"] = summary
+                    spec_summaries[f"5_{alt_label}_{target_id}"] = summary
                     total_saved += 1
                 else:
                     print(f"   [!] Failed or skipped Spec: {target_id} {model_type} in {alt}")
@@ -401,7 +401,7 @@ def main():
         print(f"\nSummary saved to: {summary_file}")
         print(f"[SUCCESS] {total_saved} per-spec Pickles written to {demand_output_dir}")
     else:
-        print(f"\n[WARNING] No Pickles written for Estimation 6")
+        print(f"\n[WARNING] No Pickles written for Estimation 5")
 
 if __name__ == "__main__":
     pd.options.mode.chained_assignment = None

@@ -16,7 +16,7 @@ CLI Options:
 ------------
 usage: estimation_2_sleep.py [-h] [--spec12]
 
-Estimation 3: Sleepiness Robustness
+Estimation 2: Sleepiness Robustness
 
 options:
   -h, --help  show this help message and exit
@@ -570,7 +570,7 @@ def run_plotting_phase(spec12_only=False):
     print("Plots generated.\n")
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Estimation 3: Sleepiness Robustness")
+    parser = argparse.ArgumentParser(description="Estimation 2: Sleepiness Robustness")
     parser.add_argument('--spec12', action='store_true', help='Only run spec 12 (Tech x IV_HausmanFull)')
     args = parser.parse_args()
 

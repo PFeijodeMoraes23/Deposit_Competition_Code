@@ -224,7 +224,7 @@ def process_specification(args):
         
     df_spec = df_spec.dropna(subset=['phi_mt', 'spread_qoq'])
     
-    # Apply estimation 5 NLLS structural logit operator
+    # Apply estimation 4 NLLS structural logit operator
     df_spec['phi_mt'] = 1.0 / (1.0 + np.exp(-df_spec['phi_mt'].astype(float)))
     df_spec['phi_mt'] = df_spec['phi_mt'].clip(lower=0.0, upper=1.0)
     

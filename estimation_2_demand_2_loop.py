@@ -1163,7 +1163,7 @@ def main():
                 if err is not None:
                     print(f"  [!] Spec {sp} failed:\n{err}")
                 elif res is not None:
-                    out_pkl = BLP_OUTPUT_DIR / f"blp_results_spec_3_{sp}_{args.stage}.pkl"
+                    out_pkl = BLP_OUTPUT_DIR / f"blp_results_spec_2_{sp}_{args.stage}.pkl"
                     with open(out_pkl, 'wb') as f:
                         pickle.dump(res, f)
                     print(f"  Saved: {out_pkl.name}")

@@ -467,7 +467,7 @@ def calculate_pooled_phis(df, res_dict, state_blocks):
     return df, phi_results
 
 def run_pipeline_for_alt(alt, model_type_arg, spec12_only):
-    print(f"\n=== ESTIMATION 6: ALT {alt} ===")
+    print(f"\n=== ESTIMATION 5: ALT {alt} ===")
     df = build_pooled_data(alt)
     _, iv_specs, state_blocks = define_specifications(alt)
     
@@ -573,7 +573,7 @@ def run_plotting_phase(alt_list, spec12_only):
             plt.close(fig)
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Estimation 6: Sleepiness Robustness with Coop/State Controls")
+    parser = argparse.ArgumentParser(description="Estimation 5: Sleepiness Robustness with Coop/State Controls")
     parser.add_argument('--spec12-only', action='store_true', help='Only run spec 12 (Tech x IV_HausmanFull)')
     parser.add_argument('--model-type', choices=['linear', 'logistic', 'both'], default='both', help='Type of NLLS optimization')
     parser.add_argument('--alt', choices=['1', '2', 'both'], default='2', help='Alternative specifications for interactions (1, 2, or both)')
