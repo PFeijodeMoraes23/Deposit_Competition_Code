@@ -90,6 +90,32 @@ def _find_julia() -> str:
         sys.exit(1)
     return jl
 
+
+JULIA_PACKAGES = [
+    "Parquet2", "DataFrames", "Optim", "QuasiMonteCarlo",
+    "Distributions", "JSON3", "ArgParse",
+]
+
+
+def _ensure_julia_packages(jl_exe: str):
+    """Install required Julia packages into the repo-local project env if not already present."""
+    manifest = ROOT / "Manifest.toml"
+    if manifest.exists():
+        return  # already instantiated
+    print("[Julia] No Manifest.toml found — installing packages into project env...")
+    pkg_list = '["' + '", "'.join(JULIA_PACKAGES) + '"]'
+    script = f'using Pkg; Pkg.activate(raw"{ROOT}"); Pkg.add({pkg_list}); Pkg.instantiate()'
+    try:
+        subprocess.run(
+            [jl_exe, f"--project={ROOT}", "-e", script],
+            check=True,
+        )
+        print("[Julia] Package installation complete.")
+    except subprocess.CalledProcessError as e:
+        print(f"[Julia] Package installation FAILED (exit {e.returncode}). "
+              "Run manually: julia --project=<repo_root> -e 'using Pkg; Pkg.instantiate()'")
+        sys.exit(1)
+
 def run_julia_estimation(est_id: int, jl_exe: str, args: argparse.Namespace):
     script = JULIA_SCRIPTS[est_id]
     if not script.exists():
@@ -98,6 +124,7 @@ def run_julia_estimation(est_id: int, jl_exe: str, args: argparse.Namespace):
 
     cmd = [
         jl_exe,
+        f"--project={ROOT}",
         f"--threads={args.workers}" if args.workers else "--threads=auto",
         str(script),
         "--spec",      args.spec,
@@ -139,6 +166,8 @@ def run_julia_pipeline(args: argparse.Namespace):
     if not est_ids:
         print("ERROR: No valid estimation IDs. Available: 1-5.")
         sys.exit(1)
+
+    _ensure_julia_packages(jl_exe)
 
     print(f"=== Julia Local BLP Pipeline | Estimations {est_ids} ===")
     for eid in est_ids:

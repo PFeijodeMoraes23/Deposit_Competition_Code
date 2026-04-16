@@ -698,15 +698,17 @@ function run_blp_for_spec(spec_id::Int, args)
 
     if args["stage"] == "logit"
         println("  Stage: LOGIT (theta2 = 0)")
-        is_B  = Bool.(df.is_B)
+        is_B  = Bool.(coalesce.(df.is_B, false))
+        share_D_clean     = Float64.(coalesce.(df.share_D,      0.0))
+        share_B_cond_clean= Float64.(coalesce.(df.share_B_cond, 0.0))
         delta = zeros(nrow(df))
-        delta[.!is_B] .= log.(clamp.(df.share_D[.!is_B], 1e-15, Inf))
-        delta[is_B]   .= log.(clamp.(df.share_B_cond[is_B], 1e-15, Inf))
+        delta[.!is_B] .= log.(clamp.(share_D_clean[.!is_B], 1e-15, Inf))
+        delta[is_B]   .= log.(clamp.(share_B_cond_clean[is_B], 1e-15, Inf))
 
         # Build minimal precomp for estimate_theta1
         spread_cols, x_mat, Z_mat, iv_cols = build_regressor_matrices(df)
         H          = hcat(x_mat, Z_mat)
-        dep_types  = Int.(df.deposit_type)
+        dep_types  = Int.(coalesce.(df.deposit_type, 0))
         spread_hat = project_endogenous_spreads(spread_cols, H, dep_types)
         X_full     = hcat(spread_cols, x_mat)
         X_hat      = hcat(spread_hat,  x_mat)
@@ -722,9 +724,10 @@ function run_blp_for_spec(spec_id::Int, args)
         pc_logit = Precomp(Int[], Int[], Tuple{String,String}[], String[], Int[], Float64[],
                            sparse(zeros(0,0)), sparse(zeros(0,0)), sparse(zeros(0,0)),
                            Int[], Int[], Int[], Int[], Int[], Int[], Int[], Int[],
-                           BitVector(Bool.(df.is_B)), .!BitVector(Bool.(df.is_B)),
-                           log.(clamp.(df.share_D,      1e-15, Inf)),
-                           log.(clamp.(df.share_B_cond, 1e-15, Inf)),
+                           BitVector(Bool.(coalesce.(df.is_B, false))),
+                           .!BitVector(Bool.(coalesce.(df.is_B, false))),
+                           log.(clamp.(share_D_clean,      1e-15, Inf)),
+                           log.(clamp.(share_B_cond_clean, 1e-15, Inf)),
                            Z_clean, X_full, X_hat, valid, clusters)
 
         theta1, xi = estimate_theta1(delta, pc_logit)

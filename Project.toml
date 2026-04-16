@@ -1,0 +1,19 @@
+name = "EganEtAl2025Rep"
+uuid = "e5a3b2c4-d6f7-8901-abcd-ef0123456789"
+
+[deps]
+ArgParse = "c7e460c6-2fb9-53a9-8c5b-16f535851c63"
+DataFrames = "a93c6f00-e57d-5684-b466-afe8fa294f15"
+Distributions = "31c24e10-a181-5473-b8eb-7969acd0382f"
+JSON3 = "0f8b85d8-7e73-4b43-9b97-3d4b1c44f571"
+LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
+Optim = "429524aa-4258-5aef-a3af-852621145aeb"
+Parquet2 = "98572fba-bba0-415d-b1e6-57e7074a4d97"
+QuasiMonteCarlo = "8a4e6c94-4038-4cdc-81c3-7e6ffdb2a71b"
+Random = "9a3f8284-a2c9-5f02-9a11-845980a1fd5c"
+Serialization = "9e88b42a-f829-5b0c-bbe9-9e923198166b"
+SparseArrays = "2f01184e-e22b-5df5-ae63-d93ebab69eaf"
+Statistics = "10745b16-79ce-11e8-11f9-7d13ad32a3b2"
+
+[compat]
+julia = "1.12"

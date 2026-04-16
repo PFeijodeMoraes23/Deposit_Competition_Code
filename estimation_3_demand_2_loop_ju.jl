@@ -153,7 +153,7 @@ end
 
 function build_precomp(df::DataFrame, Z, X_full, X_hat, valid, clusters)
     N = nrow(df)
-    b_mask = BitVector(Bool.(df.is_B)); d_mask = .!b_mask
+    b_mask = BitVector(Bool.(coalesce.(df.is_B, false))); d_mask = .!b_mask
     N_B = sum(b_mask); N_D = sum(d_mask)
     mca = string.(df.mca_code); time = string.(df.time_id)
     ptot = coalesce.(df.pop_total, 0.0)
@@ -176,8 +176,8 @@ function build_precomp(df::DataFrame, Z, X_full, X_hat, valid, clusters)
     sort_b = sortperm(b_mkt_idx); _, bg   = _unique_with_starts(b_mkt_idx[sort_b])
     sort_d = sortperm(d_time_enc); du, dg = _unique_with_starts(d_time_enc[sort_d])
     sort_pt= sortperm(pte);        ptu,ptg= _unique_with_starts(pte[sort_pt])
-    ln_sD = log.(clamp.(df.share_D,      1e-15, Inf))
-    ln_sB = log.(clamp.(df.share_B_cond, 1e-15, Inf))
+    ln_sD = log.(clamp.(Float64.(coalesce.(df.share_D,      0.0)), 1e-15, Inf))
+    ln_sB = log.(clamp.(Float64.(coalesce.(df.share_B_cond, 0.0)), 1e-15, Inf))
     return Precomp(b_mkt_idx, d_time_enc, unique_pairs, unique_times, pte, pw,
                    B_agg, D_agg, PT_agg, sort_b, bg, sort_d, du, dg, sort_pt, ptu, ptg,
                    b_mask, d_mask, ln_sD, ln_sB, Z, X_full, X_hat, valid, clusters)
@@ -319,9 +319,9 @@ function run_blp_for_spec(spec_id::Int, args)
     nu=generate_halton_draws(R,cd,seed); res=Dict{String,Any}("spec_id"=>spec_id,"stage"=>args["stage"])
 
     if args["stage"]=="logit"
-        isB=Bool.(df.is_B); delta=zeros(nrow(df))
-        delta[.!isB].=log.(clamp.(df.share_D[.!isB],1e-15,Inf)); delta[isB].=log.(clamp.(df.share_B_cond[isB],1e-15,Inf))
-        sc,xm,Zm,ivc=build_regressor_matrices(df); H=hcat(xm,Zm); dt=Int.(df.deposit_type)
+        isB=Bool.(coalesce.(df.is_B,false)); sDc=Float64.(coalesce.(df.share_D,0.0)); sBc=Float64.(coalesce.(df.share_B_cond,0.0)); delta=zeros(nrow(df))
+        delta[.!isB].=log.(clamp.(sDc[.!isB],1e-15,Inf)); delta[isB].=log.(clamp.(sBc[isB],1e-15,Inf))
+        sc,xm,Zm,ivc=build_regressor_matrices(df); H=hcat(xm,Zm); dt=Int.(coalesce.(df.deposit_type,0))
         sh=project_endogenous_spreads(sc,H,dt); Xf=hcat(sc,xm); Xh=hcat(sh,xm)
         valid=BitVector(all.(isfinite,eachrow(Xh))); cl=string.(df.CodConglomeradoPrudencial).*"_".*first.(split.(string.(df.time_id),"Q"))
         iv_ok=[c for c in ivc if std(replace(coalesce.(df[!,c],0.0),Inf=>0.0,-Inf=>0.0))>1e-10]
@@ -337,7 +337,7 @@ function run_blp_for_spec(spec_id::Int, args)
     mca=string.(df.mca_code); time=string.(df.time_id); uk=sort(collect(keys(dd))); k2i=Dict(k=>i for (i,k) in enumerate(uk))
     sd=permutedims(cat([reshape(dd[k],R,1,Ddim) for k in uk]...,dims=2),(2,1,3)); sdp=vcat(sd,zeros(1,R,Ddim)); padi=size(sd,1)+1
     oki=[get(k2i,(mca[i],time[i]),padi) for i in 1:N]
-    pv_mat=zeros(N,cd); sp=coalesce.(df.spread_qoq,0.0); dt=Int.(df.deposit_type); pv_mat[:,1].=sp
+    pv_mat=zeros(N,cd); sp=coalesce.(df.spread_qoq,0.0); dt=Int.(coalesce.(df.deposit_type,0)); pv_mat[:,1].=sp
     for (i,col) in enumerate(X_COLS); col in names(df) && (pv_mat[:,1+i].=coalesce.(df[!,col],0.0)); end
     sc,xm,Zm,ivc=build_regressor_matrices(df)
     iv_ok=[c for c in ivc if std(replace(coalesce.(df[!,c],0.0),Inf=>0.0,-Inf=>0.0))>1e-10]

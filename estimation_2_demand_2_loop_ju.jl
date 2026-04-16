@@ -153,7 +153,7 @@ end
 
 function build_precomp(df::DataFrame, Z, X_full, X_hat, valid, clusters)
     N = nrow(df)
-    b_mask = BitVector(Bool.(df.is_B)); d_mask = .!b_mask
+    b_mask = BitVector(Bool.(coalesce.(df.is_B, false))); d_mask = .!b_mask
     N_B = sum(b_mask); N_D = sum(d_mask)
     mca = string.(df.mca_code); time = string.(df.time_id)
     ptot = coalesce.(df.pop_total, 0.0)
@@ -182,8 +182,8 @@ function build_precomp(df::DataFrame, Z, X_full, X_hat, valid, clusters)
     sort_d        = sortperm(d_time_enc); du, dg    = _unique_with_starts(d_time_enc[sort_d])
     sort_pt       = sortperm(pte);        ptu, ptg  = _unique_with_starts(pte[sort_pt])
 
-    ln_sD = log.(clamp.(df.share_D,      1e-15, Inf))
-    ln_sB = log.(clamp.(df.share_B_cond, 1e-15, Inf))
+    ln_sD = log.(clamp.(Float64.(coalesce.(df.share_D,      0.0)), 1e-15, Inf))
+    ln_sB = log.(clamp.(Float64.(coalesce.(df.share_B_cond, 0.0)), 1e-15, Inf))
     return Precomp(b_mkt_idx, d_time_enc, unique_pairs, unique_times, pte, pw,
                    B_agg, D_agg, PT_agg, sort_b, bg, sort_d, du, dg, sort_pt, ptu, ptg,
                    b_mask, d_mask, ln_sD, ln_sB, Z, X_full, X_hat, valid, clusters)
@@ -382,12 +382,14 @@ function run_blp_for_spec(spec_id::Int, args)
     results  = Dict{String,Any}("spec_id"=>spec_id,"stage"=>args["stage"])
 
     if args["stage"]=="logit"
-        is_B = Bool.(df.is_B)
+        is_B = Bool.(coalesce.(df.is_B, false))
+        share_D_clean      = Float64.(coalesce.(df.share_D,      0.0))
+        share_B_cond_clean = Float64.(coalesce.(df.share_B_cond, 0.0))
         delta = zeros(nrow(df))
-        delta[.!is_B].=log.(clamp.(df.share_D[.!is_B],1e-15,Inf))
-        delta[is_B].=log.(clamp.(df.share_B_cond[is_B],1e-15,Inf))
+        delta[.!is_B].=log.(clamp.(share_D_clean[.!is_B],1e-15,Inf))
+        delta[is_B].=log.(clamp.(share_B_cond_clean[is_B],1e-15,Inf))
         spread_cols,x_mat,Z_mat,iv_cols = build_regressor_matrices(df)
-        H = hcat(x_mat,Z_mat); dep_types=Int.(df.deposit_type)
+        H = hcat(x_mat,Z_mat); dep_types=Int.(coalesce.(df.deposit_type, 0))
         sh = project_endogenous_spreads(spread_cols,H,dep_types)
         Xf=hcat(spread_cols,x_mat); Xh=hcat(sh,x_mat)
         valid=BitVector(all.(isfinite,eachrow(Xh)))
@@ -414,7 +416,7 @@ function run_blp_for_spec(spec_id::Int, args)
     sdp=vcat(sd,zeros(1,R,D_dim)); padi=size(sd,1)+1
     obs_key_idx=[get(k2i,(mca[i],time[i]),padi) for i in 1:N_obs]
 
-    prod_vec=zeros(N_obs,coef_dim); spreads=coalesce.(df.spread_qoq,0.0); dep_types=Int.(df.deposit_type)
+    prod_vec=zeros(N_obs,coef_dim); spreads=coalesce.(df.spread_qoq,0.0); dep_types=Int.(coalesce.(df.deposit_type,0))
     prod_vec[:,1].=spreads
     for (i,col) in enumerate(X_COLS); col in names(df) && (prod_vec[:,1+i].=coalesce.(df[!,col],0.0)); end
 

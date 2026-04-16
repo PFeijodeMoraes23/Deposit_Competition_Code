@@ -147,7 +147,7 @@ function _unique_with_starts(sv::Vector{Int})
 end
 
 function build_precomp(df, Z, Xf, Xh, valid, cl)
-    bm=BitVector(Bool.(df.is_B)); dm=.!bm; NB=sum(bm); ND=sum(dm)
+    bm=BitVector(Bool.(coalesce.(df.is_B,false))); dm=.!bm; NB=sum(bm); ND=sum(dm)
     mca=string.(df.mca_code); time=string.(df.time_id); pt=coalesce.(df.pop_total,0.0)
     bp=collect(zip(mca[bm],time[bm])); up=sort(unique(bp)); p2i=Dict(p=>i for (i,p) in enumerate(up))
     bmi=[p2i[(m,t)] for (m,t) in bp]
@@ -159,7 +159,7 @@ function build_precomp(df, Z, Xf, Xh, valid, cl)
     sb=sortperm(bmi); _,bg=_unique_with_starts(bmi[sb])
     sd=sortperm(dte); du,dg=_unique_with_starts(dte[sd])
     sp=sortperm(pte); ptu,ptg=_unique_with_starts(pte[sp])
-    ln_sD=log.(clamp.(df.share_D,1e-15,Inf)); ln_sB=log.(clamp.(df.share_B_cond,1e-15,Inf))
+    ln_sD=log.(clamp.(Float64.(coalesce.(df.share_D,0.0)),1e-15,Inf)); ln_sB=log.(clamp.(Float64.(coalesce.(df.share_B_cond,0.0)),1e-15,Inf))
     return Precomp(bmi,dte,up,ut,pte,pw,Ba,Da,Pa,sb,bg,sd,du,dg,sp,ptu,ptg,bm,dm,ln_sD,ln_sB,Z,Xf,Xh,valid,cl)
 end
 
@@ -273,8 +273,8 @@ function run_blp_for_spec(spec_id::Int, args)
     nu=generate_halton_draws(R,cd,seed); res=Dict{String,Any}("spec_id"=>spec_id,"stage"=>args["stage"])
 
     if args["stage"]=="logit"
-        isB=Bool.(df.is_B); delta=zeros(nrow(df)); delta[.!isB].=log.(clamp.(df.share_D[.!isB],1e-15,Inf)); delta[isB].=log.(clamp.(df.share_B_cond[isB],1e-15,Inf))
-        sc,xm,Zm,ivc=build_regressor_matrices(df); H=hcat(xm,Zm); dt=Int.(df.deposit_type); sh=project_endogenous_spreads(sc,H,dt)
+        isB=Bool.(coalesce.(df.is_B,false)); sDc=Float64.(coalesce.(df.share_D,0.0)); sBc=Float64.(coalesce.(df.share_B_cond,0.0)); delta=zeros(nrow(df)); delta[.!isB].=log.(clamp.(sDc[.!isB],1e-15,Inf)); delta[isB].=log.(clamp.(sBc[isB],1e-15,Inf))
+        sc,xm,Zm,ivc=build_regressor_matrices(df); H=hcat(xm,Zm); dt=Int.(coalesce.(df.deposit_type,0)); sh=project_endogenous_spreads(sc,H,dt)
         Xf=hcat(sc,xm); Xh=hcat(sh,xm); valid=BitVector(all.(isfinite,eachrow(Xh))); cl=string.(df.CodConglomeradoPrudencial).*"_".*first.(split.(string.(df.time_id),"Q"))
         iv_ok=[c for c in ivc if std(replace(coalesce.(df[!,c],0.0),Inf=>0.0,-Inf=>0.0))>1e-10]
         Zc=zeros(nrow(df),length(iv_ok)); for (i,c) in enumerate(iv_ok); v=coalesce.(df[!,c],0.0);replace!(v,Inf=>0.0,-Inf=>0.0);Zc[:,i].=v; end
@@ -288,7 +288,7 @@ function run_blp_for_spec(spec_id::Int, args)
     mca=string.(df.mca_code); time=string.(df.time_id); uk=sort(collect(keys(dd))); k2i=Dict(k=>i for (i,k) in enumerate(uk))
     sd=permutedims(cat([reshape(dd[k],R,1,Dd) for k in uk]...,dims=2),(2,1,3)); sdp=vcat(sd,zeros(1,R,Dd)); padi=size(sd,1)+1
     oki=[get(k2i,(mca[i],time[i]),padi) for i in 1:N]
-    pv_mat=zeros(N,cd); sp=coalesce.(df.spread_qoq,0.0); dt=Int.(df.deposit_type); pv_mat[:,1].=sp
+    pv_mat=zeros(N,cd); sp=coalesce.(df.spread_qoq,0.0); dt=Int.(coalesce.(df.deposit_type,0)); pv_mat[:,1].=sp
     for (i,col) in enumerate(X_COLS); col in names(df) && (pv_mat[:,1+i].=coalesce.(df[!,col],0.0)); end
     sc,xm,Zm,ivc=build_regressor_matrices(df)
     iv_ok=[c for c in ivc if std(replace(coalesce.(df[!,c],0.0),Inf=>0.0,-Inf=>0.0))>1e-10]
