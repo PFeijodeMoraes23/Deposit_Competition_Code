@@ -412,8 +412,14 @@ function run_blp_for_spec(spec_id::Int, args)
     d_cols=[c for c in D_COLS if c in names(df)]; D_dim=length(d_cols); N_obs=nrow(df)
     mca=string.(df.mca_code); time=string.(df.time_id)
     ukeys=sort(collect(keys(demo_draws))); k2i=Dict(k=>i for (i,k) in enumerate(ukeys))
-    sd=permutedims(cat([reshape(demo_draws[k],R,1,D_dim) for k in ukeys]...,dims=2),(2,1,3))
-    sdp=vcat(sd,zeros(1,R,D_dim)); padi=size(sd,1)+1
+    
+    n_keys=length(ukeys)
+    sd=zeros(Float64, n_keys, R, D_dim)
+    for (i,k) in enumerate(ukeys)
+        sd[i,:,:] .= demo_draws[k]
+    end
+    
+    sdp=vcat(sd,zeros(1,R,D_dim)); padi=n_keys+1
     obs_key_idx=[get(k2i,(mca[i],time[i]),padi) for i in 1:N_obs]
 
     prod_vec=zeros(N_obs,coef_dim); spreads=coalesce.(df.spread_qoq,0.0); dep_types=Int.(coalesce.(df.deposit_type,0))

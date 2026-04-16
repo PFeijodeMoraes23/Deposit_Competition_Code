@@ -253,7 +253,7 @@ function build_precomp(df::DataFrame, Z::Matrix{Float64},
                        valid::BitVector, clusters::Vector{String})::Precomp
     N = nrow(df)
     is_B_raw  = df.is_B
-    b_mask    = BitVector(Bool.(is_B_raw))
+    b_mask    = BitVector(Bool.(coalesce.(is_B_raw, false)))
     d_mask    = .!b_mask
     N_B       = sum(b_mask)
     N_D       = sum(d_mask)
@@ -302,8 +302,8 @@ function build_precomp(df::DataFrame, Z::Matrix{Float64},
     pt_uval, pt_grp_s = _unique_with_starts(pair_time_enc[sort_pt])
 
     # Contraction static arrays
-    ln_s_D    = log.(clamp.(df.share_D,      1e-15, Inf))
-    ln_s_B    = log.(clamp.(df.share_B_cond, 1e-15, Inf))
+    ln_s_D    = log.(clamp.(coalesce.(df.share_D,      0.0), 1e-15, Inf))
+    ln_s_B    = log.(clamp.(coalesce.(df.share_B_cond, 0.0), 1e-15, Inf))
 
     return Precomp(b_mkt_idx, d_time_enc, unique_pairs, unique_times,
                    pair_time_enc, pop_weights,
@@ -758,22 +758,24 @@ function run_blp_for_spec(spec_id::Int, args)
     mca_codes = string.(df.mca_code)
     time_ids  = string.(df.time_id)
     unique_keys = sort(collect(keys(demo_draws)))
+    n_keys      = length(unique_keys)
     key_to_idx  = Dict(k => i for (i, k) in enumerate(unique_keys))
-    stacked_draws = cat([demo_draws[k] for k in unique_keys]..., dims=3)  # Note: reshape below
-    # stacked_draws should be (n_keys, R, D) — fix shape
-    stacked_draws = permutedims(
-        cat([reshape(demo_draws[k], R, 1, D_dim) for k in unique_keys]..., dims=2),
-        (2, 1, 3))  # (n_keys, R, D)
-    zero_draw  = zeros(1, R, D_dim)
+    
+    stacked_draws = zeros(Float64, n_keys, R, D_dim)
+    for (i, k) in enumerate(unique_keys)
+        stacked_draws[i, :, :] .= demo_draws[k]
+    end
+    
+    zero_draw  = zeros(Float64, 1, R, D_dim)
     stacked_draws_padded = vcat(stacked_draws, zero_draw)   # (n_keys+1, R, D)
-    pad_idx    = size(stacked_draws, 1) + 1                 # 1-based
+    pad_idx    = n_keys + 1
 
     obs_key_idx = [get(key_to_idx, (mca_codes[i], time_ids[i]), pad_idx) for i in 1:N_obs]
 
     # prod_vec (N, coef_dim)
     prod_vec  = zeros(N_obs, coef_dim)
     spreads   = coalesce.(df.spread_qoq, 0.0)
-    dep_types = Int.(df.deposit_type)
+    dep_types = Int.(coalesce.(df.deposit_type, 0))
     prod_vec[:, 1] .= spreads
     for (i, col) in enumerate(X_COLS)
         col in names(df) && (prod_vec[:, 1+i] .= coalesce.(df[!, col], 0.0))

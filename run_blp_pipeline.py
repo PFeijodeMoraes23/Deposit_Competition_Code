@@ -49,9 +49,7 @@ JULIA_SCRIPTS = {
     5: ROOT / "estimation_5_demand_2_loop_ju.jl",
 }
 
-
 # ── LaTeX mode ───────────────────────────────────────────────────────────────
-
 def run_latex_for_est(est_id: int):
     print(f"Launching LaTeX builder for Estimation {est_id}...")
     cmd = [PYTHON_EXE, str(LATEX_SCRIPT), "--est", str(est_id)]
@@ -189,6 +187,9 @@ def build_parser() -> argparse.ArgumentParser:
                       help="Build LaTeX result tables (default if no mode given)")
     mode.add_argument("--julia", action="store_true", default=False,
                       help="Run Julia BLP estimation locally")
+    mode.add_argument("--julia-then-latex", action="store_true", default=False,
+                      dest="julia_then_latex",
+                      help="Run Julia estimation then build LaTeX tables")
 
     # Julia-specific args (ignored in --latex mode)
     jg = p.add_argument_group("Julia estimation options")
@@ -214,7 +215,10 @@ def main():
     parser = build_parser()
     args = parser.parse_args()
 
-    if args.julia:
+    if args.julia_then_latex:
+        run_julia_pipeline(args)
+        run_latex_pipeline()
+    elif args.julia:
         run_julia_pipeline(args)
     else:
         # Default: LaTeX mode (whether --latex given or not)

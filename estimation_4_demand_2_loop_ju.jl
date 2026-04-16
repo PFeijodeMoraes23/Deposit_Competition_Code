@@ -286,7 +286,9 @@ function run_blp_for_spec(spec_id::Int, args)
     println("  Stage: $(uppercase(args["stage"])) ($np params)")
     dd=generate_demographic_draws(df,R,seed); d_cols=[c for c in D_COLS if c in names(df)]; Dd=length(d_cols); N=nrow(df)
     mca=string.(df.mca_code); time=string.(df.time_id); uk=sort(collect(keys(dd))); k2i=Dict(k=>i for (i,k) in enumerate(uk))
-    sd=permutedims(cat([reshape(dd[k],R,1,Dd) for k in uk]...,dims=2),(2,1,3)); sdp=vcat(sd,zeros(1,R,Dd)); padi=size(sd,1)+1
+    nk=length(uk); sd=zeros(Float64,nk,R,Dd)
+    for (i,k) in enumerate(uk); sd[i,:,:].=dd[k]; end
+    sdp=vcat(sd,zeros(1,R,Dd)); padi=nk+1
     oki=[get(k2i,(mca[i],time[i]),padi) for i in 1:N]
     pv_mat=zeros(N,cd); sp=coalesce.(df.spread_qoq,0.0); dt=Int.(coalesce.(df.deposit_type,0)); pv_mat[:,1].=sp
     for (i,col) in enumerate(X_COLS); col in names(df) && (pv_mat[:,1+i].=coalesce.(df[!,col],0.0)); end
