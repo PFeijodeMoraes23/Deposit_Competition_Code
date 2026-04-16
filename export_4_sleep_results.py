@@ -13,6 +13,19 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 if _THIS_DIR not in sys.path:
     sys.path.insert(0, _THIS_DIR)
 
+# NonLinearResults must be defined at MODULE LEVEL so pickle can resolve the
+# class by name when deserialising estimation_4_sleep.py output.
+class NonLinearResults:
+    def __init__(self, params, bse, tvalues, pvalues, df_resid, params_native=None):
+        self.params = params
+        self.bse = bse
+        self.tvalues = tvalues
+        self.pvalues = pvalues
+        self.df_resid = df_resid
+        self.params_native = params_native if params_native is not None else params
+        self.G_star = df_resid
+
+
 # Paths
 _ROOT = Path(__file__).resolve().parents[2]
 DATA_DIR = _ROOT / "BCB" / "Egan_et_al_2025_Rep" / "processed"
@@ -233,88 +246,81 @@ def _get_second_stage_row_strings(vshort, panels, estimators, results_dict):
             se_strs.append("")
     return coef_strs, se_strs
 
-def build_second_stage_table(results_dict, G, G_star, opt):
-    panels = ['Base', 'Macro', 'Tech']
-    ss_spec_numbers = {
-        ('Base', 'OLS'): 1,
-        ('Base', 'IV_CostShifters'): 2,
-        ('Base', 'IV_Wholesale'): 3,
-        ('Base', 'IV_HausmanFull'): 4,
-        ('Macro', 'OLS'): 5,
-        ('Macro', 'IV_CostShifters'): 6,
-        ('Macro', 'IV_Wholesale'): 7,
-        ('Macro', 'IV_HausmanFull'): 8,
-        ('Tech', 'OLS'): 9,
-        ('Tech', 'IV_CostShifters'): 10,
-        ('Tech', 'IV_Wholesale'): 11,
-        ('Tech', 'IV_HausmanFull'): 12,
-    }
-
+def build_second_stage_table(results_dict, G, G_star):
+    panels = ['Base', 'Base_Selic', 'Macro', 'Tech']
+    n_panels = len(panels)
     estimators = [
         ('OLS', 'OLS'),
         ('IV_CostShifters', 'IV Cost'),
         ('IV_Wholesale', 'IV Wholesale'),
         ('IV_HausmanFull', 'Hausman')
     ]
+    n_est = len(estimators)
+    n_cols = n_panels * n_est
 
     all_vars = list(dict.fromkeys(
-        v.replace('interaction_', '') for p, (est_key, _) in itertools.product(panels, estimators)
-        for v in results_dict[f"Option_{opt}_{est_key}_{p}"]['second_stage'].params.index
+        v.replace('interaction_', '')
+        for p, (est_key, _) in itertools.product(panels, estimators)
+        for entry in [results_dict.get(f"{est_key} x {p}", {})]
+        if isinstance(entry, dict) and entry.get('second_stage') is not None
+        for v in entry['second_stage'].params.index
         if v not in ['v_hat', 'v_hat_2', 'v_hat_3']
     ))
 
-    col_names = []
-    for p, (est_key, est_label) in itertools.product(panels, estimators):       
-        n = ss_spec_numbers[(p, est_key)]
-        col_names.append(f"{est_label} ({n})")
+    col_names = [est_label for p, (est_key, est_label) in itertools.product(panels, estimators)]
+    panel_headers = " & ".join(
+        f"\\multicolumn{{{n_est}}}{{c}}{{\\textbf{{{p}}}}}" for p in panels
+    )
+    cmidrules = " ".join(
+        f"\\cmidrule(lr){{{2 + i*n_est}-{1 + (i+1)*n_est}}}" for i in range(n_panels)
+    )
 
     out = [
         "\\begin{landscape}",
         "\\begin{table}[htbp]\\centering",
-        "\\caption{Second Stage Estimation}",
+        "\\caption{Second Stage Estimation --- Pooled NLLS Logistic}",
         "\\resizebox{\\linewidth}{!}{",
-        "\\begin{tabular}{l" + "c"*12 + "}\\toprule",
-        " & \\multicolumn{4}{c}{\\textbf{Base}} & \\multicolumn{4}{c}{\\textbf{Macro}} & \\multicolumn{4}{c}{\\textbf{Tech}} \\\\ \\cmidrule(lr){2-5} \\cmidrule(lr){6-9} \\cmidrule(lr){10-13}",
+        "\\begin{tabular}{l" + "c"*n_cols + "}\\toprule",
+        f" & {panel_headers} \\\\ {cmidrules}",
         " & " + " & ".join(col_names) + " \\\\ \\midrule"
     ]
-    
+
     for vshort in all_vars:
-        coef_strs, se_strs = _get_second_stage_row_strings(vshort, panels, estimators, results_dict, opt)
-
+        coef_strs, se_strs = _get_second_stage_row_strings(vshort, panels, estimators, results_dict)
         if any(c != "" for c in coef_strs):
-            out.extend(
-                (
-                    f"{clean_name(vshort)} & " + " & ".join(coef_strs) + " \\\\",
-                    " & " + " & ".join(se_strs) + " \\\\"
-                )
-            )
+            out.extend((
+                f"{clean_name(vshort)} & " + " & ".join(coef_strs) + " \\\\",
+                " & " + " & ".join(se_strs) + " \\\\"
+            ))
 
-    obs_strs = []
-    rsq_strs = []
-    g_strs = []
-    g_star_strs = []
+    obs_strs, rsq_strs, g_strs, g_star_strs = [], [], [], []
     for p_name, (est_key, _) in itertools.product(panels, estimators):
-        res = results_dict[f"Option_{opt}_{est_key}_{p_name}"]['second_stage']
-        obs_strs.append(f"{int(res.nobs):,}")
-        rsq_strs.append(f"{res.rsquared:.4f}")
-        g_strs.append(str(getattr(res, 'G_nominal', '\\text{N/A}')))
+        entry = results_dict.get(f"{est_key} x {p_name}", {})
+        res = entry.get('second_stage') if isinstance(entry, dict) else None
+        if res is None:
+            obs_strs.append("---"); rsq_strs.append("---")
+            g_strs.append("---"); g_star_strs.append("---")
+            continue
+        nobs_val = getattr(res, 'nobs', None)
+        obs_strs.append(f"{int(nobs_val):,}" if nobs_val is not None else "---")
+        rsq_val = getattr(res, 'rsquared', None)
+        rsq_strs.append(f"{rsq_val:.4f}" if rsq_val is not None else "---")
+        g_strs.append(str(getattr(res, 'G_nominal', '---')))
         g_star_val = getattr(res, 'G_star', None)
-        g_star_strs.append(f"{g_star_val:.2f}" if g_star_val is not None else "\\text{N/A}")
-            
-    out.extend(
-        (
-            "\\midrule",
-            "Obs & " + " & ".join(obs_strs) + " \\\\",
-            "$R^2$ & " + " & ".join(rsq_strs) + " \\\\",
-            "Fixed Effects & " + " & ".join(["Yes"]*12) + " \\\\",
-            "Clusters (G) & " + " & ".join(g_strs) + " \\\\",
-            "Effective Clusters ($G^*$) & " + " & ".join(g_star_strs) + " \\\\",
-            "\\bottomrule",
-            "\\end{tabular}}",
-            "\\end{table}",
-            "\\end{landscape}"
-        )
-    )
+        g_star_strs.append(f"{g_star_val:.2f}" if g_star_val is not None else "---")
+
+    out.extend((
+        "\\midrule",
+        "Obs & " + " & ".join(obs_strs) + " \\\\",
+        "$R^2$ / Pseudo-$R^2$ & " + " & ".join(rsq_strs) + " \\\\",
+        "Fixed Effects & " + " & ".join(["Yes"]*n_cols) + " \\\\",
+        "Clusters (G) & " + " & ".join(g_strs) + " \\\\",
+        "Effective Clusters ($G^*$) & " + " & ".join(g_star_strs) + " \\\\",
+        "\\bottomrule",
+        "\\end{tabular}}",
+        "\\end{table}",
+        "\\end{landscape}"
+    ))
     return "\n".join(out)
 
 def build_cluster_table(cluster_data):
@@ -442,16 +448,6 @@ To resolve extreme small-$G^*$ parameter bias natively, the econometric benchmar
         return
 
     print(" - Reading pickled model estimates...")
-    # NonLinearResults must be in scope before pickle.load restores the objects.
-    class NonLinearResults:
-        def __init__(self, params, bse, tvalues, pvalues, df_resid, params_native=None):
-            self.params = params
-            self.bse = bse
-            self.tvalues = tvalues
-            self.pvalues = pvalues
-            self.df_resid = df_resid
-            self.params_native = params_native if params_native is not None else params
-            self.G_star = df_resid
     with open(RESULTS_PICKLE, 'rb') as f:
         results_dict = pickle.load(f)
         
@@ -509,19 +505,19 @@ To resolve extreme small-$G^*$ parameter bias natively, the econometric benchmar
     )
 
     os.makedirs(OUT_DIR, exist_ok=True)
-    temp_tex = os.path.join(OUT_DIR, "National_Sleepiness_Export.tex")
+    temp_tex = os.path.join(OUT_DIR, "NLLS_Sleepiness_Export.tex")
     print(f" - Writing single LaTeX file to {temp_tex} ...")
     with open(temp_tex, 'w', encoding='utf-8') as f:
         f.write(tex_doc)
     
     print("\n - Compiling...")
     try:
-        subprocess.run(["pdflatex", "-interaction=nonstopmode", "National_Sleepiness_Export.tex"],
+        subprocess.run(["pdflatex", "-interaction=nonstopmode", "NLLS_Sleepiness_Export.tex"],
                        cwd=OUT_DIR, capture_output=True, text=True)
-        res_final = subprocess.run(["pdflatex", "-interaction=nonstopmode", "National_Sleepiness_Export.tex"],
+        res_final = subprocess.run(["pdflatex", "-interaction=nonstopmode", "NLLS_Sleepiness_Export.tex"],
                        cwd=OUT_DIR, capture_output=True, text=True) 
 
-        pdf_path = os.path.join(OUT_DIR, "National_Sleepiness_Export.pdf")       
+        pdf_path = os.path.join(OUT_DIR, "NLLS_Sleepiness_Export.pdf")       
         if os.path.exists(pdf_path) and os.path.getsize(pdf_path) > 0:
             print("\n *** PDF SUCCESSFULLY GENERATED. ***\n")
         else:

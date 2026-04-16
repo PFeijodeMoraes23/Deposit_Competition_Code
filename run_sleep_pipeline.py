@@ -154,12 +154,16 @@ This script sequentially runs the following steps:
     start_time_all = time.time()
 
     sleep_scripts = []
+    heavy_scripts = []  # scripts that must run alone after parallel batch completes
     post_scripts = []
     
     # Split into sleep estimators and post-processors
     for s in scripts_to_run:
         if s['file'].startswith('estimation_') and s['file'].endswith('_sleep.py'):
-            sleep_scripts.append(s)
+            if s['file'] == 'estimation_5_sleep.py':
+                heavy_scripts.append(s)
+            else:
+                sleep_scripts.append(s)
         else:
             post_scripts.append(s)
 
@@ -197,6 +201,12 @@ This script sequentially runs the following steps:
             futures = [executor.submit(run_script, s, len(sleep_scripts)) for s in sleep_scripts]
             for future in concurrent.futures.as_completed(futures):
                 future.result() # Will raise if sys.exit was called
+
+    # Run memory-heavy scripts sequentially after the parallel batch finishes
+    if heavy_scripts:
+        print("\n====== Running Heavy Estimations Sequentially (after parallel batch) ======")
+        for step in heavy_scripts:
+            run_script(step, len(heavy_scripts))
 
     # Run post-processors sequentially because they aggregate the results from the estimations
     if post_scripts:

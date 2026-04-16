@@ -69,36 +69,5 @@ def main():
 
 if __name__ == "__main__":
     main()
-    
-    for target_dir in target_dirs:
-        pkl_path = target_dir / "estimation_results.pkl"
-        
-        if not pkl_path.exists():
-            print(f"Warning: No estimation_results.pkl found at {pkl_path}")
-            continue
-            
-        found_data = True
-        print(f"\nLoading pickle file: {pkl_path}")
-        
-        with open(pkl_path, "rb") as f:
-            try:
-                results_dict = pickle.load(f)
-                export_specification_results(results_dict, target_dir)
-            except Exception as e:
-                print(f"Failed to load or process pickle file: {pkl_path}\nError: {e}")
-                
-    if not found_data:
-        print(f"\nNo `.pkl` results were found for estimation step {args.estimation}.")
-        print("Ensure you have successfully run the regression pipelines first.")
-        sys.exit(1)
-        
-    print("\nExtraction and export complete!")
-
-if __name__ == "__main__":
-    main()
-
-
-
-
 
 
