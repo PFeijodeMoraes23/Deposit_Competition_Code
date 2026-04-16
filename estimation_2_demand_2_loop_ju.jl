@@ -40,7 +40,7 @@ function get_paths(is_hpc::Bool; local_dir::Union{String,Nothing}=nothing)
         return "/home/pf382/dep_comp/data/input", "/home/pf382/dep_comp/data/output"
     else
         data_dir = local_dir !== nothing ? local_dir :
-                   joinpath(dirname(dirname(abspath(@__FILE__))), "BCB", "Egan_et_al_2025_Rep", "processed")
+                   joinpath(dirname(dirname(dirname(abspath(@__FILE__)))), "BCB", "Egan_et_al_2025_Rep", "processed")
         return joinpath(data_dir, "ESTIMATION_OUTPUT", "DEMAND_PREP"),
                joinpath(data_dir, "ESTIMATION_OUTPUT", "BLP_RESULTS")
     end

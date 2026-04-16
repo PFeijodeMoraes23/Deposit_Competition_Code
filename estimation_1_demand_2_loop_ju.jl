@@ -75,7 +75,7 @@ function get_paths(is_hpc::Bool; local_dir::Union{String,Nothing}=nothing)
         if local_dir !== nothing
             data_dir = local_dir
         else
-            _root    = dirname(dirname(abspath(@__FILE__)))
+            _root    = dirname(dirname(dirname(abspath(@__FILE__))))
             data_dir = joinpath(_root, "BCB", "Egan_et_al_2025_Rep", "processed")
         end
         input_dir  = joinpath(data_dir, "ESTIMATION_OUTPUT", "DEMAND_PREP")
