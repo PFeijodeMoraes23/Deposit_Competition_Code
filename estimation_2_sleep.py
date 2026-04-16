@@ -46,6 +46,11 @@ except Exception:
 if ensure_project_venv is not None:
     ensure_project_venv(__file__)
 
+try:
+    from utils import load_panel_cached
+except Exception:
+    load_panel_cached = None
+
 import pandas as pd
 import numpy as np
 import statsmodels.api as sm
@@ -107,7 +112,7 @@ def define_specifications():
 # PHASE 1 & 2: LOCAL (B-TYPE) ESTIMATION AND PHI
 # ==============================================================================
 def build_local_data():
-    df_raw = pd.read_csv(PANEL_CSV, dtype={'mca_code': str}, low_memory=False)
+    df_raw = load_panel_cached(PANEL_CSV) if load_panel_cached else pd.read_csv(PANEL_CSV, dtype={'mca_code': str}, low_memory=False)
     # Restrict to B-type
     df_raw = df_raw[df_raw['CODMUN_IBGE'].astype(str) != '0'].copy()
     
@@ -196,8 +201,8 @@ def exec_local_spec(args):
     df, iv_name, iv_cols, s_name, s_cols = args
     has_cf = len(iv_cols) > 0
     spec_name = f"{iv_name} x {s_name}"
-    
-    df_target = df.copy()
+
+    df_target = df
     res_fs = None
     if has_cf:
         iv_cols_act = [c for c in iv_cols if c in df_target.columns and df_target[c].notnull().sum() > 0]
@@ -249,7 +254,8 @@ def run_local_phase(spec12_only=False):
                  for s_name in state_blocks.keys() for iv_name in ['OLS', 'IV_CostShifters', 'IV_Wholesale', 'IV_HausmanFull']]
     
     results_dict = {}
-    with concurrent.futures.ProcessPoolExecutor(max_workers=max(1, (os.cpu_count() or 2) - 1)) as executor:
+    _nw = max(1, (os.cpu_count() or 4) // max(1, int(os.environ.get('SLEEP_PIPELINE_NSLOTS', '1'))))
+    with concurrent.futures.ProcessPoolExecutor(max_workers=_nw) as executor:
         for res_ss, spec_name, res_fs in executor.map(exec_local_spec, tasks):
             if res_ss is not None:
                 results_dict[spec_name] = {'second_stage': res_ss, 'first_stage': res_fs}
@@ -267,14 +273,22 @@ def run_local_phase(spec12_only=False):
 # PHASE 3: NATIONAL (D-TYPE) ESTIMATION
 # ==============================================================================
 def build_national_data():
-    df_raw = pd.read_csv(PANEL_CSV, dtype={'mca_code': str}, low_memory=False)
+    df_raw = load_panel_cached(PANEL_CSV) if load_panel_cached else pd.read_csv(PANEL_CSV, dtype={'mca_code': str}, low_memory=False)
     df = df_raw[df_raw['Source'] == 'IFDATA'].copy()
     df = df.drop_duplicates(subset=['CodConglomeradoPrudencial', 'year', 'quarter'])
 
     if 'deposit_balance' not in df.columns:
-        id_vars = [c for c in df.columns if not c.startswith('dep_a') and not c.startswith('spread_a') and not c.startswith('leave_one_out')]
-        df = pd.wide_to_long(df, stubnames=['dep_a', 'spread_a', 'leave_one_out_mean_spread_a'], i=id_vars, j='deposit_type').reset_index()
-        df = df.rename(columns={'dep_a': 'deposit_balance', 'spread_a': 'spread_qoq'})
+        _key_cols = ['CodConglomeradoPrudencial', 'year', 'quarter']
+        _stub_prefixes = ('dep_a', 'spread_a', 'leave_one_out_mean_spread_a')
+        _stub_cols = {c for c in df.columns if any(c.startswith(p) for p in _stub_prefixes)}
+        _other_cols = [c for c in df.columns if c not in _stub_cols and c not in _key_cols]
+        df_pivoted = pd.wide_to_long(
+            df[_key_cols + list(_stub_cols)],
+            stubnames=['dep_a', 'spread_a', 'leave_one_out_mean_spread_a'],
+            i=_key_cols, j='deposit_type',
+        ).reset_index()
+        df_pivoted = df_pivoted.rename(columns={'dep_a': 'deposit_balance', 'spread_a': 'spread_qoq'})
+        df = df_pivoted.merge(df[_key_cols + _other_cols].drop_duplicates(_key_cols), on=_key_cols, how='left')
         df = df[df['Source'] == 'IFDATA'].copy()
     
     if 'deposit_type' in df.columns: df = df[~df['deposit_type'].astype(str).str.contains('3')].copy()
@@ -414,15 +428,16 @@ def run_national_phase(spec12_only=False):
             s_cols = state_blocks[s_name]
             for iv_name in ivs_to_run:
                 iv_cols = iv_specs.get(iv_name, [])
-                df_t = df.copy()
                 has_cf = len(iv_cols) > 0
                 res_fs = None
-                
+
                 if has_cf:
-                    iv_cols_act = [c for c in iv_cols if c in df_t.columns and df_t[c].notnull().sum() > 0]
-                    exog_cols_act = [c for c in s_cols if c in df_t.columns and df_t[c].notnull().sum() > 0]
+                    iv_cols_act = [c for c in iv_cols if c in df.columns and df[c].notnull().sum() > 0]
+                    exog_cols_act = [c for c in s_cols if c in df.columns and df[c].notnull().sum() > 0]
                     if not iv_cols_act: continue
-                    df_t, res_fs = run_nat_first_stage(df_t, iv_cols_act, exog_cols_act)
+                    df_t, res_fs = run_nat_first_stage(df.copy(), iv_cols_act, exog_cols_act)
+                else:
+                    df_t = df
                     
                 res_ss = None
                 if opt == 1: res_ss = exec_nat_model_opt1(df_t, s_cols, has_cf)
@@ -454,7 +469,7 @@ def run_plotting_phase(spec12_only=False):
         print("Missing Pickles.")
         return
 
-    df = pd.read_csv(PANEL_CSV, low_memory=False)
+    df = load_panel_cached(PANEL_CSV) if load_panel_cached else pd.read_csv(PANEL_CSV, low_memory=False)
     df['year_quarter'] = df['year'].astype(int).astype(str) + "Q" + df['quarter'].astype(int).astype(str)
     # Population weights for plotting aggregation (consistent with phi construction)
     df['market_size'] = df['pop_total'].fillna(0) if 'pop_total' in df.columns else 1.0

@@ -1845,6 +1845,8 @@ def append_rates_to_panel():
     df = df.merge(aux[cols_to_merge], on=["CodConglomeradoPrudencial", "AnoMes"], how="left")
     df = df.drop(columns=["AnoMes"])
     
+    import pyarrow as pa
+    import pyarrow.csv as pa_csv
     pa_csv.write_csv(pa.Table.from_pandas(df, preserve_index=False), DEPOSITS_CSV)
     logging.info(f"Updated {DEPOSITS_CSV} with rates and spreads.")
 

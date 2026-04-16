@@ -114,11 +114,11 @@ def main():
     all_ip_data = []
     
     import multiprocessing
-    from concurrent.futures import ProcessPoolExecutor, as_completed
-    
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
     max_workers = max(1, multiprocessing.cpu_count() - 1)
-    
-    with ProcessPoolExecutor(max_workers=max_workers) as executor:
+
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
         futures = {executor.submit(process_file, f): f for f in zip_files}
         for i, future in enumerate(as_completed(futures), 1):
             if i % 100 == 0:

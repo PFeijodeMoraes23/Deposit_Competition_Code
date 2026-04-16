@@ -72,7 +72,8 @@ except Exception:
 # ==============================================================================
 _ROOT = Path(__file__).resolve().parents[2]
 DATA_DIR = _ROOT / "BCB" / "Egan_et_al_2025_Rep" / "processed"
-PANEL_CSV = DATA_DIR / "market_panel.csv"
+PANEL_CSV  = DATA_DIR / "market_panel.csv"
+BANKED_CSV = _ROOT / "BCB" / "Inclusion" / "bcb_banked_mca_panel.csv"
 
 # High-Efficiency BLP Columns
 X_COLS = ['fgc_covered', 'has_ip', 'seg_S2', 'seg_S3', 'seg_S4', 'seg_S5',
@@ -164,7 +165,20 @@ def build_base_panel(panel_csv: Path) -> pd.DataFrame:
         if col in df.columns: df[col] = df[col].fillna(df[col].median())
             
     if 'pop_total' not in df.columns: df['pop_total'] = np.nan
-        
+
+    # Merge annual banked correction (source: scrape_8_bcb_banked)
+    if BANKED_CSV.exists():
+        banked = pd.read_csv(
+            BANKED_CSV,
+            usecols=['mca_code', 'year', 'banked_correction'],
+            dtype={'mca_code': str, 'year': int},
+        )
+        banked['banked_correction'] = pd.to_numeric(banked['banked_correction'], errors='coerce')
+        df = df.merge(banked, on=['mca_code', 'year'], how='left')
+    else:
+        logging.warning(f"Banked correction panel not found at {BANKED_CSV}; fallback 1.1 used.")
+        df['banked_correction'] = np.nan
+
     return df
 
 def process_specification(args):
@@ -181,7 +195,7 @@ def process_specification(args):
                  'year', 'quarter', 'deposit_type', 'is_B', 
                  'deposit_balance', 'lagged_deposits', 'gross_return_lag', 'pop_total']
     
-    keep_cols = list(set(base_cols + [c for c in EXTRA_KEEP_COLS if c in df_base.columns]))
+    keep_cols = list(set(base_cols + [c for c in EXTRA_KEEP_COLS + ['banked_correction'] if c in df_base.columns]))
     df_spec = df_base[keep_cols].copy()
     
     df_spec['phi_mt'] = 0.0
@@ -222,34 +236,68 @@ def process_specification(args):
     df_spec = df_spec[df_spec['Dep_Act'] > 1e-6]
     
     # ---------------------------------------------------------
-    # Per-capita deposit ceiling d_bar (V_Main.tex, before Eq-15)
-    # d_bar = c * max(local B per-capita, national B+D per-capita)
-    # Ensures outside option share > 0 for both local and national markets.
+    # Market-varying banked correction (replaces scalar CEILING_MULT = 1.1)
+    # From scrape_8: banked_correction[m,t] = 1 / banked_frac_proxy[m,t]
+    #
+    # B-firms:  market_size[m,t]  = banked_correction[m,t] * Σ_j Dep_Act_B[j,m,t]
+    #           outside_share_B   = 1 - banked_frac_proxy[m,t]  ∈ (0, 1)
+    #
+    # D-firms:  market_size[t]    = dep_weighted_bc[t] * Σ_j Dep_Act_all[j,t]
+    #           dep_weighted_bc[t]= Σ_m bc[m,t]*dep_B[m,t] / Σ_m dep_B[m,t]
+    #           outside_share_D   = 1 - 1/dep_weighted_bc[t]    ∈ (0, 1)
+    #
+    # Fallback: banked_correction = 1.1 where panel has no data.
     # ---------------------------------------------------------
-    CEILING_MULT = 1.1  # c: buffer to guarantee s_0 > 0
+    FALLBACK_BC = 1.1
 
-    # 1. National Population (sum of unique local populations per time period)
-    # Computed first; reused for both ceiling and D-firm share denominator.
-    df_unique_mkt = df_spec[df_spec['is_B']][['mca_code', 'time_id', 'pop_total']].drop_duplicates()
-    nat_pop = df_unique_mkt.groupby('time_id')['pop_total'].sum()
-    nat_pop_map = df_spec['time_id'].map(nat_pop)
+    # 1. B-firm Dep_Act and banked_correction per (mca_code, time_id)
+    b_spec   = df_spec[df_spec['is_B']]
+    b_dep_mt = b_spec.groupby(['mca_code', 'time_id'])['Dep_Act'].sum()
+    bc_mt    = b_spec.groupby(['mca_code', 'time_id'])['banked_correction'].first().fillna(FALLBACK_BC)
 
-    # 2a. Local B-firm active deposits per capita: max over (m, t)
-    b_mkt_totals = df_spec[df_spec['is_B']].groupby(['mca_code', 'time_id'])['Dep_Act'].sum()
-    b_pop        = df_spec[df_spec['is_B']].groupby(['mca_code', 'time_id'])['pop_total'].first()
-    local_b_pc   = (b_mkt_totals / b_pop.replace(0, np.nan)).max()
+    # 2. B-firm market size[m,t] = bc[m,t] * Σ_j Dep_Act_B[j,m,t]
+    b_ms_df = pd.DataFrame({
+        'b_market_size': bc_mt * b_dep_mt,
+        'dep_B': b_dep_mt,
+        'bc': bc_mt,
+    }).reset_index()
 
-    # 2b. National active deposits (B + D) per capita: max over t
-    nat_dep_t   = df_spec.groupby('time_id')['Dep_Act'].sum()
-    national_pc = (nat_dep_t / nat_pop.replace(0, np.nan)).max()
+    # 3. Deposit-weighted national banked correction per time_id
+    b_ms_df['w_bc'] = b_ms_df['dep_B'] * b_ms_df['bc']
+    nat_bc = (
+        b_ms_df.groupby('time_id')
+               .apply(lambda g: g['w_bc'].sum() / g['dep_B'].sum()
+                      if g['dep_B'].sum() > 0 else FALLBACK_BC,
+                      include_groups=False)
+               .rename('nat_bc')
+    )
 
-    # d_bar: take the more demanding of the two legs, then pad by c
-    d_bar = CEILING_MULT * max(local_b_pc, national_pc)
+    # 4. National market size[t] = dep_weighted_bc[t] * Σ_j Dep_Act_all[j,t]
+    nat_dep_act = df_spec.groupby('time_id')['Dep_Act'].sum()
+    nat_ms = (nat_bc * nat_dep_act).reset_index()
+    nat_ms.columns = ['time_id', 'nat_market_size_t']
 
-    # 3. Construct Model-Consistent Shares (summing to < 1)
-    df_spec['share_D'] = np.where(~df_spec['is_B'], df_spec['Dep_Act'] / (d_bar * nat_pop_map), np.nan)
+    # 5. Merge market sizes back into df_spec
+    df_spec = df_spec.merge(
+        b_ms_df[['mca_code', 'time_id', 'b_market_size']],
+        on=['mca_code', 'time_id'], how='left',
+    )
+    df_spec = df_spec.merge(nat_ms, on='time_id', how='left')
 
-    df_spec['share_B_cond'] = np.where(df_spec['is_B'], df_spec['Dep_Act'] / (d_bar * df_spec['pop_total']), np.nan)
+    # 6. Model-consistent shares (sum to < 1 since bc > 1 everywhere)
+    # D-firms: Dep_Act[j,t] / dep_weighted_bc[t] * Dep_Act_all[t]
+    df_spec['share_D'] = np.where(
+        ~df_spec['is_B'],
+        df_spec['Dep_Act'] / df_spec['nat_market_size_t'],
+        np.nan,
+    )
+    # B-firms: Dep_Act[j,m,t] / bc[m,t] * Dep_Act_B[m,t]
+    df_spec['share_B_cond'] = np.where(
+        df_spec['is_B'],
+        df_spec['Dep_Act'] / df_spec['b_market_size'],
+        np.nan,
+    )
+    df_spec.drop(columns=['b_market_size', 'nat_market_size_t'], inplace=True)
 
     SPEC_MAP = {
         'OLS x Base': 1, 'IV_CostShifters x Base': 2, 'IV_Wholesale x Base': 3, 'IV_HausmanFull x Base': 4,

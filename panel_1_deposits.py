@@ -163,13 +163,13 @@ def build_cnpj_conglomerate_map() -> dict:
     # Strategy 2: numeric CodInst entries (individual institution CNPJs)
     lf["codinst_int"] = coerce_cnpj(lf["CodInst"])
     strat2 = lf.dropna(subset=["codinst_int"]).copy()
-    strat2["_cnpj_k"] = strat2["codinst_int"].astype(int)
-    strat2["_name"]   = strat2["NomeInstituicao"].map(normalize_str)
-    strat2["_lider"]  = strat2["lider_int"].where(strat2["lider_int"].notna()).map(
+    strat2["cnpj_k"] = strat2["codinst_int"].astype(int)
+    strat2["norm_name"]   = strat2["NomeInstituicao"].map(normalize_str)
+    strat2["lider_clean"]  = strat2["lider_int"].where(strat2["lider_int"].notna()).map(
         lambda v: int(v) if pd.notna(v) else None
     )
-    for row in strat2[["_cnpj_k", "CodConglomeradoPrudencial", "_lider", "_name"]].itertuples(index=False):
-        mapping[row._cnpj_k] = (row.CodConglomeradoPrudencial, row._lider, row._name)
+    for row in strat2[["cnpj_k", "CodConglomeradoPrudencial", "lider_clean", "norm_name"]].itertuples(index=False):
+        mapping[row.cnpj_k] = (row.CodConglomeradoPrudencial, row.lider_clean, row.norm_name)
 
     # Strategy 1: CnpjInstituicaoLider (overrides – leaders take precedence)
     strat1 = lf.dropna(subset=["lider_int"])
@@ -177,10 +177,10 @@ def build_cnpj_conglomerate_map() -> dict:
     name_map = (strat1.sort_values("NomeInstituicao")
                       .drop_duplicates(subset=["lider_int"], keep="last"))
     name_map = name_map.copy()
-    name_map["_cnpj_k"] = name_map["lider_int"].astype(int)
-    name_map["_name"]   = name_map["NomeInstituicao"].map(normalize_str)
-    for row in name_map[["_cnpj_k", "CodConglomeradoPrudencial", "_name"]].itertuples(index=False):
-        mapping[row._cnpj_k] = (row.CodConglomeradoPrudencial, row._cnpj_k, row._name)
+    name_map["cnpj_k"] = name_map["lider_int"].astype(int)
+    name_map["norm_name"]   = name_map["NomeInstituicao"].map(normalize_str)
+    for row in name_map[["cnpj_k", "CodConglomeradoPrudencial", "norm_name"]].itertuples(index=False):
+        mapping[row.cnpj_k] = (row.CodConglomeradoPrudencial, row.cnpj_k, row.norm_name)
 
     logging.info(f"CNPJ→conglomerate map: {len(mapping)} entries")
     return mapping

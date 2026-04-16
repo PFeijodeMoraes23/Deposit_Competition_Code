@@ -167,7 +167,7 @@ This script sequentially runs the following steps:
         else:
             post_scripts.append(s)
 
-    def run_script(step, total_count):
+    def run_script(step, total_count, n_parallel_slots=1):
         script = step['file']
         desc = step['desc']
         args = step.get('args', [])
@@ -180,6 +180,9 @@ This script sequentially runs the following steps:
         env = os.environ.copy()
         for v in ["OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS", "VECLIB_MAXIMUM_THREADS", "NUMEXPR_NUM_THREADS"]:
             env[v] = "2" # Keep heavily numeric compute per process down to ~2 threads
+        # Tell each child script how many peer scripts share the CPU pool so it
+        # can scale down its own ProcessPoolExecutor / Parallel n_jobs accordingly.
+        env["SLEEP_PIPELINE_NSLOTS"] = str(max(1, n_parallel_slots))
             
         result = subprocess.run(cmd, cwd=cwd, env=env)
         
@@ -198,7 +201,8 @@ This script sequentially runs the following steps:
     if sleep_scripts:
         print("====== Running Sleep Estimations in Parallel (max 3 concurrent) ======")
         with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
-            futures = [executor.submit(run_script, s, len(sleep_scripts)) for s in sleep_scripts]
+            _slots = min(3, len(sleep_scripts))
+            futures = [executor.submit(run_script, s, len(sleep_scripts), _slots) for s in sleep_scripts]
             for future in concurrent.futures.as_completed(futures):
                 future.result() # Will raise if sys.exit was called
 

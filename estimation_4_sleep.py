@@ -43,6 +43,11 @@ except Exception:
 if ensure_project_venv is not None:
     ensure_project_venv(__file__)
 
+try:
+    from utils import load_panel_cached
+except Exception:
+    load_panel_cached = None
+
 import pandas as pd
 import numpy as np
 import statsmodels.api as sm
@@ -108,7 +113,7 @@ def define_specifications():
 # PHASE 1 & 2: LOCAL AND NATIONAL (POOLED) ESTIMATION AND PHI
 # ==============================================================================
 def build_pooled_data():
-    df_raw = pd.read_csv(PANEL_CSV, dtype={'mca_code': str}, low_memory=False)
+    df_raw = load_panel_cached(PANEL_CSV) if load_panel_cached else pd.read_csv(PANEL_CSV, dtype={'mca_code': str}, low_memory=False)
     
     df_raw['dummy_D_type'] = (df_raw['CODMUN_IBGE'].astype(str) == '0').astype(float)
     df_raw['pix_exists'] = ((df_raw['year'] > 2020) | ((df_raw['year'] == 2020) & (df_raw['quarter'] == 4))).astype(float)
@@ -154,23 +159,22 @@ def build_pooled_data():
     
     # Set national population-weighted averages for D-firms
     if 'pop_total' in df.columns:
-        df_b = df[df['dummy_D_type'] == 0].copy()
-        
-        for yq in df['time_id'].unique():
-            b_yq = df_b[df_b['time_id'] == yq]
-            w = b_yq['pop_total'].fillna(0).values
-            w_sum = w.sum()
-            
-            d_idx = (df['time_id'] == yq) & (df['dummy_D_type'] == 1)
-            
-            for col in s_tech_finance:
-                if col in df.columns:
-                    if w_sum > 0:
-                        vals = b_yq[col].fillna(b_yq[col].median()).values
-                        nat_avg = np.average(vals, weights=w)
-                    else:
-                        nat_avg = b_yq[col].median()
-                    df.loc[d_idx, col] = nat_avg
+        cols_to_fill = [col for col in s_tech_finance if col in df.columns]
+        b_mask = (df['dummy_D_type'] == 0)
+        d_mask = (df['dummy_D_type'] == 1)
+        df_b = df.loc[b_mask, ['time_id', 'pop_total'] + cols_to_fill].copy()
+        col_medians = df_b[cols_to_fill].median()
+        for col in cols_to_fill:
+            df_b[col] = df_b[col].fillna(col_medians[col])
+        df_b['_w'] = df_b['pop_total'].fillna(0)
+        w_sum_by_t = df_b.groupby('time_id')['_w'].sum()
+        nat_avg_df = {}
+        for col in cols_to_fill:
+            wv = (df_b[col] * df_b['_w']).groupby(df_b['time_id']).sum()
+            nat_avg_df[col] = (wv / w_sum_by_t.replace(0, np.nan)).fillna(col_medians[col])
+        d_time_ids = df.loc[d_mask, 'time_id']
+        for col in cols_to_fill:
+            df.loc[d_mask, col] = d_time_ids.map(nat_avg_df[col]).values
 
     for col in s_tech_finance:
         if col in df.columns: df[col] = df[col].fillna(df[col].median())
@@ -345,8 +349,8 @@ def exec_pooled_spec(args):
     df, iv_name, iv_cols, s_name, s_cols = args
     has_cf = len(iv_cols) > 0
     spec_name = f"{iv_name} x {s_name}"
-    
-    df_target = df.copy()
+
+    df_target = df
     res_fs = None
     if has_cf:
         iv_cols_act = [c for c in iv_cols if c in df_target.columns and df_target[c].notnull().sum() > 0]
@@ -421,7 +425,8 @@ def run_pooled_phase(spec12_only=False):
     results_dict = {}
     
     # Process 4 models at a time to stay deep within 32GB bounds while crushing latency
-    results = Parallel(n_jobs=4)(delayed(exec_pooled_spec)(t) for t in tasks)
+    _nw = max(1, (os.cpu_count() or 4) // max(1, int(os.environ.get('SLEEP_PIPELINE_NSLOTS', '1'))))
+    results = Parallel(n_jobs=min(4, _nw))(delayed(exec_pooled_spec)(t) for t in tasks)
     
     for res_ss, spec_name, res_fs in results:
         if res_ss is not None:

@@ -75,6 +75,11 @@ except Exception:
     get_script_config = None
     load_default_toon_context = None
 
+try:
+    from utils import load_panel_cached
+except Exception:
+    load_panel_cached = None
+
 def _resolve_runtime_paths() -> tuple[Path, Path]:
     _ROOT = Path(__file__).resolve().parents[2]
     DATA_DIR = _ROOT / "BCB" / "Egan_et_al_2025_Rep" / "processed"
@@ -124,7 +129,7 @@ def demean_variables(df, cols, entity_col):
 def build_estimation_data():
     panel_csv, _ = _resolve_runtime_paths()
     print(f"Loading {panel_csv}...")
-    df_raw = pd.read_csv(panel_csv)
+    df_raw = load_panel_cached(panel_csv) if load_panel_cached else pd.read_csv(panel_csv, low_memory=False)
     df_raw = df_raw[df_raw['CODMUN_IBGE'].astype(str) != '0'].copy()
     
     if 'dep_a1' in df_raw.columns:
@@ -220,7 +225,7 @@ def execute_specification(args):
         print(f" RUNNING: {spec_label}")
         print("=====================================================================")
 
-        df_target = df.copy()
+        df_target = df
 
         if has_cf:
             iv_cols_act = [c for c in iv_cols if c in df_target.columns and df_target[c].notnull().sum() > 0]
@@ -301,7 +306,8 @@ def do_estimation():
     results_dict = {}
     out_results = []
     
-    with concurrent.futures.ProcessPoolExecutor(max_workers=max(1, (os.cpu_count() or 2) - 1)) as executor:
+    _nw = max(1, (os.cpu_count() or 4) // max(1, int(os.environ.get('SLEEP_PIPELINE_NSLOTS', '1'))))
+    with concurrent.futures.ProcessPoolExecutor(max_workers=_nw) as executor:
         out_results.extend(executor.map(execute_specification, tasks))
         
     for res in out_results:
@@ -385,8 +391,8 @@ def do_phi_generation():
     print("\n=== PHASE 2: PHI CONSTRUCTION & EXPORT ===")
     panel_csv, output_dir = _resolve_runtime_paths()
     results_pickle_path = output_dir / "estimation_results.pkl"
-    
-    df = pd.read_csv(panel_csv, low_memory=False)
+
+    df = load_panel_cached(panel_csv) if load_panel_cached else pd.read_csv(panel_csv, low_memory=False)
     if 'year_quarter' not in df.columns and 'year' in df.columns:
         df['year_quarter'] = df['year'].astype(int).astype(str) + "Q" + df['quarter'].astype(int).astype(str)
     
