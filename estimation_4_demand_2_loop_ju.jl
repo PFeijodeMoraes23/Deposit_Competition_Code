@@ -349,7 +349,7 @@ function main()
             pkl=joinpath(od,"blp_results_spec_4_$(sp)_$(cs).jls"); serialize(pkl,res); println("  Saved: $(basename(pkl))")
             lock(lk) do; all_res[sp]=Dict("Q_value"=>get(res,"Q_value",0.0),"converged"=>get(res,"converged",true),"theta1_alpha"=>isempty(get(res,"theta1",Float64[])) ? [] : [res["theta1"][1]],"theta2"=>get(res,"theta2",Float64[]),"stage"=>cs); end
         end
-        sp_path=joinpath(od,"blp_summary_$(cs).json"); open(sp_path,"w") do f; JSON3.write(f,all_res); end
+        sp_path=joinpath(od,"blp_summary_$(SPEC_NUM)_$(cs).json"); open(sp_path,"w") do f; JSON3.write(f,all_res); end
         log_status("[DONE] Stage=$cs  Summary: $(basename(sp_path))")
     end
 end

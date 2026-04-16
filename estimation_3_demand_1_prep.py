@@ -263,68 +263,79 @@ def process_specification(args):
     df_spec = df_spec[df_spec['Dep_Act'] > 1e-6]
     
     # ---------------------------------------------------------
-    # Market-varying banked correction (replaces scalar CEILING_MULT = 1.1)
-    # From scrape_8: banked_correction[m,t] = 1 / banked_frac_proxy[m,t]
+    # Share construction per V_Main eqs (16)-(17).
     #
-    # B-firms:  market_size[m,t]  = banked_correction[m,t] * Σ_j Dep_Act_B[j,m,t]
-    #           outside_share_B   = 1 - banked_frac_proxy[m,t]  ∈ (0, 1)
+    # d_bar[m,t] = bc[m,t] * max_ratio, where:
+    #   bc[m,t]   = banked_correction from scrape_8 (replaces scalar 1.1)
+    #   max_ratio = max{ max_{m,t} Σ_j Dep_Act_B / Pop_{mt},
+    #                    max_t (Σ Dep_Act_B + Σ Dep_Act_D) / Σ Pop }
     #
-    # D-firms:  market_size[t]    = dep_weighted_bc[t] * Σ_j Dep_Act_all[j,t]
-    #           dep_weighted_bc[t]= Σ_m bc[m,t]*dep_B[m,t] / Σ_m dep_B[m,t]
-    #           outside_share_D   = 1 - 1/dep_weighted_bc[t]    ∈ (0, 1)
+    # Eq 17-B: s^B_{jkmt} = Dep_Act[j,m,t] / (d_bar[m,t] · Pop[m,t])
+    # Eq 17-D: s^D_{jkt}  = Dep_Act[j,t] / (d_bar_nat[t] · Pop_nat[t])
+    #   d_bar_nat[t] = pop-weighted mean of bc[m,t] * max_ratio
     #
-    # Fallback: banked_correction = 1.1 where panel has no data.
+    # Fallback bc = 1.1 where scrape_8 panel has no data.
     # ---------------------------------------------------------
     FALLBACK_BC = 1.1
+    df_spec['_bc'] = df_spec['banked_correction'].fillna(FALLBACK_BC)
 
-    # 1. B-firm Dep_Act and banked_correction per (mca_code, time_id)
-    b_spec   = df_spec[df_spec['is_B']]
-    b_dep_mt = b_spec.groupby(['mca_code', 'time_id'])['Dep_Act'].sum()
-    bc_mt    = b_spec.groupby(['mca_code', 'time_id'])['banked_correction'].first().fillna(FALLBACK_BC)
-
-    # 2. B-firm market size[m,t] = bc[m,t] * Σ_j Dep_Act_B[j,m,t]
-    b_ms_df = pd.DataFrame({
-        'b_market_size': bc_mt * b_dep_mt,
-        'dep_B': b_dep_mt,
-        'bc': bc_mt,
-    }).reset_index()
-
-    # 3. Deposit-weighted national banked correction per time_id
-    b_ms_df['w_bc'] = b_ms_df['dep_B'] * b_ms_df['bc']
-    nat_bc = (
-        b_ms_df.groupby('time_id')
-               .apply(lambda g: g['w_bc'].sum() / g['dep_B'].sum()
-                      if g['dep_B'].sum() > 0 else FALLBACK_BC,
-                      include_groups=False)
-               .rename('nat_bc')
+    # Market-level aggregates: pop and bc per (mca_code, time_id)
+    mkt = df_spec.groupby(['mca_code', 'time_id']).agg(
+        _pop=('pop_total', 'first'),
+        _bc_mt=('_bc', 'first'),
     )
 
-    # 4. National market size[t] = dep_weighted_bc[t] * Σ_j Dep_Act_all[j,t]
-    nat_dep_act = df_spec.groupby('time_id')['Dep_Act'].sum()
-    nat_ms = (nat_bc * nat_dep_act).reset_index()
-    nat_ms.columns = ['time_id', 'nat_market_size_t']
+    # Eq (16) max_ratio — scalar across the panel
+    b_dep_mt = (df_spec[df_spec['is_B']]
+                .groupby(['mca_code', 'time_id'])['Dep_Act'].sum()
+                .rename('_dep_B'))
+    mkt = mkt.join(b_dep_mt, how='left').fillna({'_dep_B': 0.0})
+    local_ratio = (mkt['_dep_B'] / mkt['_pop']).replace([np.inf, -np.inf], np.nan)
+    max_local = local_ratio.max() if local_ratio.notna().any() else 0.0
 
-    # 5. Merge market sizes back into df_spec
+    all_dep_t = df_spec.groupby('time_id')['Dep_Act'].sum()
+    nat_pop_t = mkt.groupby('time_id')['_pop'].sum()
+    nat_ratio = (all_dep_t / nat_pop_t).replace([np.inf, -np.inf], np.nan)
+    max_nat = nat_ratio.max() if nat_ratio.notna().any() else 0.0
+
+    max_ratio = max(max_local, max_nat)
+    if max_ratio <= 0:
+        max_ratio = 1.0
+
+    # Eq (17-B): local market size = bc[m,t] * max_ratio * Pop[m,t]
+    mkt['_b_mkt'] = mkt['_bc_mt'] * max_ratio * mkt['_pop']
     df_spec = df_spec.merge(
-        b_ms_df[['mca_code', 'time_id', 'b_market_size']],
+        mkt[['_b_mkt']].reset_index(),
         on=['mca_code', 'time_id'], how='left',
     )
-    df_spec = df_spec.merge(nat_ms, on='time_id', how='left')
 
-    # 6. Model-consistent shares (sum to < 1 since bc > 1 everywhere)
-    # D-firms: Dep_Act[j,t] / dep_weighted_bc[t] * Dep_Act_all[t]
-    df_spec['share_D'] = np.where(
-        ~df_spec['is_B'],
-        df_spec['Dep_Act'] / df_spec['nat_market_size_t'],
-        np.nan,
+    # Eq (17-D): national market size = d_bar_nat[t] * Pop_nat[t]
+    #   d_bar_nat[t] = pop-weighted mean of bc[m,t] * max_ratio
+    mkt_r = mkt.reset_index()
+    mkt_r['_w'] = mkt_r['_bc_mt'] * mkt_r['_pop']
+    nat_dbar = (
+        mkt_r.groupby('time_id')
+             .apply(lambda g: (g['_w'].sum() / g['_pop'].sum()) * max_ratio
+                    if g['_pop'].sum() > 0 else FALLBACK_BC * max_ratio,
+                    include_groups=False)
+             .rename('_dbar_nat')
     )
-    # B-firms: Dep_Act[j,m,t] / bc[m,t] * Dep_Act_B[m,t]
+    nat_pop = mkt_r.groupby('time_id')['_pop'].sum().rename('_pop_nat')
+    d_mkt = (nat_dbar * nat_pop).rename('_d_mkt').reset_index()
+    df_spec = df_spec.merge(d_mkt, on='time_id', how='left')
+
+    # Shares (total market, not conditional)
     df_spec['share_B_cond'] = np.where(
         df_spec['is_B'],
-        df_spec['Dep_Act'] / df_spec['b_market_size'],
+        df_spec['Dep_Act'] / df_spec['_b_mkt'],
         np.nan,
     )
-    df_spec.drop(columns=['b_market_size', 'nat_market_size_t'], inplace=True)
+    df_spec['share_D'] = np.where(
+        ~df_spec['is_B'],
+        df_spec['Dep_Act'] / df_spec['_d_mkt'],
+        np.nan,
+    )
+    df_spec.drop(columns=['_b_mkt', '_d_mkt', '_bc'], inplace=True)
 
     SPEC_MAP = {
         'OLS x Base': 1, 'IV_CostShifters x Base': 2, 'IV_Wholesale x Base': 3, 'IV_HausmanFull x Base': 4,

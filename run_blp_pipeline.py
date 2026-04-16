@@ -1,16 +1,56 @@
 """
-Parallel executing pipeline that compiles the BLP estimation results into LaTeX tables.
-Launches the generation of tables for routines 1, 2, 3, 4, and 5 concurrently.
-Output tables are exported back to the BLP_RESULTS directory.
+BLP pipeline runner.
+
+Modes
+-----
+  --latex          Build LaTeX tables for all 5 estimation routines (default).
+  --julia          Run Julia estimation scripts locally (all 5 routines).
+
+Julia-specific flags (used with --julia)
+----------------------------------------
+  --est 12345      Estimation routines to run, e.g. "1", "12", "12345", "all" (default: "12")
+  --spec 12        Spec IDs forwarded to each Julia script (default: "12")
+  --stage          logit | sigma | full | extended | sequence (default: sequence)
+  --R              Number of simulation draws (default: 100)
+  --seed           RNG seed (default: 42)
+  --workers        Julia threads (default: system nthreads)
+  --chunk-size     Chunk allocation size; 0 = unlimited (default: 0)
+  --dry-run        Dry-run mode (no optimisation, just load + sanity check)
+  --local-dir      Override 'processed' data directory
+  --tol-inner      Inner contraction tolerance (default: 1e-12)
+  --max-inner      Inner contraction max iterations (default: 2000)
+  --tol-outer      Outer GMM tolerance (default: 1e-6)
+  --alt            Estimation 5 only: alt1 | alt2 | alt2linear | alt2logistic | all (default: alt2)
+
+Recommended usage (16 GB RAM local machine)
+--------------------------------------------
+  # Full run — all 5 routines, R=2000, chunked to fit in memory:
+  python run_blp_pipeline.py --julia --est 12345 --spec 12 --R 2000 --chunk-size 200 --workers 4 --stage sequence
+
+  # Dry-run sanity check — single routine, single spec:
+  python run_blp_pipeline.py --julia --est 1 --spec 1 --R 2000 --chunk-size 200 --workers 4 --dry-run
 """
 import subprocess
 import pathlib
 import sys
+import shutil
+import argparse
 import concurrent.futures
 
 ROOT = pathlib.Path(__file__).resolve().parent
 PYTHON_EXE = sys.executable
 LATEX_SCRIPT = ROOT / "make_blp_latex_tables.py"
+
+JULIA_SCRIPTS = {
+    1: ROOT / "estimation_1_demand_2_loop_ju.jl",
+    2: ROOT / "estimation_2_demand_2_loop_ju.jl",
+    3: ROOT / "estimation_3_demand_2_loop_ju.jl",
+    4: ROOT / "estimation_4_demand_2_loop_ju.jl",
+    5: ROOT / "estimation_5_demand_2_loop_ju.jl",
+}
+
+
+# ── LaTeX mode ───────────────────────────────────────────────────────────────
 
 def run_latex_for_est(est_id: int):
     print(f"Launching LaTeX builder for Estimation {est_id}...")
@@ -21,19 +61,15 @@ def run_latex_for_est(est_id: int):
     except subprocess.CalledProcessError as e:
         return (est_id, False, f"Error:\n{e.stderr}\n{e.stdout}")
 
-def main():
+def run_latex_pipeline():
     routines = [1, 2, 3, 4, 5]
-    
     if not LATEX_SCRIPT.exists():
         print(f"Cannot find script at: {LATEX_SCRIPT}")
         sys.exit(1)
 
     print(f"=== Beginning Parallel BLP LaTeX Pipeline for Routines {routines} ===")
-    
-    # Run concurrently using ProcessPool (avoids GIL constraints and runs securely on Windows)
     with concurrent.futures.ProcessPoolExecutor(max_workers=len(routines)) as executor:
         futures = {executor.submit(run_latex_for_est, r): r for r in routines}
-        
         for future in concurrent.futures.as_completed(futures):
             est_id, success, output = future.result()
             print(f"\n--- Output from Estimation {est_id} ---")
@@ -42,8 +78,118 @@ def main():
                 print(f"[!] Estimation {est_id} LaTeX generation FAILED.")
             else:
                 print(f"[+] Estimation {est_id} LaTeX generation SUCCESSFUL.")
-                
     print("\n=== BLP LaTeX Pipeline Complete ===")
+
+
+# ── Julia mode ───────────────────────────────────────────────────────────────
+
+def _find_julia() -> str:
+    jl = shutil.which("julia")
+    if jl is None:
+        print("ERROR: 'julia' not found on PATH.")
+        sys.exit(1)
+    return jl
+
+def run_julia_estimation(est_id: int, jl_exe: str, args: argparse.Namespace):
+    script = JULIA_SCRIPTS[est_id]
+    if not script.exists():
+        print(f"ERROR: Julia script not found: {script}")
+        return (est_id, False, "Script missing")
+
+    cmd = [
+        jl_exe,
+        f"--threads={args.workers}" if args.workers else "--threads=auto",
+        str(script),
+        "--spec",      args.spec,
+        "--stage",     args.stage,
+        "--R",         str(args.R),
+        "--seed",      str(args.seed),
+        "--tol-inner", str(args.tol_inner),
+        "--max-inner", str(args.max_inner),
+        "--tol-outer", str(args.tol_outer),
+    ]
+    if args.chunk_size:
+        cmd += ["--chunk-size", str(args.chunk_size)]
+    if args.dry_run:
+        cmd.append("--dry-run")
+    if args.local_dir:
+        cmd += ["--local-dir", args.local_dir]
+    if est_id == 5 and args.alt:
+        cmd += ["--alt", args.alt]
+
+    print(f"\n=== Estimation {est_id} | Running Julia ===")
+    print(f"  CMD: {' '.join(cmd)}")
+    try:
+        proc = subprocess.run(cmd, text=True, check=True)
+        return (est_id, True, "")
+    except subprocess.CalledProcessError as e:
+        return (est_id, False, f"Exit code {e.returncode}")
+
+def run_julia_pipeline(args: argparse.Namespace):
+    jl_exe = _find_julia()
+
+    # Determine which estimation routines to run
+    est_str = args.est
+    if est_str == "all":
+        est_ids = sorted(JULIA_SCRIPTS.keys())
+    else:
+        est_ids = [int(c) for c in est_str if c.isdigit()]
+    est_ids = [e for e in est_ids if e in JULIA_SCRIPTS]
+
+    if not est_ids:
+        print("ERROR: No valid estimation IDs. Available: 1-5.")
+        sys.exit(1)
+
+    print(f"=== Julia Local BLP Pipeline | Estimations {est_ids} ===")
+    for eid in est_ids:
+        eid_result, success, msg = run_julia_estimation(eid, jl_exe, args)
+        if success:
+            print(f"[+] Estimation {eid_result} DONE.")
+        else:
+            print(f"[!] Estimation {eid_result} FAILED: {msg}")
+            sys.exit(1)
+    print("\n=== Julia Pipeline Complete ===")
+
+
+# ── CLI ──────────────────────────────────────────────────────────────────────
+
+def build_parser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(description="BLP pipeline: LaTeX tables or local Julia estimation")
+    mode = p.add_mutually_exclusive_group()
+    mode.add_argument("--latex", action="store_true", default=False,
+                      help="Build LaTeX result tables (default if no mode given)")
+    mode.add_argument("--julia", action="store_true", default=False,
+                      help="Run Julia BLP estimation locally")
+
+    # Julia-specific args (ignored in --latex mode)
+    jg = p.add_argument_group("Julia estimation options")
+    jg.add_argument("--est",        type=str,   default="12",    help='Estimation routines: "1","12","12345","all" (default: 12)')
+    jg.add_argument("--spec",       type=str,   default="12",    help='Spec IDs forwarded to Julia: "1","12","all" (default: 12)')
+    jg.add_argument("--stage",      type=str,   default="sequence",
+                    choices=["logit", "sigma", "full", "extended", "sequence"])
+    jg.add_argument("--R",          type=int,   default=100)
+    jg.add_argument("--seed",       type=int,   default=42)
+    jg.add_argument("--workers",    type=int,   default=None,    help="Julia threads (default: auto)")
+    jg.add_argument("--chunk-size", type=int,   default=0,       dest="chunk_size")
+    jg.add_argument("--dry-run",    action="store_true",         dest="dry_run")
+    jg.add_argument("--local-dir",  type=str,   default=None,    dest="local_dir",
+                    help='Override path to "processed" directory')
+    jg.add_argument("--tol-inner",  type=float, default=1e-12,   dest="tol_inner")
+    jg.add_argument("--max-inner",  type=int,   default=2000,    dest="max_inner")
+    jg.add_argument("--tol-outer",  type=float, default=1e-6,    dest="tol_outer")
+    jg.add_argument("--alt",        type=str,   default="alt2",
+                    help='Est 5 only: alt1|alt2|alt2linear|alt2logistic|all (default: alt2)')
+    return p
+
+def main():
+    parser = build_parser()
+    args = parser.parse_args()
+
+    if args.julia:
+        run_julia_pipeline(args)
+    else:
+        # Default: LaTeX mode (whether --latex given or not)
+        run_latex_pipeline()
 
 if __name__ == "__main__":
     main()

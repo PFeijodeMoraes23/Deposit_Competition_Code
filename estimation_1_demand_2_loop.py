@@ -1382,7 +1382,7 @@ def main():
                     }
 
         # Summary JSON
-        summary_path = BLP_OUTPUT_DIR / f"blp_summary_{args.stage}.json"
+        summary_path = BLP_OUTPUT_DIR / f"blp_summary_1_{args.stage}.json"
         with open(summary_path, 'w') as f:
             json.dump(all_results, f, indent=2)
         _log_status(f"Summary saved to: {summary_path}")

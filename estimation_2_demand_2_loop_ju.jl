@@ -513,7 +513,7 @@ function main()
                                  "theta2"=>get(res,"theta2",Float64[]),"stage"=>cs)
             end
         end
-        sp_path=joinpath(out_dir,"blp_summary_$(cs).json")
+        sp_path=joinpath(out_dir,"blp_summary_$(SPEC_NUM)_$(cs).json")
         open(sp_path,"w") do f; JSON3.write(f,all_res); end
         log_status("[DONE] Stage=$cs  Summary: $(basename(sp_path))")
     end

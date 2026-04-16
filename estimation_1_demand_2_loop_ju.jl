@@ -957,7 +957,7 @@ function main()
             end
         end
 
-        summary_path = joinpath(out_dir, "blp_summary_$(current_stage).json")
+        summary_path = joinpath(out_dir, "blp_summary_$(SPEC_NUM)_$(current_stage).json")
         open(summary_path, "w") do f; JSON3.write(f, all_results); end
         log_status("Summary saved to: $summary_path")
         log_status("[DONE] BLP Estimation ($current_stage) complete for specs $spec_ids.")
