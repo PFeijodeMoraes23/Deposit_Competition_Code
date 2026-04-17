@@ -311,7 +311,7 @@ function run_blp_for_spec(spec_id::Int, args)
         println("  [DRY RUN] $(round(time()-t0,digits=2))s/10. Exiting."); return Dict("dry_run"=>true); end
     oc=Ref(0); dc=Ref{Union{Vector{Float64},Nothing}}(nothing)
     obj=t2->(val=gmm_objective(t2,df,pv_mat,nu,sdp,oki,si,pi_i,R,cd,W,args["tol_inner"],args["max_inner"],dc,pc;chunk_size=cs);oc[]+=1;oc[]%10==0&&log_status("  [OUTER=$(oc[])] theta2=$(round.(t2,digits=4))");val)
-    r=optimize(obj,fill(-15.0,np),fill(15.0,np),t2_0,Fminbox(LBFGS()),Optim.Options(iterations=500,f_tol=args["tol_outer"],show_trace=false))
+    r=optimize(obj,fill(-15.0,np),fill(15.0,np),t2_0,Fminbox(LBFGS()),Optim.Options(iterations=500,f_reltol=args["tol_outer"],show_trace=false))
     t2s=Optim.minimizer(r); println("  Converged: $(Optim.converged(r))  Q=$(round(Optim.minimum(r),sigdigits=6))")
     sv,piv=unpack_theta2(t2s,si,pi_i)
     ds,_,_,_=blp_contraction_draws(dc[],R,pv_mat,nu,sdp,oki,sv,si,piv,pi_i,cd,pc;tol=args["tol_inner"],max_iter=args["max_inner"],chunk_size=cs)

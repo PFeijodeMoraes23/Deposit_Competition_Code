@@ -463,7 +463,7 @@ function run_blp_for_spec(spec_id::Int, args)
         return val
     end
 
-    res=optimize(obj_fn,fill(-15.0,n_params),fill(15.0,n_params),theta2_0,Fminbox(LBFGS()),Optim.Options(iterations=500,f_tol=args["tol_outer"],show_trace=false))
+    res=optimize(obj_fn,fill(-15.0,n_params),fill(15.0,n_params),theta2_0,Fminbox(LBFGS()),Optim.Options(iterations=500,f_reltol=args["tol_outer"],show_trace=false))
     t2s=Optim.minimizer(res)
     println("  Converged: $(Optim.converged(res))  Q=$(round(Optim.minimum(res),sigdigits=6))")
     sv,pv=unpack_theta2(t2s,sigma_indices,pi_interactions)

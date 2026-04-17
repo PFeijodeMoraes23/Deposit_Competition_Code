@@ -365,7 +365,7 @@ function run_blp_for_spec(spec_id::Int, args)
         val=gmm_objective(t2,df,pv_mat,nu,sdp,oki,sig,pi_i,R,cd,W,args["tol_inner"],args["max_inner"],dc,pc;chunk_size=cs)
         oc[]+=1; oc[]%10==0 && log_status("  [OUTER=$(oc[])] theta2=$(round.(t2,digits=4))"); return val
     end
-    r=optimize(obj,fill(-15.0,np),fill(15.0,np),t2_0,Fminbox(LBFGS()),Optim.Options(iterations=500,f_tol=args["tol_outer"],show_trace=false))
+    r=optimize(obj,fill(-15.0,np),fill(15.0,np),t2_0,Fminbox(LBFGS()),Optim.Options(iterations=500,f_reltol=args["tol_outer"],show_trace=false))
     t2s=Optim.minimizer(r); println("  Converged: $(Optim.converged(r))  Q=$(round(Optim.minimum(r),sigdigits=6))")
     sv,piv=unpack_theta2(t2s,sig,pi_i)
     ds,_,_,_=blp_contraction_draws(dc[],R,pv_mat,nu,sdp,oki,sv,sig,piv,pi_i,cd,pc;tol=args["tol_inner"],max_iter=args["max_inner"],chunk_size=cs)

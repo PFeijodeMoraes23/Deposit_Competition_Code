@@ -860,7 +860,7 @@ function run_blp_for_spec(spec_id::Int, args)
     lo = fill(-15.0, n_params)
     hi = fill( 15.0, n_params)
     result = optimize(obj_fn, lo, hi, theta2_0, Fminbox(LBFGS()),
-                      Optim.Options(iterations=500, f_tol=args["tol_outer"], show_trace=false))
+                      Optim.Options(iterations=500, f_reltol=args["tol_outer"], show_trace=false))
 
     theta2_star = Optim.minimizer(result)
     println("  Optimiser converged: $(Optim.converged(result))")
