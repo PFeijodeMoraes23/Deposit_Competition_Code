@@ -222,7 +222,7 @@ function blp_contraction(di, mu, pc::Precomp, R; tol=1e-12, max_iter=1500)
     N=length(pc.b_mask)
     delta=if di!==nothing&&length(di)==N; copy(di)
     else; d=zeros(N); d[pc.d_mask].=pc.ln_s_data_D[pc.d_mask]; d[pc.b_mask].=pc.ln_s_data_B_cond[pc.b_mask]; d; end
-    m=5; Fh=zeros(N,m); Xh=zeros(N,m); ptr=1; hl=0; nh=Float64[]
+    m=20; Fh=zeros(N,m); Xh=zeros(N,m); ptr=1; hl=0; nh=Float64[]
     for h in 1:max_iter
         sB,sD=compute_model_shares(delta,mu,pc,R); dn=copy(delta)
         dn[pc.d_mask].=delta[pc.d_mask].+pc.ln_s_data_D[pc.d_mask].-log.(clamp.(sD,1e-15,Inf))
@@ -241,7 +241,7 @@ function blp_contraction_draws(di,R,pv,nu,sd,oki,sv,si,pv2,pi2,cd,pc;tol=1e-12,m
     if chunk_size===nothing||chunk_size>=R; mu=compute_mu(pv,nu,sd,oki,sv,si,pv2,pi2,R,cd); return blp_contraction(di,mu,pc,R;tol=tol,max_iter=max_iter); end
     N=length(pc.b_mask); NB=sum(pc.b_mask); ND=sum(pc.d_mask)
     delta=if di!==nothing&&length(di)==N; copy(di) else; d=zeros(N); d[pc.d_mask].=pc.ln_s_data_D[pc.d_mask]; d[pc.b_mask].=pc.ln_s_data_B_cond[pc.b_mask]; d; end
-    m=5; Fh=zeros(N,m); Xh=zeros(N,m); ptr=1; hl=0; nh=Float64[]
+    m=20; Fh=zeros(N,m); Xh=zeros(N,m); ptr=1; hl=0; nh=Float64[]
     for h in 1:max_iter
         sB_a=zeros(NB); sD_a=zeros(ND); r0=1
         while r0<=R; r1=min(r0+chunk_size-1,R); rc=r1-r0+1

@@ -438,7 +438,7 @@ function blp_contraction(delta_init::Union{Vector{Float64},Nothing},
         d
     end
 
-    m_aa     = 5
+    m_aa     = 20
     F_hist   = zeros(N, m_aa)
     X_hist   = zeros(N, m_aa)
     ptr      = 1
@@ -526,7 +526,7 @@ function blp_contraction_draws(delta_init, R::Int,
         d
     end
 
-    m_aa = 5; F_hist = zeros(N, m_aa); X_hist = zeros(N, m_aa)
+    m_aa = 20; F_hist = zeros(N, m_aa); X_hist = zeros(N, m_aa)
     ptr = 1; hist_len = 0; norm_history = Float64[]
 
     for h in 1:max_iter

@@ -244,7 +244,7 @@ function blp_contraction(delta_init, mu, pc::Precomp, R::Int; tol=1e-12, max_ite
         d = zeros(N); d[pc.d_mask] .= pc.ln_s_data_D[pc.d_mask]
         d[pc.b_mask] .= pc.ln_s_data_B_cond[pc.b_mask]; d
     end
-    m_aa=5; Fh=zeros(N,m_aa); Xh=zeros(N,m_aa); ptr=1; hl=0; nh=Float64[]
+    m_aa=20; Fh=zeros(N,m_aa); Xh=zeros(N,m_aa); ptr=1; hl=0; nh=Float64[]
     for h in 1:max_iter
         sB, sD = compute_model_shares(delta, mu, pc, R)
         dn = copy(delta)
@@ -283,7 +283,7 @@ function blp_contraction_draws(delta_init, R, prod_vec, nu_draws, stacked_draws,
     else
         d=zeros(N); d[pc.d_mask].=pc.ln_s_data_D[pc.d_mask]; d[pc.b_mask].=pc.ln_s_data_B_cond[pc.b_mask]; d
     end
-    m_aa=5; Fh=zeros(N,m_aa); Xh=zeros(N,m_aa); ptr=1; hl=0; nh=Float64[]
+    m_aa=20; Fh=zeros(N,m_aa); Xh=zeros(N,m_aa); ptr=1; hl=0; nh=Float64[]
     for h in 1:max_iter
         sB_acc=zeros(NB); sD_acc=zeros(ND); r0=1
         while r0<=R
