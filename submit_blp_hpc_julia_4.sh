@@ -32,6 +32,6 @@ julia --project=${PROJECT_DIR} \
     --R 2000 \
     --seed 42 \
     --tol-inner 1e-12 \
-    --max-inner 2000 \
+    --max-inner 5000 \
     --tol-outer 1e-6 \
     --hpc

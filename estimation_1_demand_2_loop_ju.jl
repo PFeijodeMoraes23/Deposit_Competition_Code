@@ -420,14 +420,14 @@ function compute_model_shares(delta::Vector{Float64},
 end
 
 # --------------------------------------------------------------------------
-# 7. Anderson(m=5) BLP Contraction
+# 7. SQUAREM BLP Contraction (Varadhan & Roland 2008)
 # --------------------------------------------------------------------------
 function blp_contraction(delta_init::Union{Vector{Float64},Nothing},
                           mu::Matrix{Float64},      # (N, R) — full or chunk
                           pc::Precomp,
                           R::Int;
-                          tol::Float64=1e-12,
-                          max_iter::Int=1500)
+                          tol::Float64=1e-9,
+                          max_iter::Int=5000)
     N     = length(pc.b_mask)
     delta = if delta_init !== nothing && length(delta_init) == N
         copy(delta_init)
@@ -437,74 +437,67 @@ function blp_contraction(delta_init::Union{Vector{Float64},Nothing},
         d[pc.b_mask] .= pc.ln_s_data_B_cond[pc.b_mask]
         d
     end
-
-    m_aa     = 20
-    F_hist   = zeros(N, m_aa)
-    X_hist   = zeros(N, m_aa)
-    ptr      = 1
-    hist_len = 0
     norm_history = Float64[]
 
-    for h in 1:max_iter
-        s_B, s_D = compute_model_shares(delta, mu, pc, R)
-        delta_new = copy(delta)
-        delta_new[pc.d_mask] .= delta[pc.d_mask] .+ pc.ln_s_data_D[pc.d_mask] .-
-                                  log.(clamp.(s_D, 1e-15, Inf))
-        delta_new[pc.b_mask] .= delta[pc.b_mask] .+ pc.ln_s_data_B_cond[pc.b_mask] .-
-                                  log.(clamp.(s_B, 1e-15, Inf))
-        clamp!(delta_new, -500.0, 500.0)
+    # One application of the BLP contraction operator T(δ)
+    function T(δ)
+        s_B, s_D = compute_model_shares(δ, mu, pc, R)
+        d_new = copy(δ)
+        d_new[pc.d_mask] .= δ[pc.d_mask] .+ pc.ln_s_data_D[pc.d_mask] .-
+                             log.(clamp.(s_D, 1e-15, Inf))
+        d_new[pc.b_mask] .= δ[pc.b_mask] .+ pc.ln_s_data_B_cond[pc.b_mask] .-
+                             log.(clamp.(s_B, 1e-15, Inf))
+        clamp!(d_new, -500.0, 500.0)
+        return d_new
+    end
 
-        if !all(isfinite, delta_new)
-            n_bad = count(!isfinite, delta_new)
-            println("    [contraction ABORT] $n_bad/$N non-finite entries.")
-            return delta, false, h, norm_history
+    fevals = 0
+    while fevals + 2 <= max_iter
+        # Step 1: x1 = T(δ)
+        x1 = T(delta);  fevals += 1
+        !all(isfinite, x1) && return delta, false, fevals, norm_history
+
+        r  = x1 .- delta
+        nm = maximum(abs.(r))
+        push!(norm_history, nm)
+        (fevals % 50 == 0 || nm < tol) && println("    [SQUAREM eval=$fevals] norm=$(round(nm, sigdigits=4))")
+        nm < tol && return x1, true, fevals, norm_history
+
+        # Step 2: x2 = T(x1)
+        x2 = T(x1);  fevals += 1
+        !all(isfinite, x2) && return x1, false, fevals, norm_history
+
+        nm2 = maximum(abs.(x2 .- x1))
+        push!(norm_history, nm2)
+        (fevals % 50 == 0 || nm2 < tol) && println("    [SQUAREM eval=$fevals] norm=$(round(nm2, sigdigits=4))")
+        nm2 < tol && return x2, true, fevals, norm_history
+
+        # SQUAREM extrapolation: α = −‖r‖₂ / ‖v‖₂, v = (x2−x1) − r
+        v      = (x2 .- x1) .- r
+        norm_v = sqrt(sum(abs2, v))
+        if norm_v < 1e-14
+            delta = x2; continue
         end
+        α = -sqrt(sum(abs2, r)) / norm_v
+        x_prop = clamp.(delta .- (2α) .* r .+ (α^2) .* v, -500.0, 500.0)
 
-        f    = delta_new .- delta
-        norm = maximum(abs.(f))
-        push!(norm_history, norm)
-
-        (h % 50 == 0 || norm < tol) && println("    [Anderson iter=$h/$max_iter] norm=$(round(norm, sigdigits=4))")
-        if norm < tol
-            return delta_new, true, h, norm_history
-        end
-
-        F_hist[:, ptr] = f
-        X_hist[:, ptr] = delta
-        ptr      = mod1(ptr + 1, m_aa)
-        hist_len = min(hist_len + 1, m_aa)
-
-        if hist_len > 1
-            F_k = F_hist[:, 1:hist_len]
-            dF  = F_k[:, 2:end] .- F_k[:, 1:1]
-            try
-                rhs   = -(dF' * F_k[:, 1])
-                A_aa  = dF' * dF + 1e-10 * I(hist_len - 1)
-                c_bar = A_aa \ rhs
-                c     = vcat(1.0 - sum(c_bar), c_bar)
-                d_aa  = (X_hist[:, 1:hist_len] .+ F_hist[:, 1:hist_len]) * c
-                delta = if all(isfinite, d_aa)
-                    clamp.(d_aa, -500.0, 500.0)
-                else
-                    delta_new
-                end
-            catch
-                delta = delta_new
-            end
+        # Safety: fall back to x2 if extrapolation diverges
+        if !all(isfinite, x_prop) || maximum(abs.(x_prop .- x2)) > 100.0 * nm2 + 1.0
+            delta = x2
         else
-            delta = delta_new
+            delta = x_prop
         end
     end
-    return delta, false, max_iter, norm_history
+    return delta, false, fevals, norm_history
 end
 
-"""Chunked-R contraction: avoids materialising full (N, R) mu."""
+"""Chunked-R SQUAREM contraction: avoids materialising full (N, R) mu."""
 function blp_contraction_draws(delta_init, R::Int,
                                  prod_vec, nu_draws, stacked_draws_padded,
                                  obs_key_idx, sigma_vals, sigma_indices,
                                  pi_vals, pi_interactions, coef_dim::Int,
                                  pc::Precomp;
-                                 tol::Float64=1e-12, max_iter::Int=1500,
+                                 tol::Float64=1e-9, max_iter::Int=5000,
                                  chunk_size::Union{Int,Nothing}=nothing)
     if chunk_size === nothing || chunk_size >= R
         mu = compute_mu(prod_vec, nu_draws, stacked_draws_padded, obs_key_idx,
@@ -512,7 +505,7 @@ function blp_contraction_draws(delta_init, R::Int,
         return blp_contraction(delta_init, mu, pc, R; tol=tol, max_iter=max_iter)
     end
 
-    # ---- Chunked path ----
+    # ---- Chunked T(δ): accumulate shares across draw chunks ----
     N   = size(prod_vec, 1)
     N_B = sum(pc.b_mask)
     N_D = sum(pc.d_mask)
@@ -526,53 +519,61 @@ function blp_contraction_draws(delta_init, R::Int,
         d
     end
 
-    m_aa = 20; F_hist = zeros(N, m_aa); X_hist = zeros(N, m_aa)
-    ptr = 1; hist_len = 0; norm_history = Float64[]
-
-    for h in 1:max_iter
-        s_B_acc = zeros(N_B); s_D_acc = zeros(N_D)
-        r0 = 1
+    function T(δ)
+        s_B_acc = zeros(N_B); s_D_acc = zeros(N_D); r0 = 1
         while r0 <= R
-            r1  = min(r0 + chunk_size - 1, R)
-            rc  = r1 - r0 + 1
+            r1  = min(r0 + chunk_size - 1, R); rc = r1 - r0 + 1
             nu_c  = nu_draws[r0:r1, :]
             sd_c  = stacked_draws_padded[:, r0:r1, :]
             mu_c  = compute_mu(prod_vec, nu_c, sd_c, obs_key_idx,
                                sigma_vals, sigma_indices, pi_vals, pi_interactions, rc, coef_dim)
-            s_B_c, s_D_c = compute_model_shares(delta, mu_c, pc, rc)
-            s_B_acc .+= s_B_c .* rc
-            s_D_acc .+= s_D_c .* rc
-            r0 = r1 + 1
+            s_B_c, s_D_c = compute_model_shares(δ, mu_c, pc, rc)
+            s_B_acc .+= s_B_c .* rc; s_D_acc .+= s_D_c .* rc; r0 = r1 + 1
         end
-        s_B = s_B_acc ./ R; s_D = s_D_acc ./ R
-
-        delta_new = copy(delta)
-        delta_new[pc.d_mask] .= delta[pc.d_mask] .+ pc.ln_s_data_D[pc.d_mask] .-
-                                  log.(clamp.(s_D, 1e-15, Inf))
-        delta_new[pc.b_mask] .= delta[pc.b_mask] .+ pc.ln_s_data_B_cond[pc.b_mask] .-
-                                  log.(clamp.(s_B, 1e-15, Inf))
-        clamp!(delta_new, -500.0, 500.0)
-
-        !all(isfinite, delta_new) && (println("    [ABORT] non-finite"); return delta, false, h, norm_history)
-        f    = delta_new .- delta
-        norm = maximum(abs.(f))
-        push!(norm_history, norm)
-        (h % 50 == 0 || norm < tol) && println("    [Anderson iter=$h] norm=$(round(norm, sigdigits=4))")
-        norm < tol && return delta_new, true, h, norm_history
-
-        F_hist[:, ptr] = f; X_hist[:, ptr] = delta
-        ptr = mod1(ptr + 1, m_aa); hist_len = min(hist_len + 1, m_aa)
-        if hist_len > 1
-            F_k = F_hist[:, 1:hist_len]; dF = F_k[:, 2:end] .- F_k[:, 1:1]
-            try
-                c_bar = (dF' * dF + 1e-10 * I(hist_len-1)) \ (-(dF' * F_k[:, 1]))
-                c     = vcat(1.0 - sum(c_bar), c_bar)
-                d_aa  = (X_hist[:, 1:hist_len] .+ F_hist[:, 1:hist_len]) * c
-                delta = all(isfinite, d_aa) ? clamp.(d_aa, -500.0, 500.0) : delta_new
-            catch; delta = delta_new; end
-        else; delta = delta_new; end
+        d_new = copy(δ)
+        d_new[pc.d_mask] .= δ[pc.d_mask] .+ pc.ln_s_data_D[pc.d_mask] .-
+                             log.(clamp.(s_D_acc ./ R, 1e-15, Inf))
+        d_new[pc.b_mask] .= δ[pc.b_mask] .+ pc.ln_s_data_B_cond[pc.b_mask] .-
+                             log.(clamp.(s_B_acc ./ R, 1e-15, Inf))
+        clamp!(d_new, -500.0, 500.0)
+        return d_new
     end
-    return delta, false, max_iter, norm_history
+
+    norm_history = Float64[]
+    fevals = 0
+    while fevals + 2 <= max_iter
+        x1 = T(delta);  fevals += 1
+        !all(isfinite, x1) && (println("    [ABORT] non-finite"); return delta, false, fevals, norm_history)
+
+        r  = x1 .- delta
+        nm = maximum(abs.(r))
+        push!(norm_history, nm)
+        (fevals % 50 == 0 || nm < tol) && println("    [SQUAREM eval=$fevals] norm=$(round(nm, sigdigits=4))")
+        nm < tol && return x1, true, fevals, norm_history
+
+        x2 = T(x1);  fevals += 1
+        !all(isfinite, x2) && (println("    [ABORT] non-finite"); return x1, false, fevals, norm_history)
+
+        nm2 = maximum(abs.(x2 .- x1))
+        push!(norm_history, nm2)
+        (fevals % 50 == 0 || nm2 < tol) && println("    [SQUAREM eval=$fevals] norm=$(round(nm2, sigdigits=4))")
+        nm2 < tol && return x2, true, fevals, norm_history
+
+        v      = (x2 .- x1) .- r
+        norm_v = sqrt(sum(abs2, v))
+        if norm_v < 1e-14
+            delta = x2; continue
+        end
+        α = -sqrt(sum(abs2, r)) / norm_v
+        x_prop = clamp.(delta .- (2α) .* r .+ (α^2) .* v, -500.0, 500.0)
+
+        if !all(isfinite, x_prop) || maximum(abs.(x_prop .- x2)) > 100.0 * nm2 + 1.0
+            delta = x2
+        else
+            delta = x_prop
+        end
+    end
+    return delta, false, fevals, norm_history
 end
 
 # --------------------------------------------------------------------------

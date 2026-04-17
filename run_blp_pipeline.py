@@ -205,7 +205,7 @@ def build_parser() -> argparse.ArgumentParser:
     jg.add_argument("--local-dir",  type=str,   default=None,    dest="local_dir",
                     help='Override path to "processed" directory')
     jg.add_argument("--tol-inner",  type=float, default=1e-9,    dest="tol_inner")
-    jg.add_argument("--max-inner",  type=int,   default=2000,    dest="max_inner")
+    jg.add_argument("--max-inner",  type=int,   default=5000,    dest="max_inner")
     jg.add_argument("--tol-outer",  type=float, default=1e-6,    dest="tol_outer")
     jg.add_argument("--alt",        type=str,   default="alt2",
                     help='Est 5 only: alt1|alt2|alt2linear|alt2logistic|all (default: alt2)')

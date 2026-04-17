@@ -554,82 +554,96 @@ end
 # --------------------------------------------------------------------------
 function blp_contraction!(buf::HotBuffers, delta::Vector{Float64},
                            pc::Precomp, R::Int;
-                           tol::Float64=1e-12, max_iter::Int=2000)
+                           tol::Float64=1e-12, max_iter::Int=5000)
     N = length(delta)
-    m_aa     = 20
-    F_hist   = zeros(N, m_aa)
-    X_hist   = zeros(N, m_aa)
-    ptr      = 1
-    hist_len = 0
     norm_history = Float64[]
 
-    for h in 1:max_iter
-        compute_model_shares!(buf, delta, pc, R)
+    # SQUAREM temporaries (5 × N; much less than old 2 × N × 20 history matrices)
+    x1     = Vector{Float64}(undef, N)
+    x2     = Vector{Float64}(undef, N)
+    r_vec  = Vector{Float64}(undef, N)
+    v_vec  = Vector{Float64}(undef, N)
+    x_prop = Vector{Float64}(undef, N)
 
-        # delta_new = delta + ln_s_data - ln(s_model)
-        copyto!(buf.delta_new, delta)
+    function T_inplace!(dest::Vector{Float64}, src::Vector{Float64})
+        compute_model_shares!(buf, src, pc, R)
         b_idx = 0; d_idx = 0
         @inbounds for i in 1:N
             if pc.b_mask[i]
                 b_idx += 1
-                buf.delta_new[i] = delta[i] + pc.ln_s_data_B_cond[i] - log(clamp(buf.s_B[b_idx], 1e-15, Inf))
+                dest[i] = clamp(src[i] + pc.ln_s_data_B_cond[i] -
+                                log(clamp(buf.s_B[b_idx], 1e-15, Inf)), -500.0, 500.0)
             else
                 d_idx += 1
-                buf.delta_new[i] = delta[i] + pc.ln_s_data_D[i] - log(clamp(buf.s_D[d_idx], 1e-15, Inf))
+                dest[i] = clamp(src[i] + pc.ln_s_data_D[i] -
+                                log(clamp(buf.s_D[d_idx], 1e-15, Inf)), -500.0, 500.0)
             end
-            buf.delta_new[i] = clamp(buf.delta_new[i], -500.0, 500.0)
-        end
-
-        if !all(isfinite, buf.delta_new)
-            n_bad = count(!isfinite, buf.delta_new)
-            println("    [contraction ABORT] $n_bad/$N non-finite entries.")
-            return false, h, norm_history
-        end
-
-        # f = delta_new - delta
-        norm_val = 0.0
-        @inbounds for i in 1:N
-            buf.f[i] = buf.delta_new[i] - delta[i]
-            a = abs(buf.f[i])
-            a > norm_val && (norm_val = a)
-        end
-        push!(norm_history, norm_val)
-
-        (h % 50 == 0 || norm_val < tol) && println("    [Anderson iter=$h/$max_iter] norm=$(round(norm_val, sigdigits=4))")
-        if norm_val < tol
-            copyto!(delta, buf.delta_new)
-            return true, h, norm_history
-        end
-
-        F_hist[:, ptr] .= buf.f
-        X_hist[:, ptr] .= delta
-        ptr      = mod1(ptr + 1, m_aa)
-        hist_len = min(hist_len + 1, m_aa)
-
-        if hist_len > 1
-            F_k = @view F_hist[:, 1:hist_len]
-            dF  = F_k[:, 2:end] .- F_k[:, 1:1]
-            try
-                rhs   = -(dF' * F_k[:, 1])
-                A_aa  = dF' * dF + 1e-10 * I(hist_len - 1)
-                c_bar = A_aa \ rhs
-                c     = vcat(1.0 - sum(c_bar), c_bar)
-                d_aa  = (@view(X_hist[:, 1:hist_len]) .+ @view(F_hist[:, 1:hist_len])) * c
-                if all(isfinite, d_aa)
-                    @inbounds for i in 1:N
-                        delta[i] = clamp(d_aa[i], -500.0, 500.0)
-                    end
-                else
-                    copyto!(delta, buf.delta_new)
-                end
-            catch
-                copyto!(delta, buf.delta_new)
-            end
-        else
-            copyto!(delta, buf.delta_new)
         end
     end
-    return false, max_iter, norm_history
+
+    fevals = 0
+    while fevals + 2 <= max_iter
+        # Step 1: x1 = T(delta)
+        T_inplace!(x1, delta);  fevals += 1
+        if !all(isfinite, x1)
+            println("    [SQUAREM ABORT] non-finite at eval=$fevals")
+            return false, fevals, norm_history
+        end
+
+        nm = 0.0
+        @inbounds for i in 1:N
+            r_vec[i] = x1[i] - delta[i]
+            a = abs(r_vec[i]); a > nm && (nm = a)
+        end
+        push!(norm_history, nm)
+        (fevals % 50 == 0 || nm < tol) && println("    [SQUAREM eval=$fevals/$max_iter] norm=$(round(nm, sigdigits=4))")
+        if nm < tol
+            copyto!(delta, x1); return true, fevals, norm_history
+        end
+
+        # Step 2: x2 = T(x1)
+        T_inplace!(x2, x1);  fevals += 1
+        if !all(isfinite, x2)
+            copyto!(delta, x1); return false, fevals, norm_history
+        end
+
+        nm2 = 0.0
+        @inbounds for i in 1:N; a = abs(x2[i]-x1[i]); a > nm2 && (nm2 = a); end
+        push!(norm_history, nm2)
+        (fevals % 50 == 0 || nm2 < tol) && println("    [SQUAREM eval=$fevals/$max_iter] norm=$(round(nm2, sigdigits=4))")
+        if nm2 < tol
+            copyto!(delta, x2); return true, fevals, norm_history
+        end
+
+        # SQUAREM extrapolation: v = (x2 - x1) - r, α = -‖r‖₂ / ‖v‖₂
+        norm_r_sq = 0.0; norm_v_sq = 0.0
+        @inbounds for i in 1:N
+            v_vec[i] = (x2[i] - x1[i]) - r_vec[i]
+            norm_r_sq += r_vec[i]^2
+            norm_v_sq += v_vec[i]^2
+        end
+        if norm_v_sq < 1e-28
+            copyto!(delta, x2); continue
+        end
+        α = -sqrt(norm_r_sq / norm_v_sq)
+        @inbounds for i in 1:N
+            x_prop[i] = clamp(delta[i] - 2α * r_vec[i] + α^2 * v_vec[i], -500.0, 500.0)
+        end
+
+        # Safety: fall back to x2 if extrapolation diverges
+        if !all(isfinite, x_prop)
+            copyto!(delta, x2)
+        else
+            norm_prop = 0.0
+            @inbounds for i in 1:N; a = abs(x_prop[i]-x2[i]); a > norm_prop && (norm_prop = a); end
+            if norm_prop > 100.0 * nm2 + 1.0
+                copyto!(delta, x2)
+            else
+                copyto!(delta, x_prop)
+            end
+        end
+    end
+    return false, fevals, norm_history
 end
 
 # --------------------------------------------------------------------------

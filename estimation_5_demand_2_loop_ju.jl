@@ -218,45 +218,62 @@ end
 # --------------------------------------------------------------------------
 # 7. Contraction
 # --------------------------------------------------------------------------
-function blp_contraction(di, mu, pc::Precomp, R; tol=1e-12, max_iter=1500)
+function blp_contraction(di, mu, pc::Precomp, R; tol=1e-9, max_iter=5000)
     N=length(pc.b_mask)
     delta=if di!==nothing&&length(di)==N; copy(di)
     else; d=zeros(N); d[pc.d_mask].=pc.ln_s_data_D[pc.d_mask]; d[pc.b_mask].=pc.ln_s_data_B_cond[pc.b_mask]; d; end
-    m=20; Fh=zeros(N,m); Xh=zeros(N,m); ptr=1; hl=0; nh=Float64[]
-    for h in 1:max_iter
-        sB,sD=compute_model_shares(delta,mu,pc,R); dn=copy(delta)
-        dn[pc.d_mask].=delta[pc.d_mask].+pc.ln_s_data_D[pc.d_mask].-log.(clamp.(sD,1e-15,Inf))
-        dn[pc.b_mask].=delta[pc.b_mask].+pc.ln_s_data_B_cond[pc.b_mask].-log.(clamp.(sB,1e-15,Inf))
-        clamp!(dn,-500.0,500.0); !all(isfinite,dn) && return delta,false,h,nh
-        f=dn.-delta; nm=maximum(abs.(f)); push!(nh,nm)
-        (h%50==0||nm<tol) && println("    [iter=$h] norm=$(round(nm,sigdigits=4))"); nm<tol && return dn,true,h,nh
-        Fh[:,ptr]=f; Xh[:,ptr]=delta; ptr=mod1(ptr+1,m); hl=min(hl+1,m)
-        if hl>1; Fk=Fh[:,1:hl]; dF=Fk[:,2:end].-Fk[:,1:1]
-            try; cb=(dF'*dF+1e-10*I(hl-1))\(-(dF'*Fk[:,1])); c=vcat(1.0-sum(cb),cb); da=(Xh[:,1:hl].+Fh[:,1:hl])*c; delta=all(isfinite,da) ? clamp.(da,-500.0,500.0) : dn; catch; delta=dn; end
-        else; delta=dn; end
-    end; return delta,false,max_iter,nh
+    nh=Float64[]
+    function T(δ)
+        sB,sD=compute_model_shares(δ,mu,pc,R); dn=copy(δ)
+        dn[pc.d_mask].=δ[pc.d_mask].+pc.ln_s_data_D[pc.d_mask].-log.(clamp.(sD,1e-15,Inf))
+        dn[pc.b_mask].=δ[pc.b_mask].+pc.ln_s_data_B_cond[pc.b_mask].-log.(clamp.(sB,1e-15,Inf))
+        clamp!(dn,-500.0,500.0); return dn
+    end
+    fevals=0
+    while fevals+2<=max_iter
+        x1=T(delta); fevals+=1; !all(isfinite,x1) && return delta,false,fevals,nh
+        r=x1.-delta; nm=maximum(abs.(r)); push!(nh,nm)
+        (fevals%50==0||nm<tol) && println("    [SQUAREM eval=$fevals] norm=$(round(nm,sigdigits=4))")
+        nm<tol && return x1,true,fevals,nh
+        x2=T(x1); fevals+=1; !all(isfinite,x2) && return x1,false,fevals,nh
+        nm2=maximum(abs.(x2.-x1)); push!(nh,nm2)
+        (fevals%50==0||nm2<tol) && println("    [SQUAREM eval=$fevals] norm=$(round(nm2,sigdigits=4))")
+        nm2<tol && return x2,true,fevals,nh
+        v=(x2.-x1).-r; nv=sqrt(sum(abs2,v))
+        if nv<1e-14; delta=x2; continue; end
+        α=-sqrt(sum(abs2,r))/nv; xp=clamp.(delta.-(2α).*r.+(α^2).*v,-500.0,500.0)
+        delta=(!all(isfinite,xp)||maximum(abs.(xp.-x2))>100.0*nm2+1.0) ? x2 : xp
+    end; return delta,false,fevals,nh
 end
 
-function blp_contraction_draws(di,R,pv,nu,sd,oki,sv,si,pv2,pi2,cd,pc;tol=1e-12,max_iter=1500,chunk_size=nothing)
+function blp_contraction_draws(di,R,pv,nu,sd,oki,sv,si,pv2,pi2,cd,pc;tol=1e-9,max_iter=5000,chunk_size=nothing)
     if chunk_size===nothing||chunk_size>=R; mu=compute_mu(pv,nu,sd,oki,sv,si,pv2,pi2,R,cd); return blp_contraction(di,mu,pc,R;tol=tol,max_iter=max_iter); end
     N=length(pc.b_mask); NB=sum(pc.b_mask); ND=sum(pc.d_mask)
     delta=if di!==nothing&&length(di)==N; copy(di) else; d=zeros(N); d[pc.d_mask].=pc.ln_s_data_D[pc.d_mask]; d[pc.b_mask].=pc.ln_s_data_B_cond[pc.b_mask]; d; end
-    m=20; Fh=zeros(N,m); Xh=zeros(N,m); ptr=1; hl=0; nh=Float64[]
-    for h in 1:max_iter
+    function T(δ)
         sB_a=zeros(NB); sD_a=zeros(ND); r0=1
         while r0<=R; r1=min(r0+chunk_size-1,R); rc=r1-r0+1
             mc=compute_mu(pv,nu[r0:r1,:],sd[:,r0:r1,:],oki,sv,si,pv2,pi2,rc,cd)
-            sB,sD=compute_model_shares(delta,mc,pc,rc); sB_a.+=sB.*rc; sD_a.+=sD.*rc; r0=r1+1; end
-        dn=copy(delta); dn[pc.d_mask].=delta[pc.d_mask].+pc.ln_s_data_D[pc.d_mask].-log.(clamp.(sD_a./R,1e-15,Inf))
-        dn[pc.b_mask].=delta[pc.b_mask].+pc.ln_s_data_B_cond[pc.b_mask].-log.(clamp.(sB_a./R,1e-15,Inf))
-        clamp!(dn,-500.0,500.0); !all(isfinite,dn) && return delta,false,h,nh
-        f=dn.-delta; nm=maximum(abs.(f)); push!(nh,nm)
-        (h%50==0||nm<tol) && println("    [iter=$h] norm=$(round(nm,sigdigits=4))"); nm<tol && return dn,true,h,nh
-        Fh[:,ptr]=f; Xh[:,ptr]=delta; ptr=mod1(ptr+1,m); hl=min(hl+1,m)
-        if hl>1; Fk=Fh[:,1:hl]; dF=Fk[:,2:end].-Fk[:,1:1]
-            try; cb=(dF'*dF+1e-10*I(hl-1))\(-(dF'*Fk[:,1])); c=vcat(1.0-sum(cb),cb); da=(Xh[:,1:hl].+Fh[:,1:hl])*c; delta=all(isfinite,da) ? clamp.(da,-500.0,500.0) : dn; catch; delta=dn; end
-        else; delta=dn; end
-    end; return delta,false,max_iter,nh
+            sB,sD=compute_model_shares(δ,mc,pc,rc); sB_a.+=sB.*rc; sD_a.+=sD.*rc; r0=r1+1; end
+        dn=copy(δ); dn[pc.d_mask].=δ[pc.d_mask].+pc.ln_s_data_D[pc.d_mask].-log.(clamp.(sD_a./R,1e-15,Inf))
+        dn[pc.b_mask].=δ[pc.b_mask].+pc.ln_s_data_B_cond[pc.b_mask].-log.(clamp.(sB_a./R,1e-15,Inf))
+        clamp!(dn,-500.0,500.0); return dn
+    end
+    nh=Float64[]; fevals=0
+    while fevals+2<=max_iter
+        x1=T(delta); fevals+=1; !all(isfinite,x1) && return delta,false,fevals,nh
+        r=x1.-delta; nm=maximum(abs.(r)); push!(nh,nm)
+        (fevals%50==0||nm<tol) && println("    [SQUAREM eval=$fevals] norm=$(round(nm,sigdigits=4))")
+        nm<tol && return x1,true,fevals,nh
+        x2=T(x1); fevals+=1; !all(isfinite,x2) && return x1,false,fevals,nh
+        nm2=maximum(abs.(x2.-x1)); push!(nh,nm2)
+        (fevals%50==0||nm2<tol) && println("    [SQUAREM eval=$fevals] norm=$(round(nm2,sigdigits=4))")
+        nm2<tol && return x2,true,fevals,nh
+        v=(x2.-x1).-r; nv=sqrt(sum(abs2,v))
+        if nv<1e-14; delta=x2; continue; end
+        α=-sqrt(sum(abs2,r))/nv; xp=clamp.(delta.-(2α).*r.+(α^2).*v,-500.0,500.0)
+        delta=(!all(isfinite,xp)||maximum(abs.(xp.-x2))>100.0*nm2+1.0) ? x2 : xp
+    end; return delta,false,fevals,nh
 end
 
 # --------------------------------------------------------------------------
