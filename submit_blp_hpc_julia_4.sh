@@ -12,7 +12,7 @@
 #SBATCH --mail-user=pedro.feijodemoraes@yale.edu
 
 # ── Environment ──────────────────────────────────────────────────────────────
-module load Julia
+module load Julia/1.12.5
 
 export JULIA_NUM_THREADS=${SLURM_CPUS_PER_TASK}
 export OPENBLAS_NUM_THREADS=${SLURM_CPUS_PER_TASK}
