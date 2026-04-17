@@ -194,11 +194,11 @@ function logsumexp_groups(V, sort_idx, grp_start, n_groups, uval, R; weights=not
     for g in 1:n_uniq
         gi   = grp_start[g]; ge = g < n_uniq ? grp_start[g+1]-1 : length(sort_idx)
         rows = sort_idx[gi:ge]; V_g = V[rows, :]
-        mx   = maximum(V_g, dims=1)
+        mx   = maximum(V_g; dims=1)
         lse  = if weights !== nothing
-            mx .+ log.(max.(sum(weights[rows] .* exp.(V_g .- mx), dims=1), 1e-300))
+            mx .+ log.(max.(sum(weights[rows] .* exp.(V_g .- mx); dims=1), 1e-300))
         else
-            mx .+ log.(max.(sum(exp.(V_g .- mx), dims=1), 1e-300))
+            mx .+ log.(max.(sum(exp.(V_g .- mx); dims=1), 1e-300))
         end
         result[uval[g], :] .= vec(lse)
     end
@@ -218,21 +218,21 @@ function compute_model_shares(delta, mu, pc::Precomp, R::Int)
     jm    = max.(max.(lsB, ldp), log(1.0))
     logd  = jm .+ log.(max.(exp.(log(1.0) .- jm) .+ exp.(lsB .- jm) .+ exp.(ldp .- jm), 1e-300))
     logdB = logd[pc.b_mkt_idx, :]
-    s_B   = vec(mean(exp.(V_B .- logdB), dims=2))
+    s_B   = vec(mean(exp.(V_B .- logdB); dims=2))
 
     neg_ld  = -logd
     mx_nld  = fill(-Inf, n_times, R)
     for g in 1:length(pc.pt_grp_start)
         gi = pc.pt_grp_start[g]; ge = g < length(pc.pt_grp_start) ? pc.pt_grp_start[g+1]-1 : length(pc.sort_pt)
         rows = pc.sort_pt[gi:ge]; V_g = neg_ld[rows, :]
-        mx   = maximum(V_g, dims=1); mx_nld[pc.pt_uval[g], :] .= vec(mx)
+        mx   = maximum(V_g; dims=1); mx_nld[pc.pt_uval[g], :] .= vec(mx)
     end
     sh_inv = exp.(neg_ld .- mx_nld[pc.pair_time_enc, :])
     sw     = pc.PT_agg * sh_inv
     li_wtd = mx_nld .+ log.(max.(sw, 1e-300))
     lsD_r  = V_D .+ li_wtd[pc.d_time_enc, :]
-    rm     = maximum(lsD_r, dims=2)
-    s_D    = vec(mean(exp.(lsD_r .- rm), dims=2)) .* vec(exp.(rm))
+    rm     = maximum(lsD_r; dims=2)
+    s_D    = vec(mean(exp.(lsD_r .- rm); dims=2)) .* vec(exp.(rm))
     return s_B, s_D
 end
 
@@ -352,7 +352,7 @@ function estimate_theta1(delta, pc::Precomp)
 end
 
 function compute_gmm_moments(xi, pc::Precomp)
-    return vec(mean(xi .* pc.Z_moments, dims=1))
+    return vec(mean(xi .* pc.Z_moments; dims=1))
 end
 
 function gmm_objective(theta2, df, prod_vec, nu_draws, stacked_draws, obs_key_idx,

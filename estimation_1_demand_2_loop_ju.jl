@@ -341,12 +341,12 @@ function logsumexp_groups(V, sort_idx, grp_start, n_groups, uval, R; weights=not
         gend = g < n_uniq ? grp_start[g+1] - 1 : length(sort_idx)
         rows = sort_idx[gidx:gend]
         V_g  = V[rows, :]           # (n_g, R)
-        mx   = maximum(V_g, dims=1)
+        mx   = maximum(V_g; dims=1)
         if weights !== nothing
             w_g = weights[rows]
-            lse = mx .+ log.(max.(sum(w_g .* exp.(V_g .- mx), dims=1), 1e-300))
+            lse = mx .+ log.(max.(sum(w_g .* exp.(V_g .- mx); dims=1), 1e-300))
         else
-            lse = mx .+ log.(max.(sum(exp.(V_g .- mx), dims=1), 1e-300))
+            lse = mx .+ log.(max.(sum(exp.(V_g .- mx); dims=1), 1e-300))
         end
         result[uval[g], :] .= vec(lse)
     end
@@ -391,7 +391,7 @@ function compute_model_shares(delta::Vector{Float64},
     # B-firm shares
     log_denom_B = log_denom[pc.b_mkt_idx, :]              # (N_B, R)
     q_B         = exp.(V_B .- log_denom_B)                # (N_B, R)
-    s_B         = vec(mean(q_B, dims=2))                  # (N_B,)
+    s_B         = vec(mean(q_B; dims=2))                  # (N_B,)
 
     # D-firm national shares: Eq-13-D
     neg_log_denom = -log_denom                            # (n_pairs, R)
@@ -404,7 +404,7 @@ function compute_model_shares(delta::Vector{Float64},
         gend  = g < length(pc.pt_grp_start) ? pc.pt_grp_start[g+1] - 1 : length(pc.sort_pt)
         rows  = pc.sort_pt[gidx:gend]
         V_g   = neg_log_denom[rows, :]
-        mx    = maximum(V_g, dims=1)
+        mx    = maximum(V_g; dims=1)
         max_neg_ld[pc.pt_uval[g], :] .= vec(mx)
     end
 
@@ -413,8 +413,8 @@ function compute_model_shares(delta::Vector{Float64},
     log_inv_wtd  = max_neg_ld .+ log.(max.(sum_wtd, 1e-300))                # (n_times, R)
 
     log_s_D_r    = V_D .+ log_inv_wtd[pc.d_time_enc, :]                     # (N_D, R)
-    row_max      = maximum(log_s_D_r, dims=2)                               # (N_D, 1)
-    s_D_nat      = vec(mean(exp.(log_s_D_r .- row_max), dims=2)) .* vec(exp.(row_max))  # (N_D,)
+    row_max      = maximum(log_s_D_r; dims=2)                               # (N_D, 1)
+    s_D_nat      = vec(mean(exp.(log_s_D_r .- row_max); dims=2)) .* vec(exp.(row_max))  # (N_D,)
 
     return s_B, s_D_nat
 end
@@ -639,7 +639,7 @@ end
 # --------------------------------------------------------------------------
 function compute_gmm_moments(xi::Vector{Float64}, pc::Precomp)
     Z = pc.Z_moments
-    return vec(mean(xi .* Z, dims=1))   # (n_iv,)
+    return vec(mean(xi .* Z; dims=1))   # (n_iv,)
 end
 
 function gmm_objective(theta2::Vector{Float64},
