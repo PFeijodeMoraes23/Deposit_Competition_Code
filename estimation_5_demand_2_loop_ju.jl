@@ -203,7 +203,7 @@ function compute_model_shares(delta, mu, pc::Precomp, R::Int)
     lsB=logsumexp_groups(VB,pc.sort_b,pc.b_grp_start,np2,1:np2,R)
     ldp=lsD[pc.pair_time_enc,:]
     jm=max.(max.(lsB,ldp),log(1.0)); logd=jm.+log.(max.(exp.(log(1.0).-jm).+exp.(lsB.-jm).+exp.(ldp.-jm),1e-300))
-    sB=vec(mean(exp.(VB.-logd[pc.b_mkt_idx,:]);dims=2))
+    sB=vec(Statistics.mean(exp.(VB.-logd[pc.b_mkt_idx,:]);dims=2))
     nld=-logd; mxn=fill(-Inf,nt,R)
     for g in 1:length(pc.pt_grp_start)
         gi=pc.pt_grp_start[g]; ge=g<length(pc.pt_grp_start) ? pc.pt_grp_start[g+1]-1 : length(pc.sort_pt)
@@ -211,7 +211,7 @@ function compute_model_shares(delta, mu, pc::Precomp, R::Int)
     end
     sw=pc.PT_agg*exp.(nld.-mxn[pc.pair_time_enc,:]); li=mxn.+log.(max.(sw,1e-300))
     lsD_r=VD.+li[pc.d_time_enc,:]; rm=maximum(lsD_r;dims=2)
-    sD=vec(mean(exp.(lsD_r.-rm);dims=2)).*vec(exp.(rm))
+    sD=vec(Statistics.mean(exp.(lsD_r.-rm);dims=2)).*vec(exp.(rm))
     return sB, sD
 end
 
@@ -282,7 +282,7 @@ function estimate_theta1(delta, pc::Precomp)
     return theta1, delta.-pc.X_full*theta1
 end
 
-compute_gmm_moments(xi, pc::Precomp) = vec(mean(xi .* pc.Z_moments; dims=1))
+compute_gmm_moments(xi, pc::Precomp) = vec(Statistics.mean(xi .* pc.Z_moments; dims=1))
 
 function gmm_objective(theta2, df, pv, nu, sd, oki, si, pi, R, cd, W, ti, mi, dc::Ref, pc; chunk_size=nothing)::Float64
     sv,piv=unpack_theta2(theta2,si,pi); delta,_,_,_=blp_contraction_draws(dc[],R,pv,nu,sd,oki,sv,si,piv,pi,cd,pc;tol=ti,max_iter=mi,chunk_size=chunk_size)

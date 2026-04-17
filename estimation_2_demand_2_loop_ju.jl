@@ -218,7 +218,7 @@ function compute_model_shares(delta, mu, pc::Precomp, R::Int)
     jm    = max.(max.(lsB, ldp), log(1.0))
     logd  = jm .+ log.(max.(exp.(log(1.0) .- jm) .+ exp.(lsB .- jm) .+ exp.(ldp .- jm), 1e-300))
     logdB = logd[pc.b_mkt_idx, :]
-    s_B   = vec(mean(exp.(V_B .- logdB); dims=2))
+    s_B   = vec(Statistics.mean(exp.(V_B .- logdB); dims=2))
 
     neg_ld  = -logd
     mx_nld  = fill(-Inf, n_times, R)
@@ -232,7 +232,7 @@ function compute_model_shares(delta, mu, pc::Precomp, R::Int)
     li_wtd = mx_nld .+ log.(max.(sw, 1e-300))
     lsD_r  = V_D .+ li_wtd[pc.d_time_enc, :]
     rm     = maximum(lsD_r; dims=2)
-    s_D    = vec(mean(exp.(lsD_r .- rm); dims=2)) .* vec(exp.(rm))
+    s_D    = vec(Statistics.mean(exp.(lsD_r .- rm); dims=2)) .* vec(exp.(rm))
     return s_B, s_D
 end
 
@@ -352,7 +352,7 @@ function estimate_theta1(delta, pc::Precomp)
 end
 
 function compute_gmm_moments(xi, pc::Precomp)
-    return vec(mean(xi .* pc.Z_moments; dims=1))
+    return vec(Statistics.mean(xi .* pc.Z_moments; dims=1))
 end
 
 function gmm_objective(theta2, df, prod_vec, nu_draws, stacked_draws, obs_key_idx,

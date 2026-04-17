@@ -391,7 +391,7 @@ function compute_model_shares(delta::Vector{Float64},
     # B-firm shares
     log_denom_B = log_denom[pc.b_mkt_idx, :]              # (N_B, R)
     q_B         = exp.(V_B .- log_denom_B)                # (N_B, R)
-    s_B         = vec(mean(q_B; dims=2))                  # (N_B,)
+    s_B         = vec(Statistics.mean(q_B; dims=2))        # (N_B,)
 
     # D-firm national shares: Eq-13-D
     neg_log_denom = -log_denom                            # (n_pairs, R)
@@ -414,7 +414,7 @@ function compute_model_shares(delta::Vector{Float64},
 
     log_s_D_r    = V_D .+ log_inv_wtd[pc.d_time_enc, :]                     # (N_D, R)
     row_max      = maximum(log_s_D_r; dims=2)                               # (N_D, 1)
-    s_D_nat      = vec(mean(exp.(log_s_D_r .- row_max); dims=2)) .* vec(exp.(row_max))  # (N_D,)
+    s_D_nat      = vec(Statistics.mean(exp.(log_s_D_r .- row_max); dims=2)) .* vec(exp.(row_max))  # (N_D,)
 
     return s_B, s_D_nat
 end
@@ -639,7 +639,7 @@ end
 # --------------------------------------------------------------------------
 function compute_gmm_moments(xi::Vector{Float64}, pc::Precomp)
     Z = pc.Z_moments
-    return vec(mean(xi .* Z; dims=1))   # (n_iv,)
+    return vec(Statistics.mean(xi .* Z; dims=1))   # (n_iv,)
 end
 
 function gmm_objective(theta2::Vector{Float64},
