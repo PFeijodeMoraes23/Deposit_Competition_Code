@@ -548,14 +548,13 @@ def _contraction_step(delta, mu, df, R, b_mask, d_mask,
     return np.clip(delta_new, -500.0, 500.0)
 
 
-def blp_contraction(df, mu, R, tol=1e-12, max_iter=1500,
+def blp_contraction(df, mu, R, tol=1e-9, max_iter=5000,
                     delta_init=None, precomp=None):
-    """Anderson(m=5)-accelerated BLP inner contraction (Walker & Ni 2011).
+    """SQUAREM-accelerated BLP inner contraction (Varadhan & Roland 2008).
 
-    Maintains last m residuals and solves a (m x m) constrained LS problem each
-    iteration to extrapolate towards the fixed point.  Empirically 10-50x faster
-    than SQUAREM when the Jacobian spectral radius is near 1
-    (Conlon & Gortmaker 2020, Sec 3.3).
+    Two F-evals per step with alpha-extrapolation towards the fixed point.
+    Avoids the history matrix overhead of Anderson and does not stall when
+    the spectral radius rho is near 1 (Conlon & Gortmaker 2020, Sec 3.3).
 
     Parameters
     ----------
@@ -564,10 +563,9 @@ def blp_contraction(df, mu, R, tol=1e-12, max_iter=1500,
 
     Returns
     -------
-    (delta, converged, n_iter, norm_history)
+    (delta, converged, n_fevals, norm_history)
     """
-    N      = len(df)
-    # Pull fixed arrays from precomp when available (built once per spec)
+    N = len(df)
     if precomp is not None and 'b_mask' in precomp:
         b_mask           = precomp['b_mask']
         d_mask           = precomp['d_mask']
@@ -575,12 +573,10 @@ def blp_contraction(df, mu, R, tol=1e-12, max_iter=1500,
         ln_s_data_B_cond = precomp['ln_s_data_B_cond']
     else:
         is_B   = df['is_B'].values
-        b_mask = is_B
-        d_mask = ~is_B
-        s_data_D      = np.clip(df['share_D'].values.copy(),      1e-15, None)
-        s_data_B_cond = np.clip(df['share_B_cond'].values.copy(), 1e-15, None)
-        ln_s_data_D      = np.log(s_data_D)
-        ln_s_data_B_cond = np.log(s_data_B_cond)
+        b_mask = is_B.astype(bool)
+        d_mask = ~b_mask
+        ln_s_data_D      = np.log(np.clip(df['share_D'].values,      1e-15, None))
+        ln_s_data_B_cond = np.log(np.clip(df['share_B_cond'].values, 1e-15, None))
 
     if delta_init is not None and delta_init.shape == (N,):
         delta = delta_init.copy()
@@ -589,66 +585,60 @@ def blp_contraction(df, mu, R, tol=1e-12, max_iter=1500,
         delta[d_mask] = ln_s_data_D[d_mask]
         delta[b_mask] = ln_s_data_B_cond[b_mask]
 
-    # Anderson(m=5) history buffers
-    m_aa     = 5
-    F_hist   = np.zeros((N, m_aa))   # residual history (N, m)
-    X_hist   = np.zeros((N, m_aa))   # iterate  history (N, m)
-    ptr      = 0
-    hist_len = 0
+    def T(d):
+        return _contraction_step(d, mu, df, R, b_mask, d_mask,
+                                 ln_s_data_D, ln_s_data_B_cond, precomp)
 
     norm_history = []
-    for h in range(max_iter):
-        delta_new = _contraction_step(delta, mu, df, R, b_mask, d_mask,
-                                      ln_s_data_D, ln_s_data_B_cond, precomp)
-        if not np.all(np.isfinite(delta_new)):
-            n_bad = (~np.isfinite(delta_new)).sum()
-            print(f"    [contraction ABORT] {n_bad}/{N} non-finite entries.", flush=True)
-            return delta, False, h + 1, norm_history
+    fevals = 0
+    while fevals + 2 <= max_iter:
+        x1 = T(delta); fevals += 1
+        if not np.all(np.isfinite(x1)):
+            print(f"    [SQUAREM ABORT] non-finite after feval {fevals}", flush=True)
+            return delta, False, fevals, norm_history
 
-        f    = delta_new - delta
-        norm = np.max(np.abs(f))
-        norm_history.append(norm)
+        r  = x1 - delta
+        nm = np.max(np.abs(r))
+        norm_history.append(nm)
+        if fevals % 50 == 0 or nm < tol:
+            print(f"    [SQUAREM feval={fevals}] norm={nm:.3e}", flush=True)
+        if nm < tol:
+            return x1, True, fevals, norm_history
 
-        if h % 50 == 0 or norm < tol:
-            print(f"    [Anderson iter={h+1}/{max_iter}] norm={norm:.3e}", flush=True)
+        x2 = T(x1); fevals += 1
+        if not np.all(np.isfinite(x2)):
+            return x1, False, fevals, norm_history
 
-        if norm < tol:
-            return delta_new, True, h + 1, norm_history
+        nm2 = np.max(np.abs(x2 - x1))
+        norm_history.append(nm2)
+        if fevals % 50 == 0 or nm2 < tol:
+            print(f"    [SQUAREM feval={fevals}] norm={nm2:.3e}", flush=True)
+        if nm2 < tol:
+            return x2, True, fevals, norm_history
 
-        # Anderson mixing update
-        F_hist[:, ptr] = f
-        X_hist[:, ptr] = delta
-        ptr      = (ptr + 1) % m_aa
-        hist_len = min(hist_len + 1, m_aa)
+        v      = (x2 - x1) - r
+        norm_v = np.sqrt(np.dot(v, v))
+        if norm_v < 1e-14:
+            delta = x2
+            continue
+        alpha  = -np.sqrt(np.dot(r, r)) / norm_v
+        x_prop = np.clip(delta - 2*alpha*r + alpha**2*v, -500.0, 500.0)
 
-        if hist_len > 1:
-            F_k = F_hist[:, :hist_len]
-            dF  = F_k[:, 1:] - F_k[:, [0]]        # (N, k-1)
-            try:
-                rhs   = -dF.T @ F_k[:, 0]          # (k-1,)
-                A_aa  = dF.T @ dF + 1e-10 * np.eye(hist_len - 1)
-                c_bar = np.linalg.solve(A_aa, rhs)  # (k-1,)
-                c     = np.empty(hist_len)
-                c[0]  = 1.0 - c_bar.sum()
-                c[1:] = c_bar
-                d_aa  = (X_hist[:, :hist_len] + F_hist[:, :hist_len]) @ c
-                delta = (np.clip(d_aa, -500.0, 500.0)
-                         if np.all(np.isfinite(d_aa)) else delta_new)
-            except np.linalg.LinAlgError:
-                delta = delta_new
+        if not np.all(np.isfinite(x_prop)) or np.max(np.abs(x_prop - x2)) > 100.0*nm2 + 1.0:
+            delta = x2
         else:
-            delta = delta_new
+            delta = x_prop
 
-    return delta, False, max_iter, norm_history
+    return delta, False, fevals, norm_history
 
 
 def blp_contraction_draws(df, R,
                            prod_vec, nu_draws, stacked_draws_padded,
                            obs_key_idx, sigma_vals, sigma_indices,
                            pi_vals, pi_interactions, coef_dim,
-                           tol=1e-12, max_iter=1500,
+                           tol=1e-9, max_iter=5000,
                            delta_init=None, precomp=None, chunk_size=None):
-    """Anderson(m=5)-accelerated BLP contraction with optional chunked-R.
+    """SQUAREM-accelerated BLP contraction with optional chunked-R.
 
     When chunk_size < R, mu is never fully materialized as (N, R):
     each contraction step accumulates model shares over R-chunks, keeping
@@ -659,13 +649,12 @@ def blp_contraction_draws(df, R,
     chunk_size : int or None. If None or >= R, falls back to full-mu path.
     """
     if chunk_size is None or chunk_size >= R:
-        # Full-mu fast path — identical to blp_contraction
         mu = compute_mu(prod_vec, nu_draws, stacked_draws_padded, obs_key_idx,
                         sigma_vals, sigma_indices, pi_vals, pi_interactions, R, coef_dim)
         return blp_contraction(df, mu, R, tol=tol, max_iter=max_iter,
                                delta_init=delta_init, precomp=precomp)
 
-    # ---- Chunked path ----
+    # ---- Chunked SQUAREM path ----
     N = len(df)
     if precomp is not None and 'b_mask' in precomp:
         b_mask           = precomp['b_mask']
@@ -689,81 +678,64 @@ def blp_contraction_draws(df, R,
         delta[d_mask] = ln_s_data_D[d_mask]
         delta[b_mask] = ln_s_data_B_cond[b_mask]
 
-    m_aa     = 5
-    F_hist   = np.zeros((N, m_aa))
-    X_hist   = np.zeros((N, m_aa))
-    ptr      = 0
-    hist_len = 0
-    norm_history = []
-
-    for h in range(max_iter):
-        # Accumulate model shares over R-chunks (no full (N,R) alloc)
+    def T(d):
         s_B_acc = np.zeros(N_B)
         s_D_acc = np.zeros(N_D)
         for r0 in range(0, R, chunk_size):
-            r1  = min(r0 + chunk_size, R)
-            rc  = r1 - r0
-            nu_chunk = nu_draws[r0:r1]                        # (rc, coef_dim)
-            sd_chunk = stacked_draws_padded[:, r0:r1, :]      # (n_keys+1, rc, D)
-            mu_chunk = compute_mu(prod_vec, nu_chunk, sd_chunk, obs_key_idx,
-                                  sigma_vals, sigma_indices, pi_vals, pi_interactions,
-                                  rc, coef_dim)               # (N, rc)
-            s_B_c, s_D_c, _ = compute_model_shares(delta, mu_chunk, df, rc,
-                                                    precomp=precomp)
+            r1 = min(r0 + chunk_size, R); rc = r1 - r0
+            nu_c = nu_draws[r0:r1]
+            sd_c = stacked_draws_padded[:, r0:r1, :]
+            mu_c = compute_mu(prod_vec, nu_c, sd_c, obs_key_idx,
+                              sigma_vals, sigma_indices, pi_vals, pi_interactions, rc, coef_dim)
+            s_B_c, s_D_c, _ = compute_model_shares(d, mu_c, df, rc, precomp=precomp)
             s_B_acc += s_B_c * rc
             s_D_acc += s_D_c * rc
+        d_new = d.copy()
+        d_new[d_mask] = d[d_mask] + ln_s_data_D[d_mask] - np.log(np.clip(s_D_acc / R, 1e-15, None))
+        d_new[b_mask] = d[b_mask] + ln_s_data_B_cond[b_mask] - np.log(np.clip(s_B_acc / R, 1e-15, None))
+        return np.clip(d_new, -500.0, 500.0)
 
-        s_B = s_B_acc / R   # (N_B,)
-        s_D = s_D_acc / R   # (N_D,)
+    norm_history = []
+    fevals = 0
+    while fevals + 2 <= max_iter:
+        x1 = T(delta); fevals += 1
+        if not np.all(np.isfinite(x1)):
+            print(f"    [SQUAREM ABORT] non-finite after feval {fevals}", flush=True)
+            return delta, False, fevals, norm_history
 
-        delta_new = delta.copy()
-        delta_new[d_mask] = (delta[d_mask]
-                             + ln_s_data_D[d_mask]
-                             - np.log(np.clip(s_D, 1e-15, None)))
-        delta_new[b_mask] = (delta[b_mask]
-                             + ln_s_data_B_cond[b_mask]
-                             - np.log(np.clip(s_B, 1e-15, None)))
-        delta_new = np.clip(delta_new, -500.0, 500.0)
+        r  = x1 - delta
+        nm = np.max(np.abs(r))
+        norm_history.append(nm)
+        if fevals % 50 == 0 or nm < tol:
+            print(f"    [SQUAREM feval={fevals}] norm={nm:.3e}", flush=True)
+        if nm < tol:
+            return x1, True, fevals, norm_history
 
-        if not np.all(np.isfinite(delta_new)):
-            n_bad = (~np.isfinite(delta_new)).sum()
-            print(f"    [contraction ABORT] {n_bad}/{N} non-finite entries.", flush=True)
-            return delta, False, h + 1, norm_history
+        x2 = T(x1); fevals += 1
+        if not np.all(np.isfinite(x2)):
+            return x1, False, fevals, norm_history
 
-        f    = delta_new - delta
-        norm = np.max(np.abs(f))
-        norm_history.append(norm)
+        nm2 = np.max(np.abs(x2 - x1))
+        norm_history.append(nm2)
+        if fevals % 50 == 0 or nm2 < tol:
+            print(f"    [SQUAREM feval={fevals}] norm={nm2:.3e}", flush=True)
+        if nm2 < tol:
+            return x2, True, fevals, norm_history
 
-        if h % 50 == 0 or norm < tol:
-            print(f"    [Anderson iter={h+1}/{max_iter}] norm={norm:.3e}", flush=True)
+        v      = (x2 - x1) - r
+        norm_v = np.sqrt(np.dot(v, v))
+        if norm_v < 1e-14:
+            delta = x2
+            continue
+        alpha  = -np.sqrt(np.dot(r, r)) / norm_v
+        x_prop = np.clip(delta - 2*alpha*r + alpha**2*v, -500.0, 500.0)
 
-        if norm < tol:
-            return delta_new, True, h + 1, norm_history
-
-        F_hist[:, ptr] = f
-        X_hist[:, ptr] = delta
-        ptr      = (ptr + 1) % m_aa
-        hist_len = min(hist_len + 1, m_aa)
-
-        if hist_len > 1:
-            F_k = F_hist[:, :hist_len]
-            dF  = F_k[:, 1:] - F_k[:, [0]]
-            try:
-                rhs   = -dF.T @ F_k[:, 0]
-                A_aa  = dF.T @ dF + 1e-10 * np.eye(hist_len - 1)
-                c_bar = np.linalg.solve(A_aa, rhs)
-                c     = np.empty(hist_len)
-                c[0]  = 1.0 - c_bar.sum()
-                c[1:] = c_bar
-                d_aa  = (X_hist[:, :hist_len] + F_hist[:, :hist_len]) @ c
-                delta = (np.clip(d_aa, -500.0, 500.0)
-                         if np.all(np.isfinite(d_aa)) else delta_new)
-            except np.linalg.LinAlgError:
-                delta = delta_new
+        if not np.all(np.isfinite(x_prop)) or np.max(np.abs(x_prop - x2)) > 100.0*nm2 + 1.0:
+            delta = x2
         else:
-            delta = delta_new
+            delta = x_prop
 
-    return delta, False, max_iter, norm_history
+    return delta, False, fevals, norm_history
 
 
 
@@ -1278,9 +1250,9 @@ def main():
                         choices=[10, 100, 500, 1000],
                         help='Number of simulation draws (CG2020: 100 for testing, 1000 for final)')
     parser.add_argument('--seed', type=int, default=42)
-    parser.add_argument('--tol-inner', type=float, default=1e-12,
+    parser.add_argument('--tol-inner', type=float, default=1e-9,
                         dest='tol_inner')
-    parser.add_argument('--max-inner', type=int, default=2000,
+    parser.add_argument('--max-inner', type=int, default=5000,
                         dest='max_inner')
     parser.add_argument('--tol-outer', type=float, default=1e-6,
                         dest='tol_outer')
