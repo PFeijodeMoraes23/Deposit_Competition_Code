@@ -199,6 +199,8 @@ STEPS = [
      "Merge all MCA panels + deposit panel -> master analysis dataset"),
     (4, "13", "panel_7_instruments.py",
      "Compute LOO instruments and FGC dummy -> overwrites market_panel.csv"),
+    (4, "13b", "panel_8_demographics_sigma.py",
+     "Within-MCA demographic σ for BLP parametric draws -> demographics_sigma.parquet"),
 
     # Stage 5 -- descriptive statistics
     (5, "14", "desc_1.py",
@@ -326,7 +328,7 @@ WAVES: list[list[str]] = [
     ["8", "8b"],                               # Wave 2g: characteristic panels + deposits + IP rates
     ["9", "10", "11"],                         # Wave 3: deposit rates/spreads + bank chars + digital flags (parallel)
     ["12"],                                    # Wave 4: master merge
-    ["13"],                                    # Wave 5: instrumental variables
+    ["13", "13b"],                             # Wave 5: instrumental variables + demographics sigma
     ["14", "15"],                              # Wave 6: descriptive statistics
 ]
 

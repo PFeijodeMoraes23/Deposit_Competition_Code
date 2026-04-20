@@ -106,6 +106,26 @@ function load_merged_spec_data(estim::Int, spec_id::Int;
     return df
 end
 
+"""Load demographics_sigma.parquet → Dict{(mca_code, time_id), Vector{Float64}} of σ per D_COL."""
+function load_sigma_table(; is_hpc::Bool=false, local_dir=nothing)
+    input_dir, _ = get_paths(is_hpc; local_dir=local_dir)
+    path = joinpath(input_dir, "demographics_sigma.parquet")
+    if !isfile(path)
+        log_status("WARNING: demographics_sigma.parquet not found at $path — falling back to 0.1 × σ_national")
+        return nothing
+    end
+    df = DataFrame(Parquet2.Dataset(path); copycols=true)
+    sigma_cols = [c * "_sigma" for c in D_COLS]
+    avail = [c for c in sigma_cols if c in names(df)]
+    tbl = Dict{Tuple{String,String}, Vector{Float64}}()
+    for row in eachrow(df)
+        key = (string(row.mca_code), string(row.time_id))
+        tbl[key] = Float64[coalesce(row[c], 0.0) for c in avail]
+    end
+    log_status("Loaded demographics_sigma: $(length(tbl)) market-time σ entries")
+    return tbl
+end
+
 # ==========================================================================
 # 2. Simulation Draws
 # ==========================================================================
@@ -118,18 +138,36 @@ function generate_halton_draws(R::Int, dim::Int, seed::Int)::Matrix{Float64}
     return quantile.(Normal(), pts)'
 end
 
-function generate_demographic_draws(df::DataFrame, R::Int, seed::Int)
+function generate_demographic_draws(df::DataFrame, R::Int, seed::Int;
+                                    sigma_table=nothing)
     rng    = MersenneTwister(seed)
     d_cols = [c for c in D_COLS if c in names(df)]
     D      = length(d_cols)
     mca_time = unique(df[:, ["mca_code", "time_id", d_cols...]])
+    # National σ used as fallback when sigma_table is missing or key not found
     nat_std  = [std(skipmissing(mca_time[!, c])) for c in d_cols]
     nat_std  = [s == 0.0 ? 1.0 : s for s in nat_std]
     draws = Dict{Tuple{String,String}, Matrix{Float64}}()
+    n_market = 0; n_fallback = 0
     for row in eachrow(mca_time)
         key = (string(row.mca_code), string(row.time_id))
         mu  = [coalesce(row[c], 0.0) for c in d_cols]
-        draws[key] = mu .+ (nat_std .* 0.1) .* randn(rng, D, R) |> transpose |> Matrix
+        # Use market-specific σ from the sigma table if available
+        if sigma_table !== nothing && haskey(sigma_table, key)
+            mkt_std = sigma_table[key]
+            # Guard against zero σ (fall back to national for that dimension)
+            mkt_std = [s <= 0.0 ? nat_std[i] : s for (i, s) in enumerate(mkt_std)]
+            n_market += 1
+        else
+            mkt_std = nat_std .* 0.1  # legacy fallback
+            n_fallback += 1
+        end
+        draws[key] = mu .+ mkt_std .* randn(rng, D, R) |> transpose |> Matrix
+    end
+    if n_fallback > 0
+        log_status("Demographic draws: $n_market market-specific, $n_fallback fallback (0.1 × σ_nat)")
+    else
+        log_status("Demographic draws: $n_market market-specific σ (all matched)")
     end
     return draws
 end
@@ -807,7 +845,9 @@ function run_blp_for_spec(estim::Int, spec_id::Int, args)
     println("  Stage: $(uppercase(args["stage"])) ($n_params parameters)")
     println("  [HPC] Precomputing arrays + allocating hot buffers...")
 
-    demo_draws = generate_demographic_draws(df, R, seed)
+    sigma_tbl  = load_sigma_table(; is_hpc=args["hpc"],
+                                    local_dir=get(args, "local_dir", nothing))
+    demo_draws = generate_demographic_draws(df, R, seed; sigma_table=sigma_tbl)
     d_cols = [c for c in D_COLS if c in names(df)]
     D_dim  = length(d_cols)
     N_obs  = nrow(df)

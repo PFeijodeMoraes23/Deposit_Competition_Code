@@ -310,6 +310,12 @@ def aggregate_to_mca_quarter(cad: pd.DataFrame,
         logging.warning(f"{n_miss:,} CadUnico rows unmatched to MCA — dropped.")
     cad = cad.dropna(subset=["mca_code"])
 
+    # Save municipality-level intermediate for within-MCA σ computation
+    muni_out = os.path.join(CAD_DIR, "cadunico_muni_panel.csv")
+    cad[["cod_ibge6", "mca_code", "year", "quarter",
+         "families_total"]].to_csv(muni_out, index=False)
+    logging.info(f"Saved municipality-level CadUnico to {muni_out}")
+
     agg = (
         cad.groupby(["mca_code", "year", "quarter"])
            .agg(
@@ -347,8 +353,10 @@ def merge_population(panel: pd.DataFrame) -> pd.DataFrame:
 ## ─────────────────────────────────────────────────────────────────────────────
 
 def main():
-    # Early exit: if output already exists, skip the full rebuild
-    if os.path.exists(OUTPUT_CSV) and os.path.getsize(OUTPUT_CSV) > 0:
+    # Early exit: if output already exists AND muni intermediate exists, skip
+    muni_csv = os.path.join(CAD_DIR, "cadunico_muni_panel.csv")
+    if (os.path.exists(OUTPUT_CSV) and os.path.getsize(OUTPUT_CSV) > 0
+            and os.path.exists(muni_csv) and os.path.getsize(muni_csv) > 0):
         print(f"Output already exists, skipping: {OUTPUT_CSV}")
         logging.info(f"Output already exists -- skipping rebuild: {OUTPUT_CSV}")
         return

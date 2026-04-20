@@ -424,6 +424,13 @@ def main():
     crosswalk = load_mca_crosswalk()
     pix_raw   = merge_mca(pix_raw, crosswalk)
 
+    # 3b. Save municipality-level intermediate for within-MCA σ computation
+    muni_save = pix_raw[["municipality_code", "mca_code", "year", "quarter",
+                          "QT_PES_PagadorPF"]].copy()
+    muni_out = os.path.join(PIX_DIR, "pix_muni_panel.csv")
+    muni_save.to_csv(muni_out, index=False)
+    logging.info(f"Saved municipality-level PIX to {muni_out}")
+
     # 4. Aggregate to MCA × quarter
     pix_agg = aggregate_to_mca_quarter(pix_raw)
     logging.info(f"PIX MCA × quarter aggregation: {len(pix_agg):,} rows")

@@ -328,11 +328,13 @@ def load_mca_crosswalk() -> pd.DataFrame:
 
 
 def aggregate_to_mca_quarter(anatel: pd.DataFrame,
-                              crosswalk: pd.DataFrame) -> pd.DataFrame:
+                              crosswalk: pd.DataFrame,
+                              _muni_frames: list | None = None) -> pd.DataFrame:
     """
     1. Keep only the last month of each quarter (stock snapshot).
     2. Merge MCA code.
     3. Aggregate to MCA × year × quarter.
+    If `_muni_frames` list is passed, appends municipality-level data for σ computation.
     """
     # Last month of quarter: month 3, 6, 9, 12
     last_month = {1: 3, 2: 6, 3: 9, 4: 12}
@@ -348,6 +350,13 @@ def aggregate_to_mca_quarter(anatel: pd.DataFrame,
         logging.warning(f"{n_miss:,} ANATEL rows unmatched to MCA — dropped.")
     anatel = anatel.dropna(subset=["mca_code"])
     anatel["acessos_fast"] = anatel["acessos"].where(anatel["is_fast"] == 1, 0)
+
+    # Save municipality-level intermediate for within-MCA σ computation
+    if _muni_frames is not None:
+        _muni_frames.append(
+            anatel[["mun_code", "mca_code", "year", "quarter",
+                    "acessos", "acessos_fast"]].copy()
+        )
 
     agg = (
         anatel.groupby(["mca_code", "year", "quarter"])
@@ -738,8 +747,10 @@ def _download_and_parse(year: int) -> pd.DataFrame | None:
 
 
 def main():
-    # Early exit: if output already exists, skip the full rebuild
-    if os.path.exists(OUTPUT_CSV) and os.path.getsize(OUTPUT_CSV) > 0:
+    # Early exit: if output already exists AND muni intermediate exists, skip
+    muni_csv = os.path.join(ANATEL_DIR, "anatel_muni_panel.csv")
+    if (os.path.exists(OUTPUT_CSV) and os.path.getsize(OUTPUT_CSV) > 0
+            and os.path.exists(muni_csv) and os.path.getsize(muni_csv) > 0):
         print(f"Output already exists, skipping: {OUTPUT_CSV}")
         logging.info(f"Output already exists -- skipping rebuild: {OUTPUT_CSV}")
         return
@@ -748,6 +759,7 @@ def main():
     crosswalk = load_mca_crosswalk()
 
     all_panels: list[pd.DataFrame] = []
+    muni_frames: list[pd.DataFrame] = []
 
     # ── Pre-2019: population-weighted DDD apportionment ───────────────────
     if PANEL_START_YEAR <= 2018:
@@ -770,7 +782,7 @@ def main():
         try:
             df = _download_and_parse(year)
             if df is not None:
-                agg = aggregate_to_mca_quarter(df, crosswalk)
+                agg = aggregate_to_mca_quarter(df, crosswalk, _muni_frames=muni_frames)
                 del df      # free raw rows
                 gc.collect()
                 if agg is not None and not agg.empty:
@@ -780,6 +792,15 @@ def main():
 
     if not all_panels:
         raise RuntimeError("No ANATEL data loaded.")
+
+    # Save municipality-level intermediate for within-MCA σ computation
+    if muni_frames:
+        muni_all = pd.concat(muni_frames, ignore_index=True)
+        muni_out = os.path.join(ANATEL_DIR, "anatel_muni_panel.csv")
+        muni_all.to_csv(muni_out, index=False)
+        logging.info(f"Saved municipality-level ANATEL to {muni_out}")
+        del muni_all, muni_frames
+        gc.collect()
 
     panel = pd.concat(all_panels, ignore_index=True)
     panel = merge_population_for_per100(panel)

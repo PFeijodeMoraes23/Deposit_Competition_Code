@@ -187,6 +187,12 @@ def aggregate_to_mca_year(incl: pd.DataFrame,
         logging.warning(f"{n_miss:,} BCB inclusion rows unmatched to MCA — dropped.")
     annual = annual.dropna(subset=["mca_code"])
 
+    # Save municipality-level intermediate for within-MCA σ computation
+    muni_out = os.path.join(INCL_DIR, "bcb_inclusion_muni_panel.csv")
+    annual[["mun_code", "mca_code", "year", "branches", "correspondents"]].to_csv(
+        muni_out, index=False)
+    logging.info(f"Saved municipality-level BCB inclusion to {muni_out}")
+
     agg = (
         annual.groupby(["mca_code", "year"])
               .agg(
@@ -229,8 +235,10 @@ def merge_population(panel: pd.DataFrame) -> pd.DataFrame:
 ## ─────────────────────────────────────────────────────────────────────────────
 
 def main():
-    # Early exit: if output already exists, skip the full rebuild
-    if os.path.exists(OUTPUT_CSV) and os.path.getsize(OUTPUT_CSV) > 0:
+    # Early exit: if output already exists AND muni intermediate exists, skip
+    muni_csv = os.path.join(INCL_DIR, "bcb_inclusion_muni_panel.csv")
+    if (os.path.exists(OUTPUT_CSV) and os.path.getsize(OUTPUT_CSV) > 0
+            and os.path.exists(muni_csv) and os.path.getsize(muni_csv) > 0):
         print(f"Output already exists, skipping: {OUTPUT_CSV}")
         logging.info(f"Output already exists -- skipping rebuild: {OUTPUT_CSV}")
         return

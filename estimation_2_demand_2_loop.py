@@ -216,6 +216,27 @@ def load_merged_spec_data(spec_id: int, is_hpc: bool = False) -> pd.DataFrame:
         raise FileNotFoundError(f"Missing {pkl_path}")
     return pd.read_parquet(pkl_path, engine='pyarrow')
 
+def load_sigma_table(is_hpc: bool = False) -> dict | None:
+    """Load within-MCA demographic sigma table from demographics_sigma.parquet.
+
+    Returns dict: (mca_code, time_id) -> np.ndarray of shape (D,), or None if
+    the file is not found (falls back to 0.1 * national sigma).
+    """
+    input_dir, _ = get_paths(is_hpc)
+    path = input_dir / "demographics_sigma.parquet"
+    if not path.exists():
+        print("WARNING: demographics_sigma.parquet not found - falling back to 0.1 x sigma_national")
+        return None
+    df = pd.read_parquet(path, engine='pyarrow')
+    sigma_cols = [c + '_sigma' for c in D_COLS]
+    avail = [c for c in sigma_cols if c in df.columns]
+    tbl = {}
+    for _, row in df.iterrows():
+        key = (row['mca_code'], row['time_id'])
+        tbl[key] = np.array([row[c] if pd.notna(row[c]) else 0.0 for c in avail])
+    print(f"Loaded demographics_sigma: {len(tbl)} market-time sigma entries")
+    return tbl
+
 # ==============================================================================
 # 2. Simulation Draws
 # ==============================================================================
@@ -229,9 +250,10 @@ def generate_halton_draws(R: int, dim: int, seed: int) -> np.ndarray:
     return stats.norm.ppf(u)  # (R, dim)
 
 def generate_demographic_draws(df: pd.DataFrame, R: int,
-                               seed: int) -> dict:
+                               seed: int,
+                               sigma_table: dict | None = None) -> dict:
     """For each (mca_code, time_id), draw R demographic vectors from
-    Normal(mu_m, sigma_m^2) parametrised by MCA aggregates (Nevo 2001).
+    Normal(mu_m, sigma_m^2) using within-MCA sigma where available.
 
     Returns dict: (mca_code, time_id) -> (R, D) array.
     """
@@ -243,7 +265,7 @@ def generate_demographic_draws(df: pd.DataFrame, R: int,
     mca_level = df[['mca_code', 'time_id'] + d_cols_avail].drop_duplicates(
         subset=['mca_code', 'time_id'])
 
-    # National std for each demographic (used as sigma)
+    # National std for each demographic (fallback sigma)
     nat_std = mca_level[d_cols_avail].std().values  # (D,)
     nat_std = np.where(nat_std == 0, 1.0, nat_std)
 
@@ -252,7 +274,12 @@ def generate_demographic_draws(df: pd.DataFrame, R: int,
         key = (row['mca_code'], row['time_id'])
         mu = row[d_cols_avail].values.astype(float)
         mu = np.nan_to_num(mu, nan=0.0)
-        d_draw = rng.normal(loc=mu, scale=nat_std * 0.1, size=(R, D))
+        if sigma_table is not None and key in sigma_table:
+            mkt_std = sigma_table[key].copy()
+            mkt_std = np.where(mkt_std <= 0, nat_std * 0.1, mkt_std)
+        else:
+            mkt_std = nat_std * 0.1
+        d_draw = rng.normal(loc=mu, scale=mkt_std, size=(R, D))
         draws[key] = d_draw
 
     return draws
@@ -952,7 +979,9 @@ def run_blp_for_spec(spec_id: int, args) -> dict:
         print(f"  Stage: {args.stage.upper()} ({n_params} parameters)")
 
         print("  Precomputing arrays for vectorized logic...")
-        demo_draws = generate_demographic_draws(df, args.R, args.seed)
+        sigma_tbl = load_sigma_table(is_hpc='--hpc' in sys.argv)
+        demo_draws = generate_demographic_draws(df, args.R, args.seed,
+                                               sigma_table=sigma_tbl)
         d_cols_avail = [c for c in D_COLS if c in df.columns]
         D_dim = len(d_cols_avail)
         N_obs = len(df)

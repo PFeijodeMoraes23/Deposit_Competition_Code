@@ -59,6 +59,25 @@ function load_merged_spec_data(spec_id::Int; is_hpc::Bool=false, local_dir=nothi
     return DataFrame(Parquet2.Dataset(path); copycols=true)
 end
 
+function load_sigma_table(; is_hpc::Bool=false, local_dir=nothing)
+    input_dir, _ = get_paths(is_hpc; local_dir=local_dir)
+    path = joinpath(input_dir, "demographics_sigma.parquet")
+    if !isfile(path)
+        println("WARNING: demographics_sigma.parquet not found — falling back to 0.1 × σ_national")
+        return nothing
+    end
+    df = DataFrame(Parquet2.Dataset(path); copycols=true)
+    sigma_cols = [c * "_sigma" for c in D_COLS]
+    avail = [c for c in sigma_cols if c in names(df)]
+    tbl = Dict{Tuple{String,String}, Vector{Float64}}()
+    for row in eachrow(df)
+        key = (string(row.mca_code), string(row.time_id))
+        tbl[key] = Float64[coalesce(row[c], 0.0) for c in avail]
+    end
+    println("Loaded demographics_sigma: $(length(tbl)) market-time σ entries")
+    return tbl
+end
+
 function generate_halton_draws(R::Int, dim::Int, seed::Int)::Matrix{Float64}
     skip = seed * R
     n_total = R + skip
@@ -68,7 +87,8 @@ function generate_halton_draws(R::Int, dim::Int, seed::Int)::Matrix{Float64}
     return quantile.(Normal(), pts)'
 end
 
-function generate_demographic_draws(df::DataFrame, R::Int, seed::Int)
+function generate_demographic_draws(df::DataFrame, R::Int, seed::Int;
+                                    sigma_table::Union{Nothing, Dict{Tuple{String,String}, Vector{Float64}}}=nothing)
     rng    = MersenneTwister(seed)
     d_cols = [c for c in D_COLS if c in names(df)]
     D      = length(d_cols)
@@ -79,7 +99,13 @@ function generate_demographic_draws(df::DataFrame, R::Int, seed::Int)
     for row in eachrow(mca_time)
         key      = (string(row.mca_code), string(row.time_id))
         mu       = [coalesce(row[c], 0.0) for c in d_cols]
-        draws[key] = (mu .+ (nat_std .* 0.1) .* randn(rng, D, R)) |> transpose |> Matrix
+        if sigma_table !== nothing && haskey(sigma_table, key)
+            mkt_std = sigma_table[key]
+            mkt_std = [s <= 0.0 ? nat_std[i] : s for (i, s) in enumerate(mkt_std)]
+        else
+            mkt_std = nat_std .* 0.1
+        end
+        draws[key] = (mu .+ mkt_std .* randn(rng, D, R)) |> transpose |> Matrix
     end
     return draws
 end
@@ -413,7 +439,9 @@ function run_blp_for_spec(spec_id::Int, args)
     end
 
     println("  Stage: $(uppercase(args["stage"])) ($n_params params)")
-    demo_draws = generate_demographic_draws(df,R,seed)
+    sigma_tbl  = load_sigma_table(; is_hpc=args["hpc"],
+                                    local_dir=get(args,"local_dir",nothing))
+    demo_draws = generate_demographic_draws(df,R,seed; sigma_table=sigma_tbl)
     d_cols=[c for c in D_COLS if c in names(df)]; D_dim=length(d_cols); N_obs=nrow(df)
     mca=string.(df.mca_code); time=string.(df.time_id)
     ukeys=sort(collect(keys(demo_draws))); k2i=Dict(k=>i for (i,k) in enumerate(ukeys))

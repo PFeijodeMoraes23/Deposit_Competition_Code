@@ -1127,6 +1127,20 @@ def aggregate_to_mca(pop: pd.DataFrame, gdp: pd.DataFrame,
         merged["fraction_young"]   = np.nan
         merged["age_interpolated"] = True
 
+    # ── Save municipality-level intermediate for within-MCA σ computation ──
+    muni_gdp_pc = np.where(
+        merged["population"] > 0,
+        (merged["gdp_total_r1000"] * 1000) / merged["population"],
+        np.nan,
+    )
+    muni_save = merged[["municipality_code", "mca_code", "year",
+                         "population", "gdp_total_r1000",
+                         "fraction_65plus", "fraction_young"]].copy()
+    muni_save["gdp_per_capita"] = muni_gdp_pc
+    muni_out = os.path.join(IBGE_DIR, "muni_demographics_panel.csv")
+    muni_save.to_csv(muni_out, index=False)
+    logging.info(f"Saved municipality-level demographics to {muni_out}")
+
     # Population-weighted helpers for age shares.
     # Multiply population only where the fraction is non-NaN, so that MCAs with
     # completely missing age data produce NaN (not 0.0) in the output.
@@ -1193,8 +1207,10 @@ def aggregate_to_mca(pop: pd.DataFrame, gdp: pd.DataFrame,
 ## -----------------------------------------------------------------------------
 
 def main():
-    # Early exit: if output already exists, skip the full rebuild
-    if os.path.exists(OUTPUT) and os.path.getsize(OUTPUT) > 0:
+    # Early exit: if output already exists AND muni intermediate exists, skip
+    muni_csv = os.path.join(IBGE_DIR, "muni_demographics_panel.csv")
+    if (os.path.exists(OUTPUT) and os.path.getsize(OUTPUT) > 0
+            and os.path.exists(muni_csv) and os.path.getsize(muni_csv) > 0):
         print(f"Output already exists, skipping: {OUTPUT}")
         logging.info(f"Output already exists -- skipping rebuild: {OUTPUT}")
         return
