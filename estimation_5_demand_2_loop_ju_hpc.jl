@@ -123,8 +123,8 @@ function generate_halton_draws(R::Int, dim::Int, seed::Int)::Matrix{Float64}
     return quantile.(Normal(), pts)'
 end
 
-function generate_demographic_draws(df::DataFrame, R::Int, seed::Int;
-                                    sigma_table::Union{Nothing, Dict{Tuple{String,String}, Vector{Float64}}}=nothing)
+function generate_demographic_draws(df, R, seed;
+                                    sigma_table=nothing)
     rng = MersenneTwister(seed)
     d_cols = [c for c in D_COLS if c in names(df)]
     D = length(d_cols)

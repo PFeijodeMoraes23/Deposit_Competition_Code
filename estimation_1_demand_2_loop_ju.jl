@@ -134,8 +134,8 @@ function generate_halton_draws(R::Int, dim::Int, seed::Int)::Matrix{Float64}
 end
 
 """Draw R demographic vectors per (mca, time) from N(mu_m, sigma_m^2) using within-MCA sigma."""
-function generate_demographic_draws(df::DataFrame, R::Int, seed::Int;
-                                    sigma_table::Union{Nothing, Dict{Tuple{String,String}, Vector{Float64}}}=nothing)
+function generate_demographic_draws(df, R, seed;
+                                    sigma_table=nothing)
     rng = MersenneTwister(seed)
     d_cols = [c for c in D_COLS if c in names(df)]
     D = length(d_cols)
