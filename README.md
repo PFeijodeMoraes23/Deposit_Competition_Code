@@ -11,8 +11,9 @@
 This repository contains the full data pipeline and structural econometric estimation code for a research project studying deposit competition in Brazil's banking sector. The project replicates and extends the framework of **Egan, Hortaçsu & Matvos (2025)** to Brazilian prudential conglomerates, using granular municipality-level deposit data from the Central Bank of Brazil (BCB).
 
 The codebase:
+
 1. **Downloads and processes** raw data from multiple Brazilian government APIs (BCB, IBGE, ANATEL, SAGI/CadUnico, INSS).
-2. **Builds panel datasets** at the conglomerate × municipality × quarter level.
+2. **Builds panel datasets** at the conglomerate x municipality x quarter level.
 3. **Estimates structural models** of deposit supply and demand.
 
 ---
@@ -20,7 +21,7 @@ The codebase:
 ## Key Data Sources
 
 | Source | Description |
-|--------|-------------|
+| ------ | ----------- |
 | **BCB / ESTBAN** | Monthly bank balance sheets by municipality (COSIF format) |
 | **BCB / IF Data (Olinda API)** | Prudential conglomerate reports (deposit stocks, assets, solvency) |
 | **BCB / SGS** | Macro time series: Selic overnight rate, CDI, TR |
@@ -35,7 +36,7 @@ The codebase:
 
 ## Repository Structure
 
-```
+```text
 .
 ├── run_data_pipeline.py          # Master pipeline runner (orchestrates all stages)
 │
@@ -105,7 +106,7 @@ The codebase:
 
 The pipeline is executed via `run_data_pipeline.py`, which runs scripts as subprocesses in **dependency-ordered waves**, with independent steps parallelized within each wave:
 
-```
+```text
 Wave 1  (serial)    : 0a — Download ESTBAN + IF Data raw files
 Wave 2  (parallel)  : 1a, 2a, 2b, 2d, 2e, 2f, 3a — Demographics, market panels, deposit panel
 Wave 3  (parallel)  : 3b, 3c — Deposit rates/spreads + bank characteristics
@@ -138,9 +139,10 @@ python run_data_pipeline.py --list
 The project estimates a structural model of deposit supply and demand following **Egan, Hortaçsu & Matvos (2025)**:
 
 ### Supply Side (Deposit "Sleepiness")
+
 The structural equation in levels:
 
-```
+```text
 Dep_jkt = φ(S_t, X_jt) · nr_t · Dep_jkt−1 + ε_jkt
 
 where φ(S_t, X_jt) = Υ₁'S_t + Υ₂'X_jt
@@ -153,15 +155,17 @@ where φ(S_t, X_jt) = Υ₁'S_t + Υ₂'X_jt
 - `Υ`: "sleepiness" parameters to be estimated
 
 ### Identification
-- Deposit types 1–3 (demand, savings, interbank): exogenous rates → OLS
-- Deposit types 4–5 (CDB, prepaid): endogenous rates → **Control Function** approach (Petrin & Train 2010)
+
+- Deposit types 1-3 (demand, savings, interbank): exogenous rates -> OLS
+- Deposit types 4-5 (CDB, prepaid): endogenous rates -> **Control Function** approach (Petrin & Train 2010)
   - **Cost-shifter instruments**: lagged COSIF implicit rate, log assets, equity ratio, lagged CDI/Selic
-  - **Hausman IV**: leave-one-out mean deposit spread (same type × quarter)
+  - **Hausman IV**: leave-one-out mean deposit spread (same type x quarter)
 
 ### Demand Side
+
 Active market shares are constructed after removing the "sleeping" component, then demand is estimated via **Berry (1994)**:
 
-```
+```text
 log(s_active_jkt) = α_k · σ_jkt + δ_j + μ_kt + e_jkt
 ```
 
@@ -178,7 +182,7 @@ The primary geographic unit is the **MCA (Minimum Comparable Area)** — a time-
 ## Key Technologies
 
 | Technology | Purpose |
-|------------|---------|
+| ---------- | ------- |
 | **Python 3.x** | All data processing and estimation |
 | **pandas** | Data manipulation and panel construction |
 | **numpy** | Numerical computations |
@@ -196,7 +200,7 @@ The primary geographic unit is the **MCA (Minimum Comparable Area)** — a time-
 The pipeline produces CSV files organized by data source under a `BCB/` directory tree:
 
 | File | Description |
-|------|-------------|
+| ---- | ----------- |
 | `BCB/Panel/deposits_panel.csv` | Conglomerate × municipality × quarter deposit balances |
 | `BCB/Panel/market_panel.csv` | Master analysis dataset (deposits + all market characteristics) |
 | `BCB/Egan_et_al_2025_Rep/processed/PANEL_INTERMED/egan_panel_deposits.csv` | Egan-style panel for estimation |
@@ -212,3 +216,4 @@ The pipeline produces CSV files organized by data source under a `BCB/` director
 - Egan, M., Hortaçsu, A., & Matvos, G. (2025). *Deposit Competition and Financial Fragility: Evidence from the U.S. Banking Sector.*
 - Berry, S. T. (1994). *Estimating Discrete-Choice Models of Product Differentiation.* RAND Journal of Economics, 25(2), 242–262.
 - Petrin, A., & Train, K. (2010). *A Control Function Approach to Endogeneity in Consumer Choice Models.* Journal of Marketing Research, 47(1), 3–13.
+- Conlon, C., & Gortmaker, J. (2020). *Best Practices for Differentiated Products Demand Estimation with PyBLP.* RAND Journal of Economics, 51(4), 1108–1161.
