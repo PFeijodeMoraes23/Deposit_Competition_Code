@@ -444,7 +444,7 @@ def main():
                     print(f"   [!] Failed or skipped Spec: {target_id} {model_type} in {alt}")
 
     if total_saved > 0:
-        summary_file = demand_output_dir / "demand_prep_summary.json"
+        summary_file = demand_output_dir / "demand_prep_summary_5.json"
         
         # Load existing if it exists
         if summary_file.exists():

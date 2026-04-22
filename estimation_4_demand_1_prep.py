@@ -420,7 +420,7 @@ def main():
         print("No valid specifications were processed.")
         sys.exit(1)
         
-    out_json = demand_output_dir / "demand_prep_summary.json"
+    out_json = demand_output_dir / "demand_prep_summary_4.json"
     with open(out_json, "w") as f: json.dump(spec_summaries, f, indent=4)
     print(f"\nSummary saved to: {out_json}")
     print(f"[SUCCESS] {n_saved} per-spec Pickles written to {demand_output_dir}.")
