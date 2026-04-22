@@ -5,6 +5,9 @@ import itertools
 import pickle
 from pathlib import Path
 import subprocess
+import shutil
+
+_DRAFTS_DIR = Path(r"C:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\Drafts\Deposit Competition")
 
 # ---------------------------------------------------------------------------
 # Allow import of sibling module estimation_1_sleep / utils
@@ -462,19 +465,21 @@ To resolve extreme small-$G^*$ parameter bias natively, the econometric benchmar
     )
 
     os.makedirs(OUT_DIR, exist_ok=True)
-    temp_tex = os.path.join(OUT_DIR, "Agent_Comments_Export.tex")
+    temp_tex = os.path.join(OUT_DIR, "est1_sleep_results.tex")
     print(f" - Writing single LaTeX file to {temp_tex} ...")
     with open(temp_tex, 'w', encoding='utf-8') as f:
         f.write(tex_doc)
+    shutil.copy(temp_tex, _DRAFTS_DIR / "est1_sleep_results.tex")
+    print(f" - Copied .tex to {_DRAFTS_DIR}")
     
     print("\n - Compiling...")
     try:
-        subprocess.run(["pdflatex", "-interaction=nonstopmode", "Agent_Comments_Export.tex"],
+        subprocess.run(["pdflatex", "-interaction=nonstopmode", "est1_sleep_results.tex"],
                        cwd=OUT_DIR, capture_output=True, text=True)
-        res_final = subprocess.run(["pdflatex", "-interaction=nonstopmode", "Agent_Comments_Export.tex"],
+        res_final = subprocess.run(["pdflatex", "-interaction=nonstopmode", "est1_sleep_results.tex"],
                        cwd=OUT_DIR, capture_output=True, text=True) 
 
-        pdf_path = os.path.join(OUT_DIR, "Agent_Comments_Export.pdf")       
+        pdf_path = os.path.join(OUT_DIR, "est1_sleep_results.pdf")       
         if os.path.exists(pdf_path) and os.path.getsize(pdf_path) > 0:
             print("\n *** PDF SUCCESSFULLY GENERATED. ***\n")
         else:

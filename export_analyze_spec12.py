@@ -1,7 +1,10 @@
 import os
 import sys
+import shutil
 from pathlib import Path
 import pickle
+
+_DRAFTS_DIR = Path(r"C:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\Drafts\Deposit Competition")
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
@@ -317,14 +320,16 @@ def main():
         'interaction_cooperative', 'dummy_D_type'
     ]
     
-    build_latex_table(stage1_res, order, target_vars, out_dir / "stage1_comparison.tex", title="First Stage IV Results across Specifications")
-    build_latex_table(stage2_res, order, target_vars, out_dir / "stage2_comparison.tex", title="Second Stage Results across Specifications")
-    print(f"Exported LaTeX Tables to {out_dir}")
+    build_latex_table(stage1_res, order, target_vars, out_dir / "est1-5_spec12_stage1_comparison.tex", title="First Stage IV Results across Specifications")
+    build_latex_table(stage2_res, order, target_vars, out_dir / "est1-5_spec12_stage2_comparison.tex", title="Second Stage Results across Specifications")
+    shutil.copy(out_dir / "est1-5_spec12_stage1_comparison.tex", _DRAFTS_DIR / "est1-5_spec12_stage1_comparison.tex")
+    shutil.copy(out_dir / "est1-5_spec12_stage2_comparison.tex", _DRAFTS_DIR / "est1-5_spec12_stage2_comparison.tex")
+    print(f"Exported LaTeX Tables to {out_dir} and copied to {_DRAFTS_DIR}")
 
     # ---- 2) Pickle Model Information ----
-    with open(out_dir / "spec12_all_models.pkl", "wb") as f:
+    with open(out_dir / "est1-5_spec12_all_models.pkl", "wb") as f:
         pickle.dump(models_dict, f)
-    print(f"Exported combined model instances to {out_dir / 'spec12_all_models.pkl'}")
+    print(f"Exported combined model instances to {out_dir / 'est1-5_spec12_all_models.pkl'}")
 
     # ---- 3) Plot Implied National Phi_t ----
     fig, axes = plt.subplots(1, 2, figsize=(16, 6), sharey=True)
@@ -439,10 +444,11 @@ def main():
     axes[1].legend(loc='best')
     
     fig.tight_layout()
-    plot_path = out_dir / "phi_t_comparison_spec12.png"
+    plot_path = out_dir / "est1-5_spec12_phi_t_comparison.png"
     plt.savefig(plot_path, dpi=300)
     plt.close(fig)
-    print(f"Exported combined plot to {plot_path}")
+    shutil.copy(plot_path, _DRAFTS_DIR / "est1-5_spec12_phi_t_comparison.png")
+    print(f"Exported combined plot to {plot_path} and copied to {_DRAFTS_DIR}")
 
 if __name__ == "__main__":
     main()
