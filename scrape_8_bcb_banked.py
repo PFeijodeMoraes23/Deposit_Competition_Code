@@ -17,8 +17,12 @@
 #                          (all subtypes: government, individuals, legal entities,
 #                           judicial, mandatory, investment-linked, earmarked, etc.)
 #            VERBETE_420  — poupança (savings deposits)
+#            VERBETE_432  — depósitos a prazo (time deposits / CDB)
 #          Note: COSIF verbetes change slightly across vintages; column identification
 #          uses partial-name matching, not positional indexing.
+#          Note: Conta de Pagamento Pré-Paga (type 5, IF-Data account 110560) is
+#          absent from ESTBAN — BCB tracks it under a separate COSIF group (2.3.7.xx)
+#          not published in the ESTBAN verbete structure. No ESTBAN proxy available.
 #
 #     (B)  World Bank API — Global Findex indicator FX.OWN.TOTL.ZS:
 #            "Account at a financial institution (% age 15+)", Brazil.
@@ -27,7 +31,7 @@
 #          Fetched live; if API unavailable, falls back to hard-coded values.
 #
 #   Methodology:
-#     dep_percapita[m,t]    = (dep_vista + dep_poupanca)[m,t] / pop[m,t]
+#     dep_percapita[m,t]    = (dep_vista + dep_poupanca + dep_prazo)[m,t] / pop[m,t]
 #     nat_p95[t]            = 95th percentile of dep_percapita across MCAs in year t
 #     dep_intensity[m,t]    = clip(dep_percapita[m,t] / nat_p95[t], 0, 1)
 #     banked_frac_proxy[m,t] = findex_interp[t] * dep_intensity[m,t]
@@ -43,7 +47,8 @@
 #     year                  — Calendar year (December snapshot)
 #     dep_vista_total       — Sum of VERBETE_401 balances in MCA (R$ thousands)
 #     dep_poupanca_total    — Sum of VERBETE_420 balances in MCA (R$ thousands)
-#     dep_total             — dep_vista_total + dep_poupanca_total (R$ thousands)
+#     dep_prazo_total       — Sum of VERBETE_432 balances in MCA (R$ thousands)
+#     dep_total             — dep_vista_total + dep_poupanca_total + dep_prazo_total (R$ thousands)
 #     pop_total             — MCA population
 #     dep_percapita         — dep_total / pop_total (R$ thousands per person)
 #     findex_banked_frac    — National FX.OWN.TOTL.ZS / 100, linearly interpolated
@@ -255,6 +260,7 @@ def load_estban_december(year: int) -> pd.DataFrame | None:
         # Identify required columns by keyword
         col_vista    = _find_col(df.columns, "VERBETE_401")
         col_poupanca = _find_col(df.columns, "VERBETE_420")
+        col_prazo    = _find_col(df.columns, "VERBETE_432")
         col_mun      = _find_col(df.columns, "CODMUN_IBGE")
 
         if col_mun is None:
@@ -264,12 +270,16 @@ def load_estban_december(year: int) -> pd.DataFrame | None:
             log.warning(f"{year}: VERBETE_401 column not found — dep_vista will be 0.")
         if col_poupanca is None:
             log.warning(f"{year}: VERBETE_420 column not found — dep_poupanca will be 0.")
+        if col_prazo is None:
+            log.warning(f"{year}: VERBETE_432 column not found — dep_prazo will be 0.")
 
         keep = {col_mun: "mun_code"}
         if col_vista:
             keep[col_vista] = "dep_vista"
         if col_poupanca:
             keep[col_poupanca] = "dep_poupanca"
+        if col_prazo:
+            keep[col_prazo] = "dep_prazo"
 
         df = df[list(keep.keys())].rename(columns=keep).copy()
 
@@ -278,7 +288,7 @@ def load_estban_december(year: int) -> pd.DataFrame | None:
         df = df.dropna(subset=["mun_code"])
         df["mun_code"] = df["mun_code"].astype(int)
 
-        for dep_col in ("dep_vista", "dep_poupanca"):
+        for dep_col in ("dep_vista", "dep_poupanca", "dep_prazo"):
             if dep_col in df.columns:
                 df[dep_col] = pd.to_numeric(df[dep_col], errors="coerce").fillna(0.0)
                 df[dep_col] = df[dep_col].clip(lower=0.0)
@@ -287,7 +297,7 @@ def load_estban_december(year: int) -> pd.DataFrame | None:
 
         # Aggregate across institutions within each municipality
         agg = (
-            df.groupby("mun_code")[["dep_vista", "dep_poupanca"]]
+            df.groupby("mun_code")[["dep_vista", "dep_poupanca", "dep_prazo"]]
               .sum()
               .reset_index()
         )
@@ -296,7 +306,8 @@ def load_estban_december(year: int) -> pd.DataFrame | None:
         log.info(
             f"{year}: {len(agg):,} municipalities | "
             f"dep_vista={agg['dep_vista'].sum()/1e6:.1f}B R$k | "
-            f"dep_poupanca={agg['dep_poupanca'].sum()/1e6:.1f}B R$k"
+            f"dep_poupanca={agg['dep_poupanca'].sum()/1e6:.1f}B R$k | "
+            f"dep_prazo={agg['dep_prazo'].sum()/1e6:.1f}B R$k"
         )
         return agg
 
@@ -308,7 +319,7 @@ def load_estban_december(year: int) -> pd.DataFrame | None:
 def build_estban_panel() -> pd.DataFrame:
     """
     Load December ESTBAN for all years PANEL_START_YEAR..PANEL_END_YEAR.
-    Returns concatenated DataFrame [mun_code, year, dep_vista, dep_poupanca].
+    Returns concatenated DataFrame [mun_code, year, dep_vista, dep_poupanca, dep_prazo].
     """
     frames = []
     for yr in range(PANEL_START_YEAR, PANEL_END_YEAR + 1):
@@ -372,15 +383,19 @@ def aggregate_to_mca(estban: pd.DataFrame, crosswalk: pd.DataFrame) -> pd.DataFr
     merged = merged.dropna(subset=["mca_code"])
 
     agg = (
-        merged.groupby(["mca_code", "year"])[["dep_vista", "dep_poupanca"]]
+        merged.groupby(["mca_code", "year"])[["dep_vista", "dep_poupanca", "dep_prazo"]]
               .sum()
               .reset_index()
     )
     agg.rename(
-        columns={"dep_vista": "dep_vista_total", "dep_poupanca": "dep_poupanca_total"},
+        columns={
+            "dep_vista":    "dep_vista_total",
+            "dep_poupanca": "dep_poupanca_total",
+            "dep_prazo":    "dep_prazo_total",
+        },
         inplace=True,
     )
-    agg["dep_total"] = agg["dep_vista_total"] + agg["dep_poupanca_total"]
+    agg["dep_total"] = agg["dep_vista_total"] + agg["dep_poupanca_total"] + agg["dep_prazo_total"]
     log.info(f"MCA panel after aggregation: {len(agg):,} rows.")
     return agg
 
@@ -465,7 +480,7 @@ def main():
     # --- Column order ---
     col_order = [
         "mca_code", "year",
-        "dep_vista_total", "dep_poupanca_total", "dep_total",
+        "dep_vista_total", "dep_poupanca_total", "dep_prazo_total", "dep_total",
         "pop_total", "dep_percapita",
         "findex_banked_frac",
         "nat_p95_dep_percapita", "dep_intensity",

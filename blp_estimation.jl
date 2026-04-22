@@ -326,12 +326,21 @@ function build_precomp(df::DataFrame, Z::Matrix{Float64},
     n_times       = length(unique_times)
     pair_time_enc = [time_to_idx[p[2]] for p in unique_pairs]
 
-    pop_b       = pop_total[b_mask]
-    pair_pop    = zeros(n_pairs)
-    for (i, w) in zip(b_mkt_idx, pop_b); pair_pop[i] += w; end
-    time_pop    = zeros(n_times)
-    for (i, w) in zip(pair_time_enc, pair_pop); time_pop[i] += w; end
-    pop_weights = pair_pop ./ max.(time_pop[pair_time_enc], 1e-30)
+    # Weight for D-type share aggregation: bc_mt * pop_mt (eq:a3-D)
+    # bc_mt * pop_mt is constant within each (mca, time) pair; use per-pair mean
+    # to avoid accumulating n_firms_mt * bc_mt * pop_mt.
+    bc_vals      = Float64.(coalesce.(df.banked_correction, 1.1))
+    bc_pop_b     = (bc_vals .* pop_total)[b_mask]
+    pair_bc_pop  = zeros(n_pairs)
+    pair_n_firms = zeros(Int, n_pairs)
+    for (i, w) in zip(b_mkt_idx, bc_pop_b)
+        pair_bc_pop[i]  += w
+        pair_n_firms[i] += 1
+    end
+    pair_bc_pop  ./= max.(pair_n_firms, 1)   # bc_mt * pop_mt per pair
+    time_bc_pop  = zeros(n_times)
+    for (i, w) in zip(pair_time_enc, pair_bc_pop); time_bc_pop[i] += w; end
+    pop_weights  = pair_bc_pop ./ max.(time_bc_pop[pair_time_enc], 1e-30)
 
     B_agg  = sparse(b_mkt_idx,     1:N_B,     ones(N_B),     n_pairs, N_B)
     D_agg  = sparse(d_time_enc,    1:N_D,     ones(N_D),     n_times, N_D)
