@@ -9,7 +9,7 @@
 #SBATCH --output=/home/pf382/dep_comp/scripts/logs/blp_E1_%j.out
 #SBATCH --error=/home/pf382/dep_comp/scripts/logs/blp_E1_%j.err
 #SBATCH --mail-type=END,FAIL
-#SBATCH --mail-user=pedro.fijode@yale.edu
+#SBATCH --mail-user=pedro.feijodemoraes@yale.edu
 
 module purge
 module load Julia/1.10.4-linux-x86_64

@@ -9,7 +9,7 @@
 #SBATCH --output=/home/pf382/dep_comp/scripts/logs/blp_draws_%j.out
 #SBATCH --error=/home/pf382/dep_comp/scripts/logs/blp_draws_%j.err
 #SBATCH --mail-type=END,FAIL
-#SBATCH --mail-user=pedro.fijode@yale.edu
+#SBATCH --mail-user=pedro.feijodemoraes@yale.edu
 
 # ── Environment ──────────────────────────────────────────────────────────────
 module purge
