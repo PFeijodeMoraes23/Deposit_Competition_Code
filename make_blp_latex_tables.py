@@ -4,7 +4,7 @@ Compiles outputs from all estimation modules and prints significance-starred
 results inside tables formatted to the user's custom LaTeX preamble.
 """
 import pathlib
-import pickle
+import json
 import argparse
 import numpy as np
 import scipy.stats as stats
@@ -52,14 +52,17 @@ VAR_MAP = {
     'cadunico_families_per1000': r'CadUnico (per 1,000)',
 }
 
-def format_latex_val(coef, se):
-    """Returns a tuple of two strings: (coef_string, se_string) with significance stars."""
+def format_latex_val(coef, se, G_star=None):
+    """Returns a tuple of two strings: (coef_string, se_string) with significance stars.
+    Uses t(df=G_star) per Imbens & Koles\u00e1r (2016) if G_star is provided."""
     if np.isnan(coef) or np.isnan(se):
         return ("-", "")
     
-    # Calculate p-value (two-tailed normal)
     t_stat = coef / se
-    p_val = 2 * (1 - stats.norm.cdf(abs(t_stat)))
+    if G_star is not None and G_star > 1:
+        p_val = 2 * stats.t.sf(abs(t_stat), df=G_star)
+    else:
+        p_val = 2 * (1 - stats.norm.cdf(abs(t_stat)))
     
     stars = ""
     if p_val < 0.01:
@@ -254,15 +257,15 @@ def process_estimation(est_id: int):
             res = None
             for stage in stages_priority:
                 if alt:
-                    filename = f"blp_results_spec_6_{alt}_{sp}_{stage}.pkl"
+                    filename = f"blp_results_E5_{alt}_spec_{sp}_{stage}.json"
                 else:
-                    filename = f"blp_results_spec_{est_id}_{sp}_{stage}.pkl"
+                    filename = f"blp_results_E{est_id}_spec_{sp}_{stage}.json"
                 
                 path = RESULTS_DIR / filename
                 if path.exists():
                     try:
-                        with open(path, 'rb') as f:
-                            res = pickle.load(f)
+                        with open(path, 'r') as f:
+                            res = json.load(f)
                             # Tag the stage found
                             res['__stage__'] = stage
                         break # Found highest priority
@@ -332,7 +335,7 @@ def process_estimation(est_id: int):
                     idx = specs_data[sp]['param_names_theta1'].index(p)
                     coef = specs_data[sp]['theta1'][idx]
                     se = specs_data[sp]['theta1_se'][idx] if 'theta1_se' in specs_data[sp] else np.nan
-                    c_str, s_str = format_latex_val(coef, se)
+                    c_str, s_str = format_latex_val(coef, se, G_star=specs_data[sp].get('G_star'))
                     row_c.append(c_str)
                     row_s.append(s_str)
                 else:
@@ -370,7 +373,7 @@ def process_estimation(est_id: int):
                             coef = r['theta2'][idx]
                             se = r['theta2_se'][idx] if 'theta2_se' in r and len(r['theta2_se']) > idx else np.nan
                             
-                    c_str, s_str = format_latex_val(coef, se)
+                    c_str, s_str = format_latex_val(coef, se, G_star=specs_data.get(sp, {}).get('G_star'))
                     row_c.append(c_str)
                     row_s.append(s_str)
                 
@@ -400,7 +403,7 @@ def process_estimation(est_id: int):
 
         table_code += "\\bottomrule\n\\end{tabular}\n"
         table_code += """\\begin{tablenotes}
-\\item Standard errors in parentheses. Significance levels: * $p < 0.1$, ** $p < 0.05$, *** $p < 0.01$.
+\\item Standard errors in parentheses (cluster-robust, Imbens \\& Koles{\'a}r 2016). Significance levels: * $p < 0.1$, ** $p < 0.05$, *** $p < 0.01$.
 \\end{tablenotes}\n"""
         table_code += "\\end{threeparttable}\n\\end{table}\n\n"
         

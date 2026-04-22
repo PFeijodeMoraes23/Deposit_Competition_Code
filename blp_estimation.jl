@@ -627,6 +627,40 @@ function estimate_theta1(delta::Vector{Float64}, pc::Precomp)
     return theta1, xi
 end
 
+"""Cluster-robust sandwich SEs for theta1 (IV/2SLS) + IK2016 effective cluster count.
+Returns (se, G_nominal, G_star) where G_star = G/(1+CV²) per Imbens & Kolesár (2016)."""
+function compute_cluster_se(theta1::Vector{Float64}, delta::Vector{Float64}, pc::Precomp)
+    valid    = pc.theta1_valid .& isfinite.(delta)
+    N_v      = sum(valid)
+    K        = length(theta1)
+    X_hat_v  = pc.X_hat[valid, :]    # X̃ (first-stage projected regressors)
+    X_full_v = pc.X_full[valid, :]   # X  (original regressors)
+    xi_v     = delta[valid] .- X_full_v * theta1
+    cl_v     = pc.clusters[valid]
+    # Bread: (X̃'X)⁻¹
+    XtX     = X_hat_v' * X_full_v
+    XtX_inv = try inv(XtX) catch; pinv(XtX) end
+    # Meat: Σ_c score_c ⊗ score_c  where score_c = X̃_c' ξ_c
+    unique_cl = unique(cl_v)
+    G         = length(unique_cl)
+    meat      = zeros(K, K)
+    for c in unique_cl
+        mask    = cl_v .== c
+        score_c = X_hat_v[mask, :]' * xi_v[mask]
+        meat   .+= score_c * score_c'
+    end
+    # CR1 small-sample correction
+    correction = G > 1 ? (G / (G - 1)) * (N_v / (N_v - K)) : 1.0
+    V_cluster  = XtX_inv * meat * XtX_inv' .* correction
+    se         = sqrt.(max.(diag(V_cluster), 0.0))
+    # IK2016 effective clusters: G* = G / (1 + CV²)
+    cl_sizes = [count(==(c), cl_v) for c in unique_cl]
+    mu_G     = Statistics.mean(cl_sizes)
+    cv_G     = mu_G > 0 ? Statistics.std(cl_sizes; corrected=false) / mu_G : 0.0
+    G_star   = max(1.0, G / (1.0 + cv_G^2))
+    return se, G, G_star
+end
+
 # ==========================================================================
 # 7. GMM Objective
 # ==========================================================================
@@ -739,13 +773,24 @@ function run_blp_estimation(estim::Int, spec_id::Int, args,
                            log.(clamp.(share_B_cond, 1e-15, Inf)),
                            Z_clean, X_full, X_hat, valid, clusters)
 
-        theta1, xi = estimate_theta1(delta, pc_logit)
-        G  = compute_gmm_moments(xi, pc_logit)
+        theta1, xi              = estimate_theta1(delta, pc_logit)
+        theta1_se, n_cl, G_s    = compute_cluster_se(theta1, delta, pc_logit)
+        g_moments = compute_gmm_moments(xi, pc_logit)
         W  = Matrix(I(length(iv_avail)) * 1.0)
-        Q  = dot(G, W * G)
-        results["theta1"] = theta1; results["theta2"] = Float64[]
-        results["delta"]  = delta;  results["xi"] = xi
-        results["Q_value"] = Q;     results["converged"] = true
+        Q  = dot(g_moments, W * g_moments)
+        results["theta1"]             = theta1
+        results["theta1_se"]          = theta1_se
+        results["theta2"]             = Float64[]
+        results["theta2_se"]          = Float64[]
+        results["delta"]              = delta
+        results["xi"]                 = xi
+        results["Q_value"]            = Q
+        results["converged"]          = true
+        results["param_names_theta1"] = vcat(["alpha"], X_COLS)
+        results["sigma_indices"]      = Int[]
+        results["pi_interactions"]    = Tuple{Int,Int}[]
+        results["n_clusters"]         = n_cl
+        results["G_star"]             = G_s
         println("  theta1 (alpha): $(round(theta1[1], sigdigits=6))")
         println("  Q(0) = $(round(Q, sigdigits=6))")
         return results
@@ -882,10 +927,13 @@ function run_blp_estimation(estim::Int, spec_id::Int, args,
     conv, n_it, _ = blp_contraction!(buf, delta_final, pc, R;
                                       tol=args["tol_inner"], max_iter=args["max_inner"])
 
-    theta1_star, xi_star = estimate_theta1(delta_final, pc)
+    theta1_star, xi_star         = estimate_theta1(delta_final, pc)
+    theta1_se, n_cl, G_s         = compute_cluster_se(theta1_star, delta_final, pc)
 
     results["theta1"]             = theta1_star
+    results["theta1_se"]          = theta1_se
     results["theta2"]             = theta2_star
+    results["theta2_se"]          = fill(NaN, length(theta2_star))
     results["delta"]              = delta_final
     results["xi"]                 = xi_star
     results["Q_value"]            = Optim.minimum(result)
@@ -894,6 +942,8 @@ function run_blp_estimation(estim::Int, spec_id::Int, args,
     results["param_names_theta1"] = vcat(["alpha"], X_COLS)
     results["sigma_indices"]      = sigma_indices
     results["pi_interactions"]    = pi_interactions
+    results["n_clusters"]         = n_cl
+    results["G_star"]             = G_s
     println("  theta1 (alpha): $(round(theta1_star[1], sigdigits=6))")
 
     # Save checkpoint
@@ -993,6 +1043,29 @@ function main()
 
             serialize(out_path, res)
             println("  Saved: $(basename(out_path))")
+            # Per-spec JSON for Python consumption
+            json_path = replace(out_path, ".jls" => ".json")
+            try
+                json_out = Dict{String,Any}(
+                    "estim"              => get(res, "estim", estim),
+                    "spec_id"            => get(res, "spec_id", sp),
+                    "stage"              => get(res, "stage", current_stage),
+                    "theta1"             => round.(get(res, "theta1",    Float64[]), sigdigits=8),
+                    "theta1_se"          => round.(get(res, "theta1_se", Float64[]), sigdigits=8),
+                    "theta2"             => round.(get(res, "theta2",    Float64[]), sigdigits=8),
+                    "theta2_se"          => round.(get(res, "theta2_se", Float64[]), sigdigits=8),
+                    "Q_value"            => get(res, "Q_value",   0.0),
+                    "converged"          => get(res, "converged", false),
+                    "param_names_theta1" => get(res, "param_names_theta1", String[]),
+                    "sigma_indices"      => get(res, "sigma_indices",     Int[]),
+                    "pi_interactions"    => get(res, "pi_interactions",   []),
+                    "n_clusters"         => get(res, "n_clusters",        0),
+                    "G_star"             => get(res, "G_star",            0.0),
+                )
+                open(json_path, "w") do f; JSON3.write(f, json_out); end
+            catch e
+                println("  [JSON-WARN] $e")
+            end
             lock(lk) do
                 all_results[sp] = Dict(
                     "Q_value"      => get(res, "Q_value", 0.0),

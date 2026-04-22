@@ -214,7 +214,13 @@ function estimate_2sls(delta::Vector{Float64}, X_full::Matrix{Float64},
     V_cluster  = XpX_inv * meat * XpX_inv' .* correction
     se         = sqrt.(max.(diag(V_cluster), 0.0))
 
-    return theta1, se, xi, Q, V_cluster
+    # IK2016 effective clusters: G* = G / (1 + CV²)
+    cl_sizes = [count(==(c), cl_v) for c in unique_cl]
+    mu_G     = Statistics.mean(cl_sizes)
+    cv_G     = mu_G > 0 ? Statistics.std(cl_sizes; corrected=false) / mu_G : 0.0
+    G_star   = max(1.0, G / (1.0 + cv_G^2))
+
+    return theta1, se, xi, Q, G, G_star
 end
 
 # ==========================================================================
@@ -274,7 +280,7 @@ function main()
             end
 
             # 2SLS estimation
-            theta1, se, xi, Q, V = estimate_2sls(delta, X_full, X_hat, Z, clusters)
+            theta1, se, xi, Q, n_cl, G_star = estimate_2sls(delta, X_full, X_hat, Z, clusters)
 
             # t-statistics
             tstat = theta1 ./ max.(se, 1e-15)
@@ -305,7 +311,8 @@ function main()
                 "n_obs"       => nrow(df),
                 "n_iv"        => length(iv_names),
                 "iv_names"    => iv_names,
-                "n_clusters"  => length(unique(clusters)),
+                "n_clusters"  => n_cl,
+                "G_star"      => G_star,
                 "converged"   => true,
             )
             all_results[key] = res
