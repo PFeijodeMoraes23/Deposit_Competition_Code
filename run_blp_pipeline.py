@@ -272,6 +272,9 @@ def build_parser() -> argparse.ArgumentParser:
     mode.add_argument("--julia-then-latex", action="store_true", default=False,
                       dest="julia_then_latex",
                       help="Run estimate then build LaTeX tables")
+    mode.add_argument("--logit-then-latex", action="store_true", default=False,
+                      dest="logit_then_latex",
+                      help="Run blp_logit_local.jl then build LaTeX tables from available results")
 
     g = p.add_argument_group("Estimation options")
     g.add_argument("--est",        type=str,   default="12")
@@ -305,6 +308,9 @@ def main():
         run_estimate_pipeline(args)
     elif args.julia_then_latex:
         run_estimate_pipeline(args)
+        run_latex_pipeline()
+    elif args.logit_then_latex:
+        run_logit(args)
         run_latex_pipeline()
     else:
         run_latex_pipeline()
