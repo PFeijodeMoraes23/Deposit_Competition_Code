@@ -978,7 +978,7 @@ function parse_args_est()
     @add_arg_table! s begin
         "--estim";   arg_type=Int;     required=true;  help="Estimation strategy (1–5)"
         "--spec";    arg_type=String;  default="12"
-        "--stage";   arg_type=String;  default="logit"
+        "--stage";   arg_type=String;  default="sigma"
         "--R";       arg_type=Int;     default=2000
         "--seed";    arg_type=Int;     default=42
         "--tol-inner"; arg_type=Float64; default=1e-12; dest_name="tol_inner"
@@ -1011,7 +1011,7 @@ function main()
         draws_dir, args["R"], args["seed"])
 
     stages_to_run = args["stage"] == "sequence" ?
-                    ["logit", "sigma", "full", "extended"] : [args["stage"]]
+                    ["sigma", "full", "extended"] : [args["stage"]]
 
     for current_stage in stages_to_run
         args["stage"] = current_stage
