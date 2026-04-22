@@ -1,12 +1,16 @@
 """
 blp_estimation.jl
 =================
-BLP demand estimation consuming pre-computed draws from blp_draws.jl.
+Self-contained BLP demand estimation using pre-computed draws from blp_draws.jl.
 
-Identical to blp_loop.jl except:
-  1. ν-draws and demographic draws are LOADED from BLP_DRAWS/ (not generated)
-  2. Tighter outer bounds for sigma/pi parameters
-  3. Clustering matches sleep estimation (CodConglomeradoPrudencial only)
+All BLP core functions are inlined here — blp_loop.jl is NOT loaded at runtime.
+Pre-computed ν-draws and demographic draws are loaded from BLP_DRAWS/ once and
+shared across all specs/stages, ensuring cross-strategy comparability.
+
+Differences from blp_loop.jl:
+  1. Draws are LOADED (not generated) — blp_draws.jl must run first
+  2. Tighter outer bounds [-5, 5] per CG2020
+  3. Clustering on CodConglomeradoPrudencial only (matches sleep estimation)
 
 Usage (cluster):
   julia --project=\${PROJECT_DIR} --threads=32 \\
@@ -56,9 +60,6 @@ const IV_CAPITAL = ["indice_basileia_lag"]
 const _log_buf  = String[]
 const _log_lock = ReentrantLock()
 
-# Note: get_paths is defined AFTER the blp_loop.jl include (see below)
-# to override its 2-tuple version with our 3-tuple version.
-
 function input_filename(estim::Int, spec_id::Int)::String
     prefix = estim == 5 ? "demand_5_alt2logistic" : "demand_$(estim)"
     return "$(prefix)_final_spec_$(spec_id).parquet"
@@ -70,41 +71,14 @@ function log_status(msg::String)
     println(stamped); flush(stdout)
 end
 
-const _blp_loop_path = joinpath(dirname(abspath(@__FILE__)), "blp_loop.jl")
-
-"""Strip CLI + Main section from blp_loop.jl so we can include only the functions."""
-function _strip_main(src::String)::String
-    lines = split(src, '\n')
-    out   = String[]
-    for l in lines
-        s = strip(l)
-        # Stop at the CLI/Main section — everything below is blp_loop.jl's own driver
-        if contains(s, "CLI") && contains(s, "Main")
-            break
-        end
-        push!(out, l)
-    end
-    return join(out, '\n')
-end
-
-if isfile(_blp_loop_path)
-    _clean_src = _strip_main(read(_blp_loop_path, String))
-    try
-        include_string(Main, _clean_src, _blp_loop_path)
-        log_status("Loaded BLP core functions from blp_loop.jl")
-    catch e
-        error("Failed to load blp_loop.jl functions: $e")
-    end
-else
-    error("blp_loop.jl not found at $_blp_loop_path — required for core BLP functions")
-end
-
-# Override blp_loop.jl's get_paths (2-tuple) with 3-tuple adding draws_dir
+# ==========================================================================
+# 0b. Paths (3-tuple: input, draws, output)
+# ==========================================================================
 function get_paths(is_hpc::Bool; local_dir::Union{String,Nothing}=nothing)
     if is_hpc
-        input_dir  = "/home/pf382/dep_comp/data/input"
-        draws_dir  = "/home/pf382/dep_comp/data/output/BLP_DRAWS"
-        output_dir = "/home/pf382/dep_comp/data/output"
+        input_dir  = joinpath(@__DIR__, "..", "data", "input")
+        draws_dir  = joinpath(@__DIR__, "..", "data", "output", "BLP_DRAWS")
+        output_dir = joinpath(@__DIR__, "..", "data", "output")
     else
         if local_dir !== nothing
             data_dir = local_dir
@@ -117,6 +91,565 @@ function get_paths(is_hpc::Bool; local_dir::Union{String,Nothing}=nothing)
         output_dir = joinpath(data_dir, "ESTIMATION_OUTPUT", "BLP_RESULTS")
     end
     return input_dir, draws_dir, output_dir
+end
+
+# ==========================================================================
+# 1. Theta2 Structure
+# ==========================================================================
+function build_theta2_structure(stage::String)
+    if stage == "logit"
+        return Int[], Tuple{Int,Int}[], 0
+    elseif stage == "sigma"
+        return [1], Tuple{Int,Int}[], 1
+    elseif stage == "full"
+        sigma_idx = [1, 1 + findfirst(==("log_total_assets_lag"), X_COLS)]
+        pi_inter  = [(1, findfirst(==("gdp_per_capita"),     D_COLS)),
+                     (1, findfirst(==("fraction_65plus"),    D_COLS)),
+                     (1, findfirst(==("connections_per100"), D_COLS))]
+        return sigma_idx, pi_inter, length(sigma_idx) + length(pi_inter)
+    elseif stage == "extended"
+        sigma_idx = [1, 1 + findfirst(==("log_total_assets_lag"), X_COLS)]
+        pi_inter  = [
+            (1,                                                 findfirst(==("gdp_per_capita"),              D_COLS)),
+            (1,                                                 findfirst(==("fraction_65plus"),             D_COLS)),
+            (1,                                                 findfirst(==("connections_per100"),          D_COLS)),
+            (1 + findfirst(==("log_total_assets_lag"), X_COLS), findfirst(==("gdp_per_capita"),             D_COLS)),
+            (1 + findfirst(==("fgc_covered"),          X_COLS), findfirst(==("fraction_65plus"),            D_COLS)),
+            (1 + findfirst(==("equity_ratio_lag"),     X_COLS), findfirst(==("cadunico_families_per1000"),  D_COLS)),
+        ]
+        return sigma_idx, pi_inter, length(sigma_idx) + length(pi_inter)
+    else
+        error("Unknown stage: $stage")
+    end
+end
+
+function unpack_theta2(theta2::Vector{Float64}, sigma_indices, pi_interactions)
+    n_s = length(sigma_indices)
+    n_p = length(pi_interactions)
+    return theta2[1:n_s], theta2[n_s+1:n_s+n_p]
+end
+
+# ==========================================================================
+# 2. HotBuffers — pre-allocated workspace for the inner loop
+# ==========================================================================
+mutable struct HotBuffers
+    mu             ::Matrix{Float64}
+    sigma_nu       ::Matrix{Float64}
+    sigma_diag     ::Vector{Float64}
+    delta_B        ::Vector{Float64}
+    delta_D        ::Vector{Float64}
+    V_B            ::Matrix{Float64}
+    V_D            ::Matrix{Float64}
+    q_B            ::Matrix{Float64}
+    s_B            ::Vector{Float64}
+    s_D            ::Vector{Float64}
+    log_sum_D_time ::Matrix{Float64}
+    log_D_sum_pair ::Matrix{Float64}
+    log_sum_B_mkt  ::Matrix{Float64}
+    joint_max      ::Matrix{Float64}
+    log_denom      ::Matrix{Float64}
+    log_denom_B    ::Matrix{Float64}
+    neg_log_denom  ::Matrix{Float64}
+    max_neg_ld     ::Matrix{Float64}
+    shifted_inv    ::Matrix{Float64}
+    sum_wtd        ::Matrix{Float64}
+    log_inv_wtd    ::Matrix{Float64}
+    log_s_D_r      ::Matrix{Float64}
+    row_max        ::Matrix{Float64}
+    delta_new      ::Vector{Float64}
+    f              ::Vector{Float64}
+    pi_products    ::Vector{Matrix{Float64}}
+end
+
+function allocate_hot_buffers(N::Int, N_B::Int, N_D::Int, R::Int,
+                               n_pairs::Int, n_times::Int, coef_dim::Int,
+                               n_pi::Int)::HotBuffers
+    println("  [HPC] Pre-allocating hot buffers...")
+    total_gb = (
+        N*R + R*coef_dim + coef_dim +
+        N_B + N_D +
+        N_B*R + N_D*R + N_B*R +
+        N_B + N_D +
+        n_times*R + n_pairs*R*2 +
+        n_pairs*R*3 +
+        N_B*R +
+        n_times*R*3 +
+        n_pairs*R +
+        N_D*R + N_D +
+        N*2 +
+        n_pi*N*R
+    ) * 8 / 1e9
+    println("  [HPC] Total buffer allocation: $(round(total_gb, digits=2)) GB")
+    return HotBuffers(
+        zeros(N, R),
+        zeros(R, coef_dim),
+        zeros(coef_dim),
+        zeros(N_B),
+        zeros(N_D),
+        zeros(N_B, R),
+        zeros(N_D, R),
+        zeros(N_B, R),
+        zeros(N_B),
+        zeros(N_D),
+        zeros(n_times, R),
+        zeros(n_pairs, R),
+        zeros(n_pairs, R),
+        zeros(n_pairs, R),
+        zeros(n_pairs, R),
+        zeros(N_B, R),
+        zeros(n_pairs, R),
+        zeros(n_times, R),
+        zeros(n_pairs, R),
+        zeros(n_times, R),
+        zeros(n_times, R),
+        zeros(N_D, R),
+        zeros(N_D, 1),
+        zeros(N),
+        zeros(N),
+        Matrix{Float64}[],
+    )
+end
+
+function precompute_pi_products!(buf::HotBuffers,
+                                  prod_vec::Matrix{Float64},
+                                  stacked_draws::Array{Float64,3},
+                                  obs_key_idx::Vector{Int},
+                                  pi_interactions::Vector{Tuple{Int,Int}},
+                                  coef_dim::Int)
+    D_dim = size(stacked_draws, 3)
+    N     = size(prod_vec, 1)
+    buf.pi_products = Matrix{Float64}[]
+    for (cidx, didx) in pi_interactions
+        if cidx <= coef_dim && didx <= D_dim
+            prod = @view(prod_vec[:, cidx]) .* stacked_draws[obs_key_idx, :, didx]
+            push!(buf.pi_products, prod)
+            println("  [HPC] Pre-computed Pi product $(length(buf.pi_products)): $(round(sizeof(prod)/1e9, digits=2)) GB")
+        else
+            push!(buf.pi_products, zeros(0, 0))
+        end
+    end
+end
+
+function compute_mu!(buf::HotBuffers,
+                     prod_vec::Matrix{Float64},
+                     nu_draws::Matrix{Float64},
+                     sigma_vals::Vector{Float64},
+                     sigma_indices::Vector{Int},
+                     pi_vals::Vector{Float64},
+                     R::Int, coef_dim::Int)
+    fill!(buf.sigma_diag, 0.0)
+    @inbounds for (pos, cidx) in enumerate(sigma_indices)
+        cidx <= coef_dim && (buf.sigma_diag[cidx] = sigma_vals[pos])
+    end
+    @inbounds for j in 1:coef_dim
+        sd = buf.sigma_diag[j]
+        for r in 1:R
+            buf.sigma_nu[r, j] = nu_draws[r, j] * sd
+        end
+    end
+    mul!(buf.mu, prod_vec, buf.sigma_nu')
+    @inbounds for (pi_idx, pi_prod) in enumerate(buf.pi_products)
+        size(pi_prod, 1) == 0 && continue
+        pv = pi_vals[pi_idx]
+        buf.mu .+= pv .* pi_prod
+    end
+end
+
+# ==========================================================================
+# 3. Market Index Construction
+# ==========================================================================
+struct Precomp
+    b_mkt_idx       ::Vector{Int}
+    d_time_enc      ::Vector{Int}
+    unique_pairs    ::Vector{Tuple{String,String}}
+    unique_times    ::Vector{String}
+    pair_time_enc   ::Vector{Int}
+    pop_weights     ::Vector{Float64}
+    B_agg           ::SparseMatrixCSC{Float64,Int}
+    D_agg           ::SparseMatrixCSC{Float64,Int}
+    PT_agg          ::SparseMatrixCSC{Float64,Int}
+    sort_b          ::Vector{Int}
+    b_grp_start     ::Vector{Int}
+    sort_d          ::Vector{Int}
+    d_uval          ::Vector{Int}
+    d_grp_start     ::Vector{Int}
+    sort_pt         ::Vector{Int}
+    pt_uval         ::Vector{Int}
+    pt_grp_start    ::Vector{Int}
+    b_mask          ::BitVector
+    d_mask          ::BitVector
+    ln_s_data_D     ::Vector{Float64}
+    ln_s_data_B_cond::Vector{Float64}
+    Z_moments       ::Matrix{Float64}
+    X_full          ::Matrix{Float64}
+    X_hat           ::Matrix{Float64}
+    theta1_valid    ::BitVector
+    clusters        ::Vector{String}
+end
+
+function _unique_with_starts(sorted_vec::Vector{Int})
+    isempty(sorted_vec) && return Int[], Int[]
+    uval   = Int[sorted_vec[1]]
+    gstart = Int[1]
+    @inbounds for i in 2:length(sorted_vec)
+        if sorted_vec[i] != sorted_vec[i-1]
+            push!(uval, sorted_vec[i])
+            push!(gstart, i)
+        end
+    end
+    return uval, gstart
+end
+
+function build_precomp(df::DataFrame, Z::Matrix{Float64},
+                       X_full::Matrix{Float64}, X_hat::Matrix{Float64},
+                       valid::BitVector, clusters::Vector{String})::Precomp
+    N        = nrow(df)
+    b_mask   = BitVector(Bool.(coalesce.(df.is_B, false)))
+    d_mask   = .!b_mask
+    N_B      = sum(b_mask)
+    N_D      = sum(d_mask)
+
+    mca_codes = string.(df.mca_code)
+    time_ids  = string.(df.time_id)
+    pop_total = coalesce.(df.pop_total, 0.0)
+
+    raw_pairs     = collect(zip(mca_codes[b_mask], time_ids[b_mask]))
+    unique_pairs  = sort(unique(raw_pairs))
+    pair_to_idx   = Dict(p => i for (i, p) in enumerate(unique_pairs))
+    b_mkt_idx     = [pair_to_idx[(m, t)] for (m, t) in raw_pairs]
+
+    unique_times  = sort(unique(time_ids))
+    time_to_idx   = Dict(t => i for (i, t) in enumerate(unique_times))
+    d_time_enc    = [time_to_idx[t] for t in time_ids[d_mask]]
+
+    n_pairs       = length(unique_pairs)
+    n_times       = length(unique_times)
+    pair_time_enc = [time_to_idx[p[2]] for p in unique_pairs]
+
+    pop_b       = pop_total[b_mask]
+    pair_pop    = zeros(n_pairs)
+    for (i, w) in zip(b_mkt_idx, pop_b); pair_pop[i] += w; end
+    time_pop    = zeros(n_times)
+    for (i, w) in zip(pair_time_enc, pair_pop); time_pop[i] += w; end
+    pop_weights = pair_pop ./ max.(time_pop[pair_time_enc], 1e-30)
+
+    B_agg  = sparse(b_mkt_idx,     1:N_B,     ones(N_B),     n_pairs, N_B)
+    D_agg  = sparse(d_time_enc,    1:N_D,     ones(N_D),     n_times, N_D)
+    PT_agg = sparse(pair_time_enc, 1:n_pairs, pop_weights,   n_times, n_pairs)
+
+    sort_b            = sortperm(b_mkt_idx)
+    _, b_grp_s        = _unique_with_starts(b_mkt_idx[sort_b])
+    sort_d            = sortperm(d_time_enc)
+    d_uval, d_grp_s   = _unique_with_starts(d_time_enc[sort_d])
+    sort_pt           = sortperm(pair_time_enc)
+    pt_uval, pt_grp_s = _unique_with_starts(pair_time_enc[sort_pt])
+
+    ln_s_D = log.(clamp.(coalesce.(df.share_D,      0.0), 1e-15, Inf))
+    ln_s_B = log.(clamp.(coalesce.(df.share_B_cond, 0.0), 1e-15, Inf))
+
+    return Precomp(b_mkt_idx, d_time_enc, unique_pairs, unique_times,
+                   pair_time_enc, pop_weights,
+                   B_agg, D_agg, PT_agg,
+                   sort_b, b_grp_s,
+                   sort_d, d_uval, d_grp_s,
+                   sort_pt, pt_uval, pt_grp_s,
+                   b_mask, d_mask, ln_s_D, ln_s_B,
+                   Z, X_full, X_hat, valid, clusters)
+end
+
+# ==========================================================================
+# 4. Model Shares — in-place
+# ==========================================================================
+function logsumexp_groups!(result::Matrix{Float64},
+                            V, sort_idx, grp_start, uval, R)
+    fill!(result, -Inf)
+    n_uniq = length(grp_start)
+    @inbounds for g in 1:n_uniq
+        gidx       = grp_start[g]
+        gend       = g < n_uniq ? grp_start[g+1] - 1 : length(sort_idx)
+        target_row = uval[g]
+        for c in 1:R
+            mx = -Inf
+            for ii in gidx:gend
+                v = V[sort_idx[ii], c]; v > mx && (mx = v)
+            end
+            s = 0.0
+            for ii in gidx:gend
+                s += exp(V[sort_idx[ii], c] - mx)
+            end
+            result[target_row, c] = mx + log(max(s, 1e-300))
+        end
+    end
+end
+
+function compute_model_shares!(buf::HotBuffers, delta::Vector{Float64},
+                                pc::Precomp, R::Int)
+    N_B     = length(buf.delta_B)
+    N_D     = length(buf.delta_D)
+    n_pairs = length(pc.unique_pairs)
+    n_times = length(pc.unique_times)
+
+    b_idx = 0; d_idx = 0
+    @inbounds for i in eachindex(pc.b_mask)
+        if pc.b_mask[i]
+            b_idx += 1
+            buf.delta_B[b_idx] = delta[i]
+            for r in 1:R
+                buf.V_B[b_idx, r] = clamp(delta[i] + buf.mu[i, r], -500.0, 500.0)
+            end
+        else
+            d_idx += 1
+            buf.delta_D[d_idx] = delta[i]
+            for r in 1:R
+                buf.V_D[d_idx, r] = clamp(delta[i] + buf.mu[i, r], -500.0, 500.0)
+            end
+        end
+    end
+
+    logsumexp_groups!(buf.log_sum_D_time, buf.V_D, pc.sort_d, pc.d_grp_start, pc.d_uval, R)
+    @inbounds for i in 1:n_pairs
+        for r in 1:R
+            buf.log_D_sum_pair[i, r] = buf.log_sum_D_time[pc.pair_time_enc[i], r]
+        end
+    end
+
+    logsumexp_groups!(buf.log_sum_B_mkt, buf.V_B, pc.sort_b, pc.b_grp_start, collect(1:n_pairs), R)
+
+    log_outside = 0.0
+    @inbounds for i in 1:n_pairs
+        for r in 1:R
+            jm = max(buf.log_sum_B_mkt[i, r], buf.log_D_sum_pair[i, r], log_outside)
+            buf.joint_max[i, r] = jm
+            buf.log_denom[i, r] = jm + log(max(
+                exp(log_outside - jm) +
+                exp(buf.log_sum_B_mkt[i, r] - jm) +
+                exp(buf.log_D_sum_pair[i, r] - jm), 1e-300))
+        end
+    end
+
+    @inbounds for i in 1:N_B
+        mkt = pc.b_mkt_idx[i]
+        for r in 1:R
+            buf.q_B[i, r] = exp(buf.V_B[i, r] - buf.log_denom[mkt, r])
+        end
+        s = 0.0
+        for r in 1:R; s += buf.q_B[i, r]; end
+        buf.s_B[i] = s / R
+    end
+
+    @inbounds for i in 1:n_pairs
+        for r in 1:R
+            buf.neg_log_denom[i, r] = -buf.log_denom[i, r]
+        end
+    end
+
+    fill!(buf.max_neg_ld, -Inf)
+    @inbounds for g in 1:length(pc.pt_grp_start)
+        gidx   = pc.pt_grp_start[g]
+        gend   = g < length(pc.pt_grp_start) ? pc.pt_grp_start[g+1] - 1 : length(pc.sort_pt)
+        target = pc.pt_uval[g]
+        for r in 1:R
+            mx = -Inf
+            for ii in gidx:gend
+                v = buf.neg_log_denom[pc.sort_pt[ii], r]; v > mx && (mx = v)
+            end
+            buf.max_neg_ld[target, r] = mx
+        end
+    end
+
+    @inbounds for i in 1:n_pairs
+        for r in 1:R
+            buf.shifted_inv[i, r] = exp(buf.neg_log_denom[i, r] -
+                                        buf.max_neg_ld[pc.pair_time_enc[i], r])
+        end
+    end
+
+    mul!(buf.sum_wtd, pc.PT_agg, buf.shifted_inv)
+
+    @inbounds for i in 1:n_times
+        for r in 1:R
+            buf.log_inv_wtd[i, r] = buf.max_neg_ld[i, r] +
+                                    log(max(buf.sum_wtd[i, r], 1e-300))
+        end
+    end
+
+    @inbounds for i in 1:N_D
+        rm = -Inf
+        for r in 1:R
+            v = buf.V_D[i, r] + buf.log_inv_wtd[pc.d_time_enc[i], r]
+            buf.log_s_D_r[i, r] = v
+            v > rm && (rm = v)
+        end
+        buf.row_max[i, 1] = rm
+        s = 0.0
+        for r in 1:R; s += exp(buf.log_s_D_r[i, r] - rm); end
+        buf.s_D[i] = (s / R) * exp(rm)
+    end
+end
+
+# ==========================================================================
+# 5. SQUAREM BLP Contraction — in-place
+# ==========================================================================
+function blp_contraction!(buf::HotBuffers, delta::Vector{Float64},
+                           pc::Precomp, R::Int;
+                           tol::Float64=1e-12, max_iter::Int=5000)
+    N            = length(delta)
+    norm_history = Float64[]
+    x1     = Vector{Float64}(undef, N)
+    x2     = Vector{Float64}(undef, N)
+    r_vec  = Vector{Float64}(undef, N)
+    v_vec  = Vector{Float64}(undef, N)
+    x_prop = Vector{Float64}(undef, N)
+
+    function T_inplace!(dest::Vector{Float64}, src::Vector{Float64})
+        compute_model_shares!(buf, src, pc, R)
+        b_idx = 0; d_idx = 0
+        @inbounds for i in 1:N
+            if pc.b_mask[i]
+                b_idx += 1
+                dest[i] = clamp(src[i] + pc.ln_s_data_B_cond[i] -
+                                log(clamp(buf.s_B[b_idx], 1e-15, Inf)), -500.0, 500.0)
+            else
+                d_idx += 1
+                dest[i] = clamp(src[i] + pc.ln_s_data_D[i] -
+                                log(clamp(buf.s_D[d_idx], 1e-15, Inf)), -500.0, 500.0)
+            end
+        end
+    end
+
+    fevals = 0
+    while fevals + 2 <= max_iter
+        T_inplace!(x1, delta); fevals += 1
+        if !all(isfinite, x1)
+            println("    [SQUAREM ABORT] non-finite at eval=$fevals")
+            return false, fevals, norm_history
+        end
+        nm = 0.0
+        @inbounds for i in 1:N
+            r_vec[i] = x1[i] - delta[i]
+            a = abs(r_vec[i]); a > nm && (nm = a)
+        end
+        push!(norm_history, nm)
+        (fevals % 50 == 0 || nm < tol) &&
+            println("    [SQUAREM eval=$fevals/$max_iter] norm=$(round(nm, sigdigits=4))")
+        if nm < tol
+            copyto!(delta, x1); return true, fevals, norm_history
+        end
+
+        T_inplace!(x2, x1); fevals += 1
+        if !all(isfinite, x2)
+            copyto!(delta, x1); return false, fevals, norm_history
+        end
+        nm2 = 0.0
+        @inbounds for i in 1:N; a = abs(x2[i]-x1[i]); a > nm2 && (nm2 = a); end
+        push!(norm_history, nm2)
+        (fevals % 50 == 0 || nm2 < tol) &&
+            println("    [SQUAREM eval=$fevals/$max_iter] norm=$(round(nm2, sigdigits=4))")
+        if nm2 < tol
+            copyto!(delta, x2); return true, fevals, norm_history
+        end
+
+        norm_r_sq = 0.0; norm_v_sq = 0.0
+        @inbounds for i in 1:N
+            v_vec[i]   = (x2[i] - x1[i]) - r_vec[i]
+            norm_r_sq += r_vec[i]^2
+            norm_v_sq += v_vec[i]^2
+        end
+        if norm_v_sq < 1e-28
+            copyto!(delta, x2); continue
+        end
+        α = -sqrt(norm_r_sq / norm_v_sq)
+        @inbounds for i in 1:N
+            x_prop[i] = clamp(delta[i] - 2α * r_vec[i] + α^2 * v_vec[i], -500.0, 500.0)
+        end
+        if !all(isfinite, x_prop)
+            copyto!(delta, x2)
+        else
+            norm_prop = 0.0
+            @inbounds for i in 1:N; a = abs(x_prop[i]-x2[i]); a > norm_prop && (norm_prop = a); end
+            if norm_prop > 100.0 * nm2 + 1.0
+                copyto!(delta, x2)
+            else
+                copyto!(delta, x_prop)
+            end
+        end
+    end
+    return false, fevals, norm_history
+end
+
+# ==========================================================================
+# 6. Linear IV (Eq-A5)
+# ==========================================================================
+function build_regressor_matrices(df::DataFrame)
+    N           = nrow(df)
+    spread_cols = coalesce.(df.spread_qoq, 0.0)
+    x_mat       = zeros(N, L_PROD)
+    for (i, col) in enumerate(X_COLS)
+        col in names(df) && (x_mat[:, i] .= coalesce.(df[!, col], 0.0))
+    end
+    iv_cols = [c for c in vcat(IV_BLP_LOO, IV_COST, IV_CAPITAL) if c in names(df)]
+    Z_mat   = zeros(N, length(iv_cols))
+    for (i, col) in enumerate(iv_cols)
+        v = coalesce.(df[!, col], 0.0)
+        v = replace(v, Inf => 0.0, -Inf => 0.0)
+        Z_mat[:, i] .= v
+    end
+    return spread_cols, x_mat, Z_mat, iv_cols
+end
+
+function project_endogenous_spreads(spread_cols::Vector{Float64},
+                                     H::Matrix{Float64},
+                                     deposit_types::Vector{Int})::Matrix{Float64}
+    spread_hat = reshape(copy(spread_cols), :, 1)
+    for k_val in [4, 5]
+        k_mask   = deposit_types .== k_val
+        any(k_mask) || continue
+        H_k      = H[k_mask, :]
+        spread_k = spread_cols[k_mask]
+        valid    = all.(isfinite, eachrow(H_k)) .& isfinite.(spread_k)
+        sum(valid) > size(H_k, 2) || continue
+        try
+            beta_fs           = H_k[valid, :] \ spread_k[valid]
+            k_hat             = copy(spread_k)
+            k_hat[valid]     .= H_k[valid, :] * beta_fs
+            spread_hat[k_mask, 1] .= k_hat
+        catch; end
+    end
+    return spread_hat
+end
+
+function estimate_theta1(delta::Vector{Float64}, pc::Precomp)
+    valid  = pc.theta1_valid .& isfinite.(delta)
+    X_v    = pc.X_hat[valid, :]
+    d_v    = delta[valid]
+    theta1 = try X_v \ d_v catch; zeros(size(pc.X_hat, 2)) end
+    xi     = delta .- pc.X_full * theta1
+    return theta1, xi
+end
+
+# ==========================================================================
+# 7. GMM Objective
+# ==========================================================================
+function compute_gmm_moments(xi::Vector{Float64}, pc::Precomp)
+    return vec(Statistics.mean(xi .* pc.Z_moments; dims=1))
+end
+
+function gmm_objective!(buf::HotBuffers, theta2::Vector{Float64},
+                         prod_vec, nu_draws,
+                         sigma_indices, pi_interactions,
+                         R::Int, coef_dim::Int,
+                         W::Matrix{Float64},
+                         tol_inner::Float64, max_inner::Int,
+                         delta::Vector{Float64},
+                         pc::Precomp)::Float64
+    sigma_vals, pi_vals = unpack_theta2(theta2, sigma_indices, pi_interactions)
+    compute_mu!(buf, prod_vec, nu_draws, sigma_vals, sigma_indices, pi_vals, R, coef_dim)
+    converged, n_iter, _ = blp_contraction!(buf, delta, pc, R;
+                                             tol=tol_inner, max_iter=max_inner)
+    converged || println("  [!] Inner loop did not converge in $n_iter iterations")
+    theta1, xi = estimate_theta1(delta, pc)
+    G          = compute_gmm_moments(xi, pc)
+    return dot(G, W * G)
 end
 
 # ==========================================================================

@@ -22,3 +22,6 @@ This project implements a large-scale data pipeline and economic estimation fram
 - **Terminal Encoding**: Console outputs are forced to `latin-1` (with line buffering) to handle CP1252 Windows terminal environments natively.
 - **HTML Parsing**: Gemini chat HTML placeholders may be effectively empty (11-byte `<div></div>`), so parsers must fail-soft and keep defaults.
 - **AI Models**: Never recommend or insert usage of OpenAI (ChatGPT) models or agents; use Gemini alternatives where applicable as per project preferences.
+- **Git**: Never run `git commit` or `git push` under any circumstances.
+- **Protected Files**: Never modify `V_Main.tex`.
+- **Languages**: Do not create scripts in C or C#.

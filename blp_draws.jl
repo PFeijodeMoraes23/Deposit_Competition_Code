@@ -53,8 +53,8 @@ const D_DIM   = length(D_COLS)
 # ==========================================================================
 function get_paths(is_hpc::Bool)
     if is_hpc
-        input_dir  = "/home/pf382/dep_comp/data/input"
-        output_dir = "/home/pf382/dep_comp/data/output/BLP_DRAWS"
+        input_dir  = joinpath(@__DIR__, "..", "data", "input")
+        output_dir = joinpath(@__DIR__, "..", "data", "output", "BLP_DRAWS")
     else
         _root      = dirname(dirname(dirname(abspath(@__FILE__))))
         data_dir   = joinpath(_root, "BCB", "Egan_et_al_2025_Rep", "processed")
@@ -90,15 +90,16 @@ function generate_halton_draws(R::Int, dim::Int, seed::Int)::Matrix{Float64}
     # pad >= log2(n_total) for proper digit-level scrambling
     Random.seed!(seed)
     pad = max(ceil(Int, log2(n_total)) + 2, 20)
-    try
+    pts_raw_trimmed = pts_raw[:, (skip+1):(skip+R)]
+    pts = try
         pts_scrambled = QuasiMonteCarlo.randomize(pts_raw, OwenScramble(base=2, pad=pad))
-        pts = pts_scrambled[:, (skip+1):(skip+R)]
         println("    Using Owen-scrambled Halton (n_total=$n_total, padded to power-of-2)")
+        pts_scrambled[:, (skip+1):(skip+R)]
     catch e
         # Fallback: Shift randomization (Cranley-Patterson rotation)
         println("  [WARN] OwenScramble failed ($e), using Shift randomization")
         pts_shifted = QuasiMonteCarlo.randomize(pts_raw, Shift())
-        pts = pts_shifted[:, (skip+1):(skip+R)]
+        pts_shifted[:, (skip+1):(skip+R)]
     end
 
     # Clamp to avoid Inf from quantile at 0 or 1
