@@ -245,12 +245,12 @@ def main():
         return
 
     mapping = {
-        '1 B firms': SLEEP_DIR / "DEMAND_PREP" / "rout_1",
-        '2 B firms Robust': SLEEP_DIR / "DEMAND_PREP" / "rout_2" / "LOCAL", 
-        '3 Pooled': SLEEP_DIR / "DEMAND_PREP" / "rout_2" / "POOLED",
-        '4 Pooled Logistic': SLEEP_DIR / "DEMAND_PREP" / "rout_2" / "POOLED_NLLS",
-        '5 Dummies Linear': SLEEP_DIR / "DEMAND_PREP" / "rout_2" / "POOLED" / "ALT_2",
-        '5 Dummies Logistic': SLEEP_DIR / "DEMAND_PREP" / "rout_2" / "POOLED" / "ALT_2",
+        '1 B firms': SLEEP_DIR / "DEMAND_PREP" / "est1",
+        '2 B firms Robust': SLEEP_DIR / "DEMAND_PREP" / "est2" / "LOCAL", 
+        '3 Pooled': SLEEP_DIR / "DEMAND_PREP" / "est3",
+        '4 Pooled Logistic': SLEEP_DIR / "DEMAND_PREP" / "est4",
+        '5 Dummies Linear': SLEEP_DIR / "DEMAND_PREP" / "est5" / "ALT_2",
+        '5 Dummies Logistic': SLEEP_DIR / "DEMAND_PREP" / "est5" / "ALT_2",
     }
 
     if getattr(args, 'skip_est2', False):

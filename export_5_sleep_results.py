@@ -31,7 +31,7 @@ class NonLinearResults:
 # Paths
 _ROOT = Path(__file__).resolve().parents[2]
 DATA_DIR = _ROOT / "BCB" / "Egan_et_al_2025_Rep" / "processed"
-OUTPUT_DIR = DATA_DIR / "ESTIMATION_OUTPUT" / "DEMAND_PREP" / "rout_2" / "POOLED" / "ALT_2"
+OUTPUT_DIR = DATA_DIR / "ESTIMATION_OUTPUT" / "DEMAND_PREP" / "est5" / "ALT_2"
 RESULTS_PICKLE = OUTPUT_DIR / "estimation_results.pkl"
 CLUSTER_JSON = OUTPUT_DIR / "cluster_diagnostics.json"
 

@@ -62,9 +62,9 @@ warnings.filterwarnings("ignore", message="covariance of constraints does not ha
 _ROOT = Path(__file__).resolve().parents[2]
 DATA_DIR = _ROOT / "BCB" / "Egan_et_al_2025_Rep" / "processed"
 PANEL_CSV = DATA_DIR / "market_panel.csv"
-OUTPUT_DIR = DATA_DIR / "ESTIMATION_OUTPUT" / "DEMAND_PREP" / "rout_2"
+OUTPUT_DIR = DATA_DIR / "ESTIMATION_OUTPUT" / "DEMAND_PREP" / "est3"
 
-POOLED_DIR = OUTPUT_DIR / "POOLED"
+POOLED_DIR = OUTPUT_DIR
 PLOTS_DIR = OUTPUT_DIR / "PLOTS"
 
 POOLED_DIR.mkdir(parents=True, exist_ok=True)

@@ -78,7 +78,7 @@ EXTRA_KEEP_COLS = X_COLS + D_COLS + IV_BLP_LOO + IV_COST + IV_CAPITAL + ['segmen
 
 def _resolve_runtime_paths() -> tuple[Path, Path, Path]:
     panel_csv = PANEL_CSV
-    sleep_output_dir = DATA_DIR / "ESTIMATION_OUTPUT" / "DEMAND_PREP" / "rout_2" / "POOLED_NLLS"
+    sleep_output_dir = DATA_DIR / "ESTIMATION_OUTPUT" / "DEMAND_PREP" / "est4"
     demand_output_dir = DATA_DIR / "ESTIMATION_OUTPUT" / "DEMAND_PREP"
     return panel_csv, sleep_output_dir, demand_output_dir
 
@@ -159,12 +159,15 @@ def build_base_panel(panel_csv: Path) -> pd.DataFrame:
         df['dummy_D_type'] = (df['CODMUN_IBGE'].astype(str) == '0').astype(float)
         
     if 'dummy_D_type' in df.columns:
+        _new_cols = {}
         if 'risk_free_qoq_lag' in df.columns:
-            df['dummy_D_type_x_risk_free_qoq_lag'] = df['dummy_D_type'] * df['risk_free_qoq_lag']
+            _new_cols['dummy_D_type_x_risk_free_qoq_lag'] = df['dummy_D_type'] * df['risk_free_qoq_lag']
         if 'fraction_65plus' in df.columns:
-            df['dummy_D_type_x_fraction_65plus'] = df['dummy_D_type'] * df['fraction_65plus']
+            _new_cols['dummy_D_type_x_fraction_65plus'] = df['dummy_D_type'] * df['fraction_65plus']
         if 'fraction_young' in df.columns:
-            df['dummy_D_type_x_fraction_young'] = df['dummy_D_type'] * df['fraction_young']
+            _new_cols['dummy_D_type_x_fraction_young'] = df['dummy_D_type'] * df['fraction_young']
+        if _new_cols:
+            df = pd.concat([df, pd.DataFrame(_new_cols, index=df.index)], axis=1)
             
     if 'gdp_per_capita' in df.columns: df['gdp_per_capita'] /= 10000.0
     if 'cadunico_families_per1000' in df.columns: df['cadunico_families_per1000'] /= 100.0

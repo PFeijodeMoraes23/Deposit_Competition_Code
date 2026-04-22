@@ -84,7 +84,7 @@ def _resolve_runtime_paths() -> tuple[Path, Path]:
     _ROOT = Path(__file__).resolve().parents[2]
     DATA_DIR = _ROOT / "BCB" / "Egan_et_al_2025_Rep" / "processed"
     PANEL_CSV = DATA_DIR / "market_panel.csv"
-    OUTPUT_DIR = DATA_DIR / "ESTIMATION_OUTPUT" / "DEMAND_PREP" / "rout_1"
+    OUTPUT_DIR = DATA_DIR / "ESTIMATION_OUTPUT" / "DEMAND_PREP" / "est1"
 
     if load_default_toon_context is None or get_script_config is None:
         return PANEL_CSV, OUTPUT_DIR
@@ -319,7 +319,7 @@ def do_estimation():
             _ROOT = Path(__file__).resolve().parents[2]
             drafts_dir = _ROOT / "BCB" / "Egan_et_al_2025_Rep" / "processed" / "ESTIMATION_OUTPUT" / "Rout"
             drafts_dir.mkdir(parents=True, exist_ok=True)
-            rout_level = "rout_1"
+            rout_level = "est1"
             tex_file = drafts_dir / f"{rout_level}_{safe_name}.tex"
             from utils.tex_preamble import wrap_table
             with open(tex_file, 'w', encoding='utf-8') as f: f.write(wrap_table(res_ss.summary().as_latex()))
