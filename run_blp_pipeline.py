@@ -84,68 +84,6 @@ def run_latex_pipeline():
     print("\n=== BLP LaTeX Pipeline Complete ===")
 
 
-# ── Python mode ──────────────────────────────────────────────────────────────
-
-def run_python_estimation(est_id: int, args: argparse.Namespace):
-    script = PYTHON_SCRIPTS[est_id]
-    if not script.exists():
-        print(f"ERROR: Python script not found: {script}")
-        return (est_id, False, "Script missing")
-
-    cmd = [
-        PYTHON_EXE,
-        str(script),
-        "--spec",      args.spec,
-        "--stage",     args.stage,
-        "--R",         str(args.R),
-        "--seed",      str(args.seed),
-        "--tol-inner", str(args.tol_inner),
-        "--max-inner", str(args.max_inner),
-        "--tol-outer", str(args.tol_outer),
-    ]
-    if args.workers:
-        cmd += ["--workers", str(args.workers)]
-    if args.chunk_size:
-        cmd += ["--chunk-size", str(args.chunk_size)]
-    if args.dry_run:
-        cmd.append("--dry-run")
-    if args.local_dir:
-        cmd += ["--local-dir", args.local_dir]
-    if est_id == 5 and args.alt:
-        cmd += ["--alt", args.alt]
-
-    print(f"\n=== Estimation {est_id} | Running Python ===")
-    print(f"  CMD: {' '.join(cmd)}")
-    try:
-        proc = subprocess.run(cmd, text=True, check=True)
-        return (est_id, True, "")
-    except subprocess.CalledProcessError as e:
-        return (est_id, False, f"Exit code {e.returncode}")
-
-
-def run_python_pipeline(args: argparse.Namespace):
-    est_str = args.est
-    if est_str == "all":
-        est_ids = sorted(PYTHON_SCRIPTS.keys())
-    else:
-        est_ids = [int(c) for c in est_str if c.isdigit()]
-    est_ids = [e for e in est_ids if e in PYTHON_SCRIPTS]
-
-    if not est_ids:
-        print("ERROR: No valid estimation IDs. Available: 1-5.")
-        sys.exit(1)
-
-    print(f"=== Python Local BLP Pipeline | Estimations {est_ids} ===")
-    for eid in est_ids:
-        eid_result, success, msg = run_python_estimation(eid, args)
-        if success:
-            print(f"[+] Estimation {eid_result} DONE.")
-        else:
-            print(f"[!] Estimation {eid_result} FAILED: {msg}")
-            sys.exit(1)
-    print("\n=== Python Pipeline Complete ===")
-
-
 # ── Julia mode ───────────────────────────────────────────────────────────────
 
 def _find_julia() -> str:

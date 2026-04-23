@@ -27,7 +27,7 @@ echo "Resolving Julia packages: $(date)"
 julia --project="${PROJECT_DIR}" -e "using Pkg; Pkg.resolve(); Pkg.instantiate()"
 
 echo "======================================"
-echo " BLP Estimation E5 (alt2logistic) — $(date)"
+echo " BLP Estimation E5 (logistic) — $(date)"
 echo " stage=sequence | R=5000 | threads=${SLURM_CPUS_PER_TASK}"
 echo "======================================"
 

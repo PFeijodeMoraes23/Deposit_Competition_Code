@@ -127,6 +127,13 @@ def build_pooled_data():
 
     if 'deposit_type' in df.columns: df = df[df['deposit_type'] != 3].copy()
 
+    # B-type firms with only national-level k=5 (prepaid) observations: CODMUN_IBGE=0
+    # because ESTBAN has no branch-level prepaid data, but these firms are B-type
+    # (they have local rows for other deposit types). Do NOT label them as D-type.
+    _b_natl_firms = set(df.loc[df['CODMUN_IBGE'].astype(str) != '0', 'CodConglomeradoPrudencial'].unique())
+    _k5_natl_mask = (df['deposit_type'] == 5) & (df['CODMUN_IBGE'].astype(str) == '0') & df['CodConglomeradoPrudencial'].isin(_b_natl_firms)
+    df.loc[_k5_natl_mask, 'dummy_D_type'] = 0.0
+
     df['entity_id'] = df['CodConglomeradoPrudencial'].astype(str) + "_" + df['deposit_type'].astype(str) + "_" + df['mca_code'].astype(str)
     df['time_id'] = df['year'].astype(str) + "Q" + df['quarter'].astype(str)
     
@@ -160,8 +167,11 @@ def build_pooled_data():
     if 'pop_total' in df.columns:
         cols_to_fill = [col for col in s_tech_finance if col in df.columns]
         b_mask = (df['dummy_D_type'] == 0)
-        d_mask = (df['dummy_D_type'] == 1)
-        df_b = df.loc[b_mask, ['time_id', 'pop_total'] + cols_to_fill].copy()
+        # national_mask: rows with no local market (CODMUN_IBGE=0) — includes D-type digital
+        # firms AND B-type firms' k=5 national-level prepaid aggregates. Both receive
+        # population-weighted national-average demographics.
+        national_mask = (df['CODMUN_IBGE'].astype(str) == '0')
+        df_b = df.loc[b_mask & ~national_mask, ['time_id', 'pop_total'] + cols_to_fill].copy()
         col_medians = df_b[cols_to_fill].median()
         for col in cols_to_fill:
             df_b[col] = df_b[col].fillna(col_medians[col])
@@ -171,9 +181,9 @@ def build_pooled_data():
         for col in cols_to_fill:
             wv = (df_b[col] * df_b['_w']).groupby(df_b['time_id']).sum()
             nat_avg_df[col] = (wv / w_sum_by_t.replace(0, np.nan)).fillna(col_medians[col])
-        d_time_ids = df.loc[d_mask, 'time_id']
+        natl_time_ids = df.loc[national_mask, 'time_id']
         for col in cols_to_fill:
-            df.loc[d_mask, col] = d_time_ids.map(nat_avg_df[col]).values
+            df.loc[national_mask, col] = natl_time_ids.map(nat_avg_df[col]).values
 
     for col in s_tech_finance:
         if col in df.columns: df[col] = df[col].fillna(df[col].median())

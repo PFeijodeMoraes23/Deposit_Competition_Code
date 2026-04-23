@@ -51,13 +51,17 @@ const D_DIM   = length(D_COLS)
 # ==========================================================================
 # 0b. Paths
 # ==========================================================================
-function get_paths(is_hpc::Bool)
+function get_paths(is_hpc::Bool; local_dir=nothing)
     if is_hpc
         input_dir  = joinpath(@__DIR__, "..", "data", "input")
         output_dir = joinpath(@__DIR__, "..", "data", "output", "BLP_DRAWS")
     else
-        _root      = dirname(dirname(dirname(abspath(@__FILE__))))
-        data_dir   = joinpath(_root, "BCB", "Egan_et_al_2025_Rep", "processed")
+        if local_dir !== nothing
+            data_dir = local_dir
+        else
+            _root    = dirname(dirname(dirname(abspath(@__FILE__))))
+            data_dir = joinpath(_root, "BCB", "Egan_et_al_2025_Rep", "processed")
+        end
         input_dir  = joinpath(data_dir, "ESTIMATION_OUTPUT", "DEMAND_PREP")
         output_dir = joinpath(data_dir, "ESTIMATION_OUTPUT", "BLP_DRAWS")
     end
@@ -256,11 +260,12 @@ end
 function parse_args_draws()
     s = ArgParseSettings(description="BLP Draw Generator (CG2020-compliant)")
     @add_arg_table! s begin
-        "--R";       arg_type=Int;    default=2000; help="Number of simulation draws"
-        "--seed";    arg_type=Int;    default=42
-        "--spec";    arg_type=Int;    default=12;   help="Spec ID for key extraction"
-        "--estim";   arg_type=Int;    default=1;    help="Estimation strategy for key panel"
-        "--hpc";     action=:store_true
+        "--R";         arg_type=Int;    default=2000; help="Number of simulation draws"
+        "--seed";      arg_type=Int;    default=42
+        "--spec";      arg_type=Int;    default=12;   help="Spec ID for key extraction"
+        "--estim";     arg_type=Int;    default=1;    help="Estimation strategy for key panel"
+        "--hpc";       action=:store_true
+        "--local-dir"; arg_type=String; default=nothing; dest_name="local_dir"
     end
     return parse_args(s)
 end
@@ -271,9 +276,10 @@ function main()
     seed = args["seed"]
     spec = args["spec"]
     estim= args["estim"]
-    is_hpc = args["hpc"]
+    is_hpc  = args["hpc"]
+    local_dir = args["local_dir"]
 
-    input_dir, output_dir = get_paths(is_hpc)
+    input_dir, output_dir = get_paths(is_hpc; local_dir=local_dir)
     mkpath(output_dir)
 
     println("=" ^ 60)
@@ -289,7 +295,7 @@ function main()
     println("  Saved: $(basename(nu_path))")
 
     # ── 2. Load reference spec data for market keys ──────────────────────
-    prefix = estim == 5 ? "demand_5_alt2logistic" : "demand_$(estim)"
+    prefix = estim == 5 ? "demand_5_logistic" : "demand_$(estim)"
     fname  = "$(prefix)_final_spec_$(spec).parquet"
     path   = joinpath(input_dir, fname)
     println("\n  Loading reference panel: $fname")

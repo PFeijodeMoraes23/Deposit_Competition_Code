@@ -76,9 +76,9 @@ IV_COST = ['personnel_cost_ratio_lag', 'admin_cost_ratio_lag', 'tax_cost_ratio_l
 IV_CAPITAL = ['indice_basileia_lag']
 EXTRA_KEEP_COLS = X_COLS + D_COLS + IV_BLP_LOO + IV_COST + IV_CAPITAL + ['segment', 'spread_qoq']
 
-def _resolve_runtime_paths(alt: str = "ALT_1") -> tuple[Path, Path, Path]:
+def _resolve_runtime_paths() -> tuple[Path, Path, Path]:
     panel_csv = PANEL_CSV
-    sleep_output_dir = DATA_DIR / "ESTIMATION_OUTPUT" / "DEMAND_PREP" / "est5" / alt
+    sleep_output_dir = DATA_DIR / "ESTIMATION_OUTPUT" / "DEMAND_PREP" / "est5"
     demand_output_dir = DATA_DIR / "ESTIMATION_OUTPUT" / "DEMAND_PREP"
     return panel_csv, sleep_output_dir, demand_output_dir
 
@@ -392,10 +392,8 @@ def main():
     import json
     import pickle
 
-    alts_to_process = ['ALT_1', 'ALT_2']
-    
     # We only load the base panel once to save memory and time
-    panel_csv, _, demand_output_dir = _resolve_runtime_paths('ALT_1')
+    panel_csv, sleep_output_dir, demand_output_dir = _resolve_runtime_paths()
     
     print(f"Loading Base Panel {panel_csv}...")
     df_base = build_base_panel(panel_csv)
@@ -412,39 +410,32 @@ def main():
         9: 'OLS x Tech', 10: 'IV_CostShifters x Tech', 11: 'IV_Wholesale x Tech', 12: 'IV_HausmanFull x Tech'
     }
 
-    for alt in alts_to_process:
-        _, sleep_output_dir, _ = _resolve_runtime_paths(alt)
-        results_pickle = sleep_output_dir / "estimation_results.pkl"
-        
-        if not results_pickle.exists():
-            print(f"\n[!] Skipping {alt} (No pickle found at {results_pickle})")
-            continue
-            
-        print(f"\n=== Processing {alt} from {results_pickle} ===")
+    results_pickle = sleep_output_dir / "estimation_results.pkl"
+    if not results_pickle.exists():
+        print(f"[!] No pickle found at {results_pickle}. Run estimation_5_sleep.py first.")
+    else:
+        print(f"\n=== Processing est5 from {results_pickle} ===")
         with open(results_pickle, 'rb') as f: results_dict = pickle.load(f)
-        
+
         for target_id in spec_ids_to_run:
             target_name = SPEC_MAP.get(target_id)
             if not target_name: continue
-            
-            # Find both linear and logistic versions specifically
-            for model_type in ['linear', 'logistic']:
-                actual_key = next((k for k in results_dict.keys() if (target_name in k) and (model_type in k)), None)
-                if not actual_key:
-                    continue # Try the next type
-                
-                task = (actual_key, results_dict[actual_key], df_base)
-                df_spec, summary, spec_id = process_specification(task)
-                
-                if df_spec is not None:
-                    alt_label = f"{alt.lower().replace('_', '')}{model_type}"
-                    out_pkl = demand_output_dir / f"demand_5_{alt_label}_final_spec_{target_id}.parquet"
-                    df_spec.to_parquet(out_pkl, engine='pyarrow')
-                    print(f" > Saved Spec {target_id} ({alt} {model_type}) -> {out_pkl.name} ({len(df_spec)} rows)")
-                    spec_summaries[f"5_{alt_label}_{target_id}"] = summary
-                    total_saved += 1
-                else:
-                    print(f"   [!] Failed or skipped Spec: {target_id} {model_type} in {alt}")
+
+            actual_key = next((k for k in results_dict.keys() if target_name in k), None)
+            if not actual_key:
+                continue
+
+            task = (actual_key, results_dict[actual_key], df_base)
+            df_spec, summary, spec_id = process_specification(task)
+
+            if df_spec is not None:
+                out_pkl = demand_output_dir / f"demand_5_logistic_final_spec_{target_id}.parquet"
+                df_spec.to_parquet(out_pkl, engine='pyarrow')
+                print(f" > Saved Spec {target_id} (logistic) -> {out_pkl.name} ({len(df_spec)} rows)")
+                spec_summaries[f"5_logistic_{target_id}"] = summary
+                total_saved += 1
+            else:
+                print(f"   [!] Failed or skipped Spec: {target_id} (logistic)")
 
     if total_saved > 0:
         summary_file = demand_output_dir / "demand_prep_summary_5.json"

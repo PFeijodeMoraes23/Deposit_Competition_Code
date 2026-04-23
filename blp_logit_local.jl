@@ -3,8 +3,8 @@ blp_logit_local.jl
 ==================
 Non-random-coefficients logit demand estimation for BLP (θ₂ = 0).
 
-For specification 12 only, runs across estimation strategies E1–E4 and
-E5alt2logistic.  Three sub-models per strategy:
+For specification 12 only, runs across estimation strategies E1–E5.
+Three sub-models per strategy:
   (a) price-only:          δ = α · spread
   (b) price + X_COLS:      δ = α · spread + X · β
   (c) price + X_COLS + D:  δ = α · spread + X · β + γ · dummy_D_type
@@ -52,7 +52,7 @@ const ESTIM_STRATEGIES = [
     (id=2, label="E2", prefix="demand_2"),
     (id=3, label="E3", prefix="demand_3"),
     (id=4, label="E4", prefix="demand_4"),
-    (id=5, label="E5alt2logistic", prefix="demand_5_alt2logistic"),
+    (id=5, label="E5", prefix="demand_5_logistic"),
 ]
 
 # Sub-model definitions

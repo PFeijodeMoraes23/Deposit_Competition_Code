@@ -255,8 +255,8 @@ def main():
         '2 B firms Robust': SLEEP_DIR / "DEMAND_PREP" / "est2" / "LOCAL", 
         '3 Pooled': SLEEP_DIR / "DEMAND_PREP" / "est3",
         '4 Pooled Logistic': SLEEP_DIR / "DEMAND_PREP" / "est4",
-        '5 Dummies Linear': SLEEP_DIR / "DEMAND_PREP" / "est5" / "ALT_2",
-        '5 Dummies Logistic': SLEEP_DIR / "DEMAND_PREP" / "est5" / "ALT_2",
+        '5 Dummies Linear': SLEEP_DIR / "DEMAND_PREP" / "est5",
+        '5 Dummies Logistic': SLEEP_DIR / "DEMAND_PREP" / "est5",
     }
 
     if getattr(args, 'skip_est2', False):

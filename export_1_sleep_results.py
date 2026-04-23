@@ -1,7 +1,6 @@
 import os
 import sys
 import json
-import itertools
 import pickle
 from pathlib import Path
 import subprocess
@@ -28,62 +27,6 @@ OUT_DIR = str(TEX_OUT_DIR)
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 TEX_OUT_DIR.mkdir(parents=True, exist_ok=True)
 
-def md_to_tex_string(md_text):
-    blocks = md_text.split('$$')
-    processed_blocks = []
-
-    for i, block in enumerate(blocks):
-        if i % 2 == 1:
-            processed_blocks.append(f"\\[ {block} \\]")
-        else:
-            inline_parts = block.split('$')
-            processed_inline = []
-            for j, ipart in enumerate(inline_parts):
-                if j % 2 == 1:
-                    processed_inline.append(f"${ipart}$")
-                else:
-                    escaped = (ipart
-                               .replace('&', '\\&')
-                               .replace('%', '\\%')
-                               .replace('#', '\\#')
-                               .replace('_', '\\_'))
-                    processed_inline.append(escaped)
-            processed_blocks.append("".join(processed_inline))
-
-    tex = "".join(processed_blocks)
-
-    lines = tex.split('\n')
-    out_lines = []
-    in_code = False
-
-    for line in lines:
-        if line.startswith('```'):
-            if in_code:
-                out_lines.append('\\end{lstlisting}')
-            else:
-                out_lines.append('\\begin{lstlisting}')
-            in_code = not in_code
-            continue
-
-        if in_code:
-            out_lines.append(line)
-            continue
-
-        if line.startswith('# '):
-            out_lines.append(f"\\section*{{{line[2:]}}}")
-        elif line.startswith('## '):
-            out_lines.append(f"\\subsection*{{{line[3:]}}}")
-        elif line.startswith('### '):
-            out_lines.append(f"\\subsubsection*{{{line[4:]}}}")
-        elif line.startswith('- '):
-            out_lines.append(f"\\textbullet\\ {line[2:]} \\\\")
-        elif line.strip() == '':
-            out_lines.append("\n\n")
-        else:
-            out_lines.append(line + " \\\\")
-
-    return '\n'.join(out_lines)
-
 def stars(p):
     if p < 0.01: return '***'
     elif p < 0.05: return '**'
@@ -103,27 +46,26 @@ def clean_name(v):
         'connections_per100': 'Broadband Connections (per capita)',
         'branches_per1000': 'Branches per 1k',
         'post_2020': 'Post 2020 Dummy',
-        'const': 'Constant'
+        'const': 'Constant',
+        'constant': 'Constant',
+        'tax_cost_ratio_lag': 'Tax Cost Ratio ($t-1$)',
+        'personnel_cost_ratio_lag': 'Personnel Cost Ratio ($t-1$)',
+        'admin_cost_ratio_lag': 'Admin Cost Ratio ($t-1$)',
+        'indice_basileia_lag': 'Basel Index ($t-1$)',
+        'lci_lca_ratio_lag': 'LCI/LCA Ratio ($t-1$)',
+        'wholesale_ratio_lag': 'Wholesale Ratio ($t-1$)',
+        'leave_one_out_mean_spread': 'Leave-out Mean Spread',
     }
     return labels.get(v, v.replace('_', '\\_'))
 
-def _get_first_stage_row_strings(var, panels, ivs, results_dict):
-    coef_strs, se_strs = [], []
-    has_val = False
-    for p, (iv_key, _) in itertools.product(panels, ivs):
-        res = results_dict[f"{iv_key} x {p}"]['first_stage']
-        if var in res.params:
-            has_val = True
-            c, se, pval = res.params[var], res.bse[var], res.pvalues[var]
-            coef_strs.append(f"${c:.4f}^{{{stars(pval)}}}$")
-            se_strs.append(f"$({se:.4f})$")
-        else:
-            coef_strs.append("")
-            se_strs.append("")
-    return coef_strs, se_strs, has_val
-
 def build_first_stage_table(results_dict, G, G_star):
     panels = ['Base', 'Macro', 'Tech']
+    panel_labels = {
+        'Base': 'Base Specifications',
+        'Macro': 'Macro Specifications',
+        'Tech': 'Tech Specifications',
+    }
+    panel_letters = ['A', 'B', 'C']
     fs_spec_numbers = {
         ('Base', 'IV_CostShifters'): 2,
         ('Base', 'IV_Wholesale'): 3,
@@ -135,96 +77,147 @@ def build_first_stage_table(results_dict, G, G_star):
         ('Tech', 'IV_Wholesale'): 11,
         ('Tech', 'IV_HausmanFull'): 12,
     }
-
     ivs = [
         ('IV_CostShifters', 'IV Cost'),
         ('IV_Wholesale', 'IV Wholesale'),
-        ('IV_HausmanFull', 'Hausman')
+        ('IV_HausmanFull', 'Hausman'),
     ]
-
-    vs = list(dict.fromkeys(
-        v for p, (iv_key, _) in itertools.product(panels, ivs)
-        for v in results_dict[f"{iv_key} x {p}"]['first_stage'].params.index
-        if v != 'const'
-    ))
-
-    col_names = [f"{iv_label} ({fs_spec_numbers[(p, iv_key)]})" for p, (iv_key, iv_label) in itertools.product(panels, ivs)]
-
-    out = [
-        "\\begin{landscape}",
-        "\\begin{table}[htbp]\\centering",
-        "\\caption{First Stage Estimation (Control Function)}",
-        "\\resizebox{\\linewidth}{!}{",
-        "\\begin{tabular}{l" + "c"*9 + "}\\toprule",
-        " & \\multicolumn{3}{c}{\\textbf{Base}} & \\multicolumn{3}{c}{\\textbf{Macro}} & \\multicolumn{3}{c}{\\textbf{Tech}} \\\\ \\cmidrule(lr){2-4} \\cmidrule(lr){5-7} \\cmidrule(lr){8-10}",
-        " & " + " & ".join(col_names) + " \\\\ \\midrule"
-    ]
-    
-    for var in vs:
-        coef_strs, se_strs, has_val = _get_first_stage_row_strings(var, panels, ivs, results_dict)
-                    
-        if has_val:
-            out.extend(
-                (
-                    f"{clean_name(var)} & " + " & ".join(coef_strs) + " \\\\",
-                    " & " + " & ".join(se_strs) + " \\\\"
-                )
-            )
-
-    obs_strs = []
-    rsq_strs = []
-    fstat_strs = []
-    g_strs = []
-    g_star_strs = []
-    for p, (iv_key, _) in itertools.product(panels, ivs):
-        res = results_dict[f"{iv_key} x {p}"]['first_stage']
-        obs_strs.append(f"{int(res.nobs):,}")
-        rsq_strs.append(f"{res.rsquared:.4f}")
-        fstat_val = getattr(res, 'fvalue', None)
-        fstat_pval = getattr(res, 'f_pvalue', 1.0)
-        fstat_strs.append(f"${fstat_val:.2f}^{{{stars(fstat_pval)}}}$" if fstat_val is not None else "")
-        g_strs.append(str(getattr(res, 'G_nominal', '\\text{N/A}')))
-        g_star_val = getattr(res, 'G_star', None)
-        g_star_strs.append(f"{g_star_val:.2f}" if g_star_val is not None else "\\text{N/A}")
-
-    out.extend(
-        (
-            "\\midrule",
-            "Obs & " + " & ".join(obs_strs) + " \\\\",
-            "$R^2$ & " + " & ".join(rsq_strs) + " \\\\",
-            "F-Statistic & " + " & ".join(fstat_strs) + " \\\\",
-            "Fixed Effects & " + " & ".join(["No"]*9) + " \\\\",
-            "Clusters (G) & " + " & ".join(g_strs) + " \\\\",
-            "Effective Clusters ($G^*$) & " + " & ".join(g_star_strs) + " \\\\",
-            "\\bottomrule",
-            "\\end{tabular}}",
-            "\\end{table}",
-            "\\end{landscape}"
-        )
+    multispan = 4
+    caption = "First Stage Estimation (Control Function)"
+    label = "tab:first_stage_control_function"
+    notes = (
+        r"\scriptsize \textit{Notes:} Standard errors clustered at the conglomerate level "
+        r"are reported in parentheses, correcting for group size imbalance following "
+        r"Imbens \& Kolesár (2016) and Carter et al.\ (2017). "
+        r"Significance levels: *** $p<0.01$, ** $p<0.05$, * $p<0.1$."
     )
-    return "\n".join(out)
 
-def _get_second_stage_row_strings(vshort, panels, estimators, results_dict):
-    coef_strs, se_strs = [], []
-    for p_name, (est_key, _) in itertools.product(panels, estimators):
-        spec_key = f"{est_key} x {p_name}"
-        res = results_dict[spec_key]['second_stage']
+    def _get_res(iv_key, p):
+        entry = results_dict.get(f"{iv_key} x {p}")
+        return entry.get('first_stage') if isinstance(entry, dict) else None
 
-        var = vshort
-        if var not in res.params and f"interaction_{var}" in res.params:
-            var = f"interaction_{var}"
+    p0, l0 = panels[0], panel_letters[0]
+    iv_nums_0 = [(il, fs_spec_numbers[(p0, ik)]) for ik, il in ivs]
 
-        if var in res.params:
-            c, se, pval = res.params[var], res.bse[var], res.pvalues[var]
-            coef_strs.append(f"${c:.4f}^{{{stars(pval)}}}$")
-            se_strs.append(f"$({se:.4f})$")
-        else:
-            coef_strs.append("")
-            se_strs.append("")
-    return coef_strs, se_strs
+    lines = [
+        r"\begin{spacing}{1.0}",
+        r"\begin{longtable}{lccc}",
+        rf"    \caption{{{caption}}}\label{{{label}}} \\",
+        r"    \toprule",
+        rf"    \multicolumn{{{multispan}}}{{l}}{{\textbf{{Panel {l0}: {panel_labels[p0]}}}}} \\",
+        r"    \midrule",
+        "    & " + " & ".join(il for il, _ in iv_nums_0) + r" \\",
+        "    & " + " & ".join(f"({n})" for _, n in iv_nums_0) + r" \\",
+        r"    \midrule",
+        r"    \endfirsthead",
+        "",
+        rf"    \caption[]{{{caption} (Continued)}} \\",
+        r"    \toprule",
+        "    & " + " & ".join(il for il, _ in iv_nums_0) + r" \\",
+        r"    \midrule",
+        r"    \endhead",
+        "",
+        r"    \midrule",
+        rf"    \multicolumn{{{multispan}}}{{r}}{{\textit{{Continued on next page}}}} \\",
+        r"    \endfoot",
+        "",
+        r"    \bottomrule",
+        rf"    \multicolumn{{{multispan}}}{{p{{0.65\textwidth}}}}{{{notes}}} \\",
+        r"    \endlastfoot",
+        "",
+    ]
+
+    for pi, panel in enumerate(panels):
+        letter = panel_letters[pi]
+        plabel = panel_labels[panel]
+        iv_nums = [(il, fs_spec_numbers[(panel, ik)]) for ik, il in ivs]
+
+        if pi > 0:
+            lines += [
+                r"    \addlinespace[1.5em]",
+                "",
+                r"    \toprule",
+                rf"    \multicolumn{{{multispan}}}{{l}}{{\textbf{{Panel {letter}: {plabel}}}}} \\",
+                r"    \midrule",
+                "    & " + " & ".join(il for il, _ in iv_nums) + r" \\",
+                "    & " + " & ".join(f"({n})" for _, n in iv_nums) + r" \\",
+                r"    \midrule",
+            ]
+
+        all_vars_fs = [
+            'tax_cost_ratio_lag',
+            'personnel_cost_ratio_lag',
+            'admin_cost_ratio_lag',
+            'indice_basileia_lag',
+            'lci_lca_ratio_lag',
+            'wholesale_ratio_lag',
+            'leave_one_out_mean_spread',
+        ]
+        # include any unexpected variables not in the fixed list
+        seen = set(all_vars_fs)
+        extra = [
+            v for ik, _ in ivs
+            for res in [_get_res(ik, panel)] if res is not None
+            for v in res.params.index
+            if v not in seen and v != 'const'
+        ]
+        vs_panel = all_vars_fs + list(dict.fromkeys(extra))
+
+        for var in vs_panel:
+            coef_strs, se_strs, has_val = [], [], False
+            for ik, _ in ivs:
+                res = _get_res(ik, panel)
+                if res is not None and var in res.params:
+                    has_val = True
+                    c, se, pval = res.params[var], res.bse[var], res.pvalues[var]
+                    coef_strs.append(f"${c:.4f}^{{{stars(pval)}}}$")
+                    se_strs.append(f"$({se:.4f})$")
+                else:
+                    coef_strs.append("")
+                    se_strs.append("")
+            if has_val:
+                lines.append(f"    {clean_name(var)} & " + " & ".join(coef_strs) + r" \\*")
+                lines.append("    & " + " & ".join(se_strs) + r" \\")
+
+        obs_l, rsq_l, fstat_l, g_l, gstar_l = [], [], [], [], []
+        for ik, _ in ivs:
+            res = _get_res(ik, panel)
+            if res is None:
+                obs_l.append("---"); rsq_l.append("---"); fstat_l.append("---")
+                g_l.append("---"); gstar_l.append("---")
+                continue
+            obs_l.append(f"{int(res.nobs):,}")
+            rsq_l.append(f"{res.rsquared:.4f}")
+            fv = getattr(res, 'fvalue', None)
+            fp = getattr(res, 'f_pvalue', 1.0)
+            fstat_l.append(f"${fv:.2f}^{{{stars(fp)}}}$" if fv is not None else "---")
+            g_l.append(str(getattr(res, 'G_nominal', '---')))
+            gsv = getattr(res, 'G_star', None)
+            gstar_l.append(f"{gsv:.2f}" if gsv is not None else "---")
+
+        lines += [
+            r"    \midrule",
+            "    Observations & " + " & ".join(obs_l) + r" \\",
+            "    $R^2$ & " + " & ".join(rsq_l) + r" \\",
+            "    F-Statistic & " + " & ".join(fstat_l) + r" \\",
+            "    Fixed Effects & No & No & No \\\\",
+            "    Clusters ($G$) & " + " & ".join(g_l) + r" \\",
+            "    Effective Clusters ($G^*$) & " + " & ".join(gstar_l) + r" \\",
+            r"    \bottomrule",
+        ]
+
+    lines += [r"\end{longtable}", r"\end{spacing}"]
+    return "\n".join(lines)
+
 
 def build_second_stage_table(results_dict, G, G_star):
     panels = ['Base', 'Macro', 'Tech']
+    panel_labels = {
+        'Base': 'Base Specifications',
+        'Macro': 'Macro Specifications',
+        'Tech': 'Tech Specifications',
+    }
+    panel_letters = ['A', 'B', 'C']
     ss_spec_numbers = {
         ('Base', 'OLS'): 1,
         ('Base', 'IV_CostShifters'): 2,
@@ -239,68 +232,127 @@ def build_second_stage_table(results_dict, G, G_star):
         ('Tech', 'IV_Wholesale'): 11,
         ('Tech', 'IV_HausmanFull'): 12,
     }
-
-    all_vars = ['nr_lagged_dep', 'post_2020', 'gdp_per_capita', 'cadunico_families_per1000', 'fraction_65plus', 'fraction_young', 'pix_users_pf_per1000', 'connections_per100', 'branches_per1000', 'risk_free_qoq_lag']
-
     estimators = [
         ('OLS', 'OLS'),
         ('IV_CostShifters', 'IV Cost'),
         ('IV_Wholesale', 'IV Wholesale'),
-        ('IV_HausmanFull', 'Hausman')
+        ('IV_HausmanFull', 'Hausman'),
     ]
-
-    col_names = []
-    for p, (est_key, est_label) in itertools.product(panels, estimators):       
-        n = ss_spec_numbers[(p, est_key)]
-        col_names.append(f"{est_label} ({n})")
-
-    out = [
-        "\\begin{landscape}",
-        "\\begin{table}[htbp]\\centering",
-        "\\caption{Second Stage Estimation}",
-        "\\resizebox{\\linewidth}{!}{",
-        "\\begin{tabular}{l" + "c"*12 + "}\\toprule",
-        " & \\multicolumn{4}{c}{\\textbf{Base}} & \\multicolumn{4}{c}{\\textbf{Macro}} & \\multicolumn{4}{c}{\\textbf{Tech}} \\\\ \\cmidrule(lr){2-5} \\cmidrule(lr){6-9} \\cmidrule(lr){10-13}",
-        " & " + " & ".join(col_names) + " \\\\ \\midrule"
+    all_vars = [
+        'const', 'post_2020', 'gdp_per_capita',
+        'cadunico_families_per1000', 'fraction_65plus', 'fraction_young',
+        'risk_free_qoq_lag',
+        'pix_users_pf_per1000', 'connections_per100', 'branches_per1000',
     ]
-    
-    for vshort in all_vars:
-        coef_strs, se_strs = _get_second_stage_row_strings(vshort, panels, estimators, results_dict)
-
-        out.extend(
-            (
-                f"{clean_name(vshort)} & " + " & ".join(coef_strs) + " \\\\",
-                " & " + " & ".join(se_strs) + " \\\\"
-            )
-        )
-
-    obs_strs = []
-    rsq_strs = []
-    g_strs = []
-    g_star_strs = []
-    for p_name, (est_key, _) in itertools.product(panels, estimators):
-        res = results_dict[f"{est_key} x {p_name}"]['second_stage']
-        obs_strs.append(f"{int(res.nobs):,}")
-        rsq_strs.append(f"{res.rsquared:.4f}")
-        g_strs.append(str(getattr(res, 'G_nominal', '\\text{N/A}')))
-        g_star_val = getattr(res, 'G_star', None)
-        g_star_strs.append(f"{g_star_val:.2f}" if g_star_val is not None else "\\text{N/A}")
-            
-    out.extend(
-        (
-            "\\midrule",
-            "Obs & " + " & ".join(obs_strs) + " \\\\",
-            "$R^2$ & " + " & ".join(rsq_strs) + " \\\\",
-            "Fixed Effects & " + " & ".join(["Yes"]*12) + " \\\\",
-            "Clusters (G) & " + " & ".join(g_strs) + " \\\\",
-            "Effective Clusters ($G^*$) & " + " & ".join(g_star_strs) + " \\\\",
-            "\\bottomrule",
-            "\\end{tabular}}",
-            "\\end{table}",
-            "\\end{landscape}"
-        )
+    multispan = 5
+    caption = "Second Stage Estimation"
+    label = "tab:sleep_specifications_results_2nd_stage"
+    notes = (
+        r"\scriptsize \textit{Notes:} Standard errors clustered at the conglomerate level "
+        r"are reported in parentheses, correcting for group size imbalance following "
+        r"Imbens \& Kolesár (2016) and Carter et al.\ (2017). "
+        r"Significance levels: *** $p<0.01$, ** $p<0.05$, * $p<0.1$. "
+        r"See companion document for first stage results."
     )
-    return "\n".join(out)
+
+    def _get_res(ek, p):
+        entry = results_dict.get(f"{ek} x {p}")
+        return entry.get('second_stage') if isinstance(entry, dict) else None
+
+    p0, l0 = panels[0], panel_letters[0]
+    est_nums_0 = [(el, ss_spec_numbers[(p0, ek)]) for ek, el in estimators]
+
+    lines = [
+        r"\begin{spacing}{1.0}",
+        r"\begin{longtable}{lcccc}",
+        rf"    \caption{{{caption}}}\label{{{label}}} \\",
+        r"    \toprule",
+        rf"    \multicolumn{{{multispan}}}{{l}}{{\textbf{{Panel {l0}: {panel_labels[p0]}}}}} \\",
+        r"    \midrule",
+        "     & " + " & ".join(el for el, _ in est_nums_0) + r" \\",
+        "    & " + " & ".join(f"({n})" for _, n in est_nums_0) + r" \\",
+        r"    \midrule",
+        r"    \endfirsthead",
+        "",
+        rf"    \caption[]{{{caption} (Continued)}} \\",
+        r"    \toprule",
+        "     & " + " & ".join(el for el, _ in est_nums_0) + r" \\",
+        r"    \midrule",
+        r"    \endhead",
+        "",
+        r"    \midrule",
+        rf"    \multicolumn{{{multispan}}}{{r}}{{\textit{{Continued on next page}}}} \\",
+        r"    \endfoot",
+        "",
+        r"    \bottomrule",
+        rf"    \multicolumn{{{multispan}}}{{p{{0.85\textwidth}}}}{{{notes}}} \\",
+        r"    \endlastfoot",
+        "",
+    ]
+
+    for pi, panel in enumerate(panels):
+        letter = panel_letters[pi]
+        plabel = panel_labels[panel]
+        est_nums = [(el, ss_spec_numbers[(panel, ek)]) for ek, el in estimators]
+
+        if pi > 0:
+            lines += [
+                r"    \addlinespace[1.5em]",
+                "",
+                r"    \toprule",
+                rf"    \multicolumn{{{multispan}}}{{l}}{{\textbf{{Panel {letter}: {plabel}}}}} \\",
+                r"    \midrule",
+                "     & " + " & ".join(el for el, _ in est_nums) + r" \\",
+                "    & " + " & ".join(f"({n})" for _, n in est_nums) + r" \\",
+                r"    \midrule",
+            ]
+
+        for vshort in all_vars:
+            coef_strs, se_strs, has_val = [], [], False
+            for ek, _ in estimators:
+                res = _get_res(ek, panel)
+                var = vshort
+                if res is not None and var not in res.params and f"interaction_{var}" in res.params:
+                    var = f"interaction_{var}"
+                if res is not None and var in res.params:
+                    has_val = True
+                    c, se, pval = res.params[var], res.bse[var], res.pvalues[var]
+                    coef_strs.append(f"${c:.4f}^{{{stars(pval)}}}$")
+                    se_strs.append(f"$({se:.4f})$")
+                else:
+                    coef_strs.append("")
+                    se_strs.append("")
+            if has_val:
+                lines.append(f"    {clean_name(vshort)} & " + " & ".join(coef_strs) + r" \\")
+                lines.append("    & " + " & ".join(se_strs) + r" \\")
+
+        obs_l, rsq_l, g_l, gstar_l = [], [], [], []
+        for ek, _ in estimators:
+            res = _get_res(ek, panel)
+            if res is None:
+                obs_l.append("---"); rsq_l.append("---")
+                g_l.append("---"); gstar_l.append("---")
+                continue
+            nv = getattr(res, 'nobs', None)
+            obs_l.append(f"{int(nv):,}" if nv is not None else "---")
+            rv = getattr(res, 'rsquared', None)
+            rsq_l.append(f"{rv:.4f}" if rv is not None else "---")
+            g_l.append(str(getattr(res, 'G_nominal', '---')))
+            gsv = getattr(res, 'G_star', None)
+            gstar_l.append(f"{gsv:.2f}" if gsv is not None else "---")
+
+        lines += [
+            r"    \midrule",
+            "    Observations & " + " & ".join(obs_l) + r" \\",
+            "    $R^2$ & " + " & ".join(rsq_l) + r" \\",
+            "    Fixed Effects & Yes & Yes & Yes & Yes \\\\",
+            "    Clusters ($G$) & " + " & ".join(g_l) + r" \\",
+            "    Effective Clusters ($G^*$) & " + " & ".join(gstar_l) + r" \\",
+            r"    \bottomrule",
+        ]
+
+    lines += [r"\end{longtable}", r"\end{spacing}"]
+    return "\n".join(lines)
 
 def build_cluster_table(cluster_data):
     G_nominal = cluster_data['G_nominal']
@@ -327,159 +379,89 @@ def build_cluster_table(cluster_data):
     out.extend(("\\bottomrule", "\\end{tabular}", "\\end{table}"))
     return "\n".join(out)
 
+_STANDALONE_PREAMBLE = r"""\documentclass[12pt]{article}
+\usepackage[letterpaper, margin=1in]{geometry}
+\usepackage[utf8]{inputenc}
+\usepackage{lmodern}
+\usepackage[english]{babel}
+\usepackage{amssymb, mathrsfs, amsthm, mathtools}
+\usepackage{graphicx, float}
+\usepackage{setspace}
+\usepackage{multirow}
+\usepackage{booktabs}
+\usepackage{longtable}
+\usepackage[font=small,labelfont=bf]{caption}
+\setlength{\tabcolsep}{3.5pt}
+\renewcommand{\arraystretch}{1.08}
+\usepackage{hyperref}
+\hypersetup{colorlinks=true, linkcolor=blue}
+"""
+
+
 def main():
-    print("=====================================================================")
-    print(" INITIATING PDFLATEX COMPILATION PIPELINE")
-    print("=====================================================================")
-    
-    summary_text = r"""# Estimation Summary: Sleepiness Function Metrics
-
-This document provides a detailed breakdown of the assumptions, data preparations, specifications, and the econometric safeguards implemented during the execution of the sleepiness function estimation detailed in Egan et al. (2025).
-
-## 1. Data and Sample Preparation
-The primary dataset is derived from systems within the data pipeline architecture:
-- ESTBAN and IF Data: Monthly balance sheets are aggregated quarterly, mapping deposit balances per deposit type, per prudential conglomerate ($CodConglomeradoPrudencial$), and per regional grouping ($mca\_code$). 
-- Macroeconomics and Demographics: Includes baseline state inputs such as poverty brackets via CADUNICO ($cadunico\_extreme\_poverty$) and the fraction of the population aged above 65.
-- Digital Adoption: Integrates modern financial-technological state variables natively, such as Pix users per capita ($pix\_users\_pf\_per1000$).
-
-The estimation dataset focuses deliberately on "B-Type" Institutions, defined as banks with local presence via physical branches. Purely fintech operations that map identically to national levels ($CODMUN\_IBGE = 0$) are excluded from this empirical section to prevent structural bias stemming from their unique operational structures. Variables generated upstream in wide formatting are pivoted into a long matrix locally inside the execution script to systematically construct the high-dimensional spatial-entity effects ($CodConglomeradoPrudencial \times deposit\_type \times mca\_code$).
-
-## 2. Estimation Architecture: The 12 Specifications
-To calculate the state-dependent elasticity parameters inherent to the Depositor Sleepiness Function, the empirical design crosses 4 Instrument Specifications with 3 Vector State Subsets, generating a 12-specification empirical layout.
-
-Deposit buckets $k=4, 5$ face endogeneity concerns driven by unobserved latency in spread-setting. To address this, the script runs a Control Function estimator, where a first-stage Ordinary Least Squares (OLS) model projects observed spreads onto subsets of the proposed Instruments. The polynomial control parameters ($\hat{v}, \hat{v}^2, \hat{v}^3$) are subsequently fed into the second-stage estimation.
-
-### 2.1 First-Stage Instrument Sets
-1. Spec 1 (OLS): No instruments used. Spreads enter completely exogenously. The first-stage is skipped entirely.
-2. Spec 2 (Cost Shifters): The first stage is identified via lagged personnel cost ratios, administrative ratios, and tax ratios.
-3. Spec 3 (Wholesale and Capital): Inherits Spec 2 variables while incorporating structural risk controls (wholesale ratios, Basel index, and LCI/LCA ratios). 
-4. Spec 4 (Hausman Full): Incorporates all variables from Spec 3 and uniquely adds the Hausman-style Instrument ($leave\_one\_out\_mean\_spread$). This instrument represents the average spread offered by rival banks in the exact same quarter and deposit type, mapping exogenous pricing pressures away from the focal bank's local demand unobservables.
-
-### 2.2 Second-Stage Interaction Subsets 
-The second stage maps the interacted demand dependencies. The regressor of interest is linearly mapped and identically interacted with various state vectors ($S_{mt}$):
-1. State-Base: Includes purely physical-banking variables: a constant unit, telephony connections per capita, and physical branches per capita.
-2. State-Macro: Adds variables measuring traditional macroeconomic inertia, such as extreme poverty indices and GDP per capita.
-3. State-Tech: Integrates all prior blocks alongside the digital-finance block variables tracking Pix activity and internet banking integrations. 
-
-## 3. Standard Error Methodology: Imbens and Kolesar (2016) Bounds
-
-Calculating localized pricing elasticity inherently requires aggregating standard errors to control for systemic within-bank correlations. Since pricing mechanisms are federally dictated, clustering strictly by Conglomerate is required asymptotically to override simple heteroskedasticity. 
-
-While the nominal number of branches constitutes $G = 118$ conglomerates, classical clustering theory assumes heavily distributed group asymptotics (e.g., $G \rightarrow \infty$). Imbens and Kolesár (2016) mathematically demonstrate that relying on the nominal $G$ violently biases parameters if the clustered networks are heavily unbalanced.
-
-### 3.1 The Effective Number of Clusters ($G^*$)
-The Brazilian financial system is a strict oligopoly. The top five mega-conglomerates (including Itaú, Bradesco, and Banco do Brasil) contain over 80 percent of the aggregate internal branch network observations. 
-
-To formalize this parameter bias, \textcite{carter2017asymptotic} introduce an algebraic formulation converting unbalanced networks strictly into an empirical "Effective Number of Clusters" ($G^*$):
-$$ G^* = \frac{G}{1 + \text{cv}^2} $$
-Where $\text{cv}$ is the exact coefficient of variation detailing the structural inequality across the subset mass. Locally evaluating the estimation distribution yields a standard deviation of 16,751 branches mapping against a mean of 3,901, generating an extreme inequality coefficient $\text{cv} \approx 4.29$. Thus, the effective dimensionality of the Brazilian banking cluster collapses dangerously: $G^* \approx 6.07$. 
-
-Because $G^*$ drops structurally beneath 10, both standard Cluster-Robust Variance (CR1) systems and advanced Rademacher-weighted Wild Cluster Bootstraps (WCB) collapse and systematically over-reject the true limits \parencite{mackinnon2017wild}.
-
-### 3.2 Imbens-Kolesar Analytical Approximation
-\textcite{imbens2016robust} rigorously advocate that standard error vectors evaluated under small $G^*$ topologies must transition explicitly into Bias-Reduced Linearization frameworks (CR2 matrices) paired strictly to Satterthwaite data-driven degrees of freedom \parencite{bell2002bias}.
-
-Executing explicit CR2 formulations computationally, however, requires generating cluster-specific Hat-matrices ($H_{gg} = X_g (X'X)^{-1} X_g'$). For Brazilian conglomerate C0080329 ($n_g = 124,429$), the baseline resolution of an $n_g \times n_g$ matrix independently demands precisely 120GB of allocated computational RAM memory, functionally breaking explicit inversion models locally on micro-data structures.
-
-We algebraically bypass these explicit matrix allocation limits by implementing the mathematically parallel limits dictated universally by IK (2016) and \textcite{carter2017asymptotic}: the entire statsmodels clustering structure computes generic clustered distributions, but the statistical test bounds are entirely stripped of generic $(G-1)$ inference limits and strictly reevaluated against a $t$-distribution identically matched to Carter's bound ($df = G^* \approx 6$). 
-
-By manually mapping Python's architecture into bounding its output strictly utilizing $t_{6.07}$ reference vectors computationally, the exported parameter estimates flawlessly capture the rigorous theoretical safeguards established unilaterally inside the \textcite{imbens2016robust} derivation."""
-
-    se_text = r"""# Small Sample Asymptotics (`se_comparison.md`)
-
-Traditional asymptotic theory posits that parameter inferences under heteroskedasticity and within-group correlations rely on the number of clusters $G$ approaching infinity. In empirical setups such as the Brazilian banking sector, consolidating estimations strictly at the prudential conglomerate level treats systemic demand shocks efficiently but inherently maps extremely limited topological variance ($G \approx 118$). 
-
-Crucially, \textcite{carter2017asymptotic} demonstrate that establishing a nominally bounded group counts like 118 is mathematically disingenuous under severe oligopolistic imbalance. We natively calculate that the five dominant conglomerates restrict over 83 percent of network variance, collapsing the true Effective Number of Clusters down to $G^* = 6.07$. Under such constraints, even state-of-the-art Wild Cluster Bootstrap algorithms functionally distort hypothesis distributions \parencite{mackinnon2017wild}.
-
-## The Methodology Transition: Imbens \& Kolesar (2016)
-To resolve extreme small-$G^*$ parameter bias natively, the econometric benchmark pivots to algorithms designed explicitly by \textcite{imbens2016robust}. They advocate transitioning standard clustered metrics away from unstructured distribution limits directly into Bias-Reduced Linearization (CR2) variants matched organically to Satterthwaite degrees of freedom \parencite{bell2002bias, mackinnon2023cluster, mackinnon2023fast, cameron2008bootstrap}.
-
-1. **Analytical Adjustments Instead of Simulations**: Unlike Wild Cluster Bootstrap (WCB) algorithms which iteratively simulate non-asymptotic bounds randomly via Rademacher weights ($-1, 1$), the IK (2016) procedure scales the true variance parameters algebraically against Hat-matrices natively prior to compiling unconstrained variance boundaries.
-
-2. **Computational Hurdles**: Generating Hat-matrices computationally ($H = X(X'X)^{-1}X'$) across clusters that possess $n_g \approx 124,000$ internal observations mandates matrices sized over 15.4 billion parameters iteratively. This strictly breaks local RAM allocation barriers (requiring 120GB limits unilaterally) for micro-data distributions. 
-
-3. **Empirical Implementation**: Consequently, the explicit estimation scripts seamlessly adhere to \textcite{imbens2016robust} algebra through the computational parallel isolated formally by \textcite{carter2017asymptotic}: evaluating traditional clustered parameter variations natively, but strictly bounding their parameter significances against distributions manually forced to reflect $t_{\text{df} = G^* = 6}$ bounds exclusively."""
-
-    print(" - Translating markdown to LaTeX...")
-    tex_body_md = (md_to_tex_string(summary_text) + "\n\n\\newpage\n" + md_to_tex_string(se_text))
+    print("=" * 70)
+    print(" EXPORT EST1 SLEEP RESULTS")
+    print("=" * 70)
 
     if not RESULTS_PICKLE.exists() or not CLUSTER_JSON.exists():
         print("Results not found. Run estimation_1_sleep.py first.")
         return
 
     print(" - Reading pickled model estimates...")
-    with open(RESULTS_PICKLE, 'rb') as f:
-        results_dict = pickle.load(f)
-        
-    with open(CLUSTER_JSON, 'r') as f:
-        cluster_data = json.load(f)
+    with open(RESULTS_PICKLE, 'rb') as fh:
+        results_dict = pickle.load(fh)
+    with open(CLUSTER_JSON, 'r') as fh:
+        cluster_data = json.load(fh)
 
     G_nominal = cluster_data['G_nominal']
     G_star = cluster_data['G_star']
 
-    print(" - Generating strict regression tables...")
+    print(" - Building table fragments...")
+    fs_frag = build_first_stage_table(results_dict, G_nominal, G_star)
+    ss_frag = build_second_stage_table(results_dict, G_nominal, G_star)
     cluster_table_tex = build_cluster_table(cluster_data)
-    fs_table_tex = build_first_stage_table(results_dict, G_nominal, G_star)
-    ss_table_tex = build_second_stage_table(results_dict, G_nominal, G_star)
-
-    preamble = r"""\documentclass[11pt]{article}
-\usepackage[utf8]{inputenc}
-\usepackage{amsmath, amssymb, amsthm}
-\usepackage{booktabs}
-\usepackage{geometry}
-\geometry{letterpaper, margin=1in}
-\usepackage{caption}
-\usepackage{longtable}
-\usepackage{pdflscape}
-\usepackage{float}
-\usepackage{hyperref}
-\usepackage{graphicx}
-\usepackage{xcolor}
-\usepackage{listings}
-\usepackage[style=authoryear,backend=biber]{biblatex}
-
-\definecolor{yalegray}{RGB}{89,89,89}
-\definecolor{yaleblue}{RGB}{0,53,107}
-\definecolor{codebg}{RGB}{245,245,245}
-\definecolor{codeframe}{RGB}{220,220,220}
-
-\begin{document}
-
-\title{Estimation Summary --- Deposit Competition}
-\author{Autogenerated Report}
-\date{\today}
-\maketitle
-
-"""
-    
-    tex_doc = (
-        preamble
-        + tex_body_md
-        + "\n\\newpage\n\\section*{Cluster Diagnostics}\n"
-        + cluster_table_tex
-        + "\n\\newpage\n\\section*{Regression Results}\n"
-        + fs_table_tex
-        + "\n\n"
-        + ss_table_tex
-        + "\n\\end{document}\n"
-    )
 
     os.makedirs(OUT_DIR, exist_ok=True)
-    temp_tex = os.path.join(OUT_DIR, "est1_sleep_results.tex")
-    print(f" - Writing single LaTeX file to {temp_tex} ...")
-    with open(temp_tex, 'w', encoding='utf-8') as f:
-        f.write(tex_doc)
-    shutil.copy(temp_tex, _DRAFTS_DIR / "est1_sleep_results.tex")
-    print(f" - Copied .tex to {_DRAFTS_DIR}")
-    
-    print("\n - Compiling...")
+
+    fs_path = os.path.join(OUT_DIR, "est1_fs_table.tex")
+    ss_path = os.path.join(OUT_DIR, "est1_ss_table.tex")
+    with open(fs_path, 'w', encoding='utf-8') as fh:
+        fh.write(fs_frag + "\n")
+    with open(ss_path, 'w', encoding='utf-8') as fh:
+        fh.write(ss_frag + "\n")
+    shutil.copy(fs_path, _DRAFTS_DIR / "est1_fs_table.tex")
+    shutil.copy(ss_path, _DRAFTS_DIR / "est1_ss_table.tex")
+    print(f" - Fragments written and copied to {_DRAFTS_DIR}")
+
+    tex_doc = (
+        _STANDALONE_PREAMBLE
+        + r"\begin{document}" + "\n"
+        + r"\title{Sleep Estimation Results --- Est 1 (B-Type Firms)}" + "\n"
+        + r"\author{Autogenerated}" + "\n"
+        + r"\date{\today}" + "\n"
+        + r"\maketitle" + "\n\n"
+        + r"\section*{Cluster Diagnostics}" + "\n"
+        + cluster_table_tex + "\n\n"
+        + r"\section*{First Stage}" + "\n"
+        + r"\input{est1_fs_table.tex}" + "\n\n"
+        + r"\section*{Second Stage}" + "\n"
+        + r"\input{est1_ss_table.tex}" + "\n"
+        + r"\end{document}" + "\n"
+    )
+
+    wrapper_path = os.path.join(OUT_DIR, "est1_sleep_results.tex")
+    with open(wrapper_path, 'w', encoding='utf-8') as fh:
+        fh.write(tex_doc)
+    shutil.copy(wrapper_path, _DRAFTS_DIR / "est1_sleep_results.tex")
+    print(f" - Standalone wrapper written and copied to {_DRAFTS_DIR}")
+
+    print(" - Compiling PDF...")
     try:
         subprocess.run(["pdflatex", "-interaction=nonstopmode", "est1_sleep_results.tex"],
                        cwd=OUT_DIR, capture_output=True, text=True)
         res_final = subprocess.run(["pdflatex", "-interaction=nonstopmode", "est1_sleep_results.tex"],
-                       cwd=OUT_DIR, capture_output=True, text=True) 
-
-        pdf_path = os.path.join(OUT_DIR, "est1_sleep_results.pdf")       
+                                   cwd=OUT_DIR, capture_output=True, text=True)
+        pdf_path = os.path.join(OUT_DIR, "est1_sleep_results.pdf")
         if os.path.exists(pdf_path) and os.path.getsize(pdf_path) > 0:
             print("\n *** PDF SUCCESSFULLY GENERATED. ***\n")
         else:
@@ -488,6 +470,7 @@ To resolve extreme small-$G^*$ parameter bias natively, the econometric benchmar
         print(f"\n *** COMPILATION ERROR: {e} ***\n")
 
     print("Done.")
+
 
 if __name__ == '__main__':
     main()

@@ -134,7 +134,7 @@ This script sequentially runs the following steps:
             {"id": 2, "file": "estimation_2_sleep.py", "args": spec12_arg, "desc": "Robustness bounds for B-firms"},
             {"id": 3, "file": "estimation_3_sleep.py", "args": spec12_arg, "desc": "Robustness bounds for pooled B and D firms"},
             {"id": 4, "file": "estimation_4_sleep.py", "args": spec12_arg, "desc": "NLLS logistic structural estimation"},
-            {"id": 5, "file": "estimation_5_sleep.py", "args": ["--model-type", "both", "--alt", "2"] + (["--spec12-only"] if args.only_spec_12 else []), "desc": "Robustness bounds with cooperative/state controls"},
+            {"id": 5, "file": "estimation_5_sleep.py", "args": spec12_arg, "desc": "Robustness bounds with cooperative/state controls"},
         ])
 
     if not getattr(args, 'sleep_only', False):

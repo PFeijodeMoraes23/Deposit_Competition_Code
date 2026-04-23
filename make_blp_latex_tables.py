@@ -237,11 +237,7 @@ PREAMBLE = r"""\documentclass[12pt]{article}
 def process_estimation(est_id: int):
     print(f"\n--- Processing Estimation {est_id} ---")
     
-    # Distinguish Est 6 alts or standard
-    if est_id == 6:
-        alts = ['alt2linear', 'alt2logistic']
-    else:
-        alts = [None]
+    alts = [None]
         
     tex_content = PREAMBLE + "\n\\begin{document}\n"
     tex_content += r"\section*{Estimation " + str(est_id) + " Results}" + "\n\n"
@@ -256,11 +252,7 @@ def process_estimation(est_id: int):
         for sp in range(1, 13):
             res = None
             for stage in stages_priority:
-                if alt:
-                    filename = f"blp_results_E5_{alt}_spec_{sp}_{stage}.json"
-                else:
-                    filename = f"blp_results_E{est_id}_spec_{sp}_{stage}.json"
-                
+                filename = f"blp_results_E{est_id}_spec_{sp}_{stage}.json"
                 path = RESULTS_DIR / filename
                 if path.exists():
                     try:
@@ -276,10 +268,10 @@ def process_estimation(est_id: int):
                 specs_data[sp] = res
                 
         if not specs_data:
-            print(f"No results found for Est {est_id} {f'Alt {alt}' if alt else ''}")
+            print(f"No results found for Est {est_id}")
             continue
             
-        print(f"Loaded {len(specs_data)} specs for Est {est_id} {f'Alt {alt}' if alt else ''}")
+        print(f"Loaded {len(specs_data)} specs for Est {est_id}")
         
         # Build unified parameter list from all found specs
         # Keep consistent ordering
@@ -313,7 +305,7 @@ def process_estimation(est_id: int):
                         theta2_names_master.append(name)
                         
         # Render Table
-        title = f"Estimation {est_id}" + (f" - Variante: {alt}" if alt else "")
+        title = f"Estimation {est_id}"
         ncols = 12
         col_format = "l" + "c" * ncols
         

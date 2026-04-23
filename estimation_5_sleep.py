@@ -8,7 +8,6 @@ and state-owned ('is_state_owned') institutions across both Linear and Logistic 
 CLI Options:
 ------------
   --model-type   : linear, logistic, both (default: both)
-  --alt          : 1, 2, both (default: 2)
   --spec12-only  : Flag to only run Spec 12 (Tech x IV_HausmanFull)
 """
 import argparse
@@ -79,7 +78,7 @@ def demean_variables(df, cols, entity_col):
     means = df.groupby(entity_col)[cols].transform('mean')
     return df[cols] - means
 
-def define_specifications(alt):
+def define_specifications():
     s_base = ['constant', 'dummy_D_type', 'pix_exists']
     
     s_base_selic = ['constant', 'dummy_D_type', 'pix_exists', 'risk_free_qoq_lag', 'dummy_D_type_x_risk_free_qoq_lag']
@@ -91,25 +90,13 @@ def define_specifications(alt):
     state_blocks = {}
     
     for key, block in base_state_blocks.items():
-        if alt == 1:
-            # Alternative 1: Interact is_coop and is_state_owned with ALL state space variables
-            new_block = list(block)
-            new_block.extend(['is_coop', 'is_state_owned'])
-            for var in block:
-                if var != 'constant':
-                    new_block.append(f"is_coop_x_{var}")
-                    new_block.append(f"is_state_owned_x_{var}")
-            state_blocks[key] = list(set(new_block))
-            
-        elif alt == 2:
-            # Alternative 2: Dummy intercept + targeted interactions
-            new_block = list(block)
-            new_block.extend(['is_coop', 'is_state_owned'])
-            
-            for interact_var in ['risk_free_qoq_lag', 'fraction_65plus', 'fraction_young']:
-                if interact_var in new_block:
-                    new_block.extend([f"is_coop_x_{interact_var}", f"is_state_owned_x_{interact_var}"])
-            state_blocks[key] = list(set(new_block))
+        # Dummy intercept + targeted interactions for is_coop and is_state_owned
+        new_block = list(block)
+        new_block.extend(['is_coop', 'is_state_owned'])
+        for interact_var in ['risk_free_qoq_lag', 'fraction_65plus', 'fraction_young']:
+            if interact_var in new_block:
+                new_block.extend([f"is_coop_x_{interact_var}", f"is_state_owned_x_{interact_var}"])
+        state_blocks[key] = list(set(new_block))
             
     # Guarantee identical ordering
     for key in state_blocks.keys():
@@ -126,7 +113,7 @@ def define_specifications(alt):
 # ==============================================================================
 # DATA BUILDING
 # ==============================================================================
-def build_pooled_data(alt):
+def build_pooled_data():
     df_raw = load_panel_cached(PANEL_CSV) if load_panel_cached else pd.read_csv(PANEL_CSV, dtype={'mca_code': str}, low_memory=False)
     
     df_raw['dummy_D_type'] = (df_raw['CODMUN_IBGE'].astype(str) == '0').astype(float)
@@ -153,6 +140,13 @@ def build_pooled_data(alt):
 
     if 'deposit_type' in df.columns: df = df[df['deposit_type'] != 3].copy()
 
+    # B-type firms with only national-level k=5 (prepaid) observations: CODMUN_IBGE=0
+    # because ESTBAN has no branch-level prepaid data, but these firms are B-type
+    # (they have local rows for other deposit types). Do NOT label them as D-type.
+    _b_natl_firms = set(df.loc[df['CODMUN_IBGE'].astype(str) != '0', 'CodConglomeradoPrudencial'].unique())
+    _k5_natl_mask = (df['deposit_type'] == 5) & (df['CODMUN_IBGE'].astype(str) == '0') & df['CodConglomeradoPrudencial'].isin(_b_natl_firms)
+    df.loc[_k5_natl_mask, 'dummy_D_type'] = 0.0
+
     df['entity_id'] = df['CodConglomeradoPrudencial'].astype(str) + "_" + df['deposit_type'].astype(str) + "_" + df['mca_code'].astype(str)
     df['time_id'] = df['year'].astype(str) + "Q" + df['quarter'].astype(str)
     
@@ -166,7 +160,7 @@ def build_pooled_data(alt):
     df['dummy_D_type_x_fraction_65plus'] = df['dummy_D_type'] * df['fraction_65plus']
     df['dummy_D_type_x_fraction_young'] = df['dummy_D_type'] * df['fraction_young']
     
-    _, _, state_blocks = define_specifications(alt)
+    _, _, state_blocks = define_specifications()
     all_vars = set(val for subset in state_blocks.values() for val in subset)
     
     # Generate all requested dynamic interactions
@@ -196,8 +190,11 @@ def build_pooled_data(alt):
     if 'pop_total' in df.columns:
         cols_to_fill = [col for col in s_tech_finance if col in df.columns]
         b_mask = (df['dummy_D_type'] == 0)
-        d_mask = (df['dummy_D_type'] == 1)
-        df_b = df.loc[b_mask, ['time_id', 'pop_total'] + cols_to_fill].copy()
+        # national_mask: rows with no local market (CODMUN_IBGE=0) — includes D-type digital
+        # firms AND B-type firms' k=5 national-level prepaid aggregates. Both receive
+        # population-weighted national-average demographics.
+        national_mask = (df['CODMUN_IBGE'].astype(str) == '0')
+        df_b = df.loc[b_mask & ~national_mask, ['time_id', 'pop_total'] + cols_to_fill].copy()
         col_medians = df_b[cols_to_fill].median()
         for col in cols_to_fill:
             df_b[col] = df_b[col].fillna(col_medians[col])
@@ -207,9 +204,9 @@ def build_pooled_data(alt):
         for col in cols_to_fill:
             wv = (df_b[col] * df_b['_w']).groupby(df_b['time_id']).sum()
             nat_avg_df[col] = (wv / w_sum_by_t.replace(0, np.nan)).fillna(col_medians[col])
-        d_time_ids = df.loc[d_mask, 'time_id']
+        natl_time_ids = df.loc[national_mask, 'time_id']
         for col in cols_to_fill:
-            df.loc[d_mask, col] = d_time_ids.map(nat_avg_df[col]).values
+            df.loc[national_mask, col] = natl_time_ids.map(nat_avg_df[col]).values
 
     for col in s_tech_finance:
         if col in df.columns: df[col] = df[col].fillna(df[col].median())
@@ -242,26 +239,9 @@ def run_pooled_first_stage(df, spec_instruments, exogenous_controls):
     return df, res
 
 # --- Linear (From Est 4) ---
-def run_pooled_second_stage_linear(df, state_vars, has_cf=False):
-    X_cols = []
-    for sv in state_vars:
-        col_name = f"interaction_{sv}" if sv != 'constant' else "nr_lagged_dep"
-        df[col_name] = df[sv] * df['nr_lagged_dep'] if sv != 'constant' else df['nr_lagged_dep']
-        X_cols.append(col_name)
-    if has_cf: X_cols.extend(['v_hat', 'v_hat_2', 'v_hat_3'])
-        
-    df_ss = df.dropna(subset=X_cols + ['deposit_balance']).copy()
-    if len(df_ss) == 0: return None
-        
-    y_dm = demean_variables(df_ss, ['deposit_balance'], 'entity_id')['deposit_balance'].astype(float)
-    X_dm = demean_variables(df_ss, X_cols, 'entity_id').astype(float)
-    
-    mod = sm.OLS(y_dm, X_dm)
-    cluster_series = df_ss['CodConglomeradoPrudencial'].astype(str)
-    res = mod.fit(cov_type='cluster', cov_kwds={'groups': cluster_series}, use_t=True)
-    return apply_imbalanced_cluster_correction(res, cluster_series)
+# (Removed: est5 uses logistic only)
 
-# --- Logistic (From Est 5) ---
+# --- Logistic ---
 class NonLinearResults:
     def __init__(self, params, bse, tvalues, pvalues, df_resid, params_native=None):
         self.params = params
@@ -414,7 +394,7 @@ def exec_pooled_spec(args):
         df_target, res_fs = run_pooled_first_stage(df_target, iv_cols_act, exog_cols_act)
 
     if model_type == 'linear':
-        res_ss = run_pooled_second_stage_linear(df_target, s_cols, has_cf=has_cf)
+        res_ss = run_pooled_second_stage_logistic(df_target, s_cols, has_cf=has_cf)  # always logistic
     else:
         res_ss = run_pooled_second_stage_logistic(df_target, s_cols, has_cf=has_cf)
         
@@ -470,20 +450,17 @@ def calculate_pooled_phis(df, res_dict, state_blocks):
         
     return df, phi_results
 
-def run_pipeline_for_alt(alt, model_type_arg, spec12_only):
-    print(f"\n=== ESTIMATION 5: ALT {alt} ===")
-    df = build_pooled_data(alt)
-    _, iv_specs, state_blocks = define_specifications(alt)
-    
-    models_to_run = ['linear', 'logistic'] if model_type_arg == 'both' else [model_type_arg]
+def run_pipeline(spec12_only):
+    print(f"\n=== ESTIMATION 5 ===")
+    df = build_pooled_data()
+    _, iv_specs, state_blocks = define_specifications()
     
     tasks = []
-    for mt in models_to_run:
-        if spec12_only:
-            tasks.append((df, 'IV_HausmanFull', iv_specs['IV_HausmanFull'], 'Tech', state_blocks['Tech'], mt))
-        else:
-            tasks.extend([(df, iv_name, iv_specs[iv_name], s_name, state_blocks[s_name], mt)
-                          for s_name in state_blocks.keys() for iv_name in ['OLS', 'IV_CostShifters', 'IV_Wholesale', 'IV_HausmanFull']])
+    if spec12_only:
+        tasks.append((df, 'IV_HausmanFull', iv_specs['IV_HausmanFull'], 'Tech', state_blocks['Tech'], 'logistic'))
+    else:
+        tasks.extend([(df, iv_name, iv_specs[iv_name], s_name, state_blocks[s_name], 'logistic')
+                      for s_name in state_blocks.keys() for iv_name in ['OLS', 'IV_CostShifters', 'IV_Wholesale', 'IV_HausmanFull']])
     
     from joblib import Parallel, delayed
     results_dict = {}
@@ -495,104 +472,94 @@ def run_pipeline_for_alt(alt, model_type_arg, spec12_only):
     for res_ss, spec_name, res_fs in results:
         if res_ss is not None:
             results_dict[spec_name] = {'second_stage': res_ss, 'first_stage': res_fs}
-            print(f"Local Computed [{spec_name}] (Alt {alt})")
+            print(f"Local Computed [{spec_name}]")
 
-    out_dir = POOLED_DIR / f"ALT_{alt}"
-    out_dir.mkdir(parents=True, exist_ok=True)
-    with open(out_dir / "estimation_results.pkl", 'wb') as f: pickle.dump(results_dict, f)
+    POOLED_DIR.mkdir(parents=True, exist_ok=True)
+    with open(POOLED_DIR / "estimation_results.pkl", 'wb') as f: pickle.dump(results_dict, f)
     
     df['year_quarter'] = df['time_id']
     df, national_phis = calculate_pooled_phis(df, results_dict, state_blocks)
-    df.to_csv(out_dir / "market_panel_phis.csv", index=False)
-    print(f"Saved results and Phis for Alt {alt} -> {out_dir}")
+    df.to_csv(POOLED_DIR / "market_panel_phis.csv", index=False)
+    print(f"Saved results and Phis -> {POOLED_DIR}")
 
-def run_plotting_phase(alt_list, spec12_only):
+def run_plotting_phase(spec12_only):
     print("\n=== PLOTTING PHASE ===")
     
-    for alt in alt_list:
-        plot_out_dir = PLOTS_DIR / f"ALT_{alt}"
-        plot_out_dir.mkdir(parents=True, exist_ok=True)
-        csv_path = POOLED_DIR / f"ALT_{alt}" / "market_panel_phis.csv"
+    PLOTS_DIR.mkdir(parents=True, exist_ok=True)
+    csv_path = POOLED_DIR / "market_panel_phis.csv"
+    
+    try: df = pd.read_csv(csv_path, low_memory=False)
+    except FileNotFoundError: return
         
-        try: df = pd.read_csv(csv_path, low_memory=False)
-        except FileNotFoundError: continue
+    cols_to_plot = [c for c in df.columns if c.startswith('phi_mt_OLS') or c.startswith('phi_mt_IV')]
+    if spec12_only: cols_to_plot = [c for c in cols_to_plot if 'Tech' in c]
+        
+    for col_name in cols_to_plot:
+        fig, ax = plt.subplots(figsize=(10, 6))
+        
+        def get_agg_with_se(d_sub, col):
+            import scipy.stats as stats
+            if len(d_sub) == 0: return pd.DataFrame()
+            w = d_sub['market_size']
+            num = (d_sub[col] * w).groupby(d_sub['year_quarter']).sum()
+            den = w.groupby(d_sub['year_quarter']).sum()
+            mean = num / den
             
-        cols_to_plot = [c for c in df.columns if c.startswith('phi_mt_OLS') or c.startswith('phi_mt_IV')]
-        if spec12_only: cols_to_plot = [c for c in cols_to_plot if 'Tech' in c]
+            merged = d_sub[['year_quarter', col]].copy()
+            merged['w'] = w
+            merged['mean'] = merged['year_quarter'].map(mean)
             
-        for col_name in cols_to_plot:
-            fig, ax = plt.subplots(figsize=(10, 6))
+            var_num = (merged['w'] * (merged[col] - merged['mean'])**2).groupby(merged['year_quarter']).sum()
+            v1 = merged['w'].groupby(merged['year_quarter']).sum()
+            v2 = (merged['w']**2).groupby(merged['year_quarter']).sum()
             
-            def get_agg_with_se(d_sub, col):
-                import scipy.stats as stats
-                if len(d_sub) == 0: return pd.DataFrame()
-                w = d_sub['market_size']
-                num = (d_sub[col] * w).groupby(d_sub['year_quarter']).sum()
-                den = w.groupby(d_sub['year_quarter']).sum()
-                mean = num / den
-                
-                merged = d_sub[['year_quarter', col]].copy()
-                merged['w'] = w
-                merged['mean'] = merged['year_quarter'].map(mean)
-                
-                var_num = (merged['w'] * (merged[col] - merged['mean'])**2).groupby(merged['year_quarter']).sum()
-                v1 = merged['w'].groupby(merged['year_quarter']).sum()
-                v2 = (merged['w']**2).groupby(merged['year_quarter']).sum()
-                
-                var = var_num / (v1 - (v2 / v1))
-                
-                # Use effective sample size for n
-                n_eff = (v1**2) / v2
-                
-                se = (var / n_eff).apply(lambda x: x**0.5 if pd.notnull(x) and x > 0 else 0.0)
-                
-                # Compute critical value from t-distribution based on effective df
-                df_res = pd.DataFrame({'phi': mean, 'se': se, 'n_eff': n_eff}).reset_index()
-                df_res['cv'] = df_res['n_eff'].apply(lambda n: stats.t.ppf(0.975, max(1, n - 1)) if pd.notnull(n) and n > 1 else 1.96)
-                
-                df_res['date'] = pd.PeriodIndex(df_res['year_quarter'].str.replace('_', 'Q'), freq='Q').to_timestamp()
-                return df_res
+            var = var_num / (v1 - (v2 / v1))
+            
+            # Use effective sample size for n
+            n_eff = (v1**2) / v2
+            
+            se = (var / n_eff).apply(lambda x: x**0.5 if pd.notnull(x) and x > 0 else 0.0)
+            
+            # Compute critical value from t-distribution based on effective df
+            df_res = pd.DataFrame({'phi': mean, 'se': se, 'n_eff': n_eff}).reset_index()
+            df_res['cv'] = df_res['n_eff'].apply(lambda n: stats.t.ppf(0.975, max(1, n - 1)) if pd.notnull(n) and n > 1 else 1.96)
+            
+            df_res['date'] = pd.PeriodIndex(df_res['year_quarter'].str.replace('_', 'Q'), freq='Q').to_timestamp()
+            return df_res
 
-            df_b = df[df['dummy_D_type'] == 0]
-            df_d = df[df['dummy_D_type'] == 1]
+        df_b = df[df['dummy_D_type'] == 0]
+        df_d = df[df['dummy_D_type'] == 1]
+        
+        b_agg = get_agg_with_se(df_b, col_name)
+        if not b_agg.empty:
+            ax.plot(b_agg['date'], b_agg['phi'], label=f'B-Type (National Avg) $\hat{{\phi}}$', color='blue', linewidth=2)
+            ax.fill_between(b_agg['date'], b_agg['phi'] - b_agg['cv']*b_agg['se'], b_agg['phi'] + b_agg['cv']*b_agg['se'], color='blue', alpha=0.15)
             
-            b_agg = get_agg_with_se(df_b, col_name)
-            if not b_agg.empty:
-                ax.plot(b_agg['date'], b_agg['phi'], label=f'B-Type (National Avg) $\hat{{\phi}}$', color='blue', linewidth=2)
-                ax.fill_between(b_agg['date'], b_agg['phi'] - b_agg['cv']*b_agg['se'], b_agg['phi'] + b_agg['cv']*b_agg['se'], color='blue', alpha=0.15)
-                
-            if len(df_d) > 0:
-                df_d_active = df_d[df_d['market_size'] > 0]
-                d_agg = get_agg_with_se(df_d_active, col_name)
-                if not d_agg.empty:
-                    ax.plot(d_agg['date'], d_agg['phi'], label=f'D-Type (Digital/National) $\hat{{\phi}}$', color='red', linewidth=2)
-                    ax.fill_between(d_agg['date'], d_agg['phi'] - d_agg['cv']*d_agg['se'], d_agg['phi'] + d_agg['cv']*d_agg['se'], color='red', alpha=0.15)
-            
-            
-            ax.set_ylabel(r"National $\hat{\phi}_t$")
-            ax.set_ylim(bottom=0)
-            ax.grid()
-            ax.legend(loc='best')
-            fig.tight_layout()
-            plt.savefig(plot_out_dir / f"Robustness_{col_name.replace('phi_mt_', '')}.png", dpi=300)
-            plt.close(fig)
+        if len(df_d) > 0:
+            df_d_active = df_d[df_d['market_size'] > 0]
+            d_agg = get_agg_with_se(df_d_active, col_name)
+            if not d_agg.empty:
+                ax.plot(d_agg['date'], d_agg['phi'], label=f'D-Type (Digital/National) $\hat{{\phi}}$', color='red', linewidth=2)
+                ax.fill_between(d_agg['date'], d_agg['phi'] - d_agg['cv']*d_agg['se'], d_agg['phi'] + d_agg['cv']*d_agg['se'], color='red', alpha=0.15)
+        
+        ax.set_ylabel(r"National $\hat{\phi}_t$")
+        ax.set_ylim(bottom=0)
+        ax.grid()
+        ax.legend(loc='best')
+        fig.tight_layout()
+        plt.savefig(PLOTS_DIR / f"Robustness_{col_name.replace('phi_mt_', '')}.png", dpi=300)
+        plt.close(fig)
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Estimation 5: Sleepiness Robustness with Coop/State Controls")
+    parser = argparse.ArgumentParser(description="Estimation 5: Sleepiness Robustness with Coop/State Controls (Logistic)")
     parser.add_argument('--spec12-only', action='store_true', help='Only run spec 12 (Tech x IV_HausmanFull)')
-    parser.add_argument('--model-type', choices=['linear', 'logistic', 'both'], default='both', help='Type of NLLS optimization')
-    parser.add_argument('--alt', choices=['1', '2', 'both'], default='2', help='Alternative specifications for interactions (1, 2, or both)')
     args = parser.parse_args()
 
     pd.options.mode.chained_assignment = None
     
-    alts_to_run = [1, 2] if args.alt == 'both' else [int(args.alt)]
-    
-    for current_alt in alts_to_run:
-        run_pipeline_for_alt(current_alt, args.model_type, args.spec12_only)
-        
-    run_plotting_phase(alts_to_run, args.spec12_only)
-    print("\n--- Pipeline 6 Completed ---")
+    run_pipeline(args.spec12_only)
+    run_plotting_phase(args.spec12_only)
+    print("\n--- Pipeline 5 Completed ---")
 
 
 

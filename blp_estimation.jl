@@ -61,7 +61,7 @@ const _log_buf  = String[]
 const _log_lock = ReentrantLock()
 
 function input_filename(estim::Int, spec_id::Int)::String
-    prefix = estim == 5 ? "demand_5_alt2logistic" : "demand_$(estim)"
+    prefix = estim == 5 ? "demand_5_logistic" : "demand_$(estim)"
     return "$(prefix)_final_spec_$(spec_id).parquet"
 end
 
@@ -74,7 +74,7 @@ end
 # ==========================================================================
 # 0b. Paths (3-tuple: input, draws, output)
 # ==========================================================================
-function get_paths(is_hpc::Bool; local_dir::Union{String,Nothing}=nothing)
+function get_paths(is_hpc::Bool; local_dir=nothing)
     if is_hpc
         input_dir  = joinpath(@__DIR__, "..", "data", "input")
         draws_dir  = joinpath(@__DIR__, "..", "data", "output", "BLP_DRAWS")
@@ -728,7 +728,7 @@ function run_blp_estimation(estim::Int, spec_id::Int, args,
     println("  Estimation $estim — Specification $spec_id")
     println("=" ^ 60)
 
-    input_dir, _, _ = get_paths(args["hpc"]; local_dir=get(args, "local_dir", nothing))
+    input_dir, _, _ = get_paths(args["hpc"]; local_dir=args["local_dir"])
     fname = input_filename(estim, spec_id)
     path  = joinpath(input_dir, fname)
     isfile(path) || (println("  [!] Missing: $path"); return nothing)
@@ -1003,7 +1003,7 @@ function main()
     log_status("  R=$(args["R"]) | seed=$(args["seed"]) | HPC=$(args["hpc"])")
     log_status("  tol_inner=$(args["tol_inner"]) | tol_outer=$(args["tol_outer"]) | threads=$(Threads.nthreads())")
 
-    _, draws_dir, out_dir = get_paths(args["hpc"]; local_dir=get(args, "local_dir", nothing))
+    _, draws_dir, out_dir = get_paths(args["hpc"]; local_dir=args["local_dir"])
     mkpath(out_dir)
 
     # Load pre-computed draws once (shared across all specs and stages)
