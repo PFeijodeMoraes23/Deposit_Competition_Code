@@ -44,7 +44,7 @@ VAR_MAP = {
     # Will be formatted dynamically in code as $\Sigma_{\text{param}}$
     
     # Demographics (Pi mapping)
-    'gdp_per_capita': r'GDP per capita',
+    'gdp_per_capita': r'GDP \textit{per capita}',
     'fraction_65plus': r'Fraction 65+',
     'fraction_young': r'Fraction young',
     'pix_users_pf_per1000': r'Pix Users (per 1,000)',

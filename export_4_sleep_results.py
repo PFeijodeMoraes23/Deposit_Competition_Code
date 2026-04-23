@@ -80,6 +80,9 @@ def clean_name(v):
         'dummy_D_type_x_risk_free_qoq_lag': 'D-type $\\times$ Lagged Selic Rate',
         'dummy_D_type_x_fraction_65plus': 'D-type $\\times$ Fraction 65+',
         'dummy_D_type_x_fraction_young': 'D-type $\\times$ Fraction Young',
+        'v_hat': '$\\hat{v}$ (CF)',
+        'v_hat_2': '$\\hat{v}^2$ (CF)',
+        'v_hat_3': '$\\hat{v}^3$ (CF)',
     }
     if v in labels:
         return labels[v]
@@ -286,7 +289,7 @@ def build_second_stage_table(results_dict, G, G_star):
         return entry.get('second_stage') if isinstance(entry, dict) else None
 
     all_vars = [
-        'constant', 'post_2020', 'dummy_D_type', 'pix_exists',
+        'constant', 'dummy_D_type', 'pix_exists',
         'risk_free_qoq_lag', 'dummy_D_type_x_risk_free_qoq_lag',
         'gdp_per_capita', 'cadunico_families_per1000',
         'fraction_65plus', 'dummy_D_type_x_fraction_65plus',

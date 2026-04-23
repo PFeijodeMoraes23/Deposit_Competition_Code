@@ -215,7 +215,7 @@ def run_pooled_first_stage(df, spec_instruments, exogenous_controls):
 
 
 class NonLinearResults:
-    def __init__(self, params, bse, tvalues, pvalues, df_resid, params_native=None):
+    def __init__(self, params, bse, tvalues, pvalues, df_resid, params_native=None, nobs=None, rsquared=None, fvalue=None, f_pvalue=None, G_nominal=None):
         self.params = params
         self.bse = bse
         self.tvalues = tvalues
@@ -223,6 +223,11 @@ class NonLinearResults:
         self.df_resid = df_resid
         self.params_native = params_native if params_native is not None else params
         self.G_star = df_resid
+        self.nobs = nobs
+        self.rsquared = rsquared
+        self.fvalue = fvalue
+        self.f_pvalue = f_pvalue
+        self.G_nominal = G_nominal
 
 def nlls_objective(params, y_dm, X, Z, CF, entity_idx):
     import numpy as np
@@ -352,8 +357,22 @@ def run_pooled_second_stage(df, state_vars, has_cf=False):
     G_star = max(1.0, len(sizes) / (1 + (np.std(sizes)/np.mean(sizes))**2 if np.mean(sizes)>0 else 1))
     pvals = pd.Series(stats.t.sf(np.abs(tvals), df=G_star) * 2, index=idx)
     
+    nobs = len(y_dm)
+    G_nominal = len(sizes)
+    tss = np.sum((y_dm - np.mean(y_dm))**2)
+    rss = np.sum(res_lsq.fun**2)
+    rsquared = 1 - (rss / tss) if tss > 0 else np.nan
+    
+    k = len(res_lsq.x)
+    if tss > 0 and nobs > k and k > 1:
+        fvalue = ((tss - rss) / (k - 1)) / (rss / (nobs - k))
+        f_pvalue = stats.f.sf(fvalue, k - 1, nobs - k)
+    else:
+        fvalue, f_pvalue = np.nan, np.nan
+    
     ps_native = pd.Series(index=idx, data=res_lsq.x)
-    return NonLinearResults(ps, bs, tvals, pvals, G_star, params_native=ps_native)
+    return NonLinearResults(ps, bs, tvals, pvals, G_star, params_native=ps_native, 
+                            nobs=nobs, rsquared=rsquared, fvalue=fvalue, f_pvalue=f_pvalue, G_nominal=G_nominal)
 
 def exec_pooled_spec(args):
     df, iv_name, iv_cols, s_name, s_cols = args
