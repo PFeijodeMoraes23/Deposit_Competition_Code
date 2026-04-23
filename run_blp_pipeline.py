@@ -37,6 +37,8 @@ Recommended usage
   # Full sequence:
   python run_blp_pipeline.py --all --R 2000 --workers 4
 """
+from utils.venv_guard import ensure_project_venv
+ensure_project_venv(__file__)
 
 import subprocess
 import pathlib
@@ -44,6 +46,7 @@ import sys
 import shutil
 import argparse
 import concurrent.futures
+import os
 
 
 
@@ -126,7 +129,10 @@ def run_logit(args):
            f"--threads={args.workers}" if args.workers else "--threads=auto",
            str(LOGIT_SCRIPT)]
     print(f"\n=== Logit (non-RC) | CMD: {' '.join(cmd)} ===")
-    subprocess.run(cmd, check=True)
+    env = os.environ.copy()
+    env["PYTHON"] = PYTHON_EXE
+    env["JULIA_PYTHONCALL_EXE"] = PYTHON_EXE
+    subprocess.run(cmd, env=env, check=True)
 
 
 # ── Mode: draws ───────────────────────────────────────────────────────────────
@@ -146,7 +152,10 @@ def run_draws(args):
     if args.local_dir:
         cmd += ["--local-dir", args.local_dir]
     print(f"\n=== Draws | CMD: {' '.join(cmd)} ===")
-    subprocess.run(cmd, check=True)
+    env = os.environ.copy()
+    env["PYTHON"] = PYTHON_EXE
+    env["JULIA_PYTHONCALL_EXE"] = PYTHON_EXE
+    subprocess.run(cmd, env=env, check=True)
 
 
 # ── Mode: estimate ────────────────────────────────────────────────────────────
@@ -171,8 +180,11 @@ def run_estimation(est_id: int, jl_exe: str, args):
     if args.local_dir:
         cmd += ["--local-dir", args.local_dir]
     print(f"\n=== Estimation {est_id} | CMD: {' '.join(cmd)} ===")
+    env = os.environ.copy()
+    env["PYTHON"] = PYTHON_EXE
+    env["JULIA_PYTHONCALL_EXE"] = PYTHON_EXE
     try:
-        subprocess.run(cmd, check=True, text=True)
+        subprocess.run(cmd, env=env, check=True, text=True)
         return (est_id, True, "")
     except subprocess.CalledProcessError as e:
         return (est_id, False, f"Exit {e.returncode}")

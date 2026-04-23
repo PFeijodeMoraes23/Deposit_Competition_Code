@@ -5,6 +5,8 @@ Fetches historical HTML and PDF snapshots from the Internet Archive (Wayback Mac
 Uses an asynchronous queue and session pool to download the discovered URLs efficiently 
 while respecting rate limits, stripping IA toolbars from HTML for clean text parsing.
 """
+from utils.venv_guard import ensure_project_venv
+ensure_project_venv(__file__)
 import json
 import asyncio
 import aiohttp

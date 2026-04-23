@@ -3,6 +3,8 @@ Automated LaTeX Table generation for BLP Demand Estimation outputs.
 Compiles outputs from all estimation modules and prints significance-starred
 results inside tables formatted to the user's custom LaTeX preamble.
 """
+from utils.venv_guard import ensure_project_venv
+ensure_project_venv(__file__)
 import pathlib
 import json
 import argparse

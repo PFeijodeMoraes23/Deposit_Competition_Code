@@ -5,6 +5,8 @@ Interrogates the Wayback Machine CDX API to fetch URLs with snapshots containing
 relevant keywords or PDF content, ensuring we only query valid data points 
 between banks' first operating year and the present.
 """
+from utils.venv_guard import ensure_project_venv
+ensure_project_venv(__file__)
 import json
 import requests
 import time

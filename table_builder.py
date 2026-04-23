@@ -1,3 +1,6 @@
+
+from utils.venv_guard import ensure_project_venv
+ensure_project_venv(__file__)
 import pickle
 import json
 from pathlib import Path

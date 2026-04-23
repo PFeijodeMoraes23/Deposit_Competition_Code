@@ -21,6 +21,8 @@ This script sequentially runs the following steps:
   6. export_results.py             (Export 1st/2nd Stage Summaries across all estimators)
   7. estimation_demand_1_prep.py   (Universal Demand Prep Orchestrator & Panel Serialization)
 """
+from utils.venv_guard import ensure_project_venv
+ensure_project_venv(__file__)
 import argparse
 import subprocess
 import sys

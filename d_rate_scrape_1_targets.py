@@ -4,6 +4,8 @@ d_rate_scrape_1_targets.py
 Initializes the target list for historical Internet Archive deposit rate scraping.
 Reads the D-Type summary file and constructs domains to be queued up for scraping.
 """
+from utils.venv_guard import ensure_project_venv
+ensure_project_venv(__file__)
 import pandas as pd
 import json
 from pathlib import Path

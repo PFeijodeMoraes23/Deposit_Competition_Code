@@ -15,6 +15,8 @@ options:
                         Number of policy violations (tilde sigma) to draw.
   --beta BETA           Discount factor (beta) - typically 0.90 or 0.95.
 """
+from utils.venv_guard import ensure_project_venv
+ensure_project_venv(__file__)
 import argparse
 import pickle
 import numpy as np

@@ -17,6 +17,8 @@ Usage
   python run_local_pipeline.py --from 2           # restart data pipeline from stage 2
   python run_local_pipeline.py --only 3           # run only stage 3 of data pipeline
 """
+from utils.venv_guard import ensure_project_venv
+ensure_project_venv(__file__)
 
 import subprocess
 import sys

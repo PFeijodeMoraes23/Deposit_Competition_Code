@@ -53,6 +53,8 @@ options:
                naming. The policy function estimation itself is spec-
                invariant.
 """
+from utils.venv_guard import ensure_project_venv
+ensure_project_venv(__file__)
 
 import sys
 import os

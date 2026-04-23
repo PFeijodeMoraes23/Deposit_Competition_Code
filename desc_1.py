@@ -152,32 +152,43 @@ def main():
     sum_reg = generate_summary(df_b, ['region'], vars_to_summarize, args.weight_col)
     sum_reg_yr = generate_summary(df_b, ['region', 'year'], vars_to_summarize, args.weight_col)
 
+    DRAFTS_DIR = Path(r"C:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\Drafts\Deposit Competition")
+    DRAFTS_DIR.mkdir(parents=True, exist_ok=True)
+
     # Batch save output forms
     def save_output(res_df, name):
         out_path = OUTPUT_DIR / f"{name}{weight_str}.csv"
         res_df.to_csv(out_path, index=False)
         # Also save transposed version as LaTeX for easy table copy/pasting
         tex_path = OUTPUT_DIR / f"{name}{weight_str}.tex"
-        with open(tex_path, 'w') as f:
-            try:
-                transposed = res_df.set_index('Group').T
-                new_idx = []
-                for idx in transposed.index:
-                    if idx == 'N_obs':
-                        new_idx.append(idx)
-                        continue
-                    
-                    base_var = idx.replace('_Mean', '').replace('_SD', '')
-                    unit = UNIT_MAP.get(base_var, '')
-                    if unit:
-                        new_idx.append(f"{idx} ({unit})".replace('_', '\\_'))
-                    else:
-                        new_idx.append(idx.replace('_', '\\_'))
+        drafts_tex_path = DRAFTS_DIR / f"{name}{weight_str}.tex"
+        try:
+            transposed = res_df.set_index('Group').T
+            new_idx = []
+            for idx in transposed.index:
+                if idx == 'N_obs':
+                    new_idx.append(idx)
+                    continue
                 
-                transposed.index = new_idx
-                f.write(transposed.to_latex(float_format="%.3f"))
-            except Exception as e:
-                print(f"Failed to generate latex: {e}")
+                base_var = idx.replace('_Mean', '').replace('_SD', '')
+                unit = UNIT_MAP.get(base_var, '')
+                if unit:
+                    new_idx.append(f"{idx} ({unit})".replace('_', '\\_'))
+                else:
+                    new_idx.append(idx.replace('_', '\\_'))
+            
+            transposed.index = new_idx
+            
+            # Format as longtable with setstretch 1.0 to match other fragments
+            latex_str = transposed.to_latex(longtable=True, float_format="%.3f")
+            latex_str = "\\setstretch{1.0}\n" + latex_str
+            
+            with open(tex_path, 'w', encoding='utf-8') as f:
+                f.write(latex_str)
+            with open(drafts_tex_path, 'w', encoding='utf-8') as f:
+                f.write(latex_str)
+        except Exception as e:
+            print(f"Failed to generate latex: {e}")
 
     save_output(sum_nat, "Summary_National")
     save_output(sum_nat_yr, "Summary_National_by_Year")

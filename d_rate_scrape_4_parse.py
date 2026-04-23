@@ -5,6 +5,8 @@ Parses downloaded archival HTML and PDF files to extract historical deposit yiel
 Relies on NLP heuristics matching common Brazilian CDI and Selic rate phrasing,
 and outputs candidate rates with surrounding context for manual validation.
 """
+from utils.venv_guard import ensure_project_venv
+ensure_project_venv(__file__)
 import os
 import re
 import json
