@@ -102,8 +102,8 @@ def build_first_stage_table(results_dict, G, G_star):
     iv_nums_0 = [(il, fs_spec_numbers[(p0, ik)]) for ik, il in ivs]
 
     lines = [
-        r"\begin{spacing}{1.0}",
-        r"\begin{longtable}{lccc}",
+        r"\setstretch{1.0}",
+        r"\begin{longtable}[c]{lccc}",
         rf"    \caption{{{caption}}}\label{{{label}}} \\",
         r"    \toprule",
         rf"    \multicolumn{{{multispan}}}{{l}}{{\textbf{{Panel {l0}: {panel_labels[p0]}}}}} \\",
@@ -113,7 +113,7 @@ def build_first_stage_table(results_dict, G, G_star):
         r"    \midrule",
         r"    \endfirsthead",
         "",
-        rf"    \caption[]{{{caption} (Continued)}} \\",
+        rf"    \multicolumn{{{multispan}}}{{c}}{{{{\bfseries Table \thetable\ continued from previous page}}}} \\",
         r"    \toprule",
         "    & " + " & ".join(il for il, _ in iv_nums_0) + r" \\",
         r"    \midrule",
@@ -161,7 +161,7 @@ def build_first_stage_table(results_dict, G, G_star):
             v for ik, _ in ivs
             for res in [_get_res(ik, panel)] if res is not None
             for v in res.params.index
-            if v not in seen and v != 'const'
+            if v not in seen and v not in ('const', 'constant', 'post_2020')
         ]
         vs_panel = all_vars_fs + list(dict.fromkeys(extra))
 
@@ -208,7 +208,7 @@ def build_first_stage_table(results_dict, G, G_star):
             r"    \bottomrule",
         ]
 
-    lines += [r"\end{longtable}", r"\end{spacing}"]
+    lines += [r"\end{longtable}"]
     return "\n".join(lines)
 
 
@@ -265,7 +265,7 @@ def build_second_stage_table(results_dict, G, G_star):
     est_nums_0 = [(el, ss_spec_numbers[(p0, ek)]) for ek, el in estimators]
 
     lines = [
-        r"\begin{spacing}{1.0}",
+        r"\setstretch{1.0}",
         r"\begin{longtable}{lcccc}",
         rf"    \caption{{{caption}}}\label{{{label}}} \\",
         r"    \toprule",
@@ -276,7 +276,7 @@ def build_second_stage_table(results_dict, G, G_star):
         r"    \midrule",
         r"    \endfirsthead",
         "",
-        rf"    \caption[]{{{caption} (Continued)}} \\",
+        rf"    \multicolumn{{{multispan}}}{{c}}{{{{\bfseries Table \thetable\ continued from previous page}}}} \\",
         r"    \toprule",
         "     & " + " & ".join(el for el, _ in est_nums_0) + r" \\",
         r"    \midrule",
@@ -353,7 +353,7 @@ def build_second_stage_table(results_dict, G, G_star):
             r"    \bottomrule",
         ]
 
-    lines += [r"\end{longtable}", r"\end{spacing}"]
+    lines += [r"\end{longtable}"]
     return "\n".join(lines)
 
 def build_cluster_table(cluster_data):
@@ -425,14 +425,14 @@ def main():
 
     os.makedirs(OUT_DIR, exist_ok=True)
 
-    fs_path = os.path.join(OUT_DIR, "est1_fs_table.tex")
-    ss_path = os.path.join(OUT_DIR, "est1_ss_table.tex")
+    fs_path = os.path.join(OUT_DIR, "est1_first_stage_table.tex")
+    ss_path = os.path.join(OUT_DIR, "est1_second_stage_table.tex")
     with open(fs_path, 'w', encoding='utf-8') as fh:
         fh.write(fs_frag + "\n")
     with open(ss_path, 'w', encoding='utf-8') as fh:
         fh.write(ss_frag + "\n")
-    shutil.copy(fs_path, _DRAFTS_DIR / "est1_fs_table.tex")
-    shutil.copy(ss_path, _DRAFTS_DIR / "est1_ss_table.tex")
+    shutil.copy(fs_path, _DRAFTS_DIR / "est1_first_stage_table.tex")
+    shutil.copy(ss_path, _DRAFTS_DIR / "est1_second_stage_table.tex")
     print(f" - Fragments written and copied to {_DRAFTS_DIR}")
 
     tex_doc = (
@@ -445,9 +445,9 @@ def main():
         + r"\section*{Cluster Diagnostics}" + "\n"
         + cluster_table_tex + "\n\n"
         + r"\section*{First Stage}" + "\n"
-        + r"\input{est1_fs_table.tex}" + "\n\n"
+        + r"\input{est1_first_stage_table.tex}" + "\n\n"
         + r"\section*{Second Stage}" + "\n"
-        + r"\input{est1_ss_table.tex}" + "\n"
+        + r"\input{est1_second_stage_table.tex}" + "\n"
         + r"\end{document}" + "\n"
     )
 

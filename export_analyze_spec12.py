@@ -84,7 +84,7 @@ def build_latex_table(results_dict, order_keys, target_vars, out_path, title="")
     tex.append(r"\renewcommand{\arraystretch}{0.75}")
     
     col_def = "l" + "c" * len(order_keys)
-    tex.append(r"\begin{longtable}{" + col_def + "}")
+    tex.append(r"\begin{longtable}[c]{" + col_def + "}")
     tex.append(r"\caption{" + title + r"} \\")
     
     # First Header
