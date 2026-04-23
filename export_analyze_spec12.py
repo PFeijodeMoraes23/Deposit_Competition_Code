@@ -89,7 +89,13 @@ def build_latex_table(results_dict, order_keys, target_vars, out_path, title="")
     
     # First Header
     tex.append(r"\toprule")
-    headers = ["Variable"] + [k for k in order_keys]
+    rename_map = {
+        '1 B firms': 'Local Only',
+        '3 Pooled': 'Pooled B + D',
+        '4 Pooled Logistic': '(+) Logistic',
+        '5 Dummies Logistic': '(+) Dummies'
+    }
+    headers = ["Variable"] + [rename_map.get(k, k) for k in order_keys]
     tex.append(" & ".join(headers) + r" \\")
     tex.append(r"\midrule")
     tex.append(r"\endfirsthead")
@@ -318,6 +324,9 @@ def main():
     out_dir.mkdir(parents=True, exist_ok=True)
     
     order = list(mapping.keys())
+    if '5 Dummies Linear' in order:
+        order.remove('5 Dummies Linear')
+        
     target_vars = [
         'nr_lagged_dep', 'interaction_gdp_per_capita', 'interaction_cadunico_families_per1000',
         'interaction_fraction_65plus', 'interaction_fraction_young', 'interaction_risk_free_qoq_lag',
@@ -344,7 +353,13 @@ def main():
     base_colors = plt.rcParams['axes.prop_cycle'].by_key()['color']
     color_map = {lbl: base_colors[i % len(base_colors)] for i, lbl in enumerate(phi_data.keys())}
     
-    label_rename_map = {}
+    label_rename_map = {
+        '1 B firms': 'Local Only',
+        '3 Pooled': 'Pooled B + D',
+        '4 Pooled Logistic': '(+) Logistic',
+        '5 Dummies Linear': '(+) Dummies Linear',
+        '5 Dummies Logistic': '(+) Dummies',
+    }
     
     for label, df_phi in phi_data.items():
         if 'year_quarter' not in df_phi.columns:
@@ -459,10 +474,10 @@ def main():
     # ---- 4) Subset plot: 1 B firms, 3 Pooled, 4 Pooled Logistic, 5 Dummies Logistic ----
     _SUBSET_LABELS = {'1 B firms', '3 Pooled', '4 Pooled Logistic', '5 Dummies Logistic'}
     _SUBSET_RENAME = {
-        '1 B firms': 'B Data',
-        '3 Pooled': 'B + D Pooled',
-        '4 Pooled Logistic': 'Pooled Logistic',
-        '5 Dummies Logistic': 'Pooled + Dummy Logistic',
+        '1 B firms': 'Local Only',
+        '3 Pooled': 'Pooled B + D',
+        '4 Pooled Logistic': '(+) Logistic',
+        '5 Dummies Logistic': '(+) Dummies',
     }
     phi_data_sub = {k: v for k, v in phi_data.items() if k in _SUBSET_LABELS}
 

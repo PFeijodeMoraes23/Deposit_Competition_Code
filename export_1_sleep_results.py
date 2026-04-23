@@ -83,7 +83,7 @@ def build_first_stage_table(results_dict, G, G_star):
         ('IV_HausmanFull', 'Hausman'),
     ]
     multispan = 4
-    caption = "First Stage Estimation (Control Function)"
+    caption = "Local Data Only - First Stage Estimation (Control Function)"
     label = "tab:first_stage_control_function"
     notes = (
         r"\scriptsize \textit{Notes:} Standard errors clustered at the conglomerate level "
@@ -245,7 +245,7 @@ def build_second_stage_table(results_dict, G, G_star):
         'pix_users_pf_per1000', 'connections_per100', 'branches_per1000',
     ]
     multispan = 5
-    caption = "Second Stage Estimation"
+    caption = "Local Data Only - Second Stage Estimation"
     label = "tab:sleep_specifications_results_2nd_stage"
     notes = (
         r"\scriptsize \textit{Notes:} Standard errors clustered at the conglomerate level "

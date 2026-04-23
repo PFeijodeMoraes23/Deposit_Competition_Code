@@ -25,7 +25,7 @@ mkdir -p "${LOG_DIR}"
 
 # ── Resolve packages for Julia 1.10 ─────────────────────────────────────────
 echo "Resolving Julia packages: $(date)"
-julia --project="${PROJECT_DIR}" -e "using Pkg; Pkg.resolve(); Pkg.instantiate()"
+julia --project="${PROJECT_DIR}" -e "using Pkg; Pkg.instantiate()"
 
 echo "======================================"
 echo " BLP Draws — blp_draws.jl"

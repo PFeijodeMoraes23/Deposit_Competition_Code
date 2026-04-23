@@ -100,7 +100,7 @@ def build_first_stage_table(results_dict, G, G_star):
         ('IV_HausmanFull', 'Hausman'),
     ]
     multispan = 4
-    caption = r"First Stage Estimation --- Est.\ 3 (Pooled B+D)"
+    caption = r"Pooled B + D - First Stage Estimation"
     label = "tab:est3_first_stage"
     notes = (
         r"\scriptsize \textit{Notes:} Standard errors clustered at the conglomerate level "
@@ -259,7 +259,7 @@ def build_second_stage_table(results_dict, G, G_star):
         ('IV_HausmanFull', 'Hausman'),
     ]
     multispan = 5
-    caption = r"Second Stage Estimation --- Est.\ 3 (Pooled B+D)"
+    caption = r"Pooled B + D - Second Stage Estimation"
     label = "tab:est3_second_stage"
     notes = (
         r"\scriptsize \textit{Notes:} Standard errors clustered at the conglomerate level "
