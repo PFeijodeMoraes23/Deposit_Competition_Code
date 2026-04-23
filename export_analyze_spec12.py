@@ -175,32 +175,37 @@ def build_latex_table(results_dict, order_keys, target_vars, out_path, title="")
         nobs = getattr(res, 'nobs', getattr(res, 'n_obs', np.nan))
         r2 = getattr(res, 'rsquared', np.nan)
         fstat = getattr(res, 'fvalue', np.nan)
-        
+        fpval = getattr(res, 'f_pvalue', np.nan)
+
+        # Map NLLS/Logistic columns to their linear counterpart for fallback stats
+        _nlls_fallback = {
+            '4 Pooled Logistic': '3 Pooled',
+            '5 Dummies Logistic': '5 Dummies Linear',
+        }
+
         # If NLLS/Logistic, copy the missing metrics from the counterpart Linear model
         if pd.isna(nobs) or pd.isna(r2):
-            fallback_col = None
-            if col == '5 Pooled Logistic': fallback_col = '4 Pooled'
-            elif "Logistic" in col: fallback_col = col.replace("Logistic", "Linear")
-            
+            fallback_col = _nlls_fallback.get(col)
             if fallback_col and fallback_col in results_dict:
                 f_res = results_dict[fallback_col]
                 if f_res is not None:
                     if pd.isna(nobs): nobs = getattr(f_res, 'nobs', getattr(f_res, 'n_obs', np.nan))
                     if pd.isna(r2): r2 = getattr(f_res, 'rsquared', np.nan)
                     if pd.isna(fstat): fstat = getattr(f_res, 'fvalue', np.nan)
+                    if pd.isna(fpval): fpval = getattr(f_res, 'f_pvalue', np.nan)
 
         # clusters
         clusters = "-"
-        # Fetch from itself first
+        # Fetch from itself first (linear statsmodels results)
         if hasattr(res, 'cov_kwds') and res.cov_kwds.get('groups', None) is not None:
             groups = res.cov_kwds.get('groups', None)
             clusters = str(groups.nunique() if hasattr(groups, 'nunique') else len(set(groups)))
+        elif hasattr(res, 'G_nominal') and not pd.isna(getattr(res, 'G_nominal', np.nan)):
+            # NLLS results store G_nominal directly
+            clusters = str(int(res.G_nominal))
         else:
-            # Fallback to linear
-            fallback_col = None
-            if col == '5 Pooled Logistic': fallback_col = '4 Pooled'
-            elif "Logistic" in col: fallback_col = col.replace("Logistic", "Linear")
-            
+            # Fallback to linear counterpart
+            fallback_col = _nlls_fallback.get(col)
             if fallback_col and fallback_col in results_dict:
                 f_res = results_dict[fallback_col]
                 if f_res is not None and hasattr(f_res, 'cov_kwds') and f_res.cov_kwds.get('groups', None) is not None:
@@ -210,9 +215,10 @@ def build_latex_table(results_dict, order_keys, target_vars, out_path, title="")
         # effective clusters
         g_star = getattr(res, 'G_star', getattr(res, 'df_resid', np.nan))
         
+        fstat_str = f"{fstat:.3f}{get_stars(fpval)}" if pd.notna(fstat) else "-"
         row_nobs.append(f"{nobs:,.0f}" if pd.notna(nobs) else "-")
         row_r2.append(f"{r2:.3f}" if pd.notna(r2) else "-")
-        row_fstat.append(f"{fstat:.3f}" if pd.notna(fstat) else "-")
+        row_fstat.append(fstat_str)
         row_cluster.append(clusters)
         row_eff_cluster.append(f"{g_star:.1f}" if pd.notna(g_star) else "-")
         
@@ -449,6 +455,101 @@ def main():
     plt.close(fig)
     shutil.copy(plot_path, _DRAFTS_DIR / "est1-5_spec12_phi_t_comparison.png")
     print(f"Exported combined plot to {plot_path} and copied to {_DRAFTS_DIR}")
+
+    # ---- 4) Subset plot: 1 B firms, 3 Pooled, 4 Pooled Logistic, 5 Dummies Logistic ----
+    _SUBSET_LABELS = {'1 B firms', '3 Pooled', '4 Pooled Logistic', '5 Dummies Logistic'}
+    _SUBSET_RENAME = {
+        '1 B firms': 'B Data',
+        '3 Pooled': 'B + D Pooled',
+        '4 Pooled Logistic': 'Pooled Logistic',
+        '5 Dummies Logistic': 'Pooled + Dummy Logistic',
+    }
+    phi_data_sub = {k: v for k, v in phi_data.items() if k in _SUBSET_LABELS}
+
+    fig2, axes2 = plt.subplots(1, 2, figsize=(16, 6), sharey=True)
+
+    for label, df_phi in phi_data_sub.items():
+        if 'year_quarter' not in df_phi.columns:
+            continue
+
+        if 'dummy_D_type' in df_phi.columns:
+            df_b = df_phi[df_phi['dummy_D_type'] == 0]
+            df_d = df_phi[df_phi['dummy_D_type'] == 1]
+        elif 'is_B' in df_phi.columns:
+            df_b = df_phi[df_phi['is_B'] == 1]
+            df_d = df_phi[df_phi['is_B'] == 0]
+        else:
+            df_b = df_phi
+            df_d = pd.DataFrame(columns=df_phi.columns)
+
+        def calc_agg2(d_sub, col):
+            if len(d_sub) == 0: return pd.Series(dtype=float), pd.Series(dtype=float)
+            w = d_sub.get('market_size', pd.Series(1.0, index=d_sub.index))
+            num = (d_sub[col] * w).groupby(d_sub['year_quarter']).sum()
+            den = w.groupby(d_sub['year_quarter']).sum()
+            mean = num / den
+            if len(d_sub) > 1:
+                merged = d_sub[['year_quarter', col]].copy()
+                merged['w'] = w
+                merged['mean'] = merged['year_quarter'].map(mean)
+                var_num = (merged['w'] * (merged[col] - merged['mean'])**2).groupby(merged['year_quarter']).sum()
+                v1 = merged['w'].groupby(merged['year_quarter']).sum()
+                v2 = (merged['w']**2).groupby(merged['year_quarter']).sum()
+                var = var_num / (v1 - (v2 / v1))
+                n = d_sub.groupby('year_quarter').size()
+                se = np.sqrt(var / n)
+            else:
+                se = pd.Series(0.0, index=mean.index)
+            return mean, se
+
+        if "Logistic" in label:
+            possible_cols = ["phi_mt_IV_HausmanFull_x_Tech_x_logistic", "phi_mt_IV_HausmanFull_x_Tech_logistic"]
+        elif "Linear" in label:
+            possible_cols = ["phi_mt_IV_HausmanFull_x_Tech_x_linear", "phi_mt_IV_HausmanFull_x_Tech_linear"]
+        else:
+            possible_cols = ["phi_mt_IV_HausmanFull_x_Tech"]
+        possible_cols += ["phi_mt_IV_HausmanFull_x_Tech", "phi_mt_Tech"]
+
+        tar_col = possible_cols[0]
+        for p_col in possible_cols:
+            if p_col in df_phi.columns:
+                tar_col = p_col
+                break
+
+        c = color_map[label]
+        plot_label = _SUBSET_RENAME.get(label, label)
+
+        if tar_col in df_phi.columns:
+            agg_b, se_b = calc_agg2(df_b, tar_col)
+            agg_d, se_d = calc_agg2(df_d, tar_col)
+
+            if not agg_b.empty:
+                idx_dates = pd.PeriodIndex(agg_b.index.str.replace('_', 'Q'), freq='Q').to_timestamp()
+                axes2[0].plot(idx_dates, agg_b.values, label=plot_label, color=c, linewidth=2)
+                axes2[0].fill_between(idx_dates, agg_b.values - (1.96*se_b.values), agg_b.values + (1.96*se_b.values), color=c, alpha=0.2)
+
+            if not agg_d.empty:
+                idx_dates = pd.PeriodIndex(agg_d.index.str.replace('_', 'Q'), freq='Q').to_timestamp()
+                axes2[1].plot(idx_dates, agg_d.values, label=plot_label, color=c, linewidth=2)
+                axes2[1].fill_between(idx_dates, agg_d.values - (1.96*se_d.values), agg_d.values + (1.96*se_d.values), color=c, alpha=0.2)
+
+    axes2[0].set_title("B-Type Firms (Spec 12, subset)", fontsize=14)
+    axes2[0].set_ylabel(r"National $\hat{\phi}_t$")
+    axes2[0].set_ylim(bottom=0)
+    axes2[0].grid()
+    axes2[0].legend(loc='best')
+
+    axes2[1].set_title("D-Type Firms (Spec 12, subset)", fontsize=14)
+    axes2[1].set_ylim(bottom=0)
+    axes2[1].grid()
+    axes2[1].legend(loc='best')
+
+    fig2.tight_layout()
+    plot_path2 = out_dir / "est1345_spec12_phi_t_comparison.png"
+    plt.savefig(plot_path2, dpi=300)
+    plt.close(fig2)
+    shutil.copy(plot_path2, _DRAFTS_DIR / "est1345_spec12_phi_t_comparison.png")
+    print(f"Exported subset plot to {plot_path2} and copied to {_DRAFTS_DIR}")
 
 if __name__ == "__main__":
     main()
