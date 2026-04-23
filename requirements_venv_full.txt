@@ -1,16 +1,27 @@
-aiohttp>=3.9
-beautifulsoup4>=4.12
-geobr>=1.8
-geopandas>=0.14
-linearmodels>=5.4
-lxml>=5.2
-matplotlib>=3.8
-numpy>=1.26
-pandas>=2.2
-pdfplumber>=0.11
-pyarrow>=15.0
-requests>=2.31
-scikit-learn>=1.4
-scipy>=1.11
-statsmodels>=0.14
-urllib3>=2.2
+# ── Data collection & web scraping ─────────────────────────────────────────
+requests>=2.31          # synchronous HTTP for API calls and file downloads
+urllib3>=2.2            # low-level HTTP; used for BCB/IBGE direct downloads
+aiohttp>=3.9            # async HTTP for high-throughput Internet Archive fetching (d_rate_scrape_3_fetch.py)
+beautifulsoup4>=4.12    # HTML parsing for deposit-rate page scraping
+lxml>=5.2               # fast XML/HTML backend for BeautifulSoup
+pdfplumber>=0.11        # PDF text extraction for archival deposit-rate parsing (d_rate_scrape_4_parse.py)
+
+# ── Data manipulation & panel construction ──────────────────────────────────
+pandas>=2.2             # core panel data manipulation used in every pipeline script
+numpy>=1.26             # numerical arrays; used in estimation and panel scripts
+pyarrow>=15.0           # Parquet I/O (panel_8_demographics_sigma.py and BLP prep)
+
+# ── Econometric estimation ───────────────────────────────────────────────────
+statsmodels>=0.14       # OLS and panel regression (estimation_*_sleep.py, BBL)
+linearmodels>=5.4       # panel OLS with two-way FE and clustered SEs
+scipy>=1.11             # statistical utilities, NLLS optimisation, Halton draws
+
+# ── Geographic data ──────────────────────────────────────────────────────────
+geobr>=1.8              # Brazilian geographic boundaries and MCA shapefiles
+geopandas>=0.14         # spatial join and MCA boundary processing
+
+# ── Machine learning & dimensionality reduction ─────────────────────────────
+scikit-learn>=1.4       # PCA for LOO instrument construction (panel_7_instruments.py)
+
+# ── Visualisation ────────────────────────────────────────────────────────────
+matplotlib>=3.8         # diagnostic and results plots (export_analyze_spec12.py)
