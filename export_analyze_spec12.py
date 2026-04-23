@@ -67,7 +67,7 @@ def nice_var_name(var):
     }
     return rename_dict.get(var, var.replace("_", r"\_").replace("interaction\_", ""))
 
-def build_latex_table(results_dict, order_keys, target_vars, out_path, title=""):
+def build_latex_table(results_dict, order_keys, target_vars, out_path, title="", label=""):
     tex = []
     tex.append(r"\documentclass{article}")
     tex.append(r"\usepackage{graphicx} % Required for inserting images")
@@ -85,7 +85,7 @@ def build_latex_table(results_dict, order_keys, target_vars, out_path, title="")
     
     col_def = "l" + "c" * len(order_keys)
     tex.append(r"\begin{longtable}[c]{" + col_def + "}")
-    tex.append(r"\caption{" + title + r"} \\")
+    tex.append(r"\caption{" + title + r"}\label{" + label + r"} \\")
     
     # First Header
     tex.append(r"\toprule")
@@ -335,8 +335,8 @@ def main():
         'interaction_cooperative', 'dummy_D_type'
     ]
     
-    build_latex_table(stage1_res, order, target_vars, out_dir / "est1-5_spec12_stage1_comparison.tex", title="First Stage IV Results across Specifications")
-    build_latex_table(stage2_res, order, target_vars, out_dir / "est1-5_spec12_stage2_comparison.tex", title="Second Stage Results across Specifications")
+    build_latex_table(stage1_res, order, target_vars, out_dir / "est1-5_spec12_stage1_comparison.tex", title="First Stage IV Results across Specifications", label="tab:spec12_stage1_comparison")
+    build_latex_table(stage2_res, order, target_vars, out_dir / "est1-5_spec12_stage2_comparison.tex", title="Second Stage Results across Specifications", label="tab:spec12_stage2_comparison")
     shutil.copy(out_dir / "est1-5_spec12_stage1_comparison.tex", _DRAFTS_DIR / "est1-5_spec12_stage1_comparison.tex")
     shutil.copy(out_dir / "est1-5_spec12_stage2_comparison.tex", _DRAFTS_DIR / "est1-5_spec12_stage2_comparison.tex")
     print(f"Exported LaTeX Tables to {out_dir} and copied to {_DRAFTS_DIR}")

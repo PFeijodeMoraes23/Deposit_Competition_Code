@@ -180,7 +180,9 @@ def main():
             transposed.index = new_idx
             
             # Format as longtable with setstretch 1.0 to match other fragments
-            latex_str = transposed.to_latex(longtable=True, float_format="%.3f")
+            caption_str = f"Descriptive Statistics: {name.replace('_', ' ')}{weight_str.replace('_', ' ')}"
+            label_str = f"tab:{name}{weight_str}"
+            latex_str = transposed.to_latex(longtable=True, float_format="%.3f", caption=caption_str, label=label_str)
             latex_str = "\\setstretch{1.0}\n" + latex_str
             
             with open(tex_path, 'w', encoding='utf-8') as f:
