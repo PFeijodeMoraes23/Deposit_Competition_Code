@@ -42,13 +42,13 @@ def clean_name(v):
     v = str(v).replace('interaction_', '')
     labels = {
         'nr_lagged_dep': 'Lagged Deposits',
-        'gdp_per_capita': 'GDP per Capita (10k R\\$)',
+        'gdp_per_capita': 'GDP \\textit{per capita} (10k R\\$)',
         'cadunico_families_per1000': 'CadUnico Families (100s per 1k)',
         'fraction_65plus': 'Fraction 65+',
         'fraction_young': 'Fraction Young',
         'risk_free_qoq_lag': 'Lagged Selic Rate',
         'pix_users_pf_per1000': 'Pix Users (100s per 1k)',
-        'connections_per100': 'Broadband Connections (per capita)',
+        'connections_per100': 'Broadband Connections (\\textit{per capita})',
         'branches_per1000': 'Branches per 1k',
         'post_2020': 'Post 2020 Dummy',
         'const': 'Constant',
@@ -93,7 +93,7 @@ def build_first_stage_table(results_dict, G, G_star):
     notes = (
         r"\scriptsize \textit{Notes:} Standard errors clustered at the conglomerate level "
         r"are reported in parentheses, correcting for group size imbalance following "
-        r"Imbens \& Kolesár (2016) and Carter et al.\ (2017). "
+        r"\textcite{imbens2016robust} and \textcite{carter2017asymptotic}. "
         r"Significance levels: *** $p<0.01$, ** $p<0.05$, * $p<0.1$."
     )
 
@@ -159,14 +159,7 @@ def build_first_stage_table(results_dict, G, G_star):
             'leave_one_out_mean_spread',
         ]
         # include any unexpected variables not in the fixed list
-        seen = set(all_vars_fs)
-        extra = [
-            v for ik, _ in ivs
-            for res in [_get_res(ik, panel)] if res is not None
-            for v in res.params.index
-            if v not in seen and v not in ('const', 'constant', 'post_2020')
-        ]
-        vs_panel = all_vars_fs + list(dict.fromkeys(extra))
+        vs_panel = all_vars_fs
 
         for var in vs_panel:
             coef_strs, se_strs, has_val = [], [], False
@@ -255,9 +248,8 @@ def build_second_stage_table(results_dict, G, G_star):
     notes = (
         r"\scriptsize \textit{Notes:} Standard errors clustered at the conglomerate level "
         r"are reported in parentheses, correcting for group size imbalance following "
-        r"Imbens \& Kolesár (2016) and Carter et al.\ (2017). "
-        r"Significance levels: *** $p<0.01$, ** $p<0.05$, * $p<0.1$. "
-        r"See companion document for first stage results."
+        r"\textcite{imbens2016robust} and \textcite{carter2017asymptotic}. "
+        r"Significance levels: *** $p<0.01$, ** $p<0.05$, * $p<0.1$."
     )
 
     def _get_res(ek, p):
@@ -317,7 +309,9 @@ def build_second_stage_table(results_dict, G, G_star):
             for ek, _ in estimators:
                 res = _get_res(ek, panel)
                 var = vshort
-                if res is not None and var not in res.params and f"interaction_{var}" in res.params:
+                if vshort in ('const', 'constant') and res is not None and 'nr_lagged_dep' in res.params:
+                    var = 'nr_lagged_dep'
+                elif res is not None and var not in res.params and f"interaction_{var}" in res.params:
                     var = f"interaction_{var}"
                 if res is not None and var in res.params:
                     has_val = True

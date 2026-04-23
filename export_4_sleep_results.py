@@ -56,13 +56,13 @@ def clean_name(v):
     v = str(v).replace('interaction_', '')
     labels = {
         'nr_lagged_dep': 'Lagged Deposits',
-        'gdp_per_capita': 'GDP per Capita (10k R\\$)',
+        'gdp_per_capita': 'GDP \\textit{per capita} (10k R\\$)',
         'cadunico_families_per1000': 'CadUnico Families (100s per 1k)',
         'fraction_65plus': 'Fraction 65+',
         'fraction_young': 'Fraction Young',
         'risk_free_qoq_lag': 'Lagged Selic Rate',
         'pix_users_pf_per1000': 'Pix Users (100s per 1k)',
-        'connections_per100': 'Broadband Connections (per capita)',
+        'connections_per100': 'Broadband Connections (\\textit{per capita})',
         'branches_per1000': 'Branches per 1k',
         'post_2020': 'Post 2020 Dummy',
         'const': 'Constant',
@@ -123,7 +123,7 @@ def build_first_stage_table(results_dict, G, G_star):
     notes = (
         r"\scriptsize \textit{Notes:} Standard errors clustered at the conglomerate level "
         r"are reported in parentheses, correcting for group size imbalance following "
-        r"Imbens \& Kolesár (2016) and Carter et al.\ (2017). "
+        r"\textcite{imbens2016robust} and \textcite{carter2017asymptotic}. "
         r"Significance levels: *** $p<0.01$, ** $p<0.05$, * $p<0.1$."
     )
 
@@ -188,14 +188,7 @@ def build_first_stage_table(results_dict, G, G_star):
             'wholesale_ratio_lag',
             'leave_one_out_mean_spread',
         ]
-        seen = set(all_vars_fs)
-        extra = [
-            v for ik, _ in ivs
-            for res in [_get_res(ik, panel)] if res is not None
-            for v in res.params.index
-            if v not in seen and v not in ('const', 'constant', 'post_2020')
-        ]
-        vs_panel = all_vars_fs + list(dict.fromkeys(extra))
+        vs_panel = all_vars_fs
 
         for var in vs_panel:
             coef_strs, se_strs, has_val = [], [], False
@@ -283,10 +276,9 @@ def build_second_stage_table(results_dict, G, G_star):
     notes = (
         r"\scriptsize \textit{Notes:} Standard errors clustered at the conglomerate level "
         r"are reported in parentheses, correcting for group size imbalance following "
-        r"Imbens \& Kolesár (2016) and Carter et al.\ (2017). "
+        r"\textcite{imbens2016robust} and \textcite{carter2017asymptotic}. "
         r"Significance levels: *** $p<0.01$, ** $p<0.05$, * $p<0.1$. "
-        r"Reported estimates are average marginal effects (AME), not structural coefficients. "
-        r"See companion document for first stage results."
+        r"Reported estimates are average marginal effects (AME), not structural coefficients."
     )
 
     def _get_res(ek, p):
@@ -355,7 +347,9 @@ def build_second_stage_table(results_dict, G, G_star):
             for ek, _ in estimators:
                 res = _get_res(ek, panel)
                 var = vshort
-                if res is not None and var not in res.params and f"interaction_{var}" in res.params:
+                if vshort in ('const', 'constant') and res is not None and 'nr_lagged_dep' in res.params:
+                    var = 'nr_lagged_dep'
+                elif res is not None and var not in res.params and f"interaction_{var}" in res.params:
                     var = f"interaction_{var}"
                 if res is not None and var in res.params:
                     has_val = True
@@ -369,17 +363,22 @@ def build_second_stage_table(results_dict, G, G_star):
                 lines.append(f"    {clean_name(vshort)} & " + " & ".join(coef_strs) + r" \\")
                 lines.append("    & " + " & ".join(se_strs) + r" \\")
 
-        obs_l, rsq_l, g_l, gstar_l = [], [], [], []
+        obs_l, rsq_l, fstat_l, g_l, gstar_l = [], [], [], [], []
         for ek, _ in estimators:
             res = _get_res(ek, panel)
             if res is None:
-                obs_l.append("---"); rsq_l.append("---")
+                obs_l.append("---"); rsq_l.append("---"); fstat_l.append("---")
                 g_l.append("---"); gstar_l.append("---")
                 continue
             nv = getattr(res, 'nobs', None)
             obs_l.append(f"{int(nv):,}" if nv is not None else "---")
             rv = getattr(res, 'rsquared', None)
             rsq_l.append(f"{rv:.4f}" if rv is not None else "---")
+            
+            fv = getattr(res, 'fvalue', None)
+            fp = getattr(res, 'f_pvalue', 1.0)
+            fstat_l.append(f"${fv:.2f}^{{{stars(fp)}}}$" if fv is not None else "---")
+            
             g_l.append(str(getattr(res, 'G_nominal', '---')))
             gsv = getattr(res, 'G_star', None)
             gstar_l.append(f"{gsv:.2f}" if gsv is not None else "---")
@@ -388,6 +387,7 @@ def build_second_stage_table(results_dict, G, G_star):
             r"    \midrule",
             "    Observations & " + " & ".join(obs_l) + r" \\",
             "    $R^2$ & " + " & ".join(rsq_l) + r" \\",
+            "    F-Statistic & " + " & ".join(fstat_l) + r" \\",
             "    Fixed Effects & Yes & Yes & Yes & Yes \\\\",
             "    Clusters ($G$) & " + " & ".join(g_l) + r" \\",
             "    Effective Clusters ($G^*$) & " + " & ".join(gstar_l) + r" \\",

@@ -43,13 +43,13 @@ def clean_name(v):
     v = str(v).replace('interaction_', '')
     labels = {
         'nr_lagged_dep': 'Lagged Deposits',
-        'gdp_per_capita': 'GDP per Capita (10k R\\$)',
+        'gdp_per_capita': 'GDP \\textit{per capita} (10k R\\$)',
         'cadunico_families_per1000': 'CadUnico Families (100s per 1k)',
         'fraction_65plus': 'Fraction 65+',
         'fraction_young': 'Fraction Young',
         'risk_free_qoq_lag': 'Lagged Selic Rate',
         'pix_users_pf_per1000': 'Pix Users (100s per 1k)',
-        'connections_per100': 'Broadband Connections (per capita)',
+        'connections_per100': 'Broadband Connections (\\textit{per capita})',
         'branches_per1000': 'Branches per 1k',
         'post_2020': 'Post 2020 Dummy',
         'const': 'Constant',
@@ -172,14 +172,7 @@ def build_first_stage_table(results_dict, G, G_star, opt):
             'wholesale_ratio_lag',
             'leave_one_out_mean_spread',
         ]
-        seen = set(all_vars_fs)
-        extra = [
-            v for ik, _ in ivs
-            for res in [_get_res(ik, panel)] if res is not None
-            for v in res.params.index
-            if v not in seen and v not in ('const', 'constant')
-        ]
-        vs_panel = all_vars_fs + list(dict.fromkeys(extra))
+        vs_panel = all_vars_fs
 
         for var in vs_panel:
             coef_strs, se_strs, has_val = [], [], False

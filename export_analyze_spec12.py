@@ -46,7 +46,7 @@ def format_value(coef, se, pval):
 def nice_var_name(var):
     rename_dict = {
         'nr_lagged_dep': r"Constant",
-        'interaction_gdp_per_capita': r"GDP per Capita",
+        'interaction_gdp_per_capita': r"GDP \\textit{per capita}",
         'interaction_cadunico_families_per1000': r"Families in CadÚnico per 1k",
         'interaction_fraction_65plus': r"Fraction $>65$ years",
         'interaction_fraction_young': r"Fraction $<25$ years",
@@ -165,7 +165,7 @@ def build_latex_table(results_dict, order_keys, target_vars, out_path, title="",
     row_nobs = ["Observations"]
     row_r2 = ["$R^2$"]
     row_fstat = ["F-Statistic"]
-    row_cluster = ["Clusters"]
+    row_cluster = ["Clusters ($G$)"]
     row_eff_cluster = ["Effective Clusters ($G^*$)"]
     
     for col in order_keys:
