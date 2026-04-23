@@ -6,6 +6,8 @@ import pickle
 from pathlib import Path
 import subprocess
 import shutil
+import warnings
+warnings.filterwarnings("ignore", message="covariance of constraints does not have full rank")
 
 _DRAFTS_DIR = Path(r"C:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\Drafts\Deposit Competition")
 
