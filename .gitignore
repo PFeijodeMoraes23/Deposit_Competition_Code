@@ -1,2 +1,4 @@
-*.txt
 *.log
+*.pyc.venv/
+__pycache__/
+Manifest.toml

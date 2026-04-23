@@ -1933,18 +1933,18 @@ def test_str_fullmatch(pat, case, na, exp):
 
 
 @pytest.mark.parametrize(
-    "sub, start, end, exp, exp_type",
+    "sub, start, end, exp",
     [
-        ["ab", 0, None, [0, None], pa.int32()],
-        ["bc", 1, 3, [1, None], pa.int64()],
-        ["ab", 1, 3, [-1, None], pa.int64()],
-        ["ab", -3, -3, [-1, None], pa.int64()],
+        ["ab", 0, None, [0, None]],
+        ["bc", 1, 3, [1, None]],
+        ["ab", 1, 3, [-1, None]],
+        ["ab", -3, -3, [-1, None]],
     ],
 )
-def test_str_find(sub, start, end, exp, exp_type):
+def test_str_find(sub, start, end, exp):
     ser = pd.Series(["abc", None], dtype=ArrowDtype(pa.string()))
     result = ser.str.find(sub, start=start, end=end)
-    expected = pd.Series(exp, dtype=ArrowDtype(exp_type))
+    expected = pd.Series(exp, dtype=ArrowDtype(pa.int64()))
     tm.assert_series_equal(result, expected)
 
 
@@ -3109,6 +3109,22 @@ def test_setitem_boolean_replace_with_mask_segfault():
     expected = arr.copy()
     arr[np.zeros((N,), dtype=np.bool_)] = False
     assert arr._pa_array == expected._pa_array
+
+
+def test_setitem_na_chunked_string_if_else():
+    # GH#64320
+    df = pd.concat(
+        [
+            pd.DataFrame({"a": ["x"] * 5, "b": ["x"] * 5}),
+            pd.DataFrame({"a": ["x"] * 5, "b": ["x"] * 5}),
+        ],
+        ignore_index=True,
+    )
+    for _ in range(5):
+        df.loc[[0], "a"] = pd.NA
+    assert pd.isna(df["a"].iloc[0])
+    assert (df["a"].iloc[1:] == "x").all()
+    assert (df["b"] == "x").all()
 
 
 @pytest.mark.parametrize(

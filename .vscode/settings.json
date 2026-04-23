@@ -10,5 +10,23 @@
         "SAGI",
         "tarifas",
         "toon"
-    ]
+    ],
+    "accessibility.signals.chatUserActionRequired": {
+        "announcement": "off",
+        "sound": "off"
+    },
+    "accessibility.signals.chatResponseReceived": {
+        "sound": "off"
+    },
+    "accessibility.signals.chatEditModifiedFile": {
+        "sound": "off"
+    },
+    "accessibility.signals.chatRequestSent": {
+        "sound": "off",
+        "announcement": "off"
+    },
+    "accessibility.signals.clear": {
+        "sound": "off",
+        "announcement": "off"
+    }
 }

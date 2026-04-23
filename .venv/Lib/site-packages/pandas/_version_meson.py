@@ -1,2 +1,2 @@
-__version__="3.0.1"
-__git_version__="e04b26f375035e5106cb913e47b6db612f4ebb11"
+__version__="3.0.2"
+__git_version__="ab90747e3dae0e69b1bdbf083820b8075689b34b"

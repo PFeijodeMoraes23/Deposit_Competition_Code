@@ -3,6 +3,25 @@ run_data_pipeline.py
 ====================
 Master runner for the full Brazilian Open Finance data pipeline.
 
+Context on Digital Bank Classifications (D-Firms):
+--------------------------------------------------
+Banks originally classified as wholesale ("Tesouraria e Negócios") with zero 
+branch presence often morph into digital retail contenders by adding a checking 
+account platform. For instance, BTG Pactual's retail deposits hovered between 
+R$ 100M - 350M (2014-2019) from corporate management, but exploded to R$ 1.07B 
+in 2020 Q1 and R$ 4.49B in 2024 Q3 due to their digital app.
+
+Similar trajectories occurred for:
+1. Banco Inter (C0080996): ~R$ 300M (2018) -> R$ 4.86B (2024)
+2. Grupo Bonsucesso / BS2 (C0080422): ~R$ 31M -> R$ 677M
+3. Brasil Plural / Genial (C0080941): ~R$ 24M -> R$ 771M
+4. Sofisa (C0080271): ~R$ 119M -> R$ 575M (Sofisa Direto)
+5. Rendimento (C0080659): ~R$ 178M -> R$ 641M
+
+These institutions are manually whitelisted as True Digital Retail Banks 
+to ensure they are correctly assigned to the Tier-2 (Digital) segment, 
+overriding their legacy wholesale regulatory classifications.
+
 Executes every download / processing / panel-building script in the correct
 dependency order.  Each step is a separate Python script run as a subprocess
 so side-effects (imports, large DataFrames) never bleed between steps.
@@ -10,29 +29,40 @@ so side-effects (imports, large DataFrames) never bleed between steps.
 Pipeline stages
 ---------------
   Stage 0 - Raw data downloads
-    0a. if_data_scrape_1.py          ESTBAN monthly files + IF Data via Olinda API
+    0a. scrape_1_bcb_estban_if_data.py          ESTBAN monthly files + IF Data via Olinda API
 
   Stage 1 - IBGE demographics
-    1a. ibge_demographics_panel.py   Municipal population, GDP, age structure -> MCA panel
+    1a. scrape_2_ibge_demographics.py           Municipal population, GDP, age structure -> MCA demographics panel
 
-  Stage 2 - Market-characteristic panels  (independent; can be run in any order)
-    2a. scrape_pix_panel.py          Process existing BCB PIX municipality files -> MCA panel
-    2b. scrape_anatel.py             Download ANATEL mobile connections -> MCA panel
-    2d. scrape_bcb_inclusion.py      BCB banking access-points (branches, correspondents) -> MCA panel
-    2e. scrape_cadunico.py           CadUnico low-income families -> MCA panel
+  Stage 2 - Market characteristic panels
+    2a. scrape_3_pix_panel.py                   Process BCB PIX municipality files -> MCA PIX adoption panel
+    2b. scrape_4_anatel.py                      Download ANATEL mobile connections -> MCA connectivity panel
+    2d. scrape_5_bcb_inclusion.py               BCB banking access-points (branches + correspondents) -> MCA inclusion panel
+    2d2. scrape_8_bcb_banked.py                 BCB ESTBAN deposit balances (Dec snapshot) + WB Findex -> MCA banked-fraction proxy panel
+    2e. scrape_6_cadunico.py                    CadUnico low-income families -> MCA poverty panel
+    2f. scrape_7_fees.py                        BCB bank fee schedules (PF + PJ) -> tarifas conglomerate panel + fee summary
 
-  Stage 3 - Deposit panel
-    3a. deposits_panel_build.py      ESTBAN + IF Data -> conglomerate x municipality x quarter
+  Stage 3 - Deposit panel, characteristics & instruments
+    3a. panel_1_deposits.py                 ESTBAN + IF Data -> conglomerate x municipality x quarter deposit panel
+    3b. panel_2_rates_ip.py         Extract IP explicit deposit rates from raw COSIF (parallel to deposits)
+    3c. panel_3_rates.py                         Compute and append deposit rates/spreads (COSIF + SGS) to deposit panel
+    3d. panel_4_bank_chars.py               IF Data -> conglomerate x quarter bank size and solvency characteristics panel
+    3e. panel_5_flag_digital.py                   Analyze raw ESTBAN to identify purely digital banks -> PANEL_INTERMED
 
   Stage 4 - Master analysis panel
-    4a. build_market_panel.py        All MCA panels + deposit panel -> single merged dataset
+    4a. panel_6_market.py                   Merge all MCA panels + deposit panel -> master analysis dataset
+    4b. panel_7_instruments.py       Compute LOO instruments and FGC dummy -> overwrites market_panel.csv
+
+  Stage 5 - Descriptive statistics
+    5a. desc_1.py                        Generate unweighted overview descriptive tables
+    5b. desc_1.py --weight-col pop_total Generate market-weighted descriptive tables
 
 Usage
 -----
   python run_data_pipeline.py                   # run all stages
   python run_data_pipeline.py --from 2          # restart from stage 2 onward
   python run_data_pipeline.py --only 3          # run only stage 3
-  python run_data_pipeline.py --skip 2b,2c      # skip specific sub-steps
+  python run_data_pipeline.py --skip 2b,2e      # skip specific sub-steps
 
 Notes
 -----
@@ -42,8 +72,40 @@ Notes
     parallelized; they are serialized here for simplicity and to avoid hitting
     rate limits on BCB / ANATEL / SAGI APIs simultaneously.
   * Stage 4 requires ALL panels to exist.  If some stage-2 downloads failed
-    (data source unavailable), build_market_panel.py handles missing files
+    (data source unavailable), panel_6_market.py handles missing files
     gracefully (those columns will be NaN).
+
+CLI Options:
+------------
+usage: run_data_pipeline.py [-h] [--from N] [--only N] [--skip IDs] [--list]
+
+Run the full Brazilian Open Finance data pipeline.
+
+options:
+  -h, --help  show this help message and exit
+  --from N    Start from this stage number (0-4). Skips all earlier stages.
+  --only N    Run only this stage number (0-4). All others are skipped.
+  --skip IDs  Comma-separated list of step IDs to skip (e.g. '2b,2c').
+  --list      Print the pipeline steps and exit.
+
+Scripts called by the data pipeline:
+------------------------------------
+[1] scrape_1_bcb_estban_if_data.py
+[2] scrape_2_ibge_demographics.py
+[3] scrape_3_pix_panel.py
+[4] scrape_4_anatel.py
+[5] scrape_5_bcb_inclusion.py
+[5b] scrape_8_bcb_banked.py
+[6] scrape_6_cadunico.py
+[7] scrape_7_fees.py
+[8] panel_1_deposits.py
+[8b] panel_2_rates_ip.py
+[9] panel_3_rates.py
+[10] panel_4_bank_chars.py
+[11] panel_5_flag_digital.py
+[12] panel_6_market.py
+[13] panel_7_instruments.py
+[14] desc_1.py
 """
 
 import argparse
@@ -54,6 +116,7 @@ import subprocess
 import sys
 import threading
 import time
+import contextlib
 from pathlib import Path
 try:
     from utils.venv_guard import ensure_project_venv
@@ -100,34 +163,50 @@ def _load_toon_runtime_context() -> dict:
 # Each entry: (stage_int, step_id_str, script_filename, description)
 STEPS = [
     # Stage 0 -- raw downloads
-    (0, "0a", "if_data_scrape_1.py",
+    (0, "1", "scrape_1_bcb_estban_if_data.py",
      "ESTBAN monthly files + IF Data (Olinda API)"),
 
     # Stage 1 -- IBGE demographics
-    (1, "1a", "ibge_demographics_panel.py",
+    (1, "2", "scrape_2_ibge_demographics.py",
      "IBGE population, GDP, age structure -> MCA demographics panel"),
 
     # Stage 2 -- market characteristic panels
-    (2, "2a", "scrape_pix_panel.py",
+    (2, "3", "scrape_3_pix_panel.py",
      "Process BCB PIX municipality files -> MCA PIX adoption panel"),
-    (2, "2b", "scrape_anatel.py",
+    (2, "4", "scrape_4_anatel.py",
      "Download ANATEL mobile connections -> MCA connectivity panel"),
-    (2, "2d", "scrape_bcb_inclusion.py",
+    (2, "5", "scrape_5_bcb_inclusion.py",
      "BCB banking access-points (branches + correspondents) -> MCA inclusion panel"),
-    (2, "2e", "scrape_cadunico.py",
+    (2, "5b", "scrape_8_bcb_banked.py",
+     "BCB ESTBAN deposit balances (Dec snapshot) + WB Findex -> MCA banked-fraction proxy panel"),
+    (2, "6", "scrape_6_cadunico.py",
      "CadUnico low-income families -> MCA poverty panel"),
-    (2, "2f", "tarifas_scrape_1.py",
+    (2, "7", "scrape_7_fees.py",
      "BCB bank fee schedules (PF + PJ) -> tarifas conglomerate panel + fee summary"),
-    (3, "3a", "deposits_panel_build.py",
+    (3, "8", "panel_1_deposits.py",
      "ESTBAN + IF Data -> conglomerate x municipality x quarter deposit panel"),
-    (3, "3b", "append_rates.py",
+    (3, "8b", "panel_2_rates_ip.py",
+     "Extract IP explicit deposit rates from raw COSIF (parallel to deposits)"),
+    (3, "9", "panel_3_rates.py",
      "Compute and append deposit rates/spreads (COSIF + SGS) to deposit panel"),
-    (3, "3c", "bank_chars_panel_build.py",
+    (3, "10", "panel_4_bank_chars.py",
      "IF Data -> conglomerate x quarter bank size and solvency characteristics panel"),
+    (3, "11", "panel_5_flag_digital.py",
+     "Analyze raw ESTBAN to identify purely digital banks -> PANEL_INTERMED"),
 
     # Stage 4 -- master analysis panel
-    (4, "4a", "build_market_panel.py",
+    (4, "12", "panel_6_market.py",
      "Merge all MCA panels + deposit panel -> master analysis dataset"),
+    (4, "13", "panel_7_instruments.py",
+     "Compute LOO instruments and FGC dummy -> overwrites market_panel.csv"),
+    (4, "13b", "panel_8_demographics_sigma.py",
+     "Within-MCA demographic σ for BLP parametric draws -> demographics_sigma.parquet"),
+
+    # Stage 5 -- descriptive statistics
+    (5, "14", "desc_1.py",
+     "Generate unweighted overview descriptive tables"),
+    (5, "15", "desc_1.py --weight-col pop_total",
+     "Generate market-weighted descriptive tables"),
 ]
 
 
@@ -145,10 +224,8 @@ def _kill_running_procs(exclude_sid: str | None = None) -> None:
         for sid, proc in list(_running_procs.items()):
             if sid == exclude_sid:
                 continue
-            try:
+            with contextlib.suppress(Exception):
                 proc.kill()
-            except Exception:
-                pass
 
 _W = 72   # display width
 
@@ -161,16 +238,20 @@ def _banner(text: str, char: str = "-") -> None:
 _print_lock = threading.Lock()  # serialize console output across parallel workers
 
 
+import shlex
+
 def run_step(step_id: str, script: str, description: str) -> float:
     """
     Run one pipeline script as a subprocess, capturing its output so that
     parallel runs don't interleave on the console.  Raises RuntimeError on
     failure (safe to use inside ThreadPoolExecutor worker threads).
     """
-    path = os.path.join(SCRIPT_DIR, script)
+    script_args = shlex.split(script)
+    script_file = script_args[0]
+    path = os.path.join(SCRIPT_DIR, script_file)
     if not os.path.exists(path):
         with _print_lock:
-            print(f"  [SKIP] {step_id} -- script not found: {script}", flush=True)
+            print(f"  [SKIP] {step_id} -- script not found: {script_file}", flush=True)
         return 0.0
 
     with _print_lock:
@@ -178,12 +259,11 @@ def run_step(step_id: str, script: str, description: str) -> float:
 
     t0   = time.perf_counter()
     env = os.environ.copy()
-    toon_ctx_path = os.environ.get("TOON_CONTEXT_PATH", "").strip()
-    if toon_ctx_path:
+    if toon_ctx_path := os.environ.get("TOON_CONTEXT_PATH", "").strip():
         env["TOON_CONTEXT_PATH"] = toon_ctx_path
 
     proc = subprocess.Popen(
-        [PYTHON, path], cwd=SCRIPT_DIR,
+        [PYTHON, path] + script_args[1:], cwd=SCRIPT_DIR,
         stdout=subprocess.PIPE, stderr=subprocess.PIPE,
         env=env,
     )
@@ -228,18 +308,28 @@ def run_step(step_id: str, script: str, description: str) -> float:
 #   Wave 1 -- 0a alone: downloads ESTBAN + IF Data raw files from BCB Olinda.
 #             1a is NOT here because it takes ~700s and would block Wave 2 from
 #             starting until IBGE finishes. 1a has no dependency on 0a.
-#   Wave 2 -- After 0a completes: all characteristic panels run in parallel.
+#   Wave 2 -- After 0a completes: all characteristic panels run in stages.
 #             1a=IBGE SIDRA (long, ~700s but independent of 0a),
 #             2a=PIX (local files), 2b=ANATEL, 2d=BCB Olinda inclusion,
-#             2e=SAGI CadUnico, 2f=BCB tarifas, 3a=deposits (reads 0a output).
-#             All are mutually independent -> run in parallel.
-#   Wave 3 -- 3b (deposit rates) runs after 3a constructs the deposit panel.
+#             2e=SAGI CadUnico, 2f=BCB tarifas, 3a=deposits (reads 0a output),
+#             and 3b=IP rates (reads raw COSIF).
+#             These are mutually independent -> run in stages.
+#   Wave 3 -- 3c (deposit rates) runs after 3a constructs the deposit panel and 3b extracts IP rates.
 #   Wave 4 -- 4a (master merge) needs everything above -> serial.
 WAVES: list[list[str]] = [
-    ["0a"],                                     # Wave 1: ESTBAN + IF Data raw download
-    ["1a", "2a", "2b", "2d", "2e", "2f", "3a"], # Wave 2: all characteristic panels + deposits
-    ["3b", "3c"],                               # Wave 3: deposit rates/spreads + bank chars (parallel)
-    ["4a"],                                     # Wave 4: master merge
+    ["1"],                                     # Wave 1: ESTBAN + IF Data raw download
+    ["2"],                                     # Wave 2a: IBGE
+    ["3"],                                     # Wave 2b: Stage 2 scrapers CANNOT be parallelized
+    ["4"],                                     # Wave 2c: ANATEL
+    ["5"],                                     # Wave 2d: BCB inclusion
+    ["5b"],                                    # Wave 2d2: BCB ESTBAN banked-fraction proxy
+    ["6"],                                     # Wave 2e: CadUnico
+    ["7"],                                     # Wave 2f: fees
+    ["8", "8b"],                               # Wave 2g: characteristic panels + deposits + IP rates
+    ["9", "10", "11"],                         # Wave 3: deposit rates/spreads + bank chars + digital flags (parallel)
+    ["12"],                                    # Wave 4: master merge
+    ["13", "13b"],                             # Wave 5: instrumental variables + demographics sigma
+    ["14", "15"],                              # Wave 6: descriptive statistics
 ]
 
 def run_wave(
@@ -277,10 +367,12 @@ def run_wave(
 
     with _print_lock:
         ids_str = ", ".join(sid for sid, *_ in active)
-        print(f"\n  Wave (parallel x{len(active)}): {ids_str}", flush=True)
+        # Cap workers to 6 to safely parallelize heavily across 32GB RAM machines, keeping 4-6GB headroom for TeXStudio
+        workers = min(len(active), 6)
+        print(f"\n  Wave (concurrency: {workers}): {ids_str}", flush=True)
 
     errors: list[str] = []
-    with concurrent.futures.ThreadPoolExecutor(max_workers=len(active)) as pool:
+    with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
         future_map = {
             pool.submit(run_step, sid, script, desc): (sid, script)
             for sid, script, desc in active
@@ -312,6 +404,26 @@ def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(
         description="Run the full Brazilian Open Finance data pipeline.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Scripts called by the data pipeline:
+------------------------------------
+[1] scrape_1_bcb_estban_if_data.py
+[2] scrape_2_ibge_demographics.py
+[3] scrape_3_pix_panel.py
+[4] scrape_4_anatel.py
+[5] scrape_5_bcb_inclusion.py
+[5b] scrape_8_bcb_banked.py
+[6] scrape_6_cadunico.py
+[7] scrape_7_fees.py
+[8] panel_1_deposits.py
+[8b] panel_2_rates_ip.py
+[9] panel_3_rates.py
+[10] panel_4_bank_chars.py
+[11] panel_5_flag_digital.py
+[12] panel_6_market.py
+[13] panel_7_instruments.py
+[14] desc_1.py
+"""
     )
     p.add_argument(
         "--from", dest="from_stage", type=int, default=0, metavar="N",
@@ -331,6 +443,54 @@ def parse_args() -> argparse.Namespace:
     )
     return p.parse_args()
 
+
+def send_notification_email(finished_step: str, elapsed_seconds: float, next_step: str | None) -> None:
+    import os
+    import smtplib
+    from email.message import EmailMessage
+
+    # To use this without prompts, you must set an App Password in your environment variables.
+    # For example: 
+    # $env:SYS_EMAIL_USER="your-email@gmail.com"
+    # $env:SYS_EMAIL_PWD="your-16-digit-app-password"
+    
+    sender = os.environ.get("SYS_EMAIL_USER", "pedro.feijo25@gmail.com")
+    pwd = os.environ.get("SYS_EMAIL_PWD")
+    recipient = "pedro.feijodemoraes@yale.edu"
+
+    if not pwd:
+        with _print_lock:
+            print("  -> Skipped email notification: 'SYS_EMAIL_PWD' environment variable is not set.", flush=True)
+        return
+
+    try:
+        msg = EmailMessage()
+        mins, secs = divmod(int(elapsed_seconds), 60)
+        
+        msg['Subject'] = f"[Data Pipeline] Finished: {finished_step}"
+        msg['From'] = sender
+        msg['To'] = recipient
+
+        body = f"The data pipeline has successfully completed {finished_step}.\n"
+        body += f"Duration: {mins} minutes and {secs} seconds.\n\n"
+        
+        if next_step:
+            body += f"Next step starting now: {next_step}\n"
+        else:
+            body += "This was the last step. The pipeline is fully complete!\n"
+            
+        msg.set_content(body)
+
+        with smtplib.SMTP("smtp.gmail.com", 587) as server:
+            server.starttls()
+            server.login(sender, pwd)
+            server.send_message(msg)
+            
+        with _print_lock:
+            print("  -> Notification email sent via SMTP!", flush=True)
+    except Exception as e:
+        with _print_lock:
+            print(f"  -> Could not send SMTP notification: {e}", flush=True)
 
 # -- Main -----------------------------------------------------------------------
 
@@ -381,8 +541,9 @@ def main() -> None:
     # Filter WAVES to only include steps whose stage is active
     filtered_waves: list[list[str]] = []
     for wave in WAVES:
-        filtered = [sid for sid in wave if stage_of.get(sid, -1) in active_stages]
-        if filtered:
+        if filtered := [
+            sid for sid in wave if stage_of.get(sid, -1) in active_stages
+        ]:
             filtered_waves.append(filtered)
 
     t_start = time.perf_counter()
@@ -399,9 +560,25 @@ def main() -> None:
         print(f"  Skipping steps: {', '.join(sorted(skip_set))}")
 
     all_timings: dict[str, float] = {}
-    for wave_steps in filtered_waves:
+    for i, wave_steps in enumerate(filtered_waves):
+        wave_start = time.perf_counter()
         wave_timings = run_wave(wave_steps, steps_dict, skip_set)
-        all_timings.update(wave_timings)
+        wave_elapsed = time.perf_counter() - wave_start
+        all_timings |= wave_timings
+
+        # Only notify if we actually ran something in this wave
+        if wave_timings:
+            finished_str = ", ".join(steps_dict[sid][0] for sid in wave_steps if sid not in skip_set)
+            
+            # Find next step
+            next_str = None
+            if i + 1 < len(filtered_waves):
+                next_wave = filtered_waves[i + 1]
+                next_str = ", ".join(steps_dict[sid][0] for sid in next_wave if sid not in skip_set)
+                if not next_str:
+                    next_str = None
+            
+            send_notification_email(finished_str, wave_elapsed, next_str)
 
     total = time.perf_counter() - t_start
     print(f"\n{'=' * _W}")

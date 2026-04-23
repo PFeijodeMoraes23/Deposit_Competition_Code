@@ -664,16 +664,9 @@ cdef _convert_xslt_parameters(xslt.xsltTransformContext* transform_ctxt,
                     v = (<XPath>value)._path
                 else:
                     v = _utf8(value)
-
-                c_len = len(k)
-                if c_len > limits.INT_MAX:
-                    raise ValueError("Parameter name too long")
-                params[i] = <const_char*> tree.xmlDictLookup(c_dict, _xcstr(k), <int> c_len)
+                params[i] = <const_char*>tree.xmlDictLookup(c_dict, _xcstr(k), len(k))
                 i += 1
-                c_len = len(v)
-                if c_len > limits.INT_MAX:
-                    raise ValueError("Parameter value too long")
-                params[i] = <const_char*> tree.xmlDictLookup(c_dict, _xcstr(v), <int> c_len)
+                params[i] = <const_char*>tree.xmlDictLookup(c_dict, _xcstr(v), len(v))
                 i += 1
     except:
         python.lxml_free(params)
@@ -739,7 +732,7 @@ cdef class _XSLTResultTree(_ElementTree):
                 raise XSLTSaveError("No document to serialise")
         c_compression = compression or 0
         xslt.LXML_GET_XSLT_ENCODING(c_encoding, self._xslt._c_style)
-        writer = _create_output_buffer(file, <const_char*>c_encoding, c_compression, &c_buffer, close=False)
+        writer = _create_output_buffer(file, <const_char*>c_encoding, compression, &c_buffer, close=False)
         if writer is None:
             with nogil:
                 r = xslt.xsltSaveResultTo(c_buffer, doc._c_doc, self._xslt._c_style)
