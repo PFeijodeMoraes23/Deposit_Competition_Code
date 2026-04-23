@@ -83,8 +83,8 @@ def build_first_stage_table(results_dict, G, G_star):
         ('IV_HausmanFull', 'Hausman'),
     ]
     multispan = 4
-    caption = "Local Data Only - First Stage Estimation (Control Function)"
-    label = "tab:first_stage_control_function"
+    caption = "Local Data Only - First Stage Estimation"
+    label = "tab:est1_first_stage"
     notes = (
         r"\scriptsize \textit{Notes:} Standard errors clustered at the conglomerate level "
         r"are reported in parentheses, correcting for group size imbalance following "
@@ -246,7 +246,7 @@ def build_second_stage_table(results_dict, G, G_star):
     ]
     multispan = 5
     caption = "Local Data Only - Second Stage Estimation"
-    label = "tab:sleep_specifications_results_2nd_stage"
+    label = "tab:est1_second_stage"
     notes = (
         r"\scriptsize \textit{Notes:} Standard errors clustered at the conglomerate level "
         r"are reported in parentheses, correcting for group size imbalance following "
