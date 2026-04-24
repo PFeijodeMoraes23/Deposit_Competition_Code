@@ -56,10 +56,10 @@ def nice_var_name(var):
         'connections_per100': 'Broadband Connections (\\textit{per capita})',
         'branches_per1000': 'Branches per 1k',
         'post_2020': 'Post 2020 Dummy',
-        'dummy_D_type': 'Dummy D-Type',
+        'dummy_D_type': 'D-Type Dummy',
         'state_owned': 'State-Owned Indicator',
         'cooperative': 'Cooperative Indicator',
-        'pix_exists': 'PIX Exists Indicator',
+        'pix_exists': 'PIX Available',
         'const': 'Constant',
         'constant': 'Constant',
         'tax_cost_ratio_lag': 'Tax Cost Ratio ($t-1$)',
@@ -69,9 +69,9 @@ def nice_var_name(var):
         'lci_lca_ratio_lag': 'LCI/LCA Ratio ($t-1$)',
         'wholesale_ratio_lag': 'Wholesale Ratio ($t-1$)',
         'leave_one_out_mean_spread': 'Leave-out Mean Spread',
-        'dummy_D_type_x_fraction_65plus': 'D-Type x Fraction 65+',
-        'dummy_D_type_x_fraction_young': 'D-Type x Fraction Young',
-        'dummy_D_type_x_risk_free_qoq_lag': 'D-Type x Lagged Selic'
+        'dummy_D_type_x_fraction_65plus': 'D-Type $\times$ Fraction 65+',
+        'dummy_D_type_x_fraction_young': 'D-Type $\times$ Fraction Young',
+        'dummy_D_type_x_risk_free_qoq_lag': 'D-Type $\times$ Lagged Selic'
     }
     return labels.get(v, v.replace('_', '\\_'))
 
