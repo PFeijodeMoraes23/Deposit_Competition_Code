@@ -44,42 +44,42 @@ def format_value(coef, se, pval):
     return f"{coef:.4f}{stars}", f"({se:.4f})"
 
 def nice_var_name(var):
-    rename_dict = {
-        'nr_lagged_dep': r"Constant",
-        'interaction_gdp_per_capita': r"GDP \\textit{per capita}",
-        'interaction_cadunico_families_per1000': r"Families in CadÚnico per 1k",
-        'interaction_fraction_65plus': r"Fraction $>65$ years",
-        'interaction_fraction_young': r"Fraction $<25$ years",
-        'interaction_risk_free_qoq_lag': r"Risk-free Rate (Lag)",
-        'interaction_pix_users_pf_per1000': r"PIX Users per 1k",
-        'interaction_connections_per100': r"Internet Connections per 100",
-        'interaction_branches_per1000': r"Branches per 1k",
-        'interaction_dummy_D_type': r"Digital Bank Indicator",
-        'dummy_D_type': r"Digital Bank Indicator",
-        'interaction_state_owned': r"State-owner Indicator",
-        'interaction_cooperative': r"Cooperative Indicator",
-        'interaction_pix_exists': r"PIX Exists Indicator",
-        'interaction_post_2020': r"Post-2020 Indicator",
-        'post_2020': r"Post-2020 Indicator",
-        'pix_exists': r"PIX Exists Indicator",
-        'v_hat': r"1st Stage Control Function Residual",
-        'constant': r"Constant"
+    v = str(var).replace('interaction_', '')
+    labels = {
+        'nr_lagged_dep': 'Lagged Deposits',
+        'gdp_per_capita': 'GDP \\textit{per capita} (10k R\\$)',
+        'cadunico_families_per1000': 'CadUnico Families (100s per 1k)',
+        'fraction_65plus': 'Fraction 65+',
+        'fraction_young': 'Fraction Young',
+        'risk_free_qoq_lag': 'Lagged Selic Rate',
+        'pix_users_pf_per1000': 'Pix Users (100s per 1k)',
+        'connections_per100': 'Broadband Connections (\\textit{per capita})',
+        'branches_per1000': 'Branches per 1k',
+        'post_2020': 'Post 2020 Dummy',
+        'dummy_D_type': 'Dummy D-Type',
+        'state_owned': 'State-Owned Indicator',
+        'cooperative': 'Cooperative Indicator',
+        'pix_exists': 'PIX Exists Indicator',
+        'const': 'Constant',
+        'constant': 'Constant',
+        'tax_cost_ratio_lag': 'Tax Cost Ratio ($t-1$)',
+        'personnel_cost_ratio_lag': 'Personnel Cost Ratio ($t-1$)',
+        'admin_cost_ratio_lag': 'Admin Cost Ratio ($t-1$)',
+        'indice_basileia_lag': 'Basel Index ($t-1$)',
+        'lci_lca_ratio_lag': 'LCI/LCA Ratio ($t-1$)',
+        'wholesale_ratio_lag': 'Wholesale Ratio ($t-1$)',
+        'leave_one_out_mean_spread': 'Leave-out Mean Spread',
+        'dummy_D_type_x_fraction_65plus': 'D-Type x Fraction 65+',
+        'dummy_D_type_x_fraction_young': 'D-Type x Fraction Young',
+        'dummy_D_type_x_risk_free_qoq_lag': 'D-Type x Lagged Selic'
     }
-    return rename_dict.get(var, var.replace("_", r"\_").replace("interaction\_", ""))
+    return labels.get(v, v.replace('_', '\\_'))
 
 def build_latex_table(results_dict, order_keys, target_vars, out_path, title="", label=""):
     tex = []
-    tex.append(r"\documentclass{article}")
-    tex.append(r"\usepackage{graphicx} % Required for inserting images")
-    tex.append(r"\usepackage{booktabs}")
-    tex.append(r"\usepackage{longtable}")
-    tex.append(r"\usepackage{natbib}")
-    tex.append(r"\usepackage{rotating}")
-    tex.append(r"\usepackage{geometry}")
-    tex.append(r"\geometry{landscape, margin=1in}")
-    tex.append(r"\begin{document}")
     
-    # Reduce font size and line spacing
+    # Reduce font size and line spacing for this specific table by grouping it
+    tex.append(r"{")
     tex.append(r"\footnotesize")
     tex.append(r"\renewcommand{\arraystretch}{0.75}")
     
@@ -131,9 +131,25 @@ def build_latex_table(results_dict, order_keys, target_vars, out_path, title="",
     
     # Sort vars to put nice target vars first
     ordered_vars = [v for v in target_vars if v in vars_to_print]
-    ordered_vars += [v for v in vars_to_print if v not in ordered_vars]
     
+    if "first_stage" in str(out_path).lower() or "stage1" in str(out_path).lower():
+        # First stage table: ONLY exhibit the target instruments, not all variables
+        pass
+    else:
+        # Second stage table: Include everything else, but exclude first-stage residuals
+        other_vars = [v for v in vars_to_print if v not in ordered_vars]
+        exclude_patterns = ["reside", "v_hat", "v_hat_2", "v_hat_3"]
+        other_vars = [v for v in other_vars if not any(pattern in v.lower() for pattern in exclude_patterns)]
+        ordered_vars += other_vars
+
     for v in ordered_vars:
+        if v == "is_coop" or v == "is_state_owned":
+            # Exclude is_coop and is_state_owned from print loops (handled in bottom group)
+            continue
+        if "is_coop" in v or "is_state_owned" in v:
+            # Exclude interaction terms too
+            continue
+
         row_cf = [nice_var_name(v)]
         row_se = [""]
         for col in order_keys:
@@ -167,8 +183,17 @@ def build_latex_table(results_dict, order_keys, target_vars, out_path, title="",
     row_fstat = ["F-Statistic"]
     row_cluster = ["Clusters ($G$)"]
     row_eff_cluster = ["Effective Clusters ($G^*$)"]
-    
+    row_state = ["State Ownership Control"]
+    row_coop = ["Cooperative Control"]
+
     for col in order_keys:
+        if '5 Dummies' in col:
+            row_state.append("Yes")
+            row_coop.append("Yes")
+        else:
+            row_state.append("No")
+            row_coop.append("No")
+
         res = results_dict.get(col)
         if res is None:
             row_nobs.append("-")
@@ -233,9 +258,11 @@ def build_latex_table(results_dict, order_keys, target_vars, out_path, title="",
     tex.append(" & ".join(row_fstat) + r" \\")
     tex.append(" & ".join(row_cluster) + r" \\")
     tex.append(" & ".join(row_eff_cluster) + r" \\")
+    tex.append(" & ".join(row_state) + r" \\")
+    tex.append(" & ".join(row_coop) + r" \\")
     
     tex.append(r"\end{longtable}")
-    tex.append(r"\end{document}")
+    tex.append(r"}")
     
     with open(out_path, "w", encoding="utf-8") as f:
         f.write("\n".join(tex))
@@ -258,10 +285,8 @@ def main():
 
     mapping = {
         '1 B firms': SLEEP_DIR / "DEMAND_PREP" / "est1",
-        '2 B firms Robust': SLEEP_DIR / "DEMAND_PREP" / "est2" / "LOCAL", 
         '3 Pooled': SLEEP_DIR / "DEMAND_PREP" / "est3",
         '4 Pooled Logistic': SLEEP_DIR / "DEMAND_PREP" / "est4",
-        '5 Dummies Linear': SLEEP_DIR / "DEMAND_PREP" / "est5",
         '5 Dummies Logistic': SLEEP_DIR / "DEMAND_PREP" / "est5",
     }
 
@@ -288,10 +313,8 @@ def main():
                 
         target_keys = {
             '1 B firms': 'IV_HausmanFull x Tech',
-            '2 B firms Robust': 'IV_HausmanFull x Tech',
             '3 Pooled': 'IV_HausmanFull x Tech',
-            '4 Pooled Logistic': 'IV_HausmanFull x Tech',
-            '5 Dummies Linear': 'IV_HausmanFull x Tech x linear', 
+            '4 Pooled Logistic': 'IV_HausmanFull x Tech', 
             '5 Dummies Logistic': 'IV_HausmanFull x Tech x logistic',
         }
 
@@ -332,10 +355,17 @@ def main():
         'interaction_fraction_65plus', 'interaction_fraction_young', 'interaction_risk_free_qoq_lag',
         'interaction_pix_users_pf_per1000', 'interaction_connections_per100',
         'interaction_branches_per1000', 'interaction_dummy_D_type', 'interaction_state_owned',
-        'interaction_cooperative', 'dummy_D_type'
+        'interaction_cooperative', 'dummy_D_type', 'interaction_dummy_D_type_x_fraction_65plus',
+        'interaction_dummy_D_type_x_fraction_young', 'interaction_dummy_D_type_x_risk_free_qoq_lag'
     ]
     
-    build_latex_table(stage1_res, order, target_vars, out_dir / "est1-5_spec12_stage1_comparison.tex", title="First Stage IV Results across Specifications", label="tab:spec12_stage1_comparison")
+    first_stage_target_vars = [
+        'tax_cost_ratio_lag', 'personnel_cost_ratio_lag', 'admin_cost_ratio_lag',
+        'indice_basileia_lag', 'lci_lca_ratio_lag', 'wholesale_ratio_lag',
+        'leave_one_out_mean_spread'
+    ]
+
+    build_latex_table(stage1_res, order, first_stage_target_vars, out_dir / "est1-5_spec12_stage1_comparison.tex", title="First Stage IV Results across Specifications", label="tab:spec12_stage1_comparison")
     build_latex_table(stage2_res, order, target_vars, out_dir / "est1-5_spec12_stage2_comparison.tex", title="Second Stage Results across Specifications", label="tab:spec12_stage2_comparison")
     shutil.copy(out_dir / "est1-5_spec12_stage1_comparison.tex", _DRAFTS_DIR / "est1-5_spec12_stage1_comparison.tex")
     shutil.copy(out_dir / "est1-5_spec12_stage2_comparison.tex", _DRAFTS_DIR / "est1-5_spec12_stage2_comparison.tex")
@@ -352,7 +382,15 @@ def main():
     # Pre-define a color map for consistent colors across both subplots
     base_colors = plt.rcParams['axes.prop_cycle'].by_key()['color']
     color_map = {lbl: base_colors[i % len(base_colors)] for i, lbl in enumerate(phi_data.keys())}
-    
+    # Dummies specs use dashed lines so they remain distinguishable when values overlap
+    linestyle_map = {
+        '1 B firms': '-',
+        '3 Pooled': '-',
+        '4 Pooled Logistic': '-',
+        '5 Dummies Linear': '--',
+        '5 Dummies Logistic': '--',
+    }
+
     label_rename_map = {
         '1 B firms': 'Local Only',
         '3 Pooled': 'Pooled B + D',
@@ -368,10 +406,16 @@ def main():
         phi_col_b = f"phi_b" if "phi_b" in df_phi.columns else None
         phi_col_d = f"phi_d" if "phi_d" in df_phi.columns else None
         
-        if 'dummy_D_type' in df_phi.columns:
+        if "1 B firms" in label:
+            df_b = df_phi
+            df_d = df_phi.copy()
+        elif 'dummy_D_type' in df_phi.columns:
             # When pooled and has the dummy, we can separate
             df_b = df_phi[df_phi['dummy_D_type'] == 0]
             df_d = df_phi[df_phi['dummy_D_type'] == 1]
+            if len(df_d) == 0 and 'phi_d' in df_phi.columns:
+                df_b = df_phi
+                df_d = df_phi
         elif "2 D firms" in label:
             df_b = pd.DataFrame(columns=df_phi.columns)
             df_d = df_phi
@@ -421,7 +465,10 @@ def main():
         if "Linear" in label:
             possible_cols = ["phi_mt_IV_HausmanFull_x_Tech_x_linear", "phi_mt_IV_HausmanFull_x_Tech_linear"]
         elif "Logistic" in label:
-            possible_cols = ["phi_mt_IV_HausmanFull_x_Tech_x_logistic", "phi_mt_IV_HausmanFull_x_Tech_logistic"]
+            if "5 Dummies Logistic" in label:
+                possible_cols = ["phi_mt_IV_HausmanFull_x_Tech_x_logistic", "phi_mt_IV_HausmanFull_x_Tech_logistic"]
+            else:
+                possible_cols = ["phi_mt_IV_HausmanFull_x_Tech"]
         elif "2 D firms" in label:
             possible_cols = ["phi_mt_Option_2_IV_HausmanFull_Tech"]
         else:
@@ -437,6 +484,7 @@ def main():
                 
         plot_label = label_rename_map.get(label, label)
         c = color_map[label]
+        ls = linestyle_map.get(label, '-')
         
         if tar_col in df_phi.columns:
             agg_b, se_b = calc_agg(df_b, tar_col)
@@ -445,12 +493,12 @@ def main():
             # Use 1.96 standard errors for approx 95% CI
             if not agg_b.empty:
                 idx_dates = pd.PeriodIndex(agg_b.index.str.replace('_', 'Q'), freq='Q').to_timestamp()
-                axes[0].plot(idx_dates, agg_b.values, label=plot_label, color=c, linewidth=2)
+                axes[0].plot(idx_dates, agg_b.values, label=plot_label, color=c, linewidth=2, linestyle=ls)
                 axes[0].fill_between(idx_dates, agg_b.values - (1.96*se_b.values), agg_b.values + (1.96*se_b.values), color=c, alpha=0.2)
                 
             if not agg_d.empty:
                 idx_dates = pd.PeriodIndex(agg_d.index.str.replace('_', 'Q'), freq='Q').to_timestamp()
-                axes[1].plot(idx_dates, agg_d.values, label=plot_label, color=c, linewidth=2)
+                axes[1].plot(idx_dates, agg_d.values, label=plot_label, color=c, linewidth=2, linestyle=ls)
                 axes[1].fill_between(idx_dates, agg_d.values - (1.96*se_d.values), agg_d.values + (1.96*se_d.values), color=c, alpha=0.2)
                 
     axes[0].set_title("B-Type Firms (Spec 12)", fontsize=14)
@@ -479,6 +527,12 @@ def main():
         '4 Pooled Logistic': '(+) Logistic',
         '5 Dummies Logistic': '(+) Dummies',
     }
+    _SUBSET_LINESTYLE = {
+        '1 B firms': '-',
+        '3 Pooled': '-',
+        '4 Pooled Logistic': '-',
+        '5 Dummies Logistic': '--',
+    }
     phi_data_sub = {k: v for k, v in phi_data.items() if k in _SUBSET_LABELS}
 
     fig2, axes2 = plt.subplots(1, 2, figsize=(16, 6), sharey=True)
@@ -487,9 +541,15 @@ def main():
         if 'year_quarter' not in df_phi.columns:
             continue
 
-        if 'dummy_D_type' in df_phi.columns:
+        if "1 B firms" in label:
+            df_b = df_phi
+            df_d = df_phi.copy()
+        elif 'dummy_D_type' in df_phi.columns:
             df_b = df_phi[df_phi['dummy_D_type'] == 0]
             df_d = df_phi[df_phi['dummy_D_type'] == 1]
+            if len(df_d) == 0 and 'phi_d' in df_phi.columns:
+                df_b = df_phi
+                df_d = df_phi
         elif 'is_B' in df_phi.columns:
             df_b = df_phi[df_phi['is_B'] == 1]
             df_d = df_phi[df_phi['is_B'] == 0]
@@ -518,9 +578,14 @@ def main():
             return mean, se
 
         if "Logistic" in label:
-            possible_cols = ["phi_mt_IV_HausmanFull_x_Tech_x_logistic", "phi_mt_IV_HausmanFull_x_Tech_logistic"]
+            if "5 Dummies Logistic" in label:
+                possible_cols = ["phi_mt_IV_HausmanFull_x_Tech_x_logistic", "phi_mt_IV_HausmanFull_x_Tech_logistic"]
+            else:
+                possible_cols = ["phi_mt_IV_HausmanFull_x_Tech"]
         elif "Linear" in label:
             possible_cols = ["phi_mt_IV_HausmanFull_x_Tech_x_linear", "phi_mt_IV_HausmanFull_x_Tech_linear"]
+        elif "2 D firms" in label:
+            possible_cols = ["phi_mt_Option_2_IV_HausmanFull_Tech"]
         else:
             possible_cols = ["phi_mt_IV_HausmanFull_x_Tech"]
         possible_cols += ["phi_mt_IV_HausmanFull_x_Tech", "phi_mt_Tech"]
@@ -532,6 +597,7 @@ def main():
                 break
 
         c = color_map[label]
+        ls2 = _SUBSET_LINESTYLE.get(label, '-')
         plot_label = _SUBSET_RENAME.get(label, label)
 
         if tar_col in df_phi.columns:
@@ -540,12 +606,12 @@ def main():
 
             if not agg_b.empty:
                 idx_dates = pd.PeriodIndex(agg_b.index.str.replace('_', 'Q'), freq='Q').to_timestamp()
-                axes2[0].plot(idx_dates, agg_b.values, label=plot_label, color=c, linewidth=2)
+                axes2[0].plot(idx_dates, agg_b.values, label=plot_label, color=c, linewidth=2, linestyle=ls2)
                 axes2[0].fill_between(idx_dates, agg_b.values - (1.96*se_b.values), agg_b.values + (1.96*se_b.values), color=c, alpha=0.2)
 
             if not agg_d.empty:
                 idx_dates = pd.PeriodIndex(agg_d.index.str.replace('_', 'Q'), freq='Q').to_timestamp()
-                axes2[1].plot(idx_dates, agg_d.values, label=plot_label, color=c, linewidth=2)
+                axes2[1].plot(idx_dates, agg_d.values, label=plot_label, color=c, linewidth=2, linestyle=ls2)
                 axes2[1].fill_between(idx_dates, agg_d.values - (1.96*se_d.values), agg_d.values + (1.96*se_d.values), color=c, alpha=0.2)
 
     axes2[0].set_title("B-Type Firms (Spec 12, subset)", fontsize=14)
