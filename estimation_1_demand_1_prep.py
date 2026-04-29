@@ -154,7 +154,7 @@ def build_base_panel(panel_csv: Path) -> pd.DataFrame:
     df = df.dropna(subset=['deposit_balance', 'lagged_deposits', 'spread_qoq', 'entity_id', 'time_id'])
     
     df['constant'] = 1.0
-    if 'year' in df.columns: df['post_2020'] = (df['year'] >= 2020).astype(int)
+    if 'year' in df.columns: df['pix_exists'] = ((df['year'] > 2020) | ((df['year'] == 2020) & (df['quarter'] == 4))).astype(float)
     if 'gdp_per_capita' in df.columns: df['gdp_per_capita'] /= 10000.0
     if 'cadunico_families_per1000' in df.columns: df['cadunico_families_per1000'] /= 100.0
     if 'pix_users_pf_per1000' in df.columns: df['pix_users_pf_per1000'] /= 100.0
