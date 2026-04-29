@@ -86,7 +86,7 @@ def define_specifications():
     s_macro += ['dummy_D_type_x_fraction_65plus', 'dummy_D_type_x_fraction_young']
     s_tech = s_macro + ['pix_users_pf_per1000', 'connections_per100', 'branches_per1000']
 
-    base_state_blocks = {'Base': s_base, 'Base_Selic': s_base_selic, 'Macro': s_macro, 'Tech': s_tech}
+    base_state_blocks = {'Base': s_base, 'Macro': s_macro, 'Tech': s_tech}
     state_blocks = {}
     
     for key, block in base_state_blocks.items():

@@ -48,9 +48,9 @@ def clean_name(v):
         'fraction_young': 'Fraction Young',
         'risk_free_qoq_lag': 'Lagged Selic Rate',
         'pix_users_pf_per1000': 'Pix Users (100s per 1k)',
-        'connections_per100': 'Broadband Connections (\\textit{per capita})',
+        'connections_per100': 'Broadband Connections (per 100 inhabitants)',
         'branches_per1000': 'Branches per 1k',
-        'post_2020': 'Post 2020 Dummy',
+        'pix_exists': 'Pix Available',
         'const': 'Constant',
         'constant': 'Constant',
         'tax_cost_ratio_lag': 'Tax Cost Ratio ($t-1$)',
@@ -237,7 +237,7 @@ def build_second_stage_table(results_dict, G, G_star):
         ('IV_HausmanFull', 'Hausman'),
     ]
     all_vars = [
-        'const', 'post_2020', 'gdp_per_capita',
+        'const', 'pix_exists', 'gdp_per_capita',
         'cadunico_families_per1000', 'fraction_65plus', 'fraction_young',
         'risk_free_qoq_lag',
         'pix_users_pf_per1000', 'connections_per100', 'branches_per1000',

@@ -519,11 +519,30 @@ def build_estban_panel(cnpj_map: dict) -> pd.DataFrame:
     estban = estban[estban["CODMUN_IBGE"] != 0]
 
     agg_cols = {col: "sum" for col in ESTBAN_DEPOSIT_COLS if col in estban.columns}
-    group_cols = ["CodConglomeradoPrudencial", "CNPJ_Lider", "NomeInstituicao","CODMUN_IBGE", "YEAR", "Quarter"]
+    # NomeInstituicao is intentionally excluded from group_cols: multiple institutions
+    # within the same prudential conglomerate may carry different names (e.g. Bradesco
+    # + Agora Corretora both map to C0080075). Including NomeInstituicao would split
+    # what should be a single conglomerate×market×quarter observation into multiple rows,
+    # inflating G and violating the panel structure.
+    # We instead aggregate purely on the organisational keys and re-attach a
+    # representative name afterwards.
+    group_cols = ["CodConglomeradoPrudencial", "CNPJ_Lider", "CODMUN_IBGE", "YEAR", "Quarter"]
 
     panel = (
         estban.groupby(group_cols, dropna=False).agg(agg_cols).reset_index()
     )
+
+    # Attach representative NomeInstituicao: prefer the lead institution's own name
+    # (i.e. the entry where institution CNPJ == CNPJ_Lider).
+    cong_nome = (
+        estban[["CodConglomeradoPrudencial", "CNPJ", "CNPJ_Lider", "NomeInstituicao"]]
+        .copy()
+        .assign(is_leader=(estban["CNPJ"].astype("Int64") == estban["CNPJ_Lider"].astype("Int64")))
+        .sort_values("is_leader", ascending=False)          # leaders first
+        .drop_duplicates(subset=["CodConglomeradoPrudencial"])
+        .set_index("CodConglomeradoPrudencial")["NomeInstituicao"]
+    )
+    panel["NomeInstituicao"] = panel["CodConglomeradoPrudencial"].map(cong_nome)
 
     # Rename deposit columns to standardised names
     panel.rename(columns={
@@ -580,8 +599,15 @@ def build_ifdata_panel() -> pd.DataFrame:
     df = df.dropna(subset=["Quarter", "CodConglomeradoPrudencial"])
     df["Quarter"] = df["Quarter"].astype(int)
 
-    # Pivot to wide format
-    group_cols = ["CodConglomeradoPrudencial", "CNPJ_Lider", "NomeInstituicao","Year", "Quarter"]
+    # Pivot to wide format.
+    # NomeInstituicao is excluded from group_cols: a prudential conglomerate can
+    # have multiple member institutions in the report (e.g. XP Investimentos +
+    # Rico Corretora both under C0082475). Including NomeInstituicao would split
+    # them into separate rows, fragmenting the deposit totals. Instead we
+    # aggregate purely on the organisational keys and re-attach a representative
+    # name afterwards (preferring any entry whose NomeInstituicao contains
+    # "PRUDENCIAL", falling back to the first available name).
+    group_cols = ["CodConglomeradoPrudencial", "CNPJ_Lider", "Year", "Quarter"]
     for col in group_cols:
         if col not in df.columns:
             df[col] = pd.NA
@@ -589,6 +615,21 @@ def build_ifdata_panel() -> pd.DataFrame:
     pivot = (
         df.groupby(group_cols + ["dep_col"], dropna=False)["Value"].sum().unstack("dep_col").reset_index()
     )
+
+    # Derive representative NomeInstituicao: prefer the "PRUDENCIAL" entry.
+    if "NomeInstituicao" in df.columns:
+        nome_df = df[["CodConglomeradoPrudencial", "NomeInstituicao"]].drop_duplicates()
+        nome_df = nome_df.dropna(subset=["NomeInstituicao"])
+        # sort so "PRUDENCIAL" names appear first, then take first per conglomerate
+        nome_df = nome_df.assign(
+            _prud=nome_df["NomeInstituicao"].astype(str).str.contains("PRUDENCIAL", case=False)
+        ).sort_values("_prud", ascending=False).drop(columns="_prud")
+        nome_map = nome_df.drop_duplicates(subset=["CodConglomeradoPrudencial"]).set_index(
+            "CodConglomeradoPrudencial"
+        )["NomeInstituicao"]
+        pivot["NomeInstituicao"] = pivot["CodConglomeradoPrudencial"].map(nome_map)
+    else:
+        pivot["NomeInstituicao"] = pd.NA
 
     # Ensure all deposit columns exist
     for dep_col in ["dep_a1", "dep_a2", "dep_a3", "dep_a4", "dep_outros", "dep_a5"]:

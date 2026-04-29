@@ -61,7 +61,7 @@ def clean_name(v):
         'fraction_young': 'Fraction Young',
         'risk_free_qoq_lag': 'Lagged Selic Rate',
         'pix_users_pf_per1000': 'Pix Users (100s per 1k)',
-        'connections_per100': 'Broadband Connections (\\textit{per capita})',
+        'connections_per100': 'Broadband Connections (per 100 inhabitants)',
         'branches_per1000': 'Branches per 1k',
         'post_2020': 'Post 2020 Dummy',
         'const': 'Constant',
@@ -101,27 +101,23 @@ def clean_name(v):
 
 
 def build_first_stage_table(results_dict, G, G_star):
-    panels = ['Base', 'Base_Selic', 'Macro', 'Tech']
+    panels = ['Base', 'Macro', 'Tech']
     panel_labels = {
         'Base': 'Base Specifications',
-        'Base_Selic': 'Base + Selic Specifications',
         'Macro': 'Macro Specifications',
         'Tech': 'Tech Specifications',
     }
-    panel_letters = ['A', 'B', 'C', 'D']
+    panel_letters = ['A', 'B', 'C']
     fs_spec_numbers = {
         ('Base', 'IV_CostShifters'): 2,
         ('Base', 'IV_Wholesale'): 3,
         ('Base', 'IV_HausmanFull'): 4,
-        ('Base_Selic', 'IV_CostShifters'): 6,
-        ('Base_Selic', 'IV_Wholesale'): 7,
-        ('Base_Selic', 'IV_HausmanFull'): 8,
-        ('Macro', 'IV_CostShifters'): 10,
-        ('Macro', 'IV_Wholesale'): 11,
-        ('Macro', 'IV_HausmanFull'): 12,
-        ('Tech', 'IV_CostShifters'): 14,
-        ('Tech', 'IV_Wholesale'): 15,
-        ('Tech', 'IV_HausmanFull'): 16,
+        ('Macro', 'IV_CostShifters'): 6,
+        ('Macro', 'IV_Wholesale'): 7,
+        ('Macro', 'IV_HausmanFull'): 8,
+        ('Tech', 'IV_CostShifters'): 10,
+        ('Tech', 'IV_Wholesale'): 11,
+        ('Tech', 'IV_HausmanFull'): 12,
     }
     ivs = [
         ('IV_CostShifters', 'IV Cost'),
@@ -249,31 +245,26 @@ def build_first_stage_table(results_dict, G, G_star):
 
 
 def build_second_stage_table(results_dict, G, G_star):
-    panels = ['Base', 'Base_Selic', 'Macro', 'Tech']
+    panels = ['Base', 'Macro', 'Tech']
     panel_labels = {
         'Base': 'Base Specifications',
-        'Base_Selic': 'Base + Selic Specifications',
         'Macro': 'Macro Specifications',
         'Tech': 'Tech Specifications',
     }
-    panel_letters = ['A', 'B', 'C', 'D']
+    panel_letters = ['A', 'B', 'C']
     ss_spec_numbers = {
         ('Base', 'OLS'): 1,
         ('Base', 'IV_CostShifters'): 2,
         ('Base', 'IV_Wholesale'): 3,
         ('Base', 'IV_HausmanFull'): 4,
-        ('Base_Selic', 'OLS'): 5,
-        ('Base_Selic', 'IV_CostShifters'): 6,
-        ('Base_Selic', 'IV_Wholesale'): 7,
-        ('Base_Selic', 'IV_HausmanFull'): 8,
-        ('Macro', 'OLS'): 9,
-        ('Macro', 'IV_CostShifters'): 10,
-        ('Macro', 'IV_Wholesale'): 11,
-        ('Macro', 'IV_HausmanFull'): 12,
-        ('Tech', 'OLS'): 13,
-        ('Tech', 'IV_CostShifters'): 14,
-        ('Tech', 'IV_Wholesale'): 15,
-        ('Tech', 'IV_HausmanFull'): 16,
+        ('Macro', 'OLS'): 5,
+        ('Macro', 'IV_CostShifters'): 6,
+        ('Macro', 'IV_Wholesale'): 7,
+        ('Macro', 'IV_HausmanFull'): 8,
+        ('Tech', 'OLS'): 9,
+        ('Tech', 'IV_CostShifters'): 10,
+        ('Tech', 'IV_Wholesale'): 11,
+        ('Tech', 'IV_HausmanFull'): 12,
     }
     estimators = [
         ('OLS', 'OLS'),

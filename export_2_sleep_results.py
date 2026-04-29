@@ -49,7 +49,7 @@ def clean_name(v):
         'fraction_young': 'Fraction Young',
         'risk_free_qoq_lag': 'Lagged Selic Rate',
         'pix_users_pf_per1000': 'Pix Users (100s per 1k)',
-        'connections_per100': 'Broadband Connections (\\textit{per capita})',
+        'connections_per100': 'Broadband Connections (per 100 inhabitants)',
         'branches_per1000': 'Branches per 1k',
         'post_2020': 'Post 2020 Dummy',
         'const': 'Constant',

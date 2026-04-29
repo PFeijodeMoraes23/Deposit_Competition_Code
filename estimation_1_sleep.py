@@ -155,7 +155,7 @@ def build_estimation_data():
     for col in ['leave_one_out_mean_spread']:
         if col not in df.columns: df[col] = np.nan
 
-    df['post_2020'] = (df['year'] >= 2020).astype(int)
+    df['pix_exists'] = ((df['year'] > 2020) | ((df['year'] == 2020) & (df['quarter'] == 4))).astype(float)
     df['bank_year'] = df['CodConglomeradoPrudencial'].astype(str) + "_" + df['year'].astype(str)
     df = df.dropna(subset=['deposit_balance', 'nr_lagged_dep', 'spread_qoq', 'entity_id', 'time_id'])
     return df
@@ -270,7 +270,7 @@ def scale_magnitudes(df):
     return df
 
 def define_specifications():
-    s_base = ['constant', 'post_2020']
+    s_base = ['constant', 'pix_exists']
     s_macro = s_base + ['gdp_per_capita', 'cadunico_families_per1000', 'fraction_65plus', 'fraction_young', 'risk_free_qoq_lag']
     s_tech_finance = s_macro + ['pix_users_pf_per1000', 'connections_per100', 'branches_per1000']
 
