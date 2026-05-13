@@ -597,7 +597,7 @@ _VAR_LABELS = {
     'personnel_cost_ratio_lag': 'Personnel Cost Ratio ($t-1$)',
     'admin_cost_ratio_lag': 'Admin Cost Ratio ($t-1$)',
     'tax_cost_ratio_lag': 'Tax Cost Ratio ($t-1$)',
-    'indice_basileia_lag': 'Basel Index ($t-1$)',
+    'indice_basileia_lag': 'Basel Index (bp, $t-1$)',
     'wholesale_ratio_lag': 'Wholesale Ratio ($t-1$)',
     'lci_lca_ratio_lag': 'LCI/LCA Ratio ($t-1$)',
     'risk_free_qoq': 'Risk-Free Rate (QoQ)',

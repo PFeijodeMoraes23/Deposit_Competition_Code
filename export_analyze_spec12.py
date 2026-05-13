@@ -38,11 +38,11 @@ def get_stars(pval):
     elif pval < 0.1: return "*"
     return ""
 
-def format_value(coef, se, pval):
+def format_value(coef, se, pval, digits=4):
     if pd.isna(coef):
         return "-", "-"
     stars = get_stars(pval)
-    return f"{coef:.4f}{stars}", f"({se:.4f})"
+    return f"{coef:.{digits}f}{stars}", f"({se:.{digits}f})"
 
 
 def pastelize_color(color, blend=0.7):
@@ -72,7 +72,7 @@ def nice_var_name(var):
         'tax_cost_ratio_lag': 'Tax Cost Ratio ($t-1$)',
         'personnel_cost_ratio_lag': 'Personnel Cost Ratio ($t-1$)',
         'admin_cost_ratio_lag': 'Admin Cost Ratio ($t-1$)',
-        'indice_basileia_lag': 'Basel Index (10 pp, $t-1$)',
+        'indice_basileia_lag': 'Basel Index (bp, $t-1$)',
         'lci_lca_ratio_lag': 'LCI/LCA Ratio ($t-1$)',
         'wholesale_ratio_lag': 'Wholesale Ratio ($t-1$)',
         'leave_one_out_mean_spread': 'Leave-out Mean Spread',
@@ -171,7 +171,7 @@ def build_latex_table(results_dict, order_keys, target_vars, out_path, title="",
             pvalues = getattr(res, 'pvalues', pd.Series(dtype=float))
             
             if v in params.index:
-                c_str, se_str = format_value(params[v], bse[v], pvalues[v])
+                c_str, se_str = format_value(params[v], bse[v], pvalues[v], digits=4)
                 row_cf.append(c_str)
                 row_se.append(se_str)
             else:
@@ -706,6 +706,8 @@ def main():
                 ax3.set_ylabel(r"National $\hat{\phi}_t$")
                 ax3.set_ylim(bottom=0)
                 ax3.axhline(1.0, color='gray', linestyle=':', linewidth=1.2, alpha=0.9)
+                y_top = max(1.02, ax3.get_ylim()[1])
+                ax3.set_ylim(0, y_top)
                 current_ticks = list(ax3.get_yticks())
                 if 1.0 not in current_ticks:
                     current_ticks.append(1.0)

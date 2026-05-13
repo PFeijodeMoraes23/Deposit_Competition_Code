@@ -56,7 +56,7 @@ def clean_name(v):
         'tax_cost_ratio_lag': 'Tax Cost Ratio ($t-1$)',
         'personnel_cost_ratio_lag': 'Personnel Cost Ratio ($t-1$)',
         'admin_cost_ratio_lag': 'Admin Cost Ratio ($t-1$)',
-        'indice_basileia_lag': 'Basel Index (10 pp, $t-1$)',
+        'indice_basileia_lag': 'Basel Index (bp, $t-1$)',
         'lci_lca_ratio_lag': 'LCI/LCA Ratio ($t-1$)',
         'wholesale_ratio_lag': 'Wholesale Ratio ($t-1$)',
         'leave_one_out_mean_spread': 'Leave-out Mean Spread',
@@ -261,7 +261,9 @@ def build_second_stage_table(results_dict, G, G_star):
 
     lines = [
         r"\setstretch{1.0}",
-        r"\begin{longtable}{lcccc}",
+        r"\setlength{\LTleft}{\fill}",
+        r"\setlength{\LTright}{\fill}",
+        r"\begin{longtable}{l@{\hspace{0.35em}}cccc}",
         rf"    \caption{{{caption}}}\label{{{label}}} \\",
         r"    \toprule",
         rf"    \multicolumn{{{multispan}}}{{l}}{{\textbf{{Panel {l0}: {panel_labels[p0]}}}}} \\",
