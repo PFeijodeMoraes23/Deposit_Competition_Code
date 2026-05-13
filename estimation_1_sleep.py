@@ -263,7 +263,7 @@ def scale_magnitudes(df):
         'gdp_per_capita': 10000.0, 'cadunico_families_per1000': 100.0,
         'pix_users_pf_per1000': 100.0, 'connections_per100': 100.0,
         'deposit_balance': 1000000000.0, 'nr_lagged_dep': 1000000000.0,
-        'lagged_deposits': 1000000000.0
+        'lagged_deposits': 1000000000.0, 'indice_basileia_lag': 10.0
     }
     for col, factor in scale_cols.items():
         if col in df.columns: df[col] /= factor

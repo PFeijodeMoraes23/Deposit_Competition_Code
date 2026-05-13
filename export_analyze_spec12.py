@@ -8,6 +8,7 @@ _DRAFTS_DIR = Path(r"C:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
+import matplotlib.colors as mcolors
 
 # Mock NonLinearResults class for unpickling
 class NonLinearResults:
@@ -43,6 +44,12 @@ def format_value(coef, se, pval):
     stars = get_stars(pval)
     return f"{coef:.4f}{stars}", f"({se:.4f})"
 
+
+def pastelize_color(color, blend=0.7):
+    """Blend color toward white for CI bands."""
+    rgb = np.array(mcolors.to_rgb(color))
+    return tuple((1 - blend) * rgb + blend * np.array([1.0, 1.0, 1.0]))
+
 def nice_var_name(var):
     v = str(var).replace('interaction_', '')
     labels = {
@@ -65,13 +72,13 @@ def nice_var_name(var):
         'tax_cost_ratio_lag': 'Tax Cost Ratio ($t-1$)',
         'personnel_cost_ratio_lag': 'Personnel Cost Ratio ($t-1$)',
         'admin_cost_ratio_lag': 'Admin Cost Ratio ($t-1$)',
-        'indice_basileia_lag': 'Basel Index ($t-1$)',
+        'indice_basileia_lag': 'Basel Index (10 pp, $t-1$)',
         'lci_lca_ratio_lag': 'LCI/LCA Ratio ($t-1$)',
         'wholesale_ratio_lag': 'Wholesale Ratio ($t-1$)',
         'leave_one_out_mean_spread': 'Leave-out Mean Spread',
-        'dummy_D_type_x_fraction_65plus': 'D-Type $\times$ Fraction 65+',
-        'dummy_D_type_x_fraction_young': 'D-Type $\times$ Fraction Young',
-        'dummy_D_type_x_risk_free_qoq_lag': 'D-Type $\times$ Lagged Selic'
+        'dummy_D_type_x_fraction_65plus': 'D-Type $\\times$ Fraction 65+',
+        'dummy_D_type_x_fraction_young': 'D-Type $\\times$ Fraction Young',
+        'dummy_D_type_x_risk_free_qoq_lag': 'D-Type $\\times$ Lagged Selic'
     }
     return labels.get(v, v.replace('_', '\\_'))
 
@@ -494,12 +501,18 @@ def main():
             if not agg_b.empty:
                 idx_dates = pd.PeriodIndex(agg_b.index.str.replace('_', 'Q'), freq='Q').to_timestamp()
                 axes[0].plot(idx_dates, agg_b.values, label=plot_label, color=c, linewidth=2, linestyle=ls)
-                axes[0].fill_between(idx_dates, agg_b.values - (1.96*se_b.values), agg_b.values + (1.96*se_b.values), color=c, alpha=0.2)
+                axes[0].fill_between(idx_dates,
+                                     agg_b.values - (1.96 * se_b.values),
+                                     agg_b.values + (1.96 * se_b.values),
+                                     color=pastelize_color(c), alpha=0.45)
                 
             if not agg_d.empty:
                 idx_dates = pd.PeriodIndex(agg_d.index.str.replace('_', 'Q'), freq='Q').to_timestamp()
                 axes[1].plot(idx_dates, agg_d.values, label=plot_label, color=c, linewidth=2, linestyle=ls)
-                axes[1].fill_between(idx_dates, agg_d.values - (1.96*se_d.values), agg_d.values + (1.96*se_d.values), color=c, alpha=0.2)
+                axes[1].fill_between(idx_dates,
+                                     agg_d.values - (1.96 * se_d.values),
+                                     agg_d.values + (1.96 * se_d.values),
+                                     color=pastelize_color(c), alpha=0.45)
                 
     axes[0].set_title("B-Type Firms (Spec 12)", fontsize=14)
     axes[0].set_ylabel(r"National $\hat{\phi}_t$")
@@ -515,9 +528,12 @@ def main():
     fig.tight_layout()
     plot_path = out_dir / "est1-5_spec12_phi_t_comparison.png"
     plt.savefig(plot_path, dpi=300)
+    plot_path_ci = out_dir / "est1-5_spec12_phi_t_comparison_ci_pastel.png"
+    plt.savefig(plot_path_ci, dpi=300)
     plt.close(fig)
     shutil.copy(plot_path, _DRAFTS_DIR / "est1-5_spec12_phi_t_comparison.png")
-    print(f"Exported combined plot to {plot_path} and copied to {_DRAFTS_DIR}")
+    shutil.copy(plot_path_ci, _DRAFTS_DIR / "est1-5_spec12_phi_t_comparison_ci_pastel.png")
+    print(f"Exported combined plots to {plot_path} and {plot_path_ci}; copied to {_DRAFTS_DIR}")
 
     # ---- 4) Subset plot: 1 B firms, 3 Pooled, 4 Pooled Logistic, 5 Dummies Logistic ----
     _SUBSET_LABELS = {'1 B firms', '3 Pooled', '4 Pooled Logistic', '5 Dummies Logistic'}
@@ -607,12 +623,18 @@ def main():
             if not agg_b.empty:
                 idx_dates = pd.PeriodIndex(agg_b.index.str.replace('_', 'Q'), freq='Q').to_timestamp()
                 axes2[0].plot(idx_dates, agg_b.values, label=plot_label, color=c, linewidth=2, linestyle=ls2)
-                axes2[0].fill_between(idx_dates, agg_b.values - (1.96*se_b.values), agg_b.values + (1.96*se_b.values), color=c, alpha=0.2)
+                axes2[0].fill_between(idx_dates,
+                                      agg_b.values - (1.96 * se_b.values),
+                                      agg_b.values + (1.96 * se_b.values),
+                                      color=pastelize_color(c), alpha=0.45)
 
             if not agg_d.empty:
                 idx_dates = pd.PeriodIndex(agg_d.index.str.replace('_', 'Q'), freq='Q').to_timestamp()
                 axes2[1].plot(idx_dates, agg_d.values, label=plot_label, color=c, linewidth=2, linestyle=ls2)
-                axes2[1].fill_between(idx_dates, agg_d.values - (1.96*se_d.values), agg_d.values + (1.96*se_d.values), color=c, alpha=0.2)
+                axes2[1].fill_between(idx_dates,
+                                      agg_d.values - (1.96 * se_d.values),
+                                      agg_d.values + (1.96 * se_d.values),
+                                      color=pastelize_color(c), alpha=0.45)
 
     axes2[0].set_title("B-Type Firms (Spec 12, subset)", fontsize=14)
     axes2[0].set_ylabel(r"National $\hat{\phi}_t$")
@@ -628,9 +650,12 @@ def main():
     fig2.tight_layout()
     plot_path2 = out_dir / "est1345_spec12_phi_t_comparison.png"
     plt.savefig(plot_path2, dpi=300)
+    plot_path2_ci = out_dir / "est1345_spec12_phi_t_comparison_ci_pastel.png"
+    plt.savefig(plot_path2_ci, dpi=300)
     plt.close(fig2)
     shutil.copy(plot_path2, _DRAFTS_DIR / "est1345_spec12_phi_t_comparison.png")
-    print(f"Exported subset plot to {plot_path2} and copied to {_DRAFTS_DIR}")
+    shutil.copy(plot_path2_ci, _DRAFTS_DIR / "est1345_spec12_phi_t_comparison_ci_pastel.png")
+    print(f"Exported subset plots to {plot_path2} and {plot_path2_ci}; copied to {_DRAFTS_DIR}")
 
     # ---- 5) Single-panel: Dummies Logistic, B and D in same axes ----
     _DUMMIES_LABEL = '5 Dummies Logistic'
@@ -667,7 +692,7 @@ def main():
                     ax3.fill_between(idx_b,
                                      agg_b3.values - 1.96 * se_b3.values,
                                      agg_b3.values + 1.96 * se_b3.values,
-                                     color='steelblue', alpha=0.2)
+                                     color=pastelize_color('steelblue'), alpha=0.45)
 
                 if not agg_d3.empty:
                     idx_d = pd.PeriodIndex(agg_d3.index.str.replace('_', 'Q'), freq='Q').to_timestamp()
@@ -675,20 +700,28 @@ def main():
                     ax3.fill_between(idx_d,
                                      agg_d3.values - 1.96 * se_d3.values,
                                      agg_d3.values + 1.96 * se_d3.values,
-                                     color='tomato', alpha=0.2)
+                                     color=pastelize_color('tomato'), alpha=0.45)
 
-                ax3.set_title(r"Dummies Logistic — B vs D Firms (Spec 12)", fontsize=14)
+                ax3.set_title(r"(+) Dummies — B vs D Firms (Spec 12)", fontsize=14)
                 ax3.set_ylabel(r"National $\hat{\phi}_t$")
                 ax3.set_ylim(bottom=0)
+                ax3.axhline(1.0, color='gray', linestyle=':', linewidth=1.2, alpha=0.9)
+                current_ticks = list(ax3.get_yticks())
+                if 1.0 not in current_ticks:
+                    current_ticks.append(1.0)
+                    ax3.set_yticks(sorted(current_ticks))
                 ax3.grid()
                 ax3.legend(loc='lower left')
                 fig3.tight_layout()
 
                 plot_path3 = out_dir / "est5_spec12_phi_t_BvD.png"
                 plt.savefig(plot_path3, dpi=300)
+                plot_path3_ci = out_dir / "est5_spec12_phi_t_BvD_ci_pastel.png"
+                plt.savefig(plot_path3_ci, dpi=300)
                 plt.close(fig3)
                 shutil.copy(plot_path3, _DRAFTS_DIR / "est5_spec12_phi_t_BvD.png")
-                print(f"Exported B-vs-D dummies plot to {plot_path3} and copied to {_DRAFTS_DIR}")
+                shutil.copy(plot_path3_ci, _DRAFTS_DIR / "est5_spec12_phi_t_BvD_ci_pastel.png")
+                print(f"Exported B-vs-D dummies plots to {plot_path3} and {plot_path3_ci}; copied to {_DRAFTS_DIR}")
 
 if __name__ == "__main__":
     main()

@@ -182,7 +182,7 @@ def build_pooled_data():
     for col, factor in scale_cols.items():
         if col in df.columns: df[col] /= factor
         
-    for fix_c, fact in [('gdp_per_capita', 10000.0), ('cadunico_families_per1000', 100.0), ('pix_users_pf_per1000', 100.0), ('connections_per100', 100.0)]:
+    for fix_c, fact in [('gdp_per_capita', 10000.0), ('cadunico_families_per1000', 100.0), ('pix_users_pf_per1000', 100.0), ('connections_per100', 100.0), ('indice_basileia_lag', 10.0)]:
         if fix_c in df.columns: df[fix_c] /= fact
 
     s_tech_finance = ['gdp_per_capita', 'cadunico_families_per1000', 'fraction_65plus', 'fraction_young', 'pix_users_pf_per1000', 'connections_per100', 'branches_per1000']

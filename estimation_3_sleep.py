@@ -160,6 +160,7 @@ def build_pooled_data():
     if 'cadunico_families_per1000' in df.columns: df['cadunico_families_per1000'] /= 100.0
     if 'pix_users_pf_per1000' in df.columns: df['pix_users_pf_per1000'] /= 100.0
     if 'connections_per100' in df.columns: df['connections_per100'] /= 100.0
+    if 'indice_basileia_lag' in df.columns: df['indice_basileia_lag'] /= 10.0
 
     s_tech_finance = ['gdp_per_capita', 'cadunico_families_per1000', 'fraction_65plus', 'fraction_young', 'pix_users_pf_per1000', 'connections_per100', 'branches_per1000']
     

@@ -24,8 +24,12 @@ LOG_DIR="${PROJECT_DIR}/logs"
 mkdir -p "${LOG_DIR}"
 
 # ── Resolve packages for Julia 1.10 ─────────────────────────────────────────
+if [ -f "${PROJECT_DIR}/Manifest.toml" ] && ! grep -q 'julia_version = "1.10' "${PROJECT_DIR}/Manifest.toml"; then
+    echo "Removing incompatible Manifest.toml before instantiate: $(date)"
+    rm -f "${PROJECT_DIR}/Manifest.toml"
+fi
 echo "Resolving Julia packages: $(date)"
-julia --project="${PROJECT_DIR}" -e "using Pkg; Pkg.instantiate()"
+julia --project="${PROJECT_DIR}" -e "using Pkg; Pkg.resolve(); Pkg.instantiate()"
 
 echo "======================================"
 echo " BLP Draws — blp_draws.jl"

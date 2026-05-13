@@ -149,6 +149,7 @@ def build_local_data():
     if 'cadunico_families_per1000' in df.columns: df['cadunico_families_per1000'] /= 100.0
     if 'pix_users_pf_per1000' in df.columns: df['pix_users_pf_per1000'] /= 100.0
     if 'connections_per100' in df.columns: df['connections_per100'] /= 100.0
+    if 'indice_basileia_lag' in df.columns: df['indice_basileia_lag'] /= 10.0
 
     s_tech_finance = ['pix_users_pf_per1000', 'connections_per100', 'branches_per1000']
     for col in s_tech_finance:
@@ -310,6 +311,7 @@ def build_national_data():
     if 'cadunico_families_per1000' in df.columns: df['cadunico_families_per1000'] /= 100.0
     if 'pix_users_pf_per1000' in df.columns: df['pix_users_pf_per1000'] /= 100.0
     if 'connections_per100' in df.columns: df['connections_per100'] /= 100.0
+    if 'indice_basileia_lag' in df.columns: df['indice_basileia_lag'] /= 10.0
 
     s_tech_finance = ['pix_users_pf_per1000', 'connections_per100', 'branches_per1000']
     for col in s_tech_finance:

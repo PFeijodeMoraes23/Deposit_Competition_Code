@@ -29,7 +29,10 @@ import sys
 import time
 from pathlib import Path
 
+_EMAIL_WARNED_MISSING_PWD = False
+
 def send_notification_email(finished_step, elapsed_seconds, next_step):
+    global _EMAIL_WARNED_MISSING_PWD
     import os
     import smtplib
     from email.message import EmailMessage
@@ -44,7 +47,9 @@ def send_notification_email(finished_step, elapsed_seconds, next_step):
     recipient = "pedro.feijodemoraes@yale.edu"
 
     if not pwd:
-        print("  -> Skipped email notification: 'SYS_EMAIL_PWD' environment variable is not set.")
+        if not _EMAIL_WARNED_MISSING_PWD:
+            print("  -> Email notifications disabled (set SYS_EMAIL_PWD to enable).")
+            _EMAIL_WARNED_MISSING_PWD = True
         return
 
     try:
@@ -199,26 +204,33 @@ This script sequentially runs the following steps:
         return script, elapsed_script
 
     print("\n=====================================================================")
-    # Run sleep estimators in parallel (max 3 at a time to save RAM footprint on a 32GB machine)
-    if sleep_scripts:
-        print("====== Running Sleep Estimations in Parallel (max 3 concurrent) ======")
-        with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
-            _slots = min(3, len(sleep_scripts))
-            futures = [executor.submit(run_script, s, len(sleep_scripts), _slots) for s in sleep_scripts]
-            for future in concurrent.futures.as_completed(futures):
-                future.result() # Will raise if sys.exit was called
+    try:
+        # Run sleep estimators in parallel (max 3 at a time to save RAM footprint on a 32GB machine)
+        if sleep_scripts:
+            print("====== Running Sleep Estimations in Parallel (max 3 concurrent) ======")
+            with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
+                _slots = min(3, len(sleep_scripts))
+                futures = [executor.submit(run_script, s, len(sleep_scripts), _slots) for s in sleep_scripts]
+                for future in concurrent.futures.as_completed(futures):
+                    future.result() # child errors are raised here
 
-    # Run memory-heavy scripts sequentially after the parallel batch finishes
-    if heavy_scripts:
-        print("\n====== Running Heavy Estimations Sequentially (after parallel batch) ======")
-        for step in heavy_scripts:
-            run_script(step, len(heavy_scripts))
+        # Run memory-heavy scripts sequentially after the parallel batch finishes
+        if heavy_scripts:
+            print("\n====== Running Heavy Estimations Sequentially (after parallel batch) ======")
+            for step in heavy_scripts:
+                run_script(step, len(heavy_scripts))
 
-    # Run post-processors sequentially because they aggregate the results from the estimations
-    if post_scripts:
-        print("\n====== Running Post-Processing Sequentially ======")
-        for idx, step in enumerate(post_scripts, 1):
-            run_script(step, len(post_scripts))
+        # Run post-processors sequentially because they aggregate the results from the estimations
+        if post_scripts:
+            print("\n====== Running Post-Processing Sequentially ======")
+            for idx, step in enumerate(post_scripts, 1):
+                run_script(step, len(post_scripts))
+
+    except RuntimeError as err:
+        print("\n=====================================================================")
+        print(f" [FAILED] Sleepiness pipeline stopped: {err}")
+        print("=====================================================================")
+        sys.exit(1)
 
     elapsed_all = time.time() - start_time_all
     print("\n=====================================================================")

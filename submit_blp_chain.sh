@@ -62,8 +62,12 @@ JULIA_SETUP="module reset
 module load Julia/1.10.4-linux-x86_64
 set -euo pipefail
 mkdir -p ${LOG_DIR}
+if [ -f ${PROJECT_DIR}/Manifest.toml ] && ! grep -q 'julia_version = \"1.10' ${PROJECT_DIR}/Manifest.toml; then
+    echo 'Removing incompatible Manifest.toml before instantiate: ' \$(date)
+    rm -f ${PROJECT_DIR}/Manifest.toml
+fi
 echo 'Resolving Julia packages: '\$(date)
-julia --project=${PROJECT_DIR} -e 'using Pkg; Pkg.instantiate()'"
+julia --project=${PROJECT_DIR} -e 'using Pkg; Pkg.resolve(); Pkg.instantiate()'"
 
 BLP_COMMON_ARGS="--spec ${SPEC} --R ${R} --seed ${SEED} \
     --tol-inner 1e-12 --max-inner 5000 --tol-outer 1e-6 --hpc"

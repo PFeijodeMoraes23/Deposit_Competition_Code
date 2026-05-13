@@ -56,7 +56,7 @@ def clean_name(v):
         'tax_cost_ratio_lag': 'Tax Cost Ratio ($t-1$)',
         'personnel_cost_ratio_lag': 'Personnel Cost Ratio ($t-1$)',
         'admin_cost_ratio_lag': 'Admin Cost Ratio ($t-1$)',
-        'indice_basileia_lag': 'Basel Index ($t-1$)',
+        'indice_basileia_lag': 'Basel Index (10 pp, $t-1$)',
         'lci_lca_ratio_lag': 'LCI/LCA Ratio ($t-1$)',
         'wholesale_ratio_lag': 'Wholesale Ratio ($t-1$)',
         'leave_one_out_mean_spread': 'Leave-out Mean Spread',
