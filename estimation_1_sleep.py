@@ -263,7 +263,7 @@ def scale_magnitudes(df):
         'gdp_per_capita': 10000.0, 'cadunico_families_per1000': 100.0,
         'pix_users_pf_per1000': 100.0, 'connections_per100': 100.0,
         'deposit_balance': 1000000000.0, 'nr_lagged_dep': 1000000000.0,
-        'lagged_deposits': 1000000000.0, 'indice_basileia_lag': 100.0
+        'lagged_deposits': 1000000000.0
     }
     for col, factor in scale_cols.items():
         if col in df.columns: df[col] /= factor
@@ -289,6 +289,7 @@ def do_estimation():
     G_nominal, G_star, mean_Ng, std_Ng, cv_Ng, total_obs, Ns = print_cluster_diagnostics(df)
     output_dir.mkdir(parents=True, exist_ok=True)
     df['constant'] = 1.0
+    if 'indice_basileia_lag' in df.columns: df['indice_basileia_lag'] *= 100.0
     df = scale_magnitudes(df)
 
     s_tech_finance, specs, state_blocks = define_specifications()
