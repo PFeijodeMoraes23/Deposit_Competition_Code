@@ -890,9 +890,40 @@ function run_blp_estimation(estim::Int, spec_id::Int, args,
     println("  Inner tolerance: $(args["tol_inner"])")
     println("  Bounds: [$(lo[1]), $(hi[1])]")
 
+    # ── δ warm-start from logit checkpoint ──────────────────────────────────
+    # blp_logit_local.jl saves logit_delta_E{id}_spec_{sp}.jls locally.
+    # Rsync that file to the cluster output dir before submitting sigma jobs.
+    # Starting from logit δ* saves 50–200 SQUAREM iters per outer GMM call.
     delta_work = zeros(N_obs)
-    delta_work[pc.d_mask] .= pc.ln_s_data_D[pc.d_mask]
-    delta_work[pc.b_mask] .= pc.ln_s_data_B_cond[pc.b_mask]
+    let _loaded = false
+        for _cand in [
+            joinpath(out_dir, "logit_delta_E$(estim)_spec_$(spec_id).jls"),
+            joinpath(out_dir, "blp_checkpoint_E$(estim)_spec_$(spec_id)_logit.jls"),
+            joinpath(out_dir, "blp_results_E$(estim)_spec_$(spec_id)_logit.jls"),
+        ]
+            isfile(_cand) || continue
+            try
+                _ck = deserialize(_cand)
+                _d  = get(_ck, "delta", nothing)
+                if _d !== nothing && length(_d) == N_obs
+                    copyto!(delta_work, _d)
+                    log_status("  [δ WARM-START] Loaded $(basename(_cand)) (n=$(N_obs))")
+                    _loaded = true
+                    break
+                else
+                    log_status("  [δ WARM-START] Skipped $(basename(_cand)): " *
+                               "delta size $(length(something(_d, []))) ≠ N_obs=$(N_obs)")
+                end
+            catch _e
+                log_status("  [δ WARM-START] Skipped $(basename(_cand)): $(_e)")
+            end
+        end
+        if !_loaded
+            delta_work[pc.d_mask] .= pc.ln_s_data_D
+            delta_work[pc.b_mask] .= pc.ln_s_data_B_cond
+            log_status("  [δ WARM-START] No logit checkpoint found — log-share init")
+        end
+    end
 
     if get(args, "dry_run", false)
         println("  [DRY RUN] Running 10 contraction iterations for timing...")

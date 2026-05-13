@@ -263,6 +263,25 @@ function main()
         # Deposit types for first-stage projection
         dep_types = Int.(coalesce.(df.deposit_type, 0))
 
+        # ── Save logit δ checkpoint for BLP σ-stage warm-start ──────────────
+        # blp_estimation.jl will load this file before the sigma outer loop,
+        # saving ~50–200 SQUAREM iterations per GMM objective evaluation.
+        # After running this script locally, rsync logit_delta_E*.jls to the
+        # cluster output dir (../data/output/) before submitting BLP jobs.
+        _delta_chk_path = joinpath(output_dir,
+                                   "logit_delta_E$(estim.id)_spec_$(SPEC_ID).jls")
+        try
+            serialize(_delta_chk_path, Dict{String,Any}(
+                "delta"    => delta,
+                "estim_id" => estim.id,
+                "spec_id"  => SPEC_ID,
+                "N"        => nrow(df),
+            ))
+            println("    [δ checkpoint] $(basename(_delta_chk_path)) ($(nrow(df)) obs)")
+        catch _e
+            println("    [δ checkpoint] WARN: could not save — $(_e)")
+        end
+
         for sm in SUB_MODELS
             println("    Sub-model: $(sm.name)")
 

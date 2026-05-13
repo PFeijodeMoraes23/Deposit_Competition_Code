@@ -618,12 +618,12 @@ def main():
     axes2[0].set_ylabel(r"National $\hat{\phi}_t$")
     axes2[0].set_ylim(bottom=0)
     axes2[0].grid()
-    axes2[0].legend(loc='best')
+    axes2[0].legend(loc='lower left')
 
     axes2[1].set_title("D-Type Firms (Spec 12, subset)", fontsize=14)
     axes2[1].set_ylim(bottom=0)
     axes2[1].grid()
-    axes2[1].legend(loc='best')
+    axes2[1].legend(loc='lower left')
 
     fig2.tight_layout()
     plot_path2 = out_dir / "est1345_spec12_phi_t_comparison.png"
@@ -631,6 +631,64 @@ def main():
     plt.close(fig2)
     shutil.copy(plot_path2, _DRAFTS_DIR / "est1345_spec12_phi_t_comparison.png")
     print(f"Exported subset plot to {plot_path2} and copied to {_DRAFTS_DIR}")
+
+    # ---- 5) Single-panel: Dummies Logistic, B and D in same axes ----
+    _DUMMIES_LABEL = '5 Dummies Logistic'
+    if _DUMMIES_LABEL in phi_data:
+        df_dum = phi_data[_DUMMIES_LABEL]
+        if 'year_quarter' in df_dum.columns:
+            if 'dummy_D_type' in df_dum.columns:
+                df_dum_b = df_dum[df_dum['dummy_D_type'] == 0]
+                df_dum_d = df_dum[df_dum['dummy_D_type'] == 1]
+            elif 'is_B' in df_dum.columns:
+                df_dum_b = df_dum[df_dum['is_B'] == 1]
+                df_dum_d = df_dum[df_dum['is_B'] == 0]
+            else:
+                df_dum_b = df_dum
+                df_dum_d = pd.DataFrame(columns=df_dum.columns)
+
+            possible_cols_dum = [
+                "phi_mt_IV_HausmanFull_x_Tech_x_logistic",
+                "phi_mt_IV_HausmanFull_x_Tech_logistic",
+                "phi_mt_IV_HausmanFull_x_Tech",
+                "phi_mt_Tech",
+            ]
+            tar_col_dum = next((c for c in possible_cols_dum if c in df_dum.columns), None)
+
+            if tar_col_dum is not None:
+                fig3, ax3 = plt.subplots(figsize=(10, 6))
+
+                agg_b3, se_b3 = calc_agg2(df_dum_b, tar_col_dum)
+                agg_d3, se_d3 = calc_agg2(df_dum_d, tar_col_dum)
+
+                if not agg_b3.empty:
+                    idx_b = pd.PeriodIndex(agg_b3.index.str.replace('_', 'Q'), freq='Q').to_timestamp()
+                    ax3.plot(idx_b, agg_b3.values, label='B-Type Firms', color='steelblue', linewidth=2)
+                    ax3.fill_between(idx_b,
+                                     agg_b3.values - 1.96 * se_b3.values,
+                                     agg_b3.values + 1.96 * se_b3.values,
+                                     color='steelblue', alpha=0.2)
+
+                if not agg_d3.empty:
+                    idx_d = pd.PeriodIndex(agg_d3.index.str.replace('_', 'Q'), freq='Q').to_timestamp()
+                    ax3.plot(idx_d, agg_d3.values, label='D-Type Firms', color='tomato', linewidth=2, linestyle='--')
+                    ax3.fill_between(idx_d,
+                                     agg_d3.values - 1.96 * se_d3.values,
+                                     agg_d3.values + 1.96 * se_d3.values,
+                                     color='tomato', alpha=0.2)
+
+                ax3.set_title(r"Dummies Logistic — B vs D Firms (Spec 12)", fontsize=14)
+                ax3.set_ylabel(r"National $\hat{\phi}_t$")
+                ax3.set_ylim(bottom=0)
+                ax3.grid()
+                ax3.legend(loc='lower left')
+                fig3.tight_layout()
+
+                plot_path3 = out_dir / "est5_spec12_phi_t_BvD.png"
+                plt.savefig(plot_path3, dpi=300)
+                plt.close(fig3)
+                shutil.copy(plot_path3, _DRAFTS_DIR / "est5_spec12_phi_t_BvD.png")
+                print(f"Exported B-vs-D dummies plot to {plot_path3} and copied to {_DRAFTS_DIR}")
 
 if __name__ == "__main__":
     main()

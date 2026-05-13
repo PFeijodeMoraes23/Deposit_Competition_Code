@@ -1,11 +1,11 @@
 #!/bin/bash
 #SBATCH --job-name=blp_E2
 #SBATCH --partition=day
-#SBATCH --time=20:00:00
+#SBATCH --time=06:00:00
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=32
-#SBATCH --mem=200G
+#SBATCH --mem=80G
 #SBATCH --output=/nfs/roberts/project/pi_mf2263/pf382/dep_comp/scripts/logs/blp_E2_%j.out
 #SBATCH --error=/nfs/roberts/project/pi_mf2263/pf382/dep_comp/scripts/logs/blp_E2_%j.err
 #SBATCH --mail-type=BEGIN,END,FAIL,TIME_LIMIT_90
@@ -27,14 +27,15 @@ echo "Resolving Julia packages: $(date)"
 julia --project="${PROJECT_DIR}" -e "using Pkg; Pkg.instantiate()"
 
 echo "======================================"
-echo " BLP Estimation E2 — $(date)"
-echo " stage=sequence | R=5000 | threads=${SLURM_CPUS_PER_TASK}"
+echo " BLP Estimation E2 sigma — $(date)"
+echo " stage=sigma | R=2000 | threads=${SLURM_CPUS_PER_TASK}"
+echo " (logit delta warm-start loaded if logit_delta_E2_spec_12.jls present)"
 echo "======================================"
 
 julia --project="${PROJECT_DIR}" --threads=${SLURM_CPUS_PER_TASK} \
     "${PROJECT_DIR}/blp_estimation.jl" \
-    --estim 2 --spec 12 --stage sequence \
-    --R 5000 --seed 42 \
+    --estim 2 --spec 12 --stage sigma \
+    --R 2000 --seed 42 \
     --tol-inner 1e-12 --max-inner 5000 --tol-outer 1e-6 \
     --hpc
 

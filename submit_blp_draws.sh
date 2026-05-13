@@ -29,12 +29,12 @@ julia --project="${PROJECT_DIR}" -e "using Pkg; Pkg.instantiate()"
 
 echo "======================================"
 echo " BLP Draws — blp_draws.jl"
-echo " R=5000 | seed=42 | $(date)"
+echo " R=2000 | seed=42 | $(date)"
 echo "======================================"
 
 julia --project="${PROJECT_DIR}" --threads=${SLURM_CPUS_PER_TASK} \
     "${PROJECT_DIR}/blp_draws.jl" \
-    --R 5000 \
+    --R 2000 \
     --seed 42 \
     --spec 12 \
     --estim 1 \

@@ -1,41 +1,48 @@
 """
 BLP pipeline runner.
 
+Local / Cluster split
+---------------------
+  LOCAL  (run on your PC):
+    1. python run_blp_pipeline.py --logit
+         Runs blp_logit_local.jl: non-RC baseline + saves logit_delta_E*.jls
+         checkpoints to BLP_RESULTS/ for delta warm-start on the cluster.
+    2. python run_blp_pipeline.py --draws --R 50  (optional validation)
+         R<=500 draws finish in a few minutes locally and let you test the
+         dry-run timing before submitting to the cluster.
+    3. rsync processed/ESTIMATION_OUTPUT/BLP_RESULTS/logit_delta_E*.jls
+            <cluster>:../data/output/
+         Transfer delta checkpoints so the cluster sigma stage warm-starts
+         from logit delta* instead of log-shares (saves ~50-200 iters/call).
+
+  CLUSTER (submit SLURM jobs):
+    4. sbatch submit_blp_draws.sh          # R=2000 scrambled Halton draws
+    5. bash  submit_blp_chain.sh 1 500     # E1 preliminary (sigma/full/extended)
+       bash  submit_blp_chain.sh 1 2000    # E1 production
+       (repeat for E2-E5 in parallel)
+
 Modes
 -----
-  --latex          Build LaTeX tables (default).
-  --logit          Run blp_logit_local.jl locally (non-RC, all strategies).
-  --draws          Run blp_draws.jl to pre-compute simulation draws.
-  --estimate       Run blp_estimation.jl (load draws + full BLP GMM).
-  --all            Run logit -> draws -> estimate in sequence.
+  --latex          Build LaTeX table fragments (default).
+  --logit          Run blp_logit_local.jl (non-RC, all strategies, ~1 min).
+                   Also saves logit_delta_E*.jls delta checkpoints.
+  --draws          Run blp_draws.jl (local R<=500 fine; R=2000 use cluster).
+  --estimate       Run blp_estimation.jl with pre-computed draws.
+  --all            Run logit -> draws -> estimate in sequence (full local test).
 
 Options (used with --draws and --estimate)
 ------------------------------------------
   --est 12345      Estimation strategies: "1","12","12345","all" (default: "12")
   --spec 12        Spec IDs (default: "12")
   --stage          logit | sigma | full | extended | sequence (default: sequence)
-  --R              Simulation draws (default: 2000)
+  --R              Simulation draws (default: 2000; use 50 for local testing)
   --seed           RNG seed (default: 42)
   --workers        Julia threads (default: auto)
-  --dry-run        Dry-run mode
+  --dry-run        Dry-run: time 10 inner iterations and exit
   --local-dir      Override 'processed' data directory
   --tol-inner      Inner contraction tolerance (default: 1e-12)
   --max-inner      Inner contraction max iterations (default: 5000)
   --tol-outer      Outer GMM tolerance (default: 1e-6)
-
-Recommended usage
------------------
-  # Step 1 — logit sanity check (local, fast):
-  python run_blp_pipeline.py --logit
-
-  # Step 2 — pre-compute draws (local R=50 or cluster R=2000):
-  python run_blp_pipeline.py --draws --R 50 --seed 42
-
-  # Step 3 — estimate (dry-run):
-  python run_blp_pipeline.py --estimate --est 1 --spec 12 --stage sigma --R 50 --dry-run
-
-  # Full sequence:
-  python run_blp_pipeline.py --all --R 2000 --workers 4
 """
 from utils.venv_guard import ensure_project_venv
 ensure_project_venv(__file__)
