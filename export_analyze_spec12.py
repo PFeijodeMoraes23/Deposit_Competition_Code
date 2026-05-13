@@ -72,7 +72,7 @@ def nice_var_name(var):
         'tax_cost_ratio_lag': 'Tax Cost Ratio ($t-1$)',
         'personnel_cost_ratio_lag': 'Personnel Cost Ratio ($t-1$)',
         'admin_cost_ratio_lag': 'Admin Cost Ratio ($t-1$)',
-        'indice_basileia_lag': 'Basel Index (bp, $t-1$)',
+        'indice_basileia_lag': 'Basel Index (100 bp, $t-1$)',
         'lci_lca_ratio_lag': 'LCI/LCA Ratio ($t-1$)',
         'wholesale_ratio_lag': 'Wholesale Ratio ($t-1$)',
         'leave_one_out_mean_spread': 'Leave-out Mean Spread',
@@ -171,7 +171,12 @@ def build_latex_table(results_dict, order_keys, target_vars, out_path, title="",
             pvalues = getattr(res, 'pvalues', pd.Series(dtype=float))
             
             if v in params.index:
-                c_str, se_str = format_value(params[v], bse[v], pvalues[v], digits=4)
+                if v == 'indice_basileia_lag' and ("first_stage" in str(out_path).lower() or "stage1" in str(out_path).lower()):
+                    c = params[v] * 100.0
+                    se = bse[v] * 100.0
+                    c_str, se_str = format_value(c, se, pvalues[v], digits=4)
+                else:
+                    c_str, se_str = format_value(params[v], bse[v], pvalues[v], digits=4)
                 row_cf.append(c_str)
                 row_se.append(se_str)
             else:

@@ -58,7 +58,7 @@ def clean_name(v):
         'tax_cost_ratio_lag': 'Tax Cost Ratio ($t-1$)',
         'personnel_cost_ratio_lag': 'Personnel Cost Ratio ($t-1$)',
         'admin_cost_ratio_lag': 'Admin Cost Ratio ($t-1$)',
-        'indice_basileia_lag': 'Basel Index (bp, $t-1$)',
+        'indice_basileia_lag': 'Basel Index (100 bp, $t-1$)',
         'lci_lca_ratio_lag': 'LCI/LCA Ratio ($t-1$)',
         'wholesale_ratio_lag': 'Wholesale Ratio ($t-1$)',
         'leave_one_out_mean_spread': 'Leave-out Mean Spread',
@@ -184,8 +184,11 @@ def build_first_stage_table(results_dict, G, G_star):
                 if res is not None and var in res.params:
                     has_val = True
                     c, se, pval = res.params[var], res.bse[var], res.pvalues[var]
-                    coef_strs.append(f"${c:.4f}^{{{stars(pval)}}}$")
-                    se_strs.append(f"$({se:.4f})$")
+                    if var == 'indice_basileia_lag':
+                        c, se = c * 100.0, se * 100.0
+                    digits = 4
+                    coef_strs.append(f"${c:.{digits}f}^{{{stars(pval)}}}$")
+                    se_strs.append(f"$({se:.{digits}f})$")
                 else:
                     coef_strs.append("")
                     se_strs.append("")
