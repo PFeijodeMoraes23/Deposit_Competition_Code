@@ -83,13 +83,10 @@ def _t_crit(res, alpha=0.025):
         return float(stats.norm.ppf(1 - alpha))
     return float(stats.t.ppf(1 - alpha, df=g_star - 1))
 
-# Scaling applied to state variables in calculate_phis (estimation_1_sleep.py)
-_SCALE_COLS: dict = {
-    'gdp_per_capita': 1.0 / 10000.0,
-    'cadunico_families_per1000': 1.0 / 100.0,
-    'pix_users_pf_per1000': 1.0 / 100.0,
-    'connections_per100': 1.0 / 100.0,
-}
+# All market_panel_phis.csv files store demographic/infrastructure columns already
+# in the rescaled units used for estimation (gdp/10k, cadunico/100, etc.), so no
+# additional scaling is needed when reconstructing the regressor matrix.
+_SCALE_COLS: dict = {}
 
 
 def _build_phi_regressors(df_sub: pd.DataFrame, phi_params) -> np.ndarray:
@@ -131,9 +128,12 @@ def calc_agg_delta(d_sub: pd.DataFrame, col: str, res, is_logistic: bool) -> tup
     """
     Compute deposit-weighted national phi_t and its analytical (delta-method) SE.
 
-    Linear models  : SE²_t = X̄_t' Σ X̄_t   (X̄ = pop-weighted mean regressor vector)
-    Logistic models: SE²_t = ḡ_t' Σ ḡ_t    (ḡ = pop-weighted mean of phi*(1-phi)*X;
-                                              Σ = full AME covariance stored in NonLinearResults)
+    SE²_t = X̄_t' Σ X̄_t  where X̄_t = pop-weighted mean regressor vector for period t.
+
+    Linear models  : Σ = cov_OLS (params = OLS beta)
+    Logistic models: Σ = cov_AME (params = AME).  The phi*(1-phi) scaling is already
+                     embedded in cov_AME via the delta-method Jacobian in
+                     get_nlls_ame_and_se; the gradient of phi_t wrt AME is plain X̄.
     Phi-specific params = all params whose name does NOT start with 'v_hat'.
     """
     if len(d_sub) == 0 or col not in d_sub.columns:
@@ -160,10 +160,14 @@ def calc_agg_delta(d_sub: pd.DataFrame, col: str, res, is_logistic: bool) -> tup
     phi_vals = d_sub[col].fillna(0.0).values.astype(float)
     yq_arr = d_sub['year_quarter'].values
 
-    if is_logistic:
-        G = phi_vals[:, None] * (1.0 - phi_vals[:, None]) * X   # (n, k) gradient
-    else:
-        G = X                                                      # (n, k) gradient = X for linear
+    # For both linear and logistic the gradient of phi_t w.r.t. the *reported*
+    # params is plain X.
+    # - Linear  : params = OLS beta, cov_params = cov_beta  → d(phi)/d(beta) = X  ✓
+    # - Logistic: params = AME,      cov_params = cov_AME   → d(phi)/d(AME) ≈ X
+    #   (the phi*(1-phi) factor is already embedded in cov_AME via the delta-method
+    #   Jacobian in get_nlls_ame_and_se; applying it again here would double-scale
+    #   and make logistic CIs ~11× too narrow for phi≈0.9)
+    G = X
 
     se_vals: dict = {}
     for t in mean.index:

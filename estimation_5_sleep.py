@@ -83,7 +83,10 @@ def define_specifications():
     
     s_base_selic = ['constant', 'dummy_D_type', 'pix_exists', 'risk_free_qoq_lag', 'dummy_D_type_x_risk_free_qoq_lag']
     s_macro = s_base_selic + ['gdp_per_capita', 'cadunico_families_per1000', 'fraction_65plus', 'fraction_young']
-    s_macro += ['dummy_D_type_x_fraction_65plus', 'dummy_D_type_x_fraction_young']
+    # % dummy_D_type_x_fraction_65plus removed: within D-type firms fraction_young + fraction_65plus ≈ const
+    # % (corr = -1.000), making both interactions perfectly collinear. The remaining
+    # % dummy_D_type_x_fraction_young absorbs the full D-type age effect.
+    s_macro += ['dummy_D_type_x_fraction_young']
     s_tech = s_macro + ['pix_users_pf_per1000', 'connections_per100', 'branches_per1000']
 
     base_state_blocks = {'Base': s_base, 'Macro': s_macro, 'Tech': s_tech}
