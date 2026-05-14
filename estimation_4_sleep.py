@@ -144,6 +144,11 @@ def build_pooled_data():
     df['lagged_deposits'] = df.groupby('entity_id')['deposit_balance'].shift(1)
     df['nr_lagged_dep'] = (1 + df['risk_free_qoq_lag'] - df['spread_qoq_lag']) * df['lagged_deposits']
     df['dummy_D_type_x_risk_free_qoq_lag'] = df['dummy_D_type'] * df['risk_free_qoq_lag']
+    # Rescale to pp and center to break near-perfect collinearity with dummy_D_type
+    for _c in ('fraction_65plus', 'fraction_young'):
+        if _c in df.columns:
+            df[_c] = df[_c] * 100.0
+            df[_c] = df[_c] - df[_c].mean()
     df['dummy_D_type_x_fraction_65plus'] = df['dummy_D_type'] * df['fraction_65plus']
     df['dummy_D_type_x_fraction_young'] = df['dummy_D_type'] * df['fraction_young']
     
