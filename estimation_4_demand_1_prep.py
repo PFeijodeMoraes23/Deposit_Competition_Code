@@ -83,13 +83,22 @@ def _resolve_runtime_paths() -> tuple[Path, Path, Path]:
     return panel_csv, sleep_output_dir, demand_output_dir
 
 class NonLinearResults:
-    def __init__(self, params, bse, tvalues, pvalues, G_star, params_native=None):
+    def __init__(self, params, bse, tvalues, pvalues, G_star, params_native=None, cov_ame=None, nlls_status=None, nlls_message=None):
         self.params = params
         self.bse = bse
         self.tvalues = tvalues
         self.pvalues = pvalues
         self.G_star = G_star
         self.df_resid = G_star
+        self.cov_ame = cov_ame
+        self.nlls_status = nlls_status
+        self.nlls_message = nlls_message
+
+    def cov_params(self):
+        import pandas as pd, numpy as np
+        if self.cov_ame is not None:
+            return pd.DataFrame(self.cov_ame, index=self.params.index, columns=self.params.index)
+        return pd.DataFrame(np.diag(self.bse ** 2), index=self.params.index, columns=self.params.index)
 
 # Force __main__ proxy for pickling backwards compatibility
 sys.modules['estimation_4_sleep'] = type('FakeModule', (), {'NonLinearResults': NonLinearResults})

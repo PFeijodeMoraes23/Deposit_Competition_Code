@@ -244,7 +244,7 @@ def run_pooled_first_stage(df, spec_instruments, exogenous_controls):
 
 # --- Logistic ---
 class NonLinearResults:
-    def __init__(self, params, bse, tvalues, pvalues, df_resid, params_native=None, nobs=None, rsquared=None, fvalue=None, f_pvalue=None, G_nominal=None):
+    def __init__(self, params, bse, tvalues, pvalues, df_resid, params_native=None, nobs=None, rsquared=None, fvalue=None, f_pvalue=None, G_nominal=None, cov_ame=None, nlls_status=None, nlls_message=None):
         self.params = params
         self.bse = bse
         self.tvalues = tvalues
@@ -257,6 +257,17 @@ class NonLinearResults:
         self.fvalue = fvalue
         self.f_pvalue = f_pvalue
         self.G_nominal = G_nominal
+        self.cov_ame = cov_ame
+        self.nlls_status = nlls_status
+        self.nlls_message = nlls_message
+
+    def cov_params(self):
+        """Return full AME covariance matrix as a DataFrame (mirrors statsmodels interface)."""
+        import pandas as pd
+        import numpy as np
+        if self.cov_ame is not None:
+            return pd.DataFrame(self.cov_ame, index=self.params.index, columns=self.params.index)
+        return pd.DataFrame(np.diag(self.bse ** 2), index=self.params.index, columns=self.params.index)
 
 def nlls_objective(params, y_dm, X, Z, CF, entity_idx):
     theta = params[:X.shape[1]]
@@ -341,7 +352,7 @@ def get_nlls_ame_and_se(theta_full_hat, cov_full_hat, X, CF_shape):
     cov_AME = J @ cov_full_hat @ J.T
     bse_AME = np.sqrt(np.abs(np.diag(cov_AME)))
     
-    return AME, bse_AME
+    return AME, bse_AME, cov_AME
 
 
 def run_pooled_second_stage_logistic(df, state_vars, has_cf=False):
@@ -360,15 +371,18 @@ def run_pooled_second_stage_logistic(df, state_vars, has_cf=False):
     CF = df_ss[CF_cols].values.astype(float) if has_cf else np.empty((len(df_ss), 0), dtype=float)
     
     init_params = np.zeros(X.shape[1] + CF.shape[1])
-    # Reduced max_nfev to 150. Switched to Trust Region Reflective (trf) with robust cauchy loss to cut outliers.
-    res_lsq = least_squares(nlls_objective, init_params, args=(y_dm, X, Z, CF, entity_idx), method='trf', loss='cauchy', max_nfev=150)
+    # trf method with cauchy loss down-weights large residuals (robust to outliers).
+    # No max_nfev cap — scipy default of 100*(n_params+1) evaluations ensures convergence.
+    res_lsq = least_squares(nlls_objective, init_params, args=(y_dm, X, Z, CF, entity_idx), method='trf', loss='cauchy')
+    _STATUS_LABELS = {-1: 'budget exhausted', 1: 'gtol', 2: 'ftol', 3: 'xtol', 4: 'ftol+xtol'}
+    print(f"  [NLLS] status={res_lsq.status} ({_STATUS_LABELS.get(res_lsq.status, '?')}) | nfev={res_lsq.nfev} | cost={res_lsq.cost:.4g}")
     
     J = res_lsq.jac
     try: cov = np.linalg.pinv(J.T.dot(J)) * (np.sum(res_lsq.fun**2) / (len(y_dm) - len(init_params)))
     except: cov = np.eye(len(init_params))
     
     # Calculate Average Marginal Effects and adjust SEs
-    ps_ame, bse = get_nlls_ame_and_se(res_lsq.x, cov, X, CF.shape[1] if has_cf else 0)
+    ps_ame, bse, cov_ame = get_nlls_ame_and_se(res_lsq.x, cov, X, CF.shape[1] if has_cf else 0)
     
     idx = [f'interaction_{sv}' if sv != 'constant' else 'nr_lagged_dep' for sv in state_vars] + CF_cols
     ps = pd.Series(index=idx, data=ps_ame)
@@ -394,8 +408,9 @@ def run_pooled_second_stage_logistic(df, state_vars, has_cf=False):
         fvalue, f_pvalue = np.nan, np.nan
     
     ps_native = pd.Series(index=idx, data=res_lsq.x)
-    return NonLinearResults(ps, bs, tvals, pvals, G_star, params_native=ps_native, 
-                            nobs=nobs, rsquared=rsquared, fvalue=fvalue, f_pvalue=f_pvalue, G_nominal=G_nominal)
+    return NonLinearResults(ps, bs, tvals, pvals, G_star, params_native=ps_native,
+                            nobs=nobs, rsquared=rsquared, fvalue=fvalue, f_pvalue=f_pvalue, G_nominal=G_nominal,
+                            cov_ame=cov_ame, nlls_status=res_lsq.status, nlls_message=res_lsq.message)
 
 # ==============================================================================
 # PIPELINE EXECUTION

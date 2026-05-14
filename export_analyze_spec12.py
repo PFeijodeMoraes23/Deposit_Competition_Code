@@ -9,16 +9,36 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
+from scipy import stats
 
-# Mock NonLinearResults class for unpickling
+# Mock NonLinearResults class for unpickling estimation_2_sleep pickles.
+# Must match the real class's __init__ signature so pickle restores __dict__ correctly.
 class NonLinearResults:
-    def __init__(self, params, bse, tvalues, pvalues, df_resid):
+    def __init__(self, params, bse, tvalues, pvalues, df_resid,
+                 params_native=None, nobs=None, rsquared=None,
+                 fvalue=None, f_pvalue=None, G_nominal=None, cov_ame=None,
+                 nlls_status=None, nlls_message=None):
         self.params = params
         self.bse = bse
         self.tvalues = tvalues
         self.pvalues = pvalues
         self.df_resid = df_resid
+        self.params_native = params_native if params_native is not None else params
         self.G_star = df_resid
+        self.nobs = nobs
+        self.rsquared = rsquared
+        self.fvalue = fvalue
+        self.f_pvalue = f_pvalue
+        self.G_nominal = G_nominal
+        self.cov_ame = cov_ame
+        self.nlls_status = nlls_status
+        self.nlls_message = nlls_message
+
+    def cov_params(self):
+        """Return full AME covariance matrix as a DataFrame (mirrors statsmodels interface)."""
+        if self.cov_ame is not None:
+            return pd.DataFrame(self.cov_ame, index=self.params.index, columns=self.params.index)
+        return pd.DataFrame(np.diag(self.bse ** 2), index=self.params.index, columns=self.params.index)
 
 # Register fake module for unpickling
 sys.modules['estimation_2_sleep'] = type('FakeModule', (), {'NonLinearResults': NonLinearResults})
@@ -26,7 +46,7 @@ sys.modules['estimation_2_sleep'] = type('FakeModule', (), {'NonLinearResults': 
 
 # Try to respect the project's venv guard
 try:
-    from utils.venv_guard import ensure_project_venv
+    from utils.venv_guard import ensure_project_venv  # type: ignore[import-untyped]
     ensure_project_venv(__file__)
 except ImportError:
     pass
@@ -49,6 +69,116 @@ def pastelize_color(color, blend=0.7):
     """Blend color toward white for CI bands."""
     rgb = np.array(mcolors.to_rgb(color))
     return tuple((1 - blend) * rgb + blend * np.array([1.0, 1.0, 1.0]))
+
+def _t_crit(res, alpha=0.025):
+    """Exact two-tailed 95% CI critical value: t_{G*-1, 1-alpha} from effective cluster df."""
+    if res is None:
+        return float(stats.norm.ppf(1 - alpha))
+    g_star = getattr(res, 'G_star', getattr(res, 'df_resid', None))
+    try:
+        g_star = float(g_star)
+    except (TypeError, ValueError):
+        return float(stats.norm.ppf(1 - alpha))
+    if np.isnan(g_star) or g_star <= 1:
+        return float(stats.norm.ppf(1 - alpha))
+    return float(stats.t.ppf(1 - alpha, df=g_star - 1))
+
+# Scaling applied to state variables in calculate_phis (estimation_1_sleep.py)
+_SCALE_COLS: dict = {
+    'gdp_per_capita': 1.0 / 10000.0,
+    'cadunico_families_per1000': 1.0 / 100.0,
+    'pix_users_pf_per1000': 1.0 / 100.0,
+    'connections_per100': 1.0 / 100.0,
+}
+
+
+def _build_phi_regressors(df_sub: pd.DataFrame, phi_params) -> np.ndarray:
+    """
+    Build regressor matrix X (n_obs × len(phi_params)) from market panel columns.
+    Applies the same scaling as calculate_phis() in estimation_1_sleep.py.
+    Maps:  'nr_lagged_dep'      → constant 1.0
+           'interaction_{sv}'   → column sv (scaled)
+           other param names    → matching column if present, else 0.0
+    """
+    n = len(df_sub)
+    X = np.zeros((n, len(phi_params)))
+    for i, pname in enumerate(phi_params):
+        if pname == 'nr_lagged_dep':
+            X[:, i] = 1.0
+        elif pname.startswith('interaction_'):
+            sv = pname[len('interaction_'):]
+            if sv == 'pix_exists':
+                if sv in df_sub.columns:
+                    v = df_sub[sv].values.astype(float)
+                elif 'year' in df_sub.columns and 'quarter' in df_sub.columns:
+                    v = ((df_sub['year'] > 2020) |
+                         ((df_sub['year'] == 2020) & (df_sub['quarter'] == 4))
+                         ).astype(float).values
+                else:
+                    v = np.zeros(n)
+            elif sv in df_sub.columns:
+                v = df_sub[sv].fillna(0.0).values.astype(float) * _SCALE_COLS.get(sv, 1.0)
+            else:
+                v = np.zeros(n)
+            X[:, i] = v
+        elif pname in df_sub.columns:
+            X[:, i] = df_sub[pname].fillna(0.0).values.astype(float)
+        # else: leave column as 0.0
+    return X
+
+
+def calc_agg_delta(d_sub: pd.DataFrame, col: str, res, is_logistic: bool) -> tuple:
+    """
+    Compute deposit-weighted national phi_t and its analytical (delta-method) SE.
+
+    Linear models  : SE²_t = X̄_t' Σ X̄_t   (X̄ = pop-weighted mean regressor vector)
+    Logistic models: SE²_t = ḡ_t' Σ ḡ_t    (ḡ = pop-weighted mean of phi*(1-phi)*X;
+                                              Σ = full AME covariance stored in NonLinearResults)
+    Phi-specific params = all params whose name does NOT start with 'v_hat'.
+    """
+    if len(d_sub) == 0 or col not in d_sub.columns:
+        return pd.Series(dtype=float), pd.Series(dtype=float)
+
+    w = d_sub['market_size'] if 'market_size' in d_sub.columns else pd.Series(1.0, index=d_sub.index)
+    w_arr = w.values.astype(float)
+    mean = (d_sub[col] * w).groupby(d_sub['year_quarter']).sum() / w.groupby(d_sub['year_quarter']).sum()
+
+    if res is None:
+        return mean, pd.Series(0.0, index=mean.index)
+
+    all_idx = res.params.index
+    phi_mask = ~pd.Series(list(all_idx)).str.startswith('v_hat').values
+    phi_params = all_idx[phi_mask]
+
+    # Covariance sub-matrix (phi params only).
+    # Both statsmodels results and NonLinearResults expose cov_params().
+    full_cov = res.cov_params()
+    p_idx = [j for j, p in enumerate(all_idx) if p in set(phi_params)]
+    Sigma = full_cov.values[np.ix_(p_idx, p_idx)]
+
+    X = _build_phi_regressors(d_sub, phi_params)
+    phi_vals = d_sub[col].fillna(0.0).values.astype(float)
+    yq_arr = d_sub['year_quarter'].values
+
+    if is_logistic:
+        G = phi_vals[:, None] * (1.0 - phi_vals[:, None]) * X   # (n, k) gradient
+    else:
+        G = X                                                      # (n, k) gradient = X for linear
+
+    se_vals: dict = {}
+    for t in mean.index:
+        mask = yq_arr == t
+        w_t = w_arr[mask]
+        g_t = G[mask]
+        w_sum = w_t.sum()
+        if w_sum == 0:
+            se_vals[t] = 0.0
+            continue
+        g_bar = (w_t[:, None] * g_t).sum(axis=0) / w_sum   # (k,)
+        var_t = float(g_bar @ Sigma @ g_bar)
+        se_vals[t] = np.sqrt(max(var_t, 0.0))
+
+    return mean, pd.Series(se_vals)
 
 def nice_var_name(var):
     v = str(var).replace('interaction_', '')
@@ -405,7 +535,9 @@ def main():
         '5 Dummies Linear': '(+) Dummies Linear',
         '5 Dummies Logistic': '(+) Dummies',
     }
-    
+
+    ci_b: list = []
+    ci_d: list = []
     for label, df_phi in phi_data.items():
         if 'year_quarter' not in df_phi.columns:
             continue
@@ -438,34 +570,6 @@ def main():
                 df_b = df_phi
                 df_d = pd.DataFrame(columns=df_phi.columns)
 
-        def calc_agg(d_sub, col):
-            if len(d_sub) == 0: return pd.Series(dtype=float), pd.Series(dtype=float)
-            w = d_sub.get('market_size', pd.Series(1.0, index=d_sub.index))
-            num = (d_sub[col] * w).groupby(d_sub['year_quarter']).sum()
-            den = w.groupby(d_sub['year_quarter']).sum()
-            mean = num / den
-            
-            # Compute weighted variance and standard error of the mean
-            if len(d_sub) > 1:
-                # Merge mean back to compute variance
-                merged = d_sub[['year_quarter', col]].copy()
-                merged['w'] = w
-                merged['mean'] = merged['year_quarter'].map(mean)
-                # Weighted variance
-                var_num = (merged['w'] * (merged[col] - merged['mean'])**2).groupby(merged['year_quarter']).sum()
-                # Unbiased weighted variance (reliability weights)
-                v1 = merged['w'].groupby(merged['year_quarter']).sum()
-                v2 = (merged['w']**2).groupby(merged['year_quarter']).sum()
-                var = var_num / (v1 - (v2 / v1))
-                
-                # Standard error of the mean (weighted)
-                n = d_sub.groupby('year_quarter').size()
-                se = np.sqrt(var / n)
-            else:
-                se = pd.Series(0.0, index=mean.index)
-                
-            return mean, se
-        
         tar_col = "phi_mt_IV_HausmanFull_x_Tech"
         
         # Explicitly map target columns based on spec label to prevent collisions
@@ -492,27 +596,23 @@ def main():
         plot_label = label_rename_map.get(label, label)
         c = color_map[label]
         ls = linestyle_map.get(label, '-')
-        
+        crit_val = _t_crit(stage2_res.get(label))
+        res = stage2_res.get(label)
+        is_logistic = 'Logistic' in label
+
         if tar_col in df_phi.columns:
-            agg_b, se_b = calc_agg(df_b, tar_col)
-            agg_d, se_d = calc_agg(df_d, tar_col)
-            
-            # Use 1.96 standard errors for approx 95% CI
+            agg_b, se_b = calc_agg_delta(df_b, tar_col, res, is_logistic)
+            agg_d, se_d = calc_agg_delta(df_d, tar_col, res, is_logistic)
+
             if not agg_b.empty:
                 idx_dates = pd.PeriodIndex(agg_b.index.str.replace('_', 'Q'), freq='Q').to_timestamp()
                 axes[0].plot(idx_dates, agg_b.values, label=plot_label, color=c, linewidth=2, linestyle=ls)
-                axes[0].fill_between(idx_dates,
-                                     agg_b.values - (1.96 * se_b.values),
-                                     agg_b.values + (1.96 * se_b.values),
-                                     color=pastelize_color(c), alpha=0.45)
-                
+                ci_b.append((idx_dates, agg_b.values - crit_val * se_b.values, agg_b.values + crit_val * se_b.values, pastelize_color(c)))
+
             if not agg_d.empty:
                 idx_dates = pd.PeriodIndex(agg_d.index.str.replace('_', 'Q'), freq='Q').to_timestamp()
                 axes[1].plot(idx_dates, agg_d.values, label=plot_label, color=c, linewidth=2, linestyle=ls)
-                axes[1].fill_between(idx_dates,
-                                     agg_d.values - (1.96 * se_d.values),
-                                     agg_d.values + (1.96 * se_d.values),
-                                     color=pastelize_color(c), alpha=0.45)
+                ci_d.append((idx_dates, agg_d.values - crit_val * se_d.values, agg_d.values + crit_val * se_d.values, pastelize_color(c)))
                 
     axes[0].set_title("B-Type Firms (Spec 12)", fontsize=14)
     axes[0].set_ylabel(r"National $\hat{\phi}_t$")
@@ -528,6 +628,10 @@ def main():
     fig.tight_layout()
     plot_path = out_dir / "est1-5_spec12_phi_t_comparison.png"
     plt.savefig(plot_path, dpi=300)
+    for x, lo, hi, pc in ci_b:
+        axes[0].fill_between(x, lo, hi, color=pc, alpha=0.45)
+    for x, lo, hi, pc in ci_d:
+        axes[1].fill_between(x, lo, hi, color=pc, alpha=0.45)
     plot_path_ci = out_dir / "est1-5_spec12_phi_t_comparison_ci_pastel.png"
     plt.savefig(plot_path_ci, dpi=300)
     plt.close(fig)
@@ -553,6 +657,8 @@ def main():
 
     fig2, axes2 = plt.subplots(1, 2, figsize=(16, 6), sharey=True)
 
+    ci_b2: list = []
+    ci_d2: list = []
     for label, df_phi in phi_data_sub.items():
         if 'year_quarter' not in df_phi.columns:
             continue
@@ -574,24 +680,8 @@ def main():
             df_d = pd.DataFrame(columns=df_phi.columns)
 
         def calc_agg2(d_sub, col):
-            if len(d_sub) == 0: return pd.Series(dtype=float), pd.Series(dtype=float)
-            w = d_sub.get('market_size', pd.Series(1.0, index=d_sub.index))
-            num = (d_sub[col] * w).groupby(d_sub['year_quarter']).sum()
-            den = w.groupby(d_sub['year_quarter']).sum()
-            mean = num / den
-            if len(d_sub) > 1:
-                merged = d_sub[['year_quarter', col]].copy()
-                merged['w'] = w
-                merged['mean'] = merged['year_quarter'].map(mean)
-                var_num = (merged['w'] * (merged[col] - merged['mean'])**2).groupby(merged['year_quarter']).sum()
-                v1 = merged['w'].groupby(merged['year_quarter']).sum()
-                v2 = (merged['w']**2).groupby(merged['year_quarter']).sum()
-                var = var_num / (v1 - (v2 / v1))
-                n = d_sub.groupby('year_quarter').size()
-                se = np.sqrt(var / n)
-            else:
-                se = pd.Series(0.0, index=mean.index)
-            return mean, se
+            # Kept as alias for calc_agg_delta; is_logistic resolved from outer `label`
+            return calc_agg_delta(d_sub, col, stage2_res.get(label), 'Logistic' in label)
 
         if "Logistic" in label:
             if "5 Dummies Logistic" in label:
@@ -615,6 +705,7 @@ def main():
         c = color_map[label]
         ls2 = _SUBSET_LINESTYLE.get(label, '-')
         plot_label = _SUBSET_RENAME.get(label, label)
+        crit_val = _t_crit(stage2_res.get(label))
 
         if tar_col in df_phi.columns:
             agg_b, se_b = calc_agg2(df_b, tar_col)
@@ -623,18 +714,12 @@ def main():
             if not agg_b.empty:
                 idx_dates = pd.PeriodIndex(agg_b.index.str.replace('_', 'Q'), freq='Q').to_timestamp()
                 axes2[0].plot(idx_dates, agg_b.values, label=plot_label, color=c, linewidth=2, linestyle=ls2)
-                axes2[0].fill_between(idx_dates,
-                                      agg_b.values - (1.96 * se_b.values),
-                                      agg_b.values + (1.96 * se_b.values),
-                                      color=pastelize_color(c), alpha=0.45)
+                ci_b2.append((idx_dates, agg_b.values - crit_val * se_b.values, agg_b.values + crit_val * se_b.values, pastelize_color(c)))
 
             if not agg_d.empty:
                 idx_dates = pd.PeriodIndex(agg_d.index.str.replace('_', 'Q'), freq='Q').to_timestamp()
                 axes2[1].plot(idx_dates, agg_d.values, label=plot_label, color=c, linewidth=2, linestyle=ls2)
-                axes2[1].fill_between(idx_dates,
-                                      agg_d.values - (1.96 * se_d.values),
-                                      agg_d.values + (1.96 * se_d.values),
-                                      color=pastelize_color(c), alpha=0.45)
+                ci_d2.append((idx_dates, agg_d.values - crit_val * se_d.values, agg_d.values + crit_val * se_d.values, pastelize_color(c)))
 
     axes2[0].set_title("B-Type Firms (Spec 12, subset)", fontsize=14)
     axes2[0].set_ylabel(r"National $\hat{\phi}_t$")
@@ -650,6 +735,10 @@ def main():
     fig2.tight_layout()
     plot_path2 = out_dir / "est1345_spec12_phi_t_comparison.png"
     plt.savefig(plot_path2, dpi=300)
+    for x, lo, hi, pc in ci_b2:
+        axes2[0].fill_between(x, lo, hi, color=pc, alpha=0.45)
+    for x, lo, hi, pc in ci_d2:
+        axes2[1].fill_between(x, lo, hi, color=pc, alpha=0.45)
     plot_path2_ci = out_dir / "est1345_spec12_phi_t_comparison_ci_pastel.png"
     plt.savefig(plot_path2_ci, dpi=300)
     plt.close(fig2)
@@ -683,24 +772,21 @@ def main():
             if tar_col_dum is not None:
                 fig3, ax3 = plt.subplots(figsize=(10, 6))
 
-                agg_b3, se_b3 = calc_agg2(df_dum_b, tar_col_dum)
-                agg_d3, se_d3 = calc_agg2(df_dum_d, tar_col_dum)
+                _res5 = stage2_res.get(_DUMMIES_LABEL)
+                agg_b3, se_b3 = calc_agg_delta(df_dum_b, tar_col_dum, _res5, is_logistic=True)
+                agg_d3, se_d3 = calc_agg_delta(df_dum_d, tar_col_dum, _res5, is_logistic=True)
 
+                crit_val3 = _t_crit(stage2_res.get(_DUMMIES_LABEL))
+                ci3: list = []
                 if not agg_b3.empty:
                     idx_b = pd.PeriodIndex(agg_b3.index.str.replace('_', 'Q'), freq='Q').to_timestamp()
                     ax3.plot(idx_b, agg_b3.values, label='B-Type Firms', color='steelblue', linewidth=2)
-                    ax3.fill_between(idx_b,
-                                     agg_b3.values - 1.96 * se_b3.values,
-                                     agg_b3.values + 1.96 * se_b3.values,
-                                     color=pastelize_color('steelblue'), alpha=0.45)
+                    ci3.append((idx_b, agg_b3.values - crit_val3 * se_b3.values, agg_b3.values + crit_val3 * se_b3.values, pastelize_color('steelblue')))
 
                 if not agg_d3.empty:
                     idx_d = pd.PeriodIndex(agg_d3.index.str.replace('_', 'Q'), freq='Q').to_timestamp()
                     ax3.plot(idx_d, agg_d3.values, label='D-Type Firms', color='tomato', linewidth=2, linestyle='--')
-                    ax3.fill_between(idx_d,
-                                     agg_d3.values - 1.96 * se_d3.values,
-                                     agg_d3.values + 1.96 * se_d3.values,
-                                     color=pastelize_color('tomato'), alpha=0.45)
+                    ci3.append((idx_d, agg_d3.values - crit_val3 * se_d3.values, agg_d3.values + crit_val3 * se_d3.values, pastelize_color('tomato')))
 
                 ax3.set_title(r"(+) Dummies — B vs D Firms (Spec 12)", fontsize=14)
                 ax3.set_ylabel(r"National $\hat{\phi}_t$")
@@ -718,6 +804,8 @@ def main():
 
                 plot_path3 = out_dir / "est5_spec12_phi_t_BvD.png"
                 plt.savefig(plot_path3, dpi=300)
+                for x, lo, hi, pc in ci3:
+                    ax3.fill_between(x, lo, hi, color=pc, alpha=0.45)
                 plot_path3_ci = out_dir / "est5_spec12_phi_t_BvD_ci_pastel.png"
                 plt.savefig(plot_path3_ci, dpi=300)
                 plt.close(fig3)
