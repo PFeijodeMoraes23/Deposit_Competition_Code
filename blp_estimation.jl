@@ -919,8 +919,8 @@ function run_blp_estimation(estim::Int, spec_id::Int, args,
             end
         end
         if !_loaded
-            delta_work[pc.d_mask] .= pc.ln_s_data_D
-            delta_work[pc.b_mask] .= pc.ln_s_data_B_cond
+            delta_work[pc.d_mask] .= pc.ln_s_data_D[pc.d_mask]
+            delta_work[pc.b_mask] .= pc.ln_s_data_B_cond[pc.b_mask]
             log_status("  [δ WARM-START] No logit checkpoint found — log-share init")
         end
     end

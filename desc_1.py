@@ -155,49 +155,179 @@ def main():
     DRAFTS_DIR = Path(r"C:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\Drafts\Deposit Competition")
     DRAFTS_DIR.mkdir(parents=True, exist_ok=True)
 
+    # Human-readable labels and display scaling for each variable.
+    # Tuple: (display label, display unit string, scale divisor or None)
+    LABEL_MAP = {
+        'dep_a1':   ('Deposits (A1)',                  'R\\$M',        1e6),
+        'dep_a2':   ('Deposits (A2)',                  'R\\$M',        1e6),
+        'dep_a3':   ('Deposits (A3)',                  'R\\$M',        1e6),
+        'dep_a4':   ('Deposits (A4)',                  'R\\$M',        1e6),
+        'dep_a5':   ('Deposits (A5)',                  'R\\$M',        1e6),
+        'spread_a1': ('Spread (A1)',                   'pp',           None),
+        'spread_a2': ('Spread (A2)',                   'pp',           None),
+        'spread_a3': ('Spread (A3)',                   'pp',           None),
+        'spread_a4': ('Spread (A4)',                   'pp',           None),
+        'spread_a5': ('Spread (A5)',                   'pp',           None),
+        'gdp_per_capita':             ('GDP per Capita',             'R\\$',         None),
+        'pop_total':                  ('Population',                  'Thousands',    1e3),
+        'fraction_65plus':            ('Share Aged 65+',              '',             None),
+        'cadunico_families_per1000':  ('CadÚnico Families',           'per 1,000',    None),
+        'pix_users_pf_per1000':       ('PIX Users (PF)',              'per 1,000',    None),
+        'pix_txns_pf':                ('PIX Transactions (PF)',       'Millions',     1e6),
+        'has_ip':                     ('Has IP Rate',                 'Indicator',    None),
+        'connections_per100':         ('Internet Connections',        'per 100',      None),
+        'branches_per1000':           ('Bank Branches',               'per 1,000',    None),
+        'total_assets':               ('Total Assets',                'R\\$B',        1e9),
+        'equity_ratio':               ('Equity Ratio',                '',             None),
+    }
+
+    def _fmt_val(val, var_base):
+        """Format a cell value according to the variable's scale and unit."""
+        if pd.isna(val):
+            return '--'
+        info = LABEL_MAP.get(var_base)
+        if info is None:
+            return f"{val:.3f}"
+        _lbl, unit, scale = info
+        v = val / scale if scale is not None else val
+        if unit in ('R\\$M', 'R\\$B', 'Thousands', 'Millions'):
+            return f"{v:,.2f}"
+        elif unit == 'pp':
+            return f"{v:.4f}"
+        elif unit == 'R\\$':
+            return f"{v:,.2f}"
+        else:
+            return f"{v:.3f}"
+
+    def _esc(s):
+        return str(s).replace('_', '\\_').replace('&', '\\&').replace('%', '\\%')
+
     # Batch save output forms
-    def save_output(res_df, name):
+    def save_output(res_df, name, caption_title):
         out_path = OUTPUT_DIR / f"{name}{weight_str}.csv"
         res_df.to_csv(out_path, index=False)
-        # Also save transposed version as LaTeX for easy table copy/pasting
-        tex_path = OUTPUT_DIR / f"{name}{weight_str}.tex"
-        drafts_tex_path = DRAFTS_DIR / f"{name}{weight_str}.tex"
+
+        tex_path        = OUTPUT_DIR  / f"{name}{weight_str}.tex"
+        drafts_tex_path = DRAFTS_DIR  / f"{name}{weight_str}.tex"
         try:
             transposed = res_df.set_index('Group').T
-            new_idx = []
-            for idx in transposed.index:
-                if idx == 'N_obs':
-                    new_idx.append(idx)
-                    continue
-                
-                base_var = idx.replace('_Mean', '').replace('_SD', '')
-                unit = UNIT_MAP.get(base_var, '')
-                if unit:
-                    new_idx.append(f"{idx} ({unit})".replace('_', '\\_'))
-                else:
-                    new_idx.append(idx.replace('_', '\\_'))
-            
-            transposed.index = new_idx
-            
-            # Format as longtable with setstretch 1.0 to match other fragments
-            caption_str = f"Descriptive Statistics: {name.replace('_', ' ')}{weight_str.replace('_', ' ')}"
-            label_str = f"tab:{name}{weight_str}"
-            latex_str = transposed.to_latex(longtable=True, float_format="%.3f", caption=caption_str, label=label_str)
-            latex_str = "\\setstretch{1.0}\n" + latex_str
-            
-            with open(tex_path, 'w', encoding='utf-8') as f:
-                f.write(latex_str)
-            with open(drafts_tex_path, 'w', encoding='utf-8') as f:
-                f.write(latex_str)
-        except Exception as e:
-            print(f"Failed to generate latex: {e}")
+            groups      = list(transposed.columns)
+            n_groups    = len(groups)
+            n_cols      = n_groups + 1          # label col + one col per group
 
-    save_output(sum_nat, "Summary_National")
-    save_output(sum_nat_yr, "Summary_National_by_Year")
-    save_output(sum_bt, "Summary_BankType")
-    save_output(sum_bt_yr, "Summary_BankType_by_Year")
-    save_output(sum_reg, "Summary_Region")
-    save_output(sum_reg_yr, "Summary_Region_by_Year")
+            col_spec    = 'l@{\\hspace{0.35em}}' + 'c' * n_groups
+            weight_label = (' (Population Weighted, by ' + args.weight_col + ')'
+                            if args.weight_col else ' (Unweighted)')
+            full_caption = caption_title + weight_label
+            tab_label    = f"tab:{name}{weight_str}"
+            group_header = ' & '.join([_esc(g) for g in groups])
+
+            # Parse rows into (var_base, stat_type, {group: value}) triples
+            stat_rows = []
+            for idx in transposed.index:
+                vals = {g: transposed.loc[idx, g] for g in groups}
+                if idx == 'N_obs':
+                    stat_rows.append(('N_obs', 'N_obs', vals))
+                elif idx.endswith('_Mean'):
+                    stat_rows.append((idx[:-5], 'Mean', vals))
+                elif idx.endswith('_SD'):
+                    stat_rows.append((idx[:-3], 'SD',   vals))
+
+            # Ordered unique variable bases (preserving first-occurrence order)
+            seen_vars, var_order = set(), []
+            for vb, stat, _ in stat_rows:
+                if vb != 'N_obs' and vb not in seen_vars:
+                    var_order.append(vb)
+                    seen_vars.add(vb)
+
+            # Build data row strings
+            row_lines = []
+            for i, vb in enumerate(var_order):
+                info = LABEL_MAP.get(vb)
+                if info:
+                    lbl, unit, _ = info
+                    cell_label = lbl + (f' ({unit})' if unit else '')
+                else:
+                    cell_label = _esc(vb)
+
+                mean_row = next((r for r in stat_rows if r[0] == vb and r[1] == 'Mean'), None)
+                sd_row   = next((r for r in stat_rows if r[0] == vb and r[1] == 'SD'),   None)
+
+                if mean_row:
+                    vals_str = ' & '.join([_fmt_val(mean_row[2][g], vb) for g in groups])
+                    row_lines.append(f"    {cell_label} & {vals_str} \\\\*")
+                if sd_row:
+                    vals_str = ' & '.join([f"({_fmt_val(sd_row[2][g], vb)})" for g in groups])
+                    row_lines.append(f"    & {vals_str} \\\\")
+                if i < len(var_order) - 1:
+                    row_lines.append('    \\addlinespace[0.3em]')
+
+            # Observations row
+            n_obs_row = next((r for r in stat_rows if r[0] == 'N_obs'), None)
+            if n_obs_row:
+                row_lines.append('    \\midrule')
+                vals_str = ' & '.join(
+                    [f"{int(n_obs_row[2][g]):,}" if not pd.isna(n_obs_row[2][g]) else '--'
+                     for g in groups]
+                )
+                row_lines.append(f"    Observations & {vals_str} \\\\")
+
+            rows_text = '\n'.join(row_lines)
+
+            weight_note = (f" Population-weighted using \\texttt{{{_esc(args.weight_col)}}}."
+                           if args.weight_col else "")
+            notes_text = (
+                f"\\scriptsize \\textit{{Notes:}} Means are reported with standard deviations "
+                f"in parentheses below, computed over all market-quarter observations. "
+                f"Deposit and asset values scaled from nominal BRL.{weight_note}"
+            )
+
+            lines = [
+                '\\setstretch{1.0}',
+                '\\setlength{\\LTleft}{\\fill}',
+                '\\setlength{\\LTright}{\\fill}',
+                f'\\begin{{longtable}}[c]{{{col_spec}}}',
+                f'    \\caption{{{full_caption}}}\\label{{{tab_label}}} \\\\',
+                '    \\toprule',
+                f'    & {group_header} \\\\',
+                '    \\midrule',
+                '    \\endfirsthead',
+                '',
+                f'    \\multicolumn{{{n_cols}}}{{c}}{{{{\\bfseries Table \\thetable\\ continued from previous page}}}} \\\\',
+                '    \\toprule',
+                f'    & {group_header} \\\\',
+                '    \\midrule',
+                '    \\endhead',
+                '',
+                '    \\midrule',
+                f'    \\multicolumn{{{n_cols}}}{{r}}{{\\textit{{Continued on next page}}}} \\\\',
+                '    \\endfoot',
+                '',
+                '    \\bottomrule',
+                f'    \\multicolumn{{{n_cols}}}{{p{{0.85\\textwidth}}}}{{{notes_text}}} \\\\',
+                '    \\endlastfoot',
+                '',
+                rows_text,
+                '',
+                '\\end{longtable}',
+            ]
+            latex_str = '\n'.join(lines)
+
+            for path in [tex_path, drafts_tex_path]:
+                with open(path, 'w', encoding='utf-8') as f:
+                    f.write(latex_str)
+
+            print(f"  Saved: {tex_path.name}")
+        except Exception as e:
+            print(f"Failed to generate latex for {name}: {e}")
+            import traceback; traceback.print_exc()
+
+    save_output(sum_nat,    "Summary_National",           "National Summary Statistics")
+    save_output(sum_nat_yr, "Summary_National_by_Year",   "National Summary Statistics by Year")
+    save_output(sum_bt,     "Summary_BankType",           "Summary Statistics by Bank Type")
+    save_output(sum_bt_yr,  "Summary_BankType_by_Year",   "Summary Statistics by Bank Type and Year")
+    save_output(sum_reg,    "Summary_Region",             "Summary Statistics by Region (B-Type Firms)")
+    save_output(sum_reg_yr, "Summary_Region_by_Year",     "Summary Statistics by Region and Year (B-Type Firms)")
 
     print("Generating D-Type firm summary...")
     d_firms = df_b[df_b["CODMUN_IBGE"].astype(str) == "0"].copy()
