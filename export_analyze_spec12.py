@@ -187,7 +187,7 @@ def calc_agg_delta(d_sub: pd.DataFrame, col: str, res, is_logistic: bool) -> tup
 def nice_var_name(var):
     v = str(var).replace('interaction_', '')
     labels = {
-        'nr_lagged_dep': 'Lagged Deposits',
+        'nr_lagged_dep': 'Constant',
         'gdp_per_capita': 'GDP \\textit{per capita} (10k R\\$)',
         'cadunico_families_per1000': 'CadUnico Families (100s per 1k)',
         'fraction_65plus': 'Fraction 65+',
@@ -255,7 +255,7 @@ def build_latex_table(results_dict, order_keys, target_vars, out_path, title="",
     
     # Last Footer
     tex.append(r"\bottomrule")
-    notes_str = r"\multicolumn{" + str(len(order_keys) + 1) + r"}{p{\textwidth}}{\footnotesize\textit{Notes:} Standard errors are in parentheses. Significance levels: * $p < 0.1$, ** $p < 0.05$, *** $p < 0.01$.}"
+    notes_str = r"\multicolumn{" + str(len(order_keys) + 1) + r"}{@{}l}{\parbox[t]{\linewidth}{\footnotesize\textit{Notes:} Standard errors are in parentheses. Significance levels: * $p < 0.1$, ** $p < 0.05$, *** $p < 0.01$.}}"
     tex.append(notes_str)
     tex.append(r"\endlastfoot")
     
