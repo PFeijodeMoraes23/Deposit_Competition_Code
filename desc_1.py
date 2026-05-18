@@ -159,7 +159,6 @@ def main():
     # By Bank Type
     print("  -> By Bank Type (D vs B)")
     sum_bt = generate_summary(df, ['bank_type'], vars_to_summarize, args.weight_col)
-    sum_bt_yr = generate_summary(df, ['bank_type', 'year'], vars_to_summarize, args.weight_col)
 
     # By Region (B-Type only)
     print("  -> By Region (B-type)")
@@ -195,7 +194,7 @@ def main():
         'equity_ratio':               ('Equity Ratio',                '',             None),
     }
 
-    def _fmt_val(val, var_base):
+    def _fmt_val(val, var_base, compact=False):
         """Format a cell value according to the variable's scale and unit."""
         if pd.isna(val):
             return '--'
@@ -205,31 +204,40 @@ def main():
         _lbl, unit, scale = info
         v = val / scale if scale is not None else val
         if unit in ('R\\$M', 'R\\$B', 'Thousands', 'Millions'):
-            return f"{v:,.2f}"
+            return f"{v:,.0f}" if compact else f"{v:,.2f}"
         elif unit == 'pp':
             return f"{v:.4f}"
         elif unit == 'R\\$':
-            return f"{v:,.2f}"
+            return f"{v:,.0f}" if compact else f"{v:,.2f}"
         else:
-            return f"{v:.3f}"
+            return f"{v:.2f}" if compact else f"{v:.3f}"
 
     def _esc(s):
         return str(s).replace('_', '\\_').replace('&', '\\&').replace('%', '\\%')
 
     # Batch save output forms
-    def save_output(res_df, name, caption_title):
+    def save_output(res_df, name, caption_title, tex_name=None, append=False):
         out_path = OUTPUT_DIR / f"{name}{weight_str}.csv"
         res_df.to_csv(out_path, index=False)
 
-        tex_path        = OUTPUT_DIR  / f"{name}{weight_str}.tex"
-        drafts_tex_path = DRAFTS_DIR  / f"{name}{weight_str}.tex"
+        _tex_name       = tex_name if tex_name is not None else name
+        tex_path        = OUTPUT_DIR  / f"{_tex_name}{weight_str}.tex"
+        drafts_tex_path = DRAFTS_DIR  / f"{_tex_name}{weight_str}.tex"
         try:
             transposed = res_df.set_index('Group').T
             groups      = list(transposed.columns)
             n_groups    = len(groups)
             n_cols      = n_groups + 1          # label col + one col per group
 
-            col_spec    = 'l@{\\hspace{0.35em}}' + 'c' * n_groups
+            # Wide tables (many columns) use xltabular with auto-fit X columns and
+            # compact number formatting so cells never overflow the page width.
+            wide    = n_groups > 8
+            compact = wide
+            if wide:
+                col_spec  = 'l@{\\hspace{0.2em}}' + '>{\\centering\\arraybackslash}X' * n_groups
+            else:
+                col_spec  = 'l@{\\hspace{0.35em}}' + 'c' * n_groups
+
             weight_label = (' (Population Weighted, by ' + _esc(args.weight_col) + ')'
                             if args.weight_col else ' (Unweighted)')
             full_caption = caption_title + weight_label
@@ -277,10 +285,10 @@ def main():
                 sd_row   = next((r for r in stat_rows if r[0] == vb and r[1] == 'SD'),   None)
 
                 if mean_row:
-                    vals_str = ' & '.join([_fmt_val(mean_row[2][g], vb) for g in groups])
+                    vals_str = ' & '.join([_fmt_val(mean_row[2][g], vb, compact) for g in groups])
                     row_lines.append(f"    {cell_label} & {vals_str} \\\\*")
                 if sd_row:
-                    vals_str = ' & '.join([f"({_fmt_val(sd_row[2][g], vb)})" for g in groups])
+                    vals_str = ' & '.join([f"({_fmt_val(sd_row[2][g], vb, compact)})" for g in groups])
                     row_lines.append(f"    & {vals_str} \\\\")
                 if i < len(var_order) - 1:
                     row_lines.append('    \\addlinespace[0.3em]')
@@ -305,14 +313,20 @@ def main():
                 f"Deposit and asset values scaled from nominal BRL.{weight_note}"
             )
 
+            font_cmd  = '\\tiny'       if wide else '\\footnotesize'
+            tabcolsep = '1pt'          if wide else '3pt'
+            begin_env = (f'\\begin{{xltabular}}{{\\textwidth}}{{{col_spec}}}'
+                         if wide else f'\\begin{{longtable}}[c]{{{col_spec}}}')
+            end_env   = '\\end{xltabular}' if wide else '\\end{longtable}'
+
             lines = [
                 '\\setstretch{1.0}',
                 '\\setlength{\\LTleft}{\\fill}',
                 '\\setlength{\\LTright}{\\fill}',
                 '\\begingroup',
-                '\\footnotesize',
-                '\\setlength{\\tabcolsep}{3pt}',
-                f'\\begin{{longtable}}[c]{{{col_spec}}}',
+                font_cmd,
+                f'\\setlength{{\\tabcolsep}}{{{tabcolsep}}}',
+                begin_env,
                 f'    \\caption{{{full_caption}}}\\label{{{tab_label}}} \\\\',
                 '    \\toprule',
                 f'    & {group_header} \\\\',
@@ -335,13 +349,16 @@ def main():
                 '',
                 rows_text,
                 '',
-                '\\end{longtable}',
+                end_env,
                 '\\endgroup',
             ]
             latex_str = '\n'.join(lines)
 
             for path in [tex_path, drafts_tex_path]:
-                with open(path, 'w', encoding='utf-8') as f:
+                mode = 'a' if append else 'w'
+                with open(path, mode, encoding='utf-8') as f:
+                    if append:
+                        f.write('\n\n\\bigskip\n\n')
                     f.write(latex_str)
 
             print(f"  Saved: {tex_path.name}")
@@ -352,9 +369,14 @@ def main():
     save_output(sum_nat,        "Summary_National",           "National Summary Statistics")
     save_output(sum_nat_yr,     "Summary_National_by_Year",   "National Summary Statistics by Year")
     save_output(sum_nat_yr_b,   "Summary_National_byYear_B",  "National Summary Statistics by Year (B-Type / Municipal Markets)")
-    save_output(sum_nat_yr_d,   "Summary_National_byYear_D",  "National Summary Statistics by Year (D-Type / National Fintechs)")
+    save_output(sum_nat_yr_d,   "Summary_National_byYear_D",  "National Summary Statistics by Year (D-Type / Digital Banks)")
     save_output(sum_bt,         "Summary_BankType",           "Summary Statistics by Bank Type")
-    save_output(sum_bt_yr,      "Summary_BankType_by_Year",   "Summary Statistics by Bank Type and Year")
+    save_output(sum_nat_yr_b, "Summary_BankType_by_Year_B",
+                "Summary Statistics by Bank Type and Year (B-Type / Municipal Markets)",
+                tex_name="Summary_BankType_by_Year")
+    save_output(sum_nat_yr_d, "Summary_BankType_by_Year_D",
+                "Summary Statistics by Bank Type and Year (D-Type / Digital Banks)",
+                tex_name="Summary_BankType_by_Year", append=True)
     save_output(sum_reg,        "Summary_Region",             "Summary Statistics by Region (B-Type Firms)")
     save_output(sum_reg_yr,     "Summary_Region_by_Year",     "Summary Statistics by Region and Year (B-Type Firms)")
 
