@@ -149,6 +149,8 @@ def main():
     df_b = df[df['bank_type'] == 'B']
     df_d = df[df['bank_type'] == 'D']
 
+    print("  -> National by Year (all types combined)")
+    sum_nat_yr = generate_summary(df, ['year'], vars_to_summarize, args.weight_col)
     print("  -> B-type by Year (municipal markets)")
     sum_nat_yr_b = generate_summary(df_b, ['year'], vars_to_summarize, args.weight_col)
     print("  -> D-type by Year (national fintechs / digital banks)")
@@ -347,7 +349,8 @@ def main():
             print(f"Failed to generate latex for {name}: {e}")
             import traceback; traceback.print_exc()
 
-    save_output(sum_nat,       "Summary_National",           "National Summary Statistics")
+    save_output(sum_nat,        "Summary_National",           "National Summary Statistics")
+    save_output(sum_nat_yr,     "Summary_National_by_Year",   "National Summary Statistics by Year")
     save_output(sum_nat_yr_b,   "Summary_National_byYear_B",  "National Summary Statistics by Year (B-Type / Municipal Markets)")
     save_output(sum_nat_yr_d,   "Summary_National_byYear_D",  "National Summary Statistics by Year (D-Type / National Fintechs)")
     save_output(sum_bt,         "Summary_BankType",           "Summary Statistics by Bank Type")
