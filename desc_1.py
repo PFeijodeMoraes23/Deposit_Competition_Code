@@ -137,9 +137,22 @@ def main():
     print(f"Generating summaries ({'weighted by ' + args.weight_col if args.weight_col else 'unweighted'})...")
 
     # Overall Summary
-    print("  -> National Overall")
+    # NOTE: National-by-Year mixes B-type (municipal) and D-type (national-aggregate) rows.
+    # D-type rows carry pop_total ~= sum of all MCAs (~191M), so an unweighted mean over
+    # rows jumps artificially when D-type rows enter the panel (no D-type in 2013, ~400/yr
+    # from 2014 onward). To produce interpretable by-year statistics, we stratify the
+    # by-year tables by bank type. The "National Overall" (all years pooled) table is
+    # retained for reference.
+    print("  -> National Overall (pooled all years)")
     sum_nat = generate_summary(df, None, vars_to_summarize, args.weight_col)
-    sum_nat_yr = generate_summary(df, ['year'], vars_to_summarize, args.weight_col)
+
+    df_b = df[df['bank_type'] == 'B']
+    df_d = df[df['bank_type'] == 'D']
+
+    print("  -> B-type by Year (municipal markets)")
+    sum_nat_yr_b = generate_summary(df_b, ['year'], vars_to_summarize, args.weight_col)
+    print("  -> D-type by Year (national fintechs / digital banks)")
+    sum_nat_yr_d = generate_summary(df_d, ['year'], vars_to_summarize, args.weight_col)
 
     # By Bank Type
     print("  -> By Bank Type (D vs B)")
@@ -148,7 +161,6 @@ def main():
 
     # By Region (B-Type only)
     print("  -> By Region (B-type)")
-    df_b = df[df['bank_type'] == 'B']
     sum_reg = generate_summary(df_b, ['region'], vars_to_summarize, args.weight_col)
     sum_reg_yr = generate_summary(df_b, ['region', 'year'], vars_to_summarize, args.weight_col)
 
@@ -216,7 +228,7 @@ def main():
             n_cols      = n_groups + 1          # label col + one col per group
 
             col_spec    = 'l@{\\hspace{0.35em}}' + 'c' * n_groups
-            weight_label = (' (Population Weighted, by ' + args.weight_col + ')'
+            weight_label = (' (Population Weighted, by ' + _esc(args.weight_col) + ')'
                             if args.weight_col else ' (Unweighted)')
             full_caption = caption_title + weight_label
             tab_label    = f"tab:{name}{weight_str}"
@@ -239,6 +251,15 @@ def main():
                 if vb != 'N_obs' and vb not in seen_vars:
                     var_order.append(vb)
                     seen_vars.add(vb)
+
+            # Drop variables that are entirely missing across every group (fix C):
+            # keeps tables compact and removes rows that read as "--" everywhere.
+            def _all_missing(vb):
+                mean_row = next((r for r in stat_rows if r[0] == vb and r[1] == 'Mean'), None)
+                if mean_row is None:
+                    return True
+                return all(pd.isna(mean_row[2][g]) for g in groups)
+            var_order = [vb for vb in var_order if not _all_missing(vb)]
 
             # Build data row strings
             row_lines = []
@@ -286,6 +307,9 @@ def main():
                 '\\setstretch{1.0}',
                 '\\setlength{\\LTleft}{\\fill}',
                 '\\setlength{\\LTright}{\\fill}',
+                '\\begingroup',
+                '\\footnotesize',
+                '\\setlength{\\tabcolsep}{3pt}',
                 f'\\begin{{longtable}}[c]{{{col_spec}}}',
                 f'    \\caption{{{full_caption}}}\\label{{{tab_label}}} \\\\',
                 '    \\toprule',
@@ -310,6 +334,7 @@ def main():
                 rows_text,
                 '',
                 '\\end{longtable}',
+                '\\endgroup',
             ]
             latex_str = '\n'.join(lines)
 
@@ -322,12 +347,13 @@ def main():
             print(f"Failed to generate latex for {name}: {e}")
             import traceback; traceback.print_exc()
 
-    save_output(sum_nat,    "Summary_National",           "National Summary Statistics")
-    save_output(sum_nat_yr, "Summary_National_by_Year",   "National Summary Statistics by Year")
-    save_output(sum_bt,     "Summary_BankType",           "Summary Statistics by Bank Type")
-    save_output(sum_bt_yr,  "Summary_BankType_by_Year",   "Summary Statistics by Bank Type and Year")
-    save_output(sum_reg,    "Summary_Region",             "Summary Statistics by Region (B-Type Firms)")
-    save_output(sum_reg_yr, "Summary_Region_by_Year",     "Summary Statistics by Region and Year (B-Type Firms)")
+    save_output(sum_nat,       "Summary_National",           "National Summary Statistics")
+    save_output(sum_nat_yr_b,   "Summary_National_byYear_B",  "National Summary Statistics by Year (B-Type / Municipal Markets)")
+    save_output(sum_nat_yr_d,   "Summary_National_byYear_D",  "National Summary Statistics by Year (D-Type / National Fintechs)")
+    save_output(sum_bt,         "Summary_BankType",           "Summary Statistics by Bank Type")
+    save_output(sum_bt_yr,      "Summary_BankType_by_Year",   "Summary Statistics by Bank Type and Year")
+    save_output(sum_reg,        "Summary_Region",             "Summary Statistics by Region (B-Type Firms)")
+    save_output(sum_reg_yr,     "Summary_Region_by_Year",     "Summary Statistics by Region and Year (B-Type Firms)")
 
     print("Generating D-Type firm summary...")
     d_firms = df_b[df_b["CODMUN_IBGE"].astype(str) == "0"].copy()
