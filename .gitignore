@@ -1,4 +1,7 @@
 *.log
-*.pyc.venv/
+*.pyc
+*.err
+*.out
+.venv/
 __pycache__/
 Manifest.toml

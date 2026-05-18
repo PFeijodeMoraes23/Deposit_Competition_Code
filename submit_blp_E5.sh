@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH --job-name=blp_E5
 #SBATCH --partition=day
-#SBATCH --time=06:00:00
+#SBATCH --time=24:00:00
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=32
@@ -16,19 +16,17 @@
 module reset
 module load Julia/1.10.4-linux-x86_64
 
+# MKL threading: TBB works better than OpenMP for 32-thread BLAS in SLURM
+export JULIA_MKL_THREADING=tbb
 # Strict error checking starts after module loading to avoid false failures
 set -euo pipefail
 
 PROJECT_DIR="${SLURM_SUBMIT_DIR}"
 mkdir -p "${PROJECT_DIR}/logs"
 
-# ── Resolve packages for Julia 1.10 ─────────────────────────────────────────
-if [ -f "${PROJECT_DIR}/Manifest.toml" ] && ! grep -q 'julia_version = "1.10' "${PROJECT_DIR}/Manifest.toml"; then
-    echo "Removing incompatible Manifest.toml before instantiate: $(date)"
-    rm -f "${PROJECT_DIR}/Manifest.toml"
-fi
-echo "Resolving Julia packages: $(date)"
-julia --project="${PROJECT_DIR}" -e "using Pkg; Pkg.resolve(); Pkg.instantiate()"
+# ── Verify environment (run setup_julia_env.sh once before first submission) ──
+echo "Checking Julia packages: $(date)"
+julia --project="${PROJECT_DIR}" -e "using Pkg; Pkg.instantiate()"
 
 echo "======================================"
 echo " BLP Estimation E5 (logistic) sigma — $(date)"

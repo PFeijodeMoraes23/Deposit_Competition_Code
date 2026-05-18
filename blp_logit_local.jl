@@ -281,6 +281,18 @@ function main()
         catch _e
             println("    [δ checkpoint] WARN: could not save — $(_e)")
         end
+        # Also save as version-agnostic binary (no Julia serialization version dependency)
+        # rsync this .bin alongside the .jls before submitting sigma jobs to cluster
+        _bin_path = replace(_delta_chk_path, ".jls" => ".bin")
+        try
+            open(_bin_path, "w") do io
+                write(io, Int64(length(delta)))
+                write(io, delta)
+            end
+            println("    [δ .bin] $(basename(_bin_path))")
+        catch _e
+            println("    [δ .bin] WARN: $(_e)")
+        end
 
         for sm in SUB_MODELS
             println("    Sub-model: $(sm.name)")

@@ -27,12 +27,17 @@ References
   Conlon & Gortmaker (2020, RAND J. Econ.)
 """
 
+using MKL                       # must precede LinearAlgebra — replaces OpenBLAS with Intel MKL
+using LoopVectorization         # @turbo SIMD annotations
 using Parquet2, DataFrames, SparseArrays, LinearAlgebra, Statistics
 using Random, Optim, QuasiMonteCarlo, Distributions
 using JSON3, Serialization, ArgParse, Printf, Dates
 
-# ── Set BLAS threads ─────────────────────────────────────────────────────
-BLAS.set_num_threads(Threads.nthreads())
+# ── Set BLAS threads ────────────────────────────────────────────────────────
+# Reserve most threads for Julia-level parallelism (logsumexp, q_B loops).
+# The main BLAS call here is (N×coef_dim)×(coef_dim×R) — small k-dimension;
+# it's memory-bandwidth-bound and doesn't scale past 4–8 threads anyway.
+BLAS.set_num_threads(min(8, Threads.nthreads()))
 
 # ==========================================================================
 # 0. Constants (must match blp_loop.jl and blp_draws.jl)
@@ -69,6 +74,32 @@ function log_status(msg::String)
     stamped = "[$(Dates.format(now(), "yyyy-mm-dd HH:MM:SS"))] $msg"
     lock(_log_lock) do; push!(_log_buf, stamped); end
     println(stamped); flush(stdout)
+end
+
+# ── Version-agnostic δ persistence (raw binary; immune to Julia serialization version) ──
+"""Save a Float64 vector to a raw binary file: [Int64 length][Float64... values]"""
+function save_delta_bin(path::String, delta::Vector{Float64})
+    open(path, "w") do io
+        write(io, Int64(length(delta)))
+        write(io, delta)
+    end
+end
+
+"""Load a Float64 vector from a raw binary file saved by save_delta_bin.
+Returns nothing if the file is missing or corrupt."""
+function load_delta_bin(path::String)::Union{Vector{Float64},Nothing}
+    isfile(path) || return nothing
+    try
+        open(path, "r") do io
+            n     = read(io, Int64)
+            delta = Vector{Float64}(undef, n)
+            read!(io, delta)
+            return delta
+        end
+    catch _e
+        println("  [δ BIN] Load failed: $(_e)")
+        return nothing
+    end
 end
 
 # ==========================================================================
@@ -241,7 +272,8 @@ function compute_mu!(buf::HotBuffers,
     @inbounds for (pos, cidx) in enumerate(sigma_indices)
         cidx <= coef_dim && (buf.sigma_diag[cidx] = sigma_vals[pos])
     end
-    @inbounds for j in 1:coef_dim
+    # sigma_nu[r,j] = nu_draws[r,j] * sigma_diag[j]: stride-1 in r → vectorizes with @turbo
+    @turbo for j in 1:coef_dim
         sd = buf.sigma_diag[j]
         for r in 1:R
             buf.sigma_nu[r, j] = nu_draws[r, j] * sd
@@ -373,11 +405,13 @@ function logsumexp_groups!(result::Matrix{Float64},
                             V, sort_idx, grp_start, uval, R)
     fill!(result, -Inf)
     n_uniq = length(grp_start)
-    @inbounds for g in 1:n_uniq
+    # Each group writes to a distinct row of result → no data race.
+    # Threads.@threads partitions groups across all Julia threads (32 on Bouchet).
+    Threads.@threads for g in 1:n_uniq
         gidx       = grp_start[g]
         gend       = g < n_uniq ? grp_start[g+1] - 1 : length(sort_idx)
         target_row = uval[g]
-        for c in 1:R
+        @inbounds for c in 1:R
             mx = -Inf
             for ii in gidx:gend
                 v = V[sort_idx[ii], c]; v > mx && (mx = v)
@@ -436,13 +470,14 @@ function compute_model_shares!(buf::HotBuffers, delta::Vector{Float64},
         end
     end
 
-    @inbounds for i in 1:N_B
+    # Each i writes only to buf.q_B[i,:] and buf.s_B[i] → no data race.
+    Threads.@threads for i in 1:N_B
         mkt = pc.b_mkt_idx[i]
-        for r in 1:R
+        @inbounds for r in 1:R
             buf.q_B[i, r] = exp(buf.V_B[i, r] - buf.log_denom[mkt, r])
         end
         s = 0.0
-        for r in 1:R; s += buf.q_B[i, r]; end
+        @inbounds for r in 1:R; s += buf.q_B[i, r]; end
         buf.s_B[i] = s / R
     end
 
@@ -482,16 +517,18 @@ function compute_model_shares!(buf::HotBuffers, delta::Vector{Float64},
         end
     end
 
-    @inbounds for i in 1:N_D
+    # Each i writes only to buf.log_s_D_r[i,:], buf.row_max[i,1], buf.s_D[i] → no data race.
+    Threads.@threads for i in 1:N_D
+        tenc = pc.d_time_enc[i]
         rm = -Inf
-        for r in 1:R
-            v = buf.V_D[i, r] + buf.log_inv_wtd[pc.d_time_enc[i], r]
+        @inbounds for r in 1:R
+            v = buf.V_D[i, r] + buf.log_inv_wtd[tenc, r]
             buf.log_s_D_r[i, r] = v
             v > rm && (rm = v)
         end
         buf.row_max[i, 1] = rm
         s = 0.0
-        for r in 1:R; s += exp(buf.log_s_D_r[i, r] - rm); end
+        @inbounds for r in 1:R; s += exp(buf.log_s_D_r[i, r] - rm); end
         buf.s_D[i] = (s / R) * exp(rm)
     end
 end
@@ -754,6 +791,14 @@ function run_blp_estimation(estim::Int, spec_id::Int, args,
         delta[.!is_B] .= log.(clamp.(share_D[.!is_B],      1e-15, Inf))
         delta[is_B]   .= log.(clamp.(share_B_cond[is_B],    1e-15, Inf))
 
+        # Save δ as version-agnostic binary — survives Julia version upgrades on cluster
+        let _logit_out = get_paths(args["hpc"]; local_dir=args["local_dir"])[3]
+            mkpath(_logit_out)
+            _bin = joinpath(_logit_out, "logit_delta_E$(estim)_spec_$(spec_id).bin")
+            save_delta_bin(_bin, delta)
+            log_status("  [δ BIN] Saved $(basename(_bin)) ($(length(delta)) obs)")
+        end
+
         spread_cols, x_mat, Z_mat, iv_cols = build_regressor_matrices(df)
         H          = hcat(x_mat, Z_mat)
         dep_types  = Int.(coalesce.(df.deposit_type, 0))
@@ -896,26 +941,43 @@ function run_blp_estimation(estim::Int, spec_id::Int, args,
     # Starting from logit δ* saves 50–200 SQUAREM iters per outer GMM call.
     delta_work = zeros(N_obs)
     let _loaded = false
-        for _cand in [
-            joinpath(out_dir, "logit_delta_E$(estim)_spec_$(spec_id).jls"),
-            joinpath(out_dir, "blp_checkpoint_E$(estim)_spec_$(spec_id)_logit.jls"),
-            joinpath(out_dir, "blp_results_E$(estim)_spec_$(spec_id)_logit.jls"),
-        ]
-            isfile(_cand) || continue
-            try
-                _ck = deserialize(_cand)
-                _d  = get(_ck, "delta", nothing)
-                if _d !== nothing && length(_d) == N_obs
-                    copyto!(delta_work, _d)
-                    log_status("  [δ WARM-START] Loaded $(basename(_cand)) (n=$(N_obs))")
-                    _loaded = true
-                    break
-                else
-                    log_status("  [δ WARM-START] Skipped $(basename(_cand)): " *
-                               "delta size $(length(something(_d, []))) ≠ N_obs=$(N_obs)")
+        # 1. Try version-agnostic binary first (no Julia serialization version dependency)
+        #    Generated by blp_logit_local.jl or blp_estimation.jl --stage logit
+        _bin_cand = joinpath(out_dir, "logit_delta_E$(estim)_spec_$(spec_id).bin")
+        if isfile(_bin_cand)
+            _d = load_delta_bin(_bin_cand)
+            if _d !== nothing && length(_d) == N_obs
+                copyto!(delta_work, _d)
+                log_status("  [δ WARM-START] Loaded $(basename(_bin_cand)) [binary] (n=$(N_obs))")
+                _loaded = true
+            else
+                log_status("  [δ WARM-START] Skipped .bin: " *
+                           "size $(length(something(_d, []))) ≠ N_obs=$(N_obs)")
+            end
+        end
+        # 2. Fall back to .jls checkpoints (may fail on Julia version mismatch)
+        if !_loaded
+            for _cand in [
+                joinpath(out_dir, "logit_delta_E$(estim)_spec_$(spec_id).jls"),
+                joinpath(out_dir, "blp_checkpoint_E$(estim)_spec_$(spec_id)_logit.jls"),
+                joinpath(out_dir, "blp_results_E$(estim)_spec_$(spec_id)_logit.jls"),
+            ]
+                isfile(_cand) || continue
+                try
+                    _ck = deserialize(_cand)
+                    _d  = get(_ck, "delta", nothing)
+                    if _d !== nothing && length(_d) == N_obs
+                        copyto!(delta_work, _d)
+                        log_status("  [δ WARM-START] Loaded $(basename(_cand)) (n=$(N_obs))")
+                        _loaded = true
+                        break
+                    else
+                        log_status("  [δ WARM-START] Skipped $(basename(_cand)): " *
+                                   "delta size $(length(something(_d, []))) ≠ N_obs=$(N_obs)")
+                    end
+                catch _e
+                    log_status("  [δ WARM-START] Skipped $(basename(_cand)): $(_e)")
                 end
-            catch _e
-                log_status("  [δ WARM-START] Skipped $(basename(_cand)): $(_e)")
             end
         end
         if !_loaded
@@ -997,6 +1059,10 @@ function run_blp_estimation(estim::Int, spec_id::Int, args,
     catch e
         println("  [CHECKPOINT-WARN] $e")
     end
+    # Save delta as version-agnostic binary for next-stage warm-start
+    chk_bin_path = replace(chk_path, ".jls" => ".bin")
+    save_delta_bin(chk_bin_path, delta_final)
+    println("  [CHECKPOINT BIN] Saved $(basename(chk_bin_path))")
 
     return results
 end
@@ -1124,4 +1190,7 @@ function main()
     end
 end
 
-main()
+# Guard allows safe include() from blp_estimation_gpu.jl without auto-running main
+if abspath(PROGRAM_FILE) == @__FILE__
+    main()
+end

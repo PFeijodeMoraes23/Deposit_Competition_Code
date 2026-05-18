@@ -1,7 +1,8 @@
 #!/bin/bash
+# DEPRECATED — DEFUNCT. USE submit_blp_E5.sh INSTEAD.
 #SBATCH --job-name=blp_E2
 #SBATCH --partition=day
-#SBATCH --time=06:00:00
+#SBATCH --time=24:00:00
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=32

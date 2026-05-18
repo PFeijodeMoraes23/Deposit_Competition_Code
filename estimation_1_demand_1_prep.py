@@ -1,3 +1,4 @@
+# DEPRECATED — DEFUNCT. USE estimation_5_demand_1_prep.py INSTEAD.
 """
 estimation_1_demand_1_prep.py
 ================================================================================
