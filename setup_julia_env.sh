@@ -54,6 +54,9 @@ echo ""
 echo "=== Resolving packages: $(date) ==="
 julia --project="${PROJECT_DIR}" -e "
     using Pkg
+    println(\"  Updating package registry...\")
+    Pkg.Registry.update()
+    println(\"  Registry updated.\")
     Pkg.resolve()
     println(\"  Manifest written.\")
     Pkg.instantiate()
