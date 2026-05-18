@@ -1,11 +1,11 @@
 #!/bin/bash
 #SBATCH --job-name=blp_E5_gpu
 #SBATCH --partition=gpu
-#SBATCH --time=08:00:00
+#SBATCH --time=2-00:00:00
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=4
-#SBATCH --mem=40G
+#SBATCH --mem=100G
 #SBATCH --gpus=1
 #SBATCH --output=/nfs/roberts/project/pi_mf2263/pf382/dep_comp/scripts/logs/blp_E5_gpu_%j.out
 #SBATCH --error=/nfs/roberts/project/pi_mf2263/pf382/dep_comp/scripts/logs/blp_E5_gpu_%j.err
