@@ -417,7 +417,7 @@ def render_table1(moments_b, moments_d, meta, weight_col, suffix) -> str:
             )
         lines.append(r"\addlinespace[0.3em]")
         lines.append(
-            f"\\multicolumn{{7}}{{l}}{{\\footnotesize Unique firms: {n_firms:,}; "
+            f"\\multicolumn{{7}}{{l}}{{\\footnotesize Unique conglomerates: {n_firms:,}; "
             f"firm-quarter observations: {n_fq:,}.}} \\\\"
         )
         return lines

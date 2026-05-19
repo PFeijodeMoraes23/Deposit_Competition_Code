@@ -272,8 +272,10 @@ def build_latex_table(results_dict, order_keys, target_vars, out_path, title="",
     
     # Sort vars to put nice target vars first
     ordered_vars = [v for v in target_vars if v in vars_to_print]
-    
-    if "first_stage" in str(out_path).lower() or "stage1" in str(out_path).lower():
+
+    is_first_stage = ("first_stage" in str(out_path).lower() or "stage1" in str(out_path).lower())
+
+    if is_first_stage:
         # First stage table: ONLY exhibit the target instruments, not all variables
         pass
     else:
@@ -396,7 +398,8 @@ def build_latex_table(results_dict, order_keys, target_vars, out_path, title="",
         
     tex.append(" & ".join(row_nobs) + r" \\")
     tex.append(" & ".join(row_r2) + r" \\")
-    tex.append(" & ".join(row_fstat) + r" \\")
+    if is_first_stage:
+        tex.append(" & ".join(row_fstat) + r" \\")
     tex.append(" & ".join(row_cluster) + r" \\")
     tex.append(" & ".join(row_eff_cluster) + r" \\")
     tex.append(" & ".join(row_state) + r" \\")

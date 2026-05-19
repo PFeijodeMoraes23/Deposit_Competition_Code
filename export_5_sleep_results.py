@@ -371,22 +371,18 @@ def build_second_stage_table(results_dict, G, G_star):
                 lines.append(f"    {clean_name(vshort)} & " + " & ".join(coef_strs) + r" \\")
                 lines.append("    & " + " & ".join(se_strs) + r" \\")
 
-        obs_l, rsq_l, fstat_l, g_l, gstar_l = [], [], [], [], []
+        obs_l, rsq_l, g_l, gstar_l = [], [], [], []
         for ek, _ in estimators:
             res = _get_res(ek, panel)
             if res is None:
-                obs_l.append("---"); rsq_l.append("---"); fstat_l.append("---")
+                obs_l.append("---"); rsq_l.append("---")
                 g_l.append("---"); gstar_l.append("---")
                 continue
             nv = getattr(res, 'nobs', None)
             obs_l.append(f"{int(nv):,}" if nv is not None else "---")
             rv = getattr(res, 'rsquared', getattr(res, 'prsquared', None))
             rsq_l.append(f"{rv:.4f}" if rv is not None else "---")
-            
-            fv = getattr(res, 'fvalue', getattr(res, 'llr', None))
-            fp = getattr(res, 'f_pvalue', getattr(res, 'llr_pvalue', 1.0))
-            fstat_l.append(f"${fv:.2f}^{{{stars(fp)}}}$" if fv is not None else "---")
-            
+
             g_l.append(str(getattr(res, 'G_nominal', '---')))
             gsv = getattr(res, 'G_star', None)
             gstar_l.append(f"{gsv:.2f}" if gsv is not None else "---")
@@ -395,7 +391,6 @@ def build_second_stage_table(results_dict, G, G_star):
             r"    \midrule",
             "    Observations & " + " & ".join(obs_l) + r" \\",
             "    $R^2$ & " + " & ".join(rsq_l) + r" \\",
-            "    F-Statistic & " + " & ".join(fstat_l) + r" \\",
             "    Fixed Effects & Yes & Yes & Yes & Yes \\\\",
             "    Clusters ($G$) & " + " & ".join(g_l) + r" \\",
             "    Effective Clusters ($G^*$) & " + " & ".join(gstar_l) + r" \\",

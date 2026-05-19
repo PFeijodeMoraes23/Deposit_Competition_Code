@@ -1,4 +1,5 @@
-# DEPRECATED — DEFUNCT. USE estimation_5_demand_1_prep.py INSTEAD."""
+# DEPRECATED — DEFUNCT. USE estimation_5_demand_1_prep.py INSTEAD.
+"""
 estimation_1_demand_1_prep.py
 ================================================================================
 Prepares demand-side variables for the BLP step (Eq-15 and Eq-16 in V_Main.tex).
