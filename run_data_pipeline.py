@@ -56,6 +56,8 @@ Pipeline stages
   Stage 5 - Descriptive statistics
     5a. desc_1.py                        Generate unweighted overview descriptive tables
     5b. desc_1.py --weight-col pop_total Generate market-weighted descriptive tables
+    5c. desc_2.py                        Generate unweighted compressed/thematic tables
+    5d. desc_2.py --weight-col pop_total Generate market-weighted compressed/thematic tables
 
 Usage
 -----
@@ -207,6 +209,10 @@ STEPS = [
      "Generate unweighted overview descriptive tables"),
     (5, "15", "desc_1.py --weight-col pop_total",
      "Generate market-weighted descriptive tables"),
+    (5, "16", "desc_2.py",
+     "Generate unweighted compressed/thematic descriptive tables"),
+    (5, "17", "desc_2.py --weight-col pop_total",
+     "Generate market-weighted compressed/thematic descriptive tables"),
 ]
 
 
@@ -329,7 +335,7 @@ WAVES: list[list[str]] = [
     ["9", "10", "11"],                         # Wave 3: deposit rates/spreads + bank chars + digital flags (parallel)
     ["12"],                                    # Wave 4: master merge
     ["13", "13b"],                             # Wave 5: instrumental variables + demographics sigma
-    ["14", "15"],                              # Wave 6: descriptive statistics
+    ["14", "15", "16", "17"],                  # Wave 6: descriptive statistics (desc_1 + desc_2, weighted + unweighted)
 ]
 
 def run_wave(

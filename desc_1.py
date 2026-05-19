@@ -157,8 +157,13 @@ def main():
     sum_nat_yr_d = generate_summary(df_d, ['year'], vars_to_summarize, args.weight_col)
 
     # By Bank Type
-    print("  -> By Bank Type (D vs B)")
+    print("  -> By Bank Type (All vs B vs D)")
     sum_bt = generate_summary(df, ['bank_type'], vars_to_summarize, args.weight_col)
+    # Prepend pooled "All" panel: reuse the National Overall summary, relabel its
+    # Group from 'Overall' to 'All', and concatenate so column order is All | B | D.
+    sum_bt_all = sum_nat.copy()
+    sum_bt_all['Group'] = 'All'
+    sum_bt = pd.concat([sum_bt_all, sum_bt], ignore_index=True)
 
     # By Region (B-Type only)
     print("  -> By Region (B-type)")
@@ -238,7 +243,7 @@ def main():
             else:
                 col_spec  = 'l@{\\hspace{0.35em}}' + 'c' * n_groups
 
-            weight_label = (' (Population Weighted, by ' + _esc(args.weight_col) + ')'
+            weight_label = (' (Population Weighted)'
                             if args.weight_col else ' (Unweighted)')
             full_caption = caption_title + weight_label
             tab_label    = f"tab:{name}{weight_str}"
@@ -366,19 +371,668 @@ def main():
             print(f"Failed to generate latex for {name}: {e}")
             import traceback; traceback.print_exc()
 
-    save_output(sum_nat,        "Summary_National",           "National Summary Statistics")
-    save_output(sum_nat_yr,     "Summary_National_by_Year",   "National Summary Statistics by Year")
-    save_output(sum_nat_yr_b,   "Summary_National_byYear_B",  "National Summary Statistics by Year (B-Type / Municipal Markets)")
-    save_output(sum_nat_yr_d,   "Summary_National_byYear_D",  "National Summary Statistics by Year (D-Type / Digital Banks)")
-    save_output(sum_bt,         "Summary_BankType",           "Summary Statistics by Bank Type")
-    save_output(sum_nat_yr_b, "Summary_BankType_by_Year_B",
-                "Summary Statistics by Bank Type and Year (B-Type / Municipal Markets)",
-                tex_name="Summary_BankType_by_Year")
-    save_output(sum_nat_yr_d, "Summary_BankType_by_Year_D",
-                "Summary Statistics by Bank Type and Year (D-Type / Digital Banks)",
-                tex_name="Summary_BankType_by_Year", append=True)
+    def save_landscape_by_year(summary_df, name, caption_title, panel_descr=""):
+        """Landscape, multi-page, single-panel xltabular indexed by calendar year.
+
+        Same stylistic conventions as ``save_banktype_by_year_combined``:
+          * ``\\begin{landscape}`` + ``xltabular`` (handles page breaks).
+          * Labels: ``Deposits (A*)`` -> ``Deposits (*)``; ``Spread (A*)`` -> ``Spread (*)``.
+          * Drops ``has_ip`` row.
+          * Pre-2020 cells for PIX/A5 variables render as blank ``\\multirow{2}{*}{}``.
+          * Generic rule: cells where both Mean and SD are NaN or 0 render blank.
+        """
+        tab_label = f"tab:{name}{weight_str}"
+        summary_df.to_csv(OUTPUT_DIR / f"{name}{weight_str}.csv", index=False)
+
+        PRE2020_EMPTY = {"pix_users_pf_per1000", "pix_txns_pf", "spread_a5", "dep_a5"}
+        EXCLUDE_VARS  = {"has_ip"}
+        compact = True
+
+        def _override_label(vb):
+            info = LABEL_MAP.get(vb)
+            if info is None:
+                return _esc(vb)
+            lbl, unit, _ = info
+            if vb.startswith("dep_a"):
+                lbl = f"Deposits ({vb.split('_a')[-1]})"
+            elif vb.startswith("spread_a"):
+                lbl = f"Spread ({vb.split('_a')[-1]})"
+            return lbl + (f" ({unit})" if unit else "")
+
+        def _is_blank_cell(vb, group, mean_val, sd_val):
+            if vb in PRE2020_EMPTY:
+                try:
+                    if int(group) < 2020:
+                        return True
+                except (TypeError, ValueError):
+                    pass
+            m_empty = pd.isna(mean_val) or float(mean_val) == 0.0
+            s_empty = pd.isna(sd_val)   or float(sd_val)   == 0.0
+            return m_empty and s_empty
+
+        years = sorted(list(summary_df["Group"]), key=lambda x: int(x))
+        n_groups = len(years)
+        n_cols   = n_groups + 1
+
+        vars_to_include = []
+        for col in summary_df.columns:
+            if col.endswith("_Mean"):
+                vb = col[:-5]
+                if vb in EXCLUDE_VARS or vb in vars_to_include:
+                    continue
+                vars_to_include.append(vb)
+
+        gset = summary_df.set_index("Group")
+
+        def _all_missing(vb):
+            col = f"{vb}_Mean"
+            return col not in gset.columns or gset[col].isna().all()
+        var_order = [v for v in vars_to_include if not _all_missing(v)]
+
+        body = []
+        for i, vb in enumerate(var_order):
+            cell_label = _override_label(vb)
+            mean_cells, sd_cells = [], []
+            for g in years:
+                mean_val = gset.loc[g, f"{vb}_Mean"] if f"{vb}_Mean" in gset.columns else float("nan")
+                sd_val   = gset.loc[g, f"{vb}_SD"]   if f"{vb}_SD"   in gset.columns else float("nan")
+                if _is_blank_cell(vb, g, mean_val, sd_val):
+                    mean_cells.append(r"\multirow{2}{*}{}")
+                    sd_cells.append("")
+                else:
+                    mean_cells.append(_fmt_val(mean_val, vb, compact))
+                    sd_cells.append(f"({_fmt_val(sd_val, vb, compact)})")
+            body.append(f"    {cell_label} & " + " & ".join(mean_cells) + r" \\*")
+            body.append("    & " + " & ".join(sd_cells) + r" \\")
+            if i < len(var_order) - 1:
+                body.append(r"    \addlinespace[0.3em]")
+
+        if "N_obs" in gset.columns:
+            body.append(r"    \midrule")
+            nvals = []
+            for g in years:
+                v = gset.loc[g, "N_obs"]
+                nvals.append(f"{int(v):,}" if not pd.isna(v) else "--")
+            body.append("    Observations & " + " & ".join(nvals) + r" \\")
+
+        col_spec = "l@{\\hspace{0.2em}}" + ">{\\centering\\arraybackslash}X" * n_groups
+        weight_label = (" (Population Weighted)"
+                        if args.weight_col else " (Unweighted)")
+        full_caption = caption_title + weight_label
+        group_header = " & ".join([_esc(str(g)) for g in years])
+
+        weight_note = (f" Population-weighted using \\texttt{{{_esc(args.weight_col)}}}."
+                       if args.weight_col else "")
+        scope_note = f" {panel_descr}" if panel_descr else ""
+        notes_text = (
+            "\\scriptsize \\textit{Notes:} Means are reported with standard deviations in "
+            "parentheses immediately below, computed over market-quarter observations within "
+            f"each calendar year.{scope_note} Cells left blank denote variables that are "
+            "undefined or unobserved for that year (e.g., PIX usage and tier-A5 products are "
+            "not defined before 2020)."
+            f"{weight_note}"
+        )
+
+        lines = [
+            r"\begin{landscape}",
+            r"\setstretch{1.0}",
+            r"\setlength{\LTleft}{\fill}",
+            r"\setlength{\LTright}{\fill}",
+            r"\begingroup",
+            r"\tiny",
+            r"\setlength{\tabcolsep}{1pt}",
+            f"\\begin{{xltabular}}{{\\linewidth}}{{{col_spec}}}",
+            f"    \\caption{{{full_caption}}}\\label{{{tab_label}}} \\\\",
+            r"    \toprule",
+            f"    & {group_header} \\\\",
+            r"    \midrule",
+            r"    \endfirsthead",
+            "",
+            f"    \\multicolumn{{{n_cols}}}{{c}}{{{{\\bfseries Table \\thetable\\ continued from previous page}}}} \\\\",
+            r"    \toprule",
+            f"    & {group_header} \\\\",
+            r"    \midrule",
+            r"    \endhead",
+            "",
+            r"    \midrule",
+            f"    \\multicolumn{{{n_cols}}}{{r}}{{\\textit{{Continued on next page}}}} \\\\",
+            r"    \endfoot",
+            "",
+            r"    \bottomrule",
+            f"    \\multicolumn{{{n_cols}}}{{p{{0.95\\linewidth}}}}{{{notes_text}}} \\\\",
+            r"    \endlastfoot",
+            "",
+            *body,
+            "",
+            r"\end{xltabular}",
+            r"\endgroup",
+            r"\end{landscape}",
+        ]
+        latex_str = "\n".join(lines)
+
+        tex_path        = OUTPUT_DIR / f"{name}{weight_str}.tex"
+        drafts_tex_path = DRAFTS_DIR / f"{name}{weight_str}.tex"
+        for path in [tex_path, drafts_tex_path]:
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(latex_str)
+        print(f"  Saved landscape by-year table: {tex_path.name}")
+
+    def save_banktype_by_year_combined(df_b_summary, df_d_summary):
+        """Build a single landscape, two-panel (B / D) xltabular that breaks across pages.
+
+        Customisations vs. the generic ``save_output``:
+          * Landscape via ``pdflscape``'s ``landscape`` env (preserves page breaks).
+          * Strips ``A`` from deposit/spread labels: ``Deposits (A1)`` -> ``Deposits (1)``.
+          * Drops the ``has_ip`` row entirely.
+          * Cells where both mean and SD are NaN/0, and PIX / A5 cells for years < 2020,
+            are rendered as a single empty ``\\multirow{2}{*}{}`` spanning Mean+SD.
+        """
+        name          = "Summary_BankType_by_Year"
+        caption_title = "Summary Statistics by Bank Type and Year"
+        tab_label     = f"tab:{name}{weight_str}"
+
+        # Persist raw CSVs for both panels (preserve prior behaviour)
+        df_b_summary.to_csv(OUTPUT_DIR / f"{name}_B{weight_str}.csv", index=False)
+        df_d_summary.to_csv(OUTPUT_DIR / f"{name}_D{weight_str}.csv", index=False)
+
+        PRE2020_EMPTY = {"pix_users_pf_per1000", "pix_txns_pf", "spread_a5", "dep_a5"}
+        EXCLUDE_VARS  = {"has_ip"}
+
+        def _override_label(vb):
+            info = LABEL_MAP.get(vb)
+            if info is None:
+                return _esc(vb)
+            lbl, unit, _ = info
+            if vb.startswith("dep_a"):
+                lbl = f"Deposits ({vb.split('_a')[-1]})"
+            elif vb.startswith("spread_a"):
+                lbl = f"Spread ({vb.split('_a')[-1]})"
+            return lbl + (f" ({unit})" if unit else "")
+
+        def _is_blank_cell(vb, group, mean_val, sd_val):
+            # Hard rule: PIX & A5 variables undefined before 2020
+            if vb in PRE2020_EMPTY:
+                try:
+                    if int(group) < 2020:
+                        return True
+                except (TypeError, ValueError):
+                    pass
+            # Generic rule: both stats missing or exactly zero
+            m_empty = pd.isna(mean_val) or float(mean_val) == 0.0
+            s_empty = pd.isna(sd_val)   or float(sd_val)   == 0.0
+            return m_empty and s_empty
+
+        compact = True
+
+        # Use union of years across both panels so headers align across panels
+        years_b = list(df_b_summary["Group"])
+        years_d = list(df_d_summary["Group"])
+        years   = sorted(set(years_b) | set(years_d), key=lambda x: int(x))
+        n_groups = len(years)
+        n_cols   = n_groups + 1
+
+        # Variable order: take from B summary's column list, then drop excluded
+        # and variables that are entirely missing across BOTH panels.
+        vars_to_include = []
+        for col in df_b_summary.columns:
+            if col.endswith("_Mean"):
+                vb = col[:-5]
+                if vb in EXCLUDE_VARS or vb in vars_to_include:
+                    continue
+                vars_to_include.append(vb)
+
+        def _all_missing(vb):
+            for df_s in (df_b_summary, df_d_summary):
+                col = f"{vb}_Mean"
+                if col in df_s.columns and not df_s[col].isna().all():
+                    return False
+            return True
+        var_order = [v for v in vars_to_include if not _all_missing(v)]
+
+        def _build_panel_rows(summary_df):
+            gset = summary_df.set_index("Group")
+            out = []
+            for i, vb in enumerate(var_order):
+                cell_label = _override_label(vb)
+                mean_cells, sd_cells = [], []
+                for g in years:
+                    mean_val = sd_val = float("nan")
+                    if g in gset.index:
+                        if f"{vb}_Mean" in gset.columns:
+                            mean_val = gset.loc[g, f"{vb}_Mean"]
+                        if f"{vb}_SD" in gset.columns:
+                            sd_val = gset.loc[g, f"{vb}_SD"]
+                    if _is_blank_cell(vb, g, mean_val, sd_val):
+                        mean_cells.append(r"\multirow{2}{*}{}")
+                        sd_cells.append("")
+                    else:
+                        mean_cells.append(_fmt_val(mean_val, vb, compact))
+                        sd_cells.append(f"({_fmt_val(sd_val, vb, compact)})")
+                out.append(f"    {cell_label} & " + " & ".join(mean_cells) + r" \\*")
+                out.append("    & " + " & ".join(sd_cells) + r" \\")
+                if i < len(var_order) - 1:
+                    out.append(r"    \addlinespace[0.3em]")
+            # Observations row (per panel)
+            if "N_obs" in gset.columns:
+                out.append(r"    \midrule")
+                nvals = []
+                for g in years:
+                    if g in gset.index and not pd.isna(gset.loc[g, "N_obs"]):
+                        nvals.append(f"{int(gset.loc[g, 'N_obs']):,}")
+                    else:
+                        nvals.append("--")
+                out.append("    Observations & " + " & ".join(nvals) + r" \\")
+            return out
+
+        col_spec = "l@{\\hspace{0.2em}}" + ">{\\centering\\arraybackslash}X" * n_groups
+        weight_label = (" (Population Weighted)"
+                        if args.weight_col else " (Unweighted)")
+        full_caption = caption_title + weight_label
+        group_header = " & ".join([_esc(str(g)) for g in years])
+
+        weight_note = (f" Population-weighted using \\texttt{{{_esc(args.weight_col)}}}."
+                       if args.weight_col else "")
+        notes_text = (
+            "\\scriptsize \\textit{Notes:} Means are reported with standard deviations in "
+            "parentheses immediately below, computed over market-quarter observations within "
+            "each calendar year. Panel A reports B-type firms (municipal deposit markets); "
+            "Panel B reports D-type firms (national digital banks). Cells left blank denote "
+            "variables that are undefined or unobserved for that year (e.g., PIX usage and "
+            "tier-A5 products are not defined before 2020)."
+            f"{weight_note}"
+        )
+
+        panel_a_rows = _build_panel_rows(df_b_summary)
+        panel_b_rows = _build_panel_rows(df_d_summary)
+
+        lines = [
+            r"\begin{landscape}",
+            r"\setstretch{1.0}",
+            r"\setlength{\LTleft}{\fill}",
+            r"\setlength{\LTright}{\fill}",
+            r"\begingroup",
+            r"\tiny",
+            r"\setlength{\tabcolsep}{1pt}",
+            f"\\begin{{xltabular}}{{\\linewidth}}{{{col_spec}}}",
+            f"    \\caption{{{full_caption}}}\\label{{{tab_label}}} \\\\",
+            r"    \toprule",
+            f"    & {group_header} \\\\",
+            r"    \midrule",
+            r"    \endfirsthead",
+            "",
+            f"    \\multicolumn{{{n_cols}}}{{c}}{{{{\\bfseries Table \\thetable\\ continued from previous page}}}} \\\\",
+            r"    \toprule",
+            f"    & {group_header} \\\\",
+            r"    \midrule",
+            r"    \endhead",
+            "",
+            r"    \midrule",
+            f"    \\multicolumn{{{n_cols}}}{{r}}{{\\textit{{Continued on next page}}}} \\\\",
+            r"    \endfoot",
+            "",
+            r"    \bottomrule",
+            f"    \\multicolumn{{{n_cols}}}{{p{{0.95\\linewidth}}}}{{{notes_text}}} \\\\",
+            r"    \endlastfoot",
+            "",
+            f"    \\multicolumn{{{n_cols}}}{{l}}{{\\textbf{{Panel A: B-Type Firms (Municipal Markets)}}}} \\\\",
+            r"    \midrule",
+            *panel_a_rows,
+            r"    \midrule",
+            r"    \addlinespace[0.6em]",
+            f"    \\multicolumn{{{n_cols}}}{{l}}{{\\textbf{{Panel B: D-Type Firms (National Digital Banks)}}}} \\\\",
+            r"    \midrule",
+            *panel_b_rows,
+            "",
+            r"\end{xltabular}",
+            r"\endgroup",
+            r"\end{landscape}",
+        ]
+        latex_str = "\n".join(lines)
+
+        tex_path        = OUTPUT_DIR / f"{name}{weight_str}.tex"
+        drafts_tex_path = DRAFTS_DIR / f"{name}{weight_str}.tex"
+        for path in [tex_path, drafts_tex_path]:
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(latex_str)
+        print(f"  Saved combined two-panel landscape table: {tex_path.name}")
+
+    def save_banktype_summary(summary_df):
+        """Landscape, multi-page xltabular for the B-vs-D summary.
+
+        Applies the same stylistic conventions as ``save_banktype_by_year_combined``:
+          * Landscape via ``pdflscape``.
+          * Strips the ``A`` from ``Deposits (A*)`` / ``Spread (A*)`` labels.
+          * Drops the ``has_ip`` row.
+          * Blanks (\\multirow{2}{*}{}) cells where both mean and SD are NaN or 0.
+
+        The pre-2020 PIX / A5 rule is inapplicable here (no year axis); those rows
+        will simply blank out via the generic zero/NaN rule when undefined.
+        """
+        name          = "Summary_BankType"
+        caption_title = "Summary Statistics by Bank Type"
+        tab_label     = f"tab:{name}{weight_str}"
+
+        # Persist raw CSV (preserve prior behaviour)
+        summary_df.to_csv(OUTPUT_DIR / f"{name}{weight_str}.csv", index=False)
+
+        EXCLUDE_VARS = {"has_ip"}
+        compact      = False  # only 2 group columns; full-precision formatting fits
+
+        def _override_label(vb):
+            info = LABEL_MAP.get(vb)
+            if info is None:
+                return _esc(vb)
+            lbl, unit, _ = info
+            if vb.startswith("dep_a"):
+                lbl = f"Deposits ({vb.split('_a')[-1]})"
+            elif vb.startswith("spread_a"):
+                lbl = f"Spread ({vb.split('_a')[-1]})"
+            return lbl + (f" ({unit})" if unit else "")
+
+        def _is_blank_cell(mean_val, sd_val):
+            m_empty = pd.isna(mean_val) or float(mean_val) == 0.0
+            s_empty = pd.isna(sd_val)   or float(sd_val)   == 0.0
+            return m_empty and s_empty
+
+        groups   = list(summary_df["Group"])
+        n_groups = len(groups)
+        n_cols   = n_groups + 1
+
+        vars_to_include = []
+        for col in summary_df.columns:
+            if col.endswith("_Mean"):
+                vb = col[:-5]
+                if vb in EXCLUDE_VARS or vb in vars_to_include:
+                    continue
+                vars_to_include.append(vb)
+
+        gset = summary_df.set_index("Group")
+
+        def _all_missing(vb):
+            col = f"{vb}_Mean"
+            return col not in gset.columns or gset[col].isna().all()
+        var_order = [v for v in vars_to_include if not _all_missing(v)]
+
+        body = []
+        for i, vb in enumerate(var_order):
+            cell_label = _override_label(vb)
+            mean_cells, sd_cells = [], []
+            for g in groups:
+                mean_val = gset.loc[g, f"{vb}_Mean"] if f"{vb}_Mean" in gset.columns else float("nan")
+                sd_val   = gset.loc[g, f"{vb}_SD"]   if f"{vb}_SD"   in gset.columns else float("nan")
+                if _is_blank_cell(mean_val, sd_val):
+                    mean_cells.append(r"\multirow{2}{*}{}")
+                    sd_cells.append("")
+                else:
+                    mean_cells.append(_fmt_val(mean_val, vb, compact))
+                    sd_cells.append(f"({_fmt_val(sd_val, vb, compact)})")
+            body.append(f"    {cell_label} & " + " & ".join(mean_cells) + r" \\*")
+            body.append("    & " + " & ".join(sd_cells) + r" \\")
+            if i < len(var_order) - 1:
+                body.append(r"    \addlinespace[0.3em]")
+
+        if "N_obs" in gset.columns:
+            body.append(r"    \midrule")
+            nvals = []
+            for g in groups:
+                v = gset.loc[g, "N_obs"]
+                nvals.append(f"{int(v):,}" if not pd.isna(v) else "--")
+            body.append("    Observations & " + " & ".join(nvals) + r" \\")
+
+        # Portrait orientation: only 2 group columns, no landscape needed.
+        col_spec = "l@{\\hspace{0.35em}}" + "c" * n_groups
+        weight_label = (" (Population Weighted)"
+                        if args.weight_col else " (Unweighted)")
+        full_caption = caption_title + weight_label
+        group_header = " & ".join([_esc(str(g)) for g in groups])
+
+        weight_note = (f" Population-weighted using \\texttt{{{_esc(args.weight_col)}}}."
+                       if args.weight_col else "")
+        notes_text = (
+            "\\scriptsize \\textit{Notes:} Means are reported with standard deviations in "
+            "parentheses immediately below, computed over all market-quarter observations. "
+            "Column ``All'' pools both bank types; column ``B'' covers municipal deposit "
+            "markets; column ``D'' covers national digital banks. Cells left blank denote "
+            "variables that are undefined or unobserved for the corresponding bank type."
+            f"{weight_note}"
+        )
+
+        lines = [
+            r"\setstretch{1.0}",
+            r"\setlength{\LTleft}{\fill}",
+            r"\setlength{\LTright}{\fill}",
+            r"\begingroup",
+            r"\footnotesize",
+            r"\setlength{\tabcolsep}{6pt}",
+            f"\\begin{{longtable}}[c]{{{col_spec}}}",
+            f"    \\caption{{{full_caption}}}\\label{{{tab_label}}} \\\\",
+            r"    \toprule",
+            f"    & {group_header} \\\\",
+            r"    \midrule",
+            r"    \endfirsthead",
+            "",
+            f"    \\multicolumn{{{n_cols}}}{{c}}{{{{\\bfseries Table \\thetable\\ continued from previous page}}}} \\\\",
+            r"    \toprule",
+            f"    & {group_header} \\\\",
+            r"    \midrule",
+            r"    \endhead",
+            "",
+            r"    \midrule",
+            f"    \\multicolumn{{{n_cols}}}{{r}}{{\\textit{{Continued on next page}}}} \\\\",
+            r"    \endfoot",
+            "",
+            r"    \bottomrule",
+            f"    \\multicolumn{{{n_cols}}}{{p{{0.85\\textwidth}}}}{{{notes_text}}} \\\\",
+            r"    \endlastfoot",
+            "",
+            *body,
+            "",
+            r"\end{longtable}",
+            r"\endgroup",
+        ]
+        latex_str = "\n".join(lines)
+
+        tex_path        = OUTPUT_DIR / f"{name}{weight_str}.tex"
+        drafts_tex_path = DRAFTS_DIR / f"{name}{weight_str}.tex"
+        for path in [tex_path, drafts_tex_path]:
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(latex_str)
+        print(f"  Saved BankType table: {tex_path.name}")
+
+    def save_region_by_year_panels(summary_df):
+        """Landscape, multi-page xltabular with one Panel per macro-region.
+
+        The raw ``Summary_Region_by_Year`` dataframe carries one row per
+        (region, year) tuple, flattened to a ``"Region - Year"`` string in the
+        ``Group`` column. The generic renderer produces a >60-column mess; here
+        we split it into five vertically-stacked panels (one per region) with
+        years as columns, matching the conventions used elsewhere:
+          * Strip ``A`` from deposit / spread labels.
+          * Drop the ``has_ip`` row.
+          * Pre-2020 PIX / A5 cells render as blank ``\\multirow{2}{*}{}``.
+          * Generic rule: cells where both Mean and SD are NaN or 0 render blank.
+        """
+        name          = "Summary_Region_by_Year"
+        caption_title = "Summary Statistics by Region and Year (B-Type Firms)"
+        tab_label     = f"tab:{name}{weight_str}"
+        summary_df.to_csv(OUTPUT_DIR / f"{name}{weight_str}.csv", index=False)
+
+        PRE2020_EMPTY = {"pix_users_pf_per1000", "pix_txns_pf", "spread_a5", "dep_a5"}
+        EXCLUDE_VARS  = {"has_ip"}
+        compact = True
+
+        def _override_label(vb):
+            info = LABEL_MAP.get(vb)
+            if info is None:
+                return _esc(vb)
+            lbl, unit, _ = info
+            if vb.startswith("dep_a"):
+                lbl = f"Deposits ({vb.split('_a')[-1]})"
+            elif vb.startswith("spread_a"):
+                lbl = f"Spread ({vb.split('_a')[-1]})"
+            return lbl + (f" ({unit})" if unit else "")
+
+        def _is_blank_cell(vb, year, mean_val, sd_val):
+            if vb in PRE2020_EMPTY:
+                try:
+                    if int(year) < 2020:
+                        return True
+                except (TypeError, ValueError):
+                    pass
+            m_empty = pd.isna(mean_val) or float(mean_val) == 0.0
+            s_empty = pd.isna(sd_val)   or float(sd_val)   == 0.0
+            return m_empty and s_empty
+
+        # Split the flat "Region - Year" rows into region -> {year: row}
+        parsed = summary_df.copy()
+        split  = parsed["Group"].astype(str).str.split(" - ", n=1, expand=True)
+        parsed["_region"] = split[0]
+        parsed["_year"]   = pd.to_numeric(split[1], errors="coerce").astype("Int64")
+        parsed = parsed.dropna(subset=["_year"]).copy()
+        parsed["_year"] = parsed["_year"].astype(int)
+
+        # Ordered region list (north -> south, then center-west); only keep those present
+        REGION_ORDER = ["North", "Northeast", "Southeast", "South", "Center-West"]
+        regions      = [r for r in REGION_ORDER if r in set(parsed["_region"])]
+        years        = sorted(parsed["_year"].unique().tolist())
+        n_groups     = len(years)
+        n_cols       = n_groups + 1
+
+        vars_to_include = []
+        for col in summary_df.columns:
+            if col.endswith("_Mean"):
+                vb = col[:-5]
+                if vb in EXCLUDE_VARS or vb in vars_to_include:
+                    continue
+                vars_to_include.append(vb)
+
+        def _all_missing(vb):
+            col = f"{vb}_Mean"
+            return col not in summary_df.columns or summary_df[col].isna().all()
+        var_order = [v for v in vars_to_include if not _all_missing(v)]
+
+        def _panel_rows(region_df):
+            gset = region_df.set_index("_year")
+            out = []
+            for i, vb in enumerate(var_order):
+                cell_label = _override_label(vb)
+                mean_cells, sd_cells = [], []
+                for y in years:
+                    mean_val = sd_val = float("nan")
+                    if y in gset.index:
+                        if f"{vb}_Mean" in gset.columns:
+                            mean_val = gset.loc[y, f"{vb}_Mean"]
+                        if f"{vb}_SD" in gset.columns:
+                            sd_val = gset.loc[y, f"{vb}_SD"]
+                    if _is_blank_cell(vb, y, mean_val, sd_val):
+                        mean_cells.append(r"\multirow{2}{*}{}")
+                        sd_cells.append("")
+                    else:
+                        mean_cells.append(_fmt_val(mean_val, vb, compact))
+                        sd_cells.append(f"({_fmt_val(sd_val, vb, compact)})")
+                out.append(f"    {cell_label} & " + " & ".join(mean_cells) + r" \\*")
+                out.append("    & " + " & ".join(sd_cells) + r" \\")
+                if i < len(var_order) - 1:
+                    out.append(r"    \addlinespace[0.3em]")
+            if "N_obs" in gset.columns:
+                out.append(r"    \midrule")
+                nvals = []
+                for y in years:
+                    if y in gset.index and not pd.isna(gset.loc[y, "N_obs"]):
+                        nvals.append(f"{int(gset.loc[y, 'N_obs']):,}")
+                    else:
+                        nvals.append("--")
+                out.append("    Observations & " + " & ".join(nvals) + r" \\")
+            return out
+
+        col_spec = "l@{\\hspace{0.2em}}" + ">{\\centering\\arraybackslash}X" * n_groups
+        weight_label = (" (Population Weighted)"
+                        if args.weight_col else " (Unweighted)")
+        full_caption = caption_title + weight_label
+        group_header = " & ".join([_esc(str(y)) for y in years])
+
+        weight_note = (f" Population-weighted using \\texttt{{{_esc(args.weight_col)}}}."
+                       if args.weight_col else "")
+        notes_text = (
+            "\\scriptsize \\textit{Notes:} Means are reported with standard deviations in "
+            "parentheses immediately below, computed over market-quarter observations within "
+            "each region-year cell, restricted to B-type firms (municipal deposit markets). "
+            "Each panel covers one of the five Brazilian macro-regions. Cells left blank denote "
+            "variables that are undefined or unobserved for that year (e.g., PIX usage and "
+            "tier-A5 products are not defined before 2020)."
+            f"{weight_note}"
+        )
+
+        panel_blocks = []
+        for k, region in enumerate(regions):
+            region_df = parsed[parsed["_region"] == region]
+            panel_letter = chr(ord('A') + k)
+            panel_blocks.append(
+                f"    \\multicolumn{{{n_cols}}}{{l}}{{\\textbf{{Panel {panel_letter}: {_esc(region)}}}}} \\\\"
+            )
+            panel_blocks.append(r"    \midrule")
+            panel_blocks.extend(_panel_rows(region_df))
+            if k < len(regions) - 1:
+                panel_blocks.append(r"    \midrule")
+                panel_blocks.append(r"    \addlinespace[0.6em]")
+
+        lines = [
+            r"\begin{landscape}",
+            r"\setstretch{1.0}",
+            r"\setlength{\LTleft}{\fill}",
+            r"\setlength{\LTright}{\fill}",
+            r"\begingroup",
+            r"\tiny",
+            r"\setlength{\tabcolsep}{1pt}",
+            f"\\begin{{xltabular}}{{\\linewidth}}{{{col_spec}}}",
+            f"    \\caption{{{full_caption}}}\\label{{{tab_label}}} \\\\",
+            r"    \toprule",
+            f"    & {group_header} \\\\",
+            r"    \midrule",
+            r"    \endfirsthead",
+            "",
+            f"    \\multicolumn{{{n_cols}}}{{c}}{{{{\\bfseries Table \\thetable\\ continued from previous page}}}} \\\\",
+            r"    \toprule",
+            f"    & {group_header} \\\\",
+            r"    \midrule",
+            r"    \endhead",
+            "",
+            r"    \midrule",
+            f"    \\multicolumn{{{n_cols}}}{{r}}{{\\textit{{Continued on next page}}}} \\\\",
+            r"    \endfoot",
+            "",
+            r"    \bottomrule",
+            f"    \\multicolumn{{{n_cols}}}{{p{{0.95\\linewidth}}}}{{{notes_text}}} \\\\",
+            r"    \endlastfoot",
+            "",
+            *panel_blocks,
+            "",
+            r"\end{xltabular}",
+            r"\endgroup",
+            r"\end{landscape}",
+        ]
+        latex_str = "\n".join(lines)
+
+        tex_path        = OUTPUT_DIR / f"{name}{weight_str}.tex"
+        drafts_tex_path = DRAFTS_DIR / f"{name}{weight_str}.tex"
+        for path in [tex_path, drafts_tex_path]:
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(latex_str)
+        print(f"  Saved per-region landscape table: {tex_path.name}")
+
+    # Note: Summary_National (pooled), Summary_National_byYear_B, and
+    # Summary_National_byYear_D are intentionally NOT saved as standalone tables.
+    # They are fully redundant with (a) the "All" column of Summary_BankType and
+    # (b) the B/D panels of Summary_BankType_by_Year. The underlying summaries
+    # (sum_nat, sum_nat_yr_b, sum_nat_yr_d) are still computed because they feed
+    # those composite tables.
+    save_landscape_by_year(sum_nat_yr,   "Summary_National_by_Year",
+                           "National Summary Statistics by Year",
+                           panel_descr="All bank types pooled (B-type municipal markets and D-type national digital banks).")
+    save_banktype_summary(sum_bt)
+    save_banktype_by_year_combined(sum_nat_yr_b, sum_nat_yr_d)
     save_output(sum_reg,        "Summary_Region",             "Summary Statistics by Region (B-Type Firms)")
-    save_output(sum_reg_yr,     "Summary_Region_by_Year",     "Summary Statistics by Region and Year (B-Type Firms)")
+    save_region_by_year_panels(sum_reg_yr)
 
     print("Generating D-Type firm summary...")
     d_firms = df_b[df_b["CODMUN_IBGE"].astype(str) == "0"].copy()

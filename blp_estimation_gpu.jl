@@ -241,7 +241,8 @@ function allocate_gpu_buffers(buf::HotBuffers, pc::Precomp,
         n_b_groups, n_d_groups, n_pt_groups,
     )
 
-    CUDA.memory_status()
+    free_b, total_b = CUDA.memory_info()
+    @printf("  [GPU] VRAM after alloc: %.2f / %.2f GB free\n", free_b / 2^30, total_b / 2^30)
     return gbuf
 end
 

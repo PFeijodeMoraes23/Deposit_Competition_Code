@@ -59,7 +59,7 @@ echo "======================================================"
 
 # ── Common Julia preamble (expanded at submission time) ──────────────────────
 JULIA_SETUP="module reset
-module load Julia/1.10.4-linux-x86_64
+module load Julia/1.11.4-linux-x86_64
 set -euo pipefail
 mkdir -p ${LOG_DIR}
 if [ -f ${PROJECT_DIR}/Manifest.toml ] && ! grep -q 'julia_version = \"1.10' ${PROJECT_DIR}/Manifest.toml; then

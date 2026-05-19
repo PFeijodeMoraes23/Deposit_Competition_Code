@@ -15,7 +15,7 @@
 # ── Environment ──────────────────────────────────────────────────────────────
 # module reset is the correct command on Bouchet (module purge cannot unload StdEnv)
 module reset
-module load Julia/1.10.4-linux-x86_64
+module load Julia/1.11.4-linux-x86_64
 
 # Strict error checking starts after module loading to avoid false failures
 set -euo pipefail

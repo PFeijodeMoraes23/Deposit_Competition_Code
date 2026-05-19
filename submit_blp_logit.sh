@@ -23,7 +23,7 @@
 
 # ── Environment ───────────────────────────────────────────────────────────────
 module reset
-module load Julia/1.10.4-linux-x86_64
+module load Julia/1.11.4-linux-x86_64
 
 export JULIA_MKL_THREADING=tbb
 set -euo pipefail

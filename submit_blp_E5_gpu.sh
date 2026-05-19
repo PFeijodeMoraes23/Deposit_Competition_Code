@@ -14,12 +14,22 @@
 
 # ── Environment ───────────────────────────────────────────────────────────────
 module reset
-module load Julia/1.10.4-linux-x86_64
-module load CUDA/12.4.0
+# Pin Julia 1.11.4 — ships LLVM 16.0.6, which is the minimum required to
+# emit PTX for sm_89 (RTX 5000 Ada) and sm_90 (H100). Julia 1.10's LLVM 15
+# clamps Ada to sm_86/PTX 7.5 and triggers a PTXCompilerTarget MethodError.
+module load Julia/1.11.4-linux-x86_64
+# NOTE: We deliberately do NOT load a system CUDA module. CUDA.jl ships its
+# own toolkit via JLL artifacts (CUDA_Runtime_jll) and chooses a version
+# compatible with the detected driver. Loading a system CUDA module is only
+# needed if you call `CUDA.set_runtime_version!("local")`, which we don't.
+# (The previous `module load CUDA/12.4.0` failed on Bouchet — that exact
+# version is not installed; run `module spider CUDA` to see what is.)
 
 export JULIA_MKL_THREADING=tbb
-# CUDA.jl reads this to locate the CUDA toolkit installed by the module
-export JULIA_CUDA_USE_BINARYBUILDER=false
+# JULIA_CUDA_USE_BINARYBUILDER is deprecated since CUDA.jl 5.x — removed.
+# Keep Julia depots on the project filesystem so artifacts (CUDA toolkit ~3GB)
+# don't blow up the small $HOME quota.
+export JULIA_DEPOT_PATH="${SLURM_SUBMIT_DIR}/.julia_depot:${JULIA_DEPOT_PATH:-}"
 set -euo pipefail
 
 PROJECT_DIR="${SLURM_SUBMIT_DIR}"
@@ -27,10 +37,23 @@ mkdir -p "${PROJECT_DIR}/logs"
 
 echo "GPU node: $(hostname)"
 echo "CUDA devices: $(nvidia-smi --query-gpu=name,memory.total --format=csv,noheader)"
+echo "NVIDIA driver: $(nvidia-smi --query-gpu=driver_version --format=csv,noheader | head -1)"
 
 # ── Verify environment ────────────────────────────────────────────────────────
+# Resolve and instantiate the project. We force a CUDA.jl update so the
+# resolver picks a version matching the Project.toml compat bound (>= 5.5),
+# which is required for sm_89 (RTX Ada) targets and avoids the
+# `MethodError(Core.kwcall, ..., GPUCompiler.PTXCompilerTarget)` crash caused
+# by older CUDA.jl ↔ GPUCompiler.jl version mismatches.
 echo "Checking Julia packages: $(date)"
-julia --project="${PROJECT_DIR}" -e "using Pkg; Pkg.instantiate()"
+julia --project="${PROJECT_DIR}" -e '
+    using Pkg
+    Pkg.instantiate()
+    Pkg.update("CUDA")
+    Pkg.precompile()
+    using CUDA
+    @info "CUDA.jl version" CUDA.versioninfo()
+'
 
 echo "======================================"
 echo " BLP Estimation E5 GPU — $(date)"

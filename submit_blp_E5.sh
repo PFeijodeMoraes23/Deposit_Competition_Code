@@ -14,7 +14,7 @@
 # ── Environment ──────────────────────────────────────────────────────────────
 # module reset is the correct command on Bouchet (module purge cannot unload StdEnv)
 module reset
-module load Julia/1.10.4-linux-x86_64
+module load Julia/1.11.4-linux-x86_64
 
 # MKL threading: TBB works better than OpenMP for 32-thread BLAS in SLURM
 export JULIA_MKL_THREADING=tbb
