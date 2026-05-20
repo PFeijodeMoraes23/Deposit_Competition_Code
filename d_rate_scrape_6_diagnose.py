@@ -218,6 +218,14 @@ def main():
                     help='Reject advertised_rate_qoq < rel-low * cdi_qoq')
     ap.add_argument('--rel-high', type=float, default=DEFAULT_REL_HIGH,
                     help='Reject advertised_rate_qoq > rel-high * cdi_qoq')
+    ap.add_argument('--ignore-preferred', action='store_true',
+                    help='Override panel cells with scraped rates regardless of '
+                         'whether COSIF/IP data is present. Use when you trust '
+                         'advertised yields over regulatory implied rates.')
+    ap.add_argument('--gap-threshold', type=float, default=None,
+                    help='If set, only override (under --ignore-preferred) when '
+                         '|gap_qoq| > threshold (pp). Lets you keep panel data '
+                         'when the two sources broadly agree.')
     args = ap.parse_args()
 
     out = Path(args.out_dir); out.mkdir(parents=True, exist_ok=True)
@@ -336,16 +344,29 @@ def main():
     rec = gap.copy()
     rec['in_rel_band'] = ((rec['rel_to_cdi'] >= args.rel_low)
                           & (rec['rel_to_cdi'] <= args.rel_high))
-    rec['use_scraped'] = (rec['is_cdi_fallback']
-                          & rec['in_rel_band']
-                          & rec['tier'].isin(['A', 'B']))
+    if args.ignore_preferred:
+        gap_ok = (rec['gap_qoq'].abs() > args.gap_threshold
+                  if args.gap_threshold is not None
+                  else pd.Series(True, index=rec.index))
+        rec['use_scraped'] = (rec['in_rel_band']
+                              & rec['tier'].isin(['A', 'B'])
+                              & gap_ok)
+    else:
+        rec['use_scraped'] = (rec['is_cdi_fallback']
+                              & rec['in_rel_band']
+                              & rec['tier'].isin(['A', 'B']))
     def _reason(r):
-        if not r['is_cdi_fallback']:
-            return 'skip_panel_has_preferred_source'
         if r['tier'] == 'C':
             return 'skip_tier_C'
         if not r['in_rel_band']:
             return 'skip_out_of_rel_band'
+        if args.ignore_preferred:
+            if args.gap_threshold is not None and abs(r['gap_qoq']) <= args.gap_threshold:
+                return 'skip_gap_below_threshold'
+            tag = r['fallback_reason'] if r['is_cdi_fallback'] else 'force_override'
+            return f"override_tier_{r['tier']}_{tag}"
+        if not r['is_cdi_fallback']:
+            return 'skip_panel_has_preferred_source'
         return f"override_tier_{r['tier']}_{r['fallback_reason']}"
     rec['reason'] = rec.apply(_reason, axis=1)
     rec_out = rec[['CodConglPrud', 'AnoMes', 'deposit_type', 'has_ip',

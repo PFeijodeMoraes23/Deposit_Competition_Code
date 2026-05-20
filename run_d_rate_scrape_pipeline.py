@@ -93,7 +93,16 @@ def _banner(text, char="="):
 def _resolve_args_for_stage(stage, cli):
     """Translate top-level CLI flags into per-stage subprocess args."""
     args = []
-    if stage == 3:
+    if stage == 1:
+        if cli.target_top_n is not None:
+            args += ["--top-n", str(cli.target_top_n)]
+        if cli.target_all:
+            args.append("--all")
+        if cli.target_only_native_k5:
+            args.append("--only-native-k5")
+        if cli.target_no_aggregators:
+            args.append("--no-aggregators")
+    elif stage == 3:
         if cli.dry_run_fetch:
             args.append("--dry-run")
         if cli.fetch_workers is not None:
@@ -102,11 +111,24 @@ def _resolve_args_for_stage(stage, cli):
             args += ["--sleep-min", str(cli.fetch_sleep_min)]
         if cli.fetch_sleep_max is not None:
             args += ["--sleep-max", str(cli.fetch_sleep_max)]
+        if cli.fetch_include_images:
+            args.append("--include-images")
+        if cli.fetch_no_url_filter:
+            args.append("--no-url-filter")
+        if cli.fetch_skip_url_patterns is not None:
+            args += ["--skip-url-patterns", cli.fetch_skip_url_patterns]
+        if cli.fetch_mime_priority is not None:
+            args += ["--mime-priority", cli.fetch_mime_priority]
     elif stage == 4:
         if cli.parse_workers is not None:
             args += ["--workers", str(cli.parse_workers)]
         if cli.parse_pages is not None:
             args += ["--pages", str(cli.parse_pages)]
+        if cli.parse_ocr_images:
+            args.append("--ocr-images")
+    elif stage == 5:
+        if cli.manual_overrides is not None:
+            args += ["--manual-overrides", cli.manual_overrides]
     return args
 
 
@@ -152,12 +174,39 @@ def main():
                     help="Stage 3: min seconds of jitter between requests.")
     ap.add_argument("--fetch-sleep-max", type=float, default=None,
                     help="Stage 3: max seconds of jitter between requests.")
+    ap.add_argument("--fetch-include-images", action="store_true",
+                    help="Stage 3: also fetch png/jpg/webp/gif snapshots for OCR.")
+    ap.add_argument("--fetch-no-url-filter", action="store_true",
+                    help="Stage 3: disable URL-pattern denylist (fetch everything).")
+    ap.add_argument("--fetch-skip-url-patterns", default=None,
+                    help="Stage 3: comma-separated URL substrings to skip.")
+    ap.add_argument("--fetch-mime-priority", choices=("html", "pdf", "none"),
+                    default="html",
+                    help="Stage 3: queue ordering. Default 'html' drains HTML "
+                         "before PDFs so rate mentions appear faster.")
+
+    # Stage-1 (targets) passthrough
+    ap.add_argument("--target-top-n", type=int, default=None,
+                    help="Stage 1: number of largest digital-bank conglomerates (default 40).")
+    ap.add_argument("--target-all", action="store_true",
+                    help="Stage 1: include every D-type firm as a target (~386).")
+    ap.add_argument("--target-only-native-k5", action="store_true",
+                    help="Stage 1: restrict to firms with native IP rate data.")
+    ap.add_argument("--target-no-aggregators", action="store_true",
+                    help="Stage 1: omit supplementary aggregator-site targets.")
 
     # Stage-4 (parse) passthrough
     ap.add_argument("--parse-workers", type=int, default=None,
                     help="Stage 4: ProcessPool workers (default CPU-1).")
     ap.add_argument("--parse-pages", type=int, default=None,
                     help="Stage 4: max pages parsed per PDF.")
+    ap.add_argument("--parse-ocr-images", action="store_true",
+                    help="Stage 4: also OCR images in archive_images/ (needs pytesseract).")
+
+    # Stage-5 (format) passthrough
+    ap.add_argument("--manual-overrides", default=None,
+                    help="Stage 5: path to manual-seed CSV. Default uses "
+                         "IP_SCRAPE/manual_advertised_rates.csv if present.")
     args = ap.parse_args()
 
     if args.list:

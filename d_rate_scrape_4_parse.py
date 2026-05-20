@@ -39,12 +39,60 @@ ip_scrape_dir = root / 'BCB' / 'Egan_et_al_2025_Rep' / 'processed' / 'IP_SCRAPE'
 
 PAGES_DIR = ip_scrape_dir / 'archive_html'
 PDFS_DIR = ip_scrape_dir / 'archive_pdfs'
+IMAGES_DIR = ip_scrape_dir / 'archive_images'
+_IMAGE_EXTS = ('.png', '.jpg', '.jpeg', '.webp', '.gif')
+
+# OCR backend (optional). If pytesseract + Tesseract binary aren't installed,
+# image parsing is skipped silently and only HTML/PDF mentions are extracted.
+try:
+    import pytesseract
+    from PIL import Image
+    _HAVE_OCR = True
+except ImportError:  # pragma: no cover
+    _HAVE_OCR = False
 
 # Regexes for common deposit rate phrasing in Brazil.
 # Word-bounded so "1000% CDI" doesn't yield a spurious "100" match.
 # CDI is masculine (do/ao CDI); SELIC is feminine (da/a SELIC). "de" is allowed for both.
-CDI_REGEX = re.compile(r'\b(\d{2,3})\s*%?\s*(?:do|ao|de)?\s*CDI\b', re.IGNORECASE)
-SELIC_REGEX = re.compile(r'\b(\d{2,3})\s*%?\s*(?:da|a|de)?\s*SELIC\b', re.IGNORECASE)
+#
+# We collect *several* patterns per index because Brazilian fintech marketing
+# uses many syntactic variants:
+#   "100% do CDI"      "100% CDI"      "ate 110% do CDI"
+#   "CDI + 2%"         "CDI mais 2%"   "rendimento de 105%"
+#   "rentabilidade 100% do CDI"        "taxa Selic + 1,5%"
+# Numbers may carry a comma decimal ("100,5%"). The capture group 1 is always
+# the numeric percent (string). The downstream filter (MIN/MAX_PCT in
+# d_rate_scrape_5_format.py) drops out-of-range matches; the BAD_CONTEXT
+# blocklist drops loan/fee phrasing.
+CDI_PATTERNS = [
+    # Classic: "100% do CDI" or "100 % do CDI"
+    r'(\d{2,3}(?:[.,]\d{1,2})?)\s*%\s*(?:do|ao|de|da)?\s*CDI\b',
+    # Inverted: "CDI de 100%" / "CDI 100%"
+    r'\bCDI\s*(?:de|a|ao)?\s*(\d{2,3}(?:[.,]\d{1,2})?)\s*%',
+    # Spread form: "CDI + 2%" / "CDI mais 1.5%". Encoded as 100 + spread,
+    # capped by MAX_PCT downstream; users wanting the spread can inspect Context.
+    r'\bCDI\s*\+\s*(\d{1,2}(?:[.,]\d{1,2})?)\s*%',
+    r'\bCDI\s*mais\s*(\d{1,2}(?:[.,]\d{1,2})?)\s*%',
+    # No-% variant: "100 do CDI" (rare but appears on infographic alt-text)
+    r'(\d{2,3})\s*do\s*CDI\b',
+]
+SELIC_PATTERNS = [
+    r'(\d{2,3}(?:[.,]\d{1,2})?)\s*%\s*(?:da|a|de|do|ao)?\s*SELIC\b',
+    r'\bSELIC\s*(?:de|a|ao)?\s*(\d{2,3}(?:[.,]\d{1,2})?)\s*%',
+    r'\bSELIC\s*\+\s*(\d{1,2}(?:[.,]\d{1,2})?)\s*%',
+    r'\bSELIC\s*mais\s*(\d{1,2}(?:[.,]\d{1,2})?)\s*%',
+    r'(\d{2,3})\s*da\s*SELIC\b',
+    # Synonym: "taxa basica" / "taxa básica de juros"
+    r'(\d{2,3}(?:[.,]\d{1,2})?)\s*%\s*da\s*taxa\s*b[áa]sica',
+]
+CDI_REGEXES   = [re.compile(p, re.IGNORECASE) for p in CDI_PATTERNS]
+SELIC_REGEXES = [re.compile(p, re.IGNORECASE) for p in SELIC_PATTERNS]
+
+# "Spread" patterns expressed as `CDI + X%` translate to (100 + X) for the
+# advertised_pct convention. Same for SELIC. We tag these so the formatter
+# can add 100 instead of taking the literal capture.
+CDI_SPREAD_REGEXES   = [re.compile(r'\bCDI\s*(?:\+|mais)\s*(\d{1,2}(?:[.,]\d{1,2})?)\s*%', re.IGNORECASE)]
+SELIC_SPREAD_REGEXES = [re.compile(r'\bSELIC\s*(?:\+|mais)\s*(\d{1,2}(?:[.,]\d{1,2})?)\s*%', re.IGNORECASE)]
 
 # How many pages to scan in each PDF. Rate sheets / fund regulations often
 # have tables past page 10; widen to capture them. Override via --pages.
@@ -143,25 +191,80 @@ def _extract_rates(text, filename):
     ts = parts[1] if len(parts) > 1 else '0000'
     date_str = f"{ts[:4]}-{ts[4:6]}-{ts[6:8]}" if len(ts) >= 8 else 'Unknown'
 
-    for regex, rate_type in [(CDI_REGEX, 'CDI'), (SELIC_REGEX, 'SELIC')]:
-        for match in regex.finditer(text):
-            rate_val = match.group(1)
-            start = max(0, match.start() - 60)
-            end = min(len(text), match.end() + 60)
-            context = text[start:end].replace('\n', ' ').strip()
-            extracted.append({
-                'CodConglomerado': conglomerado,
-                'Snapshot_Date': date_str,
-                'Rate_Type': rate_type,
-                'Rate_Value': f"{rate_val}%",
-                'Context': f"... {context} ...",
-                'Source': filename
-            })
+    # Deduplicate matches by (rate_type, span_start) to avoid double-counting
+    # when overlapping patterns hit the same substring.
+    seen_spans = set()
+
+    def _emit(match, rate_type, is_spread):
+        key = (rate_type, match.start())
+        if key in seen_spans:
+            return
+        seen_spans.add(key)
+        raw = match.group(1).replace(',', '.')
+        try:
+            num = float(raw)
+        except ValueError:
+            return
+        if is_spread:
+            # "CDI + 2%" -> 102% of CDI (downstream filter will keep)
+            num = 100.0 + num
+        # Re-format: integer if whole, else 1 dp
+        rate_val = f"{num:.1f}".rstrip('0').rstrip('.') or '0'
+        start = max(0, match.start() - 60)
+        end = min(len(text), match.end() + 60)
+        context = text[start:end].replace('\n', ' ').strip()
+        extracted.append({
+            'CodConglomerado': conglomerado,
+            'Snapshot_Date': date_str,
+            'Rate_Type': rate_type,
+            'Rate_Value': f"{rate_val}%",
+            'Context': f"... {context} ...",
+            'Source': filename,
+        })
+
+    spread_cdi_spans = set()
+    for rx in CDI_SPREAD_REGEXES:
+        for m in rx.finditer(text):
+            spread_cdi_spans.add(m.start())
+    spread_sel_spans = set()
+    for rx in SELIC_SPREAD_REGEXES:
+        for m in rx.finditer(text):
+            spread_sel_spans.add(m.start())
+
+    for rx in CDI_REGEXES:
+        for m in rx.finditer(text):
+            _emit(m, 'CDI', is_spread=(m.start() in spread_cdi_spans))
+    for rx in SELIC_REGEXES:
+        for m in rx.finditer(text):
+            _emit(m, 'SELIC', is_spread=(m.start() in spread_sel_spans))
 
     return extracted
 
 
 COLS = ['CodConglomerado', 'Snapshot_Date', 'Rate_Type', 'Rate_Value', 'Context', 'Source']
+
+
+def parse_image(filepath):
+    """OCR a rate-table image and extract rate mentions. No-op if pytesseract
+    is unavailable. Uses Portuguese language model if installed; falls back
+    to default (typically English)."""
+    if not _HAVE_OCR:
+        return []
+    try:
+        img = Image.open(filepath)
+        # Try Portuguese first; fall back to default if 'por' not installed.
+        try:
+            text = pytesseract.image_to_string(img, lang='por')
+        except pytesseract.TesseractError:
+            text = pytesseract.image_to_string(img)
+        return _extract_rates(text, filepath.name)
+    except Exception as e:
+        print(f"Error OCR'ing {filepath.name}: {e}")
+        return []
+
+
+def _parse_image_worker(path_str):
+    return parse_image(Path(path_str))
 
 
 def _parse_pdf_worker(path_str):
@@ -188,6 +291,9 @@ def main():
                         help='Disable URL-keyword pre-filter (parse every PDF).')
     parser.add_argument('--out', type=str, default=str(ip_scrape_dir / 'extracted_historical_rates.csv'),
                         help='Output CSV path.')
+    parser.add_argument('--ocr-images', action='store_true',
+                        help='Also OCR archive_images/*.{png,jpg,jpeg,webp,gif} '
+                             'using pytesseract (silently skipped if not installed).')
     args = parser.parse_args()
 
     PDF_PAGE_LIMIT = max(1, args.pages)
@@ -237,6 +343,34 @@ def main():
                     print(f"  PDF: {done}/{n}")
     else:
         print(f"PDF dir not found: {PDFS_DIR}")
+
+    # 3. OCR image files (optional, requires pytesseract + Tesseract binary)
+    if args.ocr_images:
+        if not _HAVE_OCR:
+            print("--ocr-images requested but pytesseract/PIL not installed; "
+                  "skipping. Run: pip install pytesseract pillow and install "
+                  "the Tesseract binary (https://github.com/UB-Mannheim/tesseract/wiki).")
+        elif IMAGES_DIR.exists():
+            img_files = []
+            for ext in _IMAGE_EXTS:
+                img_files.extend(IMAGES_DIR.glob(f'*{ext}'))
+            img_files = sorted(img_files)
+            n_img = len(img_files)
+            workers = max(1, args.workers)
+            print(f"OCR-parsing {n_img} image files with {workers} workers...")
+            done = 0
+            with ProcessPoolExecutor(max_workers=workers) as ex:
+                futures = {ex.submit(_parse_image_worker, str(p)): p for p in img_files}
+                for fut in as_completed(futures):
+                    try:
+                        results.extend(fut.result())
+                    except Exception as e:
+                        print(f"  Image worker error on {futures[fut].name}: {e}")
+                    done += 1
+                    if done % 100 == 0:
+                        print(f"  IMG: {done}/{n_img}")
+        else:
+            print(f"Image dir not found: {IMAGES_DIR}")
 
     # Basic deduplication: same cod + date + value + context
     dedup_map = {

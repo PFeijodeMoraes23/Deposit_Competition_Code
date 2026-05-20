@@ -102,7 +102,8 @@ LABEL_MAP = {
     "n_mcas_served":             ("MCAs Served",             "count",        None, 1),
     # Table 2 specific
     "n_b_firms":                 ("Number of B Firms",       "count",        None, 2),
-    "hhi_b":                     ("HHI (B firms)",           "x10{,}000",    None, 0),
+    "hhi_b":                     ("HHI (B firms)",           "",              None, 0),
+    "hhi_d_natl":                ("HHI (D firms, national)", "",              None, 0),
     "spread_a4_w":               ("Spread (4), dep-weighted","pp",           None, 4),
     "spread_a5_w":               ("Spread (5), dep-weighted","pp",           None, 4),
     "n_d_firms_natl":            ("Number of D Firms (nat.)", "count",       None, 0),
@@ -334,11 +335,40 @@ def _build_firm_quarter_B(df_b: pd.DataFrame) -> pd.DataFrame:
 
 
 def _build_firm_quarter_D(df_d: pd.DataFrame) -> pd.DataFrame:
-    keep_cols = ["CodConglomeradoPrudencial", "year", "quarter",
-                 "total_assets", "equity_ratio",
-                 "dep_a1", "dep_a2", "dep_a4", "dep_a5",
-                 "spread_a4", "spread_a5"]
-    return df_d[keep_cols].copy()
+    """Aggregate D-firm panel (MCA-level) to firm-quarter:
+       deposits summed across MCAs; spreads averaged weighted by deposits within
+       that asset class; firm-level covariates taken as first non-null."""
+    grp_keys = ["CodConglomeradoPrudencial", "year", "quarter"]
+
+    out = (
+        df_d.groupby(grp_keys, sort=False)
+            .agg(
+                dep_a1=("dep_a1", "sum"),
+                dep_a2=("dep_a2", "sum"),
+                dep_a4=("dep_a4", "sum"),
+                dep_a5=("dep_a5", "sum"),
+                total_assets=("total_assets", "first"),
+                equity_ratio=("equity_ratio", "first"),
+            )
+            .reset_index()
+    )
+
+    # Deposit-weighted spreads
+    work = df_d[grp_keys + ["spread_a4", "spread_a5", "dep_a4", "dep_a5"]].copy()
+    for v, w in (("spread_a4", "dep_a4"), ("spread_a5", "dep_a5")):
+        ww = work[w].where(work[w] > 0, 0.0).where(work[v].notna(), 0.0)
+        work[f"_num_{v}"] = work[v] * ww
+        work[f"_den_{v}"] = ww
+    sp = (work.groupby(grp_keys, sort=False)
+              .agg({"_num_spread_a4": "sum", "_den_spread_a4": "sum",
+                    "_num_spread_a5": "sum", "_den_spread_a5": "sum"})
+              .reset_index())
+    sp["spread_a4"] = np.where(sp["_den_spread_a4"] > 0,
+                               sp["_num_spread_a4"] / sp["_den_spread_a4"], np.nan)
+    sp["spread_a5"] = np.where(sp["_den_spread_a5"] > 0,
+                               sp["_num_spread_a5"] / sp["_den_spread_a5"], np.nan)
+    out = out.merge(sp[grp_keys + ["spread_a4", "spread_a5"]], on=grp_keys, how="left")
+    return out
 
 
 def build_table1(df: pd.DataFrame, weight_col: str | None) -> tuple[pd.DataFrame, pd.DataFrame, dict]:
@@ -348,15 +378,15 @@ def build_table1(df: pd.DataFrame, weight_col: str | None) -> tuple[pd.DataFrame
     fq_b = _build_firm_quarter_B(df_b)
     fq_d = _build_firm_quarter_D(df_d)
 
-    # Population weights at firm-quarter level: B uses pop sum across MCAs;
-    # D doesn't aggregate over MCAs (national row already weighted upstream).
+    # Population weights at firm-quarter level: sum pop_total across MCAs.
     if weight_col is not None:
         pop_b = (df_b.groupby(["CodConglomeradoPrudencial", "year", "quarter"],
                               sort=False)[weight_col].sum().reset_index())
         fq_b  = fq_b.merge(pop_b, on=["CodConglomeradoPrudencial", "year", "quarter"], how="left")
         if weight_col in df_d.columns:
-            fq_d = fq_d.merge(df_d[["CodConglomeradoPrudencial", "year", "quarter", weight_col]],
-                              on=["CodConglomeradoPrudencial", "year", "quarter"], how="left")
+            pop_d = (df_d.groupby(["CodConglomeradoPrudencial", "year", "quarter"],
+                                  sort=False)[weight_col].sum().reset_index())
+            fq_d = fq_d.merge(pop_d, on=["CodConglomeradoPrudencial", "year", "quarter"], how="left")
 
     def _moments(panel: pd.DataFrame, var_list: list[str]) -> pd.DataFrame:
         rows = []
@@ -379,23 +409,37 @@ def build_table1(df: pd.DataFrame, weight_col: str | None) -> tuple[pd.DataFrame
     moments_b = _moments(fq_b, T1_VARS_B)
     moments_d = _moments(fq_d, T1_VARS_D)
 
+    # Combined (pooled) panel for Panel C — variables common to both types
+    T1_VARS_COMMON = T1_VARS_D   # n_mcas_served is B-type only; all others shared
+    cols_keep = (["CodConglomeradoPrudencial", "year", "quarter"]
+                 + T1_VARS_COMMON
+                 + ([weight_col] if weight_col and weight_col in fq_b.columns else []))
+    fq_all = pd.concat([
+        fq_b[[c for c in cols_keep if c in fq_b.columns]],
+        fq_d[[c for c in cols_keep if c in fq_d.columns]],
+    ], ignore_index=True)
+    moments_all = _moments(fq_all, T1_VARS_COMMON)
+
     meta = {
-        "n_firm_quarters_B": int(len(fq_b)),
-        "n_firm_quarters_D": int(len(fq_d)),
-        "n_firms_B":         int(fq_b["CodConglomeradoPrudencial"].nunique()),
-        "n_firms_D":         int(fq_d["CodConglomeradoPrudencial"].nunique()),
+        "n_firm_quarters_B":   int(len(fq_b)),
+        "n_firm_quarters_D":   int(len(fq_d)),
+        "n_firms_B":           int(fq_b["CodConglomeradoPrudencial"].nunique()),
+        "n_firms_D":           int(fq_d["CodConglomeradoPrudencial"].nunique()),
+        "n_firm_quarters_all": int(len(fq_all)),
+        "n_firms_all":         int(fq_all["CodConglomeradoPrudencial"].nunique()),
     }
-    return moments_b, moments_d, meta
+    return moments_b, moments_d, moments_all, meta
 
 
-def render_table1(moments_b, moments_d, meta, weight_col, suffix) -> str:
+def render_table1(moments_b, moments_d, moments_all, meta, weight_col, suffix) -> str:
     name      = "Compressed_BankType_CrossSection"
-    tab_label = f"tab:{name}{suffix}"
+    tab_label = f"tab:{name}"
     weight_lbl = "(Population Weighted)" if weight_col else "(Unweighted)"
     caption   = (f"Bank-Conglomerate Cross-Section by Type {weight_lbl}")
 
-    col_spec = "l@{\\hspace{0.5em}}rrrrrr"
-    header = r"Variable & Mean & SD & p10 & p50 & p90 & $N$ \\"
+    col_spec  = "l@{\\hspace{0.5em}}rrrrrr"
+    n_cols    = 7
+    header_row = r"Variable & Mean & SD & p10 & p50 & p90 & $N$ \\"
 
     def _panel(title: str, moments: pd.DataFrame, n_firms: int, n_fq: int) -> list[str]:
         lines = [
@@ -427,9 +471,11 @@ def render_table1(moments_b, moments_d, meta, weight_col, suffix) -> str:
         r"prudential-conglomerate $\times$ calendar-quarter pair. For type-B "
         r"(brick-and-mortar) firms, MCA-level deposits are summed within "
         r"firm-quarter, and spreads are deposit-weighted across MCAs within "
-        r"the corresponding asset class. Quantiles are computed over the pooled "
-        r"firm-quarter sample. PIX-related products (type 5) are zero by "
-        r"construction prior to 2020Q4. "
+        r"the corresponding asset class. Panel C pools both firm types over "
+        r"variables common to B and D (\texttt{n\_mcas\_served} is B-type only "
+        r"and is omitted from the pooled panel). Quantiles are computed over "
+        r"the pooled firm-quarter sample. PIX-related products (type 5) are "
+        r"zero by construction prior to 2020Q4. "
         + ("Statistics are population-weighted using \\texttt{pop\\_total}."
            if weight_col else "Statistics are unweighted.")
     )
@@ -439,24 +485,36 @@ def render_table1(moments_b, moments_d, meta, weight_col, suffix) -> str:
                    moments_b, meta["n_firms_B"], meta["n_firm_quarters_B"])
     body += _panel("Panel B: Digital (D) Firms",
                    moments_d, meta["n_firms_D"], meta["n_firm_quarters_D"])
+    body += _panel("Panel C: All Firms (Pooled)",
+                   moments_all, meta["n_firms_all"], meta["n_firm_quarters_all"])
 
     tex = "\n".join([
-        r"\begin{table}[ht]",
-        r"\centering",
-        r"\begin{threeparttable}",
-        f"\\caption{{{caption}}}\\label{{{tab_label}}}",
-        r"\footnotesize",
-        f"\\begin{{tabular}}{{{col_spec}}}",
-        r"\toprule",
-        header,
+        r"\setstretch{1.0}",
+        r"\setlength{\LTleft}{\fill}",
+        r"\setlength{\LTright}{\fill}",
+        f"\\begin{{longtable}}[c]{{{col_spec}}}",
+        f"    \\caption{{{caption}}}\\label{{{tab_label}}} \\\\",
+        r"    \toprule",
+        f"    {header_row}",
+        r"    \endfirsthead",
+        "",
+        f"    \\multicolumn{{{n_cols}}}{{c}}{{{{\\bfseries Table \\thetable\\ continued from previous page}}}} \\\\",
+        r"    \toprule",
+        f"    {header_row}",
+        r"    \midrule",
+        r"    \endhead",
+        "",
+        r"    \midrule",
+        f"    \\multicolumn{{{n_cols}}}{{r}}{{\\textit{{Continued on next page}}}} \\\\",
+        r"    \endfoot",
+        "",
+        r"    \bottomrule",
+        f"    \\multicolumn{{{n_cols}}}{{p{{0.85\\textwidth}}}}{{{notes}}} \\\\",
+        r"    \endlastfoot",
+        "",
         *body,
-        r"\bottomrule",
-        r"\end{tabular}",
-        r"\begin{tablenotes}[flushleft]",
-        r"\item " + notes,
-        r"\end{tablenotes}",
-        r"\end{threeparttable}",
-        r"\end{table}",
+        "",
+        r"\end{longtable}",
     ])
     return tex
 
@@ -525,7 +583,7 @@ def build_table2(df: pd.DataFrame, weight_col: str | None) -> pd.DataFrame:
                    .first()
                    .reset_index())
 
-    mca_q = (mq_tot[grp_keys + ["n_b_firms"]]
+    mca_q = (mq_tot[grp_keys + ["n_b_firms", "dep_total_mq"]]
              .merge(hhi, on=grp_keys, how="left")
              .merge(spread_agg[grp_keys + ["spread_a4_w", "spread_a5_w"]], on=grp_keys, how="left")
              .merge(pop_mq, on=grp_keys, how="left"))
@@ -538,11 +596,32 @@ def build_table2(df: pd.DataFrame, weight_col: str | None) -> pd.DataFrame:
                           .rename("n_d_firms_natl")
                           .reset_index())
 
+    # National D-firm HHI: squared sum of national deposit shares x 1e4
+    d_firm_yr = (d_active.groupby(["year", "CodConglomeradoPrudencial"], sort=False)["dep_total_jkmt"]
+                         .sum()
+                         .reset_index())
+    d_yr_total = (d_firm_yr.groupby("year")["dep_total_jkmt"]
+                           .sum()
+                           .rename("dep_total_yr")
+                           .reset_index())
+    d_firm_yr = d_firm_yr.merge(d_yr_total, on="year")
+    d_firm_yr["share_sq"] = np.where(
+        d_firm_yr["dep_total_yr"] > 0,
+        (d_firm_yr["dep_total_jkmt"] / d_firm_yr["dep_total_yr"]) ** 2,
+        np.nan,
+    )
+    d_hhi_yr = (d_firm_yr.groupby("year")["share_sq"]
+                         .sum(min_count=1)
+                         .mul(1e4)
+                         .rename("hhi_d_natl")
+                         .reset_index())
+
     years = sorted(df["year"].unique().tolist())
     w_col = weight_col if (weight_col and weight_col in mca_q.columns) else None
 
+    # Panel A: B firms (MCA-level)
     rows = []
-    for v in ["n_b_firms", "hhi_b", "spread_a4_w", "spread_a5_w"]:
+    for v in ["n_b_firms", "hhi_b"]:
         row = {"var": v}
         for yr in years:
             sub = mca_q[mca_q["year"] == yr]
@@ -551,12 +630,28 @@ def build_table2(df: pd.DataFrame, weight_col: str | None) -> pd.DataFrame:
             row[yr] = _weighted_mean(x, w)
         rows.append(row)
 
-    # D-firm count: same value across the year
-    drow = {"var": "n_d_firms_natl"}
+    # Panel B: D firms (national)
+    drow_count = {"var": "n_d_firms_natl"}
     for yr in years:
         v = d_count_yr.loc[d_count_yr["year"] == yr, "n_d_firms_natl"]
-        drow[yr] = float(v.iloc[0]) if len(v) else 0.0
-    rows.append(drow)
+        drow_count[yr] = float(v.iloc[0]) if len(v) else 0.0
+    rows.append(drow_count)
+
+    drow_hhi = {"var": "hhi_d_natl"}
+    for yr in years:
+        v = d_hhi_yr.loc[d_hhi_yr["year"] == yr, "hhi_d_natl"]
+        drow_hhi[yr] = float(v.iloc[0]) if len(v) else 0.0
+    rows.append(drow_hhi)
+
+    # Panel C: Market spreads (B-firm deposit-weighted, MCA-level)
+    for v in ["spread_a4_w", "spread_a5_w"]:
+        row = {"var": v}
+        for yr in years:
+            sub = mca_q[mca_q["year"] == yr]
+            x = sub[v].values
+            w = sub[w_col].values if w_col else None
+            row[yr] = _weighted_mean(x, w)
+        rows.append(row)
 
     # N row: number of MCA-quarters per year
     nrow = {"var": "N_obs"}
@@ -569,8 +664,10 @@ def build_table2(df: pd.DataFrame, weight_col: str | None) -> pd.DataFrame:
 
 def render_table2(t2_df, weight_col, suffix) -> str:
     name      = "Compressed_MarketStructure_by_Year"
-    tab_label = f"tab:{name}{suffix}"
-    weight_lbl = "(Population Weighted)" if weight_col else "(Unweighted)"
+    tab_label = f"tab:{name}"
+    weight_lbl = ("(Population Weighted)" if weight_col == "pop_total"
+                  else "(Deposit Weighted)" if weight_col == "dep_total_mq"
+                  else "(Unweighted)")
     caption   = f"MCA-Level Market Structure, Annual Averages {weight_lbl}"
 
     year_cols = [c for c in t2_df.columns if c != "var"]
@@ -579,22 +676,33 @@ def render_table2(t2_df, weight_col, suffix) -> str:
     col_spec = "l@{\\hspace{0.2em}}" + ">{\\centering\\arraybackslash}X" * n_groups
     header   = " & " + " & ".join(str(y) for y in year_cols) + r" \\"
 
+    PANELS = [
+        ("Panel A: B Firms (MCA-Level)",                ["n_b_firms", "hhi_b"]),
+        ("Panel B: D Firms (National)",                 ["n_d_firms_natl", "hhi_d_natl"]),
+        ("Panel C: Market Spreads (B-Firm, MCA-Level)", ["spread_a4_w", "spread_a5_w"]),
+    ]
     PRE2020_BLANK = {"spread_a5_w"}
+    t2_idx = t2_df.set_index("var")
 
     body = []
-    for _, row in t2_df.iterrows():
-        vb  = row["var"]
-        if vb == "N_obs":
-            continue
-        lbl = _row_label(vb)
-        cells = []
-        for y in year_cols:
-            val = row[y]
-            if vb in PRE2020_BLANK and int(y) < 2020:
-                cells.append("")
+    for i, (panel_title, vars_in_panel) in enumerate(PANELS):
+        if i > 0:
+            body.append(r"\midrule")
+        body.append(f"\\multicolumn{{{n_groups+1}}}{{l}}{{\\textit{{{panel_title}}}}} \\\\")
+        body.append(r"\midrule")
+        for vb in vars_in_panel:
+            if vb not in t2_idx.index:
                 continue
-            cells.append(_fmt_val(val, vb))
-        body.append(f"{lbl} & " + " & ".join(cells) + r" \\")
+            row = t2_idx.loc[vb]
+            lbl = _row_label(vb)
+            cells = []
+            for y in year_cols:
+                val = row[y]
+                if vb in PRE2020_BLANK and int(y) < 2020:
+                    cells.append("")
+                    continue
+                cells.append(_fmt_val(val, vb))
+            body.append(f"{lbl} & " + " & ".join(cells) + r" \\")
     # N row
     n_row = t2_df[t2_df["var"] == "N_obs"]
     if len(n_row):
@@ -603,16 +711,23 @@ def render_table2(t2_df, weight_col, suffix) -> str:
         body.append("MCA-Quarters ($N$) & " + " & ".join(nvals) + r" \\")
 
     notes = (
-        r"\scriptsize \textit{Notes:} Each year column is the mean across "
-        r"MCA $\times$ quarter cells within that calendar year. The number of "
-        r"B firms is the count of distinct prudential conglomerates with "
-        r"strictly positive deposits in the MCA-quarter; HHI is scaled to "
-        r"$0$--$10{,}000$ from B-firm deposit shares within MCA-quarter; "
-        r"deposit-weighted spreads use the corresponding asset-class deposits "
-        r"as weights. The D-firm count is national (constant across MCAs in a "
-        r"given year). Type-5 (prepaid) spreads are undefined before 2020. "
-        + ("Cross-MCA means are population-weighted using \\texttt{pop\\_total}."
-           if weight_col else "Cross-MCA means are unweighted.")
+        r"\scriptsize \textit{Notes:} "
+        r"Panel A: MCA-level averages for B (brick-and-mortar) firms. "
+        r"Number of B firms counts distinct prudential conglomerates with "
+        r"strictly positive total deposits in the MCA-quarter. "
+        r"HHI is computed from B-firm deposit shares within the MCA-quarter, "
+        r"on the $0$--$10{,}000$ scale. "
+        r"Panel B: National aggregates for D (digital) firms. "
+        r"Count is distinct conglomerates nationally with positive total deposits. "
+        r"National HHI uses each D-firm's share of total D-firm deposits, "
+        r"also on the $0$--$10{,}000$ scale. "
+        r"Panel C: B-firm deposit-weighted spreads, averaged across MCA-quarters; "
+        r"type-5 (prepaid) spreads are undefined before 2020. "
+        + ("Panels A and C are population-weighted using \\texttt{pop\\_total}."
+           if weight_col == "pop_total"
+           else "Panels A and C are weighted by total B-firm deposits in the MCA-quarter."
+           if weight_col == "dep_total_mq"
+           else "Panels A and C are unweighted.")
     )
 
     tex = "\n".join([
@@ -634,7 +749,7 @@ def render_table2(t2_df, weight_col, suffix) -> str:
         r"    \midrule",
         r"    \endhead",
         r"    \bottomrule",
-        f"    \\multicolumn{{{n_groups+1}}}{{p{{0.95\\linewidth}}}}{{{notes}}} \\\\",
+        f"    \\multicolumn{{{n_groups+1}}}{{p{{\\dimexpr\\linewidth-2\\tabcolsep\\relax}}}}{{{notes}}} \\\\",
         r"    \endlastfoot",
         *body,
         r"\end{xltabular}",
@@ -693,7 +808,7 @@ def build_table3(df: pd.DataFrame, weight_col: str | None) -> pd.DataFrame:
 
 def render_table3(t3_df, weight_col, suffix, latest_year) -> str:
     name      = "Compressed_LocalEnvironment_by_Region"
-    tab_label = f"tab:{name}{suffix}"
+    tab_label = f"tab:{name}"
     weight_lbl = "(Population Weighted)" if weight_col else "(Unweighted)"
     caption = (f"Local Environment by Macro-Region, "
                f"{latest_year} Cross-Section {weight_lbl}")
@@ -727,7 +842,7 @@ def render_table3(t3_df, weight_col, suffix, latest_year) -> str:
     )
 
     tex = "\n".join([
-        r"\begin{table}[ht]",
+        r"\begin{table}[H]",
         r"\centering",
         r"\begin{threeparttable}",
         f"\\caption{{{caption}}}\\label{{{tab_label}}}",
@@ -792,28 +907,28 @@ def build_table4(df: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
 
 def render_table4(t4_df, meta, suffix) -> str:
     name      = "Compressed_DFirm_PrePost_Pix"
-    tab_label = f"tab:{name}{suffix}"
+    tab_label = f"tab:{name}"
     caption   = ("Digital (D) Firms Before and After Pix: Difference-in-Means "
                  "with Conglomerate-Clustered Inference")
 
-    col_spec = "l@{\\hspace{0.4em}}rrrrrrrr"
-    header   = (r"Variable & Pre Mean & Post Mean & $\Delta$ & "
-                r"CR SE & $t$ & $G$ & $G^{\star}$ & $p$ \\")
+    col_spec = "l@{\\hspace{0.4em}}rrrrr"
+    header   = (r"Variable & Pre Mean & Post Mean & $\Delta$ & $G$ & $G^{\star}$ \\")
 
     body = []
     for _, r in t4_df.iterrows():
         vb = r["var"]
         diff_cell = f"{_fmt_val(r['diff'], vb)}{_stars(r['p'])}"
+        se_cell   = f"({_fmt_val(r['se'], vb)})"
         body.append(
             f"{_row_label(vb)} & "
             f"{_fmt_val(r['pre_mean'],  vb)} & "
             f"{_fmt_val(r['post_mean'], vb)} & "
             f"{diff_cell} & "
-            f"{_fmt_val(r['se'], vb)} & "
-            f"{r['t']:.2f} & "
             f"{int(r['G'])} & "
-            f"{r['G_star']:.1f} & "
-            f"{r['p']:.3f} \\\\"
+            f"{r['G_star']:.1f} \\\\"
+        )
+        body.append(
+            f" & & & {se_cell} & & \\\\[0.3em]"
         )
 
     # Context row: active D-firm counts (no test).
@@ -824,13 +939,7 @@ def render_table4(t4_df, meta, suffix) -> str:
         f"& {meta['n_d_firms_pre']:,} "
         f"& {meta['n_d_firms_post']:,} "
         f"& {meta['n_d_firms_post'] - meta['n_d_firms_pre']:+,} "
-        r"& \multicolumn{5}{c}{\textit{(count, no test)}} \\"
-    )
-    body.append(
-        f"Firm-Quarters ($N$) "
-        f"& {meta['n_firm_quarters_pre']:,} "
-        f"& {meta['n_firm_quarters_post']:,} "
-        r"& \multicolumn{6}{c}{} \\"
+        r"& \multicolumn{2}{c}{\textit{(count, no test)}} \\"
     )
 
     notes = (
@@ -839,8 +948,9 @@ def render_table4(t4_df, meta, suffix) -> str:
         r"\varepsilon_{jt}$ over the D-firm $\times$ quarter panel, where "
         r"$j$ indexes prudential conglomerates and $t$ indexes calendar quarters. "
         r"$\Delta = \hat{\beta}$ is the post-minus-pre mean difference; "
-        r"\textit{CR SE} is the cluster-robust (CRV1) standard error with "
-        r"clustering at the conglomerate level. Inference uses the effective "
+        r"cluster-robust (CRV1) standard errors are in parentheses below "
+        r"each estimate, with clustering at the conglomerate level. "
+        r"Inference uses the effective "
         r"number of clusters $G^{\star} = G / (1 + \mathrm{cv}^{2})$ as "
         r"Satterthwaite degrees of freedom, following \textcite{imbens2016robust} "
         r"and \textcite{carter2017asymptotic}. The PIX threshold is "
@@ -851,7 +961,7 @@ def render_table4(t4_df, meta, suffix) -> str:
     )
 
     tex = "\n".join([
-        r"\begin{table}[ht]",
+        r"\begin{table}[H]",
         r"\centering",
         r"\begin{threeparttable}",
         f"\\caption{{{caption}}}\\label{{{tab_label}}}",
@@ -904,20 +1014,21 @@ def main():
     suffix = f"_weighted_by_{args.weight_col}" if args.weight_col else "_unweighted"
     df = load_panel()
 
-    # --- Table 1
+    # --- Table 1 (always unweighted)
     print("\n[Table 1] Bank-conglomerate cross-section ...")
-    mom_b, mom_d, meta1 = build_table1(df, args.weight_col)
-    _write_csv(mom_b.assign(panel="B"), "Compressed_BankType_CrossSection_B", suffix)
-    _write_csv(mom_d.assign(panel="D"), "Compressed_BankType_CrossSection_D", suffix)
-    tex1 = render_table1(mom_b, mom_d, meta1, args.weight_col, suffix)
-    _write_tex(tex1, "Compressed_BankType_CrossSection", suffix)
+    mom_b, mom_d, mom_all, meta1 = build_table1(df, None)
+    _write_csv(mom_b.assign(panel="B"),     "Compressed_BankType_CrossSection_B",   "_unweighted")
+    _write_csv(mom_d.assign(panel="D"),     "Compressed_BankType_CrossSection_D",   "_unweighted")
+    _write_csv(mom_all.assign(panel="All"), "Compressed_BankType_CrossSection_All", "_unweighted")
+    tex1 = render_table1(mom_b, mom_d, mom_all, meta1, None, "_unweighted")
+    _write_tex(tex1, "Compressed_BankType_CrossSection", "")
 
-    # --- Table 2
+    # --- Table 2 (always deposit-weighted)
     print("\n[Table 2] MCA market structure by year ...")
-    t2 = build_table2(df, args.weight_col)
-    _write_csv(t2, "Compressed_MarketStructure_by_Year", suffix)
-    tex2 = render_table2(t2, args.weight_col, suffix)
-    _write_tex(tex2, "Compressed_MarketStructure_by_Year", suffix)
+    t2 = build_table2(df, "dep_total_mq")
+    _write_csv(t2, "Compressed_MarketStructure_by_Year", "_dep_weighted")
+    tex2 = render_table2(t2, "dep_total_mq", "_dep_weighted")
+    _write_tex(tex2, "Compressed_MarketStructure_by_Year", "")
 
     # --- Table 3
     print("\n[Table 3] Local environment by macro-region ...")
@@ -925,14 +1036,14 @@ def main():
     t3 = build_table3(df, args.weight_col)
     _write_csv(t3, "Compressed_LocalEnvironment_by_Region", suffix)
     tex3 = render_table3(t3, args.weight_col, suffix, latest_year)
-    _write_tex(tex3, "Compressed_LocalEnvironment_by_Region", suffix)
+    _write_tex(tex3, "Compressed_LocalEnvironment_by_Region", "")
 
     # --- Table 4
     print("\n[Table 4] D-firm Pre/Post Pix ...")
     t4, meta4 = build_table4(df)
     _write_csv(t4, "Compressed_DFirm_PrePost_Pix", suffix)
     tex4 = render_table4(t4, meta4, suffix)
-    _write_tex(tex4, "Compressed_DFirm_PrePost_Pix", suffix)
+    _write_tex(tex4, "Compressed_DFirm_PrePost_Pix", "")
 
     print("\nDone.")
 

@@ -252,6 +252,64 @@ def pivot_wide(df_long):
     return out.sort_values(['CodConglPrud', 'AnoMes']).reset_index(drop=True)
 
 
+def _load_manual_overrides(path):
+    """Load operator-provided seed rates and normalize to long-form schema.
+
+    Expected columns (case-insensitive):
+        CodConglPrud, AnoMes, rate_index, advertised_pct, [note]
+    AnoMes must be a quarter-end yyyymm (month in {3,6,9,12}).
+    Rows are tagged is_manual=1 and override any scraped/ffilled value for
+    the same (CodConglPrud, AnoMes, rate_index) key.
+    """
+    if not path or not Path(path).exists():
+        return pd.DataFrame()
+    df = pd.read_csv(path, comment='#')
+    if df.empty:
+        return df
+    # Normalize column names
+    df.columns = [c.strip() for c in df.columns]
+    rename = {}
+    for c in df.columns:
+        cl = c.lower()
+        if cl == 'codconglprud': rename[c] = 'CodConglPrud'
+        elif cl == 'anomes': rename[c] = 'AnoMes'
+        elif cl == 'rate_index': rename[c] = 'rate_index'
+        elif cl in ('advertised_pct', 'pct'): rename[c] = 'advertised_pct'
+        elif cl == 'note': rename[c] = 'note'
+    df = df.rename(columns=rename)
+    needed = {'CodConglPrud', 'AnoMes', 'rate_index', 'advertised_pct'}
+    missing = needed - set(df.columns)
+    if missing:
+        raise ValueError(f"manual-overrides {path} missing columns: {missing}")
+    df['AnoMes'] = pd.to_numeric(df['AnoMes'], errors='coerce').astype('Int64')
+    df = df.dropna(subset=['AnoMes', 'advertised_pct'])
+    df['AnoMes'] = df['AnoMes'].astype(int)
+    df['rate_index'] = df['rate_index'].astype(str).str.upper().str.strip()
+    df['CodConglPrud'] = df['CodConglPrud'].astype(str).str.strip()
+    df['advertised_pct'] = df['advertised_pct'].astype(float)
+    df['quarter'] = df['AnoMes'].apply(_anomes_to_quarter)
+    df['n_obs'] = 1
+    df['is_filled'] = 0
+    df['is_manual'] = 1
+    return df[['CodConglPrud', 'AnoMes', 'quarter', 'rate_index',
+               'advertised_pct', 'n_obs', 'is_filled', 'is_manual']]
+
+
+def _apply_manual_overrides(long_df, manual_df):
+    """Overwrite (cod, anomes, index) rows in long_df with manual values;
+    insert net-new rows; ensure is_manual column exists."""
+    if 'is_manual' not in long_df.columns:
+        long_df = long_df.copy()
+        long_df['is_manual'] = 0
+    if manual_df.empty:
+        return long_df
+    key = ['CodConglPrud', 'AnoMes', 'rate_index']
+    base = long_df.merge(manual_df[key].assign(_drop=1), on=key, how='left')
+    base = base[base['_drop'].isna()].drop(columns=['_drop'])
+    out = pd.concat([base, manual_df], ignore_index=True)
+    return out.sort_values(['CodConglPrud', 'rate_index', 'AnoMes']).reset_index(drop=True)
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument('--in', dest='in_path',
@@ -268,6 +326,11 @@ def main():
                     help='Audit CSV of rows filtered out.')
     ap.add_argument('--no-ffill', action='store_true',
                     help='Do not forward-fill quarters between observations.')
+    ap.add_argument('--manual-overrides',
+                    default=str(ip_scrape_dir / 'manual_advertised_rates.csv'),
+                    help='CSV of operator-provided seed rates that override '
+                         'scraped/ffilled values. Skipped silently if file '
+                         'does not exist. Set to empty string to disable.')
     args = ap.parse_args()
 
     in_path = Path(args.in_path)
@@ -296,6 +359,20 @@ def main():
             f"After forward-fill: {len(long_df):,} rows "
             f"({(long_df['is_filled'] == 1).sum():,} filled)"
         )
+
+    # Apply operator-provided manual overrides (Lever 4)
+    manual_df = _load_manual_overrides(args.manual_overrides) if args.manual_overrides else pd.DataFrame()
+    if not manual_df.empty:
+        n_before = len(long_df)
+        long_df = _apply_manual_overrides(long_df, manual_df)
+        logging.info(
+            f"Manual overrides: {len(manual_df):,} seed rows merged "
+            f"({len(long_df) - n_before + len(manual_df):,} insertions/replacements). "
+            f"Source: {args.manual_overrides}"
+        )
+    else:
+        if 'is_manual' not in long_df.columns:
+            long_df['is_manual'] = 0
 
     wide_df = pivot_wide(long_df)
 

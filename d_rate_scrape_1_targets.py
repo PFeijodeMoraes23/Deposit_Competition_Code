@@ -11,6 +11,7 @@ fixed). It then proceeds to build the scraper target list.
 """
 from utils.venv_guard import ensure_project_venv
 ensure_project_venv(__file__)
+import argparse
 import pandas as pd
 import json
 from pathlib import Path
@@ -21,6 +22,23 @@ root = Path(__file__).resolve().parents[2]
 processed = root / 'BCB' / 'Egan_et_al_2025_Rep' / 'processed'
 summary_path = processed / 'ESTIMATION_OUTPUT' / 'DESCRIPTIVES' / 'd_type_firms_summary_final.csv'
 panel_path = processed / 'market_panel.csv'
+
+
+# Aggregator-site domains: third-party fintech-rate comparison pages that
+# advertise CDB/RDB yields across many issuers in a single article. Parsed
+# rates from these pages are tagged with cod_conglomerado='AGG_<slug>';
+# downstream stage 5 attempts to map each rate to a CodConglPrud via a
+# bank-name lookup against the parse Context.
+AGGREGATOR_DOMAINS = [
+    ('AGG_YUBB',         'yubb.com.br'),
+    ('AGG_RENDAFIXA',    'rendafixa.com.br'),
+    ('AGG_TORO',         'toroinvestimentos.com.br'),
+    ('AGG_YIELDOO',      'yieldoo.com.br'),
+    ('AGG_INFOMONEY',    'infomoney.com.br'),
+    ('AGG_VALORINVESTE', 'valorinveste.globo.com'),
+    ('AGG_SUNO',         'suno.com.br'),
+    ('AGG_MAISRETORNO',  'maisretorno.com'),
+]
 
 
 def _build_d_type_summary(panel_csv: Path, processed_dir: Path, out_path: Path) -> pd.DataFrame:
@@ -106,9 +124,33 @@ else:
     df = pd.read_csv(summary_path)
     print(f"Using existing summary: {summary_path} ({len(df):,} rows)")
 
-# 2. Filter the top targets (Top 40 by default), excluding development banks like BNDES
+# CLI flags for target-list expansion (Lever 3)
+_ap = argparse.ArgumentParser(description=__doc__)
+_ap.add_argument('--top-n', type=int, default=40,
+                 help='Number of largest conglomerates to include as targets '
+                      '(default 40). Use --all to include every D-type firm.')
+_ap.add_argument('--all', dest='include_all', action='store_true',
+                 help='Include every D-type firm in the target list, '
+                      'overriding --top-n. Caution: ~386 candidates -> many '
+                      'thousands of CDX rows in stage 2.')
+_ap.add_argument('--only-native-k5', action='store_true',
+                 help='Restrict targets to firms flagged native_k5_rate=Yes '
+                      '(have IP-rate observations in panel_3).')
+_ap.add_argument('--no-aggregators', action='store_true',
+                 help='Skip the supplementary aggregator-site targets '
+                      '(Yubb, RendaFixa, Toro, etc.).')
+_args = _ap.parse_args()
+
+# 2. Filter the top targets, excluding development banks like BNDES
 df = df[~df['NomeInstituicao'].str.contains('BNDES', case=False, na=False)]
-top_targets = df.head(40).copy()
+if _args.only_native_k5 and 'native_k5_rate' in df.columns:
+    df = df[df['native_k5_rate'].astype(str).str.startswith('Yes')]
+if _args.include_all:
+    top_targets = df.copy()
+    print(f"--all: keeping every D-type firm ({len(top_targets):,} targets).")
+else:
+    top_targets = df.head(_args.top_n).copy()
+    print(f"Top {_args.top_n} by asset size: {len(top_targets):,} targets.")
 
 # Known domains dictionary for quick start - manually map the most obvious ones
 KNOWN_DOMAINS = {
@@ -152,6 +194,22 @@ for _, row in top_targets.iterrows():
         'domain': domain,
         'first_year': str(row['first_year'])
     })
+
+# Append aggregator-site targets (Lever 3b). These pages list rates for
+# many issuers simultaneously; the parser tags them with an AGG_* code and
+# downstream logic must dispatch each rate mention to the matching
+# CodConglPrud via in-context bank-name lookup.
+if not _args.no_aggregators:
+    for agg_code, agg_domain in AGGREGATOR_DOMAINS:
+        targets.append({
+            'cod_conglomerado': agg_code,
+            'name': f'AGGREGATOR_{agg_domain}',
+            'asset_size': 'N/A',
+            'native_k5_rate': 'N/A',
+            'domain': agg_domain,
+            'first_year': '2015',
+        })
+    print(f"Added {len(AGGREGATOR_DOMAINS)} aggregator-site targets.")
 
 # 3. Save to a JSON for the next pipeline step
 out_dir = root / 'BCB' / 'Egan_et_al_2025_Rep' / 'processed' / 'IP_SCRAPE'
