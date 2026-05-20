@@ -181,11 +181,11 @@ def main():
         'dep_a3':   ('Deposits (A3)',                  'R\\$M',        1e6),
         'dep_a4':   ('Deposits (A4)',                  'R\\$M',        1e6),
         'dep_a5':   ('Deposits (A5)',                  'R\\$M',        1e6),
-        'spread_a1': ('Spread (A1)',                   'pp',           None),
-        'spread_a2': ('Spread (A2)',                   'pp',           None),
-        'spread_a3': ('Spread (A3)',                   'pp',           None),
-        'spread_a4': ('Spread (A4)',                   'pp',           None),
-        'spread_a5': ('Spread (A5)',                   'pp',           None),
+        'spread_a1': ('Spread (A1)',                   'bp',           0.01),
+        'spread_a2': ('Spread (A2)',                   'bp',           0.01),
+        'spread_a3': ('Spread (A3)',                   'bp',           0.01),
+        'spread_a4': ('Spread (A4)',                   'bp',           0.01),
+        'spread_a5': ('Spread (A5)',                   'bp',           0.01),
         'gdp_per_capita':             ('GDP per Capita',             'R\\$',         None),
         'pop_total':                  ('Population',                  'Thousands',    1e3),
         'fraction_65plus':            ('Share Aged 65+',              '',             None),
@@ -210,8 +210,8 @@ def main():
         v = val / scale if scale is not None else val
         if unit in ('R\\$M', 'R\\$B', 'Thousands', 'Millions'):
             return f"{v:,.0f}" if compact else f"{v:,.2f}"
-        elif unit == 'pp':
-            return f"{v:.4f}"
+        elif unit in ('pp', 'bp'):
+            return f"{v:.2f}"
         elif unit == 'R\\$':
             return f"{v:,.0f}" if compact else f"{v:,.2f}"
         else:

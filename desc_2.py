@@ -97,15 +97,20 @@ LABEL_MAP = {
     "dep_a4":                    ("Deposits (4)",            r"R\$M",        1e6,  2),
     "dep_a5":                    ("Deposits (5)",            r"R\$M",        1e6,  2),
     "log_dep_a4":                ("Log Deposits (4)",        "",             None, 3),
-    "spread_a4":                 ("Spread (4)",              "pp",           None, 4),
-    "spread_a5":                 ("Spread (5)",              "pp",           None, 4),
+    "spread_a4":                 ("Spread (4)",              "bp",           0.01, 2),
+    "spread_a5":                 ("Spread (5)",              "bp",           0.01, 2),
     "n_mcas_served":             ("MCAs Served",             "count",        None, 1),
     # Table 2 specific
     "n_b_firms":                 ("Number of B Firms",       "count",        None, 2),
     "hhi_b":                     ("HHI (B firms)",           "",              None, 0),
     "hhi_d_natl":                ("HHI (D firms, national)", "",              None, 0),
-    "spread_a4_w":               ("Spread (4), dep-weighted","pp",           None, 4),
-    "spread_a5_w":               ("Spread (5), dep-weighted","pp",           None, 4),
+    "hhi_combined_natl":         ("HHI (B+D, national)",     "",              None, 0),
+    "spread_a4_d_w":              ("Spread (4), D firms",      "bp",           0.01, 2),
+    "spread_a5_d_w":              ("Spread (5), D firms",      "bp",           0.01, 2),
+    "spread_a4_natl_w":           ("Spread (4), National (B+D)","bp",          0.01, 2),
+    "spread_a5_natl_w":           ("Spread (5), National (B+D)","bp",          0.01, 2),
+    "spread_a4_w":               ("Spread (4), dep-weighted","bp",           0.01, 2),
+    "spread_a5_w":               ("Spread (5), dep-weighted","bp",           0.01, 2),
     "n_d_firms_natl":            ("Number of D Firms (nat.)", "count",       None, 0),
     # Table 3 specific
     "pop_total":                 ("Population",              "Thousands",    1e3,  1),
@@ -315,6 +320,9 @@ def _build_firm_quarter_B(df_b: pd.DataFrame) -> pd.DataFrame:
             )
             .reset_index()
     )
+    # Zero deposits mean no active product in that firm-quarter — treat as missing so N matches spread
+    for _a in ["dep_a1", "dep_a2", "dep_a4", "dep_a5"]:
+        out[_a] = out[_a].where(out[_a] > 0)
 
     # Deposit-weighted spreads (vectorized via numerator/denominator)
     work = df_b[grp_keys + ["spread_a4", "spread_a5", "dep_a4", "dep_a5"]].copy()
@@ -352,6 +360,9 @@ def _build_firm_quarter_D(df_d: pd.DataFrame) -> pd.DataFrame:
             )
             .reset_index()
     )
+    # Zero deposits mean no active product in that firm-quarter — treat as missing so N matches spread
+    for _a in ["dep_a1", "dep_a2", "dep_a4", "dep_a5"]:
+        out[_a] = out[_a].where(out[_a] > 0)
 
     # Deposit-weighted spreads
     work = df_d[grp_keys + ["spread_a4", "spread_a5", "dep_a4", "dep_a5"]].copy()
@@ -434,8 +445,8 @@ def build_table1(df: pd.DataFrame, weight_col: str | None) -> tuple[pd.DataFrame
 def render_table1(moments_b, moments_d, moments_all, meta, weight_col, suffix) -> str:
     name      = "Compressed_BankType_CrossSection"
     tab_label = f"tab:{name}"
-    weight_lbl = "(Population Weighted)" if weight_col else "(Unweighted)"
-    caption   = (f"Bank-Conglomerate Cross-Section by Type {weight_lbl}")
+    weight_lbl = "(Population Weighted)" if weight_col else ""
+    caption   = (f"Bank-Conglomerate Cross-Section by Type{(' ' + weight_lbl) if weight_lbl else ''}")
 
     col_spec  = "l@{\\hspace{0.5em}}rrrrrr"
     n_cols    = 7
@@ -466,20 +477,6 @@ def render_table1(moments_b, moments_d, moments_all, meta, weight_col, suffix) -
         )
         return lines
 
-    notes = (
-        r"\scriptsize \textit{Notes:} Each observation is a "
-        r"prudential-conglomerate $\times$ calendar-quarter pair. For type-B "
-        r"(brick-and-mortar) firms, MCA-level deposits are summed within "
-        r"firm-quarter, and spreads are deposit-weighted across MCAs within "
-        r"the corresponding asset class. Panel C pools both firm types over "
-        r"variables common to B and D (\texttt{n\_mcas\_served} is B-type only "
-        r"and is omitted from the pooled panel). Quantiles are computed over "
-        r"the pooled firm-quarter sample. PIX-related products (type 5) are "
-        r"zero by construction prior to 2020Q4. "
-        + ("Statistics are population-weighted using \\texttt{pop\\_total}."
-           if weight_col else "Statistics are unweighted.")
-    )
-
     body = []
     body += _panel("Panel A: Brick-and-Mortar (B) Firms",
                    moments_b, meta["n_firms_B"], meta["n_firm_quarters_B"])
@@ -509,7 +506,6 @@ def render_table1(moments_b, moments_d, moments_all, meta, weight_col, suffix) -
         r"    \endfoot",
         "",
         r"    \bottomrule",
-        f"    \\multicolumn{{{n_cols}}}{{p{{0.85\\textwidth}}}}{{{notes}}} \\\\",
         r"    \endlastfoot",
         "",
         *body,
@@ -616,6 +612,64 @@ def build_table2(df: pd.DataFrame, weight_col: str | None) -> pd.DataFrame:
                          .rename("hhi_d_natl")
                          .reset_index())
 
+    # Combined national HHI: B + D firms, each firm's share = total national deposits / national total
+    b_firm_yr = (df_b.groupby(["year", "CodConglomeradoPrudencial"], sort=False)["dep_total_jkmt"]
+                     .sum()
+                     .reset_index())
+    all_firm_yr = pd.concat(
+        [b_firm_yr,
+         d_firm_yr[["year", "CodConglomeradoPrudencial", "dep_total_jkmt"]]],
+        ignore_index=True,
+    )
+    all_yr_tot = (all_firm_yr.groupby("year")["dep_total_jkmt"]
+                             .sum()
+                             .rename("dep_all_yr")
+                             .reset_index())
+    all_firm_yr = all_firm_yr.merge(all_yr_tot, on="year")
+    all_firm_yr["share_sq"] = np.where(
+        all_firm_yr["dep_all_yr"] > 0,
+        (all_firm_yr["dep_total_jkmt"] / all_firm_yr["dep_all_yr"]) ** 2,
+        np.nan,
+    )
+    combined_hhi_yr = (all_firm_yr.groupby("year")["share_sq"]
+                                  .sum(min_count=1)
+                                  .mul(1e4)
+                                  .rename("hhi_combined_natl")
+                                  .reset_index())
+
+    # D-firm deposit-weighted spreads by year
+    work_d = df_d[["year", "spread_a4", "spread_a5", "dep_a4", "dep_a5"]].copy()
+    for _v, _w in (("spread_a4", "dep_a4"), ("spread_a5", "dep_a5")):
+        _ww = work_d[_w].where(work_d[_w] > 0, 0.0).where(work_d[_v].notna(), 0.0)
+        work_d[f"_num_{_v}"] = work_d[_v] * _ww
+        work_d[f"_den_{_v}"] = _ww
+    d_spread_yr = (work_d.groupby("year")
+                         .agg({"_num_spread_a4": "sum", "_den_spread_a4": "sum",
+                               "_num_spread_a5": "sum", "_den_spread_a5": "sum"})
+                         .reset_index())
+    d_spread_yr["spread_a4_d_w"] = np.where(d_spread_yr["_den_spread_a4"] > 0,
+                                             d_spread_yr["_num_spread_a4"] / d_spread_yr["_den_spread_a4"], np.nan)
+    d_spread_yr["spread_a5_d_w"] = np.where(d_spread_yr["_den_spread_a5"] > 0,
+                                             d_spread_yr["_num_spread_a5"] / d_spread_yr["_den_spread_a5"], np.nan)
+
+    # National (B+D) deposit-weighted spreads by year
+    work_all = pd.concat([
+        df_b[["year", "spread_a4", "spread_a5", "dep_a4", "dep_a5"]],
+        df_d[["year", "spread_a4", "spread_a5", "dep_a4", "dep_a5"]],
+    ], ignore_index=True)
+    for _v, _w in (("spread_a4", "dep_a4"), ("spread_a5", "dep_a5")):
+        _ww = work_all[_w].where(work_all[_w] > 0, 0.0).where(work_all[_v].notna(), 0.0)
+        work_all[f"_num_{_v}"] = work_all[_v] * _ww
+        work_all[f"_den_{_v}"] = _ww
+    natl_spread_yr = (work_all.groupby("year")
+                              .agg({"_num_spread_a4": "sum", "_den_spread_a4": "sum",
+                                    "_num_spread_a5": "sum", "_den_spread_a5": "sum"})
+                              .reset_index())
+    natl_spread_yr["spread_a4_natl_w"] = np.where(natl_spread_yr["_den_spread_a4"] > 0,
+                                                   natl_spread_yr["_num_spread_a4"] / natl_spread_yr["_den_spread_a4"], np.nan)
+    natl_spread_yr["spread_a5_natl_w"] = np.where(natl_spread_yr["_den_spread_a5"] > 0,
+                                                   natl_spread_yr["_num_spread_a5"] / natl_spread_yr["_den_spread_a5"], np.nan)
+
     years = sorted(df["year"].unique().tolist())
     w_col = weight_col if (weight_col and weight_col in mca_q.columns) else None
 
@@ -637,13 +691,13 @@ def build_table2(df: pd.DataFrame, weight_col: str | None) -> pd.DataFrame:
         drow_count[yr] = float(v.iloc[0]) if len(v) else 0.0
     rows.append(drow_count)
 
-    drow_hhi = {"var": "hhi_d_natl"}
+    drow_hhi_combined = {"var": "hhi_combined_natl"}
     for yr in years:
-        v = d_hhi_yr.loc[d_hhi_yr["year"] == yr, "hhi_d_natl"]
-        drow_hhi[yr] = float(v.iloc[0]) if len(v) else 0.0
-    rows.append(drow_hhi)
+        v = combined_hhi_yr.loc[combined_hhi_yr["year"] == yr, "hhi_combined_natl"]
+        drow_hhi_combined[yr] = float(v.iloc[0]) if len(v) else 0.0
+    rows.append(drow_hhi_combined)
 
-    # Panel C: Market spreads (B-firm deposit-weighted, MCA-level)
+    # Panel C: Market spreads (deposit-weighted)
     for v in ["spread_a4_w", "spread_a5_w"]:
         row = {"var": v}
         for yr in years:
@@ -651,6 +705,13 @@ def build_table2(df: pd.DataFrame, weight_col: str | None) -> pd.DataFrame:
             x = sub[v].values
             w = sub[w_col].values if w_col else None
             row[yr] = _weighted_mean(x, w)
+        rows.append(row)
+    for v, yr_df in [("spread_a4_d_w", d_spread_yr), ("spread_a5_d_w", d_spread_yr),
+                     ("spread_a4_natl_w", natl_spread_yr), ("spread_a5_natl_w", natl_spread_yr)]:
+        row = {"var": v}
+        for yr in years:
+            vv = yr_df.loc[yr_df["year"] == yr, v]
+            row[yr] = float(vv.iloc[0]) if len(vv) else np.nan
         rows.append(row)
 
     # N row: number of MCA-quarters per year
@@ -678,10 +739,12 @@ def render_table2(t2_df, weight_col, suffix) -> str:
 
     PANELS = [
         ("Panel A: B Firms (MCA-Level)",                ["n_b_firms", "hhi_b"]),
-        ("Panel B: D Firms (National)",                 ["n_d_firms_natl", "hhi_d_natl"]),
-        ("Panel C: Market Spreads (B-Firm, MCA-Level)", ["spread_a4_w", "spread_a5_w"]),
+        ("Panel B: D Firms (National)",                 ["n_d_firms_natl", "hhi_combined_natl"]),
+        ("Panel C: Market Spreads (Deposit-Weighted)",  ["spread_a4_w", "spread_a5_w",
+                                                          "spread_a4_d_w", "spread_a5_d_w",
+                                                          "spread_a4_natl_w", "spread_a5_natl_w"]),
     ]
-    PRE2020_BLANK = {"spread_a5_w"}
+    PRE2020_BLANK = {"spread_a5_w", "spread_a5_d_w", "spread_a5_natl_w"}
     t2_idx = t2_df.set_index("var")
 
     body = []
@@ -719,10 +782,11 @@ def render_table2(t2_df, weight_col, suffix) -> str:
         r"on the $0$--$10{,}000$ scale. "
         r"Panel B: National aggregates for D (digital) firms. "
         r"Count is distinct conglomerates nationally with positive total deposits. "
-        r"National HHI uses each D-firm's share of total D-firm deposits, "
-        r"also on the $0$--$10{,}000$ scale. "
-        r"Panel C: B-firm deposit-weighted spreads, averaged across MCA-quarters; "
-        r"type-5 (prepaid) spreads are undefined before 2020. "
+        r"Panel C: deposit-weighted spreads by firm type. "
+        r"B-firm rows are MCA-level deposit-weighted, then averaged across MCA-quarters. "
+        r"D-firm rows are deposit-weighted across all D-firm rows nationally. "
+        r"National rows pool B and D MCA-level observations, weighted by deposits. "
+        r"Type-5 (prepaid) spreads are undefined before 2020. "
         + ("Panels A and C are population-weighted using \\texttt{pop\\_total}."
            if weight_col == "pop_total"
            else "Panels A and C are weighted by total B-firm deposits in the MCA-quarter."
