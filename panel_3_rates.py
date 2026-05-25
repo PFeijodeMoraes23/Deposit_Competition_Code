@@ -1450,12 +1450,28 @@ def build_panel(df_ifdata: pd.DataFrame,
     # G0. Compute median IP prepaid rate per quarter
     panel = _compute_median_ip_rate(panel)
 
+    # G0b. Merge scraped advertised rates (d_rate_scrape pipeline output).
+    #      Only cells flagged use_scraped=True are used; all others stay NaN.
+    _scrape_path = os.path.join(PROCESSED_PATH, "IP_SCRAPE", "diagnose", "recommended_merge.csv")
+    if os.path.exists(_scrape_path):
+        _scrape = pd.read_csv(_scrape_path)
+        _scrape = _scrape[_scrape["use_scraped"] == True][
+            ["CodConglPrud", "AnoMes", "deposit_type", "advertised_rate_qoq"]
+        ].rename(columns={"advertised_rate_qoq": "scraped_rate_qoq"})
+        panel = panel.merge(_scrape, on=["CodConglPrud", "AnoMes", "deposit_type"], how="left")
+        n_scraped = panel["scraped_rate_qoq"].notna().sum()
+        logging.info(f"Scraped rates merged: {n_scraped:,} cells overriding CDI fallback")
+    else:
+        panel["scraped_rate_qoq"] = np.nan
+        logging.info(f"Scraped rates file not found ({_scrape_path}); skipping.")
+
     # G. Assign deposit rates by type
     #    Type 4 (time/CDB): residual COSIF rate (strips T1-T3 contamination)
-    #    -> fallback to blended cosif_implicit_rate -> fallback to CDI
+    #    -> fallback to blended cosif_implicit_rate -> scraped advertised rate -> CDI
     type4_rate = (
         panel["cosif_type4_rate"]
         .fillna(panel["cosif_implicit_rate"])
+        .fillna(panel["scraped_rate_qoq"])
         .fillna(panel["cdi_qoq"])
     )
 
@@ -1468,12 +1484,15 @@ def build_panel(df_ifdata: pd.DataFrame,
     #        that do report → CDI fallback.
     type5_rate = np.where(
         panel["has_ip"] == 1,
-        # Conglomerate has IP: explicit prepaid rate -> median -> CDI
+        # Conglomerate has IP: explicit prepaid rate -> median -> scraped -> CDI
         panel["ip_prepaid_rate"]
             .fillna(panel["median_ip_rate"])
+            .fillna(panel["scraped_rate_qoq"])
             .fillna(panel["cdi_qoq"]),
-        # No IP in conglomerate: median IP rate -> CDI
-        panel["median_ip_rate"].fillna(panel["cdi_qoq"]),
+        # No IP in conglomerate: median IP rate -> scraped -> CDI
+        panel["median_ip_rate"]
+            .fillna(panel["scraped_rate_qoq"])
+            .fillna(panel["cdi_qoq"]),
     )
 
     panel["deposit_rate_qoq"] = np.select(
@@ -1532,8 +1551,9 @@ def build_panel(df_ifdata: pd.DataFrame,
         "cosif_implicit_rate",     # blended COSIF rate (all types)
         "cosif_desp_captacao",     # raw absolute quarterly funding expense (R$)
         # ip_prepaid_rate: from dedicated COSIF accounts 8.1.1.9.8/4.1.9.3 (2025+);
-        #   NaN for pre-2025 → T5 falls back to median_ip_rate → CDI
+        #   NaN for pre-2025 → T5 falls back to median_ip_rate → scraped → CDI
         "ip_prepaid_rate", "median_ip_rate",
+        "scraped_rate_qoq",        # advertised rate from d_rate_scrape pipeline (fallback before CDI)
         "total_deposits", "lagged_total_deposits",
         # bank characteristics
         "total_assets", "equity", "equity_ratio", "log_total_assets",
