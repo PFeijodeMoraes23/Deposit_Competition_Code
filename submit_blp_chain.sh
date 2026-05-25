@@ -27,7 +27,7 @@ set -euo pipefail
 ESTIM="${1:?Usage: bash submit_blp_chain.sh <ESTIM_ID> [R]}"
 R="${2:-2000}"
 SEED=42
-CPUS=32
+CPUS=4
 SPEC=12
 PROJECT_DIR="${SLURM_SUBMIT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
 LOG_DIR="${PROJECT_DIR}/logs"
@@ -35,35 +35,35 @@ mkdir -p "${LOG_DIR}"
 
 # ── Resource scaling by R ────────────────────────────────────────────────────
 # Memory is set uniformly large for all stages to avoid OOM on the heavier
-# Pi-interaction buffers. Time budgets scale with R and parameter count.
+# Pi-interaction buffers. All stages get at least 1 day; heavier stages get 2.
 MEM_ALL="200G"
 if [ "${R}" -le 500 ]; then
-    T_SIGMA="02:00:00"
-    T_RC2="02:00:00"
-    T_RC3="02:00:00"
-    T_RC4="03:00:00"
-    T_FULL="04:00:00"
-    T_EXT1="05:00:00"
-    T_EXT2="06:00:00"
-    T_EXT="08:00:00"
+    T_SIGMA="1-00:00:00"
+    T_RC2="1-00:00:00"
+    T_RC3="1-00:00:00"
+    T_RC4="1-00:00:00"
+    T_FULL="1-00:00:00"
+    T_EXT1="1-00:00:00"
+    T_EXT2="1-00:00:00"
+    T_EXT="1-00:00:00"
 elif [ "${R}" -le 1000 ]; then
-    T_SIGMA="04:00:00"
-    T_RC2="04:00:00"
-    T_RC3="05:00:00"
-    T_RC4="06:00:00"
-    T_FULL="08:00:00"
-    T_EXT1="10:00:00"
-    T_EXT2="12:00:00"
-    T_EXT="16:00:00"
+    T_SIGMA="1-00:00:00"
+    T_RC2="1-00:00:00"
+    T_RC3="1-00:00:00"
+    T_RC4="1-00:00:00"
+    T_FULL="1-00:00:00"
+    T_EXT1="1-00:00:00"
+    T_EXT2="1-00:00:00"
+    T_EXT="2-00:00:00"
 else
-    T_SIGMA="06:00:00"
-    T_RC2="06:00:00"
-    T_RC3="08:00:00"
-    T_RC4="10:00:00"
-    T_FULL="12:00:00"
-    T_EXT1="14:00:00"
-    T_EXT2="16:00:00"
-    T_EXT="24:00:00"
+    T_SIGMA="1-00:00:00"
+    T_RC2="1-00:00:00"
+    T_RC3="1-00:00:00"
+    T_RC4="1-00:00:00"
+    T_FULL="2-00:00:00"
+    T_EXT1="2-00:00:00"
+    T_EXT2="2-00:00:00"
+    T_EXT="2-00:00:00"
 fi
 
 echo "======================================================"
@@ -81,14 +81,14 @@ echo "======================================================"
 # ── Common Julia preamble (expanded at submission time) ──────────────────────
 JULIA_SETUP="module reset
 module load Julia/1.11.4-linux-x86_64
+export JULIA_MKL_THREADING=tbb
+export JULIA_DEPOT_PATH=${PROJECT_DIR}/.julia_depot:\${JULIA_DEPOT_PATH:-}
 set -euo pipefail
 mkdir -p ${LOG_DIR}
-if [ -f ${PROJECT_DIR}/Manifest.toml ] && ! grep -q 'julia_version = \"1.10' ${PROJECT_DIR}/Manifest.toml; then
-    echo 'Removing incompatible Manifest.toml before instantiate: ' \$(date)
-    rm -f ${PROJECT_DIR}/Manifest.toml
-fi
+echo 'GPU node: '\$(hostname)
+echo 'CUDA devices: '\$(nvidia-smi --query-gpu=name,memory.total --format=csv,noheader)
 echo 'Resolving Julia packages: '\$(date)
-julia --project=${PROJECT_DIR} -e 'using Pkg; Pkg.resolve(); Pkg.instantiate()'"
+julia --project=${PROJECT_DIR} -e 'using Pkg; Pkg.resolve(); Pkg.instantiate(); Pkg.precompile(); using CUDA; @info \"CUDA\" CUDA.versioninfo()'"
 
 BLP_COMMON_ARGS="--spec ${SPEC} --R ${R} --seed ${SEED} \
     --tol-inner 1e-12 --max-inner 5000 --tol-outer 1e-6 --hpc"
@@ -96,7 +96,8 @@ BLP_COMMON_ARGS="--spec ${SPEC} --R ${R} --seed ${SEED} \
 # ── Stage: sigma ─────────────────────────────────────────────────────────────
 JID_SIGMA=$(sbatch --parsable \
     --job-name="blp_E${ESTIM}_sigma_R${R}" \
-    --partition=day \
+    --partition=gpu \
+    --gpus=1 \
     --time="${T_SIGMA}" \
     --nodes=1 --ntasks=1 --cpus-per-task="${CPUS}" \
     --mem="${MEM_ALL}" \
@@ -107,7 +108,7 @@ JID_SIGMA=$(sbatch --parsable \
     --wrap="${JULIA_SETUP}
 echo '=== BLP E${ESTIM} sigma | R=${R} | '\$(date)' ==='
 julia --project=${PROJECT_DIR} --threads=${CPUS} \\
-    ${PROJECT_DIR}/blp_estimation.jl \\
+    ${PROJECT_DIR}/blp_estimation_gpu.jl \\
     --estim ${ESTIM} --stage sigma ${BLP_COMMON_ARGS}
 echo 'E${ESTIM} sigma done: '\$(date)")
 
@@ -117,7 +118,8 @@ echo "  Submitted sigma:    Job ${JID_SIGMA}"
 JID_RC2=$(sbatch --parsable \
     --dependency=afterok:${JID_SIGMA} \
     --job-name="blp_E${ESTIM}_rc2_R${R}" \
-    --partition=day \
+    --partition=gpu \
+    --gpus=1 \
     --time="${T_RC2}" \
     --nodes=1 --ntasks=1 --cpus-per-task="${CPUS}" \
     --mem="${MEM_ALL}" \
@@ -128,7 +130,7 @@ JID_RC2=$(sbatch --parsable \
     --wrap="${JULIA_SETUP}
 echo '=== BLP E${ESTIM} rc2 | R=${R} | '\$(date)' ==='
 julia --project=${PROJECT_DIR} --threads=${CPUS} \\
-    ${PROJECT_DIR}/blp_estimation.jl \\
+    ${PROJECT_DIR}/blp_estimation_gpu.jl \\
     --estim ${ESTIM} --stage rc2 ${BLP_COMMON_ARGS}
 echo 'E${ESTIM} rc2 done: '\$(date)")
 
@@ -138,7 +140,8 @@ echo "  Submitted rc2:      Job ${JID_RC2} (after ${JID_SIGMA})"
 JID_RC3=$(sbatch --parsable \
     --dependency=afterok:${JID_RC2} \
     --job-name="blp_E${ESTIM}_rc3_R${R}" \
-    --partition=day \
+    --partition=gpu \
+    --gpus=1 \
     --time="${T_RC3}" \
     --nodes=1 --ntasks=1 --cpus-per-task="${CPUS}" \
     --mem="${MEM_ALL}" \
@@ -149,7 +152,7 @@ JID_RC3=$(sbatch --parsable \
     --wrap="${JULIA_SETUP}
 echo '=== BLP E${ESTIM} rc3 | R=${R} | '\$(date)' ==='
 julia --project=${PROJECT_DIR} --threads=${CPUS} \\
-    ${PROJECT_DIR}/blp_estimation.jl \\
+    ${PROJECT_DIR}/blp_estimation_gpu.jl \\
     --estim ${ESTIM} --stage rc3 ${BLP_COMMON_ARGS}
 echo 'E${ESTIM} rc3 done: '\$(date)")
 
@@ -159,7 +162,8 @@ echo "  Submitted rc3:      Job ${JID_RC3} (after ${JID_RC2})"
 JID_RC4=$(sbatch --parsable \
     --dependency=afterok:${JID_RC3} \
     --job-name="blp_E${ESTIM}_rc4_R${R}" \
-    --partition=day \
+    --partition=gpu \
+    --gpus=1 \
     --time="${T_RC4}" \
     --nodes=1 --ntasks=1 --cpus-per-task="${CPUS}" \
     --mem="${MEM_ALL}" \
@@ -170,7 +174,7 @@ JID_RC4=$(sbatch --parsable \
     --wrap="${JULIA_SETUP}
 echo '=== BLP E${ESTIM} rc4 | R=${R} | '\$(date)' ==='
 julia --project=${PROJECT_DIR} --threads=${CPUS} \\
-    ${PROJECT_DIR}/blp_estimation.jl \\
+    ${PROJECT_DIR}/blp_estimation_gpu.jl \\
     --estim ${ESTIM} --stage rc4 ${BLP_COMMON_ARGS}
 echo 'E${ESTIM} rc4 done: '\$(date)")
 
@@ -180,7 +184,8 @@ echo "  Submitted rc4:      Job ${JID_RC4} (after ${JID_RC3})"
 JID_FULL=$(sbatch --parsable \
     --dependency=afterok:${JID_RC4} \
     --job-name="blp_E${ESTIM}_full_R${R}" \
-    --partition=day \
+    --partition=gpu \
+    --gpus=1 \
     --time="${T_FULL}" \
     --nodes=1 --ntasks=1 --cpus-per-task="${CPUS}" \
     --mem="${MEM_ALL}" \
@@ -191,7 +196,7 @@ JID_FULL=$(sbatch --parsable \
     --wrap="${JULIA_SETUP}
 echo '=== BLP E${ESTIM} full | R=${R} | '\$(date)' ==='
 julia --project=${PROJECT_DIR} --threads=${CPUS} \\
-    ${PROJECT_DIR}/blp_estimation.jl \\
+    ${PROJECT_DIR}/blp_estimation_gpu.jl \\
     --estim ${ESTIM} --stage full ${BLP_COMMON_ARGS}
 echo 'E${ESTIM} full done: '\$(date)")
 
@@ -201,7 +206,8 @@ echo "  Submitted full:     Job ${JID_FULL} (after ${JID_RC4})"
 JID_EXT1=$(sbatch --parsable \
     --dependency=afterok:${JID_FULL} \
     --job-name="blp_E${ESTIM}_ext1_R${R}" \
-    --partition=day \
+    --partition=gpu \
+    --gpus=1 \
     --time="${T_EXT1}" \
     --nodes=1 --ntasks=1 --cpus-per-task="${CPUS}" \
     --mem="${MEM_ALL}" \
@@ -212,7 +218,7 @@ JID_EXT1=$(sbatch --parsable \
     --wrap="${JULIA_SETUP}
 echo '=== BLP E${ESTIM} ext1 | R=${R} | '\$(date)' ==='
 julia --project=${PROJECT_DIR} --threads=${CPUS} \\
-    ${PROJECT_DIR}/blp_estimation.jl \\
+    ${PROJECT_DIR}/blp_estimation_gpu.jl \\
     --estim ${ESTIM} --stage ext1 ${BLP_COMMON_ARGS}
 echo 'E${ESTIM} ext1 done: '\$(date)")
 
@@ -222,7 +228,8 @@ echo "  Submitted ext1:     Job ${JID_EXT1} (after ${JID_FULL})"
 JID_EXT2=$(sbatch --parsable \
     --dependency=afterok:${JID_EXT1} \
     --job-name="blp_E${ESTIM}_ext2_R${R}" \
-    --partition=day \
+    --partition=gpu \
+    --gpus=1 \
     --time="${T_EXT2}" \
     --nodes=1 --ntasks=1 --cpus-per-task="${CPUS}" \
     --mem="${MEM_ALL}" \
@@ -233,7 +240,7 @@ JID_EXT2=$(sbatch --parsable \
     --wrap="${JULIA_SETUP}
 echo '=== BLP E${ESTIM} ext2 | R=${R} | '\$(date)' ==='
 julia --project=${PROJECT_DIR} --threads=${CPUS} \\
-    ${PROJECT_DIR}/blp_estimation.jl \\
+    ${PROJECT_DIR}/blp_estimation_gpu.jl \\
     --estim ${ESTIM} --stage ext2 ${BLP_COMMON_ARGS}
 echo 'E${ESTIM} ext2 done: '\$(date)")
 
@@ -243,7 +250,8 @@ echo "  Submitted ext2:     Job ${JID_EXT2} (after ${JID_EXT1})"
 JID_EXT=$(sbatch --parsable \
     --dependency=afterok:${JID_EXT2} \
     --job-name="blp_E${ESTIM}_extended_R${R}" \
-    --partition=day \
+    --partition=gpu \
+    --gpus=1 \
     --time="${T_EXT}" \
     --nodes=1 --ntasks=1 --cpus-per-task="${CPUS}" \
     --mem="${MEM_ALL}" \
@@ -254,7 +262,7 @@ JID_EXT=$(sbatch --parsable \
     --wrap="${JULIA_SETUP}
 echo '=== BLP E${ESTIM} extended | R=${R} | '\$(date)' ==='
 julia --project=${PROJECT_DIR} --threads=${CPUS} \\
-    ${PROJECT_DIR}/blp_estimation.jl \\
+    ${PROJECT_DIR}/blp_estimation_gpu.jl \\
     --estim ${ESTIM} --stage extended ${BLP_COMMON_ARGS}
 echo 'E${ESTIM} extended done: '\$(date)")
 
