@@ -55,6 +55,7 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s')
 
 root = Path(__file__).resolve().parents[2]
 ip_scrape_dir = root / 'BCB' / 'Egan_et_al_2025_Rep' / 'processed' / 'IP_SCRAPE'
+_panel_intermed = root / 'BCB' / 'Egan_et_al_2025_Rep' / 'processed' / 'PANEL_INTERMED'
 
 # Filtering thresholds. Typical digital-bank advertised rates are 80-130% of
 # CDI/Selic. Anything outside [MIN, MAX] is almost surely either a loan rate,
@@ -62,6 +63,13 @@ ip_scrape_dir = root / 'BCB' / 'Egan_et_al_2025_Rep' / 'processed' / 'IP_SCRAPE'
 # or a regex false positive (date / address number / etc.).
 MIN_PCT = 50.0
 MAX_PCT = 200.0
+
+# Absolute-rate rescue: some PDFs quote CDI as a raw annual rate (e.g.
+# "CDI 11.57% a.a.") instead of as a percentage of CDI. Values in
+# [ABS_RATE_MIN, ABS_RATE_MAX] are treated as absolute annual rates and
+# converted to % of CDI by dividing by the CDI annual rate for that quarter.
+ABS_RATE_MIN = 3.0
+ABS_RATE_MAX = 25.0
 
 # Context-substring blocklist: keywords that signal the matched number is not
 # a deposit-yield phrase. Case-insensitive substring match against `Context`.
@@ -115,6 +123,79 @@ def _anomes_to_quarter(anomes):
         return None
     a = int(anomes)
     return f"{a // 100}Q{(a % 100) // 3}"
+
+
+def _load_macro_rates(path):
+    """Load quarterly_macro_rates.csv and return a DataFrame indexed by AnoMes
+    with columns cdi_annual and selic_annual (annualised from quarterly rates).
+    Returns None if the file is missing."""
+    p = Path(path)
+    if not p.exists():
+        logging.warning(f"Macro rates not found: {p} -- abs-rate conversion disabled.")
+        return None
+    df = pd.read_csv(p)
+    df['cdi_annual']   = ((1 + df['cdi_qoq']   / 100) ** 4 - 1) * 100
+    df['selic_annual'] = ((1 + df['selic_qoq'] / 100) ** 4 - 1) * 100
+    df['AnoMes'] = df['AnoMes'].astype(int)
+    return df[['AnoMes', 'cdi_annual', 'selic_annual']].set_index('AnoMes')
+
+
+def rescue_abs_rates(dropped, macro_rates):
+    """Rescue rows dropped as out_of_range that are absolute annual rate quotes.
+
+    Rows where advertised_pct is in [ABS_RATE_MIN, ABS_RATE_MAX] are converted
+    to % of CDI using the period's annualised CDI rate:
+        pct_of_cdi = abs_rate_annual / cdi_annual * 100
+    If the result is in [MIN_PCT, MAX_PCT] the row is promoted to kept.
+
+    Returns (rescued_df, updated_dropped_df).
+    """
+    if macro_rates is None or dropped.empty:
+        return pd.DataFrame(), dropped
+
+    mask = (
+        (dropped['drop_reason'] == 'out_of_range') &
+        (dropped['advertised_pct'] >= ABS_RATE_MIN) &
+        (dropped['advertised_pct'] <= ABS_RATE_MAX)
+    )
+    candidates = dropped[mask].copy()
+    still_dropped = dropped[~mask].copy()
+
+    if candidates.empty:
+        return pd.DataFrame(), dropped
+
+    # Join CDI annual rate by quarter
+    candidates['_anomes_int'] = candidates['AnoMes'].astype(int)
+    candidates = candidates.join(
+        macro_rates[['cdi_annual']], on='_anomes_int', how='left'
+    ).drop(columns=['_anomes_int'])
+
+    has_cdi = candidates['cdi_annual'].notna()
+
+    # Convert: abs annual % -> % of CDI
+    candidates.loc[has_cdi, 'advertised_pct'] = (
+        candidates.loc[has_cdi, 'advertised_pct']
+        / candidates.loc[has_cdi, 'cdi_annual'] * 100
+    )
+
+    in_range = (
+        has_cdi &
+        (candidates['advertised_pct'] >= MIN_PCT) &
+        (candidates['advertised_pct'] <= MAX_PCT)
+    )
+    rescued = candidates[in_range].drop(columns=['drop_reason', 'cdi_annual'])
+
+    not_rescued = candidates[~in_range].drop(columns=['cdi_annual'])
+    not_rescued['drop_reason'] = 'out_of_range'
+
+    updated_dropped = pd.concat([still_dropped, not_rescued], ignore_index=True)
+
+    logging.info(
+        f"Abs-rate rescue: {len(candidates):,} candidates in [{ABS_RATE_MIN},{ABS_RATE_MAX}]% range, "
+        f"{len(rescued):,} rescued (converted to % of CDI), "
+        f"{len(not_rescued):,} still dropped"
+    )
+    return rescued, updated_dropped
 
 
 def load_raw(in_path):
@@ -326,6 +407,11 @@ def main():
                     help='Audit CSV of rows filtered out.')
     ap.add_argument('--no-ffill', action='store_true',
                     help='Do not forward-fill quarters between observations.')
+    ap.add_argument('--macro-rates',
+                    default=str(_panel_intermed / 'quarterly_macro_rates.csv'),
+                    help='quarterly_macro_rates.csv used for abs-rate conversion.')
+    ap.add_argument('--no-abs-convert', action='store_true',
+                    help='Skip absolute-rate conversion; keep as out_of_range.')
     ap.add_argument('--manual-overrides',
                     default=str(ip_scrape_dir / 'manual_advertised_rates.csv'),
                     help='CSV of operator-provided seed rates that override '
@@ -343,6 +429,15 @@ def main():
     if not dropped.empty:
         by_reason = dropped['drop_reason'].value_counts().to_dict()
         logging.info(f"Drop reasons: {by_reason}")
+
+    if not args.no_abs_convert:
+        macro_rates = _load_macro_rates(args.macro_rates)
+        rescued, dropped = rescue_abs_rates(dropped, macro_rates)
+        if not rescued.empty:
+            kept = pd.concat([kept, rescued], ignore_index=True)
+            logging.info(
+                f"After abs-rate rescue: {len(kept):,} kept, {len(dropped):,} dropped"
+            )
 
     quarterly = aggregate_quarterly(kept)
     logging.info(

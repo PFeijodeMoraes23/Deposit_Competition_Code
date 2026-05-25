@@ -188,7 +188,12 @@ def _extract_rates(text, filename):
     if not parts or not parts[0]:
         return extracted
     conglomerado = parts[0]
-    ts = parts[1] if len(parts) > 1 else '0000'
+    # AGG files follow AGG_SLUG_YYYYMMDDHHMMSS_url format; the Wayback
+    # timestamp is the first 14 chars of parts[2], not parts[1].
+    if conglomerado == 'AGG' and len(parts) > 2:
+        ts = parts[2][:14]
+    else:
+        ts = parts[1] if len(parts) > 1 else '0000'
     date_str = f"{ts[:4]}-{ts[4:6]}-{ts[6:8]}" if len(ts) >= 8 else 'Unknown'
 
     # Deduplicate matches by (rate_type, span_start) to avoid double-counting

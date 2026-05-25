@@ -131,14 +131,52 @@ function build_theta2_structure(stage::String)
     if stage == "logit"
         return Int[], Tuple{Int,Int}[], 0
     elseif stage == "sigma"
+        # RC1: σ_spread only
         return [1], Tuple{Int,Int}[], 1
+    elseif stage == "rc2"
+        # RC2: σ_spread + π(spread × gdp_per_capita)
+        return [1], [(1, findfirst(==("gdp_per_capita"), D_COLS))], 2
+    elseif stage == "rc3"
+        # RC3: σ_spread + π(spread × gdp_per_capita) + π(spread × fraction_65plus)
+        pi_inter = [(1, findfirst(==("gdp_per_capita"),  D_COLS)),
+                    (1, findfirst(==("fraction_65plus"), D_COLS))]
+        return [1], pi_inter, 3
+    elseif stage == "rc4"
+        # RC4: σ_spread + 3 demographic π interactions (no σ_log_assets yet)
+        pi_inter = [(1, findfirst(==("gdp_per_capita"),     D_COLS)),
+                    (1, findfirst(==("fraction_65plus"),    D_COLS)),
+                    (1, findfirst(==("connections_per100"), D_COLS))]
+        return [1], pi_inter, 4
     elseif stage == "full"
+        # RC5: σ_spread + σ_log_assets + 3 demographic π interactions
         sigma_idx = [1, 1 + findfirst(==("log_total_assets_lag"), X_COLS)]
         pi_inter  = [(1, findfirst(==("gdp_per_capita"),     D_COLS)),
                      (1, findfirst(==("fraction_65plus"),    D_COLS)),
                      (1, findfirst(==("connections_per100"), D_COLS))]
         return sigma_idx, pi_inter, length(sigma_idx) + length(pi_inter)
+    elseif stage == "ext1"
+        # RC6: full + π(log_assets × gdp_per_capita)
+        sigma_idx = [1, 1 + findfirst(==("log_total_assets_lag"), X_COLS)]
+        pi_inter  = [
+            (1,                                                  findfirst(==("gdp_per_capita"),     D_COLS)),
+            (1,                                                  findfirst(==("fraction_65plus"),    D_COLS)),
+            (1,                                                  findfirst(==("connections_per100"), D_COLS)),
+            (1 + findfirst(==("log_total_assets_lag"), X_COLS),  findfirst(==("gdp_per_capita"),     D_COLS)),
+        ]
+        return sigma_idx, pi_inter, length(sigma_idx) + length(pi_inter)
+    elseif stage == "ext2"
+        # RC7: ext1 + π(fgc_covered × fraction_65plus)
+        sigma_idx = [1, 1 + findfirst(==("log_total_assets_lag"), X_COLS)]
+        pi_inter  = [
+            (1,                                                  findfirst(==("gdp_per_capita"),     D_COLS)),
+            (1,                                                  findfirst(==("fraction_65plus"),    D_COLS)),
+            (1,                                                  findfirst(==("connections_per100"), D_COLS)),
+            (1 + findfirst(==("log_total_assets_lag"), X_COLS),  findfirst(==("gdp_per_capita"),     D_COLS)),
+            (1 + findfirst(==("fgc_covered"),          X_COLS),  findfirst(==("fraction_65plus"),    D_COLS)),
+        ]
+        return sigma_idx, pi_inter, length(sigma_idx) + length(pi_inter)
     elseif stage == "extended"
+        # RC8: ext2 + π(equity_ratio × cadunico_families)
         sigma_idx = [1, 1 + findfirst(==("log_total_assets_lag"), X_COLS)]
         pi_inter  = [
             (1,                                                 findfirst(==("gdp_per_capita"),              D_COLS)),
@@ -906,7 +944,9 @@ function run_blp_estimation(estim::Int, spec_id::Int, args,
 
     # ── Warm-start from previous stage checkpoint ────────────────────────
     _, _, out_dir = get_paths(args["hpc"])
-    prev_stages = Dict("full" => "sigma", "extended" => "full")
+    prev_stages = Dict("rc2" => "sigma", "rc3" => "rc2", "rc4" => "rc3",
+                       "full" => "rc4", "ext1" => "full", "ext2" => "ext1",
+                       "extended" => "ext2")
     theta2_0 = nothing
     if args["stage"] in keys(prev_stages)
         prev_path = joinpath(out_dir,
@@ -1108,7 +1148,7 @@ function main()
         draws_dir, args["R"], args["seed"])
 
     stages_to_run = args["stage"] == "sequence" ?
-                    ["sigma", "full", "extended"] : [args["stage"]]
+                    ["sigma", "rc2", "rc3", "rc4", "full", "ext1", "ext2", "extended"] : [args["stage"]]
 
     for current_stage in stages_to_run
         args["stage"] = current_stage

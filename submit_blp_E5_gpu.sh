@@ -40,16 +40,14 @@ echo "CUDA devices: $(nvidia-smi --query-gpu=name,memory.total --format=csv,nohe
 echo "NVIDIA driver: $(nvidia-smi --query-gpu=driver_version --format=csv,noheader | head -1)"
 
 # ── Verify environment ────────────────────────────────────────────────────────
-# Resolve and instantiate the project. We force a CUDA.jl update so the
-# resolver picks a version matching the Project.toml compat bound (>= 5.5),
-# which is required for sm_89 (RTX Ada) targets and avoids the
-# `MethodError(Core.kwcall, ..., GPUCompiler.PTXCompilerTarget)` crash caused
-# by older CUDA.jl ↔ GPUCompiler.jl version mismatches.
+# Pkg.resolve() recomputes the Manifest from Project.toml compat bounds, fixing
+# any stale-manifest drift from the cluster environment. Pkg.update("CUDA") was
+# removed: it triggered a CUDACore 6.1.1 conflict with the CUDA = "5.8-6.0" bound.
 echo "Checking Julia packages: $(date)"
 julia --project="${PROJECT_DIR}" -e '
     using Pkg
-    Pkg.instantiate()
-    Pkg.update("CUDA")
+    Pkg.resolve()        # recompute Manifest from Project.toml compat bounds (fixes stale-manifest warning)
+    Pkg.instantiate()    # install resolved versions
     Pkg.precompile()
     using CUDA
     @info "CUDA.jl version" CUDA.versioninfo()
