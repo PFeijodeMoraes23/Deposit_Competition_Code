@@ -507,6 +507,7 @@ def main():
             r"\end{xltabular}",
             r"\endgroup",
             r"\end{landscape}",
+            r"\doublespacing",
         ]
         latex_str = "\n".join(lines)
 
@@ -686,6 +687,7 @@ def main():
             r"\end{xltabular}",
             r"\endgroup",
             r"\end{landscape}",
+            r"\doublespacing",
         ]
         latex_str = "\n".join(lines)
 
@@ -829,6 +831,7 @@ def main():
             "",
             r"\end{longtable}",
             r"\endgroup",
+            r"\doublespacing",
         ]
         latex_str = "\n".join(lines)
 
@@ -1010,6 +1013,7 @@ def main():
             r"\end{xltabular}",
             r"\endgroup",
             r"\end{landscape}",
+            r"\doublespacing",
         ]
         latex_str = "\n".join(lines)
 

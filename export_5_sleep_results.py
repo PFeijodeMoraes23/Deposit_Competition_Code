@@ -241,7 +241,7 @@ def build_first_stage_table(results_dict, G, G_star):
             r"    \bottomrule",
         ]
 
-    lines += [r"\end{longtable}"]
+    lines += [r"\end{longtable}", r"\doublespacing"]
     return "\n".join(lines)
 
 
@@ -397,7 +397,7 @@ def build_second_stage_table(results_dict, G, G_star):
             r"    \bottomrule",
         ]
 
-    lines += [r"\end{longtable}"]
+    lines += [r"\end{longtable}", r"\doublespacing"]
     return "\n".join(lines)
 
 

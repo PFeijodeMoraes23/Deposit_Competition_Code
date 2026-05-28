@@ -109,8 +109,8 @@ LABEL_MAP = {
     "spread_a5_d_w":              ("Spread (5), D firms",      "bp",           0.01, 2),
     "spread_a4_natl_w":           ("Spread (4), National (B+D)","bp",          0.01, 2),
     "spread_a5_natl_w":           ("Spread (5), National (B+D)","bp",          0.01, 2),
-    "spread_a4_w":               ("Spread (4), dep-weighted","bp",           0.01, 2),
-    "spread_a5_w":               ("Spread (5), dep-weighted","bp",           0.01, 2),
+    "spread_a4_w":               ("Spread (4), B firms",     "bp",           0.01, 2),
+    "spread_a5_w":               ("Spread (5), B firms",     "bp",           0.01, 2),
     "n_d_firms_natl":            ("Number of D Firms (nat.)", "count",       None, 0),
     # Table 3 specific
     "pop_total":                 ("Population",              "Thousands",    1e3,  1),
@@ -411,7 +411,9 @@ def build_table1(df: pd.DataFrame, weight_col: str | None) -> tuple[pd.DataFrame
                 "Mean": _weighted_mean(x, w),
                 "SD":   _weighted_std(x, w),
                 "p10":  _weighted_quantile(x, 0.10, w),
+                "p25":  _weighted_quantile(x, 0.25, w),
                 "p50":  _weighted_quantile(x, 0.50, w),
+                "p75":  _weighted_quantile(x, 0.75, w),
                 "p90":  _weighted_quantile(x, 0.90, w),
                 "N":    int(np.isfinite(x).sum()),
             })
@@ -448,14 +450,14 @@ def render_table1(moments_b, moments_d, moments_all, meta, weight_col, suffix) -
     weight_lbl = "(Population Weighted)" if weight_col else ""
     caption   = (f"Bank-Conglomerate Cross-Section by Type{(' ' + weight_lbl) if weight_lbl else ''}")
 
-    col_spec  = "l@{\\hspace{0.5em}}rrrrrr"
-    n_cols    = 7
-    header_row = r"Variable & Mean & SD & p10 & p50 & p90 & $N$ \\"
+    col_spec  = "l@{\\hspace{0.5em}}rrrrrrrr"
+    n_cols    = 9
+    header_row = r"Variable & Mean & SD & p10 & p25 & p50 & p75 & p90 & $N$ \\"
 
     def _panel(title: str, moments: pd.DataFrame, n_firms: int, n_fq: int) -> list[str]:
         lines = [
             r"\midrule",
-            f"\\multicolumn{{7}}{{l}}{{\\textit{{{title}}}}} \\\\",
+            f"\\multicolumn{{9}}{{l}}{{\\textit{{{title}}}}} \\\\",
             r"\midrule",
         ]
         for _, r in moments.iterrows():
@@ -466,13 +468,15 @@ def render_table1(moments_b, moments_d, moments_all, meta, weight_col, suffix) -
                 + " & ".join([_fmt_val(r["Mean"], vb),
                               _fmt_val(r["SD"],   vb),
                               _fmt_val(r["p10"],  vb),
+                              _fmt_val(r["p25"],  vb),
                               _fmt_val(r["p50"],  vb),
+                              _fmt_val(r["p75"],  vb),
                               _fmt_val(r["p90"],  vb)])
                 + f" & {int(r['N']):,} \\\\"
             )
         lines.append(r"\addlinespace[0.3em]")
         lines.append(
-            f"\\multicolumn{{7}}{{l}}{{\\footnotesize Unique conglomerates: {n_firms:,}; "
+            f"\\multicolumn{{9}}{{l}}{{\\footnotesize Unique conglomerates: {n_firms:,}; "
             f"firm-quarter observations: {n_fq:,}.}} \\\\"
         )
         return lines
@@ -511,6 +515,7 @@ def render_table1(moments_b, moments_d, moments_all, meta, weight_col, suffix) -
         *body,
         "",
         r"\end{longtable}",
+        r"\doublespacing",
     ])
     return tex
 
@@ -773,27 +778,6 @@ def render_table2(t2_df, weight_col, suffix) -> str:
         body.append(r"\midrule")
         body.append("MCA-Quarters ($N$) & " + " & ".join(nvals) + r" \\")
 
-    notes = (
-        r"\scriptsize \textit{Notes:} "
-        r"Panel A: MCA-level averages for B (brick-and-mortar) firms. "
-        r"Number of B firms counts distinct prudential conglomerates with "
-        r"strictly positive total deposits in the MCA-quarter. "
-        r"HHI is computed from B-firm deposit shares within the MCA-quarter, "
-        r"on the $0$--$10{,}000$ scale. "
-        r"Panel B: National aggregates for D (digital) firms. "
-        r"Count is distinct conglomerates nationally with positive total deposits. "
-        r"Panel C: deposit-weighted spreads by firm type. "
-        r"B-firm rows are MCA-level deposit-weighted, then averaged across MCA-quarters. "
-        r"D-firm rows are deposit-weighted across all D-firm rows nationally. "
-        r"National rows pool B and D MCA-level observations, weighted by deposits. "
-        r"Type-5 (prepaid) spreads are undefined before 2020. "
-        + ("Panels A and C are population-weighted using \\texttt{pop\\_total}."
-           if weight_col == "pop_total"
-           else "Panels A and C are weighted by total B-firm deposits in the MCA-quarter."
-           if weight_col == "dep_total_mq"
-           else "Panels A and C are unweighted.")
-    )
-
     tex = "\n".join([
         r"\begin{landscape}",
         r"\setstretch{1.0}",
@@ -813,12 +797,148 @@ def render_table2(t2_df, weight_col, suffix) -> str:
         r"    \midrule",
         r"    \endhead",
         r"    \bottomrule",
-        f"    \\multicolumn{{{n_groups+1}}}{{p{{\\dimexpr\\linewidth-2\\tabcolsep\\relax}}}}{{{notes}}} \\\\",
         r"    \endlastfoot",
         *body,
         r"\end{xltabular}",
         r"\endgroup",
         r"\end{landscape}",
+        r"\doublespacing",
+    ])
+    return tex
+
+
+def render_table2a(t2_df, weight_col, suffix) -> str:
+    """Market structure (B-firm MCA counts + D-firm national counts) — years as rows."""
+    name      = "Compressed_MarketStructure_by_Year_AB"
+    tab_label = f"tab:{name}"
+    weight_lbl = ("(Pop.\\ Weighted)" if weight_col == "pop_total"
+                  else "(Dep.\\ Weighted)" if weight_col == "dep_total_mq"
+                  else "")
+    caption = ("MCA-Level Market Structure by Year"
+               + (f" {weight_lbl}" if weight_lbl else ""))
+
+    year_cols  = [c for c in t2_df.columns if c != "var"]
+    t2_idx     = t2_df.set_index("var")
+    n_row_data = t2_df[t2_df["var"] == "N_obs"]
+
+    VARS_A  = ["n_b_firms", "hhi_b"]
+    VARS_B  = ["n_d_firms_natl", "hhi_combined_natl"]
+    VARS_AB = VARS_A + VARS_B
+
+    short_labels = {
+        "n_b_firms":         r"No.\ B Firms",
+        "hhi_b":             r"HHI (B)",
+        "n_d_firms_natl":    r"No.\ D Firms",
+        "hhi_combined_natl": r"HHI (B+D)",
+    }
+    sub_units = {
+        "n_b_firms":         r"(count)",
+        "hhi_b":             r"($0$--$10{,}000$)",
+        "n_d_firms_natl":    r"(count)",
+        "hhi_combined_natl": r"($0$--$10{,}000$)",
+    }
+
+    col_spec   = "l@{\\hspace{1.2em}}" + "rr@{\\hspace{1.2em}}" + "rr@{\\hspace{1.2em}}" + "r"
+    header_top = (
+        r" & \multicolumn{2}{c@{\hspace{1.2em}}}{\textit{B Firms (MCA-Level)}}"
+        r" & \multicolumn{2}{c@{\hspace{1.2em}}}{\textit{D Firms (National)}} & \\"
+    )
+    cmidrules  = r"\cmidrule(lr){2-3} \cmidrule(lr){4-5}"
+    col_labels = ("Year & "
+                  + " & ".join(short_labels[v] for v in VARS_AB)
+                  + r" & MCA-Qtrs.\ ($N$) \\")
+    col_units  = (" & "
+                  + " & ".join(sub_units[v] for v in VARS_AB)
+                  + r" & \\")
+
+    body = []
+    for yr in year_cols:
+        cells = [str(yr)]
+        for v in VARS_AB:
+            val = t2_idx.loc[v, yr] if v in t2_idx.index else np.nan
+            cells.append(_fmt_val(val, v))
+        cells.append(f"{int(n_row_data.iloc[0][yr]):,}" if len(n_row_data) else "--")
+        body.append(" & ".join(cells) + r" \\")
+
+    tex = "\n".join([
+        r"\begin{table}[htbp]",
+        r"\setstretch{1.0}",
+        r"\centering",
+        f"\\caption{{{caption}}}\\label{{{tab_label}}}",
+        r"\footnotesize",
+        f"\\begin{{tabular}}{{{col_spec}}}",
+        r"\toprule",
+        header_top,
+        cmidrules,
+        col_labels,
+        col_units,
+        r"\midrule",
+        *body,
+        r"\bottomrule",
+        r"\end{tabular}",
+        r"\end{table}",
+        r"\doublespacing",
+    ])
+    return tex
+
+
+def render_table2b(t2_df, weight_col, suffix) -> str:
+    """Deposit spreads by firm type and year — years as rows."""
+    name      = "Compressed_MarketStructure_by_Year_C"
+    tab_label = f"tab:{name}"
+    weight_lbl = ("(Pop.\\ Weighted)" if weight_col == "pop_total"
+                  else "(Dep.\\ Weighted)" if weight_col == "dep_total_mq"
+                  else "")
+    caption = ("Deposit Spreads by Year"
+               + (f" {weight_lbl}" if weight_lbl else ""))
+
+    year_cols = [c for c in t2_df.columns if c != "var"]
+    t2_idx    = t2_df.set_index("var")
+
+    VARS_C        = ["spread_a4_w",     "spread_a5_w",
+                     "spread_a4_d_w",   "spread_a5_d_w",
+                     "spread_a4_natl_w","spread_a5_natl_w"]
+    PRE2020_BLANK = {"spread_a5_w", "spread_a5_d_w", "spread_a5_natl_w"}
+
+    col_spec   = "l@{\\hspace{1.2em}}" + "rr@{\\hspace{1.2em}}" + "rr@{\\hspace{1.2em}}" + "rr"
+    header_top = (
+        r" & \multicolumn{2}{c@{\hspace{1.2em}}}{\textit{B Firms}}"
+        r" & \multicolumn{2}{c@{\hspace{1.2em}}}{\textit{D Firms}}"
+        r" & \multicolumn{2}{c}{\textit{National (B+D)}} \\"
+    )
+    cmidrules  = r"\cmidrule(lr){2-3} \cmidrule(lr){4-5} \cmidrule(lr){6-7}"
+    col_labels = r"Year & Spread (4) & Spread (5) & Spread (4) & Spread (5) & Spread (4) & Spread (5) \\"
+    col_units  = r" & (bp) & (bp) & (bp) & (bp) & (bp) & (bp) \\"
+
+    body = []
+    for yr in year_cols:
+        cells = [str(yr)]
+        for v in VARS_C:
+            if v in PRE2020_BLANK and int(yr) < 2020:
+                cells.append("")
+            else:
+                val = t2_idx.loc[v, yr] if v in t2_idx.index else np.nan
+                cells.append(_fmt_val(val, v))
+        body.append(" & ".join(cells) + r" \\")
+
+    tex = "\n".join([
+        r"\begin{table}[htbp]",
+        r"\setstretch{1.0}",
+        r"\centering",
+        f"\\caption{{{caption}}}\\label{{{tab_label}}}",
+        r"\footnotesize",
+        f"\\begin{{tabular}}{{{col_spec}}}",
+        r"\toprule",
+        header_top,
+        cmidrules,
+        col_labels,
+        col_units,
+        r"\midrule",
+        *body,
+        r"\bottomrule",
+        r"\end{tabular}",
+        r"\end{table}",
+        r"\doublespacing",
     ])
     return tex
 
@@ -923,6 +1043,7 @@ def render_table3(t3_df, weight_col, suffix, latest_year) -> str:
         r"\end{tablenotes}",
         r"\end{threeparttable}",
         r"\end{table}",
+        r"\doublespacing",
     ])
     return tex
 
@@ -1042,6 +1163,7 @@ def render_table4(t4_df, meta, suffix) -> str:
         r"\end{tablenotes}",
         r"\end{threeparttable}",
         r"\end{table}",
+        r"\doublespacing",
     ])
     return tex
 
@@ -1091,8 +1213,13 @@ def main():
     print("\n[Table 2] MCA market structure by year ...")
     t2 = build_table2(df, "dep_total_mq")
     _write_csv(t2, "Compressed_MarketStructure_by_Year", "_dep_weighted")
-    tex2 = render_table2(t2, "dep_total_mq", "_dep_weighted")
-    _write_tex(tex2, "Compressed_MarketStructure_by_Year", "")
+    # Landscape version (kept for reference):
+    # tex2 = render_table2(t2, "dep_total_mq", "_dep_weighted")
+    # _write_tex(tex2, "Compressed_MarketStructure_by_Year", "")
+    tex2a = render_table2a(t2, "dep_total_mq", "_dep_weighted")
+    tex2b = render_table2b(t2, "dep_total_mq", "_dep_weighted")
+    _write_tex(tex2a, "Compressed_MarketStructure_by_Year_AB", "")
+    _write_tex(tex2b, "Compressed_MarketStructure_by_Year_C", "")
 
     # --- Table 3
     print("\n[Table 3] Local environment by macro-region ...")
