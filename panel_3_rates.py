@@ -1520,6 +1520,11 @@ def build_panel(df_ifdata: pd.DataFrame,
     #    i.e. how much less than the risk-free rate the bank is paying depositors)
     panel["spread_qoq"] = panel["risk_free_qoq"] - panel["deposit_rate_qoq"]
 
+    # Annualised counterparts — consumers compare annual returns
+    panel["risk_free_ann"]    = (1 + panel["risk_free_qoq"])    ** 4 - 1
+    panel["deposit_rate_ann"] = (1 + panel["deposit_rate_qoq"]) ** 4 - 1
+    panel["spread_ann"]       = panel["risk_free_ann"] - panel["deposit_rate_ann"]
+
     # K. FGC deposit-insurance coverage dummy
     #    Types 1 (demand), 2 (savings), 4 (time/CDB): covered by FGC
     #      (Resolução CMN 4.222/2013, updated by CMN 4.860/2020; R$250k cap
@@ -1546,6 +1551,7 @@ def build_panel(df_ifdata: pd.DataFrame,
         "deposit_balance", "lagged_deposits",
         # rates & spread
         "risk_free_qoq", "deposit_rate_qoq", "spread_qoq",
+        "risk_free_ann", "deposit_rate_ann", "spread_ann",
         # implicit rates
         "cosif_type4_rate",        # residual COSIF rate (T4+T5 expense / T4+T5 stock)
         "cosif_implicit_rate",     # blended COSIF rate (all types)
@@ -1849,17 +1855,25 @@ def append_rates_to_panel():
         aux["rate_a5"] = aux["median_ip_rate"].fillna(aux["cdi_qoq"])
         
     aux["risk_free_qoq"] = aux["selic_qoq"]
-    
+    aux["risk_free_ann"] = (1 + aux["risk_free_qoq"]) ** 4 - 1
+
     for t in [1, 2, 3, 4, 5]:
-        aux[f"spread_a{t}"] = aux["risk_free_qoq"] - aux[f"rate_a{t}"]
-    
-    drop_cols = ["AnoMes", "risk_free_qoq", "rate_a1", "rate_a2", "rate_a3", "rate_a4", "rate_a5",
-                 "spread_a1", "spread_a2", "spread_a3", "spread_a4", "spread_a5"]
+        aux[f"spread_a{t}"]     = aux["risk_free_qoq"] - aux[f"rate_a{t}"]
+        # Annualised: named spread_ann_a{t} so wide_to_long(stub='spread_ann_a') works
+        aux[f"rate_a{t}_ann"]      = (1 + aux[f"rate_a{t}"]) ** 4 - 1
+        aux[f"spread_ann_a{t}"]    = aux["risk_free_ann"] - aux[f"rate_a{t}_ann"]
+
+    drop_cols = ["AnoMes", "risk_free_qoq", "risk_free_ann",
+                 "rate_a1", "rate_a2", "rate_a3", "rate_a4", "rate_a5",
+                 "rate_a1_ann", "rate_a2_ann", "rate_a3_ann", "rate_a4_ann", "rate_a5_ann",
+                 "spread_a1", "spread_a2", "spread_a3", "spread_a4", "spread_a5",
+                 "spread_ann_a1", "spread_ann_a2", "spread_ann_a3", "spread_ann_a4", "spread_ann_a5"]
     df = df.drop(columns=[c for c in drop_cols if c in df.columns], errors='ignore')
-                 
-    cols_to_merge = ["CodConglomeradoPrudencial", "AnoMes", "risk_free_qoq"] + \
+
+    cols_to_merge = ["CodConglomeradoPrudencial", "AnoMes", "risk_free_qoq", "risk_free_ann"] + \
                     [f"rate_a{t}" for t in range(1, 6)] + \
-                    [f"spread_a{t}" for t in range(1, 6)]
+                    [f"spread_a{t}" for t in range(1, 6)] + \
+                    [f"spread_ann_a{t}" for t in range(1, 6)]
                     
     df["AnoMes"] = df["Year"].astype(int) * 100 + df["Quarter"].astype(int) * 3
     df = df.merge(aux[cols_to_merge], on=["CodConglomeradoPrudencial", "AnoMes"], how="left")

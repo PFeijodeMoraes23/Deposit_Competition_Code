@@ -136,8 +136,8 @@ def build_estimation_data():
         print("Reshaping panel from wide to long...")
         id_vars = ['CodConglomeradoPrudencial', 'mca_code', 'year', 'quarter']
         df_raw = df_raw.drop_duplicates(subset=id_vars)
-        df = pd.wide_to_long(df_raw, stubnames=['dep_a', 'spread_a', 'leave_one_out_mean_spread_a'], i=id_vars, j='deposit_type').reset_index()
-        df = df.rename(columns={'dep_a': 'deposit_balance', 'spread_a': 'spread_qoq', 'leave_one_out_mean_spread_a': 'leave_one_out_mean_spread'})
+        df = pd.wide_to_long(df_raw, stubnames=['dep_a', 'spread_a', 'spread_ann_a', 'leave_one_out_mean_spread_a'], i=id_vars, j='deposit_type').reset_index()
+        df = df.rename(columns={'dep_a': 'deposit_balance', 'spread_a': 'spread_qoq', 'spread_ann_a': 'spread_ann', 'leave_one_out_mean_spread_a': 'leave_one_out_mean_spread'})
     else:
         df = df_raw.copy()
 
@@ -172,7 +172,7 @@ def run_first_stage(df, spec_instruments, exogenous_controls):
         df['v_hat'] = 0.0
         return df, None
 
-    y = df_fs['spread_qoq']
+    y = df_fs['spread_ann']
     X = sm.add_constant(df_fs[first_stage_vars])
     mod = sm.OLS(y, X)
     cluster_series = df_fs['CodConglomeradoPrudencial'].astype(str)

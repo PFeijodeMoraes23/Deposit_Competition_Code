@@ -119,8 +119,8 @@ def build_local_data():
     if 'dep_a1' in df_raw.columns:
         id_vars = ['CodConglomeradoPrudencial', 'mca_code', 'year', 'quarter']
         df_raw = df_raw.drop_duplicates(subset=id_vars)
-        df = pd.wide_to_long(df_raw, stubnames=['dep_a', 'spread_a', 'leave_one_out_mean_spread_a'], i=id_vars, j='deposit_type').reset_index()
-        df = df.rename(columns={'dep_a': 'deposit_balance', 'spread_a': 'spread_qoq', 'leave_one_out_mean_spread_a': 'leave_one_out_mean_spread'})
+        df = pd.wide_to_long(df_raw, stubnames=['dep_a', 'spread_a', 'spread_ann_a', 'leave_one_out_mean_spread_a'], i=id_vars, j='deposit_type').reset_index()
+        df = df.rename(columns={'dep_a': 'deposit_balance', 'spread_a': 'spread_qoq', 'spread_ann_a': 'spread_ann', 'leave_one_out_mean_spread_a': 'leave_one_out_mean_spread'})
     else:
         df = df_raw.copy()
 
@@ -285,7 +285,7 @@ def build_national_data():
         _other_cols = [c for c in df.columns if c not in _stub_cols and c not in _key_cols]
         df_pivoted = pd.wide_to_long(
             df[_key_cols + list(_stub_cols)],
-            stubnames=['dep_a', 'spread_a', 'leave_one_out_mean_spread_a'],
+            stubnames=['dep_a', 'spread_a', 'spread_ann_a', 'leave_one_out_mean_spread_a'],
             i=_key_cols, j='deposit_type',
         ).reset_index()
         df_pivoted = df_pivoted.rename(columns={'dep_a': 'deposit_balance', 'spread_a': 'spread_qoq'})

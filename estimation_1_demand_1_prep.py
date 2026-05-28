@@ -90,7 +90,7 @@ IV_BLP_LOO = ['loo_log_assets', 'mean_loo_log_assets',
               'n_rivals']
 IV_COST = ['personnel_cost_ratio_lag', 'admin_cost_ratio_lag', 'tax_cost_ratio_lag']
 IV_CAPITAL = ['indice_basileia_lag']
-EXTRA_KEEP_COLS = X_COLS + D_COLS + IV_BLP_LOO + IV_COST + IV_CAPITAL + ['segment', 'spread_qoq']
+EXTRA_KEEP_COLS = X_COLS + D_COLS + IV_BLP_LOO + IV_COST + IV_CAPITAL + ['segment', 'spread_qoq', 'spread_ann']
 
 def _resolve_runtime_paths() -> tuple[Path, Path, Path]:
     panel_csv = PANEL_CSV
@@ -115,8 +115,8 @@ def _reshape_panel_from_wide(df_raw: pd.DataFrame) -> pd.DataFrame:
     df_raw = df_raw.drop_duplicates(subset=id_vars)
     df_raw['is_B'] = (df_raw['CODMUN_IBGE'].astype(str) != '0')
     
-    df = pd.wide_to_long(df_raw, stubnames=['dep_a', 'spread_a'], i=id_vars, j='deposit_type').reset_index()
-    return df.rename(columns={'dep_a': 'deposit_balance', 'spread_a': 'spread_qoq'})
+    df = pd.wide_to_long(df_raw, stubnames=['dep_a', 'spread_a', 'spread_ann_a'], i=id_vars, j='deposit_type').reset_index()
+    return df.rename(columns={'dep_a': 'deposit_balance', 'spread_a': 'spread_qoq', 'spread_ann_a': 'spread_ann'})
 
 def _reshape_panel(df_raw: pd.DataFrame) -> pd.DataFrame:
     df_raw['mca_code'] = df_raw['mca_code'].astype(str)
@@ -148,11 +148,12 @@ def build_base_panel(panel_csv: Path) -> pd.DataFrame:
     df['deposit_rate_lag'] = df['risk_free_qoq_lag'] - df['spread_qoq_lag']
     df['gross_return_lag'] = 1 + df['deposit_rate_lag']
 
-    # Convert spread to basis points (×10,000) for numerical stability in BLP.
+    # Convert spreads to basis points (×10,000) for numerical stability in BLP.
     # deposit_rate_lag and gross_return_lag remain in decimal (needed for sleepiness).
     df['spread_qoq'] = df['spread_qoq'] * 10_000
+    df['spread_ann'] = df['spread_ann'] * 10_000
 
-    df = df.dropna(subset=['deposit_balance', 'lagged_deposits', 'spread_qoq', 'entity_id', 'time_id'])
+    df = df.dropna(subset=['deposit_balance', 'lagged_deposits', 'spread_qoq', 'spread_ann', 'entity_id', 'time_id'])
     
     df['constant'] = 1.0
     if 'year' in df.columns: df['pix_exists'] = ((df['year'] > 2020) | ((df['year'] == 2020) & (df['quarter'] == 4))).astype(float)

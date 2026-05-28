@@ -666,7 +666,7 @@ end
 # ==========================================================================
 function build_regressor_matrices(df::DataFrame)
     N           = nrow(df)
-    spread_cols = coalesce.(df.spread_qoq, 0.0)
+    spread_cols = coalesce.(df.spread_ann, 0.0)  # annualised — consumers compare annual returns
     x_mat       = zeros(N, L_PROD)
     for (i, col) in enumerate(X_COLS)
         col in names(df) && (x_mat[:, i] .= coalesce.(df[!, col], 0.0))
@@ -904,7 +904,7 @@ function run_blp_estimation(estim::Int, spec_id::Int, args,
     log_status("  Obs mapped to draws: $n_mapped / $N_obs ($(round(100*n_mapped/N_obs, digits=1))%)")
 
     prod_vec = zeros(N_obs, coef_dim)
-    spreads  = coalesce.(df.spread_qoq, 0.0)
+    spreads  = coalesce.(df.spread_ann, 0.0)  # annualised — consumers compare annual returns
     dep_types = Int.(coalesce.(df.deposit_type, 0))
     prod_vec[:, 1] .= spreads
     for (i, col) in enumerate(X_COLS)
