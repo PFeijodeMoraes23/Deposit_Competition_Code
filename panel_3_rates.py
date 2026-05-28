@@ -1759,9 +1759,10 @@ def append_rates_to_panel():
     
     # 2. National lags
     groupby_cols = ["CodConglomeradoPrudencial", "AnoMes"]
-    nat_stocks = df.groupby(groupby_cols)[["dep_a2", "dep_a3", "dep_a4", "dep_a5"]].sum().reset_index()
+    nat_stocks = df.groupby(groupby_cols)[["dep_a1", "dep_a2", "dep_a3", "dep_a4", "dep_a5"]].sum().reset_index()
     nat_stocks = nat_stocks.sort_values(groupby_cols)
-    
+    nat_stocks["total_deposits"] = nat_stocks[["dep_a1", "dep_a2", "dep_a4", "dep_a5"]].sum(axis=1, min_count=1)
+
     for col in ["dep_a2", "dep_a3", "dep_a4", "dep_a5"]:
         nat_stocks[f"lag_{col}"] = nat_stocks.groupby("CodConglomeradoPrudencial")[col].shift(1).fillna(0.0)
     
@@ -1870,7 +1871,8 @@ def append_rates_to_panel():
                  "spread_ann_a1", "spread_ann_a2", "spread_ann_a3", "spread_ann_a4", "spread_ann_a5"]
     df = df.drop(columns=[c for c in drop_cols if c in df.columns], errors='ignore')
 
-    cols_to_merge = ["CodConglomeradoPrudencial", "AnoMes", "risk_free_qoq", "risk_free_ann"] + \
+    cols_to_merge = ["CodConglomeradoPrudencial", "AnoMes", "risk_free_qoq", "risk_free_ann",
+                     "total_deposits"] + \
                     [f"rate_a{t}" for t in range(1, 6)] + \
                     [f"spread_a{t}" for t in range(1, 6)] + \
                     [f"spread_ann_a{t}" for t in range(1, 6)]

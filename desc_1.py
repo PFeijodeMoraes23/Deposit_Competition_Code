@@ -111,9 +111,11 @@ def main():
     df['region'] = df['region_code'].map(REGION_MAPPING)
     df.loc[df['bank_type'] == 'D', 'region'] = 'National'
 
+    df["total_deposits"] = df[["dep_a1", "dep_a2", "dep_a4", "dep_a5"]].sum(axis=1, min_count=1)
+
     # Defining target analytical variables
     vars_to_summarize = [
-        'dep_a1', 'dep_a2', 'dep_a3', 'dep_a4', 'dep_a5',
+        'dep_a1', 'dep_a2', 'dep_a3', 'dep_a4', 'dep_a5', 'total_deposits',
         'spread_a1', 'spread_a2', 'spread_a3', 'spread_a4', 'spread_a5',
         'gdp_per_capita', 'pop_total', 'fraction_65plus', 'cadunico_families_per1000',
         'pix_users_pf_per1000', 'pix_txns_pf', 'has_ip', 'connections_per100', 'branches_per1000',
@@ -122,6 +124,7 @@ def main():
 
     UNIT_MAP = {
         'dep_a1': 'R$', 'dep_a2': 'R$', 'dep_a3': 'R$', 'dep_a4': 'R$', 'dep_a5': 'R$',
+        'total_deposits': 'R$',
         'spread_a1': '%', 'spread_a2': '%', 'spread_a3': '%', 'spread_a4': '%', 'spread_a5': '%',
         'gdp_per_capita': 'R$', 'pop_total': 'Count', 'fraction_65plus': 'Fraction',
         'cadunico_families_per1000': 'Per 1000', 'pix_users_pf_per1000': 'Per 1000',
@@ -181,6 +184,7 @@ def main():
         'dep_a3':   ('Deposits (A3)',                  'R\\$M',        1e6),
         'dep_a4':   ('Deposits (A4)',                  'R\\$M',        1e6),
         'dep_a5':   ('Deposits (A5)',                  'R\\$M',        1e6),
+        'total_deposits': ('Total Deposits (1+2+4+5)', 'R\\$M',        1e6),
         'spread_a1': ('Spread (A1)',                   'bp',           0.01),
         'spread_a2': ('Spread (A2)',                   'bp',           0.01),
         'spread_a3': ('Spread (A3)',                   'bp',           0.01),

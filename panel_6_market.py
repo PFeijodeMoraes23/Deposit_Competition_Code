@@ -661,7 +661,7 @@ _COL_ORDER = [
     "year", "quarter",
     "Source",
     # Deposit balances
-    "dep_a1", "dep_a2", "dep_a3", "dep_a4", "dep_outros", "dep_a5",
+    "dep_a1", "dep_a2", "dep_a3", "dep_a4", "dep_outros", "dep_a5", "total_deposits",
     "spread_a1", "spread_a2", "spread_a3", "spread_a4", "spread_a5",
     "leave_one_out_mean_spread_a1", "leave_one_out_mean_spread_a2",
     "leave_one_out_mean_spread_a3", "leave_one_out_mean_spread_a4",

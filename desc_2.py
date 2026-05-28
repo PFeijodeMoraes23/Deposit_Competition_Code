@@ -90,6 +90,7 @@ PIX_POST_START = (2020, 4)
 # ---------------------------------------------------------------------------
 # (label, unit string, scale divisor or None, decimals)
 LABEL_MAP = {
+    "total_deposits":            ("Total Deposits",          r"R\$M",        1e9,  2),
     "total_assets":              ("Total Assets",            r"R\$B",        1e9,  2),
     "log_total_assets":          ("Log Total Assets",        "",             None, 3),
     "equity_ratio":              ("Equity Ratio",            "",             None, 3),
@@ -306,10 +307,10 @@ def load_panel() -> pd.DataFrame:
 # Table 1: Bank-type cross-section
 # ---------------------------------------------------------------------------
 T1_VARS_B = ["total_assets", "equity_ratio",
-             "dep_a1", "dep_a2", "dep_a4", "dep_a5",
+             "dep_a1", "dep_a2", "dep_a4", "dep_a5", "total_deposits",
              "spread_ann_a4", "spread_ann_a5", "n_mcas_served"]
 T1_VARS_D = ["total_assets", "equity_ratio",
-             "dep_a1", "dep_a2", "dep_a4", "dep_a5",
+             "dep_a1", "dep_a2", "dep_a4", "dep_a5", "total_deposits",
              "spread_ann_a4", "spread_ann_a5"]
 
 
@@ -336,6 +337,7 @@ def _build_firm_quarter_B(df_b: pd.DataFrame) -> pd.DataFrame:
     # Zero deposits mean no active product in that firm-quarter — treat as missing so N matches spread
     for _a in ["dep_a1", "dep_a2", "dep_a4", "dep_a5"]:
         out[_a] = out[_a].where(out[_a] > 0)
+    out["total_deposits"] = out[["dep_a1", "dep_a2", "dep_a4", "dep_a5"]].sum(axis=1, min_count=1)
 
     # Deposit-weighted spreads (vectorized via numerator/denominator)
     work = df_b[grp_keys + ["spread_a4", "spread_a5", "dep_a4", "dep_a5"]].copy()
@@ -382,6 +384,7 @@ def _build_firm_quarter_D(df_d: pd.DataFrame) -> pd.DataFrame:
     # Zero deposits mean no active product in that firm-quarter — treat as missing so N matches spread
     for _a in ["dep_a1", "dep_a2", "dep_a4", "dep_a5"]:
         out[_a] = out[_a].where(out[_a] > 0)
+    out["total_deposits"] = out[["dep_a1", "dep_a2", "dep_a4", "dep_a5"]].sum(axis=1, min_count=1)
 
     # Deposit-weighted spreads
     work = df_d[grp_keys + ["spread_a4", "spread_a5", "dep_a4", "dep_a5"]].copy()
@@ -1110,15 +1113,16 @@ def render_table3(t3_df, weight_col, suffix, latest_year) -> str:
 # ---------------------------------------------------------------------------
 # Table 4: D-firm pre/post Pix (IK/CSS cluster-robust)
 # ---------------------------------------------------------------------------
-T4_VARS = ["log_total_assets", "log_dep_a4", "spread_ann_a4", "equity_ratio"]
+T4_VARS = ["log_total_assets", "log_dep", "log_dep_a4", "spread_ann_a4", "equity_ratio"]
 
 
 def build_table4(df: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
     df_d = df[df["bank_type"] == "D"].copy()
     df_d = df_d[["CodConglomeradoPrudencial", "year", "quarter", "post",
                  "total_assets", "equity_ratio", "dep_a4", "spread_a4",
-                 "risk_free_qoq"]].copy()
+                 "risk_free_qoq", "total_deposits"]].copy()
     df_d["log_total_assets"] = np.log(df_d["total_assets"].where(df_d["total_assets"] > 0))
+    df_d["log_dep"]       = np.log(df_d["total_deposits"].where(df_d["total_deposits"] > 0))
     df_d["log_dep_a4"]       = np.log(df_d["dep_a4"].where(df_d["dep_a4"] > 0))
     # Annualise spread: rf_ann - dep_rate_ann
     _rf_ann = (1 + df_d["risk_free_qoq"]) ** 4 - 1
