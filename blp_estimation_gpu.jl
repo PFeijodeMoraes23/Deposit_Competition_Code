@@ -386,7 +386,7 @@ function launch_logsumexp!(result::CuMatrix{GPU_T},
     n_groups == 0 && return
     grid  = (n_groups, cld(R, Int(RBLOCK)))
     block = (Int(RBLOCK),)
-    CUDA.@cuda threads=block grid=grid logsumexp_groups_kernel!(
+    CUDA.@cuda threads=block blocks=grid logsumexp_groups_kernel!(
         result, V, sort_idx, uval, grp_start,
         Int32(n_groups), Int32(N_obs), Int32(R))
 end
@@ -406,7 +406,7 @@ function launch_groupmax!(result::CuMatrix{GPU_T},
     n_groups == 0 && return
     grid  = (n_groups, cld(R, Int(RBLOCK)))
     block = (Int(RBLOCK),)
-    CUDA.@cuda threads=block grid=grid groupmax_kernel!(
+    CUDA.@cuda threads=block blocks=grid groupmax_kernel!(
         result, V, sort_idx, uval, grp_start,
         Int32(n_groups), Int32(N_obs), Int32(R))
 end

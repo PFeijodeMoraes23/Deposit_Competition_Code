@@ -17,10 +17,10 @@ ArgParse = "1, 2"
 # GPUCompiler PTXCompilerTarget kwcall MethodError seen with older CUDA.jl
 # resolutions. CUDA.jl ≥ 5.8 is needed for Julia 1.12 support on the Bouchet
 # cluster (default module is now Julia/1.12.5).
-# Upper-bounded below 6.1 because CUDA.jl 6.1.0 passes a `grid=` kwarg to
-# GPUCompiler.PTXCompilerTarget that is not accepted by GPUCompiler ≤ 1.12,
-# producing a MethodError at the first kernel JIT (observed on Bouchet GPU
-# nodes with RTX 5000 Ada, sm_89).
+# Upper bound kept at 6.0 until compatibility with newer CUDACore is verified.
+# NOTE: the `grid=` kwarg error observed on Bouchet was a bug in our own kernel
+# launch wrappers (fixed: grid= → blocks= in blp_estimation_gpu.jl), not a
+# CUDA.jl 6.1 issue. The bound can be relaxed once tested.
 CUDA = "5.8 - 6.0"
 DataFrames = "1"
 Distributions = "0.25"
