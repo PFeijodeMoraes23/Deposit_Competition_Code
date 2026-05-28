@@ -90,9 +90,10 @@ PIX_POST_START = (2020, 4)
 # ---------------------------------------------------------------------------
 # (label, unit string, scale divisor or None, decimals)
 LABEL_MAP = {
-    "total_deposits":            ("Total Deposits",          r"R\$M",        1e9,  2),
+    "total_deposits":            ("Total Deposits", r"R\$M",        1e6,  2),
     "total_assets":              ("Total Assets",            r"R\$B",        1e9,  2),
     "log_total_assets":          ("Log Total Assets",        "",             None, 3),
+    "log_dep":                   ("Log Deposits",  "",             None, 3),
     "equity_ratio":              ("Equity Ratio",            "",             None, 3),
     "dep_a1":                    ("Deposits (1)",            r"R\$M",        1e6,  2),
     "dep_a2":                    ("Deposits (2)",            r"R\$M",        1e6,  2),
