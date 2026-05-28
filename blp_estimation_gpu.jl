@@ -42,7 +42,7 @@ CUDA.allowscalar(false)   # hard-fail on accidental scalar GPU indexing
 # ── Device floating-point precision ─────────────────────────────────────────
 # Change to Float64 if the GPU has fast FP64 (e.g. A100 SXM) and you need
 # tighter numerical tolerances on the inner contraction.
-const GPU_T = Float32
+const GPU_T = Float64
 
 # ==========================================================================
 # GPU Buffers

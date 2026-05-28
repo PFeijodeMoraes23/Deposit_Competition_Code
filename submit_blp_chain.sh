@@ -27,7 +27,7 @@ set -euo pipefail
 ESTIM="${1:?Usage: bash submit_blp_chain.sh <ESTIM_ID> [R]}"
 R="${2:-2000}"
 SEED=42
-CPUS=4
+CPUS=8
 SPEC=12
 PROJECT_DIR="${SLURM_SUBMIT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
 LOG_DIR="${PROJECT_DIR}/logs"
@@ -96,8 +96,8 @@ BLP_COMMON_ARGS="--spec ${SPEC} --R ${R} --seed ${SEED} \
 # ── Stage: sigma ─────────────────────────────────────────────────────────────
 JID_SIGMA=$(sbatch --parsable \
     --job-name="blp_E${ESTIM}_sigma_R${R}" \
-    --partition=gpu \
-    --gpus=1 \
+    --partition=gpu_h200 \
+    --gpus=h200:1 \
     --time="${T_SIGMA}" \
     --nodes=1 --ntasks=1 --cpus-per-task="${CPUS}" \
     --mem="${MEM_ALL}" \
@@ -118,8 +118,8 @@ echo "  Submitted sigma:    Job ${JID_SIGMA}"
 JID_RC2=$(sbatch --parsable \
     --dependency=afterok:${JID_SIGMA} \
     --job-name="blp_E${ESTIM}_rc2_R${R}" \
-    --partition=gpu \
-    --gpus=1 \
+    --partition=gpu_h200 \
+    --gpus=h200:1 \
     --time="${T_RC2}" \
     --nodes=1 --ntasks=1 --cpus-per-task="${CPUS}" \
     --mem="${MEM_ALL}" \
@@ -140,8 +140,8 @@ echo "  Submitted rc2:      Job ${JID_RC2} (after ${JID_SIGMA})"
 JID_RC3=$(sbatch --parsable \
     --dependency=afterok:${JID_RC2} \
     --job-name="blp_E${ESTIM}_rc3_R${R}" \
-    --partition=gpu \
-    --gpus=1 \
+    --partition=gpu_h200 \
+    --gpus=h200:1 \
     --time="${T_RC3}" \
     --nodes=1 --ntasks=1 --cpus-per-task="${CPUS}" \
     --mem="${MEM_ALL}" \
@@ -162,8 +162,8 @@ echo "  Submitted rc3:      Job ${JID_RC3} (after ${JID_RC2})"
 JID_RC4=$(sbatch --parsable \
     --dependency=afterok:${JID_RC3} \
     --job-name="blp_E${ESTIM}_rc4_R${R}" \
-    --partition=gpu \
-    --gpus=1 \
+    --partition=gpu_h200 \
+    --gpus=h200:1 \
     --time="${T_RC4}" \
     --nodes=1 --ntasks=1 --cpus-per-task="${CPUS}" \
     --mem="${MEM_ALL}" \
@@ -184,8 +184,8 @@ echo "  Submitted rc4:      Job ${JID_RC4} (after ${JID_RC3})"
 JID_FULL=$(sbatch --parsable \
     --dependency=afterok:${JID_RC4} \
     --job-name="blp_E${ESTIM}_full_R${R}" \
-    --partition=gpu \
-    --gpus=1 \
+    --partition=gpu_h200 \
+    --gpus=h200:1 \
     --time="${T_FULL}" \
     --nodes=1 --ntasks=1 --cpus-per-task="${CPUS}" \
     --mem="${MEM_ALL}" \
@@ -206,8 +206,8 @@ echo "  Submitted full:     Job ${JID_FULL} (after ${JID_RC4})"
 JID_EXT1=$(sbatch --parsable \
     --dependency=afterok:${JID_FULL} \
     --job-name="blp_E${ESTIM}_ext1_R${R}" \
-    --partition=gpu \
-    --gpus=1 \
+    --partition=gpu_h200 \
+    --gpus=h200:1 \
     --time="${T_EXT1}" \
     --nodes=1 --ntasks=1 --cpus-per-task="${CPUS}" \
     --mem="${MEM_ALL}" \
@@ -228,8 +228,8 @@ echo "  Submitted ext1:     Job ${JID_EXT1} (after ${JID_FULL})"
 JID_EXT2=$(sbatch --parsable \
     --dependency=afterok:${JID_EXT1} \
     --job-name="blp_E${ESTIM}_ext2_R${R}" \
-    --partition=gpu \
-    --gpus=1 \
+    --partition=gpu_h200 \
+    --gpus=h200:1 \
     --time="${T_EXT2}" \
     --nodes=1 --ntasks=1 --cpus-per-task="${CPUS}" \
     --mem="${MEM_ALL}" \
@@ -250,8 +250,8 @@ echo "  Submitted ext2:     Job ${JID_EXT2} (after ${JID_EXT1})"
 JID_EXT=$(sbatch --parsable \
     --dependency=afterok:${JID_EXT2} \
     --job-name="blp_E${ESTIM}_extended_R${R}" \
-    --partition=gpu \
-    --gpus=1 \
+    --partition=gpu_h200 \
+    --gpus=h200:1 \
     --time="${T_EXT}" \
     --nodes=1 --ntasks=1 --cpus-per-task="${CPUS}" \
     --mem="${MEM_ALL}" \
