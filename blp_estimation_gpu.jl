@@ -725,7 +725,7 @@ function run_blp_estimation_gpu(estim::Int, spec_id::Int, args,
 
     # ── Build product characteristics and IV matrices ─────────────────────
     prod_vec  = zeros(N_obs, coef_dim)
-    spreads   = coalesce.(df.spread_qoq, 0.0)
+    spreads   = coalesce.(df.spread_ann, 0.0)  # annualised — matches blp_estimation.jl and logit
     dep_types = Int.(coalesce.(df.deposit_type, 0))
     prod_vec[:, 1] .= spreads
     for (i, col) in enumerate(X_COLS)

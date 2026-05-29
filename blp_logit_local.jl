@@ -34,7 +34,8 @@ using JSON3, Serialization, Printf, Dates
 const SPEC_ID = 12
 
 const X_COLS = ["fgc_covered", "has_ip", "seg_S2", "seg_S3", "seg_S4", "seg_S5",
-                "log_total_assets_lag", "equity_ratio_lag"]
+                "log_total_assets_lag"]
+const CORE_COLS = ["fgc_covered", "has_ip", "log_total_assets_lag"]
 
 const IV_BLP_LOO = ["loo_log_assets", "mean_loo_log_assets",
                     "loo_equity_ratio", "mean_loo_equity_ratio",
@@ -57,9 +58,10 @@ const ESTIM_STRATEGIES = [
 
 # Sub-model definitions
 const SUB_MODELS = [
-    (name="priceonly",     xcols=String[],  add_dtype=false),
-    (name="full",          xcols=X_COLS,    add_dtype=false),
-    (name="full_dtype",    xcols=X_COLS,    add_dtype=true),
+    (name="priceonly",  xcols=String[],    add_dtype=false),
+    (name="core",       xcols=CORE_COLS,   add_dtype=false),
+    (name="full",       xcols=X_COLS,      add_dtype=false),
+    (name="full_dtype", xcols=X_COLS,      add_dtype=true),
 ]
 
 # ==========================================================================

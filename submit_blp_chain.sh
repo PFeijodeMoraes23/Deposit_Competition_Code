@@ -91,7 +91,7 @@ echo 'Resolving Julia packages: '\$(date)
 julia --project=${PROJECT_DIR} -e 'using Pkg; Pkg.resolve(); Pkg.instantiate(); Pkg.precompile(); using CUDA; @info \"CUDA\" CUDA.versioninfo()'"
 
 BLP_COMMON_ARGS="--spec ${SPEC} --R ${R} --seed ${SEED} \
-    --tol-inner 1e-12 --max-inner 5000 --tol-outer 1e-6 --hpc"
+    --tol-inner 1e-10 --max-inner 5000 --tol-outer 1e-6 --hpc"
 
 # ── Stage: sigma ─────────────────────────────────────────────────────────────
 JID_SIGMA=$(sbatch --parsable \

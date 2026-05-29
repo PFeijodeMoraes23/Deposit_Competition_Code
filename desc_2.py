@@ -1570,7 +1570,7 @@ def render_appendix_b10() -> str:
     ]
     return _longtable(
         caption  = r"Rates and Spreads",
-        label    = "tab:rates_spreads",
+        label    = "tab:macro_rates_spreads",
         col_spec = r">{\ttfamily\small}p{5.5cm} p{10.0cm}",
         header_row = r"\normalfont\textbf{Variable} & \textbf{Description}",
         rows     = rows,

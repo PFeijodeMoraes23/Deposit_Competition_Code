@@ -59,39 +59,10 @@ import os
 
 ROOT = pathlib.Path(__file__).resolve().parent
 PYTHON_EXE = sys.executable
-LATEX_SCRIPT   = ROOT / "make_blp_latex_tables.py"
-LOGIT_SCRIPT   = ROOT / "blp_logit_local.jl"
-DRAWS_SCRIPT   = ROOT / "blp_draws.jl"
-ESTIM_SCRIPT   = ROOT / "blp_estimation.jl"
-
-# ── LaTeX mode ───────────────────────────────────────────────────────────────
-def run_latex_for_est(est_id: int):
-    print(f"Launching LaTeX builder for Estimation {est_id}...")
-    cmd = [PYTHON_EXE, str(LATEX_SCRIPT), "--est", str(est_id)]
-    try:
-        res = subprocess.run(cmd, capture_output=True, text=True, check=True)
-        return (est_id, True, res.stdout)
-    except subprocess.CalledProcessError as e:
-        return (est_id, False, f"Error:\n{e.stderr}\n{e.stdout}")
-
-def run_latex_pipeline():
-    routines = [1, 2, 3, 4, 5]
-    if not LATEX_SCRIPT.exists():
-        print(f"Cannot find script at: {LATEX_SCRIPT}")
-        sys.exit(1)
-
-    print(f"=== Beginning Parallel BLP LaTeX Pipeline for Routines {routines} ===")
-    with concurrent.futures.ProcessPoolExecutor(max_workers=len(routines)) as executor:
-        futures = {executor.submit(run_latex_for_est, r): r for r in routines}
-        for future in concurrent.futures.as_completed(futures):
-            est_id, success, output = future.result()
-            print(f"\n--- Output from Estimation {est_id} ---")
-            print(output.strip())
-            if not success:
-                print(f"[!] Estimation {est_id} LaTeX generation FAILED.")
-            else:
-                print(f"[+] Estimation {est_id} LaTeX generation SUCCESSFUL.")
-    print("\n=== BLP LaTeX Pipeline Complete ===")
+LOGIT_TABLE_SCRIPT = ROOT / "make_blp_logit_table.py"
+LOGIT_SCRIPT       = ROOT / "blp_logit_local.jl"
+DRAWS_SCRIPT       = ROOT / "blp_draws.jl"
+ESTIM_SCRIPT       = ROOT / "blp_estimation.jl"
 
 
 # ── Julia mode ───────────────────────────────────────────────────────────────
@@ -140,6 +111,16 @@ def run_logit(args):
     env["PYTHON"] = PYTHON_EXE
     env["JULIA_PYTHONCALL_EXE"] = PYTHON_EXE
     subprocess.run(cmd, env=env, check=True)
+
+    # Generate logit table automatically after estimation
+    print(f"\n=== Generating Logit Table ===")
+    if not LOGIT_TABLE_SCRIPT.exists():
+        print(f"WARNING: {LOGIT_TABLE_SCRIPT} not found. Skipping table generation.")
+        return
+    try:
+        subprocess.run([PYTHON_EXE, str(LOGIT_TABLE_SCRIPT)], check=True)
+    except subprocess.CalledProcessError as e:
+        print(f"WARNING: Table generation failed (exit {e.returncode})")
 
 
 # ── Mode: draws ───────────────────────────────────────────────────────────────
@@ -217,21 +198,14 @@ def run_estimate_pipeline(args):
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description="BLP pipeline")
     mode = p.add_mutually_exclusive_group()
-    mode.add_argument("--latex",    action="store_true", default=False)
     mode.add_argument("--logit",    action="store_true", default=False,
-                      help="Run blp_logit_local.jl (non-RC, local)")
+                      help="Run blp_logit_local.jl (non-RC, local) and generate logit tables")
     mode.add_argument("--draws",    action="store_true", default=False,
                       help="Run blp_draws.jl to pre-compute simulation draws")
     mode.add_argument("--estimate", action="store_true", default=False,
                       help="Run blp_estimation.jl")
     mode.add_argument("--all",      action="store_true", default=False,
                       help="Run logit -> draws -> estimate in sequence")
-    mode.add_argument("--julia-then-latex", action="store_true", default=False,
-                      dest="julia_then_latex",
-                      help="Run estimate then build LaTeX tables")
-    mode.add_argument("--logit-then-latex", action="store_true", default=False,
-                      dest="logit_then_latex",
-                      help="Run blp_logit_local.jl then build LaTeX tables from available results")
 
     g = p.add_argument_group("Estimation options")
     g.add_argument("--est",        type=str,   default="12")
@@ -263,14 +237,6 @@ def main():
         run_draws(args)
     elif args.estimate:
         run_estimate_pipeline(args)
-    elif args.julia_then_latex:
-        run_estimate_pipeline(args)
-        run_latex_pipeline()
-    elif args.logit_then_latex:
-        run_logit(args)
-        run_latex_pipeline()
-    else:
-        run_latex_pipeline()
 
 
 if __name__ == "__main__":

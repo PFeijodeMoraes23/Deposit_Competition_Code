@@ -43,7 +43,7 @@ BLAS.set_num_threads(min(8, Threads.nthreads()))
 # 0. Constants (must match blp_loop.jl and blp_draws.jl)
 # ==========================================================================
 const X_COLS = ["fgc_covered", "has_ip", "seg_S2", "seg_S3", "seg_S4", "seg_S5",
-                "log_total_assets_lag", "equity_ratio_lag"]
+                "log_total_assets_lag"]
 const L_PROD = length(X_COLS)
 const K_TYPES = 4
 const K_LIST  = [1, 2, 4, 5]
@@ -176,15 +176,15 @@ function build_theta2_structure(stage::String)
         ]
         return sigma_idx, pi_inter, length(sigma_idx) + length(pi_inter)
     elseif stage == "extended"
-        # RC8: ext2 + π(equity_ratio × cadunico_families)
+        # RC8: ext2 + π(fgc_covered × cadunico_families_per1000)
         sigma_idx = [1, 1 + findfirst(==("log_total_assets_lag"), X_COLS)]
         pi_inter  = [
-            (1,                                                 findfirst(==("gdp_per_capita"),              D_COLS)),
-            (1,                                                 findfirst(==("fraction_65plus"),             D_COLS)),
-            (1,                                                 findfirst(==("connections_per100"),          D_COLS)),
-            (1 + findfirst(==("log_total_assets_lag"), X_COLS), findfirst(==("gdp_per_capita"),             D_COLS)),
-            (1 + findfirst(==("fgc_covered"),          X_COLS), findfirst(==("fraction_65plus"),            D_COLS)),
-            (1 + findfirst(==("equity_ratio_lag"),     X_COLS), findfirst(==("cadunico_families_per1000"),  D_COLS)),
+            (1,                                                  findfirst(==("gdp_per_capita"),              D_COLS)),
+            (1,                                                  findfirst(==("fraction_65plus"),             D_COLS)),
+            (1,                                                  findfirst(==("connections_per100"),          D_COLS)),
+            (1 + findfirst(==("log_total_assets_lag"), X_COLS),  findfirst(==("gdp_per_capita"),             D_COLS)),
+            (1 + findfirst(==("fgc_covered"),          X_COLS),  findfirst(==("fraction_65plus"),            D_COLS)),
+            (1 + findfirst(==("fgc_covered"),          X_COLS),  findfirst(==("cadunico_families_per1000"),  D_COLS)),
         ]
         return sigma_idx, pi_inter, length(sigma_idx) + length(pi_inter)
     else

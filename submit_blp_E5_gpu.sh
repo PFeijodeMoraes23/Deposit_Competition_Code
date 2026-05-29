@@ -62,7 +62,7 @@ julia --project="${PROJECT_DIR}" --threads=${SLURM_CPUS_PER_TASK} \
     "${PROJECT_DIR}/blp_estimation_gpu.jl" \
     --estim 5 --spec 12 --stage sigma \
     --R 2000 --seed 42 \
-    --tol-inner 1e-12 --max-inner 5000 --tol-outer 1e-6 \
+    --tol-inner 1e-10 --max-inner 5000 --tol-outer 1e-6 \
     --hpc
 
 echo "E5 GPU complete: $(date)"
