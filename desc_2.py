@@ -1409,13 +1409,13 @@ def render_appendix_b3_vars() -> str:
         r"    \midrule",
         r"    risk\_free\_qoq      & Risk-free rate: equals \texttt{selic\_qoq}. \\",
         r"    deposit\_rate\_qoq   & Type-specific deposit rate, QoQ decimal. Varies by type $k$ (see text). \\",
-        r"    spread\_qoq         & $r^{\mathrm{rf}}_t - r^{\mathrm{dep}}_{jkmt}$, QoQ decimal. Used in sleepiness estimation and deposit dynamics. \\",
+        r"    spread\_qoq         & $r^{\mathrm{f}}_t - r^{\mathrm{dep}}_{jkmt}$, QoQ decimal. Used in sleepiness estimation and deposit dynamics. \\",
         r"    \addlinespace[0.4em]",
         r"    \multicolumn{2}{l}{\textit{Annualised counterparts (for demand estimation)}} \\",
         r"    \midrule",
         r"    risk\_free\_ann      & $(1+\texttt{risk\_free\_qoq})^4 - 1$. \\",
         r"    deposit\_rate\_ann   & $(1+\texttt{deposit\_rate\_qoq})^4 - 1$. \\",
-        r"    spread\_ann         & $r^{\mathrm{rf,ann}}_t - r^{\mathrm{dep,ann}}_{jkmt}$. Price variable in demand estimation. \\",
+        r"    spread\_ann         & $r^{\mathrm{f,ann}}_t - r^{\mathrm{dep,ann}}_{jkmt}$. Price variable in demand estimation. \\",
     ]
     return _longtable(
         caption    = r"Rates and Spreads",
@@ -1563,10 +1563,10 @@ def render_appendix_b10() -> str:
         r"    meta\_selic          & COPOM Selic target rate (\% p.a.) at end of quarter. Source: BCB SGS. \\",
         r"    risk\_free\_qoq      & Risk-free rate used in spread construction; equals \texttt{selic\_qoq}. \\",
         r"    deposit\_rate\_qoq   & Type-specific deposit rate, QoQ decimal. Varies by type (see text). \\",
-        r"    spread\_qoq         & $r^{\text{rf}}_t - r^{\text{dep}}_{jkmt}$, QoQ decimal. Used in sleepiness estimation. \\",
+        r"    spread\_qoq         & $r^{\text{f}}_t - r^{\text{dep}}_{jkmt}$, QoQ decimal. Used in sleepiness estimation. \\",
         r"    risk\_free\_ann      & $(1+\texttt{risk\_free\_qoq})^4 - 1$; annualised SELIC. \\",
         r"    deposit\_rate\_ann   & $(1+\texttt{deposit\_rate\_qoq})^4 - 1$; annualised deposit rate. \\",
-        r"    spread\_ann         & $r^{\text{rf,ann}}_t - r^{\text{dep,ann}}_{jkmt}$, annualised. Used in demand estimation. \\",
+        r"    spread\_ann         & $r^{\text{f,ann}}_t - r^{\text{dep,ann}}_{jkmt}$, annualised. Used in demand estimation. \\",
     ]
     return _longtable(
         caption  = r"Rates and Spreads",
