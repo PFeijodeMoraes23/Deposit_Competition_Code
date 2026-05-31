@@ -666,7 +666,7 @@ end
 # ==========================================================================
 function build_regressor_matrices(df::DataFrame)
     N           = nrow(df)
-    spread_cols = coalesce.(df.spread_ann, 0.0)  # annualised — consumers compare annual returns
+    spread_cols = coalesce.(df.spread_ann, 0.0) ./ 100.0  # bps → percentage points (÷100)
     x_mat       = zeros(N, L_PROD)
     for (i, col) in enumerate(X_COLS)
         col in names(df) && (x_mat[:, i] .= coalesce.(df[!, col], 0.0))
@@ -904,7 +904,7 @@ function run_blp_estimation(estim::Int, spec_id::Int, args,
     log_status("  Obs mapped to draws: $n_mapped / $N_obs ($(round(100*n_mapped/N_obs, digits=1))%)")
 
     prod_vec = zeros(N_obs, coef_dim)
-    spreads  = coalesce.(df.spread_ann, 0.0)  # annualised — consumers compare annual returns
+    spreads  = coalesce.(df.spread_ann, 0.0) ./ 100.0  # bps → percentage points (÷100)
     dep_types = Int.(coalesce.(df.deposit_type, 0))
     prod_vec[:, 1] .= spreads
     for (i, col) in enumerate(X_COLS)
@@ -967,9 +967,9 @@ function run_blp_estimation(estim::Int, spec_id::Int, args,
     end
     theta2_0 === nothing && (theta2_0 = randn(MersenneTwister(seed), n_params) .* 0.01)
 
-    # ── Tighter bounds per CG2020 ────────────────────────────────────────
-    lo = fill(-5.0, n_params)
-    hi = fill( 5.0, n_params)
+    # ── Bounds: ±2 in pp units keeps σ×ν×spread O(1) for typical spreads ──
+    lo = fill(-2.0, n_params)
+    hi = fill( 2.0, n_params)
 
     println("  Outer minimisation: $(args["method"])")
     println("  Inner tolerance: $(args["tol_inner"])")

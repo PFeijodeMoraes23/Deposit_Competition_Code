@@ -64,8 +64,8 @@ def main():
     )
 
     _run(
-        "BLP Logit + LaTeX (run_blp_pipeline.py --logit-then-latex)",
-        [PYTHON_EXE, str(ROOT / "run_blp_pipeline.py"), "--logit-then-latex"],
+        "BLP Logit + LaTeX (run_blp_pipeline.py --logit)",
+        [PYTHON_EXE, str(ROOT / "run_blp_pipeline.py"), "--logit"],
     )
 
     print(f"\n{'=' * 60}")

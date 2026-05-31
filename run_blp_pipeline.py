@@ -211,7 +211,8 @@ def build_parser() -> argparse.ArgumentParser:
     g.add_argument("--est",        type=str,   default="12")
     g.add_argument("--spec",       type=str,   default="12")
     g.add_argument("--stage",      type=str,   default="sequence",
-                   choices=["logit", "sigma", "full", "extended", "sequence"])
+                   choices=["logit", "sigma", "rc2", "rc3", "rc4",
+                            "full", "ext1", "ext2", "extended", "sequence"])
     g.add_argument("--R",          type=int,   default=2000)
     g.add_argument("--seed",       type=int,   default=42)
     g.add_argument("--workers",    type=int,   default=None)

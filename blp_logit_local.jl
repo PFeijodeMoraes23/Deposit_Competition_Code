@@ -94,8 +94,8 @@ end
 function build_matrices(df::DataFrame, xcols::Vector{String}, add_dtype::Bool)
     N = nrow(df)
 
-    # Spread (endogenous price variable — annualised, consumers compare annual returns)
-    spread = Float64.(coalesce.(df.spread_ann, 0.0))
+    # Spread in percentage points (÷100 to convert from bps stored in parquet)
+    spread = Float64.(coalesce.(df.spread_ann, 0.0)) ./ 100.0
 
     # Product characteristics matrix X
     n_x = length(xcols) + (add_dtype ? 1 : 0)

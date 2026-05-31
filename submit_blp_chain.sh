@@ -27,7 +27,7 @@ set -euo pipefail
 ESTIM="${1:?Usage: bash submit_blp_chain.sh <ESTIM_ID> [R]}"
 R="${2:-2000}"
 SEED=42
-CPUS=8
+CPUS=6
 SPEC=12
 PROJECT_DIR="${SLURM_SUBMIT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
 LOG_DIR="${PROJECT_DIR}/logs"
