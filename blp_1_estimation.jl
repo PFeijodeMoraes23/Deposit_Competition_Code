@@ -788,7 +788,23 @@ function load_precomputed_draws(draws_dir::String, R::Int, seed::Int)
     draws_3d   = deserialize(demo_path)::Array{Float64,3}
     key_index  = deserialize(key_path)::Dict{Tuple{String,String},Int}
 
+    # Normalize each demographic dimension to unit std so that π bounds of ±2
+    # are meaningful for all demographics regardless of their natural scale
+    # (gdp_per_capita ~50,000 vs fraction_65plus ~0.15 differ by ~300,000×).
+    # π is then in "utility per 1-std unit of demographic × 1 pp of spread".
+    D = size(draws_3d, 3)
+    demo_scale = ones(D)
+    for d in 1:D
+        vals = vec(draws_3d[2:end, :, d])   # skip padding row (index 1)
+        σ = std(vals)
+        if σ > 1e-10
+            demo_scale[d] = σ
+            draws_3d[:, :, d] ./= σ
+        end
+    end
+
     log_status("  ν-draws: $(size(nu_draws)) | demo_draws: $(size(draws_3d)) | keys: $(length(key_index))")
+    log_status("  Demo σ-scale (for π re-interpretation): $(round.(demo_scale, sigdigits=4))")
     return nu_draws, draws_3d, key_index
 end
 
@@ -1197,9 +1213,9 @@ function main()
                     "spec_id"            => get(res, "spec_id", sp),
                     "stage"              => get(res, "stage", current_stage),
                     "theta1"             => round.(get(res, "theta1",    Float64[]), sigdigits=8),
-                    "theta1_se"          => round.(get(res, "theta1_se", Float64[]), sigdigits=8),
+                    "theta1_se"          => replace(round.(get(res, "theta1_se", Float64[]), sigdigits=8), NaN=>0.0),
                     "theta2"             => round.(get(res, "theta2",    Float64[]), sigdigits=8),
-                    "theta2_se"          => round.(get(res, "theta2_se", Float64[]), sigdigits=8),
+                    "theta2_se"          => replace(round.(get(res, "theta2_se", Float64[]), sigdigits=8), NaN=>0.0),
                     "Q_value"            => get(res, "Q_value",   0.0),
                     "converged"          => get(res, "converged", false),
                     "param_names_theta1" => get(res, "param_names_theta1", String[]),

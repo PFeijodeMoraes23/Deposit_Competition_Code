@@ -9,15 +9,15 @@
 # Submit:  sbatch submit_blp_logit.sh
 # Then:    sbatch submit_blp_E5.sh
 #
-#SBATCH --job-name=blp_logit
+#SBATCH --job-name=blp_1_logit
 #SBATCH --partition=day
 #SBATCH --time=00:15:00
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=8G
-#SBATCH --output=/nfs/roberts/project/pi_mf2263/pf382/dep_comp/scripts/logs/blp_logit_%j.out
-#SBATCH --error=/nfs/roberts/project/pi_mf2263/pf382/dep_comp/scripts/logs/blp_logit_%j.err
+#SBATCH --output=/nfs/roberts/project/pi_mf2263/pf382/dep_comp/scripts/logs/blp_1_logit_%j.out
+#SBATCH --error=/nfs/roberts/project/pi_mf2263/pf382/dep_comp/scripts/logs/blp_1_logit_%j.err
 #SBATCH --mail-type=END,FAIL
 #SBATCH --mail-user=pedro.feijodemoraes@yale.edu
 
@@ -42,7 +42,7 @@ echo " Saves: logit_delta_E5_spec_12.{jls,bin}"
 echo "======================================"
 
 julia --project="${PROJECT_DIR}" --threads=${SLURM_CPUS_PER_TASK} \
-    "${PROJECT_DIR}/blp_estimation.jl" \
+    "${PROJECT_DIR}/blp_1_estimation.jl" \
     --estim 5 --spec 12 --stage logit \
     --R 2000 --seed 42 \
     --hpc

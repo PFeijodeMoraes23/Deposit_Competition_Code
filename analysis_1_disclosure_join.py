@@ -352,14 +352,24 @@ def merge_all(panel_agg: pd.DataFrame, firm_map: pd.DataFrame,
                      "NomeInstituicao", "__has_panel"]],
         on=["cong_prud", "year", "quarter"], how="left")
 
-    # deposits_per_customer_brl: prefer disclosed BRL deposits, else panel (R$
-    # thousands -> R$). Divide by Brazil customer count where available.
-    panel_brl = merged["panel_total_deposits"] * 1000.0
-    dep_brl_for_ratio = merged["disclosed_deposits_brl"].where(
-        merged["disclosed_deposits_brl"].notna(), panel_brl)
-    cust = merged["disclosed_customers_brazil"]
-    merged["deposits_per_customer_brl"] = np.where(
-        cust.notna() & (cust > 0), dep_brl_for_ratio / cust, np.nan)
+    # deposits_per_customer_brl: disclosed BRL deposits, else disclosed USD->BRL
+    # (latam firms like Nubank/MercadoPago report deposits in USD), else panel
+    # (R$ thousands -> R$). Customer count: Brazil preferred, else broad scope so
+    # the deposit and customer scopes match.
+    FX_USD_BRL = 5.0
+    dep_brl_for_ratio = merged["disclosed_deposits_brl"]
+    dep_brl_for_ratio = dep_brl_for_ratio.where(
+        dep_brl_for_ratio.notna(), merged["disclosed_deposits_usd"] * FX_USD_BRL)
+    dep_brl_for_ratio = dep_brl_for_ratio.where(
+        dep_brl_for_ratio.notna(), merged["panel_total_deposits"] * 1000.0)
+    cust = merged["disclosed_customers_brazil"].where(
+        merged["disclosed_customers_brazil"].notna(),
+        merged.get("disclosed_customers_broad"))
+    dpc = np.where(cust.notna() & (cust > 0), dep_brl_for_ratio / cust, np.nan)
+    # Clamp to a plausible per-customer balance (R$50–200k). Values outside flag a
+    # unit mismatch or a mis-parsed customer count (text extraction is noisy) and
+    # are dropped rather than shown.
+    merged["deposits_per_customer_brl"] = np.where((dpc >= 50) & (dpc <= 2e5), dpc, np.nan)
 
     # Finalise columns.
     for c in OUT_COLUMNS:

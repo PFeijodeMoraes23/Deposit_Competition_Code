@@ -1,14 +1,13 @@
 #!/bin/bash
-# DEPRECATED — DEFUNCT. USE submit_blp_E5.sh INSTEAD.
-#SBATCH --job-name=blp_E2
+#SBATCH --job-name=blp_1_draws
 #SBATCH --partition=day
-#SBATCH --time=24:00:00
+#SBATCH --time=02:00:00
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=32
-#SBATCH --mem=80G
-#SBATCH --output=/nfs/roberts/project/pi_mf2263/pf382/dep_comp/scripts/logs/blp_E2_%j.out
-#SBATCH --error=/nfs/roberts/project/pi_mf2263/pf382/dep_comp/scripts/logs/blp_E2_%j.err
+#SBATCH --cpus-per-task=8
+#SBATCH --mem=64G
+#SBATCH --output=/nfs/roberts/project/pi_mf2263/pf382/dep_comp/scripts/logs/blp_1_draws_%j.out
+#SBATCH --error=/nfs/roberts/project/pi_mf2263/pf382/dep_comp/scripts/logs/blp_1_draws_%j.err
 #SBATCH --mail-type=BEGIN,END,FAIL,TIME_LIMIT_90
 #SBATCH --mail-user=pedro.feijodemoraes@yale.edu
 
@@ -21,7 +20,8 @@ module load Julia/1.11.4-linux-x86_64
 set -euo pipefail
 
 PROJECT_DIR="${SLURM_SUBMIT_DIR}"
-mkdir -p "${PROJECT_DIR}/logs"
+LOG_DIR="${PROJECT_DIR}/logs"
+mkdir -p "${LOG_DIR}"
 
 # ── Resolve packages for Julia 1.10 ─────────────────────────────────────────
 if [ -f "${PROJECT_DIR}/Manifest.toml" ] && ! grep -q 'julia_version = "1.10' "${PROJECT_DIR}/Manifest.toml"; then
@@ -32,16 +32,16 @@ echo "Resolving Julia packages: $(date)"
 julia --project="${PROJECT_DIR}" -e "using Pkg; Pkg.resolve(); Pkg.instantiate()"
 
 echo "======================================"
-echo " BLP Estimation E2 sigma — $(date)"
-echo " stage=sigma | R=2000 | threads=${SLURM_CPUS_PER_TASK}"
-echo " (logit delta warm-start loaded if logit_delta_E2_spec_12.jls present)"
+echo " BLP Draws — blp_1_draws.jl"
+echo " R=2000 | seed=42 | $(date)"
 echo "======================================"
 
 julia --project="${PROJECT_DIR}" --threads=${SLURM_CPUS_PER_TASK} \
-    "${PROJECT_DIR}/blp_estimation.jl" \
-    --estim 2 --spec 12 --stage sigma \
-    --R 2000 --seed 42 \
-    --tol-inner 1e-12 --max-inner 5000 --tol-outer 1e-6 \
+    "${PROJECT_DIR}/blp_1_draws.jl" \
+    --R 2000 \
+    --seed 42 \
+    --spec 12 \
+    --estim 1 \
     --hpc
 
-echo "E2 complete: $(date)"
+echo "Draws complete: $(date)"

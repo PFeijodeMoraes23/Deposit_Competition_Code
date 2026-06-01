@@ -5,7 +5,7 @@ Local / Cluster split
 ---------------------
   LOCAL  (run on your PC):
     1. python run_blp_pipeline.py --logit
-         Runs blp_logit_local.jl: non-RC baseline + saves logit_delta_E*.jls
+         Runs blp_1_logit_local.jl: non-RC baseline + saves logit_delta_E*.jls
          checkpoints to BLP_RESULTS/ for delta warm-start on the cluster.
     2. python run_blp_pipeline.py --draws --R 50  (optional validation)
          R<=500 draws finish in a few minutes locally and let you test the
@@ -24,10 +24,10 @@ Local / Cluster split
 Modes
 -----
   --latex          Build LaTeX table fragments (default).
-  --logit          Run blp_logit_local.jl (non-RC, all strategies, ~1 min).
+  --logit          Run blp_1_logit_local.jl (non-RC, all strategies, ~1 min).
                    Also saves logit_delta_E*.jls delta checkpoints.
-  --draws          Run blp_draws.jl (local R<=500 fine; R=2000 use cluster).
-  --estimate       Run blp_estimation.jl with pre-computed draws.
+  --draws          Run blp_1_draws.jl (local R<=500 fine; R=2000 use cluster).
+  --estimate       Run blp_1_estimation.jl with pre-computed draws.
   --all            Run logit -> draws -> estimate in sequence (full local test).
 
 Options (used with --draws and --estimate)
@@ -60,9 +60,9 @@ import os
 ROOT = pathlib.Path(__file__).resolve().parent
 PYTHON_EXE = sys.executable
 LOGIT_TABLE_SCRIPT = ROOT / "make_blp_logit_table.py"
-LOGIT_SCRIPT       = ROOT / "blp_logit_local.jl"
-DRAWS_SCRIPT       = ROOT / "blp_draws.jl"
-ESTIM_SCRIPT       = ROOT / "blp_estimation.jl"
+LOGIT_SCRIPT       = ROOT / "blp_1_logit_local.jl"
+DRAWS_SCRIPT       = ROOT / "blp_1_draws.jl"
+ESTIM_SCRIPT       = ROOT / "blp_1_estimation.jl"
 
 
 # ── Julia mode ───────────────────────────────────────────────────────────────
@@ -199,11 +199,11 @@ def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description="BLP pipeline")
     mode = p.add_mutually_exclusive_group()
     mode.add_argument("--logit",    action="store_true", default=False,
-                      help="Run blp_logit_local.jl (non-RC, local) and generate logit tables")
+                      help="Run blp_1_logit_local.jl (non-RC, local) and generate logit tables")
     mode.add_argument("--draws",    action="store_true", default=False,
-                      help="Run blp_draws.jl to pre-compute simulation draws")
+                      help="Run blp_1_draws.jl to pre-compute simulation draws")
     mode.add_argument("--estimate", action="store_true", default=False,
-                      help="Run blp_estimation.jl")
+                      help="Run blp_1_estimation.jl")
     mode.add_argument("--all",      action="store_true", default=False,
                       help="Run logit -> draws -> estimate in sequence")
 

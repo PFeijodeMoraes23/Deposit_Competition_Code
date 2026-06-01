@@ -59,6 +59,16 @@ Pipeline stages
     5c. desc_2.py                        Generate unweighted compressed/thematic tables
     5d. desc_2.py --weight-col pop_total Generate market-weighted compressed/thematic tables
 
+  Stage 6 - Firm-disclosure & count data (extensive-vs-intensive margin)
+    18.  scrape_9_edgar_disclosures.py       SEC EDGAR firm customers + deposits
+    18b. scrape_10_parent_disclosures.py     Mercado Pago MAU (MELI 8-K); C6/PicPay template
+    18c. scrape_11_incumbent_clients.py      Incumbent client-count template
+    18d. scrape_12_bcb_accounts.py           BCB account-count report archival + template
+    18e. scrape_13_worldbank_findex.py       Findex national demographic ownership
+    18f. scrape_14_fgc_statistics.py         FGC bracket template + report archival
+    18g. scrape_15_cvm_disclosures.py        CVM deposits in BRL (incl. Banco do Brasil)
+    19.  analysis_1_disclosure_join.py       Join disclosures -> account-vs-volume table
+
 Usage
 -----
   python run_data_pipeline.py                   # run all stages
@@ -85,8 +95,8 @@ Run the full Brazilian Open Finance data pipeline.
 
 options:
   -h, --help  show this help message and exit
-  --from N    Start from this stage number (0-4). Skips all earlier stages.
-  --only N    Run only this stage number (0-4). All others are skipped.
+  --from N    Start from this stage number (0-6). Skips all earlier stages.
+  --only N    Run only this stage number (0-6). All others are skipped.
   --skip IDs  Comma-separated list of step IDs to skip (e.g. '2b,2c').
   --list      Print the pipeline steps and exit.
 
@@ -214,6 +224,27 @@ STEPS = [
      "Generate unweighted compressed/thematic descriptive tables"),
     (5, "17", "desc_2.py --weight-col pop_total",
      "Generate market-weighted compressed/thematic descriptive tables"),
+
+    # Stage 6 -- firm-disclosure & count data (extensive-vs-intensive margin diagnostic)
+    # External-API scrapers, serialized (one per wave) to respect SEC/CVM/WB rate
+    # limits, mirroring the Stage-2 convention. The join depends on BOTH the firm
+    # disclosures (18*) and the Stage-4 market_panel.csv, so it runs last.
+    (6, "18", "scrape_9_edgar_disclosures.py",
+     "SEC EDGAR: firm customers (BR/consolidated) + deposits (XBRL)"),
+    (6, "18b", "scrape_10_parent_disclosures.py",
+     "MELI 8-K: Mercado Pago fintech MAU; C6/PicPay manual template"),
+    (6, "18c", "scrape_11_incumbent_clients.py",
+     "Incumbent client-count template + IR spreadsheet archival"),
+    (6, "18d", "scrape_12_bcb_accounts.py",
+     "BCB RCF/REB report archival + account-count manual template"),
+    (6, "18e", "scrape_13_worldbank_findex.py",
+     "World Bank Findex: national demographic account ownership"),
+    (6, "18f", "scrape_14_fgc_statistics.py",
+     "FGC: bracket manual template + report archival"),
+    (6, "18g", "scrape_15_cvm_disclosures.py",
+     "CVM DFP/ITR: deposits in BRL (incl. Banco do Brasil)"),
+    (6, "19", "analysis_1_disclosure_join.py",
+     "Join disclosures -> conglomerate x quarter account-vs-volume table"),
 ]
 
 
@@ -337,6 +368,10 @@ WAVES: list[list[str]] = [
     ["12"],                                    # Wave 4: master merge
     ["13", "13b"],                             # Wave 5: instrumental variables + demographics sigma
     ["14", "15", "16", "17"],                  # Wave 6: descriptive statistics (desc_1 + desc_2, weighted + unweighted)
+    # Stage 6: firm-disclosure scrapers, one per wave (serial) to respect external
+    # rate limits (18/18b both hit SEC EDGAR), then the join once all are present.
+    ["18"], ["18b"], ["18c"], ["18d"], ["18e"], ["18f"], ["18g"],  # Wave 7-13: disclosure scrapers
+    ["19"],                                                          # Wave 14: disclosure join
 ]
 
 def run_wave(
@@ -434,11 +469,11 @@ Scripts called by the data pipeline:
     )
     p.add_argument(
         "--from", dest="from_stage", type=int, default=0, metavar="N",
-        help="Start from this stage number (0-4).  Skips all earlier stages.",
+        help="Start from this stage number (0-6).  Skips all earlier stages.",
     )
     p.add_argument(
         "--only", dest="only_stage", type=int, default=None, metavar="N",
-        help="Run only this stage number (0-4).  All others are skipped.",
+        help="Run only this stage number (0-6).  All others are skipped.",
     )
     p.add_argument(
         "--skip", dest="skip_steps", type=str, default="", metavar="IDs",

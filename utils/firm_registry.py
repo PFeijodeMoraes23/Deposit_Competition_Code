@@ -78,6 +78,19 @@ FIRMS: list[dict] = [
          segment="digital", sec_cik=None, b3_ticker=None, cvm_code=None,
          cnpj_root="45246410", country_scope="brazil", has_sec_deposits=False,
          names=["genial"]),
+    # ---- expansion: SEC-listed platform + CVM-listed mid/digital banks ----
+    dict(firm_key="xp", display_name="XP Inc / Banco XP",
+         segment="digital", sec_cik="0001787425", b3_ticker="XPBR31", cvm_code=None,
+         cnpj_root="33264668", country_scope="brazil", has_sec_deposits=True,
+         names=["banco xp", "xp investimentos", "xp inc", "xp cctvm"]),
+    dict(firm_key="pan", display_name="Banco Pan",
+         segment="digital", sec_cik=None, b3_ticker="BPAN4", cvm_code="PAN",
+         cnpj_root="59285411", country_scope="brazil", has_sec_deposits=False,
+         names=["banco pan", "panamericano"]),
+    dict(firm_key="bmg", display_name="Banco BMG",
+         segment="digital", sec_cik=None, b3_ticker="BMGB4", cvm_code="BMG",
+         cnpj_root="61186680", country_scope="brazil", has_sec_deposits=False,
+         names=["banco bmg", "bmg"]),
 
     # ---- incumbents (B firms; full type 1-4 portfolio) ----
     dict(firm_key="itau", display_name="Itaú Unibanco",
@@ -100,6 +113,14 @@ FIRMS: list[dict] = [
          segment="incumbent", sec_cik=None, b3_ticker=None, cvm_code=None,
          cnpj_root="00360305", country_scope="brazil", has_sec_deposits=False,
          names=["caixa economica", "caixa econômica"]),
+    dict(firm_key="banrisul", display_name="Banco do Estado do RS (Banrisul)",
+         segment="incumbent", sec_cik=None, b3_ticker="BRSR6", cvm_code="BANRISUL",
+         cnpj_root="92702067", country_scope="brazil", has_sec_deposits=False,
+         names=["banrisul", "estado do rio grande do sul"]),
+    dict(firm_key="brb", display_name="BRB - Banco de Brasília",
+         segment="incumbent", sec_cik=None, b3_ticker="BSLI4", cvm_code="BRB",
+         cnpj_root="00000208", country_scope="brazil", has_sec_deposits=False,
+         names=["banco de brasilia", "banco de brasília", "brb"]),
 ]
 
 

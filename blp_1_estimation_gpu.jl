@@ -34,7 +34,7 @@ Usage (cluster GPU node)
 # ── Load CPU baseline ────────────────────────────────────────────────────────
 # include() is safe because blp_estimation.jl guards main() with:
 #   if abspath(PROGRAM_FILE) == @__FILE__
-include(joinpath(@__DIR__, "blp_estimation.jl"))
+include(joinpath(@__DIR__, "blp_1_estimation.jl"))
 
 using CUDA
 CUDA.allowscalar(false)   # hard-fail on accidental scalar GPU indexing

@@ -1,30 +1,37 @@
 #!/bin/bash
-# submit_blp_chain.sh
-# ===================
-# Submit BLP sigma → rc2 → rc3 → rc4 → full → ext1 → ext2 → extended as eight dependent SLURM jobs.
-# Each stage warm-starts θ₂ from the previous stage checkpoint (already
-# implemented in blp_estimation.jl) and δ from the logit checkpoint.
+# submit_blp_2_chain.sh
+# =====================
+# Submit BLP IFT estimation chain: sigma → rc2 → rc3 → rc4 → full → ext1 → ext2 → extended
+# Uses blp_2_estimation_gpu.jl (IFT analytical gradient + GPU inner loop).
+#
+# IFT speedup vs blp_1:
+#   Each outer L-BFGS step costs 1 inner loop + n_params forward passes
+#   instead of (n_params+1) inner loops.  For extended (8 params) ~8.7× cheaper
+#   per outer iteration; L-BFGS also converges in fewer outer iterations.
 #
 # Usage:
-#   bash submit_blp_chain.sh <ESTIM_ID> [R]
+#   bash submit_blp_2_chain.sh <ESTIM_ID> [R]
 #
 # Examples:
-#   bash submit_blp_chain.sh 1 500    # E1 preliminary (R=500, ~2/4/8 h)
-#   bash submit_blp_chain.sh 1 2000   # E1 production  (R=2000, ~6/12/24 h)
-#   bash submit_blp_chain.sh 3        # E3 production  (default R=2000)
+#   bash submit_blp_2_chain.sh 1 500    # E1 preliminary (R=500)
+#   bash submit_blp_2_chain.sh 1 2000   # E1 production  (R=2000)
+#   bash submit_blp_2_chain.sh 5 2000   # E5 production
 #
-# Prerequisites (run locally FIRST, then rsync to cluster):
-#   python run_blp_pipeline.py --logit          # generates logit_delta_E*.jls
-#   rsync logit_delta_E*.jls <cluster>:../data/output/
-#   sbatch submit_blp_draws.sh                  # generates R=2000 draws
+# Prerequisites (same draws as blp_1 — no need to regenerate):
+#   python run_blp_pipeline.py --logit          # generates logit_delta_E*.bin
+#   rsync logit_delta_E*.bin <cluster>:../data/output/
+#   sbatch submit_blp_1_draws.sh                # R=2000 draws (shared with blp_1)
 #
-# All six jobs are submitted immediately. Each sits in PENDING state until the
-# preceding job exits with code 0 (--dependency=afterok).
-# Cancel the chain at any time with: scancel <JID_SIGMA> <JID_RC2> ... <JID_EXT>
+# Bouchet H200 partition specs:
+#   - Partition: gpu_h200
+#   - GPUs:      8× NVIDIA H200 SXM5 (94 GB HBM3 each)
+#   - CPUs:      48 per node → 6 CPUs per GPU slot (use --cpus-per-task=6)
+#   - RAM:       ~750 GB per node → 200 GB cap per job is safe
+#   - Max time:  2 days (48 h)
 
 set -euo pipefail
 
-ESTIM="${1:?Usage: bash submit_blp_chain.sh <ESTIM_ID> [R]}"
+ESTIM="${1:?Usage: bash submit_blp_2_chain.sh <ESTIM_ID> [R]}"
 R="${2:-2000}"
 SEED=42
 CPUS=6
@@ -34,32 +41,33 @@ LOG_DIR="${PROJECT_DIR}/logs"
 mkdir -p "${LOG_DIR}"
 
 # ── Resource scaling by R ────────────────────────────────────────────────────
-# Memory is set uniformly large for all stages to avoid OOM on the heavier
-# Pi-interaction buffers. All stages get at least 1 day; heavier stages get 2.
+# IFT is faster, so we can use tighter time limits for the later stages.
+# sigma stays at 1 day; multi-param stages get 2 days (generous for R=2000).
 MEM_ALL="200G"
 if [ "${R}" -le 500 ]; then
-    T_SIGMA="1-00:00:00"
-    T_RC2="1-00:00:00"
-    T_RC3="1-00:00:00"
-    T_RC4="1-00:00:00"
-    T_FULL="1-00:00:00"
-    T_EXT1="1-00:00:00"
-    T_EXT2="1-00:00:00"
-    T_EXT="1-00:00:00"
+    T_SIGMA="0-12:00:00"
+    T_RC2="0-12:00:00"
+    T_RC3="0-12:00:00"
+    T_RC4="0-12:00:00"
+    T_FULL="0-12:00:00"
+    T_EXT1="0-12:00:00"
+    T_EXT2="0-12:00:00"
+    T_EXT="0-12:00:00"
 elif [ "${R}" -le 1000 ]; then
     T_SIGMA="1-00:00:00"
     T_RC2="1-00:00:00"
     T_RC3="1-00:00:00"
     T_RC4="1-00:00:00"
-    T_FULL="1-00:00:00"
-    T_EXT1="1-00:00:00"
-    T_EXT2="1-00:00:00"
+    T_FULL="1-12:00:00"
+    T_EXT1="1-12:00:00"
+    T_EXT2="1-12:00:00"
     T_EXT="2-00:00:00"
 else
+    # R=2000 production
     T_SIGMA="1-00:00:00"
-    T_RC2="1-00:00:00"
-    T_RC3="1-00:00:00"
-    T_RC4="1-00:00:00"
+    T_RC2="1-12:00:00"
+    T_RC3="1-12:00:00"
+    T_RC4="1-12:00:00"
     T_FULL="2-00:00:00"
     T_EXT1="2-00:00:00"
     T_EXT2="2-00:00:00"
@@ -67,7 +75,7 @@ else
 fi
 
 echo "======================================================"
-echo " BLP chain submit: E${ESTIM} | R=${R} | seed=${SEED} | mem=${MEM_ALL}"
+echo " BLP-2 (IFT) chain: E${ESTIM} | R=${R} | seed=${SEED} | mem=${MEM_ALL}"
 echo "  sigma    : time=${T_SIGMA}"
 echo "  rc2      : time=${T_RC2}"
 echo "  rc3      : time=${T_RC3}"
@@ -95,174 +103,174 @@ BLP_COMMON_ARGS="--spec ${SPEC} --R ${R} --seed ${SEED} \
 
 # ── Stage: sigma ─────────────────────────────────────────────────────────────
 JID_SIGMA=$(sbatch --parsable \
-    --job-name="blp_E${ESTIM}_sigma_R${R}" \
+    --job-name="blp_2_E${ESTIM}_sigma_R${R}" \
     --partition=gpu_h200 \
     --gpus=h200:1 \
     --time="${T_SIGMA}" \
     --nodes=1 --ntasks=1 --cpus-per-task="${CPUS}" \
     --mem="${MEM_ALL}" \
-    --output="${LOG_DIR}/blp_E${ESTIM}_sigma_R${R}_%j.out" \
-    --error="${LOG_DIR}/blp_E${ESTIM}_sigma_R${R}_%j.err" \
+    --output="${LOG_DIR}/blp_2_E${ESTIM}_sigma_R${R}_%j.out" \
+    --error="${LOG_DIR}/blp_2_E${ESTIM}_sigma_R${R}_%j.err" \
     --mail-type=END,FAIL,TIME_LIMIT_90 \
     --mail-user=pedro.feijodemoraes@yale.edu \
     --wrap="${JULIA_SETUP}
-echo '=== BLP E${ESTIM} sigma | R=${R} | '\$(date)' ==='
+echo '=== BLP-2 E${ESTIM} sigma | R=${R} | '\$(date)' ==='
 julia --project=${PROJECT_DIR} --threads=${CPUS} \\
-    ${PROJECT_DIR}/blp_estimation_gpu.jl \\
+    ${PROJECT_DIR}/blp_2_estimation_gpu.jl \\
     --estim ${ESTIM} --stage sigma ${BLP_COMMON_ARGS}
 echo 'E${ESTIM} sigma done: '\$(date)")
 
 echo "  Submitted sigma:    Job ${JID_SIGMA}"
 
-# ── Stage: rc2 (σ_spread + π×gdp; θ₂ warm-start from sigma) ────────────────
+# ── Stage: rc2 ───────────────────────────────────────────────────────────────
 JID_RC2=$(sbatch --parsable \
     --dependency=afterok:${JID_SIGMA} \
-    --job-name="blp_E${ESTIM}_rc2_R${R}" \
+    --job-name="blp_2_E${ESTIM}_rc2_R${R}" \
     --partition=gpu_h200 \
     --gpus=h200:1 \
     --time="${T_RC2}" \
     --nodes=1 --ntasks=1 --cpus-per-task="${CPUS}" \
     --mem="${MEM_ALL}" \
-    --output="${LOG_DIR}/blp_E${ESTIM}_rc2_R${R}_%j.out" \
-    --error="${LOG_DIR}/blp_E${ESTIM}_rc2_R${R}_%j.err" \
+    --output="${LOG_DIR}/blp_2_E${ESTIM}_rc2_R${R}_%j.out" \
+    --error="${LOG_DIR}/blp_2_E${ESTIM}_rc2_R${R}_%j.err" \
     --mail-type=END,FAIL,TIME_LIMIT_90 \
     --mail-user=pedro.feijodemoraes@yale.edu \
     --wrap="${JULIA_SETUP}
-echo '=== BLP E${ESTIM} rc2 | R=${R} | '\$(date)' ==='
+echo '=== BLP-2 E${ESTIM} rc2 | R=${R} | '\$(date)' ==='
 julia --project=${PROJECT_DIR} --threads=${CPUS} \\
-    ${PROJECT_DIR}/blp_estimation_gpu.jl \\
+    ${PROJECT_DIR}/blp_2_estimation_gpu.jl \\
     --estim ${ESTIM} --stage rc2 ${BLP_COMMON_ARGS}
 echo 'E${ESTIM} rc2 done: '\$(date)")
 
 echo "  Submitted rc2:      Job ${JID_RC2} (after ${JID_SIGMA})"
 
-# ── Stage: rc3 (+ π×frac65; θ₂ warm-start from rc2) ────────────────────────
+# ── Stage: rc3 ───────────────────────────────────────────────────────────────
 JID_RC3=$(sbatch --parsable \
     --dependency=afterok:${JID_RC2} \
-    --job-name="blp_E${ESTIM}_rc3_R${R}" \
+    --job-name="blp_2_E${ESTIM}_rc3_R${R}" \
     --partition=gpu_h200 \
     --gpus=h200:1 \
     --time="${T_RC3}" \
     --nodes=1 --ntasks=1 --cpus-per-task="${CPUS}" \
     --mem="${MEM_ALL}" \
-    --output="${LOG_DIR}/blp_E${ESTIM}_rc3_R${R}_%j.out" \
-    --error="${LOG_DIR}/blp_E${ESTIM}_rc3_R${R}_%j.err" \
+    --output="${LOG_DIR}/blp_2_E${ESTIM}_rc3_R${R}_%j.out" \
+    --error="${LOG_DIR}/blp_2_E${ESTIM}_rc3_R${R}_%j.err" \
     --mail-type=END,FAIL,TIME_LIMIT_90 \
     --mail-user=pedro.feijodemoraes@yale.edu \
     --wrap="${JULIA_SETUP}
-echo '=== BLP E${ESTIM} rc3 | R=${R} | '\$(date)' ==='
+echo '=== BLP-2 E${ESTIM} rc3 | R=${R} | '\$(date)' ==='
 julia --project=${PROJECT_DIR} --threads=${CPUS} \\
-    ${PROJECT_DIR}/blp_estimation_gpu.jl \\
+    ${PROJECT_DIR}/blp_2_estimation_gpu.jl \\
     --estim ${ESTIM} --stage rc3 ${BLP_COMMON_ARGS}
 echo 'E${ESTIM} rc3 done: '\$(date)")
 
 echo "  Submitted rc3:      Job ${JID_RC3} (after ${JID_RC2})"
 
-# ── Stage: rc4 (+ π×conn100; θ₂ warm-start from rc3) ───────────────────────
+# ── Stage: rc4 ───────────────────────────────────────────────────────────────
 JID_RC4=$(sbatch --parsable \
     --dependency=afterok:${JID_RC3} \
-    --job-name="blp_E${ESTIM}_rc4_R${R}" \
+    --job-name="blp_2_E${ESTIM}_rc4_R${R}" \
     --partition=gpu_h200 \
     --gpus=h200:1 \
     --time="${T_RC4}" \
     --nodes=1 --ntasks=1 --cpus-per-task="${CPUS}" \
     --mem="${MEM_ALL}" \
-    --output="${LOG_DIR}/blp_E${ESTIM}_rc4_R${R}_%j.out" \
-    --error="${LOG_DIR}/blp_E${ESTIM}_rc4_R${R}_%j.err" \
+    --output="${LOG_DIR}/blp_2_E${ESTIM}_rc4_R${R}_%j.out" \
+    --error="${LOG_DIR}/blp_2_E${ESTIM}_rc4_R${R}_%j.err" \
     --mail-type=END,FAIL,TIME_LIMIT_90 \
     --mail-user=pedro.feijodemoraes@yale.edu \
     --wrap="${JULIA_SETUP}
-echo '=== BLP E${ESTIM} rc4 | R=${R} | '\$(date)' ==='
+echo '=== BLP-2 E${ESTIM} rc4 | R=${R} | '\$(date)' ==='
 julia --project=${PROJECT_DIR} --threads=${CPUS} \\
-    ${PROJECT_DIR}/blp_estimation_gpu.jl \\
+    ${PROJECT_DIR}/blp_2_estimation_gpu.jl \\
     --estim ${ESTIM} --stage rc4 ${BLP_COMMON_ARGS}
 echo 'E${ESTIM} rc4 done: '\$(date)")
 
 echo "  Submitted rc4:      Job ${JID_RC4} (after ${JID_RC3})"
 
-# ── Stage: full (+ σ_log_assets; θ₂ warm-start from rc4) ────────────────────
+# ── Stage: full ──────────────────────────────────────────────────────────────
 JID_FULL=$(sbatch --parsable \
     --dependency=afterok:${JID_RC4} \
-    --job-name="blp_E${ESTIM}_full_R${R}" \
+    --job-name="blp_2_E${ESTIM}_full_R${R}" \
     --partition=gpu_h200 \
     --gpus=h200:1 \
     --time="${T_FULL}" \
     --nodes=1 --ntasks=1 --cpus-per-task="${CPUS}" \
     --mem="${MEM_ALL}" \
-    --output="${LOG_DIR}/blp_E${ESTIM}_full_R${R}_%j.out" \
-    --error="${LOG_DIR}/blp_E${ESTIM}_full_R${R}_%j.err" \
+    --output="${LOG_DIR}/blp_2_E${ESTIM}_full_R${R}_%j.out" \
+    --error="${LOG_DIR}/blp_2_E${ESTIM}_full_R${R}_%j.err" \
     --mail-type=END,FAIL,TIME_LIMIT_90 \
     --mail-user=pedro.feijodemoraes@yale.edu \
     --wrap="${JULIA_SETUP}
-echo '=== BLP E${ESTIM} full | R=${R} | '\$(date)' ==='
+echo '=== BLP-2 E${ESTIM} full | R=${R} | '\$(date)' ==='
 julia --project=${PROJECT_DIR} --threads=${CPUS} \\
-    ${PROJECT_DIR}/blp_estimation_gpu.jl \\
+    ${PROJECT_DIR}/blp_2_estimation_gpu.jl \\
     --estim ${ESTIM} --stage full ${BLP_COMMON_ARGS}
 echo 'E${ESTIM} full done: '\$(date)")
 
 echo "  Submitted full:     Job ${JID_FULL} (after ${JID_RC4})"
 
-# ── Stage: ext1 (+ π(log_assets×gdp); θ₂ warm-start from full) ──────────────
+# ── Stage: ext1 ──────────────────────────────────────────────────────────────
 JID_EXT1=$(sbatch --parsable \
     --dependency=afterok:${JID_FULL} \
-    --job-name="blp_E${ESTIM}_ext1_R${R}" \
+    --job-name="blp_2_E${ESTIM}_ext1_R${R}" \
     --partition=gpu_h200 \
     --gpus=h200:1 \
     --time="${T_EXT1}" \
     --nodes=1 --ntasks=1 --cpus-per-task="${CPUS}" \
     --mem="${MEM_ALL}" \
-    --output="${LOG_DIR}/blp_E${ESTIM}_ext1_R${R}_%j.out" \
-    --error="${LOG_DIR}/blp_E${ESTIM}_ext1_R${R}_%j.err" \
+    --output="${LOG_DIR}/blp_2_E${ESTIM}_ext1_R${R}_%j.out" \
+    --error="${LOG_DIR}/blp_2_E${ESTIM}_ext1_R${R}_%j.err" \
     --mail-type=END,FAIL,TIME_LIMIT_90 \
     --mail-user=pedro.feijodemoraes@yale.edu \
     --wrap="${JULIA_SETUP}
-echo '=== BLP E${ESTIM} ext1 | R=${R} | '\$(date)' ==='
+echo '=== BLP-2 E${ESTIM} ext1 | R=${R} | '\$(date)' ==='
 julia --project=${PROJECT_DIR} --threads=${CPUS} \\
-    ${PROJECT_DIR}/blp_estimation_gpu.jl \\
+    ${PROJECT_DIR}/blp_2_estimation_gpu.jl \\
     --estim ${ESTIM} --stage ext1 ${BLP_COMMON_ARGS}
 echo 'E${ESTIM} ext1 done: '\$(date)")
 
 echo "  Submitted ext1:     Job ${JID_EXT1} (after ${JID_FULL})"
 
-# ── Stage: ext2 (+ π(fgc_covered×frac65); θ₂ warm-start from ext1) ──────────
+# ── Stage: ext2 ──────────────────────────────────────────────────────────────
 JID_EXT2=$(sbatch --parsable \
     --dependency=afterok:${JID_EXT1} \
-    --job-name="blp_E${ESTIM}_ext2_R${R}" \
+    --job-name="blp_2_E${ESTIM}_ext2_R${R}" \
     --partition=gpu_h200 \
     --gpus=h200:1 \
     --time="${T_EXT2}" \
     --nodes=1 --ntasks=1 --cpus-per-task="${CPUS}" \
     --mem="${MEM_ALL}" \
-    --output="${LOG_DIR}/blp_E${ESTIM}_ext2_R${R}_%j.out" \
-    --error="${LOG_DIR}/blp_E${ESTIM}_ext2_R${R}_%j.err" \
+    --output="${LOG_DIR}/blp_2_E${ESTIM}_ext2_R${R}_%j.out" \
+    --error="${LOG_DIR}/blp_2_E${ESTIM}_ext2_R${R}_%j.err" \
     --mail-type=END,FAIL,TIME_LIMIT_90 \
     --mail-user=pedro.feijodemoraes@yale.edu \
     --wrap="${JULIA_SETUP}
-echo '=== BLP E${ESTIM} ext2 | R=${R} | '\$(date)' ==='
+echo '=== BLP-2 E${ESTIM} ext2 | R=${R} | '\$(date)' ==='
 julia --project=${PROJECT_DIR} --threads=${CPUS} \\
-    ${PROJECT_DIR}/blp_estimation_gpu.jl \\
+    ${PROJECT_DIR}/blp_2_estimation_gpu.jl \\
     --estim ${ESTIM} --stage ext2 ${BLP_COMMON_ARGS}
 echo 'E${ESTIM} ext2 done: '\$(date)")
 
 echo "  Submitted ext2:     Job ${JID_EXT2} (after ${JID_EXT1})"
 
-# ── Stage: extended (+ π(equity×cadunico); θ₂ warm-start from ext2) ─────────
+# ── Stage: extended ───────────────────────────────────────────────────────────
 JID_EXT=$(sbatch --parsable \
     --dependency=afterok:${JID_EXT2} \
-    --job-name="blp_E${ESTIM}_extended_R${R}" \
+    --job-name="blp_2_E${ESTIM}_extended_R${R}" \
     --partition=gpu_h200 \
     --gpus=h200:1 \
     --time="${T_EXT}" \
     --nodes=1 --ntasks=1 --cpus-per-task="${CPUS}" \
     --mem="${MEM_ALL}" \
-    --output="${LOG_DIR}/blp_E${ESTIM}_extended_R${R}_%j.out" \
-    --error="${LOG_DIR}/blp_E${ESTIM}_extended_R${R}_%j.err" \
+    --output="${LOG_DIR}/blp_2_E${ESTIM}_extended_R${R}_%j.out" \
+    --error="${LOG_DIR}/blp_2_E${ESTIM}_extended_R${R}_%j.err" \
     --mail-type=END,FAIL,TIME_LIMIT_90 \
     --mail-user=pedro.feijodemoraes@yale.edu \
     --wrap="${JULIA_SETUP}
-echo '=== BLP E${ESTIM} extended | R=${R} | '\$(date)' ==='
+echo '=== BLP-2 E${ESTIM} extended | R=${R} | '\$(date)' ==='
 julia --project=${PROJECT_DIR} --threads=${CPUS} \\
-    ${PROJECT_DIR}/blp_estimation_gpu.jl \\
+    ${PROJECT_DIR}/blp_2_estimation_gpu.jl \\
     --estim ${ESTIM} --stage extended ${BLP_COMMON_ARGS}
 echo 'E${ESTIM} extended done: '\$(date)")
 
