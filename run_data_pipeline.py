@@ -41,6 +41,8 @@ Pipeline stages
     2d2. scrape_8_bcb_banked.py                 BCB ESTBAN deposit balances (Dec snapshot) + WB Findex -> MCA banked-fraction proxy panel
     2e. scrape_6_cadunico.py                    CadUnico low-income families -> MCA poverty panel
     2f. scrape_7_fees.py                        BCB bank fee schedules (PF + PJ) -> tarifas conglomerate panel + fee summary
+    2g. scrape_7b_cosif_service_fees.py         COSIF 71700009 revenue / deposit ratios by type -> institution + conglomerate panel (realized fees, Nakane-style but richer)
+    2h. scrape_7c_openfinance_fees.py           Open Finance product APIs -> listed fee schedules by institution x account_type x service (digital-bank inclusive)
 
   Stage 3 - Deposit panel, characteristics & instruments
     3a. panel_1_deposits.py                 ESTBAN + IF Data -> conglomerate x municipality x quarter deposit panel
@@ -62,7 +64,7 @@ Pipeline stages
   Stage 6 - Firm-disclosure & count data (extensive-vs-intensive margin)
     18.  scrape_9_edgar_disclosures.py       SEC EDGAR firm customers + deposits
     18b. scrape_10_parent_disclosures.py     Mercado Pago MAU (MELI 8-K); C6/PicPay template
-    18c. scrape_11_incumbent_clients.py      Incumbent client-count template
+    18c. scrape_11_incumbent_clients.py      CVM-IPE earnings PDFs -> client counts (Tier-2/4 cascade)
     18d. scrape_12_bcb_accounts.py           BCB account-count report archival + template
     18e. scrape_13_worldbank_findex.py       Findex national demographic ownership
     18f. scrape_14_fgc_statistics.py         FGC bracket template + report archival
@@ -234,7 +236,7 @@ STEPS = [
     (6, "18b", "scrape_10_parent_disclosures.py",
      "MELI 8-K: Mercado Pago fintech MAU; C6/PicPay manual template"),
     (6, "18c", "scrape_11_incumbent_clients.py",
-     "Incumbent client-count template + IR spreadsheet archival"),
+     "CVM-IPE earnings PDFs -> client counts (Pan/BMG/Banrisul/BB); vision fallback"),
     (6, "18d", "scrape_12_bcb_accounts.py",
      "BCB RCF/REB report archival + account-count manual template"),
     (6, "18e", "scrape_13_worldbank_findex.py",

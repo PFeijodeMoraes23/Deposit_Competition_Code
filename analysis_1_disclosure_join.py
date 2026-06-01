@@ -29,9 +29,10 @@
 #
 #   INPUTS  (BASE = .../Open-Finance, two levels above this repo):
 #     BASE/BCB/Panel/market_panel.csv                      (cong x mca x year x quarter)
-#     BASE/FirmDisclosures/SEC/edgar_disclosures.csv       (long; disclosure_common schema)
-#     BASE/FirmDisclosures/CVM/cvm_deposits.csv            (long)
-#     BASE/FirmDisclosures/Parent/parent_disclosures.csv   (long)
+#     BASE/FirmDisclosures/SEC/edgar_disclosures.csv           (long; disclosure_common schema)
+#     BASE/FirmDisclosures/CVM/cvm_deposits.csv                (long)
+#     BASE/FirmDisclosures/Parent/parent_disclosures.csv       (long)
+#     BASE/FirmDisclosures/Incumbents/incumbent_client_counts.csv  (long; scrape_11 Tier-2/4)
 #     + utils.firm_registry.load_registry(BASE) for the firm_key -> conglomerate map
 #
 #   OUTPUT: BASE/BCB/Egan_et_al_2025_Rep/processed/DESCRIPTIVES/account_vs_volume_panel.csv
@@ -72,6 +73,7 @@ PANEL_CSV = os.path.join(BASE, "BCB", "Panel", "market_panel.csv")
 EDGAR_CSV = os.path.join(BASE, "FirmDisclosures", "SEC", "edgar_disclosures.csv")
 CVM_CSV = os.path.join(BASE, "FirmDisclosures", "CVM", "cvm_deposits.csv")
 PARENT_CSV = os.path.join(BASE, "FirmDisclosures", "Parent", "parent_disclosures.csv")
+INCUMBENT_CSV = os.path.join(BASE, "FirmDisclosures", "Incumbents", "incumbent_client_counts.csv")
 
 OUT_DIR = os.path.join(BASE, "BCB", "Egan_et_al_2025_Rep", "processed", "DESCRIPTIVES")
 OUT_CSV = os.path.join(OUT_DIR, "account_vs_volume_panel.csv")
@@ -243,6 +245,7 @@ def build_disclosure_aggregate() -> pd.DataFrame:
         _read_disclosure(EDGAR_CSV, "sec"),
         _read_disclosure(CVM_CSV, "cvm"),
         _read_disclosure(PARENT_CSV, "parent"),
+        _read_disclosure(INCUMBENT_CSV, "ipe"),   # CVM-IPE Tier-2/4 client counts
     ]
     parts = [p for p in parts if not p.empty]
     if not parts:
