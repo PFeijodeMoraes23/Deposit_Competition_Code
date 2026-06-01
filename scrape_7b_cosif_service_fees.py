@@ -250,11 +250,14 @@ def _build_panel(records: list[dict], doc_code: str) -> pd.DataFrame:
 def main(workers: int | None = None, test: bool = False) -> None:
     OUT_DIR.mkdir(parents=True, exist_ok=True)
 
-    # Include both BANCOS (banks) and SOCIEDADES (payment institutions: Nubank,
-    # PagSeguro, MercadoPago, Stone, PicPay, C6 CTVM, etc.)
-    bancos    = sorted(COSIF_RAW.glob("*BANCOS.ZIP"))
-    sociedades = sorted(COSIF_RAW.glob("*SOCIEDADES.ZIP"))
-    zip_files  = bancos + sociedades
+    # Include all three COSIF entity types:
+    #   BANCOS     – commercial and universal banks
+    #   SOCIEDADES – payment institutions (Nubank, PagSeguro, Stone, PicPay …)
+    #   COOPERATIVAS – credit unions (relevant local competitors in many municipalities)
+    bancos       = sorted(COSIF_RAW.glob("*BANCOS.ZIP"))
+    sociedades   = sorted(COSIF_RAW.glob("*SOCIEDADES.ZIP"))
+    cooperativas = sorted(COSIF_RAW.glob("*COOPERATIVAS.ZIP"))
+    zip_files    = bancos + sociedades + cooperativas
 
     if not zip_files:
         log.error("No COSIF ZIPs found under %s", COSIF_RAW)
@@ -264,8 +267,8 @@ def main(workers: int | None = None, test: bool = False) -> None:
         zip_files = zip_files[:5]
         log.info("TEST MODE: processing %d ZIPs", len(zip_files))
     else:
-        log.info("Found %d ZIPs (%d BANCOS + %d SOCIEDADES | %s → %s)",
-                 len(zip_files), len(bancos), len(sociedades),
+        log.info("Found %d ZIPs (%d BANCOS + %d SOCIEDADES + %d COOPERATIVAS | %s → %s)",
+                 len(zip_files), len(bancos), len(sociedades), len(cooperativas),
                  zip_files[0].name, zip_files[-1].name)
 
     n_workers = workers or min(8, (os.cpu_count() or 4))

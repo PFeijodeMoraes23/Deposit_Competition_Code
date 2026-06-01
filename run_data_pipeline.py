@@ -42,7 +42,15 @@ Pipeline stages
     2e. scrape_6_cadunico.py                    CadUnico low-income families -> MCA poverty panel
     2f. scrape_7_fees.py                        BCB bank fee schedules (PF + PJ) -> tarifas conglomerate panel + fee summary
     2g. scrape_7b_cosif_service_fees.py         COSIF 71700009 revenue / deposit ratios by type -> institution + conglomerate panel (realized fees, Nakane-style but richer)
+                                                  Sources: BANCOS + SOCIEDADES (Nubank, PagSeguro, Stone…) + COOPERATIVAS; 2013-2022, 133K rows
     2h. scrape_7c_openfinance_fees.py           Open Finance product APIs -> listed fee schedules by institution x account_type x service (digital-bank inclusive)
+                                                  83 endpoints, customer-weighted avg price from quartile distribution, diskcache for time series
+    2i. scrape_7d_bcb_tariff_vigencia.py        BCB Tarifas DataVigencia extraction -> historical listed-price anchors (when each price last changed, going back to 1996)
+    2j. scrape_7e_cosif_download.py             [BLOCKED] COSIF ZIP downloader for 2022-12 onwards (URL_TEMPLATE must be filled from browser DevTools)
+
+  Stage 3b-ext - Fee panel join
+    3f. panel_7b_cosif_fees.py                  Map COSIF service fees to market panel (CNPJ->conglomerate, monthly->quarterly) -> cosif_fee_quarterly_conglomerate.csv
+                                                  Run with --patch-market to produce market_panel_with_fees.csv
 
   Stage 3 - Deposit panel, characteristics & instruments
     3a. panel_1_deposits.py                 ESTBAN + IF Data -> conglomerate x municipality x quarter deposit panel
