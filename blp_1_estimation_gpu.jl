@@ -32,9 +32,11 @@ Usage (cluster GPU node)
 """
 
 # ── Load CPU baseline ────────────────────────────────────────────────────────
-# include() is safe because blp_estimation.jl guards main() with:
-#   if abspath(PROGRAM_FILE) == @__FILE__
-include(joinpath(@__DIR__, "blp_1_estimation.jl"))
+# Check if baseline has already been loaded (e.g., via blp_2_estimation.jl)
+# to avoid constant redefinition warnings when both blp_1 and blp_2 GPU scripts run.
+if !isdefined(Main, :X_COLS)
+    include(joinpath(@__DIR__, "blp_1_estimation.jl"))
+end
 
 using CUDA
 CUDA.allowscalar(false)   # hard-fail on accidental scalar GPU indexing
@@ -527,20 +529,91 @@ function compute_model_shares_gpu!(buf::HotBuffers, gbuf::GpuBuffers,
 end
 
 # ==========================================================================
-# GPU BLP Contraction (SQUAREM)
+# GPU Device-Resident Share Computation (for on-device SQUAREM)
+# ==========================================================================
+
+"""
+    model_shares_dev!(gbuf, delta_gpu, mu_B, mu_D, s_model_full, R)
+
+Device-resident sibling of `compute_model_shares_gpu!`.  Differences:
+
+* `delta_gpu` is a **CuVector already on device** — no host→device copy per call.
+* `gbuf.mu_gpu` is assumed already populated (uploaded **once** by the caller
+  before the inner loop) — no per-step mu copy.
+* Model shares are scattered into the device vector `s_model_full` (length N)
+  — **no device→host copy**.
+
+This keeps the entire SQUAREM contraction on the GPU so the device stays busy
+across all inner iterations (raises GPU utilisation; eliminates per-step PCIe
+transfers).  `compute_model_shares_gpu!` is retained unchanged for the IFT
+forward passes, which need `buf.s_B`/`buf.s_D` back on the CPU.
+"""
+function model_shares_dev!(gbuf::GpuBuffers, delta_gpu::CuVector{GPU_T},
+                            mu_B::CuMatrix{GPU_T}, mu_D::CuMatrix{GPU_T},
+                            s_model_full::CuVector{GPU_T}, R::Int)
+    N_B = gbuf.N_B; N_D = gbuf.N_D
+    n_pairs = gbuf.n_pairs
+
+    # Gather δ → delta_B / delta_D (delta already on device)
+    gbuf.delta_B .= delta_gpu[gbuf.b_mask_idx_gpu]
+    gbuf.delta_D .= delta_gpu[gbuf.d_mask_idx_gpu]
+
+    # V_B / V_D (mu_B / mu_D pre-gathered once per outer iter — μ is constant
+    # during the inner loop, so we avoid re-gathering the N×R μ matrix per step)
+    gbuf.V_B .= clamp.(gbuf.delta_B .+ mu_B, GPU_T(-500f0), GPU_T(500f0))
+    gbuf.V_D .= clamp.(gbuf.delta_D .+ mu_D, GPU_T(-500f0), GPU_T(500f0))
+
+    launch_logsumexp!(gbuf.log_sum_D_time, gbuf.V_D, gbuf.sort_d_gpu,
+                      gbuf.d_uval_gpu, gbuf.d_grp_start_gpu, gbuf.n_d_groups, N_D, R)
+    gbuf.log_D_sum_pair .= gbuf.log_sum_D_time[gbuf.pair_time_enc_gpu, :]
+    launch_logsumexp!(gbuf.log_sum_B_mkt, gbuf.V_B, gbuf.sort_b_gpu,
+                      gbuf.b_uval_gpu, gbuf.b_grp_start_gpu, gbuf.n_b_groups, N_B, R)
+    let lsB = gbuf.log_sum_B_mkt, lsD = gbuf.log_D_sum_pair
+        jm = max.(GPU_T(0f0), lsB, lsD)
+        gbuf.log_denom .= jm .+ log.(max.(
+            exp.(GPU_T(0f0) .- jm) .+ exp.(lsB .- jm) .+ exp.(lsD .- jm),
+            GPU_T(1f-30)))
+    end
+    gbuf.q_B     .= exp.(gbuf.V_B .- gbuf.log_denom[gbuf.b_mkt_idx_gpu, :])
+    gbuf.s_B_gpu .= vec(sum(gbuf.q_B; dims=2)) .* GPU_T(1f0 / R)
+
+    gbuf.neg_log_denom .= .-gbuf.log_denom
+    launch_groupmax!(gbuf.max_neg_ld, gbuf.neg_log_denom, gbuf.sort_pt_gpu,
+                     gbuf.pt_uval_gpu, gbuf.pt_grp_start_gpu, gbuf.n_pt_groups, n_pairs, R)
+    gbuf.shifted_inv .= exp.(gbuf.neg_log_denom .-
+                             gbuf.max_neg_ld[gbuf.pair_time_enc_gpu, :])
+    mul!(gbuf.sum_wtd, gbuf.PT_agg_gpu, gbuf.shifted_inv)
+    gbuf.log_inv_wtd .= gbuf.max_neg_ld .+ log.(max.(gbuf.sum_wtd, GPU_T(1f-30)))
+    gbuf.log_s_D_r .= gbuf.V_D .+ gbuf.log_inv_wtd[gbuf.d_time_enc_gpu, :]
+    gbuf.row_max_D .= vec(maximum(gbuf.log_s_D_r; dims=2))
+    gbuf.s_D_gpu   .= exp.(gbuf.row_max_D) .*
+                      (vec(sum(exp.(gbuf.log_s_D_r .- gbuf.row_max_D); dims=2)) .*
+                       GPU_T(1f0 / R))
+
+    # Scatter compact shares → full-N model-share vector (stays on device)
+    s_model_full[gbuf.b_mask_idx_gpu] .= gbuf.s_B_gpu
+    s_model_full[gbuf.d_mask_idx_gpu] .= gbuf.s_D_gpu
+    return nothing
+end
+
+# ==========================================================================
+# GPU BLP Contraction (SQUAREM) — fully on-device
 # ==========================================================================
 
 """
     blp_contraction_gpu!(buf, gbuf, delta, pc, R; tol, max_iter)
 
-SQUAREM BLP fixed-point contraction using GPU share computation.
+SQUAREM BLP fixed-point contraction running **entirely on the GPU**.
 
-Identical SQUAREM algorithm to `blp_contraction!` (CPU); `T_inplace!`
-calls `compute_model_shares_gpu!` instead of `compute_model_shares!`.
+`delta` (CPU `Vector{Float64}`) is uploaded **once** at entry and downloaded
+**once** at convergence.  `buf.mu` is uploaded to `gbuf.mu_gpu` once.  Every
+SQUAREM step — the contraction map `T`, the sup-norm/`‖·‖²` reductions, and the
+acceleration step — executes as device broadcasts/reductions, so the H200 stays
+busy throughout (no per-step PCIe transfers; only a handful of scalar reductions
+sync to the host per step).
 
-`buf.mu` must already be filled by `compute_mu!` before calling this.
-`gbuf.mu_gpu` is refreshed inside `compute_model_shares_gpu!` on every
-`T_inplace!` call.
+Algebraically identical to the CPU `blp_contraction!`:
+  T(δ) = clamp(δ + ln s_data − ln s_model(δ), −500, 500)
 """
 function blp_contraction_gpu!(buf::HotBuffers, gbuf::GpuBuffers,
                                delta::Vector{Float64},
@@ -549,85 +622,92 @@ function blp_contraction_gpu!(buf::HotBuffers, gbuf::GpuBuffers,
 
     N            = length(delta)
     norm_history = Float64[]
-    x1     = Vector{Float64}(undef, N)
-    x2     = Vector{Float64}(undef, N)
-    r_vec  = Vector{Float64}(undef, N)
-    v_vec  = Vector{Float64}(undef, N)
-    x_prop = Vector{Float64}(undef, N)
 
-    function T_inplace!(dest::Vector{Float64}, src::Vector{Float64})
-        compute_model_shares_gpu!(buf, gbuf, src, pc, R)
-        b_idx = 0; d_idx = 0
-        @inbounds for i in 1:N
-            if pc.b_mask[i]
-                b_idx += 1
-                dest[i] = clamp(src[i] + pc.ln_s_data_B_cond[i] -
-                                log(clamp(buf.s_B[b_idx], 1e-15, Inf)), -500.0, 500.0)
-            else
-                d_idx += 1
-                dest[i] = clamp(src[i] + pc.ln_s_data_D[i] -
-                                log(clamp(buf.s_D[d_idx], 1e-15, Inf)), -500.0, 500.0)
-            end
-        end
+    # ── Upload loop-constant data ONCE ────────────────────────────────────
+    # mu is fixed during the inner loop (depends only on θ₂); upload once.
+    copyto!(gbuf.mu_gpu, GPU_T.(buf.mu))
+
+    # Pre-gather μ for B / D observations once (constant in the loop).
+    mu_B = gbuf.mu_gpu[gbuf.b_mask_idx_gpu, :]
+    mu_D = gbuf.mu_gpu[gbuf.d_mask_idx_gpu, :]
+
+    # Full-N data log-share vector: ln_s_data_full[i] = ln_s_data_B_cond[i] for
+    # B obs, ln_s_data_D[i] for D obs.  Constant across the loop.
+    ln_s_data_cpu = Vector{GPU_T}(undef, N)
+    @inbounds for i in 1:N
+        ln_s_data_cpu[i] = pc.b_mask[i] ? GPU_T(pc.ln_s_data_B_cond[i]) :
+                                          GPU_T(pc.ln_s_data_D[i])
+    end
+    ln_s_data = CuVector{GPU_T}(ln_s_data_cpu)
+
+    # ── Device-resident SQUAREM work vectors (~7 × N × 8 B ≈ 17 MB) ───────
+    d_cur  = CuVector{GPU_T}(GPU_T.(delta))
+    x1     = CUDA.zeros(GPU_T, N)
+    x2     = CUDA.zeros(GPU_T, N)
+    r_vec  = CUDA.zeros(GPU_T, N)
+    v_vec  = CUDA.zeros(GPU_T, N)
+    x_prop = CUDA.zeros(GPU_T, N)
+    s_full = CUDA.zeros(GPU_T, N)
+
+    lo = GPU_T(-500f0); hi = GPU_T(500f0)
+    floor_s = GPU_T(1f-15)
+
+    # Contraction map T(src) → dest, both device vectors
+    Tstep!(dest::CuVector{GPU_T}, src::CuVector{GPU_T}) = begin
+        model_shares_dev!(gbuf, src, mu_B, mu_D, s_full, R)
+        dest .= clamp.(src .+ ln_s_data .- log.(max.(s_full, floor_s)), lo, hi)
+        return nothing
     end
 
     fevals = 0
     while fevals + 2 <= max_iter
-        T_inplace!(x1, delta); fevals += 1
+        Tstep!(x1, d_cur); fevals += 1
         if !all(isfinite, x1)
             println("    [SQUAREM-GPU ABORT] non-finite at eval=$fevals")
+            copyto!(delta, Float64.(Array(d_cur)))
             return false, fevals, norm_history
         end
-        nm = 0.0
-        @inbounds for i in 1:N
-            r_vec[i] = x1[i] - delta[i]
-            a = abs(r_vec[i]); a > nm && (nm = a)
-        end
+        r_vec .= x1 .- d_cur
+        nm = Float64(maximum(abs, r_vec))
         push!(norm_history, nm)
         (fevals % 50 == 0 || nm < tol) &&
             println("    [SQUAREM-GPU eval=$fevals/$max_iter] norm=$(round(nm, sigdigits=4))")
         if nm < tol
-            copyto!(delta, x1); return true, fevals, norm_history
+            copyto!(delta, Float64.(Array(x1))); return true, fevals, norm_history
         end
 
-        T_inplace!(x2, x1); fevals += 1
+        Tstep!(x2, x1); fevals += 1
         if !all(isfinite, x2)
-            copyto!(delta, x1); return false, fevals, norm_history
+            copyto!(delta, Float64.(Array(x1))); return false, fevals, norm_history
         end
-        nm2 = 0.0
-        @inbounds for i in 1:N; a = abs(x2[i]-x1[i]); a > nm2 && (nm2 = a); end
+        nm2 = Float64(maximum(abs, x2 .- x1))
         push!(norm_history, nm2)
         (fevals % 50 == 0 || nm2 < tol) &&
             println("    [SQUAREM-GPU eval=$fevals/$max_iter] norm=$(round(nm2, sigdigits=4))")
         if nm2 < tol
-            copyto!(delta, x2); return true, fevals, norm_history
+            copyto!(delta, Float64.(Array(x2))); return true, fevals, norm_history
         end
 
-        norm_r_sq = 0.0; norm_v_sq = 0.0
-        @inbounds for i in 1:N
-            v_vec[i]   = (x2[i] - x1[i]) - r_vec[i]
-            norm_r_sq += r_vec[i]^2
-            norm_v_sq += v_vec[i]^2
-        end
+        v_vec .= (x2 .- x1) .- r_vec
+        norm_r_sq = Float64(sum(abs2, r_vec))
+        norm_v_sq = Float64(sum(abs2, v_vec))
         if norm_v_sq < 1e-28
-            copyto!(delta, x2); continue
+            d_cur .= x2; continue
         end
-        α = -sqrt(norm_r_sq / norm_v_sq)
-        @inbounds for i in 1:N
-            x_prop[i] = clamp(delta[i] - 2α * r_vec[i] + α^2 * v_vec[i], -500.0, 500.0)
-        end
+        α = GPU_T(-sqrt(norm_r_sq / norm_v_sq))
+        x_prop .= clamp.(d_cur .- GPU_T(2f0) * α .* r_vec .+ α^2 .* v_vec, lo, hi)
         if !all(isfinite, x_prop)
-            copyto!(delta, x2)
+            d_cur .= x2
         else
-            norm_prop = 0.0
-            @inbounds for i in 1:N; a = abs(x_prop[i]-x2[i]); a > norm_prop && (norm_prop = a); end
+            norm_prop = Float64(maximum(abs, x_prop .- x2))
             if norm_prop > 100.0 * nm2 + 1.0
-                copyto!(delta, x2)
+                d_cur .= x2
             else
-                copyto!(delta, x_prop)
+                d_cur .= x_prop
             end
         end
     end
+    copyto!(delta, Float64.(Array(d_cur)))
     return false, fevals, norm_history
 end
 
@@ -761,7 +841,10 @@ function run_blp_estimation_gpu(estim::Int, spec_id::Int, args,
     precompute_pi_products!(buf, prod_vec, draws_3d, obs_key_idx,
                              pi_interactions, coef_dim)
     log_status("  [GPU] Device: $(CUDA.name(CUDA.device()))")
+    log_status("  [GPU] Allocating GPU buffers (~$(round(21.68, digits=1)) GB)...")
+    flush(stdout); flush(stderr)
     gbuf = allocate_gpu_buffers(buf, pc, N_obs, N_B, N_D, R, n_pairs, n_times)
+    log_status("  [GPU] ✓ GPU buffers allocated")
 
     # ── θ₂ warm-start ─────────────────────────────────────────────────────
     _, _, out_dir = get_paths(args["hpc"])
@@ -932,13 +1015,19 @@ scripts work unchanged.
 """
 function main_gpu()
     # ── GPU availability check ───────────────────────────────────────────
+    log_status("[GPU] Checking CUDA functionality...")
+    flush(stdout); flush(stderr)
     if !CUDA.functional()
+        log_status("[GPU] ERROR: CUDA.functional() = false")
+        flush(stdout); flush(stderr)
         error("[GPU] CUDA is not functional on this node.  " *
               "Use blp_estimation.jl for CPU-only estimation.")
     end
     dev = CUDA.device()
+    log_status("[GPU] ✓ CUDA functional")
     log_status("[GPU] Using device: $(CUDA.name(dev)) " *
                "($(round(CUDA.totalmem(dev)/2^30, digits=1)) GB VRAM)")
+    flush(stdout); flush(stderr)
 
     args     = parse_args_est()    # reuses CPU parser from blp_estimation.jl
     estim    = args["estim"]

@@ -1,12 +1,12 @@
 #!/bin/bash
 #SBATCH --job-name=blp_1_E5_gpu
-#SBATCH --partition=gpu
+#SBATCH --partition=gpu_h200
 #SBATCH --time=2-00:00:00
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=4
-#SBATCH --mem=100G
-#SBATCH --gpus=1
+#SBATCH --cpus-per-task=6
+#SBATCH --mem=200G
+#SBATCH --gpus=h200:1
 #SBATCH --output=/nfs/roberts/project/pi_mf2263/pf382/dep_comp/scripts/logs/blp_1_E5_gpu_%j.out
 #SBATCH --error=/nfs/roberts/project/pi_mf2263/pf382/dep_comp/scripts/logs/blp_1_E5_gpu_%j.err
 #SBATCH --mail-type=BEGIN,END,FAIL,TIME_LIMIT_90

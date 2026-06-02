@@ -27,17 +27,21 @@ Usage (Bouchet H200 cluster)
       --R 2000 --seed 42 --hpc
 """
 
-# ── Load CPU baseline + GPU infrastructure ───────────────────────────────────
-# blp_1_estimation_gpu.jl guard prevents auto-execution on include().
+# ── Load CPU baseline (IFT) ──────────────────────────────────────────────────
+# blp_2_estimation.jl includes blp_1_estimation.jl and adds IFT gradient.
+include(joinpath(@__DIR__, "blp_2_estimation.jl"))
+
+using CUDA
+CUDA.allowscalar(false)
+
+# ── GPU infrastructure from blp_1 ──────────────────────────────────────────────
+# Include GPU buffer definitions and kernels. The guard in blp_1_estimation_gpu.jl
+# checks if X_COLS is already defined to avoid constant redefinition warnings.
 include(joinpath(@__DIR__, "blp_1_estimation_gpu.jl"))
 
 # ==========================================================================
 # 8. IFT Analytical Gradient (GPU)
 # ==========================================================================
-
-# collect_model_shares is defined identically in blp_2_estimation.jl.
-# Redefine here since we include blp_1_estimation_gpu.jl (not blp_2_estimation.jl)
-# to avoid the double-include of blp_1_estimation.jl.
 
 """
     collect_model_shares(buf, pc, N) → Vector{Float64}
