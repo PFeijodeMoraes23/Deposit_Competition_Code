@@ -315,10 +315,6 @@ def impute_single_muni_mcas(sigma_df: pd.DataFrame) -> pd.DataFrame:
 # ==============================================================================
 
 def main():
-    if OUTPUT_PQ.exists() and OUTPUT_PQ.stat().st_size > 0:
-        print(f"Output already exists, skipping: {OUTPUT_PQ}")
-        return
-
     logging.info("Computing within-MCA demographic σ …")
 
     # ── IBGE: gdp_per_capita, fraction_65plus, fraction_young (annual) ────
