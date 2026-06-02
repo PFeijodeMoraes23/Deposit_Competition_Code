@@ -11,16 +11,29 @@ building a panel that improves on Nakane et al. (2006) along three dimensions:
 
 Key COSIF accounts extracted
 -----------------------------
-  71700009  Rendas De Prestacao De Servicos  (service-fee revenue)
+Pre-2023 format (old account plan):
+  71700009  Rendas De Prestacao De Servicos  (service-fee revenue, aggregate)
 
+Post-2023 format (new account plan — richer sub-accounts):
+  7170000005  Receita de Prestação de Serviços  (aggregate)
+  7170100008  Receita de Tarifas - PN e MEI     (retail / PF tariff revenue)
+  7170200001  Receita de Tarifas - PJ           (corporate / PJ tariff revenue)
+  All captured by prefix "717"
+
+Deposit accounts (unchanged across formats):
   41100000  Depositos A Vista               (demand deposits)
   41200003  Depositos De Poupanca           (savings deposits)
   41500002  Depositos A Prazo               (time deposits)
 
 DOCUMENTO codes
 ---------------
-  4010  individual institution (used for the institution-level panel)
-  4020  prudential conglomerate (used for the conglomerate-level panel)
+  4010  individual institution (always present; used for institution panel)
+  4020  prudential conglomerate (only in pre-2023 files; absent in newer data)
+
+File naming conventions
+-----------------------
+  Pre-2023:  {YYYYMM}BANCOS.ZIP       (inner CSV has 3 header rows)
+  2023+:     {YYYYMM}BANCOS.csv.zip   (same structure, different extension)
 
 Output files  (BCB/Tarifas/processed/)
 ---------------------------------------
@@ -72,16 +85,21 @@ OUT_DIR   = _REPO / "BCB" / "Tarifas" / "processed"
 # ---------------------------------------------------------------------------
 # Account filters
 # ---------------------------------------------------------------------------
-SVC_PREFIX  = "717"          # Rendas de Prestacao de Servicos
-DEP_DEMAND  = "41100"        # Depositos A Vista
-DEP_SAVINGS = "41200"        # Depositos De Poupanca
-DEP_TIME    = "41500"        # Depositos A Prazo
+SVC_PREFIX     = "717"       # All service-fee revenue accounts (both old and new plan)
+# New plan sub-accounts (2023+):
+#   7170000005 = aggregate, 7170100xxx = PF/retail, 7170200xxx = PJ/corporate
+SVC_PF_PREFIX  = "71701"     # Retail (Pessoa Física + MEI) tariff revenue
+SVC_PJ_PREFIX  = "71702"     # Corporate (Pessoa Jurídica) tariff revenue
+
+DEP_DEMAND     = "41100"     # Depositos A Vista
+DEP_SAVINGS    = "41200"     # Depositos De Poupanca
+DEP_TIME       = "41500"     # Depositos A Prazo
 DEP_ALL_PREFIX = "410"       # Total deposits header (41000007)
 
 KEEP_PREFIXES = (SVC_PREFIX, DEP_DEMAND, DEP_SAVINGS, DEP_TIME, DEP_ALL_PREFIX)
 
-INST_DOC  = "4010"           # institution-level balancete
-CONG_DOC  = "4020"           # conglomerate-level balancete
+INST_DOC  = "4010"           # institution-level (always present)
+CONG_DOC  = "4020"           # conglomerate-level (only pre-2023 files)
 
 
 # ---------------------------------------------------------------------------
@@ -90,33 +108,34 @@ CONG_DOC  = "4020"           # conglomerate-level balancete
 
 def _process_zip(zip_path: str) -> list[dict]:
     """
-    Read one COSIF BANCOS ZIP, return relevant rows as a list of dicts.
+    Read one COSIF file (ZIP, csv.zip, or plain CSV), return relevant rows.
     Runs in a subprocess — must not use any unpicklable globals.
     """
     import pandas as pd
     import zipfile
     from io import BytesIO
+    from pathlib import Path as _Path
 
-    path = zip_path  # str
+    path = zip_path
+    p = _Path(path)
+
+    # Load bytes: either from inside a ZIP or directly from a plain CSV
     try:
-        with zipfile.ZipFile(path) as zf:
-            inner = zf.namelist()[0]
-            raw_bytes = zf.open(inner).read()
+        if p.suffix.lower() in (".zip",):
+            with zipfile.ZipFile(path) as zf:
+                raw_bytes = zf.open(zf.namelist()[0]).read()
+            src = BytesIO(raw_bytes)
+        else:
+            # Plain .csv — read directly
+            src = path
     except Exception as exc:
         return [{"_error": str(exc), "_file": path}]
 
     try:
-        df = pd.read_csv(
-            BytesIO(raw_bytes),
-            sep=";",
-            encoding="latin1",
-            dtype=str,
-            skiprows=3,
-        )
+        df = pd.read_csv(src, sep=";", encoding="latin1", dtype=str, skiprows=3)
     except Exception:
-        # Some older ZIPs have no header rows
         try:
-            df = pd.read_csv(BytesIO(raw_bytes), sep=";", encoding="latin1", dtype=str)
+            df = pd.read_csv(src, sep=";", encoding="latin1", dtype=str)
         except Exception as exc:
             return [{"_error": str(exc), "_file": path}]
 
@@ -193,8 +212,14 @@ def _build_panel(records: list[dict], doc_code: str) -> pd.DataFrame:
     )
 
     # Map account to category
+    # Pre-2023: 71700009 (single aggregate)
+    # Post-2023: 7170000005 (total), 7170100xxx (PF/retail), 7170200xxx (PJ/corp)
     def _cat(conta: str) -> str:
-        if conta.startswith(SVC_PREFIX):
+        if conta.startswith(SVC_PF_PREFIX):  # 71701... → retail tariffs
+            return "svc_revenue_pf"
+        if conta.startswith(SVC_PJ_PREFIX):  # 71702... → corporate tariffs
+            return "svc_revenue_pj"
+        if conta.startswith(SVC_PREFIX):     # 717... → aggregate (catches old + new total)
             return "svc_revenue"
         if conta.startswith(DEP_DEMAND):
             return "dep_demand"
@@ -216,9 +241,16 @@ def _build_panel(records: list[dict], doc_code: str) -> pd.DataFrame:
     wide.columns.name = None
 
     # Ensure all expected columns exist
-    for col in ("svc_revenue", "dep_demand", "dep_savings", "dep_time", "dep_total"):
+    for col in ("svc_revenue", "svc_revenue_pf", "svc_revenue_pj",
+                "dep_demand", "dep_savings", "dep_time", "dep_total"):
         if col not in wide.columns:
             wide[col] = float("nan")
+
+    # For 2023+ files that report PF+PJ sub-accounts but not the aggregate,
+    # reconstruct the aggregate as PF + PJ when total is missing.
+    has_total = wide["svc_revenue"].notna() & (wide["svc_revenue"] > 0)
+    pf_pj_sum = wide[["svc_revenue_pf","svc_revenue_pj"]].sum(axis=1, min_count=1)
+    wide["svc_revenue"] = wide["svc_revenue"].where(has_total, pf_pj_sum)
 
     # Compute fee ratios (Nakane-style: revenue / deposit volume)
     # We divide by 6 as Nakane did (semi-annual flow / 6 = monthly equivalent).
@@ -240,6 +272,10 @@ def _build_panel(records: list[dict], doc_code: str) -> pd.DataFrame:
     # Universal ratio using the header total (works for all institution types)
     wide["fee_ratio_total_deposits"] = svc_monthly / wide["dep_total"]
 
+    # PF / PJ breakdowns (2023+ only; NaN for older data)
+    wide["fee_ratio_pf"] = (wide["svc_revenue_pf"] / 6) / dep_sub_sum
+    wide["fee_ratio_pj"] = (wide["svc_revenue_pj"] / 6) / dep_sub_sum
+
     return wide
 
 
@@ -250,13 +286,20 @@ def _build_panel(records: list[dict], doc_code: str) -> pd.DataFrame:
 def main(workers: int | None = None, test: bool = False) -> None:
     OUT_DIR.mkdir(parents=True, exist_ok=True)
 
-    # Include all three COSIF entity types:
-    #   BANCOS     – commercial and universal banks
-    #   SOCIEDADES – payment institutions (Nubank, PagSeguro, Stone, PicPay …)
-    #   COOPERATIVAS – credit unions (relevant local competitors in many municipalities)
-    bancos       = sorted(COSIF_RAW.glob("*BANCOS.ZIP"))
-    sociedades   = sorted(COSIF_RAW.glob("*SOCIEDADES.ZIP"))
-    cooperativas = sorted(COSIF_RAW.glob("*COOPERATIVAS.ZIP"))
+    # Include all three COSIF entity types and both filename conventions:
+    #   Pre-2023:  {YYYYMM}TYPE.ZIP
+    #   2023+:     {YYYYMM}TYPE.csv.zip  (same inner structure, different extension)
+    def _gather(pattern_upper: str) -> list[Path]:
+        return sorted(set(
+            list(COSIF_RAW.glob(f"*{pattern_upper}.ZIP")) +
+            list(COSIF_RAW.glob(f"*{pattern_upper}.zip")) +
+            list(COSIF_RAW.glob(f"*{pattern_upper}.csv.zip")) +
+            list(COSIF_RAW.glob(f"*{pattern_upper}.csv"))   # plain CSV (unzipped)
+        ))
+
+    bancos       = _gather("BANCOS")
+    sociedades   = _gather("SOCIEDADES")
+    cooperativas = _gather("COOPERATIVAS")
     zip_files    = bancos + sociedades + cooperativas
 
     if not zip_files:

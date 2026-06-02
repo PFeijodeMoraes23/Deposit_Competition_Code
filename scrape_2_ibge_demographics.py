@@ -96,10 +96,14 @@ def copy_predecessor_data(target_year, predecessor_year, final_data):
 def generate_mca_main():
     
     START_YEAR = 2010
-    END_YEAR = 2024
+    END_YEAR = 2025
     MCA_REFERENCE = 2010
     YEARS = list(range(START_YEAR, END_YEAR + 1))
-    final_json_file = output_dir / f"muni_mca_regions_{START_YEAR}_{END_YEAR}.json"
+    # NOTE: the filename is pinned to the legacy "2010_2024" label so the 9
+    # downstream consumers (panel_6, panel_8, scrape_3/4/5/6/8, scrape_inss)
+    # keep finding the crosswalk; the CONTENT now spans 2010..END_YEAR. The
+    # hardcoded reader in rectangularize_mca_main() reads this same name.
+    final_json_file = output_dir / "muni_mca_regions_2010_2024.json"
     
     REGION_YEARS = [2017, 2019, 2020]
     MICRO_MESO_YEARS = [2010, 2013, 2014, 2015, 2016]
@@ -511,7 +515,7 @@ SIDRA_BASE = "https://servicodados.ibge.gov.br/api/v3/agregados"
 HEADERS    = {"User-Agent": "research/pedro.feijodemoraes@yale.edu"}
 
 START_YEAR = 2013
-END_YEAR   = 2024
+END_YEAR   = 2025
 
 # Cache directory for large census age-group downloads.
 # If the IBGE census API returns 500 (common for large table requests),

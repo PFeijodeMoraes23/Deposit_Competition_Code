@@ -107,7 +107,7 @@ os.makedirs(RAW_DIR, exist_ok=True)
 os.makedirs(CAD_DIR, exist_ok=True)
 
 PANEL_START_YEAR = 2013
-PANEL_END_YEAR   = 2024
+PANEL_END_YEAR   = 2025
 
 # SAGI Solr API — CadUnico municipality-level monthly aggregates
 SAGI_SOLR_URL = "https://aplicacoes.mds.gov.br/sagi/servicos/misocial/"
@@ -256,7 +256,6 @@ def download_all_periods() -> pd.DataFrame:
         (y, m)
         for y in range(PANEL_START_YEAR, PANEL_END_YEAR + 1)
         for m in FETCH_MONTHS
-        if y != PANEL_END_YEAR or m <= 9
     ]
 
     logging.info(

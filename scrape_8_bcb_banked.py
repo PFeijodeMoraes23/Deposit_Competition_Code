@@ -103,7 +103,7 @@ OUTPUT_CSV = os.path.join(INCL_DIR, "bcb_banked_mca_panel.csv")
 os.makedirs(INCL_DIR, exist_ok=True)
 
 PANEL_START_YEAR = 2013
-PANEL_END_YEAR   = 2024
+PANEL_END_YEAR   = 2025
 
 # World Bank API — Findex indicator for Brazil
 WB_URL = (

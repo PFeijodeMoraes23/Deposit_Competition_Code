@@ -29,6 +29,25 @@ import re
 
 log = logging.getLogger(__name__)
 
+# Load .env file from the project root if it exists, so the key is available
+# to Claude Code's bash tool without needing to restart the session.
+def _load_dotenv() -> None:
+    here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    env_path = os.path.join(here, ".env")
+    if not os.path.exists(env_path):
+        return
+    with open(env_path, encoding="utf-8") as fh:
+        for line in fh:
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            k, _, v = line.partition("=")
+            k = k.strip(); v = v.strip().strip('"').strip("'")
+            if k and k not in os.environ:
+                os.environ[k] = v
+
+_load_dotenv()
+
 VISION_MAX_PAGES = 6      # max pages to send per PDF (cost control)
 VISION_MODEL = "claude-haiku-4-5-20251001"
 VISION_MAX_TOKENS = 256
@@ -45,11 +64,11 @@ _USER_TEMPLATE = (
     "Rules:\n"
     "- Look for the specific KPI (e.g. total clients, active clients, correntistas, base de clientes).\n"
     "- Report the number as an absolute integer (e.g. 30000000 for 30 million).\n"
-    "- If the value appears as 'X mi' or 'X milhões', multiply by 1,000,000.\n"
+    "- If the value appears as 'X mi' or 'X milhoes', multiply by 1,000,000.\n"
     "- If not found, return null for value.\n"
-    "Respond ONLY with JSON in this exact format:\n"
-    '{"value": <int or null>, "unit": "count", "period": "<quarter or year>", '
-    '"source_quote": "<exact text from the slide you used>", "confidence": "high|medium|low"}'
+    "Respond ONLY with JSON in this exact format (no markdown fences):\n"
+    '{{"value": <int or null>, "unit": "count", "period": "<quarter or year>", '
+    '"source_quote": "<exact text from the slide you used>", "confidence": "high|medium|low"}}'
 )
 
 

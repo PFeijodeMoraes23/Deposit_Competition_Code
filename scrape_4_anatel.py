@@ -98,12 +98,17 @@ if resolve_script_paths is not None:
 os.makedirs(RAW_DIR, exist_ok=True)
 os.makedirs(ANATEL_DIR, exist_ok=True)
 
-# Technologies counted as 4G/5G (fast mobile)
-FAST_TECHS = {"4G", "4G+", "4.5G", "5G", "4G-LTE", "LTE", "LTE-A"}
+# Technologies counted as 4G/5G (fast mobile).
+# Includes both the generation labels ("4G","5G",...) used in the
+# "Tecnologia Geração" column AND the raw-technology labels in the "Tecnologia"
+# column: "LTE" (=4G) and "NR" (=5G New Radio). NR variants are listed so 5G is
+# never dropped when only the raw "Tecnologia" column is present.
+FAST_TECHS = {"4G", "4G+", "4.5G", "5G", "4G-LTE", "LTE", "LTE-A",
+              "NR", "NR NSA", "NR SA", "5G NR", "5G-NR", "5GNR"}
 
 # Panel coverage
 PANEL_START_YEAR = 2013
-PANEL_END_YEAR   = 2024
+PANEL_END_YEAR   = 2025
 
 # ── ANATEL direct-download URLs ───────────────────────────────────────────────
 # Source: https://dados.gov.br/dados/conjuntos-dados/acessos-em-telefonia-movel
@@ -266,7 +271,14 @@ def parse_anatel_csv(filepath: str, year: int,
 
     # Identify required columns
     mun_col  = _find_col(df, "mun_code")
-    tec_col  = _find_col(df, "tecnologia")
+    # Prefer the unambiguous generation column ("Tecnologia Geração": 2G/3G/4G/5G)
+    # over the raw "Tecnologia" column (LTE/NR/GSM/WCDMA). In the raw column 5G is
+    # labelled "NR", which FAST_TECHS historically missed -> 5G undercounted. The
+    # generation column uses "5G" directly, which FAST_TECHS matches. Falls back to
+    # the raw column (now NR-aware via FAST_TECHS) if no generation column exists.
+    tec_col  = (next((c for c in df.columns
+                      if "tecnolog" in c.lower() and "gera" in c.lower()), None)
+                or _find_col(df, "tecnologia"))
     acc_col  = _find_col(df, "acessos")
     mes_col  = _find_col(df, "mes")
     ano_col  = _find_col(df, "ano")

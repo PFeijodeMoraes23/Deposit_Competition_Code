@@ -371,7 +371,7 @@ function run_blp_estimation_ift(estim::Int, spec_id::Int, args,
 
     function ift_compute!(t2::Vector{Float64})
         isequal(t2, cache_t2) && return
-        cache_Q[] = gmm_fg!(1.0, cache_grad, t2,
+        cache_Q[] = gmm_fg!(cache_grad, t2,
                              buf, prod_vec, nu_draws,
                              sigma_indices, pi_interactions, R, coef_dim,
                              W, args["tol_inner"], args["max_inner"],

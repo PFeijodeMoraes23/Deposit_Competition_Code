@@ -83,7 +83,7 @@ OUTPUT_CSV   = os.path.join(INCL_DIR, "bcb_inclusion_mca_panel.csv")
 os.makedirs(INCL_DIR, exist_ok=True)
 
 PANEL_START_YEAR = 2013
-PANEL_END_YEAR   = 2024
+PANEL_END_YEAR   = 2025
 
 # ESTBAN CSV — BCB "Estatística Bancária por Município" (already downloaded)
 ESTBAN_CSV = os.path.join(BASE, "BCB", "ESTBAN", "ESTBAN.csv")

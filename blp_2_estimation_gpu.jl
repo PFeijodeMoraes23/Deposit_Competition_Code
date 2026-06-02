@@ -380,7 +380,7 @@ function run_blp_estimation_ift_gpu(estim::Int, spec_id::Int, args,
 
     function ift_compute_gpu!(t2::Vector{Float64})
         isequal(t2, cache_t2) && return
-        cache_Q[] = gmm_fg_gpu!(1.0, cache_grad, t2,
+        cache_Q[] = gmm_fg_gpu!(cache_grad, t2,
                                  buf, gbuf, prod_vec, nu_draws,
                                  sigma_indices, pi_interactions, R, coef_dim,
                                  W, args["tol_inner"], args["max_inner"],

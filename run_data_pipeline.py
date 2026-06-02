@@ -30,6 +30,10 @@ Pipeline stages
 ---------------
   Stage 0 - Raw data downloads
     0a. scrape_1_bcb_estban_if_data.py          ESTBAN monthly files + IF Data via Olinda API
+    0b. scrape_1b_estban_concat.py              Concatenate raw ESTBAN monthlies -> processed ESTBAN.csv
+                                                  (Python port of the deprecated ESTBAN_Process_1.R; auto-extends as new months arrive)
+    0c. scrape_1c_ifdata_aggregate.py           Aggregate per-period IF_DATA_Values_* -> Aggregated Data type/report CSVs
+                                                  (Python port of the deprecated if_data_process_1.py; consumed by panel_1 & panel_4)
 
   Stage 1 - IBGE demographics
     1a. scrape_2_ibge_demographics.py           Municipal population, GDP, age structure -> MCA demographics panel
@@ -41,12 +45,13 @@ Pipeline stages
     2d2. scrape_8_bcb_banked.py                 BCB ESTBAN deposit balances (Dec snapshot) + WB Findex -> MCA banked-fraction proxy panel
     2e. scrape_6_cadunico.py                    CadUnico low-income families -> MCA poverty panel
     2f. scrape_7_fees.py                        BCB bank fee schedules (PF + PJ) -> tarifas conglomerate panel + fee summary
-    2g. scrape_7b_cosif_service_fees.py         COSIF 71700009 revenue / deposit ratios by type -> institution + conglomerate panel (realized fees, Nakane-style but richer)
-                                                  Sources: BANCOS + SOCIEDADES (Nubank, PagSeguro, Stone…) + COOPERATIVAS; 2013-2022, 133K rows
+    2g. scrape_7b_cosif_service_fees.py         COSIF 717xxxxx revenue / deposit ratios -> institution panel (realized fees, Nakane-style but richer)
+                                                  Sources: BANCOS + SOCIEDADES (Nubank, PagSeguro, Stone…) + COOPERATIVAS; 2013-Sep2025
+                                                  Handles .ZIP (pre-2023) and .csv.zip (2023+); post-2023 adds PF/PJ sub-account breakdown
     2h. scrape_7c_openfinance_fees.py           Open Finance product APIs -> listed fee schedules by institution x account_type x service (digital-bank inclusive)
                                                   83 endpoints, customer-weighted avg price from quartile distribution, diskcache for time series
     2i. scrape_7d_bcb_tariff_vigencia.py        BCB Tarifas DataVigencia extraction -> historical listed-price anchors (when each price last changed, going back to 1996)
-    2j. scrape_7e_cosif_download.py             [BLOCKED] COSIF ZIP downloader for 2022-12 onwards (URL_TEMPLATE must be filled from browser DevTools)
+    2j. scrape_7e_cosif_download.py             COSIF ZIP downloader for missing months (Dec2022, Jan2023 gap; and future updates)
 
   Stage 3b-ext - Fee panel join
     3f. panel_7b_cosif_fees.py                  Map COSIF service fees to market panel (CNPJ->conglomerate, monthly->quarterly) -> cosif_fee_quarterly_conglomerate.csv
@@ -188,6 +193,10 @@ STEPS = [
     # Stage 0 -- raw downloads
     (0, "1", "scrape_1_bcb_estban_if_data.py",
      "ESTBAN monthly files + IF Data (Olinda API)"),
+    (0, "1b", "scrape_1b_estban_concat.py",
+     "Concatenate raw ESTBAN monthlies -> processed ESTBAN.csv (Python port of deprecated R)"),
+    (0, "1c", "scrape_1c_ifdata_aggregate.py",
+     "Aggregate per-period IF_DATA_Values -> Aggregated Data reports (Python port of deprecated if_data_process_1.py)"),
 
     # Stage 1 -- IBGE demographics
     (1, "2", "scrape_2_ibge_demographics.py",
@@ -366,6 +375,8 @@ def run_step(step_id: str, script: str, description: str) -> float:
 #   Wave 4 -- 4a (master merge) needs everything above -> serial.
 WAVES: list[list[str]] = [
     ["1"],                                     # Wave 1: ESTBAN + IF Data raw download
+    ["1b"],                                    # Wave 1b: concat raw ESTBAN monthlies -> ESTBAN.csv
+    ["1c"],                                    # Wave 1c: aggregate per-period IF Data -> Aggregated Data reports
     ["2"],                                     # Wave 2a: IBGE
     ["3"],                                     # Wave 2b: Stage 2 scrapers CANNOT be parallelized
     ["4"],                                     # Wave 2c: ANATEL

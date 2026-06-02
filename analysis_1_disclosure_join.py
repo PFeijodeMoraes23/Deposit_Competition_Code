@@ -69,7 +69,9 @@ log = logging.getLogger("analysis_1")
 # ----------------------------------------------------------------------------
 BASE = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))
 
-PANEL_CSV = os.path.join(BASE, "BCB", "Panel", "market_panel.csv")
+_PANEL_LEGACY = os.path.join(BASE, "BCB", "Panel", "market_panel.csv")
+_PANEL_NEW    = os.path.join(BASE, "BCB", "Egan_et_al_2025_Rep", "processed", "market_panel.csv")
+PANEL_CSV = _PANEL_NEW if os.path.isfile(_PANEL_NEW) else _PANEL_LEGACY
 EDGAR_CSV = os.path.join(BASE, "FirmDisclosures", "SEC", "edgar_disclosures.csv")
 CVM_CSV = os.path.join(BASE, "FirmDisclosures", "CVM", "cvm_deposits.csv")
 PARENT_CSV = os.path.join(BASE, "FirmDisclosures", "Parent", "parent_disclosures.csv")

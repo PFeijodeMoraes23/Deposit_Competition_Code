@@ -46,7 +46,7 @@
 #   • Because the BCB files only cover Nov 2020 onward, pre-PIX quarters (every
 #     MCA × quarter before 2020-Q4) are filled with zeros and flagged
 #     pix_active=0 so that the sleepiness regression can use a single balanced
-#     panel from 2013-Q1 to 2024-Q3.
+#     panel from 2013-Q1 to 2025-Q4.
 ###─────────────────────────────────────────────────────────────────────────────
 
 import concurrent.futures
@@ -102,7 +102,7 @@ PIX_LAUNCH_YYYYMM = 202011
 
 # Panel coverage (year × quarter)
 PANEL_START_YEAR = 2013
-PANEL_END_YEAR   = 2024
+PANEL_END_YEAR   = 2025
 
 ## Numeric columns that need decimal-comma cleaning
 VALUE_COLS = [
@@ -343,15 +343,14 @@ def aggregate_to_mca_quarter(pix: pd.DataFrame) -> pd.DataFrame:
 
 def build_full_panel(pix_agg: pd.DataFrame) -> pd.DataFrame:
     """
-    Expand pix_agg to the full panel 2013-Q1 through 2024-Q3 for every MCA.
+    Expand pix_agg to the full panel 2013-Q1 through 2025-Q4 for every MCA.
     Pre-PIX quarters get pix_active=0 and all quantity/value columns = 0.
     """
     # All MCA × year × quarter combinations in the target panel
     all_mcas = pix_agg["mca_code"].unique()
     quarters  = [(y, q)
                  for y in range(PANEL_START_YEAR, PANEL_END_YEAR + 1)
-                 for q in range(1, 5)
-                 if y != PANEL_END_YEAR or q != 4]
+                 for q in range(1, 5)]
 
     rows = [{"mca_code": m, "year": y, "quarter": q}
             for m in all_mcas for y, q in quarters]

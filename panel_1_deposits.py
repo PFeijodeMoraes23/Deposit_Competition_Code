@@ -385,7 +385,7 @@ ESTBAN_DEPOSIT_COLS = ["V400_401", "V420", "V431", "V432"]   # a1, a2, a3, a4
 ESTBAN_KEEP_COLS    = ["CNPJ", "NOME_INSTITUICAO", "CODMUN_IBGE", "YEAR", "MONTH"] + ESTBAN_DEPOSIT_COLS
 
 def load_estban_processed() -> pd.DataFrame:
-    """Load the pre-processed ESTBAN.csv (2016–2024)."""
+    """Load the pre-processed ESTBAN.csv (2016–present; built by scrape_1b_estban_concat.py)."""
     logging.info("Loading ESTBAN.csv …")
     df = pd.read_csv(ESTBAN_PROC_CSV, encoding="latin1", low_memory=False)
 

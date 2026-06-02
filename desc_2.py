@@ -1429,7 +1429,7 @@ def render_appendix_b3_vars() -> str:
 def render_appendix_b4() -> str:
     rows = [
         r"    gdp\_per\_capita           & Municipal GDP from IBGE, interpolated and imputed where needed \\",
-        r"    gdp\_imputed              & Flag for when GDP was imputed rather than directly observed (2024 only) \\",
+        r"    gdp\_imputed              & Flag for when GDP was imputed (carry-forward) because IBGE publication lags the panel end-year \\",
         r"    fraction\_65plus          & Share of population aged 65+ \\",
         r"    fraction\_young           & Share of population aged 15--20 \\",
         r"    age\_interpolated         & Flag for when age structure was interpolated \\",
