@@ -15,14 +15,14 @@
 #       Cleaner standalone Panel B from analysis_2; adds Pix event line (2020)
 #       and segment shading. Log scale. D vs B contrast.
 #
-#   Figure C — Market structure: volume-share dynamics 2013-2024
+#   Figure C — Market structure: volume-share dynamics 2013-2025
 #       Top-4 incumbents (Itaú/Bradesco/BB/Santander) aggregate volume share
 #       vs. all digital/payment firms, from market_panel.csv. Shows how much
 #       incumbents still dominate volume despite D-firm account growth.
 #
 #   Figure D — Findex demographic account-ownership gradients (the Pi motivation)
 #       Bar chart: account ownership rate by demographic group (income, gender,
-#       age, education), for Brazil survey years 2011-2024.
+#       age, education), for Brazil survey years 2011-2025.
 #       Motivates heterogeneous demographic loadings Pi/Pi^q.
 ###────────────────────────────────────────────────────────────────────────────
 
@@ -277,7 +277,7 @@ def figure_c(market: pd.DataFrame, join: pd.DataFrame) -> None:
     ax.legend(fontsize=8, framealpha=0.9)
     fig.text(0.5,-0.02,
              "Retail deposit volume share = (dep_a1+dep_a2+dep_a4+dep_a5) of firm set / national total, "
-             "annual average. Source: BCB ESTBAN deposit panel 2013–2024.",
+             "annual average. Source: BCB ESTBAN deposit panel 2013–2025.",
              ha="center", fontsize=7)
     fig.tight_layout()
     _save(fig, "fig_market_structure")
@@ -324,13 +324,13 @@ def figure_d(findex: pd.DataFrame) -> None:
 
     axes[0].set_ylabel("Account ownership (% age 15+)")
     fig.suptitle(
-        "Findex: account ownership by demographic group — Brazil 2011–2024\n"
+        "Findex: account ownership by demographic group — Brazil 2011–2025\n"
         "(motivates heterogeneous loadings $\\Pi$, $\\Pi^q$ in the extensive/intensive-choice model)",
         fontsize=11, y=1.04)
     fig.text(0.5,-0.02,
              "Source: World Bank Global Findex via WB API. "
              "Account ownership = % age 15+ with a financial institution or mobile-money account. "
-             "Δ = gap between high and low subgroup in 2024.",
+             "Δ = gap between high and low subgroup in 2025.",
              ha="center", fontsize=7)
     fig.tight_layout()
     _save(fig, "fig_findex_demographics")
