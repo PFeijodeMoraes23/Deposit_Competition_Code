@@ -57,7 +57,9 @@ except Exception:
 # ==============================================================================
 _ROOT = Path(__file__).resolve().parents[2]
 DATA_DIR = _ROOT / "BCB" / "Egan_et_al_2025_Rep" / "processed"
-PANEL_CSV  = DATA_DIR / "market_panel.csv"
+# Prefer the fee-augmented panel; fall back to the base panel if not yet built.
+_PANEL_WITH_FEES = DATA_DIR / "market_panel_with_fees.csv"
+PANEL_CSV = _PANEL_WITH_FEES if _PANEL_WITH_FEES.exists() else DATA_DIR / "market_panel.csv"
 BANKED_CSV = _ROOT / "BCB" / "Inclusion" / "bcb_banked_mca_panel.csv"
 
 # High-Efficiency BLP Columns
@@ -74,7 +76,20 @@ IV_BLP_LOO = ['loo_log_assets', 'mean_loo_log_assets',
               'n_rivals']
 IV_COST = ['personnel_cost_ratio_lag', 'admin_cost_ratio_lag', 'tax_cost_ratio_lag']
 IV_CAPITAL = ['indice_basileia_lag']
-EXTRA_KEEP_COLS = X_COLS + D_COLS + IV_BLP_LOO + IV_COST + IV_CAPITAL + ['segment', 'spread_qoq', 'spread_ann']
+# Fee price columns from panel_7b_cosif_fees.py.
+# cosif_fee_valid == 1 for years < 2025 (pre-reclassification). Always filter on
+# this flag before using cosif_fee_ratio_* as a price variable in BLP.
+IV_FEE = [
+    'cosif_fee_ratio_all',            # realized svc revenue / total deposits (main price proxy)
+    'cosif_fee_ratio_total_deposits',  # alternative normalization
+    'cosif_fee_valid',                 # 1 if year < 2025 (pre-reclassification break)
+    'listed_fee_atm_withdrawal_pf',    # BCB Tarifas ATM fee, listed max (cross-sect. instrument)
+    'listed_fee_statement_pf',         # BCB Tarifas statement fee, listed max
+    'tarifa_stickiness_yrs',           # DataVigencia years-since-last-change (time-varying IV)
+    'tarifa_stickiness_n',             # data quality indicator for stickiness
+]
+EXTRA_KEEP_COLS = (X_COLS + D_COLS + IV_BLP_LOO + IV_COST + IV_CAPITAL + IV_FEE
+                   + ['segment', 'spread_qoq', 'spread_ann'])
 
 def _resolve_runtime_paths() -> tuple[Path, Path, Path]:
     panel_csv = PANEL_CSV
@@ -191,6 +206,17 @@ def build_base_panel(panel_csv: Path) -> pd.DataFrame:
         if col in df.columns: df[col] = df[col].fillna(df[col].median())
             
     if 'pop_total' not in df.columns: df['pop_total'] = np.nan
+
+    # Invalidate COSIF fee ratio columns for the 2025+ reclassification period.
+    # cosif_fee_valid == 0 means the 717xxx account bucket was expanded by mandatory
+    # BCB plan migration (Jan 2025) — ratios are not comparable to pre-2025 values.
+    cosif_ratio_cols = [c for c in df.columns if c.startswith('cosif_fee_ratio')]
+    if cosif_ratio_cols and 'cosif_fee_valid' in df.columns:
+        invalid = df['cosif_fee_valid'] == 0
+        if invalid.any():
+            df.loc[invalid, cosif_ratio_cols] = np.nan
+            logging.info("  NaN-ed %d rows of cosif_fee_ratio_* (cosif_fee_valid=0, year>=2025).",
+                         invalid.sum())
 
     # Merge annual banked correction (source: scrape_8_bcb_banked)
     if BANKED_CSV.exists():

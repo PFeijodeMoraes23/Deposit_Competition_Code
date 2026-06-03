@@ -340,6 +340,12 @@ function run_blp_estimation_ift_gpu(estim::Int, spec_id::Int, args,
         end
     end
 
+    # ── GPU↔CPU share consistency guard (catches precision regressions) ───
+    let (sv, pv) = unpack_theta2(theta2_0, sigma_indices, pi_interactions)
+        compute_mu!(buf, prod_vec, nu_draws, sv, sigma_indices, pv, R, coef_dim)
+        verify_gpu_shares(buf, gbuf, delta_work, pc, R; rtol=args["tol_inner"])
+    end
+
     # ── Dry-run timing ────────────────────────────────────────────────────
     if get(args, "dry_run", false)
         println("  [DRY RUN GPU] 10 contraction iterations for timing...")

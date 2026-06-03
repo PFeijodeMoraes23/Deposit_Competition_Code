@@ -492,7 +492,7 @@ function compute_model_shares_gpu!(buf::HotBuffers, gbuf::GpuBuffers,
 
     # ── 8–9. q_B → s_B ──────────────────────────────────────────────────
     gbuf.q_B     .= exp.(gbuf.V_B .- gbuf.log_denom[gbuf.b_mkt_idx_gpu, :])
-    gbuf.s_B_gpu .= vec(sum(gbuf.q_B; dims=2)) .* GPU_T(1f0 / R)
+    gbuf.s_B_gpu .= vec(sum(gbuf.q_B; dims=2)) .* GPU_T(1.0 / R)
 
     # ── 10. max_neg_ld ───────────────────────────────────────────────────
     gbuf.neg_log_denom .= .-gbuf.log_denom
@@ -519,13 +519,72 @@ function compute_model_shares_gpu!(buf::HotBuffers, gbuf::GpuBuffers,
     gbuf.row_max_D .= vec(maximum(gbuf.log_s_D_r; dims=2))
     gbuf.s_D_gpu   .= exp.(gbuf.row_max_D) .*
                       (vec(sum(exp.(gbuf.log_s_D_r .- gbuf.row_max_D); dims=2)) .*
-                       GPU_T(1f0 / R))
+                       GPU_T(1.0 / R))
 
     # ── 16. Copy results back to CPU Float64 ─────────────────────────────
     CUDA.synchronize()
     buf.s_B .= Float64.(Array(gbuf.s_B_gpu))
     buf.s_D .= Float64.(Array(gbuf.s_D_gpu))
     return nothing
+end
+
+# ==========================================================================
+# GPU↔CPU Consistency Guard
+# ==========================================================================
+
+"""
+    verify_gpu_shares(buf, gbuf, delta, pc, R; rtol=1e-9) → Float64
+
+The callers pass `rtol = tol_inner`: the SQUAREM residual floor equals the
+share relative error, so shares must agree to `tol_inner` for the inner loop to
+reach it. (The original `1f0/R` bug gave a ~3.6e-9 share error — above a
+`tol_inner` of 1e-10, hence non-convergence — which this guard now flags.)
+
+Compute model shares at `delta` on BOTH the CPU reference
+(`compute_model_shares!`) and the GPU (`compute_model_shares_gpu!`) and compare.
+Returns the max relative difference; **errors** if it exceeds `rtol`.
+
+This is a cheap startup guard against silent GPU precision regressions — e.g. a
+Float32 `1/R` scaling factor — that don't crash but bias every share by a constant
+factor, pinning the SQUAREM residual above `tol_inner` so the inner loop spins to
+`max_iter` every time. Such a bug shows up here as a clear failure instead of a
+day-long job that quietly never converges.
+
+`buf.mu` must already be populated (call `compute_mu!` at the same θ₂ first).
+Both share routines read `buf.mu` and write `buf.s_B`/`buf.s_D`, so the GPU call
+leaves `buf` holding the GPU shares on return.
+"""
+function verify_gpu_shares(buf::HotBuffers, gbuf::GpuBuffers,
+                            delta::Vector{Float64}, pc::Precomp, R::Int;
+                            rtol::Float64=1e-9)
+    # CPU reference shares
+    compute_model_shares!(buf, delta, pc, R)
+    cpu_sB = copy(buf.s_B); cpu_sD = copy(buf.s_D)
+
+    # GPU shares (overwrites buf.s_B / buf.s_D)
+    compute_model_shares_gpu!(buf, gbuf, delta, pc, R)
+
+    maxrel(c::Vector{Float64}, g::Vector{Float64}) = begin
+        m = 0.0
+        @inbounds for i in eachindex(c)
+            d = abs(g[i] - c[i]) / max(abs(c[i]), 1e-12)
+            d > m && (m = d)
+        end
+        m
+    end
+    eB = maxrel(cpu_sB, buf.s_B)
+    eD = maxrel(cpu_sD, buf.s_D)
+    emax = max(eB, eD)
+    log_status("  [GPU CHECK] max rel share diff CPU vs GPU: " *
+               "B=$(round(eB, sigdigits=3)) | D=$(round(eD, sigdigits=3))")
+    if emax > rtol
+        error("[GPU CHECK FAILED] GPU shares deviate from CPU by " *
+              "$(round(emax, sigdigits=4)) > rtol=$rtol. Likely a GPU precision " *
+              "regression (e.g. a Float32 scaling factor such as `1f0/R`). The inner " *
+              "loop will not converge to tol_inner — aborting before wasting the job.")
+    end
+    log_status("  [GPU CHECK] ✓ GPU shares match CPU within rtol=$rtol")
+    return emax
 end
 
 # ==========================================================================
@@ -575,7 +634,7 @@ function model_shares_dev!(gbuf::GpuBuffers, delta_gpu::CuVector{GPU_T},
             GPU_T(1f-30)))
     end
     gbuf.q_B     .= exp.(gbuf.V_B .- gbuf.log_denom[gbuf.b_mkt_idx_gpu, :])
-    gbuf.s_B_gpu .= vec(sum(gbuf.q_B; dims=2)) .* GPU_T(1f0 / R)
+    gbuf.s_B_gpu .= vec(sum(gbuf.q_B; dims=2)) .* GPU_T(1.0 / R)
 
     gbuf.neg_log_denom .= .-gbuf.log_denom
     launch_groupmax!(gbuf.max_neg_ld, gbuf.neg_log_denom, gbuf.sort_pt_gpu,
@@ -588,7 +647,7 @@ function model_shares_dev!(gbuf::GpuBuffers, delta_gpu::CuVector{GPU_T},
     gbuf.row_max_D .= vec(maximum(gbuf.log_s_D_r; dims=2))
     gbuf.s_D_gpu   .= exp.(gbuf.row_max_D) .*
                       (vec(sum(exp.(gbuf.log_s_D_r .- gbuf.row_max_D); dims=2)) .*
-                       GPU_T(1f0 / R))
+                       GPU_T(1.0 / R))
 
     # Scatter compact shares → full-N model-share vector (stays on device)
     s_model_full[gbuf.b_mask_idx_gpu] .= gbuf.s_B_gpu
@@ -913,6 +972,12 @@ function run_blp_estimation_gpu(estim::Int, spec_id::Int, args,
             delta_work[pc.b_mask] .= pc.ln_s_data_B_cond[pc.b_mask]
             log_status("  [δ WARM-START] No logit checkpoint — log-share init")
         end
+    end
+
+    # ── GPU↔CPU share consistency guard (catches precision regressions) ───
+    let (sv, pv) = unpack_theta2(theta2_0, sigma_indices, pi_interactions)
+        compute_mu!(buf, prod_vec, nu_draws, sv, sigma_indices, pv, R, coef_dim)
+        verify_gpu_shares(buf, gbuf, delta_work, pc, R; rtol=args["tol_inner"])
     end
 
     # ── Dry-run timing (GPU) ──────────────────────────────────────────────
