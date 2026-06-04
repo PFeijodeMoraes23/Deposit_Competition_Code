@@ -487,7 +487,7 @@ function compute_model_shares_gpu!(buf::HotBuffers, gbuf::GpuBuffers,
         jm = max.(GPU_T(0f0), lsB, lsD)
         gbuf.log_denom .= jm .+ log.(max.(
             exp.(GPU_T(0f0) .- jm) .+ exp.(lsB .- jm) .+ exp.(lsD .- jm),
-            GPU_T(1f-30)))
+            GPU_T(1e-30)))
     end
 
     # ── 8–9. q_B → s_B ──────────────────────────────────────────────────
@@ -510,7 +510,7 @@ function compute_model_shares_gpu!(buf::HotBuffers, gbuf::GpuBuffers,
 
     # ── 13. log_inv_wtd ──────────────────────────────────────────────────
     gbuf.log_inv_wtd .= gbuf.max_neg_ld .+
-                        log.(max.(gbuf.sum_wtd, GPU_T(1f-30)))
+                        log.(max.(gbuf.sum_wtd, GPU_T(1e-30)))
 
     # ── 14. log_s_D_r ────────────────────────────────────────────────────
     gbuf.log_s_D_r .= gbuf.V_D .+ gbuf.log_inv_wtd[gbuf.d_time_enc_gpu, :]
@@ -575,16 +575,37 @@ function verify_gpu_shares(buf::HotBuffers, gbuf::GpuBuffers,
     eB = maxrel(cpu_sB, buf.s_B)
     eD = maxrel(cpu_sD, buf.s_D)
     emax = max(eB, eD)
+
+    # Floored log-share diff — the *actual* SQUAREM residual ingredient
+    # (T(δ) = δ + ln_s_data − log(max(s, 1e-15))).  Raw-share agreement can hide a
+    # mismatch that only appears after the log-floor: a tiny-share obs floored at a
+    # slightly-off constant (e.g. Float32 `1f-15` = 1.0000000363e-15) leaves the raw
+    # shares equal yet gaps log(s) by ~3.6e-9, pinning the contraction above tol_inner.
+    # Floor at the SAME exact 1e-15 the CPU/GPU contraction uses.
+    maxabs_logfloor(c::Vector{Float64}, g::Vector{Float64}) = begin
+        m = 0.0
+        @inbounds for i in eachindex(c)
+            d = abs(log(max(g[i], 1e-15)) - log(max(c[i], 1e-15)))
+            d > m && (m = d)
+        end
+        m
+    end
+    lB = maxabs_logfloor(cpu_sB, buf.s_B)
+    lD = maxabs_logfloor(cpu_sD, buf.s_D)
+    lmax = max(lB, lD)
+
     log_status("  [GPU CHECK] max rel share diff CPU vs GPU: " *
                "B=$(round(eB, sigdigits=3)) | D=$(round(eD, sigdigits=3))")
-    if emax > rtol
-        error("[GPU CHECK FAILED] GPU shares deviate from CPU by " *
-              "$(round(emax, sigdigits=4)) > rtol=$rtol. Likely a GPU precision " *
-              "regression (e.g. a Float32 scaling factor such as `1f0/R`). The inner " *
-              "loop will not converge to tol_inner — aborting before wasting the job.")
+    log_status("  [GPU CHECK] max |Δ log(max(s,1e-15))| (residual ingredient): " *
+               "B=$(round(lB, sigdigits=3)) | D=$(round(lD, sigdigits=3))")
+    if emax > rtol || lmax > rtol
+        error("[GPU CHECK FAILED] GPU vs CPU mismatch: raw-share rel=$(round(emax, sigdigits=4)), " *
+              "log-floor abs=$(round(lmax, sigdigits=4)) (rtol=$rtol). Likely a GPU precision " *
+              "regression — a Float32 scaling factor (`1f0/R`) or log-floor literal (`1f-15`). " *
+              "The inner loop will not converge to tol_inner — aborting before wasting the job.")
     end
-    log_status("  [GPU CHECK] ✓ GPU shares match CPU within rtol=$rtol")
-    return emax
+    log_status("  [GPU CHECK] ✓ GPU matches CPU within rtol=$rtol (shares and log-floor)")
+    return max(emax, lmax)
 end
 
 # ==========================================================================
@@ -631,7 +652,7 @@ function model_shares_dev!(gbuf::GpuBuffers, delta_gpu::CuVector{GPU_T},
         jm = max.(GPU_T(0f0), lsB, lsD)
         gbuf.log_denom .= jm .+ log.(max.(
             exp.(GPU_T(0f0) .- jm) .+ exp.(lsB .- jm) .+ exp.(lsD .- jm),
-            GPU_T(1f-30)))
+            GPU_T(1e-30)))
     end
     gbuf.q_B     .= exp.(gbuf.V_B .- gbuf.log_denom[gbuf.b_mkt_idx_gpu, :])
     gbuf.s_B_gpu .= vec(sum(gbuf.q_B; dims=2)) .* GPU_T(1.0 / R)
@@ -642,7 +663,7 @@ function model_shares_dev!(gbuf::GpuBuffers, delta_gpu::CuVector{GPU_T},
     gbuf.shifted_inv .= exp.(gbuf.neg_log_denom .-
                              gbuf.max_neg_ld[gbuf.pair_time_enc_gpu, :])
     mul!(gbuf.sum_wtd, gbuf.PT_agg_gpu, gbuf.shifted_inv)
-    gbuf.log_inv_wtd .= gbuf.max_neg_ld .+ log.(max.(gbuf.sum_wtd, GPU_T(1f-30)))
+    gbuf.log_inv_wtd .= gbuf.max_neg_ld .+ log.(max.(gbuf.sum_wtd, GPU_T(1e-30)))
     gbuf.log_s_D_r .= gbuf.V_D .+ gbuf.log_inv_wtd[gbuf.d_time_enc_gpu, :]
     gbuf.row_max_D .= vec(maximum(gbuf.log_s_D_r; dims=2))
     gbuf.s_D_gpu   .= exp.(gbuf.row_max_D) .*
@@ -709,7 +730,10 @@ function blp_contraction_gpu!(buf::HotBuffers, gbuf::GpuBuffers,
     s_full = CUDA.zeros(GPU_T, N)
 
     lo = GPU_T(-500f0); hi = GPU_T(500f0)
-    floor_s = GPU_T(1f-15)
+    floor_s = GPU_T(1e-15)   # Float64 literal — MUST match the CPU `clamp(s, 1e-15, Inf)`
+                             # exactly. A Float32 `1f-15` here is 1.0000000363e-15, which
+                             # gaps log(s) by ~3.627e-9 at floored shares and pins the
+                             # SQUAREM residual above tol_inner (silent non-convergence).
 
     # Contraction map T(src) → dest, both device vectors
     Tstep!(dest::CuVector{GPU_T}, src::CuVector{GPU_T}) = begin
