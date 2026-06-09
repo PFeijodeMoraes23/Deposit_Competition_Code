@@ -26,7 +26,7 @@
 #       Motivates heterogeneous demographic loadings Pi/Pi^q.
 ###────────────────────────────────────────────────────────────────────────────
 
-import os, sys, logging
+import os, sys, re, logging
 import numpy as np
 import pandas as pd
 import matplotlib
@@ -132,8 +132,10 @@ def load_client_series() -> pd.DataFrame:
             continue
         src = str(r.get("source", "ipe"))
         src_rank = 0 if "tier4" in src else 1  # prefer tier4 (Claude vision)
+        q_raw = r.get("period_quarter", 2)
+        q_int = int(float(q_raw)) if pd.notna(q_raw) else 2
         rows.append(dict(firm_key=fk, segment=r["segment"],
-                         year=r["period_year"], quarter=r.get("period_quarter", 2),
+                         year=int(r["period_year"]), quarter=q_int,
                          clients=val, src_rank=src_rank))
 
     # ── EDGAR (Nubank, Inter, PagSeguro, Stone, XP, incumbents) ──────────────
@@ -142,7 +144,73 @@ def load_client_series() -> pd.DataFrame:
     # customers_total ONLY — do not fall back to customers_active
     edgar = edgar[edgar["metric"] == "customers_total"]
     edgar = edgar[edgar["geo_scope"].isin(["brazil", "consolidated", "latam"])]
+    edgar["value"] = pd.to_numeric(edgar["value"], errors="coerce")
     edgar = edgar[edgar["value"] <= _GLOBAL_CEIL]
+
+    # Context-based exclusion: reject rows where raw_context reveals the number
+    # is NOT the firm's current total customer count.
+    # Context-based exclusion filters (applied before dedup/QoQ).
+    # These reject rows where raw_context reveals the number is NOT the firm's
+    # current total customer count — no firm-specific number thresholds needed.
+    _CTX_EXCLUDE = [
+        # Forward-looking strategic targets, e.g. Inter's "60-30-30 plan aiming
+        # to reach 60 million clients by 2027" (target, not current count)
+        r"\bto\s+(?:reach|achieve|attain)\b",
+        r"\b(?:north\s+star|pathway\s+toward|quest\s+to|aiming\s+to)\b",
+        r"\baims?\s+to\b",
+        # "strategic objective/framework" — also matches "trategic framework" when
+        # the leading 's' is truncated at the left edge of the raw_context window
+        r"trategic\s+(?:objective|framework|goal|target)s?",
+        r"\bby\s+202[6-9]\b",           # future-year anchor ("by 2027")
+        # Microfinance/microcredit sub-division — e.g. Santander's microcredit
+        # portfolio serves ~1.1M customers; this is not total bank customers
+        r"\bmicro(?:credit|finance|cr\xe9dit|financ)\b",
+        # Microfinance programs described by number of municipalities/communities
+        # served — bank-wide customer counts do not carry this qualifier
+        r"\b\d+\s+(?:municipalities|communities)\b",
+        # Credit-portfolio outstanding balance (not total customer count)
+        r"\boutstanding\s+balance\b",
+        # App/platform migration counts and brokerage sub-segments (Itaú: "migration
+        # of 15 million customers to the Super App", "retail brokerage services to
+        # over 531,000 clients" — neither is the bank's total customer count)
+        r"\bmigrat(?:ion\s+of|e)\s+\d",
+        r"\bbrokerage\b",
+    ]
+    ctx = edgar["raw_context"].fillna("").str.lower()
+    ok = pd.Series(True, index=edgar.index)
+    for pat in _CTX_EXCLUDE:
+        ok &= ~ctx.str.contains(pat, regex=True, na=False)
+
+    # Competitor-name-as-subject filter: reject rows where a DIFFERENT firm's
+    # name appears as the grammatical subject ("Banco Inter has X million users"
+    # in Stone's 6-K is Inter's count, not Stone's).  Applied row-wise so that
+    # a firm's OWN filings saying "Nubank has 110M customers" are NOT excluded.
+    _COMP_NAMES = {
+        "banco inter": "inter",
+        "nubank": "nubank",
+        "pagbank": "pagseguro",
+        "pagseguro digital": "pagseguro",
+        "banco bradesco": "bradesco",
+        "itau unibanco": "itau",
+        "banco do brasil": "bb",
+        "caixa econom": "caixa",
+    }
+    for idx, row in edgar[ok].iterrows():
+        fk  = str(row.get("firm_key", ""))
+        ctx_low = str(row.get("raw_context", "")).lower()
+        for name, owner_fk in _COMP_NAMES.items():
+            if owner_fk != fk and re.search(r"\b" + re.escape(name) + r"\s+has\b", ctx_low):
+                ok[idx] = False
+                break
+
+    excluded = (~ok).sum()
+    if excluded:
+        for _, bad in edgar[~ok].iterrows():
+            log.warning(f"  EDGAR ctx-excl: {bad.get('firm_key','')} "
+                        f"{bad.get('period_year','')}Q{bad.get('period_quarter','')} "
+                        f"value={float(bad['value'])/1e6:.1f}M  "
+                        f"ctx: {str(bad.get('raw_context',''))[:80]}")
+    edgar = edgar[ok]
     # rank: brazil-scope best; within same scope, larger value preferred
     edgar["scope_rank"] = edgar["geo_scope"].map({"brazil": 0, "consolidated": 1, "latam": 2}).fillna(3)
     edgar = edgar.sort_values(["scope_rank", "value"], ascending=[True, False])
@@ -150,7 +218,7 @@ def load_client_series() -> pd.DataFrame:
         if pd.isna(q): continue
         best = g.iloc[0]
         rows.append(dict(firm_key=fk, segment=best["segment"],
-                         year=int(yr), quarter=int(q),
+                         year=int(yr), quarter=int(float(q)),
                          clients=float(best["value"]), src_rank=2))
 
     df = pd.DataFrame(rows)
