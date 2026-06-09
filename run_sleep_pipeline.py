@@ -13,13 +13,11 @@ options:
                   instead of all specifications.
 
 This script sequentially runs the following steps:
-  1. estimation_1_sleep.py         (Local Estimation of Sleepness)
-  2. estimation_2_sleep.py         (Robustness bounds for B-firms)
-  3. estimation_3_sleep.py         (Robustness bounds for pooled B and D firms)
-  4. estimation_4_sleep.py         (NLLS logistic structural estimation)
-  5. estimation_5_sleep.py         (Robustness bounds with cooperative/state controls)
-  6. export_results.py             (Export 1st/2nd Stage Summaries across all estimators)
-  7. estimation_demand_1_prep.py   (Universal Demand Prep Orchestrator & Panel Serialization)
+  1. estimation_1_sleep.py         (Local B-type Estimation)
+  2. estimation_2_sleep.py         (Pooled B+D Linear)
+  3. estimation_3_sleep.py         (Pooled B+D Logistic, AME)
+  4. export_results.py             (Export 1st/2nd Stage Summaries)
+  5. estimation_demand_1_prep.py   (Universal Demand Prep Orchestrator & Panel Serialization)
 """
 from utils.venv_guard import ensure_project_venv
 ensure_project_venv(__file__)
@@ -85,13 +83,11 @@ def main():
         description="Run the full Sleepiness Estimation Pipeline.",
         epilog="""
 This script sequentially runs the following steps:
-  1. estimation_1_sleep.py         (Local Estimation of Sleepness)
-  2. estimation_2_sleep.py         (Robustness bounds for B-firms)
-  3. estimation_3_sleep.py         (Robustness bounds for pooled B and D firms)
-  4. estimation_4_sleep.py         (NLLS logistic structural estimation)
-  5. estimation_5_sleep.py         (Robustness bounds with cooperative/state controls)
-  6. export_results.py             (Export 1st/2nd Stage Summaries across all estimators)
-  7. estimation_demand_1_prep.py   (Universal Demand Prep Orchestrator & Panel Serialization)
+  1. estimation_1_sleep.py         (Local B-type Estimation)
+  2. estimation_2_sleep.py         (Pooled B+D Linear)
+  3. estimation_3_sleep.py         (Pooled B+D Logistic, AME)
+  4. export_results.py             (Export 1st/2nd Stage Summaries)
+  5. estimation_demand_1_prep.py   (Universal Demand Prep Orchestrator & Panel Serialization)
         """,
         formatter_class=argparse.RawDescriptionHelpFormatter
     )
@@ -101,29 +97,26 @@ This script sequentially runs the following steps:
         action="store_true",
         help="Only run specification 12 for the demand prep scripts instead of all specifications."
     )
-    
+
     parser.add_argument(
         "--skip-sleep",
         action="store_true",
-        help="Skip executing sleepiness estimators 1-6 and only run exports and demand prep."
+        help="Skip executing sleepiness estimators 1-3 and only run exports and demand prep."
     )
-    
+
     parser.add_argument(
         "--sleep-only",
         action="store_true",
-        help="Only execute the first 6 sleepiness estimation steps and plot scripts, skipping exports and demand prep."
+        help="Only execute the first 3 sleepiness estimation steps, skipping exports and demand prep."
     )
     parser.add_argument(
         "--skip-steps",
         nargs="+",
         type=int,
         default=[],
-        help="Skip executing specific steps (1-7). E.g., --skip-steps 1 2"
+        help="Skip executing specific steps (1-6). E.g., --skip-steps 1 2"
     )
     args = parser.parse_args()
-
-
-    
 
     spec_arg = "12" if args.only_spec_12 else "all"
     spec12_arg = ["--spec12"] if args.only_spec_12 else []
@@ -132,23 +125,20 @@ This script sequentially runs the following steps:
         print("[ERROR] Cannot use both --skip-sleep and --sleep-only simultaneously.")
         sys.exit(1)
 
-    # Define the scripts and their arguments precisely as requested
     scripts_to_run = []
-    
+
     if not getattr(args, 'skip_sleep', False):
         scripts_to_run.extend([
-            {"id": 1, "file": "estimation_1_sleep.py", "desc": "Local Estimation of Sleepness"},
-            {"id": 2, "file": "estimation_2_sleep.py", "args": spec12_arg, "desc": "Robustness bounds for B-firms"},
-            {"id": 3, "file": "estimation_3_sleep.py", "args": spec12_arg, "desc": "Robustness bounds for pooled B and D firms"},
-            {"id": 4, "file": "estimation_4_sleep.py", "args": spec12_arg, "desc": "NLLS logistic structural estimation"},
-            {"id": 5, "file": "estimation_5_sleep.py", "args": spec12_arg, "desc": "Robustness bounds with cooperative/state controls"},
+            {"id": 1, "file": "estimation_1_sleep.py", "desc": "Local B-type Estimation"},
+            {"id": 2, "file": "estimation_2_sleep.py", "args": spec12_arg, "desc": "Pooled B+D Linear"},
+            {"id": 3, "file": "estimation_3_sleep.py", "args": spec12_arg, "desc": "Pooled B+D Logistic (AME)"},
         ])
 
     if not getattr(args, 'sleep_only', False):
         scripts_to_run.extend([
-            {"id": 6, "file": "export_results.py", "args": ["--estimation", "all"], "desc": "Export 1st/2nd Stage Summaries across all estimators"},
-            {"id": 7, "file": "estimation_demand_1_prep.py", "args": ["--estimation", "all", "--spec", spec_arg], "desc": "Universal Demand Prep Orchestrator & Panel Serialization"},
-            {"id": 8, "file": "export_analyze_spec12.py", "args": ["--skip-est2"], "desc": "Analyze Specification 12 Results"}
+            {"id": 4, "file": "export_results.py", "args": ["--estimation", "all"], "desc": "Export 1st/2nd Stage Summaries"},
+            {"id": 5, "file": "estimation_demand_1_prep.py", "args": ["--estimation", "all", "--spec", spec_arg], "desc": "Universal Demand Prep Orchestrator & Panel Serialization"},
+            {"id": 6, "file": "export_analyze_spec12.py", "args": [], "desc": "Analyze Specification 12 Results"},
         ])
 
     import concurrent.futures
@@ -161,16 +151,12 @@ This script sequentially runs the following steps:
     start_time_all = time.time()
 
     sleep_scripts = []
-    heavy_scripts = []  # scripts that must run alone after parallel batch completes
+    heavy_scripts = []
     post_scripts = []
-    
-    # Split into sleep estimators and post-processors
+
     for s in scripts_to_run:
         if s['file'].startswith('estimation_') and s['file'].endswith('_sleep.py'):
-            if s['file'] == 'estimation_5_sleep.py':
-                heavy_scripts.append(s)
-            else:
-                sleep_scripts.append(s)
+            sleep_scripts.append(s)
         else:
             post_scripts.append(s)
 

@@ -50,6 +50,7 @@ def clean_name(v):
         'pix_users_pf_per1000': 'Pix Users (100s per 1k)',
         'connections_per100': 'Broadband Connections (per 100 inhabitants)',
         'branches_per1000': 'Branches per 1k',
+        'v_hat_x_lagged_dep': 'CF: $\\hat{v} \\times$ Lagged Deposits',
         'pix_exists': 'Pix Available',
         'const': 'Constant',
         'constant': 'Constant',
@@ -240,8 +241,8 @@ def build_second_stage_table(results_dict, G, G_star):
     all_vars = [
         'const', 'pix_exists', 'gdp_per_capita',
         'cadunico_families_per1000', 'fraction_65plus', 'fraction_young',
-        'risk_free_qoq_lag',
-        'pix_users_pf_per1000', 'connections_per100', 'branches_per1000',
+        'risk_free_qoq_lag', 'connections_per100',
+        'v_hat_x_lagged_dep',
     ]
     multispan = 5
     caption = "Local Data Only - Second Stage Estimation"

@@ -13,11 +13,9 @@ CLI Usage Examples:
   python export_results.py --estimation all
 
 Estimation map:
-  1 -> export_1_sleep_results.py
-  2 -> export_2_sleep_results.py (if present)
-  3 -> export_3_sleep_results.py
-  4 -> export_4_sleep_results.py
-  5 -> export_5_sleep_results.py
+  1 -> export_1_sleep_results.py  (Local B-type)
+  2 -> export_2_sleep_results.py  (Pooled B+D Linear)
+  3 -> export_3_sleep_results.py  (Pooled B+D Logistic, AME)
 """
 
 import sys
@@ -42,12 +40,12 @@ def _run_export(est):
     return est, result.returncode, result.stdout + result.stderr
 
 def main():
-    parser = argparse.ArgumentParser(description="Export estimation results for steps 1-5.")
-    parser.add_argument("--estimation", choices=['1', '2', '3', '4', '5', 'all'], required=True,
-                        help="Specify the estimation step number (1 to 5) or 'all'.")
+    parser = argparse.ArgumentParser(description="Export estimation results for steps 1-3.")
+    parser.add_argument("--estimation", choices=['1', '2', '3', 'all'], required=True,
+                        help="Specify the estimation step number (1 to 3) or 'all'.")
     args = parser.parse_args()
 
-    est_list = [1, 2, 3, 4, 5] if args.estimation == 'all' else [int(args.estimation)]
+    est_list = [1, 2, 3] if args.estimation == 'all' else [int(args.estimation)]
 
     print(f"[Export] Launching {len(est_list)} export script(s) in parallel...")
 

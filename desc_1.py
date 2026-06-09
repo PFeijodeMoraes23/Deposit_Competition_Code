@@ -100,7 +100,18 @@ def main():
 
     print("Loading data...")
     df = pd.read_csv(PANEL_CSV, low_memory=False)
-    
+
+    # Forward-fill COSIF balance-sheet variables within each conglomerate to cover periods
+    # where COSIF reporting has not yet been ingested (e.g. most-recent year after panel
+    # extension). This carries the last available quarterly value forward in time.
+    _cosif_cols = [c for c in ['total_assets', 'equity_ratio', 'dep_a5'] if c in df.columns]
+    if _cosif_cols:
+        df = df.sort_values(['CodConglomeradoPrudencial', 'year', 'quarter'])
+        df[_cosif_cols] = (
+            df.groupby('CodConglomeradoPrudencial')[_cosif_cols]
+              .transform(lambda x: x.ffill())
+        )
+
     # 1. Identify Bank Type (D vs B)
     # The convention dictates B-type are municipal (CODMUN_IBGE != 0), D-type are national (= 0).
     df['CODMUN_IBGE_str'] = df['CODMUN_IBGE'].astype(str).str.split('.').str[0]

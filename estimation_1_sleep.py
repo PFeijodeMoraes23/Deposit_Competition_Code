@@ -181,8 +181,7 @@ def run_first_stage(df, spec_instruments, exogenous_controls):
 
     df['v_hat'] = 0.0
     df.loc[valid_mask, 'v_hat'] = res.resid
-    df['v_hat_2'] = df['v_hat'] ** 2
-    df['v_hat_3'] = df['v_hat'] ** 3
+    df['v_hat_x_lagged_dep'] = df['v_hat'] * df['lagged_deposits']
     return df, res
 
 def run_second_stage(df, state_vars, has_cf=False, spec_name=""):
@@ -193,8 +192,8 @@ def run_second_stage(df, state_vars, has_cf=False, spec_name=""):
         else: df[col_name] = df[sv] * df['nr_lagged_dep']
         X_cols.append(col_name)
         
-    if has_cf: X_cols.extend(['v_hat', 'v_hat_2', 'v_hat_3'])
-        
+    if has_cf: X_cols.append('v_hat_x_lagged_dep')
+
     df_ss = df.dropna(subset=X_cols + ['deposit_balance']).copy()
     if len(df_ss) == 0: return None
         
@@ -261,7 +260,7 @@ def print_cluster_diagnostics(df):
 def scale_magnitudes(df):
     scale_cols = {
         'gdp_per_capita': 10000.0, 'cadunico_families_per1000': 100.0,
-        'pix_users_pf_per1000': 100.0, 'connections_per100': 100.0,
+        'connections_per100': 100.0,
         'deposit_balance': 1000000000.0, 'nr_lagged_dep': 1000000000.0,
         'lagged_deposits': 1000000000.0
     }
@@ -272,13 +271,13 @@ def scale_magnitudes(df):
 def define_specifications():
     s_base = ['constant', 'pix_exists']
     s_macro = s_base + ['gdp_per_capita', 'cadunico_families_per1000', 'fraction_65plus', 'fraction_young', 'risk_free_qoq_lag']
-    s_tech_finance = s_macro + ['pix_users_pf_per1000', 'connections_per100', 'branches_per1000']
+    s_tech = s_macro + ['connections_per100']
 
     iv_specs = {'OLS': [], 'IV_CostShifters': ['personnel_cost_ratio_lag', 'admin_cost_ratio_lag', 'tax_cost_ratio_lag'],
                'IV_Wholesale': ['personnel_cost_ratio_lag', 'admin_cost_ratio_lag', 'tax_cost_ratio_lag', 'lci_lca_ratio_lag', 'wholesale_ratio_lag', 'indice_basileia_lag'],
                'IV_HausmanFull': ['personnel_cost_ratio_lag', 'admin_cost_ratio_lag', 'tax_cost_ratio_lag', 'lci_lca_ratio_lag', 'wholesale_ratio_lag', 'indice_basileia_lag', 'leave_one_out_mean_spread']}
-    state_blocks = {'Base': s_base, 'Macro': s_macro, 'Tech': s_tech_finance}
-    return s_tech_finance, iv_specs, state_blocks
+    state_blocks = {'Base': s_base, 'Macro': s_macro, 'Tech': s_tech}
+    return s_tech, iv_specs, state_blocks
 
 def do_estimation():
     print("=== PHASE 1: ESTIMATION (CFA) ===")
@@ -346,7 +345,7 @@ def do_estimation():
 # ==============================================================================
 def calculate_phis(df, res_dict, state_blocks):
     df['constant'] = 1.0
-    scale_cols = {'gdp_per_capita': 10000.0, 'cadunico_families_per1000': 100.0, 'pix_users_pf_per1000': 100.0, 'connections_per100': 100.0}
+    scale_cols = {'gdp_per_capita': 10000.0, 'cadunico_families_per1000': 100.0, 'connections_per100': 100.0}
     for col, factor in scale_cols.items():
         if col in df.columns: df[col] /= factor
 

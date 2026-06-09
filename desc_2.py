@@ -301,6 +301,17 @@ def load_panel() -> pd.DataFrame:
         df.loc[pre_mask, "dep_a5"] = 0.0
     if "spread_a5" in df.columns:
         df.loc[pre_mask, "spread_a5"] = np.nan
+
+    # Forward-fill COSIF balance-sheet variables within each conglomerate to cover periods
+    # where COSIF reporting has not yet been ingested (e.g. most-recent year after panel
+    # extension). This carries the last available quarterly value forward in time.
+    _cosif_cols = [c for c in ['total_assets', 'equity_ratio', 'dep_a5'] if c in df.columns]
+    if _cosif_cols:
+        df = df.sort_values(['CodConglomeradoPrudencial', 'year', 'quarter'])
+        df[_cosif_cols] = (
+            df.groupby('CodConglomeradoPrudencial')[_cosif_cols]
+              .transform(lambda x: x.ffill())
+        )
     return df
 
 
