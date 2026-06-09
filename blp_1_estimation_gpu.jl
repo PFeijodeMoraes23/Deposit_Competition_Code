@@ -918,6 +918,9 @@ function run_blp_estimation_gpu(estim::Int, spec_id::Int, args,
     n_pairs = length(pc.unique_pairs)
     n_times = length(pc.unique_times)
 
+    # ── Design-rank guard (aborts on degenerate/collinear X_hat column) ───
+    check_design_rank(pc)
+
     # ── CPU hot buffers + GPU mirror ──────────────────────────────────────
     buf  = allocate_hot_buffers(N_obs, N_B, N_D, R, n_pairs, n_times, coef_dim,
                                  length(pi_interactions))

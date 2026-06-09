@@ -711,6 +711,67 @@ function estimate_theta1(delta::Vector{Float64}, pc::Precomp)
     return theta1, xi
 end
 
+"""
+    check_design_rank(pc; colnames, abort=true) -> Int
+
+Up-front guard against a rank-deficient projected design `X_hat` over the rows used
+for the θ₁ solve (`pc.theta1_valid`). A degenerate/collinear column makes θ₁
+unidentified, and the two estimators hide it differently — a silent false positive:
+
+* `estimate_theta1` uses `X \\ d` (rank-revealing) + `inv(XtX) catch pinv`, so blp_1
+  *absorbs* a zero/constant column and still reports `converged: true`.
+* the IFT gradient uses an unpivoted `qr(X_hat_v) \\ …`, so blp_2 throws
+  `SingularException(j)` at the deficient column j.
+
+This surfaces the offending column **by name** before any estimation runs. Returns the
+numerical rank; if `abort` and rank < ncols it errors (default), else warns.
+`colnames` must align with the columns of `pc.X_hat` (i.e. `["spread_hat"; X_COLS...]`).
+"""
+function check_design_rank(pc::Precomp;
+                           colnames::Vector{String}=vcat(["spread_hat"], X_COLS),
+                           abort::Bool=true)::Int
+    valid = pc.theta1_valid
+    Xv    = pc.X_hat[valid, :]
+    n, k  = size(Xv)
+    name(j) = 1 <= j <= length(colnames) ? colnames[j] : "col$j"
+
+    # Per-column degeneracy (named for a human-readable message)
+    zerocols  = String[]; constcols = String[]
+    for j in 1:k
+        col = @view Xv[:, j]
+        if all(iszero, col)
+            push!(zerocols, name(j))
+        else
+            mn, mx = extrema(col)
+            mx == mn && push!(constcols, name(j))
+        end
+    end
+
+    # Rank-revealing pivoted QR; rank = pivots above a relative tolerance.
+    F      = qr(Xv, ColumnNorm())
+    rdiag  = abs.(diag(F.R))
+    tol    = (isempty(rdiag) ? 0.0 : maximum(rdiag)) * eps(Float64) * max(n, k) * 10
+    rnk    = count(>(tol), rdiag)
+    deficient = rnk < k ? String[name(F.p[i]) for i in (rnk+1):k] : String[]
+
+    log_status("  [DESIGN CHECK] X_hat: $(n)×$(k) | rank=$(rnk)" *
+               (isempty(zerocols)  ? "" : " | all-zero: $(zerocols)") *
+               (isempty(constcols) ? "" : " | constant: $(constcols)"))
+    if rnk < k
+        msg = "[DESIGN CHECK FAILED] X_hat is rank-deficient (rank $(rnk) < $(k) cols). " *
+              "Degenerate column(s): $(unique(vcat(zerocols, deficient)))" *
+              (isempty(constcols) ? "" : "; also constant (unidentified): $(constcols)") *
+              ". θ₁ is not identified — blp_1 would solve it silently (pivoted QR/pinv), " *
+              "blp_2 throws SingularException in the IFT QR. Fix the input data " *
+              "(missing/constant regressor) before trusting any estimates."
+        abort ? error(msg) : @warn msg
+    else
+        log_status("  [DESIGN CHECK] ✓ X_hat full rank ($(rnk)=$(k))" *
+                   (isempty(constcols) ? "" : " — but constant col(s) $(constcols) are unidentified"))
+    end
+    return rnk
+end
+
 """Cluster-robust sandwich SEs for theta1 (IV/2SLS) + IK2016 effective cluster count.
 Returns (se, G_nominal, G_star) where G_star = G/(1+CV²) per Imbens & Kolesár (2016)."""
 function compute_cluster_se(theta1::Vector{Float64}, delta::Vector{Float64}, pc::Precomp)

@@ -112,6 +112,7 @@ FIRMS: list[dict] = [
     dict(firm_key="caixa", display_name="Caixa Econômica Federal",
          segment="incumbent", sec_cik=None, b3_ticker=None, cvm_code=None,
          cnpj_root="00360305", country_scope="brazil", has_sec_deposits=False,
+         cong_prud="C0080738",  # hardcoded: 3rd-largest by 2025 deposits, not resolvable via name-match
          names=["caixa economica", "caixa econômica"]),
     dict(firm_key="banrisul", display_name="Banco do Estado do RS (Banrisul)",
          segment="incumbent", sec_cik=None, b3_ticker="BRSR6", cvm_code="BANRISUL",

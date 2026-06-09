@@ -36,11 +36,73 @@ if ensure_project_venv is not None:
 
 import pandas as pd
 import numpy as np
+import unicodedata
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
 _ROOT = Path(__file__).resolve().parents[2]
 PANEL_CSV = _ROOT / "BCB" / "Egan_et_al_2025_Rep" / "processed" / "market_panel.csv"
+# IF-Data List files (CNPJ -> conglomerate + SegmentoTb). Unlike the Prudential
+# report (which has NO payment institutions), these DO contain IPs, so they are the
+# reliable source for the per-conglomerate has_ip flag written into market_panel.csv.
+IF_DATA_LIST_DIR = _ROOT / "BCB" / "IF Data" / "List"
+
+
+def derive_has_ip_from_list_files(df: pd.DataFrame, list_dir: Path) -> pd.DataFrame:
+    """
+    (Re)derive the per-conglomerate ``has_ip`` flag (does the conglomerate include a
+    Payment Institution) from the IF-Data List files and write it onto the panel.
+
+    ``has_ip`` reaches market_panel.csv from bank_chars (panel_4), whose source
+    (IF_DATA_type_1_report_1.csv, latin1) contains NO payment institutions, so it
+    arrives all-zero. Downstream that makes the BLP X_hat column degenerate
+    (SingularException in the IFT QR / silent rank-deficient solve). The List files
+    DO contain IPs (``SegmentoTb`` ~ "Instituição de Pagamento").
+
+    Detection is accent/encoding-insensitive (NFKD strip + lowercase) so it survives
+    latin1↔utf-8 differences: a row is an IP if its normalised ``SegmentoTb`` contains
+    both "institui" and "pagamento". ``has_ip`` is the max over a conglomerate's member
+    institutions, merged on ``CodConglomeradoPrudencial``. On any failure the existing
+    column is coerced to 0/1 and left in place.
+    """
+    def _norm(s):
+        return (unicodedata.normalize("NFKD", str(s))
+                .encode("ascii", "ignore").decode("ascii").lower())
+    try:
+        files = sorted(Path(list_dir).glob("IF_DATA_List_*.csv"))
+        if not files:
+            raise FileNotFoundError(f"no IF-Data List files in {list_dir}")
+        frames = []
+        for f in files:
+            d = pd.read_csv(f, dtype=str, encoding="utf-8")
+            d.columns = [c.strip() for c in d.columns]
+            if not {"CodInst", "CodConglomeradoPrudencial", "SegmentoTb"}.issubset(d.columns):
+                continue
+            if {"Td", "Situacao"}.issubset(d.columns):
+                d = d[(d["Td"] == "I") & (d["Situacao"] == "A")]
+            cong = d["CodConglomeradoPrudencial"]
+            congl = np.where(cong.isna() | (cong == "null"), d["CodInst"], cong)
+            seg = d["SegmentoTb"].map(_norm)
+            is_ip = (seg.str.contains("institui", na=False)
+                     & seg.str.contains("pagamento", na=False)).astype(int)
+            frames.append(pd.DataFrame({"congl": congl.astype(str), "is_ip": is_ip.values}))
+        if not frames:
+            raise ValueError("List files present but none had the needed columns")
+        congl_ip = pd.concat(frames, ignore_index=True).groupby("congl")["is_ip"].max()
+        lookup = {str(k): int(v) for k, v in congl_ip.items()}
+        new = (df["CodConglomeradoPrudencial"].astype(str).map(lookup)
+               .fillna(0).astype(int))
+        n_congl = int(df.loc[new == 1, "CodConglomeradoPrudencial"].nunique())
+        logging.info(f"  [has_ip] derived from {len(files)} List files: "
+                     f"{int(new.sum()):,} rows ({100*new.mean():.1f}%) "
+                     f"across {n_congl} IP conglomerates")
+        df["has_ip"] = new
+    except Exception as e:
+        logging.warning(f"  [has_ip] List-file derivation failed ({e}); "
+                        f"coercing existing column to 0/1")
+        df["has_ip"] = (pd.to_numeric(df.get("has_ip"), errors="coerce")
+                        .fillna(0).astype(float) > 0).astype(int)
+    return df
 
 def compute_loo_instruments(df: pd.DataFrame) -> pd.DataFrame:
     """Compute Leave-One-Out (LOO) BLP instruments per MCA-quarter."""
@@ -128,7 +190,12 @@ def main():
 
     logging.info(f"Loading {PANEL_CSV}")
     df = pd.read_csv(PANEL_CSV, low_memory=False, dtype={'mca_code': str, 'CODMUN_IBGE': str})
-    
+
+    # Override has_ip with the List-file-based per-conglomerate flag. The merged panel
+    # inherits has_ip from the Prudential report, which has no payment institutions
+    # (all-zero); the List files do, so this populates the flag correctly.
+    df = derive_has_ip_from_list_files(df, IF_DATA_LIST_DIR)
+
     # Compute instruments
     df_aug = compute_loo_instruments(df)
     

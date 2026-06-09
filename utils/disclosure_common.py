@@ -279,17 +279,32 @@ def new_record(**kw) -> dict:
 
 
 def write_panel(records: Iterable[dict], out_csv: str) -> int:
-    """Write a list of records (dicts keyed by PANEL_COLUMNS) to CSV via pyarrow,
-    matching the project's I/O convention. Returns row count."""
+    """Merge new records into the existing CSV (read-modify-write), then write.
+
+    Rows for firms present in `records` are replaced; all other firms' rows are
+    preserved.  This means per-firm scraper runs accumulate correctly instead of
+    overwriting each other.
+    """
     import pandas as pd
     rows = list(records)
-    df = pd.DataFrame(rows, columns=PANEL_COLUMNS) if rows else \
-        __import__("pandas").DataFrame(columns=PANEL_COLUMNS)
+    new_df = pd.DataFrame(rows, columns=PANEL_COLUMNS) if rows else \
+        pd.DataFrame(columns=PANEL_COLUMNS)
+
+    # Merge with existing file: keep rows for firms NOT in this batch
+    if os.path.isfile(out_csv) and new_df["firm_key"].notna().any():
+        try:
+            existing = pd.read_csv(out_csv)
+            scraped_firms = set(new_df["firm_key"].dropna().unique())
+            kept = existing[~existing["firm_key"].isin(scraped_firms)]
+            new_df = pd.concat([kept, new_df], ignore_index=True)
+        except Exception:  # noqa: BLE001 - if read fails, just use new records
+            pass
+
     os.makedirs(os.path.dirname(out_csv), exist_ok=True)
     try:
         import pyarrow as pa
         import pyarrow.csv as pa_csv
-        pa_csv.write_csv(pa.Table.from_pandas(df, preserve_index=False), out_csv)
-    except Exception:  # noqa: BLE001 - fall back to pandas writer
-        df.to_csv(out_csv, index=False)
-    return len(df)
+        pa_csv.write_csv(pa.Table.from_pandas(new_df, preserve_index=False), out_csv)
+    except Exception:  # noqa: BLE001
+        new_df.to_csv(out_csv, index=False)
+    return len(new_df)

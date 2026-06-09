@@ -87,41 +87,97 @@ def _save(fig, stem: str) -> None:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def load_client_series() -> pd.DataFrame:
-    """Merge IPE + EDGAR client-count time series into a single long frame."""
+    """Merge IPE + EDGAR client-count time series into a single long frame.
+
+    Data-quality rules (targeted, not blunt QoQ filters):
+
+    EDGAR:
+    - Use customers_total only; do not fall back to customers_active. Quarters
+      where only customers_active was disclosed are left blank rather than
+      showing a mismatched metric (e.g. PagSeguro 2024-Q1/Q2: active≈17M vs
+      total≈33M).
+    - Global ceiling of 150M: values above this are deposits/other figures
+      misread by the text extractor (e.g. PagSeguro 2026-Q2 = 6M is below
+      ceiling but still removed via IPE-style ceiling on outliers below).
+
+    IPE (BB, Pan, BMG, Banrisul):
+    - Source preference: for any (firm, year, quarter) with both tier4 and
+      tier2 values, prefer tier4 (Claude-vision extraction is more reliable
+      for structured figures than tier2 text-regex).
+    - Global ceiling of 150M for the same reason.
+    - BB-specific floor: BB has had >50M clients since at least 2016; values
+      below 20M are segment mentions extracted from PDF prose, not total client
+      counts. Applied only to BB.
+    """
+    _BB_FLOOR    = 20_000_000  # BB: anything <20M is a segment mention
+    _GLOBAL_CEIL = 150_000_000  # deposits or other figures mis-tagged as clients
+
     rows = []
 
-    # IPE (Pan, BMG, BB, Banrisul) — metric = clients_active, value = absolute
+    # ── IPE (BB, Pan, BMG, Banrisul) ─────────────────────────────────────────
     ipe = pd.read_csv(os.path.join(BASE, "FirmDisclosures", "Incumbents",
                                    "incumbent_client_counts.csv"))
     for _, r in ipe.iterrows():
-        if r["metric"] == "clients_active" and pd.notna(r["value"]):
-            rows.append(dict(firm_key=r["firm_key"], segment=r["segment"],
-                             year=r["period_year"], quarter=r.get("period_quarter",2),
-                             clients=float(r["value"])))
+        if r["metric"] != "clients_active" or pd.isna(r["value"]):
+            continue
+        val = float(r["value"])
+        fk  = r["firm_key"]
+        if val > _GLOBAL_CEIL:
+            log.debug(f"IPE ceiling: {fk} {r['period_year']}-Q{r.get('period_quarter','')} "
+                      f"value={val/1e6:.0f}M > {_GLOBAL_CEIL/1e6:.0f}M, skipped")
+            continue
+        if fk == "bb" and val < _BB_FLOOR:
+            log.debug(f"IPE BB floor: {r['period_year']}-Q{r.get('period_quarter','')} "
+                      f"value={val/1e6:.1f}M < {_BB_FLOOR/1e6:.0f}M, skipped")
+            continue
+        src = str(r.get("source", "ipe"))
+        src_rank = 0 if "tier4" in src else 1  # prefer tier4 (Claude vision)
+        rows.append(dict(firm_key=fk, segment=r["segment"],
+                         year=r["period_year"], quarter=r.get("period_quarter", 2),
+                         clients=val, src_rank=src_rank))
 
-    # EDGAR (Nubank, Inter, PagSeguro, Stone, XP, Bradesco, Santander …)
-    # prefer customers_total Brazil-scope; fall back to broad
+    # ── EDGAR (Nubank, Inter, PagSeguro, Stone, XP, incumbents) ──────────────
     edgar = pd.read_csv(os.path.join(BASE, "FirmDisclosures", "SEC",
                                      "edgar_disclosures.csv"))
-    edgar = edgar[edgar["metric"].isin(["customers_total","customers_active"])]
-    edgar = edgar[edgar["geo_scope"].isin(["brazil","consolidated","latam"])]
-    # rank: brazil > consolidated/latam; total > active
-    edgar["rank"] = (edgar["geo_scope"].map({"brazil":0,"consolidated":1,"latam":1}).fillna(2)*2
-                   + edgar["metric"].map({"customers_total":0,"customers_active":1}).fillna(1))
-    edgar = edgar.sort_values("rank")
-    for (fk, yr, q), g in edgar.groupby(["firm_key","period_year","period_quarter"]):
+    # customers_total ONLY — do not fall back to customers_active
+    edgar = edgar[edgar["metric"] == "customers_total"]
+    edgar = edgar[edgar["geo_scope"].isin(["brazil", "consolidated", "latam"])]
+    edgar = edgar[edgar["value"] <= _GLOBAL_CEIL]
+    # rank: brazil-scope best; within same scope, larger value preferred
+    edgar["scope_rank"] = edgar["geo_scope"].map({"brazil": 0, "consolidated": 1, "latam": 2}).fillna(3)
+    edgar = edgar.sort_values(["scope_rank", "value"], ascending=[True, False])
+    for (fk, yr, q), g in edgar.groupby(["firm_key", "period_year", "period_quarter"]):
         if pd.isna(q): continue
         best = g.iloc[0]
         rows.append(dict(firm_key=fk, segment=best["segment"],
                          year=int(yr), quarter=int(q),
-                         clients=float(best["value"])))
+                         clients=float(best["value"]), src_rank=2))
 
     df = pd.DataFrame(rows)
-    df["t"] = df["year"] + (df["quarter"].fillna(2)-1)/4
-    # keep per (firm, year, quarter) the largest value (plausibility: suppress <500k noise)
+    df["t"] = df["year"] + (df["quarter"].fillna(2) - 1) / 4
     df = df[df["clients"] >= 500_000]
-    df = df.sort_values("clients", ascending=False).drop_duplicates(["firm_key","year","quarter"])
-    return df.sort_values(["firm_key","t"])
+    # for each (firm, quarter): prefer tier4 IPE, then tier2 IPE, then EDGAR;
+    # within the same source tier, take the largest value
+    df = (df.sort_values(["src_rank", "clients"], ascending=[True, False])
+            .drop_duplicates(["firm_key", "year", "quarter"]))
+
+    # QoQ plausibility: drop if >50% decline from the prior observation.
+    # Applied AFTER the 150M ceiling, so BB's 242M outlier no longer poisons
+    # the filter for subsequent legitimate 80M+ values.
+    keep = []
+    for fk, grp in df.groupby("firm_key"):
+        grp = grp.sort_values("t").copy()
+        prev = grp["clients"].shift(1)
+        bad  = prev.notna() & (grp["clients"] < prev * 0.50)
+        if bad.sum():
+            log.warning(f"  QoQ drop: {fk}: dropping {bad.sum()} obs "
+                        f"({', '.join(str(int(r.year))+'Q'+str(int(r.quarter)) for _, r in grp[bad].iterrows())})")
+        keep.append(grp[~bad])
+    df = pd.concat(keep, ignore_index=True) if keep else df
+
+    log.info(f"Client series loaded: {len(df)} obs, {df.firm_key.nunique()} firms, "
+             f"years {int(df.year.min())}-{int(df.year.max())}")
+    return df.sort_values(["firm_key", "t"])
 
 
 def load_join() -> pd.DataFrame:
@@ -130,7 +186,9 @@ def load_join() -> pd.DataFrame:
 
 def load_market() -> pd.DataFrame:
     cols = ["CodConglomeradoPrudencial","year","quarter","dep_a1","dep_a2","dep_a4","dep_a5"]
-    df = pd.read_csv(os.path.join(BASE,"BCB","Panel","market_panel.csv"), usecols=cols)
+    _new = os.path.join(BASE,"BCB","Egan_et_al_2025_Rep","processed","market_panel.csv")
+    _leg = os.path.join(BASE,"BCB","Panel","market_panel.csv")
+    df = pd.read_csv(_new if os.path.isfile(_new) else _leg, usecols=cols)
     df["total"] = df[["dep_a1","dep_a2","dep_a4","dep_a5"]].sum(axis=1,min_count=1)
     return df
 
@@ -144,7 +202,7 @@ def load_findex() -> pd.DataFrame:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def figure_a(clients: pd.DataFrame) -> None:
-    fig, (ax_d, ax_b) = plt.subplots(1, 2, figsize=(13, 4.5), sharey=False)
+    fig, (ax_d, ax_b) = plt.subplots(1, 2, figsize=(13, 4.5), sharey=True)
 
     digital_firms = [f for f in D_COLOURS if f in clients.firm_key.values]
     incumb_firms  = [f for f in B_COLOURS  if f in clients.firm_key.values]
@@ -156,7 +214,6 @@ def figure_a(clients: pd.DataFrame) -> None:
                   color=D_COLOURS[fk], label=fk)
 
     ax_d.axvline(PIX_YEAR, color="grey", lw=0.8, ls="--", alpha=0.6)
-    ax_d.text(PIX_YEAR+0.1, ax_d.get_ylim()[1]*0.95, "Pix", fontsize=7, color="grey")
     ax_d.set_ylabel("Clients (millions)")
     ax_d.set_xlabel("Year")
     ax_d.set_title("A. Digital / payment firms (D-type)", fontsize=10, loc="left")
@@ -169,19 +226,29 @@ def figure_a(clients: pd.DataFrame) -> None:
         ax_b.plot(g["t"], g["clients"]/1e6, marker="o", ms=3, lw=1.8,
                   color=B_COLOURS[fk], label=fk)
 
-    ax_b.set_ylabel("Clients (millions)")
+    ax_b.axvline(PIX_YEAR, color="grey", lw=0.8, ls="--", alpha=0.6)
     ax_b.set_xlabel("Year")
     ax_b.set_title("B. Incumbents (B-type)", fontsize=10, loc="left")
     ax_b.legend(fontsize=7, framealpha=0.9)
     ax_b.yaxis.set_major_formatter(mticker.FuncFormatter(lambda x,_: f"{x:.0f}M"))
 
-    fig.suptitle("Client base trajectories: D vs. B firms, Brazil 2013–2026",
+    # shared y-limit: max across both panels, with headroom
+    all_vals = clients["clients"].dropna() / 1e6
+    ymax = all_vals.max() * 1.12
+    for ax in (ax_d, ax_b):
+        ax.set_ylim(0, ymax)
+        ax.text(PIX_YEAR + 0.1, ymax * 0.97, "Pix", fontsize=7, color="grey", va="top")
+
+    fig.suptitle("Client base trajectories: D vs. B firms, Brazil 2015–2026",
                  fontsize=12, y=1.02)
-    fig.text(0.5,-0.03,
-             "Sources: SEC EDGAR (Nubank, Inter, PagSeguro, Stone, XP) and CVM-IPE (Pan, BMG, BB, Banrisul). "
-             "D-firm client counts are 'active' or 'total' depending on disclosure. "
-             "Pix launched November 2020.",
-             ha="center", fontsize=7)
+    fig.text(
+        0.5, -0.03,
+        "Sources: SEC EDGAR (Nubank, Inter, PagSeguro, Stone, XP) and CVM-IPE (Pan, BMG, BB, Banrisul). "
+        "Pix launched Nov 2020. Both panels share the same y-axis. "
+        "Observations with >50% QoQ client-count drops excluded as scraping artefacts. "
+        "Incumbent EDGAR counts excluded (too sparse / segment-level).",
+        ha="center", fontsize=7,
+    )
     fig.tight_layout()
     _save(fig, "fig_client_growth")
     plt.close(fig)
@@ -238,46 +305,76 @@ def figure_b(join: pd.DataFrame) -> None:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def figure_c(market: pd.DataFrame, join: pd.DataFrame) -> None:
-    # Identify D-firm conglomerate codes from the join table
-    d_congs = set(join[join.segment.isin(["digital","payment"])]["cong_prud"].dropna())
-    # Top-4 B-firm codes
-    top4_keys = ["itau","bradesco","bb","santander_br"]
-    top4_congs = set(join[join.firm_key.isin(top4_keys)]["cong_prud"].dropna())
+    """Deposit volume share over time.
+
+    Shows:
+      - Aggregate D-firm share (all digital/payment conglomerates)
+      - Individual major incumbents: Itaú, Bradesco, BB, Santander, Caixa
+    Y-axis spans 0-100% so shares are contextually readable.
+    """
+    from utils.firm_registry import load_registry
+    reg = load_registry(BASE, enrich=True)
+    cong_for = {f["firm_key"]: f.get("cong_prud", "") for f in reg}
 
     mkt = market.groupby(["year","quarter","CodConglomeradoPrudencial"])["total"].sum().reset_index()
+    tot_q = mkt.groupby(["year","quarter"])["total"].sum().reset_index(name="nat_total")
 
-    def share(congs, df=mkt):
-        subset = df[df["CodConglomeradoPrudencial"].isin(congs)]
-        tot    = df.groupby(["year","quarter"])["total"].sum().reset_index().rename(columns={"total":"tot"})
-        agg    = subset.groupby(["year","quarter"])["total"].sum().reset_index()
-        m = agg.merge(tot, on=["year","quarter"])
-        m["share"] = m["total"]/m["tot"]
-        m["t"] = m["year"] + (m["quarter"]-1)/4
+    def firm_share(firm_key: str) -> pd.DataFrame:
+        cong = cong_for.get(firm_key, "")
+        if not cong:
+            return pd.DataFrame()
+        sub = mkt[mkt.CodConglomeradoPrudencial == cong]
+        agg = sub.groupby(["year","quarter"])["total"].sum().reset_index()
+        m = agg.merge(tot_q, on=["year","quarter"])
+        m["share"] = m["total"] / m["nat_total"]
         return m
 
-    d_share   = share(d_congs)
-    top4_share = share(top4_congs)
-    # annual for cleaner plot
-    d_ann   = d_share.groupby("year")["share"].mean().reset_index()
-    t4_ann  = top4_share.groupby("year")["share"].mean().reset_index()
+    def agg_share(firm_keys) -> pd.DataFrame:
+        congs = {cong_for.get(fk,"") for fk in firm_keys} - {""}
+        if not congs:
+            return pd.DataFrame()
+        sub = mkt[mkt.CodConglomeradoPrudencial.isin(congs)]
+        agg = sub.groupby(["year","quarter"])["total"].sum().reset_index()
+        m = agg.merge(tot_q, on=["year","quarter"])
+        m["share"] = m["total"] / m["nat_total"]
+        return m
 
-    fig, ax = plt.subplots(figsize=(9, 4.5))
-    ax.plot(d_ann["year"],   d_ann["share"]*100,  marker="o", ms=4, lw=2,
-            color=DIGITAL_C, label="All digital/payment D-firms (aggregate)")
-    ax.plot(t4_ann["year"],  t4_ann["share"]*100, marker="s", ms=4, lw=2,
-            color=INCUMB_C,  label="Top-4 incumbents (Itaú/Bradesco/BB/Santander)")
+    d_keys = [f["firm_key"] for f in reg if f.get("segment") in ("digital","payment")]
+    d_ann = agg_share(d_keys).groupby("year")["share"].mean().reset_index()
+
+    INCUMB_LINES = [
+        ("itau",        "Itaú",      "#E9C46A"),
+        ("bradesco",    "Bradesco",  "#CC0000"),
+        ("bb",          "BB",        "#1D3557"),
+        ("caixa",       "Caixa",     "#2D6A4F"),
+        ("santander_br","Santander", "#D62828"),
+    ]
+
+    fig, ax = plt.subplots(figsize=(10, 5))
+
+    ax.plot(d_ann["year"], d_ann["share"]*100, marker="o", ms=4, lw=2,
+            color=DIGITAL_C, label="All D-firms (aggregate)", zorder=5)
+
+    for fk, label, col in INCUMB_LINES:
+        fs = firm_share(fk)
+        if fs.empty: continue
+        ann = fs.groupby("year")["share"].mean().reset_index()
+        ax.plot(ann["year"], ann["share"]*100, marker="s", ms=3, lw=1.6,
+                color=col, label=label, alpha=0.85)
+
     ax.axvline(PIX_YEAR, color="grey", lw=0.8, ls="--", alpha=0.6)
-    ax.text(PIX_YEAR+0.15, ax.get_ylim()[1]*0.95 if ax.get_ylim()[1]>1 else 0.95,
-            "Pix", fontsize=7, color="grey")
-    ax.set_ylabel("Deposit volume share (%)")
+    ax.text(PIX_YEAR+0.15, 98, "Pix", fontsize=7, color="grey", va="top")
+    ax.set_ylim(0, 100)
+    ax.set_ylabel("Deposit volume share (% of national total)")
     ax.set_xlabel("Year")
-    ax.set_title("Market structure: deposit volume share — D-firms vs. top-4 incumbents",
+    ax.set_title("Market structure: individual deposit volume shares 2013–2025",
                  fontsize=11, loc="left")
-    ax.yaxis.set_major_formatter(mticker.FuncFormatter(lambda x,_: f"{x:.1f}%"))
-    ax.legend(fontsize=8, framealpha=0.9)
-    fig.text(0.5,-0.02,
-             "Retail deposit volume share = (dep_a1+dep_a2+dep_a4+dep_a5) of firm set / national total, "
-             "annual average. Source: BCB ESTBAN deposit panel 2013–2025.",
+    ax.yaxis.set_major_formatter(mticker.FuncFormatter(lambda x,_: f"{x:.0f}%"))
+    ax.legend(fontsize=8, ncol=2, framealpha=0.9)
+    fig.text(0.5, -0.02,
+             "Retail deposit share = (dep_a1+dep_a2+dep_a4+dep_a5) / national total, annual average. "
+             "Source: BCB ESTBAN deposit panel 2013–2025. "
+             "Remaining ~30% held by mid-size incumbents not shown.",
              ha="center", fontsize=7)
     fig.tight_layout()
     _save(fig, "fig_market_structure")
@@ -288,50 +385,72 @@ def figure_c(market: pd.DataFrame, join: pd.DataFrame) -> None:
 # FIGURE D — Findex demographic ownership gradients (Pi motivation)
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _findex_panel(ax, lo, hi, label, c_lo, c_hi, piv, years, show_ylabel=False):
+    """Draw one Findex demographic panel onto ax. Returns the gap for annotation."""
+    lo_vals = [piv.get((y, lo), np.nan) for y in years]
+    hi_vals = [piv.get((y, hi), np.nan) for y in years]
+    x = np.arange(len(years)); w = 0.38
+    ax.bar(x - w/2, lo_vals, width=w, color=c_lo, alpha=0.85, label=lo.replace("_", " "))
+    ax.bar(x + w/2, hi_vals, width=w, color=c_hi, alpha=0.85, label=hi.replace("_", " "))
+    # gap bracket on most recent non-nan pair
+    for idx in range(len(years)-1, -1, -1):
+        if pd.notna(lo_vals[idx]) and pd.notna(hi_vals[idx]):
+            gap = hi_vals[idx] - lo_vals[idx]
+            top = max(lo_vals[idx], hi_vals[idx])
+            ax.annotate("", xy=(x[idx]+w/2, top+2), xytext=(x[idx]-w/2, top+2),
+                        arrowprops=dict(arrowstyle="-", color="black", lw=0.8))
+            ax.text(x[idx], top+3.5, f"+{gap:.1f}pp", fontsize=7, ha="center", color="black")
+            break
+    ax.set_xticks(x)
+    ax.set_xticklabels([str(y) for y in years], fontsize=7)
+    ax.set_ylim(0, 105)
+    ax.set_title(label, fontsize=10)
+    ax.legend(fontsize=7, loc="upper left", framealpha=0.8)
+    ax.yaxis.set_major_formatter(mticker.FuncFormatter(lambda v, _: f"{v:.0f}%"))
+    if show_ylabel:
+        ax.set_ylabel("Account ownership (% age 15+)")
+
+
 def figure_d(findex: pd.DataFrame) -> None:
-    # Bar chart: for each survey year, show ownership rates by demographic group
-    # Focus on the gap-revealing groups (not 'all')
+    """Four Findex demographic panels: combined figure + 4 individual files."""
     GAP_PAIRS = [
-        ("poorest_40","richest_60","Income\n(poor vs rich)"),
-        ("female","male","Gender\n(F vs M)"),
-        ("young_15_24","older_25p","Age\n(15-24 vs 25+)"),
-        ("primary_or_less","secondary_or_more","Education\n(primary vs secondary+)"),
+        ("poorest_40", "richest_60",       "Income (poorest 40% vs richest 60%)",
+         "#F4D35E", "#083D77", "fig_findex_income"),
+        ("female",     "male",             "Gender (female vs male)",
+         "#EE6C4D", "#C1121F", "fig_findex_gender"),
+        ("young_15_24","older_25p",        "Age (15–24 vs 25+)",
+         "#98C1D9", "#1D3557", "fig_findex_age"),
+        ("primary_or_less","secondary_or_more","Education (primary vs secondary+)",
+         "#7EC8A4", "#1B4332", "fig_findex_education"),
     ]
     years = sorted(findex["year"].unique())
-    piv = findex.set_index(["year","group"])["value_pct"]
+    piv   = findex.set_index(["year","group"])["value_pct"]
+    src_note = (
+        "Source: World Bank Global Findex via WB API. "
+        "Account ownership = % age 15+ with a financial institution or mobile-money account."
+    )
 
-    fig, axes = plt.subplots(1, 4, figsize=(13, 4.5), sharey=True)
-    colors_lo = ["#F4D35E","#EE6C4D","#98C1D9","#7EC8A4"]
-    colors_hi = ["#083D77","#C1121F","#1D3557","#1B4332"]
+    # — individual figures (one per dimension) ——————————————————————————————
+    for lo, hi, label, c_lo, c_hi, stem in GAP_PAIRS:
+        fig, ax = plt.subplots(figsize=(5, 4))
+        _findex_panel(ax, lo, hi, label, c_lo, c_hi, piv, years, show_ylabel=True)
+        fig.suptitle(f"Findex Brazil: {label}", fontsize=10, y=1.01)
+        fig.text(0.5, -0.04, src_note, ha="center", fontsize=6.5)
+        fig.tight_layout()
+        _save(fig, stem)
+        plt.close(fig)
 
-    for ax, (lo, hi, label), c_lo, c_hi in zip(axes, GAP_PAIRS, colors_lo, colors_hi):
-        lo_vals = [piv.get((y,lo), np.nan) for y in years]
-        hi_vals = [piv.get((y,hi), np.nan) for y in years]
-        x = np.arange(len(years)); w = 0.38
-        bars_lo = ax.bar(x - w/2, lo_vals, width=w, color=c_lo, alpha=0.85,
-                         label=lo.replace("_"," "))
-        bars_hi = ax.bar(x + w/2, hi_vals, width=w, color=c_hi, alpha=0.85,
-                         label=hi.replace("_"," "))
-        # gap annotation on most recent year
-        if pd.notna(lo_vals[-1]) and pd.notna(hi_vals[-1]):
-            gap = hi_vals[-1] - lo_vals[-1]
-            ax.annotate(f"Δ{gap:.1f}pp", xy=(x[-1]+w/2, hi_vals[-1]+1),
-                        fontsize=7, ha="center", color=c_hi)
-        ax.set_xticks(x); ax.set_xticklabels([str(y) for y in years], fontsize=7)
-        ax.set_title(label, fontsize=9)
-        ax.legend(fontsize=6, loc="upper left", framealpha=0.8)
-        ax.yaxis.set_major_formatter(mticker.FuncFormatter(lambda v,_: f"{v:.0f}%"))
-
-    axes[0].set_ylabel("Account ownership (% age 15+)")
+    # — combined 1×4 panel (for the appendix) ————————————————————————————————
+    fig, axes = plt.subplots(1, 4, figsize=(14, 4.5), sharey=True)
+    for ax, (lo, hi, label, c_lo, c_hi, _) in zip(axes, GAP_PAIRS):
+        _findex_panel(ax, lo, hi, label, c_lo, c_hi, piv, years,
+                      show_ylabel=(ax is axes[0]))
     fig.suptitle(
-        "Findex: account ownership by demographic group — Brazil 2011–2025\n"
-        "(motivates heterogeneous loadings $\\Pi$, $\\Pi^q$ in the extensive/intensive-choice model)",
-        fontsize=11, y=1.04)
-    fig.text(0.5,-0.02,
-             "Source: World Bank Global Findex via WB API. "
-             "Account ownership = % age 15+ with a financial institution or mobile-money account. "
-             "Δ = gap between high and low subgroup in 2025.",
-             ha="center", fontsize=7)
+        "Findex: account ownership by demographic group — Brazil 2011–2024\n"
+        r"(motivates heterogeneous loadings $\Pi$, $\Pi^q$)",
+        fontsize=11, y=1.04,
+    )
+    fig.text(0.5, -0.02, src_note, ha="center", fontsize=7)
     fig.tight_layout()
     _save(fig, "fig_findex_demographics")
     plt.close(fig)
@@ -366,9 +485,12 @@ def main():
     log.info("All figures done.")
     print(f"\nOutputs in:\n  {DESC}\n  {DRAFTS}")
     print("\nFiles generated:")
-    for stem in ["fig_client_growth","fig_intensive_margin_gap",
-                 "fig_market_structure","fig_findex_demographics"]:
-        for ext in ("png","pdf"):
+    for stem in ["fig_client_growth", "fig_intensive_margin_gap",
+                 "fig_market_structure",
+                 "fig_findex_demographics",
+                 "fig_findex_income", "fig_findex_gender",
+                 "fig_findex_age",    "fig_findex_education"]:
+        for ext in ("png", "pdf"):
             p = os.path.join(DRAFTS, f"{stem}.{ext}")
             print(f"  {'OK' if os.path.exists(p) else 'MISSING':6s} {stem}.{ext}")
 

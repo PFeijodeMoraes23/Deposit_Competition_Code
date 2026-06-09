@@ -33,6 +33,7 @@ import logging
 import pickle
 import argparse
 import re
+import unicodedata
 from pathlib import Path
 
 # Mock NonLinearResults class for unpickling
@@ -72,6 +73,10 @@ _ROOT = Path(__file__).resolve().parents[2]
 DATA_DIR = _ROOT / "BCB" / "Egan_et_al_2025_Rep" / "processed"
 PANEL_CSV  = DATA_DIR / "market_panel.csv"
 BANKED_CSV = _ROOT / "BCB" / "Inclusion" / "bcb_banked_mca_panel.csv"
+# IF-Data List files (CNPJ -> conglomerate + SegmentoTb). Unlike the Prudential
+# report, these DO contain Payment Institutions, so they are the reliable source
+# for the per-conglomerate has_ip flag.
+IF_DATA_LIST_DIR = _ROOT / "BCB" / "IF Data" / "List"
 
 # High-Efficiency BLP Columns
 X_COLS = ['fgc_covered', 'has_ip', 'seg_S2', 'seg_S3', 'seg_S4', 'seg_S5',
@@ -129,11 +134,70 @@ def _reshape_panel(df_raw: pd.DataFrame) -> pd.DataFrame:
         df = df[~pre_k5_mask].copy()
     return df
 
+def _derive_has_ip_from_list_files(df: pd.DataFrame, list_dir: Path) -> pd.DataFrame:
+    """
+    Re-derive the per-conglomerate ``has_ip`` flag (does the conglomerate include a
+    Payment Institution) from the IF-Data List files — robustly.
+
+    The prudential-conglomerate report contains NO payment institutions, so a
+    ``has_ip`` sourced there arrives all-zero → X_hat degenerate → SingularException
+    in the IFT QR. The List files DO contain IPs (``SegmentoTb`` ~ "Instituição de
+    Pagamento"). Detection is accent/encoding-insensitive (NFKD strip + lowercase),
+    matching rows whose ``SegmentoTb`` contains both "institui" and "pagamento";
+    ``has_ip`` is the max over a conglomerate's members, merged on
+    ``CodConglomeradoPrudencial``. On any failure the existing column is coerced to
+    0/1 (the estimator's design-rank guard will flag residual degeneracy).
+    """
+    def _norm(s):
+        return (unicodedata.normalize("NFKD", str(s))
+                .encode("ascii", "ignore").decode("ascii").lower())
+    try:
+        files = sorted(Path(list_dir).glob("IF_DATA_List_*.csv"))
+        if not files:
+            raise FileNotFoundError(f"no IF-Data List files in {list_dir}")
+        frames = []
+        for f in files:
+            d = pd.read_csv(f, dtype=str, encoding="utf-8")
+            d.columns = [c.strip() for c in d.columns]
+            if not {"CodInst", "CodConglomeradoPrudencial", "SegmentoTb"}.issubset(d.columns):
+                continue
+            if {"Td", "Situacao"}.issubset(d.columns):
+                d = d[(d["Td"] == "I") & (d["Situacao"] == "A")]
+            cong = d["CodConglomeradoPrudencial"]
+            congl = np.where(cong.isna() | (cong == "null"), d["CodInst"], cong)
+            seg = d["SegmentoTb"].map(_norm)
+            is_ip = (seg.str.contains("institui", na=False)
+                     & seg.str.contains("pagamento", na=False)).astype(int)
+            frames.append(pd.DataFrame({"congl": congl.astype(str), "is_ip": is_ip.values}))
+        if not frames:
+            raise ValueError("List files present but none had the needed columns")
+        congl_ip = pd.concat(frames, ignore_index=True).groupby("congl")["is_ip"].max()
+        lookup = {str(k): int(v) for k, v in congl_ip.items()}
+        new = (df["CodConglomeradoPrudencial"].astype(str).map(lookup)
+               .fillna(0).astype(int))
+        n_congl = int(df.loc[new == 1, "CodConglomeradoPrudencial"].nunique())
+        print(f"  [has_ip] derived from {len(files)} List files: "
+              f"{int(new.sum()):,} rows ({100*new.mean():.1f}%) "
+              f"across {n_congl} IP conglomerates")
+        df["has_ip"] = new
+    except Exception as e:
+        logging.warning(f"  [has_ip] List-file derivation failed ({e}); "
+                        f"coercing existing column to 0/1")
+        df["has_ip"] = (pd.to_numeric(df.get("has_ip"), errors="coerce")
+                        .fillna(0).astype(float) > 0).astype(int)
+    return df
+
 def build_base_panel(panel_csv: Path) -> pd.DataFrame:
     print(f"Loading {panel_csv}...")
     df_raw = pd.read_csv(panel_csv, dtype={'mca_code': str}, low_memory=False)
     df = _reshape_panel(df_raw)
             
+    # Re-derive fgc_covered from row-level deposit_type (wide_to_long broadcasts the
+    # per-conglomerate wide value across deposit types, so type-5 wrongly inherits 1).
+    df['fgc_covered'] = df['deposit_type'].astype('Int64').isin([1, 2, 4]).astype(int)
+    # Re-derive has_ip from the IF-Data List files (prudential report has no IPs).
+    df = _derive_has_ip_from_list_files(df, IF_DATA_LIST_DIR)
+
     df['entity_id'] = df['CodConglomeradoPrudencial'].astype(str) + "_" + df['deposit_type'].astype(str) + "_" + df['mca_code'].astype(str)
     df['time_id'] = df['year'].astype(str) + "Q" + df['quarter'].astype(str)
     df.sort_values(by=['entity_id', 'year', 'quarter'], inplace=True)
