@@ -257,6 +257,7 @@ The primary geographic unit is the **MCA (Minimum Comparable Area)** — a time-
 ## Key Technologies
 
 | Technology | Purpose |
+| ---------- | ------- |
 | **Python 3.x** | All data processing, estimation, and export scripts |
 | **Julia** | BLP GMM demand estimation (`blp_draws.jl`, `blp_estimation.jl`, `blp_logit_local.jl`) |
 | **pandas** | Data manipulation and panel construction |
@@ -327,6 +328,85 @@ The pipeline produces CSV, Parquet, and pickle files organised under a `BCB/` di
 | `BCB/PIX/pix_mca_panel.csv` | PIX adoption panel |
 | `BCB/Inclusion/bcb_inclusion_mca_panel.csv` | Banking access-point density panel |
 | `BCB/Banked/banked_fraction_mca_panel.csv` | Banked-population fraction proxy panel |
+
+---
+
+## Workflow Tips
+
+### 1. Use `--from` and `--skip` to avoid re-running completed stages
+
+```bash
+python run_data_pipeline.py --from 3        # Resume from the deposit panel stage
+python run_data_pipeline.py --skip 0a,0b    # Skip downloads if raw files already exist
+python run_data_pipeline.py --list          # Print all step names and exit
+```
+
+### 2. Set email credentials once for overnight-run notifications
+
+The sleep pipeline (`run_sleep_pipeline.py`) sends progress emails between steps if credentials are present in the environment:
+
+```powershell
+$env:SYS_EMAIL_USER = "your-email@gmail.com"
+$env:SYS_EMAIL_PWD  = "your-16-char-app-password"   # Gmail App Password
+```
+
+### 3. Use `TOON_CONTEXT_PATH` to switch between machines without editing scripts
+
+Store a per-machine `toon_context.json` with local paths and point the env var at it:
+
+```powershell
+$env:TOON_CONTEXT_PATH = "C:\Users\pedro\toon_yale.json"
+```
+
+This lets the same scripts resolve data directories correctly on your laptop, on Grace HPC, and in CI — without any code changes.
+
+### 4. Always run the logit sanity check before submitting BLP to HPC
+
+```bash
+python run_blp_pipeline.py --logit                  # Fast local check (~minutes); catches data issues early
+python run_blp_pipeline.py --draws --R 2000         # Pre-compute draws
+sbatch submit_blp_1_E1.sh                           # Only then submit to SLURM
+```
+
+### 5. `venv_guard` must come before all heavy imports
+
+In any new script, call `ensure_project_venv` **before** importing pandas, numpy, or any third-party library. If it is placed after heavy imports the script will crash before it can relaunch into the correct venv:
+
+```python
+from utils.venv_guard import ensure_project_venv
+ensure_project_venv(__file__)   # ← Must be first
+import pandas as pd             # ← Safe now
+```
+
+### 6. Never manually parallelize Stage 2 scrapers
+
+`scrape_3` through `scrape_8` have per-request rate-limit protections. Running them concurrently across multiple terminals will trigger IP bans from the BCB and ANATEL APIs. Let `run_data_pipeline.py` manage the controlled parallelism.
+
+### 7. Target a single BLP specification during development
+
+Use `--est` and `--spec` flags to run a single round rather than all 25 combinations:
+
+```bash
+python run_blp_pipeline.py --estimate --est 1 --spec 12   # Only round 1, spec 12
+```
+
+### 8. Check `pipeline_output.txt` for a record of the last full run
+
+This file captures stdout/stderr from `run_data_pipeline.py` and is the fastest way to diagnose failures after an overnight run without re-executing anything.
+
+---
+
+## Active Development Branches
+
+### `coherence_fix`
+
+This branch revisits the specification of the sleepiness function φ(·). The planned changes are:
+
+- **Remove bank-level characteristics** (`X_jt`): log total assets and the equity/solvency ratio are dropped from the φ(·) regressors, making sleepiness a function of market-level variables only.
+- **Remove branch count** from the set of market-level regressors (`S_t`).
+- **Remove PIX volume** from the set of market-level regressors (`S_t`).
+
+The motivation is to achieve a cleaner separation between the supply-side inertia equation and the bank-level covariates that enter the demand side, avoiding potential collinearity and improving structural coherence across the two estimation stages.
 
 ---
 
