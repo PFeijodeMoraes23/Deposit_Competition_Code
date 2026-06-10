@@ -50,15 +50,15 @@ The codebase:
 ├── scrape_1_bcb_estban_if_data.py        # ESTBAN monthly CSVs + IF Data via BCB Olinda API
 │
 ├── ── Stage 1: Demographics ──
-├── scrape_2_ibge_demographics.py         # IBGE population, GDP, age structure → MCA-level panel
+├── scrape_4_ibge_demographics.py         # IBGE population, GDP, age structure → MCA-level panel
 │
 ├── ── Stage 2: Market Characteristic Panels (parallel) ──
-├── scrape_3_pix_panel.py                 # BCB PIX adoption → MCA panel
-├── scrape_4_anatel.py                    # ANATEL mobile connections → MCA connectivity panel
-├── scrape_5_bcb_inclusion.py             # BCB banking access-points (branches + correspondents) → MCA panel
-├── scrape_6_cadunico.py                  # CadUnico low-income families → MCA poverty panel
-├── scrape_7_fees.py                      # BCB bank fee schedules (PF + PJ) → tarifas conglomerate panel
-├── scrape_8_bcb_banked.py                # ESTBAN Dec snapshots + WB Findex → MCA banked-fraction proxy panel
+├── scrape_5_pix_panel.py                 # BCB PIX adoption → MCA panel
+├── scrape_8_anatel.py                    # ANATEL mobile connections → MCA connectivity panel
+├── scrape_9_bcb_inclusion.py             # BCB banking access-points (branches + correspondents) → MCA panel
+├── scrape_10_cadunico.py                  # CadUnico low-income families → MCA poverty panel
+├── scrape_11_fees.py                      # BCB bank fee schedules (PF + PJ) → tarifas conglomerate panel
+├── scrape_16_bcb_banked.py                # ESTBAN Dec snapshots + WB Findex → MCA banked-fraction proxy panel
 ├── scrape_inss.py                        # INSS retirees → MCA quarter panel
 │
 ├── ── Stage 3: Deposit Panel, Rates & Characteristics (parallel) ──
@@ -71,7 +71,7 @@ The codebase:
 ├── ── Stage 4: Master Analysis Panel ──
 ├── panel_6_market.py                     # Merge all MCA panels + deposit panel → master analysis dataset
 ├── panel_7_instruments.py                # Compute LOO instruments and FGC coverage dummy
-├── panel_8_demographics_sigma.py         # Within-MCA demographic σ for BLP parametric draws → demographics_sigma.parquet
+├── panel_9_demographics_sigma.py         # Within-MCA demographic σ for BLP parametric draws → demographics_sigma.parquet
 │
 ├── ── Stage 5: Descriptive Statistics (parallel) ──
 ├── desc_1.py                             # Summary statistics tables (CSV + LaTeX) by bank type and region
@@ -380,7 +380,7 @@ import pandas as pd             # ← Safe now
 
 ### 6. Never manually parallelize Stage 2 scrapers
 
-`scrape_3` through `scrape_8` have per-request rate-limit protections. Running them concurrently across multiple terminals will trigger IP bans from the BCB and ANATEL APIs. Let `run_data_pipeline.py` manage the controlled parallelism.
+`scrape_5` through `scrape_16` have per-request rate-limit protections. Running them concurrently across multiple terminals will trigger IP bans from the BCB and ANATEL APIs. Let `run_data_pipeline.py` manage the controlled parallelism.
 
 ### 7. Target a single BLP specification during development
 

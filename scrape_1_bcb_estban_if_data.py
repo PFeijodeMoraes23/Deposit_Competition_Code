@@ -41,6 +41,9 @@ try:
 except Exception:
     resolve_script_paths = None
 
+from utils import paths
+from utils import refresh
+
 ## 2) Set up logging
 log_file = 'if_data_scrape.log'
 handler = RotatingFileHandler(log_file, maxBytes=5*1024*1024, backupCount=3) # 5MB max size, 3 backups
@@ -52,16 +55,13 @@ logging.basicConfig(handlers=[handler], level=logging.INFO, format='%(asctime)s 
 base_url_list = "https://olinda.bcb.gov.br/olinda/servico/IFDATA/versao/v1/odata/IfDataCadastro(AnoMes=@AnoMes)?@AnoMes={year_month}&$top=10000&$format=text/csv&$select=CodInst,Data,NomeInstituicao,DataInicioAtividade,Tcb,Td,Tc,SegmentoTb,Atividade,Uf,Municipio,Sr,CodConglomeradoFinanceiro,CodConglomeradoPrudencial,CnpjInstituicaoLider,Situacao"
 base_url_values = "https://olinda.bcb.gov.br/olinda/servico/IFDATA/versao/v1/odata/IfDataValores(AnoMes=@AnoMes,TipoInstituicao=@TipoInstituicao,Relatorio=@Relatorio)?@AnoMes={year_quarter}&@TipoInstituicao={tipo}&@Relatorio='T'&$top=100000000&$format=text/csv&$select=CodInst,AnoMes,NomeRelatorio,NumeroRelatorio,Grupo,Conta,NomeColuna,Saldo"
 
-# IF Data output directories
-_ROOT = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))
-_BCB  = os.path.join(_ROOT, "BCB")
-
-output_dir = os.path.join(_BCB, "IF Data", "List")
+# IF Data output directories (canonical locations in utils/paths.py)
+output_dir = str(paths.IF_DATA_LIST)
 os.makedirs(output_dir, exist_ok=True)
 
-output_type_1 = os.path.join(_BCB, "IF Data", "Prudential Conglomerates")
+output_type_1 = str(paths.IF_DATA_PRUDENTIAL)
 os.makedirs(output_type_1, exist_ok=True)
-output_type_3 = os.path.join(_BCB, "IF Data", "Individual Institutions")
+output_type_3 = str(paths.IF_DATA_INDIVIDUAL)
 os.makedirs(output_type_3, exist_ok=True)
 
 # --- ESTBAN (BCB new content server) ---
@@ -76,9 +76,9 @@ ESTBAN_API_BASE   = "https://www.bcb.gov.br"
 ESTBAN_GUID_MUN   = "f6391806-fd85-43af-acf1-c86d5b8dd6df"   # guidLista for municipio + agencia files
 ESTBAN_CONTENT_ROOT = ESTBAN_API_BASE + "/content/estatisticas/estatistica_bancaria_estban"
 
-ESTBAN_DATA_ROOT = os.path.join(_BCB, "ESTBAN")
-output_estban_mun = os.path.join(ESTBAN_DATA_ROOT, "Relatório por município")
-output_estban_ag  = os.path.join(ESTBAN_DATA_ROOT, "Relatório por município e agência")
+ESTBAN_DATA_ROOT = str(paths.ESTBAN_DIR)
+output_estban_mun = str(paths.ESTBAN_RAW_MUN)
+output_estban_ag  = str(paths.ESTBAN_RAW_AG)
 
 if resolve_script_paths is not None:
     _paths = resolve_script_paths(
@@ -112,7 +112,9 @@ def download_list(year,month, retries_number):
 
     # Skip if file already exists and has real data (> 500 bytes avoids caching headers-only stubs)
     file_path = os.path.join(output_dir, f"IF_DATA_List_{year}_{month}.csv")
-    if os.path.exists(file_path) and os.path.getsize(file_path) > 500:
+    # Skip only if cached AND outside the rolling refresh window (quarterly series).
+    if (os.path.exists(file_path) and os.path.getsize(file_path) > 500
+            and not refresh.is_recent_quarter(year, (month - 1) // 3 + 1)):
         logging.info(f"File already exists, skipping: {file_path}")
         print(f"Skipping (already exists): IF_DATA_List_{year}_{month}.csv")
         return False  # no network request made
@@ -176,7 +178,9 @@ def download_values(year, quarter, tipo, retries_number):
     else:
         output_dir = output_type_3
     file_path = os.path.join(output_dir, f"IF_DATA_Values_{year}_{quarter}.csv")
-    if os.path.exists(file_path) and os.path.getsize(file_path) > 0:
+    # Skip only if cached AND outside the rolling refresh window (quarterly series).
+    if (os.path.exists(file_path) and os.path.getsize(file_path) > 0
+            and not refresh.is_recent_quarter(year, (quarter - 1) // 3 + 1)):
         logging.info(f"File already exists, skipping: {file_path}")
         print(f"Skipping (already exists): {year}-{quarter} (Type {tipo})")
         return False  # no network request made
@@ -320,7 +324,10 @@ def download_estban(yyyymm, url_path, out_dir, csv_fname, retries_number):
     Skips if csv_fname already exists and is non-empty.
     """
     file_path = os.path.join(out_dir, csv_fname)
-    if os.path.exists(file_path) and os.path.getsize(file_path) > 0:
+    # Skip only if cached AND outside the rolling refresh window (monthly series).
+    _y, _m = int(str(yyyymm)[:4]), int(str(yyyymm)[4:6])
+    if (os.path.exists(file_path) and os.path.getsize(file_path) > 0
+            and not refresh.is_recent_month(_y, _m)):
         logging.info(f"Skipping existing ESTBAN file: {csv_fname}")
         return False  # no network request made
 

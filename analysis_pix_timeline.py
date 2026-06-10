@@ -8,7 +8,7 @@
 #          appended to Drafts/Deposit Competition/pix-institutional-timeline.md
 #          and compiled to PDF.
 #
-#   Inputs (BCB/PIX/, produced by scrape_3b / scrape_3c):
+#   Inputs (BCB/PIX/, produced by scrape_6 / scrape_7):
 #     pix_participant_keys_panel.csv   month × ISPB key stock
 #     pix_participant_entry.csv        per-ISPB key-based entry month
 #     pix_roster_history.csv           roster_date × institution classification
@@ -38,8 +38,9 @@ from matplotlib.ticker import FuncFormatter
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
-BASE      = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))
-PIX_DIR   = os.path.join(BASE, "BCB", "PIX")
+from utils import paths
+BASE      = str(paths.OPEN_FINANCE)
+PIX_DIR   = str(paths.PIX_DIR)
 DRAFTS    = os.path.join(BASE, "Drafts", "Deposit Competition")
 FIG_DIR   = os.path.join(DRAFTS, "pix_timeline_figs")
 MAIN_MD   = os.path.join(DRAFTS, "pix-institutional-timeline.md")
@@ -303,7 +304,7 @@ def main():
     # blocks). The section sits under the document's H1 as an H2 with H3 subsections.
     md = [
         "## Pix institutional adoption timeline — data analysis",
-        (f"*Auto-generated from `pix_participant_*` / `pix_roster_*` (scrape_3b + scrape_3c). "
+        (f"*Auto-generated from `pix_participant_*` / `pix_roster_*` (scrape_6 + scrape_7). "
          f"Universe: **{n_part:,} participants**; roster classification spans {span} "
          f"across {hist['roster_date'].nunique()} dated snapshots.*"),
         "### 1. Adoption curve",

@@ -1,7 +1,7 @@
 """disclosure_common.py
 # Author: Pedro Feijó de Moraes
 #
-# Shared helpers for the firm-disclosure scrapers (scrape_9..scrape_15):
+# Shared helpers for the firm-disclosure scrapers (scrape_17..scrape_23):
 #   - SEC-compliant, throttled, gzip-aware HTTP GET with retries
 #   - HTML -> text flattening
 #   - human-number / currency / period parsing
@@ -240,10 +240,13 @@ def now_iso() -> str:
 # Paths & panel schema
 # ----------------------------------------------------------------------------
 
-def data_root(script_file: str) -> str:
-    """The shared data root (…/Open-Finance), two levels above the repo, matching
-    the convention used by every scrape_*/panel_* script."""
-    return os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(script_file)), "..", ".."))
+def data_root(script_file: str | None = None) -> str:
+    """The shared data root (…/Open-Finance), matching the convention used by
+    every scrape_*/panel_* script. Now delegates to the canonical
+    ``utils/paths.py`` anchor; ``script_file`` is accepted for backward
+    compatibility but ignored."""
+    from .paths import OPEN_FINANCE
+    return str(OPEN_FINANCE)
 
 
 # Canonical LONG-format columns for every firm-disclosure scraper.

@@ -40,12 +40,13 @@ import unicodedata
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
+from utils import paths
 _ROOT = Path(__file__).resolve().parents[2]
-PANEL_CSV = _ROOT / "BCB" / "Egan_et_al_2025_Rep" / "processed" / "market_panel.csv"
+PANEL_CSV = paths.PROCESSED / "market_panel.csv"
 # IF-Data List files (CNPJ -> conglomerate + SegmentoTb). Unlike the Prudential
 # report (which has NO payment institutions), these DO contain IPs, so they are the
 # reliable source for the per-conglomerate has_ip flag written into market_panel.csv.
-IF_DATA_LIST_DIR = _ROOT / "BCB" / "IF Data" / "List"
+IF_DATA_LIST_DIR = paths.IF_DATA_LIST
 
 
 def derive_has_ip_from_list_files(df: pd.DataFrame, list_dir: Path) -> pd.DataFrame:

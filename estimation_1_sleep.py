@@ -80,10 +80,12 @@ try:
 except Exception:
     load_panel_cached = None
 
+from utils import paths as _paths_mod
+
 def _resolve_runtime_paths() -> tuple[Path, Path]:
-    _ROOT = Path(__file__).resolve().parents[2]
-    DATA_DIR = _ROOT / "BCB" / "Egan_et_al_2025_Rep" / "processed"
-    PANEL_CSV = DATA_DIR / "market_panel.csv"
+    DATA_DIR = _paths_mod.PROCESSED
+    _with_fees = DATA_DIR / "market_panel_with_fees.csv"
+    PANEL_CSV = _with_fees if _with_fees.exists() else DATA_DIR / "market_panel.csv"
     OUTPUT_DIR = DATA_DIR / "ESTIMATION_OUTPUT" / "DEMAND_PREP" / "est1"
 
     if load_default_toon_context is None or get_script_config is None:
@@ -306,7 +308,9 @@ def do_estimation():
     results_dict = {}
     out_results = []
     
-    _nw = max(1, (os.cpu_count() or 4) // max(1, int(os.environ.get('SLEEP_PIPELINE_NSLOTS', '1'))))
+    # Cap at 4: each task sends a full ~400K-row DataFrame via IPC; more workers
+    # simultaneously hammers Windows non-paged pool (WinError 1450).
+    _nw = min(4, max(1, (os.cpu_count() or 4) // max(1, int(os.environ.get('SLEEP_PIPELINE_NSLOTS', '1')))))
     with concurrent.futures.ProcessPoolExecutor(max_workers=_nw) as executor:
         out_results.extend(executor.map(execute_specification, tasks))
         

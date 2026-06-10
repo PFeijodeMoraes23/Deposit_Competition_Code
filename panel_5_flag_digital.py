@@ -13,11 +13,13 @@ if ensure_project_venv is not None:
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
-BASE = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))
+from utils import paths
 
-# Read directly from BCB/ESTBAN/ESTBAN.csv to avoid any repo logic contamination
-ESTBAN_CSV = os.path.join(BASE, "BCB", "ESTBAN", "ESTBAN.csv")
-INTERMED_DIR = os.path.join(BASE, "BCB", "Egan_et_al_2025_Rep", "processed", "PANEL_INTERMED")
+BASE = str(paths.OPEN_FINANCE)
+
+# Read directly from the consolidated ESTBAN.csv to avoid any repo logic contamination
+ESTBAN_CSV = str(paths.ESTBAN_CSV)
+INTERMED_DIR = os.path.join(str(paths.PROCESSED), "PANEL_INTERMED")
 os.makedirs(INTERMED_DIR, exist_ok=True)
 OUTPUT_PATH = os.path.join(INTERMED_DIR, "digital_banks_diagnostic.csv")
 
@@ -125,7 +127,7 @@ def main():
     
     # Enhance heuristic with BCB Regulatory Categorization
     import glob
-    if_files = sorted(glob.glob(os.path.normpath(os.path.join(BASE, "BCB", "IF Data", "List", "IF_DATA_List*.csv"))))
+    if_files = sorted(glob.glob(os.path.join(str(paths.IF_DATA_LIST), "IF_DATA_List*.csv")))
     
     cnpj_map = {}
     for f in if_files:

@@ -60,16 +60,18 @@ try:
 except Exception:
     resolve_script_paths = None
 
+from utils import paths
+
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
-# Set paths:
-BASE = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))
+# Set paths (canonical locations in utils/paths.py):
+BASE = str(paths.OPEN_FINANCE)
 
-ESTBAN_PROC_CSV  = os.path.join(BASE, "BCB", "ESTBAN", "ESTBAN.csv")           # processed 2016–2024
-ESTBAN_RAW_MUN   = os.path.join(BASE, "BCB", "ESTBAN", "Relatório por município")  # raw monthly CSVs
-IF_AGG_DIR       = os.path.join(BASE, "BCB", "IF Data", "Aggregated Data")
-IF_LIST_DIR      = os.path.join(BASE, "BCB", "IF Data", "List")
-OUTPUT_DIR       = os.path.join(BASE, "BCB", "Egan_et_al_2025_Rep", "processed")
+ESTBAN_PROC_CSV  = str(paths.ESTBAN_CSV)        # processed 2016–2024
+ESTBAN_RAW_MUN   = str(paths.ESTBAN_RAW_MUN)    # raw monthly CSVs
+IF_AGG_DIR       = str(paths.IF_DATA_AGG)
+IF_LIST_DIR      = str(paths.IF_DATA_LIST)
+OUTPUT_DIR       = str(paths.PROCESSED)
 
 if resolve_script_paths is not None:
     _paths = resolve_script_paths(
@@ -93,6 +95,7 @@ os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 # Set global constants and variables:
 # IF Data report 3 (Passivo – Captações) NumeroConta values confirmed from data:
+# Pre-2025 format:
 ACCT_A1     = 78282   # Depositos a Vista           (demand deposits)
 ACCT_A2     = 78283   # Depositos de Poupanca       (savings)
 ACCT_A3     = 78284   # Depositos Interfinanceiros  (interbank)
@@ -100,11 +103,25 @@ ACCT_A4     = 78286   # Depositos a Prazo           (time deposits)
 ACCT_OUTROS = 78285   # Outros Depositos            (other conventional deposits)
 ACCT_A5     = 110560  # Conta de Pagamento PrePaga  (prepaid payment accounts, true a5)
 
+# 2025+ format (BCB renumbered all accounts in the new IF Data plan):
+ACCT_A1_NEW     = 140222  # Depositos a Vista
+ACCT_A2_NEW     = 140223  # Depositos de Poupanca
+ACCT_A3_NEW     = 140224  # Depositos Interfinanceiros
+ACCT_A4_NEW     = 140225  # Depositos a Prazo
+ACCT_OUTROS_NEW = 140227  # Depositos Outros
+ACCT_A5_NEW     = 140226  # Conta de Pagamento PrePaga
+
 # Quarter-end months: use these ESTBAN months to represent each quarter
 QUARTER_END_MONTHS = {3: 1, 6: 2, 9: 3, 12: 4}   # month → quarter number
 
 # Sentinel municipality code for institutions with no geographic breakdown
 NO_MUN_CODE = 0
+
+# Hard cap: the analysis panel ends at 2025-Q4.  Raw data may extend further
+# (e.g. the 2026 ESTBAN months BCB has already published), but everything after
+# 2025-Q4 is dropped so the panel has a fixed, reproducible end point.
+PANEL_END_YEAR    = 2025
+PANEL_END_QUARTER = 4
 
 ## 2) User-defined functions:
 
@@ -385,7 +402,7 @@ ESTBAN_DEPOSIT_COLS = ["V400_401", "V420", "V431", "V432"]   # a1, a2, a3, a4
 ESTBAN_KEEP_COLS    = ["CNPJ", "NOME_INSTITUICAO", "CODMUN_IBGE", "YEAR", "MONTH"] + ESTBAN_DEPOSIT_COLS
 
 def load_estban_processed() -> pd.DataFrame:
-    """Load the pre-processed ESTBAN.csv (2016–present; built by scrape_1b_estban_concat.py)."""
+    """Load the pre-processed ESTBAN.csv (2016–present; built by scrape_2_estban_concat.py)."""
     logging.info("Loading ESTBAN.csv …")
     df = pd.read_csv(ESTBAN_PROC_CSV, encoding="latin1", low_memory=False)
 
@@ -579,18 +596,27 @@ def build_ifdata_panel() -> pd.DataFrame:
     df["NumeroConta"] = pd.to_numeric(df["NumeroConta"], errors="coerce").astype("Int64")
     df["Value"]       = pd.to_numeric(df["Value"],       errors="coerce")
 
-    # Keep only the deposit accounts we care about
-    deposit_accounts = [ACCT_A1, ACCT_A2, ACCT_A3, ACCT_A4, ACCT_OUTROS, ACCT_A5]
+    # Keep only the deposit accounts we care about (both pre-2025 and 2025+ codes)
+    deposit_accounts = [
+        ACCT_A1, ACCT_A2, ACCT_A3, ACCT_A4, ACCT_OUTROS, ACCT_A5,
+        ACCT_A1_NEW, ACCT_A2_NEW, ACCT_A3_NEW, ACCT_A4_NEW, ACCT_OUTROS_NEW, ACCT_A5_NEW,
+    ]
     df = df[df["NumeroConta"].isin(deposit_accounts)].copy()
 
-    # Map NumeroConta → deposit column name
+    # Map NumeroConta → deposit column name (old and new codes map to same columns)
     acct_col_map = {
-        ACCT_A1:     "dep_a1",
-        ACCT_A2:     "dep_a2",
-        ACCT_A3:     "dep_a3",
-        ACCT_A4:     "dep_a4",
-        ACCT_OUTROS: "dep_outros",
-        ACCT_A5:     "dep_a5",
+        ACCT_A1:         "dep_a1",
+        ACCT_A2:         "dep_a2",
+        ACCT_A3:         "dep_a3",
+        ACCT_A4:         "dep_a4",
+        ACCT_OUTROS:     "dep_outros",
+        ACCT_A5:         "dep_a5",
+        ACCT_A1_NEW:     "dep_a1",
+        ACCT_A2_NEW:     "dep_a2",
+        ACCT_A3_NEW:     "dep_a3",
+        ACCT_A4_NEW:     "dep_a4",
+        ACCT_OUTROS_NEW: "dep_outros",
+        ACCT_A5_NEW:     "dep_a5",
     }
     df["dep_col"] = df["NumeroConta"].map(acct_col_map)
 
@@ -744,6 +770,14 @@ def main():
     # Filter out BNDES (Development Bank, should not be in the sample)
     panel = panel[~panel["NomeInstituicao"].astype(str).str.contains("BNDES", case=False, na=False)]
     panel.reset_index(drop=True, inplace=True)
+
+    # Hard cap at 2025-Q4: drop any later quarters present in the raw data.
+    _cap = PANEL_END_YEAR * 4 + PANEL_END_QUARTER
+    _n_before = len(panel)
+    panel = panel[~((panel["Year"] * 4 + panel["Quarter"]) > _cap)].copy()
+    panel.reset_index(drop=True, inplace=True)
+    if (_dropped := _n_before - len(panel)):
+        logging.info(f"Capped panel at {PANEL_END_YEAR}-Q{PANEL_END_QUARTER}: dropped {_dropped:,} later-quarter rows.")
 
     # Save
     out_path = os.path.join(OUTPUT_DIR, "deposits_panel.csv")

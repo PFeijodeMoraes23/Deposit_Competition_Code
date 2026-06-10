@@ -4,7 +4,7 @@
 # Last edited: 2026-05-31
 #
 # Purpose: Join the firm-level public-disclosure data (customer / account counts
-#          and matching deposit balances scraped by scrape_9..scrape_15) onto the
+#          and matching deposit balances scraped by scrape_17..scrape_23) onto the
 #          project's market panel, producing a CONGLOMERATE x QUARTER analysis
 #          table for an "account-share vs volume-share" diagnostic — i.e. the
 #          extensive- vs intensive-margin decomposition of the deposit market.
@@ -32,7 +32,7 @@
 #     BASE/FirmDisclosures/SEC/edgar_disclosures.csv           (long; disclosure_common schema)
 #     BASE/FirmDisclosures/CVM/cvm_deposits.csv                (long)
 #     BASE/FirmDisclosures/Parent/parent_disclosures.csv       (long)
-#     BASE/FirmDisclosures/Incumbents/incumbent_client_counts.csv  (long; scrape_11 Tier-2/4)
+#     BASE/FirmDisclosures/Incumbents/incumbent_client_counts.csv  (long; scrape_19 Tier-2/4)
 #     + utils.firm_registry.load_registry(BASE) for the firm_key -> conglomerate map
 #
 #   OUTPUT: BASE/BCB/Egan_et_al_2025_Rep/processed/DESCRIPTIVES/account_vs_volume_panel.csv

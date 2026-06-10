@@ -71,15 +71,16 @@ import glob
 from logging.handlers import RotatingFileHandler
 
 # Folders
+from utils import paths
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 PARENT_DIR = os.path.abspath(os.path.join(SCRIPT_DIR, "..", ".."))
 BCB_PATH   = os.path.join(PARENT_DIR, "BCB")
 
 # Primary data source: complete IF-Data Prudential Conglomerate quarterly files
-IF_DATA_DIR = os.path.join(BCB_PATH, "IF Data", "Prudential Conglomerates")
+IF_DATA_DIR = str(paths.IF_DATA_PRUDENTIAL)
 
 # IF-Data List files: CNPJ -> Conglomerate mapping (monthly snapshots)
-IF_DATA_LIST_DIR = os.path.join(BCB_PATH, "IF Data", "List")
+IF_DATA_LIST_DIR = str(paths.IF_DATA_LIST)
 
 # Egan replication I/O paths
 EGAN_PATH      = os.path.join(BCB_PATH, "Egan_et_al_2025_Rep")

@@ -1,4 +1,5 @@
 import os
+import unicodedata
 import logging
 try:
     from utils.venv_guard import ensure_project_venv
@@ -10,17 +11,21 @@ if ensure_project_venv is not None:
 
 import numpy as np
 import pandas as pd
+from pathlib import Path
 
 try:
     from utils.toon_runtime import resolve_script_paths
 except Exception:
     resolve_script_paths = None
 
+from utils import paths
+
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
 
-BASE = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..'))
-IF_AGG_DIR  = os.path.join(BASE, 'BCB', 'IF Data', 'Aggregated Data')
-OUTPUT_DIR  = os.path.join(BASE, 'BCB', 'Egan_et_al_2025_Rep', 'processed')
+BASE = str(paths.OPEN_FINANCE)
+IF_AGG_DIR  = str(paths.IF_DATA_AGG)
+IF_LIST_DIR = paths.IF_DATA_LIST   # Path object; List files have IPs, Prudential report does not
+OUTPUT_DIR  = str(paths.PROCESSED)
 OUT_CSV     = os.path.join(OUTPUT_DIR, 'bank_chars_panel.csv')
 
 if resolve_script_paths is not None:
@@ -38,6 +43,58 @@ if resolve_script_paths is not None:
     OUT_CSV = _paths['out_csv']
 
 os.makedirs(OUTPUT_DIR, exist_ok=True)
+
+
+def _has_ip_from_list_files(list_dir: Path) -> dict[str, int]:
+    """
+    Build a {CodConglomeradoPrudencial -> has_ip} lookup from IF-Data List files.
+
+    The Prudential Conglomerate report (Report 1) contains NO Payment Institutions
+    (they are not reported under the prudential consolidation). Only the List files
+    include them, identified by SegmentoTb containing 'Instituição de Pagamento'.
+    has_ip=1 if ANY member institution across ALL available quarterly List files is a PI.
+
+    Returns an empty dict on failure (fallback: has_ip stays as derived from Report 1).
+    """
+    def _norm(s: str) -> str:
+        return (unicodedata.normalize("NFKD", str(s))
+                .encode("ascii", "ignore").decode("ascii").lower())
+
+    try:
+        files = sorted(list_dir.glob("IF_DATA_List_*.csv"))
+        if not files:
+            logging.warning(f"[has_ip] No List files found in {list_dir}; has_ip may be all-zero.")
+            return {}
+        frames = []
+        for f in files:
+            try:
+                d = pd.read_csv(f, dtype=str, encoding="utf-8")
+            except UnicodeDecodeError:
+                d = pd.read_csv(f, dtype=str, encoding="latin-1")
+            d.columns = [c.strip() for c in d.columns]
+            need = {"CodInst", "CodConglomeradoPrudencial", "SegmentoTb"}
+            if not need.issubset(d.columns):
+                continue
+            if {"Td", "Situacao"}.issubset(d.columns):
+                d = d[(d["Td"] == "I") & (d["Situacao"] == "A")]
+            cong = d["CodConglomeradoPrudencial"].astype(str)
+            congl = np.where(cong.isna() | (cong == "null") | (cong == "nan"),
+                             d["CodInst"].astype(str), cong)
+            seg = d["SegmentoTb"].map(_norm)
+            is_ip = (seg.str.contains("institui", na=False)
+                     & seg.str.contains("pagamento", na=False)).astype(int)
+            frames.append(pd.DataFrame({"congl": congl.astype(str), "is_ip": is_ip.values}))
+        if not frames:
+            return {}
+        congl_ip = pd.concat(frames, ignore_index=True).groupby("congl")["is_ip"].max()
+        lookup = {str(k).replace(".0", ""): int(v) for k, v in congl_ip.items()}
+        n_ip = sum(v for v in lookup.values() if v)
+        logging.info(f"[has_ip] List files: {len(files)} files, {n_ip} IP conglomerates identified.")
+        return lookup
+    except Exception as exc:
+        logging.warning(f"[has_ip] List-file derivation failed ({exc}); falling back to Prudential report.")
+        return {}
+
 
 def load_and_pivot(report_num, accounts_dict):
     csv_path = os.path.join(IF_AGG_DIR, f'IF_DATA_type_1_report_{report_num}.csv')
@@ -214,6 +271,19 @@ def build_panel() -> pd.DataFrame:
         panel['indice_basileia'] = panel['indice_basileia_raw']
     else:
         panel['indice_basileia'] = np.nan
+
+    # Override has_ip using IF-Data List files, which include Payment Institutions.
+    # The Prudential Conglomerate report (Report 1) never lists IPs, so has_ip from
+    # the pivot above is always 0. List files are the authoritative source.
+    ip_lookup = _has_ip_from_list_files(IF_LIST_DIR)
+    if ip_lookup:
+        panel['has_ip'] = (
+            panel['CodConglomeradoPrudencial'].astype(str)
+            .str.replace(r'\.0$', '', regex=True)
+            .map(ip_lookup)
+            .fillna(panel.get('has_ip', 0))
+            .astype(int)
+        )
 
     # FINALLY, Lag all variables to be used cleanly in regressions
     lag_cols = ['total_assets', 'equity', 'equity_ratio', 'log_total_assets',

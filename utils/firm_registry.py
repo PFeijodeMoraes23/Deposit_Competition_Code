@@ -136,10 +136,12 @@ def _norm(s: str) -> str:
 def _load_ifdata_namemap(base: str) -> list[dict]:
     """Build [{name_norm, cnpj_root, cong_prud}] from IF Data List CSVs."""
     import pandas as pd
-    files = sorted(glob.glob(os.path.join(base, "BCB", "IF Data", "List", "IF_DATA_List*.csv")))
+    # IF-Data List now lives under the consolidated raw tree (see utils/paths.py:IF_DATA_LIST)
+    _if_list = os.path.join(base, "BCB", "Egan_et_al_2025_Rep", "raw", "IF_DATA", "List")
+    files = sorted(glob.glob(os.path.join(_if_list, "IF_DATA_List*.csv")))
     if not files:
         # alternate naming used by scrape_1
-        files = sorted(glob.glob(os.path.join(base, "BCB", "IF Data", "List", "*.csv")))
+        files = sorted(glob.glob(os.path.join(_if_list, "*.csv")))
     rows: list[dict] = []
     for f in files:
         try:

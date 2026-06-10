@@ -1,23 +1,30 @@
 """
-run_sleep_pipeline.py
+run_sleep_pipeline.py — Sleepiness Estimation Pipeline Orchestrator
 
 CLI Options:
 ------------
-usage: run_sleep_pipeline.py [-h] [--only-spec-12]
+usage: run_sleep_pipeline.py [-h] [--only-spec-12] [--skip-sleep] [--sleep-only]
+                             [--skip-steps STEP [STEP ...]]
 
-Run the full Sleepiness Estimation Pipeline.
+Run the full Sleepiness Estimation Pipeline (3 estimators → exports → demand prep).
 
 options:
-  -h, --help      show this help message and exit
-  --only-spec-12  Only run specification 12 for the demand prep scripts
-                  instead of all specifications.
+  -h, --help              show this help message and exit
+  --only-spec-12          Only run specification 12 for demand prep (not all specs)
+  --skip-sleep            Skip the estimation steps (1–3), run only exports & demand prep (4–6)
+  --sleep-only            Run only the estimation steps (1–3), skip exports & demand prep
+  --skip-steps STEP ...   Skip specific step IDs (1–6)
 
-This script sequentially runs the following steps:
-  1. estimation_1_sleep.py         (Local B-type Estimation)
-  2. estimation_2_sleep.py         (Pooled B+D Linear)
-  3. estimation_3_sleep.py         (Pooled B+D Logistic, AME)
-  4. export_results.py             (Export 1st/2nd Stage Summaries)
-  5. estimation_demand_1_prep.py   (Universal Demand Prep Orchestrator & Panel Serialization)
+All steps run sequentially. Steps 1–3 are sleep estimators; each spawns its own
+ProcessPoolExecutor internally. Running them concurrently exhausted Windows non-paged
+pool via simultaneous IPC pipe traffic for 400K-row DataFrames (WinError 1450).
+
+  1. estimation_1_sleep.py              (Local B-type Estimation)
+  2. estimation_2_sleep.py              (Pooled B+D Linear)
+  3. estimation_3_sleep.py              (Pooled B+D Logistic, AME)
+  4. export_results.py                  (Export 1st/2nd Stage Summaries)
+  5. estimation_demand_1_prep.py        (Universal Demand Prep Orchestrator & Serialization)
+  6. export_analyze_spec12.py           (Analyze Specification 12 Results)
 """
 from utils.venv_guard import ensure_project_venv
 ensure_project_venv(__file__)
@@ -82,12 +89,16 @@ def main():
     parser = argparse.ArgumentParser(
         description="Run the full Sleepiness Estimation Pipeline.",
         epilog="""
-This script sequentially runs the following steps:
-  1. estimation_1_sleep.py         (Local B-type Estimation)
-  2. estimation_2_sleep.py         (Pooled B+D Linear)
-  3. estimation_3_sleep.py         (Pooled B+D Logistic, AME)
-  4. export_results.py             (Export 1st/2nd Stage Summaries)
-  5. estimation_demand_1_prep.py   (Universal Demand Prep Orchestrator & Panel Serialization)
+All steps run sequentially. Steps 1–3 are sleep estimators; each spawns its own
+ProcessPoolExecutor internally. Running them concurrently exhausted Windows non-paged
+pool via simultaneous IPC pipe traffic for 400K-row DataFrames (WinError 1450).
+
+  1. estimation_1_sleep.py              (Local B-type Estimation)
+  2. estimation_2_sleep.py              (Pooled B+D Linear)
+  3. estimation_3_sleep.py              (Pooled B+D Logistic, AME)
+  4. export_results.py                  (Export 1st/2nd Stage Summaries)
+  5. estimation_demand_1_prep.py        (Universal Demand Prep Orchestrator & Serialization)
+  6. export_analyze_spec12.py           (Analyze Specification 12 Results)
         """,
         formatter_class=argparse.RawDescriptionHelpFormatter
     )
@@ -141,7 +152,6 @@ This script sequentially runs the following steps:
             {"id": 6, "file": "export_analyze_spec12.py", "args": [], "desc": "Analyze Specification 12 Results"},
         ])
 
-    import concurrent.futures
     import os
 
     # Filter skipped steps
@@ -191,18 +201,19 @@ This script sequentially runs the following steps:
 
     print("\n=====================================================================")
     try:
-        # Run sleep estimators in parallel (max 3 at a time to save RAM footprint on a 32GB machine)
+        # Run sleep estimators sequentially.
+        # Running them in parallel caused WinError 1450 (Windows non-paged pool exhausted)
+        # because each script spawns its own ProcessPoolExecutor and sends large DataFrames
+        # (400K+ rows) via IPC pipes. Sequential execution lets each script use all CPUs
+        # for its inner ProcessPool without competing for kernel IPC resources.
         if sleep_scripts:
-            print("====== Running Sleep Estimations in Parallel (max 3 concurrent) ======")
-            with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
-                _slots = min(3, len(sleep_scripts))
-                futures = [executor.submit(run_script, s, len(sleep_scripts), _slots) for s in sleep_scripts]
-                for future in concurrent.futures.as_completed(futures):
-                    future.result() # child errors are raised here
+            print("====== Running Sleep Estimations Sequentially ======")
+            for s in sleep_scripts:
+                run_script(s, len(sleep_scripts), n_parallel_slots=1)
 
         # Run memory-heavy scripts sequentially after the parallel batch finishes
         if heavy_scripts:
-            print("\n====== Running Heavy Estimations Sequentially (after parallel batch) ======")
+            print("\n====== Running Heavy Estimations Sequentially ======")
             for step in heavy_scripts:
                 run_script(step, len(heavy_scripts))
 

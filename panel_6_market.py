@@ -95,15 +95,16 @@ logging.basicConfig(level=logging.INFO,
 ## -----------------------------------------------------------------------------
 ## 1) PATHS
 ## -----------------------------------------------------------------------------
-BASE = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))
+from utils import paths
+BASE = str(paths.OPEN_FINANCE)
 
-BCB_DIR    = os.path.join(BASE, "BCB")
-IBGE_DIR   = os.path.join(BASE, "IBGE")
-ANATEL_DIR = os.path.join(BASE, "ANATEL")
+BCB_DIR    = str(paths.BCB)
+IBGE_DIR   = str(paths.IBGE_DIR)
+ANATEL_DIR = str(paths.ANATEL_DIR)
 INSS_DIR   = os.path.join(BASE, "INSS")
-CAD_DIR    = os.path.join(BASE, "CadUnico")
+CAD_DIR    = str(paths.CADUNICO_DIR)
 
-PANEL_DIR  = os.path.join(BCB_DIR, "Egan_et_al_2025_Rep", "processed")
+PANEL_DIR  = str(paths.PROCESSED)
 os.makedirs(PANEL_DIR, exist_ok=True)
 
 DEPOSITS_CSV   = os.path.join(PANEL_DIR,                  "deposits_panel.csv")
@@ -118,6 +119,11 @@ TARIFAS_FEE_CSV = os.path.join(BCB_DIR, "Tarifas", "processed", "tarifas_fee_sum
 BANK_CHARS_CSV = os.path.join(PANEL_DIR,                  "bank_chars_panel.csv")
 
 OUTPUT_CSV     = os.path.join(PANEL_DIR,                  "market_panel.csv")
+
+# Hard cap: the master analysis panel ends at 2025-Q4.  Raw inputs may extend
+# further, but everything after 2025-Q4 is dropped for a fixed end point.
+PANEL_END_YEAR    = 2025
+PANEL_END_QUARTER = 4
 
 if resolve_script_paths is not None:
     _paths = resolve_script_paths(
@@ -697,6 +703,13 @@ def save(panel: pd.DataFrame) -> None:
     remaining = sorted([c for c in panel.columns if c not in ordered])
     panel     = panel[ordered + remaining]
 
+    # Hard cap at 2025-Q4: drop any later quarters present in the merged inputs.
+    _cap = PANEL_END_YEAR * 4 + PANEL_END_QUARTER
+    _n_before = len(panel)
+    panel = panel[~((panel["year"] * 4 + panel["quarter"]) > _cap)].copy()
+    if (_dropped := _n_before - len(panel)):
+        logging.info(f"Capped market panel at {PANEL_END_YEAR}-Q{PANEL_END_QUARTER}: dropped {_dropped:,} later-quarter rows.")
+
     panel.sort_values(
         ["CodConglomeradoPrudencial", "mca_code", "year", "quarter"],
         inplace=True,
@@ -712,7 +725,7 @@ def save(panel: pd.DataFrame) -> None:
 
 def get_pure_wholesale_cnpjs() -> set:
     import glob
-    if_files = sorted(glob.glob(os.path.normpath(os.path.join(BCB_DIR, "IF Data", "List", "IF_DATA_List*.csv"))))
+    if_files = sorted(glob.glob(os.path.join(str(paths.IF_DATA_LIST), "IF_DATA_List*.csv")))
     
     cong_tags = {}
     for f in if_files:

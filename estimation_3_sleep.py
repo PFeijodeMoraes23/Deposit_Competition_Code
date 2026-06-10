@@ -49,9 +49,10 @@ warnings.filterwarnings("ignore", message="covariance of constraints does not ha
 # ==============================================================================
 # GLOBAL SETUP
 # ==============================================================================
-_ROOT = Path(__file__).resolve().parents[2]
-DATA_DIR = _ROOT / "BCB" / "Egan_et_al_2025_Rep" / "processed"
-PANEL_CSV = DATA_DIR / "market_panel.csv"
+from utils import paths as _paths_mod
+DATA_DIR = _paths_mod.PROCESSED
+_PANEL_WITH_FEES = DATA_DIR / "market_panel_with_fees.csv"
+PANEL_CSV = _PANEL_WITH_FEES if _PANEL_WITH_FEES.exists() else DATA_DIR / "market_panel.csv"
 OUTPUT_DIR = DATA_DIR / "ESTIMATION_OUTPUT" / "DEMAND_PREP" / "est3"
 
 PLOTS_DIR = OUTPUT_DIR / "PLOTS"
@@ -97,6 +98,7 @@ def define_specifications():
 # ==============================================================================
 def build_pooled_data():
     df_raw = load_panel_cached(PANEL_CSV) if load_panel_cached else pd.read_csv(PANEL_CSV, dtype={'mca_code': str}, low_memory=False)
+    df_raw = df_raw.copy()  # defragment: market_panel_with_fees has many columns from merges
 
     df_raw['pix_exists'] = ((df_raw['year'] > 2020) | ((df_raw['year'] == 2020) & (df_raw['quarter'] == 4))).astype(float)
 

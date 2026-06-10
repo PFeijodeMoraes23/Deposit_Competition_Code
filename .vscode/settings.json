@@ -5,10 +5,12 @@
         "COSIF",
         "ESTBAN",
         "IBGE",
+        "Negócios",
         "Olinda",
         "procs",
         "SAGI",
         "tarifas",
+        "Tesouraria",
         "toon"
     ],
     "accessibility.signals.chatUserActionRequired": {
