@@ -110,17 +110,27 @@ def format_q_value(qv, L):
     p = 1 - stats.chi2.cdf(qv, df=L)
     return f'${qv:.4f}{_stars(p)}$'
 
-def build_logit_table(est_id: int, simple_title: bool = False) -> str:
+def build_logit_table(est_id: int, simple_title: bool = False,
+                      coherence: bool = False) -> str:
     """Build a longtable for estimation est_id Spec 12 logit results.
 
     Four columns: priceonly, core, full, full+dtype
     Parameter rows with SE underneath, in fixed ROW_ORDER.
     Footer with diagnostics (observations, Q-value, effective clusters).
+
+    When ``coherence`` is True, reads the post-coherence-fix summary
+    (``logit_summary_spec_12_coherence.json``, written by the 3-routine
+    blp_1_logit_coherence.jl) instead of the legacy 5-routine summary.
     """
-    json_path = RESULTS_DIR / 'logit_summary_spec_12.json'
+    summary_name = ('logit_summary_spec_12_coherence.json' if coherence
+                    else 'logit_summary_spec_12.json')
+    json_path = RESULTS_DIR / summary_name
     if not json_path.exists():
         print(f'ERROR: {json_path} not found.')
-        print('Run: julia --project=. --threads=4 blp_logit_local.jl')
+        if coherence:
+            print('Run: julia --project=. --threads=auto blp_1_logit_coherence.jl')
+        else:
+            print('Run: julia --project=. --threads=4 blp_logit_local.jl')
         return ''
 
     with open(json_path, 'r') as f:
@@ -399,17 +409,29 @@ def main():
                        help='Also generate documentation tables (instruments, prod_chars, demographic_chars)')
     parser.add_argument('--simple-title', action='store_true',
                        help='Use simple title without estimation/specification numbers')
+    parser.add_argument('--coherence', action='store_true',
+                       help='Use post-coherence-fix results (logit_summary_spec_12_coherence.json); '
+                            'defaults to routines E1-E3 and writes est{id}_spec12_logit_coherence.tex')
     args = parser.parse_args()
 
-    est_ids = list(range(1, 6)) if args.all else [args.est]
+    # Coherence build has 3 routines (E1-E3); legacy build has 5 (E1-E5).
+    # In coherence mode, default to E1-E3 but honor an explicit single --est
+    # (the parser default of 5 means "not specified").
+    if args.coherence:
+        est_ids = [args.est] if (args.est != 5 and not args.all) else list(range(1, 4))
+    else:
+        est_ids = list(range(1, 6)) if args.all else [args.est]
 
-    print('Generating BLP Logit tables for Specification 12...')
+    suffix = '_coherence' if args.coherence else ''
+    build_note = ' [coherence]' if args.coherence else ''
+    print(f'Generating BLP Logit tables for Specification 12{build_note}...')
 
     success = True
     for est_id in est_ids:
-        print(f'\n[E{est_id}] Generating table...')
+        print(f'\n[E{est_id}] Generating table{build_note}...')
 
-        tex_content = build_logit_table(est_id, simple_title=args.simple_title)
+        tex_content = build_logit_table(est_id, simple_title=args.simple_title,
+                                        coherence=args.coherence)
 
         if not tex_content:
             print(f'ERROR: Failed to generate table for E{est_id}.')
@@ -417,13 +439,13 @@ def main():
             continue
 
         # Save to primary location (Egan repository)
-        output_path = TABLES_DIR / f'est{est_id}_spec12_logit.tex'
+        output_path = TABLES_DIR / f'est{est_id}_spec12_logit{suffix}.tex'
         with open(output_path, 'w', encoding='utf-8') as f:
             f.write(tex_content)
         print(f'[OK] Table saved: {output_path}')
 
         # Save copy to Drafts directory
-        drafts_path = DRAFTS_DIR / f'est{est_id}_spec12_logit.tex'
+        drafts_path = DRAFTS_DIR / f'est{est_id}_spec12_logit{suffix}.tex'
         with open(drafts_path, 'w', encoding='utf-8') as f:
             f.write(tex_content)
         print(f'[OK] Copy saved: {drafts_path}')
@@ -432,7 +454,7 @@ def main():
         print(f'\n[SUCCESS] Generated tables for E{est_ids}')
         print(f'\nInsert logit tables into V_Main.tex with:')
         for est_id in est_ids:
-            print(f'  \\input{{est{est_id}_spec12_logit.tex}}')
+            print(f'  \\input{{est{est_id}_spec12_logit{suffix}.tex}}')
     else:
         print('[FAILED] Some tables could not be generated')
 

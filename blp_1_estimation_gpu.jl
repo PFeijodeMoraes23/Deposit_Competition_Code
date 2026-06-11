@@ -938,7 +938,7 @@ function run_blp_estimation_gpu(estim::Int, spec_id::Int, args,
     theta2_0     = nothing
     if args["stage"] in keys(prev_stages)
         prev_path = joinpath(out_dir,
-            "blp_checkpoint_E$(estim)_spec_$(spec_id)_$(prev_stages[args["stage"]]).jls")
+            "blp_checkpoint_E$(estim)_spec_$(spec_id)_$(prev_stages[args["stage"]])$(output_suffix()).jls")
         if isfile(prev_path)
             try
                 prev = deserialize(prev_path)
@@ -965,21 +965,29 @@ function run_blp_estimation_gpu(estim::Int, spec_id::Int, args,
     # ── δ warm-start ──────────────────────────────────────────────────────
     delta_work = zeros(N_obs)
     let _loaded = false
-        _bin_cand = joinpath(out_dir, "logit_delta_E$(estim)_spec_$(spec_id).bin")
-        if isfile(_bin_cand)
+        # BLP_DELTA_SUFFIX lets a coherence run warm-start from the suffixed delta
+        # (logit_delta_E{k}_spec_{s}_coherence.*); default "" keeps the legacy name.
+        _suffix = get(ENV, "BLP_DELTA_SUFFIX", "")
+        for _bin_cand in unique([
+                joinpath(out_dir, "logit_delta_E$(estim)_spec_$(spec_id)$(_suffix).bin"),
+                joinpath(out_dir, "logit_delta_E$(estim)_spec_$(spec_id).bin"),
+            ])
+            isfile(_bin_cand) || continue
             _d = load_delta_bin(_bin_cand)
             if _d !== nothing && length(_d) == N_obs
                 copyto!(delta_work, _d)
                 log_status("  [δ WARM-START] Loaded $(basename(_bin_cand)) [binary]")
                 _loaded = true
+                break
             end
         end
         if !_loaded
-            for _cand in [
+            for _cand in unique([
+                joinpath(out_dir, "logit_delta_E$(estim)_spec_$(spec_id)$(_suffix).jls"),
                 joinpath(out_dir, "logit_delta_E$(estim)_spec_$(spec_id).jls"),
                 joinpath(out_dir, "blp_checkpoint_E$(estim)_spec_$(spec_id)_logit.jls"),
                 joinpath(out_dir, "blp_results_E$(estim)_spec_$(spec_id)_logit.jls"),
-            ]
+            ])
                 isfile(_cand) || continue
                 try
                     _ck = deserialize(_cand)
@@ -1076,7 +1084,7 @@ function run_blp_estimation_gpu(estim::Int, spec_id::Int, args,
     # ── Save checkpoint ───────────────────────────────────────────────────
     mkpath(out_dir)
     chk_path = joinpath(out_dir,
-        "blp_checkpoint_E$(estim)_spec_$(spec_id)_$(args["stage"]).jls")
+        "blp_checkpoint_E$(estim)_spec_$(spec_id)_$(args["stage"])$(output_suffix()).jls")
     try
         serialize(chk_path, Dict("theta2_star" => theta2_star,
                                   "delta_star"  => delta_final))
@@ -1144,7 +1152,7 @@ function main_gpu()
         args["stage"] = current_stage
 
         all_done = all(isfile(joinpath(out_dir,
-            "blp_results_E$(estim)_spec_$(sp)_$(current_stage).jls"))
+            "blp_results_E$(estim)_spec_$(sp)_$(current_stage)$(output_suffix()).jls"))
             for sp in spec_ids)
         if all_done
             log_status("[SKIP] Stage '$current_stage' already complete.")
@@ -1159,7 +1167,7 @@ function main_gpu()
         # GPU: sequential spec loop — avoids multi-context VRAM contention.
         for sp in spec_ids
             out_path = joinpath(out_dir,
-                "blp_results_E$(estim)_spec_$(sp)_$(current_stage).jls")
+                "blp_results_E$(estim)_spec_$(sp)_$(current_stage)$(output_suffix()).jls")
             if isfile(out_path)
                 log_status("  [SKIP] Spec $sp already done for '$current_stage'")
                 continue
@@ -1208,7 +1216,7 @@ function main_gpu()
                 "stage"        => current_stage)
         end
 
-        summary_path = joinpath(out_dir, "blp_summary_E$(estim)_$(current_stage)_gpu.json")
+        summary_path = joinpath(out_dir, "blp_summary_E$(estim)_$(current_stage)_gpu$(output_suffix()).json")
         open(summary_path, "w") do f; JSON3.write(f, all_results); end
         log_status("Summary saved to: $summary_path")
         log_status("[DONE] BLP GPU E$estim ($current_stage) complete for specs $spec_ids.")

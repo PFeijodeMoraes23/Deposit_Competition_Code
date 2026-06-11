@@ -460,7 +460,7 @@ def run_plotting_phase(spec12_only=False):
         phi_agg = phi_agg.sort_values('date')
         ax.plot(phi_agg['date'], phi_agg['phi'], color='blue', linewidth=2)
         ax.set_ylabel(r"National $\hat{\phi}_t$ (logistic AME)")
-        ax.set_ylim(bottom=0)
+        ax.set_ylim(0, 1.0)
         ax.grid()
         fig.tight_layout()
         plt.savefig(PLOTS_DIR / f"Logistic_{col_name.replace('phi_mt_', '')}.png", dpi=300)

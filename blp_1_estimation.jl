@@ -70,6 +70,12 @@ function input_filename(estim::Int, spec_id::Int)::String
     return "$(prefix)_final_spec_$(spec_id).parquet"
 end
 
+"""Suffix appended to all written result/checkpoint/summary filenames, from
+ENV["BLP_OUTPUT_SUFFIX"] (default ""). Coherence runs set it to "_coherence" so
+their outputs (and inter-stage warm-starts) stay self-consistent and never clobber
+the legacy (non-coherence) results."""
+output_suffix()::String = get(ENV, "BLP_OUTPUT_SUFFIX", "")
+
 function log_status(msg::String)
     stamped = "[$(Dates.format(now(), "yyyy-mm-dd HH:MM:SS"))] $msg"
     lock(_log_lock) do; push!(_log_buf, stamped); end

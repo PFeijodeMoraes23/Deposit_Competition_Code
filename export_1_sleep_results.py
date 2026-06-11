@@ -128,7 +128,7 @@ def build_first_stage_table(results_dict, G, G_star):
         r"    \endfoot",
         "",
         r"    \bottomrule",
-        rf"    \multicolumn{{{multispan}}}{{p{{0.65\textwidth}}}}{{{notes}}} \\",
+        rf"    \multicolumn{{{multispan}}}{{p{{0.45\textwidth}}}}{{{notes}}} \\",
         r"    \endlastfoot",
         "",
     ]
@@ -286,7 +286,7 @@ def build_second_stage_table(results_dict, G, G_star):
         r"    \endfoot",
         "",
         r"    \bottomrule",
-        rf"    \multicolumn{{{multispan}}}{{p{{0.85\textwidth}}}}{{{notes}}} \\",
+        rf"    \multicolumn{{{multispan}}}{{p{{0.60\textwidth}}}}{{{notes}}} \\",
         r"    \endlastfoot",
         "",
     ]
