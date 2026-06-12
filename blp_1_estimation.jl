@@ -66,6 +66,12 @@ const _log_buf  = String[]
 const _log_lock = ReentrantLock()
 
 function input_filename(estim::Int, spec_id::Int)::String
+    # BLP_COHERENCE_INPUTS=1 routes to the post-fix demand parquets (no _final suffix;
+    # E3 uses the logistic variant). Default keeps the legacy _final names unchanged.
+    if lowercase(get(ENV, "BLP_COHERENCE_INPUTS", "0")) in ("1", "true", "yes")
+        prefix = estim == 3 ? "demand_3_logistic" : "demand_$(estim)"
+        return "$(prefix)_spec_$(spec_id).parquet"
+    end
     prefix = estim == 5 ? "demand_5_logistic" : "demand_$(estim)"
     return "$(prefix)_final_spec_$(spec_id).parquet"
 end

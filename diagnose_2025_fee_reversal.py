@@ -34,8 +34,17 @@ from utils import paths
 _REPO     = Path(__file__).resolve().parents[2]
 TARIF_DIR = paths.TARIFAS_PROC
 OUT_DIR   = _REPO / "Drafts" / "Deposit Competition"
+OUT_DIR.mkdir(parents=True, exist_ok=True)
 
 COSIF_CSV = TARIF_DIR / "cosif_service_fees_institution.csv"
+
+
+def _savefig(fig, name: str, **kwargs) -> None:
+    """Save figure to OUT_DIR (Drafts/Deposit Competition/)."""
+    kw = dict(dpi=150, bbox_inches="tight") | kwargs
+    fig.savefig(OUT_DIR / name, **kw)
+    print(f"  saved -> {OUT_DIR / name}")
+
 
 # ── institution universe ───────────────────────────────────────────────────────
 INSTITUTIONS = {
@@ -145,10 +154,8 @@ def fig1_revenue_monthly(df: pd.DataFrame) -> None:
     fig.suptitle("Fig 1 — Monthly COSIF Service Revenue (absolute R$), 2019–2026",
                  fontsize=10, fontweight="bold")
     fig.tight_layout(rect=[0, 0.04, 1, 0.97])
-    out = OUT_DIR / "fee_reversal_fig1_revenue_monthly.png"
-    fig.savefig(out, dpi=150, bbox_inches="tight")
+    _savefig(fig, "fee_reversal_fig1_revenue_monthly.png")
     plt.close(fig)
-    print(f"Fig 1 saved -> {out.name}")
 
 
 # ── Fig 2: revenue vs deposit decomposition ────────────────────────────────────
@@ -249,10 +256,8 @@ def fig2_decomposition(df: pd.DataFrame) -> pd.DataFrame:
         fontsize=9, fontweight="bold",
     )
     fig.tight_layout()
-    out = OUT_DIR / "fee_reversal_fig2_decomposition.png"
-    fig.savefig(out, dpi=150, bbox_inches="tight")
+    _savefig(fig, "fee_reversal_fig2_decomposition.png")
     plt.close(fig)
-    print(f"Fig 2 saved -> {out.name}")
     return summary
 
 
@@ -294,10 +299,8 @@ def fig3_pf_pj_split(df: pd.DataFrame) -> None:
         fontsize=9, fontweight="bold",
     )
     fig.tight_layout()
-    out = OUT_DIR / "fee_reversal_fig3_pf_pj_split.png"
-    fig.savefig(out, dpi=150, bbox_inches="tight")
+    _savefig(fig, "fee_reversal_fig3_pf_pj_split.png")
     plt.close(fig)
-    print(f"Fig 3 saved -> {out.name}")
 
 
 # ── Fig 4: quarterly fee ratio 2018-2026 ──────────────────────────────────────
@@ -334,10 +337,8 @@ def fig4_fee_ratio_quarterly(df: pd.DataFrame) -> None:
     ax.legend(ncol=3, fontsize=8, loc="upper right")
     ax.yaxis.set_major_formatter(mticker.FormatStrFormatter("%.4f"))
     fig.tight_layout()
-    out = OUT_DIR / "fee_reversal_fig4_fee_ratio_quarterly.png"
-    fig.savefig(out, dpi=150, bbox_inches="tight")
+    _savefig(fig, "fee_reversal_fig4_fee_ratio_quarterly.png")
     plt.close(fig)
-    print(f"Fig 4 saved -> {out.name}")
 
 
 # ── Fig 5: H1 vs H2 revenue symmetry check ─────────────────────────────────────
@@ -379,10 +380,8 @@ def fig5_h1_h2_ratio(df: pd.DataFrame) -> None:
         fontsize=9, fontweight="bold",
     )
     fig.tight_layout()
-    out = OUT_DIR / "fee_reversal_fig5_h1_h2_check.png"
-    fig.savefig(out, dpi=150, bbox_inches="tight")
+    _savefig(fig, "fee_reversal_fig5_h1_h2_check.png")
     plt.close(fig)
-    print(f"Fig 5 saved -> {out.name}")
 
 
 # ── Table: annual December snapshot for all key institutions ──────────────────

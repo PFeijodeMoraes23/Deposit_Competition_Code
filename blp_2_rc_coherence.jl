@@ -140,9 +140,14 @@ function run_coherence_routine(estim_id::Int; passthrough::Vector{String} = Stri
     # runs never clobber each other's results, and neither touches the legacy outputs:
     #   IFT (blp_2)      -> *_coherence
     #   numerical (blp_1) -> *_coherence_num
-    ENV["BLP_DELTA_SUFFIX"]  = COHERENCE_DELTA_SUFFIX
-    ENV["BLP_OUTPUT_SUFFIX"] = COHERENCE_DELTA_SUFFIX *
-                               (COHERENCE_ENGINE == "numerical" ? "_num" : "")
+    ENV["BLP_DELTA_SUFFIX"]     = COHERENCE_DELTA_SUFFIX
+    ENV["BLP_OUTPUT_SUFFIX"]    = COHERENCE_DELTA_SUFFIX *
+                                  (COHERENCE_ENGINE == "numerical" ? "_num" : "")
+    # Route input_filename to the fresh coherence parquets (no _final suffix):
+    #   E1 → demand_1_spec_12.parquet
+    #   E2 → demand_2_spec_12.parquet
+    #   E3 → demand_3_logistic_spec_12.parquet
+    ENV["BLP_COHERENCE_INPUTS"] = "1"
 
     empty!(ARGS); append!(ARGS, vcat(base, pass))
     main_gpu()

@@ -934,7 +934,9 @@ function run_blp_estimation_gpu(estim::Int, spec_id::Int, args,
 
     # ── θ₂ warm-start ─────────────────────────────────────────────────────
     _, _, out_dir = get_paths(args["hpc"])
-    prev_stages  = Dict("full" => "sigma", "extended" => "full")
+    prev_stages  = Dict("rc2" => "sigma", "rc3" => "rc2", "rc4" => "rc3",
+                        "full" => "rc4", "ext1" => "full", "ext2" => "ext1",
+                        "extended" => "ext2")
     theta2_0     = nothing
     if args["stage"] in keys(prev_stages)
         prev_path = joinpath(out_dir,
@@ -1146,7 +1148,8 @@ function main_gpu()
         draws_dir, args["R"], args["seed"])
 
     stages_to_run = args["stage"] == "sequence" ?
-                    ["sigma", "full", "extended"] : [args["stage"]]
+                    ["sigma", "rc2", "rc3", "rc4", "full", "ext1", "ext2", "extended"] :
+                    [args["stage"]]
 
     for current_stage in stages_to_run
         args["stage"] = current_stage
