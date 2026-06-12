@@ -202,8 +202,15 @@ def build_latex_table(results_dict, order_keys, target_vars, out_path, title="",
     tex.append(r"\footnotesize")
     tex.append(r"\renewcommand{\arraystretch}{0.75}")
 
-    col_def = "l" + "c" * len(order_keys)
-    tex.append(r"\begin{longtable}[c]{" + col_def + "}")
+    # Use xltabular (loaded in the draft preamble) so the table is pinned to
+    # \textwidth with equal-width, centered numeric columns. A plain longtable
+    # sizes each column to its content, and the full-width notes \parbox below
+    # then dumps all the slack into the *last* column -- which flung the final
+    # column to the right margin and overflowed the page. Equal X columns split
+    # the width evenly and keep the table inside the text block.
+    n_data = len(order_keys)
+    col_def = r"l *{" + str(n_data) + r"}{>{\centering\arraybackslash}X}"
+    tex.append(r"\begin{xltabular}{\textwidth}{" + col_def + "}")
     tex.append(r"\caption{" + title + r"}\label{" + label + r"} \\")
 
     # First Header
@@ -219,7 +226,11 @@ def build_latex_table(results_dict, order_keys, target_vars, out_path, title="",
     tex.append(r"\endfirsthead")
 
     # Next Headers
-    tex.append(r"\multicolumn{" + str(len(order_keys) + 1) + r"}{c}{{\bfseries \tablename\ \thetable{} -- " + title + r" (continued from previous page)}} \\")
+    # NOTE: keep this continuation line short. longtable computes column widths
+    # from *every* head/foot row, so embedding the full (long) title here forces
+    # an unbreakable \multicolumn wider than the page, which balloons the columns
+    # and pushes the rules off the right margin even on the first page.
+    tex.append(r"\multicolumn{" + str(len(order_keys) + 1) + r"}{c}{{\bfseries \tablename\ \thetable{} (continued from previous page)}} \\")
     tex.append(r"\toprule")
     tex.append(" & ".join(headers) + r" \\")
     tex.append(r"\midrule")
@@ -232,7 +243,9 @@ def build_latex_table(results_dict, order_keys, target_vars, out_path, title="",
 
     # Last Footer
     tex.append(r"\bottomrule")
-    notes_str = r"\multicolumn{" + str(len(order_keys) + 1) + r"}{@{}l}{\parbox[t]{\linewidth}{\footnotesize\textit{Notes:} Standard errors are in parentheses. Est.~3 reports Average Marginal Effects (AME) from NLLS logistic. Significance levels: * $p < 0.1$, ** $p < 0.05$, *** $p < 0.01$.}}"
+    # @{}l@{} strips the outer tabcolsep on *both* sides so the full-width notes
+    # parbox matches the table width exactly (otherwise it is 1 tabcolsep too wide).
+    notes_str = r"\multicolumn{" + str(len(order_keys) + 1) + r"}{@{}l@{}}{\parbox[t]{\linewidth}{\footnotesize\textit{Notes:} Standard errors are in parentheses. Est.~3 reports Average Marginal Effects (AME) from NLLS logistic. Significance levels: * $p < 0.1$, ** $p < 0.05$, *** $p < 0.01$.}}"
     tex.append(notes_str)
     tex.append(r"\endlastfoot")
 
@@ -339,7 +352,7 @@ def build_latex_table(results_dict, order_keys, target_vars, out_path, title="",
     tex.append(" & ".join(row_cluster) + r" \\")
     tex.append(" & ".join(row_eff_cluster) + r" \\")
 
-    tex.append(r"\end{longtable}")
+    tex.append(r"\end{xltabular}")
     tex.append(r"}")
 
     with open(out_path, "w", encoding="utf-8") as f:
