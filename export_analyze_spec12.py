@@ -208,8 +208,14 @@ def build_latex_table(results_dict, order_keys, target_vars, out_path, title="",
     # then dumps all the slack into the *last* column -- which flung the final
     # column to the right margin and overflowed the page. Equal X columns split
     # the width evenly and keep the table inside the text block.
+    # First column is a fixed-width, left-aligned *wrapping* column so long row
+    # labels (e.g. "Broadband Connections (per 100 inhabitants)") wrap instead of
+    # forcing the column -- and the whole table -- past \textwidth. 0.26\textwidth
+    # keeps the data X-columns wide enough to hold the "Pooled (Logistic AME)"
+    # header on one line.
     n_data = len(order_keys)
-    col_def = r"l *{" + str(n_data) + r"}{>{\centering\arraybackslash}X}"
+    col_def = (r">{\raggedright\arraybackslash}p{0.26\textwidth} "
+               r"*{" + str(n_data) + r"}{>{\centering\arraybackslash}X}")
     tex.append(r"\begin{xltabular}{\textwidth}{" + col_def + "}")
     tex.append(r"\caption{" + title + r"}\label{" + label + r"} \\")
 
