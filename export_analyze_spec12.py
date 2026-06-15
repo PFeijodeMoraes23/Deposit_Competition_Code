@@ -277,13 +277,15 @@ def build_latex_table(results_dict, order_keys, target_vars, out_path, title="",
         ordered_vars += other_vars
 
     for v in ordered_vars:
-        row_cf = [nice_var_name(v)]
-        row_se = [""]
+        # One row per variable: the coefficient and its SE are stacked inside the
+        # same cell (coef \newline (se)). This keeps the SE locked under its
+        # coefficient even when the label wraps to two lines in the fixed-width
+        # first column -- without \multirow (which overflows the tight rows).
+        row = [nice_var_name(v)]
         for col in order_keys:
             res = results_dict.get(col)
             if res is None:
-                row_cf.append("-")
-                row_se.append("-")
+                row.append("-")
                 continue
 
             params = getattr(res, 'params', pd.Series(dtype=float))
@@ -292,14 +294,11 @@ def build_latex_table(results_dict, order_keys, target_vars, out_path, title="",
 
             if v in params.index:
                 c_str, se_str = format_value(params[v], bse[v], pvalues[v], digits=4)
-                row_cf.append(c_str)
-                row_se.append(se_str)
+                row.append(c_str + r" \newline " + se_str)
             else:
-                row_cf.append("-")
-                row_se.append("-")
+                row.append("-")
 
-        tex.append(" & ".join(row_cf) + r" \\")
-        tex.append(" & ".join(row_se) + r" \\")
+        tex.append(" & ".join(row) + r" \\")
         tex.append(r"\addlinespace")
 
     tex.append(r"\midrule")
