@@ -33,6 +33,76 @@ using Parquet2, DataFrames, SparseArrays, LinearAlgebra, Statistics
 using Random, Optim, QuasiMonteCarlo, Distributions
 using JSON3, Serialization, ArgParse, Printf, Dates
 
+# ── Optional: true L-BFGS-B outer solver (Byrd–Lu–Nocedal–Zhu) ──────────────────
+# LBFGSB.jl handles the box directly (active set + projected line search), whereas
+# Optim's Fminbox(LBFGS()) solves a SEQUENCE of barrier subproblems and so burns
+# many extra objective/gradient evaluations to reach the same KKT point. Loaded
+# OPTIONALLY: if absent (or its API drifts), `solve_box_lbfgsb` falls back loudly to
+# Fminbox, so a job never fails for lack of it. Enable once with:
+#     julia --project=. -e 'using Pkg; Pkg.add("LBFGSB")'
+const HAVE_LBFGSB = try
+    @eval import LBFGSB
+    true
+catch
+    false
+end
+HAVE_LBFGSB || @warn "LBFGSB.jl not installed — box-constrained outer optimisation " *
+    "will use Optim's Fminbox(LBFGS()). Run `Pkg.add(\"LBFGSB\")` for true L-BFGS-B."
+
+"""
+    solve_box_lbfgsb(f, g!, x0, lo, hi; tol_outer=1e-6, maxiter=500, m=10)
+        -> (minimizer::Vector, minimum::Float64, n_feval::Int, converged::Bool)
+
+Bound-constrained outer minimisation. Prefers true L-BFGS-B (LBFGSB.jl); falls back
+LOUDLY to `Fminbox(LBFGS())` if LBFGSB is unavailable or its call errors / returns an
+unexpected shape. Both target the same KKT point — L-BFGS-B just reaches it with far
+fewer f/∇f evaluations by handling the box natively instead of via barrier subproblems.
+
+`f(x)::Float64` returns the objective; `g!(G, x)` writes ∇f into `G`. Callers should
+share a one-point cache between `f` and `g!` so the inner BLP contraction is solved
+once per unique `x` (the IFT and numerical engines both do).
+
+`converged` is a conservative proxy: `true` only if it stopped in < maxiter f-evals.
+"""
+function solve_box_lbfgsb(f, g!, x0::Vector{Float64},
+                          lo::Vector{Float64}, hi::Vector{Float64};
+                          tol_outer::Float64=1e-6, maxiter::Int=500, m::Int=10)
+    n = length(x0)
+    if HAVE_LBFGSB
+        fcount = Ref(0)
+        f_c(x)     = (fcount[] += 1; f(x))
+        g_c!(G, x) = (g!(G, x); G)
+        # Try two known LBFGSB.jl call conventions before giving up. Validate the
+        # returned shape so a wrong return-order can't silently corrupt the result.
+        for attempt in 1:2
+            try
+                fmin, xmin = if attempt == 1                      # high-level convenience
+                    Base.invokelatest(LBFGSB.lbfgsb, f_c, g_c!, x0;
+                        lb=lo, ub=hi, maxiter=maxiter)
+                else                                             # low-level callable + bounds matrix
+                    bounds = zeros(3, n)
+                    @inbounds for i in 1:n
+                        bounds[1, i] = 2.0; bounds[2, i] = lo[i]; bounds[3, i] = hi[i]
+                    end
+                    opt = Base.invokelatest(LBFGSB.L_BFGS_B, n, m)
+                    Base.invokelatest(opt, f_c, g_c!, x0, bounds; maxiter=maxiter)
+                end
+                if xmin isa AbstractVector && length(xmin) == n && isfinite(Float64(fmin))
+                    return (collect(Float64, xmin), Float64(fmin),
+                            fcount[], fcount[] < maxiter)
+                end
+            catch e
+                attempt == 2 && @warn "L-BFGS-B (LBFGSB.jl) call failed — falling back " *
+                    "to Fminbox(LBFGS()). Check the LBFGSB API/version." exception=(e, catch_backtrace())
+            end
+        end
+    end
+    res = optimize(f, g!, lo, hi, x0, Fminbox(LBFGS()),
+                   Optim.Options(iterations=maxiter, f_reltol=tol_outer, show_trace=false))
+    return (Optim.minimizer(res), Optim.minimum(res),
+            Optim.iterations(res), Optim.converged(res))
+end
+
 # ── Set BLAS threads ────────────────────────────────────────────────────────
 # Reserve most threads for Julia-level parallelism (logsumexp, q_B loops).
 # The main BLAS call here is (N×coef_dim)×(coef_dim×R) — small k-dimension;

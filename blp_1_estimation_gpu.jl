@@ -308,17 +308,22 @@ function logsumexp_groups_kernel!(
     ge  = grp_start[g + Int32(1)] - Int32(1)
     row = uval[g]
 
-    # Pass 1 — find max
+    # Single-pass online log-sum-exp: maintain running max `mx` and running sum
+    # `s = Σ exp(v_j − mx)`; when a larger value appears, rescale `s` to the new
+    # max before adding. Reads each V element ONCE (vs twice for the max-then-sum
+    # two-pass), halving the gather traffic of this bandwidth-bound kernel.
+    # Numerically identical to the two-pass form (verify_gpu_shares guards it).
+    #   First element: mx=-Inf, s=0 → s = 0·exp(-Inf) + 1 = 1, mx = v  (exact).
     mx = GPU_T(-Inf32)
+    s  = GPU_T(0)
     @inbounds for ii in gs:ge
         v = V[sort_idx[ii], r]
-        v > mx && (mx = v)
-    end
-
-    # Pass 2 — sum of exp(v − max)
-    s = GPU_T(0)
-    @inbounds for ii in gs:ge
-        s += CUDA.exp(V[sort_idx[ii], r] - mx)
+        if v > mx
+            s  = s * CUDA.exp(mx - v) + GPU_T(1)
+            mx = v
+        else
+            s += CUDA.exp(v - mx)
+        end
     end
 
     @inbounds result[row, r] = mx + CUDA.log(max(s, GPU_T(1e-30)))
@@ -457,13 +462,13 @@ function compute_model_shares_gpu!(buf::HotBuffers, gbuf::GpuBuffers,
 
     # ── 2. Scatter δ → delta_B / delta_D ────────────────────────────────
     delta_gpu_full = CuVector{GPU_T}(GPU_T.(delta))
-    gbuf.delta_B .= delta_gpu_full[gbuf.b_mask_idx_gpu]
-    gbuf.delta_D .= delta_gpu_full[gbuf.d_mask_idx_gpu]
+    gbuf.delta_B .= @view delta_gpu_full[gbuf.b_mask_idx_gpu]
+    gbuf.delta_D .= @view delta_gpu_full[gbuf.d_mask_idx_gpu]
 
     # ── 3. V_B / V_D ────────────────────────────────────────────────────
-    gbuf.V_B .= clamp.(gbuf.delta_B .+ gbuf.mu_gpu[gbuf.b_mask_idx_gpu, :],
+    gbuf.V_B .= clamp.(gbuf.delta_B .+ @view(gbuf.mu_gpu[gbuf.b_mask_idx_gpu, :]),
                        GPU_T(-500f0), GPU_T(500f0))
-    gbuf.V_D .= clamp.(gbuf.delta_D .+ gbuf.mu_gpu[gbuf.d_mask_idx_gpu, :],
+    gbuf.V_D .= clamp.(gbuf.delta_D .+ @view(gbuf.mu_gpu[gbuf.d_mask_idx_gpu, :]),
                        GPU_T(-500f0), GPU_T(500f0))
 
     # ── 4. log_sum_D_time ────────────────────────────────────────────────
@@ -473,7 +478,7 @@ function compute_model_shares_gpu!(buf::HotBuffers, gbuf::GpuBuffers,
                       gbuf.n_d_groups, N_D, R)
 
     # ── 5. Broadcast to pairs ────────────────────────────────────────────
-    gbuf.log_D_sum_pair .= gbuf.log_sum_D_time[gbuf.pair_time_enc_gpu, :]
+    gbuf.log_D_sum_pair .= @view gbuf.log_sum_D_time[gbuf.pair_time_enc_gpu, :]
 
     # ── 6. log_sum_B_mkt ────────────────────────────────────────────────
     launch_logsumexp!(gbuf.log_sum_B_mkt,
@@ -491,7 +496,7 @@ function compute_model_shares_gpu!(buf::HotBuffers, gbuf::GpuBuffers,
     end
 
     # ── 8–9. q_B → s_B ──────────────────────────────────────────────────
-    gbuf.q_B     .= exp.(gbuf.V_B .- gbuf.log_denom[gbuf.b_mkt_idx_gpu, :])
+    gbuf.q_B     .= exp.(gbuf.V_B .- @view(gbuf.log_denom[gbuf.b_mkt_idx_gpu, :]))
     gbuf.s_B_gpu .= vec(sum(gbuf.q_B; dims=2)) .* GPU_T(1.0 / R)
 
     # ── 10. max_neg_ld ───────────────────────────────────────────────────
@@ -503,7 +508,7 @@ function compute_model_shares_gpu!(buf::HotBuffers, gbuf::GpuBuffers,
 
     # ── 11. shifted_inv ──────────────────────────────────────────────────
     gbuf.shifted_inv .= exp.(gbuf.neg_log_denom .-
-                             gbuf.max_neg_ld[gbuf.pair_time_enc_gpu, :])
+                             @view(gbuf.max_neg_ld[gbuf.pair_time_enc_gpu, :]))
 
     # ── 12. sum_wtd = PT_agg × shifted_inv  (CUBLAS GEMM) ───────────────
     mul!(gbuf.sum_wtd, gbuf.PT_agg_gpu, gbuf.shifted_inv)
@@ -513,7 +518,7 @@ function compute_model_shares_gpu!(buf::HotBuffers, gbuf::GpuBuffers,
                         log.(max.(gbuf.sum_wtd, GPU_T(1e-30)))
 
     # ── 14. log_s_D_r ────────────────────────────────────────────────────
-    gbuf.log_s_D_r .= gbuf.V_D .+ gbuf.log_inv_wtd[gbuf.d_time_enc_gpu, :]
+    gbuf.log_s_D_r .= gbuf.V_D .+ @view(gbuf.log_inv_wtd[gbuf.d_time_enc_gpu, :])
 
     # ── 15. s_D via row-max trick ────────────────────────────────────────
     gbuf.row_max_D .= vec(maximum(gbuf.log_s_D_r; dims=2))
@@ -634,9 +639,10 @@ function model_shares_dev!(gbuf::GpuBuffers, delta_gpu::CuVector{GPU_T},
     N_B = gbuf.N_B; N_D = gbuf.N_D
     n_pairs = gbuf.n_pairs
 
-    # Gather δ → delta_B / delta_D (delta already on device)
-    gbuf.delta_B .= delta_gpu[gbuf.b_mask_idx_gpu]
-    gbuf.delta_D .= delta_gpu[gbuf.d_mask_idx_gpu]
+    # Gather δ → delta_B / delta_D (delta already on device).
+    # @view fuses the indexed gather into the assignment — no materialised temp.
+    gbuf.delta_B .= @view delta_gpu[gbuf.b_mask_idx_gpu]
+    gbuf.delta_D .= @view delta_gpu[gbuf.d_mask_idx_gpu]
 
     # V_B / V_D (mu_B / mu_D pre-gathered once per outer iter — μ is constant
     # during the inner loop, so we avoid re-gathering the N×R μ matrix per step)
@@ -645,7 +651,7 @@ function model_shares_dev!(gbuf::GpuBuffers, delta_gpu::CuVector{GPU_T},
 
     launch_logsumexp!(gbuf.log_sum_D_time, gbuf.V_D, gbuf.sort_d_gpu,
                       gbuf.d_uval_gpu, gbuf.d_grp_start_gpu, gbuf.n_d_groups, N_D, R)
-    gbuf.log_D_sum_pair .= gbuf.log_sum_D_time[gbuf.pair_time_enc_gpu, :]
+    gbuf.log_D_sum_pair .= @view gbuf.log_sum_D_time[gbuf.pair_time_enc_gpu, :]
     launch_logsumexp!(gbuf.log_sum_B_mkt, gbuf.V_B, gbuf.sort_b_gpu,
                       gbuf.b_uval_gpu, gbuf.b_grp_start_gpu, gbuf.n_b_groups, N_B, R)
     let lsB = gbuf.log_sum_B_mkt, lsD = gbuf.log_D_sum_pair
@@ -654,17 +660,17 @@ function model_shares_dev!(gbuf::GpuBuffers, delta_gpu::CuVector{GPU_T},
             exp.(GPU_T(0f0) .- jm) .+ exp.(lsB .- jm) .+ exp.(lsD .- jm),
             GPU_T(1e-30)))
     end
-    gbuf.q_B     .= exp.(gbuf.V_B .- gbuf.log_denom[gbuf.b_mkt_idx_gpu, :])
+    gbuf.q_B     .= exp.(gbuf.V_B .- @view(gbuf.log_denom[gbuf.b_mkt_idx_gpu, :]))
     gbuf.s_B_gpu .= vec(sum(gbuf.q_B; dims=2)) .* GPU_T(1.0 / R)
 
     gbuf.neg_log_denom .= .-gbuf.log_denom
     launch_groupmax!(gbuf.max_neg_ld, gbuf.neg_log_denom, gbuf.sort_pt_gpu,
                      gbuf.pt_uval_gpu, gbuf.pt_grp_start_gpu, gbuf.n_pt_groups, n_pairs, R)
     gbuf.shifted_inv .= exp.(gbuf.neg_log_denom .-
-                             gbuf.max_neg_ld[gbuf.pair_time_enc_gpu, :])
+                             @view(gbuf.max_neg_ld[gbuf.pair_time_enc_gpu, :]))
     mul!(gbuf.sum_wtd, gbuf.PT_agg_gpu, gbuf.shifted_inv)
     gbuf.log_inv_wtd .= gbuf.max_neg_ld .+ log.(max.(gbuf.sum_wtd, GPU_T(1e-30)))
-    gbuf.log_s_D_r .= gbuf.V_D .+ gbuf.log_inv_wtd[gbuf.d_time_enc_gpu, :]
+    gbuf.log_s_D_r .= gbuf.V_D .+ @view(gbuf.log_inv_wtd[gbuf.d_time_enc_gpu, :])
     gbuf.row_max_D .= vec(maximum(gbuf.log_s_D_r; dims=2))
     gbuf.s_D_gpu   .= exp.(gbuf.row_max_D) .*
                       (vec(sum(exp.(gbuf.log_s_D_r .- gbuf.row_max_D); dims=2)) .*
@@ -742,10 +748,19 @@ function blp_contraction_gpu!(buf::HotBuffers, gbuf::GpuBuffers,
         return nothing
     end
 
+    # Finiteness guards are device reductions that sync a scalar to host. The
+    # convergence norms (nm, nm2) and SQUAREM norms (norm_r_sq, norm_v_sq,
+    # norm_prop) are needed EVERY step, but the isfinite guards on x1/x2 are not:
+    # a NaN/Inf makes the norm non-finite (so `< tol` is false → no false
+    # convergence), and the periodic check below aborts within FINITE_CHECK_EVERY
+    # steps. The x_prop safeguard is folded into the norm_prop test (a non-finite
+    # x_prop ⇒ non-finite norm_prop ⇒ fall back to the Picard step x2), removing a
+    # separate sync with identical behaviour.
+    FINITE_CHECK_EVERY = 10
     fevals = 0
     while fevals + 2 <= max_iter
         Tstep!(x1, d_cur); fevals += 1
-        if !all(isfinite, x1)
+        if fevals % FINITE_CHECK_EVERY == 0 && !all(isfinite, x1)
             println("    [SQUAREM-GPU ABORT] non-finite at eval=$fevals")
             copyto!(delta, Float64.(Array(d_cur)))
             return false, fevals, norm_history
@@ -760,7 +775,7 @@ function blp_contraction_gpu!(buf::HotBuffers, gbuf::GpuBuffers,
         end
 
         Tstep!(x2, x1); fevals += 1
-        if !all(isfinite, x2)
+        if fevals % FINITE_CHECK_EVERY == 0 && !all(isfinite, x2)
             copyto!(delta, Float64.(Array(x1))); return false, fevals, norm_history
         end
         nm2 = Float64(maximum(abs, x2 .- x1))
@@ -779,15 +794,13 @@ function blp_contraction_gpu!(buf::HotBuffers, gbuf::GpuBuffers,
         end
         α = GPU_T(-sqrt(norm_r_sq / norm_v_sq))
         x_prop .= clamp.(d_cur .- GPU_T(2f0) * α .* r_vec .+ α^2 .* v_vec, lo, hi)
-        if !all(isfinite, x_prop)
+        # Non-finite x_prop ⇒ norm_prop non-finite ⇒ fall back to Picard step x2
+        # (folds the old `all(isfinite, x_prop)` sync into this existing reduction).
+        norm_prop = Float64(maximum(abs, x_prop .- x2))
+        if !isfinite(norm_prop) || norm_prop > 100.0 * nm2 + 1.0
             d_cur .= x2
         else
-            norm_prop = Float64(maximum(abs, x_prop .- x2))
-            if norm_prop > 100.0 * nm2 + 1.0
-                d_cur .= x2
-            else
-                d_cur .= x_prop
-            end
+            d_cur .= x_prop
         end
     end
     copyto!(delta, Float64.(Array(d_cur)))
@@ -1033,27 +1046,43 @@ function run_blp_estimation_gpu(estim::Int, spec_id::Int, args,
         return Dict("dry_run" => true)
     end
 
-    # ── Outer optimisation ────────────────────────────────────────────────
+    # ── Outer optimisation (true L-BFGS-B + cached forward-difference gradient) ──
+    # The numerical engine has no analytical gradient, so L-BFGS-B is fed a forward-
+    # difference ∇Q: n_params extra share solves per gradient — the same cost as the
+    # finite-difference gradient Optim used before. A one-point cache stops the base
+    # objective from being re-solved between the f and g! calls at the same θ₂.
     outer_iter = Ref(0)
+    _raw_obj(t2) = gmm_objective_gpu!(buf, gbuf, t2, prod_vec, nu_draws,
+                                       sigma_indices, pi_interactions, R, coef_dim,
+                                       W, args["tol_inner"], args["max_inner"],
+                                       delta_work, pc)
+    fd_t2 = fill(NaN, n_params); fd_Q = Ref(0.0)
     function obj_fn(t2)
-        val = gmm_objective_gpu!(buf, gbuf, t2, prod_vec, nu_draws,
-                                  sigma_indices, pi_interactions, R, coef_dim,
-                                  W, args["tol_inner"], args["max_inner"],
-                                  delta_work, pc)
-        outer_iter[] += 1
-        outer_iter[] % 10 == 0 &&
-            log_status("  [OUTER iter=$(outer_iter[])] Q=$(round(val, sigdigits=6)) " *
-                       "theta2=$(round.(t2, digits=4))")
-        return val
+        if !isequal(t2, fd_t2)
+            fd_Q[] = _raw_obj(t2); copyto!(fd_t2, t2)
+            outer_iter[] += 1
+            outer_iter[] % 10 == 0 &&
+                log_status("  [OUTER iter=$(outer_iter[])] Q=$(round(fd_Q[], sigdigits=6)) " *
+                           "theta2=$(round.(t2, digits=4))")
+        end
+        return fd_Q[]
+    end
+    function grad_fn!(G, t2)
+        f0 = obj_fn(t2)                          # base value (cached → 1 solve)
+        @inbounds for k in 1:n_params
+            h    = 1e-6 * max(1.0, abs(t2[k]))   # relative forward-difference step
+            tp   = copy(t2); tp[k] += h
+            G[k] = (_raw_obj(tp) - f0) / h
+        end
+        return G
     end
 
-    result = optimize(obj_fn, lo, hi, theta2_0, Fminbox(LBFGS()),
-                      Optim.Options(iterations=500, f_reltol=args["tol_outer"],
-                                    show_trace=false))
+    theta2_star, Q_min, n_outer, conv_outer = solve_box_lbfgsb(
+        obj_fn, grad_fn!, theta2_0, lo, hi;
+        tol_outer = args["tol_outer"], maxiter = 500)
 
-    theta2_star = Optim.minimizer(result)
-    println("  Optimiser converged: $(Optim.converged(result))")
-    println("  Q(theta2*) = $(round(Optim.minimum(result), sigdigits=6))")
+    println("  Optimiser converged: $(conv_outer)")
+    println("  Q(theta2*) = $(round(Q_min, sigdigits=6))")
     println("  theta2* = $theta2_star")
 
     # ── Final contraction at optimum (GPU) ───────────────────────────────
@@ -1073,9 +1102,9 @@ function run_blp_estimation_gpu(estim::Int, spec_id::Int, args,
     results["theta2_se"]          = fill(NaN, length(theta2_star))
     results["delta"]              = delta_final
     results["xi"]                 = xi_star
-    results["Q_value"]            = Optim.minimum(result)
-    results["converged"]          = Optim.converged(result)
-    results["n_outer_iter"]       = Optim.iterations(result)
+    results["Q_value"]            = Q_min
+    results["converged"]          = conv_outer
+    results["n_outer_iter"]       = n_outer
     results["param_names_theta1"] = vcat(["alpha"], X_COLS)
     results["sigma_indices"]      = sigma_indices
     results["pi_interactions"]    = pi_interactions
@@ -1147,9 +1176,17 @@ function main_gpu()
     nu_draws, draws_3d, key_index = load_precomputed_draws(
         draws_dir, args["R"], args["seed"])
 
-    stages_to_run = args["stage"] == "sequence" ?
-                    ["sigma", "rc2", "rc3", "rc4", "full", "ext1", "ext2", "extended"] :
-                    [args["stage"]]
+    # "sequence" → all 8 stages; a comma list (e.g. "sigma,rc2,rc3,rc4,full,ext1")
+    # → that SUBSET in one process (option-6 grouping: amortise Julia/CUDA/parquet
+    # startup over several stages, each warm-starting the next from its on-disk
+    # checkpoint); a single name → just that stage.
+    stages_to_run = if args["stage"] == "sequence"
+        ["sigma", "rc2", "rc3", "rc4", "full", "ext1", "ext2", "extended"]
+    elseif occursin(',', args["stage"])
+        String.(strip.(split(args["stage"], ',')))
+    else
+        [args["stage"]]
+    end
 
     for current_stage in stages_to_run
         args["stage"] = current_stage

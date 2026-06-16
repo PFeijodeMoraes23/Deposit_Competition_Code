@@ -4,6 +4,7 @@ CUDA = "052768ef-5323-5732-b1bb-66c8b64840ba"
 DataFrames = "a93c6f00-e57d-5684-b7b6-d8193f3e46c0"
 Distributions = "31c24e10-a181-5473-b8eb-7969acd0382f"
 JSON3 = "0f8b85d8-7281-11e9-16c2-39a750bddbf1"
+LBFGSB = "5be7bae1-8223-5378-bac3-9e7378a2f6e6"
 LoopVectorization = "bdcacae8-1622-11e9-2a5c-532679323890"
 MKL = "33e6dc65-8f57-5167-99aa-e5a354878fb2"
 Optim = "429524aa-4258-5aef-a3af-852621145aeb"
@@ -13,14 +14,6 @@ SparseArrays = "2f01184e-e22b-5df5-ae63-d93ebab69eaf"
 
 [compat]
 ArgParse = "1, 2"
-# CUDA.jl ≥ 5.5 is required for sm_89 (RTX Ada) PTX targets and to avoid the
-# GPUCompiler PTXCompilerTarget kwcall MethodError seen with older CUDA.jl
-# resolutions. CUDA.jl ≥ 5.8 is needed for Julia 1.12 support on the Bouchet
-# cluster (default module is now Julia/1.12.5).
-# Upper bound kept at 6.0 until compatibility with newer CUDACore is verified.
-# NOTE: the `grid=` kwarg error observed on Bouchet was a bug in our own kernel
-# launch wrappers (fixed: grid= → blocks= in blp_estimation_gpu.jl), not a
-# CUDA.jl 6.1 issue. The bound can be relaxed once tested.
 CUDA = "5.8 - 6.0"
 DataFrames = "1"
 Distributions = "0.25"
@@ -28,5 +21,4 @@ JSON3 = "1"
 Optim = "1, 2"
 Parquet2 = "0.2, 0.3"
 QuasiMonteCarlo = "0.3"
-# Allow Julia 1.10 (local dev) through 1.12 (Bouchet cluster default).
 julia = "1.10, 1.11, 1.12"

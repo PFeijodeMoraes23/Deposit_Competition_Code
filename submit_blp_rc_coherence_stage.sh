@@ -24,6 +24,15 @@ set -euo pipefail
 : "${COH_ENGINE:?set COH_ENGINE (ift|numerical)}"
 : "${COH_STAGE:?set COH_STAGE (sigma|rc2|rc3|rc4|full|ext1|ext2|extended)}"
 
+# max-inner is a pure SAFETY CEILING, not a tuning knob: SQUAREM self-terminates
+# at tol-inner=1e-10 in ~120-185 iters (see logs), so 5000 never actually binds.
+# Lowering it would only matter at a pathological trial θ₂ — and there it would
+# force an early exit at a NON-converged δ, biasing Q and ∇Q (Dubé–Fox–Su) and
+# breaking outer convergence. Keep it high for every stage. The deep stages get
+# more wall-time instead (sbatch --time in submit_blp_rc_coherence_all.sh); their
+# cost is the NUMBER of contractions, which the IFT engine cuts ~8× — not the
+# length of any single contraction.
+
 # ── Environment ───────────────────────────────────────────────────────────────
 module reset
 module load Julia/1.11.4-linux-x86_64           # LLVM 16 → PTX for sm_90 (H200)
@@ -46,14 +55,20 @@ julia --project="${PROJECT_DIR}" -e '
     using CUDA
 '
 
+# Grouped (option-6) jobs pass several stages joined with '+', because sbatch
+# --export uses commas to separate variables and so cannot carry a comma list.
+# Translate '+' → ',' for the engine; a single stage has no '+', so this is a
+# no-op and the per-stage orchestrator is unaffected.
+STAGE_ARG="${COH_STAGE//+/,}"
+
 echo "======================================"
-echo " Coherence RC-BLP E${COH_ROUTINE} | engine=${COH_ENGINE} | stage=${COH_STAGE} — $(date)"
+echo " Coherence RC-BLP E${COH_ROUTINE} | engine=${COH_ENGINE} | stage=${STAGE_ARG} — $(date)"
 echo " spec=12 | R=2000 | threads=${SLURM_CPUS_PER_TASK}"
 echo "======================================"
 
 julia --project="${PROJECT_DIR}" --threads=${SLURM_CPUS_PER_TASK} \
     "${PROJECT_DIR}/blp_2_rc_coherence.jl" \
-    --estim "${COH_ROUTINE}" --stage "${COH_STAGE}" \
+    --estim "${COH_ROUTINE}" --stage "${STAGE_ARG}" \
     --hpc --R 2000 --seed 42 \
     --tol-inner 1e-10 --max-inner 5000 --tol-outer 1e-6
 

@@ -198,21 +198,19 @@ def nice_var_name(var):
 def build_latex_table(results_dict, order_keys, target_vars, out_path, title="", label=""):
     tex = []
 
-    tex.append(r"{")
-    tex.append(r"\footnotesize")
-    tex.append(r"\renewcommand{\arraystretch}{0.75}")
+    # \setstretch{1.0} matches the paper's other tables (est1_first_stage_table.tex
+    # etc.), all of which open with \setstretch{1.0} and no wrapping group.
+    # Font size (\footnotesize) and \arraystretch (1.08) are applied automatically
+    # by the document preamble via \AtBeginEnvironment{xltabular}{\footnotesize}
+    # and \renewcommand{\arraystretch}{1.08}, so we do not override them locally.
+    tex.append(r"\setstretch{1.0}")
 
-    # Use xltabular (loaded in the draft preamble) so the table is pinned to
-    # \textwidth with equal-width, centered numeric columns. A plain longtable
-    # sizes each column to its content, and the full-width notes \parbox below
-    # then dumps all the slack into the *last* column -- which flung the final
-    # column to the right margin and overflowed the page. Equal X columns split
-    # the width evenly and keep the table inside the text block.
-    # First column is a fixed-width, left-aligned *wrapping* column so long row
-    # labels (e.g. "Broadband Connections (per 100 inhabitants)") wrap instead of
-    # forcing the column -- and the whole table -- past \textwidth. 0.26\textwidth
-    # keeps the data X-columns wide enough to hold the "Pooled (Logistic AME)"
-    # header on one line.
+    # xltabular pins the table to \textwidth and distributes the remaining width
+    # equally among the X data columns (same as tabularx but supports longtable
+    # headers/footers). The first column is a fixed-width raggedright p column so
+    # long labels (e.g. "Broadband Connections (per 100 inhabitants)") wrap rather
+    # than forcing the table past the text block. 0.26\textwidth leaves enough room
+    # for "Pooled (Logistic AME)" to fit on one line in each X column.
     n_data = len(order_keys)
     col_def = (r">{\raggedright\arraybackslash}p{0.26\textwidth} "
                r"*{" + str(n_data) + r"}{>{\centering\arraybackslash}X}")
@@ -247,11 +245,18 @@ def build_latex_table(results_dict, order_keys, target_vars, out_path, title="",
     tex.append(r"\multicolumn{" + str(len(order_keys) + 1) + r"}{r}{{Continued on next page}} \\")
     tex.append(r"\endfoot")
 
-    # Last Footer
+    # Last Footer — notes style matches the paper's other sleep tables:
+    # \scriptsize font, stars in descending order (***/**/*), p{} column type.
     tex.append(r"\bottomrule")
-    # @{}l@{} strips the outer tabcolsep on *both* sides so the full-width notes
-    # parbox matches the table width exactly (otherwise it is 1 tabcolsep too wide).
-    notes_str = r"\multicolumn{" + str(len(order_keys) + 1) + r"}{@{}l@{}}{\parbox[t]{\linewidth}{\footnotesize\textit{Notes:} Standard errors are in parentheses. Est.~3 reports Average Marginal Effects (AME) from NLLS logistic. Significance levels: * $p < 0.1$, ** $p < 0.05$, *** $p < 0.01$.}}"
+    # The paper's other tables use p{fixed fraction} for notes so the box is
+    # always narrower than the table span (avoiding the 2*\tabcolsep overfull
+    # that \linewidth adds). We use 0.85\textwidth which fits comfortably inside
+    # a full-width xltabular while keeping the note on a few readable lines.
+    notes_str = (r"\multicolumn{" + str(len(order_keys) + 1) + r"}{p{0.85\textwidth}}"
+                 r"{\scriptsize\textit{Notes:} Standard errors are in parentheses. "
+                 r"Est.~3 reports Average Marginal Effects (AME) from NLLS logistic, "
+                 r"following \textcite{imbens2016robust} and \textcite{carter2017asymptotic}. "
+                 r"Significance levels: *** $p<0.01$, ** $p<0.05$, * $p<0.1$.}")
     tex.append(notes_str)
     tex.append(r"\endlastfoot")
 
@@ -275,17 +280,23 @@ def build_latex_table(results_dict, order_keys, target_vars, out_path, title="",
         exclude_patterns = ["v_hat"]
         other_vars = [v for v in other_vars if not any(pattern in v.lower() for pattern in exclude_patterns)]
         ordered_vars += other_vars
+        # Never show the control-function term in the second-stage table
+        ordered_vars = [v for v in ordered_vars if 'v_hat' not in v.lower()]
 
     for v in ordered_vars:
-        # One row per variable: the coefficient and its SE are stacked inside the
-        # same cell (coef \newline (se)). This keeps the SE locked under its
-        # coefficient even when the label wraps to two lines in the fixed-width
-        # first column -- without \multirow (which overflows the tight rows).
-        row = [nice_var_name(v)]
+        # Two table rows per variable: label spans both via \multirow[t]{2} so
+        # it stays anchored even when it wraps. We give the explicit column width
+        # (0.26\textwidth, matching the p-column spec) rather than = (infer) because
+        # in V_Main.tex's \doublespacing context = computes 7pt wider than the column.
+        # \\* on the coeff row forbids a page break between coefficient and SE.
+        label_cell = r"\multirow[t]{2}{0.26\textwidth}{\raggedright " + nice_var_name(v) + r"}"
+        row_cf = [label_cell]
+        row_se = [""]
         for col in order_keys:
             res = results_dict.get(col)
             if res is None:
-                row.append("-")
+                row_cf.append("-")
+                row_se.append("-")
                 continue
 
             params = getattr(res, 'params', pd.Series(dtype=float))
@@ -294,11 +305,14 @@ def build_latex_table(results_dict, order_keys, target_vars, out_path, title="",
 
             if v in params.index:
                 c_str, se_str = format_value(params[v], bse[v], pvalues[v], digits=4)
-                row.append(c_str + r" \newline " + se_str)
+                row_cf.append(c_str)
+                row_se.append(se_str)
             else:
-                row.append("-")
+                row_cf.append("-")
+                row_se.append("-")
 
-        tex.append(" & ".join(row) + r" \\")
+        tex.append(" & ".join(row_cf) + r" \\*")
+        tex.append(" & ".join(row_se) + r" \\")
         tex.append(r"\addlinespace")
 
     tex.append(r"\midrule")
@@ -358,7 +372,6 @@ def build_latex_table(results_dict, order_keys, target_vars, out_path, title="",
     tex.append(" & ".join(row_eff_cluster) + r" \\")
 
     tex.append(r"\end{xltabular}")
-    tex.append(r"}")
 
     with open(out_path, "w", encoding="utf-8") as f:
         f.write("\n".join(tex))

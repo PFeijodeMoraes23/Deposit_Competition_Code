@@ -24,13 +24,13 @@ IFT gradient derivation
 The BLP contraction T(δ, θ₂) = δ + ln s_data − ln s(δ, θ₂) has fixed point δ*.
 Differentiating T(δ*(θ₂), θ₂) = δ*(θ₂) w.r.t. θ₂_k:
 
-  (I − ∂T/∂δ) ∂δ*/∂θ₂_k = −∂T/∂θ₂_k = ∂ ln s/∂θ₂_k
+  (I − ∂T/∂δ) ∂δ*/∂θ₂_k = ∂T/∂θ₂_k = −∂ ln s/∂θ₂_k
 
 Diagonal approximation: ∂T_i/∂δ_i ≈ s_i  (own-share derivative of logit T),
-so (1 − s_i) ∂δ*_i/∂θ₂_k ≈ ∂ ln s_i/∂θ₂_k
+so (1 − s_i) ∂δ*_i/∂θ₂_k ≈ −∂ ln s_i/∂θ₂_k
 
 Forward-difference estimate:
-  ∂δ*_i/∂θ₂_k ≈ [log s_i(δ*, θ₂+ε·eₖ) − log s_i(δ*, θ₂)] / ε / (1 − s_i)
+  ∂δ*_i/∂θ₂_k ≈ −[log s_i(δ*, θ₂+ε·eₖ) − log s_i(δ*, θ₂)] / ε / (1 − s_i)
 
 Projection to ∂Q/∂θ₂_k:
   θ₁* = X̂[valid] \\ δ*[valid]           (2SLS on converged δ*)
@@ -124,12 +124,13 @@ function compute_ift_gradient!(grad::Vector{Float64},
         compute_model_shares!(buf, delta_star, pc, R)
         s_k = collect_model_shares(buf, pc, N)
 
-        # ── Diagonal IFT: ∂δ*_i/∂θ₂_k ≈ Δln(sᵢ)/ε/(1−sᵢ) ──────────────
+        # ── Diagonal IFT: ∂δ*_i/∂θ₂_k ≈ −Δln(sᵢ)/ε/(1−sᵢ) ─────────────
+        # Sign: (1−sᵢ)∂δ*ᵢ/∂θₖ = ∂Tᵢ/∂θₖ = −∂ln sᵢ/∂θₖ  →  NEGATIVE.
         d_k = Vector{Float64}(undef, N)
         @inbounds for i in 1:N
             s_b         = s_base[i]
             one_minus_s = max(1.0 - s_b, 1e-4)     # clamp: avoids ÷0 when sᵢ ≈ 1
-            d_k[i]      = (log(max(s_k[i], 1e-15)) - log(s_b)) / ε / one_minus_s
+            d_k[i]      = -(log(max(s_k[i], 1e-15)) - log(s_b)) / ε / one_minus_s
         end
 
         # ── Project: ∂θ₁/∂θ₂_k = X̂[valid] \ d_k[valid] ──────────────────

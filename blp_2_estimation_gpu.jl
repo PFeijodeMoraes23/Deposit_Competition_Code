@@ -113,12 +113,13 @@ function compute_ift_gradient_gpu!(grad::Vector{Float64},
         compute_model_shares_gpu!(buf, gbuf, delta_star, pc, R)
         s_k = collect_model_shares(buf, pc, N)
 
-        # ── Diagonal IFT ──────────────────────────────────────────────────
+        # ── Diagonal IFT: ∂δ*_i/∂θ₂_k ≈ −Δln(sᵢ)/ε/(1−sᵢ)  (NEGATIVE sign)
+        # (1−sᵢ)∂δ*ᵢ/∂θₖ = ∂Tᵢ/∂θₖ = −∂ln sᵢ/∂θₖ — see blp_2_estimation.jl docstring.
         d_k = Vector{Float64}(undef, N)
         @inbounds for i in 1:N
             s_b         = s_base[i]
             one_minus_s = max(1.0 - s_b, 1e-4)
-            d_k[i]      = (log(max(s_k[i], 1e-15)) - log(s_b)) / ε / one_minus_s
+            d_k[i]      = -(log(max(s_k[i], 1e-15)) - log(s_b)) / ε / one_minus_s
         end
 
         # ── Project ───────────────────────────────────────────────────────
@@ -410,15 +411,17 @@ function run_blp_estimation_ift_gpu(estim::Int, spec_id::Int, args,
         copyto!(cache_t2, t2)
     end
 
-    result = optimize(
-        t2 -> (ift_compute_gpu!(t2); cache_Q[]),
-        (G, t2) -> (ift_compute_gpu!(t2); G .= cache_grad),
-        lo, hi, theta2_0, Fminbox(LBFGS()),
-        Optim.Options(iterations=500, f_reltol=args["tol_outer"], show_trace=false))
+    # True L-BFGS-B (LBFGSB.jl) instead of Optim's Fminbox barrier; same KKT point,
+    # far fewer outer evals. f and g! share ift_compute_gpu!'s one-point cache, so the
+    # GPU inner contraction is solved once per unique θ₂.
+    f_obj(t2)     = (ift_compute_gpu!(t2); cache_Q[])
+    g_obj!(G, t2) = (ift_compute_gpu!(t2); copyto!(G, cache_grad); G)
+    theta2_star, Q_min, n_outer, conv_outer = solve_box_lbfgsb(
+        f_obj, g_obj!, theta2_0, lo, hi;
+        tol_outer = args["tol_outer"], maxiter = 500)
 
-    theta2_star = Optim.minimizer(result)
-    println("  Optimizer converged: $(Optim.converged(result))")
-    println("  Q(θ₂*) = $(round(Optim.minimum(result), sigdigits=6))")
+    println("  Optimizer converged: $(conv_outer)")
+    println("  Q(θ₂*) = $(round(Q_min, sigdigits=6))")
     println("  theta2* = $theta2_star")
 
     # ── Final contraction at optimum (GPU) ────────────────────────────────
@@ -438,9 +441,9 @@ function run_blp_estimation_ift_gpu(estim::Int, spec_id::Int, args,
     results["theta2_se"]          = fill(0.0, length(theta2_star))
     results["delta"]              = delta_final
     results["xi"]                 = xi_star
-    results["Q_value"]            = Optim.minimum(result)
-    results["converged"]          = Optim.converged(result)
-    results["n_outer_iter"]       = Optim.iterations(result)
+    results["Q_value"]            = Q_min
+    results["converged"]          = conv_outer
+    results["n_outer_iter"]       = n_outer
     results["param_names_theta1"] = vcat(["alpha"], X_COLS)
     results["sigma_indices"]      = sigma_indices
     results["pi_interactions"]    = pi_interactions
@@ -497,9 +500,17 @@ function main_gpu()
     nu_draws, draws_3d, key_index = load_precomputed_draws(
         draws_dir, args["R"], args["seed"])
 
-    stages_to_run = args["stage"] == "sequence" ?
-                    ["sigma", "rc2", "rc3", "rc4", "full", "ext1", "ext2", "extended"] :
-                    [args["stage"]]
+    # "sequence" → all 8 stages; a comma list (e.g. "sigma,rc2,rc3,rc4,full,ext1")
+    # → that SUBSET in one process (option-6 grouping: amortise Julia/CUDA/parquet
+    # startup over several stages, each warm-starting the next from its on-disk
+    # checkpoint); a single name → just that stage.
+    stages_to_run = if args["stage"] == "sequence"
+        ["sigma", "rc2", "rc3", "rc4", "full", "ext1", "ext2", "extended"]
+    elseif occursin(',', args["stage"])
+        String.(strip.(split(args["stage"], ',')))
+    else
+        [args["stage"]]
+    end
 
     for current_stage in stages_to_run
         args["stage"] = current_stage

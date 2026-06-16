@@ -25,6 +25,19 @@ mkdir -p "${HERE}/logs"
 STAGES=(sigma rc2 rc3 rc4 full ext1 ext2 extended)
 GENERIC="${HERE}/submit_blp_rc_coherence_stage.sh"
 
+# Stage-dependent wall-time (overrides #SBATCH --time in the stage script):
+#   sigma..rc4  → 1 day   (1-param warm-start; historical convergence <6h)
+#   full, ext1  → 2 days  (5-6 params; historical convergence <15h)
+#   ext2        → 4 days  (7 params; numerical engine took >48h; IFT ~6h)
+#   extended    → 4 days  (8 params; most expensive stage)
+stage_wall() {
+    case "$1" in
+        ext2|extended) echo "4-00:00:00" ;;
+        full|ext1)     echo "2-00:00:00" ;;
+        *)             echo "1-00:00:00" ;;
+    esac
+}
+
 for k in 1 2 3; do
     for eng in ift numerical; do
         if [ "${eng}" = "numerical" ]; then tag="num"; else tag="ift"; fi
@@ -33,16 +46,17 @@ for k in 1 2 3; do
         for st in "${STAGES[@]}"; do
             dep=""
             [ -n "${prev}" ] && dep="--dependency=afterok:${prev}"
-            jid=$(sbatch --parsable ${dep} \
+            wall=$(stage_wall "${st}")
+            jid=$(sbatch --parsable --time="${wall}" ${dep} \
                 --export=ALL,COH_ROUTINE=${k},COH_ENGINE=${eng},COH_STAGE=${st} \
                 -J "coh_${tag}_E${k}_${st}" \
                 -o "${HERE}/logs/coh_${tag}_E${k}_${st}_%j.out" \
                 -e "${HERE}/logs/coh_${tag}_E${k}_${st}_%j.err" \
                 "${GENERIC}")
             if [ -n "${prev}" ]; then
-                echo "    ${st}: ${jid}  (afterok ${prev})"
+                echo "    ${st}: ${jid}  (afterok ${prev}, wall=${wall})"
             else
-                echo "    ${st}: ${jid}  (head of chain)"
+                echo "    ${st}: ${jid}  (head of chain, wall=${wall})"
             fi
             prev="${jid}"
         done
