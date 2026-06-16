@@ -154,8 +154,11 @@ def build_logit_table(est_id: int, simple_title: bool = False,
     lines = [
         r'\begin{spacing}{1.0}',
         r'\centering',
+        # \tabcolsep must be set BEFORE \begin{longtable}: placing it after the
+        # \begin starts a table cell, which makes the \caption's \noalign
+        # "misplaced" (TeX error). Setting it here also actually affects the table.
+        r'\setlength{\tabcolsep}{6pt}',
         rf'\begin{{longtable}}[c]{{{col_fmt}}}',
-        r'    \setlength{\tabcolsep}{6pt}',
         rf'    \caption{{{title}}}',
         rf'    \label{{{label}}} \\',
         r'    \toprule',

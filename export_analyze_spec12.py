@@ -7,6 +7,8 @@ import pickle
 _DRAFTS_DIR = Path(r"C:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\Drafts\Deposit Competition")
 import pandas as pd
 import numpy as np
+import matplotlib
+matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
 from scipy import stats
@@ -248,11 +250,11 @@ def build_latex_table(results_dict, order_keys, target_vars, out_path, title="",
     # Last Footer — notes style matches the paper's other sleep tables:
     # \scriptsize font, stars in descending order (***/**/*), p{} column type.
     tex.append(r"\bottomrule")
-    # The paper's other tables use p{fixed fraction} for notes so the box is
-    # always narrower than the table span (avoiding the 2*\tabcolsep overfull
-    # that \linewidth adds). We use 0.85\textwidth which fits comfortably inside
-    # a full-width xltabular while keeping the note on a few readable lines.
-    notes_str = (r"\multicolumn{" + str(len(order_keys) + 1) + r"}{p{0.85\textwidth}}"
+    # \dimexpr\textwidth-2\tabcolsep\relax is exactly the usable width of a
+    # full-span multicolumn in a \textwidth-wide xltabular: the table occupies
+    # \textwidth, but the outer \tabcolsep margins on left and right eat 2*3.5pt=7pt,
+    # leaving \textwidth-7pt for the cell content.
+    notes_str = (r"\multicolumn{" + str(len(order_keys) + 1) + r"}{p{\dimexpr\textwidth-2\tabcolsep\relax}}"
                  r"{\scriptsize\textit{Notes:} Standard errors are in parentheses. "
                  r"Est.~3 reports Average Marginal Effects (AME) from NLLS logistic, "
                  r"following \textcite{imbens2016robust} and \textcite{carter2017asymptotic}. "
@@ -372,6 +374,9 @@ def build_latex_table(results_dict, order_keys, target_vars, out_path, title="",
     tex.append(" & ".join(row_eff_cluster) + r" \\")
 
     tex.append(r"\end{xltabular}")
+    # Restore the document's double spacing; \setstretch{1.0} at the top of the
+    # table suppressed it, so without this the following body text stays single-spaced.
+    tex.append(r"\doublespacing")
 
     with open(out_path, "w", encoding="utf-8") as f:
         f.write("\n".join(tex))
@@ -552,9 +557,9 @@ def main():
             pastelize_color(c),
         ))
 
-    ax.set_title(r"Implied National $\hat{\phi}_t$ — Spec 12 (IV Hausman $\times$ Tech)", fontsize=14)
+    ax.set_title(r"Implied National $\hat{\phi}_t$ — Spec 12 (IV Hausman $\times$ Tech)", fontsize=14, pad=12)
     ax.set_ylabel(r"National $\hat{\phi}_t$")
-    ax.set_ylim(0, 1.0)
+    ax.set_ylim(0, 1.05)
     ax.axhline(1.0, color='gray', linestyle=':', linewidth=1.2, alpha=0.7)
     ax.grid(alpha=0.4)
     ax.legend(loc='best')
