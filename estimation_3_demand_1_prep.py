@@ -120,7 +120,7 @@ def extract_upsilon_terms(res_ss):
 def _reshape_panel_from_wide(df_raw: pd.DataFrame) -> pd.DataFrame:
     print("Reshaping panel from wide to long...")
     id_vars = ['CodConglomeradoPrudencial', 'mca_code', 'year', 'quarter']
-    df_raw = df_raw.drop_duplicates(subset=id_vars)
+    df_raw = df_raw.drop_duplicates(subset=id_vars).copy()  # de-fragment
     df_raw['is_B'] = (df_raw['CODMUN_IBGE'].astype(str) != '0')
     df = pd.wide_to_long(df_raw, stubnames=['dep_a', 'spread_a', 'spread_ann_a'], i=id_vars, j='deposit_type').reset_index()
     return df.rename(columns={'dep_a': 'deposit_balance', 'spread_a': 'spread_qoq', 'spread_ann_a': 'spread_ann'})
@@ -154,6 +154,8 @@ def build_base_panel(panel_csv: Path) -> pd.DataFrame:
             "Re-run panel_4_bank_chars.py to derive it from IF-Data List files. Defaulting to 0."
         )
         df['has_ip'] = 0
+
+    df = df.copy()  # de-fragment before the column inserts below
 
     df['entity_id'] = df['CodConglomeradoPrudencial'].astype(str) + "_" + df['deposit_type'].astype(str) + "_" + df['mca_code'].astype(str)
     df['time_id'] = df['year'].astype(str) + "Q" + df['quarter'].astype(str)

@@ -9,14 +9,14 @@ IK2016 (effective clusters, t-distribution inference).
 
 Usage
 -----
-  # Generate table for Estimation 5 only (default)
+  # Generate tables for all coherence routines E1-E3 (default)
   python make_blp_logit_table.py
 
-  # Generate tables for all estimations E1-E5
-  python make_blp_logit_table.py --all
+  # Generate table for a single coherence routine
+  python make_blp_logit_table.py --est 2
 
-  # Generate table for specific estimation
-  python make_blp_logit_table.py --est 3
+  # Generate tables for legacy 5-routine build (E1-E5)
+  python make_blp_logit_table.py --legacy
 
 Output
 ------
@@ -145,7 +145,12 @@ def build_logit_table(est_id: int, simple_title: bool = False,
     ]
 
     ncols = len(submodels)
-    col_fmt = 'lcccc'
+    # Full-\textwidth xltabular (longtable-capable tabularx): a fixed-width
+    # raggedright label column + equal centered X columns. This pins the table
+    # to \textwidth so the notes row (also \textwidth) lines up with the table
+    # edges, matching the spec-12 comparison tables.
+    col_fmt = (r'>{\raggedright\arraybackslash}p{0.24\textwidth} '
+               r'*{' + str(ncols) + r'}{>{\centering\arraybackslash}X}')
 
     # Build header section
     title = 'Demand Logit Estimation' if simple_title else f'Demand Logit Estimation -- Estimation {est_id}, Specification 12'
@@ -153,12 +158,7 @@ def build_logit_table(est_id: int, simple_title: bool = False,
 
     lines = [
         r'\begin{spacing}{1.0}',
-        r'\centering',
-        # \tabcolsep must be set BEFORE \begin{longtable}: placing it after the
-        # \begin starts a table cell, which makes the \caption's \noalign
-        # "misplaced" (TeX error). Setting it here also actually affects the table.
-        r'\setlength{\tabcolsep}{6pt}',
-        rf'\begin{{longtable}}[c]{{{col_fmt}}}',
+        rf'\begin{{xltabular}}{{\textwidth}}{{{col_fmt}}}',
         rf'    \caption{{{title}}}',
         rf'    \label{{{label}}} \\',
         r'    \toprule',
@@ -177,7 +177,10 @@ def build_logit_table(est_id: int, simple_title: bool = False,
         r'    \endfoot',
         '',
         r'    \bottomrule',
-        r'    \multicolumn{' + str(ncols + 1) + r'}{c}{\begin{minipage}{0.85\textwidth}\scriptsize \textit{Notes:} Cluster-robust standard errors in parentheses, clustered at conglomerate level following \textcite{imbens2016robust} and \textcite{carter2017asymptotic}. Significance: *** $p<0.01$, ** $p<0.05$, * $p<0.1$. $Q$ denotes the GMM overidentification test statistic ($\chi^2_L$, $L$ = \# instruments); $G^*$ is effective clusters.\end{minipage}} \\',
+        # Notes span the full table width (\textwidth minus the two outer
+        # \tabcolsep margins of the multicolumn), so the box matches the table
+        # edges instead of sitting in a narrow centered minipage.
+        r'    \multicolumn{' + str(ncols + 1) + r'}{p{\dimexpr\textwidth-2\tabcolsep\relax}}{\scriptsize \textit{Notes:} Cluster-robust standard errors in parentheses, clustered at conglomerate level following \textcite{imbens2016robust} and \textcite{carter2017asymptotic}. Significance: *** $p<0.01$, ** $p<0.05$, * $p<0.1$. $Q$ denotes the GMM overidentification test statistic ($\chi^2_L$, $L$ = \# instruments); $G^*$ is effective clusters.} \\',
         r'    \endlastfoot',
         '',
     ]
@@ -236,7 +239,7 @@ def build_logit_table(est_id: int, simple_title: bool = False,
     ]
 
     lines += [
-        r'\end{longtable}',
+        r'\end{xltabular}',
         r'\end{spacing}',
     ]
 
@@ -405,25 +408,27 @@ def main():
     parser = argparse.ArgumentParser(description='Generate BLP Logit tables and documentation')
     group = parser.add_mutually_exclusive_group()
     group.add_argument('--all', action='store_true',
-                       help='Generate tables for all estimations E1-E5')
-    group.add_argument('--est', type=int, default=5,
-                       help='Generate table for specific estimation (default: 5)')
+                       help='Generate tables for all estimations in the active build')
+    group.add_argument('--est', type=int, default=None,
+                       help='Generate table for a single estimation (e.g. --est 2); '
+                            'omit to run all estimations for the active build')
     parser.add_argument('--docs', action='store_true',
                        help='Also generate documentation tables (instruments, prod_chars, demographic_chars)')
     parser.add_argument('--simple-title', action='store_true',
                        help='Use simple title without estimation/specification numbers')
-    parser.add_argument('--coherence', action='store_true',
-                       help='Use post-coherence-fix results (logit_summary_spec_12_coherence.json); '
-                            'defaults to routines E1-E3 and writes est{id}_spec12_logit_coherence.tex')
+    parser.add_argument('--coherence', action='store_true', default=True,
+                       help='Use post-coherence-fix results (default); reads '
+                            'logit_summary_spec_12_coherence.json, runs E1-E3')
+    parser.add_argument('--legacy', dest='coherence', action='store_false',
+                       help='Use legacy 5-routine results (logit_summary_spec_12.json), runs E1-E5')
     args = parser.parse_args()
 
-    # Coherence build has 3 routines (E1-E3); legacy build has 5 (E1-E5).
-    # In coherence mode, default to E1-E3 but honor an explicit single --est
-    # (the parser default of 5 means "not specified").
+    # Coherence build: 3 routines (E1-E3). Legacy build: 5 routines (E1-E5).
+    # With no --est, run all routines for the active build.
     if args.coherence:
-        est_ids = [args.est] if (args.est != 5 and not args.all) else list(range(1, 4))
+        est_ids = [args.est] if (args.est is not None and not args.all) else list(range(1, 4))
     else:
-        est_ids = list(range(1, 6)) if args.all else [args.est]
+        est_ids = [args.est] if (args.est is not None and not args.all) else list(range(1, 6))
 
     suffix = '_coherence' if args.coherence else ''
     build_note = ' [coherence]' if args.coherence else ''

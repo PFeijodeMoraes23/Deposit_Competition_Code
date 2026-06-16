@@ -3,7 +3,7 @@ blp_2_rc_e3_coherence.jl
 ========================
 Coherence RC-BLP — routine E3 (Pooled Logistic), specification 12. One GPU job.
 
-Reads  demand_3_final_spec_12.parquet
+Reads  demand_3_logistic_spec_12.parquet
 Warm-start  BLP_RESULTS/logit_delta_E3_spec_12_coherence.bin (logit-coherence output)
 Runs the full sigma -> … -> extended RC sequence on the GPU (IFT engine by
 default; set BLP_COHERENCE_ENGINE=numerical for the finite-difference engine).

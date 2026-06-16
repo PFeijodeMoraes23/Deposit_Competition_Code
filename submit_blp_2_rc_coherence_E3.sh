@@ -13,7 +13,7 @@
 #SBATCH --mail-user=pedro.feijodemoraes@yale.edu
 
 # Coherence RC-BLP — routine E3 (Pooled Logistic), spec 12.
-# Reads demand_3_final_spec_12.parquet; warm-starts from
+# Reads demand_3_logistic_spec_12.parquet; warm-starts from
 # logit_delta_E3_spec_12_coherence.bin; writes *_coherence-suffixed outputs.
 
 # ── Environment ───────────────────────────────────────────────────────────────

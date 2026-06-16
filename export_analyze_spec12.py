@@ -518,7 +518,7 @@ def main():
     label_rename = {
         '1 Local':           'Local Only (Est 1)',
         '2 Pooled Linear':   'Pooled Linear (Est 2)',
-        '3 Pooled Logistic': 'Pooled Logistic AME (Est 3)',
+        '3 Pooled Logistic': 'Pooled Logistic (Est 3)',
     }
 
     fig, ax = plt.subplots(figsize=(12, 6))
@@ -567,12 +567,19 @@ def main():
         ax.fill_between(x, lo, hi, color=pc, alpha=0.45)
     fig.tight_layout()
 
-    plot_path = out_dir / "est1-3_spec12_phi_t_comparison.png"
+    # The figure already carries the pastel-toned confidence-interval bands
+    # (fill_between with pastelize_color above). V_Main.tex includes the
+    # "_ci_pastel" filename, so that is the canonical output name. We also write
+    # the plain name for backward compatibility with any other references.
+    plot_name = "est1-3_spec12_phi_t_comparison_ci_pastel.png"
+    plot_path = out_dir / plot_name
     plt.savefig(plot_path, dpi=300)
     plt.close(fig)
 
+    shutil.copy(plot_path, _DRAFTS_DIR / plot_name)
+    shutil.copy(plot_path, out_dir / "est1-3_spec12_phi_t_comparison.png")
     shutil.copy(plot_path, _DRAFTS_DIR / "est1-3_spec12_phi_t_comparison.png")
-    print(f"Exported phi_t plot to {plot_path}; copied to {_DRAFTS_DIR}")
+    print(f"Exported phi_t plot (pastel CIs) to {plot_path}; copied to {_DRAFTS_DIR}")
 
 if __name__ == "__main__":
     main()

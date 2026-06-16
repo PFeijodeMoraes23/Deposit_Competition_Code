@@ -13,7 +13,7 @@
 #SBATCH --mail-user=pedro.feijodemoraes@yale.edu
 
 # Coherence RC-BLP — routine E2 (Pooled Linear), spec 12.
-# Reads demand_2_final_spec_12.parquet; warm-starts from
+# Reads demand_2_spec_12.parquet; warm-starts from
 # logit_delta_E2_spec_12_coherence.bin; writes *_coherence-suffixed outputs.
 
 # ── Environment ───────────────────────────────────────────────────────────────

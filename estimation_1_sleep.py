@@ -128,38 +128,53 @@ def demean_variables(df, cols, entity_col):
 # PHASE 1: ESTIMATION (First Stage & Second Stage)
 # ==============================================================================
 
-def build_estimation_data():
-    panel_csv, _ = _resolve_runtime_paths()
-    print(f"Loading {panel_csv}...")
-    df_raw = load_panel_cached(panel_csv) if load_panel_cached else pd.read_csv(panel_csv, low_memory=False)
-    df_raw = df_raw[df_raw['CODMUN_IBGE'].astype(str) != '0'].copy()
-    
-    if 'dep_a1' in df_raw.columns:
-        print("Reshaping panel from wide to long...")
-        id_vars = ['CodConglomeradoPrudencial', 'mca_code', 'year', 'quarter']
-        df_raw = df_raw.drop_duplicates(subset=id_vars)
-        df = pd.wide_to_long(df_raw, stubnames=['dep_a', 'spread_a', 'spread_ann_a', 'leave_one_out_mean_spread_a'], i=id_vars, j='deposit_type').reset_index()
-        df = df.rename(columns={'dep_a': 'deposit_balance', 'spread_a': 'spread_qoq', 'spread_ann_a': 'spread_ann', 'leave_one_out_mean_spread_a': 'leave_one_out_mean_spread'})
-    else:
-        df = df_raw.copy()
+def _drop_digital_banks(df):
+    """Drop firms classified as digital ('True Digital Retail Bank') by the data
+    pipeline's classifier (PANEL_INTERMED/digital_banks_diagnostic.csv,
+    is_digital_candidate), matched on the 8-digit CNPJ root of the lead institution.
 
-    if 'deposit_type' in df.columns: df = df[df['deposit_type'] != 3].copy()
+    This is the SAME classification panel_6_market.py uses to overwrite
+    CODMUN_IBGE=0 for digital firms. We drop only the classified digital firms,
+    so B-type prepaid (k=5) national aggregates (also at CODMUN_IBGE=0) are kept.
+    """
+    diag_path = _paths_mod.PROCESSED / "PANEL_INTERMED" / "digital_banks_diagnostic.csv"
+    if not diag_path.exists():
+        print(f"  [Warning] {diag_path} not found; no digital banks dropped.")
+        return df
+    if 'CNPJ_Lider' not in df.columns:
+        print("  [Warning] CNPJ_Lider not in panel; cannot drop digital banks.")
+        return df
 
-    df['entity_id'] = df['CodConglomeradoPrudencial'].astype(str) + "_" + df['deposit_type'].astype(str) + "_" + df['mca_code'].astype(str)
-    df['time_id'] = df['year'].astype(str) + "Q" + df['quarter'].astype(str)
-    
-    df.sort_values(by=['entity_id', 'year', 'quarter'], inplace=True)
-    df['spread_qoq_lag'] = df.groupby('entity_id')['spread_qoq'].shift(1)
-    df['risk_free_qoq_lag'] = df.groupby('entity_id')['risk_free_qoq'].shift(1)
-    df['lagged_deposits'] = df.groupby('entity_id')['deposit_balance'].shift(1)
-    df['nr_lagged_dep'] = (1 + df['risk_free_qoq_lag'] - df['spread_qoq_lag']) * df['lagged_deposits']
-    
-    for col in ['leave_one_out_mean_spread']:
-        if col not in df.columns: df[col] = np.nan
+    diag = pd.read_csv(diag_path, dtype={'CNPJ_root': str})
+    dig_cnpj8 = set(
+        diag.loc[diag['is_digital_candidate'] == True, 'CNPJ_root']
+        .astype(str).str.replace(r'\.0$', '', regex=True).str.zfill(8)
+    )
+    cnpj8 = (df['CNPJ_Lider'].astype(str)
+             .str.replace(r'\.0$', '', regex=True).str[:8].str.zfill(8))
+    mask_dig = cnpj8.isin(dig_cnpj8)
+    n_rows = int(mask_dig.sum())
+    n_cong = df.loc[mask_dig, 'CodConglomeradoPrudencial'].nunique()
+    print(f"  Dropped {n_rows} digital-bank rows ({n_cong} conglomerates) "
+          f"per digital_banks_diagnostic.csv")
+    return df[~mask_dig].copy()
 
-    df['pix_exists'] = ((df['year'] > 2020) | ((df['year'] == 2020) & (df['quarter'] == 4))).astype(float)
-    df['bank_year'] = df['CodConglomeradoPrudencial'].astype(str) + "_" + df['year'].astype(str)
-    df = df.dropna(subset=['deposit_balance', 'nr_lagged_dep', 'spread_qoq', 'entity_id', 'time_id'])
+
+def build_unified_frame():
+    """Build E1's estimation/phi frame from the SAME pooled panel prep used by
+    E2/E3 (estimation_2_sleep.build_pooled_data), then drop digital-classified
+    banks. This guarantees all strategies share one panel (the data-pipeline
+    output, market_panel_with_fees.csv), with E1 differing only by excluding
+    digital banks.
+
+    The shared frame is already scaled, demographic-filled, and lag-dropna'd
+    (so 2013Q1 drops and phi_t starts 2013Q2, aligned with E2/E3).
+    """
+    # Lazy import: est1 has already re-exec'd into the project venv, so importing
+    # est2 here is a no-op for its venv guard and avoids import-time side effects.
+    from estimation_2_sleep import build_pooled_data
+    df = build_pooled_data()
+    df = _drop_digital_banks(df)
     return df
 
 def run_first_stage(df, spec_instruments, exogenous_controls):
@@ -284,14 +299,15 @@ def define_specifications():
 def do_estimation():
     print("=== PHASE 1: ESTIMATION (CFA) ===")
     _, output_dir = _resolve_runtime_paths()
-    df = build_estimation_data()
+    df = build_unified_frame()
     print(f"Panel size after cleaning: {len(df)} rows")
 
     G_nominal, G_star, mean_Ng, std_Ng, cv_Ng, total_obs, Ns = print_cluster_diagnostics(df)
     output_dir.mkdir(parents=True, exist_ok=True)
     df['constant'] = 1.0
-    if 'indice_basileia_lag' in df.columns: df['indice_basileia_lag'] *= 100.0
-    df = scale_magnitudes(df)
+    # Scaling (deposits/1e9, gdp/1e4, cadunico/100, connections/100,
+    # indice_basileia*100) is already applied inside build_pooled_data; do NOT
+    # re-scale here, or coefficients would be on the wrong units.
 
     s_tech_finance, specs, state_blocks = define_specifications()
     for col in s_tech_finance:
@@ -349,9 +365,8 @@ def do_estimation():
 # ==============================================================================
 def calculate_phis(df, res_dict, state_blocks):
     df['constant'] = 1.0
-    scale_cols = {'gdp_per_capita': 10000.0, 'cadunico_families_per1000': 100.0, 'connections_per100': 100.0}
-    for col, factor in scale_cols.items():
-        if col in df.columns: df[col] /= factor
+    # State variables are already scaled in build_pooled_data (same scaling the
+    # coefficients were estimated on); do NOT re-scale here.
 
     phi_results = {}
     all_s_cols = {col for cols in state_blocks.values() for col in cols if col != 'constant'}
@@ -393,18 +408,14 @@ def calculate_phis(df, res_dict, state_blocks):
 
 def do_phi_generation():
     print("\n=== PHASE 2: PHI CONSTRUCTION & EXPORT ===")
-    panel_csv, output_dir = _resolve_runtime_paths()
+    _, output_dir = _resolve_runtime_paths()
     results_pickle_path = output_dir / "estimation_results.pkl"
 
-    df = load_panel_cached(panel_csv) if load_panel_cached else pd.read_csv(panel_csv, low_memory=False)
-    if 'year_quarter' not in df.columns and 'year' in df.columns:
-        df['year_quarter'] = df['year'].astype(int).astype(str) + "Q" + df['quarter'].astype(int).astype(str)
-    
-    if 'year' in df.columns: df['post_2020'] = (df['year'] >= 2020).astype(int)
-
-    df['entity_id'] = df['CodConglomeradoPrudencial'].astype(str) + "_" + df['mca_code'].astype(str)
-    df.sort_values(by=['entity_id', 'year', 'quarter'], inplace=True)
-    df['risk_free_qoq_lag'] = df.groupby('entity_id')['risk_free_qoq'].shift(1)
+    # Use the SAME unified frame as estimation (pooled prep minus digital banks),
+    # so phi_mt is computed on the exact rows used to estimate, and phi_t starts
+    # 2013Q2 in lockstep with E2/E3. year_quarter == time_id (matches est2).
+    df = build_unified_frame()
+    df['year_quarter'] = df['time_id']
 
     print(f"Loading results from {results_pickle_path}")
     try:

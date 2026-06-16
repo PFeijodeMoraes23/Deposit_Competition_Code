@@ -10,9 +10,9 @@ After the demand-degeneracy fixes (full-rank `has_ip`/`fgc_covered`) and the new
 3-routine sleepiness methodology, the BLP RC estimation is run for THREE routines
 (down from five), each consuming its own demand-prep parquet:
 
-    E1  Local B-type      ->  demand_1_final_spec_12.parquet
-    E2  Pooled Linear     ->  demand_2_final_spec_12.parquet
-    E3  Pooled Logistic   ->  demand_3_final_spec_12.parquet
+    E1  Local B-type      ->  demand_1_spec_12.parquet
+    E2  Pooled Linear     ->  demand_2_spec_12.parquet
+    E3  Pooled Logistic   ->  demand_3_logistic_spec_12.parquet
 
 Each routine is warm-started from the local logit delta produced beforehand:
 
@@ -60,7 +60,7 @@ const COHERENCE_DELTA_SUFFIX = "_coherence"
 const COHERENCE_ROUTINES = [
     (id = 1, label = "E1", desc = "Local B-type",    prefix = "demand_1"),
     (id = 2, label = "E2", desc = "Pooled Linear",   prefix = "demand_2"),
-    (id = 3, label = "E3", desc = "Pooled Logistic", prefix = "demand_3"),
+    (id = 3, label = "E3", desc = "Pooled Logistic", prefix = "demand_3_logistic"),
 ]
 
 # Estimation engine (GPU). IFT analytical gradient by default; set
@@ -120,7 +120,7 @@ function run_coherence_routine(estim_id::Int; passthrough::Vector{String} = Stri
 
     println("\n", "="^72)
     println("  COHERENCE $(r.label): $(r.desc)  |  spec $COHERENCE_SPEC")
-    println("  input : $(r.prefix)_final_spec_$(COHERENCE_SPEC).parquet")
+    println("  input : $(r.prefix)_spec_$(COHERENCE_SPEC).parquet")
     ws = warm_start_path(estim_id; is_hpc = is_hpc, local_dir = local_dir)
     println("  warm  : $(basename(ws))")
     println("="^72)
