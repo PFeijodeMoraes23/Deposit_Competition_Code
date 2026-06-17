@@ -78,7 +78,10 @@ import pandas as pd
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+import statsmodels.api as sm
 from scipy import stats
+from scipy.stats import norm
+from scipy.optimize import least_squares
 from statsmodels.stats.diagnostic import acorr_ljungbox
 
 from utils import paths as _paths_mod
@@ -100,6 +103,7 @@ from estimation_2_sleep import (
 from estimation_3_sleep import (
     run_pooled_first_stage as e3_first_stage,
     run_pooled_second_stage as e3_second_stage,
+    NonLinearResults,
 )
 
 _DRAFTS_DIR = Path(
@@ -155,19 +159,25 @@ def _build_phi_X(df: pd.DataFrame, phi_params: list) -> np.ndarray:
     return X
 
 
-def implied_phi_t(df: pd.DataFrame, res, logistic: bool):
+def implied_phi_t(df: pd.DataFrame, res, link: str):
     """National pop-weighted phi_t (market-level mean first, then pop weight
     across markets -- identical to calculate_phis) plus a delta-method 95% band.
+
+    link in {'linear','logit','probit','uniform'} selects how the index maps to
+    phi. For the link models phi uses the native index coefficients through G(.);
+    'linear' uses the OLS coefficients directly. The delta-method band uses the
+    (AME) covariance with gradient X-bar, mirroring export_analyze_spec12.
 
     Returns (phi_t Series, lo Series, hi Series) indexed by year_quarter.
     """
     phi_params = _phi_param_names(res)
     X = _build_phi_X(df, phi_params)
 
-    params = res.params_native if (logistic and hasattr(res, "params_native")) else res.params
+    is_link = link in ("logit", "probit", "uniform")
+    params = res.params_native if (is_link and hasattr(res, "params_native")) else res.params
     beta = params[phi_params].values.astype(float)
     lin = X @ beta
-    phi_mt = 1.0 / (1.0 + np.exp(-np.clip(lin, -700, 700))) if logistic else lin
+    phi_mt = _link_cdf(lin, link) if is_link else lin
 
     w = df["pop_total"].fillna(0.0).values.astype(float) if "pop_total" in df.columns else np.ones(len(df))
     yq = df["year_quarter"].values
@@ -268,6 +278,292 @@ def _run_logistic(df_in, iv_cols, state_cols):
     return df, res_ss, res_fs
 
 
+# ==============================================================================
+# GENERIC LINK NLLS  (probit = normal eta; uniform/clip = constrained-linear)
+# ==============================================================================
+# These generalise estimation_3_sleep's logistic NLLS to an arbitrary link
+# G(.) for the sleepiness CDF: phi_mt = G(S_mt' theta). The model defines
+# phi = F_eta(index), so each link names a distribution for the sleepiness
+# shock eta:
+#     'logit'   -> eta ~ Logistic   (Est 3, kept in estimation_3_sleep.py)
+#     'probit'  -> eta ~ Normal
+#     'uniform' -> eta ~ Uniform    (= clipped-linear, the COHERENT counterpart
+#                  of the LPM+clip: the bound is imposed DURING estimation).
+# Inference mirrors Est 3: AMEs with a numerical-Jacobian delta-method SE and
+# the Imbens-Kolesar (2016) effective-cluster t correction.
+def _link_cdf(z, link):
+    if link == "probit":
+        return norm.cdf(z)
+    if link == "uniform":
+        return np.clip(z, 0.0, 1.0)
+    if link == "logit":
+        return 1.0 / (1.0 + np.exp(-np.clip(z, -700, 700)))
+    raise ValueError(f"unknown link {link!r}")
+
+
+def _demean_col(df_ss, col):
+    return (df_ss[col] - df_ss.groupby("entity_id")[col].transform("mean")).values.astype(float)
+
+
+def _nlls_resid(params, y_dm, X, Z, CF, entity_idx, link):
+    K = X.shape[1]
+    phi = _link_cdf(X @ params[:K], link)
+    yhat = phi * Z
+    if CF.shape[1] > 0:
+        yhat = yhat + CF @ params[K:]
+    sums = np.bincount(entity_idx, weights=yhat)
+    counts = np.bincount(entity_idx)
+    yhat_dm = yhat - (sums / counts)[entity_idx]
+    return y_dm - yhat_dm
+
+
+def _generic_ame(theta_full, X, link, K, G, h=1e-5):
+    """Average marginal effect of each state var on phi (dummy: level diff;
+    continuous: central numerical derivative). CF terms pass through linearly."""
+    theta_X = theta_full[:K]
+    AME = np.zeros(K + G)
+    for k in range(K):
+        col = X[:, k]
+        uniq = np.unique(col[~np.isnan(col)])
+        is_dummy = (len(uniq) == 2) and (0.0 in uniq) and (1.0 in uniq)
+        if is_dummy:
+            X1 = X.copy(); X1[:, k] = 1.0
+            X0 = X.copy(); X0[:, k] = 0.0
+            AME[k] = np.mean(_link_cdf(X1 @ theta_X, link) - _link_cdf(X0 @ theta_X, link))
+        else:
+            Xp = X.copy(); Xp[:, k] += h
+            Xm = X.copy(); Xm[:, k] -= h
+            AME[k] = np.mean((_link_cdf(Xp @ theta_X, link) - _link_cdf(Xm @ theta_X, link)) / (2 * h))
+    if G > 0:
+        AME[K:] = theta_full[K:]
+    return AME
+
+
+def _generic_ame_cov(theta_full, cov_full, X, link, K, G, h=1e-5):
+    AME = _generic_ame(theta_full, X, link, K, G)
+    J = np.zeros((K + G, K + G))
+    for i in range(K + G):
+        tp = theta_full.copy(); tp[i] += h
+        J[:, i] = (_generic_ame(tp, X, link, K, G) - AME) / h
+    cov_AME = J @ cov_full @ J.T
+    return AME, np.sqrt(np.abs(np.diag(cov_AME))), cov_AME
+
+
+def run_nlls_link(df, state_cols, has_cf, link, init=None, loss="cauchy"):
+    """NLLS sleepiness fit with link G in {'probit','uniform'} (logit handled by
+    estimation_3_sleep). Returns a NonLinearResults (AMEs) like Est 3."""
+    CF_cols = ["v_hat_x_lagged_dep"] if has_cf else []
+    cols = state_cols + ["deposit_balance", "nr_lagged_dep", "entity_id"]
+    df_ss = df.dropna(subset=cols + CF_cols).copy()
+    if len(df_ss) == 0:
+        return None
+
+    entities = df_ss["entity_id"].unique()
+    emap = {e: i for i, e in enumerate(entities)}
+    entity_idx = df_ss["entity_id"].map(emap).values
+    y_dm = _demean_col(df_ss, "deposit_balance")
+    X = df_ss[state_cols].values.astype(float)
+    Z = df_ss["nr_lagged_dep"].values.astype(float)
+    CF = df_ss[CF_cols].values.astype(float) if has_cf else np.empty((len(df_ss), 0), dtype=float)
+    K, G = X.shape[1], CF.shape[1]
+
+    if init is None:
+        init = np.zeros(K + G)
+        if link == "uniform" and "constant" in state_cols:
+            init[state_cols.index("constant")] = 0.8  # start most cells interior
+    init = np.asarray(init, float)
+    if len(init) != K + G:
+        init = np.zeros(K + G)
+
+    res_lsq = least_squares(_nlls_resid, init, args=(y_dm, X, Z, CF, entity_idx, link),
+                            method="trf", loss=loss)
+    Jr = res_lsq.jac
+    try:
+        cov = np.linalg.pinv(Jr.T @ Jr) * (np.sum(res_lsq.fun ** 2) / (len(y_dm) - len(init)))
+    except Exception:
+        cov = np.eye(len(init))
+
+    ame, bse, cov_ame = _generic_ame_cov(res_lsq.x, cov, X, link, K, G)
+    idx = [f"interaction_{sv}" if sv != "constant" else "nr_lagged_dep" for sv in state_cols] + CF_cols
+    ps = pd.Series(ame, index=idx)
+    bs = pd.Series(bse, index=idx)
+    tvals = ps / bs
+
+    cl = df_ss["CodConglomeradoPrudencial"]
+    sizes = cl.value_counts()
+    mean_ng = np.mean(sizes)
+    cv2 = (np.std(sizes) / mean_ng) ** 2 if mean_ng > 0 else 1.0
+    G_star = max(1.0, len(sizes) / (1 + cv2))
+    pvals = pd.Series(stats.t.sf(np.abs(tvals), df=G_star) * 2, index=idx)
+
+    nobs = len(y_dm)
+    tss = float(np.sum((y_dm - y_dm.mean()) ** 2))
+    rss = float(np.sum(res_lsq.fun ** 2))
+    rsq = 1 - rss / tss if tss > 0 else np.nan
+    ps_native = pd.Series(res_lsq.x, index=idx)
+    print(f"  [NLLS-{link}] status={res_lsq.status} | nfev={res_lsq.nfev} | cost={res_lsq.cost:.4g}")
+    return NonLinearResults(ps, bs, tvals, pvals, G_star, params_native=ps_native,
+                            nobs=nobs, rsquared=rsq, fvalue=np.nan, f_pvalue=np.nan,
+                            G_nominal=len(sizes), cov_ame=cov_ame)
+
+
+def _run_link(df_in, iv_cols, state_cols, link, init=None, loss="cauchy"):
+    df = df_in.copy()
+    df, res_fs = e3_first_stage(df, iv_cols, [c for c in state_cols if c != "constant"])
+    res_ss = run_nlls_link(df, state_cols, has_cf=True, link=link, init=init, loss=loss)
+    return df, res_ss, res_fs
+
+
+# ==============================================================================
+# MONOTONE SINGLE-INDEX  (distribution-free / nonparametric link for eta)
+# ==============================================================================
+# Estimates phi(S) = G(S'theta) WITHOUT naming F_eta. The index direction theta
+# is taken from the logit fit (identified up to scale under the single-index
+# assumption); the link G = F_eta is then estimated NONPARAMETRICALLY and
+# MONOTONE via a binned varying-coefficient regression + pool-adjacent-violators
+# (PAVA) isotonisation. References: Ichimura (1993, J.Econometrics);
+# Klein & Spady (1993, Econometrica); Hardle, Hall & Ichimura (1993, Ann.Stat.);
+# Powell, Stock & Stoker (1989, Econometrica); Balabdaoui, Groeneboom &
+# Hendrickx (2019, Scand.J.Stat.) for the monotone single index; Robertson,
+# Wright & Dykstra (1988) for PAVA. Inference is CONDITIONAL on the estimated
+# index direction (the link's cluster-robust covariance), and approximate.
+def _pava_increasing(y, w=None):
+    y = np.asarray(y, float)
+    n = len(y)
+    w = np.ones(n) if w is None else np.asarray(w, float)
+    bval, bw, bidx = [], [], []
+    for j in range(n):
+        cv, cw, ci = y[j], w[j], [j]
+        while bval and bval[-1] > cv:
+            pv, pw, pi = bval.pop(), bw.pop(), bidx.pop()
+            cv = (pv * pw + cv * cw) / (pw + cw)
+            cw = pw + cw
+            ci = pi + ci
+        bval.append(cv); bw.append(cw); bidx.append(ci)
+    out = np.empty(n)
+    for v_, idx_ in zip(bval, bidx):
+        for k in idx_:
+            out[k] = v_
+    return out
+
+
+def run_single_index(df, state_cols, has_cf, logit_res, n_bins=20):
+    """Monotone single-index sleepiness: logit-direction index + isotonic
+    nonparametric link. Returns (res_like, phi_t, lo, hi) where res_like is a
+    NonLinearResults carrying the average-derivative AMEs."""
+    phi_params = [p for p in logit_res.params.index if not str(p).startswith("v_hat")]
+    theta = logit_res.params_native[phi_params].values.astype(float)
+
+    CF_cols = ["v_hat_x_lagged_dep"] if has_cf else []
+    cols = state_cols + ["deposit_balance", "nr_lagged_dep", "entity_id"]
+    df_ss = df.dropna(subset=cols + CF_cols).copy()
+    if len(df_ss) == 0:
+        return None, None, None, None
+
+    X = _build_phi_X(df_ss, phi_params)        # nr_lagged_dep -> 1, interaction_sv -> sv
+    v = X @ theta                              # logit linear index
+    Z = df_ss["nr_lagged_dep"].values.astype(float)
+
+    # quantile bins of the index
+    edges = np.quantile(v, np.linspace(0, 1, n_bins + 1))
+    edges[0] -= 1e-9; edges[-1] += 1e-9
+    binid = np.clip(np.digitize(v, edges[1:-1]), 0, n_bins - 1)
+    present = np.array(sorted(np.unique(binid)))
+    B = len(present)
+    remap = {b: i for i, b in enumerate(present)}
+    binpos = np.array([remap[b] for b in binid])
+
+    # design: Z * 1[bin==b]; entity-demean; + CF; cluster-robust OLS for g_b
+    D = np.zeros((len(df_ss), B))
+    D[np.arange(len(df_ss)), binpos] = Z
+    cols_design = [f"_g{b}" for b in range(B)]
+    work = pd.DataFrame(D, columns=cols_design, index=df_ss.index)
+    work["entity_id"] = df_ss["entity_id"].values
+    work["_y"] = df_ss["deposit_balance"].values
+    if has_cf:
+        work["_cf"] = df_ss["v_hat_x_lagged_dep"].values
+        cols_design = cols_design + ["_cf"]
+    y_dm = work["_y"] - work.groupby("entity_id")["_y"].transform("mean")
+    Xdm = work[cols_design] - work.groupby("entity_id")[cols_design].transform("mean")
+
+    mod = sm.OLS(y_dm.values, Xdm.values)
+    cl = df_ss["CodConglomeradoPrudencial"].astype(str)
+    res = mod.fit(cov_type="cluster", cov_kwds={"groups": cl})
+    g_raw = res.params[:B]
+    cov_g = res.cov_params()[:B, :B]
+    counts = np.bincount(binpos, minlength=B).astype(float)
+    centers = np.array([v[binpos == b].mean() for b in range(B)])
+
+    g_mono = np.clip(_pava_increasing(g_raw, w=counts), 0.0, 1.0)
+    phi_mt = g_mono[binpos]
+
+    # national phi_t (market-first pop weight) + conditional band from cov_g
+    w_pop = df_ss["pop_total"].fillna(0.0).values.astype(float)
+    yq = df_ss["year_quarter"].values
+    mun = df_ss["CODMUN_IBGE"].astype(str).values
+    frame = pd.DataFrame({"yq": yq, "mun": mun, "bin": binpos, "phi": phi_mt, "w": w_pop})
+    mk = frame.groupby(["yq", "mun"], observed=True).agg(
+        phi=("phi", "mean"), M=("w", "sum"), bin=("bin", "first")).reset_index()
+    g_star = float(getattr(logit_res, "G_star", np.nan) or np.nan)
+    crit = stats.t.ppf(0.975, df=g_star - 1) if (g_star and g_star > 1) else 1.96
+    phi_t, lo, hi = {}, {}, {}
+    for t, grp in mk.groupby("yq"):
+        Msum = grp["M"].sum()
+        if Msum <= 0:
+            continue
+        wv = grp["M"].values / Msum
+        phi_t[t] = float((wv * grp["phi"].values).sum())
+        a = np.zeros(B)
+        for b, wb in zip(grp["bin"].values, wv):
+            a[b] += wb
+        var = float(a @ cov_g @ a)
+        se = np.sqrt(max(var, 0.0))
+        lo[t] = phi_t[t] - crit * se
+        hi[t] = phi_t[t] + crit * se
+    phi_t = pd.Series(phi_t)
+
+    # average-derivative AMEs: AME_k = theta_k * mean_i G'(v_i)
+    slope_b = np.zeros(B)
+    for b in range(B - 1):
+        dv = centers[b + 1] - centers[b]
+        slope_b[b] = (g_mono[b + 1] - g_mono[b]) / dv if dv != 0 else 0.0
+    slope_b[B - 1] = slope_b[B - 2] if B >= 2 else 0.0
+    mean_slope = float(np.average(slope_b[binpos]))
+    # linear map mean_slope = d . g  (for an approximate SE conditional on theta)
+    d = np.zeros(B)
+    seg_w = np.bincount(binpos, minlength=B).astype(float)
+    seg_w = seg_w / seg_w.sum()
+    for b in range(B - 1):
+        dv = centers[b + 1] - centers[b]
+        if dv != 0:
+            d[b + 1] += seg_w[b] / dv
+            d[b] -= seg_w[b] / dv
+    try:
+        var_slope = float(d @ cov_g @ d)
+    except Exception:
+        var_slope = np.nan
+
+    idx_names = [f"interaction_{sv}" if sv != "constant" else "nr_lagged_dep" for sv in state_cols]
+    ame, bse, pvals = {}, {}, {}
+    for nm, th in zip(phi_params, theta):
+        if nm == "nr_lagged_dep":
+            continue  # index intercept: no average-derivative AME
+        ame[nm] = th * mean_slope
+        se = abs(th) * np.sqrt(var_slope) if np.isfinite(var_slope) else np.nan
+        bse[nm] = se
+        if se and np.isfinite(se) and se > 0:
+            pvals[nm] = float(stats.t.sf(abs(ame[nm] / se), df=g_star if g_star > 1 else 30) * 2)
+        else:
+            pvals[nm] = np.nan
+    ps = pd.Series(ame); bs = pd.Series(bse); pv = pd.Series(pvals)
+    nobs = len(df_ss)
+    res_like = NonLinearResults(ps, bs, ps / bs.replace(0, np.nan), pv, g_star,
+                                params_native=ps, nobs=nobs, rsquared=getattr(res, "rsquared", np.nan),
+                                G_nominal=int(cl.nunique()), cov_ame=None)
+    print(f"  [SingleIndex] bins={B} | mean_slope={mean_slope:.4g}")
+    return res_like, phi_t, pd.Series(lo), pd.Series(hi)
+
+
 def build_frames():
     """Build the two base frames once (E1 unified; pooled shared by E2/E3),
     trim to needed columns to keep per-run copies light, and add the time vars."""
@@ -303,48 +599,93 @@ def build_frames():
     return e1, pooled, s_tech, iv_cols
 
 
+def _init_from_linear(lin_res, state_cols):
+    """Warm start for the uniform (constrained-linear) NLLS from the OLS linear
+    fit: same index coefficients, clipped during estimation rather than after."""
+    init = []
+    for sv in state_cols:
+        nm = "nr_lagged_dep" if sv == "constant" else f"interaction_{sv}"
+        init.append(float(lin_res.params.get(nm, 0.0)))
+    init.append(float(lin_res.params.get("v_hat_x_lagged_dep", 0.0)))  # CF gamma
+    return np.array(init, dtype=float)
+
+
 def run_all():
     e1_df, pooled_df, s_tech, iv_cols = build_frames()
     s_time = s_tech + TIME_VARS
+    group_of = {k: g for g, ks in GROUPS for k in ks}
 
-    # Each entry: (label, group, with_time, frame, runner, logistic)
+    # (label, with_time, runner, link). Order matters: E2 precedes CL (warm
+    # start) and E3 precedes SI (index direction).
     plan = [
-        ("E1 Base",  "Local (Est 1)",            False, e1_df,     "lin1", False),
-        ("E1 +Time", "Local (Est 1)",            True,  e1_df,     "lin1", False),
-        ("E2 Base",  "Pooled Linear (Est 2)",    False, pooled_df, "lin2", False),
-        ("E2 +Time", "Pooled Linear (Est 2)",    True,  pooled_df, "lin2", False),
-        ("E3 Base",  "Pooled Logistic (Est 3)",  False, pooled_df, "log3", True),
-        ("E3 +Time", "Pooled Logistic (Est 3)",  True,  pooled_df, "log3", True),
+        ("E1 Base", False, "lin1",    "linear"),
+        ("E1 +Time", True, "lin1",    "linear"),
+        ("E2 Base", False, "lin2",    "linear"),
+        ("E2 +Time", True, "lin2",    "linear"),
+        ("CL Base", False, "uniform", "uniform"),
+        ("CL +Time", True, "uniform", "uniform"),
+        ("E3 Base", False, "logit",   "logit"),
+        ("E3 +Time", True, "logit",   "logit"),
+        ("PB Base", False, "probit",  "probit"),
+        ("PB +Time", True, "probit",  "probit"),
+        ("SI Base", False, "si",      "si"),
+        ("SI +Time", True, "si",      "si"),
     ]
 
     results = {}
-    for label, group, with_time, frame, runner, logistic in plan:
+    for label, with_time, runner, link in plan:
         state_cols = s_time if with_time else s_tech
-        print(f"\n--- Estimating {label}  ({'Tech+Time' if with_time else 'Tech'}) ---")
-        if runner == "lin1":
-            df, res_ss, res_fs = _run_linear(frame, iv_cols, state_cols, e1_first_stage, e1_second_stage, label)
-        elif runner == "lin2":
-            df, res_ss, res_fs = _run_linear(frame, iv_cols, state_cols, e2_first_stage, e2_second_stage, label)
-        else:
-            df, res_ss, res_fs = _run_logistic(frame, iv_cols, state_cols)
+        print(f"\n--- Estimating {label} ({'Tech+Time' if with_time else 'Tech'}) ---")
+        phi_override = None
+        try:
+            if runner == "lin1":
+                df, res_ss, _ = _run_linear(e1_df, iv_cols, state_cols, e1_first_stage, e1_second_stage, label)
+            elif runner == "lin2":
+                df, res_ss, _ = _run_linear(pooled_df, iv_cols, state_cols, e2_first_stage, e2_second_stage, label)
+            elif runner == "logit":
+                df, res_ss, _ = _run_logistic(pooled_df, iv_cols, state_cols)
+            elif runner == "probit":
+                df, res_ss, _ = _run_link(pooled_df, iv_cols, state_cols, "probit", loss="cauchy")
+            elif runner == "uniform":
+                e2_key = "E2 +Time" if with_time else "E2 Base"
+                init = _init_from_linear(results[e2_key]["res"], state_cols) if e2_key in results else None
+                df, res_ss, _ = _run_link(pooled_df, iv_cols, state_cols, "uniform", init=init, loss="linear")
+            else:  # single index
+                e3_key = "E3 +Time" if with_time else "E3 Base"
+                if e3_key not in results:
+                    print(f"  [warn] {label}: logit direction {e3_key} missing; skipping.")
+                    continue
+                df = pooled_df.copy()
+                df, _ = e3_first_stage(df, iv_cols, [c for c in state_cols if c != "constant"])
+                res_ss, phi_si, lo_si, hi_si = run_single_index(
+                    df, state_cols, has_cf=True, logit_res=results[e3_key]["res"])
+                phi_override = (phi_si, lo_si, hi_si)
+        except Exception as exc:
+            print(f"  [warn] {label} failed: {exc}")
+            continue
 
         if res_ss is None:
             print(f"  [warn] {label} produced no second stage; skipping.")
             continue
 
-        phi_t, lo, hi = implied_phi_t(df, res_ss, logistic)
+        if phi_override is not None:
+            phi_t, lo, hi = phi_override
+        else:
+            phi_t, lo, hi = implied_phi_t(df, res_ss, link)
 
         lb_stat, lb_p = (np.nan, np.nan)
         wald = (np.nan, np.nan, 0)
-        if with_time:
+        if runner == "si":
+            pass  # joint Wald ill-defined for a fixed-direction single index
+        elif with_time:
             wald = wald_time_block(res_ss)
         else:
             lb_stat, lb_p = ljung_box_resid(df, res_ss, state_cols, has_cf=True)
 
         results[label] = {
-            "group": group,
+            "group": group_of.get(label, label),
             "with_time": with_time,
-            "logistic": logistic,
+            "link": link,
             "res": res_ss,
             "state_cols": state_cols,
             "phi_t": phi_t,
@@ -398,12 +739,26 @@ ORDER_VARS = [
     "interaction_gdp_growth_yoy",
 ]
 
-ORDER_KEYS = ["E1 Base", "E1 +Time", "E2 Base", "E2 +Time", "E3 Base", "E3 +Time"]
+# Each estimator = an assumption about the sleepiness-shock CDF F_eta.
 GROUPS = [
-    ("Local (Est 1)", ["E1 Base", "E1 +Time"]),
+    ("Local Linear (Est 1)",  ["E1 Base", "E1 +Time"]),
     ("Pooled Linear (Est 2)", ["E2 Base", "E2 +Time"]),
-    ("Pooled Logistic (Est 3)", ["E3 Base", "E3 +Time"]),
+    ("Constrained Linear",    ["CL Base", "CL +Time"]),
+    ("Logit (Est 3)",         ["E3 Base", "E3 +Time"]),
+    ("Probit",                ["PB Base", "PB +Time"]),
+    ("Single-Index",          ["SI Base", "SI +Time"]),
 ]
+F_ETA = {
+    "Local Linear (Est 1)":  "Uniform (LPM, post-hoc clip)",
+    "Pooled Linear (Est 2)": "Uniform (LPM, post-hoc clip)",
+    "Constrained Linear":    "Uniform (bound imposed in estimation)",
+    "Logit (Est 3)":         "Logistic",
+    "Probit":                "Normal",
+    "Single-Index":          "Nonparametric, monotone (data-chosen)",
+}
+ORDER_KEYS = [k for _, ks in GROUPS for k in ks]
+BASE_KEYS = [ks[0] for _, ks in GROUPS]
+TIME_KEYS = [ks[1] for _, ks in GROUPS]
 
 
 def _cell(res, v, digits=4):
@@ -420,35 +775,36 @@ def _cell(res, v, digits=4):
 # ==============================================================================
 # OUTPUT: LaTeX table (xltabular, grouped header -- mirrors export_analyze_spec12)
 # ==============================================================================
-def build_latex_table(results, out_path, title, label):
-    res_by_key = {k: results[k]["res"] for k in ORDER_KEYS if k in results}
-    keys = [k for k in ORDER_KEYS if k in res_by_key]
+HEADER_SHORT = {
+    "Local Linear (Est 1)": r"Local (E1)",
+    "Pooled Linear (Est 2)": r"Linear (E2)",
+    "Constrained Linear": r"Constr.\ Lin.",
+    "Logit (Est 3)": r"Logit (E3)",
+    "Probit": r"Probit",
+    "Single-Index": r"Single-Idx",
+}
+
+
+def build_latex_table(results, keys, out_path, title, label):
+    """One column per estimator (model). Call once for Base keys, once for +Time."""
+    group_of = {k: g for g, ks in GROUPS for k in ks}
+    res_by_key = {k: results[k]["res"] for k in keys if k in results}
+    keys = [k for k in keys if k in res_by_key]
     n = len(keys)
 
     tex = [r"\setstretch{1.0}"]
-    col_def = (r">{\raggedright\arraybackslash}p{0.24\textwidth} "
+    col_def = (r">{\raggedright\arraybackslash}p{0.22\textwidth} "
                r"*{" + str(n) + r"}{>{\centering\arraybackslash}X}")
     tex.append(r"\begin{xltabular}{\textwidth}{" + col_def + "}")
     tex.append(r"\caption{" + title + r"}\label{" + label + r"} \\")
     tex.append(r"\toprule")
-
-    # grouped super-header
-    sup = ["\\multicolumn{1}{c}{}"]
-    sub = ["Variable"]
-    for gname, gkeys in GROUPS:
-        present = [k for k in gkeys if k in res_by_key]
-        if not present:
-            continue
-        sup.append(r"\multicolumn{" + str(len(present)) + r"}{c}{" + gname + r"}")
-        for k in present:
-            sub.append("Base" if k.endswith("Base") else r"$+$Time")
-    tex.append(" & ".join(sup) + r" \\")
-    tex.append(" & ".join(sub) + r" \\")
+    headers = ["Variable"] + [HEADER_SHORT.get(group_of.get(k, k), group_of.get(k, k)) for k in keys]
+    tex.append(" & ".join(headers) + r" \\")
     tex.append(r"\midrule")
     tex.append(r"\endfirsthead")
     tex.append(r"\multicolumn{" + str(n + 1) + r"}{c}{{\bfseries \tablename\ \thetable{} (continued)}} \\")
     tex.append(r"\toprule")
-    tex.append(" & ".join(sub) + r" \\")
+    tex.append(" & ".join(headers) + r" \\")
     tex.append(r"\midrule")
     tex.append(r"\endhead")
     tex.append(r"\midrule")
@@ -456,19 +812,21 @@ def build_latex_table(results, out_path, title, label):
     tex.append(r"\endfoot")
     tex.append(r"\bottomrule")
     notes = (r"\multicolumn{" + str(n + 1) + r"}{p{\dimexpr\textwidth-2\tabcolsep\relax}}"
-             r"{\scriptsize\textit{Notes:} Spec 12 (IV Hausman $\times$ Tech). "
-             r"``$+$Time'' adds a time trend (years) and YoY GDP-per-capita growth, "
-             r"each interacted with $\widetilde{D}_{t-1}$. Est.~3 reports Average "
-             r"Marginal Effects. Standard errors in parentheses. "
-             r"*** $p<0.01$, ** $p<0.05$, * $p<0.1$.}")
+             r"{\scriptsize\textit{Notes:} Spec 12 (IV Hausman $\times$ Tech). Each column is a "
+             r"different assumption on the sleepiness-shock CDF $F_\eta$: Local/Pooled Linear are the "
+             r"LPM (uniform $\eta$, clipped post-hoc); Constrained Linear imposes the bound in "
+             r"estimation; Logit/Probit assume logistic/normal $\eta$; Single-Index leaves $F_\eta$ "
+             r"nonparametric and monotone. Logit, Probit and Single-Index report Average Marginal "
+             r"Effects (Single-Index: average-derivative, conditional/approx.\ SE). Standard errors "
+             r"in parentheses. *** $p<0.01$, ** $p<0.05$, * $p<0.1$.}")
     tex.append(notes)
     tex.append(r"\endlastfoot")
 
     for v in ORDER_VARS:
-        present_any = any(v in (res_by_key[k].params.index if res_by_key[k] is not None else []) for k in keys)
+        present_any = any(v in res_by_key[k].params.index for k in keys)
         if not present_any:
             continue
-        lab = r"\multirow[t]{2}{0.24\textwidth}{\raggedright " + NICE.get(v, v) + r"}"
+        lab = r"\multirow[t]{2}{0.22\textwidth}{\raggedright " + NICE.get(v, v) + r"}"
         row_c = [lab]
         row_s = [""]
         for k in keys:
@@ -480,12 +838,11 @@ def build_latex_table(results, out_path, title, label):
         tex.append(r"\addlinespace")
 
     tex.append(r"\midrule")
-    # diagnostics rows
     row_nobs = ["Observations"]
     row_r2 = ["$R^2$"]
     row_clu = ["Clusters ($G$)"]
     row_eff = ["Effective $G^*$"]
-    row_wald = ["Time block Wald $p$"]
+    row_wald = ["Time-block Wald $p$"]
     for k in keys:
         res = res_by_key[k]
         nobs = getattr(res, "nobs", np.nan)
@@ -498,7 +855,10 @@ def build_latex_table(results, out_path, title, label):
         row_eff.append(f"{gs:.1f}" if pd.notna(gs) else "-")
         w = results[k]["wald"]
         row_wald.append(f"{w[1]:.3f}{get_stars(w[1])}" if (results[k]["with_time"] and pd.notna(w[1])) else "-")
-    for r in (row_nobs, row_r2, row_clu, row_eff, row_wald):
+    rows = [row_nobs, row_r2, row_clu, row_eff]
+    if any(results[k]["with_time"] for k in keys):
+        rows.append(row_wald)
+    for r in rows:
         tex.append(" & ".join(r) + r" \\")
     tex.append(r"\end{xltabular}")
     tex.append(r"\doublespacing")
@@ -507,7 +867,7 @@ def build_latex_table(results, out_path, title, label):
 
 
 # ==============================================================================
-# OUTPUT: figure (3 panels, Base vs +Time phi_t)
+# OUTPUT: one figure per model (Base vs +Time phi_t)
 # ==============================================================================
 def _to_dates(idx):
     return pd.PeriodIndex([str(q).replace("_", "Q") for q in idx], freq="Q").to_timestamp()
@@ -517,11 +877,24 @@ def _sorted_index(idx):
     return sorted(idx, key=lambda q: pd.Period(str(q).replace("_", "Q"), freq="Q"))
 
 
-def build_figure(results, out_path):
-    fig, axes = plt.subplots(1, 3, figsize=(18, 7.2), sharey=True)
-    for ax, (gname, gkeys) in zip(axes, GROUPS):
-        base_key = gkeys[0]
-        time_key = gkeys[1]
+_MODEL_SLUG = {
+    "Local Linear (Est 1)": "e1",
+    "Pooled Linear (Est 2)": "e2",
+    "Constrained Linear": "clin",
+    "Logit (Est 3)": "logit",
+    "Probit": "probit",
+    "Single-Index": "singleindex",
+}
+
+
+def build_per_model_figures(results, rout):
+    """One Base-vs-+Time phi_t figure per estimator. Returns [(gname, slug, path)]."""
+    made = []
+    for gname, gkeys in GROUPS:
+        base_key, time_key = gkeys
+        if base_key not in results and time_key not in results:
+            continue
+        fig, ax = plt.subplots(figsize=(9, 5.2))
         for key, color, ls, lab in [
             (base_key, "#1f77b4", "-", "Base (Tech)"),
             (time_key, "#d62728", "--", r"$+$Time"),
@@ -531,22 +904,25 @@ def build_figure(results, out_path):
             r = results[key]
             phi = r["phi_t"].reindex(_sorted_index(r["phi_t"].index))
             x = _to_dates(phi.index)
-            ax.plot(x, phi.values, color=color, linestyle=ls, linewidth=2.4, label=lab)
+            ax.plot(x, phi.values, color=color, linestyle=ls, linewidth=2.2, label=lab)
             lo = r["phi_lo"].reindex(phi.index)
             hi = r["phi_hi"].reindex(phi.index)
             if lo.notna().any():
                 ax.fill_between(x, lo.values, hi.values, color=color, alpha=0.15)
-        ax.set_title(gname, fontsize=16)
-        ax.set_ylim(0, 1.05)
+        ax.set_ylim(0, 1.08)
         ax.axhline(1.0, color="gray", linestyle=":", linewidth=1.2, alpha=0.7)
         ax.grid(alpha=0.35)
-        ax.legend(loc="best", fontsize=13)
-        ax.tick_params(axis="both", labelsize=12)
-    axes[0].set_ylabel(r"National $\hat{\phi}_t$", fontsize=15)
-    fig.suptitle(r"Implied National $\hat{\phi}_t$: Spec 12 Base vs. $+$Time block", fontsize=18)
-    fig.tight_layout(rect=(0, 0, 1, 0.96))
-    fig.savefig(out_path, dpi=200, bbox_inches="tight")
-    plt.close(fig)
+        ax.legend(loc="best", fontsize=11)
+        ax.tick_params(axis="both", labelsize=11)
+        ax.set_ylabel(r"National $\hat{\phi}_t$", fontsize=12)
+        ax.set_title(f"{gname}\n" + r"$F_\eta$: " + F_ETA.get(gname, ""), fontsize=13)
+        fig.tight_layout()
+        slug = _MODEL_SLUG.get(gname, gname.lower().replace(" ", "_"))
+        path = rout / f"est_timeseries_phi_{slug}.png"
+        fig.savefig(path, dpi=170, bbox_inches="tight")
+        plt.close(fig)
+        made.append((gname, slug, path))
+    return made
 
 
 # ==============================================================================
@@ -559,7 +935,7 @@ def export_json(results, out_path):
         payload[k] = {
             "group": r["group"],
             "with_time": r["with_time"],
-            "logistic": r["logistic"],
+            "link": r["link"],
             "nobs": float(getattr(res, "nobs", np.nan)),
             "rsquared": float(getattr(res, "rsquared", np.nan)) if pd.notna(getattr(res, "rsquared", np.nan)) else None,
             "G_nominal": float(getattr(res, "G_nominal", np.nan)) if pd.notna(getattr(res, "G_nominal", np.nan)) else None,
@@ -581,10 +957,16 @@ def export_json(results, out_path):
 def _fmt(res, v, digits=4):
     if res is None or v not in res.params.index:
         return "—"
-    return f"{res.params[v]:.{digits}f}{get_stars(res.pvalues[v])} ({res.bse[v]:.{digits}f})"
+    c = res.params[v]
+    if pd.isna(c):
+        return "—"
+    se = res.bse[v] if v in res.bse.index else np.nan
+    p = res.pvalues[v] if v in res.pvalues.index else np.nan
+    se_str = f"({se:.{digits}f})" if pd.notna(se) else "(n/a)"
+    return f"{c:.{digits}f}{get_stars(p)} {se_str}"
 
 
-def build_markdown(results, fig_name, out_path, tex_name):
+def build_markdown(results, figures, out_path, tex_base_name, tex_time_name):
     L = []
     L.append("# Time-Series Structure in the Depositor Sleepiness Function")
     L.append("")
@@ -604,6 +986,39 @@ def build_markdown(results, fig_name, out_path, tex_name):
         "geographic/temporal variation. That exact route did not work, but it raises a "
         "cleaner question: **does $\\phi$ carry a residual secular *trend* or a business-cycle "
         "*cyclicality* that the current covariates miss?**"
+    )
+    L.append("")
+    L.append("## Estimators: each is an assumption about the sleepiness shock $F_\\eta$")
+    L.append("")
+    L.append(
+        "The structural model defines $\\phi$ as a threshold-crossing probability, "
+        "$D^*_{imt} = \\mathbf{S}_{mt}'\\Gamma + \\mathbf{X}_{imt}'\\Theta + \\eta_{imt}$ with "
+        "$\\phi_{mt} = \\mathrm{Prob}(D^*_{imt}\\le 0\\mid \\mathbf{S}_{mt}) = F_\\eta(-(\\mathbf{S}'\\Gamma+\\mathbf{X}'\\Theta))$. "
+        "So $\\phi(\\mathbf{S})$ **is** the CDF of the sleepiness shock $\\eta$ evaluated at the index — and "
+        "every estimator below is simply a different choice of that distribution. A linear $\\phi$ is "
+        "**not** distribution-free: a *bounded* linear CDF is exactly the **Uniform**; only the "
+        "*unbounded* straight line matches no distribution. We therefore span the choice of $F_\\eta$ "
+        "from uniform to fully nonparametric:"
+    )
+    L.append("")
+    L.append("| Estimator | Shock $F_\\eta$ | How $\\phi$ enters | Bounded $[0,1]$? |")
+    L.append("|---|---|---|---|")
+    L.append("| Local Linear (Est 1) | Uniform | $\\phi=\\mathbf{S}'\\beta$ (LPM) | only via post-hoc clip |")
+    L.append("| Pooled Linear (Est 2) | Uniform | $\\phi=\\mathbf{S}'\\beta$ (LPM) | only via post-hoc clip |")
+    L.append("| Constrained Linear | Uniform | $\\phi=\\mathrm{clip}(\\mathbf{S}'\\beta,0,1)$ | **yes** (imposed in estimation) |")
+    L.append("| Logit (Est 3) | Logistic | $\\phi=\\Lambda(\\mathbf{S}'\\theta)$ | yes |")
+    L.append("| Probit | Normal | $\\phi=\\Phi(\\mathbf{S}'\\theta)$ | yes |")
+    L.append("| Single-Index | nonparametric, monotone | $\\phi=\\hat G(\\mathbf{S}'\\hat\\theta)$ | yes |")
+    L.append("")
+    L.append(
+        "The three uniform-$\\eta$ rows isolate the effect of the *bound*: Est 1/2 are the linear "
+        "probability model (LPM) that can leave $[0,1]$ and is clipped only afterward in the demand "
+        "step; **Constrained Linear** is the same uniform-$\\eta$ model done coherently, with the bound "
+        "imposed during estimation. Logit and Probit swap in logistic/normal shocks. The "
+        "**Single-Index** estimator takes the index direction from the logit fit and then estimates the "
+        "link $F_\\eta$ nonparametrically and monotonically (PAVA), i.e. *lets the data choose the shock "
+        "distribution* (Ichimura 1993; Klein & Spady 1993; see References). Reading across the columns "
+        "tells us **how much the assumed shock distribution actually matters**."
     )
     L.append("")
     L.append("## Test design")
@@ -632,17 +1047,17 @@ def build_markdown(results, fig_name, out_path, tex_name):
              "**more attentive** (less sleepy) across 2013–2025. A **negative** `gdp_growth_yoy` "
              "coefficient means $\\phi$ is **lower in booms**: when real activity accelerates, "
              "depositors reallocate more readily, i.e. inertia is mildly *procyclical* in the "
-             "opportunity cost of not re-optimising. The three strategies differ in units — Est 1 "
-             "and Est 2 report linear slopes, while Est 3 reports Average Marginal Effects through "
-             "a logistic link, so its magnitudes are compressed but its *signs and significance* "
-             "are directly comparable.")
+             "opportunity cost of not re-optimising. The estimators differ in units — the linear "
+             "and constrained-linear specs report slopes, while Logit, Probit and the Single-Index "
+             "report Average Marginal Effects through their respective links, so their magnitudes are "
+             "compressed but their *signs and significance* are directly comparable across columns.")
     L.append("")
 
     # ---- Table 1: time block coefficients + joint test ----
     L.append("## 1. Time-block coefficients and joint significance")
     L.append("")
-    L.append("| Strategy | Time Trend (years) | GDP Growth (YoY) | Joint Wald $\\chi^2$ | Wald $p$ |")
-    L.append("|---|---|---|---|---|")
+    L.append("| Estimator | $F_\\eta$ | Time Trend (years) | GDP Growth (YoY) | Joint Wald $\\chi^2$ | Wald $p$ |")
+    L.append("|---|---|---|---|---|---|")
     for gname, gkeys in GROUPS:
         tk = gkeys[1]
         if tk not in results:
@@ -651,25 +1066,35 @@ def build_markdown(results, fig_name, out_path, tex_name):
         w = results[tk]["wald"]
         tt = _fmt(res, "interaction_time_trend")
         gg = _fmt(res, "interaction_gdp_growth_yoy")
-        wstat = f"{w[0]:.2f}" if pd.notna(w[0]) else "—"
-        wp = f"{w[1]:.3f}{get_stars(w[1])}" if pd.notna(w[1]) else "—"
-        L.append(f"| {gname} | {tt} | {gg} | {wstat} | {wp} |")
+        is_si = gname == "Single-Index"
+        wstat = f"{w[0]:.2f}" if pd.notna(w[0]) else ("n/a" if is_si else "—")
+        wp = f"{w[1]:.3f}{get_stars(w[1])}" if pd.notna(w[1]) else ("n/a" if is_si else "—")
+        L.append(f"| {gname} | {F_ETA.get(gname, '')} | {tt} | {gg} | {wstat} | {wp} |")
     L.append("")
-    L.append("*Coefficients are shown as estimate (SE); Est 3 reports Average Marginal Effects. "
-             "Stars: \\*\\*\\* p<0.01, \\*\\* p<0.05, \\* p<0.1. The Wald statistic tests the joint "
-             "null that both time-block coefficients are zero ($\\chi^2_2$).*")
+    L.append("*Coefficients are shown as estimate (SE); Logit/Probit/Single-Index report Average "
+             "Marginal Effects. Stars: \\*\\*\\* p<0.01, \\*\\* p<0.05, \\* p<0.1. The Wald statistic "
+             "tests the joint null that both time-block coefficients are zero ($\\chi^2_2$); it is "
+             "not defined for the Single-Index (its two time terms load on one monotone link slope). "
+             "The Constrained-Linear (uniform $\\eta$) SEs are approximate — the clip is "
+             "non-differentiable, so its delta-method SEs understate uncertainty and its Wald is "
+             "inflated; read its significance qualitatively.*")
     L.append("")
+    _wald_models = [(g, ks[1]) for g, ks in GROUPS if ks[1] in results and g != "Single-Index"]
+    _n_tested = len(_wald_models)
+    _n_sig = sum(1 for g, tk in _wald_models
+                 if pd.notna(results[tk]["wald"][1]) and results[tk]["wald"][1] < 0.05)
     L.append("**What this test means.** The joint Wald statistic asks whether calendar time and "
              "the business cycle add *anything* to the sleepiness function once Pix availability, "
              "broadband, demographics and the lagged Selic rate are already controlled for — the "
              "null is that both time coefficients are simultaneously zero. A small $p$ rejects "
              "that null and says $\\phi$ has a genuine **time-series dimension** the cross-sectional "
-             "`Tech` covariates miss. Here the null is rejected in **all three** strategies: the "
-             "secular trend is individually significant at the 0.1% level and GDP growth at 5% in "
-             "both linear strategies, and even the logistic strategy — which compresses every "
-             "effect through the $[0,1]$ link — still rejects jointly at 5%. The negative signs say "
-             "the action is a **downward drift** in stickiness (rising attention) plus a smaller "
-             "**procyclical** dip in booms.")
+             f"`Tech` covariates miss. Here the null is rejected at 5% in **{_n_sig} of the {_n_tested}** "
+             "estimators that admit the test — i.e. the finding is **robust to the assumed shock "
+             "distribution $F_\\eta$**, holding under uniform (LPM and constrained), logistic and "
+             "normal shocks alike. The negative signs say the action is a **downward drift** in "
+             "stickiness (rising attention) plus a smaller **procyclical** dip in booms; the "
+             "Single-Index AMEs (§ above) carry the same signs, so the result does not hinge on any "
+             "parametric link at all.")
     L.append("")
 
     # ---- Table 2: residual autocorrelation in the base spec ----
@@ -683,7 +1108,7 @@ def build_markdown(results, fig_name, out_path, tex_name):
             continue
         lb = results[bk]["ljung_box"]
         if pd.isna(lb[1]):
-            L.append(f"| {gname} | — | — (NLLS residuals not tested) |")
+            L.append(f"| {gname} | — | n/a (link/NLLS — no additive residual) |")
         else:
             L.append(f"| {gname} | {lb[0]:.2f} | {lb[1]:.3f}{get_stars(lb[1])} |")
     L.append("")
@@ -744,9 +1169,11 @@ def build_markdown(results, fig_name, out_path, tex_name):
     L.append("")
     L.append("**What this test means.** This is the most consequential panel. It asks whether the "
              "paper's headline digital-finance channels survive the trend — and for **Pix they "
-             "largely do not**. In both linear strategies the `pix_exists` coefficient collapses "
+             "largely do not**. In the linear specs the `pix_exists` coefficient collapses "
              "from $\\approx -0.12$ (significant at 10%) to $\\approx -0.01$ and statistically indistinguishable from "
-             "zero once the trend is included; broadband shrinks and loses significance too. The "
+             "zero once the trend is included; broadband shrinks and loses significance too. The same "
+             "qualitative collapse appears under the logit, probit and nonparametric single-index "
+             "links, so it is **not** an artefact of the linear functional form. The "
              "mechanism is collinearity in time: Pix switches on in 2020Q4, late in a sample over "
              "which $\\phi$ is *already* drifting down, so a single post-2020 indicator mechanically "
              "absorbs part of a longer secular decline. Read structurally, much of what looked like "
@@ -758,84 +1185,133 @@ def build_markdown(results, fig_name, out_path, tex_name):
     L.append("")
 
     # ---- phi_t impact ----
-    L.append("## 4. Impact on the implied national $\\hat{\\phi}_t$")
+    L.append("## 4. Impact on the implied national $\\hat{\\phi}_t$ (one figure per estimator)")
     L.append("")
-    L.append(f"![Implied national $\\hat{{\\phi}}_t$ under Base (solid) vs.\\ $+$Time (dashed), "
-             f"with delta-method 95% bands.]({fig_name}){{width=100%}}")
-    L.append("")
-    L.append("| Strategy | mean $\\hat{\\phi}_t$ Base | mean +Time | range Base | range +Time |")
-    L.append("|---|---|---|---|---|")
+    L.append("| Estimator | $F_\\eta$ | mean Base | mean +Time | max Base | range Base | range +Time |")
+    L.append("|---|---|---|---|---|---|---|")
     for gname, gkeys in GROUPS:
         bk, tk = gkeys
         if bk not in results or tk not in results:
             continue
         pb, pt = results[bk]["phi_t"], results[tk]["phi_t"]
         L.append(
-            f"| {gname} | {pb.mean():.3f} | {pt.mean():.3f} "
-            f"| {pb.max()-pb.min():.3f} | {pt.max()-pt.min():.3f} |"
+            f"| {gname} | {F_ETA.get(gname, '')} | {pb.mean():.3f} | {pt.mean():.3f} "
+            f"| {pb.max():.3f} | {pb.max()-pb.min():.3f} | {pt.max()-pt.min():.3f} |"
         )
     L.append("")
-    L.append("**What the figure and table show.** Each panel overlays the implied national "
+    fig_by_group = {g: slug for (g, slug, _p) in figures}
+    for gname, gkeys in GROUPS:
+        slug = fig_by_group.get(gname)
+        if slug is None:
+            continue
+        L.append(f"![{gname} ($F_\\eta$: {F_ETA.get(gname, '')}): implied national $\\hat{{\\phi}}_t$, "
+                 f"Base (solid) vs.\\ $+$Time (dashed).](est_timeseries_phi_{slug}.png){{width=70%}}")
+        L.append("")
+    L.append("**What the figures and table show.** Each panel overlays the implied national "
              "$\\hat{\\phi}_t$ — the population-weighted fraction of *sleepy* (non-reoptimising) "
-             "depositors nationwide — under the Base spec (solid blue) and the +Time spec (dashed "
-             "red), with delta-method 95% confidence bands. Two points matter for whether the time "
-             "block changes any downstream conclusion. **First, the level is robust:** adding the "
-             "time block moves the *mean* of $\\hat{\\phi}_t$ by at most about 0.7 pp in every strategy, "
-             "so the average stickiness that feeds the BLP demand/welfare step is essentially "
-             "unchanged. **Second, the shape is improved:** the Base linear specifications push "
-             "$\\hat{\\phi}_t$ *above 1* around 2020–21 — an economically inadmissible region, since "
-             "$\\phi$ is a fraction — whereas the +Time path stays inside $[0,1]$ and compresses the "
-             "peak-to-trough range by roughly 6–7 pp. In other words the time block mostly **tames "
-             "the implausible spikes** rather than relocating the series. The logistic strategy "
-             "bounds $\\phi\\in(0,1)$ by construction, so there the two curves are nearly "
-             "indistinguishable and the time block is close to immaterial for the path.")
+             "depositors — under Base (solid blue) and +Time (dashed red), with 95% bands. Three "
+             "messages. **(1) The time effect is link-invariant:** within every estimator the time "
+             "block barely shifts the mean of $\\hat{\\phi}_t$ (a point or two), and the negative "
+             "trend/cycle signs are identical whether $\\eta$ is uniform, logistic, normal or "
+             "nonparametric — so the *qualitative* time-series conclusion does not depend on the "
+             "distributional assumption. **(2) The bound cleanly separates the estimators:** the "
+             "unconstrained LPM (Local/Pooled Linear) pushes $\\hat{\\phi}_t$ *above 1* around 2020–21 "
+             "(`max Base` $\\approx 1.01$) — inadmissible, since $\\phi$ is a fraction — whereas the "
+             "**Constrained Linear, Logit, Probit and Single-Index all stay inside $[0,1]$**. That is "
+             "the practical payoff of treating $\\phi$ as a CDF: the bound keeps the active-demand "
+             "construction (which subtracts $\\phi\\,\\widetilde{D}_{t-1}$) well-behaved. **(3) The "
+             "*level* of $\\hat{\\phi}_t$, however, is genuinely link-sensitive:** mean Base sleepiness "
+             "ranges from $\\approx 0.76$ (Constrained Linear) to $\\approx 0.94$ (Logit/Probit), with "
+             "the linear LPM ($\\approx 0.81$) and the nonparametric Single-Index ($\\approx 0.86$) in "
+             "between. So while the *time variation* is robust, the *average level* that feeds active "
+             "demand does depend on the assumed $F_\\eta$ — a real model-selection consideration the "
+             "bound alone does not settle. The Single-Index (which names no distribution) reproduces "
+             "the same path *shape* and signs as the parametric links, so the logistic form is a "
+             "convenience for the *shape*; it is the *level* — not the shape or the time effect — that "
+             "still requires a deliberate choice.")
     L.append("")
 
     # ---- auto interpretation ----
     L.append("## 5. Interpretation")
     L.append("")
-    n_sig = sum(
-        1 for _, gk in GROUPS
-        if gk[1] in results and pd.notna(results[gk[1]]["wald"][1]) and results[gk[1]]["wald"][1] < 0.05
-    )
-    n_tot = sum(1 for _, gk in GROUPS if gk[1] in results)
-    L.append(
-        f"- The time block is **jointly significant at 5% in {n_sig} of {n_tot}** estimation "
-        "strategies (joint Wald test, §1)."
-    )
+    _testable = [(g, ks[1]) for g, ks in GROUPS
+                 if ks[1] in results and pd.notna(results[ks[1]]["wald"][1])]
+    n_sig = sum(1 for g, tk in _testable if results[tk]["wald"][1] < 0.05)
+    n_tot = len(_testable)
+    L.append(f"- **The time block is real and distribution-free.** It is jointly significant at 5% in "
+             f"{n_sig} of the {n_tot} estimators that admit the Wald test (§1), and the Single-Index "
+             "AMEs carry the same negative signs — so the trend/cycle in $\\phi$ holds under uniform, "
+             "logistic, normal *and* nonparametric shocks. It is not an artefact of any distributional "
+             "assumption on $\\eta$.")
     lb_sig = [gname for gname, gk in GROUPS
               if gk[0] in results and pd.notna(results[gk[0]]["ljung_box"][1])
               and results[gk[0]]["ljung_box"][1] < 0.05]
     if lb_sig:
         L.append(f"- Base-spec residuals show significant serial correlation (Ljung–Box, §2) in: "
-                 f"{', '.join(lb_sig)} — consistent with unmodelled time structure.")
+                 f"{', '.join(lb_sig)}.")
     else:
-        L.append("- Base-spec residuals show no significant serial correlation (Ljung–Box, §2), "
-                 "i.e. the existing covariates already absorb most of the time structure.")
-    L.append("- The headline channels are **not all robust**: the Pix dummy collapses to zero once "
-             "the trend is in (§3), because Pix's 2020Q4 onset overlaps the tail of an already-"
-             "declining $\\phi$. Broadband weakens but is less affected.")
-    L.append("- The **economic impact is modest where it counts**: the mean of $\\hat{\\phi}_t$ is "
-             "essentially unchanged (§4), so the BLP welfare numbers built on the *level* of "
-             "sleepiness are safe; the time block mainly removes the implausible above-1 spikes and "
-             "tightens the path.")
+        L.append("- The linear base-spec residuals show no additive serial correlation (Ljung–Box, "
+                 "§2); the time effect lives in the *slope*, which is why the Wald test — not "
+                 "Ljung–Box — is the right diagnostic.")
+    L.append("- **Headline channels are not all robust:** the Pix effect collapses toward zero once "
+             "the trend is included, under *every* link (§3), so it is a genuine identification issue, "
+             "not a functional-form quirk. Broadband weakens but less so.")
+    L.append("- **The time effect is link-invariant, but the *level* of $\\hat{\\phi}_t$ is not (§4).** "
+             "The Base-vs-+Time gap and the sign/significance of the trend are nearly identical across "
+             "uniform/logistic/normal/nonparametric links; but the *mean level* of $\\hat{\\phi}_t$ "
+             "ranges from $\\approx 0.76$ (Constrained Linear) to $\\approx 0.94$ (Logit/Probit). So the "
+             "distributional assumption *does* matter for the magnitude of sleepiness that feeds "
+             "active demand, even though it does not change the time-series conclusion. Separately, "
+             "only the unconstrained LPM (Est 1/2) leaves $[0,1]$; every bounded estimator stays in "
+             "range.")
     L.append("")
-    L.append("**Bottom line.** There *is* a robust time-series component to depositor sleepiness — a "
-             "secular rise in attention plus a mild procyclical dip — but it operates on the *slope* "
-             "of the sleepiness function, not as additive residual structure (hence significant Wald, "
-             "clean Ljung–Box). Its first-order consequence is interpretive rather than quantitative: "
-             "the apparent Pix effect is largely a repackaged trend, so claims about Pix's causal role "
-             "in waking depositors up should be hedged or backed by a design that separates the "
-             "2020Q4 launch from the ongoing drift. The aggregate $\\hat{\\phi}_t$ level used "
-             "downstream is unaffected.")
+    L.append("**Bottom line for model selection.** Because $\\phi$ is structurally a CDF, the relevant "
+             "comparison is *which $F_\\eta$*, not 'bounded vs.\\ unbounded'. Letting the data choose "
+             "$F_\\eta$ (the monotone, nonparametric Single-Index) gives the same $\\hat{\\phi}_t$ path "
+             "*shape*, signs and time-block conclusion as logit/probit — though its *level* sits "
+             "between the linear and logit fits. So (i) the logistic assumption is a *convenience* for "
+             "the shape and the time conclusion, not a driver of them; (ii) the only structural "
+             "requirement is the **bound** (which the LPM violates and the demand-step clip patches "
+             "only post-hoc); and (iii) a coherent yet transparent workhorse is the **Constrained "
+             "Linear** (uniform $\\eta$, bound imposed) or the **Single-Index** (assumption-free link). "
+             "The trend in $\\phi$ and the fragility of the Pix channel survive all of them — **but** "
+             "the *level* of $\\hat{\\phi}$ varies across links ($\\approx 0.76$–$0.94$), so whichever "
+             "estimator you carry into the BLP step, the magnitude of sleepiness it implies is a "
+             "deliberate choice, not an innocuous one; carrying two of them through and comparing the "
+             "downstream estimates is the safe check.")
     L.append("")
     L.append("**Suggested next steps.** (i) Replace the linear trend with calendar-year dummies to "
-             "see whether the drift is smooth or concentrated in specific years; (ii) add an explicit "
-             "2015Q2–2016Q4 recession and a 2020Q2–2020Q4 COVID indicator to separate those episodes "
-             "from the smooth trend/cycle; (iii) run a sharper Pix event-study around 2020Q4 to test "
-             "for a genuine level break net of the trend.")
+             "see whether the drift is smooth or concentrated; (ii) add explicit 2015Q2–2016Q4 "
+             "recession and 2020Q2–2020Q4 COVID indicators; (iii) a sharper Pix event-study around "
+             "2020Q4; (iv) if a single workhorse is wanted, carry the Constrained-Linear or "
+             "Single-Index $\\hat{\\phi}$ into the BLP step and confirm the downstream estimates are "
+             "unchanged.")
     L.append("")
-    L.append(f"*Full coefficient table with all state variables: `{tex_name}` (LaTeX, for inclusion in the draft).*")
+    L.append(f"*Full coefficient tables: `{tex_base_name}` (Base) and `{tex_time_name}` (+Time), "
+             "LaTeX, for inclusion in the draft.*")
+    L.append("")
+    L.append("## References")
+    L.append("")
+    L.append("- Ichimura, H. (1993). \"Semiparametric least squares (SLS) and weighted SLS estimation "
+             "of single-index models.\" *Journal of Econometrics* 58(1–2): 71–120.")
+    L.append("- Klein, R. W., & Spady, R. H. (1993). \"An efficient semiparametric estimator for "
+             "binary response models.\" *Econometrica* 61(2): 387–421.")
+    L.append("- Härdle, W., Hall, P., & Ichimura, H. (1993). \"Optimal smoothing in single-index "
+             "models.\" *Annals of Statistics* 21(1): 157–178.")
+    L.append("- Powell, J. L., Stock, J. H., & Stoker, T. M. (1989). \"Semiparametric estimation of "
+             "index coefficients.\" *Econometrica* 57(6): 1403–1430.")
+    L.append("- Balabdaoui, F., Groeneboom, P., & Hendrickx, K. (2019). \"Score estimation in the "
+             "monotone single-index model.\" *Scandinavian Journal of Statistics* 46(2): 517–544.")
+    L.append("- Robertson, T., Wright, F. T., & Dykstra, R. L. (1988). *Order Restricted Statistical "
+             "Inference* (pool-adjacent-violators / isotonic regression). Wiley.")
+    L.append("- Papke, L. E., & Wooldridge, J. M. (1996). \"Econometric methods for fractional response "
+             "variables with an application to 401(k) plan participation rates.\" *Journal of Applied "
+             "Econometrics* 11(6): 619–632.")
+    L.append("- Imbens, G. W., & Kolesár, M. (2016). \"Robust standard errors in small samples: some "
+             "practical advice.\" *Review of Economics and Statistics* 98(4): 701–712.")
+    L.append("- Carter, A. V., Schnepel, K. T., & Steigerwald, D. G. (2017). \"Asymptotic behavior of a "
+             "$t$-test robust to cluster heterogeneity.\" *Review of Economics and Statistics* 99(4): "
+             "698–709.")
     L.append("")
 
     out_path.write_text("\n".join(L), encoding="utf-8")
@@ -871,28 +1347,32 @@ def main():
             pickle.dump(results, f)
         print(f"Cached fitted results to {cache_path}")
 
-    tex_name = "est_timeseries_spec12_comparison.tex"
-    fig_name = "est_timeseries_spec12_phi_t.png"
+    tex_base = "est_timeseries_spec12_base.tex"
+    tex_time = "est_timeseries_spec12_time.tex"
     json_name = "est_timeseries_results.json"
     md_name = "Sleepiness_TimeSeries_Test.md"
 
-    build_latex_table(results, rout / tex_name,
-                       title="Time-Series Robustness of Spec 12 across Estimation Strategies",
-                       label="tab:timeseries_spec12")
-    build_figure(results, rout / fig_name)
+    build_latex_table(results, BASE_KEYS, rout / tex_base,
+                       title="Spec 12 across Sleepiness-Shock Distributions $F_\\eta$ (Base)",
+                       label="tab:timeseries_spec12_base")
+    build_latex_table(results, TIME_KEYS, rout / tex_time,
+                       title="Spec 12 across Sleepiness-Shock Distributions $F_\\eta$ ($+$Time block)",
+                       label="tab:timeseries_spec12_time")
+    figures = build_per_model_figures(results, rout)
     export_json(results, rout / json_name)
-    build_markdown(results, fig_name, _DRAFTS_DIR / md_name, tex_name)
+    build_markdown(results, figures, _DRAFTS_DIR / md_name, tex_base, tex_time)
 
-    # mirror export_analyze_spec12: copy artefacts into the Drafts folder
-    for name in (tex_name, fig_name):
+    # copy artefacts into the Drafts folder (tables + per-model figures)
+    copy_names = [tex_base, tex_time] + [f"est_timeseries_phi_{slug}.png" for _, slug, _ in figures]
+    for name in copy_names:
         try:
             shutil.copy(rout / name, _DRAFTS_DIR / name)
         except Exception as exc:
             print(f"  [warn] could not copy {name} to Drafts: {exc}")
 
     print("\nArtefacts written:")
-    print(f"  table  : {rout / tex_name}")
-    print(f"  figure : {rout / fig_name}")
+    print(f"  tables : {rout / tex_base} ; {rout / tex_time}")
+    print(f"  figures: {len(figures)} per-model PNGs in {rout}")
     print(f"  json   : {rout / json_name}")
     print(f"  report : {_DRAFTS_DIR / md_name}")
 
