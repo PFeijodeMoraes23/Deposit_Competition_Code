@@ -50,6 +50,19 @@ DATA_ROOT: Path = BCB / "Egan_et_al_2025_Rep"
 RAW: Path       = DATA_ROOT / "raw"
 PROCESSED: Path = DATA_ROOT / "processed"
 
+# Shared cross-project datasets (ESTBAN / IF_DATA / COSIF / PIX) resolve via the
+# repo-wide config (Open-Finance/Code/of_paths.py) so they follow the per-project +
+# shared/ reorg (flip with OF_USE_SHARED). Falls back to the in-repo raw/ locations
+# if of_paths isn't importable (e.g. a standalone checkout of this repo).
+try:
+    import sys as _sys
+    _CODE_DIR = str(OPEN_FINANCE / "Code")
+    if _CODE_DIR not in _sys.path:
+        _sys.path.insert(0, _CODE_DIR)
+    import of_paths as _ofp
+except Exception:
+    _ofp = None
+
 
 def data_root() -> str:
     """Backwards-compatible accessor: the shared data root (…/Open-Finance) as a
@@ -60,9 +73,9 @@ def data_root() -> str:
 # ---------------------------------------------------------------------------
 # Raw download trees (consolidated under RAW/)
 # ---------------------------------------------------------------------------
-ESTBAN_DIR: Path   = RAW / "ESTBAN"      # whole ESTBAN tree (raw monthly CSVs + ESTBAN.csv)
-IF_DATA_ROOT: Path = RAW / "IF_DATA"     # whole IF-Data tree
-COSIF_RAW: Path    = RAW / "COSIF_RAW"
+ESTBAN_DIR: Path   = (_ofp.ESTBAN if _ofp else RAW / "ESTBAN")    # whole ESTBAN tree (raw monthly CSVs + ESTBAN.csv)
+IF_DATA_ROOT: Path = (_ofp.IF_DATA if _ofp else RAW / "IF_DATA")  # whole IF-Data tree
+COSIF_RAW: Path    = (_ofp.COSIF if _ofp else RAW / "COSIF_RAW")
 SGS_RAW: Path      = RAW / "SGS_RAW"
 ANATEL_RAW: Path   = RAW / "ANATEL"      # raw acessos_telefonia_movel_* downloads only
 CADUNICO_RAW: Path = RAW / "CadUnico"    # raw cadunico_YYYYMM.csv downloads only
@@ -89,7 +102,7 @@ ANATEL_DIR: Path    = OPEN_FINANCE / "ANATEL"     # anatel_mca_panel.csv / anate
 CADUNICO_DIR: Path  = OPEN_FINANCE / "CadUnico"   # cadunico_mca_panel.csv / cadunico_muni_panel.csv
 IBGE_DIR: Path      = OPEN_FINANCE / "IBGE"       # *_demographics_panel.csv, muni/region panels
 INCLUSION_DIR: Path = BCB / "Inclusion"           # bcb_inclusion_* / bcb_banked_* panels (pure processed)
-PIX_DIR: Path       = BCB / "PIX"                 # pix_*_panel.csv processed outputs
+PIX_DIR: Path       = (_ofp.PIX if _ofp else BCB / "PIX")         # pix_*_panel.csv processed outputs
 
 # BCB Tarifas (not moved; raw/ was empty — real data is in processed/ + cache/)
 TARIFAS_DIR: Path   = BCB / "Tarifas"

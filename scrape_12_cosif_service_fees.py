@@ -253,29 +253,37 @@ def _build_panel(records: list[dict], doc_code: str) -> pd.DataFrame:
     pf_pj_sum = wide[["svc_revenue_pf","svc_revenue_pj"]].sum(axis=1, min_count=1)
     wide["svc_revenue"] = wide["svc_revenue"].where(has_total, pf_pj_sum)
 
-    # Compute fee ratios (Nakane-style: revenue / deposit volume)
-    # We divide by 6 as Nakane did (semi-annual flow / 6 = monthly equivalent).
-    # COSIF saldos here are CUMULATIVE 6-month income statement flows (Jan-Jun or Jul-Dec).
-    svc_monthly = wide["svc_revenue"] / 6
-    wide["fee_ratio_demand"]  = svc_monthly / wide["dep_demand"]
-    wide["fee_ratio_savings"] = svc_monthly / wide["dep_savings"]
-    wide["fee_ratio_time"]    = svc_monthly / wide["dep_time"]
+    # ── Monthly increment correction ─────────────────────────────────────────
+    # COSIF income-statement accounts accumulate within each half-year
+    # (Jan–Jun = H1, Jul–Dec = H2). The Nakane /6 divisor underestimates Q1/Q3
+    # (3 months cumulative ÷ 6 ≈ 50% of true rate). Fix: diff within (entity,
+    # year, half) to recover true monthly revenue increments.
+    wide["year"]    = wide["data_base"].astype(str).str[:4].astype(int)
+    wide["month"]   = wide["data_base"].astype(str).str[4:6].astype(int)
+    wide["half_yr"] = np.where(wide["month"] <= 6, 1, 2)
+    wide = wide.sort_values([id_col, "year", "half_yr", "data_base"])
 
-    # For the aggregate ratio: traditional banks use sum of (demand+savings+time);
-    # payment institutions (Nubank, PagSeguro, Stone …) have those as NaN and
-    # instead report all balances in dep_total (account 41000007 = Outros Depositos
-    # for IPs, or the header total for banks). Fall back to dep_total when the
-    # sub-account sum is zero or missing.
+    def _inc(col: str) -> "pd.Series":
+        """Diff within (entity, year, half); fill first month of half with raw cumulative."""
+        d = wide.groupby([id_col, "year", "half_yr"])[col].diff()
+        return d.fillna(wide[col])
+
+    wide["svc_revenue_inc"]    = _inc("svc_revenue")
+    wide["svc_revenue_pf_inc"] = _inc("svc_revenue_pf")
+    wide["svc_revenue_pj_inc"] = _inc("svc_revenue_pj")
+
+    # Deposit sub-sum (traditional banks) vs dep_total header (payment institutions)
     dep_sub_sum = wide[["dep_demand", "dep_savings", "dep_time"]].sum(axis=1, min_count=1)
     dep_sub_sum = dep_sub_sum.where(dep_sub_sum > 0, other=wide["dep_total"])
-    wide["fee_ratio_all"] = svc_monthly / dep_sub_sum
 
-    # Universal ratio using the header total (works for all institution types)
-    wide["fee_ratio_total_deposits"] = svc_monthly / wide["dep_total"]
-
-    # PF / PJ breakdowns (2023+ only; NaN for older data)
-    wide["fee_ratio_pf"] = (wide["svc_revenue_pf"] / 6) / dep_sub_sum
-    wide["fee_ratio_pj"] = (wide["svc_revenue_pj"] / 6) / dep_sub_sum
+    # Fee ratios now use the monthly increment (correct) instead of cumulative/6
+    wide["fee_ratio_demand"]         = wide["svc_revenue_inc"] / wide["dep_demand"]
+    wide["fee_ratio_savings"]        = wide["svc_revenue_inc"] / wide["dep_savings"]
+    wide["fee_ratio_time"]           = wide["svc_revenue_inc"] / wide["dep_time"]
+    wide["fee_ratio_all"]            = wide["svc_revenue_inc"] / dep_sub_sum
+    wide["fee_ratio_total_deposits"] = wide["svc_revenue_inc"] / wide["dep_total"]
+    wide["fee_ratio_pf"] = wide["svc_revenue_pf_inc"] / dep_sub_sum
+    wide["fee_ratio_pj"] = wide["svc_revenue_pj_inc"] / dep_sub_sum
 
     return wide
 
