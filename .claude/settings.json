@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "additionalDirectories": [
+      "C:\\Users\\pedro\\AppData\\Roaming\\Code\\User",
+      "c:\\Users\\pedro\\.claude\\projects\\c--Users-pedro-OneDrive-Documentos-Yale-Year-3--2024---2025--Open-Finance-Open-Finance-Code-Egan-et-al-2025-Rep\\memory"
+    ],
+    "allow": [
+      "Read(//c/Users/pedro/OneDrive/Documentos/Yale/Year 3 \\(2024 - 2025\\)/Open Finance/_audit_output/**)"
+    ]
+  }
+}

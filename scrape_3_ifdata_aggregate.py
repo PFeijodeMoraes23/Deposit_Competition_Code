@@ -144,6 +144,13 @@ def process_values_dataframe(df, list_quarterly):
         df['Value'] = pd.to_numeric(df['Value'], errors='coerce', downcast='float')
     text_columns = ['NomeRelatorio', 'NomeColuna']
     df[text_columns] = df[text_columns].apply(lambda col: col.map(normalize_string_parentheses))
+    # Defensive: BCB's Olinda API occasionally returns the same row multiple times
+    # (e.g. Financial 2025_9 came back ~3x). Drop exact-duplicate value rows so the
+    # aggregates are never inflated, regardless of which type/period is affected.
+    before = len(df)
+    df = df.drop_duplicates()
+    if len(df) < before:
+        print(f"  dropped {before - len(df):,} exact-duplicate input rows")
     df = df.merge(list_quarterly, on='merge_key', how='left', suffixes=('', '_List'))
     redundant_columns = [col for col in df.columns if col.endswith('_List')]
     df.drop(columns=redundant_columns, inplace=True)
@@ -210,7 +217,7 @@ def process_main_loop(inst_types, reports_list, list_quarterly, folders, start_y
                         print(f"Error processing {file_name} for type {inst_type} ({folder_name}): {e}")
                 else:
                     print(f"File not found: {file_name} in ({folder_name}).")
-    save_type_report_frames(type_report_frames, folders['output'])
+    return type_report_frames
 
 
 # ===== Driver ================================================================
@@ -243,12 +250,7 @@ def main():
     end_year = _detect_end_year(folders)
     print(f"IF-Data aggregation: years {START_YEAR}..{end_year}")
 
-    # Back up the existing Aggregated Data folder once.
     out_dir = folders['output']
-    bak_dir = out_dir + "_bak"
-    if os.path.isdir(out_dir) and os.listdir(out_dir) and not os.path.isdir(bak_dir):
-        print(f"Backing up existing Aggregated Data -> {os.path.basename(bak_dir)}")
-        shutil.copytree(out_dir, bak_dir)
 
     # Process List crosswalk.
     list_quarterly = process_list_files(folders['list'], START_YEAR, end_year)
@@ -258,11 +260,55 @@ def main():
                                sep=",", encoding='utf-8')['NumeroRelatorio'].tolist()
     reports_list = [r for r in reports_list if r != 15]
 
-    process_main_loop([1, 2, 3], reports_list, list_quarterly, folders, START_YEAR, end_year)
+    type_report_frames = process_main_loop(
+        [1, 2, 3], reports_list, list_quarterly, folders, START_YEAR, end_year)
+
+    # Hygiene: warn about stale report files with no current-input source, and
+    # back up only the reports we are about to overwrite (timestamped).
+    bak_dir = _prepare_output(out_dir, type_report_frames)
+    save_type_report_frames(type_report_frames, out_dir)
     print("IF-Data aggregation complete.")
 
-    if args.verify and os.path.isdir(bak_dir):
+    if args.verify and bak_dir and os.path.isdir(bak_dir):
         _verify(out_dir, bak_dir)
+
+
+def _prepare_output(out_dir, type_report_frames):
+    """Pre-write hygiene before overwriting the Aggregated Data folder.
+
+    (1) Warn about existing report files that the current inputs will NOT
+        regenerate (left STALE) — this is exactly the trap that froze old
+        Financial history when its raw inputs went missing.
+    (2) Back up ONLY the report files we are about to overwrite, into a
+        timestamped ``Aggregated Data_bak_<ts>`` dir (cheap; never relies on a
+        single stale one-time backup). Returns that dir, or None.
+    """
+    import datetime
+    regenerated = {
+        f"IF_DATA_type_{k.split('_')[1]}_report_{k.split('_')[3]}.csv"
+        for k, frames in type_report_frames.items() if frames
+    }
+    existing = {os.path.basename(p)
+                for p in glob.glob(os.path.join(out_dir, "IF_DATA_type_*_report_*.csv"))}
+    stale = sorted(existing - regenerated)
+    if stale:
+        print("WARNING: existing report files have NO current-input source and will be "
+              "left STALE (not refreshed):")
+        for s in stale:
+            print(f"   STALE: {s}")
+        print("   -> not reproducible from the current inputs; verify/preserve before "
+              "trusting or deleting them.")
+    overwrite = sorted(existing & regenerated)
+    if not overwrite:
+        return None
+    ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    bak_dir = f"{out_dir}_bak_{ts}"
+    os.makedirs(bak_dir, exist_ok=True)
+    print(f"Backing up {len(overwrite)} report(s) about to be overwritten -> "
+          f"{os.path.basename(bak_dir)}")
+    for name in overwrite:
+        shutil.copy2(os.path.join(out_dir, name), os.path.join(bak_dir, name))
+    return bak_dir
 
 
 def _verify(out_dir: str, bak_dir: str):

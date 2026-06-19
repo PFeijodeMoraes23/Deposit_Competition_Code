@@ -61,6 +61,8 @@ os.makedirs(output_dir, exist_ok=True)
 
 output_type_1 = str(paths.IF_DATA_PRUDENTIAL)
 os.makedirs(output_type_1, exist_ok=True)
+output_type_2 = str(paths.IF_DATA_FINANCIAL)
+os.makedirs(output_type_2, exist_ok=True)
 output_type_3 = str(paths.IF_DATA_INDIVIDUAL)
 os.makedirs(output_type_3, exist_ok=True)
 
@@ -86,6 +88,7 @@ if resolve_script_paths is not None:
         {
             "if_list_output_dir": output_dir,
             "if_type1_output_dir": output_type_1,
+            "if_type2_output_dir": output_type_2,
             "if_type3_output_dir": output_type_3,
             "estban_mun_output_dir": output_estban_mun,
             "estban_ag_output_dir": output_estban_ag,
@@ -94,6 +97,7 @@ if resolve_script_paths is not None:
     )
     output_dir = _paths["if_list_output_dir"]
     output_type_1 = _paths["if_type1_output_dir"]
+    output_type_2 = _paths["if_type2_output_dir"]
     output_type_3 = _paths["if_type3_output_dir"]
     output_estban_mun = _paths["estban_mun_output_dir"]
     output_estban_ag = _paths["estban_ag_output_dir"]
@@ -175,6 +179,8 @@ def download_values(year, quarter, tipo, retries_number):
     # Skip if file already exists and is non-empty
     if tipo == '1':
         output_dir = output_type_1
+    elif tipo == '2':
+        output_dir = output_type_2
     else:
         output_dir = output_type_3
     file_path = os.path.join(output_dir, f"IF_DATA_Values_{year}_{quarter}.csv")
@@ -217,9 +223,25 @@ def download_values(year, quarter, tipo, retries_number):
             return True  # network request made
             break # to stop the retries if successful
         except requests.exceptions.HTTPError as err:
+            sc = getattr(response, "status_code", None)
+            # 502/503/504 are transient gateway/timeout errors (large @Relatorio='T'
+            # queries); retry with backoff instead of giving up immediately.
+            if sc in (502, 503, 504):
+                logging.warning(f"Transient HTTP {sc} for {year}-{quarter} (Type {tipo}).")
+                print(f"Transient HTTP {sc} for {year}-{quarter} (Type {tipo}).")
+                if i < retries - 1:
+                    wait_time = 30 * (2 ** i)
+                    print(f"Waiting {wait_time}s before retrying...")
+                    time.sleep(wait_time)
+                    continue
+                with open(file_path, "w") as f:
+                    f.write("CodInst,AnoMes,NomeRelatorio,NumeroRelatorio,Grupo,Conta,NomeColuna,Saldo\nSKIP_DUMMY\n")
+                logging.error(f"HTTP {sc} persisted for {year}-{quarter} (Type {tipo}) after {retries} attempts. Skipping.")
+                print(f"HTTP {sc} persisted for {year}-{quarter} (Type {tipo}) after {retries} attempts. Skipping.")
+                return False
             with open(file_path, "w") as f:
                 f.write("CodInst,AnoMes,NomeRelatorio,NumeroRelatorio,Grupo,Conta,NomeColuna,Saldo\nSKIP_DUMMY\n")
-            if response.status_code == 500:
+            if sc == 500:
                 logging.error(f"Server error 500 for {year}-{quarter} (Type {tipo}). Treating as unavailable and skipping.")
                 print(f"Server error 500 for {year}-{quarter} (Type {tipo}). Treating as unavailable and skipping.")
                 return False
@@ -242,17 +264,17 @@ def download_values(year, quarter, tipo, retries_number):
                     f.write("CodInst,AnoMes,NomeRelatorio,NumeroRelatorio,Grupo,Conta,NomeColuna,Saldo\nSKIP_DUMMY\n")
                 break
    
-def download_all_values(year,quarter, retries_number):
-    """Download all values for all institutions types in a given year and quarter in parallel.
-    Returns True if any type was actually downloaded (network request made)."""
+def download_all_values(year, quarter, retries_number, if_types=('1', '2', '3')):
+    """Download values for the requested institution types in a given year and quarter in parallel.
+    Returns True if any type was actually downloaded (network request made).
+    Types: 1 = Prudential Conglomerates, 2 = Financial Conglomerates, 3 = Individual Institutions."""
     global stop_event
     if stop_event.is_set():
         return False
-    
+
     any_fetched = False
     with ThreadPoolExecutor() as executor:
-        futures = [executor.submit(download_values, year, quarter, tipo, retries_number) for tipo in ['1', '3']]
-        # 1 = Prudential Conglomerates, 3 = Individual Institutions
+        futures = [executor.submit(download_values, year, quarter, tipo, retries_number) for tipo in if_types]
         for future in futures:
             try:
                 result = future.result()  # Wait for each future to complete
@@ -400,80 +422,77 @@ def download_estban(yyyymm, url_path, out_dir, csv_fname, retries_number):
 
 
 ## 5) Run fetch loops:
-start_year = 2016
-end_year = 2025
-months = list(range(1, 13))
-quarters = [3,6,9,12]
+quarters = [3, 6, 9, 12]
 
-retries_number = 3
 
-# Download IF Data
-for year in range(start_year, end_year+1):
-    # Download list -- IF Data only publishes institution registry for quarter-end months (3,6,9,12).
-    # All other months return a headers-only stub, so we only iterate over quarters.
-    any_list_downloaded = False
-    for quarter in quarters:
-        fetched = download_list(year, quarter, retries_number)
-        if fetched:
-            any_list_downloaded = True
-            random_wait = random.uniform(0,2)
-            time.sleep(15 + random_wait)
-    
-    if any_list_downloaded:
-        random_wait = random.uniform(0,15)
-        time.sleep(60 + random_wait)
-    
-    # Download values
-    for quarter in quarters:
-        fetched = download_all_values(year, quarter, retries_number)
-        if fetched:
-            random_wait = random.uniform(0,2)
-            time.sleep(15 + random_wait)
+def run_if_data(start_year, end_year, retries_number, if_types=('1', '2', '3'), skip_list=False):
+    """Download IF-Data List + Values for the given years and institution types."""
+    for year in range(start_year, end_year + 1):
+        # IF Data only publishes the institution registry (List) for quarter-end
+        # months (3,6,9,12); other months return a headers-only stub.
+        if not skip_list:
+            any_list_downloaded = False
+            for quarter in quarters:
+                fetched = download_list(year, quarter, retries_number)
+                if fetched:
+                    any_list_downloaded = True
+                    time.sleep(15 + random.uniform(0, 2))
+            if any_list_downloaded:
+                time.sleep(60 + random.uniform(0, 15))
 
-## 6) ESTBAN download loop
-# Fetches the full file listing from BCB's API and downloads any missing files.
-# Files are delivered as ZIPs and decompressed to CSV on disk.
-# The BCB listing goes back to 1988 but we only need from estban_start_year.
-estban_start_year = 2013
+        for quarter in quarters:
+            fetched = download_all_values(year, quarter, retries_number, if_types)
+            if fetched:
+                time.sleep(15 + random.uniform(0, 2))
 
-print("\n--- Starting ESTBAN downloads ---")
 
-# Fetch the available file listings from BCB
-listing_mun = fetch_estban_listing("municipio", retries_number)
-listing_ag  = fetch_estban_listing("agencia",   retries_number)
+def run_estban(retries_number, estban_start_year=2013):
+    """Fetch the BCB ESTBAN listing and download any missing municipality/agency files."""
+    import datetime
+    print("\n--- Starting ESTBAN downloads ---")
+    listing_mun = fetch_estban_listing("municipio", retries_number)
+    listing_ag = fetch_estban_listing("agencia", retries_number)
+    current_ym = int(datetime.date.today().strftime("%Y%m"))
 
-import datetime
-current_ym = int(datetime.date.today().strftime("%Y%m"))
+    for yyyymm_key, info in listing_mun.items():
+        ym_int = int(yyyymm_key)
+        if ym_int < estban_start_year * 100 + 1 or ym_int > current_ym:
+            continue
+        if download_estban(yyyymm_key, info["Url"], output_estban_mun,
+                            f"{yyyymm_key}_ESTBAN.CSV", retries_number):
+            time.sleep(5 + random.uniform(0, 2))
 
-for yyyymm_key, info in listing_mun.items():
-    ym_int = int(yyyymm_key)
-    if ym_int < estban_start_year * 100 + 1:  # e.g. 201301
-        continue
-    if ym_int > current_ym:
-        continue
-    fname_mun = f"{yyyymm_key}_ESTBAN.CSV"
-    fetched_mun = download_estban(
-        yyyymm_key, info["Url"],
-        output_estban_mun, fname_mun,
-        retries_number
-    )
-    if fetched_mun:
-        random_wait = random.uniform(0, 2)
-        time.sleep(5 + random_wait)
+    for yyyymm_key, info in listing_ag.items():
+        ym_int = int(yyyymm_key)
+        if ym_int < estban_start_year * 100 + 1 or ym_int > current_ym:
+            continue
+        if download_estban(yyyymm_key, info["Url"], output_estban_ag,
+                            f"{yyyymm_key}_ESTBAN_AG.CSV", retries_number):
+            time.sleep(5 + random.uniform(0, 2))
 
-for yyyymm_key, info in listing_ag.items():
-    ym_int = int(yyyymm_key)
-    if ym_int < estban_start_year * 100 + 1:
-        continue
-    if ym_int > current_ym:
-        continue
-    fname_ag = f"{yyyymm_key}_ESTBAN_AG.CSV"
-    fetched_ag = download_estban(
-        yyyymm_key, info["Url"],
-        output_estban_ag, fname_ag,
-        retries_number
-    )
-    if fetched_ag:
-        random_wait = random.uniform(0, 2)
-        time.sleep(5 + random_wait)
+
+def main():
+    import argparse
+    ap = argparse.ArgumentParser(description="Download BCB IF-Data + ESTBAN.")
+    ap.add_argument("--if-types", default="1,2,3",
+                    help="Comma list of IF-Data institution types to fetch "
+                         "(1=Prudential, 2=Financial, 3=Individual). Default: 1,2,3.")
+    ap.add_argument("--start-year", type=int, default=2016)
+    ap.add_argument("--end-year", type=int, default=2025)
+    ap.add_argument("--skip-list", action="store_true", help="Skip the IF-Data List download.")
+    ap.add_argument("--skip-if", action="store_true", help="Skip IF-Data entirely.")
+    ap.add_argument("--skip-estban", action="store_true", help="Skip the ESTBAN download.")
+    args = ap.parse_args()
+
+    if_types = tuple(t.strip() for t in args.if_types.split(",") if t.strip())
+    retries_number = 3
+
+    if not args.skip_if:
+        run_if_data(args.start_year, args.end_year, retries_number, if_types, args.skip_list)
+    if not args.skip_estban:
+        run_estban(retries_number)
+
+
+if __name__ == "__main__":
+    main()
 

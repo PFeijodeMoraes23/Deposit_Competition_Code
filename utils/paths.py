@@ -77,6 +77,7 @@ ESTBAN_RAW_AG: Path  = ESTBAN_DIR / "Relatório por município e agência"
 # IF-Data sub-paths
 IF_DATA_LIST: Path       = IF_DATA_ROOT / "List"
 IF_DATA_PRUDENTIAL: Path = IF_DATA_ROOT / "Prudential Conglomerates"
+IF_DATA_FINANCIAL: Path  = IF_DATA_ROOT / "Financial Conglomerates"
 IF_DATA_INDIVIDUAL: Path = IF_DATA_ROOT / "Individual Institutions"
 IF_DATA_AGG: Path        = IF_DATA_ROOT / "Aggregated Data"
 
@@ -108,7 +109,7 @@ ACCOUNTS: Path         = BCB / "Accounts"
 __all__ = [
     "OPEN_FINANCE", "BCB", "DATA_ROOT", "RAW", "PROCESSED", "data_root",
     "ESTBAN_DIR", "ESTBAN_CSV", "ESTBAN_RAW_MUN", "ESTBAN_RAW_AG",
-    "IF_DATA_ROOT", "IF_DATA_LIST", "IF_DATA_PRUDENTIAL", "IF_DATA_INDIVIDUAL", "IF_DATA_AGG",
+    "IF_DATA_ROOT", "IF_DATA_LIST", "IF_DATA_PRUDENTIAL", "IF_DATA_FINANCIAL", "IF_DATA_INDIVIDUAL", "IF_DATA_AGG",
     "COSIF_RAW", "SGS_RAW",
     "ANATEL_RAW", "CADUNICO_RAW", "PIX_RAW", "IBGE_RAW",
     "ANATEL_DIR", "CADUNICO_DIR", "IBGE_DIR", "INCLUSION_DIR", "PIX_DIR",
