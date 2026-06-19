@@ -14,6 +14,7 @@ Figures produced (Drafts/Deposit Competition/):
   fee_reversal_fig8_pix_did.png                PIX structural-break DiD (incumbents vs digitals)
   fee_reversal_fig9_event_study.png            Formal quarterly event study around PIX launch
   fee_reversal_fig10_correction_factor.png     2025 COSIF reclassification correction factors
+  fee_reversal_fig11_cvm_vs_cosif.png          CVM DRE vs COSIF cross-validation + deposit-acct share
   fee_reversal_summary.csv                     YoY decomposition data
   fee_reversal_correction_factors.csv          Per-bank 2025 correction factors
 
@@ -48,6 +49,7 @@ OUT_DIR.mkdir(parents=True, exist_ok=True)
 COSIF_CSV     = TARIF_DIR / "cosif_service_fees_institution.csv"
 TARIFF_LONG   = TARIF_DIR / "tarifas_panel_institution_long.csv"
 OFB_WIDE_CSV  = TARIF_DIR / "openfinance_fees_panel_wide.csv"
+CVM_FEE_CSV   = _REPO / "FirmDisclosures" / "CVM" / "cvm_fee_income.csv"
 
 
 def _savefig(fig, name: str, **kwargs) -> None:
@@ -895,6 +897,112 @@ def fig10_correction_factor(df: pd.DataFrame) -> pd.DataFrame:
     return cf
 
 
+# ── Fig 11: CVM DRE vs COSIF cross-validation ─────────────────────────────────
+def fig11_cvm_vs_cosif(df: pd.DataFrame) -> None:
+    """
+    Time-series comparison of annual fee/service revenue (CVM DRE, BRL bn)
+    against annualised COSIF fee ratio × total deposits (also BRL bn).
+
+    CVM = consolidated holding company revenue (all business lines).
+    COSIF = bank-entity 717xxx (deposit account services only).
+
+    The ratio CVM/COSIF measures how much of total service revenue comes from
+    deposit-account fees vs. other fee lines (insurance, asset mgmt, cards).
+    Expects ~2–5× for large diversified banks (only a fraction is 717xxx).
+
+    Uses December COSIF observation (H2-end increment × 12 months) × dep_total.
+    """
+    if not CVM_FEE_CSV.exists():
+        print(f"  [Fig 11 skipped] {CVM_FEE_CSV.name} not found — run scrape_24 first")
+        return
+
+    cvm = pd.read_csv(CVM_FEE_CSV, low_memory=False)
+    cvm = cvm[cvm["firm_key"] != "firm_key"].copy()
+    cvm["value"] = pd.to_numeric(cvm["value"], errors="coerce")
+    cvm["period_year"] = pd.to_numeric(cvm["period_year"], errors="coerce")
+    cvm["period_quarter"] = pd.to_numeric(cvm["period_quarter"], errors="coerce")
+
+    # Take DFP (full-year Q4) best metric per firm-year
+    dfp = cvm[(cvm["filing_form"] == "DFP") & (cvm["period_quarter"] == 4)].copy()
+    dfp["mrank"] = dfp["metric"].map({"fee_revenue": 0, "service_revenue": 1})
+    dfp = dfp.sort_values(["firm_key", "period_year", "mrank"])
+    dfp_best = dfp.groupby(["firm_key", "period_year"], as_index=False).first()
+
+    # Map CVM firm_key → bank label used in COSIF
+    cvm_to_bank = {
+        "bb":           "BB",
+        "bradesco":     "Bradesco",
+        "itau":         "Itaú",
+        "santander_br": "Santander",
+        "inter":        "Inter",
+    }
+
+    # COSIF: annualised Dec increment (rev × 12) in BRL bn
+    dec = df[df["month"] == 12].copy()
+    dec["cosif_rev_ann_bn"] = dec["svc_revenue_inc"] * 12 / 1e9   # H2-end increment → annual
+    dec["dep_total_bn"]     = dec["dep_total"] / 1e9
+
+    fig, axes = plt.subplots(1, 2, figsize=(13, 5.5))
+
+    # ── Left: absolute BRL bn comparison ───────────────────────────────────
+    ax = axes[0]
+    for fkey, bank in cvm_to_bank.items():
+        color = COLORS.get(bank, "#888")
+        ls_c = "-" if bank in INCUMBENTS else "--"
+        # CVM
+        sub_cvm = dfp_best[dfp_best["firm_key"] == fkey].sort_values("period_year")
+        ax.plot(sub_cvm["period_year"], sub_cvm["value"] / 1e9,
+                color=color, linestyle=ls_c, linewidth=1.8, marker="o", markersize=3,
+                label=f"{bank} CVM")
+        # COSIF
+        sub_cos = dec[dec["bank"] == bank].sort_values("year")
+        ax.plot(sub_cos["year"], sub_cos["cosif_rev_ann_bn"],
+                color=color, linestyle=":", linewidth=1.2, marker="^", markersize=3,
+                label=f"{bank} COSIF×12")
+
+    ax.set_ylabel("Annual fee/service revenue (BRL bn)")
+    ax.set_title("Left: CVM DRE (solid) vs COSIF annualised (dotted)\n"
+                 "CVM includes all fee lines; COSIF = 717xxx (deposit acct only).", fontsize=8.5)
+    ax.legend(ncol=2, fontsize=6.5, loc="upper left")
+    ax.axvline(2020.9, color="black", lw=0.8, ls="--", alpha=0.5)
+    ax.set_xlabel("Year")
+
+    # ── Right: CVM/COSIF ratio — how much of CVM is deposit-acct fees ──────
+    ax = axes[1]
+    for fkey, bank in cvm_to_bank.items():
+        color = COLORS.get(bank, "#888")
+        sub_cvm = dfp_best[dfp_best["firm_key"] == fkey].set_index("period_year")["value"]
+        sub_cos = dec[dec["bank"] == bank].set_index("year")["cosif_rev_ann_bn"] * 1e9
+
+        common_yrs = sorted(set(sub_cvm.index) & set(sub_cos.index))
+        if len(common_yrs) < 2:
+            continue
+        ratio = pd.Series(
+            {y: sub_cos.get(y, np.nan) / sub_cvm.get(y, np.nan)
+             for y in common_yrs}
+        ).dropna()
+        ax.plot(ratio.index, ratio.values * 100,
+                color=color, linewidth=1.8, marker="o", markersize=4, label=bank)
+
+    ax.set_ylabel("COSIF 717xxx / CVM total fee rev (%) — deposit-acct share")
+    ax.set_title("Right: fraction of total CVM fee income attributable\n"
+                 "to deposit-account services (COSIF 717xxx / CVM DRE).", fontsize=8.5)
+    ax.axhline(100, color="#555", lw=0.5, ls="--")
+    ax.set_ylim(0, 120)
+    ax.legend(fontsize=8)
+    ax.axvline(2020.9, color="black", lw=0.8, ls="--", alpha=0.5)
+    ax.set_xlabel("Year")
+
+    fig.suptitle(
+        "Fig 11 — CVM DRE vs COSIF: Total Fee Revenue and Deposit-Account Share\n"
+        "Validates both series; right panel shows what fraction of CVM revenue is 717xxx.",
+        fontsize=9, fontweight="bold",
+    )
+    fig.tight_layout()
+    _savefig(fig, "fee_reversal_fig11_cvm_vs_cosif.png")
+    plt.close(fig)
+
+
 # ── main ──────────────────────────────────────────────────────────────────────
 def main() -> None:
     df = load_data()
@@ -910,6 +1018,7 @@ def main() -> None:
     fig8_pix_did(df)
     fig9_event_study(df)
     cf = fig10_correction_factor(df)
+    fig11_cvm_vs_cosif(df)
 
     # ── Save summary CSV ────────────────────────────────────────────────────
     csv_out = OUT_DIR / "fee_reversal_summary.csv"

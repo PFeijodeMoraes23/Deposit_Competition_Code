@@ -1,0 +1,68 @@
+COSIF time-aggregation diagnostic
+RAW : C:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\shared\COSIF
+PROC: C:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\Egan_et_al_2025_Rep\processed\COSIF_PROCESSED
+========================================================================
+(1) EXPENSE DISACCUMULATION — reset-period detection
+========================================================================
+
+Analyzing 40 institutions with >=24 nonzero monthly expense obs.
+
+Reset-month frequency across institutions (month -> # institutions that
+show a >50% cumulative drop entering that month):
+  month  1:  40  ########################################
+  month  2:   0  
+  month  3:   0  
+  month  4:   2  ##
+  month  5:   0  
+  month  6:   0  
+  month  7:  40  ########################################
+  month  8:   2  ##
+  month  9:   1  #
+  month 10:   3  ###
+  month 11:   0  
+  month 12:   0  
+
+Per-institution reset-period classification:
+  annual (Jan only)       : 0
+  semiannual (Jan+Jul)    : 40
+  other/irregular         : 0
+
+Sample (first 12 institutions):
+  CNPJ 90400888: resets at months [1, 7, 9]  -> semiannual (Jan+Jul)
+  CNPJ 30306294: resets at months [1, 7, 10]  -> semiannual (Jan+Jul)
+  CNPJ 60701190: resets at months [1, 7]  -> semiannual (Jan+Jul)
+  CNPJ 60746948: resets at months [1, 7]  -> semiannual (Jan+Jul)
+  CNPJ 33172537: resets at months [1, 7]  -> semiannual (Jan+Jul)
+  CNPJ 28195667: resets at months [1, 7]  -> semiannual (Jan+Jul)
+  CNPJ 58160789: resets at months [1, 7]  -> semiannual (Jan+Jul)
+  CNPJ 60872504: resets at months [1, 7, 8]  -> semiannual (Jan+Jul)
+  CNPJ 01522368: resets at months [1, 7]  -> semiannual (Jan+Jul)
+  CNPJ 59588111: resets at months [1, 7]  -> semiannual (Jan+Jul)
+  CNPJ 62073200: resets at months [1, 7]  -> semiannual (Jan+Jul)
+  CNPJ 01701201: resets at months [1, 4, 7, 10]  -> semiannual (Jan+Jul)
+
+=> Disaccumulation must be PER-INSTITUTION and reset-aware: a fixed
+   'reset annually' rule would be wrong for semiannual filers (and
+   vice-versa).  Robust rule: flow_m = cum_m - cum_{m-1} within a run;
+   when cum drops (new period), flow_m = cum_m.
+
+========================================================================
+(2) STOCK DOUBLING at semester close (4010 + 4016 double-count)
+========================================================================
+
+Pipeline output: Estoque_Total at close month / mean(neighbour months):
+  June  (vs May/Jul): median=2.00  mean=2.03  n=1544  (=2.0 means perfectly doubled)
+  December (vs Nov): median=2.04  mean=4.43  n=1412  (=2.0 means perfectly doubled)
+
+Raw COSIF (BANCOS) document structure by month, Itau CNPJ 60701190:
+  month   DOCUMENTOs        grp4 rows 4010/4016   grp8 rows 4010/4016   sum(41) ratio 
+  202305  ['4010']          34/0                  17/0                  1.00x (all/4010)
+  202306  ['4010', '4016']  34/34                 17/0                  2.00x (all/4010)
+  202307  ['4010']          34/0                  16/0                  1.00x (all/4010)
+  202311  ['4010']          35/0                  16/0                  1.00x (all/4010)
+  202312  ['4010', '4016']  35/35                 16/0                  2.00x (all/4010)
+
+=> If 4016 appears only at Jun/Dec, duplicates group-4 rows, and the
+   all-docs/4010-only ratio ~2.0, the doubling is the 4016 balanco
+   double-count.  If 4016 has 0 group-8 rows, the EXPENSE is NOT
+   doubled (only the cumulative-flow defect applies to it).

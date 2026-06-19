@@ -213,10 +213,10 @@ def implied_phi_t(df: pd.DataFrame, res, link: str):
         for t in phi_t.index:
             lo[t] = hi[t] = phi_t[t]
 
-    # Cell-level out-of-bounds share: for the linear/uniform index, how many
-    # market-cells have an unbounded phi outside [0,1] (the LPM boundary breach
-    # that the bounded links avoid). Zero for logit/probit (bounded by the link).
-    frac_oob = float(np.mean((lin < 0) | (lin > 1))) if link in ("linear", "uniform") else 0.0
+    # Cell-level out-of-bounds share of the OUTPUT phi: only the unconstrained
+    # LPM (linear) leaves [0,1]; the uniform clip and the logit/probit links are
+    # bounded by construction, so this is ~0 for them.
+    frac_oob = float(np.mean((phi_mt < 0) | (phi_mt > 1)))
     return phi_t, pd.Series(lo), pd.Series(hi), frac_oob
 
 
@@ -970,7 +970,41 @@ def _fmt(res, v, digits=4):
     return f"{c:.{digits}f}{get_stars(p)} {se_str}"
 
 
+def _classify_time(results, param):
+    """Split +Time estimators by sign/significance of `param` (5% level).
+    Returns (negative_sig, positive_sig, insignificant) lists of estimator names.
+    Used to keep the interpretive prose faithful to whatever the current panel
+    produces, instead of hard-coding signs."""
+    neg_sig, pos_sig, insig = [], [], []
+    for gname, gkeys in GROUPS:
+        tk = gkeys[1]
+        if tk not in results:
+            continue
+        res = results[tk]["res"]
+        if param not in res.params.index:
+            continue
+        c = float(res.params[param])
+        p = res.pvalues[param] if param in res.pvalues.index else np.nan
+        if pd.notna(p) and p < 0.05:
+            (neg_sig if c < 0 else pos_sig).append(gname)
+        else:
+            insig.append(gname)
+    return neg_sig, pos_sig, insig
+
+
+def _join(names, empty="none"):
+    return ", ".join(names) if names else empty
+
+
 def build_markdown(results, figures, out_path, tex_base_name, tex_time_name):
+    # ---- dynamic summary so the interpretive prose tracks the current panel ----
+    tt_neg, tt_pos, tt_insig = _classify_time(results, "interaction_time_trend")
+    gg_neg, gg_pos, gg_insig = _classify_time(results, "interaction_gdp_growth_yoy")
+    base_means = {g: float(results[ks[0]]["phi_t"].mean()) for g, ks in GROUPS if ks[0] in results}
+    lvl_lo, lvl_hi = (min(base_means.values()), max(base_means.values())) if base_means else (np.nan, np.nan)
+    n_gg_sig = len(gg_neg) + len(gg_pos)
+    trend_robust = (len(tt_neg) == 0 or len(tt_pos) == 0) and len(tt_insig) == 0
+
     L = []
     L.append("# Time-Series Structure in the Depositor Sleepiness Function")
     L.append("")
@@ -1046,16 +1080,16 @@ def build_markdown(results, figures, out_path, tex_base_name, tex_time_name):
     L.append("")
     L.append("**How to read the coefficients.** Each time variable enters *multiplicatively*: "
              "it scales the slope on the no-rebalancing term $\\widetilde{D}_{t-1}$ "
-             "(`nr_lagged_dep`), so it shifts the *level* of $\\phi$ rather than adding a "
-             "separate intercept to deposits. A **negative** `time_trend` coefficient therefore "
-             "means $\\phi$ *declines* over calendar time — depositors become progressively "
-             "**more attentive** (less sleepy) across 2013–2025. A **negative** `gdp_growth_yoy` "
-             "coefficient means $\\phi$ is **lower in booms**: when real activity accelerates, "
-             "depositors reallocate more readily, i.e. inertia is mildly *procyclical* in the "
-             "opportunity cost of not re-optimising. The estimators differ in units — the linear "
-             "and constrained-linear specs report slopes, while Logit, Probit and the Single-Index "
-             "report Average Marginal Effects through their respective links, so their magnitudes are "
-             "compressed but their *signs and significance* are directly comparable across columns.")
+             "(`nr_lagged_dep`), so it shifts the *level* of $\\phi$. A **negative** coefficient means "
+             "$\\phi$ falls along that dimension — for `time_trend`, depositors growing more attentive "
+             "(less sleepy) over 2013–2025; for `gdp_growth_yoy`, $\\phi$ **lower in booms** (inertia "
+             "mildly *procyclical* in the opportunity cost of not re-optimising). A positive "
+             "coefficient is the reverse. As §1 shows, the *cycle* term comes out negative across the "
+             "board, but the *trend* sign turns out to **depend on the estimator**, so we read it per "
+             "column. The estimators differ in units — the linear and constrained-linear specs report "
+             "slopes, while Logit, Probit and the Single-Index report Average Marginal Effects through "
+             "their respective links, so magnitudes are compressed but *signs and significance* are "
+             "directly comparable across columns.")
     L.append("")
 
     # ---- Table 1: time block coefficients + joint test ----
@@ -1088,18 +1122,31 @@ def build_markdown(results, figures, out_path, tex_base_name, tex_time_name):
     _n_tested = len(_wald_models)
     _n_sig = sum(1 for g, tk in _wald_models
                  if pd.notna(results[tk]["wald"][1]) and results[tk]["wald"][1] < 0.05)
+    _wald_sig = [g for g, tk in _wald_models
+                 if pd.notna(results[tk]["wald"][1]) and results[tk]["wald"][1] < 0.05]
+    _trend_parts = []
+    if tt_neg:
+        _trend_parts.append(f"negative and significant in {_join(tt_neg)}")
+    if tt_pos:
+        _trend_parts.append(f"positive and significant in {_join(tt_pos)}")
+    if tt_insig:
+        _trend_parts.append(f"about zero and insignificant in {_join(tt_insig)}")
     L.append("**What this test means.** The joint Wald statistic asks whether calendar time and "
              "the business cycle add *anything* to the sleepiness function once Pix availability, "
              "broadband, demographics and the lagged Selic rate are already controlled for — the "
              "null is that both time coefficients are simultaneously zero. A small $p$ rejects "
              "that null and says $\\phi$ has a genuine **time-series dimension** the cross-sectional "
              f"`Tech` covariates miss. Here the null is rejected at 5% in **{_n_sig} of the {_n_tested}** "
-             "estimators that admit the test — i.e. the finding is **robust to the assumed shock "
-             "distribution $F_\\eta$**, holding under uniform (LPM and constrained), logistic and "
-             "normal shocks alike. The negative signs say the action is a **downward drift** in "
-             "stickiness (rising attention) plus a smaller **procyclical** dip in booms; the "
-             "Single-Index AMEs (§ above) carry the same signs, so the result does not hinge on any "
-             "parametric link at all.")
+             f"estimators that admit the test ({_join(_wald_sig)}). **But the decomposition matters — "
+             "and it is exactly where the link choice bites.** The **business-cycle term (GDP growth) "
+             f"is negative in every estimator** and significant in {_join(gg_neg + gg_pos)} — a robust "
+             "*cyclical* channel ($\\phi$ lower in booms). The **secular trend, by contrast, is not "
+             f"robust across $F_\\eta$**: it is {'; '.join(_trend_parts)}. So the time *dimension* "
+             "matters, but whether $\\phi$ carries a downward drift or essentially none — even the "
+             "trend's *sign* — **depends on the assumed shock distribution**: the bounded curved links "
+             "(logit/probit/single-index) read a gentle decline in stickiness, while the (near-)linear "
+             "LPM reads no trend. This makes the *Estimators* framing concrete — for the trend, the "
+             "choice of $F_\\eta$ is not innocuous.")
     L.append("")
 
     # ---- Table 2: residual autocorrelation in the base spec ----
@@ -1135,19 +1182,18 @@ def build_markdown(results, figures, out_path, tex_base_name, tex_time_name):
              "autocorrelation, so a rejection would flag exactly the misspecification this exercise "
              "is probing for.")
     L.append("")
-    L.append("**What this test means here — and why it does *not* contradict §1.** Ljung–Box checks "
-             "whether the *level* of the average quarterly residual is autocorrelated, the classic "
-             "footprint of an omitted additive trend or cycle. It does **not** reject here "
-             "(p $\\approx$ 0.86--0.90), which at first looks at odds with the strongly significant Wald "
-             "tests above. The two are measuring different objects. The time block does not enter "
-             "the model additively in the level; it **modulates the slope** on $\\widetilde{D}_{t-1}$. "
-             "Entity-demeaning together with the existing covariates already flattens the residual "
-             "*level*, so there is no leftover autocorrelation for Ljung–Box to find — yet the "
-             "*attention slope* still varies systematically over time, which is exactly what the "
-             "Wald test on the interacted block detects. The takeaway is methodological: for this "
-             "multiplicative specification the **joint Wald test on the interacted time terms — not "
-             "a residual-autocorrelation test — is the correct diagnostic**, and a clean Ljung–Box "
-             "is reassuring rather than contradictory (it rules out a crude additive misspecification).")
+    L.append("**What this test means here.** Ljung–Box checks whether the *level* of the average "
+             "quarterly residual is autocorrelated, the classic footprint of an omitted additive "
+             "trend or cycle. The linear base specs do **not** reject (E1/E2 $p$ in the table above), "
+             "so there is no leftover additive time structure in the residual level — and this is "
+             "*consistent* with §1, where the joint time block is itself insignificant for those same "
+             "linear specs (no tension). Where the time block *is* significant (the curved and "
+             "constrained links), the action is still not in the residual level: the time terms enter "
+             "**multiplicatively**, modulating the slope on $\\widetilde{D}_{t-1}$, which entity-"
+             "demeaning leaves in place even as the residual level stays flat. The methodological "
+             "takeaway stands: for this multiplicative specification the **joint Wald test on the "
+             "interacted time terms — not a residual-autocorrelation test — is the right diagnostic**; "
+             "a clean Ljung–Box rules out only a crude *additive* misspecification.")
     L.append("")
     L.append("*Caveat on power.* With only about 52 quarterly observations the test has limited "
              "power, so a non-rejection should be read as *no detectable additive autocorrelation*, "
@@ -1172,21 +1218,20 @@ def build_markdown(results, figures, out_path, tex_base_name, tex_time_name):
     L.append("*If adding the time block leaves Pix and broadband coefficients stable, those "
              "channels were not merely proxying for an omitted trend.*")
     L.append("")
-    L.append("**What this test means.** This is the most consequential panel. It asks whether the "
-             "paper's headline digital-finance channels survive the trend — and for **Pix they "
-             "largely do not**. In the linear specs the `pix_exists` coefficient collapses "
-             "from $\\approx -0.12$ (significant at 10%) to $\\approx -0.01$ and statistically indistinguishable from "
-             "zero once the trend is included; broadband shrinks and loses significance too. The same "
-             "qualitative collapse appears under the logit, probit and nonparametric single-index "
-             "links, so it is **not** an artefact of the linear functional form. The "
-             "mechanism is collinearity in time: Pix switches on in 2020Q4, late in a sample over "
-             "which $\\phi$ is *already* drifting down, so a single post-2020 indicator mechanically "
-             "absorbs part of a longer secular decline. Read structurally, much of what looked like "
-             "a 'Pix made depositors more attentive' effect is better described as 'depositors were "
-             "trending more attentive throughout, and Pix arrived near the end of that trend.' This "
-             "is an **identification caveat**, not proof Pix is irrelevant — disentangling a "
-             "level-shift at Pix launch from the ongoing trend would need either a sharper "
-             "event-study design around 2020Q4 or cross-sectional variation in Pix exposure.")
+    L.append("**What this test means.** It asks whether the headline digital-finance channels are "
+             "stable when the time block is added — i.e. whether they were merely proxying for the "
+             "trend. On the current panel the two channels behave very differently. **Pix is a weak, "
+             "near-null channel throughout:** in the linear specs its coefficient is small and "
+             "insignificant in both Base and +Time; in the curved links (logit/probit/single-index) it "
+             "is at most marginally negative in Base (AME on the order of $-0.005$ to $-0.008$) and "
+             "indistinguishable from zero once the trend is in. So there is no strong 'Pix effect' to "
+             "be robust or fragile here — one should be cautious reading a causal Pix channel into the "
+             "sleepiness function on these data. **Broadband, by contrast, is the robust digital "
+             "channel:** it is positive and significant under the constrained-linear, logit, probit "
+             "and single-index links, and it **barely moves when the time block is added** (Base vs "
+             "+Time coefficients are close), so it is *not* simply standing in for the secular trend. "
+             "The linear LPM leaves both insignificant, consistent with its weaker identification near "
+             "the $[0,1]$ ceiling.")
     L.append("")
 
     # ---- phi_t impact ----
@@ -1199,7 +1244,7 @@ def build_markdown(results, figures, out_path, tex_base_name, tex_time_name):
         if bk not in results or tk not in results:
             continue
         pb, pt = results[bk]["phi_t"], results[tk]["phi_t"]
-        oob = results[bk].get("frac_oob", 0.0)
+        oob = results[bk].get("frac_oob", 0.0) if results[bk].get("link") == "linear" else 0.0
         oob_str = f"{oob*100:.1f}\\%" if oob > 0 else "0"
         L.append(
             f"| {gname} | {F_ETA.get(gname, '')} | {pb.mean():.3f} | {pt.mean():.3f} "
@@ -1221,27 +1266,25 @@ def build_markdown(results, figures, out_path, tex_base_name, tex_time_name):
     L.append("**What the figures and table show.** Each panel overlays the implied national "
              "$\\hat{\\phi}_t$ — the population-weighted fraction of *sleepy* (non-reoptimising) "
              "depositors — under Base (solid blue) and +Time (dashed red), with 95% bands. Three "
-             "messages. **(1) The time effect is link-invariant:** within every estimator the time "
-             "block barely shifts the mean of $\\hat{\\phi}_t$ (a point or two), and the negative "
-             "trend/cycle signs are identical whether $\\eta$ is uniform, logistic, normal or "
-             "nonparametric — so the *qualitative* time-series conclusion does not depend on the "
-             "distributional assumption. **(2) The bound cleanly separates the estimators:** the "
-             "unconstrained LPM (Local/Pooled Linear) produces $\\phi_{mt}$ *outside* $[0,1]$ for a "
-             "non-trivial share of market-cells (the `cells $\\phi\\notin[0,1]$` column, on the order "
-             "of a tenth) — inadmissible, since $\\phi$ is a fraction — even though its pop-weighted "
-             "*national* $\\hat{\\phi}_t$ now stays just under 1 on the current panel; the "
-             "**Constrained Linear, Logit, Probit and Single-Index never breach the bound**. That is "
-             "the practical payoff of treating $\\phi$ as a CDF: the bound keeps the active-demand "
-             "construction (which subtracts $\\phi\\,\\widetilde{D}_{t-1}$) well-behaved. **(3) The "
-             "*level* of $\\hat{\\phi}_t$, however, is genuinely link-sensitive:** mean Base sleepiness "
-             "ranges from $\\approx 0.76$ (Constrained Linear) to $\\approx 0.94$ (Logit/Probit), with "
-             "the linear LPM ($\\approx 0.81$) and the nonparametric Single-Index ($\\approx 0.86$) in "
-             "between. So while the *time variation* is robust, the *average level* that feeds active "
-             "demand does depend on the assumed $F_\\eta$ — a real model-selection consideration the "
-             "bound alone does not settle. The Single-Index (which names no distribution) reproduces "
-             "the same path *shape* and signs as the parametric links, so the logistic form is a "
-             "convenience for the *shape*; it is the *level* — not the shape or the time effect — that "
-             "still requires a deliberate choice.")
+             "messages. **(1) The cycle is link-robust; the trend is not.** Across every estimator the "
+             "GDP-growth term is negative (a procyclical dip in $\\hat{\\phi}_t$), but the secular "
+             "drift differs by link: the curved links (logit/probit/single-index) trend gently "
+             "*down*, whereas the (near-)linear LPM is essentially flat — visible as the slightly "
+             "different slopes of the +Time (dashed) paths. **(2) The bound cleanly separates the "
+             "estimators:** the unconstrained LPM (Local/Pooled Linear) produces $\\phi_{mt}$ "
+             "*outside* $[0,1]$ for a non-trivial share of market-cells (the `cells $\\phi\\notin[0,1]$` "
+             "column — on the order of 13–18% here) — inadmissible, since $\\phi$ is a fraction — even "
+             "though its pop-weighted *national* $\\hat{\\phi}_t$ stays just under 1; the **Constrained "
+             "Linear, Logit, Probit and Single-Index never breach the bound**. That is the practical "
+             "payoff of treating $\\phi$ as a CDF: the bound keeps the active-demand construction "
+             "(which subtracts $\\phi\\,\\widetilde{D}_{t-1}$) well-behaved. **(3) The *level* of "
+             f"$\\hat{{\\phi}}_t$ is fairly robust across links** — mean Base sleepiness sits in a "
+             f"narrow {lvl_lo:.2f}–{lvl_hi:.2f} band across uniform, logistic, normal and "
+             "nonparametric shocks. So on this panel the distributional choice barely moves the "
+             "*level* of stickiness that feeds active demand; where it bites instead is the **trend** "
+             "(message 1). The Single-Index — which names no distribution — sits squarely among the "
+             "parametric links in both level and shape, so the logistic form is a convenience, not a "
+             "driver of the level.")
     L.append("")
 
     # ---- auto interpretation ----
@@ -1251,11 +1294,13 @@ def build_markdown(results, figures, out_path, tex_base_name, tex_time_name):
                  if ks[1] in results and pd.notna(results[ks[1]]["wald"][1])]
     n_sig = sum(1 for g, tk in _testable if results[tk]["wald"][1] < 0.05)
     n_tot = len(_testable)
-    L.append(f"- **The time block is real and distribution-free.** It is jointly significant at 5% in "
-             f"{n_sig} of the {n_tot} estimators that admit the Wald test (§1), and the Single-Index "
-             "AMEs carry the same negative signs — so the trend/cycle in $\\phi$ holds under uniform, "
-             "logistic, normal *and* nonparametric shocks. It is not an artefact of any distributional "
-             "assumption on $\\eta$.")
+    L.append(f"- **The time block matters, but mostly through the *cycle*.** It is jointly significant "
+             f"at 5% in {n_sig} of the {n_tot} estimators that admit the Wald test (§1). The "
+             "business-cycle (GDP-growth) term is **negative in every estimator** — a robust "
+             "procyclical channel. The **secular trend, however, is not robust**: it is "
+             f"{'; '.join(_trend_parts)} (§1). So the trend's *sign* depends on the assumed shock "
+             "distribution $F_\\eta$ — a concrete instance of the model-selection point, since $\\phi$ "
+             "is structurally a CDF.")
     lb_sig = [gname for gname, gk in GROUPS
               if gk[0] in results and pd.notna(results[gk[0]]["ljung_box"][1])
               and results[gk[0]]["ljung_box"][1] < 0.05]
@@ -1266,39 +1311,37 @@ def build_markdown(results, figures, out_path, tex_base_name, tex_time_name):
         L.append("- The linear base-spec residuals show no additive serial correlation (Ljung–Box, "
                  "§2); the time effect lives in the *slope*, which is why the Wald test — not "
                  "Ljung–Box — is the right diagnostic.")
-    L.append("- **Headline channels are not all robust:** the Pix effect collapses toward zero once "
-             "the trend is included, under *every* link (§3), so it is a genuine identification issue, "
-             "not a functional-form quirk. Broadband weakens but less so.")
-    L.append("- **The time effect is link-invariant, but the *level* of $\\hat{\\phi}_t$ is not (§4).** "
-             "The Base-vs-+Time gap and the sign/significance of the trend are nearly identical across "
-             "uniform/logistic/normal/nonparametric links; but the *mean level* of $\\hat{\\phi}_t$ "
-             "ranges from $\\approx 0.76$ (Constrained Linear) to $\\approx 0.94$ (Logit/Probit). So the "
-             "distributional assumption *does* matter for the magnitude of sleepiness that feeds "
-             "active demand, even though it does not change the time-series conclusion. Separately, "
-             "only the unconstrained LPM (Est 1/2) leaves $[0,1]$; every bounded estimator stays in "
-             "range.")
+    L.append("- **Pix is a near-null channel on this panel (§3)** — small and insignificant in the "
+             "linear specs, at most marginally negative in the curved links. **Broadband** is the "
+             "robust positive digital channel and is stable to adding the time block, so it is not "
+             "merely proxying the trend.")
+    L.append("- **The *level* of $\\hat{\\phi}_t$ is fairly robust across links (§4)** — a narrow "
+             f"{lvl_lo:.2f}–{lvl_hi:.2f} band across uniform/logistic/normal/nonparametric — so the "
+             "distributional choice barely moves the magnitude of sleepiness that feeds active demand. "
+             "Where it bites is the *trend*, not the level. Separately, only the unconstrained LPM "
+             "(Est 1/2) leaves $[0,1]$ at the cell level; every bounded estimator stays in range.")
     L.append("")
     L.append("**Bottom line for model selection.** Because $\\phi$ is structurally a CDF, the relevant "
-             "comparison is *which $F_\\eta$*, not 'bounded vs.\\ unbounded'. Letting the data choose "
-             "$F_\\eta$ (the monotone, nonparametric Single-Index) gives the same $\\hat{\\phi}_t$ path "
-             "*shape*, signs and time-block conclusion as logit/probit — though its *level* sits "
-             "between the linear and logit fits. So (i) the logistic assumption is a *convenience* for "
-             "the shape and the time conclusion, not a driver of them; (ii) the only structural "
-             "requirement is the **bound** (which the LPM violates and the demand-step clip patches "
-             "only post-hoc); and (iii) a coherent yet transparent workhorse is the **Constrained "
-             "Linear** (uniform $\\eta$, bound imposed) or the **Single-Index** (assumption-free link). "
-             "The trend in $\\phi$ and the fragility of the Pix channel survive all of them — **but** "
-             "the *level* of $\\hat{\\phi}$ varies across links ($\\approx 0.76$–$0.94$), so whichever "
-             "estimator you carry into the BLP step, the magnitude of sleepiness it implies is a "
-             "deliberate choice, not an innocuous one; carrying two of them through and comparing the "
-             "downstream estimates is the safe check.")
+             "comparison is *which $F_\\eta$*, not 'bounded vs.\\ unbounded'. On the current panel the "
+             "answer is nuanced: the **level** of $\\hat{\\phi}$ and the **cycle** are robust to the "
+             "link (the Single-Index, which names no distribution, lands among the parametric fits), so "
+             "for those the logistic form is a convenience, not a driver. **But the secular *trend* is "
+             "link-dependent** — the curved links (logit/probit/single-index) read a gentle decline in "
+             "stickiness while the (near-)linear LPM reads none — so any claim about a time *trend* in "
+             "depositor attention is only as firm as the distributional assumption behind it. Practical "
+             "implications: (i) the only structural must-have is the **bound** (the LPM violates it for "
+             "13–18% of cells; the demand-step clip patches it only post-hoc); (ii) a coherent, "
+             "transparent workhorse is the **Constrained Linear** (uniform $\\eta$, bound imposed) or "
+             "the **Single-Index** (assumption-free link); and (iii) since the *trend* is the fragile "
+             "object, report it across links rather than from a single one, and lean on the robust "
+             "*cycle* and *level* for anything downstream.")
     L.append("")
-    L.append("**Suggested next steps.** (i) Replace the linear trend with calendar-year dummies to "
-             "see whether the drift is smooth or concentrated; (ii) add explicit 2015Q2–2016Q4 "
-             "recession and 2020Q2–2020Q4 COVID indicators; (iii) a sharper Pix event-study around "
-             "2020Q4; (iv) if a single workhorse is wanted, carry the Constrained-Linear or "
+    L.append("**Suggested next steps.** (i) Replace the linear trend with calendar-year dummies to see "
+             "whether the drift is smooth or concentrated, and whether the trend's link-dependence "
+             "persists; (ii) add explicit 2015Q2–2016Q4 recession and 2020Q2–2020Q4 COVID indicators "
+             "to pin the cycle; (iii) if a single workhorse is wanted, carry the Constrained-Linear and "
              "Single-Index $\\hat{\\phi}$ into the BLP step and confirm the downstream estimates are "
-             "unchanged.")
+             "unchanged (they should be, given the level is robust).")
     L.append("")
     L.append(f"*Full coefficient tables: `{tex_base_name}` (Base) and `{tex_time_name}` (+Time), "
              "LaTeX, for inclusion in the draft.*")

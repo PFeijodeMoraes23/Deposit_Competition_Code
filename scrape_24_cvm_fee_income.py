@@ -66,6 +66,16 @@ OUT_CSV = os.path.join(OUT_DIR, "cvm_fee_income.csv")
 CVM_BASE = "https://dados.cvm.gov.br/dados/CIA_ABERTA/DOC/{doc}/DADOS/{doc_l}_cia_aberta_{year}.zip"
 SCALE = {"MIL": 1e3, "UNIDADE": 1.0, "MILHAO": 1e6, "MILHÃO": 1e6}
 
+# Some firms file CVM under a holding-company CNPJ different from the COSIF bank CNPJ.
+# Maps firm_key -> additional CVM CNPJ root(s) to match.
+_CVM_CNPJ_OVERRIDES: dict[str, list[str]] = {
+    # Itaú Unibanco Holding S.A. (60872504) files CVM DFP/ITR; the bank entity (60701190)
+    # only appears in COSIF, not in CVM consolidated filings.
+    "itau": ["60872504"],
+    # Caixa Econômica Federal (00360305) is a federal public entity and does NOT file
+    # with CVM. No override — will simply remain absent from this panel.
+}
+
 
 def _accent_free(s: str) -> str:
     """Remove diacritics and lower-case."""
@@ -77,17 +87,21 @@ def _accent_free(s: str) -> str:
 
 # Keywords for fee / service-income DRE lines (applied to accent-free, lower-case DS_CONTA)
 _FEE_KEYWORDS = [
+    # Narrow (tariff-specific)
     "receita de tarifa",
     "receitas de tarifa",
     "tarifas bancaria",
     "tarifa bancaria",
-    "receita de prestacao de servico",
-    "receitas de prestacao de servico",
-    "prestacao de servico",        # broader; classified separately
-    "receita de servico",
-    "receitas de servico",
+    "tarifas e comissoes",          # "Receita Líquida de Tarifas e Comissões" (Itaú 3.04.05.01)
+    "de tarifas",                   # fallback for "Receita Líquida de Tarifas..."
     "comissoes e tarifas",
     "rendas de tarifas",
+    # Broader (service income)
+    "receita de prestacao de servico",
+    "receitas de prestacao de servico",
+    "prestacao de servico",
+    "receita de servico",
+    "receitas de servico",
     "rendas de servico",
 ]
 
@@ -101,7 +115,12 @@ def _classify_fee(ds_norm: str) -> str | None:
     Returns one of:
       'fee_revenue'      — narrowly tagged as tariff/fee line
       'service_revenue'  — broader service/commission income
+
+    Lines that contain 'despesa' or 'custo' are expense lines — skip them.
     """
+    # Skip expense lines (Despesas de tarifas, etc.)
+    if "despesa" in ds_norm or "custo " in ds_norm:
+        return None
     for kw in _NARROW_KEYWORDS:
         if kw in ds_norm:
             return "fee_revenue"
@@ -155,7 +174,15 @@ def parse_dre(raw: bytes, doc: str, firms: list[dict],
             if len(cnpj_digits) < 8:
                 continue
             cnpj_root = cnpj_digits[:8].zfill(8)
+            # Primary match on registered CNPJ root
             firm = next((f for f in firms if cnpj_root == f["cnpj_root"]), None)
+            # Secondary match via CVM holding-company overrides
+            if firm is None:
+                firm = next(
+                    (f for f in firms
+                     if cnpj_root in _CVM_CNPJ_OVERRIDES.get(f["firm_key"], [])),
+                    None,
+                )
             if not firm:
                 continue
 
