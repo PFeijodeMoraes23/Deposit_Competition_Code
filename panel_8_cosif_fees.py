@@ -181,6 +181,13 @@ def aggregate_cosif_to_conglomerate_quarter(
     cosif: pd.DataFrame,
     cmap:  pd.DataFrame,
 ) -> pd.DataFrame:
+    """
+    Aggregate COSIF institution panel to conglomerate × quarter.
+
+    Uses monthly revenue increments (not cumulative/6) to compute correct
+    quarterly fee ratios: Q_ratio = sum(3 monthly increments) / EOM deposit stock.
+    If the parquet pre-dates the increment fix, recomputes increments on the fly.
+    """
     cosif = cosif.copy()
     cosif["cnpj"] = cosif["cnpj"].astype(str).str.zfill(8)
     cosif = cosif.merge(cmap, on="cnpj", how="left")
@@ -188,16 +195,57 @@ def aggregate_cosif_to_conglomerate_quarter(
     cosif["year"], cosif["quarter"] = _to_quarter(cosif["data_base"])
     cosif["month"] = cosif["data_base"].astype(str).str[4:6].astype(int)
 
-    cosif_eom = cosif[cosif["month"].isin({3, 6, 9, 12})].copy()
-    if cosif_eom.empty:
-        log.warning("No end-of-quarter observations — using all months.")
-        cosif_eom = cosif.copy()
+    # ── Ensure svc_revenue_inc is available ────────────────────────────────
+    # scrape_12 >= fix: column already present.  scrape_12 < fix: recompute.
+    if "svc_revenue_inc" not in cosif.columns:
+        log.info("svc_revenue_inc not in parquet — computing from cumulative svc_revenue")
+        cosif["half_yr"] = np.where(cosif["month"] <= 6, 1, 2)
+        cosif = cosif.sort_values(["cnpj", "year", "half_yr", "month"])
+        for col, out in [("svc_revenue", "svc_revenue_inc"),
+                         ("svc_revenue_pf", "svc_revenue_pf_inc"),
+                         ("svc_revenue_pj", "svc_revenue_pj_inc")]:
+            if col in cosif.columns:
+                d = cosif.groupby(["cnpj", "year", "half_yr"])[col].diff()
+                cosif[out] = d.fillna(cosif[col])
+            else:
+                cosif[out] = np.nan
+    else:
+        log.info("Using pre-computed svc_revenue_inc from parquet")
+        for col, out in [("svc_revenue_pf", "svc_revenue_pf_inc"),
+                         ("svc_revenue_pj", "svc_revenue_pj_inc")]:
+            if out not in cosif.columns and col in cosif.columns:
+                cosif["half_yr"] = cosif.get("half_yr",
+                                             np.where(cosif["month"] <= 6, 1, 2))
+                d = cosif.groupby(["cnpj", "year", "half_yr"])[col].diff()
+                cosif[out] = d.fillna(cosif[col])
 
-    grp = (
-        cosif_eom.groupby(["cod_cong_prudencial", "year", "quarter"], as_index=False)
-        [FEE_COLS]
-        .median()
+    # ── Quarterly aggregation ───────────────────────────────────────────────
+    # Step 1: sum monthly revenue increments within (conglomerate, year, quarter)
+    cosif = cosif.sort_values(["cod_cong_prudencial", "year", "quarter", "month"])
+    q_rev = (
+        cosif.groupby(["cod_cong_prudencial", "year", "quarter"], as_index=False)
+        .agg(
+            svc_revenue_q    =("svc_revenue_inc",    "sum"),
+            svc_revenue_pf_q =("svc_revenue_pf_inc", "sum"),
+            svc_revenue_pj_q =("svc_revenue_pj_inc", "sum"),
+            dep_demand       =("dep_demand",  "last"),
+            dep_savings      =("dep_savings", "last"),
+            dep_time         =("dep_time",    "last"),
+            dep_total        =("dep_total",   "last"),
+        )
     )
+
+    # Step 2: compute quarterly fee ratios
+    dep_sub = q_rev[["dep_demand", "dep_savings", "dep_time"]].sum(axis=1, min_count=1)
+    dep_sub = dep_sub.where(dep_sub > 0, other=q_rev["dep_total"])
+
+    q_rev["fee_ratio_demand"]         = q_rev["svc_revenue_q"] / q_rev["dep_demand"]
+    q_rev["fee_ratio_savings"]        = q_rev["svc_revenue_q"] / q_rev["dep_savings"]
+    q_rev["fee_ratio_time"]           = q_rev["svc_revenue_q"] / q_rev["dep_time"]
+    q_rev["fee_ratio_all"]            = q_rev["svc_revenue_q"] / dep_sub
+    q_rev["fee_ratio_total_deposits"] = q_rev["svc_revenue_q"] / q_rev["dep_total"]
+
+    grp = q_rev[["cod_cong_prudencial", "year", "quarter"] + FEE_COLS].copy()
     for col in FEE_COLS:
         if col in grp.columns:
             grp[col] = grp[col].replace([np.inf, -np.inf], np.nan)

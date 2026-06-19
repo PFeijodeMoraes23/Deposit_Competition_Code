@@ -66,6 +66,7 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 from io import BytesIO
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
 logging.basicConfig(

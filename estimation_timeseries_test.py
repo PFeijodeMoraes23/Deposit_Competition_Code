@@ -213,7 +213,11 @@ def implied_phi_t(df: pd.DataFrame, res, link: str):
         for t in phi_t.index:
             lo[t] = hi[t] = phi_t[t]
 
-    return phi_t, pd.Series(lo), pd.Series(hi)
+    # Cell-level out-of-bounds share: for the linear/uniform index, how many
+    # market-cells have an unbounded phi outside [0,1] (the LPM boundary breach
+    # that the bounded links avoid). Zero for logit/probit (bounded by the link).
+    frac_oob = float(np.mean((lin < 0) | (lin > 1))) if link in ("linear", "uniform") else 0.0
+    return phi_t, pd.Series(lo), pd.Series(hi), frac_oob
 
 
 # ==============================================================================
@@ -419,14 +423,18 @@ def _run_link(df_in, iv_cols, state_cols, link, init=None, loss="cauchy"):
 # ==============================================================================
 # Estimates phi(S) = G(S'theta) WITHOUT naming F_eta. The index direction theta
 # is taken from the logit fit (identified up to scale under the single-index
-# assumption); the link G = F_eta is then estimated NONPARAMETRICALLY and
-# MONOTONE via a binned varying-coefficient regression + pool-adjacent-violators
-# (PAVA) isotonisation. References: Ichimura (1993, J.Econometrics);
-# Klein & Spady (1993, Econometrica); Hardle, Hall & Ichimura (1993, Ann.Stat.);
-# Powell, Stock & Stoker (1989, Econometrica); Balabdaoui, Groeneboom &
-# Hendrickx (2019, Scand.J.Stat.) for the monotone single index; Robertson,
-# Wright & Dykstra (1988) for PAVA. Inference is CONDITIONAL on the estimated
-# index direction (the link's cluster-robust covariance), and approximate.
+# assumption); the link G = F_eta is then estimated with a SMOOTH degree-d
+# polynomial SERIES (sieve) in the index, interacted with D-tilde and fit by
+# entity-demeaned cluster OLS, with a PAVA isotonic safeguard for monotonicity.
+# The sieve (unlike a binned link) is well identified under entity FE: its
+# basis-times-D-tilde regressors vary WITHIN entity exactly like the parametric
+# interaction terms, so it does not collapse. References: Ichimura (1993,
+# J.Econometrics); Klein & Spady (1993, Econometrica); Hardle, Hall & Ichimura
+# (1993, Ann.Stat.); Powell, Stock & Stoker (1989, Econometrica); Newey (1997)
+# for series estimation; Balabdaoui, Groeneboom & Hendrickx (2019, Scand.J.Stat.)
+# for the monotone single index; Robertson, Wright & Dykstra (1988) for PAVA.
+# Inference is CONDITIONAL on the estimated index direction (the sieve's
+# cluster-robust covariance), and approximate.
 def _pava_increasing(y, w=None):
     y = np.asarray(y, float)
     n = len(y)
@@ -447,10 +455,11 @@ def _pava_increasing(y, w=None):
     return out
 
 
-def run_single_index(df, state_cols, has_cf, logit_res, n_bins=20):
-    """Monotone single-index sleepiness: logit-direction index + isotonic
-    nonparametric link. Returns (res_like, phi_t, lo, hi) where res_like is a
-    NonLinearResults carrying the average-derivative AMEs."""
+def run_single_index(df, state_cols, has_cf, logit_res, degree=3):
+    """Monotone single-index sleepiness: logit-direction index + a SMOOTH
+    degree-`degree` polynomial (series/sieve) link, fit by entity-demeaned
+    cluster OLS, with a PAVA isotonic safeguard. Returns (res_like, phi_t, lo, hi)
+    where res_like is a NonLinearResults carrying the average-derivative AMEs."""
     phi_params = [p for p in logit_res.params.index if not str(p).startswith("v_hat")]
     theta = logit_res.params_native[phi_params].values.astype(float)
 
@@ -463,47 +472,48 @@ def run_single_index(df, state_cols, has_cf, logit_res, n_bins=20):
     X = _build_phi_X(df_ss, phi_params)        # nr_lagged_dep -> 1, interaction_sv -> sv
     v = X @ theta                              # logit linear index
     Z = df_ss["nr_lagged_dep"].values.astype(float)
+    vmu, vsd = float(v.mean()), float(v.std())
+    if vsd <= 0:
+        vsd = 1.0
+    vs = (v - vmu) / vsd                        # standardised index (numerical stability)
 
-    # quantile bins of the index
-    edges = np.quantile(v, np.linspace(0, 1, n_bins + 1))
-    edges[0] -= 1e-9; edges[-1] += 1e-9
-    binid = np.clip(np.digitize(v, edges[1:-1]), 0, n_bins - 1)
-    present = np.array(sorted(np.unique(binid)))
-    B = len(present)
-    remap = {b: i for i, b in enumerate(present)}
-    binpos = np.array([remap[b] for b in binid])
-
-    # design: Z * 1[bin==b]; entity-demean; + CF; cluster-robust OLS for g_b
-    D = np.zeros((len(df_ss), B))
-    D[np.arange(len(df_ss)), binpos] = Z
-    cols_design = [f"_g{b}" for b in range(B)]
-    work = pd.DataFrame(D, columns=cols_design, index=df_ss.index)
+    # smooth series link: G(v) = sum_d b_d vs^d, interacted with D-tilde.
+    # The regressors vs^d * Z vary WITHIN entity, so b is identified under FE.
+    P = np.column_stack([vs ** d for d in range(degree + 1)])
+    R = P * Z[:, None]
+    cols_p = [f"_p{d}" for d in range(degree + 1)]
+    work = pd.DataFrame(R, columns=cols_p, index=df_ss.index)
     work["entity_id"] = df_ss["entity_id"].values
     work["_y"] = df_ss["deposit_balance"].values
+    design = cols_p[:]
     if has_cf:
         work["_cf"] = df_ss["v_hat_x_lagged_dep"].values
-        cols_design = cols_design + ["_cf"]
+        design = cols_p + ["_cf"]
     y_dm = work["_y"] - work.groupby("entity_id")["_y"].transform("mean")
-    Xdm = work[cols_design] - work.groupby("entity_id")[cols_design].transform("mean")
+    Xdm = work[design] - work.groupby("entity_id")[design].transform("mean")
 
-    mod = sm.OLS(y_dm.values, Xdm.values)
     cl = df_ss["CodConglomeradoPrudencial"].astype(str)
-    res = mod.fit(cov_type="cluster", cov_kwds={"groups": cl})
-    g_raw = res.params[:B]
-    cov_g = res.cov_params()[:B, :B]
-    counts = np.bincount(binpos, minlength=B).astype(float)
-    centers = np.array([v[binpos == b].mean() for b in range(B)])
+    res = sm.OLS(y_dm.values, Xdm.values).fit(cov_type="cluster", cov_kwds={"groups": cl})
+    b = np.asarray(res.params)[:degree + 1]
+    cov_b = np.asarray(res.cov_params())[:degree + 1, :degree + 1]
 
-    g_mono = np.clip(_pava_increasing(g_raw, w=counts), 0.0, 1.0)
-    phi_mt = g_mono[binpos]
+    phi_raw = P @ b                             # smooth link evaluated at each obs
+    order = np.argsort(vs)
+    iso = _pava_increasing(phi_raw[order])      # monotone safeguard (smooth -> minimal change)
+    phi_mt = np.empty_like(phi_raw)
+    phi_mt[order] = iso
+    phi_mt = np.clip(phi_mt, 0.0, 1.0)
 
-    # national phi_t (market-first pop weight) + conditional band from cov_g
+    # national phi_t (market-first pop weight) + conditional band from cov_b.
+    # phi_t ~= b . m_t where m_t is the pop-weighted mean polynomial row in quarter t.
     w_pop = df_ss["pop_total"].fillna(0.0).values.astype(float)
-    yq = df_ss["year_quarter"].values
-    mun = df_ss["CODMUN_IBGE"].astype(str).values
-    frame = pd.DataFrame({"yq": yq, "mun": mun, "bin": binpos, "phi": phi_mt, "w": w_pop})
-    mk = frame.groupby(["yq", "mun"], observed=True).agg(
-        phi=("phi", "mean"), M=("w", "sum"), bin=("bin", "first")).reset_index()
+    cols_m = {f"p{d}": P[:, d] for d in range(degree + 1)}
+    frame = pd.DataFrame({"yq": df_ss["year_quarter"].values,
+                          "mun": df_ss["CODMUN_IBGE"].astype(str).values,
+                          "phi": phi_mt, "w": w_pop, **cols_m})
+    agg_spec = {"phi": ("phi", "mean"), "M": ("w", "sum")}
+    agg_spec.update({f"p{d}": (f"p{d}", "mean") for d in range(degree + 1)})
+    mk = frame.groupby(["yq", "mun"], observed=True).agg(**agg_spec).reset_index()
     g_star = float(getattr(logit_res, "G_star", np.nan) or np.nan)
     crit = stats.t.ppf(0.975, df=g_star - 1) if (g_star and g_star > 1) else 1.96
     phi_t, lo, hi = {}, {}, {}
@@ -513,41 +523,31 @@ def run_single_index(df, state_cols, has_cf, logit_res, n_bins=20):
             continue
         wv = grp["M"].values / Msum
         phi_t[t] = float((wv * grp["phi"].values).sum())
-        a = np.zeros(B)
-        for b, wb in zip(grp["bin"].values, wv):
-            a[b] += wb
-        var = float(a @ cov_g @ a)
-        se = np.sqrt(max(var, 0.0))
+        m_t = np.array([float((wv * grp[f"p{d}"].values).sum()) for d in range(degree + 1)])
+        se = np.sqrt(max(float(m_t @ cov_b @ m_t), 0.0))
         lo[t] = phi_t[t] - crit * se
         hi[t] = phi_t[t] + crit * se
     phi_t = pd.Series(phi_t)
 
-    # average-derivative AMEs: AME_k = theta_k * mean_i G'(v_i)
-    slope_b = np.zeros(B)
-    for b in range(B - 1):
-        dv = centers[b + 1] - centers[b]
-        slope_b[b] = (g_mono[b + 1] - g_mono[b]) / dv if dv != 0 else 0.0
-    slope_b[B - 1] = slope_b[B - 2] if B >= 2 else 0.0
-    mean_slope = float(np.average(slope_b[binpos]))
-    # linear map mean_slope = d . g  (for an approximate SE conditional on theta)
-    d = np.zeros(B)
-    seg_w = np.bincount(binpos, minlength=B).astype(float)
-    seg_w = seg_w / seg_w.sum()
-    for b in range(B - 1):
-        dv = centers[b + 1] - centers[b]
-        if dv != 0:
-            d[b + 1] += seg_w[b] / dv
-            d[b] -= seg_w[b] / dv
+    # average-derivative AMEs: AME_k = theta_k * mean_i G'(v_i),
+    # G'(v) = (1/vsd) * sum_{d>=1} d b_d vs^(d-1)
+    dG = np.zeros(len(vs))
+    for d in range(1, degree + 1):
+        dG += d * b[d] * vs ** (d - 1)
+    dG /= vsd
+    mean_slope = float(np.mean(dG))
+    c = np.zeros(degree + 1)                    # mean_slope = c . b
+    for d in range(1, degree + 1):
+        c[d] = (d / vsd) * float(np.mean(vs ** (d - 1)))
     try:
-        var_slope = float(d @ cov_g @ d)
+        var_slope = float(c @ cov_b @ c)
     except Exception:
         var_slope = np.nan
 
-    idx_names = [f"interaction_{sv}" if sv != "constant" else "nr_lagged_dep" for sv in state_cols]
     ame, bse, pvals = {}, {}, {}
     for nm, th in zip(phi_params, theta):
         if nm == "nr_lagged_dep":
-            continue  # index intercept: no average-derivative AME
+            continue
         ame[nm] = th * mean_slope
         se = abs(th) * np.sqrt(var_slope) if np.isfinite(var_slope) else np.nan
         bse[nm] = se
@@ -556,11 +556,13 @@ def run_single_index(df, state_cols, has_cf, logit_res, n_bins=20):
         else:
             pvals[nm] = np.nan
     ps = pd.Series(ame); bs = pd.Series(bse); pv = pd.Series(pvals)
-    nobs = len(df_ss)
     res_like = NonLinearResults(ps, bs, ps / bs.replace(0, np.nan), pv, g_star,
-                                params_native=ps, nobs=nobs, rsquared=getattr(res, "rsquared", np.nan),
+                                params_native=ps, nobs=len(df_ss),
+                                rsquared=getattr(res, "rsquared", np.nan),
                                 G_nominal=int(cl.nunique()), cov_ame=None)
-    print(f"  [SingleIndex] bins={B} | mean_slope={mean_slope:.4g}")
+    n_noniso = int((np.diff(phi_raw[order]) < 0).sum())
+    print(f"  [SingleIndex] cubic sieve deg={degree} | mean_slope={mean_slope:.4g} | "
+          f"phi_t range={phi_t.max()-phi_t.min():.4f} | pre-iso non-monotone pts={n_noniso}")
     return res_like, phi_t, pd.Series(lo), pd.Series(hi)
 
 
@@ -670,8 +672,9 @@ def run_all():
 
         if phi_override is not None:
             phi_t, lo, hi = phi_override
+            frac_oob = 0.0
         else:
-            phi_t, lo, hi = implied_phi_t(df, res_ss, link)
+            phi_t, lo, hi, frac_oob = implied_phi_t(df, res_ss, link)
 
         lb_stat, lb_p = (np.nan, np.nan)
         wald = (np.nan, np.nan, 0)
@@ -691,6 +694,7 @@ def run_all():
             "phi_t": phi_t,
             "phi_lo": lo,
             "phi_hi": hi,
+            "frac_oob": frac_oob,
             "wald": wald,
             "ljung_box": (lb_stat, lb_p),
         }
@@ -1016,8 +1020,9 @@ def build_markdown(results, figures, out_path, tex_base_name, tex_time_name):
         "step; **Constrained Linear** is the same uniform-$\\eta$ model done coherently, with the bound "
         "imposed during estimation. Logit and Probit swap in logistic/normal shocks. The "
         "**Single-Index** estimator takes the index direction from the logit fit and then estimates the "
-        "link $F_\\eta$ nonparametrically and monotonically (PAVA), i.e. *lets the data choose the shock "
-        "distribution* (Ichimura 1993; Klein & Spady 1993; see References). Reading across the columns "
+        "link $F_\\eta$ with a smooth monotone series (a cubic sieve in the index, isotonic-safeguarded), "
+        "i.e. *lets the data choose the shock distribution* (Ichimura 1993; Klein & Spady 1993; see "
+        "References). Reading across the columns "
         "tells us **how much the assumed shock distribution actually matters**."
     )
     L.append("")
@@ -1187,17 +1192,23 @@ def build_markdown(results, figures, out_path, tex_base_name, tex_time_name):
     # ---- phi_t impact ----
     L.append("## 4. Impact on the implied national $\\hat{\\phi}_t$ (one figure per estimator)")
     L.append("")
-    L.append("| Estimator | $F_\\eta$ | mean Base | mean +Time | max Base | range Base | range +Time |")
+    L.append("| Estimator | $F_\\eta$ | mean Base | mean +Time | cells $\\phi\\notin[0,1]$ | range Base | range +Time |")
     L.append("|---|---|---|---|---|---|---|")
     for gname, gkeys in GROUPS:
         bk, tk = gkeys
         if bk not in results or tk not in results:
             continue
         pb, pt = results[bk]["phi_t"], results[tk]["phi_t"]
+        oob = results[bk].get("frac_oob", 0.0)
+        oob_str = f"{oob*100:.1f}\\%" if oob > 0 else "0"
         L.append(
             f"| {gname} | {F_ETA.get(gname, '')} | {pb.mean():.3f} | {pt.mean():.3f} "
-            f"| {pb.max():.3f} | {pb.max()-pb.min():.3f} | {pt.max()-pt.min():.3f} |"
+            f"| {oob_str} | {pb.max()-pb.min():.3f} | {pt.max()-pt.min():.3f} |"
         )
+    L.append("")
+    L.append("*`cells $\\phi\\notin[0,1]$` is the share of market-cells whose (unbounded) linear "
+             "index leaves $[0,1]$ in the Base spec — the LPM boundary breach the bounded links "
+             "avoid by construction.*")
     L.append("")
     fig_by_group = {g: slug for (g, slug, _p) in figures}
     for gname, gkeys in GROUPS:
@@ -1215,9 +1226,11 @@ def build_markdown(results, figures, out_path, tex_base_name, tex_time_name):
              "trend/cycle signs are identical whether $\\eta$ is uniform, logistic, normal or "
              "nonparametric — so the *qualitative* time-series conclusion does not depend on the "
              "distributional assumption. **(2) The bound cleanly separates the estimators:** the "
-             "unconstrained LPM (Local/Pooled Linear) pushes $\\hat{\\phi}_t$ *above 1* around 2020–21 "
-             "(`max Base` $\\approx 1.01$) — inadmissible, since $\\phi$ is a fraction — whereas the "
-             "**Constrained Linear, Logit, Probit and Single-Index all stay inside $[0,1]$**. That is "
+             "unconstrained LPM (Local/Pooled Linear) produces $\\phi_{mt}$ *outside* $[0,1]$ for a "
+             "non-trivial share of market-cells (the `cells $\\phi\\notin[0,1]$` column, on the order "
+             "of a tenth) — inadmissible, since $\\phi$ is a fraction — even though its pop-weighted "
+             "*national* $\\hat{\\phi}_t$ now stays just under 1 on the current panel; the "
+             "**Constrained Linear, Logit, Probit and Single-Index never breach the bound**. That is "
              "the practical payoff of treating $\\phi$ as a CDF: the bound keeps the active-demand "
              "construction (which subtracts $\\phi\\,\\widetilde{D}_{t-1}$) well-behaved. **(3) The "
              "*level* of $\\hat{\\phi}_t$, however, is genuinely link-sensitive:** mean Base sleepiness "
