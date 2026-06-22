@@ -2,7 +2,10 @@
   "permissions": {
     "allow": [
       "Read(//c/Users/pedro/OneDrive/Documentos/Yale/Year 3 \\(2024 - 2025\\)/Open Finance/_audit_output/**)",
-      "Read(//c/Users/pedro/OneDrive/Documentos/Yale/Year 3 \\(2024 - 2025\\)/Open Finance/Open-Finance/**)"
+      "Read(//c/Users/pedro/OneDrive/Documentos/Yale/Year 3 \\(2024 - 2025\\)/Open Finance/Open-Finance/**)",
+      "Bash(tail -n +1 -f C:/Users/pedro/AppData/Local/Temp/claude/c--Users-pedro-OneDrive-Documentos-Yale-Year-3--2024---2025--Open-Finance-Open-Finance-Code-Egan-et-al-2025-Rep/e69ccff7-b499-46f9-8526-90499773063e/tasks/b4vintadj.output)",
+      "Bash(tail -n +1 -f C:/Users/pedro/AppData/Local/Temp/claude/c--Users-pedro-OneDrive-Documentos-Yale-Year-3--2024---2025--Open-Finance-Open-Finance-Code-Egan-et-al-2025-Rep/e69ccff7-b499-46f9-8526-90499773063e/tasks/b9df7u6d7.output)",
+      "Bash(tail -n +1 -f C:/Users/pedro/AppData/Local/Temp/claude/c--Users-pedro-OneDrive-Documentos-Yale-Year-3--2024---2025--Open-Finance-Open-Finance-Code-Egan-et-al-2025-Rep/e69ccff7-b499-46f9-8526-90499773063e/tasks/bjt8ord51.output)"
     ],
     "additionalDirectories": [
       "C:\\Users\\pedro\\AppData\\Roaming\\Code\\User",

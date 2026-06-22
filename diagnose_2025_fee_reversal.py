@@ -15,6 +15,7 @@ Figures produced (Drafts/Deposit Competition/):
   fee_reversal_fig9_event_study.png            Formal quarterly event study around PIX launch
   fee_reversal_fig10_correction_factor.png     2025 COSIF reclassification correction factors
   fee_reversal_fig11_cvm_vs_cosif.png          CVM DRE vs COSIF cross-validation + deposit-acct share
+  fee_reversal_fig12_fee_ratio_per_bank.png    Annualised fee ratio (%/yr) per bank — all 9 institutions
   fee_reversal_summary.csv                     YoY decomposition data
   fee_reversal_correction_factors.csv          Per-bank 2025 correction factors
 

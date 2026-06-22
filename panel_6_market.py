@@ -834,6 +834,11 @@ def main() -> None:
     tier1 = panel[panel["mca_code"] != "NATIONAL"]
     tier2 = panel[panel["mca_code"] == "NATIONAL"]
 
+    def _nn(col: str) -> str:
+        # Non-null count for a column that may be absent (e.g. PIX/INSS panels
+        # missing on disk) -- keep the summary from crashing the whole step.
+        return f"{panel[col].notna().sum():,}" if col in panel.columns else "n/a (column absent)"
+
     print(
         f"\nMarket panel summary"
         f"\n  Total rows:                  {len(panel):,}"
@@ -843,8 +848,8 @@ def main() -> None:
         f"\n  Conglomerates:               {panel['CodConglomeradoPrudencial'].nunique()}"
         f"\n  Years:                       {panel['year'].min()} - {panel['year'].max()}"
         f"\n  Columns:                     {len(panel.columns)}"
-        f"\n  pop_total non-null:          {panel['pop_total'].notna().sum():,}"
-        f"\n  pix_users_pf_per1000 non-null: {panel['pix_users_pf_per1000'].notna().sum():,}"
+        f"\n  pop_total non-null:          {_nn('pop_total')}"
+        f"\n  pix_users_pf_per1000 non-null: {_nn('pix_users_pf_per1000')}"
         f"\n  Output:                      {OUTPUT_CSV}"
     )
     print("\nFirst 5 rows (key columns):")

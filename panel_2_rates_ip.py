@@ -19,8 +19,11 @@ if ensure_project_venv is not None:
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 # --- Paths ---
+from utils import paths
 _ROOT = Path(__file__).resolve().parents[2]
-RAW_DIR = _ROOT / "BCB" / "Egan_et_al_2025_Rep" / "raw" / "COSIF_RAW"
+# Raw COSIF zips resolve via the shared dataset path (utils.paths), matching
+# scrape_15 and panel_3; the old BCB/.../raw/COSIF_RAW location is empty.
+RAW_DIR = Path(paths.COSIF_RAW)
 OUT_DIR = _ROOT / "BCB" / "Egan_et_al_2025_Rep" / "processed" / "COSIF_PROCESSED"
 OUT_CSV = OUT_DIR / "ip_rates_quarterly.csv"
 
@@ -46,7 +49,14 @@ def process_file(fpath):
             
     # Normalize columns
     df.columns = [c.replace('#', '').strip() for c in df.columns]
-    
+
+    # Keep only the monthly balancete (DOCUMENTO 4010).  At June/December BCB
+    # also ships the semester balanco patrimonial (4016), which duplicates
+    # every group-4 balance and would double the deposit stock at those two
+    # months.  4016 carries no group-8 rows, so the expense is unaffected.
+    if 'DOCUMENTO' in df.columns:
+        df = df[df['DOCUMENTO'].astype(str).str.strip() == '4010']
+
     if 'TAXONOMIA' not in df.columns:
         return pd.DataFrame()
         
@@ -145,11 +155,24 @@ def main():
     df['month'] = df['DATA_BASE'] % 100
     df['q_month'] = ((df['month'] - 1) // 3 + 1) * 3
     df['AnoMes'] = df['year'] * 100 + df['q_month']
-    
-    # Stock is End of Quarter
+
+    # COSIF group-8 expense accounts (811) accumulate within the SEMESTER and
+    # reset in January and July.  The raw monthly SALDO is therefore a
+    # semester-cumulative balance, not a monthly flow; summing it within a
+    # quarter manufactures a see-saw.  Disaccumulate to a true monthly flow
+    # within each (CNPJ, year, semester) run before the quarterly sum.
+    df = df.sort_values(['CNPJ', 'year', 'month'])
+    df['_sem'] = np.where(df['month'] <= 6, 1, 2)
+    df['Expense'] = (
+        df.groupby(['CNPJ', 'year', '_sem'])['Expense']
+        .transform(lambda s: s.diff().where(s.shift(1).notna(), s))
+    )
+    df = df.drop(columns=['_sem'])
+
+    # Stock is End of Quarter (4016 double-count already removed in process_file)
     df_q_stock = df[df['month'].isin([3, 6, 9, 12])][['CNPJ', 'AnoMes', 'Stock']].rename(columns={'Stock': 'Estoque_Total'})
-    
-    # Expense is Sum of Quarter
+
+    # Expense is Sum of Quarter (now a sum of true monthly flows)
     df_q_exp = df.groupby(['CNPJ', 'AnoMes'])['Expense'].sum().reset_index().rename(columns={'Expense': 'Despesa_Captacao'})
     
     ip_q = pd.merge(df_q_stock, df_q_exp, on=['CNPJ', 'AnoMes'], how='outer').fillna(0.0)

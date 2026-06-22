@@ -103,11 +103,15 @@ class NonLinearResults:
         self.pvalues = pvalues
         self.G_star = G_star
         self.df_resid = G_star
+        self.params_native = params_native if params_native is not None else params
 
 sys.modules['estimation_3_sleep'] = type('FakeModule', (), {'NonLinearResults': NonLinearResults})
 
 def extract_upsilon_terms(res_ss):
-    params = res_ss.params
+    # phi is built from the NATIVE logit index coefficients (AMEs are reporting-only).
+    params = getattr(res_ss, "params_native", None)
+    if params is None:
+        params = res_ss.params
     upsilon = {}
     for var_name, coef in params.items():
         if var_name == "nr_lagged_dep":

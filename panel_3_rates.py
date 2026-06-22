@@ -670,6 +670,63 @@ def _aggregate_ip_prepaid_data(merged: pd.DataFrame) -> tuple[pd.DataFrame, pd.D
         
     return df_ip_monthly, congl_has_ip, has_ip_flag
 
+def _correct_cosif_time_aggregation(df_indiv: pd.DataFrame) -> pd.DataFrame:
+    """
+    Repair two COSIF time-aggregation artifacts at the institution (CNPJ) x
+    month level, BEFORE any aggregation across institutions or quarters.
+    Both inject a quarterly see-saw into the implicit funding rate (and thus
+    into inferred spreads and the sleepiness estimation) if left uncorrected.
+
+    (1) DISACCUMULATE THE FUNDING EXPENSE.
+        COSIF group-8 result accounts accumulate within the SEMESTER and reset
+        in January and July (confirmed semiannual for 40/40 sampled banks).
+        Despite its name, the pipeline column `Despesa_Captacao_Marginal`
+        (and `Desp_Prepago_Marginal`) holds this semester-cumulative balance,
+        not a monthly flow -- so summing three of them within a quarter
+        (see `_collapse_monthly_to_quarterly`) produces a ramp-and-crash
+        sawtooth.  We difference within each (CNPJ, year, semester) run to
+        recover the true monthly flow; the first month of a run keeps its
+        level (the previous semester already reset to zero).  Differencing
+        across an internal gap still yields the correct cumulative increment,
+        so quarterly sums stay right even with missing months.
+
+    (2) UN-DOUBLE THE SEMESTER-CLOSE STOCK.
+        At June and December BCB ships a second document (4016 balanco
+        patrimonial) that duplicates every group-4 balance.  The (missing)
+        producer summed 4010+4016, doubling `Estoque_Total` / `Estoque_Prepago`
+        at those two months (factor exactly 2.00; 4016 carries no group-8 rows,
+        so the expense is unaffected).  We halve those two months.  4010's CNPJ
+        set is a subset of 4016's at semester close, so every institution is
+        doubled and the blanket halving is safe.
+    """
+    if df_indiv.empty:
+        return df_indiv
+
+    df = df_indiv.sort_values(["CNPJ", "year", "month"]).copy()
+    df["_sem"] = np.where(df["month"] <= 6, 1, 2)
+
+    # (1) Disaccumulate expense flows within (CNPJ, year, semester)
+    for col in ["Despesa_Captacao_Marginal", "Desp_Prepago_Marginal"]:
+        if col in df.columns:
+            df[col] = (
+                df.groupby(["CNPJ", "year", "_sem"])[col]
+                .transform(lambda s: s.diff().where(s.shift(1).notna(), s))
+            )
+
+    # (2) Halve the doubled June/December stocks
+    close_mask = df["month"].isin([6, 12])
+    for col in ["Estoque_Total", "Estoque_Prepago"]:
+        if col in df.columns:
+            df.loc[close_mask, col] = df.loc[close_mask, col] / 2.0
+
+    df.drop(columns=["_sem"], inplace=True)
+    logging.info(
+        "COSIF time-agg correction: expense disaccumulated within "
+        "(CNPJ, semester); Jun/Dec stocks halved (4016 double-count)."
+    )
+    return df
+
+
 def aggregate_cosif_to_conglomerates(
     df_cosif: pd.DataFrame,
     df_map: pd.DataFrame,
@@ -712,6 +769,10 @@ def aggregate_cosif_to_conglomerates(
     else:
         df_indiv = df.copy()
         logging.info("No cosif_taxonomy column -- using all rows as institution-level")
+
+    # ---- 1b. Repair COSIF time-aggregation artifacts (expense accumulation
+    #          + Jun/Dec stock doubling) at the institution x month level ----
+    df_indiv = _correct_cosif_time_aggregation(df_indiv)
 
     # ---- 2. Map institution-level COSIF CNPJs to conglomerates ----
     merged = _map_cosif_to_congl(df_indiv, df_map)

@@ -41,11 +41,11 @@ def _run_export(est):
 
 def main():
     parser = argparse.ArgumentParser(description="Export estimation results for steps 1-3.")
-    parser.add_argument("--estimation", choices=['1', '2', '3', 'all'], required=True,
-                        help="Specify the estimation step number (1 to 3) or 'all'.")
+    parser.add_argument("--estimation", choices=['1', '2', '3', '4', '5', '6', 'all'], required=True,
+                        help="Specify the estimation step number (1 to 6) or 'all'.")
     args = parser.parse_args()
 
-    est_list = [1, 2, 3] if args.estimation == 'all' else [int(args.estimation)]
+    est_list = [1, 2, 3, 4, 5, 6] if args.estimation == 'all' else [int(args.estimation)]
 
     print(f"[Export] Launching {len(est_list)} export script(s) in parallel...")
 
