@@ -6,17 +6,22 @@ the Yale Bouchet HPC cluster (GPU), specification 12.
 
 Background
 ----------
-After the demand-degeneracy fixes (full-rank `has_ip`/`fgc_covered`) and the new
-3-routine sleepiness methodology, the BLP RC estimation is run for THREE routines
-(down from five), each consuming its own demand-prep parquet:
+After the demand-degeneracy fixes (full-rank `has_ip`/`fgc_covered`) and the expanded
+sleepiness methodology, the BLP RC estimation can be run for SIX routines, each
+consuming its own demand-prep parquet:
 
-    E1  Local B-type      ->  demand_1_spec_12.parquet
-    E2  Pooled Linear     ->  demand_2_spec_12.parquet
-    E3  Pooled Logistic   ->  demand_3_logistic_spec_12.parquet
+    E1  Local B-type             ->  demand_1_spec_12.parquet
+    E2  Pooled Linear            ->  demand_2_spec_12.parquet
+    E3  Pooled Logistic          ->  demand_3_logistic_spec_12.parquet
+    E4  Pooled Constrained Lin.  ->  demand_4_constrained_spec_12.parquet
+    E5  Pooled Probit            ->  demand_5_probit_spec_12.parquet
+    E6  Pooled Single-Index      ->  demand_6_index_spec_12.parquet
 
-Each routine is warm-started from the local logit delta produced beforehand:
+The DEFAULT cluster run targets E3 and E6 (the two headline sleepiness links); the
+remaining routines stay available for robustness. Each routine is warm-started from the
+local logit delta produced beforehand:
 
-    BLP_RESULTS/logit_delta_E{1,2,3}_spec_12_coherence.bin   (logit-coherence output)
+    BLP_RESULTS/logit_delta_E{1..6}_spec_12_coherence.bin   (logit-coherence output)
 
 (the logit step is owned by the local-logit workflow; this orchestrator only
 *consumes* those deltas — see `warm_start_path`).  If a delta is missing the
@@ -36,15 +41,18 @@ flags.  Switch to the numerical-gradient engine by exporting
 Usage
 -----
   # one routine (one GPU job — the normal cluster pattern):
-  julia --project=. --threads=auto blp_2_rc_coherence.jl --estim 1 --hpc --R 2000
+  julia --project=. --threads=auto blp_2_rc_coherence.jl --estim 6 --hpc --R 2000
 
-  # all three routines sequentially on a single GPU:
+  # the default routine set (E3 + E6) sequentially on a single GPU:
   julia --project=. --threads=auto blp_2_rc_coherence.jl --all --hpc --R 2000
 
-  # local dry-run timing (needs a CUDA GPU):
-  julia --project=. blp_2_rc_coherence.jl --estim 1 --dry-run
+  # every routine (E1..E6) sequentially on a single GPU:
+  julia --project=. --threads=auto blp_2_rc_coherence.jl --all-six --hpc --R 2000
 
-The per-routine entry scripts `blp_2_rc_e{1,2,3}_coherence.jl` are even thinner:
+  # local dry-run timing (needs a CUDA GPU):
+  julia --project=. blp_2_rc_coherence.jl --estim 6 --dry-run
+
+The per-routine entry scripts `blp_2_rc_e{1..6}_coherence.jl` are even thinner:
 they just `include` this file and call `run_coherence_routine(k)`.
 """
 
@@ -55,13 +63,19 @@ const COHERENCE_SPEC = 12
 # warm-start filename from ENV["BLP_DELTA_SUFFIX"] (default "" = legacy name).
 const COHERENCE_DELTA_SUFFIX = "_coherence"
 
-# Routine id -> (label, description, demand-prep prefix). Matches the 3 sleepiness
-# estimators and the demand-prep orchestrator's EST_LIST = [1, 2, 3].
+# Routine id -> (label, description, demand-prep prefix). Matches the 6 sleepiness
+# estimators (estimation_{1..6}) and their demand-prep parquets.
 const COHERENCE_ROUTINES = [
-    (id = 1, label = "E1", desc = "Local B-type",    prefix = "demand_1"),
-    (id = 2, label = "E2", desc = "Pooled Linear",   prefix = "demand_2"),
-    (id = 3, label = "E3", desc = "Pooled Logistic", prefix = "demand_3_logistic"),
+    (id = 1, label = "E1", desc = "Local B-type",          prefix = "demand_1"),
+    (id = 2, label = "E2", desc = "Pooled Linear",         prefix = "demand_2"),
+    (id = 3, label = "E3", desc = "Pooled Logistic",       prefix = "demand_3_logistic"),
+    (id = 4, label = "E4", desc = "Pooled Constrained",    prefix = "demand_4_constrained"),
+    (id = 5, label = "E5", desc = "Pooled Probit",         prefix = "demand_5_probit"),
+    (id = 6, label = "E6", desc = "Pooled Single-Index",   prefix = "demand_6_index"),
 ]
+
+# Default cluster routine set: the two headline sleepiness links (E3 logistic, E6 index).
+const COHERENCE_DEFAULT_ROUTINES = [3, 6]
 
 # Estimation engine (GPU). IFT analytical gradient by default; set
 # BLP_COHERENCE_ENGINE=numerical for the finite-difference engine. Both define
@@ -100,7 +114,7 @@ end
 """
     run_coherence_routine(estim_id; passthrough=String[])
 
-Run one coherence routine (1, 2, or 3) through the GPU engine for spec 12.
+Run one coherence routine (1..6) through the GPU engine for spec 12.
 `passthrough` forwards engine flags (e.g. `["--hpc", "--R", "2000", "--stage",
 "sigma", "--dry-run"]`). Defaults the stage to the full `sequence` unless the
 caller supplies `--stage`.
@@ -108,7 +122,7 @@ caller supplies `--stage`.
 function run_coherence_routine(estim_id::Int; passthrough::Vector{String} = String[])
     idx = findfirst(r -> r.id == estim_id, COHERENCE_ROUTINES)
     idx === nothing &&
-        error("Coherence routine must be 1 (E1), 2 (E2), or 3 (E3); got $estim_id")
+        error("Coherence routine must be one of 1..6 (E1..E6); got $estim_id")
     r = COHERENCE_ROUTINES[idx]
 
     pass = _strip_controlled(passthrough)
@@ -129,6 +143,17 @@ function run_coherence_routine(estim_id::Int; passthrough::Vector{String} = Stri
               "back to log-share init. Run the local logit first." path = ws
     end
 
+    # Hard-fail on a missing input parquet. Otherwise the engine just prints
+    # "[!] Missing: <path>" and silently no-ops EVERY stage (writing empty
+    # blp_summary_*.json files and exiting 0), which under the afterok chain would
+    # propagate a fake "success" to the ext2/extended jobs. Fail loudly at startup
+    # so the job — and the chain — stop with a clear, actionable message.
+    in_dir, _, _ = get_paths(is_hpc; local_dir = local_dir)
+    in_path = joinpath(in_dir, "$(r.prefix)_spec_$(COHERENCE_SPEC).parquet")
+    isfile(in_path) || error(
+        "Coherence $(r.label): required input parquet not found —\n    $in_path\n" *
+        "Upload $(basename(in_path)) to the cluster's data/input/ directory before submitting.")
+
     # Fix estim + spec; default to the full RC sequence unless overridden.
     base = ["--estim", string(estim_id), "--spec", string(COHERENCE_SPEC)]
     if !("--stage" in pass)
@@ -144,31 +169,38 @@ function run_coherence_routine(estim_id::Int; passthrough::Vector{String} = Stri
     ENV["BLP_OUTPUT_SUFFIX"]    = COHERENCE_DELTA_SUFFIX *
                                   (COHERENCE_ENGINE == "numerical" ? "_num" : "")
     # Route input_filename to the fresh coherence parquets (no _final suffix):
-    #   E1 → demand_1_spec_12.parquet
-    #   E2 → demand_2_spec_12.parquet
-    #   E3 → demand_3_logistic_spec_12.parquet
+    #   E1 → demand_1_spec_12.parquet            E4 → demand_4_constrained_spec_12.parquet
+    #   E2 → demand_2_spec_12.parquet            E5 → demand_5_probit_spec_12.parquet
+    #   E3 → demand_3_logistic_spec_12.parquet   E6 → demand_6_index_spec_12.parquet
     ENV["BLP_COHERENCE_INPUTS"] = "1"
 
     empty!(ARGS); append!(ARGS, vcat(base, pass))
     main_gpu()
 end
 
-"""Run all three coherence routines sequentially (single GPU)."""
-function run_all_coherence(; passthrough::Vector{String} = String[])
-    for r in COHERENCE_ROUTINES
-        run_coherence_routine(r.id; passthrough = passthrough)
+"""Run a set of coherence routines sequentially on a single GPU. Defaults to the two
+headline routines (E3, E6); pass `ids` (e.g. `1:6`) to run a different set."""
+function run_all_coherence(; passthrough::Vector{String} = String[],
+                            ids::Vector{Int} = COHERENCE_DEFAULT_ROUTINES)
+    for id in ids
+        run_coherence_routine(id; passthrough = passthrough)
     end
 end
 
-# ── Direct CLI entry: `--estim k` (one routine) or `--all` (all three) ──────────
+# ── Direct CLI entry: `--estim k` (one routine), `--all` (default E3+E6), or
+#    `--all-six` (every routine). ────────────────────────────────────────────────
 function _coherence_main()
     a = copy(ARGS)
-    if "--all" in a
-        run_all_coherence(; passthrough = filter(!=("--all"), a))
+    if "--all-six" in a
+        run_all_coherence(; passthrough = filter(!=("--all-six"), a),
+                            ids = [r.id for r in COHERENCE_ROUTINES])
+    elseif "--all" in a
+        run_all_coherence(; passthrough = filter(!=("--all"), a))   # default E3 + E6
     else
         ei = findfirst(==("--estim"), a)
         (ei === nothing || ei == length(a)) &&
-            error("Provide `--estim {1,2,3}` or `--all` (plus engine flags). Got: $a")
+            error("Provide `--estim {1..6}`, `--all` (default E3+E6), or `--all-six` " *
+                  "(plus engine flags). Got: $a")
         estim_id = parse(Int, a[ei + 1])
         deleteat!(a, ei:ei + 1)          # run_coherence_routine re-adds --estim
         run_coherence_routine(estim_id; passthrough = a)

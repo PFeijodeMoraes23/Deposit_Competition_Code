@@ -14,13 +14,13 @@
 # (submit_blp_2_rc_coherence_all.sh) submits these as a --dependency=afterok chain
 # so each stage warm-starts θ₂ from the previous stage's checkpoint. Driven by env
 # vars exported by the orchestrator (sbatch --export):
-#   COH_ROUTINE  1 | 2 | 3
+#   COH_ROUTINE  1 | 2 | 3 | 4 | 5 | 6
 #   COH_ENGINE   ift | numerical          → BLP_COHERENCE_ENGINE
 #   COH_STAGE    sigma|rc2|rc3|rc4|full|ext1|ext2|extended
 # The first stage (sigma) warm-starts δ from logit_delta_E{k}_spec_12_coherence.bin.
 
 set -euo pipefail
-: "${COH_ROUTINE:?set COH_ROUTINE (1|2|3)}"
+: "${COH_ROUTINE:?set COH_ROUTINE (1..6)}"
 : "${COH_ENGINE:?set COH_ENGINE (ift|numerical)}"
 : "${COH_STAGE:?set COH_STAGE (sigma|rc2|rc3|rc4|full|ext1|ext2|extended)}"
 

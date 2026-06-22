@@ -8,9 +8,9 @@ Orchestrates the full local pipeline in three sequential stages:
   3. run_blp_pipeline.py       — logit sanity check, then LaTeX tables
                                  (equivalent to --logit-then-latex)
                                  OR, with --coherence, the coherence RC-BLP
-                                 (E1/E2/E3, spec 12) instead of the logit stage,
+                                 (default E3+E6, spec 12) instead of the logit stage,
                                  OR, with --logit-coherence, the post-fix non-RC
-                                 logit (E1/E2/E3, spec 12) instead of legacy logit.
+                                 logit (E1-E6, spec 12) instead of legacy logit.
 
 All CLI args passed to this script are forwarded to run_data_pipeline.py, except
 --coherence and --logit-coherence which are consumed here to select the BLP stage.
@@ -19,7 +19,7 @@ The sleep and BLP stages are otherwise run with default arguments.
 Usage
 -----
   python run_local_pipeline.py                    # run all three stages (BLP = legacy logit)
-  python run_local_pipeline.py --logit-coherence  # final stage = post-fix non-RC logit (3 routines)
+  python run_local_pipeline.py --logit-coherence  # final stage = post-fix non-RC logit (6 routines)
   python run_local_pipeline.py --coherence        # final stage = coherence RC-BLP (GPU)
   python run_local_pipeline.py --from 2           # restart data pipeline from stage 2
   python run_local_pipeline.py --only 3           # run only stage 3 of data pipeline
@@ -59,8 +59,8 @@ def _run(label: str, cmd: list):
 def main():
     # Forward all CLI args to the data pipeline only. `--coherence` and
     # `--logit-coherence` are consumed here (not data-pipeline flags): they swap the
-    # final BLP stage. `--coherence` → RC-BLP (E1/E2/E3, spec 12; needs a CUDA GPU).
-    # `--logit-coherence` → post-fix non-RC logit (E1/E2/E3, spec 12; local).
+    # final BLP stage. `--coherence` → RC-BLP (default E3+E6, spec 12; needs a CUDA GPU).
+    # `--logit-coherence` → post-fix non-RC logit (E1-E6, spec 12; local).
     extra_args = sys.argv[1:]
     coherence = "--coherence" in extra_args
     logit_coherence = "--logit-coherence" in extra_args

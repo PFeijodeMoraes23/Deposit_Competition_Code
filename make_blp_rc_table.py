@@ -2,20 +2,25 @@
 make_blp_rc_table.py
 ====================
 Generate a LaTeX table from BLP random-coefficient estimation results
-(sigma / rc2 / rc3 / rc4 / full / ext1 / ext2 / extended) for E5, Spec 12.
+(sigma / rc2 / rc3 / rc4 / full / ext1 / ext2 / extended), Spec 12.
 
-Reads blp_results_E{est}_spec_12_{stage}.json files produced on the cluster
-and dropped into the local BLP_RESULTS folder.
+Reads blp_results_E{est}_spec_12_{stage}{suffix}.json files produced on the cluster
+and dropped into the local BLP_RESULTS folder. The post-coherence-fix cluster runs
+write a ``_coherence`` suffix (IFT engine) or ``_coherence_num`` (numerical engine);
+this is the DEFAULT here. Use --legacy to read the un-suffixed legacy results.
 
 Usage
 -----
-  python make_blp_rc_table.py              # E5 (default)
-  python make_blp_rc_table.py --est 1     # E1
+  python make_blp_rc_table.py              # E6 coherence (default headline routine)
+  python make_blp_rc_table.py --est 3      # E3 coherence
+  python make_blp_rc_table.py --all        # E1-E6 coherence
+  python make_blp_rc_table.py --engine numerical --est 6   # E6 numerical-engine coherence
+  python make_blp_rc_table.py --legacy --est 5             # legacy (un-suffixed) E5
 
 Output
 ------
-  BLP_RESULTS/Rout/blp_rc_E{est}_spec12.tex
-  Drafts/Deposit Competition/blp_rc_E{est}_spec12.tex
+  BLP_RESULTS/Rout/blp_rc_E{est}_spec12{suffix}.tex
+  Drafts/Deposit Competition/blp_rc_E{est}_spec12{suffix}.tex
 """
 
 from utils.venv_guard import ensure_project_venv
@@ -107,9 +112,14 @@ def pi_label(char_idx: int, demo_idx: int) -> str:
 
 # ── Data loading ──────────────────────────────────────────────────────────────
 
-def load_stage(est_id: int, stage: str) -> dict | None:
-    """Load blp_results_E{est}_spec_12_{stage}.json. Returns None if missing/empty."""
-    path = RESULTS_DIR / f"blp_results_E{est_id}_spec_12_{stage}.json"
+def load_stage(est_id: int, stage: str, suffix: str = "") -> dict | None:
+    """Load blp_results_E{est}_spec_12_{stage}{suffix}.json. Returns None if missing/empty.
+
+    ``suffix`` selects the build: "" = legacy, "_coherence" = post-fix IFT engine,
+    "_coherence_num" = post-fix numerical engine (matches ENV["BLP_OUTPUT_SUFFIX"] on
+    the cluster).
+    """
+    path = RESULTS_DIR / f"blp_results_E{est_id}_spec_12_{stage}{suffix}.json"
     if not path.exists():
         return None
     try:
@@ -192,11 +202,11 @@ def fmt_coef(val: float, se: float, G_star: float | None = None) -> tuple[str, s
 
 # ── Table builder ─────────────────────────────────────────────────────────────
 
-def build_table(est_id: int) -> str:
+def build_table(est_id: int, suffix: str = "") -> str:
     # Load all available stages
     stage_results = {}
     for s in STAGES:
-        d = load_stage(est_id, s)
+        d = load_stage(est_id, s, suffix)
         if d is not None:
             stage_results[s] = d
 
@@ -343,19 +353,38 @@ def build_table(est_id: int) -> str:
 
 def main():
     parser = argparse.ArgumentParser(description="BLP RC LaTeX table generator")
-    parser.add_argument("--est", type=int, default=5, help="Estimation strategy (default: 5)")
-    parser.add_argument("--all", action="store_true",  help="Generate for E1-E5")
+    parser.add_argument("--est", type=int, default=6,
+                        help="Estimation strategy (default: 6, the headline single-index routine)")
+    parser.add_argument("--all", action="store_true",
+                        help="Generate for E1-E6 (coherence) or E1-E5 (--legacy)")
+    parser.add_argument("--engine", choices=["ift", "numerical"], default="ift",
+                        help="Coherence engine whose results to read (ift→_coherence, "
+                             "numerical→_coherence_num). Ignored with --legacy.")
+    parser.add_argument("--coherence", action="store_true", default=True,
+                        help="Read post-coherence-fix cluster results (default).")
+    parser.add_argument("--legacy", dest="coherence", action="store_false",
+                        help="Read legacy un-suffixed results instead.")
     args = parser.parse_args()
 
-    est_ids = list(range(1, 6)) if args.all else [args.est]
+    # Result-file suffix (matches ENV["BLP_OUTPUT_SUFFIX"] set by blp_2_rc_coherence.jl).
+    if args.coherence:
+        suffix = "_coherence_num" if args.engine == "numerical" else "_coherence"
+    else:
+        suffix = ""
+
+    # Coherence build: 6 routines (E1-E6). Legacy build: 5 routines (E1-E5).
+    if args.all:
+        est_ids = list(range(1, 7)) if args.coherence else list(range(1, 6))
+    else:
+        est_ids = [args.est]
 
     for est_id in est_ids:
-        print(f"\n[E{est_id}] Building BLP RC table...")
-        tex = build_table(est_id)
+        print(f"\n[E{est_id}] Building BLP RC table{' [' + suffix.lstrip('_') + ']' if suffix else ''}...")
+        tex = build_table(est_id, suffix)
         if not tex:
             continue
 
-        fname = f"blp_rc_E{est_id}_spec12.tex"
+        fname = f"blp_rc_E{est_id}_spec12{suffix}.tex"
         for dest in [TABLES_DIR, DRAFTS_DIR]:
             out = dest / fname
             with open(out, "w", encoding="utf-8") as f:
@@ -364,7 +393,7 @@ def main():
 
     print("\nDone. Insert into LaTeX with:")
     for est_id in est_ids:
-        print(f"  \\input{{blp_rc_E{est_id}_spec12.tex}}")
+        print(f"  \\input{{blp_rc_E{est_id}_spec12{suffix}.tex}}")
 
 
 if __name__ == "__main__":

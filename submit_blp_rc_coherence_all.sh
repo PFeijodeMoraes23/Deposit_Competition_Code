@@ -1,7 +1,7 @@
 #!/bin/bash
 # ONE command: submit the FULL coherence RC-BLP sweep as dependency CHAINS.
 #
-# For each routine (E1/E2/E3) × engine (blp_2 IFT, blp_1 numerical) we submit the
+# For each routine in ${ROUTINES} × engine (blp_2 IFT, blp_1 numerical) we submit the
 # 8 random-coefficient stages as SEPARATE jobs, each --dependency=afterok on the
 # previous stage. That way:
 #   • no single job has to run the whole sweep (avoids the wall-time ceiling), and
@@ -9,37 +9,47 @@
 #
 #   sigma → rc2 → rc3 → rc4 → full → ext1 → ext2 → extended   (1→8 σ params)
 #
-# 6 chains × 8 stages = 48 jobs; at most 6 run at once (one per routine×engine).
+# DEFAULT routine set is "3 6" (the two headline sleepiness links E3 logistic + E6
+# index). Override with e.g. ROUTINES="1 2 3 4 5 6". With the 2 default routines:
+# 4 chains × 8 stages = 32 jobs; at most 4 run at once (one per routine×engine).
 # Engine is exported per job (BLP_COHERENCE_ENGINE); blp_2_rc_coherence.jl tags
 # numerical outputs *_coherence_num so blp_1 and blp_2 results never collide.
 #
 # Prerequisite: warm-start deltas on the cluster:
-#   data/output/logit_delta_E{1,2,3}_spec_12_coherence.bin
+#   data/output/logit_delta_E{k}_spec_12_coherence.bin  for each k in ${ROUTINES}
 # (the sigma stage warns + falls back to log-share init if its delta is missing).
 #
-# Usage:  bash submit_blp_2_rc_coherence_all.sh
+# Usage:  bash submit_blp_rc_coherence_all.sh
+#         ROUTINES="1 2 3 4 5 6" bash submit_blp_rc_coherence_all.sh
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 mkdir -p "${HERE}/logs"
 
+# Default headline routines: E3 (logistic) + E6 (single-index). Override via env.
+ROUTINES="${ROUTINES:-3 6}"
+# Engines: IFT (blp_2) + numerical (blp_1) cross-check. Override e.g. ENGINES="ift".
+ENGINES="${ENGINES:-ift numerical}"
 STAGES=(sigma rc2 rc3 rc4 full ext1 ext2 extended)
 GENERIC="${HERE}/submit_blp_rc_coherence_stage.sh"
 
-# Stage-dependent wall-time (overrides #SBATCH --time in the stage script):
+# Stage-dependent wall-time (overrides #SBATCH --time in the stage script). Capped at
+# the gpu_h200 QOS max wall-PER-JOB: 4-day requests are rejected (QOSMaxWallDuration-
+# PerJobLimit), 2 days is accepted. Raise WALL_DEEP if your QOS allows more.
 #   sigma..rc4  → 1 day   (1-param warm-start; historical convergence <6h)
 #   full, ext1  → 2 days  (5-6 params; historical convergence <15h)
-#   ext2        → 4 days  (7 params; numerical engine took >48h; IFT ~6h)
-#   extended    → 4 days  (8 params; most expensive stage)
+#   ext2/ext    → WALL_DEEP (default 2 days; IFT ~6h. Numerical may need a resubmit
+#                 to resume if it wall-kills — per-stage checkpoints make that safe.)
+WALL_DEEP="${WALL_DEEP:-2-00:00:00}"
 stage_wall() {
     case "$1" in
-        ext2|extended) echo "4-00:00:00" ;;
+        ext2|extended) echo "${WALL_DEEP}" ;;
         full|ext1)     echo "2-00:00:00" ;;
         *)             echo "1-00:00:00" ;;
     esac
 }
 
-for k in 1 2 3; do
-    for eng in ift numerical; do
+for k in ${ROUTINES}; do
+    for eng in ${ENGINES}; do
         if [ "${eng}" = "numerical" ]; then tag="num"; else tag="ift"; fi
         echo "── chain: E${k} / ${eng} ──"
         prev=""
@@ -62,4 +72,5 @@ for k in 1 2 3; do
         done
     done
 done
-echo "Submitted 6 chains × 8 stages = 48 coherence RC-BLP jobs."
+n_routines=$(echo ${ROUTINES} | wc -w); n_engines=$(echo ${ENGINES} | wc -w)
+echo "Submitted $((n_routines * n_engines)) chains × 8 stages = $((n_routines * n_engines * 8)) coherence RC-BLP jobs (routines: ${ROUTINES}; engines: ${ENGINES})."

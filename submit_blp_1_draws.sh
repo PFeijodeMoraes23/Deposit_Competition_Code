@@ -16,6 +16,10 @@
 module reset
 module load Julia/1.11.4-linux-x86_64
 
+# Read the post-fix coherence reference panel (demand_1_spec_12.parquet) for market
+# keys, matching the coherence RC-BLP estimation inputs. Draws are routine-independent.
+export BLP_COHERENCE_INPUTS=1
+
 # Strict error checking starts after module loading to avoid false failures
 set -euo pipefail
 

@@ -1004,6 +1004,80 @@ def fig11_cvm_vs_cosif(df: pd.DataFrame) -> None:
     plt.close(fig)
 
 
+# ── Fig 12: annualised fee ratio per bank — all 9 institutions ────────────────
+def fig12_fee_ratio_per_bank(df: pd.DataFrame) -> None:
+    """
+    3×3 panel: one subplot per institution, Y = annualised fee ratio (%/yr).
+    Uses quarterly aggregation (sum of 3 monthly increments / EOM dep_total × 4 × 100).
+    Each subplot has its own Y scale — digitals (Nubank, Mercado Pago) run 30-400%/yr
+    due to tiny deposit bases; incumbents run 2-7%/yr.
+    """
+    q = quarterly_agg(df)
+    q = q[q["year"] >= 2013].copy()
+
+    all_banks = INCUMBENTS + DIGITALS   # BB, Caixa, Bradesco, Itaú, Santander, Inter, Nubank, C6, MP
+    ncols, nrows = 3, 3
+    fig, axes = plt.subplots(nrows, ncols, figsize=(13, 11), sharex=False, sharey=False)
+    axes_flat = axes.flatten()
+
+    pix_line   = pd.Timestamp("2020-11-01")
+    reclass_lo = pd.Timestamp("2025-01-01")
+    reclass_hi = pd.Timestamp("2026-12-31")
+
+    for ax, bank in zip(axes_flat, all_banks):
+        bdf = q[q["bank"] == bank].sort_values("date")
+        color = COLORS[bank]
+
+        ax.plot(bdf["date"], bdf["fee_ratio_q_ann"],
+                color=color, linewidth=1.6, zorder=3)
+        ax.fill_between(bdf["date"], 0, bdf["fee_ratio_q_ann"],
+                        color=color, alpha=0.10)
+
+        # PIX launch
+        ymax = bdf["fee_ratio_q_ann"].max() if not bdf.empty else 1
+        ax.axvline(pix_line, color="#444", lw=0.9, ls="--", alpha=0.7)
+
+        # 2025 reclassification band
+        ax.axvspan(reclass_lo, reclass_hi, alpha=0.08, color="red", linewidth=0)
+
+        # Annotations only if there is room (skip for very noisy digitals)
+        if ymax < 20:
+            ax.text(pix_line, ymax * 0.92, " PIX", fontsize=6.5, color="#444", va="top")
+
+        ax.set_title(bank, fontsize=9, fontweight="bold", color=color)
+        ax.set_ylabel("%/yr", fontsize=7.5)
+        ax.yaxis.set_major_formatter(mticker.FormatStrFormatter("%.1f"))
+        ax.tick_params(axis="x", rotation=30, labelsize=6.5)
+        ax.tick_params(axis="y", labelsize=7)
+
+        # Y floor at 0 unless bank has negative quarters
+        if bdf["fee_ratio_q_ann"].min() >= -0.1:
+            ax.set_ylim(bottom=0)
+
+    # Hide the unused 9th cell (we have 9 banks in 3×3 so nothing hidden)
+    for ax in axes_flat[len(all_banks):]:
+        ax.set_visible(False)
+
+    # Shared legend for reference lines
+    from matplotlib.lines import Line2D
+    legend_handles = [
+        Line2D([0], [0], color="#444", lw=1, ls="--", label="PIX launch (Nov 2020)"),
+        mpatches.Patch(color="red", alpha=0.15, label="2025+ COSIF reclassification"),
+    ]
+    fig.legend(handles=legend_handles, loc="lower center", ncol=2,
+               fontsize=8, bbox_to_anchor=(0.5, 0.01))
+
+    fig.suptitle(
+        "Fig 12 — Annualised Fee Ratio per Bank (%/yr)\n"
+        "= sum of 3 monthly increments / EOM dep_total × 400.  Each subplot has its own Y scale.\n"
+        "Digitals (Nubank, Mercado Pago) have tiny deposit bases → ratios in hundreds of %/yr.",
+        fontsize=9, fontweight="bold",
+    )
+    fig.tight_layout(rect=[0, 0.05, 1, 0.96])
+    _savefig(fig, "fee_reversal_fig12_fee_ratio_per_bank.png")
+    plt.close(fig)
+
+
 # ── main ──────────────────────────────────────────────────────────────────────
 def main() -> None:
     df = load_data()
@@ -1020,11 +1094,12 @@ def main() -> None:
     fig9_event_study(df)
     cf = fig10_correction_factor(df)
     fig11_cvm_vs_cosif(df)
+    fig12_fee_ratio_per_bank(df)
 
     # ── Save summary CSV ────────────────────────────────────────────────────
     csv_out = OUT_DIR / "fee_reversal_summary.csv"
     summary.to_csv(csv_out, index=False, float_format="%.6f")
-    print(f"\nSummary CSV -> {csv_out.name}")
+    print(f"\nSummary CSV -> {csv_out}")
 
     print("\n=== Correction factors (2025 COSIF reclassification) ===")
     if not cf.empty:

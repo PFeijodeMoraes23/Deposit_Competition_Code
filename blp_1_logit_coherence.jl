@@ -5,20 +5,27 @@ Non-random-coefficients logit demand estimation for BLP (θ₂ = 0) — COHERENC
 
 This is the post-"coherence-fix" replacement for blp_1_logit_local.jl. The sleepiness
 function was re-estimated locally, changing the demand-prep outputs. There are now
-**3 estimation routines** (instead of 5), and the demand-prep writes self-contained
-`demand_X_spec_12.parquet` files (NOT the old `demand_X_final_spec_12.parquet`):
+**6 estimation routines** (the original three plus three link-based variants), and the
+demand-prep writes self-contained `demand_X_spec_12.parquet` files (NOT the old
+`demand_X_final_spec_12.parquet`):
 
-  E1  Local B-type          → demand_1_spec_12.parquet
-  E2  Pooled B+D Linear     → demand_2_spec_12.parquet
-  E3  Pooled B+D Logistic   → demand_3_logistic_spec_12.parquet
+  E1  Local B-type                 → demand_1_spec_12.parquet
+  E2  Pooled B+D Linear            → demand_2_spec_12.parquet
+  E3  Pooled B+D Logistic          → demand_3_logistic_spec_12.parquet
+  E4  Pooled Constrained Linear    → demand_4_constrained_spec_12.parquet
+  E5  Pooled Probit                → demand_5_probit_spec_12.parquet
+  E6  Pooled Single-Index          → demand_6_index_spec_12.parquet
 
 Each parquet already carries every column the logit needs (spread_ann in bps, share_D /
 share_B_cond, is_B, deposit_type, CodConglomeradoPrudencial, the X_COLS, and all
-LOO/cost/capital instruments), so no separate "finalization" step is required.
+LOO/cost/capital instruments), so no separate "finalization" step is required. The three
+link-based routines (E4/E5/E6) are produced by estimation_demand_link_common.py, which
+mirrors estimation_3's demand prep exactly (same columns/scaling) under a different
+sleepiness link, so the logit treats all six routines identically.
 
-This file doubles as the **shared library** for the three thin per-routine entrypoints
-(blp_1_logit_e{1,2,3}_coherence.jl). They `include` this file and call `run_strategy(...)`.
-When executed directly, this file's `main()` runs all three routines and writes the
+This file doubles as the **shared library** for the six thin per-routine entrypoints
+(blp_1_logit_e{1..6}_coherence.jl). They `include` this file and call `run_strategy(...)`.
+When executed directly, this file's `main()` runs all six routines and writes the
 combined summary. All outputs are suffixed `_coherence` and are fully parallel to the old
 pipeline — nothing canonical is clobbered.
 
@@ -34,11 +41,11 @@ IK2016 effective clusters G*.
 
 Usage
 -----
-  # All three routines + combined summary:
+  # All six routines + combined summary:
   julia --project=. --threads=auto blp_1_logit_coherence.jl
 
   # A single routine (via the thin entrypoints):
-  julia --project=. blp_1_logit_e3_coherence.jl
+  julia --project=. blp_1_logit_e6_coherence.jl
 
 References
 ----------
@@ -71,11 +78,15 @@ const IV_COST    = ["personnel_cost_ratio_lag", "admin_cost_ratio_lag",
                     "tax_cost_ratio_lag"]
 const IV_CAPITAL = ["indice_basileia_lag"]
 
-# Coherence estimation routines (3, not 5). E3 input is the logistic-pooled prep.
+# Coherence estimation routines (6). E3 input is the logistic-pooled prep; E4/E5/E6 are
+# the link-based variants from estimation_demand_link_common.py (constrained/probit/index).
 const ESTIM_STRATEGIES = [
     (id=1, label="E1", prefix="demand_1"),
     (id=2, label="E2", prefix="demand_2"),
     (id=3, label="E3", prefix="demand_3_logistic"),
+    (id=4, label="E4", prefix="demand_4_constrained"),
+    (id=5, label="E5", prefix="demand_5_probit"),
+    (id=6, label="E6", prefix="demand_6_index"),
 ]
 
 # Sub-model definitions (keys must match make_blp_logit_table.py expectations)

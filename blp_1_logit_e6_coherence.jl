@@ -1,21 +1,21 @@
 """
-blp_1_logit_e3_coherence.jl
+blp_1_logit_e6_coherence.jl
 ===========================
-Thin entrypoint: run ONLY estimation routine E3 (Pooled B+D Logistic, demand_3_logistic)
-of the coherence logit build, then merge its results into the combined coherence summary.
+Thin entrypoint: run ONLY estimation routine E6 (Pooled Single-Index, demand_6_index) of
+the coherence logit build, then merge its results into the combined coherence summary.
 
 Shares all logic with blp_1_logit_coherence.jl (included below). Run all six routines
 at once with `julia blp_1_logit_coherence.jl` instead.
 
 Usage
 -----
-  julia --project=. --threads=auto blp_1_logit_e3_coherence.jl
+  julia --project=. --threads=auto blp_1_logit_e6_coherence.jl
 """
 
 include(joinpath(@__DIR__, "blp_1_logit_coherence.jl"))
 
-function main_e3()
-    estim = ESTIM_STRATEGIES[findfirst(s -> s.id == 3, ESTIM_STRATEGIES)]
+function main_e6()
+    estim = ESTIM_STRATEGIES[findfirst(s -> s.id == 6, ESTIM_STRATEGIES)]
     println("=" ^ 70)
     println("  BLP Logit (Non-RC) — COHERENCE — single routine $(estim.label) — Spec $SPEC_ID")
     println("=" ^ 70)
@@ -24,4 +24,4 @@ function main_e3()
     println("  [DONE] Coherence logit routine $(estim.label) complete.")
 end
 
-main_e3()
+main_e6()

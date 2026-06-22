@@ -295,8 +295,19 @@ function main()
     println("  Saved: $(basename(nu_path))")
 
     # ── 2. Load reference spec data for market keys ──────────────────────
-    prefix = estim == 5 ? "demand_5_logistic" : "demand_$(estim)"
-    fname  = "$(prefix)_final_spec_$(spec).parquet"
+    # Draws only need the (mca_code, time_id) market keys, which are the same across
+    # routines. With BLP_COHERENCE_INPUTS=1 read the post-fix coherence parquet (no
+    # `_final` suffix) so the key set matches the coherence estimation panels exactly.
+    if lowercase(get(ENV, "BLP_COHERENCE_INPUTS", "0")) in ("1", "true", "yes")
+        _coh_prefix = Dict(1 => "demand_1", 2 => "demand_2", 3 => "demand_3_logistic",
+                           4 => "demand_4_constrained", 5 => "demand_5_probit",
+                           6 => "demand_6_index")
+        prefix = get(_coh_prefix, estim, "demand_$(estim)")
+        fname  = "$(prefix)_spec_$(spec).parquet"
+    else
+        prefix = estim == 5 ? "demand_5_logistic" : "demand_$(estim)"
+        fname  = "$(prefix)_final_spec_$(spec).parquet"
+    end
     path   = joinpath(input_dir, fname)
     println("\n  Loading reference panel: $fname")
     isfile(path) || error("Reference parquet not found: $path")

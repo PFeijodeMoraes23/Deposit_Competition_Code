@@ -4,7 +4,7 @@ blp_1_logit_e1_coherence.jl
 Thin entrypoint: run ONLY estimation routine E1 (Local B-type, demand_1) of the
 coherence logit build, then merge its results into the combined coherence summary.
 
-Shares all logic with blp_1_logit_coherence.jl (included below). Run all three routines
+Shares all logic with blp_1_logit_coherence.jl (included below). Run all six routines
 at once with `julia blp_1_logit_coherence.jl` instead.
 
 Usage

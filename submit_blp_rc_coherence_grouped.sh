@@ -14,7 +14,9 @@
 #   ext2 :                                one job,  4-day wall  (afterok HEAD)
 #   ext  : extended                       one job,  4-day wall  (afterok ext2)
 #
-# 6 chains (E1/E2/E3 × ift/numerical) × 3 jobs = 18 jobs  (vs 48 in the per-stage
+# DEFAULT routine set is "3 6" (the two headline sleepiness links E3 logistic + E6
+# index); override with e.g. ROUTINES="1 2 3 4 5 6". With the 2 default routines:
+# 4 chains (E3/E6 × ift/numerical) × 3 jobs = 12 jobs  (vs 32 in the per-stage
 # orchestrator). Per-stage checkpoints + the engine's skip-logic make a wall-killed
 # HEAD fully resumable: just resubmit and it skips the stages already on disk.
 #
@@ -23,16 +25,26 @@
 # calling Julia (which runs a comma-separated stage subset in one process).
 #
 # Prerequisite (same as the per-stage orchestrator): warm-start deltas on the
-# cluster — data/output/logit_delta_E{1,2,3}_spec_12_coherence.bin.
+# cluster — data/output/logit_delta_E{k}_spec_12_coherence.bin for each k in ${ROUTINES}.
 #
-# NOTE: validate once with a smoke test after OOD returns (e.g. submit only the E1
+# NOTE: validate once with a smoke test after OOD returns (e.g. submit only the E6
 # numerical HEAD and confirm the startup GPU-vs-CPU guard passes) before the full set.
 #
 # Usage:  bash submit_blp_rc_coherence_grouped.sh
+#         ROUTINES="1 2 3 4 5 6" bash submit_blp_rc_coherence_grouped.sh
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 mkdir -p "${HERE}/logs"
 
+# Default headline routines: E3 (logistic) + E6 (single-index). Override via env.
+ROUTINES="${ROUTINES:-3 6}"
+# Engines: IFT (blp_2) + numerical (blp_1) cross-check. Override e.g. ENGINES="ift".
+ENGINES="${ENGINES:-ift numerical}"
+# Per-job wall time. The gpu_h200 QOS caps wall-PER-JOB: 4-day requests are rejected
+# with QOSMaxWallDurationPerJobLimit, and a 2-day job is accepted — so 2 days is the
+# usable max. Override if your QOS allows more, e.g. WALL_DEEP="3-00:00:00".
+WALL_HEAD="${WALL_HEAD:-2-00:00:00}"
+WALL_DEEP="${WALL_DEEP:-2-00:00:00}"
 HEAD_STAGES="sigma+rc2+rc3+rc4+full+ext1"   # '+'-joined; stage script → comma list
 GENERIC="${HERE}/submit_blp_rc_coherence_stage.sh"
 
@@ -47,19 +59,20 @@ submit_one () {  # $1=routine $2=engine $3=tag $4=stage $5=wall $6=jobtag [$7=de
         "${GENERIC}"
 }
 
-for k in 1 2 3; do
-    for eng in ift numerical; do
+for k in ${ROUTINES}; do
+    for eng in ${ENGINES}; do
         if [ "${eng}" = "numerical" ]; then tag="num"; else tag="ift"; fi
         echo "── grouped chain: E${k} / ${eng} ──"
 
-        jid_head=$(submit_one "${k}" "${eng}" "${tag}" "${HEAD_STAGES}" "2-00:00:00" "head")
-        echo "    head (sigma..ext1): ${jid_head}  wall=2d"
+        jid_head=$(submit_one "${k}" "${eng}" "${tag}" "${HEAD_STAGES}" "${WALL_HEAD}" "head")
+        echo "    head (sigma..ext1): ${jid_head}  wall=${WALL_HEAD}"
 
-        jid_ext2=$(submit_one "${k}" "${eng}" "${tag}" "ext2" "4-00:00:00" "ext2" "${jid_head}")
-        echo "    ext2: ${jid_ext2}  (afterok ${jid_head}, wall=4d)"
+        jid_ext2=$(submit_one "${k}" "${eng}" "${tag}" "ext2" "${WALL_DEEP}" "ext2" "${jid_head}")
+        echo "    ext2: ${jid_ext2}  (afterok ${jid_head}, wall=${WALL_DEEP})"
 
-        jid_ext=$(submit_one "${k}" "${eng}" "${tag}" "extended" "4-00:00:00" "extended" "${jid_ext2}")
-        echo "    extended: ${jid_ext}  (afterok ${jid_ext2}, wall=4d)"
+        jid_ext=$(submit_one "${k}" "${eng}" "${tag}" "extended" "${WALL_DEEP}" "extended" "${jid_ext2}")
+        echo "    extended: ${jid_ext}  (afterok ${jid_ext2}, wall=${WALL_DEEP})"
     done
 done
-echo "Submitted 6 grouped chains × 3 jobs = 18 coherence RC-BLP jobs (was 48)."
+n_routines=$(echo ${ROUTINES} | wc -w); n_engines=$(echo ${ENGINES} | wc -w)
+echo "Submitted $((n_routines * n_engines)) grouped chains × 3 jobs = $((n_routines * n_engines * 3)) coherence RC-BLP jobs (routines: ${ROUTINES}; engines: ${ENGINES})."
