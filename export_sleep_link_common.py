@@ -77,9 +77,10 @@ def build_first_stage_table(results_dict, est_num):
     caption = rf"Pooled B+D --- First Stage Estimation (Est.\ {est_num})"
     label = f"tab:est{est_num}_first_stage"
     notes = (
-        r"\scriptsize \textit{Notes:} Standard errors clustered at the conglomerate level "
-        r"are reported in parentheses, correcting for group size imbalance following "
-        r"\textcite{imbens2016robust} and \textcite{carter2017asymptotic}. "
+        r"\scriptsize \textit{Notes:} The first stage is linear; cluster-robust standard "
+        r"errors at the conglomerate level are reported in parentheses, with the "
+        r"\textcite{carter2017asymptotic} effective-number-of-clusters ($G^*$) "
+        r"degrees-of-freedom correction for cluster-size imbalance. "
         r"Significance levels: *** $p<0.01$, ** $p<0.05$, * $p<0.1$."
     )
 
@@ -154,10 +155,16 @@ def build_second_stage_table(results_dict, est_num, ss_caption, est_note):
     multispan = 5
     label = f"tab:est{est_num}_second_stage"
     notes = (
-        r"\scriptsize \textit{Notes:} Standard errors clustered at the conglomerate level "
-        r"are reported in parentheses, correcting for group size imbalance following "
-        r"\textcite{imbens2016robust} and \textcite{carter2017asymptotic}. "
-        r"Significance levels: *** $p<0.01$, ** $p<0.05$, * $p<0.1$. " + est_note +
+        r"\scriptsize \textit{Notes:} Standard errors and $p$-values are obtained by a "
+        r"score/multiplier wild cluster bootstrap at the conglomerate level "
+        r"(\textcite{cameron2008bootstrap}; \textcite{mackinnon2017wild}), with 999 "
+        r"replications and Webb six-point weights to accommodate the severe cluster-size "
+        r"imbalance. Because the estimator is nonlinear in the index (and, for the "
+        r"single index, the link is profiled nonparametrically), the "
+        r"\textcite{imbens2016robust} bias-reduced linearisation does not apply; the "
+        r"\textcite{carter2017asymptotic} effective-cluster count $G^*$ is reported only "
+        r"as a diagnostic. Significance levels: *** $p<0.01$, ** $p<0.05$, * $p<0.1$. " +
+        est_note +
         r" $\phi$ itself is constructed from the native index coefficients, not these AMEs."
     )
 

@@ -105,6 +105,7 @@ from estimation_3_sleep import (
     run_pooled_second_stage as e3_second_stage,
     NonLinearResults,
 )
+from utils.sleep_links import fit_joint_single_index, phi_from_native
 
 _DRAFTS_DIR = Path(
     r"C:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)"
@@ -566,6 +567,51 @@ def run_single_index(df, state_cols, has_cf, logit_res, degree=3):
     return res_like, phi_t, pd.Series(lo), pd.Series(hi)
 
 
+def _init_from_logit_direction(logit_res, idx_cols):
+    """Warm-start theta for the joint single index from the logit native
+    coefficients (same index direction, different link), ordered as idx_cols."""
+    nat = logit_res.params_native
+    return np.array([float(nat.get(f"interaction_{sv}", 0.0)) for sv in idx_cols], float)
+
+
+def _joint_phi_t(df_ss, res, link):
+    """National pop-weighted phi_t for a joint single-index fit (Est 7/8), built
+    from the NATIVE index x stored monotone link via phi_from_native (AMEs never
+    touch phi). Point series only; theta uncertainty is reported in the
+    coefficient table via the wild cluster bootstrap (no figure band)."""
+    phi_mt = phi_from_native(df_ss, res, link)
+    w = df_ss["pop_total"].fillna(0.0).values.astype(float) if "pop_total" in df_ss.columns else np.ones(len(df_ss))
+    work = pd.DataFrame({"yq": df_ss["year_quarter"].values,
+                         "mun": df_ss["CODMUN_IBGE"].astype(str).values,
+                         "phi": phi_mt, "w": w})
+    mk = work.groupby(["yq", "mun"], observed=True).agg(phi=("phi", "mean"), M=("w", "sum")).reset_index()
+    num = (mk["phi"] * mk["M"]).groupby(mk["yq"]).sum()
+    den = mk["M"].groupby(mk["yq"]).sum().replace(0, np.nan)
+    phi_t = (num / den).dropna()
+    frac_oob = float(np.mean((phi_mt < 0) | (phi_mt > 1)))
+    return phi_t, pd.Series(phi_t.to_dict()), pd.Series(phi_t.to_dict()), frac_oob
+
+
+def _run_joint(df_in, iv_cols, state_cols, link, logit_res, loss="robust", n_starts=2):
+    """Est 7 (link='sieve') / Est 8 (link='kernel'): joint Ichimura SLS estimating
+    the index direction AND the link together, warm-started from the logit
+    direction. Returns (df_ss, res_like, phi_t, lo, hi, frac_oob). The official
+    phi uses the robust-loss fit, matching the sleepiness pipeline."""
+    df = df_in.copy()
+    df, _ = e3_first_stage(df, iv_cols, [c for c in state_cols if c != "constant"])
+    idx_cols = [c for c in state_cols if c != "constant"]
+    init = _init_from_logit_direction(logit_res, idx_cols) if logit_res is not None else None
+    res = fit_joint_single_index(df, state_cols, has_cf=True, link=link, loss=loss,
+                                 init_theta=init, n_starts=n_starts, boot_B=999,
+                                 boot_scheme="webb", seed=0, label=link)
+    if res is None:
+        return None, None, None, None, None, 0.0
+    cols = state_cols + ["deposit_balance", "nr_lagged_dep", "entity_id", "v_hat_x_lagged_dep"]
+    df_ss = df.dropna(subset=cols).copy()
+    phi_t, lo, hi, frac_oob = _joint_phi_t(df_ss, res, link)
+    return df_ss, res, phi_t, lo, hi, frac_oob
+
+
 def build_frames():
     """Build the two base frames once (E1 unified; pooled shared by E2/E3),
     trim to needed columns to keep per-run copies light, and add the time vars."""
@@ -632,6 +678,10 @@ def run_all():
         ("PB +Time", True, "probit",  "probit"),
         ("SI Base", False, "si",      "si"),
         ("SI +Time", True, "si",      "si"),
+        ("J7 Base", False, "joint",   "sieve"),
+        ("J7 +Time", True, "joint",   "sieve"),
+        ("J8 Base", False, "joint",   "kernel"),
+        ("J8 +Time", True, "joint",   "kernel"),
     ]
 
     results = {}
@@ -639,6 +689,7 @@ def run_all():
         state_cols = s_time if with_time else s_tech
         print(f"\n--- Estimating {label} ({'Tech+Time' if with_time else 'Tech'}) ---")
         phi_override = None
+        joint_oob = None
         try:
             if runner == "lin1":
                 df, res_ss, _ = _run_linear(e1_df, iv_cols, state_cols, e1_first_stage, e1_second_stage, label)
@@ -652,6 +703,13 @@ def run_all():
                 e2_key = "E2 +Time" if with_time else "E2 Base"
                 init = _init_from_linear(results[e2_key]["res"], state_cols) if e2_key in results else None
                 df, res_ss, _ = _run_link(pooled_df, iv_cols, state_cols, "uniform", init=init, loss="linear")
+            elif runner == "joint":
+                e3_key = "E3 +Time" if with_time else "E3 Base"
+                logit_res = results[e3_key]["res"] if e3_key in results else None
+                df, res_ss, phi_j, lo_j, hi_j, joint_oob = _run_joint(
+                    pooled_df, iv_cols, state_cols, link, logit_res)
+                if res_ss is not None:
+                    phi_override = (phi_j, lo_j, hi_j)
             else:  # single index
                 e3_key = "E3 +Time" if with_time else "E3 Base"
                 if e3_key not in results:
@@ -672,14 +730,14 @@ def run_all():
 
         if phi_override is not None:
             phi_t, lo, hi = phi_override
-            frac_oob = 0.0
+            frac_oob = joint_oob if joint_oob is not None else 0.0
         else:
             phi_t, lo, hi, frac_oob = implied_phi_t(df, res_ss, link)
 
         lb_stat, lb_p = (np.nan, np.nan)
         wald = (np.nan, np.nan, 0)
-        if runner == "si":
-            pass  # joint Wald ill-defined for a fixed-direction single index
+        if runner in ("si", "joint"):
+            pass  # joint Wald needs the full AME covariance; SI/joint store only diag bootstrap SEs
         elif with_time:
             wald = wald_time_block(res_ss)
         else:
@@ -751,6 +809,8 @@ GROUPS = [
     ("Logit (Est 3)",         ["E3 Base", "E3 +Time"]),
     ("Probit",                ["PB Base", "PB +Time"]),
     ("Single-Index",          ["SI Base", "SI +Time"]),
+    ("Joint SI: Sieve (Est 7)",  ["J7 Base", "J7 +Time"]),
+    ("Joint SI: Kernel (Est 8)", ["J8 Base", "J8 +Time"]),
 ]
 F_ETA = {
     "Local Linear (Est 1)":  "Uniform (LPM, post-hoc clip)",
@@ -759,6 +819,8 @@ F_ETA = {
     "Logit (Est 3)":         "Logistic",
     "Probit":                "Normal",
     "Single-Index":          "Nonparametric, monotone (data-chosen)",
+    "Joint SI: Sieve (Est 7)":  "Nonparametric, monotone (joint, I-spline)",
+    "Joint SI: Kernel (Est 8)": "Nonparametric (joint, kernel + rearrangement)",
 }
 ORDER_KEYS = [k for _, ks in GROUPS for k in ks]
 BASE_KEYS = [ks[0] for _, ks in GROUPS]
@@ -786,6 +848,8 @@ HEADER_SHORT = {
     "Logit (Est 3)": r"Logit (E3)",
     "Probit": r"Probit",
     "Single-Index": r"Single-Idx",
+    "Joint SI: Sieve (Est 7)": r"Joint Sieve (E7)",
+    "Joint SI: Kernel (Est 8)": r"Joint Kernel (E8)",
 }
 
 
@@ -888,6 +952,8 @@ _MODEL_SLUG = {
     "Logit (Est 3)": "logit",
     "Probit": "probit",
     "Single-Index": "singleindex",
+    "Joint SI: Sieve (Est 7)": "jointsieve",
+    "Joint SI: Kernel (Est 8)": "jointkernel",
 }
 
 
@@ -1056,14 +1122,19 @@ def build_markdown(results, figures, out_path, tex_base_name, tex_time_name):
     L.append("")
     L.append("---")
     L.append("")
-    L.append("> **Scope.** The six estimators below — Local Linear, Pooled Linear, Constrained "
-             "Linear, Logit, Probit, Single-Index — are now first-class routines in the sleepiness "
+    L.append("> **Scope.** The first six estimators — Local Linear, Pooled Linear, Constrained "
+             "Linear, Logit, Probit, Single-Index — are first-class routines in the sleepiness "
              "pipeline as **Est 1–6** (`estimation_{1..6}_sleep.py` → `export_results.py` → "
              "`estimation_demand_1_prep.py`); each runs the full 12-spec grid and feeds the BLP "
-             "demand step. This report is the spec-12 ($F_\\eta$) comparison plus the $+$Time "
-             "(trend/cycle) robustness test, re-run on the COSIF-fixed panel. Per the modelling "
-             "convention, $\\phi$ is always built from the **native index coefficients $\\times$ "
-             "link**; the Average Marginal Effects shown in the tables are for reporting only.")
+             "demand step. This report adds two **jointly-estimated single-index** estimators — "
+             "**Est 7** (monotone I-spline sieve link) and **Est 8** (kernel local-linear link) — "
+             "which estimate the index direction $\\theta$ and the link $G$ *together* by Ichimura "
+             "(1993) semiparametric least squares (see Appendix A); their inference uses a "
+             "score/multiplier wild cluster bootstrap. This report is the spec-12 ($F_\\eta$) "
+             "comparison plus the $+$Time (trend/cycle) robustness test, on the COSIF-fixed panel. "
+             "Per the modelling convention, $\\phi$ is always built from the **native index "
+             "coefficients $\\times$ link** (`phi_from_native`); the Average Marginal Effects shown "
+             "in the tables are for reporting only.")
     L.append("")
     L.append("## Question")
     L.append("")
@@ -1097,7 +1168,9 @@ def build_markdown(results, figures, out_path, tex_base_name, tex_time_name):
     L.append("| Constrained Linear | Uniform | $\\phi=\\mathrm{clip}(\\mathbf{S}'\\beta,0,1)$ | **yes** (imposed in estimation) |")
     L.append("| Logit (Est 3) | Logistic | $\\phi=\\Lambda(\\mathbf{S}'\\theta)$ | yes |")
     L.append("| Probit | Normal | $\\phi=\\Phi(\\mathbf{S}'\\theta)$ | yes |")
-    L.append("| Single-Index | nonparametric, monotone | $\\phi=\\hat G(\\mathbf{S}'\\hat\\theta)$ | yes |")
+    L.append("| Single-Index | nonparametric, monotone | $\\phi=\\hat G(\\mathbf{S}'\\hat\\theta)$ (link conditional on logit $\\hat\\theta$) | yes |")
+    L.append("| Joint SI: Sieve (Est 7) | nonparametric, monotone | $\\phi=\\hat G(\\mathbf{S}'\\hat\\theta)$, $(\\hat\\theta,\\hat G)$ estimated jointly (I-spline) | **yes** (by construction) |")
+    L.append("| Joint SI: Kernel (Est 8) | nonparametric | $\\phi=\\hat G(\\mathbf{S}'\\hat\\theta)$, $(\\hat\\theta,\\hat G)$ joint (kernel) | yes (after rearrangement) |")
     L.append("")
     L.append(
         "The three uniform-$\\eta$ rows isolate the effect of the *bound*: Est 1/2 are the linear "
@@ -1110,6 +1183,71 @@ def build_markdown(results, figures, out_path, tex_base_name, tex_time_name):
         "References). Reading across the columns "
         "tells us **how much the assumed shock distribution actually matters**."
     )
+    L.append("")
+    L.append("## Estimating the joint single index (Est 7 and Est 8)")
+    L.append("")
+    L.append("The Single-Index above (Est 6) is *two-step*: it borrows the index direction "
+             "$\\theta$ from the logit fit and then estimates only the link, so its inference is "
+             "conditional on that borrowed $\\theta$. **Est 7 and Est 8 instead estimate the "
+             "direction $\\theta$ and the link $G$ jointly**, by Ichimura (1993) semiparametric "
+             "least squares — minimising the entity-demeaned sum of squares of "
+             "$\\,D_{jmt}-G(\\mathbf S_{mt}'\\theta)\\,\\widetilde D_{t-1}-\\gamma\\,(\\hat v\\widetilde D_{t-1})$ "
+             "over $\\theta$, with $G$ (and the control-function coefficient $\\gamma$) profiled out "
+             "at each candidate $\\theta$. They share the scaffold below and differ only in how the "
+             "link $G$ is profiled.")
+    L.append("")
+    L.append("*Shared scaffold.* (1) Keep rows with non-missing state variables, deposit balance "
+             "$D$, the no-rebalancing carry-forward $\\widetilde D_{t-1}$ (`nr_lagged_dep`), entity "
+             "id and the control-function term $\\hat v\\widetilde D_{t-1}$. (2) The index uses the "
+             "spec's **non-constant** state variables (the constant is absorbed into $G$'s level), "
+             "each standardised to mean $0$/s.d.\\ $1$ for conditioning, with the scale fixed by "
+             "$\\lVert\\theta\\rVert=1$. (3) **Entity fixed effects** are removed by within-entity "
+             "demeaning of the outcome and of the control function. (4) For a candidate $\\theta$ the "
+             "profiled objective is the entity-demeaned SSR of the display above; the **robust** "
+             "variant replaces it by the Cauchy $\\rho$-loss "
+             "$\\sum_i\\log(1+(e_i/2.385\\hat s)^2)$ with a MAD scale $\\hat s$. (5) The direction is "
+             "found by **Nelder–Mead** over the unit sphere, **multistart** (warm-started from the "
+             "logit direction, plus the equal-weight vector and random unit vectors), keeping the "
+             "lowest objective. (6) **Inference** is a **score/multiplier wild cluster bootstrap**: "
+             "the per-observation SLS influence functions for $\\theta$, "
+             "$\\mathrm{IF}_i=M^{-1}e_i\\,[G'(v_i)\\widetilde D_{t-1}\\widetilde{\\mathbf S}_i]^{\\mathrm{dm}}$, "
+             "are projected onto the sphere tangent and **summed within conglomerate clusters**; the "
+             "cluster sums are perturbed by wild weights ($B=999$ Webb 6-point in production, "
+             "Rademacher $B=199$ in smoke tests) and the average marginal effects recomputed — no "
+             "refit per draw. (7) $\\phi$ is built by `phi_from_native` from the stored monotone link "
+             "evaluated at the **native** index; the **robust** fit feeds the official $\\phi$, and "
+             "the reported AMEs (average-derivative) are for the table only.")
+    L.append("")
+    L.append("*Est 7 — monotone I-spline sieve link.* At each $\\theta$, with index "
+             "$v=\\widetilde{\\mathbf S}'\\theta$: place a clamped cubic B-spline knot vector "
+             "(boundary knots at the $0.1\\%/99.9\\%$ quantiles of $v$, five interior knots at "
+             "interior quantiles); form **monotone I-spline ramps** $R_j(v)=\\sum_{k\\ge j}B_k(v)$ "
+             "(cumulative sums of the B-spline basis), so $\\sum_j\\beta_jR_j$ is non-decreasing "
+             "whenever $\\beta_j\\ge0$; regress $D^{\\mathrm{dm}}$ on the entity-demeaned design "
+             "$[R_j(v)\\widetilde D_{t-1}]_j$ plus the demeaned control function by "
+             "**bounds-constrained least squares** with $\\beta_j\\ge0$ and free $\\gamma$. The link "
+             "$G(v)=\\sum_k c_kB_k(v)$ with $c=\\mathrm{cumsum}(\\hat\\beta)$ is therefore **monotone "
+             "and in $[0,1]$ by construction**; the robust loss adds two IRLS passes with Cauchy "
+             "weights, and $G'$ is the analytic spline derivative.")
+    L.append("")
+    L.append("*Est 8 — kernel local-linear link.* At each $\\theta$, on a 200-point grid over "
+             "$[q_{0.005},q_{0.995}]$ of $v$ with an undersmoothed Gaussian bandwidth "
+             "$h=0.7\\cdot0.9\\,\\min(\\mathrm{sd}(v),\\mathrm{IQR}/1.349)\\,n^{-1/5}$, the link is "
+             "profiled by **backfitting** (six Gauss–Seidel sweeps) — needed because the entity-mean "
+             "term couples $G$ across an entity's periods and $G$ enters multiplied by "
+             "$\\widetilde D_{t-1}$: with the current $G$ compute the coupling "
+             "$m_i=\\overline{G(v)\\widetilde D_{t-1}}_{\\,\\text{entity}(i)}$; update $\\gamma$ by a "
+             "1-D OLS; then, with pseudo-response $a_i=(D^{\\mathrm{dm}}-\\gamma\\,cf^{\\mathrm{dm}})+m_i$, "
+             "fit the **multiplicative** local-linear problem "
+             "$\\min_{\\alpha,\\beta}\\sum_iK_h(v_i-g)[a_i-(\\alpha+\\beta(v_i-g))\\widetilde D_{t-1,i}]^2$ "
+             "at each grid point $g$ (kernel weights $\\propto\\widetilde D_{t-1,i}^2$), set "
+             "$G(g)=\\hat\\alpha$, and interpolate to observations. The $G$-step is **binned** "
+             "(Fan–Marron 1994) — per-bin moment sums are convolved with the kernel at all grid "
+             "points by one matrix product — and the robust loss wraps the backfit in two IRLS "
+             "rounds. **Monotonicity is imposed ex post by rearrangement** "
+             "(Chernozhukov–Fernández-Val–Galichon 2009) and clipped to $[0,1]$; here $\\theta$ is "
+             "genuinely estimated jointly with $G$ (the logit only *warm-starts* the search). Because "
+             "the kernel profiling is costly, **Est 8 is run for spec 12 only**.")
     L.append("")
     L.append("## Test design")
     L.append("")
@@ -1156,7 +1294,7 @@ def build_markdown(results, figures, out_path, tex_base_name, tex_time_name):
         w = results[tk]["wald"]
         tt = _fmt(res, "interaction_time_trend")
         gg = _fmt(res, "interaction_gdp_growth_yoy")
-        is_si = gname == "Single-Index"
+        is_si = gname in ("Single-Index", "Joint SI: Sieve (Est 7)", "Joint SI: Kernel (Est 8)")
         wstat = f"{w[0]:.2f}" if pd.notna(w[0]) else ("n/a" if is_si else "—")
         wp = f"{w[1]:.3f}{get_stars(w[1])}" if pd.notna(w[1]) else ("n/a" if is_si else "—")
         L.append(f"| {gname} | {F_ETA.get(gname, '')} | {tt} | {gg} | {wstat} | {wp} |")
@@ -1169,7 +1307,8 @@ def build_markdown(results, figures, out_path, tex_base_name, tex_time_name):
              "non-differentiable, so its delta-method SEs understate uncertainty and its Wald is "
              "inflated; read its significance qualitatively.*")
     L.append("")
-    _wald_models = [(g, ks[1]) for g, ks in GROUPS if ks[1] in results and g != "Single-Index"]
+    _no_wald = ("Single-Index", "Joint SI: Sieve (Est 7)", "Joint SI: Kernel (Est 8)")
+    _wald_models = [(g, ks[1]) for g, ks in GROUPS if ks[1] in results and g not in _no_wald]
     _n_tested = len(_wald_models)
     _n_sig = sum(1 for g, tk in _wald_models
                  if pd.notna(results[tk]["wald"][1]) and results[tk]["wald"][1] < 0.05)
@@ -1416,9 +1555,174 @@ def build_markdown(results, figures, out_path, tex_base_name, tex_time_name):
     L.append("- Carter, A. V., Schnepel, K. T., & Steigerwald, D. G. (2017). \"Asymptotic behavior of a "
              "$t$-test robust to cluster heterogeneity.\" *Review of Economics and Statistics* 99(4): "
              "698–709.")
+    # --- Joint single-index (Est 7/8) and wild-bootstrap references (Appendix A) ---
+    L.append("- Fan, J. (1992). \"Design-adaptive nonparametric regression.\" *Journal of the American "
+             "Statistical Association* 87(420): 998–1004.")
+    L.append("- Fan, J., & Marron, J. S. (1994). \"Fast implementations of nonparametric curve "
+             "estimators.\" *Journal of Computational and Graphical Statistics* 3(1): 35–56.")
+    L.append("- Ramsay, J. O. (1988). \"Monotone regression splines in action.\" *Statistical Science* "
+             "3(4): 425–441.")
+    L.append("- Newey, W. K. (1997). \"Convergence rates and asymptotic normality for series "
+             "estimators.\" *Journal of Econometrics* 79(1): 147–168.")
+    L.append("- Chen, X. (2007). \"Large sample sieve estimation of semi-nonparametric models.\" In "
+             "*Handbook of Econometrics*, Vol. 6B, Ch. 76, 5549–5632. Elsevier.")
+    L.append("- Chernozhukov, V., Fernández-Val, I., & Galichon, A. (2009). \"Improving point and "
+             "interval estimators of monotone functions by rearrangement.\" *Biometrika* 96(3): 559–575.")
+    L.append("- Horowitz, J. L. (2009). *Semiparametric and Nonparametric Methods in Econometrics.* "
+             "Springer.")
+    L.append("- Li, K.-C., & Duan, N. (1989). \"Regression analysis under link violation.\" *Annals of "
+             "Statistics* 17(3): 1009–1052.")
+    L.append("- Ruud, P. A. (1983). \"Sufficient conditions for the consistency of maximum likelihood "
+             "estimation despite misspecification of distribution in multinomial discrete choice "
+             "models.\" *Econometrica* 51(1): 225–228.")
+    L.append("- Delecroix, M., Hristache, M., & Patilea, V. (2006). \"On semiparametric $M$-estimation "
+             "in single-index regression.\" *Journal of Statistical Planning and Inference* 136(3): "
+             "730–769.")
+    L.append("- Newey, W. K., Powell, J. L., & Vella, F. (1999). \"Nonparametric estimation of "
+             "triangular simultaneous equations models.\" *Econometrica* 67(3): 565–603.")
+    L.append("- Blundell, R., & Powell, J. L. (2004). \"Endogeneity in semiparametric binary response "
+             "models.\" *Review of Economic Studies* 71(3): 655–679.")
+    L.append("- Bell, R. M., & McCaffrey, D. F. (2002). \"Bias reduction in standard errors for linear "
+             "regression with multi-stage samples.\" *Survey Methodology* 28(2): 169–181.")
+    L.append("- Cameron, A. C., Gelbach, J. B., & Miller, D. L. (2008). \"Bootstrap-based improvements "
+             "for inference with clustered errors.\" *Review of Economics and Statistics* 90(3): 414–427.")
+    L.append("- MacKinnon, J. G., & Webb, M. D. (2017). \"Wild bootstrap inference for wildly different "
+             "cluster sizes.\" *Journal of Applied Econometrics* 32(2): 233–254.")
+    L.append("- Webb, M. D. (2014/2023). \"Reworking wild bootstrap-based inference for clustered "
+             "errors.\" Queen's Economics Department WP 1315 (publ. *Canadian Journal of Economics*, 2023).")
+    L.append("- Kline, P., & Santos, A. (2012). \"A score based approach to wild bootstrap inference.\" "
+             "*Journal of Econometric Methods* 1(1): 23–41.")
     L.append("")
 
+    _append_joint_si_appendix(L)
+
     out_path.write_text("\n".join(L), encoding="utf-8")
+
+
+def _append_joint_si_appendix(L):
+    """Forward-looking methodological appendix for the planned joint single-index
+    estimators Est 7 (monotone sieve) and Est 8 (kernel) — method, design choices
+    with references/trade-offs, the wild-bootstrap-vs-Imbens-Kolesar reasoning, and
+    the implementation roadmap. Documented here BEFORE the estimators are coded."""
+    L.append("---")
+    L.append("")
+    L.append("# Appendix A — Joint single-index estimators (Est 7–8): method, choices, and plan")
+    L.append("")
+    L.append("*Est 7 and Est 8 are now estimated and appear as the last two columns/figures above; "
+             "this appendix records the method and every methodological choice — with references and "
+             "trade-offs. Pipeline integration (their own `estimation_{7,8}_sleep.py` routines, demand "
+             "prep and export tables) follows the same pattern as Est 1–6.*")
+    L.append("")
+    L.append("## A.1 The estimator")
+    L.append("")
+    L.append("The current single index (**Est 6 / Single-Index** above) takes the index **direction "
+             "$\\theta$ from the logit fit** and then estimates only the link $G$ with a fixed-degree "
+             "cubic sieve, with inference *conditional* on $\\theta$. That leaves three caveats: "
+             "$\\sqrt n$-consistency of $\\theta$ leans on the Li–Duan (1989) / Ruud (1983) "
+             "*linear-conditional-mean (elliptical-regressor)* condition; the link is a fixed-degree "
+             "parametric approximation; and the standard errors ignore estimation of $\\theta$.")
+    L.append("")
+    L.append("**Est 7** and **Est 8** remove all three by estimating the direction $\\theta$ and the "
+             "link $G$ **jointly**, via Ichimura (1993) **semiparametric least squares (SLS)** — "
+             "minimising the entity-demeaned sum of squares of")
+    L.append("")
+    L.append("$$ D_{jmkt}-G(\\mathbf S_{mt}'\\theta)\\,Z_{jmkt}-\\gamma\\,(\\hat v_{jmkt}Z) $$")
+    L.append("")
+    L.append("over $\\theta$, with $G$ profiled out nonparametrically at each candidate $\\theta$ "
+             "($Z\\equiv\\widetilde D_{t-1}$ is the no-rebalancing carry-forward term, $\\hat v$ the "
+             "first-stage control-function residual). Because the outcome (the deposit equation) is "
+             "**continuous**, this is Ichimura SLS — **not** Klein–Spady (1993), which targets "
+             "*binary* response. The two estimators differ only in how $G$ is profiled: **Est 7** uses "
+             "a **monotone I-spline sieve** link (monotone and in $[0,1]$ by construction); **Est 8** "
+             "uses a **kernel local-linear** link (monotonised *ex post* by rearrangement). The exact "
+             "step-by-step procedure is in the main text (§ *Estimating the joint single index "
+             "(Est 7 and Est 8)*).")
+    L.append("")
+    L.append("## A.2 Design choices (references and trade-offs)")
+    L.append("")
+    L.append("| Choice | Decision | Rationale / reference | Trade-off |")
+    L.append("|---|---|---|---|")
+    L.append("| Link, Est 7 | Monotone **I-spline sieve** | Bound + monotone (it's a CDF) by "
+             "construction; composes with FE + CF + clustering as constrained OLS. Ramsay (1988); "
+             "Newey (1997); Chen (2007); Balabdaoui–Groeneboom–Hendrickx (2019) | Sieve rates rather "
+             "than the classic kernel $\\sqrt n$ theory |")
+    L.append("| Link, Est 8 | **Kernel local-linear** | Canonical Ichimura $\\sqrt n$ SLS; binned/FFT "
+             "for speed. Ichimura (1993); Fan (1992); Fan–Marron (1994) | Expensive (→ spec 12 only); "
+             "needs a monotone **rearrangement** (Chernozhukov–Fernández-Val–Galichon 2009) |")
+    L.append("| Normalisation | $\\lVert\\theta\\rVert=1$ (+ sign) | Index identified only up to scale. "
+             "Ichimura (1993); Horowitz (2009) | Needs a *continuous* anchor regressor — the binary "
+             "`pix_exists` cannot identify the scale |")
+    L.append("| Loss | **Both** LS and robust; **robust feeds $\\phi$** | LS = Ichimura efficiency; "
+             "robust (Cauchy) matches est3–6 and tames the mega-bank tail. Delecroix–Hristache–Patilea "
+             "(2006) | LS is dominated by a few huge banks; robust uses a different (M-estimation) "
+             "asymptotic framework |")
+    L.append("| Smoothing | **Undersmoothed** | Makes the link bias negligible for $\\theta$ "
+             "inference (the condition for valid $\\sqrt n$ $\\hat\\theta$). Härdle–Hall–Ichimura "
+             "(1993) | Worse link *fit* than the MSE-optimal smoother |")
+    L.append("| Control function | **Two-step** (OLS → $\\hat v$) | Matches est1–6; its estimation "
+             "enters the influence function. Newey–Powell–Vella (1999); Blundell–Powell (2004) | Less "
+             "efficient than full joint estimation |")
+    L.append("| $\\theta$ optimisation | **Multistart** | The SLS objective is non-convex in "
+             "$\\theta$; multistart (incl. the Est-6 logit direction) guards against local minima | "
+             "Compute |")
+    L.append("")
+    L.append("Throughout, $\\phi$ is built from the **native index $\\times$ link** "
+             "(`phi_from_native`) for both `market_panel_phis` and the demand-prep shares; the Average "
+             "Marginal Effects are **reporting-only** and never enter $\\phi$.")
+    L.append("")
+    L.append("## A.3 Inference: wild cluster bootstrap vs. Imbens–Kolesár (2016)")
+    L.append("")
+    L.append("**What IK2016 is.** An *analytic* small-sample fix for cluster-robust SEs in **linear** "
+             "models: (i) the **Bell–McCaffrey (2002) bias-reduced linearisation (BRL)** — a cluster "
+             "HC2-type residual adjustment built from the linear hat matrix "
+             "$P=X(X'X)^{-1}X'$ — and (ii) a **Satterthwaite/Bell–McCaffrey effective degrees of "
+             "freedom** for the $t$-reference. Its *spirit* is already in the pipeline: est1–6 use the "
+             "Carter–Schnepel–Steigerwald (2017) effective-cluster count $G^*=G/(1+\\mathrm{CV}^2)$ "
+             "with a $t(G^*)$ reference.")
+    L.append("")
+    L.append("**Why it does not extend to Est 7/8.** (1) *No linear hat matrix* — BRL is defined "
+             "through $P=X(X'X)^{-1}X'$, but Est 7/8 are nonlinear in $\\theta$ with a profiled "
+             "*nonparametric* link, so there is no $P$ and no exact residual-adjustment analogue "
+             "(least of all for the kernel link's functional derivative). (2) The asymptotic variance "
+             "is the **semiparametric SLS sandwich** (Ichimura 1993), with extra terms from estimating "
+             "$G$ and the two-step control function (Newey–Powell–Vella 1999) — applying IK2016 would "
+             "first require linearising the whole multi-step estimator. (3) *Nonlinear $+$ few "
+             "clusters* — even with a df fix, the normal/$t$ approximation to a semiparametric "
+             "estimator's finite-sample law is unreliable at $G^*\\approx 9$.")
+    L.append("")
+    L.append("**What we use instead.** The **score/multiplier wild cluster bootstrap** "
+             "(Kline & Santos 2012): perturb the **cluster-summed influence-function contributions** "
+             "by wild weights and recompute the linearised estimate. It is cheap per draw (no refit — "
+             "essential for the kernel Est 8), valid under few effective clusters, and approximates the "
+             "estimator's sampling law directly (Cameron–Gelbach–Miller 2008; MacKinnon–Webb 2017). "
+             "**Smoke test: $B=199$, Rademacher weights; full run: $B=999$, Webb 6-point weights** "
+             "(for the severe cluster-size imbalance; Webb 2014). The cheap $G^*$-corrected "
+             "$t$-interval is also printed for the Est 7/8 AMEs as a clearly-labelled **secondary** "
+             "(an approximation for these estimators), with the bootstrap as primary.")
+    L.append("")
+    L.append("## A.4 Implementation roadmap")
+    L.append("")
+    L.append("- Shared engine in `utils/sleep_links.py`: `fit_joint_single_index(link in {sieve,kernel}, "
+             "loss in {ls,robust})` (multistart SLS + profiled link + per-cluster influence functions), "
+             "`score_wild_bootstrap(...)`, and `phi_from_native` extended to the sieve/kernel links.")
+    L.append("- Pipeline routines mirroring est6: `estimation_7_sleep.py` (sieve, 12 specs), "
+             "`estimation_8_sleep.py` (kernel, spec 12); `export_7/8_sleep_results.py`; "
+             "`estimation_7/8_demand_1_prep.py` (parquet tags `demand_7_sijoint` / `demand_8_sikernel`).")
+    L.append("- Wired into `run_sleep_pipeline.py` / `export_results.py` / `estimation_demand_1_prep.py`; "
+             "`export_analyze_spec12.py` left untouched.")
+    L.append("- Est 7 and Est 8 then added to this report as two more models (Base vs $+$Time), each "
+             "with its own $\\hat\\phi_t$ figure, to test whether the **jointly-estimated** single "
+             "index confirms or overturns the link-dependent *trend* and the robustly-negative "
+             "*cycle*. The local-logit / BLP step follows separately.")
+    L.append("")
+    L.append("*References for this appendix:* Ichimura (1993); Klein & Spady (1993); Härdle, Hall & "
+             "Ichimura (1993); Fan (1992); Fan & Marron (1994); Ramsay (1988); Newey (1997); Chen "
+             "(2007); Balabdaoui, Groeneboom & Hendrickx (2019); Chernozhukov, Fernández-Val & Galichon "
+             "(2009); Horowitz (2009); Li & Duan (1989); Ruud (1983); Delecroix, Hristache & Patilea "
+             "(2006); Newey, Powell & Vella (1999); Blundell & Powell (2004); Bell & McCaffrey (2002); "
+             "Imbens & Kolesár (2016); Carter, Schnepel & Steigerwald (2017); Cameron, Gelbach & Miller "
+             "(2008); MacKinnon & Webb (2017); Webb (2014); Kline & Santos (2012).")
+    L.append("")
 
 
 # ==============================================================================

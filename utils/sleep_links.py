@@ -20,13 +20,19 @@ shares — uses the NATIVE index coefficients + the link via ``phi_from_native``
 never the AMEs. ``NonLinearResults.params`` holds AMEs (tables);
 ``NonLinearResults.params_native`` holds the native index coefficients (phi).
 
-Inference mirrors estimation_3_sleep.py: AMEs with a numerical-Jacobian delta
-method and the Imbens-Kolesar (2016) effective-cluster t correction.
-References for the single index: Ichimura (1993); Klein & Spady (1993);
-Robertson, Wright & Dykstra (1988, PAVA).
+Inference (Est3/4/5/6): a score/multiplier WILD CLUSTER BOOTSTRAP at the
+conglomerate level (Cameron-Gelbach-Miller 2008; MacKinnon-Webb 2017), perturbing
+the cluster-summed influence functions by wild weights and re-reading the AMEs.
+This replaces the earlier homoskedastic NLLS delta-method SEs (Est3/4/5 were NOT
+cluster-robust) and the conditional clustered-OLS SE (Est6). The Imbens-Kolesar
+(2016) BRL does not apply to these nonlinear / profiled-link estimators (no linear
+hat matrix); the Carter-Schnepel-Steigerwald (2017) G* effective-cluster count is
+retained only as a reported diagnostic. References for the single index: Ichimura
+(1993); Klein & Spady (1993); Robertson, Wright & Dykstra (1988, PAVA).
 """
 from __future__ import annotations
 
+import os
 import numpy as np
 import pandas as pd
 import statsmodels.api as sm
@@ -124,21 +130,45 @@ def _nlls_resid(params, y_dm, X, Z, CF, entity_idx, link):
     return y_dm - yhat_dm
 
 
-def _generic_ame(theta_full, X, link, K, G, h=1e-5):
-    theta_X = theta_full[:K]
-    AME = np.zeros(K + G)
+def _link_density(z, link):
+    """Link density g'(z) = dF_eta/dz for the analytic average marginal effect."""
+    if link == "probit":
+        return norm.pdf(z)
+    if link == "uniform":
+        return ((z > 0.0) & (z < 1.0)).astype(float)
+    if link == "logit":
+        p = link_cdf(z, link)
+        return p * (1.0 - p)
+    raise ValueError(f"unknown link {link!r}")
+
+
+def _ame_dummy_flags(X, K):
+    flags = np.zeros(K, dtype=bool)
     for k in range(K):
         col = X[:, k]
         uniq = np.unique(col[~np.isnan(col)])
-        is_dummy = (len(uniq) == 2) and (0.0 in uniq) and (1.0 in uniq)
-        if is_dummy:
-            X1 = X.copy(); X1[:, k] = 1.0
-            X0 = X.copy(); X0[:, k] = 0.0
-            AME[k] = np.mean(link_cdf(X1 @ theta_X, link) - link_cdf(X0 @ theta_X, link))
+        flags[k] = (len(uniq) == 2) and (0.0 in uniq) and (1.0 in uniq)
+    return flags
+
+
+def _generic_ame(theta_full, X, link, K, G, h=1e-5, dummy_flags=None):
+    """Analytic average marginal effects: continuous regressors use the exact
+    derivative E[g'(S'theta)]*theta_k; 0/1 dummies use the discrete difference
+    G(idx+theta_k(1-x))-G(idx-theta_k x), all without copying X (fast in the
+    bootstrap loop). dummy_flags may be precomputed for speed."""
+    theta_X = theta_full[:K]
+    idx = X @ theta_X
+    mean_dens = float(np.mean(_link_density(idx, link)))
+    flags = _ame_dummy_flags(X, K) if dummy_flags is None else dummy_flags
+    AME = np.zeros(K + G)
+    for k in range(K):
+        if flags[k]:
+            col = X[:, k]
+            idx1 = idx + theta_X[k] * (1.0 - col)
+            idx0 = idx - theta_X[k] * col
+            AME[k] = float(np.mean(link_cdf(idx1, link) - link_cdf(idx0, link)))
         else:
-            Xp = X.copy(); Xp[:, k] += h
-            Xm = X.copy(); Xm[:, k] -= h
-            AME[k] = np.mean((link_cdf(Xp @ theta_X, link) - link_cdf(Xm @ theta_X, link)) / (2 * h))
+            AME[k] = mean_dens * theta_X[k]
     if G > 0:
         AME[K:] = theta_full[K:]
     return AME
@@ -190,30 +220,32 @@ def fit_nlls_link(df, state_cols, has_cf, link, loss="cauchy"):
 
     res_lsq = least_squares(_nlls_resid, init, args=(y_dm, X, Z, CF, entity_idx, link),
                             method="trf", loss=loss)
-    Jr = res_lsq.jac
-    try:
-        cov = np.linalg.pinv(Jr.T @ Jr) * (np.sum(res_lsq.fun ** 2) / (len(y_dm) - len(init)))
-    except Exception:
-        cov = np.eye(len(init))
-
-    ame, bse, cov_ame = _generic_ame_cov(res_lsq.x, cov, X, link, K, G)
     idx = [f"interaction_{sv}" if sv != "constant" else "nr_lagged_dep" for sv in state_cols] + CF_cols
-    ps = pd.Series(ame, index=idx)
-    bs = pd.Series(bse, index=idx)
-    tvals = ps / bs
 
     cl = df_ss["CodConglomeradoPrudencial"].astype(str)
     G_star, G_nominal = _G_star(cl)
-    pvals = pd.Series(stats.t.sf(np.abs(tvals), df=G_star) * 2, index=idx)
+    cl_u, cl_inv = np.unique(cl.values, return_inverse=True)
+    n_cl = len(cl_u)
+
+    # Inference: score/multiplier wild cluster bootstrap (replaces the old
+    # homoskedastic delta-method SEs, which were NOT cluster-robust).
+    ame_d, bse_d, pval_d = nlls_link_wild_bootstrap(res_lsq, X, link, K, G, idx,
+                                                    cl_inv, n_cl)
+    ps = pd.Series(ame_d).reindex(idx)
+    bs = pd.Series(bse_d).reindex(idx)
+    pvals = pd.Series(pval_d).reindex(idx)
+    tvals = ps / bs.replace(0, np.nan)
 
     tss = float(np.sum((y_dm - y_dm.mean()) ** 2))
     rss = float(np.sum(res_lsq.fun ** 2))
     rsq = 1 - rss / tss if tss > 0 else np.nan
     ps_native = pd.Series(res_lsq.x, index=idx)
-    print(f"  [NLLS-{link}] status={res_lsq.status} | nfev={res_lsq.nfev} | cost={res_lsq.cost:.4g}")
+    B_used, scheme_used = boot_cfg()
+    print(f"  [NLLS-{link}] status={res_lsq.status} | nfev={res_lsq.nfev} | "
+          f"cost={res_lsq.cost:.4g} | wild boot B={B_used} ({scheme_used})")
     return NonLinearResults(ps, bs, tvals, pvals, G_star, params_native=ps_native,
                             nobs=len(y_dm), rsquared=rsq, G_nominal=G_nominal,
-                            cov_ame=cov_ame, link=link)
+                            cov_ame=None, link=link)
 
 
 # ==============================================================================
@@ -274,39 +306,44 @@ def fit_single_index(df, state_cols, has_cf, logit_res, degree=3):
     Xdm = work[design] - work.groupby("entity_id")[design].transform("mean")
 
     cl = df_ss["CodConglomeradoPrudencial"].astype(str)
-    res = sm.OLS(y_dm.values, Xdm.values).fit(cov_type="cluster", cov_kwds={"groups": cl})
-    b = np.asarray(res.params)[:degree + 1]
-    cov_b = np.asarray(res.cov_params())[:degree + 1, :degree + 1]
+    Xdm_arr = Xdm.values.astype(float)
+    res = sm.OLS(y_dm.values, Xdm_arr).fit()
+    b_full = np.asarray(res.params, float)
+    b = b_full[:degree + 1]
     G_star, G_nominal = _G_star(cl)
+    cl_u, cl_inv = np.unique(cl.values, return_inverse=True)
+    n_cl = len(cl_u)
 
-    # average-derivative AMEs (reporting): AME_k = theta_k * mean_i G'(v_i)
-    dG = np.zeros(len(vs))
-    for d in range(1, degree + 1):
-        dG += d * b[d] * vs ** (d - 1)
-    dG /= vsd
-    mean_slope = float(np.mean(dG))
-    c = np.zeros(degree + 1)
-    for d in range(1, degree + 1):
-        c[d] = (d / vsd) * float(np.mean(vs ** (d - 1)))
-    try:
-        var_slope = float(c @ cov_b @ c)
-    except Exception:
-        var_slope = np.nan
+    # average-derivative AME_k = theta_k * mean_i G'(v_i), with G'(v) read off the
+    # sieve coefficients b. mean_slope depends only on b[:degree+1].
+    sv_pows = np.column_stack([vs ** (d - 1) for d in range(1, degree + 1)]) \
+        if degree >= 1 else np.empty((len(vs), 0))
+    dcoef = np.arange(1, degree + 1, dtype=float)
 
-    ame, bse, pv = {}, {}, {}
-    for nm, th in zip(phi_params, theta):
-        if nm == "nr_lagged_dep":
-            continue
-        ame[nm] = th * mean_slope
-        se = abs(th) * np.sqrt(var_slope) if np.isfinite(var_slope) else np.nan
-        bse[nm] = se
-        pv[nm] = (float(stats.t.sf(abs(ame[nm] / se), df=G_star if G_star > 1 else 30) * 2)
-                  if (se and np.isfinite(se) and se > 0) else np.nan)
+    def _mean_slope(bfull):
+        bb = np.asarray(bfull, float)[1:degree + 1]
+        return float(np.mean(sv_pows @ (dcoef * bb))) / vsd if degree >= 1 else 0.0
+
+    names = [nm for nm in phi_params if nm != "nr_lagged_dep"]
+    ths = {nm: th for nm, th in zip(phi_params, theta) if nm != "nr_lagged_dep"}
+
+    def _ame_fn(bfull):
+        ms = _mean_slope(bfull)
+        return {nm: ths[nm] * ms for nm in names}
+
+    mean_slope = _mean_slope(b_full)
+    ame = _ame_fn(b_full)
+    # Inference: score/multiplier wild cluster bootstrap on the sieve OLS
+    # (replaces the earlier conditional clustered-OLS delta-method SE).
+    bse, pv = ols_sieve_wild_bootstrap(Xdm_arr, np.asarray(res.resid, float),
+                                       cl_inv, n_cl, b_full, _ame_fn, ame)
     ps = pd.Series(ame); bs = pd.Series(bse); pvs = pd.Series(pv)
     tss = float(np.sum((y_dm.values - y_dm.values.mean()) ** 2))
     rss = float(np.sum(res.resid ** 2))
     rsq = 1 - rss / tss if tss > 0 else getattr(res, "rsquared", np.nan)
-    print(f"  [SingleIndex] cubic sieve deg={degree} | mean_slope={mean_slope:.4g}")
+    B_used, scheme_used = boot_cfg()
+    print(f"  [SingleIndex] cubic sieve deg={degree} | mean_slope={mean_slope:.4g} | "
+          f"wild boot B={B_used} ({scheme_used})")
     return NonLinearResults(ps, bs, ps / bs.replace(0, np.nan), pvs, G_star,
                             params_native=pd.Series(theta, index=phi_params),
                             nobs=len(df_ss), rsquared=rsq, G_nominal=G_nominal,
@@ -331,4 +368,495 @@ def phi_from_native(df: pd.DataFrame, res, link: str) -> np.ndarray:
         for d in range(len(b)):
             g += b[d] * vs ** d
         return np.clip(g, 0.0, 1.0)
+    if link in ("sieve", "kernel"):
+        # Joint single index (Est7/Est8): index over the NON-constant state vars,
+        # link stored as a monotone grid (kernel) or B-spline (sieve). Both are
+        # evaluated through si_vgrid/si_ggrid (a fine monotone lookup) for a single
+        # canonical path. Index uses theta over interaction_* only (no constant).
+        idx_params = [p for p in phi_params if p != "nr_lagged_dep"]
+        Xi = _build_phi_X(df, idx_params)
+        vv = Xi @ native[idx_params].values.astype(float)
+        g = np.interp(vv, res.si_vgrid, res.si_ggrid)
+        return np.clip(g, 0.0, 1.0)
     return np.clip(link_cdf(index, link), 0.0, 1.0)
+
+
+# ==============================================================================
+# JOINT SINGLE INDEX (Est7 sieve, Est8 kernel) — Ichimura (1993) SLS
+# ==============================================================================
+# Estimate the index direction theta AND the link G jointly by semiparametric
+# least squares: min over theta (||theta||=1) of the entity-demeaned SSR of
+#   D - G(S'theta)*Z - gamma*(vhat*Z),
+# with G profiled out at each theta. Est7: monotone cubic B-spline link with
+# ordered coefficients (Ramsay 1988; Newey 1997). Est8: kernel local-linear link
+# (Ichimura 1993; Fan 1992), monotonised by rearrangement (CFG 2009). Inference:
+# score/multiplier wild cluster bootstrap (Kline-Santos 2012). phi is built from
+# theta + the stored monotone link via phi_from_native; AMEs are reporting-only.
+def _fast_demean(M, entity_idx, counts):
+    """Within-entity demean each column of M (n x k) given integer entity_idx."""
+    M = np.asarray(M, float)
+    if M.ndim == 1:
+        s = np.bincount(entity_idx, weights=M, minlength=len(counts))
+        return M - (s / counts)[entity_idx]
+    out = np.empty_like(M)
+    for j in range(M.shape[1]):
+        s = np.bincount(entity_idx, weights=M[:, j], minlength=len(counts))
+        out[:, j] = M[:, j] - (s / counts)[entity_idx]
+    return out
+
+
+def _bspline_design(v, n_interior, degree=3):
+    """Cubic B-spline design at interior knots placed on quantiles of v.
+    Returns (B [n x K], knots). Monotone G = sum_k c_k B_k(v) iff c is nondecreasing."""
+    from scipy.interpolate import BSpline
+    v = np.asarray(v, float)
+    lo, hi = np.min(v), np.max(v)
+    if hi <= lo:
+        hi = lo + 1.0
+    qs = np.linspace(0, 1, n_interior + 2)[1:-1]
+    interior = np.quantile(v, qs) if n_interior > 0 else np.array([])
+    interior = np.clip(interior, lo + 1e-9, hi - 1e-9)
+    # clamped knot vector
+    t = np.concatenate(([lo] * (degree + 1), np.sort(interior), [hi] * (degree + 1)))
+    K = len(t) - degree - 1
+    B = BSpline.design_matrix(np.clip(v, lo, hi), t, degree).toarray()
+    return B, t
+
+
+def _ramp_design(v, t, degree=3):
+    """Monotone I-spline-style ramps R_j(v)=sum_{k>=j} B_k(v) from the cubic
+    B-spline basis on knot vector t. R_1≡1; R_2..R_K rise 0→1. A nonneg combination
+    sum_j beta_j R_j(v) is monotone nondecreasing (beta_1 is the floor)."""
+    from scipy.interpolate import BSpline
+    lo, hi = t[0], t[-1]
+    B = BSpline.design_matrix(np.clip(v, lo, hi), t, degree).toarray()
+    R = np.cumsum(B[:, ::-1], axis=1)[:, ::-1]   # R[:,j] = sum_{k>=j} B[:,k]
+    return R
+
+
+def _fit_link_sieve(R, Z, cf_dm, y_dm, einv, counts, w=None):
+    """Profiled monotone sieve link given the index. Design = [R_j*Z]_j (+ CF),
+    entity-demeaned; coefficients beta_j >= 0 (monotone, floor at beta_1), gamma free.
+    Solved by bounds-constrained LS (fast). Returns (beta, gamma, resid, ssr, c)
+    where c = cumsum(beta) are the B-spline coefficients of G."""
+    from scipy.optimize import lsq_linear
+    K = R.shape[1]
+    Rz = R * Z[:, None]
+    cols = [Rz] + ([cf_dm[:, None]] if cf_dm is not None else [])
+    X = np.column_stack(cols)
+    Xdm = _fast_demean(X, einv, counts)
+    sw = np.ones(len(y_dm)) if w is None else np.sqrt(np.maximum(w, 0.0))
+    p = X.shape[1]
+    lb = np.r_[np.zeros(K), np.full(p - K, -np.inf)]
+    ub = np.full(p, np.inf)
+    sol = lsq_linear(Xdm * sw[:, None], y_dm * sw, bounds=(lb, ub),
+                     method="bvls", max_iter=200)
+    b = sol.x
+    beta = b[:K]
+    gamma = b[K:] if p > K else np.array([])
+    resid = y_dm - Xdm @ b
+    ww = np.ones(len(y_dm)) if w is None else w
+    ssr = float(np.sum(ww * resid * resid))
+    return beta, gamma, resid, ssr, np.cumsum(beta)
+
+
+def _cauchy_weights(resid, scale=None):
+    """IRLS weights for the Cauchy (Lorentzian) robust loss; scale = MAD-based."""
+    r = np.asarray(resid, float)
+    s = scale if scale else (1.4826 * np.median(np.abs(r - np.median(r))) + 1e-12)
+    return 1.0 / (1.0 + (r / (2.385 * s)) ** 2)
+
+
+# ---- Est8 kernel local-linear link (joint SLS via backfitting) ---------------
+def _kernel_bw(v):
+    """Undersmoothed Gaussian bandwidth (Silverman x undersmoothing factor).
+    Undersmoothing keeps the link bias negligible for sqrt-n theta inference
+    (Hardle-Hall-Ichimura 1993)."""
+    v = np.asarray(v, float)
+    n = len(v)
+    sd = float(np.std(v))
+    q75, q25 = np.percentile(v, [75, 25])
+    iqr = q75 - q25
+    a = min(sd, iqr / 1.349) if iqr > 0 else sd
+    if a <= 0:
+        a = 1.0
+    return 0.7 * (0.9 * a * n ** (-0.2))   # 0.7 = undersmoothing factor
+
+
+def _local_linear_Zweighted(v, Z, a, grid, bw, wts=None, nbins=400):
+    """Binned local-linear fit of the MULTIPLICATIVE model a_i ~ G(v_i)*Z_i,
+    evaluated on grid. At each grid point g it solves
+        min_{al,be} sum_i K_h(v_i-g) [ a_i - (al + be (v_i-g)) Z_i ]^2  (x wts_i)
+    and returns G(g)=al-hat. Binned over v (Fan-Marron 1994) for speed: per-bin
+    moment sums are formed once, then convolved with the Gaussian kernel at each
+    grid point. Local LINEAR (not NW) for the standard O(h^2) boundary bias."""
+    v = np.asarray(v, float); Z = np.asarray(Z, float); a = np.asarray(a, float)
+    Z2 = Z * Z
+    Za = Z * a
+    if wts is not None:
+        wts = np.asarray(wts, float)
+        Z2 = Z2 * wts
+        Za = Za * wts
+    lo, hi = grid[0], grid[-1]
+    if hi <= lo:
+        hi = lo + 1.0
+    edges = np.linspace(lo, hi, nbins + 1)
+    ctr = 0.5 * (edges[:-1] + edges[1:])
+    bidx = np.clip(np.searchsorted(edges, v) - 1, 0, nbins - 1)
+    sZ2 = np.bincount(bidx, weights=Z2, minlength=nbins)
+    sZ2v = np.bincount(bidx, weights=Z2 * v, minlength=nbins)
+    sZ2v2 = np.bincount(bidx, weights=Z2 * v * v, minlength=nbins)
+    sZa = np.bincount(bidx, weights=Za, minlength=nbins)
+    sZav = np.bincount(bidx, weights=Za * v, minlength=nbins)
+    # Vectorised over grid: K is (n_grid x n_bins), all moments via one matmul each.
+    g = np.asarray(grid, float)
+    Kmat = np.exp(-0.5 * ((g[:, None] - ctr[None, :]) / bw) ** 2)
+    S00 = Kmat @ sZ2
+    S0v = Kmat @ sZ2v
+    S01 = S0v - g * S00
+    S11 = (Kmat @ sZ2v2) - 2.0 * g * S0v + g * g * S00
+    b0 = Kmat @ sZa
+    b1 = (Kmat @ sZav) - g * b0
+    det = S00 * S11 - S01 * S01
+    with np.errstate(divide="ignore", invalid="ignore"):
+        G_ll = (S11 * b0 - S01 * b1) / det           # local-linear alpha-hat
+        G_nw = np.where(S00 > 1e-12, b0 / S00, 0.0)   # NW fallback at thin grid points
+    bad = (S00 <= 1e-12) | (np.abs(det) < 1e-12 * (np.abs(S00 * S11) + 1e-12)) | ~np.isfinite(G_ll)
+    return np.where(bad, G_nw, G_ll)
+
+
+def _fit_link_kernel(v, Z, cf_dm, y_dm, einv, counts, bw, grid, wts=None,
+                     G_init=None, tol=1e-4, max_iter=40):
+    """Profiled kernel local-linear link for the FE + multiplicative-Z model, by
+    BACKFITTING (Gauss-Seidel): alternate a weighted local-linear G-step (the
+    entity-mean coupling held at the current G, then added back into the pseudo-
+    response) with a 1-D OLS gamma-step for the control function. G is left
+    UNCONSTRAINED here; monotonicity is imposed ex post by rearrangement (CFG
+    2009) in the caller. Returns (Ggrid, gamma, resid, ssr, G_obs).
+
+    The FE and G(v)Z are strongly coupled, so cold backfitting converges slowly
+    (a fixed few sweeps badly under-shoots the link level). We therefore iterate
+    to a convergence tolerance (max|dG| on the grid) up to max_iter, and accept a
+    warm-start grid G_init (the caller passes a quick exact sieve fit) so the loop
+    starts near the converged level and needs only a handful of sweeps."""
+    n = len(v)
+    if G_init is not None:
+        Ggrid = np.asarray(G_init, float).copy()
+        G_obs = np.interp(v, grid, Ggrid)
+    else:
+        G_obs = np.zeros(n)
+        Ggrid = np.zeros(len(grid))
+    gamma = 0.0
+    wcf = (wts if wts is not None else 1.0)
+    for _ in range(max_iter):
+        Gprev = Ggrid
+        t = G_obs * Z
+        m = (np.bincount(einv, weights=t, minlength=len(counts)) / counts)[einv]
+        if cf_dm is not None:
+            tZ_dm = t - m
+            den = float(np.dot(cf_dm * wcf, cf_dm))
+            num = float(np.dot(cf_dm * wcf, y_dm - tZ_dm))
+            gamma = num / den if den > 0 else 0.0
+            target = y_dm - gamma * cf_dm
+        else:
+            gamma = 0.0
+            target = y_dm
+        a = target + m                      # add back current entity-mean coupling
+        Ggrid = _local_linear_Zweighted(v, Z, a, grid, bw, wts=wts)
+        # phi is structurally a CDF: impose the [0,1] bound IN-LOOP. Without it the
+        # robust (Cauchy) IRLS diverges -- it keeps pushing G past 1 because the
+        # unconstrained local-linear link has nothing keeping it a valid CDF (the
+        # sieve gets this for free from its monotone-bounded basis). Monotonicity
+        # is still imposed ex post by rearrangement in the caller.
+        Ggrid = np.clip(Ggrid, 0.0, 1.0)
+        G_obs = np.interp(v, grid, Ggrid)
+        if np.max(np.abs(Ggrid - Gprev)) < tol:
+            break
+    t = G_obs * Z
+    m = (np.bincount(einv, weights=t, minlength=len(counts)) / counts)[einv]
+    resid = y_dm - (t - m) - (gamma * cf_dm if cf_dm is not None else 0.0)
+    ww = wts if wts is not None else 1.0
+    ssr = float(np.sum(ww * resid * resid))
+    return Ggrid, gamma, resid, ssr, G_obs
+
+
+def fit_joint_single_index(df, state_cols, has_cf, link="sieve", loss="ls",
+                           n_interior=5, degree=3, n_starts=4, init_theta=None,
+                           boot_B=199, boot_scheme="rademacher", seed=0, label=""):
+    """Joint single-index sleepiness by Ichimura (1993) SLS: estimate the index
+    direction theta (||theta||=1) and the link G TOGETHER.
+      link='sieve'  (Est7): monotone cubic I-spline ramps, nonneg coefs (shape
+                    restriction built in).
+      link='kernel' (Est8): local-linear link profiled by BACKFITTING for the
+                    entity FE + multiplicative-Z structure (binned, Fan-Marron
+                    1994), monotonised EX POST by rearrangement (CFG 2009).
+    loss in {'ls','robust'} (robust=Cauchy IRLS). Inference: score/multiplier wild
+    cluster bootstrap on theta -> AMEs. Returns a NonLinearResults with theta in
+    params_native (index over non-constant state vars), average-derivative AMEs in
+    params, a stored monotone link grid (si_vgrid/si_ggrid), bootstrap SEs/pvalues,
+    and link in {'sieve','kernel'}."""
+    from scipy.interpolate import BSpline
+    rng = np.random.default_rng(seed)
+    CF_cols = ["v_hat_x_lagged_dep"] if has_cf else []
+    cols = state_cols + ["deposit_balance", "nr_lagged_dep", "entity_id"]
+    df_ss = df.dropna(subset=cols + CF_cols).copy()
+    if len(df_ss) == 0:
+        return None
+
+    idx_cols = [c for c in state_cols if c != "constant"]   # index excludes the constant (it is in G)
+    S = df_ss[idx_cols].values.astype(float)
+    # standardise index regressors for numerical conditioning of ||theta||=1
+    S_mu = S.mean(0); S_sd = S.std(0); S_sd[S_sd <= 0] = 1.0
+    Sn = (S - S_mu) / S_sd
+    Z = df_ss["nr_lagged_dep"].values.astype(float)
+    y = df_ss["deposit_balance"].values.astype(float)
+    cf = df_ss["v_hat_x_lagged_dep"].values.astype(float) if has_cf else None
+    cl = df_ss["CodConglomeradoPrudencial"].astype(str).values
+    _, einv = np.unique(df_ss["entity_id"].values, return_inverse=True)
+    counts = np.bincount(einv).astype(float)
+    cl_u, cl_inv = np.unique(cl, return_inverse=True)
+    n_cl = len(cl_u)
+    y_dm = _fast_demean(y, einv, counts)
+    cf_dm = _fast_demean(cf, einv, counts) if has_cf else None
+    d = Sn.shape[1]
+
+    def _cauchy_obj(resid):
+        s = 1.4826 * np.median(np.abs(resid)) + 1e-12
+        return float(np.sum(np.log1p((resid / (2.385 * s)) ** 2)))
+
+    def _fit_link(th, want_grid=False):
+        """Profile the link at direction th. Returns the objective; if want_grid,
+        also returns (v, vgrid_std, ggrid_mono01, gpgrid_nonneg, resid). Both link
+        families share this signature so the multistart and the tail are common."""
+        v = Sn @ th
+        if link == "kernel":
+            lo, hi = np.quantile(v, [0.005, 0.995])
+            vgrid = np.linspace(lo, hi, 200)
+            bw = _kernel_bw(v)
+            # Warm-start the kernel backfit from a quick EXACT sieve fit at this
+            # theta: the sieve solves the FE + link in one BVLS, so its grid is
+            # near the converged kernel level and the backfit then needs only a
+            # few sweeps (cold backfitting converges slowly here -- see the
+            # FE x G(v)Z coupling).
+            qs = np.linspace(0, 1, n_interior + 2)[1:-1]
+            interior = np.clip(np.quantile(v, qs), lo + 1e-9, hi - 1e-9)
+            t_ws = np.concatenate(([lo] * (degree + 1), np.sort(interior), [hi] * (degree + 1)))
+            R_ws = _ramp_design(v, t_ws, degree)
+            _b, _g, _r, _s, c_ws = _fit_link_sieve(R_ws, Z, cf_dm, y_dm, einv, counts, None)
+            G_init = np.clip(BSpline(t_ws, c_ws, degree, extrapolate=True)(vgrid), 0.0, 1.0)
+            Gg, gamma, resid, ssr, _ = _fit_link_kernel(v, Z, cf_dm, y_dm, einv, counts, bw,
+                                                        vgrid, G_init=G_init)
+            if loss == "robust":
+                for _ in range(2):
+                    wts = _cauchy_weights(resid)
+                    Gg, gamma, resid, ssr, _ = _fit_link_kernel(v, Z, cf_dm, y_dm, einv,
+                                                                counts, bw, vgrid, wts=wts, G_init=Gg)
+                obj = _cauchy_obj(resid)
+            else:
+                obj = ssr
+            if not want_grid:
+                return obj
+            ggrid_mono = np.clip(np.maximum.accumulate(Gg), 0.0, 1.0)   # rearrange ex post (CFG 2009)
+            gp = np.clip(np.gradient(ggrid_mono, vgrid), 0.0, None)
+            return obj, v, vgrid, ggrid_mono, gp, resid
+        # ---- sieve (Est7): monotone I-spline ramps, nonneg coefs ----
+        lo, hi = np.quantile(v, [0.001, 0.999])
+        qs = np.linspace(0, 1, n_interior + 2)[1:-1]
+        interior = np.clip(np.quantile(v, qs), lo + 1e-9, hi - 1e-9)
+        t = np.concatenate(([lo] * (degree + 1), np.sort(interior), [hi] * (degree + 1)))
+        R = _ramp_design(v, t, degree)
+        w = None
+        if loss == "robust":
+            for _ in range(2):  # a couple of IRLS passes
+                beta, gamma, resid, ssr, c = _fit_link_sieve(R, Z, cf_dm, y_dm, einv, counts, w)
+                w = _cauchy_weights(resid)
+            obj = _cauchy_obj(resid)
+        else:
+            beta, gamma, resid, ssr, c = _fit_link_sieve(R, Z, cf_dm, y_dm, einv, counts, None)
+            obj = ssr
+        if not want_grid:
+            return obj
+        spl = BSpline(t, c, degree, extrapolate=True)
+        vgrid = np.linspace(t[0], t[-1], 200)
+        ggrid_mono = np.clip(np.maximum.accumulate(spl(vgrid)), 0.0, 1.0)
+        gp = np.clip(spl.derivative()(vgrid), 0.0, None)
+        return obj, v, vgrid, ggrid_mono, gp, resid
+
+    # ---- multistart over the unit sphere ----
+    from scipy.optimize import minimize
+    starts = []
+    if init_theta is not None:
+        iv = np.asarray(init_theta, float)
+        if len(iv) == d:
+            starts.append(iv / (np.linalg.norm(iv) + 1e-12))
+    starts.append(np.ones(d) / np.sqrt(d))
+    while len(starts) < n_starts:
+        r = rng.standard_normal(d)
+        starts.append(r / np.linalg.norm(r))
+
+    def _obj(theta):
+        return _fit_link(theta / (np.linalg.norm(theta) + 1e-12), want_grid=False)
+
+    best = None
+    for s0 in starts:
+        res = minimize(_obj, s0, method="Nelder-Mead",
+                       options={"maxiter": 300 * d, "xatol": 1e-3, "fatol": 1e-5})
+        if best is None or res.fun < best[0]:
+            best = (res.fun, res.x)
+    theta_hat = best[1] / (np.linalg.norm(best[1]) + 1e-12)
+    obj, v, vgrid, ggrid, gpgrid, resid = _fit_link(theta_hat, want_grid=True)
+
+    def _ames(theta):
+        th = theta / (np.linalg.norm(theta) + 1e-12)
+        vv = Sn @ th
+        gp = np.interp(vv, vgrid, gpgrid)          # link held fixed; only the index moves
+        mean_slope = float(np.mean(gp))
+        return {idx_cols[k]: th[k] / S_sd[k] * mean_slope for k in range(d)}
+
+    ame_hat = _ames(theta_hat)
+
+    # ---- score/multiplier wild cluster bootstrap on theta -> AMEs ----
+    gp_obs = np.interp(v, vgrid, gpgrid)
+    gS = (gp_obs * Z)[:, None] * Sn               # N x d  (d/dtheta of G(v)Z)
+    gS_dm = _fast_demean(gS, einv, counts)
+    Minv = np.linalg.pinv(gS_dm.T @ gS_dm)
+    IF = (resid[:, None] * gS_dm) @ Minv.T         # N x d influence functions for theta
+    IF = IF - np.outer(IF @ theta_hat, theta_hat)  # project to the sphere tangent
+    IF_cl = np.zeros((n_cl, d))
+    for k in range(d):
+        IF_cl[:, k] = np.bincount(cl_inv, weights=IF[:, k], minlength=n_cl)
+
+    bse, pvals = cluster_wild_bootstrap(theta_hat, IF_cl, _ames, ame_hat,
+                                        B=boot_B, scheme=boot_scheme, rng=rng)
+
+    ps = pd.Series({f"interaction_{k}": ame_hat[k] for k in idx_cols})
+    bs = pd.Series({f"interaction_{k}": bse[k] for k in idx_cols})
+    pv = pd.Series({f"interaction_{k}": pvals[k] for k in idx_cols})
+    G_star, G_nominal = _G_star(df_ss["CodConglomeradoPrudencial"].astype(str))
+    tss = float(np.sum((y_dm - y_dm.mean()) ** 2))
+    rsq = 1 - float(np.sum(resid ** 2)) / tss if tss > 0 else np.nan
+    theta_native = pd.Series({f"interaction_{idx_cols[k]}": float(theta_hat[k] / S_sd[k]) for k in range(d)})
+    print(f"  [JointSI-{link}-{loss}] starts={len(starts)} | obj={obj:.5g} | "
+          f"||theta||=1 | boot B={boot_B} ({boot_scheme})")
+    res = NonLinearResults(ps, bs, ps / bs.replace(0, np.nan), pv, G_star,
+                           params_native=theta_native, nobs=len(df_ss), rsquared=rsq,
+                           G_nominal=G_nominal, cov_ame=None, link=link)
+    # phi_from_native evaluates the NATIVE (raw) index = sum native_k*S_raw_k, which
+    # equals the standardised index v plus a constant offset; store the grid in that
+    # native-index frame so np.interp aligns.
+    offset = float(np.sum(theta_hat * S_mu / S_sd))
+    res.si_vgrid = vgrid + offset
+    res.si_ggrid = ggrid
+    res.si_degree = degree
+    res.boot_B = boot_B; res.boot_scheme = boot_scheme
+    return res
+
+
+def _wild_weights(n, scheme, rng):
+    if scheme == "webb":   # 6-point Webb weights (good for severe cluster imbalance)
+        vals = np.array([-np.sqrt(1.5), -1.0, -np.sqrt(0.5), np.sqrt(0.5), 1.0, np.sqrt(1.5)])
+        return rng.choice(vals, size=n)
+    return rng.choice(np.array([-1.0, 1.0]), size=n)   # Rademacher
+
+
+def cluster_wild_bootstrap(theta_hat, IF_cl, ame_fn, ame_hat, B=199,
+                           scheme="rademacher", rng=None):
+    """Score/multiplier wild cluster bootstrap (Kline & Santos 2012): perturb the
+    cluster-summed influence functions by wild weights, recompute the (linearised)
+    AME via ame_fn, and read SEs/p-values off the bootstrap distribution.
+    Returns (bse dict, pvals dict)."""
+    rng = rng or np.random.default_rng(0)
+    n_cl = IF_cl.shape[0]
+    keys = list(ame_hat.keys())
+    draws = {k: np.empty(B) for k in keys}
+    for b in range(B):
+        wv = _wild_weights(n_cl, scheme, rng)
+        theta_b = theta_hat + wv @ IF_cl
+        a_b = ame_fn(theta_b)
+        for k in keys:
+            draws[k][b] = a_b[k]
+    bse, pvals = {}, {}
+    for k in keys:
+        sd = float(np.std(draws[k], ddof=1))
+        bse[k] = sd
+        # symmetric bootstrap p for H0: AME=0, via the studentised pivot
+        z = abs(ame_hat[k]) / sd if sd > 0 else np.inf
+        pvals[k] = float(2 * stats.norm.sf(z)) if np.isfinite(z) else 0.0
+    return bse, pvals
+
+
+# ==============================================================================
+# Shared wild-cluster-bootstrap inference for the M-estimators Est3/4/5 (link
+# NLLS) and Est6 (profiled sieve OLS). The earlier homoskedastic delta-method
+# SEs (Est3/4/5) and conditional clustered-OLS SE (Est6) are replaced by a
+# score/multiplier wild cluster bootstrap (Cameron-Gelbach-Miller 2008;
+# MacKinnon-Webb 2017): perturb the cluster-summed influence functions by wild
+# weights, recompute the (linearised) AMEs, and read SEs/p-values off the draws.
+# ==============================================================================
+def boot_cfg():
+    """Bootstrap settings, overridable by env for quick smoke runs.
+    SLEEP_BOOT_B (default 999); SLEEP_BOOT_SCHEME in {webb, rademacher} (default webb)."""
+    B = int(os.environ.get("SLEEP_BOOT_B", "999"))
+    scheme = os.environ.get("SLEEP_BOOT_SCHEME", "webb")
+    return B, scheme
+
+
+def _cluster_if(score, bread, cl_inv, n_cl):
+    """Per-cluster influence functions IF_g = sum_{i in g} (bread @ score_i)."""
+    IF = score @ bread.T                       # N x p
+    p = IF.shape[1]
+    IF_cl = np.zeros((n_cl, p))
+    for k in range(p):
+        IF_cl[:, k] = np.bincount(cl_inv, weights=IF[:, k], minlength=n_cl)
+    return IF_cl
+
+
+def nlls_link_wild_bootstrap(res_lsq, X, link, K, G, idx_names, cl_inv, n_cl,
+                             B=None, scheme=None, seed=0, ame_fn=None):
+    """Score/multiplier wild cluster bootstrap of the AMEs for the link-NLLS
+    M-estimators (Est3 logit, Est4 uniform, Est5 probit). The estimator solves
+    min_psi sum_i r_i(psi)^2, r = y_dm - f(psi); the influence function is
+    IF_i = (J'J)^{-1} (df/dpsi)_i r_i, with res_lsq.jac = dr/dpsi = -(df/dpsi).
+    Returns (ame dict, bse dict, pval dict). A custom ame_fn(psi)->array (length
+    K+G, same order as idx_names) may be passed (Est3 uses its analytic AME);
+    otherwise the generic finite-difference _generic_ame is used."""
+    if B is None or scheme is None:
+        _B, _s = boot_cfg(); B = B if B is not None else _B; scheme = scheme or _s
+    psi = res_lsq.x
+    jac = res_lsq.jac                          # dr/dpsi  (N x p)
+    resid = res_lsq.fun                        # N
+    bread = np.linalg.pinv(jac.T @ jac)
+    score = (-jac) * resid[:, None]            # (df/dpsi)*r  (sign irrelevant for variance)
+    IF_cl = _cluster_if(score, bread, cl_inv, n_cl)
+    if ame_fn is not None:
+        _ame_arr = ame_fn
+    else:
+        _flags = _ame_dummy_flags(X, K)        # precompute once for the B-loop
+        _ame_arr = lambda p_: _generic_ame(p_, X, link, K, G, dummy_flags=_flags)
+
+    def _ame_dict(p_):
+        a = _ame_arr(p_)
+        return {idx_names[j]: float(a[j]) for j in range(len(idx_names))}
+
+    ame_hat = _ame_dict(psi)
+    rng = np.random.default_rng(seed)
+    bse, pvals = cluster_wild_bootstrap(psi, IF_cl, _ame_dict, ame_hat,
+                                        B=B, scheme=scheme, rng=rng)
+    return ame_hat, bse, pvals
+
+
+def ols_sieve_wild_bootstrap(Xdm, resid, cl_inv, n_cl, b_full, ame_fn, ame_hat,
+                             B=None, scheme=None, seed=0):
+    """Score/multiplier wild cluster bootstrap for the Est6 profiled sieve OLS
+    (link coefficients conditional on the logit index direction). IF_i for OLS
+    is (X'X)^{-1} x_i u_i; perturb the cluster sums, recompute the AME via
+    ame_fn(b)->dict, return (bse dict, pvals dict)."""
+    if B is None or scheme is None:
+        _B, _s = boot_cfg(); B = B if B is not None else _B; scheme = scheme or _s
+    Xdm = np.asarray(Xdm, float)
+    bread = np.linalg.pinv(Xdm.T @ Xdm)
+    score = Xdm * np.asarray(resid, float)[:, None]
+    IF_cl = _cluster_if(score, bread, cl_inv, n_cl)
+    rng = np.random.default_rng(seed)
+    return cluster_wild_bootstrap(b_full, IF_cl, ame_fn, ame_hat,
+                                  B=B, scheme=scheme, rng=rng)

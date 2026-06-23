@@ -163,6 +163,11 @@ def _apply_link(index_series, link, res_ss):
         phi = np.zeros(len(vs))
         for d in range(len(b)):
             phi = phi + b[d] * vs ** d
+    elif link in ('sieve', 'kernel'):
+        # Joint single index (Est7/Est8): the native index has NO constant (it is
+        # absorbed in G); the monotone link is stored as a grid in the native-index
+        # frame. This mirrors phi_from_native exactly.
+        phi = np.interp(idx.values, res_ss.si_vgrid, res_ss.si_ggrid)
     else:
         raise ValueError(f"unknown link {link!r}")
     return pd.Series(phi, index=index_series.index).clip(lower=0.0, upper=1.0)

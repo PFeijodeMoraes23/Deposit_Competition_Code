@@ -338,6 +338,7 @@ def main():
             begin_env = (f'\\begin{{xltabular}}{{\\textwidth}}{{{col_spec}}}'
                          if wide else f'\\begin{{longtable}}[c]{{{col_spec}}}')
             end_env   = '\\end{xltabular}' if wide else '\\end{longtable}'
+            note_w    = r'\dimexpr\textwidth-2\tabcolsep\relax' if wide else r'0.85\textwidth'
 
             lines = [
                 '\\setstretch{1.0}',
@@ -364,7 +365,7 @@ def main():
                 '    \\endfoot',
                 '',
                 '    \\bottomrule',
-                f'    \\multicolumn{{{n_cols}}}{{p{{0.85\\textwidth}}}}{{{notes_text}}} \\\\',
+                f'    \\multicolumn{{{n_cols}}}{{p{{{note_w}}}}}{{{notes_text}}} \\\\',
                 '    \\endlastfoot',
                 '',
                 rows_text,
@@ -514,7 +515,7 @@ def main():
             r"    \endfoot",
             "",
             r"    \bottomrule",
-            f"    \\multicolumn{{{n_cols}}}{{p{{0.95\\linewidth}}}}{{{notes_text}}} \\\\",
+            f"    \\multicolumn{{{n_cols}}}{{p{{\\dimexpr\\textwidth-2\\tabcolsep\\relax}}}}{{{notes_text}}} \\\\",
             r"    \endlastfoot",
             "",
             *body,
@@ -687,7 +688,7 @@ def main():
             r"    \endfoot",
             "",
             r"    \bottomrule",
-            f"    \\multicolumn{{{n_cols}}}{{p{{0.95\\linewidth}}}}{{{notes_text}}} \\\\",
+            f"    \\multicolumn{{{n_cols}}}{{p{{\\dimexpr\\textwidth-2\\tabcolsep\\relax}}}}{{{notes_text}}} \\\\",
             r"    \endlastfoot",
             "",
             f"    \\multicolumn{{{n_cols}}}{{l}}{{\\textbf{{Panel A: B-Type Firms (Municipal Markets)}}}} \\\\",
@@ -1020,7 +1021,7 @@ def main():
             r"    \endfoot",
             "",
             r"    \bottomrule",
-            f"    \\multicolumn{{{n_cols}}}{{p{{0.95\\linewidth}}}}{{{notes_text}}} \\\\",
+            f"    \\multicolumn{{{n_cols}}}{{p{{\\dimexpr\\textwidth-2\\tabcolsep\\relax}}}}{{{notes_text}}} \\\\",
             r"    \endlastfoot",
             "",
             *panel_blocks,

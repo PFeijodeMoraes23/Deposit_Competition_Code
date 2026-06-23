@@ -25,9 +25,11 @@ pool via simultaneous IPC pipe traffic for 400K-row DataFrames (WinError 1450).
   4. estimation_4_sleep.py              (Pooled B+D Constrained Linear, uniform)
   5. estimation_5_sleep.py              (Pooled B+D Probit, AME)
   6. estimation_6_sleep.py              (Pooled B+D Single-Index, nonparametric)
-  7. export_results.py                  (Export 1st/2nd Stage Summaries, Est 1-6)
-  8. estimation_demand_1_prep.py        (Universal Demand Prep Orchestrator, Est 1-6)
-  9. export_analyze_spec12.py           (Analyze Specification 12 Results)
+  7. estimation_7_sleep.py              (Pooled B+D Joint Single-Index, monotone sieve)
+  8. estimation_8_sleep.py              (Pooled B+D Joint Single-Index, kernel; spec 12 only)
+  9. export_results.py                  (Export 1st/2nd Stage Summaries, Est 1-8)
+ 10. estimation_demand_1_prep.py        (Universal Demand Prep Orchestrator, Est 1-8)
+ 11. export_analyze_spec12.py           (Analyze Specification 12 Results)
 """
 from utils.venv_guard import ensure_project_venv
 ensure_project_venv(__file__)
@@ -102,9 +104,11 @@ pool via simultaneous IPC pipe traffic for 400K-row DataFrames (WinError 1450).
   4. estimation_4_sleep.py              (Pooled B+D Constrained Linear, uniform)
   5. estimation_5_sleep.py              (Pooled B+D Probit, AME)
   6. estimation_6_sleep.py              (Pooled B+D Single-Index, nonparametric)
-  7. export_results.py                  (Export 1st/2nd Stage Summaries, Est 1-6)
-  8. estimation_demand_1_prep.py        (Universal Demand Prep Orchestrator, Est 1-6)
-  9. export_analyze_spec12.py           (Analyze Specification 12 Results)
+  7. estimation_7_sleep.py              (Pooled B+D Joint Single-Index, monotone sieve)
+  8. estimation_8_sleep.py              (Pooled B+D Joint Single-Index, kernel; spec 12 only)
+  9. export_results.py                  (Export 1st/2nd Stage Summaries, Est 1-8)
+ 10. estimation_demand_1_prep.py        (Universal Demand Prep Orchestrator, Est 1-8)
+ 11. export_analyze_spec12.py           (Analyze Specification 12 Results)
         """,
         formatter_class=argparse.RawDescriptionHelpFormatter
     )
@@ -118,7 +122,7 @@ pool via simultaneous IPC pipe traffic for 400K-row DataFrames (WinError 1450).
     parser.add_argument(
         "--skip-sleep",
         action="store_true",
-        help="Skip executing sleepiness estimators 1-6 and only run exports and demand prep."
+        help="Skip executing sleepiness estimators 1-8 and only run exports and demand prep."
     )
 
     parser.add_argument(
@@ -131,7 +135,7 @@ pool via simultaneous IPC pipe traffic for 400K-row DataFrames (WinError 1450).
         nargs="+",
         type=int,
         default=[],
-        help="Skip executing specific steps (1-9). E.g., --skip-steps 9 to skip export_analyze."
+        help="Skip executing specific steps (1-11). E.g., --skip-steps 11 to skip export_analyze."
     )
     args = parser.parse_args()
 
@@ -152,13 +156,15 @@ pool via simultaneous IPC pipe traffic for 400K-row DataFrames (WinError 1450).
             {"id": 4, "file": "estimation_4_sleep.py", "args": spec12_arg, "desc": "Pooled B+D Constrained Linear (uniform)"},
             {"id": 5, "file": "estimation_5_sleep.py", "args": spec12_arg, "desc": "Pooled B+D Probit (AME)"},
             {"id": 6, "file": "estimation_6_sleep.py", "args": spec12_arg, "desc": "Pooled B+D Single-Index (nonparametric)"},
+            {"id": 7, "file": "estimation_7_sleep.py", "args": ["--spec12"], "desc": "Pooled B+D Joint Single-Index (monotone sieve; spec 12 only)"},
+            {"id": 8, "file": "estimation_8_sleep.py", "args": ["--spec12"], "desc": "Pooled B+D Joint Single-Index (kernel; spec 12 only)"},
         ])
 
     if not getattr(args, 'sleep_only', False):
         scripts_to_run.extend([
-            {"id": 7, "file": "export_results.py", "args": ["--estimation", "all"], "desc": "Export 1st/2nd Stage Summaries"},
-            {"id": 8, "file": "estimation_demand_1_prep.py", "args": ["--estimation", "all", "--spec", spec_arg], "desc": "Universal Demand Prep Orchestrator & Panel Serialization"},
-            {"id": 9, "file": "export_analyze_spec12.py", "args": [], "desc": "Analyze Specification 12 Results"},
+            {"id": 9, "file": "export_results.py", "args": ["--estimation", "all"], "desc": "Export 1st/2nd Stage Summaries (Est 1-8)"},
+            {"id": 10, "file": "estimation_demand_1_prep.py", "args": ["--estimation", "all", "--spec", spec_arg], "desc": "Universal Demand Prep Orchestrator & Panel Serialization (Est 1-8)"},
+            {"id": 11, "file": "export_analyze_spec12.py", "args": [], "desc": "Analyze Specification 12 Results"},
         ])
 
     import os

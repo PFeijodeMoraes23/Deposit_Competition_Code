@@ -372,9 +372,9 @@ def main():
     else:
         suffix = ""
 
-    # Coherence build: 6 routines (E1-E6). Legacy build: 5 routines (E1-E5).
+    # Coherence build: 8 routines (E1-E8). Legacy build: 5 routines (E1-E5).
     if args.all:
-        est_ids = list(range(1, 7)) if args.coherence else list(range(1, 6))
+        est_ids = list(range(1, 9)) if args.coherence else list(range(1, 6))
     else:
         est_ids = [args.est]
 

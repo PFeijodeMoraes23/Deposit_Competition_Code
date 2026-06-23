@@ -87,6 +87,8 @@ const ESTIM_STRATEGIES = [
     (id=4, label="E4", prefix="demand_4_constrained"),
     (id=5, label="E5", prefix="demand_5_probit"),
     (id=6, label="E6", prefix="demand_6_index"),
+    (id=7, label="E7", prefix="demand_7_sijoint"),    # Joint single-index, monotone sieve (spec 12)
+    (id=8, label="E8", prefix="demand_8_sikernel"),   # Joint single-index, kernel (spec 12)
 ]
 
 # Sub-model definitions (keys must match make_blp_logit_table.py expectations)

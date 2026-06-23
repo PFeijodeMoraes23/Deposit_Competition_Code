@@ -973,6 +973,12 @@ function run_blp_estimation_gpu(estim::Int, spec_id::Int, args,
 
     lo = fill(-5.0, n_params)
     hi = fill( 5.0, n_params)
+    # σ parameters are standard deviations → bound ≥ 0 (same fix as the IFT engine):
+    # removes the ±σ sign degeneracy that makes the outer optimiser oscillate without
+    # converging. σ are the first length(sigma_indices) entries of θ₂.
+    n_sigma = length(sigma_indices)
+    lo[1:n_sigma] .= 0.0
+    theta2_0 .= clamp.(theta2_0, lo, hi)   # a warm-start θ₂ may carry a negative σ
 
     println("  Outer minimisation: $(args["method"])")
     println("  Inner tolerance: $(args["tol_inner"])")

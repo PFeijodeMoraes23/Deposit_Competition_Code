@@ -301,6 +301,14 @@ function run_blp_estimation_ift_gpu(estim::Int, spec_id::Int, args,
 
     lo = fill(-2.0, n_params)
     hi = fill( 2.0, n_params)
+    # σ parameters are standard deviations → bound ≥ 0. This removes the ±σ sign
+    # degeneracy (σ and −σ give identical shares because ν is mean-zero symmetric),
+    # which otherwise makes L-BFGS-B oscillate between +σ and −σ and never converge
+    # (Q flat, all 500 outer iters wasted — observed on E6 sigma). σ are the first
+    # length(sigma_indices) entries of θ₂; the π interactions keep the [-2,2] box.
+    n_sigma = length(sigma_indices)
+    lo[1:n_sigma] .= 0.0
+    theta2_0 .= clamp.(theta2_0, lo, hi)   # a warm-start θ₂ may carry a negative σ
 
     println("  Optimizer: L-BFGS-B + IFT analytical gradient (GPU)")
     println("  Inner tolerance: $(args["tol_inner"]) | bounds: [$(lo[1]), $(hi[1])]")

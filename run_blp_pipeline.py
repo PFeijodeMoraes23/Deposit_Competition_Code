@@ -87,6 +87,8 @@ LOGIT_COH_BY_EST   = {
     4: ROOT / "blp_1_logit_e4_coherence.jl",
     5: ROOT / "blp_1_logit_e5_coherence.jl",
     6: ROOT / "blp_1_logit_e6_coherence.jl",
+    7: ROOT / "blp_1_logit_e7_coherence.jl",
+    8: ROOT / "blp_1_logit_e8_coherence.jl",
 }
 
 
@@ -173,12 +175,12 @@ def run_logit_coherence(args):
     # Decide single-routine vs orchestrator. --est default is "12"; treat that and
     # "123"/"123456"/"all" as "all routines via orchestrator".
     single = None
-    if args.est not in ("12", "123", "123456", "all"):
-        digits = [int(c) for c in args.est if c in "123456"]
+    if args.est not in ("12", "123", "123456", "12345678", "all"):
+        digits = [int(c) for c in args.est if c in "12345678"]
         if len(digits) == 1:
             single = digits[0]
         elif not digits:
-            print("ERROR: --logit-coherence --est must be among {1..6}."); sys.exit(1)
+            print("ERROR: --logit-coherence --est must be among {1..8}."); sys.exit(1)
 
     if single is not None:
         script = LOGIT_COH_BY_EST[single]
@@ -301,12 +303,12 @@ def run_coherence(args):
     # runs all six; otherwise parse the requested digits in 1-6.
     if args.est in ("12", "36"):
         est_ids = [3, 6]
-    elif args.est in ("all", "123456"):
-        est_ids = [1, 2, 3, 4, 5, 6]
+    elif args.est in ("all", "123456789", "12345678"):
+        est_ids = [1, 2, 3, 4, 5, 6, 7, 8]
     else:
-        est_ids = [int(c) for c in args.est if c in "123456"]
+        est_ids = [int(c) for c in args.est if c in "12345678"]
     if not est_ids:
-        print("ERROR: --coherence routines must be among {1..6} (use --est)."); sys.exit(1)
+        print("ERROR: --coherence routines must be among {1..8} (use --est)."); sys.exit(1)
     print(f"=== Coherence RC-BLP | E{est_ids} | spec=12 | stage={args.stage} | R={args.R} ===")
     for eid in est_ids:
         cmd = [jl_exe, f"--project={ROOT}",

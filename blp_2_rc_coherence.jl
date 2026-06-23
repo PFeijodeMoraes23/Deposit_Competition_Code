@@ -72,6 +72,8 @@ const COHERENCE_ROUTINES = [
     (id = 4, label = "E4", desc = "Pooled Constrained",    prefix = "demand_4_constrained"),
     (id = 5, label = "E5", desc = "Pooled Probit",         prefix = "demand_5_probit"),
     (id = 6, label = "E6", desc = "Pooled Single-Index",   prefix = "demand_6_index"),
+    (id = 7, label = "E7", desc = "Joint SI (sieve)",      prefix = "demand_7_sijoint"),
+    (id = 8, label = "E8", desc = "Joint SI (kernel)",     prefix = "demand_8_sikernel"),
 ]
 
 # Default cluster routine set: the two headline sleepiness links (E3 logistic, E6 index).
@@ -122,7 +124,7 @@ caller supplies `--stage`.
 function run_coherence_routine(estim_id::Int; passthrough::Vector{String} = String[])
     idx = findfirst(r -> r.id == estim_id, COHERENCE_ROUTINES)
     idx === nothing &&
-        error("Coherence routine must be one of 1..6 (E1..E6); got $estim_id")
+        error("Coherence routine must be one of 1..8 (E1..E8); got $estim_id")
     r = COHERENCE_ROUTINES[idx]
 
     pass = _strip_controlled(passthrough)
@@ -188,18 +190,18 @@ function run_all_coherence(; passthrough::Vector{String} = String[],
 end
 
 # ── Direct CLI entry: `--estim k` (one routine), `--all` (default E3+E6), or
-#    `--all-six` (every routine). ────────────────────────────────────────────────
+#    `--all-six`/`--all-routines` (every routine, now E1..E8). ───────────────────
 function _coherence_main()
     a = copy(ARGS)
-    if "--all-six" in a
-        run_all_coherence(; passthrough = filter(!=("--all-six"), a),
+    if ("--all-six" in a) || ("--all-routines" in a)
+        run_all_coherence(; passthrough = filter(x -> x ∉ ("--all-six", "--all-routines"), a),
                             ids = [r.id for r in COHERENCE_ROUTINES])
     elseif "--all" in a
         run_all_coherence(; passthrough = filter(!=("--all"), a))   # default E3 + E6
     else
         ei = findfirst(==("--estim"), a)
         (ei === nothing || ei == length(a)) &&
-            error("Provide `--estim {1..6}`, `--all` (default E3+E6), or `--all-six` " *
+            error("Provide `--estim {1..8}`, `--all` (default E3+E6), or `--all-routines` " *
                   "(plus engine flags). Got: $a")
         estim_id = parse(Int, a[ei + 1])
         deleteat!(a, ei:ei + 1)          # run_coherence_routine re-adds --estim

@@ -272,11 +272,10 @@ def build_instruments_table() -> str:
     ]
 
     ncols = 3
-    col_fmt = 'l' + 'c' * (ncols - 1)
 
     lines = [
         r'\begin{spacing}{1.0}',
-        rf'\begin{{longtable}}[c]{{{col_fmt}}}',
+        r'\begin{xltabular}{\textwidth}{>{\raggedright\arraybackslash}p{0.30\textwidth} >{\raggedright\arraybackslash}p{0.16\textwidth} >{\raggedright\arraybackslash}X}',
         r'    \caption{Instrumental Variables for BLP Logit Estimation (Specification 12)}',
         r'    \label{tab:blp_instruments} \\',
         r'    \toprule',
@@ -295,7 +294,7 @@ def build_instruments_table() -> str:
         r'    \endfoot',
         '',
         r'    \bottomrule',
-        rf'    \multicolumn{{{ncols}}}{{p{{0.7\textwidth}}}}{{\scriptsize \textit{{Notes:}} BLP LOO instruments are constructed as leave-one-out competitors'' characteristics within the same MCA-time cell, following \textcite{{berry1995automobile}}. Cost shifters are lagged firm-level variables plausibly exogenous to demand. Capital adequacy is a regulatory measure. Total: 15 instruments for 2SLS estimation of equation (Eq-15/Eq-16).}} \\',
+        rf'    \multicolumn{{{ncols}}}{{p{{\dimexpr\textwidth-2\tabcolsep\relax}}}}{{\scriptsize \textit{{Notes:}} BLP LOO instruments are constructed as leave-one-out competitors'' characteristics within the same MCA-time cell, following \textcite{{berry1995automobile}}. Cost shifters are lagged firm-level variables plausibly exogenous to demand. Capital adequacy is a regulatory measure. Total: 15 instruments for 2SLS estimation of equation (Eq-15/Eq-16).}} \\',
         r'    \endlastfoot',
         '',
     ]
@@ -305,7 +304,7 @@ def build_instruments_table() -> str:
         lines.append(rf'    {inst_name} & {category} & {description} \\')
 
     lines += [
-        r'\end{longtable}',
+        r'\end{xltabular}',
         r'\end{spacing}',
     ]
 
@@ -423,10 +422,10 @@ def main():
                        help='Use legacy 5-routine results (logit_summary_spec_12.json), runs E1-E5')
     args = parser.parse_args()
 
-    # Coherence build: 6 routines (E1-E6). Legacy build: 5 routines (E1-E5).
+    # Coherence build: 8 routines (E1-E8). Legacy build: 5 routines (E1-E5).
     # With no --est, run all routines for the active build.
     if args.coherence:
-        est_ids = [args.est] if (args.est is not None and not args.all) else list(range(1, 7))
+        est_ids = [args.est] if (args.est is not None and not args.all) else list(range(1, 9))
     else:
         est_ids = [args.est] if (args.est is not None and not args.all) else list(range(1, 6))
 

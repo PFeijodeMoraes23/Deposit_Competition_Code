@@ -90,7 +90,7 @@ def build_first_stage_table(results_dict, G, G_star):
 
     lines = [
         r"\begin{spacing}{1.0}",
-        r"\begin{longtable}{lccc}",
+        r"\begin{xltabular}{\textwidth}{>{\raggedright\arraybackslash}p{0.34\textwidth} *{3}{>{\centering\arraybackslash}X}}",
         rf"    \caption{{{caption}}}\label{{{label}}} \\",
         r"    \toprule",
         rf"    \multicolumn{{{multispan}}}{{l}}{{\textbf{{Panel {l0}: {panel_labels[p0]}}}}} \\",
@@ -111,7 +111,7 @@ def build_first_stage_table(results_dict, G, G_star):
         r"    \endfoot",
         "",
         r"    \bottomrule",
-        rf"    \multicolumn{{{multispan}}}{{p{{0.45\textwidth}}}}{{{notes}}} \\",
+        rf"    \multicolumn{{{multispan}}}{{p{{\dimexpr\textwidth-2\tabcolsep\relax}}}}{{{notes}}} \\",
         r"    \endlastfoot",
         "",
     ]
@@ -178,7 +178,7 @@ def build_first_stage_table(results_dict, G, G_star):
             r"    \bottomrule",
         ]
 
-    lines += [r"\end{longtable}", r"\end{spacing}"]
+    lines += [r"\end{xltabular}", r"\end{spacing}"]
     return "\n".join(lines)
 
 
@@ -211,7 +211,6 @@ def build_second_stage_table(results_dict, G, G_star):
         'constant', 'pix_exists', 'risk_free_qoq_lag',
         'gdp_per_capita', 'cadunico_families_per1000',
         'fraction_65plus', 'fraction_young', 'connections_per100',
-        'v_hat_x_lagged_dep',
     ]
 
     p0, l0 = panels[0], panel_letters[0]
@@ -219,9 +218,7 @@ def build_second_stage_table(results_dict, G, G_star):
 
     lines = [
         r"\begin{spacing}{1.0}",
-        r"\setlength{\LTleft}{\fill}",
-        r"\setlength{\LTright}{\fill}",
-        r"\begin{longtable}{l@{\hspace{0.35em}}cccc}",
+        r"\begin{xltabular}{\textwidth}{>{\raggedright\arraybackslash}p{0.28\textwidth} *{4}{>{\centering\arraybackslash}X}}",
         rf"    \caption{{{caption}}}\label{{{label}}} \\",
         r"    \toprule",
         rf"    \multicolumn{{{multispan}}}{{l}}{{\textbf{{Panel {l0}: {panel_labels[p0]}}}}} \\",
@@ -242,7 +239,7 @@ def build_second_stage_table(results_dict, G, G_star):
         r"    \endfoot",
         "",
         r"    \bottomrule",
-        rf"    \multicolumn{{{multispan}}}{{p{{0.60\textwidth}}}}{{{notes}}} \\",
+        rf"    \multicolumn{{{multispan}}}{{p{{\dimexpr\textwidth-2\tabcolsep\relax}}}}{{{notes}}} \\",
         r"    \endlastfoot",
         "",
     ]
@@ -308,7 +305,7 @@ def build_second_stage_table(results_dict, G, G_star):
             r"    \bottomrule",
         ]
 
-    lines += [r"\end{longtable}", r"\end{spacing}"]
+    lines += [r"\end{xltabular}", r"\end{spacing}"]
     return "\n".join(lines)
 
 

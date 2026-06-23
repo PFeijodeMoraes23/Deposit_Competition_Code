@@ -18,13 +18,14 @@ def _run_script(est, spec):
 
 def main():
     parser = argparse.ArgumentParser(description="Unified Demand 1 Prep Orchestrator")
-    parser.add_argument("--estimation", choices=['1', '2', '3', '4', '5', '6', 'all'], required=True,
+    parser.add_argument("--estimation", choices=['1', '2', '3', '4', '5', '6', '7', '8', 'all'], required=True,
                         help="Estimation strategy (1=Local Linear, 2=Pooled Linear, 3=Logistic, "
-                             "4=Constrained Linear, 5=Probit, 6=Single-Index) or 'all'.")
+                             "4=Constrained Linear, 5=Probit, 6=Single-Index, 7=Joint SI sieve, "
+                             "8=Joint SI kernel) or 'all'.")
     parser.add_argument("--spec", default="all", help="Specification ID or 'all'")
     args = parser.parse_args()
 
-    EST_LIST = [1, 2, 3, 4, 5, 6] if args.estimation == 'all' else [int(args.estimation)]
+    EST_LIST = [1, 2, 3, 4, 5, 6, 7, 8] if args.estimation == 'all' else [int(args.estimation)]
 
     print(f"[Demand Prep] Launching {len(EST_LIST)} script(s) in parallel...")
 

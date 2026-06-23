@@ -61,15 +61,27 @@ julia --project="${PROJECT_DIR}" -e '
 # no-op and the per-stage orchestrator is unaffected.
 STAGE_ARG="${COH_STAGE//+/,}"
 
+# Engine run parameters — env-overridable (exported through sbatch --export=ALL).
+#   TOL_INNER : inner δ-contraction tolerance. 1e-10 is tight; if a stage stalls
+#               hitting MAX_INNER every outer step ("did not converge in 5000"),
+#               loosen to 1e-8 (or 1e-7) — the outer GMM does NOT need δ to 1e-10.
+#   R         : simulation draws. Lowering (e.g. 1000) cuts per-iter cost ~linearly
+#               but REQUIRES regenerated draws: halton_nu_R<R>_seed<SEED>.jls etc.
+R="${R:-2000}"
+SEED="${SEED:-42}"
+TOL_INNER="${TOL_INNER:-1e-10}"
+MAX_INNER="${MAX_INNER:-5000}"
+TOL_OUTER="${TOL_OUTER:-1e-6}"
+
 echo "======================================"
 echo " Coherence RC-BLP E${COH_ROUTINE} | engine=${COH_ENGINE} | stage=${STAGE_ARG} — $(date)"
-echo " spec=12 | R=2000 | threads=${SLURM_CPUS_PER_TASK}"
+echo " spec=12 | R=${R} | tol_inner=${TOL_INNER} | max_inner=${MAX_INNER} | threads=${SLURM_CPUS_PER_TASK}"
 echo "======================================"
 
 julia --project="${PROJECT_DIR}" --threads=${SLURM_CPUS_PER_TASK} \
     "${PROJECT_DIR}/blp_2_rc_coherence.jl" \
     --estim "${COH_ROUTINE}" --stage "${STAGE_ARG}" \
-    --hpc --R 2000 --seed 42 \
-    --tol-inner 1e-10 --max-inner 5000 --tol-outer 1e-6
+    --hpc --R "${R}" --seed "${SEED}" \
+    --tol-inner "${TOL_INNER}" --max-inner "${MAX_INNER}" --tol-outer "${TOL_OUTER}"
 
 echo "Coherence RC-BLP E${COH_ROUTINE} ${COH_ENGINE} ${COH_STAGE} complete: $(date)"

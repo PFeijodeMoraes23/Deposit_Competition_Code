@@ -136,9 +136,10 @@ def build_first_stage_table(results_dict, G, G_star):
     caption = r"Pooled B+D --- First Stage Estimation (Est.\ 3)"
     label = "tab:est3_first_stage"
     notes = (
-        r"\scriptsize \textit{Notes:} Standard errors clustered at the conglomerate level "
-        r"are reported in parentheses, correcting for group size imbalance following "
-        r"\textcite{imbens2016robust} and \textcite{carter2017asymptotic}. "
+        r"\scriptsize \textit{Notes:} The first stage is linear; cluster-robust standard "
+        r"errors at the conglomerate level are reported in parentheses, with the "
+        r"\textcite{carter2017asymptotic} effective-number-of-clusters ($G^*$) "
+        r"degrees-of-freedom correction for cluster-size imbalance. "
         r"Significance levels: *** $p<0.01$, ** $p<0.05$, * $p<0.1$."
     )
 
@@ -151,7 +152,7 @@ def build_first_stage_table(results_dict, G, G_star):
 
     lines = [
         r"\setstretch{1.0}",
-        r"\begin{longtable}[c]{lccc}",
+        r"\begin{xltabular}{\textwidth}{>{\raggedright\arraybackslash}p{0.34\textwidth} *{3}{>{\centering\arraybackslash}X}}",
         rf"    \caption{{{caption}}}\label{{{label}}} \\",
         r"    \toprule",
         rf"    \multicolumn{{{multispan}}}{{l}}{{\textbf{{Panel {l0}: {panel_labels[p0]}}}}} \\",
@@ -172,7 +173,7 @@ def build_first_stage_table(results_dict, G, G_star):
         r"    \endfoot",
         "",
         r"    \bottomrule",
-        rf"    \multicolumn{{{multispan}}}{{p{{0.45\textwidth}}}}{{{notes}}} \\",
+        rf"    \multicolumn{{{multispan}}}{{p{{\dimexpr\textwidth-2\tabcolsep\relax}}}}{{{notes}}} \\",
         r"    \endlastfoot",
         "",
     ]
@@ -249,7 +250,7 @@ def build_first_stage_table(results_dict, G, G_star):
             r"    \bottomrule",
         ]
 
-    lines += [r"\end{longtable}", r"\doublespacing"]
+    lines += [r"\end{xltabular}", r"\doublespacing"]
     return "\n".join(lines)
 
 
@@ -289,11 +290,16 @@ def build_second_stage_table(results_dict, G, G_star):
     caption = r"Pooled B+D --- Second Stage Estimation (Est.\ 3, Logistic AME)"
     label = "tab:est3_second_stage"
     notes = (
-        r"\scriptsize \textit{Notes:} Standard errors clustered at the conglomerate level "
-        r"are reported in parentheses, correcting for group size imbalance following "
-        r"\textcite{imbens2016robust} and \textcite{carter2017asymptotic}. "
+        r"\scriptsize \textit{Notes:} Standard errors and $p$-values are obtained by a "
+        r"score/multiplier wild cluster bootstrap at the conglomerate level "
+        r"(\textcite{cameron2008bootstrap}; \textcite{mackinnon2017wild}), with 999 "
+        r"replications and Webb six-point weights to accommodate the severe cluster-size "
+        r"imbalance. Because the estimator is an NLLS logistic specification (nonlinear in "
+        r"the index), the \textcite{imbens2016robust} bias-reduced linearisation does not "
+        r"apply; the \textcite{carter2017asymptotic} effective-cluster count $G^*$ is "
+        r"reported only as a diagnostic. "
         r"Significance levels: *** $p<0.01$, ** $p<0.05$, * $p<0.1$. "
-        r"Reported estimates are Average Marginal Effects (AME) from an NLLS logistic specification. "
+        r"Reported estimates are Average Marginal Effects (AME). "
         r"CF: control function residual $\hat{v}$ interacted with lagged deposits."
     )
 
@@ -305,7 +311,6 @@ def build_second_stage_table(results_dict, G, G_star):
         'constant', 'pix_exists', 'risk_free_qoq_lag',
         'gdp_per_capita', 'cadunico_families_per1000',
         'fraction_65plus', 'fraction_young', 'connections_per100',
-        'v_hat_x_lagged_dep',
     ]
 
     p0, l0 = panels[0], panel_letters[0]
@@ -313,9 +318,7 @@ def build_second_stage_table(results_dict, G, G_star):
 
     lines = [
         r"\setstretch{1.0}",
-        r"\setlength{\LTleft}{\fill}",
-        r"\setlength{\LTright}{\fill}",
-        r"\begin{longtable}{l@{\hspace{0.35em}}cccc}",
+        r"\begin{xltabular}{\textwidth}{>{\raggedright\arraybackslash}p{0.28\textwidth} *{4}{>{\centering\arraybackslash}X}}",
         rf"    \caption{{{caption}}}\label{{{label}}} \\",
         r"    \toprule",
         rf"    \multicolumn{{{multispan}}}{{l}}{{\textbf{{Panel {l0}: {panel_labels[p0]}}}}} \\",
@@ -335,7 +338,7 @@ def build_second_stage_table(results_dict, G, G_star):
         r"    \endfoot",
         "",
         r"    \bottomrule",
-        rf"    \multicolumn{{{multispan}}}{{p{{0.60\textwidth}}}}{{{notes}}} \\",
+        rf"    \multicolumn{{{multispan}}}{{p{{\dimexpr\textwidth-2\tabcolsep\relax}}}}{{{notes}}} \\",
         r"    \endlastfoot",
         "",
     ]
@@ -403,7 +406,7 @@ def build_second_stage_table(results_dict, G, G_star):
             r"    \bottomrule",
         ]
 
-    lines += [r"\end{longtable}", r"\doublespacing"]
+    lines += [r"\end{xltabular}", r"\doublespacing"]
     return "\n".join(lines)
 
 

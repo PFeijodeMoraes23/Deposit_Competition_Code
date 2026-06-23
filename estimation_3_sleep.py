@@ -44,6 +44,8 @@ from scipy import stats
 from scipy.optimize import least_squares
 import matplotlib.pyplot as plt
 
+from utils.sleep_links import nlls_link_wild_bootstrap, boot_cfg
+
 warnings.filterwarnings("ignore", message="covariance of constraints does not have full rank")
 
 # ==============================================================================
@@ -225,6 +227,39 @@ def nlls_objective(params, y_dm, X, Z, CF, entity_idx):
     Y_hat_dm = Y_hat - (sums / counts)[entity_idx]
     return y_dm - Y_hat_dm
 
+def _sigmoid(z):
+    return 1.0 / (1.0 + np.exp(-np.clip(z, -700, 700)))
+
+
+def logit_ame_array(theta_full, X, K, G, dummy_flags=None):
+    """Analytic logistic AMEs (array, order = X columns then CF). Continuous vars
+    use the derivative P(1-P)theta_k; 0/1 dummies use the discrete difference, all
+    without copying X (fast in the bootstrap loop). Used both for the reported
+    point AME and as the ame_fn inside the wild bootstrap so the SEs are
+    consistent with the reported point estimates."""
+    theta_X = theta_full[:K]
+    idx = np.dot(X, theta_X)
+    P = _sigmoid(idx)
+    mean_dens = float(np.mean(P * (1.0 - P)))
+    if dummy_flags is None:
+        dummy_flags = np.zeros(K, dtype=bool)
+        for k in range(K):
+            valid = X[:, k][~np.isnan(X[:, k])]
+            uniq = np.unique(valid)
+            dummy_flags[k] = (len(uniq) == 2) and (0.0 in uniq) and (1.0 in uniq)
+    AME = np.zeros(K + G)
+    for k in range(K):
+        if dummy_flags[k]:
+            col = X[:, k]
+            AME[k] = float(np.mean(_sigmoid(idx + theta_X[k] * (1.0 - col)) -
+                                   _sigmoid(idx - theta_X[k] * col)))
+        else:
+            AME[k] = mean_dens * theta_X[k]
+    if G > 0:
+        AME[K:] = theta_full[K:]
+    return AME
+
+
 def get_nlls_ame_and_se(theta_full_hat, cov_full_hat, X, CF_shape):
     K = X.shape[1]
     G = CF_shape
@@ -305,23 +340,34 @@ def run_pooled_second_stage(df, state_vars, has_cf=False):
     _STATUS_LABELS = {-1: 'budget exhausted', 1: 'gtol', 2: 'ftol', 3: 'xtol', 4: 'ftol+xtol'}
     print(f"  [NLLS] status={res_lsq.status} ({_STATUS_LABELS.get(res_lsq.status, '?')}) | nfev={res_lsq.nfev} | cost={res_lsq.cost:.4g}")
 
-    J_jac = res_lsq.jac
-    try:
-        cov = np.linalg.pinv(J_jac.T.dot(J_jac)) * (np.sum(res_lsq.fun**2) / (len(y_dm) - len(init_params)))
-    except Exception:
-        cov = np.eye(len(init_params))
-
-    ps_ame, bse, cov_ame = get_nlls_ame_and_se(res_lsq.x, cov, X, CF.shape[1] if has_cf else 0)
-
     idx = [f'interaction_{sv}' if sv != 'constant' else 'nr_lagged_dep' for sv in state_vars] + CF_cols
-    ps = pd.Series(index=idx, data=ps_ame)
-    bs = pd.Series(index=idx, data=bse)
-    tvals = ps / bs
+    K = X.shape[1]
+    G = CF.shape[1] if has_cf else 0
 
-    cluster_series = df_ss['CodConglomeradoPrudencial']
+    cluster_series = df_ss['CodConglomeradoPrudencial'].astype(str)
     sizes = cluster_series.value_counts()
     G_star = max(1.0, len(sizes) / (1 + (np.std(sizes) / np.mean(sizes))**2 if np.mean(sizes) > 0 else 1))
-    pvals = pd.Series(stats.t.sf(np.abs(tvals), df=G_star) * 2, index=idx)
+    cl_u, cl_inv = np.unique(cluster_series.values, return_inverse=True)
+    n_cl = len(cl_u)
+
+    # Inference: score/multiplier wild cluster bootstrap (replaces the old
+    # homoskedastic delta-method SEs, which were NOT cluster-robust). The point
+    # AMEs use the analytic logistic formula via logit_ame_array.
+    _dflags = np.zeros(K, dtype=bool)
+    for _k in range(K):
+        _valid = X[:, _k][~np.isnan(X[:, _k])]
+        _uniq = np.unique(_valid)
+        _dflags[_k] = (len(_uniq) == 2) and (0.0 in _uniq) and (1.0 in _uniq)
+    _ame_fn = lambda psi: logit_ame_array(psi, X, K, G, dummy_flags=_dflags)
+    ame_d, bse_d, pval_d = nlls_link_wild_bootstrap(res_lsq, X, 'logit', K, G, idx,
+                                                    cl_inv, n_cl, ame_fn=_ame_fn)
+    ps = pd.Series(ame_d).reindex(idx)
+    bs = pd.Series(bse_d).reindex(idx)
+    pvals = pd.Series(pval_d).reindex(idx)
+    tvals = ps / bs.replace(0, np.nan)
+    cov_ame = None
+    B_used, scheme_used = boot_cfg()
+    print(f"  [AME] wild cluster bootstrap B={B_used} ({scheme_used})")
 
     nobs = len(y_dm)
     G_nominal = len(sizes)
