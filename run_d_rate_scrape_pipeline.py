@@ -27,7 +27,7 @@ Pipeline (strictly sequential — each stage depends on the previous):
             audit CSV.
 
   Stage 6 - d_rate_scrape_6_diagnose.py
-            Compare scraped rates against the panel_3_rates.py output;
+            Compare scraped rates against the panel_3_master_panel_build.py output;
             decide which CDI-fallback cells (deposit types 4 & 5 only) to
             override. Produces recommended_merge.csv.
 

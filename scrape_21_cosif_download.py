@@ -1,5 +1,5 @@
 """
-scrape_15_cosif_download.py
+scrape_21_cosif_download.py
 ============================
 Download missing COSIF balancete CSV ZIPs (BANCOS, SOCIEDADES, COOPERATIVAS,
 and optionally the other categories) for months not already on disk, then
@@ -24,10 +24,10 @@ we download each whose YYYYMM is in range and not already on disk.
 
 USAGE
 -----
-  python scrape_15_cosif_download.py
-  python scrape_15_cosif_download.py --from 202212 --to 202512
-  python scrape_15_cosif_download.py --dry-run
-  python scrape_15_cosif_download.py --all-types   # include the other categories
+  python scrape_21_cosif_download.py
+  python scrape_21_cosif_download.py --from 202212 --to 202512
+  python scrape_21_cosif_download.py --dry-run
+  python scrape_21_cosif_download.py --all-types   # include the other categories
 """
 
 from __future__ import annotations
@@ -135,7 +135,7 @@ def main(from_ym: str, to_ym: str, dry_run: bool = False, all_types: bool = Fals
             log.warning("  FAILED: %s", exc)
         time.sleep(0.5)
 
-    log.info("Done. Re-run scrape_12_cosif_service_fees.py to rebuild the fee panel.")
+    log.info("Done. Re-run scrape_18_cosif_service_fees.py to rebuild the fee panel.")
 
 
 if __name__ == "__main__":

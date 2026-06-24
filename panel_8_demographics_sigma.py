@@ -1,5 +1,5 @@
 """
-panel_9_demographics_sigma.py
+panel_8_demographics_sigma.py
 =============================
 Pipeline Step 4c — Compute within-MCA demographic dispersion for BLP draws.
 

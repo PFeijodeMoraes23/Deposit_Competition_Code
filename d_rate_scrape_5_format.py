@@ -3,7 +3,7 @@ d_rate_scrape_5_format.py
 ==============================
 Formats the raw rate mentions extracted by d_rate_scrape_4_parse.py into a
 clean conglomerate x quarter panel that merges directly with the main
-deposit panel (panel_3_rates.py).
+deposit panel (panel_3_master_panel_build.py).
 
 Inputs
 ------
@@ -19,7 +19,7 @@ Outputs
 
 Periodization
 -------------
-The deposit panel (panel_3_rates.py) keys observations by AnoMes (yyyyMM)
+The deposit panel (panel_3_master_panel_build.py) keys observations by AnoMes (yyyyMM)
 with month in {3, 6, 9, 12} -- i.e. quarter-end.  Each archival snapshot is
 assigned to the AnoMes of the quarter it falls in (e.g. 2020-04-15 ->
 202006 = 2020Q2).  Multiple snapshots within the same (cod, quarter, type)

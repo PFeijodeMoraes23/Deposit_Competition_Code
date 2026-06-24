@@ -1,5 +1,5 @@
 """
-scrape_12_cosif_service_fees.py
+scrape_18_cosif_service_fees.py
 ================================
 Extract banking service-fee revenue and deposit volumes from COSIF BANCOS ZIPs,
 building a panel that improves on Nakane et al. (2006) along three dimensions:
@@ -51,9 +51,9 @@ Design
 
 Usage
 -----
-  python scrape_12_cosif_service_fees.py
-  python scrape_12_cosif_service_fees.py --workers 4   # override CPU count
-  python scrape_12_cosif_service_fees.py --test        # first 5 ZIPs only
+  python scrape_18_cosif_service_fees.py
+  python scrape_18_cosif_service_fees.py --workers 4   # override CPU count
+  python scrape_18_cosif_service_fees.py --test        # first 5 ZIPs only
 """
 
 from __future__ import annotations

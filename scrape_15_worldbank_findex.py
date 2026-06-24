@@ -1,4 +1,4 @@
-## scrape_21_worldbank_findex.py
+## scrape_15_worldbank_findex.py
 # Author: Pedro Feijó de Moraes
 #
 # Last edited: 2026-05-31
@@ -29,8 +29,8 @@
 #     indicator, indicator_label, dimension, group, year, value_pct
 #
 #   CLI:
-#     python scrape_21_worldbank_findex.py
-#     python scrape_21_worldbank_findex.py --microdata-check   # report microdata availability only
+#     python scrape_15_worldbank_findex.py
+#     python scrape_15_worldbank_findex.py --microdata-check   # report microdata availability only
 ###────────────────────────────────────────────────────────────────────────────
 
 import os

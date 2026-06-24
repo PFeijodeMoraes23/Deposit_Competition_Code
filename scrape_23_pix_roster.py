@@ -1,4 +1,4 @@
-## scrape_7_pix_roster.py
+## scrape_23_pix_roster.py
 # Author: Pedro Feijó de Moraes
 #
 # Last edited: 2026-06-09
@@ -10,7 +10,7 @@
 #             - SPI participation:   DIRETA vs INDIRETA
 #             - institution type, modalidade, authorisation status
 #          Then derives a per-institution first_seen date and reconciles against
-#          the key-based entry dates from scrape_6_pix_participants.py.
+#          the key-based entry dates from scrape_22_pix_participants.py.
 #
 #          BCB serves only the *current* roster; the history lives on the Wayback
 #          Machine across three naming regimes (continuous May 2020 -> present):
@@ -78,7 +78,7 @@ KEYS_ENTRY    = os.path.join(PIX_DIR, "pix_participant_entry.csv")  # produced b
 
 if resolve_script_paths is not None:
     _paths = resolve_script_paths(
-        "scrape_7_pix_roster",
+        "scrape_23_pix_roster",
         {"pix_dir": PIX_DIR, "cache_dir": CACHE_DIR, "history_csv": HISTORY_CSV,
          "roster_entry": ROSTER_ENTRY, "timeline_csv": TIMELINE_CSV, "keys_entry": KEYS_ENTRY},
         script_dir=os.path.dirname(os.path.abspath(__file__)),

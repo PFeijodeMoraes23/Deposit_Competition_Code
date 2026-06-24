@@ -3,7 +3,7 @@
 # -----------------------------------------------------------------------------
 # Concatenate the raw monthly ESTBAN municipality files into the processed
 # BCB/ESTBAN/ESTBAN.csv that the rest of the pipeline consumes
-# (panel_1_deposits.py, panel_5_flag_digital.py, scrape_9_bcb_inclusion.py).
+# (panel_1_deposits.py, panel_5_flag_digital.py, scrape_7_bcb_inclusion.py).
 #
 # This is a faithful Python port of the now-DEPRECATED ESTBAN_Process_1.R.
 # It reuses panel_1_deposits.process_raw_estban_csv() for the per-file

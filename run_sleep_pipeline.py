@@ -156,8 +156,8 @@ pool via simultaneous IPC pipe traffic for 400K-row DataFrames (WinError 1450).
             {"id": 4, "file": "estimation_4_sleep.py", "args": spec12_arg, "desc": "Pooled B+D Constrained Linear (uniform)"},
             {"id": 5, "file": "estimation_5_sleep.py", "args": spec12_arg, "desc": "Pooled B+D Probit (AME)"},
             {"id": 6, "file": "estimation_6_sleep.py", "args": spec12_arg, "desc": "Pooled B+D Single-Index (nonparametric)"},
-            {"id": 7, "file": "estimation_7_sleep.py", "args": ["--spec12"], "desc": "Pooled B+D Joint Single-Index (monotone sieve; spec 12 only)"},
-            {"id": 8, "file": "estimation_8_sleep.py", "args": ["--spec12"], "desc": "Pooled B+D Joint Single-Index (kernel; spec 12 only)"},
+            {"id": 7, "file": "estimation_7_sleep.py", "args": spec12_arg, "desc": "Pooled B+D Joint Single-Index (monotone sieve)"},
+            {"id": 8, "file": "estimation_8_sleep.py", "args": spec12_arg, "desc": "Pooled B+D Joint Single-Index (kernel)"},
         ])
 
     if not getattr(args, 'sleep_only', False):

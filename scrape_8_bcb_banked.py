@@ -1,4 +1,4 @@
-## scrape_16_bcb_banked.py
+## scrape_8_bcb_banked.py
 # Author: Pedro Feijó de Moraes
 #
 # Last edited: 2026-04-16
@@ -122,7 +122,7 @@ FINDEX_FALLBACK = {
 
 if resolve_script_paths is not None:
     _paths = resolve_script_paths(
-        "scrape_16_bcb_banked",
+        "scrape_8_bcb_banked",
         {
             "incl_dir":  INCL_DIR,
             "ibge_dir":  IBGE_DIR,
@@ -459,7 +459,7 @@ def compute_proxy(
 ###────────────────────────────────────────────────────────────────────────────
 
 def main():
-    log.info("=== scrape_16_bcb_banked: START ===")
+    log.info("=== scrape_8_bcb_banked: START ===")
 
     # --- Findex (can be fetched before ESTBAN loads) ---
     survey = fetch_findex()
@@ -513,7 +513,7 @@ def main():
     with pd.option_context("display.float_format", "{:.4f}".format):
         print(summary.to_string())
 
-    log.info("=== scrape_16_bcb_banked: DONE ===")
+    log.info("=== scrape_8_bcb_banked: DONE ===")
 
 
 if __name__ == "__main__":

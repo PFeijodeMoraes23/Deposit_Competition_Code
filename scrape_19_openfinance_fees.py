@@ -1,5 +1,5 @@
 """
-scrape_13_openfinance_fees.py
+scrape_19_openfinance_fees.py
 ==============================
 Collect banking service-fee schedules from the Open Finance Brazil (OFB) public
 product APIs — no OAuth required, pure open data.
@@ -38,9 +38,9 @@ Output files  (BCB/Tarifas/processed/)
 
 Usage
 -----
-  python scrape_13_openfinance_fees.py
-  python scrape_13_openfinance_fees.py --test 15   # first 15 endpoints
-  python scrape_13_openfinance_fees.py --no-cache  # bypass disk cache
+  python scrape_19_openfinance_fees.py
+  python scrape_19_openfinance_fees.py --test 15   # first 15 endpoints
+  python scrape_19_openfinance_fees.py --no-cache  # bypass disk cache
 """
 
 from __future__ import annotations

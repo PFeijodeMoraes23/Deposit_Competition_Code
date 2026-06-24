@@ -1,4 +1,4 @@
-## egan_panel_build.py
+## master_panel_build.py
 # Author: Pedro Feijo de Moraes
 # Last edited: 2026-02-23
 #
@@ -96,7 +96,7 @@ for _p in [RAW_PATH, SGS_PATH, PROCESSED_PATH, OUTPUT_PATH, COSIF_PROCESSED_PATH
     os.makedirs(_p, exist_ok=True)
 
 # Logging
-_log_file = os.path.join(SCRIPT_DIR, "egan_panel_build.log")
+_log_file = os.path.join(SCRIPT_DIR, "master_panel_build.log")
 _handler  = RotatingFileHandler(
     _log_file, maxBytes=5 * 1024 * 1024, backupCount=3, encoding="utf-8"
 )
@@ -1509,6 +1509,29 @@ def build_panel(df_ifdata: pd.DataFrame,
     # F4b. Residual COSIF rate for Type 4 (time / CDB)
     panel = _calculate_residual_type4_rate(panel)
 
+    # F4c. CORRECTED Type-4 (CDB) rate from cosif_process_2_calibrate.
+    #      Per-bank effective repo/bills rates + per-bank de-bias k_i shrunk to
+    #      prudential segment; pre-2025 strip, 2025+ direct CDB leaf.  This is the
+    #      preferred Type-4 source (lands in ~90-115% of CDI); it falls back to the
+    #      residual/blended path below where unavailable.  Keyed congl x quarter;
+    #      rate stored as a qoq fraction (matches panel internal scale).
+    _corr_path = os.path.join(COSIF_PROCESSED_PATH, "cosif_cdb_rate_corrected.csv")
+    if os.path.exists(_corr_path):
+        _corr = pd.read_csv(_corr_path, dtype={"CodConglomeradoPrudencial": str})
+        _corr = _corr.rename(
+            columns={"CodConglomeradoPrudencial": "CodConglPrud",
+                     "rate_a4_corrected_qoq": "cosif_cdb_rate_corrected"}
+        )[["CodConglPrud", "AnoMes", "cosif_cdb_rate_corrected"]]
+        panel = panel.merge(_corr, on=["CodConglPrud", "AnoMes"], how="left")
+        logging.info(
+            f"Corrected CDB rate merged: "
+            f"{panel['cosif_cdb_rate_corrected'].notna().sum():,} cells"
+        )
+    else:
+        panel["cosif_cdb_rate_corrected"] = np.nan
+        logging.info(f"Corrected CDB rate file not found ({_corr_path}); "
+                     "falling back to residual Type-4 rate.")
+
     # G0. Compute median IP prepaid rate per quarter
     panel = _compute_median_ip_rate(panel)
 
@@ -1528,10 +1551,12 @@ def build_panel(df_ifdata: pd.DataFrame,
         logging.info(f"Scraped rates file not found ({_scrape_path}); skipping.")
 
     # G. Assign deposit rates by type
-    #    Type 4 (time/CDB): residual COSIF rate (strips T1-T3 contamination)
-    #    -> fallback to blended cosif_implicit_rate -> scraped advertised rate -> CDI
+    #    Type 4 (time/CDB): CORRECTED per-bank CDB rate (cosif_process_2_calibrate)
+    #    -> residual COSIF rate (strips T1-T3 contamination)
+    #    -> blended cosif_implicit_rate -> scraped advertised rate -> CDI
     type4_rate = (
-        panel["cosif_type4_rate"]
+        panel["cosif_cdb_rate_corrected"]
+        .fillna(panel["cosif_type4_rate"])
         .fillna(panel["cosif_implicit_rate"])
         .fillna(panel["scraped_rate_qoq"])
         .fillna(panel["cdi_qoq"])
@@ -1720,7 +1745,7 @@ def __egan_aux_main__():
         if col in panel.columns:
             panel[col] = panel[col] * 100
 
-    panel_path = os.path.join(OUTPUT_PATH, "egan_panel_deposits.csv")
+    panel_path = os.path.join(OUTPUT_PATH, "master_panel_deposits.csv")
     import pyarrow as pa
     import pyarrow.csv as pa_csv
     pa_csv.write_csv(pa.Table.from_pandas(panel, preserve_index=False), panel_path)
@@ -1903,10 +1928,36 @@ def append_rates_to_panel():
     else:
         aux["median_ip_rate"] = np.nan
         
+    # F4c (WIDE path): prefer the CORRECTED per-bank CDB rate from
+    # cosif_process_2_calibrate (same source as build_panel's F4c). This is the path
+    # the pipeline actually runs (__main__ -> append_rates_to_panel) and that feeds
+    # market_panel via deposits_panel.csv, so the correction MUST be applied HERE.
+    # Falls back to residual -> blended -> CDI where the corrected rate is absent.
+    _corr_path = os.path.join(COSIF_PROCESSED_PATH, "cosif_cdb_rate_corrected.csv")
+    if os.path.exists(_corr_path):
+        _corr = pd.read_csv(_corr_path, dtype={"CodConglomeradoPrudencial": str})
+        _corr = _corr.rename(columns={"rate_a4_corrected_qoq": "cosif_cdb_rate_corrected"})[
+            ["CodConglomeradoPrudencial", "AnoMes", "cosif_cdb_rate_corrected"]
+        ]
+        aux["CodConglomeradoPrudencial"] = aux["CodConglomeradoPrudencial"].astype(str)
+        aux = aux.merge(_corr, on=["CodConglomeradoPrudencial", "AnoMes"], how="left")
+        logging.info(
+            f"[wide] Corrected CDB rate merged: "
+            f"{aux['cosif_cdb_rate_corrected'].notna().sum():,} cells"
+        )
+    else:
+        aux["cosif_cdb_rate_corrected"] = np.nan
+        logging.info(f"[wide] Corrected CDB rate not found ({_corr_path}); using residual.")
+
     aux["rate_a1"] = 0.0
     aux["rate_a2"] = aux["savings_rate_qoq"]
     aux["rate_a3"] = aux["cdi_qoq"]
-    aux["rate_a4"] = aux["cosif_type4_rate"].fillna(aux["cosif_implicit_rate"]).fillna(aux["cdi_qoq"])
+    aux["rate_a4"] = (
+        aux["cosif_cdb_rate_corrected"]
+        .fillna(aux["cosif_type4_rate"])
+        .fillna(aux["cosif_implicit_rate"])
+        .fillna(aux["cdi_qoq"])
+    )
     
     if "ip_prepaid_rate" in aux.columns:
         aux["rate_a5"] = np.where(

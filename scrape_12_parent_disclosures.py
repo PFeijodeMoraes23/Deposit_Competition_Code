@@ -1,4 +1,4 @@
-## scrape_18_parent_disclosures.py
+## scrape_12_parent_disclosures.py
 # Author: Pedro Feijó de Moraes
 #
 # Last edited: 2026-05-31
@@ -12,7 +12,7 @@
 #
 #   Mercado Pago is recoverable: MELI's 10-K/10-Q report 'fintech monthly active
 #   users' and break Brazil out in the segment discussion. We extract those with
-#   the geo tag (Brazil vs consolidated/Latam), exactly as scrape_17 does for NU.
+#   the geo tag (Brazil vs consolidated/Latam), exactly as scrape_11 does for NU.
 #   The reduced-form deposit object for Mercado Pago is 'funds payable to
 #   customers' (not a deposit liability) — flagged as such.
 #
@@ -27,8 +27,8 @@
 #     manual_parent_counts.csv         — seeded manual template (C6, PicPay)
 #
 #   CLI:
-#     python scrape_18_parent_disclosures.py
-#     python scrape_18_parent_disclosures.py --since 2019 --max-filings 30
+#     python scrape_12_parent_disclosures.py
+#     python scrape_12_parent_disclosures.py --since 2019 --max-filings 30
 ###────────────────────────────────────────────────────────────────────────────
 
 import os
@@ -49,7 +49,7 @@ from utils.disclosure_common import (
 )
 from utils.firm_registry import load_registry
 # reuse EDGAR plumbing
-from scrape_17_edgar_disclosures import fetch_submissions, _pick_documents, EARNINGS_FORMS
+from scrape_11_edgar_disclosures import fetch_submissions, _pick_documents, EARNINGS_FORMS
 
 # MELI publishes its KPI tables in 8-K earnings exhibits (ex99.1), not in the
 # 10-K/10-Q body, so the parent scan must include 8-K.

@@ -40,33 +40,28 @@ Pipeline stages
 
   Stage 2 - Market characteristic panels
     2a. scrape_5_pix_panel.py                   Process BCB PIX municipality files -> MCA PIX adoption panel
-    2b. scrape_8_anatel.py                      Download ANATEL mobile connections -> MCA connectivity panel
-    2d. scrape_9_bcb_inclusion.py               BCB banking access-points (branches + correspondents) -> MCA inclusion panel
-    2d2. scrape_16_bcb_banked.py                 BCB ESTBAN deposit balances (Dec snapshot) + WB Findex -> MCA banked-fraction proxy panel
-    2e. scrape_10_cadunico.py                    CadUnico low-income families -> MCA poverty panel
-    2f. scrape_11_fees.py                        BCB bank fee schedules (PF + PJ) -> tarifas conglomerate panel + fee summary
-    2g. scrape_12_cosif_service_fees.py         COSIF 717xxxxx revenue / deposit ratios -> institution panel (realized fees, Nakane-style but richer)
-                                                  Sources: BANCOS + SOCIEDADES (Nubank, PagSeguro, Stone…) + COOPERATIVAS; 2013-Sep2025
-                                                  Handles .ZIP (pre-2023) and .csv.zip (2023+); post-2023 adds PF/PJ sub-account breakdown
-    2h. scrape_13_openfinance_fees.py           Open Finance product APIs -> listed fee schedules by institution x account_type x service (digital-bank inclusive)
-                                                  83 endpoints, customer-weighted avg price from quartile distribution, diskcache for time series
-    2i. scrape_14_bcb_tariff_vigencia.py        BCB Tarifas DataVigencia extraction -> historical listed-price anchors (when each price last changed, going back to 1996)
-    2j. scrape_15_cosif_download.py             COSIF ZIP downloader for missing months (Dec2022, Jan2023 gap; and future updates)
+    2b. scrape_6_anatel.py                      Download ANATEL mobile connections -> MCA connectivity panel
+    2d. scrape_7_bcb_inclusion.py               BCB banking access-points (branches + correspondents) -> MCA inclusion panel
+    2d2. scrape_8_bcb_banked.py                  BCB ESTBAN deposit balances (Dec snapshot) + WB Findex -> MCA banked-fraction proxy panel
+    2e. scrape_9_cadunico.py                     CadUnico low-income families -> MCA poverty panel
+    2f. scrape_10_fees.py                        BCB bank fee schedules (PF + PJ) -> tarifas conglomerate panel + fee summary
 
-  Stage 3b-ext - Fee panel join
-    3f. panel_8_cosif_fees.py                  Map COSIF service fees to market panel (CNPJ->conglomerate, monthly->quarterly) -> cosif_fee_quarterly_conglomerate.csv
-                                                  Run with --patch-market to produce market_panel_with_fees.csv
+  Stage 2c - COSIF download + processing (feeds deposit-rate panels)
+    2k. scrape_21_cosif_download.py             COSIF ZIP downloader for missing months (and future updates) -> shared/COSIF
+    2l. cosif_process_1_extract.py              Extract COSIF -> custos_implicitos_<TAXONOMY>.csv (canonical, consumed by panel_3) + per-type foundation
+    2m. cosif_process_2_calibrate.py            Per-bank + prudential-segment-shrunk corrected k=4 (CDB) rate -> cosif_cdb_rate_corrected.csv
 
-  Stage 3 - Deposit panel, characteristics & instruments
+  Stage 3 - Deposit panel, rates, characteristics & digital flags
     3a. panel_1_deposits.py                 ESTBAN + IF Data -> conglomerate x municipality x quarter deposit panel
     3b. panel_2_rates_ip.py         Extract IP explicit deposit rates from raw COSIF (parallel to deposits)
-    3c. panel_3_rates.py                         Compute and append deposit rates/spreads (COSIF + SGS) to deposit panel
+    3c. panel_3_master_panel_build.py            Compute and append deposit rates/spreads (COSIF + SGS; corrected k=4 CDB rate) to deposit panel
     3d. panel_4_bank_chars.py               IF Data -> conglomerate x quarter bank size and solvency characteristics panel
     3e. panel_5_flag_digital.py                   Analyze raw ESTBAN to identify purely digital banks -> PANEL_INTERMED
 
   Stage 4 - Master analysis panel
     4a. panel_6_market.py                   Merge all MCA panels + deposit panel -> master analysis dataset
     4b. panel_7_instruments.py       Compute LOO instruments and FGC dummy -> overwrites market_panel.csv
+    4c. panel_8_demographics_sigma.py        Within-MCA demographic sigma for BLP parametric draws
 
   Stage 5 - Descriptive statistics
     5a. desc_1.py                        Generate unweighted overview descriptive tables
@@ -75,14 +70,19 @@ Pipeline stages
     5d. desc_2.py --weight-col pop_total Generate market-weighted compressed/thematic tables
 
   Stage 6 - Firm-disclosure & count data (extensive-vs-intensive margin)
-    18.  scrape_17_edgar_disclosures.py       SEC EDGAR firm customers + deposits
-    18b. scrape_18_parent_disclosures.py     Mercado Pago MAU (MELI 8-K); C6/PicPay template
-    18c. scrape_19_incumbent_clients.py      CVM-IPE earnings PDFs -> client counts (Tier-2/4 cascade)
-    18d. scrape_20_bcb_accounts.py           BCB account-count report archival + template
-    18e. scrape_21_worldbank_findex.py       Findex national demographic ownership
-    18f. scrape_22_fgc_statistics.py         FGC bracket template + report archival
-    18g. scrape_23_cvm_disclosures.py        CVM deposits in BRL (incl. Banco do Brasil)
-    19.  analysis_1_disclosure_join.py       Join disclosures -> account-vs-volume table
+    6a. scrape_11_edgar_disclosures.py        SEC EDGAR firm customers + deposits
+    6b. scrape_12_parent_disclosures.py      Mercado Pago MAU (MELI 8-K); C6/PicPay template
+    6c. scrape_13_incumbent_clients.py       CVM-IPE earnings PDFs -> client counts (Tier-2/4 cascade)
+    6d. scrape_14_bcb_accounts.py            BCB account-count report archival + template
+    6e. scrape_15_worldbank_findex.py        Findex national demographic ownership
+    6f. scrape_16_fgc_statistics.py          FGC bracket template + report archival
+    6g. scrape_17_cvm_disclosures.py         CVM deposits in BRL (incl. Banco do Brasil)
+    6h.  analysis_1_disclosure_join.py       Join disclosures -> account-vs-volume table
+
+  NOTE: the non-pipeline scrapers scrape_18_cosif_service_fees, scrape_19_openfinance_fees,
+  scrape_20_bcb_tariff_vigencia, scrape_22_pix_participants, scrape_23_pix_roster,
+  scrape_24_cvm_fee_income, scrape_inss and the fee-merge panel_9_cosif_fees are run
+  outside this master runner.
 
 Usage
 -----
@@ -115,25 +115,41 @@ options:
   --skip IDs  Comma-separated list of step IDs to skip (e.g. '9,12').
   --list      Print the pipeline steps and exit.
 
-Scripts called by the data pipeline:
-------------------------------------
+Scripts called by the data pipeline (contiguous step IDs in execution order):
+-----------------------------------------------------------------------------
 [1] scrape_1_bcb_estban_if_data.py
+[2] scrape_2_estban_concat.py
+[3] scrape_3_ifdata_aggregate.py
 [4] scrape_4_ibge_demographics.py
 [5] scrape_5_pix_panel.py
-[6] scrape_8_anatel.py
-[7] scrape_9_bcb_inclusion.py
-[8] scrape_16_bcb_banked.py
-[9] scrape_10_cadunico.py
-[10] scrape_11_fees.py
-[11] panel_1_deposits.py
-[12] panel_2_rates_ip.py
-[13] panel_3_rates.py
-[14] panel_4_bank_chars.py
-[15] panel_5_flag_digital.py
-[16] panel_6_market.py
-[17] panel_7_instruments.py
-[19] desc_1.py
-[20] desc_2.py
+[6] scrape_6_anatel.py
+[7] scrape_7_bcb_inclusion.py
+[8] scrape_8_bcb_banked.py
+[9] scrape_9_cadunico.py
+[10] scrape_10_fees.py
+[11] scrape_21_cosif_download.py
+[12] cosif_process_1_extract.py
+[13] cosif_process_2_calibrate.py
+[14] panel_1_deposits.py
+[15] panel_2_rates_ip.py
+[16] panel_3_master_panel_build.py
+[17] panel_4_bank_chars.py
+[18] panel_5_flag_digital.py
+[19] panel_6_market.py
+[20] panel_7_instruments.py
+[21] panel_8_demographics_sigma.py
+[22] desc_1.py
+[23] desc_1.py --weight-col pop_total
+[24] desc_2.py
+[25] desc_2.py --weight-col pop_total
+[26] scrape_11_edgar_disclosures.py
+[27] scrape_12_parent_disclosures.py
+[28] scrape_13_incumbent_clients.py
+[29] scrape_14_bcb_accounts.py
+[30] scrape_15_worldbank_findex.py
+[31] scrape_16_fgc_statistics.py
+[32] scrape_17_cvm_disclosures.py
+[33] analysis_1_disclosure_join.py
 """
 
 import argparse
@@ -189,6 +205,7 @@ def _load_toon_runtime_context() -> dict:
 
 # -- Pipeline definition --------------------------------------------------------
 # Each entry: (stage_int, step_id_str, script_filename, description)
+# Step IDs are contiguous 1..N in execution order.
 STEPS = [
     # Stage 0 -- raw downloads
     (0, "1", "scrape_1_bcb_estban_if_data.py",
@@ -205,64 +222,74 @@ STEPS = [
     # Stage 2 -- market characteristic panels
     (2, "5", "scrape_5_pix_panel.py",
      "Process BCB PIX municipality files -> MCA PIX adoption panel"),
-    (2, "6", "scrape_8_anatel.py",
+    (2, "6", "scrape_6_anatel.py",
      "Download ANATEL mobile connections -> MCA connectivity panel"),
-    (2, "7", "scrape_9_bcb_inclusion.py",
+    (2, "7", "scrape_7_bcb_inclusion.py",
      "BCB banking access-points (branches + correspondents) -> MCA inclusion panel"),
-    (2, "8", "scrape_16_bcb_banked.py",
+    (2, "8", "scrape_8_bcb_banked.py",
      "BCB ESTBAN deposit balances (Dec snapshot) + WB Findex -> MCA banked-fraction proxy panel"),
-    (2, "9", "scrape_10_cadunico.py",
+    (2, "9", "scrape_9_cadunico.py",
      "CadUnico low-income families -> MCA poverty panel"),
-    (2, "10", "scrape_11_fees.py",
+    (2, "10", "scrape_10_fees.py",
      "BCB bank fee schedules (PF + PJ) -> tarifas conglomerate panel + fee summary"),
-    (3, "11", "panel_1_deposits.py",
+
+    # Stage 2c -- COSIF download + processing (feeds panel_2/panel_3 deposit rates)
+    (2, "11", "scrape_21_cosif_download.py",
+     "Download missing monthly COSIF ZIPs (BANCOS) into shared/COSIF"),
+    (2, "12", "cosif_process_1_extract.py",
+     "Extract COSIF -> custos_implicitos_<TAXONOMY>.csv (canonical) + per-type foundation"),
+    (2, "13", "cosif_process_2_calibrate.py",
+     "Per-bank + segment-shrunk corrected k=4 (CDB) rate -> cosif_cdb_rate_corrected.csv"),
+
+    # Stage 3 -- deposit panel, rates, characteristics & digital flags
+    (3, "14", "panel_1_deposits.py",
      "ESTBAN + IF Data -> conglomerate x municipality x quarter deposit panel"),
-    (3, "12", "panel_2_rates_ip.py",
+    (3, "15", "panel_2_rates_ip.py",
      "Extract IP explicit deposit rates from raw COSIF (parallel to deposits)"),
-    (3, "13", "panel_3_rates.py",
-     "Compute and append deposit rates/spreads (COSIF + SGS) to deposit panel"),
-    (3, "14", "panel_4_bank_chars.py",
+    (3, "16", "panel_3_master_panel_build.py",
+     "Compute and append deposit rates/spreads (COSIF + SGS; corrected k=4 CDB rate) to deposit panel"),
+    (3, "17", "panel_4_bank_chars.py",
      "IF Data -> conglomerate x quarter bank size and solvency characteristics panel"),
-    (3, "15", "panel_5_flag_digital.py",
+    (3, "18", "panel_5_flag_digital.py",
      "Analyze raw ESTBAN to identify purely digital banks -> PANEL_INTERMED"),
 
     # Stage 4 -- master analysis panel
-    (4, "16", "panel_6_market.py",
+    (4, "19", "panel_6_market.py",
      "Merge all MCA panels + deposit panel -> master analysis dataset"),
-    (4, "17", "panel_7_instruments.py",
+    (4, "20", "panel_7_instruments.py",
      "Compute LOO instruments and FGC dummy -> overwrites market_panel.csv"),
-    (4, "18", "panel_9_demographics_sigma.py",
+    (4, "21", "panel_8_demographics_sigma.py",
      "Within-MCA demographic σ for BLP parametric draws -> demographics_sigma.parquet"),
 
     # Stage 5 -- descriptive statistics
-    (5, "19", "desc_1.py",
+    (5, "22", "desc_1.py",
      "Generate unweighted overview descriptive tables"),
-    (5, "20", "desc_1.py --weight-col pop_total",
+    (5, "23", "desc_1.py --weight-col pop_total",
      "Generate market-weighted descriptive tables"),
-    (5, "21", "desc_2.py",
+    (5, "24", "desc_2.py",
      "Generate unweighted compressed/thematic descriptive tables"),
-    (5, "22", "desc_2.py --weight-col pop_total",
+    (5, "25", "desc_2.py --weight-col pop_total",
      "Generate market-weighted compressed/thematic descriptive tables"),
 
     # Stage 6 -- firm-disclosure & count data (extensive-vs-intensive margin diagnostic)
     # External-API scrapers, serialized (one per wave) to respect SEC/CVM/WB rate
     # limits, mirroring the Stage-2 convention. The join depends on BOTH the firm
-    # disclosures (18*) and the Stage-4 market_panel.csv, so it runs last.
-    (6, "23", "scrape_17_edgar_disclosures.py",
+    # disclosures and the Stage-4 market_panel.csv, so it runs last.
+    (6, "26", "scrape_11_edgar_disclosures.py",
      "SEC EDGAR: firm customers (BR/consolidated) + deposits (XBRL)"),
-    (6, "24", "scrape_18_parent_disclosures.py",
+    (6, "27", "scrape_12_parent_disclosures.py",
      "MELI 8-K: Mercado Pago fintech MAU; C6/PicPay manual template"),
-    (6, "25", "scrape_19_incumbent_clients.py",
+    (6, "28", "scrape_13_incumbent_clients.py",
      "CVM-IPE earnings PDFs -> client counts (Pan/BMG/Banrisul/BB); vision fallback"),
-    (6, "26", "scrape_20_bcb_accounts.py",
+    (6, "29", "scrape_14_bcb_accounts.py",
      "BCB RCF/REB report archival + account-count manual template"),
-    (6, "27", "scrape_21_worldbank_findex.py",
+    (6, "30", "scrape_15_worldbank_findex.py",
      "World Bank Findex: national demographic account ownership"),
-    (6, "28", "scrape_22_fgc_statistics.py",
+    (6, "31", "scrape_16_fgc_statistics.py",
      "FGC: bracket manual template + report archival"),
-    (6, "29", "scrape_23_cvm_disclosures.py",
+    (6, "32", "scrape_17_cvm_disclosures.py",
      "CVM DFP/ITR: deposits in BRL (incl. Banco do Brasil)"),
-    (6, "30", "analysis_1_disclosure_join.py",
+    (6, "33", "analysis_1_disclosure_join.py",
      "Join disclosures -> conglomerate x quarter account-vs-volume table"),
 ]
 
@@ -384,15 +411,20 @@ WAVES: list[list[str]] = [
     ["8"],                                    # Wave 2d2: BCB ESTBAN banked-fraction proxy
     ["9"],                                     # Wave 2e: CadUnico
     ["10"],                                     # Wave 2f: fees
-    ["11", "12"],                               # Wave 2g: characteristic panels + deposits + IP rates
-    ["13", "14", "15"],                         # Wave 3: deposit rates/spreads + bank chars + digital flags (parallel)
-    ["16"],                                    # Wave 4: master merge
-    ["17", "18"],                             # Wave 5: instrumental variables + demographics sigma
-    ["19", "20", "21", "22"],                  # Wave 6: descriptive statistics (desc_1 + desc_2, weighted + unweighted)
+    # Stage 2c: COSIF download -> extract -> calibrate (strict serial chain;
+    # must finish before panel_2/panel_3 consume the COSIF processed output).
+    ["11"],                                    # Wave 2g: COSIF download
+    ["12"],                                    # Wave 2h: COSIF extract (custos_implicitos + foundation)
+    ["13"],                                    # Wave 2i: COSIF calibrate (corrected k=4 CDB rate)
+    ["14", "15"],                               # Wave 3: deposits + IP rates
+    ["16", "17", "18"],                         # Wave 4: deposit rates/spreads + bank chars + digital flags (parallel)
+    ["19"],                                    # Wave 5: master merge
+    ["20", "21"],                             # Wave 6: instrumental variables + demographics sigma
+    ["22", "23", "24", "25"],                  # Wave 7: descriptive statistics (desc_1 + desc_2, weighted + unweighted)
     # Stage 6: firm-disclosure scrapers, one per wave (serial) to respect external
-    # rate limits (18/18b both hit SEC EDGAR), then the join once all are present.
-    ["23"], ["24"], ["25"], ["26"], ["27"], ["28"], ["29"],  # Wave 7-13: disclosure scrapers
-    ["30"],                                                          # Wave 14: disclosure join
+    # rate limits (EDGAR/parent both hit SEC), then the join once all are present.
+    ["26"], ["27"], ["28"], ["29"], ["30"], ["31"], ["32"],  # Wave 8-14: disclosure scrapers
+    ["33"],                                                          # Wave 15: disclosure join
 ]
 
 def run_wave(
@@ -468,24 +500,32 @@ def parse_args() -> argparse.Namespace:
         description="Run the full Brazilian Open Finance data pipeline.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
-Scripts called by the data pipeline:
-------------------------------------
+Scripts called by the data pipeline (contiguous step IDs in execution order):
+-----------------------------------------------------------------------------
 [1] scrape_1_bcb_estban_if_data.py
+[2] scrape_2_estban_concat.py
+[3] scrape_3_ifdata_aggregate.py
 [4] scrape_4_ibge_demographics.py
 [5] scrape_5_pix_panel.py
-[6] scrape_8_anatel.py
-[7] scrape_9_bcb_inclusion.py
-[8] scrape_16_bcb_banked.py
-[9] scrape_10_cadunico.py
-[10] scrape_11_fees.py
-[11] panel_1_deposits.py
-[12] panel_2_rates_ip.py
-[13] panel_3_rates.py
-[14] panel_4_bank_chars.py
-[15] panel_5_flag_digital.py
-[16] panel_6_market.py
-[17] panel_7_instruments.py
-[19] desc_1.py
+[6] scrape_6_anatel.py
+[7] scrape_7_bcb_inclusion.py
+[8] scrape_8_bcb_banked.py
+[9] scrape_9_cadunico.py
+[10] scrape_10_fees.py
+[11] scrape_21_cosif_download.py
+[12] cosif_process_1_extract.py
+[13] cosif_process_2_calibrate.py
+[14] panel_1_deposits.py
+[15] panel_2_rates_ip.py
+[16] panel_3_master_panel_build.py
+[17] panel_4_bank_chars.py
+[18] panel_5_flag_digital.py
+[19] panel_6_market.py
+[20] panel_7_instruments.py
+[21] panel_8_demographics_sigma.py
+[22] desc_1.py / [24] desc_2.py (each x2: unweighted + --weight-col pop_total)
+[26] scrape_11_edgar_disclosures.py ... [32] scrape_17_cvm_disclosures.py
+[33] analysis_1_disclosure_join.py
 """
     )
     p.add_argument(

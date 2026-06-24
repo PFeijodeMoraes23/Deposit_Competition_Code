@@ -54,24 +54,29 @@ The codebase:
 │
 ├── ── Stage 2: Market Characteristic Panels (parallel) ──
 ├── scrape_5_pix_panel.py                 # BCB PIX adoption → MCA panel
-├── scrape_8_anatel.py                    # ANATEL mobile connections → MCA connectivity panel
-├── scrape_9_bcb_inclusion.py             # BCB banking access-points (branches + correspondents) → MCA panel
-├── scrape_10_cadunico.py                  # CadUnico low-income families → MCA poverty panel
-├── scrape_11_fees.py                      # BCB bank fee schedules (PF + PJ) → tarifas conglomerate panel
-├── scrape_16_bcb_banked.py                # ESTBAN Dec snapshots + WB Findex → MCA banked-fraction proxy panel
+├── scrape_6_anatel.py                    # ANATEL mobile connections → MCA connectivity panel
+├── scrape_7_bcb_inclusion.py             # BCB banking access-points (branches + correspondents) → MCA panel
+├── scrape_8_bcb_banked.py                 # ESTBAN Dec snapshots + WB Findex → MCA banked-fraction proxy panel
+├── scrape_9_cadunico.py                   # CadUnico low-income families → MCA poverty panel
+├── scrape_10_fees.py                      # BCB bank fee schedules (PF + PJ) → tarifas conglomerate panel
 ├── scrape_inss.py                        # INSS retirees → MCA quarter panel
+│
+├── ── Stage 2c: COSIF Download + Processing ──
+├── scrape_21_cosif_download.py           # Download missing monthly COSIF ZIPs → shared/COSIF
+├── cosif_process_1_extract.py            # Extract COSIF → custos_implicitos_<TAXONOMY>.csv + per-type foundation
+├── cosif_process_2_calibrate.py          # Per-bank + segment-shrunk corrected k=4 CDB rate → cosif_cdb_rate_corrected.csv
 │
 ├── ── Stage 3: Deposit Panel, Rates & Characteristics (parallel) ──
 ├── panel_1_deposits.py                   # ESTBAN + IF Data → conglomerate × municipality × quarter deposit panel
 ├── panel_2_rates_ip.py                   # Extract IP explicit deposit rates from raw COSIF files
-├── panel_3_rates.py                      # Compute and append deposit rates/spreads (COSIF + SGS)
+├── panel_3_master_panel_build.py         # Compute and append deposit rates/spreads (COSIF + SGS; corrected k=4 CDB rate)
 ├── panel_4_bank_chars.py                 # IF Data → conglomerate bank size & solvency characteristics panel
 ├── panel_5_flag_digital.py               # Identify purely digital banks from ESTBAN → PANEL_INTERMED
 │
 ├── ── Stage 4: Master Analysis Panel ──
 ├── panel_6_market.py                     # Merge all MCA panels + deposit panel → master analysis dataset
 ├── panel_7_instruments.py                # Compute LOO instruments and FGC coverage dummy
-├── panel_9_demographics_sigma.py         # Within-MCA demographic σ for BLP parametric draws → demographics_sigma.parquet
+├── panel_8_demographics_sigma.py         # Within-MCA demographic σ for BLP parametric draws → demographics_sigma.parquet
 │
 ├── ── Stage 5: Descriptive Statistics (parallel) ──
 ├── desc_1.py                             # Summary statistics tables (CSV + LaTeX) by bank type and region

@@ -1,22 +1,22 @@
 """
-panel_8_cosif_fees.py
+panel_9_cosif_fees.py
 =======================
 Merge all fee-price columns onto the market panel.
 
 Three fee sources
 -----------------
-1. COSIF realized revenue ratios   (scrape_12_cosif_service_fees.py)
+1. COSIF realized revenue ratios   (scrape_18_cosif_service_fees.py)
    - Quarterly, conglomerate-level  |  2013-Q1 → 2026-Q1
    - 5 fee/deposit ratio columns    |  cosif_fee_ratio_*
    - NOTE: 2025+ data has a COSIF account reclassification artifact
      (mandatory new plan from Jan 2025). Set cosif_fee_valid=0 for year>=2025.
 
-2. BCB Tarifas listed maximum prices  (scrape_14_bcb_tariff_vigencia.py)
+2. BCB Tarifas listed maximum prices  (scrape_20_bcb_tariff_vigencia.py)
    - Static snapshot, no time variation  |  34 well-covered conglomerates
    - Key priority services (PF)          |  listed_fee_<name>_pf columns
    - Useful as cross-sectional instruments for BLP identification
 
-3. DataVigencia price-stickiness instrument  (scrape_14_bcb_tariff_vigencia.py)
+3. DataVigencia price-stickiness instrument  (scrape_20_bcb_tariff_vigencia.py)
    - Time-varying, conglomerate × quarter  |  2013-Q1 → latest
    - Mean years since last tariff change across BCB priority services
    - tarifa_stickiness_yrs: grows until a price change, resets to 0 at change
@@ -28,8 +28,8 @@ Output
 
 Usage
 -----
-  python panel_8_cosif_fees.py
-  python panel_8_cosif_fees.py --patch-market
+  python panel_9_cosif_fees.py
+  python panel_9_cosif_fees.py --patch-market
 
 Note
 ----

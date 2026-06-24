@@ -10,13 +10,17 @@ multiplicative-Z structure (Fan 1992; Fan-Marron 1994). Monotonicity is imposed
 EX POST by rearrangement (Chernozhukov-Fernandez-Val-Galichon 2009), then clipped
 to [0,1].
 
-Because the kernel profiling is expensive, Est 8 is estimated for SPEC 12 ONLY
-(IV_HausmanFull x Tech), the paper's headline specification. Two losses are
-stored (LS and robust); the official phi uses the ROBUST fit via phi_from_native.
-The index search is warm-started from the logit direction. Inference:
-score/multiplier wild cluster bootstrap.
+Supports the full 12-spec grid like Est 1-7 (omit --spec12), but the kernel
+profiling is expensive (~1h+ at n_starts=1), so the pipeline default and the
+cheap path is spec 12 only (--spec12, IV_HausmanFull x Tech, the headline spec).
+Two losses are stored (LS and robust); the official phi uses the ROBUST fit via
+phi_from_native. The index search is warm-started from the logit direction.
+Inference: score/multiplier wild cluster bootstrap.
 
 Outputs -> ESTIMATION_OUTPUT/DEMAND_PREP/est8
+
+CLI Options:
+  --spec12   Only run spec 12 (omit for the full 12-spec grid)
 """
 import argparse
 import os
@@ -74,10 +78,10 @@ def exec_spec(args):
     init = _init_theta(logit_res, s_cols)
 
     res_robust = fit_joint_single_index(df_target, s_cols, has_cf=has_cf, link=LINK,
-                                        loss="robust", init_theta=init, n_starts=2,
+                                        loss="robust", init_theta=init, n_starts=1,
                                         boot_B=999, boot_scheme="webb", seed=0, label=f"{spec_name}/robust")
     res_ls = fit_joint_single_index(df_target, s_cols, has_cf=has_cf, link=LINK,
-                                    loss="ls", init_theta=init, n_starts=2,
+                                    loss="ls", init_theta=init, n_starts=1,
                                     boot_B=999, boot_scheme="webb", seed=0, label=f"{spec_name}/ls")
     return res_robust, res_ls, spec_name, res_fs
 
@@ -99,15 +103,24 @@ def calculate_phis(df, results_dict):
     return df, phi_results
 
 
-def run_phase(spec12_only=True):
+def run_phase(spec12_only=False):
     print("\n=== ESTIMATION 8: POOLED B+D JOINT SINGLE-INDEX (kernel local-linear) ===")
-    if not spec12_only:
-        print("  [note] Est 8 (kernel) is spec-12-only by design; ignoring full-grid request.")
     df = build_pooled_data()
     _, iv_specs, state_blocks = define_specifications()
-    tasks = [(df, "IV_HausmanFull", iv_specs["IV_HausmanFull"], "Tech", state_blocks["Tech"])]
 
-    results = [exec_spec(t) for t in tasks]   # single spec; no joblib needed
+    if spec12_only:
+        tasks = [(df, "IV_HausmanFull", iv_specs["IV_HausmanFull"], "Tech", state_blocks["Tech"])]
+    else:
+        # Full 12-spec grid. The kernel backfit is expensive, so this is heavy
+        # (~1h+ at n_starts=1); spec-12-only (--spec12) is the cheap default in
+        # the pipeline.
+        tasks = [(df, iv, iv_specs[iv], s, state_blocks[s])
+                 for s in state_blocks.keys()
+                 for iv in ["OLS", "IV_CostShifters", "IV_Wholesale", "IV_HausmanFull"]]
+
+    from joblib import Parallel, delayed
+    _nw = max(1, (os.cpu_count() or 4) // max(1, int(os.environ.get("SLEEP_PIPELINE_NSLOTS", "1"))))
+    results = Parallel(n_jobs=min(4, _nw))(delayed(exec_spec)(t) for t in tasks)
 
     results_dict = {}
     for res_robust, res_ls, spec_name, res_fs in results:
@@ -132,8 +145,8 @@ def run_phase(spec12_only=True):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Estimation 8: Pooled B+D Joint Single-Index (kernel)")
-    parser.add_argument("--spec12", action="store_true", help="(Default) spec 12 only; kept for interface parity")
+    parser.add_argument("--spec12", action="store_true", help="Only run spec 12 (Tech x IV_HausmanFull); omit for the full 12-spec grid")
     args = parser.parse_args()
     pd.options.mode.chained_assignment = None
-    run_phase(spec12_only=True)
+    run_phase(spec12_only=args.spec12)
     print("\n--- Pipeline 8 (Joint Single-Index, kernel) Completed ---")

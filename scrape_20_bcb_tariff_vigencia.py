@@ -1,5 +1,5 @@
 """
-scrape_14_bcb_tariff_vigencia.py
+scrape_20_bcb_tariff_vigencia.py
 ==================================
 Extract the full DataVigencia (effective-date) history from the BCB Tarifas
 API to reconstruct a synthetic historical listed-price panel.
@@ -13,7 +13,7 @@ current price became effective. This encodes the *last price change* for each
 
   price_value  |  from DataVigencia  →  until next scrape that shows a change
 
-Combined with the forward-looking panel from scrape_11_fees.py (which captures
+Combined with the forward-looking panel from scrape_10_fees.py (which captures
 FUTURE changes), we reconstruct the full price path:
 
   [pre-DataVigencia]  → unknown (pre-2018 typically)
@@ -32,8 +32,8 @@ Output
 
 Usage
 -----
-  python scrape_14_bcb_tariff_vigencia.py
-  python scrape_14_bcb_tariff_vigencia.py --test 20
+  python scrape_20_bcb_tariff_vigencia.py
+  python scrape_20_bcb_tariff_vigencia.py --test 20
 """
 
 from __future__ import annotations
@@ -57,7 +57,7 @@ logging.basicConfig(
 log = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# Paths and constants (reuse scrape_11_fees.py infrastructure)
+# Paths and constants (reuse scrape_10_fees.py infrastructure)
 # ---------------------------------------------------------------------------
 from utils import paths
 _REPO    = Path(__file__).resolve().parents[2]

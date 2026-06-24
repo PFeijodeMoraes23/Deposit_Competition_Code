@@ -1,7 +1,7 @@
 """
 d_rate_scrape_6_diagnose.py
 ==============================
-Diagnostic for merging scraped advertised rates into panel_3_rates.py.
+Diagnostic for merging scraped advertised rates into panel_3_master_panel_build.py.
 
 Scope
 -----
@@ -44,7 +44,7 @@ Outputs (in processed/IP_SCRAPE/diagnose/)
   recommended_merge.csv         (cod, AnoMes, deposit_type, use_scraped,
                                  advertised_rate_qoq, reason)
 
-The recommended_merge.csv is what panel_3_rates.py should consume.
+The recommended_merge.csv is what panel_3_master_panel_build.py should consume.
 """
 from utils.venv_guard import ensure_project_venv
 ensure_project_venv(__file__)
@@ -207,7 +207,7 @@ def main():
     ap.add_argument('--advertised-long',
                     default=str(ip_scrape_dir / 'advertised_rates_quarterly.csv'))
     ap.add_argument('--panel',
-                    default=str(panel_dir / 'egan_panel_deposits.csv'))
+                    default=str(panel_dir / 'master_panel_deposits.csv'))
     ap.add_argument('--out-dir', default=str(out_dir))
     ap.add_argument('--tier-a-nobs',    type=int,   default=DEFAULT_TIER_A_NOBS)
     ap.add_argument('--tier-a-std',     type=float, default=DEFAULT_TIER_A_STD)

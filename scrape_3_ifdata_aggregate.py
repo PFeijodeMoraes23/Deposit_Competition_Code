@@ -17,7 +17,7 @@
 #
 # Consumers: panel_1_deposits.py and panel_4_bank_chars.py read
 #   Aggregated Data/IF_DATA_type_1_report_<r>.csv  (type 1 = Prudential Cong.).
-# (panel_3_rates.py reads the per-period Prudential files directly, not these.)
+# (panel_3_master_panel_build.py reads the per-period Prudential files directly, not these.)
 #
 # Usage:
 #     python scrape_3_ifdata_aggregate.py            # rebuild Aggregated Data

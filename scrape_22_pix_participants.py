@@ -1,4 +1,4 @@
-## scrape_6_pix_participants.py
+## scrape_22_pix_participants.py
 # Author: Pedro Feijó de Moraes
 #
 # Last edited: 2026-06-09
@@ -7,7 +7,7 @@
 #          participant (ISPB) first appears in the Pix environment. This is the
 #          "key-based" leg of a cross-validated timeline; the "roster-based" leg
 #          (participation type: direct/indirect, mandatory/voluntary) is built by
-#          scrape_7_pix_roster.py and the two are reconciled there.
+#          scrape_23_pix_roster.py and the two are reconciled there.
 #
 #          Distinct from scrape_5_pix_panel.py, which uses the geographic
 #          TransacoesPixPorMunicipio endpoint (MCA × quarter adoption). This
@@ -89,7 +89,7 @@ ENTRY_CSV  = os.path.join(PIX_DIR, "pix_participant_entry.csv")
 
 if resolve_script_paths is not None:
     _paths = resolve_script_paths(
-        "scrape_6_pix_participants",
+        "scrape_22_pix_participants",
         {"pix_dir": PIX_DIR, "panel_csv": PANEL_CSV, "entry_csv": ENTRY_CSV},
         script_dir=os.path.dirname(os.path.abspath(__file__)),
     )
