@@ -271,7 +271,7 @@ def pava_increasing(y, w=None):
     return out
 
 
-def fit_single_index(df, state_cols, has_cf, logit_res, degree=3):
+def fit_single_index(df, state_cols, has_cf, logit_res, degree=3, phi_band=False):
     """Smooth cubic-sieve monotone single index in the logit-direction index.
     Returns NonLinearResults carrying average-derivative AMEs (params; tables),
     the index direction (params_native = logit native coefs), and the sieve
@@ -344,10 +344,31 @@ def fit_single_index(df, state_cols, has_cf, logit_res, degree=3):
     B_used, scheme_used = boot_cfg()
     print(f"  [SingleIndex] cubic sieve deg={degree} | mean_slope={mean_slope:.4g} | "
           f"wild boot B={B_used} ({scheme_used})")
-    return NonLinearResults(ps, bs, ps / bs.replace(0, np.nan), pvs, G_star,
-                            params_native=pd.Series(theta, index=phi_params),
-                            nobs=len(df_ss), rsquared=rsq, G_nominal=G_nominal,
-                            cov_ame=None, si_b=b, si_vmu=vmu, si_vsd=vsd, link="index")
+    res_obj = NonLinearResults(ps, bs, ps / bs.replace(0, np.nan), pvs, G_star,
+                               params_native=pd.Series(theta, index=phi_params),
+                               nobs=len(df_ss), rsquared=rsq, G_nominal=G_nominal,
+                               cov_ame=None, si_b=b, si_vmu=vmu, si_vsd=vsd, link="index")
+    # National phi_t band from the sieve-link (b) wild cluster bootstrap; the
+    # logit index direction is held fixed, so the band reflects link uncertainty.
+    if phi_band:
+        bread = np.linalg.pinv(Xdm_arr.T @ Xdm_arr)
+        score = Xdm_arr * np.asarray(res.resid, float)[:, None]
+        IF_cl = _cluster_if(score, bread, cl_inv, n_cl)
+        gs = _phi_t_group_struct(df_ss)
+        vpow = np.column_stack([vs ** dd for dd in range(degree + 1)])
+
+        def _phi_of_b(bfull):
+            return np.clip(vpow @ np.asarray(bfull, float)[:degree + 1], 0.0, 1.0)
+
+        _B, _scheme = boot_cfg()
+
+        def _draw(rng_):
+            w = _wild_weights(n_cl, _scheme, rng_)
+            return _phi_of_b(b_full + w @ IF_cl)
+
+        res_obj.phi_t_boot = _phi_t_band(gs, _phi_of_b(b_full), _draw,
+                                         min(_B, 400), _scheme, np.random.default_rng(20240624))
+    return res_obj
 
 
 # ==============================================================================
@@ -582,7 +603,8 @@ def _fit_link_kernel(v, Z, cf_dm, y_dm, einv, counts, bw, grid, wts=None,
 
 def fit_joint_single_index(df, state_cols, has_cf, link="sieve", loss="ls",
                            n_interior=5, degree=3, n_starts=4, init_theta=None,
-                           boot_B=199, boot_scheme="rademacher", seed=0, label=""):
+                           boot_B=199, boot_scheme="rademacher", seed=0, label="",
+                           phi_band=False):
     """Joint single-index sleepiness by Ichimura (1993) SLS: estimate the index
     direction theta (||theta||=1) and the link G TOGETHER.
       link='sieve'  (Est7): monotone cubic I-spline ramps, nonneg coefs (shape
@@ -633,11 +655,9 @@ def fit_joint_single_index(df, state_cols, has_cf, link="sieve", loss="ls",
             lo, hi = np.quantile(v, [0.005, 0.995])
             vgrid = np.linspace(lo, hi, 200)
             bw = _kernel_bw(v)
-            # Warm-start the kernel backfit from a quick EXACT sieve fit at this
-            # theta: the sieve solves the FE + link in one BVLS, so its grid is
-            # near the converged kernel level and the backfit then needs only a
-            # few sweeps (cold backfitting converges slowly here -- see the
-            # FE x G(v)Z coupling).
+            # Warm-start the kernel backfit from a quick EXACT sieve fit at this theta:
+            # the sieve solves FE+link in one BVLS, giving a near-converged G so the
+            # backfit needs only a few sweeps (cold backfitting converges slowly here).
             qs = np.linspace(0, 1, n_interior + 2)[1:-1]
             interior = np.clip(np.quantile(v, qs), lo + 1e-9, hi - 1e-9)
             t_ws = np.concatenate(([lo] * (degree + 1), np.sort(interior), [hi] * (degree + 1)))
@@ -684,12 +704,21 @@ def fit_joint_single_index(df, state_cols, has_cf, link="sieve", loss="ls",
 
     # ---- multistart over the unit sphere ----
     from scipy.optimize import minimize
+    # Start order: (1) logit warm start, (2) the deterministic equal-weight
+    # ("ones") direction, (3+) random unit vectors. The ones-vector is a cheap,
+    # reliable second start that reliably settles the sieve optimum; random starts
+    # only kick in for n_starts>=3. n_starts is the true total of starts, so the
+    # kernel can use n_starts=1 (warm only) to avoid a costly random-start wander.
     starts = []
     if init_theta is not None:
         iv = np.asarray(init_theta, float)
         if len(iv) == d:
             starts.append(iv / (np.linalg.norm(iv) + 1e-12))
-    starts.append(np.ones(d) / np.sqrt(d))
+    ones = np.ones(d) / np.sqrt(d)
+    if not starts:
+        starts.append(ones)                 # no warm start -> ones is start 1
+    elif n_starts >= 2:
+        starts.append(ones)                 # warm + deterministic ones as start 2
     while len(starts) < n_starts:
         r = rng.standard_normal(d)
         starts.append(r / np.linalg.norm(r))
@@ -697,10 +726,14 @@ def fit_joint_single_index(df, state_cols, has_cf, link="sieve", loss="ls",
     def _obj(theta):
         return _fit_link(theta / (np.linalg.norm(theta) + 1e-12), want_grid=False)
 
+    # Kernel evals are dearer and the in-loop CDF clip roughens the objective, so
+    # cap the kernel search HARD: the logit warm-start is already a strong index
+    # direction, so a few dozen refinement steps suffice (vs the sieve's full search).
+    _maxit = (20 * d if link == "kernel" else 300 * d)
     best = None
     for s0 in starts:
         res = minimize(_obj, s0, method="Nelder-Mead",
-                       options={"maxiter": 300 * d, "xatol": 1e-3, "fatol": 1e-5})
+                       options={"maxiter": _maxit, "xatol": 1e-3, "fatol": 1e-5})
         if best is None or res.fun < best[0]:
             best = (res.fun, res.x)
     theta_hat = best[1] / (np.linalg.norm(best[1]) + 1e-12)
@@ -749,6 +782,21 @@ def fit_joint_single_index(df, state_cols, has_cf, link="sieve", loss="ls",
     res.si_ggrid = ggrid
     res.si_degree = degree
     res.boot_B = boot_B; res.boot_scheme = boot_scheme
+
+    # National phi_t confidence band: perturb theta by the cluster-summed IFs,
+    # hold the link fixed (matches the AME bootstrap), aggregate to national phi_t.
+    if phi_band:
+        gs = _phi_t_group_struct(df_ss)
+        phi_pt = np.clip(np.interp(v, vgrid, ggrid), 0.0, 1.0)
+
+        def _draw(rng_):
+            w = _wild_weights(n_cl, boot_scheme, rng_)
+            th_b = theta_hat + w @ IF_cl
+            th_b = th_b / (np.linalg.norm(th_b) + 1e-12)
+            return np.clip(np.interp(Sn @ th_b, vgrid, ggrid), 0.0, 1.0)
+
+        res.phi_t_boot = _phi_t_band(gs, phi_pt, _draw, min(boot_B, 400),
+                                     boot_scheme, np.random.default_rng(seed + 12345))
     return res
 
 
@@ -860,3 +908,58 @@ def ols_sieve_wild_bootstrap(Xdm, resid, cl_inv, n_cl, b_full, ame_fn, ame_hat,
     rng = np.random.default_rng(seed)
     return cluster_wild_bootstrap(b_full, IF_cl, ame_fn, ame_hat,
                                   B=B, scheme=scheme, rng=rng)
+
+
+# ==============================================================================
+# National phi_t confidence bands (score/multiplier wild cluster bootstrap).
+# phi_t = pop-weighted mean over markets, per quarter, of phi_mt; the band
+# propagates parameter uncertainty (theta for the joint single index; the link
+# coefficients for Est6) through to the national sleepiness path.
+# ==============================================================================
+def _phi_t_group_struct(df_ss):
+    """Precompute the (time, market) group structure for fast pop-weighted
+    national phi_t aggregation: national phi_t = sum_market pop_market *
+    mean_market(phi_mt) / sum_market pop_market, per time."""
+    t = df_ss["time_id"].astype(str).values
+    if "CODMUN_IBGE" in df_ss.columns:
+        m = df_ss["CODMUN_IBGE"].astype(str).values
+    else:
+        m = np.array(["0"] * len(df_ss))
+    pop = (df_ss["pop_total"].fillna(0).values.astype(float)
+           if "pop_total" in df_ss.columns else np.ones(len(df_ss)))
+    key = np.char.add(np.char.add(t, "|"), m)
+    gcode, _ = pd.factorize(key)
+    ng = int(gcode.max()) + 1
+    gcount = np.bincount(gcode, minlength=ng).astype(float)
+    gpop = np.bincount(gcode, weights=pop, minlength=ng) / np.maximum(gcount, 1.0)
+    tcode, tuniq = pd.factorize(df_ss["time_id"].astype(str).values)
+    tcode_g = np.zeros(ng, int)
+    tcode_g[gcode] = tcode          # time is constant within a (time,market) group
+    return dict(gcode=gcode, gcount=gcount, gpop=gpop, tcode_g=tcode_g,
+                nt=len(tuniq), tuniq=np.asarray(tuniq))
+
+
+def _agg_phi_t(phi, gs):
+    gmean = np.bincount(gs["gcode"], weights=phi, minlength=len(gs["gcount"])) / gs["gcount"]
+    num = np.bincount(gs["tcode_g"], weights=gmean * gs["gpop"], minlength=gs["nt"])
+    den = np.bincount(gs["tcode_g"], weights=gs["gpop"], minlength=gs["nt"])
+    return num / np.maximum(den, 1e-12)
+
+
+def _phi_t_band(gs, phi_point, draw_phi_fn, B, scheme, rng, alpha=0.05):
+    """National phi_t point path + (1-alpha) percentile band from B wild draws.
+    draw_phi_fn(rng) returns a per-observation phi vector for one bootstrap draw.
+    Returns a DataFrame [time_id, phi_t, lo, hi] sorted by quarter."""
+    pt = _agg_phi_t(phi_point, gs)
+    draws = np.empty((B, gs["nt"]))
+    for b in range(B):
+        draws[b] = _agg_phi_t(draw_phi_fn(rng), gs)
+    lo = np.percentile(draws, 100 * alpha / 2, axis=0)
+    hi = np.percentile(draws, 100 * (1 - alpha / 2), axis=0)
+    out = pd.DataFrame({"time_id": gs["tuniq"], "phi_t": pt, "lo": lo, "hi": hi})
+    try:
+        out["_d"] = pd.PeriodIndex(out["time_id"].str.replace("Q", "Q"), freq="Q").to_timestamp()
+        out = out.sort_values("_d").reset_index(drop=True)
+    except Exception:
+        out = out.sort_values("time_id").reset_index(drop=True)
+    return out

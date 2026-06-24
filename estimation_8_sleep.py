@@ -79,7 +79,8 @@ def exec_spec(args):
 
     res_robust = fit_joint_single_index(df_target, s_cols, has_cf=has_cf, link=LINK,
                                         loss="robust", init_theta=init, n_starts=1,
-                                        boot_B=999, boot_scheme="webb", seed=0, label=f"{spec_name}/robust")
+                                        boot_B=999, boot_scheme="webb", seed=0,
+                                        phi_band=True, label=f"{spec_name}/robust")
     res_ls = fit_joint_single_index(df_target, s_cols, has_cf=has_cf, link=LINK,
                                     loss="ls", init_theta=init, n_starts=1,
                                     boot_B=999, boot_scheme="webb", seed=0, label=f"{spec_name}/ls")

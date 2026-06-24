@@ -26,21 +26,20 @@ Modes
   --latex          Build LaTeX table fragments (default).
   --logit          Run blp_1_logit_local.jl (non-RC, legacy 5 strategies, ~1 min).
                    Also saves logit_delta_E*.jls delta checkpoints.
-  --logit-coherence  Run the post-coherence-fix non-RC logit (6 routines E1-E6,
-                   spec 12) via blp_1_logit_coherence.jl, then build *_coherence
-                   tables. Reads demand_{1,2,3_logistic,4_constrained,5_probit,
-                   6_index}_spec_12.parquet; writes logit_summary_spec_12_coherence.json
-                   + logit_delta_E{k}_spec_12_coherence.{jls,bin}. Use --est {1..6} to
-                   run one routine. Local.
+  --logit-coherence  Run the post-coherence-fix non-RC logit (routines auto-discovered
+                   from the demand-prep parquets, spec 12) via blp_1_logit_coherence.jl,
+                   then build *_coherence tables. Writes logit_summary_spec_12_coherence.json
+                   + logit_delta_E{k}_spec_12_coherence.{jls,bin}. Use --est N to run one
+                   routine (e.g. --est 7). Local.
   --draws          Run blp_1_draws.jl (local R<=500 fine; R=2000 use cluster).
   --estimate       Run blp_1_estimation.jl with pre-computed draws.
   --all            Run logit -> draws -> estimate in sequence (full local test).
   --coherence      Run the post-fix RC-BLP for the coherence routines via
-                   blp_2_rc_coherence.jl. GPU only — on the cluster pass --hpc; locally
-                   use --dry-run on a GPU box. DEFAULT runs E3 and E6 (spec 12, extended
-                   RC sequence); pick a subset with --est (digits in 1-6, e.g. --est 36),
-                   or --est all for all six. Each E{k} warm-starts from
-                   logit_delta_E{k}_spec_12_coherence.bin.
+                   blp_2_rc_coherence.jl (routines auto-discovered). GPU only — on the
+                   cluster pass --hpc; locally use --dry-run on a GPU box. DEFAULT runs
+                   E3, E6 and E7 (spec 12, extended RC sequence); pick a subset with --est
+                   (digits, e.g. --est 367), or --est all for every routine found. Each
+                   E{k} warm-starts from logit_delta_E{k}_spec_12_coherence.bin.
 
 Options (used with --draws and --estimate)
 ------------------------------------------
@@ -150,19 +149,20 @@ def run_logit(args):
         print(f"WARNING: Table generation failed (exit {e.returncode})")
 
 
-# ── Mode: logit-coherence (non-RC, post-coherence-fix, 6 routines) ─────────────
+# ── Mode: logit-coherence (non-RC, post-coherence-fix, auto-discovered routines) ─
 
 def run_logit_coherence(args):
-    """Run the post-coherence-fix non-RC logit (6 routines E1-E6, spec 12).
+    """Run the post-coherence-fix non-RC logit (routines auto-discovered, spec 12).
 
-    Reads the new self-contained demand_*_spec_12.parquet files (demand_1, demand_2,
-    demand_3_logistic, demand_4_constrained, demand_5_probit, demand_6_index), writes
+    Reads the self-contained demand_*_spec_12.parquet files, writes
     logit_summary_spec_12_coherence.json + per-routine JLS + coherence delta checkpoints,
-    then builds est{id}_spec12_logit_coherence.tex tables.
+    then builds est{id}_spec12_logit_coherence.tex tables. blp_1_logit_coherence.jl
+    auto-discovers the routine list from the parquets, so E7/E8/... are included with no
+    code change.
 
-    By default runs all six routines via the orchestrator (single Julia process —
-    avoids 6x JIT warmup). Use --est with a single digit in {1..6} to run just one
-    routine via its thin entrypoint.
+    By default runs ALL discovered routines in one Julia process (avoids repeated JIT
+    warmup). Use --est N to run a single routine, e.g. --est 7 (forwarded to the
+    orchestrator's own --est selector — no per-routine file needed).
     """
     jl_exe = _find_julia()
     _ensure_julia_packages(jl_exe)
@@ -172,27 +172,23 @@ def run_logit_coherence(args):
     env["PYTHON"] = PYTHON_EXE
     env["JULIA_PYTHONCALL_EXE"] = PYTHON_EXE
 
-    # Decide single-routine vs orchestrator. --est default is "12"; treat that and
-    # "123"/"123456"/"all" as "all routines via orchestrator".
+    if not LOGIT_COH_ORCH.exists():
+        print(f"ERROR: {LOGIT_COH_ORCH} not found."); sys.exit(1)
+
+    # Single-routine selection: a bare single integer (e.g. "7"). The default "12" and
+    # other multi-digit/sentinel values mean "all discovered routines".
     single = None
     if args.est not in ("12", "123", "123456", "12345678", "all"):
-        digits = [int(c) for c in args.est if c in "12345678"]
-        if len(digits) == 1:
-            single = digits[0]
-        elif not digits:
-            print("ERROR: --logit-coherence --est must be among {1..8}."); sys.exit(1)
+        s = args.est.strip()
+        if s.isdigit() and len(s) == 1:
+            single = int(s)
 
+    cmd = [jl_exe, f"--project={ROOT}", threads, str(LOGIT_COH_ORCH)]
     if single is not None:
-        script = LOGIT_COH_BY_EST[single]
-        if not script.exists():
-            print(f"ERROR: {script} not found."); sys.exit(1)
-        cmd = [jl_exe, f"--project={ROOT}", threads, str(script)]
+        cmd += ["--est", str(single)]
         print(f"\n=== Logit Coherence (E{single}) | CMD: {' '.join(cmd)} ===")
     else:
-        if not LOGIT_COH_ORCH.exists():
-            print(f"ERROR: {LOGIT_COH_ORCH} not found."); sys.exit(1)
-        cmd = [jl_exe, f"--project={ROOT}", threads, str(LOGIT_COH_ORCH)]
-        print(f"\n=== Logit Coherence (E1-E6) | CMD: {' '.join(cmd)} ===")
+        print(f"\n=== Logit Coherence (all discovered routines) | CMD: {' '.join(cmd)} ===")
     subprocess.run(cmd, env=env, check=True)
 
     # Generate coherence logit tables automatically after estimation.
@@ -279,42 +275,46 @@ def run_estimate_pipeline(args):
     print("\n=== Estimation Pipeline Complete ===")
 
 
-# ── Mode: coherence (GPU RC-BLP, default E3+E6 of 6 routines) ─────────────────
+# ── Mode: coherence (GPU RC-BLP, default E3+E6+E7; routines auto-discovered) ──────
 
 def run_coherence(args):
     """Run the post-fix 'coherence' RC-BLP estimation via blp_2_rc_coherence.jl.
 
-    Six routines are available (spec 12 only): E{k} reads its coherence demand-prep
-    parquet (demand_1, demand_2, demand_3_logistic, demand_4_constrained,
-    demand_5_probit, demand_6_index) and warm-starts from
-    BLP_RESULTS/logit_delta_E{k}_spec_12_coherence.bin. Requires a CUDA GPU
-    (cluster gpu_h200); locally use --dry-run on a GPU box.
+    Routines are auto-discovered on the cluster from the coherence demand-prep parquets;
+    E{k} reads its parquet (e.g. demand_3_logistic, demand_6_index, demand_7_sijoint) and
+    warm-starts from BLP_RESULTS/logit_delta_E{k}_spec_12_coherence.bin. Requires a CUDA
+    GPU (cluster gpu_h200); locally use --dry-run on a GPU box.
 
-    The DEFAULT run is routines E3 and E6 (the two headline sleepiness links), spec 12,
+    The DEFAULT run is routines E3, E6 and E7 (the headline sleepiness links), spec 12,
     with the full extended random-coefficient sequence. Pick a different subset with
-    --est (digits among 1-6, e.g. "36", "123456"); --est all runs all six. Set
+    --est (digits, e.g. "367"); --est all runs every routine found. Set
     BLP_COHERENCE_ENGINE=numerical to use the finite-difference engine instead of IFT.
     """
     jl_exe = _find_julia()
     _ensure_julia_packages(jl_exe)
     if not COHERENCE_SCRIPT.exists():
         print(f"ERROR: {COHERENCE_SCRIPT} not found."); sys.exit(1)
-    # Default (the global --est default "12", or explicit "36") → E3 + E6. "all"/"123456"
-    # runs all six; otherwise parse the requested digits in 1-6.
-    if args.est in ("12", "36"):
-        est_ids = [3, 6]
-    elif args.est in ("all", "123456789", "12345678"):
-        est_ids = [1, 2, 3, 4, 5, 6, 7, 8]
+    # Default (the global --est default "12", or explicit "367") → E3 + E6 + E7.
+    # "all" runs every discovered routine (delegated to --all-routines); otherwise parse
+    # the requested digits.
+    if args.est in ("12", "367"):
+        est_ids = [3, 6, 7]
+    elif args.est == "all":
+        est_ids = None  # → --all-routines (driver discovers every parquet on disk)
     else:
-        est_ids = [int(c) for c in args.est if c in "12345678"]
-    if not est_ids:
-        print("ERROR: --coherence routines must be among {1..8} (use --est)."); sys.exit(1)
-    print(f"=== Coherence RC-BLP | E{est_ids} | spec=12 | stage={args.stage} | R={args.R} ===")
-    for eid in est_ids:
+        est_ids = [int(c) for c in args.est if c.isdigit()]
+        if not est_ids:
+            print("ERROR: --coherence routines must be digits (use --est, e.g. 367)."); sys.exit(1)
+    # est_ids None → run every discovered routine in one process via --all-routines;
+    # otherwise one invocation per requested routine.
+    invocations = ([("all", ["--all-routines"])] if est_ids is None
+                   else [(eid, ["--estim", str(eid)]) for eid in est_ids])
+    label = "all (discovered)" if est_ids is None else f"E{est_ids}"
+    print(f"=== Coherence RC-BLP | {label} | spec=12 | stage={args.stage} | R={args.R} ===")
+    for tag, sel in invocations:
         cmd = [jl_exe, f"--project={ROOT}",
                f"--threads={args.workers}" if args.workers else "--threads=auto",
-               str(COHERENCE_SCRIPT),
-               "--estim",     str(eid),
+               str(COHERENCE_SCRIPT), *sel,
                "--stage",     args.stage,
                "--R",         str(args.R),
                "--seed",      str(args.seed),
@@ -328,15 +328,15 @@ def run_coherence(args):
             cmd.append("--dry-run")
         if args.local_dir:
             cmd += ["--local-dir", args.local_dir]
-        print(f"\n=== Coherence E{eid} | CMD: {' '.join(cmd)} ===")
+        print(f"\n=== Coherence {tag} | CMD: {' '.join(cmd)} ===")
         env = os.environ.copy()
         env["PYTHON"] = PYTHON_EXE
         env["JULIA_PYTHONCALL_EXE"] = PYTHON_EXE
         try:
             subprocess.run(cmd, env=env, check=True)
-            print(f"[+] Coherence E{eid} DONE.")
+            print(f"[+] Coherence {tag} DONE.")
         except subprocess.CalledProcessError as e:
-            print(f"[!] Coherence E{eid} FAILED: exit {e.returncode}"); sys.exit(1)
+            print(f"[!] Coherence {tag} FAILED: exit {e.returncode}"); sys.exit(1)
     print("\n=== Coherence Estimation Complete ===")
 
 
@@ -348,8 +348,8 @@ def build_parser() -> argparse.ArgumentParser:
     mode.add_argument("--logit",    action="store_true", default=False,
                       help="Run blp_1_logit_local.jl (non-RC, local, legacy 5 routines) and generate logit tables")
     mode.add_argument("--logit-coherence", action="store_true", default=False, dest="logit_coherence",
-                      help="Run the post-coherence-fix non-RC logit (6 routines E1-E6, spec 12) "
-                           "and generate *_coherence logit tables. Use --est {1..6} for one routine.")
+                      help="Run the post-coherence-fix non-RC logit (routines auto-discovered, "
+                           "spec 12) and generate *_coherence logit tables. Use --est N for one routine.")
     mode.add_argument("--draws",    action="store_true", default=False,
                       help="Run blp_1_draws.jl to pre-compute simulation draws")
     mode.add_argument("--estimate", action="store_true", default=False,
@@ -358,8 +358,8 @@ def build_parser() -> argparse.ArgumentParser:
                       help="Run logit -> draws -> estimate in sequence")
     mode.add_argument("--coherence", action="store_true", default=False,
                       help="Run the post-fix RC-BLP for the coherence routines via "
-                           "blp_2_rc_coherence.jl (GPU). Default runs E3 and E6 (spec 12); "
-                           "use --est {1..6} for a subset, --est all for all six.")
+                           "blp_2_rc_coherence.jl (GPU; routines auto-discovered). Default runs "
+                           "E3, E6, E7 (spec 12); use --est 367 for a subset, --est all for every routine.")
 
     g = p.add_argument_group("Estimation options")
     g.add_argument("--hpc",        action="store_true", default=False,

@@ -33,22 +33,15 @@ echo "GPU node: $(hostname)"
 echo "CUDA devices: $(nvidia-smi --query-gpu=name,memory.total --format=csv,noheader)"
 
 # ── Verify environment ────────────────────────────────────────────────────────
-echo "Checking Julia packages: $(date)"
-julia --project="${PROJECT_DIR}" -e '
-    using Pkg
-    Pkg.resolve()
-    Pkg.instantiate()
-    Pkg.precompile()
-    using CUDA
-    @info "CUDA.jl version" CUDA.versioninfo()
-'
+# Sysimage-aware Julia setup (sets JULIA_SYS; skips precompile when blp_sysimage.so exists).
+source "${PROJECT_DIR}/julia_sysimage_env.sh"
 
 echo "======================================"
 echo " Coherence RC-BLP E4 (Pooled Constrained Linear) — $(date)"
 echo " spec=12 | stage=sequence | R=2000 | threads=${SLURM_CPUS_PER_TASK}"
 echo "======================================"
 
-julia --project="${PROJECT_DIR}" --threads=${SLURM_CPUS_PER_TASK} \
+julia --project="${PROJECT_DIR}" ${JULIA_SYS[@]+"${JULIA_SYS[@]}"} --threads=${SLURM_CPUS_PER_TASK} \
     "${PROJECT_DIR}/blp_2_rc_e4_coherence.jl" \
     --hpc --R 2000 --seed 42 --stage sequence \
     --tol-inner 1e-10 --max-inner 5000 --tol-outer 1e-6

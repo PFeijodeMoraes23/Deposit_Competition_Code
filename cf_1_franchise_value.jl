@@ -133,7 +133,7 @@ function _parse_cf1_args()
         "--beta";        arg_type = Float64; default = 0.9
         "--horizon";     arg_type = Int;     default = 50
         "--time-filter"; arg_type = String;  default = nothing   # e.g. "2024Q4" (local dev)
-        "--dbar";        arg_type = Float64; default = 1.0
+        "--dbar";        arg_type = Float64; default = -1.0   # <=0 => auto-calibrate globally
     end
     return parse_args(s)
 end
@@ -145,12 +145,42 @@ function main_cf1()
                            R=a["R"], seed=a["seed"], hpc=a["hpc"],
                            local_dir=a["local-dir"], suffix=a["suffix"],
                            time_filter=tf)
-    st = load_sim_state(ctx; dbar=a["dbar"])
+    # Auto-calibrate a single global d-bar (deposit-per-capita) so the structural
+    # active demand (1-phi)*M*s reproduces observed active deposits in aggregate.
+    # This makes the phi=0 leg (M*s) well-defined even where phi_mt -> 1 (no 0/0).
+    # Auto-calibrate d-bar PER FIRM TYPE (B = local/regional pop, D = national pop)
+    # so structural active demand (1-phi)*M*s reproduces observed active deposits
+    # within each type. A single global d-bar mis-scales D-firms (national pop) and
+    # blows up their phi=0 leg, so we calibrate B and D separately.
+    local dbar
+    if a["dbar"] <= 0.0
+        s0 = cf_model_shares(ctx)
+        pop0, _    = _first_present(ctx.df, ["pop_total", "M_mt", "pop"]; default=NaN)
+        phi0, _    = _first_present(ctx.df, ["phi_mt", "phi_local_mt", "phi_local", "phi"]; default=NaN)
+        depact0, _ = _first_present(ctx.df, ["Dep_Act", "active_deposits", "deposit_active"]; default=NaN)
+        phi0 = clamp.(phi0, 0.0, 0.999)
+        isB  = BitVector(Bool.(coalesce.(ctx.df.is_B, false)))
+        dbar = ones(nrow(ctx.df))
+        for (lbl, mask) in (("B", isB), ("D", .!isB))
+            m = mask .& isfinite.(pop0) .& isfinite.(s0) .& isfinite.(phi0) .& isfinite.(depact0)
+            denom = sum((1.0 .- phi0[m]) .* pop0[m] .* s0[m])
+            num   = sum(max.(depact0[m], 0.0))
+            db    = (denom > 0 && isfinite(num)) ? num / denom : 1.0
+            dbar[mask] .= db
+            log_status("  [CF1] d-bar[$lbl] = $(round(db, sigdigits=5))  (n=$(sum(mask)))")
+        end
+    else
+        dbar = a["dbar"]
+    end
+    st = load_sim_state(ctx; dbar=dbar)
     # Per-period (quarterly) markdown ρ^q for the value flow.
     markdown_q, mc = _first_present(ctx.df, ["spread_qoq", "spread_q"]; default=NaN)
     if all(isnan, markdown_q)
         markdown_q = ctx.rho_hat ./ 4.0   # annualized → quarterly fallback (confirm convention)
         mc = "rho_hat/4"
+    else
+        markdown_q = clamp.(markdown_q ./ 1e4, -0.1, 0.1)  # bps -> per-quarter fraction; clip residual artifact tail (±10%/qtr)
+        mc = "$(mc)/1e4"
     end
     log_status("  [CF1] markdown ρ^q ← $mc | β=$(a["beta"]) | horizon=$(a["horizon"])")
     dec = franchise_decomposition(ctx, st; beta=a["beta"], T=a["horizon"],

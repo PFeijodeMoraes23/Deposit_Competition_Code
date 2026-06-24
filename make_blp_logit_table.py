@@ -28,6 +28,7 @@ ensure_project_venv(__file__)
 
 import pathlib
 import json
+import re
 import argparse
 import numpy as np
 import scipy.stats as stats
@@ -403,6 +404,28 @@ def build_demographic_chars_table() -> str:
 
     return '\n'.join(lines)
 
+def _discover_coherence_est_ids():
+    """Auto-discover coherence routine ids from the combined summary JSON keys (E<id>_*).
+
+    Lets E7/E8/... appear in the generated tables with no code change. Returns a sorted
+    list of ints, or [] if the summary is absent (caller falls back to a default range).
+    """
+    path = RESULTS_DIR / 'logit_summary_spec_12_coherence.json'
+    if not path.exists():
+        return []
+    try:
+        with open(path, 'r') as f:
+            data = json.load(f)
+    except (json.JSONDecodeError, ValueError):
+        return []
+    ids = set()
+    for key in data:
+        m = re.match(r'E(\d+)_', key)
+        if m:
+            ids.add(int(m.group(1)))
+    return sorted(ids)
+
+
 def main():
     parser = argparse.ArgumentParser(description='Generate BLP Logit tables and documentation')
     group = parser.add_mutually_exclusive_group()
@@ -422,10 +445,14 @@ def main():
                        help='Use legacy 5-routine results (logit_summary_spec_12.json), runs E1-E5')
     args = parser.parse_args()
 
-    # Coherence build: 8 routines (E1-E8). Legacy build: 5 routines (E1-E5).
-    # With no --est, run all routines for the active build.
+    # Coherence build: routines AUTO-DISCOVERED from the summary JSON keys (E<id>_*),
+    # so E7/E8/... are included with no code change. Legacy build: fixed E1-E5.
+    # With --est, just that routine; otherwise all routines for the active build.
     if args.coherence:
-        est_ids = [args.est] if (args.est is not None and not args.all) else list(range(1, 9))
+        if args.est is not None and not args.all:
+            est_ids = [args.est]
+        else:
+            est_ids = _discover_coherence_est_ids() or list(range(1, 8))
     else:
         est_ids = [args.est] if (args.est is not None and not args.all) else list(range(1, 6))
 

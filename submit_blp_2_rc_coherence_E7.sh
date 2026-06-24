@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=blp2rc_coh_E5
+#SBATCH --job-name=blp2rc_coh_E7
 #SBATCH --partition=gpu_h200
 #SBATCH --time=2-00:00:00
 #SBATCH --nodes=1
@@ -7,14 +7,18 @@
 #SBATCH --cpus-per-task=6
 #SBATCH --mem=200G
 #SBATCH --gpus=h200:1
-#SBATCH --output=/nfs/roberts/project/pi_mf2263/pf382/dep_comp/scripts/logs/blp2rc_coh_E5_%j.out
-#SBATCH --error=/nfs/roberts/project/pi_mf2263/pf382/dep_comp/scripts/logs/blp2rc_coh_E5_%j.err
+#SBATCH --output=/nfs/roberts/project/pi_mf2263/pf382/dep_comp/scripts/logs/blp2rc_coh_E7_%j.out
+#SBATCH --error=/nfs/roberts/project/pi_mf2263/pf382/dep_comp/scripts/logs/blp2rc_coh_E7_%j.err
 #SBATCH --mail-type=BEGIN,END,FAIL,TIME_LIMIT_90
 #SBATCH --mail-user=pedro.feijodemoraes@yale.edu
 
-# Coherence RC-BLP — routine E5 (Pooled Probit), spec 12.
-# Reads demand_5_probit_spec_12.parquet; warm-starts from
-# logit_delta_E5_spec_12_coherence.bin; writes *_coherence-suffixed outputs.
+# Coherence RC-BLP — routine E7 (Pooled Joint Single-Index, Ichimura SLS), spec 12.
+# Reads demand_7_sijoint_spec_12.parquet; warm-starts from
+# logit_delta_E7_spec_12_coherence.bin; writes *_coherence-suffixed outputs.
+#
+# NOTE: this standalone script runs the FULL sequence in ONE job (2-day wall). For the
+# resumable per-stage chains used by the default workflow, prefer:
+#   ROUTINES="7" bash submit_blp_rc_coherence_all.sh
 
 # ── Environment ───────────────────────────────────────────────────────────────
 module reset
@@ -37,13 +41,13 @@ echo "CUDA devices: $(nvidia-smi --query-gpu=name,memory.total --format=csv,nohe
 source "${PROJECT_DIR}/julia_sysimage_env.sh"
 
 echo "======================================"
-echo " Coherence RC-BLP E5 (Pooled Probit) — $(date)"
+echo " Coherence RC-BLP E7 (Pooled Joint Single-Index) — $(date)"
 echo " spec=12 | stage=sequence | R=2000 | threads=${SLURM_CPUS_PER_TASK}"
 echo "======================================"
 
 julia --project="${PROJECT_DIR}" ${JULIA_SYS[@]+"${JULIA_SYS[@]}"} --threads=${SLURM_CPUS_PER_TASK} \
-    "${PROJECT_DIR}/blp_2_rc_e5_coherence.jl" \
+    "${PROJECT_DIR}/blp_2_rc_e7_coherence.jl" \
     --hpc --R 2000 --seed 42 --stage sequence \
     --tol-inner 1e-10 --max-inner 5000 --tol-outer 1e-6
 
-echo "Coherence RC-BLP E5 complete: $(date)"
+echo "Coherence RC-BLP E7 complete: $(date)"

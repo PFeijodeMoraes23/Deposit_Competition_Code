@@ -80,10 +80,10 @@ def exec_spec(args):
     init = _init_theta(logit_res, s_cols)
 
     res_robust = fit_joint_single_index(df_target, s_cols, has_cf=has_cf, link=LINK,
-                                        loss="robust", init_theta=init, n_starts=1,
+                                        loss="robust", init_theta=init, n_starts=2,
                                         boot_B=999, boot_scheme="webb", seed=0, label=f"{spec_name}/robust")
     res_ls = fit_joint_single_index(df_target, s_cols, has_cf=has_cf, link=LINK,
-                                    loss="ls", init_theta=init, n_starts=1,
+                                    loss="ls", init_theta=init, n_starts=2,
                                     boot_B=999, boot_scheme="webb", seed=0, label=f"{spec_name}/ls")
     return res_robust, res_ls, spec_name, res_fs
 

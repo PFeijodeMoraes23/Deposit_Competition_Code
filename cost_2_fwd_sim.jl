@@ -98,7 +98,10 @@ function psi_under(ctx::CFDemandCtx, st::DepositSimState, Z::Matrix{Float64},
     sim = simulate_deposits(ctx, st; T=T, spreads_ann=spreads_ann)
     # Move the quarterly markdown with the scenario spread: Δρ^q ≈ Δρ_ann/4.
     # (Confirm annual→quarterly convention; only matters for k∈{4,5} deviations.)
-    markdown_q = markdown_q0 .+ (spreads_ann .- ctx.rho_hat) ./ 4.0
+    # markdown_q0 is the observed quarterly markdown (fraction); a scenario change in
+    # the ANNUAL spread (pp = spread_ann/100) maps to a quarterly-fraction change via
+    # /400 (×0.01 pp→fraction, ÷4 annual→quarter).
+    markdown_q = markdown_q0 .+ (spreads_ann .- ctx.rho_hat) ./ 400.0
     res = accumulate_psi(ctx, st, sim.Dep, markdown_q, Z;
                          beta=beta, asset_return_q=asset_return_q, rf_path_q=rf_path_q)
     return res.psi_firm, res.firms
@@ -142,7 +145,7 @@ function _parse_cost2_args()
         "--horizon";       arg_type = Int;     default = 50
         "--shocks";        arg_type = Int;     default = 50      # TOTAL number of σ̃ deviations
         "--perturb-scale"; arg_type = Float64; default = 0.05    # σ̃ shock sd (annualized ρ units)
-        "--dbar";          arg_type = Float64; default = 1.0
+        "--dbar";          arg_type = Float64; default = -1.0   # <=0 => per-type auto-calibrate
         "--time-filter";   arg_type = String;  default = nothing
         "--policy-csv";    arg_type = String;  default = nothing
         "--n-shards";      arg_type = Int;     default = 1       # split deviations across jobs
@@ -157,15 +160,50 @@ function main_cost2()
     ctx = build_cf_context(a["estim"], a["spec"], a["stage"];
                            R=a["R"], seed=a["seed"], hpc=a["hpc"],
                            local_dir=a["local-dir"], suffix=a["suffix"], time_filter=tf)
-    st  = load_sim_state(ctx; dbar=a["dbar"])
+    # Per-type d-bar auto-calibration (same as CF1): structural active demand
+    # (1-phi)*M*s reproduces observed active deposits within B and D separately, so
+    # the deposit path (and hence ψ) is real-scale. A global/unit d-bar mis-scales
+    # the active channel and makes the Eq-18 costs degenerate.
+    local dbar
+    if a["dbar"] <= 0.0
+        s0 = cf_model_shares(ctx)
+        pop0, _    = _first_present(ctx.df, ["pop_total", "M_mt", "pop"]; default=NaN)
+        phi0, _    = _first_present(ctx.df, ["phi_mt", "phi_local_mt", "phi_local", "phi"]; default=NaN)
+        depact0, _ = _first_present(ctx.df, ["Dep_Act", "active_deposits", "deposit_active"]; default=NaN)
+        phi0 = clamp.(phi0, 0.0, 0.999)
+        isBcal = BitVector(Bool.(coalesce.(ctx.df.is_B, false)))
+        dbar = ones(nrow(ctx.df))
+        for (lbl, mask) in (("B", isBcal), ("D", .!isBcal))
+            m = mask .& isfinite.(pop0) .& isfinite.(s0) .& isfinite.(phi0) .& isfinite.(depact0)
+            den = sum((1.0 .- phi0[m]) .* pop0[m] .* s0[m]); nm = sum(max.(depact0[m], 0.0))
+            db = (den > 0 && isfinite(nm)) ? nm / den : 1.0
+            dbar[mask] .= db
+            log_status("  [CF2] d-bar[$lbl] = $(round(db, sigdigits=5))")
+        end
+    else
+        dbar = a["dbar"]
+    end
+    st  = load_sim_state(ctx; dbar=dbar)
     Z, znames = load_Z(ctx)
     markdown_q0, mc = _first_present(ctx.df, ["spread_qoq", "spread_q"]; default=NaN)
-    all(isnan, markdown_q0) && (markdown_q0 = ctx.rho_hat ./ 4.0; mc = "rho_hat/4")
+    if all(isnan, markdown_q0)
+        markdown_q0 = ctx.rho_hat ./ 400.0; mc = "rho_hat/400"          # annual pp -> quarterly fraction
+    else
+        markdown_q0 = clamp.(markdown_q0 ./ 1e4, -0.1, 0.1); mc = "$(mc)/1e4"  # bps -> quarterly fraction
+    end
     log_status("  [CF2] markdown ρ^q ← $mc | β=$(a["beta"]) | T=$(a["horizon"]) | shocks=$(a["shocks"])")
+
+    # Forward r^f path for the ψ4 funding base (else ζ is unidentified). Placeholder:
+    # flat at the panel-median quarterly risk-free; replace with the BCB forward curve
+    # (open knob). asset_return r^j defaults to 0 (pure deposit-funding value).
+    rf_q0, rfc = _first_present(ctx.df, ["risk_free_qoq", "risk_free_qoq_lag", "selic_qoq"]; default=NaN)
+    rf_level = median(filter(isfinite, rf_q0))
+    rf_path  = fill(rf_level, a["horizon"])
+    log_status("  [CF2] forward r^f flat at median($rfc)=$(round(rf_level, sigdigits=4)) [placeholder]")
 
     # Equilibrium ψ
     σ̂ = equilibrium_spreads(ctx; policy_csv=a["policy-csv"])
-    psi_eq, firms = psi_under(ctx, st, Z, markdown_q0, σ̂; beta=a["beta"], T=a["horizon"])
+    psi_eq, firms = psi_under(ctx, st, Z, markdown_q0, σ̂; beta=a["beta"], T=a["horizon"], rf_path_q=rf_path)
     isB = firm_is_B(ctx, firms)
     log_status("  [CF2] ψ_eq: $(size(psi_eq)) over $(length(firms)) firms " *
                "($(sum(isB)) B / $(sum(.!isB)) D)")
@@ -183,7 +221,7 @@ function main_cost2()
     for (li, s) in enumerate(s_list)
         rng_s = MersenneTwister(a["seed"] * 100003 + s)
         σ̃ = draw_deviation(σ̂, st.endog, rng_s; scale=a["perturb-scale"])
-        pd, _ = psi_under(ctx, st, Z, markdown_q0, σ̃; beta=a["beta"], T=a["horizon"])
+        pd, _ = psi_under(ctx, st, Z, markdown_q0, σ̃; beta=a["beta"], T=a["horizon"], rf_path_q=rf_path)
         psi_dev[li, :, :] .= pd
         li % 5 == 0 && log_status("    [CF2] shard $sid: $li/$(length(s_list)) done")
     end

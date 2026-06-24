@@ -7,8 +7,9 @@ the Yale Bouchet HPC cluster (GPU), specification 12.
 Background
 ----------
 After the demand-degeneracy fixes (full-rank `has_ip`/`fgc_covered`) and the expanded
-sleepiness methodology, the BLP RC estimation can be run for SIX routines, each
-consuming its own demand-prep parquet:
+sleepiness methodology, the BLP RC estimation runs per routine, each consuming its own
+demand-prep parquet. The routine list is AUTO-DISCOVERED from the parquets on disk
+(`coherence_prefix` / `discover_coherence_ids`), so a new routine needs no edit here:
 
     E1  Local B-type             ->  demand_1_spec_12.parquet
     E2  Pooled Linear            ->  demand_2_spec_12.parquet
@@ -16,12 +17,14 @@ consuming its own demand-prep parquet:
     E4  Pooled Constrained Lin.  ->  demand_4_constrained_spec_12.parquet
     E5  Pooled Probit            ->  demand_5_probit_spec_12.parquet
     E6  Pooled Single-Index      ->  demand_6_index_spec_12.parquet
+    E7  Pooled Joint Single-Idx  ->  demand_7_sijoint_spec_12.parquet
+    (E8+ appear automatically once their demand-prep parquet is on disk.)
 
-The DEFAULT cluster run targets E3 and E6 (the two headline sleepiness links); the
-remaining routines stay available for robustness. Each routine is warm-started from the
-local logit delta produced beforehand:
+The DEFAULT cluster run targets E3, E6 and E7 (the headline sleepiness links); the
+remaining routines stay available (ROUTINES env / --all-routines) for robustness. Each
+routine is warm-started from the local logit delta produced beforehand:
 
-    BLP_RESULTS/logit_delta_E{1..6}_spec_12_coherence.bin   (logit-coherence output)
+    BLP_RESULTS/logit_delta_E{k}_spec_12_coherence.bin   (logit-coherence output)
 
 (the logit step is owned by the local-logit workflow; this orchestrator only
 *consumes* those deltas — see `warm_start_path`).  If a delta is missing the
@@ -63,21 +66,46 @@ const COHERENCE_SPEC = 12
 # warm-start filename from ENV["BLP_DELTA_SUFFIX"] (default "" = legacy name).
 const COHERENCE_DELTA_SUFFIX = "_coherence"
 
-# Routine id -> (label, description, demand-prep prefix). Matches the 6 sleepiness
-# estimators (estimation_{1..6}) and their demand-prep parquets.
-const COHERENCE_ROUTINES = [
-    (id = 1, label = "E1", desc = "Local B-type",          prefix = "demand_1"),
-    (id = 2, label = "E2", desc = "Pooled Linear",         prefix = "demand_2"),
-    (id = 3, label = "E3", desc = "Pooled Logistic",       prefix = "demand_3_logistic"),
-    (id = 4, label = "E4", desc = "Pooled Constrained",    prefix = "demand_4_constrained"),
-    (id = 5, label = "E5", desc = "Pooled Probit",         prefix = "demand_5_probit"),
-    (id = 6, label = "E6", desc = "Pooled Single-Index",   prefix = "demand_6_index"),
-    (id = 7, label = "E7", desc = "Joint SI (sieve)",      prefix = "demand_7_sijoint"),
-    (id = 8, label = "E8", desc = "Joint SI (kernel)",     prefix = "demand_8_sikernel"),
-]
+# The routine list is AUTO-DISCOVERED at runtime from the demand-prep parquets
+# (demand_<id>_*_spec_<spec>.parquet, excluding legacy *_final_*), so adding a routine
+# (E7, E8, …) needs no edit here — just its parquet on disk. These descriptions are
+# cosmetic labels only.
+const COHERENCE_DESC = Dict(
+    1 => "Local B-type",        2 => "Pooled Linear",       3 => "Pooled Logistic",
+    4 => "Pooled Constrained",  5 => "Pooled Probit",       6 => "Pooled Single-Index",
+    7 => "Joint SI (sieve)",    8 => "Joint SI (kernel)",
+)
+coherence_desc(id::Int) = get(COHERENCE_DESC, id, "E$id")
 
-# Default cluster routine set: the two headline sleepiness links (E3 logistic, E6 index).
-const COHERENCE_DEFAULT_ROUTINES = [3, 6]
+"""Discover routine `estim`'s demand-prep prefix by scanning `input_dir` for
+demand_<estim>_*_spec_<spec>.parquet (excluding legacy *_final_*). Returns the prefix
+(e.g. "demand_7_sijoint") or nothing if absent."""
+function coherence_prefix(estim::Int, input_dir::String; spec::Int = COHERENCE_SPEC)
+    isdir(input_dir) || return nothing
+    pat = Regex("^demand_$(estim)(?:_.*)?_spec_$(spec)\\.parquet\$")
+    for f in sort(readdir(input_dir))
+        occursin("_final_", f) && continue
+        occursin(pat, f) && return replace(f, "_spec_$(spec).parquet" => "")
+    end
+    return nothing
+end
+
+"""Discover all available coherence routine ids in `input_dir` (sorted)."""
+function discover_coherence_ids(input_dir::String; spec::Int = COHERENCE_SPEC)
+    isdir(input_dir) || return Int[]
+    ids = Set{Int}()
+    pat = Regex("^demand_(\\d+)(?:_.*)?_spec_$(spec)\\.parquet\$")
+    for f in readdir(input_dir)
+        occursin("_final_", f) && continue
+        m = match(pat, f)
+        m === nothing || push!(ids, parse(Int, m.captures[1]))
+    end
+    return sort!(collect(ids))
+end
+
+# Default cluster routine set: the headline sleepiness links E3, E6, E7. Override with
+# the ROUTINES env in the submit scripts, or --all-routines to run every discovered one.
+const COHERENCE_DEFAULT_ROUTINES = [3, 6, 7]
 
 # Estimation engine (GPU). IFT analytical gradient by default; set
 # BLP_COHERENCE_ENGINE=numerical for the finite-difference engine. Both define
@@ -116,17 +144,12 @@ end
 """
     run_coherence_routine(estim_id; passthrough=String[])
 
-Run one coherence routine (1..6) through the GPU engine for spec 12.
-`passthrough` forwards engine flags (e.g. `["--hpc", "--R", "2000", "--stage",
-"sigma", "--dry-run"]`). Defaults the stage to the full `sequence` unless the
-caller supplies `--stage`.
+Run one coherence routine through the GPU engine for spec 12. The routine's demand-prep
+prefix is auto-discovered from the parquets on disk. `passthrough` forwards engine flags
+(e.g. `["--hpc", "--R", "2000", "--stage", "sigma", "--dry-run"]`). Defaults the stage to
+the full `sequence` unless the caller supplies `--stage`.
 """
 function run_coherence_routine(estim_id::Int; passthrough::Vector{String} = String[])
-    idx = findfirst(r -> r.id == estim_id, COHERENCE_ROUTINES)
-    idx === nothing &&
-        error("Coherence routine must be one of 1..8 (E1..E8); got $estim_id")
-    r = COHERENCE_ROUTINES[idx]
-
     pass = _strip_controlled(passthrough)
     is_hpc = "--hpc" in pass
     local_dir = nothing
@@ -134,27 +157,32 @@ function run_coherence_routine(estim_id::Int; passthrough::Vector{String} = Stri
         local_dir = pass[li + 1]
     end
 
+    label = "E$estim_id"
+    in_dir, _, _ = get_paths(is_hpc; local_dir = local_dir)
+
+    # Auto-discover the routine's input prefix. A missing parquet hard-fails HERE — the
+    # engine would otherwise print "[!] Missing" and silently no-op every stage (empty
+    # blp_summary_*.json, exit 0), propagating a fake "success" down the afterok chain.
+    prefix = coherence_prefix(estim_id, in_dir)
     println("\n", "="^72)
-    println("  COHERENCE $(r.label): $(r.desc)  |  spec $COHERENCE_SPEC")
-    println("  input : $(r.prefix)_spec_$(COHERENCE_SPEC).parquet")
+    println("  COHERENCE $label: $(coherence_desc(estim_id))  |  spec $COHERENCE_SPEC")
+    if prefix === nothing
+        avail = discover_coherence_ids(in_dir)
+        error("Coherence $label: no demand-prep parquet " *
+              "demand_$(estim_id)_*_spec_$(COHERENCE_SPEC).parquet found in\n    $in_dir\n" *
+              "Available routines there: " *
+              (isempty(avail) ? "(none)" : join("E" .* string.(avail), ", ")) *
+              ". Upload $label's parquet (or run its demand prep) before submitting.")
+    end
+    in_path = joinpath(in_dir, "$(prefix)_spec_$(COHERENCE_SPEC).parquet")
+    println("  input : $(basename(in_path))")
     ws = warm_start_path(estim_id; is_hpc = is_hpc, local_dir = local_dir)
     println("  warm  : $(basename(ws))")
     println("="^72)
     if !isfile(ws)
-        @warn "Coherence $(r.label): warm-start delta not found — engine will fall " *
+        @warn "Coherence $label: warm-start delta not found — engine will fall " *
               "back to log-share init. Run the local logit first." path = ws
     end
-
-    # Hard-fail on a missing input parquet. Otherwise the engine just prints
-    # "[!] Missing: <path>" and silently no-ops EVERY stage (writing empty
-    # blp_summary_*.json files and exiting 0), which under the afterok chain would
-    # propagate a fake "success" to the ext2/extended jobs. Fail loudly at startup
-    # so the job — and the chain — stop with a clear, actionable message.
-    in_dir, _, _ = get_paths(is_hpc; local_dir = local_dir)
-    in_path = joinpath(in_dir, "$(r.prefix)_spec_$(COHERENCE_SPEC).parquet")
-    isfile(in_path) || error(
-        "Coherence $(r.label): required input parquet not found —\n    $in_path\n" *
-        "Upload $(basename(in_path)) to the cluster's data/input/ directory before submitting.")
 
     # Fix estim + spec; default to the full RC sequence unless overridden.
     base = ["--estim", string(estim_id), "--spec", string(COHERENCE_SPEC)]
@@ -170,18 +198,17 @@ function run_coherence_routine(estim_id::Int; passthrough::Vector{String} = Stri
     ENV["BLP_DELTA_SUFFIX"]     = COHERENCE_DELTA_SUFFIX
     ENV["BLP_OUTPUT_SUFFIX"]    = COHERENCE_DELTA_SUFFIX *
                                   (COHERENCE_ENGINE == "numerical" ? "_num" : "")
-    # Route input_filename to the fresh coherence parquets (no _final suffix):
-    #   E1 → demand_1_spec_12.parquet            E4 → demand_4_constrained_spec_12.parquet
-    #   E2 → demand_2_spec_12.parquet            E5 → demand_5_probit_spec_12.parquet
-    #   E3 → demand_3_logistic_spec_12.parquet   E6 → demand_6_index_spec_12.parquet
+    # Route input_filename to the fresh coherence parquet: the auto-discovered prefix
+    # is passed explicitly so the engine reads e.g. demand_7_sijoint_spec_12.parquet.
     ENV["BLP_COHERENCE_INPUTS"] = "1"
+    ENV["BLP_COHERENCE_PREFIX"] = prefix
 
     empty!(ARGS); append!(ARGS, vcat(base, pass))
     main_gpu()
 end
 
-"""Run a set of coherence routines sequentially on a single GPU. Defaults to the two
-headline routines (E3, E6); pass `ids` (e.g. `1:6`) to run a different set."""
+"""Run a set of coherence routines sequentially on a single GPU. Defaults to the
+headline routines (E3, E6, E7); pass `ids` (e.g. `1:7`) to run a different set."""
 function run_all_coherence(; passthrough::Vector{String} = String[],
                             ids::Vector{Int} = COHERENCE_DEFAULT_ROUTINES)
     for id in ids
@@ -189,19 +216,23 @@ function run_all_coherence(; passthrough::Vector{String} = String[],
     end
 end
 
-# ── Direct CLI entry: `--estim k` (one routine), `--all` (default E3+E6), or
-#    `--all-six`/`--all-routines` (every routine, now E1..E8). ───────────────────
+# ── Direct CLI entry: `--estim k` (one routine), `--all` (default E3+E6+E7), or
+#    `--all-six`/`--all-routines` (every routine discovered on disk). ─────────────
 function _coherence_main()
     a = copy(ARGS)
     if ("--all-six" in a) || ("--all-routines" in a)
-        run_all_coherence(; passthrough = filter(x -> x ∉ ("--all-six", "--all-routines"), a),
-                            ids = [r.id for r in COHERENCE_ROUTINES])
+        rest      = filter(x -> x ∉ ("--all-six", "--all-routines"), a)
+        is_hpc    = "--hpc" in rest
+        local_dir = (li = findfirst(==("--local-dir"), rest)) !== nothing && li < length(rest) ?
+                    rest[li + 1] : nothing
+        in_dir, _, _ = get_paths(is_hpc; local_dir = local_dir)
+        run_all_coherence(; passthrough = rest, ids = discover_coherence_ids(in_dir))
     elseif "--all" in a
-        run_all_coherence(; passthrough = filter(!=("--all"), a))   # default E3 + E6
+        run_all_coherence(; passthrough = filter(!=("--all"), a))   # default E3+E6+E7
     else
         ei = findfirst(==("--estim"), a)
         (ei === nothing || ei == length(a)) &&
-            error("Provide `--estim {1..8}`, `--all` (default E3+E6), or `--all-routines` " *
+            error("Provide `--estim N`, `--all` (default E3+E6+E7), or `--all-routines` " *
                   "(plus engine flags). Got: $a")
         estim_id = parse(Int, a[ei + 1])
         deleteat!(a, ei:ei + 1)          # run_coherence_routine re-adds --estim

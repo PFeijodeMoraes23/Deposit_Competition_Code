@@ -36,10 +36,14 @@ set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 mkdir -p "${HERE}/logs"
 
-# Default headline routines: E3 (logistic) + E6 (single-index). Override via env.
-ROUTINES="${ROUTINES:-3 6}"
+# Default headline routines: E3 (logistic) + E6 (single-index) + E7 (joint single-index).
+ROUTINES="${ROUTINES:-3 6 7}"
 # Engines: IFT (blp_2) + numerical (blp_1) cross-check. Override e.g. ENGINES="ift".
 ENGINES="${ENGINES:-ift numerical}"
+# Numerical engine: crosscheck (default) = ONE job at `extended` only, afterok the IFT
+# extended job and seeded from its θ₂; full = the 3-job grouped numerical chain.
+NUMERICAL_MODE="${NUMERICAL_MODE:-crosscheck}"
+DATA_OUT="${HERE}/../data/output"
 # Per-job wall time. The gpu_h200 QOS caps wall-PER-JOB: 4-day requests are rejected
 # with QOSMaxWallDurationPerJobLimit, and a 2-day job is accepted — so 2 days is the
 # usable max. Override if your QOS allows more, e.g. WALL_DEEP="3-00:00:00".
@@ -59,20 +63,51 @@ submit_one () {  # $1=routine $2=engine $3=tag $4=stage $5=wall $6=jobtag [$7=de
         "${GENERIC}"
 }
 
-for k in ${ROUTINES}; do
-    for eng in ${ENGINES}; do
-        if [ "${eng}" = "numerical" ]; then tag="num"; else tag="ift"; fi
-        echo "── grouped chain: E${k} / ${eng} ──"
+# head → ext2 → extended for (routine, engine, tag). Per-stage progress → stderr;
+# the extended job id → stdout for the caller to capture.
+submit_grouped_chain () {  # $1=routine $2=engine $3=tag
+    local k="$1" eng="$2" tag="$3" jh je2 je
+    jh=$(submit_one "${k}" "${eng}" "${tag}" "${HEAD_STAGES}" "${WALL_HEAD}" "head")
+    echo "    head (sigma..ext1): ${jh}  wall=${WALL_HEAD}" >&2
+    je2=$(submit_one "${k}" "${eng}" "${tag}" "ext2" "${WALL_DEEP}" "ext2" "${jh}")
+    echo "    ext2: ${je2}  (afterok ${jh}, wall=${WALL_DEEP})" >&2
+    je=$(submit_one "${k}" "${eng}" "${tag}" "extended" "${WALL_DEEP}" "extended" "${je2}")
+    echo "    extended: ${je}  (afterok ${je2}, wall=${WALL_DEEP})" >&2
+    echo "${je}"
+}
 
-        jid_head=$(submit_one "${k}" "${eng}" "${tag}" "${HEAD_STAGES}" "${WALL_HEAD}" "head")
-        echo "    head (sigma..ext1): ${jid_head}  wall=${WALL_HEAD}"
-
-        jid_ext2=$(submit_one "${k}" "${eng}" "${tag}" "ext2" "${WALL_DEEP}" "ext2" "${jid_head}")
-        echo "    ext2: ${jid_ext2}  (afterok ${jid_head}, wall=${WALL_DEEP})"
-
-        jid_ext=$(submit_one "${k}" "${eng}" "${tag}" "extended" "${WALL_DEEP}" "extended" "${jid_ext2}")
-        echo "    extended: ${jid_ext}  (afterok ${jid_ext2}, wall=${WALL_DEEP})"
-    done
+# Which engines were requested?
+do_ift=0; do_num=0
+for e in ${ENGINES}; do
+    [ "$e" = "ift" ] && do_ift=1
+    [ "$e" = "numerical" ] && do_num=1
 done
-n_routines=$(echo ${ROUTINES} | wc -w); n_engines=$(echo ${ENGINES} | wc -w)
-echo "Submitted $((n_routines * n_engines)) grouped chains × 3 jobs = $((n_routines * n_engines * 3)) coherence RC-BLP jobs (routines: ${ROUTINES}; engines: ${ENGINES})."
+
+njobs=0
+for k in ${ROUTINES}; do
+    ift_ext_jid=""
+    if [ "${do_ift}" = "1" ]; then
+        echo "── grouped chain: E${k} / ift ──"
+        ift_ext_jid=$(submit_grouped_chain "${k}" "ift" "ift")
+        njobs=$((njobs + 3))
+    fi
+    if [ "${do_num}" = "1" ]; then
+        if [ "${NUMERICAL_MODE}" = "crosscheck" ] && [ "${do_ift}" = "1" ]; then
+            echo "── numerical cross-check: E${k} / extended only (afterok IFT extended) ──"
+            ckpt="${DATA_OUT}/blp_checkpoint_E${k}_spec_12_extended_coherence.jls"
+            jid=$(sbatch --parsable --time="${WALL_DEEP}" --dependency=afterok:${ift_ext_jid} \
+                --export=ALL,COH_ROUTINE=${k},COH_ENGINE=numerical,COH_STAGE=extended,BLP_THETA2_INIT_FILE=${ckpt} \
+                -J "cohg_num_E${k}_xcheck" \
+                -o "${HERE}/logs/cohg_num_E${k}_xcheck_%j.out" \
+                -e "${HERE}/logs/cohg_num_E${k}_xcheck_%j.err" \
+                "${GENERIC}")
+            echo "    extended (xcheck): ${jid}  (afterok ${ift_ext_jid}, wall=${WALL_DEEP})"
+            njobs=$((njobs + 1))
+        else
+            echo "── grouped chain: E${k} / numerical (full) ──"
+            submit_grouped_chain "${k}" "numerical" "num" >/dev/null
+            njobs=$((njobs + 3))
+        fi
+    fi
+done
+echo "Submitted ${njobs} grouped coherence RC-BLP jobs (routines: ${ROUTINES}; engines: ${ENGINES}; numerical_mode: ${NUMERICAL_MODE})."

@@ -279,7 +279,24 @@ function run_blp_estimation_ift_gpu(estim::Int, spec_id::Int, args,
                          "full" => "rc4", "ext1" => "full", "ext2" => "ext1",
                          "extended" => "ext2")
     theta2_0 = nothing
-    if args["stage"] in keys(prev_stages)
+    # Explicit cross-engine seed: BLP_THETA2_INIT_FILE points at a checkpoint (e.g. the
+    # IFT `extended` result) so a single-stage numerical cross-check starts from the IFT
+    # optimum instead of its own (skipped) previous stage. Takes priority over prev-stage.
+    let _init = get(ENV, "BLP_THETA2_INIT_FILE", "")
+        if !isempty(_init) && isfile(_init)
+            try
+                _ck = deserialize(_init)
+                _t2 = get(_ck, "theta2_star", nothing)
+                if _t2 !== nothing && length(_t2) <= n_params
+                    theta2_0 = zeros(n_params); theta2_0[1:length(_t2)] .= _t2
+                    println("  [WARM-START] theta2_0 from BLP_THETA2_INIT_FILE=$(basename(_init))")
+                end
+            catch e
+                println("  [WARM-START] Could not load BLP_THETA2_INIT_FILE: $e")
+            end
+        end
+    end
+    if theta2_0 === nothing && args["stage"] in keys(prev_stages)
         prev_path = joinpath(out_dir,
             "blp_checkpoint_E$(estim)_spec_$(spec_id)_$(prev_stages[args["stage"]])$(output_suffix()).jls")
         if isfile(prev_path)

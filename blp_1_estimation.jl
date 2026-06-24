@@ -135,9 +135,10 @@ const IV_CAPITAL = ["indice_basileia_lag"]
 const _log_buf  = String[]
 const _log_lock = ReentrantLock()
 
-# Coherence demand-prep prefixes (BLP_COHERENCE_INPUTS=1). E1/E2 use the bare
-# demand_{k}; E3 the logistic-pooled prep; E4/E5/E6 the link-based variants written by
-# estimation_demand_link_common.py (constrained/probit/index).
+# Static fallback map of coherence demand-prep prefixes (BLP_COHERENCE_INPUTS=1), used
+# only when the driver hasn't auto-discovered + passed BLP_COHERENCE_PREFIX. E1/E2 use
+# the bare demand_{k}; E3 the logistic-pooled prep; E4+ the link-based variants written
+# by estimation_demand_link_common.py (constrained/probit/index/sieve…).
 const COHERENCE_PREFIXES = Dict(
     1 => "demand_1",
     2 => "demand_2",
@@ -145,13 +146,17 @@ const COHERENCE_PREFIXES = Dict(
     4 => "demand_4_constrained",
     5 => "demand_5_probit",
     6 => "demand_6_index",
+    7 => "demand_7_sijoint",
 )
 
 function input_filename(estim::Int, spec_id::Int)::String
     # BLP_COHERENCE_INPUTS=1 routes to the post-fix demand parquets (no _final suffix).
     # Default keeps the legacy _final names unchanged.
     if lowercase(get(ENV, "BLP_COHERENCE_INPUTS", "0")) in ("1", "true", "yes")
-        prefix = get(COHERENCE_PREFIXES, estim, "demand_$(estim)")
+        # Prefer the prefix auto-discovered + passed by blp_2_rc_coherence.jl
+        # (handles E7/E8/… with no static-map edit); fall back to the static map.
+        pfx = get(ENV, "BLP_COHERENCE_PREFIX", "")
+        prefix = isempty(pfx) ? get(COHERENCE_PREFIXES, estim, "demand_$(estim)") : pfx
         return "$(prefix)_spec_$(spec_id).parquet"
     end
     prefix = estim == 5 ? "demand_5_logistic" : "demand_$(estim)"

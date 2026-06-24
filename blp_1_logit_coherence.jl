@@ -4,10 +4,10 @@ blp_1_logit_coherence.jl
 Non-random-coefficients logit demand estimation for BLP (θ₂ = 0) — COHERENCE build.
 
 This is the post-"coherence-fix" replacement for blp_1_logit_local.jl. The sleepiness
-function was re-estimated locally, changing the demand-prep outputs. There are now
-**6 estimation routines** (the original three plus three link-based variants), and the
-demand-prep writes self-contained `demand_X_spec_12.parquet` files (NOT the old
-`demand_X_final_spec_12.parquet`):
+function was re-estimated locally, changing the demand-prep outputs. The estimation
+routines are **auto-discovered** from the demand-prep parquets (see
+`discover_estim_strategies()`), so adding a routine needs no code change — just its
+`demand_X_spec_12.parquet`. As of this writing the available routines are:
 
   E1  Local B-type                 → demand_1_spec_12.parquet
   E2  Pooled B+D Linear            → demand_2_spec_12.parquet
@@ -15,19 +15,21 @@ demand-prep writes self-contained `demand_X_spec_12.parquet` files (NOT the old
   E4  Pooled Constrained Linear    → demand_4_constrained_spec_12.parquet
   E5  Pooled Probit                → demand_5_probit_spec_12.parquet
   E6  Pooled Single-Index          → demand_6_index_spec_12.parquet
+  E7  Pooled Joint Single-Index    → demand_7_sijoint_spec_12.parquet
+  (E8 and beyond appear automatically once their demand-prep parquet lands.)
 
 Each parquet already carries every column the logit needs (spread_ann in bps, share_D /
 share_B_cond, is_B, deposit_type, CodConglomeradoPrudencial, the X_COLS, and all
-LOO/cost/capital instruments), so no separate "finalization" step is required. The three
-link-based routines (E4/E5/E6) are produced by estimation_demand_link_common.py, which
-mirrors estimation_3's demand prep exactly (same columns/scaling) under a different
-sleepiness link, so the logit treats all six routines identically.
+LOO/cost/capital instruments), so no separate "finalization" step is required. The
+link-based routines (E4+) are produced by estimation_demand_link_common.py, which mirrors
+estimation_3's demand prep exactly (same columns/scaling) under a different sleepiness
+link, so the logit treats every routine identically.
 
-This file doubles as the **shared library** for the six thin per-routine entrypoints
-(blp_1_logit_e{1..6}_coherence.jl). They `include` this file and call `run_strategy(...)`.
-When executed directly, this file's `main()` runs all six routines and writes the
-combined summary. All outputs are suffixed `_coherence` and are fully parallel to the old
-pipeline — nothing canonical is clobbered.
+Run all discovered routines with `julia blp_1_logit_coherence.jl`, or a single one with
+`julia blp_1_logit_coherence.jl --est 7`. The thin per-routine entrypoints
+(blp_1_logit_e{1..6}_coherence.jl) `include` this file and call `run_strategy(...)`.
+All outputs are suffixed `_coherence` and are fully parallel to the old pipeline —
+nothing canonical is clobbered.
 
 Four sub-models per routine (identical keys to the legacy build, so the LaTeX table
 generator works unchanged):
@@ -78,18 +80,8 @@ const IV_COST    = ["personnel_cost_ratio_lag", "admin_cost_ratio_lag",
                     "tax_cost_ratio_lag"]
 const IV_CAPITAL = ["indice_basileia_lag"]
 
-# Coherence estimation routines (6). E3 input is the logistic-pooled prep; E4/E5/E6 are
-# the link-based variants from estimation_demand_link_common.py (constrained/probit/index).
-const ESTIM_STRATEGIES = [
-    (id=1, label="E1", prefix="demand_1"),
-    (id=2, label="E2", prefix="demand_2"),
-    (id=3, label="E3", prefix="demand_3_logistic"),
-    (id=4, label="E4", prefix="demand_4_constrained"),
-    (id=5, label="E5", prefix="demand_5_probit"),
-    (id=6, label="E6", prefix="demand_6_index"),
-    (id=7, label="E7", prefix="demand_7_sijoint"),    # Joint single-index, monotone sieve (spec 12)
-    (id=8, label="E8", prefix="demand_8_sikernel"),   # Joint single-index, kernel (spec 12)
-]
+# Coherence estimation routines are AUTO-DISCOVERED from the demand-prep parquets — see
+# discover_estim_strategies() / const ESTIM_STRATEGIES below (defined after get_paths()).
 
 # Sub-model definitions (keys must match make_blp_logit_table.py expectations)
 const SUB_MODELS = [
@@ -113,6 +105,38 @@ end
 # Canonical combined-summary path for the coherence build.
 combined_summary_path() = joinpath(get_paths()[2],
                                    "logit_summary_spec_$(SPEC_ID)_$(COH_SUFFIX).json")
+
+"""
+    discover_estim_strategies() -> Vector of (id, label, prefix)
+
+Auto-discover the coherence estimation routines for spec SPEC_ID by scanning the
+demand-prep directory for `demand_<id>_*_spec_<SPEC_ID>.parquet`, excluding the legacy
+`*_final_*` files. The prefix is the filename minus the `_spec_<SPEC_ID>.parquet` tail
+(e.g. `demand_1`, `demand_3_logistic`, `demand_7_sijoint`). Sorted by id, deduped.
+
+Newly-added routines (E7, E8, …) are picked up with NO code change — as long as their
+demand-prep parquet is present.
+"""
+function discover_estim_strategies()
+    input_dir, _ = get_paths()
+    out = NamedTuple[]
+    isdir(input_dir) || return out
+    seen = Set{Int}()
+    pat  = Regex("^demand_(\\d+)(?:_.*)?_spec_$(SPEC_ID)\\.parquet\$")
+    for f in sort(readdir(input_dir))
+        occursin("_final_", f) && continue
+        m = match(pat, f)
+        m === nothing && continue
+        id = parse(Int, m.captures[1])
+        id in seen && continue
+        push!(seen, id)
+        prefix = replace(f, "_spec_$(SPEC_ID).parquet" => "")
+        push!(out, (id = id, label = "E$id", prefix = prefix))
+    end
+    return sort!(out, by = s -> s.id)
+end
+
+const ESTIM_STRATEGIES = discover_estim_strategies()
 
 # ==========================================================================
 # 1. Data Loading
@@ -450,25 +474,54 @@ end
 # ==========================================================================
 # 6. Orchestrator entrypoint
 # ==========================================================================
+"""Parse an optional single-routine selector from ARGS: `--est N` or a bare integer.
+Returns the id (Int) or nothing (run all discovered routines)."""
+function _parse_est_arg()
+    for (i, a) in enumerate(ARGS)
+        if a == "--est" && i < length(ARGS)
+            return tryparse(Int, ARGS[i + 1])
+        elseif (v = tryparse(Int, a)) !== nothing
+            return v
+        end
+    end
+    return nothing
+end
+
 function main()
     _, output_dir = get_paths()
     mkpath(output_dir)
 
-    println("=" ^ 70)
-    println("  BLP Logit (Non-RC) — COHERENCE build — Spec $SPEC_ID")
-    println("  $(length(ESTIM_STRATEGIES)) routines × $(length(SUB_MODELS)) sub-models")
-    println("=" ^ 70)
-
-    all_results = Dict{String, Any}()
-    for estim in ESTIM_STRATEGIES
-        try
-            merge!(all_results, run_strategy(estim))
-        catch e
-            println("  [!] Routine $(estim.label) failed: $e. Skipping.")
-        end
+    sel      = _parse_est_arg()
+    routines = sel === nothing ? ESTIM_STRATEGIES : filter(s -> s.id == sel, ESTIM_STRATEGIES)
+    if isempty(routines)
+        avail = isempty(ESTIM_STRATEGIES) ? "(none)" :
+                join([s.label for s in ESTIM_STRATEGIES], ", ")
+        error(sel === nothing ?
+            "No coherence demand-prep parquets found for spec $SPEC_ID in $(get_paths()[1])." :
+            "No coherence demand-prep parquet for E$sel (spec $SPEC_ID). Available: $avail.")
     end
 
-    write_combined_summary(all_results)
+    println("=" ^ 70)
+    println("  BLP Logit (Non-RC) — COHERENCE build — Spec $SPEC_ID")
+    println("  $(length(routines)) routine(s): $(join([s.label for s in routines], ", ")) " *
+            "× $(length(SUB_MODELS)) sub-models")
+    println("=" ^ 70)
+
+    if sel === nothing
+        # Full build: run every discovered routine, write the combined summary.
+        all_results = Dict{String, Any}()
+        for estim in ESTIM_STRATEGIES
+            try
+                merge!(all_results, run_strategy(estim))
+            catch e
+                println("  [!] Routine $(estim.label) failed: $e. Skipping.")
+            end
+        end
+        write_combined_summary(all_results)
+    else
+        # Single routine: run it and merge into the existing combined summary.
+        merge_into_combined_summary(run_strategy(routines[1]))
+    end
     println("  [DONE] Coherence logit estimation complete.")
 end
 

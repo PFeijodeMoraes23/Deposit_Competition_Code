@@ -757,6 +757,16 @@ function blp_contraction_gpu!(buf::HotBuffers, gbuf::GpuBuffers,
     # x_prop ⇒ non-finite norm_prop ⇒ fall back to the Picard step x2), removing a
     # separate sync with identical behaviour.
     FINITE_CHECK_EVERY = 10
+    # SQUAREM occasionally limit-cycles: the residual norm flat-lines well above tol
+    # (observed ~0.15 / ~0.007 for thousands of iters on hard trial θ₂). Detect a stall
+    # (best residual not improving for STALL_PATIENCE SQUAREM steps) and escape with a
+    # burst of plain Picard steps (monotone for a contraction), then resume SQUAREM. This
+    # only fires on a stall, so well-behaved contractions are unaffected and the fixed
+    # point is unchanged — it just stops the loop burning to max_iter at a plateau.
+    best_nm        = Inf
+    stall          = 0
+    STALL_PATIENCE = 30      # SQUAREM steps without ≥0.1% best-residual improvement
+    PICARD_BURST   = 20      # plain fixed-point steps to break the cycle
     fevals = 0
     while fevals + 2 <= max_iter
         Tstep!(x1, d_cur); fevals += 1
@@ -784,6 +794,31 @@ function blp_contraction_gpu!(buf::HotBuffers, gbuf::GpuBuffers,
             println("    [SQUAREM-GPU eval=$fevals/$max_iter] norm=$(round(nm2, sigdigits=4))")
         if nm2 < tol
             copyto!(delta, Float64.(Array(x2))); return true, fevals, norm_history
+        end
+
+        # ── Stall detection + Picard-burst restart (escapes SQUAREM limit cycles) ──
+        cur_best = min(nm, nm2)
+        if cur_best < best_nm * (1.0 - 1e-3)
+            best_nm = cur_best; stall = 0
+        else
+            stall += 1
+        end
+        if stall >= STALL_PATIENCE
+            d_cur .= x2                       # restart the burst from the Picard iterate
+            burst = 0
+            while burst < PICARD_BURST && fevals + 1 <= max_iter
+                Tstep!(x1, d_cur); fevals += 1; burst += 1
+                nmb = Float64(maximum(abs, x1 .- d_cur)); push!(norm_history, nmb)
+                d_cur .= x1
+                (fevals % 50 == 0) &&
+                    println("    [SQUAREM-GPU eval=$fevals/$max_iter] " *
+                            "norm=$(round(nmb, sigdigits=4)) [picard-restart]")
+                if nmb < tol
+                    copyto!(delta, Float64.(Array(d_cur))); return true, fevals, norm_history
+                end
+            end
+            best_nm = Inf; stall = 0
+            continue
         end
 
         v_vec .= (x2 .- x1) .- r_vec
@@ -951,7 +986,24 @@ function run_blp_estimation_gpu(estim::Int, spec_id::Int, args,
                         "full" => "rc4", "ext1" => "full", "ext2" => "ext1",
                         "extended" => "ext2")
     theta2_0     = nothing
-    if args["stage"] in keys(prev_stages)
+    # Explicit cross-engine seed: BLP_THETA2_INIT_FILE points at a checkpoint (e.g. the
+    # IFT `extended` result) so a single-stage numerical cross-check starts from the IFT
+    # optimum instead of its own (skipped) previous stage. Takes priority over prev-stage.
+    let _init = get(ENV, "BLP_THETA2_INIT_FILE", "")
+        if !isempty(_init) && isfile(_init)
+            try
+                _ck = deserialize(_init)
+                _t2 = get(_ck, "theta2_star", nothing)
+                if _t2 !== nothing && length(_t2) <= n_params
+                    theta2_0 = zeros(n_params); theta2_0[1:length(_t2)] .= _t2
+                    println("  [WARM-START] theta2_0 from BLP_THETA2_INIT_FILE=$(basename(_init))")
+                end
+            catch e
+                println("  [WARM-START] Could not load BLP_THETA2_INIT_FILE: $e")
+            end
+        end
+    end
+    if theta2_0 === nothing && args["stage"] in keys(prev_stages)
         prev_path = joinpath(out_dir,
             "blp_checkpoint_E$(estim)_spec_$(spec_id)_$(prev_stages[args["stage"]])$(output_suffix()).jls")
         if isfile(prev_path)

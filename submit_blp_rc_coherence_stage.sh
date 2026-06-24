@@ -46,14 +46,9 @@ mkdir -p "${PROJECT_DIR}/logs"
 echo "GPU node: $(hostname)"
 echo "CUDA devices: $(nvidia-smi --query-gpu=name,memory.total --format=csv,noheader)"
 
-echo "Checking Julia packages: $(date)"
-julia --project="${PROJECT_DIR}" -e '
-    using Pkg
-    Pkg.resolve()
-    Pkg.instantiate()
-    Pkg.precompile()
-    using CUDA
-'
+# Sysimage-aware Julia setup (sets the JULIA_SYS array; skips precompile when
+# blp_sysimage.so is present). Shared with the standalone submit scripts.
+source "${PROJECT_DIR}/julia_sysimage_env.sh"
 
 # Grouped (option-6) jobs pass several stages joined with '+', because sbatch
 # --export uses commas to separate variables and so cannot carry a comma list.
@@ -78,7 +73,7 @@ echo " Coherence RC-BLP E${COH_ROUTINE} | engine=${COH_ENGINE} | stage=${STAGE_A
 echo " spec=12 | R=${R} | tol_inner=${TOL_INNER} | max_inner=${MAX_INNER} | threads=${SLURM_CPUS_PER_TASK}"
 echo "======================================"
 
-julia --project="${PROJECT_DIR}" --threads=${SLURM_CPUS_PER_TASK} \
+julia --project="${PROJECT_DIR}" ${JULIA_SYS[@]+"${JULIA_SYS[@]}"} --threads=${SLURM_CPUS_PER_TASK} \
     "${PROJECT_DIR}/blp_2_rc_coherence.jl" \
     --estim "${COH_ROUTINE}" --stage "${STAGE_ARG}" \
     --hpc --R "${R}" --seed "${SEED}" \

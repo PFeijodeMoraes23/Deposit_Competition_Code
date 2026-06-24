@@ -71,7 +71,7 @@ merged 1:1 on the same row order, e.g. the demand-prep parquet that carries φ̂
 Dep^Act if the BLP input parquet does not). Column names are resolved against
 candidate lists; missing essentials raise a clear error.
 """
-function load_sim_state(ctx::CFDemandCtx; dbar::Float64=1.0,
+function load_sim_state(ctx::CFDemandCtx; dbar::Union{Float64,AbstractVector{<:Real}}=1.0,
                         sidecar::Union{Nothing,DataFrame}=nothing)
     df = sidecar === nothing ? ctx.df : hcat(ctx.df, sidecar; makeunique=true)
 
@@ -83,6 +83,7 @@ function load_sim_state(ctx::CFDemandCtx; dbar::Float64=1.0,
     if all(isnan, rdep)
         rf_q, rf_c   = _first_present(df, ["risk_free_qoq", "risk_free_qoq_lag", "selic_qoq", "rf_qoq"]; default=NaN)
         sp_q, sp_c   = _first_present(df, ["spread_qoq", "spread_q"]; default=NaN)
+        sp_q = sp_q ./ 1e4   # spread_qoq is BASIS POINTS -> per-quarter fraction
         rdep = rf_q .- sp_q
         rdep_c = "($rf_c − $sp_c)"
     end
@@ -92,11 +93,16 @@ function load_sim_state(ctx::CFDemandCtx; dbar::Float64=1.0,
     any(isnan, pop)  && error("Population/market-size proxy not found (tried pop_total/…).")
     any(isnan, rdep) && error("Quarterly deposit rate not resolvable (need deposit_rate_qoq or rf_qoq & spread_qoq).")
 
-    log_status("  [SIM] φ←$phi_c  Dep₀←$dep_c  M←$(pop_c)·dbar($dbar)  r^dep_q←$rdep_c")
+    log_status("  [SIM] φ←$phi_c  Dep₀←$dep_c  M←$(pop_c)·dbar($(dbar isa Number ? round(dbar,sigdigits=4) : "per-row"))  r^dep_q←$rdep_c")
     dep_type = Int.(coalesce.(df.deposit_type, 0))
     is_B     = BitVector(Bool.(coalesce.(df.is_B, false)))
     endog    = BitVector((dep_type .== 4) .| (dep_type .== 5))
-    return DepositSimState(clamp.(phi, 0.0, 0.999), max.(Dep0, 0.0), rdep,
+    # Bound the quarterly deposit rate to an economically sensible, STABILITY-
+    # guaranteeing range: r^dep in [0, 0.10] keeps the sleeper accrual β·φ̂·(1+r^dep)<1
+    # (β=0.9, φ̂≤0.999 ⇒ need r^dep<0.11), so the franchise-value integral converges.
+    # Values outside this are residual implicit-rate artifacts (≈0.3% of cells).
+    return DepositSimState(clamp.(phi, 0.0, 0.999), max.(Dep0, 0.0),
+                           clamp.(rdep, 0.0, 0.10),
                            dbar .* pop, dep_type, is_B, endog)
 end
 
