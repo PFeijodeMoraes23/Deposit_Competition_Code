@@ -30,8 +30,15 @@ _ROOT = Path(__file__).resolve().parents[2]
 DATA = _ROOT / "BCB" / "Egan_et_al_2025_Rep" / "processed"
 DEMAND_PREP = DATA / "ESTIMATION_OUTPUT" / "DEMAND_PREP"
 CF_DIR = DATA / "ESTIMATION_OUTPUT" / "CF_FOUNDATION"
-_PREFIX = {1: "demand_1", 2: "demand_2", 3: "demand_3_logistic",
-           4: "demand_4_constrained", 5: "demand_5_probit", 6: "demand_6_index"}
+def _discover_demand_parquet(estim: int, spec: int) -> Path:
+    """Auto-discover the routine's demand parquet (new 8-routine scheme; newest mtime
+    wins) instead of a stale static prefix dict (E4 Logistic+Time, E6 Single-Index+Time,
+    E8 Joint+Time; default {4,6,8})."""
+    cands = [p for p in DEMAND_PREP.glob(f"demand_{estim}_*spec_{spec}.parquet")
+             if "final" not in p.name.lower()]
+    if not cands:
+        raise FileNotFoundError(f"No demand parquet for estim={estim} spec={spec} in {DEMAND_PREP}")
+    return max(cands, key=lambda p: p.stat().st_mtime)
 K_LABEL = {1: "demand", 2: "savings", 4: "CDB(k4)", 5: "prepaid(k5)"}
 
 
@@ -47,7 +54,7 @@ def main():
     ap.add_argument("--tail", type=float, default=1500.0, help="extreme-tail threshold |bps|")
     args = ap.parse_args()
 
-    path = DEMAND_PREP / f"{_PREFIX[args.estim]}_spec_{args.spec}.parquet"
+    path = _discover_demand_parquet(args.estim, args.spec)
     df = pd.read_parquet(path)
     df["sp"] = pd.to_numeric(df["spread_qoq"], errors="coerce")
     df["dep"] = pd.to_numeric(df["deposit_balance"], errors="coerce").clip(lower=0)

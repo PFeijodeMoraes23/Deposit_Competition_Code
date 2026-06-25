@@ -135,11 +135,11 @@ const IV_CAPITAL = ["indice_basileia_lag"]
 const _log_buf  = String[]
 const _log_lock = ReentrantLock()
 
-# Static fallback map of coherence demand-prep prefixes (BLP_COHERENCE_INPUTS=1), used
-# only when the driver hasn't auto-discovered + passed BLP_COHERENCE_PREFIX. E1/E2 use
-# the bare demand_{k}; E3 the logistic-pooled prep; E4+ the link-based variants written
-# by estimation_demand_link_common.py (constrained/probit/index/sieve…).
-const COHERENCE_PREFIXES = Dict(
+# Static fallback map of demand-prep prefixes, used only when the driver hasn't
+# auto-discovered + passed BLP_DEMAND_PREFIX. E1/E2 use the bare demand_{k}; E3 the
+# logistic-pooled prep; E4+ the link-based variants written by
+# estimation_demand_link_common.py.
+const DEMAND_PREFIXES = Dict(
     1 => "demand_1",
     2 => "demand_2",
     3 => "demand_3_logistic",
@@ -150,23 +150,17 @@ const COHERENCE_PREFIXES = Dict(
 )
 
 function input_filename(estim::Int, spec_id::Int)::String
-    # BLP_COHERENCE_INPUTS=1 routes to the post-fix demand parquets (no _final suffix).
-    # Default keeps the legacy _final names unchanged.
-    if lowercase(get(ENV, "BLP_COHERENCE_INPUTS", "0")) in ("1", "true", "yes")
-        # Prefer the prefix auto-discovered + passed by blp_2_rc_coherence.jl
-        # (handles E7/E8/… with no static-map edit); fall back to the static map.
-        pfx = get(ENV, "BLP_COHERENCE_PREFIX", "")
-        prefix = isempty(pfx) ? get(COHERENCE_PREFIXES, estim, "demand_$(estim)") : pfx
-        return "$(prefix)_spec_$(spec_id).parquet"
-    end
-    prefix = estim == 5 ? "demand_5_logistic" : "demand_$(estim)"
-    return "$(prefix)_final_spec_$(spec_id).parquet"
+    # Prefer the prefix auto-discovered + passed by blp_2_rc.jl (handles E7/E8/… with no
+    # static-map edit); fall back to the static map, then the bare demand_{k}.
+    pfx = get(ENV, "BLP_DEMAND_PREFIX", "")
+    prefix = isempty(pfx) ? get(DEMAND_PREFIXES, estim, "demand_$(estim)") : pfx
+    return "$(prefix)_spec_$(spec_id).parquet"
 end
 
 """Suffix appended to all written result/checkpoint/summary filenames, from
-ENV["BLP_OUTPUT_SUFFIX"] (default ""). Coherence runs set it to "_coherence" so
-their outputs (and inter-stage warm-starts) stay self-consistent and never clobber
-the legacy (non-coherence) results."""
+ENV["BLP_OUTPUT_SUFFIX"] (default ""). The numerical engine sets it to "_num" so its
+outputs (and inter-stage warm-starts) stay self-consistent and never clobber the IFT
+results."""
 output_suffix()::String = get(ENV, "BLP_OUTPUT_SUFFIX", "")
 
 function log_status(msg::String)

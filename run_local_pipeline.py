@@ -5,24 +5,20 @@ Orchestrates the full local pipeline in three sequential stages:
 
   1. run_data_pipeline.py      — download & build the master panel
   2. run_sleep_pipeline.py     — sleepiness / inertia estimations
-  3. run_blp_pipeline.py       — logit sanity check, then LaTeX tables
-                                 (equivalent to --logit-then-latex)
-                                 OR, with --coherence, the coherence RC-BLP
-                                 (default E3+E6, spec 12) instead of the logit stage,
-                                 OR, with --logit-coherence, the post-fix non-RC
-                                 logit (E1-E6, spec 12) instead of legacy logit.
+  3. run_blp_pipeline.py       — non-RC logit (all routines, spec 12) + LaTeX tables,
+                                 OR, with --rc, the RC-BLP estimation (default E4+E6+E8,
+                                 spec 12) instead of the logit stage.
 
-All CLI args passed to this script are forwarded to run_data_pipeline.py, except
---coherence and --logit-coherence which are consumed here to select the BLP stage.
-The sleep and BLP stages are otherwise run with default arguments.
+All CLI args passed to this script are forwarded to run_data_pipeline.py, except --rc
+which is consumed here to select the BLP stage. The sleep and BLP stages are otherwise
+run with default arguments.
 
 Usage
 -----
-  python run_local_pipeline.py                    # run all three stages (BLP = legacy logit)
-  python run_local_pipeline.py --logit-coherence  # final stage = post-fix non-RC logit (6 routines)
-  python run_local_pipeline.py --coherence        # final stage = coherence RC-BLP (GPU)
-  python run_local_pipeline.py --from 2           # restart data pipeline from stage 2
-  python run_local_pipeline.py --only 3           # run only stage 3 of data pipeline
+  python run_local_pipeline.py               # run all three stages (BLP = non-RC logit)
+  python run_local_pipeline.py --rc          # final stage = RC-BLP (GPU)
+  python run_local_pipeline.py --from 2      # restart data pipeline from stage 2
+  python run_local_pipeline.py --only 3      # run only stage 3 of data pipeline
 """
 from utils.venv_guard import ensure_project_venv
 ensure_project_venv(__file__)
@@ -57,19 +53,14 @@ def _run(label: str, cmd: list):
 
 
 def main():
-    # Forward all CLI args to the data pipeline only. `--coherence` and
-    # `--logit-coherence` are consumed here (not data-pipeline flags): they swap the
-    # final BLP stage. `--coherence` → RC-BLP (default E3+E6, spec 12; needs a CUDA GPU).
-    # `--logit-coherence` → post-fix non-RC logit (E1-E6, spec 12; local).
+    # Forward all CLI args to the data pipeline only. `--rc` is consumed here (not a
+    # data-pipeline flag): it swaps the final BLP stage to the RC-BLP estimation
+    # (default E4+E6+E8, spec 12; needs a CUDA GPU). Without it the final stage is the
+    # non-RC logit (all routines, spec 12; local).
     extra_args = sys.argv[1:]
-    coherence = "--coherence" in extra_args
-    logit_coherence = "--logit-coherence" in extra_args
-    if coherence or logit_coherence:
-        extra_args = [a for a in extra_args
-                      if a not in ("--coherence", "--logit-coherence")]
-    if coherence and logit_coherence:
-        print("[ERROR] Use only one of --coherence / --logit-coherence.")
-        sys.exit(1)
+    rc = "--rc" in extra_args
+    if rc:
+        extra_args = [a for a in extra_args if a != "--rc"]
 
     _run(
         "Data Pipeline (run_data_pipeline.py)",
@@ -81,15 +72,10 @@ def main():
         [PYTHON_EXE, str(ROOT / "run_sleep_pipeline.py")],
     )
 
-    if coherence:
+    if rc:
         _run(
-            "BLP Coherence RC-BLP (run_blp_pipeline.py --coherence)",
-            [PYTHON_EXE, str(ROOT / "run_blp_pipeline.py"), "--coherence"],
-        )
-    elif logit_coherence:
-        _run(
-            "BLP Logit Coherence + LaTeX (run_blp_pipeline.py --logit-coherence)",
-            [PYTHON_EXE, str(ROOT / "run_blp_pipeline.py"), "--logit-coherence"],
+            "BLP RC-BLP (run_blp_pipeline.py --rc)",
+            [PYTHON_EXE, str(ROOT / "run_blp_pipeline.py"), "--rc"],
         )
     else:
         _run(

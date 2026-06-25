@@ -9,12 +9,11 @@
 # Uses E3 (demand_3_logistic) at R=50, stage sigma, --dry-run (times ~10 inner iters).
 
 try
-    ENV["BLP_COHERENCE_INPUTS"] = "1"
-    ENV["BLP_COHERENCE_PREFIX"] = "demand_3_logistic"
+    ENV["BLP_DEMAND_PREFIX"] = "demand_3_logistic"
     empty!(ARGS)
     append!(ARGS, ["--estim", "3", "--spec", "12", "--stage", "sigma",
                    "--hpc", "--R", "50", "--seed", "42", "--dry-run"])
-    include(joinpath(@__DIR__, "blp_2_rc_coherence.jl"))
+    include(joinpath(@__DIR__, "blp_2_rc.jl"))
     @info "[sysimage workload] dry-run completed — hot path traced."
 catch e
     @info "[sysimage workload] dry-run skipped (data/GPU not available) — packages " *

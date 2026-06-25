@@ -34,7 +34,7 @@ on the cluster data download and the author's go-ahead).
 
 Usage:
   python estimation_1_cost_3_solve.py --estim 6 --spec 12 --stage extended \\
-      --suffix _coherence --bootstrap 200
+      --bootstrap 200
 """
 from utils.venv_guard import ensure_project_venv
 ensure_project_venv(__file__)
@@ -164,7 +164,7 @@ def main():
     ap.add_argument("--estim", type=int, default=6)
     ap.add_argument("--spec", type=int, default=12)
     ap.add_argument("--stage", type=str, default="extended")
-    ap.add_argument("--suffix", type=str, default="_coherence")
+    ap.add_argument("--suffix", type=str, default="")
     ap.add_argument("--bootstrap", type=int, default=200,
                     help="firm-block bootstrap reps for SEs (0 to skip)")
     args = ap.parse_args()

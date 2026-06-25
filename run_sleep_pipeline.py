@@ -150,14 +150,17 @@ pool via simultaneous IPC pipe traffic for 400K-row DataFrames (WinError 1450).
 
     if not getattr(args, 'skip_sleep', False):
         scripts_to_run.extend([
-            {"id": 1, "file": "estimation_1_sleep.py", "desc": "Local B-type Estimation"},
-            {"id": 2, "file": "estimation_2_sleep.py", "args": spec12_arg, "desc": "Pooled B+D Linear"},
-            {"id": 3, "file": "estimation_3_sleep.py", "args": spec12_arg, "desc": "Pooled B+D Logistic (AME)"},
-            {"id": 4, "file": "estimation_4_sleep.py", "args": spec12_arg, "desc": "Pooled B+D Constrained Linear (uniform)"},
-            {"id": 5, "file": "estimation_5_sleep.py", "args": spec12_arg, "desc": "Pooled B+D Probit (AME)"},
-            {"id": 6, "file": "estimation_6_sleep.py", "args": spec12_arg, "desc": "Pooled B+D Single-Index (nonparametric)"},
-            {"id": 7, "file": "estimation_7_sleep.py", "args": spec12_arg, "desc": "Pooled B+D Joint Single-Index (monotone sieve)"},
-            {"id": 8, "file": "estimation_8_sleep.py", "args": spec12_arg, "desc": "Pooled B+D Joint Single-Index (kernel)"},
+            {"id": 1, "file": "estimation_1_sleep.py", "desc": "E1: Local B-type Estimation"},
+            {"id": 2, "file": "estimation_2_sleep.py", "args": spec12_arg, "desc": "E2: Pooled B+D Linear"},
+            # E3-E8 are config-driven via the shared dispatcher estimation_sleep_common.py --est N.
+            {"id": 3, "file": "estimation_sleep_common.py", "args": ["--est", "3"] + spec12_arg, "desc": "E3: Pooled Logit (AME)"},
+            {"id": 4, "file": "estimation_sleep_common.py", "args": ["--est", "4"] + spec12_arg, "desc": "E4: Pooled Logit + Time block"},
+            {"id": 5, "file": "estimation_sleep_common.py", "args": ["--est", "5"] + spec12_arg, "desc": "E5: Pooled Single-Index"},
+            {"id": 6, "file": "estimation_sleep_common.py", "args": ["--est", "6"] + spec12_arg, "desc": "E6: Pooled Single-Index + Time block"},
+            {"id": 7, "file": "estimation_sleep_common.py", "args": ["--est", "7"] + spec12_arg, "desc": "E7: Pooled Joint Single-Index (sieve)"},
+            {"id": 8, "file": "estimation_sleep_common.py", "args": ["--est", "8"] + spec12_arg, "desc": "E8: Pooled Joint Single-Index (sieve) + Time block"},
+            # E9 (joint kernel) is an OPTIONAL robustness routine; run estimation_9_sleep.py
+            # explicitly. It is not part of the default pipeline (kernel backfit is expensive).
         ])
 
     if not getattr(args, 'sleep_only', False):
@@ -179,8 +182,9 @@ pool via simultaneous IPC pipe traffic for 400K-row DataFrames (WinError 1450).
     heavy_scripts = []
     post_scripts = []
 
+    _sleep_files = {'estimation_sleep_common.py'}  # config-driven E3-E8 dispatcher
     for s in scripts_to_run:
-        if s['file'].startswith('estimation_') and s['file'].endswith('_sleep.py'):
+        if (s['file'].startswith('estimation_') and s['file'].endswith('_sleep.py')) or s['file'] in _sleep_files:
             sleep_scripts.append(s)
         else:
             post_scripts.append(s)

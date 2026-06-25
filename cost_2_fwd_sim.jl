@@ -140,7 +140,7 @@ function _parse_cost2_args()
         "--seed";          arg_type = Int;     default = 42
         "--hpc";           action   = :store_true
         "--local-dir";     arg_type = String;  default = nothing
-        "--suffix";        arg_type = String;  default = "_coherence"
+        "--suffix";        arg_type = String;  default = ""
         "--beta";          arg_type = Float64; default = 0.9
         "--horizon";       arg_type = Int;     default = 50
         "--shocks";        arg_type = Int;     default = 50      # TOTAL number of σ̃ deviations

@@ -1,5 +1,5 @@
 #!/bin/bash
-# ── Option-6 GROUPED coherence RC-BLP submission ────────────────────────────────
+# ── Option-6 GROUPED RC-BLP submission ──────────────────────────────────────────
 # Fewer, smarter jobs: run the CHEAP head stages in ONE process (amortising the
 # Julia JIT + CUDA context + parquet-load startup that every separate job re-pays),
 # while keeping the EXPENSIVE tail stages as their own resilient jobs.
@@ -14,30 +14,31 @@
 #   ext2 :                                one job,  4-day wall  (afterok HEAD)
 #   ext  : extended                       one job,  4-day wall  (afterok ext2)
 #
-# DEFAULT routine set is "3 6" (the two headline sleepiness links E3 logistic + E6
-# index); override with e.g. ROUTINES="1 2 3 4 5 6". With the 2 default routines:
-# 4 chains (E3/E6 × ift/numerical) × 3 jobs = 12 jobs  (vs 32 in the per-stage
-# orchestrator). Per-stage checkpoints + the engine's skip-logic make a wall-killed
-# HEAD fully resumable: just resubmit and it skips the stages already on disk.
+# DEFAULT routine set is "4 6 8" (the +Time headline variants E4 logistic+time,
+# E6 single-index+time, E8 joint+time); override with e.g. ROUTINES="1 2 3 4 5 6 7 8".
+# numerical defaults to a cross-check at `extended` only (NUMERICAL_MODE). Per-stage
+# checkpoints + the engine's skip-logic make a wall-killed HEAD fully resumable: just
+# resubmit and it skips the stages already on disk.
 #
 # Stages are joined with '+' (NOT ',') because sbatch --export uses commas to
-# separate variables; submit_blp_rc_coherence_stage.sh translates '+' → ',' before
-# calling Julia (which runs a comma-separated stage subset in one process).
+# separate variables; submit_blp_rc_stage.sh translates '+' → ',' before calling
+# Julia (which runs a comma-separated stage subset in one process).
 #
 # Prerequisite (same as the per-stage orchestrator): warm-start deltas on the
-# cluster — data/output/logit_delta_E{k}_spec_12_coherence.bin for each k in ${ROUTINES}.
+# cluster — data/output/logit_delta_E{k}_spec_12.bin for each k in ${ROUTINES}.
 #
 # NOTE: validate once with a smoke test after OOD returns (e.g. submit only the E6
 # numerical HEAD and confirm the startup GPU-vs-CPU guard passes) before the full set.
 #
-# Usage:  bash submit_blp_rc_coherence_grouped.sh
-#         ROUTINES="1 2 3 4 5 6" bash submit_blp_rc_coherence_grouped.sh
+# Usage:  bash submit_blp_rc_grouped.sh
+#         ROUTINES="1 2 3 4 5 6" bash submit_blp_rc_grouped.sh
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 mkdir -p "${HERE}/logs"
 
-# Default headline routines: E3 (logistic) + E6 (single-index) + E7 (joint single-index).
-ROUTINES="${ROUTINES:-3 6 7}"
+# Default headline routines: the three +Time variants E4 (logistic+time),
+# E6 (single-index+time), E8 (joint single-index+time).
+ROUTINES="${ROUTINES:-4 6 8}"
 # Engines: IFT (blp_2) + numerical (blp_1) cross-check. Override e.g. ENGINES="ift".
 ENGINES="${ENGINES:-ift numerical}"
 # Numerical engine: crosscheck (default) = ONE job at `extended` only, afterok the IFT
@@ -50,16 +51,16 @@ DATA_OUT="${HERE}/../data/output"
 WALL_HEAD="${WALL_HEAD:-2-00:00:00}"
 WALL_DEEP="${WALL_DEEP:-2-00:00:00}"
 HEAD_STAGES="sigma+rc2+rc3+rc4+full+ext1"   # '+'-joined; stage script → comma list
-GENERIC="${HERE}/submit_blp_rc_coherence_stage.sh"
+GENERIC="${HERE}/submit_blp_rc_stage.sh"
 
 submit_one () {  # $1=routine $2=engine $3=tag $4=stage $5=wall $6=jobtag [$7=dep_jobid]
     local dep=""
     [ -n "${7:-}" ] && dep="--dependency=afterok:$7"
     sbatch --parsable --time="$5" ${dep} \
-        --export=ALL,COH_ROUTINE=$1,COH_ENGINE=$2,COH_STAGE=$4 \
-        -J "cohg_$3_E$1_$6" \
-        -o "${HERE}/logs/cohg_$3_E$1_$6_%j.out" \
-        -e "${HERE}/logs/cohg_$3_E$1_$6_%j.err" \
+        --export=ALL,RC_ROUTINE=$1,RC_ENGINE=$2,RC_STAGE=$4 \
+        -J "rcg_$3_E$1_$6" \
+        -o "${HERE}/logs/rcg_$3_E$1_$6_%j.out" \
+        -e "${HERE}/logs/rcg_$3_E$1_$6_%j.err" \
         "${GENERIC}"
 }
 
@@ -94,12 +95,12 @@ for k in ${ROUTINES}; do
     if [ "${do_num}" = "1" ]; then
         if [ "${NUMERICAL_MODE}" = "crosscheck" ] && [ "${do_ift}" = "1" ]; then
             echo "── numerical cross-check: E${k} / extended only (afterok IFT extended) ──"
-            ckpt="${DATA_OUT}/blp_checkpoint_E${k}_spec_12_extended_coherence.jls"
+            ckpt="${DATA_OUT}/blp_checkpoint_E${k}_spec_12_extended.jls"
             jid=$(sbatch --parsable --time="${WALL_DEEP}" --dependency=afterok:${ift_ext_jid} \
-                --export=ALL,COH_ROUTINE=${k},COH_ENGINE=numerical,COH_STAGE=extended,BLP_THETA2_INIT_FILE=${ckpt} \
-                -J "cohg_num_E${k}_xcheck" \
-                -o "${HERE}/logs/cohg_num_E${k}_xcheck_%j.out" \
-                -e "${HERE}/logs/cohg_num_E${k}_xcheck_%j.err" \
+                --export=ALL,RC_ROUTINE=${k},RC_ENGINE=numerical,RC_STAGE=extended,BLP_THETA2_INIT_FILE=${ckpt} \
+                -J "rcg_num_E${k}_xcheck" \
+                -o "${HERE}/logs/rcg_num_E${k}_xcheck_%j.out" \
+                -e "${HERE}/logs/rcg_num_E${k}_xcheck_%j.err" \
                 "${GENERIC}")
             echo "    extended (xcheck): ${jid}  (afterok ${ift_ext_jid}, wall=${WALL_DEEP})"
             njobs=$((njobs + 1))
@@ -110,4 +111,4 @@ for k in ${ROUTINES}; do
         fi
     fi
 done
-echo "Submitted ${njobs} grouped coherence RC-BLP jobs (routines: ${ROUTINES}; engines: ${ENGINES}; numerical_mode: ${NUMERICAL_MODE})."
+echo "Submitted ${njobs} grouped RC-BLP jobs (routines: ${ROUTINES}; engines: ${ENGINES}; numerical_mode: ${NUMERICAL_MODE})."

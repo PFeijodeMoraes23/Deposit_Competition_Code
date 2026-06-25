@@ -59,6 +59,8 @@ def clean_name(v):
         'wholesale_ratio_lag': 'Wholesale Ratio ($t-1$)',
         'leave_one_out_mean_spread': 'Leave-out Mean Spread',
         'v_hat_x_lagged_dep': 'CF: $\\hat{v} \\times$ Lagged Deposits',
+        'time_trend': 'Time Trend (years)',
+        'gdp_growth_yoy': 'GDP Growth (YoY)',
     }
     return labels.get(v, v.replace('_', '\\_'))
 
@@ -174,7 +176,7 @@ def build_second_stage_table(results_dict, est_num, ss_caption, est_note):
 
     all_vars = ['constant', 'pix_exists', 'risk_free_qoq_lag', 'gdp_per_capita',
                 'cadunico_families_per1000', 'fraction_65plus', 'fraction_young',
-                'connections_per100', 'v_hat_x_lagged_dep']
+                'connections_per100', 'time_trend', 'gdp_growth_yoy', 'v_hat_x_lagged_dep']
     p0, l0 = panels[0], panel_letters[0]
     est_nums_0 = [(el, ss_spec_numbers[(p0, ek)]) for ek, el in estimators]
     lines = [
@@ -299,3 +301,42 @@ def export_link_results(est_num, title, ss_caption, est_note):
     except Exception as e:
         print(f"\n *** COMPILATION ERROR: {e} ***\n")
     print("Done.")
+
+
+# ── Config-driven CLI for E3-E8 tables (E1/E2 + E9 have their own export scripts) ──
+#  (title, ss_caption, est_note) per estimator. Run:  python export_sleep_link_common.py --est N
+EXPORT_CFG = {
+    3: (r"E3: Pooled Logit (single-index, logistic link)",
+        r"Pooled B+D --- Second Stage Estimation (Est.\ 3, Logit AME)",
+        r"Reported estimates are Average Marginal Effects (AME) from an NLLS logistic single-index. "
+        r"CF: control function residual $\hat{v}$ interacted with lagged deposits."),
+    4: (r"E4: Pooled Logit + Time block",
+        r"Pooled B+D --- Second Stage Estimation (Est.\ 4, Logit + Time, AME)",
+        r"As Est 3 (logistic AME) but with the time block --- time trend (years) and YoY "
+        r"GDP-per-capita growth --- added to every state block. CF: $\hat{v} \times$ lagged deposits."),
+    5: (r"E5: Pooled Single-Index (nonparametric link)",
+        r"Pooled B+D --- Second Stage Estimation (Est.\ 5, Single-Index, AME)",
+        r"Average-derivative AMEs from a single index with the direction from the logit fit and a "
+        r"monotone cubic-sieve link. CF: $\hat{v} \times$ lagged deposits."),
+    6: (r"E6: Pooled Single-Index + Time block",
+        r"Pooled B+D --- Second Stage Estimation (Est.\ 6, Single-Index + Time, AME)",
+        r"As Est 5 (single-index AME) but with the time block --- time trend (years) and YoY "
+        r"GDP-per-capita growth --- added to every state block. CF: $\hat{v} \times$ lagged deposits."),
+    7: (r"E7: Pooled Joint Single-Index (monotone sieve)",
+        r"Pooled B+D --- Second Stage Estimation (Est.\ 7, Joint Single-Index sieve, AME)",
+        r"Joint single-index (Ichimura 1993 SLS): the index direction $\theta$ ($\lVert\theta\rVert=1$) "
+        r"and a monotone I-spline link are estimated together; the robust (Cauchy) fit feeds $\phi$. "
+        r"CF: $\hat{v} \times$ lagged deposits."),
+    8: (r"E8: Pooled Joint Single-Index (sieve) + Time block",
+        r"Pooled B+D --- Second Stage Estimation (Est.\ 8, Joint Single-Index sieve + Time, AME)",
+        r"As Est 7 (joint single-index, sieve) but with the time block --- time trend (years) and YoY "
+        r"GDP-per-capita growth --- added to every state block. CF: $\hat{v} \times$ lagged deposits."),
+}
+
+if __name__ == "__main__":
+    import argparse
+    p = argparse.ArgumentParser(description="Export E3-E8 sleep tables (config-driven).")
+    p.add_argument("--est", type=int, required=True, choices=sorted(EXPORT_CFG),
+                   help="Estimator id 3-8 (E1/E2 + E9 have their own export scripts)")
+    a = p.parse_args()
+    export_link_results(a.est, *EXPORT_CFG[a.est])

@@ -35,13 +35,12 @@ R="${R:-2000}"
 SEED="${SEED:-42}"
 CF_EXTRA="${CF_EXTRA:-}"
 
-# ── Environment (match the coherence estimation so paths/suffixes line up) ──────
+# ── Environment (match the RC-BLP estimation so paths/suffixes line up) ─────────
 module reset
 module load Julia/1.11.4-linux-x86_64
 export JULIA_DEPOT_PATH="${SLURM_SUBMIT_DIR}/.julia_depot:${JULIA_DEPOT_PATH:-}"
-export BLP_COHERENCE_INPUTS=1          # route to demand_{6_index,3_logistic}_spec_12.parquet
-export BLP_OUTPUT_SUFFIX=_coherence    # read blp_results_*_coherence.jls
-export BLP_DELTA_SUFFIX=_coherence
+# IFT results/deltas are un-suffixed (the default), so no BLP_OUTPUT_SUFFIX/BLP_DELTA_SUFFIX
+# override is needed. For numerical-engine results, export BLP_OUTPUT_SUFFIX=_num.
 
 PROJECT_DIR="${SLURM_SUBMIT_DIR}"
 mkdir -p "${PROJECT_DIR}/logs"
@@ -73,7 +72,7 @@ case "${CF_STEP}" in
     cost_solve)   # CF2 part 2: Eq-18 minimization (Python; light, CPU)
         python "${PROJECT_DIR}/estimation_1_cost_3_solve.py" \
             --estim "${CF_ROUTINE}" --spec 12 --stage "${CF_STAGE}" \
-            --suffix _coherence ${CF_EXTRA} ;;
+            ${CF_EXTRA} ;;
     *) echo "Unknown CF_STEP='${CF_STEP}'"; exit 1 ;;
 esac
 

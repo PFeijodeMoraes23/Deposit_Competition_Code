@@ -19,7 +19,7 @@ Output:
   (--pdf also compiles a standalone preview PDF via pdflatex.)
 
 Usage:
-  python export_cf1_franchise.py --estim 6 --spec 12 --stage extended --suffix _coherence
+  python export_cf1_franchise.py --estim 6 --spec 12 --stage extended
   python export_cf1_franchise.py --in <path-to-parquet> --pdf
 """
 from utils.venv_guard import ensure_project_venv
@@ -108,7 +108,7 @@ def main():
     ap.add_argument("--estim", type=int, default=6)
     ap.add_argument("--spec", type=int, default=12)
     ap.add_argument("--stage", type=str, default="extended")
-    ap.add_argument("--suffix", type=str, default="_coherence")
+    ap.add_argument("--suffix", type=str, default="")
     ap.add_argument("--in", type=str, default=None, help="explicit input parquet")
     ap.add_argument("--pdf", action="store_true", help="also compile a preview PDF")
     args = ap.parse_args()

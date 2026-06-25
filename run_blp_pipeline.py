@@ -5,41 +5,37 @@ Local / Cluster split
 ---------------------
   LOCAL  (run on your PC):
     1. python run_blp_pipeline.py --logit
-         Runs blp_1_logit_local.jl: non-RC baseline + saves logit_delta_E*.jls
-         checkpoints to BLP_RESULTS/ for delta warm-start on the cluster.
+         Runs blp_1_logit.jl: non-RC logit for every routine auto-discovered from the
+         demand-prep parquets (spec 12). Writes logit_summary_spec_12.json, the
+         logit_delta_E*.{jls,bin} warm-start checkpoints, and the LaTeX tables. Use
+         --est N for a single routine.
     2. python run_blp_pipeline.py --draws --R 50  (optional validation)
          R<=500 draws finish in a few minutes locally and let you test the
          dry-run timing before submitting to the cluster.
-    3. rsync processed/ESTIMATION_OUTPUT/BLP_RESULTS/logit_delta_E*.jls
+    3. rsync processed/ESTIMATION_OUTPUT/BLP_RESULTS/logit_delta_E*.bin
             <cluster>:../data/output/
          Transfer delta checkpoints so the cluster sigma stage warm-starts
          from logit delta* instead of log-shares (saves ~50-200 iters/call).
 
   CLUSTER (submit SLURM jobs):
-    4. sbatch submit_blp_draws.sh          # R=2000 scrambled Halton draws
-    5. bash  submit_blp_chain.sh 1 500     # E1 preliminary (sigma/full/extended)
-       bash  submit_blp_chain.sh 1 2000    # E1 production
-       (repeat for E2-E5 in parallel)
+    4. sbatch submit_blp_1_draws.sh         # R=2000 scrambled Halton draws
+    5. bash  submit_blp_2_rc_default.sh     # E4+E6+E8 RC-BLP dependency chains
 
 Modes
 -----
-  --latex          Build LaTeX table fragments (default).
-  --logit          Run blp_1_logit_local.jl (non-RC, legacy 5 strategies, ~1 min).
-                   Also saves logit_delta_E*.jls delta checkpoints.
-  --logit-coherence  Run the post-coherence-fix non-RC logit (routines auto-discovered
-                   from the demand-prep parquets, spec 12) via blp_1_logit_coherence.jl,
-                   then build *_coherence tables. Writes logit_summary_spec_12_coherence.json
-                   + logit_delta_E{k}_spec_12_coherence.{jls,bin}. Use --est N to run one
-                   routine (e.g. --est 7). Local.
+  --logit          Run blp_1_logit.jl (non-RC, routines auto-discovered from the
+                   demand-prep parquets, spec 12) and build the logit tables. Writes
+                   logit_summary_spec_12.json + logit_delta_E{k}_spec_12.{jls,bin}. Use
+                   --est N to run one routine (e.g. --est 7). Local.
   --draws          Run blp_1_draws.jl (local R<=500 fine; R=2000 use cluster).
   --estimate       Run blp_1_estimation.jl with pre-computed draws.
   --all            Run logit -> draws -> estimate in sequence (full local test).
-  --coherence      Run the post-fix RC-BLP for the coherence routines via
-                   blp_2_rc_coherence.jl (routines auto-discovered). GPU only — on the
-                   cluster pass --hpc; locally use --dry-run on a GPU box. DEFAULT runs
-                   E3, E6 and E7 (spec 12, extended RC sequence); pick a subset with --est
-                   (digits, e.g. --est 367), or --est all for every routine found. Each
-                   E{k} warm-starts from logit_delta_E{k}_spec_12_coherence.bin.
+  --rc             Run the RC-BLP estimation via blp_2_rc.jl (routines auto-discovered).
+                   GPU only — on the cluster pass --hpc; locally use --dry-run on a GPU
+                   box. DEFAULT runs E4, E6 and E8 (the +Time variants; spec 12, extended
+                   RC sequence); pick a subset with --est (digits, e.g. --est 468), or
+                   --est all for every routine found. Each E{k} warm-starts from
+                   logit_delta_E{k}_spec_12.bin.
 
 Options (used with --draws and --estimate)
 ------------------------------------------
@@ -70,25 +66,10 @@ import os
 
 ROOT = pathlib.Path(__file__).resolve().parent
 PYTHON_EXE = sys.executable
-LOGIT_TABLE_SCRIPT = ROOT / "make_blp_logit_table.py"
-LOGIT_SCRIPT       = ROOT / "blp_1_logit_local.jl"
+LOGIT_SCRIPT       = ROOT / "blp_1_logit.jl"
 DRAWS_SCRIPT       = ROOT / "blp_1_draws.jl"
 ESTIM_SCRIPT       = ROOT / "blp_1_estimation.jl"
-COHERENCE_SCRIPT   = ROOT / "blp_2_rc_coherence.jl"
-
-# Coherence (post-coherence-fix) LOGIT: non-RC 6-routine orchestrator + per-routine
-# entrypoints. Distinct from COHERENCE_SCRIPT above (that is the GPU RC-BLP estimation).
-LOGIT_COH_ORCH     = ROOT / "blp_1_logit_coherence.jl"
-LOGIT_COH_BY_EST   = {
-    1: ROOT / "blp_1_logit_e1_coherence.jl",
-    2: ROOT / "blp_1_logit_e2_coherence.jl",
-    3: ROOT / "blp_1_logit_e3_coherence.jl",
-    4: ROOT / "blp_1_logit_e4_coherence.jl",
-    5: ROOT / "blp_1_logit_e5_coherence.jl",
-    6: ROOT / "blp_1_logit_e6_coherence.jl",
-    7: ROOT / "blp_1_logit_e7_coherence.jl",
-    8: ROOT / "blp_1_logit_e8_coherence.jl",
-}
+RC_SCRIPT          = ROOT / "blp_2_rc.jl"
 
 
 # ── Julia mode ───────────────────────────────────────────────────────────────
@@ -122,47 +103,19 @@ def _ensure_julia_packages(jl_exe: str):
         sys.exit(1)
 
 
-# ── Mode: logit ───────────────────────────────────────────────────────────────
+# ── Mode: logit (non-RC, auto-discovered routines) ────────────────────────────
 
 def run_logit(args):
-    jl_exe = _find_julia()
-    _ensure_julia_packages(jl_exe)
-    if not LOGIT_SCRIPT.exists():
-        print(f"ERROR: {LOGIT_SCRIPT} not found."); sys.exit(1)
-    cmd = [jl_exe, f"--project={ROOT}",
-           f"--threads={args.workers}" if args.workers else "--threads=auto",
-           str(LOGIT_SCRIPT)]
-    print(f"\n=== Logit (non-RC) | CMD: {' '.join(cmd)} ===")
-    env = os.environ.copy()
-    env["PYTHON"] = PYTHON_EXE
-    env["JULIA_PYTHONCALL_EXE"] = PYTHON_EXE
-    subprocess.run(cmd, env=env, check=True)
-
-    # Generate logit table automatically after estimation
-    print(f"\n=== Generating Logit Table ===")
-    if not LOGIT_TABLE_SCRIPT.exists():
-        print(f"WARNING: {LOGIT_TABLE_SCRIPT} not found. Skipping table generation.")
-        return
-    try:
-        subprocess.run([PYTHON_EXE, str(LOGIT_TABLE_SCRIPT)], check=True)
-    except subprocess.CalledProcessError as e:
-        print(f"WARNING: Table generation failed (exit {e.returncode})")
-
-
-# ── Mode: logit-coherence (non-RC, post-coherence-fix, auto-discovered routines) ─
-
-def run_logit_coherence(args):
-    """Run the post-coherence-fix non-RC logit (routines auto-discovered, spec 12).
+    """Run the non-RC logit (routines auto-discovered, spec 12).
 
     Reads the self-contained demand_*_spec_12.parquet files, writes
-    logit_summary_spec_12_coherence.json + per-routine JLS + coherence delta checkpoints,
-    then builds est{id}_spec12_logit_coherence.tex tables. blp_1_logit_coherence.jl
-    auto-discovers the routine list from the parquets, so E7/E8/... are included with no
-    code change.
+    logit_summary_spec_12.json + per-routine JLS + delta checkpoints, then builds
+    est{id}_spec12_logit.tex tables. blp_1_logit.jl auto-discovers the routine list from
+    the parquets, so E7/E8/... are included with no code change.
 
     By default runs ALL discovered routines in one Julia process (avoids repeated JIT
     warmup). Use --est N to run a single routine, e.g. --est 7 (forwarded to the
-    orchestrator's own --est selector — no per-routine file needed).
+    orchestrator's own --est selector).
     """
     jl_exe = _find_julia()
     _ensure_julia_packages(jl_exe)
@@ -172,8 +125,8 @@ def run_logit_coherence(args):
     env["PYTHON"] = PYTHON_EXE
     env["JULIA_PYTHONCALL_EXE"] = PYTHON_EXE
 
-    if not LOGIT_COH_ORCH.exists():
-        print(f"ERROR: {LOGIT_COH_ORCH} not found."); sys.exit(1)
+    if not LOGIT_SCRIPT.exists():
+        print(f"ERROR: {LOGIT_SCRIPT} not found."); sys.exit(1)
 
     # Single-routine selection: a bare single integer (e.g. "7"). The default "12" and
     # other multi-digit/sentinel values mean "all discovered routines".
@@ -183,26 +136,15 @@ def run_logit_coherence(args):
         if s.isdigit() and len(s) == 1:
             single = int(s)
 
-    cmd = [jl_exe, f"--project={ROOT}", threads, str(LOGIT_COH_ORCH)]
+    cmd = [jl_exe, f"--project={ROOT}", threads, str(LOGIT_SCRIPT)]
     if single is not None:
         cmd += ["--est", str(single)]
-        print(f"\n=== Logit Coherence (E{single}) | CMD: {' '.join(cmd)} ===")
+        print(f"\n=== Logit (E{single}) | CMD: {' '.join(cmd)} ===")
     else:
-        print(f"\n=== Logit Coherence (all discovered routines) | CMD: {' '.join(cmd)} ===")
+        print(f"\n=== Logit (all discovered routines) | CMD: {' '.join(cmd)} ===")
+    # blp_1_logit.jl writes the est{id}_spec12_logit.tex tables itself (the LaTeX
+    # generator is in-file), so no separate table step.
     subprocess.run(cmd, env=env, check=True)
-
-    # Generate coherence logit tables automatically after estimation.
-    print(f"\n=== Generating Logit Coherence Tables ===")
-    if not LOGIT_TABLE_SCRIPT.exists():
-        print(f"WARNING: {LOGIT_TABLE_SCRIPT} not found. Skipping table generation.")
-        return
-    table_cmd = [PYTHON_EXE, str(LOGIT_TABLE_SCRIPT), "--coherence"]
-    if single is not None:
-        table_cmd += ["--est", str(single)]
-    try:
-        subprocess.run(table_cmd, check=True)
-    except subprocess.CalledProcessError as e:
-        print(f"WARNING: Table generation failed (exit {e.returncode})")
 
 
 # ── Mode: draws ───────────────────────────────────────────────────────────────
@@ -275,46 +217,46 @@ def run_estimate_pipeline(args):
     print("\n=== Estimation Pipeline Complete ===")
 
 
-# ── Mode: coherence (GPU RC-BLP, default E3+E6+E7; routines auto-discovered) ──────
+# ── Mode: rc (GPU RC-BLP, default E4+E6+E8; routines auto-discovered) ─────────────
 
-def run_coherence(args):
-    """Run the post-fix 'coherence' RC-BLP estimation via blp_2_rc_coherence.jl.
+def run_rc(args):
+    """Run the RC-BLP estimation via blp_2_rc.jl.
 
-    Routines are auto-discovered on the cluster from the coherence demand-prep parquets;
-    E{k} reads its parquet (e.g. demand_3_logistic, demand_6_index, demand_7_sijoint) and
-    warm-starts from BLP_RESULTS/logit_delta_E{k}_spec_12_coherence.bin. Requires a CUDA
-    GPU (cluster gpu_h200); locally use --dry-run on a GPU box.
+    Routines are auto-discovered on the cluster from the demand-prep parquets; E{k}
+    reads its parquet (e.g. demand_3_logistic, demand_6_index, demand_7_sijoint) and
+    warm-starts from BLP_RESULTS/logit_delta_E{k}_spec_12.bin. Requires a CUDA GPU
+    (cluster gpu_h200); locally use --dry-run on a GPU box.
 
-    The DEFAULT run is routines E3, E6 and E7 (the headline sleepiness links), spec 12,
+    The DEFAULT run is routines E4, E6 and E8 (the +Time headline variants), spec 12,
     with the full extended random-coefficient sequence. Pick a different subset with
-    --est (digits, e.g. "367"); --est all runs every routine found. Set
-    BLP_COHERENCE_ENGINE=numerical to use the finite-difference engine instead of IFT.
+    --est (digits, e.g. "468"); --est all runs every routine found. Set
+    BLP_ENGINE=numerical to use the finite-difference engine instead of IFT.
     """
     jl_exe = _find_julia()
     _ensure_julia_packages(jl_exe)
-    if not COHERENCE_SCRIPT.exists():
-        print(f"ERROR: {COHERENCE_SCRIPT} not found."); sys.exit(1)
-    # Default (the global --est default "12", or explicit "367") → E3 + E6 + E7.
-    # "all" runs every discovered routine (delegated to --all-routines); otherwise parse
-    # the requested digits.
-    if args.est in ("12", "367"):
-        est_ids = [3, 6, 7]
+    if not RC_SCRIPT.exists():
+        print(f"ERROR: {RC_SCRIPT} not found."); sys.exit(1)
+    # Default (the global --est default "12", or explicit "468") → E4 + E6 + E8 (the
+    # +Time headline variants). "all" runs every discovered routine (delegated to
+    # --all-routines); otherwise parse the requested digits.
+    if args.est in ("12", "468"):
+        est_ids = [4, 6, 8]
     elif args.est == "all":
         est_ids = None  # → --all-routines (driver discovers every parquet on disk)
     else:
         est_ids = [int(c) for c in args.est if c.isdigit()]
         if not est_ids:
-            print("ERROR: --coherence routines must be digits (use --est, e.g. 367)."); sys.exit(1)
+            print("ERROR: --rc routines must be digits (use --est, e.g. 468)."); sys.exit(1)
     # est_ids None → run every discovered routine in one process via --all-routines;
     # otherwise one invocation per requested routine.
     invocations = ([("all", ["--all-routines"])] if est_ids is None
                    else [(eid, ["--estim", str(eid)]) for eid in est_ids])
     label = "all (discovered)" if est_ids is None else f"E{est_ids}"
-    print(f"=== Coherence RC-BLP | {label} | spec=12 | stage={args.stage} | R={args.R} ===")
+    print(f"=== RC-BLP | {label} | spec=12 | stage={args.stage} | R={args.R} ===")
     for tag, sel in invocations:
         cmd = [jl_exe, f"--project={ROOT}",
                f"--threads={args.workers}" if args.workers else "--threads=auto",
-               str(COHERENCE_SCRIPT), *sel,
+               str(RC_SCRIPT), *sel,
                "--stage",     args.stage,
                "--R",         str(args.R),
                "--seed",      str(args.seed),
@@ -328,16 +270,16 @@ def run_coherence(args):
             cmd.append("--dry-run")
         if args.local_dir:
             cmd += ["--local-dir", args.local_dir]
-        print(f"\n=== Coherence {tag} | CMD: {' '.join(cmd)} ===")
+        print(f"\n=== RC-BLP {tag} | CMD: {' '.join(cmd)} ===")
         env = os.environ.copy()
         env["PYTHON"] = PYTHON_EXE
         env["JULIA_PYTHONCALL_EXE"] = PYTHON_EXE
         try:
             subprocess.run(cmd, env=env, check=True)
-            print(f"[+] Coherence {tag} DONE.")
+            print(f"[+] RC-BLP {tag} DONE.")
         except subprocess.CalledProcessError as e:
-            print(f"[!] Coherence {tag} FAILED: exit {e.returncode}"); sys.exit(1)
-    print("\n=== Coherence Estimation Complete ===")
+            print(f"[!] RC-BLP {tag} FAILED: exit {e.returncode}"); sys.exit(1)
+    print("\n=== RC-BLP Estimation Complete ===")
 
 
 # ── CLI ──────────────────────────────────────────────────────────────────────
@@ -346,24 +288,22 @@ def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description="BLP pipeline")
     mode = p.add_mutually_exclusive_group()
     mode.add_argument("--logit",    action="store_true", default=False,
-                      help="Run blp_1_logit_local.jl (non-RC, local, legacy 5 routines) and generate logit tables")
-    mode.add_argument("--logit-coherence", action="store_true", default=False, dest="logit_coherence",
-                      help="Run the post-coherence-fix non-RC logit (routines auto-discovered, "
-                           "spec 12) and generate *_coherence logit tables. Use --est N for one routine.")
+                      help="Run blp_1_logit.jl (non-RC, routines auto-discovered, "
+                           "spec 12) and generate logit tables. Use --est N for one routine.")
     mode.add_argument("--draws",    action="store_true", default=False,
                       help="Run blp_1_draws.jl to pre-compute simulation draws")
     mode.add_argument("--estimate", action="store_true", default=False,
                       help="Run blp_1_estimation.jl")
     mode.add_argument("--all",      action="store_true", default=False,
                       help="Run logit -> draws -> estimate in sequence")
-    mode.add_argument("--coherence", action="store_true", default=False,
-                      help="Run the post-fix RC-BLP for the coherence routines via "
-                           "blp_2_rc_coherence.jl (GPU; routines auto-discovered). Default runs "
-                           "E3, E6, E7 (spec 12); use --est 367 for a subset, --est all for every routine.")
+    mode.add_argument("--rc", action="store_true", default=False,
+                      help="Run the RC-BLP estimation via blp_2_rc.jl (GPU; routines "
+                           "auto-discovered). Default runs E4, E6, E8 (spec 12); use "
+                           "--est 468 for a subset, --est all for every routine.")
 
     g = p.add_argument_group("Estimation options")
     g.add_argument("--hpc",        action="store_true", default=False,
-                   help="Pass --hpc to the engine (cluster data paths; used with --coherence)")
+                   help="Pass --hpc to the engine (cluster data paths; used with --rc)")
     g.add_argument("--est",        type=str,   default="12")
     g.add_argument("--spec",       type=str,   default="12")
     g.add_argument("--stage",      type=str,   default="sequence",
@@ -390,16 +330,13 @@ def main():
         run_estimate_pipeline(args)
     elif args.logit:
         run_logit(args)
-    elif args.logit_coherence:
-        run_logit_coherence(args)
     elif args.draws:
         run_draws(args)
     elif args.estimate:
         run_estimate_pipeline(args)
-    elif args.coherence:
-        run_coherence(args)
+    elif args.rc:
+        run_rc(args)
 
 
 if __name__ == "__main__":
     main()
-

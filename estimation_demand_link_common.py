@@ -152,7 +152,9 @@ def build_base_panel(panel_csv):
 def _apply_link(index_series, link, res_ss):
     """Map the native linear index to phi in [0,1] under the estimator's link."""
     idx = index_series.astype(float)
-    if link == 'uniform':
+    if link == 'logit':
+        phi = 1.0 / (1.0 + np.exp(-np.clip(idx, -700, 700)))
+    elif link == 'uniform':
         phi = np.clip(idx, 0.0, 1.0)
     elif link == 'probit':
         phi = norm.cdf(idx)
@@ -266,17 +268,17 @@ def process_specification(spec_name, spec_res, df_base, link):
     return df_spec, summary, spec_id
 
 
-def run(est_num, link, tag):
-    """Demand prep for Est{est_num} with the given link. CLI: --spec ID|all."""
-    parser = argparse.ArgumentParser(description=f"Demand 1 Prep — Est{est_num} ({tag})")
-    parser.add_argument('--spec', type=str, default='all', help='Specification ID (1-12) or "all"')
-    args = parser.parse_args()
-    if args.spec.lower() == 'all':
+def run(est_num, link, tag, time_block=False, spec="all"):
+    """Demand prep for Est{est_num} with the given link. spec = 'all' | 'N' | 'a-b'.
+    time_block=True (E4/E6/E8) adds the time block (time_trend + gdp_growth_yoy)
+    to the demand frame so phi reconstructs the time interactions."""
+    spec = str(spec)
+    if spec.lower() == 'all':
         spec_ids = list(range(1, 13))
-    elif '-' in args.spec:
-        a, b = map(int, args.spec.split('-')); spec_ids = list(range(a, b + 1))
+    elif '-' in spec:
+        a, b = map(int, spec.split('-')); spec_ids = list(range(a, b + 1))
     else:
-        spec_ids = [int(args.spec)]
+        spec_ids = [int(spec)]
 
     sleep_output_dir = DATA_DIR / "ESTIMATION_OUTPUT" / "DEMAND_PREP" / f"est{est_num}"
     demand_output_dir = DATA_DIR / "ESTIMATION_OUTPUT" / "DEMAND_PREP"
@@ -284,6 +286,10 @@ def run(est_num, link, tag):
 
     print(f"Loading Base Panel {PANEL_CSV}...")
     df_base = build_base_panel(PANEL_CSV)
+    if time_block:
+        from estimation_2_sleep import add_time_variables
+        df_base = add_time_variables(df_base)
+        print("  [+Time] added time_trend + gdp_growth_yoy to the demand frame")
     print(f"Base Panel rows (with valid lagged structure): {len(df_base)}")
 
     results_pickle = sleep_output_dir / "estimation_results.pkl"
@@ -324,3 +330,22 @@ def run(est_num, link, tag):
         print(f"\n[SUCCESS] {total} per-spec parquets written to {demand_output_dir}")
     else:
         print(f"\n[WARNING] No parquets written for Estimation {est_num}")
+
+
+# ── Config-driven CLI for E3-E8 demand prep (link, tag, time_block) ──────────────
+#  (E1/E2 + E9 have their own demand-prep scripts.) Run:  python estimation_demand_link_common.py --est N --spec X
+DEMAND_CFG = {
+    3: ("logit", "logit", False),       4: ("logit", "logit_time", True),
+    5: ("index", "index", False),       6: ("index", "index_time", True),
+    7: ("sieve", "sijoint", False),     8: ("sieve", "sijoint_time", True),
+}
+
+if __name__ == "__main__":
+    pd.options.mode.chained_assignment = None
+    p = argparse.ArgumentParser(description="Demand prep E3-E8 (config-driven).")
+    p.add_argument("--est", type=int, required=True, choices=sorted(DEMAND_CFG),
+                   help="Estimator id 3-8 (E1/E2 + E9 have their own demand-prep scripts)")
+    p.add_argument("--spec", type=str, default="all", help="Specification ID (1-12) or 'all'")
+    a = p.parse_args()
+    _link, _tag, _tb = DEMAND_CFG[a.est]
+    run(a.est, _link, _tag, time_block=_tb, spec=a.spec)

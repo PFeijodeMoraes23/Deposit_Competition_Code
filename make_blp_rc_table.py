@@ -5,17 +5,16 @@ Generate a LaTeX table from BLP random-coefficient estimation results
 (sigma / rc2 / rc3 / rc4 / full / ext1 / ext2 / extended), Spec 12.
 
 Reads blp_results_E{est}_spec_12_{stage}{suffix}.json files produced on the cluster
-and dropped into the local BLP_RESULTS folder. The post-coherence-fix cluster runs
-write a ``_coherence`` suffix (IFT engine) or ``_coherence_num`` (numerical engine);
-this is the DEFAULT here. Use --legacy to read the un-suffixed legacy results.
+and dropped into the local BLP_RESULTS folder. The IFT engine writes un-suffixed
+results; the numerical engine appends ``_num`` (matches ENV["BLP_OUTPUT_SUFFIX"] set by
+blp_2_rc.jl). Select which with --engine.
 
 Usage
 -----
-  python make_blp_rc_table.py              # E6 coherence (default headline routine)
-  python make_blp_rc_table.py --est 3      # E3 coherence
-  python make_blp_rc_table.py --all        # E1-E6 coherence
-  python make_blp_rc_table.py --engine numerical --est 6   # E6 numerical-engine coherence
-  python make_blp_rc_table.py --legacy --est 5             # legacy (un-suffixed) E5
+  python make_blp_rc_table.py              # E6 (default headline routine, IFT engine)
+  python make_blp_rc_table.py --est 3      # E3
+  python make_blp_rc_table.py --all        # E1-E8
+  python make_blp_rc_table.py --engine numerical --est 6   # E6 numerical-engine results
 
 Output
 ------
@@ -115,9 +114,8 @@ def pi_label(char_idx: int, demo_idx: int) -> str:
 def load_stage(est_id: int, stage: str, suffix: str = "") -> dict | None:
     """Load blp_results_E{est}_spec_12_{stage}{suffix}.json. Returns None if missing/empty.
 
-    ``suffix`` selects the build: "" = legacy, "_coherence" = post-fix IFT engine,
-    "_coherence_num" = post-fix numerical engine (matches ENV["BLP_OUTPUT_SUFFIX"] on
-    the cluster).
+    ``suffix`` selects the engine: "" = IFT, "_num" = numerical (matches
+    ENV["BLP_OUTPUT_SUFFIX"] on the cluster).
     """
     path = RESULTS_DIR / f"blp_results_E{est_id}_spec_12_{stage}{suffix}.json"
     if not path.exists():
@@ -356,25 +354,19 @@ def main():
     parser.add_argument("--est", type=int, default=6,
                         help="Estimation strategy (default: 6, the headline single-index routine)")
     parser.add_argument("--all", action="store_true",
-                        help="Generate for E1-E6 (coherence) or E1-E5 (--legacy)")
+                        help="Generate for E1-E8")
     parser.add_argument("--engine", choices=["ift", "numerical"], default="ift",
-                        help="Coherence engine whose results to read (ift→_coherence, "
-                             "numerical→_coherence_num). Ignored with --legacy.")
-    parser.add_argument("--coherence", action="store_true", default=True,
-                        help="Read post-coherence-fix cluster results (default).")
-    parser.add_argument("--legacy", dest="coherence", action="store_false",
-                        help="Read legacy un-suffixed results instead.")
+                        help="Engine whose results to read (ift→un-suffixed, "
+                             "numerical→_num).")
     args = parser.parse_args()
 
-    # Result-file suffix (matches ENV["BLP_OUTPUT_SUFFIX"] set by blp_2_rc_coherence.jl).
-    if args.coherence:
-        suffix = "_coherence_num" if args.engine == "numerical" else "_coherence"
-    else:
-        suffix = ""
+    # Result-file suffix (matches ENV["BLP_OUTPUT_SUFFIX"] set by blp_2_rc.jl):
+    # IFT writes un-suffixed, numerical appends "_num".
+    suffix = "_num" if args.engine == "numerical" else ""
 
-    # Coherence build: 8 routines (E1-E8). Legacy build: 5 routines (E1-E5).
+    # 8 routines (E1-E8).
     if args.all:
-        est_ids = list(range(1, 9)) if args.coherence else list(range(1, 6))
+        est_ids = list(range(1, 9))
     else:
         est_ids = [args.est]
 

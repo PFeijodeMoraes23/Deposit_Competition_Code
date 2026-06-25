@@ -42,7 +42,7 @@ using DataFrames, Statistics
 Return the estimated sleepiness coefficient on `pix_exists` (Υ_pix) for the routine.
 NOT YET WIRED — needs the sleep step to persist Υ (see module docstring).
 """
-function pix_coefficient(estim::Int, spec_id::Int; suffix::String="_coherence")
+function pix_coefficient(estim::Int, spec_id::Int; suffix::String="")
     error("CF4 needs Υ_pix: have estimation_1_sleep.py persist the φ control-function " *
           "coefficients (incl. pix_exists), then load it here. See cf_4_pix.jl docstring.")
 end

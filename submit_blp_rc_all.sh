@@ -1,5 +1,5 @@
 #!/bin/bash
-# ONE command: submit the FULL coherence RC-BLP sweep as dependency CHAINS.
+# ONE command: submit the FULL RC-BLP sweep as dependency CHAINS.
 #
 # For each routine in ${ROUTINES} × engine (blp_2 IFT, blp_1 numerical) we submit the
 # 8 random-coefficient stages as SEPARATE jobs, each --dependency=afterok on the
@@ -9,28 +9,29 @@
 #
 #   sigma → rc2 → rc3 → rc4 → full → ext1 → ext2 → extended   (1→8 σ params)
 #
-# DEFAULT routine set is "3 6 7" (the headline links: E3 logistic, E6 single-index,
-# E7 joint single-index). The numerical engine runs as a CROSS-CHECK at `extended` only
-# (NUMERICAL_MODE=crosscheck, seeded from the IFT optimum), not a full chain — so the
-# default is per routine: 8 IFT stage-jobs + 1 numerical extended-job = 9 jobs, × 3
-# routines = 27 jobs (vs 48 if numerical ran a full chain). Engine is exported per job
-# (BLP_COHERENCE_ENGINE); numerical outputs are tagged *_coherence_num so they never
-# collide with IFT (*_coherence). Set NUMERICAL_MODE=full for the full numerical chain.
+# DEFAULT routine set is "4 6 8" (the +Time headline variants: E4 logistic+time,
+# E6 single-index+time, E8 joint+time). The numerical engine runs as a CROSS-CHECK at
+# `extended` only (NUMERICAL_MODE=crosscheck, seeded from the IFT optimum), not a full
+# chain — so the default is per routine: 8 IFT stage-jobs + 1 numerical extended-job = 9
+# jobs, × 3 routines = 27 jobs (vs 48 if numerical ran a full chain). Engine per job
+# (BLP_ENGINE); numerical outputs are tagged *_num so they never collide with IFT
+# (un-suffixed). Set NUMERICAL_MODE=full for the full numerical chain.
 #
 # Prerequisite: warm-start deltas on the cluster:
-#   data/output/logit_delta_E{k}_spec_12_coherence.bin  for each k in ${ROUTINES}
+#   data/output/logit_delta_E{k}_spec_12.bin  for each k in ${ROUTINES}
 # (the sigma stage warns + falls back to log-share init if its delta is missing).
 #
-# Usage:  bash submit_blp_rc_coherence_all.sh
-#         ENGINES="ift" bash submit_blp_rc_coherence_all.sh          # IFT only
-#         NUMERICAL_MODE=full bash submit_blp_rc_coherence_all.sh    # full numerical chain
-#         ROUTINES="1 2 3 4 5 6 7" bash submit_blp_rc_coherence_all.sh
+# Usage:  bash submit_blp_rc_all.sh
+#         ENGINES="ift" bash submit_blp_rc_all.sh          # IFT only
+#         NUMERICAL_MODE=full bash submit_blp_rc_all.sh    # full numerical chain
+#         ROUTINES="1 2 3 4 5 6 7 8" bash submit_blp_rc_all.sh
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 mkdir -p "${HERE}/logs"
 
-# Default headline routines: E3 (logistic) + E6 (single-index) + E7 (joint single-index).
-ROUTINES="${ROUTINES:-3 6 7}"
+# Default headline routines: the three +Time variants E4 (logistic+time),
+# E6 (single-index+time), E8 (joint single-index+time).
+ROUTINES="${ROUTINES:-4 6 8}"
 # Engines: IFT (blp_2) + numerical (blp_1) cross-check. Override e.g. ENGINES="ift".
 ENGINES="${ENGINES:-ift numerical}"
 # How the numerical engine is run:
@@ -43,7 +44,7 @@ ENGINES="${ENGINES:-ift numerical}"
 NUMERICAL_MODE="${NUMERICAL_MODE:-crosscheck}"
 DATA_OUT="${HERE}/../data/output"
 STAGES=(sigma rc2 rc3 rc4 full ext1 ext2 extended)
-GENERIC="${HERE}/submit_blp_rc_coherence_stage.sh"
+GENERIC="${HERE}/submit_blp_rc_stage.sh"
 
 # Stage-dependent wall-time (overrides #SBATCH --time in the stage script). Capped at
 # the gpu_h200 QOS max wall-PER-JOB: 4-day requests are rejected (QOSMaxWallDuration-
@@ -69,10 +70,10 @@ submit_chain () {   # $1=routine $2=engine $3=tag
         dep=""; [ -n "${prev}" ] && dep="--dependency=afterok:${prev}"
         wall=$(stage_wall "${st}")
         jid=$(sbatch --parsable --time="${wall}" ${dep} \
-            --export=ALL,COH_ROUTINE=${k},COH_ENGINE=${eng},COH_STAGE=${st} \
-            -J "coh_${tag}_E${k}_${st}" \
-            -o "${HERE}/logs/coh_${tag}_E${k}_${st}_%j.out" \
-            -e "${HERE}/logs/coh_${tag}_E${k}_${st}_%j.err" \
+            --export=ALL,RC_ROUTINE=${k},RC_ENGINE=${eng},RC_STAGE=${st} \
+            -J "rc_${tag}_E${k}_${st}" \
+            -o "${HERE}/logs/rc_${tag}_E${k}_${st}_%j.out" \
+            -e "${HERE}/logs/rc_${tag}_E${k}_${st}_%j.err" \
             "${GENERIC}")
         echo "    ${st}: ${jid}  (${dep:+afterok ${prev}, }wall=${wall})" >&2
         prev="${jid}"
@@ -99,13 +100,13 @@ for k in ${ROUTINES}; do
         if [ "${NUMERICAL_MODE}" = "crosscheck" ] && [ "${do_ift}" = "1" ]; then
             # One numerical job at `extended`, seeded from the IFT extended θ₂.
             echo "── numerical cross-check: E${k} / extended only (afterok IFT extended) ──"
-            ckpt="${DATA_OUT}/blp_checkpoint_E${k}_spec_12_extended_coherence.jls"
+            ckpt="${DATA_OUT}/blp_checkpoint_E${k}_spec_12_extended.jls"
             wall=$(stage_wall extended)
             jid=$(sbatch --parsable --time="${wall}" --dependency=afterok:${ift_ext_jid} \
-                --export=ALL,COH_ROUTINE=${k},COH_ENGINE=numerical,COH_STAGE=extended,BLP_THETA2_INIT_FILE=${ckpt} \
-                -J "coh_num_E${k}_xcheck" \
-                -o "${HERE}/logs/coh_num_E${k}_xcheck_%j.out" \
-                -e "${HERE}/logs/coh_num_E${k}_xcheck_%j.err" \
+                --export=ALL,RC_ROUTINE=${k},RC_ENGINE=numerical,RC_STAGE=extended,BLP_THETA2_INIT_FILE=${ckpt} \
+                -J "rc_num_E${k}_xcheck" \
+                -o "${HERE}/logs/rc_num_E${k}_xcheck_%j.out" \
+                -e "${HERE}/logs/rc_num_E${k}_xcheck_%j.err" \
                 "${GENERIC}")
             echo "    extended (xcheck): ${jid}  (afterok ${ift_ext_jid}, wall=${wall})"
             njobs=$((njobs + 1))
@@ -117,4 +118,4 @@ for k in ${ROUTINES}; do
         fi
     fi
 done
-echo "Submitted ${njobs} coherence RC-BLP jobs (routines: ${ROUTINES}; engines: ${ENGINES}; numerical_mode: ${NUMERICAL_MODE})."
+echo "Submitted ${njobs} RC-BLP jobs (routines: ${ROUTINES}; engines: ${ENGINES}; numerical_mode: ${NUMERICAL_MODE})."

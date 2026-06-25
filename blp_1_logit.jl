@@ -1,38 +1,30 @@
 """
-blp_1_logit_coherence.jl
-========================
-Non-random-coefficients logit demand estimation for BLP (θ₂ = 0) — COHERENCE build.
+blp_1_logit.jl
+==============
+Non-random-coefficients logit demand estimation for BLP (θ₂ = 0).
 
-This is the post-"coherence-fix" replacement for blp_1_logit_local.jl. The sleepiness
-function was re-estimated locally, changing the demand-prep outputs. The estimation
-routines are **auto-discovered** from the demand-prep parquets (see
-`discover_estim_strategies()`), so adding a routine needs no code change — just its
-`demand_X_spec_12.parquet`. As of this writing the available routines are:
+The sleepiness function was re-estimated locally, changing the demand-prep outputs. The
+estimation routines are **auto-discovered** from the demand-prep parquets (see
+`discover_estim_strategies()` — id AND prefix, newest file per id wins), so a relabelled
+or new routine needs no code change, just its `demand_<id>_*_spec_12.parquet`. The
+2026-06-24 scheme (base links + their +Time variants):
 
-  E1  Local B-type                 → demand_1_spec_12.parquet
-  E2  Pooled B+D Linear            → demand_2_spec_12.parquet
-  E3  Pooled B+D Logistic          → demand_3_logistic_spec_12.parquet
-  E4  Pooled Constrained Linear    → demand_4_constrained_spec_12.parquet
-  E5  Pooled Probit                → demand_5_probit_spec_12.parquet
-  E6  Pooled Single-Index          → demand_6_index_spec_12.parquet
-  E7  Pooled Joint Single-Index    → demand_7_sijoint_spec_12.parquet
-  (E8 and beyond appear automatically once their demand-prep parquet lands.)
+  E1 Local B-type   E2 Pooled Linear
+  E3 Pooled Logistic            E4 Pooled Logistic + Time
+  E5 Pooled Single-Index        E6 Pooled Single-Index + Time
+  E7 Pooled Joint Single-Index  E8 Pooled Joint Single-Index + Time
 
 Each parquet already carries every column the logit needs (spread_ann in bps, share_D /
 share_B_cond, is_B, deposit_type, CodConglomeradoPrudencial, the X_COLS, and all
 LOO/cost/capital instruments), so no separate "finalization" step is required. The
 link-based routines (E4+) are produced by estimation_demand_link_common.py, which mirrors
-estimation_3's demand prep exactly (same columns/scaling) under a different sleepiness
-link, so the logit treats every routine identically.
+estimation_3's demand prep exactly (same columns/scaling), so the logit treats every
+routine identically.
 
-Run all discovered routines with `julia blp_1_logit_coherence.jl`, or a single one with
-`julia blp_1_logit_coherence.jl --est 7`. The thin per-routine entrypoints
-(blp_1_logit_e{1..6}_coherence.jl) `include` this file and call `run_strategy(...)`.
-All outputs are suffixed `_coherence` and are fully parallel to the old pipeline —
-nothing canonical is clobbered.
+Run all discovered routines with `julia blp_1_logit.jl`, or a single one with
+`julia blp_1_logit.jl --est 8`.
 
-Four sub-models per routine (identical keys to the legacy build, so the LaTeX table
-generator works unchanged):
+Four sub-models per routine (the in-file LaTeX table generator below reads these keys):
   (a) priceonly:           δ = α · spread
   (b) core:                δ = α · spread + X_core · β
   (c) full:                δ = α · spread + X · β
@@ -43,11 +35,11 @@ IK2016 effective clusters G*.
 
 Usage
 -----
-  # All six routines + combined summary:
-  julia --project=. --threads=auto blp_1_logit_coherence.jl
+  # All discovered routines + combined summary + LaTeX tables:
+  julia --project=. --threads=auto blp_1_logit.jl
 
-  # A single routine (via the thin entrypoints):
-  julia --project=. blp_1_logit_e6_coherence.jl
+  # A single routine:
+  julia --project=. blp_1_logit.jl --est 8
 
 References
 ----------
@@ -59,12 +51,12 @@ References
 
 using Parquet2, DataFrames, LinearAlgebra, Statistics
 using JSON3, Serialization, Printf, Dates
+using Distributions   # t/χ² p-values for the LaTeX result tables
 
 # ==========================================================================
 # 0. Constants
 # ==========================================================================
 const SPEC_ID = 12
-const COH_SUFFIX = "coherence"
 
 const X_COLS = ["fgc_covered", "has_ip", "seg_S2", "seg_S3", "seg_S4", "seg_S5",
                 "log_total_assets_lag"]
@@ -80,10 +72,10 @@ const IV_COST    = ["personnel_cost_ratio_lag", "admin_cost_ratio_lag",
                     "tax_cost_ratio_lag"]
 const IV_CAPITAL = ["indice_basileia_lag"]
 
-# Coherence estimation routines are AUTO-DISCOVERED from the demand-prep parquets — see
+# Estimation routines are AUTO-DISCOVERED from the demand-prep parquets — see
 # discover_estim_strategies() / const ESTIM_STRATEGIES below (defined after get_paths()).
 
-# Sub-model definitions (keys must match make_blp_logit_table.py expectations)
+# Sub-model definitions (keys consumed by the in-file LaTeX table generator below)
 const SUB_MODELS = [
     (name="priceonly",  xcols=String[],    add_dtype=false),
     (name="core",       xcols=CORE_COLS,   add_dtype=false),
@@ -102,38 +94,39 @@ function get_paths()
     return input_dir, output_dir
 end
 
-# Canonical combined-summary path for the coherence build.
+# Canonical combined-summary path.
 combined_summary_path() = joinpath(get_paths()[2],
-                                   "logit_summary_spec_$(SPEC_ID)_$(COH_SUFFIX).json")
+                                   "logit_summary_spec_$(SPEC_ID).json")
 
 """
     discover_estim_strategies() -> Vector of (id, label, prefix)
 
-Auto-discover the coherence estimation routines for spec SPEC_ID by scanning the
+Auto-discover the estimation routines for spec SPEC_ID by scanning the
 demand-prep directory for `demand_<id>_*_spec_<SPEC_ID>.parquet`, excluding the legacy
 `*_final_*` files. The prefix is the filename minus the `_spec_<SPEC_ID>.parquet` tail
-(e.g. `demand_1`, `demand_3_logistic`, `demand_7_sijoint`). Sorted by id, deduped.
+(e.g. `demand_1`, `demand_3_logistic`). Sorted by id.
 
-Newly-added routines (E7, E8, …) are picked up with NO code change — as long as their
-demand-prep parquet is present.
+Newly-added/relabelled routines are picked up with NO code change. If MULTIPLE non-final
+parquets exist for the same id (e.g. a leftover old-scheme file alongside a freshly
+rebuilt one), the **most recently modified** wins — so a stale file can't shadow the new
+one. (Still: deleting old `demand_*_spec_<SPEC_ID>.parquet` after a relabel is tidiest.)
 """
 function discover_estim_strategies()
     input_dir, _ = get_paths()
-    out = NamedTuple[]
-    isdir(input_dir) || return out
-    seen = Set{Int}()
+    isdir(input_dir) || return NamedTuple[]
+    best = Dict{Int, Tuple{Float64, String}}()   # id => (mtime, prefix); newest wins
     pat  = Regex("^demand_(\\d+)(?:_.*)?_spec_$(SPEC_ID)\\.parquet\$")
-    for f in sort(readdir(input_dir))
+    for f in readdir(input_dir)
         occursin("_final_", f) && continue
         m = match(pat, f)
         m === nothing && continue
         id = parse(Int, m.captures[1])
-        id in seen && continue
-        push!(seen, id)
-        prefix = replace(f, "_spec_$(SPEC_ID).parquet" => "")
-        push!(out, (id = id, label = "E$id", prefix = prefix))
+        mt = mtime(joinpath(input_dir, f))
+        if !haskey(best, id) || mt > best[id][1]
+            best[id] = (mt, replace(f, "_spec_$(SPEC_ID).parquet" => ""))
+        end
     end
-    return sort!(out, by = s -> s.id)
+    return [(id = id, label = "E$id", prefix = best[id][2]) for id in sort!(collect(keys(best)))]
 end
 
 const ESTIM_STRATEGIES = discover_estim_strategies()
@@ -141,12 +134,12 @@ const ESTIM_STRATEGIES = discover_estim_strategies()
 # ==========================================================================
 # 1. Data Loading
 # ==========================================================================
-"""Load the coherence demand-prep parquet for one routine (drops the old `_final`)."""
+"""Load the demand-prep parquet for one routine (drops the old `_final`)."""
 function load_spec_data(estim)
     input_dir, _ = get_paths()
     fname = "$(estim.prefix)_spec_$(SPEC_ID).parquet"
     path  = joinpath(input_dir, fname)
-    isfile(path) || error("Missing coherence demand-prep parquet: $path")
+    isfile(path) || error("Missing demand-prep parquet: $path")
     df = DataFrame(Parquet2.Dataset(path); copycols=true)
     return df
 end
@@ -293,17 +286,17 @@ end
 # 4. Per-routine driver
 # ==========================================================================
 """
-Estimate all four sub-models for a single coherence routine.
+Estimate all four sub-models for a single routine.
 
 Loads the routine's demand-prep parquet, builds δ from data shares, runs 2SLS for each
-sub-model, writes per-(routine, sub-model) JLS and the δ warm-start checkpoints (all
-`_coherence`), and returns a Dict keyed `"{label}_{submodel}"`.
+sub-model, writes per-(routine, sub-model) JLS and the δ warm-start checkpoints, and
+returns a Dict keyed `"{label}_{submodel}"`.
 """
 function run_strategy(estim)
     _, output_dir = get_paths()
     mkpath(output_dir)
 
-    println("\n  ── Estimation $(estim.label) [coherence] ──")
+    println("\n  ── Estimation $(estim.label) ──")
 
     df = load_spec_data(estim)
     println("    Loaded: $(nrow(df)) observations ($(estim.prefix)_spec_$(SPEC_ID).parquet)")
@@ -323,16 +316,16 @@ function run_strategy(estim)
     # Deposit types for first-stage projection
     dep_types = Int.(coalesce.(df.deposit_type, 0))
 
-    # ── Save logit δ checkpoint for BLP σ-stage warm-start (coherence-suffixed) ──
+    # ── Save logit δ checkpoint for BLP σ-stage warm-start ──
     delta_chk_path = joinpath(output_dir,
-        "logit_delta_E$(estim.id)_spec_$(SPEC_ID)_$(COH_SUFFIX).jls")
+        "logit_delta_E$(estim.id)_spec_$(SPEC_ID).jls")
     try
         serialize(delta_chk_path, Dict{String,Any}(
             "delta"    => delta,
             "estim_id" => estim.id,
             "spec_id"  => SPEC_ID,
             "N"        => nrow(df),
-            "build"    => COH_SUFFIX,
+            "build"    => "logit",
         ))
         println("    [δ checkpoint] $(basename(delta_chk_path)) ($(nrow(df)) obs)")
     catch _e
@@ -392,7 +385,7 @@ function run_strategy(estim)
             "estim"       => estim.label,
             "estim_id"    => estim.id,
             "spec_id"     => SPEC_ID,
-            "build"       => COH_SUFFIX,
+            "build"       => "logit",
             "sub_model"   => sm.name,
             "param_names" => pnames,
             "theta1"      => theta1,
@@ -408,9 +401,9 @@ function run_strategy(estim)
         )
         routine_results[key] = res
 
-        # Save individual JLS (coherence-suffixed)
+        # Save individual JLS
         jls_path = joinpath(output_dir,
-            "logit_$(key)_spec_$(SPEC_ID)_$(COH_SUFFIX).jls")
+            "logit_$(key)_spec_$(SPEC_ID).jls")
         try
             serialize(jls_path, res)
         catch; end
@@ -435,7 +428,7 @@ function _to_json_data(all_results::Dict{String,Any})
     return json_data
 end
 
-"""Write the combined coherence summary JSON from a full results Dict."""
+"""Write the combined summary JSON from a full results Dict."""
 function write_combined_summary(all_results::Dict{String,Any})
     json_path = combined_summary_path()
     open(json_path, "w") do f
@@ -446,7 +439,7 @@ function write_combined_summary(all_results::Dict{String,Any})
 end
 
 """
-Merge one routine's keys into the existing combined coherence summary (creating it if
+Merge one routine's keys into the existing combined summary (creating it if
 absent). Lets single-routine entrypoints compose into the same summary file the table
 generator reads.
 """
@@ -469,6 +462,166 @@ function merge_into_combined_summary(routine_results::Dict{String,Any})
     end
     println("  [merge] Updated $(basename(json_path)) with $(length(routine_results)) sub-model key(s).")
     return json_path
+end
+
+# ==========================================================================
+# 5b. LaTeX result tables (ported from make_blp_logit_table.py)
+# ==========================================================================
+# Writes est{id}_spec12_logit.tex (xltabular: 4 sub-model cols, parameter rows
+# with SE underneath + IK2016 t(G*) significance stars, footer with obs/Q/dof/G*). Output
+# matches the former Python generator so V_Main.tex \input{} stays unchanged.
+
+const VAR_MAP = Dict(
+    "alpha"                => raw"Price coefficient ($\alpha$)",
+    "fgc_covered"          => "FGC Covered",
+    "has_ip"               => "Has Payment Institution",
+    "log_total_assets_lag" => raw"$\ln(\text{Total Assets}_{t-1})$",
+    "seg_S2" => "Segment S2", "seg_S3" => "Segment S3",
+    "seg_S4" => "Segment S4", "seg_S5" => "Segment S5",
+    "dummy_D_type"         => "D Type",
+)
+const ROW_ORDER = ["alpha", "fgc_covered", "has_ip", "log_total_assets_lag",
+                   "seg_S2", "seg_S3", "seg_S4", "seg_S5", "dummy_D_type"]
+const TABLE_SUBMODELS = [("priceonly", "Price Only"), ("core", "Price + Core"),
+                         ("full", "Price + Chars"), ("full_dtype", "+ D-Type")]
+const DRAFTS_DIR = raw"C:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\Drafts\Deposit Competition"
+const TROW = " \\\\"   # LaTeX row terminator ` \\` (a raw " \\" would collapse to one backslash)
+
+map_var(name::AbstractString) = get(VAR_MAP, name, replace(name, "_" => raw"\_"))
+
+_stars(p) = p < 0.01 ? raw"^{***}" : p < 0.05 ? raw"^{**}" : p < 0.10 ? raw"^{*}" : ""
+
+"""Thousands-separated integer (mirrors Python's f'{n:,}')."""
+function _commas(n::Integer)
+    s = string(abs(n)); parts = String[]
+    while length(s) > 3; pushfirst!(parts, s[end-2:end]); s = s[1:end-3]; end
+    pushfirst!(parts, s)
+    return (n < 0 ? "-" : "") * join(parts, ",")
+end
+
+"""(coef_cell, se_cell) with IK2016 t(G*) significance stars; ('-','') if missing."""
+function format_cell(coef, se, gstar)
+    (coef === nothing || se === nothing || isnan(coef) || isnan(se)) && return ("-", "")
+    t = coef / max(se, 1e-15)
+    p = (gstar !== nothing && gstar > 1) ? 2 * ccdf(TDist(gstar), abs(t)) :
+                                           2 * ccdf(Normal(), abs(t))
+    return (@sprintf("\$%.4f%s\$", coef, _stars(p)), @sprintf("\$(%.4f)\$", se))
+end
+
+"""Q-value cell with χ²(L) overidentification p-value stars; '---' if missing."""
+function format_q_value(qv, L)
+    (qv === nothing || isnan(qv) || L <= 0) && return "---"
+    return @sprintf("\$%.4f%s\$", qv, _stars(ccdf(Chisq(L), qv)))
+end
+
+"""Build the xltabular LaTeX for one routine from the combined-summary `data`."""
+function build_logit_table_tex(est_id::Int, data::AbstractDict)::String
+    ncols   = length(TABLE_SUBMODELS)
+    col_fmt = raw">{\raggedright\arraybackslash}p{0.24\textwidth} *{" * string(ncols) *
+              raw"}{>{\centering\arraybackslash}X}"
+    hdr = "    Parameter & " * join([sm[2] for sm in TABLE_SUBMODELS], " & ") * TROW
+    lines = String[
+        raw"\begin{spacing}{1.0}",
+        "\\begin{xltabular}{\\textwidth}{$col_fmt}",
+        "    \\caption{Demand Logit Estimation -- Estimation $est_id, Specification 12}",
+        "    \\label{tab:demand_logit_est$(est_id)_spec12} \\\\",
+        raw"    \toprule", hdr, raw"    \midrule", raw"    \endfirsthead", "",
+        raw"    \multicolumn{" * string(ncols+1) *
+            raw"}{c}{\bfseries Table \thetable\ continued from previous page}" * TROW,
+        raw"    \toprule", hdr, raw"    \midrule", raw"    \endhead", "",
+        raw"    \midrule",
+        raw"    \multicolumn{" * string(ncols+1) * raw"}{r}{\textit{Continued on next page}}" * TROW,
+        raw"    \endfoot", "",
+        raw"    \bottomrule",
+        raw"    \multicolumn{" * string(ncols+1) *
+            raw"}{p{\dimexpr\textwidth-2\tabcolsep\relax}}{\scriptsize \textit{Notes:} " *
+            raw"Cluster-robust standard errors in parentheses, clustered at conglomerate level " *
+            raw"following \textcite{imbens2016robust} and \textcite{carter2017asymptotic}. " *
+            raw"Significance: *** $p<0.01$, ** $p<0.05$, * $p<0.1$. $Q$ denotes the GMM " *
+            raw"overidentification test statistic ($\chi^2_L$, $L$ = \# instruments); $G^*$ is " *
+            raw"effective clusters.}" * TROW,
+        raw"    \endlastfoot", "",
+    ]
+    for (i, p) in enumerate(ROW_ORDER)
+        row_c = String[map_var(p)]; row_s = String[""]
+        for (sm_key, _) in TABLE_SUBMODELS
+            entry  = get(data, "E$(est_id)_$(sm_key)", Dict{String,Any}())
+            pnames = String.(get(entry, "param_names", String[]))
+            j = findfirst(==(p), pnames)
+            if j !== nothing
+                gs = get(entry, "G_star", nothing)
+                c, s = format_cell(Float64(entry["theta1"][j]), Float64(entry["se"][j]),
+                                   gs === nothing ? nothing : Float64(gs))
+                push!(row_c, c); push!(row_s, s)
+            else
+                push!(row_c, "-"); push!(row_s, "")
+            end
+        end
+        push!(lines, "    " * join(row_c, " & ") * TROW)
+        push!(lines, "    " * join(row_s, " & ") * TROW)
+        i < length(ROW_ORDER) && push!(lines, raw"    \addlinespace")
+    end
+    push!(lines, raw"    \midrule")
+    obs_l = String[]; q_l = String[]; gstar_l = String[]; niv_l = String[]
+    for (sm_key, _) in TABLE_SUBMODELS
+        entry = get(data, "E$(est_id)_$(sm_key)", Dict{String,Any}())
+        obs   = get(entry, "n_obs", nothing)
+        push!(obs_l, (obs === nothing || obs == 0) ? "---" : _commas(Int(obs)))
+        qv  = get(entry, "Q_value", nothing); niv = Int(get(entry, "n_iv", 0))
+        push!(niv_l, string(niv))
+        push!(q_l, qv === nothing ? "---" : format_q_value(Float64(qv), niv))
+        gs = get(entry, "G_star", nothing)
+        push!(gstar_l, gs === nothing ? "---" : @sprintf("%.2f", Float64(gs)))
+    end
+    append!(lines, [
+        "    Observations & " * join(obs_l, " & ") * TROW,
+        "    \$Q\$ (GMM overidentification) & " * join(q_l, " & ") * TROW,
+        "    Degrees of freedom (overidentification) & " * join(niv_l, " & ") * TROW,
+        "    Effective Clusters (\$G^*\$) & " * join(gstar_l, " & ") * TROW,
+        raw"\end{xltabular}", raw"\end{spacing}",
+    ])
+    return join(lines, "\n")
+end
+
+"""Read the combined summary JSON back into a Dict (for table generation)."""
+function read_combined_summary()
+    p = combined_summary_path()
+    isfile(p) || return Dict{String,Any}()
+    try
+        return copy(JSON3.read(read(p, String), Dict{String,Any}))
+    catch _e
+        println("  [table] WARN: could not read summary — $_e"); return Dict{String,Any}()
+    end
+end
+
+"""Write est{id}_spec12_logit.tex for each id to BLP_RESULTS/../Rout and Drafts."""
+function write_logit_tables(ids::Vector{Int}, data::AbstractDict)
+    _, output_dir = get_paths()
+    rout_dir = joinpath(dirname(output_dir), "Rout")     # ESTIMATION_OUTPUT/Rout
+    mkpath(rout_dir)
+    dests = isdir(DRAFTS_DIR) ? [rout_dir, DRAFTS_DIR] : [rout_dir]
+    for id in ids
+        tex = build_logit_table_tex(id, data)
+        for d in dests
+            path = joinpath(d, "est$(id)_spec12_logit.tex")
+            try
+                open(path, "w") do f; write(f, tex); end
+                println("    [table] est$(id)_spec12_logit.tex → $(basename(d))/")
+            catch _e
+                println("    [table] WARN: could not write $path — $_e")
+            end
+        end
+    end
+end
+
+"""Discover routine ids present in the combined summary (keys `E<id>_<submodel>`)."""
+function _summary_ids(data::AbstractDict)
+    ids = Set{Int}()
+    for k in keys(data)
+        m = match(r"^E(\d+)_", String(k))
+        m === nothing || push!(ids, parse(Int, m.captures[1]))
+    end
+    return sort!(collect(ids))
 end
 
 # ==========================================================================
@@ -497,12 +650,12 @@ function main()
         avail = isempty(ESTIM_STRATEGIES) ? "(none)" :
                 join([s.label for s in ESTIM_STRATEGIES], ", ")
         error(sel === nothing ?
-            "No coherence demand-prep parquets found for spec $SPEC_ID in $(get_paths()[1])." :
-            "No coherence demand-prep parquet for E$sel (spec $SPEC_ID). Available: $avail.")
+            "No demand-prep parquets found for spec $SPEC_ID in $(get_paths()[1])." :
+            "No demand-prep parquet for E$sel (spec $SPEC_ID). Available: $avail.")
     end
 
     println("=" ^ 70)
-    println("  BLP Logit (Non-RC) — COHERENCE build — Spec $SPEC_ID")
+    println("  BLP Logit (Non-RC) — Spec $SPEC_ID")
     println("  $(length(routines)) routine(s): $(join([s.label for s in routines], ", ")) " *
             "× $(length(SUB_MODELS)) sub-models")
     println("=" ^ 70)
@@ -522,10 +675,17 @@ function main()
         # Single routine: run it and merge into the existing combined summary.
         merge_into_combined_summary(run_strategy(routines[1]))
     end
-    println("  [DONE] Coherence logit estimation complete.")
+
+    # LaTeX result tables (replaces the former make_blp_logit_table.py step).
+    summary   = read_combined_summary()
+    table_ids = sel === nothing ? _summary_ids(summary) : [sel]
+    println("\n  Generating LaTeX tables for $(join("E" .* string.(table_ids), ", "))…")
+    write_logit_tables(table_ids, summary)
+
+    println("  [DONE] Logit estimation + tables complete.")
 end
 
-# Only auto-run when executed directly (not when `include`d by a per-routine entrypoint).
+# Only auto-run when executed directly.
 if abspath(PROGRAM_FILE) == @__FILE__
     main()
 end

@@ -7,7 +7,7 @@ counterfactual shares are identical to the in-sample BLP shares.
 
 What it provides
 ----------------
-  * `build_cf_context(...)`  — load the coherence demand parquet, the precomputed
+  * `build_cf_context(...)`  — load the demand parquet, the precomputed
     draws, and the estimated (θ̂₁, θ̂₂, δ̂) for a routine/stage; assemble the
     same `Precomp`/`HotBuffers`/`prod_vec` the estimator builds.
   * `cf_model_shares(ctx)`   — in-sample active shares s^Act_jkmt (validation gate).
@@ -110,13 +110,47 @@ function collect_shares(buf::HotBuffers, pc::Precomp, N::Int)::Vector{Float64}
 end
 
 # ==========================================================================
+# Routine → demand-parquet mapping (AUTO-DISCOVERED, new 8-routine scheme)
+# ==========================================================================
+"""
+    discover_demand_parquet(input_dir, estim, spec_id) -> String
+
+Find the demand parquet for routine `estim`, spec `spec_id`, by scanning
+`demand_<estim>_*_spec_<spec>.parquet` (any tag; excludes `_final`), newest mtime wins.
+
+This mirrors the BLP side's auto-discovery (the note: "the routine list — id AND
+prefix — is AUTO-DISCOVERED … newest mtime per id wins so leftover old-scheme files
+can't shadow rebuilds"). We do NOT use the static `DEMAND_PREFIXES` dict — its E4+
+entries are stale after the 2026-06-24 relabel to the 8-routine scheme:
+  E1 LocalB · E2 PooledLinear · E3 Logistic · E4 Logistic+Time ·
+  E5 Single-Index · E6 Single-Index+Time (headline) · E7 Joint · E8 Joint+Time.
+The cluster default / +Time headline set is {4, 6, 8}.
+"""
+function discover_demand_parquet(input_dir::String, estim::Int, spec_id::Int)::String
+    pat = Regex("^demand_$(estim)_.*spec_$(spec_id)\\.parquet\$")
+    cands = String[]
+    for f in readdir(input_dir)
+        (occursin(pat, f) && !occursin("final", lowercase(f))) &&
+            push!(cands, joinpath(input_dir, f))
+    end
+    isempty(cands) && error(
+        "No demand parquet for estim=$estim spec=$spec_id in $input_dir " *
+        "(scanned demand_$(estim)_*spec_$(spec_id).parquet, excluding _final). " *
+        "New 8-routine scheme is auto-discovered from the parquet; ensure the routine's " *
+        "demand-prep parquet exists (the sleep/BLP side produces it).")
+    path = cands[argmax(mtime.(cands))]
+    length(cands) > 1 && log_status("  [CF] $(length(cands)) parquets for E$estim; using newest: $(basename(path))")
+    return path
+end
+
+# ==========================================================================
 # Build the evaluation context (mirrors run_blp_estimation_ift_gpu assembly)
 # ==========================================================================
 """
     build_cf_context(estim, spec_id, stage; R, seed, hpc, local_dir, suffix) -> CFDemandCtx
 
 Replicates the estimator's data/precomp assembly and loads the saved (θ̂₁, θ̂₂, δ̂)
-for `(estim, spec_id, stage)`. Requires the coherence input parquet (local) and the
+for `(estim, spec_id, stage)`. Requires the demand input parquet (local) and the
 draws + result `.jls` (downloaded from the cluster).
 """
 function build_cf_context(estim::Int, spec_id::Int, stage::String;
@@ -126,14 +160,9 @@ function build_cf_context(estim::Int, spec_id::Int, stage::String;
                           keep::Union{Nothing,BitVector}=nothing,
                           placeholder::Bool=false,
                           draws_dir_override::Union{Nothing,String}=nothing,
-                          suffix::String=get(ENV, "BLP_OUTPUT_SUFFIX", "_coherence"))
-    # Route to the coherence demand parquets unless caller overrides.
-    haskey(ENV, "BLP_COHERENCE_INPUTS") || (ENV["BLP_COHERENCE_INPUTS"] = "1")
-
+                          suffix::String=get(ENV, "BLP_OUTPUT_SUFFIX", ""))
     input_dir, draws_dir, out_dir = get_paths(hpc; local_dir=local_dir)
-    fname = input_filename(estim, spec_id)
-    path  = joinpath(input_dir, fname)
-    isfile(path) || error("Missing demand parquet: $path")
+    path = discover_demand_parquet(input_dir, estim, spec_id)   # new 8-routine scheme (auto-discover; not DEMAND_PREFIXES)
 
     df_full = DataFrame(Parquet2.Dataset(path); copycols=true)
     nrow(df_full) == 0 && error("Empty demand parquet: $path")
@@ -206,7 +235,7 @@ function build_cf_context(estim::Int, spec_id::Int, stage::String;
     # catching plumbing bugs now; swap in δ̂/θ̂ once results land.
     rpath = _result_path(out_dir, estim, spec_id, stage, suffix)
     if !placeholder && stage == "logit"
-        # Coherence LOGIT stage: δ̂ is saved as logit_delta_E{e}_spec_{s}{suffix}.bin
+        # LOGIT stage: δ̂ is saved as logit_delta_E{e}_spec_{s}{suffix}.bin
         # (there is no RC-style result dict). θ₂ is empty ⇒ μ=0 ⇒ plain logit shares.
         # θ₁ is only needed for SPREAD counterfactuals; pull α from the 'full' logit
         # sub-model if present, else 0 (in-sample share reproduction is unaffected).
@@ -366,7 +395,7 @@ function _parse_cf_args()
         "--hpc";       action   = :store_true
         "--local-dir"; arg_type = String; default = nothing
         "--draws-dir"; arg_type = String; default = nothing   # override draws location
-        "--suffix";    arg_type = String; default = "_coherence"
+        "--suffix";    arg_type = String; default = ""
     end
     return parse_args(s)
 end

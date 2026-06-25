@@ -78,10 +78,35 @@ def demean_variables(df, cols, entity_col):
     means = df.groupby(entity_col)[cols].transform('mean')
     return df[cols] - means
 
-def define_specifications():
+# Time block (E4/E6/E8 "+Time" variants): time_trend + gdp_growth_yoy, entered as
+# interactions with nr_lagged_dep exactly like the other state vars.
+TIME_VARS = ['time_trend', 'gdp_growth_yoy']
+
+
+def add_time_variables(df):
+    """Add the two time-series state variables in place and return df.
+    time_trend     : continuous years since the first sample quarter.
+    gdp_growth_yoy : within-entity year-over-year growth of gdp_per_capita
+                     (scale-invariant ratio; first 4 obs/entity and inf -> 0)."""
+    df.sort_values(by=['entity_id', 'year', 'quarter'], inplace=True)
+    df['time_trend'] = (df['year'] - int(df['year'].min())) + (df['quarter'] - 1) / 4.0
+    gpc = df['gdp_per_capita']
+    growth = df.groupby('entity_id')['gdp_per_capita'].transform(lambda s: s / s.shift(4) - 1.0)
+    growth = growth.replace([np.inf, -np.inf], np.nan).fillna(0.0)
+    df['gdp_growth_yoy'] = growth.where(gpc.notna(), 0.0)
+    return df
+
+
+def define_specifications(time_block=False):
     s_base = ['constant', 'pix_exists']
     s_macro = s_base + ['gdp_per_capita', 'cadunico_families_per1000', 'fraction_65plus', 'fraction_young', 'risk_free_qoq_lag']
     s_tech = s_macro + ['connections_per100']
+
+    if time_block:
+        # +Time variants: append the time block to every state block.
+        s_base = s_base + TIME_VARS
+        s_macro = s_macro + TIME_VARS
+        s_tech = s_tech + TIME_VARS
 
     iv_specs = {
         'OLS': [],
@@ -95,7 +120,7 @@ def define_specifications():
 # ==============================================================================
 # DATA BUILDING
 # ==============================================================================
-def build_pooled_data():
+def build_pooled_data(time_block=False):
     df_raw = load_panel_cached(PANEL_CSV) if load_panel_cached else pd.read_csv(PANEL_CSV, dtype={'mca_code': str}, low_memory=False)
     df_raw = df_raw.copy()  # defragment: market_panel_with_fees has many columns from merges
 
@@ -161,6 +186,9 @@ def build_pooled_data():
 
     for col in state_vars_to_fill:
         if col in df.columns: df[col] = df[col].fillna(df[col].median())
+
+    if time_block:
+        df = add_time_variables(df)
     return df
 
 # ==============================================================================

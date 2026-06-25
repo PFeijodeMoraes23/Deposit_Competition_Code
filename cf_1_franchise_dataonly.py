@@ -43,8 +43,17 @@ DATA = _ROOT / "BCB" / "Egan_et_al_2025_Rep" / "processed"
 DEMAND_PREP = DATA / "ESTIMATION_OUTPUT" / "DEMAND_PREP"
 CF_DIR = DATA / "ESTIMATION_OUTPUT" / "CF_FOUNDATION"
 
-_COH_PREFIX = {1: "demand_1", 2: "demand_2", 3: "demand_3_logistic",
-               4: "demand_4_constrained", 5: "demand_5_probit", 6: "demand_6_index"}
+def _discover_demand_parquet(estim: int, spec: int) -> Path:
+    """Auto-discover the routine's demand parquet (new 8-routine scheme; newest mtime
+    wins). The old static prefix dict is stale after the 2026-06-24 relabel
+    (E4 Logistic+Time, E6 Single-Index+Time headline, E8 Joint+Time; default {4,6,8})."""
+    cands = [p for p in DEMAND_PREP.glob(f"demand_{estim}_*spec_{spec}.parquet")
+             if "final" not in p.name.lower()]
+    if not cands:
+        raise FileNotFoundError(
+            f"No demand parquet for estim={estim} spec={spec} in {DEMAND_PREP} "
+            f"(demand_{estim}_*spec_{spec}.parquet, excl _final).")
+    return max(cands, key=lambda p: p.stat().st_mtime)
 
 
 def _pick(df: pd.DataFrame, candidates, what: str) -> np.ndarray:
@@ -61,7 +70,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--estim", type=int, default=6)
     ap.add_argument("--spec", type=int, default=12)
-    ap.add_argument("--suffix", type=str, default="_coherence")
+    ap.add_argument("--suffix", type=str, default="")
     ap.add_argument("--parquet", type=str, default=None)
     ap.add_argument("--beta", type=float, default=0.9)
     ap.add_argument("--horizon", type=int, default=50)
@@ -70,7 +79,7 @@ def main():
     if args.parquet:
         path = Path(args.parquet)
     else:
-        path = DEMAND_PREP / f"{_COH_PREFIX.get(args.estim, f'demand_{args.estim}')}_spec_{args.spec}.parquet"
+        path = _discover_demand_parquet(args.estim, args.spec)
     if not path.exists():
         raise FileNotFoundError(f"Demand parquet not found: {path}")
     df = pd.read_parquet(path)
