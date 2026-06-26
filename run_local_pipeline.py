@@ -6,7 +6,7 @@ Orchestrates the full local pipeline in three sequential stages:
   1. run_data_pipeline.py      — download & build the master panel
   2. run_sleep_pipeline.py     — sleepiness / inertia estimations
   3. run_blp_pipeline.py       — non-RC logit (all routines, spec 12) + LaTeX tables,
-                                 OR, with --rc, the RC-BLP estimation (default E4+E6+E8,
+                                 OR, with --rc, the RC-BLP estimation (default E5-E8,
                                  spec 12) instead of the logit stage.
 
 All CLI args passed to this script are forwarded to run_data_pipeline.py, except --rc
@@ -55,7 +55,7 @@ def _run(label: str, cmd: list):
 def main():
     # Forward all CLI args to the data pipeline only. `--rc` is consumed here (not a
     # data-pipeline flag): it swaps the final BLP stage to the RC-BLP estimation
-    # (default E4+E6+E8, spec 12; needs a CUDA GPU). Without it the final stage is the
+    # (default E5-E8, spec 12; needs a CUDA GPU). Without it the final stage is the
     # non-RC logit (all routines, spec 12; local).
     extra_args = sys.argv[1:]
     rc = "--rc" in extra_args

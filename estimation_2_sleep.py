@@ -78,9 +78,30 @@ def demean_variables(df, cols, entity_col):
     means = df.groupby(entity_col)[cols].transform('mean')
     return df[cols] - means
 
-# Time block (E4/E6/E8 "+Time" variants): time_trend + gdp_growth_yoy, entered as
-# interactions with nr_lagged_dep exactly like the other state vars.
-TIME_VARS = ['time_trend', 'gdp_growth_yoy']
+
+def demean_variables_2way(df, cols, entity_col, time_col, n_iter=15, tol=1e-9):
+    """Two-way (entity + time) additive FE removal by alternating projections
+    (Gaure 2013). Exact within transform for D = ... + alpha_i + delta_t."""
+    _, einv = np.unique(df[entity_col].values, return_inverse=True)
+    ec = np.bincount(einv).astype(float)
+    _, tinv = np.unique(df[time_col].values, return_inverse=True)
+    tc = np.bincount(tinv).astype(float)
+    M = df[cols].to_numpy(dtype=float, copy=True)
+    for _ in range(n_iter):
+        prev = M.copy()
+        for j in range(M.shape[1]):
+            M[:, j] -= (np.bincount(einv, M[:, j]) / ec)[einv]
+            M[:, j] -= (np.bincount(tinv, M[:, j]) / tc)[tinv]
+        if np.max(np.abs(M - prev)) < tol:
+            break
+    return pd.DataFrame(M, columns=cols, index=df.index)
+
+
+# Time block (E4/E6/E8 "+Time" variants). time_trend was DROPPED: with quarter
+# fixed effects (delta_t) now absorbing aggregate time additively, a pure-time
+# linear trend in the index is redundant/collinear with the time FE. The block
+# keeps only gdp_growth_yoy (a genuine entity-time business-cycle covariate).
+TIME_VARS = ['gdp_growth_yoy']
 
 
 def add_time_variables(df):
@@ -228,8 +249,8 @@ def run_pooled_second_stage(df, state_vars, has_cf=False):
     df_ss = df.dropna(subset=X_cols + ['deposit_balance']).copy()
     if len(df_ss) == 0: return None
 
-    y_dm = demean_variables(df_ss, ['deposit_balance'], 'entity_id')['deposit_balance']
-    X_dm = demean_variables(df_ss, X_cols, 'entity_id')
+    y_dm = demean_variables_2way(df_ss, ['deposit_balance'], 'entity_id', 'time_id')['deposit_balance']
+    X_dm = demean_variables_2way(df_ss, X_cols, 'entity_id', 'time_id')
 
     mod = sm.OLS(y_dm, X_dm)
     cluster_series = df_ss['CodConglomeradoPrudencial'].astype(str)

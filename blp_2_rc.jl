@@ -16,7 +16,7 @@ wins per id), so a relabelled/new routine needs NO edit here. The 2026-06-24 sch
     E5 Pooled Single-Index        E6 Pooled Single-Index + Time
     E7 Pooled Joint Single-Index  E8 Pooled Joint Single-Index + Time
 
-The DEFAULT cluster run targets **E4, E6, E8** (the three +Time headline variants); the
+The DEFAULT cluster run targets **E5-E8** (the single-index links + their +Time variants); the
 rest stay available (ROUTINES env / --all-routines) for robustness. Each routine is
 warm-started from the local logit delta produced beforehand:
 
@@ -107,10 +107,10 @@ function discover_routine_ids(input_dir::String; spec::Int = RC_SPEC)
     return sort!(collect(ids))
 end
 
-# Default cluster routine set: the three +Time headline variants E4 (Logistic+Time),
-# E6 (Single-Index+Time), E8 (Joint+Time). Override with the ROUTINES env in the submit
-# scripts, or --all-routines to run every discovered routine.
-const DEFAULT_ROUTINES = [4, 6, 8]
+# Default cluster routine set: the single-index links and their +Time variants —
+# E5 (Single-Index), E6 (Single-Index+Time), E7 (Joint Single-Index), E8 (Joint+Time).
+# Override with the ROUTINES env in the submit scripts, or --all-routines for all.
+const DEFAULT_ROUTINES = [5, 6, 7, 8]
 
 # Estimation engine (GPU). Both engines live in blp_gpu_engine.jl: the IFT analytical
 # gradient (`main_gpu_ift`, default) and the numerical finite-difference engine
@@ -209,8 +209,8 @@ function run_routine(estim_id::Int; passthrough::Vector{String} = String[])
     ENGINE == "numerical" ? main_gpu_numerical() : main_gpu_ift()
 end
 
-"""Run a set of routines sequentially on a single GPU. Defaults to the headline
-routines (E4, E6, E8); pass `ids` (e.g. `1:8`) to run a different set."""
+"""Run a set of routines sequentially on a single GPU. Defaults to the single-index
+routines (E5-E8); pass `ids` (e.g. `1:8`) to run a different set."""
 function run_all_routines(; passthrough::Vector{String} = String[],
                           ids::Vector{Int} = DEFAULT_ROUTINES)
     for id in ids
@@ -218,7 +218,7 @@ function run_all_routines(; passthrough::Vector{String} = String[],
     end
 end
 
-# ── Direct CLI entry: `--estim k` (one routine), `--all` (default E4+E6+E8), or
+# ── Direct CLI entry: `--estim k` (one routine), `--all` (default E5-E8), or
 #    `--all-six`/`--all-routines` (every routine discovered on disk). ─────────────
 function _main()
     a = copy(ARGS)
@@ -230,11 +230,11 @@ function _main()
         in_dir, _, _ = get_paths(is_hpc; local_dir = local_dir)
         run_all_routines(; passthrough = rest, ids = discover_routine_ids(in_dir))
     elseif "--all" in a
-        run_all_routines(; passthrough = filter(!=("--all"), a))   # default E4+E6+E8
+        run_all_routines(; passthrough = filter(!=("--all"), a))   # default E5-E8
     else
         ei = findfirst(==("--estim"), a)
         (ei === nothing || ei == length(a)) &&
-            error("Provide `--estim N`, `--all` (default E4+E6+E8), or `--all-routines` " *
+            error("Provide `--estim N`, `--all` (default E5-E8), or `--all-routines` " *
                   "(plus engine flags). Got: $a")
         estim_id = parse(Int, a[ei + 1])
         deleteat!(a, ei:ei + 1)          # run_routine re-adds --estim

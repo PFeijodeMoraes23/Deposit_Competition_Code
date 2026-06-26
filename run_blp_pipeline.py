@@ -19,7 +19,7 @@ Local / Cluster split
 
   CLUSTER (submit SLURM jobs):
     4. sbatch submit_blp_1_draws.sh         # R=2000 scrambled Halton draws
-    5. bash  submit_blp_2_rc_default.sh     # E4+E6+E8 RC-BLP dependency chains
+    5. bash  submit_blp_2_rc_default.sh     # E5-E8 RC-BLP dependency chains
 
 Modes
 -----
@@ -32,8 +32,8 @@ Modes
   --all            Run logit -> draws -> estimate in sequence (full local test).
   --rc             Run the RC-BLP estimation via blp_2_rc.jl (routines auto-discovered).
                    GPU only — on the cluster pass --hpc; locally use --dry-run on a GPU
-                   box. DEFAULT runs E4, E6 and E8 (the +Time variants; spec 12, extended
-                   RC sequence); pick a subset with --est (digits, e.g. --est 468), or
+                   box. DEFAULT runs E5-E8 (single-index links + +Time; spec 12, extended
+                   RC sequence); pick a subset with --est (digits, e.g. --est 5678), or
                    --est all for every routine found. Each E{k} warm-starts from
                    logit_delta_E{k}_spec_12.bin.
 
@@ -217,7 +217,7 @@ def run_estimate_pipeline(args):
     print("\n=== Estimation Pipeline Complete ===")
 
 
-# ── Mode: rc (GPU RC-BLP, default E4+E6+E8; routines auto-discovered) ─────────────
+# ── Mode: rc (GPU RC-BLP, default E5-E8; routines auto-discovered) ────────────────
 
 def run_rc(args):
     """Run the RC-BLP estimation via blp_2_rc.jl.
@@ -227,26 +227,26 @@ def run_rc(args):
     warm-starts from BLP_RESULTS/logit_delta_E{k}_spec_12.bin. Requires a CUDA GPU
     (cluster gpu_h200); locally use --dry-run on a GPU box.
 
-    The DEFAULT run is routines E4, E6 and E8 (the +Time headline variants), spec 12,
-    with the full extended random-coefficient sequence. Pick a different subset with
-    --est (digits, e.g. "468"); --est all runs every routine found. Set
+    The DEFAULT run is routines E5-E8 (the single-index links and their +Time variants),
+    spec 12, with the full extended random-coefficient sequence. Pick a different subset
+    with --est (digits, e.g. "5678"); --est all runs every routine found. Set
     BLP_ENGINE=numerical to use the finite-difference engine instead of IFT.
     """
     jl_exe = _find_julia()
     _ensure_julia_packages(jl_exe)
     if not RC_SCRIPT.exists():
         print(f"ERROR: {RC_SCRIPT} not found."); sys.exit(1)
-    # Default (the global --est default "12", or explicit "468") → E4 + E6 + E8 (the
-    # +Time headline variants). "all" runs every discovered routine (delegated to
-    # --all-routines); otherwise parse the requested digits.
-    if args.est in ("12", "468"):
-        est_ids = [4, 6, 8]
+    # Default (the global --est default "12", or explicit "5678") → E5-E8 (the single-
+    # index links + their +Time variants). "all" runs every discovered routine (delegated
+    # to --all-routines); otherwise parse the requested digits.
+    if args.est in ("12", "5678"):
+        est_ids = [5, 6, 7, 8]
     elif args.est == "all":
         est_ids = None  # → --all-routines (driver discovers every parquet on disk)
     else:
         est_ids = [int(c) for c in args.est if c.isdigit()]
         if not est_ids:
-            print("ERROR: --rc routines must be digits (use --est, e.g. 468)."); sys.exit(1)
+            print("ERROR: --rc routines must be digits (use --est, e.g. 5678)."); sys.exit(1)
     # est_ids None → run every discovered routine in one process via --all-routines;
     # otherwise one invocation per requested routine.
     invocations = ([("all", ["--all-routines"])] if est_ids is None
@@ -298,8 +298,8 @@ def build_parser() -> argparse.ArgumentParser:
                       help="Run logit -> draws -> estimate in sequence")
     mode.add_argument("--rc", action="store_true", default=False,
                       help="Run the RC-BLP estimation via blp_2_rc.jl (GPU; routines "
-                           "auto-discovered). Default runs E4, E6, E8 (spec 12); use "
-                           "--est 468 for a subset, --est all for every routine.")
+                           "auto-discovered). Default runs E5-E8 (spec 12); use "
+                           "--est 5678 for a subset, --est all for every routine.")
 
     g = p.add_argument_group("Estimation options")
     g.add_argument("--hpc",        action="store_true", default=False,

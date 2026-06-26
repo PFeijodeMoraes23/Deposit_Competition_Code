@@ -9,11 +9,11 @@
 #
 #   sigma → rc2 → rc3 → rc4 → full → ext1 → ext2 → extended   (1→8 σ params)
 #
-# DEFAULT routine set is "4 6 8" (the +Time headline variants: E4 logistic+time,
-# E6 single-index+time, E8 joint+time). The numerical engine runs as a CROSS-CHECK at
-# `extended` only (NUMERICAL_MODE=crosscheck, seeded from the IFT optimum), not a full
-# chain — so the default is per routine: 8 IFT stage-jobs + 1 numerical extended-job = 9
-# jobs, × 3 routines = 27 jobs (vs 48 if numerical ran a full chain). Engine per job
+# DEFAULT routine set is "5 6 7 8" (the single-index links + their +Time variants:
+# E5 single-index, E6 single-index+time, E7 joint, E8 joint+time). The numerical engine
+# runs as a CROSS-CHECK at `extended` only (NUMERICAL_MODE=crosscheck, seeded from the
+# IFT optimum), not a full chain — so the default is per routine: 8 IFT stage-jobs + 1
+# numerical extended-job = 9 jobs, × 4 routines = 36 jobs (vs 64 full). Engine per job
 # (BLP_ENGINE); numerical outputs are tagged *_num so they never collide with IFT
 # (un-suffixed). Set NUMERICAL_MODE=full for the full numerical chain.
 #
@@ -29,9 +29,9 @@ set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 mkdir -p "${HERE}/logs"
 
-# Default headline routines: the three +Time variants E4 (logistic+time),
-# E6 (single-index+time), E8 (joint single-index+time).
-ROUTINES="${ROUTINES:-4 6 8}"
+# Default routines: the single-index links + their +Time variants E5 (single-index),
+# E6 (single-index+time), E7 (joint), E8 (joint+time).
+ROUTINES="${ROUTINES:-5 6 7 8}"
 # Engines: IFT (blp_2) + numerical (blp_1) cross-check. Override e.g. ENGINES="ift".
 ENGINES="${ENGINES:-ift numerical}"
 # How the numerical engine is run:

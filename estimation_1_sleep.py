@@ -124,6 +124,23 @@ def demean_variables(df, cols, entity_col):
     return df[cols] - means
 
 
+def demean_variables_2way(df, cols, entity_col, time_col, n_iter=15, tol=1e-9):
+    """Two-way (entity + time) additive FE removal by alternating projections."""
+    _, einv = np.unique(df[entity_col].values, return_inverse=True)
+    ec = np.bincount(einv).astype(float)
+    _, tinv = np.unique(df[time_col].values, return_inverse=True)
+    tc = np.bincount(tinv).astype(float)
+    M = df[cols].to_numpy(dtype=float, copy=True)
+    for _ in range(n_iter):
+        prev = M.copy()
+        for j in range(M.shape[1]):
+            M[:, j] -= (np.bincount(einv, M[:, j]) / ec)[einv]
+            M[:, j] -= (np.bincount(tinv, M[:, j]) / tc)[tinv]
+        if np.max(np.abs(M - prev)) < tol:
+            break
+    return pd.DataFrame(M, columns=cols, index=df.index)
+
+
 # ==============================================================================
 # PHASE 1: ESTIMATION (First Stage & Second Stage)
 # ==============================================================================
@@ -214,9 +231,9 @@ def run_second_stage(df, state_vars, has_cf=False, spec_name=""):
     df_ss = df.dropna(subset=X_cols + ['deposit_balance']).copy()
     if len(df_ss) == 0: return None
         
-    y_dm = demean_variables(df_ss, ['deposit_balance'], 'entity_id')['deposit_balance']
-    X_dm = demean_variables(df_ss, X_cols, 'entity_id')
-    
+    y_dm = demean_variables_2way(df_ss, ['deposit_balance'], 'entity_id', 'time_id')['deposit_balance']
+    X_dm = demean_variables_2way(df_ss, X_cols, 'entity_id', 'time_id')
+
     mod = sm.OLS(y_dm, X_dm)
     cluster_series = df_ss['CodConglomeradoPrudencial'].astype(str)
     res = mod.fit(cov_type='cluster', cov_kwds={'groups': cluster_series}, use_t=True)
@@ -396,12 +413,13 @@ def calculate_phis(df, res_dict, state_blocks):
                 c = ss_res.params[col_name]
                 phi_mt += c if sv == 'constant' else c * filled_cols[sv]
         
-        df[f'phi_mt_{spec_name}'] = phi_mt
-        market_agg = df.groupby(['year_quarter', 'CODMUN_IBGE'], observed=True).agg(phi_mt=(f'phi_mt_{spec_name}', 'mean'), M_mt=('market_size', 'sum')).reset_index()
+        key = f"IV_HausmanFull_x_{spec_name}"   # match the E2-E8 phi column naming convention
+        df[f'phi_mt_{key}'] = phi_mt
+        market_agg = df.groupby(['year_quarter', 'CODMUN_IBGE'], observed=True).agg(phi_mt=(f'phi_mt_{key}', 'mean'), M_mt=('market_size', 'sum')).reset_index()
         weighted_phi = market_agg['phi_mt'] * market_agg['M_mt']
         sum_weighted = weighted_phi.groupby(market_agg['year_quarter']).sum()
         sum_m_mt = market_agg['M_mt'].groupby(market_agg['year_quarter']).sum()
-        national_agg = (sum_weighted / sum_m_mt.replace(0, np.nan)).fillna(0).reset_index(name=f'phi_t_{spec_name}')
+        national_agg = (sum_weighted / sum_m_mt.replace(0, np.nan)).fillna(0).reset_index(name=f'phi_t_{key}')
         phi_results[spec_name] = national_agg
         
     return df, phi_results

@@ -118,15 +118,18 @@ def _build_phi_X(df: pd.DataFrame, phi_params) -> np.ndarray:
 # ==============================================================================
 # Generic link NLLS  (Est4 uniform, Est5 probit; also used for Est6's direction)
 # ==============================================================================
-def _nlls_resid(params, y_dm, X, Z, CF, entity_idx, link):
+def _nlls_resid(params, y_dm, X, Z, CF, entity_idx, link, ecounts=None, tinv=None, tcounts=None):
     K = X.shape[1]
     phi = link_cdf(X @ params[:K], link)
     yhat = phi * Z
     if CF.shape[1] > 0:
         yhat = yhat + CF @ params[K:]
-    sums = np.bincount(entity_idx, weights=yhat)
-    counts = np.bincount(entity_idx)
-    yhat_dm = yhat - (sums / counts)[entity_idx]
+    if tinv is None:
+        sums = np.bincount(entity_idx, weights=yhat)
+        cnt = np.bincount(entity_idx)
+        yhat_dm = yhat - (sums / cnt)[entity_idx]
+    else:                                   # two-way (entity + time) FE
+        yhat_dm = _twoway_demean(yhat, entity_idx, ecounts, tinv, tcounts)
     return y_dm - yhat_dm
 
 
@@ -195,9 +198,11 @@ def _linear_warm_start(y_dm, X, Z, CF):
         return np.zeros(X.shape[1] + CF.shape[1])
 
 
-def fit_nlls_link(df, state_cols, has_cf, link, loss="cauchy"):
+def fit_nlls_link(df, state_cols, has_cf, link, loss="cauchy", fe_time_col=None):
     """NLLS sleepiness fit with link in {'logit','probit','uniform'}. Returns a
-    NonLinearResults (params = AMEs for tables; params_native = index coefs for phi)."""
+    NonLinearResults (params = AMEs for tables; params_native = index coefs for phi).
+    fe_time_col (e.g. 'time_id') adds a second additive FE => two-way (entity+time)
+    concentration; None reproduces the entity-only within estimator exactly."""
     CF_cols = ["v_hat_x_lagged_dep"] if has_cf else []
     cols = state_cols + ["deposit_balance", "nr_lagged_dep", "entity_id"]
     df_ss = df.dropna(subset=cols + CF_cols).copy()
@@ -207,7 +212,14 @@ def fit_nlls_link(df, state_cols, has_cf, link, loss="cauchy"):
     entities = df_ss["entity_id"].unique()
     emap = {e: i for i, e in enumerate(entities)}
     entity_idx = df_ss["entity_id"].map(emap).values
-    y_dm = _demean_col(df_ss, "deposit_balance")
+    ecounts = np.bincount(entity_idx).astype(float)
+    if fe_time_col is not None:
+        _, tinv = np.unique(df_ss[fe_time_col].values, return_inverse=True)
+        tcounts = np.bincount(tinv).astype(float)
+    else:
+        tinv = tcounts = None
+    y_raw = df_ss["deposit_balance"].values.astype(float)
+    y_dm = _twoway_demean(y_raw, entity_idx, ecounts, tinv, tcounts)
     X = df_ss[state_cols].values.astype(float)
     Z = df_ss["nr_lagged_dep"].values.astype(float)
     CF = df_ss[CF_cols].values.astype(float) if has_cf else np.empty((len(df_ss), 0), dtype=float)
@@ -218,7 +230,8 @@ def fit_nlls_link(df, state_cols, has_cf, link, loss="cauchy"):
     else:
         init = np.zeros(K + G)
 
-    res_lsq = least_squares(_nlls_resid, init, args=(y_dm, X, Z, CF, entity_idx, link),
+    res_lsq = least_squares(_nlls_resid, init,
+                            args=(y_dm, X, Z, CF, entity_idx, link, ecounts, tinv, tcounts),
                             method="trf", loss=loss)
     idx = [f"interaction_{sv}" if sv != "constant" else "nr_lagged_dep" for sv in state_cols] + CF_cols
 
@@ -271,11 +284,13 @@ def pava_increasing(y, w=None):
     return out
 
 
-def fit_single_index(df, state_cols, has_cf, logit_res, degree=3, phi_band=False):
+def fit_single_index(df, state_cols, has_cf, logit_res, degree=3, phi_band=False,
+                     fe_time_col=None):
     """Smooth cubic-sieve monotone single index in the logit-direction index.
     Returns NonLinearResults carrying average-derivative AMEs (params; tables),
     the index direction (params_native = logit native coefs), and the sieve
-    params si_b/si_vmu/si_vsd (used by phi_from_native for Est6's phi)."""
+    params si_b/si_vmu/si_vsd (used by phi_from_native for Est6's phi).
+    fe_time_col adds a second additive FE (two-way entity+time concentration)."""
     phi_params = [p for p in logit_res.params.index if not str(p).startswith("v_hat")]
     theta = logit_res.params_native[phi_params].values.astype(float)
 
@@ -302,12 +317,18 @@ def fit_single_index(df, state_cols, has_cf, logit_res, degree=3, phi_band=False
     if has_cf:
         work["_cf"] = df_ss["v_hat_x_lagged_dep"].values
         design = cols_p + ["_cf"]
-    y_dm = work["_y"] - work.groupby("entity_id")["_y"].transform("mean")
-    Xdm = work[design] - work.groupby("entity_id")[design].transform("mean")
+    _, einv = np.unique(df_ss["entity_id"].values, return_inverse=True)
+    ecounts = np.bincount(einv).astype(float)
+    if fe_time_col is not None:
+        _, tinv = np.unique(df_ss[fe_time_col].values, return_inverse=True)
+        tcounts = np.bincount(tinv).astype(float)
+    else:
+        tinv = tcounts = None
+    y_dm = _twoway_demean(work["_y"].values.astype(float), einv, ecounts, tinv, tcounts)
+    Xdm_arr = _twoway_demean(work[design].values.astype(float), einv, ecounts, tinv, tcounts)
 
     cl = df_ss["CodConglomeradoPrudencial"].astype(str)
-    Xdm_arr = Xdm.values.astype(float)
-    res = sm.OLS(y_dm.values, Xdm_arr).fit()
+    res = sm.OLS(y_dm, Xdm_arr).fit()
     b_full = np.asarray(res.params, float)
     b = b_full[:degree + 1]
     G_star, G_nominal = _G_star(cl)
@@ -338,7 +359,7 @@ def fit_single_index(df, state_cols, has_cf, logit_res, degree=3, phi_band=False
     bse, pv = ols_sieve_wild_bootstrap(Xdm_arr, np.asarray(res.resid, float),
                                        cl_inv, n_cl, b_full, _ame_fn, ame)
     ps = pd.Series(ame); bs = pd.Series(bse); pvs = pd.Series(pv)
-    tss = float(np.sum((y_dm.values - y_dm.values.mean()) ** 2))
+    tss = float(np.sum((y_dm - y_dm.mean()) ** 2))
     rss = float(np.sum(res.resid ** 2))
     rsq = 1 - rss / tss if tss > 0 else getattr(res, "rsquared", np.nan)
     B_used, scheme_used = boot_cfg()
@@ -426,6 +447,28 @@ def _fast_demean(M, entity_idx, counts):
     return out
 
 
+def _twoway_demean(M, einv, ecounts, tinv, tcounts, n_iter=15, tol=1e-9):
+    """Two-way (entity + time) additive FE removal by alternating projections
+    (Gaure 2013). Concentrates out D = ... + alpha_i + delta_t exactly in the
+    least-squares sense. Reduces to one-way entity demeaning when tinv is None."""
+    M = np.asarray(M, float)
+    if tinv is None:
+        return _fast_demean(M, einv, ecounts)
+    one_d = M.ndim == 1
+    X = (M.reshape(-1, 1) if one_d else M).astype(float, copy=True)
+    for _ in range(n_iter):
+        prev = X.copy()
+        for j in range(X.shape[1]):          # entity sweep
+            s = np.bincount(einv, weights=X[:, j], minlength=len(ecounts))
+            X[:, j] -= (s / ecounts)[einv]
+        for j in range(X.shape[1]):          # time sweep
+            s = np.bincount(tinv, weights=X[:, j], minlength=len(tcounts))
+            X[:, j] -= (s / tcounts)[tinv]
+        if np.max(np.abs(X - prev)) < tol:
+            break
+    return X.ravel() if one_d else X
+
+
 def _bspline_design(v, n_interior, degree=3):
     """Cubic B-spline design at interior knots placed on quantiles of v.
     Returns (B [n x K], knots). Monotone G = sum_k c_k B_k(v) iff c is nondecreasing."""
@@ -455,17 +498,18 @@ def _ramp_design(v, t, degree=3):
     return R
 
 
-def _fit_link_sieve(R, Z, cf_dm, y_dm, einv, counts, w=None):
+def _fit_link_sieve(R, Z, cf_dm, y_dm, einv, counts, w=None, dm=None):
     """Profiled monotone sieve link given the index. Design = [R_j*Z]_j (+ CF),
     entity-demeaned; coefficients beta_j >= 0 (monotone, floor at beta_1), gamma free.
     Solved by bounds-constrained LS (fast). Returns (beta, gamma, resid, ssr, c)
-    where c = cumsum(beta) are the B-spline coefficients of G."""
+    where c = cumsum(beta) are the B-spline coefficients of G. `dm`, if given, is a
+    demeaner callable (e.g. two-way entity+time FE) used in place of entity demeaning."""
     from scipy.optimize import lsq_linear
     K = R.shape[1]
     Rz = R * Z[:, None]
     cols = [Rz] + ([cf_dm[:, None]] if cf_dm is not None else [])
     X = np.column_stack(cols)
-    Xdm = _fast_demean(X, einv, counts)
+    Xdm = dm(X) if dm is not None else _fast_demean(X, einv, counts)
     sw = np.ones(len(y_dm)) if w is None else np.sqrt(np.maximum(w, 0.0))
     p = X.shape[1]
     lb = np.r_[np.zeros(K), np.full(p - K, -np.inf)]
@@ -604,7 +648,7 @@ def _fit_link_kernel(v, Z, cf_dm, y_dm, einv, counts, bw, grid, wts=None,
 def fit_joint_single_index(df, state_cols, has_cf, link="sieve", loss="ls",
                            n_interior=5, degree=3, n_starts=4, init_theta=None,
                            boot_B=199, boot_scheme="rademacher", seed=0, label="",
-                           phi_band=False):
+                           phi_band=False, fe_time_col=None, theta_fixed=None):
     """Joint single-index sleepiness by Ichimura (1993) SLS: estimate the index
     direction theta (||theta||=1) and the link G TOGETHER.
       link='sieve'  (Est7): monotone cubic I-spline ramps, nonneg coefs (shape
@@ -618,6 +662,8 @@ def fit_joint_single_index(df, state_cols, has_cf, link="sieve", loss="ls",
     params, a stored monotone link grid (si_vgrid/si_ggrid), bootstrap SEs/pvalues,
     and link in {'sieve','kernel'}."""
     from scipy.interpolate import BSpline
+    if fe_time_col is not None and link == "kernel":
+        raise NotImplementedError("two-way FE (fe_time_col) is wired for the sieve link only")
     rng = np.random.default_rng(seed)
     CF_cols = ["v_hat_x_lagged_dep"] if has_cf else []
     cols = state_cols + ["deposit_balance", "nr_lagged_dep", "entity_id"]
@@ -638,8 +684,16 @@ def fit_joint_single_index(df, state_cols, has_cf, link="sieve", loss="ls",
     counts = np.bincount(einv).astype(float)
     cl_u, cl_inv = np.unique(cl, return_inverse=True)
     n_cl = len(cl_u)
-    y_dm = _fast_demean(y, einv, counts)
-    cf_dm = _fast_demean(cf, einv, counts) if has_cf else None
+    # Optional second additive FE (e.g. time): two-way concentration via alternating
+    # projections. fe_time_col=None reproduces the entity-only within estimator exactly.
+    if fe_time_col is not None:
+        _, tinv = np.unique(df_ss[fe_time_col].values, return_inverse=True)
+        tcounts = np.bincount(tinv).astype(float)
+        demean = lambda M: _twoway_demean(M, einv, counts, tinv, tcounts)
+    else:
+        demean = lambda M: _fast_demean(M, einv, counts)
+    y_dm = demean(y)
+    cf_dm = demean(cf) if has_cf else None
     d = Sn.shape[1]
 
     def _cauchy_obj(resid):
@@ -688,11 +742,11 @@ def fit_joint_single_index(df, state_cols, has_cf, link="sieve", loss="ls",
         w = None
         if loss == "robust":
             for _ in range(2):  # a couple of IRLS passes
-                beta, gamma, resid, ssr, c = _fit_link_sieve(R, Z, cf_dm, y_dm, einv, counts, w)
+                beta, gamma, resid, ssr, c = _fit_link_sieve(R, Z, cf_dm, y_dm, einv, counts, w, dm=demean)
                 w = _cauchy_weights(resid)
             obj = _cauchy_obj(resid)
         else:
-            beta, gamma, resid, ssr, c = _fit_link_sieve(R, Z, cf_dm, y_dm, einv, counts, None)
+            beta, gamma, resid, ssr, c = _fit_link_sieve(R, Z, cf_dm, y_dm, einv, counts, None, dm=demean)
             obj = ssr
         if not want_grid:
             return obj
@@ -730,13 +784,21 @@ def fit_joint_single_index(df, state_cols, has_cf, link="sieve", loss="ls",
     # cap the kernel search HARD: the logit warm-start is already a strong index
     # direction, so a few dozen refinement steps suffice (vs the sieve's full search).
     _maxit = (20 * d if link == "kernel" else 300 * d)
-    best = None
-    for s0 in starts:
-        res = minimize(_obj, s0, method="Nelder-Mead",
-                       options={"maxiter": _maxit, "xatol": 1e-3, "fatol": 1e-5})
-        if best is None or res.fun < best[0]:
-            best = (res.fun, res.x)
-    theta_hat = best[1] / (np.linalg.norm(best[1]) + 1e-12)
+    if theta_fixed is not None:
+        # The index direction was found externally (e.g. the Julia engine on a
+        # subsample). Skip the expensive Python multistart; just refit the link
+        # and run the tail (AMEs, bootstrap, phi grid) on the FULL sample. theta
+        # is in the standardised Sn frame (same S_mu/S_sd as here).
+        tf = np.asarray(theta_fixed, float)
+        theta_hat = tf / (np.linalg.norm(tf) + 1e-12)
+    else:
+        best = None
+        for s0 in starts:
+            res = minimize(_obj, s0, method="Nelder-Mead",
+                           options={"maxiter": _maxit, "xatol": 1e-3, "fatol": 1e-5})
+            if best is None or res.fun < best[0]:
+                best = (res.fun, res.x)
+        theta_hat = best[1] / (np.linalg.norm(best[1]) + 1e-12)
     obj, v, vgrid, ggrid, gpgrid, resid = _fit_link(theta_hat, want_grid=True)
 
     def _ames(theta):
@@ -751,7 +813,7 @@ def fit_joint_single_index(df, state_cols, has_cf, link="sieve", loss="ls",
     # ---- score/multiplier wild cluster bootstrap on theta -> AMEs ----
     gp_obs = np.interp(v, vgrid, gpgrid)
     gS = (gp_obs * Z)[:, None] * Sn               # N x d  (d/dtheta of G(v)Z)
-    gS_dm = _fast_demean(gS, einv, counts)
+    gS_dm = demean(gS)
     Minv = np.linalg.pinv(gS_dm.T @ gS_dm)
     IF = (resid[:, None] * gS_dm) @ Minv.T         # N x d influence functions for theta
     IF = IF - np.outer(IF @ theta_hat, theta_hat)  # project to the sphere tangent

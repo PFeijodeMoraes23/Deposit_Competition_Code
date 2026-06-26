@@ -124,7 +124,7 @@ can't shadow rebuilds"). We do NOT use the static `DEMAND_PREFIXES` dict — its
 entries are stale after the 2026-06-24 relabel to the 8-routine scheme:
   E1 LocalB · E2 PooledLinear · E3 Logistic · E4 Logistic+Time ·
   E5 Single-Index · E6 Single-Index+Time (headline) · E7 Joint · E8 Joint+Time.
-The cluster default / +Time headline set is {4, 6, 8}.
+The cluster default set is {5, 6, 7, 8} (single-index links + their +Time variants).
 """
 function discover_demand_parquet(input_dir::String, estim::Int, spec_id::Int)::String
     pat = Regex("^demand_$(estim)_.*spec_$(spec_id)\\.parquet\$")

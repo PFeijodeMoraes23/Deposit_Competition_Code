@@ -47,6 +47,22 @@ LINK_OF = {"logit": "logit", "single_index": "index",
 
 _IV_ORDER = ["OLS", "IV_CostShifters", "IV_Wholesale", "IV_HausmanFull"]
 
+# Two-way fixed effects: the sleepiness model now carries BOTH an entity FE
+# (bank x deposit-type x market) and a quarter time FE (time_id). The time FE
+# absorbs aggregate time shocks additively, outside the link. Set to None to
+# fall back to the entity-only within estimator.
+FE_TIME_COL = "time_id"
+
+# Opt 1/4: route the joint-sieve theta-search through the Julia engine on a
+# subsample of entities (the link/phi/inference stay exact on full N in Python).
+# All env-overridable; USE_JULIA_SIEVE=0 falls back to the pure-Python search.
+USE_JULIA_SIEVE = os.environ.get("USE_JULIA_SIEVE", "1") != "0"
+SUBSAMPLE_FRAC = float(os.environ.get("SLEEP_SUBSAMPLE_FRAC", "0.2"))
+MAXITER_MULT = int(os.environ.get("SLEEP_MAXITER_MULT", "40"))
+JULIA_THREADS = int(os.environ.get("SLEEP_JULIA_THREADS", "2"))
+# Opt 8: drop the LS loss during the grid (robust feeds phi). Set DROP_LS=0 to keep it.
+DROP_LS = os.environ.get("SLEEP_DROP_LS", "1") != "0"
+
 
 def _out_dir(est_num):
     d = _paths_mod.PROCESSED / "ESTIMATION_OUTPUT" / "DEMAND_PREP" / f"est{est_num}"
@@ -63,9 +79,13 @@ def _init_theta(logit_res, s_cols):
 
 
 def _exec_spec(args):
-    df, iv_name, iv_cols, s_name, s_cols, kind = args
+    df, iv_name, iv_cols, s_name, s_cols, kind = args[:6]
+    warm_theta = args[6] if len(args) > 6 else None   # opt 9: cross-spec warm start (native theta)
     has_cf = len(iv_cols) > 0
     spec_name = f"{iv_name} x {s_name}"
+    # The single-index/joint-sieve link comparison in the time-series report uses spec 12
+    # (IV_HausmanFull x Tech); compute its national phi_t CI band in the main routine.
+    is_spec12 = (iv_name == "IV_HausmanFull" and s_name == "Tech")
     df_target, res_fs = df, None
     if has_cf:
         iv_act = [c for c in iv_cols if c in df_target.columns and df_target[c].notnull().sum() > 0]
@@ -75,30 +95,81 @@ def _exec_spec(args):
         df_target, res_fs = run_pooled_first_stage(df_target, iv_act, exog_act)
 
     if kind == "logit":
-        res = fit_nlls_link(df_target, s_cols, has_cf=has_cf, link="logit", loss="cauchy")
+        res = fit_nlls_link(df_target, s_cols, has_cf=has_cf, link="logit", loss="cauchy",
+                            fe_time_col=FE_TIME_COL)
         return res, None, spec_name, res_fs
 
     if kind == "single_index":
-        logit_res = fit_nlls_link(df_target, s_cols, has_cf=has_cf, link="logit", loss="cauchy")
-        res = fit_single_index(df_target, s_cols, has_cf=has_cf, logit_res=logit_res, degree=3)
+        logit_res = fit_nlls_link(df_target, s_cols, has_cf=has_cf, link="logit", loss="cauchy",
+                                  fe_time_col=FE_TIME_COL)
+        res = fit_single_index(df_target, s_cols, has_cf=has_cf, logit_res=logit_res, degree=3,
+                               fe_time_col=FE_TIME_COL, phi_band=is_spec12)
         return res, None, spec_name, res_fs
 
     if kind in ("joint_sieve", "joint_kernel"):
         link = "sieve" if kind == "joint_sieve" else "kernel"
-        logit_res = fit_nlls_link(df_target, s_cols, has_cf=has_cf, link="logit", loss="cauchy")
+        fe_tc = FE_TIME_COL if link == "sieve" else None   # kernel two-way FE not yet wired
+        logit_res = fit_nlls_link(df_target, s_cols, has_cf=has_cf, link="logit", loss="cauchy",
+                                  fe_time_col=fe_tc)
         init = _init_theta(logit_res, s_cols)
         n_starts = 1 if link == "kernel" else 2   # kernel: multistart impractical at full N
+        warm = init if warm_theta is None else warm_theta   # opt 9: cross-spec warm start
+        # Opt 1+4: Julia subsample theta-search for the sieve (kernel stays Python).
+        theta_jl = None
+        if link == "sieve" and USE_JULIA_SIEVE:
+            try:
+                from sleep_joint_julia import julia_theta
+                theta_jl = julia_theta(df_target, s_cols, has_cf=has_cf, loss="robust", fe_time_col=fe_tc,
+                                       subsample_frac=SUBSAMPLE_FRAC, maxiter_mult=MAXITER_MULT,
+                                       init_theta=warm, seed=0, threads=JULIA_THREADS)
+            except Exception as e:
+                print(f"  [julia_theta] error, Python fallback: {e}")
+                theta_jl = None
         res_robust = fit_joint_single_index(df_target, s_cols, has_cf=has_cf, link=link,
-                                            loss="robust", init_theta=init, n_starts=n_starts,
+                                            loss="robust", init_theta=warm,
+                                            n_starts=n_starts, boot_B=999, boot_scheme="webb", seed=0,
+                                            label=f"{spec_name}/robust", fe_time_col=fe_tc,
+                                            theta_fixed=theta_jl, phi_band=is_spec12)
+        # Opt 8: drop the LS loss during the grid (robust feeds phi).
+        if DROP_LS:
+            res_ls = None
+        else:
+            res_ls = fit_joint_single_index(df_target, s_cols, has_cf=has_cf, link=link,
+                                            loss="ls", init_theta=warm, n_starts=n_starts,
                                             boot_B=999, boot_scheme="webb", seed=0,
-                                            label=f"{spec_name}/robust")
-        res_ls = fit_joint_single_index(df_target, s_cols, has_cf=has_cf, link=link,
-                                        loss="ls", init_theta=init, n_starts=n_starts,
-                                        boot_B=999, boot_scheme="webb", seed=0,
-                                        label=f"{spec_name}/ls")
+                                            label=f"{spec_name}/ls", fe_time_col=fe_tc)
         return res_robust, res_ls, spec_name, res_fs
 
     raise ValueError(f"unknown kind {kind!r}")
+
+
+def _warm_from(res, s_cols):
+    """Extract the native theta from a joint/single-index result as a warm start for
+    the next spec in the same state block (same index regressors)."""
+    if res is None or not hasattr(res, "params_native"):
+        return None
+    nat = res.params_native
+    idx_cols = [c for c in s_cols if c != "constant"]
+    arr = np.array([float(nat.get(f"interaction_{sv}", 0.0)) for sv in idx_cols], float)
+    return arr if np.isfinite(arr).all() and np.linalg.norm(arr) > 0 else None
+
+
+def _exec_block(block_args):
+    """Run the 4 instrument specs of ONE state block sequentially, warm-starting each
+    joint/single-index fit from the previous spec's theta (opt 9). Blocks run in
+    parallel (opt 3), so warm-start stays within a block where the index is shared."""
+    df, s_name, s_cols, kind, iv_specs = block_args
+    df = df.copy()      # thread-local copy (run_pooled_first_stage adds v_hat columns in place)
+    out, warm = [], None
+    for iv in _IV_ORDER:
+        res_main, res_ls, spec_name, res_fs = _exec_spec(
+            (df, iv, iv_specs[iv], s_name, s_cols, kind, warm))
+        out.append((res_main, res_ls, spec_name, res_fs))
+        if kind in ("joint_sieve", "single_index"):
+            w = _warm_from(res_main, s_cols)
+            if w is not None:
+                warm = w
+    return out
 
 
 def _calculate_phis(df, results_dict, link):
@@ -129,17 +200,26 @@ def run_sleep_estimator(est_num, kind, time_block=False, spec12_only=False, n_jo
     _, iv_specs, state_blocks = define_specifications(time_block=time_block)
 
     if spec12_only:
-        tasks = [(df, "IV_HausmanFull", iv_specs["IV_HausmanFull"], "Tech", state_blocks["Tech"], kind)]
+        results = [_exec_spec(
+            (df, "IV_HausmanFull", iv_specs["IV_HausmanFull"], "Tech", state_blocks["Tech"], kind, None))]
     else:
-        tasks = [(df, iv, iv_specs[iv], s, state_blocks[s], kind)
-                 for s in state_blocks.keys() for iv in _IV_ORDER]
-
-    if len(tasks) == 1:
-        results = [_exec_spec(tasks[0])]
-    else:
-        from joblib import Parallel, delayed
-        nw = max(1, (os.cpu_count() or 4) // max(1, int(os.environ.get("SLEEP_PIPELINE_NSLOTS", "1"))))
-        results = Parallel(n_jobs=min(n_jobs, nw))(delayed(_exec_spec)(t) for t in tasks)
+        # Opt 3+9: parallelise over the 3 state blocks; within each block the 4 instrument
+        # specs run sequentially with a cross-spec theta warm start. With JULIA_THREADS=2
+        # this packs the ~6 fast cores (3 blocks x 2 threads).
+        block_tasks = [(df, s, state_blocks[s], kind, iv_specs) for s in state_blocks.keys()]
+        # Default SEQUENTIAL: concurrent statsmodels/scipy/numpy calls across threads
+        # segfault (0xC0000005) on this stack, and the loky/process backend pickles the
+        # 400k-row df (WinError 1450). Sequential is the safe default; the per-fit Julia
+        # + sysimage + subsample optimizations keep it fast. SLEEP_BLOCK_JOBS>1 opts into
+        # the (risky) threading backend.
+        nblk = int(os.environ.get("SLEEP_BLOCK_JOBS", "1"))
+        if nblk <= 1:
+            block_results = [_exec_block(bt) for bt in block_tasks]
+        else:
+            from joblib import Parallel, delayed
+            block_results = Parallel(n_jobs=min(nblk, len(block_tasks)), backend="threading")(
+                delayed(_exec_block)(bt) for bt in block_tasks)
+        results = [r for block in block_results for r in block]
 
     results_dict = {}
     for res_main, res_ls, spec_name, res_fs in results:
@@ -153,6 +233,19 @@ def run_sleep_estimator(est_num, kind, time_block=False, spec12_only=False, n_jo
     out = _out_dir(est_num)
     with open(out / "estimation_results.pkl", "wb") as f:
         pickle.dump(results_dict, f)
+
+    # Integrate the time-series report's link-comparison CI band into the main routine:
+    # the spec-12 single-index/joint-sieve fit carries a national phi_t bootstrap band
+    # (phi_t_boot); persist it where estimation_timeseries_test._link_band reads it.
+    if kind in ("single_index", "joint_sieve"):
+        sp12 = results_dict.get("IV_HausmanFull x Tech", {}).get("second_stage")
+        boot = getattr(sp12, "phi_t_boot", None) if sp12 is not None else None
+        if boot is not None:
+            rout = _paths_mod.PROCESSED / "ESTIMATION_OUTPUT" / "Rout"
+            rout.mkdir(parents=True, exist_ok=True)
+            with open(rout / f"ts_link_band_est{est_num}.pkl", "wb") as f:
+                pickle.dump(boot, f)
+            print(f"Saved spec-12 phi_t CI band -> ts_link_band_est{est_num}.pkl")
 
     df["year_quarter"] = df["time_id"]
     df, national_phis = _calculate_phis(df, results_dict, LINK_OF[kind])

@@ -168,13 +168,120 @@ def fig_links(path, bands=True, refit=False):
 
 def build(bands=True, refit=False):
     L = ["# Sleepiness report — time block (E3/E4, E5/E6, E7/E8) and single-index links", ""]
-    L += ["With the estimator relineup, the **time block** (`time_trend` = years since the sample "
-          "start; `gdp_growth_yoy` = within-entity YoY growth of GDP per capita, both interacted with "
-          "$\\widetilde D_{t-1}$ and added to every state block) defines first-class **+Time** "
-          "estimators, so the old \"does $\\phi$ carry an unmodelled time component?\" test is now the "
-          "**Base vs +Time** comparison of three paired estimators:", "",
+    L += ["This report documents the **sleepiness estimation routines** (E1–E8), their estimation "
+          "logic, and the **two-way fixed-effects** structural change. The methodology in the next "
+          "four sections reflects the **current** specification (additive entity + quarter FE). "
+          "*The $\\hat\\phi_t$ figures and AME tables below reflect the completed **two-way "
+          "fixed-effects** run (E1–E8; additive entity + quarter FE); the single-index link "
+          "comparison carries 95% score/multiplier wild-cluster-bootstrap CI bands (computed in the "
+          "main estimation routine for spec 12).*", "",
+          "Under the relineup the **+Time** estimators (E4/E6/E8) now append only `gdp_growth_yoy` to "
+          "the index — the pure-time `time_trend` was dropped because it is collinear with the quarter "
+          "fixed effect — so the **Base vs +Time** pairs are:", "",
           "| Pair | Base | +Time |", "|---|---|---|",
           "| Logit | E3 | **E4** |", "| Single-Index | E5 | **E6** |", "| Joint sieve | E7 | **E8** |", ""]
+
+    # =====================  METHODOLOGY  =====================
+    L += [
+      "## Estimation framework", "",
+      "The sleepiness function $\\phi_{mt}=\\phi(\\mathbf S_{mt})\\in[0,1]$ is the share of "
+      "depositors in market $m$ at quarter $t$ who do **not** re-optimize ('asleep'), so their "
+      "balances carry forward; it is identified from the autocorrelation of deposits. Writing "
+      "$\\widetilde D_{jkmt-1}=(1+r_{t-1}-\\rho_{jkmt-1})\\,\\mathrm{Dep}^{\\mathrm B}_{jkmt-1}$ for "
+      "the interest-accrued lagged stock (the **carry term** $Z$, `nr_lagged_dep`), the structural "
+      "deposit equation (V\\_Main eq. 13) is", "",
+      "$$\\mathrm{Dep}^{\\mathrm B}_{jkmt} = \\phi(\\mathbf S_{mt})\\,\\widetilde D_{jkmt-1} "
+      "+ H(\\hat v_{jkmt},\\mathrm{Dep}_{jkmt-1}) + \\alpha_{jkm} + \\delta_t + u_{jkmt},$$", "",
+      "with $\\phi(\\mathbf S)=G(\\mathbf S'\\theta)$ for a link $G$. The pieces:", "",
+      "- **Carry term $Z=\\widetilde D_{t-1}$** — $\\phi$ loads on it (high $\\phi$ = sticky deposits).",
+      "- **Control function $H$** (`v_hat_x_lagged_dep`). OLS of eq. 13 is biased because lagged "
+      "deposits co-move with omitted active demand (vertical differentiation). A first stage "
+      "regresses spreads on cost-shifter instruments $\\mathbf Z^{\\mathrm{Sleep}}$ (eq. 12); the "
+      "residual $\\hat v$ — the **latent demand** — interacted with the lagged stock enters the "
+      "second stage and purges the bias transmitted through $\\rho_{t-1}$ (Newey–Powell–Vella 1999).",
+      "- **Fixed effects $\\alpha_{jkm}+\\delta_t$** — see the next section.",
+      "- **State vector $\\mathbf S$** — a constant, `pix_exists`, and (by specification) GDP per "
+      "capita, CadÚnico family density, age structure, the lagged risk-free rate and broadband "
+      "connections; spec 12 (the BLP input) is the 'Tech' block under the Hausman-style instruments.", "",
+      "National sleepiness is the population-weighted average "
+      "$\\hat\\phi_t=\\sum_m M_{mt}\\hat\\phi_{mt}/M_t$.", "",
+      "## Fixed effects: the two-way change", "",
+      "**What changed.** Eq. 13 originally carried only **bank $\\times$ type $\\times$ market** "
+      "effects $\\alpha_{jkm}$ — a purely cross-sectional unit effect (12{,}255 entities, each "
+      "spanning about 36 of 51 quarters, *no time dimension*). We add a **quarter** fixed effect "
+      "$\\delta_t$, giving an **additive two-way** structure $\\alpha_{jkm}+\\delta_t$ across all E1–E8.", "",
+      "**Why.** The control function removes the endogeneity transmitted through $\\rho_{t-1}$; the "
+      "fixed effects 'absorb all remaining bias entering through $\\mathrm{Dep}_{t-1}$' (V\\_Main line "
+      "390) — i.e. the latent demand $v$. The entity FE absorb its time-invariant, cross-sectional "
+      "part; but if $v$ has a **time-varying aggregate** component correlated with lagged deposits "
+      "(the 2020 COVID deposit surge is exactly such a shock), the entity FE miss it and OVB remains. "
+      "$\\delta_t$ absorbs it — the same OVB/latent-demand argument, now on the **time** margin.", "",
+      "**How — and why not just demean $\\mathbf S$.** The FE are **additive, outside the link, and "
+      "not interacted with $\\widetilde D_{t-1}$**. For a nonlinear link one **cannot** remove them by "
+      "demeaning the state space, since $G(\\mathbf S-\\bar{\\mathbf S})\\neq G(\\mathbf S)-"
+      "\\overline{G(\\mathbf S)}$ (Frisch–Waugh–Lovell holds only for the linear model). Instead we "
+      "apply the link to the **raw** $\\mathbf S$, form the additive prediction "
+      "$G(\\mathbf S'\\theta)\\,Z+H$, and concentrate out $\\alpha_{jkm}+\\delta_t$ by "
+      "**within-demeaning the prediction (and the outcome)** — two-way via alternating projections "
+      "(Gaure 2013). Because the FE enter additively and are *differenced out* (not estimated by "
+      "nonlinear MLE), there is **no incidental-parameters bias**; the wild cluster bootstrap inherits "
+      "the two-way transform automatically (through the demeaned residual/Jacobian).", "",
+      "**Index regressors under the time FE.** With $\\delta_t$ absorbing aggregate time, `time_trend` "
+      "(a pure-time ramp, zero within-quarter variation) is collinear with the quarter FE and is "
+      "**dropped**; the '+Time' block reduces to `gdp_growth_yoy` (a genuine entity-time covariate). "
+      "`pix_exists` is **kept** as the Pix treatment. Empirically the two-way FE **flattens** "
+      "$\\hat\\phi_t$ — this is the **bias correction**: the aggregate variation it removes (notably "
+      "the post-2020 climb toward the ceiling) was time-varying latent demand previously misattributed "
+      "to rising sleepiness. The logit (E3/E4) still saturates regardless — that is a functional-form "
+      "pathology of the unbounded index, orthogonal to the FE, so the bounded **E7** is canonical.", "",
+      "## Estimation routines (E1–E8)", "",
+      "All share eq. 13, the control function, the two-way FE and the wild-cluster-bootstrap "
+      "inference; they differ in the **functional form of $\\phi$**, the **data coverage** and the "
+      "**estimation method**. The **robust (Cauchy)** fit feeds $\\phi$; a plain-LS variant is "
+      "reported alongside.", "",
+      "- **E1 — Local-linear** (`estimation_1_sleep.py`). Linear "
+      "$\\phi=\\boldsymbol\\Upsilon'\\mathbf S$, **B-firms only** (digital banks excluded). Two-way "
+      "within-OLS of the demeaned interacted design $[\\,S_k\\widetilde D_{t-1}\\,]_k$ on demeaned "
+      "deposits; cluster-robust (bank) SE with the Carter–Schnepel–Steigerwald imbalance correction. "
+      "Unconstrained, so $\\phi$ may exit $[0,1]$.",
+      "- **E2 — Pooled-linear** (`estimation_2_sleep.py`). As E1 but **pooled** over B and D firms; "
+      "hosts the shared data build.",
+      "- **E3 — Logit.** $\\phi=\\Lambda(\\mathbf S'\\theta)$, bounded by construction. Estimated by "
+      "**nonlinear least squares** (trust-region, Cauchy loss) on the two-way-demeaned residual "
+      "$D-\\Lambda(\\mathbf S'\\theta)Z-\\gamma(\\hat vZ)$; analytic AMEs, wild-cluster-bootstrap SE.",
+      "- **E4 — Logit + Time.** E3 with `gdp_growth_yoy` appended to the index.",
+      "- **E5 — Single-Index.** $\\phi=G(\\mathbf S'\\theta)$ with a **monotone cubic B-spline "
+      "(sieve)** link. The index **direction $\\theta$ is taken from the logit** (E3); $G$ is then fit "
+      "by OLS of the two-way-demeaned $[\\,B_d(\\mathbf S'\\theta)\\,\\widetilde D_{t-1}\\,]$ basis, "
+      "with the average-derivative AME read off the spline. Bounded and smooth, but inference is "
+      "conditional on $\\theta$.",
+      "- **E6 — Single-Index + Time.** E5 with `gdp_growth_yoy`.",
+      "- **E7 — Joint sieve.** Ichimura (1993) **semiparametric least squares**: estimate the index "
+      "direction $\\theta$ ($\\lVert\\theta\\rVert=1$) **and** the link $G$ **jointly**, minimizing "
+      "the two-way-demeaned SSR with $G$ profiled out at each $\\theta$. $G$ is a **monotone I-spline** "
+      "(cumulative cubic B-spline ramps with non-negative coefficients — monotone and in $[0,1]$ by "
+      "construction; Ramsay 1988). The $\\theta$-search is Nelder–Mead (1965) multistart over the unit sphere "
+      "(warm-started from the logit direction); each evaluation re-fits the profiled link by "
+      "bounded-variable least squares. This removes all three single-index caveats (direction "
+      "consistency, fixed-degree link, SEs that ignore $\\hat\\theta$) and is the **BLP-input** "
+      "estimator; SEs by score/multiplier wild cluster bootstrap on $\\theta\\to$AMEs.",
+      "- **E8 — Joint sieve + Time.** E7 with `gdp_growth_yoy`.",
+      "- *(E9 — Joint kernel: local-linear link, monotonised by rearrangement; deferred, not in the "
+      "default lineup.)*", "",
+      "## Computational implementation (Julia)", "",
+      "The two-way demean runs **per $\\theta$-evaluation** inside the joint sieve (E7/E8), making "
+      "those the wall-clock bottleneck. We moved the **$\\theta$-search only** to Julia "
+      "(`sleep_joint_sieve.jl`): Python keeps the data build, the first stage, the **final link refit "
+      "at $\\hat\\theta$** (with an exact demean), $\\phi$, AMEs and the bootstrap — Julia returns "
+      "$\\hat\\theta$. The hot loop is **allocation-free**: the profiled monotone-sieve BVLS is solved "
+      "from $K\\times K$ Gram cross-products (the control-function coefficient partialled out by FWL, "
+      "then Lawson–Hanson (1974) NNLS in the fast normal-equations form of Bro–De Jong (1997)), with "
+      "in-place two-way demeaning, a single "
+      "sorted buffer for the knot quantiles, and a buffered Cauchy median/MAD. A **subsample-$\\theta$** "
+      "step (estimate the low-dimensional direction on a fraction of entities, then refit the link on "
+      "the full sample) adds a further multiplicative speed-up. The Julia $\\theta$-search reproduces "
+      "the Python optimum (validated by direction cosine and an equal-or-lower SLS objective).", ""]
+    # =====================  END METHODOLOGY  =====================
 
     # ---- time-block coefficient table (E4/E6/E8) ----
     L += ["## Does the time block matter? (spec 12)", "",
@@ -204,6 +311,7 @@ def build(bands=True, refit=False):
             pb, pt = load_phi_t(eb), load_phi_t(et)
             L.append(f"**{name}** — Base (E{eb}) mean $\\hat\\phi_t$ = {pb['phi_t'].mean():.3f}; "
                      f"+Time (E{et}) mean = {pt['phi_t'].mean():.3f}.")
+            L.append("")
             L.append(f"![{name}: Base vs +Time]({png}){{width=85%}}")
             L.append("")
 
@@ -228,12 +336,86 @@ def build(bands=True, refit=False):
                  "for E9 prefer the LS link.*")
         L.append("")
 
-    L += ["## References", "",
-          "- Ichimura, H. (1993). Semiparametric least squares estimation of single-index models. "
-          "*J. Econometrics* 58: 71–120.",
-          "- Cameron, Gelbach & Miller (2008); MacKinnon & Webb (2017) — wild cluster bootstrap.",
-          "- Carter, Schnepel & Steigerwald (2017) — effective number of clusters.",
-          "- Chernozhukov, Fernández-Val & Galichon (2009) — rearrangement (kernel link).", ""]
+    L += ["## Average marginal effects (AME): implementation", "",
+          "Every AME table above (and in the per-estimator export tables) reports the sample-average "
+          "effect of a state variable on the sleepiness probability $\\phi=G(\\mathbf S'\\theta)$, "
+          "computed **analytically** and given inference by a **wild cluster bootstrap**. (This merges "
+          "and updates the old standalone AME notes.)", "",
+          "**The effects (analytical).** For each regressor $S_k$:", "",
+          "- **Dummies** (e.g. Pix): the exact discrete difference "
+          "$\\frac1n\\sum_i\\big[G(\\cdot,S_k{=}1)-G(\\cdot,S_k{=}0)\\big]$, bounded in $[-1,1]$.",
+          "- **Continuous regressors**: the exact derivative averaged, "
+          "$\\frac1n\\sum_i G'(\\mathbf S_i'\\theta)\\,\\theta_k$ — for the logit $G'=P(1-P)$; for the "
+          "single index $G'$ is the cubic-sieve / I-spline / kernel link slope (average-derivative AME).",
+          "",
+          "**The standard errors (wild cluster bootstrap).** The SE printed beside each AME is the SE "
+          "*of the AME itself*, not of the underlying index coefficients: the bootstrap perturbs the "
+          "cluster-summed influence functions of $\\hat\\theta$ and re-evaluates the AME map "
+          "$g(\\hat\\theta)$ on every draw, so the reported figure is the sampling standard deviation of "
+          "the average marginal effect (the average-derivative estimand for continuous regressors; "
+          "Powell, Stock & Stoker 1989; on computing marginal-effect SEs via delta method vs. bootstrap, "
+          "Dowd, Greene & Norton 2014). This supersedes the old "
+          "delta-method / numerical-Jacobian SEs ($\\mathrm{Cov}_{AME}\\approx J\\,\\mathrm{Cov}(\\hat"
+          "\\theta)\\,J'$ with a finite-difference $J$, which was NOT cluster-robust). Inference is now "
+          "a **score/multiplier wild cluster bootstrap** at the conglomerate level "
+          "(Cameron-Gelbach-Miller 2008; MacKinnon-Webb 2017): the cluster-summed influence functions "
+          "are perturbed by wild weights (Webb 6-point, $B=999$) and the AMEs recomputed — no refit per "
+          "draw. The Imbens-Kolesar (2016) bias-reduced linearisation does **not** apply to these "
+          "nonlinear / profiled-link estimators (no linear hat matrix), so the "
+          "Carter-Schnepel-Steigerwald (2017) effective-cluster count $G^*$ is reported only as a "
+          "diagnostic.", "",
+          "**Reporting-only.** AMEs never enter $\\phi$ — $\\phi$ is always built from the native index "
+          "$\\times$ link (`phi_from_native`); the AMEs are for the tables only.", "",
+          "## References", "",
+          "Bro, R., & De Jong, S. (1997). A fast non-negativity-constrained least squares "
+          "algorithm. *Journal of Chemometrics* 11(5): 393–401. "
+          "[normal-equations form of the NNLS used for the profiled monotone-link solver]", "",
+          "Cameron, A. C., Gelbach, J. B., & Miller, D. L. (2008). Bootstrap-based improvements "
+          "for inference with clustered errors. *Review of Economics and Statistics* 90(3): 414–427. "
+          "[wild cluster bootstrap]", "",
+          "Carter, A. V., Schnepel, K. T., & Steigerwald, D. G. (2017). Asymptotic behavior of a "
+          "t-test robust to cluster heterogeneity. *Review of Economics and Statistics* 99(4): 698–709. "
+          "[effective number of clusters $G^*$]", "",
+          "Chernozhukov, V., Fernández-Val, I., & Galichon, A. (2009). Improving point and interval "
+          "estimators of monotone functions by rearrangement. *Biometrika* 96(3): 559–575. "
+          "[ex-post monotonisation of the kernel link]", "",
+          "Dowd, B. E., Greene, W. H., & Norton, E. C. (2014). Computation of standard errors. "
+          "*Health Services Research* 49(2): 731–750. "
+          "[standard errors for marginal/incremental effects: delta method vs. bootstrap]", "",
+          "Egan, M., Hortaçsu, A., & Matvos, G. (2017). Deposit competition and financial fragility: "
+          "evidence from the US banking sector. *American Economic Review* 107(1): 169–216. "
+          "[foundational deposit-demand model; the dynamic depositor-sleepiness extension followed "
+          "here is cited as `egan2025dynamic` in V\\_Main — fill the exact working-paper entry from "
+          "References.bib]", "",
+          "Gaure, S. (2013). OLS with multiple high-dimensional category variables. *Computational "
+          "Statistics & Data Analysis* 66: 8–18. [two-way fixed effects by alternating projections]", "",
+          "Greene, W. H. (2018). *Econometric Analysis*, 8th ed. Pearson, New York. "
+          "[textbook treatment of marginal effects in nonlinear models and their delta-method SEs]", "",
+          "Härdle, W., & Stoker, T. M. (1989). Investigating smooth multiple regression by the "
+          "method of average derivatives. *Journal of the American Statistical Association* 84(408): "
+          "986–995. [average-derivative estimation — the continuous-regressor AME]", "",
+          "Ichimura, H. (1993). Semiparametric least squares (SLS) and weighted SLS estimation of "
+          "single-index models. *Journal of Econometrics* 58(1–2): 71–120. "
+          "[joint single-index SLS — E7/E8]", "",
+          "Lawson, C. L., & Hanson, R. J. (1974). *Solving Least Squares Problems*. Prentice-Hall, "
+          "Englewood Cliffs, NJ (reprinted as SIAM Classics in Applied Mathematics 15, 1995). "
+          "[non-negative least squares (NNLS) active-set algorithm]", "",
+          "MacKinnon, J. G., & Webb, M. D. (2017). Wild bootstrap inference for wildly different "
+          "cluster sizes. *Journal of Applied Econometrics* 32(2): 233–254. "
+          "[Webb 6-point weights for imbalanced clusters]", "",
+          "Nelder, J. A., & Mead, R. (1965). A simplex method for function minimization. "
+          "*The Computer Journal* 7(4): 308–313. [derivative-free optimiser for the joint-sieve "
+          "$\\theta$-search]", "",
+          "Newey, W. K., Powell, J. L., & Vella, F. (1999). Nonparametric estimation of triangular "
+          "simultaneous equations models. *Econometrica* 67(3): 565–603. [control-function approach]", "",
+          "Powell, J. L., Stock, J. H., & Stoker, T. M. (1989). Semiparametric estimation of index "
+          "coefficients. *Econometrica* 57(6): 1403–1430. "
+          "[average-derivative average marginal effect for single-index models]", "",
+          "Ramsay, J. O. (1988). Monotone regression splines in action. *Statistical Science* 3(4): "
+          "425–441. [I-splines — the monotone sieve link]", "",
+          "Wooldridge, J. M. (2010). *Econometric Analysis of Cross Section and Panel Data*, 2nd ed. "
+          "MIT Press. [average partial/marginal effects (APE/AME) — the reported estimand and its "
+          "inference]", ""]
 
     out_md = DRAFTS / "Sleepiness_TimeSeries_Test.md"
     out_md.write_text("\n".join(L), encoding="utf-8")

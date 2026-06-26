@@ -158,14 +158,27 @@ function main_cf1()
         pop0, _    = _first_present(ctx.df, ["pop_total", "M_mt", "pop"]; default=NaN)
         phi0, _    = _first_present(ctx.df, ["phi_mt", "phi_local_mt", "phi_local", "phi"]; default=NaN)
         depact0, _ = _first_present(ctx.df, ["Dep_Act", "active_deposits", "deposit_active"]; default=NaN)
+        deptot0, _ = _first_present(ctx.df, ["deposit_balance", "Dep", "Dep_total"]; default=NaN)
         phi0 = clamp.(phi0, 0.0, 0.999)
         isB  = BitVector(Bool.(coalesce.(ctx.df.is_B, false)))
         dbar = ones(nrow(ctx.df))
+        # GUARDRAIL (E4): a degenerate link (e.g. Logistic) can make active shares tiny,
+        # inflating d-bar so the φ=0 leg (M·s) explodes. Cap d-bar so the φ=0 aggregate
+        # active deposits Σ M·s ≤ DBAR_CAP_K × observed total deposits within the type.
+        # No effect on well-behaved links (E5/E6/E8); only clamps the degenerate case.
+        DBAR_CAP_K = 5.0
         for (lbl, mask) in (("B", isB), ("D", .!isB))
             m = mask .& isfinite.(pop0) .& isfinite.(s0) .& isfinite.(phi0) .& isfinite.(depact0)
             denom = sum((1.0 .- phi0[m]) .* pop0[m] .* s0[m])
             num   = sum(max.(depact0[m], 0.0))
             db    = (denom > 0 && isfinite(num)) ? num / denom : 1.0
+            ms    = sum(pop0[m] .* s0[m])                                   # Σ M·s / d-bar
+            dt    = sum(x -> (isfinite(x) && x > 0) ? x : 0.0, deptot0[m])  # Σ observed deposits
+            dcap  = ms > 0 ? DBAR_CAP_K * dt / ms : db
+            if isfinite(dcap) && db > dcap
+                log_status("  [CF1] d-bar[$lbl] CAPPED $(round(db, sigdigits=4)) → $(round(dcap, sigdigits=4))  (φ=0 leg ≤ $(DBAR_CAP_K)× obs deposits)")
+                db = dcap
+            end
             dbar[mask] .= db
             log_status("  [CF1] d-bar[$lbl] = $(round(db, sigdigits=5))  (n=$(sum(mask)))")
         end

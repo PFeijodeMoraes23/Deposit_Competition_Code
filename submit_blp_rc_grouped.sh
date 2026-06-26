@@ -14,8 +14,9 @@
 #   ext2 :                                one job,  4-day wall  (afterok HEAD)
 #   ext  : extended                       one job,  4-day wall  (afterok ext2)
 #
-# DEFAULT routine set is "4 6 8" (the +Time headline variants E4 logistic+time,
-# E6 single-index+time, E8 joint+time); override with e.g. ROUTINES="1 2 3 4 5 6 7 8".
+# DEFAULT routine set is "5 6 7 8" (the single-index links + their +Time variants:
+# E5 single-index, E6 single-index+time, E7 joint, E8 joint+time); override with e.g.
+# ROUTINES="1 2 3 4 5 6 7 8".
 # numerical defaults to a cross-check at `extended` only (NUMERICAL_MODE). Per-stage
 # checkpoints + the engine's skip-logic make a wall-killed HEAD fully resumable: just
 # resubmit and it skips the stages already on disk.
@@ -36,9 +37,9 @@ set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 mkdir -p "${HERE}/logs"
 
-# Default headline routines: the three +Time variants E4 (logistic+time),
-# E6 (single-index+time), E8 (joint single-index+time).
-ROUTINES="${ROUTINES:-4 6 8}"
+# Default routines: the single-index links + their +Time variants E5 (single-index),
+# E6 (single-index+time), E7 (joint), E8 (joint+time).
+ROUTINES="${ROUTINES:-5 6 7 8}"
 # Engines: IFT (blp_2) + numerical (blp_1) cross-check. Override e.g. ENGINES="ift".
 ENGINES="${ENGINES:-ift numerical}"
 # Numerical engine: crosscheck (default) = ONE job at `extended` only, afterok the IFT
