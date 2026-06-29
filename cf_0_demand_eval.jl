@@ -83,11 +83,30 @@ end
 """
     _result_path(out_dir, estim, spec, stage, suffix) -> String
 
-Path of the serialized RC result Dict written by blp_2_estimation_gpu.jl:
-`blp_results_E{estim}_spec_{spec}_{stage}{suffix}.jls`.
+Path of the serialized RC result Dict for the counterfactuals.
+
+After the 2026-06-25 `BLP_RESULTS/` reorg (handoff), the canonical CF input is the
+consolidated **`cluster_processed/blp_E{estim}_spec_{spec}.jls`** — a byte-identical
+copy of the cluster's `blp_results_E{estim}_spec_{spec}_extended.jls` (final/most-complex
+`extended` stage, IFT engine; unchanged Julia Dict schema: δ̂, θ̂₁, θ̂₂, Q). It is treated
+as `stage="extended"`, `suffix=""`. The metadata `.json` (per routine) and `INDEX.json`
+sit alongside it; intermediate stages and the numerical-engine `*_num` results remain in
+`cluster_raw/`.
+
+`out_dir` is `get_paths()[2]` = the `BLP_RESULTS/` root. For the `extended` stage we point
+at `cluster_processed/`; any other stage falls back to the legacy flat name
+`blp_results_E{estim}_spec_{spec}_{stage}{suffix}.jls` (so an intermediate stage from
+`cluster_raw/` still loads if explicitly requested). The `extended` consolidated path also
+falls back to the flat name if the consolidated artifact is absent. (Logit is loaded by a
+separate branch from `out_dir/logit/`.)
 """
 function _result_path(out_dir, estim, spec_id, stage, suffix)
-    joinpath(out_dir, "blp_results_E$(estim)_spec_$(spec_id)_$(stage)$(suffix).jls")
+    flat = joinpath(out_dir, "blp_results_E$(estim)_spec_$(spec_id)_$(stage)$(suffix).jls")
+    if stage == "extended"
+        consolidated = joinpath(out_dir, "cluster_processed", "blp_E$(estim)_spec_$(spec_id).jls")
+        return isfile(consolidated) ? consolidated : flat
+    end
+    return flat
 end
 
 """
@@ -239,7 +258,8 @@ function build_cf_context(estim::Int, spec_id::Int, stage::String;
         # (there is no RC-style result dict). θ₂ is empty ⇒ μ=0 ⇒ plain logit shares.
         # θ₁ is only needed for SPREAD counterfactuals; pull α from the 'full' logit
         # sub-model if present, else 0 (in-sample share reproduction is unaffected).
-        dbin  = joinpath(out_dir, "logit_delta_E$(estim)_spec_$(spec_id)$(suffix).bin")
+        dbin  = joinpath(out_dir, "logit", "logit_delta_E$(estim)_spec_$(spec_id)$(suffix).bin")
+        isfile(dbin) || (dbin = joinpath(out_dir, "logit_delta_E$(estim)_spec_$(spec_id)$(suffix).bin"))
         dfull = load_delta_bin(dbin)
         dfull === nothing && error("Missing logit δ̂ bin: $dbin")
         length(dfull) == N_full ||
@@ -247,7 +267,8 @@ function build_cf_context(estim::Int, spec_id::Int, stage::String;
         delta_hat = all(row_keep) ? dfull : dfull[row_keep]
         theta2 = Float64[]
         theta1 = zeros(coef_dim)
-        lpath  = joinpath(out_dir, "logit_E$(estim)_full_spec_$(spec_id)$(suffix).jls")
+        lpath  = joinpath(out_dir, "logit", "logit_E$(estim)_full_spec_$(spec_id)$(suffix).jls")
+        isfile(lpath) || (lpath = joinpath(out_dir, "logit_E$(estim)_full_spec_$(spec_id)$(suffix).jls"))
         if isfile(lpath)
             lr = deserialize(lpath); t1 = get(lr, "theta1", nothing)
             (t1 !== nothing && !isempty(t1)) && (theta1[1] = Float64(t1[1]))

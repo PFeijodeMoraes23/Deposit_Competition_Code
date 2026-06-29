@@ -204,6 +204,15 @@ function run_routine(estim_id::Int; passthrough::Vector{String} = String[])
     # Route input_filename to the demand parquet: the auto-discovered prefix is passed
     # explicitly so the engine reads e.g. demand_7_sijoint_spec_12.parquet.
     ENV["BLP_DEMAND_PREFIX"] = prefix
+    # θ₂ box, applied UNIFORMLY to every routine so the cross-routine comparison shares one
+    # box (default 5.0; an explicit export of either var still takes precedence). Only E5
+    # actually binds at the old 2.0 — its demographic interaction π(FGC×Age65+) pinned there
+    # (the earlier "σ₇" reading was a positional mislabel; it is a π, not a σ). E6/E7/E8 are
+    # interior (max|θ₂| ≤ 1) so the wider box leaves them unchanged. Both engines read these,
+    # so IFT and the numerical cross-check stay on the same box. Watch for any parameter that
+    # pins at the NEW bound — that is a weak-identification signal (visible in blp_compare_*).
+    ENV["BLP_SIGMA_UB"] = get(ENV, "BLP_SIGMA_UB", "5.0")
+    ENV["BLP_PI_BOUND"] = get(ENV, "BLP_PI_BOUND", "5.0")
 
     empty!(ARGS); append!(ARGS, vcat(base, pass))
     ENGINE == "numerical" ? main_gpu_numerical() : main_gpu_ift()

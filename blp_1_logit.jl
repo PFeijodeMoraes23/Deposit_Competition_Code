@@ -94,8 +94,16 @@ function get_paths()
     return input_dir, output_dir
 end
 
+# Local logit outputs live in a dedicated `logit/` subfolder of BLP_RESULTS, kept separate
+# from the cluster RC outputs (see process_blp_outputs.py). Created on demand.
+function logit_dir()
+    d = joinpath(get_paths()[2], "logit")
+    isdir(d) || mkpath(d)
+    return d
+end
+
 # Canonical combined-summary path.
-combined_summary_path() = joinpath(get_paths()[2],
+combined_summary_path() = joinpath(logit_dir(),
                                    "logit_summary_spec_$(SPEC_ID).json")
 
 """
@@ -317,7 +325,7 @@ function run_strategy(estim)
     dep_types = Int.(coalesce.(df.deposit_type, 0))
 
     # ── Save logit δ checkpoint for BLP σ-stage warm-start ──
-    delta_chk_path = joinpath(output_dir,
+    delta_chk_path = joinpath(logit_dir(),
         "logit_delta_E$(estim.id)_spec_$(SPEC_ID).jls")
     try
         serialize(delta_chk_path, Dict{String,Any}(
@@ -402,7 +410,7 @@ function run_strategy(estim)
         routine_results[key] = res
 
         # Save individual JLS
-        jls_path = joinpath(output_dir,
+        jls_path = joinpath(logit_dir(),
             "logit_$(key)_spec_$(SPEC_ID).jls")
         try
             serialize(jls_path, res)

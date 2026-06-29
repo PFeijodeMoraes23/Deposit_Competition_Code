@@ -124,6 +124,85 @@ def load_ss(est_num):
         return None
 
 
+# Full stage-2 comparison: same lineup/rows as export_analyze_spec12.py's stage-2 table.
+S2_ESTS = [(1, "Local (Lin.)"), (2, "Pooled (Lin.)"), (5, "Single-Idx (AME)"),
+           (6, "Single-Idx +T (AME)"), (7, "Joint Sieve (AME)"), (8, "Joint Sieve +T (AME)")]
+S2_ROWS = [("nr_lagged_dep", "Constant"),
+           ("interaction_gdp_per_capita", "GDP p.c."),
+           ("interaction_cadunico_families_per1000", "CadUnico"),
+           ("interaction_fraction_65plus", "Fraction 65+"),
+           ("interaction_fraction_young", "Fraction young"),
+           ("interaction_risk_free_qoq_lag", "Lagged Selic"),
+           ("interaction_connections_per100", "Broadband"),
+           ("interaction_pix_exists", "Pix available"),
+           ("interaction_gdp_growth_yoy", "GDP growth (YoY)")]
+
+
+def _ss_clusters(ss):
+    """Nominal cluster count G: from the linear cov_kwds groups, else NonLinearResults.G_nominal."""
+    ck = getattr(ss, "cov_kwds", None)
+    if ck and ck.get("groups", None) is not None:
+        g = ck["groups"]
+        return str(g.nunique() if hasattr(g, "nunique") else len(set(g)))
+    gn = getattr(ss, "G_nominal", np.nan)
+    return str(int(gn)) if pd.notna(gn) else "—"
+
+
+def stage2_comparison_md():
+    """Pandoc-native markdown table of the full stage-2 AME comparison across the six
+    estimators, wrapped in raw-LaTeX \\begin{landscape}...\\end{landscape} for preview."""
+    ssn = {n: load_ss(n) for n, _ in S2_ESTS}
+    if all(ss is None for ss in ssn.values()):
+        return []
+
+    header = "| Variable | " + " | ".join(lbl for _, lbl in S2_ESTS) + " |"
+    sep = "|" + "|".join(["---"] * (len(S2_ESTS) + 1)) + "|"
+    L = ["```{=latex}", "\\begin{landscape}", "```", "",
+         "## Stage-2 sleepiness coefficients / AMEs — full comparison (spec 12)", "",
+         "Linear sleepiness coefficients (Local, Pooled) and average marginal effects "
+         "(Single-Index, Joint Sieve), wild-cluster-bootstrap SE in parentheses "
+         "(*** p<0.01, ** p<0.05, * p<0.1). The single-index/joint columns carry no constant "
+         "AME (the level is absorbed into the monotone link), so the **Mean $\\hat\\phi$** row "
+         "gives the comparable implied sleepiness level across all six columns. This is the "
+         "preview of the canonical `est1-3_spec12_stage2_comparison.tex` table.", "",
+         header, sep]
+
+    for key, lbl in S2_ROWS:
+        cells = []
+        for n, _ in S2_ESTS:
+            ss = ssn[n]
+            if ss is not None and key in getattr(ss, "params", pd.Series(dtype=float)).index:
+                a = ss.params[key]; se = ss.bse.get(key, np.nan); p = ss.pvalues.get(key, np.nan)
+                cells.append(f"{a:+.4f}{_stars(p)} ({se:.4f})")
+            else:
+                cells.append("—")
+        L.append(f"| {lbl} | " + " | ".join(cells) + " |")
+
+    # diagnostic rows
+    mean_cells, nobs_cells, r2_cells, g_cells, gstar_cells = [], [], [], [], []
+    for n, _ in S2_ESTS:
+        ss = ssn[n]
+        pt = load_phi_t(n)
+        mean_cells.append(f"{pt['phi_t'].mean():.3f}" if pt is not None else "—")
+        if ss is None:
+            nobs_cells.append("—"); r2_cells.append("—"); g_cells.append("—"); gstar_cells.append("—")
+            continue
+        nobs = getattr(ss, "nobs", np.nan); r2 = getattr(ss, "rsquared", np.nan)
+        gstar = getattr(ss, "G_star", getattr(ss, "df_resid", np.nan))
+        nobs_cells.append(f"{nobs:,.0f}" if pd.notna(nobs) else "—")
+        r2_cells.append(f"{r2:.3f}" if pd.notna(r2) else "—")
+        g_cells.append(_ss_clusters(ss))
+        gstar_cells.append(f"{gstar:.1f}" if pd.notna(gstar) else "—")
+
+    L.append("| **Mean $\\hat\\phi$ (level)** | " + " | ".join(mean_cells) + " |")
+    L.append("| Observations | " + " | ".join(nobs_cells) + " |")
+    L.append("| $R^2$ | " + " | ".join(r2_cells) + " |")
+    L.append("| Clusters ($G$) | " + " | ".join(g_cells) + " |")
+    L.append("| Effective $G^*$ | " + " | ".join(gstar_cells) + " |")
+    L += ["", "```{=latex}", "\\end{landscape}", "```", ""]
+    return L
+
+
 def fig_pair(name, eb, et, path):
     pb, pt = load_phi_t(eb), load_phi_t(et)
     if pb is None or pt is None:
@@ -303,6 +382,9 @@ def build(bands=True, refit=False):
         L.append(f"| {CLEAN[key]} | " + " | ".join(cells) + " |")
     L.append("")
 
+    # ---- full stage-2 comparison table (landscaped preview of the V_Main table) ----
+    L += stage2_comparison_md()
+
     # ---- phi_t base vs +time per pair ----
     L += ["## National $\\hat\\phi_t$: Base vs +Time", ""]
     for name, eb, et in PAIRS:
@@ -366,6 +448,39 @@ def build(bands=True, refit=False):
           "diagnostic.", "",
           "**Reporting-only.** AMEs never enter $\\phi$ — $\\phi$ is always built from the native index "
           "$\\times$ link (`phi_from_native`); the AMEs are for the tables only.", "",
+          "### Weak identification under two-way FE: the Pix dummy", "",
+          "Two-way (entity + quarter) FE absorb any index regressor whose variation is mostly a "
+          "persistent cross-sectional **level** plus a smooth **national trend**; identification of its "
+          "sleepiness loading then comes only from the residual **within-market, within-quarter** "
+          "variation. `pix_exists` is the extreme case: Pix launched nationally (Nov 2020), so the dummy "
+          "flips at essentially the same quarter for every market — it is **collinear with the quarter "
+          "FE** and has almost no within-FE variation left.", "",
+          "*Evidence — share of each index regressor's variance absorbed by the entity + quarter FE on "
+          "the spec-12 estimation panel ($N\\approx438$k; absorbed "
+          "$R^2 = 1-\\operatorname{Var}(\\text{resid})/\\operatorname{Var}(\\text{raw})$, and the "
+          "surviving residual sd as a fraction of the raw sd):*", "",
+          "| Index regressor | FE-absorbed $R^2$ | resid sd / raw sd |",
+          "|---|---|---|",
+          "| `pix_exists` | **1.0000** | **0.000** |",
+          "| Lagged Selic | 0.9996 | 0.020 |",
+          "| Fraction 65+ | 0.9899 | 0.100 |",
+          "| Fraction young | 0.9889 | 0.105 |",
+          "| CadUnico | 0.9671 | 0.181 |",
+          "| GDP p.c. | 0.7542 | 0.496 |",
+          "| Broadband | 0.6658 | 0.578 |", "",
+          "`pix_exists` is the **only** regressor with essentially zero residual variation. With its "
+          "loading thereby unidentified, the **unnormalised** logit index direction that E5/E6 inherit "
+          "hands it a runaway coefficient — $\\theta_{\\text{pix}}\\approx 300$ in E5 and $45$ in E6, "
+          "versus $0.05$ (E7) and $0.97$ (E8), where the joint estimators' unit-norm constraint "
+          "$\\lVert\\theta\\rVert=1$ caps it. Before the dummy-AME fix this inflated the "
+          "**continuous-style** Pix effect $\\theta_{\\text{pix}}\\cdot\\overline{G'}$ to an impossible "
+          "$+6.9$ (E5) / $+1.2$ (E6) — outside the $[-1,1]$ bound a probability change must respect. The "
+          "corrected **discrete-difference** AME $\\tfrac1n\\sum_i[G(\\cdot,\\text{pix}{=}1)-"
+          "G(\\cdot,\\text{pix}{=}0)]$ is bounded and sensible ($\\approx +0.10$ in E5/E6, "
+          "$+0.001$–$0.005$ in E7/E8). The **caveat stands**, however: the Pix effect is weakly "
+          "identified under two-way FE, and the single-index estimators (E5/E6), inheriting the large "
+          "logit Pix direction, report a larger Pix AME than the unit-norm joint sieve (E7/E8, the BLP "
+          "input). Read the Pix row accordingly — the joint-sieve estimate is the conservative one.", "",
           "## References", "",
           "Bro, R., & De Jong, S. (1997). A fast non-negativity-constrained least squares "
           "algorithm. *Journal of Chemometrics* 11(5): 393–401. "
@@ -426,7 +541,9 @@ def build(bands=True, refit=False):
 def compile_pdf(md):
     try:
         r = subprocess.run(["pandoc", md.name, "-o", "_ts_build.pdf", "--pdf-engine=xelatex",
-                            "-V", "geometry:margin=1in"], cwd=str(DRAFTS), capture_output=True, text=True)
+                            "-V", "geometry:margin=1in",
+                            "-V", "header-includes=\\usepackage{pdflscape}"],
+                           cwd=str(DRAFTS), capture_output=True, text=True)
         built = DRAFTS / "_ts_build.pdf"
         if built.exists() and built.stat().st_size > 0:
             os.replace(built, DRAFTS / "Sleepiness_TimeSeries_Test.pdf")

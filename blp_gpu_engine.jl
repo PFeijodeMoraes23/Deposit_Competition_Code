@@ -1597,7 +1597,18 @@ function run_blp_estimation_gpu(estim::Int, spec_id::Int, args,
     # converging. σ are the first length(sigma_indices) entries of θ₂.
     n_sigma = length(sigma_indices)
     lo[1:n_sigma] .= 0.0
-    theta2_0 .= clamp.(theta2_0, lo, hi)   # a warm-start θ₂ may carry a negative σ
+    # σ upper bound (BLP_SIGMA_UB) and π box half-width (BLP_PI_BOUND), both default 2.0,
+    # shared with the IFT engine so the cross-check optimises over the SAME box (the driver
+    # widens the π bound to 5.0 for E5). This also overrides the wide ±5 default on the σ/π
+    # slices, unifying the two engines' boxes.
+    sigma_ub = parse(Float64, get(ENV, "BLP_SIGMA_UB", "2.0"))
+    hi[1:n_sigma] .= sigma_ub
+    pi_bound = parse(Float64, get(ENV, "BLP_PI_BOUND", "2.0"))
+    if n_sigma < n_params
+        lo[(n_sigma + 1):n_params] .= -pi_bound
+        hi[(n_sigma + 1):n_params] .=  pi_bound
+    end
+    theta2_0 .= clamp.(theta2_0, lo, hi)   # a warm-start θ₂ may carry an out-of-box value
 
     println("  Outer minimisation: $(args["method"])")
     println("  Inner tolerance: $(args["tol_inner"])")
@@ -2220,7 +2231,19 @@ function run_blp_estimation_ift_gpu(estim::Int, spec_id::Int, args,
     # length(sigma_indices) entries of θ₂; the π interactions keep the [-2,2] box.
     n_sigma = length(sigma_indices)
     lo[1:n_sigma] .= 0.0
-    theta2_0 .= clamp.(theta2_0, lo, hi)   # a warm-start θ₂ may carry a negative σ
+    # σ upper bound (BLP_SIGMA_UB, default 2.0) and π box half-width (BLP_PI_BOUND, default
+    # 2.0) are configurable. In E5 the demographic interaction π(FGC×Age65+) pins at the π
+    # bound 2.0 (the earlier "σ₇" reading was a positional mislabel — it is a π), so the
+    # driver widens BLP_PI_BOUND to 5.0 for E5. σ are the first n_sigma θ₂ entries; the π
+    # interactions are the rest. Keep IFT and the numerical cross-check on the SAME box.
+    sigma_ub = parse(Float64, get(ENV, "BLP_SIGMA_UB", "2.0"))
+    hi[1:n_sigma] .= sigma_ub
+    pi_bound = parse(Float64, get(ENV, "BLP_PI_BOUND", "2.0"))
+    if n_sigma < n_params
+        lo[(n_sigma + 1):n_params] .= -pi_bound
+        hi[(n_sigma + 1):n_params] .=  pi_bound
+    end
+    theta2_0 .= clamp.(theta2_0, lo, hi)   # a warm-start θ₂ may carry an out-of-box value
 
     println("  Optimizer: L-BFGS-B + IFT analytical gradient (GPU)")
     println("  Inner tolerance: $(args["tol_inner"]) | bounds: [$(lo[1]), $(hi[1])]")

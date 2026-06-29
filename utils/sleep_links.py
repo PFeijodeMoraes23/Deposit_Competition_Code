@@ -348,9 +348,37 @@ def fit_single_index(df, state_cols, has_cf, logit_res, degree=3, phi_band=False
     names = [nm for nm in phi_params if nm != "nr_lagged_dep"]
     ths = {nm: th for nm, th in zip(phi_params, theta) if nm != "nr_lagged_dep"}
 
+    # 0/1 DUMMIES get the DISCRETE-DIFFERENCE AME, not the continuous average
+    # derivative: the marginal effect of a binary regressor is
+    # E[G(idx | x=1) - G(idx | x=0)] on the structural (clipped) sieve link, which
+    # is bounded to [-1,1]. Treating a dummy as continuous (theta_k * mean_slope)
+    # is the wrong estimand and explodes when the inherited (unnormalised) logit
+    # direction gives a weakly-identified dummy a huge coefficient (e.g. pix_exists,
+    # near-collinear with the quarter FE -> theta_pix ~ 300 -> AME ~ 6.9). The flip
+    # terms below depend only on (vs, theta_k, vsd, the 0/1 column) -- all fixed
+    # across the link bootstrap -- so we precompute their standardised-index powers.
+    dcols = {}
+    for nm in names:
+        coln = X[:, phi_params.index(nm)]
+        u = np.unique(coln[~np.isnan(coln)])
+        if len(u) == 2 and 0.0 in u and 1.0 in u:
+            z1 = vs + ths[nm] * (1.0 - coln) / vsd      # standardised index at x=1
+            z0 = vs - ths[nm] * coln / vsd              # standardised index at x=0
+            dcols[nm] = (np.column_stack([z1 ** dd for dd in range(degree + 1)]),
+                         np.column_stack([z0 ** dd for dd in range(degree + 1)]))
+
     def _ame_fn(bfull):
         ms = _mean_slope(bfull)
-        return {nm: ths[nm] * ms for nm in names}
+        bb = np.asarray(bfull, float)[:degree + 1]
+        out = {}
+        for nm in names:
+            if nm in dcols:                              # discrete difference (bounded)
+                Pz1, Pz0 = dcols[nm]
+                out[nm] = float(np.mean(np.clip(Pz1 @ bb, 0.0, 1.0)
+                                        - np.clip(Pz0 @ bb, 0.0, 1.0)))
+            else:                                        # continuous average derivative
+                out[nm] = ths[nm] * ms
+        return out
 
     mean_slope = _mean_slope(b_full)
     ame = _ame_fn(b_full)
@@ -801,12 +829,34 @@ def fit_joint_single_index(df, state_cols, has_cf, link="sieve", loss="ls",
         theta_hat = best[1] / (np.linalg.norm(best[1]) + 1e-12)
     obj, v, vgrid, ggrid, gpgrid, resid = _fit_link(theta_hat, want_grid=True)
 
+    # 0/1 DUMMIES use the DISCRETE-DIFFERENCE AME E[G(idx|x=1) - G(idx|x=0)] on the
+    # fixed monotone link (bounded to the link range), NOT the continuous average
+    # derivative theta_k * mean_slope. The unit-norm direction keeps theta_k moderate
+    # here (so the bug is invisible -- pix AME ~ 2e-3), but a binary regressor's
+    # estimand is still the discrete difference, so we treat it correctly and
+    # consistently with the single-index / logit paths. Flip terms are fixed in i.
+    _dummy = np.zeros(d, dtype=bool)
+    for k in range(d):
+        u = np.unique(S[~np.isnan(S[:, k]), k])
+        _dummy[k] = (len(u) == 2) and (0.0 in u) and (1.0 in u)
+    _flip1 = [((1.0 - S[:, k]) / S_sd[k]) if _dummy[k] else None for k in range(d)]
+    _flip0 = [(S[:, k] / S_sd[k]) if _dummy[k] else None for k in range(d)]
+
     def _ames(theta):
         th = theta / (np.linalg.norm(theta) + 1e-12)
         vv = Sn @ th
         gp = np.interp(vv, vgrid, gpgrid)          # link held fixed; only the index moves
         mean_slope = float(np.mean(gp))
-        return {idx_cols[k]: th[k] / S_sd[k] * mean_slope for k in range(d)}
+        out = {}
+        for k in range(d):
+            if _dummy[k]:                          # discrete difference (bounded by the link)
+                vv1 = vv + th[k] * _flip1[k]
+                vv0 = vv - th[k] * _flip0[k]
+                out[idx_cols[k]] = float(np.mean(np.interp(vv1, vgrid, ggrid)
+                                                 - np.interp(vv0, vgrid, ggrid)))
+            else:                                  # continuous average derivative
+                out[idx_cols[k]] = th[k] / S_sd[k] * mean_slope
+        return out
 
     ame_hat = _ames(theta_hat)
 

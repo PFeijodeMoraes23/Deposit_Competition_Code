@@ -35,6 +35,8 @@ import scipy.stats as stats
 ROOT       = pathlib.Path(__file__).resolve().parent
 DATA_DIR   = ROOT.parents[1] / "BCB" / "Egan_et_al_2025_Rep" / "processed"
 RESULTS_DIR = DATA_DIR / "ESTIMATION_OUTPUT" / "BLP_RESULTS"
+# Raw per-stage cluster results live in cluster_raw/ after the 2026-06-25 reorg.
+RAW_DIR    = RESULTS_DIR / "cluster_raw"
 TABLES_DIR  = DATA_DIR / "ESTIMATION_OUTPUT" / "Rout"
 DRAFTS_DIR  = pathlib.Path(
     r"C:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)"
@@ -117,7 +119,7 @@ def load_stage(est_id: int, stage: str, suffix: str = "") -> dict | None:
     ``suffix`` selects the engine: "" = IFT, "_num" = numerical (matches
     ENV["BLP_OUTPUT_SUFFIX"] on the cluster).
     """
-    path = RESULTS_DIR / f"blp_results_E{est_id}_spec_12_{stage}{suffix}.json"
+    path = RAW_DIR / f"blp_results_E{est_id}_spec_12_{stage}{suffix}.json"
     if not path.exists():
         return None
     try:
