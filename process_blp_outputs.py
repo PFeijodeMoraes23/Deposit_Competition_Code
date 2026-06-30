@@ -60,6 +60,70 @@ def _theta2_labels(sigma_indices, pi_interactions):
     labs += [f"π({_name(COEF_NAMES, ci)} × {_name(D_COLS, di)})" for ci, di in (pi_interactions or [])]
     return labs
 
+_STAGE_HEAD = {"sigma": "Sigma", "rc2": "RC2", "rc3": "RC3", "rc4": "RC4",
+               "full": "Full", "ext1": "Ext1", "ext2": "Ext2", "extended": "Extended"}
+
+def md_compare_table(k, raw_dir, logit_e, eff_rec):
+    """Markdown version of the per-routine Logit-vs-RC-stages compare table (same content as
+    Rout/blp_compare_E{k}_spec12.tex): Panel A θ₁ (coef (SE)), Panel B θ₂ (point estimates),
+    footer Q / effective α / converged / N / G*. Reads the small per-stage result JSONs."""
+    sdata, stages = {}, []
+    for st in STAGE_SEQUENCE:
+        try:
+            d = json.load(open(os.path.join(raw_dir, f"blp_results_E{k}_spec_12_{st}.json")))
+        except Exception:
+            d = None
+        if d:
+            sdata[st] = d; stages.append(st)
+    if not stages:
+        return []
+    cols = (["logit"] if logit_e else []) + stages
+    head = ["Logit" if c == "logit" else _STAGE_HEAD[c] for c in cols]
+    def cell(v, se):
+        return "—" if v is None else (f"{v:.3f}" + (f" ({se:.3f})" if se else ""))
+    def src(c): return logit_e if c == "logit" else sdata[c]
+    L = [f"### E{k} — Logit vs RC-BLP stages", "",
+         "| Parameter | " + " | ".join(head) + " |",
+         "|:--" + "|--:" * len(cols) + "|"]
+    ref = sdata[stages[-1]]
+    for nm in (ref.get("param_names_theta1") or []):              # Panel A — θ₁
+        row = [THETA1_PRETTY.get(nm, nm.replace("_", " "))]
+        for c in cols:
+            d = src(c)
+            nms = d.get("param_names_theta1") or d.get("param_names") or []
+            ses = d.get("theta1_se") or d.get("se") or []
+            if nm in nms and nms.index(nm) < len(d.get("theta1", [])):
+                i = nms.index(nm); row.append(cell(d["theta1"][i], ses[i] if i < len(ses) else None))
+            else:
+                row.append("—")
+        L.append("| " + " | ".join(row) + " |")
+    labs = []                                                     # Panel B — θ₂
+    for c in stages:
+        for lb in _theta2_labels(sdata[c].get("sigma_indices"), sdata[c].get("pi_interactions")):
+            if lb not in labs: labs.append(lb)
+    for lb in labs:
+        row = [lb]
+        for c in cols:
+            if c == "logit":
+                row.append("—"); continue
+            d = sdata[c]; dl = _theta2_labels(d.get("sigma_indices"), d.get("pi_interactions"))
+            t2 = d.get("theta2") or []
+            row.append(f"{t2[dl.index(lb)]:.4f}" if lb in dl and dl.index(lb) < len(t2) else "—")
+        L.append("| " + " | ".join(row) + " |")
+    def foot(label, fn):                                          # footer
+        return "| " + label + " | " + " | ".join(fn(c) for c in cols) + " |"
+    def eff_of(c):
+        if c == "logit":
+            t1 = logit_e.get("theta1") or []; return f"{t1[0]:+.3f}" if t1 else "—"
+        return f"{eff_rec['alpha_i_mean']:+.3f}" if (c == "extended" and eff_rec) else "—"
+    L.append(foot("**Q (GMM)**", lambda c: f"{src(c).get('Q_value'):.4f}" if src(c).get('Q_value') is not None else "—"))
+    L.append(foot("**eff. α (mean)**", eff_of))
+    L.append(foot("**converged**", lambda c: "yes" if src(c).get("converged") else "no"))
+    L.append(foot("**N**", lambda c: f"{src(c).get('n_obs'):,}" if src(c).get("n_obs") else "—"))
+    L.append(foot("**G\\***", lambda c: f"{src(c).get('G_star'):.2f}" if src(c).get("G_star") is not None else "—"))
+    L.append("")
+    return L
+
 IV_COLS = ["loo_log_assets","mean_loo_log_assets","loo_equity_ratio","mean_loo_equity_ratio",
            "loo_basileia","mean_loo_basileia","loo_credit_assets","mean_loo_credit_assets",
            "loo_npl_provision","mean_loo_npl_provision","n_rivals",
@@ -287,7 +351,10 @@ def write_summary_md(sub, index, stage, eff=None):
     each run, so it never goes stale). `eff` = compute_effective_alpha() output (or None)."""
     ts = datetime.datetime.now().isoformat(timespec="minutes")
     BOUND = 5.0  # current θ₂ box half-width (blp_2_rc.jl sets BLP_SIGMA_UB / BLP_PI_BOUND)
-    L = ["# BLP RC-BLP — results summary", ""]
+    # MD013 (line-length) is unfixable for wide tables, so disable it for this file (the only
+    # markdownlint rule this report trips). Recognised by the markdownlint VS Code extension.
+    L = ["# BLP RC-BLP — results summary", "",
+         "<!-- markdownlint-disable-file MD013 -->", ""]
     L.append(f"_Generated {ts} · stage = **{stage}** · IFT engine · "
              f"θ₂ box: σ∈[0,{BOUND:g}], π∈[−{BOUND:g},{BOUND:g}]._")
     L += ["", "## Headline estimates", "",
@@ -391,6 +458,23 @@ def write_summary_md(sub, index, stage, eff=None):
               "makes θ₁ the average-market coefficients (correctly signed) and the π's deviations "
               "around them."]
 
+    # per-routine Logit-vs-RC-stages compare tables (markdown mirror of Rout/blp_compare_*.tex)
+    raw_dir = sub["cluster_raw"]
+    try:
+        logit_summary = json.load(open(os.path.join(sub["logit"], "logit_summary_spec_12.json")))
+    except Exception:
+        logit_summary = {}
+    L += ["", "## Logit vs RC-BLP stages (per routine)", "",
+          "Full comparison tables (same content as `Rout/blp_compare_E{k}_spec12.tex`): the non-RC "
+          "logit (`full` sub-model) then each RC-BLP stage. Panel-A cells are coefficient (SE); θ₂ "
+          "are point estimates (no SE). `eff. α` is the mean effective spread coefficient over "
+          "markets (the logit α is already average-market).", ""]
+    for m in index:
+        kk = m["routine"]
+        le = next((logit_summary.get(f"E{kk}_{sm_}") for sm_ in ("full", "full_dtype", "core", "priceonly")
+                   if logit_summary.get(f"E{kk}_{sm_}")), None)
+        L += md_compare_table(kk, raw_dir, le or {}, (eff or {}).get(str(kk)))
+
     L += ["", "## Notes", "",
           "- **Stages** free one random coefficient at a time: `sigma`(1) → `rc2`(2) → `rc3`(3) → "
           "`rc4`(4) → `full`(5) → `ext1`(6) → `ext2`(7) → `extended`(8). The processed `.jls` is the "
@@ -403,6 +487,7 @@ def write_summary_md(sub, index, stage, eff=None):
           "- **Artifacts:** `cluster_processed/blp_E{k}_spec_12.jls` (CF input — full δ̂/θ̂₁/θ̂₂) + "
           "`.json` (scalars + `stage_progression`); labeled parameter tables in "
           "`Rout/blp_compare_E{k}_spec12.tex`."]
+    L = [ln for i, ln in enumerate(L) if not (ln == "" and i and L[i-1] == "")]  # collapse blank runs (MD012/MD022)
     out_dir = SUMMARY_DIR if os.path.isdir(SUMMARY_DIR) else sub["cluster_processed"]
     path = os.path.join(out_dir, "SUMMARY.md")
     with open(path, "w", encoding="utf-8") as f:
