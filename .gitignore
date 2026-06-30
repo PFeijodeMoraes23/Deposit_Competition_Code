@@ -2,8 +2,8 @@
 *.pyc
 *.err
 *.out
+*.so
 .venv/
 __pycache__/
 Manifest.toml
 .env
-sleep_sysimage.so
