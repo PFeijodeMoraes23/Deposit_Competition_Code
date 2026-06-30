@@ -6,3 +6,4 @@
 __pycache__/
 Manifest.toml
 .env
+sleep_sysimage.so
