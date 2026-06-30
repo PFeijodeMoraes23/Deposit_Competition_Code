@@ -261,7 +261,8 @@ def build_latex_table(results_dict, order_keys, target_vars, out_path, title="",
     # leaving \textwidth-7pt for the cell content.
     notes_str = (r"\multicolumn{" + str(len(order_keys) + 1) + r"}{p{\dimexpr\textwidth-2\tabcolsep\relax}}"
                  r"{\scriptsize\textit{Notes:} Standard errors (score/multiplier wild cluster "
-                 r"bootstrap at the conglomerate level; \textcite{cameron2008bootstrap}, "
+                 r"bootstrap at the conglomerate level, Webb 6-point $B=999$, applied uniformly to "
+                 r"every column; \textcite{cameron2008bootstrap}, "
                  r"\textcite{mackinnon2017wild}) in parentheses. The Local and Pooled columns report "
                  r"linear sleepiness coefficients; the Single-Index and Joint Sieve columns report "
                  r"average marginal effects (AME). The single-index/joint estimators carry no "
@@ -511,7 +512,8 @@ def build_latex_table_landscape(results_dict, order_keys, target_vars, out_path,
             r"\begin{tablenotes}[flushleft]",
             r"\footnotesize",
             r"\item \textit{Notes:} Standard errors (score/multiplier wild cluster bootstrap at the "
-            r"conglomerate level; \textcite{cameron2008bootstrap}, \textcite{mackinnon2017wild}) in "
+            r"conglomerate level, Webb 6-point $B=999$, applied uniformly to every column; "
+            r"\textcite{cameron2008bootstrap}, \textcite{mackinnon2017wild}) in "
             r"parentheses. The Local and Pooled columns report linear sleepiness coefficients; the "
             r"Single-Index and Joint Sieve columns report average marginal effects (AME). The "
             r"single-index/joint estimators carry no constant AME --- the baseline level is absorbed "

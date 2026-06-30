@@ -111,12 +111,20 @@ def apply_imbalanced_cluster_correction(res, cluster_series):
     
     res.G_nominal = G_nominal
     res.G_star = G_star
-
     res.df_resid = G_star
-    t_dist = stats.t(df=G_star)
-    new_pvals = t_dist.sf(np.abs(res.tvalues)) * 2
-    res._results.__dict__['pvalues'] = new_pvals
-    
+    # Inference: score/multiplier wild cluster bootstrap (Cameron-Gelbach-Miller 2008;
+    # MacKinnon-Webb 2017) -- the SAME scheme as the single-index/joint estimators, so
+    # every comparison-table column shares one inference method. G* is kept as the
+    # reported effective-cluster diagnostic. Falls back to CRVE + t(G*) if unavailable.
+    try:
+        from utils.sleep_links import linear_wild_cluster_bootstrap
+        bse, tvals, pvals = linear_wild_cluster_bootstrap(res)
+        for _nm, _v in (("bse", bse.values), ("tvalues", tvals.values), ("pvalues", pvals.values)):
+            res._results._cache[_nm] = _v          # statsmodels reads cached props from _cache
+            res._results.__dict__[_nm] = _v
+    except Exception as e:
+        print(f"  [linear WCB] failed ({e}); CRVE + t(G*) fallback")
+        res._results.__dict__['pvalues'] = stats.t(df=G_star).sf(np.abs(res.tvalues)) * 2
     return res
 
 def demean_variables(df, cols, entity_col):

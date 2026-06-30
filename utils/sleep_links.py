@@ -945,6 +945,41 @@ def cluster_wild_bootstrap(theta_hat, IF_cl, ame_fn, ame_hat, B=199,
     return bse, pvals
 
 
+def linear_wild_cluster_bootstrap(res, B=999, scheme="webb", seed=0):
+    """Score/multiplier wild cluster bootstrap SEs/p-values for a fitted statsmodels
+    cluster-OLS result, so the LINEAR sleepiness estimators (Est1/Est2) share ONE
+    inference method with the single-index/joint columns (Cameron-Gelbach-Miller 2008;
+    MacKinnon-Webb 2017; Kline-Santos 2012). The cluster influence functions are read
+    straight off the fit -- IF_cl[g] = (X'X)^{-1} sum_{i in g} X_i u_hat_i -- and
+    perturbed by wild weights via the same cluster_wild_bootstrap used for the
+    nonlinear AMEs (identity map: the parameters ARE the coefficients). No refit.
+    Returns (bse, tvalues, pvalues) as pandas Series indexed like res.params."""
+    idx = res.params.index
+    names = list(idx)
+    beta = np.asarray(res.params, float)
+    X = np.asarray(res.model.exog, float)
+    u = np.asarray(res.resid, float)
+    cl = pd.Series(np.asarray(res.cov_kwds["groups"])).astype(str).values
+    cl_u, cl_inv = np.unique(cl, return_inverse=True)
+    n_cl = len(cl_u)
+    K = X.shape[1]
+    bread = np.linalg.pinv(X.T @ X)
+    score = X * u[:, None]                                   # N x K per-obs scores
+    s_cl = np.zeros((n_cl, K))
+    for k in range(K):
+        s_cl[:, k] = np.bincount(cl_inv, weights=score[:, k], minlength=n_cl)
+    IF_cl = s_cl @ bread.T                                   # n_cl x K cluster IFs on beta
+    ame_hat = {nm: float(b) for nm, b in zip(names, beta)}
+    ame_fn = lambda th: {nm: float(th[i]) for i, nm in enumerate(names)}
+    bse, pvals = cluster_wild_bootstrap(beta, IF_cl, ame_fn, ame_hat,
+                                        B=B, scheme=scheme, rng=np.random.default_rng(seed))
+    bse_s = pd.Series({nm: bse[nm] for nm in names}).reindex(idx)
+    pv_s = pd.Series({nm: pvals[nm] for nm in names}).reindex(idx)
+    tv_s = pd.Series({nm: (ame_hat[nm] / bse[nm] if bse[nm] else np.nan)
+                      for nm in names}).reindex(idx)
+    return bse_s, tv_s, pv_s
+
+
 # ==============================================================================
 # Shared wild-cluster-bootstrap inference for the M-estimators Est3/4/5 (link
 # NLLS) and Est6 (profiled sieve OLS). The earlier homoskedastic delta-method

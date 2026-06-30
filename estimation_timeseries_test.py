@@ -321,8 +321,9 @@ def build(bands=True, refit=False):
       "- **E1 — Local-linear** (`estimation_1_sleep.py`). Linear "
       "$\\phi=\\boldsymbol\\Upsilon'\\mathbf S$, **B-firms only** (digital banks excluded). Two-way "
       "within-OLS of the demeaned interacted design $[\\,S_k\\widetilde D_{t-1}\\,]_k$ on demeaned "
-      "deposits; cluster-robust (bank) SE with the Carter–Schnepel–Steigerwald imbalance correction. "
-      "Unconstrained, so $\\phi$ may exit $[0,1]$.",
+      "deposits; **wild cluster bootstrap** SE at the conglomerate level — the same score/multiplier "
+      "scheme as every other column (see the AME section) — with the Carter–Schnepel–Steigerwald "
+      "$G^*$ reported as a diagnostic. Unconstrained, so $\\phi$ may exit $[0,1]$.",
       "- **E2 — Pooled-linear** (`estimation_2_sleep.py`). As E1 but **pooled** over B and D firms; "
       "hosts the shared data build.",
       "- **E3 — Logit.** $\\phi=\\Lambda(\\mathbf S'\\theta)$, bounded by construction. Estimated by "
@@ -442,10 +443,16 @@ def build(bands=True, refit=False):
           "a **score/multiplier wild cluster bootstrap** at the conglomerate level "
           "(Cameron-Gelbach-Miller 2008; MacKinnon-Webb 2017): the cluster-summed influence functions "
           "are perturbed by wild weights (Webb 6-point, $B=999$) and the AMEs recomputed — no refit per "
-          "draw. The Imbens-Kolesar (2016) bias-reduced linearisation does **not** apply to these "
-          "nonlinear / profiled-link estimators (no linear hat matrix), so the "
-          "Carter-Schnepel-Steigerwald (2017) effective-cluster count $G^*$ is reported only as a "
-          "diagnostic.", "",
+          "draw. **The same wild cluster bootstrap is now applied to the linear estimators (E1/E2) "
+          "too** — for the linear OLS columns the cluster influence functions are "
+          "$(\\mathbf X'\\mathbf X)^{-1}\\sum_{i\\in g}\\mathbf X_i\\hat u_i$ — so **every column of the "
+          "comparison tables shares one inference scheme**, with $B=999$ Webb weights at the "
+          "conglomerate level. (Imbens-Kolesar's (2016) CR2 bias-reduced linearisation is defined "
+          "through the OLS hat matrix, so it is available for the linear columns but does **not** "
+          "extend to the nonlinear / profiled-link estimators, which have no hat matrix; we therefore "
+          "use the WCB throughout rather than mixing schemes.) The Carter-Schnepel-Steigerwald (2017) "
+          "effective-cluster count $G^*$ ($\\approx 9$ here) is reported across all columns as a "
+          "diagnostic only.", "",
           "**Reporting-only.** AMEs never enter $\\phi$ — $\\phi$ is always built from the native index "
           "$\\times$ link (`phi_from_native`); the AMEs are for the tables only.", "",
           "### Weak identification under two-way FE: the Pix dummy", "",
