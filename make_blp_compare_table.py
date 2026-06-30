@@ -89,6 +89,15 @@ def logit_cell(entry: dict, pname: str):
 
 
 # ── table builder ─────────────────────────────────────────────────────────────
+def _load_eff_alpha():
+    p = RES_DIR / "cluster_processed" / "effective_alpha.json"
+    try:
+        return json.loads(p.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+EFF_ALPHA = _load_eff_alpha()   # {routine: {alpha_bar, alpha_i_mean, ...}} from process_blp_outputs.py
+
+
 def build_table(est: int) -> str:
     stage_data = {s: load_stage(est, s) for s in STAGES}
     stage_data = {s: d for s, d in stage_data.items() if d is not None}
@@ -210,9 +219,20 @@ def build_table(est: int) -> str:
     def dim_of(c):
         if c == "logit": return "0"
         return str(len(stage_data[c].get("theta2", [])))
+    eff_rec = EFF_ALPHA.get(str(est))
+    def eff_of(c):
+        # Logit alpha is already an average-market coefficient; RC alpha_bar (Panel A) is at
+        # demographics=0, so the comparable quantity is the mean EFFECTIVE alpha_i over markets.
+        if c == "logit":
+            t1 = (logit or {}).get("theta1") or []
+            return f"${t1[0]:+.3f}$" if t1 else "---"
+        if c == "extended" and eff_rec:
+            return f"${eff_rec['alpha_i_mean']:+.3f}$"
+        return "---"
     L += [
         stat_row(r"$Q$ (GMM)", q_of),
         stat_row(r"$\dim(\theta_2)$", dim_of),
+        stat_row(r"Eff.\ $\bar\alpha$ (mean, real mkts)", eff_of),
         stat_row(r"Converged", conv_of),
         stat_row(r"Observations", n_of),
         stat_row(r"Eff.\ clusters ($G^*$)", g_of),

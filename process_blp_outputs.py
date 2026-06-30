@@ -60,6 +60,91 @@ def _theta2_labels(sigma_indices, pi_interactions):
     labs += [f"π({_name(COEF_NAMES, ci)} × {_name(D_COLS, di)})" for ci, di in (pi_interactions or [])]
     return labs
 
+IV_COLS = ["loo_log_assets","mean_loo_log_assets","loo_equity_ratio","mean_loo_equity_ratio",
+           "loo_basileia","mean_loo_basileia","loo_credit_assets","mean_loo_credit_assets",
+           "loo_npl_provision","mean_loo_npl_provision","n_rivals",
+           "personnel_cost_ratio_lag","admin_cost_ratio_lag","tax_cost_ratio_lag","indice_basileia_lag"]
+
+def compute_effective_alpha(index, res_dir):
+    """Effective per-market spread coefficient α_i = α_bar + Σ_d π(spread,d)·(D_dm/σ_d).
+    Demographics enter μ divided by their cross-market σ but NOT centered (engine convention),
+    so α_bar = θ₁[0] is the coefficient at demographics = 0 (no real market). Also a pooled
+    first-stage F of the excluded instruments on the spread. Reads the demand parquets; writes
+    cluster_processed/effective_alpha.json and returns {routine: rec}. Returns None if
+    pandas/parquets are unavailable (graceful — the rest of the pipeline is unaffected)."""
+    try:
+        import pandas as pd, numpy as np
+    except Exception:
+        print("[effective-α] pandas unavailable — skipped"); return None
+    try:
+        import statsmodels.api as sm
+    except Exception:
+        sm = None
+    dp = os.path.join(os.path.dirname(res_dir), "DEMAND_PREP")
+    out = {}
+    for m in index:
+        k = m["routine"]
+        fs = glob.glob(os.path.join(dp, f"demand_{k}_*spec_12.parquet"))
+        t1 = m.get("theta1") or m.get("theta1_alpha") or []
+        if not fs or not t1:
+            print(f"[effective-α] E{k}: missing parquet/θ₁ — skipped"); continue
+        sidx, pis, t2 = m.get("sigma_indices") or [], m.get("pi_interactions") or [], m.get("theta2_sigma_pi") or []
+        abar = float(t1[0]); ns = len(sidx)
+        all_demos = list(dict.fromkeys(D_COLS[di-1] for ci, di in pis if 0 < di <= len(D_COLS)))
+        need = list(dict.fromkeys(["spread_ann","deposit_balance","mca_code","time_id"] + X_COLS + IV_COLS + all_demos))
+        try:
+            df = pd.read_parquet(fs[0], columns=need)
+        except Exception as e:
+            print(f"[effective-α] E{k}: parquet read failed ({e}) — skipped"); continue
+        mk = df.drop_duplicates(["mca_code", "time_id"])
+        sd_cache = {n: float(mk[n].std()) for n in all_demos}
+        # β_i = θ₁[char] + Σ_d π(char,d)·(D/σ_d) for EVERY characteristic with a demographic
+        # interaction (same uncentered-demographics issue as the spread coefficient).
+        coefs = {}
+        for ci in sorted(set(sidx) | {ci for ci, di in pis}):
+            if not (0 < ci <= len(COEF_NAMES)) or ci-1 >= len(t1):
+                continue
+            beta = np.full(len(df), float(t1[ci-1]), float)
+            for j, (c2, di) in enumerate(pis):
+                if c2 == ci and 0 < di <= len(D_COLS) and ns+j < len(t2):
+                    sd = sd_cache.get(D_COLS[di-1], 0.0)
+                    if sd > 0:
+                        beta += t2[ns+j] * (df[D_COLS[di-1]].to_numpy(float) / sd)
+            entry = {"reported": float(t1[ci-1]), "mean_eff": float(np.nanmean(beta)),
+                     "median_eff": float(np.nanmedian(beta))}
+            if ci == 1:    # spread (α): extra detail for the price-coefficient diagnostic
+                w = np.nan_to_num(df["deposit_balance"].to_numpy(float), nan=0.0)
+                negv = beta < 0
+                entry.update({"p5": float(np.nanpercentile(beta, 5)), "p95": float(np.nanpercentile(beta, 95)),
+                              "frac_obs_neg": float(negv.mean()),
+                              "frac_dep_neg": float(w[negv].sum()/w.sum()) if w.sum() else None})
+            coefs[COEF_NAMES[ci-1]] = entry
+        sp = coefs.get("spread", {})
+        rec = {"alpha_bar": sp.get("reported"), "alpha_i_mean": sp.get("mean_eff"),
+               "alpha_i_median": sp.get("median_eff"), "alpha_i_p5": sp.get("p5"),
+               "alpha_i_p95": sp.get("p95"), "frac_obs_neg": sp.get("frac_obs_neg"),
+               "frac_dep_neg": sp.get("frac_dep_neg"), "coefs": coefs}
+        if sm is not None:
+            try:
+                d2 = df[["spread_ann"] + X_COLS + IV_COLS].replace([np.inf, -np.inf], np.nan).dropna()
+                Y = d2["spread_ann"].to_numpy(float)
+                full = sm.add_constant(d2[X_COLS + IV_COLS].astype(float))
+                mm = sm.OLS(Y, full.to_numpy(float)).fit()
+                cc = list(full.columns); R = np.zeros((len(IV_COLS), len(cc)))
+                for i, iv in enumerate(IV_COLS): R[i, cc.index(iv)] = 1.0
+                rec["firststage_F"] = float(np.squeeze(mm.f_test(R).fvalue))
+                m0 = sm.OLS(Y, sm.add_constant(d2[X_COLS].astype(float)).to_numpy(float)).fit()
+                rec["partial_R2"] = float((mm.rsquared - m0.rsquared) / (1 - m0.rsquared))
+            except Exception as e:
+                print(f"[effective-α] E{k}: first-stage failed ({e})")
+        out[str(k)] = rec
+        print(f"[effective-α] E{k}: α_bar {abar:+.3f} → mean α_i {rec['alpha_i_mean']:+.3f} "
+              f"({(rec.get('frac_dep_neg') or 0):.0%} of deposits α_i<0)")
+    if out:
+        with open(os.path.join(res_dir, "cluster_processed", "effective_alpha.json"), "w") as f:
+            json.dump(out, f, indent=2)
+    return out
+
 def default_results_dir():
     repo = os.path.dirname(os.path.abspath(__file__))
     root = os.path.dirname(os.path.dirname(repo))  # .../Open-Finance
@@ -192,13 +277,14 @@ def main():
 
     with open(os.path.join(sub["cluster_processed"], "INDEX.json"), "w") as f:
         json.dump({"routines": index, "stage": args.stage}, f, indent=2)
-    write_summary_md(sub, index, args.stage)
+    eff = compute_effective_alpha(index, RES)
+    write_summary_md(sub, index, args.stage, eff)
     print(f"\n[done] {len(index)} routines processed -> cluster_processed/  (+ INDEX.json + SUMMARY.md)")
 
 
-def write_summary_md(sub, index, stage):
+def write_summary_md(sub, index, stage, eff=None):
     """Emit a human-readable SUMMARY.md alongside the processed artifacts (auto-regenerated
-    each run, so it never goes stale)."""
+    each run, so it never goes stale). `eff` = compute_effective_alpha() output (or None)."""
     ts = datetime.datetime.now().isoformat(timespec="minutes")
     BOUND = 5.0  # current θ₂ box half-width (blp_2_rc.jl sets BLP_SIGMA_UB / BLP_PI_BOUND)
     L = ["# BLP RC-BLP — results summary", ""]
@@ -239,6 +325,11 @@ def write_summary_md(sub, index, stage):
                 else:
                     cells.append("—")
             L.append("| " + " | ".join(cells) + " |")
+        if eff:
+            cells = ["↳ **effective α** (mean, real mkts)"] + [
+                (f"{eff[str(m['routine'])]['alpha_i_mean']:+.3f}" if str(m['routine']) in eff else "—")
+                for m in index]
+            L.append("| " + " | ".join(cells) + " |")
     labels = _theta2_labels(ref.get("sigma_indices"), ref.get("pi_interactions"))
     if labels:
         L += ["", "**Random coefficients (θ₂)** — point estimates (θ₂ SEs not computed):", ""]
@@ -248,6 +339,57 @@ def write_summary_md(sub, index, stage):
             cells = [lbl] + [f"{(m.get('theta2_sigma_pi') or [])[k]:.4f}"
                              if k < len(m.get('theta2_sigma_pi') or []) else "—" for m in index]
             L.append("| " + " | ".join(cells) + " |")
+
+    if eff:
+        L += ["", "## Price-coefficient (α) diagnostic", "",
+              "θ₁[0] (α_bar) is the spread coefficient **at demographics = 0** — no real market: the "
+              "engine scales demographics by their cross-market σ but does **not** center them "
+              "(`draws ./= σ`). The coefficient an actual market faces is "
+              "`α_i = α_bar + Σ_d π(spread,d)·(D_dm/σ_d)`, dominated by the strongly negative "
+              "`π(spread × fraction_65plus)` on the (positive) elderly share. So **α_bar > 0 is a "
+              "centering artifact**; the *effective* coefficient is negative — downward-sloping "
+              "demand, the expected sign (spread is the deposit markdown, rf − dep_rate) — for the "
+              "vast majority of deposit volume.", ""]
+        L += ["| Routine | α_bar (demo=0) | mean α_i | median α_i | % deposits α_i<0 | "
+              "first-stage F (15 IVs) |",
+              "|---|---:|---:|---:|---:|---:|"]
+        for m in index:
+            r = eff.get(str(m["routine"]))
+            if not r: continue
+            fF = f"{r['firststage_F']:,.0f}" if r.get("firststage_F") is not None else "—"
+            fd = f"{r['frac_dep_neg']:.1%}" if r.get("frac_dep_neg") is not None else "—"
+            L.append(f"| E{m['routine']} | {r['alpha_bar']:+.3f} | {r['alpha_i_mean']:+.3f} | "
+                     f"{r['alpha_i_median']:+.3f} | {fd} | {fF} |")
+        onames = []
+        for m in index:
+            for nm in ((eff.get(str(m["routine"])) or {}).get("coefs") or {}):
+                if nm != "spread" and nm not in onames:
+                    onames.append(nm)
+        if onames:
+            L += ["", "**Same artifact in the other interacted coefficients** — reported θ₁ (demo=0) "
+                  "→ mean effective coefficient over markets:", ""]
+            L.append("| Coefficient | " + " | ".join(f"E{m['routine']}" for m in index) + " |")
+            L.append("|:--" + "|:--:" * len(index) + "|")
+            for nm in onames:
+                cells = [nm.replace("_", " ")]
+                for m in index:
+                    c = ((eff.get(str(m["routine"])) or {}).get("coefs") or {}).get(nm)
+                    cells.append(f"{c['reported']:+.2f} → {c['mean_eff']:+.2f}" if c else "—")
+                L.append("| " + " | ".join(cells) + " |")
+        L += ["",
+              "- **Reconciles the apparent logit↔RC sign flip.** The full-logit α (small, slightly "
+              "negative) is already an average-market coefficient, whereas RC α_bar is at demo=0; the "
+              "RC mean effective α_i (table) matches the logit's sign and rough magnitude.",
+              "- **Instruments are not weak.** The pooled first-stage F (table, in the hundreds) is far "
+              "above the Staiger–Stock ≈10 rule, so the positive α_bar is not an instrument-strength "
+              "issue — it is the centering artifact (partial R² ≈ 3–4%; pooled, no FE).",
+              "- **`fgc_covered` is the other notably-affected coefficient** (reported ≈ −14/−12 in "
+              "E5/E8 vs effective ≈ −4): its `π(fgc×65+)` — the interaction that pinned the π-bound — "
+              "shifts it strongly. `has_ip` and the segment dummies have no interaction (θ₁ = effective).",
+              "- **Fix (pending):** center the demographics (subtract the mean before dividing by σ) "
+              "in `load_precomputed_draws`. A pure reparametrization (fit/shares/δ unchanged) that "
+              "makes θ₁ the average-market coefficients (correctly signed) and the π's deviations "
+              "around them."]
 
     L += ["", "## Notes", "",
           "- **Stages** free one random coefficient at a time: `sigma`(1) → `rc2`(2) → `rc3`(3) → "
