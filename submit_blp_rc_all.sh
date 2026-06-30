@@ -89,12 +89,14 @@ for e in ${ENGINES}; do
 done
 
 njobs=0
+term_jids=""           # terminal job of every chain — the auto-zip waits on these
 for k in ${ROUTINES}; do
     ift_ext_jid=""
     if [ "${do_ift}" = "1" ]; then
         echo "── chain: E${k} / ift ──"
         ift_ext_jid=$(submit_chain "${k}" "ift" "ift")
         njobs=$((njobs + 8))
+        term_jids="${term_jids} ${ift_ext_jid}"
     fi
     if [ "${do_num}" = "1" ]; then
         if [ "${NUMERICAL_MODE}" = "crosscheck" ] && [ "${do_ift}" = "1" ]; then
@@ -110,12 +112,37 @@ for k in ${ROUTINES}; do
                 "${GENERIC}")
             echo "    extended (xcheck): ${jid}  (afterok ${ift_ext_jid}, wall=${wall})"
             njobs=$((njobs + 1))
+            term_jids="${term_jids} ${jid}"
         else
             # Full 8-stage numerical chain (NUMERICAL_MODE=full, or numerical without IFT).
             echo "── chain: E${k} / numerical (full) ──"
-            submit_chain "${k}" "numerical" "num" >/dev/null
+            num_ext_jid=$(submit_chain "${k}" "numerical" "num")
             njobs=$((njobs + 8))
+            term_jids="${term_jids} ${num_ext_jid}"
         fi
     fi
 done
 echo "Submitted ${njobs} RC-BLP jobs (routines: ${ROUTINES}; engines: ${ENGINES}; numerical_mode: ${NUMERICAL_MODE})."
+
+# ── auto-zip: one short CPU job, afterany ALL chains, bundles into data/output:
+#     • blp_outputs_<thisjobid>.zip — the result/summary/logit files process_blp_outputs.py reads
+#     • blp_logs_<thisjobid>.zip    — the per-stage SLURM .out/.err (for assessing run performance)
+#    `afterany` (not afterok) so partial results + logs still get bundled if a stage wall-kills.
+ZIP_PARTITION="${ZIP_PARTITION:-day}"   # any CPU partition; override if your cluster differs
+dep_csv="$(echo ${term_jids} | tr ' ' ':' | sed 's/^://; s/:$//')"
+if [ -n "${dep_csv}" ]; then
+    zip_jid=$(sbatch --parsable --dependency=afterany:${dep_csv} \
+        --job-name=blp_zip --partition="${ZIP_PARTITION}" --time=00:20:00 \
+        --nodes=1 --ntasks=1 --cpus-per-task=2 --mem=8G \
+        -o "${HERE}/logs/blp_zip_%j.out" -e "${HERE}/logs/blp_zip_%j.err" \
+        --wrap "cd '${DATA_OUT}' && { \
+                  zip -j \"blp_outputs_\${SLURM_JOB_ID}.zip\" \
+                    blp_results_E*_spec_12_*.json blp_results_E*_spec_12_*.jls \
+                    blp_summary_E*_gpu_*.json logit_* ; \
+                  zip -j \"blp_logs_\${SLURM_JOB_ID}.zip\" \
+                    '${HERE}'/logs/rc_*.out '${HERE}'/logs/rc_*.err ; \
+                  echo \"wrote \${PWD}/blp_outputs_\${SLURM_JOB_ID}.zip + blp_logs_\${SLURM_JOB_ID}.zip\"; }")
+    echo "── auto-zip: ${zip_jid}  (afterany ${term_jids# })"
+    echo "   → ${DATA_OUT}/blp_outputs_<${zip_jid}>.zip  (results; process_blp_outputs.py auto-discovers blp_outputs_*.zip)"
+    echo "   → ${DATA_OUT}/blp_logs_<${zip_jid}>.zip     (the rc_*.out/.err SLURM logs for performance review)"
+fi

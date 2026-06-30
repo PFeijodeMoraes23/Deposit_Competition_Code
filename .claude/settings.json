@@ -9,7 +9,8 @@
       "Skill(schedule)",
       "Skill(schedule:*)",
       "Read(//c/Users/pedro/OneDrive/Documentos/Yale/Year 3 \\(2024 - 2025\\)/Open Finance/**)",
-      "Read(//c/Users/pedro/OneDrive/Documentos/Yale/Year 3 \\(2024 - 2025\\)/Open Finance/Open-Finance/Drafts/Deposit Competition/**)"
+      "Read(//c/Users/pedro/OneDrive/Documentos/Yale/Year 3 \\(2024 - 2025\\)/Open Finance/Open-Finance/Drafts/Deposit Competition/**)",
+      "WebFetch(domain:arxiv.org)"
     ],
     "additionalDirectories": [
       "C:\\Users\\pedro\\AppData\\Roaming\\Code\\User",

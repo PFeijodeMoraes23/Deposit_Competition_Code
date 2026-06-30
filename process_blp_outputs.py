@@ -63,10 +63,10 @@ def _theta2_labels(sigma_indices, pi_interactions):
 _STAGE_HEAD = {"sigma": "Sigma", "rc2": "RC2", "rc3": "RC3", "rc4": "RC4",
                "full": "Full", "ext1": "Ext1", "ext2": "Ext2", "extended": "Extended"}
 
-def md_compare_table(k, raw_dir, logit_e, eff_rec):
+def md_compare_table(k, raw_dir, logit_e):
     """Markdown version of the per-routine Logit-vs-RC-stages compare table (same content as
     Rout/blp_compare_E{k}_spec12.tex): Panel A θ₁ (coef (SE)), Panel B θ₂ (point estimates),
-    footer Q / effective α / converged / N / G*. Reads the small per-stage result JSONs."""
+    footer Q / converged / N / G*. Reads the small per-stage result JSONs."""
     sdata, stages = {}, []
     for st in STAGE_SEQUENCE:
         try:
@@ -112,38 +112,27 @@ def md_compare_table(k, raw_dir, logit_e, eff_rec):
         L.append("| " + " | ".join(row) + " |")
     def foot(label, fn):                                          # footer
         return "| " + label + " | " + " | ".join(fn(c) for c in cols) + " |"
-    def eff_of(c):
-        if c == "logit":
-            t1 = logit_e.get("theta1") or []; return f"{t1[0]:+.3f}" if t1 else "—"
-        return f"{eff_rec['alpha_i_mean']:+.3f}" if (c == "extended" and eff_rec) else "—"
     L.append(foot("**Q (GMM)**", lambda c: f"{src(c).get('Q_value'):.4f}" if src(c).get('Q_value') is not None else "—"))
-    L.append(foot("**eff. α (mean)**", eff_of))
     L.append(foot("**converged**", lambda c: "yes" if src(c).get("converged") else "no"))
     L.append(foot("**N**", lambda c: f"{src(c).get('n_obs'):,}" if src(c).get("n_obs") else "—"))
     L.append(foot("**G\\***", lambda c: f"{src(c).get('G_star'):.2f}" if src(c).get("G_star") is not None else "—"))
     L.append("")
     return L
 
-IV_COLS = ["loo_log_assets","mean_loo_log_assets","loo_equity_ratio","mean_loo_equity_ratio",
-           "loo_basileia","mean_loo_basileia","loo_credit_assets","mean_loo_credit_assets",
-           "loo_npl_provision","mean_loo_npl_provision","n_rivals",
-           "personnel_cost_ratio_lag","admin_cost_ratio_lag","tax_cost_ratio_lag","indice_basileia_lag"]
-
-def compute_effective_alpha(index, res_dir):
-    """Effective per-market spread coefficient α_i = α_bar + Σ_d π(spread,d)·(D_dm/σ_d).
-    Demographics enter μ divided by their cross-market σ but NOT centered (engine convention),
-    so α_bar = θ₁[0] is the coefficient at demographics = 0 (no real market). Also a pooled
-    first-stage F of the excluded instruments on the spread. Reads the demand parquets; writes
-    cluster_processed/effective_alpha.json and returns {routine: rec}. Returns None if
-    pandas/parquets are unavailable (graceful — the rest of the pipeline is unaffected)."""
+def compute_coef_heterogeneity(index, res_dir):
+    """Per-market effective coefficient β_i = θ₁[char] + Σ_d π(char,d)·((D_dm − D̄_d)/σ_d) for
+    every characteristic with a demographic interaction. Demographics are now CENTERED in the
+    engine (load_precomputed_draws: D̃ = (D − D̄)/σ), so the reported θ₁ is the AVERAGE-market
+    coefficient — `mean(β_i) ≈ θ₁` here is the reparametrization sanity check, and the spread of
+    β_i across markets is genuine random-coefficient heterogeneity (an economic result, not the
+    old centering artifact). Demographics are centered+scaled with per-market parquet moments to
+    mirror the engine convention (an illustration; the exact per-market coefficients live in the
+    engine's demo_draws). Reads the demand parquets; writes cluster_processed/coef_heterogeneity.json
+    and returns {routine: rec}. Returns None if pandas/parquets are unavailable (graceful)."""
     try:
         import pandas as pd, numpy as np
     except Exception:
-        print("[effective-α] pandas unavailable — skipped"); return None
-    try:
-        import statsmodels.api as sm
-    except Exception:
-        sm = None
+        print("[heterogeneity] pandas unavailable — skipped"); return None
     dp = os.path.join(os.path.dirname(res_dir), "DEMAND_PREP")
     out = {}
     for m in index:
@@ -151,19 +140,20 @@ def compute_effective_alpha(index, res_dir):
         fs = glob.glob(os.path.join(dp, f"demand_{k}_*spec_12.parquet"))
         t1 = m.get("theta1") or m.get("theta1_alpha") or []
         if not fs or not t1:
-            print(f"[effective-α] E{k}: missing parquet/θ₁ — skipped"); continue
+            print(f"[heterogeneity] E{k}: missing parquet/θ₁ — skipped"); continue
         sidx, pis, t2 = m.get("sigma_indices") or [], m.get("pi_interactions") or [], m.get("theta2_sigma_pi") or []
-        abar = float(t1[0]); ns = len(sidx)
+        ns = len(sidx)
         all_demos = list(dict.fromkeys(D_COLS[di-1] for ci, di in pis if 0 < di <= len(D_COLS)))
-        need = list(dict.fromkeys(["spread_ann","deposit_balance","mca_code","time_id"] + X_COLS + IV_COLS + all_demos))
+        need = list(dict.fromkeys(["spread_ann","deposit_balance","mca_code","time_id"] + X_COLS + all_demos))
         try:
             df = pd.read_parquet(fs[0], columns=need)
         except Exception as e:
-            print(f"[effective-α] E{k}: parquet read failed ({e}) — skipped"); continue
+            print(f"[heterogeneity] E{k}: parquet read failed ({e}) — skipped"); continue
         mk = df.drop_duplicates(["mca_code", "time_id"])
-        sd_cache = {n: float(mk[n].std()) for n in all_demos}
-        # β_i = θ₁[char] + Σ_d π(char,d)·(D/σ_d) for EVERY characteristic with a demographic
-        # interaction (same uncentered-demographics issue as the spread coefficient).
+        sd_cache  = {n: float(mk[n].std())  for n in all_demos}    # σ_d
+        avg_cache = {n: float(mk[n].mean()) for n in all_demos}    # D̄_d (subtracted → centered)
+        # β_i = θ₁[char] + Σ_d π(char,d)·((D − D̄)/σ_d) for EVERY characteristic with a demographic
+        # interaction. Centering matches the engine, so mean(β_i) ≈ θ₁ (the average-market value).
         coefs = {}
         for ci in sorted(set(sidx) | {ci for ci, di in pis}):
             if not (0 < ci <= len(COEF_NAMES)) or ci-1 >= len(t1):
@@ -171,12 +161,12 @@ def compute_effective_alpha(index, res_dir):
             beta = np.full(len(df), float(t1[ci-1]), float)
             for j, (c2, di) in enumerate(pis):
                 if c2 == ci and 0 < di <= len(D_COLS) and ns+j < len(t2):
-                    sd = sd_cache.get(D_COLS[di-1], 0.0)
+                    nm = D_COLS[di-1]; sd = sd_cache.get(nm, 0.0)
                     if sd > 0:
-                        beta += t2[ns+j] * (df[D_COLS[di-1]].to_numpy(float) / sd)
+                        beta += t2[ns+j] * ((df[nm].to_numpy(float) - avg_cache[nm]) / sd)
             entry = {"reported": float(t1[ci-1]), "mean_eff": float(np.nanmean(beta)),
                      "median_eff": float(np.nanmedian(beta))}
-            if ci == 1:    # spread (α): extra detail for the price-coefficient diagnostic
+            if ci == 1:    # spread (α): extra distribution detail
                 w = np.nan_to_num(df["deposit_balance"].to_numpy(float), nan=0.0)
                 negv = beta < 0
                 entry.update({"p5": float(np.nanpercentile(beta, 5)), "p95": float(np.nanpercentile(beta, 95)),
@@ -188,24 +178,13 @@ def compute_effective_alpha(index, res_dir):
                "alpha_i_median": sp.get("median_eff"), "alpha_i_p5": sp.get("p5"),
                "alpha_i_p95": sp.get("p95"), "frac_obs_neg": sp.get("frac_obs_neg"),
                "frac_dep_neg": sp.get("frac_dep_neg"), "coefs": coefs}
-        if sm is not None:
-            try:
-                d2 = df[["spread_ann"] + X_COLS + IV_COLS].replace([np.inf, -np.inf], np.nan).dropna()
-                Y = d2["spread_ann"].to_numpy(float)
-                full = sm.add_constant(d2[X_COLS + IV_COLS].astype(float))
-                mm = sm.OLS(Y, full.to_numpy(float)).fit()
-                cc = list(full.columns); R = np.zeros((len(IV_COLS), len(cc)))
-                for i, iv in enumerate(IV_COLS): R[i, cc.index(iv)] = 1.0
-                rec["firststage_F"] = float(np.squeeze(mm.f_test(R).fvalue))
-                m0 = sm.OLS(Y, sm.add_constant(d2[X_COLS].astype(float)).to_numpy(float)).fit()
-                rec["partial_R2"] = float((mm.rsquared - m0.rsquared) / (1 - m0.rsquared))
-            except Exception as e:
-                print(f"[effective-α] E{k}: first-stage failed ({e})")
         out[str(k)] = rec
-        print(f"[effective-α] E{k}: α_bar {abar:+.3f} → mean α_i {rec['alpha_i_mean']:+.3f} "
-              f"({(rec.get('frac_dep_neg') or 0):.0%} of deposits α_i<0)")
+        a = sp.get("reported"); mb = rec["alpha_i_mean"]
+        print(f"[heterogeneity] E{k}: α (avg-mkt) {a:+.3f} | mean β_i {mb:+.3f} "
+              f"({(rec.get('frac_dep_neg') or 0):.0%} of deposits β_i<0)"
+              if (a is not None and mb is not None) else f"[heterogeneity] E{k}: computed")
     if out:
-        with open(os.path.join(res_dir, "cluster_processed", "effective_alpha.json"), "w") as f:
+        with open(os.path.join(res_dir, "cluster_processed", "coef_heterogeneity.json"), "w") as f:
             json.dump(out, f, indent=2)
     return out
 
@@ -243,17 +222,22 @@ def main():
     print(f"subfolders  = {', '.join(SUBDIRS)}\n")
 
     # ── 1. zip -> cluster_raw/ + extract ──────────────────────────────────────
-    zip_root = os.path.join(RES, "blp_outputs.zip")
-    zip_raw  = os.path.join(sub["cluster_raw"], "blp_outputs.zip")
-    if os.path.exists(zip_root):
+    # Accept either the legacy literal `blp_outputs.zip` or the auto-named
+    # `blp_outputs_<jobid>.zip` produced by submit_blp_rc_all.sh — newest wins, no rename needed.
+    def _newest_zip(d):
+        zs = glob.glob(os.path.join(d, "blp_outputs*.zip"))
+        return max(zs, key=os.path.getmtime) if zs else None
+    zip_root = _newest_zip(RES)
+    if zip_root:
         move_into(zip_root, sub["cluster_raw"])
-        print("[zip] moved blp_outputs.zip -> cluster_raw/")
-    if not os.path.exists(zip_raw):
-        sys.exit(f"ERROR: blp_outputs.zip not found in {RES} or cluster_raw/.")
+        print(f"[zip] moved {os.path.basename(zip_root)} -> cluster_raw/")
+    zip_raw = _newest_zip(sub["cluster_raw"])
+    if not zip_raw:
+        sys.exit(f"ERROR: no blp_outputs*.zip found in {RES} or cluster_raw/.")
     with zipfile.ZipFile(zip_raw) as z:
         members = [m for m in z.namelist() if not m.endswith("/")]
         z.extractall(sub["cluster_raw"])
-    print(f"[zip] extracted {len(members)} files -> cluster_raw/")
+    print(f"[zip] extracted {len(members)} files from {os.path.basename(zip_raw)} -> cluster_raw/")
 
     # ── 2. current logit_* (un-suffixed) -> logit/ ────────────────────────────
     n_logit = 0
@@ -341,20 +325,21 @@ def main():
 
     with open(os.path.join(sub["cluster_processed"], "INDEX.json"), "w") as f:
         json.dump({"routines": index, "stage": args.stage}, f, indent=2)
-    eff = compute_effective_alpha(index, RES)
-    write_summary_md(sub, index, args.stage, eff)
+    het = compute_coef_heterogeneity(index, RES)
+    write_summary_md(sub, index, args.stage, het)
     print(f"\n[done] {len(index)} routines processed -> cluster_processed/  (+ INDEX.json + SUMMARY.md)")
 
 
-def write_summary_md(sub, index, stage, eff=None):
+def write_summary_md(sub, index, stage, het=None):
     """Emit a human-readable SUMMARY.md alongside the processed artifacts (auto-regenerated
-    each run, so it never goes stale). `eff` = compute_effective_alpha() output (or None)."""
+    each run, so it never goes stale). `het` = compute_coef_heterogeneity() output (or None)."""
     ts = datetime.datetime.now().isoformat(timespec="minutes")
     BOUND = 5.0  # current θ₂ box half-width (blp_2_rc.jl sets BLP_SIGMA_UB / BLP_PI_BOUND)
-    # MD013 (line-length) is unfixable for wide tables, so disable it for this file (the only
-    # markdownlint rule this report trips). Recognised by the markdownlint VS Code extension.
+    # MD013 (line-length) and MD060 (table-pipe spacing) are both unfixable for the wide compact
+    # tables this report uses, so disable them file-wide (the only markdownlint rules it trips).
+    # Recognised by the markdownlint VS Code extension / markdownlint-cli2.
     L = ["# BLP RC-BLP — results summary", "",
-         "<!-- markdownlint-disable-file MD013 -->", ""]
+         "<!-- markdownlint-disable-file MD013 MD060 -->", ""]
     L.append(f"_Generated {ts} · stage = **{stage}** · IFT engine · "
              f"θ₂ box: σ∈[0,{BOUND:g}], π∈[−{BOUND:g},{BOUND:g}]._")
     L += ["", "## Headline estimates", "",
@@ -392,11 +377,6 @@ def write_summary_md(sub, index, stage, eff=None):
                 else:
                     cells.append("—")
             L.append("| " + " | ".join(cells) + " |")
-        if eff:
-            cells = ["↳ **effective α** (mean, real mkts)"] + [
-                (f"{eff[str(m['routine'])]['alpha_i_mean']:+.3f}" if str(m['routine']) in eff else "—")
-                for m in index]
-            L.append("| " + " | ".join(cells) + " |")
     labels = _theta2_labels(ref.get("sigma_indices"), ref.get("pi_interactions"))
     if labels:
         L += ["", "**Random coefficients (θ₂)** — point estimates (θ₂ SEs not computed):", ""]
@@ -407,56 +387,108 @@ def write_summary_md(sub, index, stage, eff=None):
                              if k < len(m.get('theta2_sigma_pi') or []) else "—" for m in index]
             L.append("| " + " | ".join(cells) + " |")
 
-    if eff:
-        L += ["", "## Price-coefficient (α) diagnostic", "",
-              "θ₁[0] (α_bar) is the spread coefficient **at demographics = 0** — no real market: the "
-              "engine scales demographics by their cross-market σ but does **not** center them "
-              "(`draws ./= σ`). The coefficient an actual market faces is "
-              "`α_i = α_bar + Σ_d π(spread,d)·(D_dm/σ_d)`, dominated by the strongly negative "
-              "`π(spread × fraction_65plus)` on the (positive) elderly share. So **α_bar > 0 is a "
-              "centering artifact**; the *effective* coefficient is negative — downward-sloping "
-              "demand, the expected sign (spread is the deposit markdown, rf − dep_rate) — for the "
-              "vast majority of deposit volume.", ""]
-        L += ["| Routine | α_bar (demo=0) | mean α_i | median α_i | % deposits α_i<0 | "
-              "first-stage F (15 IVs) |",
-              "|---|---:|---:|---:|---:|---:|"]
+    if het:
+        L += ["", "## Coefficient heterogeneity across markets", "",
+              "Demographics enter μ **centered** (D̃ = (D − D̄)/σ in `load_precomputed_draws`), so the "
+              "reported θ₁ above is the **average-market** coefficient — spread α is negative "
+              "(downward-sloping demand; spread is the deposit markdown, rf − dep_rate). Random "
+              "coefficients make the coefficient an individual market faces, "
+              "`β_i = θ₁ + Σ_d π·(D_dm − D̄_d)/σ_d`, vary around that average. The table illustrates "
+              "the spread distribution (parquet-based; the exact per-market coefficients live in the "
+              "engine's demo_draws):", ""]
+        def _f(x, p="+.3f"):
+            return format(x, p) if x is not None else "—"
+        L += ["| Routine | α (avg-mkt, θ₁) | mean β_i | median β_i | p5 | p95 | % deposits β_i<0 |",
+              "|---|---:|---:|---:|---:|---:|---:|"]
         for m in index:
-            r = eff.get(str(m["routine"]))
+            r = het.get(str(m["routine"]))
             if not r: continue
-            fF = f"{r['firststage_F']:,.0f}" if r.get("firststage_F") is not None else "—"
             fd = f"{r['frac_dep_neg']:.1%}" if r.get("frac_dep_neg") is not None else "—"
-            L.append(f"| E{m['routine']} | {r['alpha_bar']:+.3f} | {r['alpha_i_mean']:+.3f} | "
-                     f"{r['alpha_i_median']:+.3f} | {fd} | {fF} |")
+            L.append(f"| E{m['routine']} | {_f(r['alpha_bar'])} | {_f(r['alpha_i_mean'])} | "
+                     f"{_f(r['alpha_i_median'])} | {_f(r['alpha_i_p5'])} | {_f(r['alpha_i_p95'])} | {fd} |")
         onames = []
         for m in index:
-            for nm in ((eff.get(str(m["routine"])) or {}).get("coefs") or {}):
+            for nm in ((het.get(str(m["routine"])) or {}).get("coefs") or {}):
                 if nm != "spread" and nm not in onames:
                     onames.append(nm)
         if onames:
-            L += ["", "**Same artifact in the other interacted coefficients** — reported θ₁ (demo=0) "
-                  "→ mean effective coefficient over markets:", ""]
+            L += ["", "**Other interacted coefficients** — average-market θ₁ → mean β_i over markets "
+                  "(they should roughly coincide; the gap is parquet-proxy / sampling noise):", ""]
             L.append("| Coefficient | " + " | ".join(f"E{m['routine']}" for m in index) + " |")
             L.append("|:--" + "|:--:" * len(index) + "|")
             for nm in onames:
                 cells = [nm.replace("_", " ")]
                 for m in index:
-                    c = ((eff.get(str(m["routine"])) or {}).get("coefs") or {}).get(nm)
+                    c = ((het.get(str(m["routine"])) or {}).get("coefs") or {}).get(nm)
                     cells.append(f"{c['reported']:+.2f} → {c['mean_eff']:+.2f}" if c else "—")
                 L.append("| " + " | ".join(cells) + " |")
         L += ["",
-              "- **Reconciles the apparent logit↔RC sign flip.** The full-logit α (small, slightly "
-              "negative) is already an average-market coefficient, whereas RC α_bar is at demo=0; the "
-              "RC mean effective α_i (table) matches the logit's sign and rough magnitude.",
-              "- **Instruments are not weak.** The pooled first-stage F (table, in the hundreds) is far "
-              "above the Staiger–Stock ≈10 rule, so the positive α_bar is not an instrument-strength "
-              "issue — it is the centering artifact (partial R² ≈ 3–4%; pooled, no FE).",
-              "- **`fgc_covered` is the other notably-affected coefficient** (reported ≈ −14/−12 in "
-              "E5/E8 vs effective ≈ −4): its `π(fgc×65+)` — the interaction that pinned the π-bound — "
-              "shifts it strongly. `has_ip` and the segment dummies have no interaction (θ₁ = effective).",
-              "- **Fix (pending):** center the demographics (subtract the mean before dividing by σ) "
-              "in `load_precomputed_draws`. A pure reparametrization (fit/shares/δ unchanged) that "
-              "makes θ₁ the average-market coefficients (correctly signed) and the π's deviations "
-              "around them."]
+              "- **`mean β_i ≈ θ₁`** is the sanity check that demographic centering is a pure "
+              "reparametrization: the average-market coefficient equals θ₁, and the dispersion "
+              "(p5–p95) is real preference heterogeneity, not a centering artifact.",
+              "- **`fgc_covered`** carries the largest interaction (`π(fgc×65+)`), so its β_i spreads "
+              "most around θ₁; `has_ip` and the segment dummies have no interaction (β_i = θ₁)."]
+
+    # ── weak-instruments diagnostics (from weak_iv_analysis.py → cluster_processed/weak_iv.json) ──
+    try:
+        wiv = json.load(open(os.path.join(sub["cluster_processed"], "weak_iv.json")))
+    except Exception:
+        wiv = {}
+    if wiv:
+        L += ["", "## Weak-instruments diagnostics", "",
+              "First stage of the demand model: the deposit **spread** (the only endogenous "
+              "regressor) on the 15 excluded instruments (leave-one-out rival characteristics, "
+              "`n_rivals`, cost ratios, capital ratio), partialling out the product controls and "
+              "clustering by conglomerate. The engine instruments spread for deposit **types 4 and "
+              "5** (`project_spreads`), so the battery is reported on those subsamples (and pooled). "
+              "`KP-F` = cluster-robust first-stage / Kleibergen-Paap rk Wald F [@kleibergenpaap2006]; "
+              "`CD-F` = Cragg-Donald (homoskedastic) [@craggdonald1993]; `eff-F` = Montiel-Olea–"
+              "Pflueger effective F [@oleapflueger2013]; `LM 95%` = Kleibergen LM/K weak-IV-robust CI "
+              "for α [@kleibergen2005]; `J (p)` = Hansen overid test [@hansen1982]. Staiger–Stock "
+              "rule of thumb is F ≈ 10 [@staigerstock1997].", ""]
+        L += ["| Routine | sample | N | K | α̂ (SE) | partial R² | KP-F | CD-F | eff-F | LM 95% CI | J (p) |",
+              "|---|:--:|---:|---:|---:|---:|---:|---:|---:|:--:|---:|"]
+        def _F(x):
+            return f"{x:,.0f}" if x is not None else "—"
+        for m in index:
+            rr = wiv.get(str(m["routine"]))
+            if not rr: continue
+            for key, lbl in (("type45", "4+5"), ("type4", "4"), ("type5", "5")):
+                r = rr.get(key)
+                if not r: continue
+                a, se = r.get("alpha_2sls"), r.get("alpha_se")
+                astr = f"{a:+.3f} ({se:.3f})" if (a is not None and se is not None) else "—"
+                pr = f"{r['partial_R2']:.3f}" if r.get("partial_R2") is not None else "—"
+                lm = (f"[{r['lm_ci_low']:+.3f}, {r['lm_ci_high']:+.3f}]"
+                      + ("" if r.get("lm_ci_bounded", True) else " (open)")
+                      + (" (disc.)" if r.get("lm_ci_disconnected") else "")) \
+                    if r.get("lm_ci_low") is not None else "∅"
+                jp = f"{r['hansen_J_p']:.2f}" if r.get("hansen_J_p") is not None else "—"
+                L.append(f"| E{m['routine']} | {lbl} | {r['n_obs']:,} | {r['n_iv']} | {astr} | {pr} | "
+                         f"{_F(r.get('kp_first_stage_F'))} | {_F(r.get('cragg_donald_F'))} | "
+                         f"{_F(r.get('effective_F'))} | {lm} | {jp} |")
+        L += ["",
+              "- **Clustering matters a lot here.** The homoskedastic Cragg-Donald F is in the "
+              "hundreds, but the cluster-robust effective F [@oleapflueger2013] and KP rk Wald F "
+              "[@kleibergenpaap2006] are an order of magnitude smaller (effective F ≈ 7–36 across "
+              "subsamples) — the leave-one-out / rival instruments are highly correlated **within "
+              "conglomerate**, so once SEs are clustered the spread is only weakly-to-moderately "
+              "identified. The naive ≈400 first-stage F overstated instrument strength; type 5 is the "
+              "strongest, type 4 the weakest (below 10).",
+              "- **Weak-IV-robust inference.** The reported interval is the **Kleibergen LM/K** CI "
+              "[@kleibergen2005] (χ²₁; isolates α from the overidentification direction), which stays "
+              "informative even when the **Anderson-Rubin** set [@andersonrubin1949] is empty (∅). "
+              "Because min over α of the AR statistic equals the **Hansen J** overid test "
+              "[@hansen1982], and J rejects in the larger subsamples (J p ≈ 0 — at n ≈ 90k the overid "
+              "test over-rejects), the AR set collapses to ∅ there; the LM/K CI does not. The optimal "
+              "conditional-LR refinement [@moreira2003] is available if needed.",
+              "- **Caveat.** These α̂ are a subsample first-pass on the engine's ln(share) δ (no "
+              "market/time FE), **not** the headline logit α; consistent with the weak first stage "
+              "they are imprecise/wrong-signed.",
+              "- **Takeaway:** the spread instruments are not as strong as the homoskedastic F "
+              "suggested. This is independent of the demographic-centering fix (which is about the "
+              "RC θ₁ sign, not identification) and is worth weighing for the deposit-competition "
+              "first stage."]
 
     # per-routine Logit-vs-RC-stages compare tables (markdown mirror of Rout/blp_compare_*.tex)
     raw_dir = sub["cluster_raw"]
@@ -467,13 +499,13 @@ def write_summary_md(sub, index, stage, eff=None):
     L += ["", "## Logit vs RC-BLP stages (per routine)", "",
           "Full comparison tables (same content as `Rout/blp_compare_E{k}_spec12.tex`): the non-RC "
           "logit (`full` sub-model) then each RC-BLP stage. Panel-A cells are coefficient (SE); θ₂ "
-          "are point estimates (no SE). `eff. α` is the mean effective spread coefficient over "
-          "markets (the logit α is already average-market).", ""]
+          "are point estimates (no SE). With demographics centered, θ₁ (incl. spread α) is the "
+          "average-market coefficient, directly comparable to the logit α.", ""]
     for m in index:
         kk = m["routine"]
         le = next((logit_summary.get(f"E{kk}_{sm_}") for sm_ in ("full", "full_dtype", "core", "priceonly")
                    if logit_summary.get(f"E{kk}_{sm_}")), None)
-        L += md_compare_table(kk, raw_dir, le or {}, (eff or {}).get(str(kk)))
+        L += md_compare_table(kk, raw_dir, le or {})
 
     L += ["", "## Notes", "",
           "- **Stages** free one random coefficient at a time: `sigma`(1) → `rc2`(2) → `rc3`(3) → "
@@ -487,7 +519,12 @@ def write_summary_md(sub, index, stage, eff=None):
           "- **Artifacts:** `cluster_processed/blp_E{k}_spec_12.jls` (CF input — full δ̂/θ̂₁/θ̂₂) + "
           "`.json` (scalars + `stage_progression`); labeled parameter tables in "
           "`Rout/blp_compare_E{k}_spec12.tex`."]
+    # References — pandoc-citeproc resolves the [@key] citations above against Drafts/References.bib
+    # and renders the bibliography under this heading in the PDF (build_summary_pdf.py).
+    L += ["", "## References"]
     L = [ln for i, ln in enumerate(L) if not (ln == "" and i and L[i-1] == "")]  # collapse blank runs (MD012/MD022)
+    while L and L[-1] == "":                       # no trailing blank (MD012 on final newline)
+        L.pop()
     out_dir = SUMMARY_DIR if os.path.isdir(SUMMARY_DIR) else sub["cluster_processed"]
     path = os.path.join(out_dir, "SUMMARY.md")
     with open(path, "w", encoding="utf-8") as f:

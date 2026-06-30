@@ -15,10 +15,15 @@ import os, re, subprocess, sys, tempfile
 DRAFT = r"C:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\Drafts\Deposit Competition"
 SRC = os.path.join(DRAFT, "SUMMARY.md")
 PDF = os.path.join(DRAFT, "SUMMARY.pdf")
+# References.bib lives one level up (Drafts/); pandoc --citeproc resolves the [@key] citations.
+BIB = os.path.join(os.path.dirname(DRAFT), "References.bib")
 # Glyphs that Latin/Windows text fonts lack → folded for the PDF only (the .md keeps unicode).
-FOLD = {'₀': '0', '₁': '1', '₂': '2', '₃': '3', '̂': '', '→': '->', '−': '-',
-        '∈': ' in ', '≥': '>=', '≤': '<='}
-LANDSCAPE_SECTION = "## Logit vs RC-BLP stages"
+# The combining marks (circumflex δ̂, macron D̄, tilde D̃) can't sit on a Latin base letter, so
+# they fold to nothing (the bar/hat is dropped in the PDF only).
+FOLD = {'₀': '0', '₁': '1', '₂': '2', '₃': '3', '̂': '', '̄': '', '̃': '', '→': '->', '−': '-',
+        '∈': ' in ', '≥': '>=', '≤': '<=', '≈': '~=', '∅': '(none)'}
+# Wide tables that should sit on their own landscape pages (each from its H2 header to the next H2).
+LANDSCAPE_SECTIONS = ("## Weak-instruments diagnostics", "## Logit vs RC-BLP stages")
 # \blandscape/\elandscape are COMMANDS (not the landscape ENVIRONMENT) so pandoc still parses
 # the markdown tables between them instead of swallowing them as raw LaTeX.
 HEADER_TEX = (r"\usepackage{pdflscape}" "\n"
@@ -34,7 +39,7 @@ def main():
     lines, out, i = t.split("\n"), [], 0
     while i < len(lines):
         ln = lines[i]
-        if ln.startswith(LANDSCAPE_SECTION):
+        if any(ln.startswith(s) for s in LANDSCAPE_SECTIONS):
             out += ["", r"\blandscape", r"\footnotesize", ""]
             out.append(ln); i += 1
             while i < len(lines) and not lines[i].startswith("## "):   # to the next H2 (Notes)
@@ -49,6 +54,10 @@ def main():
     cmd = ["pandoc", md, "-o", PDF, "--pdf-engine=xelatex",
            "-V", "mainfont=Cambria", "-V", "monofont=Consolas",
            "-V", "geometry:margin=1in", "-H", hdr]
+    if os.path.exists(BIB):                       # resolve [@key] citations + render bibliography
+        cmd += ["--citeproc", "--bibliography=" + BIB]
+    else:
+        print(f"NOTE: {BIB} not found — citations will render unresolved.")
     r = subprocess.run(cmd, capture_output=True, text=True)
     errs = [l for l in (r.stdout + r.stderr).splitlines() if re.search(r"error|! |cannot|fatal", l, re.I)]
     if errs:

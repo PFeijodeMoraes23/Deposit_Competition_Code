@@ -947,7 +947,8 @@ function load_precomputed_draws(draws_dir::String, R::Int, seed::Int)
     # (gdp_per_capita ~50,000 vs fraction_65plus ~0.15 differ by ~300,000×).
     # π is then in "utility per 1-std unit of demographic × 1 pp of spread".
     D = size(draws_3d, 3)
-    demo_scale = ones(D)
+    demo_scale  = ones(D)
+    demo_center = zeros(D)
     for d in 1:D
         vals = vec(draws_3d[2:end, :, d])   # skip padding row (index 1)
         σ = std(vals)
@@ -955,10 +956,22 @@ function load_precomputed_draws(draws_dir::String, R::Int, seed::Int)
             demo_scale[d] = σ
             draws_3d[:, :, d] ./= σ
         end
+        # Center the real-market rows to zero mean → D̃ = (D − D̄)/σ, so the reported
+        # θ₁ is the AVERAGE-MARKET coefficient (the value at the cross-market mean),
+        # NOT the value at demographics = 0 (a market that does not exist). This is a
+        # pure reparametrization: the constant Σ_k x_k Σ_d π_kd·D̄_d/σ_d is linear in the
+        # product characteristics, so it is absorbed entirely into θ₁ (δ̂ shifts by the
+        # matching X·b); ξ̂, simulated shares, Q, and θ₂ (σ, π) + their SEs are unchanged.
+        # The padding row 1 is left at 0 = the average market, so unmatched observations
+        # carry no π deviation.
+        μ_d = mean(vec(draws_3d[2:end, :, d]))
+        demo_center[d] = μ_d
+        draws_3d[2:end, :, d] .-= μ_d
     end
 
     log_status("  ν-draws: $(size(nu_draws)) | demo_draws: $(size(draws_3d)) | keys: $(length(key_index))")
     log_status("  Demo σ-scale (for π re-interpretation): $(round.(demo_scale, sigdigits=4))")
+    log_status("  Demo center (subtracted D̄/σ → θ₁ is average-market): $(round.(demo_center, sigdigits=4))")
     return nu_draws, draws_3d, key_index
 end
 

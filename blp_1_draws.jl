@@ -201,7 +201,11 @@ function generate_demographic_draws(df::DataFrame, R::Int, seed::Int;
 
     n_keys = length(keys_list)
 
-    # Stack into 3D array: (n_keys+1, R, D) with zero-padding row at index 1
+    # Stack into 3D array: (n_keys+1, R, D) with zero-padding row at index 1.
+    # NB: draws are saved in their NATURAL scale here. The σ-scaling AND the
+    # mean-centering (D̃ = (D − D̄)/σ, so reported θ₁ is the average-market coefficient)
+    # are applied at load time in `load_precomputed_draws` (blp_1_estimation.jl) — that is
+    # the canonical normalization site, so these .jls stay valid without regeneration.
     draws_3d = zeros(n_keys + 1, R, D)
     for (i, mat) in enumerate(draws_list)
         draws_3d[i + 1, :, :] .= mat  # index 1 is padding, data starts at 2
