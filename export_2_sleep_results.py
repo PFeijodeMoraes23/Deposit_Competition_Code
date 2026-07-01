@@ -21,7 +21,6 @@ _ROOT = Path(__file__).resolve().parents[2]
 DATA_DIR = _ROOT / "BCB" / "Egan_et_al_2025_Rep" / "processed"
 OUTPUT_DIR = DATA_DIR / "ESTIMATION_OUTPUT" / "DEMAND_PREP" / "est2"
 RESULTS_PICKLE = OUTPUT_DIR / "estimation_results.pkl"
-CLUSTER_JSON = OUTPUT_DIR / "cluster_diagnostics.json"
 
 TEX_OUT_DIR = DATA_DIR / "ESTIMATION_OUTPUT" / "Rout"
 OUT_DIR = str(TEX_OUT_DIR)
@@ -61,7 +60,7 @@ def clean_name(v):
     return v.replace('_', '\\_')
 
 
-def build_first_stage_table(results_dict, G, G_star):
+def build_first_stage_table(results_dict):
     panels = ['Base', 'Macro', 'Tech']
     panel_labels = {'Base': 'Base Specifications', 'Macro': 'Macro Specifications', 'Tech': 'Tech Specifications'}
     panel_letters = ['A', 'B', 'C']
@@ -152,20 +151,18 @@ def build_first_stage_table(results_dict, G, G_star):
                 lines.append(f"    {clean_name(var)} & " + " & ".join(coef_strs) + r" \\*")
                 lines.append("    & " + " & ".join(se_strs) + r" \\")
 
-        obs_l, rsq_l, fstat_l, g_l, gstar_l = [], [], [], [], []
+        obs_l, rsq_l, fstat_l, g_l = [], [], [], []
         for ik, _ in ivs:
             res = _get_res(ik, panel)
             if res is None:
                 obs_l.append("---"); rsq_l.append("---"); fstat_l.append("---")
-                g_l.append("---"); gstar_l.append("---")
+                g_l.append("---")
                 continue
             obs_l.append(f"{int(res.nobs):,}")
             rsq_l.append(f"{res.rsquared:.4f}")
             fv = getattr(res, 'fvalue', None); fp = getattr(res, 'f_pvalue', 1.0)
             fstat_l.append(f"${fv:.2f}^{{{stars(fp)}}}$" if fv is not None else "---")
             g_l.append(str(getattr(res, 'G_nominal', '---')))
-            gsv = getattr(res, 'G_star', None)
-            gstar_l.append(f"{gsv:.2f}" if gsv is not None else "---")
 
         lines += [
             r"    \midrule",
@@ -174,7 +171,6 @@ def build_first_stage_table(results_dict, G, G_star):
             "    F-Statistic & " + " & ".join(fstat_l) + r" \\",
             "    Fixed Effects & No & No & No \\\\",
             "    Clusters ($G$) & " + " & ".join(g_l) + r" \\",
-            "    Effective Clusters ($G^*$) & " + " & ".join(gstar_l) + r" \\",
             r"    \bottomrule",
         ]
 
@@ -182,7 +178,7 @@ def build_first_stage_table(results_dict, G, G_star):
     return "\n".join(lines)
 
 
-def build_second_stage_table(results_dict, G, G_star):
+def build_second_stage_table(results_dict):
     panels = ['Base', 'Macro', 'Tech']
     panel_labels = {'Base': 'Base Specifications', 'Macro': 'Macro Specifications', 'Tech': 'Tech Specifications'}
     panel_letters = ['A', 'B', 'C']
@@ -280,20 +276,18 @@ def build_second_stage_table(results_dict, G, G_star):
                 lines.append(f"    {clean_name(vshort)} & " + " & ".join(coef_strs) + r" \\")
                 lines.append("    & " + " & ".join(se_strs) + r" \\")
 
-        obs_l, rsq_l, g_l, gstar_l = [], [], [], []
+        obs_l, rsq_l, g_l = [], [], []
         for ek, _ in estimators:
             res = _get_res(ek, panel)
             if res is None:
                 obs_l.append("---"); rsq_l.append("---")
-                g_l.append("---"); gstar_l.append("---")
+                g_l.append("---")
                 continue
             nv = getattr(res, 'nobs', None)
             obs_l.append(f"{int(nv):,}" if nv is not None else "---")
             rv = getattr(res, 'rsquared', None)
             rsq_l.append(f"{rv:.4f}" if rv is not None else "---")
             g_l.append(str(getattr(res, 'G_nominal', '---')))
-            gsv = getattr(res, 'G_star', None)
-            gstar_l.append(f"{gsv:.2f}" if gsv is not None else "---")
 
         lines += [
             r"    \midrule",
@@ -301,7 +295,6 @@ def build_second_stage_table(results_dict, G, G_star):
             "    $R^2$ & " + " & ".join(rsq_l) + r" \\",
             "    Fixed Effects & Yes & Yes & Yes & Yes \\\\",
             "    Clusters ($G$) & " + " & ".join(g_l) + r" \\",
-            "    Effective Clusters ($G^*$) & " + " & ".join(gstar_l) + r" \\",
             r"    \bottomrule",
         ]
 
@@ -341,19 +334,11 @@ def main():
     with open(RESULTS_PICKLE, 'rb') as fh:
         results_dict = pickle.load(fh)
 
-    cluster_data = None
-    if CLUSTER_JSON.exists():
-        with open(CLUSTER_JSON, 'r') as fh:
-            cluster_data = json.load(fh)
-
-    G_nominal = cluster_data.get('G_nominal', r'\text{N/A}') if cluster_data else r'\text{N/A}'
-    G_star = cluster_data.get('G_star', None) if cluster_data else None
-
     os.makedirs(OUT_DIR, exist_ok=True)
 
     print(" - Building table fragments...")
-    fs_frag = build_first_stage_table(results_dict, G_nominal, G_star)
-    ss_frag = build_second_stage_table(results_dict, G_nominal, G_star)
+    fs_frag = build_first_stage_table(results_dict)
+    ss_frag = build_second_stage_table(results_dict)
 
     fs_path = os.path.join(OUT_DIR, "est2_first_stage_table.tex")
     ss_path = os.path.join(OUT_DIR, "est2_second_stage_table.tex")

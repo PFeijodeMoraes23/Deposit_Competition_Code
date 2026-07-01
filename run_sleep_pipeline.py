@@ -30,6 +30,7 @@ pool via simultaneous IPC pipe traffic for 400K-row DataFrames (WinError 1450).
   9. export_results.py                  (Export 1st/2nd Stage Summaries, Est 1-8)
  10. estimation_demand_1_prep.py        (Universal Demand Prep Orchestrator, Est 1-8)
  11. export_analyze_spec12.py           (Analyze Specification 12 Results)
+ 12. desc_3.py                          (Cluster-imbalance / deposit-concentration table)
 """
 from utils.venv_guard import ensure_project_venv
 ensure_project_venv(__file__)
@@ -109,6 +110,7 @@ pool via simultaneous IPC pipe traffic for 400K-row DataFrames (WinError 1450).
   9. export_results.py                  (Export 1st/2nd Stage Summaries, Est 1-8)
  10. estimation_demand_1_prep.py        (Universal Demand Prep Orchestrator, Est 1-8)
  11. export_analyze_spec12.py           (Analyze Specification 12 Results)
+ 12. desc_3.py                          (Cluster-imbalance / deposit-concentration table)
         """,
         formatter_class=argparse.RawDescriptionHelpFormatter
     )
@@ -135,7 +137,7 @@ pool via simultaneous IPC pipe traffic for 400K-row DataFrames (WinError 1450).
         nargs="+",
         type=int,
         default=[],
-        help="Skip executing specific steps (1-11). E.g., --skip-steps 11 to skip export_analyze."
+        help="Skip executing specific steps (1-12). E.g., --skip-steps 11 to skip export_analyze."
     )
     args = parser.parse_args()
 
@@ -168,6 +170,10 @@ pool via simultaneous IPC pipe traffic for 400K-row DataFrames (WinError 1450).
             {"id": 9, "file": "export_results.py", "args": ["--estimation", "all"], "desc": "Export 1st/2nd Stage Summaries (Est 1-8)"},
             {"id": 10, "file": "estimation_demand_1_prep.py", "args": ["--estimation", "all", "--spec", spec_arg], "desc": "Universal Demand Prep Orchestrator & Panel Serialization (Est 1-8)"},
             {"id": 11, "file": "export_analyze_spec12.py", "args": [], "desc": "Analyze Specification 12 Results"},
+            # desc_3 reads the E7 second-stage sample (est7/market_panel_phis.csv), so it
+            # runs after estimation; it is the canonical cluster-imbalance / deposit-
+            # concentration exhibit that justifies the wild cluster bootstrap.
+            {"id": 12, "file": "desc_3.py", "args": [], "desc": "Cluster-imbalance & deposit-concentration table (WCB justification)"},
         ])
 
     import os

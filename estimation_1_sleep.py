@@ -104,11 +104,9 @@ def _resolve_runtime_paths() -> tuple[Path, Path]:
     return PANEL_CSV, OUTPUT_DIR
 
 def apply_imbalanced_cluster_correction(res, cluster_series):
-    sizes = cluster_series.value_counts()
-    G_nominal = len(sizes)
-    cv_Ng = np.std(sizes, ddof=0) / np.mean(sizes) if np.mean(sizes) > 0 else 0
-    G_star = max(1.0, G_nominal / (1 + (cv_Ng ** 2)))
-    
+    from utils.cluster import effective_cluster_stats   # single source of G*/CV
+    _st = effective_cluster_stats(cluster_series.value_counts().values)
+    G_nominal, G_star = _st["G_nominal"], _st["G_star"]
     res.G_nominal = G_nominal
     res.G_star = G_star
     res.df_resid = G_star
@@ -288,17 +286,6 @@ def execute_specification(args):
 
     return new_stdout.getvalue(), res, spec_name, res_fs, spec_number
 
-def print_cluster_diagnostics(df):
-    cluster_var = 'CodConglomeradoPrudencial'
-    Ns = df.groupby(cluster_var).size()
-    G_nominal = len(Ns)
-    mean_Ng = np.mean(Ns)
-    std_Ng = np.std(Ns, ddof=0)
-    cv_Ng = std_Ng / mean_Ng if mean_Ng > 0 else 0
-    G_star = max(1.0, G_nominal / (1 + (cv_Ng ** 2)))
-    total_obs = len(df)
-    return G_nominal, G_star, mean_Ng, std_Ng, cv_Ng, total_obs, Ns
-
 def scale_magnitudes(df):
     scale_cols = {
         'gdp_per_capita': 10000.0, 'cadunico_families_per1000': 100.0,
@@ -327,7 +314,6 @@ def do_estimation():
     df = build_unified_frame()
     print(f"Panel size after cleaning: {len(df)} rows")
 
-    G_nominal, G_star, mean_Ng, std_Ng, cv_Ng, total_obs, Ns = print_cluster_diagnostics(df)
     output_dir.mkdir(parents=True, exist_ok=True)
     df['constant'] = 1.0
     # Scaling (deposits/1e9, gdp/1e4, cadunico/100, connections/100,
@@ -372,15 +358,10 @@ def do_estimation():
                 tex_file_fs = drafts_dir / f"{rout_level}_{safe_name}_FirstStage.tex"
                 with open(tex_file_fs, 'w', encoding='utf-8') as f: f.write(wrap_table(res_fs.summary().as_latex()))
             results_dict[spec_name] = {'spec_number': spec_number, 'spec_label': f"({spec_number}) {spec_name}", 'second_stage': res_ss, 'first_stage': res_fs}
-            
-    cluster_diagnostics = {
-        'G_nominal': G_nominal, 'G_star': float(G_star), 'mean_obs_per_cluster': float(mean_Ng), 
-        'std_obs_per_cluster': float(std_Ng), 'coefficient_variation': float(cv_Ng), 'total_observations': total_obs,
-        'top_5_clusters': {str(c): {'observations': n, 'share_pct': float((n / total_obs) * 100)} for c, n in Ns.sort_values(ascending=False).head(5).items()}
-    }
 
-    diag_file = output_dir / "cluster_diagnostics.json"
-    with open(diag_file, 'w') as f: json.dump(cluster_diagnostics, f, indent=2)
+    # Cluster-imbalance reporting (G, G*, CV, top-conglomerate concentration) now lives
+    # solely in desc_3.py, computed on the spec-12 second-stage sample. No cluster
+    # diagnostics json is written here anymore.
     results_pickle = output_dir / "estimation_results.pkl"
     with open(results_pickle, 'wb') as f: pickle.dump(results_dict, f)
     print(f"Estimation outputs successfully saved in: {output_dir}")

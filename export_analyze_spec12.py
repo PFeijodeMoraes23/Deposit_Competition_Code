@@ -198,9 +198,24 @@ def nice_var_name(var):
     }
     return labels.get(v, v.replace('_', '\\_'))
 
+# Column headers reference the estimation-strategy enumeration in V_Main.tex
+# (\item\label{estimation:*} at lines ~402-408), so a column reads as its item number
+# ((1)-(6)) rather than a name -- thinner columns, and the strategy is defined once in
+# the text. \ref resolves inside V_Main; standalone/test compiles show "(??)".
+REF_LABELS = {
+    '1 Local':             r'\ref{estimation:local}',
+    '2 Pooled Linear':     r'\ref{estimation:pooled}',
+    '5 Single-Index':      r'\ref{estimation:single_idx}',
+    '6 Single-Index Time': r'\ref{estimation:single_idx_time}',
+    '7 Joint Sieve':       r'\ref{estimation:joint_sieve}',
+    '8 Joint Sieve Time':  r'\ref{estimation:joint_sieve_time}',
+}
+
+
 def build_latex_table(results_dict, order_keys, target_vars, out_path, title="", label="",
                       mean_phi=None):
     tex = []
+    is_first_stage = ("first_stage" in str(out_path).lower() or "stage1" in str(out_path).lower())
 
     # \setstretch{1.0} matches the paper's other tables (est1_first_stage_table.tex
     # etc.), all of which open with \setstretch{1.0} and no wrapping group.
@@ -223,15 +238,7 @@ def build_latex_table(results_dict, order_keys, target_vars, out_path, title="",
 
     # First Header
     tex.append(r"\toprule")
-    rename_map = {
-        '1 Local': 'Local (Lin.)',
-        '2 Pooled Linear': 'Pooled (Lin.)',
-        '5 Single-Index': 'Single-Idx (AME)',
-        '6 Single-Index Time': 'Single-Idx +T (AME)',
-        '7 Joint Sieve': 'Joint Sieve (AME)',
-        '8 Joint Sieve Time': 'Joint Sieve +T (AME)',
-    }
-    headers = ["Variable"] + [rename_map.get(k, k) for k in order_keys]
+    headers = ["Variable"] + [REF_LABELS.get(k, k) for k in order_keys]
     tex.append(" & ".join(headers) + r" \\")
     tex.append(r"\midrule")
     tex.append(r"\endfirsthead")
@@ -259,16 +266,14 @@ def build_latex_table(results_dict, order_keys, target_vars, out_path, title="",
     # full-span multicolumn in a \textwidth-wide xltabular: the table occupies
     # \textwidth, but the outer \tabcolsep margins on left and right eat 2*3.5pt=7pt,
     # leaving \textwidth-7pt for the cell content.
+    _stage_note = ("" if is_first_stage else
+                   r"; the linear strategies report coefficients and the single-index/joint "
+                   r"strategies report average marginal effects (AME)")
     notes_str = (r"\multicolumn{" + str(len(order_keys) + 1) + r"}{p{\dimexpr\textwidth-2\tabcolsep\relax}}"
-                 r"{\scriptsize\textit{Notes:} Standard errors (score/multiplier wild cluster "
-                 r"bootstrap at the conglomerate level, Webb 6-point $B=999$, applied uniformly to "
-                 r"every column; \textcite{cameron2008bootstrap}, "
-                 r"\textcite{mackinnon2017wild}) in parentheses. The Local and Pooled columns report "
-                 r"linear sleepiness coefficients; the Single-Index and Joint Sieve columns report "
-                 r"average marginal effects (AME). The single-index/joint estimators carry no "
-                 r"constant AME --- the baseline level is absorbed into the monotone link --- so the "
-                 r"`Mean $\hat{\phi}$' row gives the comparable implied level across all columns. "
-                 r"\textcite{carter2017asymptotic} effective clusters $G^*$ are a diagnostic. "
+                 r"{\scriptsize\textit{Notes:} Standard errors (wild cluster bootstrap at the "
+                 r"conglomerate level, applied uniformly to every column; \textcite{cameron2008bootstrap}, "
+                 r"\textcite{mackinnon2017wild}) in parentheses. Columns index the estimation "
+                 r"strategies enumerated in Section~\ref{sec:empirical:sleep}" + _stage_note + r". "
                  r"Significance levels: *** $p<0.01$, ** $p<0.05$, * $p<0.1$.}")
     tex.append(notes_str)
     tex.append(r"\endlastfoot")
@@ -285,8 +290,6 @@ def build_latex_table(results_dict, order_keys, target_vars, out_path, title="",
 
     # Target vars first, then any remaining (excluding CF nuisance term)
     ordered_vars = [v for v in target_vars if v in vars_to_print]
-
-    is_first_stage = ("first_stage" in str(out_path).lower() or "stage1" in str(out_path).lower())
 
     if not is_first_stage:
         other_vars = [v for v in vars_to_print if v not in ordered_vars]
@@ -344,7 +347,6 @@ def build_latex_table(results_dict, order_keys, target_vars, out_path, title="",
     row_r2 = ["$R^2$"]
     row_fstat = ["F-Statistic"]
     row_cluster = ["Clusters ($G$)"]
-    row_eff_cluster = ["Effective Clusters ($G^*$)"]
 
     # E5-E8 (single-index/joint) carry their own nobs/rsquared; no fallback needed.
     _nlls_fallback: dict = {}
@@ -353,7 +355,7 @@ def build_latex_table(results_dict, order_keys, target_vars, out_path, title="",
         res = results_dict.get(col)
         if res is None:
             row_nobs.append("-"); row_r2.append("-"); row_fstat.append("-")
-            row_cluster.append("-"); row_eff_cluster.append("-")
+            row_cluster.append("-")
             continue
 
         nobs  = getattr(res, 'nobs', np.nan)
@@ -378,21 +380,18 @@ def build_latex_table(results_dict, order_keys, target_vars, out_path, title="",
         elif hasattr(res, 'G_nominal') and not pd.isna(getattr(res, 'G_nominal', np.nan)):
             clusters = str(int(res.G_nominal))
 
-        g_star = getattr(res, 'G_star', getattr(res, 'df_resid', np.nan))
         fstat_str = f"{fstat:.3f}{get_stars(fpval)}" if pd.notna(fstat) else "-"
 
         row_nobs.append(f"{nobs:,.0f}" if pd.notna(nobs) else "-")
         row_r2.append(f"{r2:.3f}" if pd.notna(r2) else "-")
         row_fstat.append(fstat_str)
         row_cluster.append(clusters)
-        row_eff_cluster.append(f"{g_star:.1f}" if pd.notna(g_star) else "-")
 
     tex.append(" & ".join(row_nobs) + r" \\")
     tex.append(" & ".join(row_r2) + r" \\")
     if is_first_stage:
         tex.append(" & ".join(row_fstat) + r" \\")
     tex.append(" & ".join(row_cluster) + r" \\")
-    tex.append(" & ".join(row_eff_cluster) + r" \\")
 
     tex.append(r"\end{xltabular}")
     # Restore the document's double spacing; \setstretch{1.0} at the top of the
@@ -415,18 +414,11 @@ def build_latex_table_landscape(results_dict, order_keys, target_vars, out_path,
     the \\input location. Carries the SAME \\label as the portrait table, so
     swapping the \\input in V_Main keeps every \\ref resolving. Natural centred
     columns (not xltabular's X) + two-line \\shortstack headers keep the seven
-    columns readable across the rotated page.
+    columns readable across the rotated page. Column headers are the estimation-strategy
+    item numbers via \\ref (see REF_LABELS), not names.
     """
     n = len(order_keys)
-    rename_map = {
-        '1 Local':             r'\shortstack{Local\\(Lin.)}',
-        '2 Pooled Linear':     r'\shortstack{Pooled\\(Lin.)}',
-        '5 Single-Index':      r'\shortstack{Single-Idx\\(AME)}',
-        '6 Single-Index Time': r'\shortstack{Single-Idx $+$T\\(AME)}',
-        '7 Joint Sieve':       r'\shortstack{Joint Sieve\\(AME)}',
-        '8 Joint Sieve Time':  r'\shortstack{Joint Sieve $+$T\\(AME)}',
-    }
-    headers = [""] + [rename_map.get(k, k) for k in order_keys]
+    headers = [""] + [REF_LABELS.get(k, k) for k in order_keys]
 
     # Variable order: target_vars first, then any extras, never the CF nuisance term.
     vars_to_print = []
@@ -483,11 +475,11 @@ def build_latex_table_landscape(results_dict, order_keys, target_vars, out_path,
         tex.append(" & ".join(row_mp) + r" \\")
 
     row_nobs = ["Observations"]; row_r2 = ["$R^2$"]; row_fstat = ["F-Statistic"]
-    row_cl = [r"Clusters ($G$)"]; row_gs = [r"Effective Clusters ($G^*$)"]
+    row_cl = [r"Clusters ($G$)"]
     for col in order_keys:
         res = results_dict.get(col)
         if res is None:
-            for r_ in (row_nobs, row_r2, row_fstat, row_cl, row_gs): r_.append("-")
+            for r_ in (row_nobs, row_r2, row_fstat, row_cl): r_.append("-")
             continue
         nobs = getattr(res, 'nobs', np.nan); r2 = getattr(res, 'rsquared', np.nan)
         fstat = getattr(res, 'fvalue', np.nan); fpval = getattr(res, 'f_pvalue', np.nan)
@@ -497,29 +489,27 @@ def build_latex_table_landscape(results_dict, order_keys, target_vars, out_path,
             clusters = str(g.nunique() if hasattr(g, 'nunique') else len(set(g)))
         elif hasattr(res, 'G_nominal') and not pd.isna(getattr(res, 'G_nominal', np.nan)):
             clusters = str(int(res.G_nominal))
-        g_star = getattr(res, 'G_star', getattr(res, 'df_resid', np.nan))
         row_nobs.append(f"{nobs:,.0f}" if pd.notna(nobs) else "-")
         row_r2.append(f"{r2:.3f}" if pd.notna(r2) else "-")
         row_fstat.append(f"{fstat:.3f}{get_stars(fpval)}" if pd.notna(fstat) else "-")
         row_cl.append(clusters)
-        row_gs.append(f"{g_star:.1f}" if pd.notna(g_star) else "-")
-    diag_rows = [row_nobs, row_r2] + ([row_fstat] if first_stage else []) + [row_cl, row_gs]
+    diag_rows = [row_nobs, row_r2] + ([row_fstat] if first_stage else []) + [row_cl]
     for r_ in diag_rows:
         tex.append(" & ".join(r_) + r" \\")
 
+    _stage_note = ("" if first_stage else
+                   r"; the linear strategies report coefficients and the single-index/joint "
+                   r"strategies report average marginal effects (AME)")
     tex += [r"\bottomrule",
             r"\end{tabular}",
             r"\begin{tablenotes}[flushleft]",
             r"\footnotesize",
-            r"\item \textit{Notes:} Standard errors (score/multiplier wild cluster bootstrap at the "
-            r"conglomerate level, Webb 6-point $B=999$, applied uniformly to every column; "
-            r"\textcite{cameron2008bootstrap}, \textcite{mackinnon2017wild}) in "
-            r"parentheses. The Local and Pooled columns report linear sleepiness coefficients; the "
-            r"Single-Index and Joint Sieve columns report average marginal effects (AME). The "
-            r"single-index/joint estimators carry no constant AME --- the baseline level is absorbed "
-            r"into the monotone link --- so the `Mean $\hat{\phi}$' row gives the comparable implied "
-            r"level across all columns. \textcite{carter2017asymptotic} effective clusters $G^*$ are a "
-            r"diagnostic. Significance levels: *** $p<0.01$, ** $p<0.05$, * $p<0.1$.",
+            r"\item \textit{Notes:} Standard errors (wild cluster bootstrap at the "
+            r"conglomerate level, applied uniformly to every column; "
+            r"\textcite{cameron2008bootstrap}, \textcite{mackinnon2017wild}) in parentheses. Columns "
+            r"index the estimation strategies enumerated in Section~\ref{sec:empirical:sleep}" +
+            _stage_note +
+            r". Significance levels: *** $p<0.01$, ** $p<0.05$, * $p<0.1$.",
             r"\end{tablenotes}",
             r"\end{threeparttable}",
             r"\end{table}",

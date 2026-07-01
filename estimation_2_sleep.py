@@ -60,11 +60,9 @@ OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 PLOTS_DIR.mkdir(parents=True, exist_ok=True)
 
 def apply_imbalanced_cluster_correction(res, cluster_series):
-    sizes = cluster_series.value_counts()
-    G_nominal = len(sizes)
-    cv_Ng = np.std(sizes, ddof=0) / np.mean(sizes) if np.mean(sizes) > 0 else 0
-    G_star = max(1.0, G_nominal / (1 + (cv_Ng ** 2)))
-
+    from utils.cluster import effective_cluster_stats   # single source of G*/CV
+    _st = effective_cluster_stats(cluster_series.value_counts().values)
+    G_nominal, G_star = _st["G_nominal"], _st["G_star"]
     res.G_nominal = G_nominal
     res.G_star = G_star
     res.df_resid = G_star

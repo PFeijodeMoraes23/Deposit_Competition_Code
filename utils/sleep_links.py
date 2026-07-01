@@ -95,10 +95,9 @@ def _demean_col(df_ss, col):
 
 
 def _G_star(cluster_series):
-    sizes = cluster_series.value_counts()
-    mean_ng = np.mean(sizes)
-    cv2 = (np.std(sizes) / mean_ng) ** 2 if mean_ng > 0 else 1.0
-    return max(1.0, len(sizes) / (1 + cv2)), int(len(sizes))
+    from utils.cluster import effective_cluster_stats   # single source of G*/CV
+    st = effective_cluster_stats(cluster_series.value_counts().values)
+    return st["G_star"], st["G_nominal"]
 
 
 def _build_phi_X(df: pd.DataFrame, phi_params) -> np.ndarray:

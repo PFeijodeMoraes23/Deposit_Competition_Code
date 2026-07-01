@@ -125,8 +125,8 @@ def load_ss(est_num):
 
 
 # Full stage-2 comparison: same lineup/rows as export_analyze_spec12.py's stage-2 table.
-S2_ESTS = [(1, "Local (Lin.)"), (2, "Pooled (Lin.)"), (5, "Single-Idx (AME)"),
-           (6, "Single-Idx +T (AME)"), (7, "Joint Sieve (AME)"), (8, "Joint Sieve +T (AME)")]
+S2_ESTS = [(1, "Local"), (2, "Pooled"), (5, "Single-Idx"),
+           (6, "Single-Idx +T"), (7, "Joint Sieve"), (8, "Joint Sieve +T")]
 S2_ROWS = [("nr_lagged_dep", "Constant"),
            ("interaction_gdp_per_capita", "GDP p.c."),
            ("interaction_cadunico_families_per1000", "CadUnico"),
@@ -160,11 +160,11 @@ def stage2_comparison_md():
     L = ["```{=latex}", "\\begin{landscape}", "```", "",
          "## Stage-2 sleepiness coefficients / AMEs — full comparison (spec 12)", "",
          "Linear sleepiness coefficients (Local, Pooled) and average marginal effects "
-         "(Single-Index, Joint Sieve), wild-cluster-bootstrap SE in parentheses "
-         "(*** p<0.01, ** p<0.05, * p<0.1). The single-index/joint columns carry no constant "
-         "AME (the level is absorbed into the monotone link), so the **Mean $\\hat\\phi$** row "
-         "gives the comparable implied sleepiness level across all six columns. This is the "
-         "preview of the canonical `est1-3_spec12_stage2_comparison.tex` table.", "",
+         "(Single-Index, Joint Sieve); wild-cluster-bootstrap SE in parentheses "
+         "(*** p<0.01, ** p<0.05, * p<0.1), applied uniformly to every column. The "
+         "**Mean $\\hat\\phi$** row is the implied national sleepiness level, comparable across "
+         "all six columns. Preview of the canonical `est1-3_spec12_stage2_comparison.tex` "
+         "(where V_Main numbers the columns via the estimation-strategy enumeration).", "",
          header, sep]
 
     for key, lbl in S2_ROWS:
@@ -179,27 +179,63 @@ def stage2_comparison_md():
         L.append(f"| {lbl} | " + " | ".join(cells) + " |")
 
     # diagnostic rows
-    mean_cells, nobs_cells, r2_cells, g_cells, gstar_cells = [], [], [], [], []
+    mean_cells, nobs_cells, r2_cells, g_cells = [], [], [], []
     for n, _ in S2_ESTS:
         ss = ssn[n]
         pt = load_phi_t(n)
         mean_cells.append(f"{pt['phi_t'].mean():.3f}" if pt is not None else "—")
         if ss is None:
-            nobs_cells.append("—"); r2_cells.append("—"); g_cells.append("—"); gstar_cells.append("—")
+            nobs_cells.append("—"); r2_cells.append("—"); g_cells.append("—")
             continue
         nobs = getattr(ss, "nobs", np.nan); r2 = getattr(ss, "rsquared", np.nan)
-        gstar = getattr(ss, "G_star", getattr(ss, "df_resid", np.nan))
         nobs_cells.append(f"{nobs:,.0f}" if pd.notna(nobs) else "—")
         r2_cells.append(f"{r2:.3f}" if pd.notna(r2) else "—")
         g_cells.append(_ss_clusters(ss))
-        gstar_cells.append(f"{gstar:.1f}" if pd.notna(gstar) else "—")
 
     L.append("| **Mean $\\hat\\phi$ (level)** | " + " | ".join(mean_cells) + " |")
     L.append("| Observations | " + " | ".join(nobs_cells) + " |")
     L.append("| $R^2$ | " + " | ".join(r2_cells) + " |")
     L.append("| Clusters ($G$) | " + " | ".join(g_cells) + " |")
-    L.append("| Effective $G^*$ | " + " | ".join(gstar_cells) + " |")
     L += ["", "```{=latex}", "\\end{landscape}", "```", ""]
+    return L
+
+
+def cluster_imbalance_md():
+    """Cluster-imbalance / deposit-concentration two-panel table (the WCB
+    justification), as a pandoc-native markdown table computed on the E7 second-stage
+    sample via desc_3 (single source of the numbers)."""
+    try:
+        from desc_3 import load_sample, build_stats
+        df, _ = load_sample(7)
+        st, _ = build_stats(df, top_n=5)
+    except Exception as e:
+        print(f"  [cluster_imbalance] skipped: {e}")
+        return []
+
+    def pct(x):
+        return f"{100 * x:.1f}%"
+    L = ["## Cluster imbalance and deposit concentration (spec-12 second-stage sample)", "",
+         "Why the wild cluster bootstrap: the conglomerate clusters are few in *effective* terms "
+         "and wildly unequal in size. On the spec-12 second-stage sample "
+         f"({int(st['total_obs']):,} observations, {st['G_nominal']} conglomerates) the "
+         f"**{st['G_nominal']} nominal clusters collapse to $G^{{*}}\\approx{st['G_star']:.0f}$ "
+         f"effective** (Carter et al. 2017), with a coefficient of variation of cluster sizes of "
+         f"{st['cv']:.1f}; that is precisely the regime where the cluster-robust / Delta-method "
+         "$t$-test over-rejects (MacKinnon-Webb 2017).", "",
+         "**Panel A --- cluster structure**", "",
+         "| Metric | Value |", "|---|---|",
+         f"| Clusters (conglomerates), $G$ | {st['G_nominal']:,} |",
+         f"| Effective clusters, $G^{{*}}=G/(1+\\mathrm{{CV}}^2)$ | {st['G_star']:.1f} |",
+         f"| Total observations | {int(st['total_obs']):,} |",
+         f"| Obs. per cluster: mean / median / max | {st['mean_size']:,.0f} / {st['median_size']:,.0f} / {st['max_size']:,.0f} |",
+         f"| CV of cluster sizes | {st['cv']:.2f} |",
+         f"| Deposit HHI ($1/$HHI) | {st['hhi']:.3f} ({st['inv_hhi']:.1f}) |", "",
+         "**Panel B --- five largest conglomerates by national deposit share**", "",
+         "| Rank | Conglomerate | Dep. share | Cumulative | Obs. share |",
+         "|---|---|---|---|---|"]
+    for i, r in enumerate(st["top_n"], 1):
+        L.append(f"| {i} | {r['name']} | {pct(r['dep_share'])} | {pct(r['cum_share'])} | {pct(r['obs_share'])} |")
+    L.append("")
     return L
 
 
@@ -385,6 +421,9 @@ def build(bands=True, refit=False):
 
     # ---- full stage-2 comparison table (landscaped preview of the V_Main table) ----
     L += stage2_comparison_md()
+
+    # ---- cluster-imbalance / deposit-concentration table (WCB justification) ----
+    L += cluster_imbalance_md()
 
     # ---- phi_t base vs +time per pair ----
     L += ["## National $\\hat\\phi_t$: Base vs +Time", ""]

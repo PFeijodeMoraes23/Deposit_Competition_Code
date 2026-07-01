@@ -80,6 +80,8 @@ The codebase:
 │
 ├── ── Stage 5: Descriptive Statistics (parallel) ──
 ├── desc_1.py                             # Summary statistics tables (CSV + LaTeX) by bank type and region
+├── desc_2.py                             # Compact market-structure / cross-section descriptive tables
+├── desc_3.py                             # Cluster-imbalance & deposit-concentration table (justifies the wild cluster bootstrap). Reads the est7 second-stage sample, so it runs AFTER the sleep estimation (wired as the final step of run_sleep_pipeline.py).
 │
 ├── ── Deposit Rate Scraping (Internet Archive) ──
 ├── d_rate_scrape_1_targets.py            # Initialise target domain list for archival rate scraping
