@@ -314,7 +314,7 @@ function main()
     maxiter = parse(Int, get(man, "maxiter", string(300 * d))); K = n_interior + degree + 1
     nbins = parse(Int, get(man, "nbins", "0"))           # opt 5: binned ramp (0 = exact)
 
-    Sn = reshape(read_f64(joinpath(dir, "Sn.bin"), N * d), N, d)
+    Sn = Matrix{Float64}(undef, N, d); read!(joinpath(dir, "Sn.bin"), Sn)   # column-major == reshape(read vec, N, d)
     Z = read_f64(joinpath(dir, "Z.bin"), N); y_dm = read_f64(joinpath(dir, "y_dm.bin"), N)
     cf_dm = has_cf ? read_f64(joinpath(dir, "cf_dm.bin"), N) : nothing
     ecode = read_i32(joinpath(dir, "ecode.bin"), N); ec = counts_of(ecode, nE)

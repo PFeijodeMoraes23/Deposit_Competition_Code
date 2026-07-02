@@ -91,10 +91,9 @@ def build_first_stage_table(results_dict):
     caption = "Local Data Only - First Stage Estimation"
     label = "tab:est1_first_stage"
     notes = (
-        r"\scriptsize \textit{Notes:} Standard errors clustered at the conglomerate level "
-        r"are reported in parentheses, correcting for group size imbalance following "
-        r"\textcite{imbens2016robust} and \textcite{carter2017asymptotic}. "
-        r"Significance levels: *** $p<0.01$, ** $p<0.05$, * $p<0.1$."
+        r"\footnotesize \textit{Notes:} Standard errors (wild cluster bootstrap at the "
+        r"conglomerate level; \textcite{cameron2008bootstrap}, \textcite{mackinnon2017wild}) "
+        r"in parentheses. Significance levels: *** $p<0.01$, ** $p<0.05$, * $p<0.1$."
     )
 
     def _get_res(iv_key, p):
@@ -243,10 +242,9 @@ def build_second_stage_table(results_dict):
     caption = "Local Data Only - Second Stage Estimation"
     label = "tab:est1_second_stage"
     notes = (
-        r"\scriptsize \textit{Notes:} Standard errors clustered at the conglomerate level "
-        r"are reported in parentheses, correcting for group size imbalance following "
-        r"\textcite{imbens2016robust} and \textcite{carter2017asymptotic}. "
-        r"Significance levels: *** $p<0.01$, ** $p<0.05$, * $p<0.1$."
+        r"\footnotesize \textit{Notes:} Standard errors (wild cluster bootstrap at the "
+        r"conglomerate level; \textcite{cameron2008bootstrap}, \textcite{mackinnon2017wild}) "
+        r"in parentheses. Significance levels: *** $p<0.01$, ** $p<0.05$, * $p<0.1$."
     )
 
     def _get_res(ek, p):

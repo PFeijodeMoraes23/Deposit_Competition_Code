@@ -30,5 +30,12 @@
     "accessibility.signals.clear": {
         "sound": "off",
         "announcement": "off"
-    }
+    },
+    // The Julia LanguageServer's call-signature check (StaticLint "IncorrectCallArgs") produces
+    // false positives on this codebase: it flags trivially-correct Base/stdlib calls such as
+    // keyword-argument reducers (mean(x; dims=1)), many-method Base functions (Int32, size,
+    // push!, clamp., max.) and type-alias constructors (GPU_T = Float64). None are real errors —
+    // the full estimation pipeline runs — so only this one check is disabled. All other Julia
+    // lints (undefined refs, unused vars, etc.) remain on.
+    "julia.lint.call": false
 }

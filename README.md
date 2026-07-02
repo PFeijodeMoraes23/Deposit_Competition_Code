@@ -122,7 +122,6 @@ The codebase:
 │
 ├── ── Tables ──
 ├── make_blp_latex_tables.py              # Compile BLP demand estimation results into LaTeX tables
-├── table_builder.py                      # Build LaTeX regression tables from sleepiness pickle output
 │
 ├── ── HPC Submission Scripts (Yale HPC / SLURM) ──
 ├── submit_blp_E1.sh                      # SLURM: BLP estimation strategy 1

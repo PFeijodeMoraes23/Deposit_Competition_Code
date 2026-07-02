@@ -793,5 +793,45 @@ def main():
     shutil.copy(plot_path, _DRAFTS_DIR / "est1-3_spec12_phi_t_comparison.png")
     print(f"Exported phi_t plot (pastel CIs) to {plot_path}; copied to {_DRAFTS_DIR}")
 
+    # ---- 3b) Base-vs-+Time pair graphs (kept alongside the six-strategy plot above) ----
+    # One for the single index (E5 vs E6), one for the joint sieve (E7 vs E8). The
+    # non-time estimator is a solid BLUE line, the +Time estimator a dashed RED line;
+    # both carry their wild-cluster-bootstrap CI bands; the axis is fixed to [0,1].
+    def _make_pair_plot(nt_est, t_est, nt_label, t_label, title, out_name):
+        figp, axp = plt.subplots(figsize=(11, 5.5))
+        drew = False
+        for est_num, lab, col, lstyle in ((nt_est, nt_label, "tab:blue", "-"),
+                                          (t_est, t_label, "tab:red", "--")):
+            bpkl = out_dir / f"ts_link_band_est{est_num}.pkl"
+            if not bpkl.exists():
+                print(f"  [Warning] no band pkl for est{est_num}; skipping in {out_name}")
+                continue
+            with open(bpkl, "rb") as fb:
+                bd = pickle.load(fb).sort_values("_d")
+            axp.plot(bd["_d"], bd["phi_t"], label=lab, color=col, linewidth=2, linestyle=lstyle)
+            axp.fill_between(bd["_d"].values, bd["lo"].values, bd["hi"].values, color=col, alpha=0.18, linewidth=0)
+            drew = True
+        if not drew:
+            plt.close(figp)
+            return
+        axp.set_title(title, fontsize=14, pad=12)
+        axp.set_ylabel(r"National $\hat{\phi}_t$")
+        axp.set_ylim(0, 1)
+        axp.grid(alpha=0.4)
+        axp.legend(loc="best")
+        figp.tight_layout()
+        pp = out_dir / out_name
+        plt.savefig(pp, dpi=300)
+        plt.close(figp)
+        shutil.copy(pp, _DRAFTS_DIR / out_name)
+        print(f"Exported pair phi_t plot -> {pp}; copied to {_DRAFTS_DIR}")
+
+    _make_pair_plot(5, 6, "Single-Index", "Single-Index + Time",
+                    r"Implied National $\hat{\phi}_t$: Single-Index (Spec 12)",
+                    "est_phi_t_single_index_pair.png")
+    _make_pair_plot(7, 8, "Joint Sieve", "Joint Sieve + Time",
+                    r"Implied National $\hat{\phi}_t$: Joint Sieve (Spec 12)",
+                    "est_phi_t_joint_sieve_pair.png")
+
 if __name__ == "__main__":
     main()

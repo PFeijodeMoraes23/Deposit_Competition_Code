@@ -79,11 +79,9 @@ def build_first_stage_table(results_dict, est_num):
     caption = rf"Pooled B+D --- First Stage Estimation (Est.\ {est_num})"
     label = f"tab:est{est_num}_first_stage"
     notes = (
-        r"\scriptsize \textit{Notes:} The first stage is linear; cluster-robust standard "
-        r"errors at the conglomerate level are reported in parentheses, with the "
-        r"\textcite{carter2017asymptotic} effective-number-of-clusters ($G^*$) "
-        r"degrees-of-freedom correction for cluster-size imbalance. "
-        r"Significance levels: *** $p<0.01$, ** $p<0.05$, * $p<0.1$."
+        r"\footnotesize \textit{Notes:} Standard errors (wild cluster bootstrap at the "
+        r"conglomerate level; \textcite{cameron2008bootstrap}, \textcite{mackinnon2017wild}) "
+        r"in parentheses. Significance levels: *** $p<0.01$, ** $p<0.05$, * $p<0.1$."
     )
 
     def _get_res(iv_key, p):
@@ -93,7 +91,8 @@ def build_first_stage_table(results_dict, est_num):
     p0, l0 = panels[0], panel_letters[0]
     iv_nums_0 = [(il, fs_spec_numbers[(p0, ik)]) for ik, il in ivs]
     lines = [
-        r"\setstretch{1.0}", r"\begin{longtable}[c]{lccc}",
+        r"\setstretch{1.0}",
+        r"\begin{xltabular}{\textwidth}{>{\raggedright\arraybackslash}p{0.34\textwidth} *{3}{>{\centering\arraybackslash}X}}",
         rf"    \caption{{{caption}}}\label{{{label}}} \\", r"    \toprule",
         rf"    \multicolumn{{{multispan}}}{{l}}{{\textbf{{Panel {l0}: {panel_labels[p0]}}}}} \\", r"    \midrule",
         "    & " + " & ".join(il for il, _ in iv_nums_0) + r" \\",
@@ -101,7 +100,7 @@ def build_first_stage_table(results_dict, est_num):
         rf"    \multicolumn{{{multispan}}}{{c}}{{{{\bfseries Table \thetable\ continued from previous page}}}} \\",
         r"    \toprule", "    & " + " & ".join(il for il, _ in iv_nums_0) + r" \\", r"    \midrule", r"    \endhead", "",
         r"    \midrule", rf"    \multicolumn{{{multispan}}}{{r}}{{\textit{{Continued on next page}}}} \\", r"    \endfoot", "",
-        r"    \bottomrule", rf"    \multicolumn{{{multispan}}}{{p{{0.45\textwidth}}}}{{{notes}}} \\", r"    \endlastfoot", "",
+        r"    \bottomrule", rf"    \multicolumn{{{multispan}}}{{p{{\dimexpr\textwidth-2\tabcolsep\relax}}}}{{{notes}}} \\", r"    \endlastfoot", "",
     ]
     all_vars_fs = ['tax_cost_ratio_lag', 'personnel_cost_ratio_lag', 'admin_cost_ratio_lag',
                    'indice_basileia_lag', 'lci_lca_ratio_lag', 'wholesale_ratio_lag', 'leave_one_out_mean_spread']
@@ -126,21 +125,20 @@ def build_first_stage_table(results_dict, est_num):
             if has_val:
                 lines.append(f"    {clean_name(var)} & " + " & ".join(coef_strs) + r" \\*")
                 lines.append("    & " + " & ".join(se_strs) + r" \\")
-        obs_l, rsq_l, fstat_l, g_l, gstar_l = [], [], [], [], []
+        obs_l, rsq_l, fstat_l, g_l = [], [], [], []
         for ik, _ in ivs:
             res = _get_res(ik, panel)
             if res is None:
-                obs_l.append("---"); rsq_l.append("---"); fstat_l.append("---"); g_l.append("---"); gstar_l.append("---"); continue
+                obs_l.append("---"); rsq_l.append("---"); fstat_l.append("---"); g_l.append("---"); continue
             obs_l.append(f"{int(res.nobs):,}"); rsq_l.append(f"{res.rsquared:.4f}")
             fv = getattr(res, 'fvalue', None); fp = getattr(res, 'f_pvalue', 1.0)
             fstat_l.append(f"${fv:.2f}^{{{stars(fp)}}}$" if fv is not None else "---")
             g_l.append(str(getattr(res, 'G_nominal', '---')))
-            gsv = getattr(res, 'G_star', None); gstar_l.append(f"{gsv:.2f}" if gsv is not None else "---")
         lines += [r"    \midrule", "    Observations & " + " & ".join(obs_l) + r" \\",
                   "    $R^2$ & " + " & ".join(rsq_l) + r" \\", "    F-Statistic & " + " & ".join(fstat_l) + r" \\",
                   "    Fixed Effects & No & No & No \\\\", "    Clusters ($G$) & " + " & ".join(g_l) + r" \\",
-                  "    Effective Clusters ($G^*$) & " + " & ".join(gstar_l) + r" \\", r"    \bottomrule"]
-    lines += [r"\end{longtable}", r"\doublespacing"]
+                  r"    \bottomrule"]
+    lines += [r"\end{xltabular}", r"\doublespacing"]
     return "\n".join(lines)
 
 
@@ -157,17 +155,11 @@ def build_second_stage_table(results_dict, est_num, ss_caption, est_note):
     multispan = 5
     label = f"tab:est{est_num}_second_stage"
     notes = (
-        r"\scriptsize \textit{Notes:} Standard errors and $p$-values are obtained by a "
-        r"score/multiplier wild cluster bootstrap at the conglomerate level "
-        r"(\textcite{cameron2008bootstrap}; \textcite{mackinnon2017wild}), with 999 "
-        r"replications and Webb six-point weights to accommodate the severe cluster-size "
-        r"imbalance. Because the estimator is nonlinear in the index (and, for the "
-        r"single index, the link is profiled nonparametrically), the "
-        r"\textcite{imbens2016robust} bias-reduced linearisation does not apply; the "
-        r"\textcite{carter2017asymptotic} effective-cluster count $G^*$ is reported only "
-        r"as a diagnostic. Significance levels: *** $p<0.01$, ** $p<0.05$, * $p<0.1$. " +
-        est_note +
-        r" $\phi$ itself is constructed from the native index coefficients, not these AMEs."
+        r"\footnotesize \textit{Notes:} Standard errors (wild cluster bootstrap at the "
+        r"conglomerate level; \textcite{cameron2008bootstrap}, \textcite{mackinnon2017wild}) "
+        r"in parentheses. Reported effects are average marginal effects (AMEs); $\phi$ is "
+        r"built from the native index coefficients, not these AMEs. " + est_note +
+        r" Significance levels: *** $p<0.01$, ** $p<0.05$, * $p<0.1$."
     )
 
     def _get_res(ek, p):
@@ -180,8 +172,8 @@ def build_second_stage_table(results_dict, est_num, ss_caption, est_note):
     p0, l0 = panels[0], panel_letters[0]
     est_nums_0 = [(el, ss_spec_numbers[(p0, ek)]) for ek, el in estimators]
     lines = [
-        r"\setstretch{1.0}", r"\setlength{\LTleft}{\fill}", r"\setlength{\LTright}{\fill}",
-        r"\begin{longtable}{l@{\hspace{0.35em}}cccc}",
+        r"\setstretch{1.0}",
+        r"\begin{xltabular}{\textwidth}{>{\raggedright\arraybackslash}p{0.28\textwidth} *{4}{>{\centering\arraybackslash}X}}",
         rf"    \caption{{{ss_caption}}}\label{{{label}}} \\", r"    \toprule",
         rf"    \multicolumn{{{multispan}}}{{l}}{{\textbf{{Panel {l0}: {panel_labels[p0]}}}}} \\", r"    \midrule",
         "     & " + " & ".join(el for el, _ in est_nums_0) + r" \\",
@@ -189,7 +181,7 @@ def build_second_stage_table(results_dict, est_num, ss_caption, est_note):
         rf"    \multicolumn{{{multispan}}}{{c}}{{{{\bfseries Table \thetable\ continued from previous page}}}} \\",
         r"    \toprule", r"    \endhead", "", r"    \midrule",
         rf"    \multicolumn{{{multispan}}}{{r}}{{\textit{{Continued on next page}}}} \\", r"    \endfoot", "",
-        r"    \bottomrule", rf"    \multicolumn{{{multispan}}}{{p{{0.60\textwidth}}}}{{{notes}}} \\", r"    \endlastfoot", "",
+        r"    \bottomrule", rf"    \multicolumn{{{multispan}}}{{p{{\dimexpr\textwidth-2\tabcolsep\relax}}}}{{{notes}}} \\", r"    \endlastfoot", "",
     ]
     for pi, panel in enumerate(panels):
         letter = panel_letters[pi]
@@ -217,20 +209,18 @@ def build_second_stage_table(results_dict, est_num, ss_caption, est_note):
             if has_val:
                 lines.append(f"    {clean_name(vshort)} & " + " & ".join(coef_strs) + r" \\")
                 lines.append("    & " + " & ".join(se_strs) + r" \\")
-        obs_l, rsq_l, g_l, gstar_l = [], [], [], []
+        obs_l, rsq_l, g_l = [], [], []
         for ek, _ in estimators:
             res = _get_res(ek, panel)
             if res is None:
-                obs_l.append("---"); rsq_l.append("---"); g_l.append("---"); gstar_l.append("---"); continue
+                obs_l.append("---"); rsq_l.append("---"); g_l.append("---"); continue
             nv = getattr(res, 'nobs', None); obs_l.append(f"{int(nv):,}" if nv is not None else "---")
             rv = getattr(res, 'rsquared', None); rsq_l.append(f"{rv:.4f}" if rv is not None else "---")
             g_l.append(str(getattr(res, 'G_nominal', '---')))
-            gsv = getattr(res, 'G_star', None); gstar_l.append(f"{gsv:.2f}" if gsv is not None else "---")
         lines += [r"    \midrule", "    Observations & " + " & ".join(obs_l) + r" \\",
                   "    $R^2$ & " + " & ".join(rsq_l) + r" \\", "    Fixed Effects & Yes & Yes & Yes & Yes \\\\",
-                  "    Clusters ($G$) & " + " & ".join(g_l) + r" \\",
-                  "    Effective Clusters ($G^*$) & " + " & ".join(gstar_l) + r" \\", r"    \bottomrule"]
-    lines += [r"\end{longtable}", r"\doublespacing"]
+                  "    Clusters ($G$) & " + " & ".join(g_l) + r" \\", r"    \bottomrule"]
+    lines += [r"\end{xltabular}", r"\doublespacing"]
     return "\n".join(lines)
 
 

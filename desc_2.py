@@ -1100,7 +1100,7 @@ def render_table3(t3_df, weight_col, suffix, latest_year) -> str:
     )
 
     tex = "\n".join([
-        r"\begin{table}[H]",
+        r"\begin{table}[htbp]",
         r"\centering",
         r"\begin{threeparttable}",
         f"\\caption{{{caption}}}\\label{{{tab_label}}}",
@@ -1219,7 +1219,7 @@ def render_table4(t4_df, meta, suffix) -> str:
     )
 
     tex = "\n".join([
-        r"\begin{table}[H]",
+        r"\begin{table}[htbp]",
         r"\centering",
         r"\begin{threeparttable}",
         f"\\caption{{{caption}}}\\label{{{tab_label}}}",
