@@ -25,6 +25,8 @@
 #         ENGINES="ift" bash submit_blp_rc_all.sh          # IFT only
 #         NUMERICAL_MODE=full bash submit_blp_rc_all.sh    # full numerical chain
 #         ROUTINES="1 2 3 4 5 6 7 8" bash submit_blp_rc_all.sh
+#         SE_METHOD=sandwich bash submit_blp_rc_all.sh     # θ₁+θ₂ SEs via analytical GMM sandwich
+#         SE_METHOD=wcb bash submit_blp_rc_all.sh          # θ₁+θ₂ SEs via wild cluster bootstrap (default)
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 mkdir -p "${HERE}/logs"
@@ -42,6 +44,15 @@ ENGINES="${ENGINES:-ift numerical}"
 #                          points IFT already found. Needs IFT in ENGINES.
 #   full                 — the full 8-stage numerical chain (old behaviour).
 NUMERICAL_MODE="${NUMERICAL_MODE:-crosscheck}"
+# Standard-error method for BOTH θ₁ and θ₂ (read by the engine as BLP_SE_METHOD):
+#   wcb      (default) — wild cluster bootstrap, matching the sleepiness inference
+#   sandwich           — analytical cluster-robust GMM sandwich (uses the IFT ∂δ/∂θ₂ Jacobian)
+# WCB_REPS / WCB_SCHEME mirror the sleepiness SLEEP_BOOT_B / SLEEP_BOOT_SCHEME (999, webb).
+SE_METHOD="${SE_METHOD:-wcb}"
+WCB_REPS="${WCB_REPS:-999}"
+WCB_SCHEME="${WCB_SCHEME:-webb}"
+export BLP_SE_METHOD="${SE_METHOD}" BLP_WCB_REPS="${WCB_REPS}" BLP_WCB_SCHEME="${WCB_SCHEME}"
+echo "SE method: ${SE_METHOD} (θ₁+θ₂; WCB reps=${WCB_REPS}, scheme=${WCB_SCHEME}) — propagated via --export=ALL"
 DATA_OUT="${HERE}/../data/output"
 STAGES=(sigma rc2 rc3 rc4 full ext1 ext2 extended)
 GENERIC="${HERE}/submit_blp_rc_stage.sh"

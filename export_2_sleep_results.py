@@ -71,7 +71,7 @@ def build_first_stage_table(results_dict):
     }
     ivs = [('IV_CostShifters', 'IV Cost'), ('IV_Wholesale', 'IV Wholesale'), ('IV_HausmanFull', 'Hausman')]
     multispan = 4
-    caption = r"Pooled B+D --- First Stage Estimation (Est.\ 2)"
+    caption = r"First Stage --- Estimation Strategy~\ref{estimation:pooled}"
     label = "tab:est2_first_stage"
     notes = (
         r"\footnotesize \textit{Notes:} Standard errors (wild cluster bootstrap at the "
@@ -189,14 +189,12 @@ def build_second_stage_table(results_dict):
     }
     estimators = [('OLS', 'OLS'), ('IV_CostShifters', 'IV Cost'), ('IV_Wholesale', 'IV Wholesale'), ('IV_HausmanFull', 'Hausman')]
     multispan = 5
-    caption = r"Pooled B+D --- Second Stage Estimation (Est.\ 2, Linear)"
+    caption = r"Second Stage --- Estimation Strategy~\ref{estimation:pooled}"
     label = "tab:est2_second_stage"
     notes = (
         r"\footnotesize \textit{Notes:} Standard errors (wild cluster bootstrap at the "
         r"conglomerate level; \textcite{cameron2008bootstrap}, \textcite{mackinnon2017wild}) "
-        r"in parentheses. "
-        r"Significance levels: *** $p<0.01$, ** $p<0.05$, * $p<0.1$. "
-        r"CF: control function residual $\hat{v}$ interacted with lagged deposits."
+        r"in parentheses. Significance levels: *** $p<0.01$, ** $p<0.05$, * $p<0.1$."
     )
 
     def _get_res(ek, p):

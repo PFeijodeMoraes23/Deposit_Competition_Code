@@ -33,6 +33,9 @@ using Parquet2, DataFrames, SparseArrays, LinearAlgebra, Statistics
 using Random, Optim, QuasiMonteCarlo, Distributions
 using JSON3, Serialization, ArgParse, Printf, Dates
 
+# Shared SE machinery (wild cluster bootstrap + analytical GMM sandwich, BLP_SE_METHOD).
+include(joinpath(@__DIR__, "se_common.jl"))
+
 # ── Optional: true L-BFGS-B outer solver (Byrd–Lu–Nocedal–Zhu) ──────────────────
 # LBFGSB.jl handles the box directly (active set + projected line search), whereas
 # Optim's Fminbox(LBFGS()) solves a SEQUENCE of barrier subproblems and so burns

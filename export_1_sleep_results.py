@@ -88,7 +88,7 @@ def build_first_stage_table(results_dict):
         ('IV_HausmanFull', 'Hausman'),
     ]
     multispan = 4
-    caption = "Local Data Only - First Stage Estimation"
+    caption = r"First Stage --- Estimation Strategy~\ref{estimation:local}"
     label = "tab:est1_first_stage"
     notes = (
         r"\footnotesize \textit{Notes:} Standard errors (wild cluster bootstrap at the "
@@ -239,7 +239,7 @@ def build_second_stage_table(results_dict):
         'risk_free_qoq_lag', 'connections_per100',
     ]
     multispan = 5
-    caption = "Local Data Only - Second Stage Estimation"
+    caption = r"Second Stage --- Estimation Strategy~\ref{estimation:local}"
     label = "tab:est1_second_stage"
     notes = (
         r"\footnotesize \textit{Notes:} Standard errors (wild cluster bootstrap at the "

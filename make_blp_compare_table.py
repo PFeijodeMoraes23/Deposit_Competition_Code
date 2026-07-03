@@ -46,9 +46,9 @@ DRAFTS_DIR = rc.DRAFTS_DIR
 TABLES_DIR.mkdir(parents=True, exist_ok=True)
 
 STAGES = rc.STAGES
-# Column headers for the RC stages (clearer than the per-stage σ labels).
-STAGE_HEAD = {"sigma": "Sigma", "rc2": "RC2", "rc3": "RC3", "rc4": "RC4",
-              "full": "Full", "ext1": "Ext1", "ext2": "Ext2", "extended": "Extended"}
+# RC-stage headers by number of freed random coefficients (1→8), so the ladder is legible.
+STAGE_HEAD = {"sigma": "1 RC", "rc2": "2 RC", "rc3": "3 RC", "rc4": "4 RC",
+              "full": "5 RC", "ext1": "6 RC", "ext2": "7 RC", "extended": "Full"}
 
 
 # ── loaders ───────────────────────────────────────────────────────────────────
@@ -97,6 +97,7 @@ def build_table(est: int) -> str:
         print(f"[E{est}] no RC stage results in {RAW_DIR}")
         return ""
     logit = load_logit_full(est)
+    rc_sem = rc.se_note(stage_data.get("extended"))       # RC SE-method sentence (method-aware)
 
     cols = (["logit"] if logit else []) + avail          # column keys, left→right
     ncols = len(cols)
@@ -120,40 +121,46 @@ def build_table(est: int) -> str:
                 names = d.get("param_names_theta1", [])
                 if p in names:
                     i = names.index(p)
-                    cc, ss = rc.fmt_coef(d["theta1"][i], d.get("theta1_se", [])[i]
-                                         if i < len(d.get("theta1_se", [])) else 0.0,
-                                         d.get("G_star"))
+                    t1se = d.get("theta1_se", []); t1pv = d.get("theta1_pval", [])
+                    cc, ss = rc.fmt_coef(d["theta1"][i],
+                                         t1se[i] if i < len(t1se) else 0.0,
+                                         d.get("G_star"),
+                                         t1pv[i] if i < len(t1pv) else None)
                 else:
                     cc, ss = "-", ""
             cvals.append(cc); svals.append(ss)
-        return ["    " + " & ".join(cvals) + r" \\",
-                "    " + " & ".join(svals) + r" \\",
-                r"    \addlinespace[0.15ex]"]
+        rows = ["    " + " & ".join(cvals) + r" \\"]
+        if any(s.strip() for s in svals[1:]):   # skip an all-blank SE row (e.g. θ₂ SEs not yet computed)
+            rows.append("    " + " & ".join(svals) + r" \\")
+        rows.append(r"    \addlinespace[0.15ex]")
+        return rows
 
     def panelB_row(lbl):
         cvals, svals = [lbl], [""]
         for c in cols:
             if c == "logit":
                 cvals.append("-"); svals.append(""); continue
-            decoded = {l: (v, se) for l, v, se in rc.decode_theta2(stage_data[c])}
+            decoded = {l: (v, se, pv) for l, v, se, pv in rc.decode_theta2(stage_data[c])}
             if lbl in decoded:
-                v, se = decoded[lbl]
-                cc, ss = rc.fmt_coef(v, se, stage_data[c].get("G_star"))
+                v, se, pv = decoded[lbl]
+                cc, ss = rc.fmt_coef(v, se, stage_data[c].get("G_star"), pv)
             else:
                 cc, ss = "-", ""
             cvals.append(cc); svals.append(ss)
-        return ["    " + " & ".join(cvals) + r" \\",
-                "    " + " & ".join(svals) + r" \\",
-                r"    \addlinespace[0.15ex]"]
+        rows = ["    " + " & ".join(cvals) + r" \\"]
+        if any(s.strip() for s in svals[1:]):   # skip an all-blank SE row (e.g. θ₂ SEs not yet computed)
+            rows.append("    " + " & ".join(svals) + r" \\")
+        rows.append(r"    \addlinespace[0.15ex]")
+        return rows
 
     L = [
         r"\begin{landscape}",
         r"\begin{spacing}{1.0}",
         r"\centering\scriptsize",
-        rf"\begin{{longtable}}{{{col_fmt}}}",
-        r"    \setlength{\tabcolsep}{4pt}",
-        rf"    \caption{{BLP Demand: Logit vs.\ RC-BLP stages --- E{est} "
-        rf"({rc_label(est)}), Specification 12}}",
+        r"\setlength{\tabcolsep}{4pt}",   # MUST precede \begin{longtable}: a token inside the
+        rf"\begin{{longtable}}{{{col_fmt}}}",  # longtable body before \caption starts the first
+        rf"    \caption{{BLP Demand: Logit vs.\ RC-BLP stages --- Estimation "  # cell → \caption's \noalign misplaces
+        rf"{rc.est_ref(est)}}}",
         rf"    \label{{tab:blp_compare_E{est}_spec12}} \\",
         r"    \toprule",
         f"     & {hdr_cols} \\\\",
@@ -166,12 +173,12 @@ def build_table(est: int) -> str:
         rf"    \multicolumn{{{ncols + 1}}}{{r}}{{\textit{{Continued on next page}}}} \\",
         r"    \endfoot",
         r"    \bottomrule",
-        r"    \multicolumn{" + str(ncols + 1) + r"}{p{0.95\textwidth}}{\scriptsize "
-        r"\textit{Notes:} Column 1 is the non-RC logit (`full' sub-model); the remaining "
-        r"columns are the RC-BLP stages run on the cluster, each freeing one more random "
-        r"coefficient (Sigma$=$1 $\sigma$ $\to$ Extended$=$8). SEs in parentheses; "
-        r"$\theta_1$ SEs are cluster-robust (logit) / analytic (RC), $\theta_2$ SEs are not "
-        r"computed (RC point estimates, no stars). Stars: *** $p<0.01$, ** $p<0.05$, "
+        r"    \multicolumn{" + str(ncols + 1) + r"}{p{\dimexpr\textheight-2\tabcolsep\relax}}{\scriptsize "  # \textheight = landscape line width
+        r"\textit{Notes:} The estimation strategy is enumerated in "
+        r"Section~\ref{sec:empirical:sleep}. Column 1 is the non-RC logit (`full' sub-model); "
+        r"the remaining columns are the RC-BLP stages run on the cluster, each freeing one more random "
+        r"coefficient (Sigma$=$1 $\sigma$ $\to$ Extended$=$8). The logit column reports wild cluster "
+        rf"bootstrap standard errors (conglomerate clusters); for the RC columns, {rc_sem}. Stars: *** $p<0.01$, ** $p<0.05$, "
         r"* $p<0.1$. $Q$ is each model's own GMM objective (not comparable across the "
         r"logit/RC boundary --- different moment counts). Spread in percentage points."
         r"} \\",
@@ -198,9 +205,6 @@ def build_table(est: int) -> str:
     def q_of(c):
         d = logit if c == "logit" else stage_data[c]
         q = d.get("Q_value");  return f"${q:.4f}$" if q is not None else "---"
-    def conv_of(c):
-        d = logit if c == "logit" else stage_data[c]
-        return "Yes" if d.get("converged") else "No"
     def n_of(c):
         d = logit if c == "logit" else stage_data[c]
         n = d.get("n_obs");    return f"{n:,}" if n is not None else "---"
@@ -215,7 +219,6 @@ def build_table(est: int) -> str:
     L += [
         stat_row(r"$Q$ (GMM)", q_of),
         stat_row(r"$\dim(\theta_2)$", dim_of),
-        stat_row(r"Converged", conv_of),
         stat_row(r"Observations", n_of),
         stat_row(r"Eff.\ clusters ($G^*$)", g_of),
         r"\end{longtable}",
@@ -223,11 +226,6 @@ def build_table(est: int) -> str:
         r"\end{landscape}",
     ]
     return "\n".join(L)
-
-
-def rc_label(est: int) -> str:
-    return {5: "Pooled Single-Index", 6: "Single-Index + Time",
-            7: "Joint Single-Index", 8: "Joint + Time"}.get(est, f"E{est}")
 
 
 def main():

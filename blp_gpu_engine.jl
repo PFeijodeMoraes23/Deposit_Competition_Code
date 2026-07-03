@@ -530,6 +530,9 @@ function main()
                     "theta1_se"          => replace(round.(get(res, "theta1_se", Float64[]), sigdigits=8), NaN=>0.0),
                     "theta2"             => round.(get(res, "theta2",    Float64[]), sigdigits=8),
                     "theta2_se"          => replace(round.(get(res, "theta2_se", Float64[]), sigdigits=8), NaN=>0.0),
+                    "theta1_pval"        => replace(round.(get(res, "theta1_pval", Float64[]), sigdigits=6), NaN=>1.0),
+                    "theta2_pval"        => replace(round.(get(res, "theta2_pval", Float64[]), sigdigits=6), NaN=>1.0),
+                    "se_method"          => get(res, "se_method", "none"),
                     "Q_value"            => get(res, "Q_value",   0.0),
                     "converged"          => get(res, "converged", false),
                     "param_names_theta1" => get(res, "param_names_theta1", String[]),
@@ -2041,6 +2044,35 @@ function compute_ift_gradient_gpu!(grad::Vector{Float64},
     return nothing
 end
 
+"""Collect the raw diagonal-IFT Jacobian ∂δ*/∂θ₂ (N × dim θ₂) at the optimum, for standard errors.
+Same per-column forward pass as `compute_ift_gradient_gpu!`, but returns the raw `d_k` columns
+(BEFORE the θ₁ projection) — the θ₂ block of the moment Jacobian D=[−Z'X, Z'∂δ/∂θ₂]. Restores
+buf.mu to base θ₂ on exit. Inherits the diagonal-IFT + forward-difference approximation."""
+function compute_delta_jacobian_gpu(delta_star::Vector{Float64}, s_base::Vector{Float64},
+                                    theta2::Vector{Float64}, buf::HotBuffers, gbuf::GpuBuffers,
+                                    prod_vec::Matrix{Float64}, nu_draws::Matrix{Float64},
+                                    sigma_indices::Vector{Int},
+                                    pi_interactions::Vector{Tuple{Int,Int}},
+                                    R::Int, coef_dim::Int, pc::Precomp; ε::Float64=1e-5)
+    n_params = length(theta2)
+    N        = length(delta_star)
+    Ddelta   = Matrix{Float64}(undef, N, n_params)
+    for k in 1:n_params
+        theta2_k     = copy(theta2); theta2_k[k] += ε
+        sv_k, pv_k   = unpack_theta2(theta2_k, sigma_indices, pi_interactions)
+        compute_mu!(buf, prod_vec, nu_draws, sv_k, sigma_indices, pv_k, R, coef_dim)
+        compute_model_shares_gpu!(buf, gbuf, delta_star, pc, R)
+        s_k = collect_model_shares(buf, pc, N)
+        @inbounds for i in 1:N
+            one_minus_s   = max(1.0 - s_base[i], 1e-4)
+            Ddelta[i, k]  = -(log(max(s_k[i], 1e-15)) - log(s_base[i])) / ε / one_minus_s
+        end
+    end
+    sv_base, pv_base = unpack_theta2(theta2, sigma_indices, pi_interactions)
+    compute_mu!(buf, prod_vec, nu_draws, sv_base, sigma_indices, pv_base, R, coef_dim)
+    return Ddelta
+end
+
 
 """
     gmm_fg_gpu!(F, G, theta2, ...) → Float64
@@ -2377,11 +2409,40 @@ function run_blp_estimation_ift_gpu(estim::Int, spec_id::Int, args,
 
     theta1_star, xi_star   = estimate_theta1(delta_final, pc)
     theta1_se, n_cl, G_s   = compute_cluster_se(theta1_star, delta_final, pc)
+    theta2_se   = fill(0.0, length(theta2_star))
+    theta1_pval = Float64[]; theta2_pval = Float64[]
+
+    # ── θ₁+θ₂ SEs "in the same manner" via BLP_SE_METHOD ("wcb" default | "sandwich") ──────
+    # Joint GMM Jacobian D=[−Z'X, Z'∂δ/∂θ₂]; ∂δ/∂θ₂ from the diagonal IFT (same approximation the
+    # gradient uses). Overwrites the linear-IV θ₁ SE so θ₁ accounts for θ₂ estimation uncertainty.
+    _sem = se_method()
+    if _sem in ("sandwich", "wcb")
+        try
+            valid  = pc.theta1_valid .& isfinite.(delta_final)
+            compute_model_shares_gpu!(buf, gbuf, delta_final, pc, R)          # shares at (δ*, θ₂*)
+            s_base = collect_model_shares(buf, pc, N_obs)
+            Ddelta = compute_delta_jacobian_gpu(delta_final, s_base, theta2_star, buf, gbuf,
+                        prod_vec, nu_draws, sigma_indices, pi_interactions, R, coef_dim, pc)
+            se_all, pval_all = gmm_cluster_ses(_sem, vcat(theta1_star, theta2_star),
+                        pc.Z_moments[valid, :], pc.X_full[valid, :], Ddelta[valid, :],
+                        delta_final[valid] .- pc.X_full[valid, :] * theta1_star,
+                        W, pc.clusters[valid])
+            K1 = length(theta1_star)
+            theta1_se   = se_all[1:K1];   theta2_se   = se_all[K1+1:end]
+            theta1_pval = pval_all[1:K1]; theta2_pval = pval_all[K1+1:end]
+            println("  SE method: $_sem  |  θ₂ SE: $(round.(theta2_se, sigdigits=3))")
+        catch e
+            println("  [!] SE ($_sem) failed: $e — keeping linear θ₁ SE, θ₂_se=0.")
+        end
+    end
 
     results["theta1"]             = theta1_star
     results["theta1_se"]          = theta1_se
     results["theta2"]             = theta2_star
-    results["theta2_se"]          = fill(0.0, length(theta2_star))
+    results["theta2_se"]          = theta2_se
+    results["theta1_pval"]        = theta1_pval
+    results["theta2_pval"]        = theta2_pval
+    results["se_method"]          = _sem
     results["delta"]              = delta_final
     results["xi"]                 = xi_star
     results["Q_value"]            = Q_min
@@ -2498,6 +2559,9 @@ function main_gpu_ift()
                     "theta1_se"          => replace(round.(get(res, "theta1_se", Float64[]), sigdigits=8), NaN=>0.0),
                     "theta2"             => round.(get(res, "theta2",    Float64[]), sigdigits=8),
                     "theta2_se"          => replace(round.(get(res, "theta2_se", Float64[]), sigdigits=8), NaN=>0.0),
+                    "theta1_pval"        => replace(round.(get(res, "theta1_pval", Float64[]), sigdigits=6), NaN=>1.0),
+                    "theta2_pval"        => replace(round.(get(res, "theta2_pval", Float64[]), sigdigits=6), NaN=>1.0),
+                    "se_method"          => get(res, "se_method", "none"),
                     "Q_value"            => get(res, "Q_value",   0.0),
                     "converged"          => get(res, "converged", false),
                     "param_names_theta1" => get(res, "param_names_theta1", String[]),

@@ -56,20 +56,19 @@ D_COLS = ["gdp_per_capita", "fraction_65plus", "fraction_young",
 
 STAGES = ["sigma", "rc2", "rc3", "rc4", "full", "ext1", "ext2", "extended"]
 
+# Columns are labelled by the number of freed random coefficients (1→8), so the complexity
+# ladder is legible: "1 RC" = one random coefficient (sigma stage) ... "8 RC" = all eight
+# (extended / full model).
 STAGE_LABELS = {
-    "sigma":    r"$\sigma_1$",
-    "rc2":      r"RC2",
-    "rc3":      r"RC3",
-    "rc4":      r"RC4",
-    "full":     r"Full",
-    "ext1":     r"Ext1",
-    "ext2":     r"Ext2",
-    "extended": r"Extended",
+    "sigma":    r"1 RC", "rc2": r"2 RC", "rc3": r"3 RC", "rc4": r"4 RC",
+    "full":     r"5 RC", "ext1": r"6 RC", "ext2": r"7 RC", "extended": r"Full",
 }
 
-# Human-readable labels for θ₁ parameters
+# Human-readable labels for θ₁ parameters. The price coefficient uses the SAME wording as the
+# non-RC logit table (blp_1_logit.jl VAR_MAP) and V_Main eq. (1), where α is the coefficient on
+# the price/spread ρ — so the logit and RC columns of the compare table share one row label.
 THETA1_LABELS = {
-    "alpha":                r"Spread ($\alpha$)",
+    "alpha":                r"Price coefficient ($\alpha$)",
     "fgc_covered":          r"FGC Covered",
     "has_ip":               r"Has Payment Institution",
     "seg_S2":               r"Segment S2",
@@ -79,19 +78,47 @@ THETA1_LABELS = {
     "log_total_assets_lag": r"$\ln(\text{Total Assets}_{t-1})$",
 }
 
-# Labels for characteristics in σ/π names
+# Characteristic labels for the σ/π parameter names — cover ALL θ₁ characteristics so σ(·) labels
+# never fall back to a raw underscore-escaped column name.
 COEF_LABELS = {
     "spread":               r"Spread",
     "fgc_covered":          r"FGC",
+    "has_ip":               r"Payment Inst.",
+    "seg_S2":               r"Seg.\ S2",
+    "seg_S3":               r"Seg.\ S3",
+    "seg_S4":               r"Seg.\ S4",
+    "seg_S5":               r"Seg.\ S5",
     "log_total_assets_lag": r"$\ln$ Assets",
 }
 
+# Demographic labels — descriptive names consistent with the sleepiness tables and
+# tab:demographic_chars (units dropped: BLP demographics enter STANDARDIZED, D̃=(D−D̄)/σ, so
+# "per 1k" / "10k R$" would be misleading). Covers all 8 D_COLS → no raw fallbacks.
 DEMO_LABELS = {
-    "gdp_per_capita":            r"GDP p.c.",
-    "fraction_65plus":           r"Frac.\ Age 65+",
-    "connections_per100":        r"Broadband/100",
-    "cadunico_families_per1000": r"Cad\'Unico/1000",
+    "gdp_per_capita":            r"GDP per capita",
+    "fraction_65plus":           r"Fraction 65+",
+    "fraction_young":            r"Fraction Young",
+    "pix_users_pf_per1000":      r"PIX Users",
+    "connections_per100":        r"Broadband Connections",
+    "frac_4g5g":                 r"4G/5G Share",
+    "branches_per1000":          r"Bank Branches",
+    "cadunico_families_per1000": r"Cad\'Unico Families",
 }
+
+# Estimator identity → the \ref{estimation:*} enumerate labels in V_Main (sec:empirical:sleep),
+# EXACTLY as the sleepiness comparison tables (est5-8_spec12_stage2_comparison.tex) reference them.
+# The demand routine id (E5) is a code artifact; \ref{estimation:single_idx} renders as the paper's
+# estimator number (3), keeping the demand tables consistent with the text. NO ad-hoc names.
+ESTIMATION_REF = {
+    1: r"\ref{estimation:local}",          2: r"\ref{estimation:pooled}",
+    5: r"\ref{estimation:single_idx}",     6: r"\ref{estimation:single_idx_time}",
+    7: r"\ref{estimation:joint_sieve}",    8: r"\ref{estimation:joint_sieve_time}",
+}
+
+def est_ref(est: int) -> str:
+    """Estimator id → V_Main enumerate \\ref (fallback E{id} for ids with no live label, e.g. E3/E4
+    whose 'estimation:logistic' item is commented out)."""
+    return ESTIMATION_REF.get(est, rf"E{est}")
 
 # ── Label helpers ─────────────────────────────────────────────────────────────
 
@@ -132,30 +159,26 @@ def load_stage(est_id: int, stage: str, suffix: str = "") -> dict | None:
         return None
 
 
-def decode_theta2(data: dict) -> list[tuple[str, float, float]]:
+def decode_theta2(data: dict) -> list[tuple[str, float, float, float | None]]:
     """
-    Return list of (label, value, se) for each θ₂ parameter in the stage result.
-    se is 0.0 when not yet computed.
+    Return list of (label, value, se, pval) for each θ₂ parameter in the stage result.
+    se is 0.0 and pval None when SEs were not computed (BLP_SE_METHOD unset).
     """
     sigma_idx  = data.get("sigma_indices", [])
     pi_inter   = data.get("pi_interactions", [])
     theta2     = data.get("theta2", [])
     theta2_se  = data.get("theta2_se", [])
+    theta2_pv  = data.get("theta2_pval", [])
 
-    # theta2_se may be stored as 0.0 when NaN was replaced
-    out = []
-    for k, sidx in enumerate(sigma_idx):
-        val = theta2[k]       if k < len(theta2)    else float("nan")
-        se  = theta2_se[k]    if k < len(theta2_se) else 0.0
-        out.append((sigma_label(sidx), val, se))
+    def _row(label, k):
+        val = theta2[k]    if k < len(theta2)    else float("nan")
+        se  = theta2_se[k] if k < len(theta2_se) else 0.0
+        pv  = theta2_pv[k] if k < len(theta2_pv) else None
+        return (label, val, se, pv)
 
+    out = [_row(sigma_label(sidx), k) for k, sidx in enumerate(sigma_idx)]
     n_s = len(sigma_idx)
-    for j, (ci, di) in enumerate(pi_inter):
-        k   = n_s + j
-        val = theta2[k]       if k < len(theta2)    else float("nan")
-        se  = theta2_se[k]    if k < len(theta2_se) else 0.0
-        out.append((pi_label(ci, di), val, se))
-
+    out += [_row(pi_label(ci, di), n_s + j) for j, (ci, di) in enumerate(pi_inter)]
     return out
 
 
@@ -169,7 +192,7 @@ def build_global_theta2_labels(stage_results: dict) -> list[str]:
         data = stage_results.get(stage)
         if data is None:
             continue
-        for lbl, _, _ in decode_theta2(data):
+        for lbl, *_ in decode_theta2(data):
             if lbl not in seen:
                 seen.append(lbl)
     return seen
@@ -184,20 +207,39 @@ def _stars(pval: float) -> str:
     return ""
 
 
-def fmt_coef(val: float, se: float, G_star: float | None = None) -> tuple[str, str]:
-    """Return (coef_cell, se_cell) with significance stars."""
+def fmt_coef(val: float, se: float, G_star: float | None = None,
+             pval: float | None = None) -> tuple[str, str]:
+    """Return (coef_cell, se_cell) with significance stars. Stars use the supplied `pval`
+    (e.g. the WCB Wald p) when available, else a t(G*) p from val/se."""
     if val is None or (isinstance(val, float) and math.isnan(val)):
         return "-", ""
     coef_str = f"{val:.4f}"
     if se and se > 0:
-        t = val / se
-        df = G_star if (G_star and G_star > 1) else None
-        pv = 2 * stats.t.sf(abs(t), df=df) if df else 2 * (1 - stats.norm.cdf(abs(t)))
+        if pval is not None and not (isinstance(pval, float) and math.isnan(pval)):
+            pv = pval
+        else:
+            t = val / se
+            df = G_star if (G_star and G_star > 1) else None
+            pv = 2 * stats.t.sf(abs(t), df=df) if df else 2 * (1 - stats.norm.cdf(abs(t)))
         coef_str += _stars(pv)
         se_str = f"$({se:.4f})$"
     else:
         se_str = ""
     return f"${coef_str}$", se_str
+
+
+def se_note(data: dict | None) -> str:
+    """SE-method sentence from the stage's `se_method` field. WCB (default) / sandwich name the
+    method used on the cluster (BLP_SE_METHOD); 'none' means θ₂ SEs were not computed."""
+    m = (data or {}).get("se_method", "none")
+    if m == "wcb":
+        return (r"Wild cluster bootstrap standard errors (conglomerate clusters) in parentheses, "
+                r"for both $\theta_1$ and $\theta_2$")
+    if m == "sandwich":
+        return (r"Cluster-robust GMM sandwich standard errors (conglomerate clusters) in "
+                r"parentheses, for both $\theta_1$ and $\theta_2$")
+    return (r"$\theta_1$ standard errors (cluster-robust, conglomerate) in parentheses; $\theta_2$ "
+            r"SEs require a re-run with \texttt{SE\_METHOD} set")
 
 
 # ── Table builder ─────────────────────────────────────────────────────────────
@@ -223,13 +265,15 @@ def build_table(est_id: int, suffix: str = "") -> str:
     rep = stage_results[available[0]]
     n_obs = rep.get("n_obs") or rep.get("n_clusters", "---")
     G_star_map = {s: stage_results[s].get("G_star") for s in available}
+    sem_note   = se_note(stage_results.get("extended") or rep)
 
     lines = [
+        r"\begin{landscape}",
         r"\begin{spacing}{1.0}",
-        r"\centering",
-        rf"\begin{{longtable}}[c]{{{col_fmt}}}",
-        r"    \setlength{\tabcolsep}{5pt}",
-        rf"    \caption{{BLP Demand Estimation — E{est_id}, Specification 12}}",
+        r"\centering\footnotesize",
+        r"\setlength{\tabcolsep}{5pt}",   # MUST precede \begin{longtable} (else it starts the
+        rf"\begin{{longtable}}[c]{{{col_fmt}}}",  # first cell and \caption's \noalign misplaces)
+        rf"    \caption{{BLP Demand Estimation --- Estimation {est_ref(est_id)}}}",
         rf"    \label{{tab:blp_rc_est{est_id}_spec12}} \\",
         r"    \toprule",
         f"    Stage & {hdr_cols} \\\\",
@@ -247,15 +291,16 @@ def build_table(est_id: int, suffix: str = "") -> str:
         r"    \endfoot",
         "",
         r"    \bottomrule",
-        r"    \multicolumn{" + str(ncols + 1) + r"}{c}{\begin{minipage}{0.85\textwidth}"
-        r"\scriptsize \textit{Notes:} Standard errors in parentheses (when available). "
+        r"    \multicolumn{" + str(ncols + 1) + r"}{p{\dimexpr\textheight-2\tabcolsep\relax}}{"  # \textheight = landscape line width
+        r"\scriptsize \textit{Notes:} The estimation strategy is enumerated in "
+        rf"Section~\ref{{sec:empirical:sleep}}. {sem_note}. "
         r"Significance: *** $p<0.01$, ** $p<0.05$, * $p<0.1$. "
         r"$\theta_1$: mean utility coefficients (linear IV); demographics are centered "
         r"($\tilde D=(D-\bar D)/\sigma$), so $\theta_1$ is the average-market coefficient. "
         r"$\theta_2$: random coefficient parameters. "
         r"$Q$: GMM overidentification statistic. "
         r"Spread in percentage points (÷100 from basis points)."
-        r"\end{minipage}} \\",
+        r"} \\",
         r"    \endlastfoot",
         "",
     ]
@@ -285,17 +330,20 @@ def build_table(est_id: int, suffix: str = "") -> str:
             pnames = d.get("param_names_theta1") or d.get("param_names", [])
             t1     = d.get("theta1", [])
             t1_se  = d.get("theta1_se", [])
+            t1_pv  = d.get("theta1_pval", [])
             G      = G_star_map[s]
             if p in pnames:
                 i  = pnames.index(p)
                 v  = t1[i]    if i < len(t1)    else float("nan")
                 se = t1_se[i] if i < len(t1_se) else 0.0
-                c, s_ = fmt_coef(v, se, G)
+                pv = t1_pv[i] if i < len(t1_pv) else None
+                c, s_ = fmt_coef(v, se, G, pv)
                 cvals.append(c); svals.append(s_)
             else:
                 cvals.append("-"); svals.append("")
         lines.append("    " + " & ".join(cvals) + r" \\")
-        lines.append("    " + " & ".join(svals) + r" \\")
+        if any(s.strip() for s in svals[1:]):   # skip an all-blank SE row (e.g. θ₂ SEs not yet computed)
+            lines.append("    " + " & ".join(svals) + r" \\")
         lines.append(r"    \addlinespace[0.15ex]")
 
     # ── Panel B: θ₂ (random coefficients) ────────────────────────────────────
@@ -308,36 +356,34 @@ def build_table(est_id: int, suffix: str = "") -> str:
     for lbl in global_labels:
         cvals, svals = [lbl], [""]
         for s in available:
-            decoded = {l: (v, se) for l, v, se in decode_theta2(stage_results[s])}
+            decoded = {l: (v, se, pv) for l, v, se, pv in decode_theta2(stage_results[s])}
             G = G_star_map[s]
             if lbl in decoded:
-                v, se = decoded[lbl]
-                c, s_ = fmt_coef(v, se, G)
+                v, se, pv = decoded[lbl]
+                c, s_ = fmt_coef(v, se, G, pv)
                 cvals.append(c); svals.append(s_)
             else:
                 cvals.append("-"); svals.append("")
         lines.append("    " + " & ".join(cvals) + r" \\")
-        lines.append("    " + " & ".join(svals) + r" \\")
+        if any(s.strip() for s in svals[1:]):   # skip an all-blank SE row (e.g. θ₂ SEs not yet computed)
+            lines.append("    " + " & ".join(svals) + r" \\")
         lines.append(r"    \addlinespace[0.15ex]")
 
     # ── Footer statistics ─────────────────────────────────────────────────────
     lines.append(r"    \midrule")
 
-    q_vals, conv_vals, nobs_vals, gstar_vals = [], [], [], []
+    q_vals, nobs_vals, gstar_vals = [], [], []
     for s in available:
         d = stage_results[s]
         qv   = d.get("Q_value")
-        conv = d.get("converged", False)
         nob  = d.get("n_obs")
         G    = d.get("G_star")
         q_vals.append(   f"${qv:.4f}$"     if qv   is not None else "---")
-        conv_vals.append("Yes"              if conv             else "No")
         nobs_vals.append(f"{nob:,}"         if nob  is not None else "---")
         gstar_vals.append(f"{G:.2f}"        if G    is not None else "---")
 
     lines += [
         "    $Q$ (GMM) & "       + " & ".join(q_vals)    + r" \\",
-        "    Converged & "        + " & ".join(conv_vals) + r" \\",
         "    Observations & "     + " & ".join(nobs_vals) + r" \\",
         r"    Eff.\ Clusters ($G^*$) & " + " & ".join(gstar_vals) + r" \\",
     ]
@@ -345,6 +391,7 @@ def build_table(est_id: int, suffix: str = "") -> str:
     lines += [
         r"\end{longtable}",
         r"\end{spacing}",
+        r"\end{landscape}",
     ]
 
     return "\n".join(lines)

@@ -206,7 +206,9 @@ def run_sleep_estimator(est_num, kind, time_block=False, spec12_only=False, n_jo
         # Opt 3+9: parallelise over the 3 state blocks; within each block the 4 instrument
         # specs run sequentially with a cross-spec theta warm start. With JULIA_THREADS=2
         # this packs the ~6 fast cores (3 blocks x 2 threads).
-        block_tasks = [(df, s, state_blocks[s], kind, iv_specs) for s in state_blocks.keys()]
+        # single-index/joint strategies drop Base: a constant-only index has no direction.
+        blocks = [s for s in state_blocks if not (s == "Base" and kind != "logit")]
+        block_tasks = [(df, s, state_blocks[s], kind, iv_specs) for s in blocks]
         # Default SEQUENTIAL: concurrent statsmodels/scipy/numpy calls across threads
         # segfault (0xC0000005) on this stack, and the loky/process backend pickles the
         # 400k-row df (WinError 1450). Sequential is the safe default; the per-fit Julia

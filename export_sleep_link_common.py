@@ -65,8 +65,26 @@ def clean_name(v):
     return labels.get(v, v.replace('_', '\\_'))
 
 
+# Appendix caption = stage + a reference to the estimation strategy enumerated in V_Main
+# (Section ref{sec:empirical:sleep}); no ad-hoc strategy names. E3/E4 (logit) are not in the
+# appendix and have no enumerate label, so they fall back to a plain (Est. N) tag.
+EST_LABEL = {5: "single_idx", 6: "single_idx_time", 7: "joint_sieve", 8: "joint_sieve_time"}
+
+
+def _strategy_caption(stage, est_num):
+    lbl = EST_LABEL.get(est_num)
+    ref = rf"\ref{{estimation:{lbl}}}" if lbl else rf"(Est.\ {est_num})"
+    return rf"{stage} --- Estimation Strategy~{ref}"
+
+
+def _panels_for(est_num):
+    # E5-E8 (single-index/joint sieve) drop the Base panel: their index excludes the
+    # constant, so a constant-only Base has no index. E3/E4 (logit) keep all three.
+    return ['Macro', 'Tech'] if est_num >= 5 else ['Base', 'Macro', 'Tech']
+
+
 def build_first_stage_table(results_dict, est_num):
-    panels = ['Base', 'Macro', 'Tech']
+    panels = _panels_for(est_num)
     panel_labels = {'Base': 'Base Specifications', 'Macro': 'Macro Specifications', 'Tech': 'Tech Specifications'}
     panel_letters = ['A', 'B', 'C']
     fs_spec_numbers = {
@@ -76,7 +94,7 @@ def build_first_stage_table(results_dict, est_num):
     }
     ivs = [('IV_CostShifters', 'IV Cost'), ('IV_Wholesale', 'IV Wholesale'), ('IV_HausmanFull', 'Hausman')]
     multispan = 4
-    caption = rf"Pooled B+D --- First Stage Estimation (Est.\ {est_num})"
+    caption = _strategy_caption("First Stage", est_num)
     label = f"tab:est{est_num}_first_stage"
     notes = (
         r"\footnotesize \textit{Notes:} Standard errors (wild cluster bootstrap at the "
@@ -142,8 +160,8 @@ def build_first_stage_table(results_dict, est_num):
     return "\n".join(lines)
 
 
-def build_second_stage_table(results_dict, est_num, ss_caption, est_note):
-    panels = ['Base', 'Macro', 'Tech']
+def build_second_stage_table(results_dict, est_num):
+    panels = _panels_for(est_num)
     panel_labels = {'Base': 'Base Specifications', 'Macro': 'Macro Specifications', 'Tech': 'Tech Specifications'}
     panel_letters = ['A', 'B', 'C']
     ss_spec_numbers = {
@@ -154,12 +172,12 @@ def build_second_stage_table(results_dict, est_num, ss_caption, est_note):
     estimators = [('OLS', 'OLS'), ('IV_CostShifters', 'IV Cost'), ('IV_Wholesale', 'IV Wholesale'), ('IV_HausmanFull', 'Hausman')]
     multispan = 5
     label = f"tab:est{est_num}_second_stage"
+    caption = _strategy_caption("Second Stage", est_num)
     notes = (
         r"\footnotesize \textit{Notes:} Standard errors (wild cluster bootstrap at the "
         r"conglomerate level; \textcite{cameron2008bootstrap}, \textcite{mackinnon2017wild}) "
-        r"in parentheses. Reported effects are average marginal effects (AMEs); $\phi$ is "
-        r"built from the native index coefficients, not these AMEs. " + est_note +
-        r" Significance levels: *** $p<0.01$, ** $p<0.05$, * $p<0.1$."
+        r"in parentheses. Reported effects are average marginal effects (AMEs). "
+        r"Significance levels: *** $p<0.01$, ** $p<0.05$, * $p<0.1$."
     )
 
     def _get_res(ek, p):
@@ -174,7 +192,7 @@ def build_second_stage_table(results_dict, est_num, ss_caption, est_note):
     lines = [
         r"\setstretch{1.0}",
         r"\begin{xltabular}{\textwidth}{>{\raggedright\arraybackslash}p{0.28\textwidth} *{4}{>{\centering\arraybackslash}X}}",
-        rf"    \caption{{{ss_caption}}}\label{{{label}}} \\", r"    \toprule",
+        rf"    \caption{{{caption}}}\label{{{label}}} \\", r"    \toprule",
         rf"    \multicolumn{{{multispan}}}{{l}}{{\textbf{{Panel {l0}: {panel_labels[p0]}}}}} \\", r"    \midrule",
         "     & " + " & ".join(el for el, _ in est_nums_0) + r" \\",
         "    & " + " & ".join(f"({n})" for _, n in est_nums_0) + r" \\", r"    \midrule", r"    \endfirsthead", "",
@@ -243,7 +261,7 @@ _STANDALONE_PREAMBLE = r"""\documentclass[12pt]{article}
 """
 
 
-def export_link_results(est_num, title, ss_caption, est_note):
+def export_link_results(est_num, title):
     """Build est{est_num} first/second-stage TeX tables + standalone PDF."""
     out_dir = DATA_DIR / "ESTIMATION_OUTPUT" / "DEMAND_PREP" / f"est{est_num}"
     results_pickle = out_dir / "estimation_results.pkl"
@@ -255,7 +273,7 @@ def export_link_results(est_num, title, ss_caption, est_note):
 
     TEX_OUT_DIR.mkdir(parents=True, exist_ok=True)
     fs_frag = build_first_stage_table(results_dict, est_num)
-    ss_frag = build_second_stage_table(results_dict, est_num, ss_caption, est_note)
+    ss_frag = build_second_stage_table(results_dict, est_num)
 
     fs_name = f"est{est_num}_first_stage_table.tex"
     ss_name = f"est{est_num}_second_stage_table.tex"
@@ -294,33 +312,15 @@ def export_link_results(est_num, title, ss_caption, est_note):
 
 
 # ── Config-driven CLI for E3-E8 tables (E1/E2 + E9 have their own export scripts) ──
-#  (title, ss_caption, est_note) per estimator. Run:  python export_sleep_link_common.py --est N
+#  Standalone-preview title per estimator; captions/notes are derived from est_num.
+#  Run:  python export_sleep_link_common.py --est N
 EXPORT_CFG = {
-    3: (r"E3: Pooled Logit (single-index, logistic link)",
-        r"Pooled B+D --- Second Stage Estimation (Est.\ 3, Logit AME)",
-        r"Reported estimates are Average Marginal Effects (AME) from an NLLS logistic single-index. "
-        r"CF: control function residual $\hat{v}$ interacted with lagged deposits."),
-    4: (r"E4: Pooled Logit + Time block",
-        r"Pooled B+D --- Second Stage Estimation (Est.\ 4, Logit + Time, AME)",
-        r"As Est 3 (logistic AME) but with the time block --- time trend (years) and YoY "
-        r"GDP-per-capita growth --- added to every state block. CF: $\hat{v} \times$ lagged deposits."),
-    5: (r"E5: Pooled Single-Index (nonparametric link)",
-        r"Pooled B+D --- Second Stage Estimation (Est.\ 5, Single-Index, AME)",
-        r"Average-derivative AMEs from a single index with the direction from the logit fit and a "
-        r"monotone cubic-sieve link. CF: $\hat{v} \times$ lagged deposits."),
-    6: (r"E6: Pooled Single-Index + Time block",
-        r"Pooled B+D --- Second Stage Estimation (Est.\ 6, Single-Index + Time, AME)",
-        r"As Est 5 (single-index AME) but with the time block --- time trend (years) and YoY "
-        r"GDP-per-capita growth --- added to every state block. CF: $\hat{v} \times$ lagged deposits."),
-    7: (r"E7: Pooled Joint Single-Index (monotone sieve)",
-        r"Pooled B+D --- Second Stage Estimation (Est.\ 7, Joint Single-Index sieve, AME)",
-        r"Joint single-index (Ichimura 1993 SLS): the index direction $\theta$ ($\lVert\theta\rVert=1$) "
-        r"and a monotone I-spline link are estimated together; the robust (Cauchy) fit feeds $\phi$. "
-        r"CF: $\hat{v} \times$ lagged deposits."),
-    8: (r"E8: Pooled Joint Single-Index (sieve) + Time block",
-        r"Pooled B+D --- Second Stage Estimation (Est.\ 8, Joint Single-Index sieve + Time, AME)",
-        r"As Est 7 (joint single-index, sieve) but with the time block --- time trend (years) and YoY "
-        r"GDP-per-capita growth --- added to every state block. CF: $\hat{v} \times$ lagged deposits."),
+    3: r"E3: Pooled Logit (single-index, logistic link)",
+    4: r"E4: Pooled Logit + Time block",
+    5: r"E5: Pooled Single-Index (nonparametric link)",
+    6: r"E6: Pooled Single-Index + Time block",
+    7: r"E7: Pooled Joint Single-Index (monotone sieve)",
+    8: r"E8: Pooled Joint Single-Index (sieve) + Time block",
 }
 
 if __name__ == "__main__":
@@ -329,4 +329,4 @@ if __name__ == "__main__":
     p.add_argument("--est", type=int, required=True, choices=sorted(EXPORT_CFG),
                    help="Estimator id 3-8 (E1/E2 + E9 have their own export scripts)")
     a = p.parse_args()
-    export_link_results(a.est, *EXPORT_CFG[a.est])
+    export_link_results(a.est, EXPORT_CFG[a.est])

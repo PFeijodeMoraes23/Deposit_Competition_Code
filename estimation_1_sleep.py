@@ -298,8 +298,8 @@ def scale_magnitudes(df):
     return df
 
 def define_specifications():
-    s_base = ['constant', 'pix_exists']
-    s_macro = s_base + ['gdp_per_capita', 'cadunico_families_per1000', 'fraction_65plus', 'fraction_young', 'risk_free_qoq_lag']
+    s_base = ['constant']
+    s_macro = ['constant', 'pix_exists', 'gdp_per_capita', 'cadunico_families_per1000', 'fraction_65plus', 'fraction_young', 'risk_free_qoq_lag']
     s_tech = s_macro + ['connections_per100']
 
     iv_specs = {'OLS': [], 'IV_CostShifters': ['personnel_cost_ratio_lag', 'admin_cost_ratio_lag', 'tax_cost_ratio_lag'],

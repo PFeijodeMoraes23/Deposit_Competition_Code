@@ -126,8 +126,8 @@ def add_time_variables(df):
 
 
 def define_specifications(time_block=False):
-    s_base = ['constant', 'pix_exists']
-    s_macro = s_base + ['gdp_per_capita', 'cadunico_families_per1000', 'fraction_65plus', 'fraction_young', 'risk_free_qoq_lag']
+    s_base = ['constant']
+    s_macro = ['constant', 'pix_exists', 'gdp_per_capita', 'cadunico_families_per1000', 'fraction_65plus', 'fraction_young', 'risk_free_qoq_lag']
     s_tech = s_macro + ['connections_per100']
 
     if time_block:
