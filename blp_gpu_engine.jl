@@ -429,7 +429,7 @@ function run_blp_estimation_ift(estim::Int, spec_id::Int, args,
     results["theta1"]             = theta1_star
     results["theta1_se"]          = theta1_se
     results["theta2"]             = theta2_star
-    results["theta2_se"]          = fill(0.0, length(theta2_star))
+    results["theta2_se"]          = fill(NaN, length(theta2_star))   # CPU-IFT path: θ₂ SEs not computed (sentinel)
     results["delta"]              = delta_final
     results["xi"]                 = xi_star
     results["Q_value"]            = Optim.minimum(result)
@@ -2409,7 +2409,7 @@ function run_blp_estimation_ift_gpu(estim::Int, spec_id::Int, args,
 
     theta1_star, xi_star   = estimate_theta1(delta_final, pc)
     theta1_se, n_cl, G_s   = compute_cluster_se(theta1_star, delta_final, pc)
-    theta2_se   = fill(0.0, length(theta2_star))
+    theta2_se   = fill(NaN, length(theta2_star))   # NaN sentinel = "not computed" (distinct from a genuine 0)
     theta1_pval = Float64[]; theta2_pval = Float64[]
 
     # ── θ₁+θ₂ SEs "in the same manner" via BLP_SE_METHOD ("wcb" default | "sandwich") ──────
@@ -2432,7 +2432,7 @@ function run_blp_estimation_ift_gpu(estim::Int, spec_id::Int, args,
             theta1_pval = pval_all[1:K1]; theta2_pval = pval_all[K1+1:end]
             println("  SE method: $_sem  |  θ₂ SE: $(round.(theta2_se, sigdigits=3))")
         catch e
-            println("  [!] SE ($_sem) failed: $e — keeping linear θ₁ SE, θ₂_se=0.")
+            println("  [!] SE ($_sem) failed: $e — keeping linear θ₁ SE, θ₂_se=NaN (not computed).")
         end
     end
 

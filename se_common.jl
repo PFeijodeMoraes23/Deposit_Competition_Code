@@ -24,12 +24,31 @@ function wild_weights(n::Int, scheme::AbstractString, rng::AbstractRNG)
     return Float64[rand(rng) < 0.5 ? -1.0 : 1.0 for _ in 1:n]   # Rademacher
 end
 
+"""Effective number of clusters G* = G/(1+CV²), CV = coefficient of variation of cluster sizes.
+This is the few-cluster degrees-of-freedom used for the Student-t reference (matching desc_3.py's
+G*/CV table and the logit tables' t(G*)). With one conglomerate holding ~17% of obs, G*≈7 ≪ G≈506."""
+function effective_clusters(cl::AbstractVector)
+    counts = Dict{eltype(cl),Int}()
+    for c in cl
+        counts[c] = get(counts, c, 0) + 1
+    end
+    sizes = Float64.(collect(values(counts)))
+    G = length(sizes)
+    G == 0 && return 0.0
+    m   = sum(sizes) / G
+    cv2 = m > 0 ? (sum((sizes .- m) .^ 2) / G) / m^2 : 0.0
+    return G / (1 + cv2)
+end
+
 """Score/no-refit wild cluster bootstrap (Kline–Santos; same primitive as the sleepiness
 `cluster_wild_bootstrap`). `IF_cl` (G×K) are per-cluster influence functions for θ̂. Draws `B`
 wild-weighted perturbations θ_b = θ̂ + Σ_g w_g·IF_g and returns (se, pval): the bootstrap SD and a
-symmetric Wald p, 2·Φ̄(|θ̂_k|/se_k). No small-sample factor (unit-variance weights supply it)."""
+symmetric Wald p, 2·T̄_{G*}(|θ̂_k|/se_k), using a Student-t reference with `dof`=G* effective
+clusters (few-cluster correction; Normal if `dof` is not supplied). A degenerate se_k (e.g. a
+σ pinned at the σ≥0 bound, where the score is exactly 0) yields pval=NaN, not a spurious 0."""
 function wcb_se(theta::AbstractVector{Float64}, IF_cl::AbstractMatrix{Float64};
-                B::Int=wcb_reps(), scheme::AbstractString=wcb_scheme(), seed::Int=0)
+                B::Int=wcb_reps(), scheme::AbstractString=wcb_scheme(), seed::Int=0,
+                dof::Float64=NaN)
     G, K = size(IF_cl)
     (G < 2 || K == 0) && return (fill(NaN, K), fill(NaN, K))
     rng   = MersenneTwister(seed)
@@ -39,7 +58,8 @@ function wcb_se(theta::AbstractVector{Float64}, IF_cl::AbstractMatrix{Float64};
         @views draws[b, :] .= theta .+ IF_cl' * wv  # θ_b = θ̂ + Σ_g w_g IF_g
     end
     se   = Float64[std(@view(draws[:, k]); corrected=true) for k in 1:K]
-    pval = Float64[se[k] > 0 ? 2 * ccdf(Normal(), abs(theta[k]) / se[k]) : 0.0 for k in 1:K]
+    ref  = (isfinite(dof) && dof > 1) ? TDist(dof) : Normal()   # t(G*) few-cluster reference
+    pval = Float64[se[k] > 0 ? 2 * ccdf(ref, abs(theta[k]) / se[k]) : NaN for k in 1:K]
     return se, pval
 end
 
@@ -68,14 +88,16 @@ function gmm_cluster_ses(method::AbstractString, theta::Vector{Float64},
     DtW   = D' * W                                     # (K × L)
     DtWD  = DtW * D                                    # (K × K)
     bread = try inv(DtWD) catch; pinv(DtWD) end
+    gstar = effective_clusters(cl)                     # few-cluster t(G*) df (≈7 here, not G≈506)
     if method == "sandwich"
         corr = G > 1 ? (G / (G - 1)) * ((N - 1) / (N - K)) : 1.0
         V    = bread * (DtW * (Mcl' * Mcl) * DtW') * bread' .* corr
         se   = sqrt.(max.(diag(V), 0.0))
-        pval = Float64[se[k] > 0 ? 2 * ccdf(Normal(), abs(theta[k]) / se[k]) : 0.0 for k in 1:K]
+        ref  = gstar > 1 ? TDist(gstar) : Normal()     # t(G*) few-cluster reference
+        pval = Float64[se[k] > 0 ? 2 * ccdf(ref, abs(theta[k]) / se[k]) : NaN for k in 1:K]
         return se, pval
     else  # "wcb": per-cluster GMM influence functions IF_g = −(D'WD)⁻¹ D'W m_g, row g of IF_cl
         IF_cl = -(bread * DtW * Mcl')'                 # (G × K)
-        return wcb_se(theta, Matrix(IF_cl); B=B, scheme=scheme, seed=seed)
+        return wcb_se(theta, Matrix(IF_cl); B=B, scheme=scheme, seed=seed, dof=gstar)
     end
 end

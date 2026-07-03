@@ -1,7 +1,8 @@
 """
 export_results.py
 =================
-Orchestrator: dispatches to individual export_*_sleep_results.py scripts in parallel.
+Orchestrator: dispatches exports in parallel. E1/E2 (+ optional E9) have their own
+export_{N}_sleep_results.py; E3-E8 route to the shared export_sleep_link_common.py --est N.
 
 Each individual script writes:
   - Data/summaries (txt, csv): DEMAND_PREP/rout_*/EXPORTS/
@@ -13,9 +14,9 @@ CLI Usage Examples:
   python export_results.py --estimation all
 
 Estimation map:
-  1 -> export_1_sleep_results.py  (Local B-type)
-  2 -> export_2_sleep_results.py  (Pooled B+D Linear)
-  3 -> export_3_sleep_results.py  (Pooled B+D Logistic, AME)
+  1, 2  -> export_1_sleep_results.py / export_2_sleep_results.py  (E1 Local B-type, E2 Pooled Linear)
+  3-8   -> export_sleep_link_common.py --est N                    (E3 Logit ... E8 Joint Sieve + Time)
+  9     -> export_9_sleep_results.py                              (optional joint-kernel robustness)
 """
 
 import sys

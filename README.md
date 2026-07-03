@@ -42,7 +42,7 @@ The codebase:
 ```text
 .
 ├── run_data_pipeline.py                  # Master data pipeline runner (stages 0–5)
-├── run_sleep_pipeline.py                 # Sleepiness estimation pipeline runner (est. 1–5 + exports)
+├── run_sleep_pipeline.py                 # Sleepiness estimation pipeline runner (E1–E8 + exports, demand prep, tables)
 ├── run_blp_pipeline.py                   # BLP pipeline runner (logit check, draws, GMM, LaTeX)
 ├── run_local_pipeline.py                 # End-to-end local orchestrator (data → sleep → BLP)
 │

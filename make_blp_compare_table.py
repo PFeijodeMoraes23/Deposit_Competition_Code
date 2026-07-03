@@ -136,6 +136,7 @@ def build_table(est: int) -> str:
         return rows
 
     def panelB_row(lbl):
+        is_sigma = lbl.startswith(r"$\sigma$")           # σ's are σ≥0-bounded → boundary handling
         cvals, svals = [lbl], [""]
         for c in cols:
             if c == "logit":
@@ -143,7 +144,9 @@ def build_table(est: int) -> str:
             decoded = {l: (v, se, pv) for l, v, se, pv in rc.decode_theta2(stage_data[c])}
             if lbl in decoded:
                 v, se, pv = decoded[lbl]
-                cc, ss = rc.fmt_coef(v, se, stage_data[c].get("G_star"), pv)
+                ob = is_sigma and v is not None and not (isinstance(v, float) and math.isnan(v)) \
+                    and abs(v) < rc.SIGMA_BOUND_TOL
+                cc, ss = rc.fmt_coef(v, se, stage_data[c].get("G_star"), pv, on_bound=ob)
             else:
                 cc, ss = "-", ""
             cvals.append(cc); svals.append(ss)
@@ -178,8 +181,11 @@ def build_table(est: int) -> str:
         r"Section~\ref{sec:empirical:sleep}. Column 1 is the non-RC logit (`full' sub-model); "
         r"the remaining columns are the RC-BLP stages run on the cluster, each freeing one more random "
         r"coefficient (Sigma$=$1 $\sigma$ $\to$ Extended$=$8). The logit column reports wild cluster "
-        rf"bootstrap standard errors (conglomerate clusters); for the RC columns, {rc_sem}. Stars: *** $p<0.01$, ** $p<0.05$, "
-        r"* $p<0.1$. $Q$ is each model's own GMM objective (not comparable across the "
+        rf"bootstrap standard errors (conglomerate clusters); for the RC columns, {rc_sem}. "
+        r"Stars from a Student-$t$ reference with $G^*$ effective clusters: *** $p<0.01$, ** $p<0.05$, "
+        r"* $p<0.1$. A $\dagger$ marks a random coefficient $\sigma$ estimated at the $\sigma\ge0$ "
+        r"boundary ($\hat\sigma\approx0$): point reported on the bound, no two-sided SE (Andrews 1999). "
+        r"$Q$ is each model's own GMM objective (not comparable across the "
         r"logit/RC boundary --- different moment counts). Spread in percentage points."
         r"} \\",
         r"    \endlastfoot",

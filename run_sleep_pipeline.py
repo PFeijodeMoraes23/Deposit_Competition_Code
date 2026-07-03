@@ -15,18 +15,19 @@ options:
   --sleep-only            Run only the estimation steps (1–3), skip exports & demand prep
   --skip-steps STEP ...   Skip specific step IDs (1–6)
 
-All steps run sequentially. Steps 1–3 are sleep estimators; each spawns its own
+All steps run sequentially. Steps 1–8 are sleep estimators; each spawns its own
 ProcessPoolExecutor internally. Running them concurrently exhausted Windows non-paged
 pool via simultaneous IPC pipe traffic for 400K-row DataFrames (WinError 1450).
 
-  1. estimation_1_sleep.py              (Local B-type Estimation)
-  2. estimation_2_sleep.py              (Pooled B+D Linear)
-  3. estimation_3_sleep.py              (Pooled B+D Logistic, AME)
-  4. estimation_4_sleep.py              (Pooled B+D Constrained Linear, uniform)
-  5. estimation_5_sleep.py              (Pooled B+D Probit, AME)
-  6. estimation_6_sleep.py              (Pooled B+D Single-Index, nonparametric)
-  7. estimation_7_sleep.py              (Pooled B+D Joint Single-Index, monotone sieve)
-  8. estimation_8_sleep.py              (Pooled B+D Joint Single-Index, kernel; spec 12 only)
+  1. estimation_1_sleep.py              (E1: Local B-type)
+  2. estimation_2_sleep.py              (E2: Pooled B+D Linear)
+  3. estimation_sleep_common.py --est 3 (E3: Pooled Logit, AME)
+  4. estimation_sleep_common.py --est 4 (E4: Pooled Logit + Time)
+  5. estimation_sleep_common.py --est 5 (E5: Pooled Single-Index)
+  6. estimation_sleep_common.py --est 6 (E6: Pooled Single-Index + Time)
+  7. estimation_sleep_common.py --est 7 (E7: Pooled Joint Single-Index, sieve)
+  8. estimation_sleep_common.py --est 8 (E8: Pooled Joint Single-Index, sieve + Time)
+     (E9 joint kernel: optional; run estimation_9_sleep.py explicitly)
   9. export_results.py                  (Export 1st/2nd Stage Summaries, Est 1-8)
  10. estimation_demand_1_prep.py        (Universal Demand Prep Orchestrator, Est 1-8)
  11. export_analyze_spec12.py           (Analyze Specification 12 Results)
@@ -95,18 +96,19 @@ def main():
     parser = argparse.ArgumentParser(
         description="Run the full Sleepiness Estimation Pipeline.",
         epilog="""
-All steps run sequentially. Steps 1–3 are sleep estimators; each spawns its own
+All steps run sequentially. Steps 1–8 are sleep estimators; each spawns its own
 ProcessPoolExecutor internally. Running them concurrently exhausted Windows non-paged
 pool via simultaneous IPC pipe traffic for 400K-row DataFrames (WinError 1450).
 
-  1. estimation_1_sleep.py              (Local B-type Estimation)
-  2. estimation_2_sleep.py              (Pooled B+D Linear)
-  3. estimation_3_sleep.py              (Pooled B+D Logistic, AME)
-  4. estimation_4_sleep.py              (Pooled B+D Constrained Linear, uniform)
-  5. estimation_5_sleep.py              (Pooled B+D Probit, AME)
-  6. estimation_6_sleep.py              (Pooled B+D Single-Index, nonparametric)
-  7. estimation_7_sleep.py              (Pooled B+D Joint Single-Index, monotone sieve)
-  8. estimation_8_sleep.py              (Pooled B+D Joint Single-Index, kernel; spec 12 only)
+  1. estimation_1_sleep.py              (E1: Local B-type)
+  2. estimation_2_sleep.py              (E2: Pooled B+D Linear)
+  3. estimation_sleep_common.py --est 3 (E3: Pooled Logit, AME)
+  4. estimation_sleep_common.py --est 4 (E4: Pooled Logit + Time)
+  5. estimation_sleep_common.py --est 5 (E5: Pooled Single-Index)
+  6. estimation_sleep_common.py --est 6 (E6: Pooled Single-Index + Time)
+  7. estimation_sleep_common.py --est 7 (E7: Pooled Joint Single-Index, sieve)
+  8. estimation_sleep_common.py --est 8 (E8: Pooled Joint Single-Index, sieve + Time)
+     (E9 joint kernel: optional; run estimation_9_sleep.py explicitly)
   9. export_results.py                  (Export 1st/2nd Stage Summaries, Est 1-8)
  10. estimation_demand_1_prep.py        (Universal Demand Prep Orchestrator, Est 1-8)
  11. export_analyze_spec12.py           (Analyze Specification 12 Results)

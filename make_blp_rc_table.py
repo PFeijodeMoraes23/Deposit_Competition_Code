@@ -207,20 +207,33 @@ def _stars(pval: float) -> str:
     return ""
 
 
+# σ's are bounded σ≥0; a σ pinned at the boundary (σ̂≈0) has no valid two-sided Wald SE — a
+# symmetric ±1.96·SE interval would straddle the inadmissible σ<0 region (Andrews 1999/2001).
+# We flag such σ with a dagger and report the point on the bound, no two-sided SE. (These are also
+# exactly the directions where the WCB SD is degenerate because ∂s/∂σ=0 at σ=0 — false precision.)
+SIGMA_BOUND_TOL = 1e-3
+
+
 def fmt_coef(val: float, se: float, G_star: float | None = None,
-             pval: float | None = None) -> tuple[str, str]:
-    """Return (coef_cell, se_cell) with significance stars. Stars use the supplied `pval`
-    (e.g. the WCB Wald p) when available, else a t(G*) p from val/se."""
+             pval: float | None = None, on_bound: bool = False) -> tuple[str, str]:
+    """Return (coef_cell, se_cell) with significance stars.
+
+    Significance uses a Student-t reference with df = G* effective clusters (few-cluster
+    correction), matching the logit tables (blp_1_logit.jl); a supplied bootstrap `pval` and the
+    Normal are fallbacks only when G* is absent. `on_bound=True` marks a σ pinned at the σ≥0
+    boundary: the point is reported with a dagger and NO two-sided SE/stars (Andrews 1999/2001)."""
     if val is None or (isinstance(val, float) and math.isnan(val)):
         return "-", ""
     coef_str = f"{val:.4f}"
-    if se and se > 0:
-        if pval is not None and not (isinstance(pval, float) and math.isnan(pval)):
+    if on_bound:
+        return rf"${coef_str}^{{\dagger}}$", ""
+    if se and se > 0 and not (isinstance(se, float) and math.isnan(se)):
+        if G_star and G_star > 1:
+            pv = 2 * stats.t.sf(abs(val / se), df=G_star)      # t(G*): few-cluster reference
+        elif pval is not None and not (isinstance(pval, float) and math.isnan(pval)):
             pv = pval
         else:
-            t = val / se
-            df = G_star if (G_star and G_star > 1) else None
-            pv = 2 * stats.t.sf(abs(t), df=df) if df else 2 * (1 - stats.norm.cdf(abs(t)))
+            pv = 2 * (1 - stats.norm.cdf(abs(val / se)))
         coef_str += _stars(pv)
         se_str = f"$({se:.4f})$"
     else:
@@ -238,8 +251,9 @@ def se_note(data: dict | None) -> str:
     if m == "sandwich":
         return (r"Cluster-robust GMM sandwich standard errors (conglomerate clusters) in "
                 r"parentheses, for both $\theta_1$ and $\theta_2$")
-    return (r"$\theta_1$ standard errors (cluster-robust, conglomerate) in parentheses; $\theta_2$ "
-            r"SEs require a re-run with \texttt{SE\_METHOD} set")
+    return (r"$\theta_1$ standard errors (cluster-robust, conglomerate) in parentheses; interior "
+            r"$\theta_2$ standard errors are pending the wild-cluster-bootstrap cluster run "
+            r"(\texttt{SE\_METHOD=wcb})")
 
 
 # ── Table builder ─────────────────────────────────────────────────────────────
@@ -293,11 +307,15 @@ def build_table(est_id: int, suffix: str = "") -> str:
         r"    \bottomrule",
         r"    \multicolumn{" + str(ncols + 1) + r"}{p{\dimexpr\textheight-2\tabcolsep\relax}}{"  # \textheight = landscape line width
         r"\scriptsize \textit{Notes:} The estimation strategy is enumerated in "
-        rf"Section~\ref{{sec:empirical:sleep}}. {sem_note}. "
-        r"Significance: *** $p<0.01$, ** $p<0.05$, * $p<0.1$. "
+        rf"Section~\ref{{sec:empirical:sleep}}. {sem_note}. Significance from a Student-$t$ "
+        r"reference with $G^*$ effective clusters (few-cluster correction): "
+        r"*** $p<0.01$, ** $p<0.05$, * $p<0.1$. "
         r"$\theta_1$: mean utility coefficients (linear IV); demographics are centered "
         r"($\tilde D=(D-\bar D)/\sigma$), so $\theta_1$ is the average-market coefficient. "
-        r"$\theta_2$: random coefficient parameters. "
+        r"$\theta_2$: random coefficient parameters; the $\sigma$'s are bounded $\sigma\ge0$. "
+        r"A $\dagger$ marks a $\sigma$ estimated at the boundary ($\hat\sigma\approx0$): we report "
+        r"the point on the bound and \emph{no} two-sided standard error, since a symmetric interval "
+        r"would straddle $\sigma<0$ (Andrews 1999) and the bootstrap is degenerate there. "
         r"$Q$: GMM overidentification statistic. "
         r"Spread in percentage points (÷100 from basis points)."
         r"} \\",
@@ -354,13 +372,16 @@ def build_table(est_id: int, suffix: str = "") -> str:
     global_labels = build_global_theta2_labels(stage_results)
 
     for lbl in global_labels:
+        is_sigma = lbl.startswith(r"$\sigma$")           # σ's are σ≥0-bounded → boundary handling
         cvals, svals = [lbl], [""]
         for s in available:
             decoded = {l: (v, se, pv) for l, v, se, pv in decode_theta2(stage_results[s])}
             G = G_star_map[s]
             if lbl in decoded:
                 v, se, pv = decoded[lbl]
-                c, s_ = fmt_coef(v, se, G, pv)
+                ob = is_sigma and v is not None and not (isinstance(v, float) and math.isnan(v)) \
+                    and abs(v) < SIGMA_BOUND_TOL
+                c, s_ = fmt_coef(v, se, G, pv, on_bound=ob)
                 cvals.append(c); svals.append(s_)
             else:
                 cvals.append("-"); svals.append("")
