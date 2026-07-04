@@ -305,7 +305,7 @@ def build_table(est_id: int, suffix: str = "") -> str:
         r"    \endfoot",
         "",
         r"    \bottomrule",
-        r"    \multicolumn{" + str(ncols + 1) + r"}{p{\dimexpr\textheight-2\tabcolsep\relax}}{"  # \textheight = landscape line width
+        r"    \multicolumn{" + str(ncols + 1) + r"}{p{\dimexpr\linewidth-2\tabcolsep\relax}}{"  # \linewidth = landscape line width (pdflscape clamps \textheight→\textwidth)
         r"\scriptsize \textit{Notes:} The estimation strategy is enumerated in "
         rf"Section~\ref{{sec:empirical:sleep}}. {sem_note}. Significance from a Student-$t$ "
         r"reference with $G^*$ effective clusters (few-cluster correction): "

@@ -557,6 +557,8 @@ const TABLE_SUBMODELS = [("priceonly", "Price Only"), ("core", "Price + Core"),
 const COMPARISON_IDS  = [5, 6, 7, 8]
 const COMPARISON_ROWS = ["alpha", "fgc_covered", "has_ip", "log_total_assets_lag",
                          "dummy_D_type"]   # seg_S2-S5 included in the spec, not reported
+const COMPARISON_ROWS_SEG = ["alpha", "fgc_covered", "has_ip", "log_total_assets_lag",
+                             "seg_S2", "seg_S3", "seg_S4", "seg_S5", "dummy_D_type"]  # segments shown
 const ESTIMATION_ENUM_REF = Dict(
     1 => raw"\ref{estimation:local}",
     2 => raw"\ref{estimation:pooled}",
@@ -631,15 +633,19 @@ end
 sub-model), rows = COMPARISON_ROWS, stats block = semi-elasticity / N / Q(dof) / G*.
 Layout, notes and label conventions mirror est5-8_spec12_stage2_comparison.tex."""
 function build_logit_comparison_tex(data::AbstractDict, ids::Vector{Int},
-                                    elas::AbstractDict)::String
+                                    elas::AbstractDict;
+                                    rows::Vector{String}=COMPARISON_ROWS,
+                                    with_seg::Bool=false)::String
     n    = length(ids)
     hdr  = "Variable & " * join([get(ESTIMATION_ENUM_REF, id, "E$id") for id in ids], " & ") * TROW
+    seg_sentence = with_seg ? "" :
+        raw"Segment dummies (S2--S5) are included in every strategy but not reported. "
     note = raw"\multicolumn{" * string(n + 1) *
         raw"}{p{\dimexpr\textwidth-2\tabcolsep\relax}}{\scriptsize\textit{Notes:} Each " *
         raw"column reports the demand logit's final specification, estimated on the demand " *
         raw"sample implied by the corresponding sleepiness strategy, on Specification~12; columns " *
         raw"index the estimation strategies enumerated in Section~\ref{sec:empirical:sleep}. " *
-        raw"Segment dummies (S2--S5) are included in every strategy but not reported. " *
+        seg_sentence *
         raw"Wild cluster bootstrap standard errors (conglomerate clusters) in parentheses. " *
         raw"Significance: *** $p<0.01$, ** $p<0.05$, * $p<0.1$. $Q$ is the GMM " *
         raw"overidentification statistic ($\chi^2_L$, $L$ = \# instruments); $G^*$ is " *
@@ -650,7 +656,8 @@ function build_logit_comparison_tex(data::AbstractDict, ids::Vector{Int},
         raw"\setstretch{1.0}",
         raw"\begin{xltabular}{\textwidth}{>{\raggedright\arraybackslash}p{0.26\textwidth} *{" *
             string(n) * raw"}{>{\centering\arraybackslash}X}}",
-        raw"\caption{Demand Logit Estimation}\label{tab:demand_logit_spec12_comparison}" * TROW,
+        "\\caption{Demand Logit Estimation}\\label{tab:demand_logit_spec12_comparison" *
+            (with_seg ? "_seg" : "") * "}" * TROW,
         raw"\toprule", hdr, raw"\midrule", raw"\endfirsthead",
         raw"\multicolumn{" * string(n + 1) *
             raw"}{c}{{\bfseries \tablename\ \thetable{} (continued from previous page)}}" * TROW,
@@ -660,7 +667,7 @@ function build_logit_comparison_tex(data::AbstractDict, ids::Vector{Int},
         raw"\endfoot",
         raw"\bottomrule", note, raw"\endlastfoot",
     ]
-    for (i, p) in enumerate(COMPARISON_ROWS)
+    for (i, p) in enumerate(rows)
         row_c = String[]; row_s = String[]
         for id in ids
             entry  = get(data, "E$(id)_full_dtype", Dict{String,Any}())
@@ -680,7 +687,7 @@ function build_logit_comparison_tex(data::AbstractDict, ids::Vector{Int},
         push!(lines, raw"\multirow[t]{2}{0.26\textwidth}{\raggedright " * map_var(p) *
                      "} & " * join(row_c, " & ") * " \\\\*")
         push!(lines, " & " * join(row_s, " & ") * TROW)
-        i < length(COMPARISON_ROWS) && push!(lines, raw"\addlinespace")
+        i < length(rows) && push!(lines, raw"\addlinespace")
     end
     push!(lines, raw"\midrule")
     elas_l = String[]; obs_l = String[]; q_l = String[]; niv_l = String[]; gstar_l = String[]
@@ -733,18 +740,22 @@ function write_logit_comparison_table(data::AbstractDict)
             println("    [table] WARN: E$id semi-elasticity failed — $_e"); NaN
         end
     end
-    tex = build_logit_comparison_tex(data, ids, elas)
     _, output_dir = get_paths()
     rout_dir = joinpath(dirname(output_dir), "Rout")
     mkpath(rout_dir)
     dests = isdir(DRAFTS_DIR) ? [rout_dir, DRAFTS_DIR] : [rout_dir]
-    for d in dests
-        path = joinpath(d, "est5-8_spec12_logit_comparison.tex")
-        try
-            open(path, "w") do f; write(f, tex); end
-            println("    [table] est5-8_spec12_logit_comparison.tex → $(basename(d))/")
-        catch _e
-            println("    [table] WARN: could not write $path — $_e")
+    # Two versions: segment dummies suppressed (default) and segment dummies shown (`_seg`).
+    for (rws, wseg, fn) in ((COMPARISON_ROWS,     false, "est5-8_spec12_logit_comparison.tex"),
+                            (COMPARISON_ROWS_SEG, true,  "est5-8_spec12_logit_comparison_seg.tex"))
+        tex = build_logit_comparison_tex(data, ids, elas; rows=rws, with_seg=wseg)
+        for d in dests
+            path = joinpath(d, fn)
+            try
+                open(path, "w") do f; write(f, tex); end
+                println("    [table] $fn → $(basename(d))/")
+            catch _e
+                println("    [table] WARN: could not write $path — $_e")
+            end
         end
     end
 end

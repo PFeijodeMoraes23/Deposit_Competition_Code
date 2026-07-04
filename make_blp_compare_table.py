@@ -176,7 +176,7 @@ def build_table(est: int) -> str:
         rf"    \multicolumn{{{ncols + 1}}}{{r}}{{\textit{{Continued on next page}}}} \\",
         r"    \endfoot",
         r"    \bottomrule",
-        r"    \multicolumn{" + str(ncols + 1) + r"}{p{\dimexpr\textheight-2\tabcolsep\relax}}{\scriptsize "  # \textheight = landscape line width
+        r"    \multicolumn{" + str(ncols + 1) + r"}{p{\dimexpr\linewidth-2\tabcolsep\relax}}{\scriptsize "  # \linewidth = landscape line width (pdflscape clamps \textheight→\textwidth)
         r"\textit{Notes:} The estimation strategy is enumerated in "
         r"Section~\ref{sec:empirical:sleep}. Column 1 is the non-RC logit (`full' sub-model); "
         r"the remaining columns are the RC-BLP stages run on the cluster, each freeing one more random "
