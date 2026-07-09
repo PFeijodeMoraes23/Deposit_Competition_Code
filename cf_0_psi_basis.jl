@@ -32,6 +32,7 @@ This module is `include`d by cost_2_fwd_sim.jl; it is not a standalone entry poi
 include(joinpath(@__DIR__, "cf_0_deposit_sim.jl"))
 
 using DataFrames, LinearAlgebra, Statistics
+import JSON3
 
 # Cost-shifter (Z) columns — mirror estimation_1_cost_1_polfunc.py so γ is comparable.
 const Z_COST_COLS = ["personnel_cost_ratio_lag", "admin_cost_ratio_lag",
@@ -55,6 +56,61 @@ function load_Z(ctx::CFDemandCtx; sidecar::Union{Nothing,DataFrame}=nothing)
     end
     log_status("  [ψ] Z cost-shifters: $(cols)")
     return Z, cols
+end
+
+# ==========================================================================
+# Marginal-cost parameters (CF2 output) — shared by CF3 (equilibrium) and CF1-net
+# ==========================================================================
+"""
+    load_cost_params(path, znames) -> Dict("B"=>(omega,zeta,gamma::Vector), "D"=>(…))
+
+Read `COST_FWD/cost_params_{tag}.json` (estimation_1_cost_3_solve.py) and align each type's
+γ to the ψ-basis Z-column order `znames`.
+"""
+function load_cost_params(path::String, znames::Vector{String})
+    isfile(path) || error("Missing cost params $path — run cost_2_fwd_sim.jl → " *
+                          "estimation_1_cost_3_solve.py first (or pass --cost-json).")
+    j = JSON3.read(read(path, String))
+    out = Dict{String,Any}()
+    for κ in ("B", "D")
+        haskey(j, Symbol(κ)) || continue
+        b = j[Symbol(κ)]; γmap = b["gamma"]
+        γ = Float64[haskey(γmap, Symbol(z)) ? Float64(γmap[Symbol(z)]) : 0.0 for z in znames]
+        out[κ] = (omega=Float64(b["omega"]), zeta=Float64(b["zeta"]), gamma=γ)
+    end
+    isempty(out) && error("No B/D blocks in $path")
+    return out
+end
+
+"""
+    theta_c(cost_κ, n_Z) -> Vector{Float64}
+
+Cost-contraction vector matching the ψ_firm layout [ψ1, ψ2, ψ3(1..n_Z), ψ4]:
+`[1, −ω, −γ_1..−γ_{n_Z}, −(1+ζ)]` (V_Main eq 16). V_j = ψ_j · θ_c.
+"""
+function theta_c(costκ, n_Z::Int)::Vector{Float64}
+    v = Vector{Float64}(undef, 3 + n_Z)
+    v[1] = 1.0; v[2] = -costκ.omega
+    @inbounds for z in 1:n_Z; v[2+z] = -costκ.gamma[z]; end
+    v[3+n_Z] = -(1.0 + costκ.zeta)
+    return v
+end
+
+"""
+    marginal_cost_per_obs(cost, is_B, rf_q, Z) -> Vector{Float64}
+
+Per-observation quarterly marginal cost `c = ω^κ + ζ^κ·r^f_q + (γ^κ)′Z` (V_Main eq 8), with
+κ∈{B,D} selected by `is_B`. `rf_q` is the per-obs quarterly risk-free; `Z` is the (N×n_Z)
+cost-shifter matrix from `load_Z` (same column order as the γ in `cost`).
+"""
+function marginal_cost_per_obs(cost, is_B::BitVector, rf_q::Vector{Float64}, Z::Matrix{Float64})
+    N = length(is_B); c = Vector{Float64}(undef, N)
+    cB = cost["B"]; cD = cost["D"]
+    @inbounds for i in 1:N
+        κ = is_B[i] ? cB : cD
+        c[i] = κ.omega + κ.zeta * rf_q[i] + dot(@view(Z[i, :]), κ.gamma)
+    end
+    return c
 end
 
 """

@@ -36,7 +36,7 @@ Usage (after data is downloaded AND running is authorized):
       --spec 12 --stage extended --R 2000 --hpc --beta 0.9 --horizon 50
 """
 
-include(joinpath(@__DIR__, "cf_0_deposit_sim.jl"))
+include(joinpath(@__DIR__, "cf_0_psi_basis.jl"))   # → cf_0_deposit_sim + load_Z / load_cost_params (for --net)
 
 using DataFrames, Statistics, Printf
 
@@ -134,6 +134,8 @@ function _parse_cf1_args()
         "--horizon";     arg_type = Int;     default = 50
         "--time-filter"; arg_type = String;  default = nothing   # e.g. "2024Q4" (local dev)
         "--dbar";        arg_type = Float64; default = -1.0   # <=0 => auto-calibrate globally
+        "--net";         action   = :store_true             # net-of-cost value flow: ρ^q − ĉ (needs CF2 costs)
+        "--cost-json";   arg_type = String;  default = nothing  # default COST_FWD/cost_params_{tag}.json
     end
     return parse_args(s)
 end
@@ -196,14 +198,33 @@ function main_cf1()
         mc = "$(mc)/1e4"
     end
     log_status("  [CF1] markdown ρ^q ← $mc | β=$(a["beta"]) | horizon=$(a["horizon"])")
+    _, _, out_dir = get_paths(a["hpc"]; local_dir=a["local-dir"])
+
+    # NET-of-cost value flow (needs CF2 costs): replace ρ^q with (r^j−r^f)+ρ^q−ĉ. With the
+    # r^j−r^f=0 default this is ρ^q − c^q, c^q = ω+ζ·r^f_q+γ′Z per obs (V_Main eq 8). The cost
+    # is φ-invariant so it shifts both the φ̂ and φ=0 legs identically.
+    kind = "gross"
+    if a["net"]
+        tag = "E$(a["estim"])_spec_$(a["spec"])_$(a["stage"])$(a["suffix"])"
+        cj = a["cost-json"] === nothing ?
+            joinpath(dirname(out_dir), "COST_FWD", "cost_params_$tag.json") : a["cost-json"]
+        Z, znames = load_Z(ctx)
+        cost = load_cost_params(cj, znames)
+        rfq, _ = _first_present(ctx.df, ["risk_free_qoq", "risk_free_qoq_lag", "selic_qoq"]; default=0.0)
+        isBv = BitVector(Bool.(coalesce.(ctx.df.is_B, false)))
+        cq = marginal_cost_per_obs(cost, isBv, rfq, Z)
+        markdown_q = markdown_q .- cq
+        kind = "net"
+        log_status("  [CF1] NET: markdown ρ^q − ĉ (mean c^q=$(round(mean(cq), sigdigits=3))) ← $(basename(cj))")
+    end
+
     dec = franchise_decomposition(ctx, st; beta=a["beta"], T=a["horizon"],
                                   markdown_q=markdown_q)
-    _, _, out_dir = get_paths(a["hpc"]; local_dir=a["local-dir"])
     cf_dir = joinpath(dirname(out_dir), "CF_FOUNDATION")
     out_path = joinpath(cf_dir,
-        "cf1_franchise_gross_E$(a["estim"])_spec_$(a["spec"])_$(a["stage"])$(a["suffix"]).parquet")
+        "cf1_franchise_$(kind)_E$(a["estim"])_spec_$(a["spec"])_$(a["stage"])$(a["suffix"]).parquet")
     summarize_and_export(ctx, st, dec; out_path=out_path)
-    log_status("[DONE] CF1 franchise value (gross)")
+    log_status("[DONE] CF1 franchise value ($kind)")
 end
 
 if abspath(PROGRAM_FILE) == @__FILE__

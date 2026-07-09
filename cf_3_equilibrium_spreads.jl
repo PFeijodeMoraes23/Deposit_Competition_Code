@@ -32,47 +32,7 @@ Headline (after credible RC costs land): --stage extended --R 2000 on the cluste
 include(joinpath(@__DIR__, "cost_2_fwd_sim.jl"))
 
 using DataFrames, Statistics, Printf, LinearAlgebra
-import JSON3
-
-# ==========================================================================
-# Marginal-cost parameters (CF2 output) → per-firm cost vector θ_c
-# ==========================================================================
-"""
-    load_cost_params(path, znames) -> Dict("B"=>(ω,ζ,γ::Vector), "D"=>(…))
-
-Read `COST_FWD/cost_params_{tag}.json` (written by estimation_1_cost_3_solve.py) and align
-each type's γ to the ψ-basis Z-column order `znames`.
-"""
-function load_cost_params(path::String, znames::Vector{String})
-    isfile(path) || error("CF3 needs CF2 costs. Missing $path — run cost_2_fwd_sim.jl → " *
-                          "estimation_1_cost_3_solve.py first (or pass --cost-json).")
-    j = JSON3.read(read(path, String))
-    out = Dict{String,Any}()
-    for κ in ("B", "D")
-        haskey(j, Symbol(κ)) || continue
-        b = j[Symbol(κ)]
-        γmap = b["gamma"]
-        γ = Float64[haskey(γmap, Symbol(z)) ? Float64(γmap[Symbol(z)]) : 0.0 for z in znames]
-        out[κ] = (omega=Float64(b["omega"]), zeta=Float64(b["zeta"]), gamma=γ)
-    end
-    isempty(out) && error("No B/D blocks in $path")
-    return out
-end
-
-"""
-    theta_c(cost_κ, n_Z) -> Vector{Float64}
-
-Cost-contraction vector matching the ψ_firm column layout [ψ1, ψ2, ψ3(1..n_Z), ψ4]:
-`[1, −ω, −γ_1..−γ_{n_Z}, −(1+ζ)]` (V_Main eq 16).
-"""
-function theta_c(costκ, n_Z::Int)::Vector{Float64}
-    v = Vector{Float64}(undef, 3 + n_Z)
-    v[1] = 1.0
-    v[2] = -costκ.omega
-    @inbounds for z in 1:n_Z; v[2+z] = -costκ.gamma[z]; end
-    v[3+n_Z] = -(1.0 + costκ.zeta)
-    return v
-end
+# load_cost_params / theta_c / marginal_cost_per_obs come from cf_0_psi_basis.jl (shared with CF1-net).
 
 # ==========================================================================
 # Firm value V_j(σ) under a stationary spread vector
@@ -201,17 +161,25 @@ function _parse_cf3_args()
         "--br-grid";     arg_type = Int;     default = 7      # grid points per choice type (BR search)
         "--br-window";   arg_type = Float64; default = 0.02   # BR grid half-width around current (annual ρ)
         "--n-markets";   arg_type = Int;     default = 0      # >0: restrict to K biggest markets (fast local validation)
+        "--selic-shock"; arg_type = Float64; default = 0.01   # CF5: annual Selic shock for pass-through
+        "--merge";       arg_type = String;  default = ""     # CF6: "firmA,firmB" conglomerate pair to merge
     end
     return parse_args(s)
 end
 
-function main_cf3()
-    a = _parse_cf3_args()
-    scheme = Symbol(replace(a["fixed-point"], "-" => "_") == "gauss_seidel" ? :gauss_seidel : :jacobi)
+"""
+    cf3_setup(a) -> NamedTuple
+
+Assemble the CF3 problem — context, sim state, ψ inputs, forward r^f, marginal-cost vectors,
+firms, spread box — from parsed args `a`. Shared by CF3, CF5 (pass-through) and CF6 (mergers).
+`a["n-markets"]>0` restricts to the K biggest markets for fast local validation. Fields:
+`(ctx, st, Z, znames, mq0, rf, aret, cost, θc_B, θc_D, firms, isB, lo, hi, out_dir, tag)`.
+"""
+function cf3_setup(a)
     tf = a["time-filter"] === nothing ? nothing : String[a["time-filter"]]
-    # Optional: restrict to the K biggest (mca,time) markets for a FAST local validation of
-    # the machinery (each best-response evals a full-panel psi_under, so a small panel is what
-    # makes the fixed point tractable locally; the full run is a cluster job).
+    # Optional: restrict to the K biggest (mca,time) markets for a FAST local validation of the
+    # machinery (each best-response evals a full-panel psi_under, so a small panel is what makes
+    # the fixed point tractable locally; the full run is a cluster job).
     keep = nothing
     if a["n-markets"] > 0
         input_dir, _, _ = get_paths(a["hpc"]; local_dir=a["local-dir"])
@@ -237,20 +205,19 @@ function main_cf3()
     depact0, _ = _first_present(ctx.df, ["Dep_Act", "active_deposits", "deposit_active"]; default=NaN)
     phi0 = clamp.(phi0, 0.0, 0.999); isBcal = BitVector(Bool.(coalesce.(ctx.df.is_B, false)))
     dbar = ones(nrow(ctx.df))
-    for (lbl, mask) in (("B", isBcal), ("D", .!isBcal))
+    for (_, mask) in (("B", isBcal), ("D", .!isBcal))
         m = mask .& isfinite.(pop0) .& isfinite.(s0) .& isfinite.(phi0) .& isfinite.(depact0)
         den = sum((1.0 .- phi0[m]) .* pop0[m] .* s0[m]); nm = sum(max.(depact0[m], 0.0))
         dbar[mask] .= (den > 0 && isfinite(nm)) ? nm / den : 1.0
     end
     st  = load_sim_state(ctx; dbar=dbar)
     Z, znames = load_Z(ctx)
-    mq0, mc = _first_present(ctx.df, ["spread_qoq", "spread_q"]; default=NaN)
+    mq0, _ = _first_present(ctx.df, ["spread_qoq", "spread_q"]; default=NaN)
     mq0 = all(isnan, mq0) ? ctx.rho_hat ./ 400.0 : clamp.(mq0 ./ 1e4, -0.1, 0.1)
     _, _, out_dir = get_paths(a["hpc"]; local_dir=a["local-dir"])
     rf = load_forward_rf(nothing, out_dir, a["horizon"], ctx; require=a["hpc"])
     aret = zeros(nrow(ctx.df))
 
-    # Costs.
     tag = "E$(a["estim"])_spec_$(a["spec"])_$(a["stage"])$(a["suffix"])"
     cost_json = a["cost-json"] === nothing ?
         joinpath(dirname(out_dir), "COST_FWD", "cost_params_$tag.json") : a["cost-json"]
@@ -260,21 +227,27 @@ function main_cf3()
     θc_B = theta_c(cost["B"], n_Z); θc_D = theta_c(cost["D"], n_Z)
     log_status("  [CF3] costs ← $(basename(cost_json)) | B ω=$(round(cost["B"].omega,sigdigits=3)) ζ=$(round(cost["B"].zeta,sigdigits=3)) | D ω=$(round(cost["D"].omega,sigdigits=3))")
 
-    # Firms + type, then solve.
     _, firms = psi_under(ctx, st, Z, mq0, ctx.rho_hat; beta=a["beta"], T=a["horizon"],
                          asset_return_q=aret, rf_path_q=rf)
     isB = firm_is_B(ctx, firms)
-    # Spread box: the observed range on the choice types ± a margin (`--br-bound`). A fixed
-    # [0, br-bound] box would clamp firms whose ρ̂ lies outside it (CDB spreads are large /
-    # can be negative), spuriously yanking them to the boundary.
+    # Spread box: observed range on the choice types ± a margin (a fixed [0,br-bound] box would
+    # clamp firms whose ρ̂ lies outside it — CDB spreads are large / can be negative).
     ρe = ctx.rho_hat[st.endog]
     lo = minimum(ρe) - a["br-bound"]; hi = maximum(ρe) + a["br-bound"]
-    log_status("  [CF3] spread box [$(round(lo,sigdigits=3)), $(round(hi,sigdigits=3))] | BR grid $(a["br-grid"]) × window $(a["br-window"])")
-    eq = solve_equilibrium(ctx, st, Z, mq0, θc_B, θc_D, isB, firms;
-                           beta=a["beta"], T=a["horizon"], aret=aret, rf=rf,
+    return (; ctx, st, Z, znames, mq0, rf, aret, cost, θc_B, θc_D, firms, isB, lo, hi, out_dir, tag)
+end
+
+function main_cf3()
+    a = _parse_cf3_args()
+    scheme = Symbol(replace(a["fixed-point"], "-" => "_") == "gauss_seidel" ? :gauss_seidel : :jacobi)
+    P = cf3_setup(a)
+    log_status("  [CF3] spread box [$(round(P.lo,sigdigits=3)), $(round(P.hi,sigdigits=3))] | BR grid $(a["br-grid"]) × window $(a["br-window"])")
+    eq = solve_equilibrium(P.ctx, P.st, P.Z, P.mq0, P.θc_B, P.θc_D, P.isB, P.firms;
+                           beta=a["beta"], T=a["horizon"], aret=P.aret, rf=P.rf,
                            scheme=scheme, damping=a["damping"], tol=a["tol"],
-                           max_iter=a["max-iter"], lo=lo, hi=hi,
+                           max_iter=a["max-iter"], lo=P.lo, hi=P.hi,
                            ngrid=a["br-grid"], window=a["br-window"])
+    ctx = P.ctx; st = P.st; out_dir = P.out_dir; tag = P.tag
 
     # Validation gate: does the fixed point reproduce observed spreads on the choice types?
     endog = st.endog
