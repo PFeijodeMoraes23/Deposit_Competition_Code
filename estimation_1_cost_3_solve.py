@@ -94,46 +94,69 @@ def build_delta(eq: pd.DataFrame, dev: pd.DataFrame):
 # ==========================================================================
 # Objective (eq 18) and analytic gradient
 # ==========================================================================
-def _unpack(theta, nZ):
-    """theta = [omega, zeta, gamma_1..gamma_nZ]."""
-    return theta[0], theta[1], theta[2:2 + nZ]
+def _rms(x):
+    """Root-mean-square scale of a column; floored so a degenerate block → 1.0."""
+    r = float(np.sqrt(np.mean(np.asarray(x, float) ** 2)))
+    return r if r > 1e-30 else 1.0
 
 
-def g_values(theta, blk):
-    omega, zeta, gamma = _unpack(theta, blk["d_gamma"].shape[1])
-    return (blk["d1"]
-            - omega * blk["d_omega"]
-            - blk["d_gamma"] @ gamma
-            - (1.0 + zeta) * blk["d_zeta"])
+def _scaled_design(blk):
+    """RMS-condition the Δψ blocks.
 
+    Raw ψ blocks differ by orders of magnitude (Σdep ~1e12 vs Σdep·spread ~1e10), so
+    the L-BFGS-B objective is badly scaled and the recovered ω is a scale artifact
+    (and collinear regressors starve ζ). We map to unit-RMS regressors and solve for
+    scaled coefficients b, then unscale. Design columns (order): [ω, γ_1..γ_nZ, (1+ζ)].
 
-def objective(theta, blk):
-    g = g_values(theta, blk)
-    viol = np.minimum(g, 0.0)
-    return float(np.sum(viol ** 2))
+        g/s1 = d1/s1 − b_ω·(d_ω/s_ω) − Σ_z b_γz·(d_γz/s_γz) − b_ζ·(d_ζ/s_ζ)
+        with  b_ω = ω·s_ω/s1,  b_γz = γ_z·s_γz/s1,  b_ζ = (1+ζ)·s_ζ/s1.
 
-
-def gradient(theta, blk):
-    g = g_values(theta, blk)
-    viol = np.minimum(g, 0.0)              # 0 where g>=0
-    # dF/dθ = Σ 2·viol · dg/dθ ;  dg/dω=−d_omega, dg/dγ=−d_gamma, dg/dζ=−d_zeta
-    two_v = 2.0 * viol
-    dF_omega = np.sum(two_v * (-blk["d_omega"]))
-    dF_zeta = np.sum(two_v * (-blk["d_zeta"]))
-    dF_gamma = (two_v[:, None] * (-blk["d_gamma"])).sum(axis=0)
-    return np.concatenate([[dF_omega, dF_zeta], dF_gamma])
-
-
-def solve_kappa(blk, x0=None):
+    Returns (c1, Xs, scales) for the problem  min_b Σ min{c1 − Xs·b, 0}².
+    """
     nZ = blk["d_gamma"].shape[1]
-    if x0 is None:
-        x0 = np.zeros(2 + nZ)
-    res = minimize(objective, x0, args=(blk,), jac=gradient, method="L-BFGS-B",
-                   options=dict(maxiter=2000, ftol=1e-12))
-    omega, zeta, gamma = _unpack(res.x, nZ)
-    return dict(omega=float(omega), zeta=float(zeta),
+    s1 = _rms(blk["d1"]); s_om = _rms(blk["d_omega"]); s_ze = _rms(blk["d_zeta"])
+    s_ga = np.array([_rms(blk["d_gamma"][:, z]) for z in range(nZ)])
+    c1 = blk["d1"] / s1
+    cols = [blk["d_omega"] / s_om]
+    cols += [blk["d_gamma"][:, z] / s_ga[z] for z in range(nZ)]
+    cols += [blk["d_zeta"] / s_ze]
+    Xs = np.column_stack(cols) if cols else np.zeros((len(c1), 0))
+    return c1, Xs, dict(s1=s1, s_om=s_om, s_ga=s_ga, s_ze=s_ze, nZ=nZ)
+
+
+def _obj(b, c1, Xs):
+    v = np.minimum(c1 - Xs @ b, 0.0)
+    return float(v @ v)
+
+
+def _grad(b, c1, Xs):
+    v = np.minimum(c1 - Xs @ b, 0.0)        # 0 where g>=0; dg/db = −Xs
+    return -2.0 * (Xs.T @ v)
+
+
+def solve_kappa(blk):
+    """Solve eq-18 in RMS-scaled coordinates with sign bounds, then unscale.
+
+    Bounds: ω ≥ 0 (non-negative intercept cost) and 1+ζ ≥ 0 (non-negative funding
+    base); γ free. `omega_at_bound` flags a corner solution (a credibility signal).
+    """
+    c1, Xs, sc = _scaled_design(blk)
+    nZ = sc["nZ"]
+    bounds = [(0.0, None)] + [(None, None)] * nZ + [(0.0, None)]   # [ω, γ…, (1+ζ)]
+    res = minimize(_obj, np.zeros(2 + nZ), args=(c1, Xs), jac=_grad,
+                   method="L-BFGS-B", bounds=bounds,
+                   options=dict(maxiter=5000, ftol=1e-14, gtol=1e-10))
+    b = res.x
+    omega = float(b[0] * sc["s1"] / sc["s_om"])
+    gamma = b[1:1 + nZ] * sc["s1"] / sc["s_ga"]
+    zeta = float(b[1 + nZ] * sc["s1"] / sc["s_ze"] - 1.0)
+    g = c1 - Xs @ b
+    return dict(omega=omega, zeta=zeta,
                 gamma=dict(zip(blk["gamma_names"], gamma.tolist())),
-                objective=float(res.fun), success=bool(res.success), x=res.x)
+                objective=float(res.fun), success=bool(res.success),
+                theta=np.concatenate([[omega, zeta], gamma]),
+                omega_at_bound=bool(b[0] <= 1e-9),
+                frac_bind=float(np.mean(g < 0.0)))
 
 
 # ==========================================================================
@@ -144,7 +167,6 @@ def bootstrap_kappa(blk, n_boot, seed=42):
     rng = np.random.default_rng(seed)
     firms = blk["firms"]
     uniq = np.unique(firms)
-    # Precompute row indices per firm for fast resampling.
     idx_by_firm = {f: np.where(firms == f)[0] for f in uniq}
     draws = []
     for _ in range(n_boot):
@@ -153,8 +175,7 @@ def bootstrap_kappa(blk, n_boot, seed=42):
         sub = dict(d1=blk["d1"][rows], d_omega=blk["d_omega"][rows],
                    d_gamma=blk["d_gamma"][rows], d_zeta=blk["d_zeta"][rows],
                    firms=firms[rows], gamma_names=blk["gamma_names"])
-        fit = solve_kappa(sub)
-        draws.append(fit["x"])
+        draws.append(solve_kappa(sub)["theta"])
     arr = np.vstack(draws)
     return arr.std(axis=0)
 
@@ -199,12 +220,15 @@ def main():
             zeta=fit["zeta"], zeta_se=se[1],
             gamma=fit["gamma"], gamma_se=gamma_se,
             objective=fit["objective"], success=fit["success"],
+            omega_at_bound=fit["omega_at_bound"], frac_bind=fit["frac_bind"],
             n_firms=int(np.unique(blk["firms"]).size),
             n_rows=int(blk["d1"].size),
         )
-        print(f"  [{kappa}] ω={fit['omega']:.4g} (se {se[0]}) | "
-              f"ζ={fit['zeta']:.4g} (se {se[1]}) | obj={fit['objective']:.4g} | "
-              f"firms={results[kappa]['n_firms']}")
+        se0 = f"{se[0]:.3g}" if se[0] is not None else "—"
+        se1 = f"{se[1]:.3g}" if se[1] is not None else "—"
+        print(f"  [{kappa}] ω={fit['omega']:.4g} (se {se0}){' [BOUND]' if fit['omega_at_bound'] else ''} | "
+              f"ζ={fit['zeta']:.4g} (se {se1}) | obj={fit['objective']:.4g} | "
+              f"bind={100*fit['frac_bind']:.0f}% | firms={results[kappa]['n_firms']}")
 
     out_path = COST_FWD / f"cost_params_{tag}.json"
     with open(out_path, "w") as f:

@@ -101,6 +101,10 @@ done
 
 njobs=0
 term_jids=""           # terminal job of every chain — the auto-zip waits on these
+# Auto-zip marker: only files produced by THIS run (mtime newer than now) are bundled, so stale
+# outputs/logs from previous runs are NOT re-zipped. Unique per submit ($$ = this script's PID).
+RUN_MARKER="${DATA_OUT}/.blp_run_marker.$$"
+mkdir -p "${DATA_OUT}"; touch "${RUN_MARKER}"
 for k in ${ROUTINES}; do
     ift_ext_jid=""
     if [ "${do_ift}" = "1" ]; then
@@ -139,6 +143,8 @@ echo "Submitted ${njobs} RC-BLP jobs (routines: ${ROUTINES}; engines: ${ENGINES}
 #     • blp_outputs_<thisjobid>.zip — the result/summary/logit files process_blp_outputs.py reads
 #     • blp_logs_<thisjobid>.zip    — the per-stage SLURM .out/.err (for assessing run performance)
 #    `afterany` (not afterok) so partial results + logs still get bundled if a stage wall-kills.
+#    Files are MOVED into the zips (zip -m: no outside copies kept) and restricted to THIS run's
+#    outputs (find -newer ${RUN_MARKER}), so stale files from earlier runs are not re-bundled.
 ZIP_PARTITION="${ZIP_PARTITION:-day}"   # any CPU partition; override if your cluster differs
 dep_csv="$(echo ${term_jids} | tr ' ' ':' | sed 's/^://; s/:$//')"
 if [ -n "${dep_csv}" ]; then
@@ -147,12 +153,10 @@ if [ -n "${dep_csv}" ]; then
         --nodes=1 --ntasks=1 --cpus-per-task=2 --mem=8G \
         -o "${HERE}/logs/blp_zip_%j.out" -e "${HERE}/logs/blp_zip_%j.err" \
         --wrap "cd '${DATA_OUT}' && { \
-                  zip -j \"blp_outputs_\${SLURM_JOB_ID}.zip\" \
-                    blp_results_E*_spec_12_*.json blp_results_E*_spec_12_*.jls \
-                    blp_summary_E*_gpu_*.json logit_* ; \
-                  zip -j \"blp_logs_\${SLURM_JOB_ID}.zip\" \
-                    '${HERE}'/logs/rc_*.out '${HERE}'/logs/rc_*.err ; \
-                  echo \"wrote \${PWD}/blp_outputs_\${SLURM_JOB_ID}.zip + blp_logs_\${SLURM_JOB_ID}.zip\"; }")
+                  find . -maxdepth 1 -newer '${RUN_MARKER}' \\( -name 'blp_results_E*_spec_12_*.json' -o -name 'blp_results_E*_spec_12_*.jls' -o -name 'blp_summary_E*_gpu_*.json' -o -name 'logit_*' \\) -print0 | xargs -0 -r zip -jm \"blp_outputs_\${SLURM_JOB_ID}.zip\" ; \
+                  find '${HERE}'/logs -maxdepth 1 -newer '${RUN_MARKER}' \\( -name 'rc_*.out' -o -name 'rc_*.err' \\) -print0 | xargs -0 -r zip -jm \"blp_logs_\${SLURM_JOB_ID}.zip\" ; \
+                  rm -f '${RUN_MARKER}' ; \
+                  echo \"wrote \${PWD}/blp_outputs_\${SLURM_JOB_ID}.zip + blp_logs_\${SLURM_JOB_ID}.zip (moved: no outside copies kept)\"; }")
     echo "── auto-zip: ${zip_jid}  (afterany ${term_jids# })"
     echo "   → ${DATA_OUT}/blp_outputs_<${zip_jid}>.zip  (results; process_blp_outputs.py auto-discovers blp_outputs_*.zip)"
     echo "   → ${DATA_OUT}/blp_logs_<${zip_jid}>.zip     (the rc_*.out/.err SLURM logs for performance review)"

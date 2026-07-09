@@ -444,7 +444,7 @@ def write_summary_md(sub, index, stage, het=None):
               "`KP-F` = cluster-robust first-stage / Kleibergen-Paap rk Wald F [@kleibergenpaap2006]; "
               "`CD-F` = Cragg-Donald (homoskedastic) [@craggdonald1993]; `eff-F` = Montiel-Olea–"
               "Pflueger effective F [@oleapflueger2013]; `LM 95%` = Kleibergen LM/K weak-IV-robust CI "
-              "for α [@kleibergen2005]; `J (p)` = Hansen overid test [@hansen1982]. Staiger–Stock "
+              "for α (wild-cluster-bootstrap criticals) [@kleibergen2005]; `J (p)` = Hansen overid test [@hansen1982]. Staiger–Stock "
               "rule of thumb is F ≈ 10 [@staigerstock1997].", ""]
         L += ["| Routine | sample | N | K | α̂ (SE) | partial R² | KP-F | CD-F | eff-F | LM 95% CI | J (p) |",
               "|---|:--:|---:|---:|---:|---:|---:|---:|---:|:--:|---:|"]
@@ -476,7 +476,9 @@ def write_summary_md(sub, index, stage, het=None):
               "identified. The naive ≈400 first-stage F overstated instrument strength; type 5 is the "
               "strongest, type 4 the weakest (below 10).",
               "- **Weak-IV-robust inference.** The reported interval is the **Kleibergen LM/K** CI "
-              "[@kleibergen2005] (χ²₁; isolates α from the overidentification direction), which stays "
+              "[@kleibergen2005], inverted against **wild-cluster-bootstrap** criticals (few-cluster "
+              "valid at effective clusters ≈ 7, matching the paper's inference scheme; isolates α from "
+              "the overidentification direction), which stays "
               "informative even when the **Anderson-Rubin** set [@andersonrubin1949] is empty (∅). "
               "Because min over α of the AR statistic equals the **Hansen J** overid test "
               "[@hansen1982], and J rejects in the larger subsamples (J p ≈ 0 — at n ≈ 90k the overid "

@@ -92,7 +92,9 @@ def build_table(ests, suffix: str = "", show_segments: bool = True) -> str:
         r"$\theta_2$: random-coefficient parameters ($\sigma$ = std.\ dev., $\pi$ = demographic "
         r"interaction); the $\sigma$'s are bounded $\sigma\ge0$, and a $\dagger$ marks a $\sigma$ at "
         r"the boundary ($\hat\sigma\approx0$), reported on the bound with no two-sided SE "
-        r"(Andrews 1999). $Q$: GMM overidentification statistic. Spread in percentage points."
+        r"(Andrews 1999). $Q$: GMM overidentification statistic. Mean own-price semi-elasticity is "
+        r"the average-market plug-in $\hat\alpha\cdot\overline{\rho(1-s)}$ (representative-agent; the "
+        r"exact RC value integrates the individual price coefficients). Spread in percentage points."
         r"} \\",
         r"    \endlastfoot",
         "",
@@ -164,7 +166,10 @@ def build_table(ests, suffix: str = "", show_segments: bool = True) -> str:
         n = data[e].get("n_obs");    return f"{n:,}" if n is not None else "---"
     def g_of(e):
         g = data[e].get("G_star");   return f"{g:.2f}" if g is not None else "---"
+    def se_of(e):
+        return rc.semi_elast_cell(data[e], e)         # α̂·mean(ρ(1−s)), average-market plug-in
     lines += [
+        stat(r"Mean own-price semi-elast.", se_of),
         stat(r"$Q$ (GMM)", q_of),
         stat(r"Observations", n_of),
         stat(r"Eff.\ Clusters ($G^*$)", g_of),

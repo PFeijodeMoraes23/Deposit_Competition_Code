@@ -37,6 +37,7 @@ DATA_DIR   = ROOT.parents[1] / "BCB" / "Egan_et_al_2025_Rep" / "processed"
 RESULTS_DIR = DATA_DIR / "ESTIMATION_OUTPUT" / "BLP_RESULTS"
 # Raw per-stage cluster results live in cluster_raw/ after the 2026-06-25 reorg.
 RAW_DIR    = RESULTS_DIR / "cluster_raw"
+DEMAND_PREP_DIR = DATA_DIR / "ESTIMATION_OUTPUT" / "DEMAND_PREP"   # demand_{k}_*spec_12.parquet
 TABLES_DIR  = DATA_DIR / "ESTIMATION_OUTPUT" / "Rout"
 DRAFTS_DIR  = pathlib.Path(
     r"C:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)"
@@ -157,6 +158,50 @@ def load_stage(est_id: int, stage: str, suffix: str = "") -> dict | None:
         return data
     except (json.JSONDecodeError, ValueError):
         return None
+
+
+_RHO_CACHE: dict = {}
+
+
+def mean_rho_one_minus_s(est_id: int):
+    """mean(ρ·(1−s)) over the routine's demand sample: ρ = spread_ann/100, s = share_B_cond if is_B
+    else share_D, masked to finite ρ,s and 0≤s<1. Times a column's α̂ this gives the mean own-price
+    SEMI-elasticity (average-market plug-in; matches blp_1_logit.jl). None if the parquet is missing."""
+    if est_id in _RHO_CACHE:
+        return _RHO_CACHE[est_id]
+    val = None
+    try:
+        import pandas as pd
+        fs = sorted(DEMAND_PREP_DIR.glob(f"demand_{est_id}_*spec_12.parquet"),
+                    key=lambda p: p.stat().st_mtime)
+        if fs:
+            df   = pd.read_parquet(fs[-1], columns=["spread_ann", "share_D", "share_B_cond", "is_B"])
+            is_B = df["is_B"].fillna(False).astype(bool).to_numpy()
+            s    = np.where(is_B, df["share_B_cond"].to_numpy(float), df["share_D"].to_numpy(float))
+            rho  = df["spread_ann"].to_numpy(float) / 100.0
+            m    = np.isfinite(rho) & np.isfinite(s) & (s >= 0.0) & (s < 1.0)
+            if m.any():
+                val = float(np.mean(rho[m] * (1.0 - s[m])))
+    except Exception as e:
+        print(f"  [semi-elast] E{est_id}: mean(ρ(1−s)) failed — {e}")
+    _RHO_CACHE[est_id] = val
+    return val
+
+
+def alpha_of(entry: dict):
+    """θ₁ price coefficient α from a result entry (param_names 'alpha' index, else theta1[0])."""
+    t1 = entry.get("theta1", [])
+    names = entry.get("param_names_theta1") or entry.get("param_names", [])
+    if "alpha" in names and names.index("alpha") < len(t1):
+        return float(t1[names.index("alpha")])
+    return float(t1[0]) if t1 else None
+
+
+def semi_elast_cell(entry: dict, est_id: int) -> str:
+    """α̂·mean(ρ(1−s)) formatted (the average-market own-price semi-elasticity), or '---'."""
+    rho = mean_rho_one_minus_s(est_id)
+    a   = alpha_of(entry)
+    return f"{a * rho:.3f}" if (rho is not None and a is not None) else "---"
 
 
 def decode_theta2(data: dict) -> list[tuple[str, float, float, float | None]]:
@@ -316,7 +361,9 @@ def build_table(est_id: int, suffix: str = "") -> str:
         r"A $\dagger$ marks a $\sigma$ estimated at the boundary ($\hat\sigma\approx0$): we report "
         r"the point on the bound and \emph{no} two-sided standard error, since a symmetric interval "
         r"would straddle $\sigma<0$ (Andrews 1999) and the bootstrap is degenerate there. "
-        r"$Q$: GMM overidentification statistic. "
+        r"$Q$: GMM overidentification statistic. Mean own-price semi-elasticity is the average-market "
+        r"plug-in $\hat\alpha\cdot\overline{\rho(1-s)}$ (representative-agent; the exact RC value "
+        r"integrates the individual price coefficients). "
         r"Spread in percentage points (÷100 from basis points)."
         r"} \\",
         r"    \endlastfoot",
@@ -393,7 +440,8 @@ def build_table(est_id: int, suffix: str = "") -> str:
     # ── Footer statistics ─────────────────────────────────────────────────────
     lines.append(r"    \midrule")
 
-    q_vals, nobs_vals, gstar_vals = [], [], []
+    q_vals, nobs_vals, gstar_vals, se_vals = [], [], [], []
+    rho = mean_rho_one_minus_s(est_id)
     for s in available:
         d = stage_results[s]
         qv   = d.get("Q_value")
@@ -402,9 +450,12 @@ def build_table(est_id: int, suffix: str = "") -> str:
         q_vals.append(   f"${qv:.4f}$"     if qv   is not None else "---")
         nobs_vals.append(f"{nob:,}"         if nob  is not None else "---")
         gstar_vals.append(f"{G:.2f}"        if G    is not None else "---")
+        a = alpha_of(d)
+        se_vals.append(f"{a * rho:.3f}" if (rho is not None and a is not None) else "---")
 
     lines += [
         "    $Q$ (GMM) & "       + " & ".join(q_vals)    + r" \\",
+        r"    Mean own-price semi-elasticity & " + " & ".join(se_vals) + r" \\",
         "    Observations & "     + " & ".join(nobs_vals) + r" \\",
         r"    Eff.\ Clusters ($G^*$) & " + " & ".join(gstar_vals) + r" \\",
     ]

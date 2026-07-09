@@ -71,6 +71,11 @@ const X_COLS = ["fgc_covered", "has_ip", "seg_S2", "seg_S3", "seg_S4", "seg_S5",
                 "log_total_assets_lag"]
 const CORE_COLS = ["fgc_covered", "has_ip", "log_total_assets_lag"]
 
+# Full instrument set (15 = these 11 + IV_COST + IV_CAPITAL). A `mean_loo_`-trimmed set was TESTED
+# 2026-07-09 and REJECTED: dropping the aggregates roughly doubled the logit α SE and made it
+# insignificant (t −2.2→−0.75), even though the subsample eff-F rose (13→21, a mechanical dilution
+# effect) — the `mean_loo_` contribute identifying variation despite their collinearity. Kept only
+# as a robustness discussion (review §4). See weak_iv_analysis.py PARSIMONIOUS_IV for the diagnostic.
 const IV_BLP_LOO = ["loo_log_assets", "mean_loo_log_assets",
                     "loo_equity_ratio", "mean_loo_equity_ratio",
                     "loo_basileia", "mean_loo_basileia",

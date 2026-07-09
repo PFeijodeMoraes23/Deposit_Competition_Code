@@ -125,6 +125,11 @@ const D_COLS  = ["gdp_per_capita", "fraction_65plus", "fraction_young",
                  "branches_per1000", "cadunico_families_per1000"]
 const D_DIM   = length(D_COLS)
 
+# Full instrument set (15 = these 11 + IV_COST + IV_CAPITAL). A trim (dropping the near-singular
+# duplicate `mean_loo_basileia`, VIF ≈ 707) was considered 2026-07-09 but NOT adopted — the GMM
+# `pinv` weight matrix already handles the collinearity, and the linear-logit trim was rejected
+# for weakening α (see blp_1_logit.jl). Kept consistent with the logit; trimming is a robustness
+# discussion only (review §4).
 const IV_BLP_LOO = ["loo_log_assets", "mean_loo_log_assets",
                     "loo_equity_ratio", "mean_loo_equity_ratio",
                     "loo_basileia", "mean_loo_basileia",

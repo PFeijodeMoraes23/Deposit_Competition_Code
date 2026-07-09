@@ -186,7 +186,10 @@ def build_table(est: int) -> str:
         r"* $p<0.1$. A $\dagger$ marks a random coefficient $\sigma$ estimated at the $\sigma\ge0$ "
         r"boundary ($\hat\sigma\approx0$): point reported on the bound, no two-sided SE (Andrews 1999). "
         r"$Q$ is each model's own GMM objective (not comparable across the "
-        r"logit/RC boundary --- different moment counts). Spread in percentage points."
+        r"logit/RC boundary --- different moment counts). Mean own-price semi-elasticity is the "
+        r"average-market plug-in $\hat\alpha\cdot\overline{\rho(1-s)}$ (representative-agent; "
+        r"cf.\ the logit comparison, Table~\ref{tab:demand_logit_spec12_comparison}). "
+        r"Spread in percentage points."
         r"} \\",
         r"    \endlastfoot",
         r"    \multicolumn{" + str(ncols + 1) + r"}{l}{\textit{Panel A: Mean utility ($\theta_1$)}} \\",
@@ -222,7 +225,11 @@ def build_table(est: int) -> str:
         return str(len(stage_data[c].get("theta2", [])))
     # Demographics are centered in the engine, so Panel-A θ₁ (incl. spread α) is already the
     # average-market coefficient — directly comparable to the logit α, no effective-α row needed.
+    def se_of(c):
+        entry = logit if c == "logit" else stage_data[c]
+        return rc.semi_elast_cell(entry, est)         # α̂·mean(ρ(1−s)), average-market plug-in
     L += [
+        stat_row(r"Mean own-price semi-elasticity", se_of),
         stat_row(r"$Q$ (GMM)", q_of),
         stat_row(r"$\dim(\theta_2)$", dim_of),
         stat_row(r"Observations", n_of),

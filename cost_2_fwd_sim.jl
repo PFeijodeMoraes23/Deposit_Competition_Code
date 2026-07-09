@@ -18,11 +18,25 @@ Pipeline
   export {ψ_eq, ψ_dev, firms, firm_is_B, Z_names}  → COST_FWD/psi_bbl_*.jls
   estimation_1_cost_3_solve.py reads these and minimizes Σ min{g,0}² (Eq 18).
 
-DEVIATING STRATEGY σ̃ (knob — confirm scheme/scale with author):
-  σ̃ perturbs the CHOICE spreads (k∈{4,5}) by a draw and holds the perturbed policy
-  for the whole horizon (a stationary deviation, as in BBL forward simulation).
-  Default: σ̃ = σ̂ + ε with ε ~ N(0, perturb_scale) on k∈{4,5} only (regulated types
-  unchanged). `--perturb-scale` in annualized-spread units (ρ=spread_ann/100).
+DEVIATING STRATEGY σ̃ (`--dev-scheme`, default `grid`):
+  σ̃ shifts the CHOICE spreads (k∈{4,5}) by Δ and holds the perturbed policy for the
+  whole horizon (a stationary deviation, as in BBL forward simulation). `grid`: Δ takes
+  a symmetric grid over [−scale,+scale] excluding 0, so both raising AND lowering are
+  probed at graduated magnitudes — the Eq-18 objective Σ min{g,0}² is only informative
+  where a deviation binds, so directed small deviations pin the FOC far better than the
+  tiny symmetric normals (`normal`, legacy) they replace. `--perturb-scale` is the grid
+  half-width in annualized-ρ units (ρ=spread_ann/100).
+
+  NOTE (deferred): the deviation is applied industry-wide (all firms shift together),
+  not as a strict UNILATERAL deviation of firm j alone. The exact BBL object perturbs
+  one firm at a time (N_firms× the share evals); left as a first-pass approximation.
+
+FORWARD r^f (`--rf-curve`, default `COST_FWD/forward_rf_qoq.csv` from cf_forward_rf.py):
+  the market Selic curve enters ψ4. A FLAT r^f makes ψ4 collinear with ψ2, leaving ζ
+  unidentified; the time-varying curve separates ζ from ω.
+
+ASSET RETURN r^j (`--asset-return-col` / `--asset-margin`, default 0): enters ψ1. A
+  firm-constant r^j is collinear with the ω regressor (ψ2) so it mainly relabels ω̂.
 
 EQUILIBRIUM σ̂ (knob):
   Default σ̂ = observed spreads ρ̂ (the data IS the equilibrium). Pass
@@ -63,17 +77,75 @@ function equilibrium_spreads(ctx::CFDemandCtx; policy_csv::Union{Nothing,String}
 end
 
 """
-    draw_deviation(σ̂, endog, rng; scale) -> Vector{Float64}
+    deviation_shifts(S, scale, scheme, seed) -> Vector{Float64}
 
-A stationary deviating strategy σ̃: perturb the choice spreads (k∈{4,5}) by an
-i.i.d. N(0, scale) shock; regulated types pass through unchanged.
+The additive spread shifts Δ_s (annualized ρ units) defining the S deviating
+strategies. `grid` (default): a symmetric grid over [−scale, +scale] EXCLUDING 0, so
+we probe RAISING and LOWERING the choice spread at graduated magnitudes — this is what
+pins the FOC, since the Eq-18 objective Σ min{g,0}² is only informative where a
+deviation binds (g<0), and tiny i.i.d. normals mostly leave g>0. `normal`: legacy
+N(0,scale) (kept for comparison). Deterministic in `grid` mode ⇒ shard-invariant by
+global index with no RNG.
 """
-function draw_deviation(σ̂::Vector{Float64}, endog::BitVector, rng::AbstractRNG; scale::Float64)
-    σ̃ = copy(σ̂)
-    @inbounds for i in eachindex(σ̃)
-        endog[i] && (σ̃[i] += scale * randn(rng))
+function deviation_shifts(S::Int, scale::Float64, scheme::String, seed::Int)
+    if scheme == "normal"
+        rng = MersenneTwister(seed * 100003)
+        return scale .* randn(rng, S)
     end
+    scheme == "grid" || error("--dev-scheme must be grid|normal (got $scheme)")
+    m = cld(S, 2)                              # magnitudes; each gets a ± pair
+    mags = (collect(1:m) ./ m) .* scale        # graduated up to `scale`
+    shifts = Float64[]
+    for g in mags; push!(shifts, +g); push!(shifts, -g); end
+    return shifts[1:S]
+end
+
+"""
+    apply_shift(σ̂, endog, Δ) -> Vector{Float64}
+
+Stationary deviation: add the scalar shift `Δ` (annualized) to the choice spreads
+k∈{4,5}; regulated types pass through unchanged.
+"""
+function apply_shift(σ̂::Vector{Float64}, endog::BitVector, Δ::Float64)
+    σ̃ = copy(σ̂)
+    @inbounds for i in eachindex(σ̃); endog[i] && (σ̃[i] += Δ); end
     return σ̃
+end
+
+"""
+    load_forward_rf(path, out_dir, T, ctx) -> Vector{Float64}
+
+Quarterly forward r^f path (length T) from the market Selic curve written by
+cf_forward_rf.py (`COST_FWD/forward_rf_qoq.csv`, column `rf_qoq`), padded/truncated to
+T. A FLAT r^f makes ψ4 = r^f·Σβ^t Dep a rescaling of ψ2 = Σβ^t Dep (collinear) so ζ is
+unidentified; the time-varying curve breaks that. Falls back to the flat panel median
+(with a warning) if the curve file is absent.
+"""
+function load_forward_rf(path::Union{Nothing,String}, out_dir::String, T::Int, ctx::CFDemandCtx;
+                         require::Bool=false)
+    csv = path === nothing ? joinpath(dirname(out_dir), "COST_FWD", "forward_rf_qoq.csv") : path
+    if isfile(csv)
+        lines = filter(l -> !isempty(strip(l)), readlines(csv))
+        hdr = strip.(split(lines[1], ','))
+        ci = findfirst(==("rf_qoq"), hdr)
+        ci === nothing && error("rf_qoq column not found in $csv")
+        rf = [parse(Float64, strip(split(l, ',')[ci])) for l in lines[2:end]]
+        length(rf) >= T || (rf = vcat(rf, fill(rf[end], T - length(rf))))
+        log_status("  [CF2] forward r^f ← $(basename(csv)) (T=$T; " *
+                   "$(round(rf[1],sigdigits=4))→$(round(rf[T],sigdigits=4)))")
+        return rf[1:T]
+    end
+    # Missing curve. On the cluster this MUST be a hard failure: silently using a flat
+    # r^f leaves ζ unidentified (ψ4∝ψ2) and wastes the expensive run. Locally, warn +
+    # fall back so dev/smoke tests still run.
+    msg = "Forward r^f curve not found at:\n    $csv\n" *
+          "Generate it locally (needs internet) and upload it there:\n" *
+          "    python cf_forward_rf.py --horizon $T --start 2026Q1"
+    require && error(msg)
+    rf_q0, rfc = _first_present(ctx.df, ["risk_free_qoq", "risk_free_qoq_lag", "selic_qoq"]; default=NaN)
+    lvl = median(filter(isfinite, rf_q0))
+    @warn "$msg\n  → FALLING BACK to FLAT r^f=median($rfc)=$(round(lvl,sigdigits=4)); ζ weakly identified."
+    return fill(lvl, T)
 end
 
 # ==========================================================================
@@ -144,7 +216,11 @@ function _parse_cost2_args()
         "--beta";          arg_type = Float64; default = 0.9
         "--horizon";       arg_type = Int;     default = 50
         "--shocks";        arg_type = Int;     default = 50      # TOTAL number of σ̃ deviations
-        "--perturb-scale"; arg_type = Float64; default = 0.05    # σ̃ shock sd (annualized ρ units)
+        "--perturb-scale"; arg_type = Float64; default = 0.02    # σ̃ grid half-width (annualized ρ units)
+        "--dev-scheme";    arg_type = String;  default = "grid"  # grid (directed) | normal (legacy)
+        "--rf-curve";      arg_type = String;  default = nothing # forward-r^f CSV; default COST_FWD/forward_rf_qoq.csv
+        "--asset-return-col"; arg_type = String; default = nothing # r^j source col (e.g. gross_return_lag)
+        "--asset-margin";  arg_type = Float64; default = 0.0     # constant quarterly (r^j−r^f) if no col
         "--dbar";          arg_type = Float64; default = -1.0   # <=0 => per-type auto-calibrate
         "--time-filter";   arg_type = String;  default = nothing
         "--policy-csv";    arg_type = String;  default = nothing
@@ -193,17 +269,34 @@ function main_cost2()
     end
     log_status("  [CF2] markdown ρ^q ← $mc | β=$(a["beta"]) | T=$(a["horizon"]) | shocks=$(a["shocks"])")
 
-    # Forward r^f path for the ψ4 funding base (else ζ is unidentified). Placeholder:
-    # flat at the panel-median quarterly risk-free; replace with the BCB forward curve
-    # (open knob). asset_return r^j defaults to 0 (pure deposit-funding value).
-    rf_q0, rfc = _first_present(ctx.df, ["risk_free_qoq", "risk_free_qoq_lag", "selic_qoq"]; default=NaN)
-    rf_level = median(filter(isfinite, rf_q0))
-    rf_path  = fill(rf_level, a["horizon"])
-    log_status("  [CF2] forward r^f flat at median($rfc)=$(round(rf_level, sigdigits=4)) [placeholder]")
+    _, _, out_dir = get_paths(a["hpc"]; local_dir=a["local-dir"])
+
+    # Forward r^f path for ψ4 (BCB market Selic curve via cf_forward_rf.py). A FLAT path
+    # makes ψ4 = r^f·Σβ^t Dep a rescaling of ψ2 = Σβ^t Dep (collinear) ⇒ ζ unidentified;
+    # the time-varying curve breaks that. Fallback: flat panel median (warns).
+    rf_path = load_forward_rf(a["rf-curve"], out_dir, a["horizon"], ctx; require=a["hpc"])
+
+    # Asset return r^j in ψ1 (revenue). A firm-constant r^j is COLLINEAR with the ω (ψ2)
+    # regressor, so it mainly RELABELS ω̂ — default 0 (deposit-funding value). A column
+    # (e.g. gross_return_lag, a quarterly GROSS factor) or a constant net margin may be
+    # supplied; both are read as the quarterly net margin (r^j − r^f) entering ψ1.
+    asset_ret = zeros(nrow(ctx.df))
+    if a["asset-return-col"] !== nothing
+        col = a["asset-return-col"]
+        col in names(ctx.df) || error("--asset-return-col '$col' not in demand parquet")
+        gr = Float64.(coalesce.(ctx.df[!, col], 1.0)) .- 1.0
+        rfq, _ = _first_present(ctx.df, ["risk_free_qoq", "risk_free_qoq_lag", "selic_qoq"]; default=0.0)
+        asset_ret = gr .- rfq
+        log_status("  [CF2] r^j ← ($col − 1) − r^f_q  (mean net margin $(round(mean(asset_ret), sigdigits=3)))")
+    elseif a["asset-margin"] != 0.0
+        asset_ret = fill(a["asset-margin"], nrow(ctx.df))
+        log_status("  [CF2] r^j − r^f = $(a["asset-margin"]) (constant)")
+    end
 
     # Equilibrium ψ
     σ̂ = equilibrium_spreads(ctx; policy_csv=a["policy-csv"])
-    psi_eq, firms = psi_under(ctx, st, Z, markdown_q0, σ̂; beta=a["beta"], T=a["horizon"], rf_path_q=rf_path)
+    psi_eq, firms = psi_under(ctx, st, Z, markdown_q0, σ̂; beta=a["beta"], T=a["horizon"],
+                              asset_return_q=asset_ret, rf_path_q=rf_path)
     isB = firm_is_B(ctx, firms)
     log_status("  [CF2] ψ_eq: $(size(psi_eq)) over $(length(firms)) firms " *
                "($(sum(isB)) B / $(sum(.!isB)) D)")
@@ -212,21 +305,22 @@ function main_cost2()
     nf, nb = size(psi_eq)
     S = a["shocks"]; nsh = a["n-shards"]; sid = a["shard-id"]
     (0 <= sid < nsh) || error("shard-id ($sid) must be in 0:$(nsh-1)")
-    # Global shock indices for THIS shard (stride). A per-shock RNG seeded by the
-    # GLOBAL index makes σ̃ identical whether or not the run is sharded, so shard
-    # outputs merge into exactly the unsharded result.
+    # Global shift vector (by index) — deterministic in grid mode ⇒ σ̃ is identical
+    # whether or not the run is sharded, so shard outputs merge into the unsharded result.
+    shifts = deviation_shifts(S, a["perturb-scale"], a["dev-scheme"], a["seed"])
+    log_status("  [CF2] σ̃ scheme=$(a["dev-scheme"]) scale=$(a["perturb-scale"]) → " *
+               "Δ∈[$(round(minimum(shifts), sigdigits=3)), $(round(maximum(shifts), sigdigits=3))]")
     s_list = [s for s in 1:S if (s - 1) % nsh == sid]
     log_status("  [CF2] shard $sid/$nsh → $(length(s_list)) of $S deviations")
     psi_dev = Array{Float64,3}(undef, length(s_list), nf, nb)
     for (li, s) in enumerate(s_list)
-        rng_s = MersenneTwister(a["seed"] * 100003 + s)
-        σ̃ = draw_deviation(σ̂, st.endog, rng_s; scale=a["perturb-scale"])
-        pd, _ = psi_under(ctx, st, Z, markdown_q0, σ̃; beta=a["beta"], T=a["horizon"], rf_path_q=rf_path)
+        σ̃ = apply_shift(σ̂, st.endog, shifts[s])
+        pd, _ = psi_under(ctx, st, Z, markdown_q0, σ̃; beta=a["beta"], T=a["horizon"],
+                          asset_return_q=asset_ret, rf_path_q=rf_path)
         psi_dev[li, :, :] .= pd
         li % 5 == 0 && log_status("    [CF2] shard $sid: $li/$(length(s_list)) done")
     end
 
-    _, _, out_dir = get_paths(a["hpc"]; local_dir=a["local-dir"])
     cost_dir = joinpath(dirname(out_dir), "COST_FWD"); mkpath(cost_dir)
     tag = "E$(a["estim"])_spec_$(a["spec"])_$(a["stage"])$(a["suffix"])"
     blocks = vcat(["psi1", "psi2_omega"], ["psi3_gamma_$z" for z in znames], ["psi4_zeta"])

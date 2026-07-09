@@ -66,6 +66,18 @@ case "${CF_STEP}" in
     cf1)          # CF1: gross franchise-value sleepiness decomposition
         run_julia cf_1_franchise_value.jl ;;
     cost2)        # CF2 part 1: ψ under σ̂ and σ̃ deviations (shardable)
+        # Forward r^f curve is a REQUIRED input (cost_2 errors under --hpc if absent):
+        # a flat r^f makes ψ4∝ψ2 and leaves ζ unidentified. It is fetched from the BCB
+        # APIs locally (compute nodes have no internet) and uploaded to data/COST_FWD/.
+        RF_CURVE="${RF_CURVE:-${PROJECT_DIR}/../data/COST_FWD/forward_rf_qoq.csv}"
+        if [[ ! -f "${RF_CURVE}" ]]; then
+            echo "ERROR: forward r^f curve missing: ${RF_CURVE}" >&2
+            echo "  Generate locally (needs internet) and upload to data/COST_FWD/:" >&2
+            echo "    python cf_forward_rf.py --horizon 50 --start 2026Q1" >&2
+            echo "  Refusing to run: a flat r^f leaves ζ unidentified." >&2
+            exit 1
+        fi
+        echo "forward r^f curve OK: ${RF_CURVE}"
         SHARD_ID="${SLURM_ARRAY_TASK_ID:-${SHARD_ID:-0}}"
         N_SHARDS="${N_SHARDS:-1}"
         run_julia cost_2_fwd_sim.jl --n-shards "${N_SHARDS}" --shard-id "${SHARD_ID}" ;;
