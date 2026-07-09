@@ -163,6 +163,15 @@ function _parse_cf3_args()
         "--n-markets";   arg_type = Int;     default = 0      # >0: restrict to K biggest markets (fast local validation)
         "--selic-shock"; arg_type = Float64; default = 0.01   # CF5: annual Selic shock for pass-through
         "--merge";       arg_type = String;  default = ""     # CF6: "firmA,firmB" conglomerate pair to merge
+        # ── Firm-sharded Jacobi (full-panel cluster solve): one SWEEP = an array of shard jobs
+        #    (each best-responds a subset of firms vs the FROZEN σ) then a merge. Sweeps chain. ──
+        "--n-firm-shards"; arg_type = Int;   default = 0      # 0 = in-process solve; >0 = one shard of a Jacobi sweep
+        "--firm-shard-id"; arg_type = Int;   default = 0      # 0-based; = SLURM_ARRAY_TASK_ID
+        "--jacobi-merge";  action   = :store_true             # merge shard outputs → next-sweep σ
+        "--write-sigma0";  action   = :store_true             # write the initial σ⁰=ρ̂ (full-N) and exit
+        "--sigma-in";      arg_type = String; default = ""    # input σ parquet (empty ⇒ observed ρ̂)
+        "--sigma-out";     arg_type = String; default = ""    # output σ parquet
+        "--sigma-glob";    arg_type = String; default = ""    # merge: glob of this sweep's shard files
     end
     return parse_args(s)
 end
@@ -237,10 +246,82 @@ function cf3_setup(a)
     return (; ctx, st, Z, znames, mq0, rf, aret, cost, θc_B, θc_D, firms, isB, lo, hi, out_dir, tag)
 end
 
+# ==========================================================================
+# Firm-sharded Jacobi (full-panel cluster solve)
+# ==========================================================================
+# A SWEEP = an array of shard jobs, each best-responding a subset of firms against the
+# FROZEN σ from the previous sweep, then a merge into the next σ. Sweeps chain (afterok).
+# Correct (uses the exact full-panel psi_under) and embarrassingly parallel across firms.
+
+_read_sigma(path) = Float64.(DataFrame(Parquet2.Dataset(path)).sigma)
+_write_sigma(path, σ) = (Parquet2.writefile(path, DataFrame(sigma=σ)); log_status("  [CF3] wrote σ ($(length(σ))) → $(basename(path))"))
+
+"""Per-firm k=4 / k=5 row indices, keyed by firm INDEX in `firms`."""
+function _firm_endog_rows(ctx, st, firms)
+    firm_key = string.(ctx.df.CodConglomeradoPrudencial)
+    fidx = Dict(f => i for (i, f) in enumerate(firms))
+    rows4 = Dict{Int,Vector{Int}}(); rows5 = Dict{Int,Vector{Int}}()
+    @inbounds for i in eachindex(firm_key)
+        f = get(fidx, firm_key[i], 0); f == 0 && continue
+        st.dep_type[i] == 4 && push!(get!(rows4, f, Int[]), i)
+        st.dep_type[i] == 5 && push!(get!(rows5, f, Int[]), i)
+    end
+    return rows4, rows5
+end
+
+"""One shard of a Jacobi sweep: best-respond this shard's firms vs the frozen σ; write
+their new choice spreads (per endog row) to `--sigma-out`."""
+function jacobi_shard(a, P)
+    σ = isempty(a["sigma-in"]) ? copy(P.ctx.rho_hat) : _read_sigma(a["sigma-in"])
+    length(σ) == nrow(P.ctx.df) || error("σ length $(length(σ)) ≠ N $(nrow(P.ctx.df))")
+    ns = a["n-firm-shards"]; sid = a["firm-shard-id"]
+    rows4, rows5 = _firm_endog_rows(P.ctx, P.st, P.firms)
+    out_rows = Int[]; out_sig = Float64[]; ndone = 0
+    for fi in eachindex(P.firms)
+        ((fi - 1) % ns == sid) || continue
+        r4 = get(rows4, fi, Int[]); r5 = get(rows5, fi, Int[])
+        (isempty(r4) && isempty(r5)) && continue
+        θc = P.isB[fi] ? P.θc_B : P.θc_D
+        s4, s5, _ = firm_best_response(P.ctx, P.st, P.Z, P.mq0, σ, r4, r5, θc, fi;
+                                       beta=a["beta"], T=a["horizon"], aret=P.aret, rf=P.rf,
+                                       lo=P.lo, hi=P.hi, ngrid=a["br-grid"], window=a["br-window"])
+        if !isnan(s4); for i in r4; push!(out_rows, i); push!(out_sig, s4); end; end
+        if !isnan(s5); for i in r5; push!(out_rows, i); push!(out_sig, s5); end; end
+        ndone += 1
+        ndone % 20 == 0 && log_status("  [CF3-shard $sid] $ndone firms done")
+    end
+    Parquet2.writefile(a["sigma-out"], DataFrame(row_idx=out_rows, sigma=out_sig))
+    log_status("  [CF3-shard $sid/$ns] $ndone firms, $(length(out_rows)) rows → $(basename(a["sigma-out"]))")
+end
+
+"""Merge a sweep's shard files onto the previous σ (`--sigma-in`), write the next σ
+(`--sigma-out`), and report the sweep's ‖Δσ‖∞ on the choice types."""
+function jacobi_merge(a)
+    σprev = _read_sigma(a["sigma-in"]); σ = copy(σprev); n = 0
+    for f in sort(glob_files(a["sigma-glob"]))
+        d = DataFrame(Parquet2.Dataset(f)); n += 1
+        @inbounds for (ri, sv) in zip(Int.(d.row_idx), Float64.(d.sigma)); σ[ri] = sv; end
+    end
+    touched = σ .!= σprev
+    Δ = any(touched) ? maximum(abs.(σ[touched] .- σprev[touched])) : 0.0
+    _write_sigma(a["sigma-out"], σ)
+    log_status("  [CF3-merge] $n shards | ‖Δσ‖∞=$(round(Δ, sigdigits=4)) | $(sum(touched)) rows changed")
+end
+
+# Minimal glob (avoid a Glob.jl dep): split dir + wildcard filename.
+function glob_files(pattern)
+    dir = dirname(pattern); pat = basename(pattern)
+    rx = Regex("^" * replace(replace(pat, "." => "\\."), "*" => ".*") * "\$")
+    return [joinpath(dir, f) for f in readdir(isempty(dir) ? "." : dir) if occursin(rx, f)]
+end
+
 function main_cf3()
     a = _parse_cf3_args()
+    a["jacobi-merge"] && return jacobi_merge(a)   # light: no context build
     scheme = Symbol(replace(a["fixed-point"], "-" => "_") == "gauss_seidel" ? :gauss_seidel : :jacobi)
     P = cf3_setup(a)
+    a["write-sigma0"] && return _write_sigma(a["sigma-out"], P.ctx.rho_hat)
+    a["n-firm-shards"] > 0 && return jacobi_shard(a, P)   # one shard of a sweep (cluster full-panel)
     log_status("  [CF3] spread box [$(round(P.lo,sigdigits=3)), $(round(P.hi,sigdigits=3))] | BR grid $(a["br-grid"]) × window $(a["br-window"])")
     eq = solve_equilibrium(P.ctx, P.st, P.Z, P.mq0, P.θc_B, P.θc_D, P.isB, P.firms;
                            beta=a["beta"], T=a["horizon"], aret=P.aret, rf=P.rf,

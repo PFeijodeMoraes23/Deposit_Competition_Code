@@ -20,11 +20,13 @@
 #     ROUTINES="6"          routines to run CFs for (space list; "5 6 7 8" = headline+band)
 #     CF_STAGE=extended  R=2000  SEED=42
 #     SHOCKS=50  N_SHARDS=10  PERTURB_SCALE=0.02  DEV_SCHEME=grid  BETA=0.9  HORIZON=50
-#     DO_DEMAND_EVAL=1  DO_CF1=1
+#     DO_DEMAND_EVAL=1  DO_CF1=1     (CF1-gross + CF2 chain)
+#     DO_CF1NET=1  DO_CF3=0  DO_CF5=0  DO_CF6=0   (equilibrium CFs, afterok cost_solve; cf3/5/6 opt-in)
+#     CF_EQ_EXTRA=""        extra flags for cf3/cf5/cf6 (e.g. "--min-firm-markets 50 --selic-shock 0.01")
 #     AUTO_PROCESS=1        auto-build cluster_processed/ from blp_outputs_*.zip if absent
 #     BLP_ZIP=<path>        pin a specific RC zip (default: latest by job id across all saved)
 #     PYTHON=python         interpreter for process_blp_outputs.py
-#     SHARD_TIME=08:00:00   SOLVE_TIME=01:00:00
+#     SHARD_TIME=08:00:00   SOLVE_TIME=01:00:00   EQ_TIME=12:00:00 (cf3/5/6 wall)
 #
 # The forward r^f curve (data/COST_FWD/forward_rf_qoq.csv) is the one input that must be
 # built LOCALLY (cf_forward_rf.py needs internet) and uploaded; everything else is either
@@ -38,8 +40,12 @@ SHOCKS="${SHOCKS:-50}"; N_SHARDS="${N_SHARDS:-10}"
 PERTURB_SCALE="${PERTURB_SCALE:-0.02}"; DEV_SCHEME="${DEV_SCHEME:-grid}"
 BETA="${BETA:-0.9}"; HORIZON="${HORIZON:-50}"
 DO_DEMAND_EVAL="${DO_DEMAND_EVAL:-1}"; DO_CF1="${DO_CF1:-1}"
+# Equilibrium CFs (afterok cost_solve). cf1_net is light (on by default); cf3/cf5/cf6 re-solve
+# the pricing game (heavier even with the market-local best-response) — opt-in.
+DO_CF1NET="${DO_CF1NET:-1}"; DO_CF3="${DO_CF3:-0}"; DO_CF5="${DO_CF5:-0}"; DO_CF6="${DO_CF6:-0}"
 AUTO_PROCESS="${AUTO_PROCESS:-1}"; PYTHON="${PYTHON:-python}"
 SHARD_TIME="${SHARD_TIME:-08:00:00}"; SOLVE_TIME="${SOLVE_TIME:-01:00:00}"
+EQ_TIME="${EQ_TIME:-12:00:00}"
 LOGDIR="logs"; mkdir -p "${LOGDIR}"
 DATA_ROOT="${DATA_ROOT:-$(pwd)/../data}"
 CP_DIR="${DATA_ROOT}/output/cluster_processed"
@@ -125,6 +131,22 @@ for k in ${ROUTINES}; do
     slv=$(submit "cf_solve_E${k}" "${SOLVE_TIME}" --dependency=afterok:"${arr}" \
         --export=ALL,${base_export},CF_STEP=cost_solve,CF_EXTRA="--bootstrap 200" submit_cf.sh)
     echo "  cost_solve   → job ${slv} (afterok:${arr})"
+
+    # Equilibrium CFs — each runs only after this routine's costs are solved.
+    eq_extra="--beta ${BETA} --horizon ${HORIZON}"
+    if [[ "${DO_CF1NET}" == "1" ]]; then
+        j=$(submit "cf_cf1net_E${k}" "${SOLVE_TIME}" --dependency=afterok:"${slv}" \
+            --export=ALL,${base_export},CF_STEP=cf1_net,CF_EXTRA="${eq_extra}" submit_cf.sh)
+        echo "  cf1_net      → job ${j} (afterok:${slv})"
+    fi
+    for step in cf3 cf5 cf6; do
+        flag="DO_$(echo ${step} | tr a-z A-Z)"          # DO_CF3 / DO_CF5 / DO_CF6
+        if [[ "${!flag}" == "1" ]]; then
+            j=$(submit "cf_${step}_E${k}" "${EQ_TIME}" --dependency=afterok:"${slv}" \
+                --export=ALL,${base_export},CF_STEP=${step},CF_EXTRA="${eq_extra} ${CF_EQ_EXTRA:-}" submit_cf.sh)
+            echo "  ${step}          → job ${j} (afterok:${slv})"
+        fi
+    done
     first=0
 done
 

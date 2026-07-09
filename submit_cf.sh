@@ -10,7 +10,8 @@
 # (job-name + .out/.err set per submission via sbatch -J/-o/-e)
 #
 # Counterfactual pipeline driver (foundation 0a, CF1, CF2). Driven by env vars:
-#   CF_STEP     demand_eval | cf1 | cost2 | cost_solve      (which stage to run)
+#   CF_STEP     demand_eval | cf1 | cost2 | cost_solve       (CF1-gross + CF2 chain)
+#               | cf1_net | cf3 | cf5 | cf6                   (equilibrium CFs; need cost_solve first)
 #   CF_ROUTINE  6 (E6 headline) | 3 (E3 robustness)          → --estim
 #   CF_STAGE    extended (headline) | full | …               → --stage
 #   R, SEED     draws (default 2000 / 42) — must match the downloaded BLP_DRAWS
@@ -85,6 +86,26 @@ case "${CF_STEP}" in
         python "${PROJECT_DIR}/estimation_1_cost_3_solve.py" \
             --estim "${CF_ROUTINE}" --spec 12 --stage "${CF_STAGE}" \
             ${CF_EXTRA} ;;
+    cf1_net)      # CF1 net-of-cost franchise value — needs cost_solve output (cost_params_*.json)
+        run_julia cf_1_franchise_value.jl --net ;;
+    cf3)          # CF3 equilibrium — single-process solve (only tractable on --n-markets subsets)
+        run_julia cf_3_equilibrium_spreads.jl ;;
+    cf3_init)     # firm-sharded Jacobi: write σ⁰=ρ̂ (SIGMA_DIR from env)
+        run_julia cf_3_equilibrium_spreads.jl --write-sigma0 --sigma-out "${SIGMA_DIR}/sig_0.parquet" ;;
+    cf3_shard)    # firm-sharded Jacobi: one shard of sweep ${SWEEP} (SLURM_ARRAY_TASK_ID = shard id)
+        SID="${SLURM_ARRAY_TASK_ID:-${SHARD_ID:-0}}"
+        run_julia cf_3_equilibrium_spreads.jl --n-firm-shards "${N_FIRM_SHARDS}" --firm-shard-id "${SID}" \
+            --sigma-in  "${SIGMA_DIR}/sig_$((SWEEP-1)).parquet" \
+            --sigma-out "${SIGMA_DIR}/sh_${SWEEP}_${SID}.parquet" ;;
+    cf3_merge)    # firm-sharded Jacobi: merge sweep ${SWEEP}'s shards → sig_${SWEEP}
+        run_julia cf_3_equilibrium_spreads.jl --jacobi-merge \
+            --sigma-in   "${SIGMA_DIR}/sig_$((SWEEP-1)).parquet" \
+            --sigma-glob "${SIGMA_DIR}/sh_${SWEEP}_*.parquet" \
+            --sigma-out  "${SIGMA_DIR}/sig_${SWEEP}.parquet" ;;
+    cf5)          # CF5 monetary pass-through — needs cost_solve
+        run_julia cf_5_passthrough.jl ;;
+    cf6)          # CF6 merger simulation — needs cost_solve
+        run_julia cf_6_merger.jl ;;
     *) echo "Unknown CF_STEP='${CF_STEP}'"; exit 1 ;;
 esac
 
