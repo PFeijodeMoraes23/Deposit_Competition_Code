@@ -161,7 +161,7 @@ function _parse_cf3_args()
         "--br-grid";     arg_type = Int;     default = 7      # grid points per choice type (BR search)
         "--br-window";   arg_type = Float64; default = 0.02   # BR grid half-width around current (annual ρ)
         "--n-markets";   arg_type = Int;     default = 0      # >0: restrict to K biggest markets (fast local validation)
-        "--selic-shock"; arg_type = Float64; default = 0.01   # CF5: annual Selic shock for pass-through
+        "--selic-shock"; arg_type = Float64; default = 0.0    # CF5: annual Selic shock (0 ⇒ base); applied to r^f in cf3_setup
         "--merge";       arg_type = String;  default = ""     # CF6: "firmA,firmB" conglomerate pair to merge
         # ── Firm-sharded Jacobi (full-panel cluster solve): one SWEEP = an array of shard jobs
         #    (each best-responds a subset of firms vs the FROZEN σ) then a merge. Sweeps chain. ──
@@ -172,6 +172,10 @@ function _parse_cf3_args()
         "--sigma-in";      arg_type = String; default = ""    # input σ parquet (empty ⇒ observed ρ̂)
         "--sigma-out";     arg_type = String; default = ""    # output σ parquet
         "--sigma-glob";    arg_type = String; default = ""    # merge: glob of this sweep's shard files
+        # CF5/CF6 compare: read two solved equilibria (base + scenario σ) and report the effect.
+        "--compare";       action   = :store_true
+        "--sigma-base";    arg_type = String; default = ""    # base-scenario equilibrium σ parquet
+        "--sigma-scn";     arg_type = String; default = ""    # shocked (CF5) / merged (CF6) equilibrium σ
     end
     return parse_args(s)
 end
@@ -207,6 +211,17 @@ function cf3_setup(a)
                            R=a["R"], seed=a["seed"], hpc=a["hpc"],
                            local_dir=a["local-dir"], suffix=a["suffix"], time_filter=tf, keep=keep)
 
+    # CF6 scenario: merge a conglomerate pair into ONE decision-maker (relabel B→A) BEFORE firms
+    # are formed, so the merged entity best-responds jointly (internalizes cross-elasticities).
+    if !isempty(a["merge"])
+        parts = strip.(split(a["merge"], ",")); length(parts) == 2 || error("--merge needs \"firmA,firmB\"")
+        fA, fB = String(parts[1]), String(parts[2])
+        key = string.(ctx.df.CodConglomeradoPrudencial)
+        (fA in key && fB in key) || error("--merge firms not found: $fA / $fB")
+        ctx.df[!, :CodConglomeradoPrudencial] = [k == fB ? fA : k for k in key]
+        log_status("  [CF3] merged $fB → $fA")
+    end
+
     # Per-type d̄ + markdown + forward r^f, identical to cost_2_fwd_sim (so ψ matches CF2).
     s0 = cf_model_shares(ctx)
     pop0, _    = _first_present(ctx.df, ["pop_total", "M_mt", "pop"]; default=NaN)
@@ -225,6 +240,12 @@ function cf3_setup(a)
     mq0 = all(isnan, mq0) ? ctx.rho_hat ./ 400.0 : clamp.(mq0 ./ 1e4, -0.1, 0.1)
     _, _, out_dir = get_paths(a["hpc"]; local_dir=a["local-dir"])
     rf = load_forward_rf(nothing, out_dir, a["horizon"], ctx; require=a["hpc"])
+    # CF5 scenario: shift the whole forward Selic (r^f) path by an annual shock (0 ⇒ no-op).
+    if a["selic-shock"] != 0.0
+        Δq = (1.0 + a["selic-shock"])^0.25 - 1.0
+        rf = rf .+ Δq
+        log_status("  [CF3] Selic shock $(a["selic-shock"]) → Δr^f_q=$(round(Δq, sigdigits=3)) on forward r^f")
+    end
     aret = zeros(nrow(ctx.df))
 
     tag = "E$(a["estim"])_spec_$(a["spec"])_$(a["stage"])$(a["suffix"])"

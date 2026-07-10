@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --partition=gpu_h200
+#SBATCH --partition=day
 #SBATCH --time=08:00:00
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
@@ -12,6 +12,7 @@
 # Counterfactual pipeline driver (foundation 0a, CF1, CF2). Driven by env vars:
 #   CF_STEP     demand_eval | cf1 | cost2 | cost_solve       (CF1-gross + CF2 chain)
 #               | cf1_net | cf3 | cf5 | cf6                   (equilibrium CFs; need cost_solve first)
+#               | zip                                         (CF_WHICH=<cf>: archive that CF's outputs)
 #   CF_ROUTINE  6 (E6 headline) | 3 (E3 robustness)          → --estim
 #   CF_STAGE    extended (headline) | full | …               → --stage
 #   R, SEED     draws (default 2000 / 42) — must match the downloaded BLP_DRAWS
@@ -22,11 +23,14 @@
 # To beat Bouchet time walls, submit cost2 as a JOB ARRAY (one shard per task) and
 # the cost_solve as an afterok dependency — see submit_cf_all.sh (the orchestrator).
 #
-# ⚠ The CF Julia scripts are CPU-only (they include blp_1_estimation.jl, NOT the
-# CUDA path), so this job does NOT use a GPU. We request gpu_h200 only because it
-# is the node known to have ≥200G RAM (the R=2000 'extended' stage peaks ~60G).
-# If your cluster has a high-mem CPU partition, switch --partition to it and you'll
-# queue faster and not reserve an H200. CF2 GPU acceleration is a future option.
+# PARTITIONS (Bouchet). Default is the CPU `day` partition (64–192 CPU, 990–2251G RAM,
+# 1-day wall) — right for demand_eval/cf1/cost2/cost_solve/cf1_net, which are CPU-only
+# (they use blp_1_estimation.jl's CPU share kernels). The orchestrators override per job:
+#   • CPU steps   → PARTITION=day (or week/bigmem/mpi for longer/bigger)
+#   • GPU steps   → PARTITION=gpu_h200 GPUS=h200:1  (cf3/cf5/cf6 use the GPU share path
+#                   when a GPU is present; on gpu_h200 you MUST request one or the QOS
+#                   rejects the job — "QOSMinGRES"). 48 CPU, 1995G RAM, 2-day wall, 8 H200/node.
+# The R=2000 'extended' context peaks ~60G, so keep --mem ≥ ~100G.
 
 set -euo pipefail
 : "${CF_STEP:?set CF_STEP (demand_eval|cf1|cost2|cost_solve)}"
@@ -102,10 +106,17 @@ case "${CF_STEP}" in
             --sigma-in   "${SIGMA_DIR}/sig_$((SWEEP-1)).parquet" \
             --sigma-glob "${SIGMA_DIR}/sh_${SWEEP}_*.parquet" \
             --sigma-out  "${SIGMA_DIR}/sig_${SWEEP}.parquet" ;;
-    cf5)          # CF5 monetary pass-through — needs cost_solve
+    cf5)          # CF5 monetary pass-through — single-process (subset) solve
         run_julia cf_5_passthrough.jl ;;
-    cf6)          # CF6 merger simulation — needs cost_solve
+    cf6)          # CF6 merger simulation — single-process (subset) solve
         run_julia cf_6_merger.jl ;;
+    cf5_compare)  # CF5: combine the base + Selic-shocked equilibria (SIGMA_BASE/SIGMA_SCN from env)
+        run_julia cf_5_passthrough.jl --compare --sigma-base "${SIGMA_BASE}" --sigma-scn "${SIGMA_SCN}" ;;
+    cf6_compare)  # CF6: combine the base + merged equilibria (CF_EXTRA carries --merge "A,B")
+        run_julia cf_6_merger.jl --compare --sigma-base "${SIGMA_BASE}" --sigma-scn "${SIGMA_SCN}" ;;
+    zip)          # archive a CF's outputs across all estimations → CF_ZIPS/<cf>_outputs.zip (moves them out)
+        DATA_ROOT="${DATA_ROOT:-${PROJECT_DIR}/../data}" \
+            bash "${PROJECT_DIR}/zip_cf_outputs.sh" "${CF_WHICH:?set CF_WHICH (foundation|cf1|cf2|cf3|cf4|cf5|cf6)}" ${CF_TAG:-} ;;
     *) echo "Unknown CF_STEP='${CF_STEP}'"; exit 1 ;;
 esac
 

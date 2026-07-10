@@ -50,10 +50,18 @@ Usage
 Outputs `CF_FOUNDATION/shares_elas_E{estim}_spec_{spec}_{stage}{suffix}.parquet`.
 """
 
-# ── CPU baseline only (no CUDA): brings in all reusable kernels & constants ──────
+# CPU kernels & constants, then the GPU engine (re-include of blp_1 is guarded, so no
+# double-include). blp_gpu_engine brings in CUDA + the GPU share kernels; it LOADS on a
+# no-GPU machine (verified), where CUDA.functional()==false and we fall back to the CPU
+# share path. So the share computation runs on the H200 on the cluster and on CPU on a laptop.
 include(joinpath(@__DIR__, "blp_1_estimation.jl"))
+include(joinpath(@__DIR__, "blp_gpu_engine.jl"))
 
 using Parquet2, DataFrames, Serialization, Statistics, LinearAlgebra, ArgParse
+import CUDA
+
+# Use the GPU share kernel only when a GPU is actually present AND the CF opts in (CF_GPU!=0).
+const _CF_USE_GPU = (get(ENV, "CF_GPU", "1") != "0") && (try CUDA.functional() catch; false end)
 
 # ==========================================================================
 # Context: everything needed to evaluate (counterfactual) shares
@@ -78,6 +86,7 @@ struct CFDemandCtx
     delta_hat      ::Vector{Float64}
     rho_hat        ::Vector{Float64}      # in-sample spread (= prod_vec[:,1])
     alpha          ::Float64              # θ̂₁[1], mean spread coefficient
+    gbuf           ::Union{Nothing,GpuBuffers}   # GPU share buffers (nothing ⇒ CPU share path)
 end
 
 """
@@ -245,6 +254,9 @@ function build_cf_context(estim::Int, spec_id::Int, stage::String;
                                length(pi_interactions))
     precompute_pi_products!(buf, prod_vec, draws_3d, obs_key_idx,
                             pi_interactions, coef_dim)
+    # GPU share buffers (H200 on the cluster; nothing on a CPU-only machine ⇒ CPU share path).
+    gbuf = _CF_USE_GPU ? allocate_gpu_buffers(buf, pc, N_obs, N_B, N_D, R, n_pairs, n_times) : nothing
+    gbuf === nothing || log_status("  [CF] GPU share kernel enabled ($(CUDA.name(CUDA.device())))")
 
     # ── Load estimated parameters & δ̂ for this stage ───────────────────────
     # PLACEHOLDER mode (smoke test before the BLP finishes): no RC result needed —
@@ -301,12 +313,23 @@ function build_cf_context(estim::Int, spec_id::Int, stage::String;
 
     return CFDemandCtx(estim, spec_id, stage, R, coef_dim, df, pc, buf, prod_vec,
                        nu_draws, draws_3d, obs_key_idx, sigma_indices, pi_interactions,
-                       theta1, theta2, delta_hat, copy(prod_vec[:, 1]), theta1[1])
+                       theta1, theta2, delta_hat, copy(prod_vec[:, 1]), theta1[1], gbuf)
 end
 
 # ==========================================================================
 # Share evaluation
 # ==========================================================================
+# Dispatch the share aggregation to the GPU kernel (H200) when a GPU context is present,
+# else the CPU kernel. Both consume ctx.buf.mu (filled by compute_mu! on CPU) and write
+# results into ctx.buf.s_B / ctx.buf.s_D (Float64), so callers/collect_shares are unchanged.
+@inline function _cf_model_shares!(ctx::CFDemandCtx, delta::Vector{Float64})
+    if ctx.gbuf === nothing
+        compute_model_shares!(ctx.buf, delta, ctx.pc, ctx.R)
+    else
+        compute_model_shares_gpu!(ctx.buf, ctx.gbuf, delta, ctx.pc, ctx.R)
+    end
+end
+
 """
     cf_model_shares(ctx) -> Vector{Float64}
 
@@ -317,7 +340,7 @@ function cf_model_shares(ctx::CFDemandCtx)::Vector{Float64}
     sv, pv = unpack_theta2(ctx.theta2, ctx.sigma_indices, ctx.pi_interactions)
     compute_mu!(ctx.buf, ctx.prod_vec, ctx.nu_draws, sv, ctx.sigma_indices, pv,
                 ctx.R, ctx.coef_dim)
-    compute_model_shares!(ctx.buf, ctx.delta_hat, ctx.pc, ctx.R)
+    _cf_model_shares!(ctx, ctx.delta_hat)
     return collect_shares(ctx.buf, ctx.pc, nrow(ctx.df))
 end
 
@@ -344,7 +367,7 @@ function cf_shares_at(ctx::CFDemandCtx, rho_new::Vector{Float64})::Vector{Float6
     compute_mu!(ctx.buf, ctx.prod_vec, ctx.nu_draws, sv, ctx.sigma_indices, pv,
                 ctx.R, ctx.coef_dim)
     delta_cf = ctx.delta_hat .+ ctx.alpha .* (rho_new .- ctx.rho_hat)
-    compute_model_shares!(ctx.buf, delta_cf, ctx.pc, ctx.R)
+    _cf_model_shares!(ctx, delta_cf)
     s = collect_shares(ctx.buf, ctx.pc, nrow(ctx.df))
     # Restore in-sample spread so the context is reusable.
     ctx.prod_vec[:, 1] .= ctx.rho_hat
@@ -417,8 +440,23 @@ function _parse_cf_args()
         "--local-dir"; arg_type = String; default = nothing
         "--draws-dir"; arg_type = String; default = nothing   # override draws location
         "--suffix";    arg_type = String; default = ""
+        "--verify-gpu"; action  = :store_true                 # assert GPU shares == CPU shares, then exit
     end
     return parse_args(s)
+end
+
+"""
+    verify_cf_gpu(ctx; rtol) — assert the GPU share kernel matches the CPU one at (δ̂, θ̂₂).
+
+Run once on the cluster (`cf_0_demand_eval.jl … --verify-gpu`) to gate the GPU path. Errors if
+the max relative / log-floor share difference exceeds `rtol`. No-op (warns) without a GPU.
+"""
+function verify_cf_gpu(ctx::CFDemandCtx; rtol::Float64=1e-7)
+    ctx.gbuf === nothing && (@warn "  [CF] --verify-gpu: no GPU present (CUDA.functional()==false) — nothing to verify"; return)
+    sv, pv = unpack_theta2(ctx.theta2, ctx.sigma_indices, ctx.pi_interactions)
+    compute_mu!(ctx.buf, ctx.prod_vec, ctx.nu_draws, sv, ctx.sigma_indices, pv, ctx.R, ctx.coef_dim)
+    verify_gpu_shares(ctx.buf, ctx.gbuf, ctx.delta_hat, ctx.pc, ctx.R; rtol=rtol)  # errors on mismatch
+    log_status("  [CF] --verify-gpu PASSED: GPU shares == CPU shares to rtol=$rtol")
 end
 
 function main_cf_demand()
@@ -429,6 +467,7 @@ function main_cf_demand()
                            R=a["R"], seed=a["seed"], hpc=a["hpc"],
                            local_dir=a["local-dir"], suffix=a["suffix"],
                            draws_dir_override=a["draws-dir"])
+    if a["verify-gpu"]; verify_cf_gpu(ctx); return; end
     _, _, out_dir = get_paths(a["hpc"]; local_dir=a["local-dir"])
     cf_dir = joinpath(dirname(out_dir), "CF_FOUNDATION")
     out_path = joinpath(cf_dir,

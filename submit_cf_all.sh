@@ -3,13 +3,14 @@
 #
 # Run from the code directory on the login node; it does everything:
 #   1. builds cluster_processed/ from the RC zip (blp_outputs_*.zip) if it's missing
-#      (process_blp_outputs.py — light, runs here on the login node), then
+#      (minimal unzip + cp of the four extended .jls — no python), then
 #   2. preflight-checks the staged inputs (draws, RC results, forward r^f curve), then
 #   3. submits the CF chain for EACH routine in ROUTINES:
 #        (optional) demand_eval — 0a share reproduction (first routine only; precompiles)
 #        (optional) cf1         — gross franchise-value decomposition          [1 job]
 #        cost2 ARRAY            — CF2 ψ deviations, N_SHARDS tasks              [array job]
-#        cost_solve             — Eq-18 minimization, afterok the array         [1 job]
+#        cost_solve             — Eq-18 minimization, afterANY the array          [1 job]
+#                                 (solves on surviving shards; a flaky shard won't block it)
 #   Each cost2 array task computes SHOCKS/N_SHARDS deviations (reproducible per-shock RNG
 #   → shards merge exactly); the solver globs all shards.
 #
@@ -23,10 +24,14 @@
 #     DO_DEMAND_EVAL=1  DO_CF1=1     (CF1-gross + CF2 chain)
 #     DO_CF1NET=1  DO_CF3=0  DO_CF5=0  DO_CF6=0   (equilibrium CFs, afterok cost_solve; cf3/5/6 opt-in)
 #     CF_EQ_EXTRA=""        extra flags for cf3/cf5/cf6 (e.g. "--min-firm-markets 50 --selic-shock 0.01")
-#     AUTO_PROCESS=1        auto-build cluster_processed/ from blp_outputs_*.zip if absent
+#     AUTO_PROCESS=1        auto-build cluster_processed/ from blp_outputs_*.zip if absent (unzip+cp)
 #     BLP_ZIP=<path>        pin a specific RC zip (default: latest by job id across all saved)
-#     PYTHON=python         interpreter for process_blp_outputs.py
 #     SHARD_TIME=08:00:00   SOLVE_TIME=01:00:00   EQ_TIME=12:00:00 (cf3/5/6 wall)
+#     PARTITION=<name>      SBATCH partition. submit_cf.sh defaults to `day` (CPU). These CF2/CF1
+#                           steps are CPU-only — keep them on a CPU partition (day/week/bigmem/mpi).
+#     GPUS=h200:1           request a GPU (Bouchet syntax). Not needed here — the CF2/CF1 chain is
+#                           CPU-only; the GPU is for the cf3/cf5/cf6 equilibrium solve (submit_cf3_jacobi.sh).
+#     MEM=200G              override --mem (needs ≥ ~100G for the R=2000 extended context)
 #
 # The forward r^f curve (data/COST_FWD/forward_rf_qoq.csv) is the one input that must be
 # built LOCALLY (cf_forward_rf.py needs internet) and uploaded; everything else is either
@@ -43,7 +48,7 @@ DO_DEMAND_EVAL="${DO_DEMAND_EVAL:-1}"; DO_CF1="${DO_CF1:-1}"
 # Equilibrium CFs (afterok cost_solve). cf1_net is light (on by default); cf3/cf5/cf6 re-solve
 # the pricing game (heavier even with the market-local best-response) — opt-in.
 DO_CF1NET="${DO_CF1NET:-1}"; DO_CF3="${DO_CF3:-0}"; DO_CF5="${DO_CF5:-0}"; DO_CF6="${DO_CF6:-0}"
-AUTO_PROCESS="${AUTO_PROCESS:-1}"; PYTHON="${PYTHON:-python}"
+AUTO_PROCESS="${AUTO_PROCESS:-1}"
 SHARD_TIME="${SHARD_TIME:-08:00:00}"; SOLVE_TIME="${SOLVE_TIME:-01:00:00}"
 EQ_TIME="${EQ_TIME:-12:00:00}"
 LOGDIR="logs"; mkdir -p "${LOGDIR}"
@@ -54,8 +59,7 @@ ROUTINES_CSV="$(echo ${ROUTINES} | tr ' ' ',')"
 # ── Step 1: build cluster_processed/ from the RC zip if any routine is missing ───
 # Each RC run is saved as blp_outputs_<SLURM_JOB_ID>.zip (submit_blp_rc_all.sh), so with
 # several runs on disk "latest" = highest job id. pick_zip returns: BLP_ZIP override →
-# highest-job-id zip → (legacy fallback) newest by mtime. We touch the winner so
-# process_blp_outputs.py — which auto-discovers by newest mtime — processes exactly it.
+# highest-job-id zip → (legacy fallback) newest by mtime.
 pick_zip () {
     if [[ -n "${BLP_ZIP:-}" ]]; then printf '%s\n' "${BLP_ZIP}"; return; fi
     local best="" bestid=-1 f id
@@ -68,17 +72,29 @@ pick_zip () {
     printf '%s\n' "${best}"
 }
 
+# Minimal, robust: the CF inputs are just the four extended result .jls — extract them straight
+# from the zip (unzip + cp; no python, no pandas, no file reorganization). The RC zips are FLAT
+# (submit_blp_rc_all.sh writes them with `zip -jm`), so `-j` + the member name lands each .jls in
+# cluster_raw/; a `find` fallback covers a dir-prefixed member too. (process_blp_outputs.py stays
+# the LOCAL tool for the full reorg + summaries; it is NOT needed — or trusted — here.)
 need_process=0
 for k in ${ROUTINES}; do [[ -f "${CP_DIR}/blp_E${k}_spec_12.jls" ]] || need_process=1; done
 if [[ "${need_process}" == "1" && "${AUTO_PROCESS}" == "1" ]]; then
-    zip="$(pick_zip)"
+    zip="$(pick_zip)"; CRAW="${DATA_ROOT}/output/cluster_raw"
     if [[ -n "${zip}" && -f "${zip}" ]]; then
-        echo "── building cluster_processed/ from $(basename "${zip}") (latest of $(ls "${DATA_ROOT}"/output/blp_outputs_*.zip "${DATA_ROOT}"/output/cluster_raw/blp_outputs_*.zip 2>/dev/null | wc -l) zip(s); routines ${ROUTINES_CSV}) ──"
-        touch "${zip}" 2>/dev/null || true   # make it the newest-mtime → process_blp_outputs.py picks THIS one
-        # The .jls copy runs before the optional pandas heterogeneity/summary step, so the
-        # CF inputs land even if that trailing step warns — tolerate a nonzero exit.
-        ${PYTHON} process_blp_outputs.py "${DATA_ROOT}/output" --routines "${ROUTINES_CSV}" \
-            || echo "  (process_blp_outputs.py returned nonzero — verifying .jls in preflight anyway)"
+        echo "── building cluster_processed/ from $(basename "${zip}") (routines ${ROUTINES}) ──"
+        mkdir -p "${CP_DIR}" "${CRAW}"
+        for k in ${ROUTINES}; do
+            src="blp_results_E${k}_spec_12_${CF_STAGE}.jls"
+            unzip -o -j "${zip}" "${src}" "*/${src}" -d "${CRAW}" >/dev/null 2>&1 || true
+            found="${CRAW}/${src}"
+            [[ -f "${found}" ]] || found="$(find "${CRAW}" -name "${src}" 2>/dev/null | head -1)"
+            if [[ -n "${found}" && -f "${found}" ]]; then
+                cp -f "${found}" "${CP_DIR}/blp_E${k}_spec_12.jls"; echo "     E${k} ✓  (${src})"
+            else
+                echo "     E${k} ✗  — ${src} not found in $(basename "${zip}")"
+            fi
+        done
     else
         echo "── no blp_outputs_*.zip under ${DATA_ROOT}/output — cannot auto-build cluster_processed/ (has the RC run finished?)"
     fi
@@ -93,8 +109,9 @@ miss=0
     echo "   → build locally then upload: python cf_forward_rf.py --horizon ${HORIZON} --start 2026Q1"; miss=1; }
 for k in ${ROUTINES}; do
     [[ -f "${CP_DIR}/blp_E${k}_spec_12.jls" ]] || { echo "MISSING RC result: ${CP_DIR}/blp_E${k}_spec_12.jls"; \
-        echo "   → drop the RC blp_outputs_*.zip in ${DATA_ROOT}/output and re-run (auto-built), or:"; \
-        echo "     python process_blp_outputs.py ${DATA_ROOT}/output --routines 5,6,7,8"; miss=1; }
+        echo "   → drop the RC blp_outputs_*.zip in ${DATA_ROOT}/output and re-run (auto-built via unzip+cp),"; \
+        echo "     pin one with BLP_ZIP=<path>, or extract by hand:"; \
+        echo "     unzip -o -j <zip> 'blp_results_E${k}_spec_12_${CF_STAGE}.jls' -d ${CRAW:-${DATA_ROOT}/output/cluster_raw} && cp <...>_extended.jls ${CP_DIR}/blp_E${k}_spec_12.jls"; miss=1; }
 done
 [[ "${miss}" == "0" ]] || { echo "Stage the missing input(s) (runbook §8), then re-run."; exit 1; }
 echo "Preflight OK: R=${R} draws + forward r^f curve + RC results for routines: ${ROUTINES}"
@@ -105,10 +122,16 @@ cf1_extra="--beta ${BETA} --horizon ${HORIZON}"
 
 submit () {  # submit <jobname> <time> <extra-sbatch-args...>
     local name="$1" tlim="$2"; shift 2
-    sbatch --parsable -J "${name}" -t "${tlim}" \
+    # --kill-on-invalid-dep=yes: if an afterok dependency can never be satisfied (an upstream job
+    # FAILED / was cancelled, incl. one array task), cancel this job instead of leaving it pending.
+    sbatch --parsable -J "${name}" -t "${tlim}" --kill-on-invalid-dep=yes \
+        ${PARTITION:+--partition="${PARTITION}"} ${GPUS:+--gpus="${GPUS}"} ${MEM:+--mem="${MEM}"} \
         -o "${LOGDIR}/${name}_%A_%a.out" -e "${LOGDIR}/${name}_%A_%a.err" "$@"
 }
 
+# Per-CF afterany dependency lists (colon-joined job ids) — one auto-zip job per CF is submitted
+# after ALL routines finish, so each <cf>_outputs.zip bundles every estimation in one archive.
+found_dep=""; cf1_dep=""; cf2_dep=""; cf3_dep=""; cf5_dep=""; cf6_dep=""
 first=1
 for k in ${ROUTINES}; do
     base_export="CF_ROUTINE=${k},CF_STAGE=${CF_STAGE},R=${R},SEED=${SEED}"
@@ -117,27 +140,32 @@ for k in ${ROUTINES}; do
     if [[ "${DO_DEMAND_EVAL}" == "1" && "${first}" == "1" ]]; then
         j=$(submit "cf_demaneval_E${k}" "${SOLVE_TIME}" \
             --export=ALL,${base_export},CF_STEP=demand_eval submit_cf.sh)
-        echo "  demand_eval  → job ${j}"
+        echo "  demand_eval  → job ${j}"; found_dep="${found_dep}:${j}"
     fi
     if [[ "${DO_CF1}" == "1" ]]; then
         j=$(submit "cf_cf1_E${k}" "${SHARD_TIME}" \
             --export=ALL,${base_export},CF_STEP=cf1,CF_EXTRA="${cf1_extra}" submit_cf.sh)
-        echo "  cf1          → job ${j}"
+        echo "  cf1          → job ${j}"; cf1_dep="${cf1_dep}:${j}"
     fi
     arr=$(submit "cf_cost2_E${k}" "${SHARD_TIME}" --array=0-$((N_SHARDS-1)) \
         --export=ALL,${base_export},CF_STEP=cost2,N_SHARDS=${N_SHARDS},CF_EXTRA="${cf2_extra}" \
         submit_cf.sh)
     echo "  cost2 array  → job ${arr} (${N_SHARDS} shards)"
-    slv=$(submit "cf_solve_E${k}" "${SOLVE_TIME}" --dependency=afterok:"${arr}" \
+    # cost_solve depends on the cost2 array via afterANY (not afterok): the Eq-18 solve globs
+    # whatever psi_dev shards exist, so a flaky shard doesn't block the routine's costs — it just
+    # solves on the surviving deviations. (If shard 0 failed there's no psi_eq → the solve errors
+    # and its own afterok downstream is cancelled by --kill-on-invalid-dep.)
+    slv=$(submit "cf_solve_E${k}" "${SOLVE_TIME}" --dependency=afterany:"${arr}" \
         --export=ALL,${base_export},CF_STEP=cost_solve,CF_EXTRA="--bootstrap 200" submit_cf.sh)
-    echo "  cost_solve   → job ${slv} (afterok:${arr})"
+    echo "  cost_solve   → job ${slv} (afterany:${arr})"
+    cf2_dep="${cf2_dep}:${slv}"     # cost_solve implies the array is done → covers psi_* + cost_params
 
     # Equilibrium CFs — each runs only after this routine's costs are solved.
     eq_extra="--beta ${BETA} --horizon ${HORIZON}"
     if [[ "${DO_CF1NET}" == "1" ]]; then
         j=$(submit "cf_cf1net_E${k}" "${SOLVE_TIME}" --dependency=afterok:"${slv}" \
             --export=ALL,${base_export},CF_STEP=cf1_net,CF_EXTRA="${eq_extra}" submit_cf.sh)
-        echo "  cf1_net      → job ${j} (afterok:${slv})"
+        echo "  cf1_net      → job ${j} (afterok:${slv})"; cf1_dep="${cf1_dep}:${j}"   # net → same cf1 archive
     fi
     for step in cf3 cf5 cf6; do
         flag="DO_$(echo ${step} | tr a-z A-Z)"          # DO_CF3 / DO_CF5 / DO_CF6
@@ -145,9 +173,32 @@ for k in ${ROUTINES}; do
             j=$(submit "cf_${step}_E${k}" "${EQ_TIME}" --dependency=afterok:"${slv}" \
                 --export=ALL,${base_export},CF_STEP=${step},CF_EXTRA="${eq_extra} ${CF_EQ_EXTRA:-}" submit_cf.sh)
             echo "  ${step}          → job ${j} (afterok:${slv})"
+            case "${step}" in cf3) cf3_dep="${cf3_dep}:${j}";; cf5) cf5_dep="${cf5_dep}:${j}";; cf6) cf6_dep="${cf6_dep}:${j}";; esac
         fi
     done
     first=0
 done
+
+# ── Step 4: auto-zip each CF's outputs (one archive per CF, across all estimations) ──
+# A light CPU job runs afterANY the CF's work (so a partial CF still gets archived), calling
+# zip_cf_outputs.sh, which MOVES the outputs into data/CF_ZIPS/<cf>_outputs.zip (flock-serialized).
+DO_ZIP="${DO_ZIP:-1}"
+zip_after () {  # zip_after <cf> <colon-joined-deps>
+    local cf="$1" deps="$2"
+    [[ "${DO_ZIP}" == "1" && -n "${deps}" ]] || return 0
+    local zj
+    zj=$(sbatch --parsable -J "cf_zip_${cf}" -t 00:30:00 --kill-on-invalid-dep=yes \
+        --partition="${PARTITION:-day}" --mem=4G --dependency=afterany"${deps}" \
+        -o "${LOGDIR}/cf_zip_${cf}_%j.out" -e "${LOGDIR}/cf_zip_${cf}_%j.err" \
+        --export=ALL,CF_STEP=zip,CF_WHICH=${cf},CF_STAGE=${CF_STAGE},DATA_ROOT=${DATA_ROOT} submit_cf.sh)
+    echo "  zip ${cf}    → job ${zj} (afterany${deps})"
+}
+echo "── auto-zip (data/CF_ZIPS/<cf>_outputs.zip, afterany each CF) ──"
+zip_after foundation "${found_dep}"
+zip_after cf1 "${cf1_dep}"
+zip_after cf2 "${cf2_dep}"
+zip_after cf3 "${cf3_dep}"
+zip_after cf5 "${cf5_dep}"
+zip_after cf6 "${cf6_dep}"
 
 echo "Submitted CFs for routines: ${ROUTINES}. Watch with: squeue -u \$USER"

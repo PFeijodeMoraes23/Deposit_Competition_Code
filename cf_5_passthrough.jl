@@ -24,16 +24,42 @@ include(joinpath(@__DIR__, "cf_3_equilibrium_spreads.jl"))
 using Printf, Statistics
 
 # Total deposits at a given equilibrium spread vector (last-period stock), reusing the sim.
-function _total_deposits(P, σ; T)
-    sim = simulate_deposits(P.ctx, P.st; T=T, spreads_ann=σ, rf_path_q=P.rf)
+function _total_deposits(P, σ; T, rf=P.rf)
+    sim = simulate_deposits(P.ctx, P.st; T=T, spreads_ann=σ, rf_path_q=rf)
     return sum(@view sim.Dep[:, end])
+end
+
+"""CF5 compare: read the base + Selic-shocked equilibria (σ solved by the cluster Jacobi) and
+report the pass-through, without re-solving. `P` is the base context; the shocked deposits use
+the shocked r^f."""
+function cf5_compare(a)
+    shock = a["selic-shock"] == 0.0 ? 0.01 : a["selic-shock"]
+    a0 = copy(a); a0["selic-shock"] = 0.0
+    P = cf3_setup(a0)
+    σ0 = _read_sigma(a["sigma-base"]); σ1 = _read_sigma(a["sigma-scn"])
+    (length(σ0) == nrow(P.ctx.df) && length(σ1) == nrow(P.ctx.df)) || error("σ length ≠ N")
+    Δq = (1.0 + shock)^0.25 - 1.0
+    endog = P.st.endog
+    dσ = (σ1[endog] .- σ0[endog]) ./ shock
+    dep0 = _total_deposits(P, σ0; T=a["horizon"])
+    dep1 = _total_deposits(P, σ1; T=a["horizon"], rf=P.rf .+ Δq)
+    @printf("\n  === CF5 monetary pass-through (Selic +%.3g) ===\n", shock)
+    @printf("  ∂ρ*/∂Selic on k∈{4,5}:  mean=%.4g  median=%.4g\n", mean(dσ), median(dσ))
+    @printf("  ΣDep: base=%.4g  shock=%.4g  ∂Dep/∂Selic=%.4g\n", dep0, dep1, (dep1 - dep0) / shock)
+    df = DataFrame(CodConglomeradoPrudencial=string.(P.ctx.df.CodConglomeradoPrudencial),
+                   deposit_type=P.st.dep_type, endog=endog, sigma_base=σ0, sigma_shock=σ1)
+    cf_dir = joinpath(dirname(P.out_dir), "CF_FOUNDATION"); mkpath(cf_dir)
+    Parquet2.writefile(joinpath(cf_dir, "cf5_passthrough_$(P.tag).parquet"), df)
+    log_status("  [CF5] wrote cf5_passthrough_$(P.tag).parquet")
 end
 
 function main_cf5()
     a = _parse_cf3_args()   # shared CF3 CLI (includes --selic-shock)
-    shock = a["selic-shock"]
+    a["compare"] && return cf5_compare(a)   # cluster: combine two solved equilibria
+    shock = a["selic-shock"] == 0.0 ? 0.01 : a["selic-shock"]   # descriptive default
     scheme = Symbol(replace(a["fixed-point"], "-" => "_") == "gauss_seidel" ? :gauss_seidel : :jacobi)
-    P = cf3_setup(a)
+    a0 = copy(a); a0["selic-shock"] = 0.0        # build the BASE r^f here; we apply the shock below
+    P = cf3_setup(a0)
     Δq = (1.0 + shock)^0.25 - 1.0    # annual Selic shock → quarterly r^f increment
     log_status("  [CF5] Selic shock $(shock) (annual) → Δr^f_q=$(round(Δq, sigdigits=3)) | box [$(round(P.lo,sigdigits=3)),$(round(P.hi,sigdigits=3))]")
 
