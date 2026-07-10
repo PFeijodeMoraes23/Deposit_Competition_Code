@@ -55,13 +55,22 @@ Outputs `CF_FOUNDATION/shares_elas_E{estim}_spec_{spec}_{stage}{suffix}.parquet`
 # no-GPU machine (verified), where CUDA.functional()==false and we fall back to the CPU
 # share path. So the share computation runs on the H200 on the cluster and on CPU on a laptop.
 include(joinpath(@__DIR__, "blp_1_estimation.jl"))
-include(joinpath(@__DIR__, "blp_gpu_engine.jl"))
 
 using Parquet2, DataFrames, Serialization, Statistics, LinearAlgebra, ArgParse
-import CUDA
 
-# Use the GPU share kernel only when a GPU is actually present AND the CF opts in (CF_GPU!=0).
-const _CF_USE_GPU = (get(ENV, "CF_GPU", "1") != "0") && (try CUDA.functional() catch; false end)
+# Load CUDA + the GPU share engine ONLY when the CF opts in (CF_GPU!=0). CPU-only steps (cost2,
+# cost_solve, cf1, the Jacobi init/merge) set CF_GPU=0 so they never import CUDA — critical on the
+# cluster, where many concurrent CPU jobs sharing one NFS depot would otherwise stampede the Julia
+# precompile/load lock just to load a package they don't use. (blp_gpu_engine re-includes blp_1
+# under a guard, so no double-include.)
+const _CF_GPU_REQUESTED = get(ENV, "CF_GPU", "1") != "0"
+if _CF_GPU_REQUESTED
+    include(joinpath(@__DIR__, "blp_gpu_engine.jl"))
+    import CUDA
+end
+# Use the GPU share kernel only when opted in AND a GPU is actually present. The `&&` short-circuits,
+# so CUDA is never referenced when CF_GPU=0 (and thus need not be imported).
+const _CF_USE_GPU = _CF_GPU_REQUESTED && (try CUDA.functional() catch; false end)
 
 # ==========================================================================
 # Context: everything needed to evaluate (counterfactual) shares
@@ -86,7 +95,7 @@ struct CFDemandCtx
     delta_hat      ::Vector{Float64}
     rho_hat        ::Vector{Float64}      # in-sample spread (= prod_vec[:,1])
     alpha          ::Float64              # θ̂₁[1], mean spread coefficient
-    gbuf           ::Union{Nothing,GpuBuffers}   # GPU share buffers (nothing ⇒ CPU share path)
+    gbuf           ::Any                          # GPU share buffers (nothing ⇒ CPU share path; typed Any so the struct loads without CUDA when CF_GPU=0)
 end
 
 """

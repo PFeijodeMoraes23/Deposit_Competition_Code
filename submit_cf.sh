@@ -50,6 +50,13 @@ export JULIA_DEPOT_PATH="${SLURM_SUBMIT_DIR}/.julia_depot:${JULIA_DEPOT_PATH:-}"
 PROJECT_DIR="${SLURM_SUBMIT_DIR}"
 mkdir -p "${PROJECT_DIR}/logs"
 
+# GPU share kernel: load CUDA ONLY for the sharded best-response (cf3_shard — the GPU workhorse).
+# Every other step is CPU-only; keep CUDA out of them so many concurrent jobs on the shared NFS
+# depot don't stampede the Julia precompile/load lock loading a package they never use. Override
+# per-run with CF_GPU=1/0 if you deliberately want a GPU (or not) for a given step.
+case "${CF_STEP}" in cf3_shard) : "${CF_GPU:=1}" ;; *) : "${CF_GPU:=0}" ;; esac
+export CF_GPU
+
 echo "======================================"
 echo " CF pipeline | step=${CF_STEP} | E${CF_ROUTINE} | stage=${CF_STAGE}"
 echo " R=${R} seed=${SEED} threads=${SLURM_CPUS_PER_TASK} | $(date)"
@@ -65,6 +72,14 @@ run_julia () {
 }
 
 case "${CF_STEP}" in
+    warmup)       # Serially precompile the depot + JIT-load the CF stack ONCE, so the parallel
+                  # cost2 array + cf1 don't stampede the shared-NFS depot precompile/load lock (the
+                  # cause of jobs sitting at 0% CPU for an hour). Everything else depends on this.
+        echo "Precompiling depot…"; julia --project="${PROJECT_DIR}" -e 'using Pkg; Pkg.instantiate(); Pkg.precompile()'
+        echo "Loading the CF stack (CF_GPU=${CF_GPU})…"
+        julia --project="${PROJECT_DIR}" --threads="${SLURM_CPUS_PER_TASK}" \
+            -e 'include(joinpath(ENV["SLURM_SUBMIT_DIR"], "cf_0_demand_eval.jl"))' || true
+        echo "warmup complete: depot precompiled + CF stack loaded — array can launch warm" ;;
     demand_eval)  # 0a: reproduce in-sample shares + export shares_elas parquet
         echo "Julia packages check:"; julia --project="${PROJECT_DIR}" -e 'using Pkg; Pkg.instantiate(); Pkg.precompile()'
         run_julia cf_0_demand_eval.jl ;;

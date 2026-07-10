@@ -129,6 +129,20 @@ submit () {  # submit <jobname> <time> <extra-sbatch-args...>
         -o "${LOGDIR}/${name}_%A_%a.out" -e "${LOGDIR}/${name}_%A_%a.err" "$@"
 }
 
+# ── Pre-warm barrier ──────────────────────────────────────────────────────────
+# Many Julia processes starting cold against ONE shared NFS depot stampede its precompile/load
+# lock — they sit at 0% CPU for a long time. So precompile the depot ONCE (serial job), and make
+# demand_eval / cf1 / cost2 all wait on it (afterok): they then load a warm cache with no lock
+# fight. DO_WARMUP=0 to skip; ARRAY_THROTTLE=N caps concurrent cost2 tasks (belt-and-suspenders).
+warm_dep=""
+if [[ "${DO_WARMUP:-1}" == "1" ]]; then
+    wj=$(submit "cf_warmup" "${SOLVE_TIME}" \
+        --export=ALL,CF_ROUTINE=${ROUTINES%% *},CF_STAGE=${CF_STAGE},R=${R},SEED=${SEED},CF_STEP=warmup submit_cf.sh)
+    echo "── pre-warm depot → job ${wj} (demand_eval/cf1/cost2 wait on it) ──"
+    warm_dep="--dependency=afterok:${wj}"
+fi
+THROTTLE="${ARRAY_THROTTLE:+%${ARRAY_THROTTLE}}"
+
 # Per-CF afterany dependency lists (colon-joined job ids) — one auto-zip job per CF is submitted
 # after ALL routines finish, so each <cf>_outputs.zip bundles every estimation in one archive.
 found_dep=""; cf1_dep=""; cf2_dep=""; cf3_dep=""; cf5_dep=""; cf6_dep=""
@@ -136,21 +150,21 @@ first=1
 for k in ${ROUTINES}; do
     base_export="CF_ROUTINE=${k},CF_STAGE=${CF_STAGE},R=${R},SEED=${SEED}"
     echo "── E${k} ${CF_STAGE} | R=${R} | shocks=${SHOCKS} over ${N_SHARDS} shards ──"
-    # demand_eval runs once (first routine) — it also Pkg.instantiate/precompiles the depot.
+    # demand_eval runs once (first routine); it waits on the warmup so the cache is already built.
     if [[ "${DO_DEMAND_EVAL}" == "1" && "${first}" == "1" ]]; then
-        j=$(submit "cf_demaneval_E${k}" "${SOLVE_TIME}" \
+        j=$(submit "cf_demaneval_E${k}" "${SOLVE_TIME}" ${warm_dep} \
             --export=ALL,${base_export},CF_STEP=demand_eval submit_cf.sh)
         echo "  demand_eval  → job ${j}"; found_dep="${found_dep}:${j}"
     fi
     if [[ "${DO_CF1}" == "1" ]]; then
-        j=$(submit "cf_cf1_E${k}" "${SHARD_TIME}" \
+        j=$(submit "cf_cf1_E${k}" "${SHARD_TIME}" ${warm_dep} \
             --export=ALL,${base_export},CF_STEP=cf1,CF_EXTRA="${cf1_extra}" submit_cf.sh)
         echo "  cf1          → job ${j}"; cf1_dep="${cf1_dep}:${j}"
     fi
-    arr=$(submit "cf_cost2_E${k}" "${SHARD_TIME}" --array=0-$((N_SHARDS-1)) \
+    arr=$(submit "cf_cost2_E${k}" "${SHARD_TIME}" ${warm_dep} --array=0-$((N_SHARDS-1))${THROTTLE} \
         --export=ALL,${base_export},CF_STEP=cost2,N_SHARDS=${N_SHARDS},CF_EXTRA="${cf2_extra}" \
         submit_cf.sh)
-    echo "  cost2 array  → job ${arr} (${N_SHARDS} shards)"
+    echo "  cost2 array  → job ${arr} (${N_SHARDS} shards${THROTTLE:+, throttled ${THROTTLE}})"
     # cost_solve depends on the cost2 array via afterANY (not afterok): the Eq-18 solve globs
     # whatever psi_dev shards exist, so a flaky shard doesn't block the routine's costs — it just
     # solves on the surviving deviations. (If shard 0 failed there's no psi_eq → the solve errors

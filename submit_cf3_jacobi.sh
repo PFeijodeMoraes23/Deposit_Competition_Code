@@ -50,12 +50,22 @@ sub () { local n="$1" t="$2"; shift 2
     sbatch --parsable -J "${n}" -t "${t}" --kill-on-invalid-dep=yes ${MEM:+--mem="${MEM}"} \
         -o "${LOGDIR}/${n}_%A_%a.out" -e "${LOGDIR}/${n}_%A_%a.err" "$@"; }
 
-j=$(sub cf3init_E${CF_ROUTINE} "${MERGE_TIME}" "${CPU_SB[@]}" \
+# GPU pre-warm: precompile/load the CUDA share path ONCE on a GPU node, so the N_FIRM_SHARDS shard
+# tasks don't stampede the shared-NFS depot lock loading CUDA cold (the same 0%-CPU stall the CPU
+# chain hit). init waits on it → the shards, which wait on init, start warm. DO_WARMUP=0 to skip.
+warm_dep=""
+if [[ "${DO_WARMUP:-1}" == "1" ]]; then
+    wj=$(sub cf3warm_E${CF_ROUTINE} "${WARM_TIME:-01:00:00}" "${GPU_SB[@]}" \
+        --export=ALL,CF_ROUTINE=${CF_ROUTINE},CF_STAGE=${CF_STAGE},R=${R},SEED=${SEED},CF_STEP=warmup,CF_GPU=1 submit_cf.sh)
+    echo "  GPU warmup → ${wj} (${GPU_PARTITION}; init/shards wait on it)"
+    warm_dep="--dependency=afterok:${wj}"
+fi
+j=$(sub cf3init_E${CF_ROUTINE} "${MERGE_TIME}" "${CPU_SB[@]}" ${warm_dep} \
     --export=ALL,${base},CF_STEP=cf3_init,CF_EXTRA="${eq}" submit_cf.sh)
 echo "  init σ⁰ → ${j} (${CPU_PARTITION})"
 prev="${j}"
 for s in $(seq 1 "${N_SWEEPS}"); do
-    arr=$(sub "cf3sw${s}_E${CF_ROUTINE}" "${SHARD_TIME}" --array=0-$((N_FIRM_SHARDS-1)) \
+    arr=$(sub "cf3sw${s}_E${CF_ROUTINE}" "${SHARD_TIME}" --array=0-$((N_FIRM_SHARDS-1))${SHARD_THROTTLE:+%${SHARD_THROTTLE}} \
         "${GPU_SB[@]}" --dependency=afterok:"${prev}" \
         --export=ALL,${base},SWEEP=${s},CF_STEP=cf3_shard,CF_EXTRA="${eq}" submit_cf.sh)
     mrg=$(sub "cf3mg${s}_E${CF_ROUTINE}" "${MERGE_TIME}" "${CPU_SB[@]}" --dependency=afterok:"${arr}" \
