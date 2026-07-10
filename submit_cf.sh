@@ -86,8 +86,22 @@ case "${CF_STEP}" in
         SHARD_ID="${SLURM_ARRAY_TASK_ID:-${SHARD_ID:-0}}"
         N_SHARDS="${N_SHARDS:-1}"
         run_julia cost_2_fwd_sim.jl --n-shards "${N_SHARDS}" --shard-id "${SHARD_ID}" ;;
-    cost_solve)   # CF2 part 2: Eq-18 minimization (Python; light, CPU)
-        python "${PROJECT_DIR}/estimation_1_cost_3_solve.py" \
+    cost_solve)   # CF2 part 2: Eq-18 minimization (Python; needs numpy/pandas/scipy, light, CPU).
+        # Compute nodes have no bare `python`; load a Python env. Configure for your cluster via env:
+        #   PY_MODULE=miniconda   module(s) to load (space-list ok)
+        #   CONDA_ENV=<name>      conda env to activate (must have numpy/pandas/scipy)
+        #   CF_PYTHON=python      interpreter to call (default python3)
+        # One-time setup example:  module load miniconda && conda create -y -n costsolve numpy pandas scipy
+        [[ -n "${PY_MODULE:-}" ]] && module load ${PY_MODULE}
+        if [[ -n "${CONDA_ENV:-}" ]]; then
+            source activate "${CONDA_ENV}" 2>/dev/null || conda activate "${CONDA_ENV}"
+        fi
+        PYBIN="${CF_PYTHON:-python3}"
+        command -v "${PYBIN}" >/dev/null 2>&1 || {
+            echo "ERROR: Python '${PYBIN}' not found on the node. Set PY_MODULE / CONDA_ENV / CF_PYTHON" >&2
+            echo "  e.g.  PY_MODULE=miniconda CONDA_ENV=costsolve ROUTINES=7 bash submit_cf_all.sh" >&2
+            exit 127; }
+        "${PYBIN}" "${PROJECT_DIR}/estimation_1_cost_3_solve.py" \
             --estim "${CF_ROUTINE}" --spec 12 --stage "${CF_STAGE}" \
             ${CF_EXTRA} ;;
     cf1_net)      # CF1 net-of-cost franchise value — needs cost_solve output (cost_params_*.json)
