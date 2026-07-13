@@ -57,6 +57,7 @@ except Exception:
 # 0. Global Paths and Parameters
 # ==============================================================================
 from utils import paths
+from estimation_demand_link_common import build_market_size_and_shares
 _ROOT = Path(__file__).resolve().parents[2]
 DATA_DIR = paths.PROCESSED
 _PANEL_WITH_FEES = DATA_DIR / "market_panel_with_fees.csv"
@@ -85,7 +86,10 @@ IV_FEE = [
     'tarifa_stickiness_yrs',
     'tarifa_stickiness_n',
 ]
+# CF2 needs the bank's ASSET return r^j (V_Main eq 16, ψ1 row) — see counterfactuals_plan.md §9.4.
+CF_COST_COLS = ['asset_gross_return_lag', 'asset_return_imputed']
 EXTRA_KEEP_COLS = (X_COLS + D_COLS + IV_BLP_LOO + IV_COST + IV_CAPITAL + IV_FEE
+                   + CF_COST_COLS
                    + ['segment', 'spread_qoq', 'spread_ann'])
 
 def _resolve_runtime_paths() -> tuple[Path, Path, Path]:
@@ -223,10 +227,11 @@ def build_base_panel(panel_csv: Path) -> pd.DataFrame:
     if BANKED_CSV.exists():
         banked = pd.read_csv(
             BANKED_CSV,
-            usecols=['mca_code', 'year', 'banked_correction'],
+            usecols=['mca_code', 'year', 'banked_correction', 'findex_banked_frac'],
             dtype={'mca_code': str, 'year': int},
         )
-        banked['banked_correction'] = pd.to_numeric(banked['banked_correction'], errors='coerce')
+        for _c in ('banked_correction', 'findex_banked_frac'):
+            banked[_c] = pd.to_numeric(banked[_c], errors='coerce')
         df = df.merge(banked, on=['mca_code', 'year'], how='left')
     else:
         logging.warning(f"Banked correction panel not found at {BANKED_CSV}; fallback 1.1 used.")
@@ -306,60 +311,11 @@ def process_specification(args):
     df_spec = df_spec.dropna(subset=['Dep_Act'])
     df_spec = df_spec[df_spec['Dep_Act'] > 1e-6]
 
-    FALLBACK_BC = 1.1
-    df_spec['_bc'] = df_spec['banked_correction'].fillna(FALLBACK_BC)
-
-    mkt = df_spec.groupby(['mca_code', 'time_id']).agg(
-        _pop=('pop_total', 'first'),
-        _bc_mt=('_bc', 'first'),
-    )
-
-    b_dep_mt = (df_spec[df_spec['is_B']]
-                .groupby(['mca_code', 'time_id'])['Dep_Act'].sum()
-                .rename('_dep_B'))
-    mkt = mkt.join(b_dep_mt, how='left').fillna({'_dep_B': 0.0})
-    local_ratio = (mkt['_dep_B'] / mkt['_pop']).replace([np.inf, -np.inf], np.nan)
-    max_local = local_ratio.max() if local_ratio.notna().any() else 0.0
-
-    all_dep_t = df_spec.groupby('time_id')['Dep_Act'].sum()
-    nat_pop_t = mkt.groupby('time_id')['_pop'].sum()
-    nat_ratio = (all_dep_t / nat_pop_t).replace([np.inf, -np.inf], np.nan)
-    max_nat = nat_ratio.max() if nat_ratio.notna().any() else 0.0
-
-    max_ratio = max(max_local, max_nat)
-    if max_ratio <= 0:
-        max_ratio = 1.0
-
-    mkt['_b_mkt'] = mkt['_bc_mt'] * max_ratio * mkt['_pop']
-    df_spec = df_spec.merge(
-        mkt[['_b_mkt']].reset_index(),
-        on=['mca_code', 'time_id'], how='left',
-    )
-
-    mkt_r = mkt.reset_index()
-    mkt_r['_w'] = mkt_r['_bc_mt'] * mkt_r['_pop']
-    nat_dbar = (
-        mkt_r.groupby('time_id')
-             .apply(lambda g: (g['_w'].sum() / g['_pop'].sum()) * max_ratio
-                    if g['_pop'].sum() > 0 else FALLBACK_BC * max_ratio,
-                    include_groups=False)
-             .rename('_dbar_nat')
-    )
-    nat_pop = mkt_r.groupby('time_id')['_pop'].sum().rename('_pop_nat')
-    d_mkt = (nat_dbar * nat_pop).rename('_d_mkt').reset_index()
-    df_spec = df_spec.merge(d_mkt, on='time_id', how='left')
-
-    df_spec['share_B_cond'] = np.where(
-        df_spec['is_B'],
-        df_spec['Dep_Act'] / df_spec['_b_mkt'],
-        np.nan,
-    )
-    df_spec['share_D'] = np.where(
-        ~df_spec['is_B'],
-        df_spec['Dep_Act'] / df_spec['_d_mkt'],
-        np.nan,
-    )
-    df_spec.drop(columns=['_b_mkt', '_d_mkt', '_bc'], inplace=True)
+    # Market size M_mt / M_nat and the shares of ACTIVE depositors.
+    # SHARED implementation — see estimation_demand_link_common.build_market_size_and_shares()
+    # and counterfactuals_plan.md §0. This block used to be copy-pasted here, which is exactly
+    # how the (1-phi), anchor and bc defects survived: a fix in one copy never reached the others.
+    df_spec = build_market_size_and_shares(df_spec)
 
     SPEC_MAP = {
         'OLS x Base': 1, 'IV_CostShifters x Base': 2, 'IV_Wholesale x Base': 3, 'IV_HausmanFull x Base': 4,

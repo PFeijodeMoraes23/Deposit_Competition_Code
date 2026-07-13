@@ -9,6 +9,10 @@
 #            estimation/run of that CF APPENDS into ONE archive (zip -m updates same-named
 #            entries). Pass a tag only to keep a separate snapshot (<cf>_outputs_<tag>.zip).
 #   Env: SPEC=12  DATA_ROOT=<...>/data  OUT_DIR=<...>/CF_ZIPS  DRYRUN=1 (list only, don't zip/move)
+#        KEEP=1 → COPY mode: archive + verify but do NOT delete the originals. Use this to make a
+#        downloadable bundle while the pipeline is still running — the equilibrium CFs (CF3/CF5/CF6)
+#        still need cost_params_E*.json and CF3's sig_*.parquet on disk. Move mode is only safe once
+#        the whole chain is finished (that's what zip_all_cf.sh does at the end).
 #
 # Archive → ${OUT_DIR}/<cf>_outputs[_<tag>].zip, paths relative to data/ (CF_FOUNDATION/…,
 # COST_FWD/…). Concurrent appends (several estimations' zip jobs → one archive) are serialized
@@ -60,19 +64,24 @@ done
 _add () { zip -q "${ZIP}" "$@" 2>/dev/null || true; }
 # Add → confirm-in-archive → delete only what landed; re-add anything skipped (a zip build can drop
 # an entry that is momentarily read-locked). On a settled tree the first pass takes everything.
+KEEP="${KEEP:-0}"          # 1 = copy mode: archive + verify, keep the originals on disk
 remaining=("${files[@]}"); tries=0
 while ((${#remaining[@]})); do
     if command -v flock >/dev/null 2>&1; then ( flock 9; _add "${remaining[@]}" ) 9>"${OUT_DIR}/.${CF}.ziplock"
     else _add "${remaining[@]}"; fi
     declare -A have=(); while IFS= read -r n; do have["${n}"]=1; done < <(unzip -Z1 "${ZIP}" 2>/dev/null)
-    ng=(); for f in "${remaining[@]}"; do [[ -n "${have[${f}]:-}" ]] && rm -f "${f}" || ng+=("${f}"); done
+    ng=(); for f in "${remaining[@]}"; do
+        if [[ -n "${have[${f}]:-}" ]]; then [[ "${KEEP}" == "1" ]] || rm -f "${f}"   # confirmed in archive
+        else ng+=("${f}"); fi                                                        # missed → retry
+    done
     unset have; remaining=("${ng[@]}")
     ((${#remaining[@]} == 0)) && break
     ((++tries >= 4)) && break
 done
-for p in "${paths[@]}"; do [[ -d "${p}" ]] && find "${p}" -type d -empty -delete 2>/dev/null || true; done
+[[ "${KEEP}" == "1" ]] || for p in "${paths[@]}"; do [[ -d "${p}" ]] && find "${p}" -type d -empty -delete 2>/dev/null || true; done
 if ((${#remaining[@]})); then
     echo "WARNING: ${#remaining[@]} file(s) failed to archive after ${tries} retries — NOT deleted; re-run 'zip_cf_outputs.sh ${CF}':" >&2
     printf '  %s\n' "${remaining[@]}" >&2
 fi
-echo "Archived + removed originals. $(unzip -l "${ZIP}" | tail -1)"
+if [[ "${KEEP}" == "1" ]]; then echo "Archived (COPY — originals kept on disk). $(unzip -l "${ZIP}" | tail -1)"
+else echo "Archived + removed originals. $(unzip -l "${ZIP}" | tail -1)"; fi

@@ -193,20 +193,32 @@ def build_panel() -> pd.DataFrame:
     for col in ['total_assets', 'equity']:
         if col not in p1.columns: p1[col] = np.nan
 
-    # 2. Asset quality (Ativo) — NPL provision
-    p2 = load_and_pivot(2, {78192: 'npl_provision'})
+    # 2. Asset quality (Ativo) — NPL provision + the EARNING-ASSET stocks.
+    #    The earning-asset stocks feed the bank's asset return r^j (V_Main eq 16, ψ1 row): the
+    #    return on what deposits actually fund. Disponibilidades (78188) is deliberately EXCLUDED
+    #    — it is non-earning cash. Compulsórios are not broken out separately in IF-Data's condensed
+    #    Ativo; they sit inside the asset base earning little, so the realized yield below is already
+    #    reserve-drag-adjusted (see counterfactuals_plan.md §9.4).
+    p2 = load_and_pivot(2, {
+        78192: 'npl_provision',
+        78189: 'aplic_interfin',   # Aplicacoes Interfinanceiras de Liquidez
+        78190: 'tvm',              # TVM e Instrumentos Financeiros Derivativos
+        78193: 'credit_net',       # Operacoes de Credito Liquidas de Provisao
+        78198: 'leasing_net',      # Arrendamento Mercantil Liquido de Provisao
+    })
 
     # 3. Wholesale (Passivo)
     p3 = load_and_pivot(3, {
-        78288: 'repos', 78289: 'lci', 78290: 'lca', 
+        78288: 'repos', 78289: 'lci', 78290: 'lca',
         78291: 'letras_financeiras', 78295: 'emprestimos_repasses'
     })
 
-    # 4. Costs (DRE)
+    # 4. Costs + financial income (DRE)
     p4 = load_and_pivot(4, {
         78218: 'personnel_expenses',
-        78219: 'admin_expenses', 
-        78220: 'tax_expenses'
+        78219: 'admin_expenses',
+        78220: 'tax_expenses',
+        78208: 'fin_income',       # Receitas de Intermediacao Financeira (= credit + TVM + deriv + ...)
     })
 
     # 5. Capital (Informacoes de Capital)
@@ -222,8 +234,11 @@ def build_panel() -> pd.DataFrame:
     panel.sort_values(['CodConglomeradoPrudencial', 'Year', 'Quarter'], inplace=True)
 
     # Note: IF Data DRE is reported cumulatively by year. Standardize to quarter flows.
+    # fin_income is a DRE flow too — it accumulates within the calendar year exactly like the
+    # expense lines, so it MUST go through the same differencing or the asset yield is nonsense
+    # (Q4 would carry four quarters of income against one quarter of assets).
     if not p4.empty:
-        for cost_col in ['personnel_expenses', 'admin_expenses', 'tax_expenses']:
+        for cost_col in ['personnel_expenses', 'admin_expenses', 'tax_expenses', 'fin_income']:
             if cost_col in panel.columns:
                 panel[cost_col] = panel[cost_col].fillna(0)
                 # Group differencing by Conglomerate-Year
@@ -272,6 +287,36 @@ def build_panel() -> pd.DataFrame:
     else:
         panel['indice_basileia'] = np.nan
 
+    # ── ASSET RETURN r^j (V_Main eq 16, ψ1 row) ─────────────────────────────────────────────
+    # The return the bank earns on the assets its deposits fund. CF2 needs (r^j − r^f); with r^j
+    # left at 0 the deposit franchise is worth only (ρ − c) and eq-18 can only rationalise the
+    # observed spreads with a NEGATIVE marginal cost (see counterfactuals_plan.md §9.4).
+    #
+    # Realized portfolio yield = quarterly financial income ÷ LAGGED earning assets. Dividing by
+    # the lagged stock mirrors the deposit implicit-rate convention (expense ÷ lagged stock) and
+    # keeps the flow/stock timing honest. Because compulsórios sit inside the asset base earning
+    # little, this realized yield is already reserve-drag ("compulsório") adjusted.
+    ea_cols = [c for c in ['aplic_interfin', 'tvm', 'credit_net', 'leasing_net'] if c in panel.columns]
+    if ea_cols and 'fin_income' in panel.columns:
+        panel['earning_assets'] = panel[ea_cols].sum(axis=1, min_count=1)
+        ea_lag = panel.groupby('CodConglomeradoPrudencial')['earning_assets'].shift(1)
+        ea_lag = ea_lag.where(ea_lag > 0)                      # guard: no yield off a zero/neg base
+        # The DRE differencing above fillna(0)s missing flows. A bank with NO reported income would
+        # then get r^j = 0 and hence an asset margin of −r^f (≈ −10.5pp/yr) — reintroducing exactly
+        # the pathology this column exists to remove. So only trust a strictly positive income, and
+        # impute the rest from the cross-sectional median for that quarter (r^j is a bank
+        # characteristic; the quarter median is the natural fallback and keeps the sign right).
+        raw = panel['fin_income'].where(panel['fin_income'] > 0) / ea_lag
+        raw = raw.replace([np.inf, -np.inf], np.nan)
+        raw = raw.where((raw > 0) & (raw < 0.5))               # drop absurd yields (>50%/quarter)
+        med_by_q = raw.groupby([panel['Year'], panel['Quarter']]).transform('median')
+        panel['asset_return_qoq'] = raw.fillna(med_by_q).fillna(raw.median())
+        panel['asset_return_imputed'] = raw.isna().astype(int)
+    else:
+        panel['earning_assets'] = np.nan
+        panel['asset_return_qoq'] = np.nan
+        panel['asset_return_imputed'] = 1
+
     # Override has_ip using IF-Data List files, which include Payment Institutions.
     # The Prudential Conglomerate report (Report 1) never lists IPs, so has_ip from
     # the pivot above is always 0. List files are the authoritative source.
@@ -289,10 +334,17 @@ def build_panel() -> pd.DataFrame:
     lag_cols = ['total_assets', 'equity', 'equity_ratio', 'log_total_assets',
                 'lci_lca_ratio', 'wholesale_ratio', 'indice_basileia',
                 'personnel_cost_ratio', 'admin_cost_ratio', 'tax_cost_ratio',
-                'npl_provision_ratio']
-    
+                'npl_provision_ratio', 'asset_return_qoq']
+
     present_lag_cols = [c for c in lag_cols if c in panel.columns]
     panel[[c + '_lag' for c in present_lag_cols]] = panel.groupby('CodConglomeradoPrudencial')[present_lag_cols].shift(1)
+
+    # Gross factor for the Julia consumer (cost_2_fwd_sim.jl --asset-return-col), which does
+    #     gr = col − 1 ;  asset_ret = gr − risk_free_qoq_lag
+    # so this must be 1 + a LAGGED quarterly DECIMAL rate — the same vintage and units as
+    # gross_return_lag = 1 + deposit_rate_lag (≈1.0126) and risk_free_qoq_lag (≈0.0253).
+    if 'asset_return_qoq_lag' in panel.columns:
+        panel['asset_gross_return_lag'] = 1.0 + panel['asset_return_qoq_lag']
 
     panel.rename(columns={'Year': 'year', 'Quarter': 'quarter'}, inplace=True)
     return panel

@@ -36,11 +36,15 @@ Usage:
   python estimation_1_cost_3_solve.py --estim 6 --spec 12 --stage extended \\
       --bootstrap 200
 """
-from utils.venv_guard import ensure_project_venv
-ensure_project_venv(__file__)
+try:
+    from utils.venv_guard import ensure_project_venv
+    ensure_project_venv(__file__)
+except ModuleNotFoundError:
+    pass  # utils/ is a local-dev convenience (re-exec into the Windows .venv); absent + a no-op on the cluster
 
 import argparse
 import json
+import os
 from pathlib import Path
 
 import numpy as np
@@ -48,7 +52,11 @@ import pandas as pd
 from scipy.optimize import minimize
 
 _ROOT = Path(__file__).resolve().parents[2]
-COST_FWD = _ROOT / "BCB" / "Egan_et_al_2025_Rep" / "processed" / "ESTIMATION_OUTPUT" / "COST_FWD"
+# COST_FWD holds the ψ parquets (from cost_2_fwd_sim) + the cost_params json. Default is the local
+# processed-data layout; on the cluster the Julia writes them to data/COST_FWD, so set CF_COST_FWD
+# to that path (submit_cf.sh does this) — the script's own dir doesn't contain the BCB tree there.
+COST_FWD = Path(os.environ.get("CF_COST_FWD") or
+                _ROOT / "BCB" / "Egan_et_al_2025_Rep" / "processed" / "ESTIMATION_OUTPUT" / "COST_FWD")
 
 
 # ==========================================================================
@@ -135,21 +143,41 @@ def _grad(b, c1, Xs):
 
 
 def solve_kappa(blk):
-    """Solve eq-18 in RMS-scaled coordinates with sign bounds, then unscale.
+    """Solve eq-18 in RMS-scaled coordinates, then unscale.
 
-    Bounds: ω ≥ 0 (non-negative intercept cost) and 1+ζ ≥ 0 (non-negative funding
-    base); γ free. `omega_at_bound` flags a corner solution (a credibility signal).
+    PARAMETRIZATION. ψ1 carries the GROSS r^j (V_Main eq 16), so the ψ4 loading is ζ
+    itself — NOT (1+ζ). (Before the cf_0_psi_basis fix, ψ1 held the NET (r^j − r^f) while
+    θ_c still applied −(1+ζ)ψ4, double-charging r^f.) So:
+        g = Δψ1 − ω·Δψ2 − γ′·Δψ3 − ζ·Δψ4.
+
+    NO SIGN RESTRICTIONS (eq-17 is an unconstrained argmin; ω, ζ, γ are all free).
+
+    Earlier revisions of this file imposed ω ≥ 0 ("non-negative intercept cost") and
+    1+ζ ≥ 0 ("non-negative funding base"). Those bounds are NOT in V_Main and were a
+    code-side choice. They are removed, because with a hinge objective a binding bound does
+    not yield a conservative estimate — it yields a CORNER that silently absorbs
+    misspecification. That is what happened: ψ1 was double-charging r^f and the deposit
+    franchise had no asset-side margin (r^j − r^f), so the moments wanted ω < 0; the bound
+    reported ω = 0 with a quiet `omega_at_bound` flag instead of exposing the error.
+
+    In BBL (bajari2007estimating) the inequality set IS the identifying discipline; sign
+    bounds substitute assumption for it. Where positivity of marginal cost matters, the
+    standard device is a log-cost reparametrization (mc = exp(w′γ)), not box-clamping.
+
+    So: estimate free, and READ THE SIGN AS A DIAGNOSTIC. ω < 0 means the value function is
+    misspecified (most likely a missing/incorrect asset return r^j), not that cost is negative.
+    `omega_at_bound` is retained only as a legacy flag and should now always be False.
     """
     c1, Xs, sc = _scaled_design(blk)
     nZ = sc["nZ"]
-    bounds = [(0.0, None)] + [(None, None)] * nZ + [(0.0, None)]   # [ω, γ…, (1+ζ)]
+    bounds = None                      # unconstrained — matches V_Main eq 17
     res = minimize(_obj, np.zeros(2 + nZ), args=(c1, Xs), jac=_grad,
                    method="L-BFGS-B", bounds=bounds,
                    options=dict(maxiter=5000, ftol=1e-14, gtol=1e-10))
     b = res.x
     omega = float(b[0] * sc["s1"] / sc["s_om"])
     gamma = b[1:1 + nZ] * sc["s1"] / sc["s_ga"]
-    zeta = float(b[1 + nZ] * sc["s1"] / sc["s_ze"] - 1.0)
+    zeta = float(b[1 + nZ] * sc["s1"] / sc["s_ze"])      # ψ4 loading IS ζ (no −1)
     g = c1 - Xs @ b
     return dict(omega=omega, zeta=zeta,
                 gamma=dict(zip(blk["gamma_names"], gamma.tolist())),

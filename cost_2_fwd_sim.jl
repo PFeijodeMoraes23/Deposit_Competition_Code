@@ -35,8 +35,20 @@ FORWARD r^f (`--rf-curve`, default `COST_FWD/forward_rf_qoq.csv` from cf_forward
   the market Selic curve enters ψ4. A FLAT r^f makes ψ4 collinear with ψ2, leaving ζ
   unidentified; the time-varying curve separates ζ from ω.
 
-ASSET RETURN r^j (`--asset-return-col` / `--asset-margin`, default 0): enters ψ1. A
-  firm-constant r^j is collinear with the ω regressor (ψ2) so it mainly relabels ω̂.
+ASSET RETURN r^j (`--asset-return-col` / `--asset-margin`, default 0): enters ψ1 (V_Main
+  eq 16, row 1). Both flags are read as the QUARTERLY NET margin (r^j − r^f); cf_0_psi_basis
+  adds r^f back so ψ1 carries the GROSS r^j the paper requires.
+    ⚠ DO NOT pass `--asset-return-col gross_return_lag`. Despite the name, that column is
+      `1 + deposit_rate_lag` (estimation_1_demand_1_prep.py:167) — the rate the bank PAYS
+      DEPOSITORS (liability side), not what it earns on assets. It sits BELOW r^f by
+      construction (that gap IS the markdown this paper estimates); using it as r^j would
+      hand the model a negative asset margin. There is currently NO asset-return column in
+      the demand parquet — one must be built (COSIF asset yield; see counterfactuals_plan.md §9).
+    Default 0 ⇒ r^j = r^f: deposits earn exactly the risk-free rate, so a deposit is worth
+      only (ρ − c). That is a SUBSTANTIVE assumption (it says the marginal deposit funds
+      reserves/govvies, not credit), and with the observed spreads it forces ω̂ < 0.
+  A firm-constant r^j is collinear with the ω regressor (ψ2), so it shifts ω̂ one-for-one:
+  the data cannot pin r^j down internally — it must be measured/calibrated from outside.
 
 EQUILIBRIUM σ̂ (knob):
   Default σ̂ = observed spreads ρ̂ (the data IS the equilibrium). Pass
@@ -109,6 +121,38 @@ k∈{4,5}; regulated types pass through unchanged.
 function apply_shift(σ̂::Vector{Float64}, endog::BitVector, Δ::Float64)
     σ̃ = copy(σ̂)
     @inbounds for i in eachindex(σ̃); endog[i] && (σ̃[i] += Δ); end
+    return σ̃
+end
+
+"""
+    firm_endog_rows(ctx, st, firms) -> Vector{Vector{Int}}
+
+Row indices of each firm's OWN choice spreads (k∈{4,5}), aligned to `firms`. Needed for the
+unilateral deviation: firm j moves only its own rows, rivals stay at σ̂.
+"""
+function firm_endog_rows(ctx::CFDemandCtx, st::DepositSimState, firms::Vector{String})
+    key = string.(ctx.df.CodConglomeradoPrudencial)
+    idx = Dict(f => j for (j, f) in enumerate(firms))
+    rows = [Int[] for _ in 1:length(firms)]
+    @inbounds for i in eachindex(key)
+        st.endog[i] || continue
+        j = get(idx, key[i], 0)
+        j > 0 && push!(rows[j], i)
+    end
+    return rows
+end
+
+"""
+    apply_shift_firm(σ̂, rows_j, Δ) -> Vector{Float64}
+
+UNILATERAL deviation: add Δ to firm j's own k∈{4,5} spreads only; every rival stays at σ̂.
+This is the perturbation eq-17 requires (a Nash/MPE no-profitable-deviation condition).
+Contrast `apply_shift` above, which moves EVERY firm at once — that is a coordinated
+(collusive) move, not a unilateral one, and must NOT be used to build the eq-17 moments.
+"""
+function apply_shift_firm(σ̂::Vector{Float64}, rows_j::Vector{Int}, Δ::Float64)
+    σ̃ = copy(σ̂)
+    @inbounds for i in rows_j; σ̃[i] += Δ; end
     return σ̃
 end
 
@@ -216,7 +260,11 @@ function _parse_cost2_args()
         "--beta";          arg_type = Float64; default = 0.9
         "--horizon";       arg_type = Int;     default = 50
         "--shocks";        arg_type = Int;     default = 50      # TOTAL number of σ̃ deviations
-        "--perturb-scale"; arg_type = Float64; default = 0.02    # σ̃ grid half-width (annualized ρ units)
+        # σ̃ grid half-width in annualized ρ units (pp). 2.0 = 200bp ≈ 54% of the median observed
+        # choice spread (~3.7pp); the ± grid gives graduated magnitudes up to that. The old default
+        # of 0.02 (=2bp) sat so deep in the linear regime that g carried no curvature at all
+        # (even/|odd| of Δψ1 ≈ 0.002 vs 0.16 at 200bp), leaving the FOC as the only signal.
+        "--perturb-scale"; arg_type = Float64; default = 2.0
         "--dev-scheme";    arg_type = String;  default = "grid"  # grid (directed) | normal (legacy)
         "--rf-curve";      arg_type = String;  default = nothing # forward-r^f CSV; default COST_FWD/forward_rf_qoq.csv
         "--asset-return-col"; arg_type = String; default = nothing # r^j source col (e.g. gross_return_lag)
@@ -236,29 +284,12 @@ function main_cost2()
     ctx = build_cf_context(a["estim"], a["spec"], a["stage"];
                            R=a["R"], seed=a["seed"], hpc=a["hpc"],
                            local_dir=a["local-dir"], suffix=a["suffix"], time_filter=tf)
-    # Per-type d-bar auto-calibration (same as CF1): structural active demand
-    # (1-phi)*M*s reproduces observed active deposits within B and D separately, so
-    # the deposit path (and hence ψ) is real-scale. A global/unit d-bar mis-scales
-    # the active channel and makes the Eq-18 costs degenerate.
-    local dbar
-    if a["dbar"] <= 0.0
-        s0 = cf_model_shares(ctx)
-        pop0, _    = _first_present(ctx.df, ["pop_total", "M_mt", "pop"]; default=NaN)
-        phi0, _    = _first_present(ctx.df, ["phi_mt", "phi_local_mt", "phi_local", "phi"]; default=NaN)
-        depact0, _ = _first_present(ctx.df, ["Dep_Act", "active_deposits", "deposit_active"]; default=NaN)
-        phi0 = clamp.(phi0, 0.0, 0.999)
-        isBcal = BitVector(Bool.(coalesce.(ctx.df.is_B, false)))
-        dbar = ones(nrow(ctx.df))
-        for (lbl, mask) in (("B", isBcal), ("D", .!isBcal))
-            m = mask .& isfinite.(pop0) .& isfinite.(s0) .& isfinite.(phi0) .& isfinite.(depact0)
-            den = sum((1.0 .- phi0[m]) .* pop0[m] .* s0[m]); nm = sum(max.(depact0[m], 0.0))
-            db = (den > 0 && isfinite(nm)) ? nm / den : 1.0
-            dbar[mask] .= db
-            log_status("  [CF2] d-bar[$lbl] = $(round(db, sigdigits=5))")
-        end
-    else
-        dbar = a["dbar"]
-    end
+    # Market size: load_sim_state now takes M_mt/M_nat straight from the demand parquet — the SAME
+    # market size the BLP was estimated under (V_Main d̄_mt = bc_mt·r̂_max). The old per-type d-bar
+    # auto-calibration that used to live here back-solved a scalar dbar·pop_total that ignored
+    # banked_correction, so the CFs simulated under a market size the demand model never saw. It is
+    # retired; --dbar remains only as a manual override/diagnostic. See counterfactuals_plan.md §9.8.
+    dbar = a["dbar"] > 0.0 ? a["dbar"] : 1.0
     st  = load_sim_state(ctx; dbar=dbar)
     Z, znames = load_Z(ctx)
     markdown_q0, mc = _first_present(ctx.df, ["spread_qoq", "spread_q"]; default=NaN)
@@ -284,10 +315,21 @@ function main_cost2()
     if a["asset-return-col"] !== nothing
         col = a["asset-return-col"]
         col in names(ctx.df) || error("--asset-return-col '$col' not in demand parquet")
-        gr = Float64.(coalesce.(ctx.df[!, col], 1.0)) .- 1.0
         rfq, _ = _first_present(ctx.df, ["risk_free_qoq", "risk_free_qoq_lag", "selic_qoq"]; default=0.0)
+        gr = Float64.(coalesce.(ctx.df[!, col], NaN)) .- 1.0
         asset_ret = gr .- rfq
-        log_status("  [CF2] r^j ← ($col − 1) − r^f_q  (mean net margin $(round(mean(asset_ret), sigdigits=3)))")
+        # A row with no reported asset yield (bank absent from the IF-Data bank-chars panel) must NOT
+        # silently become r^j = 0 — that hands it a margin of −r^f (≈ −10.5pp/yr), the exact pathology
+        # this column exists to remove. Impute the cross-sectional MEDIAN margin instead.
+        fin = isfinite.(asset_ret)
+        any(fin) || error("--asset-return-col '$col' has no finite rows (check units/merge)")
+        med = median(asset_ret[fin]); n_imp = count(!, fin)
+        asset_ret[.!fin] .= med
+        log_status("  [CF2] r^j ← ($col − 1) − r^f_q | median net margin " *
+                   "$(round(med, sigdigits=3))/q = $(round(med*400, sigdigits=3)) pp/yr | " *
+                   "$n_imp/$(length(asset_ret)) rows imputed at the median")
+        med > 0 || @warn "  [CF2] median asset margin is NOT positive ($med) — deposits earn less " *
+                         "than r^f, which will force ω̂ < 0. Check the asset-return column."
     elseif a["asset-margin"] != 0.0
         asset_ret = fill(a["asset-margin"], nrow(ctx.df))
         log_status("  [CF2] r^j − r^f = $(a["asset-margin"]) (constant)")
@@ -301,7 +343,17 @@ function main_cost2()
     log_status("  [CF2] ψ_eq: $(size(psi_eq)) over $(length(firms)) firms " *
                "($(sum(isB)) B / $(sum(.!isB)) D)")
 
-    # ── Deviation ψ's (SHARDABLE across SLURM jobs to fit Bouchet time walls) ──
+    # ── Deviation ψ's — UNILATERAL (Nash) deviations, SHARDED over the (firm × Δ) grid ──
+    # eq-17 is an MPE no-profitable-deviation condition: firm j deviates ALONE, rivals hold σ̂:
+    #     g_jt = [ψ_j(σ̂) − ψ_j(σ̃_j, σ̂_{−j})]′·θ_c ≥ 0.
+    # Until 2026-07-13 this loop called apply_shift(σ̂, st.endog, Δ), moving EVERY firm at once.
+    # A common spread hike is the COLLUSIVE direction — profitable for all — so the estimator was
+    # being asked to certify a false inequality. Symptoms: exactly 50% of deviations "violated"
+    # g≥0 (the Δ>0 half), the deposit response collapsed to the industry-wide elasticity (no
+    # business stealing: −0.10/pp instead of α≈−0.19/pp), and ω̂ ran to ≈ −0.8/quarter. See
+    # counterfactuals_plan.md §9.
+    # COST: one forward sim per (firm, Δ) instead of per Δ — so shard over the PAIR grid.
+    # With ~300 choice firms × 50 Δ that is ~15k sims: use N_SHARDS ≫ 10 on the cluster.
     nf, nb = size(psi_eq)
     S = a["shocks"]; nsh = a["n-shards"]; sid = a["shard-id"]
     (0 <= sid < nsh) || error("shard-id ($sid) must be in 0:$(nsh-1)")
@@ -310,15 +362,20 @@ function main_cost2()
     shifts = deviation_shifts(S, a["perturb-scale"], a["dev-scheme"], a["seed"])
     log_status("  [CF2] σ̃ scheme=$(a["dev-scheme"]) scale=$(a["perturb-scale"]) → " *
                "Δ∈[$(round(minimum(shifts), sigdigits=3)), $(round(maximum(shifts), sigdigits=3))]")
-    s_list = [s for s in 1:S if (s - 1) % nsh == sid]
-    log_status("  [CF2] shard $sid/$nsh → $(length(s_list)) of $S deviations")
-    psi_dev = Array{Float64,3}(undef, length(s_list), nf, nb)
-    for (li, s) in enumerate(s_list)
-        σ̃ = apply_shift(σ̂, st.endog, shifts[s])
+    rows_by_firm = firm_endog_rows(ctx, st, firms)
+    dev_firms = [j for j in 1:nf if !isempty(rows_by_firm[j])]
+    log_status("  [CF2] UNILATERAL deviations: $(length(dev_firms)) of $nf firms set a choice spread")
+    # Global (firm, shock) grid — deterministic ⇒ shard-invariant by global index.
+    pairs = [(j, s) for j in dev_firms for s in 1:S]
+    loc = [p for (i, p) in enumerate(pairs) if (i - 1) % nsh == sid]
+    log_status("  [CF2] shard $sid/$nsh → $(length(loc)) of $(length(pairs)) (firm × Δ) sims")
+    psi_dev = Array{Float64,2}(undef, length(loc), nb)
+    for (li, (j, s)) in enumerate(loc)
+        σ̃ = apply_shift_firm(σ̂, rows_by_firm[j], shifts[s])       # only firm j moves
         pd, _ = psi_under(ctx, st, Z, markdown_q0, σ̃; beta=a["beta"], T=a["horizon"],
                           asset_return_q=asset_ret, rf_path_q=rf_path)
-        psi_dev[li, :, :] .= pd
-        li % 5 == 0 && log_status("    [CF2] shard $sid: $li/$(length(s_list)) done")
+        psi_dev[li, :] .= @view pd[j, :]                            # only the DEVIATOR's ψ
+        li % 25 == 0 && log_status("    [CF2] shard $sid: $li/$(length(loc)) sims done")
     end
 
     cost_dir = joinpath(dirname(out_dir), "COST_FWD"); mkpath(cost_dir)
@@ -333,17 +390,19 @@ function main_cost2()
         log_status("  [CF2] wrote psi_eq_$tag.parquet")
     end
 
-    # Deviation ψ for this shard (firm-fastest within shock; GLOBAL shock ids).
-    nloc = length(s_list)
-    dev_df = DataFrame(shock=repeat(s_list, inner=nf),
-                       firm=repeat(firms, outer=nloc),
-                       is_B=repeat(collect(isB), outer=nloc))
-    for (j, b) in enumerate(blocks)
-        dev_df[!, b] = vec([psi_dev[li, f, j] for f in 1:nf, li in 1:nloc])
+    # Deviation ψ for this shard: ONE row per (deviating firm, Δ) pair — `firm` is the DEVIATOR
+    # and the ψ blocks are that firm's own value under its unilateral move. GLOBAL shock ids, so
+    # shards concatenate into the unsharded result (the Python solver globs psi_dev_*).
+    nloc = length(loc)
+    dev_df = DataFrame(shock=[s for (_j, s) in loc],
+                       firm=[firms[j] for (j, _s) in loc],
+                       is_B=[isB[j] for (j, _s) in loc])
+    for (c, b) in enumerate(blocks)
+        dev_df[!, b] = psi_dev[:, c]
     end
     shard_tag = nsh == 1 ? "" : "_shard$(sid)of$(nsh)"
     Parquet2.writefile(joinpath(cost_dir, "psi_dev_$tag$shard_tag.parquet"), dev_df)
-    log_status("  [CF2] wrote psi_dev_$tag$shard_tag.parquet ($nloc deviations)")
+    log_status("  [CF2] wrote psi_dev_$tag$shard_tag.parquet ($nloc firm×Δ deviations)")
     log_status("[DONE] cost_2_fwd_sim shard $sid — run estimation_1_cost_3_solve.py after ALL shards")
 end
 

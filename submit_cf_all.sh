@@ -41,8 +41,13 @@ set -euo pipefail
 ROUTINES="${ROUTINES:-${CF_ROUTINE:-6}}"
 CF_STAGE="${CF_STAGE:-extended}"
 R="${R:-2000}"; SEED="${SEED:-42}"
-SHOCKS="${SHOCKS:-50}"; N_SHARDS="${N_SHARDS:-10}"
-PERTURB_SCALE="${PERTURB_SCALE:-0.02}"; DEV_SCHEME="${DEV_SCHEME:-grid}"
+# cost2 now runs UNILATERAL (Nash) deviations: one forward sim per (firm × Δ), not per Δ.
+# With ~300 choice firms × 50 Δ that is ~15k sims (was 50) — so N_SHARDS must be much larger.
+# 50 shards ⇒ ~300 sims each (~2.5h at R=2000), inside the 8h SHARD_TIME wall.
+SHOCKS="${SHOCKS:-50}"; N_SHARDS="${N_SHARDS:-50}"
+# 2.0 ρ-units = 200bp ≈ 54% of the median choice spread (~3.7pp); the ± grid runs graduated
+# magnitudes up to that. The old 0.02 (=2bp) was pure linear regime — no curvature in g at all.
+PERTURB_SCALE="${PERTURB_SCALE:-2.0}"; DEV_SCHEME="${DEV_SCHEME:-grid}"
 BETA="${BETA:-0.9}"; HORIZON="${HORIZON:-50}"
 DO_DEMAND_EVAL="${DO_DEMAND_EVAL:-1}"; DO_CF1="${DO_CF1:-1}"
 # Equilibrium CFs (afterok cost_solve). cf1_net is light (on by default); cf3/cf5/cf6 re-solve
@@ -117,7 +122,17 @@ done
 echo "Preflight OK: R=${R} draws + forward r^f curve + RC results for routines: ${ROUTINES}"
 
 # ── Step 3: submit the CF chain per routine ──────────────────────────────────────
-cf2_extra="--shocks ${SHOCKS} --perturb-scale ${PERTURB_SCALE} --dev-scheme ${DEV_SCHEME} --beta ${BETA} --horizon ${HORIZON}"
+# Asset return r^j (V_Main eq 16, ψ1 row). Both flags are read as the QUARTERLY NET margin
+# (r^j − r^f); cf_0_psi_basis adds r^f back so ψ1 carries the GROSS r^j the paper requires.
+# Left unset ⇒ r^j = r^f (zero asset margin), which makes a deposit worth only (ρ − c) and,
+# with the observed spreads, forces ω to its ≥0 bound in eq-18. Set one of these to give the
+# deposit franchise its asset-side value:
+#   ASSET_RETURN_COL=gross_return_lag   (per-obs, from the demand parquet)
+#   ASSET_MARGIN=0.015                  (constant quarterly net margin, e.g. 1.5%/q ≈ 6pp/yr)
+asset_flags=""
+[[ -n "${ASSET_RETURN_COL:-}" ]] && asset_flags="--asset-return-col ${ASSET_RETURN_COL}"
+[[ "${ASSET_MARGIN:-0}" != "0" ]] && asset_flags="${asset_flags} --asset-margin ${ASSET_MARGIN}"
+cf2_extra="--shocks ${SHOCKS} --perturb-scale ${PERTURB_SCALE} --dev-scheme ${DEV_SCHEME} --beta ${BETA} --horizon ${HORIZON}${asset_flags:+ ${asset_flags}}"
 cf1_extra="--beta ${BETA} --horizon ${HORIZON}"
 
 submit () {  # submit <jobname> <time> <extra-sbatch-args...>
@@ -193,26 +208,11 @@ for k in ${ROUTINES}; do
     first=0
 done
 
-# ── Step 4: auto-zip each CF's outputs (one archive per CF, across all estimations) ──
-# A light CPU job runs afterANY the CF's work (so a partial CF still gets archived), calling
-# zip_cf_outputs.sh, which MOVES the outputs into data/CF_ZIPS/<cf>_outputs.zip (flock-serialized).
-DO_ZIP="${DO_ZIP:-1}"
-zip_after () {  # zip_after <cf> <colon-joined-deps>
-    local cf="$1" deps="$2"
-    [[ "${DO_ZIP}" == "1" && -n "${deps}" ]] || return 0
-    local zj
-    zj=$(sbatch --parsable -J "cf_zip_${cf}" -t 00:30:00 --kill-on-invalid-dep=yes \
-        --partition="${PARTITION:-day}" --mem=4G --dependency=afterany"${deps}" \
-        -o "${LOGDIR}/cf_zip_${cf}_%j.out" -e "${LOGDIR}/cf_zip_${cf}_%j.err" \
-        --export=ALL,CF_STEP=zip,CF_WHICH=${cf},CF_STAGE=${CF_STAGE},DATA_ROOT=${DATA_ROOT} submit_cf.sh)
-    echo "  zip ${cf}    → job ${zj} (afterany${deps})"
-}
-echo "── auto-zip (data/CF_ZIPS/<cf>_outputs.zip, afterany each CF) ──"
-zip_after foundation "${found_dep}"
-zip_after cf1 "${cf1_dep}"
-zip_after cf2 "${cf2_dep}"
-zip_after cf3 "${cf3_dep}"
-zip_after cf5 "${cf5_dep}"
-zip_after cf6 "${cf6_dep}"
+# ── Archiving ──────────────────────────────────────────────────────────────────
+# NO auto-zip here. zip_cf_outputs.sh MOVES files out of data/COST_FWD & CF_FOUNDATION, but the
+# equilibrium CFs consume them long after this script exits (cost_params_E*.json → CF3/CF5/CF6;
+# CF3's sig_6 → CF5 base). Archiving mid-pipeline strands those inputs inside the .zip. So archive
+# ONCE, at the very end, after CF3/CF5/CF6 have finished:  bash zip_all_cf.sh
 
 echo "Submitted CFs for routines: ${ROUTINES}. Watch with: squeue -u \$USER"
+echo "When the WHOLE chain (incl. CF3/CF5/CF6) is done, archive with:  bash zip_all_cf.sh"

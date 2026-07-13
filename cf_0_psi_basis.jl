@@ -144,13 +144,17 @@ function accumulate_psi(ctx::CFDemandCtx, st::DepositSimState,
     @inbounds for t in 0:T
         bt = beta^t
         dep_t = @view Dep[:, t+1]
-        # ψ1: Dep·(r^j + ρ). (r^j defaults to 0 over r^f ⇒ pure markdown value.)
-        psi1 .+= bt .* dep_t .* (rj .+ markdown_q)
+        rf_t = t == 0 ? 0.0 : rf_flat[t]
+        # ψ1 (V_Main eq 16, row 1) carries the GROSS asset return r^j: Dep·(r^j + ρ).
+        # `asset_return_q` is supplied as the NET margin (r^j − r^f), so add r^f back here.
+        # The single −r^f (funding cost) is then delivered by the −(1+ζ)·ψ4 term in θ_c.
+        # Using the NET rj here subtracted r^f TWICE (V/Dep = ρ − c − r^f), which made the
+        # deposit franchise value negative and forced ω to its ≥0 bound in the eq-18 solve.
+        psi1 .+= bt .* dep_t .* (rj .+ rf_t .+ markdown_q)
         psi2 .+= bt .* dep_t
         for z in 1:n_Z
             @views psi3[:, z] .+= bt .* dep_t .* Z[:, z]
         end
-        rf_t = t == 0 ? 0.0 : rf_flat[t]
         psi4 .+= bt .* rf_t .* dep_t
     end
 

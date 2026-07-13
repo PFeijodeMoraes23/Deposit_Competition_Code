@@ -222,19 +222,11 @@ function cf3_setup(a)
         log_status("  [CF3] merged $fB → $fA")
     end
 
-    # Per-type d̄ + markdown + forward r^f, identical to cost_2_fwd_sim (so ψ matches CF2).
-    s0 = cf_model_shares(ctx)
-    pop0, _    = _first_present(ctx.df, ["pop_total", "M_mt", "pop"]; default=NaN)
-    phi0, _    = _first_present(ctx.df, ["phi_mt", "phi_local_mt", "phi_local", "phi"]; default=NaN)
-    depact0, _ = _first_present(ctx.df, ["Dep_Act", "active_deposits", "deposit_active"]; default=NaN)
-    phi0 = clamp.(phi0, 0.0, 0.999); isBcal = BitVector(Bool.(coalesce.(ctx.df.is_B, false)))
-    dbar = ones(nrow(ctx.df))
-    for (_, mask) in (("B", isBcal), ("D", .!isBcal))
-        m = mask .& isfinite.(pop0) .& isfinite.(s0) .& isfinite.(phi0) .& isfinite.(depact0)
-        den = sum((1.0 .- phi0[m]) .* pop0[m] .* s0[m]); nm = sum(max.(depact0[m], 0.0))
-        dbar[mask] .= (den > 0 && isfinite(nm)) ? nm / den : 1.0
-    end
-    st  = load_sim_state(ctx; dbar=dbar)
+    # Market size + markdown + forward r^f, identical to cost_2_fwd_sim (so ψ matches CF2).
+    # load_sim_state takes M_mt/M_nat from the demand parquet — the market size the BLP was actually
+    # estimated under. The per-type d̄ auto-calibration that used to live here is retired (it ignored
+    # banked_correction and re-invented M). See counterfactuals_plan.md §9.8.
+    st  = load_sim_state(ctx; dbar=1.0)
     Z, znames = load_Z(ctx)
     mq0, _ = _first_present(ctx.df, ["spread_qoq", "spread_q"]; default=NaN)
     mq0 = all(isnan, mq0) ? ctx.rho_hat ./ 400.0 : clamp.(mq0 ./ 1e4, -0.1, 0.1)

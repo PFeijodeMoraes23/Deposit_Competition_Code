@@ -53,7 +53,43 @@ IV_CAPITAL = ['indice_basileia_lag']
 IV_FEE = ['cosif_fee_ratio_all', 'cosif_fee_ratio_total_deposits', 'cosif_fee_valid',
           'listed_fee_atm_withdrawal_pf', 'listed_fee_statement_pf',
           'tarifa_stickiness_yrs', 'tarifa_stickiness_n']
+# CF2 needs the bank's ASSET return r^j (V_Main eq 16, ψ1 row): the return on what deposits fund.
+# `asset_gross_return_lag` = 1 + lagged quarterly asset yield (built in panel_4_bank_chars.py).
+# Consumed by cost_2_fwd_sim.jl --asset-return-col. NOT `gross_return_lag`, which is 1 + the
+# DEPOSIT rate (liability side) — see counterfactuals_plan.md §9.4.
+CF_COST_COLS = ['asset_gross_return_lag', 'asset_return_imputed']
+
+# ── Market-size / active-share knobs (V_Main pp.26-27; counterfactuals_plan.md §9.8) ────────────
+# PHI_CAP  φ is capped before forming (1-φ). The BLP share is a share of ACTIVE depositors, so its
+#          denominator is the ACTIVE market (1-φ)·M; without a cap, (1-φ)→0 in near-comatose markets
+#          and a single market-quarter would set r̂ for the whole country. The SAME capped φ is used
+#          in the anchor and in the share, which is what guarantees Σ_j s_j ≤ 1/bc < 1.
+#          0.99 barely binds: p90(φ)=0.977.
+# RMAX_RULE  anchor for d̄ = bc·r̂. The original 'max' is set by an outlier — 16.4× the p99, a
+#          74,000-population municipality — which crushes the typical market's inside share to
+#          ~0.001 (a 99.9% outside option) and leaves the model with no competitive interaction.
+#          'p99' winsorises it. Use 'max' to reproduce the original construction.
+# TOTAL_SHARE_CAP  a percentile anchor does not bound every market, so a thin tail would get
+#          Σ_j s_j > 1 (impossible — the BLP contraction needs a positive outside option). A floor on
+#          M (the market must be big enough to hold what is in it) caps the TOTAL inside share at
+#          this value in every market, which a per-share clip cannot do.
+# BC_RULE  the banked correction. 'findex_gdp' (default) = 1/(findex · gdppc/median(gdppc)); 'findex'
+#          = 1/findex (no local access); 'legacy' = the original deposit-intensity bc (robustness).
+# ACCESS_LO/HI  the access index is CENTRED at 1 (not capped at 1), so it does not systematically
+#          inflate M; clipped to keep GDP-per-capita outliers (mining/refinery towns) in check.
+# FINDEX_FALLBACK  used where the World Bank series is missing.
+PHI_CAP         = float(os.environ.get('DEMAND_PHI_CAP', 0.99))
+RMAX_RULE       = os.environ.get('DEMAND_RMAX_RULE', 'q95')       # q95 | p99 | p999 | max
+BC_RULE         = os.environ.get('DEMAND_BC_RULE', 'findex_gdp')  # findex_gdp | findex | legacy
+ACCESS_LO       = float(os.environ.get('DEMAND_ACCESS_LO', 0.35))
+ACCESS_HI       = float(os.environ.get('DEMAND_ACCESS_HI', 2.5))
+FINDEX_FALLBACK = float(os.environ.get('DEMAND_FINDEX_FALLBACK', 0.77))
+TOTAL_SHARE_CAP = float(os.environ.get('DEMAND_TOTAL_SHARE_CAP', 0.95))
+
+# NB: M_mt / M_nat are BUILT inside process_specification (after the keep_cols filter) and so reach
+# the parquet without needing to be listed here.
 EXTRA_KEEP_COLS = (X_COLS + D_COLS + IV_BLP_LOO + IV_COST + IV_CAPITAL + IV_FEE
+                   + CF_COST_COLS
                    + ['segment', 'spread_qoq', 'spread_ann'])
 
 SPEC_MAP = {
@@ -140,12 +176,19 @@ def build_base_panel(panel_csv):
     if cosif_ratio_cols and 'cosif_fee_valid' in df.columns:
         df.loc[df['cosif_fee_valid'] == 0, cosif_ratio_cols] = np.nan
     if BANKED_CSV.exists():
-        banked = pd.read_csv(BANKED_CSV, usecols=['mca_code', 'year', 'banked_correction'],
+        # findex_banked_frac (World Bank Global Findex, national, interpolated by year) is the BANKED
+        # FRACTION of the population. It is the economically meaningful part of the banked correction:
+        # a fully-served market's inside share should equal the banked fraction, because the UNBANKED
+        # ARE the outside option. `banked_correction` is kept for the legacy/robustness path.
+        banked = pd.read_csv(BANKED_CSV,
+                             usecols=['mca_code', 'year', 'banked_correction', 'findex_banked_frac'],
                              dtype={'mca_code': str, 'year': int})
-        banked['banked_correction'] = pd.to_numeric(banked['banked_correction'], errors='coerce')
+        for _c in ('banked_correction', 'findex_banked_frac'):
+            banked[_c] = pd.to_numeric(banked[_c], errors='coerce')
         df = df.merge(banked, on=['mca_code', 'year'], how='left')
     else:
         df['banked_correction'] = np.nan
+        df['findex_banked_frac'] = np.nan
     return df
 
 
@@ -173,6 +216,162 @@ def _apply_link(index_series, link, res_ss):
     else:
         raise ValueError(f"unknown link {link!r}")
     return pd.Series(phi, index=index_series.index).clip(lower=0.0, upper=1.0)
+
+
+
+# ==============================================================================
+# SHARED market size + ACTIVE-depositor shares  (V_Main pp.26-27; see
+# counterfactuals_plan.md §0). This lives in ONE place and is imported by
+# estimation_1_demand_1_prep.py and estimation_2_demand_1_prep.py.
+#
+# It used to be copy-pasted into all three scripts, which is exactly how the
+# (1-phi) / anchor / bc defects survived: a fix in one copy never reached the
+# others. Do NOT re-inline it.
+#
+# Requires on df_spec: is_B, phi_mt, phi_t, Dep_Act, pop_total, mca_code,
+#                      time_id, year, gdp_per_capita, banked_correction,
+#                      findex_banked_frac
+# Adds:  M_mt, M_nat, share_B_cond, share_D
+# ==============================================================================
+def build_market_size_and_shares(df_spec: pd.DataFrame) -> pd.DataFrame:
+    """Market size M and the shares of ACTIVE depositors. See counterfactuals_plan.md §0."""
+    # RMAX_RULE: the raw `max` anchor is set by an outlier (16.4× the p99; a 74k-population
+    # municipality), which crushes the typical market's inside share to ~0.001. 'p99'/'p999' winsorise
+    # it. Set RMAX_RULE='max' to reproduce the original construction.
+    # ── The banked correction bc_mt ────────────────────────────────────────────────────────────
+    #   BC_RULE='findex_gdp' (default):  bc = 1 / ( findex_t · access_mt ),  access = gdppc/median(gdppc)
+    #   BC_RULE='findex'              :  bc = 1 / findex_t                  (no market-level access)
+    #   BC_RULE='legacy'              :  the original banked_correction     (robustness column only)
+    #
+    # findex is the BANKED FRACTION: a fully-served market's inside share should equal it, because the
+    # UNBANKED ARE the outside option. `access` adds local heterogeneity (V_Main line 472).
+    #
+    # Why NOT the original bc = 1/(findex·min{d^pc/Q95,1}): the intensity term is the market's own
+    # DEPOSIT DENSITY, so it enlarges M using the very outcome the share then divides by — the same
+    # information twice. It drives bc to a median of 4.0 and a MAX OF 991, inflating M to 77× GDP per
+    # capita and crushing the typical market's inside share to 0.001 (a 99.9% outside option).
+    # `access` is instead built from an EXOGENOUS local characteristic (GDP per capita: the strongest
+    # available proxy for deposit density, corr 0.34; branch density 0.16 and CadÚnico 0.18 are weaker,
+    # and a 3-variable index adds nothing (R 0.349 vs 0.344) while flipping CadÚnico's sign).
+    # It is CENTRED at 1 (not capped at 1) so it does not systematically inflate M.
+    FALLBACK_BC = 1.1
+    df_spec['_1mphi'] = 1.0 - np.where(df_spec['is_B'],
+                                       df_spec['phi_mt'], df_spec['phi_t']).clip(0.0, PHI_CAP)
+    _fx = pd.to_numeric(df_spec.get('findex_banked_frac'), errors='coerce').fillna(FINDEX_FALLBACK) \
+        if 'findex_banked_frac' in df_spec.columns else pd.Series(FINDEX_FALLBACK, index=df_spec.index)
+    _fx = _fx.clip(0.3, 1.0)
+
+    if BC_RULE == 'legacy':
+        df_spec['_bc'] = df_spec['banked_correction'].fillna(FALLBACK_BC)
+        df_spec['_access'] = 1.0
+    else:
+        if BC_RULE == 'findex_gdp':
+            _x = pd.to_numeric(df_spec['gdp_per_capita'], errors='coerce')
+            _med = _x.groupby(df_spec['year']).transform('median')
+            _acc = (_x / _med).replace([np.inf, -np.inf], np.nan).fillna(1.0).clip(ACCESS_LO, ACCESS_HI)
+        elif BC_RULE == 'findex':
+            _acc = pd.Series(1.0, index=df_spec.index)
+        else:
+            raise ValueError(f"BC_RULE must be findex_gdp|findex|legacy (got {BC_RULE})")
+        df_spec['_access'] = _acc
+        df_spec['_bc'] = 1.0 / (_fx * _acc)
+
+    mkt = df_spec.groupby(['mca_code', 'time_id']).agg(_pop=('pop_total', 'first'),
+                                                       _bc_mt=('_bc', 'first'),
+                                                       _acc_mt=('_access', 'first'))
+    # (1-φ) for the LOCAL market must come from a B row (φ_mt). Taking the group's `first` row can
+    # pick a D row, whose (1-φ) is built from the NATIONAL φ_t — which would break the floor bound.
+    _b = df_spec[df_spec['is_B']]
+    mkt = mkt.join(_b.groupby(['mca_code', 'time_id'])['_1mphi'].first().rename('_1mphi'), how='left')
+    mkt['_1mphi'] = mkt['_1mphi'].fillna(1.0 - PHI_CAP)
+    b_dep_mt = _b.groupby(['mca_code', 'time_id'])['Dep_Act'].sum().rename('_dep_B')
+    mkt = mkt.join(b_dep_mt, how='left').fillna({'_dep_B': 0.0})
+
+    # ── The anchor r̂ ───────────────────────────────────────────────────────────────────────────
+    # The share is  s = Dep_Act / ((1-φ)·bc·r̂·Pop) = dens · findex · access / r̂ ,
+    # with dens = Dep_Act/((1-φ)·Pop) the ACTIVE-market density. So the market sitting at the chosen
+    # quantile of (dens · access) gets an inside share of exactly `findex` — the banked fraction.
+    # THAT is why the anchor is taken over dens·access, and why Q95 is the right quantile: `bc`'s own
+    # definition names Q95 as its saturated reference. The original `max` anchor sat 16× ABOVE that
+    # reference (it was set by a 74,000-population municipality — an ESTBAN HQ-booking artifact),
+    # which is internally inconsistent with bc and is what produced the 99.9% outside option.
+    local_ratio = ((mkt['_dep_B'] / (mkt['_1mphi'] * mkt['_pop'])) * mkt['_acc_mt']) \
+        .replace([np.inf, -np.inf], np.nan)
+    dep_over_1mphi = (df_spec['Dep_Act'] / df_spec['_1mphi']).replace([np.inf, -np.inf], np.nan)
+    all_dep_t = dep_over_1mphi.groupby(df_spec['time_id']).sum()
+    nat_pop_t = mkt.groupby('time_id')['_pop'].sum()
+    nat_ratio = (all_dep_t / nat_pop_t).replace([np.inf, -np.inf], np.nan)
+
+    def _anchor(s):
+        s = s.dropna()
+        if s.empty:
+            return 0.0
+        if RMAX_RULE == 'max':   return float(s.max())          # original construction (robustness)
+        if RMAX_RULE == 'p999':  return float(s.quantile(0.999))
+        if RMAX_RULE == 'p99':   return float(s.quantile(0.99))
+        if RMAX_RULE == 'q95':   return float(s.quantile(0.95))  # bc's own declared reference
+        raise ValueError(f"RMAX_RULE must be max|p999|p99|q95 (got {RMAX_RULE})")
+
+    max_ratio = max(_anchor(local_ratio), _anchor(nat_ratio)) or 1.0
+
+    mkt['_b_mkt'] = mkt['_bc_mt'] * max_ratio * mkt['_pop']          # TOTAL market M_mt
+
+    # MARKET-SIZE FLOOR. A percentile anchor (unlike `max`) does not bound every market, so ~1% of
+    # market-quarters would get Σ_j s_j > 1 — an impossible share vector (the BLP contraction needs a
+    # positive outside option). Rather than clip the shares (which does not fix the SUM), impose the
+    # economically-obvious constraint that the market is at least large enough to hold what is in it:
+    #
+    #     M_mt ≥ Σ_j Dep_Act_jmt / ((1-φ_mt) · TOTAL_SHARE_CAP)
+    #
+    # ⇒ Σ_j s_j = Σ_j Dep_Act / ((1-φ)·M) ≤ TOTAL_SHARE_CAP < 1, by construction, in EVERY market.
+    # It binds only in the thin tail above the anchor; elsewhere the anchor governs.
+    # Build the floor from EXACTLY the quantity that appears in the share sum, row-wise:
+    #     Σ_j s_j = Σ_j Dep_Act_j/((1-φ_j)·M) = [Σ_j Dep_Act_j/(1-φ_j)] / M
+    # so the floor is that numerator ÷ CAP. Using a market-level (1-φ) would break the bound wherever
+    # φ varies within a market-quarter.
+    _floor_B = ((_b.assign(_x=lambda x: x['Dep_Act'] / x['_1mphi'])
+                   .groupby(['mca_code', 'time_id'])['_x'].sum()) / TOTAL_SHARE_CAP)
+    _floor_B = _floor_B.reindex(mkt.index).replace([np.inf, -np.inf], np.nan)
+    _n_bind = int((_floor_B > mkt['_b_mkt']).sum())
+    mkt['_b_mkt'] = np.maximum(mkt['_b_mkt'], _floor_B.fillna(0.0))
+    if _n_bind:
+        print(f"  [market size] floor bound in {_n_bind}/{len(mkt)} market-quarters "
+              f"({100*_n_bind/len(mkt):.2f}%)  [RMAX_RULE={RMAX_RULE}, PHI_CAP={PHI_CAP}, "
+              f"TOTAL_SHARE_CAP={TOTAL_SHARE_CAP}]")
+
+    df_spec = df_spec.merge(mkt[['_b_mkt']].reset_index(), on=['mca_code', 'time_id'], how='left')
+    mkt_r = mkt.reset_index()
+    mkt_r['_w'] = mkt_r['_bc_mt'] * mkt_r['_pop']
+    nat_dbar = (mkt_r.groupby('time_id')
+                .apply(lambda g: (g['_w'].sum() / g['_pop'].sum()) * max_ratio if g['_pop'].sum() > 0 else FALLBACK_BC * max_ratio,
+                       include_groups=False).rename('_dbar_nat'))
+    nat_pop = mkt_r.groupby('time_id')['_pop'].sum().rename('_pop_nat')
+    d_mkt = (nat_dbar * nat_pop).rename('_d_mkt').reset_index()
+    # Same floor, nationally, for the D-firm market.
+    _d_num = (df_spec.loc[~df_spec['is_B']]
+              .assign(_x=lambda x: x['Dep_Act'] / x['_1mphi'])
+              .groupby('time_id')['_x'].sum().rename('_dfloor'))
+    d_mkt = d_mkt.merge((_d_num / TOTAL_SHARE_CAP).reset_index(), on='time_id', how='left')
+    d_mkt['_d_mkt'] = np.maximum(d_mkt['_d_mkt'], d_mkt['_dfloor'].fillna(0.0))
+    d_mkt = d_mkt.drop(columns=['_dfloor'])
+    df_spec = df_spec.merge(d_mkt, on='time_id', how='left')
+
+    # Shares of the ACTIVE market (1-φ)·M. Bounded by TOTAL_SHARE_CAP by construction (see floor).
+    df_spec['share_B_cond'] = np.where(
+        df_spec['is_B'], df_spec['Dep_Act'] / (df_spec['_1mphi'] * df_spec['_b_mkt']), np.nan)
+    df_spec['share_D'] = np.where(
+        ~df_spec['is_B'], df_spec['Dep_Act'] / (df_spec['_1mphi'] * df_spec['_d_mkt']), np.nan)
+
+    # PERSIST the market size (V_Main §"Demand Parameters", M_mt = d̄_mt·Pop_mt with
+    # d̄_mt = bc_mt·r̂_max). It was previously computed here, used for the shares, and then DROPPED —
+    # so the counterfactuals could not see it and each re-invented their own market size as a
+    # per-type scalar dbar·pop_total that ignores banked_correction entirely. That meant the demand
+    # model was ESTIMATED under one market size and the CFs SIMULATED under another. Keeping these
+    # two columns lets cf_0_deposit_sim.jl consume the estimation's own M. See §9.8.
+    df_spec['M_mt'] = df_spec['_b_mkt']      # local market size (B firms)
+    df_spec['M_nat'] = df_spec['_d_mkt']     # national market size (D firms)
+    df_spec.drop(columns=['_b_mkt', '_d_mkt', '_bc'], inplace=True)
+    return df_spec
 
 
 def process_specification(spec_name, spec_res, df_base, link):
@@ -228,33 +427,23 @@ def process_specification(spec_name, spec_res, df_base, link):
     df_spec = df_spec.dropna(subset=['Dep_Act'])
     df_spec = df_spec[df_spec['Dep_Act'] > 1e-6]
 
-    FALLBACK_BC = 1.1
-    df_spec['_bc'] = df_spec['banked_correction'].fillna(FALLBACK_BC)
-    mkt = df_spec.groupby(['mca_code', 'time_id']).agg(_pop=('pop_total', 'first'), _bc_mt=('_bc', 'first'))
-    b_dep_mt = df_spec[df_spec['is_B']].groupby(['mca_code', 'time_id'])['Dep_Act'].sum().rename('_dep_B')
-    mkt = mkt.join(b_dep_mt, how='left').fillna({'_dep_B': 0.0})
-    local_ratio = (mkt['_dep_B'] / mkt['_pop']).replace([np.inf, -np.inf], np.nan)
-    max_local = local_ratio.max() if local_ratio.notna().any() else 0.0
-    all_dep_t = df_spec.groupby('time_id')['Dep_Act'].sum()
-    nat_pop_t = mkt.groupby('time_id')['_pop'].sum()
-    nat_ratio = (all_dep_t / nat_pop_t).replace([np.inf, -np.inf], np.nan)
-    max_nat = nat_ratio.max() if nat_ratio.notna().any() else 0.0
-    max_ratio = max(max_local, max_nat) or 1.0
-
-    mkt['_b_mkt'] = mkt['_bc_mt'] * max_ratio * mkt['_pop']
-    df_spec = df_spec.merge(mkt[['_b_mkt']].reset_index(), on=['mca_code', 'time_id'], how='left')
-    mkt_r = mkt.reset_index()
-    mkt_r['_w'] = mkt_r['_bc_mt'] * mkt_r['_pop']
-    nat_dbar = (mkt_r.groupby('time_id')
-                .apply(lambda g: (g['_w'].sum() / g['_pop'].sum()) * max_ratio if g['_pop'].sum() > 0 else FALLBACK_BC * max_ratio,
-                       include_groups=False).rename('_dbar_nat'))
-    nat_pop = mkt_r.groupby('time_id')['_pop'].sum().rename('_pop_nat')
-    d_mkt = (nat_dbar * nat_pop).rename('_d_mkt').reset_index()
-    df_spec = df_spec.merge(d_mkt, on='time_id', how='left')
-
-    df_spec['share_B_cond'] = np.where(df_spec['is_B'], df_spec['Dep_Act'] / df_spec['_b_mkt'], np.nan)
-    df_spec['share_D'] = np.where(~df_spec['is_B'], df_spec['Dep_Act'] / df_spec['_d_mkt'], np.nan)
-    df_spec.drop(columns=['_b_mkt', '_d_mkt', '_bc'], inplace=True)
+    # ── Market size M and the ACTIVE-depositor shares ──────────────────────────────────────────
+    # The BLP share is the share of ACTIVE (awake) depositors, so the denominator is the ACTIVE
+    # market (1-φ)·M — NOT the total market M. Dividing by M alone made the fitted shares (1-φ)×
+    # too small (≈13.6× here), which in turn made the simulator's active deposit channel — the ONLY
+    # channel through which spreads move deposits — 13.6× too weak. See counterfactuals_plan.md §9.8.
+    #
+    #   Dep_Act_j = (1-φ)·M·s_j     (law of motion, V_Main eq 324)
+    #   ⇒  s_j = Dep_Act_j / ((1-φ)·M)
+    #
+    # PHI_CAP: (1-φ) → 0 as φ → 1, so the ratio explodes in near-comatose markets and a single such
+    # market-quarter would otherwise set r̂ for the whole country. Cap φ, and use the SAME capped φ in
+    # BOTH the anchor and the share — that is what guarantees Σ_j s_j ≤ 1/bc  < 1.
+    # Market size M_mt / M_nat and the ACTIVE-depositor shares (share_B_cond, share_D).
+    # Single shared implementation — see build_market_size_and_shares() above and
+    # counterfactuals_plan.md §0. Do NOT re-inline: three divergent copies is how the
+    # (1-phi), anchor and bc defects survived.
+    df_spec = build_market_size_and_shares(df_spec)
 
     spec_id = SPEC_MAP_INV.get(spec_name, spec_name)
     df_spec['Spec_ID'] = spec_id

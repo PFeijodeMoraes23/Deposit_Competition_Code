@@ -116,6 +116,10 @@ case "${CF_STEP}" in
             echo "ERROR: Python '${PYBIN}' not found on the node. Set PY_MODULE / CONDA_ENV / CF_PYTHON" >&2
             echo "  e.g.  PY_MODULE=miniconda CONDA_ENV=costsolve ROUTINES=7 bash submit_cf_all.sh" >&2
             exit 127; }
+        # The script's default COST_FWD is the local BCB tree, absent on the cluster. Point it at the
+        # data/COST_FWD where cost2 (Julia) wrote the psi_* — same dir as the forward r^f curve.
+        export CF_COST_FWD="${CF_COST_FWD:-${PROJECT_DIR}/../data/COST_FWD}"
+        echo "COST_FWD = ${CF_COST_FWD}"
         "${PYBIN}" "${PROJECT_DIR}/estimation_1_cost_3_solve.py" \
             --estim "${CF_ROUTINE}" --spec 12 --stage "${CF_STAGE}" \
             ${CF_EXTRA} ;;
