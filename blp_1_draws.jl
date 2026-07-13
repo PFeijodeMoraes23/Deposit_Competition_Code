@@ -155,7 +155,17 @@ Returns:
 function generate_demographic_draws(df::DataFrame, R::Int, seed::Int;
                                      sigma_table=nothing)
     rng    = MersenneTwister(seed + 1)  # offset seed to decorrelate from ν
-    d_cols = [c for c in D_COLS if c in names(df)]
+
+    # Every D_COL must be present.  Silently dropping one yields draws of width
+    # D-1 against a σ table of width D_DIM, which surfaces far downstream as an
+    # opaque DimensionMismatch (this is how a stale PIX path went unnoticed).
+    absent = [c for c in D_COLS if !(c in names(df))]
+    if !isempty(absent)
+        error("Demographic column(s) missing from the demand parquets: " *
+              join(absent, ", ") * ". The draws need all $(D_DIM) of D_COLS to " *
+              "match σ. Rebuild market_panel + the demand prep before regenerating draws.")
+    end
+    d_cols = copy(D_COLS)
     D      = length(d_cols)
 
     # Extract unique (mca_code, time_id) pairs with demographic means
@@ -298,20 +308,38 @@ function main()
     serialize(nu_path, nu_draws)
     println("  Saved: $(basename(nu_path))")
 
-    # ── 2. Load reference spec data for market keys ──────────────────────
-    # Draws only need the (mca_code, time_id) market keys, which are the same across
-    # routines. Read the demand parquet (no `_final` suffix) so the key set matches the
-    # estimation panels exactly.
-    _demand_prefix = Dict(1 => "demand_1", 2 => "demand_2", 3 => "demand_3_logistic",
-                          4 => "demand_4_constrained", 5 => "demand_5_probit",
-                          6 => "demand_6_index")
-    prefix = get(_demand_prefix, estim, "demand_$(estim)")
-    fname  = "$(prefix)_spec_$(spec).parquet"
-    path   = joinpath(input_dir, fname)
-    println("\n  Loading reference panel: $fname")
-    isfile(path) || error("Reference parquet not found: $path")
-    df = DataFrame(Parquet2.Dataset(path); copycols=true)
-    println("    $(nrow(df)) observations")
+    # ── 2. Market keys + demographic MEANS ← UNION of ALL routine panels ─
+    # Each draw is  mean + σ·ν, so we need, per (mca_code, time_id): the demographic MEANS and the
+    # σ vector. σ comes from demographics_sigma.parquet (below); the MEANS come from the demand
+    # panels — they are the only complete source (market_panel covers just 75% of the σ skeleton and
+    # has no pix_users_pf_per1000 at all).
+    #
+    # Take the UNION of EVERY routine's panel, not one reference. The routines' key sets are NOT
+    # identical — each sleep stage filters Dep_Act differently — so they differ by up to ~25
+    # market-quarters (measured 2026-07-13: E6 has 25 keys absent from E1, E7 has 4, E2 has 7).
+    # Keying off a single panel left the other routines' extra markets with NO draw row, and at
+    # estimation time those silently fell back to the pad row (mean demographics) rather than
+    # erroring. The union (23,126 keys) covers every routine.
+    #
+    # (This also retires a stale prefix map: it claimed 3 => demand_3_logistic, 5 => demand_5_probit,
+    #  filenames that no longer exist after the E1-E8 relabel. It only ever worked because --estim
+    #  defaults to 1 — and demand_1 does NOT cover the routines actually estimated.)
+    rx = Regex("^demand_\\d+(_[A-Za-z0-9_]+)?_spec_$(spec)\\.parquet\$")
+    files = sort(filter(f -> occursin(rx, f), readdir(input_dir)))
+    isempty(files) && error("No demand_*_spec_$(spec).parquet in $input_dir — the draws need at " *
+                            "least one routine panel for the demographic means.")
+    println("\n  Market keys + demographic means ← UNION over $(length(files)) routine panel(s):")
+    df = DataFrame()
+    for f in files
+        d = DataFrame(Parquet2.Dataset(joinpath(input_dir, f)); copycols=true)
+        cols = vcat(["mca_code", "time_id"], [c for c in D_COLS if c in names(d)])
+        k = unique(d[:, cols])
+        k.mca_code = string.(k.mca_code); k.time_id = string.(k.time_id)
+        println("    $(rpad(f, 44)) $(nrow(k)) keys")
+        df = isempty(df) ? k : vcat(df, k; cols=:union)
+    end
+    df = unique(df, [:mca_code, :time_id])
+    println("    UNION: $(nrow(df)) market-quarter keys")
 
     # ── 3. Load sigma table ──────────────────────────────────────────────
     sigma_table = load_sigma_table(input_dir)

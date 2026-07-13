@@ -103,6 +103,7 @@ IBGE_DIR   = str(paths.IBGE_DIR)
 ANATEL_DIR = str(paths.ANATEL_DIR)
 INSS_DIR   = os.path.join(BASE, "INSS")
 CAD_DIR    = str(paths.CADUNICO_DIR)
+PIX_DIR    = str(paths.PIX_DIR)
 
 PANEL_DIR  = str(paths.PROCESSED)
 os.makedirs(PANEL_DIR, exist_ok=True)
@@ -110,7 +111,7 @@ os.makedirs(PANEL_DIR, exist_ok=True)
 DEPOSITS_CSV   = os.path.join(PANEL_DIR,                  "deposits_panel.csv")
 MCA_XWALK_CSV  = os.path.join(IBGE_DIR,                   "muni_mca_regions_2010_2024_panel.csv")
 DEMO_CSV       = os.path.join(IBGE_DIR,                   "mca_demographics_panel.csv")
-PIX_CSV        = os.path.join(BCB_DIR, "PIX",             "pix_mca_panel.csv")
+PIX_CSV        = os.path.join(PIX_DIR,                    "pix_mca_panel.csv")
 ANATEL_CSV     = os.path.join(ANATEL_DIR,                 "anatel_mca_panel.csv")
 INSS_CSV       = os.path.join(INSS_DIR,                   "inss_mca_panel.csv")
 INCLUSION_CSV  = os.path.join(BCB_DIR, "Inclusion",       "bcb_inclusion_mca_panel.csv")
@@ -375,6 +376,17 @@ def merge_characteristics(dep: pd.DataFrame) -> pd.DataFrame:
 
     # Maintain original order for deterministic merge sequence
     panels = [(name, loaded.get(name)) for name, _ in loaders]
+
+    # A missing source used to degrade silently to all-NaN columns, which is how
+    # market_panel.csv was once rebuilt with no PIX columns at all.  Every source
+    # below feeds the demand-side demographics, so a miss is fatal.  INSS is the
+    # sole exception: its panel has never been built and nothing consumes it.
+    missing = [n for n, d in panels if d is None and n != "INSS"]
+    if missing:
+        raise FileNotFoundError(
+            "Required characteristic panel(s) not found: " + ", ".join(missing) +
+            ". Rebuilding market_panel without them would silently drop demographics."
+        )
 
     result = dep.copy()
 

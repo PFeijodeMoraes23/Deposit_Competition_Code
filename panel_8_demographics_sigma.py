@@ -387,8 +387,35 @@ def main():
     # Build time_id to match BLP prep format: "{year}Q{quarter}"
     skeleton["time_id"] = skeleton["year"].astype(str) + "Q" + skeleton["quarter"].astype(str)
 
+    # ── Demographic MEANS, alongside the sigmas ──────────────────────────
+    # blp_1_draws.jl builds each draw as  mean + sigma * nu, so it needs BOTH per market-quarter.
+    # It used to take the MEANS off a demand parquet (--estim), which was a bad key reference: the
+    # routines' key sets are NOT identical (each sleep stage filters Dep_Act differently, so they
+    # differ by up to ~25 market-quarters), and any single reference left the other routines' extra
+    # markets with no draw row — silently falling back to the pad row at estimation time.
+    # Emitting the means HERE, on the same 24,260-key skeleton as the sigmas, lets the draws key off
+    # this one file and decouples them from the demand panels entirely.
+    mp = MARKET_PANEL_CSV if 'MARKET_PANEL_CSV' in globals() else (
+        BASE / "BCB" / "Egan_et_al_2025_Rep" / "processed" / "market_panel.csv")
+    mean_cols = []
+    if Path(mp).exists():
+        _m = pd.read_csv(mp, usecols=lambda c: c in (["mca_code", "year", "quarter"] + D_COLS),
+                         dtype={"mca_code": str}, low_memory=False)
+        _have = [c for c in D_COLS if c in _m.columns]
+        if _have:
+            _m = (_m.groupby(["mca_code", "year", "quarter"], as_index=False)[_have].first())
+            skeleton["mca_code"] = skeleton["mca_code"].astype(str)
+            skeleton = skeleton.merge(_m, on=["mca_code", "year", "quarter"], how="left")
+            mean_cols = _have
+            _cov = 100 * skeleton[_have].notna().all(axis=1).mean()
+            logging.info(f"Merged {len(_have)} demographic MEAN columns from market_panel "
+                         f"({_cov:.1f}% of market-quarters complete)")
+    else:
+        logging.warning(f"market_panel.csv not found at {mp}; demographic MEANS not emitted — "
+                        f"blp_1_draws.jl will have to fall back to a demand parquet.")
+
     sigma_cols = [f"{c}_sigma" for c in D_COLS]
-    col_order = ["mca_code", "year", "quarter", "time_id"] + sigma_cols
+    col_order = ["mca_code", "year", "quarter", "time_id"] + mean_cols + sigma_cols
     col_order = [c for c in col_order if c in skeleton.columns]
     skeleton = skeleton[col_order]
     skeleton.sort_values(["mca_code", "year", "quarter"], inplace=True)
