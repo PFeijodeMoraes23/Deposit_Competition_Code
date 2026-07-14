@@ -48,6 +48,19 @@ const D_COLS  = ["gdp_per_capita", "fraction_65plus", "fraction_young",
                  "branches_per1000", "cadunico_families_per1000"]
 const D_DIM   = length(D_COLS)
 
+# The demographic MEANS come from the demand parquets, where the prep rescales four
+# of the eight columns (estimation_demand_link_common.py L168-171, mirroring
+# estimation_2_sleep.build_pooled_data so the native index matches).  The σ table
+# (panel_8_demographics_sigma.py) is written in NATURAL units and rescales nothing.
+# Pairing a scaled μ with a raw σ makes the draw N(μ_scaled, σ_raw): for
+# gdp_per_capita that is σ=5175 against a between-market SD of 3.9, i.e. the draw is
+# ~99.9% noise and the demographic carries no cross-market signal.  Divide σ by the
+# same factors so μ and σ live in one scale.  Keep in sync with the prep.
+const D_SCALE = Dict("gdp_per_capita"            => 10000.0,
+                     "cadunico_families_per1000" =>   100.0,
+                     "pix_users_pf_per1000"      =>   100.0,
+                     "connections_per100"        =>   100.0)
+
 # ==========================================================================
 # 0b. Paths
 # ==========================================================================
@@ -132,10 +145,17 @@ function load_sigma_table(input_dir::String)
     avail = [c for c in sigma_cols if c in names(df)]
     println("  Loaded sigma table: $(nrow(df)) rows, $(length(avail)) σ columns")
 
+    # σ is stored in natural units; the parquet means are rescaled by the prep.
+    # Bring σ into the means' scale (see D_SCALE).
+    scale = [get(D_SCALE, replace(c, "_sigma" => ""), 1.0) for c in avail]
+    for (c, s) in zip(avail, scale)
+        s == 1.0 || println("    rescaling $(c) by 1/$(s) to match the parquet means")
+    end
+
     tbl = Dict{Tuple{String,String}, Vector{Float64}}()
     for row in eachrow(df)
         key = (string(row.mca_code), string(row.time_id))
-        tbl[key] = Float64[coalesce(row[c], 0.0) for c in avail]
+        tbl[key] = Float64[coalesce(row[c], 0.0) / s for (c, s) in zip(avail, scale)]
     end
     return tbl
 end
