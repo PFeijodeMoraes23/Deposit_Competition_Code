@@ -178,10 +178,11 @@ def build_base_panel(panel_csv: Path) -> pd.DataFrame:
 
     df = df.dropna(subset=['deposit_balance', 'lagged_deposits', 'spread_qoq', 'spread_ann', 'entity_id', 'time_id'])
 
-    # Demand sample ends at MAX_YEAR (2024): the 2025 IF-Data chart-of-accounts break redefines
-    # total_assets (+50% level jump), so bank characteristics — and the instruments built from them —
-    # cannot be spliced across it. See estimation_demand_link_common.MAX_YEAR / plan §0A.2.
-    # After the lags, so 2024Q4 keeps its 2024Q3 lag.
+    # Demand sample ends at MAX_YEAR (2025 = last full year in the panel; keeps partial 2026 out).
+    # The 2025 IF-Data recode does NOT break the bank characteristics — the earlier "+50% jump in
+    # total_assets" was an analysis error (summing a conta across reports; report-1-only gives a
+    # matched-bank ratio of 1.015). See estimation_demand_link_common.MAX_YEAR / plan §0A.2.
+    # Applied after the lags, so the final quarter keeps its lag.
     if MAX_YEAR is not None and 'year' in df.columns:
         _n0 = len(df)
         df = df[df['year'] <= MAX_YEAR].copy()

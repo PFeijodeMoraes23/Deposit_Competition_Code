@@ -115,7 +115,7 @@ LABEL_MAP = {
     "risk_free_qoq":              ("SELIC (risk-free)",         r"\% qoq",      0.01, 2),
     "spread_a4_w":               ("Spread (4), B firms",     "bp",           0.01, 2),
     "spread_a5_w":               ("Spread (5), B firms",     "bp",           0.01, 2),
-    # Annualised spread variants (for Tables 1, 2b, 4)
+    # Annualized spread variants (for Tables 1, 2b, 4)
     "spread_ann_a4":             ("Spread (4)",              r"\% p.a.",     0.01, 2),
     "spread_ann_a5":             ("Spread (5)",              r"\% p.a.",     0.01, 2),
     "spread_ann_a4_w":           ("Spread (4), B firms",     r"\% p.a.",     0.01, 2),
@@ -366,7 +366,7 @@ def _build_firm_quarter_B(df_b: pd.DataFrame) -> pd.DataFrame:
     sp["spread_a5"] = np.where(sp["_den_spread_a5"] > 0,
                                sp["_num_spread_a5"] / sp["_den_spread_a5"], np.nan)
     out = out.merge(sp[grp_keys + ["spread_a4", "spread_a5"]], on=grp_keys, how="left")
-    # Annualise deposit-weighted spreads: spread_ann = rf_ann - dep_rate_ann
+    # Annualize deposit-weighted spreads: spread_ann = rf_ann - dep_rate_ann
     _rf_ann = (1 + out["risk_free_qoq"]) ** 4 - 1
     for _a in ("a4", "a5"):
         _dep_qoq = out["risk_free_qoq"] - out[f"spread_{_a}"] * 0.01
@@ -553,7 +553,7 @@ def render_table1(moments_b, moments_d, moments_all, meta, weight_col, suffix) -
         *body,
         "",
         r"\end{longtable}",
-        r"\par\noindent{\footnotesize \textit{Notes:} Spreads are annualised: $(1 + r_{\text{qoq}})^4 - 1$. "
+        r"\par\noindent{\footnotesize \textit{Notes:} Spreads are annualized: $(1 + r_{\text{qoq}})^4 - 1$. "
         r"Deposit spreads are defined as the risk-free rate minus the offered deposit rate.}",
         r"\doublespacing",
     ])
@@ -601,7 +601,7 @@ def build_table2(df: pd.DataFrame, weight_col: str | None) -> pd.DataFrame:
                   .rename("hhi_b")
                   .reset_index())
 
-    # Step 4: annualise spread at row level, then deposit-weight
+    # Step 4: annualize spread at row level, then deposit-weight
     df_b["_rf_ann"] = (1 + df_b["risk_free_qoq"]) ** 4 - 1
     for _a in ("a4", "a5"):
         _dep = df_b["risk_free_qoq"] - df_b[f"spread_{_a}"] * 0.01
@@ -687,7 +687,7 @@ def build_table2(df: pd.DataFrame, weight_col: str | None) -> pd.DataFrame:
                                   .rename("hhi_combined_natl")
                                   .reset_index())
 
-    # D-firm annualised deposit-weighted spreads by year
+    # D-firm annualized deposit-weighted spreads by year
     work_d = df_d[["year", "spread_a4", "spread_a5", "dep_a4", "dep_a5", "risk_free_qoq"]].copy()
     work_d["_rf_ann"] = (1 + work_d["risk_free_qoq"]) ** 4 - 1
     for _a in ("a4", "a5"):
@@ -706,7 +706,7 @@ def build_table2(df: pd.DataFrame, weight_col: str | None) -> pd.DataFrame:
     d_spread_yr["spread_ann_a5_d_w"] = np.where(d_spread_yr["_den_spread_ann_a5"] > 0,
                                                  d_spread_yr["_num_spread_ann_a5"] / d_spread_yr["_den_spread_ann_a5"], np.nan)
 
-    # National (B+D) annualised deposit-weighted spreads by year
+    # National (B+D) annualized deposit-weighted spreads by year
     work_all = pd.concat([
         df_b[["year", "spread_a4", "spread_a5", "dep_a4", "dep_a5", "risk_free_qoq", "_rf_ann"]],
         work_d[["year", "spread_a4", "spread_a5", "dep_a4", "dep_a5", "risk_free_qoq", "_rf_ann"]],
@@ -754,7 +754,7 @@ def build_table2(df: pd.DataFrame, weight_col: str | None) -> pd.DataFrame:
         drow_hhi_combined[yr] = float(v.iloc[0]) if len(v) else 0.0
     rows.append(drow_hhi_combined)
 
-    # Panel C: Risk-free rate (annualised) then annualised deposit-weighted spreads
+    # Panel C: Risk-free rate (annualized) then annualized deposit-weighted spreads
     rf_yr = (df.groupby(["year", "quarter"])["risk_free_qoq"].first()
                .groupby("year").mean())
     rf_ann_yr = (1 + rf_yr) ** 4 - 1
@@ -1005,7 +1005,7 @@ def render_table2b(t2_df, weight_col, suffix) -> str:
         r"\bottomrule",
         r"\end{tabular}",
         r"\begin{tablenotes}[flushleft]",
-        r"\item \scriptsize \textit{Notes:} All spreads and the SELIC rate are annualised: "
+        r"\item \scriptsize \textit{Notes:} All spreads and the SELIC rate are annualized: "
         r"$(1 + r_{\text{qoq}})^4 - 1$. "
         r"Spread\,(5) is undefined before 2020 and shown as blank. "
         r"Deposit spreads are defined as the risk-free rate minus the offered deposit rate.",
@@ -1136,7 +1136,7 @@ def build_table4(df: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
     df_d["log_total_assets"] = np.log(df_d["total_assets"].where(df_d["total_assets"] > 0))
     df_d["log_dep"]       = np.log(df_d["total_deposits"].where(df_d["total_deposits"] > 0))
     df_d["log_dep_a4"]       = np.log(df_d["dep_a4"].where(df_d["dep_a4"] > 0))
-    # Annualise spread: rf_ann - dep_rate_ann
+    # Annualize spread: rf_ann - dep_rate_ann
     _rf_ann = (1 + df_d["risk_free_qoq"]) ** 4 - 1
     _dep_qoq = df_d["risk_free_qoq"] - df_d["spread_a4"] * 0.01
     df_d["spread_ann_a4"] = _rf_ann - ((1 + _dep_qoq) ** 4 - 1)
@@ -1213,13 +1213,15 @@ def render_table4(t4_df, meta, suffix) -> str:
         r"$t \geq 2020\mathrm{Q}4$, the activation of the Brazilian instant "
         r"payment system on Nov.\ 16, 2020. Type-5 (prepaid) outcomes are not "
         r"reported because they are zero by construction prior to 2020Q4. "
-        r"Deposit spreads are annualised: $(1 + r_{\text{qoq}})^4 - 1$. "
+        r"Deposit spreads are annualized: $(1 + r_{\text{qoq}})^4 - 1$. "
         r"Deposit spreads are defined as the risk-free rate minus the offered deposit rate. "
         r"Stars: $^{*}\,p<0.10$, $^{**}\,p<0.05$, $^{***}\,p<0.01$."
     )
 
     tex = "\n".join([
-        r"\begin{table}[htbp]",
+        # [H] (exact placement, `float` package) rather than [htbp]: the table is discussed inline
+        # and must not drift to the top of another page.
+        r"\begin{table}[H]",
         r"\centering",
         r"\begin{threeparttable}",
         f"\\caption{{{caption}}}\\label{{{tab_label}}}",
@@ -1246,7 +1248,7 @@ def render_table4(t4_df, meta, suffix) -> str:
 # ---------------------------------------------------------------------------
 def build_appendix_rates() -> pd.DataFrame:
     """Annual averages of macro interest rates from quarterly_macro_rates.csv.
-    Quarterly compound rates are annualised as (1 + r_qoq/100)^4 - 1."""
+    Quarterly compound rates are annualized as (1 + r_qoq/100)^4 - 1."""
     df = pd.read_csv(MACRO_RATES_CSV)
     df["year"]    = df["AnoMes"] // 100
     df["quarter"] = df["AnoMes"] % 100
@@ -1268,7 +1270,7 @@ def build_appendix_rates() -> pd.DataFrame:
 
 
 def render_appendix_rates(df: pd.DataFrame) -> str:
-    """Portrait table of annualised macro rates by year."""
+    """Portrait table of annualized macro rates by year."""
     name      = "Appendix_Macro_Rates_by_Year"
     tab_label = f"tab:{name}"
     caption   = "Brazilian Macro Interest Rates by Year"
@@ -1277,7 +1279,7 @@ def render_appendix_rates(df: pd.DataFrame) -> str:
     # col positions: 1=Year, 2-4=market rates (cmidrule), 5=COPOM target
     col_spec   = "l@{\\hspace{1.2em}}rrr@{\\hspace{1.2em}}r"
     header_top = (
-        r" & \multicolumn{3}{c@{\hspace{1.2em}}}{\textit{Market Rates (annualised)}} & \\"
+        r" & \multicolumn{3}{c@{\hspace{1.2em}}}{\textit{Market Rates (annualized)}} & \\"
     )
     cmidrules  = r"\cmidrule(lr){2-4}"
     col_labels = r"Year & SELIC & CDI & Savings Rate & COPOM Target \\"
@@ -1422,7 +1424,7 @@ def render_appendix_b3_vars() -> str:
         r"    deposit\_rate\_qoq   & Type-specific deposit rate, QoQ decimal. Varies by type $k$ (see text). \\",
         r"    spread\_qoq         & $r^{\mathrm{f}}_t - r^{\mathrm{dep}}_{jkmt}$, QoQ decimal. Used in sleepiness estimation and deposit dynamics. \\",
         r"    \addlinespace[0.4em]",
-        r"    \multicolumn{2}{l}{\textit{Annualised counterparts (for demand estimation)}} \\",
+        r"    \multicolumn{2}{l}{\textit{Annualized counterparts (for demand estimation)}} \\",
         r"    \midrule",
         r"    risk\_free\_ann      & $(1+\texttt{risk\_free\_qoq})^4 - 1$. \\",
         r"    deposit\_rate\_ann   & $(1+\texttt{deposit\_rate\_qoq})^4 - 1$. \\",
@@ -1575,9 +1577,9 @@ def render_appendix_b10() -> str:
         r"    risk\_free\_qoq      & Risk-free rate used in spread construction; equals \texttt{selic\_qoq}. \\",
         r"    deposit\_rate\_qoq   & Type-specific deposit rate, QoQ decimal. Varies by type (see text). \\",
         r"    spread\_qoq         & $r^{\text{f}}_t - r^{\text{dep}}_{jkmt}$, QoQ decimal. Used in sleepiness estimation. \\",
-        r"    risk\_free\_ann      & $(1+\texttt{risk\_free\_qoq})^4 - 1$; annualised SELIC. \\",
-        r"    deposit\_rate\_ann   & $(1+\texttt{deposit\_rate\_qoq})^4 - 1$; annualised deposit rate. \\",
-        r"    spread\_ann         & $r^{\text{f,ann}}_t - r^{\text{dep,ann}}_{jkmt}$, annualised. Used in demand estimation. \\",
+        r"    risk\_free\_ann      & $(1+\texttt{risk\_free\_qoq})^4 - 1$; annualized SELIC. \\",
+        r"    deposit\_rate\_ann   & $(1+\texttt{deposit\_rate\_qoq})^4 - 1$; annualized deposit rate. \\",
+        r"    spread\_ann         & $r^{\text{f,ann}}_t - r^{\text{dep,ann}}_{jkmt}$, annualized. Used in demand estimation. \\",
     ]
     return _longtable(
         caption  = r"Rates and Spreads",

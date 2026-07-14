@@ -86,17 +86,23 @@ ACCESS_HI       = float(os.environ.get('DEMAND_ACCESS_HI', 2.5))
 FINDEX_FALLBACK = float(os.environ.get('DEMAND_FINDEX_FALLBACK', 0.77))
 TOTAL_SHARE_CAP = float(os.environ.get('DEMAND_TOTAL_SHARE_CAP', 0.95))
 
-# MAX_YEAR  the demand stage (logit + BLP) ends at 2024Q4.  BCB rebuilt the IF-Data chart of accounts
-#          in 2025 (IFRS-style): reports 1-4 were RENUMBERED *and REDEFINED*.  The new "Ativo Total"
-#          (140220) is not the old one (78182) — on the matched sample of conglomerates present in both,
-#          total assets (a STOCK, so it must be continuous across adjacent quarters) jumps by a median
-#          ×1.52 from 2024Q4 to 2025Q1.  Aliasing the codes would inject a +50% level break into
-#          total_assets and hence into log_total_assets, equity_ratio and every *_cost_ratio — i.e. into
-#          the BLP's instruments.  The income side breaks too (old gross 78208 has no 2025 counterpart;
-#          TVM is now net of fair-value adjustments and derivatives became a net result).  Both stages
-#          need bank characteristics, so the sample stops before the break rather than splicing it.
-#          See counterfactuals_plan.md §0A.2.  The sleep stage is unaffected (it does not use these).
-MAX_YEAR        = int(os.environ.get('DEMAND_MAX_YEAR', 2024))
+# MAX_YEAR  upper bound on the demand sample (inclusive).  Default 2025 = the last full year in the
+#          panel (panel_6 caps at PANEL_END_YEAR=2025Q4); this keeps any partial 2026 data out.
+#
+#          NB a 2024 cap was briefly imposed on the belief that BCB's 2025 IF-Data recode broke the
+#          bank characteristics — that the new "Ativo Total" (140220) was not the old one (78182),
+#          with total assets (a STOCK, hence necessarily continuous) jumping ×1.52 across 2024Q4→2025Q1.
+#          THAT WAS AN ANALYSIS ERROR, not a data break: `Ativo Total` is reported in 2 reports in 2024
+#          and 3 in 2025, and the check summed across reports instead of filtering to report 1 (3/2 = 1.5).
+#          Filtering to report 1 — which is what panel_4 actually does — the matched-bank ratio is
+#          **1.015**, and the cost ratios are continuous (personnel .00698→.00700, admin .00848→.00858).
+#          The 2025 renumbering is real and panel_4's alias map handles it correctly.  2025 stays IN.
+#
+#          The one genuine 2025 break is `fin_income`: the DRE was restructured (TVM now net of
+#          fair-value/hedge adjustments; derivatives became a net result), so `asset_return_qoq` (r^j)
+#          is biased in 2025.  That feeds the CF cost stage only — not the sleep, not the BLP.
+#          See counterfactuals_plan.md §0A.2.
+MAX_YEAR        = int(os.environ.get('DEMAND_MAX_YEAR', 2025))
 
 # NB: M_mt / M_nat are BUILT inside process_specification (after the keep_cols filter) and so reach
 # the parquet without needing to be listed here.

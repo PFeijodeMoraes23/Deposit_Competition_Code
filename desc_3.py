@@ -19,8 +19,8 @@ mean/median/max obs per cluster, and the deposit HHI with its numbers-equivalent
 cumulative share and each cluster's observation share.
 
 Outputs (CSV + LaTeX to ESTIMATION_OUTPUT/Rout, mirrored to Drafts/Deposit Competition):
-    cluster_imbalance_panelA.tex  (\\input-able standalone table [htbp]: cluster structure / WCB justification; \\label{tab:cluster_imbalance})
-    cluster_imbalance_panelB.tex  (\\input-able standalone table [htbp]: deposit concentration, top-N, for V_Main.tex; \\label{tab:deposit_concentration})
+    cluster_imbalance_panelA.tex  (\\input-able standalone table [H]: cluster structure / WCB justification; \\label{tab:cluster_imbalance})
+    cluster_imbalance_panelB.tex  (\\input-able standalone table [H], spans \\textwidth: deposit concentration, top-N, for V_Main.tex; \\label{tab:deposit_concentration})
     cluster_imbalance.csv
     cluster_imbalance.json  (the underlying numbers)
 Panels A and B are separate, self-contained tables (no cross-\\ref) so Panel B can be
@@ -156,10 +156,27 @@ def build_stats(df, top_n=5):
     return st, sizes
 
 
-def _table_open(caption, label):
-    return [r"\begin{table}[htbp]", r"\setstretch{1.0}", r"\centering",
+def _table_open(caption, label, full_width=False):
+    """Standalone table preamble.
+
+    Placement is [H] (exact position, `float` package) rather than [htbp]: these panels are
+    referenced inline in the text and must not drift to the top of another page.
+
+    full_width=True opens a threeparttable spanning \\textwidth, so the table fills the column
+    instead of sitting as a narrow block. The tabular itself must then be a tabular* with
+    \\extracolsep{\\fill} (see _tabular_full_width) — that spreads the COLUMNS to the full width
+    rather than rescaling the type, which a \\resizebox would do.
+    """
+    width = r"\begin{threeparttable}[b]" if not full_width else r"\begin{threeparttable}"
+    return [r"\begin{table}[H]", r"\setstretch{1.0}", r"\centering",
             r"\caption{" + caption + r"}", r"\label{" + label + r"}",
-            r"\footnotesize", r"\begin{threeparttable}"]
+            r"\footnotesize", width]
+
+
+def _tabular_full_width(colspec_body):
+    """tabular* spanning \\textwidth. `colspec_body` is the column spec WITHOUT the leading
+    @{} — e.g. 'l r r r'. \\extracolsep{\\fill} distributes the slack between columns."""
+    return r"\begin{tabular*}{\textwidth}{@{\extracolsep{\fill}}" + colspec_body + r"@{}}"
 
 
 def render_panel_a(st):
@@ -194,12 +211,12 @@ def render_panel_b(st):
     Self-contained so it can be \\input on its own into V_Main.tex."""
     def pct(x):
         return f"{100 * x:.1f}\\%"
-    L = _table_open(r"Deposit Shares", r"tab:deposit_concentration")
-    L += [r"\begin{tabular}{@{}l r r r@{}}", r"\toprule",
+    L = _table_open(r"Deposit Shares", r"tab:deposit_concentration", full_width=True)
+    L += [_tabular_full_width(r"l r r r"), r"\toprule",
           r" & Dep.\ share & Cumulative & Obs.\ share \\", r"\midrule"]
     for i, r in enumerate(st["top_n"], 1):
         L.append(f"{_ordinal(i)} & {pct(r['dep_share'])} & {pct(r['cum_share'])} & {pct(r['obs_share'])} " + r"\\")
-    L += [r"\bottomrule", r"\end{tabular}",
+    L += [r"\bottomrule", r"\end{tabular*}",
           r"\begin{tablenotes}[flushleft]", r"\footnotesize",
           r"\item \textit{Notes:} Conglomerates are ranked by their time-averaged national share of "
           r"total deposits (``Dep.\ share''). ``Obs.\ share'' is a conglomerate's share of estimation "
