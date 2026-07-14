@@ -197,11 +197,16 @@ def _linear_warm_start(y_dm, X, Z, CF):
         return np.zeros(X.shape[1] + CF.shape[1])
 
 
-def fit_nlls_link(df, state_cols, has_cf, link, loss="cauchy", fe_time_col=None):
+def fit_nlls_link(df, state_cols, has_cf, link, loss="cauchy", fe_time_col=None,
+                  bootstrap=True):
     """NLLS sleepiness fit with link in {'logit','probit','uniform'}. Returns a
     NonLinearResults (params = AMEs for tables; params_native = index coefs for phi).
     fe_time_col (e.g. 'time_id') adds a second additive FE => two-way (entity+time)
-    concentration; None reproduces the entity-only within estimator exactly."""
+    concentration; None reproduces the entity-only within estimator exactly.
+
+    bootstrap=False skips the wild cluster bootstrap and returns NaN AMEs/SEs, keeping
+    only params_native (and the index). Used by the single-index/joint-sieve estimators,
+    which fit this logit purely to warm-start theta and never read its AMEs or SEs."""
     CF_cols = ["v_hat_x_lagged_dep"] if has_cf else []
     cols = state_cols + ["deposit_balance", "nr_lagged_dep", "entity_id"]
     df_ss = df.dropna(subset=cols + CF_cols).copy()
@@ -241,20 +246,27 @@ def fit_nlls_link(df, state_cols, has_cf, link, loss="cauchy", fe_time_col=None)
 
     # Inference: score/multiplier wild cluster bootstrap (replaces the old
     # homoskedastic delta-method SEs, which were NOT cluster-robust).
-    ame_d, bse_d, pval_d = nlls_link_wild_bootstrap(res_lsq, X, link, K, G, idx,
-                                                    cl_inv, n_cl)
-    ps = pd.Series(ame_d).reindex(idx)
-    bs = pd.Series(bse_d).reindex(idx)
-    pvals = pd.Series(pval_d).reindex(idx)
-    tvals = ps / bs.replace(0, np.nan)
+    if bootstrap:
+        ame_d, bse_d, pval_d = nlls_link_wild_bootstrap(res_lsq, X, link, K, G, idx,
+                                                        cl_inv, n_cl)
+        ps = pd.Series(ame_d).reindex(idx)
+        bs = pd.Series(bse_d).reindex(idx)
+        pvals = pd.Series(pval_d).reindex(idx)
+        tvals = ps / bs.replace(0, np.nan)
+    else:
+        ps = pd.Series(np.nan, index=idx)
+        bs = pd.Series(np.nan, index=idx)
+        pvals = pd.Series(np.nan, index=idx)
+        tvals = pd.Series(np.nan, index=idx)
 
     tss = float(np.sum((y_dm - y_dm.mean()) ** 2))
     rss = float(np.sum(res_lsq.fun ** 2))
     rsq = 1 - rss / tss if tss > 0 else np.nan
     ps_native = pd.Series(res_lsq.x, index=idx)
     B_used, scheme_used = boot_cfg()
+    boot_msg = f"wild boot B={B_used} ({scheme_used})" if bootstrap else "wild boot SKIPPED (warm start)"
     print(f"  [NLLS-{link}] status={res_lsq.status} | nfev={res_lsq.nfev} | "
-          f"cost={res_lsq.cost:.4g} | wild boot B={B_used} ({scheme_used})")
+          f"cost={res_lsq.cost:.4g} | {boot_msg}")
     return NonLinearResults(ps, bs, tvals, pvals, G_star, params_native=ps_native,
                             nobs=len(y_dm), rsquared=rsq, G_nominal=G_nominal,
                             cov_ame=None, link=link)

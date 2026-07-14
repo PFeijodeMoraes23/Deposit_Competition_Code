@@ -2,6 +2,7 @@
 from utils.venv_guard import ensure_project_venv
 ensure_project_venv(__file__)
 import argparse
+import os
 import sys
 import subprocess
 from pathlib import Path
@@ -32,10 +33,13 @@ def main():
     # 'all' = the default lineup E1-E8; E9 (optional kernel) must be requested explicitly.
     EST_LIST = [1, 2, 3, 4, 5, 6, 7, 8] if args.estimation == 'all' else [int(args.estimation)]
 
-    print(f"[Demand Prep] Launching {len(EST_LIST)} script(s) in parallel...")
+    # Each child parses its own ~700 MB market_panel_phis.csv, so running all 8 at once
+    # exhausts RAM (pandas "C error: out of memory"). Cap concurrency; DEMAND_PREP_JOBS overrides.
+    n_jobs = max(1, min(len(EST_LIST), int(os.environ.get("DEMAND_PREP_JOBS", "2"))))
+    print(f"[Demand Prep] Launching {len(EST_LIST)} script(s), {n_jobs} at a time...")
 
     failed = []
-    with ThreadPoolExecutor(max_workers=len(EST_LIST)) as pool:
+    with ThreadPoolExecutor(max_workers=n_jobs) as pool:
         futures = {pool.submit(_run_script, est, args.spec): est for est in EST_LIST}
         for future in as_completed(futures):
             est, returncode, output = future.result()

@@ -86,6 +86,18 @@ ACCESS_HI       = float(os.environ.get('DEMAND_ACCESS_HI', 2.5))
 FINDEX_FALLBACK = float(os.environ.get('DEMAND_FINDEX_FALLBACK', 0.77))
 TOTAL_SHARE_CAP = float(os.environ.get('DEMAND_TOTAL_SHARE_CAP', 0.95))
 
+# MAX_YEAR  the demand stage (logit + BLP) ends at 2024Q4.  BCB rebuilt the IF-Data chart of accounts
+#          in 2025 (IFRS-style): reports 1-4 were RENUMBERED *and REDEFINED*.  The new "Ativo Total"
+#          (140220) is not the old one (78182) — on the matched sample of conglomerates present in both,
+#          total assets (a STOCK, so it must be continuous across adjacent quarters) jumps by a median
+#          ×1.52 from 2024Q4 to 2025Q1.  Aliasing the codes would inject a +50% level break into
+#          total_assets and hence into log_total_assets, equity_ratio and every *_cost_ratio — i.e. into
+#          the BLP's instruments.  The income side breaks too (old gross 78208 has no 2025 counterpart;
+#          TVM is now net of fair-value adjustments and derivatives became a net result).  Both stages
+#          need bank characteristics, so the sample stops before the break rather than splicing it.
+#          See counterfactuals_plan.md §0A.2.  The sleep stage is unaffected (it does not use these).
+MAX_YEAR        = int(os.environ.get('DEMAND_MAX_YEAR', 2024))
+
 # NB: M_mt / M_nat are BUILT inside process_specification (after the keep_cols filter) and so reach
 # the parquet without needing to be listed here.
 EXTRA_KEEP_COLS = (X_COLS + D_COLS + IV_BLP_LOO + IV_COST + IV_CAPITAL + IV_FEE
@@ -156,6 +168,16 @@ def build_base_panel(panel_csv):
     df['spread_qoq'] = df['spread_qoq'] * 10_000
     df['spread_ann'] = df['spread_ann'] * 10_000
     df = df.dropna(subset=['deposit_balance', 'lagged_deposits', 'spread_qoq', 'spread_ann', 'entity_id', 'time_id'])
+
+    # Cap the demand sample at MAX_YEAR (see the MAX_YEAR note above: the 2025 IF-Data chart-of-accounts
+    # break makes bank characteristics non-spliceable).  Applied AFTER the lags are formed, so 2024Q4
+    # keeps its 2024Q3 lag.
+    if MAX_YEAR is not None and 'year' in df.columns:
+        _n0 = len(df)
+        df = df[df['year'] <= MAX_YEAR].copy()
+        logging.info(f"  MAX_YEAR={MAX_YEAR}: kept {len(df):,} of {_n0:,} rows "
+                     f"(dropped {_n0 - len(df):,} in years > {MAX_YEAR})")
+
     df['constant'] = 1.0
     if 'year' in df.columns:
         df['post_2020'] = (df['year'] >= 2020).astype(int)

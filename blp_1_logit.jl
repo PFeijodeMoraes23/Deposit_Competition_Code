@@ -235,10 +235,26 @@ function build_matrices(df::DataFrame, xcols::Vector{String}, add_dtype::Bool)
 
     # IV matrix
     all_iv_names = vcat(IV_BLP_LOO, IV_COST, IV_CAPITAL)
-    iv_avail = [c for c in all_iv_names if c in names(df)]
-    # Drop IVs with zero variance
-    iv_avail = [c for c in iv_avail if
-        std(replace(Float64.(coalesce.(df[!, c], 0.0)), Inf=>0.0, -Inf=>0.0)) > 1e-10]
+
+    # A missing instrument COLUMN used to be dropped in silence, which is how the entire IV_BLP_LOO
+    # block vanished when a market_panel rebuild skipped panel_7_instruments.py (it OVERWRITES
+    # market_panel.csv with the LOO instruments + FGC dummy). The logit then ran on the cost shifters
+    # alone. A missing column is a broken panel, not a modelling choice — say so.
+    _absent = [c for c in all_iv_names if !(c in names(df))]
+    if !isempty(_absent)
+        error("Demand parquet is missing instrument column(s): " * join(_absent, ", ") *
+              ".\nRebuild in order: panel_6 → panel_7 (LOO instruments + FGC; OVERWRITES " *
+              "market_panel.csv) → panel_9 --patch-market, then re-run the demand prep.")
+    end
+
+    # Zero-variance IVs are still dropped (a constant column carries no identifying information and
+    # would make Z'Z singular) — but say WHICH, so a silently-degenerate instrument is visible.
+    _zerovar = [c for c in all_iv_names if
+        std(replace(Float64.(coalesce.(df[!, c], 0.0)), Inf=>0.0, -Inf=>0.0)) <= 1e-10]
+    if !isempty(_zerovar)
+        @warn "Dropping zero-variance instrument(s): " * join(_zerovar, ", ")
+    end
+    iv_avail = [c for c in all_iv_names if !(c in _zerovar)]
 
     Z = zeros(N, length(iv_avail))
     for (i, col) in enumerate(iv_avail)

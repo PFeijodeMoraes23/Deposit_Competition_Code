@@ -95,6 +95,12 @@ COSIF_PROCESSED_PATH = os.path.join(PROCESSED_PATH, "COSIF_PROCESSED")
 for _p in [RAW_PATH, SGS_PATH, PROCESSED_PATH, OUTPUT_PATH, COSIF_PROCESSED_PATH]:
     os.makedirs(_p, exist_ok=True)
 
+# rate_a4 (type-4 / CDB) plausibility band, as a multiple of the CONTEMPORANEOUS Selic.  A CDB pays
+# ~90-115% of CDI; past a few multiples of Selic the implicit expense/stock ratio is broken, not a
+# deposit rate.  Rates above the band are treated as MISSING and fall through to cdi_qoq (the last
+# resort already in the rate_a4 chain).  See the guard near the rate_a4 assembly.
+RATE_A4_MAX_MULT = float(os.environ.get("RATE_A4_MAX_MULT", 3.0))
+
 # Logging
 _log_file = os.path.join(SCRIPT_DIR, "master_panel_build.log")
 _handler  = RotatingFileHandler(
@@ -1958,7 +1964,36 @@ def append_rates_to_panel():
         .fillna(aux["cosif_implicit_rate"])
         .fillna(aux["cdi_qoq"])
     )
-    
+
+    # ---- rate_a4 plausibility guard -------------------------------------------------------------
+    # The type-4 (CDB) implicit rate carries a tail out to 0.49/quarter (~370%/yr).  Annualised by
+    # (1+r)^4 below, that produces spreads down to -357 pp, which then dominate the BLP.  A CDB pays
+    # ~90-115% of CDI; anything past a few multiples of Selic is not a deposit rate, it is a broken
+    # expense/stock ratio.  Diagnosed (2026-07-14): 0.78% of rows, 86.5% of them from ten
+    # conglomerates, P(bad | bad last quarter) = 95%.  It is NOT a small-denominator artifact (the
+    # flagged share RISES with the CDB book) and NOT a semester-cumulation bug (ex-Bradesco the
+    # flagged rows are flat across quarters).  Bradesco alone is 57% of flags, all in 2016, its book
+    # halving -49% in Q1 and recovering +62% in Q4 (the HSBC Brasil year) -- a bad filing, not bad
+    # code.  The rest are CFIs/SCFIs/leasing/asset-manager entities with a near-zero CDB book.
+    #
+    # So: treat an implausible rate as MISSING and let it fall through to cdi_qoq, the last resort
+    # already in the chain above.  This never rewrites a rate that was actually measured.
+    #
+    # Precedent: this tightens a device the pipeline already uses -- cosif_implicit_rate > 0.5 is
+    # NaN'd above ("a quarterly deposit rate above 50% is economically implausible") and
+    # _calculate_residual_type4_rate caps at 0.5.  Those bounds are far too loose AND, critically,
+    # were never applied to cosif_cdb_rate_corrected -- which is where the tail actually lives
+    # (100% coverage, median 0.026, but 3.8% above 0.10/qtr).  See counterfactuals_plan.md §0B.
+    _band = RATE_A4_MAX_MULT * aux["selic_qoq"]
+    _bad = (aux["rate_a4"] > _band) & aux["rate_a4"].notna() & aux["selic_qoq"].notna()
+    aux["rate_a4_guarded"] = _bad.astype(int)
+    aux.loc[_bad, "rate_a4"] = np.nan
+    aux["rate_a4"] = aux["rate_a4"].fillna(aux["cdi_qoq"])
+    logging.info(
+        f"[wide] rate_a4 plausibility guard (> {RATE_A4_MAX_MULT:g}x Selic): "
+        f"{int(_bad.sum()):,} of {len(aux):,} bank-quarters ({100*_bad.mean():.2f}%) -> cdi_qoq"
+    )
+
     if "ip_prepaid_rate" in aux.columns:
         aux["rate_a5"] = np.where(
             aux["has_ip"] == 1,
@@ -1984,8 +2019,10 @@ def append_rates_to_panel():
                  "spread_ann_a1", "spread_ann_a2", "spread_ann_a3", "spread_ann_a4", "spread_ann_a5"]
     df = df.drop(columns=[c for c in drop_cols if c in df.columns], errors='ignore')
 
+    # rate_a4_guarded rides along so downstream code (and the paper) can see WHICH bank-quarters had
+    # an implausible CDB implicit rate replaced by cdi_qoq — otherwise the substitution is invisible.
     cols_to_merge = ["CodConglomeradoPrudencial", "AnoMes", "risk_free_qoq", "risk_free_ann",
-                     "total_deposits"] + \
+                     "total_deposits", "rate_a4_guarded"] + \
                     [f"rate_a{t}" for t in range(1, 6)] + \
                     [f"spread_a{t}" for t in range(1, 6)] + \
                     [f"spread_ann_a{t}" for t in range(1, 6)]

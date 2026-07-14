@@ -96,6 +96,29 @@ def _has_ip_from_list_files(list_dir: Path) -> dict[str, int]:
         return {}
 
 
+# ── 2025 IF-Data account renumbering ─────────────────────────────────────────────
+# In 2025 the BCB renumbered every IF-Data report we read (1, 2, 3, 4) — and for
+# reports 2 and 4 it also RESTRUCTURED the lines. The old 78xxx codes stop at 2024Q4
+# and 140xxx/141xxx codes take over from 2025Q1, so hardcoding the old codes silently
+# returned NaN for all of 2025. Report 5 (capital) was NOT renumbered.
+#
+# The two vintages never coexist within a quarter, so both are merged into a single
+# {code -> canonical_name} lookup and the pivot's groupby-sum resolves whichever code
+# that period actually carries. Mappings were derived empirically by matching the raw
+# `NomeColuna` labels between 2024 and 2025 — no code was guessed.
+#
+# This is a pure code->name re-resolution: the canonical series keep their pre-2025
+# economic definitions (where 2025 SPLIT an old line into components, every component
+# maps to the same canonical name so the sum re-assembles the original aggregate).
+
+def _accounts(pre_2025: dict, from_2025: dict) -> dict:
+    """Merge the pre-2025 and 2025+ account-code vintages into one lookup."""
+    overlap = set(pre_2025) & set(from_2025)
+    if overlap:
+        raise ValueError(f'Account code(s) {sorted(overlap)} claimed by both vintages.')
+    return {**pre_2025, **from_2025}
+
+
 def load_and_pivot(report_num, accounts_dict):
     csv_path = os.path.join(IF_AGG_DIR, f'IF_DATA_type_1_report_{report_num}.csv')
     if not os.path.exists(csv_path):
@@ -188,7 +211,12 @@ def load_and_pivot(report_num, accounts_dict):
 
 def build_panel() -> pd.DataFrame:
     # 1. Base (Resumo) size attributes
-    p1 = load_and_pivot(1, {78182: 'total_assets', 78186: 'equity'})
+    p1 = load_and_pivot(1, _accounts(
+        {78182: 'total_assets',    # Ativo Total
+         78186: 'equity'},         # Patrimonio Liquido
+        {140220: 'total_assets',   # 2025: Ativo Total
+         140246: 'equity'},        # 2025: Patrimonio Liquido
+    ))
     if p1.empty: return pd.DataFrame()
     for col in ['total_assets', 'equity']:
         if col not in p1.columns: p1[col] = np.nan
@@ -199,29 +227,80 @@ def build_panel() -> pd.DataFrame:
     #    — it is non-earning cash. Compulsórios are not broken out separately in IF-Data's condensed
     #    Ativo; they sit inside the asset base earning little, so the realized yield below is already
     #    reserve-drag-adjusted (see counterfactuals_plan.md §9.4).
-    p2 = load_and_pivot(2, {
-        78192: 'npl_provision',
-        78189: 'aplic_interfin',   # Aplicacoes Interfinanceiras de Liquidez
-        78190: 'tvm',              # TVM e Instrumentos Financeiros Derivativos
-        78193: 'credit_net',       # Operacoes de Credito Liquidas de Provisao
-        78198: 'leasing_net',      # Arrendamento Mercantil Liquido de Provisao
-    })
+    p2 = load_and_pivot(2, _accounts(
+        {78192: 'npl_provision',    # Provisao sobre Operacoes de Credito
+         78189: 'aplic_interfin',   # Aplicacoes Interfinanceiras de Liquidez
+         78190: 'tvm',              # TVM e Instrumentos Financeiros Derivativos
+         78193: 'credit_net',       # Operacoes de Credito Liquidas de Provisao
+         78198: 'leasing_net'},     # Arrendamento Mercantil Liquido de Provisao
+        # 2025 renumbered AND restructured the Ativo (IFRS-9 style "Perda Esperada").
+        {140202: 'npl_provision',   # Perda Esperada (e2), under Operacoes de Credito
+         140199: 'aplic_interfin',  # Aplicacoes Interfinanceiras de Liquidez
+         # 78190 bundled TVM + derivatives; 2025 splits them. Both map to 'tvm' so the
+         # groupby-sum re-assembles the pre-2025 aggregate (no definition change).
+         140200: 'tvm',             # Titulos e Valores Mobiliarios
+         141612: 'tvm',             # Instrumentos Derivativos
+         140205: 'credit_net',      # Operacoes de Credito (e) — already net of Perda Esperada
+         140210: 'leasing_net'},    # Operacoes de Arrendamento Financeiro (f) — net
+        # NOT mapped (genuinely NEW 2025 lines with no pre-2025 counterpart, so including
+        # them would break comparability): 140216 Outras Operacoes com Caracteristicas de
+        # Concessao de Credito, 145833 Valores a Receber de Transacoes de Pagamentos.
+    ))
 
     # 3. Wholesale (Passivo)
-    p3 = load_and_pivot(3, {
-        78288: 'repos', 78289: 'lci', 78290: 'lca',
-        78291: 'letras_financeiras', 78295: 'emprestimos_repasses'
-    })
+    p3 = load_and_pivot(3, _accounts(
+        {78288: 'repos',                  # Obrigacoes por Operacoes Compromissadas
+         78289: 'lci',                    # Letras de Credito Imobiliario
+         78290: 'lca',                    # Letras de Credito do Agronegocio
+         78291: 'letras_financeiras',     # Letras Financeiras
+         78295: 'emprestimos_repasses'},  # Obrigacoes por Emprestimos e Repasses
+        {140230: 'repos',                 # 2025: same five lines, renumbered 1:1
+         140231: 'lci',
+         140232: 'lca',
+         140233: 'letras_financeiras',
+         140238: 'emprestimos_repasses'},
+    ))
 
     # 4. Costs + financial income (DRE)
-    p4 = load_and_pivot(4, {
-        78218: 'personnel_expenses',
-        78219: 'admin_expenses',
-        78220: 'tax_expenses',
-        78208: 'fin_income',       # Receitas de Intermediacao Financeira (= credit + TVM + deriv + ...)
-    })
+    p4 = load_and_pivot(4, _accounts(
+        {78218: 'personnel_expenses',  # Despesas de Pessoal
+         78219: 'admin_expenses',      # Despesas Administrativas
+         78220: 'tax_expenses',        # Despesas Tributarias
+         78208: 'fin_income'},         # Receitas de Intermediacao Financeira (= credit + TVM + deriv + ...)
+        # 2025 rebuilt the DRE. The three expense lines survive 1:1 by name. The single
+        # gross-revenue total 78208 does NOT: it was decomposed into per-asset-class
+        # "Rendas de ..." lines (the 2025 total 141851 is the NET result of intermediation
+        # — the analogue of the old 78215, not of 78208). We therefore re-assemble 78208
+        # from exactly the components it used to contain, so 'fin_income' keeps its
+        # pre-2025 meaning and stays the income earned on `earning_assets` below.
+        {141858: 'personnel_expenses',  # Despesas de Pessoal (o)
+         141859: 'admin_expenses',      # Despesas Administrativas (p)
+         141862: 'tax_expenses',        # Despesas Tributarias (s)
+         141835: 'fin_income',          # Rendas de Operacoes de Credito      (old a1)
+         141836: 'fin_income',          # Rendas de Arrendamento Financeiro   (old a2)
+         141830: 'fin_income',          # Rendas de Titulos e Valores Mobiliarios (old a3)
+         141849: 'fin_income',          # Resultado com Derivativos           (old a4)
+         141825: 'fin_income'},         # Rendas de Aplicacoes Interfinanceiras de Liquidez
+                                        #   (carries the old a6 Rendas de Aplicacoes Compulsorias;
+                                        #    old a5 Resultado de Cambio has no 2025 line — FX is now
+                                        #    folded into the "Ajuste de Variacao Cambial" subcomponents
+                                        #    already inside the totals above).
+        # NOT mapped: 141837 Rendas de Outras Operacoes com Caracteristicas de Concessao de
+        # Credito and 141850 Outros Resultados de Intermediacao Financeira — new buckets whose
+        # assets are likewise excluded from `earning_assets`, so leaving them out keeps the
+        # income/asset numerator and denominator consistent.
+        #
+        # CAVEAT (fin_income only): unlike every other series here, 78208 has NO exact 2025
+        # counterpart, so this is a best-faith reconstruction, not an identity. It does NOT
+        # splice perfectly: system-wide 2025Q1 = R$336bn vs 2024Q1 = R$451bn. The shortfall is
+        # concentrated in TVM income (R$103bn vs R$159bn) and in derivatives, which flipped from
+        # a GROSS revenue line (old a4, +R$10bn) to a NET result (new (i), -R$24bn) — the 2025
+        # DRE simply does not decompose the old way. Alternative groupings land at R$347-370bn;
+        # none recover R$451bn. Consequence: `asset_return_qoq` (r^j) is biased DOWN in 2025
+        # relative to earlier years. Revisit before leaning on 2025 asset returns.
+    ))
 
-    # 5. Capital (Informacoes de Capital)
+    # 5. Capital (Informacoes de Capital) — report 5 was NOT renumbered in 2025.
     p5 = load_and_pivot(5, {79664: 'indice_basileia_raw'})
 
     # Merge everything
@@ -233,16 +312,28 @@ def build_panel() -> pd.DataFrame:
 
     panel.sort_values(['CodConglomeradoPrudencial', 'Year', 'Quarter'], inplace=True)
 
-    # Note: IF Data DRE is reported cumulatively by year. Standardize to quarter flows.
-    # fin_income is a DRE flow too — it accumulates within the calendar year exactly like the
-    # expense lines, so it MUST go through the same differencing or the asset yield is nonsense
-    # (Q4 would carry four quarters of income against one quarter of assets).
+    # The IF-Data DRE is cumulative WITHIN EACH SEMESTER, not within the calendar year: the
+    # series RESETS in July.  A large bank's 2022 admin expenses run
+    #     Q1 -5.79bn   Q2 -12.10bn   Q3 -6.77bn   Q4 -14.06bn
+    # i.e. Q3 (H2 to date) is *smaller* than Q2 (H1 total).  Differencing by year therefore gets
+    # Q1/Q2/Q4 right but computes Q3 = M09 - M06, which is the wrong sign for every expense line
+    # (and turns fin_income negative, so the `>0` guard below silently drops it and the asset
+    # return gets median-imputed for a quarter of the panel).  The cost ratios feed the BLP's
+    # cost-shifter instruments, so a sign flip in 25% of quarters is not cosmetic.
+    #
+    # Correct disaccumulation is therefore by (conglomerate, year, SEMESTER):
+    #     Q1 = M03            Q2 = M06 - M03            Q3 = M09            Q4 = M12 - M09
+    # The first quarter of each semester keeps its reported (already single-quarter) value; the
+    # second is a within-semester difference.  Same defect class as the COSIF semester-cumulative
+    # bug fixed in panel_2/panel_3.
     if not p4.empty:
+        semester = np.where(panel['Quarter'] <= 2, 1, 2)
         for cost_col in ['personnel_expenses', 'admin_expenses', 'tax_expenses', 'fin_income']:
             if cost_col in panel.columns:
                 panel[cost_col] = panel[cost_col].fillna(0)
-                # Group differencing by Conglomerate-Year
-                val_diff = panel.groupby(['CodConglomeradoPrudencial', 'Year'])[cost_col].diff()
+                val_diff = panel.groupby(
+                    ['CodConglomeradoPrudencial', 'Year', semester])[cost_col].diff()
+                # NaN = first quarter present in that semester (normally Q1/Q3) -> keep as reported.
                 panel[cost_col] = val_diff.fillna(panel[cost_col])
 
     # Core characteristics

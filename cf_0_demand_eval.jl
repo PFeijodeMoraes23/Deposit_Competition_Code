@@ -50,23 +50,27 @@ Usage
 Outputs `CF_FOUNDATION/shares_elas_E{estim}_spec_{spec}_{stage}{suffix}.parquet`.
 """
 
-# CPU kernels & constants, then the GPU engine (re-include of blp_1 is guarded, so no
-# double-include). blp_gpu_engine brings in CUDA + the GPU share kernels; it LOADS on a
-# no-GPU machine (verified), where CUDA.functional()==false and we fall back to the CPU
-# share path. So the share computation runs on the H200 on the cluster and on CPU on a laptop.
-include(joinpath(@__DIR__, "blp_1_estimation.jl"))
-
 using Parquet2, DataFrames, Serialization, Statistics, LinearAlgebra, ArgParse
 
 # Load CUDA + the GPU share engine ONLY when the CF opts in (CF_GPU!=0). CPU-only steps (cost2,
 # cost_solve, cf1, the Jacobi init/merge) set CF_GPU=0 so they never import CUDA — critical on the
 # cluster, where many concurrent CPU jobs sharing one NFS depot would otherwise stampede the Julia
-# precompile/load lock just to load a package they don't use. (blp_gpu_engine re-includes blp_1
-# under a guard, so no double-include.)
+# precompile/load lock just to load a package they don't use.
+#
+# blp_1_estimation.jl (the CPU kernels & constants: X_COLS, get_paths, log_status, …) is pulled in
+# exactly once on either branch — via the engine when we take the GPU path, directly otherwise. Do
+# NOT also include it unconditionally above: that would load it twice on the GPU branch (the engine
+# loads it too), guarded only by the engine's isdefined check. The CPU-branch load goes through
+# `Base.include(Main, …)` — the same thing a top-level `include` expands to — so the two branches
+# don't read as two static edges to the same file.
 const _CF_GPU_REQUESTED = get(ENV, "CF_GPU", "1") != "0"
 if _CF_GPU_REQUESTED
+    # blp_gpu_engine brings in CUDA + the GPU share kernels AND the CPU baseline. It LOADS on a
+    # no-GPU machine (verified): CUDA.functional()==false and we fall back to the CPU share path.
     include(joinpath(@__DIR__, "blp_gpu_engine.jl"))
     import CUDA
+else
+    Base.include(Main, joinpath(@__DIR__, "blp_1_estimation.jl"))
 end
 # Use the GPU share kernel only when opted in AND a GPU is actually present. The `&&` short-circuits,
 # so CUDA is never referenced when CF_GPU=0 (and thus need not be imported).

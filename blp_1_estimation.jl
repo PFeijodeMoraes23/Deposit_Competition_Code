@@ -768,11 +768,30 @@ end
 function build_regressor_matrices(df::DataFrame)
     N           = nrow(df)
     spread_cols = coalesce.(df.spread_ann, 0.0) ./ 100.0  # bps → percentage points (÷100)
-    x_mat       = zeros(N, L_PROD)
-    for (i, col) in enumerate(X_COLS)
-        col in names(df) && (x_mat[:, i] .= coalesce.(df[!, col], 0.0))
+
+    # A regressor or instrument that is ABSENT from the parquet used to vanish silently: X_COLS fell
+    # back to a column of zeros, and `iv_cols = [... if c in names(df)]` simply dropped the missing
+    # instrument from Z.  That is how the ENTIRE IV_BLP_LOO block (loo_log_assets, mean_loo_log_assets,
+    # loo_equity_ratio, loo_basileia, leave_one_out_mean_spread) disappeared without a word when a
+    # market_panel rebuild skipped panel_7_instruments.py — leaving the BLP identified off the cost
+    # shifters alone, and α̂ flipping positive.  Fail loudly instead.  (Missing VALUES are still fine;
+    # they are coalesced to 0 below.  It is a missing COLUMN that is fatal.)  See plan §0B.
+    _absent_x  = [c for c in X_COLS if !(c in names(df))]
+    _absent_iv = [c for c in vcat(IV_BLP_LOO, IV_COST, IV_CAPITAL) if !(c in names(df))]
+    if !isempty(_absent_x) || !isempty(_absent_iv)
+        msg = "Demand parquet is missing columns the estimator requires.\n"
+        isempty(_absent_x)  || (msg *= "  product characteristics (X_COLS): " * join(_absent_x, ", ") * "\n")
+        isempty(_absent_iv) || (msg *= "  instruments (IV_*): " * join(_absent_iv, ", ") * "\n")
+        msg *= "Rebuild the panel in order — panel_6 → panel_7 (LOO instruments + FGC; it OVERWRITES " *
+               "market_panel.csv) → panel_9 --patch-market — then re-run the demand prep."
+        error(msg)
     end
-    iv_cols = [c for c in vcat(IV_BLP_LOO, IV_COST, IV_CAPITAL) if c in names(df)]
+
+    x_mat = zeros(N, L_PROD)
+    for (i, col) in enumerate(X_COLS)
+        x_mat[:, i] .= coalesce.(df[!, col], 0.0)
+    end
+    iv_cols = vcat(IV_BLP_LOO, IV_COST, IV_CAPITAL)
     Z_mat   = zeros(N, length(iv_cols))
     for (i, col) in enumerate(iv_cols)
         v = coalesce.(df[!, col], 0.0)

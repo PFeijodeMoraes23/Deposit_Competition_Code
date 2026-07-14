@@ -477,7 +477,12 @@ def main():
     ap.add_argument("--if-types", default="1,2,3",
                     help="Comma list of IF-Data institution types to fetch "
                          "(1=Prudential, 2=Financial, 3=Individual). Default: 1,2,3.")
-    ap.add_argument("--start-year", type=int, default=2016)
+    # 2013 matches the ESTBAN/deposits start (run_estban(..., estban_start_year=2013)),
+    # so bank characteristics cover the same years as the deposit panel. Existing files
+    # are skipped, so widening the window is idempotent.
+    # NOTE: the Conglomerado Prudencial (type 1) did not exist before 2014 — the API
+    # returns empty for 2013; types 2/3 do have 2013 data.
+    ap.add_argument("--start-year", type=int, default=2013)
     ap.add_argument("--end-year", type=int, default=2025)
     ap.add_argument("--skip-list", action="store_true", help="Skip the IF-Data List download.")
     ap.add_argument("--skip-if", action="store_true", help="Skip IF-Data entirely.")

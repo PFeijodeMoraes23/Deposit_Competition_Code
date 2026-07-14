@@ -58,16 +58,19 @@ Pipeline stages
     3d. panel_4_bank_chars.py               IF Data -> conglomerate x quarter bank size and solvency characteristics panel
     3e. panel_5_flag_digital.py                   Analyze raw ESTBAN to identify purely digital banks -> PANEL_INTERMED
 
-  Stage 4 - Master analysis panel
+  Stage 4 - Master analysis panel   [ORDER IS LOAD-BEARING - see the STEPS comment]
     4a. panel_6_market.py                   Merge all MCA panels + deposit panel -> master analysis dataset
-    4b. panel_7_instruments.py       Compute LOO instruments and FGC dummy -> overwrites market_panel.csv
+    4b. panel_7_instruments.py       Compute LOO instruments and FGC dummy -> OVERWRITES market_panel.csv
     4c. panel_8_demographics_sigma.py        Within-MCA demographic sigma for BLP parametric draws
+    4d. panel_9_cosif_fees.py --patch-market  Fee columns -> market_panel_with_fees.csv (MUST follow 4b;
+                                              the estimators prefer this file over market_panel.csv)
 
   Stage 5 - Descriptive statistics
     5a. desc_1.py                        Generate unweighted overview descriptive tables
     5b. desc_1.py --weight-col pop_total Generate market-weighted descriptive tables
     5c. desc_2.py                        Generate unweighted compressed/thematic tables
     5d. desc_2.py --weight-col pop_total Generate market-weighted compressed/thematic tables
+    5e. desc_3.py                        Cluster-imbalance / deposit-concentration table (G*, CV)
 
   Stage 6 - Firm-disclosure & count data (extensive-vs-intensive margin)
     6a. scrape_11_edgar_disclosures.py        SEC EDGAR firm customers + deposits
@@ -254,42 +257,58 @@ STEPS = [
      "Analyze raw ESTBAN to identify purely digital banks -> PANEL_INTERMED"),
 
     # Stage 4 -- master analysis panel
+    #
+    # ORDER IS LOAD-BEARING, and two steps were missing here until 2026-07-14:
+    #   * panel_7 OVERWRITES market_panel.csv with the LOO instruments (IV_BLP_LOO) + the FGC dummy.
+    #     Rebuilding panel_6 without then re-running panel_7 leaves market_panel with NO
+    #     loo_log_assets / mean_loo_log_assets / loo_equity_ratio / loo_basileia /
+    #     leave_one_out_mean_spread -- and blp_1_estimation's build_regressor_matrices SILENTLY drops
+    #     any instrument not present, so the BLP ends up identified off the cost shifters alone.
+    #   * panel_9 builds market_panel_with_fees.csv, and EVERY estimation script prefers that file
+    #     over market_panel.csv when it exists. So a stale with_fees silently shadows a freshly
+    #     rebuilt market_panel. It must run LAST in this stage, after panel_7's overwrite.
+    # See counterfactuals_plan.md §0B.
     (4, "19", "panel_6_market.py",
      "Merge all MCA panels + deposit panel -> master analysis dataset"),
     (4, "20", "panel_7_instruments.py",
      "Compute LOO instruments and FGC dummy -> overwrites market_panel.csv"),
     (4, "21", "panel_8_demographics_sigma.py",
      "Within-MCA demographic σ for BLP parametric draws -> demographics_sigma.parquet"),
+    (4, "22", "panel_9_cosif_fees.py --patch-market",
+     "COSIF/Tarifas fee columns -> market_panel_with_fees.csv (MUST follow panel_7; the "
+     "estimators read this file in preference to market_panel.csv)"),
 
     # Stage 5 -- descriptive statistics
-    (5, "22", "desc_1.py",
+    (5, "23", "desc_1.py",
      "Generate unweighted overview descriptive tables"),
-    (5, "23", "desc_1.py --weight-col pop_total",
+    (5, "24", "desc_1.py --weight-col pop_total",
      "Generate market-weighted descriptive tables"),
-    (5, "24", "desc_2.py",
+    (5, "25", "desc_2.py",
      "Generate unweighted compressed/thematic descriptive tables"),
-    (5, "25", "desc_2.py --weight-col pop_total",
+    (5, "26", "desc_2.py --weight-col pop_total",
      "Generate market-weighted compressed/thematic descriptive tables"),
+    (5, "27", "desc_3.py",
+     "Cluster-imbalance / deposit-concentration table (G*, CV) justifying the wild cluster bootstrap"),
 
     # Stage 6 -- firm-disclosure & count data (extensive-vs-intensive margin diagnostic)
     # External-API scrapers, serialized (one per wave) to respect SEC/CVM/WB rate
     # limits, mirroring the Stage-2 convention. The join depends on BOTH the firm
     # disclosures and the Stage-4 market_panel.csv, so it runs last.
-    (6, "26", "scrape_11_edgar_disclosures.py",
+    (6, "28", "scrape_11_edgar_disclosures.py",
      "SEC EDGAR: firm customers (BR/consolidated) + deposits (XBRL)"),
-    (6, "27", "scrape_12_parent_disclosures.py",
+    (6, "29", "scrape_12_parent_disclosures.py",
      "MELI 8-K: Mercado Pago fintech MAU; C6/PicPay manual template"),
-    (6, "28", "scrape_13_incumbent_clients.py",
+    (6, "30", "scrape_13_incumbent_clients.py",
      "CVM-IPE earnings PDFs -> client counts (Pan/BMG/Banrisul/BB); vision fallback"),
-    (6, "29", "scrape_14_bcb_accounts.py",
+    (6, "31", "scrape_14_bcb_accounts.py",
      "BCB RCF/REB report archival + account-count manual template"),
-    (6, "30", "scrape_15_worldbank_findex.py",
+    (6, "32", "scrape_15_worldbank_findex.py",
      "World Bank Findex: national demographic account ownership"),
-    (6, "31", "scrape_16_fgc_statistics.py",
+    (6, "33", "scrape_16_fgc_statistics.py",
      "FGC: bracket manual template + report archival"),
-    (6, "32", "scrape_17_cvm_disclosures.py",
+    (6, "34", "scrape_17_cvm_disclosures.py",
      "CVM DFP/ITR: deposits in BRL (incl. Banco do Brasil)"),
-    (6, "33", "analysis_1_disclosure_join.py",
+    (6, "35", "analysis_1_disclosure_join.py",
      "Join disclosures -> conglomerate x quarter account-vs-volume table"),
 ]
 

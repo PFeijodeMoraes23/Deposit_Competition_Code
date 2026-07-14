@@ -46,7 +46,13 @@ from utils import paths
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 MAIN_FOLDER = str(paths.IF_DATA_ROOT)
 
-START_YEAR = 2016  # matches the legacy builder's lower bound
+# Lower bound of the aggregation window. Set to 2013 to match the ESTBAN/deposits
+# start (run_estban(..., estban_start_year=2013) in scrape_1), so bank characteristics
+# span the same years as the deposit panel. The legacy builder used 2016, which left
+# 2013-2015 deposits with no matching bank characteristics.
+# NOTE: the Conglomerado Prudencial (type 1) did not exist before 2014 — the API returns
+# empty for 2013 — so type-1 reports legitimately start in 2014 while types 2/3 start 2013.
+START_YEAR = 2013
 
 
 # ===== Transform functions (verbatim from if_data_process_1.py) ==============

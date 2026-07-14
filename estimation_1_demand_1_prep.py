@@ -56,7 +56,7 @@ except Exception:
 # 0. Global Paths and Parameters
 # ==============================================================================
 from utils import paths
-from estimation_demand_link_common import build_market_size_and_shares
+from estimation_demand_link_common import build_market_size_and_shares, MAX_YEAR
 _ROOT = Path(__file__).resolve().parents[2]
 DATA_DIR = paths.PROCESSED
 _PANEL_WITH_FEES = DATA_DIR / "market_panel_with_fees.csv"
@@ -177,6 +177,16 @@ def build_base_panel(panel_csv: Path) -> pd.DataFrame:
     df['spread_ann'] = df['spread_ann'] * 10_000
 
     df = df.dropna(subset=['deposit_balance', 'lagged_deposits', 'spread_qoq', 'spread_ann', 'entity_id', 'time_id'])
+
+    # Demand sample ends at MAX_YEAR (2024): the 2025 IF-Data chart-of-accounts break redefines
+    # total_assets (+50% level jump), so bank characteristics — and the instruments built from them —
+    # cannot be spliced across it. See estimation_demand_link_common.MAX_YEAR / plan §0A.2.
+    # After the lags, so 2024Q4 keeps its 2024Q3 lag.
+    if MAX_YEAR is not None and 'year' in df.columns:
+        _n0 = len(df)
+        df = df[df['year'] <= MAX_YEAR].copy()
+        logging.info(f"  MAX_YEAR={MAX_YEAR}: kept {len(df):,} of {_n0:,} rows "
+                     f"(dropped {_n0 - len(df):,} in years > {MAX_YEAR})")
 
     df['constant'] = 1.0
     if 'year' in df.columns:

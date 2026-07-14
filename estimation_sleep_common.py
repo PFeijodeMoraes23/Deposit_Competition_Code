@@ -100,8 +100,10 @@ def _exec_spec(args):
         return res, None, spec_name, res_fs
 
     if kind == "single_index":
+        # warm start only: fit_single_index reads params_native (+ the index), never the
+        # logit's AMEs/SEs -> skip its wild bootstrap.
         logit_res = fit_nlls_link(df_target, s_cols, has_cf=has_cf, link="logit", loss="cauchy",
-                                  fe_time_col=FE_TIME_COL)
+                                  fe_time_col=FE_TIME_COL, bootstrap=False)
         res = fit_single_index(df_target, s_cols, has_cf=has_cf, logit_res=logit_res, degree=3,
                                fe_time_col=FE_TIME_COL, phi_band=is_spec12)
         return res, None, spec_name, res_fs
@@ -109,8 +111,9 @@ def _exec_spec(args):
     if kind in ("joint_sieve", "joint_kernel"):
         link = "sieve" if kind == "joint_sieve" else "kernel"
         fe_tc = FE_TIME_COL if link == "sieve" else None   # kernel two-way FE not yet wired
+        # warm start only: _init_theta reads params_native -> skip its wild bootstrap.
         logit_res = fit_nlls_link(df_target, s_cols, has_cf=has_cf, link="logit", loss="cauchy",
-                                  fe_time_col=fe_tc)
+                                  fe_time_col=fe_tc, bootstrap=False)
         init = _init_theta(logit_res, s_cols)
         n_starts = 1 if link == "kernel" else 2   # kernel: multistart impractical at full N
         warm = init if warm_theta is None else warm_theta   # opt 9: cross-spec warm start

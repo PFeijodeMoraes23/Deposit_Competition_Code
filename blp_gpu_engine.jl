@@ -13,9 +13,12 @@
 # picks the engine from BLP_ENGINE (default ift).
 # EDIT THIS FILE for engine changes (the three originals were removed).
 
-# CPU baseline — separate file (shared CPU-only with cf_0_demand_eval.jl):
+# CPU baseline — separate file (shared CPU-only with cf_0_demand_eval.jl).
+# The isdefined guard makes this load-once: several drivers reach the baseline both through this
+# engine and on their own CPU-only path. `Base.include(Main, …)` is what a top-level `include` call
+# expands to, spelled so the static include graph carries one edge per driver instead of two.
 if !isdefined(Main, :X_COLS)
-    include(joinpath(@__DIR__, "blp_1_estimation.jl"))
+    Base.include(Main, joinpath(@__DIR__, "blp_1_estimation.jl"))
 end
 
 # ===================== blp_2_estimation.jl =====================
