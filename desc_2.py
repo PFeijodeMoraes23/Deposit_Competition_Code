@@ -1591,6 +1591,98 @@ def render_appendix_b10() -> str:
 
 
 # ---------------------------------------------------------------------------
+# BLP instrument table (tab:blp_instruments) — the Z_{jt} used in the 2SLS
+# mean-utility estimation. Previously a hand-written tex file with no generator;
+# reproduced here so the category labels stay single-sourced (and correct).
+# ---------------------------------------------------------------------------
+# Category labels (single-sourced). The leave-one-out block was formerly labelled
+# "BLP LOO"; it now reads "Leave-one-out".
+_CAT_LOO     = "Leave-one-out"
+_CAT_COST    = "Cost Shifter"
+_CAT_CAPITAL = "Capital"
+
+# (instrument, category, description). Order = IV_BLP_LOO, then IV_COST, then IV_CAPITAL
+# (blp_1_estimation.jl). \addlinespace is inserted automatically between categories.
+_BLP_INSTRUMENTS = [
+    ("loo_log_assets",          _CAT_LOO,  r"Leave-one-out mean $\ln(\text{Total Assets}_{t-1})$ of rivals"),
+    ("mean_loo_log_assets",     _CAT_LOO,  r"Mean $\ln(\text{Total Assets}_{t-1})$ across all leave-one-out observations"),
+    ("loo_equity_ratio",        _CAT_LOO,  r"Leave-one-out mean equity ratio of rivals"),
+    ("mean_loo_equity_ratio",   _CAT_LOO,  r"Mean equity ratio across all leave-one-out observations"),
+    ("loo_basileia",            _CAT_LOO,  r"Leave-one-out mean Basel index of rivals"),
+    ("mean_loo_basileia",       _CAT_LOO,  r"Mean Basel index across all leave-one-out observations"),
+    ("loo_credit_assets",       _CAT_LOO,  r"Leave-one-out mean credit-to-assets ratio of rivals"),
+    ("mean_loo_credit_assets",  _CAT_LOO,  r"Mean credit-to-assets ratio across all leave-one-out observations"),
+    ("loo_npl_provision",       _CAT_LOO,  r"Leave-one-out mean non-performing-loan provision of rivals"),
+    ("mean_loo_npl_provision",  _CAT_LOO,  r"Mean NPL provision across all leave-one-out observations"),
+    ("n_rivals",                _CAT_LOO,  r"Number of rival institutions in the MCA--time cell"),
+    ("personnel_cost_ratio_lag", _CAT_COST, r"Personnel cost ratio, lagged $t-1$"),
+    ("admin_cost_ratio_lag",     _CAT_COST, r"Administrative cost ratio, lagged $t-1$"),
+    ("tax_cost_ratio_lag",       _CAT_COST, r"Tax cost ratio, lagged $t-1$"),
+    ("indice_basileia_lag",      _CAT_CAPITAL, r"Basel index (regulatory capital-adequacy ratio), lagged $t-1$"),
+]
+
+
+def render_blp_instruments() -> str:
+    """Longtable of the BLP instruments Z_{jt} (spec 12), grouped by category.
+
+    Reproduces the former hand-written tab_blp_instruments.tex; the leave-one-out
+    category now reads 'Leave-one-out' instead of 'BLP LOO'.
+    """
+    def esc(name: str) -> str:            # underscores -> LaTeX literal
+        return name.replace("_", r"\_")
+    w = max(len(esc(n)) for n, _, _ in _BLP_INSTRUMENTS)   # pad the ttfamily column
+    cat_w = max(len(c) for _, c, _ in _BLP_INSTRUMENTS)
+
+    body, prev_cat = [], None
+    for name, cat, desc in _BLP_INSTRUMENTS:
+        if prev_cat is not None and cat != prev_cat:
+            body.append(r"    \addlinespace")
+        body.append(f"    {esc(name):<{w}} & {cat:<{cat_w}} & {desc} \\\\")
+        prev_cat = cat
+
+    n_iv = len(_BLP_INSTRUMENTS)
+    return "\n".join([
+        r"\setstretch{1.0}",
+        r"\setlength{\LTleft}{\fill}",
+        r"\setlength{\LTright}{\fill}",
+        r"\begin{longtable}{>{\ttfamily\small}p{4.6cm} >{\small}l >{\small}p{8.0cm}}",
+        r"    \caption{Instrumental Variables for the BLP Demand Estimation (Specification~12)}",
+        r"    \label{tab:blp_instruments} \\",
+        r"    \toprule",
+        r"    \normalfont\textbf{Instrument} & \normalfont\textbf{Category} & \normalfont\textbf{Description} \\",
+        r"    \midrule",
+        r"    \endfirsthead",
+        r"    \caption[]{Instrumental Variables for the BLP Demand Estimation (Continued)} \\",
+        r"    \toprule",
+        r"    \normalfont\textbf{Instrument} & \normalfont\textbf{Category} & \normalfont\textbf{Description} \\",
+        r"    \midrule",
+        r"    \endhead",
+        r"    \midrule",
+        r"    \multicolumn{3}{r}{\normalfont\textit{Continued on next page}} \\",
+        r"    \endfoot",
+        r"    \bottomrule",
+        r"    \multicolumn{3}{@{}p{\dimexpr\textwidth-2\tabcolsep\relax}@{}}{\normalfont\footnotesize",
+        r"        \textit{Notes:} The leave-one-out (LOO) instruments are competitor characteristics",
+        r"        averaged over the \emph{other} institutions in the same market--quarter (MCA--time) cell,",
+        r"        following \textcite{berry1995automobile}; the paired \texttt{mean\_loo\_} variables average",
+        r"        those over all leave-one-out observations. Cost shifters are lagged firm-level operating",
+        r"        ratios, plausibly exogenous to demand; the capital-adequacy measure is a regulatory ratio.",
+        rf"        {_num_word(n_iv).capitalize()} instruments in total for the 2SLS estimation of the mean-utility equation",
+        r"        (Eq.~15/Eq.~16).} \\",
+        r"    \endlastfoot",
+        *body,
+        r"\end{longtable}",
+        r"\doublespacing",
+    ])
+
+
+def _num_word(n: int) -> str:
+    words = {11: "eleven", 12: "twelve", 13: "thirteen", 14: "fourteen", 15: "fifteen",
+             16: "sixteen", 17: "seventeen", 18: "eighteen"}
+    return words.get(n, str(n))
+
+
+# ---------------------------------------------------------------------------
 # Save helpers
 # ---------------------------------------------------------------------------
 def _write_tex(tex: str, basename: str, suffix: str) -> None:
@@ -1676,6 +1768,7 @@ def main():
         ("Appendix_B_WholesaleFunding",  render_appendix_b7),
         ("Appendix_B_CapitalAdequacy",   render_appendix_b8),
         ("Appendix_B_BLPloo",            render_appendix_b9),
+        ("tab_blp_instruments",          render_blp_instruments),  # was hand-written; now generated
     ]:
         _write_tex(render_fn(), fname, "")
 
