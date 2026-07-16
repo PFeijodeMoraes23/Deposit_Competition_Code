@@ -32,9 +32,18 @@
 #     GPUS=h200:1           request a GPU (Bouchet syntax). Not needed here — the CF2/CF1 chain is
 #                           CPU-only; the GPU is for the cf3/cf5/cf6 equilibrium solve (submit_cf3_jacobi.sh).
 #     MEM=200G              override --mem (needs ≥ ~100G for the R=2000 extended context)
+#     POLICY_CSV=<path>     BBL Step-1 fitted policy for cost2's σ̂ (default:
+#                           data/COST_POLFUNC/polfunc_fitted_spec_12.csv). Built LOCALLY by
+#                           estimation_1_cost_1_polfunc.py and uploaded. If ABSENT, cost2 falls back to
+#                           OBSERVED spreads and frac_bind ≈ 0.5 becomes mechanical (uninformative
+#                           cost parameters) — the script warns loudly. See §0A/§9 of the plan.
+#     ASSET_RETURN_COL=asset_gross_return_lag   give the deposit franchise its asset-side margin
+#                           (NOT `gross_return_lag`, which is the deposit rate — see the note below).
 #
-# The forward r^f curve (data/COST_FWD/forward_rf_qoq.csv) is the one input that must be
-# built LOCALLY (cf_forward_rf.py needs internet) and uploaded; everything else is either
+# TWO inputs must be built LOCALLY and uploaded (both need data/tools the compute nodes lack):
+#   data/COST_FWD/forward_rf_qoq.csv          (cf_forward_rf.py — needs internet)
+#   data/COST_POLFUNC/polfunc_fitted_spec_12.csv  (estimation_1_cost_1_polfunc.py — needs market_panel)
+# everything else is either
 # already staged from the BLP run or auto-built here from the zip. See runbook §8.
 set -euo pipefail
 
@@ -124,15 +133,36 @@ echo "Preflight OK: R=${R} draws + forward r^f curve + RC results for routines: 
 # ── Step 3: submit the CF chain per routine ──────────────────────────────────────
 # Asset return r^j (V_Main eq 16, ψ1 row). Both flags are read as the QUARTERLY NET margin
 # (r^j − r^f); cf_0_psi_basis adds r^f back so ψ1 carries the GROSS r^j the paper requires.
-# Left unset ⇒ r^j = r^f (zero asset margin), which makes a deposit worth only (ρ − c) and,
-# with the observed spreads, forces ω to its ≥0 bound in eq-18. Set one of these to give the
-# deposit franchise its asset-side value:
-#   ASSET_RETURN_COL=gross_return_lag   (per-obs, from the demand parquet)
-#   ASSET_MARGIN=0.015                  (constant quarterly net margin, e.g. 1.5%/q ≈ 6pp/yr)
+# Left unset ⇒ r^j = r^f (zero asset margin), which makes a deposit worth only (ρ − c) and
+# forces ω̂ < 0 in eq-17. Set one of these to give the deposit franchise its asset-side value:
+#   ASSET_RETURN_COL=asset_gross_return_lag  (per-obs; = 1 + asset_return_qoq_lag, built in panel_4)
+#   ASSET_MARGIN=0.015                       (constant quarterly net margin, e.g. 1.5%/q ≈ 6pp/yr)
+# ⚠ NOT `gross_return_lag` — that is 1 + the DEPOSIT rate (what the bank PAYS), so it would hand the
+#   model a negative asset margin. The asset return is `asset_gross_return_lag`.
 asset_flags=""
 [[ -n "${ASSET_RETURN_COL:-}" ]] && asset_flags="--asset-return-col ${ASSET_RETURN_COL}"
 [[ "${ASSET_MARGIN:-0}" != "0" ]] && asset_flags="${asset_flags} --asset-margin ${ASSET_MARGIN}"
-cf2_extra="--shocks ${SHOCKS} --perturb-scale ${PERTURB_SCALE} --dev-scheme ${DEV_SCHEME} --beta ${BETA} --horizon ${HORIZON}${asset_flags:+ ${asset_flags}}"
+
+# BBL Step 1 → Step 2. Deviations must be formed around the FITTED policy σ̂(state) from
+# estimation_1_cost_1_polfunc.py — NOT the raw observed spread (V_Main line 551; Egan et al./Ryan/
+# Matvos-Seru all perturb the fitted policy). Why it matters: g(±Δ) = V(σ̂) − V(σ̂±Δ) ≥ 0 asserts σ̂ is a
+# local argmax of the simulated value. Raw observed spreads are NOT a turning point of that value, so a
+# symmetric ±grid makes exactly one of each ± pair bind for ANY θ — frac_bind ≈ 0.5 mechanically and the
+# eq-17 moments carry no identifying content. Upload polfunc_fitted_spec_12.csv (spec-12, windowed
+# 2016-2024) to ${POLICY_CSV}. Unset/absent ⇒ falls back to observed spreads = the old, uninformative
+# behaviour, so we warn loudly rather than fail silently. See counterfactuals_plan.md §0A/§9.
+POLICY_CSV="${POLICY_CSV:-${DATA_ROOT}/COST_POLFUNC/polfunc_fitted_spec_12.csv}"
+policy_flag=""
+if [[ -f "${POLICY_CSV}" ]]; then
+    policy_flag="--policy-csv ${POLICY_CSV}"
+    echo "cost2 σ̂ ← FITTED policy: ${POLICY_CSV}"
+else
+    echo "!! WARNING: no fitted policy at ${POLICY_CSV}"
+    echo "!!          cost2 will fall back to OBSERVED spreads ⇒ frac_bind ≈ 0.5 is then MECHANICAL and"
+    echo "!!          the recovered (ω, ζ, γ) are uninformative. Upload polfunc_fitted_spec_12.csv."
+fi
+
+cf2_extra="--shocks ${SHOCKS} --perturb-scale ${PERTURB_SCALE} --dev-scheme ${DEV_SCHEME} --beta ${BETA} --horizon ${HORIZON}${asset_flags:+ ${asset_flags}}${policy_flag:+ ${policy_flag}}"
 cf1_extra="--beta ${BETA} --horizon ${HORIZON}"
 
 submit () {  # submit <jobname> <time> <extra-sbatch-args...>

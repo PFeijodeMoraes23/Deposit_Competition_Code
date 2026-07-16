@@ -81,6 +81,13 @@ warnings.filterwarnings("ignore", message="covariance of constraints does not ha
 _ROOT = Path(__file__).resolve().parents[2]
 DATA_DIR = _ROOT / "BCB" / "Egan_et_al_2025_Rep" / "processed"
 PANEL_CSV = DATA_DIR / "market_panel.csv"
+
+# Estimation window — keep in sync with estimation_demand_link_common.MIN_YEAR/MAX_YEAR and
+# estimation_2_sleep.SLEEP_MIN_YEAR/MAX_YEAR.  The BBL Step-1 policy function is fit on bank
+# characteristics, which only exist on the prudential-conglomerate basis from 2016; 2025 carries the
+# fin_income/COSIF/renumbering breaks.  See counterfactuals_plan.md §0A.
+POLFUNC_MIN_YEAR = int(os.environ.get('DEMAND_MIN_YEAR', 2016))
+POLFUNC_MAX_YEAR = int(os.environ.get('DEMAND_MAX_YEAR', 2024))
 OUTPUT_DIR = DATA_DIR / "ESTIMATION_OUTPUT" / "COST_POLFUNC"
 
 # Endogenous deposit types (spreads set by institutions)
@@ -144,6 +151,17 @@ def load_and_prepare_panel() -> pd.DataFrame:
     print(f"Loading panel from {PANEL_CSV}...")
     df_raw = pd.read_csv(PANEL_CSV, dtype={'mca_code': str}, low_memory=False)
     print(f"  Raw panel: {len(df_raw):,} rows, {len(df_raw.columns)} columns")
+
+    # Restrict to the estimation window (2016-2024), matching the sleep/demand/cost stages.
+    # This is not cosmetic: the policy regressors are bank characteristics, which do not exist on the
+    # prudential-conglomerate basis before 2016.  Fitting/predicting outside the window drove
+    # compute_fitted_values' fillna(0) to return the bare intercept (~190pp — an impossible deposit
+    # spread) for ~19% of k∈{4,5} rows, all of them 2013-2015.  Windowing removes that fabrication at
+    # source rather than filtering it downstream.  See counterfactuals_plan.md §0A.
+    if 'year' in df_raw.columns:
+        _n0 = len(df_raw)
+        df_raw = df_raw[(df_raw['year'] >= POLFUNC_MIN_YEAR) & (df_raw['year'] <= POLFUNC_MAX_YEAR)].copy()
+        print(f"  Year window [{POLFUNC_MIN_YEAR}, {POLFUNC_MAX_YEAR}]: kept {len(df_raw):,} of {_n0:,} rows")
 
     # ----- Reshape wide → long for k=4,5 ---------------------------------
     id_vars = ['CodConglomeradoPrudencial', 'mca_code', 'year', 'quarter']
@@ -498,7 +516,16 @@ def compute_fitted_values(df: pd.DataFrame, results: dict) -> pd.DataFrame:
         if not avail_cols:
             continue
 
-        X_pred = sm.add_constant(df_pred[avail_cols].fillna(0), has_constant='add')
+        # PREDICT ON COMPLETE CASES ONLY. This used to be `df_pred[avail_cols].fillna(0)`, which does
+        # NOT impute a neutral value — it forces every missing regressor to zero, so a row missing all
+        # of them collapses to the bare intercept. For k=4 that intercept is ~0.475 qoq-frac = ~190pp
+        # annualized: an impossible deposit spread, silently written out as if it were a fitted policy.
+        # It hit ~26% of rows before the 2016-2024 window and still ~3.6% after (the 2016Q1 rows, whose
+        # _lag bank characteristics lag into the excluded 2015). Leave incomplete cases as NaN instead;
+        # the consumer (cost_2_fwd_sim::equilibrium_spreads) already falls back to the observed spread
+        # for non-finite fits. Fabricating is never better than admitting the gap.
+        complete = df_pred[avail_cols].notna().all(axis=1)
+        X_pred = sm.add_constant(df_pred.loc[complete, avail_cols], has_constant='add')
 
         # Align columns with the estimated model
         for c in coef_names:
@@ -506,9 +533,19 @@ def compute_fitted_values(df: pd.DataFrame, results: dict) -> pd.DataFrame:
                 X_pred[c] = 0.0
         X_pred = X_pred[coef_names]
 
-        fitted = X_pred @ res.params
+        # Build a df_pred-length vector, NaN on the incomplete rows, and assign POSITIONALLY into
+        # df_out[mask] — exactly the alignment the original used (the pooled branch's df_pred does not
+        # necessarily share df_out's index, so an index-based write could silently misalign).
+        fitted_full = pd.Series(np.nan, index=df_pred.index, dtype=float)
+        if len(X_pred):
+            fitted_full.loc[X_pred.index] = (X_pred @ res.params).astype(float)
+
         col_name = f'fitted_{label}'
-        df_out.loc[mask, col_name] = fitted.values
+        df_out.loc[mask, col_name] = fitted_full.values
+        n_inc = int((~complete).sum())
+        if n_inc:
+            print(f"    [{label}] {n_inc:,} of {len(df_pred):,} rows left NaN "
+                  f"(incomplete regressors — not fabricated to the intercept)")
 
     return df_out
 
