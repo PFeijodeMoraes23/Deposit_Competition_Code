@@ -2028,9 +2028,17 @@ def append_rates_to_panel():
                     [f"spread_ann_a{t}" for t in range(1, 6)]
                     
     df["AnoMes"] = df["Year"].astype(int) * 100 + df["Quarter"].astype(int) * 3
+
+    # aux carries the canonical total_deposits (it is in cols_to_merge). Drop ANY total_deposits column
+    # already on df BEFORE the merge — including the total_deposits_x / total_deposits_y that a prior
+    # (buggy) run left inside deposits_panel.csv, which would otherwise make pandas raise
+    # "suffixes cause duplicate columns". After the drop the merge supplies a single clean
+    # total_deposits, so the duplicate never reaches market_panel.
+    df = df.drop(columns=[c for c in ("total_deposits", "total_deposits_x", "total_deposits_y")
+                          if c in df.columns], errors="ignore")
     df = df.merge(aux[cols_to_merge], on=["CodConglomeradoPrudencial", "AnoMes"], how="left")
     df = df.drop(columns=["AnoMes"])
-    
+
     import pyarrow as pa
     import pyarrow.csv as pa_csv
     pa_csv.write_csv(pa.Table.from_pandas(df, preserve_index=False), DEPOSITS_CSV)

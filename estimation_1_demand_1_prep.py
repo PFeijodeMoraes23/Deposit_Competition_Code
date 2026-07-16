@@ -56,7 +56,7 @@ except Exception:
 # 0. Global Paths and Parameters
 # ==============================================================================
 from utils import paths
-from estimation_demand_link_common import build_market_size_and_shares, MAX_YEAR
+from estimation_demand_link_common import build_market_size_and_shares, MAX_YEAR, MIN_YEAR
 _ROOT = Path(__file__).resolve().parents[2]
 DATA_DIR = paths.PROCESSED
 _PANEL_WITH_FEES = DATA_DIR / "market_panel_with_fees.csv"
@@ -183,11 +183,14 @@ def build_base_panel(panel_csv: Path) -> pd.DataFrame:
     # total_assets" was an analysis error (summing a conta across reports; report-1-only gives a
     # matched-bank ratio of 1.015). See estimation_demand_link_common.MAX_YEAR / plan §0A.2.
     # Applied after the lags, so the final quarter keeps its lag.
-    if MAX_YEAR is not None and 'year' in df.columns:
+    if 'year' in df.columns:
         _n0 = len(df)
-        df = df[df['year'] <= MAX_YEAR].copy()
-        logging.info(f"  MAX_YEAR={MAX_YEAR}: kept {len(df):,} of {_n0:,} rows "
-                     f"(dropped {_n0 - len(df):,} in years > {MAX_YEAR})")
+        if MIN_YEAR is not None:
+            df = df[df['year'] >= MIN_YEAR].copy()
+        if MAX_YEAR is not None:
+            df = df[df['year'] <= MAX_YEAR].copy()
+        logging.info(f"  year window [{MIN_YEAR}, {MAX_YEAR}]: kept {len(df):,} of {_n0:,} rows "
+                     f"(dropped {_n0 - len(df):,})")
 
     df['constant'] = 1.0
     if 'year' in df.columns:

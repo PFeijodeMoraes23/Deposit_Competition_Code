@@ -2429,7 +2429,8 @@ function run_blp_estimation_ift_gpu(estim::Int, spec_id::Int, args,
             se_all, pval_all = gmm_cluster_ses(_sem, vcat(theta1_star, theta2_star),
                         pc.Z_moments[valid, :], pc.X_full[valid, :], Ddelta[valid, :],
                         delta_final[valid] .- pc.X_full[valid, :] * theta1_star,
-                        W, pc.clusters[valid])
+                        W, pc.clusters[valid];
+                        n_sigma=length(sigma_indices))   # profile out on-bound σ's from the covariance
             K1 = length(theta1_star)
             theta1_se   = se_all[1:K1];   theta2_se   = se_all[K1+1:end]
             theta1_pval = pval_all[1:K1]; theta2_pval = pval_all[K1+1:end]

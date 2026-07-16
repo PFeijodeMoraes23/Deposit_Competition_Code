@@ -105,7 +105,7 @@ def build_table(est: int) -> str:
     for c in cols:
         head.append("Logit" if c == "logit" else STAGE_HEAD[c])
     hdr_cols = " & ".join(head)
-    col_fmt = "l" + "c" * ncols
+    col_fmt = rc.equal_col_fmt(ncols, "4.6cm")   # equal-width columns fill the line (no bulging column)
 
     rep = stage_data[avail[0]]
     theta1_params = rep.get("param_names_theta1") or (["alpha"] + rc.X_COLS)
@@ -136,7 +136,7 @@ def build_table(est: int) -> str:
         return rows
 
     def panelB_row(lbl):
-        is_sigma = lbl.startswith(r"$\sigma$")           # σ's are σ≥0-bounded → boundary handling
+        is_sigma = lbl.startswith(r"$\Sigma$")           # Σ's are Σ≥0-bounded → boundary handling
         cvals, svals = [lbl], [""]
         for c in cols:
             if c == "logit":
@@ -180,11 +180,11 @@ def build_table(est: int) -> str:
         r"\textit{Notes:} The estimation strategy is enumerated in "
         r"Section~\ref{sec:empirical:sleep}. Column 1 is the non-RC logit (`full' sub-model); "
         r"the remaining columns are the RC-BLP stages run on the cluster, each freeing one more random "
-        r"coefficient (Sigma$=$1 $\sigma$ $\to$ Extended$=$8). The logit column reports wild cluster "
+        r"coefficient (1 RC $\to$ Full, i.e.\ all 8). The logit column reports wild cluster "
         rf"bootstrap standard errors (conglomerate clusters); for the RC columns, {rc_sem}. "
         r"Stars from a Student-$t$ reference with $G^*$ effective clusters: *** $p<0.01$, ** $p<0.05$, "
-        r"* $p<0.1$. A $\dagger$ marks a random coefficient $\sigma$ estimated at the $\sigma\ge0$ "
-        r"boundary ($\hat\sigma\approx0$): point reported on the bound, no two-sided SE (Andrews 1999). "
+        r"* $p<0.1$. A $\dagger$ marks a random-coefficient $\Sigma$ estimated at the $\Sigma\ge0$ "
+        r"boundary ($\hat\Sigma\approx0$): point reported on the bound, no two-sided SE (Andrews 1999). "
         r"$Q$ is each model's own GMM objective (not comparable across the "
         r"logit/RC boundary --- different moment counts). Mean own-price semi-elasticity is the "
         r"average-market plug-in $\hat\alpha\cdot\overline{\rho(1-s)}$ (representative-agent; "

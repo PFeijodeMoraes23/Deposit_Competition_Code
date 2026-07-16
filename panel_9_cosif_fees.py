@@ -92,6 +92,34 @@ PRIORITY_SERVICES = {
 # Year of the COSIF structural break; rows with year >= this value get cosif_fee_valid=0
 COSIF_BREAK_YEAR = 2025
 
+# ---------------------------------------------------------------------------
+# COSIF fee/deposit ratio plausibility band.
+#
+# A quarterly service-fee / deposit ratio is economically O(0.001-0.1): fees are
+# at most a few percent of the deposit base per quarter.  The clean 2016-2018
+# distribution confirms this (per-year MEDIAN ~0.009 for fee_ratio_all, ~0.05
+# for the smallest-denominator fee_ratio_demand; p95 <= 0.13 and <= 0.57
+# respectively).  The MEDIANS are stable and sane in EVERY year -- the cross-year
+# "break" (means of 100-3000, maxima up to 1e10) is a pure SMALL-DENOMINATOR
+# explosion, not a units mismatch or an account-definition change:
+#
+#   * a bank whose demand/savings/time deposits are a near-zero sliver of its
+#     real balance sheet (e.g. R$142 of classified demand deposits against
+#     R$21bn total) -- the dep_sub sub-sum divides fee revenue by that sliver;
+#   * a payment institution with a token deposit stock (R$0.02, R$380) against
+#     large fee revenue.
+#
+# Such values are not fee ratios and are treated as MISSING, exactly as
+# panel_3_master_panel_build NaNs rate_a4 above RATE_A4_MAX_MULT x Selic and
+# cosif_implicit_rate above 0.5.  Negative ratios (from svc_revenue_inc within-
+# semester reversals) are likewise implausible for a fee ratio and NaN'd.
+# The ceiling is env-overridable (mirrors panel_3's RATE_A4_MAX_MULT); the
+# default 1.0 = "quarterly fees cannot exceed 100% of the deposit base" leaves
+# the entire clean central distribution (p95 <= 0.57) untouched while removing
+# every explosion.  A cosif_fee_guarded flag marks affected cong-quarters,
+# mirroring panel_3's rate_a4_guarded.
+COSIF_FEE_RATIO_MAX = float(os.environ.get("COSIF_FEE_RATIO_MAX", 1.0))
+
 
 # ---------------------------------------------------------------------------
 # 1. Load COSIF institution panel
@@ -249,6 +277,27 @@ def aggregate_cosif_to_conglomerate_quarter(
     for col in FEE_COLS:
         if col in grp.columns:
             grp[col] = grp[col].replace([np.inf, -np.inf], np.nan)
+
+    # ── Plausibility guard: NaN small-denominator explosions ────────────────
+    # (see COSIF_FEE_RATIO_MAX above.)  Each ratio column is guarded
+    # independently so that a broken sub-classification (which blows up
+    # fee_ratio_all / _demand) does not discard a bank's still-valid
+    # fee_ratio_total_deposits.  cosif_fee_guarded = 1 marks any cong-quarter
+    # where at least one fee ratio fell outside the sane [0, MAX] band.
+    guarded = pd.Series(False, index=grp.index)
+    for col in FEE_COLS:
+        if col not in grp.columns:
+            continue
+        col_bad = ((grp[col] < 0) | (grp[col] > COSIF_FEE_RATIO_MAX)).fillna(False)
+        guarded = guarded | col_bad
+        grp.loc[col_bad, col] = np.nan
+    grp["cosif_fee_guarded"] = guarded.astype(int)
+    log.info(
+        "COSIF fee plausibility guard (ratio < 0 or > %.3g): "
+        "%d of %d cong-quarters flagged (%.2f%%) -> NaN",
+        COSIF_FEE_RATIO_MAX, int(guarded.sum()), len(grp),
+        100 * guarded.mean() if len(grp) else 0.0,
+    )
 
     grp = grp.rename(columns={c: f"cosif_{c}" for c in FEE_COLS})
     log.info("COSIF panel: %d rows | %d conglomerates | %d year-quarters",

@@ -795,6 +795,20 @@ def main() -> None:
     # C. Merge all market characteristic panels
     panel = merge_characteristics(dep)
 
+    # C2. Access-point series carry-back. The BCB access-point panel (branches/correspondents/
+    # access_points per 1000) begins in 2016 at source, but the deposit panel runs from 2013, so
+    # 2013-2015 rows merge to NaN and the demand prep would otherwise fall back to a NATIONAL-median
+    # fill. Branch density is a slow-moving municipal stock, so the municipality's own earliest
+    # observed (2016) value is a far better estimate: back-fill within mca_code. 2016+ is 100% present,
+    # so bfill only touches the leading 2013-2015 gap (no mid-series fill). See counterfactuals_plan.md
+    # §0A (access-point source gap).
+    _ap_cols = [c for c in ("branches_per1000", "correspondents_per1000", "access_points_per1000")
+                if c in panel.columns]
+    if _ap_cols:
+        panel = panel.sort_values(["mca_code", "year", "quarter"])
+        panel[_ap_cols] = panel.groupby("mca_code", sort=False)[_ap_cols].bfill()
+        logging.info(f"Access-point carry-back (2016->2013-2015) applied to {_ap_cols}")
+
     # D. Fill NATIONAL (fintech) rows with pop-weighted national averages
     panel = fill_national_averages(panel)
 

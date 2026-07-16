@@ -249,15 +249,18 @@ function build_theta2_structure(stage::String)
                     (1, findfirst(==("connections_per100"), D_COLS))]
         return [1], pi_inter, 4
     elseif stage == "full"
-        # RC5: σ_spread + σ_log_assets + 3 demographic π interactions
-        sigma_idx = [1, 1 + findfirst(==("log_total_assets_lag"), X_COLS)]
+        # RC5 (now 4 params: σ_spread + 3 demographic π). σ_log_assets was dropped, so this stage is
+        # currently IDENTICAL to rc4 — a redundant rung that reconverges to rc4 in seconds. Kept as a
+        # placeholder until the ladder/table labels are renumbered (deferred). No longer the slow
+        # stage: without the on-bound σ_log_assets to grind, `full` no longer walks a flat objective.
+        sigma_idx = [1]   # σ_spread only — σ_log_assets dropped (2026-07-15: at the σ≥0 bound in E5–E8)
         pi_inter  = [(1, findfirst(==("gdp_per_capita"),     D_COLS)),
                      (1, findfirst(==("fraction_65plus"),    D_COLS)),
                      (1, findfirst(==("connections_per100"), D_COLS))]
         return sigma_idx, pi_inter, length(sigma_idx) + length(pi_inter)
     elseif stage == "ext1"
         # RC6: full + π(log_assets × gdp_per_capita)
-        sigma_idx = [1, 1 + findfirst(==("log_total_assets_lag"), X_COLS)]
+        sigma_idx = [1]   # σ_spread only — σ_log_assets dropped (2026-07-15: at the σ≥0 bound in E5–E8)
         pi_inter  = [
             (1,                                                  findfirst(==("gdp_per_capita"),     D_COLS)),
             (1,                                                  findfirst(==("fraction_65plus"),    D_COLS)),
@@ -267,7 +270,7 @@ function build_theta2_structure(stage::String)
         return sigma_idx, pi_inter, length(sigma_idx) + length(pi_inter)
     elseif stage == "ext2"
         # RC7: ext1 + π(fgc_covered × fraction_65plus)
-        sigma_idx = [1, 1 + findfirst(==("log_total_assets_lag"), X_COLS)]
+        sigma_idx = [1]   # σ_spread only — σ_log_assets dropped (2026-07-15: at the σ≥0 bound in E5–E8)
         pi_inter  = [
             (1,                                                  findfirst(==("gdp_per_capita"),     D_COLS)),
             (1,                                                  findfirst(==("fraction_65plus"),    D_COLS)),
@@ -278,7 +281,7 @@ function build_theta2_structure(stage::String)
         return sigma_idx, pi_inter, length(sigma_idx) + length(pi_inter)
     elseif stage == "extended"
         # RC8: ext2 + π(fgc_covered × cadunico_families_per1000)
-        sigma_idx = [1, 1 + findfirst(==("log_total_assets_lag"), X_COLS)]
+        sigma_idx = [1]   # σ_spread only — σ_log_assets dropped (2026-07-15: at the σ≥0 bound in E5–E8)
         pi_inter  = [
             (1,                                                  findfirst(==("gdp_per_capita"),              D_COLS)),
             (1,                                                  findfirst(==("fraction_65plus"),             D_COLS)),

@@ -127,16 +127,31 @@ def sigma_label(idx: int) -> str:
     """Julia 1-based index → σ(characteristic) label."""
     name  = COEF_NAMES[idx - 1]
     inner = COEF_LABELS.get(name, name.replace("_", r"\_"))
-    return rf"$\sigma$({inner})"
+    # Upper-case Σ for the random-coefficient std devs, matching the paper's BLP notation
+    # (Σ = std-dev matrix, Π = demographic-interaction matrix).
+    return rf"$\Sigma$({inner})"
 
 
 def pi_label(char_idx: int, demo_idx: int) -> str:
-    """Julia 1-based indices → π(char × demo) label."""
+    """Julia 1-based indices → Π(char × demo) label."""
     char = COEF_NAMES[char_idx - 1]
     demo = D_COLS[demo_idx - 1]
     cl   = COEF_LABELS.get(char, char.replace("_", r"\_"))
     dl   = DEMO_LABELS.get(demo, demo.replace("_", r"\_"))
-    return rf"$\pi$({cl} $\times$ {dl})"
+    return rf"$\Pi$({cl} $\times$ {dl})"
+
+
+def equal_col_fmt(ncols: int, label_w: str = "4.8cm") -> str:
+    r"""Column spec: a raggedright label column of width ``label_w`` followed by ``ncols``
+    equal-width, centered ``p``-columns that together fill \linewidth (the landscape line width).
+    Equal widths keep the inter-column spacing uniform --- this avoids the "bulging column" gap that
+    natural-width ``c`` columns produce when one cell (e.g. a large weak-$\theta_2$ SE) is far wider
+    than its neighbours. Assumes ``\tabcolsep`` is set before ``\begin{longtable}``; the ``2(ncols+1)``
+    factor is the total left+right column padding subtracted so the row fills the line exactly."""
+    total = ncols + 1
+    data = (r">{\centering\arraybackslash}p{\dimexpr(\linewidth-" + label_w
+            + r"-" + str(2 * total) + r"\tabcolsep)/" + str(ncols) + r"\relax}")
+    return r">{\raggedright\arraybackslash}p{" + label_w + r"}" + data * ncols
 
 
 # ── Data loading ──────────────────────────────────────────────────────────────
@@ -317,7 +332,7 @@ def build_table(est_id: int, suffix: str = "") -> str:
         return ""
 
     ncols    = len(available)
-    col_fmt  = "l" + "c" * ncols
+    col_fmt  = equal_col_fmt(ncols, "4.8cm")   # equal-width columns fill the line (no bulging column)
     hdr_cols = " & ".join(STAGE_LABELS[s] for s in available)
 
     # Representative data for metadata
@@ -330,7 +345,7 @@ def build_table(est_id: int, suffix: str = "") -> str:
         r"\begin{landscape}",
         r"\begin{spacing}{1.0}",
         r"\centering\footnotesize",
-        r"\setlength{\tabcolsep}{5pt}",   # MUST precede \begin{longtable} (else it starts the
+        r"\setlength{\tabcolsep}{4pt}",   # MUST precede \begin{longtable} (else it starts the
         rf"\begin{{longtable}}[c]{{{col_fmt}}}",  # first cell and \caption's \noalign misplaces)
         rf"    \caption{{BLP Demand Estimation --- Estimation {est_ref(est_id)}}}",
         rf"    \label{{tab:blp_rc_est{est_id}_spec12}} \\",
@@ -357,10 +372,11 @@ def build_table(est_id: int, suffix: str = "") -> str:
         r"*** $p<0.01$, ** $p<0.05$, * $p<0.1$. "
         r"$\theta_1$: mean utility coefficients (linear IV); demographics are centered "
         r"($\tilde D=(D-\bar D)/\sigma$), so $\theta_1$ is the average-market coefficient. "
-        r"$\theta_2$: random coefficient parameters; the $\sigma$'s are bounded $\sigma\ge0$. "
-        r"A $\dagger$ marks a $\sigma$ estimated at the boundary ($\hat\sigma\approx0$): we report "
+        r"$\theta_2$: random coefficient parameters ($\Sigma$ = std.\ dev., $\Pi$ = demographic "
+        r"interaction); the $\Sigma$'s are bounded $\Sigma\ge0$. "
+        r"A $\dagger$ marks a $\Sigma$ estimated at the boundary ($\hat\Sigma\approx0$): we report "
         r"the point on the bound and \emph{no} two-sided standard error, since a symmetric interval "
-        r"would straddle $\sigma<0$ (Andrews 1999) and the bootstrap is degenerate there. "
+        r"would straddle $\Sigma<0$ (Andrews 1999) and the bootstrap is degenerate there. "
         r"$Q$: GMM overidentification statistic. Mean own-price semi-elasticity is the average-market "
         r"plug-in $\hat\alpha\cdot\overline{\rho(1-s)}$ (representative-agent; the exact RC value "
         r"integrates the individual price coefficients). "
@@ -419,7 +435,7 @@ def build_table(est_id: int, suffix: str = "") -> str:
     global_labels = build_global_theta2_labels(stage_results)
 
     for lbl in global_labels:
-        is_sigma = lbl.startswith(r"$\sigma$")           # σ's are σ≥0-bounded → boundary handling
+        is_sigma = lbl.startswith(r"$\Sigma$")           # Σ's are Σ≥0-bounded → boundary handling
         cvals, svals = [lbl], [""]
         for s in available:
             decoded = {l: (v, se, pv) for l, v, se, pv in decode_theta2(stage_results[s])}

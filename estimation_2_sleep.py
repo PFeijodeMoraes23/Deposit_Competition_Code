@@ -148,9 +148,25 @@ def define_specifications(time_block=False):
 # ==============================================================================
 # DATA BUILDING
 # ==============================================================================
+# Estimation window (author decision 2026-07-16): the whole pipeline — sleep, demand, cost — runs on
+# 2016-2024.  MIN 2016: prudential-conglomerate bank characteristics (and the cost-shifter/capital/LOO
+# instruments built from them) do not exist on the model's basis before 2016 — pre-2016 the type-1
+# IF-Data report is credit cooperatives only, and the banks' type-2/type-3 data is a different, non-
+# spliceable consolidation.  MAX 2024: 2025 concentrates several data breaks (fin_income/r^j, COSIF fee
+# recode, IF-Data renumbering).  Keep in sync with estimation_demand_link_common.MIN_YEAR/MAX_YEAR.
+SLEEP_MIN_YEAR = int(os.environ.get('SLEEP_MIN_YEAR', os.environ.get('DEMAND_MIN_YEAR', 2016)))
+SLEEP_MAX_YEAR = int(os.environ.get('SLEEP_MAX_YEAR', os.environ.get('DEMAND_MAX_YEAR', 2024)))
+
+
 def build_pooled_data(time_block=False):
     df_raw = load_panel_cached(PANEL_CSV) if load_panel_cached else pd.read_csv(PANEL_CSV, dtype={'mca_code': str}, low_memory=False)
     df_raw = df_raw.copy()  # defragment: market_panel_with_fees has many columns from merges
+
+    # Restrict the whole sleep estimation to the [SLEEP_MIN_YEAR, SLEEP_MAX_YEAR] window (see note above).
+    if 'year' in df_raw.columns:
+        _n0 = len(df_raw)
+        df_raw = df_raw[(df_raw['year'] >= SLEEP_MIN_YEAR) & (df_raw['year'] <= SLEEP_MAX_YEAR)].copy()
+        print(f"  [sleep] year window [{SLEEP_MIN_YEAR}, {SLEEP_MAX_YEAR}]: kept {len(df_raw):,} of {_n0:,} rows")
 
     df_raw['pix_exists'] = ((df_raw['year'] > 2020) | ((df_raw['year'] == 2020) & (df_raw['quarter'] == 4))).astype(float)
 
@@ -240,7 +256,14 @@ def run_pooled_first_stage(df, spec_instruments, exogenous_controls):
     res = mod.fit(cov_type='cluster', cov_kwds={'groups': cluster_series}, use_t=True)
     res = apply_imbalanced_cluster_correction(res, cluster_series)
 
-    df['v_hat'] = 0.0
+    # Rows excluded from the first stage (endogenous k=4,5 rows whose instruments are missing — chiefly
+    # 2013-2015, where prudential-conglomerate bank characteristics do not exist) get v_hat = NaN, NOT 0.
+    # A zero here would smuggle those rows into the control-function (IV) second stage treating their
+    # endogenous spread as exogenous, biasing the very coefficients that reconstruct φ̂ downstream. With
+    # NaN, v_hat_x_lagged_dep is NaN there and the second stage's dropna(X_cols) drops them — so the
+    # INSTRUMENTED specs are cleanly floored to where the instruments exist (~2016+), while the OLS/state
+    # specs (has_cf=False, no v_hat term) keep the full 2013+ sample. See counterfactuals_plan.md §0A.
+    df['v_hat'] = np.nan
     df.loc[valid_mask, 'v_hat'] = res.resid
     df['v_hat_x_lagged_dep'] = df['v_hat'] * df['lagged_deposits']
     return df, res

@@ -86,23 +86,30 @@ ACCESS_HI       = float(os.environ.get('DEMAND_ACCESS_HI', 2.5))
 FINDEX_FALLBACK = float(os.environ.get('DEMAND_FINDEX_FALLBACK', 0.77))
 TOTAL_SHARE_CAP = float(os.environ.get('DEMAND_TOTAL_SHARE_CAP', 0.95))
 
-# MAX_YEAR  upper bound on the demand sample (inclusive).  Default 2025 = the last full year in the
-#          panel (panel_6 caps at PANEL_END_YEAR=2025Q4); this keeps any partial 2026 data out.
-#
-#          NB a 2024 cap was briefly imposed on the belief that BCB's 2025 IF-Data recode broke the
-#          bank characteristics — that the new "Ativo Total" (140220) was not the old one (78182),
-#          with total assets (a STOCK, hence necessarily continuous) jumping ×1.52 across 2024Q4→2025Q1.
-#          THAT WAS AN ANALYSIS ERROR, not a data break: `Ativo Total` is reported in 2 reports in 2024
-#          and 3 in 2025, and the check summed across reports instead of filtering to report 1 (3/2 = 1.5).
-#          Filtering to report 1 — which is what panel_4 actually does — the matched-bank ratio is
-#          **1.015**, and the cost ratios are continuous (personnel .00698→.00700, admin .00848→.00858).
-#          The 2025 renumbering is real and panel_4's alias map handles it correctly.  2025 stays IN.
-#
-#          The one genuine 2025 break is `fin_income`: the DRE was restructured (TVM now net of
-#          fair-value/hedge adjustments; derivatives became a net result), so `asset_return_qoq` (r^j)
-#          is biased in 2025.  That feeds the CF cost stage only — not the sleep, not the BLP.
-#          See counterfactuals_plan.md §0A.2.
-MAX_YEAR        = int(os.environ.get('DEMAND_MAX_YEAR', 2025))
+# MAX_YEAR  upper bound on the estimation sample (inclusive).  Default 2024.  2025 is dropped
+#          (author decision 2026-07-16): it is the year with the most concentrated data breaks — the
+#          IF-Data DRE was restructured so `fin_income`/`asset_return_qoq` (r^j) is biased (TVM now net
+#          of fair-value adjustments; derivatives a net result), the COSIF fee accounts were recoded,
+#          and the IF-Data report chart was renumbered.  panel_4's alias map handles the renumbering
+#          and the fee guard handles the recode, but with the r^j break unresolved and 2025 being the
+#          latest partial-context year, the conservative window ends at 2024.  Together with MIN_YEAR
+#          this pins the whole estimation to 2016-2024.  Set DEMAND_MAX_YEAR to override.
+MAX_YEAR        = int(os.environ.get('DEMAND_MAX_YEAR', 2024))
+
+# MIN_YEAR  lower bound on the demand sample (inclusive).  Default 2016 = the first year with
+#          prudential-conglomerate bank characteristics.  The BCB prudential-conglomerate framework
+#          was phased in over 2015-2016: before 2016 the type-1 (Prudential) IF-Data report contains
+#          only credit cooperatives — the banks report individually (type-3) or as financial
+#          conglomerates (type-2), on a DIFFERENT consolidation basis that does not splice to the
+#          2016+ prudential figures (individual sums over-count intra-group by ~20%).  So bank
+#          characteristics — and the cost-shifter, capital and LOO instruments built from them — do
+#          not exist on the model's basis before 2016; 2013-2015 rows had them fabricated (fillna 0 /
+#          median), which biased both the demand IV and the sleep IV first stage.  Author decision
+#          (2026-07-16): the WHOLE estimation — sleep, demand and cost — runs on 2016-2024, one
+#          consistent fully-populated window (rather than mixing a 2013+ OLS sleep with a 2016+ IV
+#          sleep).  See estimation_2_sleep (SLEEP_MIN_YEAR/MAX_YEAR) and counterfactuals_plan.md §0A.
+#          Set DEMAND_MIN_YEAR to override.
+MIN_YEAR        = int(os.environ.get('DEMAND_MIN_YEAR', 2016))
 
 # NB: M_mt / M_nat are BUILT inside process_specification (after the keep_cols filter) and so reach
 # the parquet without needing to be listed here.
@@ -175,14 +182,18 @@ def build_base_panel(panel_csv):
     df['spread_ann'] = df['spread_ann'] * 10_000
     df = df.dropna(subset=['deposit_balance', 'lagged_deposits', 'spread_qoq', 'spread_ann', 'entity_id', 'time_id'])
 
-    # Cap the demand sample at MAX_YEAR (see the MAX_YEAR note above: the 2025 IF-Data chart-of-accounts
-    # break makes bank characteristics non-spliceable).  Applied AFTER the lags are formed, so 2024Q4
-    # keeps its 2024Q3 lag.
-    if MAX_YEAR is not None and 'year' in df.columns:
+    # Bound the demand sample to [MIN_YEAR, MAX_YEAR].  MAX (2025): keep partial 2026 out.  MIN (2016):
+    # prudential-conglomerate bank characteristics — and the instruments built from them — do not exist
+    # on the model's basis before 2016 (see the MIN_YEAR note above).  Applied AFTER the lags are formed,
+    # so the boundary quarter keeps its lag.
+    if 'year' in df.columns:
         _n0 = len(df)
-        df = df[df['year'] <= MAX_YEAR].copy()
-        logging.info(f"  MAX_YEAR={MAX_YEAR}: kept {len(df):,} of {_n0:,} rows "
-                     f"(dropped {_n0 - len(df):,} in years > {MAX_YEAR})")
+        if MIN_YEAR is not None:
+            df = df[df['year'] >= MIN_YEAR].copy()
+        if MAX_YEAR is not None:
+            df = df[df['year'] <= MAX_YEAR].copy()
+        logging.info(f"  year window [{MIN_YEAR}, {MAX_YEAR}]: kept {len(df):,} of {_n0:,} rows "
+                     f"(dropped {_n0 - len(df):,})")
 
     df['constant'] = 1.0
     if 'year' in df.columns:

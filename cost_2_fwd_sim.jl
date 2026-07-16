@@ -72,19 +72,159 @@ using DataFrames, Random, Serialization, Statistics
 # ==========================================================================
 # Spread scenarios
 # ==========================================================================
+# ── BBL Step-1 fitted-policy merge constants ────────────────────────────────────────────────────
+# The polfunc regressand `spread_qoq` (= market_panel spread_a{k}) is a per-QUARTER FRACTION, whereas
+# ρ̂ = spread_ann/100 is an ANNUALIZED percentage point. So fitted × 400 (=×4 quarter→year, ×100
+# fraction→pp) converts the fitted policy to ρ̂ units. VERIFIED empirically: on the matched k∈{4,5}
+# rows the OBSERVED spread_qoq×400 reproduces ρ̂ to corr≈0.999 (k4) / 1.000 (k5).
+const _POLFUNC_QOQ_TO_ANN_PP = 400.0
+# estimation_1_cost_1_polfunc.py::compute_fitted_values predicts with missing regressors filled to 0
+# (`fillna(0)`), which pins ~19% of early-panel (2013–2016) B rows at the ≈190pp regression intercept —
+# absurd for a deposit spread (real ρ̂ never exceeds ~16pp). Any |fitted|>this cap is an upstream
+# extrapolation artifact and is NOT adopted; that row keeps its observed spread. The cap is far above
+# every real spread and far below the intercept plateau, so it is insensitive (same fallback set for a
+# 20–50pp cap).
+const _POLFUNC_SANE_CAP_PP = 40.0
+
+# Composite row key for the (CodConglomeradoPrudencial × mca_code × deposit_type × time_id) match.
+_polkey(firm, mca, k::Int, tid) = string(firm, '\x1f', mca, '\x1f', k, '\x1f', tid)
+
+"""
+    _load_policy_map(path) -> Dict{String,Float64}
+
+Parse the BBL Step-1 fitted-policy CSV (`polfunc_fitted_spec_*.csv` from
+estimation_1_cost_1_polfunc.py) into `(firm,mca,k,time) → fitted spread (annual pp)`, keeping only
+k∈{4,5} rows with a finite fitted value. Per firm type we take that type's OWN Step-1 regression: B
+firms → the `_B` column, D firms → the `_D_optB` column (national pop-weighted demographics — the
+best-fitting D spec). Values are converted qoq-fraction → annual pp (×`_POLFUNC_QOQ_TO_ANN_PP`).
+Uses a minimal comma split (no CSV.jl dependency; the file's fields never contain commas or quotes).
+"""
+function _load_policy_map(path::String)::Dict{String,Float64}
+    lines = readlines(path)
+    isempty(lines) && error("policy-csv is empty: $path")
+    hdr = split(strip(lines[1]), ',')
+    ci  = Dict(String(strip(String(h))) => i for (i, h) in enumerate(hdr))
+    need = ["CodConglomeradoPrudencial", "mca_code", "deposit_type", "is_B", "time_id",
+            "fitted_k4_Time_CDB_B", "fitted_k4_Time_CDB_D_optB",
+            "fitted_k5_Prepaid_B", "fitted_k5_Prepaid_D_optB"]
+    for c in need
+        haskey(ci, c) || error("policy-csv missing column '$c' in $(basename(path)). " *
+                               "Re-run estimation_1_cost_1_polfunc.py --spec <spec>.")
+    end
+    i_firm = ci["CodConglomeradoPrudencial"]; i_mca = ci["mca_code"]; i_k = ci["deposit_type"]
+    i_isB = ci["is_B"]; i_t = ci["time_id"]
+    i_k4B = ci["fitted_k4_Time_CDB_B"]; i_k4D = ci["fitted_k4_Time_CDB_D_optB"]
+    i_k5B = ci["fitted_k5_Prepaid_B"]; i_k5D = ci["fitted_k5_Prepaid_D_optB"]
+    ncol = length(hdr)
+    m = Dict{String,Float64}()
+    @inbounds for li in 2:length(lines)
+        line = lines[li]
+        isempty(line) && continue
+        f = split(line, ',')
+        length(f) < ncol && continue
+        k = tryparse(Int, strip(String(f[i_k])))
+        (k === nothing || !(k == 4 || k == 5)) && continue
+        isB = strip(String(f[i_isB])) == "True"
+        col = k == 4 ? (isB ? i_k4B : i_k4D) : (isB ? i_k5B : i_k5D)
+        raw = strip(String(f[col]))
+        isempty(raw) && continue                       # missing fitted (NaN written blank) → skip
+        v = tryparse(Float64, raw)
+        (v === nothing || !isfinite(v)) && continue
+        key = _polkey(String(strip(String(f[i_firm]))), String(strip(String(f[i_mca]))),
+                      k, String(strip(String(f[i_t]))))
+        m[key] = v * _POLFUNC_QOQ_TO_ANN_PP            # qoq-fraction → annual pp (ρ̂ units)
+    end
+    isempty(m) && error("policy-csv parsed 0 usable k∈{4,5} fitted rows: $path")
+    return m
+end
+
 """
     equilibrium_spreads(ctx; policy_csv=nothing) -> Vector{Float64}
 
-The equilibrium choice-spread vector σ̂ (annualized units). Default = observed ρ̂.
-If `policy_csv` is given, overwrite k∈{4,5} rows with the fitted policy spreads
-(matched on CodConglomeradoPrudencial × mca_code × deposit_type × time_id).
+The equilibrium choice-spread vector σ̂ (annualized pp, ρ = spread_ann/100). Default = the observed
+spreads ρ̂ — the data IS the equilibrium, so every row passes through unchanged.
+
+If `policy_csv` is given (the BBL Step-1 fitted policy, `polfunc_fitted_spec_*.csv`), the CHOICE rows
+k∈{4,5} are replaced by the FITTED policy so that Step-2 deviations perturb the smoothed policy rather
+than raw noisy spreads (author decision 2026-07-16 — observed-spread deviations make frac_bind≈0.5
+mechanically, since σ̂ is not then a turning point of the simulated value). Regulated types k∈{1,2}
+always keep their observed (exogenous) spread. Matching is on
+(CodConglomeradoPrudencial × mca_code × deposit_type × time_id); units are converted qoq-fraction →
+annual pp via ×`_POLFUNC_QOQ_TO_ANN_PP` (see the const's note for the empirical verification).
+
+ROBUSTNESS: the Step-1 CSV pins ~19% of early-panel B rows at the ≈190pp intercept (upstream
+`fillna(0)` extrapolation). Those implausible rows (|fit|>`_POLFUNC_SANE_CAP_PP`) and any non-finite
+or unmatched rows fall back to the observed spread, with a loud count. The units/key SANITY GATE
+(match rate, |fit−obs| gap, correlation) is then evaluated on the ADOPTED rows and THROWS on a
+genuine units or key bug (which would corrupt the adopted rows too).
 """
 function equilibrium_spreads(ctx::CFDemandCtx; policy_csv::Union{Nothing,String}=nothing)
     σ̂ = copy(ctx.rho_hat)
     policy_csv === nothing && return σ̂
-    @warn "policy-csv merge is a stub: confirm key columns in polfunc_fitted_*.csv before use."
-    # TODO(author-confirm): read polfunc_fitted_spec_*.csv, match rows, and replace
-    # σ̂ on k∈{4,5}. Left as observed until the fitted-policy keys are confirmed.
+    isfile(policy_csv) || error("--policy-csv file not found: $policy_csv")
+
+    polmap = _load_policy_map(policy_csv)              # (firm,mca,k,time) → fitted spread (annual pp)
+
+    firm  = string.(ctx.df.CodConglomeradoPrudencial)
+    mca   = string.(ctx.df.mca_code)
+    tid   = string.(ctx.df.time_id)
+    kvec  = Int.(coalesce.(ctx.df.deposit_type, 0))
+    endog = (kvec .== 4) .| (kvec .== 5)
+    n_endog = count(endog)
+    n_endog == 0 && error("no k∈{4,5} rows in ctx.df — cannot apply the fitted policy.")
+
+    n_matched = 0; n_adopted = 0
+    fit_adopt = Float64[]; obs_adopt = Float64[]
+    @inbounds for i in eachindex(σ̂)
+        endog[i] || continue
+        key = _polkey(firm[i], mca[i], kvec[i], tid[i])
+        haskey(polmap, key) || continue                # unmatched → keep observed
+        f = polmap[key]
+        isfinite(f) || continue
+        n_matched += 1
+        if abs(f) <= _POLFUNC_SANE_CAP_PP
+            σ̂[i] = f                                   # ADOPT the fitted policy on this choice row
+            n_adopted += 1
+            push!(fit_adopt, f); push!(obs_adopt, ctx.rho_hat[i])
+        end                                            # else: implausible fitted → keep observed
+    end
+
+    match_rate  = n_matched / n_endog
+    n_untrusted = n_matched - n_adopted
+    n_unmatched = n_endog - n_matched
+    log_status("  [CF2] policy-csv ← $(basename(policy_csv)); fitted qoq-fraction × " *
+               "$(_POLFUNC_QOQ_TO_ANN_PP) → annual pp (ρ̂ units)")
+    log_status("  [CF2] k∈{4,5}: $n_endog rows | matched $n_matched " *
+               "($(round(100 * match_rate, digits=1))%) | adopted $n_adopted | " *
+               "fell back to observed: $n_unmatched unmatched + $n_untrusted implausible " *
+               "(|fit|>$(_POLFUNC_SANE_CAP_PP)pp)")
+
+    # ── SANITY GATE (throws on a units or key bug) ──────────────────────────────────────────────
+    match_rate < 0.95 && error(
+        "policy-csv match rate $(round(100 * match_rate, digits=1))% < 95% on k∈{4,5} — key mismatch " *
+        "(matched on CodConglomeradoPrudencial×mca_code×deposit_type×time_id; check the CSV keys).")
+    n_adopted == 0 && error(
+        "policy-csv: 0 adopted rows (every matched fitted value non-finite or |fit|>$(_POLFUNC_SANE_CAP_PP)pp) — units or upstream-fit bug.")
+
+    med_gap    = median(abs.(fit_adopt .- obs_adopt))
+    med_spread = median(abs.(obs_adopt))
+    ρcorr      = cor(fit_adopt, obs_adopt)
+    log_status("  [CF2] adopted-row sanity: median|fit−obs|=$(round(med_gap, digits=3))pp | " *
+               "median|obs|=$(round(med_spread, digits=3))pp | corr(fit,obs)=$(round(ρcorr, digits=3))")
+    if n_untrusted > 0
+        @warn "  [CF2] $n_untrusted/$n_endog matched k∈{4,5} fitted spreads exceeded " *
+              "$(_POLFUNC_SANE_CAP_PP)pp and fell back to observed. Cause: " *
+              "estimation_1_cost_1_polfunc.py::compute_fitted_values fills missing regressors with 0, " *
+              "pinning early-panel B rows at the ≈190pp intercept. Restrict that prediction to complete " *
+              "cases to adopt the fitted policy on those rows too."
+    end
+    ρcorr < 0.3 && error(
+        "policy-csv sanity: corr(fitted,observed)=$(round(ρcorr, digits=3)) < 0.3 on adopted k∈{4,5} " *
+        "rows — likely a units or key bug (the fitted policy should track observed spreads).")
+    med_gap > med_spread && error(
+        "policy-csv sanity: median|fit−obs|=$(round(med_gap, digits=3))pp > median|obs|=" *
+        "$(round(med_spread, digits=3))pp — likely a units bug (check the ×$(_POLFUNC_QOQ_TO_ANN_PP) " *
+        "qoq→annual-pp conversion).")
     return σ̂
 end
 

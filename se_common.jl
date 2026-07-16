@@ -71,33 +71,61 @@ wild cluster bootstrap (same weights/seed as the logit). All inputs are on the V
 
 Moment g = Z'ξ/N; Jacobian (×N, cancels) D = [−Z'X, Z'Ddelta]; cluster meat S = Σ_g m_g m_g',
 m_g = Σ_{i∈g} Z_i ξ_i. Sandwich V = (D'WD)⁻¹ D'W S W D (D'WD)⁻¹ · corr; WCB uses IF_g = −(D'WD)⁻¹ D'W m_g.
-Returns (se, pval) over all K params (θ₁ block first)."""
+Returns (se, pval) over all K params (θ₁ block first).
+
+BOUNDARY PROFILING (`n_sigma`, `bound_tol`): the first `n_sigma` entries of θ₂ are the random-
+coefficient σ's, bounded σ≥0. A σ pinned at the bound (|σ̂|<`bound_tol`) has ∂δ/∂σ≈0 — shares are
+even in σ, so the score vanishes at σ=0 — hence its `Ddelta` column ≈0. Keeping such a column makes
+`DtWD` near-singular, and `inv()` then inflates EVERY parameter's SE (θ₁ included), not just the σ's
+own. We therefore PROFILE those σ's out (drop their columns = condition on σ=0, the boundary-correct
+treatment, Andrews 1999), compute the covariance on the identified sub-vector, and return `NaN` SE
+for the profiled σ's — exactly the σ's the tables flag with a dagger. This is the fix for the
+"SEs blow up when a second on-bound σ enters" pathology (4→5 RC)."""
 function gmm_cluster_ses(method::AbstractString, theta::Vector{Float64},
                          Z::Matrix{Float64}, X::Matrix{Float64}, Ddelta::Matrix{Float64},
                          xi::Vector{Float64}, W::Matrix{Float64}, cl::Vector{String};
-                         B::Int=wcb_reps(), scheme::AbstractString=wcb_scheme(), seed::Int=0)
+                         B::Int=wcb_reps(), scheme::AbstractString=wcb_scheme(), seed::Int=0,
+                         n_sigma::Int=0, bound_tol::Float64=1e-3)
     N, L = size(Z)
     K1   = size(X, 2); K2 = size(Ddelta, 2); K = K1 + K2
-    D    = hcat(-Z' * X, Z' * Ddelta)                 # (L × K)
+
+    # Profile out on-bound σ's (degenerate ∂δ/∂σ≈0 columns) before forming the Jacobian.
+    drop = Int[]                                       # full-param indices to profile out
+    for j in 1:min(n_sigma, K2)
+        abs(theta[K1 + j]) < bound_tol && push!(drop, K1 + j)
+    end
+    isempty(drop) || @info "  [se] profiling out $(length(drop)) on-bound σ (param idx $drop) from the covariance"
+    θ2keep  = [j for j in 1:K2 if !((K1 + j) in drop)]           # kept θ₂ columns (into Ddelta)
+    keepidx = vcat(collect(1:K1), [K1 + j for j in θ2keep])      # kept full-param indices, in order
+    Dd_k    = K2 > 0 ? Ddelta[:, θ2keep] : Ddelta
+    Kk      = length(keepidx)
+
+    D    = hcat(-Z' * X, Z' * Dd_k)                    # (L × Kk), degenerate cols removed
     uc   = unique(cl); G = length(uc)
     Mcl  = zeros(G, L)                                 # cluster meats m_g (rows)
     for (gi, c) in enumerate(uc)
         cm = cl .== c
         Mcl[gi, :] = Z[cm, :]' * xi[cm]
     end
-    DtW   = D' * W                                     # (K × L)
-    DtWD  = DtW * D                                    # (K × K)
+    DtW   = D' * W                                     # (Kk × L)
+    DtWD  = DtW * D                                    # (Kk × Kk)
     bread = try inv(DtWD) catch; pinv(DtWD) end
     gstar = effective_clusters(cl)                     # few-cluster t(G*) df (≈7 here, not G≈506)
+
+    theta_k   = theta[keepidx]
+    se_full   = fill(NaN, K)                           # profiled σ's stay NaN (dagger in the tables)
+    pval_full = fill(NaN, K)
     if method == "sandwich"
-        corr = G > 1 ? (G / (G - 1)) * ((N - 1) / (N - K)) : 1.0
+        corr = G > 1 ? (G / (G - 1)) * ((N - 1) / (N - Kk)) : 1.0
         V    = bread * (DtW * (Mcl' * Mcl) * DtW') * bread' .* corr
-        se   = sqrt.(max.(diag(V), 0.0))
+        se_k = sqrt.(max.(diag(V), 0.0))
         ref  = gstar > 1 ? TDist(gstar) : Normal()     # t(G*) few-cluster reference
-        pval = Float64[se[k] > 0 ? 2 * ccdf(ref, abs(theta[k]) / se[k]) : NaN for k in 1:K]
-        return se, pval
+        pv_k = Float64[se_k[k] > 0 ? 2 * ccdf(ref, abs(theta_k[k]) / se_k[k]) : NaN for k in 1:Kk]
     else  # "wcb": per-cluster GMM influence functions IF_g = −(D'WD)⁻¹ D'W m_g, row g of IF_cl
-        IF_cl = -(bread * DtW * Mcl')'                 # (G × K)
-        return wcb_se(theta, Matrix(IF_cl); B=B, scheme=scheme, seed=seed, dof=gstar)
+        IF_cl = -(bread * DtW * Mcl')'                 # (G × Kk)
+        se_k, pv_k = wcb_se(theta_k, Matrix(IF_cl); B=B, scheme=scheme, seed=seed, dof=gstar)
     end
+    se_full[keepidx]   = se_k
+    pval_full[keepidx] = pv_k
+    return se_full, pval_full
 end

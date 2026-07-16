@@ -25,6 +25,14 @@
 # separate variables; submit_blp_rc_stage.sh translates '+' → ',' before calling
 # Julia (which runs a comma-separated stage subset in one process).
 #
+# CONCURRENCY: the routine chains are submitted independently (no cross-routine dependency, no
+# shared mutable file — checkpoints are per-(routine,stage)), so all |ROUTINES| HEADs can run AT THE
+# SAME TIME and the wall-clock is one chain (~1.5 h), not their sum (~5.9 h) — BUT only if the
+# scheduler grants that many concurrent gpu_h200 jobs. If your QOS caps concurrent GPUs below
+# |ROUTINES|, they serialise and you pay the sum. Check your limit with:
+#     sacctmgr -n show qos gpu_h200 format=MaxJobsPU,MaxTRESPU%30    (or: MaxSubmitJobsPU)
+# and, if needed, ask RC to raise it or stagger routine sets.
+#
 # Prerequisite (same as the per-stage orchestrator): warm-start deltas on the
 # cluster — data/output/logit_delta_E{k}_spec_12.bin for each k in ${ROUTINES}.
 #
@@ -40,8 +48,11 @@ mkdir -p "${HERE}/logs"
 # Default routines: the single-index links + their +Time variants E5 (single-index),
 # E6 (single-index+time), E7 (joint), E8 (joint+time).
 ROUTINES="${ROUTINES:-5 6 7 8}"
-# Engines: IFT (blp_2) + numerical (blp_1) cross-check. Override e.g. ENGINES="ift".
-ENGINES="${ENGINES:-ift numerical}"
+# Engines: IFT (blp_2) by default. The numerical (blp_1) cross-check is the single most expensive
+# block (~2.8 h across E5–E8) and only re-validates POINT estimates, which don't change run-to-run —
+# so it is OFF by default. Run it ONCE after a code change, ideally on one representative routine:
+#   ENGINES="ift numerical" ROUTINES=5 bash submit_blp_rc_grouped.sh
+ENGINES="${ENGINES:-ift}"
 # Numerical engine: crosscheck (default) = ONE job at `extended` only, afterok the IFT
 # extended job and seeded from its θ₂; full = the 3-job grouped numerical chain.
 NUMERICAL_MODE="${NUMERICAL_MODE:-crosscheck}"
@@ -84,6 +95,18 @@ for e in ${ENGINES}; do
     [ "$e" = "ift" ] && do_ift=1
     [ "$e" = "numerical" ] && do_num=1
 done
+
+# Concurrency check (non-fatal): the routine chains are independent, so wall-clock = one chain only
+# if the QOS lets |ROUTINES| gpu_h200 jobs run at once. Report the cap so serialisation is visible.
+nroutines=$(echo ${ROUTINES} | wc -w)
+maxjobs="$(sacctmgr -n -P show qos gpu_h200 format=MaxJobsPU 2>/dev/null | head -1 || true)"
+if [ -n "${maxjobs}" ] && [ "${maxjobs}" != "0" ] 2>/dev/null; then
+    echo "[concurrency] ${nroutines} routine chains submitted; QOS gpu_h200 MaxJobsPU=${maxjobs}." \
+         "$([ "${maxjobs}" -lt "${nroutines}" ] 2>/dev/null && echo '⚠ below routine count → chains will SERIALISE.' || echo 'chains can run in parallel.')"
+else
+    echo "[concurrency] ${nroutines} routine chains submitted; could not read QOS MaxJobsPU — verify" \
+         "≥${nroutines} concurrent gpu_h200 jobs are allowed, else chains serialise (see header)."
+fi
 
 njobs=0
 for k in ${ROUTINES}; do
