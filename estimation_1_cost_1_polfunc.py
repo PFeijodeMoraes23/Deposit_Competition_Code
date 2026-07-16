@@ -82,12 +82,9 @@ _ROOT = Path(__file__).resolve().parents[2]
 DATA_DIR = _ROOT / "BCB" / "Egan_et_al_2025_Rep" / "processed"
 PANEL_CSV = DATA_DIR / "market_panel.csv"
 
-# Estimation window — keep in sync with estimation_demand_link_common.MIN_YEAR/MAX_YEAR and
-# estimation_2_sleep.SLEEP_MIN_YEAR/MAX_YEAR.  The BBL Step-1 policy function is fit on bank
-# characteristics, which only exist on the prudential-conglomerate basis from 2016; 2025 carries the
-# fin_income/COSIF/renumbering breaks.  See counterfactuals_plan.md §0A.
-POLFUNC_MIN_YEAR = int(os.environ.get('DEMAND_MIN_YEAR', 2016))
-POLFUNC_MAX_YEAR = int(os.environ.get('DEMAND_MAX_YEAR', 2024))
+# Estimation window [2016, 2024] — defined once in utils/window.py (full rationale + the
+# DEMAND_MIN_YEAR / DEMAND_MAX_YEAR env overrides, which it reads).
+from utils.window import MIN_YEAR as POLFUNC_MIN_YEAR, MAX_YEAR as POLFUNC_MAX_YEAR  # noqa: E402
 OUTPUT_DIR = DATA_DIR / "ESTIMATION_OUTPUT" / "COST_POLFUNC"
 
 # Endogenous deposit types (spreads set by institutions)

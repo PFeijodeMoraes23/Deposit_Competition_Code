@@ -60,6 +60,8 @@ import pandas as pd
 import statsmodels.api as sm
 from scipy import stats
 
+from utils.window import apply_window
+
 warnings.filterwarnings("ignore")
 
 # ---------------------------------------------------------------------------
@@ -284,6 +286,10 @@ def _stars(p: float) -> str:
 def load_panel() -> pd.DataFrame:
     print(f"Loading {PANEL_CSV.name} ...")
     df = pd.read_csv(PANEL_CSV, low_memory=False)
+
+    # The descriptives must describe the same sample the model is fit on. See utils/window.py.
+    df = apply_window(df, label="desc_2 panel")
+
     df["CODMUN_IBGE_str"] = df["CODMUN_IBGE"].astype(str).str.split(".").str[0]
     df["bank_type"] = np.where(df["CODMUN_IBGE_str"] == "0", "D", "B")
     df["region_code"] = df["CODMUN_IBGE_str"].str[0]
@@ -341,7 +347,7 @@ def _build_firm_quarter_B(df_b: pd.DataFrame) -> pd.DataFrame:
                 dep_a5=("dep_a5", "sum"),
                 total_assets=("total_assets", "first"),
                 equity_ratio=("equity_ratio", "first"),
-                n_mcas_served=("CODMUN_IBGE", "nunique"),
+                n_mcas_served=("mca_code", "nunique"),
                 risk_free_qoq=("risk_free_qoq", "first"),
             )
             .reset_index()
@@ -570,7 +576,7 @@ def build_table2(df: pd.DataFrame, weight_col: str | None) -> pd.DataFrame:
     df_b["dep_total_jkmt"] = df_b[["dep_a1", "dep_a2", "dep_a4", "dep_a5"]].sum(axis=1, min_count=1)
 
     # ---- Vectorized B-side MCA-quarter aggregates ----
-    grp_keys = ["CODMUN_IBGE", "year", "quarter"]
+    grp_keys = ["mca_code", "year", "quarter"]
 
     # Step 1: collapse to firm-level within MCA-quarter
     firm_mq = (
@@ -1034,7 +1040,7 @@ def build_table3(df: pd.DataFrame, weight_col: str | None) -> pd.DataFrame:
     snap = df_b[df_b["year"] == latest_year]
 
     # One row per MCA (collapse over firms and quarters within the year)
-    mca = snap.groupby("CODMUN_IBGE", sort=False).agg(
+    mca = snap.groupby("mca_code", sort=False).agg(
         **{v: (v, "mean") for v in T3_VARS if v in snap.columns},
         region=("region", "first"),
         weight=(weight_col, "mean") if (weight_col and weight_col in snap.columns) else ("year", "size"),
@@ -1252,6 +1258,9 @@ def build_appendix_rates() -> pd.DataFrame:
     df = pd.read_csv(MACRO_RATES_CSV)
     df["year"]    = df["AnoMes"] // 100
     df["quarter"] = df["AnoMes"] % 100
+
+    # This table reports rates BY YEAR, so it must cover the same years as the estimation sample.
+    df = apply_window(df, label="desc_2 macro rates")
 
     for col in ["selic_qoq", "cdi_qoq", "savings_rate_qoq"]:
         df[f"{col}_ann"] = ((1 + df[col] / 100) ** 4 - 1) * 100

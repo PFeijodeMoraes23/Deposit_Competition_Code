@@ -253,8 +253,21 @@ def attach_mca_code(dep: pd.DataFrame) -> pd.DataFrame:
             f"(municipality not in crosswalk for that year)."
         )
 
-    # Write resolved mca_code back to the main df
-    tier1_merged["mca_code"] = tier1_merged["mca_code_xwalk"].fillna("UNKNOWN")
+    # Write resolved mca_code back to the main df. Unmapped municipalities get their OWN
+    # pseudo-market ("UNKNOWN_<codmun>") rather than a shared "UNKNOWN" bucket: the panel is
+    # aggregated to mca_code downstream, and a shared bucket would fuse unrelated
+    # municipalities into one fake market.
+    tier1_merged["mca_code"] = tier1_merged["mca_code_xwalk"]
+    _unmapped = tier1_merged["mca_code"].isna()
+    if _unmapped.any():
+        tier1_merged.loc[_unmapped, "mca_code"] = (
+            "UNKNOWN_" + tier1_merged.loc[_unmapped, "CODMUN_IBGE_int"].astype(str)
+        )
+        logging.warning(
+            f"{int(_unmapped.sum()):,} unmapped Tier-1 rows across "
+            f"{tier1_merged.loc[_unmapped, 'CODMUN_IBGE_int'].nunique():,} municipalities kept as "
+            f"standalone UNKNOWN_<codmun> pseudo-markets (not fused)."
+        )
     tier1_merged.drop(columns=["mca_code_xwalk", "CODMUN_IBGE_int"], inplace=True)
 
     # Recombine
@@ -266,6 +279,56 @@ def attach_mca_code(dep: pd.DataFrame) -> pd.DataFrame:
         f"(including NATIONAL={( result['mca_code'] == 'NATIONAL').sum():,} rows)"
     )
     return result
+
+
+## -----------------------------------------------------------------------------
+## 4b) COLLAPSE MUNICIPALITIES -> MCA (the panel's documented unit of observation)
+## -----------------------------------------------------------------------------
+
+def aggregate_to_mca(dep: pd.DataFrame) -> pd.DataFrame:
+    """Collapse the municipality-level deposit rows to
+    CodConglomeradoPrudencial x mca_code x year x quarter.
+
+    ESTBAN arrives as a municipality-month panel, but a market is an MCA (V_Main
+    Sec. 2: "B firms compete in local markets - defined here as Minimal Comparable
+    Areas"; Sec. 3 descriptives "sum MCA-level deposits within firm-quarter"). Without
+    this step the panel carries ~3.84 municipality rows per market while every merged
+    characteristic is already MCA-level, and downstream consumers silently
+    drop_duplicates() to one arbitrary municipality -- discarding ~74% of the rows and
+    understating market deposits.
+
+    Deposit LEVELS are summed across the MCA's municipalities; every other column is
+    constant within the key (market characteristics are MCA-level from the scrapers;
+    spreads and bank characteristics are conglomerate-level), so first() is exact.
+
+    NATIONAL (D-firm) rows: IF-Data rows are already one-per-key, so the sum is a no-op;
+    the ESTBAN "retail digital candidate" rows zeroed in attach_mca_code() are
+    municipality splits of a national bank, so summing rebuilds the national total. No
+    conglomerate-quarter mixes the two sources, so this cannot double-count.
+    """
+    key = ["CodConglomeradoPrudencial", "mca_code", "year", "quarter"]
+    dep_cols = [c for c in dep.columns if c.startswith("dep_") or c == "total_deposits"]
+    other = [c for c in dep.columns if c not in key + dep_cols]
+
+    n_before = len(dep)
+    n_keys = dep.drop_duplicates(subset=key).shape[0]
+    if n_before == n_keys:
+        logging.info("Deposit panel already unique at conglomerate x MCA x quarter; no aggregation needed.")
+        return dep
+
+    # min_count=1 so an all-NaN group stays NaN instead of collapsing to 0.0 -- dep_a5
+    # (prepaid) is legitimately NaN before 2020Q2 and must not become "zero deposits".
+    agg_dep = dep.groupby(key, sort=False, dropna=False)[dep_cols].sum(min_count=1)
+    agg_oth = dep.groupby(key, sort=False, dropna=False)[other].first()
+    out = agg_dep.join(agg_oth).reset_index()
+
+    logging.info(
+        f"Aggregated municipalities -> MCA: {n_before:,} rows -> {len(out):,} "
+        f"({n_before / max(len(out), 1):.2f} municipality rows per market). "
+        f"Summed {len(dep_cols)} deposit column(s): {dep_cols}"
+    )
+    assert len(out) == n_keys, f"aggregation produced {len(out):,} rows, expected {n_keys:,}"
+    return out
 
 
 ## -----------------------------------------------------------------------------
@@ -791,6 +854,12 @@ def main() -> None:
 
     # B. Map CODMUN_IBGE -> mca_code
     dep = attach_mca_code(dep)
+
+    # B2. Collapse municipalities -> MCA (the documented unit of observation). Must run
+    # BEFORE the merges: fill_national_averages() pop-weights by MCA pop_total (repeated
+    # municipality rows would over-weight multi-municipality MCAs by their municipality
+    # count) and calculate_hausman_iv_wide() builds a leave-one-out mean over MARKETS.
+    dep = aggregate_to_mca(dep)
 
     # C. Merge all market characteristic panels
     panel = merge_characteristics(dep)

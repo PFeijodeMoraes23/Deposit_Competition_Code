@@ -70,7 +70,8 @@ Pipeline stages
     5b. desc_1.py --weight-col pop_total Generate market-weighted descriptive tables
     5c. desc_2.py                        Generate unweighted compressed/thematic tables
     5d. desc_2.py --weight-col pop_total Generate market-weighted compressed/thematic tables
-    5e. desc_3.py                        Cluster-imbalance / deposit-concentration table (G*, CV)
+    (desc_3.py and export_analyze_spec12.py are POST-ESTIMATION — they read the sleep's
+     market_panel_phis.csv — and live in run_sleep_pipeline.py steps 11-12, not here.)
 
   Stage 6 - Firm-disclosure & count data (extensive-vs-intensive margin)
     6a. scrape_11_edgar_disclosures.py        SEC EDGAR firm customers + deposits
@@ -287,8 +288,11 @@ STEPS = [
      "Generate unweighted compressed/thematic descriptive tables"),
     (5, "26", "desc_2.py --weight-col pop_total",
      "Generate market-weighted compressed/thematic descriptive tables"),
-    (5, "27", "desc_3.py",
-     "Cluster-imbalance / deposit-concentration table (G*, CV) justifying the wild cluster bootstrap"),
+    # NB: desc_3.py and export_analyze_spec12.py are NOT here. They read market_panel_phis.csv, which
+    # is a SLEEP output — so they are POST-ESTIMATION steps and live in run_sleep_pipeline.py (steps
+    # 11-12), which runs after the estimators. Putting them in this data pipeline would silently read
+    # whatever the last sleep happened to leave on disk. desc_1/desc_2 belong here: they read
+    # market_panel.csv, which this pipeline builds.
 
     # Stage 6 -- firm-disclosure & count data (extensive-vs-intensive margin diagnostic)
     # External-API scrapers, serialized (one per wave) to respect SEC/CVM/WB rate
@@ -437,13 +441,17 @@ WAVES: list[list[str]] = [
     ["13"],                                    # Wave 2i: COSIF calibrate (corrected k=4 CDB rate)
     ["14", "15"],                               # Wave 3: deposits + IP rates
     ["16", "17", "18"],                         # Wave 4: deposit rates/spreads + bank chars + digital flags (parallel)
-    ["19"],                                    # Wave 5: master merge
-    ["20", "21"],                             # Wave 6: instrumental variables + demographics sigma
-    ["22", "23", "24", "25"],                  # Wave 7: descriptive statistics (desc_1 + desc_2, weighted + unweighted)
+    ["19"],                                    # Wave 5: master merge (panel_6)
+    ["20", "21"],                             # Wave 6: LOO instruments (panel_7, OVERWRITES market_panel)
+                                              #         + demographics sigma (panel_8, independent)
+    ["22"],                                   # Wave 7: panel_9 fee patch — MUST follow panel_7's overwrite
+    ["23", "24", "25", "26"],                 # Wave 8: descriptives (desc_1/desc_2 x {unweighted, weighted})
+                                              #         desc_3 + export_analyze_spec12 are post-estimation
+                                              #         -> run_sleep_pipeline.py steps 11-12
     # Stage 6: firm-disclosure scrapers, one per wave (serial) to respect external
     # rate limits (EDGAR/parent both hit SEC), then the join once all are present.
-    ["26"], ["27"], ["28"], ["29"], ["30"], ["31"], ["32"],  # Wave 8-14: disclosure scrapers
-    ["33"],                                                          # Wave 15: disclosure join
+    ["28"], ["29"], ["30"], ["31"], ["32"], ["33"], ["34"],  # Wave 9-15: disclosure scrapers
+    ["35"],                                                          # Wave 16: disclosure join
 ]
 
 def run_wave(

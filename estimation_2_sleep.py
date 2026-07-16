@@ -148,14 +148,13 @@ def define_specifications(time_block=False):
 # ==============================================================================
 # DATA BUILDING
 # ==============================================================================
-# Estimation window (author decision 2026-07-16): the whole pipeline — sleep, demand, cost — runs on
-# 2016-2024.  MIN 2016: prudential-conglomerate bank characteristics (and the cost-shifter/capital/LOO
-# instruments built from them) do not exist on the model's basis before 2016 — pre-2016 the type-1
-# IF-Data report is credit cooperatives only, and the banks' type-2/type-3 data is a different, non-
-# spliceable consolidation.  MAX 2024: 2025 concentrates several data breaks (fin_income/r^j, COSIF fee
-# recode, IF-Data renumbering).  Keep in sync with estimation_demand_link_common.MIN_YEAR/MAX_YEAR.
-SLEEP_MIN_YEAR = int(os.environ.get('SLEEP_MIN_YEAR', os.environ.get('DEMAND_MIN_YEAR', 2016)))
-SLEEP_MAX_YEAR = int(os.environ.get('SLEEP_MAX_YEAR', os.environ.get('DEMAND_MAX_YEAR', 2024)))
+# The estimation window [2016, 2024] is defined once in utils/window.py — see that module for the full
+# rationale on both bounds.  utils.window already reads DEMAND_MIN_YEAR / DEMAND_MAX_YEAR; the
+# SLEEP_*_YEAR env vars below stay as a sleep-specific override on top of it.
+from utils.window import MIN_YEAR as _WINDOW_MIN_YEAR, MAX_YEAR as _WINDOW_MAX_YEAR  # noqa: E402
+
+SLEEP_MIN_YEAR = int(os.environ.get('SLEEP_MIN_YEAR', _WINDOW_MIN_YEAR))
+SLEEP_MAX_YEAR = int(os.environ.get('SLEEP_MAX_YEAR', _WINDOW_MAX_YEAR))
 
 
 def build_pooled_data(time_block=False):
@@ -172,7 +171,18 @@ def build_pooled_data(time_block=False):
 
     if 'dep_a1' in df_raw.columns:
         id_vars = ['CodConglomeradoPrudencial', 'mca_code', 'year', 'quarter']
-        df_raw = df_raw.drop_duplicates(subset=id_vars)
+        # panel_6_market.aggregate_to_mca() guarantees one row per market. Fail loudly if
+        # that ever regresses: the previous silent drop_duplicates() here kept ONE arbitrary
+        # municipality per MCA, discarding ~74% of rows and understating every market's
+        # deposits -- invisibly, for as long as the panel had been municipality-level.
+        _dups = int(df_raw.duplicated(subset=id_vars).sum())
+        if _dups:
+            raise ValueError(
+                f"market panel is not unique at {id_vars}: {_dups:,} duplicate rows "
+                f"({len(df_raw):,} rows / {df_raw.drop_duplicates(subset=id_vars).shape[0]:,} markets). "
+                "The municipality->MCA aggregation (panel_6_market.aggregate_to_mca) is missing or "
+                "stale -- rebuild the panel; do NOT de-duplicate here."
+            )
         df = pd.wide_to_long(df_raw, stubnames=['dep_a', 'spread_a', 'spread_ann_a', 'leave_one_out_mean_spread_a'], i=id_vars, j='deposit_type').reset_index()
         df = df.rename(columns={'dep_a': 'deposit_balance', 'spread_a': 'spread_qoq', 'spread_ann_a': 'spread_ann', 'leave_one_out_mean_spread_a': 'leave_one_out_mean_spread'})
     else:
@@ -330,7 +340,8 @@ def calculate_pooled_phis(df, res_dict, state_blocks):
 
         safe_key = model_key.replace(' ', '_').replace('.', '')
         df[f'phi_mt_{safe_key}'] = phi_mt
-        market_agg = df.groupby(['year_quarter', 'CODMUN_IBGE'], observed=True).agg(
+        # phi_t = sum_m phi_mt*M_mt / sum_m M_mt over MARKETS m (a market is an MCA).
+        market_agg = df.groupby(['year_quarter', 'mca_code'], observed=True).agg(
             phi_mt=(f'phi_mt_{safe_key}', 'mean'), M_mt=('market_size', 'sum')).reset_index()
         weighted_phi = market_agg['phi_mt'] * market_agg['M_mt']
         national_agg = (weighted_phi.groupby(market_agg['year_quarter']).sum() /

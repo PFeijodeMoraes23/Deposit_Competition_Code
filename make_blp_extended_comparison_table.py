@@ -42,7 +42,9 @@ def build_table(ests, suffix: str = "", show_segments: bool = True) -> str:
         return ""
 
     ncols   = len(avail)
-    TABLE_W = r"0.86\textwidth"      # narrower than \textwidth, centered via \LTleft/\LTright
+    # The no-segment variant spans the FULL \textwidth (it is the one pulled into the paper body);
+    # the with-segments variant stays narrower and centered via \LTleft/\LTright.
+    TABLE_W = r"\textwidth" if not show_segments else r"0.86\textwidth"
     hdr     = " & ".join(rc.est_ref(e) for e in avail)        # bare \ref{estimation:*} column heads
     G_map   = {e: data[e].get("G_star") for e in avail}
     rep     = data[avail[0]]

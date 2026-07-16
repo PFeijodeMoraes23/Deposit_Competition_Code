@@ -86,30 +86,11 @@ ACCESS_HI       = float(os.environ.get('DEMAND_ACCESS_HI', 2.5))
 FINDEX_FALLBACK = float(os.environ.get('DEMAND_FINDEX_FALLBACK', 0.77))
 TOTAL_SHARE_CAP = float(os.environ.get('DEMAND_TOTAL_SHARE_CAP', 0.95))
 
-# MAX_YEAR  upper bound on the estimation sample (inclusive).  Default 2024.  2025 is dropped
-#          (author decision 2026-07-16): it is the year with the most concentrated data breaks — the
-#          IF-Data DRE was restructured so `fin_income`/`asset_return_qoq` (r^j) is biased (TVM now net
-#          of fair-value adjustments; derivatives a net result), the COSIF fee accounts were recoded,
-#          and the IF-Data report chart was renumbered.  panel_4's alias map handles the renumbering
-#          and the fee guard handles the recode, but with the r^j break unresolved and 2025 being the
-#          latest partial-context year, the conservative window ends at 2024.  Together with MIN_YEAR
-#          this pins the whole estimation to 2016-2024.  Set DEMAND_MAX_YEAR to override.
-MAX_YEAR        = int(os.environ.get('DEMAND_MAX_YEAR', 2024))
-
-# MIN_YEAR  lower bound on the demand sample (inclusive).  Default 2016 = the first year with
-#          prudential-conglomerate bank characteristics.  The BCB prudential-conglomerate framework
-#          was phased in over 2015-2016: before 2016 the type-1 (Prudential) IF-Data report contains
-#          only credit cooperatives — the banks report individually (type-3) or as financial
-#          conglomerates (type-2), on a DIFFERENT consolidation basis that does not splice to the
-#          2016+ prudential figures (individual sums over-count intra-group by ~20%).  So bank
-#          characteristics — and the cost-shifter, capital and LOO instruments built from them — do
-#          not exist on the model's basis before 2016; 2013-2015 rows had them fabricated (fillna 0 /
-#          median), which biased both the demand IV and the sleep IV first stage.  Author decision
-#          (2026-07-16): the WHOLE estimation — sleep, demand and cost — runs on 2016-2024, one
-#          consistent fully-populated window (rather than mixing a 2013+ OLS sleep with a 2016+ IV
-#          sleep).  See estimation_2_sleep (SLEEP_MIN_YEAR/MAX_YEAR) and counterfactuals_plan.md §0A.
-#          Set DEMAND_MIN_YEAR to override.
-MIN_YEAR        = int(os.environ.get('DEMAND_MIN_YEAR', 2016))
+# MIN_YEAR / MAX_YEAR  the estimation window [2016, 2024], defined once in utils/window.py — see that
+#          module for the full rationale on both bounds (and the DEMAND_MIN_YEAR / DEMAND_MAX_YEAR env
+#          overrides, which it reads).  Re-exported here so the existing
+#          `from estimation_demand_link_common import MIN_YEAR, MAX_YEAR` importers keep working.
+from utils.window import MIN_YEAR, MAX_YEAR  # noqa: E402
 
 # NB: M_mt / M_nat are BUILT inside process_specification (after the keep_cols filter) and so reach
 # the parquet without needing to be listed here.

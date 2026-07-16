@@ -404,7 +404,9 @@ def calculate_phis(df, res_dict, state_blocks):
         
         key = f"IV_HausmanFull_x_{spec_name}"   # match the E2-E8 phi column naming convention
         df[f'phi_mt_{key}'] = phi_mt
-        market_agg = df.groupby(['year_quarter', 'CODMUN_IBGE'], observed=True).agg(phi_mt=(f'phi_mt_{key}', 'mean'), M_mt=('market_size', 'sum')).reset_index()
+        # phi_t = sum_m phi_mt*M_mt / sum_m M_mt over MARKETS m (V_Main eq. below sec.4:
+        # a market is an MCA, not a municipality).
+        market_agg = df.groupby(['year_quarter', 'mca_code'], observed=True).agg(phi_mt=(f'phi_mt_{key}', 'mean'), M_mt=('market_size', 'sum')).reset_index()
         weighted_phi = market_agg['phi_mt'] * market_agg['M_mt']
         sum_weighted = weighted_phi.groupby(market_agg['year_quarter']).sum()
         sum_m_mt = market_agg['M_mt'].groupby(market_agg['year_quarter']).sum()

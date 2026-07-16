@@ -33,6 +33,8 @@ if ensure_project_venv is not None:
 import pandas as pd
 import numpy as np
 
+from utils.window import apply_window
+
 warnings.filterwarnings("ignore")
 
 _ROOT = Path(__file__).resolve().parents[2]
@@ -100,6 +102,9 @@ def main():
 
     print("Loading data...")
     df = pd.read_csv(PANEL_CSV, low_memory=False)
+
+    # The descriptives must describe the same sample the model is fit on. See utils/window.py.
+    df = apply_window(df, label="desc_1")
 
     # Forward-fill COSIF balance-sheet variables within each conglomerate to cover periods
     # where COSIF reporting has not yet been ingested (e.g. most-recent year after panel

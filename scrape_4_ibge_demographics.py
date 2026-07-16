@@ -22,10 +22,32 @@ from utils import paths
 import pandas as pd
 import geopandas as gpd
 import geobr
+import geobr.utils as _geobr_utils
+import requests as _requests
 from pathlib import Path
 import sys
-import json 
+import json
 import warnings
+
+# ── geobr unblock (2026-07-16) ────────────────────────────────────────────────
+# geobr/utils.py:22-38 `url_solver` tries its primary host (IPEA) FIRST and calls
+# `requests.get(url)` with NO timeout, swallowing failures with a bare `except: continue`.
+# IPEA serves http:// which 302-redirects to https://, and IPEA's :443 silently drops the
+# SYN -- so each URL burns ~21s per DNS-resolved IP (x2 IPs = ~42s) before the GitHub
+# mirror declared on utils.py:14 is ever reached. With IBGE geographies sharded one gpkg
+# per state (27/year), generate_mca_main() needs ~656 URLs => ~7.6h of pure TCP timeout.
+# Go straight to the mirror: same files, same content, no dead host.
+_GEOBR_MIRROR = "https://github.com/ipeaGIT/geobr/releases/download/v1.7.0/"
+
+
+def _geobr_mirror_url_solver(url):
+    """Fetch a geobr asset from the GitHub mirror, bypassing the unresponsive IPEA host."""
+    resp = _requests.get(_GEOBR_MIRROR + url.split("/")[-1], timeout=(10, 300))
+    resp.raise_for_status()
+    return resp
+
+
+_geobr_utils.url_solver = _geobr_mirror_url_solver
 
 # Suppress warnings from geopandas/shapely during buffer operation and sjoin
 warnings.filterwarnings('ignore', 'The CRS of the two GeoSeries', UserWarning)
@@ -120,8 +142,17 @@ def generate_mca_main():
     
     # Step 1: Load MCA Crosswalk Table (2010 boundaries):
     try:
-        # load the polygons defined by the old/newest year combination available and rename for clarity
-        mca_geo_df = geobr.read_comparable_areas(start_year = 1872, end_year = MCA_REFERENCE)
+        # MCA vintage: use the MOST RECENT valid comparable-area span, (2000 -> 2010).
+        # geobr accepts start_year in {1872,1900,1911,1920,1933,1940,1950,1960,1970,1980,1991,2000}
+        # with end_year = 2010; there is no (2010, 2010) set (a single year is degenerate).
+        # Counts by vintage: 1872 -> 522 AMCs (~12 municipalities each!), 1970 -> 3,800,
+        # 1991 -> 4,298, 2000 -> 5,476 (5,565 municipalities => 1.016 per AMC, 99.1% singletons).
+        # The panel is entirely post-2010 and Brazilian municipal boundaries are effectively frozen
+        # since the 2010 census, so the 2000 span is the finest time-consistent geography and the
+        # right definition of a LOCAL deposit market (V_Main Sec. 2: B firms compete in MCAs).
+        # The previous 1872 setting forced comparability across 138 years and 13 census cycles,
+        # collapsing Brazil to 522 microregion-scale blobs and grossly overstating market size.
+        mca_geo_df = geobr.read_comparable_areas(start_year = 2000, end_year = MCA_REFERENCE)
         
         mca_geo_df.rename(columns = {'code_amc': 'mca_code', 'list_name_muni_2010': 'mca_name'}, inplace = True)
         
@@ -1295,23 +1326,90 @@ def ibge_demographics_main():
     main()
 
 
+_UF = {"11": ("RO", "Rondonia"), "12": ("AC", "Acre"), "13": ("AM", "Amazonas"), "14": ("RR", "Roraima"),
+       "15": ("PA", "Para"), "16": ("AP", "Amapa"), "17": ("TO", "Tocantins"), "21": ("MA", "Maranhao"),
+       "22": ("PI", "Piaui"), "23": ("CE", "Ceara"), "24": ("RN", "Rio Grande do Norte"), "25": ("PB", "Paraiba"),
+       "26": ("PE", "Pernambuco"), "27": ("AL", "Alagoas"), "28": ("SE", "Sergipe"), "29": ("BA", "Bahia"),
+       "31": ("MG", "Minas Gerais"), "32": ("ES", "Espirito Santo"), "33": ("RJ", "Rio de Janeiro"),
+       "35": ("SP", "Sao Paulo"), "41": ("PR", "Parana"), "42": ("SC", "Santa Catarina"),
+       "43": ("RS", "Rio Grande do Sul"), "50": ("MS", "Mato Grosso do Sul"), "51": ("MT", "Mato Grosso"),
+       "52": ("GO", "Goias"), "53": ("DF", "Distrito Federal")}
+
+
+def build_mca_crosswalk_direct(start_year=2000, end_year=2010, year_min=2010, year_max=2025):
+    """Build muni->MCA crosswalk from the ONE geobr call that actually defines it.
+
+    The mapping comes from `list_code_muni_2010` on the comparable-areas file -- NOT from
+    generate_mca_main()'s spatial joins. Those sjoins only attach micro/meso/immediate/
+    intermediate region columns, which NOTHING in this repo reads (verified: the only
+    consumers are panel_6_market.py:218 usecols=[municipality_code, mca_code, year],
+    scrape_4 itself, and panel_8_demographics_sigma.py:285 usecols=[mca_code, state_code,
+    year]). Producing them costs ~656 sharded per-state URLs, and geobr's metadata has no
+    `municipality` year past 2024, so read_municipality(2025) raises and generate_mca_main's
+    blanket except silently DROPS 2025 from the output.
+
+    An MCA mapping is time-invariant by construction, so the year dimension is replication.
+    Runtime: ~15s vs ~7.6h.
+    """
+    amc = geobr.read_comparable_areas(start_year=start_year, end_year=end_year, simplified=True)
+    logging.info(f"geobr comparable areas ({start_year}->{end_year}): {len(amc):,} AMCs")
+
+    rows = []
+    for _, r in amc.iterrows():
+        mca = str(int(r["code_amc"]))
+        codes = [c.strip() for c in str(r["list_code_muni_2010"]).split(",") if c.strip()]
+        names = [n.strip() for n in str(r["list_name_muni_2010"]).split(",")]
+        if len(names) != len(codes):      # municipality names contain commas -> never misalign
+            names = ["N/A"] * len(codes)
+        rows += [(c, names[i], mca) for i, c in enumerate(codes)]
+
+    base = pd.DataFrame(rows, columns=["municipality_code", "municipality_name", "mca_code"])
+    p = base.merge(pd.DataFrame({"year": range(year_min, year_max + 1)}), how="cross")
+    p["state_code"] = p["municipality_code"].str[:2]
+    p["state_uf"] = p["state_code"].map(lambda x: _UF.get(x, ("N/A", "N/A"))[0])
+    p["state_name"] = p["state_code"].map(lambda x: _UF.get(x, ("N/A", "N/A"))[1])
+    for c in ["micro_code", "micro_name", "meso_code", "meso_name",
+              "immgr_code", "immgr_name", "intgr_code", "intgr_name"]:
+        p[c] = "N/A"       # placeholders: written by the old sjoin path, read by nothing
+
+    p = p[["municipality_code", "municipality_name", "state_code", "state_uf", "state_name",
+           "mca_code", "year", "micro_code", "micro_name", "meso_code", "meso_name",
+           "immgr_code", "immgr_name", "intgr_code", "intgr_name"]] \
+        .sort_values(["municipality_code", "year"]).reset_index(drop=True)
+
+    out = paths.IBGE_DIR / "muni_mca_regions_2010_2024_panel.csv"
+    p.to_csv(out, index=False, encoding="utf-8-sig")
+    logging.info(f"Wrote {out.name}: {len(p):,} rows | {p['mca_code'].nunique():,} MCAs | "
+                 f"{p['municipality_code'].nunique():,} municipalities | "
+                 f"{p['year'].min()}-{p['year'].max()}")
+    return p
+
+
 if __name__ == "__main__":
     from pathlib import Path
     try:
         root_dir = Path(__file__).parent.parent
     except NameError:
         root_dir = Path.cwd()
-    
+
     output_dir = paths.IBGE_DIR
     output_csv_file = output_dir / "muni_mca_regions_2010_2024_panel.csv"
-    
+
     if output_csv_file.exists():
-        print(f"\n--- SKIPPING MCA JSON PREP: {output_csv_file.name} already exists ---")
-    else:
-        print("\n--- GENERATING MCA JSON ---")
+        print(f"\n--- SKIPPING MCA PREP: {output_csv_file.name} already exists ---")
+        print("    (delete it to rebuild; set SCRAPE4_FULL_REGIONS=1 for the slow sjoin path)")
+    elif os.environ.get("SCRAPE4_FULL_REGIONS", "0") == "1":
+        # Legacy path: also populates the micro/meso/immediate/intermediate region columns
+        # via per-state spatial joins (~656 geobr URLs). Nothing in this repo reads those
+        # columns, and geobr has no `municipality` metadata past 2024 (so this path silently
+        # drops 2025). Kept only for provenance.
+        print("\n--- GENERATING MCA JSON (full region sjoin path) ---")
         generate_mca_main()
         print("\n--- RECTANGULARIZING JSON ---")
         rectangularize_mca_main()
+    else:
+        print("\n--- BUILDING MCA CROSSWALK (direct, 2000->2010 vintage) ---")
+        build_mca_crosswalk_direct()
 
     print("\n--- BUILDING DEMOGRAPHICS PANEL ---")
     ibge_demographics_main()
