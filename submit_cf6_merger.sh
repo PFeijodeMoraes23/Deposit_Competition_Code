@@ -6,7 +6,7 @@
 # the merger's franchise-value effect (pre V_A+V_B vs post V_AB). The two solves run in parallel;
 # the compare is afterok both.
 #
-# Prereq: RC costs (run submit_cf_all.sh through cost_solve first).
+# Prereq: RC costs (run the BBL cost stage first:  bash submit_bbl_all.sh).
 # Usage:  CF_ROUTINE=7 MERGE="C0080099,C0080329" N_FIRM_SHARDS=40 N_SWEEPS=6 bash submit_cf6_merger.sh
 # Tunables: everything submit_cf3_jacobi.sh takes, plus MERGE (required, the conglomerate pair) and
 #   BASE_SIGMA=<path> to REUSE an already-solved base σ instead of re-solving it.

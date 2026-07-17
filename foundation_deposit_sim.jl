@@ -1,8 +1,8 @@
 """
-cf_0_deposit_sim.jl
+foundation_deposit_sim.jl
 ===================
-Foundation 0b: forward simulator for the deposit law of motion (eqs 8-B / 8-D),
-built on the demand-evaluation context from cf_0_demand_eval.jl.
+Foundation 0b: forward simulator for the deposit law of motion (eqs 9-B / 9-D),
+built on the demand-evaluation context from foundation_demand_eval.jl.
 
 Law of motion (per jkmt, with sleeper persistence φ):
 
@@ -32,7 +32,7 @@ This file defines reusable functions; running it as a script does a small smoke
 simulation (only once data is present and you've authorized running).
 """
 
-include(joinpath(@__DIR__, "cf_0_demand_eval.jl"))
+include(joinpath(@__DIR__, "foundation_demand_eval.jl"))
 
 using DataFrames, Statistics
 
@@ -233,7 +233,7 @@ function main_cf_depositsim()
     sim = simulate_deposits(ctx, st; T=50)
     log_status("  [SIM] Dep₀ total=$(round(sum(st.Dep0), sigdigits=4)) → " *
                "Dep_T total=$(round(sum(sim.Dep[:, end]), sigdigits=4))")
-    log_status("[DONE] cf_0_deposit_sim smoke")
+    log_status("[DONE] foundation_deposit_sim smoke")
 end
 
 if abspath(PROGRAM_FILE) == @__FILE__

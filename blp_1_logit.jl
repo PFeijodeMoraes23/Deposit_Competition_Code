@@ -85,6 +85,10 @@ const IV_BLP_LOO = ["loo_log_assets", "mean_loo_log_assets",
 const IV_COST    = ["personnel_cost_ratio_lag", "admin_cost_ratio_lag",
                     "tax_cost_ratio_lag"]
 const IV_CAPITAL = ["indice_basileia_lag"]
+# ESTBAN branch-competition IV (panel_10): log1p lagged RIVAL-branch count in the MCA. The only
+# instrument with within-conglomerate variation (across municipalities) — independent + relevant for
+# demand-deposit spreads; validated against reserve requirements (rejected: macro-endogenous).
+const IV_ESTBAN  = ["estban_rival_branches_lag"]
 
 # Estimation routines are AUTO-DISCOVERED from the demand-prep parquets — see
 # discover_estim_strategies() / const ESTIM_STRATEGIES below (defined after get_paths()).
@@ -93,6 +97,7 @@ const IV_CAPITAL = ["indice_basileia_lag"]
 const SUB_MODELS = [
     (name="priceonly",  xcols=String[],    add_dtype=false),
     (name="core",       xcols=CORE_COLS,   add_dtype=false),
+    (name="core_dtype", xcols=CORE_COLS,   add_dtype=true),   # Price + Core + D-Type (no seg/"Chars")
     (name="full",       xcols=X_COLS,      add_dtype=false),
     (name="full_dtype", xcols=X_COLS,      add_dtype=true),
 ]
@@ -234,7 +239,7 @@ function build_matrices(df::DataFrame, xcols::Vector{String}, add_dtype::Bool)
     X_full = hcat(spread, X)
 
     # IV matrix
-    all_iv_names = vcat(IV_BLP_LOO, IV_COST, IV_CAPITAL)
+    all_iv_names = vcat(IV_BLP_LOO, IV_ESTBAN, IV_COST, IV_CAPITAL)
 
     # A missing instrument COLUMN used to be dropped in silence, which is how the entire IV_BLP_LOO
     # block vanished when a market_panel rebuild skipped panel_7_instruments.py (it OVERWRITES
@@ -569,7 +574,8 @@ const VAR_MAP = Dict(
 const ROW_ORDER = ["alpha", "fgc_covered", "has_ip", "log_total_assets_lag",
                    "seg_S2", "seg_S3", "seg_S4", "seg_S5", "dummy_D_type"]
 const TABLE_SUBMODELS = [("priceonly", "Price Only"), ("core", "Price + Core"),
-                         ("full", "Price + Chars"), ("full_dtype", "+ D-Type")]
+                         ("full", "Price + Chars"), ("full_dtype", "+ D-Type"),
+                         ("core_dtype", "Price + Core + D-Type")]
 # Cross-estimator comparison table (est5-8_spec12_logit_comparison.tex): one column per
 # demand routine, each showing its final `+ D-Type` sub-model. Column headers \ref{} the
 # sleepiness-strategy enumerate items in V_Main §(sec:empirical:sleep) — same convention as

@@ -35,6 +35,7 @@ IV_BLP_LOO = ["loo_log_assets", "mean_loo_log_assets",
               "loo_npl_provision", "mean_loo_npl_provision", "n_rivals"]
 IV_COST = ["personnel_cost_ratio_lag", "admin_cost_ratio_lag", "tax_cost_ratio_lag"]
 IV_CAPITAL = ["indice_basileia_lag"]
+IV_ESTBAN = ["estban_rival_branches_lag"]   # ESTBAN branch-competition IV (panel_10)
 KEY_COLS = ["spread_ann", "deposit_type", "is_B", "mca_code", "time_id",
             "CodConglomeradoPrudencial"]
 
@@ -113,7 +114,7 @@ def main():
     summarize(df, KEY_COLS, "KEY COLUMNS")
     _, xdeg = summarize(df, X_COLS, "X_COLS  (build x_mat -> X_hat cols 2..K)")
     summarize(df, D_COLS, "D_COLS  (demographics -> pi interactions / theta2)")
-    summarize(df, IV_BLP_LOO + IV_COST + IV_CAPITAL, "INSTRUMENTS (Z)")
+    summarize(df, IV_BLP_LOO + IV_ESTBAN + IV_COST + IV_CAPITAL, "INSTRUMENTS (Z)")
 
     rank, ncol = qr_rank_report(df)
 

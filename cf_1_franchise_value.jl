@@ -13,7 +13,7 @@ income the bank earns by funding at r^dep = r^f − ρ instead of r^f:
     ΔV^sleep_j = V^gross_j(φ̂) − V^gross_j(φ=0)
 
 This needs NEITHER marginal costs NOR an equilibrium re-solve — only the demand
-shares (cf_0_demand_eval) and the deposit law of motion (cf_0_deposit_sim). The
+shares (foundation_demand_eval) and the deposit law of motion (foundation_deposit_sim). The
 NET-of-cost version (subtracting ĉ and adding the asset-return term) is produced
 later, once CF2 delivers cost parameters; see counterfactuals_plan.md.
 
@@ -36,7 +36,7 @@ Usage (after data is downloaded AND running is authorized):
       --spec 12 --stage extended --R 2000 --hpc --beta 0.9 --horizon 50
 """
 
-include(joinpath(@__DIR__, "cf_0_psi_basis.jl"))   # → cf_0_deposit_sim + load_Z / load_cost_params (for --net)
+include(joinpath(@__DIR__, "foundation_psi_basis.jl"))   # → foundation_deposit_sim + load_Z / load_cost_params (for --net)
 
 using DataFrames, Statistics, Printf
 

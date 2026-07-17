@@ -108,8 +108,10 @@ The codebase:
 ├── blp_estimation.jl                     # Julia: full BLP GMM estimation (loads draws, solves BLP)
 │
 ├── ── Cost Estimation (BBL) ──
-├── estimation_1_cost_1_polfunc.py        # BBL Step 1: parametric policy functions for endogenous rates (k=4,5)
-├── estimation_1_cost_2_fwd.py            # BBL Step 2: forward simulation for marginal cost recovery
+├── estimation_bbl_1_polfunc.py           # BBL Step 1: parametric policy functions for endogenous rates (k=4,5)
+├── estimation_bbl_2_fwd_sim.jl           # BBL Step 2a: forward-simulate the ψ value-function basis (Julia)
+├── estimation_bbl_3_solve.py             # BBL Step 2b: recover (ω,ζ,γ) via the eq:17 squared-hinge solve
+│   #   cluster: submit_bbl.sh (driver) + submit_bbl_all.sh (orchestrator)
 │
 ├── ── Export & Results ──
 ├── export_results.py                     # Orchestrator: dispatches export_*_sleep_results.py in parallel
@@ -250,7 +252,7 @@ log(s_active_jkt) = α_k · σ_jkt + δ_j + μ_kt + e_jkt
 where `σ_jkt` is the deposit spread (opportunity cost) and `δ_j` is a bank×type fixed effect.
 
 ### Cost Estimation (BBL)
-Following Bajari, Benkard & Levin (2007), parametric policy functions for endogenous deposit types (k=4,5) are estimated in `estimation_1_cost_1_polfunc.py`, then used to recover marginal costs via forward simulation in `estimation_1_cost_2_fwd.py`.
+Following Bajari, Benkard & Levin (2007), parametric policy functions for endogenous deposit types (k=4,5) are estimated in `estimation_bbl_1_polfunc.py` (Step 1). The ψ value-function basis is then forward-simulated under the equilibrium and deviating strategies in `estimation_bbl_2_fwd_sim.jl` (Step 2a), and marginal costs `(ω,ζ,γ)` are recovered from the eq:17 squared-hinge minimization in `estimation_bbl_3_solve.py` (Step 2b). On the cluster the stage runs via `submit_bbl_all.sh`; it writes `cost_params_E*_spec_12_*.json`, which the counterfactuals then consume.
 
 ---
 

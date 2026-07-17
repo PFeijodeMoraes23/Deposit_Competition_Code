@@ -1,28 +1,26 @@
 """
-cost_2_fwd_sim.jl
+estimation_bbl_2_fwd_sim.jl
 =================
-CF2 — BBL Step 2, part 1: forward-simulate the value-function basis ψ under the
+BBL Step 2, part 1: forward-simulate the value-function basis ψ under the
 EQUILIBRIUM strategy σ̂ and under a battery of DEVIATING strategies σ̃, then export
-the firm-level ψ's for the Eq-18 minimization (estimation_1_cost_3_solve.py).
+the firm-level ψ's for the eq:17 minimization (estimation_bbl_3_solve.py).
 
-This REPLACES the simulation core of the legacy prototype estimation_1_cost_2_fwd.py
-(which used a crude exp(δ-shift) share proxy, hard-coded r_f, only k=4,5, and never
-solved Eq 18). Here shares come from the real RC demand (cf_0_demand_eval), deposits
-from the real law of motion (cf_0_deposit_sim), and ψ from the exact basis
-(cf_0_psi_basis).
+Shares come from the real RC demand (foundation_demand_eval), deposits from the real
+law of motion (foundation_deposit_sim), and ψ from the exact basis (foundation_psi_basis)
+— not the crude exp(δ-shift) share proxy with hard-coded r_f of the earlier prototype.
 
 Pipeline
 --------
   σ̂  (equilibrium)  → simulate deposits → accumulate ψ_eq         (per firm)
   σ̃₁…σ̃_S (deviations)→ simulate deposits → accumulate ψ_dev[s]     (per firm)
   export {ψ_eq, ψ_dev, firms, firm_is_B, Z_names}  → COST_FWD/psi_bbl_*.jls
-  estimation_1_cost_3_solve.py reads these and minimizes Σ min{g,0}² (Eq 18).
+  estimation_bbl_3_solve.py reads these and minimizes Σ min{g,0}² (eq:17).
 
 DEVIATING STRATEGY σ̃ (`--dev-scheme`, default `grid`):
   σ̃ shifts the CHOICE spreads (k∈{4,5}) by Δ and holds the perturbed policy for the
   whole horizon (a stationary deviation, as in BBL forward simulation). `grid`: Δ takes
   a symmetric grid over [−scale,+scale] excluding 0, so both raising AND lowering are
-  probed at graduated magnitudes — the Eq-18 objective Σ min{g,0}² is only informative
+  probed at graduated magnitudes — the eq:17 objective Σ min{g,0}² is only informative
   where a deviation binds, so directed small deviations pin the FOC far better than the
   tiny symmetric normals (`normal`, legacy) they replace. `--perturb-scale` is the grid
   half-width in annualized-ρ units (ρ=spread_ann/100).
@@ -36,7 +34,7 @@ FORWARD r^f (`--rf-curve`, default `COST_FWD/forward_rf_qoq.csv` from cf_forward
   unidentified; the time-varying curve separates ζ from ω.
 
 ASSET RETURN r^j (`--asset-return-col` / `--asset-margin`, default 0): enters ψ1 (V_Main
-  eq 16, row 1). Both flags are read as the QUARTERLY NET margin (r^j − r^f); cf_0_psi_basis
+  eq 16, row 1). Both flags are read as the QUARTERLY NET margin (r^j − r^f); foundation_psi_basis
   adds r^f back so ψ1 carries the GROSS r^j the paper requires.
     ⚠ DO NOT pass `--asset-return-col gross_return_lag`. Despite the name, that column is
       `1 + deposit_rate_lag` (estimation_1_demand_1_prep.py:167) — the rate the bank PAYS
@@ -53,7 +51,7 @@ ASSET RETURN r^j (`--asset-return-col` / `--asset-margin`, default 0): enters ψ
 EQUILIBRIUM σ̂ (knob):
   Default σ̂ = observed spreads ρ̂ (the data IS the equilibrium). Pass
   `--policy-csv` to instead use the smoothed fitted policy from
-  estimation_1_cost_1_polfunc.py (polfunc_fitted_spec_*.csv).
+  estimation_bbl_1_polfunc.py (polfunc_fitted_spec_*.csv).
 
 ⚠ COMPUTE: each σ̃ costs one deposit simulation (≈ one share evaluation when spreads
 are held flat). With S deviations on the full panel at R=2000 this is the heavy,
@@ -61,11 +59,11 @@ GPU/cluster step. Develop locally with --R small, --time-filter one quarter, and
 --shocks small; run headline on Bouchet.
 
 Usage (write-only here; run only after data is downloaded AND author authorizes):
-  julia --project=. --threads=4 cost_2_fwd_sim.jl --estim 6 --spec 12 \\
+  julia --project=. --threads=4 estimation_bbl_2_fwd_sim.jl --estim 6 --spec 12 \\
       --stage extended --R 300 --time-filter 2024Q4 --shocks 20 --beta 0.9 --horizon 50
 """
 
-include(joinpath(@__DIR__, "cf_0_psi_basis.jl"))
+include(joinpath(@__DIR__, "foundation_psi_basis.jl"))
 
 using DataFrames, Random, Serialization, Statistics
 
@@ -78,7 +76,7 @@ using DataFrames, Random, Serialization, Statistics
 # fraction→pp) converts the fitted policy to ρ̂ units. VERIFIED empirically: on the matched k∈{4,5}
 # rows the OBSERVED spread_qoq×400 reproduces ρ̂ to corr≈0.999 (k4) / 1.000 (k5).
 const _POLFUNC_QOQ_TO_ANN_PP = 400.0
-# estimation_1_cost_1_polfunc.py::compute_fitted_values predicts with missing regressors filled to 0
+# estimation_bbl_1_polfunc.py::compute_fitted_values predicts with missing regressors filled to 0
 # (`fillna(0)`), which pins ~19% of early-panel (2013–2016) B rows at the ≈190pp regression intercept —
 # absurd for a deposit spread (real ρ̂ never exceeds ~16pp). Any |fitted|>this cap is an upstream
 # extrapolation artifact and is NOT adopted; that row keeps its observed spread. The cap is far above
@@ -93,7 +91,7 @@ _polkey(firm, mca, k::Int, tid) = string(firm, '\x1f', mca, '\x1f', k, '\x1f', t
     _load_policy_map(path) -> Dict{String,Float64}
 
 Parse the BBL Step-1 fitted-policy CSV (`polfunc_fitted_spec_*.csv` from
-estimation_1_cost_1_polfunc.py) into `(firm,mca,k,time) → fitted spread (annual pp)`, keeping only
+estimation_bbl_1_polfunc.py) into `(firm,mca,k,time) → fitted spread (annual pp)`, keeping only
 k∈{4,5} rows with a finite fitted value. Per firm type we take that type's OWN Step-1 regression: B
 firms → the `_B` column, D firms → the `_D_optB` column (national pop-weighted demographics — the
 best-fitting D spec). Values are converted qoq-fraction → annual pp (×`_POLFUNC_QOQ_TO_ANN_PP`).
@@ -109,7 +107,7 @@ function _load_policy_map(path::String)::Dict{String,Float64}
             "fitted_k5_Prepaid_B", "fitted_k5_Prepaid_D_optB"]
     for c in need
         haskey(ci, c) || error("policy-csv missing column '$c' in $(basename(path)). " *
-                               "Re-run estimation_1_cost_1_polfunc.py --spec <spec>.")
+                               "Re-run estimation_bbl_1_polfunc.py --spec <spec>.")
     end
     i_firm = ci["CodConglomeradoPrudencial"]; i_mca = ci["mca_code"]; i_k = ci["deposit_type"]
     i_isB = ci["is_B"]; i_t = ci["time_id"]
@@ -192,9 +190,9 @@ function equilibrium_spreads(ctx::CFDemandCtx; policy_csv::Union{Nothing,String}
     match_rate  = n_matched / n_endog
     n_untrusted = n_matched - n_adopted
     n_unmatched = n_endog - n_matched
-    log_status("  [CF2] policy-csv ← $(basename(policy_csv)); fitted qoq-fraction × " *
+    log_status("  [BBL] policy-csv ← $(basename(policy_csv)); fitted qoq-fraction × " *
                "$(_POLFUNC_QOQ_TO_ANN_PP) → annual pp (ρ̂ units)")
-    log_status("  [CF2] k∈{4,5}: $n_endog rows | matched $n_matched " *
+    log_status("  [BBL] k∈{4,5}: $n_endog rows | matched $n_matched " *
                "($(round(100 * match_rate, digits=1))%) | adopted $n_adopted | " *
                "fell back to observed: $n_unmatched unmatched + $n_untrusted implausible " *
                "(|fit|>$(_POLFUNC_SANE_CAP_PP)pp)")
@@ -209,12 +207,12 @@ function equilibrium_spreads(ctx::CFDemandCtx; policy_csv::Union{Nothing,String}
     med_gap    = median(abs.(fit_adopt .- obs_adopt))
     med_spread = median(abs.(obs_adopt))
     ρcorr      = cor(fit_adopt, obs_adopt)
-    log_status("  [CF2] adopted-row sanity: median|fit−obs|=$(round(med_gap, digits=3))pp | " *
+    log_status("  [BBL] adopted-row sanity: median|fit−obs|=$(round(med_gap, digits=3))pp | " *
                "median|obs|=$(round(med_spread, digits=3))pp | corr(fit,obs)=$(round(ρcorr, digits=3))")
     if n_untrusted > 0
-        @warn "  [CF2] $n_untrusted/$n_endog matched k∈{4,5} fitted spreads exceeded " *
+        @warn "  [BBL] $n_untrusted/$n_endog matched k∈{4,5} fitted spreads exceeded " *
               "$(_POLFUNC_SANE_CAP_PP)pp and fell back to observed. Cause: " *
-              "estimation_1_cost_1_polfunc.py::compute_fitted_values fills missing regressors with 0, " *
+              "estimation_bbl_1_polfunc.py::compute_fitted_values fills missing regressors with 0, " *
               "pinning early-panel B rows at the ≈190pp intercept. Restrict that prediction to complete " *
               "cases to adopt the fitted policy on those rows too."
     end
@@ -234,7 +232,7 @@ end
 The additive spread shifts Δ_s (annualized ρ units) defining the S deviating
 strategies. `grid` (default): a symmetric grid over [−scale, +scale] EXCLUDING 0, so
 we probe RAISING and LOWERING the choice spread at graduated magnitudes — this is what
-pins the FOC, since the Eq-18 objective Σ min{g,0}² is only informative where a
+pins the FOC, since the eq:17 objective Σ min{g,0}² is only informative where a
 deviation binds (g<0), and tiny i.i.d. normals mostly leave g>0. `normal`: legacy
 N(0,scale) (kept for comparison). Deterministic in `grid` mode ⇒ shard-invariant by
 global index with no RNG.
@@ -286,9 +284,9 @@ end
     apply_shift_firm(σ̂, rows_j, Δ) -> Vector{Float64}
 
 UNILATERAL deviation: add Δ to firm j's own k∈{4,5} spreads only; every rival stays at σ̂.
-This is the perturbation eq-17 requires (a Nash/MPE no-profitable-deviation condition).
+This is the perturbation eq:17 requires (a Nash/MPE no-profitable-deviation condition).
 Contrast `apply_shift` above, which moves EVERY firm at once — that is a coordinated
-(collusive) move, not a unilateral one, and must NOT be used to build the eq-17 moments.
+(collusive) move, not a unilateral one, and must NOT be used to build the eq:17 moments.
 """
 function apply_shift_firm(σ̂::Vector{Float64}, rows_j::Vector{Int}, Δ::Float64)
     σ̃ = copy(σ̂)
@@ -315,7 +313,7 @@ function load_forward_rf(path::Union{Nothing,String}, out_dir::String, T::Int, c
         ci === nothing && error("rf_qoq column not found in $csv")
         rf = [parse(Float64, strip(split(l, ',')[ci])) for l in lines[2:end]]
         length(rf) >= T || (rf = vcat(rf, fill(rf[end], T - length(rf))))
-        log_status("  [CF2] forward r^f ← $(basename(csv)) (T=$T; " *
+        log_status("  [BBL] forward r^f ← $(basename(csv)) (T=$T; " *
                    "$(round(rf[1],sigdigits=4))→$(round(rf[T],sigdigits=4)))")
         return rf[1:T]
     end
@@ -438,7 +436,7 @@ function main_cost2()
     else
         markdown_q0 = clamp.(markdown_q0 ./ 1e4, -0.1, 0.1); mc = "$(mc)/1e4"  # bps -> quarterly fraction
     end
-    log_status("  [CF2] markdown ρ^q ← $mc | β=$(a["beta"]) | T=$(a["horizon"]) | shocks=$(a["shocks"])")
+    log_status("  [BBL] markdown ρ^q ← $mc | β=$(a["beta"]) | T=$(a["horizon"]) | shocks=$(a["shocks"])")
 
     _, _, out_dir = get_paths(a["hpc"]; local_dir=a["local-dir"])
 
@@ -465,14 +463,14 @@ function main_cost2()
         any(fin) || error("--asset-return-col '$col' has no finite rows (check units/merge)")
         med = median(asset_ret[fin]); n_imp = count(!, fin)
         asset_ret[.!fin] .= med
-        log_status("  [CF2] r^j ← ($col − 1) − r^f_q | median net margin " *
+        log_status("  [BBL] r^j ← ($col − 1) − r^f_q | median net margin " *
                    "$(round(med, sigdigits=3))/q = $(round(med*400, sigdigits=3)) pp/yr | " *
                    "$n_imp/$(length(asset_ret)) rows imputed at the median")
-        med > 0 || @warn "  [CF2] median asset margin is NOT positive ($med) — deposits earn less " *
+        med > 0 || @warn "  [BBL] median asset margin is NOT positive ($med) — deposits earn less " *
                          "than r^f, which will force ω̂ < 0. Check the asset-return column."
     elseif a["asset-margin"] != 0.0
         asset_ret = fill(a["asset-margin"], nrow(ctx.df))
-        log_status("  [CF2] r^j − r^f = $(a["asset-margin"]) (constant)")
+        log_status("  [BBL] r^j − r^f = $(a["asset-margin"]) (constant)")
     end
 
     # Equilibrium ψ
@@ -480,11 +478,11 @@ function main_cost2()
     psi_eq, firms = psi_under(ctx, st, Z, markdown_q0, σ̂; beta=a["beta"], T=a["horizon"],
                               asset_return_q=asset_ret, rf_path_q=rf_path)
     isB = firm_is_B(ctx, firms)
-    log_status("  [CF2] ψ_eq: $(size(psi_eq)) over $(length(firms)) firms " *
+    log_status("  [BBL] ψ_eq: $(size(psi_eq)) over $(length(firms)) firms " *
                "($(sum(isB)) B / $(sum(.!isB)) D)")
 
     # ── Deviation ψ's — UNILATERAL (Nash) deviations, SHARDED over the (firm × Δ) grid ──
-    # eq-17 is an MPE no-profitable-deviation condition: firm j deviates ALONE, rivals hold σ̂:
+    # eq:17 is an MPE no-profitable-deviation condition: firm j deviates ALONE, rivals hold σ̂:
     #     g_jt = [ψ_j(σ̂) − ψ_j(σ̃_j, σ̂_{−j})]′·θ_c ≥ 0.
     # Until 2026-07-13 this loop called apply_shift(σ̂, st.endog, Δ), moving EVERY firm at once.
     # A common spread hike is the COLLUSIVE direction — profitable for all — so the estimator was
@@ -500,22 +498,22 @@ function main_cost2()
     # Global shift vector (by index) — deterministic in grid mode ⇒ σ̃ is identical
     # whether or not the run is sharded, so shard outputs merge into the unsharded result.
     shifts = deviation_shifts(S, a["perturb-scale"], a["dev-scheme"], a["seed"])
-    log_status("  [CF2] σ̃ scheme=$(a["dev-scheme"]) scale=$(a["perturb-scale"]) → " *
+    log_status("  [BBL] σ̃ scheme=$(a["dev-scheme"]) scale=$(a["perturb-scale"]) → " *
                "Δ∈[$(round(minimum(shifts), sigdigits=3)), $(round(maximum(shifts), sigdigits=3))]")
     rows_by_firm = firm_endog_rows(ctx, st, firms)
     dev_firms = [j for j in 1:nf if !isempty(rows_by_firm[j])]
-    log_status("  [CF2] UNILATERAL deviations: $(length(dev_firms)) of $nf firms set a choice spread")
+    log_status("  [BBL] UNILATERAL deviations: $(length(dev_firms)) of $nf firms set a choice spread")
     # Global (firm, shock) grid — deterministic ⇒ shard-invariant by global index.
     pairs = [(j, s) for j in dev_firms for s in 1:S]
     loc = [p for (i, p) in enumerate(pairs) if (i - 1) % nsh == sid]
-    log_status("  [CF2] shard $sid/$nsh → $(length(loc)) of $(length(pairs)) (firm × Δ) sims")
+    log_status("  [BBL] shard $sid/$nsh → $(length(loc)) of $(length(pairs)) (firm × Δ) sims")
     psi_dev = Array{Float64,2}(undef, length(loc), nb)
     for (li, (j, s)) in enumerate(loc)
         σ̃ = apply_shift_firm(σ̂, rows_by_firm[j], shifts[s])       # only firm j moves
         pd, _ = psi_under(ctx, st, Z, markdown_q0, σ̃; beta=a["beta"], T=a["horizon"],
                           asset_return_q=asset_ret, rf_path_q=rf_path)
         psi_dev[li, :] .= @view pd[j, :]                            # only the DEVIATOR's ψ
-        li % 25 == 0 && log_status("    [CF2] shard $sid: $li/$(length(loc)) sims done")
+        li % 25 == 0 && log_status("    [BBL] shard $sid: $li/$(length(loc)) sims done")
     end
 
     cost_dir = joinpath(dirname(out_dir), "COST_FWD"); mkpath(cost_dir)
@@ -527,7 +525,7 @@ function main_cost2()
         eq_df = DataFrame(firm=firms, is_B=collect(isB))
         for (j, b) in enumerate(blocks); eq_df[!, b] = psi_eq[:, j]; end
         Parquet2.writefile(joinpath(cost_dir, "psi_eq_$tag.parquet"), eq_df)
-        log_status("  [CF2] wrote psi_eq_$tag.parquet")
+        log_status("  [BBL] wrote psi_eq_$tag.parquet")
     end
 
     # Deviation ψ for this shard: ONE row per (deviating firm, Δ) pair — `firm` is the DEVIATOR
@@ -542,8 +540,8 @@ function main_cost2()
     end
     shard_tag = nsh == 1 ? "" : "_shard$(sid)of$(nsh)"
     Parquet2.writefile(joinpath(cost_dir, "psi_dev_$tag$shard_tag.parquet"), dev_df)
-    log_status("  [CF2] wrote psi_dev_$tag$shard_tag.parquet ($nloc firm×Δ deviations)")
-    log_status("[DONE] cost_2_fwd_sim shard $sid — run estimation_1_cost_3_solve.py after ALL shards")
+    log_status("  [BBL] wrote psi_dev_$tag$shard_tag.parquet ($nloc firm×Δ deviations)")
+    log_status("[DONE] estimation_bbl_2_fwd_sim shard $sid — run estimation_bbl_3_solve.py after ALL shards")
 end
 
 if abspath(PROGRAM_FILE) == @__FILE__

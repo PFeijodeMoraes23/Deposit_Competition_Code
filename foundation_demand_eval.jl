@@ -1,5 +1,5 @@
 """
-cf_0_demand_eval.jl
+foundation_demand_eval.jl
 ===================
 Foundation 0a for the counterfactual pipeline: a demand-evaluation + composite
 elasticity module that REUSES the estimator's exact share kernels so that
@@ -14,7 +14,7 @@ What it provides
   * `cf_shares_at(ctx, ρ′)`  — active shares under a COUNTERFACTUAL spread vector ρ′,
     holding ξ̂ and all other characteristics fixed. δ′ = δ̂ + α̂·(ρ′ − ρ̂) and μ is
     recomputed for ρ′ (the spread enters the random coefficient, coef index 1).
-    This is the building block reused by cf_0_deposit_sim.jl / CF1 / CF2.
+    This is the building block reused by foundation_deposit_sim.jl / CF1 / CF2.
   * `cf_dDep_dρ(ctx; ...)`   — composite deposit semi-elasticity ∂Dep/∂ρ via finite
     differences on `cf_shares_at`, scaled by the deposit law of motion (1−φ)·M.
 
@@ -25,7 +25,7 @@ Design notes
     `build_regressor_matrices`, `project_endogenous_spreads`, `estimate_theta1`,
     `build_theta2_structure`, `unpack_theta2`, `load_precomputed_draws`,
     `precompute_pi_products!`. The CPU path is portable to a laptop; the GPU path is
-    only needed for the heavy CF2 forward simulation (see cost_2_fwd_sim.jl).
+    only needed for the heavy CF2 forward simulation (see estimation_bbl_2_fwd_sim.jl).
   * Spread convention (must match the estimator exactly): ρ = spread_ann / 100
     (bps → percentage points). θ̂₁[1] = α̂ is the mean spread coefficient.
   * s^Act: for B-firms `buf.s_B` is the CONDITIONAL within-market share
@@ -40,11 +40,11 @@ Design notes
 Usage
 -----
   # Local quick-look (approximate, low memory):
-  julia --project=. --threads=4 cf_0_demand_eval.jl --estim 6 --spec 12 \\
+  julia --project=. --threads=4 foundation_demand_eval.jl --estim 6 --spec 12 \\
       --stage extended --R 200 --seed 42
 
   # Cluster exact (matches the estimated shares):
-  julia --project=\${PROJECT_DIR} --threads=8 cf_0_demand_eval.jl --estim 6 \\
+  julia --project=\${PROJECT_DIR} --threads=8 foundation_demand_eval.jl --estim 6 \\
       --spec 12 --stage extended --R 2000 --seed 42 --hpc
 
 Outputs `CF_FOUNDATION/shares_elas_E{estim}_spec_{spec}_{stage}{suffix}.parquet`.
@@ -401,7 +401,7 @@ pass). Returns the share derivative `ds_dρ = (s(ρ̂+eps) − s(ρ̂))/eps` and
 NOTE: this is the response to a *uniform* spread shift, which folds in within-market
 cross-substitution; it is the right object for aggregate pass-through intuition but
 is NOT the pure own-spread Jacobian diagonal. The exact own/cross Jacobian is built
-inside CF2 by perturbing each strategy and re-simulating (see cost_2_fwd_sim.jl).
+inside CF2 by perturbing each strategy and re-simulating (see estimation_bbl_2_fwd_sim.jl).
 """
 function cf_dDep_dρ(ctx::CFDemandCtx; eps::Float64=1e-4,
                     market_size=nothing, phi=nothing)
@@ -461,7 +461,7 @@ end
 """
     verify_cf_gpu(ctx; rtol) — assert the GPU share kernel matches the CPU one at (δ̂, θ̂₂).
 
-Run once on the cluster (`cf_0_demand_eval.jl … --verify-gpu`) to gate the GPU path. Errors if
+Run once on the cluster (`foundation_demand_eval.jl … --verify-gpu`) to gate the GPU path. Errors if
 the max relative / log-floor share difference exceeds `rtol`. No-op (warns) without a GPU.
 """
 function verify_cf_gpu(ctx::CFDemandCtx; rtol::Float64=1e-7)

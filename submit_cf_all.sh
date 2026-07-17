@@ -8,59 +8,43 @@
 #   3. submits the CF chain for EACH routine in ROUTINES:
 #        (optional) demand_eval — 0a share reproduction (first routine only; precompiles)
 #        (optional) cf1         — gross franchise-value decomposition          [1 job]
-#        cost2 ARRAY            — CF2 ψ deviations, N_SHARDS tasks              [array job]
-#        cost_solve             — Eq-18 minimization, afterANY the array          [1 job]
-#                                 (solves on surviving shards; a flaky shard won't block it)
-#   Each cost2 array task computes SHOCKS/N_SHARDS deviations (reproducible per-shock RNG
-#   → shards merge exactly); the solver globs all shards.
+#        (optional) cf1_net/cf3/cf5/cf6 — equilibrium CFs; consume the BBL cost params
+#   The BBL cost-estimation stage (fwd_sim ψ deviations + eq:17 solve) is now a SEPARATE
+#   stage — run `bash submit_bbl_all.sh` first; it writes cost_params_E*_spec_12_*.json,
+#   which the equilibrium CFs here preflight and consume.
 #
 # Usage:
 #     bash submit_cf_all.sh                       # E6 headline, everything
 #     ROUTINES="5 6 7 8" bash submit_cf_all.sh    # headline + robustness band, one shot
 #   Tunables (env):
 #     ROUTINES="6"          routines to run CFs for (space list; "5 6 7 8" = headline+band)
-#     CF_STAGE=extended  R=2000  SEED=42
-#     SHOCKS=50  N_SHARDS=10  PERTURB_SCALE=0.02  DEV_SCHEME=grid  BETA=0.9  HORIZON=50
-#     DO_DEMAND_EVAL=1  DO_CF1=1     (CF1-gross + CF2 chain)
-#     DO_CF1NET=1  DO_CF3=0  DO_CF5=0  DO_CF6=0   (equilibrium CFs, afterok cost_solve; cf3/5/6 opt-in)
+#     CF_STAGE=extended  R=2000  SEED=42  BETA=0.9  HORIZON=50
+#     DO_DEMAND_EVAL=1  DO_CF1=1     (CF1-gross)
+#     DO_CF1NET=1  DO_CF3=0  DO_CF5=0  DO_CF6=0   (equilibrium CFs; need cost params; cf3/5/6 opt-in)
 #     CF_EQ_EXTRA=""        extra flags for cf3/cf5/cf6 (e.g. "--min-firm-markets 50 --selic-shock 0.01")
 #     AUTO_PROCESS=1        auto-build cluster_processed/ from blp_outputs_*.zip if absent (unzip+cp)
 #     BLP_ZIP=<path>        pin a specific RC zip (default: latest by job id across all saved)
 #     SHARD_TIME=08:00:00   SOLVE_TIME=01:00:00   EQ_TIME=12:00:00 (cf3/5/6 wall)
-#     PARTITION=<name>      SBATCH partition. submit_cf.sh defaults to `day` (CPU). These CF2/CF1
+#     PARTITION=<name>      SBATCH partition. submit_cf.sh defaults to `day` (CPU). These CF1
 #                           steps are CPU-only — keep them on a CPU partition (day/week/bigmem/mpi).
-#     GPUS=h200:1           request a GPU (Bouchet syntax). Not needed here — the CF2/CF1 chain is
+#     GPUS=h200:1           request a GPU (Bouchet syntax). Not needed here — the CF1 chain is
 #                           CPU-only; the GPU is for the cf3/cf5/cf6 equilibrium solve (submit_cf3_jacobi.sh).
 #     MEM=200G              override --mem (needs ≥ ~100G for the R=2000 extended context)
-#     POLICY_CSV=<path>     BBL Step-1 fitted policy for cost2's σ̂ (default:
-#                           data/COST_POLFUNC/polfunc_fitted_spec_12.csv). Built LOCALLY by
-#                           estimation_1_cost_1_polfunc.py and uploaded. If ABSENT, cost2 falls back to
-#                           OBSERVED spreads and frac_bind ≈ 0.5 becomes mechanical (uninformative
-#                           cost parameters) — the script warns loudly. See §0A/§9 of the plan.
-#     ASSET_RETURN_COL=asset_gross_return_lag   give the deposit franchise its asset-side margin
-#                           (NOT `gross_return_lag`, which is the deposit rate — see the note below).
 #
-# TWO inputs must be built LOCALLY and uploaded (both need data/tools the compute nodes lack):
-#   data/COST_FWD/forward_rf_qoq.csv          (cf_forward_rf.py — needs internet)
-#   data/COST_POLFUNC/polfunc_fitted_spec_12.csv  (estimation_1_cost_1_polfunc.py — needs market_panel)
-# everything else is either
+# ONE input must be built LOCALLY and uploaded (needs internet the compute nodes lack):
+#   data/COST_FWD/forward_rf_qoq.csv          (cf_forward_rf.py) — cf3/cf5/cf6 rebuild ψ and read it.
+# The BBL cost params the equilibrium CFs consume come from the SEPARATE BBL stage
+# (submit_bbl_all.sh → data/COST_FWD/cost_params_E*_spec_12_*.json); everything else is either
 # already staged from the BLP run or auto-built here from the zip. See runbook §8.
 set -euo pipefail
 
 ROUTINES="${ROUTINES:-${CF_ROUTINE:-6}}"
 CF_STAGE="${CF_STAGE:-extended}"
 R="${R:-2000}"; SEED="${SEED:-42}"
-# cost2 now runs UNILATERAL (Nash) deviations: one forward sim per (firm × Δ), not per Δ.
-# With ~300 choice firms × 50 Δ that is ~15k sims (was 50) — so N_SHARDS must be much larger.
-# 50 shards ⇒ ~300 sims each (~2.5h at R=2000), inside the 8h SHARD_TIME wall.
-SHOCKS="${SHOCKS:-50}"; N_SHARDS="${N_SHARDS:-50}"
-# 2.0 ρ-units = 200bp ≈ 54% of the median choice spread (~3.7pp); the ± grid runs graduated
-# magnitudes up to that. The old 0.02 (=2bp) was pure linear regime — no curvature in g at all.
-PERTURB_SCALE="${PERTURB_SCALE:-2.0}"; DEV_SCHEME="${DEV_SCHEME:-grid}"
 BETA="${BETA:-0.9}"; HORIZON="${HORIZON:-50}"
 DO_DEMAND_EVAL="${DO_DEMAND_EVAL:-1}"; DO_CF1="${DO_CF1:-1}"
-# Equilibrium CFs (afterok cost_solve). cf1_net is light (on by default); cf3/cf5/cf6 re-solve
-# the pricing game (heavier even with the market-local best-response) — opt-in.
+# Equilibrium CFs — consume the BBL cost params (preflighted below). cf1_net is light (on by
+# default); cf3/cf5/cf6 re-solve the pricing game (heavier even with the market-local best-response) — opt-in.
 DO_CF1NET="${DO_CF1NET:-1}"; DO_CF3="${DO_CF3:-0}"; DO_CF5="${DO_CF5:-0}"; DO_CF6="${DO_CF6:-0}"
 AUTO_PROCESS="${AUTO_PROCESS:-1}"
 SHARD_TIME="${SHARD_TIME:-08:00:00}"; SOLVE_TIME="${SOLVE_TIME:-01:00:00}"
@@ -127,42 +111,23 @@ for k in ${ROUTINES}; do
         echo "     pin one with BLP_ZIP=<path>, or extract by hand:"; \
         echo "     unzip -o -j <zip> 'blp_results_E${k}_spec_12_${CF_STAGE}.jls' -d ${CRAW:-${DATA_ROOT}/output/cluster_raw} && cp <...>_extended.jls ${CP_DIR}/blp_E${k}_spec_12.jls"; miss=1; }
 done
+# The equilibrium CFs (cf1_net/cf3/cf5/cf6) consume the BBL cost params. Those come from the
+# SEPARATE BBL stage (submit_bbl_all.sh), which is an independent run — so preflight the JSON on
+# disk rather than chaining an sbatch dependency across the two orchestrators. cf1 (gross) and
+# demand_eval need no costs, so this check is skipped when only they are requested.
+need_costs=0
+[[ "${DO_CF1NET}" == "1" || "${DO_CF3}" == "1" || "${DO_CF5}" == "1" || "${DO_CF6}" == "1" ]] && need_costs=1
+if [[ "${need_costs}" == "1" ]]; then
+    for k in ${ROUTINES}; do
+        cp_json="${DATA_ROOT}/COST_FWD/cost_params_E${k}_spec_12_${CF_STAGE}.json"
+        [[ -f "${cp_json}" ]] || { echo "MISSING BBL cost params: ${cp_json}"; \
+            echo "   → run the BBL cost stage first:  bash submit_bbl_all.sh"; miss=1; }
+    done
+fi
 [[ "${miss}" == "0" ]] || { echo "Stage the missing input(s) (runbook §8), then re-run."; exit 1; }
-echo "Preflight OK: R=${R} draws + forward r^f curve + RC results for routines: ${ROUTINES}"
+echo "Preflight OK: R=${R} draws + forward r^f curve + RC results${need_costs:+ + BBL cost params} for routines: ${ROUTINES}"
 
 # ── Step 3: submit the CF chain per routine ──────────────────────────────────────
-# Asset return r^j (V_Main eq 16, ψ1 row). Both flags are read as the QUARTERLY NET margin
-# (r^j − r^f); cf_0_psi_basis adds r^f back so ψ1 carries the GROSS r^j the paper requires.
-# Left unset ⇒ r^j = r^f (zero asset margin), which makes a deposit worth only (ρ − c) and
-# forces ω̂ < 0 in eq-17. Set one of these to give the deposit franchise its asset-side value:
-#   ASSET_RETURN_COL=asset_gross_return_lag  (per-obs; = 1 + asset_return_qoq_lag, built in panel_4)
-#   ASSET_MARGIN=0.015                       (constant quarterly net margin, e.g. 1.5%/q ≈ 6pp/yr)
-# ⚠ NOT `gross_return_lag` — that is 1 + the DEPOSIT rate (what the bank PAYS), so it would hand the
-#   model a negative asset margin. The asset return is `asset_gross_return_lag`.
-asset_flags=""
-[[ -n "${ASSET_RETURN_COL:-}" ]] && asset_flags="--asset-return-col ${ASSET_RETURN_COL}"
-[[ "${ASSET_MARGIN:-0}" != "0" ]] && asset_flags="${asset_flags} --asset-margin ${ASSET_MARGIN}"
-
-# BBL Step 1 → Step 2. Deviations must be formed around the FITTED policy σ̂(state) from
-# estimation_1_cost_1_polfunc.py — NOT the raw observed spread (V_Main line 551; Egan et al./Ryan/
-# Matvos-Seru all perturb the fitted policy). Why it matters: g(±Δ) = V(σ̂) − V(σ̂±Δ) ≥ 0 asserts σ̂ is a
-# local argmax of the simulated value. Raw observed spreads are NOT a turning point of that value, so a
-# symmetric ±grid makes exactly one of each ± pair bind for ANY θ — frac_bind ≈ 0.5 mechanically and the
-# eq-17 moments carry no identifying content. Upload polfunc_fitted_spec_12.csv (spec-12, windowed
-# 2016-2024) to ${POLICY_CSV}. Unset/absent ⇒ falls back to observed spreads = the old, uninformative
-# behaviour, so we warn loudly rather than fail silently. See counterfactuals_plan.md §0A/§9.
-POLICY_CSV="${POLICY_CSV:-${DATA_ROOT}/COST_POLFUNC/polfunc_fitted_spec_12.csv}"
-policy_flag=""
-if [[ -f "${POLICY_CSV}" ]]; then
-    policy_flag="--policy-csv ${POLICY_CSV}"
-    echo "cost2 σ̂ ← FITTED policy: ${POLICY_CSV}"
-else
-    echo "!! WARNING: no fitted policy at ${POLICY_CSV}"
-    echo "!!          cost2 will fall back to OBSERVED spreads ⇒ frac_bind ≈ 0.5 is then MECHANICAL and"
-    echo "!!          the recovered (ω, ζ, γ) are uninformative. Upload polfunc_fitted_spec_12.csv."
-fi
-
-cf2_extra="--shocks ${SHOCKS} --perturb-scale ${PERTURB_SCALE} --dev-scheme ${DEV_SCHEME} --beta ${BETA} --horizon ${HORIZON}${asset_flags:+ ${asset_flags}}${policy_flag:+ ${policy_flag}}"
 cf1_extra="--beta ${BETA} --horizon ${HORIZON}"
 
 submit () {  # submit <jobname> <time> <extra-sbatch-args...>
@@ -177,24 +142,24 @@ submit () {  # submit <jobname> <time> <extra-sbatch-args...>
 # ── Pre-warm barrier ──────────────────────────────────────────────────────────
 # Many Julia processes starting cold against ONE shared NFS depot stampede its precompile/load
 # lock — they sit at 0% CPU for a long time. So precompile the depot ONCE (serial job), and make
-# demand_eval / cf1 / cost2 all wait on it (afterok): they then load a warm cache with no lock
-# fight. DO_WARMUP=0 to skip; ARRAY_THROTTLE=N caps concurrent cost2 tasks (belt-and-suspenders).
+# demand_eval / cf1 / the equilibrium CFs all wait on it (afterok): they then load a warm cache
+# with no lock fight. DO_WARMUP=0 to skip.
 warm_dep=""
 if [[ "${DO_WARMUP:-1}" == "1" ]]; then
     wj=$(submit "cf_warmup" "${SOLVE_TIME}" \
         --export=ALL,CF_ROUTINE=${ROUTINES%% *},CF_STAGE=${CF_STAGE},R=${R},SEED=${SEED},CF_STEP=warmup submit_cf.sh)
-    echo "── pre-warm depot → job ${wj} (demand_eval/cf1/cost2 wait on it) ──"
+    echo "── pre-warm depot → job ${wj} (demand_eval/cf1/equilibrium CFs wait on it) ──"
     warm_dep="--dependency=afterok:${wj}"
 fi
-THROTTLE="${ARRAY_THROTTLE:+%${ARRAY_THROTTLE}}"
 
-# Per-CF afterany dependency lists (colon-joined job ids) — one auto-zip job per CF is submitted
-# after ALL routines finish, so each <cf>_outputs.zip bundles every estimation in one archive.
-found_dep=""; cf1_dep=""; cf2_dep=""; cf3_dep=""; cf5_dep=""; cf6_dep=""
+# The BBL cost params are produced by the separate BBL stage (preflighted above), NOT chained
+# here — so every step depends only on the warmup. cf1_net/cf3/cf5/cf6 read cost_params_*.json off
+# disk. Per-CF afterany dependency lists (colon-joined job ids) feed the end-of-run archiver.
+found_dep=""; cf1_dep=""; cf3_dep=""; cf5_dep=""; cf6_dep=""
 first=1
 for k in ${ROUTINES}; do
     base_export="CF_ROUTINE=${k},CF_STAGE=${CF_STAGE},R=${R},SEED=${SEED}"
-    echo "── E${k} ${CF_STAGE} | R=${R} | shocks=${SHOCKS} over ${N_SHARDS} shards ──"
+    echo "── E${k} ${CF_STAGE} | R=${R} ──"
     # demand_eval runs once (first routine); it waits on the warmup so the cache is already built.
     if [[ "${DO_DEMAND_EVAL}" == "1" && "${first}" == "1" ]]; then
         j=$(submit "cf_demaneval_E${k}" "${SOLVE_TIME}" ${warm_dep} \
@@ -206,32 +171,21 @@ for k in ${ROUTINES}; do
             --export=ALL,${base_export},CF_STEP=cf1,CF_EXTRA="${cf1_extra}" submit_cf.sh)
         echo "  cf1          → job ${j}"; cf1_dep="${cf1_dep}:${j}"
     fi
-    arr=$(submit "cf_cost2_E${k}" "${SHARD_TIME}" ${warm_dep} --array=0-$((N_SHARDS-1))${THROTTLE} \
-        --export=ALL,${base_export},CF_STEP=cost2,N_SHARDS=${N_SHARDS},CF_EXTRA="${cf2_extra}" \
-        submit_cf.sh)
-    echo "  cost2 array  → job ${arr} (${N_SHARDS} shards${THROTTLE:+, throttled ${THROTTLE}})"
-    # cost_solve depends on the cost2 array via afterANY (not afterok): the Eq-18 solve globs
-    # whatever psi_dev shards exist, so a flaky shard doesn't block the routine's costs — it just
-    # solves on the surviving deviations. (If shard 0 failed there's no psi_eq → the solve errors
-    # and its own afterok downstream is cancelled by --kill-on-invalid-dep.)
-    slv=$(submit "cf_solve_E${k}" "${SOLVE_TIME}" --dependency=afterany:"${arr}" \
-        --export=ALL,${base_export},CF_STEP=cost_solve,CF_EXTRA="--bootstrap 200" submit_cf.sh)
-    echo "  cost_solve   → job ${slv} (afterany:${arr})"
-    cf2_dep="${cf2_dep}:${slv}"     # cost_solve implies the array is done → covers psi_* + cost_params
 
-    # Equilibrium CFs — each runs only after this routine's costs are solved.
+    # Equilibrium CFs — consume the BBL cost params (preflighted on disk), so they depend only on
+    # the warmup, not on any cost job in this run.
     eq_extra="--beta ${BETA} --horizon ${HORIZON}"
     if [[ "${DO_CF1NET}" == "1" ]]; then
-        j=$(submit "cf_cf1net_E${k}" "${SOLVE_TIME}" --dependency=afterok:"${slv}" \
+        j=$(submit "cf_cf1net_E${k}" "${SOLVE_TIME}" ${warm_dep} \
             --export=ALL,${base_export},CF_STEP=cf1_net,CF_EXTRA="${eq_extra}" submit_cf.sh)
-        echo "  cf1_net      → job ${j} (afterok:${slv})"; cf1_dep="${cf1_dep}:${j}"   # net → same cf1 archive
+        echo "  cf1_net      → job ${j}"; cf1_dep="${cf1_dep}:${j}"   # net → same cf1 archive
     fi
     for step in cf3 cf5 cf6; do
         flag="DO_$(echo ${step} | tr a-z A-Z)"          # DO_CF3 / DO_CF5 / DO_CF6
         if [[ "${!flag}" == "1" ]]; then
-            j=$(submit "cf_${step}_E${k}" "${EQ_TIME}" --dependency=afterok:"${slv}" \
+            j=$(submit "cf_${step}_E${k}" "${EQ_TIME}" ${warm_dep} \
                 --export=ALL,${base_export},CF_STEP=${step},CF_EXTRA="${eq_extra} ${CF_EQ_EXTRA:-}" submit_cf.sh)
-            echo "  ${step}          → job ${j} (afterok:${slv})"
+            echo "  ${step}          → job ${j}"
             case "${step}" in cf3) cf3_dep="${cf3_dep}:${j}";; cf5) cf5_dep="${cf5_dep}:${j}";; cf6) cf6_dep="${cf6_dep}:${j}";; esac
         fi
     done

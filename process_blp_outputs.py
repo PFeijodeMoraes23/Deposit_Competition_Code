@@ -25,7 +25,7 @@ Idempotent and re-runnable: drop a freshly downloaded blp_outputs.zip into BLP_R
 Usage:
     python process_blp_outputs.py [BLP_RESULTS_dir] [--stage extended] [--routines 5,6,7,8]
 """
-import os, sys, glob, json, zipfile, shutil, argparse, datetime
+import os, sys, glob, json, zipfile, shutil, argparse, datetime, math
 
 ROUTINE_LABEL = {
     1: "Local B-type", 2: "Pooled Linear",
@@ -446,10 +446,17 @@ def write_summary_md(sub, index, stage, het=None):
               "Pflueger effective F [@oleapflueger2013]; `LM 95%` = Kleibergen LM/K weak-IV-robust CI "
               "for α (wild-cluster-bootstrap criticals) [@kleibergen2005]; `J (p)` = Hansen overid test [@hansen1982]. Staiger–Stock "
               "rule of thumb is F ≈ 10 [@staigerstock1997].", ""]
-        L += ["| Routine | sample | N | K | α̂ (SE) | partial R² | KP-F | CD-F | eff-F | LM 95% CI | J (p) |",
-              "|---|:--:|---:|---:|---:|---:|---:|---:|---:|:--:|---:|"]
+        L += ["| Routine | sample | N | K | 2SLS α̂ (SE) | LIML α̂ | partial R² | KP-F | eff-F | LM 95% CI | tF 95% CI | J (p) |",
+              "|---|:--:|---:|---:|---:|---:|---:|---:|---:|:--:|:--:|---:|"]
         def _F(x):
-            return f"{x:,.0f}" if x is not None else "—"
+            return f"{x:,.0f}" if isinstance(x, (int, float)) else "—"
+        def _s(x, d=3):
+            return f"{x:+.{d}f}" if isinstance(x, (int, float)) and math.isfinite(x) else "—"
+        def _tfstr(r):
+            tf = r.get("tf") or {}
+            if tf.get("tf_defined") and tf.get("tf_ci_low") is not None:
+                return f"[{tf['tf_ci_low']:+.2f}, {tf['tf_ci_high']:+.2f}]"
+            return "(undef, F<3.84)" if tf.get("tf_defined") is False else "—"
         for m in index:
             rr = wiv.get(str(m["routine"]))
             if not rr: continue
@@ -464,33 +471,83 @@ def write_summary_md(sub, index, stage, het=None):
                       + (" (disc.)" if r.get("lm_ci_disconnected") else "")) \
                     if r.get("lm_ci_low") is not None else "∅"
                 jp = f"{r['hansen_J_p']:.2f}" if r.get("hansen_J_p") is not None else "—"
-                L.append(f"| E{m['routine']} | {lbl} | {r['n_obs']:,} | {r['n_iv']} | {astr} | {pr} | "
-                         f"{_F(r.get('kp_first_stage_F'))} | {_F(r.get('cragg_donald_F'))} | "
-                         f"{_F(r.get('effective_F'))} | {lm} | {jp} |")
+                L.append(f"| E{m['routine']} | {lbl} | {r['n_obs']:,} | {r['n_iv']} | {astr} | "
+                         f"{_s(r.get('alpha_liml'))} | {pr} | {_F(r.get('kp_first_stage_F'))} | "
+                         f"{_F(r.get('effective_F'))} | {lm} | {_tfstr(r)} | {jp} |")
+
+        # ── Estimator ladder (OLS → 2SLS → LIML → Fuller): the weak-ID signature ──
+        L += ["", "### Estimator ladder (α̂)", "",
+              "OLS is pulled toward the endogeneity-biased estimate; LIML is ~median-unbiased under weak "
+              "identification [@andersonrubin1949] and Fuller(1) [@fuller1977] restores finite moments. "
+              "A LIML sitting well away from a 2SLS that is itself pulled toward OLS is the "
+              "weak-instrument signature; `DWH p` is the control-function Durbin–Wu–Hausman endogeneity "
+              "test [@hausman1978] (low power under weak ID).", "",
+              "| Routine | sample | OLS α̂ | 2SLS α̂ | LIML α̂ | Fuller α̂ | LIML−2SLS | 2SLS−OLS | DWH p |",
+              "|---|:--:|---:|---:|---:|---:|---:|---:|---:|"]
+        for m in index:
+            rr = wiv.get(str(m["routine"]))
+            if not rr: continue
+            for key, lbl in (("type45", "4+5"), ("type4", "4"), ("type5", "5")):
+                r = rr.get(key)
+                if not r: continue
+                a2, al, ao = r.get("alpha_2sls"), r.get("alpha_liml"), r.get("alpha_ols")
+                lg = (al - a2) if (isinstance(al, (int, float)) and isinstance(a2, (int, float))) else None
+                dp = f"{r['dwh_cf_p']:.2f}" if r.get("dwh_cf_p") is not None else "—"
+                L.append(f"| E{m['routine']} | {lbl} | {_s(ao)} | {_s(a2)} | {_s(al)} | "
+                         f"{_s(r.get('alpha_fuller'))} | {_s(lg)} | {_s(r.get('dwh_gap'))} | {dp} |")
+
+        # ── First-stage instrument diagnostics: collinearity + leave-group-out ──
+        L += ["", "### First-stage instrument diagnostics", "",
+              "Collinearity of the 15 instruments (condition number and max VIF of the partialled Z) and "
+              "leave-one-**group**-out sensitivity: the `mean_loo_*` block is a set of market-level rival "
+              "averages that are near-collinear (the load-bearing case for the differentiation-IV "
+              "construction [@gandhihoude2019]). Per-instrument *cluster-robust* t's are rank-deficient "
+              "here (K=15 > effective clusters ≈ 7) and are omitted; `neg π̂` counts negative first-stage "
+              "coefficients (sign expectation for market-level generated instruments is ambiguous).", "",
+              "| Routine | sample | cond # | max VIF | neg π̂ / K | eff-F full | eff-F drop mean_loo | Δα drop mean_loo |",
+              "|---|:--:|---:|---:|:--:|---:|---:|---:|"]
+        for m in index:
+            rr = wiv.get(str(m["routine"]))
+            if not rr: continue
+            for key, lbl in (("type45", "4+5"), ("type4", "4"), ("type5", "5")):
+                r = rr.get(key)
+                if not r: continue
+                zc = r.get("z_collinearity") or {}; pv = r.get("per_iv") or {}
+                dm = ((r.get("loo") or {}).get("drop_group") or {}).get("mean_loo") or {}
+                negk = (f"{pv['n_neg']}/{r['n_iv']}" if pv.get("n_neg") is not None else "—")
+                L.append(f"| E{m['routine']} | {lbl} | {_F(zc.get('cond_number'))} | "
+                         f"{_F(zc.get('max_vif'))} | {negk} | {_F(r.get('effective_F'))} | "
+                         f"{_F(dm.get('eff_F'))} | {_s(dm.get('dAlpha'))} |")
+
         L += ["",
               "- **Clustering matters a lot here.** The homoskedastic Cragg-Donald F is in the "
               "hundreds, but the cluster-robust effective F [@oleapflueger2013] and KP rk Wald F "
-              "[@kleibergenpaap2006] are an order of magnitude smaller (effective F ≈ 7–36 across "
-              "subsamples) — the leave-one-out / rival instruments are highly correlated **within "
-              "conglomerate**, so once SEs are clustered the spread is only weakly-to-moderately "
-              "identified. The naive ≈400 first-stage F overstated instrument strength; type 5 is the "
-              "strongest, type 4 the weakest (below 10).",
-              "- **Weak-IV-robust inference.** The reported interval is the **Kleibergen LM/K** CI "
+              "[@kleibergenpaap2006] are an order of magnitude smaller — the leave-one-out / rival "
+              "instruments are highly correlated **within conglomerate** (see the max VIF), so once SEs "
+              "are clustered the spread is only weakly identified. The per-subsample pattern (type 4 vs "
+              "5 vs pooled) is in the table above; the naive first-stage F badly overstated strength.",
+              "- **The estimator ladder is the verdict on the price sign.** OLS → 2SLS → LIML: LIML "
+              "moves α̂ further in the economically-sensible (negative) direction than 2SLS, which is the "
+              "classic weak-IV signature (2SLS biased toward OLS). But the **tF honest CI** "
+              "[@leemccrarymoreira2022] — which converts the effective F into an F-adjusted critical "
+              "value (at eff-F ≈ 4 the multiplier is ≈ 13–14, i.e. the SE is inflated ~7×) — is "
+              "near-uninformative and does not exclude zero. **So the sign of the price coefficient is "
+              "not identified from the excluded instruments**; the naive ±1.96·SE Wald interval overstates "
+              "precision. This is the direct evidence that the positive/insignificant logit α is a "
+              "weak-instrument artifact, and that structural price sensitivity must lean on the BLP "
+              "(RC + demographics), not the instruments alone.",
+              "- **Weak-IV-robust inference (LM/K).** The `LM 95% CI` is the Kleibergen LM/K CI "
               "[@kleibergen2005], inverted against **wild-cluster-bootstrap** criticals (few-cluster "
-              "valid at effective clusters ≈ 7, matching the paper's inference scheme; isolates α from "
-              "the overidentification direction), which stays "
-              "informative even when the **Anderson-Rubin** set [@andersonrubin1949] is empty (∅). "
-              "Because min over α of the AR statistic equals the **Hansen J** overid test "
-              "[@hansen1982], and J rejects in the larger subsamples (J p ≈ 0 — at n ≈ 90k the overid "
-              "test over-rejects), the AR set collapses to ∅ there; the LM/K CI does not. The optimal "
-              "conditional-LR refinement [@moreira2003] is available if needed.",
-              "- **Caveat.** These α̂ are a subsample first-pass on the engine's ln(share) δ (no "
-              "market/time FE), **not** the headline logit α; consistent with the weak first stage "
-              "they are imprecise/wrong-signed.",
-              "- **Takeaway:** the spread instruments are not as strong as the homoskedastic F "
-              "suggested. This is independent of the demographic-centering fix (which is about the "
-              "RC θ₁ sign, not identification) and is worth weighing for the deposit-competition "
-              "first stage."]
+              "valid; isolates α from the overid direction), which stays informative even when the "
+              "**Anderson-Rubin** set [@andersonrubin1949] is empty (∅). Because min over α of AR equals "
+              "the **Hansen J** [@hansen1982] and J rejects at these n, the AR set collapses to ∅; the "
+              "LM/K CI does not. The optimal conditional-LR refinement [@moreira2003] is available if "
+              "needed. With a single endogenous regressor the Sanderson–Windmeijer conditional F equals "
+              "the first-stage F, so it adds nothing here.",
+              "- **Caveats.** The DWH endogeneity test and the overid/AR sets are low-power at "
+              "effective clusters ≈ 7 (descriptive, not decisive). Per-instrument cluster-robust t's are "
+              "rank-deficient (K > G) and omitted. These α̂ use the engine's ln(share) δ (no market/time "
+              "FE), so they are a first-stage-quality diagnostic, not the headline structural α."]
 
     # per-routine Logit-vs-RC-stages compare tables (markdown mirror of Rout/blp_compare_*.tex)
     raw_dir = sub["cluster_raw"]

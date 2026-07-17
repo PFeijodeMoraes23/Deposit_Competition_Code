@@ -10,7 +10,7 @@ franchise value
 
     V_j(σ) = ψ_j(σ)′ · [ 1, −ω^κ, −γ^κ′, −(1+ζ^κ) ]                       (V_Main eq 16)
 
-where ψ_j is the discounted, deposit-weighted value basis (cf_0_psi_basis / psi_under) and
+where ψ_j is the discounted, deposit-weighted value basis (foundation_psi_basis / psi_under) and
 κ∈{B,D} is the firm type. The equilibrium is the fixed point of the best-response map,
 found by iterating firm best responses (Gauss-Seidel or Jacobi) from σ⁰=ρ̂ until
 ‖σ^{n+1}−σ^n‖ < tol. VALIDATION GATE (V_Main): at ĉ the fixed point should reproduce the
@@ -29,10 +29,10 @@ Local dev (validate the machinery at logit with the logit costs already on disk)
 Headline (after credible RC costs land): --stage extended --R 2000 on the cluster.
 """
 
-include(joinpath(@__DIR__, "cost_2_fwd_sim.jl"))
+include(joinpath(@__DIR__, "estimation_bbl_2_fwd_sim.jl"))
 
 using DataFrames, Statistics, Printf, LinearAlgebra
-# load_cost_params / theta_c / marginal_cost_per_obs come from cf_0_psi_basis.jl (shared with CF1-net).
+# load_cost_params / theta_c / marginal_cost_per_obs come from foundation_psi_basis.jl (shared with CF1-net).
 
 # ==========================================================================
 # Firm value V_j(σ) under a stationary spread vector
@@ -222,7 +222,7 @@ function cf3_setup(a)
         log_status("  [CF3] merged $fB → $fA")
     end
 
-    # Market size + markdown + forward r^f, identical to cost_2_fwd_sim (so ψ matches CF2).
+    # Market size + markdown + forward r^f, identical to estimation_bbl_2_fwd_sim (so ψ matches CF2).
     # load_sim_state takes M_mt/M_nat from the demand parquet — the market size the BLP was actually
     # estimated under. The per-type d̄ auto-calibration that used to live here is retired (it ignored
     # banked_correction and re-invented M). See counterfactuals_plan.md §9.8.

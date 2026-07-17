@@ -13,7 +13,7 @@ and no equilibrium re-solve needed (the user's CF4: "requires volume reallocatio
 no need for decomposition").
 
   φ_cf_mt   = φ̂_mt − Υ_pix · pix_exists_mt          (force the pre-Pix regime)
-  Dep_cf    = simulate_deposits(ctx, st with φ=φ_cf, spreads = ρ̂)   [cf_0_deposit_sim]
+  Dep_cf    = simulate_deposits(ctx, st with φ=φ_cf, spreads = ρ̂)   [foundation_deposit_sim]
   Δvolume_j = Dep_cf_j − Dep_obs_j                                  (per institution)
 
 ⚠ DEPENDENCY (why this is a scaffold, not yet runnable): it needs the estimated
@@ -24,7 +24,7 @@ sleepiness coefficient on `pix_exists` (Υ_pix). The sleep step
       file keyed by routine/spec, OR
   (2) recover Υ_pix by re-running the φ regression here from the demand-prep inputs.
 Then fill in `pix_coefficient(...)` below and the rest executes on the existing
-cf_0_deposit_sim engine (which already has the bps / accrual-stability / per-type
+foundation_deposit_sim engine (which already has the bps / accrual-stability / per-type
 d̄ fixes from CF1).
 
 This file deliberately does the safe parts (load context, locate pix/phi columns)
@@ -32,7 +32,7 @@ and STOPS at the Υ_pix hookup with a clear error, so running it fails loudly ra
 than silently producing wrong numbers.
 """
 
-include(joinpath(@__DIR__, "cf_0_deposit_sim.jl"))
+include(joinpath(@__DIR__, "foundation_deposit_sim.jl"))
 
 using DataFrames, Statistics, Printf
 

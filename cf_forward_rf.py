@@ -2,10 +2,10 @@
 cf_forward_rf.py
 ================
 Build the forward risk-free (Selic) path r^f_t for the counterfactual horizon and
-cache it as a CSV that the Julia CF engines read (cost_2_fwd_sim.jl ψ4 funding base;
+cache it as a CSV that the Julia CF engines read (estimation_bbl_2_fwd_sim.jl ψ4 funding base;
 later CF3/CF5 equilibrium re-solves).
 
-WHY A REAL FORWARD CURVE (not a flat placeholder). In the BBL value basis (eq 17),
+WHY A REAL FORWARD CURVE (not a flat placeholder). In the BBL value basis (eq:16),
 ψ4 = Σ_t β^t r^f_t · Σ_k Dep_t enters with coefficient −(1+ζ). If r^f_t is held FLAT,
 ψ4 = r^f · Σ_t β^t Σ_k Dep_t is just a rescaling of ψ2 = Σ_t β^t Σ_k Dep_t, so ω and
 ζ are COLLINEAR and ζ (funding-cost pass-through) is unidentified. A time-varying

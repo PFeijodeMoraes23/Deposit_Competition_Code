@@ -50,12 +50,16 @@ IV_BLP_LOO = ['loo_log_assets', 'mean_loo_log_assets', 'loo_equity_ratio', 'mean
               'loo_npl_provision', 'mean_loo_npl_provision', 'n_rivals']
 IV_COST = ['personnel_cost_ratio_lag', 'admin_cost_ratio_lag', 'tax_cost_ratio_lag']
 IV_CAPITAL = ['indice_basileia_lag']
+# ESTBAN branch-competition instrument (panel_10_estban_instruments.py): log1p lagged count of RIVAL
+# branches in the local market (MCA). Unlike the accounting IVs it has within-conglomerate variation
+# (across the conglomerate's municipalities) and is independent + relevant for demand-deposit spreads.
+IV_ESTBAN = ['estban_rival_branches_lag']
 IV_FEE = ['cosif_fee_ratio_all', 'cosif_fee_ratio_total_deposits', 'cosif_fee_valid',
           'listed_fee_atm_withdrawal_pf', 'listed_fee_statement_pf',
           'tarifa_stickiness_yrs', 'tarifa_stickiness_n']
 # CF2 needs the bank's ASSET return r^j (V_Main eq 16, ψ1 row): the return on what deposits fund.
 # `asset_gross_return_lag` = 1 + lagged quarterly asset yield (built in panel_4_bank_chars.py).
-# Consumed by cost_2_fwd_sim.jl --asset-return-col. NOT `gross_return_lag`, which is 1 + the
+# Consumed by estimation_bbl_2_fwd_sim.jl --asset-return-col. NOT `gross_return_lag`, which is 1 + the
 # DEPOSIT rate (liability side) — see counterfactuals_plan.md §9.4.
 CF_COST_COLS = ['asset_gross_return_lag', 'asset_return_imputed']
 
@@ -94,7 +98,7 @@ from utils.window import MIN_YEAR, MAX_YEAR  # noqa: E402
 
 # NB: M_mt / M_nat are BUILT inside process_specification (after the keep_cols filter) and so reach
 # the parquet without needing to be listed here.
-EXTRA_KEEP_COLS = (X_COLS + D_COLS + IV_BLP_LOO + IV_COST + IV_CAPITAL + IV_FEE
+EXTRA_KEEP_COLS = (X_COLS + D_COLS + IV_BLP_LOO + IV_ESTBAN + IV_COST + IV_CAPITAL + IV_FEE
                    + CF_COST_COLS
                    + ['segment', 'spread_qoq', 'spread_ann'])
 
@@ -387,7 +391,7 @@ def build_market_size_and_shares(df_spec: pd.DataFrame) -> pd.DataFrame:
     # so the counterfactuals could not see it and each re-invented their own market size as a
     # per-type scalar dbar·pop_total that ignores banked_correction entirely. That meant the demand
     # model was ESTIMATED under one market size and the CFs SIMULATED under another. Keeping these
-    # two columns lets cf_0_deposit_sim.jl consume the estimation's own M. See §9.8.
+    # two columns lets foundation_deposit_sim.jl consume the estimation's own M. See §9.8.
     df_spec['M_mt'] = df_spec['_b_mkt']      # local market size (B firms)
     df_spec['M_nat'] = df_spec['_d_mkt']     # national market size (D firms)
     df_spec.drop(columns=['_b_mkt', '_d_mkt', '_bc'], inplace=True)

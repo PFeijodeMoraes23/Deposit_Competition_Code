@@ -5,7 +5,7 @@
 #   blp_2_estimation.jl (IFT CPU) + blp_1_estimation_gpu.jl (numerical GPU)
 #   + blp_2_estimation_gpu.jl (IFT GPU).
 # The shared CPU baseline blp_1_estimation.jl is KEPT as a separate file (it's also used
-# CPU-only, without CUDA, by cf_0_demand_eval.jl) and is include()d below.
+# CPU-only, without CUDA, by foundation_demand_eval.jl) and is include()d below.
 # Inter-file include()s were dropped; the two GPU entrypoints were renamed
 #   main_gpu (blp_1 numerical) -> main_gpu_numerical ;  main_gpu (blp_2 IFT) -> main_gpu_ift
 # so both engines coexist. blp_2_rc.jl include()s this file and calls the right
@@ -13,7 +13,7 @@
 # picks the engine from BLP_ENGINE (default ift).
 # EDIT THIS FILE for engine changes (the three originals were removed).
 
-# CPU baseline — separate file (shared CPU-only with cf_0_demand_eval.jl).
+# CPU baseline — separate file (shared CPU-only with foundation_demand_eval.jl).
 # The isdefined guard makes this load-once: several drivers reach the baseline both through this
 # engine and on their own CPU-only path. `Base.include(Main, …)` is what a top-level `include` call
 # expands to, spelled so the static include graph carries one edge per driver instead of two.
@@ -1939,17 +1939,16 @@ Usage (Bouchet H200 cluster)
       --R 2000 --seed 42 --hpc
 """
 
-# ── Load CPU baseline (IFT) ──────────────────────────────────────────────────
-# blp_2_estimation.jl includes blp_1_estimation.jl and adds IFT gradient.
-# [merged] include(joinpath(@__DIR__, "blp_2_estimation.jl"))
+# ── CPU baseline (IFT) ───────────────────────────────────────────────────────
+# The IFT gradient code (formerly blp_2_estimation.jl, which included blp_1_estimation.jl)
+# is merged inline into this engine.
 
 using CUDA
 CUDA.allowscalar(false)
 
-# ── GPU infrastructure from blp_1 ──────────────────────────────────────────────
-# Include GPU buffer definitions and kernels. The guard in blp_1_estimation_gpu.jl
-# checks if X_COLS is already defined to avoid constant redefinition warnings.
-# [merged] include(joinpath(@__DIR__, "blp_1_estimation_gpu.jl"))
+# ── GPU infrastructure ─────────────────────────────────────────────────────────
+# GPU buffer definitions and kernels (formerly blp_1_estimation_gpu.jl) are merged inline;
+# the X_COLS guard avoids constant-redefinition warnings.
 
 # ==========================================================================
 # 8. IFT Analytical Gradient (GPU)

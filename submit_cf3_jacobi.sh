@@ -7,8 +7,8 @@
 # FROZEN previous-sweep σ — followed by a merge into the next σ. Sweeps chain via afterok. This
 # uses the exact (correct) full-panel psi_under; it just parallelizes the firms.
 #
-# Prerequisite: the RC costs (cost_params_E{k}_spec_12_extended.json) — i.e. run submit_cf_all.sh
-# (through cost_solve) first.
+# Prerequisite: the RC costs (cost_params_E{k}_spec_12_extended.json) — i.e. run the BBL cost
+# stage first:  bash submit_bbl_all.sh
 #
 # The shard best-responses are share-evaluation-bound, so they run on the GPU (the CF share
 # kernel auto-uses the H200 when present, CF_GPU!=0). init/merge are light and stay on CPU.
@@ -37,7 +37,7 @@ SIGMA_DIR="${SIGMA_DIR:-${DATA_ROOT}/CF_FOUNDATION/cf3_jacobi_E${CF_ROUTINE}_${C
 LOGDIR="logs"; mkdir -p "${LOGDIR}" "${SIGMA_DIR}"
 
 COST="${DATA_ROOT}/COST_FWD/cost_params_E${CF_ROUTINE}_spec_12_${CF_STAGE}.json"
-[[ -f "${COST}" ]] || { echo "MISSING costs: ${COST}"; echo "  → run submit_cf_all.sh through cost_solve first."; exit 1; }
+[[ -f "${COST}" ]] || { echo "MISSING costs: ${COST}"; echo "  → run the BBL cost stage first:  bash submit_bbl_all.sh"; exit 1; }
 echo "CF3 firm-sharded Jacobi: E${CF_ROUTINE} ${CF_STAGE} | ${N_FIRM_SHARDS} shards × ${N_SWEEPS} sweeps"
 echo "  shards → ${GPU_PARTITION} (--gpus=${GPUS}) | init/merge → ${CPU_PARTITION} | → ${SIGMA_DIR}"
 

@@ -261,7 +261,10 @@ def main():
             if wide:
                 col_spec  = 'l@{\\hspace{0.2em}}' + '>{\\centering\\arraybackslash}X' * n_groups
             else:
-                col_spec  = 'l@{\\hspace{0.35em}}' + 'c' * n_groups
+                col_spec  = 'l@{\\hspace{0.35em}}' + '>{\\centering\\arraybackslash}X' * n_groups
+            # Fixed width scaled to the column count so the footnote can match the
+            # table width exactly; X columns share it evenly (no lopsided last gap).
+            narrow_w = f'{min(1.0, 0.30 + 0.11 * n_groups):.2f}\\textwidth'
 
             weight_label = (' (Population Weighted)'
                             if args.weight_col else ' (Unweighted)')
@@ -341,9 +344,10 @@ def main():
             font_cmd  = '\\tiny'       if wide else '\\footnotesize'
             tabcolsep = '1pt'          if wide else '3pt'
             begin_env = (f'\\begin{{xltabular}}{{\\textwidth}}{{{col_spec}}}'
-                         if wide else f'\\begin{{longtable}}[c]{{{col_spec}}}')
-            end_env   = '\\end{xltabular}' if wide else '\\end{longtable}'
-            note_w    = r'\dimexpr\textwidth-2\tabcolsep\relax' if wide else r'0.85\textwidth'
+                         if wide else f'\\begin{{xltabular}}{{{narrow_w}}}{{{col_spec}}}')
+            end_env   = '\\end{xltabular}'
+            note_w    = (r'\dimexpr\textwidth-2\tabcolsep\relax' if wide
+                         else f'\\dimexpr{narrow_w}-2\\tabcolsep\\relax')
 
             lines = [
                 '\\setstretch{1.0}',
@@ -802,8 +806,10 @@ def main():
                 nvals.append(f"{int(v):,}" if not pd.isna(v) else "--")
             body.append("    Observations & " + " & ".join(nvals) + r" \\")
 
-        # Portrait orientation: only 2 group columns, no landscape needed.
-        col_spec = "l@{\\hspace{0.35em}}" + "c" * n_groups
+        # Portrait, fixed-width so the footnote (below) can match the table width
+        # exactly; X data columns share the width evenly (no lopsided last gap).
+        table_w  = r"0.75\textwidth"
+        col_spec = "l@{\\hspace{0.35em}}" + ">{\\centering\\arraybackslash}X" * n_groups
         weight_label = (" (Population Weighted)"
                         if args.weight_col else " (Unweighted)")
         full_caption = caption_title + weight_label
@@ -827,7 +833,7 @@ def main():
             r"\begingroup",
             r"\footnotesize",
             r"\setlength{\tabcolsep}{6pt}",
-            f"\\begin{{longtable}}[c]{{{col_spec}}}",
+            f"\\begin{{xltabular}}{{{table_w}}}{{{col_spec}}}",
             f"    \\caption{{{full_caption}}}\\label{{{tab_label}}} \\\\",
             r"    \toprule",
             f"    & {group_header} \\\\",
@@ -845,12 +851,12 @@ def main():
             r"    \endfoot",
             "",
             r"    \bottomrule",
-            f"    \\multicolumn{{{n_cols}}}{{p{{0.85\\textwidth}}}}{{{notes_text}}} \\\\",
+            f"    \\multicolumn{{{n_cols}}}{{p{{\\dimexpr{table_w}-2\\tabcolsep\\relax}}}}{{{notes_text}}} \\\\",
             r"    \endlastfoot",
             "",
             *body,
             "",
-            r"\end{longtable}",
+            r"\end{xltabular}",
             r"\endgroup",
             r"\doublespacing",
         ]

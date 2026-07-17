@@ -5,7 +5,7 @@
 # Selic-SHOCKED forward r^f — then a compare job reports ∂ρ*/∂Selic and ∂Dep/∂Selic. The two
 # solves are independent (run in parallel); the compare is afterok both.
 #
-# Prereq: RC costs (run submit_cf_all.sh through cost_solve first).
+# Prereq: RC costs (run the BBL cost stage first:  bash submit_bbl_all.sh).
 # Usage:  CF_ROUTINE=7 SELIC_SHOCK=0.01 N_FIRM_SHARDS=40 N_SWEEPS=6 bash submit_cf5_passthrough.sh
 # Tunables: everything submit_cf3_jacobi.sh takes, plus SELIC_SHOCK (annual, default 0.01) and
 #   BASE_SIGMA=<path> to REUSE an already-solved base σ (e.g. the CF3 headline) instead of re-solving.

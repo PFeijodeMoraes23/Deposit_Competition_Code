@@ -76,6 +76,7 @@ IV_BLP_LOO = ['loo_log_assets', 'mean_loo_log_assets',
               'n_rivals']
 IV_COST = ['personnel_cost_ratio_lag', 'admin_cost_ratio_lag', 'tax_cost_ratio_lag']
 IV_CAPITAL = ['indice_basileia_lag']
+IV_ESTBAN = ['estban_rival_branches_lag']   # ESTBAN branch-competition IV (panel_10; within-congl var)
 IV_FEE = [
     'cosif_fee_ratio_all',
     'cosif_fee_ratio_total_deposits',
@@ -87,10 +88,10 @@ IV_FEE = [
 ]
 # CF2 needs the bank's ASSET return r^j (V_Main eq 16, ψ1 row): the return on what deposits fund.
 # `asset_gross_return_lag` = 1 + lagged quarterly asset yield (built in panel_4_bank_chars.py).
-# Consumed by cost_2_fwd_sim.jl --asset-return-col. NOT to be confused with `gross_return_lag`,
+# Consumed by estimation_bbl_2_fwd_sim.jl --asset-return-col. NOT to be confused with `gross_return_lag`,
 # which is 1 + the DEPOSIT rate (liability side) — see counterfactuals_plan.md §9.4.
 CF_COST_COLS = ['asset_gross_return_lag', 'asset_return_imputed']
-EXTRA_KEEP_COLS = (X_COLS + D_COLS + IV_BLP_LOO + IV_COST + IV_CAPITAL + IV_FEE
+EXTRA_KEEP_COLS = (X_COLS + D_COLS + IV_BLP_LOO + IV_ESTBAN + IV_COST + IV_CAPITAL + IV_FEE
                    + CF_COST_COLS
                    + ['segment', 'spread_qoq', 'spread_ann'])
 

@@ -380,7 +380,7 @@ def build_panel() -> pd.DataFrame:
 
     # ── ASSET RETURN r^j (V_Main eq 16, ψ1 row) ─────────────────────────────────────────────
     # The return the bank earns on the assets its deposits fund. CF2 needs (r^j − r^f); with r^j
-    # left at 0 the deposit franchise is worth only (ρ − c) and eq-18 can only rationalise the
+    # left at 0 the deposit franchise is worth only (ρ − c) and eq:17 can only rationalise the
     # observed spreads with a NEGATIVE marginal cost (see counterfactuals_plan.md §9.4).
     #
     # Realized portfolio yield = quarterly financial income ÷ LAGGED earning assets. Dividing by
@@ -430,7 +430,7 @@ def build_panel() -> pd.DataFrame:
     present_lag_cols = [c for c in lag_cols if c in panel.columns]
     panel[[c + '_lag' for c in present_lag_cols]] = panel.groupby('CodConglomeradoPrudencial')[present_lag_cols].shift(1)
 
-    # Gross factor for the Julia consumer (cost_2_fwd_sim.jl --asset-return-col), which does
+    # Gross factor for the Julia consumer (estimation_bbl_2_fwd_sim.jl --asset-return-col), which does
     #     gr = col − 1 ;  asset_ret = gr − risk_free_qoq_lag
     # so this must be 1 + a LAGGED quarterly DECIMAL rate — the same vintage and units as
     # gross_return_lag = 1 + deposit_rate_lag (≈1.0126) and risk_free_qoq_lag (≈0.0253).

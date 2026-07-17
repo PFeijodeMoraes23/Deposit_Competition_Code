@@ -494,7 +494,9 @@ def render_table1(moments_b, moments_d, moments_all, meta, weight_col, suffix) -
     weight_lbl = "(Population Weighted)" if weight_col else ""
     caption   = (f"Bank-Conglomerate Cross-Section by Type{(' ' + weight_lbl) if weight_lbl else ''}")
 
-    col_spec  = "l@{\\hspace{0.5em}}rrrrrrrr"
+    # Fill \textwidth (extracolsep distributes slack evenly) so the table matches
+    # the full-width \par note below; longtable keeps the table page-breakable.
+    col_spec  = "@{\\extracolsep{\\fill}}l rrrrrrrr"
     n_cols    = 9
     header_row = r"Variable & Mean & SD & p10 & p25 & p50 & p75 & p90 & $N$ \\"
 
@@ -1607,6 +1609,7 @@ def render_appendix_b10() -> str:
 # Category labels (single-sourced). The leave-one-out block was formerly labelled
 # "BLP LOO"; it now reads "Leave-one-out".
 _CAT_LOO     = "Leave-one-out"
+_CAT_ESTBAN  = "Branch competition"
 _CAT_COST    = "Cost Shifter"
 _CAT_CAPITAL = "Capital"
 
@@ -1624,6 +1627,7 @@ _BLP_INSTRUMENTS = [
     ("loo_npl_provision",       _CAT_LOO,  r"Leave-one-out mean non-performing-loan provision of rivals"),
     ("mean_loo_npl_provision",  _CAT_LOO,  r"Mean NPL provision across all leave-one-out observations"),
     ("n_rivals",                _CAT_LOO,  r"Number of rival institutions in the MCA--time cell"),
+    ("estban_rival_branches_lag", _CAT_ESTBAN, r"$\ln(1+\,$rival bank branches in the MCA$)$, lagged $t-1$ (ESTBAN)"),
     ("personnel_cost_ratio_lag", _CAT_COST, r"Personnel cost ratio, lagged $t-1$"),
     ("admin_cost_ratio_lag",     _CAT_COST, r"Administrative cost ratio, lagged $t-1$"),
     ("tax_cost_ratio_lag",       _CAT_COST, r"Tax cost ratio, lagged $t-1$"),

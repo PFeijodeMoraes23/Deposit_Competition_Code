@@ -139,6 +139,9 @@ const IV_BLP_LOO = ["loo_log_assets", "mean_loo_log_assets",
 const IV_COST    = ["personnel_cost_ratio_lag", "admin_cost_ratio_lag",
                     "tax_cost_ratio_lag"]
 const IV_CAPITAL = ["indice_basileia_lag"]
+# ESTBAN branch-competition IV (panel_10): log1p lagged RIVAL-branch count in the MCA — the only IV
+# with within-conglomerate (cross-municipality) variation; independent + relevant for demand deposits.
+const IV_ESTBAN  = ["estban_rival_branches_lag"]
 
 const _log_buf  = String[]
 const _log_lock = ReentrantLock()
@@ -780,7 +783,7 @@ function build_regressor_matrices(df::DataFrame)
     # shifters alone, and α̂ flipping positive.  Fail loudly instead.  (Missing VALUES are still fine;
     # they are coalesced to 0 below.  It is a missing COLUMN that is fatal.)  See plan §0B.
     _absent_x  = [c for c in X_COLS if !(c in names(df))]
-    _absent_iv = [c for c in vcat(IV_BLP_LOO, IV_COST, IV_CAPITAL) if !(c in names(df))]
+    _absent_iv = [c for c in vcat(IV_BLP_LOO, IV_ESTBAN, IV_COST, IV_CAPITAL) if !(c in names(df))]
     if !isempty(_absent_x) || !isempty(_absent_iv)
         msg = "Demand parquet is missing columns the estimator requires.\n"
         isempty(_absent_x)  || (msg *= "  product characteristics (X_COLS): " * join(_absent_x, ", ") * "\n")
@@ -794,7 +797,7 @@ function build_regressor_matrices(df::DataFrame)
     for (i, col) in enumerate(X_COLS)
         x_mat[:, i] .= coalesce.(df[!, col], 0.0)
     end
-    iv_cols = vcat(IV_BLP_LOO, IV_COST, IV_CAPITAL)
+    iv_cols = vcat(IV_BLP_LOO, IV_ESTBAN, IV_COST, IV_CAPITAL)
     Z_mat   = zeros(N, length(iv_cols))
     for (i, col) in enumerate(iv_cols)
         v = coalesce.(df[!, col], 0.0)

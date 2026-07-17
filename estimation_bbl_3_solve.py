@@ -1,16 +1,16 @@
 """
-estimation_1_cost_3_solve.py
+estimation_bbl_3_solve.py
 ============================
-CF2 — BBL Step 2, part 2: recover marginal-cost parameters (ω, ζ, γ)^κ for
+BBL Step 2, part 2: recover marginal-cost parameters (ω, ζ, γ)^κ for
 κ ∈ {B, D} by minimizing the sum of squared FOC-inequality violations, using the
-firm-level ψ basis produced by cost_2_fwd_sim.jl.
+firm-level ψ basis produced by estimation_bbl_2_fwd_sim.jl.
 
 Moment inequality (per firm j, deviation σ̃) — the unnumbered display above
 V_Main \\label{eq:17}:
 
     g_j(σ̂, σ̃) = (ψ_eq,j − ψ_dev,j,σ̃)' · [ 1 , −ω , −γ' , −(1+ζ) ]  ≥ 0
 
-with the ψ block layout written by cost_2_fwd_sim.jl:
+with the ψ block layout written by estimation_bbl_2_fwd_sim.jl:
     [ psi1 ,  psi2_omega ,  psi3_gamma_<z>… ,  psi4_zeta ]
 so, writing Δ = ψ_eq − ψ_dev,
 
@@ -22,7 +22,7 @@ Deviations should make the bank worse off, so g ≥ 0 in equilibrium; we minimiz
 
 separately for B- and D-type firms. χ (private cost shock) is dropped, as in the draft.
 
-Inputs (from cost_2_fwd_sim.jl):
+Inputs (from estimation_bbl_2_fwd_sim.jl):
     COST_FWD/psi_eq_{tag}.parquet   — firm, is_B, psi1, psi2_omega, psi3_gamma_*, psi4_zeta
     COST_FWD/psi_dev_{tag}.parquet  — shock, firm, is_B, <same blocks>
 where tag = E{estim}_spec_{spec}_{stage}{suffix}.
@@ -31,11 +31,11 @@ Outputs:
     COST_FWD/cost_params_{tag}.json — (ω, ζ, γ) per type with bootstrap SEs, plus
     optimizer-health diagnostics and (with --profile) 1-D identified-set profiles.
 
-⚠ Run only after cost_2_fwd_sim.jl has produced its parquets (which itself is gated
+⚠ Run only after estimation_bbl_2_fwd_sim.jl has produced its parquets (which itself is gated
 on the cluster data download and the author's go-ahead).
 
 Usage:
-  python estimation_1_cost_3_solve.py --estim 6 --spec 12 --stage extended \\
+  python estimation_bbl_3_solve.py --estim 6 --spec 12 --stage extended \\
       --bootstrap 200 --profile
 """
 try:
@@ -54,7 +54,7 @@ import pandas as pd
 from scipy.optimize import minimize
 
 _ROOT = Path(__file__).resolve().parents[2]
-# COST_FWD holds the ψ parquets (from cost_2_fwd_sim) + the cost_params json. Default is the local
+# COST_FWD holds the ψ parquets (from estimation_bbl_2_fwd_sim) + the cost_params json. Default is the local
 # processed-data layout; on the cluster the Julia writes them to data/COST_FWD, so set CF_COST_FWD
 # to that path (submit_cf.sh does this) — the script's own dir doesn't contain the BCB tree there.
 COST_FWD = Path(os.environ.get("CF_COST_FWD") or
@@ -161,7 +161,7 @@ def solve_kappa(blk):
 
     so the fitted ψ4 design coefficient (unscaled: b[1+nZ]·s1/s_ze) equals (1+ζ). We
     SUBTRACT 1 to report ζ itself, matching V_Main eq:17 / B-6 and the downstream Julia
-    theta_c in cf_0_psi_basis.jl, which reconstructs the loading as −(1+ζ) and also uses ζ
+    theta_c in foundation_psi_basis.jl, which reconstructs the loading as −(1+ζ) and also uses ζ
     as the r^f cost coefficient. (2026-07-16: this is a fix. Prior JSONs stored b[1+nZ]·… with
     NO −1, i.e. they reported 1+ζ mislabeled as ζ; the old solve_kappa docstring claiming
     "gross ψ1 ⇒ ψ4 loading IS ζ" had the algebra backwards. All cost_params_*.json written
@@ -300,11 +300,11 @@ def main():
     tag = f"E{args.estim}_spec_{args.spec}_{args.stage}{args.suffix}"
     eq_path = COST_FWD / f"psi_eq_{tag}.parquet"
     if not eq_path.exists():
-        raise FileNotFoundError(f"Missing {eq_path.name} — run cost_2_fwd_sim.jl first.")
+        raise FileNotFoundError(f"Missing {eq_path.name} — run estimation_bbl_2_fwd_sim.jl first.")
     # Deviation ψ may be a single file (n-shards=1) or several shard files; merge all.
     dev_files = sorted(COST_FWD.glob(f"psi_dev_{tag}*.parquet"))
     if not dev_files:
-        raise FileNotFoundError(f"No psi_dev_{tag}*.parquet — run cost_2_fwd_sim.jl (all shards) first.")
+        raise FileNotFoundError(f"No psi_dev_{tag}*.parquet — run estimation_bbl_2_fwd_sim.jl (all shards) first.")
 
     eq = pd.read_parquet(eq_path)
     dev = pd.concat([pd.read_parquet(f) for f in dev_files], ignore_index=True)

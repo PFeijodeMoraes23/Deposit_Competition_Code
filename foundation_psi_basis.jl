@@ -1,8 +1,8 @@
 """
-cf_0_psi_basis.jl
+foundation_psi_basis.jl
 =================
 Foundation 0c: accumulate the BBL value-function basis ψ along a simulated deposit
-path. The value function is LINEAR in the cost parameters (eqs 17-B / 17-D):
+path. The value function is LINEAR in the cost parameters (eqs 16-B / 16-D):
 
     V_jσt = ψ_jσt' · [ 1 , −ω , −γ' , −(1+ζ) ]
 
@@ -22,19 +22,19 @@ OPEN MODELING KNOBS (confirm before headline run — see counterfactuals_plan.md
     to r^f_t (i.e. (r^j − r^f)=0, treating the object as the deposit-FUNDING value).
     Supply a margin or column to include a positive asset spread.
   * Z_j cost shifters: the γ regressors. Default = the lagged cost/capital ratios
-    used by the policy-function step (estimation_1_cost_1_polfunc.py COST_SHIFTERS +
+    used by the policy-function step (estimation_bbl_1_polfunc.py COST_SHIFTERS +
     CAPITAL_WHOLESALE), resolved by name from the parquet/sidecar.
   * β (per quarter, default 0.9), horizon T (default 50), r^f path (default flat).
 
-This module is `include`d by cost_2_fwd_sim.jl; it is not a standalone entry point.
+This module is `include`d by estimation_bbl_2_fwd_sim.jl; it is not a standalone entry point.
 """
 
-include(joinpath(@__DIR__, "cf_0_deposit_sim.jl"))
+include(joinpath(@__DIR__, "foundation_deposit_sim.jl"))
 
 using DataFrames, LinearAlgebra, Statistics
 import JSON3
 
-# Cost-shifter (Z) columns — mirror estimation_1_cost_1_polfunc.py so γ is comparable.
+# Cost-shifter (Z) columns — mirror estimation_bbl_1_polfunc.py so γ is comparable.
 const Z_COST_COLS = ["personnel_cost_ratio_lag", "admin_cost_ratio_lag",
                      "tax_cost_ratio_lag", "indice_basileia_lag",
                      "wholesale_ratio_lag", "lci_lca_ratio_lag"]
@@ -64,12 +64,12 @@ end
 """
     load_cost_params(path, znames) -> Dict("B"=>(omega,zeta,gamma::Vector), "D"=>(…))
 
-Read `COST_FWD/cost_params_{tag}.json` (estimation_1_cost_3_solve.py) and align each type's
+Read `COST_FWD/cost_params_{tag}.json` (estimation_bbl_3_solve.py) and align each type's
 γ to the ψ-basis Z-column order `znames`.
 """
 function load_cost_params(path::String, znames::Vector{String})
-    isfile(path) || error("Missing cost params $path — run cost_2_fwd_sim.jl → " *
-                          "estimation_1_cost_3_solve.py first (or pass --cost-json).")
+    isfile(path) || error("Missing cost params $path — run estimation_bbl_2_fwd_sim.jl → " *
+                          "estimation_bbl_3_solve.py first (or pass --cost-json).")
     j = JSON3.read(read(path, String))
     out = Dict{String,Any}()
     for κ in ("B", "D")
@@ -149,7 +149,7 @@ function accumulate_psi(ctx::CFDemandCtx, st::DepositSimState,
         # `asset_return_q` is supplied as the NET margin (r^j − r^f), so add r^f back here.
         # The single −r^f (funding cost) is then delivered by the −(1+ζ)·ψ4 term in θ_c.
         # Using the NET rj here subtracted r^f TWICE (V/Dep = ρ − c − r^f), which made the
-        # deposit franchise value negative and forced ω to its ≥0 bound in the eq-18 solve.
+        # deposit franchise value negative and forced ω to its ≥0 bound in the eq:17 solve.
         psi1 .+= bt .* dep_t .* (rj .+ rf_t .+ markdown_q)
         psi2 .+= bt .* dep_t
         for z in 1:n_Z

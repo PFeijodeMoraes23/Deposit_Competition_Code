@@ -11,7 +11,7 @@ model. This gives a first, honest magnitude for the headline object; the
 model-based cf_1_franchise_value.jl reproduces it (and enables spread counterfactuals)
 once results land.
 
-Decomposition (mirrors cf_0_deposit_sim so the two are directly comparable):
+Decomposition (mirrors foundation_deposit_sim so the two are directly comparable):
   accrual         g   = 1 + r^dep_q = 1 + (r^f_q − ρ_q)
   φ̂ path          Dep_t = Dep^Act + φ̂·g·Dep_{t−1},     Dep_0 = observed stock
   φ=0 path        Dep_t = Dep^Act/(1−φ̂)  (t≥1),         Dep_0 = observed stock
