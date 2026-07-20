@@ -94,10 +94,17 @@ echo " RC-BLP E${RC_ROUTINE} | engine=${RC_ENGINE} | stage=${STAGE_ARG} — $(da
 echo " spec=12 | R=${R} | tol_inner=${TOL_INNER} | max_inner=${MAX_INNER} | threads=${SLURM_CPUS_PER_TASK}"
 echo "======================================"
 
+# BLP_SE_ONLY=1 → recompute SEs from each stage's existing checkpoint instead of re-optimising.
+# Only valid when the change is confined to the SE routine (it runs after optimisation, so the point
+# estimates cannot move). Stages are INDEPENDENT in this mode — no warm-start chain is needed.
+SE_ONLY_ARG=()
+[ "${BLP_SE_ONLY:-0}" = "1" ] && SE_ONLY_ARG=(--se-only)
+
 julia --project="${PROJECT_DIR}" ${JULIA_SYS[@]+"${JULIA_SYS[@]}"} --threads=${SLURM_CPUS_PER_TASK} \
     "${PROJECT_DIR}/blp_2_rc.jl" \
     --estim "${RC_ROUTINE}" --stage "${STAGE_ARG}" \
     --hpc --R "${R}" --seed "${SEED}" \
-    --tol-inner "${TOL_INNER}" --max-inner "${MAX_INNER}" --tol-outer "${TOL_OUTER}"
+    --tol-inner "${TOL_INNER}" --max-inner "${MAX_INNER}" --tol-outer "${TOL_OUTER}" \
+    ${SE_ONLY_ARG[@]+"${SE_ONLY_ARG[@]}"}
 
 echo "RC-BLP E${RC_ROUTINE} ${RC_ENGINE} ${RC_STAGE} complete: $(date)"

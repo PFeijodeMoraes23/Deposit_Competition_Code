@@ -1160,8 +1160,13 @@ function run_blp_estimation(estim::Int, spec_id::Int, args,
 
     # ── Warm-start from previous stage checkpoint ────────────────────────
     _, _, out_dir = get_paths(args["hpc"])
+    # Warm-start chain. NOTE `ext1` now warm-starts from `rc4`, NOT `full`: since σ(ln assets) was
+    # dropped from θ₂, `full` has the SAME θ₂ structure as `rc4` and reproduces it exactly (verified
+    # in job 18689035 — identical Q, α, SE and every θ₂ across all of E5-E8), so it is a redundant
+    # rung and is no longer part of the default sequence. Its entry is kept so `--stage full` still
+    # works if requested explicitly.
     prev_stages = Dict("rc2" => "sigma", "rc3" => "rc2", "rc4" => "rc3",
-                       "full" => "rc4", "ext1" => "full", "ext2" => "ext1",
+                       "full" => "rc4", "ext1" => "rc4", "ext2" => "ext1",
                        "extended" => "ext2")
     theta2_0 = nothing
     if args["stage"] in keys(prev_stages)
@@ -1342,6 +1347,11 @@ function parse_args_est()
         "--hpc";     action=:store_true
         "--local-dir"; arg_type=String; default=nothing; dest_name="local_dir"
         "--dry-run"; action=:store_true; dest_name="dry_run"
+        # Recompute SEs from this stage's existing checkpoint instead of re-optimising. Valid ONLY
+        # when the change is confined to the SE routine (se_common.jl / BLP_SE_METHOD / WCB knobs),
+        # which runs after optimisation and cannot move the point estimates. Requires
+        # blp_checkpoint_E{estim}_spec_{spec}_{stage}.jls from a prior normal run.
+        "--se-only"; action=:store_true; dest_name="se_only"
     end
     return parse_args(s)
 end
@@ -1364,7 +1374,7 @@ function main()
         draws_dir, args["R"], args["seed"])
 
     stages_to_run = args["stage"] == "sequence" ?
-                    ["sigma", "rc2", "rc3", "rc4", "full", "ext1", "ext2", "extended"] : [args["stage"]]
+                    ["sigma", "rc2", "rc3", "rc4", "ext1", "ext2", "extended"] : [args["stage"]]
 
     for current_stage in stages_to_run
         args["stage"] = current_stage

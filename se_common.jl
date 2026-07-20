@@ -73,34 +73,58 @@ Moment g = Z'ξ/N; Jacobian (×N, cancels) D = [−Z'X, Z'Ddelta]; cluster meat 
 m_g = Σ_{i∈g} Z_i ξ_i. Sandwich V = (D'WD)⁻¹ D'W S W D (D'WD)⁻¹ · corr; WCB uses IF_g = −(D'WD)⁻¹ D'W m_g.
 Returns (se, pval) over all K params (θ₁ block first).
 
-BOUNDARY PROFILING (`n_sigma`, `bound_tol`): the first `n_sigma` entries of θ₂ are the random-
-coefficient σ's, bounded σ≥0. A σ pinned at the bound (|σ̂|<`bound_tol`) has ∂δ/∂σ≈0 — shares are
-even in σ, so the score vanishes at σ=0 — hence its `Ddelta` column ≈0. Keeping such a column makes
-`DtWD` near-singular, and `inv()` then inflates EVERY parameter's SE (θ₁ included), not just the σ's
-own. We therefore PROFILE those σ's out (drop their columns = condition on σ=0, the boundary-correct
-treatment, Andrews 1999), compute the covariance on the identified sub-vector, and return `NaN` SE
-for the profiled σ's — exactly the σ's the tables flag with a dagger. This is the fix for the
-"SEs blow up when a second on-bound σ enters" pathology (4→5 RC)."""
+DEGENERATE-DIRECTION PROFILING (`n_sigma`, `bound_tol`, `jac_tol`): a θ₂ coordinate whose
+moment-Jacobian column `Z'∂δ/∂θ₂ⱼ` is ≈0 makes `DtWD` near-singular, and `inv()` then inflates EVERY
+parameter's SE (θ₁ and α included), not just that coordinate's own. Two distinct causes:
+  (a) ON-BOUND σ — the first `n_sigma` θ₂ entries are the σ's, bounded σ≥0. A σ pinned at the bound
+      (|σ̂|<`bound_tol`) has ∂δ/∂σ≈0 because shares are even in σ, so the score vanishes at σ=0.
+  (b) FLAT direction (any σ OR π) — relative Jacobian column norm < `jac_tol`. The objective does
+      not respond to the parameter at all; the ladder signature is Q frozen across consecutive
+      stages while the newly freed π optimizes to ~0.
+Both are PROFILED OUT (drop the column = condition on that coordinate, the boundary-correct
+treatment for (a), Andrews 1999); the covariance is computed on the identified sub-vector and `NaN`
+SE returned for the profiled coordinates — exactly the ones the tables flag with a dagger. (a) fixes
+the "SEs blow up when a second on-bound σ enters" pathology (4→5 RC); (b) fixes the same blow-up
+driven by unidentified π's in the ext1/ext2 stages. NOTE: this addresses NUMERICAL degeneracy only —
+a parameter with a genuinely non-zero but small Jacobian is weakly (not un-) identified, and its
+large SE is real and must be reported, not profiled away."""
 function gmm_cluster_ses(method::AbstractString, theta::Vector{Float64},
                          Z::Matrix{Float64}, X::Matrix{Float64}, Ddelta::Matrix{Float64},
                          xi::Vector{Float64}, W::Matrix{Float64}, cl::Vector{String};
                          B::Int=wcb_reps(), scheme::AbstractString=wcb_scheme(), seed::Int=0,
-                         n_sigma::Int=0, bound_tol::Float64=1e-3)
+                         n_sigma::Int=0, bound_tol::Float64=1e-3, jac_tol::Float64=1e-8)
     N, L = size(Z)
     K1   = size(X, 2); K2 = size(Ddelta, 2); K = K1 + K2
 
-    # Profile out on-bound σ's (degenerate ∂δ/∂σ≈0 columns) before forming the Jacobian.
-    drop = Int[]                                       # full-param indices to profile out
-    for j in 1:min(n_sigma, K2)
-        abs(theta[K1 + j]) < bound_tol && push!(drop, K1 + j)
+    # Profile out degenerate θ₂ directions before forming the Jacobian. Two ways a direction dies:
+    #  (a) ON-BOUND σ (|σ̂| < bound_tol): shares are even in σ, so ∂δ/∂σ ≈ 0 at σ=0; conditioning on
+    #      σ=0 is the boundary-correct treatment (Andrews 1999).
+    #  (b) FLAT direction (any σ OR π): its moment-Jacobian column Z'∂δ/∂θ₂ⱼ is numerically
+    #      negligible relative to the largest column of D — the objective simply does not respond
+    #      to it. Signature in the stage ladder: Q frozen across stages while the added π optimizes
+    #      to ~0 (e.g. E5-E8 rc4→ext1→ext2 with π(fgc×65+) ≡ 0.0000).
+    # Either way the column is ~0, DtWD is near-singular, and inv() inflates EVERY parameter's SE —
+    # θ₁'s (incl. α) included — not just the offending parameter's own.
+    ZtX  = Z' * X                                                 # (L × K1)
+    ZtDd = K2 > 0 ? Z' * Ddelta : Matrix{Float64}(undef, L, 0)    # (L × K2)
+    _cn(A, j) = sqrt(sum(abs2, view(A, :, j)))                    # column norm (no LinearAlgebra dep)
+    scale = 0.0
+    for k in 1:K1; scale = max(scale, _cn(ZtX, k)); end
+    for j in 1:K2; scale = max(scale, _cn(ZtDd, j)); end
+    drop = Int[]; why = String[]                       # full-param indices to profile out
+    for j in 1:K2
+        if j <= n_sigma && abs(theta[K1 + j]) < bound_tol
+            push!(drop, K1 + j); push!(why, "θ₂[$j] σ on-bound")
+        elseif scale > 0 && _cn(ZtDd, j) / scale < jac_tol
+            push!(drop, K1 + j); push!(why, "θ₂[$j] flat (rel. Jacobian norm < $jac_tol)")
+        end
     end
-    isempty(drop) || @info "  [se] profiling out $(length(drop)) on-bound σ (param idx $drop) from the covariance"
+    isempty(drop) || @info "  [se] profiling out $(length(drop)) degenerate θ₂ direction(s): $(join(why, "; "))"
     θ2keep  = [j for j in 1:K2 if !((K1 + j) in drop)]           # kept θ₂ columns (into Ddelta)
     keepidx = vcat(collect(1:K1), [K1 + j for j in θ2keep])      # kept full-param indices, in order
-    Dd_k    = K2 > 0 ? Ddelta[:, θ2keep] : Ddelta
     Kk      = length(keepidx)
 
-    D    = hcat(-Z' * X, Z' * Dd_k)                    # (L × Kk), degenerate cols removed
+    D    = hcat(-ZtX, K2 > 0 ? ZtDd[:, θ2keep] : ZtDd)  # (L × Kk), degenerate cols removed
     uc   = unique(cl); G = length(uc)
     Mcl  = zeros(G, L)                                 # cluster meats m_g (rows)
     for (gi, c) in enumerate(uc)

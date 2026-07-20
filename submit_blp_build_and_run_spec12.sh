@@ -1,14 +1,17 @@
 #!/bin/bash
-# ONE command: rebuild the sysimage AND regenerate the BLP draws, then run the FULL RC-BLP sweep
-# (E5-8, spec 12, IFT) once BOTH are ready. The estimation jobs wait on both builds via SLURM
-# --dependency=afterok, so nothing runs against a stale sysimage or stale draws. Mandatory after the
-# ESTBAN-instrument / SE-fix / σ-drop source edits (blp_1_estimation.jl, blp_gpu_engine.jl,
-# se_common.jl are baked into blp_sysimage.so) and after the demographics/panel changed on the cluster
-# (the draws — ν + demo — are rebuilt from the new files by blp_1_draws.jl).
+# ONE command: run the FULL RC-BLP sweep (E5-8, spec 12, IFT), optionally preceded by a sysimage
+# rebuild and/or a draws regeneration. BOTH build steps are OPT-IN (--sysimage / --draws) because
+# the common case — editing our own Julia source — needs NEITHER:
+#   * the sysimage bakes only third-party PACKAGES, and our .jl files are include()d at runtime
+#     (blp_1_estimation.jl:37), so a source edit takes effect on the next run with no rebuild;
+#   * the draws (ν + demo) depend on the demographics/panel and R, not on the instruments or source.
+# Rebuild the sysimage when Manifest.toml / package versions change; regenerate the draws when the
+# demographics/panel or R change. Whatever IS requested runs first, with the estimation jobs waiting
+# via SLURM --dependency=afterok so nothing runs against a stale input.
 #
-#   sysimage build ┐
-#                  ├─afterok BOTH→ per-routine grouped chain:  HEAD(sigma..ext1) → ext2 → extended
-#   draws build    ┘   (the two builds run in parallel)
+#   [sysimage build] ┐
+#                    ├─afterok→ per-routine grouped chain:  HEAD(sigma..ext1) → ext2 → extended
+#   [draws build]    ┘   (requested builds run in parallel; with neither, the chains start at once)
 #
 # Each routine is an INDEPENDENT afterok chain (grouped like submit_blp_rc_grouped.sh: the cheap head
 # stages share one process; the deep tail stages are their own resilient jobs). A final afterany CPU
@@ -19,20 +22,52 @@
 # in data/output, plus the new demographics/panel inputs blp_1_draws.jl reads. The engine hard-errors
 # if the estban instrument column is missing.
 #
-# Usage:  bash submit_blp_build_and_run_spec12.sh
-#         REBUILD_SYSIMAGE=0 bash submit_blp_build_and_run_spec12.sh   # skip build (already current)
-#         BUILD_DRAWS=0 bash submit_blp_build_and_run_spec12.sh        # skip draws (already regenerated)
-#         ROUTINES="5 6" bash submit_blp_build_and_run_spec12.sh
-#         ENGINES="ift numerical" bash submit_blp_build_and_run_spec12.sh   # also the numerical xcheck
+# Usage:  bash submit_blp_build_and_run_spec12.sh                  # just run the BLP (the usual case)
+#         bash submit_blp_build_and_run_spec12.sh --se-only        # SE-only: recompute SEs from the
+#                 existing checkpoints, no re-optimisation (minutes, not hours). Use when ONLY the SE
+#                 routine changed — it runs after optimisation so point estimates cannot move.
+#         bash submit_blp_build_and_run_spec12.sh --sysimage       # + rebuild the sysimage first
+#         bash submit_blp_build_and_run_spec12.sh --draws          # + regenerate the draws first
+#         bash submit_blp_build_and_run_spec12.sh --sysimage --draws
+#         bash submit_blp_build_and_run_spec12.sh --routines "5 6"
+#         bash submit_blp_build_and_run_spec12.sh --engines "ift numerical"   # + numerical xcheck
+#         (env vars REBUILD_SYSIMAGE=1 / BUILD_DRAWS=1 still work; flags win)
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 mkdir -p "${HERE}/logs"
 
 ROUTINES="${ROUTINES:-5 6 7 8}"
 ENGINES="${ENGINES:-ift}"                       # IFT only by default (no numerical cross-check)
-REBUILD_SYSIMAGE="${REBUILD_SYSIMAGE:-1}"
-BUILD_DRAWS="${BUILD_DRAWS:-1}"                  # regenerate the BLP draws (ν + demo) first — needed
-                                                # when the demographics/panel changed on the cluster
+
+# Both build steps are OPT-IN, because the COMMON case — editing our own .jl source — needs NEITHER:
+#   --sysimage  rebuild blp_sysimage.so. Needed ONLY when Manifest.toml / package versions change.
+#               The sysimage bakes ONLY third-party packages (CUDA, Parquet2, DataFrames, Optim,
+#               LBFGSB, QuasiMonteCarlo, Distributions, JSON3, ArgParse, SparseArrays) — NOT our
+#               source. se_common.jl / blp_1_estimation.jl / blp_gpu_engine.jl are include()d at
+#               RUNTIME (blp_1_estimation.jl:37), so source edits take effect with no rebuild.
+#   --draws     regenerate the BLP draws (ν + demo). Needed ONLY when the demographics/panel or R
+#               change — the draws are independent of the instruments and of our source.
+REBUILD_SYSIMAGE="${REBUILD_SYSIMAGE:-0}"
+BUILD_DRAWS="${BUILD_DRAWS:-0}"
+# --se-only: recompute SEs from the existing per-stage checkpoints instead of re-optimising. Valid
+# ONLY when the change is confined to the SE routine (se_common.jl / BLP_SE_METHOD / WCB knobs) —
+# it runs after optimisation, so the point estimates provably cannot move. Minutes, not hours.
+SE_ONLY="${SE_ONLY:-0}"
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --sysimage|--rebuild-sysimage) REBUILD_SYSIMAGE=1 ;;
+        --draws|--redraw)              BUILD_DRAWS=1 ;;
+        --no-sysimage)                 REBUILD_SYSIMAGE=0 ;;
+        --no-draws)                    BUILD_DRAWS=0 ;;
+        --se-only)                     SE_ONLY=1 ;;
+        --routines) ROUTINES="$2"; shift ;;
+        --engines)  ENGINES="$2";  shift ;;
+        -h|--help)  sed -n '2,36p' "${BASH_SOURCE[0]}"; exit 0 ;;
+        *) echo "unknown option: $1 (see --help)" >&2; exit 2 ;;
+    esac
+    shift
+done
+export BLP_SE_ONLY="${SE_ONLY}"                 # read by submit_blp_rc_stage.sh (→ --se-only)
 # SE knobs (read by the engine as BLP_SE_METHOD) — same defaults as the other submitters.
 SE_METHOD="${SE_METHOD:-wcb}"; WCB_REPS="${WCB_REPS:-999}"; WCB_SCHEME="${WCB_SCHEME:-webb}"
 export BLP_SE_METHOD="${SE_METHOD}" BLP_WCB_REPS="${WCB_REPS}" BLP_WCB_SCHEME="${WCB_SCHEME}"
@@ -45,7 +80,27 @@ DRAWS="${HERE}/submit_blp_1_draws.sh"          # blp_1_draws.jl --R 2000 --spec 
 # gpu_h200 QOS caps wall-per-job at 2 days; each grouped block fits.
 WALL_HEAD="${WALL_HEAD:-2-00:00:00}"
 WALL_DEEP="${WALL_DEEP:-2-00:00:00}"
-HEAD_STAGES="sigma+rc2+rc3+rc4+full+ext1"       # '+'-joined; submit_blp_rc_stage.sh → comma list
+# '+'-joined; submit_blp_rc_stage.sh turns it into a comma list. `full` is NOT in the ladder: with
+# σ(ln assets) dropped from θ₂ it has the same θ₂ structure as rc4 and reproduces it exactly, so it
+# was a redundant rung (ext1 now warm-starts from rc4 — see prev_stages in blp_1_estimation.jl).
+HEAD_STAGES="sigma+rc2+rc3+rc4+ext1"
+# SE-only runs need no warm-start chain (each stage reloads its own checkpoint), so all stages go
+# in ONE short job per routine instead of the HEAD→ext2→extended chain.
+ALL_STAGES="sigma+rc2+rc3+rc4+ext1+ext2+extended"
+WALL_SE="${WALL_SE:-04:00:00}"
+
+# Non-fatal staleness guard: since the sysimage is now opt-in, catch the one case where skipping it
+# is wrong (the package set actually changed) instead of silently running against a stale image.
+SYSIMG="${HERE}/blp_sysimage.so"
+if [ "${REBUILD_SYSIMAGE}" = "0" ]; then
+    if [ ! -f "${SYSIMG}" ]; then
+        echo "[!] no blp_sysimage.so — jobs still run, but every job re-precompiles CUDA (slow start). Use --sysimage."
+    elif [ -f "${HERE}/Manifest.toml" ] && [ "${HERE}/Manifest.toml" -nt "${SYSIMG}" ]; then
+        echo "[!] Manifest.toml is NEWER than blp_sysimage.so — package set may have changed; consider --sysimage."
+    else
+        echo "── sysimage: reusing $(basename "${SYSIMG}") (source edits do NOT need a rebuild)"
+    fi
+fi
 
 # ── 1. Build prerequisites (run in PARALLEL; every HEAD stage waits on afterok BOTH) ──
 #   (a) rebuild the sysimage so the ESTBAN/SE/σ source edits are compiled into blp_sysimage.so;
@@ -100,6 +155,13 @@ RUN_MARKER="${DATA_OUT}/.blp_run_marker.$$"
 mkdir -p "${DATA_OUT}"; touch "${RUN_MARKER}"
 for k in ${ROUTINES}; do
     ift_ext_jid=""
+    if [ "${SE_ONLY}" = "1" ]; then
+        # No homotopy chain: every stage reloads its own checkpoint, so one job does them all.
+        jid=$(submit_one "${k}" "ift" "se" "${ALL_STAGES}" "${WALL_SE}" "seonly" "${sys_dep}")
+        echo "    E${k}: SE-only — all stages in ONE job: ${jid}"
+        njobs=$((njobs + 1)); term_jids="${term_jids} ${jid}"
+        continue
+    fi
     if [ "${do_ift}" = "1" ]; then
         echo "── grouped chain: E${k} / ift ──"
         ift_ext_jid=$(submit_grouped_chain "${k}" "ift" "ift")

@@ -303,6 +303,13 @@ def main():
             "G_star": rj.get("G_star"),
             "theta1": rj.get("theta1"),
             "theta1_se": rj.get("theta1_se"),
+            "theta1_pval": rj.get("theta1_pval"),
+            # θ₂ SEs exist since the on-bound-σ profiling fix in se_common.jl (gmm_cluster_ses):
+            # on-bound σ's are profiled out of the SE computation and come back as 0/NaN, rendered
+            # as a dagger in the summary. se_method records the scheme (wcb = wild cluster bootstrap).
+            "theta2_se": rj.get("theta2_se"),
+            "theta2_pval": rj.get("theta2_pval"),
+            "se_method": rj.get("se_method"),
             "param_names_theta1": rj.get("param_names_theta1"),
             "sigma_indices": rj.get("sigma_indices"),
             "pi_interactions": rj.get("pi_interactions"),
@@ -352,9 +359,13 @@ def write_summary_md(sub, index, stage, het=None):
         pinned = [f"θ₂[{i+1}]={v:.2f}" for i, v in enumerate(t2) if abs(abs(v) - BOUND) < 1e-2]
         nb = f"{m['n_obs']:,}" if m.get("n_obs") else "—"
         g = f"{m['G_star']:.2f}" if m.get("G_star") is not None else "—"
-        L.append(f"| E{m['routine']} | {m['label']} | {q:.4f} | "
+        # Q_num_crosscheck is absent whenever the run was IFT-only (ENGINES=ift, the default since
+        # the numerical cross-check was turned off), so both Q cells need the same "—" fallback.
+        qs = f"{q:.4f}" if q is not None else "—"
+        qns = f"{qn:.4f}" if qn is not None else "—"
+        L.append(f"| E{m['routine']} | {m['label']} | {qs} | "
                  f"{'yes' if m.get('converged') else 'no'} | {m.get('n_theta2')} | {nb} | {g} | "
-                 f"{qn:.4f} | {dq} | {', '.join(pinned) if pinned else 'none'} |")
+                 f"{qns} | {dq} | {', '.join(pinned) if pinned else 'none'} |")
     L += ["", "## Increasing-complexity Q-path (1→8 random coefficients)", ""]
     for m in index:
         path = " → ".join(f"{p['Q']:.4f}" for p in m.get("stage_progression", []) if p.get("Q") is not None)
@@ -379,12 +390,28 @@ def write_summary_md(sub, index, stage, het=None):
             L.append("| " + " | ".join(cells) + " |")
     labels = _theta2_labels(ref.get("sigma_indices"), ref.get("pi_interactions"))
     if labels:
-        L += ["", "**Random coefficients (θ₂)** — point estimates (θ₂ SEs not computed):", ""]
+        se_meth = next((m.get("se_method") for m in index if m.get("se_method")), None)
+        has_t2se = any(m.get("theta2_se") for m in index)
+        head = (f"point estimate (SE), SEs by {se_meth or 'cluster'}. A dagger (†) marks a σ "
+                "**profiled out** of the SE computation because it sits on the σ ≥ 0 boundary, where "
+                "∂δ/∂σ ≈ 0 leaves it locally unidentified and would otherwise inflate every SE"
+                if has_t2se else "point estimates (θ₂ SEs not computed)")
+        L += ["", f"**Random coefficients (θ₂)** — {head}:", ""]
         L.append("| Parameter | " + " | ".join(f"E{m['routine']}" for m in index) + " |")
         L.append("|:--" + "|--:" * len(index) + "|")
         for k, lbl in enumerate(labels):
-            cells = [lbl] + [f"{(m.get('theta2_sigma_pi') or [])[k]:.4f}"
-                             if k < len(m.get('theta2_sigma_pi') or []) else "—" for m in index]
+            cells = [lbl]
+            for m in index:
+                t2, se2 = (m.get("theta2_sigma_pi") or []), (m.get("theta2_se") or [])
+                if k >= len(t2):
+                    cells.append("—")
+                    continue
+                cell = f"{t2[k]:.4f}"
+                if k < len(se2):
+                    v = se2[k]
+                    bad = v is None or (isinstance(v, float) and math.isnan(v)) or v == 0
+                    cell += " †" if bad else f" ({v:.4f})"
+                cells.append(cell)
             L.append("| " + " | ".join(cells) + " |")
 
     if het:
@@ -437,8 +464,10 @@ def write_summary_md(sub, index, stage, het=None):
     if wiv:
         L += ["", "## Weak-instruments diagnostics", "",
               "First stage of the demand model: the deposit **spread** (the only endogenous "
-              "regressor) on the 15 excluded instruments (leave-one-out rival characteristics, "
-              "`n_rivals`, cost ratios, capital ratio), partialling out the product controls and "
+              "regressor) on the 16 excluded instruments (leave-one-out rival characteristics, "
+              "`n_rivals`, cost ratios, capital ratio, plus the ESTBAN branch-competition "
+              "instrument `estban_rival_branches_lag` — the one instrument with within-conglomerate "
+              "variation), partialling out the product controls and "
               "clustering by conglomerate. The engine instruments spread for deposit **types 4 and "
               "5** (`project_spreads`), so the battery is reported on those subsamples (and pooled). "
               "`KP-F` = cluster-robust first-stage / Kleibergen-Paap rk Wald F [@kleibergenpaap2006]; "

@@ -2393,9 +2393,37 @@ function run_blp_estimation_ift_gpu(estim::Int, spec_id::Int, args,
     # GPU inner contraction is solved once per unique θ₂.
     f_obj(t2)     = (ift_compute_gpu!(t2); cache_Q[])
     g_obj!(G, t2) = (ift_compute_gpu!(t2); copyto!(G, cache_grad); G)
-    theta2_star, Q_min, n_outer, conv_outer = solve_box_lbfgsb(
-        f_obj, g_obj!, theta2_0, lo, hi;
-        tol_outer = args["tol_outer"], maxiter = 500)
+    # ── SE-ONLY: skip the outer optimisation, recompute SEs from this stage's checkpoint ──────
+    # The SE routine runs strictly AFTER optimisation, so a change confined to it (e.g. the
+    # degenerate-direction profiling in se_common.jl) provably cannot move the point estimates.
+    # We reload θ₂* (and δ*) and do ONE objective evaluation instead of a full L-BFGS-B solve —
+    # a ~1.5 h/routine stage becomes a couple of minutes. δ* warm-starts the inner contraction at
+    # its own fixed point, so that single evaluation converges immediately and leaves every GPU
+    # buffer in exactly the state the SE block below expects.
+    if get(args, "se_only", false)
+        chk = joinpath(out_dir,
+            "blp_checkpoint_E$(estim)_spec_$(spec_id)_$(args["stage"])$(output_suffix()).jls")
+        isfile(chk) || error("--se-only: checkpoint not found: $chk (run the stage normally first)")
+        ck = deserialize(chk)
+        theta2_star = collect(Float64, ck["theta2_star"])
+        length(theta2_star) == n_params || error("--se-only: checkpoint θ₂ has " *
+            "$(length(theta2_star)) params but stage '$(args["stage"])' expects $n_params — the θ₂ " *
+            "structure changed since that checkpoint; re-run this stage normally.")
+        d0 = load_delta_bin(replace(chk, ".jls" => ".bin"))
+        d0 === nothing && haskey(ck, "delta_star") && (d0 = collect(Float64, ck["delta_star"]))
+        if d0 !== nothing && length(d0) == length(delta_work)
+            copyto!(delta_work, d0)
+        else
+            println("  [SE-ONLY] no usable δ* — contracting from the existing warm start.")
+        end
+        println("  [SE-ONLY] θ₂* loaded from $(basename(chk)); outer optimisation SKIPPED.")
+        ift_compute_gpu!(theta2_star)      # one evaluation: converges δ + fills the GPU buffers
+        Q_min = cache_Q[]; n_outer = 0; conv_outer = true
+    else
+        theta2_star, Q_min, n_outer, conv_outer = solve_box_lbfgsb(
+            f_obj, g_obj!, theta2_0, lo, hi;
+            tol_outer = args["tol_outer"], maxiter = 500)
+    end
 
     println("  Optimizer converged: $(conv_outer)")
     println("  Q(θ₂*) = $(round(Q_min, sigdigits=6))")
