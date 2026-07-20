@@ -37,7 +37,7 @@
 #     DO_POLFUNC=0          if 1, run BBL Step 1 on the cluster as a pre-step (afterok warmup) and
 #                           chain fwd_sim after it; default 0 → the fitted CSV is a preflighted input.
 #     POLICY_CSV=<path>     BBL Step-1 fitted policy for σ̂ (default:
-#                           data/COST_POLFUNC/polfunc_fitted_spec_12.csv). Built LOCALLY by
+#                           data/COST_POLFUNC/polfunc_fitted.csv). Built LOCALLY by
 #                           estimation_bbl_1_polfunc.py and uploaded. REQUIRED (deviations must be
 #                           formed around the fitted policy, not observed spreads — else frac_bind ≈ 0.5
 #                           is mechanical and (ω,ζ,γ) are uninformative; V_Main line 551, §0A/§9).
@@ -46,7 +46,7 @@
 #
 # TWO inputs must be built LOCALLY and uploaded (both need data/tools the compute nodes lack):
 #   data/COST_FWD/forward_rf_qoq.csv              (cf_forward_rf.py — needs internet)
-#   data/COST_POLFUNC/polfunc_fitted_spec_12.csv  (estimation_bbl_1_polfunc.py — needs market_panel)
+#   data/COST_POLFUNC/polfunc_fitted.csv  (estimation_bbl_1_polfunc.py — needs market_panel)
 # everything else is either already staged from the BLP run or auto-built here from the zip.
 set -euo pipefail
 
@@ -105,7 +105,7 @@ fi
 # ── Step 2: preflight — every required input must be present ──────────────────────
 RF_CURVE="${DATA_ROOT}/COST_FWD/forward_rf_qoq.csv"
 DRAWS="${DATA_ROOT}/output/BLP_DRAWS/halton_nu_R${R}_seed${SEED}.jls"
-POLICY_CSV="${POLICY_CSV:-${DATA_ROOT}/COST_POLFUNC/polfunc_fitted_spec_12.csv}"
+POLICY_CSV="${POLICY_CSV:-${DATA_ROOT}/COST_POLFUNC/polfunc_fitted.csv}"
 miss=0
 [[ -f "${DRAWS}" ]]    || { echo "MISSING R=${R} draws:  ${DRAWS}"; miss=1; }
 [[ -f "${RF_CURVE}" ]] || { echo "MISSING forward curve: ${RF_CURVE}"; \
@@ -114,7 +114,7 @@ miss=0
 # observed spreads make frac_bind ≈ 0.5 mechanical and the recovered costs uninformative.
 if [[ "${DO_POLFUNC}" != "1" ]]; then
     [[ -f "${POLICY_CSV}" ]] || { echo "MISSING fitted policy: ${POLICY_CSV}"; \
-        echo "   → build locally then upload: python estimation_bbl_1_polfunc.py --spec 12"; \
+        echo "   → build locally then upload: python estimation_bbl_1_polfunc.py"; \
         echo "     (or set DO_POLFUNC=1 to run BBL Step 1 on the cluster as a pre-step)"; miss=1; }
 fi
 for k in ${ROUTINES}; do

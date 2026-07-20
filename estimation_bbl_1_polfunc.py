@@ -18,21 +18,29 @@ specifications:
     Option B — Use population-weighted national averages of MCA demographics.
     Option C — Pool B and D firms under a single coefficient vector
                (D-firms receive national demographics as their regressors).
+Option C is still estimated and kept in the summary/pickle as a robustness record, but it is NOT
+shown in the tables: Step 2 consumes only B and D-Option-B, and pooling the few-but-huge B clusters
+with the many-small D ones collapses the effective cluster count (G* ~ 9) that the WCB relies on.
 
 Pipeline position
 -----------------
   estimation_1_sleep  →  estimation_1_demand  →  **estimation_bbl_1_polfunc**
                           →  estimation_bbl_2_fwd_sim  →  estimation_bbl_3_solve
 
+NO SPEC LABEL.  The policy function never touches a sleepiness specification — it regresses the
+observed spread (or deposit rate) on the pricing state — so it is SPEC-INVARIANT and its outputs
+carry no `_spec_{id}` suffix. An earlier version replicated identical files under every spec label
+for pipeline cosmetics; that was removed (2026-07-20) as misleading.
+
+INFERENCE.  Standard errors are a score/multiplier wild cluster bootstrap at the CONGLOMERATE
+level (utils.sleep_links.linear_wild_cluster_bootstrap) — the same scheme and clustering unit as
+the sleepiness and BLP stages, so every SE in the paper is produced one way. G and G* are reported
+as descriptive cluster-paucity statistics, not as the inference. (Previously: CRVE + t(G*).)
+
 Usage
 -----
-  python estimation_bbl_1_polfunc.py
-  python estimation_bbl_1_polfunc.py --spec all
-
-CLI Flags
----------
-  --spec {1..12|all}   Sleepiness specification label for output naming
-                       (policy function itself is spec-invariant). Default=1.
+  python estimation_bbl_1_polfunc.py                  # spread (feeds BBL Step 2)
+  python estimation_bbl_1_polfunc.py --depvar rate    # annualized deposit rate (robustness)
 
 References
 ----------
@@ -40,18 +48,7 @@ References
   Egan, Hortacsu & Matvos (2025, NBER WP)
   Matvos & Seru (2014, AER)
   Ryan (2012, Econometrica)
-
-CLI Options:
-------------
-usage: estimation_bbl_1_polfunc.py [-h] [--spec SPEC]
-
-Policy Function Estimation for Deposit Types k=4,5 (BBL Step 1)
-
-options:
-  -h, --help   show this help message and exit
-  --spec SPEC  Sleepiness specification label (1-12 or "all") for output
-               naming. The policy function estimation itself is spec-
-               invariant.
+  Cameron, Gelbach & Miller (2008); MacKinnon & Webb (2017)  [wild cluster bootstrap]
 """
 from utils.venv_guard import ensure_project_venv
 ensure_project_venv(__file__)
@@ -130,6 +127,40 @@ DEMOGRAPHICS = [
 # Macro variable
 MACRO = ['risk_free_qoq']
 
+# ---- Outlier control ------------------------------------------------------------------------
+# The accounting ratios carry a small number of corrupt observations, concentrated among D firms:
+# `indice_basileia_lag` reaches 16,069.7 for D (sd 205.6) against a B-firm max of 7.10 (sd 0.05),
+# and `personnel_cost_ratio_lag` reaches 2.32 (232% of assets). These are near-zero-denominator
+# artifacts, and because leverage concentrates in a handful of rows they both drive the point
+# estimates and collapse the wild-cluster-bootstrap SEs (the Basel row printed 0.0001 with a
+# 0.0000 SE at *** before this was applied).
+#
+# They are winsorized at the 1st/99th percentile SEPARATELY WITHIN B and D. Within-type is the
+# point: B and D have genuinely different balance sheets (D-firm equity ratios are ~4x B-firm
+# ones), so pooled percentiles would clip real cross-type variation instead of the corrupt tail.
+# Demographics are NOT winsorized (market-level, clean), nor is risk_free_qoq (macro), nor
+# log_total_assets_lag (already a log). Quadratic terms are rebuilt FROM the winsorized bases.
+WINSOR_PCT = 0.01
+WINSOR_VARS = BALANCE_SHEET + COST_SHIFTERS + CAPITAL_WHOLESALE + ['equity_ratio_lag']
+
+# ---- Centering -------------------------------------------------------------------------------
+# Continuous regressors are demeaned WITHIN each estimation sample, so the intercept is the
+# prediction at the AVERAGE state instead of at x=0. Uncentered, x=0 means a bank with R$1 of
+# assets (log assets = 0), far outside the support: the k=4 B-type constant was +170pp purely to
+# offset the log-asset terms (-375pp linear, +209pp quadratic, netting ~+3pp at the median).
+#
+# This is a REPARAMETRIZATION, not a different model. span{1, x, x^2} == span{1, x-xbar,
+# (x-xbar)^2}, so R^2, residuals and every fitted value are unchanged -- which is exactly what
+# the fitted-values identity check in main() verifies against the pre-centering policy CSV.
+# Slopes are unchanged too, EXCEPT the linear terms of the three variables that also enter
+# quadratically (log assets, equity ratio, risk-free): those become the marginal effect AT THE
+# MEAN rather than at zero, which is the interpretable margin anyway.
+#
+# Dummies are NOT centered, so the intercept keeps a reference-category reading: segment S1,
+# no IP subsidiary, every continuous regressor at its mean. Centering them would turn the
+# intercept into a grand mean and throw that reading away.
+NO_CENTER_VARS = {'has_ip', 'seg_S2', 'seg_S3', 'seg_S4', 'seg_S5'}
+
 # Quadratic terms (appended as _sq)
 QUADRATIC_BASE = ['log_total_assets_lag', 'equity_ratio_lag', 'risk_free_qoq']
 
@@ -154,6 +185,16 @@ CFG = {
     'tab_label':   'tab:polfunc',
     'caption':     'Policy Function Estimates for Endogenous Deposit Spreads (BBL Step~1)',
     'lhs_title':   'Deposit Spread',
+    # Appended to the table caption. Empty for the spread tables (the headline): their caption is
+    # just "Policy Function Estimates: <deposit type>".
+    'caption_suffix': '',
+    # 400 = 4 x 100: SIMPLE annualization of the QoQ spread, the same convention Step 2's
+    # forward-sim uses (_POLFUNC_QOQ_TO_ANN_PP = 400.0). This is NOT the panel's exact compounded
+    # spread_ann_a{k} = (1+rf)^4-(1+rate)^4, which differs by ~0.4pp on average (p99 ~0.9pp), so the
+    # unit is labelled "simple-annualized" rather than "annualized". The REGRESSAND stays spread_qoq:
+    # Step 2 consumes the QoQ policy, and OLS is scale-equivariant so this is display-only.
+    'lhs_display': 400.0,
+    'lhs_unit':    r'pp, simple-annualized ($4\times$QoQ)',
     'lhs_short':   'quarterly deposit spread',
     'depvar_note': (r'Dependent variable: quarterly deposit spread '
                     r'$\rho_{jkmt}=r^{f}_{t}-r^{\mathrm{dep}}_{jkmt}$, 2016--2024.'),
@@ -165,6 +206,13 @@ _CFG_RATE = {
     'tab_label':   'tab:polfunc_rate',
     'caption':     'Policy Function Estimates for the Annualized Deposit Rate (BBL Step~1)',
     'lhs_title':   'Annualized Deposit Rate',
+    # NON-empty here on purpose: the rate tables are a robustness variant of the same regressions,
+    # so without an LHS descriptor their captions would be identical to the spread tables'.
+    'caption_suffix': r' --- Annualized Deposit Rate',
+    # 100 = fraction -> pp. The regressand is ALREADY exactly compounded (rate_ann), so unlike the
+    # spread variant this is the exact annualized rate, not a simple-annualization approximation.
+    'lhs_display': 100.0,
+    'lhs_unit':    'pp of the annualized deposit rate',
     'lhs_short':   'annualized deposit rate',
     'depvar_note': (r'Dependent variable: annualized deposit rate '
                     r'$r^{\mathrm{dep,ann}}_{jkmt}=(1+r^{\mathrm{dep}}_{jkmt})^{4}-1$, 2016--2024.'),
@@ -174,6 +222,38 @@ _CFG_RATE = {
 # ==============================================================================
 # 1. Data Loading & Preparation
 # ==============================================================================
+def winsorize_within_type(df: pd.DataFrame, pct: float = None, verbose: bool = True) -> pd.DataFrame:
+    """Clip WINSOR_VARS to their [pct, 1-pct] quantiles separately within B and within D.
+
+    Returns the same frame (modified in place). Prints an audit line per variable that was
+    actually clipped, so the effect on each regressor is visible in the run log."""
+    pct = WINSOR_PCT if pct is None else pct
+    lo_q, hi_q = pct, 1.0 - pct
+    if verbose:
+        print(f"  Winsorizing accounting ratios at {pct:.0%}/{1-pct:.0%} within firm type:")
+    for v in WINSOR_VARS:
+        if v not in df.columns:
+            continue
+        n_clip, before_max = 0, pd.to_numeric(df[v], errors='coerce').max()
+        for is_b in (True, False):
+            mask = df['is_B'] == is_b
+            s = pd.to_numeric(df.loc[mask, v], errors='coerce')
+            if s.notna().sum() < 100:          # too few to form stable percentiles
+                continue
+            lo, hi = s.quantile(lo_q), s.quantile(hi_q)
+            if not (np.isfinite(lo) and np.isfinite(hi)) or lo >= hi:
+                continue
+            clipped = s.clip(lo, hi)
+            # NaN != NaN is True in pandas, so guard with notna() or the count degenerates into
+            # the missing-value count (which is ~37k here and would badly overstate the clipping).
+            n_clip += int(((clipped != s) & s.notna()).sum())
+            df.loc[mask, v] = clipped
+        if verbose and n_clip:
+            after_max = pd.to_numeric(df[v], errors='coerce').max()
+            print(f"    {v:28s} clipped {n_clip:>6,d} obs   max {before_max:>12.4f} -> {after_max:.4f}")
+    return df
+
+
 def load_and_prepare_panel() -> pd.DataFrame:
     """Load market_panel.csv, reshape to long for k=4,5, and construct lags.
 
@@ -231,12 +311,6 @@ def load_and_prepare_panel() -> pd.DataFrame:
     df['time_id'] = df['year'].astype(str) + 'Q' + df['quarter'].astype(str)
     df.sort_values(by=['entity_id', 'year', 'quarter'], inplace=True)
 
-    # ----- Quadratic terms ------------------------------------------------
-    for col in QUADRATIC_BASE:
-        sq_col = f'{col}_sq'
-        if col in df.columns:
-            df[sq_col] = df[col].astype(float) ** 2
-
     # ----- Coerce all regressor columns to numeric ------------------------
     # Some columns (e.g. has_ip) may arrive as object dtype from the CSV.
     all_regressor_cols = (
@@ -246,6 +320,15 @@ def load_and_prepare_panel() -> pd.DataFrame:
     for col in all_regressor_cols:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors='coerce')
+
+    # ----- Winsorize the accounting ratios within firm type ---------------
+    df = winsorize_within_type(df)
+
+    # ----- Quadratic terms (built AFTER winsorizing, so squares of a clipped
+    #       base stay consistent with the base itself) ---------------------
+    for col in QUADRATIC_BASE:
+        if col in df.columns:
+            df[f'{col}_sq'] = df[col].astype(float) ** 2
 
     # ----- Drop rows with missing dependent variable ----------------------
     regressand = CFG['regressand']
@@ -312,27 +395,21 @@ def compute_national_demographics(df: pd.DataFrame) -> pd.DataFrame:
 # ==============================================================================
 # 3. Cluster-Robust Standard Errors (IK2016 / Carter et al. 2017)
 # ==============================================================================
-def apply_cluster_correction(res, cluster_series: pd.Series):
-    """Apply Imbens-Kolesar (2016) / Carter-Schnepel-Steigerwald (2017)
-    effective cluster correction to a statsmodels RegressionResults object.
+def cluster_structure(cluster_series: pd.Series):
+    """Descriptive cluster structure: (G, G*) with G* = G/(1+cv²) the effective cluster
+    count of Imbens-Kolesar (2016) / Carter-Schnepel-Steigerwald (2017).
 
-    The effective number of clusters G* = G / (1 + cv²) is used as the
-    degrees of freedom for the t-distribution governing inference.
+    NOTE (2026-07-20): G* is now reported as a DESCRIPTIVE statistic only — it is the
+    cluster-paucity measure that MOTIVATES the wild cluster bootstrap (see desc_3.py), not
+    the inference itself. Inference used to be CRVE + t(G*) here; it is now the same
+    score/multiplier wild cluster bootstrap the rest of the paper uses, so every standard
+    error in the paper is produced by one scheme. See run_single_regression.
     """
     sizes = cluster_series.value_counts()
-    G_nominal = len(sizes)
-    cv_Ng = np.std(sizes, ddof=0) / np.mean(sizes) if np.mean(sizes) > 0 else 0
-    G_star = max(1.0, G_nominal / (1 + cv_Ng ** 2))
-
-    res.G_nominal = G_nominal
-    res.G_star = G_star
-    res.df_resid = G_star
-
-    t_dist = stats.t(df=G_star)
-    new_pvals = t_dist.sf(np.abs(res.tvalues)) * 2
-    res._results.__dict__['pvalues'] = new_pvals
-
-    return res
+    G_nominal = int(len(sizes))
+    cv_Ng = float(np.std(sizes, ddof=0) / np.mean(sizes)) if np.mean(sizes) > 0 else 0.0
+    G_star = float(max(1.0, G_nominal / (1 + cv_Ng ** 2)))
+    return G_nominal, G_star
 
 
 # ==============================================================================
@@ -376,6 +453,36 @@ def _build_regressor_list(firm_type: str, d_option: str) -> list:
         raise ValueError(f"Unknown firm_type: {firm_type}")
 
 
+def apply_centering(frame: pd.DataFrame, cols: list, means: dict) -> pd.DataFrame:
+    """Subtract `means` from the continuous columns of `frame`, then REBUILD every `_sq` column
+    from its freshly centered base.
+
+    Shared by estimation and prediction so both use the identical transform -- the prediction
+    path must reuse the ESTIMATION means (passed in), never recompute its own, or the fitted
+    values silently shift. Modifies and returns `frame`.
+    """
+    # Bases first...
+    for c in cols:
+        if c.endswith('_sq') or c not in means or c not in frame.columns:
+            continue
+        frame[c] = frame[c] - means[c]
+    # ...then the squares, from the now-centered bases.
+    for c in cols:
+        if not c.endswith('_sq'):
+            continue
+        base = c[:-3]
+        if base in frame.columns and base in means:
+            frame[c] = frame[base] ** 2
+    return frame
+
+
+def centering_means(df_w: pd.DataFrame, avail: list) -> dict:
+    """Mean of every centerable regressor in this estimation sample (dummies and `_sq` excluded;
+    the squares are not centered, they are rebuilt from centered bases)."""
+    return {c: float(df_w[c].mean()) for c in avail
+            if c not in NO_CENTER_VARS and not c.endswith('_sq') and c in df_w.columns}
+
+
 def run_single_regression(
     df_sub: pd.DataFrame,
     dep_var: str,
@@ -410,32 +517,57 @@ def run_single_regression(
         print(f"    [{label}] Insufficient observations ({len(df_w)}). Skipping.")
         return None
 
+    # CENTER the continuous regressors (see NO_CENTER_VARS above). Pure reparametrization:
+    # the intercept becomes the prediction at the average state; fit and fitted values are
+    # unchanged. The means are stored and REUSED verbatim at prediction time.
+    center_means = centering_means(df_w, avail)
+    df_w = apply_centering(df_w, avail, center_means)
+
     y = df_w[dep_var]
     X = sm.add_constant(df_w[avail], has_constant='add')
 
-    # Create bank-year cluster variable
-    df_w['bank_year'] = df_w['CodConglomeradoPrudencial'].astype(str) + "_" + df_w['year'].astype(str)
-    
-    # Cluster-robust estimation
-    cluster = df_w['bank_year']
+    # CLUSTER AT THE CONGLOMERATE LEVEL — the same unit as every other stage of the paper
+    # (estimation_{1,2}_sleep.py first/second stages, the BLP stage). This previously
+    # clustered on bank×year, a finer and therefore LESS CONSERVATIVE unit, which left the
+    # policy function inconsistent with everything it feeds.
+    cluster = df_w['CodConglomeradoPrudencial'].astype(str)
     model = sm.OLS(y, X)
     res = model.fit(cov_type='cluster', cov_kwds={'groups': cluster}, use_t=True)
-    res = apply_cluster_correction(res, cluster)
 
-    # Extract results
+    # G / G*: descriptive cluster structure (the paucity that motivates the WCB), not the inference.
+    G_nominal, G_star = cluster_structure(cluster)
+
+    # INFERENCE: score/multiplier wild cluster bootstrap — the SAME function the sleepiness
+    # stages call (utils.sleep_links; Cameron-Gelbach-Miller 2008, MacKinnon-Webb 2017), and
+    # the same B/scheme config (SLEEP_BOOT_B / SLEEP_BOOT_SCHEME), so every SE in the paper is
+    # produced one way. Replaces the old CRVE + t(G*) ("IK2016") path.
+    from utils.sleep_links import boot_cfg, linear_wild_cluster_bootstrap
+    B, scheme = boot_cfg()
+    bse, tvals, pvals = linear_wild_cluster_bootstrap(res, B=B, scheme=scheme, seed=0)
+
     coef_names = list(res.params.index)
     out = {
         'label': label,
         'res': res,
         'n_obs': int(res.nobs),
-        'n_clusters': res.G_nominal,
-        'G_star': float(res.G_star),
+        'n_clusters': G_nominal,
+        'G_star': G_star,
         'r_squared': float(res.rsquared),
         'r_squared_adj': float(res.rsquared_adj),
         'regressors': coef_names,
         'coefficients': res.params.to_dict(),
-        'std_errors': res.bse.to_dict(),
-        'pvalues': {k: float(v) for k, v in zip(coef_names, res.pvalues)},
+        'std_errors': {k: float(v) for k, v in bse.items()},
+        'pvalues': {k: float(v) for k, v in pvals.items()},
+        'se_method': f'wild cluster bootstrap (B={B}, {scheme}); clusters = conglomerate',
+        # Anchor for reading the intercept. The reported constant is the prediction at x=0, which
+        # is far outside the support (log assets = 0 means assets of R$1), so it is large and not
+        # interpretable on its own -- for B/k=4 it is +170pp purely to offset the log-assets terms
+        # (-375pp linear, +209pp quadratic, netting ~+3pp at the median). OLS with an intercept
+        # forces mean(fitted) == mean(y), so the fitted value AT THE SAMPLE MEAN state is exactly
+        # this number; reporting it gives the reader the scale anchor the constant does not.
+        'mean_depvar': float(y.mean()),
+        # The estimation-sample means used to center; compute_fitted_values MUST reuse these.
+        'center_means': center_means,
     }
 
     print(f"    [{label}] N={out['n_obs']:,} | R²={out['r_squared']:.4f} "
@@ -564,6 +696,10 @@ def compute_fitted_values(df: pd.DataFrame, results: dict) -> pd.DataFrame:
         # _lag bank characteristics lag into the excluded 2015). Leave incomplete cases as NaN instead;
         # the consumer (estimation_bbl_2_fwd_sim::equilibrium_spreads) already falls back to the observed spread
         # for non-finite fits. Fabricating is never better than admitting the gap.
+        # Apply the ESTIMATION centering (never recomputed here -- reusing the stored means is
+        # what keeps the fitted values identical to the uncentered parametrization).
+        df_pred = apply_centering(df_pred, avail_cols, res_dict.get('center_means', {}))
+
         complete = df_pred[avail_cols].notna().all(axis=1)
         X_pred = sm.add_constant(df_pred.loc[complete, avail_cols], has_constant='add')
 
@@ -590,12 +726,12 @@ def compute_fitted_values(df: pd.DataFrame, results: dict) -> pd.DataFrame:
     return df_out
 
 
-def save_outputs(results: dict, df_fitted: pd.DataFrame, spec_id: str) -> None:
+def save_outputs(results: dict, df_fitted: pd.DataFrame) -> None:
     """Persist all estimation outputs to disk."""
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
     # --- 1. Pickle with full statsmodels results --------------------------
-    pkl_path = OUTPUT_DIR / f"{CFG['out_prefix']}_results_spec_{spec_id}.pkl"
+    pkl_path = OUTPUT_DIR / f"{CFG['out_prefix']}_results.pkl"
     # Strip non-picklable items for safety; keep full result objects
     pkl_data = {}
     for label, res_dict in results.items():
@@ -607,7 +743,7 @@ def save_outputs(results: dict, df_fitted: pd.DataFrame, spec_id: str) -> None:
     print(f"  Saved pickle: {pkl_path.name}")
 
     # --- 2. Fitted values CSV ---------------------------------------------
-    csv_path = OUTPUT_DIR / f"{CFG['out_prefix']}_fitted_spec_{spec_id}.csv"
+    csv_path = OUTPUT_DIR / f"{CFG['out_prefix']}_fitted.csv"
     df_fitted.to_csv(csv_path, index=False, float_format='%.6f')
     print(f"  Saved fitted values: {csv_path.name}")
 
@@ -625,14 +761,14 @@ def save_outputs(results: dict, df_fitted: pd.DataFrame, spec_id: str) -> None:
             'pvalues': res_dict['pvalues'],
         }
 
-    json_path = OUTPUT_DIR / f"{CFG['out_prefix']}_summary_spec_{spec_id}.json"
+    json_path = OUTPUT_DIR / f"{CFG['out_prefix']}_summary.json"
     with open(json_path, 'w') as f:
         json.dump(summary, f, indent=2, default=str)
     print(f"  Saved summary JSON: {json_path.name}")
 
     # --- 4. LaTeX tables per regression -----------------------------------
     for label, res_dict in results.items():
-        tex_path = OUTPUT_DIR / f"{CFG['out_prefix']}_{label}_spec_{spec_id}.tex"
+        tex_path = OUTPUT_DIR / f"{CFG['out_prefix']}_{label}.tex"
         try:
             with open(tex_path, 'w') as f:
                 f.write(res_dict['res'].summary().as_latex())
@@ -666,7 +802,7 @@ _VAR_LABELS = {
     'const': 'Constant',
     'log_total_assets_lag': 'Log Total Assets ($t-1$)',
     'equity_ratio_lag': 'Equity Ratio ($t-1$)',
-    'has_ip': 'Has IP Subsidiary',
+    'has_ip': 'IP Subsidiary',
     'asset_return_qoq_lag': 'Asset Return (QoQ, $t-1$)',
     'npl_provision_ratio_lag': 'NPL Provisions Ratio ($t-1$)',
     'credit_assets_lag': 'Credit / Assets ($t-1$)',
@@ -677,7 +813,7 @@ _VAR_LABELS = {
     'personnel_cost_ratio_lag': 'Personnel Cost Ratio ($t-1$)',
     'admin_cost_ratio_lag': 'Admin Cost Ratio ($t-1$)',
     'tax_cost_ratio_lag': 'Tax Cost Ratio ($t-1$)',
-    'indice_basileia_lag': 'Basel Index (bp, $t-1$)',
+    'indice_basileia_lag': 'Basel Index ($t-1$)',
     'wholesale_ratio_lag': 'Wholesale Ratio ($t-1$)',
     'lci_lca_ratio_lag': 'LCI/LCA Ratio ($t-1$)',
     'risk_free_qoq': 'Risk-Free Rate (QoQ)',
@@ -687,17 +823,17 @@ _VAR_LABELS = {
     'gdp_per_capita': r'GDP \textit{per capita}',
     'fraction_65plus': 'Fraction 65+',
     'fraction_young': 'Fraction Young',
-    'pix_users_pf_per1000': 'PIX Users (per 1k)',
-    'connections_per100': 'Broadband (per 100)',
-    'branches_per1000': 'Branches (per 1k)',
-    'cadunico_families_per1000': 'CadUnico Families (per 1k)',
+    'pix_users_pf_per1000': 'Pix Users',
+    'connections_per100': 'Broadband Connections',
+    'branches_per1000': 'Branches',
+    'cadunico_families_per1000': 'CadUnico Families',
     'gdp_per_capita_natl': r'GDP \textit{per capita} (Natl.)',
     'fraction_65plus_natl': 'Fraction 65+ (Natl.)',
     'fraction_young_natl': 'Fraction Young (Natl.)',
-    'pix_users_pf_per1000_natl': 'PIX Users (per 1k, Natl.)',
-    'connections_per100_natl': 'Broadband (per 100, Natl.)',
-    'branches_per1000_natl': 'Branches (per 1k, Natl.)',
-    'cadunico_families_per1000_natl': 'CadUnico Families (per 1k, Natl.)',
+    'pix_users_pf_per1000_natl': 'Pix Users (Natl.)',
+    'connections_per100_natl': 'Broadband Connections (Natl.)',
+    'branches_per1000_natl': 'Branches (Natl.)',
+    'cadunico_families_per1000_natl': 'CadUnico Families (Natl.)',
 }
 
 
@@ -720,11 +856,18 @@ def _clean_var(v: str) -> str:
 def _polfunc_col_keys(k: int) -> list:
     """The four regression labels (columns) for deposit type k."""
     kl = K_LABELS[k]
-    return [f'k{k}_{kl}_B', f'k{k}_{kl}_D_optA', f'k{k}_{kl}_D_optB', f'k{k}_{kl}_pooled_optC']
+    # NOTE: the pooled (Option C) regression is still estimated and stored in the summary/pickle as a
+    # robustness record, but it is NOT displayed: Step 2 consumes only B and D_optB, and pooling
+    # few-but-huge B clusters with many-small D ones collapses the effective cluster count.
+    return [f'k{k}_{kl}_B', f'k{k}_{kl}_D_optA', f'k{k}_{kl}_D_optB']
 
 
 # Column headers, in the order of _polfunc_col_keys.
-_COL_HEADERS = ['B-type', 'D (no demo.)', r'D (natl.\ demo.)', r'Pooled ($B{=}D$)']
+# The two D columns sit under ONE spanning 'D-type' header, formatted exactly like 'B-type'.
+# They stay distinguishable without per-column labels because the Demographics indicator row
+# reads Yes/No/Yes: the D column marked No is the no-demographics specification, the one marked
+# Yes carries the population-weighted national demographics.
+_COL_HEADERS = ['B-type', 'D-type']
 
 # Demographic bases whose local and `_natl` variants are collapsed to ONE display row:
 # each column shows its own geography (B/Pooled = local MCA, D natl. = national averages).
@@ -750,8 +893,11 @@ def _polfunc_variant_cell(res_dict, base):
     return None
 
 
-def _polfunc_emit_rows(label, cells, rows):
-    """Append a coefficient line + a standard-error line for one regressor across columns."""
+def _polfunc_emit_rows(label, cells, rows, mult=1.0):
+    """Append a coefficient line + a standard-error line for one regressor across columns.
+
+    `mult` = LHS_display · unit_scale rescales coefficient AND standard error together (a pure
+    change of units, so t-stats and stars are unaffected)."""
     coef_cells, se_cells = [], []
     for c in cells:
         if c is None:
@@ -759,18 +905,29 @@ def _polfunc_emit_rows(label, cells, rows):
             se_cells.append('')
         else:
             cf, se, p = c
-            coef_cells.append(f'${cf:.4f}^{{{_stars(p)}}}$')
-            se_cells.append(f'$({se:.4f})$')
+            coef_cells.append(f'${cf * mult:.4f}^{{{_stars(p)}}}$')
+            se_cells.append(f'$({se * mult:.4f})$')
     rows.append(f'{label} & ' + ' & '.join(coef_cells) + r' \\')
     rows.append(' & ' + ' & '.join(se_cells) + r' \\')
 
 
-def _polfunc_panel_rows(results: dict, k: int) -> list:
+def _row_label(v):
+    """Row label, WITHOUT a bracketed unit. The display SCALING still applies (see
+    _display_unit / _DISPLAY_UNITS); only the '[unit]' suffix is omitted, because the units are
+    stated in the table notes and in the surrounding prose instead of in column 1."""
+    return _clean_var(v)
+
+
+def _polfunc_panel_rows(results: dict, k: int, include_segments: bool = False) -> list:
     """LaTeX coefficient rows for one deposit type k across the four columns.
-    Non-demographic regressors are the ordered union; demographics are merged
-    (local + national into one row, each column showing its own variant)."""
+
+    Non-demographic regressors are the ordered union; demographics are merged (local + national
+    into one row, each column showing its own variant). Segment dummies are EXCLUDED unless
+    `include_segments` — in the main table they collapse to a 'Segment FE: Yes' indicator row.
+    Every coefficient is shown in its display unit (see _DISPLAY_UNITS)."""
     cols = _polfunc_col_keys(k)
     demo_all = set(_DEMO_BASES) | {d + '_natl' for d in _DEMO_BASES}
+    lhs = float(CFG.get('lhs_display', 1.0))
 
     # ordered union of NON-demographic regressors (first appearance across columns)
     order, seen = [], set()
@@ -780,21 +937,27 @@ def _polfunc_panel_rows(results: dict, k: int) -> list:
         for v in results[ck]['regressors']:
             if v in demo_all or v in seen:
                 continue
+            if v in _SEGMENT_VARS and not include_segments:
+                continue
             order.append(v)
             seen.add(v)
 
     rows = []
     for v in order:
         cells = [_polfunc_cell(results[ck], v) if ck in results else None for ck in cols]
-        _polfunc_emit_rows(_clean_var(v), cells, rows)
+        _polfunc_emit_rows(_row_label(v), cells, rows, mult=lhs * _display_unit(v)[0])
 
-    # merged demographic rows (skip a base with no coefficient in any column)
+    # Merged demographic rows -- DETAIL ONLY. In the main table they collapse to a
+    # 'Demographics' indicator row (Yes/No/Yes: B carries local MCA demographics, D~(no demo.)
+    # carries none, D~(natl. demo.) carries national ones), exactly like the segment dummies.
     demo_rows = []
+    if not include_segments:
+        return rows
     for base in _DEMO_BASES:
         cells = [_polfunc_variant_cell(results[ck], base) if ck in results else None for ck in cols]
         if all(c is None for c in cells):
             continue
-        _polfunc_emit_rows(_clean_var(base), cells, demo_rows)
+        _polfunc_emit_rows(_row_label(base), cells, demo_rows, mult=lhs * _display_unit(base)[0])
     if demo_rows:
         rows.append(r'\addlinespace[0.3ex]')
         rows.extend(demo_rows)
@@ -807,34 +970,106 @@ def _polfunc_stat_row(label, values, fmt) -> str:
 
 
 def _polfunc_notes() -> str:
-    """Table Notes, with the LHS description and dependent-variable sentence from CFG."""
+    """Table Notes: the inference paragraph only.
+
+    Deliberately short. Everything the notes used to carry -- units, winsorization, centering,
+    the segment/demographic indicators, the column definitions -- is documented in the prose of
+    the paper and in this module\'s comments, and repeating it under every table crowded out the
+    one thing a reader needs at the table: how the standard errors were produced.
+
+    Citations are real \\parencite keys, not typeset-by-hand author strings, so they resolve
+    against References.bib and stay correct if an entry changes. The paper uses biblatex/biber
+    (authoryear-comp), where \\parencite is the parenthetical form.
+    """
     return (
-        r'\textit{Notes:} OLS of the observed ' + CFG['lhs_short'] + r' on the pricing state, '
-        r'estimated separately by firm type and deposit type (BBL Step~1). '
-        r'\textbf{B} = brick-and-mortar firms (local MCA demographics); '
-        r'\textbf{D (no demo.)} / \textbf{D (natl.\ demo.)} = digital/national firms without '
-        r'demographics and with population-weighted national demographics; '
-        r'\textbf{Pooled} = B and D under one coefficient vector (D firms given national demographics). '
-        r'Demographic rows show each column\textquotesingle s own geography. '
-        r'Standard errors clustered at the bank$\times$year level in parentheses, with the '
-        r'effective-cluster correction $G^{*}=G/(1+\mathrm{cv}^{2})$ '
-        r'(Imbens \& Kolesar 2016; Carter et al.\ 2017). '
-        r'*** $p<0.01$, ** $p<0.05$, * $p<0.1$. '
+        r'\textit{Notes:} Standard errors in parentheses are from a score/multiplier wild cluster '
+        r'bootstrap at the conglomerate level (Webb weights) '
+        r'\parencite{cameron2008bootstrap,mackinnon2017wild,webb2023reworking}. '
+        r'$G$ and the effective cluster count '
+        r'$G^{*}=G/(1+\mathrm{cv}^{2})$ \parencite{imbens2016robust,carter2017asymptotic} are '
+        r'reported as the cluster-paucity statistics that motivate the bootstrap, not as the '
+        r'inference. *** $p<0.01$, ** $p<0.05$, * $p<0.1$. '
         + CFG['depvar_note']
     )
 
 
 _K_TITLE = {4: r'Time Deposits / CDB ($k=4$)', 5: r'Prepaid Accounts ($k=5$)'}
 
+# Segment dummies: absorbed out of the main table into a "Segment FE: Yes" indicator row, and
+# shown explicitly only in the `_segment` companion table.
+_SEGMENT_VARS = ['seg_S2', 'seg_S3', 'seg_S4', 'seg_S5']
 
-def build_polfunc_table(results: dict, k: int) -> str:
+# ---- Display units -------------------------------------------------------------------------
+# Coefficients are reported per the unit in brackets in the row label. Units are pinned to the
+# REST OF THE PAPER, not chosen freely: any regressor that also appears in the sleepiness/demand
+# tables is displayed in the unit it carries there, so a coefficient here is comparable to one
+# there. Those tables rescale exactly two variables, in the prep step
+# (estimation_1_demand_1_prep.py:225-226 / estimation_demand_link_common.py:192-193):
+#       gdp_per_capita            /= 10_000   -> "10k R$"
+#       cadunico_families_per1000 /= 100      -> "100s per 1k"
+# and leave EVERY other regressor raw (fractions stay fractions: `indice_basileia` is a fraction,
+# median 0.163, NOT basis points; the cost ratios, `risk_free_qoq`, `fraction_65plus`,
+# `fraction_young` and `connections_per100` are all raw in export_sleep_link_common.py).
+# We therefore display those raw too. The ONLY departure is `pix_users_pf_per1000`, which does not
+# appear in any sleepiness table (so nothing to match) and whose 0-1,869 range would otherwise
+# print as 0.0000; it is shown per 100 users, labelled as such.
+_UNIT_PP = (0.01, 'pp')          # ratio expressed in percentage points
+_UNIT_PP2 = (1e-4, 'pp$^{2}$')   # its square
+
+_DISPLAY_UNITS = {
+    # ---- DEMOGRAPHICS: units pinned to the sleepiness tables, so a coefficient here is directly
+    # comparable to one there. Do not "improve" these -- cross-table comparability is the point.
+    'gdp_per_capita':            (1e4,   r'10k R\$'),          # demand prep divides by 10,000
+    'cadunico_families_per1000': (100.0, '100s per 1k'),       # demand prep divides by 100
+    'fraction_65plus':           (1.0,   'fraction'),          # raw in the sleepiness tables
+    'fraction_young':            (1.0,   'fraction'),          # raw
+    'connections_per100':        (1.0,   'per 100 inhab.'),    # raw
+    'branches_per1000':          (1.0,   'per 1k'),            # not in sleepiness; keep the family raw
+    'pix_users_pf_per1000':      (100.0, 'per 100 per 1k'),    # not in sleepiness; 0-1,869 range
+    # ---- EVERYTHING ELSE: percentage points, chosen for READABILITY. These are ratios whose
+    # in-sample sd is ~0.002-0.03, so a one-unit (0 -> 100%) coefficient is ~1,000x any real move
+    # and prints in the hundreds or thousands (tax cost ratio was -1,657.85 raw, i.e. -0.65pp per
+    # sd). In pp the coefficient answers "per 1 percentage point", which is the interpretable
+    # margin. None of these appears in the sleepiness tables, so nothing is made incomparable.
+    'equity_ratio_lag':          _UNIT_PP,
+    'equity_ratio_lag_sq':       _UNIT_PP2,
+    'asset_return_qoq_lag':      _UNIT_PP,
+    'npl_provision_ratio_lag':   _UNIT_PP,
+    'credit_assets_lag':         _UNIT_PP,
+    'personnel_cost_ratio_lag':  _UNIT_PP,
+    'admin_cost_ratio_lag':      _UNIT_PP,
+    'tax_cost_ratio_lag':        _UNIT_PP,
+    'wholesale_ratio_lag':       _UNIT_PP,
+    'lci_lca_ratio_lag':         _UNIT_PP,
+    'indice_basileia_lag':       _UNIT_PP,
+    'risk_free_qoq':             _UNIT_PP,
+    'risk_free_qoq_sq':          _UNIT_PP2,
+    # ---- scale-free regressors
+    'log_total_assets_lag':      (1.0, 'log pt'),
+    'log_total_assets_lag_sq':   (1.0, '(log pt)$^{2}$'),
+    'has_ip':                    (1.0, 'indicator'),
+}
+
+
+def _display_unit(v):
+    """(scale, unit label) for a regressor; `_natl` variants inherit the base unit."""
+    base = v[:-5] if v.endswith('_natl') else v
+    return _DISPLAY_UNITS.get(base, (1.0, ''))
+
+
+def build_polfunc_table(results: dict, k: int, include_segments: bool = False) -> str:
     """Paper-style, page-breaking `xltabular` fragment for ONE deposit type k
     (four columns: B / D no-demo / D natl.-demo / Pooled). Bare fragment — `\\input`-able
-    into V_Main.tex (the paper preamble already provides xltabular/booktabs/setspace)."""
-    colspec = r'>{\raggedright\arraybackslash}p{5.0cm} *{4}{>{\centering\arraybackslash}X}'
-    head = ' & ' + ' & '.join(_COL_HEADERS) + r' \\'
-    caption = 'Policy Function Estimates: ' + _K_TITLE[k] + r' --- ' + CFG['lhs_title'] + ' (BBL Step~1)'
-    label = CFG['tab_label'] + f'_k{k}'
+    into V_Main.tex (the paper preamble already provides xltabular/booktabs/setspace).
+
+    `include_segments=False` (the main table) hides the four segment dummies and reports them as a
+    'Segment FE: Yes' indicator row; `True` builds the `_segment` companion that shows them."""
+    colspec = r'>{\raggedright\arraybackslash}p{5.4cm} *{3}{>{\centering\arraybackslash}X}'
+    # 'D-type' spans the two D columns via \multicolumn. No \cmidrule under it: the \midrule that
+    # follows already closes the header, and adding one stacks a second rule on top of it.
+    head = ' & ' + _COL_HEADERS[0] + r' & \multicolumn{2}{c}{' + _COL_HEADERS[1] + r'} \\'
+    caption = 'Policy Function Estimates: ' + _K_TITLE[k] + CFG.get('caption_suffix', '')
+    label = CFG['tab_label'] + f'_k{k}' + ('_segment' if include_segments else '')
     cols = _polfunc_col_keys(k)
 
     L = [
@@ -847,26 +1082,47 @@ def build_polfunc_table(results: dict, k: int) -> str:
         head,
         r'\midrule',
         r'\endfirsthead',
-        r'\multicolumn{5}{c}{\bfseries Table \thetable\ (continued)} \\',
+        r'\multicolumn{4}{c}{\bfseries Table \thetable\ (continued)} \\',
         r'\toprule',
         head,
         r'\midrule',
         r'\endhead',
         r'\midrule',
-        r'\multicolumn{5}{r}{\textit{Continued on next page}} \\',
+        r'\multicolumn{4}{r}{\textit{Continued on next page}} \\',
         r'\endfoot',
         r'\bottomrule',
-        r'\multicolumn{5}{@{}p{\dimexpr\textwidth-2\tabcolsep\relax}@{}}{\scriptsize '
+        r'\multicolumn{4}{@{}p{\dimexpr\textwidth-2\tabcolsep\relax}@{}}{\scriptsize '
         + _polfunc_notes() + r'} \\',
         r'\endlastfoot',
     ]
 
-    L.extend(_polfunc_panel_rows(results, k))
+    L.extend(_polfunc_panel_rows(results, k, include_segments=include_segments))
     L.append(r'\midrule')
     r2 = [results[ck]['r_squared'] if ck in results else None for ck in cols]
     obs = [results[ck]['n_obs'] if ck in results else None for ck in cols]
     G = [results[ck]['n_clusters'] if ck in results else None for ck in cols]
     Gs = [results[ck]['G_star'] if ck in results else None for ck in cols]
+    if not include_segments:
+        # Segment dummies are in every regression; report them as an FE indicator.
+        present = ['Yes' if (ck in results and any(v in results[ck]['coefficients']
+                                                   for v in _SEGMENT_VARS)) else 'No'
+                   for ck in cols]
+        L.append('Segment FE & ' + ' & '.join(present) + r' \\')
+        # Demographics: Yes where the column actually carries demographic regressors. This reads
+        # Yes/No/Yes -- B has local MCA demographics, D (no demo.) has none by construction, and
+        # D (natl. demo.) has the population-weighted national ones.
+        _demo_all = set(_DEMO_BASES) | {d + '_natl' for d in _DEMO_BASES}
+        demo_present = ['Yes' if (ck in results and any(v in results[ck]['coefficients']
+                                                        for v in _demo_all)) else 'No'
+                        for ck in cols]
+        L.append('Demographics & ' + ' & '.join(demo_present) + r' \\')
+    # Scale anchor for the intercept: the constant is the prediction at x=0 (assets of R$1), which
+    # is out of support and therefore large; mean(fitted) == mean(y) under OLS, so this row IS the
+    # fitted value at the average state and is what the reader should read the levels against.
+    _lhs = float(CFG.get('lhs_display', 1.0))
+    mdv = [results[ck]['mean_depvar'] * _lhs if ck in results and 'mean_depvar' in results[ck]
+           else None for ck in cols]
+    L.append(_polfunc_stat_row('Mean dep.\\ var.', mdv, lambda x: f'{x:.4f}'))
     L.append(_polfunc_stat_row(r'$R^{2}$', r2, lambda x: f'{x:.4f}'))
     L.append(_polfunc_stat_row('Observations', obs, lambda x: f'{x:,}'))
     L.append(_polfunc_stat_row(r'Clusters ($G$)', G, lambda x: f'{x}'))
@@ -877,21 +1133,25 @@ def build_polfunc_table(results: dict, k: int) -> str:
     return '\n'.join(L)
 
 
-def write_polfunc_fragments(results: dict, spec_id: str) -> dict:
-    """Write ONE bare `\\input`-able fragment per deposit type to the paper's drafts folder."""
+def write_polfunc_fragments(results: dict) -> dict:
+    """Write the `\\input`-able fragments: one MAIN table per deposit type (segment dummies
+    collapsed to an FE indicator) plus a `_segment` companion that shows them explicitly."""
     DRAFTS_DIR.mkdir(parents=True, exist_ok=True)
     frags = {}
     for k in K_ENDOG:
-        frag = build_polfunc_table(results, k)
-        path = DRAFTS_DIR / f"{CFG['out_prefix']}_k{k}_spec{spec_id}.tex"
-        with open(path, 'w', encoding='utf-8') as f:
-            f.write(frag + '\n')
-        print(f"  Wrote fragment: {path.name}  (\\input into V_Main.tex; label {CFG['tab_label']}_k{k})")
-        frags[k] = frag
+        for seg in (False, True):
+            frag = build_polfunc_table(results, k, include_segments=seg)
+            suffix = '_segment' if seg else ''
+            path = DRAFTS_DIR / f"{CFG['out_prefix']}_k{k}{suffix}.tex"
+            with open(path, 'w', encoding='utf-8') as f:
+                f.write(frag + '\n')
+            print(f"  Wrote fragment: {path.name}  (label {CFG['tab_label']}_k{k}{suffix})")
+            if not seg:
+                frags[k] = frag          # preview shows the MAIN tables
     return frags
 
 
-def compile_polfunc_preview(frags: dict, spec_id: str) -> None:
+def compile_polfunc_preview(frags: dict) -> None:
     """Compile ONE standalone preview PDF holding all deposit-type fragments (one per page),
     rendered with the paper's own preamble (utils.tex_preamble.wrap_table)."""
     import subprocess
@@ -901,12 +1161,23 @@ def compile_polfunc_preview(frags: dict, spec_id: str) -> None:
         print(f"  [WARN] utils.tex_preamble not importable ({exc}); fragments saved, preview skipped.")
         return
     body = '\n\n\\clearpage\n\n'.join(frags[k] for k in sorted(frags))
-    name = f"{CFG['out_prefix']}_preview_spec{spec_id}"
+    name = f"{CFG['out_prefix']}_preview"
     tex_path = DRAFTS_DIR / f"{name}.tex"
     with open(tex_path, 'w', encoding='utf-8') as f:
         f.write(wrap_table(body))
     print(f"  Compiling preview PDF ({name}.pdf)...")
     try:
+        # pdflatex -> biber -> pdflatex x2. The biber pass is what resolves the \parencite keys in
+        # the Notes against References.bib (the preamble already \addbibresource's it). Without it
+        # the preview renders the citations as unresolved markers, which reads like a broken table
+        # even though the fragment is fine in V_Main.tex, where biber does run.
+        subprocess.run(['pdflatex', '-interaction=nonstopmode', f'{name}.tex'],
+                       cwd=str(DRAFTS_DIR), capture_output=True, text=True)
+        try:
+            subprocess.run(['biber', name], cwd=str(DRAFTS_DIR), capture_output=True, text=True)
+        except FileNotFoundError:
+            print("  [WARN] biber not found; preview citations will render unresolved "
+                  "(fragments are unaffected).")
         for _ in range(2):
             subprocess.run(['pdflatex', '-interaction=nonstopmode', f'{name}.tex'],
                            cwd=str(DRAFTS_DIR), capture_output=True, text=True)
@@ -928,10 +1199,6 @@ def main():
     parser = argparse.ArgumentParser(
         description="Policy Function Estimation for Deposit Types k=4,5 (BBL Step 1)")
     parser.add_argument(
-        '--spec', type=str, default='1',
-        help='Sleepiness specification label (1-12 or "all") for output naming. '
-             'The policy function estimation itself is spec-invariant.')
-    parser.add_argument(
         '--depvar', choices=['spread', 'rate'], default='spread',
         help='Regressand: "spread" (default; QoQ deposit spread, fed to BBL Step 2) or '
              '"rate" (annualized deposit rate = (1+rate_qoq)^4-1). "rate" writes a SEPARATE '
@@ -942,18 +1209,11 @@ def main():
     if args.depvar == 'rate':
         CFG.update(_CFG_RATE)
 
-    # Determine spec IDs
-    if args.spec.lower() == 'all':
-        spec_ids = [str(i) for i in range(1, 13)]
-    else:
-        spec_ids = [args.spec]
-
     print("=" * 70)
     print("  Policy Function Estimation (BBL Step 1)")
     print(f"  Regressand: {CFG['regressand']}  (--depvar {args.depvar}) -> {CFG['out_prefix']}_*")
     print(f"  Deposit types: {K_ENDOG}")
     print(f"  D-firm demographic options: {D_DEMO_OPTIONS}")
-    print(f"  Spec labels: {spec_ids}")
     print("=" * 70)
 
     # ---- Load data once --------------------------------------------------
@@ -975,15 +1235,16 @@ def main():
     print("Computing fitted values...")
     df_fitted = compute_fitted_values(df, results)
 
-    # ---- Save outputs (replicated per spec label for pipeline compat) ----
-    for spec_id in spec_ids:
-        print(f"\n  --- Saving outputs for spec {spec_id} ---")
-        save_outputs(results, df_fitted, spec_id)
+    # ---- Save outputs -----------------------------------------------------
+    # The policy function is SPEC-INVARIANT (it never touches a sleepiness spec), so outputs
+    # carry no spec label. The old `_spec_{id}` replication was pipeline cosmetics only.
+    print("\n  --- Saving outputs ---")
+    save_outputs(results, df_fitted)
 
     # ---- Paper-style table fragments (one per deposit type) + preview PDF -----
     print("\n  --- Paper table fragments + preview ---")
-    frags = write_polfunc_fragments(results, spec_ids[0])
-    compile_polfunc_preview(frags, spec_ids[0])
+    frags = write_polfunc_fragments(results)
+    compile_polfunc_preview(frags)
 
     elapsed = time.perf_counter() - t_start
     print(f"\n[DONE] Policy function estimation complete in {elapsed:.1f}s")

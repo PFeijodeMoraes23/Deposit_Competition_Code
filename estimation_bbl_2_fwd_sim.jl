@@ -51,7 +51,7 @@ ASSET RETURN r^j (`--asset-return-col` / `--asset-margin`, default 0): enters ψ
 EQUILIBRIUM σ̂ (knob):
   Default σ̂ = observed spreads ρ̂ (the data IS the equilibrium). Pass
   `--policy-csv` to instead use the smoothed fitted policy from
-  estimation_bbl_1_polfunc.py (polfunc_fitted_spec_*.csv).
+  estimation_bbl_1_polfunc.py (polfunc_fitted.csv).
 
 ⚠ COMPUTE: each σ̃ costs one deposit simulation (≈ one share evaluation when spreads
 are held flat). With S deviations on the full panel at R=2000 this is the heavy,
@@ -90,7 +90,7 @@ _polkey(firm, mca, k::Int, tid) = string(firm, '\x1f', mca, '\x1f', k, '\x1f', t
 """
     _load_policy_map(path) -> Dict{String,Float64}
 
-Parse the BBL Step-1 fitted-policy CSV (`polfunc_fitted_spec_*.csv` from
+Parse the BBL Step-1 fitted-policy CSV (`polfunc_fitted.csv` from
 estimation_bbl_1_polfunc.py) into `(firm,mca,k,time) → fitted spread (annual pp)`, keeping only
 k∈{4,5} rows with a finite fitted value. Per firm type we take that type's OWN Step-1 regression: B
 firms → the `_B` column, D firms → the `_D_optB` column (national pop-weighted demographics — the
@@ -142,7 +142,7 @@ end
 The equilibrium choice-spread vector σ̂ (annualized pp, ρ = spread_ann/100). Default = the observed
 spreads ρ̂ — the data IS the equilibrium, so every row passes through unchanged.
 
-If `policy_csv` is given (the BBL Step-1 fitted policy, `polfunc_fitted_spec_*.csv`), the CHOICE rows
+If `policy_csv` is given (the BBL Step-1 fitted policy, `polfunc_fitted.csv`), the CHOICE rows
 k∈{4,5} are replaced by the FITTED policy so that Step-2 deviations perturb the smoothed policy rather
 than raw noisy spreads (author decision 2026-07-16 — observed-spread deviations make frac_bind≈0.5
 mechanically, since σ̂ is not then a turning point of the simulated value). Regulated types k∈{1,2}

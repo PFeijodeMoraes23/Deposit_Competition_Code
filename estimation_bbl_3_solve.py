@@ -28,15 +28,38 @@ Inputs (from estimation_bbl_2_fwd_sim.jl):
 where tag = E{estim}_spec_{spec}_{stage}{suffix}.
 
 Outputs:
-    COST_FWD/cost_params_{tag}.json — (ω, ζ, γ) per type with bootstrap SEs, plus
-    optimizer-health diagnostics and (with --profile) 1-D identified-set profiles.
+    COST_FWD/cost_params_{tag}.json — (ω, ζ, γ) per type, optimizer-health diagnostics, and
+    inference: `subsample` (critical values + √n-rate comparison CI) and, with --profile,
+    `ci_omega`/`ci_zeta` (the criterion inverted at the subsampled critical value).
+    `omega_se`/`zeta_se`/`gamma_se` are the legacy firm-block bootstrap SDs, RETAINED FOR
+    COMPARISON ONLY.
 
-⚠ Run only after estimation_bbl_2_fwd_sim.jl has produced its parquets (which itself is gated
-on the cluster data download and the author's go-ahead).
+INFERENCE (2026-07-17).  F is a squared hinge over moment INEQUALITIES: kinked and possibly
+SET-identified, so the nonparametric bootstrap is inconsistent here — it neither handles a
+boundary/partially-identified parameter nor reproduces the non-standard limit of a kinked
+criterion.  BBL propose SUBSAMPLING; Chernozhukov–Hong–Tamer invert the criterion with a
+subsampled critical value.  Both are implemented (subsample_kappa, profile_ci) and are the
+headline; the bootstrap is kept only so the two can be compared.  Cheap, because ψ is
+precomputed — only the fast hinge minimisation is re-run.
+
+⚠ TWO VARIANCE COMPONENTS ARE STILL MISSING.  (1) FIRST-STAGE: δ̂, θ̂₂, α̂, the Step-1 policy,
+φ̂ and M are held FIXED and ψ is never re-simulated, so everything here is inference
+*conditional on demand*; with the demand stage's few effective clusters that term may
+dominate.  (2) SIMULATION: ψ carries Monte-Carlo error from the R draws.  See §2.8 of
+counterfactuals_plan.md for the propagation recipe.
+
+⚠ ζ SPECIFICALLY: every firm is simulated against the SAME realised forward r^f path, so ζ
+(a pass-through parameter) is identified off one macro path, not off n independent firms.
+No firm-resampling scheme — bootstrap or subsample — delivers honest uncertainty for it.
+
+⚠ Run only after estimation_bbl_2_fwd_sim.jl has produced its parquets, AND only with σ̂ from
+the FITTED policy (--policy-csv upstream): with deviations around raw observed spreads,
+frac_bind ≈ ½ mechanically and nothing here is interpretable.
 
 Usage:
   python estimation_bbl_3_solve.py --estim 6 --spec 12 --stage extended \\
-      --bootstrap 200 --profile
+      --subsample 200 --profile --ci-level 0.95      # headline
+  ... --bootstrap 200                                 # legacy SEs, for comparison
 """
 try:
     from utils.venv_guard import ensure_project_venv
@@ -237,35 +260,181 @@ def bootstrap_kappa(blk, n_boot, seed=42):
 # ==========================================================================
 # Diagnostics: 1-D identified-set profiles and multistart smoke check
 # ==========================================================================
-def profile_param(fit, which, opt_val, se_val, npts=81, span=5.0):
-    """Profile the objective along one scalar param (ω or ζ), other fitted b's held fixed.
+def _theta_to_b(omega, zeta, gamma, sc):
+    """Map REPORTED (ω, ζ, γ) into a given design's scaled b-coordinates.
 
-    Grid runs over opt ± span·(bootstrap SE if given, else |opt|+1) in the REPORTED
-    parameter, mapped to the scaled b-coordinate for evaluation (sweep b_i, unscale for
-    reporting). Returns {grid, F, flat_lo, flat_hi} where [flat_lo, flat_hi] is the interval
-    over which F ≤ F_min·(1+1e-6)+1e-12 — the near-flat (set-identified) width.
+    Inverse of solve_kappa's unscaling: b = [ω·s_om/s1, γ_z·s_ga_z/s1 …, (1+ζ)·s_ze/s1].
+    Needed because every subsample re-conditions its own design, so the full-sample θ̂ has
+    to be re-expressed in that subsample's scale before its criterion can be evaluated.
     """
-    b0 = fit["_b"].copy(); c1 = fit["_c1"]; Xs = fit["_Xs"]; sc = fit["_scales"]
     nZ = sc["nZ"]
+    b = np.empty(2 + nZ)
+    b[0] = omega * sc["s_om"] / sc["s1"]
+    if nZ:
+        b[1:1 + nZ] = np.asarray(gamma, float) * sc["s_ga"] / sc["s1"]
+    b[1 + nZ] = (1.0 + zeta) * sc["s_ze"] / sc["s1"]
+    return b
+
+
+def _rows_for_firms(idx_by_firm, sel):
+    return np.concatenate([idx_by_firm[f] for f in sel])
+
+
+def _sub_block(blk, rows):
+    return dict(d1=blk["d1"][rows], d_omega=blk["d_omega"][rows],
+                d_gamma=blk["d_gamma"][rows], d_zeta=blk["d_zeta"][rows],
+                firms=blk["firms"][rows], gamma_names=blk["gamma_names"])
+
+
+def subsample_kappa(blk, fit, n_sub=200, b_firms=None, seed=4242, levels=(0.90, 0.95)):
+    """Subsampling inference for the eq:17 criterion (BBL 2007; Chernozhukov–Hong–Tamer 2007).
+
+    WHY NOT THE BOOTSTRAP.  F is a squared hinge over moment INEQUALITIES: kinked, and
+    potentially SET-identified.  The nonparametric bootstrap is inconsistent for
+    set-identified / boundary parameters and does not reproduce the non-standard limit of a
+    kinked criterion.  BBL propose subsampling; CHT invert the criterion with a subsampled
+    critical value.  This is cheap here because ψ is PRECOMPUTED — only the fast,
+    linear-in-θ hinge minimisation is re-run.
+
+    PROCEDURE.  Draw `n_sub` subsamples of `b_firms` FIRMS without replacement (the firm is
+    the dependence unit: a firm's ψ_eq is reused across all of its deviations).  With
+    Q(θ) = F(θ)/n_rows the mean squared violation (comparable across sample sizes),
+
+        T_s = b · [ Q_b(θ̂_n) − min_θ Q_b(θ) ]
+
+    i.e. how much worse the FULL-sample estimate does on subsample s than that subsample's
+    own optimum.  The (1−α) quantile of {T_s} is the critical value that profile_ci inverts.
+
+    Also returns a parameter-quantile CI built under a √n rate, FOR COMPARISON ONLY — that
+    rate assumption is exactly what set identification can break, so it is not the headline.
+
+    ⚠ This is inference CONDITIONAL ON THE FIRST STAGE.  δ̂, θ̂₂, α̂, the Step-1 policy, φ̂ and
+    M are held fixed; ψ is not re-simulated.  Demand uncertainty is NOT propagated here.
+    """
+    firms = blk["firms"]
+    uniq = np.unique(firms)
+    n = int(len(uniq))
+    if n < 8:
+        return dict(skipped=f"only {n} firms — subsampling not meaningful")
+    if b_firms is None:                       # b = n^(2/3): b → ∞, b/n → 0
+        b_firms = int(round(n ** (2.0 / 3.0)))
+    b_firms = int(np.clip(b_firms, 5, n - 1))
+
+    idx_by_firm = {f: np.where(firms == f)[0] for f in uniq}
+    rng = np.random.default_rng(seed)
+
+    om_n, ze_n = fit["omega"], fit["zeta"]
+    ga_n = np.asarray(list(fit["gamma"].values()), float)
+    theta_n = np.asarray(fit["theta"], float)
+
+    T, thetas = [], []
+    for _ in range(n_sub):
+        sel = rng.choice(uniq, size=b_firms, replace=False)
+        rows = _rows_for_firms(idx_by_firm, sel)
+        fb = solve_kappa(_sub_block(blk, rows))
+        nrb = len(rows)
+        b_full = _theta_to_b(om_n, ze_n, ga_n, fb["_scales"])
+        Q_at_full = _obj(b_full, fb["_c1"], fb["_Xs"]) / nrb
+        Q_min = fb["objective"] / nrb
+        T.append(b_firms * max(Q_at_full - Q_min, 0.0))
+        thetas.append(fb["theta"])
+
+    T = np.asarray(T, float)
+    TH = np.vstack(thetas)
+    crit = {f"{lv:.2f}": float(np.quantile(T, lv)) for lv in levels}
+
+    # √n-rate parameter-quantile CI (comparison only)
+    scaled = np.sqrt(b_firms) * (TH - theta_n)
+    param_ci = {}
+    for lv in levels:
+        a = 1.0 - lv
+        q_lo = np.quantile(scaled, a / 2.0, axis=0)
+        q_hi = np.quantile(scaled, 1.0 - a / 2.0, axis=0)
+        param_ci[f"{lv:.2f}"] = dict(lo=(theta_n - q_hi / np.sqrt(n)).tolist(),
+                                     hi=(theta_n - q_lo / np.sqrt(n)).tolist())
+
+    return dict(n_firms=n, b_firms=b_firms, n_sub=int(n_sub),
+                crit=crit, param_ci_sqrtn=param_ci,
+                theta_sd_rate_adj=(TH.std(axis=0) * np.sqrt(b_firms / n)).tolist(),
+                T_median=float(np.median(T)), T_max=float(T.max()))
+
+
+def _profile_min_F(b_idx, b_val, c1, Xs, b0):
+    """min F over the OTHER coefficients holding b[b_idx] fixed — a TRUE profile."""
+    dim = len(b0)
+    free = np.array([i for i in range(dim) if i != b_idx], dtype=int)
+    if free.size == 0:
+        b = b0.copy(); b[b_idx] = b_val
+        return _obj(b, c1, Xs)
+
+    def f(bf):
+        b = b0.copy(); b[b_idx] = b_val; b[free] = bf
+        return _obj(b, c1, Xs)
+
+    def gr(bf):
+        b = b0.copy(); b[b_idx] = b_val; b[free] = bf
+        return _grad(b, c1, Xs)[free]
+
+    res = minimize(f, b0[free], jac=gr, method="L-BFGS-B", bounds=None,
+                   options=dict(maxiter=5000, ftol=1e-14, gtol=1e-10))
+    return float(res.fun)
+
+
+def profile_ci(blk, fit, which, crit_value, npts=81, max_expand=6):
+    """TRUE profile of the criterion in ω or ζ, inverted at a subsampled critical value.
+
+    Two fixes over the earlier `profile_param`:
+      * it RE-MINIMISES over the nuisance coefficients at each grid point (a profile). The
+        old routine held them fixed — a SLICE, which makes F rise faster and therefore
+        UNDERSTATES the identified width.
+      * the window no longer scales with the bootstrap SE it is meant to replace; it starts
+        from |opt| and expands geometrically until the region closes inside the grid.
+
+    Reports `truncated_lo/hi` so a window-limited interval is never mistaken for a set
+    boundary.  Statistic matches subsample_kappa:  T(θ) = n_firms·[Q(θ) − Q(θ̂)].
+    """
+    sc = fit["_scales"]; nZ = sc["nZ"]
+    c1 = fit["_c1"]; Xs = fit["_Xs"]; b0 = np.asarray(fit["_b"], float)
+    n_rows = len(c1)
+    n_firms = int(len(np.unique(blk["firms"])))
+    F_hat = float(fit["objective"])
+
     if which == "omega":
-        idx = 0
+        idx, opt = 0, fit["omega"]
         to_b = lambda v: v * sc["s_om"] / sc["s1"]
     elif which == "zeta":
-        idx = 1 + nZ
-        to_b = lambda v: (v + 1.0) * sc["s_ze"] / sc["s1"]   # reported ζ ↦ (1+ζ) ↦ b
+        idx, opt = 1 + nZ, fit["zeta"]
+        to_b = lambda v: (v + 1.0) * sc["s_ze"] / sc["s1"]
     else:
         raise ValueError(which)
-    spread = span * (se_val if (se_val is not None and np.isfinite(se_val) and se_val > 0)
-                     else abs(opt_val) + 1.0)
-    grid = np.linspace(opt_val - spread, opt_val + spread, npts)
-    F = np.empty(npts)
-    for k, v in enumerate(grid):
-        b = b0.copy(); b[idx] = to_b(v)
-        F[k] = _obj(b, c1, Xs)
-    fmin = float(F.min())
-    flat = grid[F <= fmin * (1.0 + 1e-6) + 1e-12]
-    return dict(grid=grid.tolist(), F=F.tolist(),
-                flat_lo=float(flat.min()), flat_hi=float(flat.max()))
+
+    def T_of(v):
+        F = _profile_min_F(idx, to_b(v), c1, Xs, b0)
+        return n_firms * (F - F_hat) / n_rows
+
+    hw = max(abs(float(opt)), 1.0)
+    grid = T = None
+    for _ in range(max_expand):
+        grid = np.linspace(opt - hw, opt + hw, npts)
+        T = np.array([T_of(v) for v in grid])
+        inside = grid[T <= crit_value]
+        if inside.size == 0:
+            break
+        lo, hi = float(inside.min()), float(inside.max())
+        if lo > grid[0] + 1e-12 and hi < grid[-1] - 1e-12:
+            break                                   # region closed inside the window
+        hw *= 3.0
+
+    inside = grid[T <= crit_value]
+    if inside.size == 0:
+        return dict(which=which, crit=float(crit_value), ci_lo=None, ci_hi=None,
+                    empty=True, half_width=float(hw),
+                    grid=grid.tolist(), T=T.tolist())
+    lo, hi = float(inside.min()), float(inside.max())
+    return dict(which=which, crit=float(crit_value), ci_lo=lo, ci_hi=hi, empty=False,
+                truncated_lo=bool(lo <= grid[0] + 1e-12),
+                truncated_hi=bool(hi >= grid[-1] - 1e-12),
+                half_width=float(hw), grid=grid.tolist(), T=T.tolist())
 
 
 def multistart_check(fit, f_opt, n=5, seed=12345):
@@ -292,9 +461,17 @@ def main():
     ap.add_argument("--stage", type=str, default="extended")
     ap.add_argument("--suffix", type=str, default="")
     ap.add_argument("--bootstrap", type=int, default=200,
-                    help="firm-block bootstrap reps for SEs (0 to skip)")
+                    help="firm-block bootstrap reps (COMPARISON ONLY — the bootstrap is not "
+                         "valid for this kinked/possibly set-identified criterion; 0 to skip)")
+    ap.add_argument("--subsample", type=int, default=200,
+                    help="subsampling reps for the HEADLINE inference (BBL/CHT); 0 to skip")
+    ap.add_argument("--subsample-b", type=int, default=None,
+                    help="subsample size in FIRMS (default n^(2/3))")
+    ap.add_argument("--ci-level", type=float, default=0.95,
+                    help="confidence level for the subsampled criterion inversion")
     ap.add_argument("--profile", action="store_true",
-                    help="compute 1-D ω/ζ objective profiles (identified-set widths)")
+                    help="invert the criterion into ω/ζ confidence intervals (true profile, "
+                         "re-minimising nuisance coefficients; needs --subsample > 0)")
     args = ap.parse_args()
 
     tag = f"E{args.estim}_spec_{args.spec}_{args.stage}{args.suffix}"
@@ -340,9 +517,21 @@ def main():
             n_rows=int(blk["d1"].size),
         )
 
+        # ---- Subsampling: the headline inference for this criterion --------------------
+        sub = subsample_kappa(blk, fit, n_sub=args.subsample,
+                              b_firms=args.subsample_b) if args.subsample > 0 else None
+        if sub is not None:
+            rec["subsample"] = {k: v for k, v in sub.items()}
+
+        # ---- Invert the criterion into ω/ζ confidence intervals -----------------------
         if args.profile:
-            rec["profile_omega"] = profile_param(fit, "omega", fit["omega"], se[0])
-            rec["profile_zeta"] = profile_param(fit, "zeta", fit["zeta"], se[1])
+            lvl = f"{args.ci_level:.2f}"
+            crit = (sub or {}).get("crit", {}).get(lvl)
+            if crit is None:
+                print(f"  [{kappa}] --profile needs --subsample > 0 for a critical value; skipped.")
+            else:
+                rec["ci_omega"] = profile_ci(blk, fit, "omega", crit)
+                rec["ci_zeta"] = profile_ci(blk, fit, "zeta", crit)
 
         results[kappa] = rec
 
@@ -358,12 +547,32 @@ def main():
         if ms_max_dF > 1e-6:
             print(f"  !!!! [{kappa}] MULTISTART DISAGREEMENT max ΔF={ms_max_dF:.3e} > 1e-6 — "
                   f"convex hinge should have a unique optimum; suspect a gradient/scaling bug !!!!")
-        if args.profile:
-            po, pz = rec["profile_omega"], rec["profile_zeta"]
-            print(f"        profile ω: F_min={min(po['F']):.4g} flat=[{po['flat_lo']:.4g},"
-                  f"{po['flat_hi']:.4g}] width={po['flat_hi']-po['flat_lo']:.4g}")
-            print(f"        profile ζ: F_min={min(pz['F']):.4g} flat=[{pz['flat_lo']:.4g},"
-                  f"{pz['flat_hi']:.4g}] width={pz['flat_hi']-pz['flat_lo']:.4g}")
+        if sub is not None and "skipped" not in sub:
+            print(f"        subsample: b={sub['b_firms']}/{sub['n_firms']} firms, "
+                  f"{sub['n_sub']} reps | crit({args.ci_level:.2f})="
+                  f"{sub['crit'][f'{args.ci_level:.2f}']:.4g}")
+        elif sub is not None:
+            print(f"        subsample: {sub['skipped']}")
+
+        for nm in ("omega", "zeta"):
+            ci = rec.get(f"ci_{nm}")
+            if not ci:
+                continue
+            sym = "ω" if nm == "omega" else "ζ"
+            if ci["empty"]:
+                print(f"        CI {sym}: EMPTY at the {args.ci_level:.0%} level "
+                      f"(criterion never within crit — check identification)")
+            else:
+                trunc = ("  ⚠ WINDOW-TRUNCATED (not a set boundary)"
+                         if (ci["truncated_lo"] or ci["truncated_hi"]) else "")
+                print(f"        CI {sym}: [{ci['ci_lo']:.4g}, {ci['ci_hi']:.4g}] "
+                      f"width={ci['ci_hi']-ci['ci_lo']:.4g}{trunc}")
+        if 0.45 <= fit["frac_bind"] <= 0.55:
+            print(f"  !!!! [{kappa}] frac_bind={fit['frac_bind']:.3f} — suspiciously close to ½. "
+                  f"A symmetric ± grid around a σ̂ that is NOT a turning point of the simulated "
+                  f"value makes exactly one of each ± pair bind for ANY θ, so the moments carry "
+                  f"little/no identifying content and NOTHING below (point estimates, SEs, CIs) "
+                  f"should be read as a result. Deviate around the FITTED policy (--policy-csv). !!!!")
 
     out_path = COST_FWD / f"cost_params_{tag}.json"
     with open(out_path, "w") as f:

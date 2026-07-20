@@ -96,9 +96,11 @@ case "${BBL_STEP}" in
         echo "warmup complete: depot precompiled + BBL stack loaded — array can launch warm" ;;
     polfunc)      # BBL Step 1: fit the parametric policy function (usually run LOCALLY and uploaded;
                   # this cluster path exists for reproducibility, off by default in the orchestrator).
-                  # Reads market_panel.csv → writes COST_POLFUNC/polfunc_fitted_spec_12.csv.
+                  # Reads market_panel.csv → writes COST_POLFUNC/polfunc_fitted.csv.
+                  # NOTE: the policy function is SPEC-INVARIANT — it takes no --spec (unlike the
+                  # fwd_sim/solve below, whose --spec 12 selects the BLP demand specification).
         setup_python
-        "${PYBIN}" "${PROJECT_DIR}/estimation_bbl_1_polfunc.py" --spec 12 ${BBL_EXTRA} ;;
+        "${PYBIN}" "${PROJECT_DIR}/estimation_bbl_1_polfunc.py" ${BBL_EXTRA} ;;
     fwd_sim)      # BBL Step 2 part 1: ψ under σ̂ and σ̃ deviations (shardable).
         # Forward r^f curve is a REQUIRED input (the sim errors under --hpc if absent):
         # a flat r^f makes ψ4∝ψ2 and leaves ζ unidentified. It is fetched from the BCB

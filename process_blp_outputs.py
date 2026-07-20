@@ -349,6 +349,54 @@ def write_summary_md(sub, index, stage, het=None):
          "<!-- markdownlint-disable-file MD013 MD060 -->", ""]
     L.append(f"_Generated {ts} · stage = **{stage}** · IFT engine · "
              f"θ₂ box: σ∈[0,{BOUND:g}], π∈[−{BOUND:g},{BOUND:g}]._")
+
+    # ── what the estimation actually recovers ────────────────────────────────────────────────
+    # Derived from the engine's own theta2 structure (sigma_indices / pi_interactions), never
+    # hardcoded, so this section cannot drift from the specification that was estimated.
+    _r0 = index[0] if index else {}
+    _t1 = _r0.get("param_names_theta1") or []
+    _sidx = _r0.get("sigma_indices") or []
+    _pis = _r0.get("pi_interactions") or []
+    if _t1 or _sidx or _pis:
+        _has_sigma = set(_sidx)
+        _has_pi = {ci for ci, _ in _pis}
+        _flat = [c for c in range(1, len(COEF_NAMES) + 1)
+                 if c not in _has_sigma and c not in _has_pi]
+        L += ["", "## What the estimation recovers", "",
+              "Two blocks of parameters, estimated jointly by GMM on the moment condition "
+              "E[Z'ξ]=0. Individual `i` in market `m` has coefficient "
+              "`β_i = θ₁ + Σ_d π·(D_dm − D̄_d)/σ_d + σ·ν_i` on each characteristic.", ""]
+        L += [f"**θ₁ — mean utility ({len(_t1)} coefficients).** Linear; recovered by IV-GMM "
+              "given the mean utilities δ, then re-estimated at each θ₂ trial. Demographics enter "
+              "centered, so θ₁ is the **average-market** coefficient:", ""]
+        L.append("| # | Parameter | Interpretation |")
+        L.append("|--:|:--|:--|")
+        for i, nm in enumerate(_t1, start=1):
+            role = ("**price**: the deposit spread (markdown rf − dep. rate); the structural object "
+                    "the counterfactuals need" if nm == "alpha" else "product characteristic")
+            L.append(f"| {i} | {THETA1_PRETTY.get(nm, nm.replace('_', ' '))} | {role} |")
+        L += ["", f"**θ₂ — heterogeneity ({len(_sidx)} σ + {len(_pis)} π = "
+              f"{len(_sidx) + len(_pis)} parameters).** Nonlinear; these are what the outer GMM "
+              "search optimises over. Everything else is profiled out analytically.", ""]
+        L.append("| Parameter | What it lets vary |")
+        L.append("|:--|:--|")
+        for s in _sidx:
+            L.append(f"| σ({_name(COEF_NAMES, s)}) | **unobserved** dispersion in the "
+                     f"{_name(COEF_NAMES, s)} coefficient across individuals |")
+        for ci, di in _pis:
+            L.append(f"| π({_name(COEF_NAMES, ci)} × {_name(D_COLS, di)}) | **observed** variation: "
+                     f"how the {_name(COEF_NAMES, ci)} coefficient shifts with market "
+                     f"{_name(D_COLS, di).replace('_', ' ')} |")
+        if _flat:
+            L += ["", "**Not freed** (no σ and no π, so β_i = θ₁ for every market — no "
+                  "heterogeneity is estimated for these): "
+                  + ", ".join(f"`{_name(COEF_NAMES, c)}`" for c in _flat) + ".", ""]
+        L += ["A dagger (†) on a θ₂ SE below means that coefficient was **profiled out of the "
+              "covariance** as a degenerate direction (an on-bound σ, or a π whose moment-Jacobian "
+              "column is numerically flat): its point estimate is still reported, but it is locally "
+              "unidentified so no SE is defined for it. σ(ln assets) is absent by construction — it "
+              "sat on the σ≥0 bound in every routine and was dropped from the specification.", ""]
+
     L += ["", "## Headline estimates", "",
           "| Routine | Model | Q (IFT) | conv. | dim θ₂ | N obs | G\\* | num Q | Δ(IFT,num) | θ₂ near bound |",
           "|---|---|---:|:---:|---:|---:|---:|---:|---:|---|"]
