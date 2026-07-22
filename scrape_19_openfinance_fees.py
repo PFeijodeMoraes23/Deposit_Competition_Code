@@ -286,7 +286,7 @@ def parse_response(url: str, payload: dict, ep: dict) -> list[dict]:
     product       = ep["product"]
 
     rows: list[dict] = []
-    items = payload.get("data", [])
+    items = payload.get("data") or []      # key may exist but be null
     if isinstance(items, dict):
         items = [items]
 
@@ -448,7 +448,7 @@ async def fetch_endpoint(
     if cache is not None and url in cache:
         payload = cache[url]
         if payload:
-            return _stamp(parse_response(url, payload, ep))
+            return _safe_parse(url, payload, ep)
 
     async with semaphore:
         payload = await _get_json(client, url)
@@ -459,7 +459,17 @@ async def fetch_endpoint(
     if cache is not None:
         cache.set(url, payload, expire=86400 * 30)   # 30-day TTL
 
-    return _stamp(parse_response(url, payload, ep))
+    return _safe_parse(url, payload, ep)
+
+
+def _safe_parse(url: str, payload: dict, ep: dict) -> list[dict]:
+    """Parse one endpoint's payload, isolating failures so a single malformed
+    response (e.g. an unexpected shape) never aborts the whole batch."""
+    try:
+        return _stamp(parse_response(url, payload, ep))
+    except Exception as exc:
+        log.warning("Parse failed for %s (%s): %s", ep.get("product"), url, exc)
+        return []
 
 
 def _stamp(rows: list[dict]) -> list[dict]:
