@@ -1,25 +1,35 @@
 """
-make_blp_extended_comparison_table.py
+make_blp_demand_comparison_table.py
 =====================================
-Cross-estimator comparison of the FULL (Extended, all-8-random-coefficient) RC-BLP model across the
-sleepiness estimation strategies E5-E8, Spec 12. One column per strategy (\\ref{estimation:*});
-rows are the mean-utility coefficients θ₁ (Panel A) and the random-coefficient parameters θ₂
-(Panel B). This is the RC analog of the logit cross-estimator comparison (review §1.1): it puts the
-headline full models side by side so the reader sees how the estimates move across strategies.
+Cross-estimator comparison of an RC-BLP model across the sleepiness estimation strategies E5-E8,
+Spec 12. One column per strategy (\\ref{estimation:*}); rows are the mean-utility coefficients θ₁
+(Panel A) and the random-coefficient parameters θ₂ (Panel B). This is the RC analog of the logit
+cross-estimator comparison (review §1.1): it puts the models side by side so the reader sees how the
+estimates move across strategies.
 
-Reads  blp_results_E{5,6,7,8}_spec_12_extended{suffix}.json  (the last/Extended stage).
+TWO stages are emitted (see STAGE_SPECS):
+  * rc4  (DEFAULT, no filename suffix) — the price-heterogeneity model: a random coefficient on the
+    deposit spread plus its interactions with market demographics. This is the last well-identified
+    stage; the fgc/asset interactions freed in ext1/ext2/extended are near-collinear with the spread
+    interactions, so they leave α essentially unchanged while inflating its SE ~8x. rc4 is therefore
+    the headline. Files: blp_demand_comparison{_noseg}_spec12.tex.
+  * extended  (_full suffix) — the Full model with every freed random coefficient / interaction,
+    kept as a robustness/appendix table. Files: blp_demand_comparison_full{_noseg}_spec12.tex.
+
+Reads  blp_results_E{5,6,7,8}_spec_12_{stage}{engine_suffix}.json.
 Reuses the label maps + formatting (t(G*) stars, on-bound σ dagger, se_note) from make_blp_rc_table.
 
 Usage
 -----
-  python make_blp_extended_comparison_table.py                 # E5-E8, IFT engine
-  python make_blp_extended_comparison_table.py --routines 5,6,7,8
-  python make_blp_extended_comparison_table.py --engine numerical
+  python make_blp_demand_comparison_table.py                 # E5-E8, IFT engine, BOTH stages
+  python make_blp_demand_comparison_table.py --routines 5,6,7,8
+  python make_blp_demand_comparison_table.py --engine numerical
+  python make_blp_demand_comparison_table.py --stages rc4     # only the rc4 (default) tables
 
-Output
+Output (× {with-seg, _noseg})
 ------
-  BLP_RESULTS/Rout/blp_extended_comparison_spec12{suffix}.tex
-  Drafts/Deposit Competition/blp_extended_comparison_spec12{suffix}.tex
+  rc4 :  BLP_RESULTS/Rout/ + Drafts/  blp_demand_comparison{_noseg}_spec12{engine}.tex
+  full:  BLP_RESULTS/Rout/ + Drafts/  blp_demand_comparison_full{_noseg}_spec12{engine}.tex
 """
 from utils.venv_guard import ensure_project_venv
 ensure_project_venv(__file__)
@@ -30,15 +40,35 @@ import math
 import make_blp_rc_table as rc   # label maps, decode_theta2, fmt_coef, se_note, est_ref, loaders
 
 DEFAULT_ESTS = [5, 6, 7, 8]
-STAGE = "extended"   # the full model = all eight random coefficients freed
+
+# Which RC stage each comparison table reports.
+#   stage        : checkpoint stage read from disk
+#   file_lbl     : filename/label infix ("" => the default no-subscript table; "_full" => the Full one)
+#   caption_tail : appended to the "BLP Demand Estimation" caption
+#   blurb        : the "Each column is <blurb> ..." phrase in the notes
+STAGE_SPECS = {
+    "rc4": dict(
+        stage="rc4", file_lbl="", caption_tail="",
+        blurb=(r"the random-coefficients model with a random coefficient on the deposit spread and "
+               r"its interactions with market demographics (the price-heterogeneity specification, "
+               r"the last stage in which $\hat\alpha$ is precisely estimated)"),
+    ),
+    "full": dict(
+        stage="extended", file_lbl="_full", caption_tail=r" --- Full Specification",
+        blurb=(r"the Full random-coefficients model, freeing every random coefficient and "
+               r"demographic interaction"),
+    ),
+}
 
 
-def build_table(ests, suffix: str = "", show_segments: bool = True) -> str:
-    data  = {e: rc.load_stage(e, STAGE, suffix) for e in ests}
+def build_table(ests, suffix: str = "", show_segments: bool = True,
+                stage: str = "extended", file_lbl: str = "",
+                caption_tail: str = "", blurb: str = "") -> str:
+    data  = {e: rc.load_stage(e, stage, suffix) for e in ests}
     data  = {e: d for e, d in data.items() if d is not None}
     avail = [e for e in ests if e in data]
     if not avail:
-        print(f"[extended-comparison] no {STAGE} results found for {ests}")
+        print(f"[demand-comparison] no {stage} results found for {ests}")
         return ""
 
     ncols   = len(avail)
@@ -65,8 +95,8 @@ def build_table(ests, suffix: str = "", show_segments: bool = True) -> str:
         r"\setlength{\LTright}{\fill}",
         rf"\begin{{xltabular}}{{{TABLE_W}}}{{>{{\raggedright\arraybackslash}}p{{4.9cm}} "
         rf"*{{{ncols}}}{{>{{\centering\arraybackslash}}X}}}}",
-        r"    \caption{BLP Demand Estimation}",
-        rf"    \label{{tab:blp_extended_comparison{lbl_suffix}_spec12}} \\",
+        rf"    \caption{{BLP Demand Estimation{caption_tail}}}",
+        rf"    \label{{tab:blp_demand_comparison{file_lbl}{lbl_suffix}_spec12}} \\",
         r"    \toprule",
         rf"     & {hdr} \\",
         r"    \midrule",
@@ -84,7 +114,7 @@ def build_table(ests, suffix: str = "", show_segments: bool = True) -> str:
         "",
         r"    \bottomrule",
         r"    \multicolumn{" + str(ncols + 1) + r"}{@{}p{\dimexpr" + TABLE_W + r"-2\tabcolsep\relax}@{}}{"
-        r"\scriptsize \textit{Notes:} Each column is the Full random-coefficients model for one "
+        rf"\scriptsize \textit{{Notes:}} Each column is {blurb} for one "
         rf"sleepiness estimation strategy, enumerated in Section~\ref{{sec:empirical:sleep}}.{seg_note} {sem}. "
         r"Significance from a "
         r"Student-$t$ reference with $G^*$ effective clusters: *** $p<0.01$, ** $p<0.05$, * $p<0.1$. "
@@ -178,23 +208,34 @@ def build_table(ests, suffix: str = "", show_segments: bool = True) -> str:
 
 
 def main():
-    ap = argparse.ArgumentParser(description="Full-model (Extended) RC-BLP comparison across E5-E8")
+    ap = argparse.ArgumentParser(description="RC-BLP cross-estimator comparison across E5-E8 "
+                                             "(rc4 headline + Full)")
     ap.add_argument("--routines", default="5,6,7,8")
     ap.add_argument("--engine", choices=["ift", "numerical"], default="ift")
+    ap.add_argument("--stages", default="rc4,full",
+                    help="comma list of STAGE_SPECS keys to emit (default: both)")
     args = ap.parse_args()
     suffix = "_num" if args.engine == "numerical" else ""
     ests   = [int(x) for x in args.routines.split(",") if x.strip()]
+    want   = [s.strip() for s in args.stages.split(",") if s.strip()]
 
-    # Two versions: with segment dummies (S2-S5) and without (they are nuisance controls).
-    for show_seg, lbl in ((True, ""), (False, "_noseg")):
-        tex = build_table(ests, suffix, show_segments=show_seg)
-        if not tex:
+    for key in want:
+        spec = STAGE_SPECS.get(key)
+        if spec is None:
+            print(f"[demand-comparison] unknown stage '{key}' (have {list(STAGE_SPECS)}) — skipped")
             continue
-        fname = f"blp_extended_comparison{lbl}_spec12{suffix}.tex"
-        for dest in (rc.TABLES_DIR, rc.DRAFTS_DIR):
-            dest.mkdir(parents=True, exist_ok=True)
-            (dest / fname).write_text(tex, encoding="utf-8")
-            print(f"  saved: {dest / fname}")
+        # Two versions each: with segment dummies (S2-S5) and without (nuisance controls).
+        for show_seg, seg_lbl in ((True, ""), (False, "_noseg")):
+            tex = build_table(ests, suffix, show_segments=show_seg,
+                              stage=spec["stage"], file_lbl=spec["file_lbl"],
+                              caption_tail=spec["caption_tail"], blurb=spec["blurb"])
+            if not tex:
+                continue
+            fname = f"blp_demand_comparison{spec['file_lbl']}{seg_lbl}_spec12{suffix}.tex"
+            for dest in (rc.TABLES_DIR, rc.DRAFTS_DIR):
+                dest.mkdir(parents=True, exist_ok=True)
+                (dest / fname).write_text(tex, encoding="utf-8")
+                print(f"  saved [{key}]: {dest / fname}")
     print("\nDone. \\input needs \\usepackage{longtable,booktabs,setspace}.")
 
 

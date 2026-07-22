@@ -320,9 +320,34 @@ function build_cf_context(estim::Int, spec_id::Int, stage::String;
             error("δ̂ length $(length(delta_full)) ≠ parquet rows $N_full — results/parquet mismatch")
         delta_hat = all(row_keep) ? delta_full : delta_full[row_keep]
     end
-    # Sanity: the saved θ₂ structure must match the requested stage.
-    (@isdefined(res) && res["sigma_indices"] != sigma_indices) &&
-        @warn "sigma_indices in result ≠ build_theta2_structure($stage)"
+    # Sanity: the saved θ₂ structure must match the LOCAL build_theta2_structure($stage), because
+    # θ₂ is unpacked POSITIONALLY (unpack_theta2 slices by these index lists). If the saved result
+    # was estimated under a different σ/π layout than the local code builds, every μ — and hence
+    # every share, deposit path, ψ and cost — is silently wrong with nothing failing. This is a
+    # hard error, not a warning: a structure mismatch means the numbers are invalid, and the fix is
+    # to re-sync the code (or rebuild the sysimage) so build_theta2_structure matches the run that
+    # produced the result. (Only checked when a real RC result was loaded; `res` is undefined in the
+    # logit/placeholder branches, whose θ₂ is empty/zeroed by construction.)
+    if @isdefined(res)
+        saved_sig = get(res, "sigma_indices", nothing)
+        saved_pi  = get(res, "pi_interactions", nothing)
+        if saved_sig !== nothing && collect(saved_sig) != collect(sigma_indices)
+            error("θ₂ σ-structure mismatch for stage '$stage': result has sigma_indices=" *
+                  "$(collect(saved_sig)) but local build_theta2_structure gives $(sigma_indices). " *
+                  "Re-sync blp_1_estimation.jl / rebuild the sysimage to match the run that wrote " *
+                  "$(basename(rpath)).")
+        end
+        if saved_pi !== nothing && collect(Tuple.(saved_pi)) != collect(Tuple.(pi_interactions))
+            error("θ₂ π-structure mismatch for stage '$stage': result has pi_interactions=" *
+                  "$(collect(Tuple.(saved_pi))) but local build_theta2_structure gives " *
+                  "$(pi_interactions). θ₂ is unpacked positionally, so this would silently " *
+                  "mis-map the random coefficients. Re-sync the code / rebuild the sysimage.")
+        end
+        exp_len = length(sigma_indices) + length(pi_interactions)
+        length(theta2) == exp_len ||
+            error("θ₂ length $(length(theta2)) ≠ $(exp_len) implied by the local structure for " *
+                  "stage '$stage' — results/code mismatch in $(basename(rpath)).")
+    end
 
     return CFDemandCtx(estim, spec_id, stage, R, coef_dim, df, pc, buf, prod_vec,
                        nu_draws, draws_3d, obs_key_idx, sigma_indices, pi_interactions,

@@ -2,7 +2,7 @@
 scrape_19_openfinance_fees.py
 ==============================
 Collect banking service-fee schedules from the Open Finance Brazil (OFB) public
-product APIs — no OAuth required, pure open data.
+open-data product APIs — no OAuth required, pure open data.
 
 Why this beats Nakane et al.
 -----------------------------
@@ -14,33 +14,60 @@ Why this beats Nakane et al.
   • Customer distribution: each price tier comes with the share of customers
     paying it — so we can compute a weighted average price, not just a max.
   • Time variation: responses cached to disk tagged with scrape date; each run
-    appends a new snapshot → free historical archive.
+    appends a new snapshot → free prospective historical archive.
+
+Scope — the full open-data Products & Services family
+-----------------------------------------------------
+The OFB open data used to be one "products-services" API; it is now split into
+per-product families. This collector is parameterized over them:
+
+  accounts           deposit / payment accounts  →  fees.priorityServices/otherServices  (per-event BRL)
+  creditcards        credit cards                →  fees.services (annuity …) + interest.rates/instalmentRates
+  loans              personal/business loans     →  fees.services + interestRates
+  financings         financings                  →  fees.services + interestRates
+  invoicefinancings  invoice financings          →  fees.services + interestRates
+  unarranged         unarranged overdraft        →  fees.services + interestRates
+
+Two economically-distinct objects are parsed and TAGGED with `price_kind`:
+  per_event_brl   a fee charged per event, in BRL   (comparable across banks; enters the fee measure)
+  rate_pct        an interest-rate distribution, %  (a different object; kept separate)
+
+IMPORTANT — temporal scope
+---------------------------
+The frequency-distribution values (price bands + customer shares) only exist
+MONTHLY since JANUARY 2021 (BCB Instrução Normativa 32/2020, art. 6), published
+on the 10th BUSINESS day referencing the previous month. This is a recent
+short-panel / cross-sectional source — NOT the historical backbone. Pre-2021
+history comes from scrape_20 (BCB DataVigencia listed prices) and scrape_18
+(COSIF realized revenue). The response carries NO reference-period field, so
+freshness must be inferred empirically (see diag_openfinance_freshness.py).
 
 Data flow
 ---------
   1. Fetch participant list from the OFB Directory.
-  2. Extract each institution's opendata-accounts_* API URLs directly from
-     the registered ApiDiscoveryEndpoints (family: opendata-accounts_personal-
-     accounts / opendata-accounts_business-accounts).
-  3. Concurrently fetch all URLs; parse fees from data[].fees.priorityServices[].
-  4. Compute weighted average price from quartile-interval distributions.
+  2. Extract each institution's opendata-* API URLs from the registered
+     ApiDiscoveryEndpoints, for the requested families.
+  3. Concurrently fetch all URLs; parse fees + interest-rate distributions.
+  4. Compute customer-weighted average price/rate from the quartile bands.
   5. Append to a long panel CSV tagged with today's scrape date.
 
 Stack
 -----
-  httpx (async, HTTP/2)  +  tenacity (retry)  +  diskcache (persistent cache)
+  httpx (async, HTTP/2)  +  diskcache (persistent cache)
 
 Output files  (BCB/Tarifas/processed/)
 ---------------------------------------
-  openfinance_fees_raw/YYYYMMDD_fees_raw.jsonl   raw rows this run
+  openfinance_fees_raw/YYYYMMDD_fees_raw.jsonl   raw rows this run (immutable archive)
   openfinance_fees_panel_long.csv                long panel (all runs, appended)
-  openfinance_fees_panel_wide.csv                latest wide snapshot
+  openfinance_fees_panel_wide.csv                latest wide snapshot (per-event fees only)
 
 Usage
 -----
-  python scrape_19_openfinance_fees.py
-  python scrape_19_openfinance_fees.py --test 15   # first 15 endpoints
-  python scrape_19_openfinance_fees.py --no-cache  # bypass disk cache
+  python scrape_19_openfinance_fees.py                       # accounts only (default)
+  python scrape_19_openfinance_fees.py --families accounts,creditcards,loans
+  python scrape_19_openfinance_fees.py --families all
+  python scrape_19_openfinance_fees.py --test 15             # first 15 endpoints
+  python scrape_19_openfinance_fees.py --no-cache            # bypass disk cache
 """
 
 from __future__ import annotations
@@ -49,8 +76,13 @@ import argparse
 import asyncio
 import json
 import logging
+import re
 from datetime import date
 from pathlib import Path
+
+# Enforce the project venv before importing third-party deps.
+from utils.venv_guard import ensure_project_venv
+ensure_project_venv(__file__)
 
 import httpx
 import pandas as pd
@@ -81,14 +113,56 @@ CACHE_DIR = paths.TARIFAS_CACHE / "of_opendata"
 # Constants
 # ---------------------------------------------------------------------------
 DIRECTORY_URL  = "https://data.directory.openbankingbrasil.org.br/participants"
-OPENDATA_FAM_PF = "opendata-accounts_personal-accounts"
-OPENDATA_FAM_PJ = "opendata-accounts_business-accounts"
+
+# The open-data product families we know how to parse. Keys are the canonical
+# "product" tokens accepted by --families; values are the ApiFamilyType prefix
+# (the part before the first '_') normalized to hyphen-free lowercase, so we can
+# match the directory's family strings regardless of their exact hyphenation
+# (e.g. "opendata-invoice-financings_personal-invoice-financings").
+#   accounts           <- opendata-accounts_*
+#   creditcards        <- opendata-creditcards_*
+#   loans              <- opendata-loans_*
+#   financings         <- opendata-financings_*
+#   invoicefinancings  <- opendata-invoice-financings_*
+#   unarranged         <- opendata-unarranged-accounts-overdraft_*
+PRODUCT_BY_PREFIX = {
+    "opendataaccounts":                    "accounts",
+    "opendatacreditcards":                 "creditcards",
+    "opendataloans":                       "loans",
+    "opendatafinancings":                  "financings",
+    "opendatainvoicefinancings":           "invoicefinancings",
+    "opendataunarranged":                  "unarranged",
+}
+ALL_PRODUCTS = list(dict.fromkeys(PRODUCT_BY_PREFIX.values()))
+DEFAULT_PRODUCTS = ["accounts"]
 
 CONCURRENCY    = 20
 TIMEOUT        = 25.0
 MAX_RETRIES    = 3
 TODAY          = date.today().isoformat()
 TODAY_TAG      = TODAY.replace("-", "")
+
+
+def _norm_token(s: str) -> str:
+    """Lowercase and strip all non-alphanumerics (hyphens/underscores)."""
+    return re.sub(r"[^a-z0-9]", "", str(s).lower())
+
+
+def product_for_family(api_family: str) -> str | None:
+    """Map an ApiFamilyType (e.g. 'opendata-loans_personal-loans') to a product token."""
+    prefix = api_family.split("_", 1)[0]
+    return PRODUCT_BY_PREFIX.get(_norm_token(prefix))
+
+
+def customer_type_for_family(api_family: str) -> str:
+    """PF / PJ / NA inferred from the resource segment of the ApiFamilyType."""
+    resource = api_family.split("_", 1)[1] if "_" in api_family else ""
+    r = resource.lower()
+    if "personal" in r:
+        return "PF"
+    if "business" in r:
+        return "PJ"
+    return "NA"
 
 
 # ---------------------------------------------------------------------------
@@ -112,15 +186,18 @@ def get_cache(use_cache: bool) -> "diskcache.Cache | None":
 # Directory parsing
 # ---------------------------------------------------------------------------
 
-def extract_opendata_endpoints(participants: list[dict]) -> list[dict]:
+def extract_endpoints(participants: list[dict], products: list[str]) -> list[dict]:
     """
-    Walk the participant directory and return all open-data account endpoints.
+    Walk the participant directory and return all open-data endpoints for the
+    requested product families.
 
     Returns list of:
-      { org_name, cnpj, customer_type ('PF'/'PJ'), url }
+      { org_name, cnpj8, customer_type ('PF'/'PJ'/'NA'), api_family, product, url }
     """
+    wanted = set(products)
     endpoints: list[dict] = []
-    seen: set[str] = set()
+    seen: set[tuple[str, str]] = set()
+    unknown_families: set[str] = set()
 
     for p in participants:
         if p.get("Status", "Active") not in ("Active", ""):
@@ -132,120 +209,219 @@ def extract_opendata_endpoints(participants: list[dict]) -> list[dict]:
         for auth in p.get("AuthorisationServers", []):
             for res in auth.get("ApiResources", []):
                 fam = res.get("ApiFamilyType", "")
-                if fam not in (OPENDATA_FAM_PF, OPENDATA_FAM_PJ):
+                if not fam.lower().startswith("opendata"):
                     continue
 
-                ctype = "PF" if fam == OPENDATA_FAM_PF else "PJ"
+                product = product_for_family(fam)
+                if product is None:
+                    unknown_families.add(fam)
+                    continue
+                if product not in wanted:
+                    continue
+
+                ctype = customer_type_for_family(fam)
 
                 for disc in res.get("ApiDiscoveryEndpoints") or []:
                     url = disc.get("ApiEndpoint", "").strip()
-                    if not url or url in seen:
+                    if not url:
                         continue
-                    seen.add(url)
+                    key = (url, fam)
+                    if key in seen:
+                        continue
+                    seen.add(key)
                     endpoints.append({
                         "org_name":      name,
                         "cnpj8":         cnpj8,
                         "customer_type": ctype,
+                        "api_family":    fam,
+                        "product":       product,
                         "url":           url,
                     })
 
-    log.info("Directory: %d open-data account endpoints (%d PF, %d PJ)",
-             len(endpoints),
-             sum(1 for e in endpoints if e["customer_type"] == "PF"),
-             sum(1 for e in endpoints if e["customer_type"] == "PJ"))
+    by_product: dict[str, int] = {}
+    for e in endpoints:
+        by_product[e["product"]] = by_product.get(e["product"], 0) + 1
+    log.info("Directory: %d open-data endpoints for %s  (%s)",
+             len(endpoints), sorted(wanted),
+             ", ".join(f"{k}={v}" for k, v in sorted(by_product.items())))
+    if unknown_families:
+        log.info("Directory: %d unrecognized opendata family types skipped: %s",
+                 len(unknown_families), sorted(unknown_families))
     return endpoints
 
 
 def _clean_cnpj(raw: str) -> str:
-    import re
     d = re.sub(r"\D", "", str(raw))
     return d[:8].zfill(8) if d else ""
 
 
 # ---------------------------------------------------------------------------
-# Response parser — handles the v1 opendata-accounts structure
+# Response parser — one unified parser over the open-data family shapes
 # ---------------------------------------------------------------------------
 
-def parse_opendata_response(url: str, payload: dict,
-                             org_name: str, cnpj8: str,
-                             customer_type: str) -> list[dict]:
-    """
-    Parse the open-data personal/business accounts response.
+# Fee-service lists can appear under any of these keys, depending on family.
+_FEE_LIST_KEYS = ("priorityServices", "otherServices", "services")
 
-    Structure:
-      data[] →
-        participant.cnpjNumber
-        type  (account type: CONTA_CORRENTE, CONTA_PAGAMENTO_PRE_PAGA, …)
-        fees.priorityServices[] →
-          name, code, chargingTriggerInfo
-          prices[{interval, value, currency, customers.rate}]
-          minimum.value / maximum.value
+# The four quartile bands, in order.
+_FAIXAS = ("1_FAIXA", "2_FAIXA", "3_FAIXA", "4_FAIXA")
+
+
+def parse_response(url: str, payload: dict, ep: dict) -> list[dict]:
     """
+    Parse an open-data response into unified fee/rate rows.
+
+    Emits two kinds of rows, tagged by `price_kind`:
+      per_event_brl  from fees.{priorityServices,otherServices,services}[]
+                     prices[{interval, value, currency, customers.rate}] + minimum/maximum
+      rate_pct       from interestRates[] (loans/financings/…) OR
+                     interest.{rates,instalmentRates}[] (credit cards)
+                     applications[{interval, indexer.rate, customers.rate}] + minimum/maximumRate
+
+    All rows share one schema so the long panel stays a single table.
+    """
+    org_name      = ep["org_name"]
+    cnpj8         = ep["cnpj8"]
+    customer_type = ep["customer_type"]
+    api_family    = ep["api_family"]
+    product       = ep["product"]
+
     rows: list[dict] = []
     items = payload.get("data", [])
     if isinstance(items, dict):
         items = [items]
 
     for item in items:
-        participant = item.get("participant", {})
-        # Prefer the CNPJ from the response (more reliable than directory)
-        resp_cnpj_full = participant.get("cnpjNumber", "")
-        import re
-        resp_cnpj8 = re.sub(r"\D", "", resp_cnpj_full)[:8].zfill(8)
-        resolved_cnpj = resp_cnpj8 or cnpj8
+        if not isinstance(item, dict):
+            continue
+        participant = item.get("participant", {}) or {}
+        resp_cnpj8  = re.sub(r"\D", "", participant.get("cnpjNumber", ""))[:8].zfill(8)
+        resolved_cnpj = resp_cnpj8 if resp_cnpj8 != "00000000" else cnpj8
+        resp_name   = participant.get("name", org_name)
+        resp_brand  = participant.get("brand", "")
+        account_type = item.get("type", "") or item.get("name", "")
 
-        resp_name    = participant.get("name", org_name)
-        resp_brand   = participant.get("brand", "")
-        account_type = item.get("type", "")
+        base = {
+            "org_name":      org_name,
+            "cnpj8":         resolved_cnpj,
+            "brand":         resp_brand,
+            "company_name":  resp_name,
+            "customer_type": customer_type,
+            "api_family":    api_family,
+            "product":       product,
+            "account_type":  account_type,
+            "source_url":    url,
+        }
 
-        fees_block       = item.get("fees", {})
-        priority_svcs    = fees_block.get("priorityServices", [])
-        other_svcs       = fees_block.get("otherServices", [])
+        # --- per-event BRL fees -------------------------------------------
+        fees_block = item.get("fees", {}) or {}
+        for key in _FEE_LIST_KEYS:
+            for svc in (fees_block.get(key) or []):
+                if not isinstance(svc, dict):
+                    continue
+                row = _fee_row(svc, base)
+                if row is not None:
+                    rows.append(row)
 
-        for svc in (priority_svcs + other_svcs):
-            name    = svc.get("name", "")
-            code    = svc.get("code", "")
-            trigger = svc.get("chargingTriggerInfo", "")
+        # --- interest-rate distributions ----------------------------------
+        # Shape A: top-level interestRates[] (loans/financings/invoicefinancings/unarranged)
+        for ir in (item.get("interestRates") or []):
+            if isinstance(ir, dict):
+                rows.append(_rate_row(ir, base, kind_label="INTEREST"))
+        # Shape B: nested interest.{rates,instalmentRates}[] (credit cards)
+        interest = item.get("interest", {}) or {}
+        for ir in (interest.get("rates") or []):
+            if isinstance(ir, dict):
+                rows.append(_rate_row(ir, base, kind_label="INTEREST_ROTATIVO"))
+        for ir in (interest.get("instalmentRates") or []):
+            if isinstance(ir, dict):
+                rows.append(_rate_row(ir, base, kind_label="INTEREST_PARCELADO"))
 
-            prices  = svc.get("prices", [])
-            minimum = svc.get("minimum", {})
-            maximum = svc.get("maximum", {})
+    return [r for r in rows if r is not None]
 
-            price_min = _to_float(minimum.get("value"))
-            price_max = _to_float(maximum.get("value"))
 
-            # Weighted average price from quartile distribution
-            wtd_avg = _weighted_avg(prices)
+def _fee_row(svc: dict, base: dict) -> dict | None:
+    name    = svc.get("name", "")
+    code    = svc.get("code", "")
+    if not (name or code):
+        return None
+    prices  = svc.get("prices", []) or []
+    minimum = svc.get("minimum", {}) or {}
+    maximum = svc.get("maximum", {}) or {}
 
-            # Also store individual quartile values (useful for distributional analysis)
-            q_vals: dict[str, float | None] = {}
-            for pt in prices:
-                iv = pt.get("interval", "")
-                q_vals[f"price_{iv}"] = _to_float(pt.get("value"))
-                q_vals[f"cust_rate_{iv}"] = _to_float(
-                    (pt.get("customers") or {}).get("rate")
-                )
+    bands = _band_values(prices, value_getter=lambda pt: pt.get("value"))
+    row = {
+        **base,
+        "price_kind":    "per_event_brl",
+        "service_name":  name,
+        "service_code":  str(code),
+        "trigger_info":  svc.get("chargingTriggerInfo", ""),
+        "price_minimum": _to_float(minimum.get("value")),
+        "price_maximum": _to_float(maximum.get("value")),
+    }
+    row.update(bands)
+    return row
 
-            row: dict = {
-                "data_coleta":   TODAY,
-                "org_name":      org_name,
-                "cnpj8":         resolved_cnpj,
-                "brand":         resp_brand,
-                "company_name":  resp_name,
-                "customer_type": customer_type,
-                "account_type":  account_type,
-                "service_name":  name,
-                "service_code":  code,
-                "trigger_info":  trigger,
-                "price_minimum": price_min,
-                "price_maximum": price_max,
-                "price_weighted_avg": wtd_avg,
-                "source_url":    url,
-            }
-            row.update(q_vals)
-            rows.append(row)
 
-    return rows
+def _rate_row(ir: dict, base: dict, kind_label: str) -> dict:
+    indexer = ir.get("referentialRateIndexer") or ir.get("indexer") or ""
+    code    = f"{kind_label}_{indexer}" if indexer else kind_label
+    apps    = ir.get("applications", []) or []
+
+    # The per-band rate lives under applications[].indexer.rate; the customer
+    # share under applications[].customers.rate.
+    bands = _band_values(
+        apps,
+        value_getter=lambda a: (a.get("indexer") or {}).get("rate") if isinstance(a.get("indexer"), dict) else a.get("rate"),
+    )
+    row = {
+        **base,
+        "price_kind":    "rate_pct",
+        "service_name":  str(indexer) or kind_label,
+        "service_code":  str(code),
+        "trigger_info":  "",
+        "price_minimum": _to_float(ir.get("minimumRate")),
+        "price_maximum": _to_float(ir.get("maximumRate")),
+    }
+    row.update(bands)
+    return row
+
+
+def _band_values(items: list[dict], value_getter) -> dict:
+    """
+    Build the band-level columns + summary stats from a 4-quartile distribution.
+
+    Each item has an `interval` (1_FAIXA..4_FAIXA), a value (via value_getter),
+    and customers.rate (share of customers in that band).
+    Returns price_weighted_avg, share_zero, price_band_spread, and per-band
+    price_<FAIXA> / cust_rate_<FAIXA> columns.
+    """
+    q_vals: dict = {f"price_{iv}": None for iv in _FAIXAS}
+    q_vals.update({f"cust_rate_{iv}": None for iv in _FAIXAS})
+
+    total_w = 0.0
+    total_wv = 0.0
+    share_zero = 0.0
+    for pt in items:
+        if not isinstance(pt, dict):
+            continue
+        iv = pt.get("interval", "")
+        v  = _to_float(value_getter(pt))
+        r  = _to_float((pt.get("customers") or {}).get("rate"))
+        if iv in _FAIXAS:
+            q_vals[f"price_{iv}"] = v
+            q_vals[f"cust_rate_{iv}"] = r
+        if v is not None and r is not None:
+            total_w  += r
+            total_wv += v * r
+            if v == 0.0:
+                share_zero += r
+
+    q_vals["price_weighted_avg"] = (total_wv / total_w) if total_w > 0 else None
+    q_vals["share_zero"] = share_zero if total_w > 0 else None
+    p1 = q_vals["price_1_FAIXA"]
+    p4 = q_vals["price_4_FAIXA"]
+    q_vals["price_band_spread"] = (p4 - p1) if (p1 is not None and p4 is not None) else None
+    return q_vals
 
 
 def _to_float(v: "str | None") -> "float | None":
@@ -255,24 +431,6 @@ def _to_float(v: "str | None") -> "float | None":
         return float(str(v).replace(",", "."))
     except ValueError:
         return None
-
-
-def _weighted_avg(prices: list[dict]) -> "float | None":
-    """
-    Compute the customer-weighted average price across quartile intervals.
-    E.g. 3% pay R$0, 97% pay R$6.50 → weighted avg = R$6.30.
-    """
-    total_w = 0.0
-    total_wv = 0.0
-    for pt in prices:
-        v = _to_float(pt.get("value"))
-        r = _to_float((pt.get("customers") or {}).get("rate"))
-        if v is not None and r is not None:
-            total_w  += r
-            total_wv += v * r
-    if total_w > 0:
-        return total_wv / total_w
-    return None
 
 
 # ---------------------------------------------------------------------------
@@ -285,16 +443,12 @@ async def fetch_endpoint(
     semaphore: asyncio.Semaphore,
     cache: "diskcache.Cache | None",
 ) -> list[dict]:
-    url           = ep["url"]
-    org_name      = ep["org_name"]
-    cnpj8         = ep["cnpj8"]
-    customer_type = ep["customer_type"]
+    url = ep["url"]
 
-    # Disk cache
     if cache is not None and url in cache:
         payload = cache[url]
         if payload:
-            return parse_opendata_response(url, payload, org_name, cnpj8, customer_type)
+            return _stamp(parse_response(url, payload, ep))
 
     async with semaphore:
         payload = await _get_json(client, url)
@@ -305,7 +459,13 @@ async def fetch_endpoint(
     if cache is not None:
         cache.set(url, payload, expire=86400 * 30)   # 30-day TTL
 
-    return parse_opendata_response(url, payload, org_name, cnpj8, customer_type)
+    return _stamp(parse_response(url, payload, ep))
+
+
+def _stamp(rows: list[dict]) -> list[dict]:
+    for r in rows:
+        r["data_coleta"] = TODAY
+    return rows
 
 
 async def _get_json(client: httpx.AsyncClient, url: str) -> dict | None:
@@ -320,8 +480,7 @@ async def _get_json(client: httpx.AsyncClient, url: str) -> dict | None:
                 return None
             if resp.status_code in (404, 405, 501, 400):
                 return None   # endpoint doesn't exist — no retry
-            # 429 / 5xx → exponential backoff
-            await asyncio.sleep(2 ** attempt)
+            await asyncio.sleep(2 ** attempt)         # 429 / 5xx → backoff
         except (httpx.TimeoutException, httpx.ConnectError,
                 httpx.RemoteProtocolError, httpx.ReadError):
             if attempt == MAX_RETRIES - 1:
@@ -362,26 +521,47 @@ async def run_async(endpoints: list[dict], use_cache: bool) -> list[dict]:
 # Panel building
 # ---------------------------------------------------------------------------
 
+# Long-panel column order (stable, so appended snapshots stay aligned).
+LONG_COLS = [
+    "data_coleta", "org_name", "cnpj8", "brand", "company_name",
+    "customer_type", "api_family", "product", "account_type",
+    "price_kind", "service_name", "service_code", "trigger_info",
+    "price_minimum", "price_maximum", "price_weighted_avg",
+    "share_zero", "price_band_spread",
+    "price_1_FAIXA", "price_2_FAIXA", "price_3_FAIXA", "price_4_FAIXA",
+    "cust_rate_1_FAIXA", "cust_rate_2_FAIXA", "cust_rate_3_FAIXA", "cust_rate_4_FAIXA",
+    "source_url",
+]
+
+DEDUP_KEY = ["cnpj8", "customer_type", "api_family", "product",
+             "account_type", "service_code", "price_kind", "data_coleta"]
+
+
 def build_panels(rows: list[dict]) -> tuple[pd.DataFrame, pd.DataFrame]:
     if not rows:
         return pd.DataFrame(), pd.DataFrame()
 
     long = pd.DataFrame(rows)
-    long = long[long["service_name"].str.strip() != ""].copy()
+    long = long[long["service_name"].astype(str).str.strip() != ""].copy()
+    # Stable column order (tolerate any missing columns).
+    ordered = [c for c in LONG_COLS if c in long.columns]
+    extra   = [c for c in long.columns if c not in ordered]
+    long = long[ordered + extra]
 
-    # Wide: one column per service_code, value = weighted_avg price
+    # Wide: one column per (product, service_code) for PER-EVENT fees only —
+    # interest-rate rows are a different object and must not be mixed in.
+    fees = long[long["price_kind"] == "per_event_brl"].copy()
     try:
-        wide = long.pivot_table(
+        fees["svc_key"] = fees["product"] + "_" + fees["service_code"].astype(str)
+        wide = fees.pivot_table(
             index=["cnpj8", "org_name", "customer_type", "account_type", "data_coleta"],
-            columns="service_code",
+            columns="svc_key",
             values="price_weighted_avg",
             aggfunc="mean",
         ).reset_index()
         wide.columns.name = None
-        svc_cols = [c for c in wide.columns
-                    if c not in ("cnpj8", "org_name", "customer_type",
-                                 "account_type", "data_coleta")]
-        wide = wide.rename(columns={c: f"fee_{c}" for c in svc_cols})
+        idx_cols = ("cnpj8", "org_name", "customer_type", "account_type", "data_coleta")
+        wide = wide.rename(columns={c: f"fee_{c}" for c in wide.columns if c not in idx_cols})
     except Exception as exc:
         log.warning("Wide pivot failed: %s", exc)
         wide = pd.DataFrame()
@@ -396,8 +576,7 @@ def append_long_panel(new_long: pd.DataFrame, path: Path) -> pd.DataFrame:
     else:
         combined = new_long.copy()
 
-    dedup = ["cnpj8", "customer_type", "account_type", "service_code", "data_coleta"]
-    dedup = [c for c in dedup if c in combined.columns]
+    dedup = [c for c in DEDUP_KEY if c in combined.columns]
     combined = combined.drop_duplicates(subset=dedup, keep="last")
     combined.to_csv(path, index=False)
     return combined
@@ -407,17 +586,34 @@ def append_long_panel(new_long: pd.DataFrame, path: Path) -> pd.DataFrame:
 # Entry point
 # ---------------------------------------------------------------------------
 
-def main(test_n: int | None = None, use_cache: bool = True) -> None:
+def resolve_products(families_arg: str) -> list[str]:
+    if not families_arg or families_arg.strip().lower() == "all":
+        return ALL_PRODUCTS if (families_arg or "").strip().lower() == "all" else DEFAULT_PRODUCTS
+    tokens = [_norm_token(t) for t in families_arg.split(",") if t.strip()]
+    valid = {_norm_token(p): p for p in ALL_PRODUCTS}
+    out: list[str] = []
+    for t in tokens:
+        if t in valid and valid[t] not in out:
+            out.append(valid[t])
+        elif t not in valid:
+            log.warning("Unknown family token '%s' (valid: %s)", t, ALL_PRODUCTS)
+    return out or DEFAULT_PRODUCTS
+
+
+def main(test_n: int | None = None, use_cache: bool = True,
+         families: str = "accounts") -> None:
     import urllib3
     urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
+    products = resolve_products(families)
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     RAW_DIR.mkdir(parents=True, exist_ok=True)
 
     # Step 1: directory
     log.info("=== Step 1: fetching OFB participant directory ===")
+    log.info("Families requested: %s", products)
     try:
-        resp = httpx.get(DIRECTORY_URL, timeout=60, follow_redirects=True)
+        resp = httpx.get(DIRECTORY_URL, timeout=60, follow_redirects=True, verify=False)
         resp.raise_for_status()
         participants = resp.json()
     except Exception as exc:
@@ -426,9 +622,9 @@ def main(test_n: int | None = None, use_cache: bool = True) -> None:
     log.info("Directory: %d participants", len(participants))
 
     # Step 2: extract endpoints
-    endpoints = extract_opendata_endpoints(participants)
+    endpoints = extract_endpoints(participants, products)
     if not endpoints:
-        log.error("No open-data account endpoints found in directory.")
+        log.error("No open-data endpoints found for families %s.", products)
         return
 
     if test_n is not None:
@@ -438,10 +634,13 @@ def main(test_n: int | None = None, use_cache: bool = True) -> None:
     # Step 3: fetch
     log.info("=== Step 3: fetching %d endpoints ===", len(endpoints))
     rows = asyncio.run(run_async(endpoints, use_cache=use_cache))
-    log.info("Collected %d fee rows", len(rows))
+    log.info("Collected %d rows (%d per-event, %d rate)",
+             len(rows),
+             sum(1 for r in rows if r.get("price_kind") == "per_event_brl"),
+             sum(1 for r in rows if r.get("price_kind") == "rate_pct"))
 
     if not rows:
-        log.warning("No fee rows — check endpoint URLs above.")
+        log.warning("No rows — check endpoint URLs above.")
         return
 
     # Step 4: save raw
@@ -459,7 +658,6 @@ def main(test_n: int | None = None, use_cache: bool = True) -> None:
         combined  = append_long_panel(long_df, long_path)
         log.info("Long panel: %d rows → %s", len(combined), long_path.name)
 
-        # Polars parquet if available
         try:
             import polars as pl
             pl.from_pandas(combined).write_parquet(
@@ -480,10 +678,13 @@ def main(test_n: int | None = None, use_cache: bool = True) -> None:
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Open Finance Brazil fee collector")
+    parser = argparse.ArgumentParser(description="Open Finance Brazil open-data fee collector")
+    parser.add_argument("--families", type=str, default="accounts",
+                        help="Comma-separated product families, or 'all'. "
+                             f"Valid: {','.join(ALL_PRODUCTS)}. Default: accounts")
     parser.add_argument("--test", type=int, default=None, metavar="N",
                         help="Collect only first N endpoints")
     parser.add_argument("--no-cache", action="store_true",
                         help="Bypass disk cache")
     args = parser.parse_args()
-    main(test_n=args.test, use_cache=not args.no_cache)
+    main(test_n=args.test, use_cache=not args.no_cache, families=args.families)

@@ -668,10 +668,7 @@ function build_logit_comparison_tex(data::AbstractDict, ids::Vector{Int},
     seg_sentence = with_seg ? "" :
         raw"Segment dummies (S2--S5) are included in every strategy but not reported. "
     note = raw"\multicolumn{" * string(n + 1) *
-        raw"}{p{\dimexpr\textwidth-2\tabcolsep\relax}}{\scriptsize\textit{Notes:} Each " *
-        raw"column reports the demand logit's final specification, estimated on the demand " *
-        raw"sample implied by the corresponding sleepiness strategy, on Specification~12; columns " *
-        raw"index the estimation strategies enumerated in Section~\ref{sec:empirical:sleep}. " *
+        raw"}{p{\dimexpr\textwidth-2\tabcolsep\relax}}{\scriptsize " *
         seg_sentence *
         raw"Wild cluster bootstrap standard errors (conglomerate clusters) in parentheses. " *
         raw"Significance: *** $p<0.01$, ** $p<0.05$, * $p<0.1$. $Q$ is the GMM " *

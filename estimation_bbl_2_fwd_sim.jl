@@ -115,8 +115,7 @@ function _load_policy_map(path::String)::Dict{String,Float64}
     i_k5B = ci["fitted_k5_Prepaid_B"]; i_k5D = ci["fitted_k5_Prepaid_D_optB"]
     ncol = length(hdr)
     m = Dict{String,Float64}()
-    @inbounds for li in 2:length(lines)
-        line = lines[li]
+    @inbounds for line in Iterators.drop(lines, 1)   # drop(…, 1) skips the header row
         isempty(line) && continue
         f = split(line, ',')
         length(f) < ncol && continue

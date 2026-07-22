@@ -578,7 +578,7 @@ def write_summary_md(sub, index, stage, het=None):
               "Collinearity of the 15 instruments (condition number and max VIF of the partialled Z) and "
               "leave-one-**group**-out sensitivity: the `mean_loo_*` block is a set of market-level rival "
               "averages that are near-collinear (the load-bearing case for the differentiation-IV "
-              "construction [@gandhihoude2019]). Per-instrument *cluster-robust* t's are rank-deficient "
+              "construction [@gandhihoude2019]). Per-instrument _cluster-robust_ t's are rank-deficient "
               "here (K=15 > effective clusters ≈ 7) and are omitted; `neg π̂` counts negative first-stage "
               "coefficients (sign expectation for market-level generated instruments is ambiguous).", "",
               "| Routine | sample | cond # | max VIF | neg π̂ / K | eff-F full | eff-F drop mean_loo | Δα drop mean_loo |",
@@ -625,6 +625,32 @@ def write_summary_md(sub, index, stage, het=None):
               "effective clusters ≈ 7 (descriptive, not decisive). Per-instrument cluster-robust t's are "
               "rank-deficient (K > G) and omitted. These α̂ use the engine's ln(share) δ (no market/time "
               "FE), so they are a first-stage-quality diagnostic, not the headline structural α."]
+
+    # ── Limitations and paths forward (interpretation; the weak-α / concentration story) ──────────
+    L += ["", "## Limitations and paths forward", "",
+          "The price coefficient α is correctly signed (downward-sloping demand) and qualitatively "
+          "robust across strategies and stages, but it is _imprecisely estimated_: the excluded "
+          "instruments are weak (effective F ≈ 4, the tF honest CI spans zero) and, because deposits "
+          "are highly concentrated, conglomerate-clustered inference has only G\\* ≈ 5–7 effective "
+          "clusters — so cluster-robust SEs are large almost regardless of the point estimate. This "
+          "is a feature of the data (weak instruments + a concentrated market), not of the modeling "
+          "choices, which remain the honest ones (a finer clustering would manufacture significance "
+          "by ignoring within-conglomerate price co-movement). The realistic paths, in order of "
+          "weight:", "",
+          "1. **Reframe the demand results around weak-IV-robust inference** — report the AR / tF / "
+          "LM confidence set for α as the headline object, not the ±SE. \"Demand slopes down; the "
+          "level lies in [weak-IV CI]\" is a legitimate, publishable finding. Many IO papers do "
+          "exactly this when instruments are weak. This is the honest move and it is available now.",
+          "2. **Carry the imprecision into the counterfactuals** — present them as ranges over the α "
+          "CI, or lead with the ones that do not hinge on α's exact level. Do not report a "
+          "single-number counterfactual from this α.",
+          "3. **Keep looking for instrument strength** only if a genuinely new source exists — the "
+          "obvious candidates have been worked hard, and reserve requirements failed the exclusion "
+          "diagnostic. Diminishing returns (but see the ESTBAN spatial-LOO extension under "
+          "investigation).",
+          "4. **State the concentration limitation explicitly** as a scope condition. It is a feature "
+          "of the Brazilian deposit market, and naming it is more credible than hoping a reader does "
+          "not notice G\\* ≈ 5.", ""]
 
     # per-routine Logit-vs-RC-stages compare tables (markdown mirror of Rout/blp_compare_*.tex)
     raw_dir = sub["cluster_raw"]
