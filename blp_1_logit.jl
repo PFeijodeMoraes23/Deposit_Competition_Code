@@ -665,8 +665,14 @@ function build_logit_comparison_tex(data::AbstractDict, ids::Vector{Int},
                                     with_seg::Bool=false)::String
     n    = length(ids)
     hdr  = "Variable & " * join([get(ESTIMATION_ENUM_REF, id, "E$id") for id in ids], " & ") * TROW
+    # The segment dummies are nuisance controls already printed IN FULL, per routine, by the appendix
+    # tables est{5..8}_spec12_logit.tex — so we omit them here and point the reader there rather than
+    # carrying a duplicate `_seg` twin of this table (four extra rows, no information). Do NOT write
+    # "available on request": they ARE reported, just in the per-routine tables.
     seg_sentence = with_seg ? "" :
-        raw"Segment dummies (S2--S5) are included in every strategy but not reported. "
+        raw"Segment dummies (S2--S5) are included in every strategy but not reported; the full " *
+        raw"coefficient vector, including the segment dummies, appears in the per-routine tables " *
+        raw"\ref{tab:demand_logit_est5_spec12}--\ref{tab:demand_logit_est8_spec12}. "
     note = raw"\multicolumn{" * string(n + 1) *
         raw"}{p{\dimexpr\textwidth-2\tabcolsep\relax}}{\scriptsize " *
         seg_sentence *
@@ -768,9 +774,12 @@ function write_logit_comparison_table(data::AbstractDict)
     rout_dir = joinpath(dirname(output_dir), "Rout")
     mkpath(rout_dir)
     dests = isdir(DRAFTS_DIR) ? [rout_dir, DRAFTS_DIR] : [rout_dir]
-    # Two versions: segment dummies suppressed (default) and segment dummies shown (`_seg`).
-    for (rws, wseg, fn) in ((COMPARISON_ROWS,     false, "est5-8_spec12_logit_comparison.tex"),
-                            (COMPARISON_ROWS_SEG, true,  "est5-8_spec12_logit_comparison_seg.tex"))
+    # ONLY the segment-suppressed version is emitted. The `_seg` twin was retired: the segment dummies
+    # it added are already printed per routine by est{5..8}_spec12_logit.tex (both live in the
+    # appendix), so it duplicated four rows and no information while lengthening the appendix. The
+    # footnote now cross-references those tables. Re-add the COMPARISON_ROWS_SEG/`true` tuple here if a
+    # referee ever wants the with-segments layout back.
+    for (rws, wseg, fn) in ((COMPARISON_ROWS, false, "est5-8_spec12_logit_comparison.tex"),)
         tex = build_logit_comparison_tex(data, ids, elas; rows=rws, with_seg=wseg)
         for d in dests
             path = joinpath(d, fn)

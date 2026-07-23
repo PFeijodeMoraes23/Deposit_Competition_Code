@@ -80,8 +80,15 @@ def build_table(ests, suffix: str = "", show_segments: bool = True,
     rep     = data[avail[0]]
     sem     = rc.se_note(data.get(avail[-1]) or rep)
     lbl_suffix = "" if show_segments else "_noseg"
-    seg_note   = "" if show_segments else (r" Segment dummies (S2--S5) are included in every "
-                                           r"strategy but not reported.")
+    # The segment dummies are nuisance controls whose coefficients are already printed IN FULL, per
+    # routine, by the appendix tables blp_rc_E{5..8}_spec12.tex. So we omit them here and point the
+    # reader at those tables rather than carrying a duplicate with-segments variant of this table
+    # (which added four rows and no information). Never write "available on request" — they ARE
+    # reported, just elsewhere.
+    seg_note = "" if show_segments else (
+        r" Segment dummies (S2--S5) are included in every strategy but not reported; the full "
+        r"coefficient vector, including the segment dummies, appears in the per-routine tables "
+        r"\ref{tab:blp_rc_est5_spec12}--\ref{tab:blp_rc_est8_spec12}.")
 
     theta1_params = rep.get("param_names_theta1") or (["alpha"] + rc.X_COLS)
     if not show_segments:
@@ -224,8 +231,12 @@ def main():
         if spec is None:
             print(f"[demand-comparison] unknown stage '{key}' (have {list(STAGE_SPECS)}) — skipped")
             continue
-        # Two versions each: with segment dummies (S2-S5) and without (nuisance controls).
-        for show_seg, seg_lbl in ((True, ""), (False, "_noseg")):
+        # ONLY the no-segment variant is emitted. The with-segments twin was retired: the segment
+        # dummies it added are already printed per routine by blp_rc_E{5..8}_spec12.tex (both are in
+        # the appendix), so it duplicated four rows and no information — and kept the appendix long.
+        # The footnote now cross-references those tables. Pass show_segments=True to build_table if a
+        # referee ever wants the with-segments layout back.
+        for show_seg, seg_lbl in ((False, "_noseg"),):
             tex = build_table(ests, suffix, show_segments=show_seg,
                               stage=spec["stage"], file_lbl=spec["file_lbl"],
                               caption_tail=spec["caption_tail"], blurb=spec["blurb"])

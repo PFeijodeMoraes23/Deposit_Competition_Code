@@ -59,6 +59,22 @@ def _alpha_se(a, se, stars_from=None):
     return s
 
 
+# Grid half-width of the weak-IV-robust CI inversion (weak_iv_analysis searches alpha in [-2, 2]);
+# an endpoint at the bound is an OPEN interval, flagged so it is not read as a finite limit.
+_GRID = 2.0
+
+
+def _robust_ci(lo, hi, disconnected=False):
+    if not isinstance(lo, (int, float)) or not isinstance(hi, (int, float)):
+        return "---"
+    open_lo = lo <= -_GRID + 1e-9
+    open_hi = hi >= _GRID - 1e-9
+    ls = r"(-\infty" if open_lo else f"[{lo:+.2f}"
+    hs = r"+\infty)" if open_hi else f"{hi:+.2f}]"
+    star = r"^{\dagger}" if disconnected else ""
+    return f"${ls},\\,{hs}{star}$"
+
+
 def _wrap(body_lines, col_fmt, caption, label, header, footnote, ncols):
     trow = r" \\"
     return "\n".join([
@@ -175,11 +191,62 @@ def build_comparison(wiv):
                  "tab:iv_comparison_spec12", header, foot, 9)
 
 
+def build_alpha_robust(wiv):
+    # THE HEADLINE weak-IV table: identification-robust inference on the deposit-price coefficient α.
+    # Leads with the estimator ladder (sign) and the robust confidence sets (level), NOT the ±SE Wald
+    # interval — because the instruments are weak, the Wald interval overstates precision.
+    # Routine | Sample | N | eff-F | OLS α | 2SLS α (SE) | LIML α | tF 95% CI
+    col_fmt = "ll r r r l r c"
+    header = (r"Routine & Sample & $N$ & eff-$F$ & OLS $\hat\alpha$ & 2SLS $\hat\alpha$ (SE) & "
+              r"LIML $\hat\alpha$ & tF 95\% CI")
+    body = []
+    for k in ROUTINES:
+        rr = wiv.get(str(k))
+        if not rr:
+            continue
+        for i, (key, lbl) in enumerate(SUBS):
+            r = rr.get(key)
+            if not r:
+                continue
+            rt = rc.est_ref(k) if i == 0 else ""
+            body.append("    " + " & ".join([
+                rt, lbl, f"{r.get('n_obs', 0):,}", _F(r.get("effective_F")),
+                _num(r.get("alpha_ols")), _alpha_se(r.get("alpha_2sls"), r.get("alpha_se")),
+                _num(r.get("alpha_liml")), _tf(r),
+            ]) + r" \\")
+        if k != ROUTINES[-1]:
+            body.append(r"    \addlinespace[0.4ex]")
+    foot = (r"\textit{Notes:} Identification-robust inference on the deposit-spread coefficient "
+            r"$\alpha$ (the single endogenous regressor), from the log-share linear-IV benchmark on "
+            r"the $K{=}16$ excluded instruments, clustered by prudential conglomerate. The estimator "
+            r"ladder (OLS $\to$ 2SLS $\to$ LIML) identifies the \emph{sign}: LIML (Anderson \& Rubin, "
+            r"1949), median-unbiased under weak identification, moves $\hat\alpha$ further into the "
+            r"economically-signed (negative, downward-sloping demand) region than 2SLS, the classic "
+            r"weak-instrument signature. But the \emph{level} is not point-identified: eff-$F$ = "
+            r"Montiel-Olea--Pflueger effective $F$ (2013) $\approx 4$, so the naive $\pm1.96\,$SE Wald "
+            r"interval overstates precision. We report the $F$-adjusted honest tF 95\% CI (Lee, "
+            r"McCrary, Moreira \& Porter, 2022) as the identification-robust object; the "
+            r"Kleibergen LM/K weak-IV-robust set (2005; wild-cluster-bootstrap criticals) concurs and "
+            r"is not shown---the Anderson--Rubin set is empty (the Hansen $J$ rejects) and the LM/K set "
+            r"is open and likewise fails to exclude zero. \textbf{The tF CI contains $0$ in every "
+            r"routine} (and is undefined for type~5, where eff-$F\approx1$), so the sign of price "
+            r"sensitivity is robust but its magnitude is only set-identified. This is driven by three "
+            r"features of the setting, not "
+            r"by modelling choices: the excluded instruments are weak; the deposit spread is set "
+            r"nationally (conglomerate$\times$type$\times$quarter, constant across municipalities), so "
+            r"the price has no within-market variation; and deposits are highly concentrated, leaving "
+            r"only $G^\ast\approx5$--$7$ effective clusters. Spread in percentage points.")
+    return _wrap(body, col_fmt,
+                 r"Identification-Robust Inference on the Deposit-Price Coefficient (Spec.~12)",
+                 "tab:alpha_weakiv_spec12", header, foot, 8)
+
+
 def main():
     if not WEAK_IV.exists():
         raise FileNotFoundError(f"weak_iv.json not found at {WEAK_IV} — run weak_iv_analysis.py first.")
     wiv = json.load(open(WEAK_IV))
     tables = {
+        "tab_alpha_weakiv_spec12.tex": build_alpha_robust(wiv),
         "tab_firststage_spec12.tex": build_firststage(wiv),
         "tab_iv_comparison_spec12.tex": build_comparison(wiv),
     }

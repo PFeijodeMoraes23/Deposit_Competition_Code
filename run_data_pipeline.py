@@ -275,8 +275,16 @@ STEPS = [
      "Compute LOO instruments and FGC dummy -> overwrites market_panel.csv"),
     (4, "21", "panel_8_demographics_sigma.py",
      "Within-MCA demographic σ for BLP parametric draws -> demographics_sigma.parquet"),
+    # panel_10 (ESTBAN rival-branch IV) and panel_12 (local CDB spread) were manual-only
+    # until 2026-07-23. A full panel_6 rebuild wipes market_panel, so estban_rival_branches_lag
+    # and the local spread must be re-applied here, AFTER panel_7's overwrite and BEFORE panel_9.
+    (4, "36", "panel_10_estban_instruments.py",
+     "ESTBAN rival-branch instrument -> market_panel.csv (estban_rival_branches_lag; MUST follow panel_7)"),
+    (4, "37", "panel_12_local_cdb_spread.py",
+     "Member-CNPJ LOCAL type-4 (CDB) spread patch, toggle LOCAL_CDB_SPREAD (default ON) -> "
+     "market_panel.csv (MUST follow panel_10, precede panel_9)"),
     (4, "22", "panel_9_cosif_fees.py --patch-market",
-     "COSIF/Tarifas fee columns -> market_panel_with_fees.csv (MUST follow panel_7; the "
+     "COSIF/Tarifas fee columns -> market_panel_with_fees.csv (MUST follow panel_7/panel_10/panel_12; the "
      "estimators read this file in preference to market_panel.csv)"),
 
     # Stage 5 -- descriptive statistics
@@ -444,7 +452,9 @@ WAVES: list[list[str]] = [
     ["19"],                                    # Wave 5: master merge (panel_6)
     ["20", "21"],                             # Wave 6: LOO instruments (panel_7, OVERWRITES market_panel)
                                               #         + demographics sigma (panel_8, independent)
-    ["22"],                                   # Wave 7: panel_9 fee patch — MUST follow panel_7's overwrite
+    ["36"],                                   # Wave 6b: ESTBAN rival-branch IV (panel_10) — after panel_7 overwrite
+    ["37"],                                   # Wave 6c: LOCAL CDB spread patch (panel_12) — after panel_10, before panel_9
+    ["22"],                                   # Wave 7: panel_9 fee patch — MUST follow panel_7/panel_10/panel_12
     ["23", "24", "25", "26"],                 # Wave 8: descriptives (desc_1/desc_2 x {unweighted, weighted})
                                               #         desc_3 + export_analyze_spec12 are post-estimation
                                               #         -> run_sleep_pipeline.py steps 11-12

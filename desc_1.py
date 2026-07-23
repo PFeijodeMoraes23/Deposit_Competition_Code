@@ -816,6 +816,7 @@ def main():
         group_header = " & ".join([_esc(str(g)) for g in groups])
 
         weight_note = (f" Population-weighted using \\texttt{{{_esc(args.weight_col)}}}."
+                       " The unweighted version of this table is available upon request."
                        if args.weight_col else "")
         notes_text = (
             "\\scriptsize \\textit{Notes:} Means are reported with standard deviations in "

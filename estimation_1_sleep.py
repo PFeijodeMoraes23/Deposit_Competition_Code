@@ -212,7 +212,13 @@ def run_first_stage(df, spec_instruments, exogenous_controls):
         df['v_hat'] = 0.0
         return df, None
 
-    y = df_fs['spread_ann']
+    # QUARTERLY spread, matching every other estimator (estimation_2_sleep.run_pooled_first_stage)
+    # and the model's time interval: the second stage compares t to t-1 one QUARTER apart via
+    # nr_lagged_dep = (1 + risk_free_qoq_lag - spread_qoq_lag) * lagged_deposits.  Using the
+    # annualised spread here made v_hat the residual of a DIFFERENT (nonlinearly rescaled)
+    # equation than the endogeneity it corrects -- (1+rf)^4-(1+rate)^4 is not linear in
+    # (rf - rate), so it does not cancel as a mere rescaling of the control-function term.
+    y = df_fs['spread_qoq']
     X = sm.add_constant(df_fs[first_stage_vars])
     mod = sm.OLS(y, X)
     cluster_series = df_fs['CodConglomeradoPrudencial'].astype(str)

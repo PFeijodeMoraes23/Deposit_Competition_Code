@@ -44,6 +44,7 @@ Usage
 from __future__ import annotations
 
 import argparse
+import shutil
 import warnings
 from pathlib import Path
 
@@ -1026,6 +1027,176 @@ def render_table2b(t2_df, weight_col, suffix) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Figure: market structure & deposit pricing by year (visual twin of Tables 2/3)
+# ---------------------------------------------------------------------------
+# Small-multiple grid rather than twin axes: every panel carries ONE y-scale, so
+# no pair of series is forced onto an arbitrary shared scaling. Co-movement is
+# read off the shared year axis down each column (entry vs concentration on the
+# left; spreads vs the policy rate on the right).
+#
+# Colours reuse the paper's existing bank-type convention from
+# analysis_3_additional_figures.py (incumbent/B blue, digital/D orange-red).
+B_COLOR    = "#1565C0"   # brick-and-mortar (B) / incumbent
+D_COLOR    = "#E64A19"   # digital (D)
+NATL_COLOR = "#4F4F4F"   # pooled B+D / policy series (not a bank type)
+GRID_COLOR = "#D5D5D0"
+MUTED_INK  = "#5A5A57"
+PIX_YEAR   = 2020.5      # Pix launched Nov 2020
+
+
+def _t2_series(t2_df: pd.DataFrame, var_name: str, year_cols: list) -> "np.ndarray | None":
+    """Numeric series for one `var` row of build_table2's frame, aligned to year_cols."""
+    row = t2_df.loc[t2_df["var"] == var_name]
+    if row.empty:
+        return None
+    r = row.iloc[0]
+    return np.array([pd.to_numeric(r.get(c, np.nan), errors="coerce") for c in year_cols],
+                    dtype=float)
+
+
+def render_market_structure_figure(t2_df: pd.DataFrame, suffix: str = "") -> None:
+    """2x3 small-multiple figure summarising Tables 2 and 3.
+
+    Left column  - market structure: concentration, digital entry, local entry.
+    Right column - deposit pricing:  type-4 spread, the SELIC policy rate, type-5 spread.
+    """
+    import matplotlib
+    matplotlib.use("Agg")          # venv lives in OneDrive; Agg keeps batch runs safe
+    import matplotlib.pyplot as plt
+
+    year_cols = [c for c in t2_df.columns if c != "var"]
+    years = np.array([int(c) for c in year_cols], dtype=float)
+
+    hhi_b   = _t2_series(t2_df, "hhi_b", year_cols)
+    hhi_bd  = _t2_series(t2_df, "hhi_combined_natl", year_cols)
+    n_d     = _t2_series(t2_df, "n_d_firms_natl", year_cols)
+    n_b     = _t2_series(t2_df, "n_b_firms", year_cols)
+    selic   = _t2_series(t2_df, "risk_free_ann", year_cols)
+    sp4_b   = _t2_series(t2_df, "spread_ann_a4_w", year_cols)
+    sp4_d   = _t2_series(t2_df, "spread_ann_a4_d_w", year_cols)
+    sp5_b   = _t2_series(t2_df, "spread_ann_a5_w", year_cols)
+    sp5_d   = _t2_series(t2_df, "spread_ann_a5_d_w", year_cols)
+
+    # Stored as decimal fractions: 0.0003 -> 0.03 % p.a. -> 3 bp; 0.1426 -> 14.26 %.
+    to_bp  = lambda a: None if a is None else a * 1e4
+    to_pct = lambda a: None if a is None else a * 1e2
+    sp4_b, sp4_d, sp5_b, sp5_d = map(to_bp, (sp4_b, sp4_d, sp5_b, sp5_d))
+    selic = to_pct(selic)
+
+    line_kw = dict(linewidth=2, solid_capstyle="round", marker="o", markersize=4.5,
+                   markeredgecolor="white", markeredgewidth=1.0, zorder=3)
+
+    fig, axes = plt.subplots(3, 2, figsize=(11, 9.5), sharex="col")
+
+    def _style(ax, title, ylabel, pix_label=False):
+        ax.set_title(title, fontsize=10.5, loc="left", pad=6, color="#111111")
+        ax.set_ylabel(ylabel, fontsize=9, color=MUTED_INK)
+        ax.grid(True, axis="y", color=GRID_COLOR, linewidth=0.6, alpha=0.9)
+        ax.set_axisbelow(True)
+        for s in ("top", "right"):
+            ax.spines[s].set_visible(False)
+        for s in ("left", "bottom"):
+            ax.spines[s].set_color("#BFBFBA")
+            ax.spines[s].set_linewidth(0.8)
+        ax.tick_params(labelsize=9, colors=MUTED_INK, length=3)
+        # Pix is a genuine event threshold, so a dashed rule is correct here
+        # (gridlines stay solid); matches analysis_3_additional_figures.py.
+        ax.axvline(PIX_YEAR, color="grey", lw=0.8, ls="--", alpha=0.6, zorder=1)
+        if pix_label:
+            ax.text(PIX_YEAR + 0.08, 0.97, "Pix", transform=ax.get_xaxis_transform(),
+                    fontsize=8, color="grey", va="top", ha="left")
+
+    def _endlabel(ax, x, y, text, color, dy=0):
+        if y is None or not np.isfinite(y[-1]):
+            return
+        ax.annotate(text, xy=(x[-1], y[-1]), xytext=(5, dy), textcoords="offset points",
+                    fontsize=8.5, color=MUTED_INK, va="center", ha="left")
+
+    # (a) concentration -------------------------------------------------------
+    ax = axes[0, 0]
+    # Reference thresholds, right-aligned: above each line the right-hand side is
+    # empty, so the labels clear both series. Dotted keeps them distinct from the
+    # dashed Pix rule.
+    for thr, lab in ((2500, "2,500  highly concentrated"), (1500, "1,500  moderately conc.")):
+        ax.axhline(thr, color="#C9C9C4", lw=0.7, ls=(0, (1, 3)), zorder=1)
+        ax.text(years[-1] - 0.1, thr + 25, lab, fontsize=7, color="#9A9A95",
+                va="bottom", ha="right")
+    if hhi_b is not None:
+        ax.plot(years, hhi_b, color=B_COLOR, label="B, local (within MCA)", **line_kw)
+        _endlabel(ax, years, hhi_b, f"{hhi_b[-1]:,.0f}", B_COLOR)
+    if hhi_bd is not None:
+        ax.plot(years, hhi_bd, color=NATL_COLOR, label="B+D, national", **line_kw)
+        _endlabel(ax, years, hhi_bd, f"{hhi_bd[-1]:,.0f}", NATL_COLOR)
+    _style(ax, "(a) Deposit concentration", "HHI (0–10,000)", pix_label=True)
+    ax.legend(fontsize=8.5, loc="lower left", frameon=False)
+
+    # (b) policy rate ---------------------------------------------------------
+    ax = axes[0, 1]
+    if selic is not None:
+        ax.plot(years, selic, color=NATL_COLOR, **line_kw)
+        _endlabel(ax, years, selic, f"{selic[-1]:.1f}%", NATL_COLOR)
+    _style(ax, "(b) SELIC policy rate", "% p.a.", pix_label=True)
+
+    # (c) digital entry -------------------------------------------------------
+    ax = axes[1, 0]
+    if n_d is not None:
+        ax.plot(years, n_d, color=D_COLOR, **line_kw)
+        _endlabel(ax, years, n_d, f"{n_d[-1]:,.0f}", D_COLOR)
+    _style(ax, "(c) Digital (D) firms, national", "count")
+
+    # (d) local entry ---------------------------------------------------------
+    ax = axes[1, 1]
+    if n_b is not None:
+        ax.plot(years, n_b, color=B_COLOR, **line_kw)
+        _endlabel(ax, years, n_b, f"{n_b[-1]:.1f}", B_COLOR)
+    _style(ax, "(d) B firms per MCA (mean)", "count")
+
+    # (e) type-4 spread -------------------------------------------------------
+    ax = axes[2, 0]
+    ax.axhline(0, color="#BFBFBA", lw=0.8, zorder=1)
+    if sp4_b is not None:
+        ax.plot(years, sp4_b, color=B_COLOR, label="B (brick-and-mortar)", **line_kw)
+    if sp4_d is not None:
+        ax.plot(years, sp4_d, color=D_COLOR, label="D (digital)", **line_kw)
+    _style(ax, "(e) Time-deposit spread (type 4)", "basis points")
+    ax.legend(fontsize=8.5, loc="upper left", frameon=False)
+
+    # (f) type-5 spread -------------------------------------------------------
+    ax = axes[2, 1]
+    ax.axhline(0, color="#BFBFBA", lw=0.8, zorder=1)
+    # Both types sit indistinguishably at zero, so a solid D would hide B entirely.
+    # Dashing D keeps both readable without displacing either value.
+    for arr, col, lab, ls in ((sp5_b, B_COLOR, "B (brick-and-mortar)", "-"),
+                              (sp5_d, D_COLOR, "D (digital)", (0, (5, 2)))):
+        if arr is None:
+            continue
+        m = np.isfinite(arr)
+        if m.any():
+            kw = {**line_kw, "linestyle": ls}
+            ax.plot(years[m], arr[m], color=col, label=lab, **kw)
+    _style(ax, "(f) Prepaid spread (type 5), 2020–", "basis points")
+    ax.set_ylim(-1, 1)
+    ax.legend(fontsize=8.5, loc="upper left", frameon=False)
+
+    for ax in axes[2, :]:
+        ax.set_xlabel("Year", fontsize=9, color=MUTED_INK)
+        ax.set_xticks(years)
+        ax.set_xticklabels([f"{int(y)}" for y in years], rotation=0)
+
+    fig.tight_layout(h_pad=1.6, w_pad=2.4)
+
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    DRAFTS_DIR.mkdir(parents=True, exist_ok=True)
+    name = f"fig_market_structure_by_year{suffix}.png"
+    p = OUTPUT_DIR / name
+    fig.savefig(p, dpi=300, bbox_inches="tight", facecolor="white")
+    plt.close(fig)
+    shutil.copy(p, DRAFTS_DIR / name)
+    print(f"  Wrote {p}")
+    print(f"  Wrote {DRAFTS_DIR / name}")
+
+
+# ---------------------------------------------------------------------------
 # Table 3: Local environment by macro-region
 # ---------------------------------------------------------------------------
 T3_VARS = ["pop_total", "gdp_per_capita", "fraction_65plus",
@@ -1344,23 +1515,30 @@ def render_appendix_rates(df: pd.DataFrame) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Appendix B: variable-description longtables (content extracted from V_Main.tex)
-# These are not data-driven; they are hardcoded LaTeX matching the inline tables.
+# Appendix: consolidated variable dictionaries (master tables A and B).
+# These replace the former per-role glossary longtables (identifiers, deposits,
+# rates, state variables, institution chars, cost shifters, wholesale funding,
+# capital adequacy, BLP LOO, prod/demographic chars, BLP instruments) with two
+# master tables: (A) estimation variables grouped by role with source and
+# used-in columns; (B) instruments with the estimation stage they enter. Only
+# variables that appear in an estimated specification are printed; collected-
+# but-unused columns are documented in the replication package data dictionary.
+# Each master table carries the labels of every table it absorbed, so all
+# existing \ref{}s in V_Main.tex keep resolving after the \input swap.
 # ---------------------------------------------------------------------------
-def _longtable(caption: str, label: str, col_spec: str,
-               header_row: str, rows: list[str],
-               cont_caption: str = "") -> str:
-    """Standard variable-description longtable skeleton."""
-    n_cols = col_spec.count("p{") + col_spec.count(">") + col_spec.count("l") \
-             + col_spec.count("r") + col_spec.count("c")
-    cont = cont_caption or f"{caption} (Continued)"
-    body = "\n".join(rows)
+def _master_longtable(caption: str, labels: list[str], col_spec: str,
+                      header_row: str, n_cols: int, rows: list[str],
+                      notes: str) -> str:
+    """xltabular skeleton for the consolidated dictionaries: full \\textwidth,
+    notes width matched to the table, continuation headers on page breaks."""
+    label_str = "".join(f"\\label{{{l}}}" for l in labels)
+    cont = f"{caption} (Continued)"
     return "\n".join([
         r"\setstretch{1.0}",
-        r"\setlength{\LTleft}{\fill}",
-        r"\setlength{\LTright}{\fill}",
-        f"\\begin{{longtable}}{{{col_spec}}}",
-        f"    \\caption{{{caption}}} \\label{{{label}}} \\\\",
+        r"\begingroup",
+        r"\small",
+        f"\\begin{{xltabular}}{{\\textwidth}}{{{col_spec}}}",
+        f"    \\caption{{{caption}}}{label_str} \\\\",
         r"    \toprule",
         f"    {header_row} \\\\",
         r"    \midrule",
@@ -1371,319 +1549,183 @@ def _longtable(caption: str, label: str, col_spec: str,
         r"    \midrule",
         r"    \endhead",
         r"    \midrule",
-        f"    \\multicolumn{{2}}{{r}}{{\\textit{{Continued on next page}}}} \\\\",
+        f"    \\multicolumn{{{n_cols}}}{{r}}{{\\textit{{Continued on next page}}}} \\\\",
         r"    \endfoot",
         r"    \bottomrule",
+        f"    \\multicolumn{{{n_cols}}}{{p{{\\dimexpr\\textwidth-2\\tabcolsep\\relax}}}}{{{notes}}} \\\\",
         r"    \endlastfoot",
-        body,
-        r"\end{longtable}",
+        *rows,
+        r"\end{xltabular}",
+        r"\endgroup",
         r"\doublespacing",
     ])
 
 
-def render_appendix_b1() -> str:
-    rows = [
-        r"    CodConglomeradoPrudencial & Conglomerate $j$ (prudential C-code) \\",
-        r"    CNPJ\_Lider               & Lead institution CNPJ of the conglomerate \\",
-        r"    CNPJ                     & Institution $j$ at root-CNPJ level \\",
-        r"    CODMUN\_IBGE             & 7-digit IBGE municipality code; \texttt{0} = nationally active D institution \\",
-        r"    mca\_code                & Market $m$ --- one of 468 MCAs, or \texttt{NATIONAL} for D institutions \\",
-        r"    year, quarter            & Period $t$ label \\",
-        r"    AnoMes                   & BCB IF-Data period code YYYYMM \\",
-        r"    deposit\_type            & Deposit category $k$: 1=demand, 2=savings, 3=interbank, 4=time/CDB, 5=prepaid \\",
-    ]
-    return _longtable(
-        caption  = "Identifiers / indices",
-        label    = "tab:identifiers",
-        col_spec = r">{\ttfamily\small}p{6.0cm} p{9.5cm}",
-        header_row = r"\normalfont\textbf{Variable} & \textbf{Role}",
-        rows     = rows,
-    )
+def _grouped_rows(groups, n_cols: int) -> list[str]:
+    """Emit group subheaders + data rows for a master table."""
+    out = []
+    for gi, (gname, grows) in enumerate(groups):
+        if gi > 0:
+            out.append(r"    \addlinespace[0.7em]")
+        # No rule or glue under group headers: booktabs' below-rule/-space glue
+        # is a legal longtable breakpoint (it orphans the header). The header
+        # row ends \\*[0.15em], which both adds the small gap and forbids the
+        # break, gluing the header to its first data row.
+        out.append(f"    \\multicolumn{{{n_cols}}}{{l}}{{\\itshape {gname}}} \\\\*[0.15em]")
+        for cells in grows:
+            out.append("    " + " & ".join(cells) + r" \\")
+    return out
 
 
-def render_appendix_b2() -> str:
-    rows = [
-        r"    dep\_a1--dep\_a5          & Deposit balances by type from ESTBAN and IF-Data, aggregated to MCA level if $\mathrm{B}$ firm and national level if $\mathrm{D}$ firm \\",
-        r"    deposit\_balance         & Type-specific deposit stock from IF-Data Passivo report \\",
-        r"    lagged\_deposits         & \texttt{deposit\_balance} shifted 1 quarter within institution and type \\",
-        r"    total\_deposits          & Sum across all 5 types of deposits for institution $j$ at period $t$ \\",
-        r"    lagged\_total\_deposits   & \texttt{total\_deposits} shifted 1 quarter \\",
-        r"    pop\_total               & Proxy for market size $M_{mt}$ from IBGE population \\",
-    ]
-    return _longtable(
-        caption  = r"Outcome Variables --- Deposit Stocks $\mathrm{Dep}_{jkmt}$",
-        label    = "tab:deposits",
-        col_spec = r">{\ttfamily}p{6.0cm} p{10.0cm}",
-        header_row = r"\normalfont\textbf{Variable} & \textbf{Role}",
-        rows     = rows,
-    )
-
-
-def render_appendix_b3_vars() -> str:
-    """New B.3: rate and spread variable descriptions."""
-    rows = [
-        r"    \multicolumn{2}{l}{\textit{Benchmark macro rates (from BCB SGS)}} \\",
-        r"    \midrule",
-        r"    selic\_qoq           & SELIC overnight rate compounded QoQ: $(1+r_{\text{daily}})^{63}-1$. Risk-free benchmark. \\",
-        r"    cdi\_qoq             & CDI (interbank) rate compounded QoQ. \\",
-        r"    savings\_rate\_qoq   & Regulated savings deposit rate, compounded QoQ. \\",
-        r"    meta\_selic          & COPOM Selic target rate (\% p.a.) at end of quarter. \\",
-        r"    \addlinespace[0.4em]",
-        r"    \multicolumn{2}{l}{\textit{Institution-level rates and spreads}} \\",
-        r"    \midrule",
-        r"    risk\_free\_qoq      & Risk-free rate: equals \texttt{selic\_qoq}. \\",
-        r"    deposit\_rate\_qoq   & Type-specific deposit rate, QoQ decimal. Varies by type $k$ (see text). \\",
-        r"    spread\_qoq         & $r^{\mathrm{f}}_t - r^{\mathrm{dep}}_{jkmt}$, QoQ decimal. Used in sleepiness estimation and deposit dynamics. \\",
-        r"    \addlinespace[0.4em]",
-        r"    \multicolumn{2}{l}{\textit{Annualized counterparts (for demand estimation)}} \\",
-        r"    \midrule",
-        r"    risk\_free\_ann      & $(1+\texttt{risk\_free\_qoq})^4 - 1$. \\",
-        r"    deposit\_rate\_ann   & $(1+\texttt{deposit\_rate\_qoq})^4 - 1$. \\",
-        r"    spread\_ann         & $r^{\mathrm{f,ann}}_t - r^{\mathrm{dep,ann}}_{jkmt}$. Price variable in demand estimation. \\",
-    ]
-    return _longtable(
-        caption    = r"Rates and Spreads",
-        label      = "tab:rates_spreads",
-        col_spec   = r">{\ttfamily\small}p{5.5cm} p{10.0cm}",
-        header_row = r"\normalfont\textbf{Variable} & \textbf{Description}",
-        rows       = rows,
-    )
-
-
-def render_appendix_b4() -> str:
-    rows = [
-        r"    gdp\_per\_capita           & Municipal GDP from IBGE, interpolated and imputed where needed \\",
-        r"    gdp\_imputed              & Flag for when GDP was imputed (carry-forward) because IBGE publication lags the panel end-year \\",
-        r"    fraction\_65plus          & Share of population aged 65+ \\",
-        r"    fraction\_young           & Share of population aged 15--20 \\",
-        r"    age\_interpolated         & Flag for when age structure was interpolated \\",
-        r"    pix\_exists               & Binary indicator for PIX available in the quarter \\",
-        r"    pix\_users\_pf\_per1000   & Number of PIX users per 1,000 inhabitants \\",
-        r"    pix\_txns\_pf             & Number of PIX transactions by individuals \\",
-        r"    pix\_value\_pf\_r1000     & PIX transaction value by individuals \\",
-        r"    pix\_users\_pj            & PIX business users \\",
-        r"    connections\_per100       & Broadband subscriptions per 100 inhabitants \\",
-        r"    frac\_4g5g                & Share of mobile connections that are 4G or 5G \\",
-        r"    branches\_per1000         & Bank branches per 1,000 inhabitants \\",
-        r"    access\_points\_per1000    & Total access points per 1,000 inhabitants \\",
-        r"    cadunico\_families\_per1000 & Registered low-income families per 1,000 inhabitants \\",
-        r"    cadunico\_extreme\_poverty & Share in extreme poverty \\",
-        r"    cadunico\_poverty         & Share in poverty \\",
-    ]
-    return _longtable(
-        caption  = r"$S_{mt}$ --- Market-level state variables entering the sleepiness function $\phi(S_{mt})$ and the auxiliary demand model",
-        label    = "tab:state_variables_app",
-        col_spec = r">{\ttfamily\small}p{6.0cm} p{9.5cm}",
-        header_row = r"\normalfont\textbf{Variable} & \textbf{Role}",
-        rows     = rows,
-    )
-
-
-def render_appendix_b5() -> str:
-    rows = [
-        r"    equity\_ratio             & Capital structure; basis for rival IVs --- \texttt{equity}/\texttt{total\_assets} \\",
-        r"    log\_total\_assets         & Size shifter; basis for rival IVs --- $\ln(\text{total\_assets})$ \\",
-        r"    fgc\_covered              & Insurance --- indicator for FGC-insured deposit types (1, 2, and 4) \\",
-        r"    has\_ip                   & IP subsidiary flag (see Table \ref{tab:identifiers}) \\",
-    ]
-    return _longtable(
-        caption  = r"$X_{jt}$ --- Institution-level product characteristics",
-        label    = "tab:institution_characteristics",
-        col_spec = r">{\ttfamily\small}p{6.0cm} p{9.5cm}",
-        header_row = r"\normalfont\textbf{Variable} & \textbf{Role}",
-        rows     = rows,
-    )
-
-
-def render_appendix_b6() -> str:
-    rows = [
-        r"    personnel\_cost\_ratio\_lag    & From COSIF 78215 --- $|\text{personnel}|/\text{assets}$, lag 1Q. IV Logic: wage costs shift marginal cost \\",
-        r"    admin\_cost\_ratio\_lag        & From COSIF 78214 --- $|\text{admin}|/\text{assets}$, lag 1Q. IV Logic: general overhead cost shifter \\",
-        r"    tax\_cost\_ratio\_lag          & From COSIF 78220 --- $|\text{tax}|/\text{assets}$, lag 1Q. IV Logic: tax burden cost shifter \\",
-    ]
-    return _longtable(
-        caption  = r"$Z_{jt}$ --- Operating Cost Shifters from IF-Data DRE Report",
-        label    = "tab:operating_cost_shifters",
-        col_spec = r">{\ttfamily\small}p{6.0cm} p{9.5cm}",
-        header_row = r"\normalfont\textbf{Variable} & \textbf{Role}",
-        rows     = rows,
-    )
-
-
-def render_appendix_b7() -> str:
-    rows = [
-        r"    lci\_lca\_ratio\_lag      & COSIF LCI (78289) + LCA (78290) / \text{assets}. IV: alternative funding source pressure \\",
-        r"    wholesale\_ratio\_lag     & Sum of wholesale accounts / \text{assets}. IV: aggregate wholesale dependence \\",
-    ]
-    return _longtable(
-        caption  = r"$Z_{jt}$ --- Wholesale Funding Mix Cost Instruments from IF-Data Passivo report",
-        label    = "tab:wholesale_funding",
-        col_spec = r">{\ttfamily\small}p{6.0cm} p{9.5cm}",
-        header_row = r"\normalfont\textbf{Variable} & \textbf{Role}",
-        rows     = rows,
-    )
-
-
-def render_appendix_b8() -> str:
-    rows = [
-        r"    indice\_basileia\_lag          & From COSIF 79664 --- Constructed as total capital ratio (Basel Index), lagged 1Q \\",
-    ]
-    return _longtable(
-        caption  = r"$Z_{jt}$ --- Capital adequacy cost instruments from IF-Data Capital report",
-        label    = "tab:capital_adequacy",
-        col_spec = r">{\ttfamily\small}p{6.0cm} p{9.5cm}",
-        header_row = r"\normalfont\textbf{Variable} & \textbf{Role}",
-        rows     = rows,
-    )
-
-
-def render_appendix_b9() -> str:
-    rows = [
-        r"    loo\_log\_assets / mean\_loo\_log\_assets       & log\_total\_assets         & Rival scale instrument \\",
-        r"    loo\_equity\_assets / mean\_loo\_equity\_ratio  & equity\_ratio              & Rival capital structure instrument \\",
-        r"    loo\_indice\_basileia / mean\_loo\_basileia     & indice\_basileia\_lag      & Rival capital slack \\",
-        r"    loo\_credit\_assets / mean\_loo\_credit\_assets  & credit\_assets\_ratio\_lag  & Rival ALM pressure \\",
-        r"    loo\_lci\_lca\_ratio / mean\_loo\_lci\_lca\_ratio & lci\_lca\_ratio\_lag       & Rival wholesale substitutability \\",
-        r"    loo\_wholesale\_ratio / mean\_loo\_wholesale    & wholesale\_ratio\_lag      & Rival aggregate wholesale mix \\",
-        r"    loo\_npl\_provision / mean\_loo\_npl\_provision & npl\_provision\_ratio\_lag & Rival credit quality \\",
-        r"    n\_rivals                                     & --                          & Count of non-null rivals in the same group \\",
-    ]
-    # 3-column table — override the 2-col multicolumn in footer
-    n_cols = 3
-    cont = r"$Z_{jt}$ --- BLP leave-one-out rival instruments (Continued)"
-    body  = "\n".join(rows)
-    return "\n".join([
-        r"\setstretch{1.0}",
-        r"\setlength{\LTleft}{\fill}",
-        r"\setlength{\LTright}{\fill}",
-        r"\begin{longtable}{>{\ttfamily\small}p{5.5cm} >{\ttfamily\small}p{4.5cm} p{5.5cm}}",
-        r"    \caption{$Z_{jt}$ --- BLP leave-one-out rival instruments} \label{tab:blp_loo} \\",
-        r"    \toprule",
-        r"    \normalfont\textbf{Variable Pair} & \normalfont\textbf{Source Characteristic} & \textbf{Logic} \\",
-        r"    \midrule",
-        r"    \endfirsthead",
-        f"    \\caption[]{{{cont}}} \\\\",
-        r"    \toprule",
-        r"    \normalfont\textbf{Variable Pair} & \normalfont\textbf{Source Characteristic} & \textbf{Logic} \\",
-        r"    \midrule",
-        r"    \endhead",
-        r"    \midrule",
-        r"    \multicolumn{3}{r}{\textit{Continued on next page}} \\",
-        r"    \endfoot",
-        r"    \bottomrule",
-        r"    \endlastfoot",
-        body,
-        r"\end{longtable}",
-        r"\doublespacing",
-    ])
-
-
-def render_appendix_b10() -> str:
-    """Rates and spreads variable descriptions — new table."""
-    rows = [
-        r"    selic\_qoq           & SELIC overnight rate, compounded QoQ; $\approx (1+r_{\text{daily}})^{63}-1$. Source: BCB SGS. \\",
-        r"    cdi\_qoq             & CDI (interbank) rate, compounded QoQ. Source: BCB SGS. \\",
-        r"    savings\_rate\_qoq   & Regulated savings rate, compounded QoQ. Source: BCB SGS. \\",
-        r"    meta\_selic          & COPOM Selic target rate (\% p.a.) at end of quarter. Source: BCB SGS. \\",
-        r"    risk\_free\_qoq      & Risk-free rate used in spread construction; equals \texttt{selic\_qoq}. \\",
-        r"    deposit\_rate\_qoq   & Type-specific deposit rate, QoQ decimal. Varies by type (see text). \\",
-        r"    spread\_qoq         & $r^{\text{f}}_t - r^{\text{dep}}_{jkmt}$, QoQ decimal. Used in sleepiness estimation. \\",
-        r"    risk\_free\_ann      & $(1+\texttt{risk\_free\_qoq})^4 - 1$; annualized SELIC. \\",
-        r"    deposit\_rate\_ann   & $(1+\texttt{deposit\_rate\_qoq})^4 - 1$; annualized deposit rate. \\",
-        r"    spread\_ann         & $r^{\text{f,ann}}_t - r^{\text{dep,ann}}_{jkmt}$, annualized. Used in demand estimation. \\",
-    ]
-    return _longtable(
-        caption  = r"Rates and Spreads",
-        label    = "tab:macro_rates_spreads",
-        col_spec = r">{\ttfamily\small}p{5.5cm} p{10.0cm}",
-        header_row = r"\normalfont\textbf{Variable} & \textbf{Description}",
-        rows     = rows,
-    )
-
-
-# ---------------------------------------------------------------------------
-# BLP instrument table (tab:blp_instruments) — the Z_{jt} used in the 2SLS
-# mean-utility estimation. Previously a hand-written tex file with no generator;
-# reproduced here so the category labels stay single-sourced (and correct).
-# ---------------------------------------------------------------------------
-# Category labels (single-sourced). The leave-one-out block was formerly labelled
-# "BLP LOO"; it now reads "Leave-one-out".
-_CAT_LOO     = "Leave-one-out"
-_CAT_ESTBAN  = "Branch competition"
-_CAT_COST    = "Cost Shifter"
-_CAT_CAPITAL = "Capital"
-
-# (instrument, category, description). Order mirrors the engine's Z construction exactly:
-# vcat(IV_BLP_LOO, IV_ESTBAN, IV_COST, IV_CAPITAL) — blp_1_estimation.jl:133-144 and the identical
-# vcat in blp_1_logit.jl. K = 16. \addlinespace is inserted automatically between categories.
-_BLP_INSTRUMENTS = [
-    ("loo_log_assets",          _CAT_LOO,  r"Leave-one-out mean $\ln(\text{Total Assets}_{t-1})$ of rivals"),
-    ("mean_loo_log_assets",     _CAT_LOO,  r"Mean $\ln(\text{Total Assets}_{t-1})$ across all leave-one-out observations"),
-    ("loo_equity_ratio",        _CAT_LOO,  r"Leave-one-out mean equity ratio of rivals"),
-    ("mean_loo_equity_ratio",   _CAT_LOO,  r"Mean equity ratio across all leave-one-out observations"),
-    ("loo_basileia",            _CAT_LOO,  r"Leave-one-out mean Basel index of rivals"),
-    ("mean_loo_basileia",       _CAT_LOO,  r"Mean Basel index across all leave-one-out observations"),
-    ("loo_credit_assets",       _CAT_LOO,  r"Leave-one-out mean credit-to-assets ratio of rivals"),
-    ("mean_loo_credit_assets",  _CAT_LOO,  r"Mean credit-to-assets ratio across all leave-one-out observations"),
-    ("loo_npl_provision",       _CAT_LOO,  r"Leave-one-out mean non-performing-loan provision of rivals"),
-    ("mean_loo_npl_provision",  _CAT_LOO,  r"Mean NPL provision across all leave-one-out observations"),
-    ("n_rivals",                _CAT_LOO,  r"Number of rival institutions in the MCA--time cell"),
-    ("estban_rival_branches_lag", _CAT_ESTBAN, r"$\ln(1+\,$rival bank branches in the MCA$)$, lagged $t-1$ (ESTBAN)"),
-    ("personnel_cost_ratio_lag", _CAT_COST, r"Personnel cost ratio, lagged $t-1$"),
-    ("admin_cost_ratio_lag",     _CAT_COST, r"Administrative cost ratio, lagged $t-1$"),
-    ("tax_cost_ratio_lag",       _CAT_COST, r"Tax cost ratio, lagged $t-1$"),
-    ("indice_basileia_lag",      _CAT_CAPITAL, r"Basel index (regulatory capital-adequacy ratio), lagged $t-1$"),
+# Master table A: variables used in estimation, grouped by role.
+# 'Sleep' = sleepiness estimation E1-E8 (state vars enter phi interacted with
+# lagged deposits; estimation_2_sleep.define_specifications). 'Demand' = the
+# logit/BLP system (X = product chars, pi = demographic interactions actually
+# estimated in blp_1_estimation.jl). gdp_growth_yoy is the +Time block of
+# E4/E6/E8; it was previously undocumented in the appendix dictionaries.
+_VARS_MASTER_GROUPS = [
+    ("Identifiers and panel structure", [
+        (r"CodConglomeradoPrudencial", r"Conglomerate $j$ (prudential C-code)", "BCB", "All"),
+        (r"CNPJ\_Lider, CNPJ", r"Lead-institution and root-level CNPJ of the conglomerate", "BCB", "All"),
+        (r"CODMUN\_IBGE", r"7-digit IBGE municipality code; \texttt{0} = nationally active D institution", "IBGE", "All"),
+        (r"mca\_code", r"Market $m$ --- one of 468 MCAs, or \texttt{NATIONAL} for D institutions", "Constructed", "All"),
+        (r"year, quarter, AnoMes", r"Period $t$; \texttt{AnoMes} is the BCB IF-Data code YYYYMM", "BCB", "All"),
+        (r"deposit\_type", r"Category $k$: 1 = demand, 2 = savings, 3 = interbank, 4 = time/CDB, 5 = prepaid", "BCB", "All"),
+    ]),
+    ("Outcomes: deposit stocks", [
+        (r"dep\_a1--dep\_a5, deposit\_balance", r"Type-$k$ deposit stock $\mathrm{Dep}_{jkmt}$; MCA level for B firms, national for D firms", "ESTBAN, IF-Data", "Sleep; Demand"),
+        (r"lagged\_deposits", r"\texttt{deposit\_balance} shifted one quarter within institution $\times$ type", "Constructed", "Sleep"),
+        (r"total\_deposits, lagged\_total\_deposits", r"Sum across the five deposit types, and its one-quarter lag", "Constructed", "Sleep"),
+        (r"pop\_total", r"Market size $M_{mt}$", "IBGE", "Demand (shares)"),
+    ]),
+    ("Rates and spreads", [
+        (r"selic\_qoq, risk\_free\_qoq", r"SELIC overnight compounded QoQ, $(1+r_{\text{daily}})^{63}-1$; the risk-free benchmark", "BCB SGS", "Sleep; Demand"),
+        (r"deposit\_rate\_qoq", r"Type-specific deposit rate, QoQ decimal", "BCB, COSIF", "Sleep; Demand"),
+        (r"spread\_qoq", r"$r^{\mathrm{f}}_t - r^{\mathrm{dep}}_{jkmt}$, QoQ decimal; the endogenous price in the sleepiness estimation", "Constructed", "Sleep"),
+        (r"risk\_free\_ann, deposit\_rate\_ann, spread\_ann", r"Annualized counterparts, $(1+x)^4-1$; \texttt{spread\_ann} is the demand price $\rho_{jkmt}$", "Constructed", "Demand"),
+        (r"risk\_free\_qoq\_lag", r"One-quarter lag of the Selic rate (state variable)", "BCB SGS", "Sleep"),
+        (r"gdp\_growth\_yoy", r"Year-over-year GDP growth; the optional time block of the +Time estimators", "IBGE", "Sleep (+Time)"),
+    ]),
+    ("Market-level state variables and demographics", [
+        (r"pix\_exists", r"Pix availability indicator (from 2020Q4)", "BCB", "Sleep"),
+        (r"gdp\_per\_capita", r"Municipal GDP aggregated to MCA, divided by population", "IBGE", r"Sleep; Demand ($\pi$)"),
+        (r"fraction\_65plus", r"Share of population aged 65+", "IBGE Census", r"Sleep; Demand ($\pi$)"),
+        (r"fraction\_young", r"Share of population aged 15--20", "IBGE Census", "Sleep"),
+        (r"connections\_per100", r"Broadband subscriptions per 100 inhabitants", "ANATEL", r"Sleep; Demand ($\pi$)"),
+        (r"cadunico\_families\_per1000", r"Low-income families registered in Cad\'Unico per 1,000 inhabitants", "SAGI/MDS", r"Sleep; Demand ($\pi$)"),
+    ]),
+    ("Product characteristics", [
+        (r"fgc\_covered", r"FGC deposit-insurance indicator (types 1, 2, and 4)", "Constructed", r"Demand ($X$, $\pi$)"),
+        (r"has\_ip", r"Payment-institution subsidiary flag", "BCB", r"Demand ($X$)"),
+        (r"segment, seg\_S2--seg\_S5", r"BCB prudential segment S1--S5 and its dummies", "BCB", r"Demand ($X$)"),
+        (r"total\_assets, log\_total\_assets\_lag", r"Total balance-sheet assets and $\ln(\cdot)$, lagged one quarter", "IF-Data", r"Demand ($X$, $\pi$)"),
+        (r"equity\_ratio", r"\texttt{equity}/\texttt{total\_assets}; basis for the rival leave-one-out instruments (Table \ref{tab:instruments_master})", "IF-Data", "Instruments"),
+    ]),
 ]
 
 
-def render_blp_instruments() -> str:
-    """Longtable of the BLP instruments Z_{jt} (spec 12), grouped by category.
+def render_variables_master() -> str:
+    notes = (
+        r"\footnotesize \textit{Notes:} Only variables entering an estimated "
+        r"specification are listed. ``Sleep'' = sleepiness estimation (E1--E8; "
+        r"state variables enter $\phi(S_{mt})$ interacted with lagged deposits), "
+        r"``+Time'' = the E4/E6/E8 time block; ``Demand'' = logit/BLP demand "
+        r"system ($X$ = product characteristics, $\pi$ = estimated demographic "
+        r"interactions, shares = market-share construction). Auxiliary collected "
+        r"variables that enter no estimated specification (additional Pix usage "
+        r"measures, 4G/5G share, branch and access-point densities, Cad\'Unico "
+        r"poverty shares, imputation and interpolation flags) are documented in "
+        r"the replication package's data dictionary."
+    )
+    rows = _grouped_rows(
+        [(g, [(rf"{n}", d, s, u) for n, d, s, u in rws]) for g, rws in _VARS_MASTER_GROUPS],
+        n_cols=4,
+    )
+    return _master_longtable(
+        caption    = "Variables Used in Estimation, by Role",
+        labels     = ["tab:variables_master", "tab:identifiers", "tab:deposits",
+                      "tab:rates_spreads", "tab:state_variables_app",
+                      "tab:institution_characteristics", "tab:prod_chars",
+                      "tab:demographic_chars"],
+        col_spec   = (r">{\ttfamily\footnotesize}p{4.6cm} "
+                      r">{\raggedright\arraybackslash}X "
+                      r">{\raggedright\arraybackslash}p{2.2cm} "
+                      r">{\raggedright\arraybackslash}p{2.6cm}"),
+        header_row = (r"\normalfont\small\textbf{Variable} & \textbf{Definition} "
+                      r"& \textbf{Source} & \textbf{Used in}"),
+        n_cols     = 4,
+        rows       = rows,
+        notes      = notes,
+    )
 
-    Reproduces the former hand-written tab_blp_instruments.tex; the leave-one-out
-    category now reads 'Leave-one-out' instead of 'BLP LOO'.
-    """
-    def esc(name: str) -> str:            # underscores -> LaTeX literal
-        return name.replace("_", r"\_")
-    w = max(len(esc(n)) for n, _, _ in _BLP_INSTRUMENTS)   # pad the ttfamily column
-    cat_w = max(len(c) for _, c, _ in _BLP_INSTRUMENTS)
 
-    body, prev_cat = [], None
-    for name, cat, desc in _BLP_INSTRUMENTS:
-        if prev_cat is not None and cat != prev_cat:
-            body.append(r"    \addlinespace")
-        body.append(f"    {esc(name):<{w}} & {cat:<{cat_w}} & {desc} \\\\")
-        prev_cat = cat
+# Master table B: instruments with the stage they enter. Stage strings follow
+# the estimated sets exactly: the sleepiness first stage (nested IV sets in
+# estimation_2_sleep.define_specifications) and the K=16 demand vector
+# vcat(IV_BLP_LOO, IV_ESTBAN, IV_COST, IV_CAPITAL) in blp_1_estimation.jl /
+# blp_1_logit.jl. leave_one_out_mean_spread (the Hausman IV) was previously
+# undocumented; the LOO lci/wholesale pairs listed in the old BLP-LOO table are
+# NOT in the estimated demand vector and are therefore not printed.
+_STAGE_BOTH   = "Sleep 1st stage; Demand"
+_STAGE_SLEEP  = "Sleep 1st stage"
+_STAGE_DEMAND = "Demand (logit/BLP)"
 
-    n_iv = len(_BLP_INSTRUMENTS)
-    return "\n".join([
-        r"\setstretch{1.0}",
-        # xltabular pinned to \textwidth so the table can never overflow the text block regardless of
-        # page geometry: col 1 (instrument names) is a fixed \footnotesize \ttfamily p-box wide enough
-        # for the longest single-token name (estban_rival_branches_lag); col 2 (category) takes its
-        # natural width; the Description is an X column that absorbs exactly the remaining width. (Same
-        # xltabular mechanism the demand-comparison table uses, so V_Main already loads the package.)
-        r"\begin{xltabular}{\textwidth}{>{\ttfamily\footnotesize}p{5.0cm} >{\small}l "
-        r">{\small\raggedright\arraybackslash}X}",
-        r"    \caption{Instrumental Variables for the BLP Demand Estimation (Specification~12)}",
-        r"    \label{tab:blp_instruments} \\",
-        r"    \toprule",
-        r"    \normalfont\small\textbf{Instrument} & \normalfont\textbf{Category} & \normalfont\textbf{Description} \\",
-        r"    \midrule",
-        r"    \endfirsthead",
-        r"    \caption[]{Instrumental Variables for the BLP Demand Estimation (Continued)} \\",
-        r"    \toprule",
-        r"    \normalfont\small\textbf{Instrument} & \normalfont\textbf{Category} & \normalfont\textbf{Description} \\",
-        r"    \midrule",
-        r"    \endhead",
-        r"    \midrule",
-        r"    \multicolumn{3}{r}{\normalfont\textit{Continued on next page}} \\",
-        r"    \endfoot",
-        r"    \bottomrule",
-        r"    \endlastfoot",
-        *body,
-        r"\end{xltabular}",
-        r"\doublespacing",
-    ])
+_INSTR_MASTER_GROUPS = [
+    ("Operating cost shifters (IF-Data DRE)", [
+        (r"personnel\_cost\_ratio\_lag", r"$|\text{personnel expense}|/\text{assets}$ (COSIF 78215), lagged 1Q", _STAGE_BOTH),
+        (r"admin\_cost\_ratio\_lag", r"$|\text{administrative expense}|/\text{assets}$ (COSIF 78214), lagged 1Q", _STAGE_BOTH),
+        (r"tax\_cost\_ratio\_lag", r"$|\text{tax expense}|/\text{assets}$ (COSIF 78220), lagged 1Q", _STAGE_BOTH),
+    ]),
+    ("Funding mix (IF-Data Passivo)", [
+        (r"lci\_lca\_ratio\_lag", r"(LCI 78289 + LCA 78290)$/\text{assets}$, lagged 1Q; alternative funding-source pressure", _STAGE_SLEEP),
+        (r"wholesale\_ratio\_lag", r"Wholesale funding accounts$/\text{assets}$, lagged 1Q; aggregate wholesale dependence", _STAGE_SLEEP),
+    ]),
+    ("Capital adequacy (IF-Data Capital)", [
+        (r"indice\_basileia\_lag", r"Basel index --- total regulatory capital ratio (COSIF 79664), lagged 1Q", _STAGE_BOTH),
+    ]),
+    ("Hausman-style", [
+        (r"leave\_one\_out\_mean\_spread", r"Leave-one-out mean spread of rivals in the same deposit type $\times$ quarter", _STAGE_SLEEP),
+    ]),
+    (r"BLP leave-one-out rival characteristics, group $g=(\texttt{deposit\_type},\texttt{AnoMes})$", [
+        (r"loo\_log\_assets, mean\_loo\_log\_assets", r"LOO sum and mean of rival $\ln(\text{Total Assets}_{t-1})$", _STAGE_DEMAND),
+        (r"loo\_equity\_ratio, mean\_loo\_equity\_ratio", r"LOO sum and mean of rival equity ratio", _STAGE_DEMAND),
+        (r"loo\_basileia, mean\_loo\_basileia", r"LOO sum and mean of rival Basel index", _STAGE_DEMAND),
+        (r"loo\_credit\_assets, mean\_loo\_credit\_assets", r"LOO sum and mean of rival credit-to-assets ratio", _STAGE_DEMAND),
+        (r"loo\_npl\_provision, mean\_loo\_npl\_provision", r"LOO sum and mean of rival non-performing-loan provisions", _STAGE_DEMAND),
+        (r"n\_rivals", r"Number of non-null rivals in the group", _STAGE_DEMAND),
+    ]),
+    ("Branch competition (ESTBAN)", [
+        (r"estban\_rival\_branches\_lag", r"Log of one plus the count of rival bank branches in the MCA, lagged 1Q", _STAGE_DEMAND),
+    ]),
+]
+
+
+def render_instruments_master() -> str:
+    notes = (
+        r"\footnotesize \textit{Notes:} ``Sleep 1st stage'' instruments enter "
+        r"the deposit-spread equation under the nested IV sets (cost shifters "
+        r"$\subset$ wholesale $\subset$ Hausman); ``Demand'' instruments form "
+        r"the $K=16$ vector $Z_{jt}$ of the logit/BLP moment conditions. "
+        r"Leave-one-out (LOO) instruments are built within group "
+        r"$g=(\texttt{deposit\_type},\texttt{AnoMes})$: "
+        r"$\texttt{loo\_x}_j=\sum_{l\in g,\,l\neq j}x_l$ and "
+        r"$\texttt{mean\_loo\_x}_j=\texttt{loo\_x}_j/n_{\mathrm{rivals},j}$."
+    )
+    rows = _grouped_rows(_INSTR_MASTER_GROUPS, n_cols=3)
+    return _master_longtable(
+        caption    = "Instruments, by Estimation Stage",
+        labels     = ["tab:instruments_master", "tab:operating_cost_shifters",
+                      "tab:wholesale_funding", "tab:capital_adequacy",
+                      "tab:blp_loo", "tab:blp_instruments"],
+        col_spec   = (r">{\ttfamily\footnotesize}p{5.3cm} "
+                      r">{\raggedright\arraybackslash}X "
+                      r">{\raggedright\arraybackslash}p{3.4cm}"),
+        header_row = (r"\normalfont\small\textbf{Instrument} & "
+                      r"\textbf{Definition} & \textbf{Stage}"),
+        n_cols     = 3,
+        rows       = rows,
+        notes      = notes,
+    )
 
 
 def _num_word(n: int) -> str:
@@ -1744,6 +1786,7 @@ def main():
     tex2b = render_table2b(t2, "dep_total_mq", "_dep_weighted")
     _write_tex(tex2a, "Compressed_MarketStructure_by_Year_AB", "")
     _write_tex(tex2b, "Compressed_MarketStructure_by_Year_C", "")
+    render_market_structure_figure(t2, "")
 
     # --- Table 3
     print("\n[Table 3] Local environment by macro-region ...")
@@ -1766,21 +1809,10 @@ def main():
     tex_app   = render_appendix_rates(app_rates)
     _write_tex(tex_app, "Appendix_Macro_Rates_by_Year", "")
 
-    # --- Appendix B: variable description tables (B.1, B.2, B.4–B.10)
-    print("\n[Appendix B] Variable description tables ...")
-    for fname, render_fn in [
-        ("Appendix_B_Identifiers",       render_appendix_b1),
-        ("Appendix_B_Deposits",          render_appendix_b2),
-        ("Appendix_B_RatesVars",         render_appendix_b3_vars),   # new B.3
-        ("Appendix_B_StateVariables",    render_appendix_b4),
-        ("Appendix_B_InstitutionChars",  render_appendix_b5),
-        ("Appendix_B_CostShifters",      render_appendix_b6),
-        ("Appendix_B_WholesaleFunding",  render_appendix_b7),
-        ("Appendix_B_CapitalAdequacy",   render_appendix_b8),
-        ("Appendix_B_BLPloo",            render_appendix_b9),
-        ("tab_blp_instruments",          render_blp_instruments),  # was hand-written; now generated
-    ]:
-        _write_tex(render_fn(), fname, "")
+    # --- Appendix: consolidated variable dictionaries (master tables A & B)
+    print("\n[Appendix] Consolidated variable dictionaries ...")
+    _write_tex(render_variables_master(),   "Appendix_Variables_Master", "")
+    _write_tex(render_instruments_master(), "Appendix_Instruments_Master", "")
 
     print("\nDone.")
 

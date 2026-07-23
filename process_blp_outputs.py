@@ -644,10 +644,12 @@ def write_summary_md(sub, index, stage, het=None):
           "2. **Carry the imprecision into the counterfactuals** — present them as ranges over the α "
           "CI, or lead with the ones that do not hinge on α's exact level. Do not report a "
           "single-number counterfactual from this α.",
-          "3. **Keep looking for instrument strength** only if a genuinely new source exists — the "
-          "obvious candidates have been worked hard, and reserve requirements failed the exclusion "
-          "diagnostic. Diminishing returns (but see the ESTBAN spatial-LOO extension under "
-          "investigation).",
+          "3. **Instrument search is exhausted** — Gandhi-Houde moments, funding-cost shifters, "
+          "reserve requirements (strong but macro-endogenous), and a branch-overlap-weighted rival "
+          "characteristic (tested: dilutes eff-F 4.3→3.0, own partial-F≈2.6, VIF≈1,500, α "
+          "wrong-signed) all fail relevance or exclusion. The blocker is structural: the spread is "
+          "national (conglomerate×type×quarter) so no MCA-level instrument has matching price "
+          "variation, and G\\* ≈ 5–7 caps cross-sectional power. Not a design problem.",
           "4. **State the concentration limitation explicitly** as a scope condition. It is a feature "
           "of the Brazilian deposit market, and naming it is more credible than hoping a reader does "
           "not notice G\\* ≈ 5.", ""]

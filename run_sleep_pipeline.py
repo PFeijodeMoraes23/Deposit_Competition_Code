@@ -41,6 +41,14 @@ import sys
 import time
 from pathlib import Path
 
+# Line-buffer our OWN output (mirrors run_data_pipeline.py).  Python block-buffers stdout when
+# it is a file/pipe rather than a tty, so without this the [STARTING]/Finished banners sit in
+# the buffer for hours and the log looks stalled even though the pipeline is healthy.
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(line_buffering=True)
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(line_buffering=True)
+
 _EMAIL_WARNED_MISSING_PWD = False
 
 def send_notification_email(finished_step, elapsed_seconds, next_step):
@@ -120,7 +128,9 @@ pool via simultaneous IPC pipe traffic for 400K-row DataFrames (WinError 1450).
     parser.add_argument(
         "--only-spec-12",
         action="store_true",
-        help="Only run specification 12 for the demand prep scripts instead of all specifications."
+        help=("Only run specification 12 for E2-E8 + demand prep instead of all specifications. "
+              "NOTE: E1 (estimation_1_sleep.py) has no spec selector -- it always runs the full "
+              "12-spec grid -- so this flag does not reduce E1's runtime.")
     )
 
     parser.add_argument(
@@ -202,12 +212,18 @@ pool via simultaneous IPC pipe traffic for 400K-row DataFrames (WinError 1450).
         desc = step['desc']
         args = step.get('args', [])
         
-        print(f"\n[STARTING] {script}: {desc}")
-        cmd = [sys.executable, script] + args
+        print(f"\n[STARTING] {script}: {desc}", flush=True)
+        # -u: run the child UNBUFFERED.  Without it Python block-buffers the child's stdout
+        # whenever this pipeline is redirected to a file (the normal way it is run), so a
+        # healthy multi-hour estimator (E7/E8 sieve) emits NOTHING to the log for over an
+        # hour and looks dead.  That cost a killed-and-restarted run on 2026-07-23; the
+        # process was fine, only its output was invisible.  Never remove this.
+        cmd = [sys.executable, "-u", script] + args
         start_time_script = time.time()
-        
+
         # Limit numpy/scipy core thrashing so multiple heavy processes don't freeze the OS
         env = os.environ.copy()
+        env["PYTHONUNBUFFERED"] = "1"   # belt-and-braces alongside -u
         for v in ["OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS", "VECLIB_MAXIMUM_THREADS", "NUMEXPR_NUM_THREADS"]:
             env[v] = "2" # Keep heavily numeric compute per process down to ~2 threads
         # Force a headless matplotlib backend: the project .venv lives inside OneDrive,

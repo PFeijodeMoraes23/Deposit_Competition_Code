@@ -16,6 +16,12 @@ has ZERO Wayback captures. So this is expected to be sparse, big-bank-biased and
 irregular. Hence the design is FEASIBILITY-GATED: measure coverage first, only backfill
 if it clears a threshold.
 
+VERDICT (2026-07-23): checked three independent archives — Internet Archive/Wayback
+(this module), Common Crawl, and arquivo.pt. Per-bank fee endpoints are unarchived in
+ALL THREE (only the directory is sparsely captured); the gate FAILS. Pre-collection OFB
+actual prices are unrecoverable — use BCB DataVigencia (scrape_20) for listed-price
+history. Kept for periodic re-checking, not because a backfill is expected.
+
 Pipeline
 --------
   Phase A (default) — FEASIBILITY PROBE
