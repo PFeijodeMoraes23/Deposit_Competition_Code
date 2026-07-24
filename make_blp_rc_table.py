@@ -150,7 +150,7 @@ def pi_label(char_idx: int, demo_idx: int) -> str:
 
 def equal_col_fmt(ncols: int, label_w: str = "4.8cm") -> str:
     r"""Column spec: a raggedright label column of width ``label_w`` followed by ``ncols``
-    equal-width, centered ``p``-columns that together fill \linewidth (the landscape line width).
+    equal-width, centered ``p``-columns that together fill \linewidth (= \textwidth in portrait).
     Equal widths keep the inter-column spacing uniform --- this avoids the "bulging column" gap that
     natural-width ``c`` columns produce when one cell (e.g. a large weak-$\theta_2$ SE) is far wider
     than its neighbours. Assumes ``\tabcolsep`` is set before ``\begin{longtable}``; the ``2(ncols+1)``
@@ -351,7 +351,6 @@ def build_table(est_id: int, suffix: str = "") -> str:
     sem_note   = se_note(stage_results.get("extended") or rep)
 
     lines = [
-        r"\begin{landscape}",
         r"\begin{spacing}{1.0}",
         r"\centering\footnotesize",
         r"\setlength{\tabcolsep}{4pt}",   # MUST precede \begin{longtable} (else it starts the
@@ -374,7 +373,7 @@ def build_table(est_id: int, suffix: str = "") -> str:
         r"    \endfoot",
         "",
         r"    \bottomrule",
-        r"    \multicolumn{" + str(ncols + 1) + r"}{p{\dimexpr\linewidth-2\tabcolsep\relax}}{"  # \linewidth = landscape line width (pdflscape clamps \textheight→\textwidth)
+        r"    \multicolumn{" + str(ncols + 1) + r"}{p{\dimexpr\linewidth-2\tabcolsep\relax}}{"  # \linewidth = \textwidth (portrait)
         r"\scriptsize \textit{Notes:} The estimation strategy is enumerated in "
         rf"Section~\ref{{sec:empirical:sleep}}. {sem_note}. Significance from a Student-$t$ "
         r"reference with $G^*$ effective clusters (few-cluster correction): "
@@ -489,7 +488,6 @@ def build_table(est_id: int, suffix: str = "") -> str:
     lines += [
         r"\end{longtable}",
         r"\end{spacing}",
-        r"\end{landscape}",
     ]
 
     return "\n".join(lines)
