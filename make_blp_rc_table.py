@@ -48,7 +48,7 @@ DRAFTS_DIR.mkdir(parents=True, exist_ok=True)
 
 # ── Constants (must match blp_estimation.jl) ──────────────────────────────────
 X_COLS = ["fgc_covered", "has_ip", "seg_S2", "seg_S3", "seg_S4", "seg_S5",
-          "log_total_assets_lag"]
+          "log_total_assets_lag", "is_state_owned"]
 COEF_NAMES = ["spread"] + X_COLS   # 1-indexed in Julia
 
 D_COLS = ["gdp_per_capita", "fraction_65plus", "fraction_young",
@@ -77,6 +77,7 @@ THETA1_LABELS = {
     "seg_S4":               r"Segment S4",
     "seg_S5":               r"Segment S5",
     "log_total_assets_lag": r"$\ln(\text{Total Assets}_{t-1})$",
+    "is_state_owned":       r"State-Owned",
 }
 
 # Characteristic labels for the σ/π parameter names — cover ALL θ₁ characteristics so σ(·) labels
@@ -90,6 +91,7 @@ COEF_LABELS = {
     "seg_S4":               r"Seg.\ S4",
     "seg_S5":               r"Seg.\ S5",
     "log_total_assets_lag": r"$\ln$ Assets",
+    "is_state_owned":       r"State-Owned",
 }
 
 # Demographic labels — descriptive names consistent with the sleepiness tables and
@@ -181,7 +183,9 @@ _RHO_CACHE: dict = {}
 def mean_rho_one_minus_s(est_id: int):
     """mean(ρ·(1−s)) over the routine's demand sample: ρ = spread_ann/100, s = share_B_cond if is_B
     else share_D, masked to finite ρ,s and 0≤s<1. Times a column's α̂ this gives the mean own-price
-    SEMI-elasticity (average-market plug-in; matches blp_1_logit.jl). None if the parquet is missing."""
+    ELASTICITY ∂ln s/∂ln ρ = α̂·ρ·(1−s) — unit-free, since the spread ρ enters in levels (a
+    semi-elasticity would be α̂·(1−s), per pp); average-market plug-in, matches blp_1_logit.jl.
+    None if the parquet is missing."""
     if est_id in _RHO_CACHE:
         return _RHO_CACHE[est_id]
     val = None
@@ -198,7 +202,7 @@ def mean_rho_one_minus_s(est_id: int):
             if m.any():
                 val = float(np.mean(rho[m] * (1.0 - s[m])))
     except Exception as e:
-        print(f"  [semi-elast] E{est_id}: mean(ρ(1−s)) failed — {e}")
+        print(f"  [elast] E{est_id}: mean(ρ(1−s)) failed — {e}")
     _RHO_CACHE[est_id] = val
     return val
 
@@ -213,7 +217,7 @@ def alpha_of(entry: dict):
 
 
 def semi_elast_cell(entry: dict, est_id: int) -> str:
-    """α̂·mean(ρ(1−s)) formatted (the average-market own-price semi-elasticity), or '---'."""
+    """α̂·mean(ρ(1−s)) formatted (the average-market own-price elasticity), or '---'."""
     rho = mean_rho_one_minus_s(est_id)
     a   = alpha_of(entry)
     return f"{a * rho:.3f}" if (rho is not None and a is not None) else "---"
@@ -377,9 +381,10 @@ def build_table(est_id: int, suffix: str = "") -> str:
         r"A $\dagger$ marks a $\Sigma$ estimated at the boundary ($\hat\Sigma\approx0$): we report "
         r"the point on the bound and \emph{no} two-sided standard error, since a symmetric interval "
         r"would straddle $\Sigma<0$ (Andrews 1999) and the bootstrap is degenerate there. "
-        r"$Q$: GMM overidentification statistic. Mean own-price semi-elasticity is the average-market "
-        r"plug-in $\hat\alpha\cdot\overline{\rho(1-s)}$ (representative-agent; the exact RC value "
-        r"integrates the individual price coefficients). "
+        r"$Q$: GMM overidentification statistic. Mean own-price elasticity is the average-market "
+        r"plug-in $\hat\alpha\cdot\overline{\rho(1-s)}$ (unit-free, since the spread $\rho$ enters "
+        r"in levels; representative-agent; the exact RC value integrates the individual price "
+        r"coefficients). "
         r"Spread in percentage points (÷100 from basis points)."
         r"} \\",
         r"    \endlastfoot",
@@ -471,7 +476,7 @@ def build_table(est_id: int, suffix: str = "") -> str:
 
     lines += [
         "    $Q$ (GMM) & "       + " & ".join(q_vals)    + r" \\",
-        r"    Mean own-price semi-elasticity & " + " & ".join(se_vals) + r" \\",
+        r"    Mean own-price elasticity & " + " & ".join(se_vals) + r" \\",
         "    Observations & "     + " & ".join(nobs_vals) + r" \\",
         r"    Eff.\ Clusters ($G^*$) & " + " & ".join(gstar_vals) + r" \\",
     ]

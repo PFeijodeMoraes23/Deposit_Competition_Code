@@ -177,7 +177,15 @@ def load_and_pivot(report_num, accounts_dict):
             df['is_ip'] = False
             df['is_coop'] = False
 
-        if 'NomeInstituicao' in df.columns:
+        # Ownership from BCB's authoritative "Tipo de Controle" (Tc): 1=state/public, 2=private-
+        # national, 3=foreign. Fully populated in every IF-Data report_1 snapshot. This REPLACES an
+        # earlier hardcoded name regex that flagged only ~4 conglomerates and misclassified 23 of 29
+        # Tc==1 state conglomerates as private (notably the retail state bank BANESTES) -- a latent
+        # descriptive bug (is_state_owned is not currently in the active demand X_COLS). Regex kept as
+        # a fallback only for the (never observed) case of a snapshot lacking Tc.
+        if 'Tc' in df.columns:
+            df['is_state_owned'] = (df['Tc'].astype(str).str.strip() == '1')
+        elif 'NomeInstituicao' in df.columns:
             df['is_state_owned'] = (
                 df['SegmentoTb'].astype(str).str.contains('Caixa Econômica', case=False, na=False) |
                 df['NomeInstituicao'].astype(str).str.contains('Banco do Brasil|BNDES|BANRISUL|NORDESTE|AMAZONIA|BANZ|BANPARA|BANESE|BRB|BANDES', case=False, na=False)

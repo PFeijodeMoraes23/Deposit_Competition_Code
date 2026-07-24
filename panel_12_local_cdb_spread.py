@@ -22,6 +22,18 @@ and proto_1_member_cnpj_local_panel.py for the diagnostics that motivated this.
 TOGGLE.  Gated by env LOCAL_CDB_SPREAD (default "1" = ON).  "0" restores the
 national columns from the *_national snapshots and drops the patch columns.
 
+GUARD (two-sided).  A patched cell is kept only if its local rate lands in
+    [RATE_A4_MIN_MULT * Selic,  min(RATE_Q_CAP, RATE_A4_MAX_MULT * Selic)]
+(defaults: Selic/3 .. 3*Selic, i.e. log-symmetric); otherwise that cell reverts to
+the national rate and its dev is zeroed.  The FLOOR was added 2026-07-24: the guard
+had been upper-only (`rate_loc > 0`), so implausibly low member-CNPJ rates — a small
+or noisy stk_time_lag denominator rather than real local pricing — passed through and
+produced large positive spread deviations that flipped a cell's sign (worst observed:
+rate = 0.01-0.04 x Selic, spread_ann -0.02 -> +0.13).  Impact is small and local: the
+affected cells were ~0.04% of panel rows, alpha moved only in the 3rd-4th decimal, and
+the LOO Hausman instrument was essentially unchanged (corr(local, national) = 0.99996),
+so this does NOT invalidate estimates produced before the fix.
+
 IDEMPOTENT.  On apply, national values are snapshotted once to
 {spread_a4,rate_a4,spread_ann_a4,leave_one_out_mean_spread_a4}_national.  Re-running
 restores from the snapshot first, so the deviation is never double-counted.
@@ -71,6 +83,14 @@ MCA_XWALK = paths.IBGE_DIR / "muni_mca_regions_2010_2024_panel.csv"
 KEYS = ["CodConglomeradoPrudencial", "mca_code", "year", "quarter"]
 RATE_Q_CAP = 0.5                                        # per-CNPJ rate plausibility cap (matches cosif_process_2)
 RATE_A4_MAX_MULT = float(os.environ.get("RATE_A4_MAX_MULT", 3.0))   # panel_3's rate_a4 band multiple of Selic
+# LOWER band multiple. The guard used to be one-sided (rate>0 only), so implausibly LOW member-CNPJ
+# rates — driven by a small/noisy stk_time_lag denominator, not by local pricing — passed straight
+# through and produced large POSITIVE spread deviations that could flip a cell's sign (observed:
+# rate = 0.01-0.04 x Selic, spread_ann -0.02 -> +0.13). Default is the RECIPROCAL of the max multiple,
+# making the admissible band log-symmetric: rate in [Selic/3, 3*Selic]. A time deposit paying under a
+# third of the risk-free rate is not a local pricing decision. Empirically this reverts ~1% of the
+# applied cells (p1 of rate/Selic = 0.33) while leaving the legitimate dispersion (p50 = 0.93) intact.
+RATE_A4_MIN_MULT = float(os.environ.get("RATE_A4_MIN_MULT", 1.0 / RATE_A4_MAX_MULT))
 # The patched columns and their national snapshots.
 _PATCH_COLS = ["rate_a4", "spread_a4", "spread_ann_a4", "leave_one_out_mean_spread_a4"]
 _NAT_COLS = {c: f"{c}_national" for c in _PATCH_COLS}
@@ -197,12 +217,26 @@ def apply_local_spread(panel: pd.DataFrame, dev: pd.DataFrame) -> pd.DataFrame:
     rf_qoq = spr_nat + rate_nat                             # recover Selic (risk_free_qoq)
     rate_loc = rate_nat + panel["dev_a4_qoq"]
 
-    # 3) guard to panel_3's band: (0, min(0.5, RATE_A4_MAX_MULT * Selic)]; else revert cell to national
+    # 3) TWO-SIDED guard to panel_3's band:
+    #        rate_loc in [RATE_A4_MIN_MULT * Selic, min(0.5, RATE_A4_MAX_MULT * Selic)]
+    #    else revert that cell to the national rate. The lower bound matters as much as the upper:
+    #    without it, near-zero member-CNPJ rates (noisy stk_time_lag denominators) sail through the
+    #    old `rate_loc > 0` test and flip the cell's spread sign. Counts are logged per bound so the
+    #    band can be tuned from the run log rather than by guesswork.
     upper = np.minimum(RATE_Q_CAP, RATE_A4_MAX_MULT * rf_qoq)
-    bad = ~np.isfinite(rate_loc) | (rate_loc <= 0) | (rate_loc > upper) | ~np.isfinite(rf_qoq)
+    lower = RATE_A4_MIN_MULT * rf_qoq
+    nonfinite = ~np.isfinite(rate_loc) | ~np.isfinite(rf_qoq)
+    too_low = (~nonfinite) & (rate_loc < lower)
+    too_high = (~nonfinite) & (rate_loc > upper)
+    bad = nonfinite | too_low | too_high | (rate_loc <= 0)
     rate_loc = rate_loc.where(~bad, rate_nat)
     panel.loc[bad.fillna(True), "dev_a4_qoq"] = 0.0        # record the effective (guarded) deviation
     n_applied = int((panel["dev_a4_qoq"].abs() > 0).sum())
+    log.info("rate guard [%.3g x Selic, min(%.2f, %.3g x Selic)]: reverted %d cells below the floor, "
+             "%d above the ceiling, %d non-finite",
+             RATE_A4_MIN_MULT, RATE_Q_CAP, RATE_A4_MAX_MULT,
+             int(too_low.fillna(False).sum()), int(too_high.fillna(False).sum()),
+             int(nonfinite.fillna(True).sum()))
 
     # 4) rebuild the type-4 columns (fractions)
     panel["rate_a4"] = rate_loc

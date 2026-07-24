@@ -116,7 +116,7 @@ BLAS.set_num_threads(min(8, Threads.nthreads()))
 # 0. Constants (must match blp_loop.jl and blp_draws.jl)
 # ==========================================================================
 const X_COLS = ["fgc_covered", "has_ip", "seg_S2", "seg_S3", "seg_S4", "seg_S5",
-                "log_total_assets_lag"]
+                "log_total_assets_lag", "is_state_owned"]
 const L_PROD = length(X_COLS)
 const K_TYPES = 4
 const K_LIST  = [1, 2, 4, 5]

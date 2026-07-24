@@ -64,7 +64,7 @@ PANEL_CSV = _PANEL_WITH_FEES if _PANEL_WITH_FEES.exists() else DATA_DIR / "marke
 BANKED_CSV = paths.INCLUSION_DIR / "bcb_banked_mca_panel.csv"
 
 X_COLS = ['fgc_covered', 'has_ip', 'seg_S2', 'seg_S3', 'seg_S4', 'seg_S5',
-          'log_total_assets_lag', 'equity_ratio_lag']
+          'log_total_assets_lag', 'equity_ratio_lag', 'is_state_owned']
 D_COLS = ['gdp_per_capita', 'fraction_65plus', 'fraction_young',
           'pix_users_pf_per1000', 'connections_per100', 'frac_4g5g',
           'branches_per1000', 'cadunico_families_per1000']
@@ -207,7 +207,7 @@ def build_base_panel(panel_csv: Path) -> pd.DataFrame:
         df['is_coop'] = 0.0
 
     if 'is_state_owned' in df.columns:
-        df['is_state_owned'] = df['is_state_owned'].fillna(0.0)
+        df['is_state_owned'] = pd.to_numeric(df['is_state_owned'], errors='coerce').fillna(0.0)
     else:
         df['is_state_owned'] = 0.0
 

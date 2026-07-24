@@ -68,7 +68,7 @@ using Random          # MersenneTwister for the wild cluster bootstrap
 const SPEC_ID = 12
 
 const X_COLS = ["fgc_covered", "has_ip", "seg_S2", "seg_S3", "seg_S4", "seg_S5",
-                "log_total_assets_lag"]
+                "log_total_assets_lag", "is_state_owned"]
 const CORE_COLS = ["fgc_covered", "has_ip", "log_total_assets_lag"]
 
 # Full instrument set (15 = these 11 + IV_COST + IV_CAPITAL). A `mean_loo_`-trimmed set was TESTED
@@ -569,10 +569,11 @@ const VAR_MAP = Dict(
     "log_total_assets_lag" => raw"$\ln(\text{Total Assets}_{t-1})$",
     "seg_S2" => "Segment S2", "seg_S3" => "Segment S3",
     "seg_S4" => "Segment S4", "seg_S5" => "Segment S5",
+    "is_state_owned"       => "State-Owned",
     "dummy_D_type"         => "D Type",
 )
 const ROW_ORDER = ["alpha", "fgc_covered", "has_ip", "log_total_assets_lag",
-                   "seg_S2", "seg_S3", "seg_S4", "seg_S5", "dummy_D_type"]
+                   "seg_S2", "seg_S3", "seg_S4", "seg_S5", "is_state_owned", "dummy_D_type"]
 const TABLE_SUBMODELS = [("priceonly", "Price Only"), ("core", "Price + Core"),
                          ("full", "Price + Chars"), ("full_dtype", "+ D-Type"),
                          ("core_dtype", "Price + Core + D-Type")]
@@ -583,9 +584,9 @@ const TABLE_SUBMODELS = [("priceonly", "Price Only"), ("core", "Price + Core"),
 # in V_Main, so they fall back to a plain E<id> header if ever included.)
 const COMPARISON_IDS  = [5, 6, 7, 8]
 const COMPARISON_ROWS = ["alpha", "fgc_covered", "has_ip", "log_total_assets_lag",
-                         "dummy_D_type"]   # seg_S2-S5 included in the spec, not reported
+                         "is_state_owned", "dummy_D_type"]   # seg_S2-S5 included in the spec, not reported
 const COMPARISON_ROWS_SEG = ["alpha", "fgc_covered", "has_ip", "log_total_assets_lag",
-                             "seg_S2", "seg_S3", "seg_S4", "seg_S5", "dummy_D_type"]  # segments shown
+                             "seg_S2", "seg_S3", "seg_S4", "seg_S5", "is_state_owned", "dummy_D_type"]  # segments shown
 const ESTIMATION_ENUM_REF = Dict(
     1 => raw"\ref{estimation:local}",
     2 => raw"\ref{estimation:pooled}",
@@ -642,9 +643,11 @@ function format_cell_plain(coef, se, gstar, pval=nothing)
 end
 
 """Sample mean of ρ(1−s) for one routine — multiplied by that routine's α̂ it gives the
-mean own-price semi-elasticity row of the comparison table: α̂·ρ_jkmt·(1−s_jkmt) averaged
-over the estimation sample. ρ = spread in pp (spread_ann/100); s = the share used to build
-δ (share_D for D-type products, conditional share_B_cond for B-type). NaN if unavailable."""
+mean own-price ELASTICITY row of the comparison table: α̂·ρ_jkmt·(1−s_jkmt) averaged over
+the estimation sample. Because the spread ρ enters in levels, α̂·ρ·(1−s) = ∂ln s/∂ln ρ is
+the unit-free own-price elasticity (a semi-elasticity would be α̂·(1−s), per pp). ρ = spread
+in pp (spread_ann/100); s = the share used to build δ (share_D for D-type products,
+conditional share_B_cond for B-type). NaN if unavailable."""
 function _mean_rho_one_minus_s(estim)
     df   = load_spec_data(estim)
     ρ    = Float64.(coalesce.(df.spread_ann, NaN)) ./ 100.0
@@ -657,7 +660,7 @@ function _mean_rho_one_minus_s(estim)
 end
 
 """Build est5-8_spec12_logit_comparison.tex: columns = routines (each its `+ D-Type`
-sub-model), rows = COMPARISON_ROWS, stats block = semi-elasticity / N / Q(dof) / G*.
+sub-model), rows = COMPARISON_ROWS, stats block = elasticity / N / Q(dof) / G*.
 Layout, notes and label conventions mirror est5-8_spec12_stage2_comparison.tex."""
 function build_logit_comparison_tex(data::AbstractDict, ids::Vector{Int},
                                     elas::AbstractDict;
@@ -679,9 +682,9 @@ function build_logit_comparison_tex(data::AbstractDict, ids::Vector{Int},
         raw"Wild cluster bootstrap standard errors (conglomerate clusters) in parentheses. " *
         raw"Significance: *** $p<0.01$, ** $p<0.05$, * $p<0.1$. $Q$ is the GMM " *
         raw"overidentification statistic ($\chi^2_L$, $L$ = \# instruments); $G^*$ is " *
-        raw"effective clusters. The mean own-price semi-elasticity is " *
+        raw"effective clusters. The mean own-price elasticity is " *
         raw"$\hat{\alpha}\,\rho_{jkmt}(1-s_{jkmt})$ averaged over the estimation sample " *
-        raw"(spread $\rho$ in percentage points).}"   # no trailing TROW (matches stage2 template)
+        raw"(unit-free, since the spread $\rho$ enters in levels; $\rho$ in percentage points).}"   # no trailing TROW (matches stage2 template)
     lines = String[
         raw"\setstretch{1.0}",
         raw"\begin{xltabular}{\textwidth}{>{\raggedright\arraybackslash}p{0.26\textwidth} *{" *
@@ -735,7 +738,7 @@ function build_logit_comparison_tex(data::AbstractDict, ids::Vector{Int},
         push!(gstar_l, gs === nothing ? "---" : @sprintf("%.2f", Float64(gs)))
     end
     append!(lines, [
-        "Mean own-price semi-elasticity & " * join(elas_l, " & ") * TROW,
+        "Mean own-price elasticity & " * join(elas_l, " & ") * TROW,
         "Observations & " * join(obs_l, " & ") * TROW,
         "\$Q\$ & " * join(q_l, " & ") * TROW,
         "Degrees of Freedom & " * join(niv_l, " & ") * TROW,
@@ -747,7 +750,7 @@ function build_logit_comparison_tex(data::AbstractDict, ids::Vector{Int},
 end
 
 """Write est5-8_spec12_logit_comparison.tex (COMPARISON_IDS × `+ D-Type`) to Rout + Drafts.
-Computes the mean own-price semi-elasticity per routine from its demand parquet (skipped
+Computes the mean own-price elasticity per routine from its demand parquet (skipped
 with a '---' cell if the parquet is unavailable)."""
 function write_logit_comparison_table(data::AbstractDict)
     ids = [id for id in COMPARISON_IDS if haskey(data, "E$(id)_full_dtype")]
@@ -767,7 +770,7 @@ function write_logit_comparison_table(data::AbstractDict)
         elas[id] = try
             Float64(entry["theta1"][j]) * _mean_rho_one_minus_s(ESTIM_STRATEGIES[estim])
         catch _e
-            println("    [table] WARN: E$id semi-elasticity failed — $_e"); NaN
+            println("    [table] WARN: E$id elasticity failed — $_e"); NaN
         end
     end
     _, output_dir = get_paths()
@@ -928,7 +931,7 @@ function main()
     sel = _parse_est_arg()
 
     # --tables-only: rebuild every LaTeX table from the existing combined summary,
-    # skipping estimation entirely (the semi-elasticity row still reads the parquets).
+    # skipping estimation entirely (the elasticity row still reads the parquets).
     if "--tables-only" in ARGS
         summary = read_combined_summary()
         isempty(summary) && error("--tables-only: no combined summary at $(combined_summary_path()).")

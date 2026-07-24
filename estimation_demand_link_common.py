@@ -41,7 +41,7 @@ PANEL_CSV = _PANEL_WITH_FEES if _PANEL_WITH_FEES.exists() else DATA_DIR / "marke
 BANKED_CSV = paths.INCLUSION_DIR / "bcb_banked_mca_panel.csv"
 
 X_COLS = ['fgc_covered', 'has_ip', 'seg_S2', 'seg_S3', 'seg_S4', 'seg_S5',
-          'log_total_assets_lag', 'equity_ratio_lag']
+          'log_total_assets_lag', 'equity_ratio_lag', 'is_state_owned']
 D_COLS = ['gdp_per_capita', 'fraction_65plus', 'fraction_young',
           'pix_users_pf_per1000', 'connections_per100', 'frac_4g5g',
           'branches_per1000', 'cadunico_families_per1000']
@@ -187,7 +187,8 @@ def build_base_panel(panel_csv):
     if 'CODMUN_IBGE' in df.columns:
         df['dummy_D_type'] = (df['CODMUN_IBGE'].astype(str) == '0').astype(float)
     for c in ('is_coop', 'is_state_owned'):
-        df[c] = df[c].fillna(0.0) if c in df.columns else 0.0
+        # is_state_owned arrives as bool (Tc==1); cast to float 0/1 since it is now a demand regressor.
+        df[c] = pd.to_numeric(df[c], errors='coerce').fillna(0.0) if c in df.columns else 0.0
     # Same scaling as estimation_*_sleep.build_pooled_data so the native index matches.
     if 'gdp_per_capita' in df.columns: df['gdp_per_capita'] /= 10000.0
     if 'cadunico_families_per1000' in df.columns: df['cadunico_families_per1000'] /= 100.0

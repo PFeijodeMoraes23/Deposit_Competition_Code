@@ -126,9 +126,10 @@ def build_table(ests, suffix: str = "", show_segments: bool = True,
         r"Significance from a "
         r"Student-$t$ reference with $G^*$ effective clusters: *** $p<0.01$, ** $p<0.05$, * $p<0.1$. "
         r"The $\Sigma$'s are bounded $\Sigma\ge0$, and a $\dagger$ marks a $\Sigma$ at "
-        r"the boundary ($\hat{\Sigma}\approx0$), reported on the bound with no two-sided SE "
-        r"(\textcite{andrews1999}). $Q$: GMM overidentification statistic. Mean own-price semi-elasticity is "
-        r"the average-market plug-in $\hat\alpha\cdot\overline{\rho(1-s)}$ (representative-agent; the "
+        r"the boundary ($\widehat{\Sigma}\approx0$), reported on the bound with no two-sided standard "
+        r"errors \parencite{andrews1999}. $Q$: GMM overidentification statistic. Mean own-price elasticity is "
+        r"the average-market plug-in $\hat\alpha\cdot\overline{\rho(1-s)}$ (unit-free, since the spread enters "
+        r"in levels; representative-agent; the "
         r"exact RC value integrates the individual price coefficients). Spread in percentage points."
         r"} \\",
         r"    \endlastfoot",
@@ -204,7 +205,7 @@ def build_table(ests, suffix: str = "", show_segments: bool = True,
     def se_of(e):
         return rc.semi_elast_cell(data[e], e)         # α̂·mean(ρ(1−s)), average-market plug-in
     lines += [
-        stat(r"Mean own-price semi-elast.", se_of),
+        stat(r"Mean own-price elast.", se_of),
         stat(r"$Q$ (GMM)", q_of),
         stat(r"Observations", n_of),
         stat(r"Eff.\ Clusters ($G^*$)", g_of),

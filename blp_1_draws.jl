@@ -39,9 +39,9 @@ using JSON3, Serialization, ArgParse, Printf, Dates
 # 0. Constants (must match blp_loop.jl)
 # ==========================================================================
 const X_COLS = ["fgc_covered", "has_ip", "seg_S2", "seg_S3", "seg_S4", "seg_S5",
-                "log_total_assets_lag"]
+                "log_total_assets_lag", "is_state_owned"]
 const L_PROD  = length(X_COLS)
-const COEF_DIM = 1 + L_PROD   # spread + 7 product chars = 8
+const COEF_DIM = 1 + L_PROD   # spread + 8 product chars = 9
 
 const D_COLS  = ["gdp_per_capita", "fraction_65plus", "fraction_young",
                  "pix_users_pf_per1000", "connections_per100", "frac_4g5g",

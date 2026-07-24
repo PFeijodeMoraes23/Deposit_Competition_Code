@@ -24,7 +24,7 @@ except Exception:
 
 # ── Column lists copied verbatim from blp_1_estimation.jl ────────────────────
 X_COLS = ["fgc_covered", "has_ip", "seg_S2", "seg_S3", "seg_S4", "seg_S5",
-          "log_total_assets_lag"]
+          "log_total_assets_lag", "is_state_owned"]
 D_COLS = ["gdp_per_capita", "fraction_65plus", "fraction_young",
           "pix_users_pf_per1000", "connections_per100", "frac_4g5g",
           "branches_per1000", "cadunico_families_per1000"]

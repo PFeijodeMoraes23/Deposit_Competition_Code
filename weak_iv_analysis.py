@@ -40,7 +40,7 @@ Run:  python weak_iv_analysis.py [BLP_RESULTS_dir] [--routines 5,6,7,8]
 import os, sys, glob, json, argparse
 import numpy as np
 
-X_COLS = ["fgc_covered", "has_ip", "seg_S2", "seg_S3", "seg_S4", "seg_S5", "log_total_assets_lag"]
+X_COLS = ["fgc_covered", "has_ip", "seg_S2", "seg_S3", "seg_S4", "seg_S5", "log_total_assets_lag", "is_state_owned"]
 IV_COLS = ["loo_log_assets", "mean_loo_log_assets", "loo_equity_ratio", "mean_loo_equity_ratio",
            "loo_basileia", "mean_loo_basileia", "loo_credit_assets", "mean_loo_credit_assets",
            "loo_npl_provision", "mean_loo_npl_provision", "n_rivals",

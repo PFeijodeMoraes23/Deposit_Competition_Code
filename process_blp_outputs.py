@@ -44,7 +44,7 @@ STAGE_SEQUENCE = ["sigma", "rc2", "rc3", "rc4", "full", "ext1", "ext2", "extende
 SUMMARY_DIR = r"C:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\Drafts\Deposit Competition"
 
 # Variable names — must mirror blp_1_estimation.jl (X_COLS / D_COLS) so θ₂ indices decode.
-X_COLS = ["fgc_covered", "has_ip", "seg_S2", "seg_S3", "seg_S4", "seg_S5", "log_total_assets_lag"]
+X_COLS = ["fgc_covered", "has_ip", "seg_S2", "seg_S3", "seg_S4", "seg_S5", "log_total_assets_lag", "is_state_owned"]
 COEF_NAMES = ["spread"] + X_COLS                       # θ₁/random-coef characteristics (1-based)
 D_COLS = ["gdp_per_capita", "fraction_65plus", "fraction_young", "pix_users_pf_per1000",
           "connections_per100", "frac_4g5g", "branches_per1000", "cadunico_families_per1000"]
@@ -146,7 +146,12 @@ def compute_coef_heterogeneity(index, res_dir):
         all_demos = list(dict.fromkeys(D_COLS[di-1] for ci, di in pis if 0 < di <= len(D_COLS)))
         need = list(dict.fromkeys(["spread_ann","deposit_balance","mca_code","time_id"] + X_COLS + all_demos))
         try:
-            df = pd.read_parquet(fs[0], columns=need)
+            # X_COLS enter `need` for completeness, but the β_i loop below only reads demographics; drop
+            # any column the parquet lacks (e.g. is_state_owned in a pre-registration parquet) so a newly
+            # added θ₁ characteristic never silently kills the entire heterogeneity block.
+            import pyarrow.parquet as _pq
+            avail = set(_pq.ParquetFile(fs[0]).schema.names)
+            df = pd.read_parquet(fs[0], columns=[c for c in need if c in avail])
         except Exception as e:
             print(f"[heterogeneity] E{k}: parquet read failed ({e}) — skipped"); continue
         mk = df.drop_duplicates(["mca_code", "time_id"])
