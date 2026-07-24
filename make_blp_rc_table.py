@@ -56,6 +56,11 @@ D_COLS = ["gdp_per_capita", "fraction_65plus", "fraction_young",
           "branches_per1000", "cadunico_families_per1000"]
 
 STAGES = ["sigma", "rc2", "rc3", "rc4", "full", "ext1", "ext2", "extended"]
+# The per-routine RC tables (blp_rc_E*) stop at ext1: ext2/extended are the degenerate rungs where the
+# fgc/asset-interaction weak identification inflates every SE ~6-10x (α SE ~0.11 → 0.6-1.2) while leaving
+# α essentially unchanged, so those two columns carry no usable information. The Full model still lives in
+# the _full demand-comparison / robustness tables, which read it directly.
+RC_TABLE_STAGES = STAGES[:STAGES.index("ext1") + 1]   # sigma, rc2, rc3, rc4, full, ext1
 
 # Columns are labelled by the number of freed random coefficients (1→8), so the complexity
 # ladder is legible: "1 RC" = one random coefficient (sigma stage) ... "8 RC" = all eight
@@ -325,12 +330,12 @@ def se_note(data: dict | None) -> str:
 def build_table(est_id: int, suffix: str = "") -> str:
     # Load all available stages
     stage_results = {}
-    for s in STAGES:
+    for s in RC_TABLE_STAGES:
         d = load_stage(est_id, s, suffix)
         if d is not None:
             stage_results[s] = d
 
-    available = [s for s in STAGES if s in stage_results]
+    available = [s for s in RC_TABLE_STAGES if s in stage_results]
     if not available:
         print(f"[E{est_id}] No result files found in {RESULTS_DIR}")
         return ""
