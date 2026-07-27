@@ -74,7 +74,11 @@ function main_cf5()
     endog = P.st.endog
     dσ = (eq1.sigma[endog] .- eq0.sigma[endog]) ./ shock          # ∂ρ*/∂Selic
     dep0 = _total_deposits(P, eq0.sigma; T=a["horizon"])
-    dep1 = _total_deposits(P, eq1.sigma; T=a["horizon"])
+    # Shocked accrual on the shocked leg, so ∂Dep/∂Selic includes the DIRECT accrual channel
+    # (r^dep_q = r^f_q − ρ_q) and not only the re-priced-spread channel. Matches cf5_compare (:45);
+    # dep0 stays on the base r^f. Without the `rf` override these were inconsistent between the two
+    # CF5 entry points (in-process here vs the cluster `--compare` path).
+    dep1 = _total_deposits(P, eq1.sigma; T=a["horizon"], rf=P.rf .+ Δq)
     @printf("\n  === CF5 monetary pass-through (Selic +%.3g) ===\n", shock)
     @printf("  ∂ρ*/∂Selic on k∈{4,5}:  mean=%.4g  median=%.4g  (spread units per unit Selic)\n",
             mean(dσ), median(dσ))
