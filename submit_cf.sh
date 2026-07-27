@@ -10,7 +10,7 @@
 # (job-name + .out/.err set per submission via sbatch -J/-o/-e)
 #
 # Counterfactual pipeline driver (foundation 0a, CF1, equilibrium CFs). Driven by env vars:
-#   CF_STEP     demand_eval | cf1                             (CF1-gross)
+#   CF_STEP     demand_eval | cf1 | cf4                       (descriptive: CF1-gross, CF4-Pix)
 #               | cf1_net | cf3 | cf5 | cf6                   (equilibrium CFs; need the BBL cost
 #                                                              params — run submit_bbl_all.sh first)
 #               | zip                                         (CF_WHICH=<cf>: archive that CF's outputs)
@@ -32,7 +32,7 @@
 # The R=2000 'extended' context peaks ~60G, so keep --mem ≥ ~100G.
 
 set -euo pipefail
-: "${CF_STEP:?set CF_STEP (demand_eval|cf1|cf1_net|cf3|cf5|cf6|zip)}"
+: "${CF_STEP:?set CF_STEP (demand_eval|cf1|cf4|cf1_net|cf3|cf5|cf6|zip)}"
 CF_ROUTINE="${CF_ROUTINE:-6}"
 CF_STAGE="${CF_STAGE:-extended}"
 R="${R:-2000}"
@@ -84,6 +84,11 @@ case "${CF_STEP}" in
         run_julia foundation_demand_eval.jl ;;
     cf1)          # CF1: gross franchise-value sleepiness decomposition
         run_julia cf_1_franchise_value.jl ;;
+    cf4)          # CF4: Pix reallocation (descriptive — no costs, no equilibrium). Consumes the exact
+                  # link-aware φ^noPix parquet + Υ_pix JSON from cf_4_upsilon_export.py, which are BUILT
+                  # LOCALLY and uploaded to CF_FOUNDATION (compute nodes lack the sleep pickle), like the
+                  # forward r^f curve; submit_cf_all.sh preflights both.
+        run_julia cf_4_pix.jl ;;
     cf1_net)      # CF1 net-of-cost franchise value — needs the BBL cost params (cost_params_*.json,
                   # produced by submit_bbl_all.sh; preflighted by submit_cf_all.sh)
         run_julia cf_1_franchise_value.jl --net ;;

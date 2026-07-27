@@ -20,6 +20,7 @@
 #     ROUTINES="6"          routines to run CFs for (space list; "5 6 7 8" = headline+band)
 #     CF_STAGE=extended  R=2000  SEED=42  BETA=0.9  HORIZON=50
 #     DO_DEMAND_EVAL=1  DO_CF1=1     (CF1-gross)
+#     DO_CF4=0                       (CF4 Pix reallocation; descriptive; needs φ^noPix uploaded — opt-in)
 #     DO_CF1NET=1  DO_CF3=0  DO_CF5=0  DO_CF6=0   (equilibrium CFs; need cost params; cf3/5/6 opt-in)
 #     CF_EQ_EXTRA=""        extra flags for cf3/cf5/cf6 (e.g. "--min-firm-markets 50 --selic-shock 0.01")
 #     AUTO_PROCESS=1        auto-build cluster_processed/ from blp_outputs_*.zip if absent (unzip+cp)
@@ -31,8 +32,9 @@
 #                           CPU-only; the GPU is for the cf3/cf5/cf6 equilibrium solve (submit_cf3_jacobi.sh).
 #     MEM=200G              override --mem (needs ≥ ~100G for the R=2000 extended context)
 #
-# ONE input must be built LOCALLY and uploaded (needs internet the compute nodes lack):
+# Inputs built LOCALLY and uploaded (the compute nodes lack internet / the sleep pickle):
 #   data/COST_FWD/forward_rf_qoq.csv          (cf_forward_rf.py) — cf3/cf5/cf6 rebuild ψ and read it.
+#   data/CF_FOUNDATION/{upsilon_pix,phi_nopix}_E{k}_spec_12.*  (cf_4_upsilon_export.py) — CF4 only (DO_CF4=1).
 # The BBL cost params the equilibrium CFs consume come from the SEPARATE BBL stage
 # (submit_bbl_all.sh → data/COST_FWD/cost_params_E*_spec_12_*.json); everything else is either
 # already staged from the BLP run or auto-built here from the zip. See runbook §8.
@@ -43,6 +45,9 @@ CF_STAGE="${CF_STAGE:-extended}"
 R="${R:-2000}"; SEED="${SEED:-42}"
 BETA="${BETA:-0.9}"; HORIZON="${HORIZON:-50}"
 DO_DEMAND_EVAL="${DO_DEMAND_EVAL:-1}"; DO_CF1="${DO_CF1:-1}"
+# CF4 (Pix reallocation) is descriptive like cf1 (no costs), but needs the locally-built φ^noPix
+# artifacts uploaded (see preflight) — opt-in so the default run is unchanged.
+DO_CF4="${DO_CF4:-0}"
 # Equilibrium CFs — consume the BBL cost params (preflighted below). cf1_net is light (on by
 # default); cf3/cf5/cf6 re-solve the pricing game (heavier even with the market-local best-response) — opt-in.
 DO_CF1NET="${DO_CF1NET:-1}"; DO_CF3="${DO_CF3:-0}"; DO_CF5="${DO_CF5:-0}"; DO_CF6="${DO_CF6:-0}"
@@ -124,8 +129,22 @@ if [[ "${need_costs}" == "1" ]]; then
             echo "   → run the BBL cost stage first:  bash submit_bbl_all.sh"; miss=1; }
     done
 fi
+# CF4 needs no BBL costs, but DOES need the exact link-aware φ^noPix + Υ_pix built LOCALLY (the
+# sleep pickle is not on the compute nodes) and uploaded to CF_FOUNDATION, like the forward r^f
+# curve. Preflight both per routine when CF4 is requested.
+cf4_note=""
+if [[ "${DO_CF4}" == "1" ]]; then
+    CFF="${DATA_ROOT}/CF_FOUNDATION"
+    for k in ${ROUTINES}; do
+        for pf in "${CFF}/upsilon_pix_E${k}_spec_12.json" "${CFF}/phi_nopix_E${k}_spec_12.parquet"; do
+            [[ -f "${pf}" ]] || { echo "MISSING CF4 input: ${pf}"; \
+                echo "   → build locally then upload: python cf_4_upsilon_export.py --estim ${k} --spec 12"; miss=1; }
+        done
+    done
+    cf4_note=" + CF4 phi_nopix"
+fi
 [[ "${miss}" == "0" ]] || { echo "Stage the missing input(s) (runbook §8), then re-run."; exit 1; }
-echo "Preflight OK: R=${R} draws + forward r^f curve + RC results${need_costs:+ + BBL cost params} for routines: ${ROUTINES}"
+echo "Preflight OK: R=${R} draws + forward r^f curve + RC results${need_costs:+ + BBL cost params}${cf4_note} for routines: ${ROUTINES}"
 
 # ── Step 3: submit the CF chain per routine ──────────────────────────────────────
 cf1_extra="--beta ${BETA} --horizon ${HORIZON}"
@@ -155,7 +174,7 @@ fi
 # The BBL cost params are produced by the separate BBL stage (preflighted above), NOT chained
 # here — so every step depends only on the warmup. cf1_net/cf3/cf5/cf6 read cost_params_*.json off
 # disk. Per-CF afterany dependency lists (colon-joined job ids) feed the end-of-run archiver.
-found_dep=""; cf1_dep=""; cf3_dep=""; cf5_dep=""; cf6_dep=""
+found_dep=""; cf1_dep=""; cf4_dep=""; cf3_dep=""; cf5_dep=""; cf6_dep=""
 first=1
 for k in ${ROUTINES}; do
     base_export="CF_ROUTINE=${k},CF_STAGE=${CF_STAGE},R=${R},SEED=${SEED}"
@@ -170,6 +189,11 @@ for k in ${ROUTINES}; do
         j=$(submit "cf_cf1_E${k}" "${SHARD_TIME}" ${warm_dep} \
             --export=ALL,${base_export},CF_STEP=cf1,CF_EXTRA="${cf1_extra}" submit_cf.sh)
         echo "  cf1          → job ${j}"; cf1_dep="${cf1_dep}:${j}"
+    fi
+    if [[ "${DO_CF4}" == "1" ]]; then   # descriptive Pix reallocation; consumes the uploaded φ^noPix
+        j=$(submit "cf_cf4_E${k}" "${SHARD_TIME}" ${warm_dep} \
+            --export=ALL,${base_export},CF_STEP=cf4 submit_cf.sh)
+        echo "  cf4          → job ${j}"; cf4_dep="${cf4_dep}:${j}"
     fi
 
     # Equilibrium CFs — consume the BBL cost params (preflighted on disk), so they depend only on

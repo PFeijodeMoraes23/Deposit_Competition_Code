@@ -36,7 +36,7 @@ case "${CF}" in
   cf1)        pats=("${CFF}/cf1_franchise_"*"_E"*"_spec_${SPEC}"*.parquet) ;;
   cf2)        pats=("${COST}/psi_eq_E"*"_spec_${SPEC}_"* "${COST}/psi_dev_E"*"_spec_${SPEC}_"* "${COST}/cost_params_E"*"_spec_${SPEC}_"*.json) ;;
   cf3)        pats=("${CFF}/cf3_equilibrium_E"*"_spec_${SPEC}_"*.parquet "${CFF}/cf3_jacobi_E"*) ;;
-  cf4)        pats=("${CFF}/cf4_pix_realloc_E"*"_spec_${SPEC}_"*.parquet "${CFF}/upsilon_pix_E"*"_spec_${SPEC}.json") ;;
+  cf4)        pats=("${CFF}/cf4_pix_realloc_E"*"_spec_${SPEC}_"*.parquet "${CFF}/upsilon_pix_E"*"_spec_${SPEC}.json" "${CFF}/phi_nopix_E"*"_spec_${SPEC}.parquet") ;;
   cf5)        pats=("${CFF}/cf5_passthrough_E"*"_spec_${SPEC}_"*.parquet "${CFF}/cf5_E"*) ;;
   cf6)        pats=("${CFF}/cf6_merger_E"*"_spec_${SPEC}_"*.parquet "${CFF}/cf6_E"*) ;;
   *) echo "Unknown CF '${CF}' (expected foundation|cf1|cf2|cf3|cf4|cf5|cf6)"; exit 1 ;;

@@ -4,7 +4,7 @@ cf_4_pix.jl
 CF4 — Pix as a switching function (DESCRIPTIVE, volume reallocation).
 
 Idea: Pix lowered account-switching frictions. In this model Pix enters the
-SLEEPINESS function φ(S_mt) = Υ'·S_mt via the `pix_exists` state (it does NOT enter
+SLEEPINESS function φ(S_mt) = G(S_mt′θ) via the `pix_exists` state (it does NOT enter
 the logit mean utility X_COLS; under RC it also enters demographic interactions).
 The descriptive counterfactual sets the regime to "no Pix" (`pix_exists = 0`),
 recomputes φ, re-simulates the deposit law of motion at observed spreads, and
@@ -12,24 +12,24 @@ measures the volume REALLOCATION (which institutions gain/lose deposits) — no 
 and no equilibrium re-solve needed (the user's CF4: "requires volume reallocation —
 no need for decomposition").
 
-  φ_cf_mt   = φ̂_mt − Υ_pix · pix_exists_mt          (force the pre-Pix regime)
+  φ_cf_mt   = G( S_mt′θ − θ_pix·pix_exists_mt )     (EXACT no-Pix φ under a nonlinear link G;
+              built by phi_from_native with pix=0, loaded from the cf_4_upsilon_export.py parquet)
+            = φ̂_mt − Υ_pix · pix_exists_mt          (identity-link fallback E1/E2 only; here
+              Υ_pix is the AME, so subtracting it is a 1st-order approximation when G≠identity)
   Dep_cf    = simulate_deposits(ctx, st with φ=φ_cf, spreads = ρ̂)   [foundation_deposit_sim]
   Δvolume_j = Dep_cf_j − Dep_obs_j                                  (per institution)
 
-⚠ DEPENDENCY (why this is a scaffold, not yet runnable): it needs the estimated
-sleepiness coefficient on `pix_exists` (Υ_pix). The sleep step
-(`estimation_1_sleep.py`, control-function regression with `s_base = ['constant',
-'pix_exists', …]`) produces φ̂_mt but does NOT currently persist Υ. To run CF4:
-  (1) have the sleep step save its Υ vector (or the φ control-function model) to a
-      file keyed by routine/spec, OR
-  (2) recover Υ_pix by re-running the φ regression here from the demand-prep inputs.
-Then fill in `pix_coefficient(...)` below and the rest executes on the existing
-foundation_deposit_sim engine (which already has the bps / accrual-stability / per-type
-d̄ fixes from CF1).
-
-This file deliberately does the safe parts (load context, locate pix/phi columns)
-and STOPS at the Υ_pix hookup with a clear error, so running it fails loudly rather
-than silently producing wrong numbers.
+DEPENDENCY: the no-Pix φ is prepared read-only by `cf_4_upsilon_export.py` (it does NOT touch
+the sleep estimation). Keyed by routine/spec it writes:
+  • `upsilon_pix_E{e}_spec_{s}.json`    — Υ_pix (the Pix AME; reporting + the identity-link
+    fallback), read here by `pix_coefficient`;
+  • `phi_nopix_E{e}_spec_{s}.parquet`   — the EXACT per-row no-Pix φ for the NONLINEAR links
+    (E5/E6 'index', E7/E8 'sieve', E3/E4 logit), computed via `phi_from_native` with pix=0,
+    read here by `load_phi_nopix` and joined 1:1 to `ctx.df` on (entity_id, time_id).
+CF4 prefers the exact parquet and falls back to the scalar subtraction only when it is absent
+(identity-link specs E1/E2, where the subtraction is exact). A missing JSON errors loudly with
+the exact command to run, so a run without the recovery fails rather than silently producing
+wrong numbers.
 """
 
 include(joinpath(@__DIR__, "foundation_deposit_sim.jl"))
@@ -53,14 +53,59 @@ function pix_coefficient(cf_dir::String, estim::Int, spec_id::Int)::Float64
 end
 
 """
-    cf4_pix_reallocation(ctx, st; upsilon_pix) -> NamedTuple
+    load_phi_nopix(cf_dir, estim, spec, ctx) -> Union{Nothing,Vector{Float64}}
 
-Force pix_exists=0 in φ, re-simulate deposits at observed spreads, and return the
-per-institution volume reallocation vs the observed (φ̂) deposits.
+Exact link-aware no-Pix φ, precomputed by `cf_4_upsilon_export.py` via `phi_from_native`
+with `pix_exists` zeroed — the correct counterfactual under a NONLINEAR link G, where the
+level subtraction φ̂ − Υ_pix·pix is only a first-order approximation (Υ_pix is the AME, not
+∂φ/∂pix). Reads `CF_FOUNDATION/phi_nopix_E{e}_spec_{s}.parquet` and returns a per-row vector
+aligned to `ctx.df` by an (entity_id, time_id) join, or `nothing` if the file is absent (→
+caller falls back to the scalar subtraction, exact for the identity-link specs E1/E2).
 """
-function cf4_pix_reallocation(ctx::CFDemandCtx, st::DepositSimState; upsilon_pix::Float64, T::Int=8)
+function load_phi_nopix(cf_dir::String, estim::Int, spec_id::Int, ctx::CFDemandCtx)
+    f = joinpath(cf_dir, "phi_nopix_E$(estim)_spec_$(spec_id).parquet")
+    isfile(f) || return nothing
+    e = DataFrame(Parquet2.Dataset(f); copycols=true)
+    for c in ("entity_id", "time_id", "phi_mt_nopix")
+        c in names(e) || error("phi_nopix export $(basename(f)) missing column $c")
+    end
+    ("entity_id" in names(ctx.df) && "time_id" in names(ctx.df)) ||
+        error("ctx.df lacks entity_id/time_id — cannot join the exact no-Pix φ export")
+    lut = Dict{Tuple{String,String},Float64}()
+    for r in eachrow(e)
+        lut[(string(r.entity_id), string(r.time_id))] = Float64(r.phi_mt_nopix)
+    end
+    out = Vector{Float64}(undef, nrow(ctx.df))
+    miss = 0
+    for (i, r) in enumerate(eachrow(ctx.df))
+        k = (string(r.entity_id), string(r.time_id))
+        haskey(lut, k) ? (out[i] = lut[k]) : (miss += 1; out[i] = NaN)
+    end
+    miss == 0 || error("phi_nopix export misses $miss/$(nrow(ctx.df)) ctx rows (stale? " *
+                       "regenerate: python cf_4_upsilon_export.py --estim $estim --spec $spec_id)")
+    return out
+end
+
+"""
+    cf4_pix_reallocation(ctx, st; upsilon_pix[, phi_nopix]) -> NamedTuple
+
+Force the pre-Pix regime in φ, re-simulate deposits at observed spreads, and return the
+per-institution volume reallocation vs the observed (φ̂) deposits. If `phi_nopix` (the exact
+link-aware no-Pix φ from `load_phi_nopix`) is supplied it is used directly; otherwise the
+identity-link fallback φ̂ − Υ_pix·pix is used (exact only for the linear specs E1/E2).
+"""
+function cf4_pix_reallocation(ctx::CFDemandCtx, st::DepositSimState; upsilon_pix::Float64,
+                              T::Int=8, phi_nopix::Union{Nothing,Vector{Float64}}=nothing)
     pix, pc = _first_present(ctx.df, ["pix_exists", "pix_active"]; default=0.0)
-    phi_cf  = clamp.(st.phi .- upsilon_pix .* pix, 0.0, 0.999)   # pre-Pix regime (drop the Pix term)
+    if phi_nopix === nothing
+        # Identity-link fallback (exact only for E1/E2): drop the Pix term from the level φ̂.
+        # For a nonlinear link G this is a first-order approximation (Υ_pix is the AME); prefer
+        # the exact per-row export from cf_4_upsilon_export.py.
+        phi_cf = clamp.(st.phi .- upsilon_pix .* pix, 0.0, 0.999)
+    else
+        # Exact: φ^noPix = G(index − θ_pix·pix), already in [0,1] from phi_from_native.
+        phi_cf = clamp.(phi_nopix, 0.0, 0.999)
+    end
     sim_obs = simulate_deposits(ctx, st; T=T)                    # observed φ̂
     sim_cf  = simulate_deposits(ctx, st; T=T, phi_override=phi_cf)
     dvol    = sim_cf.Dep[:, end] .- sim_obs.Dep[:, end]
@@ -78,9 +123,17 @@ function main_cf4()
     _, _, out_dir = get_paths(a["hpc"]; local_dir=a["local-dir"])
     cf_dir = joinpath(dirname(out_dir), "CF_FOUNDATION")
     υ   = pix_coefficient(cf_dir, a["estim"], a["spec"])
+    phi_np = load_phi_nopix(cf_dir, a["estim"], a["spec"], ctx)   # exact link-aware φ^noPix, or nothing
     T   = 8   # medium-run (2y) reallocation horizon
-    log_status("  [CF4] Υ_pix=$(round(υ, sigdigits=4)) | horizon=$T")
-    res = cf4_pix_reallocation(ctx, st; upsilon_pix=υ, T=T)
+    if phi_np === nothing
+        log_status("  [CF4] Υ_pix=$(round(υ, sigdigits=4)) | horizon=$T | no-Pix φ via LEVEL " *
+                   "subtraction (exact for identity-link E1/E2; for a NONLINEAR link run " *
+                   "cf_4_upsilon_export.py to get the exact per-row φ^noPix)")
+    else
+        log_status("  [CF4] exact link-aware no-Pix φ loaded (phi_from_native, Pix zeroed), " *
+                   "$(length(phi_np)) rows | horizon=$T | Υ_pix=$(round(υ, sigdigits=4)) [AME, reporting]")
+    end
+    res = cf4_pix_reallocation(ctx, st; upsilon_pix=υ, T=T, phi_nopix=phi_np)
     log_status("  [CF4] φ_cf ≤ φ̂ for $(round(100*mean(res.phi_cf .<= res.phi .+ 1e-12), digits=1))% of obs " *
                "(mean φ̂=$(round(mean(res.phi), digits=3)) → φ_cf=$(round(mean(res.phi_cf), digits=3)))")
 
