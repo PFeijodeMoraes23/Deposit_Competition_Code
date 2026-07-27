@@ -47,7 +47,7 @@ def clean_name(v):
         'fraction_young': 'Fraction Young',
         'risk_free_qoq_lag': 'Lagged Selic Rate',
         'pix_users_pf_per1000': 'Pix Users (100s per 1k)',
-        'connections_per100': 'Broadband Connections (per 100 inhabitants)',
+        'connections_per100': 'Broadband Connections (per 100)',
         'branches_per1000': 'Branches per 1k',
         'v_hat_x_lagged_dep': 'CF: $\\hat{v} \\times$ Lagged Deposits',
         'pix_exists': 'Pix Available',
@@ -256,7 +256,8 @@ def build_second_stage_table(results_dict):
 
     lines = [
         r"\setstretch{1.0}",
-        r"\begin{xltabular}{\textwidth}{>{\raggedright\arraybackslash}p{0.28\textwidth} *{4}{>{\centering\arraybackslash}X}}",
+        r"\setlength{\tabcolsep}{3pt}",
+        r"\begin{xltabular}{\textwidth}{>{\raggedright\arraybackslash}p{0.34\textwidth} *{4}{>{\centering\arraybackslash}X}}",
         rf"    \caption{{{caption}}}\label{{{label}}} \\",
         r"    \toprule",
         rf"    \multicolumn{{{multispan}}}{{l}}{{\textbf{{Panel {l0}: {panel_labels[p0]}}}}} \\",
@@ -342,7 +343,7 @@ def build_second_stage_table(results_dict):
             r"    \bottomrule",
         ]
 
-    lines += [r"\end{xltabular}", r"\doublespacing"]
+    lines += [r"\end{xltabular}", r"\setlength{\tabcolsep}{6pt}", r"\doublespacing"]
     return "\n".join(lines)
 
 _STANDALONE_PREAMBLE = r"""\documentclass[12pt]{article}

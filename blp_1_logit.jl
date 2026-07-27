@@ -677,7 +677,7 @@ function build_logit_comparison_tex(data::AbstractDict, ids::Vector{Int},
         raw"coefficient vector, including the segment dummies, appears in the per-routine tables " *
         raw"\ref{tab:demand_logit_est5_spec12}--\ref{tab:demand_logit_est8_spec12}. "
     note = raw"\multicolumn{" * string(n + 1) *
-        raw"}{p{\dimexpr\textwidth-2\tabcolsep\relax}}{\scriptsize " *
+        raw"}{p{\dimexpr\textwidth-2\tabcolsep\relax}}{\scriptsize \textit{Notes:} " *
         seg_sentence *
         raw"Wild cluster bootstrap standard errors (conglomerate clusters) in parentheses. " *
         raw"Significance: *** $p<0.01$, ** $p<0.05$, * $p<0.1$. $Q$ is the GMM " *

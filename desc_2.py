@@ -540,6 +540,9 @@ def render_table1(moments_b, moments_d, moments_all, meta, weight_col, suffix) -
         r"\setstretch{1.0}",
         r"\setlength{\LTleft}{\fill}",
         r"\setlength{\LTright}{\fill}",
+        # Shrink longtable's ending glue (default \bigskipamount) so the Notes
+        # paragraph sits close under the bottom rule.
+        r"\setlength{\LTpost}{0.3em}",
         f"\\begin{{longtable}}[c]{{{col_spec}}}",
         f"    \\caption{{{caption}}}\\label{{{tab_label}}} \\\\",
         r"    \toprule",
@@ -562,6 +565,7 @@ def render_table1(moments_b, moments_d, moments_all, meta, weight_col, suffix) -
         *body,
         "",
         r"\end{longtable}",
+        r"\setlength{\LTpost}{\bigskipamount}",
         r"\par\noindent{\footnotesize \textit{Notes:} Spreads are annualized: $(1 + r_{\text{qoq}})^4 - 1$. "
         r"Deposit spreads are defined as the risk-free rate minus the offered deposit rate.}",
         r"\doublespacing",
@@ -1354,7 +1358,9 @@ def render_table4(t4_df, meta, suffix) -> str:
     caption   = ("Digital (D) Firms Before and After Pix: Difference-in-Means "
                  "with Conglomerate-Clustered Inference")
 
-    col_spec = "l@{\\hspace{0.4em}}ccccc"
+    # tabular* at \textwidth with \extracolsep: the fill spreads the slack
+    # across columns so the table (and its threeparttable notes) span the page.
+    col_spec = "@{\\extracolsep{\\fill}}l ccccc@{}"
     header   = (r"Variable & \multicolumn{1}{c}{Pre Mean} & \multicolumn{1}{c}{Post Mean}"
                 r" & \multicolumn{1}{c}{$\Delta$} & \multicolumn{1}{c}{$G$}"
                 r" & \multicolumn{1}{c}{$G^{\star}$} \\")
@@ -1405,13 +1411,13 @@ def render_table4(t4_df, meta, suffix) -> str:
         r"\begin{threeparttable}",
         f"\\caption{{{caption}}}\\label{{{tab_label}}}",
         r"\footnotesize",
-        f"\\begin{{tabular}}{{{col_spec}}}",
+        f"\\begin{{tabular*}}{{\\textwidth}}{{{col_spec}}}",
         r"\toprule",
         header,
         r"\midrule",
         *body,
         r"\bottomrule",
-        r"\end{tabular}",
+        r"\end{tabular*}",
         r"\begin{tablenotes}[flushleft]",
         r"\item " + notes,
         r"\end{tablenotes}",

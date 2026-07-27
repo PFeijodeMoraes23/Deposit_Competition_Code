@@ -42,7 +42,7 @@ def clean_name(v):
         'fraction_65plus': 'Fraction 65+',
         'fraction_young': 'Fraction Young',
         'risk_free_qoq_lag': 'Lagged Selic Rate',
-        'connections_per100': 'Broadband Connections (per 100 inhabitants)',
+        'connections_per100': 'Broadband Connections (per 100)',
         'pix_exists': 'Pix Available',
         'const': 'Constant',
         'constant': 'Constant',
@@ -220,7 +220,8 @@ def build_second_stage_table(results_dict):
 
     lines = [
         r"\begin{spacing}{1.0}",
-        r"\begin{xltabular}{\textwidth}{>{\raggedright\arraybackslash}p{0.28\textwidth} *{4}{>{\centering\arraybackslash}X}}",
+        r"\setlength{\tabcolsep}{3pt}",
+        r"\begin{xltabular}{\textwidth}{>{\raggedright\arraybackslash}p{0.34\textwidth} *{4}{>{\centering\arraybackslash}X}}",
         rf"    \caption{{{caption}}}\label{{{label}}} \\",
         r"    \toprule",
         rf"    \multicolumn{{{multispan}}}{{l}}{{\textbf{{Panel {l0}: {panel_labels[p0]}}}}} \\",

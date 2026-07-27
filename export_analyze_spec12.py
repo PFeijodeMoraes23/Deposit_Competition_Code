@@ -182,7 +182,7 @@ def nice_var_name(var):
         'fraction_65plus': 'Fraction 65+',
         'fraction_young': 'Fraction Young',
         'risk_free_qoq_lag': 'Lagged Selic Rate',
-        'connections_per100': 'Broadband Connections (per 100 inhabitants)',
+        'connections_per100': 'Broadband Connections (per 100)',
         'gdp_growth_yoy': 'GDP Growth (YoY)',
         'pix_exists': 'Pix Available',
         'v_hat_x_lagged_dep': 'CF: $\\hat{v} \\times$ Lagged Deposits',

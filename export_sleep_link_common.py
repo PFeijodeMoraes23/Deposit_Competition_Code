@@ -48,7 +48,7 @@ def clean_name(v):
         'fraction_65plus': 'Fraction 65+',
         'fraction_young': 'Fraction Young',
         'risk_free_qoq_lag': 'Lagged Selic Rate',
-        'connections_per100': 'Broadband Connections (per 100 inhabitants)',
+        'connections_per100': 'Broadband Connections (per 100)',
         'pix_exists': 'Pix Available',
         'const': 'Constant', 'constant': 'Constant',
         'tax_cost_ratio_lag': 'Tax Cost Ratio ($t-1$)',
@@ -211,7 +211,8 @@ def build_second_stage_table(results_dict, est_num):
     est_nums_0 = [(el, ss_spec_numbers[(p0, ek)]) for ek, el in estimators]
     lines = [
         r"\setstretch{1.0}",
-        r"\begin{xltabular}{\textwidth}{>{\raggedright\arraybackslash}p{0.28\textwidth} *{4}{>{\centering\arraybackslash}X}}",
+        r"\setlength{\tabcolsep}{3pt}",
+        r"\begin{xltabular}{\textwidth}{>{\raggedright\arraybackslash}p{0.34\textwidth} *{4}{>{\centering\arraybackslash}X}}",
         rf"    \caption{{{caption}}}\label{{{label}}} \\", r"    \toprule",
         rf"    \multicolumn{{{multispan}}}{{l}}{{\textbf{{Panel {l0}: {panel_labels[p0]}}}}} \\", r"    \midrule",
         "     & " + " & ".join(el for el, _ in est_nums_0) + r" \\",
@@ -258,7 +259,7 @@ def build_second_stage_table(results_dict, est_num):
         lines += [r"    \midrule", "    Observations & " + " & ".join(obs_l) + r" \\",
                   "    $R^2$ & " + " & ".join(rsq_l) + r" \\", "    Fixed Effects & Yes & Yes & Yes & Yes \\\\",
                   "    Clusters ($G$) & " + " & ".join(g_l) + r" \\", r"    \bottomrule"]
-    lines += [r"\end{xltabular}", r"\doublespacing"]
+    lines += [r"\end{xltabular}", r"\setlength{\tabcolsep}{6pt}", r"\doublespacing"]
     return "\n".join(lines)
 
 

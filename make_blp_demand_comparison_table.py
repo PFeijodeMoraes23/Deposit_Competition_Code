@@ -121,8 +121,7 @@ def build_table(ests, suffix: str = "", show_segments: bool = True,
         "",
         r"    \bottomrule",
         r"    \multicolumn{" + str(ncols + 1) + r"}{@{}p{\dimexpr" + TABLE_W + r"-2\tabcolsep\relax}@{}}{"
-        rf"\scriptsize \textit{{Notes:}} Each column is {blurb} for one "
-        rf"sleepiness estimation strategy, enumerated in Section~\ref{{sec:empirical:sleep}}.{seg_note} {sem}. "
+        rf"\scriptsize \textit{{Notes:}} {sem}. "
         r"Significance from a "
         r"Student-$t$ reference with $G^*$ effective clusters: *** $p<0.01$, ** $p<0.05$, * $p<0.1$. "
         r"The $\Sigma$'s are bounded $\Sigma\ge0$, and a $\dagger$ marks a $\Sigma$ at "
