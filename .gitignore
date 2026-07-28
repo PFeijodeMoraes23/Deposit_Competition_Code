@@ -9,3 +9,5 @@
 __pycache__/
 Manifest.toml
 .env
+
+audit/_audit_output/
