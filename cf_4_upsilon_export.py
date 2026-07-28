@@ -45,6 +45,8 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from utils import state_transform as _st
+
 # Our status lines print Greek (Υ, φ, Δ); Windows consoles default to cp1252 and would
 # raise UnicodeEncodeError on them, so force UTF-8 output (no-op where already UTF-8).
 try:
@@ -148,6 +150,11 @@ def main():
     native = getattr(ss, "params_native", None)
     phi_nopix_name = None
     audit = {}
+    # The estimation-units value of "no Pix". Exported for BOTH branches: the identity
+    # branch never builds a phi_nopix parquet, so cf_4_pix.jl needs it to form the
+    # scalar subtraction as Υ_pix·(pix − pix_level_zero) rather than Υ_pix·pix.
+    _tf = _st.load_transform()
+    pix_level_zero = _tf.level_of("pix_exists", raw=0.0)
     if link is not None and native is not None and link != "identity":
         import pyarrow.parquet as pq
         from utils.sleep_links import phi_from_native
@@ -167,10 +174,26 @@ def main():
         audit = dict(nopix_link=link,
                      nopix_audit_corr=round(float(np.corrcoef(phi_hat, pm)[0, 1]), 8),
                      nopix_audit_max_abs=float(np.max(np.abs(phi_hat - pm))))
-        # counterfactual: zero the Pix indicator, re-apply the link G
+        # counterfactual: set the Pix indicator to its RAW-ZERO level, re-apply the link G.
+        # NOT the literal 0.0: the state block is grand-mean centred, so "no Pix" is the
+        # value -mean(pix_exists), and writing 0.0 would quietly evaluate the
+        # counterfactual at 53% of markets having Pix. A wrong constant here produces a
+        # perfectly plausible-looking φ^noPix, so the level is read from the persisted
+        # transform and the observed levels are asserted against it.
+        pix_lo = pix_level_zero
         dd0 = dd.copy()
         if "pix_exists" in dd0.columns:
-            dd0["pix_exists"] = 0.0
+            _lv = _st.dummy_levels("pix_exists")
+            _u = np.unique(dd0["pix_exists"].to_numpy(float))
+            if _lv is not None and len(_u) == 2 and \
+                    max(abs(_u[0] - _lv[0]), abs(_u[1] - _lv[1])) > 1e-8:
+                raise ValueError(
+                    f"{dpath.name}: pix_exists carries levels {tuple(np.round(_u, 8))} but the "
+                    f"transform says {tuple(np.round(_lv, 8))}. This parquet was built under a "
+                    "different centering than the current state_centering_means.json -- rebuild "
+                    "the demand prep before exporting the no-Pix counterfactual."
+                )
+            dd0["pix_exists"] = pix_lo
         phi_nopix = np.asarray(phi_from_native(dd0, ss, link), float)
         outp = pd.DataFrame(dict(
             entity_id=dd["entity_id"].astype(str).to_numpy(),
@@ -187,9 +210,12 @@ def main():
                match_corr=round(corr, 5), match_med_abs_diff=round(med, 6),
                estim=e, spec=s, link=link, exact_nopix=phi_nopix_name is not None,
                phi_nopix_parquet=phi_nopix_name,
-               note=("exact link-aware no-Pix φ exported (phi_from_native, Pix zeroed); "
-                     "upsilon_pix is the Pix AME, reporting-only" if phi_nopix_name
-                     else "identity/linear link: φ_cf = φ̂ − Υ_pix·pix is exact"),
+               state_transform_version=_st.STATE_TRANSFORM_VERSION,
+               pix_level_zero=pix_level_zero,
+               note=("exact link-aware no-Pix φ exported (phi_from_native, Pix set to "
+                     "pix_level_zero); upsilon_pix is the Pix AME, reporting-only"
+                     if phi_nopix_name
+                     else "identity/linear link: φ_cf = φ̂ − Υ_pix·(pix − pix_level_zero) is exact"),
                **audit)
     CF_DIR.mkdir(parents=True, exist_ok=True)
     out_path = CF_DIR / f"upsilon_pix_E{e}_spec_{s}.json"

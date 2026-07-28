@@ -144,30 +144,69 @@ def _link_density(z, link):
     raise ValueError(f"unknown link {link!r}")
 
 
-def _ame_dummy_flags(X, K):
+def _dummy_spec(X, K, names=None):
+    """Per-column (is_dummy, lo, hi) driving the discrete-difference AME.
+
+    A binary regressor's estimand is the discrete difference between its two
+    levels, not a derivative.  The levels used to be assumed to be literally
+    {0, 1}.  Once the state block is GRAND-MEAN CENTRED a dummy takes values
+    {-p_bar, 1-p_bar}, that test fails silently, and the dummy reverts to a
+    continuous average derivative -- the exact defect fixed on 2026-06-26.
+
+    So the levels come from utils.state_transform (explicit metadata, which
+    cannot drift with the data).  The fallback for columns that registry does
+    not know about is deliberately "two distinct values exactly 1 apart": it
+    covers both {0,1} and any centred/shifted image of it, and it is a strict
+    superset of the old rule, so behaviour is unchanged when nothing is centred.
+    """
+    from utils.state_transform import dummy_levels, NEVER_BINARY
+
     flags = np.zeros(K, dtype=bool)
+    lo = np.zeros(K, dtype=float)
+    hi = np.ones(K, dtype=float)
     for k in range(K):
-        col = X[:, k]
-        uniq = np.unique(col[~np.isnan(col)])
-        flags[k] = (len(uniq) == 2) and (0.0 in uniq) and (1.0 in uniq)
-    return flags
+        nm = str(names[k]).replace("interaction_", "") if names is not None and k < len(names) else None
+        if nm in NEVER_BINARY:
+            continue
+        lv = dummy_levels(nm) if nm else None
+        if lv is not None:
+            # STALE-TRANSFORM GUARD. The registry levels are only right if this frame
+            # was centred by exactly the persisted mean. If the column is two-valued
+            # and those values disagree, the discrete difference would be computed
+            # between the wrong pair -- silently, and still inside [0,1]. Fail loudly.
+            u = np.unique(X[:, k][~np.isnan(X[:, k])])
+            if len(u) == 2 and max(abs(u[0] - lv[0]), abs(u[1] - lv[1])) > 1e-8:
+                raise ValueError(
+                    f"state_transform: '{nm}' carries levels {tuple(np.round(u, 8))} but the "
+                    f"registry says {tuple(np.round(lv, 8))}. The frame was built under a "
+                    "different centering than state_centering_means.json. Rebuild the frame, "
+                    "or rebuild the JSON with `python estimation_2_sleep.py --write-centers`."
+                )
+        else:
+            u = np.unique(X[:, k][~np.isnan(X[:, k])])
+            if len(u) == 2 and abs((u[1] - u[0]) - 1.0) < 1e-9:
+                lv = (float(u[0]), float(u[1]))
+        if lv is not None:
+            flags[k], lo[k], hi[k] = True, lv[0], lv[1]
+    return flags, lo, hi
 
 
-def _generic_ame(theta_full, X, link, K, G, h=1e-5, dummy_flags=None):
+def _generic_ame(theta_full, X, link, K, G, h=1e-5, dummy_spec=None, names=None):
     """Analytic average marginal effects: continuous regressors use the exact
-    derivative E[g'(S'theta)]*theta_k; 0/1 dummies use the discrete difference
-    G(idx+theta_k(1-x))-G(idx-theta_k x), all without copying X (fast in the
-    bootstrap loop). dummy_flags may be precomputed for speed."""
+    derivative E[g'(S'theta)]*theta_k; dummies use the discrete difference
+    G(idx+theta_k(hi-x)) - G(idx+theta_k(lo-x)) between their two levels, all
+    without copying X (fast in the bootstrap loop). At (lo,hi)=(0,1) this is
+    identical to the pre-centering formula. dummy_spec may be precomputed."""
     theta_X = theta_full[:K]
     idx = X @ theta_X
     mean_dens = float(np.mean(_link_density(idx, link)))
-    flags = _ame_dummy_flags(X, K) if dummy_flags is None else dummy_flags
+    flags, lo, hi = _dummy_spec(X, K, names) if dummy_spec is None else dummy_spec
     AME = np.zeros(K + G)
     for k in range(K):
         if flags[k]:
             col = X[:, k]
-            idx1 = idx + theta_X[k] * (1.0 - col)
-            idx0 = idx - theta_X[k] * col
+            idx1 = idx + theta_X[k] * (hi[k] - col)
+            idx0 = idx + theta_X[k] * (lo[k] - col)
             AME[k] = float(np.mean(link_cdf(idx1, link) - link_cdf(idx0, link)))
         else:
             AME[k] = mean_dens * theta_X[k]
@@ -176,12 +215,13 @@ def _generic_ame(theta_full, X, link, K, G, h=1e-5, dummy_flags=None):
     return AME
 
 
-def _generic_ame_cov(theta_full, cov_full, X, link, K, G, h=1e-5):
-    AME = _generic_ame(theta_full, X, link, K, G)
+def _generic_ame_cov(theta_full, cov_full, X, link, K, G, h=1e-5, names=None):
+    spec = _dummy_spec(X, K, names)
+    AME = _generic_ame(theta_full, X, link, K, G, dummy_spec=spec)
     J = np.zeros((K + G, K + G))
     for i in range(K + G):
         tp = theta_full.copy(); tp[i] += h
-        J[:, i] = (_generic_ame(tp, X, link, K, G) - AME) / h
+        J[:, i] = (_generic_ame(tp, X, link, K, G, dummy_spec=spec) - AME) / h
     cov_AME = J @ cov_full @ J.T
     return AME, np.sqrt(np.abs(np.diag(cov_AME))), cov_AME
 
@@ -248,7 +288,8 @@ def fit_nlls_link(df, state_cols, has_cf, link, loss="cauchy", fe_time_col=None,
     # homoskedastic delta-method SEs, which were NOT cluster-robust).
     if bootstrap:
         ame_d, bse_d, pval_d = nlls_link_wild_bootstrap(res_lsq, X, link, K, G, idx,
-                                                        cl_inv, n_cl)
+                                                        cl_inv, n_cl,
+                                                        state_names=state_cols)
         ps = pd.Series(ame_d).reindex(idx)
         bs = pd.Series(bse_d).reindex(idx)
         pvals = pd.Series(pval_d).reindex(idx)
@@ -366,17 +407,21 @@ def fit_single_index(df, state_cols, has_cf, logit_res, degree=3, phi_band=False
     # is the wrong estimand and explodes when the inherited (unnormalised) logit
     # direction gives a weakly-identified dummy a huge coefficient (e.g. pix_exists,
     # near-collinear with the quarter FE -> theta_pix ~ 300 -> AME ~ 6.9). The flip
-    # terms below depend only on (vs, theta_k, vsd, the 0/1 column) -- all fixed
+    # terms below depend only on (vs, theta_k, vsd, the dummy column) -- all fixed
     # across the link bootstrap -- so we precompute their standardised-index powers.
+    # Levels come from _dummy_spec (registry-driven), so a CENTRED dummy with values
+    # {-p_bar, 1-p_bar} is still recognised; a literal {0,1} test would not see it.
+    _dsub = X[:, [phi_params.index(nm) for nm in names]]
+    _dflag, _dlo, _dhi = _dummy_spec(_dsub, len(names), names)
     dcols = {}
-    for nm in names:
-        coln = X[:, phi_params.index(nm)]
-        u = np.unique(coln[~np.isnan(coln)])
-        if len(u) == 2 and 0.0 in u and 1.0 in u:
-            z1 = vs + ths[nm] * (1.0 - coln) / vsd      # standardised index at x=1
-            z0 = vs - ths[nm] * coln / vsd              # standardised index at x=0
-            dcols[nm] = (np.column_stack([z1 ** dd for dd in range(degree + 1)]),
-                         np.column_stack([z0 ** dd for dd in range(degree + 1)]))
+    for j, nm in enumerate(names):
+        if not _dflag[j]:
+            continue
+        coln = _dsub[:, j]
+        z1 = vs + ths[nm] * (_dhi[j] - coln) / vsd     # standardised index at the HIGH level
+        z0 = vs + ths[nm] * (_dlo[j] - coln) / vsd     # standardised index at the LOW level
+        dcols[nm] = (np.column_stack([z1 ** dd for dd in range(degree + 1)]),
+                     np.column_stack([z0 ** dd for dd in range(degree + 1)]))
 
     def _ame_fn(bfull):
         ms = _mean_slope(bfull)
@@ -846,12 +891,13 @@ def fit_joint_single_index(df, state_cols, has_cf, link="sieve", loss="ls",
     # here (so the bug is invisible -- pix AME ~ 2e-3), but a binary regressor's
     # estimand is still the discrete difference, so we treat it correctly and
     # consistently with the single-index / logit paths. Flip terms are fixed in i.
-    _dummy = np.zeros(d, dtype=bool)
-    for k in range(d):
-        u = np.unique(S[~np.isnan(S[:, k]), k])
-        _dummy[k] = (len(u) == 2) and (0.0 in u) and (1.0 in u)
-    _flip1 = [((1.0 - S[:, k]) / S_sd[k]) if _dummy[k] else None for k in range(d)]
-    _flip0 = [(S[:, k] / S_sd[k]) if _dummy[k] else None for k in range(d)]
+    # Levels from _dummy_spec (registry-driven) rather than a literal {0,1} test, which
+    # a CENTRED dummy ({-p_bar, 1-p_bar}) fails silently. Note the flip terms are
+    # INVARIANT to centering: with S_new = a(S - m), S_sd scales by a too, so
+    # (hi - S_new)/S_sd_new = (1 - S_raw)/S_sd_old exactly.
+    _dummy, _dlo, _dhi = _dummy_spec(S, d, idx_cols)
+    _flip1 = [((_dhi[k] - S[:, k]) / S_sd[k]) if _dummy[k] else None for k in range(d)]
+    _flip0 = [((_dlo[k] - S[:, k]) / S_sd[k]) if _dummy[k] else None for k in range(d)]
 
     def _ames(theta):
         th = theta / (np.linalg.norm(theta) + 1e-12)
@@ -861,8 +907,10 @@ def fit_joint_single_index(df, state_cols, has_cf, link="sieve", loss="ls",
         out = {}
         for k in range(d):
             if _dummy[k]:                          # discrete difference (bounded by the link)
+                # both flips now carry their own sign: _flip0 = (lo - S)/S_sd, so it is
+                # ADDED here. (It used to be S/S_sd and subtracted; same thing at lo=0.)
                 vv1 = vv + th[k] * _flip1[k]
-                vv0 = vv - th[k] * _flip0[k]
+                vv0 = vv + th[k] * _flip0[k]
                 out[idx_cols[k]] = float(np.mean(np.interp(vv1, vgrid, ggrid)
                                                  - np.interp(vv0, vgrid, ggrid)))
             else:                                  # continuous average derivative
@@ -1018,7 +1066,8 @@ def _cluster_if(score, bread, cl_inv, n_cl):
 
 
 def nlls_link_wild_bootstrap(res_lsq, X, link, K, G, idx_names, cl_inv, n_cl,
-                             B=None, scheme=None, seed=0, ame_fn=None):
+                             B=None, scheme=None, seed=0, ame_fn=None,
+                             state_names=None):
     """Score/multiplier wild cluster bootstrap of the AMEs for the link-NLLS
     M-estimators (Est3 logit, Est4 uniform, Est5 probit). The estimator solves
     min_psi sum_i r_i(psi)^2, r = y_dm - f(psi); the influence function is
@@ -1037,8 +1086,10 @@ def nlls_link_wild_bootstrap(res_lsq, X, link, K, G, idx_names, cl_inv, n_cl,
     if ame_fn is not None:
         _ame_arr = ame_fn
     else:
-        _flags = _ame_dummy_flags(X, K)        # precompute once for the B-loop
-        _ame_arr = lambda p_: _generic_ame(p_, X, link, K, G, dummy_flags=_flags)
+        # precompute the (is_dummy, lo, hi) spec once for the B-loop; `names` lets
+        # the registry answer for centred dummies instead of sniffing {0,1} values
+        _spec = _dummy_spec(X, K, state_names)
+        _ame_arr = lambda p_: _generic_ame(p_, X, link, K, G, dummy_spec=_spec)
 
     def _ame_dict(p_):
         a = _ame_arr(p_)

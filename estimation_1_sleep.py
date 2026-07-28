@@ -292,16 +292,10 @@ def execute_specification(args):
 
     return new_stdout.getvalue(), res, spec_name, res_fs, spec_number
 
-def scale_magnitudes(df):
-    scale_cols = {
-        'gdp_per_capita': 10000.0, 'cadunico_families_per1000': 100.0,
-        'connections_per100': 100.0,
-        'deposit_balance': 1000000000.0, 'nr_lagged_dep': 1000000000.0,
-        'lagged_deposits': 1000000000.0
-    }
-    for col, factor in scale_cols.items():
-        if col in df.columns: df[col] /= factor
-    return df
+# NOTE: a local `scale_magnitudes()` used to live here. It was DEAD CODE (never called
+# -- build_unified_frame inherits the scaling from estimation_2_sleep.build_pooled_data)
+# and had already drifted from the real thing by omitting indice_basileia_lag. The
+# factors now live once, in utils/state_transform.SCALE. Do not re-add a local copy.
 
 def define_specifications():
     s_base = ['constant']

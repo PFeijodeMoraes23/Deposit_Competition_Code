@@ -33,6 +33,7 @@ import numpy as np
 from scipy.stats import norm
 
 from utils import paths
+from utils import state_transform as _st
 from utils.sleep_links import NonLinearResults  # noqa: F401 (needed for unpickling)
 
 DATA_DIR = paths.PROCESSED
@@ -147,7 +148,14 @@ def _reshape_panel(df_raw):
     return df
 
 
-def build_base_panel(panel_csv):
+def build_base_panel(panel_csv, time_block=False):
+    """The E3-E9 demand frame.
+
+    `time_block` is handled HERE rather than by the caller so that the ordering
+    constraint lives in one place: gdp_growth_yoy is a RATIO of gdp_per_capita to
+    its own 4-quarter lag, so it must be built BEFORE the state block is centred
+    (a ratio is scale-invariant but not shift-invariant -- centring first puts
+    near-zero values in that denominator)."""
     print(f"Loading {panel_csv}...")
     df_raw = pd.read_csv(panel_csv, dtype={'mca_code': str}, low_memory=False)
     df = _reshape_panel(df_raw)
@@ -189,11 +197,10 @@ def build_base_panel(panel_csv):
     for c in ('is_coop', 'is_state_owned'):
         # is_state_owned arrives as bool (Tc==1); cast to float 0/1 since it is now a demand regressor.
         df[c] = pd.to_numeric(df[c], errors='coerce').fillna(0.0) if c in df.columns else 0.0
-    # Same scaling as estimation_*_sleep.build_pooled_data so the native index matches.
-    if 'gdp_per_capita' in df.columns: df['gdp_per_capita'] /= 10000.0
-    if 'cadunico_families_per1000' in df.columns: df['cadunico_families_per1000'] /= 100.0
-    if 'pix_users_pf_per1000' in df.columns: df['pix_users_pf_per1000'] /= 100.0
-    if 'connections_per100' in df.columns: df['connections_per100'] /= 100.0
+    # Raw panel units -> estimation units, from utils/state_transform.SCALE -- the same
+    # object estimation_2_sleep.build_pooled_data uses, so the native index matches by
+    # construction rather than by a comment asking two copies to agree.
+    _st.apply_scale(df)
     for col in ['pix_users_pf_per1000', 'connections_per100', 'branches_per1000']:
         if col in df.columns: df[col] = df[col].fillna(df[col].median())
     if 'pop_total' not in df.columns: df['pop_total'] = np.nan
@@ -214,6 +221,17 @@ def build_base_panel(panel_csv):
     else:
         df['banked_correction'] = np.nan
         df['findex_banked_frac'] = np.nan
+
+    if time_block:
+        from estimation_2_sleep import add_time_variables
+        df = add_time_variables(df)
+        print("  [+Time] added time_trend + gdp_growth_yoy to the demand frame")
+
+    # GRAND-MEAN CENTERING -- last, after the time block is built, and by the SAME
+    # persisted means the sleepiness estimation used (loaded, never recomputed: this
+    # frame is a different sample, so a locally-computed mean would silently shift the
+    # index phi is rebuilt from).
+    _st.load_transform().center(df)
     return df
 
 
@@ -499,11 +517,7 @@ def run(est_num, link, tag, time_block=False, spec="all"):
     demand_output_dir.mkdir(parents=True, exist_ok=True)
 
     print(f"Loading Base Panel {PANEL_CSV}...")
-    df_base = build_base_panel(PANEL_CSV)
-    if time_block:
-        from estimation_2_sleep import add_time_variables
-        df_base = add_time_variables(df_base)
-        print("  [+Time] added time_trend + gdp_growth_yoy to the demand frame")
+    df_base = build_base_panel(PANEL_CSV, time_block=time_block)
     print(f"Base Panel rows (with valid lagged structure): {len(df_base)}")
 
     results_pickle = sleep_output_dir / "estimation_results.pkl"

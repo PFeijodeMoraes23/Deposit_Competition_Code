@@ -26,6 +26,7 @@ warnings.filterwarnings("ignore", message="covariance of constraints does not ha
 
 from utils.sleep_links import NonLinearResults  # noqa: F401 (needed for unpickling)
 from utils import paths as _paths_mod
+from utils import state_transform as _st
 
 _DRAFTS_DIR = Path(r"C:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\Drafts\Deposit Competition")
 DATA_DIR = _paths_mod.PROCESSED
@@ -39,30 +40,50 @@ def stars(p):
     return ''
 
 
-def clean_name(v):
+# Base row labels. The UNIT in each label is appended from utils/state_transform.DISPLAY
+# (see clean_name below), so the sleepiness tables, the BBL policy functions and the
+# descriptive tables cannot state different units for the same variable.
+_BASE_LABELS = {
+    'nr_lagged_dep': 'Lagged Deposits',
+    'gdp_per_capita': 'GDP \\textit{per capita}',
+    'cadunico_families_per1000': 'CadUnico Families',
+    'fraction_65plus': 'Fraction 65+',
+    'fraction_young': 'Fraction Young',
+    'risk_free_qoq_lag': 'Lagged Selic Rate',
+    'connections_per100': 'Broadband Connections',
+    'pix_exists': 'Pix Available',
+    'const': 'Constant', 'constant': 'Constant',
+    'tax_cost_ratio_lag': 'Tax Cost Ratio ($t-1$)',
+    'personnel_cost_ratio_lag': 'Personnel Cost Ratio ($t-1$)',
+    'admin_cost_ratio_lag': 'Admin Cost Ratio ($t-1$)',
+    'indice_basileia_lag': 'Basel Index ($t-1$)',
+    'lci_lca_ratio_lag': 'LCI/LCA Ratio ($t-1$)',
+    'wholesale_ratio_lag': 'Wholesale Ratio ($t-1$)',
+    'leave_one_out_mean_spread': 'Leave-out Mean Spread',
+    'v_hat_x_lagged_dep': 'CF: $\\hat{v} \\times$ Lagged Deposits',
+    'time_trend': 'Time Trend',
+    'gdp_growth_yoy': 'GDP Growth',
+    'pix_users_pf_per1000': 'Pix Users',
+    'branches_per1000': 'Branches',
+    'estban_rival_branches_lag': 'Rival Branches ($t-1$)',
+}
+
+# Rows whose label must NOT carry a state-block unit: they are not state variables.
+_NO_UNIT = {'nr_lagged_dep', 'const', 'constant', 'v_hat_x_lagged_dep'}
+
+
+def clean_name(v, with_unit=True):
     v = str(v).replace('interaction_', '')
-    labels = {
-        'nr_lagged_dep': 'Lagged Deposits',
-        'gdp_per_capita': 'GDP \\textit{per capita} (10k R\\$)',
-        'cadunico_families_per1000': 'CadUnico Families (100s per 1k)',
-        'fraction_65plus': 'Fraction 65+',
-        'fraction_young': 'Fraction Young',
-        'risk_free_qoq_lag': 'Lagged Selic Rate',
-        'connections_per100': 'Broadband Connections (per 100)',
-        'pix_exists': 'Pix Available',
-        'const': 'Constant', 'constant': 'Constant',
-        'tax_cost_ratio_lag': 'Tax Cost Ratio ($t-1$)',
-        'personnel_cost_ratio_lag': 'Personnel Cost Ratio ($t-1$)',
-        'admin_cost_ratio_lag': 'Admin Cost Ratio ($t-1$)',
-        'indice_basileia_lag': 'Basel Index (pp, $t-1$)',
-        'lci_lca_ratio_lag': 'LCI/LCA Ratio ($t-1$)',
-        'wholesale_ratio_lag': 'Wholesale Ratio ($t-1$)',
-        'leave_one_out_mean_spread': 'Leave-out Mean Spread',
-        'v_hat_x_lagged_dep': 'CF: $\\hat{v} \\times$ Lagged Deposits',
-        'time_trend': 'Time Trend (years)',
-        'gdp_growth_yoy': 'GDP Growth (YoY)',
-    }
-    return labels.get(v, v.replace('_', '\\_'))
+    base = _BASE_LABELS.get(v)
+    if base is None:
+        return v.replace('_', '\\_')
+    return base if (not with_unit or v in _NO_UNIT) else _st.label_with_unit(base, v)
+
+
+def disp(v, lhs=None):
+    """Display multiplier for a coefficient AND its standard error. Never applied to
+    t-statistics, p-values or stars, which are invariant to a change of units."""
+    return _st.display_mult(v, lhs=_st.PHI_DISPLAY if lhs is None else lhs)
 
 
 # Appendix caption = stage + a reference to the estimation strategy enumerated in V_Main
@@ -119,7 +140,11 @@ def build_first_stage_table(results_dict, est_num):
     notes = (
         r"\footnotesize \textit{Notes:} Standard errors (wild cluster bootstrap at the "
         r"conglomerate level; \textcite{cameron2008bootstrap}, \textcite{mackinnon2017wild}) "
-        r"in parentheses. Significance levels: *** $p<0.01$, ** $p<0.05$, * $p<0.1$."
+        r"in parentheses. Coefficients are in \textbf{percentage points of the quarterly "
+        r"deposit spread} per the unit given in the row label, matching the units of the "
+        r"second-stage tables. $t$-statistics, $p$-values and significance stars are "
+        r"invariant to these units. "
+        r"Significance levels: *** $p<0.01$, ** $p<0.05$, * $p<0.1$."
     )
 
     def _get_res(iv_key, p):
@@ -157,6 +182,8 @@ def build_first_stage_table(results_dict, est_num):
                 if res is not None and var in res.params:
                     has_val = True
                     c, se, pval = res.params[var], res.bse[var], res.pvalues[var]
+                    m = disp(var, lhs=_st.SPREAD_DISPLAY)   # LHS here is the spread, not phi
+                    c, se = c * m, se * m
                     coef_strs.append(f"${c:.4f}^{{{stars(pval)}}}$"); se_strs.append(f"$({se:.4f})$")
                 else:
                     coef_strs.append(""); se_strs.append("")
@@ -196,7 +223,12 @@ def build_second_stage_table(results_dict, est_num):
     notes = (
         r"\footnotesize \textit{Notes:} Standard errors (wild cluster bootstrap at the "
         r"conglomerate level; \textcite{cameron2008bootstrap}, \textcite{mackinnon2017wild}) "
-        r"in parentheses. Reported effects are average marginal effects (AMEs). "
+        r"in parentheses. Reported effects are average marginal effects (AMEs) on $\phi$, "
+        r"expressed in \textbf{percentage points of the sleepy share} per the unit given in "
+        r"the row label; shares and rates are in percentage points, and Pix Available is a "
+        r"discrete $0\to1$ difference. $t$-statistics, $p$-values and significance stars are "
+        r"invariant to these units. State variables are grand-mean centred at their pooled "
+        r"estimation-sample means, so the index is evaluated relative to the average market. "
         r"Significance levels: *** $p<0.01$, ** $p<0.05$, * $p<0.1$."
     )
 

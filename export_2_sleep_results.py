@@ -33,31 +33,11 @@ def stars(p):
     elif p < 0.10: return '*'
     return ''
 
-def clean_name(v):
-    v = str(v).replace('interaction_', '')
-    labels = {
-        'nr_lagged_dep': 'Lagged Deposits',
-        'gdp_per_capita': 'GDP \\textit{per capita} (10k R\\$)',
-        'cadunico_families_per1000': 'CadUnico Families (100s per 1k)',
-        'fraction_65plus': 'Fraction 65+',
-        'fraction_young': 'Fraction Young',
-        'risk_free_qoq_lag': 'Lagged Selic Rate',
-        'connections_per100': 'Broadband Connections (per 100)',
-        'pix_exists': 'Pix Available',
-        'const': 'Constant',
-        'constant': 'Constant',
-        'tax_cost_ratio_lag': 'Tax Cost Ratio ($t-1$)',
-        'personnel_cost_ratio_lag': 'Personnel Cost Ratio ($t-1$)',
-        'admin_cost_ratio_lag': 'Admin Cost Ratio ($t-1$)',
-        'indice_basileia_lag': 'Basel Index (pp, $t-1$)',
-        'lci_lca_ratio_lag': 'LCI/LCA Ratio ($t-1$)',
-        'wholesale_ratio_lag': 'Wholesale Ratio ($t-1$)',
-        'leave_one_out_mean_spread': 'Leave-out Mean Spread',
-        'v_hat_x_lagged_dep': 'CF: $\\hat{v} \\times$ Lagged Deposits',
-    }
-    if v in labels:
-        return labels[v]
-    return v.replace('_', '\\_')
+# Row labels and display units come from the SHARED registry so that every table in the
+# paper -- sleepiness, BBL policy functions, descriptives -- states the same unit for the
+# same variable. There used to be four independent copies of this dict.
+from export_sleep_link_common import clean_name, disp  # noqa: E402
+from utils import state_transform as _st  # noqa: E402
 
 
 def build_first_stage_table(results_dict):
@@ -84,7 +64,10 @@ def build_first_stage_table(results_dict):
     notes = (
         r"\footnotesize \textit{Notes:} Standard errors (wild cluster bootstrap at the "
         r"conglomerate level; \textcite{cameron2008bootstrap}, \textcite{mackinnon2017wild}) "
-        r"in parentheses. "
+        r"in parentheses. Coefficients are in \textbf{percentage points of the quarterly "
+        r"deposit spread} per the unit given in the row label, matching the units of the "
+        r"second-stage tables. $t$-statistics, $p$-values and significance stars are "
+        r"invariant to these units. "
         r"Significance levels: *** $p<0.01$, ** $p<0.05$, * $p<0.1$."
     )
 
@@ -151,6 +134,8 @@ def build_first_stage_table(results_dict):
                 if res is not None and var in res.params:
                     has_val = True
                     c, se, pval = res.params[var], res.bse[var], res.pvalues[var]
+                    m = disp(var, lhs=_st.SPREAD_DISPLAY)   # LHS here is the spread, not phi
+                    c, se = c * m, se * m
                     coef_strs.append(f"${c:.4f}^{{{stars(pval)}}}$")
                     se_strs.append(f"$({se:.4f})$")
                 else:
@@ -202,7 +187,13 @@ def build_second_stage_table(results_dict):
     notes = (
         r"\footnotesize \textit{Notes:} Standard errors (wild cluster bootstrap at the "
         r"conglomerate level; \textcite{cameron2008bootstrap}, \textcite{mackinnon2017wild}) "
-        r"in parentheses. Significance levels: *** $p<0.01$, ** $p<0.05$, * $p<0.1$."
+        r"in parentheses. Coefficients are effects on $\phi$, expressed in "
+        r"\textbf{percentage points of the sleepy share} per the unit given in the row "
+        r"label; shares and rates are in percentage points, and Pix Available is a discrete "
+        r"$0\to1$ difference. $t$-statistics, $p$-values and significance stars are "
+        r"invariant to these units. State variables are grand-mean centred at their pooled "
+        r"estimation-sample means, so the Constant is $\hat{\phi}$ at the average market. "
+        r"Significance levels: *** $p<0.01$, ** $p<0.05$, * $p<0.1$."
     )
 
     def _get_res(ek, p):
@@ -275,6 +266,8 @@ def build_second_stage_table(results_dict):
                 if res is not None and var in res.params:
                     has_val = True
                     c, se, pval = res.params[var], res.bse[var], res.pvalues[var]
+                    m = disp(vshort)          # coefficient and SE only; pval/stars unchanged
+                    c, se = c * m, se * m
                     coef_strs.append(f"${c:.4f}^{{{stars(pval)}}}$")
                     se_strs.append(f"$({se:.4f})$")
                 else:

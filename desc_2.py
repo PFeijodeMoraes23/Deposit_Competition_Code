@@ -132,7 +132,11 @@ LABEL_MAP = {
     # Table 3 specific
     "pop_total":                 ("Population",              "Thousands",    1e3,  1),
     "gdp_per_capita":            ("GDP per Capita",          r"R\$",         None, 0),
-    "fraction_65plus":           ("Share Aged 65+",          "",             None, 3),
+    # Shares are reported in PERCENTAGE POINTS, matching the unit their coefficients carry
+    # in the sleepiness and BBL policy-function tables (utils/state_transform.DISPLAY, where
+    # fraction_65plus is (0.01, 'pp')). Printing a bare 0.109 here while the coefficient
+    # reads "per pp" is what makes SD x coefficient impossible to do in one's head.
+    "fraction_65plus":           ("Share Aged 65+",          "pp",           0.01, 1),
     "cadunico_families_per1000": (r"Cad\'Unico Families",    "per 1{,}000",  None, 2),
     "branches_per1000":          ("Bank Branches",           "per 1{,}000",  None, 3),
     "connections_per100":        ("Internet Connections",    "per 100",      None, 2),

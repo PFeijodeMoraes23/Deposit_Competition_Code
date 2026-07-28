@@ -211,13 +211,29 @@ def tier0(estimators, spec_filter):
 # TIER 1/2 -- the diff gate against a pre-change backup
 # ==============================================================================
 def _phi_frame(path):
-    """phi_mt_* columns keyed on the panel identifiers."""
+    """phi_mt_* columns keyed on the panel identifiers.  Accepts either the live
+    market_panel_phis.csv or the reduced parquet backup_precenter.py writes (the
+    full CSV is ~2 GB of columns this gate never reads)."""
     keys = ["CodConglomeradoPrudencial", "mca_code", "deposit_type", "year", "quarter"]
-    head = pd.read_csv(path, nrows=0)
-    cols = [c for c in head.columns if c.startswith("phi_mt_")]
-    use = [k for k in keys if k in head.columns] + cols
-    df = pd.read_csv(path, usecols=use, dtype={"mca_code": str}, low_memory=False)
-    return df.set_index([k for k in keys if k in df.columns]), cols
+    path = Path(path)
+    if path.suffix == ".parquet":
+        df = pd.read_parquet(path)
+        cols = [c for c in df.columns if c.startswith("phi_mt_")]
+        df = df[[k for k in keys if k in df.columns] + cols]
+    else:
+        head = pd.read_csv(path, nrows=0)
+        cols = [c for c in head.columns if c.startswith("phi_mt_")]
+        use = [k for k in keys if k in head.columns] + cols
+        df = pd.read_csv(path, usecols=use, dtype={"mca_code": str}, low_memory=False)
+    idx = [k for k in keys if k in df.columns]
+    df[idx] = df[idx].astype(str)
+    return df.set_index(idx).sort_index(), cols
+
+
+def _phi_path(d):
+    """market_panel_phis as parquet (backup) or csv (live)."""
+    p = Path(d) / "market_panel_phis.parquet"
+    return p if p.exists() else Path(d) / "market_panel_phis.csv"
 
 
 def gate(estimators, backup):
@@ -262,15 +278,18 @@ def gate(estimators, backup):
                   f"|d const - shift| {d_const:.3e} | |d AME pix| {d_pix:.3e}")
 
         # --- phi identity ------------------------------------------------------
-        for fn in ("market_panel_phis.csv", "national_phi_t.csv"):
-            fo, fn_ = old_p / fn, new_p / fn
-            if not (fo.exists() and fn_.exists()):
-                continue
+        for fn in ("market_panel_phis", "national_phi_t.csv"):
             if fn == "national_phi_t.csv":
+                fo, fn_ = old_p / fn, new_p / fn
+                if not (fo.exists() and fn_.exists()):
+                    continue
                 a = pd.read_csv(fo).set_index("year_quarter")
                 b = pd.read_csv(fn_).set_index("year_quarter")
                 cols = [c for c in a.columns if c.startswith("phi_t_") and c in b.columns]
             else:
+                fo, fn_ = _phi_path(old_p), _phi_path(new_p)
+                if not (fo.exists() and fn_.exists()):
+                    continue
                 a, cols_a = _phi_frame(fo)
                 b, cols_b = _phi_frame(fn_)
                 cols = [c for c in cols_a if c in cols_b]

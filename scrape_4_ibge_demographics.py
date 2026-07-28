@@ -585,16 +585,39 @@ def _age_cache_path(tabela: int, year: int) -> str:
     return os.path.join(AGE_CACHE_DIR, f"census_age_{tabela}_{year}_raw.csv")
 
 
-def _load_age_cache(tabela: int, year: int) -> pd.DataFrame | None:
+def _load_age_cache(tabela: int, year: int,
+                    expect_munis: set[int] | None = None) -> pd.DataFrame | None:
+    """Load the cached census age download, but ONLY if it still covers the current
+    municipality universe.
+
+    The cache is keyed by (table, year) while its CONTENT depends on the
+    municipality->MCA crosswalk that was current when it was fetched. Nothing tied the
+    two together, so when the crosswalk was refreshed on 2026-07-22 (5,416 -> 5,565
+    municipalities) these 2026-03-09 caches kept short-circuiting the fetch and the 149
+    new municipalities were never requested. They then had no census anchor at all, so
+    fraction_65plus/fraction_young were NaN for them in every year -- and nothing
+    downstream complained, because estimation_2_sleep median-fills those columns.
+
+    Treating a cache that does not cover `expect_munis` as a MISS is what makes a
+    crosswalk refresh self-healing instead of silently partial."""
     path = _age_cache_path(tabela, year)
-    if os.path.exists(path):
-        logging.info(f"Loading census age cache: {path}")
-        return pd.read_csv(
-            path,
-            dtype={"municipio_code": int, "age_label": str},
-            encoding="latin-1",
-        )
-    return None
+    if not os.path.exists(path):
+        return None
+    df = pd.read_csv(path, dtype={"municipio_code": int, "age_label": str},
+                     encoding="latin-1")
+    if expect_munis:
+        missing = expect_munis - set(df["municipio_code"].astype(int))
+        if missing:
+            logging.warning(
+                f"Census age cache {os.path.basename(path)} covers "
+                f"{df['municipio_code'].nunique():,} municipalities but the crosswalk now "
+                f"has {len(expect_munis):,} -- {len(missing):,} MISSING (e.g. "
+                f"{sorted(missing)[:5]}). Cache is STALE; re-fetching from SIDRA."
+            )
+            return None
+    logging.info(f"Loading census age cache: {path} "
+                 f"({df['municipio_code'].nunique():,} municipalities)")
+    return df
 
 
 def _save_age_cache(df: pd.DataFrame, tabela: int, year: int) -> None:
@@ -941,8 +964,9 @@ def fetch_age_structure() -> pd.DataFrame:
     for spec in census_specs:
         tabela, year, variavel, class_id, categories = spec
 
-        # 1. Check local cache first
-        cached = _load_age_cache(tabela, year)
+        # 1. Check local cache first -- but only accept it if it still covers every
+        #    municipality in the CURRENT crosswalk (see _load_age_cache).
+        cached = _load_age_cache(tabela, year, expect_munis=set(all_munis))
         if cached is not None:
             cached["census_year"] = year
             all_frames.append(cached)
@@ -967,6 +991,7 @@ def fetch_age_structure() -> pd.DataFrame:
         # 3. Fetch via SIDRA in municipality batches
         logging.info(f"Fetching census age structure -- Table {tabela} ({year}) ...")
         batch_frames = []
+        failed_munis: list[int] = []
         n_batches = (len(fetch_munis) + batch_size - 1) // batch_size
         for i in range(0, len(fetch_munis), batch_size):
             batch = fetch_munis[i: i + batch_size]
@@ -976,6 +1001,7 @@ def fetch_age_structure() -> pd.DataFrame:
                                              class_id, categories)
                 batch_frames.append(df_batch)
             except Exception as exc:
+                failed_munis.extend(batch)
                 logging.warning(
                     f"Table {tabela} ({year}) batch {batch_num}/{n_batches} failed: {exc}"
                 )
@@ -992,9 +1018,26 @@ def fetch_age_structure() -> pd.DataFrame:
 
         df = pd.concat(batch_frames, ignore_index=True)
         df["census_year"] = year
-        _save_age_cache(df, tabela, year)
+
+        # A PARTIAL fetch must never be cached. Caching it makes a transient HTTP 500 into a
+        # permanent hole: every later run loads the cache, skips the API, and the missing
+        # municipalities silently lose their age structure for good. (Combined with the old
+        # per-column safe_interp fallback, that is how 149 MCAs ended up with no
+        # fraction_65plus/fraction_young in any year -- and nothing downstream complained,
+        # because estimation_2_sleep median-fills the column.)
+        if failed_munis:
+            logging.error(
+                f"Table {tabela} ({year}): {len(failed_munis):,} of {len(fetch_munis):,} "
+                f"municipalities are MISSING ({len(failed_munis) // batch_size + 1} failed "
+                f"batches); NOT writing {_age_cache_path(tabela, year)} so the gap is not "
+                f"made permanent. Re-run to retry, or place a manually-downloaded CSV there. "
+                f"First missing: {failed_munis[:5]}"
+            )
+        else:
+            _save_age_cache(df, tabela, year)
         all_frames.append(df)
-        logging.info(f"Table {tabela} ({year}): {len(df):,} rows fetched.")
+        logging.info(f"Table {tabela} ({year}): {len(df):,} rows fetched"
+                     + (f" ({len(failed_munis):,} municipalities MISSING)" if failed_munis else ""))
         time.sleep(3)   # pause between the two large census table requests
 
     if not all_frames:
@@ -1099,18 +1142,36 @@ def interpolate_age_structure(age_census: pd.DataFrame,
             col_lo_yg = f"fraction_young_{y_lo_c}"
             col_hi_yg = f"fraction_young_{y_hi_c}"
 
-            def safe_interp(lo, hi, w):
-                if lo in tmp.columns and hi in tmp.columns:
-                    return tmp[lo] * (1 - w) + tmp[hi] * w
-                elif lo in tmp.columns:
-                    return tmp[lo]
-                elif hi in tmp.columns:
-                    return tmp[hi]
-                else:
-                    return np.nan
+            def safe_interp(stem, w):
+                """Blend the two bracketing census anchors, falling back PER MUNICIPALITY to
+                the NEAREST census it actually has.
 
-            tmp["fraction_65plus"]  = safe_interp(col_lo_65, col_hi_65, w)
-            tmp["fraction_young"]   = safe_interp(col_lo_yg, col_hi_yg, w)
+                The old fallback was per-COLUMN (`if lo in tmp.columns`) and therefore dead
+                code: the pivot creates both anchor columns as soon as ANY municipality has
+                each census, so the blend branch always won. A municipality present in only
+                one census then hit `NaN*(1-w) + value*w = NaN` and lost its age structure in
+                EVERY interpolated year despite having a perfectly good census reading. That
+                silently emptied fraction_65plus/fraction_young for 149 MCAs (2.7% of the
+                panel, 5.25% of population) -- invisible downstream because
+                estimation_2_sleep median-fills these columns.
+
+                The fallback must run over ALL census years, not just the two brackets: for a
+                year after the last census the brackets collapse to (y_hi, y_hi), so `lo` and
+                `hi` are the SAME column and falling back to either one recovers nothing."""
+                idx = tmp.index
+
+                def col(y):
+                    c = f"{stem}_{y}"
+                    return tmp[c] if c in tmp.columns else pd.Series(np.nan, index=idx)
+
+                out = col(y_lo_c) * (1 - w) + col(y_hi_c) * w
+                for cy in sorted(census_years, key=lambda c: abs(c - yr)):
+                    if out.isna().any():
+                        out = out.fillna(col(cy))
+                return out
+
+            tmp["fraction_65plus"]  = safe_interp("fraction_65plus", w)
+            tmp["fraction_young"]   = safe_interp("fraction_young", w)
             tmp["age_interpolated"] = True
 
         rows.append(tmp[["municipio_code", "year",

@@ -1003,58 +1003,24 @@ _SEGMENT_VARS = ['seg_S2', 'seg_S3', 'seg_S4', 'seg_S5']
 # Coefficients are reported per the unit in brackets in the row label. Units are pinned to the
 # REST OF THE PAPER, not chosen freely: any regressor that also appears in the sleepiness/demand
 # tables is displayed in the unit it carries there, so a coefficient here is comparable to one
-# there. Those tables rescale exactly two variables, in the prep step
-# (estimation_1_demand_1_prep.py:225-226 / estimation_demand_link_common.py:192-193):
-#       gdp_per_capita            /= 10_000   -> "10k R$"
-#       cadunico_families_per1000 /= 100      -> "100s per 1k"
-# and leave EVERY other regressor raw (fractions stay fractions: `indice_basileia` is a fraction,
-# median 0.163, NOT basis points; the cost ratios, `risk_free_qoq`, `fraction_65plus`,
-# `fraction_young` and `connections_per100` are all raw in export_sleep_link_common.py).
-# We therefore display those raw too. The ONLY departure is `pix_users_pf_per1000`, which does not
-# appear in any sleepiness table (so nothing to match) and whose 0-1,869 range would otherwise
-# print as 0.0000; it is shown per 100 users, labelled as such.
-_UNIT_PP = (0.01, 'pp')          # ratio expressed in percentage points
-_UNIT_PP2 = (1e-4, 'pp$^{2}$')   # its square
-
-_DISPLAY_UNITS = {
-    # ---- DEMOGRAPHICS: units pinned to the sleepiness tables, so a coefficient here is directly
-    # comparable to one there. Do not "improve" these -- cross-table comparability is the point.
-    'gdp_per_capita':            (1e4,   r'10k R\$'),          # demand prep divides by 10,000
-    'cadunico_families_per1000': (100.0, '100s per 1k'),       # demand prep divides by 100
-    'fraction_65plus':           (1.0,   'fraction'),          # raw in the sleepiness tables
-    'fraction_young':            (1.0,   'fraction'),          # raw
-    'connections_per100':        (1.0,   'per 100 inhab.'),    # raw
-    'branches_per1000':          (1.0,   'per 1k'),            # not in sleepiness; keep the family raw
-    'pix_users_pf_per1000':      (100.0, 'per 100 per 1k'),    # not in sleepiness; 0-1,869 range
-    # ---- EVERYTHING ELSE: percentage points, chosen for READABILITY. These are ratios whose
-    # in-sample sd is ~0.002-0.03, so a one-unit (0 -> 100%) coefficient is ~1,000x any real move
-    # and prints in the hundreds or thousands (tax cost ratio was -1,657.85 raw, i.e. -0.65pp per
-    # sd). In pp the coefficient answers "per 1 percentage point", which is the interpretable
-    # margin. None of these appears in the sleepiness tables, so nothing is made incomparable.
-    'equity_ratio_lag':          _UNIT_PP,
-    'equity_ratio_lag_sq':       _UNIT_PP2,
-    'asset_return_qoq_lag':      _UNIT_PP,
-    'npl_provision_ratio_lag':   _UNIT_PP,
-    'credit_assets_lag':         _UNIT_PP,
-    'personnel_cost_ratio_lag':  _UNIT_PP,
-    'admin_cost_ratio_lag':      _UNIT_PP,
-    'tax_cost_ratio_lag':        _UNIT_PP,
-    'wholesale_ratio_lag':       _UNIT_PP,
-    'lci_lca_ratio_lag':         _UNIT_PP,
-    'indice_basileia_lag':       _UNIT_PP,
-    'risk_free_qoq':             _UNIT_PP,
-    'risk_free_qoq_sq':          _UNIT_PP2,
-    # ---- scale-free regressors
-    'log_total_assets_lag':      (1.0, 'log pt'),
-    'log_total_assets_lag_sq':   (1.0, '(log pt)$^{2}$'),
-    'has_ip':                    (1.0, 'indicator'),
-}
-
-
+# there. That pinning is now ENFORCED rather than documented: the unit table lives once, in
+# utils/state_transform.DISPLAY, and the sleepiness exporters, the descriptive tables and this
+# module all read the same object. Shares and rates are in percentage points throughout
+# (fraction_65plus / fraction_young moved from "fraction" to "pp" when the sleepiness tables
+# did, which is the whole reason the two are still comparable).
 def _display_unit(v):
-    """(scale, unit label) for a regressor; `_natl` variants inherit the base unit."""
-    base = v[:-5] if v.endswith('_natl') else v
-    return _DISPLAY_UNITS.get(base, (1.0, ''))
+    """(scale, unit label) for a regressor; `_natl` variants inherit the base unit.
+
+    The table now lives in utils/state_transform.DISPLAY, shared with the sleepiness
+    exporters and the descriptive tables. The comment above used to ask a reader to keep
+    this dict in sync with export_sleep_link_common.py by hand; the units are now a single
+    object, so cross-table comparability is structural rather than aspirational.
+
+    NOTE the polfunc builds its regressors in RAW panel units (it does not go through
+    state_transform.apply_scale), which is why `scaled=False` is the right convention
+    here and the returned scale is the display unit measured in raw units."""
+    from utils.state_transform import display_unit
+    return display_unit(v)
 
 
 def build_polfunc_table(results: dict, k: int, include_segments: bool = False) -> str:

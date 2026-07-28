@@ -166,14 +166,25 @@ class StateTransform:
     def level_of(self, col: str, raw: float) -> float:
         """The ESTIMATION-units value of a raw level.  This is what a
         counterfactual that flips a state to a literal value must use:
-        `dd0['pix_exists'] = tf.level_of('pix_exists', raw=0.0)`, never 0.0."""
+        `dd0['pix_exists'] = tf.level_of('pix_exists', raw=0.0)`, never 0.0.
+
+        Tracks `centering_enabled()`, so the flip stays correct under the
+        SLEEP_CENTER_STATES=0 rollback path instead of silently subtracting a
+        mean the data does not carry."""
         v = float(raw) / float(self.scale.get(col, 1.0))
-        return v - float(self.mean_scaled.get(col, 0.0))
+        if centering_enabled():
+            v -= float(self.mean_scaled.get(col, 0.0))
+        return v
 
     def levels(self, col: str):
         """(lo, hi) in estimation units for a registered dummy, else None."""
         d = self.binary_levels.get(col)
-        return (float(d["lo"]), float(d["hi"])) if d else None
+        if not d:
+            return None
+        if centering_enabled():
+            return (float(d["lo"]), float(d["hi"]))
+        f = float(self.scale.get(col, 1.0))
+        return (float(d["lo_raw"]) / f, float(d["hi_raw"]) / f)
 
     def center(self, df: pd.DataFrame) -> pd.DataFrame:
         """Subtract the persisted grand means, in place.  No-op under
@@ -310,7 +321,7 @@ _PP2   = (1e-4, 'pp$^{2}$')
 
 DISPLAY = {
     # ---- sleepiness state block -------------------------------------------------
-    'pix_exists':                (1.0,   'indicator'),
+    'pix_exists':                (1.0,   r'$0\to1$'),   # discrete difference, not a derivative
     'gdp_per_capita':            (1e4,   r'10k R\$'),
     'cadunico_families_per1000': (100.0, '100s per 1k'),
     'fraction_65plus':           _PP,
@@ -348,6 +359,11 @@ DISPLAY = {
 PHI_DISPLAY    = 100.0   # sleepiness second stage: pp of the sleepy share
 SPREAD_DISPLAY = 100.0   # sleepiness first stage: pp of the quarterly spread
 
+# Rows that are NOT an effect on the dependent variable's scale and so take no LHS
+# factor.  The control-function coefficient multiplies v_hat x lagged deposits: it is
+# deposits per deposit, already unit-free, and scaling it by 100 would be meaningless.
+NON_LHS_PARAMS = {'v_hat_x_lagged_dep'}
+
 
 def display_unit(var: str):
     """(u, label) for a regressor; `_natl` variants inherit the base unit."""
@@ -366,6 +382,8 @@ def display_mult(var: str, lhs: float = PHI_DISPLAY, scaled: bool = True) -> flo
     """
     v = str(var).replace('interaction_', '')
     base = v[:-5] if v.endswith('_natl') else v
+    if base in NON_LHS_PARAMS:
+        return 1.0
     u, _ = display_unit(base)
     f = float(SCALE.get(base, 1.0)) if scaled else 1.0
     return float(lhs) * float(u) / f
@@ -378,12 +396,25 @@ def display_level_div(var: str) -> float:
 
 
 def label_with_unit(base_label: str, var: str) -> str:
-    """'Fraction 65+' -> 'Fraction 65+ (pp)'.  Blank units append nothing, and a
-    label that already carries a parenthetical is left alone."""
+    """Attach the display unit to a row label.
+
+        'Fraction 65+'          -> 'Fraction 65+ (pp)'
+        'Basel Index ($t-1$)'   -> 'Basel Index (pp, $t-1$)'
+
+    A label that already ends in a parenthetical (the house style for lag markers)
+    gets the unit merged INTO it rather than a second pair of brackets appended --
+    otherwise the lag-suffixed instruments would silently lose their unit while the
+    table notes promise one on every row."""
+    base = base_label.rstrip()
     _, unit = display_unit(var)
-    if not unit or base_label.rstrip().endswith(')'):
+    if not unit:
         return base_label
-    return f"{base_label} ({unit})"
+    if base.endswith(')'):
+        i = base.rfind('(')
+        if i > 0:
+            return f"{base[:i]}({unit}, {base[i + 1:]}"
+        return base_label
+    return f"{base} ({unit})"
 
 
 __all__ = [

@@ -208,7 +208,9 @@ def main():
         'spread_a5': ('Spread (A5)',                   'bp',           0.01),
         'gdp_per_capita':             ('GDP per Capita',             'R\\$',         None),
         'pop_total':                  ('Population',                  'Thousands',    1e3),
-        'fraction_65plus':            ('Share Aged 65+',              '',             None),
+        # Shares in PERCENTAGE POINTS, matching the unit their coefficients carry in the
+        # sleepiness / BBL tables (utils/state_transform.DISPLAY: fraction_65plus = (0.01,'pp')).
+        'fraction_65plus':            ('Share Aged 65+',              'pp',           0.01),
         'cadunico_families_per1000':  ('CadÚnico Families',           'per 1,000',    None),
         'pix_users_pf_per1000':       ('PIX Users (PF)',              'per 1,000',    None),
         'pix_txns_pf':                ('PIX Transactions (PF)',       'Millions',     1e6),

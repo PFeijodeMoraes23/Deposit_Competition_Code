@@ -53,6 +53,22 @@ function pix_coefficient(cf_dir::String, estim::Int, spec_id::Int)::Float64
 end
 
 """
+    pix_level_zero(cf_dir, estim, spec) -> Float64
+
+The value the `pix_exists` COLUMN takes when Pix does not exist, in estimation units.
+The state block is grand-mean centred, so that is −mean(pix_exists) ≈ −0.53, NOT 0.0:
+the identity-link fallback below subtracts Υ_pix·(pix − this), and using 0.0 instead
+would evaluate a "no Pix" world in which 53% of markets still have Pix. Written by
+cf_4_upsilon_export.py alongside Υ_pix; falls back to 0.0 for pre-centering exports.
+"""
+function pix_level_zero(cf_dir::String, estim::Int, spec_id::Int)::Float64
+    f = joinpath(cf_dir, "upsilon_pix_E$(estim)_spec_$(spec_id).json")
+    isfile(f) || return 0.0
+    m = match(r"\"pix_level_zero\"\s*:\s*(-?[0-9.eE+]+)", read(f, String))
+    return m === nothing ? 0.0 : parse(Float64, m.captures[1])
+end
+
+"""
     load_phi_nopix(cf_dir, estim, spec, ctx) -> Union{Nothing,Vector{Float64}}
 
 Exact link-aware no-Pix φ, precomputed by `cf_4_upsilon_export.py` via `phi_from_native`
@@ -95,13 +111,16 @@ link-aware no-Pix φ from `load_phi_nopix`) is supplied it is used directly; oth
 identity-link fallback φ̂ − Υ_pix·pix is used (exact only for the linear specs E1/E2).
 """
 function cf4_pix_reallocation(ctx::CFDemandCtx, st::DepositSimState; upsilon_pix::Float64,
-                              T::Int=8, phi_nopix::Union{Nothing,Vector{Float64}}=nothing)
+                              T::Int=8, phi_nopix::Union{Nothing,Vector{Float64}}=nothing,
+                              pix_zero::Float64=0.0)
     pix, pc = _first_present(ctx.df, ["pix_exists", "pix_active"]; default=0.0)
     if phi_nopix === nothing
         # Identity-link fallback (exact only for E1/E2): drop the Pix term from the level φ̂.
-        # For a nonlinear link G this is a first-order approximation (Υ_pix is the AME); prefer
-        # the exact per-row export from cf_4_upsilon_export.py.
-        phi_cf = clamp.(st.phi .- upsilon_pix .* pix, 0.0, 0.999)
+        # The DEVIATION from the no-Pix level is what Υ_pix multiplies -- with the state block
+        # centred, the column's "no Pix" value is pix_zero ≈ −0.53, not 0. For a nonlinear link
+        # G this is a first-order approximation (Υ_pix is the AME); prefer the exact per-row
+        # export from cf_4_upsilon_export.py.
+        phi_cf = clamp.(st.phi .- upsilon_pix .* (pix .- pix_zero), 0.0, 0.999)
     else
         # Exact: φ^noPix = G(index − θ_pix·pix), already in [0,1] from phi_from_native.
         phi_cf = clamp.(phi_nopix, 0.0, 0.999)
@@ -123,6 +142,7 @@ function main_cf4()
     _, _, out_dir = get_paths(a["hpc"]; local_dir=a["local-dir"])
     cf_dir = joinpath(dirname(out_dir), "CF_FOUNDATION")
     υ   = pix_coefficient(cf_dir, a["estim"], a["spec"])
+    pix0 = pix_level_zero(cf_dir, a["estim"], a["spec"])          # centred "no Pix" level (≈ −0.53)
     phi_np = load_phi_nopix(cf_dir, a["estim"], a["spec"], ctx)   # exact link-aware φ^noPix, or nothing
     T   = 8   # medium-run (2y) reallocation horizon
     if phi_np === nothing
@@ -133,7 +153,7 @@ function main_cf4()
         log_status("  [CF4] exact link-aware no-Pix φ loaded (phi_from_native, Pix zeroed), " *
                    "$(length(phi_np)) rows | horizon=$T | Υ_pix=$(round(υ, sigdigits=4)) [AME, reporting]")
     end
-    res = cf4_pix_reallocation(ctx, st; upsilon_pix=υ, T=T, phi_nopix=phi_np)
+    res = cf4_pix_reallocation(ctx, st; upsilon_pix=υ, T=T, phi_nopix=phi_np, pix_zero=pix0)
     log_status("  [CF4] φ_cf ≤ φ̂ for $(round(100*mean(res.phi_cf .<= res.phi .+ 1e-12), digits=1))% of obs " *
                "(mean φ̂=$(round(mean(res.phi), digits=3)) → φ_cf=$(round(mean(res.phi_cf), digits=3)))")
 

@@ -57,6 +57,7 @@ except Exception:
 # 0. Global Paths and Parameters
 # ==============================================================================
 from utils import paths
+from utils import state_transform as _st
 from estimation_demand_link_common import build_market_size_and_shares, MAX_YEAR, MIN_YEAR
 _ROOT = Path(__file__).resolve().parents[2]
 DATA_DIR = paths.PROCESSED
@@ -209,21 +210,11 @@ def build_base_panel(panel_csv: Path) -> pd.DataFrame:
     else:
         df['is_state_owned'] = 0.0
 
-    if 'dummy_D_type' in df.columns:
-        _new_cols = {}
-        if 'risk_free_qoq_lag' in df.columns:
-            _new_cols['dummy_D_type_x_risk_free_qoq_lag'] = df['dummy_D_type'] * df['risk_free_qoq_lag']
-        if 'fraction_65plus' in df.columns:
-            _new_cols['dummy_D_type_x_fraction_65plus'] = df['dummy_D_type'] * df['fraction_65plus']
-        if 'fraction_young' in df.columns:
-            _new_cols['dummy_D_type_x_fraction_young'] = df['dummy_D_type'] * df['fraction_young']
-        if _new_cols:
-            df = pd.concat([df, pd.DataFrame(_new_cols, index=df.index)], axis=1)
-
-    if 'gdp_per_capita' in df.columns: df['gdp_per_capita'] /= 10000.0
-    if 'cadunico_families_per1000' in df.columns: df['cadunico_families_per1000'] /= 100.0
-    if 'pix_users_pf_per1000' in df.columns: df['pix_users_pf_per1000'] /= 100.0
-    if 'connections_per100' in df.columns: df['connections_per100'] /= 100.0
+    # Raw panel units -> estimation units. Factors live in utils/state_transform.SCALE,
+    # shared with estimation_2_sleep.build_pooled_data: phi is rebuilt here as
+    # params_native x these columns, so a scale that differs from the one theta was
+    # estimated under gives a silently wrong phi that still lies in [0,1].
+    _st.apply_scale(df)
 
     s_tech_finance = ['pix_users_pf_per1000', 'connections_per100', 'branches_per1000']
     for col in s_tech_finance:
@@ -252,6 +243,10 @@ def build_base_panel(panel_csv: Path) -> pd.DataFrame:
         logging.warning(f"Banked correction panel not found at {BANKED_CSV}; fallback 1.1 used.")
         df['banked_correction'] = np.nan
 
+    # GRAND-MEAN CENTERING -- last, and by the SAME persisted means the sleepiness
+    # estimation used (loaded, never recomputed: this frame is a different sample, so a
+    # locally-computed mean would silently shift the index phi is rebuilt from).
+    _st.load_transform().center(df)
     return df
 
 def process_specification(args):

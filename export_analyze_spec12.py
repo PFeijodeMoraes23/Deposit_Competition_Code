@@ -13,6 +13,15 @@ import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
 from scipy import stats
 
+# Row labels and display units come from the SHARED registry, so the sleepiness tables,
+# the BBL policy functions and the descriptives cannot state different units for the same
+# variable. There used to be four independent copies of the label dict.
+_THIS_DIR = os.path.dirname(os.path.abspath(__file__))
+if _THIS_DIR not in sys.path:
+    sys.path.insert(0, _THIS_DIR)
+from utils import state_transform as _st  # noqa: E402
+from export_sleep_link_common import clean_name as _clean_name  # noqa: E402
+
 # Mock NonLinearResults for unpickling estimation_3_sleep pickles.
 # Must match the real class's __init__ signature so pickle restores __dict__ correctly.
 class NonLinearResults:
@@ -107,9 +116,15 @@ def _build_phi_regressors(df_sub: pd.DataFrame, phi_params) -> np.ndarray:
                 if sv in df_sub.columns:
                     v = df_sub[sv].values.astype(float)
                 elif 'year' in df_sub.columns and 'quarter' in df_sub.columns:
-                    v = ((df_sub['year'] > 2020) |
-                         ((df_sub['year'] == 2020) & (df_sub['quarter'] == 4))
-                         ).astype(float).values
+                    # Reconstruct the RAW indicator, then map it onto the levels the
+                    # estimation actually used. Emitting raw {0,1} here would inject an
+                    # uncentred column into a centred index -- silently, and the resulting
+                    # phi would still look like a plausible number in [0,1].
+                    raw = ((df_sub['year'] > 2020) |
+                           ((df_sub['year'] == 2020) & (df_sub['quarter'] == 4))
+                           ).astype(float).values
+                    _lv = _st.dummy_levels('pix_exists')
+                    v = raw if _lv is None else np.where(raw > 0.5, _lv[1], _lv[0])
                 else:
                     v = np.zeros(n)
             elif sv in df_sub.columns:
@@ -174,29 +189,12 @@ def calc_agg_delta(d_sub: pd.DataFrame, col: str, res, is_logistic: bool) -> tup
     return mean, pd.Series(se_vals)
 
 def nice_var_name(var):
+    """Row label from the SHARED registry (units included). The one local override is
+    'nr_lagged_dep', which this table heads as the Constant rather than as a regressor."""
     v = str(var).replace('interaction_', '')
-    labels = {
-        'nr_lagged_dep': 'Constant',
-        'gdp_per_capita': 'GDP \\textit{per capita} (10k R\\$)',
-        'cadunico_families_per1000': 'CadUnico Families (100s per 1k)',
-        'fraction_65plus': 'Fraction 65+',
-        'fraction_young': 'Fraction Young',
-        'risk_free_qoq_lag': 'Lagged Selic Rate',
-        'connections_per100': 'Broadband Connections (per 100)',
-        'gdp_growth_yoy': 'GDP Growth (YoY)',
-        'pix_exists': 'Pix Available',
-        'v_hat_x_lagged_dep': 'CF: $\\hat{v} \\times$ Lagged Deposits',
-        'const': 'Constant',
-        'constant': 'Constant',
-        'tax_cost_ratio_lag': 'Tax Cost Ratio ($t-1$)',
-        'personnel_cost_ratio_lag': 'Personnel Cost Ratio ($t-1$)',
-        'admin_cost_ratio_lag': 'Admin Cost Ratio ($t-1$)',
-        'indice_basileia_lag': 'Basel Index (pp, $t-1$)',
-        'lci_lca_ratio_lag': 'LCI/LCA Ratio ($t-1$)',
-        'wholesale_ratio_lag': 'Wholesale Ratio ($t-1$)',
-        'leave_one_out_mean_spread': 'Leave-out Mean Spread',
-    }
-    return labels.get(v, v.replace('_', '\\_'))
+    if v in ('nr_lagged_dep', 'const', 'constant'):
+        return 'Constant'
+    return _clean_name(v)
 
 # Column headers reference the estimation-strategy enumeration in V_Main.tex
 # (\item\label{estimation:*} at lines ~402-408), so a column reads as its item number
@@ -268,7 +266,12 @@ def build_latex_table(results_dict, order_keys, target_vars, out_path, title="",
     # leaving \textwidth-7pt for the cell content.
     _stage_note = ("" if is_first_stage else
                    r"; the linear strategies report coefficients and the single-index/joint "
-                   r"strategies report average marginal effects (AME)")
+                   r"strategies report average marginal effects (AME), in percentage points "
+                   r"of the sleepy share per the unit given in the row label, with shares and "
+                   r"rates in percentage points and Pix Available a discrete $0\to1$ "
+                   r"difference. $t$-statistics and stars are invariant to these units. State "
+                   r"variables are grand-mean centred, so the Constant is $\hat{\phi}$ at the "
+                   r"average market")
     notes_str = (r"\multicolumn{" + str(len(order_keys) + 1) + r"}{p{\dimexpr\textwidth-2\tabcolsep\relax}}"
                  r"{\scriptsize\textit{Notes:} Standard errors (wild cluster bootstrap at the "
                  r"conglomerate level, applied uniformly to every column; \textcite{cameron2008bootstrap}, "
@@ -320,7 +323,11 @@ def build_latex_table(results_dict, order_keys, target_vars, out_path, title="",
             pvalues = getattr(res, 'pvalues', pd.Series(dtype=float))
 
             if v in params.index:
-                c_str, se_str = format_value(params[v], bse[v], pvalues[v], digits=4)
+                # Display units from the shared registry: coefficient and SE only --
+                # p-values and stars are invariant to a change of units.
+                m = _st.display_mult(v, lhs=_st.SPREAD_DISPLAY if is_first_stage
+                                     else _st.PHI_DISPLAY)
+                c_str, se_str = format_value(params[v] * m, bse[v] * m, pvalues[v], digits=4)
                 row_cf.append(c_str)
                 row_se.append(se_str)
             else:
@@ -337,10 +344,13 @@ def build_latex_table(results_dict, order_keys, target_vars, out_path, title="",
     # The single-index/joint estimators carry no constant AME (the level is in the monotone
     # link), so this row gives the interpretable baseline sleepiness for every column.
     if mean_phi is not None and not is_first_stage:
-        row_meanphi = [r"Mean $\hat{\phi}$ (level)"]
+        # phi is a LEVEL here, so it carries PHI_DISPLAY too -- otherwise this would be
+        # the one row still in [0,1] while every coefficient above it is in pp.
+        row_meanphi = [r"Mean $\hat{\phi}$ (pp)"]
         for col in order_keys:
             mp = mean_phi.get(col)
-            row_meanphi.append(f"{mp:.3f}" if mp is not None and pd.notna(mp) else "-")
+            row_meanphi.append(f"{mp * _st.PHI_DISPLAY:.2f}"
+                               if mp is not None and pd.notna(mp) else "-")
         tex.append(" & ".join(row_meanphi) + r" \\")
 
     row_nobs = ["Observations"]
@@ -458,7 +468,9 @@ def build_latex_table_landscape(results_dict, order_keys, target_vars, out_path,
             bse = getattr(res, 'bse', pd.Series(dtype=float))
             pvalues = getattr(res, 'pvalues', pd.Series(dtype=float))
             if v in params.index:
-                c_str, se_str = format_value(params[v], bse[v], pvalues[v], digits=4)
+                m = _st.display_mult(v, lhs=_st.SPREAD_DISPLAY if first_stage
+                                     else _st.PHI_DISPLAY)
+                c_str, se_str = format_value(params[v] * m, bse[v] * m, pvalues[v], digits=4)
                 row_cf.append(c_str); row_se.append(se_str)
             else:
                 row_cf.append("-"); row_se.append("-")
@@ -468,10 +480,11 @@ def build_latex_table_landscape(results_dict, order_keys, target_vars, out_path,
 
     tex.append(r"\midrule")
     if mean_phi is not None:
-        row_mp = [r"Mean $\hat{\phi}$ (level)"]
+        row_mp = [r"Mean $\hat{\phi}$ (pp)"]
         for col in order_keys:
             mp = mean_phi.get(col)
-            row_mp.append(f"{mp:.3f}" if mp is not None and pd.notna(mp) else "-")
+            row_mp.append(f"{mp * _st.PHI_DISPLAY:.2f}"
+                          if mp is not None and pd.notna(mp) else "-")
         tex.append(" & ".join(row_mp) + r" \\")
 
     row_nobs = ["Observations"]; row_r2 = ["$R^2$"]; row_fstat = ["F-Statistic"]
@@ -499,7 +512,12 @@ def build_latex_table_landscape(results_dict, order_keys, target_vars, out_path,
 
     _stage_note = ("" if first_stage else
                    r"; the linear strategies report coefficients and the single-index/joint "
-                   r"strategies report average marginal effects (AME)")
+                   r"strategies report average marginal effects (AME), in percentage points "
+                   r"of the sleepy share per the unit given in the row label, with shares and "
+                   r"rates in percentage points and Pix Available a discrete $0\to1$ "
+                   r"difference. $t$-statistics and stars are invariant to these units. State "
+                   r"variables are grand-mean centred, so the Constant is $\hat{\phi}$ at the "
+                   r"average market")
     tex += [r"\bottomrule",
             r"\end{tabular}",
             r"\begin{tablenotes}[flushleft]",
