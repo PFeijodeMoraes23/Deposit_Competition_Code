@@ -9,7 +9,11 @@ CF correction: v_hat x lagged_deposits (linear in residual, interacted with lagg
 Outputs are directed to ESTIMATION_OUTPUT/DEMAND_PREP/est2
 
 CLI Options:
-  --spec12    Only run spec 12 (Tech x IV_HausmanFull)
+  --spec12          Only run spec 12 (Tech x IV_HausmanFull)
+  --write-centers   Rebuild ESTIMATION_OUTPUT/DEMAND_PREP/state_centering_means.json
+                    (the grand means of the state block) and exit. THE ONLY WRITER --
+                    every other caller, including E1 and all three demand preps, only
+                    ever LOADS it. See utils/state_transform.py.
 """
 import argparse
 import os
@@ -49,6 +53,7 @@ warnings.filterwarnings("ignore", message="covariance of constraints does not ha
 # GLOBAL SETUP
 # ==============================================================================
 from utils import paths as _paths_mod
+from utils import state_transform as _st
 DATA_DIR = _paths_mod.PROCESSED
 _PANEL_WITH_FEES = DATA_DIR / "market_panel_with_fees.csv"
 PANEL_CSV = _PANEL_WITH_FEES if _PANEL_WITH_FEES.exists() else DATA_DIR / "market_panel.csv"
@@ -157,7 +162,13 @@ SLEEP_MIN_YEAR = int(os.environ.get('SLEEP_MIN_YEAR', _WINDOW_MIN_YEAR))
 SLEEP_MAX_YEAR = int(os.environ.get('SLEEP_MAX_YEAR', _WINDOW_MAX_YEAR))
 
 
-def build_pooled_data(time_block=False):
+def build_pooled_data(time_block=False, center=True):
+    """The canonical pooled B+D prep. E1 (via build_unified_frame) and E3-E9 (via
+    estimation_sleep_common) both go through it, so the state block is scaled and
+    centred in exactly one place.
+
+    center=False is used ONLY by --write-centers, which must see the frame in
+    scaled-but-uncentred units to compute the grand means in the first place."""
     df_raw = load_panel_cached(PANEL_CSV) if load_panel_cached else pd.read_csv(PANEL_CSV, dtype={'mca_code': str}, low_memory=False)
     df_raw = df_raw.copy()  # defragment: market_panel_with_fees has many columns from merges
 
@@ -211,10 +222,11 @@ def build_pooled_data(time_block=False):
     for col, factor in scale_cols.items():
         if col in df.columns: df[col] /= factor
 
-    if 'gdp_per_capita' in df.columns: df['gdp_per_capita'] /= 10000.0
-    if 'cadunico_families_per1000' in df.columns: df['cadunico_families_per1000'] /= 100.0
-    if 'connections_per100' in df.columns: df['connections_per100'] /= 100.0
-    if 'indice_basileia_lag' in df.columns: df['indice_basileia_lag'] *= 100.0
+    # Raw panel units -> estimation units. The factors live in utils/state_transform.SCALE,
+    # which the three demand preps import too: phi is rebuilt downstream as params_native x
+    # parquet columns, so a site that scales differently from the site that estimated theta
+    # yields a silently wrong phi that still lies in [0,1].
+    _st.apply_scale(df)
 
     state_vars_to_fill = ['gdp_per_capita', 'cadunico_families_per1000', 'fraction_65plus', 'fraction_young', 'connections_per100']
 
@@ -243,6 +255,17 @@ def build_pooled_data(time_block=False):
 
     if time_block:
         df = add_time_variables(df)
+
+    # GRAND-MEAN CENTERING -- must be the LAST thing that touches the state block.
+    #   * after the :207 dropna, or S_bar is not the estimation-sample mean;
+    #   * after both imputations above, or the persisted mean is an unfilled-sample mean;
+    #   * after add_time_variables, because gdp_growth_yoy = gpc/gpc.shift(4) - 1 is
+    #     scale-invariant but NOT shift-invariant -- centering gdp_per_capita first puts
+    #     near-zero values in that denominator and corrupts the whole time block.
+    # Pure reparametrisation: slopes/AMEs/phi unchanged, theta_0 -> theta_0 + sum_k theta_k S_bar_k,
+    # i.e. the constant becomes phi-hat at the average market instead of phi at S = 0.
+    if center:
+        _st.load_transform().center(df)
     return df
 
 # ==============================================================================
@@ -422,8 +445,21 @@ def run_plotting_phase(spec12_only=False):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Estimation 2: Pooled B+D Sleepiness (Linear)")
     parser.add_argument('--spec12', action='store_true', help='Only run spec 12 (Tech x IV_HausmanFull)')
+    parser.add_argument('--write-centers', action='store_true',
+                        help='Rebuild state_centering_means.json from the pooled frame and exit')
     args = parser.parse_args()
 
     pd.options.mode.chained_assignment = None
+
+    if args.write_centers:
+        # ALWAYS the time_block=True frame, so the persisted vector carries every CENTER
+        # entry (a time_block=False frame would silently omit gdp_growth_yoy and leave two
+        # JSONs racing for one path). add_time_variables drops no rows, so the seven shared
+        # means are identical either way -- but "write once, load always" makes that a
+        # guarantee rather than a coincidence.
+        _df = build_pooled_data(time_block=True, center=False)
+        _st.write_transform(_df)
+        raise SystemExit(0)
+
     run_pooled_phase(spec12_only=args.spec12)
     run_plotting_phase(spec12_only=args.spec12)
