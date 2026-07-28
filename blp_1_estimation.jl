@@ -35,6 +35,7 @@ using JSON3, Serialization, ArgParse, Printf, Dates
 
 # Shared SE machinery (wild cluster bootstrap + analytical GMM sandwich, BLP_SE_METHOD).
 include(joinpath(@__DIR__, "se_common.jl"))
+include(joinpath(@__DIR__, "of_root.jl"))
 
 # ── Optional: true L-BFGS-B outer solver (Byrd–Lu–Nocedal–Zhu) ──────────────────
 # LBFGSB.jl handles the box directly (active set + projected line search), whereas
@@ -218,8 +219,7 @@ function get_paths(is_hpc::Bool; local_dir=nothing)
         if local_dir !== nothing
             data_dir = local_dir
         else
-            _root    = dirname(dirname(dirname(abspath(@__FILE__))))
-            data_dir = joinpath(_root, "BCB", "Egan_et_al_2025_Rep", "processed")
+            data_dir = joinpath(resolve_of_root(), "BCB", "Egan_et_al_2025_Rep", "processed")
         end
         input_dir  = joinpath(data_dir, "ESTIMATION_OUTPUT", "DEMAND_PREP")
         draws_dir  = joinpath(data_dir, "ESTIMATION_OUTPUT", "BLP_DRAWS")

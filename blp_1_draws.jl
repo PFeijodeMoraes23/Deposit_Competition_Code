@@ -35,6 +35,8 @@ using Parquet2, DataFrames, LinearAlgebra, Statistics
 using Random, QuasiMonteCarlo, Distributions
 using JSON3, Serialization, ArgParse, Printf, Dates
 
+include(joinpath(@__DIR__, "of_root.jl"))
+
 # ==========================================================================
 # 0. Constants (must match blp_loop.jl)
 # ==========================================================================
@@ -72,8 +74,7 @@ function get_paths(is_hpc::Bool; local_dir=nothing)
         if local_dir !== nothing
             data_dir = local_dir
         else
-            _root    = dirname(dirname(dirname(abspath(@__FILE__))))
-            data_dir = joinpath(_root, "BCB", "Egan_et_al_2025_Rep", "processed")
+            data_dir = joinpath(resolve_of_root(), "BCB", "Egan_et_al_2025_Rep", "processed")
         end
         input_dir  = joinpath(data_dir, "ESTIMATION_OUTPUT", "DEMAND_PREP")
         output_dir = joinpath(data_dir, "ESTIMATION_OUTPUT", "BLP_DRAWS")

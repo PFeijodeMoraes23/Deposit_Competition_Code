@@ -62,6 +62,8 @@ using JSON3, Serialization, Printf, Dates
 using Distributions   # t/χ² p-values for the LaTeX result tables
 using Random          # MersenneTwister for the wild cluster bootstrap
 
+include(joinpath(@__DIR__, "of_root.jl"))
+
 # ==========================================================================
 # 0. Constants
 # ==========================================================================
@@ -146,8 +148,7 @@ end
 # 0b. Paths
 # ==========================================================================
 function get_paths()
-    _root     = dirname(dirname(dirname(abspath(@__FILE__))))
-    data_dir  = joinpath(_root, "BCB", "Egan_et_al_2025_Rep", "processed")
+    data_dir  = joinpath(resolve_of_root(), "BCB", "Egan_et_al_2025_Rep", "processed")
     input_dir = joinpath(data_dir, "ESTIMATION_OUTPUT", "DEMAND_PREP")
     output_dir= joinpath(data_dir, "ESTIMATION_OUTPUT", "BLP_RESULTS")
     return input_dir, output_dir
