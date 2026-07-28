@@ -306,6 +306,7 @@ def _prepare_output(out_dir, type_report_frames):
               "trusting or deleting them.")
     overwrite = sorted(existing & regenerated)
     if not overwrite:
+        _prune_old_backups(out_dir)
         return None
     ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     bak_dir = f"{out_dir}_bak_{ts}"
@@ -314,7 +315,22 @@ def _prepare_output(out_dir, type_report_frames):
           f"{os.path.basename(bak_dir)}")
     for name in overwrite:
         shutil.copy2(os.path.join(out_dir, name), os.path.join(bak_dir, name))
+    _prune_old_backups(out_dir)
     return bak_dir
+
+
+def _prune_old_backups(out_dir, keep=1):
+    """Retention: keep only the newest ``keep`` timestamped _bak dirs.
+
+    Without this every refresh leaves another full-size snapshot behind (three
+    had accumulated to 23 GB by 2026-07).  The ``_bak_%Y%m%d_%H%M%S`` suffix is
+    fixed-width, so lexical order is chronological and the bak the caller just
+    wrote is always the survivor.
+    """
+    baks = sorted(p for p in glob.glob(f"{out_dir}_bak_*") if os.path.isdir(p))
+    for old in (baks[:-keep] if keep > 0 else baks):
+        print(f"Pruning old backup: {os.path.basename(old)}")
+        shutil.rmtree(old, ignore_errors=True)
 
 
 def _verify(out_dir: str, bak_dir: str):
