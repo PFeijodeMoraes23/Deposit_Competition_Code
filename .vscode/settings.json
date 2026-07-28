@@ -37,5 +37,6 @@
     // push!, clamp., max.) and type-alias constructors (GPU_T = Float64). None are real errors —
     // the full estimation pipeline runs — so only this one check is disabled. All other Julia
     // lints (undefined refs, unused vars, etc.) remain on.
-    "julia.lint.call": false
+    "julia.lint.call": false,
+    "git.ignoreLimitWarning": true
 }
