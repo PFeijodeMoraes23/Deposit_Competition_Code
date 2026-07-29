@@ -57,9 +57,31 @@ FE_TIME_COL = "time_id"
 # subsample of entities (the link/phi/inference stay exact on full N in Python).
 # All env-overridable; USE_JULIA_SIEVE=0 falls back to the pure-Python search.
 USE_JULIA_SIEVE = os.environ.get("USE_JULIA_SIEVE", "1") != "0"
-SUBSAMPLE_FRAC = float(os.environ.get("SLEEP_SUBSAMPLE_FRAC", "0.2"))
+# FIX 1 (2026-07-29): was 0.2. The Julia theta search ran on a 20% subsample and its answer
+# was then FROZEN (theta_fixed) with no full-sample refinement, which drove E7 to a corner
+# solution loading 0.988 of a unit-norm theta on risk_free_qoq_lag -- a national series with
+# ~36 distinct values that a subsample makes look maximally explanatory. The saturated link
+# that produced collapsed every E7 AME by ~700x. Search on the full sample.
+SUBSAMPLE_FRAC = float(os.environ.get("SLEEP_SUBSAMPLE_FRAC", "1.0"))
+# FIX 2: bounded full-sample polish from whichever candidate direction wins. 0 disables.
+SIEVE_REFINE_MAXITER = int(os.environ.get("SLEEP_SIEVE_REFINE_MAXITER", "60"))
 MAXITER_MULT = int(os.environ.get("SLEEP_MAXITER_MULT", "40"))
-JULIA_THREADS = int(os.environ.get("SLEEP_JULIA_THREADS", "2"))
+# The Julia engine parallelises the multistart across starts (`@threads for s in 1:nst`,
+# sleep_joint_sieve.jl:294), so ADDITIONAL STARTS ARE NEARLY FREE IN WALL-CLOCK as long as
+# threads >= starts. This box has 12 logical cores and we were using 2, i.e. the search was
+# 3x narrower than it could be at the same elapsed time -- which mattered because the
+# objective turned out to be flat and multimodal (E7 landed in a Selic corner at an R2 of
+# 0.95230 vs 0.95235 for the good direction).
+JULIA_THREADS = int(os.environ.get("SLEEP_JULIA_THREADS",
+                                   str(max(2, min(8, (os.cpu_count() or 4) - 4)))))
+# Starts for the joint sieve. Was hardcoded 2; now env-overridable and matched to threads.
+SIEVE_N_STARTS = int(os.environ.get("SLEEP_SIEVE_N_STARTS", str(max(2, JULIA_THREADS))))
+# Starts for the NLLS logit (E3/E4, and the warm start E5-E8 inherit). Was a single start
+# from zeros. That matters beyond E3/E4: fit_single_index never re-optimises theta, so E5/E6
+# take whatever direction this fit lands on -- and on the joint-sieve full-sample candidate
+# scan the logit direction scored WORST of four (164,913 vs 160,940). Sequential, so each
+# extra start costs one more least_squares solve; 4 is a reasonable default.
+NLLS_N_STARTS = int(os.environ.get("SLEEP_NLLS_N_STARTS", "4"))
 # Opt 8: drop the LS loss during the grid (robust feeds phi). Set DROP_LS=0 to keep it.
 DROP_LS = os.environ.get("SLEEP_DROP_LS", "1") != "0"
 
@@ -96,14 +118,17 @@ def _exec_spec(args):
 
     if kind == "logit":
         res = fit_nlls_link(df_target, s_cols, has_cf=has_cf, link="logit", loss="cauchy",
-                            fe_time_col=FE_TIME_COL)
+                            fe_time_col=FE_TIME_COL, n_starts=NLLS_N_STARTS)
         return res, None, spec_name, res_fs
 
     if kind == "single_index":
         # warm start only: fit_single_index reads params_native (+ the index), never the
         # logit's AMEs/SEs -> skip its wild bootstrap.
+        # n_starts matters HERE as much as for E3/E4: fit_single_index never re-optimises
+        # theta, so E5/E6 inherit exactly the direction this call returns.
         logit_res = fit_nlls_link(df_target, s_cols, has_cf=has_cf, link="logit", loss="cauchy",
-                                  fe_time_col=FE_TIME_COL, bootstrap=False)
+                                  fe_time_col=FE_TIME_COL, bootstrap=False,
+                                  n_starts=NLLS_N_STARTS)
         res = fit_single_index(df_target, s_cols, has_cf=has_cf, logit_res=logit_res, degree=3,
                                fe_time_col=FE_TIME_COL, phi_band=is_spec12)
         return res, None, spec_name, res_fs
@@ -113,26 +138,43 @@ def _exec_spec(args):
         fe_tc = FE_TIME_COL if link == "sieve" else None   # kernel two-way FE not yet wired
         # warm start only: _init_theta reads params_native -> skip its wild bootstrap.
         logit_res = fit_nlls_link(df_target, s_cols, has_cf=has_cf, link="logit", loss="cauchy",
-                                  fe_time_col=fe_tc, bootstrap=False)
+                                  fe_time_col=fe_tc, bootstrap=False, n_starts=NLLS_N_STARTS)
         init = _init_theta(logit_res, s_cols)
-        n_starts = 1 if link == "kernel" else 2   # kernel: multistart impractical at full N
+        # kernel: multistart impractical at full N. sieve: starts run in PARALLEL threads
+        # in the Julia engine, so widening the search costs wall-clock only when
+        # starts > threads.
+        n_starts = 1 if link == "kernel" else SIEVE_N_STARTS
         warm = init if warm_theta is None else warm_theta   # opt 9: cross-spec warm start
         # Opt 1+4: Julia subsample theta-search for the sieve (kernel stays Python).
         theta_jl = None
         if link == "sieve" and USE_JULIA_SIEVE:
             try:
                 from sleep_joint_julia import julia_theta
+                # n_starts MUST be passed: julia_theta defaults to 2 and it is the JULIA
+                # search that actually picks the direction here (the Python multistart is
+                # skipped whenever theta_fixed is returned). Raising only the Python-side
+                # n_starts changed nothing -- the engine still reported "starts=2".
                 theta_jl = julia_theta(df_target, s_cols, has_cf=has_cf, loss="robust", fe_time_col=fe_tc,
                                        subsample_frac=SUBSAMPLE_FRAC, maxiter_mult=MAXITER_MULT,
-                                       init_theta=warm, seed=0, threads=JULIA_THREADS)
+                                       init_theta=warm, seed=0, threads=JULIA_THREADS,
+                                       n_starts=SIEVE_N_STARTS)
             except Exception as e:
                 print(f"  [julia_theta] error, Python fallback: {e}")
                 theta_jl = None
+        # FIX 3: give the full-sample scan more than one candidate to choose between --
+        # the Julia direction, the logit warm start, and the equal-weight vector are all
+        # scored on the FULL-sample objective inside fit_joint_single_index, and the best
+        # wins. Previously the Julia (subsample) answer was simply frozen.
+        cands = []
+        if theta_jl is not None and warm is not None:
+            cands.append(("logit_warm", warm))
         res_robust = fit_joint_single_index(df_target, s_cols, has_cf=has_cf, link=link,
                                             loss="robust", init_theta=warm,
                                             n_starts=n_starts, boot_B=999, boot_scheme="webb", seed=0,
                                             label=f"{spec_name}/robust", fe_time_col=fe_tc,
-                                            theta_fixed=theta_jl, phi_band=is_spec12)
+                                            theta_fixed=theta_jl, phi_band=is_spec12,
+                                            theta_candidates=cands,
+                                            refine_maxiter=SIEVE_REFINE_MAXITER)
         # Opt 8: drop the LS loss during the grid (robust feeds phi).
         if DROP_LS:
             res_ls = None

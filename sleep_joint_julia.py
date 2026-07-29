@@ -97,11 +97,25 @@ def julia_theta(df, state_cols, has_cf, loss="robust", fe_time_col="time_id",
         if os.path.exists(SYSIMAGE):
             cmd += ["--sysimage", SYSIMAGE]
         cmd += ["-t", str(threads), ENGINE, os.path.join(wd, "manifest.txt")]
-        r = subprocess.run(cmd, capture_output=True, text=True)
+        # STREAM the engine's output instead of capture_output=True. The search runs for
+        # tens of minutes on the full sample, and buffering everything until exit made the
+        # log look dead -- on 2026-07-29 that cost real time diagnosing a "hung" job that
+        # was simply blocked on this subprocess. Echo each line as it arrives, and keep a
+        # tail for the failure message.
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                text=True, bufsize=1)
+        tail = []
+        for line in proc.stdout:
+            line = line.rstrip()
+            if line:
+                print(f"    [julia] {line}", flush=True)
+                tail.append(line)
+                del tail[:-20]
+        rc = proc.wait()
         tpath = os.path.join(wd, "theta_out.bin")
-        if r.returncode != 0 or not os.path.exists(tpath):
-            print(f"  [julia_theta] FAILED (rc={r.returncode}); falling back to Python.\n"
-                  f"    {r.stderr.strip()[-400:]}")
+        if rc != 0 or not os.path.exists(tpath):
+            print(f"  [julia_theta] FAILED (rc={rc}); falling back to Python.\n"
+                  "    " + "\n    ".join(tail[-8:]))
             return None
         theta = np.frombuffer(open(tpath, "rb").read(), np.float64).copy()
         return theta / (np.linalg.norm(theta) + 1e-12)

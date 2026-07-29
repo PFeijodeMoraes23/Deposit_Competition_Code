@@ -238,7 +238,7 @@ def _linear_warm_start(y_dm, X, Z, CF):
 
 
 def fit_nlls_link(df, state_cols, has_cf, link, loss="cauchy", fe_time_col=None,
-                  bootstrap=True):
+                  bootstrap=True, init=None, n_starts=1):
     """NLLS sleepiness fit with link in {'logit','probit','uniform'}. Returns a
     NonLinearResults (params = AMEs for tables; params_native = index coefs for phi).
     fe_time_col (e.g. 'time_id') adds a second additive FE => two-way (entity+time)
@@ -269,14 +269,67 @@ def fit_nlls_link(df, state_cols, has_cf, link, loss="cauchy", fe_time_col=None,
     CF = df_ss[CF_cols].values.astype(float) if has_cf else np.empty((len(df_ss), 0), dtype=float)
     K, G = X.shape[1], CF.shape[1]
 
-    if link == "uniform":
-        init = _linear_warm_start(y_dm, X, Z, CF)          # bound imposed around the OLS fit
-    else:
-        init = np.zeros(K + G)
+    # `init` lets a caller probe whether this single start is landing in a local
+    # optimum. E3/E4 otherwise run ONE start from zeros, and E5/E6 inherit whatever
+    # direction that produces (fit_single_index never re-optimises theta), so a bad
+    # basin here propagates silently to four reported estimators.
+    _args = (y_dm, X, Z, CF, entity_idx, link, ecounts, tinv, tcounts)
 
-    res_lsq = least_squares(_nlls_resid, init,
-                            args=(y_dm, X, Z, CF, entity_idx, link, ecounts, tinv, tcounts),
-                            method="trf", loss=loss)
+    if init is not None:
+        starts = [("caller", np.asarray(init, float))]
+        if starts[0][1].shape != (K + G,):
+            raise ValueError(f"init has shape {starts[0][1].shape}, expected {(K + G,)}")
+    else:
+        # MULTISTART. This used to be a single start from zeros, which is thin for a
+        # non-convex M-estimator -- and it propagates: fit_single_index (E5/E6) never
+        # re-optimises theta, it inherits whatever direction this fit produces. On the
+        # joint-sieve full-sample candidate scan the logit direction scored WORST of four
+        # (164,913 vs 160,940 for the best), so the inherited direction was measurably poor.
+        starts = [("zeros", np.zeros(K + G))]                       # production baseline
+        lw = _linear_warm_start(y_dm, X, Z, CF)                     # OLS-implied direction
+        if np.all(np.isfinite(lw)):
+            starts.append(("linear", lw))
+        # Random directions, SCALE-AWARE: the state columns are centred but not
+        # standardised (gdp_per_capita ~O(1) vs fraction_65plus ~O(0.03)), so an isotropic
+        # draw in raw coefficient space would be dominated by the small-SD columns. Draw in
+        # standardised space and divide back, then normalise so the index has unit variance.
+        sd = X.std(axis=0); sd[sd <= 0] = 1.0
+        rng_ms = np.random.default_rng(12345)
+        while len(starts) < max(1, int(n_starts)):
+            th = rng_ms.standard_normal(K) / sd
+            v = X @ th
+            s = float(v.std())
+            if not np.isfinite(s) or s <= 0:
+                continue
+            starts.append((f"rand{len(starts)}", np.concatenate([th / s, np.zeros(G)])))
+
+    best = None
+    costs = []
+    for nm, s0 in starts:
+        try:
+            r = least_squares(_nlls_resid, s0, args=_args, method="trf", loss=loss)
+        except Exception as exc:                      # a bad start must not kill the fit
+            print(f"  [NLLS-{link}] start {nm} failed: {exc}")
+            continue
+        costs.append((float(r.cost), nm))
+        if best is None or r.cost < best[0].cost:
+            best = (r, nm)
+    if best is None:
+        return None
+    res_lsq, best_nm = best
+
+    if len(costs) > 1:
+        costs.sort()
+        spread = costs[-1][0] - costs[0][0]
+        print(f"  [NLLS-{link}] multistart: " + ", ".join(f"{nm}={c:.6g}" for c, nm in costs) +
+              f" | winner={best_nm} | spread={spread:.3g}")
+        if spread <= 1e-6 * max(1.0, abs(costs[0][0])):
+            print(f"  [NLLS-{link}] NOTE: starts agree to <1e-6 -- the index direction is "
+                  "weakly identified here; the optimizer is not what is choosing it.")
+        elif best_nm != "zeros":
+            print(f"  [NLLS-{link}] NOTE: '{best_nm}' beat the production 'zeros' start "
+                  f"by {costs[-1][0] - costs[0][0]:.6g} -- the single-start fit was in a "
+                  "worse basin.")
     idx = [f"interaction_{sv}" if sv != "constant" else "nr_lagged_dep" for sv in state_cols] + CF_cols
 
     cl = df_ss["CodConglomeradoPrudencial"].astype(str)
@@ -731,6 +784,7 @@ def _fit_link_kernel(v, Z, cf_dm, y_dm, einv, counts, bw, grid, wts=None,
 
 def fit_joint_single_index(df, state_cols, has_cf, link="sieve", loss="ls",
                            n_interior=5, degree=3, n_starts=4, init_theta=None,
+                           theta_candidates=None, refine_maxiter=0,
                            boot_B=199, boot_scheme="rademacher", seed=0, label="",
                            phi_band=False, fe_time_col=None, theta_fixed=None):
     """Joint single-index sleepiness by Ichimura (1993) SLS: estimate the index
@@ -823,11 +877,24 @@ def fit_joint_single_index(df, state_cols, has_cf, link="sieve", loss="ls",
         interior = np.clip(np.quantile(v, qs), lo + 1e-9, hi - 1e-9)
         t = np.concatenate(([lo] * (degree + 1), np.sort(interior), [hi] * (degree + 1)))
         R = _ramp_design(v, t, degree)
-        w = None
         if loss == "robust":
-            for _ in range(2):  # a couple of IRLS passes
-                beta, gamma, resid, ssr, c = _fit_link_sieve(R, Z, cf_dm, y_dm, einv, counts, w, dm=demean)
+            # ONE unweighted fit, then TWO weighted IRLS passes -- matching the Julia
+            # engine exactly (sleep_joint_sieve.jl::profile_obj) and the kernel branch
+            # above, both of which do 1+2.
+            #
+            # This branch used to run `for _ in range(2)` with w=None on the first pass,
+            # i.e. only TWO fits, so the objective was read off residuals that were one
+            # IRLS pass less converged. That made Python report a systematically HIGHER
+            # objective than Julia FOR THE SAME theta (E8: 166,865 vs 158,680), and the
+            # full-sample candidate scan then rejected Julia's own -- better -- answer in
+            # favour of a worse one. The two objectives must be the same computation for
+            # the scan to mean anything.
+            beta, gamma, resid, ssr, c = _fit_link_sieve(R, Z, cf_dm, y_dm, einv, counts,
+                                                         None, dm=demean)
+            for _ in range(2):
                 w = _cauchy_weights(resid)
+                beta, gamma, resid, ssr, c = _fit_link_sieve(R, Z, cf_dm, y_dm, einv, counts,
+                                                             w, dm=demean)
             obj = _cauchy_obj(resid)
         else:
             beta, gamma, resid, ssr, c = _fit_link_sieve(R, Z, cf_dm, y_dm, einv, counts, None, dm=demean)
@@ -870,11 +937,49 @@ def fit_joint_single_index(df, state_cols, has_cf, link="sieve", loss="ls",
     _maxit = (20 * d if link == "kernel" else 300 * d)
     if theta_fixed is not None:
         # The index direction was found externally (e.g. the Julia engine on a
-        # subsample). Skip the expensive Python multistart; just refit the link
-        # and run the tail (AMEs, bootstrap, phi grid) on the FULL sample. theta
-        # is in the standardised Sn frame (same S_mu/S_sd as here).
-        tf = np.asarray(theta_fixed, float)
-        theta_hat = tf / (np.linalg.norm(tf) + 1e-12)
+        # SUBSAMPLE). It is a starting point, not an answer: on 2026-07-29 the
+        # 20%-subsample search drove E7 to a corner (0.988 of a unit-norm theta on
+        # risk_free_qoq_lag, a national series with ~36 distinct values), which
+        # saturated the monotone link into a 1.5pp band of phi and collapsed EVERY
+        # AME by ~700x at essentially unchanged R2 (0.95230 vs 0.95250). Freezing it
+        # meant the full sample never got to disagree.
+        #
+        # So: score every candidate direction on the FULL-SAMPLE objective, keep the
+        # best, then optionally polish. All candidates are normalised into the same
+        # standardised Sn frame (same S_mu/S_sd as here).
+        cands = [("external", theta_fixed)]
+        if theta_candidates:
+            cands += [(str(nm), th) for nm, th in theta_candidates]
+        if init_theta is not None:
+            cands.append(("warm", init_theta))
+        cands.append(("ones", ones))
+
+        scored = []
+        for nm, th in cands:
+            th = np.asarray(th, float)
+            if th.shape != (d,) or not np.all(np.isfinite(th)):
+                continue
+            th = th / (np.linalg.norm(th) + 1e-12)
+            scored.append((float(_fit_link(th, want_grid=False)), nm, th))
+        scored.sort(key=lambda t: t[0])
+        obj_best, nm_best, theta_hat = scored[0]
+        if len(scored) > 1:
+            spread = scored[-1][0] - scored[0][0]
+            print(f"  [joint-{link}] full-sample candidate scan: " +
+                  ", ".join(f"{nm}={o:.6g}" for o, nm, _ in scored) +
+                  f" | winner={nm_best} | spread={spread:.3g}")
+            if abs(spread) <= 1e-6 * max(1.0, abs(obj_best)):
+                print(f"  [joint-{link}] WARNING: candidates are within 1e-6 of each other -- "
+                      "the index DIRECTION is weakly identified; the optimizer, not the data, "
+                      "is choosing it. Treat theta as set-identified.")
+
+        if refine_maxiter and refine_maxiter > 0:
+            rr = minimize(_obj, theta_hat, method="Nelder-Mead",
+                          options={"maxiter": int(refine_maxiter), "xatol": 1e-3, "fatol": 1e-5})
+            if np.all(np.isfinite(rr.x)) and float(rr.fun) < obj_best:
+                theta_hat = rr.x / (np.linalg.norm(rr.x) + 1e-12)
+                print(f"  [joint-{link}] full-sample polish: {obj_best:.6g} -> {float(rr.fun):.6g} "
+                      f"({rr.nit} iters)")
     else:
         best = None
         for s0 in starts:

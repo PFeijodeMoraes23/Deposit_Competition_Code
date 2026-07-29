@@ -39,9 +39,19 @@ ensure_project_venv(__file__)
 
 import argparse
 import json
+import sys
 import urllib.request
 import urllib.parse
 from pathlib import Path
+
+# The status lines print Greek/arrows (r^f path "->"); Windows consoles default to cp1252 and
+# raise UnicodeEncodeError on them, which crashes the script AFTER the CSV is already written
+# -- i.e. it reports failure for work that succeeded. Force UTF-8 (no-op where already UTF-8).
+# Same guard as cf_4_upsilon_export.py.
+try:
+    sys.stdout.reconfigure(encoding="utf-8")
+except Exception:
+    pass
 
 import numpy as np
 import pandas as pd

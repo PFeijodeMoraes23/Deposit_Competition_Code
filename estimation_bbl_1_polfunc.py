@@ -1008,6 +1008,12 @@ _SEGMENT_VARS = ['seg_S2', 'seg_S3', 'seg_S4', 'seg_S5']
 # module all read the same object. Shares and rates are in percentage points throughout
 # (fraction_65plus / fraction_young moved from "fraction" to "pp" when the sleepiness tables
 # did, which is the whole reason the two are still comparable).
+# Re-exported for `make_polfunc_md_table.py`, which imports this name and indexes it as a
+# dict (`_DISPLAY_UNITS.get(base, (1.0, ""))`). It IS the shared registry table, not a copy,
+# so there is still exactly one source of truth for units across the paper.
+from utils.state_transform import DISPLAY as _DISPLAY_UNITS  # noqa: E402,F401
+
+
 def _display_unit(v):
     """(scale, unit label) for a regressor; `_natl` variants inherit the base unit.
 
