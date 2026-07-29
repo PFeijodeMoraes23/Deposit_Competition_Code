@@ -954,32 +954,43 @@ def fit_joint_single_index(df, state_cols, has_cf, link="sieve", loss="ls",
             cands.append(("warm", init_theta))
         cands.append(("ones", ones))
 
+        # POLISH EVERY CANDIDATE, THEN COMPARE. Scoring candidates unpolished and then
+        # refining only the winner is not a like-for-like comparison and actively picks the
+        # wrong direction: `external` is Julia's OPTIMISED theta (8 starts) but expressed in
+        # Julia's own metric -- which differs from this one because the Julia engine bins the
+        # ramp design (nbins=1000) and solves the bounded LS by a different algorithm. Scored
+        # cold against a raw `ones` vector it loses, gets no refinement, and the estimate
+        # degrades: on E7 that produced a 5x flatter link (G span 0.051 vs 0.266), a lower
+        # R2, and HALF the AMEs versus simply trusting Julia's direction. Refining each
+        # candidate first lets a direction that starts worse but converges better win.
         scored = []
         for nm, th in cands:
             th = np.asarray(th, float)
             if th.shape != (d,) or not np.all(np.isfinite(th)):
                 continue
             th = th / (np.linalg.norm(th) + 1e-12)
-            scored.append((float(_fit_link(th, want_grid=False)), nm, th))
+            o0 = float(_fit_link(th, want_grid=False))
+            o1, th1 = o0, th
+            if refine_maxiter and refine_maxiter > 0:
+                rr = minimize(_obj, th, method="Nelder-Mead",
+                              options={"maxiter": int(refine_maxiter),
+                                       "xatol": 1e-3, "fatol": 1e-5})
+                if np.all(np.isfinite(rr.x)) and float(rr.fun) < o1:
+                    o1 = float(rr.fun)
+                    th1 = rr.x / (np.linalg.norm(rr.x) + 1e-12)
+            scored.append((o1, o0, nm, th1))
         scored.sort(key=lambda t: t[0])
-        obj_best, nm_best, theta_hat = scored[0]
+        obj_best, _, nm_best, theta_hat = scored[0]
         if len(scored) > 1:
             spread = scored[-1][0] - scored[0][0]
-            print(f"  [joint-{link}] full-sample candidate scan: " +
-                  ", ".join(f"{nm}={o:.6g}" for o, nm, _ in scored) +
+            print(f"  [joint-{link}] full-sample candidate scan (each polished "
+                  f"{int(refine_maxiter)} iters): " +
+                  ", ".join(f"{nm}={o0:.6g}->{o1:.6g}" for o1, o0, nm, _ in scored) +
                   f" | winner={nm_best} | spread={spread:.3g}")
             if abs(spread) <= 1e-6 * max(1.0, abs(obj_best)):
                 print(f"  [joint-{link}] WARNING: candidates are within 1e-6 of each other -- "
                       "the index DIRECTION is weakly identified; the optimizer, not the data, "
                       "is choosing it. Treat theta as set-identified.")
-
-        if refine_maxiter and refine_maxiter > 0:
-            rr = minimize(_obj, theta_hat, method="Nelder-Mead",
-                          options={"maxiter": int(refine_maxiter), "xatol": 1e-3, "fatol": 1e-5})
-            if np.all(np.isfinite(rr.x)) and float(rr.fun) < obj_best:
-                theta_hat = rr.x / (np.linalg.norm(rr.x) + 1e-12)
-                print(f"  [joint-{link}] full-sample polish: {obj_best:.6g} -> {float(rr.fun):.6g} "
-                      f"({rr.nit} iters)")
     else:
         best = None
         for s0 in starts:
