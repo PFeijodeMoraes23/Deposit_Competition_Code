@@ -38,6 +38,7 @@ def stars(p):
 # same variable. There used to be four independent copies of this dict.
 from export_sleep_link_common import clean_name, disp  # noqa: E402
 from utils import state_transform as _st  # noqa: E402
+from utils import se_national as _sen  # noqa: E402
 
 
 def build_first_stage_table(results_dict):
@@ -193,6 +194,15 @@ def build_second_stage_table(results_dict):
         r"$0\to1$ difference. $t$-statistics, $p$-values and significance stars are "
         r"invariant to these units. State variables are grand-mean centred at their pooled "
         r"estimation-sample means, so the Constant is $\hat{\phi}$ at the average market. "
+        r"Rows marked $\dagger$ are \textbf{national} regressors: Pix Available and the lagged "
+        r"Selic rate take a common value across all conglomerates within a quarter, so "
+        r"clustering on the conglomerate treats each firm's copy of a national value as "
+        r"independent evidence and understates their sampling uncertainty. For those rows the "
+        r"figure in parentheses is a wild bootstrap clustered on the \emph{quarter}, and stars "
+        r"are computed from it; the figure in square brackets is the corresponding "
+        r"Driscoll--Kraay heteroskedasticity- and autocorrelation-consistent standard error "
+        r"(\textcite{driscoll1998consistent}, \textcite{newey1987simple}), with a Bartlett "
+        r"bandwidth chosen by the usual rule. "
         r"Significance levels: *** $p<0.01$, ** $p<0.05$, * $p<0.1$."
     )
 
@@ -255,7 +265,7 @@ def build_second_stage_table(results_dict):
             ]
 
         for vshort in all_vars:
-            coef_strs, se_strs, has_val = [], [], False
+            coef_strs, se_strs, dk_strs, has_val = [], [], [], False
             for ek, _ in estimators:
                 res = _get_res(ek, panel)
                 var = vshort
@@ -265,16 +275,26 @@ def build_second_stage_table(results_dict):
                     var = f"interaction_{var}"
                 if res is not None and var in res.params:
                     has_val = True
-                    c, se, pval = res.params[var], res.bse[var], res.pvalues[var]
+                    c = res.params[var]
+                    # National rows (Pix, Selic) report the quarter-clustered bootstrap; every
+                    # other row keeps the conglomerate one. See utils/se_national.select_se.
+                    se, pval, scheme = _sen.select_se(res, var)
                     m = disp(vshort)          # coefficient and SE only; pval/stars unchanged
                     c, se = c * m, se * m
+                    mark = f"^{{{_sen.SE_MARK}}}" if scheme != "congl" else ""
+                    # Driscoll-Kraay, in brackets, on the national rows only. Every column of
+                    # this table is linear, so DK is defined throughout and nothing is mixed.
+                    dkv = _sen.dk_se(res, var) if _sen.is_national(var) else None
+                    dk_strs.append(f"$[{dkv * m:.4f}]$" if dkv is not None else "")
                     coef_strs.append(f"${c:.4f}^{{{stars(pval)}}}$")
-                    se_strs.append(f"$({se:.4f})$")
+                    se_strs.append(f"$({se:.4f}){mark}$")
                 else:
-                    coef_strs.append(""); se_strs.append("")
+                    coef_strs.append(""); se_strs.append(""); dk_strs.append("")
             if has_val:
                 lines.append(f"    {clean_name(vshort)} & " + " & ".join(coef_strs) + r" \\")
                 lines.append("    & " + " & ".join(se_strs) + r" \\")
+                if any(dk_strs):
+                    lines.append("    & " + " & ".join(dk_strs) + r" \\")
 
         obs_l, rsq_l, g_l = [], [], []
         for ek, _ in estimators:

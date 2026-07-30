@@ -27,6 +27,7 @@ warnings.filterwarnings("ignore", message="covariance of constraints does not ha
 from utils.sleep_links import NonLinearResults  # noqa: F401 (needed for unpickling)
 from utils import paths as _paths_mod
 from utils import state_transform as _st
+from utils import se_national as _sen
 
 _DRAFTS_DIR = Path(r"C:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\Drafts\Deposit Competition")
 DATA_DIR = _paths_mod.PROCESSED
@@ -229,6 +230,15 @@ def build_second_stage_table(results_dict, est_num):
         r"discrete $0\to1$ difference. $t$-statistics, $p$-values and significance stars are "
         r"invariant to these units. State variables are grand-mean centred at their pooled "
         r"estimation-sample means, so the index is evaluated relative to the average market. "
+        r"Rows marked $\dagger$ are \textbf{national} regressors: Pix Available and the lagged "
+        r"Selic rate take a common value across all conglomerates within a quarter, so "
+        r"clustering on the conglomerate treats each firm's copy of a national value as "
+        r"independent evidence and understates their sampling uncertainty. Those rows instead "
+        r"report a wild bootstrap clustered on the \emph{quarter}, with stars computed from it. "
+        r"A Driscoll--Kraay heteroskedasticity- and autocorrelation-consistent standard error "
+        r"(\textcite{driscoll1998consistent}, \textcite{newey1987simple}) is wider still for "
+        r"these rows but is defined only for the linear specifications, so it is reported with "
+        r"the linear columns rather than mixed into a single row across estimators. "
         r"Significance levels: *** $p<0.01$, ** $p<0.05$, * $p<0.1$."
     )
 
@@ -273,8 +283,20 @@ def build_second_stage_table(results_dict, est_num):
                     var = f"interaction_{var}"
                 if res is not None and var in res.params:
                     has_val = True
-                    c, se, pval = res.params[var], res.bse[var], res.pvalues[var]
-                    coef_strs.append(f"${c:.4f}^{{{stars(pval)}}}$"); se_strs.append(f"$({se:.4f})$")
+                    c = res.params[var]
+                    # National rows (Pix, Selic) lead with the wider time-robust SE; every other
+                    # row keeps the conglomerate bootstrap. See utils/se_national.select_se.
+                    se, pval, scheme = _sen.select_se(res, var)
+                    # The display multiplier was MISSING here (fixed 2026-07-30): these E5-E8
+                    # tables printed raw phi units while export_1/export_2 printed percentage
+                    # points, so Pix / GDP per capita / CadUnico were 100x too small and not
+                    # comparable with the linear columns next to them. pval and stars are
+                    # unit-invariant and are deliberately left alone.
+                    m = disp(vshort)
+                    c, se = c * m, se * m
+                    mark = f"^{{{_sen.SE_MARK}}}" if scheme != "congl" else ""
+                    coef_strs.append(f"${c:.4f}^{{{stars(pval)}}}$")
+                    se_strs.append(f"$({se:.4f}){mark}$")
                 else:
                     coef_strs.append(""); se_strs.append("")
             if has_val:

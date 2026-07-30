@@ -20,6 +20,7 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 if _THIS_DIR not in sys.path:
     sys.path.insert(0, _THIS_DIR)
 from utils import state_transform as _st  # noqa: E402
+from utils import se_national as _sen  # noqa: E402
 from export_sleep_link_common import clean_name as _clean_name  # noqa: E402
 
 # Mock NonLinearResults for unpickling estimation_3_sleep pickles.
@@ -68,11 +69,14 @@ def get_stars(pval):
     elif pval < 0.1: return "*"
     return ""
 
-def format_value(coef, se, pval, digits=4):
+def format_value(coef, se, pval, digits=4, mark=""):
+    """`mark` flags a row whose SE comes from a non-default clustering scheme. These cells are
+    TEXT mode (no surrounding $), so the marker must carry its own math delimiters -- unlike the
+    sleepiness exporters, where the dagger goes inside the existing $...$."""
     if pd.isna(coef):
         return "-", "-"
     stars = get_stars(pval)
-    return f"{coef:.{digits}f}{stars}", f"({se:.{digits}f})"
+    return f"{coef:.{digits}f}{stars}", f"({se:.{digits}f}){mark}"
 
 
 def pastelize_color(color, blend=0.7):
@@ -274,9 +278,14 @@ def build_latex_table(results_dict, order_keys, target_vars, out_path, title="",
                    r"average market")
     notes_str = (r"\multicolumn{" + str(len(order_keys) + 1) + r"}{p{\dimexpr\textwidth-2\tabcolsep\relax}}"
                  r"{\scriptsize\textit{Notes:} Standard errors (wild cluster bootstrap at the "
-                 r"conglomerate level, applied uniformly to every column; \textcite{cameron2008bootstrap}, "
+                 r"conglomerate level, except on the rows marked $\dagger$ below; \textcite{cameron2008bootstrap}, "
                  r"\textcite{mackinnon2017wild}) in parentheses. Columns index the estimation "
                  r"strategies enumerated in Section~\ref{sec:empirical:sleep}" + _stage_note + r". "
+                 r"Rows marked $\dagger$ are national regressors, constant across conglomerates "
+                 r"within a quarter; for those rows the standard error is a wild bootstrap "
+                 r"clustered on the quarter (the same bootstrap, resampling the only dimension "
+                 r"along which the regressor varies), applied uniformly across columns so that "
+                 r"linear and nonlinear estimators remain comparable within the row. "
                  r"Significance levels: *** $p<0.01$, ** $p<0.05$, * $p<0.1$.}")
     tex.append(notes_str)
     tex.append(r"\endlastfoot")
@@ -327,7 +336,13 @@ def build_latex_table(results_dict, order_keys, target_vars, out_path, title="",
                 # p-values and stars are invariant to a change of units.
                 m = _st.display_mult(v, lhs=_st.SPREAD_DISPLAY if is_first_stage
                                      else _st.PHI_DISPLAY)
-                c_str, se_str = format_value(params[v] * m, bse[v] * m, pvalues[v], digits=4)
+                # National rows (Pix, Selic) report the quarter-clustered bootstrap; all other
+                # rows keep the conglomerate one. This table mixes linear (E1/E2) and nonlinear
+                # (E5-E8) columns, so the same scheme must hold across a row -- which is why the
+                # reported cell is quarter-WCB rather than the wider-of-two (DK is linear-only).
+                _se, _pv, _sch = _sen.select_se(res, v)
+                _mark = r"$^{\dagger}$" if _sch != "congl" else ""
+                c_str, se_str = format_value(params[v] * m, _se * m, _pv, digits=4, mark=_mark)
                 row_cf.append(c_str)
                 row_se.append(se_str)
             else:
@@ -470,7 +485,10 @@ def build_latex_table_landscape(results_dict, order_keys, target_vars, out_path,
             if v in params.index:
                 m = _st.display_mult(v, lhs=_st.SPREAD_DISPLAY if first_stage
                                      else _st.PHI_DISPLAY)
-                c_str, se_str = format_value(params[v] * m, bse[v] * m, pvalues[v], digits=4)
+                # See the portrait generator above: quarter-clustered WCB on the national rows.
+                _se, _pv, _sch = _sen.select_se(res, v)
+                _mark = r"$^{\dagger}$" if _sch != "congl" else ""
+                c_str, se_str = format_value(params[v] * m, _se * m, _pv, digits=4, mark=_mark)
                 row_cf.append(c_str); row_se.append(se_str)
             else:
                 row_cf.append("-"); row_se.append("-")
@@ -523,10 +541,15 @@ def build_latex_table_landscape(results_dict, order_keys, target_vars, out_path,
             r"\begin{tablenotes}[flushleft]",
             r"\footnotesize",
             r"\item \textit{Notes:} Standard errors (wild cluster bootstrap at the "
-            r"conglomerate level, applied uniformly to every column; "
+            r"conglomerate level, except on the rows marked $\dagger$ below; "
             r"\textcite{cameron2008bootstrap}, \textcite{mackinnon2017wild}) in parentheses. Columns "
             r"index the estimation strategies enumerated in Section~\ref{sec:empirical:sleep}" +
             _stage_note +
+            r". Rows marked $\dagger$ are national regressors, constant across conglomerates "
+            r"within a quarter; for those rows the standard error is a wild bootstrap clustered "
+            r"on the quarter (the same bootstrap, resampling the only dimension along which the "
+            r"regressor varies), applied uniformly across columns so that linear and nonlinear "
+            r"estimators remain comparable within the row"
             r". Significance levels: *** $p<0.01$, ** $p<0.05$, * $p<0.1$.",
             r"\end{tablenotes}",
             r"\end{threeparttable}",

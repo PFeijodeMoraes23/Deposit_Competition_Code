@@ -13,7 +13,9 @@ enters only the variance. So these are recomputations of SEs, never re-estimatio
 why they can run off a saved fit (or a tail-only refit with theta_fixed) instead of a full
 re-search.
 
-Two alternatives, which fail in OPPOSITE directions -- report both and take the wider interval:
+Two alternatives, which fail in OPPOSITE directions. Both are computed; the TABLES report the
+quarter-clustered bootstrap and show/quote Driscoll-Kraay alongside (see `select_se` for why the
+reported cell is not a per-cell maximum of the two):
 
   time_clustered_wcb   Clusters on the quarter. Allows ARBITRARY dependence within a quarter
                        (exactly what a national shock is) but assumes quarters are INDEPENDENT.
@@ -155,6 +157,98 @@ def attach_national_ses_nonlinear(res, IF_rows: np.ndarray, periods, theta, ame_
     except Exception as exc:
         print(f"  [national-SE] nonlinear path skipped ({type(exc).__name__}: {exc})")
     return res
+
+
+def _normal_two_sided(t: float) -> float:
+    """Two-sided normal p-value. Driscoll-Kraay is analytic, so unlike the bootstrap schemes it
+    carries no p-value of its own and one has to be formed from the t-ratio."""
+    import math
+    return float(math.erfc(abs(float(t)) / math.sqrt(2.0)))
+
+
+# Reporting policy for the tables. Decided 2026-07-30: for the two NATIONAL regressors the table
+# LEADS with a time-robust standard error rather than the conglomerate one, because conglomerate
+# clustering cannot see a shock common to every firm in a quarter and is therefore
+# anti-conservative on exactly those rows. Measured on the appendix grid, the phi equation's
+# national SEs are ~1.6-1.9x wider under quarter clustering and ~1.9-2.2x wider under DK.
+#
+# The reported cell is the QUARTER-CLUSTERED WCB, not max(quarter, DK). Three reasons:
+#   1. DK exists only for the LINEAR columns (E1/E2). Taking a per-cell max would report DK in
+#      the E1/E2 columns and quarter-WCB in the E5-E8 columns OF THE SAME ROW, so a reader
+#      comparing across columns could not tell whether a gap is the scheme or the estimator.
+#   2. max() of two variance estimators is not itself an estimator of the sampling variance --
+#      it is upward-biased by construction, and the bias depends on the noise in both.
+#   3. Quarter-WCB is the SAME bootstrap as the reported SEs with only the resampled dimension
+#      changed, keeps the small-sample refinement that matters at T=35, and has a genuine
+#      bootstrap p-value, so stars need no invented reference distribution.
+# DK is still computed and stored (`bse_dk`); it is reported alongside on the all-linear tables
+# and quoted in the footnote, rather than silently swapped into a mixed row.
+SE_MARK = r"\dagger"
+SCHEME_LABEL = {"congl": "conglomerate WCB", "quarter": "quarter-clustered WCB",
+                "dk": "Driscoll-Kraay"}
+
+
+def select_se(res, name, lead_time_robust: bool = True):
+    """Return ``(se, pvalue, scheme)`` for ONE parameter of a fitted result.
+
+    Firm-level regressors keep the conglomerate wild cluster bootstrap -- unchanged, and correct
+    for them. National regressors (``pix_exists``, ``risk_free_qoq_lag``) get the WIDER of the
+    quarter-clustered WCB and Driscoll-Kraay, when those are present.
+
+    Degrades silently: any pickle written before ``attach_national_ses`` existed simply has no
+    ``bse_time``/``bse_dk``, and every row then reports ``('congl')`` exactly as before. That
+    matters because the tables must keep building off older fits.
+
+    `scheme` is one of 'congl' | 'quarter' | 'dk' and drives the dagger in the table body.
+    """
+    def _get(attr):
+        s = getattr(res, attr, None)
+        if s is None:
+            return None
+        try:
+            return float(pd.Series(s)[name])
+        except Exception:
+            return None
+
+    se_c = _get("bse")
+    p_c = _get("pvalues")
+    if se_c is None or not np.isfinite(se_c):
+        return (float("nan"), float("nan"), "congl")
+    if not (lead_time_robust and is_national(name)):
+        return (se_c, p_c, "congl")
+
+    beta = _get("params")
+    # Preference order, NOT a max: quarter-WCB is available for every estimator, so choosing it
+    # first keeps one estimator per row across all columns. DK is the fallback only where the
+    # bootstrap is somehow absent but the analytic SE is present (linear columns).
+    se_q, p_q = _get("bse_time"), _get("pvalues_time")
+    if se_q is not None and se_q > 0:
+        pv = p_q
+        if pv is None or not np.isfinite(pv):
+            pv = (_normal_two_sided(beta / se_q)
+                  if beta is not None and np.isfinite(beta) else p_c)
+        return (se_q, pv, "quarter")
+
+    se_d = _get("bse_dk")
+    if se_d is not None and se_d > 0:
+        pv = (_normal_two_sided(beta / se_d)
+              if beta is not None and np.isfinite(beta) else p_c)
+        return (se_d, pv, "dk")
+
+    return (se_c, p_c, "congl")
+
+
+def dk_se(res, name):
+    """Driscoll-Kraay SE for one parameter, or None. Used by the all-linear tables to show DK as
+    a supplementary bracketed line without displacing the reported quarter-clustered cell."""
+    s = getattr(res, "bse_dk", None)
+    if s is None:
+        return None
+    try:
+        v = float(pd.Series(s)[name])
+    except Exception:
+        return None
+    return v if np.isfinite(v) and v > 0 else None
 
 
 def attach_national_ses(res, score: np.ndarray, bread: np.ndarray, periods, beta, names,

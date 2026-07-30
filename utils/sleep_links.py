@@ -496,6 +496,30 @@ def fit_single_index(df, state_cols, has_cf, logit_res, degree=3, phi_band=False
     bse, pv = ols_sieve_wild_bootstrap(Xdm_arr, np.asarray(res.resid, float),
                                        cl_inv, n_cl, b_full, _ame_fn, ame)
     ps = pd.Series(ame); bs = pd.Series(bse); pvs = pd.Series(pv)
+
+    # Quarter-clustered WCB for the national rows (pix_exists, risk_free_qoq_lag). Same
+    # bootstrap, same _ame_fn, resampling the QUARTER instead of the conglomerate -- which is
+    # the only dimension along which a national regressor actually varies. Mirrors the block in
+    # fit_joint_single_index; stored separately so `bs` is untouched and the exporters choose
+    # per row. Driscoll-Kraay is not produced here: it is analytic and would need a
+    # delta-method push through _ame_fn, which the bootstrap already does exactly.
+    _nat_time = _nat_pv = None
+    if fe_time_col is not None and fe_time_col in df_ss.columns:
+        try:
+            _per = df_ss[fe_time_col].astype(str).values
+            _uniq, _t_inv = np.unique(_per, return_inverse=True)
+            _bt, _pt = ols_sieve_wild_bootstrap(Xdm_arr, np.asarray(res.resid, float),
+                                                _t_inv, len(_uniq), b_full, _ame_fn, ame)
+            _nat_time = pd.Series(_bt); _nat_pv = pd.Series(_pt)
+            from utils.se_national import is_national
+            _shown = [k for k in ps.index if is_national(k)]
+            if _shown:
+                print(f"  [national-SE single-index] T={len(_uniq)} | " + ", ".join(
+                    f"{str(k).replace('interaction_','')}: congl={float(bs[k]):.4g} / "
+                    f"quarter={float(_nat_time[k]):.4g}" for k in _shown))
+        except Exception as _e:
+            print(f"  [national-SE single-index] skipped ({type(_e).__name__}: {_e})")
+
     tss = float(np.sum((y_dm - y_dm.mean()) ** 2))
     rss = float(np.sum(res.resid ** 2))
     rsq = 1 - rss / tss if tss > 0 else getattr(res, "rsquared", np.nan)
@@ -506,6 +530,11 @@ def fit_single_index(df, state_cols, has_cf, logit_res, degree=3, phi_band=False
                                params_native=pd.Series(theta, index=phi_params),
                                nobs=len(df_ss), rsquared=rsq, G_nominal=G_nominal,
                                cov_ame=None, si_b=b, si_vmu=vmu, si_vsd=vsd, link="index")
+    # Quarter-clustered SEs for the national rows, computed above. Kept alongside `bse` so the
+    # exporters can choose PER ROW without a second estimation pass.
+    if _nat_time is not None:
+        res_obj.bse_time = _nat_time
+        res_obj.pvalues_time = _nat_pv
     # National phi_t band from the sieve-link (b) wild cluster bootstrap; the
     # logit index direction is held fixed, so the band reflects link uncertainty.
     if phi_band:
