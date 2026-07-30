@@ -33,7 +33,17 @@ from utils.venv_guard import ensure_project_venv
 ensure_project_venv(__file__)
 
 import argparse
+import sys
 from pathlib import Path
+
+# Status lines print arrows ("phi <- phi_mt"); Windows consoles default to cp1252 and raise
+# UnicodeEncodeError on them, which kills the script AFTER the data is loaded -- i.e. it
+# reports failure for work that succeeded. Force UTF-8 (no-op where already UTF-8). Same
+# guard as cf_4_upsilon_export.py and cf_forward_rf.py.
+try:
+    sys.stdout.reconfigure(encoding="utf-8")
+except Exception:
+    pass
 
 import numpy as np
 import pandas as pd
