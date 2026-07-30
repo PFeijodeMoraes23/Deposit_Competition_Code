@@ -38,6 +38,16 @@ import argparse
 import math
 
 import make_blp_rc_table as rc   # label maps, decode_theta2, fmt_coef, se_note, est_ref, loaders
+import sys
+
+# Windows consoles default to cp1252 and raise UnicodeEncodeError on any non-ASCII
+# character in a print (phi, arrows, Upsilon, x). That usually fires on a STATUS line after
+# the real work is done, so the script exits non-zero and reports failure for a computation
+# that succeeded -- three such false failures on 2026-07-29. Force UTF-8 (no-op if already).
+try:
+    sys.stdout.reconfigure(encoding="utf-8")
+except Exception:
+    pass
 
 DEFAULT_ESTS = [5, 6, 7, 8]
 

@@ -35,6 +35,16 @@ import pathlib
 
 import scipy.stats as stats
 import make_blp_rc_table as rc   # label maps, decode_theta2, sigma_label, pi_label, STAGES
+import sys
+
+# Windows consoles default to cp1252 and raise UnicodeEncodeError on any non-ASCII
+# character in a print (phi, arrows, Upsilon, x). That usually fires on a STATUS line after
+# the real work is done, so the script exits non-zero and reports failure for a computation
+# that succeeded -- three such false failures on 2026-07-29. Force UTF-8 (no-op if already).
+try:
+    sys.stdout.reconfigure(encoding="utf-8")
+except Exception:
+    pass
 
 ROOT       = pathlib.Path(__file__).resolve().parent
 DATA_DIR   = ROOT.parents[1] / "BCB" / "Egan_et_al_2025_Rep" / "processed"

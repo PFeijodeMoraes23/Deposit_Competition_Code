@@ -1026,6 +1026,29 @@ def fit_joint_single_index(df, state_cols, has_cf, link="sieve", loss="ls",
     ps = pd.Series({f"interaction_{k}": ame_hat[k] for k in idx_cols})
     bs = pd.Series({f"interaction_{k}": bse[k] for k in idx_cols})
     pv = pd.Series({f"interaction_{k}": pvals[k] for k in idx_cols})
+
+    # Quarter-clustered WCB for the national rows (pix_exists, risk_free_qoq_lag): same
+    # bootstrap, same _ames map, influence functions aggregated by QUARTER rather than by
+    # conglomerate. Conglomerate clustering cannot see their sampling variation because they
+    # are constant across firms within a period. Stored separately; `bs` is untouched.
+    _nat_time = _nat_pv = None
+    if fe_time_col is not None and fe_time_col in df_ss.columns:
+        try:
+            from utils.se_national import _aggregate_if_by_period
+            IF_t, _n_t = _aggregate_if_by_period(IF, df_ss[fe_time_col])
+            _bt, _pt = cluster_wild_bootstrap(theta_hat, IF_t, _ames, ame_hat,
+                                              B=boot_B, scheme=boot_scheme,
+                                              rng=np.random.default_rng(seed))
+            _nat_time = pd.Series({f"interaction_{k}": _bt[k] for k in idx_cols})
+            _nat_pv = pd.Series({f"interaction_{k}": _pt[k] for k in idx_cols})
+            from utils.se_national import is_national
+            _shown = [k for k in idx_cols if is_national(k)]
+            if _shown:
+                print(f"  [national-SE joint-{link}] T={_n_t} | " + ", ".join(
+                    f"{k}: congl={float(bs['interaction_'+k]):.4g} / "
+                    f"quarter={float(_nat_time['interaction_'+k]):.4g}" for k in _shown))
+        except Exception as _e:
+            print(f"  [national-SE joint-{link}] skipped ({type(_e).__name__}: {_e})")
     G_star, G_nominal = _G_star(df_ss["CodConglomeradoPrudencial"].astype(str))
     tss = float(np.sum((y_dm - y_dm.mean()) ** 2))
     rsq = 1 - float(np.sum(resid ** 2)) / tss if tss > 0 else np.nan
@@ -1043,6 +1066,12 @@ def fit_joint_single_index(df, state_cols, has_cf, link="sieve", loss="ls",
     res.si_ggrid = ggrid
     res.si_degree = degree
     res.boot_B = boot_B; res.boot_scheme = boot_scheme
+    # Quarter-clustered SEs for the national rows, computed above. Kept alongside `bse` so the
+    # exporters can choose PER ROW (conglomerate for firm-level regressors, quarter for the
+    # national ones) without a second estimation pass.
+    if _nat_time is not None:
+        res.bse_time = _nat_time
+        res.pvalues_time = _nat_pv
 
     # National phi_t confidence band: perturb theta by the cluster-summed IFs,
     # hold the link fixed (matches the AME bootstrap), aggregate to national phi_t.

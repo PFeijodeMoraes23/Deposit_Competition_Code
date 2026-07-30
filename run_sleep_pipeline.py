@@ -230,6 +230,13 @@ pool via simultaneous IPC pipe traffic for 400K-row DataFrames (WinError 1450).
         # whose on-demand sync can dehydrate matplotlib's Tk window-icon PNG, crashing
         # the default interactive backend mid-batch (FileNotFoundError on matplotlib.png).
         env["MPLBACKEND"] = "Agg"
+        # Windows consoles default to cp1252, so ANY non-ASCII character in a child's
+        # print (phi, arrows, Upsilon) raises UnicodeEncodeError. It usually fires on a
+        # STATUS line after the real work is done, so the step exits non-zero and reports
+        # failure for a computation that actually succeeded -- three such false failures on
+        # 2026-07-29 (cf_forward_rf, cf_1_franchise_dataonly). One env var here covers every
+        # child the pipeline launches, which is why this is preferable to editing each script.
+        env["PYTHONIOENCODING"] = "utf-8"
         # Tell each child script how many peer scripts share the CPU pool so it
         # can scale down its own ProcessPoolExecutor / Parallel n_jobs accordingly.
         env["SLEEP_PIPELINE_NSLOTS"] = str(max(1, n_parallel_slots))

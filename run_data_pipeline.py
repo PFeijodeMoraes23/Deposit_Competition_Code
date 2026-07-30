@@ -374,6 +374,11 @@ def run_step(step_id: str, script: str, description: str) -> float:
 
     t0   = time.perf_counter()
     env = os.environ.copy()
+    # Windows consoles default to cp1252, so any non-ASCII character in a child's print
+    # (phi, arrows, Upsilon) raises UnicodeEncodeError -- typically on a STATUS line AFTER
+    # the work is done, so the step reports failure for a computation that succeeded. One
+    # env var here covers every child this pipeline launches. See run_sleep_pipeline.py.
+    env["PYTHONIOENCODING"] = "utf-8"
     if toon_ctx_path := os.environ.get("TOON_CONTEXT_PATH", "").strip():
         env["TOON_CONTEXT_PATH"] = toon_ctx_path
 

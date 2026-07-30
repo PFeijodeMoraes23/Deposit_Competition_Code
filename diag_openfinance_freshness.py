@@ -53,6 +53,16 @@ log = logging.getLogger(__name__)
 
 from utils import paths
 from utils.br_calendar import business_day_index
+import sys
+
+# Windows consoles default to cp1252 and raise UnicodeEncodeError on any non-ASCII
+# character in a print (phi, arrows, Upsilon, x). That usually fires on a STATUS line after
+# the real work is done, so the script exits non-zero and reports failure for a computation
+# that succeeded -- three such false failures on 2026-07-29. Force UTF-8 (no-op if already).
+try:
+    sys.stdout.reconfigure(encoding="utf-8")
+except Exception:
+    pass
 
 LONG_CSV = paths.TARIFAS_PROC / "openfinance_fees_panel_long.csv"
 OUT_CSV  = paths.TARIFAS_PROC / "openfinance_freshness_report.csv"

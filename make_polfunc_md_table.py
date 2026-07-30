@@ -31,6 +31,16 @@ ANCHOR = "## 3. The execution plan (easiest → hardest)"   # §2.6/§2.7 are in
 # .md and the .tex fragments can never drift apart. Units are pinned to the sleepiness/demand tables
 # (see the _DISPLAY_UNITS comment in estimation_bbl_1_polfunc.py).
 from estimation_bbl_1_polfunc import _DISPLAY_UNITS, _SEGMENT_VARS, CFG as _CFG_SPREAD, _CFG_RATE
+import sys
+
+# Windows consoles default to cp1252 and raise UnicodeEncodeError on any non-ASCII
+# character in a print (phi, arrows, Upsilon, x). That usually fires on a STATUS line after
+# the real work is done, so the script exits non-zero and reports failure for a computation
+# that succeeded -- three such false failures on 2026-07-29. Force UTF-8 (no-op if already).
+try:
+    sys.stdout.reconfigure(encoding="utf-8")
+except Exception:
+    pass
 
 K_LABELS = {4: "Time_CDB", 5: "Prepaid"}
 K_TITLES = {4: "Panel A: Time deposits / CDB (k=4)", 5: "Panel B: Prepaid accounts (k=5)"}

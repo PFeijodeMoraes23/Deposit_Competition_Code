@@ -64,7 +64,7 @@ PLOTS_DIR = OUTPUT_DIR / "PLOTS"
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 PLOTS_DIR.mkdir(parents=True, exist_ok=True)
 
-def apply_imbalanced_cluster_correction(res, cluster_series):
+def apply_imbalanced_cluster_correction(res, cluster_series, periods=None):
     from utils.cluster import effective_cluster_stats   # single source of G*/CV
     _st = effective_cluster_stats(cluster_series.value_counts().values)
     G_nominal, G_star = _st["G_nominal"], _st["G_star"]
@@ -84,6 +84,22 @@ def apply_imbalanced_cluster_correction(res, cluster_series):
     except Exception as e:
         print(f"  [linear WCB] failed ({e}); CRVE + t(G*) fallback")
         res._results.__dict__['pvalues'] = stats.t(df=G_star).sf(np.abs(res.tvalues)) * 2
+
+    # ALTERNATIVE SEs FOR THE NATIONAL ROWS. pix_exists and risk_free_qoq_lag are identical
+    # across all conglomerates within a quarter, so conglomerate clustering counts ~1.1M
+    # observations of a regressor that really has T=36 quarters of variation. Attach
+    # quarter-clustered WCB and Driscoll-Kraay alongside; `bse` is left untouched, and the
+    # exporters pick per row. Point estimates are unaffected -- clustering enters only V.
+    if periods is not None:
+        try:
+            from utils.se_national import attach_national_ses
+            X = np.asarray(res.model.exog, float)
+            u = np.asarray(res.resid, float)
+            attach_national_ses(res, X * u[:, None], np.linalg.pinv(X.T @ X), periods,
+                                np.asarray(res.params, float), list(res.params.index),
+                                label="linear")
+        except Exception as e:
+            print(f"  [national-SE] linear path skipped ({e})")
     return res
 
 def demean_variables(df, cols, entity_col):
@@ -287,7 +303,8 @@ def run_pooled_first_stage(df, spec_instruments, exogenous_controls):
     mod = sm.OLS(df_fs['spread_qoq'], sm.add_constant(df_fs[first_stage_vars]))
     cluster_series = df_fs['CodConglomeradoPrudencial'].astype(str)
     res = mod.fit(cov_type='cluster', cov_kwds={'groups': cluster_series}, use_t=True)
-    res = apply_imbalanced_cluster_correction(res, cluster_series)
+    res = apply_imbalanced_cluster_correction(res, cluster_series,
+                                              periods=df_fs['time_id'])
 
     # Rows excluded from the first stage (endogenous k=4,5 rows whose instruments are missing — chiefly
     # 2013-2015, where prudential-conglomerate bank characteristics do not exist) get v_hat = NaN, NOT 0.
@@ -318,7 +335,8 @@ def run_pooled_second_stage(df, state_vars, has_cf=False):
     mod = sm.OLS(y_dm, X_dm)
     cluster_series = df_ss['CodConglomeradoPrudencial'].astype(str)
     res = mod.fit(cov_type='cluster', cov_kwds={'groups': cluster_series}, use_t=True)
-    return apply_imbalanced_cluster_correction(res, cluster_series)
+    return apply_imbalanced_cluster_correction(res, cluster_series,
+                                              periods=df_ss['time_id'])
 
 def exec_pooled_spec(args):
     df, iv_name, iv_cols, s_name, s_cols = args

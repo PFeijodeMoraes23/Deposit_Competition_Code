@@ -25,6 +25,16 @@ os.environ.setdefault("MPLBACKEND", "Agg")  # headless / OneDrive-safe
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
+import sys
+
+# Windows consoles default to cp1252 and raise UnicodeEncodeError on any non-ASCII
+# character in a print (phi, arrows, Upsilon, x). That usually fires on a STATUS line after
+# the real work is done, so the script exits non-zero and reports failure for a computation
+# that succeeded -- three such false failures on 2026-07-29. Force UTF-8 (no-op if already).
+try:
+    sys.stdout.reconfigure(encoding="utf-8")
+except Exception:
+    pass
 
 _ROOT = Path(__file__).resolve().parents[2]
 DATA = _ROOT / "BCB" / "Egan_et_al_2025_Rep" / "processed"

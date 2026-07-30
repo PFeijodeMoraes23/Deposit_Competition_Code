@@ -103,27 +103,12 @@ def _resolve_runtime_paths() -> tuple[Path, Path]:
         pass
     return PANEL_CSV, OUTPUT_DIR
 
-def apply_imbalanced_cluster_correction(res, cluster_series):
-    from utils.cluster import effective_cluster_stats   # single source of G*/CV
-    _st = effective_cluster_stats(cluster_series.value_counts().values)
-    G_nominal, G_star = _st["G_nominal"], _st["G_star"]
-    res.G_nominal = G_nominal
-    res.G_star = G_star
-    res.df_resid = G_star
-    # Inference: score/multiplier wild cluster bootstrap (Cameron-Gelbach-Miller 2008;
-    # MacKinnon-Webb 2017) -- the SAME scheme as the single-index/joint estimators, so
-    # every comparison-table column shares one inference method. G* is kept as the
-    # reported effective-cluster diagnostic. Falls back to CRVE + t(G*) if unavailable.
-    try:
-        from utils.sleep_links import linear_wild_cluster_bootstrap
-        bse, tvals, pvals = linear_wild_cluster_bootstrap(res)
-        for _nm, _v in (("bse", bse.values), ("tvalues", tvals.values), ("pvalues", pvals.values)):
-            res._results._cache[_nm] = _v          # statsmodels reads cached props from _cache
-            res._results.__dict__[_nm] = _v
-    except Exception as e:
-        print(f"  [linear WCB] failed ({e}); CRVE + t(G*) fallback")
-        res._results.__dict__['pvalues'] = stats.t(df=G_star).sf(np.abs(res.tvalues)) * 2
-    return res
+def apply_imbalanced_cluster_correction(res, cluster_series, periods=None):
+    """Delegates to the E2 implementation so there is ONE inference path (and one place
+    where the national-regressor SEs get attached). E1 previously carried a byte-identical
+    copy of this helper, which is how the two drifted before."""
+    from estimation_2_sleep import apply_imbalanced_cluster_correction as _apply
+    return _apply(res, cluster_series, periods=periods)
 
 def demean_variables(df, cols, entity_col):
     means = df.groupby(entity_col)[cols].transform('mean')
@@ -223,7 +208,8 @@ def run_first_stage(df, spec_instruments, exogenous_controls):
     mod = sm.OLS(y, X)
     cluster_series = df_fs['CodConglomeradoPrudencial'].astype(str)
     res = mod.fit(cov_type='cluster', cov_kwds={'groups': cluster_series}, use_t=True)
-    res = apply_imbalanced_cluster_correction(res, cluster_series)
+    res = apply_imbalanced_cluster_correction(res, cluster_series,
+                                              periods=df_fs['time_id'])
 
     df['v_hat'] = 0.0
     df.loc[valid_mask, 'v_hat'] = res.resid
@@ -249,7 +235,8 @@ def run_second_stage(df, state_vars, has_cf=False, spec_name=""):
     mod = sm.OLS(y_dm, X_dm)
     cluster_series = df_ss['CodConglomeradoPrudencial'].astype(str)
     res = mod.fit(cov_type='cluster', cov_kwds={'groups': cluster_series}, use_t=True)
-    res = apply_imbalanced_cluster_correction(res, cluster_series)
+    res = apply_imbalanced_cluster_correction(res, cluster_series,
+                                              periods=df_ss['time_id'])
     return res
 
 def execute_specification(args):
