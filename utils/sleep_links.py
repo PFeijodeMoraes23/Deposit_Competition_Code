@@ -784,7 +784,6 @@ def _fit_link_kernel(v, Z, cf_dm, y_dm, einv, counts, bw, grid, wts=None,
 
 def fit_joint_single_index(df, state_cols, has_cf, link="sieve", loss="ls",
                            n_interior=5, degree=3, n_starts=4, init_theta=None,
-                           theta_candidates=None, refine_maxiter=0,
                            boot_B=199, boot_scheme="rademacher", seed=0, label="",
                            phi_band=False, fe_time_col=None, theta_fixed=None):
     """Joint single-index sleepiness by Ichimura (1993) SLS: estimate the index
@@ -936,61 +935,36 @@ def fit_joint_single_index(df, state_cols, has_cf, link="sieve", loss="ls",
     # direction, so a few dozen refinement steps suffice (vs the sieve's full search).
     _maxit = (20 * d if link == "kernel" else 300 * d)
     if theta_fixed is not None:
-        # The index direction was found externally (e.g. the Julia engine on a
-        # SUBSAMPLE). It is a starting point, not an answer: on 2026-07-29 the
-        # 20%-subsample search drove E7 to a corner (0.988 of a unit-norm theta on
-        # risk_free_qoq_lag, a national series with ~36 distinct values), which
-        # saturated the monotone link into a 1.5pp band of phi and collapsed EVERY
-        # AME by ~700x at essentially unchanged R2 (0.95230 vs 0.95250). Freezing it
-        # meant the full sample never got to disagree.
-        #
-        # So: score every candidate direction on the FULL-SAMPLE objective, keep the
-        # best, then optionally polish. All candidates are normalised into the same
+        # Trust the direction the Julia engine found; refit the link and run the tail
+        # (AMEs, bootstrap, phi grid) on the FULL sample here. theta arrives in the
         # standardised Sn frame (same S_mu/S_sd as here).
-        cands = [("external", theta_fixed)]
-        if theta_candidates:
-            cands += [(str(nm), th) for nm, th in theta_candidates]
-        if init_theta is not None:
-            cands.append(("warm", init_theta))
-        cands.append(("ones", ones))
-
-        # POLISH EVERY CANDIDATE, THEN COMPARE. Scoring candidates unpolished and then
-        # refining only the winner is not a like-for-like comparison and actively picks the
-        # wrong direction: `external` is Julia's OPTIMISED theta (8 starts) but expressed in
-        # Julia's own metric -- which differs from this one because the Julia engine bins the
-        # ramp design (nbins=1000) and solves the bounded LS by a different algorithm. Scored
-        # cold against a raw `ones` vector it loses, gets no refinement, and the estimate
-        # degrades: on E7 that produced a 5x flatter link (G span 0.051 vs 0.266), a lower
-        # R2, and HALF the AMEs versus simply trusting Julia's direction. Refining each
-        # candidate first lets a direction that starts worse but converges better win.
-        scored = []
-        for nm, th in cands:
-            th = np.asarray(th, float)
-            if th.shape != (d,) or not np.all(np.isfinite(th)):
-                continue
-            th = th / (np.linalg.norm(th) + 1e-12)
-            o0 = float(_fit_link(th, want_grid=False))
-            o1, th1 = o0, th
-            if refine_maxiter and refine_maxiter > 0:
-                rr = minimize(_obj, th, method="Nelder-Mead",
-                              options={"maxiter": int(refine_maxiter),
-                                       "xatol": 1e-3, "fatol": 1e-5})
-                if np.all(np.isfinite(rr.x)) and float(rr.fun) < o1:
-                    o1 = float(rr.fun)
-                    th1 = rr.x / (np.linalg.norm(rr.x) + 1e-12)
-            scored.append((o1, o0, nm, th1))
-        scored.sort(key=lambda t: t[0])
-        obj_best, _, nm_best, theta_hat = scored[0]
-        if len(scored) > 1:
-            spread = scored[-1][0] - scored[0][0]
-            print(f"  [joint-{link}] full-sample candidate scan (each polished "
-                  f"{int(refine_maxiter)} iters): " +
-                  ", ".join(f"{nm}={o0:.6g}->{o1:.6g}" for o1, o0, nm, _ in scored) +
-                  f" | winner={nm_best} | spread={spread:.3g}")
-            if abs(spread) <= 1e-6 * max(1.0, abs(obj_best)):
-                print(f"  [joint-{link}] WARNING: candidates are within 1e-6 of each other -- "
-                      "the index DIRECTION is weakly identified; the optimizer, not the data, "
-                      "is choosing it. Treat theta as set-identified.")
+        #
+        # 2026-07-29: a Python-side "candidate scan" was added here and then REVERTED --
+        # score several candidate directions on THIS objective, keep the best, polish it.
+        # Two measured reasons it does not work:
+        #
+        #  1. IT PICKS THE WRONG DIRECTION. `external` is Julia's OPTIMISED theta, but
+        #     optimised in JULIA's metric, which is not this one: the engine bins the ramp
+        #     design (nbins=1000) and solves the bounded LS by a different algorithm
+        #     (Gram cross-products + NNLS-normal vs scipy lsq_linear here). Scored on this
+        #     objective against a raw equal-weight vector it LOSES. On E7 that produced a 5x
+        #     flatter link (G span 0.051 vs 0.266), lower R2, and HALF the AMEs compared with
+        #     simply trusting Julia's answer. Cross-implementation objective values are NOT
+        #     comparable; only same-implementation ones are.
+        #
+        #  2. FIXING (1) BY POLISHING EVERY CANDIDATE IS UNAFFORDABLE. Nelder-Mead
+        #     `maxiter=60` is ~180 FUNCTION EVALUATIONS (reflection/expansion/contraction,
+        #     and a shrink evaluates d+1 points), and each evaluation is one _fit_link = 3
+        #     full-sample sieve solves on 487k rows. That is ~540 solves per candidate,
+        #     measured at 3-5 HOURS per spec -- i.e. 24-40h of scan alone per estimator on
+        #     the 8-spec grid.
+        #
+        # What actually fixed the original degeneracy was SLEEP_SUBSAMPLE_FRAC 0.2 -> 1.0
+        # (link span x18, mean slope x570, R2 slightly up) plus passing n_starts through to
+        # julia_theta so the engine really does multistart (objective -5.5%). Neither needs a
+        # Python-side search. Do not re-add one without first counting function evaluations.
+        tf = np.asarray(theta_fixed, float)
+        theta_hat = tf / (np.linalg.norm(tf) + 1e-12)
     else:
         best = None
         for s0 in starts:

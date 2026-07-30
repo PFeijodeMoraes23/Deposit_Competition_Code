@@ -272,6 +272,23 @@ def mode_grid(a):
     print("  point-identified without a stand on rho_xi (which D2b/D3 estimate from data).")
 
 
+def _acf_sim_one(args):
+    """One fitted-model panel -> ACF(h=1..hmax). Top-level for process-pool pickling.
+    Balanced panel, so the lag alignment is a plain (T,N) reshape."""
+    ent_rec, sd_t, phi_fit, seed, r, hmax = args
+    ent = pd.DataFrame(ent_rec)
+    rng = np.random.default_rng((seed, 999, r))
+    rows_dep, _ = simulate_panel(ent, sd_t, phi_fit, 0.0, rng)
+    T, N = rows_dep.shape
+    y = rows_dep.reshape(-1)
+    einv = np.tile(np.arange(N), T)
+    tinv = np.repeat(np.arange(T), N)
+    e = within_2way(y[:, None], einv, np.bincount(einv).astype(float),
+                    tinv, np.bincount(tinv).astype(float))[:, 0].reshape(T, N)
+    return np.array([np.corrcoef(e[h:].ravel(), e[:-h].ravel())[0, 1]
+                     for h in range(1, hmax + 1)])
+
+
 def mode_acf(a):
     print("=== D8: ACF overidentification vs fitted pure-sleepiness model ===")
     from diag_phi_augmented_tests import load_sleep_frame
@@ -296,17 +313,11 @@ def mode_acf(a):
 
     ent, sd_t = calibrate(a.n_entities, a.seed)
     phi_fit = a.phi_prod
-    bands = []
-    for r in range(a.reps_acf):
-        rng = np.random.default_rng((a.seed, 999, r))
-        rows_dep, rows_lag = simulate_panel(ent, sd_t, phi_fit, 0.0, rng)
-        T, N = rows_dep.shape
-        sd = pd.DataFrame({"deposit_balance": rows_dep.reshape(-1),
-                           "entity_id": np.tile(np.arange(N), T),
-                           "time_id": np.repeat(np.arange(T), N),
-                           "qidx": np.repeat(np.arange(T), N)})
-        sd["_e"] = demean_variables_2way(sd, ["deposit_balance"], "entity_id", "time_id")["deposit_balance"]
-        bands.append(panel_acf(sd, "_e"))
+    # sims are independent -> process pool (was sequential; ~4x wall-clock win)
+    ent_rec = ent.to_dict("list")
+    sim_args = [(ent_rec, sd_t, phi_fit, a.seed, r, 12) for r in range(a.reps_acf)]
+    with ProcessPoolExecutor(max_workers=min(8, os.cpu_count() or 4)) as ex:
+        bands = list(ex.map(_acf_sim_one, sim_args, chunksize=8))
     B = np.vstack(bands)
     lo, hi = np.nanpercentile(B, 2.5, axis=0), np.nanpercentile(B, 97.5, axis=0)
 

@@ -63,8 +63,12 @@ USE_JULIA_SIEVE = os.environ.get("USE_JULIA_SIEVE", "1") != "0"
 # ~36 distinct values that a subsample makes look maximally explanatory. The saturated link
 # that produced collapsed every E7 AME by ~700x. Search on the full sample.
 SUBSAMPLE_FRAC = float(os.environ.get("SLEEP_SUBSAMPLE_FRAC", "1.0"))
-# FIX 2: bounded full-sample polish from whichever candidate direction wins. 0 disables.
-SIEVE_REFINE_MAXITER = int(os.environ.get("SLEEP_SIEVE_REFINE_MAXITER", "60"))
+# NOTE: a SLEEP_SIEVE_REFINE_MAXITER knob (a Python-side Nelder-Mead polish of the Julia
+# direction) was added on 2026-07-29 and reverted the same day -- see the long comment in
+# utils/sleep_links.fit_joint_single_index. It cost 3-5 HOURS per spec because each of the
+# ~180 function evaluations is 3 full-sample sieve solves on 487k rows, and it selected a
+# WORSE direction than simply trusting the engine. Do not reintroduce it without counting
+# function evaluations first.
 MAXITER_MULT = int(os.environ.get("SLEEP_MAXITER_MULT", "40"))
 # The Julia engine parallelises the multistart across starts (`@threads for s in 1:nst`,
 # sleep_joint_sieve.jl:294), so ADDITIONAL STARTS ARE NEARLY FREE IN WALL-CLOCK as long as
@@ -161,20 +165,11 @@ def _exec_spec(args):
             except Exception as e:
                 print(f"  [julia_theta] error, Python fallback: {e}")
                 theta_jl = None
-        # FIX 3: give the full-sample scan more than one candidate to choose between --
-        # the Julia direction, the logit warm start, and the equal-weight vector are all
-        # scored on the FULL-sample objective inside fit_joint_single_index, and the best
-        # wins. Previously the Julia (subsample) answer was simply frozen.
-        cands = []
-        if theta_jl is not None and warm is not None:
-            cands.append(("logit_warm", warm))
         res_robust = fit_joint_single_index(df_target, s_cols, has_cf=has_cf, link=link,
                                             loss="robust", init_theta=warm,
                                             n_starts=n_starts, boot_B=999, boot_scheme="webb", seed=0,
                                             label=f"{spec_name}/robust", fe_time_col=fe_tc,
-                                            theta_fixed=theta_jl, phi_band=is_spec12,
-                                            theta_candidates=cands,
-                                            refine_maxiter=SIEVE_REFINE_MAXITER)
+                                            theta_fixed=theta_jl, phi_band=is_spec12)
         # Opt 8: drop the LS loss during the grid (robust feeds phi).
         if DROP_LS:
             res_ls = None
