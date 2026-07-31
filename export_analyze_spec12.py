@@ -281,11 +281,8 @@ def build_latex_table(results_dict, order_keys, target_vars, out_path, title="",
                  r"conglomerate level, except on the rows marked $\dagger$ below; \textcite{cameron2008bootstrap}, "
                  r"\textcite{mackinnon2017wild}) in parentheses. Columns index the estimation "
                  r"strategies enumerated in Section~\ref{sec:empirical:sleep}" + _stage_note + r". "
-                 r"Rows marked $\dagger$ are national regressors, constant across conglomerates "
-                 r"within a quarter; for those rows the standard error is a wild bootstrap "
-                 r"clustered on the quarter (the same bootstrap, resampling the only dimension "
-                 r"along which the regressor varies), applied uniformly across columns so that "
-                 r"linear and nonlinear estimators remain comparable within the row. "
+                 # Substituted at the write site from the schemes select_se actually returned.
+                 + _sen.NOTE_TOKEN +
                  r"Significance levels: *** $p<0.01$, ** $p<0.05$, * $p<0.1$.}")
     tex.append(notes_str)
     tex.append(r"\endlastfoot")
@@ -302,6 +299,7 @@ def build_latex_table(results_dict, order_keys, target_vars, out_path, title="",
 
     # Target vars first, then any remaining (excluding CF nuisance term)
     ordered_vars = [v for v in target_vars if v in vars_to_print]
+    _nat_schemes = set()   # what select_se ACTUALLY returned on the national rows
 
     if not is_first_stage:
         other_vars = [v for v in vars_to_print if v not in ordered_vars]
@@ -341,6 +339,8 @@ def build_latex_table(results_dict, order_keys, target_vars, out_path, title="",
                 # (E5-E8) columns, so the same scheme must hold across a row -- which is why the
                 # reported cell is quarter-WCB rather than the wider-of-two (DK is linear-only).
                 _se, _pv, _sch = _sen.select_se(res, v)
+                if _sen.is_national(v):
+                    _nat_schemes.add(_sch)
                 _mark = r"$^{\dagger}$" if _sch != "congl" else ""
                 c_str, se_str = format_value(params[v] * m, _se * m, _pv, digits=4, mark=_mark)
                 row_cf.append(c_str)
@@ -424,7 +424,8 @@ def build_latex_table(results_dict, order_keys, target_vars, out_path, title="",
     tex.append(r"\doublespacing")
 
     with open(out_path, "w", encoding="utf-8") as f:
-        f.write("\n".join(tex))
+        f.write("\n".join(tex).replace(
+            _sen.NOTE_TOKEN, _sen.national_note(_nat_schemes)))
 
 
 def build_latex_table_landscape(results_dict, order_keys, target_vars, out_path,
@@ -454,6 +455,7 @@ def build_latex_table_landscape(results_dict, order_keys, target_vars, out_path,
                 if v not in vars_to_print:
                     vars_to_print.append(v)
     ordered_vars = [v for v in target_vars if v in vars_to_print]
+    _nat_schemes = set()   # what select_se ACTUALLY returned on the national rows
     if not first_stage:   # second stage also lists any extra coefs; first stage = instruments only
         ordered_vars += [v for v in vars_to_print if v not in ordered_vars and 'v_hat' not in v.lower()]
         ordered_vars = [v for v in ordered_vars if 'v_hat' not in v.lower()]
@@ -487,6 +489,8 @@ def build_latex_table_landscape(results_dict, order_keys, target_vars, out_path,
                                      else _st.PHI_DISPLAY)
                 # See the portrait generator above: quarter-clustered WCB on the national rows.
                 _se, _pv, _sch = _sen.select_se(res, v)
+                if _sen.is_national(v):
+                    _nat_schemes.add(_sch)
                 _mark = r"$^{\dagger}$" if _sch != "congl" else ""
                 c_str, se_str = format_value(params[v] * m, _se * m, _pv, digits=4, mark=_mark)
                 row_cf.append(c_str); row_se.append(se_str)
@@ -545,19 +549,18 @@ def build_latex_table_landscape(results_dict, order_keys, target_vars, out_path,
             r"\textcite{cameron2008bootstrap}, \textcite{mackinnon2017wild}) in parentheses. Columns "
             r"index the estimation strategies enumerated in Section~\ref{sec:empirical:sleep}" +
             _stage_note +
-            r". Rows marked $\dagger$ are national regressors, constant across conglomerates "
-            r"within a quarter; for those rows the standard error is a wild bootstrap clustered "
-            r"on the quarter (the same bootstrap, resampling the only dimension along which the "
-            r"regressor varies), applied uniformly across columns so that linear and nonlinear "
-            r"estimators remain comparable within the row"
-            r". Significance levels: *** $p<0.01$, ** $p<0.05$, * $p<0.1$.",
+            r". "
+            # Substituted at the write site from the schemes select_se actually returned.
+            + _sen.NOTE_TOKEN +
+            r"Significance levels: *** $p<0.01$, ** $p<0.05$, * $p<0.1$.",
             r"\end{tablenotes}",
             r"\end{threeparttable}",
             r"\end{table}",
             r"\end{landscape}"]
 
     with open(out_path, "w", encoding="utf-8") as f:
-        f.write("\n".join(tex))
+        f.write("\n".join(tex).replace(
+            _sen.NOTE_TOKEN, _sen.national_note(_nat_schemes)))
 
 
 import argparse

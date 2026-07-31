@@ -5,7 +5,7 @@ Author: Pedro Feijó de Moraes
 `pix_exists` and `risk_free_qoq_lag` take the SAME value for all ~506 conglomerates within a
 quarter. Clustering on the conglomerate therefore treats each firm's copy of a national value
 as independent evidence, so the standard error is formed as if there were ~1.1M observations of
-Pix when the regressor really has only T=36 quarters of variation. That understates uncertainty
+Pix when the regressor really has only T=35 quarters of variation. That understates uncertainty
 on exactly the two rows with the largest headline coefficients.
 
 Nothing here touches a point estimate. theta-hat minimises the objective; the clustering scheme
@@ -20,13 +20,13 @@ reported cell is not a per-cell maximum of the two):
   time_clustered_wcb   Clusters on the quarter. Allows ARBITRARY dependence within a quarter
                        (exactly what a national shock is) but assumes quarters are INDEPENDENT.
                        Keeps the wild bootstrap's small-sample refinement, which matters at
-                       T=36. Optimistic if the regressor is persistent -- and Selic is.
+                       T=35. Optimistic if the regressor is persistent -- and Selic is.
 
   driscoll_kraay       Aggregates the scores across the cross-section within each period, then
                        applies a Bartlett/Newey-West HAC to that T-length series. Robust to
                        within-quarter dependence AND to serial correlation across quarters, so
                        it handles the persistence that time-clustering assumes away. But its
-                       asymptotics are in T, and T=36 is modest; and it is analytic, so it gets
+                       asymptotics are in T, and T=35 is modest; and it is analytic, so it gets
                        no bootstrap refinement.
 
 Reference: Driscoll & Kraay (1998); Newey & West (1987); Cameron-Gelbach-Miller (2008) and
@@ -40,7 +40,7 @@ import pandas as pd
 # Regressors with NO cross-sectional variation: identical across all firms within a quarter,
 # so conglomerate clustering cannot see their real sampling variation. Measured on the panel:
 # pix_exists is a pure function of the quarter; risk_free_qoq_lag has only 32 distinct values
-# over 36 quarters. NOT gdp_growth_yoy -- that is built per entity from its own gdp lag.
+# over the 35 quarters. NOT gdp_growth_yoy -- that is built per entity from its own gdp lag.
 NATIONAL_VARS = {"pix_exists", "risk_free_qoq_lag"}
 
 
@@ -51,7 +51,7 @@ def is_national(name: str) -> bool:
 
 
 def bartlett_lags(n_periods: int) -> int:
-    """Newey-West bandwidth by the usual rule L = floor(4 (T/100)^(2/9)); T=36 -> 3."""
+    """Newey-West bandwidth by the usual rule L = floor(4 (T/100)^(2/9)); T=35 -> 3."""
     if n_periods < 3:
         return 0
     return max(1, int(np.floor(4.0 * (n_periods / 100.0) ** (2.0 / 9.0))))
@@ -236,6 +236,60 @@ def select_se(res, name, lead_time_robust: bool = True):
         return (se_d, pv, "dk")
 
     return (se_c, p_c, "congl")
+
+
+NOTE_TOKEN = "%%NATIONAL_SE_NOTE%%"
+
+
+def national_note(schemes, dk_bracket: bool = False) -> str:
+    """LaTeX sentence describing the scheme ACTUALLY used on the national rows of one table.
+
+    Added 2026-07-30 after an adversarial review caught the previous unconditional wording
+    asserting a quarter-clustered bootstrap on tables where every national cell had in fact
+    fallen back to conglomerate clustering (E5/E6/E8, whose pickles predated the
+    `fit_single_index` / joint-sieve quarter blocks). `select_se` degrades silently by design --
+    so the FOOTNOTE, not the fallback, is what has to be honest about it.
+
+    `schemes` is the set of scheme tags select_se returned for national rows while the body was
+    being built. Pass `dk_bracket=True` on all-linear tables that print a bracketed DK line.
+    """
+    s = {x for x in (schemes or set())}
+    if not s:
+        return ""                                   # no national rows in this table
+
+    lead = (r"Rows marked $\dagger$ are \textbf{national} regressors: Pix Available and the "
+            r"lagged Selic rate take a common value across all conglomerates within a quarter, "
+            r"so clustering on the conglomerate treats each firm's copy of a national value as "
+            r"independent evidence and understates their sampling uncertainty. ")
+
+    if s == {"congl"}:
+        # Nothing time-robust was available anywhere: say so plainly rather than describe a
+        # calculation that never ran.
+        return (r"Pix Available and the lagged Selic rate are \textbf{national} regressors, "
+                r"constant across conglomerates within a quarter, so conglomerate clustering "
+                r"understates their sampling uncertainty; a time-robust standard error is not "
+                r"available for them in this table. ")
+
+    if "congl" in s:
+        # MIXED -- the honest, and unfortunately verbose, case.
+        body = (r"Where marked, those rows report a wild bootstrap clustered on the "
+                r"\emph{quarter}, with stars computed from it; \textbf{unmarked} national cells "
+                r"retain conglomerate clustering, so standard errors are not comparable across "
+                r"columns within those rows. ")
+    else:
+        body = (r"Those rows report a wild bootstrap clustered on the \emph{quarter} -- the same "
+                r"bootstrap, resampling the only dimension along which the regressor varies -- "
+                r"with stars computed from it, applied uniformly across columns. ")
+
+    if dk_bracket:
+        body += (r"The figure in square brackets is the corresponding Driscoll--Kraay "
+                 r"heteroskedasticity- and autocorrelation-consistent standard error "
+                 r"(\textcite{driscoll1998consistent}, \textcite{newey1987simple}), with a "
+                 r"Bartlett bandwidth chosen by the usual rule. ")
+    elif "dk" in s:
+        body += (r"Cells marked $\dagger$ without an available bootstrap use the Driscoll--Kraay "
+                 r"standard error (\textcite{driscoll1998consistent}). ")
+    return lead + body
 
 
 def dk_se(res, name):

@@ -194,15 +194,11 @@ def build_second_stage_table(results_dict):
         r"$0\to1$ difference. $t$-statistics, $p$-values and significance stars are "
         r"invariant to these units. State variables are grand-mean centred at their pooled "
         r"estimation-sample means, so the Constant is $\hat{\phi}$ at the average market. "
-        r"Rows marked $\dagger$ are \textbf{national} regressors: Pix Available and the lagged "
-        r"Selic rate take a common value across all conglomerates within a quarter, so "
-        r"clustering on the conglomerate treats each firm's copy of a national value as "
-        r"independent evidence and understates their sampling uncertainty. For those rows the "
-        r"figure in parentheses is a wild bootstrap clustered on the \emph{quarter}, and stars "
-        r"are computed from it; the figure in square brackets is the corresponding "
-        r"Driscoll--Kraay heteroskedasticity- and autocorrelation-consistent standard error "
-        r"(\textcite{driscoll1998consistent}, \textcite{newey1987simple}), with a Bartlett "
-        r"bandwidth chosen by the usual rule. "
+        # Filled in at the END of this function from the schemes select_se actually returned,
+        # so the note can never describe a calculation that did not run (adversarial review,
+        # 2026-07-30: the previous unconditional wording claimed a quarter-clustered bootstrap
+        # on tables where every national cell had fallen back to conglomerate).
+        + _sen.NOTE_TOKEN +
         r"Significance levels: *** $p<0.01$, ** $p<0.05$, * $p<0.1$."
     )
 
@@ -264,6 +260,8 @@ def build_second_stage_table(results_dict):
                 r"    \midrule",
             ]
 
+        _nat_schemes = set()
+
         for vshort in all_vars:
             coef_strs, se_strs, dk_strs, has_val = [], [], [], False
             for ek, _ in estimators:
@@ -279,6 +277,8 @@ def build_second_stage_table(results_dict):
                     # National rows (Pix, Selic) report the quarter-clustered bootstrap; every
                     # other row keeps the conglomerate one. See utils/se_national.select_se.
                     se, pval, scheme = _sen.select_se(res, var)
+                    if _sen.is_national(var):
+                        _nat_schemes.add(scheme)
                     m = disp(vshort)          # coefficient and SE only; pval/stars unchanged
                     c, se = c * m, se * m
                     mark = f"^{{{_sen.SE_MARK}}}" if scheme != "congl" else ""
@@ -319,7 +319,8 @@ def build_second_stage_table(results_dict):
         ]
 
     lines += [r"\end{xltabular}", r"\end{spacing}"]
-    return "\n".join(lines)
+    return "\n".join(lines).replace(
+        _sen.NOTE_TOKEN, _sen.national_note(_nat_schemes, dk_bracket=True))
 
 
 _STANDALONE_PREAMBLE = r"""\documentclass[12pt]{article}

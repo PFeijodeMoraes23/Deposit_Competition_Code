@@ -144,6 +144,15 @@ function main_cf4()
     υ   = pix_coefficient(cf_dir, a["estim"], a["spec"])
     pix0 = pix_level_zero(cf_dir, a["estim"], a["spec"])          # centred "no Pix" level (≈ −0.53)
     phi_np = load_phi_nopix(cf_dir, a["estim"], a["spec"], ctx)   # exact link-aware φ^noPix, or nothing
+    # CF4_EXACT_NOPIX=0 forces the identity-link scalar fallback (φ̂ − Υ_pix·(pix−pix0)) even when the
+    # exact parquet is present — for the "with vs without re-eval" comparison. The output is tagged
+    # "_noeval" so it never overwrites the exact (re-evaluated) run.
+    mode_sfx = ""
+    if get(ENV, "CF4_EXACT_NOPIX", "1") == "0" && phi_np !== nothing
+        phi_np = nothing; mode_sfx = "_noeval"
+        log_status("  [CF4] CF4_EXACT_NOPIX=0 → identity-link scalar fallback (no re-eval)")
+    end
+    sfx = a["suffix"] * mode_sfx
     T   = 8   # medium-run (2y) reallocation horizon
     if phi_np === nothing
         log_status("  [CF4] Υ_pix=$(round(υ, sigdigits=4)) | horizon=$T | no-Pix φ via LEVEL " *
@@ -161,7 +170,7 @@ function main_cf4()
     df = DataFrame(CodConglomeradoPrudencial=res.firm, is_B=res.is_B, deposit_type=res.dep_type,
                    pix_exists=res.pix, phi=res.phi, phi_cf=res.phi_cf,
                    dep_obs=res.dep_obs, dep_cf=res.dep_cf, dvol=res.dvol)
-    out_path = joinpath(cf_dir, "cf4_pix_realloc_E$(a["estim"])_spec_$(a["spec"])_$(a["stage"])$(a["suffix"]).parquet")
+    out_path = joinpath(cf_dir, "cf4_pix_realloc_E$(a["estim"])_spec_$(a["spec"])_$(a["stage"])$(sfx).parquet")
     mkpath(cf_dir); Parquet2.writefile(out_path, df)
 
     tot_obs = sum(res.dep_obs); tot_cf = sum(res.dep_cf)

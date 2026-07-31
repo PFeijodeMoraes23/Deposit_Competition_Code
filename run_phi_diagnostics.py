@@ -71,6 +71,7 @@ STEPS = [
     ("D6",  "Pix event study",                 "diag_phi_augmented_tests.py",   ["--arm", "pix"],            True,  22),
     ("D2a", "fitted-share augmentation",       "diag_phi_augmented_tests.py",   ["--arm", "fittedshare"],    True,  28),
     ("D4",  "spread level (qualitative)",      "diag_phi_augmented_tests.py",   ["--arm", "spreadlevel"],    True,  10),
+    ("D9",  "BLP elasticity consistency",      "diag_phi_augmented_tests.py",   ["--arm", "blpelast"],       True,  10),
 ]
 
 _print_lock = threading.Lock()

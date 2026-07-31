@@ -53,10 +53,27 @@ from estimation_2_sleep import (build_pooled_data, define_specifications,
 from utils import paths as _paths
 
 PARQUET = _paths.PROCESSED / "ESTIMATION_OUTPUT" / "DEMAND_PREP" / "demand_2_spec_12.parquet"
+BLP_RAW = _paths.PROCESSED / "ESTIMATION_OUTPUT" / "BLP_RESULTS" / "cluster_raw"
 OUT_DIR = _paths.PROCESSED / "ESTIMATION_OUTPUT" / "DIAG_PHI_SEPARATION"
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 
 DEP_SCALE = 1e9   # sleep frame stores deposits in R$ bn; the demand parquet in raw R$
+BLP_X_COLS = ["fgc_covered", "has_ip", "seg_S2", "seg_S3", "seg_S4", "seg_S5",
+              "log_total_assets_lag", "is_state_owned"]
+
+
+def load_blp_theta1(est="E8", stage="extended", spec=12):
+    """theta1 from the downloaded cluster results as {param_name: coef}, or None.
+    NB: the BLP spread regressor is spread_ann/100 (annual pp) -- blp_1_logit.jl:219."""
+    import json
+    fp = BLP_RAW / f"blp_results_{est}_spec_{spec}_{stage}.json"
+    if not fp.exists():
+        return None
+    with open(fp, encoding="utf-8") as fh:
+        r = json.load(fh)
+    if not r.get("converged", False):
+        return None
+    return dict(zip(r["param_names_theta1"], r["theta1"]))
 
 
 # ==============================================================================
@@ -223,43 +240,121 @@ def arm_lagdepact():
     return rows
 
 
+def _shares_from_dhat(b, dhat_col, out_col):
+    """Logit shares from a fitted index within (mca x time), rescaled so the fitted
+    inside shares sum to the observed inside-share total per market."""
+    e = np.exp(b[dhat_col] - b.groupby("_grp")[dhat_col].transform("max"))
+    denom = e.groupby(b["_grp"]).transform("sum")
+    inside_tot = b.groupby("_grp")["share_B_cond"].transform("sum").clip(upper=0.95)
+    b[out_col] = (1.0 - b["phi_mt"]) * b["M_mt"] * (e / denom * inside_tot) / DEP_SCALE
+    return b
+
+
 def arm_fittedshare():
-    """D2a: characteristics-fitted awake inflow, xi-hat excluded."""
+    """D2a: characteristics-fitted awake inflow, xi-hat excluded. Two coefficient
+    sources: the local within-market OLS (self-contained), and -- when the downloaded
+    cluster results exist -- the BLP theta1 of E7/E8 spec 12 (stage `extended`)."""
     print("\n=== D2a: fitted-share augmentation (xi-hat excluded; lower bound) ===")
-    x_blp = ["spread_ann", "fgc_covered", "has_ip", "seg_S2", "seg_S3", "seg_S4",
-             "seg_S5", "log_total_assets_lag", "is_state_owned"]
+    x_blp = ["spread_ann"] + BLP_X_COLS
     pq = pd.read_parquet(PARQUET, columns=["entity_id", "time_id", "mca_code", "is_B",
                                            "share_B_cond", "phi_mt", "M_mt"] + x_blp)
     b = pq[pq["is_B"].astype(bool)].dropna(subset=["share_B_cond"] + x_blp).copy()
     b = b[b["share_B_cond"] > 0]
     b["_delta"] = np.log(b["share_B_cond"])
-
-    # delta on characteristics with market x time FE; fitted value EXCLUDES the residual
-    # (xi-hat), which mechanically absorbs the accounting Dep_Act and would be circular.
     b["_grp"] = b["mca_code"].astype(str) + "|" + b["time_id"].astype(str)
+
+    # (a) local within-market OLS; fitted value EXCLUDES the residual (xi-hat), which
+    # mechanically absorbs the accounting Dep_Act and would be circular.
     Xc = b[x_blp] - b.groupby("_grp")[x_blp].transform("mean")
     yc = b["_delta"] - b.groupby("_grp")["_delta"].transform("mean")
     beta = np.linalg.lstsq(Xc.to_numpy(float), yc.to_numpy(float), rcond=None)[0]
     b["_dhat"] = b[x_blp].to_numpy(float) @ beta
-    e = np.exp(b["_dhat"] - b.groupby("_grp")["_dhat"].transform("max"))
-    denom = e.groupby(b["_grp"]).transform("sum")
-    # rescale so the fitted inside shares sum to the observed inside-share total per market
-    inside_tot = b.groupby("_grp")["share_B_cond"].transform("sum").clip(upper=0.95)
-    b["_s_hat"] = e / denom * inside_tot
-    b["A_hat_c"] = (1.0 - b["phi_mt"]) * b["M_mt"] * b["_s_hat"] / DEP_SCALE
+    b = _shares_from_dhat(b, "_dhat", "A_hat_c")
+    variants = [("A_hat_c", "local within-market OLS")]
+
+    # (b) cluster BLP theta1 (proper IV estimates; spread enters as spread_ann/100 = pp)
+    for est in ("E7", "E8"):
+        th = load_blp_theta1(est)
+        if th is None:
+            print(f"  [{est}] no converged extended results in {BLP_RAW.name}; skipped")
+            continue
+        col = f"A_hat_{est}"
+        b["_dhat_blp"] = (th["alpha"] * b["spread_ann"] / 100.0
+                          + sum(th[c] * b[c] for c in BLP_X_COLS))
+        b = _shares_from_dhat(b, "_dhat_blp", col)
+        variants.append((col, f"BLP theta1 {est} spec12 extended (alpha={th['alpha']:+.3f})"))
 
     df, s_cols = load_sleep_frame()
-    df = df.merge(b[["entity_id", "time_id", "A_hat_c"]], on=["entity_id", "time_id"],
-                  how="left", validate="1:1")
+    keep = ["entity_id", "time_id"] + [v for v, _ in variants]
+    df = df.merge(b[keep], on=["entity_id", "time_id"], how="left", validate="1:1")
     rows = []
-    for tag, has_cf in (("spec12(k=4,5)", True), ("OLSxTech(all k)", False)):
-        res_b, res_a, d = run_augmented(df, s_cols, ["A_hat_c"], has_cf)
-        n_full = len(df.dropna(subset=["nr_lagged_dep", "deposit_balance"]
-                               + (["v_hat_x_lagged_dep"] if has_cf else [])))
-        rows += report_delta_phi(tag, res_b, res_a, ["A_hat_c"], len(d), n_full)
+    for col, desc in variants:
+        print(f"\n  --- awake-inflow proxy: {desc} ---")
+        for tag, has_cf in (("spec12(k=4,5)", True), ("OLSxTech(all k)", False)):
+            res_b, res_a, d = run_augmented(df, s_cols, [col], has_cf)
+            n_full = len(df.dropna(subset=["nr_lagged_dep", "deposit_balance"]
+                                   + (["v_hat_x_lagged_dep"] if has_cf else [])))
+            rows += report_delta_phi(f"{tag}|{col}", res_b, res_a, [col], len(d), n_full)
     print("\n  VERDICT: lambda > 0 with phi-hat falling = contamination through the")
     print("  OBSERVABLE component of awake-inflow persistence. Because xi-hat is excluded")
-    print("  by construction, this is a LOWER BOUND on the confound.")
+    print("  by construction, this is a LOWER BOUND on the confound. The BLP variants")
+    print("  use the cluster-estimated demand coefficients (instrumented) in place of")
+    print("  the local projection; agreement across sources is the robustness check.")
+    return rows
+
+
+def arm_blpelast():
+    """D9: BLP-elasticity consistency. The model allows ONLY the awake margin to react
+    to the contemporaneous spread: dDep/drho = (1-phi)*M*alpha*s(1-s). Compare that
+    implied response (cluster alpha-hat, parquet phi/M/s) with the panel's instrumented
+    spread response. Observed >> implied means the awake mass (1-phi-hat) is understated,
+    i.e. phi-hat overstates sleepiness."""
+    print("\n=== D9: BLP elasticity consistency (implied vs observed spread response) ===")
+    pq = pd.read_parquet(PARQUET, columns=["entity_id", "time_id", "is_B", "deposit_type",
+                                           "share_B_cond", "phi_mt", "M_mt"])
+    b = pq[pq["is_B"].astype(bool) & pq["deposit_type"].isin([4, 5])].dropna(
+        subset=["share_B_cond", "phi_mt", "M_mt"]).copy()
+    s = b["share_B_cond"].clip(0.0, 0.95)
+    # implied dDep/drho in SLEEP-FRAME units: R$bn per unit of QUARTERLY DECIMAL spread.
+    # alpha-hat is per ANNUAL PP (spread_ann/100); 1 unit qoq-decimal = 400 annual pp.
+    base = (1.0 - b["phi_mt"]) * b["M_mt"] * s * (1.0 - s) * 400.0 / DEP_SCALE
+
+    # observed: 2SLS-style spread response. Fitted first-stage spread (rho_hat = spread
+    # - v_hat on the instrumented k=4,5 rows) replaces the CF term; the carry block stays.
+    df, s_cols = load_sleep_frame()
+    df["rho_hat"] = df["spread_qoq"] - df["v_hat"]
+    res_b, res_a, d = run_augmented(df, s_cols, ["rho_hat"], has_cf=False)
+    coef = float(res_a.params["rho_hat"])
+    pval = float(res_a.pvalues["rho_hat"])
+    print(f"  observed dDep/drho (2SLS, within FE + carry block): {coef:+.4f} R$bn per "
+          f"qoq-decimal (WCB p={pval:.4f}, n={len(d):,})")
+
+    rows = [{"spec": "observed", "param": "dDep_drho", "coef": coef, "p_wcb": pval}]
+    phi_bar = float(b["phi_mt"].mean())
+    for est in ("E7", "E8"):
+        th = load_blp_theta1(est)
+        if th is None:
+            print(f"  [{est}] no converged extended results; skipped")
+            continue
+        implied = float((base * th["alpha"]).mean())
+        print(f"  [{est}] alpha={th['alpha']:+.4f}/annual-pp -> implied mean dDep/drho = "
+              f"{implied:+.4f} R$bn per qoq-decimal")
+        if implied != 0 and np.sign(coef) == np.sign(implied):
+            k = coef / implied
+            phi_implied = 1.0 - k * (1.0 - phi_bar)
+            print(f"        observed/implied k = {k:.2f}  ->  phi consistent with the "
+                  f"demand step = {phi_implied:.4f} (parquet mean phi-hat = {phi_bar:.4f})")
+            rows.append({"spec": est, "param": "k_ratio", "coef": k,
+                         "phi_implied": phi_implied, "phi_hat": phi_bar})
+        else:
+            print("        sign mismatch with the observed response -- ratio not "
+                  "interpretable (simultaneity or weak response); recorded only")
+            rows.append({"spec": est, "param": "implied", "coef": implied})
+    print("\n  VERDICT: k >> 1 (observed response many times the phi-implied one) says")
+    print("  deposits react to spreads far more than the sleepy carry allows -- the awake")
+    print("  mass is understated and phi-hat overstates sleepiness. k ~ 1 = the sleep and")
+    print("  demand steps are mutually consistent. Wrong-signed observed response =")
+    print("  simultaneity dominates; treat as uninformative.")
     return rows
 
 
@@ -342,7 +437,8 @@ def arm_pix():
 
 # ==============================================================================
 ARMS = {"identity": arm_identity, "lagdepact": arm_lagdepact,
-        "fittedshare": arm_fittedshare, "spreadlevel": arm_spreadlevel, "pix": arm_pix}
+        "fittedshare": arm_fittedshare, "spreadlevel": arm_spreadlevel, "pix": arm_pix,
+        "blpelast": arm_blpelast}
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser(description=__doc__,

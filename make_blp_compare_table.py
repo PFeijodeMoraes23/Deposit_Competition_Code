@@ -56,9 +56,10 @@ DRAFTS_DIR = rc.DRAFTS_DIR
 TABLES_DIR.mkdir(parents=True, exist_ok=True)
 
 STAGES = rc.STAGES
-# RC-stage headers by number of freed random coefficients (1→8), so the ladder is legible.
+# RC-stage headers by number of freed random coefficients (1→7). `full` is not a stage (dropped from
+# rc.STAGES; σ(ln assets) removed → full≡rc4), so ext1=5 RC, ext2=6 RC.
 STAGE_HEAD = {"sigma": "1 RC", "rc2": "2 RC", "rc3": "3 RC", "rc4": "4 RC",
-              "full": "5 RC", "ext1": "6 RC", "ext2": "7 RC", "extended": "Full"}
+              "ext1": "5 RC", "ext2": "6 RC", "extended": "Full"}
 
 
 # ── loaders ───────────────────────────────────────────────────────────────────

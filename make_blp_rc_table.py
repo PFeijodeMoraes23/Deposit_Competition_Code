@@ -65,19 +65,22 @@ D_COLS = ["gdp_per_capita", "fraction_65plus", "fraction_young",
           "pix_users_pf_per1000", "connections_per100", "frac_4g5g",
           "branches_per1000", "cadunico_families_per1000"]
 
-STAGES = ["sigma", "rc2", "rc3", "rc4", "full", "ext1", "ext2", "extended"]
+STAGES = ["sigma", "rc2", "rc3", "rc4", "ext1", "ext2", "extended"]
+# NB: `full` (the old 5-RC rung) is intentionally ABSENT — the cluster ladder is
+# sigma→rc2→rc3→rc4→ext1→ext2→extended (σ(ln assets) was dropped, so `full`≡rc4 and is no longer run).
+# Leaving it in the list silently surfaced a STALE pre-is_state_owned `full` result left in cluster_raw.
 # The per-routine RC tables (blp_rc_E*) stop at ext1: ext2/extended are the degenerate rungs where the
 # fgc/asset-interaction weak identification inflates every SE ~6-10x (α SE ~0.11 → 0.6-1.2) while leaving
 # α essentially unchanged, so those two columns carry no usable information. The Full model still lives in
 # the _full demand-comparison / robustness tables, which read it directly.
-RC_TABLE_STAGES = STAGES[:STAGES.index("ext1") + 1]   # sigma, rc2, rc3, rc4, full, ext1
+RC_TABLE_STAGES = STAGES[:STAGES.index("ext1") + 1]   # sigma, rc2, rc3, rc4, ext1
 
-# Columns are labelled by the number of freed random coefficients (1→8), so the complexity
-# ladder is legible: "1 RC" = one random coefficient (sigma stage) ... "8 RC" = all eight
-# (extended / full model).
+# Columns are labelled by the number of freed random coefficients (1→7), so the complexity ladder is
+# legible: "1 RC" = one random coefficient (sigma stage) ... "Full" = all seven (extended model).
+# `full` is not a stage (see STAGES above), so ext1 = 5 RC and ext2 = 6 RC.
 STAGE_LABELS = {
     "sigma":    r"1 RC", "rc2": r"2 RC", "rc3": r"3 RC", "rc4": r"4 RC",
-    "full":     r"5 RC", "ext1": r"6 RC", "ext2": r"7 RC", "extended": r"Full",
+    "ext1":     r"5 RC", "ext2": r"6 RC", "extended": r"Full",
 }
 
 # Human-readable labels for θ₁ parameters. The price coefficient uses the SAME wording as the
