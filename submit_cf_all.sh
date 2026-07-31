@@ -122,6 +122,13 @@ done
 # demand_eval need no costs, so this check is skipped when only they are requested.
 need_costs=0
 [[ "${DO_CF1NET}" == "1" || "${DO_CF3}" == "1" || "${DO_CF5}" == "1" || "${DO_CF6}" == "1" ]] && need_costs=1
+# CF_COST_AFTEROK=<jobid[:jobid…]> — when the BBL solve jobs are chained via afterok (an orchestrated
+# run, e.g. submit_bbl_cf_all.sh), the cost params do NOT exist on disk yet; they'll be written before
+# these CFs run. Skip the on-disk preflight and let SLURM enforce the ordering (afterok, below).
+if [[ -n "${CF_COST_AFTEROK:-}" ]]; then
+    need_costs=0
+    echo "cost params chained via afterok:${CF_COST_AFTEROK} — skipping the on-disk cost_params preflight"
+fi
 if [[ "${need_costs}" == "1" ]]; then
     for k in ${ROUTINES}; do
         cp_json="${DATA_ROOT}/COST_FWD/cost_params_E${k}_spec_12_${CF_STAGE}.json"
@@ -171,6 +178,15 @@ if [[ "${DO_WARMUP:-1}" == "1" ]]; then
     warm_dep="--dependency=afterok:${wj}"
 fi
 
+# Cost-consuming steps (cf1_net/cf3/cf5/cf6) wait on the warmup AND — when the BBL stage is chained
+# into the same orchestrated run — the BBL solve jobs (CF_COST_AFTEROK). Merge into ONE afterok list:
+# sbatch keeps only the LAST --dependency flag, so a step can't take warm_dep and a second dep flag
+# separately. cf1(gross)/cf4/demand_eval need no costs and keep the plain warm_dep.
+cost_ok_ids=""
+[[ "${DO_WARMUP:-1}" == "1" ]] && cost_ok_ids="${wj}"
+[[ -n "${CF_COST_AFTEROK:-}" ]] && cost_ok_ids="${cost_ok_ids:+${cost_ok_ids}:}${CF_COST_AFTEROK}"
+cost_dep="${cost_ok_ids:+--dependency=afterok:${cost_ok_ids}}"
+
 # The BBL cost params are produced by the separate BBL stage (preflighted above), NOT chained
 # here — so every step depends only on the warmup. cf1_net/cf3/cf5/cf6 read cost_params_*.json off
 # disk. Per-CF afterany dependency lists (colon-joined job ids) feed the end-of-run archiver.
@@ -196,18 +212,19 @@ for k in ${ROUTINES}; do
         echo "  cf4          → job ${j}"; cf4_dep="${cf4_dep}:${j}"
     fi
 
-    # Equilibrium CFs — consume the BBL cost params (preflighted on disk), so they depend only on
-    # the warmup, not on any cost job in this run.
+    # Equilibrium CFs — consume the BBL cost params. Normally those are preflighted on disk and these
+    # depend only on the warmup (${cost_dep}==${warm_dep}); in an orchestrated run CF_COST_AFTEROK folds
+    # the BBL solve jobs into ${cost_dep} so they launch the instant the params are written.
     eq_extra="--beta ${BETA} --horizon ${HORIZON}"
     if [[ "${DO_CF1NET}" == "1" ]]; then
-        j=$(submit "cf_cf1net_E${k}" "${SOLVE_TIME}" ${warm_dep} \
+        j=$(submit "cf_cf1net_E${k}" "${SOLVE_TIME}" ${cost_dep} \
             --export=ALL,${base_export},CF_STEP=cf1_net,CF_EXTRA="${eq_extra}" submit_cf.sh)
         echo "  cf1_net      → job ${j}"; cf1_dep="${cf1_dep}:${j}"   # net → same cf1 archive
     fi
     for step in cf3 cf5 cf6; do
         flag="DO_$(echo ${step} | tr a-z A-Z)"          # DO_CF3 / DO_CF5 / DO_CF6
         if [[ "${!flag}" == "1" ]]; then
-            j=$(submit "cf_${step}_E${k}" "${EQ_TIME}" ${warm_dep} \
+            j=$(submit "cf_${step}_E${k}" "${EQ_TIME}" ${cost_dep} \
                 --export=ALL,${base_export},CF_STEP=${step},CF_EXTRA="${eq_extra} ${CF_EQ_EXTRA:-}" submit_cf.sh)
             echo "  ${step}          → job ${j}"
             case "${step}" in cf3) cf3_dep="${cf3_dep}:${j}";; cf5) cf5_dep="${cf5_dep}:${j}";; cf6) cf6_dep="${cf6_dep}:${j}";; esac
@@ -224,3 +241,8 @@ done
 
 echo "Submitted CFs for routines: ${ROUTINES}. Watch with: squeue -u \$USER"
 echo "When the WHOLE chain (incl. CF3/CF5/CF6) is done, archive with:  bash zip_all_cf.sh"
+# Machine-parseable handle for an orchestrator (submit_bbl_cf_all.sh): every result job id this run
+# submitted, colon-joined, so a final `afterany` archive job can wait on all of them before zipping.
+# Keep this the LAST line so `sed -n 's/^CF_RESULT_JOBIDS=//p' | tail -1` captures it cleanly.
+cf_all_ids="$(echo "${found_dep}${cf1_dep}${cf4_dep}${cf3_dep}${cf5_dep}${cf6_dep}" | sed 's/^://')"
+echo "CF_RESULT_JOBIDS=${cf_all_ids}"

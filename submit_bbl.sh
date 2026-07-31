@@ -46,9 +46,28 @@ export JULIA_DEPOT_PATH="${SLURM_SUBMIT_DIR}/.julia_depot:${JULIA_DEPOT_PATH:-}"
 PROJECT_DIR="${SLURM_SUBMIT_DIR}"
 mkdir -p "${PROJECT_DIR}/logs"
 
-# Every BBL step is CPU-only; keep CUDA out so many concurrent array tasks on the shared
-# NFS depot don't stampede the Julia precompile/load lock loading a package they never use.
+# CF_GPU is set by the orchestrator (submit_bbl_all.sh: FWD_GPU=1 → warmup + fwd_sim on the H200,
+# solve/polfunc CPU). Default OFF here so a bare `BBL_STEP=… sbatch submit_bbl.sh` stays CPU and
+# concurrent array tasks on the shared NFS depot don't stampede the precompile/load lock loading CUDA.
 : "${CF_GPU:=0}"; export CF_GPU
+
+# ── Sysimage: load blp_sysimage.so if present, exactly like the RC-BLP path (submit_blp_rc_stage.sh).
+# WHY THIS MATTERS FOR GPU: without it, each concurrent array task loads packages fresh from the ONE
+# shared-NFS depot and stampedes the precompile cache. A task that loses that race on CUDA's dependency
+# chain hits CUDA.functional()==false, which foundation_demand_eval.jl catches and silently downgrades
+# to the CPU share path — the job then holds its H200 at 0% util. The sysimage bakes CUDA + the whole
+# package closure, so tasks touch the precompile cache zero times → no race → the GPU engages on every
+# task. (Diagnosed 2026-07-31: 5/11 fwd_sim tasks fell back to CPU on FillArrays/StaticArrays cache races.)
+SYSIMAGE="${PROJECT_DIR}/blp_sysimage.so"
+JULIA_SYS=()
+if [ -f "${SYSIMAGE}" ]; then
+    JULIA_SYS=(--sysimage "${SYSIMAGE}")
+    echo "Julia sysimage: ${SYSIMAGE} (no per-task precompile)"
+elif [ "${CF_GPU}" != "0" ]; then
+    echo "[!] CF_GPU=1 but no blp_sysimage.so — concurrent array tasks may lose the CUDA precompile"
+    echo "    race on the shared depot → silent CPU fallback (0% GPU util). Build it once, on gpu_h200:"
+    echo "      sbatch submit_build_sysimage.sh"
+fi
 
 echo "======================================"
 echo " BBL cost stage | step=${BBL_STEP} | E${BBL_ROUTINE} | stage=${BBL_STAGE}"
@@ -58,7 +77,7 @@ echo "======================================"
 
 run_julia () {
     local script="$1"; shift
-    julia --project="${PROJECT_DIR}" --threads="${SLURM_CPUS_PER_TASK}" \
+    julia --project="${PROJECT_DIR}" "${JULIA_SYS[@]}" --threads="${SLURM_CPUS_PER_TASK}" \
         "${PROJECT_DIR}/${script}" \
         --estim "${BBL_ROUTINE}" --spec 12 --stage "${BBL_STAGE}" \
         --R "${R}" --seed "${SEED}" --hpc ${BBL_EXTRA} "$@"
@@ -87,13 +106,18 @@ setup_python () {
 }
 
 case "${BBL_STEP}" in
-    warmup)       # Serially precompile the depot + JIT-load the BBL stack ONCE, so the parallel
-                  # fwd_sim array doesn't stampede the shared-NFS depot precompile/load lock.
-        echo "Precompiling depot…"; julia --project="${PROJECT_DIR}" -e 'using Pkg; Pkg.instantiate(); Pkg.precompile()'
+    warmup)       # JIT-load the BBL stack ONCE. With the sysimage, packages are already baked so the
+                  # array never precompiles → no shared-NFS stampede. Without it, precompile the depot
+                  # here so the parallel fwd_sim array at least doesn't all precompile at once.
+        if [ ${#JULIA_SYS[@]} -gt 0 ]; then
+            echo "Sysimage present — skipping depot precompile."
+        else
+            echo "Precompiling depot…"; julia --project="${PROJECT_DIR}" -e 'using Pkg; Pkg.instantiate(); Pkg.precompile()'
+        fi
         echo "Loading the BBL stack (CF_GPU=${CF_GPU})…"
-        julia --project="${PROJECT_DIR}" --threads="${SLURM_CPUS_PER_TASK}" \
+        julia --project="${PROJECT_DIR}" "${JULIA_SYS[@]}" --threads="${SLURM_CPUS_PER_TASK}" \
             -e 'include(joinpath(ENV["SLURM_SUBMIT_DIR"], "estimation_bbl_2_fwd_sim.jl"))' || true
-        echo "warmup complete: depot precompiled + BBL stack loaded — array can launch warm" ;;
+        echo "warmup complete: BBL stack loaded — array can launch warm" ;;
     polfunc)      # BBL Step 1: fit the parametric policy function (usually run LOCALLY and uploaded;
                   # this cluster path exists for reproducibility, off by default in the orchestrator).
                   # Reads market_panel.csv → writes COST_POLFUNC/polfunc_fitted.csv.

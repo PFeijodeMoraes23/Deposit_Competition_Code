@@ -267,6 +267,7 @@ function build_cf_context(estim::Int, spec_id::Int, stage::String;
                                length(pi_interactions))
     precompute_pi_products!(buf, prod_vec, draws_3d, obs_key_idx,
                             pi_interactions, coef_dim)
+    save_pi_base!(buf, pi_interactions, 1)   # ρ̂ spread-products snapshot → cf_shares_at restore-by-copy (B.1)
     # GPU share buffers (H200 on the cluster; nothing on a CPU-only machine ⇒ CPU share path).
     gbuf = _CF_USE_GPU ? allocate_gpu_buffers(buf, pc, N_obs, N_B, N_D, R, n_pairs, n_times) : nothing
     gbuf === nothing || log_status("  [CF] GPU share kernel enabled ($(CUDA.name(CUDA.device())))")
@@ -382,6 +383,34 @@ function cf_model_shares(ctx::CFDemandCtx)::Vector{Float64}
     return collect_shares(ctx.buf, ctx.pc, nrow(ctx.df))
 end
 
+# ── B.2 + B.1 helpers: incremental Pi-product maintenance for cf_shares_at ─────────────────────────
+# These operate on `HotBuffers` (defined in the included blp_1_estimation.jl) but are pure CF/BBL
+# machinery — kept here, next to their only caller cf_shares_at, so the demand-estimation engine
+# carries nothing beyond the inert `pi_base` field. A spread deviation perturbs ONLY prod_vec[:,
+# target_cidx] (the spread, cidx==1), so only the Pi products whose product-char index is target_cidx
+# change; the rest are invariant. refresh_pi_products_cidx! rebuilds just those, IN PLACE (no realloc
+# → no GC churn), instead of rebuilding the full 72 GB set on every deviation.
+function refresh_pi_products_cidx!(buf::HotBuffers, prod_vec::Matrix{Float64},
+                                   stacked_draws::Array{Float64,3}, obs_key_idx::Vector{Int},
+                                   pi_interactions::Vector{Tuple{Int,Int}}, coef_dim::Int,
+                                   target_cidx::Int)
+    D_dim = size(stacked_draws, 3)
+    @inbounds for (pi_idx, (cidx, didx)) in enumerate(pi_interactions)
+        (cidx == target_cidx && cidx <= coef_dim && didx <= D_dim) || continue
+        pp = buf.pi_products[pi_idx]
+        size(pp, 1) == 0 && continue
+        pp .= @view(prod_vec[:, cidx]) .* @view(stacked_draws[obs_key_idx, :, didx])   # in place
+    end
+end
+
+# Save the current (ρ̂) spread-interacting Pi products so cf_shares_at can RESTORE them by copy
+# instead of recomputing (B.1). Call once after the initial precompute, at ρ̂.
+function save_pi_base!(buf::HotBuffers, pi_interactions::Vector{Tuple{Int,Int}}, target_cidx::Int)
+    buf.pi_base = [ (c == target_cidx && length(buf.pi_products) >= i && size(buf.pi_products[i], 1) > 0) ?
+                    copy(buf.pi_products[i]) : zeros(0, 0)
+                    for (i, (c, _)) in enumerate(pi_interactions) ]
+end
+
 """
     cf_shares_at(ctx, rho_new) -> Vector{Float64}
 
@@ -397,20 +426,31 @@ through unchanged.
 """
 function cf_shares_at(ctx::CFDemandCtx, rho_new::Vector{Float64})::Vector{Float64}
     length(rho_new) == nrow(ctx.df) || error("rho_new length ≠ N_obs")
-    # Update the spread column and the π-products that interact with it (cidx==1).
+    # A spread change perturbs ONLY prod_vec[:, 1], so only the cidx==1 Pi products change. Refresh
+    # just those, IN PLACE (B.2) — the non-spread products are invariant, and this avoids rebuilding
+    # (and reallocating) the full 72 GB set on every deviation.
     ctx.prod_vec[:, 1] .= rho_new
-    precompute_pi_products!(ctx.buf, ctx.prod_vec, ctx.draws_3d, ctx.obs_key_idx,
-                            ctx.pi_interactions, ctx.coef_dim)
+    refresh_pi_products_cidx!(ctx.buf, ctx.prod_vec, ctx.draws_3d, ctx.obs_key_idx,
+                              ctx.pi_interactions, ctx.coef_dim, 1)
     sv, pv = unpack_theta2(ctx.theta2, ctx.sigma_indices, ctx.pi_interactions)
     compute_mu!(ctx.buf, ctx.prod_vec, ctx.nu_draws, sv, ctx.sigma_indices, pv,
                 ctx.R, ctx.coef_dim)
     delta_cf = ctx.delta_hat .+ ctx.alpha .* (rho_new .- ctx.rho_hat)
     _cf_model_shares!(ctx, delta_cf)
     s = collect_shares(ctx.buf, ctx.pc, nrow(ctx.df))
-    # Restore in-sample spread so the context is reusable.
+    # Restore the in-sample spread + its Pi products so the context is reusable. Restore the spread
+    # products by COPY from the ρ̂ snapshot (B.1) — no recompute — falling back to a refresh only if
+    # the snapshot is absent (a context built before save_pi_base!).
     ctx.prod_vec[:, 1] .= ctx.rho_hat
-    precompute_pi_products!(ctx.buf, ctx.prod_vec, ctx.draws_3d, ctx.obs_key_idx,
-                            ctx.pi_interactions, ctx.coef_dim)
+    if length(ctx.buf.pi_base) == length(ctx.pi_interactions)
+        @inbounds for (i, (c, _)) in enumerate(ctx.pi_interactions)
+            (c == 1 && size(ctx.buf.pi_base[i], 1) > 0) || continue
+            ctx.buf.pi_products[i] .= ctx.buf.pi_base[i]
+        end
+    else
+        refresh_pi_products_cidx!(ctx.buf, ctx.prod_vec, ctx.draws_3d, ctx.obs_key_idx,
+                                  ctx.pi_interactions, ctx.coef_dim, 1)
+    end
     return s
 end
 

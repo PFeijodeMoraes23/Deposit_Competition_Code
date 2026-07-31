@@ -57,10 +57,27 @@ R="${R:-2000}"; SEED="${SEED:-42}"
 SHOCKS="${SHOCKS:-50}"; N_SHARDS="${N_SHARDS:-100}"
 PERTURB_SCALE="${PERTURB_SCALE:-2.0}"; DEV_SCHEME="${DEV_SCHEME:-grid}"
 BETA="${BETA:-0.9}"; HORIZON="${HORIZON:-50}"
-SHARD_TIME="${SHARD_TIME:-08:00:00}"; SOLVE_TIME="${SOLVE_TIME:-01:00:00}"
+SHARD_TIME="${SHARD_TIME:-16:00:00}"; SOLVE_TIME="${SOLVE_TIME:-01:00:00}"   # fwd_sim ↑ from 08:00:00 (headroom)
 MEM="${MEM:-256G}"
 AUTO_PROCESS="${AUTO_PROCESS:-1}"
 DO_POLFUNC="${DO_POLFUNC:-0}"
+# fwd_sim on GPU by default (FWD_GPU=1): the share aggregation moves to the H200
+# (compute_model_shares_gpu!), while the 72 GB Pi products + compute_mu! stay on the HOST
+# (gpu_h200 has ~1995 G RAM), so there is NO HBM-overflow risk — only ~30 G of share buffers land
+# on the device. FWD_GPU=0 reverts to CPU (still fast after the cf_shares_at fix). The warmup and
+# the fwd_sim array share the GPU node type so the CUDA precompile carries over.
+FWD_GPU="${FWD_GPU:-1}"
+GPU_PARTITION="${GPU_PARTITION:-gpu_h200}"; GPUS="${GPUS:-h200:1}"
+if [[ "${FWD_GPU}" == "1" ]]; then
+    FWD_SB=(--partition="${GPU_PARTITION}" --gpus="${GPUS}"); FWD_GPU_ENV="CF_GPU=1"
+    # Each GPU shard holds one H200; default to ~one gpu_h200 node's worth of concurrent shards so the
+    # array doesn't demand N_SHARDS scarce GPUs at once. Override with ARRAY_THROTTLE=N (or ""=unlimited).
+    [[ -z "${ARRAY_THROTTLE+set}" ]] && ARRAY_THROTTLE=8   # default only when truly UNSET (empty ⇒ unlimited)
+    echo "fwd_sim → GPU (${GPU_PARTITION}, --gpus=${GPUS}, throttle=${ARRAY_THROTTLE:-none}); set FWD_GPU=0 to force CPU"
+else
+    FWD_SB=(); FWD_GPU_ENV="CF_GPU=0"
+    echo "fwd_sim → CPU (FWD_GPU=0)"
+fi
 LOGDIR="logs"; mkdir -p "${LOGDIR}"
 DATA_ROOT="${DATA_ROOT:-$(pwd)/../data}"
 CP_DIR="${DATA_ROOT}/output/cluster_processed"
@@ -156,8 +173,8 @@ submit () {  # submit <jobname> <time> <extra-sbatch-args...>
 #    shared-NFS precompile/load lock. DO_WARMUP=0 to skip; ARRAY_THROTTLE=N caps concurrent tasks.
 warm_dep=""
 if [[ "${DO_WARMUP:-1}" == "1" ]]; then
-    wj=$(submit "bbl_warmup" "${SOLVE_TIME}" \
-        --export=ALL,BBL_ROUTINE=${ROUTINES%% *},BBL_STAGE=${CF_STAGE},R=${R},SEED=${SEED},BBL_STEP=warmup submit_bbl.sh)
+    wj=$(submit "bbl_warmup" "${SOLVE_TIME}" "${FWD_SB[@]}" \
+        --export=ALL,BBL_ROUTINE=${ROUTINES%% *},BBL_STAGE=${CF_STAGE},R=${R},SEED=${SEED},BBL_STEP=warmup,${FWD_GPU_ENV} submit_bbl.sh)
     echo "── pre-warm depot → job ${wj} (fwd_sim waits on it) ──"
     warm_dep="--dependency=afterok:${wj}"
 fi
@@ -177,8 +194,8 @@ solve_dep=""    # colon-joined solve job ids → the auto-zip waits on all of th
 for k in ${ROUTINES}; do
     base_export="BBL_ROUTINE=${k},BBL_STAGE=${CF_STAGE},R=${R},SEED=${SEED}"
     echo "── E${k} ${CF_STAGE} | R=${R} | shocks=${SHOCKS} over ${N_SHARDS} shards ──"
-    arr=$(submit "bbl_fwd_E${k}" "${SHARD_TIME}" ${fwd_dep} --array=0-$((N_SHARDS-1))${THROTTLE} \
-        --export=ALL,${base_export},BBL_STEP=fwd_sim,N_SHARDS=${N_SHARDS},BBL_EXTRA="${bbl_extra}" \
+    arr=$(submit "bbl_fwd_E${k}" "${SHARD_TIME}" ${fwd_dep} "${FWD_SB[@]}" --array=0-$((N_SHARDS-1))${THROTTLE} \
+        --export=ALL,${base_export},BBL_STEP=fwd_sim,N_SHARDS=${N_SHARDS},BBL_EXTRA="${bbl_extra}",${FWD_GPU_ENV} \
         submit_bbl.sh)
     echo "  fwd_sim array → job ${arr} (${N_SHARDS} shards${THROTTLE:+, throttled ${THROTTLE}})"
     # solve depends on the fwd_sim array via afterANY: the eq:17 solve globs whatever psi_dev shards
@@ -217,3 +234,8 @@ fi
 
 echo "Submitted BBL cost estimation for routines: ${ROUTINES}. Watch with: squeue -u \$USER"
 echo "When solve completes, the CFs can run:  bash submit_cf_all.sh  (it preflights cost_params_*.json)"
+# Machine-parseable handle for an orchestrator (submit_bbl_cf_all.sh): the colon-joined solve job ids
+# an afterok can chain on so CF1-net launches the instant the cost params are written. Empty if no
+# routines were submitted. Keep this the LAST line so a `sed -n 's/^BBL_SOLVE_JOBIDS=//p' | tail -1`
+# captures it cleanly.
+echo "BBL_SOLVE_JOBIDS=${dep_csv}"

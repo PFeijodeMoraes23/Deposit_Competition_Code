@@ -335,6 +335,7 @@ mutable struct HotBuffers
     delta_new      ::Vector{Float64}
     f              ::Vector{Float64}
     pi_products    ::Vector{Matrix{Float64}}
+    pi_base        ::Vector{Matrix{Float64}}   # saved ρ̂ spread-products → cf_shares_at restore-by-copy (B.1)
 end
 
 function allocate_hot_buffers(N::Int, N_B::Int, N_D::Int, R::Int,
@@ -383,6 +384,7 @@ function allocate_hot_buffers(N::Int, N_B::Int, N_D::Int, R::Int,
         zeros(N),
         zeros(N),
         Matrix{Float64}[],
+        Matrix{Float64}[],       # pi_base (B.1) — filled by save_pi_base! after the initial precompute
     )
 end
 

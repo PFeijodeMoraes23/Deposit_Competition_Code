@@ -88,6 +88,9 @@ SIEVE_N_STARTS = int(os.environ.get("SLEEP_SIEVE_N_STARTS", str(max(2, JULIA_THR
 NLLS_N_STARTS = int(os.environ.get("SLEEP_NLLS_N_STARTS", "4"))
 # Opt 8: drop the LS loss during the grid (robust feeds phi). Set DROP_LS=0 to keep it.
 DROP_LS = os.environ.get("SLEEP_DROP_LS", "1") != "0"
+# SLEEP_LS_ONLY=1: compute ONLY the LS variant (res_robust=None); the saved robust results are
+# preserved by merge-on-save. Requires SLEEP_DROP_LS=0 to have any effect. See _exec_spec.
+LS_ONLY = os.environ.get("SLEEP_LS_ONLY", "0") == "1"
 
 
 def _out_dir(est_num):
@@ -150,34 +153,66 @@ def _exec_spec(args):
         n_starts = 1 if link == "kernel" else SIEVE_N_STARTS
         warm = init if warm_theta is None else warm_theta   # opt 9: cross-spec warm start
         # Opt 1+4: Julia subsample theta-search for the sieve (kernel stays Python).
-        theta_jl = None
-        if link == "sieve" and USE_JULIA_SIEVE:
+        def _julia_search(loss_name):
+            """One Julia direction search; returns theta or None (Python fallback)."""
             try:
                 from sleep_joint_julia import julia_theta
                 # n_starts MUST be passed: julia_theta defaults to 2 and it is the JULIA
                 # search that actually picks the direction here (the Python multistart is
                 # skipped whenever theta_fixed is returned). Raising only the Python-side
                 # n_starts changed nothing -- the engine still reported "starts=2".
-                theta_jl = julia_theta(df_target, s_cols, has_cf=has_cf, loss="robust", fe_time_col=fe_tc,
-                                       subsample_frac=SUBSAMPLE_FRAC, maxiter_mult=MAXITER_MULT,
-                                       init_theta=warm, seed=0, threads=JULIA_THREADS,
-                                       n_starts=SIEVE_N_STARTS)
+                return julia_theta(df_target, s_cols, has_cf=has_cf, loss=loss_name,
+                                   fe_time_col=fe_tc, subsample_frac=SUBSAMPLE_FRAC,
+                                   maxiter_mult=MAXITER_MULT, init_theta=warm, seed=0,
+                                   threads=JULIA_THREADS, n_starts=SIEVE_N_STARTS)
             except Exception as e:
-                print(f"  [julia_theta] error, Python fallback: {e}")
-                theta_jl = None
-        res_robust = fit_joint_single_index(df_target, s_cols, has_cf=has_cf, link=link,
-                                            loss="robust", init_theta=warm,
-                                            n_starts=n_starts, boot_B=999, boot_scheme="webb", seed=0,
-                                            label=f"{spec_name}/robust", fe_time_col=fe_tc,
-                                            theta_fixed=theta_jl, phi_band=is_spec12)
+                print(f"  [julia_theta/{loss_name}] error, Python fallback: {e}")
+                return None
+
+        # SLEEP_LS_ONLY=1: skip the robust search + fit entirely (res_robust=None) and let
+        # merge-on-save leave the stored robust results untouched. Used for retro-fitting the
+        # LS variant onto an already-computed grid without re-paying the robust cost.
+        theta_jl = None
+        res_robust = None
+        if not LS_ONLY:
+            if link == "sieve" and USE_JULIA_SIEVE:
+                theta_jl = _julia_search("robust")
+            res_robust = fit_joint_single_index(df_target, s_cols, has_cf=has_cf, link=link,
+                                                loss="robust", init_theta=warm,
+                                                n_starts=n_starts, boot_B=999, boot_scheme="webb", seed=0,
+                                                label=f"{spec_name}/robust", fe_time_col=fe_tc,
+                                                theta_fixed=theta_jl, phi_band=is_spec12)
         # Opt 8: drop the LS loss during the grid (robust feeds phi).
         if DROP_LS:
             res_ls = None
         else:
+            # Two LS modes, mutually exclusive:
+            #   SLEEP_LS_FIXED_THETA=1  (diagnostic): hold theta at the ROBUST Julia direction,
+            #       so robust and LS differ ONLY in the loss. Lower bound on the LS link span.
+            #   default: LS finds its OWN theta through the Julia engine (loss="ls" -- the .jl
+            #       else-branch is plain dot(r,r); ~3x cheaper per eval than robust). Without
+            #       the Julia call the LS branch runs the full Python-side Nelder-Mead search,
+            #       measured at ~14h/spec -- never let it fall through silently, which is why
+            #       the fallback prints loudly above.
+            if os.environ.get("SLEEP_LS_FIXED_THETA", "0") == "1":
+                _ls_theta = theta_jl          # None under LS_ONLY: nothing to hold fixed
+            elif link == "sieve" and USE_JULIA_SIEVE:
+                _ls_theta = _julia_search("ls")
+                if _ls_theta is None and LS_ONLY:
+                    # Without a Julia direction the LS fit falls into the full Python-side
+                    # Nelder-Mead search (~14h/spec, measured 07-30/31). In the retrofit mode
+                    # that is never what was asked for -- fail instead of silently grinding.
+                    raise RuntimeError(
+                        f"[{spec_name}] Julia LS theta search failed and SLEEP_LS_ONLY=1; "
+                        f"refusing the ~14h/spec Python fallback")
+            else:
+                _ls_theta = None
+            _ls_boot = int(os.environ.get("SLEEP_LS_BOOT_B", "999"))
             res_ls = fit_joint_single_index(df_target, s_cols, has_cf=has_cf, link=link,
                                             loss="ls", init_theta=warm, n_starts=n_starts,
-                                            boot_B=999, boot_scheme="webb", seed=0,
-                                            label=f"{spec_name}/ls", fe_time_col=fe_tc)
+                                            boot_B=_ls_boot, boot_scheme="webb", seed=0,
+                                            label=f"{spec_name}/ls", fe_time_col=fe_tc,
+                                            theta_fixed=_ls_theta)
         return res_robust, res_ls, spec_name, res_fs
 
     raise ValueError(f"unknown kind {kind!r}")
@@ -206,7 +241,9 @@ def _exec_block(block_args):
             (df, iv, iv_specs[iv], s_name, s_cols, kind, warm))
         out.append((res_main, res_ls, spec_name, res_fs))
         if kind in ("joint_sieve", "single_index"):
-            w = _warm_from(res_main, s_cols)
+            # In LS-only mode res_main is None; chain the LS theta instead so an LS grid
+            # warm-starts itself exactly as the robust grid does.
+            w = _warm_from(res_main if res_main is not None else res_ls, s_cols)
             if w is not None:
                 warm = w
     return out
@@ -263,18 +300,54 @@ def run_sleep_estimator(est_num, kind, time_block=False, spec12_only=False, n_jo
                 delayed(_exec_block)(bt) for bt in block_tasks)
         results = [r for block in block_results for r in block]
 
+    # MERGE-ON-SAVE (2026-07-31). The previous code rebuilt results_dict from scratch and
+    # pickle.dump'd it, so a `--spec12` run silently DESTROYED the other 7 specs of a full-grid
+    # pickle (this actually happened to est7 on 07-31; restored from _PRE_LSTEST_ backup).
+    # Now: load the existing pickle and update only the specs computed in THIS run.
+    #   * res_main (robust) present  -> overwrite second_stage/first_stage as before.
+    #   * res_main None, res_ls set  -> LS-only run: attach second_stage_ls to the EXISTING
+    #     entry, leaving the stored robust results byte-untouched. The entry must already
+    #     exist (an LS variant without its robust counterpart is meaningless) -- fail loudly.
+    out = _out_dir(est_num)
+    pkl_path = out / "estimation_results.pkl"
     results_dict = {}
+    if pkl_path.exists():
+        try:
+            with open(pkl_path, "rb") as f:
+                results_dict = pickle.load(f)
+            print(f"Merging into existing pickle ({len(results_dict)} spec(s) on disk)")
+        except Exception as e:
+            raise RuntimeError(
+                f"existing {pkl_path} unreadable ({e}); refusing to overwrite blindly") from e
+
+    fresh_robust = []            # specs whose second_stage was recomputed this run
     for res_main, res_ls, spec_name, res_fs in results:
         if res_main is not None:
-            entry = {"second_stage": res_main, "first_stage": res_fs}
+            entry = results_dict.setdefault(spec_name, {})
+            entry["second_stage"] = res_main
+            entry["first_stage"] = res_fs
             if res_ls is not None:
                 entry["second_stage_ls"] = res_ls
-            results_dict[spec_name] = entry
+            fresh_robust.append(spec_name)
             print(f"Computed [{spec_name}]")
+        elif res_ls is not None:
+            if spec_name not in results_dict or "second_stage" not in results_dict[spec_name]:
+                raise RuntimeError(
+                    f"LS-only result for [{spec_name}] but no stored robust fit to attach to -- "
+                    f"run the full estimator first")
+            results_dict[spec_name]["second_stage_ls"] = res_ls
+            print(f"Computed [{spec_name}] (LS only; robust preserved)")
 
-    out = _out_dir(est_num)
-    with open(out / "estimation_results.pkl", "wb") as f:
+    with open(pkl_path, "wb") as f:
         pickle.dump(results_dict, f)
+
+    # phi CSVs + the spec-12 CI band derive ONLY from second_stage (robust). If this run
+    # recomputed no robust fit (LS-only), the stored CSVs/band are already correct for the
+    # merged pickle -- skip the rebuild so their content AND mtimes stay untouched (which the
+    # verification step uses as evidence that an LS run disturbed nothing downstream).
+    if not fresh_robust:
+        print(f"Saved results (LS merged; phi CSVs/band untouched) -> {out}")
+        return
 
     # Integrate the time-series report's link-comparison CI band into the main routine:
     # the spec-12 single-index/joint-sieve fit carries a national phi_t bootstrap band
@@ -289,6 +362,8 @@ def run_sleep_estimator(est_num, kind, time_block=False, spec12_only=False, n_jo
                 pickle.dump(boot, f)
             print(f"Saved spec-12 phi_t CI band -> ts_link_band_est{est_num}.pkl")
 
+    # NOTE: _calculate_phis runs over the MERGED dict, so even a partial robust re-run
+    # rebuilds the phi columns of every stored spec -- the CSVs stay complete.
     df["year_quarter"] = df["time_id"]
     df, national_phis = _calculate_phis(df, results_dict, LINK_OF[kind])
     df.to_csv(out / "market_panel_phis.csv", index=False)
