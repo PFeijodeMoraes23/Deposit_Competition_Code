@@ -106,10 +106,16 @@ setup_python () {
     # Probe the actual imports, not just the binary — bare node python3 exists but has no sci stack,
     # and a Traceback 14h into the pipeline (after the fwd_sim array drains) is the failure mode this
     # prevents. Fail loud, with the one-time fix.
-    "${PYBIN}" -c 'import numpy, pandas, scipy, pyarrow, statsmodels' 2>/dev/null || {
-        echo "ERROR: '${PYBIN}' lacks the solve stack (numpy/pandas/scipy/pyarrow/statsmodels)." >&2
-        echo "  One-time setup:  module load miniconda && conda create -y -n costsolve python=3.11 numpy pandas scipy pyarrow statsmodels" >&2
-        echo "  Then submit with the defaults (PY_MODULE=miniconda CONDA_ENV=costsolve), or override them." >&2
+    # Require ONLY what the step actually imports. estimation_bbl_3_solve.py uses numpy/pandas/scipy
+    # (+pyarrow via pd.read_parquet) and NOT statsmodels — that is a Step-1 polfunc dependency only.
+    # Over-requiring it would reject an otherwise-usable existing env.
+    PY_REQ="numpy, pandas, scipy, pyarrow"
+    [[ "${BBL_STEP}" == "polfunc" ]] && PY_REQ="${PY_REQ}, statsmodels"
+    "${PYBIN}" -c "import ${PY_REQ}" 2>/dev/null || {
+        echo "ERROR: '${PYBIN}' lacks the required stack (${PY_REQ})." >&2
+        echo "  Use an existing env:  CONDA_ENV=<name> …   (conda env list)" >&2
+        echo "  or point straight at an interpreter:  CF_PYTHON=/path/to/python CONDA_ENV='' …" >&2
+        echo "  or add the missing bit:  conda install -n <name> -y pyarrow" >&2
         exit 127; }
     # The scripts' default COST_FWD is the local BCB tree, absent on the cluster. Point it at the
     # data/output/cost where fwd_sim (Julia) writes the psi_* this solve reads.

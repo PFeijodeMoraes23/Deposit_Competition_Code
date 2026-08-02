@@ -159,10 +159,14 @@ done
 # t+4s on `No module named 'pandas'`, and its afterok cascade auto-cancelled cf1_net with no log at
 # all). Subshell so `module load` / conda activate don't leak into this submit shell. PY_PREFLIGHT=0 skips.
 if [[ "${PY_PREFLIGHT:-1}" == "1" ]]; then
+    # Only what is actually imported: the solve needs numpy/pandas/scipy/pyarrow; statsmodels is a
+    # Step-1 polfunc dependency, so require it only when polfunc runs here (mirrors submit_bbl.sh).
+    PY_REQ="numpy, pandas, scipy, pyarrow"
+    [[ "${DO_POLFUNC}" == "1" ]] && PY_REQ="${PY_REQ}, statsmodels"
     ( [[ -n "${PY_MODULE:-}" ]] && module load ${PY_MODULE}
       [[ -n "${CONDA_ENV:-}" ]] && { source activate "${CONDA_ENV}" 2>/dev/null || conda activate "${CONDA_ENV}"; }
-      "${CF_PYTHON:-python3}" -c 'import numpy, pandas, scipy, pyarrow, statsmodels' ) >/dev/null 2>&1 || {
-        echo "MISSING the solve's Python stack (numpy/pandas/scipy/pyarrow/statsmodels)"
+      "${CF_PYTHON:-python3}" -c "import ${PY_REQ}" ) >/dev/null 2>&1 || {
+        echo "MISSING the solve's Python stack (${PY_REQ})"
         echo "   env: PY_MODULE='${PY_MODULE:-}' CONDA_ENV='${CONDA_ENV:-}' CF_PYTHON='${CF_PYTHON:-python3}'"
         echo "   → one-time fix:  module load miniconda && conda create -y -n costsolve python=3.11 numpy pandas scipy pyarrow statsmodels"
         echo "     (PY_PREFLIGHT=0 skips this check; CONDA_ENV=\"\" opts out of conda entirely)"; miss=1; }
