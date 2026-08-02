@@ -92,7 +92,7 @@ run_julia () {
 #   CF_PYTHON=python      interpreter to call (default python3)
 # One-time setup:  module load miniconda && conda create -y -n costsolve python=3.11 numpy pandas scipy pyarrow statsmodels
 [[ -z "${PY_MODULE+set}" ]]  && PY_MODULE=miniconda    # default only when truly UNSET (empty ⇒ opt out)
-[[ -z "${CONDA_ENV+set}" ]]  && CONDA_ENV=costsolve
+[[ -z "${CONDA_ENV+set}" ]]  && CONDA_ENV=dep_comp_blp   # verified 2026-08-02: has numpy/pandas/scipy/pyarrow
 setup_python () {
     [[ -n "${PY_MODULE:-}" ]] && module load ${PY_MODULE}
     if [[ -n "${CONDA_ENV:-}" ]]; then

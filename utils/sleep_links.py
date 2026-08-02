@@ -814,7 +814,8 @@ def _fit_link_kernel(v, Z, cf_dm, y_dm, einv, counts, bw, grid, wts=None,
 def fit_joint_single_index(df, state_cols, has_cf, link="sieve", loss="ls",
                            n_interior=5, degree=3, n_starts=4, init_theta=None,
                            boot_B=199, boot_scheme="rademacher", seed=0, label="",
-                           phi_band=False, fe_time_col=None, theta_fixed=None):
+                           phi_band=False, fe_time_col=None, theta_fixed=None,
+                           polish_evals=0):
     """Joint single-index sleepiness by Ichimura (1993) SLS: estimate the index
     direction theta (||theta||=1) and the link G TOGETHER.
       link='sieve'  (Est7): monotone cubic I-spline ramps, nonneg coefs (shape
@@ -937,6 +938,7 @@ def fit_joint_single_index(df, state_cols, has_cf, link="sieve", loss="ls",
 
     # ---- multistart over the unit sphere ----
     from scipy.optimize import minimize
+    import time as _time
     # Start order: (1) logit warm start, (2) the deterministic equal-weight
     # ("ones") direction, (3+) random unit vectors. The ones-vector is a cheap,
     # reliable second start that reliably settles the sieve optimum; random starts
@@ -994,6 +996,25 @@ def fit_joint_single_index(df, state_cols, has_cf, link="sieve", loss="ls",
         # Python-side search. Do not re-add one without first counting function evaluations.
         tf = np.asarray(theta_fixed, float)
         theta_hat = tf / (np.linalg.norm(tf) + 1e-12)
+        # OPTIONAL POLISH (2026-08-02). The Julia engine minimises a DIFFERENT objective from
+        # this one -- it bins the ramp design and solves the bounded LS by another algorithm --
+        # so its theta is a good START but not the optimum of `_obj`. Measured on E7 spec 12
+        # under LS: Julia 26,054 vs 25,528 for a 33h cold Python search; ~100 Nelder-Mead evals
+        # from Julia's theta recover 80% of that gap. Polishing HERE reuses `_obj` directly, so
+        # each evaluation is one link solve -- not a whole fit+bootstrap+grid pass.
+        # polish_evals=0 (default) keeps the previous behaviour exactly.
+        if polish_evals and int(polish_evals) > 0:
+            _o0 = _obj(theta_hat)
+            _t0 = _time.time()
+            _r = minimize(_obj, theta_hat, method="Nelder-Mead",
+                          options={"maxfev": int(polish_evals), "xatol": 1e-4,
+                                   "fatol": 1e-3, "adaptive": True})
+            if np.isfinite(_r.fun) and _r.fun < _o0:
+                theta_hat = np.asarray(_r.x, float)
+                theta_hat = theta_hat / (np.linalg.norm(theta_hat) + 1e-12)
+            print(f"  [polish/{loss}] {int(_r.nfev)} evals in {(_time.time()-_t0)/60:.1f} min | "
+                  f"obj {_o0:.0f} -> {min(_r.fun, _o0):.0f} "
+                  f"({100*(_o0-min(_r.fun,_o0))/max(_o0,1e-12):.2f}% better)")
     else:
         best = None
         for s0 in starts:

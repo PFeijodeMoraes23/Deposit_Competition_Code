@@ -26,6 +26,9 @@
 #   DO_CF4_NOEVAL=1   Phase-1 CF4 identity-link fallback
 #   DO_CF1_GROSS=1 / DO_CF1_NET=1 / DO_CF4_REEVAL=1     Phase-2 CFs
 #   DO_DEMAND_EVAL=1  baseline shares_elas (attached to the first CF invocation)
+#   DO_LOG_ZIP=1      final afterany job → ONE data/output/run_logs_<jobid>.zip with every .out/.err
+#                     this run produced (~800 files at 100 shards × 4 routines), originals removed.
+#                     Scoped by mtime marker, so earlier runs' logs are untouched. 0 → keep them loose.
 #   DO_FINAL_ZIP=1    final afterany job → data/output/{foundation,cf1,cf4}_outputs.zip for download
 #                     (FINAL_ZIP_CFS overrides which CFs; BBL cost params are auto-zipped separately)
 #   ROUTINES="6"  CF_STAGE=extended  R=2000  SEED=42     (shared by both stages)
@@ -69,10 +72,19 @@ ORCH_DEMAND_EVAL="${DO_DEMAND_EVAL:-1}"   # baseline shares_elas — attach to t
 DO_FINAL_ZIP="${DO_FINAL_ZIP:-1}"
 FINAL_ZIP_CFS="${FINAL_ZIP_CFS:-foundation cf1 cf4}"
 
+# A full run writes ~800 log files (each fwd_sim array task emits a .out and a .err, ×N_SHARDS
+# ×routines). DO_LOG_ZIP=1 adds ONE short job, afterany EVERYTHING, that bundles this run's logs into
+# data/output/run_logs_<jobid>.zip and REMOVES the originals (zip -m: only what it archived is
+# deleted). Scoped by mtime against a marker created below, so older logs are untouched.
+DO_LOG_ZIP="${DO_LOG_ZIP:-1}"
+LOG_MARKER="$(mktemp logs/.orch_marker.XXXXXX)"
+
 CF_JOBIDS=""   # every CF result job id this run submits (both phases) → the final-zip afterany
+ALL_JOBIDS=""  # + BBL jobs + the archive jobs → the log archiver waits on ALL of them
+add_jobids() { [[ -n "$1" ]] && ALL_JOBIDS="${ALL_JOBIDS:+${ALL_JOBIDS}:}$1"; }
 capture_cf_ids() {  # $1 = captured submit_cf_all.sh stdout
     local ids; ids="$(printf '%s\n' "$1" | sed -n 's/^CF_RESULT_JOBIDS=//p' | tail -n1)"
-    [[ -n "${ids}" ]] && CF_JOBIDS="${CF_JOBIDS:+${CF_JOBIDS}:}${ids}"
+    [[ -n "${ids}" ]] && { CF_JOBIDS="${CF_JOBIDS:+${CF_JOBIDS}:}${ids}"; add_jobids "${ids}"; }
 }
 
 echo "══════════════════════════════════════════════════════════════════════════════"
@@ -87,6 +99,7 @@ if [[ "${DO_BBL}" == "1" ]]; then
     bbl_out="$(bash submit_bbl_all.sh)"
     printf '%s\n' "${bbl_out}"
     COST_AFTEROK="$(printf '%s\n' "${bbl_out}" | sed -n 's/^BBL_SOLVE_JOBIDS=//p' | tail -n1)"
+    add_jobids "$(printf '%s\n' "${bbl_out}" | sed -n 's/^BBL_ALL_JOBIDS=//p' | tail -n1)"
     if [[ -z "${COST_AFTEROK}" && "${DO_CF1_NET}" == "1" ]]; then
         echo "ERROR: submit_bbl_all.sh emitted no BBL_SOLVE_JOBIDS — cannot chain CF1-net. Aborting." >&2
         echo "  (Re-run with DO_CF1_NET=0, or DO_BBL=0 once cost_params_*.json are on disk.)" >&2
@@ -129,8 +142,31 @@ if [[ "${DO_FINAL_ZIP}" == "1" && -n "${CF_JOBIDS}" ]]; then
         -o logs/cf_final_zip_%j.out -e logs/cf_final_zip_%j.err \
         --wrap "cd '$(pwd)' && KEEP=1 CFS='${FINAL_ZIP_CFS}' bash zip_all_cf.sh")
     echo "  final CF archive → job ${final_zip_jid} (afterany:${CF_JOBIDS})"
+    add_jobids "${final_zip_jid}"
 elif [[ "${DO_FINAL_ZIP}" == "1" ]]; then
     echo; echo "── final archive skipped: no CF jobs were submitted ──"
+fi
+
+# ── Log archive: ONE zip for the whole run, afterany every job above ───────────────
+log_zip_jid=""
+if [[ "${DO_LOG_ZIP}" == "1" && -n "${ALL_JOBIDS}" ]]; then
+    echo; echo "═══ Log archive: bundle this run's logs → data/output/run_logs_<jobid>.zip ═══"
+    # -newer "${LOG_MARKER}" scopes this to logs written AFTER the orchestrator started, so previous
+    # runs' logs survive. Excludes its own .out/.err (still open) and any existing archive. `zip -m`
+    # deletes only entries it actually archived, so a skipped file is kept rather than lost.
+    log_zip_jid=$(sbatch --parsable --dependency=afterany:"${ALL_JOBIDS}" \
+        -J run_log_zip --partition="${ZIP_PARTITION:-day}" --time=00:20:00 \
+        --nodes=1 --ntasks=1 --cpus-per-task=2 --mem=4G \
+        -o logs/run_log_zip_%j.out -e logs/run_log_zip_%j.err \
+        --wrap "cd '$(pwd)' && { \
+                  find logs -maxdepth 1 -type f -newer '${LOG_MARKER}' \
+                       \\( -name '*.out' -o -name '*.err' \\) ! -name \"run_log_zip_\${SLURM_JOB_ID}.*\" -print0 \
+                    | xargs -0 -r zip -qmj '../data/output/run_logs_'\"\${SLURM_JOB_ID}\"'.zip' ; \
+                  rm -f '${LOG_MARKER}' ; \
+                  echo \"bundled \$(unzip -l '../data/output/run_logs_'\"\${SLURM_JOB_ID}\"'.zip' | tail -1) — originals removed\"; }")
+    echo "  run-log archive → job ${log_zip_jid} (afterany ${ALL_JOBIDS//:/, })"
+else
+    rm -f "${LOG_MARKER}"
 fi
 
 echo
@@ -149,5 +185,8 @@ else
     echo "                       KEEP=1 CFS='foundation cf1 cf4' bash zip_all_cf.sh"
     echo "                       (bare 'zip_all_cf.sh' MOVES files and its default CFS includes cf2,"
     echo "                        which would sweep the psi_* shards out of data/output/cost)"
+fi
+if [[ -n "${log_zip_jid}" ]]; then
+    echo "   • run logs        : data/output/run_logs_<${log_zip_jid}>.zip   (all .out/.err, originals removed)"
 fi
 echo "══════════════════════════════════════════════════════════════════════════════"

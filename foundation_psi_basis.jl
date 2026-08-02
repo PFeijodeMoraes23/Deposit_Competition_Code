@@ -34,10 +34,19 @@ include(joinpath(@__DIR__, "foundation_deposit_sim.jl"))
 using DataFrames, LinearAlgebra, Statistics
 import JSON3
 
-# Cost-shifter (Z) columns — mirror estimation_bbl_1_polfunc.py so γ is comparable.
+# Cost-shifter (Z) columns entering c = ω + ζ·r^f_q + γ′Z (V_Main eq 8).
+# ACTIVE SET — the four actually present in the demand-prep parquets. Mirrors the corresponding
+# subset of estimation_bbl_1_polfunc.py's COST_SHIFTERS (personnel/admin/tax, COSIF DRE) +
+# CAPITAL_WHOLESALE (indice_basileia), so γ stays comparable with the policy function.
 const Z_COST_COLS = ["personnel_cost_ratio_lag", "admin_cost_ratio_lag",
-                     "tax_cost_ratio_lag", "indice_basileia_lag",
-                     "wholesale_ratio_lag", "lci_lca_ratio_lag"]
+                     "tax_cost_ratio_lag", "indice_basileia_lag"]
+
+# DEFERRED (2026-08-02) — these live in market_panel.csv and ARE used by polfunc
+# (CAPITAL_WHOLESALE), but were never propagated into the demand-prep parquets, so the ψ basis
+# never saw them: load_Z silently kept whatever was present and γ was identified on 4, not 6.
+# This is a PREP-WIRING gap, not missing data. Until estimation_1_demand_1_prep.py carries them
+# through (needs a re-prep + re-upload), their explanatory power loads onto ω.
+const Z_COST_DEFERRED = ["wholesale_ratio_lag", "lci_lca_ratio_lag"]
 
 """
     load_Z(ctx; sidecar=nothing) -> (Z::Matrix, names::Vector{String})
@@ -49,6 +58,12 @@ function load_Z(ctx::CFDemandCtx; sidecar::Union{Nothing,DataFrame}=nothing)
     df = sidecar === nothing ? ctx.df : hcat(ctx.df, sidecar; makeunique=true)
     cols = [c for c in Z_COST_COLS if c in names(df)]
     isempty(cols) && error("No cost-shifter (Z) columns found; pass a sidecar with $(Z_COST_COLS).")
+    # Never drop an expected shifter silently: a missing column just removes a γ, changing what ω
+    # absorbs, with no other trace. (2026-08-02: two shifters had been vanishing this way for the
+    # whole project because they were absent from the demand parquets — see Z_COST_DEFERRED.)
+    absent = setdiff(Z_COST_COLS, cols)
+    isempty(absent) || @warn "  [ψ] Z cost-shifter(s) MISSING from the panel — γ is identified " *
+                             "WITHOUT them and their effect loads onto ω: $(absent)"
     Z = zeros(nrow(df), length(cols))
     for (i, c) in enumerate(cols)
         v = Float64.(coalesce.(df[!, c], 0.0)); replace!(v, Inf=>0.0, -Inf=>0.0)

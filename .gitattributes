@@ -1,0 +1,15 @@
+# Line-ending policy
+#
+# This repo is edited on Windows (core.autocrlf=true) but its shell scripts EXECUTE ON LINUX
+# (Yale Bouchet, SLURM). Under autocrlf=true git rewrites LF -> CRLF on checkout, and bash then
+# reads the shebang/`set -euo pipefail` with a trailing \r:
+#
+#     submit_bbl_all.sh: line 51: set: pipefail: invalid option name
+#
+# (hit 2026-08-02 — every submit_* script failed at line 1 after upload). `eol=lf` pins these to
+# LF in the working tree regardless of the local autocrlf setting, so what is uploaded always runs.
+*.sh text eol=lf
+
+# Julia/Python tolerate CRLF, so they are deliberately NOT forced here — normalizing them would
+# rewrite most of the repo for no functional gain. Only add a pattern below when the file is
+# consumed by something that breaks on \r.

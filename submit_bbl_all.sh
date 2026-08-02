@@ -65,7 +65,7 @@ DO_POLFUNC="${DO_POLFUNC:-0}"
 # are exported to the jobs via --export=ALL and re-defaulted identically inside submit_bbl.sh.
 # Set to "" to opt out (unset ⇒ default, empty ⇒ no module/env), CF_PYTHON to pick the interpreter.
 [[ -z "${PY_MODULE+set}" ]] && PY_MODULE=miniconda
-[[ -z "${CONDA_ENV+set}" ]] && CONDA_ENV=costsolve
+[[ -z "${CONDA_ENV+set}" ]] && CONDA_ENV=dep_comp_blp   # verified 2026-08-02
 export PY_MODULE CONDA_ENV
 # fwd_sim on GPU by default (FWD_GPU=1): the share aggregation moves to the H200
 # (compute_model_shares_gpu!), while the 72 GB Pi products + compute_mu! stay on the HOST
@@ -209,6 +209,7 @@ if [[ "${DO_WARMUP:-1}" == "1" ]]; then
         --export=ALL,BBL_ROUTINE=${ROUTINES%% *},BBL_STAGE=${CF_STAGE},R=${R},SEED=${SEED},BBL_STEP=warmup,${FWD_GPU_ENV} submit_bbl.sh)
     echo "── pre-warm depot → job ${wj} (fwd_sim waits on it) ──"
     warm_dep="--dependency=afterok:${wj}"
+    ALL_JIDS="${ALL_JIDS:+${ALL_JIDS}:}${wj}"
 fi
 THROTTLE="${ARRAY_THROTTLE:+%${ARRAY_THROTTLE}}"
 
@@ -220,8 +221,10 @@ if [[ "${DO_POLFUNC}" == "1" ]]; then
         --export=ALL,BBL_STAGE=${CF_STAGE},R=${R},SEED=${SEED},BBL_STEP=polfunc submit_bbl.sh)
     echo "── BBL Step 1 (polfunc) → job ${pj} (fwd_sim waits on it) ──"
     fwd_dep="--dependency=afterok:${pj}"
+    ALL_JIDS="${ALL_JIDS:+${ALL_JIDS}:}${pj}"
 fi
 
+ALL_JIDS=""     # EVERY job id this run creates → the orchestrator's final log archiver waits on all
 solve_dep=""    # colon-joined solve job ids → the auto-zip waits on all of them
 for k in ${ROUTINES}; do
     base_export="BBL_ROUTINE=${k},BBL_STAGE=${CF_STAGE},R=${R},SEED=${SEED}"
@@ -237,6 +240,7 @@ for k in ${ROUTINES}; do
         --export=ALL,${base_export},BBL_STEP=solve,BBL_EXTRA="--bootstrap 200" submit_bbl.sh)
     echo "  solve        → job ${slv} (afterany:${arr})"
     solve_dep="${solve_dep}:${slv}"
+    ALL_JIDS="${ALL_JIDS:+${ALL_JIDS}:}${arr}:${slv}"
 done
 
 # ── auto-zip: one short CPU job, afterany ALL solves, bundles this run's cost_params into
@@ -258,6 +262,7 @@ if [[ -n "${dep_csv}" ]]; then
                     | xargs -0 -r zip -j \"${DATA_OUT}/bbl_logs_\${SLURM_JOB_ID}.zip\" ; \
                   rm -f '${RUN_MARKER}' ; \
                   echo \"wrote \${PWD%/*}/output/bbl_outputs_\${SLURM_JOB_ID}.zip (cost_params COPIED — originals kept in place for the CFs)\"; }")
+    ALL_JIDS="${ALL_JIDS:+${ALL_JIDS}:}${zip_jid}"
     echo "── auto-zip: ${zip_jid}  (afterany${solve_dep})"
     echo "   → ${DATA_OUT}/bbl_outputs_<${zip_jid}>.zip  (cost_params_*.json, copied)"
 else
@@ -271,3 +276,6 @@ echo "When solve completes, the CFs can run:  bash submit_cf_all.sh  (it preflig
 # routines were submitted. Keep this the LAST line so a `sed -n 's/^BBL_SOLVE_JOBIDS=//p' | tail -1`
 # captures it cleanly.
 echo "BBL_SOLVE_JOBIDS=${dep_csv}"
+# Every job id above (warmup/polfunc/array/solve/zip), for a caller that wants to archive this
+# run's logs only after ALL of them have finished. submit_bbl_cf_all.sh consumes this.
+echo "BBL_ALL_JOBIDS=${ALL_JIDS}"

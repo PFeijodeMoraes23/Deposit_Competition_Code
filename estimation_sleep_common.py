@@ -222,11 +222,18 @@ def _exec_spec(args):
             else:
                 _ls_theta = None
             _ls_boot = int(os.environ.get("SLEEP_LS_BOOT_B", "999"))
+            # SLEEP_LS_POLISH_EVALS>0: Nelder-Mead polish of the Julia direction on the PYTHON
+            # objective. The two engines minimise DIFFERENT functions (the .jl bins the ramp and
+            # solves the bounded LS another way), so Julia's theta is a good start but not this
+            # objective's optimum: measured on E7 spec 12, Julia 26,054 vs 25,528 for a 33h cold
+            # Python search, and ~100 polish evals recover ~80% of that gap. Needs a start, so it
+            # only fires when _ls_theta exists.
+            _ls_polish = int(os.environ.get("SLEEP_LS_POLISH_EVALS", "0")) if _ls_theta is not None else 0
             res_ls = fit_joint_single_index(df_target, s_cols, has_cf=has_cf, link=link,
                                             loss="ls", init_theta=warm, n_starts=n_starts,
                                             boot_B=_ls_boot, boot_scheme="webb", seed=0,
                                             label=f"{spec_name}/ls", fe_time_col=fe_tc,
-                                            theta_fixed=_ls_theta)
+                                            theta_fixed=_ls_theta, polish_evals=_ls_polish)
         return res_robust, res_ls, spec_name, res_fs
 
     raise ValueError(f"unknown kind {kind!r}")
