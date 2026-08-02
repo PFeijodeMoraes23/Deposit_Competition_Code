@@ -17,7 +17,7 @@ R="${R:-2000}"; SEED="${SEED:-42}"; BETA="${BETA:-0.9}"; HORIZON="${HORIZON:-50}
 CPU_PARTITION="${CPU_PARTITION:-day}"
 : "${MERGE:?set MERGE=\"firmA,firmB\" (the conglomerate pair to merge)}"
 DATA_ROOT="${DATA_ROOT:-$(pwd)/../data}"
-ROOT="${DATA_ROOT}/CF_FOUNDATION/cf6_E${CF_ROUTINE}_${CF_STAGE}"
+ROOT="${DATA_ROOT}/output/cf/cf6_E${CF_ROUTINE}_${CF_STAGE}"
 export CF_ROUTINE CF_STAGE R SEED BETA HORIZON DATA_ROOT   # inherited by submit_cf3_jacobi.sh
 mkdir -p "${HERE}/logs"
 
@@ -52,4 +52,4 @@ if [[ "${DO_ZIP:-1}" == "1" ]]; then
         --export=ALL,CF_STEP=zip,CF_WHICH=cf6,CF_STAGE=${CF_STAGE},DATA_ROOT=${DATA_ROOT} "${HERE}/submit_cf.sh")
     echo "  zip cf6     → job ${zj} (afterany:${cmp})"
 fi
-echo "CF6 merger submitted (E${CF_ROUTINE}, ${MERGE}). Result → CF_FOUNDATION/cf6_merger_E${CF_ROUTINE}_spec_12_${CF_STAGE}.parquet. Watch: squeue -u \$USER"
+echo "CF6 merger submitted (E${CF_ROUTINE}, ${MERGE}). Result → data/output/cf/cf6_merger_E${CF_ROUTINE}_spec_12_${CF_STAGE}.parquet. Watch: squeue -u \$USER"

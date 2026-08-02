@@ -86,7 +86,7 @@ case "${CF_STEP}" in
         run_julia cf_1_franchise_value.jl ;;
     cf4)          # CF4: Pix reallocation (descriptive — no costs, no equilibrium). Consumes the exact
                   # link-aware φ^noPix parquet + Υ_pix JSON from cf_4_upsilon_export.py, which are BUILT
-                  # LOCALLY and uploaded to CF_FOUNDATION (compute nodes lack the sleep pickle), like the
+                  # LOCALLY and uploaded to data/input (compute nodes lack the sleep pickle), like the
                   # forward r^f curve; submit_cf_all.sh preflights both.
         run_julia cf_4_pix.jl ;;
     cf1_net)      # CF1 net-of-cost franchise value — needs the BBL cost params (cost_params_*.json,
@@ -114,7 +114,7 @@ case "${CF_STEP}" in
         run_julia cf_5_passthrough.jl --compare --sigma-base "${SIGMA_BASE}" --sigma-scn "${SIGMA_SCN}" ;;
     cf6_compare)  # CF6: combine the base + merged equilibria (CF_EXTRA carries --merge "A,B")
         run_julia cf_6_merger.jl --compare --sigma-base "${SIGMA_BASE}" --sigma-scn "${SIGMA_SCN}" ;;
-    zip)          # archive a CF's outputs across all estimations → CF_ZIPS/<cf>_outputs.zip (moves them out)
+    zip)          # archive a CF's outputs across all estimations → data/output/<cf>_outputs.zip (COPY when KEEP=1)
         DATA_ROOT="${DATA_ROOT:-${PROJECT_DIR}/../data}" \
             bash "${PROJECT_DIR}/zip_cf_outputs.sh" "${CF_WHICH:?set CF_WHICH (foundation|cf1|cf2|cf3|cf4|cf5|cf6)}" ${CF_TAG:-} ;;
     *) echo "Unknown CF_STEP='${CF_STEP}'"; exit 1 ;;

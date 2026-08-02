@@ -77,6 +77,30 @@ end
 const _CF_USE_GPU = _CF_GPU_REQUESTED && (try CUDA.functional() catch; false end)
 
 # ==========================================================================
+# Data-layout authority for the CF/BBL stack (cluster vs local)
+# ==========================================================================
+# get_paths(is_hpc=true) returns out_dir = <repo>/../data/output, so dirname(out_dir) == data/.
+# CLUSTER CONVENTION (2026-08-02): data/input holds everything UPLOADED from the local machine;
+# data/output holds everything the CLUSTER PRODUCES — including the BLP draws + RC results the BLP
+# jobs generate (those keep their existing locations; the BLP family is not touched here). The legacy
+# sibling dirs CF_FOUNDATION/ COST_FWD/ COST_POLFUNC/ CF_ZIPS/ are RETIRED on the cluster and replaced
+# by subdirectories of data/output (each holds many files, so nothing is a single-file directory).
+# LOCALLY out_dir is …/ESTIMATION_OUTPUT/BLP_RESULTS and the legacy tree is UNCHANGED — detection is
+# by tree shape, so one code path serves both and no local workflow breaks.
+_hpc_tree(out_dir) = basename(rstrip(String(out_dir), ['/', '\\'])) == "output"
+const _HPC_SUBDIR = Dict("CF_FOUNDATION" => "cf", "COST_FWD" => "cost", "COST_POLFUNC" => "polfunc")
+
+"""Directory the CF/BBL stack WRITES to (cluster: data/output/{cf,cost}; local: legacy sibling)."""
+cf_out_dir(out_dir, which::AbstractString="CF_FOUNDATION") =
+    _hpc_tree(out_dir) ? joinpath(String(out_dir), get(_HPC_SUBDIR, which, lowercase(which))) :
+                         joinpath(dirname(out_dir), which)
+
+"""Directory holding UPLOADED inputs (cluster: data/input; local: legacy sibling)."""
+cf_in_dir(out_dir, which::AbstractString="CF_FOUNDATION") =
+    _hpc_tree(out_dir) ? joinpath(dirname(String(out_dir)), "input") :
+                         joinpath(dirname(out_dir), which)
+
+# ==========================================================================
 # Context: everything needed to evaluate (counterfactual) shares
 # ==========================================================================
 struct CFDemandCtx
@@ -125,8 +149,17 @@ separate branch from `out_dir/logit/`.)
 function _result_path(out_dir, estim, spec_id, stage, suffix)
     flat = joinpath(out_dir, "blp_results_E$(estim)_spec_$(spec_id)_$(stage)$(suffix).jls")
     if stage == "extended"
-        consolidated = joinpath(out_dir, "cluster_processed", "blp_E$(estim)_spec_$(spec_id).jls")
-        return isfile(consolidated) ? consolidated : flat
+        # RC results are produced by the BLP family, which owns their location. Accept EVERY layout
+        # it may use — flat under out_dir, or nested under a BLP_RESULTS/ root — so the CF/BBL stack
+        # keeps working whichever one is in force (first existing wins; no flag-day coupling).
+        # Keep in sync with the CP_DIR candidate list in submit_cf_all.sh / submit_bbl_all.sh.
+        leaf = "blp_E$(estim)_spec_$(spec_id).jls"
+        for c in (joinpath(out_dir, "cluster_processed", leaf),
+                  joinpath(out_dir, "BLP_RESULTS", "cluster_processed", leaf),
+                  joinpath(out_dir, "BLP_RESULTS", leaf))
+            isfile(c) && return c
+        end
+        return flat
     end
     return flat
 end
@@ -284,7 +317,10 @@ function build_cf_context(estim::Int, spec_id::Int, stage::String;
         # (there is no RC-style result dict). θ₂ is empty ⇒ μ=0 ⇒ plain logit shares.
         # θ₁ is only needed for SPREAD counterfactuals; pull α from the 'full' logit
         # sub-model if present, else 0 (in-sample share reproduction is unaffected).
-        dbin  = joinpath(out_dir, "logit", "logit_delta_E$(estim)_spec_$(spec_id)$(suffix).bin")
+        # in_dir (= input_dir; data/input on HPC, where the uploaded delta lives) is checked
+        # first, then the local out_dir/logit write, then a legacy out_dir copy.
+        dbin  = joinpath(input_dir, "logit_delta_E$(estim)_spec_$(spec_id)$(suffix).bin")
+        isfile(dbin) || (dbin = joinpath(out_dir, "logit", "logit_delta_E$(estim)_spec_$(spec_id)$(suffix).bin"))
         isfile(dbin) || (dbin = joinpath(out_dir, "logit_delta_E$(estim)_spec_$(spec_id)$(suffix).bin"))
         dfull = load_delta_bin(dbin)
         dfull === nothing && error("Missing logit δ̂ bin: $dbin")
@@ -547,7 +583,7 @@ function main_cf_demand()
                            draws_dir_override=a["draws-dir"])
     if a["verify-gpu"]; verify_cf_gpu(ctx); return; end
     _, _, out_dir = get_paths(a["hpc"]; local_dir=a["local-dir"])
-    cf_dir = joinpath(dirname(out_dir), "CF_FOUNDATION")
+    cf_dir = cf_out_dir(out_dir)                       # cluster: data/output/cf
     out_path = joinpath(cf_dir,
         "shares_elas_E$(a["estim"])_spec_$(a["spec"])_$(a["stage"])$(a["suffix"]).parquet")
     cf_export_shares(ctx; out_path=out_path)

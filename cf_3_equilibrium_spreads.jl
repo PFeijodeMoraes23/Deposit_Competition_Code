@@ -242,7 +242,7 @@ function cf3_setup(a)
 
     tag = "E$(a["estim"])_spec_$(a["spec"])_$(a["stage"])$(a["suffix"])"
     cost_json = a["cost-json"] === nothing ?
-        joinpath(dirname(out_dir), "COST_FWD", "cost_params_$tag.json") : a["cost-json"]
+        joinpath(cf_out_dir(out_dir, "COST_FWD"), "cost_params_$tag.json") : a["cost-json"]
     cost = load_cost_params(cost_json, znames)
     n_Z = length(znames)
     haskey(cost, "B") && haskey(cost, "D") || error("cost_params must have B and D blocks")
@@ -356,7 +356,7 @@ function main_cf3()
     df = DataFrame(CodConglomeradoPrudencial=string.(ctx.df.CodConglomeradoPrudencial),
                    deposit_type=st.dep_type, is_B=st.is_B,
                    rho_hat=ctx.rho_hat, sigma_star=eq.sigma, endog=endog)
-    cf_dir = joinpath(dirname(out_dir), "CF_FOUNDATION"); mkpath(cf_dir)
+    cf_dir = cf_out_dir(out_dir); mkpath(cf_dir)       # cluster: data/output/cf
     out_path = joinpath(cf_dir, "cf3_equilibrium_$tag.parquet")
     Parquet2.writefile(out_path, df)
     log_status("  [CF3] wrote $(basename(out_path))")

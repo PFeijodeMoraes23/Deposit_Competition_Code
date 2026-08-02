@@ -33,14 +33,14 @@
 #     MEM=200G              override --mem (needs ≥ ~100G for the R=2000 extended context)
 #
 # Inputs built LOCALLY and uploaded (the compute nodes lack internet / the sleep pickle):
-#   data/COST_FWD/forward_rf_qoq.csv          (cf_forward_rf.py) — cf3/cf5/cf6 rebuild ψ and read it.
-#   data/CF_FOUNDATION/{upsilon_pix,phi_nopix}_E{k}_spec_12.*  (cf_4_upsilon_export.py) — CF4 only (DO_CF4=1).
+#   data/input/forward_rf_qoq.csv          (cf_forward_rf.py) — cf3/cf5/cf6 rebuild ψ and read it.
+#   data/input/{upsilon_pix,phi_nopix}_E{k}_spec_12.*  (cf_4_upsilon_export.py) — CF4 only (DO_CF4=1).
 # The BBL cost params the equilibrium CFs consume come from the SEPARATE BBL stage
-# (submit_bbl_all.sh → data/COST_FWD/cost_params_E*_spec_12_*.json); everything else is either
+# (submit_bbl_all.sh → data/output/cost/cost_params_E*_spec_12_*.json); everything else is either
 # already staged from the BLP run or auto-built here from the zip. See runbook §8.
 set -euo pipefail
 
-ROUTINES="${ROUTINES:-${CF_ROUTINE:-6}}"
+ROUTINES="${ROUTINES:-${CF_ROUTINE:-5 6 7 8}}"   # full RC lineup by default (E7/E8 are the headline)
 CF_STAGE="${CF_STAGE:-extended}"
 R="${R:-2000}"; SEED="${SEED:-42}"
 BETA="${BETA:-0.9}"; HORIZON="${HORIZON:-50}"
@@ -56,7 +56,15 @@ SHARD_TIME="${SHARD_TIME:-08:00:00}"; SOLVE_TIME="${SOLVE_TIME:-01:00:00}"
 EQ_TIME="${EQ_TIME:-12:00:00}"
 LOGDIR="logs"; mkdir -p "${LOGDIR}"
 DATA_ROOT="${DATA_ROOT:-$(pwd)/../data}"
-CP_DIR="${DATA_ROOT}/output/cluster_processed"
+# RC results are produced + placed by the BLP family, which owns their layout. Accept whichever is in
+# force (first EXISTING wins); fall back to the legacy path as the build target when none exists yet.
+# Keep in sync with _result_path()'s candidate list in foundation_demand_eval.jl.
+if [[ -z "${CP_DIR:-}" ]]; then
+    for _c in "${DATA_ROOT}/output/BLP_RESULTS/cluster_processed" "${DATA_ROOT}/output/cluster_processed"; do
+        [[ -d "${_c}" ]] && { CP_DIR="${_c}"; break; }
+    done
+    CP_DIR="${CP_DIR:-${DATA_ROOT}/output/cluster_processed}"
+fi
 ROUTINES_CSV="$(echo ${ROUTINES} | tr ' ' ',')"
 
 # ── Step 1: build cluster_processed/ from the RC zip if any routine is missing ───
@@ -104,7 +112,7 @@ if [[ "${need_process}" == "1" && "${AUTO_PROCESS}" == "1" ]]; then
 fi
 
 # ── Step 2: preflight — every required input must be present ──────────────────────
-RF_CURVE="${DATA_ROOT}/COST_FWD/forward_rf_qoq.csv"
+RF_CURVE="${DATA_ROOT}/input/forward_rf_qoq.csv"          # UPLOADED input
 DRAWS="${DATA_ROOT}/output/BLP_DRAWS/halton_nu_R${R}_seed${SEED}.jls"
 miss=0
 [[ -f "${DRAWS}" ]]    || { echo "MISSING R=${R} draws:  ${DRAWS}"; miss=1; }
@@ -131,17 +139,17 @@ if [[ -n "${CF_COST_AFTEROK:-}" ]]; then
 fi
 if [[ "${need_costs}" == "1" ]]; then
     for k in ${ROUTINES}; do
-        cp_json="${DATA_ROOT}/COST_FWD/cost_params_E${k}_spec_12_${CF_STAGE}.json"
+        cp_json="${DATA_ROOT}/output/cost/cost_params_E${k}_spec_12_${CF_STAGE}.json"
         [[ -f "${cp_json}" ]] || { echo "MISSING BBL cost params: ${cp_json}"; \
             echo "   → run the BBL cost stage first:  bash submit_bbl_all.sh"; miss=1; }
     done
 fi
 # CF4 needs no BBL costs, but DOES need the exact link-aware φ^noPix + Υ_pix built LOCALLY (the
-# sleep pickle is not on the compute nodes) and uploaded to CF_FOUNDATION, like the forward r^f
+# sleep pickle is not on the compute nodes) and uploaded to data/input, like the forward r^f
 # curve. Preflight both per routine when CF4 is requested.
 cf4_note=""
 if [[ "${DO_CF4}" == "1" ]]; then
-    CFF="${DATA_ROOT}/CF_FOUNDATION"
+    CFF="${DATA_ROOT}/input"          # upsilon_pix / phi_nopix are UPLOADED inputs
     for k in ${ROUTINES}; do
         for pf in "${CFF}/upsilon_pix_E${k}_spec_12.json" "${CFF}/phi_nopix_E${k}_spec_12.parquet"; do
             [[ -f "${pf}" ]] || { echo "MISSING CF4 input: ${pf}"; \
@@ -234,7 +242,7 @@ for k in ${ROUTINES}; do
 done
 
 # ── Archiving ──────────────────────────────────────────────────────────────────
-# NO auto-zip here. zip_cf_outputs.sh MOVES files out of data/COST_FWD & CF_FOUNDATION, but the
+# NO auto-zip here. zip_cf_outputs.sh MOVES files out of data/output/{cost,cf}, but the
 # equilibrium CFs consume them long after this script exits (cost_params_E*.json → CF3/CF5/CF6;
 # CF3's sig_6 → CF5 base). Archiving mid-pipeline strands those inputs inside the .zip. So archive
 # ONCE, at the very end, after CF3/CF5/CF6 have finished:  bash zip_all_cf.sh

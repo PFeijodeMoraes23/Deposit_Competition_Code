@@ -18,7 +18,7 @@
 # (un-suffixed). Set NUMERICAL_MODE=full for the full numerical chain.
 #
 # Prerequisite: warm-start deltas on the cluster:
-#   data/output/logit_delta_E{k}_spec_12.bin  for each k in ${ROUTINES}
+#   data/input/logit_delta_E{k}_spec_12.bin  for each k in ${ROUTINES}  (data/output kept as a fallback)
 # (the sigma stage warns + falls back to log-share init if its delta is missing).
 #
 # Usage:  bash submit_blp_rc_all.sh

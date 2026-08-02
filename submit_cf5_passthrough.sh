@@ -15,7 +15,7 @@ CF_ROUTINE="${CF_ROUTINE:-6}"; CF_STAGE="${CF_STAGE:-extended}"
 R="${R:-2000}"; SEED="${SEED:-42}"; BETA="${BETA:-0.9}"; HORIZON="${HORIZON:-50}"
 SELIC_SHOCK="${SELIC_SHOCK:-0.01}"; CPU_PARTITION="${CPU_PARTITION:-day}"
 DATA_ROOT="${DATA_ROOT:-$(pwd)/../data}"
-ROOT="${DATA_ROOT}/CF_FOUNDATION/cf5_E${CF_ROUTINE}_${CF_STAGE}"
+ROOT="${DATA_ROOT}/output/cf/cf5_E${CF_ROUTINE}_${CF_STAGE}"
 export CF_ROUTINE CF_STAGE R SEED BETA HORIZON DATA_ROOT   # inherited by submit_cf3_jacobi.sh
 mkdir -p "${HERE}/logs"
 
@@ -50,4 +50,4 @@ if [[ "${DO_ZIP:-1}" == "1" ]]; then
         --export=ALL,CF_STEP=zip,CF_WHICH=cf5,CF_STAGE=${CF_STAGE},DATA_ROOT=${DATA_ROOT} "${HERE}/submit_cf.sh")
     echo "  zip cf5     → job ${zj} (afterany:${cmp})"
 fi
-echo "CF5 pass-through submitted (E${CF_ROUTINE}). Result → CF_FOUNDATION/cf5_passthrough_E${CF_ROUTINE}_spec_12_${CF_STAGE}.parquet. Watch: squeue -u \$USER"
+echo "CF5 pass-through submitted (E${CF_ROUTINE}). Result → data/output/cf/cf5_passthrough_E${CF_ROUTINE}_spec_12_${CF_STAGE}.parquet. Watch: squeue -u \$USER"

@@ -304,7 +304,9 @@ function run_blp_estimation_ift(estim::Int, spec_id::Int, args,
                              pi_interactions, coef_dim)
 
     # ── θ₂ warm-start from previous stage checkpoint ──────────────────────
-    _, _, out_dir = get_paths(args["hpc"])
+    # in_dir is the FIRST get_paths return (on HPC: data/input, where the uploaded
+    # logit_delta warm-starts live); out_dir stays the checkpoint/result dir.
+    in_dir, _, out_dir = get_paths(args["hpc"])
     prev_stages   = Dict("rc2" => "sigma", "rc3" => "rc2", "rc4" => "rc3",
                          "full" => "rc4", "ext1" => "full", "ext2" => "ext1",
                          "extended" => "ext2")
@@ -337,17 +339,22 @@ function run_blp_estimation_ift(estim::Int, spec_id::Int, args,
     # ── δ warm-start ──────────────────────────────────────────────────────
     delta_work = zeros(N_obs)
     let _loaded = false
-        _bin_cand = joinpath(out_dir, "logit_delta_E$(estim)_spec_$(spec_id).bin")
-        if isfile(_bin_cand)
+        for _bin_cand in [
+                joinpath(in_dir,  "logit_delta_E$(estim)_spec_$(spec_id).bin"),
+                joinpath(out_dir, "logit_delta_E$(estim)_spec_$(spec_id).bin"),
+            ]
+            isfile(_bin_cand) || continue
             _d = load_delta_bin(_bin_cand)
             if _d !== nothing && length(_d) == N_obs
                 copyto!(delta_work, _d)
                 log_status("  [δ WARM-START] Loaded $(basename(_bin_cand)) [binary] (n=$(N_obs))")
                 _loaded = true
+                break
             end
         end
         if !_loaded
             for _cand in [
+                joinpath(in_dir,  "logit_delta_E$(estim)_spec_$(spec_id).jls"),
                 joinpath(out_dir, "logit_delta_E$(estim)_spec_$(spec_id).jls"),
                 joinpath(out_dir, "blp_checkpoint_E$(estim)_spec_$(spec_id)_logit.jls"),
                 joinpath(out_dir, "blp_results_E$(estim)_spec_$(spec_id)_logit.jls"),
@@ -1554,7 +1561,8 @@ function run_blp_estimation_gpu(estim::Int, spec_id::Int, args,
     log_status("  [GPU] ✓ GPU buffers allocated")
 
     # ── θ₂ warm-start ─────────────────────────────────────────────────────
-    _, _, out_dir = get_paths(args["hpc"])
+    # in_dir = data/input on HPC (uploaded logit_delta warm-starts); out_dir = results/checkpoints.
+    in_dir, _, out_dir = get_paths(args["hpc"])
     prev_stages  = Dict("rc2" => "sigma", "rc3" => "rc2", "rc4" => "rc3",
                         "full" => "rc4", "ext1" => "full", "ext2" => "ext1",
                         "extended" => "ext2")
@@ -1623,9 +1631,12 @@ function run_blp_estimation_gpu(estim::Int, spec_id::Int, args,
     delta_work = zeros(N_obs)
     let _loaded = false
         # BLP_DELTA_SUFFIX lets a run warm-start from a suffixed delta; default "" reads
-        # the logit_delta_E{k}_spec_{s}.* the logit step writes.
+        # the logit_delta_E{k}_spec_{s}.* the logit step writes. in_dir (data/input on
+        # HPC) is checked first so the uploaded warm-start wins over any legacy data/output copy.
         _suffix = get(ENV, "BLP_DELTA_SUFFIX", "")
         for _bin_cand in unique([
+                joinpath(in_dir,  "logit_delta_E$(estim)_spec_$(spec_id)$(_suffix).bin"),
+                joinpath(in_dir,  "logit_delta_E$(estim)_spec_$(spec_id).bin"),
                 joinpath(out_dir, "logit_delta_E$(estim)_spec_$(spec_id)$(_suffix).bin"),
                 joinpath(out_dir, "logit_delta_E$(estim)_spec_$(spec_id).bin"),
             ])
@@ -1640,6 +1651,8 @@ function run_blp_estimation_gpu(estim::Int, spec_id::Int, args,
         end
         if !_loaded
             for _cand in unique([
+                joinpath(in_dir,  "logit_delta_E$(estim)_spec_$(spec_id)$(_suffix).jls"),
+                joinpath(in_dir,  "logit_delta_E$(estim)_spec_$(spec_id).jls"),
                 joinpath(out_dir, "logit_delta_E$(estim)_spec_$(spec_id)$(_suffix).jls"),
                 joinpath(out_dir, "logit_delta_E$(estim)_spec_$(spec_id).jls"),
                 joinpath(out_dir, "blp_checkpoint_E$(estim)_spec_$(spec_id)_logit.jls"),
@@ -2214,7 +2227,8 @@ function run_blp_estimation_ift_gpu(estim::Int, spec_id::Int, args,
     gbuf = allocate_gpu_buffers(buf, pc, N_obs, N_B, N_D, R, n_pairs, n_times)
 
     # ── θ₂ warm-start ─────────────────────────────────────────────────────
-    _, _, out_dir = get_paths(args["hpc"])
+    # in_dir = data/input on HPC (uploaded logit_delta warm-starts); out_dir = results/checkpoints.
+    in_dir, _, out_dir = get_paths(args["hpc"])
     prev_stages   = Dict("rc2" => "sigma", "rc3" => "rc2", "rc4" => "rc3",
                          "full" => "rc4", "ext1" => "full", "ext2" => "ext1",
                          "extended" => "ext2")
@@ -2287,9 +2301,12 @@ function run_blp_estimation_ift_gpu(estim::Int, spec_id::Int, args,
     let _loaded = false
         # BLP_DELTA_SUFFIX lets a run warm-start from a suffixed delta; default "" reads
         # the logit_delta_E{k}_spec_{s}.* that the logit step writes. A suffixed delta is
-        # preferred when set, the unsuffixed one is the fallback.
+        # preferred when set, the unsuffixed one is the fallback. in_dir (data/input on
+        # HPC) is checked first so the uploaded warm-start wins over any legacy data/output copy.
         _suffix = get(ENV, "BLP_DELTA_SUFFIX", "")
         for _bin_cand in unique([
+                joinpath(in_dir,  "logit_delta_E$(estim)_spec_$(spec_id)$(_suffix).bin"),
+                joinpath(in_dir,  "logit_delta_E$(estim)_spec_$(spec_id).bin"),
                 joinpath(out_dir, "logit_delta_E$(estim)_spec_$(spec_id)$(_suffix).bin"),
                 joinpath(out_dir, "logit_delta_E$(estim)_spec_$(spec_id).bin"),
             ])
@@ -2304,6 +2321,8 @@ function run_blp_estimation_ift_gpu(estim::Int, spec_id::Int, args,
         end
         if !_loaded
             for _cand in unique([
+                joinpath(in_dir,  "logit_delta_E$(estim)_spec_$(spec_id)$(_suffix).jls"),
+                joinpath(in_dir,  "logit_delta_E$(estim)_spec_$(spec_id).jls"),
                 joinpath(out_dir, "logit_delta_E$(estim)_spec_$(spec_id)$(_suffix).jls"),
                 joinpath(out_dir, "logit_delta_E$(estim)_spec_$(spec_id).jls"),
                 joinpath(out_dir, "blp_checkpoint_E$(estim)_spec_$(spec_id)_logit.jls"),

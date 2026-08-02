@@ -174,7 +174,7 @@ function main_cf1()
     if a["net"]
         tag = "E$(a["estim"])_spec_$(a["spec"])_$(a["stage"])$(a["suffix"])"
         cj = a["cost-json"] === nothing ?
-            joinpath(dirname(out_dir), "COST_FWD", "cost_params_$tag.json") : a["cost-json"]
+            joinpath(cf_out_dir(out_dir, "COST_FWD"), "cost_params_$tag.json") : a["cost-json"]
         Z, znames = load_Z(ctx)
         cost = load_cost_params(cj, znames)
         rfq, _ = _first_present(ctx.df, ["risk_free_qoq", "risk_free_qoq_lag", "selic_qoq"]; default=0.0)
@@ -187,7 +187,7 @@ function main_cf1()
 
     dec = franchise_decomposition(ctx, st; beta=a["beta"], T=a["horizon"],
                                   markdown_q=markdown_q)
-    cf_dir = joinpath(dirname(out_dir), "CF_FOUNDATION")
+    cf_dir = cf_out_dir(out_dir)                       # cluster: data/output/cf
     out_path = joinpath(cf_dir,
         "cf1_franchise_$(kind)_E$(a["estim"])_spec_$(a["spec"])_$(a["stage"])$(a["suffix"]).parquet")
     summarize_and_export(ctx, st, dec; out_path=out_path)

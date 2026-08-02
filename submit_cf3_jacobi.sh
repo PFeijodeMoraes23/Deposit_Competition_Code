@@ -33,10 +33,10 @@ ZIP_AFTER="${ZIP_AFTER-cf3}"; DO_ZIP="${DO_ZIP:-1}"   # note: -, not :-, so an e
 DATA_ROOT="${DATA_ROOT:-$(pwd)/../data}"
 # SIGMA_DIR + EXTRA_CF are overridable so CF5/CF6 can drive this as a scenario solver (a shocked /
 # merged equilibrium into its own σ dir). It prints FINAL_JOB=<id> / FINAL_SIGMA=<path> for chaining.
-SIGMA_DIR="${SIGMA_DIR:-${DATA_ROOT}/CF_FOUNDATION/cf3_jacobi_E${CF_ROUTINE}_${CF_STAGE}}"
+SIGMA_DIR="${SIGMA_DIR:-${DATA_ROOT}/output/cf/cf3_jacobi_E${CF_ROUTINE}_${CF_STAGE}}"
 LOGDIR="logs"; mkdir -p "${LOGDIR}" "${SIGMA_DIR}"
 
-COST="${DATA_ROOT}/COST_FWD/cost_params_E${CF_ROUTINE}_spec_12_${CF_STAGE}.json"
+COST="${DATA_ROOT}/output/cost/cost_params_E${CF_ROUTINE}_spec_12_${CF_STAGE}.json"
 [[ -f "${COST}" ]] || { echo "MISSING costs: ${COST}"; echo "  → run the BBL cost stage first:  bash submit_bbl_all.sh"; exit 1; }
 echo "CF3 firm-sharded Jacobi: E${CF_ROUTINE} ${CF_STAGE} | ${N_FIRM_SHARDS} shards × ${N_SWEEPS} sweeps"
 echo "  shards → ${GPU_PARTITION} (--gpus=${GPUS}) | init/merge → ${CPU_PARTITION} | → ${SIGMA_DIR}"

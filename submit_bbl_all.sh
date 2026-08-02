@@ -2,7 +2,7 @@
 # submit_bbl_all.sh — ONE-COMMAND orchestrator for the BBL cost-estimation stage on Bouchet.
 #
 # This is the marginal-cost ESTIMATION stage (formerly the cost2/cost_solve steps of
-# submit_cf_all.sh). It produces data/COST_FWD/cost_params_E*_spec_12_*.json, which the
+# submit_cf_all.sh). It produces data/output/cost/cost_params_E*_spec_12_*.json, which the
 # counterfactuals (submit_cf_all.sh: cf1_net/cf3/cf5/cf6) then CONSUME. Structure mirrors
 # submit_blp_rc_all.sh (the demand-estimation stage): a driver + this orchestrator.
 #
@@ -37,7 +37,7 @@
 #     DO_POLFUNC=0          if 1, run BBL Step 1 on the cluster as a pre-step (afterok warmup) and
 #                           chain fwd_sim after it; default 0 → the fitted CSV is a preflighted input.
 #     POLICY_CSV=<path>     BBL Step-1 fitted policy for σ̂ (default:
-#                           data/COST_POLFUNC/polfunc_fitted.csv). Built LOCALLY by
+#                           data/input/polfunc_fitted.csv). Built LOCALLY by
 #                           estimation_bbl_1_polfunc.py and uploaded. REQUIRED (deviations must be
 #                           formed around the fitted policy, not observed spreads — else frac_bind ≈ 0.5
 #                           is mechanical and (ω,ζ,γ) are uninformative; V_Main line 551, §0A/§9).
@@ -45,13 +45,13 @@
 #                           (NOT `gross_return_lag`, which is the deposit rate — see the note below).
 #
 # TWO inputs must be built LOCALLY and uploaded (both need data/tools the compute nodes lack):
-#   data/COST_FWD/forward_rf_qoq.csv              (cf_forward_rf.py — needs internet)
-#   data/COST_POLFUNC/polfunc_fitted.csv  (estimation_bbl_1_polfunc.py — needs market_panel)
+#   data/input/forward_rf_qoq.csv              (cf_forward_rf.py — needs internet)
+#   data/input/polfunc_fitted.csv  (estimation_bbl_1_polfunc.py — needs market_panel)
 # everything else is either already staged from the BLP run or auto-built here from the zip.
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ROUTINES="${ROUTINES:-${BBL_ROUTINE:-6}}"
+ROUTINES="${ROUTINES:-${BBL_ROUTINE:-5 6 7 8}}"   # full RC lineup by default (E7/E8 are the headline)
 CF_STAGE="${CF_STAGE:-extended}"
 R="${R:-2000}"; SEED="${SEED:-42}"
 SHOCKS="${SHOCKS:-50}"; N_SHARDS="${N_SHARDS:-100}"
@@ -61,6 +61,12 @@ SHARD_TIME="${SHARD_TIME:-16:00:00}"; SOLVE_TIME="${SOLVE_TIME:-01:00:00}"   # f
 MEM="${MEM:-256G}"
 AUTO_PROCESS="${AUTO_PROCESS:-1}"
 DO_POLFUNC="${DO_POLFUNC:-0}"
+# BBL Step 3 (solve) + optional Step 1 (polfunc) are Python. Default to the Bouchet conda env; both
+# are exported to the jobs via --export=ALL and re-defaulted identically inside submit_bbl.sh.
+# Set to "" to opt out (unset ⇒ default, empty ⇒ no module/env), CF_PYTHON to pick the interpreter.
+[[ -z "${PY_MODULE+set}" ]] && PY_MODULE=miniconda
+[[ -z "${CONDA_ENV+set}" ]] && CONDA_ENV=costsolve
+export PY_MODULE CONDA_ENV
 # fwd_sim on GPU by default (FWD_GPU=1): the share aggregation moves to the H200
 # (compute_model_shares_gpu!), while the 72 GB Pi products + compute_mu! stay on the HOST
 # (gpu_h200 has ~1995 G RAM), so there is NO HBM-overflow risk — only ~30 G of share buffers land
@@ -80,7 +86,15 @@ else
 fi
 LOGDIR="logs"; mkdir -p "${LOGDIR}"
 DATA_ROOT="${DATA_ROOT:-$(pwd)/../data}"
-CP_DIR="${DATA_ROOT}/output/cluster_processed"
+# RC results are produced + placed by the BLP family, which owns their layout. Accept whichever is in
+# force (first EXISTING wins); fall back to the legacy path as the build target when none exists yet.
+# Keep in sync with _result_path()'s candidate list in foundation_demand_eval.jl.
+if [[ -z "${CP_DIR:-}" ]]; then
+    for _c in "${DATA_ROOT}/output/BLP_RESULTS/cluster_processed" "${DATA_ROOT}/output/cluster_processed"; do
+        [[ -d "${_c}" ]] && { CP_DIR="${_c}"; break; }
+    done
+    CP_DIR="${CP_DIR:-${DATA_ROOT}/output/cluster_processed}"
+fi
 RUN_MARKER="$(mktemp "${DATA_ROOT}/output/.bbl_run_marker.XXXXXX")"
 
 # ── Step 1: build cluster_processed/ from the RC zip if any routine is missing ───
@@ -120,9 +134,9 @@ if [[ "${need_process}" == "1" && "${AUTO_PROCESS}" == "1" ]]; then
 fi
 
 # ── Step 2: preflight — every required input must be present ──────────────────────
-RF_CURVE="${DATA_ROOT}/COST_FWD/forward_rf_qoq.csv"
+RF_CURVE="${DATA_ROOT}/input/forward_rf_qoq.csv"          # UPLOADED input
 DRAWS="${DATA_ROOT}/output/BLP_DRAWS/halton_nu_R${R}_seed${SEED}.jls"
-POLICY_CSV="${POLICY_CSV:-${DATA_ROOT}/COST_POLFUNC/polfunc_fitted.csv}"
+POLICY_CSV="${POLICY_CSV:-${DATA_ROOT}/input/polfunc_fitted.csv}"   # UPLOADED input (built locally)
 miss=0
 [[ -f "${DRAWS}" ]]    || { echo "MISSING R=${R} draws:  ${DRAWS}"; miss=1; }
 [[ -f "${RF_CURVE}" ]] || { echo "MISSING forward curve: ${RF_CURVE}"; \
@@ -139,8 +153,22 @@ for k in ${ROUTINES}; do
         echo "   → drop the RC blp_outputs_*.zip in ${DATA_ROOT}/output and re-run (auto-built via unzip+cp),"; \
         echo "     or pin one with BLP_ZIP=<path>."; miss=1; }
 done
+# BBL Step 3 (solve) is PYTHON. Compute nodes' bare python3 has no scientific stack, so verify the
+# env NOW — on the login node, which shares modules + NFS with the compute nodes — instead of
+# discovering it ~14h from now when the fwd_sim array finally drains (2026-08-01: the solve died at
+# t+4s on `No module named 'pandas'`, and its afterok cascade auto-cancelled cf1_net with no log at
+# all). Subshell so `module load` / conda activate don't leak into this submit shell. PY_PREFLIGHT=0 skips.
+if [[ "${PY_PREFLIGHT:-1}" == "1" ]]; then
+    ( [[ -n "${PY_MODULE:-}" ]] && module load ${PY_MODULE}
+      [[ -n "${CONDA_ENV:-}" ]] && { source activate "${CONDA_ENV}" 2>/dev/null || conda activate "${CONDA_ENV}"; }
+      "${CF_PYTHON:-python3}" -c 'import numpy, pandas, scipy, pyarrow, statsmodels' ) >/dev/null 2>&1 || {
+        echo "MISSING the solve's Python stack (numpy/pandas/scipy/pyarrow/statsmodels)"
+        echo "   env: PY_MODULE='${PY_MODULE:-}' CONDA_ENV='${CONDA_ENV:-}' CF_PYTHON='${CF_PYTHON:-python3}'"
+        echo "   → one-time fix:  module load miniconda && conda create -y -n costsolve python=3.11 numpy pandas scipy pyarrow statsmodels"
+        echo "     (PY_PREFLIGHT=0 skips this check; CONDA_ENV=\"\" opts out of conda entirely)"; miss=1; }
+fi
 [[ "${miss}" == "0" ]] || { rm -f "${RUN_MARKER}"; echo "Stage the missing input(s) (runbook §8), then re-run."; exit 1; }
-echo "Preflight OK: R=${R} draws + forward r^f curve + fitted policy + RC results for routines: ${ROUTINES}"
+echo "Preflight OK: R=${R} draws + forward r^f curve + fitted policy + RC results + solve Python env for routines: ${ROUTINES}"
 
 # ── Step 3: build the fwd_sim flags ───────────────────────────────────────────────
 # Asset return r^j (V_Main eq 16, ψ1 row). Both flags are read as the QUARTERLY NET margin
@@ -219,7 +247,7 @@ if [[ -n "${dep_csv}" ]]; then
         --job-name=bbl_zip --partition="${ZIP_PARTITION}" --time=00:20:00 \
         --nodes=1 --ntasks=1 --cpus-per-task=2 --mem=8G \
         -o "${LOGDIR}/bbl_zip_%j.out" -e "${LOGDIR}/bbl_zip_%j.err" \
-        --wrap "cd '${DATA_ROOT}/COST_FWD' && { \
+        --wrap "cd '${DATA_ROOT}/output/cost' && { \
                   find . -maxdepth 1 -newer '${RUN_MARKER}' -name 'cost_params_E*_spec_12_*.json' -print0 \
                     | xargs -0 -r zip -j \"${DATA_OUT}/bbl_outputs_\${SLURM_JOB_ID}.zip\" ; \
                   find '${HERE}'/logs -maxdepth 1 -newer '${RUN_MARKER}' \\( -name 'bbl_solve_*.out' -o -name 'bbl_solve_*.err' \\) -print0 \

@@ -34,7 +34,7 @@
 # and, if needed, ask RC to raise it or stagger routine sets.
 #
 # Prerequisite (same as the per-stage orchestrator): warm-start deltas on the
-# cluster — data/output/logit_delta_E{k}_spec_12.bin for each k in ${ROUTINES}.
+# cluster — data/input/logit_delta_E{k}_spec_12.bin for each k in ${ROUTINES} (data/output kept as a fallback).
 #
 # NOTE: validate once with a smoke test after OOD returns (e.g. submit only the E6
 # numerical HEAD and confirm the startup GPU-vs-CPU guard passes) before the full set.

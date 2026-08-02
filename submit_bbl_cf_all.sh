@@ -26,9 +26,18 @@
 #   DO_CF4_NOEVAL=1   Phase-1 CF4 identity-link fallback
 #   DO_CF1_GROSS=1 / DO_CF1_NET=1 / DO_CF4_REEVAL=1     Phase-2 CFs
 #   DO_DEMAND_EVAL=1  baseline shares_elas (attached to the first CF invocation)
-#   DO_FINAL_ZIP=1    final afterany job → data/CF_ZIPS/{foundation,cf1,cf4}_outputs.zip for download
+#   DO_FINAL_ZIP=1    final afterany job → data/output/{foundation,cf1,cf4}_outputs.zip for download
 #                     (FINAL_ZIP_CFS overrides which CFs; BBL cost params are auto-zipped separately)
 #   ROUTINES="6"  CF_STAGE=extended  R=2000  SEED=42     (shared by both stages)
+#   PY_MODULE/CONDA_ENV  (default miniconda/costsolve) — the BBL solve is PYTHON; its env is
+#                     preflighted at submit time by submit_bbl_all.sh (PY_PREFLIGHT=0 skips).
+#                     One-time: module load miniconda && conda create -y -n costsolve python=3.11 \
+#                               numpy pandas scipy pyarrow statsmodels
+#
+# GOTCHA — a failed BBL solve silently takes cf1_net with it: cf1_net is chained afterok on the solve,
+# so --kill-on-invalid-dep cancels it as DependencyNeverSatisfied and it produces NO LOG FILE AT ALL.
+# A missing cf1_net log ⇒ look UPSTREAM at bbl_solve's .err, not at cf1_net. (Happened 2026-08-01:
+# solve died at t+4s on a missing pandas; the env preflight above now catches that at submit time.)
 #
 # Everything the two sub-orchestrators accept still works via the environment (e.g. FWD_GPU=0 to put
 # the BBL fwd_sim back on CPU, N_SHARDS=…, SHARD_TIME=…, DO_CF3/5/6 for extra equilibrium CFs).
@@ -37,7 +46,9 @@ set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")"
 
 # ── Shared config (both stages read these) ────────────────────────────────────────
-export ROUTINES="${ROUTINES:-6}"
+# Default to the FULL RC lineup E5-E8 (E7/E8 are the joint-sieve headline estimators — a routines=6
+# default silently shipped E6 only). Narrow with e.g. ROUTINES="7 8" when iterating on one estimator.
+export ROUTINES="${ROUTINES:-5 6 7 8}"
 export CF_STAGE="${CF_STAGE:-extended}"
 export R="${R:-2000}"
 export SEED="${SEED:-42}"
@@ -49,9 +60,12 @@ DO_CF1_GROSS="${DO_CF1_GROSS:-1}"
 DO_CF1_NET="${DO_CF1_NET:-1}"
 DO_CF4_REEVAL="${DO_CF4_REEVAL:-1}"
 ORCH_DEMAND_EVAL="${DO_DEMAND_EVAL:-1}"   # baseline shares_elas — attach to the first CF invocation
-# Final archive: one short afterany job zips this run's CF outputs into data/CF_ZIPS/ for download.
-# Safe here because nothing downstream consumes CF1/CF4 in this run (no CF3/5/6). 0 → skip (then run
-# `bash zip_all_cf.sh` by hand once squeue is empty). FINAL_ZIP_CFS scopes which CFs get archived.
+# Final archive: one short afterany job zips this run's CF outputs into data/output/ for download.
+# ALWAYS in KEEP=1 COPY mode: zip_cf_outputs.sh otherwise MOVES (rm -f) what it archives, and the cf4
+# pattern sweeps upsilon_pix_E*.json + phi_nopix_E*.parquet — which are INPUTS built locally from the
+# sleep pickle (absent on the cluster) and uploaded. Move-mode emptied CF_FOUNDATION on 2026-08-01.
+# Copy mode keeps every original on disk so re-runs and downstream CFs still find their inputs.
+# 0 → skip. FINAL_ZIP_CFS scopes which CFs get archived (never add cf2: that glob owns the psi shards).
 DO_FINAL_ZIP="${DO_FINAL_ZIP:-1}"
 FINAL_ZIP_CFS="${FINAL_ZIP_CFS:-foundation cf1 cf4}"
 
@@ -108,12 +122,12 @@ fi
 # ── Final archive: one short afterany job zips this run's CF outputs for download ──
 final_zip_jid=""
 if [[ "${DO_FINAL_ZIP}" == "1" && -n "${CF_JOBIDS}" ]]; then
-    echo; echo "═══ Final archive: zip ${FINAL_ZIP_CFS} → data/CF_ZIPS/ (afterany all CF jobs) ═══"
+    echo; echo "═══ Final archive: zip ${FINAL_ZIP_CFS} → data/output/ (afterany all CF jobs) ═══"
     final_zip_jid=$(sbatch --parsable --dependency=afterany:"${CF_JOBIDS}" \
         -J cf_final_zip --partition="${ZIP_PARTITION:-day}" --time=00:20:00 \
         --nodes=1 --ntasks=1 --cpus-per-task=2 --mem=8G \
         -o logs/cf_final_zip_%j.out -e logs/cf_final_zip_%j.err \
-        --wrap "cd '$(pwd)' && CFS='${FINAL_ZIP_CFS}' bash zip_all_cf.sh")
+        --wrap "cd '$(pwd)' && KEEP=1 CFS='${FINAL_ZIP_CFS}' bash zip_all_cf.sh")
     echo "  final CF archive → job ${final_zip_jid} (afterany:${CF_JOBIDS})"
 elif [[ "${DO_FINAL_ZIP}" == "1" ]]; then
     echo; echo "── final archive skipped: no CF jobs were submitted ──"
@@ -129,8 +143,11 @@ if [[ "${DO_BBL}" == "1" ]]; then
     echo "   • BBL cost params : data/output/bbl_outputs_<jobid>.zip   (BBL auto-zip)"
 fi
 if [[ -n "${final_zip_jid}" ]]; then
-    echo "   • CF outputs      : data/CF_ZIPS/{$(echo ${FINAL_ZIP_CFS} | tr ' ' ',')}_outputs.zip   (job ${final_zip_jid})"
+    echo "   • CF outputs      : data/output/{$(echo ${FINAL_ZIP_CFS} | tr ' ' ',')}_outputs.zip   (job ${final_zip_jid})"
 else
-    echo "   • CF outputs      : run  bash zip_all_cf.sh  once squeue is empty → data/CF_ZIPS/"
+    echo "   • CF outputs      : once squeue is empty, archive in COPY mode →"
+    echo "                       KEEP=1 CFS='foundation cf1 cf4' bash zip_all_cf.sh"
+    echo "                       (bare 'zip_all_cf.sh' MOVES files and its default CFS includes cf2,"
+    echo "                        which would sweep the psi_* shards out of data/output/cost)"
 fi
 echo "══════════════════════════════════════════════════════════════════════════════"

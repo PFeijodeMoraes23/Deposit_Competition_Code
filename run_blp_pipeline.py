@@ -13,9 +13,10 @@ Local / Cluster split
          R<=500 draws finish in a few minutes locally and let you test the
          dry-run timing before submitting to the cluster.
     3. rsync processed/ESTIMATION_OUTPUT/BLP_RESULTS/logit_delta_E*.bin
-            <cluster>:../data/output/
+            <cluster>:../data/input/
          Transfer delta checkpoints so the cluster sigma stage warm-starts
          from logit delta* instead of log-shares (saves ~50-200 iters/call).
+         The cluster engine reads them from data/input (data/output kept as a fallback).
 
   CLUSTER (submit SLURM jobs):
     4. sbatch submit_blp_1_draws.sh         # R=2000 scrambled Halton draws
@@ -35,7 +36,8 @@ Modes
                    box. DEFAULT runs E5-E8 (single-index links + +Time; spec 12, extended
                    RC sequence); pick a subset with --est (digits, e.g. --est 5678), or
                    --est all for every routine found. Each E{k} warm-starts from
-                   logit_delta_E{k}_spec_12.bin.
+                   data/input/logit_delta_E{k}_spec_12.bin on the cluster (data/output
+                   kept as a fallback).
 
 Options (used with --draws and --estimate)
 ------------------------------------------
@@ -224,7 +226,8 @@ def run_rc(args):
 
     Routines are auto-discovered on the cluster from the demand-prep parquets; E{k}
     reads its parquet (e.g. demand_3_logistic, demand_6_index, demand_7_sijoint) and
-    warm-starts from BLP_RESULTS/logit_delta_E{k}_spec_12.bin. Requires a CUDA GPU
+    warm-starts from data/input/logit_delta_E{k}_spec_12.bin on the cluster (uploaded from
+    the local BLP_RESULTS; data/output kept as a fallback). Requires a CUDA GPU
     (cluster gpu_h200); locally use --dry-run on a GPU box.
 
     The DEFAULT run is routines E5-E8 (the single-index links and their +Time variants),

@@ -140,10 +140,14 @@ function main_cf4()
                            local_dir=a["local-dir"], suffix=a["suffix"])
     st  = load_sim_state(ctx)
     _, _, out_dir = get_paths(a["hpc"]; local_dir=a["local-dir"])
-    cf_dir = joinpath(dirname(out_dir), "CF_FOUNDATION")
-    υ   = pix_coefficient(cf_dir, a["estim"], a["spec"])
-    pix0 = pix_level_zero(cf_dir, a["estim"], a["spec"])          # centred "no Pix" level (≈ −0.53)
-    phi_np = load_phi_nopix(cf_dir, a["estim"], a["spec"], ctx)   # exact link-aware φ^noPix, or nothing
+    # Υ_pix + φ^noPix are built LOCALLY by cf_4_upsilon_export.py (the sleep pickle is not on the
+    # compute nodes) and UPLOADED → they read from data/input. The reallocation parquet is produced
+    # here → it writes to data/output/cf. Distinct dirs on the cluster; same legacy dir locally.
+    cf_in  = cf_in_dir(out_dir)                        # cluster: data/input
+    cf_dir = cf_out_dir(out_dir)                       # cluster: data/output/cf
+    υ   = pix_coefficient(cf_in, a["estim"], a["spec"])
+    pix0 = pix_level_zero(cf_in, a["estim"], a["spec"])          # centred "no Pix" level (≈ −0.53)
+    phi_np = load_phi_nopix(cf_in, a["estim"], a["spec"], ctx)   # exact link-aware φ^noPix, or nothing
     # CF4_EXACT_NOPIX=0 forces the identity-link scalar fallback (φ̂ − Υ_pix·(pix−pix0)) even when the
     # exact parquet is present — for the "with vs without re-eval" comparison. The output is tagged
     # "_noeval" so it never overwrites the exact (re-evaluated) run.

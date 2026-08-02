@@ -83,12 +83,16 @@ run_julia () {
         --R "${R}" --seed "${SEED}" --hpc ${BBL_EXTRA} "$@"
 }
 
-# The Step-1 polfunc and the Step-3 solve are Python (numpy/pandas/scipy/statsmodels, light, CPU).
-# Compute nodes have no bare `python`; load a Python env. Configure per cluster via env:
-#   PY_MODULE=miniconda   module(s) to load (space-list ok)
-#   CONDA_ENV=<name>      conda env to activate (must have numpy/pandas/scipy/statsmodels)
+# The Step-1 polfunc and the Step-3 solve are Python (numpy/pandas/scipy/pyarrow/statsmodels — pyarrow
+# because the solve pd.read_parquet's the psi shards; light, CPU). Compute nodes' bare `python3` has
+# NONE of that stack (2026-08-01: the solve died at t+4s on `No module named 'pandas'`), so default to
+# the Bouchet conda env and VERIFY the imports before running. Override per cluster via env:
+#   PY_MODULE=miniconda   module(s) to load (space-list ok; default miniconda)
+#   CONDA_ENV=<name>      conda env to activate (default costsolve; CONDA_ENV="" opts out)
 #   CF_PYTHON=python      interpreter to call (default python3)
-# One-time setup example:  module load miniconda && conda create -y -n costsolve numpy pandas scipy statsmodels
+# One-time setup:  module load miniconda && conda create -y -n costsolve python=3.11 numpy pandas scipy pyarrow statsmodels
+[[ -z "${PY_MODULE+set}" ]]  && PY_MODULE=miniconda    # default only when truly UNSET (empty ⇒ opt out)
+[[ -z "${CONDA_ENV+set}" ]]  && CONDA_ENV=costsolve
 setup_python () {
     [[ -n "${PY_MODULE:-}" ]] && module load ${PY_MODULE}
     if [[ -n "${CONDA_ENV:-}" ]]; then
@@ -99,9 +103,20 @@ setup_python () {
         echo "ERROR: Python '${PYBIN}' not found on the node. Set PY_MODULE / CONDA_ENV / CF_PYTHON" >&2
         echo "  e.g.  PY_MODULE=miniconda CONDA_ENV=costsolve ROUTINES=7 bash submit_bbl_all.sh" >&2
         exit 127; }
+    # Probe the actual imports, not just the binary — bare node python3 exists but has no sci stack,
+    # and a Traceback 14h into the pipeline (after the fwd_sim array drains) is the failure mode this
+    # prevents. Fail loud, with the one-time fix.
+    "${PYBIN}" -c 'import numpy, pandas, scipy, pyarrow, statsmodels' 2>/dev/null || {
+        echo "ERROR: '${PYBIN}' lacks the solve stack (numpy/pandas/scipy/pyarrow/statsmodels)." >&2
+        echo "  One-time setup:  module load miniconda && conda create -y -n costsolve python=3.11 numpy pandas scipy pyarrow statsmodels" >&2
+        echo "  Then submit with the defaults (PY_MODULE=miniconda CONDA_ENV=costsolve), or override them." >&2
+        exit 127; }
     # The scripts' default COST_FWD is the local BCB tree, absent on the cluster. Point it at the
-    # data/COST_FWD where fwd_sim (Julia) wrote the psi_* — same dir as the forward r^f curve.
-    export CF_COST_FWD="${CF_COST_FWD:-${PROJECT_DIR}/../data/COST_FWD}"
+    # data/output/cost where fwd_sim (Julia) writes the psi_* this solve reads.
+    # Cluster layout (2026-08-02): the BBL cost family (psi_eq, psi_dev shards, cost_params) lives in
+    # data/output/cost — matching cf_out_dir(out_dir,"COST_FWD") in foundation_demand_eval.jl, which is
+    # where the Julia fwd_sim writes the psi this solve reads. Legacy data/COST_FWD is retired.
+    export CF_COST_FWD="${CF_COST_FWD:-${PROJECT_DIR}/../data/output/cost}"
     echo "COST_FWD = ${CF_COST_FWD}"
 }
 
@@ -120,7 +135,7 @@ case "${BBL_STEP}" in
         echo "warmup complete: BBL stack loaded — array can launch warm" ;;
     polfunc)      # BBL Step 1: fit the parametric policy function (usually run LOCALLY and uploaded;
                   # this cluster path exists for reproducibility, off by default in the orchestrator).
-                  # Reads market_panel.csv → writes COST_POLFUNC/polfunc_fitted.csv.
+                  # Reads market_panel.csv → writes polfunc_fitted.csv (upload to data/input/).
                   # NOTE: the policy function is SPEC-INVARIANT — it takes no --spec (unlike the
                   # fwd_sim/solve below, whose --spec 12 selects the BLP demand specification).
         setup_python
@@ -128,11 +143,12 @@ case "${BBL_STEP}" in
     fwd_sim)      # BBL Step 2 part 1: ψ under σ̂ and σ̃ deviations (shardable).
         # Forward r^f curve is a REQUIRED input (the sim errors under --hpc if absent):
         # a flat r^f makes ψ4∝ψ2 and leaves ζ unidentified. It is fetched from the BCB
-        # APIs locally (compute nodes have no internet) and uploaded to data/COST_FWD/.
-        RF_CURVE="${RF_CURVE:-${PROJECT_DIR}/../data/COST_FWD/forward_rf_qoq.csv}"
+        # APIs locally (compute nodes have no internet) and uploaded to data/input/.
+        # UPLOADED input (fetched locally from the BCB APIs — compute nodes have no internet)
+        RF_CURVE="${RF_CURVE:-${PROJECT_DIR}/../data/input/forward_rf_qoq.csv}"
         if [[ ! -f "${RF_CURVE}" ]]; then
             echo "ERROR: forward r^f curve missing: ${RF_CURVE}" >&2
-            echo "  Generate locally (needs internet) and upload to data/COST_FWD/:" >&2
+            echo "  Generate locally (needs internet) and upload to data/input/:" >&2
             echo "    python cf_forward_rf.py --horizon 50 --start 2026Q1" >&2
             echo "  Refusing to run: a flat r^f leaves ζ unidentified." >&2
             exit 1
@@ -141,7 +157,7 @@ case "${BBL_STEP}" in
         SHARD_ID="${SLURM_ARRAY_TASK_ID:-${SHARD_ID:-0}}"
         N_SHARDS="${N_SHARDS:-1}"
         run_julia estimation_bbl_2_fwd_sim.jl --n-shards "${N_SHARDS}" --shard-id "${SHARD_ID}" ;;
-    solve)        # BBL Step 2 part 2: eq:17 minimization → COST_FWD/cost_params_*.json.
+    solve)        # BBL Step 2 part 2: eq:17 minimization → data/output/cost/cost_params_*.json.
         setup_python
         "${PYBIN}" "${PROJECT_DIR}/estimation_bbl_3_solve.py" \
             --estim "${BBL_ROUTINE}" --spec 12 --stage "${BBL_STAGE}" \

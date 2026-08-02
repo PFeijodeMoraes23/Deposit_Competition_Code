@@ -25,7 +25,7 @@
 #   LAYOUT=grouped          → 4 × (3 IFT + 1 num) = 16 jobs
 #
 # Prereqs already on disk: data/input/ demand parquets + demographics_sigma.parquet,
-# data/output/ logit_delta_E{5,6,7,8}_spec_12.bin, and the R=2000 draws
+# data/input/ logit_delta_E{5,6,7,8}_spec_12.bin (data/output kept as a fallback), and the R=2000 draws
 # (run `sbatch submit_blp_1_draws.sh` first).
 #
 # Usage:  bash submit_blp_2_rc_default.sh

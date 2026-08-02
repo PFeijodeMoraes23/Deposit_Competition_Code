@@ -133,12 +133,26 @@ def _exec_spec(args):
         # logit's AMEs/SEs -> skip its wild bootstrap.
         # n_starts matters HERE as much as for E3/E4: fit_single_index never re-optimises
         # theta, so E5/E6 inherit exactly the direction this call returns.
-        logit_res = fit_nlls_link(df_target, s_cols, has_cf=has_cf, link="logit", loss="cauchy",
-                                  fe_time_col=FE_TIME_COL, bootstrap=False,
-                                  n_starts=NLLS_N_STARTS)
-        res = fit_single_index(df_target, s_cols, has_cf=has_cf, logit_res=logit_res, degree=3,
-                               fe_time_col=FE_TIME_COL, phi_band=is_spec12)
-        return res, None, spec_name, res_fs
+        #
+        # E5/E6 are a HYBRID: the LINK is already least squares (sieve OLS inside
+        # fit_single_index) but the DIRECTION comes from this Cauchy NLLS logit. The LS
+        # variant below refits only the direction, making the column fully LS and directly
+        # comparable with the linear (OLS) E1/E2 and the LS joint sieve E7/E8.
+        def _single_index(loss, band):
+            lg = fit_nlls_link(df_target, s_cols, has_cf=has_cf, link="logit", loss=loss,
+                               fe_time_col=FE_TIME_COL, bootstrap=False,
+                               n_starts=NLLS_N_STARTS)
+            if lg is None:                      # fit_single_index would AttributeError on None
+                print(f"  [single-index/{loss}] logit direction failed -- skipped")
+                return None
+            return fit_single_index(df_target, s_cols, has_cf=has_cf, logit_res=lg, degree=3,
+                                    fe_time_col=FE_TIME_COL, phi_band=band)
+
+        res = None if LS_ONLY else _single_index("cauchy", is_spec12)
+        # scipy's plain least squares is loss="linear" (NOT "ls"); the Julia engine spells the
+        # same thing "ls". Mapping them wrongly silently re-runs Cauchy.
+        res_ls = None if DROP_LS else _single_index("linear", False)
+        return res, res_ls, spec_name, res_fs
 
     if kind in ("joint_sieve", "joint_kernel"):
         link = "sieve" if kind == "joint_sieve" else "kernel"

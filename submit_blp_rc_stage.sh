@@ -17,7 +17,8 @@
 #   RC_ROUTINE  1 | 2 | 3 | 4 | 5 | 6 | 7 | 8
 #   RC_ENGINE   ift | numerical          → BLP_ENGINE
 #   RC_STAGE    sigma|rc2|rc3|rc4|full|ext1|ext2|extended
-# The first stage (sigma) warm-starts δ from logit_delta_E{k}_spec_12.bin.
+# The first stage (sigma) warm-starts δ from data/input/logit_delta_E{k}_spec_12.bin
+# on the cluster (data/output kept as a fallback).
 
 set -euo pipefail
 : "${RC_ROUTINE:?set RC_ROUTINE (1..8)}"

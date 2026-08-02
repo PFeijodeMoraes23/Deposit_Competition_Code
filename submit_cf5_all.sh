@@ -8,7 +8,7 @@
 #   2. solves the SHOCKED equilibrium→ submit_cf3_jacobi.sh (SIGMA_DIR=…cf5_shock, --selic-shock Δ)
 #      (both run concurrently; each is its own warmup→init→sweeps chain)
 #   3. submits cf5_compare gated on afterok BOTH final merges — it reads the two solved σ vectors
-#      and reports ∂ρ*/∂Selic and ∂Dep/∂Selic → CF_FOUNDATION/cf5_passthrough_*.parquet
+#      and reports ∂ρ*/∂Selic and ∂Dep/∂Selic → data/output/cf/cf5_passthrough_*.parquet
 #   4. (optional) auto-zips the cf5 outputs afterany the compare (DO_ZIP=1).
 #
 # Prerequisite: the RC costs (cost_params_E{k}_spec_12_extended.json) — run the BBL stage first:
@@ -40,12 +40,12 @@ LOGDIR="logs"; mkdir -p "${LOGDIR}"
 
 # Fail fast on the shared prerequisite (submit_cf3_jacobi.sh checks it too, but do it once up front
 # so we never submit a half-chain).
-COST="${DATA_ROOT}/COST_FWD/cost_params_E${CF_ROUTINE}_spec_12_${CF_STAGE}.json"
+COST="${DATA_ROOT}/output/cost/cost_params_E${CF_ROUTINE}_spec_12_${CF_STAGE}.json"
 [[ -f "${COST}" ]] || { echo "MISSING costs: ${COST}"; \
     echo "  → run the BBL cost stage first:  bash submit_bbl_all.sh"; exit 1; }
 
-BASE_DIR="${DATA_ROOT}/CF_FOUNDATION/cf5_base_E${CF_ROUTINE}_${CF_STAGE}"
-SCN_DIR="${DATA_ROOT}/CF_FOUNDATION/cf5_shock_E${CF_ROUTINE}_${CF_STAGE}"
+BASE_DIR="${DATA_ROOT}/output/cf/cf5_base_E${CF_ROUTINE}_${CF_STAGE}"
+SCN_DIR="${DATA_ROOT}/output/cf/cf5_shock_E${CF_ROUTINE}_${CF_STAGE}"
 
 echo "======================================================================"
 echo " CF5 pass-through | E${CF_ROUTINE} ${CF_STAGE} | Selic +${SELIC_SHOCK} | R=${R}"
@@ -96,5 +96,5 @@ fi
 
 echo "----------------------------------------------------------------------"
 echo "Submitted CF5 pass-through: base=${base_job} shock=${scn_job} compare=${cmp_job}"
-echo "Result: CF_FOUNDATION/cf5_passthrough_*.parquet + console ∂ρ*/∂Selic, ∂Dep/∂Selic (after ${cmp_job})"
+echo "Result: data/output/cf/cf5_passthrough_*.parquet + console ∂ρ*/∂Selic, ∂Dep/∂Selic (after ${cmp_job})"
 echo "Watch: squeue -u \$USER"

@@ -20,7 +20,9 @@ The DEFAULT cluster run targets **E5-E8** (the single-index links + their +Time 
 rest stay available (ROUTINES env / --all-routines) for robustness. Each routine is
 warm-started from the local logit delta produced beforehand:
 
-    BLP_RESULTS/logit_delta_E{k}_spec_12.bin   (blp_1_logit.jl output)
+    data/input/logit_delta_E{k}_spec_12.bin    (uploaded from the local blp_1_logit.jl
+                                                output; on the cluster the engine reads it
+                                                from data/input, with data/output as fallback)
 
 (the logit step is owned by the local-logit workflow; this orchestrator only
 *consumes* those deltas — see `warm_start_path`).  If a delta is missing the
@@ -58,7 +60,8 @@ const RC_SPEC = 12
 
 # Warm-start delta suffix. The engine builds its warm-start filename from
 # ENV["BLP_DELTA_SUFFIX"]; the logit (blp_1_logit.jl) writes the un-suffixed
-# logit_delta_E{k}_spec_12.{bin,jls}, so the default "" is correct.
+# logit_delta_E{k}_spec_12.{bin,jls} (uploaded to data/input on the cluster), so the
+# default "" is correct.
 const DELTA_SUFFIX = ""
 
 # The routine list is AUTO-DISCOVERED at runtime from the demand-prep parquets
@@ -123,11 +126,16 @@ if !isdefined(Main, :main_gpu_ift)
 end
 
 """Resolve the expected warm-start delta path for a routine, the same way the
-engine does (`get_paths(is_hpc; local_dir)` -> out_dir)."""
+engine does: in_dir (data/input on HPC, where the uploaded delta lives) first, then
+out_dir as a fallback. Returns the first existing candidate, or the in_dir path (the
+primary expected location) when neither is present — used only for the missing-delta warning."""
 function warm_start_path(estim_id::Int; is_hpc::Bool, local_dir=nothing)
-    _, _, out_dir = get_paths(is_hpc; local_dir = local_dir)
-    return joinpath(out_dir,
-        "logit_delta_E$(estim_id)_spec_$(RC_SPEC)$(DELTA_SUFFIX).bin")
+    in_dir, _, out_dir = get_paths(is_hpc; local_dir = local_dir)
+    _fname = "logit_delta_E$(estim_id)_spec_$(RC_SPEC)$(DELTA_SUFFIX).bin"
+    for _cand in (joinpath(in_dir, _fname), joinpath(out_dir, _fname))
+        isfile(_cand) && return _cand
+    end
+    return joinpath(in_dir, _fname)
 end
 
 """Strip routine-controlled flags (`--estim`, `--spec`) from a passthrough vector

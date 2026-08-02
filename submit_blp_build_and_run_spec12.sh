@@ -18,8 +18,8 @@
 # job zips the outputs + logs into blp_outputs_<jobid>.zip / blp_logs_<jobid>.zip.
 #
 # PREREQUISITES on the cluster: the edited Julia source uploaded; the demand parquets
-# demand_{5..8}_*spec_12.parquet (WITH estban_rival_branches_lag) + logit_delta_E{5..8}_spec_12.bin
-# in data/output, plus the new demographics/panel inputs blp_1_draws.jl reads. The engine hard-errors
+# demand_{5..8}_*spec_12.parquet (WITH estban_rival_branches_lag) in data/input + logit_delta_E{5..8}_spec_12.bin
+# in data/input (data/output kept as a fallback), plus the new demographics/panel inputs blp_1_draws.jl reads. The engine hard-errors
 # if the estban instrument column is missing.
 #
 # Usage:  bash submit_blp_build_and_run_spec12.sh                  # just run the BLP (the usual case)
@@ -181,9 +181,12 @@ for k in ${ROUTINES}; do
 done
 echo "Submitted ${njobs} RC-BLP jobs (routines: ${ROUTINES}; engines: ${ENGINES})${sys_dep:+ + build prereqs [afterok ${sys_dep}]}."
 
-# ── 3. Auto-zip: one short CPU job, afterany ALL chains + the build log. Files are MOVED into the
-#      zips (no outside copies) and restricted to THIS run (find -newer ${RUN_MARKER}), so
-#      process_blp_outputs.py auto-discovers the newest blp_outputs_*.zip after download.
+# ── 3. Auto-zip: one short CPU job, afterany ALL chains + the build log. Files are MOVED into THREE
+#      zips (no outside copies), restricted to THIS run (find -newer ${RUN_MARKER}):
+#        blp_outputs_<jid>.zip      summaries + per-stage result .jls + logit (process_blp_outputs.py finds it)
+#        blp_logs_<jid>.zip         the rcg/sysimg/draws .out + .err
+#        blp_checkpoints_<jid>.zip  the warm-start blp_checkpoint_*.jls (~12 MB each) — MOVED off data/output
+#                                   so they stop accumulating; only needed for --se-only / resuming a stage.
 ZIP_PARTITION="${ZIP_PARTITION:-day}"
 dep_csv="$(echo ${term_jids} | tr ' ' ':' | sed 's/^://; s/:$//')"
 if [ -n "${dep_csv}" ]; then
@@ -194,9 +197,11 @@ if [ -n "${dep_csv}" ]; then
         --wrap "cd '${DATA_OUT}' && { \
                   find . -maxdepth 1 -newer '${RUN_MARKER}' \\( -name 'blp_results_E*_spec_12_*.json' -o -name 'blp_results_E*_spec_12_*.jls' -o -name 'blp_summary_E*_gpu_*.json' -o -name 'logit_*' \\) -print0 | xargs -0 -r zip -jm \"blp_outputs_\${SLURM_JOB_ID}.zip\" ; \
                   find '${HERE}'/logs -maxdepth 1 -newer '${RUN_MARKER}' \\( -name 'rcg_*.out' -o -name 'rcg_*.err' -o -name 'blp_build_sysimg_*.out' -o -name 'blp_build_sysimg_*.err' -o -name 'blp_1_draws_*.out' -o -name 'blp_1_draws_*.err' \\) -print0 | xargs -0 -r zip -jm \"blp_logs_\${SLURM_JOB_ID}.zip\" ; \
+                  find . -maxdepth 1 -newer '${RUN_MARKER}' -name 'blp_checkpoint_E*_spec_*_*.jls' -print0 | xargs -0 -r zip -jm \"blp_checkpoints_\${SLURM_JOB_ID}.zip\" ; \
                   rm -f '${RUN_MARKER}' ; \
-                  echo \"wrote \${PWD}/blp_outputs_\${SLURM_JOB_ID}.zip + blp_logs_\${SLURM_JOB_ID}.zip\"; }")
+                  echo \"wrote \${PWD}/blp_outputs + blp_logs + blp_checkpoints, job \${SLURM_JOB_ID}\"; }")
     echo "── auto-zip: ${zip_jid}  (afterany ${term_jids# })"
     echo "   → ${DATA_OUT}/blp_outputs_<${zip_jid}>.zip (process_blp_outputs.py auto-discovers blp_outputs_*.zip)"
     echo "   → ${DATA_OUT}/blp_logs_<${zip_jid}>.zip"
+    echo "   → ${DATA_OUT}/blp_checkpoints_<${zip_jid}>.zip  (warm-start .jls moved off data/output; needed only for --se-only / resuming a stage — unzip first if so)"
 fi

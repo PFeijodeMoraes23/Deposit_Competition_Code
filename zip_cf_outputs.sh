@@ -8,14 +8,14 @@
 #     [tag]  optional label. DEFAULT is EMPTY → the archive is <cf>_outputs.zip, so every
 #            estimation/run of that CF APPENDS into ONE archive (zip -m updates same-named
 #            entries). Pass a tag only to keep a separate snapshot (<cf>_outputs_<tag>.zip).
-#   Env: SPEC=12  DATA_ROOT=<...>/data  OUT_DIR=<...>/CF_ZIPS  DRYRUN=1 (list only, don't zip/move)
+#   Env: SPEC=12  DATA_ROOT=<...>/data  OUT_DIR=<...>/output  DRYRUN=1 (list only, don't zip/move)
 #        KEEP=1 → COPY mode: archive + verify but do NOT delete the originals. Use this to make a
 #        downloadable bundle while the pipeline is still running — the equilibrium CFs (CF3/CF5/CF6)
 #        still need cost_params_E*.json and CF3's sig_*.parquet on disk. Move mode is only safe once
 #        the whole chain is finished (that's what zip_all_cf.sh does at the end).
 #
-# Archive → ${OUT_DIR}/<cf>_outputs[_<tag>].zip, paths relative to data/ (CF_FOUNDATION/…,
-# COST_FWD/…). Concurrent appends (several estimations' zip jobs → one archive) are serialized
+# Archive → ${OUT_DIR}/<cf>_outputs[_<tag>].zip, paths relative to data/ (output/cf/…,
+# output/cost/…). Concurrent appends (several estimations' zip jobs → one archive) are serialized
 # with flock. DRYRUN=1 previews exactly what would be moved without touching anything.
 set -euo pipefail
 CF="${1:?usage: zip_cf_outputs.sh <foundation|cf1|cf2|cf3|cf4|cf5|cf6> [tag]}"
@@ -23,8 +23,11 @@ TAG="${2:-}"
 SPEC="${SPEC:-12}"
 DATA_ROOT="${DATA_ROOT:-$(pwd)/../data}"
 DATA_ROOT="$(cd "${DATA_ROOT}" 2>/dev/null && pwd)" || { echo "DATA_ROOT not found: ${DATA_ROOT:-?}"; exit 1; }
-OUT_DIR="${OUT_DIR:-${DATA_ROOT}/CF_ZIPS}"
-CFF="CF_FOUNDATION"; COST="COST_FWD"          # relative to DATA_ROOT
+# Cluster layout (2026-08-02): archives land in data/output alongside what they bundle; the separate
+# CF_ZIPS/ tree is retired. CFF/COST are the CF + BBL-cost output dirs, matching cf_out_dir() in
+# foundation_demand_eval.jl. Paths stay relative to DATA_ROOT so `unzip <zip> -d data/` restores in place.
+OUT_DIR="${OUT_DIR:-${DATA_ROOT}/output}"
+CFF="output/cf"; COST="output/cost"           # relative to DATA_ROOT
 
 # Build the pattern list FROM INSIDE data/ (so the globs resolve there) with nullglob on (an
 # unmatched pattern expands to nothing rather than a literal). Dirs (cf3_jacobi_E*, cf5_E*,
@@ -36,7 +39,11 @@ case "${CF}" in
   cf1)        pats=("${CFF}/cf1_franchise_"*"_E"*"_spec_${SPEC}"*.parquet) ;;
   cf2)        pats=("${COST}/psi_eq_E"*"_spec_${SPEC}_"* "${COST}/psi_dev_E"*"_spec_${SPEC}_"* "${COST}/cost_params_E"*"_spec_${SPEC}_"*.json) ;;
   cf3)        pats=("${CFF}/cf3_equilibrium_E"*"_spec_${SPEC}_"*.parquet "${CFF}/cf3_jacobi_E"*) ;;
-  cf4)        pats=("${CFF}/cf4_pix_realloc_E"*"_spec_${SPEC}_"*.parquet "${CFF}/upsilon_pix_E"*"_spec_${SPEC}.json" "${CFF}/phi_nopix_E"*"_spec_${SPEC}.parquet") ;;
+  # OUTPUTS ONLY. upsilon_pix_E*.json and phi_nopix_E*.parquet are UPLOADED INPUTS (built locally by
+  # cf_4_upsilon_export.py from the sleep pickle, which does not exist on the cluster) and now live in
+  # data/input. They were previously listed here, so every default (move-mode) archive DELETED them —
+  # that is what emptied CF_FOUNDATION on 2026-08-01. Never glob an input from this script.
+  cf4)        pats=("${CFF}/cf4_pix_realloc_E"*"_spec_${SPEC}_"*.parquet) ;;
   cf5)        pats=("${CFF}/cf5_passthrough_E"*"_spec_${SPEC}_"*.parquet "${CFF}/cf5_E"*) ;;
   cf6)        pats=("${CFF}/cf6_merger_E"*"_spec_${SPEC}_"*.parquet "${CFF}/cf6_E"*) ;;
   *) echo "Unknown CF '${CF}' (expected foundation|cf1|cf2|cf3|cf4|cf5|cf6)"; exit 1 ;;

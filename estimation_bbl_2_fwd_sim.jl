@@ -304,7 +304,8 @@ unidentified; the time-varying curve breaks that. Falls back to the flat panel m
 """
 function load_forward_rf(path::Union{Nothing,String}, out_dir::String, T::Int, ctx::CFDemandCtx;
                          require::Bool=false)
-    csv = path === nothing ? joinpath(dirname(out_dir), "COST_FWD", "forward_rf_qoq.csv") : path
+    # forward r^f is fetched LOCALLY (compute nodes have no internet) and UPLOADED → data/input
+    csv = path === nothing ? joinpath(cf_in_dir(out_dir, "COST_FWD"), "forward_rf_qoq.csv") : path
     if isfile(csv)
         lines = filter(l -> !isempty(strip(l)), readlines(csv))
         hdr = strip.(split(lines[1], ','))
@@ -515,7 +516,7 @@ function main_cost2()
         li % 25 == 0 && log_status("    [BBL] shard $sid: $li/$(length(loc)) sims done")
     end
 
-    cost_dir = joinpath(dirname(out_dir), "COST_FWD"); mkpath(cost_dir)
+    cost_dir = cf_out_dir(out_dir, "COST_FWD"); mkpath(cost_dir)   # cluster: data/output/cost
     tag = "E$(a["estim"])_spec_$(a["spec"])_$(a["stage"])$(a["suffix"])"
     blocks = vcat(["psi1", "psi2_omega"], ["psi3_gamma_$z" for z in znames], ["psi4_zeta"])
 
