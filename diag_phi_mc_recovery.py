@@ -334,11 +334,31 @@ def mode_acf(a):
     fig.savefig(OUT_DIR / "d8_acf_overid.png", dpi=150)
     pd.DataFrame({"h": h, "acf_data": acf_data, "band_lo": lo, "band_hi": hi}
                  ).to_csv(OUT_DIR / "d8_acf_overid.csv", index=False)
-    inside = np.mean((acf_data >= lo) & (acf_data <= hi))
-    print(f"  share of horizons inside the band: {inside:.0%}  -> d8_acf_overid.png/.csv")
-    print("\n  VERDICT: data ACF exiting the band DOWNWARD at h>=4 means the h=1")
-    print("  persistence the kernel fits is not the same object as long-run non-waking;")
-    print("  inside-the-band means geometric carry is consistent with medium-run dynamics.")
+    inside = (acf_data >= lo) & (acf_data <= hi)
+    above, below = acf_data > hi, acf_data < lo
+    print(f"  share of horizons inside the band: {inside.mean():.0%}  -> d8_acf_overid.png/.csv")
+    print(f"  horizons ABOVE the band: {list(h[above])}")
+    print(f"  horizons BELOW the band: {list(h[below])}")
+
+    # COMPUTE the direction; never assert it. An earlier version printed "exiting DOWNWARD"
+    # unconditionally, and the archived reading of this diagnostic was written from that
+    # boilerplate -- the data in fact sit ABOVE the band. A verdict that does not read its
+    # own output is worse than no verdict.
+    print("\n  VERDICT:", end=" ")
+    if above.sum() > below.sum() and above.sum() >= 2:
+        print("the data ACF sits ABOVE the band over most horizons.")
+        print("  Deposits are MORE persistent at medium horizons than a geometric carry at")
+        print(f"  phi={phi_fit} generates: the single h=1 moment the estimator fits implies too")
+        print("  LITTLE medium-run stickiness. Read with care -- entity-specific drift and")
+        print("  heterogeneous phi_j across firms both push the data ACF up without any extra")
+        print("  sleepiness, and neither is in this simulation's DGP.")
+    elif below.sum() > above.sum() and below.sum() >= 2:
+        print("the data ACF sits BELOW the band over most horizons.")
+        print("  Measured h=1 persistence dissipates faster than pure sleepiness at")
+        print(f"  phi={phi_fit} allows, so it is not the same object as long-run non-waking.")
+    else:
+        print("the data ACF is largely inside the band -- a geometric carry at")
+        print(f"  phi={phi_fit} is consistent with the medium-run dynamics.")
 
 
 if __name__ == "__main__":

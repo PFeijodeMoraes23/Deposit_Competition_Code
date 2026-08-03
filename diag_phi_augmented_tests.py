@@ -58,6 +58,14 @@ OUT_DIR = _paths.PROCESSED / "ESTIMATION_OUTPUT" / "DIAG_PHI_SEPARATION"
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 
 DEP_SCALE = 1e9   # sleep frame stores deposits in R$ bn; the demand parquet in raw R$
+
+# Few-cluster constants. The panel has ~456 nominal conglomerates but the size distribution
+# is extreme (CV ~ 8.5), so the Carter-Schnepel-Steigerwald effective count is G* ~ 6, i.e.
+# nu = G*-1 ~ 5 degrees of freedom for the reference distribution.
+#   MDE_MULT       t_.975,nu + t_.80,nu at nu=5.2  (the large-sample value is 2.80)
+#   MDE_LO/HI      90% band for SE_hat/SE_true from chi2_nu -- the SE is uncertain by ~3x
+#                  end to end, so a point MDE alone overstates what the design pins down.
+MDE_MULT, MDE_LO, MDE_HI = 3.457, 0.676, 2.04
 BLP_X_COLS = ["fgc_covered", "has_ip", "seg_S2", "seg_S3", "seg_S4", "seg_S5",
               "log_total_assets_lag", "is_state_owned"]
 
@@ -207,19 +215,74 @@ def arm_identity():
             {"spec": "identity", "param": "matched_share", "coef": float(matched.mean())}]
 
 
+def build_uncensored_inflow(df):
+    """A_t = Dep_t - phi*g*Dep_{t-1} on EVERY row, signed, in R$bn.
+
+    This is the regression's own error term (arm 'identity' verifies the accounting holds
+    exactly). The demand step stores instead Dep_Act = max{0, A} and drops the zeros, because
+    BLP shares must be non-negative -- a requirement of THAT step, not a property of this
+    error. Using the censored version as D2b's regressor conditions the test on the sign of
+    the lagged error it is testing, and costs 33-40% of rows; on the surviving subsample the
+    two-way demeaning returns phi-hat ~ 0.80 against ~0.91 on the full frame, so the
+    augmentation was being asked about a different carry coefficient from the headline.
+
+    phi is a MARKET-level object (estimation_demand_link_common.py:433-463), so it can be
+    mapped to censored rows too: dedupe phi_mt by (mca_code, time_id) and phi_t by time_id.
+    """
+    phi_mt = (pd.read_parquet(PARQUET, columns=["mca_code", "time_id", "phi_mt"])
+              .dropna().drop_duplicates(["mca_code", "time_id"]))
+    phi_t = (pd.read_parquet(PARQUET, columns=["time_id", "phi_t"])
+             .dropna().drop_duplicates(["time_id"]))
+    out = df.drop(columns=[c for c in ("phi_mt", "phi_t") if c in df.columns])
+    out = out.merge(phi_mt, on=["mca_code", "time_id"], how="left")
+    out = out.merge(phi_t, on="time_id", how="left")
+    out["phi_use"] = np.where(out["CODMUN_IBGE"].astype(str) != "0",
+                              out["phi_mt"], out["phi_t"])
+    cov = out["phi_use"].notna().mean()
+    out["A_full"] = out["deposit_balance"] - out["phi_use"] * out["nr_lagged_dep"]
+    # censoring indicator, for the D2c margin test below
+    out["C_lagpos"] = (out["A_full"] > 1e-6 / DEP_SCALE).astype(float)
+    print(f"  uncensored inflow built on {cov:.2%} of rows (phi mapped from market level)")
+    return out
+
+
 def arm_lagdepact():
-    """D2b: lagged accounting awake inflow."""
-    print("\n=== D2b: lagged-Dep_Act augmentation ===")
+    """D2b: lagged awake inflow. Uses the UNCENSORED residual (see build_uncensored_inflow);
+    the censored `Dep_Act` variant is reported alongside so the two are comparable."""
+    print("\n=== D2b: lagged awake-inflow augmentation ===")
     df, s_cols = load_sleep_frame()
     df = merge_parquet_cols(df, ["Dep_Act"])
+    df = build_uncensored_inflow(df)
     df = lag_within_entity(df, "Dep_Act")
+    df = lag_within_entity(df, "A_full")
+    df = lag_within_entity(df, "C_lagpos")
+    df["C_lag_x_Z"] = df["C_lagpos_lag"] * df["nr_lagged_dep"]
 
     rows = []
     for tag, has_cf in (("spec12(k=4,5)", True), ("OLSxTech(all k)", False)):
-        res_b, res_a, d = run_augmented(df, s_cols, ["Dep_Act_lag"], has_cf)
+        # headline: uncensored regressor on the full frame
+        res_b, res_a, d = run_augmented(df, s_cols, ["A_full_lag"], has_cf)
         n_full = len(df.dropna(subset=["nr_lagged_dep", "deposit_balance"]
                                + (["v_hat_x_lagged_dep"] if has_cf else [])))
-        rows += report_delta_phi(tag, res_b, res_a, ["Dep_Act_lag"], len(d), n_full)
+        rows += report_delta_phi(f"{tag}|uncensored", res_b, res_a, ["A_full_lag"],
+                                 len(d), n_full)
+
+        # D2c: does the carry itself differ across the censoring margin? Under H0 the
+        # censoring indicator is a function of past errors only, so interacted with the
+        # carry it must be zero -- this is what answers the "the 0.80 vs 0.91 gap is
+        # evidence of contamination" reading directly, on the FULL sample.
+        _, res_c, dc = run_augmented(df, s_cols, ["C_lag_x_Z"], has_cf)
+        print(f"    [D2c margin test] C(A_lag>0) x carry: coef="
+              f"{float(res_c.params['C_lag_x_Z']):+.5f}  "
+              f"WCB p={float(res_c.pvalues['C_lag_x_Z']):.4f}  (n={len(dc):,})")
+        rows.append({"spec": tag, "param": "C_lag_x_Z",
+                     "coef": float(res_c.params["C_lag_x_Z"]),
+                     "p_wcb": float(res_c.pvalues["C_lag_x_Z"]), "n": len(dc)})
+
+        # legacy censored variant, for comparability with the archived numbers
+        res_b2, res_a2, d2 = run_augmented(df, s_cols, ["Dep_Act_lag"], has_cf)
+        rows += report_delta_phi(f"{tag}|censored(legacy)", res_b2, res_a2,
+                                 ["Dep_Act_lag"], len(d2), n_full)
 
         # residual autocorrelation of the BASELINE regression (AB m1 analog)
         d = d.copy()
@@ -234,9 +297,15 @@ def arm_lagdepact():
         rows.append({"spec": tag, "param": "resid_ar1", "coef": float(ar.params["_e_lag"]),
                      "t": float(ar.tvalues["_e_lag"])})
 
-    print("\n  VERDICT: a significant Dep_Act_lag coefficient (and any material Delta-phi)")
+    print("\n  VERDICT: a significant lagged-inflow coefficient (or any material Delta-phi)")
     print("  rejects 'awake-inflow innovations are serially uncorrelated within entity',")
     print("  the exact assumption separating sleepiness from woke-and-stayed persistence.")
+    print("  Read the UNCENSORED rows: they run on ~95% of the frame at the production")
+    print("  carry level. The censored rows are kept only to match the archived numbers --")
+    print("  they condition on the sign of the lagged error and lose a third of the panel.")
+    print("  D2c (censoring margin) is the direct answer to 'but phi-hat is lower on the")
+    print("  augmentable subsample': if that interaction is null, the gap is a thinned-panel")
+    print("  artifact of the within transform, not evidence against the assumption.")
     return rows
 
 
@@ -475,12 +544,20 @@ def arm_pixpooled():
             print(f"\n  [{tag} | {vname}] n={len(d):,}")
             for p in extra:
                 se = float(res_a.bse[p])
-                # MDE at 5% size / 80% power for a two-sided test: 2.8 x SE.
+                # MDE at 5% size / 80% power. The multiplier is z_.975+z_.80 = 2.80 ONLY in
+                # large samples; the reference distribution here has G*-1 ~ 5 degrees of
+                # freedom (a handful of conglomerates carry the score mass), where
+                # t_.975 + t_.80 = 3.46. Using 2.80 understates the detectable effect by
+                # ~23%. The SE is itself a chi2_nu object at this nu, so the point MDE is
+                # reported with the 90% band implied by that sampling uncertainty.
+                mde = MDE_MULT * se
                 print(f"    {p:<10s} coef={float(res_a.params[p]):+.5f}  se={se:.5f}  "
-                      f"WCB p={float(res_a.pvalues[p]):.4f}   MDE(80%)={2.8*se:.5f}")
+                      f"WCB p={float(res_a.pvalues[p]):.4f}   "
+                      f"MDE(80%)={mde:.5f} [{MDE_LO*mde:.5f}, {MDE_HI*mde:.5f}]")
                 rows.append({"spec": tag, "variant": vname, "param": p,
                              "coef": float(res_a.params[p]), "se": se,
-                             "p_wcb": float(res_a.pvalues[p]), "mde80": 2.8 * se,
+                             "p_wcb": float(res_a.pvalues[p]), "mde80": mde,
+                             "mde_lo": MDE_LO * mde, "mde_hi": MDE_HI * mde,
                              "n": len(d)})
             base_phi = float(res_a.params.get("nr_lagged_dep", np.nan))
             if np.isfinite(base_phi) and base_phi:
