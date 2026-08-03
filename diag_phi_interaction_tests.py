@@ -19,6 +19,14 @@ Arms (--arm):
                   Under the model the carry cannot vary with bank attractiveness; a
                   loading means persistently attractive banks retain MORE than phi --
                   the woke-and-stayed channel by name.
+                  Reported TWICE: the production wild cluster bootstrap, and a Fisher
+                  RANDOMIZATION p-value that needs no variance estimate (the rank is a
+                  predetermined label, so the sharp null licenses reassigning it across
+                  conglomerates). At G* ~ 6 the WCB reference distribution is the weak
+                  link, and D1 puts this arm's power at 0.06-0.11, so a "pass" read off
+                  that reference distribution alone is not worth much. See
+                  diag_phi_augmented_tests.cluster_permutation_test for the scheme and,
+                  in particular, for what the randomization test does NOT deliver.
 
 Sample note: spec 12's CF term restricts it to k=4,5 (v_hat NaN elsewhere), so the types
 arm contrasts 4 vs 5 there; the full k set runs under OLS x Tech.
@@ -31,7 +39,9 @@ import argparse
 import numpy as np
 import pandas as pd
 
-from diag_phi_augmented_tests import (load_sleep_frame, run_augmented, OUT_DIR)
+from diag_phi_augmented_tests import (load_sleep_frame, run_augmented, OUT_DIR,
+                                      cluster_permutation_test, report_permutation,
+                                      design_cols)
 
 
 def arm_types():
@@ -102,9 +112,62 @@ def arm_attractiveness():
               f"(awake margin 1-phi = {1 - phi0:.4f})")
         rows.append({"spec": tag, "param": "rank_x_Z", "coef": co, "p_wcb": p,
                      "phi_gap_iqr": co * iqr, "awake_margin": 1 - phi0})
+
+        # ---- Fisher randomization (ADDITIVE -- the WCB lines above are unchanged).
+        # attr_rank is a PREDETERMINED 2016 label, so under the sharp null "attractiveness
+        # shifts the carry for no bank" the outcome is invariant to reassigning it across
+        # conglomerates. That gives an exact p-value with NO variance estimate, which
+        # matters here because the Monte Carlo (D1) puts this arm's power at 0.06-0.11 --
+        # its WCB "pass" is a statement about the reference distribution as much as about
+        # the data. See the header of cluster_permutation_test for what this does and,
+        # more importantly, what it does not deliver.
+        for _mode in ("collapse", "between"):
+            pr = cluster_permutation_test(
+                d, "rank_x_Z",
+                lambda a, C: {"rank_x_Z": a * C["nr_lagged_dep"]},
+                "attr_rank_c", design_cols(s_cols, has_cf), mode=_mode)
+            rows.append({"spec": tag, "awake_margin": 1 - phi0, **report_permutation(
+                pr, "rank_x_Z", co, p, wcb_se=float(res_a.bse["rank_x_Z"]), carry=phi0)})
     print("\n  VERDICT: under the model the carry is bank-invariant. A positive loading")
     print("  with a phi gap comparable to (1-phi) says retention tracks persistent bank")
     print("  attractiveness -- consumers who woke and stayed being booked as asleep.")
+    _pm = [r for r in rows if "p_perm_coef" in r]
+    if _pm:
+        _agree = all((r["p_perm_headline"] <= 0.05) == (r["p_wcb"] <= 0.05) for r in _pm)
+        _div = [r for r in _pm if r["perm_stats_diverge"]]
+        print("  RANDOMIZATION: the variance-free Fisher test " +
+              ("AGREES with the WCB at 5% on every spec and scheme" if _agree
+               else "DISAGREES with the WCB at 5% somewhere") +
+              " (studentised perm p = " +
+              ", ".join(f"{r['spec']}/{r['perm_mode']}:{r['p_perm_headline']:.3f}"
+                        for r in _pm) + ")." +
+              (f" NOTE: {len(_div)} of {len(_pm)} configurations flip on the UNSTUDENTISED "
+               "statistic -- see report_permutation." if _div else
+               " The unstudentised statistic agrees everywhere too."))
+        print("  It removes the few-cluster VARIANCE ESTIMATE from the verdict; it does NOT")
+        print("  remove the few-cluster problem -- top-5 R2 = " +
+              ", ".join(f"{r['spec']}/{r['perm_mode']}:{r['top_r2']:.2f}" for r in _pm))
+        print("  of the permutation variance. And it tests the SHARP null, so a pass is not a")
+        print("  bound on an average effect. Read it with the D1 power numbers, not instead of them.")
+        # POWER, on this arm's OWN yardstick. attr_rank is a percentile in [0,1], so the
+        # coefficient is "carry units per unit of rank" and the natural comparison is the
+        # awake margin 1-phi: an attractiveness channel big enough to matter for the
+        # sleepiness reading would have to move the carry by an appreciable fraction of the
+        # mass the model says is awake. If the randomization MDE exceeds 1-phi outright,
+        # the design cannot see even a violation the size of the ENTIRE awake margin --
+        # which is a stronger negative statement than "power 0.06-0.11 against the MC
+        # alternative", because it needs no alternative to be specified.
+        for r in [x for x in _pm if x["perm_mode"] == "between"]:
+            am, m, c = r["awake_margin"], r["perm_mde80"], abs(r["coef_entity_level"])
+            print(f"  POWER [{r['spec']}]: randomization MDE(80%) = {m:.4f} per unit of rank"
+                  f" = {m/am:.1f}x the awake margin (1-phi = {am:.4f}) and {m/max(c,1e-12):.1f}x"
+                  f" the estimated |coef| = {c:.4f}.")
+            print("    -> " + ("the design cannot detect a rank effect even as large as the "
+                               "whole awake margin; this arm's 'pass' carries no information "
+                               "about attractiveness-driven retention."
+                               if m > am else
+                               "the design can resolve effects smaller than the awake margin, "
+                               "so the null is an informative bound."))
     return rows
 
 

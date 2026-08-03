@@ -20,8 +20,16 @@ Steps run in isolated SUBPROCESSES (the known 0xC0000005 segfaults are threads i
 one process; separate processes are safe). Default is sequential; `--jobs N` runs up to
 N steps concurrently with longest-first scheduling. Each step needs ~3-4 GB (its own
 panel copy) and D1 spawns 8 workers of its own, so on a 32 GB / 12-core box:
-  --jobs 3 is the sweet spot (~35-50 min wall vs ~2-2.5 h sequential);
-  do NOT run alongside the Julia sieve (E7/E8) or other heavy jobs.
+  --jobs 2 is the safe setting; do NOT run alongside the Julia sieve or other heavy jobs.
+
+MEMORY GOTCHA (observed 2026-08-03): at `--jobs 3` the D2a and D6 lanes were KILLED
+mid-run -- their logs simply stop, with no traceback, which is the signature of an
+OOM kill rather than an exception. Both passed immediately when re-run sequentially.
+So a FAIL from this runner is not automatically a code fault: check whether the log ends
+abruptly without a traceback, and if so re-run that step alone before debugging it.
+The steps most likely to be victims are the memory-hungry ones (D6b's permutation loop
+holds several full-design copies), and the victim is whichever lane happens to allocate
+when the box is already full -- so it will not reproduce deterministically.
 Each step's full output goes to
 <PROCESSED>/ESTIMATION_OUTPUT/DIAG_PHI_SEPARATION/logs/<step>.log; the console gets a
 timestamped line per step plus its VERDICT block. A failing step does not stop the
@@ -124,7 +132,8 @@ def main() -> int:
                     help="skip the full MC grid (D1); keep the smoke harness check")
     ap.add_argument("--jobs", type=int, default=1, metavar="N",
                     help="run up to N steps concurrently (isolated subprocesses, "
-                         "longest-first schedule). 3 is the 32GB sweet spot; keep 1 if "
+                         "longest-first schedule). 2 is safe on 32GB; 3 has been observed "
+                         "to OOM-kill a lane (see the memory note below). Keep 1 if "
                          "anything heavy (Julia sieve, BLP) is running.")
     ap.add_argument("--only", nargs="+", metavar="STEP",
                     help="run only these step keys (e.g. --only D5 D2b)")

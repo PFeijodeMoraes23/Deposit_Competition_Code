@@ -31,6 +31,13 @@ Arms (--arm):
               break concentrated in connected markets supports the attention reading of
               the Pix component; this is an asymmetric test (passing does not validate
               the phi LEVEL).
+  pixpooled   D6b: the same quasi-experiment with ONE break parameter (post x carry x
+              continuous pre-2020 connectivity) instead of D6's fourteen, plus the
+              minimum detectable effect so a null reads as a bound. Reported both under
+              the wild cluster bootstrap and -- because the exposure is a predetermined
+              entity label -- under a Fisher RANDOMIZATION test that needs no variance
+              estimate at all (cluster_permutation_test below).
+  blpelast    D9: implied-vs-observed spread response, using the cluster BLP alpha-hat.
 
 Sample note: the production spec 12 (IV_HausmanFull x Tech) second stage is restricted to
 deposit types 4,5 because v_hat is NaN elsewhere (estimation_2_sleep.py:299-301). Every
@@ -158,6 +165,365 @@ def report_delta_phi(tag, res_base, res_aug, extra_cols, n, n_full):
         print(f"    {c:<26s} coef={co:+.5g}  t={t:+.2f}  WCB p={p:.4f}")
         rows.append({"spec": tag, "param": c, "coef": co, "t": t, "p_wcb": p})
     return rows
+
+
+# ==============================================================================
+# FISHER RANDOMIZATION (CLUSTER PERMUTATION) TEST  -- shared by D3 and D6b
+# ==============================================================================
+# WHY IT EXISTS. D3 and D6b both test a coefficient on a PREDETERMINED, ENTITY-LEVEL
+# attribute (2016 share rank; pre-2020 connectivity) interacted with the carry. Both are
+# read off a cluster-robust reference distribution at G* ~ 6 -- i.e. the whole verdict
+# rests on a variance estimate built from a handful of effective clusters, which is
+# exactly where CRVE and its wild bootstrap are least trustworthy. Because the regressor
+# is a FIXED LABEL rather than an outcome, a Fisher randomization test is available that
+# needs NO variance estimate at all: under the SHARP null "the attribute changes Dep for
+# no unit", the outcome vector is invariant to relabelling, so every reassignment of the
+# attribute across conglomerates is equally likely and the statistic's permutation
+# distribution IS its exact null distribution.
+#
+# WHY CONGLOMERATE AND NOT ENTITY. Entities inside a conglomerate share the cluster shock
+# the whole inference scheme exists to respect. Shuffling at the entity level would break
+# that dependence and manufacture a far too narrow null distribution (anti-conservative).
+# So the attribute is collapsed to ONE value per conglomerate (mean over its entities) and
+# those values are shuffled among conglomerates. Entity nests inside conglomerate here
+# (entity = conglomerate x deposit_type x MCA), so the collapse is a clean aggregation.
+#
+# WHAT IT DOES *NOT* DELIVER.
+#   (i)  It tests the SHARP null (no effect for ANY unit), not "zero average effect".
+#        Failing to reject does not establish that an average effect is zero; a design
+#        with offsetting signs passes it trivially.
+#   (ii) It buys NO extra information about the tail. With ~5 conglomerates holding ~81%
+#        of deposits, the permutation distribution is essentially "which giant drew which
+#        label" -- the SAME few-cluster coarseness that makes the WCB unreliable, just
+#        expressed without a variance estimate. `top_r2` below quantifies precisely how
+#        much of the permutation variance those top conglomerates generate; read the
+#        p-value in that light, not as a fix.
+#  (iii) Its validity is design-based, so it is exact only for the reassignment mechanism
+#        assumed (conglomerate-level exchangeability). If big conglomerates differ
+#        systematically from small ones in ways correlated with the attribute, that is a
+#        violation of exchangeability, not something the test can detect.
+#
+# GOTCHA. Collapsing to conglomerate means CHANGES the regressor, so the permutation
+# test's observed coefficient is NOT numerically the entity-level coefficient the WCB
+# reports. Both are printed, and the gap between them is itself informative (it is the
+# share of the interaction that lives within conglomerates). Note also that the statistic
+# is invariant to any affine recentring/rescaling-by-a-constant of the attribute, because
+# `nr_lagged_dep` (and, for D6b, `postZ`) sit in the fixed block and FWL absorbs the shift.
+PERM_B = int(os.environ.get("DIAG_PERM_B", "999"))   # >= 999; env override for smokes ONLY
+PERM_SEED = 20260803                                  # PINNED -- do not vary between runs
+
+
+def design_cols(s_cols, has_cf):
+    """The production carry design -- exactly the columns run_augmented builds."""
+    cols = ["nr_lagged_dep" if sv == "constant" else f"interaction_{sv}" for sv in s_cols]
+    return cols + (["v_hat_x_lagged_dep"] if has_cf else [])
+
+
+def cluster_permutation_test(d, target, make_cols, attr_col, fixed_cols,
+                             y_col="deposit_balance",
+                             cluster_col="CodConglomeradoPrudencial",
+                             entity_col="entity_id", time_col="time_id",
+                             n_perm=PERM_B, seed=PERM_SEED, n_top=5, mode="collapse"):
+    """Fisher randomization test for the coefficient on `target`, permuting a
+    conglomerate-level attribute across conglomerates.
+
+    d          estimation sample (the frame run_augmented returns, so the permutation
+               runs on EXACTLY the sample the WCB coefficient came from).
+    target     name of the coefficient under test; must be a key of make_cols' output.
+    make_cols  callable(a_row, C) -> {name: ndarray}: every design column that depends on
+               the attribute, rebuilt from the row-level attribute `a_row`. `C[name]`
+               yields a cached float ndarray of `d[name]` in row order, so the closure
+               never has to worry about alignment or repeated conversions.
+               D6b passes BOTH postZ_x and Z_x here: a reassignment of the attribute has
+               to propagate to every column it enters, or the "control" column would still
+               carry the true labels and the test would be incoherent.
+    attr_col   entity-level attribute column in `d` (collapsed to conglomerate means).
+    fixed_cols design columns held FIXED across permutations (the carry block, the CF
+               term, and any extras that do not involve the attribute).
+    mode       WHICH object is being randomised. This matters more than it looks:
+               'collapse' -- the regressor IS the conglomerate-level attribute (each
+                 conglomerate one value, values shuffled). Clean and literal, but the
+                 observed statistic is the BETWEEN-conglomerate loading, not the
+                 entity-level coefficient the WCB row reports. When most of the
+                 attribute's variance is within conglomerates the two can differ a lot
+                 (D3: they even differ in sign), so 'collapse' answers a related but
+                 distinct question.
+               'between'  -- the entity keeps its within-conglomerate deviation
+                 (a_e - a_c) and only the conglomerate component a_c is shuffled. The
+                 identity assignment then reproduces the production regressor EXACTLY, so
+                 the observed statistic IS the reported coefficient and "does the
+                 conclusion change" is answered for the number actually in the table. The
+                 price: it conditions on the within-conglomerate structure, so it is exact
+                 only for the mechanism "the conglomerate-level component was assigned at
+                 random", and the within component contributes sampling variability the
+                 reference distribution does not see (mildly anti-conservative).
+               Both are run and both are reported: agreement is the robustness statement.
+
+    Implementation: Frisch-Waugh. The entity FE, the time FE and the fixed regressors are
+    projected out of y ONCE; each permutation then only has to push its (1-2 column)
+    attribute block through the same projector and read one coefficient. Statistics
+    recorded per permutation:
+    the coefficient itself and a cluster-robust studentised t. The t is a permutation
+    STATISTIC, not an inference object -- its validity does not depend on the SE being
+    right, and studentising is what makes the test robust to the wildly unequal cluster
+    sizes (Canay-Romano-Shaikh 2017; MacKinnon-Webb 2020).
+    """
+    if mode not in ("collapse", "between"):
+        raise ValueError(f"mode must be 'collapse' or 'between', got {mode!r}")
+    dd = d.reset_index(drop=True)
+    n = len(dd)
+    _, einv = np.unique(dd[entity_col].values, return_inverse=True)
+    ec = np.bincount(einv).astype(float)
+    _, tinv = np.unique(dd[time_col].values, return_inverse=True)
+    tc = np.bincount(tinv).astype(float)
+    cl_u, cinv = np.unique(dd[cluster_col].astype(str).values, return_inverse=True)
+    n_cl = len(cl_u)
+    T = len(tc)
+
+    # Cached column accessor handed to make_cols: the closure is called once per
+    # permutation, and re-running .to_numpy() on a million-row column ~4000 times is pure
+    # waste. Row order is untouched by reset_index(drop=True), so these align with dd.
+    class _Cols:
+        def __init__(self, frame):
+            self._f, self._c = frame, {}
+
+        def __getitem__(self, k):
+            if k not in self._c:
+                self._c[k] = self._f[k].to_numpy(float)
+            return self._c[k]
+
+    C = _Cols(dd)
+
+    # ---- ONE value per conglomerate: entity means, then the mean across its entities.
+    # Equal weight per entity (not per row) so a conglomerate with many quarters of data
+    # does not get a differently-defined attribute from one with few.
+    ent = dd.groupby(entity_col, observed=True).agg(_a=(attr_col, "mean"),
+                                                    _c=(cluster_col, "first"))
+    ent["_c"] = ent["_c"].astype(str)
+    a_cl = ent.groupby("_c")["_a"].mean().reindex(cl_u)
+    if a_cl.isna().any():                      # cannot happen once the frame is dropna'd
+        raise RuntimeError(f"{a_cl.isna().sum()} conglomerates have no {attr_col}")
+    a_cl = a_cl.to_numpy(float)
+
+    # BETWEEN/WITHIN split of the attribute, over ENTITIES (equal weight per entity).
+    # This is the single number that says how much of the entity-level regressor the
+    # 'collapse' scheme can possibly speak to. Low share => the collapsed coefficient is a
+    # different object from the reported one, and 'between' is the comparison that matters.
+    _a_e = ent["_a"].to_numpy(float)
+    _c_pos = pd.Series(np.arange(n_cl), index=cl_u).reindex(ent["_c"].values).to_numpy()
+    _a_ce = a_cl[_c_pos]
+    _v_tot = float(np.var(_a_e))
+    between_share = float(np.var(_a_ce) / _v_tot) if _v_tot > 0 else np.nan
+    # row-level within-conglomerate deviation, held fixed by mode='between'
+    dev_row = (dd[entity_col].map(pd.Series(_a_e - _a_ce, index=ent.index))
+               .to_numpy(float))
+
+    def _a_row(a_vec):
+        return a_vec[cinv] if mode == "collapse" else a_vec[cinv] + dev_row
+
+    # ---- fixed block, in CLOSED FORM (this is a speed fix, and it is exact) ----
+    # The production path two-way demeans by alternating projections (15 sweeps) and then
+    # residualises on the fixed regressors. That is a projection onto span{entity FE, time
+    # FE, fixed X}. The permutation loop needs the same projection ~4000 times, and 15
+    # sweeps over a million rows each time costs hours. Equivalent one-pass construction:
+    # sweep out the entity FE EXACTLY (one bincount -- entity demeaning is idempotent on
+    # its own), then residualise on the entity-demeaned [time dummies, fixed X]. Sequential
+    # residualisation on the augmented span equals projection onto the union span, so this
+    # is the identical operator, not an approximation -- and the identity-permutation check
+    # in report_permutation (mode='between' reproduces the statsmodels coefficient to
+    # ~1e-15) is what PROVES it, so do not remove that check.
+    def _dm_e(M):
+        M = np.array(M, dtype=float, copy=True)
+        flat = M.ndim == 1
+        if flat:
+            M = M.reshape(-1, 1)
+        for j in range(M.shape[1]):
+            M[:, j] -= (np.bincount(einv, M[:, j], minlength=len(ec)) / ec)[einv]
+        return M.ravel() if flat else M
+
+    Xf = np.empty((n, (T - 1) + len(fixed_cols)))
+    for t in range(1, T):                        # one period dropped (entity FE spans 1)
+        Xf[:, t - 1] = (tinv == t)
+    Xf[:, T - 1:] = dd[fixed_cols].to_numpy(float)
+    Xf = _dm_e(Xf)
+    XtXi = np.linalg.pinv(Xf.T @ Xf)
+
+    def _resid(V):
+        return V - Xf @ (XtXi @ (Xf.T @ V))
+
+    y_t = _resid(_dm_e(C[y_col]))
+
+    def _stat(a_vec):
+        """(coef, t, residualised target column) at conglomerate-level attribute a_vec."""
+        cols = make_cols(_a_row(a_vec), C)
+        names = list(cols)
+        W = _resid(_dm_e(np.column_stack([cols[nm] for nm in names])))
+        WtW = W.T @ W
+        Ai = np.linalg.pinv(WtW)
+        b = Ai @ (W.T @ y_t)
+        k = names.index(target)
+        e = y_t - W @ b
+        S = np.column_stack([np.bincount(cinv, weights=W[:, j] * e, minlength=n_cl)
+                             for j in range(W.shape[1])])
+        V = Ai @ (S.T @ S) @ Ai
+        se = float(np.sqrt(max(V[k, k], 0.0)))
+        return float(b[k]), (float(b[k]) / se if se > 0 else np.nan), W[:, k], Ai, W, names
+
+    coef_obs, t_obs, w_obs, _, _, _ = _stat(a_cl)
+
+    # ---- top-|deposits| conglomerates: the coarseness diagnostic ----
+    size = dd.groupby(dd[cluster_col].astype(str))[y_col].sum().reindex(cl_u).fillna(0.0)
+    top_pos = np.argsort(-size.to_numpy(float))[:n_top]
+    top_ids = [cl_u[i] for i in top_pos]
+    dep_share_top = float(size.to_numpy(float)[top_pos].sum() / max(size.sum(), 1e-30))
+    w2 = np.bincount(cinv, weights=w_obs ** 2, minlength=n_cl)
+    w2_share_top = float(w2[top_pos].sum() / max(w2.sum(), 1e-30))
+
+    rng = np.random.default_rng(seed)
+    dist = np.empty(n_perm)
+    tdist = np.empty(n_perm)
+    gperm = np.empty(n_perm)      # d(coef_perm)/d(true effect on the OBSERVED regressor)
+    A_top = np.empty((n_perm, len(top_pos)))
+    for j in range(n_perm):
+        a_p = rng.permutation(a_cl)
+        c_j, t_j, _, Ai, W, names = _stat(a_p)
+        dist[j] = c_j
+        tdist[j] = t_j
+        # If the truth were y -> y + delta * (observed target column), the permuted
+        # coefficient would move by delta * [ (W'W)^-1 W' w_obs ]_k. Storing that lets the
+        # power/MDE calculation below be exact instead of assuming the reference
+        # distribution is unaffected by the effect being detected.
+        gperm[j] = float((Ai @ (W.T @ w_obs))[names.index(target)])
+        A_top[j] = a_p[top_pos]
+
+    more = int(np.sum(np.abs(dist) >= abs(coef_obs) - 1e-15))
+    p_perm = (1.0 + more) / (1.0 + n_perm)
+    fin = np.isfinite(tdist)
+    more_t = int(np.sum(np.abs(tdist[fin]) >= abs(t_obs) - 1e-15))
+    p_perm_t = (1.0 + more_t) / (1.0 + int(fin.sum()))
+
+    # ---- how much of the permutation VARIANCE is "which giant got which label"? ----
+    Atop = np.column_stack([np.ones(n_perm), A_top])
+    bb, *_ = np.linalg.lstsq(Atop, dist, rcond=None)
+    ssr = float(np.sum((dist - Atop @ bb) ** 2))
+    sst = float(np.sum((dist - dist.mean()) ** 2))
+    top_r2 = 1.0 - ssr / sst if sst > 0 else np.nan
+
+    # ---- randomization MDE. Direct analog of MDE_MULT*se, but read off the permutation
+    # distribution: for a true effect delta the observed statistic is dist_j + delta and
+    # the reference distribution is |dist + delta*gperm|; power = share of draws above its
+    # 95th percentile. delta at 80% power is the smallest effect this randomization test
+    # would catch 4 times in 5. No normality, no variance estimate.
+    scale0 = float(np.quantile(np.abs(dist), 0.95))
+    grid = np.linspace(0.0, 8.0 * scale0 + 1e-12, 401)
+    power = np.empty(len(grid))
+    for i, g in enumerate(grid):
+        crit = float(np.quantile(np.abs(dist + g * gperm), 0.95))
+        power[i] = float(np.mean(np.abs(dist + g) > crit))
+    hit = np.where(power >= 0.80)[0]
+    mde_perm = float(grid[hit[0]]) if len(hit) else np.nan
+
+    return {"coef_obs": coef_obs, "t_obs": t_obs, "p_perm": p_perm, "p_perm_t": p_perm_t,
+            "share_more_extreme": more / n_perm, "share_more_extreme_t": more_t / max(int(fin.sum()), 1),
+            "n_perm": n_perm, "n": n, "n_cl": n_cl, "dist": dist, "tdist": tdist,
+            "gperm": gperm, "top_ids": top_ids, "dep_share_top": dep_share_top,
+            "w2_share_top": w2_share_top, "top_r2": top_r2, "mde_perm": mde_perm,
+            "crit95": scale0, "seed": seed, "mode": mode,
+            "between_share": between_share}
+
+
+def report_permutation(pr, label, wcb_coef, wcb_p, wcb_se=None, carry=None, alpha=0.05):
+    """Print the randomization block next to the WCB numbers and COMPUTE the verdict.
+
+    HEADLINE STATISTIC = the STUDENTISED one. Both |coef| and |t| give exact p-values under
+    the sharp null *and* exact exchangeability, so neither is "wrong" -- but exchangeability
+    of the raw coefficient is not credible when cluster sizes are this unequal. The variance
+    of beta-hat depends on WHICH conglomerate holds which attribute value (a giant with an
+    extreme value pins the regressor down; a giant near the mean leaves it noisy), so the
+    permutation distribution of the raw coefficient mixes assignments with very different
+    sampling variances and the realised assignment need not be typical of that mixture.
+    Studentising is the standard fix (Chung-Romano 2013; Canay-Romano-Shaikh 2017;
+    MacKinnon-Webb 2020 for the cluster case), so the verdict is computed from p_perm_t and
+    the raw-coefficient p is reported beside it, with an explicit warning when they cross
+    `alpha` differently. Empirically they DO diverge here (D6b: |coef| rejects at 0.028-0.042
+    while |t| sits at 0.20-0.37), which is why this distinction is not academic.
+
+    Nothing here is hard-coded: whether the conclusion changes is derived from the two
+    p-values crossing `alpha` (and the 0.10 line), and the coarseness sentence is derived
+    from top_r2, so a future re-run cannot inherit a stale claim."""
+    p_head, p_raw = pr["p_perm_t"], pr["p_perm"]
+    same = (p_head <= alpha) == (wcb_p <= alpha)
+    same10 = (p_head <= 0.10) == (wcb_p <= 0.10)
+    diverge = (p_raw <= alpha) != (p_head <= alpha)
+    print(f"    [randomization/{pr['mode']}] conglomerate-level Fisher test on {label} "
+          f"(B={pr['n_perm']}, seed={pr['seed']}, G={pr['n_cl']})")
+    print(f"      entity-level coef (WCB row) = {wcb_coef:+.5f}   WCB p={wcb_p:.4f}")
+    _lab = "congl-collapsed coef " if pr["mode"] == "collapse" else "coef at identity perm"
+    print(f"      {_lab}       = {pr['coef_obs']:+.5f}   (t={pr['t_obs']:+.2f})")
+    print(f"      attribute variance that is BETWEEN conglomerates: "
+          f"{pr['between_share']:.1%} of the entity-level total")
+    if pr["mode"] == "between":
+        # SELF-CHECK, not decoration: under 'between' the identity assignment rebuilds the
+        # production regressor exactly, so the observed statistic MUST equal the WCB
+        # coefficient. If it does not, the closure passed as make_cols is not reproducing
+        # the design and every p-value below is meaningless.
+        _gap = abs(pr["coef_obs"] - wcb_coef)
+        _ok = _gap <= 1e-6 * max(1.0, abs(wcb_coef))
+        print(f"      identity-permutation check: |perm_obs - WCB coef| = {_gap:.2e} "
+              f"-> {'OK, same regressor' if _ok else 'MISMATCH -- make_cols does not rebuild the design'}")
+        if not _ok:
+            raise RuntimeError(f"mode='between' identity check failed for {label}: "
+                               f"{pr['coef_obs']:.8f} vs {wcb_coef:.8f}")
+    else:
+        print("      (this is the BETWEEN-conglomerate loading; it is not the entity-level "
+              "coefficient above, and need not match it in size or sign)")
+    print(f"      permutation p (|t|, studentised)  = {p_head:.4f}   "
+          f"share more extreme = {pr['share_more_extreme_t']:.3f}   <- HEADLINE")
+    print(f"      permutation p (|coef|, unstudentised) = {p_raw:.4f}   "
+          f"share more extreme = {pr['share_more_extreme']:.3f}")
+    if diverge:
+        print(f"      DIVERGENCE: the two randomization statistics cross {alpha:.0%} "
+              f"differently (|t| {'rejects' if p_head <= alpha else 'does not reject'}, "
+              f"|coef| {'rejects' if p_raw <= alpha else 'does not reject'}). Both are exact "
+              "under the sharp null AND exact exchangeability, so this is not a bug: it says "
+              "the SCALE of the raw statistic varies across assignments, which is precisely "
+              "what unequal cluster sizes produce. The raw permutation distribution then "
+              "mixes assignments with very different sampling variances and the realised one "
+              "need not be typical of that mixture; studentising removes exactly that. READ "
+              "THE |t| ROW (Chung-Romano 2013; Canay-Romano-Shaikh 2017).")
+    print(f"      perm dist: sd={pr['dist'].std(ddof=1):.5f}  "
+          f"95th pct |coef|={pr['crit95']:.5f}  MDE(80%)={pr['mde_perm']:.5f}"
+          + (f"  ({100*pr['mde_perm']/abs(carry):.2f}% of the carry)" if carry else ""))
+    if wcb_se:
+        print(f"      vs WCB MDE(80%) = {MDE_MULT*wcb_se:.5f}  -> randomization is "
+              f"{pr['mde_perm']/(MDE_MULT*wcb_se):.2f}x the WCB bound")
+    print(f"      COARSENESS: top-{len(pr['top_ids'])} conglomerates hold "
+          f"{pr['dep_share_top']:.1%} of sample deposits and {pr['w2_share_top']:.1%} of "
+          f"the residualised regressor's squared mass; regressing the permutation "
+          f"statistic on the labels THOSE {len(pr['top_ids'])} drew gives R2="
+          f"{pr['top_r2']:.3f}")
+    print("      -> " + (f"{pr['top_r2']:.0%} of the permutation distribution is generated by "
+                         "which giant got which label; the randomization p-value is coarse "
+                         "for the same reason the WCB is."
+                         if np.isfinite(pr["top_r2"]) and pr["top_r2"] >= 0.5 else
+                         f"the top {len(pr['top_ids'])} generate {pr['top_r2']:.0%} of the "
+                         "permutation variance, so the distribution is not driven by a "
+                         "single relabelling."))
+    print("      VERDICT (vs studentised randomization): conclusion " +
+          ("UNCHANGED" if same else "CHANGES") + f" at the {alpha:.0%} level " +
+          (f"(both {'reject' if wcb_p <= alpha else 'fail to reject'})" if same
+           else f"(WCB {'rejects' if wcb_p <= alpha else 'does not reject'}, "
+                f"randomization {'rejects' if p_head <= alpha else 'does not'})")
+          + ("; also unchanged at 10%." if same10 else "; DIFFERS at the 10% level."))
+    return {"param": label, "perm_mode": pr["mode"], "coef_perm_obs": pr["coef_obs"],
+            "t_perm_obs": pr["t_obs"], "p_perm_headline": p_head,
+            "perm_stats_diverge": bool(diverge),
+            "p_perm_coef": pr["p_perm"], "p_perm_t": pr["p_perm_t"],
+            "share_more_extreme": pr["share_more_extreme"],
+            "perm_sd": float(pr["dist"].std(ddof=1)), "perm_mde80": pr["mde_perm"],
+            "top_r2": pr["top_r2"], "w2_share_top": pr["w2_share_top"],
+            "dep_share_top": pr["dep_share_top"], "between_share": pr["between_share"],
+            "n_perm": pr["n_perm"], "coef_entity_level": wcb_coef, "p_wcb": wcb_p}
 
 
 # ==============================================================================
@@ -565,12 +931,65 @@ def arm_pixpooled():
                 print(f"    -> a Pix break in the carry larger than {m:.5f} per SD of "
                       f"connectivity ({100*m/abs(base_phi):.2f}% of the carry) would have "
                       "been detected 80% of the time.")
+
+            # ---- Fisher randomization on the SAME sample (ADDITIVE: the WCB block above
+            # is untouched). `_expo` is a predetermined entity attribute, so the sharp
+            # null licenses reassigning it across conglomerates. It enters BOTH postZ_x
+            # and the level control Z_x, so both are rebuilt from the permuted labels --
+            # leaving Z_x at the true labels would test a different (incoherent) null.
+            # Only the `pooled` variant is permuted: `pooled+trend` differs from it in the
+            # 4th decimal (trendZ is an additional FIXED regressor, not an attribute), so
+            # a second 999-permutation pass would cost ~10 min to reproduce the same
+            # number. trendZ is therefore carried in the fixed block when present.
+            if vname != "pooled":
+                continue
+            fixed = design_cols(s_cols, has_cf) + ["postZ"]
+            for _mode in ("collapse", "between"):
+                pr = cluster_permutation_test(
+                    d, "postZ_x",
+                    lambda a, C: {"postZ_x": a * C["postZ"],
+                                  "Z_x": a * C["nr_lagged_dep"]},
+                    "_expo", fixed, mode=_mode)
+                rows.append({"spec": tag, "variant": vname, "n": len(d),
+                             **report_permutation(pr, "postZ_x",
+                                                  float(res_a.params["postZ_x"]),
+                                                  float(res_a.pvalues["postZ_x"]),
+                                                  wcb_se=float(res_a.bse["postZ_x"]),
+                                                  carry=base_phi)})
     pd.DataFrame(rows).to_csv(OUT_DIR / "d6b_pix_pooled.csv", index=False)
     print("\n  VERDICT: the TRIPLE (post x carry x connectivity) is the test -- it has")
     print("  cross-sectional variation, so the conglomerate WCB above applies. A null with")
     print("  a SMALL MDE bounds the Pix attention channel; a null with a LARGE MDE means the")
     print("  design cannot see it. The pooled post x carry term is time-identified only")
     print("  (a national step at ~35 quarters) and is descriptive, not a test.")
+    _pm = [r for r in rows if "p_perm_coef" in r]
+    if _pm:
+        _agree = all((r["p_perm_headline"] <= 0.05) == (r["p_wcb"] <= 0.05) for r in _pm)
+        _r2 = float(np.mean([r["top_r2"] for r in _pm]))
+        _div = [r for r in _pm if r["perm_stats_diverge"]]
+        print("  RANDOMIZATION: the variance-free Fisher test " +
+              ("AGREES with the WCB at 5% on every spec and scheme" if _agree
+               else "DISAGREES with the WCB at 5% somewhere") +
+              " (studentised perm p = " +
+              ", ".join(f"{r['spec']}/{r['perm_mode']}:{r['p_perm_headline']:.3f}"
+                        for r in _pm) +
+              f"); mean top-5 R2 of the permutation distribution = {_r2:.2f}, so the "
+              "randomization null is driven by the same few giants as the WCB and is not "
+              "an independent second opinion about the tail.")
+        if _div:
+            print(f"  CAUTION: on {len(_div)} of {len(_pm)} configurations the UNSTUDENTISED "
+                  "randomization statistic crosses 5% the other way (|coef| p = " +
+                  ", ".join(f"{r['spec']}/{r['perm_mode']}:{r['p_perm_coef']:.3f}"
+                            for r in _div) +
+                  "). That is the unequal-cluster-size artefact described in "
+                  "report_permutation, NOT a Pix effect the WCB missed: the raw statistic's "
+                  "scale moves with the assignment. A naive randomization test without "
+                  "studentisation would have reported a significant Pix break here.")
+        for r in [x for x in _pm if x["perm_mode"] == "between"]:
+            print(f"  POWER [{r['spec']}]: randomization MDE(80%) = {r['perm_mde80']:.5f} "
+                  f"per SD of connectivity vs |coef| = {abs(r['coef_entity_level']):.5f}; "
+                  f"the design detects {r['perm_mde80']/max(abs(r['coef_entity_level']),1e-12):.1f}x "
+                  "the estimated break, not the break itself.")
     print(f"\nresults -> {OUT_DIR / 'd6b_pix_pooled.csv'}")
     return rows
 

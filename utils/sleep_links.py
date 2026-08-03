@@ -29,6 +29,14 @@ cluster-robust) and the conditional clustered-OLS SE (Est6). The Imbens-Kolesar
 hat matrix); the Carter-Schnepel-Steigerwald (2017) G* effective-cluster count is
 retained only as a reported diagnostic. References for the single index: Ichimura
 (1993); Klein & Spady (1993); Robertson, Wright & Dykstra (1988, PAVA).
+
+REFERENCE DISTRIBUTION (env SLEEP_WCB_MODE, default unchanged): the historical
+p-values use the bootstrap only for the SE and a NORMAL reference, which at
+nu = G*-1 = 5.2 is materially undersized. SLEEP_WCB_MODE=studentised (bootstrap-t,
+unrestricted) and =wcr (bootstrap-t with H0 imposed on the DGP residuals) are OPT-IN
+corrections; see the comment block above cluster_wild_bootstrap for why the default
+is NOT flipped and what must be re-run to promote it. Quantified side-by-side in
+diag_wcb_reference.py.
 """
 from __future__ import annotations
 
@@ -1147,33 +1155,292 @@ def _wild_weights(n, scheme, rng):
     return rng.choice(np.array([-1.0, 1.0]), size=n)   # Rademacher
 
 
+# ==============================================================================
+# WCB REFERENCE DISTRIBUTION  --  OPT-IN, DEFAULT DELIBERATELY UNCHANGED
+# ==============================================================================
+# WHAT WAS WRONG (and still is, by default). The historical `cluster_wild_bootstrap`
+# below takes the standard DEVIATION of the bootstrap draws as a standard error and
+# then reads the p-value off a NORMAL reference:
+#
+#       sd = np.std(draws[k], ddof=1);  z = |ame| / sd;  p = 2 * Phi(-z)
+#
+# So the bootstrap supplies the SE but NOT the reference distribution. That is a
+# Wald test with a bootstrap SE, not a wild cluster bootstrap test: the asymptotic
+# refinement that motivates the wild bootstrap at small G is never realised. With
+# G* = 6.2 effective clusters (nu = G*-1 = 5.2) the normal reference is far too
+# narrow -- the exact t(5.2) 97.5% quantile is 2.53 against 1.96, so a nominal-5%
+# normal test has size ~10-11%. Second, the scheme is the UNRESTRICTED variant
+# (WCU): `theta_b = theta_hat + wv @ IF_cl` perturbs the UNRESTRICTED residuals and
+# centres the bootstrap DGP at theta_hat, so the null is never imposed.
+# MacKinnon & Webb (2017, 2018) show WCR (impose H0 when generating the bootstrap
+# DGP) dominates WCU at small/imbalanced G precisely because WCU over-rejects.
+#
+# NOTE on the algebra: for OLS the score/multiplier draw IS the WCU refit draw --
+#   beta*_b = (X'X)^{-1} X'(X beta_hat + w_g u_hat) = beta_hat + (X'X)^{-1} sum_g w_g s_g
+#             = theta_hat + wv @ IF_cl.
+# So the numerator here was already the textbook WCU numerator; what is missing is
+# (a) studentisation by a PER-DRAW SE and (b) the null restriction.
+#
+# WHY THE DEFAULT IS **NOT** FLIPPED. utils/sleep_links.py is production code for
+# E1-E8, the BBL policy function, utils/se_national.py and the whole phi-separation
+# battery. Every p-value archived in Drafts/Deposit Competition (V_Main.tex tables,
+# identification_notes.md, the DIAG_PHI_SEPARATION csvs, sleep_first_stage_pooled*.tex)
+# was produced under the normal reference. Silently changing the default would make
+# the code disagree with every archived number with no audit trail, and the tables
+# and the drafts would drift apart mid-revision. So the corrected schemes are OPT-IN
+# through SLEEP_WCB_MODE and the default is bit-identical to the historical path
+# (same RNG stream, same draws, same bse, same p-values -- verified by the Tier-0
+# check in diag_wcb_reference.py --check-default).
+#
+# WHAT IT COSTS, MEASURED (diag_wcb_reference.py, run 2026-08-03; numbers in
+# <PROCESSED>/ESTIMATION_OUTPUT/DIAG_PHI_SEPARATION/d_wcb_reference_*.csv):
+#   * Size, synthetic panel at THIS repo's cluster geometry (G=456 Zipf sizes calibrated
+#     to CV=8.54 => G*=6.17, top-5 clusters = 66% of rows; 400 reps, B=299, beta_1 = 0
+#     imposed). Rejection rate of a NOMINAL 5% test:
+#         normal reference 0.270 | WCU-t 0.138 | WCR-t 0.083 | CRVE+t(G*) 0.145
+#     The pure reference-distribution arithmetic (a t(5.2) pivot judged against 1.96)
+#     accounts for 0.105 of that; the rest is the CRVE's own small-G noise. A balanced
+#     G=20 control run gives normal 0.140, WCU-t 0.060, WCR-t 0.068 -- i.e. the machinery
+#     is calibrated where it should be, and WCR is the best-behaved variant at OUR
+#     geometry. If the default is ever flipped, flip it to 'wcr', NOT to 'studentised'.
+#   * The phi-separation battery (11 coefficients, D5/D3/D2b/D6b, refit once each):
+#     every null stays null; the ONE legacy 5% rejection, D5's CDB carry excess
+#     Zdiff_k4 = +0.1849 (p_normal = 0.0131), goes to p = 0.152 under WCU-t but
+#     p = 0.010 under WCR-t. WCU and WCR DISAGREE on the only rejection in the battery,
+#     which is precisely why the promotion decision cannot be made silently.
+#   * Reported SEs barely move: bootstrap sd vs CRVE-from-IF differ by <= 3.5% across
+#     all 11 coefficients, so the mode changes the p-value, not the standard error.
+#
+# TO PROMOTE the corrected reference to default, re-run and re-export, in order:
+#   1. estimation_2_sleep.py (E1/E2, all specs)  -> est1/est2 pickles
+#   2. estimation_sleep_common.py --est 3..8     -> E3-E8 pickles (~11h)
+#   3. estimation_bbl_1_polfunc.py               -> BBL policy-function SEs
+#   4. export_1_sleep_results.py + the sleep_first_stage_pooled*.tex exporters
+#   5. run_phi_diagnostics.py (full D0-D12 battery) -> DIAG_PHI_SEPARATION csvs
+#   6. hand-update the p-values quoted in identification_notes.md and V_Main.tex
+# Point estimates are untouched by any of this: the mode changes only the reference
+# distribution used to convert a statistic into a p-value.
+#
+# MODES (env SLEEP_WCB_MODE):
+#   unset / "normal"      historical behaviour (bootstrap-sd SE + normal reference)
+#   "studentised"/"wcu"   bootstrap-t: store t*_b = (theta*_b - theta_hat)/se*_b and
+#                         read p = P(|t*| >= |t_obs|); null NOT imposed
+#   "wcr"                 restricted bootstrap-t: residuals used to build the
+#                         bootstrap DGP come from the fit with H0: theta_k = 0
+#                         imposed (exact in the linear path; see the fallback note)
+# ==============================================================================
+_WCB_ALIASES = {
+    "": "normal", "normal": "normal", "default": "normal", "legacy": "normal",
+    "off": "normal", "wald": "normal",
+    "studentised": "wcu", "studentized": "wcu", "wcu": "wcu", "wcu-t": "wcu",
+    "boott": "wcu", "boot-t": "wcu",
+    "wcr": "wcr", "wcr-t": "wcr", "restricted": "wcr",
+}
+_WCB_WARNED = set()
+
+
+def wcb_mode(default="normal"):
+    """Resolve SLEEP_WCB_MODE -> one of {'normal', 'wcu', 'wcr'}.
+
+    GOTCHA: an unrecognised value RAISES rather than silently falling back, because
+    a typo'd 'SLEEP_WCB_MODE=wrc' that quietly produced legacy p-values labelled as
+    corrected is exactly the failure this whole exercise is about."""
+    raw = os.environ.get("SLEEP_WCB_MODE", default)
+    m = _WCB_ALIASES.get(str(raw).strip().lower())
+    if m is None:
+        raise ValueError(f"SLEEP_WCB_MODE={raw!r} not understood; use one of "
+                         f"{sorted(set(_WCB_ALIASES.values()))} "
+                         f"(aliases: {sorted(_WCB_ALIASES)})")
+    return m
+
+
+def _boot_pval(t_obs, t_star):
+    """Symmetric equal-tail bootstrap p: p = (1 + #{|t*_b| >= |t_obs|}) / (1 + B).
+
+    The (1+.)/(1+B) form (Davidson & MacKinnon 2004, 4.62) is the finite-B unbiased
+    version and can never return exactly 0, which the normal-reference path could."""
+    t_star = np.asarray(t_star, float)
+    ok = np.isfinite(t_star)
+    B_eff = int(ok.sum())
+    if B_eff == 0 or not np.isfinite(t_obs):
+        return float("nan")
+    # 1e-12 slack so a draw that ties |t_obs| to machine precision counts as >=
+    hits = int(np.sum(np.abs(t_star[ok]) >= abs(t_obs) - 1e-12))
+    return float((1.0 + hits) / (B_eff + 1.0))
+
+
+def _ame_cluster_if(theta_hat, IF_cl, ame_fn, keys, h_rel=1e-5):
+    """Per-cluster influence of each AME: IF^a_{g,k} = grad_theta AME_k . IF_g.
+
+    Needed to studentise the multiplier bootstrap: the bootstrap analogue of the
+    CRVE at draw b is V*_b = sum_g w_g^2 IF^a_g IF^a_g' (E[w^2]=1, so E[V*_b] is the
+    CRVE itself). One-sided finite differences, p extra ame_fn calls, all done
+    OUTSIDE the draw loop so the RNG stream is untouched.
+    GOTCHA: with Rademacher weights w^2 == 1, so V*_b is constant across draws and
+    the studentisation is vacuous (no asymptotic refinement) -- Webb weights, the
+    repo default, put w^2 in {0.5, 1, 1.5} and do vary."""
+    theta_hat = np.asarray(theta_hat, float)
+    p = theta_hat.size
+    a0 = ame_fn(theta_hat)
+    J = np.empty((p, len(keys)))
+    for j in range(p):
+        h = h_rel * max(1.0, abs(float(theta_hat[j])))
+        tp = theta_hat.copy()
+        tp[j] += h
+        a1 = ame_fn(tp)
+        for ki, k in enumerate(keys):
+            J[j, ki] = (float(a1[k]) - float(a0[k])) / h
+    return np.asarray(IF_cl, float) @ J          # (n_cl x p) @ (p x K) -> n_cl x K
+
+
 def cluster_wild_bootstrap(theta_hat, IF_cl, ame_fn, ame_hat, B=199,
-                           scheme="rademacher", rng=None):
+                           scheme="rademacher", rng=None, mode=None):
     """Score/multiplier wild cluster bootstrap (Kline & Santos 2012): perturb the
     cluster-summed influence functions by wild weights, recompute the (linearised)
     AME via ame_fn, and read SEs/p-values off the bootstrap distribution.
-    Returns (bse dict, pvals dict)."""
+    Returns (bse dict, pvals dict).
+
+    mode=None reads SLEEP_WCB_MODE (default 'normal' = historical behaviour).
+      'normal' -> bse = sd(draws), p = 2*Phi(-|ame|/sd)          [legacy]
+      'wcu'    -> bse = CRVE-from-IF, p = bootstrap tail mass of |t*|, t* studentised
+                  by the per-draw V*_b = sum_g w_g^2 IF^a_g IF^a_g'
+      'wcr'    -> not available on this generic M-estimator path (imposing H0 needs a
+                  RESTRICTED refit, which this signature has no handle on); falls back
+                  to 'wcu' with a one-time warning. The linear path
+                  (linear_wild_cluster_bootstrap) implements WCR exactly.
+    The draws themselves are identical across modes -- same weights, same RNG
+    consumption -- so switching mode cannot move a point estimate or a draw."""
     rng = rng or np.random.default_rng(0)
+    mode = wcb_mode() if mode is None else mode
+    if mode == "wcr":
+        if "generic-wcr" not in _WCB_WARNED:
+            _WCB_WARNED.add("generic-wcr")
+            print("  [WCB] SLEEP_WCB_MODE=wcr requested on the generic score path "
+                  "(nonlinear AMEs): H0 cannot be imposed without a restricted refit; "
+                  "using studentised WCU here. The linear estimators use true WCR.")
+        mode = "wcu"
     n_cl = IF_cl.shape[0]
     keys = list(ame_hat.keys())
     draws = {k: np.empty(B) for k in keys}
+    stud = (mode != "normal")
+    if stud:
+        IF_a = _ame_cluster_if(theta_hat, IF_cl, ame_fn, keys)     # n_cl x K
+        se_hat = np.sqrt(np.sum(IF_a ** 2, axis=0))                # CRVE-from-IF
+        IF_a2 = IF_a ** 2
+        Vb = np.empty((B, len(keys)))
     for b in range(B):
         wv = _wild_weights(n_cl, scheme, rng)
         theta_b = theta_hat + wv @ IF_cl
         a_b = ame_fn(theta_b)
         for k in keys:
             draws[k][b] = a_b[k]
+        if stud:
+            Vb[b] = (wv ** 2) @ IF_a2       # diag of the bootstrap-draw CRVE
     bse, pvals = {}, {}
-    for k in keys:
+    for ki, k in enumerate(keys):
         sd = float(np.std(draws[k], ddof=1))
-        bse[k] = sd
-        # symmetric bootstrap p for H0: AME=0, via the studentised pivot
-        z = abs(ame_hat[k]) / sd if sd > 0 else np.inf
-        pvals[k] = float(2 * stats.norm.sf(z)) if np.isfinite(z) else 0.0
+        if not stud:
+            bse[k] = sd
+            # symmetric p for H0: AME=0, NORMAL reference (legacy; see block above)
+            z = abs(ame_hat[k]) / sd if sd > 0 else np.inf
+            pvals[k] = float(2 * stats.norm.sf(z)) if np.isfinite(z) else 0.0
+            continue
+        s0 = float(se_hat[ki])
+        bse[k] = s0 if s0 > 0 else sd
+        se_b = np.sqrt(np.clip(Vb[:, ki], 0.0, None))
+        with np.errstate(divide="ignore", invalid="ignore"):
+            t_star = np.where(se_b > 0, (draws[k] - ame_hat[k]) / se_b, np.nan)
+        t_obs = (ame_hat[k] / s0) if s0 > 0 else np.nan
+        pvals[k] = _boot_pval(t_obs, t_star)
     return bse, pvals
 
 
-def linear_wild_cluster_bootstrap(res, B=999, scheme="webb", seed=0):
+def _linear_wcb_t(res, B, scheme, seed, restricted, tstats_out=None):
+    """True (restricted or unrestricted) wild cluster bootstrap-t for a fitted
+    statsmodels cluster-OLS. Opt-in path for SLEEP_WCB_MODE in {wcu, wcr}; the
+    default 'normal' path never reaches here.
+
+    Per coefficient j, H0: beta_j = 0.
+      WCR: beta~ = OLS with column j DROPPED (the null imposed), u~ = y - X beta~.
+      WCU: beta~ = beta_hat (unrestricted), u~ = u_hat.
+      draw b: u*_ig = w_g u~_ig,  y* = X beta~ + u*,
+              beta*_b = beta~ + A^{-1} sum_g w_g s~_g       (A = X'X)
+              u_hat*_ig = w_g u~_ig - X_i'(beta*_b - beta~)
+              s*_g = w_g s~_g - Q_g (beta*_b - beta~),       Q_g = X_g' X_g
+              V*_b = A^{-1} (sum_g s*_g s*_g') A^{-1}
+              t*_b = (beta*_bj - beta~_j) / se*_bj
+    NOTE the numerator is `delta_j = beta*_bj - beta~_j` under BOTH variants: under
+    WCR the DGP's true beta_j is 0 and beta~_j = 0, so beta*_bj - 0 = delta_j; under
+    WCU the DGP's true beta_j is beta_hat_j = beta~_j. The two variants differ ONLY
+    in which residuals generate the bootstrap DGP -- that is the whole of the WCR/WCU
+    distinction, and it is why WCR is essentially free here.
+    t_obs = beta_hat_j / se_hat_j with se_hat from the SAME (uncorrected) CRVE
+    formula, so the G/(G-1)*(N-1)/(N-K) finite-sample factor cancels in the test and
+    is omitted. p = (1 + #{|t*| >= |t_obs|}) / (1 + B).
+
+    Everything is done in cluster-sum space -- Sy_g = sum_{i in g} X_i y_i and
+    Q_g -- so no per-coefficient pass over the N ~ 1e6 rows is ever needed:
+    S(b) = Sy - Q @ b for any coefficient vector b."""
+    idx = res.params.index
+    names = list(idx)
+    beta = np.asarray(res.params, float)
+    X = np.asarray(res.model.exog, float)
+    y = np.asarray(res.model.endog, float)
+    cl = pd.Series(np.asarray(res.cov_kwds["groups"])).astype(str).values
+    cl_u, cl_inv = np.unique(cl, return_inverse=True)
+    n_cl, K = len(cl_u), X.shape[1]
+
+    Sy = np.empty((n_cl, K))                     # sum_{i in g} X_i y_i
+    for a in range(K):
+        Sy[:, a] = np.bincount(cl_inv, weights=X[:, a] * y, minlength=n_cl)
+    Q = np.empty((n_cl, K, K))                   # X_g' X_g, per cluster
+    for a in range(K):
+        for c in range(a, K):
+            v = np.bincount(cl_inv, weights=X[:, a] * X[:, c], minlength=n_cl)
+            Q[:, a, c] = v
+            Q[:, c, a] = v
+    A = Q.sum(axis=0)                            # X'X
+    Ainv = np.linalg.pinv(A)
+    Xty = Sy.sum(axis=0)                         # X'y
+
+    def _crve_diag(S):
+        M = Ainv @ (S.T @ S) @ Ainv
+        return np.diag(M)
+
+    se_hat = np.sqrt(np.clip(_crve_diag(Sy - Q @ beta), 0.0, None))
+
+    bse, pvals = {}, {}
+    for j, nm in enumerate(names):
+        s0 = float(se_hat[j])
+        bse[nm] = s0
+        t_obs = (beta[j] / s0) if s0 > 0 else np.nan
+        if restricted:
+            keep = [c for c in range(K) if c != j]
+            b_null = np.zeros(K)
+            if keep:
+                kk = np.ix_(keep, keep)
+                b_null[keep] = np.linalg.lstsq(A[kk], Xty[list(keep)], rcond=None)[0]
+        else:
+            b_null = beta
+        S0 = Sy - Q @ b_null                     # cluster scores of the DGP residuals
+        # own RNG per coefficient: the restricted DGP differs by coefficient, so a
+        # shared stream would make the draws mutually dependent for no benefit.
+        rng = np.random.default_rng(seed + 7919 * (j + 1))
+        t_star = np.empty(B)
+        for b in range(B):
+            w = _wild_weights(n_cl, scheme, rng)
+            delta = Ainv @ (w @ S0)              # beta*_b - b_null
+            Sb = S0 * w[:, None] - Q @ delta     # bootstrap-sample cluster scores
+            v = float((Ainv @ (Sb.T @ Sb) @ Ainv)[j, j])
+            t_star[b] = delta[j] / np.sqrt(v) if v > 0 else np.nan
+        pvals[nm] = _boot_pval(t_obs, t_star)
+        if tstats_out is not None:      # diagnostics only (diag_wcb_reference.py)
+            tstats_out[nm] = (t_obs, t_star.copy())
+    return bse, pvals
+
+
+def linear_wild_cluster_bootstrap(res, B=999, scheme="webb", seed=0, mode=None,
+                                  tstats_out=None):
     """Score/multiplier wild cluster bootstrap SEs/p-values for a fitted statsmodels
     cluster-OLS result, so the LINEAR sleepiness estimators (Est1/Est2) share ONE
     inference method with the single-index/joint columns (Cameron-Gelbach-Miller 2008;
@@ -1181,10 +1448,22 @@ def linear_wild_cluster_bootstrap(res, B=999, scheme="webb", seed=0):
     straight off the fit -- IF_cl[g] = (X'X)^{-1} sum_{i in g} X_i u_hat_i -- and
     perturbed by wild weights via the same cluster_wild_bootstrap used for the
     nonlinear AMEs (identity map: the parameters ARE the coefficients). No refit.
-    Returns (bse, tvalues, pvalues) as pandas Series indexed like res.params."""
+    Returns (bse, tvalues, pvalues) as pandas Series indexed like res.params.
+
+    mode=None reads SLEEP_WCB_MODE; 'normal' (the default) is the historical code
+    below, bit-for-bit. 'wcu'/'wcr' route to the bootstrap-t in _linear_wcb_t."""
     idx = res.params.index
     names = list(idx)
     beta = np.asarray(res.params, float)
+    mode = wcb_mode() if mode is None else mode
+    if mode != "normal":
+        bse, pvals = _linear_wcb_t(res, B=B, scheme=scheme, seed=seed,
+                                   restricted=(mode == "wcr"), tstats_out=tstats_out)
+        bse_s = pd.Series({nm: bse[nm] for nm in names}).reindex(idx)
+        pv_s = pd.Series({nm: pvals[nm] for nm in names}).reindex(idx)
+        tv_s = pd.Series({nm: (float(b) / bse[nm] if bse[nm] else np.nan)
+                          for nm, b in zip(names, beta)}).reindex(idx)
+        return bse_s, tv_s, pv_s
     X = np.asarray(res.model.exog, float)
     u = np.asarray(res.resid, float)
     cl = pd.Series(np.asarray(res.cov_kwds["groups"])).astype(str).values
@@ -1199,8 +1478,8 @@ def linear_wild_cluster_bootstrap(res, B=999, scheme="webb", seed=0):
     IF_cl = s_cl @ bread.T                                   # n_cl x K cluster IFs on beta
     ame_hat = {nm: float(b) for nm, b in zip(names, beta)}
     ame_fn = lambda th: {nm: float(th[i]) for i, nm in enumerate(names)}
-    bse, pvals = cluster_wild_bootstrap(beta, IF_cl, ame_fn, ame_hat,
-                                        B=B, scheme=scheme, rng=np.random.default_rng(seed))
+    bse, pvals = cluster_wild_bootstrap(beta, IF_cl, ame_fn, ame_hat, B=B, scheme=scheme,
+                                        rng=np.random.default_rng(seed), mode="normal")
     bse_s = pd.Series({nm: bse[nm] for nm in names}).reindex(idx)
     pv_s = pd.Series({nm: pvals[nm] for nm in names}).reindex(idx)
     tv_s = pd.Series({nm: (ame_hat[nm] / bse[nm] if bse[nm] else np.nan)
