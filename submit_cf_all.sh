@@ -6,7 +6,7 @@
 #      (minimal unzip + cp of the four extended .jls — no python), then
 #   2. preflight-checks the staged inputs (draws, RC results, forward r^f curve), then
 #   3. submits the CF chain for EACH routine in ROUTINES:
-#        (optional) demand_eval — 0a share reproduction (first routine only; precompiles)
+#        (optional) demand_eval — 0a share reproduction, PER ROUTINE (shares_elas_E{k})
 #        (optional) cf1         — gross franchise-value decomposition          [1 job]
 #        (optional) cf1_net/cf3/cf5/cf6 — equilibrium CFs; consume the BBL cost params
 #   The BBL cost-estimation stage (fwd_sim ψ deviations + eq:17 solve) is now a SEPARATE
@@ -199,12 +199,14 @@ cost_dep="${cost_ok_ids:+--dependency=afterok:${cost_ok_ids}}"
 # here — so every step depends only on the warmup. cf1_net/cf3/cf5/cf6 read cost_params_*.json off
 # disk. Per-CF afterany dependency lists (colon-joined job ids) feed the end-of-run archiver.
 found_dep=""; cf1_dep=""; cf4_dep=""; cf3_dep=""; cf5_dep=""; cf6_dep=""
-first=1
 for k in ${ROUTINES}; do
     base_export="CF_ROUTINE=${k},CF_STAGE=${CF_STAGE},R=${R},SEED=${SEED}"
     echo "── E${k} ${CF_STAGE} | R=${R} ──"
-    # demand_eval runs once (first routine); it waits on the warmup so the cache is already built.
-    if [[ "${DO_DEMAND_EVAL}" == "1" && "${first}" == "1" ]]; then
+    # demand_eval runs PER ROUTINE: shares_elas_E{k}_… is the in-sample share reproduction for THAT
+    # estimator, so a single routine's copy validates only that one. (It was gated on the first
+    # routine back when ROUTINES defaulted to a single estimator and this doubled as a precompile
+    # warm-up; with the E5-E8 default that silently produced validation for E5 alone. 2026-08-03.)
+    if [[ "${DO_DEMAND_EVAL}" == "1" ]]; then
         j=$(submit "cf_demaneval_E${k}" "${SOLVE_TIME}" ${warm_dep} \
             --export=ALL,${base_export},CF_STEP=demand_eval submit_cf.sh)
         echo "  demand_eval  → job ${j}"; found_dep="${found_dep}:${j}"
@@ -238,7 +240,6 @@ for k in ${ROUTINES}; do
             case "${step}" in cf3) cf3_dep="${cf3_dep}:${j}";; cf5) cf5_dep="${cf5_dep}:${j}";; cf6) cf6_dep="${cf6_dep}:${j}";; esac
         fi
     done
-    first=0
 done
 
 # ── Archiving ──────────────────────────────────────────────────────────────────

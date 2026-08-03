@@ -72,6 +72,11 @@ STEPS = [
     ("D2a", "fitted-share augmentation",       "diag_phi_augmented_tests.py",   ["--arm", "fittedshare"],    True,  28),
     ("D4",  "spread level (qualitative)",      "diag_phi_augmented_tests.py",   ["--arm", "spreadlevel"],    True,  10),
     ("D9",  "BLP elasticity consistency",      "diag_phi_augmented_tests.py",   ["--arm", "blpelast"],       True,  10),
+    # --- Egan-alignment external validation (added 2026-08-03) -----------------------
+    ("D10", "entry dynamics vs closed form",   "diag_entry_dynamics.py",        ["--no-branch-screen"],      True,   6),
+    ("D6b", "Pix pooled post x exposure",      "diag_phi_augmented_tests.py",   ["--arm", "pixpooled"],      True,  20),
+    ("D11", "Pix-keys flow moment (proxy)",    "diag_flow_moment.py",           [],                          True,   2),
+    ("D12", "Selic wake-up comovement",        "export_selic_wakeup.py",        [],                          True,   1),
 ]
 
 _print_lock = threading.Lock()

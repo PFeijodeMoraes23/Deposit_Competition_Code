@@ -436,9 +436,72 @@ def arm_pix():
 
 
 # ==============================================================================
+def arm_pixpooled():
+    """D6b: the Pix quasi-experiment with ONE break parameter instead of D6's fourteen.
+
+    D6 spends its degrees of freedom on 7 event-time bins x {base, high-connectivity} and
+    finds nothing at ~9 effective clusters -- which is as consistent with low power as with
+    no effect. This arm pools the post-launch window into a single interaction and uses
+    connectivity CONTINUOUSLY (not a median split), then reports the minimum detectable
+    effect so "no break" can be read as an actual bound rather than a silence.
+
+    The triple post x carry x exposure is the test: it has cross-sectional variation, so
+    conglomerate WCB is the right inference. The pooled post x carry term is identified off
+    the time dimension alone (a national step), so it also gets quarter-clustered/DK
+    treatment via utils.se_national and is labelled descriptive.
+    """
+    print("\n=== D6b: Pix pooled post x exposure (power-upgraded D6) ===")
+    df, s_cols = load_sleep_frame()
+    s_cols = [c for c in s_cols if c != "pix_exists"]     # the post dummy replaces the step
+    LAUNCH = 2020 * 4 + 3
+    df["_post"] = (df["qidx"] >= LAUNCH).astype(float)
+
+    # predetermined exposure: entity's pre-2020 mean connectivity, standardised
+    pre = df[df["year"] < 2020].groupby("entity_id")["connections_per100"].mean()
+    e = df["entity_id"].map(pre)
+    df["_expo"] = ((e - e.mean()) / e.std(ddof=0)).fillna(0.0)
+
+    df["postZ"] = df["_post"] * df["nr_lagged_dep"]
+    df["postZ_x"] = df["postZ"] * df["_expo"]
+    df["Z_x"] = df["nr_lagged_dep"] * df["_expo"]          # level control
+    df["_qc"] = df["qidx"] - df["qidx"].mean()
+    df["trendZ"] = df["_qc"] * df["nr_lagged_dep"]         # secular-drift control
+
+    rows = []
+    for tag, has_cf in (("spec12(k=4,5)", True), ("OLSxTech(all k)", False)):
+        for vname, extra in (("pooled", ["postZ", "postZ_x", "Z_x"]),
+                             ("pooled+trend", ["postZ", "postZ_x", "Z_x", "trendZ"])):
+            res_b, res_a, d = run_augmented(df, s_cols, extra, has_cf)
+            print(f"\n  [{tag} | {vname}] n={len(d):,}")
+            for p in extra:
+                se = float(res_a.bse[p])
+                # MDE at 5% size / 80% power for a two-sided test: 2.8 x SE.
+                print(f"    {p:<10s} coef={float(res_a.params[p]):+.5f}  se={se:.5f}  "
+                      f"WCB p={float(res_a.pvalues[p]):.4f}   MDE(80%)={2.8*se:.5f}")
+                rows.append({"spec": tag, "variant": vname, "param": p,
+                             "coef": float(res_a.params[p]), "se": se,
+                             "p_wcb": float(res_a.pvalues[p]), "mde80": 2.8 * se,
+                             "n": len(d)})
+            base_phi = float(res_a.params.get("nr_lagged_dep", np.nan))
+            if np.isfinite(base_phi) and base_phi:
+                m = 2.8 * float(res_a.bse["postZ_x"])
+                print(f"    -> a Pix break in the carry larger than {m:.5f} per SD of "
+                      f"connectivity ({100*m/abs(base_phi):.2f}% of the carry) would have "
+                      "been detected 80% of the time.")
+    pd.DataFrame(rows).to_csv(OUT_DIR / "d6b_pix_pooled.csv", index=False)
+    print("\n  VERDICT: the TRIPLE (post x carry x connectivity) is the test -- it has")
+    print("  cross-sectional variation, so the conglomerate WCB above applies. A null with")
+    print("  a SMALL MDE bounds the Pix attention channel; a null with a LARGE MDE means the")
+    print("  design cannot see it. The pooled post x carry term is time-identified only")
+    print("  (a national step at ~35 quarters) and is descriptive, not a test.")
+    print(f"\nresults -> {OUT_DIR / 'd6b_pix_pooled.csv'}")
+    return rows
+
+
+# ==============================================================================
 ARMS = {"identity": arm_identity, "lagdepact": arm_lagdepact,
         "fittedshare": arm_fittedshare, "spreadlevel": arm_spreadlevel, "pix": arm_pix,
-        "blpelast": arm_blpelast}
+        "blpelast": arm_blpelast, "pixpooled": arm_pixpooled}
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser(description=__doc__,

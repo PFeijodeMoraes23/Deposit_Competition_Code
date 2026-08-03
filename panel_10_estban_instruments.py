@@ -43,6 +43,13 @@ ESTBAN_CSV = paths.ESTBAN_CSV
 MCA_XWALK = paths.IBGE_DIR / "muni_mca_regions_2010_2024_panel.csv"
 INSTRUMENT = "estban_rival_branches_lag"
 KEYS = ["CodConglomeradoPrudencial", "mca_code", "year", "quarter"]
+# Own branch counts per (conglomerate, MCA, quarter). Computed here anyway as the input to the
+# leave-one-out rival count; persisted as a sidecar because it is the only branch-network
+# series at market granularity in the project. diag_entry_dynamics.py uses it to date entry
+# by BRANCHES rather than by deposits, which screens out markets where deposits are booked
+# before any branch exists (the analogue of Egan et al.'s Summary-of-Deposits caveat).
+# Sidecar only -- market_panel.csv keeps exactly the one instrument column it had before.
+OWN_BRANCH_SIDECAR = paths.PROCESSED / "PANEL_INTERMED" / "estban_own_branches.csv"
 
 
 def build_estban_rival_branches() -> pd.DataFrame:
@@ -80,6 +87,19 @@ def build_estban_rival_branches() -> pd.DataFrame:
         columns={"AGEN_PROCESSADAS": "own_br", "YEAR": "year"})
     mkt = own.groupby([M, "year", Q])["own_br"].transform("sum")
     own["rival_br"] = (mkt - own["own_br"]).clip(lower=0.0)
+
+    # Persist own_br (see the OWN_BRANCH_SIDECAR note at the top). Never fatal: a locked or
+    # unwritable sidecar must not take down the instrument build, which is what the panel
+    # actually depends on.
+    try:
+        OWN_BRANCH_SIDECAR.parent.mkdir(parents=True, exist_ok=True)
+        sc = own[[C, M, "year", Q, "own_br"]].copy()
+        sc.columns = KEYS + ["own_br"]
+        sc.to_csv(OWN_BRANCH_SIDECAR, index=False)
+        logging.info(f"Wrote branch sidecar {OWN_BRANCH_SIDECAR.name}: {len(sc):,} rows")
+    except Exception as e:                                    # noqa: BLE001
+        logging.warning(f"branch sidecar not written ({e}); diag_entry_dynamics will "
+                        "fall back to --no-branch-screen")
 
     # Lag one quarter within (conglomerate, mca); log1p.
     own = own.sort_values([C, M, "year", Q])
