@@ -22,14 +22,22 @@ if !haskey(Pkg.project().dependencies, "PackageCompiler")
 end
 using PackageCompiler
 
+# BLP_SYSIMAGE_CPU=1 builds the CPU-partition image: no CUDA (with CF_GPU=0 the CF/BBL stack never
+# includes blp_gpu_engine.jl, so CUDA is dead weight) and a DIFFERENT output name. This exists
+# because a sysimage bakes the BUILD node's CPU target: the gpu_h200 image (sapphirerapids) is
+# REJECTED on `day` nodes ("Unable to find compatible target in cached code image"), which sends
+# every task back to precompiling and stampedes the shared NFS depot. Build this one ON a day node.
+const CPU_ONLY = get(ENV, "BLP_SYSIMAGE_CPU", "0") == "1"
+
 # Bake the heavy direct dependencies actually present in this project's Manifest.
 direct = keys(Pkg.project().dependencies)
 wanted = ["CUDA", "Parquet2", "DataFrames", "Optim", "LBFGSB", "QuasiMonteCarlo",
           "Distributions", "JSON3", "ArgParse", "SparseArrays"]
+CPU_ONLY && (wanted = filter(!=("CUDA"), wanted))
 pkgs   = Symbol.(filter(in(direct), wanted))
-@info "Baking packages into sysimage" pkgs
+@info "Baking packages into sysimage" pkgs cpu_only=CPU_ONLY
 
-sysimg   = joinpath(@__DIR__, "blp_sysimage.so")
+sysimg   = joinpath(@__DIR__, CPU_ONLY ? "blp_sysimage_cpu.so" : "blp_sysimage.so")
 workload = joinpath(@__DIR__, "sysimage_precompile_workload.jl")
 kw = Dict{Symbol,Any}(:sysimage_path => sysimg)
 if get(ENV, "BLP_SYSIMAGE_WORKLOAD", "0") == "1" && isfile(workload)

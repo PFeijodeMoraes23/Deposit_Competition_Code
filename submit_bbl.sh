@@ -58,15 +58,23 @@ mkdir -p "${PROJECT_DIR}/logs"
 # to the CPU share path — the job then holds its H200 at 0% util. The sysimage bakes CUDA + the whole
 # package closure, so tasks touch the precompile cache zero times → no race → the GPU engages on every
 # task. (Diagnosed 2026-07-31: 5/11 fwd_sim tasks fell back to CPU on FillArrays/StaticArrays cache races.)
-SYSIMAGE="${PROJECT_DIR}/blp_sysimage.so"
+# A sysimage bakes its BUILD node's CPU target, so GPU (gpu_h200 = sapphirerapids) and CPU (`day`)
+# runs need DIFFERENT images — loading the wrong one fails with "Unable to find compatible target in
+# cached code image" and drops the task back to precompiling against the shared NFS depot.
+if [ "${CF_GPU}" != "0" ]; then
+    SYSIMAGE="${PROJECT_DIR}/blp_sysimage.so";      SYSBUILD="sbatch submit_build_sysimage.sh      # on gpu_h200"
+else
+    SYSIMAGE="${PROJECT_DIR}/blp_sysimage_cpu.so";  SYSBUILD="sbatch submit_build_sysimage_cpu.sh  # on day"
+fi
 JULIA_SYS=()
 if [ -f "${SYSIMAGE}" ]; then
     JULIA_SYS=(--sysimage "${SYSIMAGE}")
     echo "Julia sysimage: ${SYSIMAGE} (no per-task precompile)"
-elif [ "${CF_GPU}" != "0" ]; then
-    echo "[!] CF_GPU=1 but no blp_sysimage.so — concurrent array tasks may lose the CUDA precompile"
-    echo "    race on the shared depot → silent CPU fallback (0% GPU util). Build it once, on gpu_h200:"
-    echo "      sbatch submit_build_sysimage.sh"
+else
+    echo "[!] No $(basename "${SYSIMAGE}") — concurrent array tasks will each precompile against the"
+    echo "    shared NFS depot and stampede its lock (GPU runs then silently fall back to CPU at 0%"
+    echo "    util; CPU runs just fail slowly). Build it once:"
+    echo "      ${SYSBUILD}"
 fi
 
 echo "======================================"

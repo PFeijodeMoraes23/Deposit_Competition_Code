@@ -81,8 +81,19 @@ if [[ "${FWD_GPU}" == "1" ]]; then
     [[ -z "${ARRAY_THROTTLE+set}" ]] && ARRAY_THROTTLE=8   # default only when truly UNSET (empty ⇒ unlimited)
     echo "fwd_sim → GPU (${GPU_PARTITION}, --gpus=${GPUS}, throttle=${ARRAY_THROTTLE:-none}); set FWD_GPU=0 to force CPU"
 else
-    FWD_SB=(); FWD_GPU_ENV="CF_GPU=0"
-    echo "fwd_sim → CPU (FWD_GPU=0)"
+    # EXPLICIT CPU partition + NO --gpus: requesting a GPU we then leave at ~0% util gets the job
+    # flagged by YCRC ("This job did not use the GPU") and lowers subsequent priority. Stating the
+    # partition here also stops a stray PARTITION= in the environment from silently routing CPU
+    # fwd_sim onto gpu_h200. `day` QOS has NO MaxJobsPU (unlike gpu_h200's 6), so concurrency is
+    # bounded by MaxTRESPU (cpu=1000, mem=15000G) → ~58 shards at --mem=256G.
+    # --constraint pins the microarchitecture: `day` mixes cpugen:turin (AMD 9575f/9655) with
+    # cpugen:emeraldrapids (Intel 8562Y+), and blp_sysimage_cpu.so is only valid on the cpugen it was
+    # BUILT on — land on the other and the task rejects the image ("Unable to find compatible target
+    # in cached code image") and falls back to precompiling against the shared NFS depot. Must match
+    # the --constraint in submit_build_sysimage_cpu.sh. Turin is also the larger node (2305 GB/128c).
+    FWD_SB=(--partition="${CPU_PARTITION:-day}" --constraint="${CPU_CONSTRAINT:-cpugen:turin}")
+    FWD_GPU_ENV="CF_GPU=0"
+    echo "fwd_sim → CPU (${CPU_PARTITION:-day}, ${CPU_CONSTRAINT:-cpugen:turin}, no GPU, throttle=${ARRAY_THROTTLE:-none})"
 fi
 LOGDIR="logs"; mkdir -p "${LOGDIR}"
 DATA_ROOT="${DATA_ROOT:-$(pwd)/../data}"
@@ -229,7 +240,13 @@ solve_dep=""    # colon-joined solve job ids → the auto-zip waits on all of th
 for k in ${ROUTINES}; do
     base_export="BBL_ROUTINE=${k},BBL_STAGE=${CF_STAGE},R=${R},SEED=${SEED}"
     echo "── E${k} ${CF_STAGE} | R=${R} | shocks=${SHOCKS} over ${N_SHARDS} shards ──"
-    arr=$(submit "bbl_fwd_E${k}" "${SHARD_TIME}" ${fwd_dep} "${FWD_SB[@]}" --array=0-$((N_SHARDS-1))${THROTTLE} \
+    # ARRAY_SPEC lets you re-run a SUBSET of shards (a cancelled run, a flaky task) without redoing
+    # the ones already on disk: psi_dev_*_shard{i}of{N}.parquet files are independent and the solve
+    # globs whatever exists, so completed shards are reusable as-is (a CPU-computed shard is
+    # numerically identical to a GPU one). e.g. ARRAY_SPEC=96-99 or ARRAY_SPEC=3,17,88.
+    # N_SHARDS must stay the SAME as the original run — it is baked into the filename and the
+    # (firm × Δ) split. psi_eq is written by shard 0 only, so keep it if shard 0 already succeeded.
+    arr=$(submit "bbl_fwd_E${k}" "${SHARD_TIME}" ${fwd_dep} "${FWD_SB[@]}" --array="${ARRAY_SPEC:-0-$((N_SHARDS-1))}"${THROTTLE} \
         --export=ALL,${base_export},BBL_STEP=fwd_sim,N_SHARDS=${N_SHARDS},BBL_EXTRA="${bbl_extra}",${FWD_GPU_ENV} \
         submit_bbl.sh)
     echo "  fwd_sim array → job ${arr} (${N_SHARDS} shards${THROTTLE:+, throttled ${THROTTLE}})"

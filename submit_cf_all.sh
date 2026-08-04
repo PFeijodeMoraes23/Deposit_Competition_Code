@@ -159,7 +159,11 @@ if [[ "${DO_CF4}" == "1" ]]; then
     cf4_note=" + CF4 phi_nopix"
 fi
 [[ "${miss}" == "0" ]] || { echo "Stage the missing input(s) (runbook §8), then re-run."; exit 1; }
-echo "Preflight OK: R=${R} draws + forward r^f curve + RC results${need_costs:+ + BBL cost params}${cf4_note} for routines: ${ROUTINES}"
+# `${need_costs:+…}` was WRONG here: need_costs="0" is a NON-EMPTY string, so the ":+" expansion fired
+# even when the cost preflight had been skipped — the line claimed "+ BBL cost params" on runs where
+# nothing was verified (seen 2026-08-03 Phase 1b, with no cost_params on disk at all). Test the value.
+costs_note=""; [[ "${need_costs}" == "1" ]] && costs_note=" + BBL cost params"
+echo "Preflight OK: R=${R} draws + forward r^f curve + RC results${costs_note}${cf4_note} for routines: ${ROUTINES}"
 
 # ── Step 3: submit the CF chain per routine ──────────────────────────────────────
 cf1_extra="--beta ${BETA} --horizon ${HORIZON}"
