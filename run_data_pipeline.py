@@ -62,8 +62,9 @@ Pipeline stages
     4a. panel_6_market.py                   Merge all MCA panels + deposit panel -> master analysis dataset
     4b. panel_7_instruments.py       Compute LOO instruments and FGC dummy -> OVERWRITES market_panel.csv
     4c. panel_8_demographics_sigma.py        Within-MCA demographic sigma for BLP parametric draws
-    4d. panel_9_cosif_fees.py --patch-market  Fee columns -> market_panel_with_fees.csv (MUST follow 4b;
-                                              the estimators prefer this file over market_panel.csv)
+    4d. panel_9_cosif_fees.py --patch-market  Fee columns -> market_panel_with_fees.csv (MUST follow 4b).
+                                              OPTIONAL since 2026-08-04: the estimators read
+                                              market_panel.csv unless USE_FEE_PANEL=1.
 
   Stage 5 - Descriptive statistics
     5a. desc_1.py                        Generate unweighted overview descriptive tables
@@ -265,9 +266,15 @@ STEPS = [
     #     loo_log_assets / mean_loo_log_assets / loo_equity_ratio / loo_basileia /
     #     leave_one_out_mean_spread -- and blp_1_estimation's build_regressor_matrices SILENTLY drops
     #     any instrument not present, so the BLP ends up identified off the cost shifters alone.
-    #   * panel_9 builds market_panel_with_fees.csv, and EVERY estimation script prefers that file
-    #     over market_panel.csv when it exists. So a stale with_fees silently shadows a freshly
-    #     rebuilt market_panel. It must run LAST in this stage, after panel_7's overwrite.
+    #   * panel_9 builds market_panel_with_fees.csv. It must still run LAST in this stage, after
+    #     panel_7's overwrite, so the fee panel is not built from a half-finished base.
+    #     RESOLVED 2026-08-04 — the shadowing hazard this warning described actually fired.
+    #     Estimation scripts USED to prefer with_fees whenever it existed, so a stale copy
+    #     silently shadowed a freshly rebuilt market_panel. Run-order discipline was the only
+    #     guard and it failed: panel_7/10/12 overwrote market_panel.csv on 08-03, panel_9 was
+    #     not re-run, and every downstream estimate was built from the 07-28 fee panel. The
+    #     preference is now gone (utils/paths.market_panel_csv reads market_panel.csv; opt in
+    #     with USE_FEE_PANEL=1), so a stale fee panel can no longer shadow anything.
     # See counterfactuals_plan.md §0B.
     (4, "19", "panel_6_market.py",
      "Merge all MCA panels + deposit panel -> master analysis dataset"),
@@ -284,8 +291,8 @@ STEPS = [
      "Member-CNPJ LOCAL type-4 (CDB) spread patch, toggle LOCAL_CDB_SPREAD (default ON) -> "
      "market_panel.csv (MUST follow panel_10, precede panel_9)"),
     (4, "22", "panel_9_cosif_fees.py --patch-market",
-     "COSIF/Tarifas fee columns -> market_panel_with_fees.csv (MUST follow panel_7/panel_10/panel_12; the "
-     "estimators read this file in preference to market_panel.csv)"),
+     "COSIF/Tarifas fee columns -> market_panel_with_fees.csv (MUST follow panel_7/panel_10/panel_12). "
+     "Optional for estimation: the estimators read market_panel.csv unless USE_FEE_PANEL=1"),
 
     # Stage 5 -- descriptive statistics
     (5, "23", "desc_1.py",

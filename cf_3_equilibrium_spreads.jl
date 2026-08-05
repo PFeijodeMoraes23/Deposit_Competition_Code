@@ -238,6 +238,11 @@ function cf3_setup(a)
         rf = rf .+ Δq
         log_status("  [CF3] Selic shock $(a["selic-shock"]) → Δr^f_q=$(round(Δq, sigdigits=3)) on forward r^f")
     end
+    # MUST match the asset return the BBL solve used when it produced cost_params below. Zero is
+    # correct only while the BBL also runs without --asset-return-col (the state as of 2026-08-04).
+    # If the BBL is re-run WITH an asset margin, ω̂ absorbs +r̄^j in estimation while ψ1 here is
+    # rebuilt without it — V comes out short by ~2·r̄^j·ψ2 and CF3/CF5/CF6 silently diverge from
+    # θ_c. Wire the same column through here in that same commit. See identification_notes.md §9.
     aret = zeros(nrow(ctx.df))
 
     tag = "E$(a["estim"])_spec_$(a["spec"])_$(a["stage"])$(a["suffix"])"

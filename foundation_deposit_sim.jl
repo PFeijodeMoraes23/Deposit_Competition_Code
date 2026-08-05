@@ -63,6 +63,38 @@ function _first_present(df::DataFrame, candidates::Vector{String}; default::Floa
     return (fill(default, nrow(df)), "<none:default=$default>")
 end
 
+# r^f candidate lists, contemporaneous and lagged. `risk_free_qoq_lag` is DELIBERATELY absent:
+# utils/state_transform.py CENTER grand-mean centres it in the demand parquet (mean ≈ 0, values
+# negative), and every consumer here needs a LEVEL. Erroring on a stale parquet beats silently
+# subtracting a deviation. estimation_1/2_demand_1_prep + estimation_demand_link_common snapshot
+# the uncentred level into `risk_free_qoq_lag_level` just before center() is called.
+const RF_LEVEL_CANDIDATES     = ["risk_free_qoq", "risk_free_qoq_lag_level", "selic_qoq", "rf_qoq"]
+const RF_LEVEL_LAG_CANDIDATES = ["risk_free_qoq_lag_level"]
+
+"""
+    _first_present_rf_level(df, candidates; default=NaN, what="r^f") -> (values, colname)
+
+`_first_present` plus a centring guard. A grand-mean-centred r^f averages ~0 and goes negative,
+while a compounded quarterly Selic (panel_3 `(1+selic/100).prod()-1`) cannot; so a non-positive
+median is proof the column is a deviation, not a level. Fails loudly rather than biasing ω̂ by
+the grand mean (0.0216/q = 8.6 pp/yr) — see identification_notes.md §9.
+"""
+function _first_present_rf_level(df::DataFrame, candidates::Vector{String};
+                                 default::Float64=NaN, what::AbstractString="r^f")
+    v, c = _first_present(df, candidates; default=default)
+    fin = filter(isfinite, v)
+    if !isempty(fin)
+        med = median(fin)
+        (med > 0.002 && minimum(fin) >= 0.0) && return (v, c)
+        error("$what column '$c' looks GRAND-MEAN CENTRED (median $(round(med, sigdigits=4)), " *
+              "min $(round(minimum(fin), sigdigits=4))): a quarterly Selic level is strictly " *
+              "positive. The BBL/CF stack needs a LEVEL. Rebuild the demand parquets so they " *
+              "carry `risk_free_qoq_lag_level` (see estimation_1_demand_1_prep.py), or check " *
+              "utils/state_transform.py CENTER.")
+    end
+    return (v, c)
+end
+
 """
     load_sim_state(ctx; dbar=1.0, sidecar=nothing, ...) -> DepositSimState
 
@@ -81,7 +113,7 @@ function load_sim_state(ctx::CFDemandCtx; dbar::Union{Float64,AbstractVector{<:R
     # Quarterly accrual rate: prefer an explicit deposit rate; else r^f_q − ρ_q.
     rdep, rdep_c = _first_present(df, ["deposit_rate_qoq", "rdep_qoq", "r_dep_qoq"]; default=NaN)
     if all(isnan, rdep)
-        rf_q, rf_c   = _first_present(df, ["risk_free_qoq", "risk_free_qoq_lag", "selic_qoq", "rf_qoq"]; default=NaN)
+        rf_q, rf_c   = _first_present_rf_level(df, RF_LEVEL_CANDIDATES; default=NaN, what="deposit-accrual r^f")
         sp_q, sp_c   = _first_present(df, ["spread_qoq", "spread_q"]; default=NaN)
         sp_q = sp_q ./ 1e4   # spread_qoq is BASIS POINTS -> per-quarter fraction
         rdep = rf_q .- sp_q

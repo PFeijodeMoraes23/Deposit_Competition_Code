@@ -33,8 +33,13 @@ Usage
 
 Note
 ----
-  Estimation scripts should read market_panel_with_fees.csv, not market_panel.csv.
-  market_panel.csv is the raw pipeline output (no fee columns); this script adds them.
+  Estimation scripts read market_panel.csv, NOT this file (changed 2026-08-04). The fee columns
+  it adds are used by no estimator: they appear in no .jl, in neither X_COLS nor D_COLS, and in
+  no sleepiness design — they reached the demand parquets only via IV_FEE, which is skipped when
+  absent. The old "prefer with_fees if it exists" rule meant a stale copy of this file silently
+  shadowed a freshly rebuilt market_panel, which is exactly what happened between 2026-07-28 and
+  2026-08-03. Set USE_FEE_PANEL=1 to opt back in (e.g. to estimate a fee specification); see
+  utils/paths.market_panel_csv. This script remains the way to BUILD the fee panel.
 """
 
 from __future__ import annotations

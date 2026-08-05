@@ -177,7 +177,7 @@ function main_cf1()
             joinpath(cf_out_dir(out_dir, "COST_FWD"), "cost_params_$tag.json") : a["cost-json"]
         Z, znames = load_Z(ctx)
         cost = load_cost_params(cj, znames)
-        rfq, _ = _first_present(ctx.df, ["risk_free_qoq", "risk_free_qoq_lag", "selic_qoq"]; default=0.0)
+        rfq, _ = _first_present_rf_level(ctx.df, RF_LEVEL_CANDIDATES; default=0.0, what="CF1-net r^f")
         isBv = BitVector(Bool.(coalesce.(ctx.df.is_B, false)))
         cq = marginal_cost_per_obs(cost, isBv, rfq, Z)
         markdown_q = markdown_q .- cq

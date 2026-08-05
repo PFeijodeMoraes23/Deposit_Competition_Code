@@ -84,9 +84,11 @@ from utils import paths as _paths_mod
 
 def _resolve_runtime_paths() -> tuple[Path, Path]:
     DATA_DIR = _paths_mod.PROCESSED
-    _with_fees = DATA_DIR / "market_panel_with_fees.csv"
-    PANEL_CSV = _with_fees if _with_fees.exists() else DATA_DIR / "market_panel.csv"
-    OUTPUT_DIR = DATA_DIR / "ESTIMATION_OUTPUT" / "DEMAND_PREP" / "est1"
+    # market_panel.csv, NOT the fees variant — see utils/paths.market_panel_csv
+    # (USE_FEE_PANEL=1 opts back in). A per-script `panel_csv` in the TOON config still wins.
+    PANEL_CSV = _paths_mod.market_panel_csv()
+    # SLEEP_OUT_ROOT-aware (utils.paths.demand_prep_root); unset => the historical path.
+    OUTPUT_DIR = _paths_mod.demand_prep_root() / "est1"
 
     if load_default_toon_context is None or get_script_config is None:
         return PANEL_CSV, OUTPUT_DIR
@@ -383,12 +385,16 @@ def calculate_phis(df, res_dict, state_blocks):
         if ss_res is None: continue
             
         phi_mt = np.zeros(len(df))
+        Zcols, coef_names = [], []
         for sv in s_cols:
             col_name = f"interaction_{sv}" if sv != 'constant' else "nr_lagged_dep"
             if col_name in ss_res.params:
                 c = ss_res.params[col_name]
-                phi_mt += c if sv == 'constant' else c * filled_cols[sv]
-        
+                z = (np.ones(len(df)) if sv == 'constant'
+                     else np.asarray(filled_cols[sv], float))
+                phi_mt += c * z
+                Zcols.append(z); coef_names.append(col_name)
+
         key = f"IV_HausmanFull_x_{spec_name}"   # match the E2-E8 phi column naming convention
         df[f'phi_mt_{key}'] = phi_mt
         # phi_t = sum_m phi_mt*M_mt / sum_m M_mt over MARKETS m (V_Main eq. below sec.4:
@@ -398,6 +404,13 @@ def calculate_phis(df, res_dict, state_blocks):
         sum_weighted = weighted_phi.groupby(market_agg['year_quarter']).sum()
         sum_m_mt = market_agg['M_mt'].groupby(market_agg['year_quarter']).sum()
         national_agg = (sum_weighted / sum_m_mt.replace(0, np.nan)).fillna(0).reset_index(name=f'phi_t_{key}')
+        # 95% wild-cluster band on the same aggregation convention as the point path above
+        # (market = mca_code, weight = M_mt summed over banks). See utils.sleep_links.
+        if Zcols:
+            from utils.sleep_links import attach_phi_band
+            national_agg = attach_phi_band(national_agg, ss_res, np.column_stack(Zcols),
+                                           coef_names, df, phi_mt, key,
+                                           market_key='mca_code')
         phi_results[spec_name] = national_agg
         
     return df, phi_results

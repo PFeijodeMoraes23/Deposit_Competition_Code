@@ -55,6 +55,7 @@ except Exception:
 
 import numpy as np
 import pandas as pd
+import pyarrow.parquet as pq
 
 _ROOT = Path(__file__).resolve().parents[2]
 COST_FWD = _ROOT / "BCB" / "Egan_et_al_2025_Rep" / "processed" / "ESTIMATION_OUTPUT" / "COST_FWD"
@@ -127,14 +128,30 @@ def _annual_to_quarterly(selic_ann_pct: np.ndarray) -> np.ndarray:
 
 
 def _last_panel_selic_ann():
-    """Fallback anchor: last observed risk_free_qoq_lag → annualized %."""
+    """Fallback anchor: last observed LEVEL r^f → annualized %.
+
+    Never `risk_free_qoq_lag` — utils/state_transform.CENTER grand-mean centres it, so the
+    parquet ships a deviation (mean ~0). Reading it here anchored the curve at ~2%/yr instead
+    of ~11%/yr for 2024Q4. A centred column is rejected rather than silently used.
+    """
     cands = sorted(DEMAND_PREP.glob("demand_6_*spec_12.parquet"))
     if not cands:
         cands = sorted(DEMAND_PREP.glob("demand_*spec_12.parquet"))
-    df = pd.read_parquet(cands[-1], columns=["time_id", "risk_free_qoq_lag"])
+    schema = pq.read_schema(cands[-1]).names
+    col = next((c for c in ("risk_free_qoq", "risk_free_qoq_lag_level") if c in schema), None)
+    if col is None:
+        raise SystemExit(
+            f"{cands[-1].name} carries no LEVEL r^f column (looked for risk_free_qoq, "
+            "risk_free_qoq_lag_level). Rebuild the demand parquets — see "
+            "estimation_1_demand_1_prep.py CF_COST_COLS.")
+    df = pd.read_parquet(cands[-1], columns=["time_id", col])
     df["t"] = df["time_id"].astype(str)
     last = df[df["t"] == df["t"].max()]
-    rf_q = pd.to_numeric(last["risk_free_qoq_lag"], errors="coerce").median()
+    rf_q = pd.to_numeric(last[col], errors="coerce").median()
+    if not (rf_q > 0.002):
+        raise SystemExit(
+            f"'{col}' median is {rf_q:.6f} — a quarterly Selic level is strictly positive, so "
+            "this column looks grand-mean centred. Refusing to anchor the forward curve on it.")
     return 100.0 * ((1.0 + rf_q) ** 4 - 1.0)
 
 

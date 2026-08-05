@@ -37,8 +37,8 @@ from utils import state_transform as _st
 from utils.sleep_links import NonLinearResults  # noqa: F401 (needed for unpickling)
 
 DATA_DIR = paths.PROCESSED
-_PANEL_WITH_FEES = DATA_DIR / "market_panel_with_fees.csv"
-PANEL_CSV = _PANEL_WITH_FEES if _PANEL_WITH_FEES.exists() else DATA_DIR / "market_panel.csv"
+# market_panel.csv, NOT the fees variant — see utils/paths.market_panel_csv (USE_FEE_PANEL=1).
+PANEL_CSV = paths.market_panel_csv()
 BANKED_CSV = paths.INCLUSION_DIR / "bcb_banked_mca_panel.csv"
 
 X_COLS = ['fgc_covered', 'has_ip', 'seg_S2', 'seg_S3', 'seg_S4', 'seg_S5',
@@ -62,7 +62,13 @@ IV_FEE = ['cosif_fee_ratio_all', 'cosif_fee_ratio_total_deposits', 'cosif_fee_va
 # `asset_gross_return_lag` = 1 + lagged quarterly asset yield (built in panel_4_bank_chars.py).
 # Consumed by estimation_bbl_2_fwd_sim.jl --asset-return-col. NOT `gross_return_lag`, which is 1 + the
 # DEPOSIT rate (liability side) — see counterfactuals_plan.md §9.4.
-CF_COST_COLS = ['asset_gross_return_lag', 'asset_return_imputed']
+CF_COST_COLS = ['asset_gross_return_lag', 'asset_return_imputed',
+                # LEVEL r^f for the BBL/CF stack. `risk_free_qoq_lag` is grand-mean
+                # CENTRED below (utils/state_transform.CENTER), so it reaches the parquet
+                # as a deviation (mean ~0, negative values) and must never be used as a
+                # level. `risk_free_qoq` is contemporaneous; `risk_free_qoq_lag_level` is
+                # the uncentred lag, snapshotted just before center().
+                'risk_free_qoq', 'risk_free_qoq_lag_level']
 
 # ── Market-size / active-share knobs (V_Main pp.26-27; counterfactuals_plan.md §9.8) ────────────
 # PHI_CAP  φ is capped before forming (1-φ). The BLP share is a share of ACTIVE depositors, so its
@@ -231,6 +237,12 @@ def build_base_panel(panel_csv, time_block=False):
     # persisted means the sleepiness estimation used (loaded, never recomputed: this
     # frame is a different sample, so a locally-computed mean would silently shift the
     # index phi is rebuilt from).
+    # Snapshot the UNCENTRED lagged r^f before centring. estimation_bbl_2_fwd_sim.jl and
+    # cf_1_franchise_value.jl need a LEVEL (a centred r^f biases omega-hat by the grand
+    # mean, 0.0216/q = 8.6pp/yr) and foundation_deposit_sim.jl's accrual clamp pins 82%
+    # of rows at zero when handed a deviation. See identification_notes.md section 9.
+    if 'risk_free_qoq_lag' in df.columns:
+        df['risk_free_qoq_lag_level'] = df['risk_free_qoq_lag']
     _st.load_transform().center(df)
     return df
 

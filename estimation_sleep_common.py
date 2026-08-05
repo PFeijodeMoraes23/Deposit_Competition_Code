@@ -94,7 +94,9 @@ LS_ONLY = os.environ.get("SLEEP_LS_ONLY", "0") == "1"
 
 
 def _out_dir(est_num):
-    d = _paths_mod.PROCESSED / "ESTIMATION_OUTPUT" / "DEMAND_PREP" / f"est{est_num}"
+    # demand_prep_root() honours SLEEP_OUT_ROOT, so a whole grid can be re-estimated into a
+    # sandbox without touching production results. Unset => the historical path exactly.
+    d = _paths_mod.demand_prep_root() / f"est{est_num}"
     d.mkdir(parents=True, exist_ok=True)
     return d
 
@@ -115,6 +117,10 @@ def _exec_spec(args):
     # The single-index/joint-sieve link comparison in the time-series report uses spec 12
     # (IV_HausmanFull x Tech); compute its national phi_t CI band in the main routine.
     is_spec12 = (iv_name == "IV_HausmanFull" and s_name == "Tech")
+    # SLEEP_PHI_BAND_ALL=1: compute the national phi_t bootstrap band for EVERY spec, not just
+    # spec 12. Off by default because the band costs min(boot_B,400) extra draws per spec and
+    # only spec 12 is reported; on when a full CI grid is wanted.
+    want_band = is_spec12 or os.environ.get("SLEEP_PHI_BAND_ALL", "0") == "1"
     df_target, res_fs = df, None
     if has_cf:
         iv_act = [c for c in iv_cols if c in df_target.columns and df_target[c].notnull().sum() > 0]
@@ -148,10 +154,10 @@ def _exec_spec(args):
             return fit_single_index(df_target, s_cols, has_cf=has_cf, logit_res=lg, degree=3,
                                     fe_time_col=FE_TIME_COL, phi_band=band)
 
-        res = None if LS_ONLY else _single_index("cauchy", is_spec12)
+        res = None if LS_ONLY else _single_index("cauchy", want_band)
         # scipy's plain least squares is loss="linear" (NOT "ls"); the Julia engine spells the
         # same thing "ls". Mapping them wrongly silently re-runs Cauchy.
-        res_ls = None if DROP_LS else _single_index("linear", False)
+        res_ls = None if DROP_LS else _single_index("linear", want_band)
         return res, res_ls, spec_name, res_fs
 
     if kind in ("joint_sieve", "joint_kernel"):
@@ -195,7 +201,7 @@ def _exec_spec(args):
                                                 loss="robust", init_theta=warm,
                                                 n_starts=n_starts, boot_B=999, boot_scheme="webb", seed=0,
                                                 label=f"{spec_name}/robust", fe_time_col=fe_tc,
-                                                theta_fixed=theta_jl, phi_band=is_spec12)
+                                                theta_fixed=theta_jl, phi_band=want_band)
         # Opt 8: drop the LS loss during the grid (robust feeds phi).
         if DROP_LS:
             res_ls = None
@@ -233,7 +239,7 @@ def _exec_spec(args):
                                             loss="ls", init_theta=warm, n_starts=n_starts,
                                             boot_B=_ls_boot, boot_scheme="webb", seed=0,
                                             label=f"{spec_name}/ls", fe_time_col=fe_tc,
-                                            theta_fixed=_ls_theta, polish_evals=_ls_polish)
+                                            theta_fixed=_ls_theta, polish_evals=_ls_polish, phi_band=want_band)
         return res_robust, res_ls, spec_name, res_fs
 
     raise ValueError(f"unknown kind {kind!r}")

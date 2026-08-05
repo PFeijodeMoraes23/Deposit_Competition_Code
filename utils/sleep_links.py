@@ -1573,6 +1573,162 @@ def ols_sieve_wild_bootstrap(Xdm, resid, cl_inv, n_cl, b_full, ame_fn, ame_hat,
 # propagates parameter uncertainty (theta for the joint single index; the link
 # coefficients for Est6) through to the national sleepiness path.
 # ==============================================================================
+def phi_t_group_struct(df_ss, market_key=None, weight="mean", time_key=None):
+    """(time, market) group structure for national phi_t aggregation, parameterised by the
+    two conventions that actually differ across this codebase.
+
+    weight="mean"  each market enters weighted by its POPULATION. This is the estimand as
+                   written down in estimation_1_sleep.py:394 ("phi_t = sum_m phi_mt*M_mt /
+                   sum_m M_mt over MARKETS m") and in this module's header.
+    weight="sum"   each market enters weighted by population x THE NUMBER OF BANK ROWS in
+                   the cell. pop_total is constant within a (quarter, market) cell, so
+                   M_mt=("market_size","sum") -- what calculate_phis and
+                   calculate_pooled_phis both use -- multiplies by the bank count.
+
+    Measured 2026-08-04 on est6 spec 12: the two weights move the LEVEL of national
+    sleepiness by 1.90 pp (0.9720 vs 0.9531) from identical phi_mt, against a 3.76 pp
+    movement being interpreted; the RANGE is nearly unchanged (3.76 vs 3.50 pp). The
+    market key matters far less (CODMUN_IBGE vs mca_code: 0.21 pp). The parameter exists
+    so a band can always be built on EXACTLY the convention its own point series uses --
+    the mismatch between the two is what made the stored E5/E6 bands sit 1.5-2.2 pp away
+    from the phi_t they shipped next to.
+    """
+    if weight not in ("mean", "sum"):
+        raise ValueError(f"weight must be 'mean' or 'sum', got {weight!r}")
+    tcol = time_key or ("time_id" if "time_id" in df_ss.columns else "year_quarter")
+    t = df_ss[tcol].astype(str).values
+    if market_key is None:
+        market_key = "CODMUN_IBGE"
+    if market_key in df_ss.columns:
+        m = df_ss[market_key].astype(str).values
+    else:
+        m = np.array(["0"] * len(df_ss))
+    pop = (df_ss["pop_total"].fillna(0).values.astype(float)
+           if "pop_total" in df_ss.columns else np.ones(len(df_ss)))
+    key = np.char.add(np.char.add(t, "|"), m)
+    gcode, _ = pd.factorize(key)
+    ng = int(gcode.max()) + 1
+    gcount = np.bincount(gcode, minlength=ng).astype(float)
+    gpop = np.bincount(gcode, weights=pop, minlength=ng)
+    if weight == "mean":
+        gpop = gpop / np.maximum(gcount, 1.0)
+    tcode, tuniq = pd.factorize(df_ss[tcol].astype(str).values)
+    tcode_g = np.zeros(ng, int)
+    tcode_g[gcode] = tcode
+    return dict(gcode=gcode, gcount=gcount, gpop=gpop, tcode_g=tcode_g,
+                nt=len(tuniq), tuniq=np.asarray(tuniq))
+
+
+def linear_phi_t_band(res, Z, coef_names, df_agg, market_key=None, weight="sum",
+                      time_key=None, B=None, scheme=None, seed=20240624):
+    """National phi_t point path + wild-cluster percentile band for the LINEAR sleepiness
+    estimators (Est1/Est2), where phi_mt = Z @ beta_state is linear in the fitted
+    coefficients, so no refit is needed at any draw.
+
+    Same inference scheme as every other column: the cluster influence functions are read
+    off the fit, IF_g = (X'X)^{-1} sum_{i in g} X_i u_i, perturbed by wild weights
+    (Cameron-Gelbach-Miller 2008; MacKinnon-Webb 2017), and the band is the percentile
+    interval of the resulting national paths.
+
+    Z          (n_agg x k) design for phi on the AGGREGATION sample, built by the caller so
+               that Z @ beta reproduces its own phi_mt exactly -- including whatever NaN fill
+               that caller uses (Est1 median-fills, Est2 zero-fills).
+    coef_names names of the k coefficients, aligned to Z's columns, as they appear in
+               res.params.
+    df_agg     the frame Z was built from; supplies the time/market/pop columns.
+    weight     aggregation convention -- pass the one the caller's point series uses, so the
+               band and the point path can never drift apart (see phi_t_group_struct).
+    """
+    names = list(res.params.index)
+    beta = np.asarray(res.params, float)
+    missing = [c for c in coef_names if c not in names]
+    if missing:
+        raise KeyError(f"coefficients absent from the fit: {missing}")
+    pos = np.array([names.index(c) for c in coef_names], int)
+    Z = np.asarray(Z, float)
+    if Z.shape[1] != len(coef_names):
+        raise ValueError(f"Z has {Z.shape[1]} columns but {len(coef_names)} coefficient names")
+    if len(Z) != len(df_agg):
+        raise ValueError(f"Z has {len(Z)} rows but df_agg has {len(df_agg)}")
+
+    X = np.asarray(res.model.exog, float)
+    u = np.asarray(res.resid, float)
+    cl = pd.Series(np.asarray(res.cov_kwds["groups"])).astype(str).values
+    _, cl_inv = np.unique(cl, return_inverse=True)
+    n_cl = int(cl_inv.max()) + 1
+    IF_cl = _cluster_if(X * u[:, None], np.linalg.pinv(X.T @ X), cl_inv, n_cl)
+
+    _B, _scheme = boot_cfg()
+    B = _B if B is None else int(B)
+    scheme = _scheme if scheme is None else scheme
+    gs = phi_t_group_struct(df_agg, market_key=market_key, weight=weight, time_key=time_key)
+
+    def _draw(rng_):
+        return Z @ (beta + _wild_weights(n_cl, scheme, rng_) @ IF_cl)[pos]
+
+    return _phi_t_band(gs, Z @ beta[pos], _draw, B, scheme, np.random.default_rng(seed))
+
+
+def attach_phi_band(national_agg, res, Z, coef_names, df_agg, phi_mt, safe_key,
+                    market_key=None, weight="sum", time_key="year_quarter"):
+    """Add phi_t_lo_<key> / phi_t_hi_<key> to a linear estimator's national phi_t frame.
+
+    Two self-checks run every time, because both failures have actually happened here:
+      1. Z @ beta must reproduce the caller's own phi_mt (catches a design matrix built with a
+         different NaN fill or column order than the phi it is supposed to explain);
+      2. the band's point path must reproduce the point series it is attached to (catches the
+         band and the point path being aggregated on different conventions -- the Est5-Est8
+         bug found 2026-08-04, where the two sat 1.5-2.2 pp apart).
+    Either mismatch prints a loud warning rather than failing the run, and a failure to build
+    the band at all leaves national_agg untouched: an estimation that produced good point
+    estimates should not be lost to a reporting extra.
+
+    Set SLEEP_PHI_BAND_LINEAR=0 to skip (smoke runs).
+    """
+    if os.environ.get("SLEEP_PHI_BAND_LINEAR", "1") != "1":
+        return national_agg
+    try:
+        beta = np.asarray(res.params[coef_names], float)
+        d_phi = float(np.nanmax(np.abs(np.asarray(Z, float) @ beta - np.asarray(phi_mt, float))))
+        if d_phi > 1e-8:
+            print(f"  [phi-band {safe_key}] WARNING design/phi mismatch {d_phi:.3g} "
+                  f"-- band would describe a different phi than the one reported")
+        band = linear_phi_t_band(res, Z, coef_names, df_agg, market_key=market_key,
+                                 weight=weight, time_key=time_key)
+        pt_col = f"phi_t_{safe_key}"
+        # Carry EVERY band column the frame offers, not just lo/hi. The bias-corrected columns
+        # (lo_bc/hi_bc/p_below) are computed by _phi_t_band for free, and the linear estimators
+        # store their band ONLY here -- there is no phi_t_boot on a statsmodels result to fall
+        # back on, unlike E5-E8. Selecting a fixed lo/hi pair silently dropped them.
+        ren = {"time_id": time_key, "phi_t": "_band_pt",
+               "lo": f"phi_t_lo_{safe_key}", "hi": f"phi_t_hi_{safe_key}",
+               "lo_bc": f"phi_t_lobc_{safe_key}", "hi_bc": f"phi_t_hibc_{safe_key}",
+               "p_below": f"phi_t_pbelow_{safe_key}"}
+        cols = [c for c in ren if c in band.columns]
+        merged = national_agg.merge(band[cols].rename(columns=ren), on=time_key, how="left")
+        d_pt = float(np.nanmax(np.abs(merged["_band_pt"] - merged[pt_col])))
+        if d_pt > 1e-6:
+            print(f"  [phi-band {safe_key}] WARNING band point path differs from the reported "
+                  f"phi_t by up to {100*d_pt:.3f} pp -- aggregation conventions disagree")
+        merged = merged.drop(columns=["_band_pt"])
+        w = 100 * float((merged[f"phi_t_hi_{safe_key}"] - merged[f"phi_t_lo_{safe_key}"]).mean())
+        rng = 100 * float(merged[pt_col].max() - merged[pt_col].min())
+        extra = ""
+        if f"phi_t_lobc_{safe_key}" in merged.columns:
+            w_bc = 100 * float((merged[f"phi_t_hibc_{safe_key}"]
+                                - merged[f"phi_t_lobc_{safe_key}"]).mean())
+            pb = merged[f"phi_t_pbelow_{safe_key}"]
+            n_undef = int(((pb <= 0.025) | (pb >= 0.975)).sum())
+            extra = (f" | BC width {w_bc:.2f}pp"
+                     + (f" | {n_undef} quarter(s) beyond BC repair" if n_undef else ""))
+        print(f"  [phi-band {safe_key}] mean width {w:.2f}pp | phi_t range {rng:.2f}pp | "
+              f"width/range {w/max(rng, 1e-9):.2f}{extra}")
+        return merged
+    except Exception as e:
+        print(f"  [phi-band {safe_key}] skipped ({type(e).__name__}: {e})")
+        return national_agg
+
+
 def _phi_t_group_struct(df_ss):
     """Precompute the (time, market) group structure for fast pop-weighted
     national phi_t aggregation: national phi_t = sum_market pop_market *
@@ -1604,16 +1760,67 @@ def _agg_phi_t(phi, gs):
 
 
 def _phi_t_band(gs, phi_point, draw_phi_fn, B, scheme, rng, alpha=0.05):
-    """National phi_t point path + (1-alpha) percentile band from B wild draws.
+    """National phi_t point path + bootstrap band from B wild draws.
+
     draw_phi_fn(rng) returns a per-observation phi vector for one bootstrap draw.
-    Returns a DataFrame [time_id, phi_t, lo, hi] sorted by quarter."""
+    Returns a DataFrame [time_id, phi_t, lo, hi, lo_bc, hi_bc, p_below] sorted by quarter.
+
+    TWO bands are returned, deliberately:
+
+    `lo`/`hi` -- the RAW percentile interval (unchanged; every stored band predating
+    2026-08-04 is this). It is kept because its failure mode is diagnostic: a raw percentile
+    interval can EXCLUDE its own point estimate, and on E7 spec 12 it does so in 26 of 35
+    quarters. That happens when the map from parameters to phi is nonlinear enough to displace
+    the draw cloud off the estimate. The joint sieve stacks three nonlinearities in one draw --
+    renormalise theta onto the unit sphere, interpolate through a kinked link grid, clip to
+    [0,1] -- and when the fitted link is nearly flat (E7's spans 1.33 pp) with the point sitting
+    ON its floor, the draws end up one-sided. The single-index path cannot do this: its draw is
+    `vpow @ (b + w.IF)`, linear in the perturbed coefficients up to the clip, so the draws are
+    mechanically centred (0 violations in all 32 E5/E6 cells).
+
+    `lo_bc`/`hi_bc` -- Efron's BIAS-CORRECTED percentile interval (Efron 1987), which is the
+    repair: measure the median bias of the draw cloud as z0 = Phi^-1(P[draw < estimate]) and read
+    the interval off the shifted quantile levels Phi(2*z0 +/- z_{alpha/2}). z0 = 0 (a centred
+    cloud) reproduces the raw interval exactly, so this is a strict generalisation and the
+    linear/single-index paths are unaffected.
+
+    NOT done here: recentring the draws on the point estimate. That would force containment
+    everywhere and destroy the very signal that exposed E7's degenerate link.
+
+    `p_below` -- P[draw < estimate], the displacement diagnostic itself, computed with the
+    (1+.)/(1+B) finite-B correction used elsewhere in this module so z0 stays finite. Quarters
+    where it hits the clamp are DISPLACED BEYOND CORRECTION: no bootstrap draw reaches the
+    estimate, so no monotone reparametrisation of the quantile levels can bracket it and the BC
+    interval is undefined-by-construction there. Callers must flag those, never report silently.
+    """
     pt = _agg_phi_t(phi_point, gs)
     draws = np.empty((B, gs["nt"]))
     for b in range(B):
         draws[b] = _agg_phi_t(draw_phi_fn(rng), gs)
     lo = np.percentile(draws, 100 * alpha / 2, axis=0)
     hi = np.percentile(draws, 100 * (1 - alpha / 2), axis=0)
-    out = pd.DataFrame({"time_id": gs["tuniq"], "phi_t": pt, "lo": lo, "hi": hi})
+
+    # --- Efron (1987) bias correction, per quarter ------------------------------------------
+    from scipy.stats import norm as _norm
+    p_below = (1.0 + np.sum(draws < pt[None, :], axis=0)) / (1.0 + B)
+    z0 = _norm.ppf(np.clip(p_below, 1.0 / (1.0 + B), B / (1.0 + B)))
+    za_lo, za_hi = _norm.ppf(alpha / 2), _norm.ppf(1 - alpha / 2)
+    a_lo = 100.0 * _norm.cdf(2 * z0 + za_lo)
+    a_hi = 100.0 * _norm.cdf(2 * z0 + za_hi)
+    lo_bc = np.empty(gs["nt"])
+    hi_bc = np.empty(gs["nt"])
+    for t in range(gs["nt"]):
+        lo_bc[t] = np.percentile(draws[:, t], a_lo[t])
+        hi_bc[t] = np.percentile(draws[:, t], a_hi[t])
+
+    out = pd.DataFrame({"time_id": gs["tuniq"], "phi_t": pt, "lo": lo, "hi": hi,
+                        "lo_bc": lo_bc, "hi_bc": hi_bc, "p_below": p_below})
+    n_out = int(np.sum((pt < lo) | (pt > hi)))
+    n_undef = int(np.sum((p_below <= alpha / 2) | (p_below >= 1 - alpha / 2)))
+    if n_out or n_undef:
+        print(f"  [phi_t band] RAW percentile interval excludes the point estimate in "
+              f"{n_out}/{gs['nt']} quarters; {n_undef} quarter(s) displaced beyond BC repair "
+              f"(p_below at the clamp). Report the BC interval, and flag the undefined quarters.")
     try:
         out["_d"] = pd.PeriodIndex(out["time_id"].str.replace("Q", "Q"), freq="Q").to_timestamp()
         out = out.sort_values("_d").reset_index(drop=True)

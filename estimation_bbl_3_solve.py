@@ -233,6 +233,87 @@ def solve_kappa(blk):
 
 
 # ==========================================================================
+# The identified combination: marginal cost at the mean forward r^f
+# ==========================================================================
+def rbar_of_block(blk):
+    r"""r̄^f and the ω/ζ ridge diagnostics for one firm-type block.
+
+    ω loads on Δψ₂ (`d_omega`) and (1+ζ) on Δψ₄ (`d_zeta`). Structurally
+    Δψ₄/Δψ₂ is the β^t-weighted mean of r^f_t, which is COMMON to every firm, so it varies
+    only through the timing of ΔDep. With the BCB Focus curve nearly flat inside the
+    discounted window (β=0.9 puts ~90% of the weight in the first ~22 quarters, where rf moves
+    only 0.0333 → ~0.0285) that ratio is a near-constant and the two columns are collinear:
+    measured corr > 0.99997 on the 2026-08-03 production run, i.e. ≤0.005% of Δψ₄ is
+    independent of Δψ₂.
+
+    Consequence: only c̄ = ω + r̄^f·ζ — marginal cost at the mean forward risk-free rate — is
+    identified. The reported ω̂/ζ̂ split is wherever the optimizer stopped on the ridge
+    ω = −r̄^f·ζ, which is why ω̂ < 0 appears without implying negative marginal cost.
+    V_Main:584 states the failure condition ("a flat rate would leave it unidentified"); these
+    numbers show it binds WITH the market curve loaded. See identification_notes.md §9.
+    """
+    d2 = np.asarray(blk["d_omega"], float)
+    d4 = np.asarray(blk["d_zeta"], float)
+    ok = np.isfinite(d2) & np.isfinite(d4) & (d2 != 0.0)
+    d2, d4 = d2[ok], d4[ok]
+    if d2.size == 0:
+        return dict(rbar_f=float("nan"))
+    ratio = d4 / d2
+    b = float((d2 @ d4) / (d2 @ d2))
+    resid = d4 - b * d2
+    denom = float(((d4 - d4.mean()) ** 2).sum())
+    return dict(
+        rbar_f=float(np.median(ratio)),
+        rbar_f_mean=float(ratio.mean()),
+        ridge_corr=float(np.corrcoef(d2, d4)[0, 1]),
+        ridge_cond=float(np.linalg.cond(np.column_stack([d2, d4]))),
+        ridge_one_minus_R2=float(1.0 - (1.0 - (resid @ resid) / denom)) if denom > 0 else float("nan"),
+    )
+
+
+def cbar_stats(fit, rbar, boot_draws=None, sub_thetas=None, n_firms=None, b_firms=None,
+               levels=(0.90, 0.95)):
+    r"""Point estimate and inference for c̄ = ω + r̄^f·ζ.
+
+    Two inference routes, mirroring exactly what this file already does for ω and ζ separately:
+      * `c_bar_se_boot` — SD over firm-block bootstrap draws. Directly comparable to
+        `omega_se`/`zeta_se`, and like them RETAINED FOR COMPARISON ONLY: the nonparametric
+        bootstrap is inconsistent for a set-identified, kinked criterion (Tamer 2003).
+      * `c_bar_sd_rate_adj` / `c_bar_ci_sqrtn` — the subsampling route, rate-adjusted by
+        √(b/n), matching `theta_sd_rate_adj` / `param_ci_sqrtn`. This is the headline.
+
+    Because c̄ is a scalar LINEAR functional of θ, both are exact transformations of the draws
+    already computed — no extra refits. The gain over quoting ω̂ and ζ̂ separately is real:
+    their marginal SDs are inflated by the ridge, whereas c̄ is the direction the data pins.
+    """
+    out = dict(c_bar=float(fit["omega"] + rbar * fit["zeta"]))
+    if not np.isfinite(rbar):
+        return out
+
+    if boot_draws is not None and len(boot_draws):
+        cb = boot_draws[:, 0] + rbar * boot_draws[:, 1]
+        out["c_bar_se_boot"] = float(cb.std())
+        with np.errstate(invalid="ignore"):
+            cc = np.corrcoef(boot_draws[:, 0], boot_draws[:, 1])[0, 1]
+        out["omega_zeta_corr_boot"] = float(cc) if np.isfinite(cc) else None
+
+    if sub_thetas is not None and len(sub_thetas) and n_firms and b_firms:
+        TH = np.asarray(sub_thetas, float)
+        cb = TH[:, 0] + rbar * TH[:, 1]
+        cn = out["c_bar"]
+        out["c_bar_sd_rate_adj"] = float(cb.std() * np.sqrt(b_firms / n_firms))
+        scaled = np.sqrt(b_firms) * (cb - cn)
+        ci = {}
+        for lv in levels:
+            a = 1.0 - lv
+            lo = cn - float(np.quantile(scaled, 1.0 - a / 2.0)) / np.sqrt(n_firms)
+            hi = cn - float(np.quantile(scaled, a / 2.0)) / np.sqrt(n_firms)
+            ci[f"{lv:.2f}"] = dict(lo=lo, hi=hi)
+        out["c_bar_ci_sqrtn"] = ci
+    return out
+
+
+# ==========================================================================
 # Firm-block bootstrap for inference
 # ==========================================================================
 def bootstrap_kappa(blk, n_boot, seed=42):
@@ -254,7 +335,10 @@ def bootstrap_kappa(blk, n_boot, seed=42):
                    firms=firms[rows], gamma_names=blk["gamma_names"])
         draws.append(solve_kappa(sub)["theta"])
     arr = np.vstack(draws)
-    return arr.std(axis=0)
+    # Return the DRAWS as well as the SDs. ω and ζ are near-perfectly collinear in this design
+    # (see rbar_of_block), so their marginal SDs say nothing about the precision of the one
+    # combination that IS identified, ω + r̄^f·ζ. That needs the joint draws.
+    return arr.std(axis=0), arr
 
 
 # ==========================================================================
@@ -356,7 +440,10 @@ def subsample_kappa(blk, fit, n_sub=200, b_firms=None, seed=4242, levels=(0.90, 
     return dict(n_firms=n, b_firms=b_firms, n_sub=int(n_sub),
                 crit=crit, param_ci_sqrtn=param_ci,
                 theta_sd_rate_adj=(TH.std(axis=0) * np.sqrt(b_firms / n)).tolist(),
-                T_median=float(np.median(T)), T_max=float(T.max()))
+                T_median=float(np.median(T)), T_max=float(T.max()),
+                # kept (not serialized) so cbar_stats can form the subsampling CI for the
+                # identified combination without re-running the n_sub refits.
+                _thetas=TH)
 
 
 def _profile_min_F(b_idx, b_val, c1, Xs, b0):
@@ -496,8 +583,11 @@ def main():
     for kappa, blk in blocks.items():
         nZ = blk["d_gamma"].shape[1]
         fit = solve_kappa(blk)
-        se = (bootstrap_kappa(blk, args.bootstrap).tolist()
-              if args.bootstrap > 0 else [None] * (2 + nZ))
+        if args.bootstrap > 0:
+            _se, boot_draws = bootstrap_kappa(blk, args.bootstrap)
+            se = _se.tolist()
+        else:
+            se, boot_draws = [None] * (2 + nZ), None
         gamma_se = dict(zip(blk["gamma_names"], se[2:2 + nZ]))
 
         # Multistart smoke check (cheap, always on).
@@ -521,7 +611,18 @@ def main():
         sub = subsample_kappa(blk, fit, n_sub=args.subsample,
                               b_firms=args.subsample_b) if args.subsample > 0 else None
         if sub is not None:
-            rec["subsample"] = {k: v for k, v in sub.items()}
+            # `_thetas` is a private ndarray handle for cbar_stats — never serialize it.
+            rec["subsample"] = {k: v for k, v in sub.items() if not k.startswith("_")}
+
+        # ---- The identified combination c̄ = ω + r̄^f·ζ ---------------------------------
+        # ω and ζ are not separately identified here (Δψ₂ and Δψ₄ collinear at corr > 0.99997);
+        # c̄ is the direction the data does pin down, so it carries the interpretable SE.
+        ridge = rbar_of_block(blk)
+        rec.update(ridge)
+        rec.update(cbar_stats(
+            fit, ridge["rbar_f"], boot_draws=boot_draws,
+            sub_thetas=(sub or {}).get("_thetas"),
+            n_firms=(sub or {}).get("n_firms"), b_firms=(sub or {}).get("b_firms")))
 
         # ---- Invert the criterion into ω/ζ confidence intervals -----------------------
         if args.profile:

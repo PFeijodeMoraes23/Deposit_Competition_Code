@@ -70,6 +70,30 @@ def data_root() -> str:
     return str(OPEN_FINANCE)
 
 
+def demand_prep_root() -> Path:
+    """Directory holding the per-estimator sleepiness outputs (``est1`` … ``est8``).
+
+    Normally ``PROCESSED/ESTIMATION_OUTPUT/DEMAND_PREP``. Setting ``SLEEP_OUT_ROOT``
+    redirects the whole tree somewhere else, which is how a re-estimation can be run
+    WITHOUT touching production results.
+
+    That matters here for two reasons beyond ordinary caution. Adding a column to a
+    stored band requires re-fitting the cell, and re-fitting is not idempotent for the
+    joint sieve: the criterion has multiple near-equivalent optima (2026-08-03 probe),
+    so a rerun can land in a different basin than the fit the uploaded cluster parquets
+    descend from. And the estimators write ~2 GB of derived CSV per grid, which is
+    better kept off OneDrive. Point a sandbox run at a local disk, compare, and promote
+    by explicit copy only if the comparison is clean.
+
+    INPUTS ARE UNAFFECTED -- they resolve through the other anchors in this module, so
+    a redirected run reads exactly the same panels as production.
+    """
+    override = os.environ.get("SLEEP_OUT_ROOT", "").strip()
+    if override:
+        return Path(override).expanduser()
+    return PROCESSED / "ESTIMATION_OUTPUT" / "DEMAND_PREP"
+
+
 # ---------------------------------------------------------------------------
 # Raw download trees (consolidated under RAW/)
 # ---------------------------------------------------------------------------
@@ -119,8 +143,42 @@ FGC: Path              = OPEN_FINANCE / "FGC"
 ACCOUNTS: Path         = BCB / "Accounts"
 
 
+def market_panel_csv(processed: Path | None = None) -> Path:
+    """The market panel every estimation script reads. ONE source of truth.
+
+    Returns `market_panel.csv` — the panel that panel_3/…/panel_10/panel_12 build and that
+    carries every estimated regressor and instrument, including `estban_rival_branches_lag`.
+
+    HISTORY (2026-08-04). Five scripts previously resolved this as
+    `market_panel_with_fees.csv if it exists else market_panel.csv`. That silently pinned the
+    whole pipeline to whichever vintage of the fees panel happened to sit on disk: on
+    2026-08-04 the base panel was 6 days NEWER (08-03 vs 07-28), so every demand-prep parquet,
+    the logit, the BLP and the sleepiness estimates were built from stale data. The fees panel
+    is `market_panel.csv` PLUS 15 fee columns and nothing else (verified by column diff), and
+    those 15 columns are referenced by no `.jl`, no sleepiness estimator, and neither X_COLS
+    nor D_COLS — they reach the parquets only via `IV_FEE ⊂ EXTRA_KEEP_COLS`, which is guarded
+    by `if c in df_base.columns` and so degrades safely when they are absent.
+
+    Set `USE_FEE_PANEL=1` to opt back into `market_panel_with_fees.csv` (e.g. to estimate a fee
+    specification). It is an explicit opt-in, never an implicit fallback: if you ask for it and
+    it is missing, this raises rather than quietly handing back a different file.
+    """
+    d = PROCESSED if processed is None else Path(processed)
+    base = d / "market_panel.csv"
+    if os.environ.get("USE_FEE_PANEL", "").strip() in ("1", "true", "True", "yes"):
+        fees = d / "market_panel_with_fees.csv"
+        if not fees.exists():
+            raise FileNotFoundError(
+                f"USE_FEE_PANEL=1 but {fees} does not exist. Build it with "
+                "`python panel_9_cosif_fees.py --patch-market` (it must run AFTER "
+                "panel_7/panel_10/panel_12), or unset USE_FEE_PANEL to use market_panel.csv.")
+        return fees
+    return base
+
+
 __all__ = [
-    "OPEN_FINANCE", "BCB", "DATA_ROOT", "RAW", "PROCESSED", "data_root",
+    "OPEN_FINANCE", "BCB", "DATA_ROOT", "RAW", "PROCESSED", "data_root", "market_panel_csv",
+    "demand_prep_root",
     "ESTBAN_DIR", "ESTBAN_CSV", "ESTBAN_RAW_MUN", "ESTBAN_RAW_AG",
     "IF_DATA_ROOT", "IF_DATA_LIST", "IF_DATA_PRUDENTIAL", "IF_DATA_FINANCIAL", "IF_DATA_INDIVIDUAL", "IF_DATA_AGG",
     "COSIF_RAW", "SGS_RAW",

@@ -40,8 +40,14 @@ ASSET RETURN r^j (`--asset-return-col` / `--asset-margin`, default 0): enters ψ
       `1 + deposit_rate_lag` (estimation_1_demand_1_prep.py:167) — the rate the bank PAYS
       DEPOSITORS (liability side), not what it earns on assets. It sits BELOW r^f by
       construction (that gap IS the markdown this paper estimates); using it as r^j would
-      hand the model a negative asset margin. There is currently NO asset-return column in
-      the demand parquet — one must be built (COSIF asset yield; see counterfactuals_plan.md §9).
+      hand the model a negative asset margin.
+    ✅ USE `--asset-return-col asset_gross_return_lag`. (This docstring previously said no
+      asset-return column existed; that is STALE — the column was added to the demand-prep
+      parquets and verified present 2026-08-04: mean 1.0365 = 1 + quarterly asset return,
+      i.e. ~3.5%/q net of r^f, vs gross_return_lag's 1.0119 = 1 + the deposit rate.
+      `asset_return_imputed` flags the 0.2% of rows without a reported yield.) The stale note
+      is why the 2026-08-03 cluster run was launched WITHOUT any asset margin and produced
+      ω̂ < 0 in all 8 blocks — exactly the pathology predicted two lines below.
     Default 0 ⇒ r^j = r^f: deposits earn exactly the risk-free rate, so a deposit is worth
       only (ρ − c). That is a SUBSTANTIVE assumption (it says the marginal deposit funds
       reserves/govvies, not credit), and with the observed spreads it forces ω̂ < 0.
@@ -324,7 +330,7 @@ function load_forward_rf(path::Union{Nothing,String}, out_dir::String, T::Int, c
           "Generate it locally (needs internet) and upload it there:\n" *
           "    python cf_forward_rf.py --horizon $T --start 2026Q1"
     require && error(msg)
-    rf_q0, rfc = _first_present(ctx.df, ["risk_free_qoq", "risk_free_qoq_lag", "selic_qoq"]; default=NaN)
+    rf_q0, rfc = _first_present_rf_level(ctx.df, RF_LEVEL_CANDIDATES; default=NaN, what="fallback flat r^f")
     lvl = median(filter(isfinite, rf_q0))
     @warn "$msg\n  → FALLING BACK to FLAT r^f=median($rfc)=$(round(lvl,sigdigits=4)); ζ weakly identified."
     return fill(lvl, T)
@@ -453,7 +459,12 @@ function main_cost2()
     if a["asset-return-col"] !== nothing
         col = a["asset-return-col"]
         col in names(ctx.df) || error("--asset-return-col '$col' not in demand parquet")
-        rfq, _ = _first_present(ctx.df, ["risk_free_qoq", "risk_free_qoq_lag", "selic_qoq"]; default=0.0)
+        # LAGGED level, to match the vintage of asset_gross_return_lag (= 1 + LAGGED quarterly
+        # asset yield; see the producer contract at panel_4_bank_chars.py:441-444). The
+        # contemporaneous `risk_free_qoq` must NOT be used here — it would introduce a
+        # one-quarter vintage error on top of the level fix.
+        rfq, rfq_c = _first_present_rf_level(ctx.df, RF_LEVEL_LAG_CANDIDATES; default=0.0,
+                                             what="asset-margin r^f (lagged)")
         gr = Float64.(coalesce.(ctx.df[!, col], NaN)) .- 1.0
         asset_ret = gr .- rfq
         # A row with no reported asset yield (bank absent from the IF-Data bank-chars panel) must NOT
@@ -463,7 +474,7 @@ function main_cost2()
         any(fin) || error("--asset-return-col '$col' has no finite rows (check units/merge)")
         med = median(asset_ret[fin]); n_imp = count(!, fin)
         asset_ret[.!fin] .= med
-        log_status("  [BBL] r^j ← ($col − 1) − r^f_q | median net margin " *
+        log_status("  [BBL] r^j ← ($col − 1) − $rfq_c | median net margin " *
                    "$(round(med, sigdigits=3))/q = $(round(med*400, sigdigits=3)) pp/yr | " *
                    "$n_imp/$(length(asset_ret)) rows imputed at the median")
         med > 0 || @warn "  [BBL] median asset margin is NOT positive ($med) — deposits earn less " *

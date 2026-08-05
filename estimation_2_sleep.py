@@ -55,9 +55,10 @@ warnings.filterwarnings("ignore", message="covariance of constraints does not ha
 from utils import paths as _paths_mod
 from utils import state_transform as _st
 DATA_DIR = _paths_mod.PROCESSED
-_PANEL_WITH_FEES = DATA_DIR / "market_panel_with_fees.csv"
-PANEL_CSV = _PANEL_WITH_FEES if _PANEL_WITH_FEES.exists() else DATA_DIR / "market_panel.csv"
-OUTPUT_DIR = DATA_DIR / "ESTIMATION_OUTPUT" / "DEMAND_PREP" / "est2"
+# market_panel.csv, NOT the fees variant — see utils/paths.market_panel_csv (USE_FEE_PANEL=1).
+PANEL_CSV = _paths_mod.market_panel_csv()
+# SLEEP_OUT_ROOT-aware (utils.paths.demand_prep_root); unset => the historical path.
+OUTPUT_DIR = _paths_mod.demand_prep_root() / "est2"
 
 PLOTS_DIR = OUTPUT_DIR / "PLOTS"
 
@@ -373,11 +374,14 @@ def calculate_pooled_phis(df, res_dict, state_blocks):
 
         ss_res = res_item['second_stage']
         phi_mt = np.zeros(len(df))
+        Zcols, coef_names = [], []
         for sv in s_cols:
             col_name = f"interaction_{sv}" if sv != 'constant' else "nr_lagged_dep"
             if col_name in ss_res.params:
                 c = ss_res.params[col_name]
-                phi_mt += c if sv == 'constant' else c * df[sv].fillna(0)
+                z = np.ones(len(df)) if sv == 'constant' else df[sv].fillna(0).values.astype(float)
+                phi_mt += c * z
+                Zcols.append(z); coef_names.append(col_name)
 
         safe_key = model_key.replace(' ', '_').replace('.', '')
         df[f'phi_mt_{safe_key}'] = phi_mt
@@ -388,6 +392,15 @@ def calculate_pooled_phis(df, res_dict, state_blocks):
         national_agg = (weighted_phi.groupby(market_agg['year_quarter']).sum() /
                         market_agg['M_mt'].groupby(market_agg['year_quarter']).sum().replace(0, np.nan)
                         ).fillna(0).reset_index(name=f'phi_t_{safe_key}')
+        # 95% wild-cluster band on the national path, on the SAME aggregation convention the
+        # point series above uses (market = mca_code, weight = M_mt summed over banks), so the
+        # two cannot drift apart. They did for Est5-Est8: those bands are built on a pop-only
+        # weight and sit 1.5-2.2 pp away from the phi_t they ship beside (2026-08-04).
+        if Zcols:
+            from utils.sleep_links import attach_phi_band
+            national_agg = attach_phi_band(national_agg, ss_res, np.column_stack(Zcols),
+                                           coef_names, df, phi_mt, safe_key,
+                                           market_key='mca_code')
         phi_results[safe_key] = national_agg
     return df, phi_results
 
