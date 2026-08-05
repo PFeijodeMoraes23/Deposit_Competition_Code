@@ -21,12 +21,15 @@
 # consumes phi_mt from it -> the parquets feed logit/BLP.  Do not reorder.
 #
 # USAGE
-#   bash run_sleep_recompute.sh                 # everything: E1,E2,E5-E8 -> exports -> prep -> tables
+#   bash run_sleep_recompute.sh                 # E1,E2,E5-E8 -> exports -> prep -> tables -> logit
 #   bash run_sleep_recompute.sh --from prep     # resume at demand prep (sleepiness already done)
+#   bash run_sleep_recompute.sh --from logit    # logit only (parquets already rebuilt)
 #   bash run_sleep_recompute.sh --dry-run       # print the plan, run nothing
 #   MIN_FREE_GB=9 bash run_sleep_recompute.sh   # raise the gate (default 7)
+#   RUN_LOGIT=0 bash run_sleep_recompute.sh     # stop after the tables, skip the logit
 #
-# DOES NOT run the logit/BLP; that is run_blp_pipeline.py --logit, deliberately separate.
+# The logit (run_blp_pipeline.py --logit) runs LAST because it consumes the parquets the prep
+# step rebuilds. It does NOT run the RC/BLP stage or anything on the cluster.
 # ===========================================================================================
 set -uo pipefail
 cd "$(dirname "$0")" || exit 1
@@ -72,18 +75,22 @@ gate() {
   done
 }
 
-# step <key> <label> <script> [args...]
-run_step() {
+# step <key> <label> <script> [args...]        -- python steps
+run_step() { _run "$1" "$2" python -u "${@:3}"; }
+# step_cmd <key> <label> <cmd> [args...]       -- anything else (the logit is Julia via a py driver)
+run_step_cmd() { _run "$@"; }
+
+_run() {
   local key="$1" label="$2"; shift 2
   case "$FROM" in
     all) ;;
     "$key") FROM="all" ;;                       # resume point reached
     *) echo "[recompute] SKIP  ${label}  (--from ${FROM})"; return 0 ;;
   esac
-  if [ "$DRY" = "1" ]; then echo "[recompute] would run: ${label}  ->  python -u $*"; return 0; fi
+  if [ "$DRY" = "1" ]; then echo "[recompute] would run: ${label}  ->  $*"; return 0; fi
   gate "$label"
   echo "[recompute] ===== ${label}  START $(date '+%F %H:%M:%S') ====="
-  python -u "$@"
+  "$@"
   local rc=$?
   echo "[recompute] ===== ${label}  END   $(date '+%F %H:%M:%S')  rc=${rc} ====="
   if [ "$rc" -ne 0 ]; then
@@ -118,5 +125,15 @@ run_step prep    "Demand prep (all estimators)"   estimation_demand_1_prep.py --
 run_step spec12  "Analyze spec 12"                export_analyze_spec12.py
 run_step desc3   "Cluster-imbalance table"        desc_3.py
 
+# --- 3. logit -------------------------------------------------------------------------------
+# Consumes the demand_*_spec_12.parquet files written by the prep step above, so it MUST follow
+# it. Julia, --threads=auto: it will take every core, which is why it is last and why nothing
+# else should be running. RUN_LOGIT=0 skips it.
+if [ "${RUN_LOGIT:-1}" = "1" ]; then
+  run_step_cmd logit "Logit (blp_1_logit.jl, all routines, spec 12)" \
+    python -u run_blp_pipeline.py --logit
+else
+  echo "[recompute] SKIP  logit (RUN_LOGIT=0)"
+fi
+
 echo "[recompute] ALL DONE $(date '+%F %H:%M:%S')"
-echo "[recompute] next: python run_blp_pipeline.py --logit"
