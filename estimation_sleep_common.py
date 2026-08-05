@@ -285,8 +285,21 @@ def _calculate_phis(df, results_dict, link):
             continue
         safe_key = model_key.replace(" ", "_").replace(".", "")
         df[f"phi_mt_{safe_key}"] = phi_from_native(df, ss, link)
-        agg = df.groupby(["year_quarter", "CODMUN_IBGE"], observed=True).agg(
-            phi_mt=(f"phi_mt_{safe_key}", "mean"), M_mt=("market_size", "sum")).reset_index()
+        # WEIGHT = MARKET POPULATION, i.e. the cell MEAN of market_size (2026-08-05 fix).
+        # market_size (= pop_total) is CONSTANT within a (quarter, municipality) cell, so the
+        # previous M_mt=("market_size","sum") multiplied by the number of bank rows present:
+        # markets were weighted by pop x n_banks, which has no counterpart in the model
+        # (phi_t = sum_m phi_mt*M_mt / sum_m M_mt over MARKETS m). Measured on est6 spec 12,
+        # the two conventions differ by 1.90pp in LEVEL (0.9720 vs 0.9531) with the shape
+        # nearly unchanged. "mean" also aligns this reported series with (a) the bootstrap
+        # bands (_phi_t_group_struct, always pop-only -- the stored bands need no recompute)
+        # and (b) demand prep's own phi_t (estimation_demand_link_common, already pop-only).
+        # MARKET = MCA, not municipality (2026-08-05). V_Main.tex:182 defines the local market
+        # as the Minimal Comparable Area, and :406 sums over that market set; E1/E2 already
+        # grouped by mca_code, so this also removes a cross-estimator inconsistency (~0.21 pp).
+        _mkey = "mca_code" if "mca_code" in df.columns else "CODMUN_IBGE"
+        agg = df.groupby(["year_quarter", _mkey], observed=True).agg(
+            phi_mt=(f"phi_mt_{safe_key}", "mean"), M_mt=("market_size", "mean")).reset_index()
         num = (agg["phi_mt"] * agg["M_mt"]).groupby(agg["year_quarter"]).sum()
         den = agg["M_mt"].groupby(agg["year_quarter"]).sum().replace(0, np.nan)
         phi_results[safe_key] = (num / den).fillna(0).reset_index(name=f"phi_t_{safe_key}")

@@ -157,9 +157,26 @@ def calc_agg_delta(d_sub: pd.DataFrame, col: str, res, is_logistic: bool) -> tup
     if len(d_sub) == 0 or col not in d_sub.columns:
         return pd.Series(dtype=float), pd.Series(dtype=float)
 
-    w = d_sub['market_size'] if 'market_size' in d_sub.columns else pd.Series(1.0, index=d_sub.index)
+    # WEIGHT = MARKET POPULATION (2026-08-05 fix, matching the national_phi_t.csv writers).
+    # Row-level pop weighting implicitly multiplies by the bank count of each market (every
+    # bank-row carries the market's pop), reproducing the pop x n_banks convention this fix
+    # retires. Collapse to (quarter, market) cells first -- cell-mean phi, cell pop weight --
+    # exactly like calculate_phis/_calculate_phis. Falls back to row weighting only when no
+    # market key exists in the frame.
+    mkey = next((k for k in ('mca_code', 'CODMUN_IBGE') if k in d_sub.columns), None)
+    if mkey is not None and 'market_size' in d_sub.columns:
+        cells = d_sub.groupby(['year_quarter', mkey], observed=True).agg(
+            _phi=(col, 'mean'), _w=('market_size', 'mean')).reset_index()
+        mean = ((cells['_phi'] * cells['_w']).groupby(cells['year_quarter']).sum()
+                / cells['_w'].groupby(cells['year_quarter']).sum())
+        # per-row weights for the delta-method X-bar below: pop / n_rows-in-cell, so each
+        # market contributes its population once regardless of how many banks sit in it.
+        _n = d_sub.groupby(['year_quarter', mkey], observed=True)[col].transform('size')
+        w = (d_sub['market_size'] / _n).astype(float)
+    else:
+        w = d_sub['market_size'] if 'market_size' in d_sub.columns else pd.Series(1.0, index=d_sub.index)
+        mean = (d_sub[col] * w).groupby(d_sub['year_quarter']).sum() / w.groupby(d_sub['year_quarter']).sum()
     w_arr = w.values.astype(float)
-    mean = (d_sub[col] * w).groupby(d_sub['year_quarter']).sum() / w.groupby(d_sub['year_quarter']).sum()
 
     if res is None:
         return mean, pd.Series(0.0, index=mean.index)

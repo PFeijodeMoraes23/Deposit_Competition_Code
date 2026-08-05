@@ -1598,8 +1598,10 @@ def phi_t_group_struct(df_ss, market_key=None, weight="mean", time_key=None):
     tcol = time_key or ("time_id" if "time_id" in df_ss.columns else "year_quarter")
     t = df_ss[tcol].astype(str).values
     if market_key is None:
-        market_key = "CODMUN_IBGE"
-    if market_key in df_ss.columns:
+        # MARKET = MCA (V_Main.tex:182); municipality only as a fallback. See
+        # _phi_t_group_struct for the 2026-08-05 note.
+        market_key = next((k for k in ("mca_code", "CODMUN_IBGE") if k in df_ss.columns), None)
+    if market_key is not None and market_key in df_ss.columns:
         m = df_ss[market_key].astype(str).values
     else:
         m = np.array(["0"] * len(df_ss))
@@ -1619,7 +1621,7 @@ def phi_t_group_struct(df_ss, market_key=None, weight="mean", time_key=None):
                 nt=len(tuniq), tuniq=np.asarray(tuniq))
 
 
-def linear_phi_t_band(res, Z, coef_names, df_agg, market_key=None, weight="sum",
+def linear_phi_t_band(res, Z, coef_names, df_agg, market_key=None, weight="mean",
                       time_key=None, B=None, scheme=None, seed=20240624):
     """National phi_t point path + wild-cluster percentile band for the LINEAR sleepiness
     estimators (Est1/Est2), where phi_mt = Z @ beta_state is linear in the fitted
@@ -1670,7 +1672,10 @@ def linear_phi_t_band(res, Z, coef_names, df_agg, market_key=None, weight="sum",
 
 
 def attach_phi_band(national_agg, res, Z, coef_names, df_agg, phi_mt, safe_key,
-                    market_key=None, weight="sum", time_key="year_quarter"):
+                    market_key=None, weight="mean", time_key="year_quarter"):
+    # weight default flipped "sum" -> "mean" 2026-08-05 together with the three point-series
+    # writers: the reported national phi_t now weights markets by POPULATION (the stated
+    # estimand), not population x bank count. The self-check below enforces the match.
     """Add phi_t_lo_<key> / phi_t_hi_<key> to a linear estimator's national phi_t frame.
 
     Two self-checks run every time, because both failures have actually happened here:
@@ -1729,13 +1734,23 @@ def attach_phi_band(national_agg, res, Z, coef_names, df_agg, phi_mt, safe_key,
         return national_agg
 
 
-def _phi_t_group_struct(df_ss):
+def _phi_t_group_struct(df_ss, market_key=None):
     """Precompute the (time, market) group structure for fast pop-weighted
     national phi_t aggregation: national phi_t = sum_market pop_market *
-    mean_market(phi_mt) / sum_market pop_market, per time."""
+    mean_market(phi_mt) / sum_market pop_market, per time.
+
+    MARKET = MCA (2026-08-05). V_Main.tex:182 defines the local market as the Minimal
+    Comparable Area -- "B firms compete in local markets - defined here as Minimal Comparable
+    Areas (MCAs)" -- and :303/:406 sum over m in that market set. This function previously
+    hardcoded CODMUN_IBGE (municipality), which splits MCAs that were created precisely to keep
+    territorial units comparable across boundary changes; measured effect on national phi_t is
+    ~0.21 pp, small but wrong by the model's own definition. Pass market_key explicitly to
+    reproduce a legacy CODMUN_IBGE band (the unconditional-band correctness gate does this)."""
     t = df_ss["time_id"].astype(str).values
-    if "CODMUN_IBGE" in df_ss.columns:
-        m = df_ss["CODMUN_IBGE"].astype(str).values
+    if market_key is None:
+        market_key = next((k for k in ("mca_code", "CODMUN_IBGE") if k in df_ss.columns), None)
+    if market_key is not None and market_key in df_ss.columns:
+        m = df_ss[market_key].astype(str).values
     else:
         m = np.array(["0"] * len(df_ss))
     pop = (df_ss["pop_total"].fillna(0).values.astype(float)
@@ -1797,6 +1812,17 @@ def _phi_t_band(gs, phi_point, draw_phi_fn, B, scheme, rng, alpha=0.05):
     draws = np.empty((B, gs["nt"]))
     for b in range(B):
         draws[b] = _agg_phi_t(draw_phi_fn(rng), gs)
+    return _band_from_draws(pt, draws, gs["tuniq"], alpha=alpha)
+
+
+def _band_from_draws(pt, draws, tuniq, alpha=0.05, label="phi_t band"):
+    """Assemble the band frame from a precomputed (B x nt) national draw matrix.
+
+    Split out of _phi_t_band (2026-08-05) so the unconditional band -- whose draw loop must run
+    once and feed THREE variants (total / direction-only / link-only) from the same expensive
+    re-profiled fits -- can reuse the identical raw-percentile + Efron-BC + p_below assembly
+    instead of re-implementing it. Same math, same warnings, same column layout."""
+    B = draws.shape[0]
     lo = np.percentile(draws, 100 * alpha / 2, axis=0)
     hi = np.percentile(draws, 100 * (1 - alpha / 2), axis=0)
 
@@ -1807,23 +1833,362 @@ def _phi_t_band(gs, phi_point, draw_phi_fn, B, scheme, rng, alpha=0.05):
     za_lo, za_hi = _norm.ppf(alpha / 2), _norm.ppf(1 - alpha / 2)
     a_lo = 100.0 * _norm.cdf(2 * z0 + za_lo)
     a_hi = 100.0 * _norm.cdf(2 * z0 + za_hi)
-    lo_bc = np.empty(gs["nt"])
-    hi_bc = np.empty(gs["nt"])
-    for t in range(gs["nt"]):
+    nt = draws.shape[1]
+    lo_bc = np.empty(nt)
+    hi_bc = np.empty(nt)
+    for t in range(nt):
         lo_bc[t] = np.percentile(draws[:, t], a_lo[t])
         hi_bc[t] = np.percentile(draws[:, t], a_hi[t])
 
-    out = pd.DataFrame({"time_id": gs["tuniq"], "phi_t": pt, "lo": lo, "hi": hi,
+    out = pd.DataFrame({"time_id": np.asarray(tuniq), "phi_t": pt, "lo": lo, "hi": hi,
                         "lo_bc": lo_bc, "hi_bc": hi_bc, "p_below": p_below})
     n_out = int(np.sum((pt < lo) | (pt > hi)))
     n_undef = int(np.sum((p_below <= alpha / 2) | (p_below >= 1 - alpha / 2)))
     if n_out or n_undef:
-        print(f"  [phi_t band] RAW percentile interval excludes the point estimate in "
-              f"{n_out}/{gs['nt']} quarters; {n_undef} quarter(s) displaced beyond BC repair "
+        print(f"  [{label}] RAW percentile interval excludes the point estimate in "
+              f"{n_out}/{nt} quarters; {n_undef} quarter(s) displaced beyond BC repair "
               f"(p_below at the clamp). Report the BC interval, and flag the undefined quarters.")
     try:
         out["_d"] = pd.PeriodIndex(out["time_id"].str.replace("Q", "Q"), freq="Q").to_timestamp()
         out = out.sort_values("_d").reset_index(drop=True)
     except Exception:
         out = out.sort_values("time_id").reset_index(drop=True)
+    return out
+
+
+# ==============================================================================
+# UNCONDITIONAL national phi_t band for the single-index estimators (Est5/Est6)
+# ==============================================================================
+# The stored bands condition on the estimated DIRECTION theta-hat: they perturb only the
+# sieve-link coefficients b through vpow built once at theta-hat. But theta-hat is the object
+# the 2026-08 multiplicity diagnostics show is weakly identified, and conditioning on a weakly
+# identified quantity can only understate uncertainty. The two functions below produce the
+# joint (direction + link) band without refitting the production estimator:
+#
+#   nlls_direction_if      cluster influence functions of the NLLS direction, reconstructed at
+#                          the STORED solution (they were never persisted: the E5/E6 pipeline
+#                          calls fit_nlls_link with bootstrap=False).
+#   unconditional_phi_t_band
+#                          per wild draw w: theta_b = theta_hat + w@IF_theta; re-standardize
+#                          the index; RE-PROFILE the sieve link exactly (one OLS -- the link
+#                          solver has no constraints); add the conditional-link channel with
+#                          the SAME w. One refit per draw feeds three variants (total /
+#                          direction-only / link-only); link-only must reproduce the stored
+#                          conditional band, which is the blocking correctness gate.
+#
+# Composition note (no double counting): the refit b-hat(theta_b) on the ORIGINAL y carries the
+# same level noise e as the baseline b-hat(theta-hat); e cancels in the deviation, leaving the
+# exact d b-hat / d theta channel. The link's own sampling noise enters once, through +w@IF_b.
+# Sharing w across the two channels keeps the theta-b covariance (Kline-Santos multiplier
+# bootstrap on the stacked estimating equations, with the theta->b Jacobian handled exactly by
+# re-profiling). Not propagated (documented): the first-stage CF v_hat (generated regressor)
+# and the aggregation weights.
+def nlls_direction_if(df, state_cols, has_cf, theta_native, loss, link="logit",
+                      fe_time_col=None, fd_check=True):
+    """Cluster IFs of the NLLS direction at a stored solution. Returns a dict:
+    IF_cl (n_cl x K, theta rows only), gamma_hat, foc_norm, cl_inv, n_cl, diag.
+
+    The production fit discarded the scipy result, so everything is rebuilt: the arg tuple
+    exactly as fit_nlls_link (dropna subset, demean index arrays), the CF coefficient gamma
+    PROFILED at theta-hat under the matching loss (gamma enters the residual linearly), an
+    ANALYTIC Jacobian, and the psi-weighted M-estimator sandwich:
+
+        score_i = rho'(f_i^2) * f_i * J_i          (LS: rho' == 1)
+        bread   = pinv( sum_i max(rho' + 2 rho'' f^2, 0) * J_i J_i' )   (clamped GN)
+
+    Reusing scipy's res.jac naively would be WRONG under robust loss: scipy stores the
+    sqrt(weight)-scaled Jacobian with RAW residuals, and its EPS clamp zeroes the scores of
+    exactly the influential rows (verified scipy 1.17.1 _lsq/trf.py:409-412). For
+    loss='linear' the sandwich below reduces to the standard OLS-type one, exactly."""
+    CF_cols = ["v_hat_x_lagged_dep"] if has_cf else []
+    cols = state_cols + ["deposit_balance", "nr_lagged_dep", "entity_id"]
+    df_ss = df.dropna(subset=cols + CF_cols).copy()
+    entities = df_ss["entity_id"].unique()
+    emap = {e: i for i, e in enumerate(entities)}
+    entity_idx = df_ss["entity_id"].map(emap).values
+    ecounts = np.bincount(entity_idx).astype(float)
+    if fe_time_col is not None:
+        _, tinv = np.unique(df_ss[fe_time_col].values, return_inverse=True)
+        tcounts = np.bincount(tinv).astype(float)
+    else:
+        tinv = tcounts = None
+    y_dm = _twoway_demean(df_ss["deposit_balance"].values.astype(float),
+                          entity_idx, ecounts, tinv, tcounts)
+    X = df_ss[state_cols].values.astype(float)
+    Z = df_ss["nr_lagged_dep"].values.astype(float)
+    CF = df_ss[CF_cols].values.astype(float) if has_cf else np.empty((len(df_ss), 0))
+    K, G = X.shape[1], CF.shape[1]
+
+    idx = [f"interaction_{sv}" if sv != "constant" else "nr_lagged_dep"
+           for sv in state_cols]
+    theta = np.asarray(pd.Series(theta_native).reindex(idx).values, float)
+    if not np.all(np.isfinite(theta)):
+        raise ValueError(f"theta_native missing entries for {idx}")
+
+    def _dm(M):
+        return _twoway_demean(M, entity_idx, ecounts, tinv, tcounts)
+
+    # --- profile gamma at theta-hat under the matching loss ---------------------------------
+    # r(theta, gamma) = y_dm - dm(phi(X theta) Z) - dm(CF) gamma  is linear in gamma.
+    phi_v = link_cdf(X @ theta, link)
+    u = y_dm - _dm(phi_v * Z)
+    if G > 0:
+        CF_dm = np.column_stack([_dm(CF[:, j]) for j in range(G)])
+        gamma, *_ = np.linalg.lstsq(CF_dm, u, rcond=None)
+        if loss == "cauchy":                    # IRLS with rho'(f^2) weights
+            for _it in range(25):
+                f = u - CF_dm @ gamma
+                wls = 1.0 / (1.0 + f * f)       # rho'(z) = 1/(1+z), z = f^2
+                sw = np.sqrt(wls)
+                g_new, *_ = np.linalg.lstsq(CF_dm * sw[:, None], u * sw, rcond=None)
+                if np.max(np.abs(g_new - gamma)) < 1e-10 * max(1.0, float(np.max(np.abs(gamma)))):
+                    gamma = g_new
+                    break
+                gamma = g_new
+    else:
+        CF_dm = np.empty((len(df_ss), 0))
+        gamma = np.empty(0)
+
+    psi = np.concatenate([theta, gamma])
+    f = _nlls_resid(psi, y_dm, X, Z, CF, entity_idx, link, ecounts, tinv, tcounts)
+
+    # --- analytic Jacobian of the residual ---------------------------------------------------
+    # dr/dtheta_k = -dm( g'(X theta) * X_k * Z );  dr/dgamma_j = -dm( CF_j )
+    gp = _link_density(X @ theta, link)
+    base = gp * Z
+    J = np.empty((len(df_ss), K + G))
+    for k in range(K):
+        J[:, k] = -_dm(base * X[:, k])
+    if G > 0:
+        J[:, K:] = -CF_dm
+
+    if fd_check:
+        rng_fd = np.random.default_rng(0)
+        sub = rng_fd.choice(len(df_ss), size=min(20000, len(df_ss)), replace=False)
+        worst = 0.0
+        for k in rng_fd.choice(K + G, size=min(3, K + G), replace=False):
+            h = 1e-6 * max(1.0, abs(psi[k]))
+            pp = psi.copy()
+            pp[k] += h
+            fd = (_nlls_resid(pp, y_dm, X, Z, CF, entity_idx, link,
+                              ecounts, tinv, tcounts) - f) / h
+            num = float(np.max(np.abs(fd[sub] - J[sub, k])))
+            den = max(1e-12, float(np.max(np.abs(J[sub, k]))))
+            worst = max(worst, num / den)
+        if worst > 1e-4:
+            raise RuntimeError(f"analytic Jacobian fails FD check (rel err {worst:.2e})")
+    else:
+        worst = np.nan
+
+    # --- psi-weighted M-estimator sandwich ---------------------------------------------------
+    if loss == "linear":
+        rho1 = np.ones(len(f))
+        w2 = np.ones(len(f))
+    elif loss == "cauchy":
+        z = f * f
+        rho1 = 1.0 / (1.0 + z)                              # rho'(z)
+        w2 = np.maximum((1.0 - z) / (1.0 + z) ** 2, 0.0)    # rho' + 2 rho'' z, clamped
+    else:
+        raise ValueError(f"unsupported loss {loss!r}")
+    score = J * (rho1 * f)[:, None]
+    foc = J.T @ (rho1 * f)
+    foc_norm = float(np.linalg.norm(foc) / max(1.0, float(np.linalg.norm(rho1 * f))))
+    bread = np.linalg.pinv((J * w2[:, None]).T @ J)
+
+    cl = df_ss["CodConglomeradoPrudencial"].astype(str)
+    cl_u, cl_inv = np.unique(cl.values, return_inverse=True)
+    n_cl = len(cl_u)
+    IF_full = _cluster_if(score, bread, cl_inv, n_cl)       # n_cl x (K+G)
+
+    return dict(IF_cl=IF_full[:, :K], gamma_hat=gamma, foc_norm=foc_norm,
+                cl_inv=cl_inv, n_cl=n_cl, theta=theta, idx=idx,
+                diag=dict(jac_fd_relerr=worst, n=len(df_ss), K=K, G=G,
+                          clamped_rows=int(np.sum(w2 <= 0.0))))
+
+
+def unconditional_phi_t_band(df, state_cols, has_cf, si_res, loss, degree=3,
+                             fe_time_col=None, B=400, scheme=None, seed=20240624,
+                             keep_draws=True):
+    """Joint (direction + link) national phi_t band for a stored fit_single_index result.
+
+    Per wild draw with ONE weight vector w per cluster:
+        theta_b = theta_hat + w @ IF_theta          (nlls_direction_if, at the stored solution)
+        re-standardize the index at theta_b         (vmu_b, vsd_b recomputed -- this makes the
+                                                     band exactly invariant to scale/shift
+                                                     noise in theta, as phi itself is)
+        b_hat(theta_b) by exact re-profiling        (one OLS on the original y)
+        total draw  = clip(vpow_b @ (b_hat(theta_b) + w @ IF_b)[:degree+1])
+        theta-only  = clip(vpow_b @  b_hat(theta_b)[:degree+1])
+        link-only   = clip(vpow   @ (b_full        + w @ IF_b)[:degree+1])   (no refit)
+
+    One refit per draw feeds all three variants. The link-only variant must reproduce the
+    stored conditional phi_t_boot (same seed, same B) -- the blocking correctness gate.
+    Returns a dict with the three band frames, per-draw diagnostics, meta, and (optionally)
+    the raw (B x nt) draw matrices."""
+    # Build the index name list from state_cols, NOT from si_res.params.index: `params` holds
+    # the AMEs, which OMIT the constant term (nr_lagged_dep) because a constant has no marginal
+    # effect, while params_native carries it. Subsetting params_native by the AME index
+    # therefore silently drops the constant from theta -- caught by the synthetic smoke test
+    # 2026-08-05, and it would have produced a 7-of-8-coefficient index on the real cells.
+    idx_expect = [f"interaction_{sv}" if sv != "constant" else "nr_lagged_dep"
+                  for sv in state_cols]
+    theta_ser = si_res.params_native.reindex(idx_expect)
+    if theta_ser.isna().any():
+        missing = [k for k in idx_expect if k not in si_res.params_native.index]
+        raise KeyError(f"params_native lacks {missing}; state_cols/fit mismatch")
+
+    dirif = nlls_direction_if(df, state_cols, has_cf, theta_ser, loss,
+                              link="logit", fe_time_col=fe_time_col)
+    IF_th, cl_inv, n_cl = dirif["IF_cl"], dirif["cl_inv"], dirif["n_cl"]
+    theta = dirif["theta"]
+
+    # --- rebuild the link stage at theta-hat, mirroring fit_single_index -------------------
+    CF_cols = ["v_hat_x_lagged_dep"] if has_cf else []
+    cols = state_cols + ["deposit_balance", "nr_lagged_dep", "entity_id"]
+    df_ss = df.dropna(subset=cols + CF_cols).copy()
+    X = _build_phi_X(df_ss, idx_expect)
+    Z = df_ss["nr_lagged_dep"].values.astype(float)
+    v = X @ theta
+    vmu, vsd = float(v.mean()), float(v.std())
+    if vsd <= 0:
+        vsd = 1.0
+    # fingerprint gates: the frame must reproduce the stored standardization
+    if abs(vmu - float(si_res.si_vmu)) > 1e-6 * max(1.0, abs(vmu)) or \
+       abs(vsd - float(si_res.si_vsd)) > 1e-6 * max(1.0, abs(vsd)):
+        raise RuntimeError(f"vmu/vsd fingerprint mismatch: rebuilt ({vmu:.10g},{vsd:.10g}) "
+                           f"vs stored ({si_res.si_vmu:.10g},{si_res.si_vsd:.10g}) -- data drift")
+    vs = (v - vmu) / vsd
+
+    _, einv = np.unique(df_ss["entity_id"].values, return_inverse=True)
+    ecounts = np.bincount(einv).astype(float)
+    if fe_time_col is not None:
+        _, tinv = np.unique(df_ss[fe_time_col].values, return_inverse=True)
+        tcounts = np.bincount(tinv).astype(float)
+    else:
+        tinv = tcounts = None
+
+    def _dm(M):
+        return _twoway_demean(M, einv, ecounts, tinv, tcounts)
+
+    y_dm = _dm(df_ss["deposit_balance"].values.astype(float))
+    Z_dm = _dm(Z)                                            # the d=0 column, never changes
+    if has_cf:
+        CF_raw = df_ss["v_hat_x_lagged_dep"].values.astype(float)
+        CF_dm = _dm(CF_raw)
+    ncols = degree + 1 + (1 if has_cf else 0)
+
+    def _profile(vs_loc):
+        """Exact link re-profile at a standardized index: demean the 3 changing columns,
+        assemble, one lstsq. Returns b_full (ncols,)."""
+        D = np.empty((len(df_ss), ncols))
+        D[:, 0] = Z_dm
+        for d in range(1, degree + 1):
+            D[:, d] = _dm((vs_loc ** d) * Z)
+        if has_cf:
+            D[:, degree + 1] = CF_dm
+        b, *_ = np.linalg.lstsq(D, y_dm, rcond=None)
+        return b
+
+    b_full = _profile(vs)
+    if np.max(np.abs(b_full[:degree + 1] - np.asarray(si_res.si_b, float))) > 1e-6:
+        raise RuntimeError(f"si_b fingerprint mismatch: refit {b_full[:degree+1]} "
+                           f"vs stored {np.asarray(si_res.si_b)} -- data drift")
+
+    # conditional-link IFs at theta-hat (mirrors fit_single_index :548-551)
+    D0 = np.empty((len(df_ss), ncols))
+    D0[:, 0] = Z_dm
+    for d in range(1, degree + 1):
+        D0[:, d] = _dm((vs ** d) * Z)
+    if has_cf:
+        D0[:, degree + 1] = CF_dm
+    resid0 = y_dm - D0 @ b_full
+    bread_b = np.linalg.pinv(D0.T @ D0)
+    IF_b = _cluster_if(D0 * resid0[:, None], bread_b, cl_inv, n_cl)
+
+    # TWO group structures from one draw loop. The per-draw REFIT is the expensive part and is
+    # independent of how phi is aggregated, so emitting both market keys costs one extra
+    # bincount per draw:
+    #   gs      MCA -- the market as defined in V_Main.tex:182; the reported deliverable.
+    #   gs_leg  CODMUN_IBGE -- the key every STORED band was built on. Needed so the link-only
+    #           variant can be checked against those bands bit-for-bit; that gate is what
+    #           proves this rebuild path is faithful, and it would be unavailable if the
+    #           aggregation changed at the same time as the statistics.
+    gs = _phi_t_group_struct(df_ss)
+    gs_leg = _phi_t_group_struct(df_ss, market_key="CODMUN_IBGE")
+    vpow0 = np.column_stack([vs ** d for d in range(degree + 1)])
+    phi_pt = np.clip(vpow0 @ b_full[:degree + 1], 0.0, 1.0)
+    pt = _agg_phi_t(phi_pt, gs)
+    pt_leg = _agg_phi_t(phi_pt, gs_leg)
+
+    # zero-weight reproduction gate
+    if float(np.max(np.abs(np.clip(vpow0 @ (b_full + 0.0 * IF_b[0])[:degree + 1], 0, 1)
+                           - phi_pt))) > 1e-12:
+        raise RuntimeError("zero-weight draw does not reproduce the point path")
+
+    _B, _scheme = boot_cfg()
+    B = int(B if B is not None else min(_B, 400))
+    scheme = scheme or _scheme
+    rng = np.random.default_rng(seed)
+    nt = gs["nt"]
+    draws_tot = np.empty((B, nt))
+    draws_th = np.empty((B, nt))
+    draws_ln = np.empty((B, nt))
+    draws_ln_leg = np.empty((B, gs_leg["nt"]))     # legacy key, for the reproduction gate only
+    diag_rows = []
+    n_fail = 0
+    for ib in range(B):
+        w = _wild_weights(n_cl, scheme, rng)
+        th_b = theta + w @ IF_th
+        v_b = X @ th_b
+        vmu_b, vsd_b = float(v_b.mean()), float(v_b.std())
+        flag_vsd = vsd_b <= 0
+        if flag_vsd:
+            vsd_b = 1.0
+        vs_b = (v_b - vmu_b) / vsd_b
+        try:
+            b_th = _profile(vs_b)
+            if not np.all(np.isfinite(b_th)):
+                raise FloatingPointError("non-finite b")
+        except Exception:
+            b_th = b_full.copy()
+            n_fail += 1
+        vpow_b = np.column_stack([vs_b ** d for d in range(degree + 1)])
+        db = w @ IF_b
+        phi_tot = np.clip(vpow_b @ (b_th + db)[:degree + 1], 0.0, 1.0)
+        phi_th = np.clip(vpow_b @ b_th[:degree + 1], 0.0, 1.0)
+        phi_ln = np.clip(vpow0 @ (b_full + db)[:degree + 1], 0.0, 1.0)
+        draws_tot[ib] = _agg_phi_t(phi_tot, gs)
+        draws_th[ib] = _agg_phi_t(phi_th, gs)
+        draws_ln[ib] = _agg_phi_t(phi_ln, gs)
+        draws_ln_leg[ib] = _agg_phi_t(phi_ln, gs_leg)
+        nth = float(np.linalg.norm(theta))
+        diag_rows.append(dict(
+            cos=float(theta @ th_b / max(1e-300, nth * float(np.linalg.norm(th_b)))),
+            vsd_ratio=vsd_b / vsd, b_shift=float(np.linalg.norm(b_th - b_full)),
+            clip_lo=float(np.mean((vpow_b @ (b_th + db)[:degree + 1]) < 0.0)),
+            clip_hi=float(np.mean((vpow_b @ (b_th + db)[:degree + 1]) > 1.0)),
+            vsd_flag=bool(flag_vsd)))
+        if (ib + 1) % 50 == 0:
+            print(f"    [uncond] draw {ib+1}/{B}", flush=True)
+    if n_fail:
+        print(f"  [uncond] WARNING {n_fail}/{B} refits failed (theta channel suppressed there)"
+              + ("  <-- DEGRADED" if n_fail > 0.01 * B else ""))
+
+    out = dict(
+        band_total=_band_from_draws(pt, draws_tot, gs["tuniq"], label="uncond total"),
+        band_theta_only=_band_from_draws(pt, draws_th, gs["tuniq"], label="uncond theta-only"),
+        band_link_only=_band_from_draws(pt, draws_ln, gs["tuniq"], label="uncond link-only"),
+        # legacy-key link-only: NOT for reporting -- it exists so the caller can check this
+        # rebuild against the stored CODMUN_IBGE conditional band.
+        band_link_only_legacy=_band_from_draws(pt_leg, draws_ln_leg, gs_leg["tuniq"],
+                                               label="uncond link-only [legacy key]"),
+        per_draw_diag=pd.DataFrame(diag_rows),
+        meta=dict(B=B, scheme=scheme, seed=seed, loss=loss, degree=degree,
+                  n=len(df_ss), n_cl=n_cl, n_fail=n_fail,
+                  foc_norm=dirif["foc_norm"], gamma_hat=dirif["gamma_hat"],
+                  dir_diag=dirif["diag"], vmu=vmu, vsd=vsd,
+                  theta=theta, idx=idx_expect, b_full=b_full,
+                  market_key="mca_code (V_Main:182); legacy variant on CODMUN_IBGE"))
+    if keep_draws:
+        out["draws"] = dict(total=draws_tot, theta_only=draws_th, link_only=draws_ln)
     return out

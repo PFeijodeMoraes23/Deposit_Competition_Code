@@ -399,13 +399,18 @@ def calculate_phis(df, res_dict, state_blocks):
         df[f'phi_mt_{key}'] = phi_mt
         # phi_t = sum_m phi_mt*M_mt / sum_m M_mt over MARKETS m (V_Main eq. below sec.4:
         # a market is an MCA, not a municipality).
-        market_agg = df.groupby(['year_quarter', 'mca_code'], observed=True).agg(phi_mt=(f'phi_mt_{key}', 'mean'), M_mt=('market_size', 'sum')).reset_index()
+        # WEIGHT = cell MEAN of market_size = the market's POPULATION (2026-08-05 fix).
+        # market_size is constant within a (quarter, MCA) cell, so the previous "sum"
+        # multiplied by the bank count -- pop x n_banks, not the stated estimand. 1.90pp
+        # level effect measured; see utils/sleep_links.phi_t_group_struct for the audit.
+        market_agg = df.groupby(['year_quarter', 'mca_code'], observed=True).agg(phi_mt=(f'phi_mt_{key}', 'mean'), M_mt=('market_size', 'mean')).reset_index()
         weighted_phi = market_agg['phi_mt'] * market_agg['M_mt']
         sum_weighted = weighted_phi.groupby(market_agg['year_quarter']).sum()
         sum_m_mt = market_agg['M_mt'].groupby(market_agg['year_quarter']).sum()
         national_agg = (sum_weighted / sum_m_mt.replace(0, np.nan)).fillna(0).reset_index(name=f'phi_t_{key}')
         # 95% wild-cluster band on the same aggregation convention as the point path above
-        # (market = mca_code, weight = M_mt summed over banks). See utils.sleep_links.
+        # (market = mca_code, weight = population). attach_phi_band's self-check asserts the
+        # band's point path reproduces the series above, so the two cannot drift again.
         if Zcols:
             from utils.sleep_links import attach_phi_band
             national_agg = attach_phi_band(national_agg, ss_res, np.column_stack(Zcols),

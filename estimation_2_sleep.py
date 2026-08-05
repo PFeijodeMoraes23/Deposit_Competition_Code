@@ -386,16 +386,20 @@ def calculate_pooled_phis(df, res_dict, state_blocks):
         safe_key = model_key.replace(' ', '_').replace('.', '')
         df[f'phi_mt_{safe_key}'] = phi_mt
         # phi_t = sum_m phi_mt*M_mt / sum_m M_mt over MARKETS m (a market is an MCA).
+        # WEIGHT = cell MEAN of market_size = the market's POPULATION (2026-08-05 fix).
+        # market_size is constant within a (quarter, MCA) cell, so the previous "sum"
+        # multiplied by the bank count -- pop x n_banks, which has no counterpart in the
+        # model and shifted the reported LEVEL by 1.90pp (est6 spec 12 audit). "mean"
+        # aligns this series with the stored E5-E8 bands and with demand prep's own phi_t.
         market_agg = df.groupby(['year_quarter', 'mca_code'], observed=True).agg(
-            phi_mt=(f'phi_mt_{safe_key}', 'mean'), M_mt=('market_size', 'sum')).reset_index()
+            phi_mt=(f'phi_mt_{safe_key}', 'mean'), M_mt=('market_size', 'mean')).reset_index()
         weighted_phi = market_agg['phi_mt'] * market_agg['M_mt']
         national_agg = (weighted_phi.groupby(market_agg['year_quarter']).sum() /
                         market_agg['M_mt'].groupby(market_agg['year_quarter']).sum().replace(0, np.nan)
                         ).fillna(0).reset_index(name=f'phi_t_{safe_key}')
         # 95% wild-cluster band on the national path, on the SAME aggregation convention the
-        # point series above uses (market = mca_code, weight = M_mt summed over banks), so the
-        # two cannot drift apart. They did for Est5-Est8: those bands are built on a pop-only
-        # weight and sit 1.5-2.2 pp away from the phi_t they ship beside (2026-08-04).
+        # point series above uses (market = mca_code, weight = population); attach_phi_band's
+        # self-check asserts the two agree, so they cannot silently drift apart again.
         if Zcols:
             from utils.sleep_links import attach_phi_band
             national_agg = attach_phi_band(national_agg, ss_res, np.column_stack(Zcols),
