@@ -64,11 +64,94 @@ function load_Z(ctx::CFDemandCtx; sidecar::Union{Nothing,DataFrame}=nothing)
     absent = setdiff(Z_COST_COLS, cols)
     isempty(absent) || @warn "  [ψ] Z cost-shifter(s) MISSING from the panel — γ is identified " *
                              "WITHOUT them and their effect loads onto ω: $(absent)"
+    # ---- Missing / non-finite: impute the WITHIN-TYPE MEDIAN, not 0.0 -----------------------
+    # Until 2026-08-06 this was `coalesce(v, 0.0)` plus `replace!(Inf => 0.0)`. For a COST RATIO
+    # zero is not a neutral filler — it reads as "this bank has zero personnel cost" — so every
+    # unobserved row entered γ̂ as an extreme-LOW observation, pulling the slope. It was ~2,094
+    # rows per column on demand_6_spec_12 (0.28%), small but systematically signed, and invisible
+    # because 0.0 is a perfectly plausible-looking value.
+    # The within-type median is the natural filler here: it is the same B/D split the winsorising
+    # below uses (D balance sheets differ from B by construction), it is robust to the very tail
+    # this function then clips, and imputing at the median means those rows contribute no
+    # leverage to γ̂ instead of contributing wrong leverage.
+    # (polfunc leaves them NaN and statsmodels drops the rows; the BBL cannot drop rows because ψ
+    # is per-observation, so imputation is the only option here.)
+    isB_all = "is_B" in names(df) ? BitVector(Bool.(coalesce.(df.is_B, false))) : trues(nrow(df))
     Z = zeros(nrow(df), length(cols))
     for (i, c) in enumerate(cols)
-        v = Float64.(coalesce.(df[!, c], 0.0)); replace!(v, Inf=>0.0, -Inf=>0.0)
+        raw = df[!, c]
+        v = Float64[(x === missing || x === nothing) ? NaN : Float64(x) for x in raw]
+        replace!(v, Inf => NaN, -Inf => NaN)          # ±Inf is missing information, not a value
+        bad = .!isfinite.(v)
+        if any(bad)
+            nimp = 0
+            for grp in (true, false)
+                rows = findall(isB_all .== grp)
+                isempty(rows) && continue
+                good = [v[r] for r in rows if isfinite(v[r])]
+                isempty(good) && continue
+                med = median(good)
+                for r in rows
+                    isfinite(v[r]) || (v[r] = med; nimp += 1)
+                end
+            end
+            # Anything still non-finite has no finite value anywhere in its own type group.
+            leftover = count(!isfinite, v)
+            leftover == 0 || (v[.!isfinite.(v)] .= 0.0)
+            log_status("  [ψ] $c: imputed $nimp non-finite obs at the within-type median" *
+                       (leftover == 0 ? "" : " ($leftover had no finite value in-type → 0.0)"))
+        end
         Z[:, i] .= v
     end
+
+    # ---- WINSORIZE, matching estimation_bbl_1_polfunc.py -----------------------------------
+    # Until 2026-08-06 the BBL read these RAW while polfunc winsorized the same columns at the
+    # 1st/99th percentile within firm type — so the policy function and the cost equation were
+    # fitted on DIFFERENT versions of the same regressors, and γ̂ was not what the write-up
+    # described. Measured on demand_6_spec_12 (n=755,438) before this fix:
+    #     personnel_cost_ratio_lag  p99 0.0109  max   1.995   (183x p99)
+    #     admin_cost_ratio_lag      p99 0.0110  max   4.567   (415x p99)
+    #     indice_basileia_lag       p99 21.21   max  53093.6  (2503x p99)
+    # and **93.1% of Σx² for the Basel ratio came from 0.034% of rows** — i.e. γ̂ was set by ~257
+    # observations, dominated by one. The extremes are all is_B=false (digital) banks: capital
+    # over near-zero risk-weighted assets, a divide-by-tiny artifact, not a real capital ratio
+    # (p50 = 16.4, so the column is a PERCENT and anything >100 is implausible).
+    # polfunc's own note records the consequence: the corrupt tail "drives the point estimates and
+    # collapses the wild-cluster-bootstrap SEs (the Basel row printed 0.0001 with a 0.0000 SE at
+    # *** before this was applied)". Same rule here, same reason.
+    # WITHIN-type is the point: B and D have genuinely different balance sheets, so pooled
+    # percentiles would clip real cross-type variation instead of the corrupt tail.
+    # BBL_WINSOR_Z=0 restores the raw columns (for a with/without comparison).
+    if get(ENV, "BBL_WINSOR_Z", "1") == "1"
+        pct = try parse(Float64, get(ENV, "BBL_WINSOR_PCT", "0.01")) catch; 0.01 end
+        isB = isB_all      # same B/D split the median imputation above used — keep them in step
+        "is_B" in names(df) || @warn "  [ψ] no is_B column — imputing and winsorizing Z POOLED, " *
+                                     "not within type"
+        for (i, c) in enumerate(cols)
+            nclip = 0; before = maximum(view(Z, :, i))
+            for grp in (true, false)
+                rows = findall(isB .== grp)
+                length(rows) < 100 && continue          # too few for stable percentiles
+                s = view(Z, rows, i)
+                lo, hi = quantile(s, pct), quantile(s, 1 - pct)
+                (isfinite(lo) && isfinite(hi) && lo < hi) || continue
+                for r in rows
+                    z = Z[r, i]
+                    zc = clamp(z, lo, hi)
+                    zc == z || (nclip += 1)
+                    Z[r, i] = zc
+                end
+            end
+            nclip == 0 || log_status("  [ψ] winsorized $c: $nclip obs, max " *
+                                     "$(round(before, sigdigits=6)) → $(round(maximum(view(Z,:,i)), sigdigits=6))")
+        end
+        log_status("  [ψ] Z winsorized at $(round(100*pct, digits=1))%/$(round(100*(1-pct), digits=1))% within firm type " *
+                   "(matches estimation_bbl_1_polfunc.py)")
+    else
+        @warn "  [ψ] BBL_WINSOR_Z=0 — Z cost-shifters RAW; γ̂ will be driven by the corrupt tail " *
+              "and is NOT comparable to the policy function's regressors."
+    end
+
     log_status("  [ψ] Z cost-shifters: $(cols)")
     return Z, cols
 end

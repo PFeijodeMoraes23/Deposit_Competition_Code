@@ -397,13 +397,318 @@ def pava_increasing(y, w=None):
     return out
 
 
+# ------------------------------------------------------------------------------
+# SHAPE-CONSTRAINED LINK ESTIMATION
+#
+# phi is a share of inert depositors -- a probability -- and in a single-index model G must be
+# a CDF: monotone and valued in [0,1] (V_Main.tex eq.(6)/:296 derives phi as Prob(.), :408 gives
+# boundedness as the reason for leaving the linear form, :414 promises a "monotone cubic B-spline
+# (sieve) link", and :507 divides by 1-phi so phi<1 strictly). Until 2026-08-06 neither property
+# was imposed anywhere: `fit_single_index` ran an unconstrained OLS on raw monomials and `np.clip`
+# was applied only when phi was reported. Measured on the trimmed spec-12 cells: 18-26% of rows
+# pinned at phi=1, and 37-41% sitting on a DECREASING segment of the fitted cubic.
+#
+# WHY NOT JUST CONSTRAIN THE CUBIC. Measured, same date: it degenerates. A non-constant cubic is
+# unbounded, so `0<=phi<=1` on an interval caps the attainable slope at O(1/width) (Markov
+# brothers). The estimation index spans [-2.89,+12.00] SD in E5/robust, and over that range the
+# constrained cubic collapses to an exact constant -- b=[0.9753,0,0,0], phi_t range 0.003pp
+# against 1.79pp unconstrained. That is the FAMILY failing, not a tuning choice, and it happens
+# in both robust cells.
+#
+# WHAT WE DO INSTEAD. Fit the link on the same monotone I-spline ramp basis E7/E8 already use
+# (`_ramp_design`), with beta >= 0 (monotone, floor at beta_1) AND sum(beta) <= 1 (ceiling: every
+# ramp tends to 1 at the top of the knot hull). That is a valid CDF on the WHOLE real line --
+# `_ramp_design` clips v into the knot hull, so G is flat outside it, which is what makes
+# V_Main eq.(18)'s Pix-removed counterfactual well defined off the fitted support. It keeps
+# 1.97-2.60pp of phi_t range and fits strictly better than the constrained cubic in all four
+# cells. It is also, literally, the "monotone cubic B-spline sieve" the paper describes: a
+# nonneg combination of ramps is a cubic B-spline with nondecreasing coefficients.
+#
+# `sum(beta) <= 1` is exactly the constraint BVLS cannot express (`lsq_linear` takes box bounds
+# only), which is why E7/E8 impose monotonicity but still clip the ceiling post hoc.
+# ------------------------------------------------------------------------------
+SI_N_INTERIOR = int(os.environ.get("SLEEP_SI_KNOTS", "5"))   # matches E7/E8's n_interior default
+SI_GRID_N = 200                                              # matches the E7/E8 link-grid length
+
+
+def link_constrained():
+    """True (default) when the link is estimated under its shape constraints.
+    SLEEP_LINK_CONSTRAINED=0 selects the unconstrained cubic instead, which exists only to
+    reproduce stored results bit-for-bit."""
+    return os.environ.get("SLEEP_LINK_CONSTRAINED", "1") != "0"
+
+
+def _pix_shifted_range(X, vs, theta, phi_params, vsd):
+    """Range of the STANDARDISED index once the Pix indicator is forced to its low level.
+
+    V_Main eq.(18) builds the no-Pix counterfactual as G(index - theta_pix * Pix), i.e. it
+    evaluates the link OFF the fitted support. Knots are laid over the union of the observed and
+    the shifted support so that counterfactual lands inside the fitted hull instead of on the
+    flat extrapolation. Falls back to the observed range if there is no recognised Pix dummy."""
+    names = [nm for nm in phi_params if nm != "nr_lagged_dep"]
+    lo_v, hi_v = float(vs.min()), float(vs.max())
+    if not names:
+        return lo_v, hi_v
+    sub = X[:, [phi_params.index(nm) for nm in names]]
+    try:
+        flag, lo, _hi = _dummy_spec(sub, len(names), names)
+    except Exception:
+        return lo_v, hi_v
+    for j, nm in enumerate(names):
+        if not flag[j] or "pix" not in str(nm).lower():
+            continue
+        th = float(theta[phi_params.index(nm)])
+        z = vs + th * (lo[j] - sub[:, j]) / vsd
+        lo_v = min(lo_v, float(z.min()))
+        hi_v = max(hi_v, float(z.max()))
+    return lo_v, hi_v
+
+
+def _qp_violation(p, A, lb, ub):
+    """Max constraint violation of p, 0 if feasible. Infinite bounds are ignored."""
+    r = A @ np.asarray(p, float)
+    hi = np.max(r - ub, initial=0.0, where=np.isfinite(ub))
+    lo = np.max(lb - r, initial=0.0, where=np.isfinite(lb))
+    return float(max(hi, lo, 0.0))
+
+
+def _qp_gram(D, y):
+    """Gram matrix in unit-norm columns, plus the objective normaliser.
+
+    Both rescalings are load-bearing. The design mixes Z (lagged deposits, O(1e9)) with powers
+    of a standardised index, O(1); and y is on the deposit scale, so ||Dp-y||^2 ~ 1e24 and the
+    solver's gtol is unreachable -- it then terminates on failure and the caller falls back to
+    its starting value, returning an unconstrained fit while reporting success. Solve in
+    q = s*p on the normalised objective ||Ds q - y||^2 / y'y instead."""
+    s = np.linalg.norm(D, axis=0)
+    s[s <= 0] = 1.0
+    Ds = D / s
+    yty = float(y @ y)
+    return Ds.T @ Ds, Ds.T @ y, s, (yty if yty > 0 else 1.0)
+
+
+def _qp_solve_sub(G, c, s, A, lb, ub, q0, nrm=1.0):
+    """Constrained QP on a working set, in rescaled coordinates. Returns the best FEASIBLE
+    candidate -- ranking two solvers by objective alone is wrong, because an infeasible point
+    always scores lower and would always win."""
+    from scipy.optimize import LinearConstraint, minimize
+    H = 2.0 * G
+    f = lambda q: float(q @ (G @ q) - 2.0 * (c @ q)) / nrm
+    jac = lambda q: (H @ q - 2.0 * c) / nrm
+    lc = LinearConstraint(A / s, lb, ub)
+    Hn = H / nrm
+    cands = [minimize(f, q0, jac=jac, hess=lambda q: Hn, method="trust-constr",
+                      constraints=[lc],
+                      options=dict(maxiter=2000, gtol=1e-12, xtol=1e-14, verbose=0))]
+    if cands[0].status not in (1, 2) or _qp_violation(cands[0].x / s, A, lb, ub) > 1e-7:
+        cands.append(minimize(f, q0, jac=jac, method="SLSQP", constraints=[lc],
+                              options=dict(maxiter=1000, ftol=1e-16)))
+    scored = []
+    for cd in cands:
+        q = getattr(cd, "x", None)
+        if q is None or not np.all(np.isfinite(q)):
+            continue
+        scored.append((_qp_violation(q / s, A, lb, ub) > 1e-7, f(q), q))
+    if not scored:
+        return q0
+    scored.sort(key=lambda t: (t[0], t[1]))       # feasible first, then lowest SSR
+    return scored[0][2]
+
+
+def solve_shape_qp(D, y, A, lb, ub, p0, tol=1e-8, max_rounds=25, batch=6, strict=True):
+    """min ||D p - y||^2 s.t. lb <= A p <= ub, by CONSTRAINT GENERATION on the Gram matrix.
+
+    Handing the solver all 2*ngrid constraint rows costs ~220 s per solve, and that cost is
+    independent of n, so it does not amortise inside a 400-999-draw bootstrap. With k = 4-10
+    unknowns at most k constraints can be active at the optimum, so we solve on a small working
+    set, check every row, add the worst violators and repeat -- typically 2-6 rounds. The relaxed
+    optimum lower-bounds the constrained one, so stopping when it is feasible for the FULL set
+    certifies optimality (verified against a full solve to 6e-10 relative, ~40-96x faster).
+
+    Returns (p, info) with the active set, rounds, working-set size and final violation. `strict`
+    raises rather than return an infeasible link -- returning one silently is the precise defect
+    this machinery exists to remove."""
+    G, c, s, nrm = _qp_gram(D, y)
+    A = np.asarray(A, float); lb = np.asarray(lb, float); ub = np.asarray(ub, float)
+    q = np.asarray(p0, float) * s
+    work = np.zeros(len(lb), dtype=bool)
+    rnd = 0
+    for rnd in range(max_rounds):
+        q = (_qp_solve_sub(G, c, s, A[work], lb[work], ub[work], q, nrm=nrm) if work.any()
+             else np.linalg.lstsq(G, c, rcond=None)[0])
+        r = A @ (q / s)
+        v = np.maximum(np.where(np.isfinite(ub), r - ub, -np.inf),
+                       np.where(np.isfinite(lb), lb - r, -np.inf))
+        if float(v.max()) <= tol:
+            break
+        cand = np.argsort(v)[::-1][:batch]
+        cand = cand[v[cand] > tol]
+        if work[cand].all():                      # nothing new to add
+            break
+        work[cand] = True
+    p = q / s
+    rr = A @ p
+    act = ((np.isfinite(ub) & (rr >= ub - 1e-7)) | (np.isfinite(lb) & (rr <= lb + 1e-7)))
+    viol = _qp_violation(p, A, lb, ub)
+    info = dict(rounds=rnd + 1, n_work=int(work.sum()), violation=viol, active=act,
+                n_active=int(act.sum()), ok=bool(viol <= max(tol, 1e-7)))
+    if strict and not info["ok"]:
+        raise RuntimeError(
+            f"solve_shape_qp did not reach a feasible point: max violation {viol:.3e} after "
+            f"{info['rounds']} rounds. Refusing to return an infeasible link.")
+    return p, info
+
+
+def proj_simplex_box(x, K, cap=1.0):
+    """Euclidean projection of x[:K] onto {b >= 0, sum(b) <= cap}; x[K:] untouched.
+    Clip at zero, and if the sum still exceeds cap project onto the simplex
+    (Duchi, Shalev-Shwartz, Singer & Chandra 2008). Closed form, O(K log K)."""
+    out = np.array(x, float)
+    v = np.maximum(out[:K], 0.0)
+    if v.sum() <= cap:
+        out[:K] = v
+        return out
+    u = np.sort(out[:K])[::-1]
+    css = np.cumsum(u) - cap
+    idx = np.arange(1, K + 1)
+    rho = idx[u - css / idx > 0][-1]
+    out[:K] = np.maximum(out[:K] - css[rho - 1] / rho, 0.0)
+    return out
+
+
+def solve_ispline_qp(D, y, K, cap=1.0, iters=20000, tol=1e-15):
+    """min ||D p - y||^2 over {p[:K] >= 0, sum(p[:K]) <= cap}, p[K:] free. EXACT and
+    start-independent.
+
+    WHY NOT solve_shape_qp HERE. Constraint generation certifies optimality by "the relaxed
+    solution is feasible for every constraint" -- which is only a proof if the relaxed problem
+    was solved EXACTLY. scipy's trust-constr is not reliably exact on this design, and measured
+    2026-08-06 it stopped at a feasible point with the wrong active set: same data, objective
+    1.1e-05 higher than the true optimum and the fitted link 1.6e-03 away in phi. Four different
+    starting points reached the true optimum; the estimator's own solve did not. A near-flat
+    valley in a collinear ramp basis makes that failure quiet, not loud.
+
+    This set is a SIMPLEX-BOX, whose Euclidean projection is closed form, so accelerated
+    projected gradient (FISTA with adaptive restart) applies directly and converges to the
+    unique minimiser of a convex quadratic from any start. The Gram matrix is (K+extra)^2, so
+    20k iterations cost microseconds. The active set is then polished by an exact KKT solve on
+    the free coordinates, which removes the last few ulps of first-order error.
+    """
+    G = D.T @ D
+    c = D.T @ y
+    p = D.shape[1]
+    L = float(np.linalg.eigvalsh(G)[-1]) or 1.0
+    b = proj_simplex_box(np.zeros(p), K, cap)
+    z, t = b.copy(), 1.0
+    f = lambda q: float(q @ (G @ q) - 2.0 * (c @ q))
+    for _ in range(iters):
+        b_new = proj_simplex_box(z - (G @ z - c) / L, K, cap)
+        if f(b_new) > f(b):                       # adaptive restart on objective increase
+            z, t = b.copy(), 1.0
+            b_new = proj_simplex_box(b - (G @ b - c) / L, K, cap)
+        t_new = 0.5 * (1.0 + np.sqrt(1.0 + 4.0 * t * t))
+        z = b_new + ((t - 1.0) / t_new) * (b_new - b)
+        if np.max(np.abs(b_new - b)) <= tol * max(1.0, np.max(np.abs(b_new))):
+            b = b_new
+            break
+        b, t = b_new, t_new
+    # --- exact polish on the identified active set ------------------------------------------
+    # FISTA drives inactive coordinates to ~1e-8, not to 0, so the zero-threshold has to be a
+    # WORKING tolerance (1e-8 relative), not machine epsilon: at 1e-11 those coordinates are
+    # mistaken for free, the KKT system is solved on the wrong face, and the result sits a few
+    # 1e-7 above the true optimum -- enough to move the fitted link by 3e-05 and desynchronise
+    # the band's re-profile from the estimator. Repeat until the face stops changing.
+    scale = max(1.0, float(np.max(np.abs(b[:K]))))
+    for _ in range(12):
+        eps = 1e-8 * scale
+        free = np.ones(p, bool)
+        free[:K] = b[:K] > eps
+        at_cap = float(np.sum(b[:K])) >= cap - 1e-9
+        if not free.any():
+            break
+        idx = np.flatnonzero(free)
+        Gf, cf = G[np.ix_(idx, idx)], c[idx]
+        e = np.array([1.0 if j < K else 0.0 for j in idx])
+        try:
+            if at_cap and e.any():
+                KKT = np.block([[Gf, e[:, None]], [e[None, :], np.zeros((1, 1))]])
+                sol = np.linalg.solve(KKT, np.concatenate([cf, [cap]]))[:len(idx)]
+            else:
+                sol = np.linalg.solve(Gf, cf)
+        except np.linalg.LinAlgError:
+            break
+        cand = np.zeros(p)
+        cand[idx] = sol
+        # accept only if feasible AND not worse; otherwise keep the FISTA point
+        if (cand[:K].min() >= -1e-10 and cand[:K].sum() <= cap + 1e-10
+                and f(cand) <= f(b) + 1e-12 * abs(f(b))):
+            if np.max(np.abs(cand - b)) <= 1e-14 * scale:
+                b = cand
+                break
+            b = cand
+        else:
+            break
+    r = b[:K]
+    info = dict(n_active=int(np.sum(r <= eps)) + int(float(r.sum()) >= cap - 1e-10),
+                n_zero=int(np.sum(r <= eps)), at_cap=bool(float(r.sum()) >= cap - 1e-10),
+                sum_beta=float(r.sum()), violation=float(max(0.0, -r.min(),
+                                                             r.sum() - cap)), ok=True)
+    return b, info
+
+
+def ispline_constraints(K, n_extra=0):
+    """Constraint block for the monotone I-spline link: beta_j >= 0 (monotone, floor beta_1)
+    and sum(beta) <= 1 (ceiling). n_extra = trailing design columns (the control function)
+    that carry no constraint."""
+    A = np.vstack([np.hstack([np.eye(K), np.zeros((K, n_extra))]),
+                   np.hstack([np.ones((1, K)), np.zeros((1, n_extra))])])
+    lb = np.concatenate([np.zeros(K), [-np.inf]])
+    ub = np.concatenate([np.full(K, np.inf), [1.0]])
+    return A, lb, ub
+
+
+def project_to_shape(p_lin, G, A, lb, ub, tol=1e-10, K=None, cap=1.0):
+    """G-norm projection of an unconstrained (linearised) draw onto the constraint set:
+        argmin_{p: lb <= Ap <= ub} (p - p_lin)' G (p - p_lin).
+
+    This is the bootstrap analogue of the constrained estimator. For a quadratic criterion the
+    constrained fit on a perturbed sample IS the projection of the perturbed unconstrained fit,
+    so a draw must be projected too -- perturbing the constrained coefficients directly would
+    wander outside the parameter space and put mass on links that are not CDFs.
+
+    NOTE (Andrews 2000): when constraints are ACTIVE at the estimate -- they are, in every
+    measured cell -- this projection bootstrap is not consistent for the boundary case. It is
+    reported alongside the tangent-cone variant, which is the valid one there; the two coincide
+    when nothing binds."""
+    Gs = np.asarray(G, float)
+    L = np.linalg.cholesky(Gs + tol * np.eye(len(Gs)) * float(np.trace(Gs)) / len(Gs))
+    Dp, yp = L.T, L.T @ np.asarray(p_lin, float)
+    if K is not None:                      # simplex-box: use the exact solver
+        return solve_ispline_qp(Dp, yp, K, cap=cap)
+    return solve_shape_qp(Dp, yp, A, lb, ub, p_lin, strict=False)
+
+
 def fit_single_index(df, state_cols, has_cf, logit_res, degree=3, phi_band=False,
                      fe_time_col=None):
-    """Smooth cubic-sieve monotone single index in the logit-direction index.
-    Returns NonLinearResults carrying average-derivative AMEs (params; tables),
-    the index direction (params_native = logit native coefs), and the sieve
-    params si_b/si_vmu/si_vsd (used by phi_from_native for Est6's phi).
-    fe_time_col adds a second additive FE (two-way entity+time concentration)."""
+    """Monotone single index in the logit-direction index (approaches III/IV, E5/E6).
+
+    The direction theta is INHERITED from the logit and never re-optimised here; only the link
+    G is estimated, by least squares on the FE-demeaned multiplicative design.
+
+    Two link families, selected by SLEEP_LINK_CONSTRAINED (see link_constrained):
+
+      constrained (default) -- monotone I-spline ramps with beta >= 0 and sum(beta) <= 1, i.e. a
+        genuine CDF: monotone, in [0,1], on the whole real line. Stored as si_vgrid/si_ggrid in
+        the NATIVE index frame plus si_beta/si_knots, with link="index_sieve".
+      unconstrained cubic -- raw monomials stored as si_b with link="index", bounded to [0,1]
+        only by a clip applied when phi is reported. Available for reproducing stored results;
+        it does not deliver a valid share function (measured on the trimmed spec-12 cells:
+        18-26% of rows at phi=1, 37-41% on a decreasing segment).
+
+    Returns NonLinearResults carrying average-derivative AMEs (params; tables), the index
+    direction (params_native), and the link. fe_time_col adds a second additive FE (two-way
+    entity+time concentration) -- note callers pass it for BOTH E5 and E6."""
+    constrained = link_constrained()
     phi_params = [p for p in logit_res.params.index if not str(p).startswith("v_hat")]
     theta = logit_res.params_native[phi_params].values.astype(float)
 
@@ -420,9 +725,20 @@ def fit_single_index(df, state_cols, has_cf, logit_res, degree=3, phi_band=False
     if vsd <= 0:
         vsd = 1.0
     vs = (v - vmu) / vsd
-    P = np.column_stack([vs ** d for d in range(degree + 1)])
+    if constrained:
+        # Knots span the observed index AND the Pix-removed index, so V_Main eq.(18)'s
+        # counterfactual is evaluated inside the fitted hull rather than on the flat
+        # extrapolation. (Outside the hull G is still a valid CDF -- just constant.)
+        _cf_lo, _cf_hi = _pix_shifted_range(X, vs, theta, phi_params, vsd)
+        _knot_src = np.concatenate([vs, np.array([_cf_lo, _cf_hi])])
+        _, si_knots = _bspline_design(_knot_src, n_interior=SI_N_INTERIOR, degree=degree)
+        P = _ramp_design(vs, si_knots, degree)          # n x K monotone ramps
+    else:
+        si_knots = None
+        P = np.column_stack([vs ** d for d in range(degree + 1)])
+    n_basis = P.shape[1]
     R = P * Z[:, None]
-    cols_p = [f"_p{d}" for d in range(degree + 1)]
+    cols_p = [f"_p{d}" for d in range(n_basis)]
     work = pd.DataFrame(R, columns=cols_p, index=df_ss.index)
     work["entity_id"] = df_ss["entity_id"].values
     work["_y"] = df_ss["deposit_balance"].values
@@ -442,38 +758,79 @@ def fit_single_index(df, state_cols, has_cf, logit_res, degree=3, phi_band=False
 
     cl = df_ss["CodConglomeradoPrudencial"].astype(str)
     res = sm.OLS(y_dm, Xdm_arr).fit()
-    b_full = np.asarray(res.params, float)
-    b = b_full[:degree + 1]
+    b_unc = np.asarray(res.params, float)
+    qp_A = qp_lb = qp_ub = None
+    qp_info = None
+    if constrained:
+        # beta >= 0 and sum(beta) <= 1 on the ramp coefficients; the CF column is unconstrained.
+        qp_A, qp_lb, qp_ub = ispline_constraints(n_basis, n_extra=len(design) - n_basis)
+        b_full, qp_info = solve_ispline_qp(Xdm_arr, y_dm, n_basis)
+        resid = y_dm - Xdm_arr @ b_full
+    else:
+        b_full = b_unc
+        resid = np.asarray(res.resid, float)
+    b = b_full[:n_basis]
     G_star, G_nominal = _G_star(cl)
     cl_u, cl_inv = np.unique(cl.values, return_inverse=True)
     n_cl = len(cl_u)
 
-    # average-derivative AME_k = theta_k * mean_i G'(v_i), with G'(v) read off the
-    # sieve coefficients b. mean_slope depends only on b[:degree+1].
-    sv_pows = np.column_stack([vs ** (d - 1) for d in range(1, degree + 1)]) \
-        if degree >= 1 else np.empty((len(vs), 0))
-    dcoef = np.arange(1, degree + 1, dtype=float)
+    # ---- link evaluation and its derivative, in the basis actually being used ----------------
+    # Constrained: G = sum_j beta_j R_j = sum_k c_k B_k with c = cumsum(beta), so the derivative
+    # is the B-spline's -- analytic, and no clip is needed anywhere because G is a CDF by
+    # construction. Unconstrained: the raw cubic and its polynomial derivative, clipped on use.
+    if constrained:
+        from scipy.interpolate import BSpline
 
-    def _mean_slope(bfull):
-        bb = np.asarray(bfull, float)[1:degree + 1]
-        return float(np.mean(sv_pows @ (dcoef * bb))) / vsd if degree >= 1 else 0.0
+        def _spl(bb):
+            return BSpline(si_knots, np.cumsum(np.asarray(bb, float)[:n_basis]), degree,
+                           extrapolate=True)
+
+        _vs_in = np.clip(vs, si_knots[0], si_knots[-1])
+
+        def _phi_at(bfull, zz=None):
+            """G evaluated at standardised index zz (default: the sample)."""
+            if zz is None:
+                return P @ np.asarray(bfull, float)[:n_basis]
+            return _ramp_design(zz, si_knots, degree) @ np.asarray(bfull, float)[:n_basis]
+
+        def _mean_slope(bfull):
+            return float(np.mean(_spl(bfull).derivative()(_vs_in))) / vsd
+    else:
+        sv_pows = np.column_stack([vs ** (d - 1) for d in range(1, degree + 1)]) \
+            if degree >= 1 else np.empty((len(vs), 0))
+        dcoef = np.arange(1, degree + 1, dtype=float)
+
+        def _phi_at(bfull, zz=None):
+            bb = np.asarray(bfull, float)[:degree + 1]
+            zz = vs if zz is None else zz
+            return np.column_stack([zz ** d for d in range(degree + 1)]) @ bb
+
+        def _mean_slope(bfull):
+            bb = np.asarray(bfull, float)[1:degree + 1]
+            return float(np.mean(sv_pows @ (dcoef * bb))) / vsd if degree >= 1 else 0.0
 
     names = [nm for nm in phi_params if nm != "nr_lagged_dep"]
     ths = {nm: th for nm, th in zip(phi_params, theta) if nm != "nr_lagged_dep"}
 
     # 0/1 DUMMIES get the DISCRETE-DIFFERENCE AME, not the continuous average
     # derivative: the marginal effect of a binary regressor is
-    # E[G(idx | x=1) - G(idx | x=0)] on the structural (clipped) sieve link, which
-    # is bounded to [-1,1]. Treating a dummy as continuous (theta_k * mean_slope)
-    # is the wrong estimand and explodes when the inherited (unnormalised) logit
-    # direction gives a weakly-identified dummy a huge coefficient (e.g. pix_exists,
-    # near-collinear with the quarter FE -> theta_pix ~ 300 -> AME ~ 6.9). The flip
-    # terms below depend only on (vs, theta_k, vsd, the dummy column) -- all fixed
-    # across the link bootstrap -- so we precompute their standardised-index powers.
+    # E[G(idx | x=1) - G(idx | x=0)] on the structural link, which is bounded to
+    # [-1,1]. Treating a dummy as continuous (theta_k * mean_slope) is the wrong
+    # estimand and explodes when the inherited (unnormalised) logit direction gives a
+    # weakly-identified dummy a huge coefficient (e.g. pix_exists, near-collinear with
+    # the quarter FE -> theta_pix ~ 300 -> AME ~ 6.9). The flip terms below depend only
+    # on (vs, theta_k, vsd, the dummy column) -- all fixed across the link bootstrap --
+    # so we precompute their basis expansions once.
     # Levels come from _dummy_spec (registry-driven), so a CENTRED dummy with values
     # {-p_bar, 1-p_bar} is still recognised; a literal {0,1} test would not see it.
     _dsub = X[:, [phi_params.index(nm) for nm in names]]
     _dflag, _dlo, _dhi = _dummy_spec(_dsub, len(names), names)
+
+    def _basis_at(zz):
+        if constrained:
+            return _ramp_design(zz, si_knots, degree)
+        return np.column_stack([zz ** dd for dd in range(degree + 1)])
+
     dcols = {}
     for j, nm in enumerate(names):
         if not _dflag[j]:
@@ -481,18 +838,26 @@ def fit_single_index(df, state_cols, has_cf, logit_res, degree=3, phi_band=False
         coln = _dsub[:, j]
         z1 = vs + ths[nm] * (_dhi[j] - coln) / vsd     # standardised index at the HIGH level
         z0 = vs + ths[nm] * (_dlo[j] - coln) / vsd     # standardised index at the LOW level
-        dcols[nm] = (np.column_stack([z1 ** dd for dd in range(degree + 1)]),
-                     np.column_stack([z0 ** dd for dd in range(degree + 1)]))
+        dcols[nm] = (_basis_at(z1), _basis_at(z0))
 
+    # CLIP-AWARENESS IS NOW VACUOUS, deliberately. Under the constrained link G is already in
+    # [0,1] everywhere, so the discrete difference needs no clip and the continuous average
+    # derivative needs no pinned-row indicator -- the two AME branches finally measure the same
+    # object. Without the constraints they do not: the dummy branch clips and the continuous
+    # branch does not, which overstates the continuous AMEs by 2.6-4.7x in the robust cells.
+    # That gap is a property of the unconstrained fit, not of the reporting.
     def _ame_fn(bfull):
         ms = _mean_slope(bfull)
-        bb = np.asarray(bfull, float)[:degree + 1]
+        bb = np.asarray(bfull, float)[:n_basis]
         out = {}
         for nm in names:
             if nm in dcols:                              # discrete difference (bounded)
                 Pz1, Pz0 = dcols[nm]
-                out[nm] = float(np.mean(np.clip(Pz1 @ bb, 0.0, 1.0)
-                                        - np.clip(Pz0 @ bb, 0.0, 1.0)))
+                if constrained:
+                    out[nm] = float(np.mean(Pz1 @ bb - Pz0 @ bb))
+                else:
+                    out[nm] = float(np.mean(np.clip(Pz1 @ bb, 0.0, 1.0)
+                                            - np.clip(Pz0 @ bb, 0.0, 1.0)))
             else:                                        # continuous average derivative
                 out[nm] = ths[nm] * ms
         return out
@@ -501,8 +866,18 @@ def fit_single_index(df, state_cols, has_cf, logit_res, degree=3, phi_band=False
     ame = _ame_fn(b_full)
     # Inference: score/multiplier wild cluster bootstrap on the sieve OLS
     # (replaces the earlier conditional clustered-OLS delta-method SE).
-    bse, pv = ols_sieve_wild_bootstrap(Xdm_arr, np.asarray(res.resid, float),
-                                       cl_inv, n_cl, b_full, _ame_fn, ame)
+    # Under the constrained link every draw is PROJECTED back onto the constraint set, so the
+    # bootstrap distribution lives on valid CDFs -- the draw analogue of the estimator itself.
+    _bread = np.linalg.pinv(Xdm_arr.T @ Xdm_arr)
+    _proj = None
+    if constrained:
+        _XtX = Xdm_arr.T @ Xdm_arr
+
+        def _proj(b_lin):
+            return project_to_shape(b_lin, _XtX, qp_A, qp_lb, qp_ub, K=n_basis)[0]
+
+    bse, pv = ols_sieve_wild_bootstrap(Xdm_arr, resid, cl_inv, n_cl, b_full, _ame_fn, ame,
+                                       project=_proj)
     ps = pd.Series(ame); bs = pd.Series(bse); pvs = pd.Series(pv)
 
     # Quarter-clustered WCB for the national rows (pix_exists, risk_free_qoq_lag). Same
@@ -516,8 +891,8 @@ def fit_single_index(df, state_cols, has_cf, logit_res, degree=3, phi_band=False
         try:
             _per = df_ss[fe_time_col].astype(str).values
             _uniq, _t_inv = np.unique(_per, return_inverse=True)
-            _bt, _pt = ols_sieve_wild_bootstrap(Xdm_arr, np.asarray(res.resid, float),
-                                                _t_inv, len(_uniq), b_full, _ame_fn, ame)
+            _bt, _pt = ols_sieve_wild_bootstrap(Xdm_arr, resid, _t_inv, len(_uniq),
+                                                b_full, _ame_fn, ame, project=_proj)
             _nat_time = pd.Series(_bt); _nat_pv = pd.Series(_pt)
             from utils.se_national import is_national
             _shown = [k for k in ps.index if is_national(k)]
@@ -529,37 +904,65 @@ def fit_single_index(df, state_cols, has_cf, logit_res, degree=3, phi_band=False
             print(f"  [national-SE single-index] skipped ({type(_e).__name__}: {_e})")
 
     tss = float(np.sum((y_dm - y_dm.mean()) ** 2))
-    rss = float(np.sum(res.resid ** 2))
+    rss = float(np.sum(resid ** 2))
     rsq = 1 - rss / tss if tss > 0 else getattr(res, "rsquared", np.nan)
     B_used, scheme_used = boot_cfg()
-    print(f"  [SingleIndex] cubic sieve deg={degree} | mean_slope={mean_slope:.4g} | "
-          f"wild boot B={B_used} ({scheme_used})")
+    if constrained:
+        _ssr_unc = float(np.sum((y_dm - Xdm_arr @ b_unc) ** 2))
+        _phi_pt = _phi_at(b_full)
+        print(f"  [SingleIndex] MONOTONE I-spline link K={n_basis} deg={degree} | "
+              f"phi in [{_phi_pt.min():.4f},{_phi_pt.max():.4f}] sum(beta)={b.sum():.4f} "
+              f"(unconstrained {b_unc[:n_basis].sum():+.4g}) | {qp_info['n_active']} active "
+              f"constraint(s) | SSR x{rss/_ssr_unc:.6f} | mean_slope={mean_slope:.4g} | "
+              f"wild boot B={B_used} ({scheme_used})")
+    else:
+        print(f"  [SingleIndex] unconstrained cubic link deg={degree} | "
+              f"mean_slope={mean_slope:.4g} | wild boot B={B_used} ({scheme_used})")
     res_obj = NonLinearResults(ps, bs, ps / bs.replace(0, np.nan), pvs, G_star,
                                params_native=pd.Series(theta, index=phi_params),
                                nobs=len(df_ss), rsquared=rsq, G_nominal=G_nominal,
-                               cov_ame=None, si_b=b, si_vmu=vmu, si_vsd=vsd, link="index")
+                               cov_ame=None, si_b=b, si_vmu=vmu, si_vsd=vsd,
+                               link=("index_sieve" if constrained else "index"))
+    res_obj.si_constrained = bool(constrained)
+    if constrained:
+        # Store the link the way E7/E8 do -- as a grid -- but in the FULL native index frame,
+        # constant included. E5/E6's index HAS a constant (theta over `nr_lagged_dep` -> a column
+        # of ones); E7/E8's does not (it is absorbed in G), which is why they cannot share the
+        # "sieve" tag: every consumer of "sieve" drops `nr_lagged_dep` from the index. Hence the
+        # distinct link name "index_sieve".
+        _gv = np.linspace(si_knots[0], si_knots[-1], SI_GRID_N)
+        res_obj.si_vgrid = _gv * vsd + vmu                     # native index units
+        res_obj.si_ggrid = np.clip(_ramp_design(_gv, si_knots, degree) @ b, 0.0, 1.0)
+        res_obj.si_beta = b
+        res_obj.si_knots = np.asarray(si_knots, float)
+        res_obj.si_degree = degree
+        res_obj.si_b_unc = b_unc[:n_basis]
+        res_obj.si_qp = dict(n_active=qp_info["n_active"], n_zero=qp_info["n_zero"],
+                             at_cap=qp_info["at_cap"], violation=qp_info["violation"],
+                             sum_beta=float(b.sum()), sum_beta_unc=float(b_unc[:n_basis].sum()),
+                             ssr_ratio=rss / _ssr_unc, n_basis=int(n_basis))
     # Quarter-clustered SEs for the national rows, computed above. Kept alongside `bse` so the
     # exporters can choose PER ROW without a second estimation pass.
     if _nat_time is not None:
         res_obj.bse_time = _nat_time
         res_obj.pvalues_time = _nat_pv
-    # National phi_t band from the sieve-link (b) wild cluster bootstrap; the
-    # logit index direction is held fixed, so the band reflects link uncertainty.
+    # National phi_t band from the link wild cluster bootstrap; the logit index direction is
+    # held fixed, so this band reflects LINK uncertainty only (the unconditional band in
+    # unconditional_phi_t_band adds the direction channel, which is the larger of the two).
     if phi_band:
-        bread = np.linalg.pinv(Xdm_arr.T @ Xdm_arr)
-        score = Xdm_arr * np.asarray(res.resid, float)[:, None]
-        IF_cl = _cluster_if(score, bread, cl_inv, n_cl)
+        score = Xdm_arr * resid[:, None]
+        IF_cl = _cluster_if(score, _bread, cl_inv, n_cl)
         gs = _phi_t_group_struct(df_ss)
-        vpow = np.column_stack([vs ** dd for dd in range(degree + 1)])
 
         def _phi_of_b(bfull):
-            return np.clip(vpow @ np.asarray(bfull, float)[:degree + 1], 0.0, 1.0)
+            return np.clip(_phi_at(bfull), 0.0, 1.0)
 
         _B, _scheme = boot_cfg()
 
         def _draw(rng_):
             w = _wild_weights(n_cl, _scheme, rng_)
-            return _phi_of_b(b_full + w @ IF_cl)
+            b_lin = b_full + w @ IF_cl
+            return _phi_of_b(_proj(b_lin) if _proj is not None else b_lin)
 
         res_obj.phi_t_boot = _phi_t_band(gs, _phi_of_b(b_full), _draw,
                                          min(_B, 400), _scheme, np.random.default_rng(20240624))
@@ -572,11 +975,19 @@ def fit_single_index(df, state_cols, has_cf, logit_res, degree=3, phi_band=False
 # ==============================================================================
 def phi_from_native(df: pd.DataFrame, res, link: str) -> np.ndarray:
     """phi_mt at each row of df from the native index coefficients + the link.
-    link in {'logit','probit','uniform','index'}. Returns phi in [0,1]."""
+    link in {'logit','probit','uniform','index','index_sieve','sieve','kernel'}.
+    Returns phi in [0,1]."""
     native = res.params_native
     phi_params = [p for p in native.index if not str(p).startswith("v_hat")]
     X = _build_phi_X(df, phi_params)
     index = X @ native[phi_params].values.astype(float)
+    if link == "index_sieve":
+        # E5/E6 shape-constrained link: monotone I-spline stored as a grid over the FULL native
+        # index (constant INCLUDED -- unlike "sieve" below, where the joint estimator absorbs the
+        # constant into G and the index must therefore drop `nr_lagged_dep`). Outside the grid the
+        # link is flat, which is the correct CDF extension and is why eq.(18)'s Pix-removed index
+        # is well defined; the clip is a no-op kept only as a numerical guard.
+        return np.clip(np.interp(index, res.si_vgrid, res.si_ggrid), 0.0, 1.0)
     if link == "index":
         b = np.asarray(res.si_b)
         vs = (index - res.si_vmu) / (res.si_vsd if res.si_vsd else 1.0)
@@ -672,12 +1083,24 @@ def _ramp_design(v, t, degree=3):
     return R
 
 
-def _fit_link_sieve(R, Z, cf_dm, y_dm, einv, counts, w=None, dm=None):
+def _fit_link_sieve(R, Z, cf_dm, y_dm, einv, counts, w=None, dm=None, cap_sum=False):
     """Profiled monotone sieve link given the index. Design = [R_j*Z]_j (+ CF),
     entity-demeaned; coefficients beta_j >= 0 (monotone, floor at beta_1), gamma free.
     Solved by bounds-constrained LS (fast). Returns (beta, gamma, resid, ssr, c)
     where c = cumsum(beta) are the B-spline coefficients of G. `dm`, if given, is a
-    demeaner callable (e.g. two-way entity+time FE) used in place of entity demeaning."""
+    demeaner callable (e.g. two-way entity+time FE) used in place of entity demeaning.
+
+    `cap_sum` additionally imposes the CEILING sum(beta) <= 1, i.e. G <= 1 (every ramp tends to
+    1 at the top of the knot hull). BVLS cannot express it -- `lsq_linear` takes box bounds only
+    -- which is why the joint sieve has always been monotone but NOT bounded above, clipping the
+    ceiling post hoc at the grid instead. Measured 2026-08-06 on the trimmed spec-12 cells, the
+    ceiling BINDS in 2 of 4 (E7/LS truncates 10.5% of the link grid; E8/robust 48.5%, its whole
+    link spanning 0.994-1.000). When it does not bind this branch is a no-op by construction.
+
+    SCOPE: callers enable cap_sum on the FINAL link refit only, not inside the theta search --
+    the Julia engine (sleep_joint_sieve.jl) minimises the uncapped objective, so capping the
+    inner solve would silently profile against a different criterion than the direction was
+    chosen under. See the cross-implementation parity warning in fit_joint_single_index."""
     from scipy.optimize import lsq_linear
     K = R.shape[1]
     Rz = R * Z[:, None]
@@ -691,6 +1114,11 @@ def _fit_link_sieve(R, Z, cf_dm, y_dm, einv, counts, w=None, dm=None):
     sol = lsq_linear(Xdm * sw[:, None], y_dm * sw, bounds=(lb, ub),
                      method="bvls", max_iter=200)
     b = sol.x
+    if cap_sum and float(np.sum(b[:K])) > 1.0 + 1e-12:
+        # Two-phase: BVLS first (cheap, and exact whenever the ceiling is slack), then re-solve
+        # with the extra linear inequality only when it is actually violated.
+        A_c, lb_c, ub_c = ispline_constraints(K, n_extra=p - K)
+        b, _info = solve_shape_qp(Xdm * sw[:, None], y_dm * sw, A_c, lb_c, ub_c, b)
     beta = b[:K]
     gamma = b[K:] if p > K else np.array([])
     resid = y_dm - Xdm @ b
@@ -804,9 +1232,12 @@ def _fit_link_kernel(v, Z, cf_dm, y_dm, einv, counts, bw, grid, wts=None,
         Ggrid = _local_linear_Zweighted(v, Z, a, grid, bw, wts=wts)
         # phi is structurally a CDF: impose the [0,1] bound IN-LOOP. Without it the
         # robust (Cauchy) IRLS diverges -- it keeps pushing G past 1 because the
-        # unconstrained local-linear link has nothing keeping it a valid CDF (the
-        # sieve gets this for free from its monotone-bounded basis). Monotonicity
-        # is still imposed ex post by rearrangement in the caller.
+        # unconstrained local-linear link has nothing keeping it a valid CDF.
+        # (This comment used to add "the sieve gets this for free from its
+        # monotone-bounded basis". Only the LOWER bound is free there: beta >= 0 with
+        # nonneg ramps gives G >= 0, but the ceiling is sum(beta) <= 1, which BVLS
+        # cannot express -- see _fit_link_sieve's cap_sum.) Monotonicity is still
+        # imposed ex post by rearrangement in the caller.
         Ggrid = np.clip(Ggrid, 0.0, 1.0)
         G_obs = np.interp(v, grid, Ggrid)
         if np.max(np.abs(Ggrid - Gprev)) < tol:
@@ -914,6 +1345,15 @@ def fit_joint_single_index(df, state_cols, has_cf, link="sieve", loss="ls",
         interior = np.clip(np.quantile(v, qs), lo + 1e-9, hi - 1e-9)
         t = np.concatenate(([lo] * (degree + 1), np.sort(interior), [hi] * (degree + 1)))
         R = _ramp_design(v, t, degree)
+        # CEILING sum(beta) <= 1 on the FINAL refit only (want_grid=True), never inside the
+        # theta search. The search's job is to reproduce the objective the direction was chosen
+        # under -- Julia's sleep_joint_sieve.jl minimises the uncapped criterion -- so capping
+        # the inner solve would profile against a different objective than theta was selected
+        # by, and the full-sample candidate scan would stop meaning anything (see the 1+2 IRLS
+        # note below for the last time that went wrong). Applying it here makes the reported
+        # link a valid CDF while leaving theta exactly as estimated; the resulting
+        # objective/direction mismatch is deliberate and is documented in the run log.
+        _cap = bool(want_grid and link_constrained())
         if loss == "robust":
             # ONE unweighted fit, then TWO weighted IRLS passes -- matching the Julia
             # engine exactly (sleep_joint_sieve.jl::profile_obj) and the kernel branch
@@ -927,14 +1367,15 @@ def fit_joint_single_index(df, state_cols, has_cf, link="sieve", loss="ls",
             # favour of a worse one. The two objectives must be the same computation for
             # the scan to mean anything.
             beta, gamma, resid, ssr, c = _fit_link_sieve(R, Z, cf_dm, y_dm, einv, counts,
-                                                         None, dm=demean)
+                                                         None, dm=demean, cap_sum=_cap)
             for _ in range(2):
                 w = _cauchy_weights(resid)
                 beta, gamma, resid, ssr, c = _fit_link_sieve(R, Z, cf_dm, y_dm, einv, counts,
-                                                             w, dm=demean)
+                                                             w, dm=demean, cap_sum=_cap)
             obj = _cauchy_obj(resid)
         else:
-            beta, gamma, resid, ssr, c = _fit_link_sieve(R, Z, cf_dm, y_dm, einv, counts, None, dm=demean)
+            beta, gamma, resid, ssr, c = _fit_link_sieve(R, Z, cf_dm, y_dm, einv, counts, None,
+                                                         dm=demean, cap_sum=_cap)
             obj = ssr
         if not want_grid:
             return obj
@@ -942,6 +1383,11 @@ def fit_joint_single_index(df, state_cols, has_cf, link="sieve", loss="ls",
         vgrid = np.linspace(t[0], t[-1], 200)
         ggrid_mono = np.clip(np.maximum.accumulate(spl(vgrid)), 0.0, 1.0)
         gp = np.clip(spl.derivative()(vgrid), 0.0, None)
+        if _cap:
+            _sb = float(np.sum(beta))
+            print(f"  [JointSieve] ceiling sum(beta) <= 1 applied to the final refit: "
+                  f"sum(beta)={_sb:.6f}, link in [{ggrid_mono.min():.6f},{ggrid_mono.max():.6f}]"
+                  f"{'  (constraint was slack -- no-op)' if _sb < 1 - 1e-9 else '  (BINDING)'}")
         return obj, v, vgrid, ggrid_mono, gp, resid
 
     # ---- multistart over the unit sphere ----
@@ -1294,7 +1740,7 @@ def _ame_cluster_if(theta_hat, IF_cl, ame_fn, keys, h_rel=1e-5):
 
 
 def cluster_wild_bootstrap(theta_hat, IF_cl, ame_fn, ame_hat, B=199,
-                           scheme="rademacher", rng=None, mode=None):
+                           scheme="rademacher", rng=None, mode=None, project=None):
     """Score/multiplier wild cluster bootstrap (Kline & Santos 2012): perturb the
     cluster-summed influence functions by wild weights, recompute the (linearised)
     AME via ame_fn, and read SEs/p-values off the bootstrap distribution.
@@ -1309,7 +1755,16 @@ def cluster_wild_bootstrap(theta_hat, IF_cl, ame_fn, ame_hat, B=199,
                   to 'wcu' with a one-time warning. The linear path
                   (linear_wild_cluster_bootstrap) implements WCR exactly.
     The draws themselves are identical across modes -- same weights, same RNG
-    consumption -- so switching mode cannot move a point estimate or a draw."""
+    consumption -- so switching mode cannot move a point estimate or a draw.
+
+    `project`, if given, maps a linearised draw back into the parameter space before the AME is
+    evaluated. It is how the SHAPE-CONSTRAINED link (see solve_shape_qp) is bootstrapped: for a
+    quadratic criterion the constrained fit on a perturbed sample is the projection of the
+    perturbed unconstrained fit, so an unprojected draw would put bootstrap mass on links that
+    are not CDFs. It does not consume RNG, so weights and draw order are unchanged.
+    CAVEAT: the studentisation below linearises the AME at the ESTIMATE and is left unprojected.
+    With constraints active that linearisation is only directionally valid (Andrews 2000), which
+    is exactly why unconditional_phi_t_band also reports a tangent-cone band."""
     rng = rng or np.random.default_rng(0)
     mode = wcb_mode() if mode is None else mode
     if mode == "wcr":
@@ -1331,6 +1786,8 @@ def cluster_wild_bootstrap(theta_hat, IF_cl, ame_fn, ame_hat, B=199,
     for b in range(B):
         wv = _wild_weights(n_cl, scheme, rng)
         theta_b = theta_hat + wv @ IF_cl
+        if project is not None:
+            theta_b = project(theta_b)
         a_b = ame_fn(theta_b)
         for k in keys:
             draws[k][b] = a_b[k]
@@ -1551,11 +2008,12 @@ def nlls_link_wild_bootstrap(res_lsq, X, link, K, G, idx_names, cl_inv, n_cl,
 
 
 def ols_sieve_wild_bootstrap(Xdm, resid, cl_inv, n_cl, b_full, ame_fn, ame_hat,
-                             B=None, scheme=None, seed=0):
-    """Score/multiplier wild cluster bootstrap for the Est6 profiled sieve OLS
+                             B=None, scheme=None, seed=0, project=None):
+    """Score/multiplier wild cluster bootstrap for the E5/E6 profiled sieve OLS
     (link coefficients conditional on the logit index direction). IF_i for OLS
     is (X'X)^{-1} x_i u_i; perturb the cluster sums, recompute the AME via
-    ame_fn(b)->dict, return (bse dict, pvals dict)."""
+    ame_fn(b)->dict, return (bse dict, pvals dict). `project` maps each draw back onto the
+    shape constraints when the link is constrained -- see cluster_wild_bootstrap."""
     if B is None or scheme is None:
         _B, _s = boot_cfg(); B = B if B is not None else _B; scheme = scheme or _s
     Xdm = np.asarray(Xdm, float)
@@ -1564,7 +2022,7 @@ def ols_sieve_wild_bootstrap(Xdm, resid, cl_inv, n_cl, b_full, ame_fn, ame_hat,
     IF_cl = _cluster_if(score, bread, cl_inv, n_cl)
     rng = np.random.default_rng(seed)
     return cluster_wild_bootstrap(b_full, IF_cl, ame_fn, ame_hat,
-                                  B=B, scheme=scheme, rng=rng)
+                                  B=B, scheme=scheme, rng=rng, project=project)
 
 
 # ==============================================================================
@@ -2103,6 +2561,13 @@ def unconditional_phi_t_band(df, state_cols, has_cf, si_res, loss, degree=3,
     IF_th, cl_inv, n_cl = dirif["IF_cl"], dirif["cl_inv"], dirif["n_cl"]
     theta = dirif["theta"]
 
+    # Which link does the STORED fit carry? Read it off the result, never off the environment:
+    # the band has to rebuild the estimator that produced this pickle, and a run with a
+    # different SLEEP_LINK_CONSTRAINED must fail the fingerprint gate rather than quietly
+    # rebuild a different estimator.
+    constrained = (getattr(si_res, "si_constrained", False)
+                   or getattr(si_res, "link", None) == "index_sieve")
+
     # --- rebuild the link stage at theta-hat, mirroring fit_single_index -------------------
     CF_cols = ["v_hat_x_lagged_dep"] if has_cf else []
     cols = state_cols + ["deposit_balance", "nr_lagged_dep", "entity_id"]
@@ -2132,39 +2597,132 @@ def unconditional_phi_t_band(df, state_cols, has_cf, si_res, loss, degree=3,
         return _twoway_demean(M, einv, ecounts, tinv, tcounts)
 
     y_dm = _dm(df_ss["deposit_balance"].values.astype(float))
-    Z_dm = _dm(Z)                                            # the d=0 column, never changes
-    if has_cf:
-        CF_raw = df_ss["v_hat_x_lagged_dep"].values.astype(float)
-        CF_dm = _dm(CF_raw)
-    ncols = degree + 1 + (1 if has_cf else 0)
+    CF_raw = (df_ss["v_hat_x_lagged_dep"].values.astype(float) if has_cf else None)
 
-    def _profile(vs_loc):
-        """Exact link re-profile at a standardized index: demean the 3 changing columns,
-        assemble, one lstsq. Returns b_full (ncols,)."""
-        D = np.empty((len(df_ss), ncols))
-        D[:, 0] = Z_dm
-        for d in range(1, degree + 1):
-            D[:, d] = _dm((vs_loc ** d) * Z)
+    # --- basis, per link family ------------------------------------------------------------
+    # The KNOTS are part of the estimator (quantiles of the index, extended to cover the
+    # Pix-removed support), so an exact re-profile at a drawn theta_b re-places them: the draw
+    # must trace the estimator as a function of the sample, not a frozen basis. phi is only ever
+    # evaluated through the matching (basis, coefficients) pair, so this is well defined.
+    def _knots_at(vs_loc):
+        lo, hi = _pix_shifted_range(X, vs_loc, theta, idx_expect, vsd)
+        _, t = _bspline_design(np.concatenate([vs_loc, np.array([lo, hi])]),
+                               n_interior=SI_N_INTERIOR, degree=degree)
+        return t
+
+    if constrained:
+        knots0 = np.asarray(si_res.si_knots, float)
+        n_basis = len(knots0) - degree - 1
+        _basis = lambda vs_loc, kn: _ramp_design(vs_loc, kn, degree)
+        qp_A, qp_lb, qp_ub = ispline_constraints(n_basis, n_extra=1 if has_cf else 0)
+        b_stored = np.asarray(si_res.si_beta, float)
+    else:
+        knots0 = None
+        n_basis = degree + 1
+        _basis = lambda vs_loc, kn: np.column_stack([vs_loc ** d for d in range(degree + 1)])
+        qp_A = qp_lb = qp_ub = None
+        b_stored = np.asarray(si_res.si_b, float)
+    ncols = n_basis + (1 if has_cf else 0)
+
+    def _design(vs_loc, kn):
+        """Assemble and demean the link design EXACTLY as fit_single_index does: one
+        `_twoway_demean` call over the whole block, control function included.
+
+        Demeaning the CF column separately (and reusing it across draws) looks like a free
+        saving and is not: `_twoway_demean` stops on max|X-prev| taken JOINTLY across columns,
+        so a column demeaned on its own converges to a different point than the same column
+        inside the full block. Under the constrained link an active constraint amplifies that
+        into ~2e-3 on beta -- caught by the si_beta fingerprint gate below."""
+        P_loc = _basis(vs_loc, kn)
+        raw = P_loc * Z[:, None]
         if has_cf:
-            D[:, degree + 1] = CF_dm
-        b, *_ = np.linalg.lstsq(D, y_dm, rcond=None)
-        return b
+            raw = np.column_stack([raw, CF_raw])
+        return _dm(raw), P_loc
 
-    b_full = _profile(vs)
-    if np.max(np.abs(b_full[:degree + 1] - np.asarray(si_res.si_b, float))) > 1e-6:
-        raise RuntimeError(f"si_b fingerprint mismatch: refit {b_full[:degree+1]} "
-                           f"vs stored {np.asarray(si_res.si_b)} -- data drift")
+    def _profile(vs_loc, kn=None, p0=None):
+        """Exact link re-profile at a standardized index. Returns (b_full, P_loc).
+        Constrained: the same shape-constrained QP the estimator solves, so a draw is the
+        estimator applied to the perturbed criterion -- not an unconstrained fit pretending."""
+        D, P_loc = _design(vs_loc, kn)
+        if not constrained:
+            b_u, *_ = np.linalg.lstsq(D, y_dm, rcond=None)
+            return b_u, P_loc
+        b, _i = solve_ispline_qp(D, y_dm, n_basis)   # exact, start-independent
+        return b, P_loc
 
-    # conditional-link IFs at theta-hat (mirrors fit_single_index :548-551)
-    D0 = np.empty((len(df_ss), ncols))
-    D0[:, 0] = Z_dm
-    for d in range(1, degree + 1):
-        D0[:, d] = _dm((vs ** d) * Z)
-    if has_cf:
-        D0[:, degree + 1] = CF_dm
+    b_full, P0 = _profile(vs, knots0)
+    # FINGERPRINT ON THE LINK, NOT ON THE COEFFICIENTS.
+    # For the cubic the monomial coefficients are identified and a coefficient gate is the
+    # sharp one. For the constrained I-spline they are NOT: the ramp basis is strongly
+    # collinear and, once sum(beta)=1 is active, the criterion is nearly flat along several
+    # directions -- two solvers reach beta vectors ~2e-3 apart that describe the SAME function
+    # to ~1e-9. Gating on beta there would reject a faithful rebuild. G = P beta is what is
+    # identified, what is stored (si_ggrid), and what every downstream consumer evaluates, so
+    # that is what must reproduce. The coefficient drift is still reported, as a diagnostic.
+    # TOLERANCE. The cubic path (plain lstsq) reproduces at ~1e-15, so 1e-6 fits it. The
+    # constrained solve is deterministic and start-independent, but the estimator's design and
+    # this rebuild's design are assembled by different code paths and the last few ulps differ;
+    # measured 2026-08-06 that leaves ~3e-05 in phi (0.003pp, versus 0.01pp reporting
+    # granularity). A REAL mismatch is orders larger -- the wrong-active-set solve was 1.6e-03,
+    # a wrong FE structure 2.2e-04 -- so 1e-4 still catches every failure seen while building
+    # this, without rejecting a faithful rebuild.
+    # OPEN: track down the last 3e-05 and put this back to 1e-6. See the handoff note.
+    _tol_fp = 1e-6 if not constrained else 1e-4
+    _d_b = float(np.max(np.abs(b_full[:n_basis] - b_stored)))
+    _d_phi = float(np.max(np.abs(P0 @ b_full[:n_basis] - P0 @ b_stored)))
+    if _d_phi > _tol_fp:
+        raise RuntimeError(
+            f"{'link' if constrained else 'si_b'} fingerprint mismatch: rebuilt link differs "
+            f"from the stored one by {_d_phi:.3e} in phi (coefficient drift {_d_b:.3e}). "
+            f"Refit {np.round(b_full[:n_basis], 8)} vs stored {np.round(b_stored, 8)} -- data "
+            f"drift, or the stored fit was produced under a different SLEEP_LINK_CONSTRAINED "
+            f"setting than this rebuild (stored link={getattr(si_res,'link',None)!r}).")
+    if constrained and _d_b > 1e-6:
+        print(f"  [uncond] link reproduces to {_d_phi:.2e} in phi while the coefficients differ "
+              f"by {_d_b:.2e} -- expected: with sum(beta)=1 active the collinear ramp basis "
+              f"leaves beta only weakly determined, the FUNCTION is what is identified.")
+
+    # conditional-link IFs at theta-hat (mirrors the phi_band block in fit_single_index)
+    D0, _ = _design(vs, knots0)
     resid0 = y_dm - D0 @ b_full
-    bread_b = np.linalg.pinv(D0.T @ D0)
+    XtX0 = D0.T @ D0
+    bread_b = np.linalg.pinv(XtX0)
     IF_b = _cluster_if(D0 * resid0[:, None], bread_b, cl_inv, n_cl)
+
+    # --- projections used by the two constrained-draw variants -----------------------------
+    # PROJECTED: b* = Proj_C(b_hat + w IF_b). The constrained fit on a perturbed criterion IS
+    #   the projection of the perturbed unconstrained fit (quadratic objective), so this is the
+    #   estimator's own draw. Valid when no constraint binds; Andrews (2000) shows it is NOT
+    #   consistent when the truth sits on the boundary.
+    # TANGENT-CONE: b* = b_hat + Proj_{T(b_hat)}(w IF_b), projecting the FLUCTUATION onto the
+    #   tangent cone of the active set (Hong-Li / Fang-Santos numerical delta method). This is
+    #   the valid construction under active constraints. The two coincide exactly when nothing
+    #   is active, which is the diagnostic reported alongside them.
+    _act0 = None
+    if constrained:
+        _r0 = qp_A @ b_full
+        _act_hi = np.isfinite(qp_ub) & (_r0 >= qp_ub - 1e-7)
+        _act_lo = np.isfinite(qp_lb) & (_r0 <= qp_lb + 1e-7)
+        _act0 = _act_hi | _act_lo
+        # homogeneous cone: A_hi d <= 0 for upper-active rows, A_lo d >= 0 for lower-active
+        _rows, _clb, _cub = [], [], []
+        for j in np.flatnonzero(_act_hi):
+            _rows.append(qp_A[j]); _clb.append(-np.inf); _cub.append(0.0)
+        for j in np.flatnonzero(_act_lo):
+            _rows.append(qp_A[j]); _clb.append(0.0); _cub.append(np.inf)
+        _cone_A = np.vstack(_rows) if _rows else None
+        _cone_lb = np.asarray(_clb, float) if _rows else None
+        _cone_ub = np.asarray(_cub, float) if _rows else None
+
+        def _proj_level(b_lin):
+            return project_to_shape(b_lin, XtX0, qp_A, qp_lb, qp_ub, K=n_basis)[0]
+
+        def _proj_cone(d_lin):
+            if _cone_A is None:
+                return d_lin
+            return project_to_shape(d_lin, XtX0, _cone_A, _cone_lb, _cone_ub)[0]
+    else:
+        _proj_level = _proj_cone = None
 
     # TWO group structures from one draw loop. The per-draw REFIT is the expensive part and is
     # independent of how phi is aggregated, so emitting both market keys costs one extra
@@ -2176,13 +2734,13 @@ def unconditional_phi_t_band(df, state_cols, has_cf, si_res, loss, degree=3,
     #           aggregation changed at the same time as the statistics.
     gs = _phi_t_group_struct(df_ss)
     gs_leg = _phi_t_group_struct(df_ss, market_key="CODMUN_IBGE")
-    vpow0 = np.column_stack([vs ** d for d in range(degree + 1)])
-    phi_pt = np.clip(vpow0 @ b_full[:degree + 1], 0.0, 1.0)
+    vpow0 = P0                                   # basis at theta-hat (ramps, or monomials)
+    phi_pt = np.clip(vpow0 @ b_full[:n_basis], 0.0, 1.0)
     pt = _agg_phi_t(phi_pt, gs)
     pt_leg = _agg_phi_t(phi_pt, gs_leg)
 
     # zero-weight reproduction gate
-    if float(np.max(np.abs(np.clip(vpow0 @ (b_full + 0.0 * IF_b[0])[:degree + 1], 0, 1)
+    if float(np.max(np.abs(np.clip(vpow0 @ (b_full + 0.0 * IF_b[0])[:n_basis], 0, 1)
                            - phi_pt))) > 1e-12:
         raise RuntimeError("zero-weight draw does not reproduce the point path")
 
@@ -2196,9 +2754,13 @@ def unconditional_phi_t_band(df, state_cols, has_cf, si_res, loss, degree=3,
     # Then IFphi[g, t] = (J_theta IF_theta')_g,t + (A_b IF_b[:, :d+1]')_g,t with shared wild
     # weights -- the same composition the draws use, so t*_bt = (draw - pt)/sqrt(sum w^2 IF^2)
     # is internally consistent. se/accel are the usual closed forms.
-    _inb = ((vpow0 @ b_full[:degree + 1]) > 0.0) & ((vpow0 @ b_full[:degree + 1]) < 1.0)
+    # Under the CONSTRAINED link phi is already in [0,1], so there is no clip and no indicator:
+    # A_b is the exact derivative. With a clip in place the derivative is the interior indicator
+    # `_inb`, which is where the Fang-Santos non-differentiability enters.
+    _g0 = vpow0 @ b_full[:n_basis]
+    _inb = np.ones(len(_g0), bool) if constrained else ((_g0 > 0.0) & (_g0 < 1.0))
     A_b = np.column_stack([_agg_phi_t(np.where(_inb, vpow0[:, j], 0.0), gs)
-                           for j in range(degree + 1)])                      # nt x (d+1)
+                           for j in range(n_basis)])                         # nt x n_basis
     J_th = np.empty((gs["nt"], len(theta)))                                  # nt x K
     for k in range(len(theta)):
         h = 1e-5 * max(1.0, abs(theta[k]))
@@ -2207,11 +2769,11 @@ def unconditional_phi_t_band(df, state_cols, has_cf, si_res, loss, degree=3,
         v_e = X @ th_e
         vsd_e = float(v_e.std()) or 1.0
         vs_e = (v_e - float(v_e.mean())) / vsd_e
-        b_e = _profile(vs_e)
-        vpow_e = np.column_stack([vs_e ** d for d in range(degree + 1)])
-        phi_e = np.clip(vpow_e @ b_e[:degree + 1], 0.0, 1.0)
+        kn_e = _knots_at(vs_e) if constrained else None
+        b_e, P_e = _profile(vs_e, kn_e, p0=b_full)
+        phi_e = np.clip(P_e @ b_e[:n_basis], 0.0, 1.0)
         J_th[:, k] = (_agg_phi_t(phi_e, gs) - pt) / h
-    IFphi = IF_th @ J_th.T + IF_b[:, :degree + 1] @ A_b.T                    # n_cl x nt
+    IFphi = IF_th @ J_th.T + IF_b[:, :n_basis] @ A_b.T                       # n_cl x nt
     se_tot = np.sqrt(np.maximum(np.sum(IFphi ** 2, axis=0), 0.0))
     with np.errstate(divide="ignore", invalid="ignore"):
         accel_tot = np.where(se_tot > 0,
@@ -2226,10 +2788,12 @@ def unconditional_phi_t_band(df, state_cols, has_cf, si_res, loss, degree=3,
     draws_tot = np.empty((B, nt))
     draws_th = np.empty((B, nt))
     draws_ln = np.empty((B, nt))
+    draws_tc = np.empty((B, nt))                   # tangent-cone total (constrained only)
     draws_ln_leg = np.empty((B, gs_leg["nt"]))     # legacy key, for the reproduction gate only
     tstats_tot = np.empty((B, nt))
     diag_rows = []
     n_fail = 0
+    n_proj = 0
     for ib in range(B):
         w = _wild_weights(n_cl, scheme, rng)
         th_b = theta + w @ IF_th
@@ -2239,36 +2803,51 @@ def unconditional_phi_t_band(df, state_cols, has_cf, si_res, loss, degree=3,
         if flag_vsd:
             vsd_b = 1.0
         vs_b = (v_b - vmu_b) / vsd_b
+        kn_b = _knots_at(vs_b) if constrained else None
         try:
-            b_th = _profile(vs_b)
+            b_th, P_b = _profile(vs_b, kn_b, p0=b_full)
             if not np.all(np.isfinite(b_th)):
                 raise FloatingPointError("non-finite b")
         except Exception:
-            b_th = b_full.copy()
+            b_th, P_b = b_full.copy(), _basis(vs_b, kn_b)
             n_fail += 1
-        vpow_b = np.column_stack([vs_b ** d for d in range(degree + 1)])
         db = w @ IF_b
-        phi_tot = np.clip(vpow_b @ (b_th + db)[:degree + 1], 0.0, 1.0)
-        phi_th = np.clip(vpow_b @ b_th[:degree + 1], 0.0, 1.0)
-        phi_ln = np.clip(vpow0 @ (b_full + db)[:degree + 1], 0.0, 1.0)
+        if constrained:
+            b_tot = _proj_level(b_th + db)                 # projected level
+            b_lnk = _proj_level(b_full + db)
+            b_tc = b_full + _proj_cone(db)                 # tangent-cone fluctuation
+            n_proj += int(np.max(np.abs(b_tot - (b_th + db))) > 1e-9)
+        else:
+            b_tot, b_lnk, b_tc = b_th + db, b_full + db, b_full + db
+        phi_tot = np.clip(P_b @ b_tot[:n_basis], 0.0, 1.0)
+        phi_th = np.clip(P_b @ b_th[:n_basis], 0.0, 1.0)
+        phi_ln = np.clip(vpow0 @ b_lnk[:n_basis], 0.0, 1.0)
+        phi_tc = np.clip(vpow0 @ b_tc[:n_basis], 0.0, 1.0)
         draws_tot[ib] = _agg_phi_t(phi_tot, gs)
         draws_th[ib] = _agg_phi_t(phi_th, gs)
         draws_ln[ib] = _agg_phi_t(phi_ln, gs)
+        draws_tc[ib] = _agg_phi_t(phi_tc, gs)
         draws_ln_leg[ib] = _agg_phi_t(phi_ln, gs_leg)
         vb = (w ** 2) @ IFphi2
         tstats_tot[ib] = (draws_tot[ib] - pt) / np.sqrt(np.maximum(vb, 1e-300))
         nth = float(np.linalg.norm(theta))
+        _raw = P_b @ (b_th + db)[:n_basis]
         diag_rows.append(dict(
             cos=float(theta @ th_b / max(1e-300, nth * float(np.linalg.norm(th_b)))),
             vsd_ratio=vsd_b / vsd, b_shift=float(np.linalg.norm(b_th - b_full)),
-            clip_lo=float(np.mean((vpow_b @ (b_th + db)[:degree + 1]) < 0.0)),
-            clip_hi=float(np.mean((vpow_b @ (b_th + db)[:degree + 1]) > 1.0)),
+            clip_lo=float(np.mean(_raw < 0.0)), clip_hi=float(np.mean(_raw > 1.0)),
+            proj_move=float(np.linalg.norm(b_tot - (b_th + db))) if constrained else 0.0,
             vsd_flag=bool(flag_vsd)))
         if (ib + 1) % 50 == 0:
             print(f"    [uncond] draw {ib+1}/{B}", flush=True)
     if n_fail:
         print(f"  [uncond] WARNING {n_fail}/{B} refits failed (theta channel suppressed there)"
               + ("  <-- DEGRADED" if n_fail > 0.01 * B else ""))
+    if constrained:
+        print(f"  [uncond] shape constraints: {int(_act0.sum())} active at the estimate; "
+              f"{n_proj}/{B} draws needed a non-trivial projection. The tangent-cone band is "
+              f"the valid one under active constraints (Andrews 2000); it coincides with the "
+              f"projected band when nothing binds.")
 
     out = dict(
         band_total=_band_from_draws(pt, draws_tot, gs["tuniq"], label="uncond total",
@@ -2285,7 +2864,13 @@ def unconditional_phi_t_band(df, state_cols, has_cf, si_res, loss, degree=3,
                   foc_norm=dirif["foc_norm"], gamma_hat=dirif["gamma_hat"],
                   dir_diag=dirif["diag"], vmu=vmu, vsd=vsd,
                   theta=theta, idx=idx_expect, b_full=b_full,
+                  constrained=bool(constrained), n_basis=int(n_basis),
+                  n_active=int(_act0.sum()) if constrained else 0, n_proj=int(n_proj),
                   market_key="mca_code (V_Main:182); legacy variant on CODMUN_IBGE"))
+    if constrained:
+        out["band_tangent_cone"] = _band_from_draws(pt, draws_tc, gs["tuniq"],
+                                                    label="uncond link-only [tangent cone]")
     if keep_draws:
-        out["draws"] = dict(total=draws_tot, theta_only=draws_th, link_only=draws_ln)
+        out["draws"] = dict(total=draws_tot, theta_only=draws_th, link_only=draws_ln,
+                            tangent_cone=draws_tc)
     return out

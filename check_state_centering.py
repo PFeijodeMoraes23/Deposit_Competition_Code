@@ -75,6 +75,10 @@ def _phi(df, native, link, res):
 
     if link == "identity":
         return index
+    if link == "index_sieve":
+        # E5/E6 shape-constrained link: grid over the FULL native index (constant included),
+        # unlike "sieve" below which drops it. Mirrors phi_from_native.
+        return np.clip(np.interp(index, res.si_vgrid, res.si_ggrid), 0.0, 1.0)
     if link == "index":
         b = np.asarray(res.si_b)
         vs = (index - res.si_vmu) / (res.si_vsd if res.si_vsd else 1.0)

@@ -916,8 +916,14 @@ if __name__ == "__main__":
                     help="power: archived grid CSV to read (never re-simulated)")
     ap.add_argument("--power-compare", default=None,
                     help="power: second grid CSV (e.g. the --censor run) to difference")
-    ap.add_argument("--phi-prod", type=float, default=0.92,
-                    help="production phi for the iso-contour / D8 band (E2 spec-12 median 0.92; "
-                         "use 0.985 for the E7/E8 headline)")
+    # default=None so an unspecified --phi-prod RESOLVES from the estimation output rather
+    # than freezing a literal; an explicit value on the command line still wins.
+    ap.add_argument("--phi-prod", type=float, default=None,
+                    help="production phi for the iso-contour / D8 band. Default: read from "
+                         "the est2 spec-12 fit via utils.phi_reference (pass 0.985 to use "
+                         "the E7/E8 headline instead)")
     a = ap.parse_args()
+    if a.phi_prod is None:
+        from utils import phi_reference as _pr
+        a.phi_prod = round(_pr.phi_e2_avg(), 3)
     {"grid": mode_grid, "acf": mode_acf, "power": mode_power}[a.mode](a)

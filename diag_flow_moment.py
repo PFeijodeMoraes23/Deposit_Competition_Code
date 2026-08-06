@@ -40,8 +40,13 @@ OUT_DIR.mkdir(parents=True, exist_ok=True)
 PIX_DIR = _paths.OPEN_FINANCE / "shared" / "PIX"
 
 # Anchors from the battery (sources printed with the output):
-PHI_E2_AVG = 0.918          # D4 full-sample phi-hat(avg market), spec 12 (d_augmented_spreadlevel)
-PHI_K = {1: 0.7244, 2: 0.8504, 4: 0.9093, 5: 0.9687}   # D5 type contrast (d_interactions types)
+# Anchors are READ, never frozen: utils.phi_reference pulls phi-hat from the est2 spec-12
+# fit and phi_k from D5's output, refreshing a last-known-good cache on every successful
+# read. A literal here would silently compare a fresh flow rate against a stale awake
+# margin after any re-estimation. Resolved lazily in main() so importing this module does
+# not touch a 3 GB pickle.
+PHI_E2_AVG = None
+PHI_K = None
 RAMP_END = 202312           # quarters <= this are flagged "adoption ramp"
 
 
@@ -120,7 +125,11 @@ def load_keys_to_congl():
 
 
 def main():
+    global PHI_E2_AVG, PHI_K
     print("=== D11: Pix-keys relationship-formation rate vs the awake share 1-phi ===")
+    from utils import phi_reference as _pr
+    PHI_E2_AVG = _pr.phi_e2_avg()
+    PHI_K = _pr.phi_k()
     keys = load_keys_to_congl()
 
     # quarter-end months only -> congl x quarter stocks

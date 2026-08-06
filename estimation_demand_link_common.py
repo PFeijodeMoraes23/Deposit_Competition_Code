@@ -256,6 +256,12 @@ def _apply_link(index_series, link, res_ss):
         phi = np.clip(idx, 0.0, 1.0)
     elif link == 'probit':
         phi = norm.cdf(idx)
+    elif link == 'index_sieve':
+        # E5/E6 shape-constrained link (monotone I-spline, beta>=0 and sum(beta)<=1). Stored as
+        # a grid over the FULL native index -- constant INCLUDED, unlike the 'sieve' branch
+        # below where the joint estimator absorbs the constant into G. Mirrors
+        # phi_from_native exactly.
+        phi = np.interp(idx.values, res_ss.si_vgrid, res_ss.si_ggrid)
     elif link == 'index':
         b = np.asarray(res_ss.si_b)
         vsd = res_ss.si_vsd if getattr(res_ss, 'si_vsd', None) else 1.0

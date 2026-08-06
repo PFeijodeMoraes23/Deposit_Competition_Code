@@ -59,7 +59,28 @@ from estimation_2_sleep import (build_pooled_data, define_specifications,
                                 apply_imbalanced_cluster_correction)
 from utils import paths as _paths
 
-PARQUET = _paths.PROCESSED / "ESTIMATION_OUTPUT" / "DEMAND_PREP" / "demand_2_spec_12.parquet"
+DEMAND_PREP = _paths.PROCESSED / "ESTIMATION_OUTPUT" / "DEMAND_PREP"
+
+
+def demand_parquet(estim: int = 2):
+    """Newest `demand_{estim}_*_spec_12.parquet`.
+
+    The battery was written against E2 and hardcoded its parquet. That is fine for the arms
+    that only need the POOLED PANEL (the frame is shared), but wrong for anything that reads
+    phi: D0's censoring rate is `Dep_t < phi*g*Dep_{t-1}`, which is mechanically increasing in
+    phi, so measuring it on E2 (phi ~ 0.92) understates it for the joint-sieve routines that
+    are the headline (E7/E8, phi ~ 0.99). --estim repoints the phi source.
+    """
+    cands = [p for p in DEMAND_PREP.glob(f"demand_{estim}_*spec_12.parquet")
+             if "final" not in p.name.lower()]
+    if not cands:
+        raise FileNotFoundError(f"no demand_{estim}_*spec_12.parquet in {DEMAND_PREP}")
+    return max(cands, key=lambda p: p.stat().st_mtime)
+
+
+# Module-level default preserved so every existing arm keeps working unchanged; `main` rebinds
+# it when --estim is passed.
+PARQUET = demand_parquet(2)
 BLP_RAW = _paths.PROCESSED / "ESTIMATION_OUTPUT" / "BLP_RESULTS" / "cluster_raw"
 OUT_DIR = _paths.PROCESSED / "ESTIMATION_OUTPUT" / "DIAG_PHI_SEPARATION"
 OUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -1003,11 +1024,26 @@ if __name__ == "__main__":
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--arm", choices=list(ARMS) + ["all"], required=True)
+    ap.add_argument("--estim", type=int, default=2,
+                    help="routine whose phi to test (default 2, the historical hardcoded one). "
+                         "D0's censoring rate is increasing in phi, so run the routine you "
+                         "actually report — E7/E8 carry phi~0.99 against E2's ~0.92.")
     a = ap.parse_args()
+
+    # Rebind the module-level parquet BEFORE any arm runs. The arms read PARQUET at call time,
+    # so this repoints every phi source in one place.
+    if a.estim != 2:
+        PARQUET = demand_parquet(a.estim)
+        globals()["PARQUET"] = PARQUET
+        print(f"[estim E{a.estim}] phi source: {PARQUET.name}")
+
     to_run = list(ARMS) if a.arm == "all" else [a.arm]
     all_rows = []
     for arm in to_run:
         all_rows += ARMS[arm]()
-    out = OUT_DIR / f"d_augmented_{a.arm}.csv"
+    for r in all_rows:                       # stamp provenance so pooled CSVs stay attributable
+        r.setdefault("estim", a.estim)
+    sfx = "" if a.estim == 2 else f"_E{a.estim}"
+    out = OUT_DIR / f"d_augmented_{a.arm}{sfx}.csv"
     pd.DataFrame(all_rows).to_csv(out, index=False)
     print(f"\nresults -> {out}")

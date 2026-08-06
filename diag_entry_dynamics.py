@@ -59,12 +59,23 @@ MODEL_COLORS = {"E2": "#2E7D32", "E7": "#6A1B9A", "E8": "#00838F"}
 
 
 # ----------------------------------------------------------------------------- phi vintages
+# Nonlinear reference vintages plotted against the entry paths. E5/E6 (single-index) rather
+# than E7/E8 (joint sieve): the joint fits' index DIRECTION is weakly identified -- four
+# polishes from different starts move phi_t by 7x at an R2 difference of 0.0013 -- so their
+# level is not a stable object to draw a curve at. E5/E6 inherit the logit direction and are
+# reproducible. Override with SLEEP_ENTRY_REFS if a comparison against the sieve is wanted.
+REF_ESTS = tuple(os.environ.get("SLEEP_ENTRY_REFS", "E5,E6").split(","))
+
+
 def phi_vintages():
-    """(label, phi, source) for each model line. E2 = the linear spec-12 avg-market value
-    (D4 baseline); E7/E8 = mean phi_mt of the CF_FOUNDATION exports actually on disk."""
-    out = [("E2", 0.918, "spec-12 linear phi-hat(avg market), d_augmented_spreadlevel")]
+    """(label, phi, source) for each model line. All refresh from disk: E2 via
+    utils.phi_reference (est2 spec-12 fit, with a self-updating last-known-good cache),
+    the REF_ESTS from the CF_FOUNDATION exports. Nothing here is a frozen literal -- a stale
+    model line plotted against fresh data is the one failure this figure cannot survive."""
+    from utils import phi_reference as _pr
+    out = [("E2", _pr.phi_e2_avg(), "est2 spec-12 fit via utils.phi_reference")]
     cf = _paths.PROCESSED / "ESTIMATION_OUTPUT" / "CF_FOUNDATION"
-    for est in ("E7", "E8"):
+    for est in REF_ESTS:
         fp = cf / f"phi_nopix_{est}_spec_12.parquet"
         if not fp.exists():
             print(f"  [phi] {est}: {fp.name} absent -- line skipped")
