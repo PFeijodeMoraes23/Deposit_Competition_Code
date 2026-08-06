@@ -1665,10 +1665,35 @@ def linear_phi_t_band(res, Z, coef_names, df_agg, market_key=None, weight="mean"
     scheme = _scheme if scheme is None else scheme
     gs = phi_t_group_struct(df_agg, market_key=market_key, weight=weight, time_key=time_key)
 
-    def _draw(rng_):
-        return Z @ (beta + _wild_weights(n_cl, scheme, rng_) @ IF_cl)[pos]
+    # phi_t is LINEAR in beta, so its per-cluster influence values are exact:
+    #   A[t, j] = national aggregation of Z[:, j] in quarter t   (aggregation is linear)
+    #   IFphi[g, t] = sum_j IF_cl[g, pos_j] * A[t, j]
+    # and every draw is pt + w @ IFphi -- identical (to fp roundoff) to aggregating the
+    # perturbed per-row phi, but exposing exactly what the 2026-08-06 additions need:
+    #   se_t   = sqrt(sum_g IFphi^2)                        cluster-robust SE of phi_t
+    #   a_t    = sum_g IFphi^3 / (6 se_t^3)                 Efron acceleration, closed form
+    #   t*_bt  = (draw - pt)/sqrt(sum_g w_bg^2 IFphi^2)     score-studentized bootstrap-t
+    k = len(pos)
+    A = np.column_stack([_agg_phi_t(Z[:, j], gs) for j in range(k)])       # nt x k
+    IFphi = IF_cl[:, pos] @ A.T                                            # n_cl x nt
+    pt = A @ beta[pos]
+    se = np.sqrt(np.maximum(np.sum(IFphi ** 2, axis=0), 0.0))
+    with np.errstate(divide="ignore", invalid="ignore"):
+        accel = np.where(se > 0, np.sum(IFphi ** 3, axis=0) / (6.0 * se ** 3), 0.0)
 
-    return _phi_t_band(gs, Z @ beta[pos], _draw, B, scheme, np.random.default_rng(seed))
+    rng = np.random.default_rng(seed)
+    nt = gs["nt"]
+    draws = np.empty((B, nt))
+    tstats = np.empty((B, nt))
+    IFphi2 = IFphi ** 2
+    for b in range(B):
+        w = _wild_weights(n_cl, scheme, rng)
+        draws[b] = pt + w @ IFphi
+        vb = (w ** 2) @ IFphi2
+        tstats[b] = (draws[b] - pt) / np.sqrt(np.maximum(vb, 1e-300))
+
+    return _band_from_draws(pt, draws, gs["tuniq"], label="linear phi_t band",
+                            accel=accel, tstats=tstats, se=se)
 
 
 def attach_phi_band(national_agg, res, Z, coef_names, df_agg, phi_mt, safe_key,
@@ -1708,7 +1733,11 @@ def attach_phi_band(national_agg, res, Z, coef_names, df_agg, phi_mt, safe_key,
         ren = {"time_id": time_key, "phi_t": "_band_pt",
                "lo": f"phi_t_lo_{safe_key}", "hi": f"phi_t_hi_{safe_key}",
                "lo_bc": f"phi_t_lobc_{safe_key}", "hi_bc": f"phi_t_hibc_{safe_key}",
-               "p_below": f"phi_t_pbelow_{safe_key}"}
+               "p_below": f"phi_t_pbelow_{safe_key}",
+               # 2026-08-06: BCa (closed-form acceleration) and score-studentized bootstrap-t
+               "lo_bca": f"phi_t_lobca_{safe_key}", "hi_bca": f"phi_t_hibca_{safe_key}",
+               "lo_bt": f"phi_t_lobt_{safe_key}", "hi_bt": f"phi_t_hibt_{safe_key}",
+               "se_score": f"phi_t_se_{safe_key}"}
         cols = [c for c in ren if c in band.columns]
         merged = national_agg.merge(band[cols].rename(columns=ren), on=time_key, how="left")
         d_pt = float(np.nanmax(np.abs(merged["_band_pt"] - merged[pt_col])))
@@ -1815,13 +1844,23 @@ def _phi_t_band(gs, phi_point, draw_phi_fn, B, scheme, rng, alpha=0.05):
     return _band_from_draws(pt, draws, gs["tuniq"], alpha=alpha)
 
 
-def _band_from_draws(pt, draws, tuniq, alpha=0.05, label="phi_t band"):
+def _band_from_draws(pt, draws, tuniq, alpha=0.05, label="phi_t band",
+                     accel=None, tstats=None, se=None):
     """Assemble the band frame from a precomputed (B x nt) national draw matrix.
 
     Split out of _phi_t_band (2026-08-05) so the unconditional band -- whose draw loop must run
     once and feed THREE variants (total / direction-only / link-only) from the same expensive
     re-profiled fits -- can reuse the identical raw-percentile + Efron-BC + p_below assembly
-    instead of re-implementing it. Same math, same warnings, same column layout."""
+    instead of re-implementing it. Same math, same warnings, same column layout.
+
+    2026-08-06 additions (both optional; existing columns are byte-unchanged when omitted):
+      accel   (nt,) Efron acceleration constants -> lo_bca/hi_bca columns. Computed by the
+              caller in closed form from the per-cluster influence values of phi_t
+              (a_t = sum IF^3 / (6 (sum IF^2)^1.5), Efron 1987 eq. 7.3) -- no jackknife loop.
+      tstats  (B x nt) studentized draws t*_bt = (phi*_bt - phi_t)/se*_bt, with se
+              (nt,) the point cluster-robust SE -> lo_bt/hi_bt bootstrap-t columns,
+              read as phi_t - q_{1-a/2}(t*) * se  /  phi_t - q_{a/2}(t*) * se
+              (equal-tail percentile-t; the refinement MacKinnon-Nielsen-Webb recommend)."""
     B = draws.shape[0]
     lo = np.percentile(draws, 100 * alpha / 2, axis=0)
     hi = np.percentile(draws, 100 * (1 - alpha / 2), axis=0)
@@ -1842,6 +1881,28 @@ def _band_from_draws(pt, draws, tuniq, alpha=0.05, label="phi_t band"):
 
     out = pd.DataFrame({"time_id": np.asarray(tuniq), "phi_t": pt, "lo": lo, "hi": hi,
                         "lo_bc": lo_bc, "hi_bc": hi_bc, "p_below": p_below})
+
+    if accel is not None:
+        # BCa: percentile levels Phi(z0 + (z0+z_a)/(1 - a (z0+z_a))). a=0 reduces to BC.
+        a = np.asarray(accel, float)
+        lo_bca = np.empty(nt)
+        hi_bca = np.empty(nt)
+        for t in range(nt):
+            zl, zh = z0[t] + za_lo, z0[t] + za_hi
+            al = 100.0 * _norm.cdf(z0[t] + zl / max(1e-12, 1.0 - a[t] * zl))
+            ah = 100.0 * _norm.cdf(z0[t] + zh / max(1e-12, 1.0 - a[t] * zh))
+            lo_bca[t] = np.percentile(draws[:, t], np.clip(al, 0.0, 100.0))
+            hi_bca[t] = np.percentile(draws[:, t], np.clip(ah, 0.0, 100.0))
+        out["lo_bca"] = lo_bca
+        out["hi_bca"] = hi_bca
+
+    if tstats is not None and se is not None:
+        se = np.asarray(se, float)
+        q_lo = np.percentile(tstats, 100 * alpha / 2, axis=0)
+        q_hi = np.percentile(tstats, 100 * (1 - alpha / 2), axis=0)
+        out["lo_bt"] = pt - q_hi * se        # equal-tail bootstrap-t
+        out["hi_bt"] = pt - q_lo * se
+        out["se_score"] = se
     n_out = int(np.sum((pt < lo) | (pt > hi)))
     n_undef = int(np.sum((p_below <= alpha / 2) | (p_below >= 1 - alpha / 2)))
     if n_out or n_undef:
@@ -2125,6 +2186,38 @@ def unconditional_phi_t_band(df, state_cols, has_cf, si_res, loss, degree=3,
                            - phi_pt))) > 1e-12:
         raise RuntimeError("zero-weight draw does not reproduce the point path")
 
+    # --- per-cluster influence values of NATIONAL phi_t, for BCa + bootstrap-t (2026-08-06) --
+    # Linearize phi_t in (theta, b) at the point estimate:
+    #   link channel  (exact): d phi_t / d b_j = aggregation of vpow0[:, j] on the un-clipped
+    #                          rows (the clip's derivative is an indicator);
+    #   theta channel (FD)   : K re-profiled evaluations phi_t(theta + h e_k) -- the profiling
+    #                          absorbs d b-hat/d theta exactly, so this is the derivative of
+    #                          the PROFILED path, which is the object the draws follow.
+    # Then IFphi[g, t] = (J_theta IF_theta')_g,t + (A_b IF_b[:, :d+1]')_g,t with shared wild
+    # weights -- the same composition the draws use, so t*_bt = (draw - pt)/sqrt(sum w^2 IF^2)
+    # is internally consistent. se/accel are the usual closed forms.
+    _inb = ((vpow0 @ b_full[:degree + 1]) > 0.0) & ((vpow0 @ b_full[:degree + 1]) < 1.0)
+    A_b = np.column_stack([_agg_phi_t(np.where(_inb, vpow0[:, j], 0.0), gs)
+                           for j in range(degree + 1)])                      # nt x (d+1)
+    J_th = np.empty((gs["nt"], len(theta)))                                  # nt x K
+    for k in range(len(theta)):
+        h = 1e-5 * max(1.0, abs(theta[k]))
+        th_e = theta.copy()
+        th_e[k] += h
+        v_e = X @ th_e
+        vsd_e = float(v_e.std()) or 1.0
+        vs_e = (v_e - float(v_e.mean())) / vsd_e
+        b_e = _profile(vs_e)
+        vpow_e = np.column_stack([vs_e ** d for d in range(degree + 1)])
+        phi_e = np.clip(vpow_e @ b_e[:degree + 1], 0.0, 1.0)
+        J_th[:, k] = (_agg_phi_t(phi_e, gs) - pt) / h
+    IFphi = IF_th @ J_th.T + IF_b[:, :degree + 1] @ A_b.T                    # n_cl x nt
+    se_tot = np.sqrt(np.maximum(np.sum(IFphi ** 2, axis=0), 0.0))
+    with np.errstate(divide="ignore", invalid="ignore"):
+        accel_tot = np.where(se_tot > 0,
+                             np.sum(IFphi ** 3, axis=0) / (6.0 * se_tot ** 3), 0.0)
+    IFphi2 = IFphi ** 2
+
     _B, _scheme = boot_cfg()
     B = int(B if B is not None else min(_B, 400))
     scheme = scheme or _scheme
@@ -2134,6 +2227,7 @@ def unconditional_phi_t_band(df, state_cols, has_cf, si_res, loss, degree=3,
     draws_th = np.empty((B, nt))
     draws_ln = np.empty((B, nt))
     draws_ln_leg = np.empty((B, gs_leg["nt"]))     # legacy key, for the reproduction gate only
+    tstats_tot = np.empty((B, nt))
     diag_rows = []
     n_fail = 0
     for ib in range(B):
@@ -2161,6 +2255,8 @@ def unconditional_phi_t_band(df, state_cols, has_cf, si_res, loss, degree=3,
         draws_th[ib] = _agg_phi_t(phi_th, gs)
         draws_ln[ib] = _agg_phi_t(phi_ln, gs)
         draws_ln_leg[ib] = _agg_phi_t(phi_ln, gs_leg)
+        vb = (w ** 2) @ IFphi2
+        tstats_tot[ib] = (draws_tot[ib] - pt) / np.sqrt(np.maximum(vb, 1e-300))
         nth = float(np.linalg.norm(theta))
         diag_rows.append(dict(
             cos=float(theta @ th_b / max(1e-300, nth * float(np.linalg.norm(th_b)))),
@@ -2175,7 +2271,8 @@ def unconditional_phi_t_band(df, state_cols, has_cf, si_res, loss, degree=3,
               + ("  <-- DEGRADED" if n_fail > 0.01 * B else ""))
 
     out = dict(
-        band_total=_band_from_draws(pt, draws_tot, gs["tuniq"], label="uncond total"),
+        band_total=_band_from_draws(pt, draws_tot, gs["tuniq"], label="uncond total",
+                                    accel=accel_tot, tstats=tstats_tot, se=se_tot),
         band_theta_only=_band_from_draws(pt, draws_th, gs["tuniq"], label="uncond theta-only"),
         band_link_only=_band_from_draws(pt, draws_ln, gs["tuniq"], label="uncond link-only"),
         # legacy-key link-only: NOT for reporting -- it exists so the caller can check this

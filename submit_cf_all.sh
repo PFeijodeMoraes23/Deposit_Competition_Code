@@ -40,7 +40,7 @@
 # already staged from the BLP run or auto-built here from the zip. See runbook §8.
 set -euo pipefail
 
-ROUTINES="${ROUTINES:-${CF_ROUTINE:-5 6 7 8}}"   # full RC lineup by default (E7/E8 are the headline)
+ROUTINES="${ROUTINES:-${CF_ROUTINE:-1 2 5 6 7 8}}"   # active lineup (E7/E8 headline; E3/E4 dropped 2026-08-06)
 CF_STAGE="${CF_STAGE:-extended}"
 R="${R:-2000}"; SEED="${SEED:-42}"
 BETA="${BETA:-0.9}"; HORIZON="${HORIZON:-50}"

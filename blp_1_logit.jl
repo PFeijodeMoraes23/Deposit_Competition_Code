@@ -194,7 +194,20 @@ function discover_estim_strategies()
             best[id] = (mt, replace(f, "_spec_$(SPEC_ID).parquet" => ""))
         end
     end
-    return [(id = id, label = "E$id", prefix = best[id][2]) for id in sort!(collect(keys(best)))]
+    # E3/E4 are DROPPED (2026-08-06). Auto-discovery is by FILE PRESENCE, so a leftover
+    # demand_3/demand_4 parquet silently re-enters the run — and on 08-05 those were rebuilt from
+    # the new panel but the stale 07-28 phi, i.e. mixed-vintage inputs that look current. Filter
+    # here so the logit cannot pick them up even if the parquets exist. SLEEP_ACTIVE_ESTS mirrors
+    # estimation_demand_1_prep.py / export_results.py; set it to include 3 4 to restore them.
+    active = Set(parse.(Int, split(get(ENV, "SLEEP_ACTIVE_ESTS", "1 2 5 6 7 8"))))
+    ids = sort!(collect(keys(best)))
+    skipped = [id for id in ids if !(id in active)]
+    if !isempty(skipped)
+        skipped_str = join(["E$id" for id in skipped], ", ")
+        @info "discover_estim_strategies: skipping $skipped_str (not in SLEEP_ACTIVE_ESTS); " *
+              "their parquets are present but deliberately excluded."
+    end
+    return [(id = id, label = "E$id", prefix = best[id][2]) for id in ids if id in active]
 end
 
 const ESTIM_STRATEGIES = discover_estim_strategies()

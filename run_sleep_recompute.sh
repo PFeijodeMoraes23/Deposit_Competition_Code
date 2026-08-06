@@ -129,9 +129,14 @@ run_step desc3   "Cluster-imbalance table"        desc_3.py
 # Consumes the demand_*_spec_12.parquet files written by the prep step above, so it MUST follow
 # it. Julia, --threads=auto: it will take every core, which is why it is last and why nothing
 # else should be running. RUN_LOGIT=0 skips it.
+# NB: this used to call `python run_blp_pipeline.py --logit`. That wrapper was REMOVED in
+# a30be201 (2026-08-04) with no replacement, so the step failed with "No such file or directory"
+# on the 08-05 run. blp_1_logit.jl documents its own invocation in its header ("Run all
+# discovered routines with `julia blp_1_logit.jl`"), auto-discovers the routine list from the
+# parquets, and writes the LaTeX tables itself — the wrapper added nothing this needs.
 if [ "${RUN_LOGIT:-1}" = "1" ]; then
   run_step_cmd logit "Logit (blp_1_logit.jl, all routines, spec 12)" \
-    python -u run_blp_pipeline.py --logit
+    julia --project=. --threads=auto blp_1_logit.jl
 else
   echo "[recompute] SKIP  logit (RUN_LOGIT=0)"
 fi

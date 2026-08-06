@@ -51,7 +51,7 @@
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ROUTINES="${ROUTINES:-${BBL_ROUTINE:-5 6 7 8}}"   # full RC lineup by default (E7/E8 are the headline)
+ROUTINES="${ROUTINES:-${BBL_ROUTINE:-1 2 5 6 7 8}}"   # active lineup (E7/E8 headline; E3/E4 dropped 2026-08-06)
 CF_STAGE="${CF_STAGE:-extended}"
 R="${R:-2000}"; SEED="${SEED:-42}"
 SHOCKS="${SHOCKS:-50}"; N_SHARDS="${N_SHARDS:-100}"

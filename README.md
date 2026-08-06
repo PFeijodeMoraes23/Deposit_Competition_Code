@@ -43,8 +43,8 @@ The codebase:
 .
 ├── run_data_pipeline.py                  # Master data pipeline runner (stages 0–5)
 ├── run_sleep_pipeline.py                 # Sleepiness estimation pipeline runner (E1–E8 + exports, demand prep, tables)
-├── run_blp_pipeline.py                   # BLP pipeline runner (logit check, draws, GMM, LaTeX)
-├── run_local_pipeline.py                 # End-to-end local orchestrator (data → sleep → BLP)
+│                                         # (run_blp_pipeline.py / run_local_pipeline.py were
+│                                         #  removed in a30be201 — call the Julia directly)
 │
 ├── ── Stage 0: Raw Data Downloads ──
 ├── scrape_1_bcb_estban_if_data.py        # ESTBAN monthly CSVs + IF Data via BCB Olinda API
@@ -191,26 +191,33 @@ python run_sleep_pipeline.py --only-spec-12    # Run only specification 1 & 2
 python run_sleep_pipeline.py --skip-sleep      # Skip estimation, run exports only
 ```
 
-### BLP Pipeline (`run_blp_pipeline.py`)
+### BLP stages (call the Julia directly)
 
-Manages Julia BLP demand estimation and LaTeX output table compilation:
-
-```bash
-python run_blp_pipeline.py --logit                         # Non-RC logit sanity check (fast)
-python run_blp_pipeline.py --draws --R 2000 --seed 42      # Pre-compute simulation draws
-python run_blp_pipeline.py --estimate --est 12 --spec 12   # Run BLP GMM for est. 1 & 2
-python run_blp_pipeline.py --all --R 2000 --workers 4      # Full logit → draws → GMM sequence
-python run_blp_pipeline.py --latex                         # Build LaTeX tables from results
-```
-
-### Local Orchestrator (`run_local_pipeline.py`)
-
-Runs the complete end-to-end pipeline locally in three sequential stages:
+`run_blp_pipeline.py` and `run_local_pipeline.py` were REMOVED in `a30be201` (2026-08-04) with no
+replacement wrapper. Call each stage directly — every script auto-discovers its routines from the
+demand parquets and writes its own LaTeX tables, which is what the wrapper was doing.
 
 ```bash
-python run_local_pipeline.py                   # Data → Sleep → BLP (full run)
-python run_local_pipeline.py --from 2          # Restart data pipeline from stage 2
+# Non-RC logit sanity check (fast) — writes est*_spec12_logit.tex to Rout/ and Drafts/
+julia --project=. --threads=auto blp_1_logit.jl
+julia --project=. --threads=auto blp_1_logit.jl --est 8      # a single routine
+
+# Pre-compute simulation draws
+julia --project=. blp_1_draws.jl --R 2000 --seed 42
+
+# BLP GMM (one round; see the script header for --stage values)
+julia --project=. --threads=4 blp_1_estimation.jl --estim 1 --spec 12 --stage sigma --R 50 --seed 42
 ```
+
+> **Stale-doc warning.** The *Usage* headers inside `blp_1_draws.jl` and `blp_1_estimation.jl`
+> still show PRE-RENAME filenames (`blp_draws.jl`, `blp_estimation.jl`). Use the `blp_1_` names
+> above. Only the logit line has been re-verified end-to-end (2026-08-06: clean, 57 result files
+> + 9 tables); the draws/GMM lines are transcribed from those headers with the filename
+> corrected, so read the header before committing to a long run.
+
+For the end-to-end local sequence the orchestrator used to provide: run `run_data_pipeline.py`,
+then `run_sleep_recompute.sh` (sleepiness → exports → demand prep → tables → logit), which chains
+the stages behind a free-RAM gate and supports `--from` resume.
 
 ---
 
@@ -371,8 +378,8 @@ This lets the same scripts resolve data directories correctly on your laptop, on
 ### 4. Always run the logit sanity check before submitting BLP to HPC
 
 ```bash
-python run_blp_pipeline.py --logit                  # Fast local check (~minutes); catches data issues early
-python run_blp_pipeline.py --draws --R 2000         # Pre-compute draws
+julia --project=. --threads=auto blp_1_logit.jl     # Fast local check (~minutes); catches data issues early
+julia --project=. blp_1_draws.jl --R 2000           # Pre-compute draws
 sbatch submit_blp_1_E1.sh                           # Only then submit to SLURM
 ```
 
@@ -395,7 +402,8 @@ import pandas as pd             # ← Safe now
 Use `--est` and `--spec` flags to run a single round rather than all 25 combinations:
 
 ```bash
-python run_blp_pipeline.py --estimate --est 1 --spec 12   # Only round 1, spec 12
+julia --project=. --threads=4 blp_1_estimation.jl --estim 1 --spec 12 \
+    --stage sigma --R 50 --seed 42                       # Only round 1, spec 12
 ```
 
 ### 8. Check `pipeline_output.txt` for a record of the last full run

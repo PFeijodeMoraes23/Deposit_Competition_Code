@@ -51,7 +51,7 @@ cd "$(dirname "${BASH_SOURCE[0]}")"
 # ── Shared config (both stages read these) ────────────────────────────────────────
 # Default to the FULL RC lineup E5-E8 (E7/E8 are the joint-sieve headline estimators — a routines=6
 # default silently shipped E6 only). Narrow with e.g. ROUTINES="7 8" when iterating on one estimator.
-export ROUTINES="${ROUTINES:-5 6 7 8}"
+export ROUTINES="${ROUTINES:-1 2 5 6 7 8}"
 export CF_STAGE="${CF_STAGE:-extended}"
 export R="${R:-2000}"
 export SEED="${SEED:-42}"

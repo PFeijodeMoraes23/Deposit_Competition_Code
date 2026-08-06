@@ -51,8 +51,12 @@ def main():
                         help="Estimation step 1-8, '9' (optional kernel), or 'all' (=1-8).")
     args = parser.parse_args()
 
-    # 'all' = the default lineup E1-E8; E9 (optional kernel) must be requested explicitly.
-    est_list = [1, 2, 3, 4, 5, 6, 7, 8] if args.estimation == 'all' else [int(args.estimation)]
+    # 'all' = the ACTIVE lineup. E3/E4 dropped 2026-08-06 (see estimation_demand_1_prep.py for
+    # the reasoning); E9 (optional kernel) must always be requested explicitly. Same env override,
+    # so the two stay in step: SLEEP_ACTIVE_ESTS="1 2 3 4 5 6 7 8" restores the old behaviour.
+    import os as _os
+    _active = _os.environ.get("SLEEP_ACTIVE_ESTS", "1 2 5 6 7 8").split()
+    est_list = [int(x) for x in _active] if args.estimation == 'all' else [int(args.estimation)]
 
     print(f"[Export] Launching {len(est_list)} export script(s) in parallel...")
 

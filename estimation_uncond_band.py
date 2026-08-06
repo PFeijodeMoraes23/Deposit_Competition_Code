@@ -85,24 +85,37 @@ def run_cell(est, loss_lbl, B, attach):
                                    degree=3, fe_time_col=FE_TIME_COL, B=B)
 
     # ---- BLOCKING GATE: link-only variant must reproduce the stored conditional band -------
-    # Compared on the LEGACY market key (CODMUN_IBGE), because that is what every stored band
-    # was built on. The reported bands use MCA (V_Main.tex:182); checking the gate on the
-    # legacy key keeps "is the rebuild faithful?" separate from "which market is correct?".
-    gate = dict(checked=False, max_lo=np.nan, max_hi=np.nan, ok=None, key="CODMUN_IBGE")
-    _gate_band = out.get("band_link_only_legacy", out["band_link_only"])
-    if stored_band is not None and len(stored_band) == len(_gate_band):
-        a = _gate_band.sort_values("time_id").reset_index(drop=True)
+    # WHICH market key the stored band was aggregated on depends on WHEN it was estimated:
+    # bands stored before 2026-08-05 are CODMUN_IBGE-keyed, bands stored after the market-key
+    # fix are mca_code-keyed. Hardcoding either comparator produces a false alarm of exactly the
+    # market-key gap (~1e-4 national units) on the other vintage -- which is what happened on
+    # the 05 Aug trimmed run (all four gates cried MISMATCH at ~1e-4 while the MCA variant
+    # matched at ~1e-12). So: compare BOTH variants, gate on the best, and report which one
+    # matched. A genuine failure (seed/B/scheme/frame drift) fails BOTH by far more than the
+    # key gap, so this cannot mask a real mismatch.
+    gate = dict(checked=False, max_lo=np.nan, max_hi=np.nan, ok=None, key=None)
+    if stored_band is not None:
         s = stored_band.sort_values("time_id").reset_index(drop=True)
-        gate.update(checked=True,
-                    max_lo=float(np.max(np.abs(a["lo"].values - s["lo"].values))),
-                    max_hi=float(np.max(np.abs(a["hi"].values - s["hi"].values))))
-        gate["ok"] = max(gate["max_lo"], gate["max_hi"]) < 1e-8
-        msg = "REPRODUCED" if gate["ok"] else "MISMATCH -- do not trust this band"
-        print(f"  [gate] link-only vs stored band: max|dlo|={gate['max_lo']:.2e} "
-              f"max|dhi|={gate['max_hi']:.2e}  {msg}")
-        if not gate["ok"]:
-            print("  [gate] NOTE: a mismatch here usually means seed/B/scheme differ from the "
-                  "stored band (B must be 400, seed 20240624, webb) or the frame drifted.")
+        best = None
+        for key_name, var in (("mca_code", "band_link_only"),
+                              ("CODMUN_IBGE", "band_link_only_legacy")):
+            cand = out.get(var)
+            if cand is None or len(cand) != len(s):
+                continue
+            a = cand.sort_values("time_id").reset_index(drop=True)
+            d_lo = float(np.max(np.abs(a["lo"].values - s["lo"].values)))
+            d_hi = float(np.max(np.abs(a["hi"].values - s["hi"].values)))
+            if best is None or max(d_lo, d_hi) < max(best[1], best[2]):
+                best = (key_name, d_lo, d_hi)
+        if best is not None:
+            gate.update(checked=True, key=best[0], max_lo=best[1], max_hi=best[2],
+                        ok=max(best[1], best[2]) < 1e-8)
+            msg = "REPRODUCED" if gate["ok"] else "MISMATCH -- do not trust this band"
+            print(f"  [gate] link-only[{best[0]}] vs stored band: max|dlo|={best[1]:.2e} "
+                  f"max|dhi|={best[2]:.2e}  {msg}")
+            if not gate["ok"]:
+                print("  [gate] NOTE: BOTH key variants mismatch -> seed/B/scheme differ from "
+                      "the stored band (need B=400, seed 20240624, webb) or the frame drifted.")
     out["meta"]["link_only_gate"] = gate
     out["meta"].update(est=est, loss_label=loss_lbl, spec=SPEC,
                        runtime_s=time.time() - t0,

@@ -206,9 +206,67 @@ def main():
         CF_DIR.mkdir(parents=True, exist_ok=True)
         outp.to_parquet(CF_DIR / phi_nopix_name, index=False)
 
+    else:
+        # IDENTITY / LINEAR LINK (E1, E2) — added 2026-08-06 at the user's request.
+        #
+        # These estimators are plain statsmodels results: no .link, no .params_native, so the
+        # phi_from_native path above cannot run. For an identity link φ = S′θ, so the no-Pix
+        # counterfactual is exact in closed form and PER ROW:
+        #     φ^noPix = φ̂ − θ_pix · (pix − pix_level_zero)
+        # This is numerically identical to the scalar fallback cf_4_pix.jl already performs, so
+        # it buys no accuracy — what it buys is UNIFORMITY: every active routine now ships the
+        # same artifact and CF4 takes one code path instead of branching on link type. The
+        # fallback stays in place, so an older export without this file still works.
+        #
+        # pix_level_zero, NOT 0.0: the state block is grand-mean centred, so "no Pix" is
+        # −mean(pix_exists). Writing 0.0 would evaluate the counterfactual at ~53% of markets
+        # still having Pix, and would look entirely plausible. Same assertion as the nonlinear
+        # branch, for the same reason.
+        import pyarrow.parquet as pq
+        avail = set(pq.read_schema(dpath).names)
+        cols = [c for c in dict.fromkeys(["entity_id", "time_id", "phi_mt", "pix_exists"] + MERGE_KEYS)
+                if c in avail]
+        gap = [c for c in ("entity_id", "time_id", "phi_mt", "pix_exists") if c not in avail]
+        if gap:
+            raise KeyError(f"demand parquet {dpath.name} lacks columns needed for the identity-link "
+                           f"no-Pix φ: {gap}")
+        dd = pd.read_parquet(dpath, columns=cols)
+        pm = dd["phi_mt"].to_numpy(float)
+        pix = dd["pix_exists"].to_numpy(float)
+
+        _lv = _st.dummy_levels("pix_exists")
+        _u = np.unique(pix)
+        if _lv is not None and len(_u) == 2 and \
+                max(abs(_u[0] - _lv[0]), abs(_u[1] - _lv[1])) > 1e-8:
+            raise ValueError(
+                f"{dpath.name}: pix_exists carries levels {tuple(np.round(_u, 8))} but the "
+                f"transform says {tuple(np.round(_lv, 8))}. This parquet was built under a "
+                "different centering than the current state_centering_means.json -- rebuild "
+                "the demand prep before exporting the no-Pix counterfactual.")
+
+        phi_nopix = pm - upsilon * (pix - pix_level_zero)
+        # Audit: rows already AT the no-Pix level must be unchanged. Exactness is by
+        # construction here, so this checks the level constant rather than the arithmetic.
+        at_zero = np.abs(pix - pix_level_zero) < 1e-12
+        audit = dict(nopix_link="identity",
+                     nopix_audit_corr=round(float(np.corrcoef(phi_nopix, pm)[0, 1]), 8)
+                     if np.std(phi_nopix) > 0 and np.std(pm) > 0 else None,
+                     nopix_audit_max_abs=float(np.max(np.abs(phi_nopix[at_zero] - pm[at_zero])))
+                     if at_zero.any() else 0.0)
+        outp = pd.DataFrame(dict(
+            entity_id=dd["entity_id"].astype(str).to_numpy(),
+            time_id=dd["time_id"].astype(str).to_numpy(),
+            CodConglomeradoPrudencial=dd["CodConglomeradoPrudencial"].astype(str).to_numpy(),
+            deposit_type=dd["deposit_type"].to_numpy(),
+            mca_code=dd["mca_code"].astype(str).to_numpy(),
+            phi_mt=pm, phi_mt_nopix=phi_nopix))
+        phi_nopix_name = f"phi_nopix_E{e}_spec_{s}.parquet"
+        CF_DIR.mkdir(parents=True, exist_ok=True)
+        outp.to_parquet(CF_DIR / phi_nopix_name, index=False)
+
     out = dict(upsilon_pix=upsilon, source_key=src_key, phi_col=phi_col,
                match_corr=round(corr, 5), match_med_abs_diff=round(med, 6),
-               estim=e, spec=s, link=link, exact_nopix=phi_nopix_name is not None,
+               estim=e, spec=s, link=(link or "identity"), exact_nopix=phi_nopix_name is not None,
                phi_nopix_parquet=phi_nopix_name,
                state_transform_version=_st.STATE_TRANSFORM_VERSION,
                pix_level_zero=pix_level_zero,

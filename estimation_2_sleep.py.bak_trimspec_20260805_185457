@@ -149,7 +149,7 @@ def add_time_variables(df):
 
 def define_specifications(time_block=False):
     s_base = ['constant']
-    s_macro = ['constant', 'pix_exists', 'cadunico_families_per1000', 'fraction_65plus', 'risk_free_qoq_lag']
+    s_macro = ['constant', 'pix_exists', 'gdp_per_capita', 'cadunico_families_per1000', 'fraction_65plus', 'fraction_young', 'risk_free_qoq_lag']
     s_tech = s_macro + ['connections_per100']
 
     if time_block:
@@ -245,7 +245,7 @@ def build_pooled_data(time_block=False, center=True):
     # yields a silently wrong phi that still lies in [0,1].
     _st.apply_scale(df)
 
-    state_vars_to_fill = ['cadunico_families_per1000', 'fraction_65plus', 'connections_per100']
+    state_vars_to_fill = ['gdp_per_capita', 'cadunico_families_per1000', 'fraction_65plus', 'fraction_young', 'connections_per100']
 
     # Assign national population-weighted averages to D-type (CODMUN_IBGE == '0') rows.
     # This includes both true digital banks and B-type prepaid (k=5) national aggregates.

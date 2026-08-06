@@ -36,7 +36,7 @@ set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 mkdir -p "${HERE}/logs"
 
-ROUTINES="${ROUTINES:-5 6 7 8}"
+ROUTINES="${ROUTINES:-1 2 5 6 7 8}"
 ENGINES="${ENGINES:-ift}"                       # IFT only by default (no numerical cross-check)
 
 # Both build steps are OPT-IN, because the COMMON case — editing our own .jl source — needs NEITHER:

@@ -33,7 +33,7 @@ mkdir -p "${HERE}/logs"
 
 # Default routines: the single-index links + their +Time variants E5 (single-index),
 # E6 (single-index+time), E7 (joint), E8 (joint+time).
-ROUTINES="${ROUTINES:-5 6 7 8}"
+ROUTINES="${ROUTINES:-1 2 5 6 7 8}"
 # Engines: IFT (blp_2) + numerical (blp_1) cross-check. Override e.g. ENGINES="ift".
 ENGINES="${ENGINES:-ift numerical}"
 # How the numerical engine is run:
