@@ -62,10 +62,13 @@ if [ -f "${SYSIMAGE}" ]; then
     fi
 else
     JULIA_SYS=()
-    echo "No sysimage — resolving/precompiling Julia packages: $(date)"
+    # No Pkg.resolve() here: this branch can run in up to 36 concurrent RC-stage jobs
+    # (submit_blp_rc_all.sh / submit_blp_rc_grouped.sh) sharing one PROJECT_DIR on NFS.
+    # Concurrent resolve() calls race-corrupt Manifest.toml. Build Manifest.toml ONCE via
+    # `sbatch setup_julia_env.sh` before submitting any RC chains; only instantiate here.
+    echo "No sysimage — instantiating/precompiling Julia packages: $(date)"
     julia --project="${PROJECT_DIR}" -e '
         using Pkg
-        Pkg.resolve()
         Pkg.instantiate()
         Pkg.precompile()
         using CUDA

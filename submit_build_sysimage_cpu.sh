@@ -49,7 +49,9 @@ echo "CPU node: $(hostname)"
 echo "CPU model: $(lscpu | grep -m1 'Model name' | cut -d: -f2 | xargs)"
 echo "Building CPU sysimage (no CUDA): $(date)"
 
-julia --project="${PROJECT_DIR}" -e 'using Pkg; Pkg.resolve(); Pkg.instantiate()'
+# Do NOT Pkg.resolve() here: that rewrites Manifest.toml and should only happen once,
+# via `sbatch setup_julia_env.sh`. Instantiate only (safe to run alongside other jobs).
+julia --project="${PROJECT_DIR}" -e 'using Pkg; Pkg.instantiate()'
 
 BLP_SYSIMAGE_CPU=1 BLP_SYSIMAGE_WORKLOAD="${BLP_SYSIMAGE_WORKLOAD:-0}" \
     julia --project="${PROJECT_DIR}" --threads="${SLURM_CPUS_PER_TASK}" \

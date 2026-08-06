@@ -1,7 +1,7 @@
 #!/bin/bash
 # setup_julia_env.sh
 # ==================
-# ONE-TIME script: builds a Julia 1.10-compatible Manifest.toml on the cluster
+# ONE-TIME script: builds a Julia 1.11-compatible Manifest.toml on the cluster
 # and precompiles all packages (including MKL and LoopVectorization).
 #
 # Run this ONCE after cloning/pulling changes that touch Project.toml.
@@ -24,8 +24,13 @@
 #SBATCH --mail-user=pedro.feijodemoraes@yale.edu
 
 # ── Environment ───────────────────────────────────────────────────────────────
+# MUST match the Julia module every compute job loads (submit_blp_*.sh, submit_bbl.sh,
+# submit_cf.sh, submit_build_sysimage*.sh all load 1.11.4) — a mismatched Manifest.toml
+# (built under one Julia minor version, read under another) plus concurrent Pkg writes
+# from parallel jobs on NFS is what corrupts Manifest.toml. This script is the ONLY
+# place that should call Pkg.resolve(); every other script must only Pkg.instantiate().
 module reset
-module load Julia/1.10.4-linux-x86_64
+module load Julia/1.11.4-linux-x86_64
 set -euo pipefail
 
 PROJECT_DIR="${SLURM_SUBMIT_DIR}"
@@ -33,13 +38,13 @@ echo "Project dir: ${PROJECT_DIR}"
 echo "Julia: $(julia --version)"
 
 # ── Remove any manifest from a different Julia version ───────────────────────
-# Local machine likely uses Julia 1.12.x; cluster uses 1.10.4. The manifest
+# Local machine likely uses Julia 1.12.x; cluster compute jobs use 1.11.4. The manifest
 # encodes the exact Julia version and is not portable across major/minor versions.
 if [ -f "${PROJECT_DIR}/Manifest.toml" ]; then
     MANIFEST_VER=$(grep 'julia_version' "${PROJECT_DIR}/Manifest.toml" | head -1 | grep -oP '"\K[^"]+' || echo "unknown")
     echo "Found Manifest.toml (julia_version = ${MANIFEST_VER})"
-    if ! grep -q 'julia_version = "1.10' "${PROJECT_DIR}/Manifest.toml"; then
-        echo "  → Incompatible with Julia 1.10 — removing."
+    if ! grep -q 'julia_version = "1.11' "${PROJECT_DIR}/Manifest.toml"; then
+        echo "  → Incompatible with Julia 1.11 — removing."
         rm -f "${PROJECT_DIR}/Manifest.toml"
     else
         echo "  → Compatible — keeping."

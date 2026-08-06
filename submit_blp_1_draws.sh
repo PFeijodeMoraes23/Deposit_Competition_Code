@@ -34,13 +34,18 @@ SPEC="${SPEC:-12}"
 CHUNK_SIZE="${CHUNK_SIZE:-2G}"                     # per-part size for `split`
 SPLIT_MIN_BYTES="${SPLIT_MIN_BYTES:-4000000000}"  # only split demo_draws if larger than ~4 GB
 
-# ── Resolve packages for Julia 1.10 ─────────────────────────────────────────
-if [ -f "${PROJECT_DIR}/Manifest.toml" ] && ! grep -q 'julia_version = "1.10' "${PROJECT_DIR}/Manifest.toml"; then
-    echo "Removing incompatible Manifest.toml before instantiate: $(date)"
-    rm -f "${PROJECT_DIR}/Manifest.toml"
+# ── Verify packages for Julia 1.11 ──────────────────────────────────────────
+# Do NOT call Pkg.resolve() here: it rewrites Manifest.toml, and this script may run
+# concurrently with other submit_blp_*.sh jobs sharing the same PROJECT_DIR on NFS —
+# concurrent resolves are what corrupt Manifest.toml (interleaved partial writes).
+# Manifest.toml should be built ONCE via `sbatch setup_julia_env.sh` (run alone, before
+# submitting any parallel jobs); every compute job here only verifies/instantiates it.
+if [ -f "${PROJECT_DIR}/Manifest.toml" ] && ! grep -q 'julia_version = "1.11' "${PROJECT_DIR}/Manifest.toml"; then
+    echo "[!] Manifest.toml was built for a different Julia version than 1.11.4 — run 'sbatch setup_julia_env.sh' first." >&2
+    exit 1
 fi
-echo "Resolving Julia packages: $(date)"
-julia --project="${PROJECT_DIR}" -e "using Pkg; Pkg.resolve(); Pkg.instantiate()"
+echo "Instantiating Julia packages: $(date)"
+julia --project="${PROJECT_DIR}" -e "using Pkg; Pkg.instantiate()"
 
 echo "======================================"
 echo " BLP Draws — blp_1_draws.jl"

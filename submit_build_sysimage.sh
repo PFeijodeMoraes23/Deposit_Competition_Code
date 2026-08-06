@@ -44,7 +44,9 @@ echo "GPU node: $(hostname)"
 echo "CUDA devices: $(nvidia-smi --query-gpu=name,memory.total --format=csv,noheader)"
 echo "Building BLP sysimage: $(date)"
 
-julia --project="${PROJECT_DIR}" -e 'using Pkg; Pkg.resolve(); Pkg.instantiate()'
+# Do NOT Pkg.resolve() here: that rewrites Manifest.toml and should only happen once,
+# via `sbatch setup_julia_env.sh`. Instantiate only (safe to run alongside other jobs).
+julia --project="${PROJECT_DIR}" -e 'using Pkg; Pkg.instantiate()'
 
 BLP_SYSIMAGE_WORKLOAD="${BLP_SYSIMAGE_WORKLOAD:-0}" \
     julia --project="${PROJECT_DIR}" --threads="${SLURM_CPUS_PER_TASK}" \
