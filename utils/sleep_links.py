@@ -576,7 +576,7 @@ def proj_simplex_box(x, K, cap=1.0):
     return out
 
 
-def solve_ispline_qp(D, y, K, cap=1.0, iters=20000, tol=1e-15):
+def solve_ispline_qp(D, y, K, cap=1.0, iters=5000, tol=1e-12, warm=None):
     """min ||D p - y||^2 over {p[:K] >= 0, sum(p[:K]) <= cap}, p[K:] free. EXACT and
     start-independent.
 
@@ -593,62 +593,124 @@ def solve_ispline_qp(D, y, K, cap=1.0, iters=20000, tol=1e-15):
     unique minimiser of a convex quadratic from any start. The Gram matrix is (K+extra)^2, so
     20k iterations cost microseconds. The active set is then polished by an exact KKT solve on
     the free coordinates, which removes the last few ulps of first-order error.
+
+    `warm` supplies a starting point, which is what makes this affordable INSIDE a bootstrap.
+    Each draw perturbs the criterion slightly, so consecutive solutions share an active set
+    almost always, and the active-set loop below can start from it directly. FISTA is then only
+    needed cold. That matters a great deal at this conditioning: FISTA does not hit its early
+    exit here and runs its full iteration budget, measured at ~490 ms per solve, i.e. ~33 min
+    per spec of pure projection cost at B=999 over two bootstraps and two losses. Warm-started,
+    the same solve is a handful of 10x10 linear systems. The loop keeps its drop AND release
+    steps, so it converges to the same optimum from any starting face -- the warm start changes
+    the path, never the answer, and a warm solve that fails its optimality check falls back to
+    the cold one.
     """
     G = D.T @ D
     c = D.T @ y
     p = D.shape[1]
-    L = float(np.linalg.eigvalsh(G)[-1]) or 1.0
-    b = proj_simplex_box(np.zeros(p), K, cap)
-    z, t = b.copy(), 1.0
     f = lambda q: float(q @ (G @ q) - 2.0 * (c @ q))
-    for _ in range(iters):
-        b_new = proj_simplex_box(z - (G @ z - c) / L, K, cap)
-        if f(b_new) > f(b):                       # adaptive restart on objective increase
-            z, t = b.copy(), 1.0
-            b_new = proj_simplex_box(b - (G @ b - c) / L, K, cap)
-        t_new = 0.5 * (1.0 + np.sqrt(1.0 + 4.0 * t * t))
-        z = b_new + ((t - 1.0) / t_new) * (b_new - b)
-        if np.max(np.abs(b_new - b)) <= tol * max(1.0, np.max(np.abs(b_new))):
-            b = b_new
-            break
-        b, t = b_new, t_new
-    # --- exact polish on the identified active set ------------------------------------------
-    # FISTA drives inactive coordinates to ~1e-8, not to 0, so the zero-threshold has to be a
-    # WORKING tolerance (1e-8 relative), not machine epsilon: at 1e-11 those coordinates are
-    # mistaken for free, the KKT system is solved on the wrong face, and the result sits a few
-    # 1e-7 above the true optimum -- enough to move the fitted link by 3e-05 and desynchronise
-    # the band's re-profile from the estimator. Repeat until the face stops changing.
-    scale = max(1.0, float(np.max(np.abs(b[:K]))))
-    for _ in range(12):
-        eps = 1e-8 * scale
+
+    def _fista():
+        L = float(np.linalg.eigvalsh(G)[-1]) or 1.0
+        b_ = proj_simplex_box(np.zeros(p), K, cap)
+        z, t = b_.copy(), 1.0
+        for _ in range(iters):
+            b_new = proj_simplex_box(z - (G @ z - c) / L, K, cap)
+            if f(b_new) > f(b_):                  # adaptive restart on objective increase
+                z, t = b_.copy(), 1.0
+                b_new = proj_simplex_box(b_ - (G @ b_ - c) / L, K, cap)
+            t_new = 0.5 * (1.0 + np.sqrt(1.0 + 4.0 * t * t))
+            z = b_new + ((t - 1.0) / t_new) * (b_new - b_)
+            if np.max(np.abs(b_new - b_)) <= tol * max(1.0, np.max(np.abs(b_new))):
+                return b_new
+            b_, t = b_new, t_new
+        return b_
+
+    if warm is not None:
+        b = proj_simplex_box(np.asarray(warm, float).copy(), K, cap)
+    else:
+        b = _fista()
+    # --- exact polish: primal ACTIVE-SET loop on the face FISTA identified -------------------
+    # FISTA gets the face approximately right but leaves inactive coordinates at ~1e-8 rather
+    # than 0, so the face has to be both DROPPED into (zero out what is at the bound) and
+    # RELEASED from (put back anything whose reduced cost says the objective still falls if it
+    # moves off the bound). Only dropping is not enough: a genuinely tiny but nonzero
+    # coefficient gets zeroed, the KKT system is solved on too small a face, and the answer sits
+    # ~2e-07 above the optimum -- small, but it desynchronises the band's re-profile from the
+    # estimator, which is what the fingerprint gate exists to detect.
+    #
+    # Reduced cost of a coordinate held at zero is  r_j = (G b - c)_j + mu, where mu is the
+    # multiplier on sum(beta) = cap, pinned by stationarity on the free coordinates. r_j < 0
+    # means releasing j lowers the objective, so j belongs in the face.
+    def _polish(b0):
+        """Primal active-set loop from the face implied by b0. Returns (b, converged).
+
+        THREE optimality conditions, all required. Dropping a coordinate that goes negative and
+        releasing one whose reduced cost is negative are the familiar pair; the third is the
+        SIGN OF THE CEILING MULTIPLIER. With sum(beta) <= cap held as an equality, stationarity
+        gives G b - c = -mu e, and a genuine minimum needs mu >= 0. If mu < 0 the ceiling is not
+        really active and must be released. Without that test a warm start that happens to sit
+        at the cap keeps it there and certifies a WRONG optimum -- measured 8.75e-02 away from
+        the cold solve, which is why the warm and cold paths are checked against each other
+        rather than assumed to agree."""
+        bb = b0
+        scale = max(1.0, float(np.max(np.abs(bb[:K]))))
         free = np.ones(p, bool)
-        free[:K] = b[:K] > eps
-        at_cap = float(np.sum(b[:K])) >= cap - 1e-9
-        if not free.any():
-            break
-        idx = np.flatnonzero(free)
-        Gf, cf = G[np.ix_(idx, idx)], c[idx]
-        e = np.array([1.0 if j < K else 0.0 for j in idx])
-        try:
-            if at_cap and e.any():
-                KKT = np.block([[Gf, e[:, None]], [e[None, :], np.zeros((1, 1))]])
-                sol = np.linalg.solve(KKT, np.concatenate([cf, [cap]]))[:len(idx)]
-            else:
-                sol = np.linalg.solve(Gf, cf)
-        except np.linalg.LinAlgError:
-            break
-        cand = np.zeros(p)
-        cand[idx] = sol
-        # accept only if feasible AND not worse; otherwise keep the FISTA point
-        if (cand[:K].min() >= -1e-10 and cand[:K].sum() <= cap + 1e-10
-                and f(cand) <= f(b) + 1e-12 * abs(f(b))):
-            if np.max(np.abs(cand - b)) <= 1e-14 * scale:
-                b = cand
-                break
-            b = cand
-        else:
-            break
+        free[:K] = bb[:K] > 1e-9 * scale
+        cap_active = float(np.sum(np.maximum(bb[:K], 0.0))) >= cap - 1e-9
+        for _ in range(6 * K + 16):
+            at_cap = cap_active
+            if not free.any():
+                return bb, True
+            idx = np.flatnonzero(free)
+            Gf, cf_ = G[np.ix_(idx, idx)], c[idx]
+            e = (idx < K).astype(float)
+            try:
+                if at_cap and e.any():
+                    KKT = np.block([[Gf, e[:, None]], [e[None, :], np.zeros((1, 1))]])
+                    sol = np.linalg.solve(KKT, np.concatenate([cf_, [cap]]))
+                    mu, sol = float(sol[-1]), sol[:len(idx)]
+                else:
+                    sol = np.linalg.solve(Gf, cf_)
+                    mu = 0.0
+            except np.linalg.LinAlgError:
+                return bb, False
+            cand = np.zeros(p)
+            cand[idx] = sol
+            neg = (idx < K) & (sol < -1e-12 * scale)
+            if neg.any():                               # infeasible: drop the worst offender
+                free[idx[np.argmin(np.where(neg, sol, np.inf))]] = False
+                continue
+            if cand[:K].sum() > cap + 1e-10:            # ceiling violated: activate it
+                if at_cap:
+                    return bb, False
+                cap_active = True
+                bb = proj_simplex_box(cand, K, cap)
+                free[:K] = bb[:K] > 1e-9 * scale
+                continue
+            g = G @ cand - c
+            gs_ = max(1.0, float(np.max(np.abs(g))))
+            if at_cap and mu < -1e-11 * gs_:            # ceiling not really binding: release it
+                cap_active = False
+                bb = cand
+                continue
+            # feasible on this face -- can any bound-held coordinate be released?
+            held = np.flatnonzero(~free[:K])
+            if len(held):
+                r_ = g[held] + mu
+                if float(np.min(r_)) < -1e-11 * gs_:
+                    free[int(held[np.argmin(r_)])] = True
+                    continue
+            # no drop, no release, feasible => KKT satisfied on this face: optimal
+            return (cand if f(cand) <= f(bb) + 1e-12 * abs(f(bb)) else bb), True
+        return bb, False
+
+    b, ok = _polish(b)
+    if not ok and warm is not None:
+        # the warm face did not certify; pay for the cold solve rather than return a guess
+        b, ok = _polish(_fista())
     r = b[:K]
+    eps = 1e-9 * max(1.0, float(np.max(np.abs(r))))
     info = dict(n_active=int(np.sum(r <= eps)) + int(float(r.sum()) >= cap - 1e-10),
                 n_zero=int(np.sum(r <= eps)), at_cap=bool(float(r.sum()) >= cap - 1e-10),
                 sum_beta=float(r.sum()), violation=float(max(0.0, -r.min(),
@@ -667,7 +729,7 @@ def ispline_constraints(K, n_extra=0):
     return A, lb, ub
 
 
-def project_to_shape(p_lin, G, A, lb, ub, tol=1e-10, K=None, cap=1.0):
+def project_to_shape(p_lin, G, A, lb, ub, tol=1e-10, K=None, cap=1.0, warm=None):
     """G-norm projection of an unconstrained (linearised) draw onto the constraint set:
         argmin_{p: lb <= Ap <= ub} (p - p_lin)' G (p - p_lin).
 
@@ -684,7 +746,7 @@ def project_to_shape(p_lin, G, A, lb, ub, tol=1e-10, K=None, cap=1.0):
     L = np.linalg.cholesky(Gs + tol * np.eye(len(Gs)) * float(np.trace(Gs)) / len(Gs))
     Dp, yp = L.T, L.T @ np.asarray(p_lin, float)
     if K is not None:                      # simplex-box: use the exact solver
-        return solve_ispline_qp(Dp, yp, K, cap=cap)
+        return solve_ispline_qp(Dp, yp, K, cap=cap, warm=warm)
     return solve_shape_qp(Dp, yp, A, lb, ub, p_lin, strict=False)
 
 
@@ -781,10 +843,6 @@ def fit_single_index(df, state_cols, has_cf, logit_res, degree=3, phi_band=False
     if constrained:
         from scipy.interpolate import BSpline
 
-        def _spl(bb):
-            return BSpline(si_knots, np.cumsum(np.asarray(bb, float)[:n_basis]), degree,
-                           extrapolate=True)
-
         _vs_in = np.clip(vs, si_knots[0], si_knots[-1])
 
         def _phi_at(bfull, zz=None):
@@ -793,8 +851,20 @@ def fit_single_index(df, state_cols, has_cf, logit_res, degree=3, phi_band=False
                 return P @ np.asarray(bfull, float)[:n_basis]
             return _ramp_design(zz, si_knots, degree) @ np.asarray(bfull, float)[:n_basis]
 
+        # PRECOMPUTED AVERAGE DERIVATIVE. G' = sum_k c_k B'_k with c = cumsum(beta), so
+        #   mean_i G'(v_i) = m . c = (L' m) . beta,   m_k = mean_i B'_k(v_i),  L = cumsum matrix,
+        # i.e. the average derivative is a FIXED linear functional of beta. Evaluate the K basis
+        # derivatives once and the AME bootstrap costs a dot product per draw instead of building
+        # a spline and evaluating it on ~487k rows B times. This is exact, and it is available
+        # only because the constrained link needs no clip -- a clip would make the row-average
+        # nonlinear in beta and force the full per-draw evaluation.
+        _m = np.array([float(np.mean(BSpline(si_knots, np.eye(n_basis)[k], degree,
+                                             extrapolate=True).derivative()(_vs_in)))
+                       for k in range(n_basis)])
+        _slope_w = np.cumsum(_m[::-1])[::-1] / vsd        # (L' m) / vsd
+
         def _mean_slope(bfull):
-            return float(np.mean(_spl(bfull).derivative()(_vs_in))) / vsd
+            return float(_slope_w @ np.asarray(bfull, float)[:n_basis])
     else:
         sv_pows = np.column_stack([vs ** (d - 1) for d in range(1, degree + 1)]) \
             if degree >= 1 else np.empty((len(vs), 0))
@@ -838,7 +908,12 @@ def fit_single_index(df, state_cols, has_cf, logit_res, degree=3, phi_band=False
         coln = _dsub[:, j]
         z1 = vs + ths[nm] * (_dhi[j] - coln) / vsd     # standardised index at the HIGH level
         z0 = vs + ths[nm] * (_dlo[j] - coln) / vsd     # standardised index at the LOW level
-        dcols[nm] = (_basis_at(z1), _basis_at(z0))
+        B1, B0 = _basis_at(z1), _basis_at(z0)
+        # Constrained: E[G(z1) - G(z0)] = (mean B1 - mean B0) . beta, a fixed linear functional,
+        # so collapse the two n x K blocks to one K-vector now and the AME costs a dot product
+        # per bootstrap draw. Unconstrained: the clip sits between the basis and the average, so
+        # the full blocks must be kept and re-evaluated per draw.
+        dcols[nm] = ((B1.mean(axis=0) - B0.mean(axis=0)) if constrained else (B1, B0))
 
     # CLIP-AWARENESS IS NOW VACUOUS, deliberately. Under the constrained link G is already in
     # [0,1] everywhere, so the discrete difference needs no clip and the continuous average
@@ -852,10 +927,10 @@ def fit_single_index(df, state_cols, has_cf, logit_res, degree=3, phi_band=False
         out = {}
         for nm in names:
             if nm in dcols:                              # discrete difference (bounded)
-                Pz1, Pz0 = dcols[nm]
                 if constrained:
-                    out[nm] = float(np.mean(Pz1 @ bb - Pz0 @ bb))
+                    out[nm] = float(dcols[nm] @ bb)
                 else:
+                    Pz1, Pz0 = dcols[nm]
                     out[nm] = float(np.mean(np.clip(Pz1 @ bb, 0.0, 1.0)
                                             - np.clip(Pz0 @ bb, 0.0, 1.0)))
             else:                                        # continuous average derivative
@@ -873,8 +948,17 @@ def fit_single_index(df, state_cols, has_cf, logit_res, degree=3, phi_band=False
     if constrained:
         _XtX = Xdm_arr.T @ Xdm_arr
 
+        # Bootstrap draws perturb the criterion only slightly, so each projection starts from
+        # the previous one's solution: the active set is almost always the same and the solve
+        # collapses to a few tiny linear systems. Cold, it is ~490 ms per draw at this
+        # conditioning, which is ~33 min per spec across two bootstraps and two losses.
+        _warm = [b_full.copy()]
+
         def _proj(b_lin):
-            return project_to_shape(b_lin, _XtX, qp_A, qp_lb, qp_ub, K=n_basis)[0]
+            out = project_to_shape(b_lin, _XtX, qp_A, qp_lb, qp_ub, K=n_basis,
+                                   warm=_warm[0])[0]
+            _warm[0] = out
+            return out
 
     bse, pv = ols_sieve_wild_bootstrap(Xdm_arr, resid, cl_inv, n_cl, b_full, _ame_fn, ame,
                                        project=_proj)
@@ -910,11 +994,24 @@ def fit_single_index(df, state_cols, has_cf, logit_res, degree=3, phi_band=False
     if constrained:
         _ssr_unc = float(np.sum((y_dm - Xdm_arr @ b_unc) ** 2))
         _phi_pt = _phi_at(b_full)
+        # SATURATED SHARE. A monotone spline whose ceiling sum(beta)=1 is ACTIVE reaches exactly
+        # 1 once the highest basis function with beta_j>0 finishes rising, and is flat at 1 from
+        # there on -- so a whole region of the index can sit at phi=1, unlike a cubic which can
+        # only touch a bound at isolated points. That is a real property of the fit, and it
+        # matters downstream because demand prep forms (1-phi) through PHI_CAP=0.99
+        # (estimation_demand_link_common:92,320): rows at phi=1 have their phi replaced by the
+        # cap, so their heterogeneity is discarded. Reported per cell so the share is visible
+        # rather than rediscovered.
+        _sat = 100.0 * float((_phi_pt >= 1.0 - 1e-9).mean())
         print(f"  [SingleIndex] MONOTONE I-spline link K={n_basis} deg={degree} | "
               f"phi in [{_phi_pt.min():.4f},{_phi_pt.max():.4f}] sum(beta)={b.sum():.4f} "
               f"(unconstrained {b_unc[:n_basis].sum():+.4g}) | {qp_info['n_active']} active "
-              f"constraint(s) | SSR x{rss/_ssr_unc:.6f} | mean_slope={mean_slope:.4g} | "
-              f"wild boot B={B_used} ({scheme_used})")
+              f"constraint(s) | phi=1 on {_sat:.2f}% of rows | SSR x{rss/_ssr_unc:.6f} | "
+              f"mean_slope={mean_slope:.4g} | wild boot B={B_used} ({scheme_used})")
+        if _sat > 5.0:
+            print(f"  [SingleIndex] NOTE {_sat:.1f}% of rows are at phi=1 (the link saturates "
+                  f"inside the data). Downstream those rows are capped at PHI_CAP before "
+                  f"forming 1-phi, so their phi heterogeneity does not reach the shares.")
     else:
         print(f"  [SingleIndex] unconstrained cubic link deg={degree} | "
               f"mean_slope={mean_slope:.4g} | wild boot B={B_used} ({scheme_used})")
@@ -940,7 +1037,9 @@ def fit_single_index(df, state_cols, has_cf, logit_res, degree=3, phi_band=False
         res_obj.si_qp = dict(n_active=qp_info["n_active"], n_zero=qp_info["n_zero"],
                              at_cap=qp_info["at_cap"], violation=qp_info["violation"],
                              sum_beta=float(b.sum()), sum_beta_unc=float(b_unc[:n_basis].sum()),
-                             ssr_ratio=rss / _ssr_unc, n_basis=int(n_basis))
+                             ssr_ratio=rss / _ssr_unc, n_basis=int(n_basis),
+                             saturated_pct=_sat, phi_lo=float(_phi_pt.min()),
+                             phi_hi=float(_phi_pt.max()))
     # Quarter-clustered SEs for the national rows, computed above. Kept alongside `bse` so the
     # exporters can choose PER ROW without a second estimation pass.
     if _nat_time is not None:
@@ -1569,6 +1668,10 @@ def fit_joint_single_index(df, state_cols, has_cf, link="sieve", loss="ls",
     res.si_vgrid = vgrid + offset
     res.si_ggrid = ggrid
     res.si_degree = degree
+    # Records whether the ceiling sum(beta) <= 1 was imposed on the final link refit. Read by
+    # the resume logic to refuse to mix fits made under different link settings inside one
+    # pickle, and by anything downstream that needs to know the link is a genuine CDF.
+    res.si_constrained = bool(link == "sieve" and link_constrained())
     res.boot_B = boot_B; res.boot_scheme = boot_scheme
     # Quarter-clustered SEs for the national rows, computed above. Kept alongside `bse` so the
     # exporters can choose PER ROW (conglomerate for firm-level regressors, quarter for the
@@ -2659,15 +2762,11 @@ def unconditional_phi_t_band(df, state_cols, has_cf, si_res, loss, degree=3,
     # to ~1e-9. Gating on beta there would reject a faithful rebuild. G = P beta is what is
     # identified, what is stored (si_ggrid), and what every downstream consumer evaluates, so
     # that is what must reproduce. The coefficient drift is still reported, as a diagnostic.
-    # TOLERANCE. The cubic path (plain lstsq) reproduces at ~1e-15, so 1e-6 fits it. The
-    # constrained solve is deterministic and start-independent, but the estimator's design and
-    # this rebuild's design are assembled by different code paths and the last few ulps differ;
-    # measured 2026-08-06 that leaves ~3e-05 in phi (0.003pp, versus 0.01pp reporting
-    # granularity). A REAL mismatch is orders larger -- the wrong-active-set solve was 1.6e-03,
-    # a wrong FE structure 2.2e-04 -- so 1e-4 still catches every failure seen while building
-    # this, without rejecting a faithful rebuild.
-    # OPEN: track down the last 3e-05 and put this back to 1e-6. See the handoff note.
-    _tol_fp = 1e-6 if not constrained else 1e-4
+    # TOLERANCE. Both paths reproduce their stored link to ~1e-13 or better, so 1e-6 is a real
+    # gate rather than a formality: the failures encountered while building this were orders
+    # larger (a solve that stopped on the wrong active set, 1.6e-03; the wrong FE structure,
+    # 2.2e-04). It is a phi tolerance, not a coefficient one -- see the note above.
+    _tol_fp = 1e-6
     _d_b = float(np.max(np.abs(b_full[:n_basis] - b_stored)))
     _d_phi = float(np.max(np.abs(P0 @ b_full[:n_basis] - P0 @ b_stored)))
     if _d_phi > _tol_fp:
@@ -2714,8 +2813,13 @@ def unconditional_phi_t_band(df, state_cols, has_cf, si_res, loss, degree=3,
         _cone_lb = np.asarray(_clb, float) if _rows else None
         _cone_ub = np.asarray(_cub, float) if _rows else None
 
+        _warm_lvl = [b_full.copy()]
+
         def _proj_level(b_lin):
-            return project_to_shape(b_lin, XtX0, qp_A, qp_lb, qp_ub, K=n_basis)[0]
+            out = project_to_shape(b_lin, XtX0, qp_A, qp_lb, qp_ub, K=n_basis,
+                                   warm=_warm_lvl[0])[0]
+            _warm_lvl[0] = out
+            return out
 
         def _proj_cone(d_lin):
             if _cone_A is None:

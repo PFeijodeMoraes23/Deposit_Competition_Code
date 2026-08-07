@@ -1,0 +1,46 @@
+{
+ "started": "2026-08-07T14:25:18",
+ "deadline": null,
+ "units": [
+  {
+   "unit": "d2a",
+   "estim": 1,
+   "status": "pending"
+  },
+  {
+   "unit": "d2a",
+   "estim": 2,
+   "status": "pending"
+  },
+  {
+   "unit": "d2a",
+   "estim": 5,
+   "status": "pending"
+  },
+  {
+   "unit": "d2a",
+   "estim": 6,
+   "status": "pending"
+  },
+  {
+   "unit": "d2a",
+   "estim": 7,
+   "status": "pending"
+  },
+  {
+   "unit": "d2a",
+   "estim": 8,
+   "status": "pending"
+  },
+  {
+   "unit": "d3",
+   "estim": 5,
+   "status": "pending"
+  },
+  {
+   "unit": "d5",
+   "estim": 2,
+   "status": "pending"
+  }
+ ]
+}

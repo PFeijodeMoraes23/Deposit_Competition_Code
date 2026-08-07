@@ -728,8 +728,13 @@ def arm_fittedshare():
     b = _shares_from_dhat(b, "_dhat", "A_hat_c")
     variants = [("A_hat_c", "local within-market OLS")]
 
-    # (b) cluster BLP theta1 (proper IV estimates; spread enters as spread_ann/100 = pp)
-    for est in ("E7", "E8"):
+    # (b) cluster BLP theta1 (proper IV estimates; spread enters as spread_ann/100 = pp).
+    # The routine list is DISCOVERED from what has converged on disk rather than hardcoded to
+    # E7/E8: a cluster run that adds further routines is then picked up without editing this
+    # arm, and one that has not landed yet degrades to the local-OLS variant instead of
+    # silently reporting a stale pair. SLEEP_ACTIVE_ESTS bounds the search to the reported set.
+    blp_ests = [f"E{k}" for k in os.environ.get("SLEEP_ACTIVE_ESTS", "1 2 5 6 7 8").split()]
+    for est in blp_ests:
         th = load_blp_theta1(est)
         if th is None:
             print(f"  [{est}] no converged extended results in {BLP_RAW.name}; skipped")

@@ -259,11 +259,24 @@ def _warm_from(res, s_cols):
 def _exec_block(block_args):
     """Run the 4 instrument specs of ONE state block sequentially, warm-starting each
     joint/single-index fit from the previous spec's theta (opt 9). Blocks run in
-    parallel (opt 3), so warm-start stays within a block where the index is shared."""
-    df, s_name, s_cols, kind, iv_specs = block_args
+    parallel (opt 3), so warm-start stays within a block where the index is shared.
+
+    Under SLEEP_RESUME a spec already on disk (and computed under the SAME link setting) is
+    skipped, and its stored fit still feeds the warm-start chain -- so resuming produces the
+    same sequence of starting values as an uninterrupted run rather than a colder one."""
+    df, s_name, s_cols, kind, iv_specs = block_args[:5]
+    done = block_args[5] if len(block_args) > 5 else (lambda _s: None)
     df = df.copy()      # thread-local copy (run_pooled_first_stage adds v_hat columns in place)
     out, warm = [], None
     for iv in _IV_ORDER:
+        spec_name = f"{iv} x {s_name}"
+        stored = done(spec_name)
+        if stored is not None:
+            print(f"  [resume] {spec_name}: already on disk, skipping")
+            w = _warm_from(stored.get("second_stage") or stored.get("second_stage_ls"), s_cols)
+            if w is not None:
+                warm = w
+            continue
         res_main, res_ls, spec_name, res_fs = _exec_spec(
             (df, iv, iv_specs[iv], s_name, s_cols, kind, warm))
         out.append((res_main, res_ls, spec_name, res_fs))
@@ -274,6 +287,100 @@ def _exec_block(block_args):
             if w is not None:
                 warm = w
     return out
+
+
+# ── Resume support ───────────────────────────────────────────────────────────────
+# A full grid is 9-12 fits and the joint sieve runs ~50 min per spec, so an interrupted run
+# used to lose everything: results were merged and written ONCE, after every spec finished.
+# Two changes make a run restartable:
+#   * the pickle is merged and written after EACH state block, so a stop costs at most the
+#     block in flight (<= 4 specs) rather than the whole estimator;
+#   * with SLEEP_RESUME=1 a spec already on disk is skipped, PROVIDED it was computed under
+#     the same link setting -- reusing a spec fitted under a different SLEEP_LINK_CONSTRAINED
+#     would silently mix two estimators inside one pickle, which is exactly the failure the
+#     fingerprint gates elsewhere exist to prevent.
+# Default is OFF: an unqualified re-run still recomputes everything, which is what a
+# reproduction run should do. run_sleep_constrained.sh opts in.
+def _resume_on():
+    return os.environ.get("SLEEP_RESUME", "0") == "1"
+
+
+def _load_existing(est_num):
+    pkl_path = _out_dir(est_num) / "estimation_results.pkl"
+    if not pkl_path.exists():
+        return {}
+    try:
+        with open(pkl_path, "rb") as f:
+            return pickle.load(f)
+    except Exception as e:
+        raise RuntimeError(f"existing {pkl_path} unreadable ({e}); refusing to resume "
+                           f"against it -- move it aside or run without SLEEP_RESUME") from e
+
+
+def _spec_done(existing, kind):
+    """-> callable(spec_name) returning the stored entry if it can be reused, else None."""
+    from utils.sleep_links import link_constrained
+    want_constrained = link_constrained()
+
+    def _f(spec_name):
+        if not _resume_on():
+            return None
+        entry = existing.get(spec_name)
+        if not entry or entry.get("second_stage") is None:
+            return None
+        if not DROP_LS and entry.get("second_stage_ls") is None:
+            return None                      # an LS column was requested but is missing
+        if kind in ("single_index", "joint_sieve"):
+            for k in ("second_stage", "second_stage_ls"):
+                r = entry.get(k)
+                if r is None:
+                    continue
+                if bool(getattr(r, "si_constrained", False)) != want_constrained:
+                    print(f"  [resume] {spec_name}: stored under a different link setting "
+                          f"(si_constrained={getattr(r, 'si_constrained', False)}, "
+                          f"want {want_constrained}) -- recomputing")
+                    return None
+        return entry
+
+    return _f
+
+
+def _merge_into_pickle(est_num, results):
+    """Merge freshly computed specs into estimation_results.pkl and write it out.
+    Returns (merged dict, list of specs whose robust fit was recomputed)."""
+    out = _out_dir(est_num)
+    out.mkdir(parents=True, exist_ok=True)
+    pkl_path = out / "estimation_results.pkl"
+    results_dict = {}
+    if pkl_path.exists():
+        try:
+            with open(pkl_path, "rb") as f:
+                results_dict = pickle.load(f)
+        except Exception as e:
+            raise RuntimeError(
+                f"existing {pkl_path} unreadable ({e}); refusing to overwrite blindly") from e
+
+    fresh_robust = []
+    for res_main, res_ls, spec_name, res_fs in results:
+        if res_main is not None:
+            entry = results_dict.setdefault(spec_name, {})
+            entry["second_stage"] = res_main
+            entry["first_stage"] = res_fs
+            if res_ls is not None:
+                entry["second_stage_ls"] = res_ls
+            fresh_robust.append(spec_name)
+            print(f"Computed [{spec_name}]")
+        elif res_ls is not None:
+            if spec_name not in results_dict or "second_stage" not in results_dict[spec_name]:
+                raise RuntimeError(
+                    f"LS-only result for [{spec_name}] but no stored robust fit to attach to -- "
+                    f"run the full estimator first")
+            results_dict[spec_name]["second_stage_ls"] = res_ls
+            print(f"Computed [{spec_name}] (LS only; robust preserved)")
+
+    with open(pkl_path, "wb") as f:
+        pickle.dump(results_dict, f)
+    return results_dict, fresh_robust
 
 
 def _calculate_phis(df, results_dict, link):
@@ -316,16 +423,27 @@ def run_sleep_estimator(est_num, kind, time_block=False, spec12_only=False, n_jo
     df = build_pooled_data(time_block=time_block)
     _, iv_specs, state_blocks = define_specifications(time_block=time_block)
 
+    existing = _load_existing(est_num) if _resume_on() else {}
+    _done = _spec_done(existing, kind)
+    if _resume_on():
+        print(f"[resume] SLEEP_RESUME=1 | {len(existing)} spec(s) already on disk")
+
     if spec12_only:
-        results = [_exec_spec(
-            (df, "IV_HausmanFull", iv_specs["IV_HausmanFull"], "Tech", state_blocks["Tech"], kind, None))]
+        _sp12 = "IV_HausmanFull x Tech"
+        if _done(_sp12) is not None:
+            print(f"  [resume] {_sp12}: already on disk, skipping")
+            results = []
+        else:
+            results = [_exec_spec(
+                (df, "IV_HausmanFull", iv_specs["IV_HausmanFull"], "Tech",
+                 state_blocks["Tech"], kind, None))]
     else:
         # Opt 3+9: parallelise over the 3 state blocks; within each block the 4 instrument
         # specs run sequentially with a cross-spec theta warm start. With JULIA_THREADS=2
         # this packs the ~6 fast cores (3 blocks x 2 threads).
         # single-index/joint strategies drop Base: a constant-only index has no direction.
         blocks = [s for s in state_blocks if not (s == "Base" and kind != "logit")]
-        block_tasks = [(df, s, state_blocks[s], kind, iv_specs) for s in blocks]
+        block_tasks = [(df, s, state_blocks[s], kind, iv_specs, _done) for s in blocks]
         # Default SEQUENTIAL: concurrent statsmodels/scipy/numpy calls across threads
         # segfault (0xC0000005) on this stack, and the loky/process backend pickles the
         # 400k-row df (WinError 1450). Sequential is the safe default; the per-fit Julia
@@ -333,61 +451,50 @@ def run_sleep_estimator(est_num, kind, time_block=False, spec12_only=False, n_jo
         # the (risky) threading backend.
         nblk = int(os.environ.get("SLEEP_BLOCK_JOBS", "1"))
         if nblk <= 1:
-            block_results = [_exec_block(bt) for bt in block_tasks]
+            # CHECKPOINT PER BLOCK: merge and write after each one, so an interrupted run keeps
+            # every completed block instead of discarding the estimator's whole grid.
+            block_results = []
+            for bt in block_tasks:
+                br = _exec_block(bt)
+                block_results.append(br)
+                if br:
+                    _merge_into_pickle(est_num, br)
+                    print(f"[checkpoint] {bt[1]} block saved "
+                          f"({len(br)} spec(s)) -> est{est_num}/estimation_results.pkl",
+                          flush=True)
         else:
             from joblib import Parallel, delayed
             block_results = Parallel(n_jobs=min(nblk, len(block_tasks)), backend="threading")(
                 delayed(_exec_block)(bt) for bt in block_tasks)
         results = [r for block in block_results for r in block]
 
-    # MERGE-ON-SAVE (2026-07-31). The previous code rebuilt results_dict from scratch and
-    # pickle.dump'd it, so a `--spec12` run silently DESTROYED the other 7 specs of a full-grid
-    # pickle (this actually happened to est7 on 07-31; restored from _PRE_LSTEST_ backup).
-    # Now: load the existing pickle and update only the specs computed in THIS run.
+    # MERGE-ON-SAVE (2026-07-31). Rebuilding results_dict from scratch and pickle.dump'ing it
+    # meant a `--spec12` run silently DESTROYED the other 7 specs of a full-grid pickle (this
+    # happened to est7 on 07-31; restored from _PRE_LSTEST_ backup). _merge_into_pickle loads
+    # the existing pickle and updates only the specs computed in THIS run:
     #   * res_main (robust) present  -> overwrite second_stage/first_stage as before.
     #   * res_main None, res_ls set  -> LS-only run: attach second_stage_ls to the EXISTING
     #     entry, leaving the stored robust results byte-untouched. The entry must already
     #     exist (an LS variant without its robust counterpart is meaningless) -- fail loudly.
+    # It also runs after every block above, so this final call is normally a no-op that just
+    # returns the merged dict.
     out = _out_dir(est_num)
-    pkl_path = out / "estimation_results.pkl"
-    results_dict = {}
-    if pkl_path.exists():
-        try:
-            with open(pkl_path, "rb") as f:
-                results_dict = pickle.load(f)
-            print(f"Merging into existing pickle ({len(results_dict)} spec(s) on disk)")
-        except Exception as e:
-            raise RuntimeError(
-                f"existing {pkl_path} unreadable ({e}); refusing to overwrite blindly") from e
-
-    fresh_robust = []            # specs whose second_stage was recomputed this run
-    for res_main, res_ls, spec_name, res_fs in results:
-        if res_main is not None:
-            entry = results_dict.setdefault(spec_name, {})
-            entry["second_stage"] = res_main
-            entry["first_stage"] = res_fs
-            if res_ls is not None:
-                entry["second_stage_ls"] = res_ls
-            fresh_robust.append(spec_name)
-            print(f"Computed [{spec_name}]")
-        elif res_ls is not None:
-            if spec_name not in results_dict or "second_stage" not in results_dict[spec_name]:
-                raise RuntimeError(
-                    f"LS-only result for [{spec_name}] but no stored robust fit to attach to -- "
-                    f"run the full estimator first")
-            results_dict[spec_name]["second_stage_ls"] = res_ls
-            print(f"Computed [{spec_name}] (LS only; robust preserved)")
-
-    with open(pkl_path, "wb") as f:
-        pickle.dump(results_dict, f)
+    results_dict, fresh_robust = _merge_into_pickle(est_num, results)
 
     # phi CSVs + the spec-12 CI band derive ONLY from second_stage (robust). If this run
     # recomputed no robust fit (LS-only), the stored CSVs/band are already correct for the
     # merged pickle -- skip the rebuild so their content AND mtimes stay untouched (which the
     # verification step uses as evidence that an LS run disturbed nothing downstream).
-    if not fresh_robust:
-        print(f"Saved results (LS merged; phi CSVs/band untouched) -> {out}")
+    # A RESUMED run is the exception: it may legitimately compute nothing (everything already
+    # on disk) while the CSVs were never written, because the interruption landed between the
+    # last block and the CSV step. Rebuild when they are missing.
+    _csvs_missing = not (out / "market_panel_phis.csv").exists()
+    if not fresh_robust and not (_resume_on() and _csvs_missing):
+        print(f"Saved results (nothing recomputed; phi CSVs/band untouched) -> {out}")
         return
+    if not fresh_robust and _csvs_missing:
+        print("[resume] every spec was already on disk but the phi CSVs are missing "
+              "-- rebuilding them from the stored fits")
 
     # Integrate the time-series report's link-comparison CI band into the main routine:
     # the spec-12 single-index/joint-sieve fit carries a national phi_t bootstrap band
