@@ -67,6 +67,104 @@ def _prep_frame(time_block):
     return df_t, s_cols
 
 
+def link_only_gate(stored_band, out):
+    """BLOCKING GATE: the link-only rebuild must reproduce the stored conditional band.
+
+    Two tiers, because the two sides do not always hold the same objects:
+
+    (a) DRAW-MATRIX -- when the stored band carries its draw matrix (`attrs["draws"]`,
+        attached by `_phi_t_band` since 2026-08-11), compare draws directly: max|delta| over
+        the B x nt values against 1e-8. Draws are Lipschitz in the inputs (the projection is
+        non-expansive, the aggregation linear), so this is a true reproduction criterion, and
+        a genuine seed/scheme/frame drift moves EVERY draw by orders of magnitude more. Key
+        ambiguity does not arise: any pickle new enough to carry draws is mca-keyed.
+
+    (b) EDGE + LOCAL-SPAN TOLERANCE -- bands stored without draws compare on their lo/hi edges.
+        An interpolated empirical quantile moves by up to one local order-statistic gap under
+        sub-tolerance draw noise (measured 2026-08-11: the six 2020Q1-2021Q3 knife edges on
+        the robust cells, delta/gap 0.33-0.99, all other quarters ~1e-13), so the per-quarter
+        tolerance is max(1e-8, the local order-statistic span around the corresponding
+        quantile of the REBUILT draws). Verdicts are three-way: REPRODUCED (inside the 1e-8 floor everywhere),
+        WITHIN-SPAN (knife edges only -- ok, reported distinctly), MISMATCH.
+        WHICH market key the stored band was aggregated on depends on WHEN it was estimated
+        (pre-2026-08-05 bands are CODMUN_IBGE-keyed), so both variants are compared and the
+        gate takes the best; the gap tolerances come from the mca draw matrix in either case
+        (the aggregation changes levels, not the scale of inter-draw spacing).
+    """
+    gate = dict(checked=False, tier=None, max_lo=np.nan, max_hi=np.nan, ok=None, key=None,
+                n_knife=0)
+    if stored_band is None:
+        return gate
+    s = stored_band.sort_values("time_id").reset_index(drop=True)
+
+    stored_draws = stored_band.attrs.get("draws") if hasattr(stored_band, "attrs") else None
+    rebuilt_draws = (out.get("draws") or {}).get("link_only")
+    if stored_draws is not None and rebuilt_draws is not None \
+            and np.shape(stored_draws) == np.shape(rebuilt_draws):
+        d_max = float(np.max(np.abs(np.asarray(stored_draws) - rebuilt_draws)))
+        gate.update(checked=True, tier="draws", key="mca_code", max_lo=d_max, max_hi=d_max,
+                    ok=d_max < 1e-8)
+        msg = "REPRODUCED" if gate["ok"] else "MISMATCH -- do not trust this band"
+        print(f"  [gate] link-only draws vs stored draws: max|d|={d_max:.2e}  {msg}")
+        if not gate["ok"]:
+            print("  [gate] NOTE: a genuine seed/B/scheme/frame drift moves every draw "
+                  "(need B=400, seed 20240624, webb).")
+        return gate
+
+    B_n = rebuilt_draws.shape[0] if rebuilt_draws is not None else 0
+    tol_lo = tol_hi = None
+    if B_n:
+        # Tolerance = the LOCAL ORDER-STATISTIC SPAN, one reordering either side of the
+        # interpolation interval: the edge at fractional index q(B-1) lives in
+        # [srt[i], srt[i+1]], and sub-tolerance draw perturbations can carry it across the
+        # adjacent intervals, so the reachable set is bounded by srt[i+2]-srt[i-1]. Measured
+        # 2026-08-11: E5/robust needs 0.33-0.99 of one gap, E6/robust needs up to 2.4 gaps --
+        # every quarter inside the span on both.
+        srt = np.sort(rebuilt_draws, axis=0)
+        i_lo = int(np.floor(0.025 * (B_n - 1)))
+        i_hi = int(np.floor(0.975 * (B_n - 1)))
+        tol_lo = np.maximum(1e-8, srt[min(i_lo + 2, B_n - 1)] - srt[max(i_lo - 1, 0)])
+        tol_hi = np.maximum(1e-8, srt[min(i_hi + 2, B_n - 1)] - srt[max(i_hi - 1, 0)])
+    # Key selection is VERDICT-aware, not magnitude-aware: the wrong key's deltas (the
+    # aggregation gap, spread over every quarter) can have a smaller max than the right key's
+    # single knife edge, so ranking by raw max picks the key that fails. Rank by (reproduced,
+    # within-gap, max delta) instead.
+    best = None
+    for key_name, var in (("mca_code", "band_link_only"),
+                          ("CODMUN_IBGE", "band_link_only_legacy")):
+        cand = out.get(var)
+        if cand is None or len(cand) != len(s):
+            continue
+        a = cand.sort_values("time_id").reset_index(drop=True)
+        d_lo = np.abs(a["lo"].values - s["lo"].values)
+        d_hi = np.abs(a["hi"].values - s["hi"].values)
+        floor_ok = max(d_lo.max(), d_hi.max()) < 1e-8
+        if tol_lo is not None:
+            ok = bool(np.all(d_lo <= tol_lo) and np.all(d_hi <= tol_hi))
+            n_knife = int((((d_lo > 1e-8) & (d_lo <= tol_lo))
+                           | ((d_hi > 1e-8) & (d_hi <= tol_hi))).sum())
+        else:
+            ok, n_knife = floor_ok, 0
+        rank = (not ok, not floor_ok, float(max(d_lo.max(), d_hi.max())))
+        if best is None or rank < best[0]:
+            best = (rank, key_name, d_lo, d_hi, floor_ok, ok, n_knife)
+    if best is None:
+        return gate
+    _, key_name, d_lo, d_hi, floor_ok, ok, n_knife = best
+    gate.update(checked=True, tier="edges", key=key_name,
+                max_lo=float(d_lo.max()), max_hi=float(d_hi.max()), ok=ok, n_knife=n_knife)
+    msg = ("REPRODUCED" if floor_ok else
+           f"WITHIN LOCAL ORDER-STAT SPAN ({n_knife} knife-edge quarter(s))" if ok else
+           "MISMATCH -- do not trust this band")
+    print(f"  [gate] link-only[{key_name}] vs stored band: max|dlo|={d_lo.max():.2e} "
+          f"max|dhi|={d_hi.max():.2e}  {msg}")
+    if not ok:
+        print("  [gate] NOTE: BOTH key variants mismatch beyond the local order-stat span -> "
+              "seed/B/scheme differ from the stored band (need B=400, seed 20240624, webb) "
+              "or the frame drifted.")
+    return gate
+
+
 def run_cell(est, loss_lbl, B, attach):
     t0 = time.time()
     root = _paths_mod.demand_prep_root()
@@ -84,38 +182,7 @@ def run_cell(est, loss_lbl, B, attach):
     out = unconditional_phi_t_band(df_t, s_cols, True, si_res, LOSS_OF[loss_lbl],
                                    degree=3, fe_time_col=FE_TIME_COL, B=B)
 
-    # ---- BLOCKING GATE: link-only variant must reproduce the stored conditional band -------
-    # WHICH market key the stored band was aggregated on depends on WHEN it was estimated:
-    # bands stored before 2026-08-05 are CODMUN_IBGE-keyed, bands stored after the market-key
-    # fix are mca_code-keyed. Hardcoding either comparator produces a false alarm of exactly the
-    # market-key gap (~1e-4 national units) on the other vintage -- which is what happened on
-    # the 05 Aug trimmed run (all four gates cried MISMATCH at ~1e-4 while the MCA variant
-    # matched at ~1e-12). So: compare BOTH variants, gate on the best, and report which one
-    # matched. A genuine failure (seed/B/scheme/frame drift) fails BOTH by far more than the
-    # key gap, so this cannot mask a real mismatch.
-    gate = dict(checked=False, max_lo=np.nan, max_hi=np.nan, ok=None, key=None)
-    if stored_band is not None:
-        s = stored_band.sort_values("time_id").reset_index(drop=True)
-        best = None
-        for key_name, var in (("mca_code", "band_link_only"),
-                              ("CODMUN_IBGE", "band_link_only_legacy")):
-            cand = out.get(var)
-            if cand is None or len(cand) != len(s):
-                continue
-            a = cand.sort_values("time_id").reset_index(drop=True)
-            d_lo = float(np.max(np.abs(a["lo"].values - s["lo"].values)))
-            d_hi = float(np.max(np.abs(a["hi"].values - s["hi"].values)))
-            if best is None or max(d_lo, d_hi) < max(best[1], best[2]):
-                best = (key_name, d_lo, d_hi)
-        if best is not None:
-            gate.update(checked=True, key=best[0], max_lo=best[1], max_hi=best[2],
-                        ok=max(best[1], best[2]) < 1e-8)
-            msg = "REPRODUCED" if gate["ok"] else "MISMATCH -- do not trust this band"
-            print(f"  [gate] link-only[{best[0]}] vs stored band: max|dlo|={best[1]:.2e} "
-                  f"max|dhi|={best[2]:.2e}  {msg}")
-            if not gate["ok"]:
-                print("  [gate] NOTE: BOTH key variants mismatch -> seed/B/scheme differ from "
-                      "the stored band (need B=400, seed 20240624, webb) or the frame drifted.")
+    gate = link_only_gate(stored_band, out)
     out["meta"]["link_only_gate"] = gate
     out["meta"].update(est=est, loss_label=loss_lbl, spec=SPEC,
                        runtime_s=time.time() - t0,

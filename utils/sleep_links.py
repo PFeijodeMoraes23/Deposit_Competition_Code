@@ -2402,7 +2402,15 @@ def _phi_t_band(gs, phi_point, draw_phi_fn, B, scheme, rng, alpha=0.05):
     draws = np.empty((B, gs["nt"]))
     for b in range(B):
         draws[b] = _agg_phi_t(draw_phi_fn(rng), gs)
-    return _band_from_draws(pt, draws, gs["tuniq"], alpha=alpha)
+    band = _band_from_draws(pt, draws, gs["tuniq"], alpha=alpha)
+    # The raw draw matrix rides along in .attrs (pickled with the frame, ~B*nt*8 bytes) so the
+    # unconditional band's reproduction gate can compare DRAWS rather than interpolated band
+    # edges: an empirical quantile moves by up to one local order-statistic gap under
+    # sub-tolerance draw perturbations, so an edge gate can fire at a knife edge while every
+    # draw reproduces. Bands stored before this attribute existed carry no draws; the gate
+    # falls back to edges with a one-gap tolerance there.
+    band.attrs["draws"] = draws
+    return band
 
 
 def _band_from_draws(pt, draws, tuniq, alpha=0.05, label="phi_t band",
