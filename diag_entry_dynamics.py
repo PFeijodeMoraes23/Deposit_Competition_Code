@@ -55,7 +55,11 @@ DEP_COLS = ["dep_a1", "dep_a2", "dep_a4"]          # a5 (prepaid) is NaN in ESTB
 
 # figure palette (desc_2.py convention)
 B_COLOR, D_COLOR, INK, GRID = "#1565C0", "#E64A19", "#4F4F4F", "#D5D5D0"
-MODEL_COLORS = {"E2": "#2E7D32", "E7": "#6A1B9A", "E8": "#00838F"}
+# every vintage a distinct hue: with only E2/E7/E8 keyed, any other REF_ESTS line fell back
+# to INK and two greys became indistinguishable in the legend (observed 2026-08-10 when the
+# all-six comparison run drew E1/E5/E6 identically).
+MODEL_COLORS = {"E2": "#2E7D32", "E1": "#455A64", "E5": "#6A1B9A",
+                "E6": "#00838F", "E7": "#AD1457", "E8": "#5D4037"}
 
 
 # ----------------------------------------------------------------------------- phi vintages
@@ -288,6 +292,87 @@ def _path_matrix(reg, paths, H, norm, plateau_w):
     return np.vstack(mat) if mat else None
 
 
+def routine_event_curves(reg, paths, H, plateau_w, g, ests):
+    """Per-routine model paths built from each routine's OWN fitted dispersion.
+
+    The scalar model line collapses a routine's fitted phi_mt to one number; this is the
+    D8 '--routine-bands' idea transported to entry dynamics. For each routine N, every kept
+    B event gets the model curve at ITS market's mean fitted phi_m (from the CF_FOUNDATION
+    phi_nopix export, which carries phi_mt through the routine's own link), and the
+    routine's prediction is the MEDIAN of those per-event curves -- the routine as
+    estimated, phi common within a market and varying across markets, exactly what the
+    depositor-attention theory permits. Per routine it also reports the share of events in
+    the explosive regime phi_m*g >= 1 (where no steady-state share exists and the curve is
+    convex -- see model_curve), and the SSE against the empirical median path on the same
+    horizons the implied-phi fit uses.
+    """
+    cf = _paths.PROCESSED / "ESTIMATION_OUTPUT" / "CF_FOUNDATION"
+    M = _path_matrix(reg, paths, H, "main", plateau_w)
+    if M is None:
+        print("  [routine curves] no usable events"); return None
+    emp = np.nanmedian(M, axis=0)
+    hs = [h for h in range(1, H) if h not in plateau_w and np.isfinite(emp[h])]
+    kept = reg[reg["keep"]].copy()
+    kept["_mkt"] = kept["mkt"].astype(str)
+    rows, curves = [], {}
+    for est in ests:
+        fp = cf / f"phi_nopix_E{est}_spec_12.parquet"
+        if not fp.exists():
+            print(f"  [routine curves] E{est}: {fp.name} absent -- skipped"); continue
+        pm = pd.read_parquet(fp, columns=["mca_code", "phi_mt"])
+        pm["mca_code"] = pm["mca_code"].astype(str)
+        mp = pm.groupby("mca_code")["phi_mt"].mean()
+        v = kept["_mkt"].map(mp)
+        hit = float(v.notna().mean())
+        if hit < 0.90:
+            print(f"  [routine curves] E{est}: market map hit-rate {hit:.0%} < 90% -- "
+                  f"skipped (check mca key compatibility)"); continue
+        v = v.fillna(v.median()).to_numpy(float)
+        C = np.vstack([model_curve(p, g, H, "main", plateau_w) for p in v])
+        med = np.nanmedian(C, axis=0)
+        curves[est] = (med, np.nanpercentile(C, 25, axis=0), np.nanpercentile(C, 75, axis=0))
+        sse = float(((med[hs] - emp[hs]) ** 2).sum())
+        expl = float((v * g >= 1.0).mean())
+        rows.append({"estim": est, "phi_mean": float(v.mean()),
+                     "phi_p10": float(np.percentile(v, 10)),
+                     "phi_p90": float(np.percentile(v, 90)),
+                     "map_hit": hit, "share_explosive": expl, "sse_vs_data": sse,
+                     "n_events": len(v)})
+        print(f"  [routine curves] E{est}: mean phi_m={v.mean():.3f} "
+              f"p10-p90 [{np.percentile(v,10):.3f},{np.percentile(v,90):.3f}] "
+              f"map hit={hit:.0%} | explosive share={expl:.0%} | SSE vs data={sse:.4f}")
+        for h in range(H + 1):
+            rows.append({"estim": est, "h": h, "model_median": float(med[h]),
+                         "model_q25": float(curves[est][1][h]),
+                         "model_q75": float(curves[est][2][h]),
+                         "data_median": float(emp[h]) if np.isfinite(emp[h]) else np.nan})
+    if not rows:
+        return None
+    pd.DataFrame(rows).to_csv(OUT_DIR / "d10_routine_curves.csv", index=False)
+
+    import matplotlib.pyplot as plt
+    fig, ax = plt.subplots(figsize=(7.2, 4.6))
+    ax.grid(color=GRID, lw=0.6)
+    hgrid = np.arange(H + 1)
+    ax.plot(hgrid, emp, "o-", color=D_COLOR, lw=2.0, ms=4, label="data (median B path)",
+            zorder=5)
+    pal = ["#1565C0", "#2E7D32", "#6A1B9A", "#00838F", "#E65100", "#5D4037"]
+    for c, (est, (med, q25, q75)) in zip(pal, curves.items()):
+        ax.plot(hgrid, med, "-", color=c, lw=1.4, label=f"E{est} (own $\\phi_m$)")
+        ax.fill_between(hgrid, q25, q75, color=c, alpha=0.10)
+    ax.axhline(1.0, color="0.6", lw=0.8, ls=":")
+    ax.set_xlabel("quarters since entry")
+    ax.set_ylabel("normalised entrant deposits (main norm.)")
+    ax.set_title("D10 per routine: entry paths implied by each routine's own fitted "
+                 "$\\phi_m$ dispersion", fontsize=10.5)
+    ax.legend(fontsize=8, ncol=2)
+    fig.tight_layout()
+    fig.savefig(OUT_DIR / "d10_routine_curves.png", dpi=150)
+    plt.close(fig)
+    print(f"  -> d10_routine_curves.csv / .png")
+    return rows
+
+
 def event_paths(reg, paths, H, norm, plateau_w, boot, seed):
     """Median normalised path + IQR + bootstrap CI over kept events."""
     mat = []
@@ -457,6 +542,11 @@ def main(args):
         pd.DataFrame(imp).T.rename_axis("kind").reset_index().to_csv(
             OUT_DIR / "d10_implied_phi.csv", index=False)
 
+    if args.routine_curves:
+        print("\n  per-routine model paths from each routine's own fitted phi_m dispersion:")
+        routine_event_curves(reg_b, paths_b, H, plateau_w, g,
+                             [int(x) for x in args.routine_curves])
+
     make_figure(paths_df, curves_df, vint, g, args, imp)
 
     # verdict
@@ -562,6 +652,8 @@ if __name__ == "__main__":
                     help="drop events entering above this share (mechanical booking)")
     ap.add_argument("--window-only", action="store_true",
                     help="restrict to entries from 2016Q1 (the estimation window)")
+    ap.add_argument("--routine-curves", nargs="+", default=None,
+                    help="per-routine model paths from each routine's own fitted phi_m (D8 --routine-bands analogue), e.g. --routine-curves 1 2 5 6 7 8")
     ap.add_argument("--no-branch-screen", action="store_true",
                     help="skip the ESTBAN branch-timing screen even if the sidecar exists")
     raise SystemExit(main(ap.parse_args()))

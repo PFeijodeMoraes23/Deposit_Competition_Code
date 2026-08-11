@@ -33,6 +33,14 @@ mkdir -p "${HERE}/logs"
 
 # Default routines: the single-index links + their +Time variants E5 (single-index),
 # E6 (single-index+time), E7 (joint), E8 (joint+time).
+# Provenance is echoed because an `export ROUTINES=...` lingering in the login shell silently
+# overrides the default and the run then SKIPS routines with no error anywhere — the 21525240 run
+# shipped without E1/E2 and the only evidence was one line of submit output (2026-08-07).
+if [[ -n "${ROUTINES+set}" ]]; then
+    echo "ROUTINES='${ROUTINES}' (FROM ENVIRONMENT — default would be '1 2 5 6 7 8'; unset ROUTINES to use it)"
+else
+    echo "ROUTINES defaulting to '1 2 5 6 7 8'"
+fi
 ROUTINES="${ROUTINES:-1 2 5 6 7 8}"
 # Engines: IFT (blp_2) + numerical (blp_1) cross-check. Override e.g. ENGINES="ift".
 ENGINES="${ENGINES:-ift numerical}"

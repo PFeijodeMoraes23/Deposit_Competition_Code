@@ -55,7 +55,10 @@ TABLES_DIR = DATA_DIR / "ESTIMATION_OUTPUT" / "Rout"
 DRAFTS_DIR = rc.DRAFTS_DIR
 TABLES_DIR.mkdir(parents=True, exist_ok=True)
 
-STAGES = rc.STAGES
+# Stop at ext1, matching the per-routine RC tables (rc.RC_TABLE_STAGES): ext2/extended are the
+# degenerate rungs where the flat objective inflates every SE ~6-10x, so those columns carry no
+# usable information. The Full model still appears in the _full demand-comparison table.
+STAGES = rc.RC_TABLE_STAGES
 # RC-stage headers by number of freed random coefficients (1→7). `full` is not a stage (dropped from
 # rc.STAGES; σ(ln assets) removed → full≡rc4), so ext1=5 RC, ext2=6 RC.
 STAGE_HEAD = {"sigma": "1 RC", "rc2": "2 RC", "rc3": "3 RC", "rc4": "4 RC",
@@ -191,7 +194,7 @@ def build_table(est: int) -> str:
         r"\textit{Notes:} The estimation strategy is enumerated in "
         r"Section~\ref{sec:empirical:sleep}. Column 1 is the non-RC logit (`full' sub-model); "
         r"the remaining columns are the RC-BLP stages run on the cluster, each freeing one more random "
-        r"coefficient (1 RC $\to$ Full, i.e.\ all 8). The logit column reports wild cluster "
+        r"coefficient (1 RC $\to$ 5 RC). The logit column reports wild cluster "
         rf"bootstrap standard errors (conglomerate clusters); for the RC columns, {rc_sem}. "
         r"Stars from a Student-$t$ reference with $G^*$ effective clusters: *** $p<0.01$, ** $p<0.05$, "
         r"* $p<0.1$. A $\dagger$ marks a random-coefficient $\Sigma$ estimated at the $\Sigma\ge0$ "

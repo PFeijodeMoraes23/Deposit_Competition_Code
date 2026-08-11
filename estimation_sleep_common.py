@@ -41,7 +41,9 @@ from utils.sleep_links import (fit_nlls_link, fit_single_index, fit_joint_single
                                phi_from_native)
 from utils import paths as _paths_mod
 
-# kind -> phi_from_native link key
+# kind -> phi_from_native link key. Fallback only: _calculate_phis prefers each
+# result's own .link tag, which distinguishes the constrained single-index
+# ("index_sieve") from the cubic ("index") within the same kind.
 LINK_OF = {"logit": "logit", "single_index": "index",
            "joint_sieve": "sieve", "joint_kernel": "kernel"}
 
@@ -391,7 +393,12 @@ def _calculate_phis(df, results_dict, link):
         if ss is None:
             continue
         safe_key = model_key.replace(" ", "_").replace(".", "")
-        df[f"phi_mt_{safe_key}"] = phi_from_native(df, ss, link)
+        # The result's own link tag decides the branch: a shape-constrained single-index fit
+        # stores link="index_sieve" (I-spline grid over the full native index) while the
+        # kind-level key says "index" (cubic in si_b), and the cubic branch would read the
+        # I-spline betas as monomial coefficients. `link` is the fallback for results
+        # that carry no tag.
+        df[f"phi_mt_{safe_key}"] = phi_from_native(df, ss, getattr(ss, "link", None) or link)
         # WEIGHT = MARKET POPULATION, i.e. the cell MEAN of market_size (2026-08-05 fix).
         # market_size (= pop_total) is CONSTANT within a (quarter, municipality) cell, so the
         # previous M_mt=("market_size","sum") multiplied by the number of bank rows present:

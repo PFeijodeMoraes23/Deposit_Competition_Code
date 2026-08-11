@@ -243,6 +243,35 @@ def main():
     print(f"  Observed {float(su.median()) if 'a_user_equiv' in agg.columns and len(su) else med:.4f}")
     print(f"  < 1-phi-hat {one_m_phi:.3f}: the estimate SURVIVES, but treat this as a sanity")
     print("  check, not as the second identification moment Egan et al. get from microdata.")
+    # ---- per-routine anchors -------------------------------------------------------------
+    # The formation rate is phi-free, so the ONLY routine-specific object is the anchor
+    # 1-phi. The test is one-sided and conservative in exactly the direction that matters:
+    # a_user_equiv counts only net-positive user-equivalent key formation, so it is a LOWER
+    # bound on gross relationship formation -- and at most (1-phi) of depositors can form a
+    # new relationship in a quarter. A routine whose 1-phi falls BELOW the measured rate is
+    # therefore genuinely contradicted, not merely unsupported. phi per routine = mean phi_mt
+    # of the CF_FOUNDATION export (the production phi through that routine's own link; same
+    # anchor family as the D8/D10 per-routine exhibits).
+    if "a_user_equiv" in agg.columns and len(su):
+        a_ue = float(su.median())
+        cf = _paths.PROCESSED / "ESTIMATION_OUTPUT" / "CF_FOUNDATION"
+        print("\n  PER-ROUTINE anchors vs the user-equivalent formation rate "
+              f"({a_ue:.4f}/qtr):")
+        rrows = []
+        for est in (1, 2, 5, 6, 7, 8):
+            fp = cf / f"phi_nopix_E{est}_spec_12.parquet"
+            if not fp.exists():
+                print(f"    E{est}: {fp.name} absent -- skipped"); continue
+            ph = float(pd.read_parquet(fp, columns=["phi_mt"])["phi_mt"].mean())
+            margin = 1.0 - ph
+            ok = a_ue <= margin
+            print(f"    E{est}: phi={ph:.4f}  1-phi={margin:.4f}  "
+                  f"{'PASSES (rate below the awake margin)' if ok else 'VIOLATED -- observed formation exceeds the awake margin'}")
+            rrows.append({"estim": est, "phi_mean": ph, "one_minus_phi": margin,
+                          "a_user_equiv": a_ue, "bound_holds": ok})
+        if rrows:
+            pd.DataFrame(rrows).to_csv(OUT_DIR / "d11_routine_anchors.csv", index=False)
+            print(f"  -> d11_routine_anchors.csv")
     print(f"\nresults -> {OUT_DIR / 'd11_flow_moment.csv'}")
     return 0
 

@@ -81,6 +81,8 @@ def demand_parquet(estim: int = 2):
 # Module-level default preserved so every existing arm keeps working unchanged; `main` rebinds
 # it when --estim is passed.
 PARQUET = demand_parquet(2)
+ESTIM = 2      # the routine PARQUET points at; set by --estim in main. arm_blpelast
+               # reads it to pair the routine's own alpha-hat with its own parquet.
 BLP_RAW = _paths.PROCESSED / "ESTIMATION_OUTPUT" / "BLP_RESULTS" / "cluster_raw"
 OUT_DIR = _paths.PROCESSED / "ESTIMATION_OUTPUT" / "DIAG_PHI_SEPARATION"
 OUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -767,9 +769,15 @@ def arm_fittedshare():
 def arm_blpelast():
     """D9: BLP-elasticity consistency. The model allows ONLY the awake margin to react
     to the contemporaneous spread: dDep/drho = (1-phi)*M*alpha*s(1-s). Compare that
-    implied response (cluster alpha-hat, parquet phi/M/s) with the panel's instrumented
-    spread response. Observed >> implied means the awake mass (1-phi-hat) is understated,
-    i.e. phi-hat overstates sleepiness."""
+    implied response with the panel's instrumented spread response. Observed >> implied
+    means the awake mass (1-phi-hat) is understated, i.e. phi-hat overstates sleepiness.
+
+    The implied side is the DIAGONAL pairing only: routine N's alpha-hat with routine N's
+    own parquet (phi, M, s), selected by --estim. The parquet's awake share and market size
+    are built FROM that routine's phi-hat (Dep_Act = Dep - phi*g*Dep_lag), and alpha-hat was
+    estimated on those shares -- so a cross pairing (one routine's awake mass, another's
+    alpha) multiplies objects from two different decompositions and tests nothing coherent.
+    The observed side is the shared linear kernel and is common to every routine's run."""
     print("\n=== D9: BLP elasticity consistency (implied vs observed spread response) ===")
     pq = pd.read_parquet(PARQUET, columns=["entity_id", "time_id", "is_B", "deposit_type",
                                            "share_B_cond", "phi_mt", "M_mt"])
@@ -792,10 +800,11 @@ def arm_blpelast():
 
     rows = [{"spec": "observed", "param": "dDep_drho", "coef": coef, "p_wcb": pval}]
     phi_bar = float(b["phi_mt"].mean())
-    for est in ("E7", "E8"):
+    for est in [f"E{ESTIM}"]:
         th = load_blp_theta1(est)
         if th is None:
-            print(f"  [{est}] no converged extended results; skipped")
+            print(f"  [{est}] no converged extended results for this routine — the diagonal "
+                  f"pairing needs routine {est}'s own alpha-hat; nothing to compare")
             continue
         implied = float((base * th["alpha"]).mean())
         print(f"  [{est}] alpha={th['alpha']:+.4f}/annual-pp -> implied mean dDep/drho = "
@@ -1041,6 +1050,7 @@ if __name__ == "__main__":
         PARQUET = demand_parquet(a.estim)
         globals()["PARQUET"] = PARQUET
         print(f"[estim E{a.estim}] phi source: {PARQUET.name}")
+    globals()["ESTIM"] = a.estim
 
     to_run = list(ARMS) if a.arm == "all" else [a.arm]
     all_rows = []

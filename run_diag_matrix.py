@@ -54,6 +54,7 @@ UNITS = {
     "d0":   ("diag_phi_augmented_tests.py",   ["--arm", "identity"],     1.0),
     "d2a":  ("diag_phi_augmented_tests.py",   ["--arm", "fittedshare"],  3.0),
     "d2b":  ("diag_phi_augmented_tests.py",   ["--arm", "lagdepact"],    2.5),
+    "d9":   ("diag_phi_augmented_tests.py",   ["--arm", "blpelast"],     2.0),
     "d3":   ("diag_phi_interaction_tests.py", ["--arm", "attractiveness"], 6.0),
     "d5":   ("diag_phi_interaction_tests.py", ["--arm", "types"],        1.5),
     "d1s":  ("diag_phi_mc_recovery.py",       ["--mode", "grid", "--smoke"], 0.5),
@@ -61,16 +62,17 @@ UNITS = {
     "d8":   ("diag_phi_mc_recovery.py",       ["--mode", "acf"],         1.0),
 }
 
-# Units whose script does NOT accept --estim. diag_phi_interaction_tests.py takes only --arm, so
-# appending --estim aborts it in argparse before a single row is computed -- a scheduled d3/d5
-# would have failed instantly rather than producing an E2 result. Listed here so the runner
-# omits the flag and reports the E2-only scope, instead of the whole unit dying.
-NO_ESTIM = {"d3", "d5"}
+# Units whose script does NOT accept --estim. diag_phi_interaction_tests.py takes only --arm,
+# and diag_phi_mc_recovery.py exposes --mode/--phi-prod but no --estim (its calibration parquet
+# and kernel are E2's by construction) -- appending --estim aborts either one in argparse before
+# a single row is computed. Listed here so the runner omits the flag and reports the E2-only
+# scope, instead of the whole unit dying.
+NO_ESTIM = {"d3", "d5", "d1s", "d1", "d8"}
 
 # Arms whose ESTIMATOR is E2's regardless of --estim. Running them for another routine gives a
 # HYBRID (that routine's phi inside E2's kernel), which is a legitimate reduced-form check but is
 # not "the test for that routine". The runner labels these loudly rather than pretending.
-E2_KERNEL = {"d2b", "d3", "d1", "d1s", "d8"}
+E2_KERNEL = {"d2b", "d3", "d1", "d1s", "d8", "d9"}
 
 
 def parse_deadline(until: str | None, for_: str | None) -> dt.datetime | None:

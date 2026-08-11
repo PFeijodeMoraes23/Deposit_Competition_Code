@@ -96,8 +96,17 @@ echo "════════════════════════�
 COST_AFTEROK=""
 if [[ "${DO_BBL}" == "1" ]]; then
     echo; echo "═══ Phase 1a: BBL cost estimation (submit_bbl_all.sh) ═══"
-    bbl_out="$(bash submit_bbl_all.sh)"
+    # Capture WITHOUT letting set -e abort before the output is shown: the sub-orchestrator's
+    # preflight prints its "MISSING ..." diagnostics to stdout, and dying on the $(...) assignment
+    # swallowed them entirely (observed on Bouchet 2026-08-07: Phase 1a printed nothing and no job
+    # was submitted). Same pattern at every capture site below.
+    set +e; bbl_out="$(bash submit_bbl_all.sh)"; bbl_rc=$?; set -e
     printf '%s\n' "${bbl_out}"
+    if [[ ${bbl_rc} -ne 0 ]]; then
+        echo "ERROR: submit_bbl_all.sh failed (rc=${bbl_rc}) — its output is above (usually a preflight MISSING)." >&2
+        rm -f "${LOG_MARKER}"
+        exit "${bbl_rc}"
+    fi
     COST_AFTEROK="$(printf '%s\n' "${bbl_out}" | sed -n 's/^BBL_SOLVE_JOBIDS=//p' | tail -n1)"
     add_jobids "$(printf '%s\n' "${bbl_out}" | sed -n 's/^BBL_ALL_JOBIDS=//p' | tail -n1)"
     if [[ -z "${COST_AFTEROK}" && "${DO_CF1_NET}" == "1" ]]; then
@@ -114,10 +123,14 @@ fi
 first_cf_demand="${ORCH_DEMAND_EVAL}"   # run the baseline on the first CF invocation only
 if [[ "${DO_CF4_NOEVAL}" == "1" ]]; then
     echo; echo "═══ Phase 1b: CF4 no re-eval  (CF4_EXACT_NOPIX=0) ═══"
+    set +e
     out="$(DO_DEMAND_EVAL="${first_cf_demand}" DO_CF1=0 DO_CF1NET=0 DO_CF4=1 DO_CF3=0 DO_CF5=0 DO_CF6=0 \
            CF4_EXACT_NOPIX=0 \
            bash submit_cf_all.sh)"
-    printf '%s\n' "${out}"; capture_cf_ids "${out}"
+    cf_rc=$?; set -e
+    printf '%s\n' "${out}"
+    [[ ${cf_rc} -ne 0 ]] && { echo "ERROR: Phase-1b submit_cf_all.sh failed (rc=${cf_rc}) — output above." >&2; rm -f "${LOG_MARKER}"; exit "${cf_rc}"; }
+    capture_cf_ids "${out}"
     first_cf_demand=0                    # baseline already scheduled
 fi
 
@@ -128,8 +141,10 @@ if [[ "${DO_CF1_GROSS}" == "1" || "${DO_CF1_NET}" == "1" || "${DO_CF4_REEVAL}" =
             DO_CF1="${DO_CF1_GROSS}" DO_CF1NET="${DO_CF1_NET}" DO_CF4="${DO_CF4_REEVAL}"
             DO_CF3=0 DO_CF5=0 DO_CF6=0 CF4_EXACT_NOPIX=1)
     [[ -n "${COST_AFTEROK}" ]] && p2_env+=(CF_COST_AFTEROK="${COST_AFTEROK}")
-    out="$(env "${p2_env[@]}" bash submit_cf_all.sh)"
-    printf '%s\n' "${out}"; capture_cf_ids "${out}"
+    set +e; out="$(env "${p2_env[@]}" bash submit_cf_all.sh)"; cf_rc=$?; set -e
+    printf '%s\n' "${out}"
+    [[ ${cf_rc} -ne 0 ]] && { echo "ERROR: Phase-2 submit_cf_all.sh failed (rc=${cf_rc}) — output above." >&2; rm -f "${LOG_MARKER}"; exit "${cf_rc}"; }
+    capture_cf_ids "${out}"
 fi
 
 # ── Final archive: one short afterany job zips this run's CF outputs for download ──

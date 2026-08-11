@@ -151,6 +151,9 @@ def _entity_table(size_bins):
     # be able to change the sample the archived runs were drawn from.
     ent = ent.dropna(subset=["ln_a", "sig", "accr", "dep0", "congl", "nobs"])
     ent = ent[(ent["nobs"] >= 8) & (ent["sig"] > 0)]
+    # entity_id survives as a COLUMN: calibrate() resets the index, and the routine-band
+    # mode needs the id to map each sampled entity to its routine-fitted phi.
+    ent = ent.reset_index()
     ent["size_bin"] = pd.qcut(ent["mean_dep"].rank(method="first"),
                               size_bins, labels=False).astype(int)
     # aggregate log-shock scale: sd over time of the cross-entity mean of ln A
@@ -658,6 +661,84 @@ def mode_acf(a):
                   f"{phi_vec.min():.3f}-{phi_vec.max():.3f}): inside {ins_m.mean():.0%}, "
                   f"above {_hlist(above_m)}")
 
+        # ---- per-routine model bands (--routine-bands) -------------------------------
+        # For each routine, the pooled data ACF is banded against that routine's OWN model:
+        # a scalar band at its mean fitted phi (the LEVEL) and a vector band where every
+        # entity carries its own routine-fitted phi_j = its entity-mean phi_mt (the
+        # DISPERSION the routine's state index actually generates across markets). The
+        # vector band is the theory-consistent object: phi_mt varies across markets in the
+        # model, and is common across banks and types WITHIN one -- so this tests each
+        # routine as estimated, not a strawman. Outputs are separate files; the archived
+        # pooled csv/figure are never touched.
+        if a.routine_bands:
+            cf_dir = _paths.PROCESSED / "ESTIMATION_OUTPUT" / "CF_FOUNDATION"
+            ent_r, sd_r = calibrate(a.n_entities, a.seed, size_bins=a.size_bins)
+            r_rows, r_panels = [], []
+            for e_id in a.routine_bands:
+                fp = cf_dir / f"phi_nopix_E{e_id}_spec_12.parquet"
+                if not fp.exists():
+                    print(f"  [E{e_id}] MISSING {fp.name} -- run cf_4_upsilon_export.py "
+                          f"--estim {e_id}; skipped")
+                    continue
+                pm = (pd.read_parquet(fp, columns=["entity_id", "phi_mt"])
+                      .groupby("entity_id")["phi_mt"].mean())
+                v = ent_r["entity_id"].map(pm)
+                hit = float(v.notna().mean())
+                v = v.fillna(v.median())
+                phi_bar = float(v.mean())
+                bands = {}
+                for kind, phi_arg in (("level", phi_bar), ("fitted phi_j", v.tolist())):
+                    B = _sim_band(ex, ent_r.to_dict("list"), sd_r, phi_arg,
+                                  a.seed, a.reps_acf, detr)
+                    lo, hi = (np.nanpercentile(B, 2.5, axis=0),
+                              np.nanpercentile(B, 97.5, axis=0))
+                    ins, above, below = _inside(acf_pool, lo, hi)
+                    bands[kind] = (lo, hi)
+                    print(f"  [E{e_id} | {kind:12s}] mean phi={phi_bar:.3f} "
+                          f"p10-p90 [{v.quantile(.1):.3f},{v.quantile(.9):.3f}] "
+                          f"map hit={hit:.0%} | inside: {ins.mean():.0%}  "
+                          f"above: {_hlist(above)}  below: {_hlist(below)}")
+                    for i, h in enumerate(range(1, HMAX + 1)):
+                        r_rows.append({"estim": e_id, "kind": kind, "h": h,
+                                       "acf_data": acf_pool[i], "band_lo": lo[i],
+                                       "band_hi": hi[i], "inside": bool(ins[i]),
+                                       "phi_mean": phi_bar, "phi_p10": float(v.quantile(.1)),
+                                       "phi_p90": float(v.quantile(.9)), "map_hit": hit})
+                r_panels.append((e_id, phi_bar, bands))
+            if r_rows:
+                pd.DataFrame(r_rows).to_csv(OUT_DIR / "d8_acf_routine_bands.csv",
+                                            index=False)
+                import matplotlib.pyplot as plt
+                hgrid = np.arange(1, HMAX + 1)
+                ncol_r = min(len(r_panels), 3)
+                nrow_r = int(np.ceil(len(r_panels) / ncol_r))
+                figr, axr = plt.subplots(nrow_r, ncol_r,
+                                         figsize=(4.2 * ncol_r, 3.4 * nrow_r),
+                                         squeeze=False, sharey=True)
+                for ax, (e_id, phi_bar, bands) in zip(axr.ravel(), r_panels):
+                    ax.grid(color=PAL_GRID, lw=0.6)
+                    lo_v, hi_v = bands["fitted phi_j"]
+                    lo_s, hi_s = bands["level"]
+                    ax.fill_between(hgrid, lo_v, hi_v, alpha=0.30, color=PAL_B,
+                                    label="fitted $\\phi_j$ band")
+                    ax.plot(hgrid, lo_s, "--", color=PAL_B, lw=1.1,
+                            label=f"level band ($\\bar\\phi$={phi_bar:.3f})")
+                    ax.plot(hgrid, hi_s, "--", color=PAL_B, lw=1.1)
+                    ax.plot(hgrid, acf_pool, "o-", color=PAL_D, ms=3.5, label="data")
+                    ax.axhline(0, lw=0.8, color="0.5")
+                    ax.set_title(f"E{e_id}", fontsize=10)
+                    ax.set_xlabel("horizon h (quarters)")
+                ax = axr.ravel()[0]
+                ax.set_ylabel("within ACF" + (" (detrended)" if detr else ""))
+                ax.legend(fontsize=7)
+                for ax in axr.ravel()[len(r_panels):]:
+                    ax.axis("off")
+                figr.suptitle("D8 per routine: pooled data ACF vs each routine's own "
+                              "fitted-model band", fontsize=11)
+                figr.tight_layout()
+                figr.savefig(OUT_DIR / "d8_acf_routine_bands.png", dpi=150)
+                print(f"  -> d8_acf_routine_bands.csv / .png")
+
     out = pd.DataFrame(rows)
     # the archived default run keeps its exact 4-column layout (h, acf_data, band_lo,
     # band_hi); only the new variants get the long group/inside format.
@@ -918,6 +999,13 @@ if __name__ == "__main__":
                     help="power: second grid CSV (e.g. the --censor run) to difference")
     # default=None so an unspecified --phi-prod RESOLVES from the estimation output rather
     # than freezing a literal; an explicit value on the command line still wins.
+    ap.add_argument("--routine-bands", nargs="+", type=int, default=None,
+                    help="D8 per routine: for each estimation routine N, band the POOLED data "
+                         "ACF against (a) a scalar band at that routine's mean fitted phi and "
+                         "(b) a vector band where each entity carries its own routine-fitted "
+                         "phi_j (entity mean of phi_mt from CF_FOUNDATION/phi_nopix_E{N}). "
+                         "Writes d8_acf_routine_bands.{csv,png}; the archived pooled outputs "
+                         "are untouched.")
     ap.add_argument("--phi-prod", type=float, default=None,
                     help="production phi for the iso-contour / D8 band. Default: read from "
                          "the est2 spec-12 fit via utils.phi_reference (pass 0.985 to use "
