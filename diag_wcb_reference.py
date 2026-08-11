@@ -25,8 +25,8 @@ opting in would do, in three sections:
            CV ~ 8.5 => Carter-Schnepel-Steigerwald G* ~ 6). Rejection rates under a TRUE
            null for the three schemes, so "the normal reference over-rejects" is a
            measured number, not an assertion.
-  battery  the real phi-separation regressions (D5 type contrast, D3 attractiveness
-           placebo, D2b lagged awake inflow, D6b pooled Pix break) refit ONCE each, with
+  battery  the real phi-separation regressions (D4b type contrast, D4a attractiveness
+           placebo, D2 lagged awake inflow, D6b pooled Pix break) refit ONCE each, with
            all three schemes read off the SAME fit. Legacy p-values are printed next to
            the archived DIAG_PHI_SEPARATION csv values as a replication check.
 
@@ -44,8 +44,8 @@ RESULT AS OF 2026-08-03 (re-run to refresh; do not trust this header over the cs
            the normal reference, 13.8% under WCU-t, 8.3% under WCR-t (CRVE+t(G*): 14.5%).
            Balanced G=20 control: 14.0% / 6.0% / 6.8%.
   battery  11/11 legacy p-values reproduce the archived csvs. All nulls stay null
-           (D2b 0.7015 -> 0.736/0.721; D3 0.5413 -> 0.582/0.582; D6b 0.1679 ->
-           0.246/0.291). The single rejection, D5's CDB carry excess (0.0131), goes to
+           (D2 0.7015 -> 0.736/0.721; D4a 0.5413 -> 0.582/0.582; D6b 0.1679 ->
+           0.246/0.291). The single rejection, D4b's CDB carry excess (0.0131), goes to
            0.152 under WCU-t but 0.010 under WCR-t -- the two corrected variants
            DISAGREE on it, and the size section says WCR is the one to believe here.
 """
@@ -314,14 +314,14 @@ def section_size(reps, G, cv_target, n_total, B, seed=20260803):
 # Archived legacy p-values (DIAG_PHI_SEPARATION csvs, read 2026-08-03) so the
 # replication is checked rather than trusted.
 ARCHIVED = {
-    ("D5", "OLSxTech(all k)", "Zdiff_k4"): 0.013076,
-    ("D5", "OLSxTech(all k)", "Zdiff_k5"): 0.060668,
-    ("D5", "OLSxTech(all k)", "Zdiff_k2"): 0.213056,
-    ("D5", "spec12(k=4,5)", "Zdiff_k5"): 0.621844,
-    ("D3", "spec12(k=4,5)", "rank_x_Z"): 0.541269,
-    ("D3", "OLSxTech(all k)", "rank_x_Z"): 0.312231,
-    ("D2b", "spec12(k=4,5)", "A_full_lag"): 0.701456,
-    ("D2b", "OLSxTech(all k)", "A_full_lag"): 0.737835,
+    ("D4b", "OLSxTech(all k)", "Zdiff_k4"): 0.013076,
+    ("D4b", "OLSxTech(all k)", "Zdiff_k5"): 0.060668,
+    ("D4b", "OLSxTech(all k)", "Zdiff_k2"): 0.213056,
+    ("D4b", "spec12(k=4,5)", "Zdiff_k5"): 0.621844,
+    ("D4a", "spec12(k=4,5)", "rank_x_Z"): 0.541269,
+    ("D4a", "OLSxTech(all k)", "rank_x_Z"): 0.312231,
+    ("D2", "spec12(k=4,5)", "A_full_lag"): 0.701456,
+    ("D2", "OLSxTech(all k)", "A_full_lag"): 0.737835,
     ("D6b", "spec12(k=4,5)", "postZ_x"): 0.167945,
     ("D6b", "spec12(k=4,5)", "postZ"): 0.506229,
     ("D6b", "spec12(k=4,5)", "Z_x"): 0.302509,
@@ -403,7 +403,7 @@ def section_battery(arms, B):
     rows = []
 
     if "d5" in arms:
-        # D5 (diag_phi_interaction_tests.arm_types): difference-coded type carries.
+        # D4b (diag_phi_interaction_tests.arm_types): difference-coded type carries.
         for spec, has_cf, ks, base_k in (("OLSxTech(all k)", False, [1, 2, 4, 5], 1),
                                          ("spec12(k=4,5)", True, [4, 5], 4)):
             d0 = df0.copy()
@@ -416,12 +416,12 @@ def section_battery(arms, B):
                 extra.append(nm)
             res, d, _ = _fit_aug(d0, s_cols, extra, has_cf)
             r = _three_schemes(res, extra, B)
-            _print_block("D5", spec, r, len(d))
-            rows += [dict(arm="D5", spec=spec, n=len(d), **x) for x in r]
-            print(f"  [{_ts()}] D5 {spec} done")
+            _print_block("D4b", spec, r, len(d))
+            rows += [dict(arm="D4b", spec=spec, n=len(d), **x) for x in r]
+            print(f"  [{_ts()}] D4b {spec} done")
 
     if "d3" in arms:
-        # D3 (arm_attractiveness): predetermined 2016 within-market share rank x carry.
+        # D4a (arm_attractiveness): predetermined 2016 within-market share rank x carry.
         df = df0.copy()
         base = df[df["year"] == 2016].copy()
         base["_rank"] = base.groupby(["mca_code", "deposit_type", "time_id"],
@@ -433,20 +433,20 @@ def section_battery(arms, B):
         for spec, has_cf in (("spec12(k=4,5)", True), ("OLSxTech(all k)", False)):
             res, d, _ = _fit_aug(df, s_cols, ["rank_x_Z"], has_cf)
             r = _three_schemes(res, ["rank_x_Z"], B)
-            _print_block("D3", spec, r, len(d))
-            rows += [dict(arm="D3", spec=spec, n=len(d), **x) for x in r]
-            print(f"  [{_ts()}] D3 {spec} done")
+            _print_block("D4a", spec, r, len(d))
+            rows += [dict(arm="D4a", spec=spec, n=len(d), **x) for x in r]
+            print(f"  [{_ts()}] D4a {spec} done")
 
     if "d2b" in arms:
-        # D2b (arm_lagdepact, uncensored headline): lagged awake inflow A_full_lag.
+        # D2 (arm_lagdepact, uncensored headline): lagged awake inflow A_full_lag.
         df = build_uncensored_inflow(df0.copy())
         df = lag_within_entity(df, "A_full")
         for spec, has_cf in (("spec12(k=4,5)", True), ("OLSxTech(all k)", False)):
             res, d, _ = _fit_aug(df, s_cols, ["A_full_lag"], has_cf)
             r = _three_schemes(res, ["A_full_lag"], B)
-            _print_block("D2b", spec, r, len(d))
-            rows += [dict(arm="D2b", spec=spec, n=len(d), **x) for x in r]
-            print(f"  [{_ts()}] D2b {spec} done")
+            _print_block("D2", spec, r, len(d))
+            rows += [dict(arm="D2", spec=spec, n=len(d), **x) for x in r]
+            print(f"  [{_ts()}] D2 {spec} done")
 
     if "d6b" in arms:
         # D6b (arm_pixpooled, 'pooled' variant): post x carry x exposure.
@@ -516,7 +516,7 @@ if __name__ == "__main__":
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--only", nargs="*", default=["tier0", "size", "battery"],
                     choices=["tier0", "size", "battery"])
-    ap.add_argument("--arms", default="d5,d3,d2b,d6b",
+    ap.add_argument("--arms", default="d5,d3,d2b",
                     help="battery arms to run (comma-separated subset of d5,d3,d2b,d6b)")
     ap.add_argument("--reps", type=int, default=400, help="size-experiment replications")
     ap.add_argument("--size-B", type=int, default=299, help="B inside the size experiment")

@@ -514,6 +514,12 @@ def main():
                         help="Estimation strategy (default: 6, the headline single-index routine)")
     parser.add_argument("--all", action="store_true",
                         help="Generate for E1-E8")
+    parser.add_argument("--ests", nargs="+", type=int, default=None,
+                        help="Generate for an explicit subset, e.g. --ests 5 6 7 8. Use this "
+                             "rather than --all when some routines' RC chains have not "
+                             "reached ext1: a routine that stops earlier still yields a "
+                             "table, but a narrower one (fewer stage columns), which is easy "
+                             "to mistake for a complete result.")
     parser.add_argument("--engine", choices=["ift", "numerical"], default="ift",
                         help="Engine whose results to read (ift→un-suffixed, "
                              "numerical→_num).")
@@ -523,8 +529,9 @@ def main():
     # IFT writes un-suffixed, numerical appends "_num".
     suffix = "_num" if args.engine == "numerical" else ""
 
-    # 8 routines (E1-E8).
-    if args.all:
+    if args.ests:
+        est_ids = args.ests
+    elif args.all:
         est_ids = list(range(1, 9))
     else:
         est_ids = [args.est]

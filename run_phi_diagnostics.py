@@ -2,19 +2,17 @@
 
 Author: Pedro Feijo de Moraes
 
-Runs the full D0-D8 diagnostic battery (see identification_notes.md in
+Runs the full D0-D4c diagnostic battery (see identification_notes.md in
 Drafts/Deposit Competition) in the cheapest-most-informative-first order:
 
     D0  identity/tautology + censoring     diag_phi_augmented_tests.py  --arm identity
-    D5  deposit-type contrast              diag_phi_interaction_tests.py --arm types
-    D2b lagged-Dep_Act augmentation        diag_phi_augmented_tests.py  --arm lagdepact
-    D3  attractiveness placebo             diag_phi_interaction_tests.py --arm attractiveness
+    D4b  deposit-type contrast              diag_phi_interaction_tests.py --arm types
+    D2 lagged-Dep_Act augmentation        diag_phi_augmented_tests.py  --arm lagdepact
+    D4a  attractiveness placebo             diag_phi_interaction_tests.py --arm attractiveness
     D1s MC recovery smoke (harness check)  diag_phi_mc_recovery.py      --mode grid --smoke
     D1  MC recovery full + null stats      diag_phi_mc_recovery.py      --mode grid --stats-under-null
-    D8  ACF overidentification             diag_phi_mc_recovery.py      --mode acf
-    D6  Pix event study                    diag_phi_augmented_tests.py  --arm pix
-    D2a fitted-share augmentation          diag_phi_augmented_tests.py  --arm fittedshare
-    D4  spread level (qualitative)         diag_phi_augmented_tests.py  --arm spreadlevel
+    D4c  ACF overidentification             diag_phi_mc_recovery.py      --mode acf
+    D4b  Pix event study                    diag_phi_augmented_tests.py  --arm pix
 
 Steps run in isolated SUBPROCESSES (the known 0xC0000005 segfaults are threads inside
 one process; separate processes are safe). Default is sequential; `--jobs N` runs up to
@@ -22,7 +20,7 @@ N steps concurrently with longest-first scheduling. Each step needs ~3-4 GB (its
 panel copy) and D1 spawns 8 workers of its own, so on a 32 GB / 12-core box:
   --jobs 2 is the safe setting; do NOT run alongside the Julia sieve or other heavy jobs.
 
-MEMORY GOTCHA (observed 2026-08-03): at `--jobs 3` the D2a and D6 lanes were KILLED
+MEMORY GOTCHA (observed 2026-08-03): at `--jobs 3` concurrent lanes were KILLED
 mid-run -- their logs simply stop, with no traceback, which is the signature of an
 OOM kill rather than an exception. Both passed immediately when re-run sequentially.
 So a FAIL from this runner is not automatically a code fault: check whether the log ends
@@ -35,7 +33,7 @@ Each step's full output goes to
 timestamped line per step plus its VERDICT block. A failing step does not stop the
 battery (status reported at the end); exit code is 0 only if all ran.
 
-PREREQUISITE when attached after a re-estimation: D0/D2b/D2a and the D1/D8 calibration
+PREREQUISITE when attached after a re-estimation: D0/D2 and the D1/D4c calibration
 read demand_2_spec_12.parquet, so rebuild the E2 demand prep (estimation_2_demand_1_prep,
 spec 12) after re-running the sleep step and BEFORE this battery.
 
@@ -43,8 +41,8 @@ Usage:
   python run_phi_diagnostics.py              # full battery, sequential (~2-2.5h)
   python run_phi_diagnostics.py --jobs 3     # concurrent lanes (~35-50 min)
   python run_phi_diagnostics.py --quick      # skip the full MC grid (keeps the smoke)
-  python run_phi_diagnostics.py --only D5 D2b
-  python run_phi_diagnostics.py --skip D6 D4
+  python run_phi_diagnostics.py --only D4b D2
+  python run_phi_diagnostics.py --skip D4b D5
   python run_phi_diagnostics.py --list       # print the plan and exit
 """
 from utils.venv_guard import ensure_project_venv
@@ -70,21 +68,18 @@ LOG_DIR = OUT_DIR / "logs"
 # est_minutes drive the longest-first schedule under --jobs; from the 2026-07-29 runs.
 STEPS = [
     ("D0",  "identity/tautology + censoring",  "diag_phi_augmented_tests.py",   ["--arm", "identity"],       True,   4),
-    ("D5",  "deposit-type contrast",           "diag_phi_interaction_tests.py", ["--arm", "types"],          True,  12),
-    ("D2b", "lagged-Dep_Act augmentation",     "diag_phi_augmented_tests.py",   ["--arm", "lagdepact"],      True,  15),
-    ("D3",  "attractiveness placebo",          "diag_phi_interaction_tests.py", ["--arm", "attractiveness"], True,  15),
+    ("D4b",  "deposit-type contrast",           "diag_phi_interaction_tests.py", ["--arm", "types"],          True,  12),
+    ("D2", "lagged-Dep_Act augmentation",     "diag_phi_augmented_tests.py",   ["--arm", "lagdepact"],      True,  15),
+    ("D4a",  "attractiveness placebo",          "diag_phi_interaction_tests.py", ["--arm", "attractiveness"], True,  15),
     ("D1s", "MC recovery smoke (harness)",     "diag_phi_mc_recovery.py",       ["--mode", "grid", "--smoke"], True, 5),
     ("D1",  "MC recovery full + null stats",   "diag_phi_mc_recovery.py",       ["--mode", "grid", "--stats-under-null"], False, 20),
-    ("D8",  "ACF overidentification",          "diag_phi_mc_recovery.py",       ["--mode", "acf"],           True,  10),
-    ("D6",  "Pix event study",                 "diag_phi_augmented_tests.py",   ["--arm", "pix"],            True,  22),
-    ("D2a", "fitted-share augmentation",       "diag_phi_augmented_tests.py",   ["--arm", "fittedshare"],    True,  28),
-    ("D4",  "spread level (qualitative)",      "diag_phi_augmented_tests.py",   ["--arm", "spreadlevel"],    True,  10),
-    ("D9",  "BLP elasticity consistency",      "diag_phi_augmented_tests.py",   ["--arm", "blpelast"],       True,  10),
+    ("D4c",  "ACF overidentification",          "diag_phi_mc_recovery.py",       ["--mode", "acf"],           True,  10),
+    ("D4b",  "Pix event study",                 "diag_phi_augmented_tests.py",   ["--arm", "pix"],            True,  22),
+    ("D5",  "BLP elasticity consistency",      "diag_phi_augmented_tests.py",   ["--arm", "blpelast"],       True,  10),
     # --- Egan-alignment external validation (added 2026-08-03) -----------------------
-    ("D10", "entry dynamics vs closed form",   "diag_entry_dynamics.py",        ["--no-branch-screen"],      True,   6),
+    ("D6", "entry dynamics vs closed form",   "diag_entry_dynamics.py",        ["--no-branch-screen"],      True,   6),
     ("D6b", "Pix pooled post x exposure",      "diag_phi_augmented_tests.py",   ["--arm", "pixpooled"],      True,  20),
-    ("D11", "Pix-keys flow moment (proxy)",    "diag_flow_moment.py",           [],                          True,   2),
-    ("D12", "Selic wake-up comovement",        "export_selic_wakeup.py",        [],                          True,   1),
+    ("D7", "Selic wake-up comovement",        "export_selic_wakeup.py",        [],                          True,   1),
 ]
 
 _print_lock = threading.Lock()
@@ -136,7 +131,7 @@ def main() -> int:
                          "to OOM-kill a lane (see the memory note below). Keep 1 if "
                          "anything heavy (Julia sieve, BLP) is running.")
     ap.add_argument("--only", nargs="+", metavar="STEP",
-                    help="run only these step keys (e.g. --only D5 D2b)")
+                    help="run only these step keys (e.g. --only D4b D2)")
     ap.add_argument("--skip", nargs="+", metavar="STEP", default=[],
                     help="skip these step keys")
     ap.add_argument("--list", action="store_true", help="print the plan and exit")

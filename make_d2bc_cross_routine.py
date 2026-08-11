@@ -20,8 +20,8 @@ That is the link-independent part of the identifying assumption, and it is the p
 assumption actually concerns; the routine's own link is Appendix A's unapplied patch.
 
 Outputs (OUT_DIR = .../DIAG_PHI_SEPARATION):
-    tab_d2bc_cross_routine.tex   booktabs table, also copied next to V_Main.tex
-    tab_d2bc_cross_routine.md    the same table as markdown, for the notes
+    tab_d2_3_cross_routine.tex   booktabs table, also copied next to V_Main.tex
+    tab_d2_3_cross_routine.md    the same table as markdown, for the notes
     fig_d2bc_cross_routine.png   coefficient plot with WCB confidence marks
 
 Usage:
@@ -148,7 +148,7 @@ def main() -> int:
                       f"{r[f'{skey}|d2c']:+.4f}{stars(r[f'{skey}|d2c_p'])} | "
                       f"{r[f'{skey}|d2c_p']:.2f} |")
         md.append("")
-    (OUT_DIR / "tab_d2bc_cross_routine.md").write_text("\n".join(md) + "\n", encoding="utf-8")
+    (OUT_DIR / "tab_d2_3_cross_routine.md").write_text("\n".join(md) + "\n", encoding="utf-8")
 
     # ---- latex --------------------------------------------------------------------------
     tex = [r"\begin{tabular}{lcccc}", r"\toprule",
@@ -165,8 +165,8 @@ def main() -> int:
         tex.append(r"\addlinespace")
     tex += [r"\bottomrule", r"\end{tabular}"]
     txt = "\n".join(tex) + "\n"
-    (OUT_DIR / "tab_d2bc_cross_routine.tex").write_text(txt, encoding="utf-8")
-    (DRAFTS / "tab_d2bc_cross_routine.tex").write_text(txt, encoding="utf-8")
+    (OUT_DIR / "tab_d2_3_cross_routine.tex").write_text(txt, encoding="utf-8")
+    (DRAFTS / "tab_d2_3_cross_routine.tex").write_text(txt, encoding="utf-8")
 
     # ---- figure -------------------------------------------------------------------------
     # Coefficients on a common axis with the null at zero. The point of the panel is that
@@ -236,8 +236,8 @@ def main() -> int:
     fig.savefig(fp, dpi=170, bbox_inches="tight")
     plt.close(fig)
 
-    print(f"  -> {OUT_DIR / 'tab_d2bc_cross_routine.md'}")
-    print(f"  -> {OUT_DIR / 'tab_d2bc_cross_routine.tex'}  (+ copy next to V_Main.tex)")
+    print(f"  -> {OUT_DIR / 'tab_d2_3_cross_routine.md'}")
+    print(f"  -> {OUT_DIR / 'tab_d2_3_cross_routine.tex'}  (+ copy next to V_Main.tex)")
     print(f"  -> {fp}")
     print("\n" + "\n".join(md))
     return 0

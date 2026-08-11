@@ -1,4 +1,4 @@
-"""export_selic_wakeup.py -- D12: the Selic wake-up comovement row (Egan alignment).
+"""export_selic_wakeup.py -- D7: the Selic wake-up comovement row (Egan alignment).
 
 Author: Pedro Feijo de Moraes
 
@@ -15,7 +15,7 @@ Units: E1/E2 are linear, so the coefficient IS d(phi)/d(Selic) per unit of the r
 regressor. E3-E8 report the INDEX loading (sign-interpretable; magnitude runs through
 the link); the AME row is included when the saved fit carries one.
 
-Outputs: DIAG_PHI_SEPARATION/d12_selic_comovement.csv + tab_selic_wakeup.tex (Rout +
+Outputs: DIAG_PHI_SEPARATION/d7_selic_comovement.csv + tab_selic_wakeup.tex (Rout +
 copied to Drafts). No estimation -- reads saved pickles only.
 """
 from utils.venv_guard import ensure_project_venv
@@ -84,10 +84,10 @@ def one_row(est):
 
 
 def main():
-    print("=== D12: Selic wake-up comovement (spec 12, all estimators) ===")
+    print("=== D7: Selic wake-up comovement (spec 12, all estimators) ===")
     rows = [one_row(e) for e in range(1, 9)]
     df = pd.DataFrame(rows)
-    df.to_csv(OUT_DIR / "d12_selic_comovement.csv", index=False)
+    df.to_csv(OUT_DIR / "d7_selic_comovement.csv", index=False)
     ok = df[df["status"] == "ok"]
     for _, r in df.iterrows():
         if r["status"] != "ok":

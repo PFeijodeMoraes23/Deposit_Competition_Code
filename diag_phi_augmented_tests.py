@@ -15,29 +15,12 @@ Arms (--arm):
               parquet (=> the naive contemporaneous augmentation is tautological), measure
               the selection the max{0,.} & >1e-6 filters introduce, and confirm the sleep
               step and demand prep share one accrual rate.
-  lagdepact   D2b: augment the second stage with Dep_Act_{t-1}. Under the maintained
+  lagdepact   D2: augment the second stage with Dep_Act_{t-1}. Under the maintained
               assumption its coefficient is 0 (its effect on Dep_t flows only through
               Dep_{t-1}, which nr_lagged_dep already carries). A nonzero coefficient and
               the induced Delta-phi measure the awake-persistence confound.
-  fittedshare D2a: augment with the characteristics-fitted awake inflow
-              A_hat = (1-phi)*M*s_hat(X), with xi-hat EXCLUDED (xi-hat mechanically
-              absorbs the accounting residual, so including it would be circular).
-              A LOWER BOUND on the confound: only its observable component is used.
-  spreadlevel D4: augment with the contemporaneous spread level. QUALITATIVE ONLY --
-              collinear with the CF residual by construction and equally consistent
-              with simultaneity; reported for completeness, carries no weight.
-  pix         D6: event-study of the carry coefficient in 2-quarter bins around Pix
-              launch (2020Q4), with a high/low pre-period connectivity split. A discrete
-              break concentrated in connected markets supports the attention reading of
-              the Pix component; this is an asymmetric test (passing does not validate
-              the phi LEVEL).
-  pixpooled   D6b: the same quasi-experiment with ONE break parameter (post x carry x
-              continuous pre-2020 connectivity) instead of D6's fourteen, plus the
-              minimum detectable effect so a null reads as a bound. Reported both under
-              the wild cluster bootstrap and -- because the exposure is a predetermined
-              entity label -- under a Fisher RANDOMIZATION test that needs no variance
-              estimate at all (cluster_permutation_test below).
-  blpelast    D9: implied-vs-observed spread response, using the cluster BLP alpha-hat.
+
+  blpelast    D5: implied-vs-observed spread response, using the cluster BLP alpha-hat.
 
 Sample note: the production spec 12 (IV_HausmanFull x Tech) second stage is restricted to
 deposit types 4,5 because v_hat is NaN elsewhere (estimation_2_sleep.py:299-301). Every
@@ -96,8 +79,6 @@ DEP_SCALE = 1e9   # sleep frame stores deposits in R$ bn; the demand parquet in 
 #   MDE_LO/HI      90% band for SE_hat/SE_true from chi2_nu -- the SE is uncertain by ~3x
 #                  end to end, so a point MDE alone overstates what the design pins down.
 MDE_MULT, MDE_LO, MDE_HI = 3.457, 0.676, 2.04
-BLP_X_COLS = ["fgc_covered", "has_ip", "seg_S2", "seg_S3", "seg_S4", "seg_S5",
-              "log_total_assets_lag", "is_state_owned"]
 
 
 def load_blp_theta1(est="E8", stage="extended", spec=12):
@@ -191,9 +172,9 @@ def report_delta_phi(tag, res_base, res_aug, extra_cols, n, n_full):
 
 
 # ==============================================================================
-# FISHER RANDOMIZATION (CLUSTER PERMUTATION) TEST  -- shared by D3 and D6b
+# FISHER RANDOMIZATION (CLUSTER PERMUTATION) TEST  -- shared by D4a and D6b
 # ==============================================================================
-# WHY IT EXISTS. D3 and D6b both test a coefficient on a PREDETERMINED, ENTITY-LEVEL
+# WHY IT EXISTS. D4a and D6b both test a coefficient on a PREDETERMINED, ENTITY-LEVEL
 # attribute (2016 share rank; pre-2020 connectivity) interacted with the carry. Both are
 # read off a cluster-robust reference distribution at G* ~ 6 -- i.e. the whole verdict
 # rests on a variance estimate built from a handful of effective clusters, which is
@@ -269,7 +250,7 @@ def cluster_permutation_test(d, target, make_cols, attr_col, fixed_cols,
                  observed statistic is the BETWEEN-conglomerate loading, not the
                  entity-level coefficient the WCB row reports. When most of the
                  attribute's variance is within conglomerates the two can differ a lot
-                 (D3: they even differ in sign), so 'collapse' answers a related but
+                 (D4a: they even differ in sign), so 'collapse' answers a related but
                  distinct question.
                'between'  -- the entity keeps its within-conglomerate deviation
                  (a_e - a_c) and only the conglomerate component a_c is shuffled. The
@@ -598,7 +579,7 @@ def arm_identity():
     if taut:
         print("  a contemporaneous Dep_Act augmentation is TAUTOLOGICAL (returns coef 1, R2=1).")
         print("  Only the max{0,.} censoring plus the >1e-6 drop separate the two objects;")
-        print("  D2 must use the LAGGED (D2b) or fitted (D2a) variants.")
+        print("  D2 must use the LAGGED (D2) variant.")
     return [{"spec": "identity", "param": "max_abs_resid_B", "coef": float(res_b.max())},
             {"spec": "identity", "param": "share_val_neg", "coef": float(neg)},
             {"spec": "identity", "param": "matched_share", "coef": float(matched.mean())}]
@@ -610,7 +591,7 @@ def build_uncensored_inflow(df):
     This is the regression's own error term (arm 'identity' verifies the accounting holds
     exactly). The demand step stores instead Dep_Act = max{0, A} and drops the zeros, because
     BLP shares must be non-negative -- a requirement of THAT step, not a property of this
-    error. Using the censored version as D2b's regressor conditions the test on the sign of
+    error. Using the censored version as D2's regressor conditions the test on the sign of
     the lagged error it is testing, and costs 33-40% of rows; on the surviving subsample the
     two-way demeaning returns phi-hat ~ 0.80 against ~0.91 on the full frame, so the
     augmentation was being asked about a different carry coefficient from the headline.
@@ -629,16 +610,16 @@ def build_uncensored_inflow(df):
                               out["phi_mt"], out["phi_t"])
     cov = out["phi_use"].notna().mean()
     out["A_full"] = out["deposit_balance"] - out["phi_use"] * out["nr_lagged_dep"]
-    # censoring indicator, for the D2c margin test below
+    # censoring indicator, for the D3 margin test below
     out["C_lagpos"] = (out["A_full"] > 1e-6 / DEP_SCALE).astype(float)
     print(f"  uncensored inflow built on {cov:.2%} of rows (phi mapped from market level)")
     return out
 
 
 def arm_lagdepact():
-    """D2b: lagged awake inflow. Uses the UNCENSORED residual (see build_uncensored_inflow);
+    """D2: lagged awake inflow. Uses the UNCENSORED residual (see build_uncensored_inflow);
     the censored `Dep_Act` variant is reported alongside so the two are comparable."""
-    print("\n=== D2b: lagged awake-inflow augmentation ===")
+    print("\n=== D2: lagged awake-inflow augmentation ===")
     df, s_cols = load_sleep_frame()
     df = merge_parquet_cols(df, ["Dep_Act"])
     df = build_uncensored_inflow(df)
@@ -656,12 +637,12 @@ def arm_lagdepact():
         rows += report_delta_phi(f"{tag}|uncensored", res_b, res_a, ["A_full_lag"],
                                  len(d), n_full)
 
-        # D2c: does the carry itself differ across the censoring margin? Under H0 the
+        # D3: does the carry itself differ across the censoring margin? Under H0 the
         # censoring indicator is a function of past errors only, so interacted with the
         # carry it must be zero -- this is what answers the "the 0.80 vs 0.91 gap is
         # evidence of contamination" reading directly, on the FULL sample.
         _, res_c, dc = run_augmented(df, s_cols, ["C_lag_x_Z"], has_cf)
-        print(f"    [D2c margin test] C(A_lag>0) x carry: coef="
+        print(f"    [D3 margin test] C(A_lag>0) x carry: coef="
               f"{float(res_c.params['C_lag_x_Z']):+.5f}  "
               f"WCB p={float(res_c.pvalues['C_lag_x_Z']):.4f}  (n={len(dc):,})")
         rows.append({"spec": tag, "param": "C_lag_x_Z",
@@ -692,82 +673,14 @@ def arm_lagdepact():
     print("  Read the UNCENSORED rows: they run on ~95% of the frame at the production")
     print("  carry level. The censored rows are kept only to match the archived numbers --")
     print("  they condition on the sign of the lagged error and lose a third of the panel.")
-    print("  D2c (censoring margin) is the direct answer to 'but phi-hat is lower on the")
+    print("  D3 (censoring margin) is the direct answer to 'but phi-hat is lower on the")
     print("  augmentable subsample': if that interaction is null, the gap is a thinned-panel")
     print("  artifact of the within transform, not evidence against the assumption.")
     return rows
 
 
-def _shares_from_dhat(b, dhat_col, out_col):
-    """Logit shares from a fitted index within (mca x time), rescaled so the fitted
-    inside shares sum to the observed inside-share total per market."""
-    e = np.exp(b[dhat_col] - b.groupby("_grp")[dhat_col].transform("max"))
-    denom = e.groupby(b["_grp"]).transform("sum")
-    inside_tot = b.groupby("_grp")["share_B_cond"].transform("sum").clip(upper=0.95)
-    b[out_col] = (1.0 - b["phi_mt"]) * b["M_mt"] * (e / denom * inside_tot) / DEP_SCALE
-    return b
-
-
-def arm_fittedshare():
-    """D2a: characteristics-fitted awake inflow, xi-hat excluded. Two coefficient
-    sources: the local within-market OLS (self-contained), and -- when the downloaded
-    cluster results exist -- the BLP theta1 of E7/E8 spec 12 (stage `extended`)."""
-    print("\n=== D2a: fitted-share augmentation (xi-hat excluded; lower bound) ===")
-    x_blp = ["spread_ann"] + BLP_X_COLS
-    pq = pd.read_parquet(PARQUET, columns=["entity_id", "time_id", "mca_code", "is_B",
-                                           "share_B_cond", "phi_mt", "M_mt"] + x_blp)
-    b = pq[pq["is_B"].astype(bool)].dropna(subset=["share_B_cond"] + x_blp).copy()
-    b = b[b["share_B_cond"] > 0]
-    b["_delta"] = np.log(b["share_B_cond"])
-    b["_grp"] = b["mca_code"].astype(str) + "|" + b["time_id"].astype(str)
-
-    # (a) local within-market OLS; fitted value EXCLUDES the residual (xi-hat), which
-    # mechanically absorbs the accounting Dep_Act and would be circular.
-    Xc = b[x_blp] - b.groupby("_grp")[x_blp].transform("mean")
-    yc = b["_delta"] - b.groupby("_grp")["_delta"].transform("mean")
-    beta = np.linalg.lstsq(Xc.to_numpy(float), yc.to_numpy(float), rcond=None)[0]
-    b["_dhat"] = b[x_blp].to_numpy(float) @ beta
-    b = _shares_from_dhat(b, "_dhat", "A_hat_c")
-    variants = [("A_hat_c", "local within-market OLS")]
-
-    # (b) cluster BLP theta1 (proper IV estimates; spread enters as spread_ann/100 = pp).
-    # The routine list is DISCOVERED from what has converged on disk rather than hardcoded to
-    # E7/E8: a cluster run that adds further routines is then picked up without editing this
-    # arm, and one that has not landed yet degrades to the local-OLS variant instead of
-    # silently reporting a stale pair. SLEEP_ACTIVE_ESTS bounds the search to the reported set.
-    blp_ests = [f"E{k}" for k in os.environ.get("SLEEP_ACTIVE_ESTS", "1 2 5 6 7 8").split()]
-    for est in blp_ests:
-        th = load_blp_theta1(est)
-        if th is None:
-            print(f"  [{est}] no converged extended results in {BLP_RAW.name}; skipped")
-            continue
-        col = f"A_hat_{est}"
-        b["_dhat_blp"] = (th["alpha"] * b["spread_ann"] / 100.0
-                          + sum(th[c] * b[c] for c in BLP_X_COLS))
-        b = _shares_from_dhat(b, "_dhat_blp", col)
-        variants.append((col, f"BLP theta1 {est} spec12 extended (alpha={th['alpha']:+.3f})"))
-
-    df, s_cols = load_sleep_frame()
-    keep = ["entity_id", "time_id"] + [v for v, _ in variants]
-    df = df.merge(b[keep], on=["entity_id", "time_id"], how="left", validate="1:1")
-    rows = []
-    for col, desc in variants:
-        print(f"\n  --- awake-inflow proxy: {desc} ---")
-        for tag, has_cf in (("spec12(k=4,5)", True), ("OLSxTech(all k)", False)):
-            res_b, res_a, d = run_augmented(df, s_cols, [col], has_cf)
-            n_full = len(df.dropna(subset=["nr_lagged_dep", "deposit_balance"]
-                                   + (["v_hat_x_lagged_dep"] if has_cf else [])))
-            rows += report_delta_phi(f"{tag}|{col}", res_b, res_a, [col], len(d), n_full)
-    print("\n  VERDICT: lambda > 0 with phi-hat falling = contamination through the")
-    print("  OBSERVABLE component of awake-inflow persistence. Because xi-hat is excluded")
-    print("  by construction, this is a LOWER BOUND on the confound. The BLP variants")
-    print("  use the cluster-estimated demand coefficients (instrumented) in place of")
-    print("  the local projection; agreement across sources is the robustness check.")
-    return rows
-
-
 def arm_blpelast():
-    """D9: BLP-elasticity consistency. The model allows ONLY the awake margin to react
+    """D5: BLP-elasticity consistency. The model allows ONLY the awake margin to react
     to the contemporaneous spread: dDep/drho = (1-phi)*M*alpha*s(1-s). Compare that
     implied response with the panel's instrumented spread response. Observed >> implied
     means the awake mass (1-phi-hat) is understated, i.e. phi-hat overstates sleepiness.
@@ -778,7 +691,7 @@ def arm_blpelast():
     estimated on those shares -- so a cross pairing (one routine's awake mass, another's
     alpha) multiplies objects from two different decompositions and tests nothing coherent.
     The observed side is the shared linear kernel and is common to every routine's run."""
-    print("\n=== D9: BLP elasticity consistency (implied vs observed spread response) ===")
+    print("\n=== D5: BLP elasticity consistency (implied vs observed spread response) ===")
     pq = pd.read_parquet(PARQUET, columns=["entity_id", "time_id", "is_B", "deposit_type",
                                            "share_B_cond", "phi_mt", "M_mt"])
     b = pq[pq["is_B"].astype(bool) & pq["deposit_type"].isin([4, 5])].dropna(
@@ -828,211 +741,9 @@ def arm_blpelast():
     return rows
 
 
-def arm_spreadlevel():
-    """D4: contemporaneous spread level. Qualitative only."""
-    print("\n=== D4: contemporaneous spread level (QUALITATIVE ONLY) ===")
-    df, s_cols = load_sleep_frame()
-    rows = []
-    for tag, has_cf in (("spec12(k=4,5)", True), ("OLSxTech(all k)", False)):
-        res_b, res_a, d = run_augmented(df, s_cols, ["spread_qoq"], has_cf)
-        n_full = len(d)
-        rows += report_delta_phi(tag, res_b, res_a, ["spread_qoq"], len(d), n_full)
-    print("\n  VERDICT: not interpretable as a clean timing test -- the CF residual is the")
-    print("  contemporaneous spread net of instruments (collinear by construction), and a")
-    print("  loading is equally consistent with banks pricing expected inflows. Recorded only.")
-    return rows
-
-
-def arm_pix():
-    """D6: event study of the carry coefficient around Pix launch (2020Q4)."""
-    print("\n=== D6: Pix event study of the carry coefficient ===")
-    df, s_cols = load_sleep_frame()
-    s_cols = [c for c in s_cols if c != "pix_exists"]   # bins replace the pix step
-    LAUNCH = 2020 * 4 + 3                               # qidx of 2020Q4
-    df["_ev"] = df["qidx"] - LAUNCH
-
-    # 2-quarter bins on [-8,+8); reference bin [-2,-1]; outside window uncontrolled
-    bins = [(-8, -7), (-6, -5), (-4, -3), (0, 1), (2, 3), (4, 5), (6, 7)]
-    # predetermined connectivity split: entity's pre-2020 mean (centred units keep order)
-    pre = df[df["year"] < 2020].groupby("entity_id")["connections_per100"].mean()
-    df["_hi_conn"] = (df["entity_id"].map(pre) > pre.median()).astype(float)
-
-    extra, labels = [], []
-    for lo, hi in bins:
-        nm = f"evZ_{lo}_{hi}"
-        m = ((df["_ev"] >= lo) & (df["_ev"] <= hi)).astype(float)
-        df[nm] = m * df["nr_lagged_dep"]
-        df[nm + "_hi"] = df[nm] * df["_hi_conn"]
-        extra += [nm, nm + "_hi"]
-        labels.append((lo, hi))
-
-    rows = []
-    for tag, has_cf in (("spec12(k=4,5)", True), ("OLSxTech(all k)", False)):
-        res_b, res_a, d = run_augmented(df, s_cols, extra, has_cf)
-        print(f"\n  [{tag}] n={len(d):,}  event-time carry deviations vs [-2,-1] "
-              f"(base + high-connectivity extra):")
-        for lo, hi in labels:
-            nm = f"evZ_{lo}_{hi}"
-            print(f"    [{lo:+d},{hi:+d}]  base={res_a.params[nm]:+.4f} "
-                  f"(p={res_a.pvalues[nm]:.3f})   x hi-conn={res_a.params[nm + '_hi']:+.4f} "
-                  f"(p={res_a.pvalues[nm + '_hi']:.3f})")
-            rows.append({"spec": tag, "param": nm, "coef": float(res_a.params[nm]),
-                         "p_wcb": float(res_a.pvalues[nm]),
-                         "coef_hi": float(res_a.params[nm + "_hi"]),
-                         "p_hi": float(res_a.pvalues[nm + "_hi"])})
-
-        import matplotlib.pyplot as plt
-        fig, ax = plt.subplots(figsize=(7, 4))
-        mid = [(lo + hi) / 2 for lo, hi in labels]
-        ax.axhline(0, lw=0.8, color="0.5")
-        ax.axvline(-0.5, lw=0.8, color="0.5", ls="--")
-        ax.plot(mid, [res_a.params[f"evZ_{lo}_{hi}"] for lo, hi in labels], "o-", label="base")
-        ax.plot(mid, [res_a.params[f"evZ_{lo}_{hi}"] + res_a.params[f"evZ_{lo}_{hi}_hi"]
-                      for lo, hi in labels], "s--", label="high connectivity")
-        ax.set_xlabel("quarters since Pix launch (2020Q4)")
-        ax.set_ylabel("carry-coefficient deviation vs [-2,-1]")
-        ax.set_title(f"D6 Pix event study -- {tag}")
-        ax.legend()
-        fig.tight_layout()
-        fp = OUT_DIR / f"d6_pix_event_{'cf' if has_cf else 'ols'}.png"
-        fig.savefig(fp, dpi=150)
-        plt.close(fig)
-        print(f"    figure -> {fp.name}")
-
-    print("\n  VERDICT: a post-launch drop in the carry coefficient concentrated in")
-    print("  high-connectivity markets supports the ATTENTION reading of the Pix component")
-    print("  (CF4's channel). Passing does NOT validate the phi level (asymmetric test).")
-    return rows
-
-
-# ==============================================================================
-def arm_pixpooled():
-    """D6b: the Pix quasi-experiment with ONE break parameter instead of D6's fourteen.
-
-    D6 spends its degrees of freedom on 7 event-time bins x {base, high-connectivity} and
-    finds nothing at ~9 effective clusters -- which is as consistent with low power as with
-    no effect. This arm pools the post-launch window into a single interaction and uses
-    connectivity CONTINUOUSLY (not a median split), then reports the minimum detectable
-    effect so "no break" can be read as an actual bound rather than a silence.
-
-    The triple post x carry x exposure is the test: it has cross-sectional variation, so
-    conglomerate WCB is the right inference. The pooled post x carry term is identified off
-    the time dimension alone (a national step), so it also gets quarter-clustered/DK
-    treatment via utils.se_national and is labelled descriptive.
-    """
-    print("\n=== D6b: Pix pooled post x exposure (power-upgraded D6) ===")
-    df, s_cols = load_sleep_frame()
-    s_cols = [c for c in s_cols if c != "pix_exists"]     # the post dummy replaces the step
-    LAUNCH = 2020 * 4 + 3
-    df["_post"] = (df["qidx"] >= LAUNCH).astype(float)
-
-    # predetermined exposure: entity's pre-2020 mean connectivity, standardised
-    pre = df[df["year"] < 2020].groupby("entity_id")["connections_per100"].mean()
-    e = df["entity_id"].map(pre)
-    df["_expo"] = ((e - e.mean()) / e.std(ddof=0)).fillna(0.0)
-
-    df["postZ"] = df["_post"] * df["nr_lagged_dep"]
-    df["postZ_x"] = df["postZ"] * df["_expo"]
-    df["Z_x"] = df["nr_lagged_dep"] * df["_expo"]          # level control
-    df["_qc"] = df["qidx"] - df["qidx"].mean()
-    df["trendZ"] = df["_qc"] * df["nr_lagged_dep"]         # secular-drift control
-
-    rows = []
-    for tag, has_cf in (("spec12(k=4,5)", True), ("OLSxTech(all k)", False)):
-        for vname, extra in (("pooled", ["postZ", "postZ_x", "Z_x"]),
-                             ("pooled+trend", ["postZ", "postZ_x", "Z_x", "trendZ"])):
-            res_b, res_a, d = run_augmented(df, s_cols, extra, has_cf)
-            print(f"\n  [{tag} | {vname}] n={len(d):,}")
-            for p in extra:
-                se = float(res_a.bse[p])
-                # MDE at 5% size / 80% power. The multiplier is z_.975+z_.80 = 2.80 ONLY in
-                # large samples; the reference distribution here has G*-1 ~ 5 degrees of
-                # freedom (a handful of conglomerates carry the score mass), where
-                # t_.975 + t_.80 = 3.46. Using 2.80 understates the detectable effect by
-                # ~23%. The SE is itself a chi2_nu object at this nu, so the point MDE is
-                # reported with the 90% band implied by that sampling uncertainty.
-                mde = MDE_MULT * se
-                print(f"    {p:<10s} coef={float(res_a.params[p]):+.5f}  se={se:.5f}  "
-                      f"WCB p={float(res_a.pvalues[p]):.4f}   "
-                      f"MDE(80%)={mde:.5f} [{MDE_LO*mde:.5f}, {MDE_HI*mde:.5f}]")
-                rows.append({"spec": tag, "variant": vname, "param": p,
-                             "coef": float(res_a.params[p]), "se": se,
-                             "p_wcb": float(res_a.pvalues[p]), "mde80": mde,
-                             "mde_lo": MDE_LO * mde, "mde_hi": MDE_HI * mde,
-                             "n": len(d)})
-            base_phi = float(res_a.params.get("nr_lagged_dep", np.nan))
-            if np.isfinite(base_phi) and base_phi:
-                m = 2.8 * float(res_a.bse["postZ_x"])
-                print(f"    -> a Pix break in the carry larger than {m:.5f} per SD of "
-                      f"connectivity ({100*m/abs(base_phi):.2f}% of the carry) would have "
-                      "been detected 80% of the time.")
-
-            # ---- Fisher randomization on the SAME sample (ADDITIVE: the WCB block above
-            # is untouched). `_expo` is a predetermined entity attribute, so the sharp
-            # null licenses reassigning it across conglomerates. It enters BOTH postZ_x
-            # and the level control Z_x, so both are rebuilt from the permuted labels --
-            # leaving Z_x at the true labels would test a different (incoherent) null.
-            # Only the `pooled` variant is permuted: `pooled+trend` differs from it in the
-            # 4th decimal (trendZ is an additional FIXED regressor, not an attribute), so
-            # a second 999-permutation pass would cost ~10 min to reproduce the same
-            # number. trendZ is therefore carried in the fixed block when present.
-            if vname != "pooled":
-                continue
-            fixed = design_cols(s_cols, has_cf) + ["postZ"]
-            for _mode in ("collapse", "between"):
-                pr = cluster_permutation_test(
-                    d, "postZ_x",
-                    lambda a, C: {"postZ_x": a * C["postZ"],
-                                  "Z_x": a * C["nr_lagged_dep"]},
-                    "_expo", fixed, mode=_mode)
-                rows.append({"spec": tag, "variant": vname, "n": len(d),
-                             **report_permutation(pr, "postZ_x",
-                                                  float(res_a.params["postZ_x"]),
-                                                  float(res_a.pvalues["postZ_x"]),
-                                                  wcb_se=float(res_a.bse["postZ_x"]),
-                                                  carry=base_phi)})
-    pd.DataFrame(rows).to_csv(OUT_DIR / "d6b_pix_pooled.csv", index=False)
-    print("\n  VERDICT: the TRIPLE (post x carry x connectivity) is the test -- it has")
-    print("  cross-sectional variation, so the conglomerate WCB above applies. A null with")
-    print("  a SMALL MDE bounds the Pix attention channel; a null with a LARGE MDE means the")
-    print("  design cannot see it. The pooled post x carry term is time-identified only")
-    print("  (a national step at ~35 quarters) and is descriptive, not a test.")
-    _pm = [r for r in rows if "p_perm_coef" in r]
-    if _pm:
-        _agree = all((r["p_perm_headline"] <= 0.05) == (r["p_wcb"] <= 0.05) for r in _pm)
-        _r2 = float(np.mean([r["top_r2"] for r in _pm]))
-        _div = [r for r in _pm if r["perm_stats_diverge"]]
-        print("  RANDOMIZATION: the variance-free Fisher test " +
-              ("AGREES with the WCB at 5% on every spec and scheme" if _agree
-               else "DISAGREES with the WCB at 5% somewhere") +
-              " (studentised perm p = " +
-              ", ".join(f"{r['spec']}/{r['perm_mode']}:{r['p_perm_headline']:.3f}"
-                        for r in _pm) +
-              f"); mean top-5 R2 of the permutation distribution = {_r2:.2f}, so the "
-              "randomization null is driven by the same few giants as the WCB and is not "
-              "an independent second opinion about the tail.")
-        if _div:
-            print(f"  CAUTION: on {len(_div)} of {len(_pm)} configurations the UNSTUDENTISED "
-                  "randomization statistic crosses 5% the other way (|coef| p = " +
-                  ", ".join(f"{r['spec']}/{r['perm_mode']}:{r['p_perm_coef']:.3f}"
-                            for r in _div) +
-                  "). That is the unequal-cluster-size artefact described in "
-                  "report_permutation, NOT a Pix effect the WCB missed: the raw statistic's "
-                  "scale moves with the assignment. A naive randomization test without "
-                  "studentisation would have reported a significant Pix break here.")
-        for r in [x for x in _pm if x["perm_mode"] == "between"]:
-            print(f"  POWER [{r['spec']}]: randomization MDE(80%) = {r['perm_mde80']:.5f} "
-                  f"per SD of connectivity vs |coef| = {abs(r['coef_entity_level']):.5f}; "
-                  f"the design detects {r['perm_mde80']/max(abs(r['coef_entity_level']),1e-12):.1f}x "
-                  "the estimated break, not the break itself.")
-    print(f"\nresults -> {OUT_DIR / 'd6b_pix_pooled.csv'}")
-    return rows
-
-
 # ==============================================================================
 ARMS = {"identity": arm_identity, "lagdepact": arm_lagdepact,
-        "fittedshare": arm_fittedshare, "spreadlevel": arm_spreadlevel, "pix": arm_pix,
-        "blpelast": arm_blpelast, "pixpooled": arm_pixpooled}
+        "blpelast": arm_blpelast}
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser(description=__doc__,

@@ -5,6 +5,10 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=6
 #SBATCH --mem=200G
+# ^ DEFAULT only. submit_blp_build_and_run_spec12.sh passes an sbatch command-line --mem per routine
+#   (MEM_DEFAULT for E5-E8, MEM_BIG for E1/E2), which OVERRIDES this directive. E1/E2 are the largest
+#   panels (E1 = 796,154 obs) and 200G OOM-killed them at ext1 in job 21525240 — the n_pi*N*R hot
+#   buffer (blp_1_estimation.jl:357) grows ~38 GB -> ~51 GB from rc4 to ext1.
 #SBATCH --gpus=h200:1
 #SBATCH --mail-type=FAIL,TIME_LIMIT_90
 #SBATCH --mail-user=pedro.feijodemoraes@yale.edu

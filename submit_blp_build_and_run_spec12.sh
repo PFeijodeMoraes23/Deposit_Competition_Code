@@ -39,6 +39,22 @@ mkdir -p "${HERE}/logs"
 ROUTINES="${ROUTINES:-1 2 5 6 7 8}"
 ENGINES="${ENGINES:-ift}"                       # IFT only by default (no numerical cross-check)
 
+# ── Per-routine memory ────────────────────────────────────────────────────────────────────────
+# E1/E2 are the LARGEST panels (E1 = 796,154 obs vs 607k-714k for E5-E8) and were OOM-killed at the
+# ext1 stage in job 21525240 ("Detected 1 oom_kill event"), even though submit_blp_rc_stage.sh asks
+# for 200G. Cause: the hot buffer in blp_1_estimation.jl:357 scales as n_pi*N*R, and rc4 -> ext1 takes
+# n_pi 3 -> 4, i.e. ~38 GB -> ~51 GB for E1 (plus N*R ~ 12.7 GB and the GPU staging copies). E5-E8
+# (~45 GB at ext1) fit; E1/E2 do not. An sbatch COMMAND-LINE --mem overrides the #SBATCH --mem
+# directive in the stage script, so the split lives here and the stage script stays single-purpose.
+MEM_DEFAULT="${MEM_DEFAULT:-200G}"              # E5-E8 (proven sufficient through `extended`)
+# 600G for E1/E2: gpu_h200 nodes carry 2,043,833 MB (~1.95 TiB, measured 2026-08-10 via
+# `sinfo -p gpu_h200 -o "%n %m"`), so this is ~30% of one node and schedules freely — the QOS caps
+# GPUs, not RAM. 200G demonstrably OOM'd at ext1 while the n_pi*N*R buffer alone is only ~51 GB, so
+# the true footprint (WCB B=999 + GPU staging copies) is well above that arithmetic; the generous
+# margin is close to free, whereas another OOM costs a multi-hour chain.
+MEM_BIG="${MEM_BIG:-600G}"                      # E1/E2
+mem_for () { case "$1" in 1|2) printf '%s' "${MEM_BIG}" ;; *) printf '%s' "${MEM_DEFAULT}" ;; esac; }
+
 # Both build steps are OPT-IN, because the COMMON case — editing our own .jl source — needs NEITHER:
 #   --sysimage  rebuild blp_sysimage.so. Needed ONLY when Manifest.toml / package versions change.
 #               The sysimage bakes ONLY third-party packages (CUDA, Parquet2, DataFrames, Optim,
@@ -127,7 +143,7 @@ fi
 submit_one () {   # $1=routine $2=engine $3=tag $4=stage $5=wall $6=jobtag [$7=dep_jobid]
     local dep=""
     [ -n "${7:-}" ] && dep="--dependency=afterok:$7"
-    sbatch --parsable --time="$5" ${dep} \
+    sbatch --parsable --time="$5" --mem="$(mem_for "$1")" ${dep} \
         --export=ALL,RC_ROUTINE=$1,RC_ENGINE=$2,RC_STAGE=$4 \
         -J "rcg_$3_E$1_$6" \
         -o "${HERE}/logs/rcg_$3_E$1_$6_%j.out" -e "${HERE}/logs/rcg_$3_E$1_$6_%j.err" \
@@ -170,7 +186,7 @@ for k in ${ROUTINES}; do
     if [ "${do_num}" = "1" ] && [ "${do_ift}" = "1" ]; then
         # Numerical cross-check at `extended` only, seeded from the IFT extended θ₂ (afterok IFT extended).
         ckpt="${DATA_OUT}/blp_checkpoint_E${k}_spec_12_extended.jls"
-        jid=$(sbatch --parsable --time="${WALL_DEEP}" --dependency=afterok:${ift_ext_jid} \
+        jid=$(sbatch --parsable --time="${WALL_DEEP}" --mem="$(mem_for "${k}")" --dependency=afterok:${ift_ext_jid} \
             --export=ALL,RC_ROUTINE=${k},RC_ENGINE=numerical,RC_STAGE=extended,BLP_THETA2_INIT_FILE=${ckpt} \
             -J "rcg_num_E${k}_xcheck" \
             -o "${HERE}/logs/rcg_num_E${k}_xcheck_%j.out" -e "${HERE}/logs/rcg_num_E${k}_xcheck_%j.err" \

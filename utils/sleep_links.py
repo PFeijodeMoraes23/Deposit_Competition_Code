@@ -2807,19 +2807,25 @@ def unconditional_phi_t_band(df, state_cols, has_cf, si_res, loss, degree=3,
     #   is active, which is the diagnostic reported alongside them.
     _act0 = None
     if constrained:
-        _r0 = qp_A @ b_full
-        _act_hi = np.isfinite(qp_ub) & (_r0 >= qp_ub - 1e-7)
-        _act_lo = np.isfinite(qp_lb) & (_r0 <= qp_lb + 1e-7)
-        _act0 = _act_hi | _act_lo
-        # homogeneous cone: A_hi d <= 0 for upper-active rows, A_lo d >= 0 for lower-active
-        _rows, _clb, _cub = [], [], []
-        for j in np.flatnonzero(_act_hi):
-            _rows.append(qp_A[j]); _clb.append(-np.inf); _cub.append(0.0)
-        for j in np.flatnonzero(_act_lo):
-            _rows.append(qp_A[j]); _clb.append(0.0); _cub.append(np.inf)
-        _cone_A = np.vstack(_rows) if _rows else None
-        _cone_lb = np.asarray(_clb, float) if _rows else None
-        _cone_ub = np.asarray(_cub, float) if _rows else None
+        def _cone_at(b_at):
+            """Homogeneous tangent cone at b_at: A_j d <= 0 on upper-active rows, >= 0 on
+            lower-active ones. The cone belongs to the POINT it is taken at -- the link-only
+            variant takes it at b_hat, the total variant at that draw's own re-profiled
+            solution, whose active set generally differs."""
+            _r = qp_A @ b_at
+            _hi = np.isfinite(qp_ub) & (_r >= qp_ub - 1e-7)
+            _lo = np.isfinite(qp_lb) & (_r <= qp_lb + 1e-7)
+            _rows, _clb, _cub = [], [], []
+            for j in np.flatnonzero(_hi):
+                _rows.append(qp_A[j]); _clb.append(-np.inf); _cub.append(0.0)
+            for j in np.flatnonzero(_lo):
+                _rows.append(qp_A[j]); _clb.append(0.0); _cub.append(np.inf)
+            if not _rows:
+                return None, None, None, (_hi | _lo)
+            return (np.vstack(_rows), np.asarray(_clb, float), np.asarray(_cub, float),
+                    (_hi | _lo))
+
+        _cone_A, _cone_lb, _cone_ub, _act0 = _cone_at(b_full)
 
         _warm_lvl = [b_full.copy()]
 
@@ -2833,8 +2839,14 @@ def unconditional_phi_t_band(df, state_cols, has_cf, si_res, loss, degree=3,
             if _cone_A is None:
                 return d_lin
             return project_to_shape(d_lin, XtX0, _cone_A, _cone_lb, _cone_ub)[0]
+
+        def _proj_cone_at(b_at, d_lin):
+            A_c, lb_c, ub_c, _ = _cone_at(b_at)
+            if A_c is None:
+                return d_lin
+            return project_to_shape(d_lin, XtX0, A_c, lb_c, ub_c)[0]
     else:
-        _proj_level = _proj_cone = None
+        _proj_level = _proj_cone = _proj_cone_at = None
 
     # TWO group structures from one draw loop. The per-draw REFIT is the expensive part and is
     # independent of how phi is aggregated, so emitting both market keys costs one extra
@@ -2900,7 +2912,8 @@ def unconditional_phi_t_band(df, state_cols, has_cf, si_res, loss, degree=3,
     draws_tot = np.empty((B, nt))
     draws_th = np.empty((B, nt))
     draws_ln = np.empty((B, nt))
-    draws_tc = np.empty((B, nt))                   # tangent-cone total (constrained only)
+    draws_tc = np.empty((B, nt))                   # tangent-cone, LINK channel (constrained)
+    draws_tct = np.empty((B, nt))                  # tangent-cone, BOTH channels (constrained)
     draws_ln_leg = np.empty((B, gs_leg["nt"]))     # legacy key, for the reproduction gate only
     tstats_tot = np.empty((B, nt))
     diag_rows = []
@@ -2928,17 +2941,25 @@ def unconditional_phi_t_band(df, state_cols, has_cf, si_res, loss, degree=3,
             b_tot = _proj_level(b_th + db)                 # projected level
             b_lnk = _proj_level(b_full + db)
             b_tc = b_full + _proj_cone(db)                 # tangent-cone fluctuation
+            # TOTAL under the valid construction: the draw's own re-profiled solution b_th
+            # carries the direction channel, and the link fluctuation is projected onto the
+            # cone AT b_th -- that draw's active set, not b_hat's. Evaluated at P_b (the basis
+            # at the drawn theta) for the same reason band_total is.
+            b_tct = b_th + _proj_cone_at(b_th, db)
             n_proj += int(np.max(np.abs(b_tot - (b_th + db))) > 1e-9)
         else:
             b_tot, b_lnk, b_tc = b_th + db, b_full + db, b_full + db
+            b_tct = b_th + db
         phi_tot = np.clip(P_b @ b_tot[:n_basis], 0.0, 1.0)
         phi_th = np.clip(P_b @ b_th[:n_basis], 0.0, 1.0)
         phi_ln = np.clip(vpow0 @ b_lnk[:n_basis], 0.0, 1.0)
         phi_tc = np.clip(vpow0 @ b_tc[:n_basis], 0.0, 1.0)
+        phi_tct = np.clip(P_b @ b_tct[:n_basis], 0.0, 1.0)
         draws_tot[ib] = _agg_phi_t(phi_tot, gs)
         draws_th[ib] = _agg_phi_t(phi_th, gs)
         draws_ln[ib] = _agg_phi_t(phi_ln, gs)
         draws_tc[ib] = _agg_phi_t(phi_tc, gs)
+        draws_tct[ib] = _agg_phi_t(phi_tct, gs)
         draws_ln_leg[ib] = _agg_phi_t(phi_ln, gs_leg)
         vb = (w ** 2) @ IFphi2
         tstats_tot[ib] = (draws_tot[ib] - pt) / np.sqrt(np.maximum(vb, 1e-300))
@@ -2982,7 +3003,13 @@ def unconditional_phi_t_band(df, state_cols, has_cf, si_res, loss, degree=3,
     if constrained:
         out["band_tangent_cone"] = _band_from_draws(pt, draws_tc, gs["tuniq"],
                                                     label="uncond link-only [tangent cone]")
+        # The reporting object: BOTH channels under the valid construction. `band_total`
+        # projects the level and is inconsistent on the boundary (Andrews 2000);
+        # `band_tangent_cone` is valid but carries the link channel only, so it understates
+        # by the direction channel.
+        out["band_tangent_cone_total"] = _band_from_draws(
+            pt, draws_tct, gs["tuniq"], label="uncond total [tangent cone]")
     if keep_draws:
         out["draws"] = dict(total=draws_tot, theta_only=draws_th, link_only=draws_ln,
-                            tangent_cone=draws_tc)
+                            tangent_cone=draws_tc, tangent_cone_total=draws_tct)
     return out

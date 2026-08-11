@@ -23,7 +23,7 @@ mid-write is what this exists to prevent). --grace lets you cap that too.
 
 Usage:
     python run_diag_matrix.py --units d0:1,2,5,6,7,8 --until 16:00
-    python run_diag_matrix.py --units d0:5,6 d2b:5,6 --for 2h --dry-run
+    python run_diag_matrix.py --units d0:5,6 d2:5,6 --for 2h --dry-run
     python run_diag_matrix.py --resume            # continue the last run
 """
 from __future__ import annotations
@@ -52,14 +52,13 @@ STATE = HERE / ".diag_matrix_state.json"
 # late finish. Update them when a run reports a materially different duration.
 UNITS = {
     "d0":   ("diag_phi_augmented_tests.py",   ["--arm", "identity"],     1.0),
-    "d2a":  ("diag_phi_augmented_tests.py",   ["--arm", "fittedshare"],  3.0),
-    "d2b":  ("diag_phi_augmented_tests.py",   ["--arm", "lagdepact"],    2.5),
-    "d9":   ("diag_phi_augmented_tests.py",   ["--arm", "blpelast"],     2.0),
-    "d3":   ("diag_phi_interaction_tests.py", ["--arm", "attractiveness"], 6.0),
-    "d5":   ("diag_phi_interaction_tests.py", ["--arm", "types"],        1.5),
+    "d2":  ("diag_phi_augmented_tests.py",   ["--arm", "lagdepact"],    2.5),
+    "d5":   ("diag_phi_augmented_tests.py",   ["--arm", "blpelast"],     2.0),
+    "d4a":   ("diag_phi_interaction_tests.py", ["--arm", "attractiveness"], 6.0),
+    "d4b":   ("diag_phi_interaction_tests.py", ["--arm", "types"],        1.5),
     "d1s":  ("diag_phi_mc_recovery.py",       ["--mode", "grid", "--smoke"], 0.5),
     "d1":   ("diag_phi_mc_recovery.py",       ["--mode", "grid", "--stats-under-null"], 3.0),
-    "d8":   ("diag_phi_mc_recovery.py",       ["--mode", "acf"],         1.0),
+    "d4c":   ("diag_phi_mc_recovery.py",       ["--mode", "acf"],         1.0),
 }
 
 # Units whose script does NOT accept --estim. diag_phi_interaction_tests.py takes only --arm,
@@ -67,12 +66,12 @@ UNITS = {
 # and kernel are E2's by construction) -- appending --estim aborts either one in argparse before
 # a single row is computed. Listed here so the runner omits the flag and reports the E2-only
 # scope, instead of the whole unit dying.
-NO_ESTIM = {"d3", "d5", "d1s", "d1", "d8"}
+NO_ESTIM = {"d4a", "d4b", "d1s", "d1", "d4c"}
 
 # Arms whose ESTIMATOR is E2's regardless of --estim. Running them for another routine gives a
 # HYBRID (that routine's phi inside E2's kernel), which is a legitimate reduced-form check but is
 # not "the test for that routine". The runner labels these loudly rather than pretending.
-E2_KERNEL = {"d2b", "d3", "d1", "d1s", "d8", "d9"}
+E2_KERNEL = {"d2", "d4a", "d1", "d1s", "d4c", "d5"}
 
 
 def parse_deadline(until: str | None, for_: str | None) -> dt.datetime | None:
@@ -131,7 +130,7 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--units", nargs="+", metavar="UNIT:ROUTINES",
-                    help="e.g. d0:1,2,5,6,7,8 d2b:5,6")
+                    help="e.g. d0:1,2,5,6,7,8 d2:5,6")
     ap.add_argument("--until", help="stop starting new units after this local time (HH:MM or ISO)")
     ap.add_argument("--for", dest="for_", help="relative deadline, e.g. 90m or 2h")
     ap.add_argument("--grace", type=float, default=0,

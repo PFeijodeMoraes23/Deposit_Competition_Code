@@ -122,7 +122,7 @@ def _build_phi_regressors(df_sub: pd.DataFrame, phi_params) -> np.ndarray:
                 elif 'year' in df_sub.columns and 'quarter' in df_sub.columns:
                     # Reconstruct the RAW indicator, then map it onto the levels the
                     # estimation actually used. Emitting raw {0,1} here would inject an
-                    # uncentred column into a centred index -- silently, and the resulting
+                    # uncentered column into a centered index -- silently, and the resulting
                     # phi would still look like a plausible number in [0,1].
                     raw = ((df_sub['year'] > 2020) |
                            ((df_sub['year'] == 2020) & (df_sub['quarter'] == 4))
@@ -291,7 +291,7 @@ def build_latex_table(results_dict, order_keys, target_vars, out_path, title="",
                    r"of the sleepy share per the unit given in the row label, with shares and "
                    r"rates in percentage points and Pix Available a discrete $0\to1$ "
                    r"difference. $t$-statistics and stars are invariant to these units. State "
-                   r"variables are grand-mean centred, so the Constant is $\hat{\phi}$ at the "
+                   r"variables are grand-mean centered, so the Constant is $\hat{\phi}$ at the "
                    r"average market")
     notes_str = (r"\multicolumn{" + str(len(order_keys) + 1) + r"}{p{\dimexpr\textwidth-2\tabcolsep\relax}}"
                  r"{\scriptsize\textit{Notes:} Standard errors (wild cluster bootstrap at the "
@@ -455,7 +455,7 @@ def build_latex_table_landscape(results_dict, order_keys, target_vars, out_path,
     threeparttable notes -- all already loaded by V_Main.tex. The float takes a
     SOFT placement specifier (default [ht], NOT a hard [H]) so it settles around
     the \\input location. Carries the SAME \\label as the portrait table, so
-    swapping the \\input in V_Main keeps every \\ref resolving. Natural centred
+    swapping the \\input in V_Main keeps every \\ref resolving. Natural centered
     columns (not xltabular's X) + two-line \\shortstack headers keep the seven
     columns readable across the rotated page. Column headers are the estimation-strategy
     item numbers via \\ref (see REF_LABELS), not names.
@@ -555,7 +555,7 @@ def build_latex_table_landscape(results_dict, order_keys, target_vars, out_path,
                    r"of the sleepy share per the unit given in the row label, with shares and "
                    r"rates in percentage points and Pix Available a discrete $0\to1$ "
                    r"difference. $t$-statistics and stars are invariant to these units. State "
-                   r"variables are grand-mean centred, so the Constant is $\hat{\phi}$ at the "
+                   r"variables are grand-mean centered, so the constant is $\hat{\phi}$ at the "
                    r"average market")
     tex += [r"\bottomrule",
             r"\end{tabular}",
@@ -616,6 +616,8 @@ def main():
     stage1_res = {}
     stage2_res = {}
     phi_data = {}
+    phi_csv_paths = {}  # lazy: market_panel_phis.csv is ~2GB/estimator, only read for the
+                        # linear estimators (est1/est2) that actually plot from it (see below)
     mean_phi = {}      # implied national mean phi_t level per estimator (the comparable "level" row)
     models_dict = {}
 
@@ -648,10 +650,7 @@ def main():
 
         csv_path = d / "market_panel_phis.csv"
         if csv_path.exists():
-            try:
-                phi_data[label] = pd.read_csv(csv_path, low_memory=False)
-            except Exception as e:
-                print(f"  [Warning] Could not load phi CSV for {label}: {e}")
+            phi_csv_paths[label] = csv_path
 
         natl_path = d / "national_phi_t.csv"
         if natl_path.exists():
@@ -806,8 +805,19 @@ def main():
                 print(f"  [Warning] band load failed for {label} ({e}); falling back to delta band.")
 
         # Linear E1/E2: aggregate per-market phi to national with a delta-method band.
+        # Also serves as the fallback for est_num>=5 if the band pkl was missing/unreadable.
         df_phi = phi_data.get(label)
-        if df_phi is None or 'year_quarter' not in df_phi.columns:
+        if df_phi is None:
+            csv_path = phi_csv_paths.get(label)
+            if csv_path is None:
+                continue
+            try:
+                df_phi = pd.read_csv(csv_path, low_memory=False)
+                phi_data[label] = df_phi
+            except Exception as e:
+                print(f"  [Warning] Could not load phi CSV for {label}: {e}")
+                continue
+        if 'year_quarter' not in df_phi.columns:
             continue
         tar_col = next((cc for cc in ('phi_mt_IV_HausmanFull_x_Tech', 'phi_mt_Tech')
                         if cc in df_phi.columns), None)

@@ -10,12 +10,12 @@ is misspecified). See identification_notes.md in Drafts/Deposit Competition (nex
 V_Main.tex).
 
 Arms (--arm):
-  types           D5: type-specific carries phi_k, k in {1,2,4,5}. Savings (1,2) are
+  types           D4b: type-specific carries phi_k, k in {1,2,4,5}. Savings (1,2) are
                   payroll-linked, CDB (4) rolls over contractually, prepaid (5) is
                   transactional -- mechanical persistence differs sharply by instrument
                   while the model says phi cannot. Difference coding gives WCB inference
                   on phi_k - phi_base directly.
-  attractiveness  D3: predetermined (2016) within-market deposit-share rank x carry.
+  attractiveness  D4a: predetermined (2016) within-market deposit-share rank x carry.
                   Under the model the carry cannot vary with bank attractiveness; a
                   loading means persistently attractive banks retain MORE than phi --
                   the woke-and-stayed channel by name.
@@ -45,8 +45,8 @@ from diag_phi_augmented_tests import (load_sleep_frame, run_augmented, OUT_DIR,
 
 
 def arm_types():
-    """D5: type-specific carry coefficients."""
-    print("\n=== D5: deposit-type contrast of the carry coefficient ===")
+    """D4b: type-specific carry coefficients."""
+    print("\n=== D4b: deposit-type contrast of the carry coefficient ===")
     df, s_cols = load_sleep_frame()
     rows = []
     for tag, has_cf, ks, base_k in (("OLSxTech(all k)", False, [1, 2, 4, 5], 1),
@@ -85,8 +85,8 @@ def arm_types():
 
 
 def arm_attractiveness():
-    """D3: predetermined attractiveness x carry placebo."""
-    print("\n=== D3: attractiveness placebo (2016 within-market share rank x carry) ===")
+    """D4a: predetermined attractiveness x carry placebo."""
+    print("\n=== D4a: attractiveness placebo (2016 within-market share rank x carry) ===")
     df, s_cols = load_sleep_frame()
 
     base = df[df["year"] == 2016].copy()

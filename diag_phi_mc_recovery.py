@@ -19,18 +19,18 @@ Readings:
     that row validates the harness AND quantifies a distortion never measured before.
   * The (phi_true, rho_xi) pairs whose E[phi-hat] matches the production estimate form
     the observational-equivalence set of the headline number.
-  * --stats-under-null: per-rep D2b (lagged-A coef) and D3 (a_j-rank x carry) statistics
+  * --stats-under-null: per-rep D2 (lagged-A coef) and D4a (a_j-rank x carry) statistics
     give their finite-sample null (rho=0) and power (rho>0) distributions.
 
 Modes:
   --mode grid   (default) the phi_true x rho_xi recovery grid
-  --mode acf    D8: within-entity, quarter-partialled ACF(h=1..12) of deposits in the
+  --mode acf    D4c: within-entity, quarter-partialled ACF(h=1..12) of deposits in the
                 REAL panel vs the 2.5-97.5% band from panels simulated at the fitted
                 phi with iid inflows (rho_xi=0). Sim and data get the identical
                 transform, so the small-T distortion cancels. A data ACF that decays
                 faster at h>=4 than the band says h=1 persistence is not long-run
                 non-waking.
-  --mode power  D1-power: read the ARCHIVED d1_mc_recovery_full.csv and turn the D2b/D3
+  --mode power  D1-power: read the ARCHIVED d1_mc_recovery_full.csv and turn the D2/D4a
                 per-rep statistics into honest power curves. The per-rep statistic is a
                 CRVE t on ~35 simulated conglomerates compared to 1.96, whose MEASURED
                 size under rho_xi=0 is 37-48%, so raw rejection frequencies are not power
@@ -39,10 +39,10 @@ Modes:
                 coefficient-based (critical value = 95th pct of the coefficient under
                 rho_xi=0). No re-simulation.
 
-D8 sub-modes (all default OFF, so the archived d8_acf_overid.* are reproducible):
+D4c sub-modes (all default OFF, so the archived d4c_acf_overid.* are reproducible):
   --detrend     remove an entity-specific LINEAR TREND, after the two-way within
                 transform, from the data AND from every simulated panel identically.
-                Tests explanation (i) for the D8 gap: real conglomerate x type x MCA
+                Tests explanation (i) for the D4c gap: real conglomerate x type x MCA
                 deposits trend (nominal growth, multi-year share gains); additive quarter
                 FE remove the common component but not firm-specific slopes, and a
                 trending level has a near-unit-root within-ACF. The DGP has no trend, so
@@ -60,13 +60,13 @@ D8 sub-modes (all default OFF, so the archived d8_acf_overid.* are reproducible)
   --fit-phi     simulated-minimum-distance phi: grid phi, R panels per grid point, report
                 argmin of SSE over h=1..12 against the mean simulated ACF, with a
                 grid-profile (Monte-Carlo test inversion) interval, next to the h=1-only
-                fit and next to D10's entry-dynamics phi read from d10_implied_phi.csv.
+                fit and next to D6's entry-dynamics phi read from d6_implied_phi.csv.
 
 Grid sub-mode:
-  --censor      apply the demand-step rule inside each simulated panel before the D2b
+  --censor      apply the demand-step rule inside each simulated panel before the D2
                 statistic: Dep_Act = max(0, Dep_t - phi_hat*accr*Dep_{t-1}), rows with
                 Dep_Act <= 1e-6 raw R$ dropped (estimation_2_demand_1_prep.py:314-322).
-                The data test can only use surviving rows, so this is what D2b's power
+                The data test can only use surviving rows, so this is what D2's power
                 actually is.
 
 CLI: --smoke (2x2 grid, R=25), --reps, --n-entities, --seed, --stats-under-null, --tag.
@@ -100,15 +100,15 @@ CENSOR_EPS = 1e-6
 # desc_2.py palette
 PAL_B, PAL_D, PAL_GRID = "#1565C0", "#E64A19", "#D5D5D0"
 
-D10_CSV = OUT_DIR / "d10_implied_phi.csv"
+D6_CSV = OUT_DIR / "d6_implied_phi.csv"
 
 
-def d10_reference(kind="B"):
-    """D10's entry-dynamics phi as (phi, lo, hi), READ from disk -- never hard-coded, so
+def d6_reference(kind="B"):
+    """D6's entry-dynamics phi as (phi, lo, hi), READ from disk -- never hard-coded, so
     that re-running diag_entry_dynamics.py updates this script's comparison automatically.
-    Returns None if D10 has not been run."""
+    Returns None if D6 has not been run."""
     try:
-        t = pd.read_csv(D10_CSV)
+        t = pd.read_csv(D6_CSV)
         r = t[t["kind"] == kind].iloc[0]
         return float(r["phi_entry"]), float(r["lo"]), float(r["hi"])
     except Exception:
@@ -124,7 +124,7 @@ _ENT_CACHE = {}
 def _entity_table(size_bins):
     """Per-entity calibration table + sigma_delta, cached within a process.
 
-    `dtype` and `size_bin` are carried so the D8 group modes can calibrate a band from
+    `dtype` and `size_bin` are carried so the D4c group modes can calibrate a band from
     the SAME population the data group is drawn from. size_bin is cut on the FULL entity
     population (equal counts of entities, rank-based) BEFORE any sampling, so group
     membership never depends on the draw."""
@@ -222,7 +222,7 @@ def within_2way(M, einv, ec, tinv, tc, n_iter=15, tol=1e-9):
 def detrend_by_entity(v, einv, tvals):
     """Residual of v on an entity-specific intercept AND linear trend in `tvals`.
 
-    Used on BOTH sides of D8 --detrend. GOTCHA: this is not innocuous on the simulation
+    Used on BOTH sides of D4c --detrend. GOTCHA: this is not innocuous on the simulation
     side either -- with T=36 an entity-specific slope eats a real degree of freedom and
     mechanically bends the long-horizon ACF down. That is precisely why the band must be
     recomputed from detrended SIMULATED panels rather than compared to the old band."""
@@ -251,7 +251,7 @@ def estimate_once(rows_dep, rows_lag, ent, stats_null=False, censor=False):
     out = {"phi_hat": phi_hat}
 
     if stats_null:
-        # D2b analog: augment with the lagged ACCOUNTING awake inflow at the estimated
+        # D2 analog: augment with the lagged ACCOUNTING awake inflow at the estimated
         # phi (exactly what the data test can observe). Everything is re-demeaned on the
         # keep subsample so the augmented design is internally consistent.
         A_acc = y - phi_hat * z                       # Dep_t - phi_hat*(accr*Dep_{t-1})
@@ -289,7 +289,7 @@ def estimate_once(rows_dep, rows_lag, ent, stats_null=False, censor=False):
         out["d2b_coef"] = float(b[1])
         out["d2b_t"] = float(b[1] / np.sqrt(V[1, 1]))
         out["phi_hat_aug"] = float(b[0])
-        # D3 analog: a_j-rank x carry
+        # D4a analog: a_j-rank x carry
         rank = ent["ln_a"].rank(pct=True).to_numpy() - 0.5
         rz = z * np.tile(rank, T)
         rz_dm = within_2way(rz[:, None], einv, ec, tinv, tc)[:, 0]
@@ -301,7 +301,7 @@ def estimate_once(rows_dep, rows_lag, ent, stats_null=False, censor=False):
         G3 = np.zeros((cl3.max() + 1, 2))
         np.add.at(G3, cl3, X3 * e3[:, None])
         V3 = X3tXi @ (G3.T @ G3) @ X3tXi
-        # NB --censor deliberately does NOT touch D3: the data-side D3 (attractiveness rank
+        # NB --censor deliberately does NOT touch D4a: the data-side D4a (attractiveness rank
         # x carry, diag_phi_interaction_tests.py --arm attractiveness) runs on the sleep
         # frame and never reads Dep_Act, so it never loses the censored rows.
         out["d3_coef"] = float(b3[1])
@@ -375,7 +375,7 @@ def mode_grid(a):
         tag += "_censored"
     dfres.to_csv(OUT_DIR / f"d1_mc_recovery_{tag}.csv", index=False)
     if "censor_kept" in dfres.columns:
-        print(f"  censoring keeps {dfres['censor_kept'].mean():.1%} of the D2b rows "
+        print(f"  censoring keeps {dfres['censor_kept'].mean():.1%} of the D2 rows "
               f"(data loses 33-40%)")
 
     # summary + money plot
@@ -413,11 +413,11 @@ def mode_grid(a):
               f"(Nickell-type distortion {r['mean'] - r['phi_true']:+.4f})")
     print("  Any cell whose E[phi_hat] reaches the production estimate with phi_true far")
     print("  below it is an observationally-equivalent DGP: the headline phi is not")
-    print("  point-identified without a stand on rho_xi (which D2b/D3 estimate from data).")
+    print("  point-identified without a stand on rho_xi (which D2/D4a estimate from data).")
 
 
 # ------------------------------------------------------------------------------
-# D8 machinery
+# D4c machinery
 # ------------------------------------------------------------------------------
 def _resid_2way(rows_dep, detrend=False):
     """(T,N) simulated deposits -> two-way within residual, optionally entity-detrended."""
@@ -547,7 +547,7 @@ def _hlist(mask):
 
 
 def mode_acf(a):
-    print("=== D8: ACF overidentification vs fitted pure-sleepiness model ===")
+    print("=== D4c: ACF overidentification vs fitted pure-sleepiness model ===")
     from diag_phi_augmented_tests import load_sleep_frame
 
     df, _ = load_sleep_frame()
@@ -556,7 +556,7 @@ def mode_acf(a):
     detr = bool(a.detrend)
     suffix = ("" if a.by == "none" else f"_by{a.by}" + (f"{a.size_bins}" if a.by == "size" else "")) \
              + ("_detrend" if detr else "")
-    base_name = "d8_acf_overid" + suffix
+    base_name = "d4c_acf_overid" + suffix
     grid = np.round(np.arange(a.fit_lo, a.fit_hi + 1e-9, a.fit_step), 4)
 
     # ---- pooled data ACF (always computed: it is the reference for every variant) ----
@@ -706,7 +706,7 @@ def mode_acf(a):
                                        "phi_p90": float(v.quantile(.9)), "map_hit": hit})
                 r_panels.append((e_id, phi_bar, bands))
             if r_rows:
-                pd.DataFrame(r_rows).to_csv(OUT_DIR / "d8_acf_routine_bands.csv",
+                pd.DataFrame(r_rows).to_csv(OUT_DIR / "d4c_acf_routine_bands.csv",
                                             index=False)
                 import matplotlib.pyplot as plt
                 hgrid = np.arange(1, HMAX + 1)
@@ -733,11 +733,11 @@ def mode_acf(a):
                 ax.legend(fontsize=7)
                 for ax in axr.ravel()[len(r_panels):]:
                     ax.axis("off")
-                figr.suptitle("D8 per routine: pooled data ACF vs each routine's own "
+                figr.suptitle("D4c per routine: pooled data ACF vs each routine's own "
                               "fitted-model band", fontsize=11)
                 figr.tight_layout()
-                figr.savefig(OUT_DIR / "d8_acf_routine_bands.png", dpi=150)
-                print(f"  -> d8_acf_routine_bands.csv / .png")
+                figr.savefig(OUT_DIR / "d4c_acf_routine_bands.png", dpi=150)
+                print(f"  -> d4c_acf_routine_bands.csv / .png")
 
     out = pd.DataFrame(rows)
     # the archived default run keeps its exact 4-column layout (h, acf_data, band_lo,
@@ -747,12 +747,12 @@ def mode_acf(a):
      ).to_csv(OUT_DIR / f"{base_name}.csv", index=False)
     if fits:
         prof = pd.concat([f["profile"] for f in fits.values()], ignore_index=True)
-        prof.to_csv(OUT_DIR / f"d8_acf_fitphi{suffix}.csv", index=False)
+        prof.to_csv(OUT_DIR / f"d4c_acf_fitphi{suffix}.csv", index=False)
         pd.DataFrame([{"group": k, "phi_md": f["phi_md"], "ci_lo": f["ci_lo"],
                        "ci_hi": f["ci_hi"], "phi_h1_only": f["phi_h1"],
                        "sse_min": f["sse_min"], "inside_at_md": f["inside_at_md"]}
                       for k, f in fits.items()]
-                     ).to_csv(OUT_DIR / f"d8_acf_fitphi_summary{suffix}.csv", index=False)
+                     ).to_csv(OUT_DIR / f"d4c_acf_fitphi_summary{suffix}.csv", index=False)
 
     # ---- figure --------------------------------------------------------------------
     import matplotlib.pyplot as plt
@@ -773,7 +773,7 @@ def mode_acf(a):
         ax.legend(fontsize=7)
     for ax in axes.ravel()[len(panels):]:
         ax.axis("off")
-    fig.suptitle("D8: medium-run persistence vs pure-sleepiness model"
+    fig.suptitle("D4c: medium-run persistence vs pure-sleepiness model"
                  + (" [entity-detrended]" if detr else ""), fontsize=11)
     fig.tight_layout()
     fig.savefig(OUT_DIR / f"{base_name}.png", dpi=150)
@@ -830,9 +830,9 @@ def mode_acf(a):
                 else:
                     print("  Heterogeneity in phi_j leaves the pooled fit unchanged.")
     if fits:
-        d10 = d10_reference()
-        ref = (f"D10 entry dynamics phi={d10[0]:.3f} [{d10[1]:.3f}, {d10[2]:.3f}]"
-               if d10 else "D10 not on disk")
+        d10 = d6_reference()
+        ref = (f"D6 entry dynamics phi={d10[0]:.3f} [{d10[1]:.3f}, {d10[2]:.3f}]"
+               if d10 else "D6 not on disk")
         for k, f in fits.items():
             print(f"  [{k}] SMD(h=1..{HMAX}) phi={f['phi_md']:.3f} "
                   f"[{f['ci_lo']:.3f}, {f['ci_hi']:.3f}] vs h=1-only phi={f['phi_h1']:.3f} "
@@ -881,7 +881,7 @@ def _print_power(tab, stat, title):
 
 
 def mode_power(a):
-    print("=== D1-power: size-honest power of the D2b / D3 statistics ===")
+    print("=== D1-power: size-honest power of the D2 / D4a statistics ===")
     src = OUT_DIR / a.power_csv
     # tag the outputs with the source grid, so a --power-csv run on an alternative grid
     # (e.g. the R=1000 one) cannot silently overwrite the default R=200 tables.
@@ -898,8 +898,8 @@ def mode_power(a):
                          "--mode grid --stats-under-null")
 
     tab = pd.concat([_power_tables(df, "d2b"), _power_tables(df, "d3")], ignore_index=True)
-    _print_power(tab, "d2b", "D2b (lagged awake-inflow coefficient)")
-    _print_power(tab, "d3", "D3 (attractiveness-rank x carry)")
+    _print_power(tab, "d2b", "D2 (lagged awake-inflow coefficient)")
+    _print_power(tab, "d3", "D4a (attractiveness-rank x carry)")
 
     cmp_tab = None
     if a.power_compare:
@@ -913,7 +913,7 @@ def mode_power(a):
             print("\n  rows surviving the demand-step censoring in the compared file:")
             print("   " + ", ".join(f"phi={i[0]:g}/rho={i[1]:g}: {v:.1%}"
                                     for i, v in kk.items()))
-            print("   (the DATA lose 33-40% of D2b rows; the DGP's inflow A is lognormal and")
+            print("   (the DATA lose 33-40% of D2 rows; the DGP's inflow A is lognormal and")
             print("    therefore never negative, so simulated censoring bites only through")
             print("    phi_hat estimation error -- the power cost below is a LOWER bound.)")
         print(f"\n  --- power cost of {a.power_compare} vs {a.power_csv} "
@@ -929,7 +929,7 @@ def mode_power(a):
 
     import matplotlib.pyplot as plt
     fig, axes = plt.subplots(1, 2, figsize=(10, 4.0), sharey=True)
-    for ax, stat, name in zip(axes, ("d2b", "d3"), ("D2b", "D3")):
+    for ax, stat, name in zip(axes, ("d2b", "d3"), ("D2", "D4a")):
         t = tab[tab["stat"] == stat]
         for i, (phi, g) in enumerate(t.groupby("phi_true")):
             ax.plot(g["rho_xi"], g["power_coef"], "o-", label=f"phi_true={phi:g}",
@@ -952,15 +952,15 @@ def mode_power(a):
           f"UNDER THE NULL, so raw")
     print("  rejection frequencies in this file are not power at 5% and must not be read as such.")
     if len(p9):
-        print(f"  Size-corrected: at phi_true=0.9 the D2b COEFFICIENT test has power "
+        print(f"  Size-corrected: at phi_true=0.9 the D2 COEFFICIENT test has power "
               f"{', '.join(f'{r.power_coef:.2f} at rho={r.rho_xi:g}' for r in p9.itertuples())};")
         tp = d2[(d2["phi_true"] == 0.9) & (d2["rho_xi"] > 0)]["power_t_sizecorr"]
         print(f"  the size-corrected t on the same replications reaches only "
               f"{tp.min():.2f}-{tp.max():.2f}, i.e. the CRVE")
         print("  standard error, not the coefficient, is what destroys the test on ~35 clusters.")
-    print(f"  D3's coefficient test stays at {d3['power_coef'].min():.2f}-"
+    print(f"  D4a's coefficient test stays at {d3['power_coef'].min():.2f}-"
           f"{d3['power_coef'].max():.2f} across the grid: as a check on awake-flow")
-    print("  persistence it is close to uninformative, and a null D3 in the data is weak evidence.")
+    print("  persistence it is close to uninformative, and a null D4a in the data is weak evidence.")
 
 
 if __name__ == "__main__":
@@ -976,7 +976,7 @@ if __name__ == "__main__":
     ap.add_argument("--stats-under-null", action="store_true")
     ap.add_argument("--censor", action="store_true",
                     help="grid: apply the demand step's max{0,.} / >1e-6 rule to the "
-                         "simulated D2b sample (what the data test actually sees)")
+                         "simulated D2 sample (what the data test actually sees)")
     ap.add_argument("--tag", default=None, help="grid: output filename tag")
     ap.add_argument("--phis", type=float, nargs="+", default=None,
                     help="grid: override the phi_true grid")
@@ -1000,14 +1000,14 @@ if __name__ == "__main__":
     # default=None so an unspecified --phi-prod RESOLVES from the estimation output rather
     # than freezing a literal; an explicit value on the command line still wins.
     ap.add_argument("--routine-bands", nargs="+", type=int, default=None,
-                    help="D8 per routine: for each estimation routine N, band the POOLED data "
+                    help="D4c per routine: for each estimation routine N, band the POOLED data "
                          "ACF against (a) a scalar band at that routine's mean fitted phi and "
                          "(b) a vector band where each entity carries its own routine-fitted "
                          "phi_j (entity mean of phi_mt from CF_FOUNDATION/phi_nopix_E{N}). "
-                         "Writes d8_acf_routine_bands.{csv,png}; the archived pooled outputs "
+                         "Writes d4c_acf_routine_bands.{csv,png}; the archived pooled outputs "
                          "are untouched.")
     ap.add_argument("--phi-prod", type=float, default=None,
-                    help="production phi for the iso-contour / D8 band. Default: read from "
+                    help="production phi for the iso-contour / D4c band. Default: read from "
                          "the est2 spec-12 fit via utils.phi_reference (pass 0.985 to use "
                          "the E7/E8 headline instead)")
     a = ap.parse_args()

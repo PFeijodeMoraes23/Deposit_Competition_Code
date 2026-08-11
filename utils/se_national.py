@@ -257,7 +257,7 @@ def national_note(schemes, dk_bracket: bool = False) -> str:
     if not s:
         return ""                                   # no national rows in this table
 
-    lead = (r"Rows marked $\dagger$ are \textbf{national} regressors: Pix Available and the "
+    lead = (r"Rows marked $\dagger$ are national regressors: Pix Available and the "
             r"lagged Selic rate take a common value across all conglomerates within a quarter, "
             r"so clustering on the conglomerate treats each firm's copy of a national value as "
             r"independent evidence and understates their sampling uncertainty. ")
@@ -265,7 +265,7 @@ def national_note(schemes, dk_bracket: bool = False) -> str:
     if s == {"congl"}:
         # Nothing time-robust was available anywhere: say so plainly rather than describe a
         # calculation that never ran.
-        return (r"Pix Available and the lagged Selic rate are \textbf{national} regressors, "
+        return (r"Pix Available and the lagged Selic rate are national regressors, "
                 r"constant across conglomerates within a quarter, so conglomerate clustering "
                 r"understates their sampling uncertainty; a time-robust standard error is not "
                 r"available for them in this table. ")
@@ -273,7 +273,7 @@ def national_note(schemes, dk_bracket: bool = False) -> str:
     if "congl" in s:
         # MIXED -- the honest, and unfortunately verbose, case.
         body = (r"Where marked, those rows report a wild bootstrap clustered on the "
-                r"\emph{quarter}, with stars computed from it; \textbf{unmarked} national cells "
+                r"\emph{quarter}, with stars computed from it; unmarked national cells "
                 r"retain conglomerate clustering, so standard errors are not comparable across "
                 r"columns within those rows. ")
     else:

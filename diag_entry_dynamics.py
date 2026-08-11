@@ -1,4 +1,4 @@
-"""diag_entry_dynamics.py -- D10: do entrants accumulate share at the speed phi-hat implies?
+"""diag_entry_dynamics.py -- D6: do entrants accumulate share at the speed phi-hat implies?
 
 Author: Pedro Feijo de Moraes
 
@@ -28,8 +28,8 @@ Two normalisations, exactly as in the paper:
                         flat line at 1 (it is 0/0 in the main normalisation, so it is
                         drawn on the ALT panel only -- same as the paper).
 
-Outputs -> DIAG_PHI_SEPARATION/d10_entry_{events,paths,model_curves}.csv,
-           d10_entry_dynamics.png/.pdf, and fig_entry_dynamics.png/.pdf in Drafts.
+Outputs -> DIAG_PHI_SEPARATION/d6_entry_{events,paths,model_curves}.csv,
+           d6_entry_dynamics.png/.pdf, and fig_entry_dynamics.png/.pdf in Drafts.
 """
 from utils.venv_guard import ensure_project_venv
 ensure_project_venv(__file__)
@@ -296,7 +296,7 @@ def routine_event_curves(reg, paths, H, plateau_w, g, ests):
     """Per-routine model paths built from each routine's OWN fitted dispersion.
 
     The scalar model line collapses a routine's fitted phi_mt to one number; this is the
-    D8 '--routine-bands' idea transported to entry dynamics. For each routine N, every kept
+    D4c '--routine-bands' idea transported to entry dynamics. For each routine N, every kept
     B event gets the model curve at ITS market's mean fitted phi_m (from the CF_FOUNDATION
     phi_nopix export, which carries phi_mt through the routine's own link), and the
     routine's prediction is the MEDIAN of those per-event curves -- the routine as
@@ -348,7 +348,7 @@ def routine_event_curves(reg, paths, H, plateau_w, g, ests):
                          "data_median": float(emp[h]) if np.isfinite(emp[h]) else np.nan})
     if not rows:
         return None
-    pd.DataFrame(rows).to_csv(OUT_DIR / "d10_routine_curves.csv", index=False)
+    pd.DataFrame(rows).to_csv(OUT_DIR / "d6_routine_curves.csv", index=False)
 
     import matplotlib.pyplot as plt
     fig, ax = plt.subplots(figsize=(7.2, 4.6))
@@ -363,13 +363,13 @@ def routine_event_curves(reg, paths, H, plateau_w, g, ests):
     ax.axhline(1.0, color="0.6", lw=0.8, ls=":")
     ax.set_xlabel("quarters since entry")
     ax.set_ylabel("normalised entrant deposits (main norm.)")
-    ax.set_title("D10 per routine: entry paths implied by each routine's own fitted "
+    ax.set_title("D6 per routine: entry paths implied by each routine's own fitted "
                  "$\\phi_m$ dispersion", fontsize=10.5)
     ax.legend(fontsize=8, ncol=2)
     fig.tight_layout()
-    fig.savefig(OUT_DIR / "d10_routine_curves.png", dpi=150)
+    fig.savefig(OUT_DIR / "d6_routine_curves.png", dpi=150)
     plt.close(fig)
-    print(f"  -> d10_routine_curves.csv / .png")
+    print(f"  -> d6_routine_curves.csv / .png")
     return rows
 
 
@@ -412,7 +412,7 @@ def event_paths(reg, paths, H, norm, plateau_w, boot, seed):
 
 # ----------------------------------------------------------------------------- main
 def main(args):
-    print("=== D10: entry dynamics vs the closed-form accumulation path (Egan Fig. 3) ===")
+    print("=== D6: entry dynamics vs the closed-form accumulation path (Egan Fig. 3) ===")
     g = median_g()
     vint = phi_vintages()
     H = args.horizon
@@ -467,7 +467,7 @@ def main(args):
             frames.append(reg)
             all_paths.update(paths)
     reg_all = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
-    reg_all.to_csv(OUT_DIR / "d10_entry_events.csv", index=False)
+    reg_all.to_csv(OUT_DIR / "d6_entry_events.csv", index=False)
 
     for kind, reg in (("B", reg_b), ("D", reg_d)):
         if reg.empty:
@@ -506,8 +506,8 @@ def main(args):
                                         "vintage": lab, "phi": phi, "norm": norm}))
     paths_df = pd.concat(rows, ignore_index=True) if rows else pd.DataFrame()
     curves_df = pd.concat(curves, ignore_index=True)
-    paths_df.to_csv(OUT_DIR / "d10_entry_paths.csv", index=False)
-    curves_df.to_csv(OUT_DIR / "d10_model_curves.csv", index=False)
+    paths_df.to_csv(OUT_DIR / "d6_entry_paths.csv", index=False)
+    curves_df.to_csv(OUT_DIR / "d6_model_curves.csv", index=False)
 
     if not paths_df.empty:
         print("\n  normalised median share paths (main normalisation):")
@@ -540,7 +540,7 @@ def main(args):
             print(f"        vs phi[{lab}]={p:.4f}: {'INSIDE' if inside else 'OUTSIDE'} the CI")
     if imp:
         pd.DataFrame(imp).T.rename_axis("kind").reset_index().to_csv(
-            OUT_DIR / "d10_implied_phi.csv", index=False)
+            OUT_DIR / "d6_implied_phi.csv", index=False)
 
     if args.routine_curves:
         print("\n  per-routine model paths from each routine's own fitted phi_m dispersion:")
@@ -629,14 +629,14 @@ def make_figure(paths_df, curves_df, vint, g, args, imp=None):
              "estimated law of motion (frozen spreads, $g$ = median gross accrual).",
              ha="left", fontsize=7.5, color=MUTED if (MUTED := "#5A5A57") else INK)
     fig.tight_layout(rect=(0, 0.035, 1, 0.94))
-    for stem, d in (("d10_entry_dynamics", OUT_DIR), ("fig_entry_dynamics", DRAFTS)):
+    for stem, d in (("d6_entry_dynamics", OUT_DIR), ("fig_entry_dynamics", DRAFTS)):
         try:
             fig.savefig(d / f"{stem}.png", dpi=300, bbox_inches="tight", facecolor="white")
             fig.savefig(d / f"{stem}.pdf", bbox_inches="tight", facecolor="white")
         except OSError as e:
             print(f"  [fig] save to {d} failed: {e}")
     plt.close(fig)
-    print(f"  figure -> {OUT_DIR/'d10_entry_dynamics.png'} (+ Drafts/fig_entry_dynamics.*)")
+    print(f"  figure -> {OUT_DIR/'d6_entry_dynamics.png'} (+ Drafts/fig_entry_dynamics.*)")
 
 
 if __name__ == "__main__":
@@ -653,7 +653,7 @@ if __name__ == "__main__":
     ap.add_argument("--window-only", action="store_true",
                     help="restrict to entries from 2016Q1 (the estimation window)")
     ap.add_argument("--routine-curves", nargs="+", default=None,
-                    help="per-routine model paths from each routine's own fitted phi_m (D8 --routine-bands analogue), e.g. --routine-curves 1 2 5 6 7 8")
+                    help="per-routine model paths from each routine's own fitted phi_m (D4c --routine-bands analogue), e.g. --routine-curves 1 2 5 6 7 8")
     ap.add_argument("--no-branch-screen", action="store_true",
                     help="skip the ESTBAN branch-timing screen even if the sidecar exists")
     raise SystemExit(main(ap.parse_args()))
