@@ -54,6 +54,9 @@ def main():
     ap.add_argument("--B", type=int, default=400)
     ap.add_argument("--loss", default="robust", choices=("robust", "ls"))
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--cert-tol", type=float, default=1e-9,
+                    help="certification-1 tolerance on the link grid; raise ONLY with the "
+                         "diagnostic evidence described in the failure message")
     a = ap.parse_args()
     tb = (a.est == 8)
     loss = "robust" if a.loss == "robust" else "ls"
@@ -140,9 +143,26 @@ def main():
     d_g = float(np.max(np.abs(ggrid0 - np.asarray(res.si_ggrid, float))))
     d_v = float(np.max(np.abs((vgrid0 + offset) - np.asarray(res.si_vgrid, float))))
     print(f"[cert 1] link grid vs stored: G {d_g:.3e} | index {d_v:.3e}")
-    if d_g > 1e-9 or d_v > 1e-6:
-        raise RuntimeError("profiling does not reproduce the stored link -- the rebuild is "
-                           "not this estimator; refusing to report a band")
+    if d_g > a.cert_tol or d_v > 1e-6:
+        # Localise the disagreement before refusing: a rebuild that is simply WRONG misses
+        # everywhere, while a solver that stopped elsewhere on a degenerate face misses only
+        # where the link is flat against its ceiling.
+        gg_s = np.asarray(res.si_ggrid, float)
+        dif = np.abs(ggrid0 - gg_s)
+        sat = gg_s >= gg_s.max() - 1e-9
+        print(f"  [cert 1 diag] |dG| max {dif.max():.3e} median {np.median(dif):.3e} | "
+              f"grid points at the stored ceiling: {sat.sum()}/{len(gg_s)} "
+              f"({100*sat.mean():.1f}%)")
+        print(f"  [cert 1 diag] |dG| on saturated points: max {dif[sat].max():.3e} | "
+              f"elsewhere: max {dif[~sat].max() if (~sat).any() else float('nan'):.3e}")
+        print(f"  [cert 1 diag] argmax at grid index {int(dif.argmax())}/{len(gg_s)}, "
+              f"G stored {gg_s[dif.argmax()]:.9f} vs rebuilt {ggrid0[dif.argmax()]:.9f}")
+        raise RuntimeError(
+            f"profiling does not reproduce the stored link ({d_g:.3e} > {a.cert_tol:.0e}) -- "
+            f"the rebuild is not this estimator; refusing to report a band. If the diagnostic "
+            f"above shows the gap confined to the saturated region, this is the ceiling QP's "
+            f"indeterminacy on a degenerate cell rather than a wrong rebuild, and --cert-tol "
+            f"may be raised DELIBERATELY with that stated in the write-up.")
 
     # ---- influence functions for theta, as the estimator builds them ----------------------
     gp_obs = np.interp(v0, vgrid0, gp0)
