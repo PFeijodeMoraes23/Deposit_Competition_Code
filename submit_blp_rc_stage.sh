@@ -19,15 +19,22 @@
 # previous stage's checkpoint. Driven by env vars exported by the orchestrator
 # (sbatch --export):
 #   RC_ROUTINE  1 | 2 | 3 | 4 | 5 | 6 | 7 | 8
-#   RC_ENGINE   ift | numerical          → BLP_ENGINE
+#   RC_ENGINE   ift | numerical | cue    → BLP_ENGINE  (cue = continuously-updated GMM, suffix _cue)
 #   RC_STAGE    sigma|rc2|rc3|rc4|full|ext1|ext2|extended
 # The first stage (sigma) warm-starts δ from data/input/logit_delta_E{k}_spec_12.bin
 # on the cluster (data/output kept as a fallback).
 
 set -euo pipefail
 : "${RC_ROUTINE:?set RC_ROUTINE (1..8)}"
-: "${RC_ENGINE:?set RC_ENGINE (ift|numerical)}"
+: "${RC_ENGINE:?set RC_ENGINE (ift|numerical|cue)}"
 : "${RC_STAGE:?set RC_STAGE (sigma|rc2|rc3|rc4|full|ext1|ext2|extended)}"
+# ${VAR:?} only catches unset/empty, so validate the VALUE too: an unrecognised engine used to fall
+# through to IFT with an empty output suffix and overwrite the production artifacts. Fails here in
+# seconds rather than after the module load + Julia/CUDA startup (blp_2_rc.jl re-checks as a backstop).
+case "${RC_ENGINE}" in
+    ift|numerical|cue) ;;
+    *) echo "RC_ENGINE='${RC_ENGINE}' is not a recognised engine (ift|numerical|cue)" >&2; exit 2 ;;
+esac
 
 # max-inner is a pure SAFETY CEILING, not a tuning knob: SQUAREM self-terminates
 # at tol-inner=1e-10 in ~120-185 iters (see logs), so 5000 never actually binds.

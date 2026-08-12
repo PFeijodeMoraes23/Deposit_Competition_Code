@@ -136,7 +136,7 @@ def build_alpha(wiv):
                 _tf(r), _gamma_t(r.get("cf_hausman")),
             ]) + r" \\")
         body.append(r"    \addlinespace[0.4ex]")
-    foot = (r"\textit{Notes:} \textbf{$\hat\alpha$ is a LINEAR-IV PROJECTION benchmark---2SLS of the "
+    foot = (r"\textit{Notes:} \emph{$\hat\alpha$ is a LINEAR-IV PROJECTION benchmark---2SLS of the "
             r"two-way-FE-demeaned deposit balance on \texttt{spread\_qoq} instrumented by the excluded "
             r"instruments---NOT the structural sleepiness parameter $\phi$}; it shares the first stage "
             r"and exclusion restriction with the control-function estimator, so it diagnoses the "

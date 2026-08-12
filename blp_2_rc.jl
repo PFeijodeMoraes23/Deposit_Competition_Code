@@ -120,6 +120,15 @@ const DEFAULT_ROUTINES = [5, 6, 7, 8]
 # (`main_gpu_numerical`, BLP_ENGINE=numerical). They share input_filename,
 # get_paths, log_status, … and the CPU baseline blp_1_estimation.jl (include()d there).
 const ENGINE = lowercase(get(ENV, "BLP_ENGINE", "ift"))
+# Engine → output suffix. This Dict is the ONLY authority for suffixes, and membership in it is the
+# engine allow-list. Guard placed BEFORE the engine include below so a typo fails in <1s with no CUDA
+# initialisation: an unrecognised value previously fell through to IFT with suffix "" and silently
+# OVERWROTE the production results/checkpoints/summaries.
+const ENGINE_SUFFIX = Dict("ift" => "", "numerical" => "_num", "cue" => "_cue")
+haskey(ENGINE_SUFFIX, ENGINE) || error(
+    "BLP_ENGINE='$(ENGINE)' is not a recognised engine (" *
+    join(sort(collect(keys(ENGINE_SUFFIX))), " | ") * "). Refusing to run: an unrecognised engine " *
+    "would fall through to IFT with an empty output suffix and overwrite the production artifacts.")
 
 if !isdefined(Main, :main_gpu_ift)
     include(joinpath(@__DIR__, "blp_gpu_engine.jl"))
@@ -208,7 +217,7 @@ function run_routine(estim_id::Int; passthrough::Vector{String} = String[])
     #   IFT (blp_2)       -> un-suffixed
     #   numerical (blp_1) -> *_num
     ENV["BLP_DELTA_SUFFIX"]  = DELTA_SUFFIX
-    ENV["BLP_OUTPUT_SUFFIX"] = ENGINE == "numerical" ? "_num" : ""
+    ENV["BLP_OUTPUT_SUFFIX"] = ENGINE_SUFFIX[ENGINE]
     # Route input_filename to the demand parquet: the auto-discovered prefix is passed
     # explicitly so the engine reads e.g. demand_7_sijoint_spec_12.parquet.
     ENV["BLP_DEMAND_PREFIX"] = prefix
@@ -223,7 +232,9 @@ function run_routine(estim_id::Int; passthrough::Vector{String} = String[])
     ENV["BLP_PI_BOUND"] = get(ENV, "BLP_PI_BOUND", "5.0")
 
     empty!(ARGS); append!(ARGS, vcat(base, pass))
-    ENGINE == "numerical" ? main_gpu_numerical() : main_gpu_ift()
+    # cue rides the NUMERICAL main (its FD gradient stays consistent when the objective changes);
+    # the CUE objective is selected inside run_blp_estimation_gpu from BLP_ENGINE.
+    ENGINE == "ift" ? main_gpu_ift() : main_gpu_numerical()
 end
 
 """Run a set of routines sequentially on a single GPU. Defaults to the single-index

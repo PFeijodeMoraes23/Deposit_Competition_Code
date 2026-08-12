@@ -8,14 +8,18 @@ cross-estimator comparison (review §1.1): it puts the models side by side so th
 estimates move across strategies.
 
 TWO stages are emitted (see STAGE_SPECS):
-  * ext1  (DEFAULT, no filename suffix) — the last rung of the complexity ladder reported per
-    routine, so the cross-E comparison ends where the within-E tables (blp_rc_E*, blp_compare_E*)
-    end. Files: blp_demand_comparison{_noseg}_spec12.tex.
+  * ext1  (HEADLINE, no filename suffix) — a random coefficient on the deposit spread, its
+    interactions with market demographics, and the ln-assets x income interaction. This is the last
+    rung of the ladder reported per routine, so the cross-routine comparison ends where the
+    within-routine tables (blp_rc_E*, blp_compare_E*) end. It is the headline because rc4 leaves the
+    price coefficient near zero (partly wrong-signed), while ext1 delivers correctly-signed,
+    near-unit-elastic estimates. Files: blp_demand_comparison{_noseg}_spec12.tex.
   * extended  (_full suffix) — the Full model with every freed random coefficient / interaction,
     kept as a robustness/appendix table. Files: blp_demand_comparison_full{_noseg}_spec12.tex.
 
-ext2/extended are the degenerate rungs (SEs inflate ~6-10x on a flat objective), which is why the
-ladder is cut at ext1 everywhere; `full` (the old 5-RC rung) is not a stage at all — see
+The per-routine tables (blp_rc_E*, blp_compare_E*) run the ladder through ext1 either way. ext2 and
+extended are the degenerate rungs (SEs inflate ~6-10x on a flat objective), which is why the ladder
+is cut at ext1 there; `full` (the old 5-RC rung) is not a stage at all — see
 make_blp_rc_table.STAGES / RC_TABLE_STAGES, the single source of truth for the ladder.
 
 Reads  blp_results_E{5,6,7,8}_spec_12_{stage}{engine_suffix}.json.
@@ -26,11 +30,11 @@ Usage
   python make_blp_demand_comparison_table.py                 # E5-E8, IFT engine, BOTH stages
   python make_blp_demand_comparison_table.py --routines 5,6,7,8
   python make_blp_demand_comparison_table.py --engine numerical
-  python make_blp_demand_comparison_table.py --stages ext1    # only the ext1 (default) tables
+  python make_blp_demand_comparison_table.py --stages ext1    # only the ext1 (headline) table
 
 Output (× {with-seg, _noseg})
 ------
-  rc4 :  BLP_RESULTS/Rout/ + Drafts/  blp_demand_comparison{_noseg}_spec12{engine}.tex
+  ext1:  BLP_RESULTS/Rout/ + Drafts/  blp_demand_comparison{_noseg}_spec12{engine}.tex
   full:  BLP_RESULTS/Rout/ + Drafts/  blp_demand_comparison_full{_noseg}_spec12{engine}.tex
 """
 from utils.venv_guard import ensure_project_venv
@@ -63,7 +67,7 @@ STAGE_SPECS = {
         stage="ext1", file_lbl="", caption_tail="",
         blurb=(r"the random-coefficients model with a random coefficient on the deposit spread, its "
                r"interactions with market demographics, and the $\ln$-assets $\times$ income "
-               r"interaction (the last stage of the complexity ladder reported per routine)"),
+               r"interaction (the last rung of the ladder reported per routine)"),
     ),
     "full": dict(
         stage="extended", file_lbl="_full", caption_tail=r" --- Full Specification",
@@ -139,9 +143,7 @@ def build_table(ests, suffix: str = "", show_segments: bool = True,
         r"The $\Sigma$'s are bounded $\Sigma\ge0$, and a $\dagger$ marks a $\Sigma$ at "
         r"the boundary ($\widehat{\Sigma}\approx0$), reported on the bound with no two-sided standard "
         r"errors \parencite{andrews1999}. $Q$: GMM overidentification statistic. Mean own-price elasticity is "
-        r"the average-market plug-in $\hat\alpha\cdot\overline{\rho(1-s)}$ (unit-free, since the spread enters "
-        r"in levels; representative-agent; the "
-        r"exact RC value integrates the individual price coefficients). Spread in percentage points."
+        r"the average-market plug-in $\hat\alpha\cdot\overline{\rho(1-s)}$. Spread in percentage points."
         r"} \\",
         r"    \endlastfoot",
         "",
@@ -230,11 +232,14 @@ def main():
     ap = argparse.ArgumentParser(description="RC-BLP cross-estimator comparison across E5-E8 "
                                              "(ext1 headline + Full)")
     ap.add_argument("--routines", default="5,6,7,8")
-    ap.add_argument("--engine", choices=["ift", "numerical"], default="ift")
+    ap.add_argument("--engine", choices=["ift", "numerical", "cue"], default="ift",
+                    help="Engine whose results to read (ift→un-suffixed, numerical→_num, cue→_cue). "
+                         "The suffix also lands in the output filename, so a non-ift engine writes a "
+                         "NEW .tex beside the headline.")
     ap.add_argument("--stages", default="ext1,full",
                     help="comma list of STAGE_SPECS keys to emit (default: both)")
     args = ap.parse_args()
-    suffix = "_num" if args.engine == "numerical" else ""
+    suffix = rc.ENGINE_SUFFIX[args.engine]
     ests   = [int(x) for x in args.routines.split(",") if x.strip()]
     want   = [s.strip() for s in args.stages.split(",") if s.strip()]
 

@@ -1454,6 +1454,47 @@ function gmm_objective_gpu!(buf::HotBuffers, gbuf::GpuBuffers,
     return dot(G, W * G)
 end
 
+"""
+    gmm_objective_cue_gpu!(...same as gmm_objective_gpu! + opts::CueOpts[, alpha0])
+
+CUE twin of `gmm_objective_gpu!` (BLP_ENGINE=cue): identical GPU contraction, then the clustered
+continuously-updated fixed point (`cue_fixed_point`, blp_1_estimation.jl §7b) instead of the fixed-W
+one-step. W0 is retained only for the one-time self-check log. With `alpha0 !== nothing` it runs the
+Stock–Wright variant (`cue_fixed_point_alpha0`): α pinned, β-only concentration → S(α₀).
+Q is in Hansen-J units (N-scaled) — NOT comparable to the ift/numerical Q.
+"""
+function gmm_objective_cue_gpu!(buf::HotBuffers, gbuf::GpuBuffers,
+                                 theta2::Vector{Float64},
+                                 prod_vec, nu_draws,
+                                 sigma_indices, pi_interactions,
+                                 R::Int, coef_dim::Int,
+                                 W0::Matrix{Float64},
+                                 tol_inner::Float64, max_inner::Int,
+                                 delta::Vector{Float64},
+                                 pc::Precomp, opts::CueOpts;
+                                 alpha0::Union{Nothing,Float64}=nothing)::Float64
+    sigma_vals, pi_vals = unpack_theta2(theta2, sigma_indices, pi_interactions)
+    compute_mu!(buf, prod_vec, nu_draws, sigma_vals, sigma_indices, pi_vals, R, coef_dim)
+    converged, n_iter, _ = blp_contraction_gpu!(buf, gbuf, delta, pc, R;
+                                                 tol=tol_inner, max_iter=max_inner)
+    converged || println("  [!] Inner loop (GPU) did not converge in $n_iter iterations")
+    local Q, iters, wconv
+    if alpha0 === nothing
+        _, _, _, Q, iters, wconv = cue_fixed_point(delta, pc, opts)
+    else
+        _, _, _, Q, iters, wconv = cue_fixed_point_alpha0(delta, pc, opts, alpha0)
+    end
+    opts.n_evals[] += 1
+    wconv || (opts.n_nonconv[] += 1)
+    iters > opts.itmax_seen[] && (opts.itmax_seen[] = iters)
+    if opts.n_evals[] == 1   # one-time self-check: production one-step Q vs CUE Q at the same δ
+        g0 = compute_gmm_moments(estimate_theta1(delta, pc)[2], pc)
+        log_status("  [CUE self-check] Q_onestep(fixed W)=$(round(dot(g0, W0 * g0), sigdigits=6)) | " *
+                   "Q_cue=$(round(Q, sigdigits=6)) (N-scaled, NOT comparable) | witer=$iters conv=$wconv")
+    end
+    return Q
+end
+
 # ==========================================================================
 # GPU Estimation Runner
 # ==========================================================================
@@ -1480,8 +1521,16 @@ function run_blp_estimation_gpu(estim::Int, spec_id::Int, args,
     println("  Estimation $estim — Specification $spec_id  [GPU]")
     println("=" ^ 60)
 
+    # CUE (BLP_ENGINE=cue): clustered continuously-updated weight matrix — see §7b in
+    # blp_1_estimation.jl. Lives ONLY on this GPU-numerical path (FD gradients stay consistent
+    # automatically when the objective changes; the IFT analytic gradient assumes ∂W/∂θ₂ = 0).
+    use_cue = lowercase(get(ENV, "BLP_ENGINE", "ift")) == "cue"
+
     # Logit: no inner contraction → CPU path is fine
     if args["stage"] == "logit"
+        use_cue && error("CUE is RC-stages/GPU-numerical only: the logit stage delegates to the CPU " *
+                         "path, which ignores BLP_OUTPUT_SUFFIX and would overwrite the production " *
+                         "(unsuffixed) files. Run the logit under BLP_ENGINE=ift.")
         return run_blp_estimation(estim, spec_id, args, nu_draws, draws_3d, key_index)
     end
 
@@ -1554,6 +1603,10 @@ function run_blp_estimation_gpu(estim::Int, spec_id::Int, args,
                                  length(pi_interactions))
     precompute_pi_products!(buf, prod_vec, draws_3d, obs_key_idx,
                              pi_interactions, coef_dim)
+    cue_opts = use_cue ? CueOpts(pc.clusters) : nothing
+    use_cue && log_status("  [CUE] clustered CU-GMM objective: G=$(cue_opts.G) clusters | " *
+                          "max_witer=$(cue_opts.max_witer) wtol=$(cue_opts.wtol) " *
+                          "pinv_rtol=$(cue_opts.pinv_rtol) ridge=$(cue_opts.ridge)")
     log_status("  [GPU] Device: $(CUDA.name(CUDA.device()))")
     log_status("  [GPU] Allocating GPU buffers (~$(round(21.68, digits=1)) GB)...")
     flush(stdout); flush(stderr)
@@ -1582,6 +1635,9 @@ function run_blp_estimation_gpu(estim::Int, spec_id::Int, args,
             catch e
                 println("  [WARM-START] Could not load BLP_THETA2_INIT_FILE: $e")
             end
+        elseif !isempty(_init)
+            # A set-but-missing seed silently degraded to a cold start before — say so loudly.
+            println("  [WARM-START] BLP_THETA2_INIT_FILE set but MISSING: $_init")
         end
     end
     if theta2_0 === nothing && args["stage"] in keys(prev_stages)
@@ -1707,10 +1763,18 @@ function run_blp_estimation_gpu(estim::Int, spec_id::Int, args,
     # finite-difference gradient Optim used before. A one-point cache stops the base
     # objective from being re-solved between the f and g! calls at the same θ₂.
     outer_iter = Ref(0)
-    _raw_obj(t2) = gmm_objective_gpu!(buf, gbuf, t2, prod_vec, nu_draws,
-                                       sigma_indices, pi_interactions, R, coef_dim,
-                                       W, args["tol_inner"], args["max_inner"],
-                                       delta_work, pc)
+    # CUE swaps ONLY the objective; grad_fn! below is a forward difference of _raw_obj, so the
+    # gradient follows automatically. `alpha0_ref` is nothing except in Stock-Wright grid mode.
+    alpha0_ref = Ref{Union{Nothing,Float64}}(nothing)
+    _raw_obj(t2) = use_cue ?
+        gmm_objective_cue_gpu!(buf, gbuf, t2, prod_vec, nu_draws,
+                                sigma_indices, pi_interactions, R, coef_dim,
+                                W, args["tol_inner"], args["max_inner"],
+                                delta_work, pc, cue_opts; alpha0=alpha0_ref[]) :
+        gmm_objective_gpu!(buf, gbuf, t2, prod_vec, nu_draws,
+                            sigma_indices, pi_interactions, R, coef_dim,
+                            W, args["tol_inner"], args["max_inner"],
+                            delta_work, pc)
     fd_t2 = fill(NaN, n_params); fd_Q = Ref(0.0)
     function obj_fn(t2)
         if !isequal(t2, fd_t2)
@@ -1732,6 +1796,62 @@ function run_blp_estimation_gpu(estim::Int, spec_id::Int, args,
         return G
     end
 
+    # ── Stock–Wright S-set mode (BLP_ALPHA_GRID, cue only) ────────────────
+    # S(α₀) = min_{θ₂,β} N·ḡ'W(θ)ḡ with α pinned at α₀. Inverting {α₀ : S(α₀) ≤ crit} gives an
+    # identification-robust set for α that ACCOUNTS for θ₂ being estimated — unlike the conditional
+    # AR/LM sets computed at a fixed δ(θ̂₂). One artifact per (routine, stage); returns early.
+    let _grid_spec = get(ENV, "BLP_ALPHA_GRID", "")
+        if use_cue && !isempty(_grid_spec)
+            parts = parse.(Float64, split(_grid_spec, ':'))
+            length(parts) == 3 || error("BLP_ALPHA_GRID must be start:step:stop, got '$_grid_spec'")
+            grid = collect(parts[1]:parts[2]:parts[3])
+            log_status("  [S-SET] Stock-Wright grid: $(length(grid)) points " *
+                       "$(parts[1]):$(parts[2]):$(parts[3]) — each is a constrained solve")
+            pts = Vector{Dict{String,Any}}()
+            t2_seed = copy(theta2_0)     # warm-start each point from the previous optimum
+            for (gi, a0) in enumerate(grid)
+                alpha0_ref[] = a0
+                fill!(fd_t2, NaN)        # invalidate the one-point objective cache
+                outer_iter[] = 0
+                t2s, Sv, n_o, cvg = solve_box_lbfgsb(obj_fn, grad_fn!, t2_seed, lo, hi;
+                                                     tol_outer = args["tol_outer"], maxiter = 500)
+                # β/ξ at the constrained optimum (re-run the contraction at t2s first)
+                sv_g, pv_g = unpack_theta2(t2s, sigma_indices, pi_interactions)
+                compute_mu!(buf, prod_vec, nu_draws, sv_g, sigma_indices, pv_g, R, coef_dim)
+                d_g = copy(delta_work)
+                blp_contraction_gpu!(buf, gbuf, d_g, pc, R;
+                                     tol=args["tol_inner"], max_iter=args["max_inner"])
+                beta_g, _, _, S_g, it_g, wc_g = cue_fixed_point_alpha0(d_g, pc, cue_opts, a0)
+                push!(pts, Dict{String,Any}("alpha0" => a0, "S" => S_g, "theta2" => t2s,
+                                            "beta" => beta_g, "n_outer" => n_o,
+                                            "converged" => cvg, "cue_iters" => it_g,
+                                            "cue_converged" => wc_g))
+                log_status("  [S-SET $gi/$(length(grid))] alpha0=$(round(a0, digits=4)) " *
+                           "S=$(round(S_g, sigdigits=6)) outer=$n_o conv=$cvg")
+                t2_seed = copy(t2s)
+            end
+            alpha0_ref[] = nothing
+            L_iv = size(pc.Z_moments, 2)
+            out = Dict{String,Any}(
+                "estim" => estim, "spec_id" => spec_id, "stage" => args["stage"],
+                "engine" => "cue", "mode" => "stock_wright_sset",
+                "grid_spec" => _grid_spec, "n_obs" => N_obs,
+                "n_instruments" => L_iv, "n_theta2" => n_params,
+                "n_beta" => size(pc.X_full, 2) - 1,
+                "df_conservative" => L_iv,
+                "df_concentrated" => L_iv - (size(pc.X_full, 2) - 1 + n_params),
+                "S_scale" => "N*g'*pinv(Omega_cluster)*g at the constrained optimum; " *
+                             "invert {alpha0 : S <= chi2 crit}. Criticals are asymptotic chi2 " *
+                             "(WCB criticals for S are out of scope).",
+                "points" => pts)
+            spath = joinpath(out_dir,
+                "blp_results_E$(estim)_spec_$(spec_id)_$(args["stage"])_sset_cue.json")
+            open(spath, "w") do io; JSON3.pretty(io, out); end
+            log_status("  [S-SET] wrote $(basename(spath))  ($(length(grid)) points)")
+            return Dict{String,Any}("sset" => true, "path" => spath, "n_points" => length(grid))
+        end
+    end
+
     theta2_star, Q_min, n_outer, conv_outer = solve_box_lbfgsb(
         obj_fn, grad_fn!, theta2_0, lo, hi;
         tol_outer = args["tol_outer"], maxiter = 500)
@@ -1750,6 +1870,39 @@ function run_blp_estimation_gpu(estim::Int, spec_id::Int, args,
 
     theta1_star, xi_star      = estimate_theta1(delta_final, pc)
     theta1_se, n_cl, G_s      = compute_cluster_se(theta1_star, delta_final, pc)
+
+    # ── CUE: re-solve θ₁ at the optimum with the continuously-updated weight ──
+    # The production 2SLS θ₁/SE computed just above are KEPT (as theta1_2sls/alpha_2sls) so a table
+    # can print α_cue vs α_2sls without re-deriving anything; the standard keys then carry the CUE
+    # values, i.e. theta1[1] in a _cue JSON IS α_cue.
+    if use_cue
+        t1c, xic, Wc, Qc, itc, convc = cue_fixed_point(delta_final, pc, cue_opts)
+        results["theta1_2sls"]       = theta1_star
+        results["theta1_2sls_se"]    = theta1_se
+        results["alpha_2sls"]        = theta1_star[1]
+        results["cue_inner_iters"]   = itc
+        results["cue_converged"]     = convc
+        results["cue_witer_evals"]   = cue_opts.n_evals[]
+        results["cue_witer_nonconv"] = cue_opts.n_nonconv[]
+        results["cue_witer_itmax"]   = cue_opts.itmax_seen[]
+        results["hansen_J"]          = Qc
+        results["hansen_J_df"]       = size(pc.Z_moments, 2) - (size(pc.X_full, 2) + n_params)
+        let ev = eigvals(Symmetric(cue_weight(xic, pc.Z_moments, cue_opts)))
+            results["cue_omega_eig_min"] = minimum(ev)
+            results["cue_omega_eig_max"] = maximum(ev)
+        end
+        results["Q_scale"] = "N*g'*pinv(Omega_cluster)*g (Hansen-J units; NOT comparable to " *
+                             "the ift/numerical Q = g'(Z'Z/N)^-1 g)"
+        results["se_method_theta1"] = "cue_linear_gmm_efficient(+CR1) at fixed theta2/W; " *
+                                      "theta1_2sls_se is the production 2SLS cluster sandwich"
+        println("  [CUE] alpha_cue=$(round(t1c[1], sigdigits=6)) vs " *
+                "alpha_2sls=$(round(theta1_star[1], sigdigits=6)) | witer=$itc conv=$convc | " *
+                "J=$(round(Qc, sigdigits=6)) | evals=$(cue_opts.n_evals[]) " *
+                "nonconv=$(cue_opts.n_nonconv[]) itmax=$(cue_opts.itmax_seen[])")
+        theta1_star = t1c
+        xi_star     = xic
+        theta1_se   = cue_linear_se(delta_final, pc, Wc, cue_opts.G)
+    end
 
     results["theta1"]             = theta1_star
     results["theta1_se"]          = theta1_se
@@ -1897,6 +2050,13 @@ function main_gpu_numerical()
                     "n_clusters"         => get(res, "n_clusters",        0),
                     "G_star"             => get(res, "G_star",            0.0),
                 )
+                # CUE extras — present only under BLP_ENGINE=cue, so ift/num JSON is byte-identical.
+                for k in ("theta1_2sls", "theta1_2sls_se", "alpha_2sls", "cue_inner_iters",
+                          "cue_converged", "cue_witer_evals", "cue_witer_nonconv",
+                          "cue_witer_itmax", "hansen_J", "hansen_J_df",
+                          "cue_omega_eig_min", "cue_omega_eig_max", "Q_scale", "se_method_theta1")
+                    haskey(res, k) && (json_out[k] = res[k])
+                end
                 open(json_path, "w") do f; JSON3.write(f, json_out); end
             catch e
                 println("  [JSON-WARN] $e")
@@ -1909,6 +2069,8 @@ function main_gpu_numerical()
                                   [] : [res["theta1"][1]],
                 "theta2"       => get(res, "theta2", Float64[]),
                 "stage"        => current_stage)
+            haskey(res, "alpha_2sls")    && (all_results[sp]["alpha_2sls"]    = res["alpha_2sls"])
+            haskey(res, "cue_converged") && (all_results[sp]["cue_converged"] = res["cue_converged"])
         end
 
         summary_path = joinpath(out_dir, "blp_summary_E$(estim)_$(current_stage)_gpu$(output_suffix()).json")
@@ -2248,6 +2410,9 @@ function run_blp_estimation_ift_gpu(estim::Int, spec_id::Int, args,
             catch e
                 println("  [WARM-START] Could not load BLP_THETA2_INIT_FILE: $e")
             end
+        elseif !isempty(_init)
+            # A set-but-missing seed silently degraded to a cold start before — say so loudly.
+            println("  [WARM-START] BLP_THETA2_INIT_FILE set but MISSING: $_init")
         end
     end
     if theta2_0 === nothing && args["stage"] in keys(prev_stages)
@@ -2649,9 +2814,16 @@ end
 # Inert when this file is include()d (PROGRAM_FILE != @__FILE__), e.g. by the blp_2_rc.jl
 # driver, which calls main_gpu_ift()/main_gpu_numerical() itself.
 if abspath(PROGRAM_FILE) == @__FILE__
-    if lowercase(get(ENV, "BLP_ENGINE", "ift")) == "numerical"
-        main_gpu_numerical()
-    else
-        main_gpu_ift()
+    let _eng = lowercase(get(ENV, "BLP_ENGINE", "ift"))
+        # An unrecognised engine used to fall through to IFT and OVERWRITE the production results.
+        _eng in ("ift", "numerical", "cue") ||
+            error("BLP_ENGINE='$(_eng)' is not a recognised engine (ift | numerical | cue).")
+        # Likewise, a non-ift engine with an empty suffix writes to the ift filenames.
+        if _eng != "ift" && isempty(output_suffix())
+            error("BLP_ENGINE=$(_eng) with an empty BLP_OUTPUT_SUFFIX would overwrite the " *
+                  "production (IFT) artifacts. Run via blp_2_rc.jl, which sets the suffix, or " *
+                  "export BLP_OUTPUT_SUFFIX explicitly.")
+        end
+        _eng == "ift" ? main_gpu_ift() : main_gpu_numerical()
     end
 end

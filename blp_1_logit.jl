@@ -597,6 +597,12 @@ const TABLE_SUBMODELS = [("priceonly", "Price Only"), ("core", "Price + Core"),
 # est5-8_spec12_stage2_comparison.tex. (E3/E4's `estimation:logistic` item is commented out
 # in V_Main, so they fall back to a plain E<id> header if ever included.)
 const COMPARISON_IDS  = [5, 6, 7, 8]
+# Routines that get a per-routine est{id}_spec12_logit.tex. The routines are AUTO-DISCOVERED from the
+# demand parquets, so E3/E4 (pooled logistic — not part of the reported lineup, and their
+# `estimation:logistic` item is commented out in V_Main) were silently getting tables written on every
+# run. Restrict the AUTO-discovered set to the reported lineup; an explicit `--est N` still overrides,
+# so E3/E4 remain reachable on demand.
+const REPORTED_IDS    = [1, 2, 5, 6, 7, 8]
 const COMPARISON_ROWS = ["alpha", "fgc_covered", "has_ip", "log_total_assets_lag",
                          "is_state_owned", "dummy_D_type"]   # seg_S2-S5 included in the spec, not reported
 const COMPARISON_ROWS_SEG = ["alpha", "fgc_covered", "has_ip", "log_total_assets_lag",
@@ -698,7 +704,7 @@ function build_logit_comparison_tex(data::AbstractDict, ids::Vector{Int},
         raw"overidentification statistic ($\chi^2_L$, $L$ = \# instruments); $G^*$ is " *
         raw"effective clusters. The mean own-price elasticity is " *
         raw"$\hat{\alpha}\,\rho_{jkmt}(1-s_{jkmt})$ averaged over the estimation sample " *
-        raw"(unit-free, since the spread $\rho$ enters in levels; $\rho$ in percentage points).}"   # no trailing TROW (matches stage2 template)
+        raw"(spread $\rho$ in percentage points).}"   # no trailing TROW (matches stage2 template)
     lines = String[
         raw"\setstretch{1.0}",
         raw"\begin{xltabular}{\textwidth}{>{\raggedright\arraybackslash}p{0.26\textwidth} *{" *
@@ -949,7 +955,7 @@ function main()
     if "--tables-only" in ARGS
         summary = read_combined_summary()
         isempty(summary) && error("--tables-only: no combined summary at $(combined_summary_path()).")
-        table_ids = sel === nothing ? _summary_ids(summary) : [sel]
+        table_ids = sel === nothing ? filter(in(REPORTED_IDS), _summary_ids(summary)) : [sel]
         println("  [tables-only] Regenerating LaTeX tables for $(join("E" .* string.(table_ids), ", "))…")
         write_logit_tables(table_ids, summary)
         write_logit_comparison_table(summary)
@@ -990,7 +996,7 @@ function main()
 
     # LaTeX result tables (replaces the former make_blp_logit_table.py step).
     summary   = read_combined_summary()
-    table_ids = sel === nothing ? _summary_ids(summary) : [sel]
+    table_ids = sel === nothing ? filter(in(REPORTED_IDS), _summary_ids(summary)) : [sel]
     println("\n  Generating LaTeX tables for $(join("E" .* string.(table_ids), ", "))…")
     write_logit_tables(table_ids, summary)
     write_logit_comparison_table(summary)

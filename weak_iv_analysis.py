@@ -55,6 +55,34 @@ PARSIMONIOUS_IV = ["loo_log_assets", "loo_equity_ratio", "loo_basileia",
                    "loo_credit_assets", "loo_npl_provision"]
 AR_GRID = np.linspace(-2.0, 2.0, 4001)   # α grid (spread coef, percentage-point units)
 
+# --delta-stage: invert AR/LM against the STRUCTURAL δ(θ̂₂) of an RC stage instead of the log-share
+# (θ₂ = 0) δ built below. The first-stage block (eff-F, KP-F, Cragg-Donald, partial R², collinearity)
+# is θ₂-INVARIANT — it is computed from the spread and Z alone and never touches δ — so only the
+# AR/LM/Hansen-J sets and the α̂ ladder change. Export the δ first with
+#   julia --project=. export_rc_delta.jl --stage ext1
+# which writes cluster_processed/rc_delta_E{k}_spec_12_{stage}.bin (Int64 n, then n Float64).
+DELTA_STAGE = None       # set from the CLI in main()
+DELTA_DIR = None
+
+
+def _load_rc_delta(k, stage, ddir, n_expect):
+    """Read rc_delta_E{k}_spec_12_{stage}.bin. Returns None (with a printed reason) if unusable —
+    a silent fallback to the log-share δ would mislabel the whole run."""
+    path = os.path.join(ddir, f"rc_delta_E{k}_spec_12_{stage}.bin")
+    if not os.path.isfile(path):
+        print(f"[weak-IV] E{k}: {os.path.basename(path)} not found — run export_rc_delta.jl first")
+        return None
+    with open(path, "rb") as f:
+        n = int(np.frombuffer(f.read(8), dtype="<i8")[0])
+        d = np.frombuffer(f.read(n * 8), dtype="<f8")
+    if len(d) != n:
+        print(f"[weak-IV] E{k}: truncated δ ({len(d)} of {n})"); return None
+    # Positional alignment is the whole premise: the engine reads the parquet in file order.
+    if n != n_expect:
+        print(f"[weak-IV] E{k}: δ length {n:,} != parquet rows {n_expect:,} — REFUSING to align")
+        return None
+    return d.astype(float).copy()
+
 # Named instrument groups (for the leave-one-group-out sensitivity). mean_loo is the collinear block.
 IV_GROUPS = {
     "loo":      ["loo_log_assets", "loo_equity_ratio", "loo_basileia", "loo_credit_assets",
@@ -547,6 +575,14 @@ def analyze_routine(k, dp):
     sD = df["share_D"].fillna(0.0).to_numpy(float)
     sB = df["share_B_cond"].fillna(0.0).to_numpy(float)
     delta = np.where(is_B, np.log(np.clip(sB, 1e-15, None)), np.log(np.clip(sD, 1e-15, None)))
+    if DELTA_STAGE:
+        rc_delta = _load_rc_delta(k, DELTA_STAGE, DELTA_DIR, len(df))
+        if rc_delta is None:
+            print(f"[weak-IV] E{k}: skipped (no usable {DELTA_STAGE} δ)"); return None
+        delta = rc_delta
+        print(f"[weak-IV] E{k}: using STRUCTURAL δ from stage {DELTA_STAGE} "
+              f"(mean {delta.mean():+.3f}, sd {delta.std():.3f}); "
+              f"log-share δ would be (mean {np.where(is_B, np.log(np.clip(sB,1e-15,None)), np.log(np.clip(sD,1e-15,None))).mean():+.3f})")
     spread = df["spread_ann"].fillna(0.0).to_numpy(float) / 100.0
     Xmat = np.column_stack([np.ones(len(df))] +
                            [df[c].fillna(0.0).to_numpy(float) if c in df else np.zeros(len(df))
@@ -630,9 +666,15 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("results_dir", nargs="?", default=default_results_dir())
     ap.add_argument("--routines", default="5,6,7,8")
+    ap.add_argument("--delta-stage", default=None, metavar="STAGE",
+                    help="invert AR/LM against the structural δ of this RC stage (e.g. ext1) instead "
+                         "of the log-share δ; writes weak_iv_<STAGE>.json. Requires export_rc_delta.jl.")
     args = ap.parse_args()
     RES = os.path.abspath(args.results_dir)
     dp = os.path.join(os.path.dirname(RES), "DEMAND_PREP")
+    global DELTA_STAGE, DELTA_DIR
+    DELTA_STAGE = args.delta_stage
+    DELTA_DIR = os.path.join(RES, "cluster_processed")
     routines = [int(x) for x in args.routines.split(",") if x.strip()]
     try:
         import linearmodels  # noqa: F401
@@ -647,7 +689,10 @@ def main():
             out[str(k)] = r
     if out:
         os.makedirs(os.path.join(RES, "cluster_processed"), exist_ok=True)
-        path = os.path.join(RES, "cluster_processed", "weak_iv.json")
+        # Never clobber the log-share benchmark: a --delta-stage run is a robustness variant and gets
+        # its own file, so make_iv_tables.py keeps reading the benchmark it documents.
+        fname = f"weak_iv_{DELTA_STAGE}.json" if DELTA_STAGE else "weak_iv.json"
+        path = os.path.join(RES, "cluster_processed", fname)
         with open(path, "w") as f:
             json.dump(out, f, indent=2)
         print(f"\n[weak-IV] wrote {path}  ({len(out)} routines)")

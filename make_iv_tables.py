@@ -85,14 +85,24 @@ def _robust_ci(lo, hi, disconnected=False):
     return f"${ls},\\,{hs}{star}$"
 
 
-def _wrap(body_lines, col_fmt, caption, label, header, footnote, ncols):
+def _wrap(body_lines, col_fmt, caption, label, header, footnote, ncols, width=r"0.70\linewidth"):
+    # `width` is the width of the notes \multicolumn, and therefore of the whole table: longtable sizes
+    # itself from its widest row, and the notes row is always the widest. At the full landscape
+    # \linewidth (~24.7cm) the columns hold ~16cm of content, and longtable parks the entire ~9cm of
+    # slack in the LAST inter-column gap -- a chasm before the final column (@{\extracolsep{\fill}} does
+    # not redistribute it here). Sizing the notes near the natural content width removes the slack at
+    # the source; \extracolsep spreads whatever little remains.
     trow = r" \\"
     return "\n".join([
         r"\begin{landscape}",
         r"\begin{spacing}{1.0}",
         r"\centering\footnotesize",
         r"\setlength{\tabcolsep}{5pt}",
-        rf"\begin{{longtable}}[c]{{{col_fmt}}}",
+        # @{\extracolsep{\fill}}: the notes row below is a \multicolumn spanning \linewidth, which
+        # stretches the table to the full line. Without a stretch directive longtable dumps ALL of that
+        # slack into the last inter-column gap (leaving a chasm before the final column); \extracolsep
+        # {\fill} spreads it evenly across every gap instead.
+        rf"\begin{{longtable}}[c]{{@{{\extracolsep{{\fill}}}}{col_fmt}}}",
         rf"    \caption{{{caption}}}",
         rf"    \label{{{label}}} \\",
         r"    \toprule",
@@ -108,7 +118,7 @@ def _wrap(body_lines, col_fmt, caption, label, header, footnote, ncols):
         rf"    \multicolumn{{{ncols}}}{{r}}{{\textit{{Continued on next page}}}} \\",
         r"    \endfoot",
         r"    \bottomrule",
-        r"    \multicolumn{" + str(ncols) + r"}{p{\dimexpr\linewidth-2\tabcolsep\relax}}{\scriptsize "
+        r"    \multicolumn{" + str(ncols) + r"}{@{}p{\dimexpr" + width + r"-2\tabcolsep\relax}@{}}{\scriptsize "
         + footnote + r"} \\",
         r"    \endlastfoot",
         *body_lines,
@@ -228,24 +238,30 @@ def build_alpha_robust(wiv):
             body.append(r"    \addlinespace[0.4ex]")
     foot = (r"\textit{Notes:} Identification-robust inference on the deposit-spread coefficient "
             r"$\alpha$ (the single endogenous regressor), from the log-share linear-IV benchmark on "
-            r"the $K{=}16$ excluded instruments, clustered by prudential conglomerate. The estimator "
-            r"ladder (OLS $\to$ 2SLS $\to$ LIML) identifies the \emph{sign}: LIML (Anderson \& Rubin, "
-            r"1949), median-unbiased under weak identification, moves $\hat\alpha$ further into the "
-            r"economically-signed (negative, downward-sloping demand) region than 2SLS, the classic "
-            r"weak-instrument signature. But the \emph{level} is not point-identified: eff-$F$ = "
-            r"Montiel-Olea--Pflueger effective $F$ (2013) $\approx 4$, so the naive $\pm1.96\,$SE Wald "
-            r"interval overstates precision. We report the $F$-adjusted honest tF 95\% CI (Lee, "
-            r"McCrary, Moreira \& Porter, 2022) as the identification-robust object; the "
-            r"Kleibergen LM/K weak-IV-robust set (2005; wild-cluster-bootstrap criticals) concurs and "
-            r"is not shown---the Anderson--Rubin set is empty (the Hansen $J$ rejects) and the LM/K set "
-            r"is open and likewise fails to exclude zero. \textbf{The tF CI contains $0$ in every "
-            r"routine} (and is undefined for type~5, where eff-$F\approx1$), so the sign of price "
-            r"sensitivity is robust but its magnitude is only set-identified. This is driven by three "
-            r"features of the setting, not "
-            r"by modelling choices: the excluded instruments are weak; the deposit spread is set "
-            r"nationally (conglomerate$\times$type$\times$quarter, constant across municipalities), so "
-            r"the price has no within-market variation; and deposits are highly concentrated, leaving "
-            r"only $G^\ast\approx5$--$7$ effective clusters. Spread in percentage points.")
+            r"the $K{=}16$ excluded instruments, clustered by prudential conglomerate. \emph{This "
+            r"design does not identify} $\alpha$. The Montiel-Olea--Pflueger effective $F$ (2013) is "
+            r"$\approx1.4$ for types~4 and 4+5 and $\approx1.0$ for type~5, against a critical value of "
+            r"$\approx9.4$ for tolerating even a $30\%$ worst-case bias. Accordingly the $F$-adjusted "
+            r"honest tF 95\% CI (Lee, McCrary, Moreira \& Porter, 2022) is \emph{undefined} in every "
+            r"cell: the first stage lies below the range over which the adjustment is tabulated, so no "
+            r"valid Wald-type interval exists at this instrument strength. The estimator ladder behaves "
+            r"as weak-instrument theory predicts when it fails---OLS, 2SLS and LIML are wrong-signed and "
+            r"diverge with each estimator's sensitivity to weak identification rather than converging. "
+            r"The Anderson--Rubin set (1949) is \emph{empty}, mechanically: $\min_\alpha$AR is the "
+            r"Hansen $J$, which rejects the overidentifying restrictions ($p\le0.002$; a low bar at "
+            r"$n\approx200{,}000$ with 15 restrictions). The Kleibergen LM/K set (2005; "
+            r"wild-cluster-bootstrap criticals), which does not collapse under overidentification "
+            r"failure, is the reportable object: it contains zero and is \emph{unbounded above}. "
+            r"Trimming the instrument set raises eff-$F$ to $\approx5.0$ (the five leave-one-out rival "
+            r"characteristics alone), confirming many-weak-instrument dilution, but leaves it below "
+            r"threshold with partial $R^2\approx0.001$. Three features of the setting drive this, not "
+            r"modelling choices: the excluded instruments are weak and near-collinear (Patnaik effective "
+            r"$K\approx2.7$ of 16); the deposit spread is set nationally "
+            r"(conglomerate$\times$type$\times$quarter, constant across municipalities), so the price "
+            r"has no within-market variation; and deposits are highly concentrated, leaving only "
+            r"$G^\ast\approx5$ effective clusters. The structural random-coefficients estimates, which "
+            r"identify $\alpha$ off the share inversion rather than these instruments alone, are "
+            r"reported separately. Spread in percentage points.")
     return _wrap(body, col_fmt,
                  r"Identification-Robust Inference on the Deposit-Price Coefficient (Spec.~12)",
                  "tab:alpha_weakiv_spec12", header, foot, 8)

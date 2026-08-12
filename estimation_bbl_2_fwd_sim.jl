@@ -25,9 +25,11 @@ DEVIATING STRATEGY σ̃ (`--dev-scheme`, default `grid`):
   tiny symmetric normals (`normal`, legacy) they replace. `--perturb-scale` is the grid
   half-width in annualized-ρ units (ρ=spread_ann/100).
 
-  NOTE (deferred): the deviation is applied industry-wide (all firms shift together),
-  not as a strict UNILATERAL deviation of firm j alone. The exact BBL object perturbs
-  one firm at a time (N_firms× the share evals); left as a first-pass approximation.
+  UNILATERAL: Δ moves ONE firm's own k∈{4,5} rows; every rival holds σ̂. The loop runs one
+  forward simulation per (firm j × Δ) pair (~300 choice firms × S ⇒ shard it), and keeps only
+  the deviator's ψ. Rivals' mean utilities stay at equilibrium — their shares still move, via
+  the share denominator, which IS the business stealing eq:17 prices. A common industry-wide
+  shift is the collusive direction and would certify a false inequality; see the loop comment.
 
 FORWARD r^f (`--rf-curve`, default `COST_FWD/forward_rf_qoq.csv` from cf_forward_rf.py):
   the market Selic curve enters ψ4. A FLAT r^f makes ψ4 collinear with ψ2, leaving ζ
@@ -256,18 +258,6 @@ function deviation_shifts(S::Int, scale::Float64, scheme::String, seed::Int)
 end
 
 """
-    apply_shift(σ̂, endog, Δ) -> Vector{Float64}
-
-Stationary deviation: add the scalar shift `Δ` (annualized) to the choice spreads
-k∈{4,5}; regulated types pass through unchanged.
-"""
-function apply_shift(σ̂::Vector{Float64}, endog::BitVector, Δ::Float64)
-    σ̃ = copy(σ̂)
-    @inbounds for i in eachindex(σ̃); endog[i] && (σ̃[i] += Δ); end
-    return σ̃
-end
-
-"""
     firm_endog_rows(ctx, st, firms) -> Vector{Vector{Int}}
 
 Row indices of each firm's OWN choice spreads (k∈{4,5}), aligned to `firms`. Needed for the
@@ -290,8 +280,8 @@ end
 
 UNILATERAL deviation: add Δ to firm j's own k∈{4,5} spreads only; every rival stays at σ̂.
 This is the perturbation eq:17 requires (a Nash/MPE no-profitable-deviation condition).
-Contrast `apply_shift` above, which moves EVERY firm at once — that is a coordinated
-(collusive) move, not a unilateral one, and must NOT be used to build the eq:17 moments.
+Shifting every firm at once instead would be a coordinated (collusive) move and must NOT be
+used to build the eq:17 moments — `rows_j` is what keeps the move firm-specific.
 """
 function apply_shift_firm(σ̂::Vector{Float64}, rows_j::Vector{Int}, Δ::Float64)
     σ̃ = copy(σ̂)
@@ -495,12 +485,12 @@ function main_cost2()
     # ── Deviation ψ's — UNILATERAL (Nash) deviations, SHARDED over the (firm × Δ) grid ──
     # eq:17 is an MPE no-profitable-deviation condition: firm j deviates ALONE, rivals hold σ̂:
     #     g_jt = [ψ_j(σ̂) − ψ_j(σ̃_j, σ̂_{−j})]′·θ_c ≥ 0.
-    # Until 2026-07-13 this loop called apply_shift(σ̂, st.endog, Δ), moving EVERY firm at once.
-    # A common spread hike is the COLLUSIVE direction — profitable for all — so the estimator was
-    # being asked to certify a false inequality. Symptoms: exactly 50% of deviations "violated"
-    # g≥0 (the Δ>0 half), the deposit response collapsed to the industry-wide elasticity (no
-    # business stealing: −0.10/pp instead of α≈−0.19/pp), and ω̂ ran to ≈ −0.8/quarter. See
-    # counterfactuals_plan.md §9.
+    # Shifting every firm together instead would be the COLLUSIVE direction — a common spread hike
+    # is profitable for all — and would ask the estimator to certify a false inequality. Its
+    # signature, if this ever regresses: exactly 50% of deviations "violate" g≥0 (the Δ>0 half),
+    # the deposit response collapses to the industry-wide elasticity (no business stealing:
+    # −0.10/pp instead of α≈−0.19/pp), and ω̂ runs to ≈ −0.8/quarter. See counterfactuals_plan.md §9.
+    # The @assert below is the cheap standing guard on exactly that.
     # COST: one forward sim per (firm, Δ) instead of per Δ — so shard over the PAIR grid.
     # With ~300 choice firms × 50 Δ that is ~15k sims: use N_SHARDS ≫ 10 on the cluster.
     nf, nb = size(psi_eq)
@@ -512,6 +502,14 @@ function main_cost2()
     log_status("  [BBL] σ̃ scheme=$(a["dev-scheme"]) scale=$(a["perturb-scale"]) → " *
                "Δ∈[$(round(minimum(shifts), sigdigits=3)), $(round(maximum(shifts), sigdigits=3))]")
     rows_by_firm = firm_endog_rows(ctx, st, firms)
+    # No panel row may be claimed by two firms: a shared row would move more than the deviator
+    # and the moment would stop being unilateral.
+    let seen = falses(length(σ̂))
+        for rows in rows_by_firm, i in rows
+            seen[i] && error("row $i is claimed by two firms — deviations would not be unilateral")
+            seen[i] = true
+        end
+    end
     dev_firms = [j for j in 1:nf if !isempty(rows_by_firm[j])]
     log_status("  [BBL] UNILATERAL deviations: $(length(dev_firms)) of $nf firms set a choice spread")
     # Global (firm, shock) grid — deterministic ⇒ shard-invariant by global index.
@@ -521,6 +519,8 @@ function main_cost2()
     psi_dev = Array{Float64,2}(undef, length(loc), nb)
     for (li, (j, s)) in enumerate(loc)
         σ̃ = apply_shift_firm(σ̂, rows_by_firm[j], shifts[s])       # only firm j moves
+        @assert count(i -> !isequal(σ̃[i], σ̂[i]), eachindex(σ̃)) ==
+                (shifts[s] == 0 ? 0 : length(rows_by_firm[j])) "σ̃ moved rows outside firm $(firms[j])"
         pd, _ = psi_under(ctx, st, Z, markdown_q0, σ̃; beta=a["beta"], T=a["horizon"],
                           asset_return_q=asset_ret, rf_path_q=rf_path)
         psi_dev[li, :] .= @view pd[j, :]                            # only the DEVIATOR's ψ

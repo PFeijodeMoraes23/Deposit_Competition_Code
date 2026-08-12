@@ -141,7 +141,7 @@ def build_first_stage_table(results_dict, est_num):
     notes = (
         r"\footnotesize \textit{Notes:} Standard errors (wild cluster bootstrap at the "
         r"conglomerate level; \textcite{cameron2008bootstrap}, \textcite{mackinnon2017wild}) "
-        r"in parentheses. Coefficients are in \textbf{percentage points of the quarterly "
+        r"in parentheses. Coefficients are in \emph{percentage points of the quarterly "
         r"deposit spread} per the unit given in the row label, matching the units of the "
         r"second-stage tables. $t$-statistics, $p$-values and significance stars are "
         r"invariant to these units. "
@@ -225,7 +225,7 @@ def build_second_stage_table(results_dict, est_num):
         r"\footnotesize \textit{Notes:} Standard errors (wild cluster bootstrap at the "
         r"conglomerate level; \textcite{cameron2008bootstrap}, \textcite{mackinnon2017wild}) "
         r"in parentheses. Reported effects are average marginal effects (AMEs) on $\phi$, "
-        r"expressed in \textbf{percentage points of the sleepy share} per the unit given in "
+        r"expressed in \emph{percentage points of the sleepy share} per the unit given in "
         r"the row label; shares and rates are in percentage points, and Pix Available is a "
         r"discrete $0\to1$ difference. $t$-statistics, $p$-values and significance stars are "
         r"invariant to these units. State variables are grand-mean centred at their pooled "

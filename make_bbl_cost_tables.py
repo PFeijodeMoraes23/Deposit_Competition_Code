@@ -217,7 +217,7 @@ def build_identified(rows, ridge):
         r"\textit{Notes:} Marginal cost of deposits from the BBL moment-inequality problem "
         r"(V\_Main eq.~17), spec.~12, extended stage, estimated separately by firm type. "
         r"$\bar r^f_q$ is the $\beta^t$-weighted mean forward risk-free rate implied by the "
-        r"design, $\bar r^f_q=\Delta\psi_4/\Delta\psi_2$. \textbf{Only "
+        r"design, $\bar r^f_q=\Delta\psi_4/\Delta\psi_2$. \emph{Only "
         r"$\hat c(\bar r^f)=\hat\omega+\bar r^f\hat\zeta$ is identified}, and it is positive in "
         rf"all eight blocks ({cmin:.1f}--{cmax:.1f} pp/yr before the $\gamma'Z$ shifters), with "
         rf"{excl} of {len(rows)} 95\% intervals excluding zero. Standard errors for "
@@ -231,7 +231,7 @@ def build_identified(rows, ridge):
         r"throughout without implying negative marginal cost, and why the bootstrap draws of "
         rf"$(\hat\omega,\hat\zeta)$ correlate at {min(wz):.4f} to {max(wz):.4f}. The combination "
         rf"is up to {gain:.0f}$\times$ more precisely estimated than $\hat\omega$ alone. "
-        r"\textbf{Caveat:} all eight blocks trip the solver's own $\mathrm{frac\_bind}\approx"
+        r"\emph{Caveat:} all eight blocks trip the solver's own $\mathrm{frac\_bind}\approx"
         r"\tfrac12$ gate, indicating the $\pm$ deviation grid carries little identifying "
         r"content; these magnitudes should be treated as provisional until that is resolved."
     )

@@ -840,6 +840,30 @@ function estimate_theta1(delta::Vector{Float64}, pc::Precomp)
 end
 
 """
+    estimate_theta1_gmm(delta, pc, W) -> (theta1, xi)
+
+W-weighted linear-GMM θ₁ for the CUE engine: θ₁(W) = (X'Z W Z'X)⁻¹ X'Z W Z'δ with X = `pc.X_full`
+and Z = `pc.Z_moments`, solved on `pc.theta1_valid ∧ isfinite.(δ)` rows with ξ on ALL rows —
+mirroring `estimate_theta1`'s masking asymmetry. NOT identical to `estimate_theta1` even at
+W = (Z'Z/N)⁻¹: production 2SLS projects only the type-4/5 spread on H = [X, Z] and keeps x_mat as
+its own instrument, while this instruments all X columns with the excluded Z. Iteration 0 of the CUE
+fixed point therefore calls `estimate_theta1` itself; this function is used from iteration 1 on
+(CUE/GPU-numerical path only — no production caller).
+"""
+function estimate_theta1_gmm(delta::Vector{Float64}, pc::Precomp, W::Matrix{Float64})
+    valid = pc.theta1_valid .& isfinite.(delta)
+    Zv  = pc.Z_moments[valid, :]
+    Xv  = pc.X_full[valid, :]
+    ZtX = Zv' * Xv                       # L×K
+    Ztd = Zv' * delta[valid]             # L
+    A   = ZtX' * W * ZtX
+    b   = ZtX' * W * Ztd
+    theta1 = try A \ b catch; pinv(A) * b end
+    xi = delta .- pc.X_full * theta1     # ALL rows (mirrors estimate_theta1)
+    return theta1, xi
+end
+
+"""
     check_design_rank(pc; colnames, abort=true) -> Int
 
 Up-front guard against a rank-deficient projected design `X_hat` over the rows used
@@ -957,6 +981,149 @@ function gmm_objective!(buf::HotBuffers, theta2::Vector{Float64},
     theta1, xi = estimate_theta1(delta, pc)
     G          = compute_gmm_moments(xi, pc)
     return dot(G, W * G)
+end
+
+# ==========================================================================
+# 7b. CUE (continuously-updated GMM) — the LIML analogue. GPU-numerical engine only.
+# ==========================================================================
+# The production estimator is one-step GMM: W = (Z'Z/N)⁻¹ FIXED, θ₁ concentrated out by 2SLS.
+# CUE replaces the weight with W(θ) = pinv(Ω̂(θ)), Ω̂ clustered on conglomerate, recomputed at EVERY
+# objective evaluation, and solves the concentrated θ₁ by W-weighted linear GMM iterated to a fixed
+# point — so α inherits LIML's weak-identification behaviour (no bias toward OLS). Selected via
+# BLP_ENGINE=cue (suffix "_cue" on every artifact; see blp_2_rc.jl). It rides the NUMERICAL engine:
+# its gradient is pure forward finite differences of the objective, so changing only the objective
+# keeps objective/gradient consistent automatically. The IFT analytic gradient assumes ∂W/∂θ₂ = 0 and
+# is NOT valid for CUE.
+#
+# Q_cue is returned in Hansen-J units, N·ḡ'Wḡ — NOT comparable to the fixed-W Q = ḡ'(Z'Z/N)⁻¹ḡ.
+
+"""Per-run CUE state: integer cluster codes precomputed ONCE (a naive `clusters .== c` scan per
+evaluation would be O(G·N) ≈ 350M comparisons), env-tunable knobs, and eval/non-convergence counters."""
+struct CueOpts
+    codes::Vector{Int}                 # cluster code 1..G per row
+    G::Int
+    max_witer::Int                     # BLP_CUE_MAX_WITER  (default 10)
+    wtol::Float64                      # BLP_CUE_WTOL       (default 1e-10; FD-gradient stability)
+    pinv_rtol::Float64                 # BLP_CUE_PINV_RTOL  (default 1e-10)
+    ridge::Float64                     # BLP_CUE_RIDGE      (default 0 = off; ·tr(Ω̂)/L·I stabiliser)
+    n_evals::Base.RefValue{Int}
+    n_nonconv::Base.RefValue{Int}
+    itmax_seen::Base.RefValue{Int}
+end
+
+function CueOpts(clusters::Vector{String})
+    uc  = unique(clusters)
+    idx = Dict(c => i for (i, c) in enumerate(uc))
+    return CueOpts([idx[c] for c in clusters], length(uc),
+                   parse(Int,     get(ENV, "BLP_CUE_MAX_WITER", "10")),
+                   parse(Float64, get(ENV, "BLP_CUE_WTOL",      "1e-10")),
+                   parse(Float64, get(ENV, "BLP_CUE_PINV_RTOL", "1e-10")),
+                   parse(Float64, get(ENV, "BLP_CUE_RIDGE",     "0.0")),
+                   Ref(0), Ref(0), Ref(0))
+end
+
+"""Clustered moment covariance Ω̂ = (1/N)Σ_g (Z_g'ξ_g)(Z_g'ξ_g)' — the se_common.jl:128 meat pattern,
+code-indexed. ALL rows, unmasked (mirrors `compute_gmm_moments`)."""
+function cue_weight(xi::Vector{Float64}, Z::Matrix{Float64}, opts::CueOpts)
+    N, L = size(Z)
+    MclT = zeros(L, opts.G)                       # L×G so the inner loop is stride-1 in Z's rows
+    @inbounds for i in 1:N
+        g = opts.codes[i]; x = xi[i]
+        for l in 1:L
+            MclT[l, g] += x * Z[i, l]
+        end
+    end
+    Omega = (MclT * MclT') ./ N
+    if opts.ridge > 0
+        Omega .+= (opts.ridge * tr(Omega) / L) .* Matrix{Float64}(I, L, L)
+    end
+    return Omega
+end
+
+cue_pinv(Omega::Matrix{Float64}, rtol::Float64) =
+    Matrix(pinv(Symmetric((Omega .+ Omega') ./ 2); rtol=rtol))
+
+"""
+    cue_fixed_point(delta, pc, opts) -> (theta1, xi, W_final, Q, iters, converged)
+
+The CUE inner fixed point at a given δ(θ₂). Iteration 0 is the VERBATIM production 2SLS
+(`estimate_theta1`) — the self-check anchor; iterations 1.. alternate W = pinv(Ω̂(ξ)) and
+θ₁ = W-weighted linear GMM (`estimate_theta1_gmm`) until relΔθ₁ < wtol or max_witer. A non-finite
+update keeps the last finite iterate. Q = N·ḡ'W_final ḡ with W_final re-formed from the FINAL ξ
+(the CU criterion / Hansen J at the final iterate). All linear algebra is O(N·L) + a 16×16 pinv —
+negligible beside the GPU contraction that precedes it.
+"""
+function cue_fixed_point(delta::Vector{Float64}, pc::Precomp, opts::CueOpts)
+    theta1, xi = estimate_theta1(delta, pc)       # iteration 0 ≡ production 2SLS
+    L = size(pc.Z_moments, 2)
+    all(isfinite, xi) || return theta1, xi, Matrix{Float64}(I, L, L), 1e12, 0, false
+    iters = 0; converged = false
+    for it in 1:opts.max_witer
+        Wn = cue_pinv(cue_weight(xi, pc.Z_moments, opts), opts.pinv_rtol)
+        t1n, xin = estimate_theta1_gmm(delta, pc, Wn)
+        all(isfinite, t1n) || break               # keep last finite iterate
+        drel = maximum(abs, t1n .- theta1) / max(1.0, maximum(abs, theta1))
+        theta1 = t1n; xi = xin; iters = it
+        if drel < opts.wtol
+            converged = true; break
+        end
+    end
+    Wf = cue_pinv(cue_weight(xi, pc.Z_moments, opts), opts.pinv_rtol)   # W from the FINAL ξ
+    g  = compute_gmm_moments(xi, pc)              # ALL rows, unmasked
+    Q  = all(isfinite, g) ? length(delta) * dot(g, Wf * g) : 1e12
+    return theta1, xi, Wf, Q, iters, converged
+end
+
+"""
+    cue_fixed_point_alpha0(delta, pc, opts, alpha0) -> (beta, xi, W_final, S, iters, converged)
+
+Stock–Wright building block: the SAME CUE fixed point with α held at `alpha0`. δ̃ = δ − α₀·spread
+(X_full column 1 IS the spread), β-only W-weighted GMM on X̃ = X_full[:, 2:end], ξ = δ − α₀·p − X̃β.
+Minimised over θ₂ this gives S(α₀) = min N·ḡ'Wḡ, inverted into the identification-robust set for α.
+"""
+function cue_fixed_point_alpha0(delta::Vector{Float64}, pc::Precomp, opts::CueOpts, alpha0::Float64)
+    spread = view(pc.X_full, :, 1)
+    Xt     = pc.X_full[:, 2:end]                  # K−1 exogenous columns
+    dtil   = delta .- alpha0 .* spread
+    valid  = pc.theta1_valid .& isfinite.(delta)
+    L      = size(pc.Z_moments, 2)
+    # iteration 0: β by OLS-style 2SLS analogue on the projected design (X_hat cols 2:end = x_mat,
+    # which are exogenous ⇒ plain least squares of δ̃ on X̃ over valid rows)
+    beta = try Xt[valid, :] \ dtil[valid] catch; zeros(size(Xt, 2)) end
+    xi   = dtil .- Xt * beta
+    all(isfinite, xi) || return beta, xi, Matrix{Float64}(I, L, L), 1e12, 0, false
+    Zv   = pc.Z_moments[valid, :]
+    ZtX  = Zv' * Xt[valid, :]
+    Ztd  = Zv' * dtil[valid]
+    iters = 0; converged = false
+    for it in 1:opts.max_witer
+        Wn = cue_pinv(cue_weight(xi, pc.Z_moments, opts), opts.pinv_rtol)
+        A  = ZtX' * Wn * ZtX
+        b  = ZtX' * Wn * Ztd
+        bn = try A \ b catch; pinv(A) * b end
+        all(isfinite, bn) || break
+        drel = maximum(abs, bn .- beta) / max(1.0, maximum(abs, beta))
+        beta = bn; xi = dtil .- Xt * beta; iters = it
+        if drel < opts.wtol
+            converged = true; break
+        end
+    end
+    Wf = cue_pinv(cue_weight(xi, pc.Z_moments, opts), opts.pinv_rtol)
+    g  = compute_gmm_moments(xi, pc)
+    S  = all(isfinite, g) ? length(delta) * dot(g, Wf * g) : 1e12
+    return beta, xi, Wf, S, iters, converged
+end
+
+"""Efficient-GMM sandwich SEs for the CUE θ₁, with θ₂ and W held fixed (labelled as such in the
+results): V = (A'WA)⁻¹/N_v with A = Z'X/N_v on valid rows, CR1 small-cluster correction."""
+function cue_linear_se(delta::Vector{Float64}, pc::Precomp, W::Matrix{Float64}, G::Int)
+    valid = pc.theta1_valid .& isfinite.(delta)
+    Nv    = sum(valid)
+    K     = size(pc.X_full, 2)
+    A     = (pc.Z_moments[valid, :]' * pc.X_full[valid, :]) ./ Nv
+    V     = pinv(Symmetric(A' * W * A)) ./ Nv
+    corr  = G > 1 ? (G / (G - 1)) * ((Nv - 1) / (Nv - K)) : 1.0
+    return sqrt.(max.(diag(V) .* corr, 0.0))
 end
 
 # ==========================================================================

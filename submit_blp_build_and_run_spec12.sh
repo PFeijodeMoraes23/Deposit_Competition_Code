@@ -31,13 +31,27 @@
 #         bash submit_blp_build_and_run_spec12.sh --sysimage --draws
 #         bash submit_blp_build_and_run_spec12.sh --routines "5 6"
 #         bash submit_blp_build_and_run_spec12.sh --engines "ift numerical"   # + numerical xcheck
+#         bash submit_blp_build_and_run_spec12.sh --engines "ift cue"         # + CUE variant (_cue
+#                 files; the LIML analogue). CUE_STAGES="ext1" by default; CUE_SSET=1 adds the
+#                 Stock-Wright S-set grid (SSET_GRID="-1.5:0.125:1.5"). Nothing existing is touched.
 #         (env vars REBUILD_SYSIMAGE=1 / BUILD_DRAWS=1 still work; flags win)
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 mkdir -p "${HERE}/logs"
 
 ROUTINES="${ROUTINES:-1 2 5 6 7 8}"
-ENGINES="${ENGINES:-ift}"                       # IFT only by default (no numerical cross-check)
+ENGINES="${ENGINES:-ift}"                       # IFT only by default (no numerical cross-check, no CUE)
+
+# ── CUE (continuously-updated GMM) — opt in with ENGINES="ift cue" ────────────────────────────
+# A side-by-side variant, never a replacement: W(θ)=pinv(Ω̂(θ)) recomputed at every objective
+# evaluation (the LIML analogue) instead of the fixed W=(Z'Z/N)⁻¹, with θ₁ by W-weighted GMM iterated
+# to a fixed point. Every artifact carries the _cue suffix, so the IFT results — and every downstream
+# consumer, which reads exact ift filenames — are untouched. Requires the IFT chain in the same
+# invocation: the cue jobs are seeded from its checkpoints.
+CUE_STAGES="${CUE_STAGES:-ext1}"                # '+'-separated; ext1 is the reported headline rung
+CUE_SSET="${CUE_SSET:-0}"                       # 1 → also submit the Stock-Wright S-set grid job
+SSET_STAGE="${SSET_STAGE:-ext1}"
+SSET_GRID="${SSET_GRID:--1.5:0.125:1.5}"        # start:step:stop → 25 constrained solves per routine
 
 # ── Per-routine memory ────────────────────────────────────────────────────────────────────────
 # E1/E2 are the LARGEST panels (E1 = 796,154 obs vs 607k-714k for E5-E8) and were OOM-killed at the
@@ -159,10 +173,14 @@ submit_grouped_chain () {   # $1=routine $2=engine $3=tag  → echoes the termin
     echo "${je}"
 }
 
-do_ift=0; do_num=0
+do_ift=0; do_num=0; do_cue=0
 for e in ${ENGINES}; do
-    [ "$e" = "ift" ] && do_ift=1
-    [ "$e" = "numerical" ] && do_num=1
+    case "$e" in
+        ift)       do_ift=1 ;;
+        numerical) do_num=1 ;;
+        cue)       do_cue=1 ;;
+        *) echo "[!] unknown engine token '$e' in ENGINES — ignored (valid: ift numerical cue)" >&2 ;;
+    esac
 done
 
 njobs=0
@@ -193,6 +211,38 @@ for k in ${ROUTINES}; do
             "${GENERIC}")
         echo "    E${k} numerical xcheck: ${jid}  (afterok ${ift_ext_jid})"
         njobs=$((njobs + 1)); term_jids="${term_jids} ${jid}"
+    fi
+    if [ "${do_cue}" = "1" ] && [ "${do_ift}" = "1" ]; then
+        # ── CUE (continuously-updated GMM): the LIML analogue, a SIDE-BY-SIDE variant ──────────
+        # Every artifact carries the _cue suffix (blp_2_rc.jl ENGINE_SUFFIX), so nothing the IFT
+        # chain wrote is touched and every downstream consumer — which reads EXACT ift filenames —
+        # ignores it. One job PER STAGE (not a grouped '+' list): a grouped job would seed every
+        # stage from the same BLP_THETA2_INIT_FILE, and the _cue prev-stage checkpoint chain does
+        # not exist. Each is seeded from the IFT checkpoint of the SAME stage.
+        for st in $(echo "${CUE_STAGES}" | tr '+' ' '); do
+            ckpt="${DATA_OUT}/blp_checkpoint_E${k}_spec_12_${st}.jls"
+            jid=$(sbatch --parsable --time="${WALL_DEEP}" --mem="$(mem_for "${k}")" --dependency=afterok:${ift_ext_jid} \
+                --export=ALL,RC_ROUTINE=${k},RC_ENGINE=cue,RC_STAGE=${st},BLP_THETA2_INIT_FILE=${ckpt} \
+                -J "rcg_cue_E${k}_${st}" \
+                -o "${HERE}/logs/rcg_cue_E${k}_${st}_%j.out" -e "${HERE}/logs/rcg_cue_E${k}_${st}_%j.err" \
+                "${GENERIC}")
+            echo "    E${k} CUE ${st}: ${jid}  (afterok ${ift_ext_jid}; seed $(basename "${ckpt}"))"
+            njobs=$((njobs + 1)); term_jids="${term_jids} ${jid}"
+        done
+        if [ "${CUE_SSET}" = "1" ]; then
+            # Stock-Wright S-set: S(α₀)=min_{θ₂,β} N·ḡ'W(θ)ḡ on a grid of pinned α₀, inverted into
+            # an identification-robust set that ACCOUNTS for θ₂ being estimated (unlike the
+            # conditional AR/LM sets). One constrained solve per grid point, warm-started along the
+            # grid; writes ONE blp_results_E{k}_spec_12_{stage}_sset_cue.json.
+            ckpt="${DATA_OUT}/blp_checkpoint_E${k}_spec_12_${SSET_STAGE}.jls"
+            jid=$(sbatch --parsable --time="${WALL_DEEP}" --mem="$(mem_for "${k}")" --dependency=afterok:${ift_ext_jid} \
+                --export=ALL,RC_ROUTINE=${k},RC_ENGINE=cue,RC_STAGE=${SSET_STAGE},BLP_THETA2_INIT_FILE=${ckpt},BLP_ALPHA_GRID=${SSET_GRID} \
+                -J "rcg_sset_E${k}" \
+                -o "${HERE}/logs/rcg_sset_E${k}_%j.out" -e "${HERE}/logs/rcg_sset_E${k}_%j.err" \
+                "${GENERIC}")
+            echo "    E${k} S-set ${SSET_STAGE} [${SSET_GRID}]: ${jid}  (afterok ${ift_ext_jid})"
+            njobs=$((njobs + 1)); term_jids="${term_jids} ${jid}"
+        fi
     fi
 done
 echo "Submitted ${njobs} RC-BLP jobs (routines: ${ROUTINES}; engines: ${ENGINES})${sys_dep:+ + build prereqs [afterok ${sys_dep}]}."

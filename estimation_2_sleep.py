@@ -150,6 +150,22 @@ def add_time_variables(df):
 def define_specifications(time_block=False):
     s_base = ['constant']
     s_macro = ['constant', 'pix_exists', 'cadunico_families_per1000', 'fraction_65plus', 'risk_free_qoq_lag']
+
+    # SLEEP_STATE_BLOCK=legacy7 restores the pre-trim state block, which adds gdp_per_capita
+    # and fraction_young. That is the specification the stored estimates -- and therefore the
+    # demand parquets, phi_nopix, the BLP inputs and the cluster BBL -- were all fitted under;
+    # the trim (commit 621b71cc, 2026-08-06) postdates the last estimation run, so the
+    # diagnostics and the production artifacts have been running different blocks since.
+    #
+    # It exists so a diagnostic can be reproduced AT THE VINTAGE its inputs came from, without
+    # a re-estimation. It is NOT a recommendation: measured on the spec-12 frame, the trimmed
+    # block puts 48% of market-quarters at phi_mt > 1 and 56% above the stationarity bound
+    # 1/g = 0.9887, against 0% and 6.9% for the stored block -- so which of the two should
+    # become production is an open modelling decision, not a default to flip silently.
+    if os.environ.get('SLEEP_STATE_BLOCK', '').strip().lower() == 'legacy7':
+        s_macro = ['constant', 'pix_exists', 'gdp_per_capita', 'cadunico_families_per1000',
+                   'fraction_65plus', 'fraction_young', 'risk_free_qoq_lag']
+
     s_tech = s_macro + ['connections_per100']
 
     if time_block:
@@ -245,7 +261,15 @@ def build_pooled_data(time_block=False, center=True):
     # yields a silently wrong phi that still lies in [0,1].
     _st.apply_scale(df)
 
-    state_vars_to_fill = ['cadunico_families_per1000', 'fraction_65plus', 'connections_per100']
+    # The fill list must track the state block. A state that is IN the block but NOT filled
+    # leaves the D-type rows -- digital banks and the k=5 national prepaid aggregates, the
+    # highest-leverage observations in a levels regression -- without a value for it, which
+    # distorts that state's slope and drags theta0 with it. Deriving both from one source
+    # makes the two impossible to desync. Only market demographics are filled; the national
+    # states below vary by time alone and have nothing to average across municipalities.
+    _NON_MARKET_STATES = {'constant', 'pix_exists', 'risk_free_qoq_lag'}
+    state_vars_to_fill = [s for s in define_specifications()[2]['Tech']
+                          if s not in _NON_MARKET_STATES]
 
     # Assign national population-weighted averages to D-type (CODMUN_IBGE == '0') rows.
     # This includes both true digital banks and B-type prepaid (k=5) national aggregates.

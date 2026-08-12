@@ -201,9 +201,8 @@ def build_table(est: int) -> str:
         r"boundary ($\hat\Sigma\approx0$): point reported on the bound, no two-sided SE (Andrews 1999). "
         r"$Q$ is each model's own GMM objective (not comparable across the "
         r"logit/RC boundary --- different moment counts). Mean own-price elasticity is the "
-        r"average-market plug-in $\hat\alpha\cdot\overline{\rho(1-s)}$ (unit-free, since the spread "
-        r"enters in levels; representative-agent; "
-        r"cf.\ the logit comparison, Table~\ref{tab:demand_logit_spec12_comparison}). "
+        r"average-market plug-in $\hat\alpha\cdot\overline{\rho(1-s)}$ "
+        r"(cf.\ the logit comparison, Table~\ref{tab:demand_logit_spec12_comparison}). "
         r"Spread in percentage points."
         r"} \\",
         r"    \endlastfoot",

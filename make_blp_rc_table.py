@@ -65,6 +65,11 @@ D_COLS = ["gdp_per_capita", "fraction_65plus", "fraction_young",
           "pix_users_pf_per1000", "connections_per100", "frac_4g5g",
           "branches_per1000", "cadunico_families_per1000"]
 
+# Engine → result-file suffix. Mirrors ENGINE_SUFFIX in blp_2_rc.jl, which is the authority; keep the
+# two in sync. `cue` is the continuously-updated-GMM variant (the LIML analogue) and is a side-by-side
+# robustness engine — its files never collide with the ift headline.
+ENGINE_SUFFIX = {"ift": "", "numerical": "_num", "cue": "_cue"}
+
 STAGES = ["sigma", "rc2", "rc3", "rc4", "ext1", "ext2", "extended"]
 # NB: `full` (the old 5-RC rung) is intentionally ABSENT — the cluster ladder is
 # sigma→rc2→rc3→rc4→ext1→ext2→extended (σ(ln assets) was dropped, so `full`≡rc4 and is no longer run).
@@ -399,9 +404,7 @@ def build_table(est_id: int, suffix: str = "") -> str:
         r"the point on the bound and \emph{no} two-sided standard error, since a symmetric interval "
         r"would straddle $\Sigma<0$ (Andrews 1999) and the bootstrap is degenerate there. "
         r"$Q$: GMM overidentification statistic. Mean own-price elasticity is the average-market "
-        r"plug-in $\hat\alpha\cdot\overline{\rho(1-s)}$ (unit-free, since the spread $\rho$ enters "
-        r"in levels; representative-agent; the exact RC value integrates the individual price "
-        r"coefficients). "
+        r"plug-in $\hat\alpha\cdot\overline{\rho(1-s)}$. "
         r"Spread in percentage points (÷100 from basis points)."
         r"} \\",
         r"    \endlastfoot",
@@ -520,14 +523,15 @@ def main():
                              "reached ext1: a routine that stops earlier still yields a "
                              "table, but a narrower one (fewer stage columns), which is easy "
                              "to mistake for a complete result.")
-    parser.add_argument("--engine", choices=["ift", "numerical"], default="ift",
+    parser.add_argument("--engine", choices=["ift", "numerical", "cue"], default="ift",
                         help="Engine whose results to read (ift→un-suffixed, "
-                             "numerical→_num).")
+                             "numerical→_num, cue→_cue).")
     args = parser.parse_args()
 
-    # Result-file suffix (matches ENV["BLP_OUTPUT_SUFFIX"] set by blp_2_rc.jl):
-    # IFT writes un-suffixed, numerical appends "_num".
-    suffix = "_num" if args.engine == "numerical" else ""
+    # Result-file suffix — must match ENGINE_SUFFIX in blp_2_rc.jl (the single authority).
+    # It flows into the OUTPUT filename too, so a non-ift engine writes a NEW .tex beside the
+    # headline rather than overwriting it.
+    suffix = ENGINE_SUFFIX[args.engine]
 
     if args.ests:
         est_ids = args.ests
