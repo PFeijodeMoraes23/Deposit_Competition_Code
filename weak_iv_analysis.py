@@ -594,8 +594,16 @@ def analyze_routine(k, dp):
     clus = df["CodConglomeradoPrudencial"].astype(str).to_numpy()
 
     out = {}
+    # α is estimated by the engine on the FULL sample, so the diagnostics must cover the full sample —
+    # not only the two products the engine happens to instrument. `type12` (savings + demand deposits)
+    # is 61% of the rows and supplies the reported negative sign; `all` is the engine's own estimation
+    # sample. CAVEAT recorded in the table note: within types 1-2 the engine does NOT instrument the
+    # spread (those rates are regulated/zero and enter raw), so the 2SLS/first-stage numbers for
+    # `type12` and `all` describe what an IV estimator WOULD do there, not what the engine does.
     subsamples = [("type4", dtype == 4), ("type5", dtype == 5),
-                  ("type45", np.isin(dtype, ENDOG_TYPES))]
+                  ("type45", np.isin(dtype, ENDOG_TYPES)),
+                  ("type12", np.isin(dtype, [1, 2])),
+                  ("all", np.ones(len(dtype), bool))]
     for name, mask in subsamples:
         d, s, X, Z, cl = delta[mask], spread[mask], Xmat[mask], Zall[mask], clus[mask]
         ok = np.isfinite(d) & np.isfinite(s) & np.all(np.isfinite(X), 1) & np.all(np.isfinite(Z), 1)

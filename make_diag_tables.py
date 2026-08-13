@@ -115,12 +115,18 @@ def tab_d6_entry_curves():
         if not len(m):
             continue
         r = m.iloc[0]
+        # share_explosive counts EVENTS whose average accrual tips them over; with a
+        # per-quarter g an event can also be explosive only part of the time, which
+        # share_explosive_qtrs reports. The two coincide under a constant g.
+        q = r.get("share_explosive_qtrs", np.nan)
+        qcell = f"{100*q:.0f}\\%" if pd.notna(q) else "--"
         rows.append(f"{LAB[e]} & {r['phi_mean']:.3f} [{r['phi_p10']:.3f}, "
                     f"{r['phi_p90']:.3f}] & {100*r['share_explosive']:.0f}\\% & "
-                    f"{r['sse_vs_data']:.4f} \\\\")
+                    f"{qcell} & {r['sse_vs_data']:.4f} \\\\")
     w("tab_d6_routine_curves.tex",
-      ["{lccc}", r"Routine & mean $\phi_m$ (p10--p90) & Entry markets explosive "
-       r"($\phi_m g\ge1$) & SSE vs data median \\", r"\midrule"] + rows)
+      ["{lcccc}", r"Routine & mean $\phi_m$ (p10--p90) & Entry markets explosive "
+       r"($\phi_m \bar g_e\ge1$) & Event-quarters explosive & SSE vs data median \\",
+       r"\midrule"] + rows)
 
 
 def tab_wcb():

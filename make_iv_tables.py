@@ -40,7 +40,8 @@ WEAK_IV    = DATA_DIR / "ESTIMATION_OUTPUT" / "BLP_RESULTS" / "cluster_processed
 TABLES_DIR = DATA_DIR / "ESTIMATION_OUTPUT" / "Rout"
 DRAFTS_DIR = rc.DRAFTS_DIR
 ROUTINES   = [5, 6, 7, 8]
-SUBS       = [("type45", "4+5"), ("type4", "4"), ("type5", "5")]
+SUBS       = [("all", "all"), ("type12", "1+2"), ("type45", "4+5"),
+              ("type4", "4"), ("type5", "5")]
 
 
 def _num(x, d=3, signed=True):
@@ -58,6 +59,33 @@ def _tf(rec):
     if tf.get("tf_defined") and tf.get("tf_ci_low") is not None:
         return f"$[{tf['tf_ci_low']:+.2f},\\,{tf['tf_ci_high']:+.2f}]$"
     return "(undef.)" if tf.get("tf_defined") is False else "---"
+
+
+# The identification-robust interval actually REPORTED. The tF interval is undefined in every cell at
+# this instrument strength (eff-F is below the range Lee et al. tabulate), so a tF column carries no
+# information — it prints "(undef.)" throughout. The Kleibergen LM/K set does not collapse under the
+# overidentification rejection that empties AR, so it is the interval the prose refers to, and it is
+# what belongs in the table. Grid-inverted over alpha in [-2, +2]: a bound sitting on an endpoint is
+# not a bound the data imposed, so it is flagged rather than printed as if it were finite.
+_LM_GRID_LO, _LM_GRID_HI = -2.0, 2.0
+
+
+def _lm(rec):
+    lo, hi = rec.get("lm_ci_low"), rec.get("lm_ci_high")
+    if lo is None or hi is None:
+        return "empty"
+    open_lo = lo <= _LM_GRID_LO + 1e-9
+    open_hi = hi >= _LM_GRID_HI - 1e-9
+    if open_lo and open_hi:
+        return r"unbounded$^{\dagger}$"
+    s = (f"$(-\\infty,\\,{hi:+.2f}]$" if open_lo else
+         f"$[{lo:+.2f},\\,+\\infty)$" if open_hi else
+         f"$[{lo:+.2f},\\,{hi:+.2f}]$")
+    if open_lo or open_hi:
+        s += r"$^{\dagger}$"
+    if rec.get("lm_ci_disconnected"):
+        s += r"$^{\ddagger}$"
+    return s
 
 
 def _alpha_se(a, se, stars_from=None):
@@ -132,7 +160,7 @@ def build_firststage(wiv):
     # Routine | Sample | N | K | 2SLS a(SE) | LIML a | KP-F | eff-F | partial R^2 | tF 95% CI | J (p)
     col_fmt = "ll r r l r r r r c r"
     header = (r"Routine & Sample & $N$ & $K$ & 2SLS $\hat\alpha$ (SE) & LIML $\hat\alpha$ & "
-              r"KP-$F$ & eff-$F$ & partial $R^2$ & tF 95\% CI & $J$ ($p$)")
+              r"KP-$F$ & eff-$F$ & partial $R^2$ & LM 95\% set & $J$ ($p$)")
     body = []
     for k in ROUTINES:
         rr = wiv.get(str(k))
@@ -149,19 +177,29 @@ def build_firststage(wiv):
                 _alpha_se(r.get("alpha_2sls"), r.get("alpha_se")),
                 _num(r.get("alpha_liml")),
                 _F(r.get("kp_first_stage_F")), _F(r.get("effective_F")),
-                _num(r.get("partial_R2"), 3, signed=False), _tf(r), pv,
+                _num(r.get("partial_R2"), 3, signed=False), _lm(r), pv,
             ]) + r" \\")
         if k != ROUTINES[-1]:
             body.append(r"    \addlinespace[0.4ex]")
     foot = (r"\textit{Notes:} First stage of the deposit-spread demand model (the only endogenous "
             r"regressor), on $K$ excluded instruments \emph{including} the ESTBAN branch-competition "
             r"instrument (\texttt{estban\_rival\_branches\_lag}), partialling the product controls and "
-            r"clustering by conglomerate. The engine instruments spread for deposit types 4 and 5, "
-            r"reported per subsample and pooled. KP-$F$ = cluster-robust Kleibergen--Paap rk Wald $F$; "
-            r"eff-$F$ = Montiel-Olea--Pflueger effective $F$; LIML $\hat\alpha$ is the limited-information "
-            r"ML estimate (near median-unbiased under weak identification); tF 95\% CI is the "
-            r"$F$-adjusted honest interval of Lee, McCrary, Moreira \& Porter (2022). Spread in "
-            r"percentage points.")
+            r"clustering by conglomerate. Subsamples: \texttt{all} is the engine's own estimation sample, "
+            r"\texttt{1+2} the regulated products (savings and demand deposits, $61\%$ of rows) and "
+            r"\texttt{4+5} the two the engine instruments. \emph{Within types~1--2 the engine does not "
+            r"instrument the spread}---those rates are regulated or fixed at zero and enter raw---so the "
+            r"first-stage and 2SLS entries for \texttt{1+2} and \texttt{all} describe what an IV "
+            r"estimator would do there, not what the engine does; they are reported because $\alpha$ is "
+            r"estimated on the full sample and a diagnostic confined to types~4--5 would cover only "
+            r"$39\%$ of it. KP-$F$ = cluster-robust Kleibergen--Paap rk Wald $F$; eff-$F$ = "
+            r"Montiel-Olea--Pflueger effective $F$; LIML $\hat\alpha$ is the limited-information ML "
+            r"estimate (near median-unbiased under weak identification). The LM $95\%$ set is the "
+            r"Kleibergen (2005) score set, grid-inverted over $\alpha\in[-2,+2]$ against "
+            r"wild-cluster-bootstrap criticals; it is reported in place of the $F$-adjusted tF interval "
+            r"of Lee, McCrary, Moreira \& Porter (2022), which is \emph{undefined at every cell here} "
+            r"because eff-$F$ falls below the range that adjustment is tabulated over. A $\dagger$ marks "
+            r"a set reaching a grid endpoint (open, i.e.\ bounded by the search window rather than by "
+            r"the data); $\ddagger$ marks a disconnected set. Spread in percentage points.")
     return _wrap(body, col_fmt, r"First-Stage Instrument Strength and Weak-IV-Robust Inference (Spec.~12)",
                  "tab:firststage_spec12", header, foot, 11)
 
@@ -216,9 +254,9 @@ def build_alpha_robust(wiv):
     # Leads with the estimator ladder (sign) and the robust confidence sets (level), NOT the ±SE Wald
     # interval — because the instruments are weak, the Wald interval overstates precision.
     # Routine | Sample | N | eff-F | OLS α | 2SLS α (SE) | LIML α | tF 95% CI
-    col_fmt = "ll r r r l r c"
+    col_fmt = "ll r r r l r c c"
     header = (r"Routine & Sample & $N$ & eff-$F$ & OLS $\hat\alpha$ & 2SLS $\hat\alpha$ (SE) & "
-              r"LIML $\hat\alpha$ & tF 95\% CI")
+              r"LIML $\hat\alpha$ & tF 95\% CI & LM 95\% set")
     body = []
     for k in ROUTINES:
         rr = wiv.get(str(k))
@@ -232,26 +270,39 @@ def build_alpha_robust(wiv):
             body.append("    " + " & ".join([
                 rt, lbl, f"{r.get('n_obs', 0):,}", _F(r.get("effective_F")),
                 _num(r.get("alpha_ols")), _alpha_se(r.get("alpha_2sls"), r.get("alpha_se")),
-                _num(r.get("alpha_liml")), _tf(r),
+                _num(r.get("alpha_liml")), _tf(r), _lm(r),
             ]) + r" \\")
         if k != ROUTINES[-1]:
             body.append(r"    \addlinespace[0.4ex]")
     foot = (r"\textit{Notes:} Identification-robust inference on the deposit-spread coefficient "
             r"$\alpha$ (the single endogenous regressor), from the log-share linear-IV benchmark on "
-            r"the $K{=}16$ excluded instruments, clustered by prudential conglomerate. \emph{This "
+            r"the $K{=}16$ excluded instruments, clustered by prudential conglomerate, on the engine's full "
+            r"estimation sample (\texttt{all}) and by product block --- the regulated types~1--2 "
+            r"($61\%$ of rows, spread NOT instrumented by the engine) and the instrumented types~4--5. "
+            r"\emph{This "
             r"design does not identify} $\alpha$. The Montiel-Olea--Pflueger effective $F$ (2013) is "
             r"$\approx1.4$ for types~4 and 4+5 and $\approx1.0$ for type~5, against a critical value of "
-            r"$\approx9.4$ for tolerating even a $30\%$ worst-case bias. Accordingly the $F$-adjusted "
-            r"honest tF 95\% CI (Lee, McCrary, Moreira \& Porter, 2022) is \emph{undefined} in every "
-            r"cell: the first stage lies below the range over which the adjustment is tabulated, so no "
-            r"valid Wald-type interval exists at this instrument strength. The estimator ladder behaves "
-            r"as weak-instrument theory predicts when it fails---OLS, 2SLS and LIML are wrong-signed and "
-            r"diverge with each estimator's sensitivity to weak identification rather than converging. "
+            r"$\approx9.4$ for tolerating even a $30\%$ worst-case bias. \emph{Instrument strength differs "
+            r"sharply by block}: eff-$F\approx4.0$--$4.3$ on the estimation sample and on types~1--2, "
+            r"but only $\approx1.4$ on the instrumented types~4--5 and $\approx1.0$ on type~5 alone. "
+            r"Consequently the $F$-adjusted honest tF $95\%$ interval of Lee, McCrary, Moreira \& "
+            r"Porter (2022) \emph{is} defined on the full sample and on types~1--2 --- roughly "
+            r"$[-1.0,+0.8]$, bounded and containing zero --- but is undefined on types~4--5, where the "
+            r"first stage falls below the range that adjustment is tabulated over. The LM $95\%$ set is "
+            r"the Kleibergen (2005) score set, grid-inverted over $\alpha\in[-2,+2]$ against "
+            r"wild-cluster-bootstrap criticals; being fully robust it is wider, and unbounded on the "
+            r"full sample. A $\dagger$ marks a set reaching a grid endpoint (open: bounded by the "
+            r"search window, not by the data); $\ddagger$ a disconnected set. The estimator ladder "
+            r"behaves "
+            r"as weak-instrument theory predicts \emph{within the instrumented block}: on types~4--5 OLS, "
+            r"2SLS and LIML are wrong-signed and diverge with each estimator's sensitivity to weak "
+            r"identification. On the full sample OLS and 2SLS are both negative, consistent with the "
+            r"structural estimate, though LIML still diverges. "
             r"The Anderson--Rubin set (1949) is \emph{empty}, mechanically: $\min_\alpha$AR is the "
             r"Hansen $J$, which rejects the overidentifying restrictions ($p\le0.002$; a low bar at "
             r"$n\approx200{,}000$ with 15 restrictions). The Kleibergen LM/K set (2005; "
             r"wild-cluster-bootstrap criticals), which does not collapse under overidentification "
-            r"failure, is the reportable object: it contains zero and is \emph{unbounded above}. "
+            r"failure, is the reportable object and is the interval tabulated here. "
             r"Trimming the instrument set raises eff-$F$ to $\approx5.0$ (the five leave-one-out rival "
             r"characteristics alone), confirming many-weak-instrument dilution, but leaves it below "
             r"threshold with partial $R^2\approx0.001$. Three features of the setting drive this, not "
@@ -264,7 +315,7 @@ def build_alpha_robust(wiv):
             r"reported separately. Spread in percentage points.")
     return _wrap(body, col_fmt,
                  r"Identification-Robust Inference on the Deposit-Price Coefficient (Spec.~12)",
-                 "tab:alpha_weakiv_spec12", header, foot, 8)
+                 "tab:alpha_weakiv_spec12", header, foot, 9)
 
 
 def main():

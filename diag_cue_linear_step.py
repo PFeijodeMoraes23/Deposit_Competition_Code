@@ -290,12 +290,33 @@ def analyse(k, stage, args, dp, raw, cp):
         return None
 
     spread, x_mat, z_mat, dtype, X_full, X_hat = _build_matrices(df)
+    clus_all = df["CodConglomeradoPrudencial"].astype(str).to_numpy()
+
+    # ── Optional deposit-type block (--types) ──────────────────────────────────────────────────
+    # Default `all` = the engine's own estimation sample, which is what θ₁ is fitted on and the only
+    # block where the self-check below can hold. The blocks exist to test whether Ω̂'s rank deficiency
+    # is a property of the weak instrumented products (4+5) or of the clustering geometry generally:
+    # G* ≈ 5 is a feature of the conglomerate concentration, not of any product, so if the deficiency
+    # is general it should persist in 1+2 where the first stage is ~3x stronger.
+    # NOTE the spread projection inside _build_matrices already ran per type on the FULL sample, exactly
+    # as the engine does; subsetting afterwards keeps each row's X_hat identical to the engine's.
+    _TYPE_SETS = {"all": None, "12": [1, 2], "45": [4, 5], "4": [4], "5": [5]}
+    tsel = getattr(args, "types", "all")
+    if tsel not in _TYPE_SETS:
+        print(f"  E{k}: unknown --types {tsel!r} (all|12|45|4|5)"); return None
+    if _TYPE_SETS[tsel] is not None:
+        m = np.isin(dtype, _TYPE_SETS[tsel])
+        if m.sum() < 100:
+            print(f"  E{k}/{tsel}: only {m.sum()} rows — skipped"); return None
+        delta, spread, x_mat, z_mat = delta[m], spread[m], x_mat[m], z_mat[m]
+        X_full, X_hat, dtype, clus_all = X_full[m], X_hat[m], dtype[m], clus_all[m]
+
     # The engine drops zero-variance instruments before building Z (blp_gpu_engine.jl:1568-1574).
     keep = z_mat.std(axis=0) > 1e-10
     Z, iv_kept = z_mat[:, keep], [c for c, kp in zip(IV_COLS, keep) if kp]
     valid = np.all(np.isfinite(X_hat), axis=1) & np.isfinite(delta)
-    codes, G = _cluster_codes(df["CodConglomeradoPrudencial"].astype(str).to_numpy())
-    N = len(df)
+    codes, G = _cluster_codes(clus_all)      # recomputed on the block: G must not count empty clusters
+    N = len(delta)
 
     # ── Self-check against the engine's own reported θ₁/Q ──────────────────────────────────────
     th_2sls, *_ = np.linalg.lstsq(X_hat[valid], delta[valid], rcond=None)
@@ -315,6 +336,10 @@ def analyse(k, stage, args, dp, raw, cp):
         except Exception as e:
             print(f"  E{k}: could not read {rj.name} ({e})")
 
+    # The engine fits θ₁ on the FULL sample, so its α is only reproducible when tsel == "all".
+    # On a block the comparison is meaningless and must not be reported as a mismatch.
+    if tsel != "all":
+        a_eng = q_eng = None
     ok_alpha = a_eng is not None and abs(th_2sls[0] - a_eng) < ALPHA_TOL
     if a_eng is not None and not ok_alpha:
         print(f"  E{k}: *** REPLICATION MISMATCH: alpha_2sls={th_2sls[0]:+.6f} vs engine "
@@ -345,7 +370,8 @@ def analyse(k, stage, args, dp, raw, cp):
     print(f"     Omega spectrum            : min={ev.min():.3e} max={ev.max():.3e} "
           f"cond={ev.max()/max(ev.min(), 1e-300):.3e}  truncated_by_pinv={n_trunc}")
 
-    out = {"routine": k, "stage": stage, "n_obs": N, "n_clusters": G, "n_iv": int(Z.shape[1]),
+    out = {"routine": k, "stage": stage, "types": tsel,
+           "n_obs": N, "n_clusters": G, "n_iv": int(Z.shape[1]),
            "alpha_2sls": float(th_2sls[0]), "alpha_engine": a_eng,
            "alpha_2sls_matches_engine": bool(ok_alpha),
            "alpha_gmm_W0": float(a_gmm_w0), "alpha_cue": float(res["theta1"][0]),
@@ -361,11 +387,27 @@ def analyse(k, stage, args, dp, raw, cp):
     if args.sset_grid:
         a, b, c = (float(x) for x in args.sset_grid.split(":"))
         grid = np.arange(a, c + b / 2, b)
+        # Hoist the per-cluster moment parts out of the grid loop. Only the TARGET moves with α₀, and
+        # it moves affinely:  a(α₀) = Z_g'(δ − α₀·p) = a_δ − α₀·a_p.  The design (β columns) and hence
+        # B are identical at every grid point. Recomputing them per point costs ~3 s × |grid| and was
+        # what made the first S-curve attempt appear to hang.
+        from scipy.optimize import minimize
+        Xt = X_full[:, 1:]
+        a_del, Bm = _cluster_moment_parts(delta, Xt, Z, codes, G)
+        a_spr, _  = _cluster_moment_parts(X_full[:, 0], Xt, Z, codes, G)
+        b0, *_ = np.linalg.lstsq(Xt[valid], delta[valid], rcond=None)
+        N = len(delta)
         pts = []
         for a0 in grid:
-            r = solver(delta, X_full, X_hat, Z, valid, codes, G, args, alpha0=float(a0))
-            pts.append({"alpha0": float(a0), "S": r["Q"], "iters": r["iters"],
-                        "converged": r["converged"]})
+            av  = a_del - float(a0) * a_spr
+            fun = lambda bb: _cu_criterion_fast(bb, av, Bm, N, args)
+            r1  = minimize(fun, b0, method="Nelder-Mead",
+                           options={"maxiter": args.min_maxiter, "maxfev": args.min_maxiter * 2,
+                                    "xatol": 1e-9, "fatol": 1e-11, "adaptive": True})
+            r2  = minimize(fun, r1.x, method="BFGS", options={"maxiter": 300, "gtol": 1e-9})
+            pts.append({"alpha0": float(a0), "S": float(min(r1.fun, r2.fun)),
+                        "iters": int(r1.nit + r2.nit),
+                        "converged": bool(r1.success or r2.success)})
         S = np.array([p["S"] for p in pts])
         try:
             from scipy.stats import chi2
@@ -392,6 +434,11 @@ def main():
     ap.add_argument("--wtol", type=float, default=1e-10)
     ap.add_argument("--pinv-rtol", type=float, default=1e-10, dest="pinv_rtol")
     ap.add_argument("--ridge", type=float, default=0.0)
+    ap.add_argument("--types", choices=["all", "12", "45", "4", "5"], default="all",
+                    help="deposit-type block. 'all' (default) is the engine's estimation sample and the "
+                         "only one where the alpha self-check applies; '12' is the un-instrumented "
+                         "regulated block, '45' the instrumented one. Use to test whether Omega's rank "
+                         "deficiency is block-specific or a general consequence of G*~5.")
     ap.add_argument("--method", choices=["minimize", "fixedpoint"], default="minimize",
                     help="minimize = TRUE CUE (joint minimiser of the CU criterion, Hansen-Heaton-"
                          "Yaron 1996); fixedpoint = iterated GMM (alternate W and theta1) — a "
@@ -419,6 +466,9 @@ def main():
         print(f"E{r['routine']}   {r['alpha_2sls']:+11.4f} {r['alpha_gmm_W0']:+14.4f} "
               f"{r['alpha_cue']:+11.4f} {r['cue_iters']:6d} {str(r['cue_converged']):>6s}")
     print("=" * 78)
+    if getattr(args, "types", "all") != "all":
+        print(f"NOTE: --types {args.types} is a BLOCK; the engine fits theta1 on the full sample, so "
+              "the alpha self-check is not applicable and was skipped.")
     print("SELF-CHECK: " + ("all alpha_2sls match the engine ✓" if not bad
                             else f"*** MISMATCH for routines {bad} — replication is NOT trustworthy ***"))
 
