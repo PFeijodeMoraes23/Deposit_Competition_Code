@@ -447,6 +447,22 @@ def _path_matrix(reg, paths, H, norm, plateau_w, want_rows=False):
     return (M, np.asarray(rows, dtype=int)) if want_rows else M
 
 
+def model_curve_phipath(phi, g, H, norm, plateau_w):
+    """Model path when BOTH phi and g vary along the horizon. Same affine map as
+    model_curve; the only difference is that the multiplier is phi_h*g_h rather than
+    phi*g_h, so nothing about the entrant's environment is held at an average."""
+    ph = np.asarray(phi, float)
+    gv = np.asarray(g, float)
+    if ph.ndim == 0:
+        return model_curve(float(ph), gv, H, norm, plateau_w)
+    lvl = np.empty(H + 1)
+    lvl[0] = 1.0
+    for h in range(1, H + 1):
+        lvl[h] = ph[h] * gv[h] * lvl[h - 1] + 1.0
+    end = lvl[plateau_w].mean()
+    return (lvl - lvl[0]) / (end - lvl[0]) if norm == "main" else lvl / end
+
+
 def vintage_curve(phi, g, H, norm, plateau_w):
     """One model line for a single phi. With a per-event g this is the MEDIAN over the
     events' own curves -- the same aggregation the data median uses, so the comparison is
@@ -474,7 +490,120 @@ def model_tensor(grid, Ge, H, plateau_w):
     return (lvl - lvl[:, :, [0]]) / (end - lvl[:, :, 0])[:, :, None]
 
 
-def routine_event_curves(reg, paths, H, plateau_w, g, ests):
+_POP_G_CACHE = {}
+
+
+def population_stationarity(est):
+    """Share of ALL (market, quarter) cells whose fitted carry breaches phi*g >= 1.
+
+    The entry-event diagnostics speak only for the markets an entrant happened to enter.
+    This is the same bound evaluated over every market-quarter the routine fits, which is
+    the population the counterfactuals actually simulate.
+    """
+    cf = _paths.PROCESSED / "ESTIMATION_OUTPUT" / "CF_FOUNDATION"
+    fp = cf / f"phi_nopix_E{est}_spec_12.parquet"
+    if not fp.exists():
+        return {}
+    if "g" not in _POP_G_CACHE:
+        dp = (_paths.PROCESSED / "ESTIMATION_OUTPUT" / "DEMAND_PREP"
+              / "demand_2_spec_12.parquet")
+        q = pd.read_parquet(dp, columns=["mca_code", "time_id", "deposit_type",
+                                         "gross_return_lag", "deposit_balance"])
+        q = q[q["deposit_type"].astype(int).isin(G_TYPES)].copy()
+        q["w"] = q["deposit_balance"].astype(float).clip(lower=0.0)
+        q["wg"] = q["w"] * q["gross_return_lag"].astype(float)
+        a = q.groupby(["mca_code", "time_id"], observed=True)[["wg", "w"]].sum()
+        _POP_G_CACHE["g"] = (a["wg"] / a["w"].replace(0.0, np.nan)).rename("g")
+    gmt = _POP_G_CACHE["g"]
+    d = pd.read_parquet(fp, columns=["mca_code", "time_id", "deposit_type", "phi_mt"])
+    d = d[d["deposit_type"].astype(int).isin(G_TYPES)]
+    d = (d.groupby(["mca_code", "time_id"], observed=True)["phi_mt"].mean()
+         .rename("phi").to_frame().join(gmt, how="inner"))
+    if d.empty:
+        return {}
+    pg = d["phi"] * d["g"]
+    return {"pop_cells": int(len(d)), "pop_share_expl": float((pg >= 1.0).mean()),
+            "pop_phi_max": float(d["phi"].max()), "pop_pg_max": float(pg.max())}
+
+
+def explosive_diagnostics(est, Pm, Gm):
+    """Depth, persistence and breadth of the stationarity breach for one routine.
+
+    The headline shares say how OFTEN phi*g >= 1. They do not say how far past the bound it
+    goes, nor whether it is a fixed property of a market or an episode the rate cycle drives
+    -- and those change the reading, so they are measured rather than asserted.
+    """
+    PG = Pm * Gm
+    expl = PG >= 1.0
+    exc = PG[expl] - 1.0
+    out = {"estim": est, "phi_mean": float(Pm.mean()),
+           "phi_g_median": float(np.median(PG)),
+           "phi_g_p90": float(np.percentile(PG, 90)), "phi_g_max": float(PG.max()),
+           "share_cells_expl": float(expl.mean()),
+           "share_events_ever": float(expl.any(axis=1).mean()),
+           "share_events_always": float(expl.all(axis=1).mean()),
+           "mean_excess": float(exc.mean()) if exc.size else 0.0,
+           "n_events": int(Pm.shape[0])}
+    out.update(population_stationarity(est))
+    return out
+
+
+def _qidx_to_time_id(q):
+    """qidx = year*4 + quarter - 1  ->  the parquet's 'YYYYQq' label."""
+    return f"{int(q) // 4}Q{int(q) % 4 + 1}"
+
+
+def build_phi_paths(kept, H, est, mode):
+    """(n_kept, H+1) fitted phi for each event at each horizon, plus a source tally.
+
+    `market` collapses phi_mt to one number per market (the mean over every quarter the
+    market appears). `path` reads phi at the event's OWN calendar quarter, m(e) x (t0+h),
+    which is the resolution phi_mt is actually estimated at -- the market and time indices
+    are the only two the theory gives it, so this collapses nothing.
+
+    Deposit types are restricted to 1/2/4, matching the deposits an entry path is built
+    from. That also removes a boundary artifact: within a (market, quarter) cell phi is
+    exactly constant for 99.99% of E7's cells but only 90% of E6's, and the exceptions are
+    rows the single-index link clipped to zero -- in the worst cell, types 1/2/4 sit at 0.0
+    while type 5 sits at 0.984. Averaging across types would mix a clipped value with a live
+    one; averaging within the modelled types does not.
+    """
+    cf = _paths.PROCESSED / "ESTIMATION_OUTPUT" / "CF_FOUNDATION"
+    fp = cf / f"phi_nopix_E{est}_spec_12.parquet"
+    if not fp.exists():
+        return None, None
+    pm = pd.read_parquet(fp, columns=["mca_code", "time_id", "deposit_type", "phi_mt"])
+    pm = pm[pm["deposit_type"].astype(int).isin(G_TYPES)]
+    pm["mca_code"] = pm["mca_code"].astype(str)
+    by_mt = pm.groupby(["mca_code", "time_id"], observed=True)["phi_mt"].mean()
+    by_m = pm.groupby("mca_code", observed=True)["phi_mt"].mean()
+    glob = float(pm["phi_mt"].mean())
+
+    mkt = kept["mkt"].astype(str).to_numpy()
+    q0 = kept["q_entry"].astype(int).to_numpy()
+    n = len(kept)
+    if mode == "market":
+        v = by_m.reindex(mkt).to_numpy(float, copy=True)
+        hit = float(np.isfinite(v).mean())
+        v = np.where(np.isfinite(v), v, glob)
+        return np.repeat(v[:, None], H + 1, axis=1), {"hit": hit, "exact": 0.0}
+
+    P_ = np.full((n, H + 1), np.nan)
+    exact = 0
+    for h in range(H + 1):
+        tid = [_qidx_to_time_id(q) for q in q0 + h]
+        v = by_mt.reindex(pd.MultiIndex.from_arrays([mkt, tid])).to_numpy(float, copy=True)
+        exact += int(np.isfinite(v).sum())
+        P_[:, h] = v
+    # market mean where that quarter is outside the estimation window, then flat carry
+    fill = by_m.reindex(mkt).to_numpy(float, copy=True)
+    fill = np.where(np.isfinite(fill), fill, glob)
+    P_ = np.where(np.isfinite(P_), P_, fill[:, None])
+    hit = float(np.isfinite(by_m.reindex(mkt).to_numpy(float)).mean())
+    return P_, {"hit": hit, "exact": exact / max(n * (H + 1), 1)}
+
+
+def routine_event_curves(reg, paths, H, plateau_w, g, ests, phi_mode="market"):
     """Per-routine model paths built from each routine's OWN fitted dispersion.
 
     The scalar model line collapses a routine's fitted phi_mt to one number; this is the
@@ -496,30 +625,38 @@ def routine_event_curves(reg, paths, H, plateau_w, g, ests):
     hs = [h for h in range(1, H) if h not in plateau_w and np.isfinite(emp[h])]
     kept = reg[reg["keep"]].copy()
     kept["_mkt"] = kept["mkt"].astype(str)
-    rows, curves = [], {}
+    rows, curves, panel_rows, expl_rows = [], {}, [], []
     for est in ests:
         fp = cf / f"phi_nopix_E{est}_spec_12.parquet"
         if not fp.exists():
             print(f"  [routine curves] E{est}: {fp.name} absent -- skipped"); continue
-        pm = pd.read_parquet(fp, columns=["mca_code", "phi_mt"])
-        pm["mca_code"] = pm["mca_code"].astype(str)
-        mp = pm.groupby("mca_code")["phi_mt"].mean()
-        v = kept["_mkt"].map(mp)
-        hit = float(v.notna().mean())
+        Pm, pinfo = build_phi_paths(kept, H, est, phi_mode)
+        if Pm is None:
+            print(f"  [routine curves] E{est}: {fp.name} absent -- skipped"); continue
+        hit = pinfo["hit"]
         if hit < 0.90:
             print(f"  [routine curves] E{est}: market map hit-rate {hit:.0%} < 90% -- "
                   f"skipped (check mca key compatibility)"); continue
-        v = v.fillna(v.median()).to_numpy(float)
+        v = Pm.mean(axis=1)                     # per-event summary, for the reported moments
         Gv = np.asarray(g, dtype=float)
-        if Gv.ndim == 2:
-            C = np.vstack([model_curve(p, Gv[i], H, "main", plateau_w)
-                           for i, p in enumerate(v)])
-            g_row = Gv.mean(axis=1)
-            expl_q = float((v[:, None] * Gv >= 1.0).mean())
-        else:
-            C = np.vstack([model_curve(p, float(Gv), H, "main", plateau_w) for p in v])
-            g_row = np.full(len(v), float(Gv))
-            expl_q = float((v * float(Gv) >= 1.0).mean())
+        Gm = Gv if Gv.ndim == 2 else np.full_like(Pm, float(Gv))
+        # phi and g both enter the recursion at (event, horizon) resolution; with
+        # phi_mode='market' the phi rows are constant along h and this reduces to the
+        # single-phi-per-market construction.
+        C = np.vstack([model_curve_phipath(Pm[i], Gm[i], H, "main", plateau_w)
+                       for i in range(len(Pm))])
+        # The alt normalisation is the same per-event construction; computing it here means
+        # the two-panel exhibit below draws the identical objects the SSE is scored on.
+        C_alt = np.vstack([model_curve_phipath(Pm[i], Gm[i], H, "alt", plateau_w)
+                           for i in range(len(Pm))])
+        for _nm, _C in (("main", C), ("alt", C_alt)):
+            _m = np.nanmedian(_C, axis=0)
+            for h in range(H + 1):
+                panel_rows.append({"h": h, "value": float(_m[h]), "vintage": f"E{est}",
+                                   "phi": float(Pm.mean()), "norm": _nm})
+        g_row = Gm.mean(axis=1)
+        expl_q = float((Pm * Gm >= 1.0).mean())
+        expl_rows.append(explosive_diagnostics(est, Pm, Gm))
         med = np.nanmedian(C, axis=0)
         curves[est] = (med, np.nanpercentile(C, 25, axis=0), np.nanpercentile(C, 75, axis=0))
         sse = float(((med[hs] - emp[hs]) ** 2).sum())
@@ -541,7 +678,14 @@ def routine_event_curves(reg, paths, H, plateau_w, g, ests):
                          "data_median": float(emp[h]) if np.isfinite(emp[h]) else np.nan})
     if not rows:
         return None
-    pd.DataFrame(rows).to_csv(OUT_DIR / "d6_routine_curves.csv", index=False)
+    # The frozen-phi exhibit and the full-resolution one are different exercises, not
+    # successive versions of one -- they are written side by side.
+    sfx = "_phipath" if phi_mode == "path" else ""
+    pd.DataFrame(rows).to_csv(OUT_DIR / f"d6_routine_curves{sfx}.csv", index=False)
+    if expl_rows:
+        pd.DataFrame(expl_rows).to_csv(OUT_DIR / f"d6_explosive_diag{sfx}.csv",
+                                       index=False)
+        print(f"  -> d6_explosive_diag{sfx}.csv")
 
     import matplotlib.pyplot as plt
     fig, ax = plt.subplots(figsize=(7.2, 4.6))
@@ -549,21 +693,36 @@ def routine_event_curves(reg, paths, H, plateau_w, g, ests):
     hgrid = np.arange(H + 1)
     ax.plot(hgrid, emp, "o-", color=D_COLOR, lw=2.0, ms=4, label="data (median B path)",
             zorder=5)
-    pal = ["#1565C0", "#2E7D32", "#6A1B9A", "#00838F", "#E65100", "#5D4037"]
-    for c, (est, (med, q25, q75)) in zip(pal, curves.items()):
-        ax.plot(hgrid, med, "-", color=c, lw=1.4, label=f"E{est} (own $\\phi_m$)")
+    # Drawn set follows REF_ESTS, the same switch that selects Figure 4's reference lines, so
+    # the two exhibits cannot end up showing different line-ups. Every routine passed in is
+    # still computed and written to the CSV -- the filter is presentational.
+    shown = {e: v for e, v in curves.items() if f"E{e}" in REF_ESTS} or curves
+    # Colour and label come from the same registries Figure 4 uses, keyed by routine rather
+    # than by position, so a routine keeps its identity across every exhibit.
+    for est, (med, q25, q75) in shown.items():
+        c = MODEL_COLORS.get(f"E{est}", INK)
+        ax.plot(hgrid, med, "-", color=c, lw=1.4, label=ROMAN.get(f"E{est}", f"E{est}"))
         ax.fill_between(hgrid, q25, q75, color=c, alpha=0.10)
     ax.axhline(1.0, color="0.6", lw=0.8, ls=":")
-    ax.set_xlabel("quarters since entry")
-    ax.set_ylabel("normalised entrant deposits (main norm.)")
-    ax.set_title("D6 per routine: entry paths implied by each routine's own fitted "
-                 "$\\phi_m$ dispersion", fontsize=10.5)
+    ax.set_xlabel("Quarters Since Entry ($h$)")
+    ax.set_ylabel("Normalized Entrant Deposits")
+    # Kept short enough to fit the canvas: the previous one-line title ran past the right
+    # edge and was clipped in the saved figure.
+    ax.set_title("Entry Paths at Each Routine's Fitted "
+                 + ("$\\phi_{m,t}$ (Market $\\times$ Quarter)"
+                    if phi_mode == "path" else "$\\phi_m$ (Market Average)"),
+                 fontsize=10.5)
     ax.legend(fontsize=8, ncol=2)
     fig.tight_layout()
-    fig.savefig(OUT_DIR / "d6_routine_curves.png", dpi=150)
+    fig.savefig(OUT_DIR / f"d6_routine_curves{sfx}.png", dpi=150)
+    try:
+        fig.savefig(DRAFTS / f"fig_routine_curves{sfx}.pdf", bbox_inches="tight",
+                    facecolor="white")
+    except OSError as e:
+        print(f"  [fig] Drafts copy failed: {e}")
     plt.close(fig)
-    print(f"  -> d6_routine_curves.csv / .png")
-    return rows
+    print(f"  -> d6_routine_curves{sfx}.csv / .png  (phi resolution: {phi_mode})")
+    return rows, pd.DataFrame(panel_rows)
 
 
 def event_paths(reg, paths, H, norm, plateau_w, boot, seed):
@@ -754,8 +913,25 @@ def main(args):
 
     if args.routine_curves:
         print("\n  per-routine model paths from each routine's own fitted phi_m dispersion:")
-        routine_event_curves(reg_b, paths_b, H, plateau_w, gB,
-                             [int(x) for x in args.routine_curves])
+        _rc = routine_event_curves(reg_b, paths_b, H, plateau_w, gB,
+                                   [int(x) for x in args.routine_curves], args.phi_mode)
+        if _rc is not None:
+            _rows, _panel = _rc
+            if not _panel.empty:
+                # Same two-panel treatment as the reference-curve exhibit, but every line is
+                # a routine evaluated at ITS OWN fitted dispersion rather than one level.
+                _shown = [e for e in REF_ESTS
+                          if e in set(_panel["vintage"].astype(str))]
+                _vint = [(e, float(_panel.loc[_panel["vintage"] == e, "phi"].iloc[0]),
+                          f"per-event phi ({args.phi_mode})") for e in _shown]
+                _stem = ("fig_routine_dynamics_phipath" if args.phi_mode == "path"
+                         else "fig_routine_dynamics")
+                make_panel_figures(paths_df, _panel, _vint, g, args, imp, _stem,
+                                   suptitle=("Entrant accumulation vs each routine's own "
+                                             + ("$\\phi_{m,t}$ (market $\\times$ quarter)"
+                                                if args.phi_mode == "path"
+                                                else "$\\phi_m$ (market average)")),
+                                   per_routine=True)
 
     make_figure(paths_df, curves_df, vint, g, args, imp)
 
@@ -783,6 +959,10 @@ PANEL_TITLE = {"main": "(a) Egan Fig. 3 normalisation:  $(s_h-s_0)/(s_{end}-s_0)
                "alt": "(b) Alt. normalisation:  $s_h/s_{end}$"}
 PANEL_STEM = {"main": "a", "alt": "b"}
 DASHES = {"E2": (5, 2), "E7": (2, 1.5), "E8": (7, 2, 1.5, 2)}
+# The paper enumerates the estimation strategies I-VI in the order E1, E2, E5, E6, E7, E8
+# (see the stage-2 comparison table's column refs). Figures carry those numerals so a reader
+# moves between a figure legend and the specification tables without a translation step.
+ROMAN = {"E1": "(I)", "E2": "(II)", "E5": "(III)", "E6": "(IV)", "E7": "(V)", "E8": "(VI)"}
 
 
 def _draw_entry_panel(ax, norm, paths_df, curves_df, vint, g, H, imp=None, title=True):
@@ -792,7 +972,10 @@ def _draw_entry_panel(ax, norm, paths_df, curves_df, vint, g, H, imp=None, title
         sub = paths_df[(paths_df["kind"] == kind) & (paths_df["norm"] == norm)]
         if sub.empty:
             continue
-        ax.fill_between(sub["h"], sub["p25"], sub["p75"], color=color, alpha=0.13, lw=0)
+        # Bootstrap CI of the median only. The IQR describes how much entrants differ from
+        # one another, which is not what this exhibit is asking -- the question is where the
+        # median path sits relative to each model level, and two overlapping bands made that
+        # harder to read.
         ax.fill_between(sub["h"], sub["ci_lo"], sub["ci_hi"], color=color, alpha=0.28, lw=0)
         n0 = int(sub["n"].iloc[0])
         ax.plot(sub["h"], sub["median"], color=color, lw=2, marker="o", ms=4.5,
@@ -800,20 +983,20 @@ def _draw_entry_panel(ax, norm, paths_df, curves_df, vint, g, H, imp=None, title
                 label=f"{kind}-firm entries (n={n0})")
     for lab, phi, _ in vint:
         c = curves_df[(curves_df["vintage"] == lab) & (curves_df["norm"] == norm)]
-        expl = " explosive" if phi * g >= 1.0 else ""
         ax.plot(c["h"], c["value"], color=MODEL_COLORS.get(lab, INK), lw=1.6,
                 ls=(0, DASHES.get(lab, (5, 2))), zorder=2,
-                label=f"model, {lab} ($\\hat\\phi$={phi:.3f}){expl}")
+                label=f"{ROMAN.get(lab, lab)} $\\hat\\phi$={phi:.3f}")
     if norm == "alt":
-        ax.axhline(1.0, color="#B71C1C", lw=1.6, ls=":", zorder=4,
-                   label="instant sorting (no sleepiness)")
+        # The benchmark stays as a rule; naming it in the legend spent a row on a
+        # line the caption already explains.
+        ax.axhline(1.0, color="#B71C1C", lw=1.6, ls=":", zorder=4, label="_nolegend_")
         # D-firm dispersion is wide (n is small and shares are national); clip so the
         # comparison of interest -- B vs the model curves -- stays legible.
         ax.set_ylim(-0.05, 1.65)
     if title:
         ax.set_title(PANEL_TITLE[norm], loc="left", fontsize=10)
-    ax.set_xlabel("quarters since entry ($h$)")
-    ax.set_ylabel("normalised market share")
+    ax.set_xlabel("Quarters Since Entry ($h$)")
+    ax.set_ylabel("Normalized Market Share")
     ax.grid(axis="y", color=GRID, lw=0.8)
     ax.set_axisbelow(True)
     for sp in ("top", "right"):
@@ -822,30 +1005,32 @@ def _draw_entry_panel(ax, norm, paths_df, curves_df, vint, g, H, imp=None, title
         ax.spines[sp].set_color("#BFBFBA")
         ax.spines[sp].set_linewidth(0.8)
     ax.set_xlim(-0.3, H + 0.3)
-    ax.legend(frameon=False, fontsize=7.5,
-              loc="upper left" if norm == "main" else "lower right")
-    if norm == "main" and imp and "B" in imp:
-        r = imp["B"]
-        ax.text(0.98, 0.06,
-                f"entry-implied $\\phi$ = {r['phi_entry']:.3f}  "
-                f"[{r['lo']:.3f}, {r['hi']:.3f}]",
-                transform=ax.transAxes, ha="right", fontsize=8.5, color=INK)
+    # Opaque box: the curves converge into the lower-right corner at the short horizons, so
+    # a transparent legend would sit on top of them.
+    leg = ax.legend(loc="lower right", fontsize=7.5, frameon=True, framealpha=1.0,
+                    facecolor="white", edgecolor="#BFBFBA", borderpad=0.6)
+    leg.set_zorder(10)
+    leg.get_frame().set_linewidth(0.8)
 
 
-def _panel_tex(norm, vint, imp, gmode, n_b):
+def _panel_tex(norm, vint, imp, gmode, n_b, stem="fig_entry_dynamics", per_routine=False):
     r"""A standalone \input-able float for one panel. The image carries no title or footnote
     -- the caption states the content, which is what a paper float wants."""
-    labs = ", ".join(f"{lab} ($\\hat\\phi$ = {phi:.3f})" for lab, phi, _ in vint)
+    labs = ", ".join(f"{ROMAN.get(lab, lab)} ($\\hat\\phi$ = {phi:.3f})" for lab, phi, _ in vint)
     accrual = ("each entrant's own deposit-weighted accrual path" if gmode != "scalar"
                else "the median gross accrual across the panel")
     if norm == "main":
         what = (r"Median normalised share path of the " + str(n_b) + r" conglomerate--market "
-                r"entry events (markers), with the interquartile range and a bootstrap "
+                r"entry events (markers), with a bootstrap "
                 r"confidence interval for the median (shading), against the accumulation path "
                 r"implied by the estimated law of motion at " + labs + r". Each model curve is "
-                r"the median over the events' own paths, evaluated at " + accrual + r", so the "
-                r"curve and the data are aggregated identically and a curve asserts a level of "
-                r"$\phi$ only. Shares are normalised as in \textcite{egan2025dynamic} Figure~3, "
+                + (r"the median over the events' own paths, each evaluated at ITS OWN "
+                   r"market-and-quarter fitted $\phi_{m,t}$ and its own accrual, so no "
+                   r"dimension of the estimate is averaged away" if per_routine else
+                   r"the median over the events' own paths, evaluated at " + accrual +
+                   r", so the curve and the data are aggregated identically and a curve "
+                   r"asserts a level of $\phi$ only")
+                + r". Shares are normalised as in \textcite{egan2025dynamic} Figure~3, "
                 r"$(s_h-s_0)/(s_{\mathrm{end}}-s_0)$, with $s_{\mathrm{end}}$ the average over "
                 r"$h\in\{10,11,12\}$; the normalisation cancels the level of the awake inflow, "
                 r"so the path depends on $\phi$ and the accrual alone.")
@@ -854,7 +1039,10 @@ def _panel_tex(norm, vint, imp, gmode, n_b):
             what += (r" Inverting the comparison, the paths alone imply $\phi = "
                      f"{r_['phi_entry']:.3f}$ (95\\% CI $[{r_['lo']:.3f}, {r_['hi']:.3f}]$, "
                      r"event bootstrap).")
-        cap, lab = "Entrant share accumulation against the sleepiness-implied path", "entry_dynamics_main"
+        cap = ("Entrant accumulation against each routine's own fitted dispersion"
+               if per_routine else
+               "Entrant share accumulation against the sleepiness-implied path")
+        lab = stem.replace("fig_", "") + "_main"
     else:
         what = (r"The same entry events under the alternative normalisation $s_h/s_{\mathrm{end}}$, "
                 r"in which \emph{instant sorting} --- the persistent-preferences benchmark with no "
@@ -863,17 +1051,27 @@ def _panel_tex(norm, vint, imp, gmode, n_b):
                 r"it, which is the qualitative content of the test: entry is gradual. Model curves "
                 r"as in the preceding figure. The vertical range is clipped for legibility; D-firm "
                 r"dispersion is wide because those shares are national and few.")
-        cap, lab = ("Entrant share accumulation against the instant-sorting benchmark",
-                    "entry_dynamics_alt")
+        cap = "Entrant share accumulation against the instant-sorting benchmark"
+        lab = stem.replace("fig_", "") + "_alt"
     return ("\\begin{figure}[htbp]\n"
             "  \\centering\n"
-            f"  \\includegraphics[width=\\linewidth]{{fig_entry_dynamics_{PANEL_STEM[norm]}.pdf}}\n"
+            f"  \\includegraphics[width=\\linewidth]{{{stem}_{PANEL_STEM[norm]}.pdf}}\n"
             f"  \\caption[{cap}]{{\\textbf{{{cap}.}} {what}}}\n"
             f"  \\label{{fig:{lab}}}\n"
             "\\end{figure}\n")
 
 
 def make_figure(paths_df, curves_df, vint, g, args, imp=None):
+    """The reference-curve exhibit: one scalar phi per routine."""
+    make_panel_figures(paths_df, curves_df, vint, g, args, imp,
+                       stem="fig_entry_dynamics", out_stem="d6_entry_dynamics",
+                       suptitle="Entrant share accumulation: data vs the "
+                                "sleepiness-implied path")
+
+
+def make_panel_figures(paths_df, curves_df, vint, g, args, imp=None,
+                       stem="fig_entry_dynamics", out_stem=None, suptitle="",
+                       per_routine=False):
     import matplotlib.pyplot as plt
     if paths_df.empty:
         print("  [fig] no paths to plot")
@@ -882,8 +1080,8 @@ def make_figure(paths_df, curves_df, vint, g, args, imp=None):
     fig, axes = plt.subplots(1, 2, figsize=(11, 4.6), sharey=False)
     for ax, norm in ((axes[0], "main"), (axes[1], "alt")):
         _draw_entry_panel(ax, norm, paths_df, curves_df, vint, g, H, imp)
-    fig.suptitle("Entrant share accumulation: data vs the sleepiness-implied path",
-                 x=0.008, ha="left", fontsize=12)
+    out_stem = out_stem or stem.replace("fig_", "d6_")
+    fig.suptitle(suptitle, x=0.008, ha="left", fontsize=12)
     accrual = ("each event's own accrual path" if args.g_mode != "scalar"
                else "$g$ = median gross accrual")
     fig.text(0.008, 0.005,
@@ -893,10 +1091,10 @@ def make_figure(paths_df, curves_df, vint, g, args, imp=None):
              "medianed over events exactly as the data is.",
              ha="left", fontsize=7.5, color="#5A5A57")
     fig.tight_layout(rect=(0, 0.035, 1, 0.94))
-    for stem, d in (("d6_entry_dynamics", OUT_DIR), ("fig_entry_dynamics", DRAFTS)):
+    for _s, d in ((out_stem, OUT_DIR), (stem, DRAFTS)):
         try:
-            fig.savefig(d / f"{stem}.png", dpi=300, bbox_inches="tight", facecolor="white")
-            fig.savefig(d / f"{stem}.pdf", bbox_inches="tight", facecolor="white")
+            fig.savefig(d / f"{_s}.png", dpi=300, bbox_inches="tight", facecolor="white")
+            fig.savefig(d / f"{_s}.pdf", bbox_inches="tight", facecolor="white")
         except OSError as e:
             print(f"  [fig] save to {d} failed: {e}")
     plt.close(fig)
@@ -908,18 +1106,19 @@ def make_figure(paths_df, curves_df, vint, g, args, imp=None):
         f1, a1 = plt.subplots(figsize=(6.4, 4.6))
         _draw_entry_panel(a1, norm, paths_df, curves_df, vint, g, H, imp, title=False)
         f1.tight_layout()
-        stem = f"fig_entry_dynamics_{PANEL_STEM[norm]}"
+        pstem = f"{stem}_{PANEL_STEM[norm]}"
         try:
             for ext in ("png", "pdf"):
-                f1.savefig(DRAFTS / f"{stem}.{ext}", dpi=300, bbox_inches="tight",
+                f1.savefig(DRAFTS / f"{pstem}.{ext}", dpi=300, bbox_inches="tight",
                            facecolor="white")
-            (DRAFTS / f"{stem}.tex").write_text(
-                _panel_tex(norm, vint, imp, args.g_mode, n_b), encoding="utf-8")
+            (DRAFTS / f"{pstem}.tex").write_text(
+                _panel_tex(norm, vint, imp, args.g_mode, n_b, stem, per_routine),
+                encoding="utf-8")
         except OSError as e:
             print(f"  [fig] panel save failed: {e}")
         plt.close(f1)
-    print(f"  figure -> {OUT_DIR/'d6_entry_dynamics.png'} (+ Drafts/fig_entry_dynamics.*, "
-          f"per-panel fig_entry_dynamics_{{a,b}}.{{png,pdf,tex}})")
+    print(f"  figure -> {out_stem}.png (+ Drafts/{stem}.*, "
+          f"per-panel {stem}_{{a,b}}.{{png,pdf,tex}})")
 
 
 if __name__ == "__main__":
@@ -942,6 +1141,11 @@ if __name__ == "__main__":
     ap.add_argument("--g-mode", choices=GMODE_CHOICES, default="path",
                     help="accrual factor: 'path' = per-event, per-quarter g (default); "
                          "'event' = one g per event; 'scalar' = the single median g")
+    ap.add_argument("--phi-mode", choices=("market", "path"), default="market",
+                    help="fitted phi resolution in the per-routine curves: 'market' "
+                         "(default) = one phi per market, the frozen-phi exhibit; 'path' = "
+                         "phi at the event's own market AND quarter, which writes SEPARATE "
+                         "*_phipath artifacts rather than replacing the frozen-phi ones")
     ap.add_argument("--g-selftest", action="store_true",
                     help="force every per-event g to the scalar median; 'path' must then "
                          "reproduce '--g-mode scalar'")

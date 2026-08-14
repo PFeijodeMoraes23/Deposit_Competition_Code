@@ -33,6 +33,7 @@ from diag_phi_augmented_tests import OUT_DIR  # noqa: E402
 DRAFTS = Path(r"c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance"
               r"\Open-Finance\Drafts\Deposit Competition")
 NOTES = DRAFTS / "identification_notes.md"
+ROMAN = {1: "(I)", 2: "(II)", 5: "(III)", 6: "(IV)", 7: "(V)", 8: "(VI)"}
 LAB = {1: "E1 identity", 2: "E2 pooled linear", 5: "E5 single-index",
        6: "E6 single-index + time", 7: "E7 joint sieve", 8: "E8 joint sieve + time"}
 ESTS = (1, 2, 5, 6, 7, 8)
@@ -129,6 +130,42 @@ def tab_d6_entry_curves():
        r"\midrule"] + rows)
 
 
+def tab_d6_explosive():
+    """Stationarity diagnostics for the nonlinear routines, at full phi_{m,t} x g_{e,h}
+    resolution. E1/E2 are excluded: the paper's stationarity discussion is about the
+    routines whose fitted carry approaches one.
+
+    Reports depth and persistence alongside frequency, because they read differently -- a
+    breach of 0.01 that appears in some quarters is a different object from a market that
+    sits above the bound throughout.
+    """
+    f = OUT_DIR / "d6_explosive_diag_phipath.csv"
+    if not f.exists():
+        print(f"  [skip] {f.name} absent -- run diag_entry_dynamics.py --phi-mode path")
+        return
+    d = pd.read_csv(f).set_index("estim")
+    rows = []
+    for e in (5, 6, 7, 8):
+        if e not in d.index:
+            continue
+        r = d.loc[e]
+        pop = (f"{100*r['pop_share_expl']:.1f}\\%" if pd.notna(r.get("pop_share_expl"))
+               else "--")
+        rows.append(
+            f"{ROMAN[e]} {LAB[e].split(' ', 1)[1]} & {r['phi_mean']:.3f} & "
+            f"{r['phi_g_median']:.3f} & {100*r['share_cells_expl']:.0f}\\% & "
+            f"{100*r['share_events_ever']:.0f}\\% & {100*r['share_events_always']:.0f}\\% & "
+            f"{r['mean_excess']:.4f} & {pop} \\\\")
+    w("tab_d6_explosive.tex",
+      ["{lccccccc}",
+       r"Strategy & mean $\phi_{m,t}$ & median $\phi g$ & \multicolumn{3}{c}{Entry markets} "
+       r"& mean excess & All market--\\",
+       r"\cmidrule(lr){4-6}",
+       r" &  &  & quarters & entrants & entrants & $(\phi g - 1)$ & quarters \\",
+       r" &  &  & $\phi g\ge1$ & ever & always &  & $\phi g\ge1$ \\",
+       r"\midrule"] + rows)
+
+
 def tab_wcb():
     d = pd.read_csv(OUT_DIR / "d_wcb_reference_battery.csv")
     esc = "\\_"
@@ -157,7 +194,8 @@ def copy_figures():
 
 
 if __name__ == "__main__":
-    for fn in (tab_d0, tab_d4b, tab_d4c, tab_d5, tab_d6_entry_curves, tab_wcb):
+    for fn in (tab_d0, tab_d4b, tab_d4c, tab_d5, tab_d6_entry_curves,
+               tab_d6_explosive, tab_wcb):
         fn()
     copy_figures()
     print("done")
