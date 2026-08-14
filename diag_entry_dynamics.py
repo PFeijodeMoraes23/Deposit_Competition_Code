@@ -111,6 +111,16 @@ def median_g():
 # phi_m); g was the only input still collapsed, which made the model path a median over events
 # in phi but a constant in g while the data path is a median over events in everything.
 GMODE_CHOICES = ("path", "event", "scalar")
+# One suffix map for every phi-resolution artifact -- CSVs and figures alike, so a cell
+# of the aggregation 2x2 can never write over another.
+PHI_SFX = {"path": "_phipath", "market": "", "time": "_phitime",
+           "scalar": "_phiscalar"}
+# Raw strings: "$\bar\phi$" in a normal literal puts an actual backspace in the label, and
+# mathtext then fails to parse it at savefig time.
+PHI_LABEL = {"path": r"$\phi_{m,t}$ (no averaging)",
+             "market": r"$\phi_m$ (averaged over quarters)",
+             "time": r"$\phi_t$ (averaged over markets)",
+             "scalar": r"$\bar{\phi}$ (averaged over both)"}
 G_TYPES = (1, 2, 4)          # event deposits are dep_a1+dep_a2+dep_a4; type 5 (g ~ 1.025)
                              # is in the parquet but NEVER entered the path being modelled.
 
@@ -363,16 +373,31 @@ def build_events(df, kind, args, branch=None):
     return reg, paths
 
 
-def implied_phi(reg, paths, H, plateau_w, g, boot, seed, grid=None):
+def implied_phi(reg, paths, H, plateau_w, g, boot, seed, grid=None, loss="median"):
     """INVERT the figure: what phi do the entry paths themselves imply?
 
-    One-parameter fit -- pick phi minimising SSE between the model curve 1-(phi g)^h
-    (main normalisation) and the median empirical path over h=1..H-1 (h=0 and the plateau
-    window are pinned to 0/1 by the normalisation and carry no information). The bootstrap
-    resamples EVENTS, refits phi on each draw, and returns the percentile CI.
+    One-parameter fit over h=1..H-1 (h=0 and the plateau window are pinned to 0/1 by the
+    normalisation and carry no information). The bootstrap resamples EVENTS, refits phi on
+    each draw, and returns the percentile CI.
 
     This is a genuine second measure of phi, independent of the deposit-autocorrelation
     moment that produced phi-hat: it uses only the SHAPE of post-entry accumulation.
+
+    TWO LOSSES, both reported, because the choice is not innocuous:
+
+      median  minimise the squared distance between the MEDIAN model path and the MEDIAN
+              data path. Robust, and the presentation Egan et al. use -- but it takes the
+              two medians separately, so the median data path is not the one the median
+              accrual generates: the event-to-accrual pairing is broken by the aggregation.
+      pooled  minimise summed ABSOLUTE deviations over every (event, horizon) cell, each
+              event against its own accrual. Keeps the pairing and uses every event.
+
+    Squared loss on the pooled cells is NOT offered, and deliberately: each path is divided
+    by its own three-quarter plateau mean, so it is a ratio with a noisy denominator, and the
+    individual paths run from -2.4 to +12.1 against a median path inside [0.11, 0.90]. Pooled
+    least squares returns 0.852 against 0.9165 here -- a shift of 1.4 CI widths driven by a
+    handful of small-denominator events. Pooled ABSOLUTE deviation on the same cells returns
+    0.914, i.e. the movement was the loss function meeting heavy tails, not extra information.
     """
     if grid is None:
         grid = np.linspace(0.50, 0.9985, 1400)
@@ -403,14 +428,41 @@ def implied_phi(reg, paths, H, plateau_w, g, boot, seed, grid=None):
             sse = ((curves[:, ok] - med[ok]) ** 2).sum(axis=1)
             return float(grid[int(np.argmin(sse))])
 
+    def fit_pooled(idx):
+        """Every (event, horizon) cell against that event's own accrual, absolute loss."""
+        A = M[idx][:, hs]
+        ok = np.isfinite(A)
+        if per_event:
+            Bm = T[:, idx, :][:, :, hs]
+        else:
+            Bm = np.repeat(curves[:, hs][:, None, :], len(idx), axis=1)
+        r = np.where(ok[None, :, :], np.abs(Bm - A[None, :, :]), 0.0)
+        return float(grid[int(np.argmin(r.sum(axis=(1, 2))))])
+
     n = M.shape[0]
-    phi_hat = fit(np.arange(n))
     rng = np.random.default_rng(seed)
-    bs = [fit(rng.integers(0, n, n)) for _ in range(min(boot, 400))]
+    # One set of resampled indices drives both estimators, so the two intervals are paired
+    # and any difference between them is the loss function rather than the draws.
+    draws = [rng.integers(0, n, n) for _ in range(min(boot, 400))]
+    phi_med = fit(np.arange(n))
+    bs_med = [fit(d_) for d_ in draws]
+    # The pooled fit touches grid x events x horizons per draw; cap it so a full run stays
+    # in the same order of magnitude as before.
+    d_pool = draws[:min(len(draws), 200)]
+    phi_pool = fit_pooled(np.arange(n))
+    bs_pool = [fit_pooled(d_) for d_ in d_pool]
+
+    head = phi_pool if loss == "pooled" else phi_med
+    head_bs = bs_pool if loss == "pooled" else bs_med
     g_row = Gv[keep_rows].mean(axis=1) if per_event else np.full(n, float(Gv))
-    return {"phi_entry": phi_hat, "lo": float(np.percentile(bs, 2.5)),
-            "hi": float(np.percentile(bs, 97.5)), "n_events": int(n),
-            "phi_g": phi_hat * float(np.median(g_row)),
+    return {"phi_entry": head, "lo": float(np.percentile(head_bs, 2.5)),
+            "hi": float(np.percentile(head_bs, 97.5)), "n_events": int(n),
+            "loss": loss,
+            "phi_median_loss": phi_med, "lo_median_loss": float(np.percentile(bs_med, 2.5)),
+            "hi_median_loss": float(np.percentile(bs_med, 97.5)),
+            "phi_pooled_abs": phi_pool, "lo_pooled_abs": float(np.percentile(bs_pool, 2.5)),
+            "hi_pooled_abs": float(np.percentile(bs_pool, 97.5)),
+            "phi_g": head * float(np.median(g_row)),
             "g_e_median": float(np.median(g_row)),
             "g_e_p10": float(np.percentile(g_row, 10)),
             "g_e_p90": float(np.percentile(g_row, 90))}
@@ -493,6 +545,65 @@ def model_tensor(grid, Ge, H, plateau_w):
 _POP_G_CACHE = {}
 
 
+def phi_in_interval(ests, lo, hi):
+    """How much of each routine's fitted phi lies inside the entry-implied interval.
+
+    The level comparison sets ONE number per routine against [lo, hi]. That is silent on how
+    much of the fitted distribution the interval covers -- a routine can have the right mean
+    with almost no mass inside, or the wrong mean with substantial mass inside. Reported at
+    the three resolutions the aggregation 2x2 uses, plus deposit-weighted, since the
+    counterfactuals weight cells by deposits rather than counting them.
+
+    READ IT AS A COMPARISON ACROSS ROUTINES, NOT AS PASS/FAIL. [lo, hi] is a confidence
+    interval for a single central phi, not a tolerance region for a distribution: a routine
+    whose phi genuinely varies across markets SHOULD place mass outside it. What is
+    interpretable is the same yardstick applied to every routine -- and in particular a share
+    of exactly zero, which says a routine has no admissible cell anywhere.
+    """
+    cf = _paths.PROCESSED / "ESTIMATION_OUTPUT" / "CF_FOUNDATION"
+    dp = (_paths.PROCESSED / "ESTIMATION_OUTPUT" / "DEMAND_PREP"
+          / "demand_2_spec_12.parquet")
+    w = pd.read_parquet(dp, columns=["mca_code", "time_id", "deposit_type",
+                                     "deposit_balance"])
+    w = w[w["deposit_type"].astype(int).isin(G_TYPES)]
+    wmt = w.groupby(["mca_code", "time_id"], observed=True)["deposit_balance"].sum()
+
+    def _sh(v):
+        v = np.asarray(v, float)
+        v = v[np.isfinite(v)]
+        if not v.size:
+            return np.nan, np.nan, np.nan, 0
+        return (float(np.mean(v < lo)), float(np.mean((v >= lo) & (v <= hi))),
+                float(np.mean(v > hi)), int(v.size))
+
+    rows = []
+    for est in ests:
+        fp = cf / f"phi_nopix_E{est}_spec_12.parquet"
+        if not fp.exists():
+            continue
+        d = pd.read_parquet(fp, columns=["mca_code", "time_id", "deposit_type", "phi_mt"])
+        d = d[d["deposit_type"].astype(int).isin(G_TYPES)]
+        mt = d.groupby(["mca_code", "time_id"], observed=True)["phi_mt"].mean()
+        r = {"estim": est, "lo": lo, "hi": hi, "phi_mean": float(d["phi_mt"].mean())}
+        for tag, v in (("mq", mt),
+                       ("mkt", d.groupby("mca_code", observed=True)["phi_mt"].mean()),
+                       ("qtr", d.groupby("time_id", observed=True)["phi_mt"].mean())):
+            b, i, a, n = _sh(v)
+            r |= {f"{tag}_below": b, f"{tag}_in": i, f"{tag}_above": a, f"{tag}_n": n}
+        j = pd.concat([mt.rename("phi"), wmt.rename("w")], axis=1).dropna()
+        ins = (j["phi"] >= lo) & (j["phi"] <= hi)
+        r["mq_in_depwt"] = float(j.loc[ins, "w"].sum() / j["w"].sum()) if len(j) else np.nan
+        rows.append(r)
+        print(f"  [phi-in-CI] E{est}: market-quarters {100*r['mq_in']:.1f}% in "
+              f"({100*r['mq_below']:.1f}% below, {100*r['mq_above']:.1f}% above) | "
+              f"markets {100*r['mkt_in']:.1f}% | quarters {100*r['qtr_in']:.1f}% | "
+              f"deposit-weighted {100*r['mq_in_depwt']:.1f}%")
+    if rows:
+        pd.DataFrame(rows).to_csv(OUT_DIR / "d6_phi_in_interval.csv", index=False)
+        print("  -> d6_phi_in_interval.csv")
+    return rows
+
+
 def population_stationarity(est):
     """Share of ALL (market, quarter) cells whose fitted carry breaches phi*g >= 1.
 
@@ -556,10 +667,22 @@ def _qidx_to_time_id(q):
 def build_phi_paths(kept, H, est, mode):
     """(n_kept, H+1) fitted phi for each event at each horizon, plus a source tally.
 
-    `market` collapses phi_mt to one number per market (the mean over every quarter the
-    market appears). `path` reads phi at the event's OWN calendar quarter, m(e) x (t0+h),
-    which is the resolution phi_mt is actually estimated at -- the market and time indices
-    are the only two the theory gives it, so this collapses nothing.
+    phi_mt carries exactly two indices, so there are four ways to feed it to the entry
+    recursion -- a 2x2 over "keep the market variation?" and "keep the time variation?":
+
+        path    m and t both kept. The resolution phi_mt is estimated at, and the resolution
+                the demand parquet and the counterfactuals consume. Collapses nothing.
+        market  average over t. Isolates the cross-market level assignment.
+        time    average over m. Isolates the fitted time path.
+        scalar  average over both. The pure level test, closest to Egan's own.
+
+    They are not interchangeable, and which one flatters a routine depends on where that
+    routine put its variance: E7's phi is 75.3% between-quarter and 12.6% between-market,
+    E6's is the mirror image at 3.1% and 60.5%. So averaging over t deletes three quarters of
+    what E7 fitted and almost nothing of what E6 fitted -- an aggregation choice is a choice
+    about whose estimate to amputate, which is why all four are reported rather than one.
+
+    Deposit types are restricted to 1/2/4, matching the deposits an entry path is built
 
     Deposit types are restricted to 1/2/4, matching the deposits an entry path is built
     from. That also removes a boundary artifact: within a (market, quarter) cell phi is
@@ -577,16 +700,27 @@ def build_phi_paths(kept, H, est, mode):
     pm["mca_code"] = pm["mca_code"].astype(str)
     by_mt = pm.groupby(["mca_code", "time_id"], observed=True)["phi_mt"].mean()
     by_m = pm.groupby("mca_code", observed=True)["phi_mt"].mean()
+    by_t = pm.groupby("time_id", observed=True)["phi_mt"].mean()
     glob = float(pm["phi_mt"].mean())
 
     mkt = kept["mkt"].astype(str).to_numpy()
     q0 = kept["q_entry"].astype(int).to_numpy()
     n = len(kept)
+    if mode == "scalar":
+        return np.full((n, H + 1), glob), {"hit": 1.0, "exact": 0.0}
     if mode == "market":
         v = by_m.reindex(mkt).to_numpy(float, copy=True)
         hit = float(np.isfinite(v).mean())
         v = np.where(np.isfinite(v), v, glob)
         return np.repeat(v[:, None], H + 1, axis=1), {"hit": hit, "exact": 0.0}
+    if mode == "time":
+        # Market variation averaged away; every event at the national phi of its own quarter.
+        P_ = np.full((n, H + 1), np.nan)
+        for h in range(H + 1):
+            tid = [_qidx_to_time_id(q) for q in q0 + h]
+            P_[:, h] = by_t.reindex(tid).to_numpy(float, copy=True)
+        P_ = np.where(np.isfinite(P_), P_, glob)
+        return P_, {"hit": 1.0, "exact": 0.0}
 
     P_ = np.full((n, H + 1), np.nan)
     exact = 0
@@ -680,7 +814,7 @@ def routine_event_curves(reg, paths, H, plateau_w, g, ests, phi_mode="market"):
         return None
     # The frozen-phi exhibit and the full-resolution one are different exercises, not
     # successive versions of one -- they are written side by side.
-    sfx = "_phipath" if phi_mode == "path" else ""
+    sfx = PHI_SFX[phi_mode]
     pd.DataFrame(rows).to_csv(OUT_DIR / f"d6_routine_curves{sfx}.csv", index=False)
     if expl_rows:
         pd.DataFrame(expl_rows).to_csv(OUT_DIR / f"d6_explosive_diag{sfx}.csv",
@@ -897,7 +1031,7 @@ def main(args):
     for kind, reg, paths, gk in (("B", reg_b, paths_b, gB), ("D", reg_d, paths_d, gD)):
         if reg.empty:
             continue
-        r = implied_phi(reg, paths, H, plateau_w, gk, args.boot, args.seed)
+        r = implied_phi(reg, paths, H, plateau_w, gk, args.boot, args.seed, loss=args.inversion_loss)
         if r is None:
             continue
         imp[kind] = r
@@ -910,6 +1044,12 @@ def main(args):
     if imp:
         pd.DataFrame(imp).T.rename_axis("kind").reset_index().to_csv(
             OUT_DIR / "d6_implied_phi.csv", index=False)
+        # How much of each routine's fitted phi the B interval actually covers -- the
+        # distributional companion to the level comparison printed above.
+        if "B" in imp and args.routine_curves:
+            print("\n  fitted phi inside the entry-implied interval:")
+            phi_in_interval([int(x) for x in args.routine_curves],
+                            float(imp["B"]["lo"]), float(imp["B"]["hi"]))
 
     if args.routine_curves:
         print("\n  per-routine model paths from each routine's own fitted phi_m dispersion:")
@@ -924,13 +1064,12 @@ def main(args):
                           if e in set(_panel["vintage"].astype(str))]
                 _vint = [(e, float(_panel.loc[_panel["vintage"] == e, "phi"].iloc[0]),
                           f"per-event phi ({args.phi_mode})") for e in _shown]
-                _stem = ("fig_routine_dynamics_phipath" if args.phi_mode == "path"
-                         else "fig_routine_dynamics")
+                # One figure family per cell of the aggregation 2x2, so the four can be
+                # compared side by side instead of overwriting each other.
+                _stem = f"fig_routine_dynamics{PHI_SFX[args.phi_mode]}"
                 make_panel_figures(paths_df, _panel, _vint, g, args, imp, _stem,
                                    suptitle=("Entrant accumulation vs each routine's own "
-                                             + ("$\\phi_{m,t}$ (market $\\times$ quarter)"
-                                                if args.phi_mode == "path"
-                                                else "$\\phi_m$ (market average)")),
+                                             + PHI_LABEL[args.phi_mode]),
                                    per_routine=True)
 
     make_figure(paths_df, curves_df, vint, g, args, imp)
@@ -1141,11 +1280,17 @@ if __name__ == "__main__":
     ap.add_argument("--g-mode", choices=GMODE_CHOICES, default="path",
                     help="accrual factor: 'path' = per-event, per-quarter g (default); "
                          "'event' = one g per event; 'scalar' = the single median g")
-    ap.add_argument("--phi-mode", choices=("market", "path"), default="market",
+    ap.add_argument("--phi-mode", choices=("path", "market", "time", "scalar"),
+                    default="market",
                     help="fitted phi resolution in the per-routine curves: 'market' "
                          "(default) = one phi per market, the frozen-phi exhibit; 'path' = "
                          "phi at the event's own market AND quarter, which writes SEPARATE "
                          "*_phipath artifacts rather than replacing the frozen-phi ones")
+    ap.add_argument("--inversion-loss", choices=("median", "pooled"), default="median",
+                    help="which loss carries the headline inverted phi: 'median' "
+                         "(default, Egan-comparable) or 'pooled' = every event against "
+                         "its own accrual under absolute loss. BOTH are always computed "
+                         "and written to d6_implied_phi.csv")
     ap.add_argument("--g-selftest", action="store_true",
                     help="force every per-event g to the scalar median; 'path' must then "
                          "reproduce '--g-mode scalar'")
