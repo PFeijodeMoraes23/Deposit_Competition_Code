@@ -37,6 +37,8 @@ except Exception:
 ROOT       = pathlib.Path(__file__).resolve().parent
 DATA_DIR   = ROOT.parents[1] / "BCB" / "Egan_et_al_2025_Rep" / "processed"
 WEAK_IV    = DATA_DIR / "ESTIMATION_OUTPUT" / "BLP_RESULTS" / "cluster_processed" / "weak_iv.json"
+WEAK_IV_EXT1 = WEAK_IV.parent / "weak_iv_ext1.json"          # structural-δ battery (--delta-stage ext1)
+DIAG_MR      = WEAK_IV.parent / "diag_moment_reduction.json"  # diag_moment_reduction.py output
 TABLES_DIR = DATA_DIR / "ESTIMATION_OUTPUT" / "Rout"
 DRAFTS_DIR = rc.DRAFTS_DIR
 ROUTINES   = [5, 6, 7, 8]
@@ -95,7 +97,8 @@ def _robust_ci(lo, hi, disconnected=False):
     return f"${ls},\\,{hs}{star}$"
 
 
-def _wrap(body_lines, col_fmt, caption, label, header, footnote, ncols, width=r"0.70\linewidth"):
+def _wrap(body_lines, col_fmt, caption, label, header, footnote, ncols, width=r"0.70\linewidth",
+          landscape=True):
     # `width` is the width of the notes \multicolumn, and therefore of the whole table: longtable sizes
     # itself from its widest row, and the notes row is always the widest. At the full landscape
     # \linewidth (~24.7cm) the columns hold ~16cm of content, and longtable parks the entire ~9cm of
@@ -104,7 +107,7 @@ def _wrap(body_lines, col_fmt, caption, label, header, footnote, ncols, width=r"
     # the source; \extracolsep spreads whatever little remains.
     trow = r" \\"
     return "\n".join([
-        r"\begin{landscape}",
+        *([r"\begin{landscape}"] if landscape else []),
         r"\begin{spacing}{1.0}",
         r"\centering\footnotesize",
         r"\setlength{\tabcolsep}{5pt}",
@@ -134,7 +137,7 @@ def _wrap(body_lines, col_fmt, caption, label, header, footnote, ncols, width=r"
         *body_lines,
         r"\end{longtable}",
         r"\end{spacing}",
-        r"\end{landscape}",
+        *([r"\end{landscape}"] if landscape else []),
     ])
 
 
@@ -275,14 +278,105 @@ def build_alpha_robust(wiv):
                  "tab:alpha_weakiv_spec12", header, foot, 6)
 
 
+def _diag_variant(diag, k, name):
+    """Look up a variant dict in the diag_moment_reduction.json list; {} when absent/stale."""
+    for r in diag:
+        if r.get("routine") == k:
+            for v in r.get("variants") or []:
+                if v.get("variant") == name:
+                    return v
+    return {}
+
+
+def _ji_set(lo, hi, disconnected=False, empty=False):
+    if empty:
+        return r"$\emptyset$"
+    return _robust_ci(lo, hi, disconnected)
+
+
+def build_ji(wiv, wiv_ext1, diag):
+    # The just-identified repair: one moment (the fitted first stage), so no weight matrix, no
+    # Hansen J, and the AR inversion cannot be emptied by overidentification failure. Three δ/
+    # instrument conventions side by side, all with the SAME WCB machinery (Webb, B=999, seed 0,
+    # null imposed, Ω̂ observed per grid point). The engine-grade column is the identification-
+    # robust CI for the estimator the paper actually reports (FWL: the engine's θ₁ step IS
+    # just-identified IV with instrument spread_hat).
+    col_fmt = "l l c c c"
+    header = (r"Routine & Engine $\hat\alpha$ (SE) & Benchmark JI--WCB & Structural JI--WCB & "
+              r"Engine-grade JI--WCB")
+    body = []
+    for k in ROUTINES:
+        rb = (wiv.get(str(k)) or {}).get("all") or {}
+        rs = (wiv_ext1.get(str(k)) or {}).get("all") or {}
+        ve = _diag_variant(diag, k, "ji_engine")
+        cells = [rc.est_ref(k),
+                 _alpha_se(ve.get("alpha_2sls"), ve.get("alpha_se")),
+                 (_ji_set(rb.get("ji_ci_low"), rb.get("ji_ci_high"),
+                          rb.get("ji_ci_disconnected", False)) if rb else "---"),
+                 (_ji_set(rs.get("ji_ci_low"), rs.get("ji_ci_high"),
+                          rs.get("ji_ci_disconnected", False)) if rs else "---")]
+        sw = ve.get("sset_wcb") or {}
+        cells.append(_ji_set(sw.get("lo"), sw.get("hi"), sw.get("disconnected", False),
+                             sw.get("empty", False)) if sw else "---")
+        body.append("    " + " & ".join(cells) + r" \\")
+    foot = (r"\textit{Notes:} Identification-robust $95\%$ confidence sets for the deposit-spread "
+            r"coefficient $\alpha$ under the \emph{just-identified} design: the sixteen excluded "
+            r"instruments are collapsed to the single fitted first stage $z^{*}$, so there is no "
+            r"weight matrix, no Hansen $J$, and the Anderson--Rubin inversion cannot be emptied by "
+            r"an overidentification rejection --- the set contains the point estimate by "
+            r"construction. All three set columns use the same inference: grid inversion over "
+            r"$\alpha\in[-2,+2]$ against wild-cluster-bootstrap criticals (Webb six-point weights, "
+            r"$B{=}999$, null imposed, the moment variance held at its observed value at each grid "
+            r"point), clustered by prudential conglomerate --- the few-cluster-valid treatment "
+            r"($G^\ast\approx5.5$ effective clusters). Columns differ only in the regressand and "
+            r"instrument convention: \emph{Benchmark} inverts the log-share (plain logit) $\delta$ "
+            r"with a uniform first stage on all rows; \emph{Structural} replaces the regressand "
+            r"with the Berry-inverted $\delta(\hat\theta_2)$ of the reported (ext1) fit, same "
+            r"uniform first stage; \emph{Engine-grade} uses $\delta(\hat\theta_2)$ with the "
+            r"engine's own generated instrument --- the per-type projected spread for deposit "
+            r"types~4--5 and the \emph{raw} spread for the regulated types~1--2, no intercept. By "
+            r"Frisch--Waugh--Lovell the engine's $\theta_1$ step is exactly just-identified IV with "
+            r"that instrument, so the Engine $\hat\alpha$ column reproduces the reported structural "
+            r"price coefficient (verified to $5\times10^{-6}$) and the engine-grade set is the "
+            r"robust interval for \emph{the estimator the paper reports}; it also makes explicit "
+            r"that the regulated products' spread is treated as exogenous. Caveats: $z^{*}$ is "
+            r"fitted in sample, and a cluster-level two-fold cross-fit variant "
+            r"(\texttt{ji\_split}, diagnostics file) shows the uniform instrument's strength is "
+            r"substantially optimistic --- the sets here are conditional on $\hat\theta_2$ and on "
+            r"the generated instrument. A set printed as open at $\pm2$ is bounded by the search "
+            r"window, not the data; $\dagger$ marks a disconnected set. Spread in percentage "
+            r"points.")
+    return _wrap(body, col_fmt,
+                 r"Just-Identified Robust Confidence Sets for the Deposit-Price Coefficient (Spec.~12)",
+                 "tab:alpha_ji_spec12", header, foot, 5, width=r"0.92\linewidth", landscape=False)
+
+
 def main():
     if not WEAK_IV.exists():
         raise FileNotFoundError(f"weak_iv.json not found at {WEAK_IV} — run weak_iv_analysis.py first.")
     wiv = json.load(open(WEAK_IV))
+    # The JI table's two extra inputs are allowed to be missing or stale (the generator must not go
+    # red because a diagnostic upstream has not been re-run) — absent entries render as ---.
+    wiv_ext1, diag = {}, []
+    if WEAK_IV_EXT1.exists():
+        try:
+            wiv_ext1 = json.load(open(WEAK_IV_EXT1))
+        except Exception as e:
+            print(f"  WARNING: {WEAK_IV_EXT1.name} unreadable ({e}) — structural column will be ---")
+    else:
+        print(f"  WARNING: {WEAK_IV_EXT1.name} missing — structural column will be ---")
+    if DIAG_MR.exists():
+        try:
+            diag = json.load(open(DIAG_MR))
+        except Exception as e:
+            print(f"  WARNING: {DIAG_MR.name} unreadable ({e}) — engine-grade column will be ---")
+    else:
+        print(f"  WARNING: {DIAG_MR.name} missing — engine-grade column will be ---")
     tables = {
         "tab_alpha_weakiv_spec12.tex": build_alpha_robust(wiv),
         "tab_firststage_spec12.tex": build_firststage(wiv),
         "tab_iv_comparison_spec12.tex": build_comparison(wiv),
+        "tab_alpha_ji_spec12.tex": build_ji(wiv, wiv_ext1, diag),
     }
     for name, tex in tables.items():
         for dest in (TABLES_DIR, DRAFTS_DIR):
