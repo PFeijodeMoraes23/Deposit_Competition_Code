@@ -585,6 +585,8 @@ import argparse
 def main():
     parser = argparse.ArgumentParser(description="Analyze Specification 12 Results (Est 1-3)")
     parser.add_argument('--skip-est2', action='store_true', help='Skip estimation 2 (Pooled Linear)')
+    parser.add_argument('--include-joint', action='store_true',
+                        help='Also load and export the joint-sieve pair (E5/E6)')
     args = parser.parse_args()
 
     print("Collecting Estimation results for Spec 12 (IV_HausmanFull x Tech)...")
@@ -596,16 +598,22 @@ def main():
         print(f"ERROR: Cannot find {SLEEP_DIR}")
         return
 
-    # Modern lineup (post two-way-FE relineup): drop the artifactual logit (E3), add the
-    # bounded single-index (E5/E6) and the canonical joint sieve (E7 = BLP input, E8 = +Time).
+    # The reported lineup is E1/E2 (linear) + E3/E4 (bounded single-index). The joint sieve
+    # (E5/E6) is estimated and kept here for comparison but is NOT exported by default: its
+    # reported band conditions on a link estimated jointly with the direction, and re-profiling
+    # that link per draw widens the band 1.71x (E5) and 7.46x (E6) -- past its own fitted phi_t
+    # range. Pass --include-joint to emit the joint-sieve tables anyway.
     mapping = {
         '1 Local':             SLEEP_DIR / "DEMAND_PREP" / "est1",
         '2 Pooled Linear':     SLEEP_DIR / "DEMAND_PREP" / "est2",
-        '5 Single-Index':      SLEEP_DIR / "DEMAND_PREP" / "est5",
-        '6 Single-Index Time': SLEEP_DIR / "DEMAND_PREP" / "est6",
-        '7 Joint Sieve':       SLEEP_DIR / "DEMAND_PREP" / "est7",
-        '8 Joint Sieve Time':  SLEEP_DIR / "DEMAND_PREP" / "est8",
+        '3 Single-Index':      SLEEP_DIR / "DEMAND_PREP" / "est3",
+        '4 Single-Index Time': SLEEP_DIR / "DEMAND_PREP" / "est4",
+        '5 Joint Sieve':       SLEEP_DIR / "DEMAND_PREP" / "est5",
+        '6 Joint Sieve Time':  SLEEP_DIR / "DEMAND_PREP" / "est6",
     }
+    if not getattr(args, 'include_joint', False):
+        for _k in ('5 Joint Sieve', '6 Joint Sieve Time'):
+            mapping.pop(_k, None)
 
     if getattr(args, 'skip_est2', False):
         mapping.pop('2 Pooled Linear', None)
@@ -689,58 +697,62 @@ def main():
 
     build_latex_table(
         stage1_res, order, first_stage_target_vars,
-        out_dir / "est1-3_spec12_stage1_comparison.tex",
+        out_dir / "est1-4_spec12_stage1_comparison.tex",
         title="First Stage IV Results across Specifications (Spec 12)",
         label="tab:spec12_stage1_comparison",
     )
     build_latex_table(
         stage2_res, order, target_vars,
-        out_dir / "est1-3_spec12_stage2_comparison.tex",
+        out_dir / "est1-4_spec12_stage2_comparison.tex",
         title="Second Stage Results across Specifications (Spec 12)",
         label="tab:spec12_stage2_comparison",
         mean_phi=mean_phi,
     )
     # Landscape variants of BOTH stages for V_Main inclusion (7 columns need the rotated
     # page). Same \labels as the portrait versions, so V_Main only switches which file it
-    # \inputs (\input{est1-3_spec12_stage{1,2}_comparison_landscape.tex}).
+    # \inputs (\input{est1-4_spec12_stage{1,2}_comparison_landscape.tex}).
     build_latex_table_landscape(
         stage1_res, order, first_stage_target_vars,
-        out_dir / "est1-3_spec12_stage1_comparison_landscape.tex",
+        out_dir / "est1-4_spec12_stage1_comparison_landscape.tex",
         title="First Stage IV Results across Specifications (Spec 12)",
         label="tab:spec12_stage1_comparison",
         placement="ht", first_stage=True,
     )
     build_latex_table_landscape(
         stage2_res, order, target_vars,
-        out_dir / "est1-3_spec12_stage2_comparison_landscape.tex",
+        out_dir / "est1-4_spec12_stage2_comparison_landscape.tex",
         title="Second Stage Results across Specifications (Spec 12)",
         label="tab:spec12_stage2_comparison",
         mean_phi=mean_phi, placement="ht",
     )
 
-    # Nonlinear-only comparison (E5-E8): four columns fit PORTRAIT. Distinct \labels so
-    # these can sit alongside the full tables in V_Main.
-    order_nl = [k for k in order if k.split()[0] in {"5", "6", "7", "8"}]
-    build_latex_table(
-        stage1_res, order_nl, first_stage_target_vars,
-        out_dir / "est5-8_spec12_stage1_comparison.tex",
-        title="First Stage IV Results, Single-Index \\& Joint-Sieve Estimators (Spec 12)",
-        label="tab:spec12_stage1_comparison_nl",
-    )
-    build_latex_table(
-        stage2_res, order_nl, target_vars,
-        out_dir / "est5-8_spec12_stage2_comparison.tex",
-        title="Second Stage Results, Single-Index \\& Joint-Sieve Estimators (Spec 12)",
-        label="tab:spec12_stage2_comparison_nl",
-        mean_phi=mean_phi,
-    )
+    # Joint-sieve-only comparison (E5/E6), emitted only under --include-joint: the pair is
+    # estimated but is not part of the reported lineup, so it is not exported by default.
+    # Distinct \labels so it can sit alongside the full tables in V_Main when requested.
+    joint_tex = []
+    if getattr(args, 'include_joint', False):
+        order_nl = [k for k in order if k.split()[0] in {"5", "6"}]
+        build_latex_table(
+            stage1_res, order_nl, first_stage_target_vars,
+            out_dir / "est5-6_spec12_stage1_comparison.tex",
+            title="First Stage IV Results, Joint-Sieve Estimators (Spec 12)",
+            label="tab:spec12_stage1_comparison_nl",
+        )
+        build_latex_table(
+            stage2_res, order_nl, target_vars,
+            out_dir / "est5-6_spec12_stage2_comparison.tex",
+            title="Second Stage Results, Joint-Sieve Estimators (Spec 12)",
+            label="tab:spec12_stage2_comparison_nl",
+            mean_phi=mean_phi,
+        )
+        joint_tex = ["est5-6_spec12_stage1_comparison.tex",
+                     "est5-6_spec12_stage2_comparison.tex"]
 
-    for fn in ("est1-3_spec12_stage1_comparison.tex",
-               "est1-3_spec12_stage2_comparison.tex",
-               "est1-3_spec12_stage1_comparison_landscape.tex",
-               "est1-3_spec12_stage2_comparison_landscape.tex",
-               "est5-8_spec12_stage1_comparison.tex",
-               "est5-8_spec12_stage2_comparison.tex"):
+    for fn in ("est1-4_spec12_stage1_comparison.tex",
+               "est1-4_spec12_stage2_comparison.tex",
+               "est1-4_spec12_stage1_comparison_landscape.tex",
+               "est1-4_spec12_stage2_comparison_landscape.tex",
+               *joint_tex):
         shutil.copy(out_dir / fn, _DRAFTS_DIR / fn)
     print(f"Exported LaTeX tables to {out_dir} and copied to {_DRAFTS_DIR}")
 
@@ -768,18 +780,18 @@ def main():
     linestyle_map = {
         '1 Local':             '-',
         '2 Pooled Linear':     '-',
-        '5 Single-Index':      '-',
-        '6 Single-Index Time': '--',
-        '7 Joint Sieve':       '-',
-        '8 Joint Sieve Time':  '--',
+        '3 Single-Index':      '-',
+        '4 Single-Index Time': '--',
+        '5 Joint Sieve':       '-',
+        '6 Joint Sieve Time':  '--',
     }
     label_rename = {
         '1 Local':             'Local Linear (E1)',
         '2 Pooled Linear':     'Pooled Linear (E2)',
-        '5 Single-Index':      'Single-Index (E5)',
-        '6 Single-Index Time': 'Single-Index +Time (E6)',
-        '7 Joint Sieve':       'Joint Sieve (E7)',
-        '8 Joint Sieve Time':  'Joint Sieve +Time (E8)',
+        '3 Single-Index':      'Single-Index (E3)',
+        '4 Single-Index Time': 'Single-Index +Time (E4)',
+        '5 Joint Sieve':       'Joint Sieve (E5)',
+        '6 Joint Sieve Time':  'Joint Sieve +Time (E6)',
     }
 
     fig, ax = plt.subplots(figsize=(12, 6))
@@ -792,7 +804,7 @@ def main():
         plot_label = label_rename.get(label, label)
 
         band_pkl = out_dir / f"ts_link_band_est{est_num}.pkl"
-        if est_num >= 5 and band_pkl.exists():
+        if est_num >= 3 and band_pkl.exists():
             # Single-index / joint sieve: bootstrap point path + wild-cluster band.
             try:
                 with open(band_pkl, "rb") as fb:
@@ -805,7 +817,7 @@ def main():
                 print(f"  [Warning] band load failed for {label} ({e}); falling back to delta band.")
 
         # Linear E1/E2: aggregate per-market phi to national with a delta-method band.
-        # Also serves as the fallback for est_num>=5 if the band pkl was missing/unreadable.
+        # Also serves as the fallback for est_num>=3 if the band pkl was missing/unreadable.
         df_phi = phi_data.get(label)
         if df_phi is None:
             csv_path = phi_csv_paths.get(label)

@@ -8,12 +8,12 @@ import subprocess
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-_LINK_DEMAND = {3, 4, 5, 6, 7, 8}   # config-driven via estimation_demand_link_common.py --est N
+_LINK_DEMAND = {3, 4, 5, 6}   # config-driven via estimation_demand_link_common.py --est N
 
 def _run_script(est, spec):
     if est in _LINK_DEMAND:
         cmd = [sys.executable, "estimation_demand_link_common.py", "--est", str(est), "--spec", str(spec)]
-    else:                            # E1/E2 + optional E9 have their own demand-prep scripts
+    else:                            # E1/E2 have their own demand-prep scripts
         script_name = f"estimation_{est}_demand_1_prep.py"
         if not (Path(__file__).parent / script_name).exists():
             return est, None, f"[!] Warning: {script_name} not found. Skipping."
@@ -23,20 +23,22 @@ def _run_script(est, spec):
 
 def main():
     parser = argparse.ArgumentParser(description="Unified Demand 1 Prep Orchestrator")
-    parser.add_argument("--estimation", choices=['1', '2', '3', '4', '5', '6', '7', '8', '9', 'all'], required=True,
-                        help="Estimation strategy (1=Local Linear, 2=Pooled Linear, 3=Logit, "
-                             "4=Logit+Time, 5=Single-Index, 6=Single-Index+Time, 7=Joint SI sieve, "
-                             "8=Joint SI sieve+Time, 9=Joint SI kernel [optional]) or 'all' (=1-8).")
+    parser.add_argument("--estimation", choices=['1', '2', '3', '4', '5', '6', 'all'], required=True,
+                        help="Estimation strategy (1=Local Linear, 2=Pooled Linear, "
+                             "3=Single-Index, 4=Single-Index+Time, 5=Joint SI sieve, "
+                             "6=Joint SI sieve+Time) or 'all' (=1-6).")
     parser.add_argument("--spec", default="all", help="Specification ID or 'all'")
     args = parser.parse_args()
 
-    # 'all' = the default lineup E1-E8; E9 (optional kernel) must be requested explicitly.
-    # E3/E4 are DROPPED (user decision 2026-08-06): the pooled-logit pair is not used in the
-    # paper, and leaving them in 'all' silently rebuilt demand_3/demand_4 parquets from the NEW
-    # panel but their STALE 07-28 phi — a mixed-vintage artifact that looks current by mtime and
-    # then fed the logit. Override with SLEEP_ACTIVE_ESTS="1 2 3 4 5 6 7 8" to restore them; an
-    # explicit --estimation 3 still works, so nothing is unreachable.
-    _active = os.environ.get("SLEEP_ACTIVE_ESTS", "1 2 5 6 7 8").split()
+    # 'all' = the whole lineup E1-E6. SLEEP_ACTIVE_ESTS narrows it; an explicit --estimation N
+    # always works, so nothing is unreachable.
+    #
+    # Demand prep discovers routines BY FILE PRESENCE downstream, so an artifact left behind by
+    # a routine that is no longer in the lineup re-enters a run on its own: parquets for a
+    # dropped routine were once rebuilt from the NEW panel while carrying a STALE phi, which
+    # looks current by mtime and then feeds the estimator. Archive the artifacts of any routine
+    # you remove from this list, do not just stop listing it.
+    _active = os.environ.get("SLEEP_ACTIVE_ESTS", "1 2 3 4 5 6").split()
     EST_LIST = [int(x) for x in _active] if args.estimation == 'all' else [int(args.estimation)]
 
     # Each child parses its own ~700 MB market_panel_phis.csv, so running all 8 at once

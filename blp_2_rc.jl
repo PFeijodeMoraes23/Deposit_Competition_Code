@@ -9,14 +9,13 @@ Background
 The BLP RC estimation runs per routine, each consuming its own
 `demand_<id>_*_spec_12.parquet`. The routine list — id AND prefix — is AUTO-DISCOVERED
 from the parquets on disk (`demand_prefix` / `discover_routine_ids`; newest file
-wins per id), so a relabelled/new routine needs NO edit here. The 2026-06-24 scheme:
+wins per id), so a relabelled/new routine needs NO edit here. The lineup:
 
     E1 Local B-type   E2 Pooled Linear
-    E3 Pooled Logistic            E4 Pooled Logistic + Time
-    E5 Pooled Single-Index        E6 Pooled Single-Index + Time
-    E7 Pooled Joint Single-Index  E8 Pooled Joint Single-Index + Time
+    E3 Pooled Single-Index        E4 Pooled Single-Index + Time
+    E5 Pooled Joint Single-Index  E6 Pooled Joint Single-Index + Time
 
-The DEFAULT cluster run targets **E5-E8** (the single-index links + their +Time variants); the
+The DEFAULT cluster run targets **E3-E6** (the single-index links + their +Time variants); the
 rest stay available (ROUTINES env / --all-routines) for robustness. Each routine is
 warm-started from the local logit delta produced beforehand:
 
@@ -43,7 +42,7 @@ Usage
   # one routine (one GPU job — the normal cluster pattern):
   julia --project=. --threads=auto blp_2_rc.jl --estim 6 --hpc --R 2000
 
-  # the default routine set (E4 + E6 + E8) sequentially on a single GPU:
+  # the default routine set (E3 + E4 + E5 + E6) sequentially on a single GPU:
   julia --project=. --threads=auto blp_2_rc.jl --all --hpc --R 2000
 
   # every discovered routine sequentially on a single GPU:
@@ -66,14 +65,13 @@ const DELTA_SUFFIX = ""
 
 # The routine list is AUTO-DISCOVERED at runtime from the demand-prep parquets
 # (demand_<id>_*_spec_<spec>.parquet, excluding legacy *_final_*), so adding a routine
-# (E7, E8, …) needs no edit here — just its parquet on disk. These descriptions are
+# (E5, E6, …) needs no edit here — just its parquet on disk. These descriptions are
 # cosmetic labels only.
-# Routine scheme (2026-06-24 relabel): odd-numbered base links + their +Time variants.
+# Routine scheme: base links + their +Time variants.
 const ROUTINE_DESC = Dict(
     1 => "Local B-type",            2 => "Pooled Linear",
-    3 => "Pooled Logistic",         4 => "Pooled Logistic + Time",
-    5 => "Pooled Single-Index",     6 => "Pooled Single-Index + Time",
-    7 => "Pooled Joint Single-Idx", 8 => "Pooled Joint Single-Idx + Time",
+    3 => "Pooled Single-Index",     4 => "Pooled Single-Index + Time",
+    5 => "Pooled Joint Single-Idx", 6 => "Pooled Joint Single-Idx + Time",
 )
 routine_desc(id::Int) = get(ROUTINE_DESC, id, "E$id")
 
@@ -111,7 +109,7 @@ function discover_routine_ids(input_dir::String; spec::Int = RC_SPEC)
 end
 
 # Default cluster routine set: the single-index links and their +Time variants —
-# E5 (Single-Index), E6 (Single-Index+Time), E7 (Joint Single-Index), E8 (Joint+Time).
+# E3 (Single-Index), E4 (Single-Index+Time), E5 (Joint Single-Index), E6 (Joint+Time).
 # Override with the ROUTINES env in the submit scripts, or --all-routines for all.
 const DEFAULT_ROUTINES = [5, 6, 7, 8]
 
@@ -219,12 +217,12 @@ function run_routine(estim_id::Int; passthrough::Vector{String} = String[])
     ENV["BLP_DELTA_SUFFIX"]  = DELTA_SUFFIX
     ENV["BLP_OUTPUT_SUFFIX"] = ENGINE_SUFFIX[ENGINE]
     # Route input_filename to the demand parquet: the auto-discovered prefix is passed
-    # explicitly so the engine reads e.g. demand_7_sijoint_spec_12.parquet.
+    # explicitly so the engine reads e.g. demand_5_sijoint_spec_12.parquet.
     ENV["BLP_DEMAND_PREFIX"] = prefix
     # θ₂ box, applied UNIFORMLY to every routine so the cross-routine comparison shares one
-    # box (default 5.0; an explicit export of either var still takes precedence). Only E5
+    # box (default 5.0; an explicit export of either var still takes precedence). Only E3
     # actually binds at the old 2.0 — its demographic interaction π(FGC×Age65+) pinned there
-    # (the earlier "σ₇" reading was a positional mislabel; it is a π, not a σ). E6/E7/E8 are
+    # (the earlier "σ₇" reading was a positional mislabel; it is a π, not a σ). E4/E5/E6 are
     # interior (max|θ₂| ≤ 1) so the wider box leaves them unchanged. Both engines read these,
     # so IFT and the numerical cross-check stay on the same box. Watch for any parameter that
     # pins at the NEW bound — that is a weak-identification signal (visible in blp_compare_*).
@@ -238,7 +236,7 @@ function run_routine(estim_id::Int; passthrough::Vector{String} = String[])
 end
 
 """Run a set of routines sequentially on a single GPU. Defaults to the single-index
-routines (E5-E8); pass `ids` (e.g. `1:8`) to run a different set."""
+routines (E3-E6); pass `ids` (e.g. `1:6`) to run a different set."""
 function run_all_routines(; passthrough::Vector{String} = String[],
                           ids::Vector{Int} = DEFAULT_ROUTINES)
     for id in ids
@@ -246,7 +244,7 @@ function run_all_routines(; passthrough::Vector{String} = String[],
     end
 end
 
-# ── Direct CLI entry: `--estim k` (one routine), `--all` (default E5-E8), or
+# ── Direct CLI entry: `--estim k` (one routine), `--all` (default E3-E6), or
 #    `--all-six`/`--all-routines` (every routine discovered on disk). ─────────────
 function _main()
     a = copy(ARGS)
@@ -258,11 +256,11 @@ function _main()
         in_dir, _, _ = get_paths(is_hpc; local_dir = local_dir)
         run_all_routines(; passthrough = rest, ids = discover_routine_ids(in_dir))
     elseif "--all" in a
-        run_all_routines(; passthrough = filter(!=("--all"), a))   # default E5-E8
+        run_all_routines(; passthrough = filter(!=("--all"), a))   # default E3-E6
     else
         ei = findfirst(==("--estim"), a)
         (ei === nothing || ei == length(a)) &&
-            error("Provide `--estim N`, `--all` (default E5-E8), or `--all-routines` " *
+            error("Provide `--estim N`, `--all` (default E3-E6), or `--all-routines` " *
                   "(plus engine flags). Got: $a")
         estim_id = parse(Int, a[ei + 1])
         deleteat!(a, ei:ei + 1)          # run_routine re-adds --estim

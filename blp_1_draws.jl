@@ -9,7 +9,7 @@ Generates:
 
 Outputs are serialised to BLP_DRAWS/ for consumption by blp_loop.jl or
 blp_estimation.jl.  Separating draw generation from estimation ensures:
-  - Cross-strategy comparability (same draws for E1–E5)
+  - Cross-strategy comparability (same draws for E1–E6)
   - Transparent diagnostics (fallback rate, σ statistics)
   - No re-generation on cluster job restarts
 
@@ -337,14 +337,15 @@ function main()
     #
     # Take the UNION of EVERY routine's panel, not one reference. The routines' key sets are NOT
     # identical — each sleep stage filters Dep_Act differently — so they differ by up to ~25
-    # market-quarters (measured 2026-07-13: E6 has 25 keys absent from E1, E7 has 4, E2 has 7).
+    # market-quarters (measured 2026-07-13; the worst offender carried 25 keys absent from the
+    # local-linear routine's panel, others 4 and 7).
     # Keying off a single panel left the other routines' extra markets with NO draw row, and at
     # estimation time those silently fell back to the pad row (mean demographics) rather than
     # erroring. The union (23,126 keys) covers every routine.
     #
-    # (This also retires a stale prefix map: it claimed 3 => demand_3_logistic, 5 => demand_5_probit,
-    #  filenames that no longer exist after the E1-E8 relabel. It only ever worked because --estim
-    #  defaults to 1 — and demand_1 does NOT cover the routines actually estimated.)
+    # The routine panels are found by GLOB, never by a static id -> prefix map: such a map goes
+    # stale the moment a routine is relabelled, and it fails silently because --estim defaults
+    # to 1, so demand_1 is read and the routines actually estimated are never covered.
     rx = Regex("^demand_\\d+(_[A-Za-z0-9_]+)?_spec_$(spec)\\.parquet\$")
     files = sort(filter(f -> occursin(rx, f), readdir(input_dir)))
     isempty(files) && error("No demand_*_spec_$(spec).parquet in $input_dir — the draws need at " *

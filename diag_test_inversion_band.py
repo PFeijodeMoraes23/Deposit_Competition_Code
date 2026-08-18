@@ -63,12 +63,12 @@ DEGREE = 3
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("--est", type=int, default=5, choices=(5, 6))
+    ap.add_argument("--est", type=int, default=3, choices=(3, 4))
     ap.add_argument("--loss", default="robust", choices=("robust", "ls"))
     ap.add_argument("--nsamp", type=int, default=200)
     ap.add_argument("--seed", type=int, default=20240624)
     a = ap.parse_args()
-    tb = (a.est == 6)
+    tb = (a.est == 4)
     root = _paths_mod.demand_prep_root()
     # Artifacts live with the DATA, beside the bands they cross-check -- never in the
     # code repo. demand_prep_root() honours SLEEP_OUT_ROOT, so they follow the vintage.

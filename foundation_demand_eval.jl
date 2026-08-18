@@ -32,7 +32,7 @@ Design notes
     (model s^Act,B); for D-firms `buf.s_D` is the unconditional national share
     (model s^Act,D). See eqs (13-B)/(13-D) and (16-B)/(16-D) in the proposal.
   * MEMORY: peak RAM is dominated by `buf.mu` (N×R) and the π-products
-    (n_pi × N×R). For E6 "extended" (n_pi=6) at R=2000 this is tens of GB → cluster.
+    (n_pi × N×R). For E4 "extended" (n_pi=6) at R=2000 this is tens of GB → cluster.
     At R≈200–500 it is a few GB → laptop-feasible, but shares are then a
     Monte-Carlo approximation of the R=2000 estimates (use only for development /
     magnitudes, NOT for the exact-reproduction validation gate).
@@ -194,11 +194,11 @@ Find the demand parquet for routine `estim`, spec `spec_id`, by scanning
 
 This mirrors the BLP side's auto-discovery (the note: "the routine list — id AND
 prefix — is AUTO-DISCOVERED … newest mtime per id wins so leftover old-scheme files
-can't shadow rebuilds"). We do NOT use the static `DEMAND_PREFIXES` dict — its E4+
-entries are stale after the 2026-06-24 relabel to the 8-routine scheme:
-  E1 LocalB · E2 PooledLinear · E3 Logistic · E4 Logistic+Time ·
-  E5 Single-Index · E6 Single-Index+Time (headline) · E7 Joint · E8 Joint+Time.
-The cluster default set is {5, 6, 7, 8} (single-index links + their +Time variants).
+can't shadow rebuilds"). Discovery is by GLOB, never the static `DEMAND_PREFIXES`
+dict, whose entries go stale the moment a routine is relabelled. The lineup:
+  E1 LocalB · E2 PooledLinear ·
+  E3 Single-Index (headline) · E4 Single-Index+Time · E5 Joint · E6 Joint+Time.
+The cluster default set is {3, 4, 5, 6} (the link routines).
 """
 function discover_demand_parquet(input_dir::String, estim::Int, spec_id::Int)::String
     pat = Regex("^demand_$(estim)_.*spec_$(spec_id)\\.parquet\$")

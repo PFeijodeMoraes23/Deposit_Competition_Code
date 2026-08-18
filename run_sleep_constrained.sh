@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ===========================================================================================
-# run_sleep_constrained.sh — re-estimate E1/E2/E5-E8 with the shape-constrained link
+# run_sleep_constrained.sh — re-estimate E1/E2/E3-E6 with the shape-constrained link
 # ===========================================================================================
 # WHAT THIS IS FOR.  phi is a probability, so the single-index link G must be a CDF: monotone
 # and valued in [0,1] (V_Main.tex eq.(6)/:296, :408, :414, and :507 which divides by 1-phi).
@@ -15,7 +15,7 @@
 # which deliberately `unset SLEEP_OUT_ROOT` to target production.
 #
 # USAGE
-#   bash run_sleep_constrained.sh                     # E1,E2,E5-E8 into C:/egan_constrained
+#   bash run_sleep_constrained.sh                     # E1,E2,E3-E6 into C:/egan_constrained
 #   OUT=C:/egan_other bash run_sleep_constrained.sh   # different sandbox root
 #   bash run_sleep_constrained.sh --from e5           # force the start point
 #   bash run_sleep_constrained.sh --dry-run           # print the plan, run nothing
@@ -35,8 +35,8 @@
 #   * completed estimators are skipped wholesale by the marker check below.
 # `--fresh` turns all of that off. Use it for a clean reproduction run.
 #
-# E3/E4 are excluded, as in run_sleep_recompute.sh: they are not reported, and E5/E6 derive
-# their direction from an internally-fitted logit rather than from a stored est3/est4.
+# The single-index routines derive their direction from an INTERNALLY-fitted logit, not from
+# any stored estimator output, so the lineup needs no separate logit routine.
 # ===========================================================================================
 set -uo pipefail
 cd "$(dirname "$0")" || exit 1
@@ -48,7 +48,7 @@ export SLEEP_WCB_MODE="${SLEEP_WCB_MODE:-wcu-t}"   # bootstrap-t reference, not 
 # KEEP THE LS LOSS. estimation_sleep_common defaults SLEEP_DROP_LS=1, which computes the robust
 # (Cauchy-direction) fit only. Every comparison this run exists to support is robust-vs-LS: the
 # stored vintage carries second_stage_ls for each spec, the loss ordering is measured across the
-# 12 instrumented cells, and the briefing's headline cell is E5/LS. A robust-only vintage cannot
+# 12 instrumented cells, and the briefing's headline cell is E3/LS. A robust-only vintage cannot
 # be compared with it. Computing both in ONE pass also shares the frame build and first stage,
 # which a robust pass followed by an SLEEP_LS_ONLY pass would pay for twice.
 export SLEEP_DROP_LS="${SLEEP_DROP_LS:-0}"
@@ -77,8 +77,8 @@ export SLEEP_RESUME=$([ "$FRESH" = "1" ] && echo 0 || echo 1)
 step_done() {
   case "$1" in
     e1|e2|e5|e6|e7|e8) [ -s "${SLEEP_OUT_ROOT}/est${1#e}/market_panel_phis.csv" ] ;;
-    band5) [ -s "${SLEEP_OUT_ROOT}/Rout/ts_link_band_est5_uncond_ls.pkl" ] ;;
-    band6) [ -s "${SLEEP_OUT_ROOT}/Rout/ts_link_band_est6_uncond_ls.pkl" ] ;;
+    band3) [ -s "${SLEEP_OUT_ROOT}/Rout/ts_link_band_est3_uncond_ls.pkl" ] ;;
+    band4) [ -s "${SLEEP_OUT_ROOT}/Rout/ts_link_band_est4_uncond_ls.pkl" ] ;;
     *) return 1 ;;
   esac
 }
@@ -152,17 +152,18 @@ echo "[constrained] from      : ${FROM}   dry-run: ${DRY}   bands: ${BANDS}   fr
 # re-run anyway so the whole vintage is same-frame and same-inference (WCU-t) for comparison.
 run_step e1 "E1 local B-type"        estimation_1_sleep.py
 run_step e2 "E2 pooled B+D linear"   estimation_2_sleep.py
-run_step e5 "E5 single-index"        estimation_sleep_common.py --est 5
-run_step e6 "E6 single-index + time" estimation_sleep_common.py --est 6
+run_step e3 "E3 single-index"        estimation_sleep_common.py --est 3
+run_step e4 "E4 single-index + time" estimation_sleep_common.py --est 4
 
-# E7/E8: SPEC 12 ONLY by default, matching the comparator vintage in C:\egan_trimmed (its est7
-# and est8 pickles hold exactly one spec, IV_HausmanFull x Tech, while est5/est6 hold 8). The
+# E5/E6 (joint sieve): SPEC 12 ONLY by default, matching the comparator vintage in
+# C:\egan_trimmed (its joint-sieve pickles hold exactly one spec, IV_HausmanFull x Tech,
+# while the single-index pair holds 8). The
 # joint sieve runs a Julia theta search per spec at roughly 50 min, so a full 8-spec grid is
 # ~7 h per estimator and would produce cells the comparator has nothing to compare against.
 # E78_FULL=1 runs the whole grid instead.
-_E78_ARGS=$([ "${E78_FULL:-0}" = "1" ] && echo "" || echo "--spec12")
-run_step e7 "E7 joint sieve${_E78_ARGS:+ (spec 12)}"        estimation_sleep_common.py --est 7 ${_E78_ARGS}
-run_step e8 "E8 joint sieve + time${_E78_ARGS:+ (spec 12)}" estimation_sleep_common.py --est 8 ${_E78_ARGS}
+_E56_ARGS=$([ "${E78_FULL:-0}" = "1" ] && echo "" || echo "--spec12")
+run_step e5 "E5 joint sieve${_E56_ARGS:+ (spec 12)}"        estimation_sleep_common.py --est 5 ${_E56_ARGS}
+run_step e6 "E6 joint sieve + time${_E56_ARGS:+ (spec 12)}" estimation_sleep_common.py --est 6 ${_E56_ARGS}
 
 # --- unconditional bands (opt-in: the expensive part) ---------------------------------------
 # Each cell re-profiles the constrained link once per draw, and additionally emits the

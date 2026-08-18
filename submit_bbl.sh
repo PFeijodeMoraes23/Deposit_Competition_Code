@@ -16,7 +16,7 @@
 #   BBL_STEP     fwd_sim | solve                                  (BBL Step-2 chain)
 #                | polfunc                                        (Step-1; usually run LOCALLY, off by default)
 #                | warmup                                         (precompile depot + JIT-load the stack)
-#   BBL_ROUTINE  5 | 6 (E6 headline) | 7 | 8                      → --estim
+#   BBL_ROUTINE  3 (E3 headline) | 4 | 5 | 6                      → --estim
 #   BBL_STAGE    extended (headline) | full | logit | …           → --stage
 #   R, SEED      draws (default 2000 / 42) — must match the downloaded BLP_DRAWS
 #   BBL_EXTRA    extra CLI flags passed through (e.g. "--shocks 50 --beta 0.9 --policy-csv <csv>";
@@ -109,7 +109,7 @@ setup_python () {
     PYBIN="${CF_PYTHON:-python3}"
     command -v "${PYBIN}" >/dev/null 2>&1 || {
         echo "ERROR: Python '${PYBIN}' not found on the node. Set PY_MODULE / CONDA_ENV / CF_PYTHON" >&2
-        echo "  e.g.  PY_MODULE=miniconda CONDA_ENV=costsolve ROUTINES=7 bash submit_bbl_all.sh" >&2
+        echo "  e.g.  PY_MODULE=miniconda CONDA_ENV=costsolve ROUTINES=3 bash submit_bbl_all.sh" >&2
         exit 127; }
     # Probe the actual imports, not just the binary — bare node python3 exists but has no sci stack,
     # and a Traceback 14h into the pipeline (after the fwd_sim array drains) is the failure mode this

@@ -50,7 +50,7 @@ DEGREE, N_INTERIOR = 3, 5
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("--est", type=int, default=7, choices=(7, 8))
+    ap.add_argument("--est", type=int, default=5, choices=(5, 6))
     ap.add_argument("--B", type=int, default=400)
     ap.add_argument("--loss", default="robust", choices=("robust", "ls"))
     ap.add_argument("--seed", type=int, default=0)
@@ -58,7 +58,7 @@ def main():
                     help="certification-1 tolerance on the link grid; raise ONLY with the "
                          "diagnostic evidence described in the failure message")
     a = ap.parse_args()
-    tb = (a.est == 8)
+    tb = (a.est == 6)
     loss = "robust" if a.loss == "robust" else "ls"
     root = _paths_mod.demand_prep_root()
     # Artifacts live with the DATA, beside the bands they cross-check -- never in the

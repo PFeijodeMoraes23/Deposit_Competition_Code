@@ -1669,7 +1669,7 @@ function run_blp_estimation_gpu(estim::Int, spec_id::Int, args,
     lo[1:n_sigma] .= 0.0
     # σ upper bound (BLP_SIGMA_UB) and π box half-width (BLP_PI_BOUND), both default 2.0,
     # shared with the IFT engine so the cross-check optimises over the SAME box (the driver
-    # widens the π bound to 5.0 for E5). This also overrides the wide ±5 default on the σ/π
+    # widens the π bound to 5.0 for E3). This also overrides the wide ±5 default on the σ/π
     # slices, unifying the two engines' boxes.
     sigma_ub = parse(Float64, get(ENV, "BLP_SIGMA_UB", "2.0"))
     hi[1:n_sigma] .= sigma_ub
@@ -2440,14 +2440,14 @@ function run_blp_estimation_ift_gpu(estim::Int, spec_id::Int, args,
     # σ parameters are standard deviations → bound ≥ 0. This removes the ±σ sign
     # degeneracy (σ and −σ give identical shares because ν is mean-zero symmetric),
     # which otherwise makes L-BFGS-B oscillate between +σ and −σ and never converge
-    # (Q flat, all 500 outer iters wasted — observed on E6 sigma). σ are the first
+    # (Q flat, all 500 outer iters wasted — observed on E4 sigma). σ are the first
     # length(sigma_indices) entries of θ₂; the π interactions keep the [-2,2] box.
     n_sigma = length(sigma_indices)
     lo[1:n_sigma] .= 0.0
     # σ upper bound (BLP_SIGMA_UB, default 2.0) and π box half-width (BLP_PI_BOUND, default
-    # 2.0) are configurable. In E5 the demographic interaction π(FGC×Age65+) pins at the π
+    # 2.0) are configurable. In E3 the demographic interaction π(FGC×Age65+) pins at the π
     # bound 2.0 (the earlier "σ₇" reading was a positional mislabel — it is a π), so the
-    # driver widens BLP_PI_BOUND to 5.0 for E5. σ are the first n_sigma θ₂ entries; the π
+    # driver widens BLP_PI_BOUND to 5.0 for E3. σ are the first n_sigma θ₂ entries; the π
     # interactions are the rest. Keep IFT and the numerical cross-check on the SAME box.
     sigma_ub = parse(Float64, get(ENV, "BLP_SIGMA_UB", "2.0"))
     hi[1:n_sigma] .= sigma_ub

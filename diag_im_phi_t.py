@@ -78,13 +78,13 @@ def fit_cell(df, s_cols, loss, tb):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("--est", type=int, default=5, choices=(5, 6))
+    ap.add_argument("--est", type=int, default=3, choices=(3, 4))
     ap.add_argument("--loss", default="robust", choices=("robust", "ls"))
     ap.add_argument("--qs", default="6,8,12", help="group counts; the primary is --q")
     ap.add_argument("--q", type=int, default=8, help="primary group count (reported band)")
     a = ap.parse_args()
     qs = sorted({int(x) for x in a.qs.split(",")} | {a.q})
-    tb = (a.est == 6)
+    tb = (a.est == 4)
     root = _paths_mod.demand_prep_root()
     # Artifacts live with the DATA, beside the bands they cross-check -- never in the
     # code repo. demand_prep_root() honours SLEEP_OUT_ROOT, so they follow the vintage.

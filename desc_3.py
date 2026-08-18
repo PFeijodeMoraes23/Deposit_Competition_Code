@@ -7,8 +7,8 @@ used to justify the wild cluster bootstrap (WCB) over cluster-robust / Delta-met
 standard errors.
 
 Everything is computed on the EXACT specification-12 second-stage estimation sample
-we report (the pooled joint single-index estimator, E7), read from
-    ESTIMATION_OUTPUT/DEMAND_PREP/est7/market_panel_phis.csv,
+we report (the pooled single-index estimator, E3), read from
+    ESTIMATION_OUTPUT/DEMAND_PREP/est3/market_panel_phis.csv,
 so the table's Observations / Clusters match the estimation tables (441,331 / 506).
 
 Metrics (Panel A): nominal clusters G vs effective G* = G/(1+CV^2)
@@ -27,8 +27,8 @@ Panels A and B are separate, self-contained tables (no cross-\\ref) so Panel B c
 \\input into V_Main.tex on its own.
 
 Usage:
-    python desc_3.py                 # est7, top-5
-    python desc_3.py --est 7 --top-n 10
+    python desc_3.py                 # est3, top-5
+    python desc_3.py --est 3 --top-n 10
 
 NOTE: reads estimation output, so it runs AFTER the sleep estimation (unlike
 desc_1/desc_2, which read the raw market panel).
@@ -227,7 +227,7 @@ def render_panel_b(st):
 
 def main():
     ap = argparse.ArgumentParser(description="Cluster-imbalance / deposit-concentration descriptives.")
-    ap.add_argument("--est", type=int, default=7, help="estimator whose second-stage sample to use (default 7 = joint sieve).")
+    ap.add_argument("--est", type=int, default=3, help="estimator whose second-stage sample to use (default 3 = single index, the reported routine).")
     ap.add_argument("--top-n", type=int, default=5, help="conglomerates listed in Panel B (default 5).")
     args = ap.parse_args()
 
@@ -254,7 +254,7 @@ def main():
     csv = pd.DataFrame(st["top_n"])
     csv.to_csv(OUTPUT_DIR / "cluster_imbalance.csv", index=False, encoding="utf-8")
     csv.to_csv(DRAFTS_DIR / "cluster_imbalance.csv", index=False, encoding="utf-8")
-    # relocated cluster diagnostics (E7 sample)
+    # relocated cluster diagnostics (E3 sample)
     diag = {"est": args.est, "sample": "spec12_second_stage",
             "G_nominal": st["G_nominal"], "G_star": st["G_star"], "coefficient_variation": st["cv"],
             "mean_obs_per_cluster": st["mean_size"], "median_obs_per_cluster": st["median_size"],

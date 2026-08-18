@@ -19,10 +19,10 @@
 #      (COPY, not move — the CFs consume the JSONs in place).
 #
 # Usage:
-#     bash submit_bbl_all.sh                       # E6 headline
-#     ROUTINES="5 6 7 8" bash submit_bbl_all.sh    # headline + robustness band, one shot
+#     bash submit_bbl_all.sh                       # full lineup (E3 headline)
+#     ROUTINES="3 4" bash submit_bbl_all.sh        # headline pair only, one shot
 #   Tunables (env):
-#     ROUTINES="6"          routines to estimate costs for (space list; "5 6 7 8" = headline+band)
+#     ROUTINES="3 4"        routines to estimate costs for (space list; "3 4 5 6" = link routines)
 #     CF_STAGE=extended  R=2000  SEED=42
 #     SHOCKS=50  N_SHARDS=100  PERTURB_SCALE=2.0  DEV_SCHEME=grid  BETA=0.9  HORIZON=50
 #     SHARD_TIME=08:00:00   SOLVE_TIME=01:00:00
@@ -51,7 +51,7 @@
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ROUTINES="${ROUTINES:-${BBL_ROUTINE:-1 2 5 6 7 8}}"   # active lineup (E7/E8 headline; E3/E4 dropped 2026-08-06)
+ROUTINES="${ROUTINES:-${BBL_ROUTINE:-1 2 3 4 5 6}}"   # active lineup (E3 headline single-index)
 CF_STAGE="${CF_STAGE:-extended}"
 R="${R:-2000}"; SEED="${SEED:-42}"
 SHOCKS="${SHOCKS:-50}"; N_SHARDS="${N_SHARDS:-100}"

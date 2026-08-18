@@ -148,21 +148,20 @@ const _log_buf  = String[]
 const _log_lock = ReentrantLock()
 
 # Static fallback map of demand-prep prefixes, used only when the driver hasn't
-# auto-discovered + passed BLP_DEMAND_PREFIX. E1/E2 use the bare demand_{k}; E3 the
-# logistic-pooled prep; E4+ the link-based variants written by
-# estimation_demand_link_common.py.
+# auto-discovered + passed BLP_DEMAND_PREFIX. E1/E2 use the bare demand_{k}; E3+ the
+# link-based variants written by estimation_demand_link_common.py, whose tags come from
+# its DEMAND_CFG — keep the two in step.
 const DEMAND_PREFIXES = Dict(
     1 => "demand_1",
     2 => "demand_2",
-    3 => "demand_3_logistic",
-    4 => "demand_4_constrained",
-    5 => "demand_5_probit",
-    6 => "demand_6_index",
-    7 => "demand_7_sijoint",
+    3 => "demand_3_index",
+    4 => "demand_4_index_time",
+    5 => "demand_5_sijoint",
+    6 => "demand_6_sijoint_time",
 )
 
 function input_filename(estim::Int, spec_id::Int)::String
-    # Prefer the prefix auto-discovered + passed by blp_2_rc.jl (handles E7/E8/… with no
+    # Prefer the prefix auto-discovered + passed by blp_2_rc.jl (handles new routines with no
     # static-map edit); fall back to the static map, then the bare demand_{k}.
     pfx = get(ENV, "BLP_DEMAND_PREFIX", "")
     prefix = isempty(pfx) ? get(DEMAND_PREFIXES, estim, "demand_$(estim)") : pfx
@@ -256,14 +255,14 @@ function build_theta2_structure(stage::String)
         # currently IDENTICAL to rc4 — a redundant rung that reconverges to rc4 in seconds. Kept as a
         # placeholder until the ladder/table labels are renumbered (deferred). No longer the slow
         # stage: without the on-bound σ_log_assets to grind, `full` no longer walks a flat objective.
-        sigma_idx = [1]   # σ_spread only — σ_log_assets dropped (2026-07-15: at the σ≥0 bound in E5–E8)
+        sigma_idx = [1]   # σ_spread only — σ_log_assets dropped (2026-07-15: at the σ≥0 bound in every link routine)
         pi_inter  = [(1, findfirst(==("gdp_per_capita"),     D_COLS)),
                      (1, findfirst(==("fraction_65plus"),    D_COLS)),
                      (1, findfirst(==("connections_per100"), D_COLS))]
         return sigma_idx, pi_inter, length(sigma_idx) + length(pi_inter)
     elseif stage == "ext1"
         # RC6: full + π(log_assets × gdp_per_capita)
-        sigma_idx = [1]   # σ_spread only — σ_log_assets dropped (2026-07-15: at the σ≥0 bound in E5–E8)
+        sigma_idx = [1]   # σ_spread only — σ_log_assets dropped (2026-07-15: at the σ≥0 bound in every link routine)
         pi_inter  = [
             (1,                                                  findfirst(==("gdp_per_capita"),     D_COLS)),
             (1,                                                  findfirst(==("fraction_65plus"),    D_COLS)),
@@ -273,7 +272,7 @@ function build_theta2_structure(stage::String)
         return sigma_idx, pi_inter, length(sigma_idx) + length(pi_inter)
     elseif stage == "ext2"
         # RC7: ext1 + π(fgc_covered × fraction_65plus)
-        sigma_idx = [1]   # σ_spread only — σ_log_assets dropped (2026-07-15: at the σ≥0 bound in E5–E8)
+        sigma_idx = [1]   # σ_spread only — σ_log_assets dropped (2026-07-15: at the σ≥0 bound in every link routine)
         pi_inter  = [
             (1,                                                  findfirst(==("gdp_per_capita"),     D_COLS)),
             (1,                                                  findfirst(==("fraction_65plus"),    D_COLS)),
@@ -284,7 +283,7 @@ function build_theta2_structure(stage::String)
         return sigma_idx, pi_inter, length(sigma_idx) + length(pi_inter)
     elseif stage == "extended"
         # RC8: ext2 + π(fgc_covered × cadunico_families_per1000)
-        sigma_idx = [1]   # σ_spread only — σ_log_assets dropped (2026-07-15: at the σ≥0 bound in E5–E8)
+        sigma_idx = [1]   # σ_spread only — σ_log_assets dropped (2026-07-15: at the σ≥0 bound in every link routine)
         pi_inter  = [
             (1,                                                  findfirst(==("gdp_per_capita"),              D_COLS)),
             (1,                                                  findfirst(==("fraction_65plus"),             D_COLS)),
@@ -1333,7 +1332,7 @@ function run_blp_estimation(estim::Int, spec_id::Int, args,
     in_dir, _, out_dir = get_paths(args["hpc"])
     # Warm-start chain. NOTE `ext1` now warm-starts from `rc4`, NOT `full`: since σ(ln assets) was
     # dropped from θ₂, `full` has the SAME θ₂ structure as `rc4` and reproduces it exactly (verified
-    # in job 18689035 — identical Q, α, SE and every θ₂ across all of E5-E8), so it is a redundant
+    # in job 18689035 — identical Q, α, SE and every θ₂ across all link routines), so it is a redundant
     # rung and is no longer part of the default sequence. Its entry is kept so `--stage full` still
     # works if requested explicitly.
     prev_stages = Dict("rc2" => "sigma", "rc3" => "rc2", "rc4" => "rc3",

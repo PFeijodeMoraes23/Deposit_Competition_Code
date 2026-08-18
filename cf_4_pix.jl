@@ -24,7 +24,7 @@ the sleep estimation). Keyed by routine/spec it writes:
   • `upsilon_pix_E{e}_spec_{s}.json`    — Υ_pix (the Pix AME; reporting + the identity-link
     fallback), read here by `pix_coefficient`;
   • `phi_nopix_E{e}_spec_{s}.parquet`   — the EXACT per-row no-Pix φ for the NONLINEAR links
-    (E5/E6 'index', E7/E8 'sieve', E3/E4 logit), computed via `phi_from_native` with pix=0,
+    (E3/E4 'index', E5/E6 'sieve'), computed via `phi_from_native` with pix=0,
     read here by `load_phi_nopix` and joined 1:1 to `ctx.df` on (entity_id, time_id).
 CF4 prefers the exact parquet and falls back to the scalar subtraction only when it is absent
 (identity-link specs E1/E2, where the subtraction is exact). A missing JSON errors loudly with

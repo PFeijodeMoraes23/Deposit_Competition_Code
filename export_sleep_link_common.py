@@ -88,24 +88,24 @@ def disp(v, lhs=None):
 
 
 # Appendix caption = stage + a reference to the estimation strategy enumerated in V_Main
-# (Section ref{sec:empirical:sleep}); no ad-hoc strategy names. E3/E4 (logit) are not in the
-# appendix and have no enumerate label, so they fall back to a plain (Est. N) tag.
-EST_LABEL = {5: "single_idx", 6: "single_idx_time", 7: "joint_sieve", 8: "joint_sieve_time"}
+# (Section ref{sec:empirical:sleep}); no ad-hoc strategy names. An estimator with no
+# enumerate label falls back to a plain (Est. N) tag.
+EST_LABEL = {3: "single_idx", 4: "single_idx_time", 5: "joint_sieve", 6: "joint_sieve_time"}
 
 # FIRST-STAGE DEDUPLICATION.  The first stage is the deposit-spread (price) equation; it does not
 # depend on the second-stage link, so it is identical across estimators that share a sample AND a
 # control set.  Verified numerically on the saved pickles (spec 'IV_CostShifters x Macro'):
-#     est2 == est5 == est7   (10 coefficients, no Time block)
-#     est6 == est8           (11 coefficients: the Time block adds one first-stage control)
+#     est2 == est3 == est5   (10 coefficients, no Time block)
+#     est4 == est6           (11 coefficients: the Time block adds one first-stage control)
 #     est1                    stands alone (local B-type sample, nobs 486,233 vs 487,046)
 # So the appendix needs THREE first-stage tables, not six.  Ownership:
 #   * no-Time pooled  -> export_2_sleep_results.py writes SHARED_FS_POOLED (E2 is the only
-#     estimator carrying all three panels; E5-E8 drop the Base block).
-#   * Time-block pooled -> E6 writes SHARED_FS_TIME here (Macro/Tech, the only panels that exist).
+#     estimator carrying all three panels; E3-E6 drop the Base block).
+#   * Time-block pooled -> E4 writes SHARED_FS_TIME here (Macro/Tech, the only panels that exist).
 # Non-owners emit no first-stage file and point at the shared table by \ref (not \input, so a
 # standalone preview still compiles when the owner's file has not been written yet).
-FS_TIME_OWNER = 6
-TIME_ESTS = {4, 6, 8}
+FS_TIME_OWNER = 4
+TIME_ESTS = {4, 6}
 SHARED_FS_TIME = "sleep_first_stage_pooled_time.tex"
 SHARED_FS_POOLED = "sleep_first_stage_pooled.tex"   # written by export_2_sleep_results.py
 
@@ -117,9 +117,9 @@ def _strategy_caption(stage, est_num):
 
 
 def _panels_for(est_num):
-    # E5-E8 (single-index/joint sieve) drop the Base panel: their index excludes the
-    # constant, so a constant-only Base has no index. E3/E4 (logit) keep all three.
-    return ['Macro', 'Tech'] if est_num >= 5 else ['Base', 'Macro', 'Tech']
+    # E3-E6 (single-index/joint sieve) drop the Base panel: their index excludes the
+    # constant, so a constant-only Base has no index.
+    return ['Macro', 'Tech'] if est_num >= 3 else ['Base', 'Macro', 'Tech']
 
 
 def build_first_stage_table(results_dict, est_num):
@@ -134,9 +134,9 @@ def build_first_stage_table(results_dict, est_num):
     ivs = [('IV_CostShifters', 'IV Cost'), ('IV_Wholesale', 'IV Wholesale'), ('IV_HausmanFull', 'Hausman')]
     multispan = 4
     # Shared first stage (see the FS_TIME_OWNER block at the top of this module): only the
-    # Time-block owner (E6) writes a table here, and it serves E6 and E8 alike.
+    # Time-block owner (E4) writes a table here, and it serves E4 and E6 alike.
     caption = (r"First Stage --- Deposit Spread on Instruments "
-               r"(Time-block specifications; common to Estimation Strategies~6 and~8)")
+               r"(Time-block specifications; common to Estimation Strategies~4 and~6)")
     label = "tab:sleep_first_stage_pooled_time"
     notes = (
         r"\footnotesize \textit{Notes:} Standard errors (wild cluster bootstrap at the "
@@ -284,7 +284,7 @@ def build_second_stage_table(results_dict, est_num):
                     se, pval, scheme = _sen.select_se(res, var)
                     if _sen.is_national(var):
                         _nat_schemes.add(scheme)
-                    # The display multiplier was MISSING here (fixed 2026-07-30): these E5-E8
+                    # The display multiplier was MISSING here (fixed 2026-07-30): these E3-E6
                     # tables printed raw phi units while export_1/export_2 printed percentage
                     # points, so Pix / GDP per capita / CadUnico were 100x too small and not
                     # comparable with the linear columns next to them. pval and stars are
@@ -350,8 +350,8 @@ def export_link_results(est_num, title):
     (TEX_OUT_DIR / ss_name).write_text(ss_frag + "\n", encoding="utf-8")
     shutil.copy(TEX_OUT_DIR / ss_name, _DRAFTS_DIR / ss_name)
 
-    # First stage: written ONCE by the Time-block owner (E6) and shared with E8; the no-Time
-    # estimators (E3/E5/E7) point at export_2's SHARED_FS_POOLED instead.  See the module header.
+    # First stage: written ONCE by the Time-block owner (E4) and shared with E6; the no-Time
+    # estimators (E3/E5) point at export_2's SHARED_FS_POOLED instead.  See the module header.
     if est_num == FS_TIME_OWNER:
         fs_frag = build_first_stage_table(results_dict, est_num)
         (TEX_OUT_DIR / SHARED_FS_TIME).write_text(fs_frag + "\n", encoding="utf-8")
@@ -399,22 +399,20 @@ def export_link_results(est_num, title):
     print("Done.")
 
 
-# ── Config-driven CLI for E3-E8 tables (E1/E2 + E9 have their own export scripts) ──
+# ── Config-driven CLI for E3-E6 tables (E1/E2 have their own export scripts) ──
 #  Standalone-preview title per estimator; captions/notes are derived from est_num.
 #  Run:  python export_sleep_link_common.py --est N
 EXPORT_CFG = {
-    3: r"E3: Pooled Logit (single-index, logistic link)",
-    4: r"E4: Pooled Logit + Time block",
-    5: r"E5: Pooled Single-Index (nonparametric link)",
-    6: r"E6: Pooled Single-Index + Time block",
-    7: r"E7: Pooled Joint Single-Index (monotone sieve)",
-    8: r"E8: Pooled Joint Single-Index (sieve) + Time block",
+    3: r"E3: Pooled Single-Index (nonparametric link)",
+    4: r"E4: Pooled Single-Index + Time block",
+    5: r"E5: Pooled Joint Single-Index (monotone sieve)",
+    6: r"E6: Pooled Joint Single-Index (sieve) + Time block",
 }
 
 if __name__ == "__main__":
     import argparse
-    p = argparse.ArgumentParser(description="Export E3-E8 sleep tables (config-driven).")
+    p = argparse.ArgumentParser(description="Export E3-E6 sleep tables (config-driven).")
     p.add_argument("--est", type=int, required=True, choices=sorted(EXPORT_CFG),
-                   help="Estimator id 3-8 (E1/E2 + E9 have their own export scripts)")
+                   help="Estimator id 3-6 (E1/E2 have their own export scripts)")
     a = p.parse_args()
     export_link_results(a.est, EXPORT_CFG[a.est])

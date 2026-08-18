@@ -21,17 +21,14 @@ pool via simultaneous IPC pipe traffic for 400K-row DataFrames (WinError 1450).
 
   1. estimation_1_sleep.py              (E1: Local B-type)
   2. estimation_2_sleep.py              (E2: Pooled B+D Linear)
-  3. estimation_sleep_common.py --est 3 (E3: Pooled Logit, AME)
-  4. estimation_sleep_common.py --est 4 (E4: Pooled Logit + Time)
-  5. estimation_sleep_common.py --est 5 (E5: Pooled Single-Index)
-  6. estimation_sleep_common.py --est 6 (E6: Pooled Single-Index + Time)
-  7. estimation_sleep_common.py --est 7 (E7: Pooled Joint Single-Index, sieve)
-  8. estimation_sleep_common.py --est 8 (E8: Pooled Joint Single-Index, sieve + Time)
-     (E9 joint kernel: optional; run estimation_9_sleep.py explicitly)
-  9. export_results.py                  (Export 1st/2nd Stage Summaries, Est 1-8)
- 10. estimation_demand_1_prep.py        (Universal Demand Prep Orchestrator, Est 1-8)
- 11. export_analyze_spec12.py           (Analyze Specification 12 Results)
- 12. desc_3.py                          (Cluster-imbalance / deposit-concentration table)
+  3. estimation_sleep_common.py --est 3 (E3: Pooled Single-Index)
+  4. estimation_sleep_common.py --est 4 (E4: Pooled Single-Index + Time)
+  5. estimation_sleep_common.py --est 5 (E5: Pooled Joint Single-Index, sieve)
+  6. estimation_sleep_common.py --est 6 (E6: Pooled Joint Single-Index, sieve + Time)
+  7. export_results.py                  (Export 1st/2nd Stage Summaries, Est 1-6)
+  8. estimation_demand_1_prep.py        (Universal Demand Prep Orchestrator, Est 1-6)
+  9. export_analyze_spec12.py           (Analyze Specification 12 Results)
+ 10. desc_3.py                          (Cluster-imbalance / deposit-concentration table)
 """
 from utils.venv_guard import ensure_project_venv
 ensure_project_venv(__file__)
@@ -110,17 +107,14 @@ pool via simultaneous IPC pipe traffic for 400K-row DataFrames (WinError 1450).
 
   1. estimation_1_sleep.py              (E1: Local B-type)
   2. estimation_2_sleep.py              (E2: Pooled B+D Linear)
-  3. estimation_sleep_common.py --est 3 (E3: Pooled Logit, AME)
-  4. estimation_sleep_common.py --est 4 (E4: Pooled Logit + Time)
-  5. estimation_sleep_common.py --est 5 (E5: Pooled Single-Index)
-  6. estimation_sleep_common.py --est 6 (E6: Pooled Single-Index + Time)
-  7. estimation_sleep_common.py --est 7 (E7: Pooled Joint Single-Index, sieve)
-  8. estimation_sleep_common.py --est 8 (E8: Pooled Joint Single-Index, sieve + Time)
-     (E9 joint kernel: optional; run estimation_9_sleep.py explicitly)
-  9. export_results.py                  (Export 1st/2nd Stage Summaries, Est 1-8)
- 10. estimation_demand_1_prep.py        (Universal Demand Prep Orchestrator, Est 1-8)
- 11. export_analyze_spec12.py           (Analyze Specification 12 Results)
- 12. desc_3.py                          (Cluster-imbalance / deposit-concentration table)
+  3. estimation_sleep_common.py --est 3 (E3: Pooled Single-Index)
+  4. estimation_sleep_common.py --est 4 (E4: Pooled Single-Index + Time)
+  5. estimation_sleep_common.py --est 5 (E5: Pooled Joint Single-Index, sieve)
+  6. estimation_sleep_common.py --est 6 (E6: Pooled Joint Single-Index, sieve + Time)
+  7. export_results.py                  (Export 1st/2nd Stage Summaries, Est 1-6)
+  8. estimation_demand_1_prep.py        (Universal Demand Prep Orchestrator, Est 1-6)
+  9. export_analyze_spec12.py           (Analyze Specification 12 Results)
+ 10. desc_3.py                          (Cluster-imbalance / deposit-concentration table)
         """,
         formatter_class=argparse.RawDescriptionHelpFormatter
     )
@@ -166,26 +160,22 @@ pool via simultaneous IPC pipe traffic for 400K-row DataFrames (WinError 1450).
         scripts_to_run.extend([
             {"id": 1, "file": "estimation_1_sleep.py", "desc": "E1: Local B-type Estimation"},
             {"id": 2, "file": "estimation_2_sleep.py", "args": spec12_arg, "desc": "E2: Pooled B+D Linear"},
-            # E3-E8 are config-driven via the shared dispatcher estimation_sleep_common.py --est N.
-            {"id": 3, "file": "estimation_sleep_common.py", "args": ["--est", "3"] + spec12_arg, "desc": "E3: Pooled Logit (AME)"},
-            {"id": 4, "file": "estimation_sleep_common.py", "args": ["--est", "4"] + spec12_arg, "desc": "E4: Pooled Logit + Time block"},
-            {"id": 5, "file": "estimation_sleep_common.py", "args": ["--est", "5"] + spec12_arg, "desc": "E5: Pooled Single-Index"},
-            {"id": 6, "file": "estimation_sleep_common.py", "args": ["--est", "6"] + spec12_arg, "desc": "E6: Pooled Single-Index + Time block"},
-            {"id": 7, "file": "estimation_sleep_common.py", "args": ["--est", "7"] + spec12_arg, "desc": "E7: Pooled Joint Single-Index (sieve)"},
-            {"id": 8, "file": "estimation_sleep_common.py", "args": ["--est", "8"] + spec12_arg, "desc": "E8: Pooled Joint Single-Index (sieve) + Time block"},
-            # E9 (joint kernel) is an OPTIONAL robustness routine; run estimation_9_sleep.py
-            # explicitly. It is not part of the default pipeline (kernel backfit is expensive).
+            # E3-E6 are config-driven via the shared dispatcher estimation_sleep_common.py --est N.
+            {"id": 3, "file": "estimation_sleep_common.py", "args": ["--est", "3"] + spec12_arg, "desc": "E3: Pooled Single-Index"},
+            {"id": 4, "file": "estimation_sleep_common.py", "args": ["--est", "4"] + spec12_arg, "desc": "E4: Pooled Single-Index + Time block"},
+            {"id": 5, "file": "estimation_sleep_common.py", "args": ["--est", "5"] + spec12_arg, "desc": "E5: Pooled Joint Single-Index (sieve)"},
+            {"id": 6, "file": "estimation_sleep_common.py", "args": ["--est", "6"] + spec12_arg, "desc": "E6: Pooled Joint Single-Index (sieve) + Time block"},
         ])
 
     if not getattr(args, 'sleep_only', False):
         scripts_to_run.extend([
-            {"id": 9, "file": "export_results.py", "args": ["--estimation", "all"], "desc": "Export 1st/2nd Stage Summaries (Est 1-8)"},
-            {"id": 10, "file": "estimation_demand_1_prep.py", "args": ["--estimation", "all", "--spec", spec_arg], "desc": "Universal Demand Prep Orchestrator & Panel Serialization (Est 1-8)"},
-            {"id": 11, "file": "export_analyze_spec12.py", "args": [], "desc": "Analyze Specification 12 Results"},
-            # desc_3 reads the E7 second-stage sample (est7/market_panel_phis.csv), so it
+            {"id": 7, "file": "export_results.py", "args": ["--estimation", "all"], "desc": "Export 1st/2nd Stage Summaries (Est 1-6)"},
+            {"id": 8, "file": "estimation_demand_1_prep.py", "args": ["--estimation", "all", "--spec", spec_arg], "desc": "Universal Demand Prep Orchestrator & Panel Serialization (Est 1-6)"},
+            {"id": 9, "file": "export_analyze_spec12.py", "args": [], "desc": "Analyze Specification 12 Results"},
+            # desc_3 reads the E5 second-stage sample (est5/market_panel_phis.csv), so it
             # runs after estimation; it is the canonical cluster-imbalance / deposit-
             # concentration exhibit that justifies the wild cluster bootstrap.
-            {"id": 12, "file": "desc_3.py", "args": [], "desc": "Cluster-imbalance & deposit-concentration table (WCB justification)"},
+            {"id": 10, "file": "desc_3.py", "args": [], "desc": "Cluster-imbalance & deposit-concentration table (WCB justification)"},
         ])
 
     import os

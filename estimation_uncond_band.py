@@ -2,7 +2,7 @@
 estimation_uncond_band.py
 ================================================================================
 UNCONDITIONAL (direction + link) national phi_t bands for the single-index
-sleepiness estimators E5/E6 at spec 12, from STORED fits -- no re-estimation.
+sleepiness estimators E3/E4 at spec 12, from STORED fits -- no re-estimation.
 
 Why: the bands stored on the estimator pickles condition on the fitted index
 direction theta-hat (they perturb only the sieve-link coefficients), and the
@@ -20,7 +20,7 @@ and never touches the estimator pickle unless --attach is passed (off by
 default; makes a timestamped .bak first).
 
 Usage:
-    python estimation_uncond_band.py --est 5 --loss both [--B 400] [--attach]
+    python estimation_uncond_band.py --est 3 --loss both [--B 400] [--attach]
 """
 import argparse
 import os
@@ -118,7 +118,7 @@ def link_only_gate(stored_band, out):
         # interpolation interval: the edge at fractional index q(B-1) lives in
         # [srt[i], srt[i+1]], and sub-tolerance draw perturbations can carry it across the
         # adjacent intervals, so the reachable set is bounded by srt[i+2]-srt[i-1]. Measured
-        # 2026-08-11: E5/robust needs 0.33-0.99 of one gap, E6/robust needs up to 2.4 gaps --
+        # E3/robust needs 0.33-0.99 of one gap, E4/robust needs up to 2.4 gaps --
         # every quarter inside the span on both.
         srt = np.sort(rebuilt_draws, axis=0)
         i_lo = int(np.floor(0.025 * (B_n - 1)))
@@ -178,7 +178,7 @@ def run_cell(est, loss_lbl, B, attach):
         return None
     stored_band = getattr(si_res, "phi_t_boot", None)
 
-    df_t, s_cols = _prep_frame(time_block=(est == 6))
+    df_t, s_cols = _prep_frame(time_block=(est == 4))
     out = unconditional_phi_t_band(df_t, s_cols, True, si_res, LOSS_OF[loss_lbl],
                                    degree=3, fe_time_col=FE_TIME_COL, B=B)
 
@@ -224,7 +224,7 @@ def run_cell(est, loss_lbl, B, attach):
 
 def main():
     p = argparse.ArgumentParser(description=__doc__.splitlines()[2])
-    p.add_argument("--est", type=int, required=True, choices=(5, 6))
+    p.add_argument("--est", type=int, required=True, choices=(3, 4))
     p.add_argument("--loss", choices=("robust", "ls", "both"), default="both")
     p.add_argument("--B", type=int, default=400)
     p.add_argument("--attach", action="store_true")

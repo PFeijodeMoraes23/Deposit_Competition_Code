@@ -248,7 +248,18 @@ def build_base_panel(panel_csv, time_block=False):
 
 
 def _apply_link(index_series, link, res_ss):
-    """Map the native linear index to phi in [0,1] under the estimator's link."""
+    """Map the native linear index to phi in [0,1] under the estimator's link.
+
+    THE RESULT'S OWN TAG DECIDES THE BRANCH; `link` is only the fallback for a result that
+    carries none. The caller passes a kind-level default (DEMAND_CFG), and the two disagree
+    exactly where it is most damaging: a shape-constrained single-index fit is configured as
+    "index" but stores link="index_sieve" with si_b holding ~10 I-spline ramp betas. The
+    'index' branch below would read those as monomial coefficients of a degree-9 polynomial,
+    which explodes across the panel and clips to 0 or 1 almost everywhere -- the same
+    mechanism that produced an 8.45pp national phi_t in the derived CSVs, here in the
+    consumer that feeds the demand parquets and the BLP.
+    """
+    link = getattr(res_ss, "link", None) or link
     idx = index_series.astype(float)
     if link == 'logit':
         phi = 1.0 / (1.0 + np.exp(-np.clip(idx, -700, 700)))
@@ -578,19 +589,23 @@ def run(est_num, link, tag, time_block=False, spec="all"):
         print(f"\n[WARNING] No parquets written for Estimation {est_num}")
 
 
-# ── Config-driven CLI for E3-E8 demand prep (link, tag, time_block) ──────────────
-#  (E1/E2 + E9 have their own demand-prep scripts.) Run:  python estimation_demand_link_common.py --est N --spec X
+# ── Config-driven CLI for E3-E6 demand prep (link, tag, time_block) ──────────────
+#  (E1/E2 have their own demand-prep scripts.) Run:  python estimation_demand_link_common.py --est N --spec X
+#
+# The link string here is a DEFAULT only: _apply_link prefers the stored result's own tag, so
+# a constrained single-index fit ("index_sieve") is evaluated on its I-spline grid even though
+# this table says "index". The tag is what lands in the parquet filename
+# (demand_{est}_{tag}_spec_{spec}.parquet) and is what the Julia routine discovery keys on.
 DEMAND_CFG = {
-    3: ("logit", "logit", False),       4: ("logit", "logit_time", True),
-    5: ("index", "index", False),       6: ("index", "index_time", True),
-    7: ("sieve", "sijoint", False),     8: ("sieve", "sijoint_time", True),
+    3: ("index", "index", False),       4: ("index", "index_time", True),
+    5: ("sieve", "sijoint", False),     6: ("sieve", "sijoint_time", True),
 }
 
 if __name__ == "__main__":
     pd.options.mode.chained_assignment = None
-    p = argparse.ArgumentParser(description="Demand prep E3-E8 (config-driven).")
+    p = argparse.ArgumentParser(description="Demand prep E3-E6 (config-driven).")
     p.add_argument("--est", type=int, required=True, choices=sorted(DEMAND_CFG),
-                   help="Estimator id 3-8 (E1/E2 + E9 have their own demand-prep scripts)")
+                   help="Estimator id 3-6 (E1/E2 have their own demand-prep scripts)")
     p.add_argument("--spec", type=str, default="all", help="Specification ID (1-12) or 'all'")
     a = p.parse_args()
     _link, _tag, _tb = DEMAND_CFG[a.est]

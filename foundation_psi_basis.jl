@@ -68,7 +68,7 @@ function load_Z(ctx::CFDemandCtx; sidecar::Union{Nothing,DataFrame}=nothing)
     # Until 2026-08-06 this was `coalesce(v, 0.0)` plus `replace!(Inf => 0.0)`. For a COST RATIO
     # zero is not a neutral filler — it reads as "this bank has zero personnel cost" — so every
     # unobserved row entered γ̂ as an extreme-LOW observation, pulling the slope. It was ~2,094
-    # rows per column on demand_6_spec_12 (0.28%), small but systematically signed, and invisible
+    # rows per column on demand_4_spec_12 (0.28%), small but systematically signed, and invisible
     # because 0.0 is a perfectly plausible-looking value.
     # The within-type median is the natural filler here: it is the same B/D split the winsorising
     # below uses (D balance sheets differ from B by construction), it is robust to the very tail
@@ -108,7 +108,7 @@ function load_Z(ctx::CFDemandCtx; sidecar::Union{Nothing,DataFrame}=nothing)
     # Until 2026-08-06 the BBL read these RAW while polfunc winsorized the same columns at the
     # 1st/99th percentile within firm type — so the policy function and the cost equation were
     # fitted on DIFFERENT versions of the same regressors, and γ̂ was not what the write-up
-    # described. Measured on demand_6_spec_12 (n=755,438) before this fix:
+    # described. Measured on demand_4_spec_12 (n=755,438) before this fix:
     #     personnel_cost_ratio_lag  p99 0.0109  max   1.995   (183x p99)
     #     admin_cost_ratio_lag      p99 0.0110  max   4.567   (415x p99)
     #     indice_basileia_lag       p99 21.21   max  53093.6  (2503x p99)

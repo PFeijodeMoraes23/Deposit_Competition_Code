@@ -526,21 +526,26 @@ def run_sleep_estimator(est_num, kind, time_block=False, spec12_only=False, n_jo
     print(f"Saved results and Phis -> {out}")
 
 
-# ── Config-driven CLI for the default lineup E3-E8 ───────────────────────────────
-# (E1/E2 are separate estimators; E9 joint-kernel is an optional, separate routine:
-#  estimation_9_sleep.py.) Run one estimator with:  python estimation_sleep_common.py --est N
+# ── Config-driven CLI for the default lineup E3-E6 ───────────────────────────────
+# (E1/E2 are separate estimators with their own scripts.) Run one estimator with:
+#   python estimation_sleep_common.py --est N
+#
+# The lineup reports the SINGLE-INDEX pair as the paper's headline (E3, E4) and keeps the
+# JOINT SIEVE pair (E5, E6) as an estimated-but-unexported comparison. The joint sieve is not
+# carried as a headline because its reported band conditions on a link estimated jointly with
+# the direction: re-profiling the link per bootstrap draw widens it 1.71x (no-Time) and 7.46x
+# (+Time), the latter to roughly six times its own fitted phi_t range.
 EST_CONFIG = {
-    3: ("logit", False), 4: ("logit", True),
-    5: ("single_index", False), 6: ("single_index", True),
-    7: ("joint_sieve", False), 8: ("joint_sieve", True),
+    3: ("single_index", False), 4: ("single_index", True),
+    5: ("joint_sieve", False),  6: ("joint_sieve", True),
 }
 
 if __name__ == "__main__":
     import argparse
     pd.options.mode.chained_assignment = None
-    p = argparse.ArgumentParser(description="Pooled sleepiness estimators E3-E8 (config-driven).")
+    p = argparse.ArgumentParser(description="Pooled sleepiness estimators E3-E6 (config-driven).")
     p.add_argument("--est", type=int, required=True, choices=sorted(EST_CONFIG),
-                   help="Estimator id 3-8 (E9 kernel is a separate routine: estimation_9_sleep.py)")
+                   help="Estimator id 3-6 (3/4 = single-index +/- Time, 5/6 = joint sieve +/- Time)")
     p.add_argument("--spec12", action="store_true", help="Only run spec 12 (Tech[+Time] x IV_HausmanFull)")
     args = p.parse_args()
     _kind, _tb = EST_CONFIG[args.est]

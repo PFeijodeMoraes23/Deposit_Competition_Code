@@ -31,7 +31,7 @@
 #                     Scoped by mtime marker, so earlier runs' logs are untouched. 0 → keep them loose.
 #   DO_FINAL_ZIP=1    final afterany job → data/output/{foundation,cf1,cf4}_outputs.zip for download
 #                     (FINAL_ZIP_CFS overrides which CFs; BBL cost params are auto-zipped separately)
-#   ROUTINES="6"  CF_STAGE=extended  R=2000  SEED=42     (shared by both stages)
+#   ROUTINES="4"  CF_STAGE=extended  R=2000  SEED=42     (shared by both stages)
 #   PY_MODULE/CONDA_ENV  (default miniconda/costsolve) — the BBL solve is PYTHON; its env is
 #                     preflighted at submit time by submit_bbl_all.sh (PY_PREFLIGHT=0 skips).
 #                     One-time: module load miniconda && conda create -y -n costsolve python=3.11 \
@@ -49,9 +49,9 @@ set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")"
 
 # ── Shared config (both stages read these) ────────────────────────────────────────
-# Default to the FULL RC lineup E5-E8 (E7/E8 are the joint-sieve headline estimators — a routines=6
-# default silently shipped E6 only). Narrow with e.g. ROUTINES="7 8" when iterating on one estimator.
-export ROUTINES="${ROUTINES:-1 2 5 6 7 8}"
+# Default to the FULL lineup E1-E6 (E3 is the headline single-index estimator; a single-routine
+# default silently ships one estimator only). Narrow with e.g. ROUTINES="3 4" when iterating.
+export ROUTINES="${ROUTINES:-1 2 3 4 5 6}"
 export CF_STAGE="${CF_STAGE:-extended}"
 export R="${R:-2000}"
 export SEED="${SEED:-42}"

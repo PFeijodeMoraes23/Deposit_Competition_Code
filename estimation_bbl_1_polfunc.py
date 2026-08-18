@@ -82,6 +82,7 @@ PANEL_CSV = DATA_DIR / "market_panel.csv"
 # Estimation window [2016, 2024] — defined once in utils/window.py (full rationale + the
 # DEMAND_MIN_YEAR / DEMAND_MAX_YEAR env overrides, which it reads).
 from utils.window import MIN_YEAR as POLFUNC_MIN_YEAR, MAX_YEAR as POLFUNC_MAX_YEAR  # noqa: E402
+from utils.winsorize import winsorize_within_type as _winsorize_within_type  # noqa: E402
 OUTPUT_DIR = DATA_DIR / "ESTIMATION_OUTPUT" / "COST_POLFUNC"
 
 # Endogenous deposit types (spreads set by institutions)
@@ -225,33 +226,16 @@ _CFG_RATE = {
 def winsorize_within_type(df: pd.DataFrame, pct: float = None, verbose: bool = True) -> pd.DataFrame:
     """Clip WINSOR_VARS to their [pct, 1-pct] quantiles separately within B and within D.
 
-    Returns the same frame (modified in place). Prints an audit line per variable that was
-    actually clipped, so the effect on each regressor is visible in the run log."""
-    pct = WINSOR_PCT if pct is None else pct
-    lo_q, hi_q = pct, 1.0 - pct
-    if verbose:
-        print(f"  Winsorizing accounting ratios at {pct:.0%}/{1-pct:.0%} within firm type:")
-    for v in WINSOR_VARS:
-        if v not in df.columns:
-            continue
-        n_clip, before_max = 0, pd.to_numeric(df[v], errors='coerce').max()
-        for is_b in (True, False):
-            mask = df['is_B'] == is_b
-            s = pd.to_numeric(df.loc[mask, v], errors='coerce')
-            if s.notna().sum() < 100:          # too few to form stable percentiles
-                continue
-            lo, hi = s.quantile(lo_q), s.quantile(hi_q)
-            if not (np.isfinite(lo) and np.isfinite(hi)) or lo >= hi:
-                continue
-            clipped = s.clip(lo, hi)
-            # NaN != NaN is True in pandas, so guard with notna() or the count degenerates into
-            # the missing-value count (which is ~37k here and would badly overstate the clipping).
-            n_clip += int(((clipped != s) & s.notna()).sum())
-            df.loc[mask, v] = clipped
-        if verbose and n_clip:
-            after_max = pd.to_numeric(df[v], errors='coerce').max()
-            print(f"    {v:28s} clipped {n_clip:>6,d} obs   max {before_max:>12.4f} -> {after_max:.4f}")
-    return df
+    Delegates to utils.winsorize so the rule has ONE implementation. market_panel.csv already
+    arrives bounded and winsorized from panel_7_instruments, so on a current panel this is a
+    near no-op that clips only what the reshape to k=4,5 rows re-exposes; it is kept because
+    this frame is the one the policy function is actually fitted on, and a stale panel would
+    otherwise reach the regression untreated.
+
+    Returns the same frame (modified in place), with an audit line per clipped variable."""
+    return _winsorize_within_type(df, WINSOR_VARS,
+                                  pct=WINSOR_PCT if pct is None else pct,
+                                  type_key='is_B', verbose=verbose)
 
 
 def load_and_prepare_panel() -> pd.DataFrame:

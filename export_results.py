@@ -1,8 +1,8 @@
 """
 export_results.py
 =================
-Orchestrator: dispatches exports in parallel. E1/E2 (+ optional E9) have their own
-export_{N}_sleep_results.py; E3-E8 route to the shared export_sleep_link_common.py --est N.
+Orchestrator: dispatches exports in parallel. E1/E2 have their own
+export_{N}_sleep_results.py; E3-E6 route to the shared export_sleep_link_common.py --est N.
 
 Each individual script writes:
   - Data/summaries (txt, csv): DEMAND_PREP/rout_*/EXPORTS/
@@ -15,8 +15,7 @@ CLI Usage Examples:
 
 Estimation map:
   1, 2  -> export_1_sleep_results.py / export_2_sleep_results.py  (E1 Local B-type, E2 Pooled Linear)
-  3-8   -> export_sleep_link_common.py --est N                    (E3 Logit ... E8 Joint Sieve + Time)
-  9     -> export_9_sleep_results.py                              (optional joint-kernel robustness)
+  3-6   -> export_sleep_link_common.py --est N                    (E3 Single-Index ... E6 Joint Sieve + Time)
 """
 
 import sys
@@ -32,12 +31,12 @@ try:
 except ImportError:
     pass
 
-_LINK_EXPORT = {3, 4, 5, 6, 7, 8}   # config-driven via export_sleep_link_common.py --est N
+_LINK_EXPORT = {3, 4, 5, 6}   # config-driven via export_sleep_link_common.py --est N
 
 def _run_export(est):
     if est in _LINK_EXPORT:
         cmd = [sys.executable, "export_sleep_link_common.py", "--est", str(est)]
-    else:                            # E1/E2 + optional E9 have their own export scripts
+    else:                            # E1/E2 have their own export scripts
         script_name = f"export_{est}_sleep_results.py"
         if not (Path(__file__).parent / script_name).exists():
             return est, None, f"[!] Warning: {script_name} not found. Skipping."
@@ -46,16 +45,15 @@ def _run_export(est):
     return est, result.returncode, result.stdout + result.stderr
 
 def main():
-    parser = argparse.ArgumentParser(description="Export estimation results for steps 1-9.")
-    parser.add_argument("--estimation", choices=['1', '2', '3', '4', '5', '6', '7', '8', '9', 'all'], required=True,
-                        help="Estimation step 1-8, '9' (optional kernel), or 'all' (=1-8).")
+    parser = argparse.ArgumentParser(description="Export estimation results for steps 1-6.")
+    parser.add_argument("--estimation", choices=['1', '2', '3', '4', '5', '6', 'all'], required=True,
+                        help="Estimation step 1-6, or 'all' (=1-6).")
     args = parser.parse_args()
 
-    # 'all' = the ACTIVE lineup. E3/E4 dropped 2026-08-06 (see estimation_demand_1_prep.py for
-    # the reasoning); E9 (optional kernel) must always be requested explicitly. Same env override,
-    # so the two stay in step: SLEEP_ACTIVE_ESTS="1 2 3 4 5 6 7 8" restores the old behaviour.
+    # 'all' = the ACTIVE lineup, read from the SAME env override as demand prep so the two
+    # cannot drift apart (see estimation_demand_1_prep.py).
     import os as _os
-    _active = _os.environ.get("SLEEP_ACTIVE_ESTS", "1 2 5 6 7 8").split()
+    _active = _os.environ.get("SLEEP_ACTIVE_ESTS", "1 2 3 4 5 6").split()
     est_list = [int(x) for x in _active] if args.estimation == 'all' else [int(args.estimation)]
 
     print(f"[Export] Launching {len(est_list)} export script(s) in parallel...")

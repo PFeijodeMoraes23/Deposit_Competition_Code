@@ -41,8 +41,32 @@ import unicodedata
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
 from utils import paths
+from utils.winsorize import apply_validity_bounds, winsorize_within_type
 _ROOT = Path(__file__).resolve().parents[2]
 PANEL_CSV = paths.PROCESSED / "market_panel.csv"
+
+# ---- Outlier control, applied ONCE here so every consumer inherits the same columns -------
+# These ratios are stock/stock or flow/stock quotients, so a near-zero denominator produces a
+# number that is not a measurement: indice_basileia reaches 16,069.73 where a real Basel ratio
+# sits near 0.16, and personnel_cost_ratio_lag drew 52.7% of its sum of squares from 0.1% of
+# bank-quarters. The rule runs BEFORE compute_loo_instruments because one bank with near-zero
+# risk-weighted assets enters the leave-one-out sum of every rival in its market, which turned
+# 0.4% of corrupt source rows into 6.2% of corrupt loo_basileia rows.
+#
+# Placement matters as much as the rule. panel_7 both reads and rewrites market_panel.csv, so
+# cleaning here is what every downstream stage sees: the sleepiness first stage, the BLP
+# instrument blocks, panel_10b's estban_rival_*_wtd_lag (built later from these same columns),
+# and estimation_bbl_1_polfunc, whose own winsorisation then has nothing left to do. A future
+# routine that reads the panel inherits the treatment without opting in.
+WINSOR_RATIOS = [
+    'indice_basileia', 'admin_cost_ratio', 'tax_cost_ratio',
+    'personnel_cost_ratio', 'lci_lca_ratio', 'wholesale_ratio',
+]
+WINSOR_PCT = 0.01
+# One vote per conglomerate-quarter when forming the percentiles. On this panel a bank present
+# in 500 MCAs would otherwise cast 500 identical votes and the branch networks would set the
+# cutoff: on the B block the two populations put p99 at 0.21 against 3.15.
+WINSOR_UNIT_KEYS = ['CodConglomeradoPrudencial', 'year', 'quarter']
 # IF-Data List files (CNPJ -> conglomerate + SegmentoTb). Unlike the Prudential
 # report (which has NO payment institutions), these DO contain IPs, so they are the
 # reliable source for the per-conglomerate has_ip flag written into market_panel.csv.
@@ -104,6 +128,32 @@ def derive_has_ip_from_list_files(df: pd.DataFrame, list_dir: Path) -> pd.DataFr
         df["has_ip"] = (pd.to_numeric(df.get("has_ip"), errors="coerce")
                         .fillna(0).astype(float) > 0).astype(int)
     return df
+
+def clean_accounting_ratios(df: pd.DataFrame) -> pd.DataFrame:
+    """Bound and winsorize the accounting ratios (see WINSOR_RATIOS at the top of the module).
+
+    Firm type comes from CODMUN_IBGE: a D (national) firm carries the '0' sentinel, a B firm
+    a real municipality. Splitting on it is the point -- B and D have genuinely different
+    balance sheets, so pooled percentiles would clip real cross-type variation rather than
+    the tail.
+    """
+    df = df.copy()
+    cols = [c for base in WINSOR_RATIOS for c in (base, f"{base}_lag") if c in df.columns]
+    if not cols:
+        logging.warning("  [winsorize] none of the accounting ratios are present; skipping")
+        return df
+
+    logging.info("Cleaning accounting ratios before the LOO build")
+    is_B = df['CODMUN_IBGE'].astype(str) != '0' if 'CODMUN_IBGE' in df.columns else None
+    if is_B is None:
+        logging.warning("  [winsorize] no CODMUN_IBGE column; percentiles will be pooled "
+                        "across firm types")
+    apply_validity_bounds(df, verbose=True)
+    winsorize_within_type(df, cols, pct=WINSOR_PCT, type_key=is_B,
+                          dedup_keys=[k for k in WINSOR_UNIT_KEYS if k in df.columns] or None,
+                          verbose=True)
+    return df
+
 
 def compute_loo_instruments(df: pd.DataFrame) -> pd.DataFrame:
     """Compute Leave-One-Out (LOO) BLP instruments per MCA-quarter."""
@@ -196,6 +246,10 @@ def main():
     # inherits has_ip from the Prudential report, which has no payment institutions
     # (all-zero); the List files do, so this populates the flag correctly.
     df = derive_has_ip_from_list_files(df, IF_DATA_LIST_DIR)
+
+    # Bound and winsorize the accounting ratios FIRST: the LOO columns are sums over rivals
+    # of indice_basileia_lag, so cleaning afterwards would leave the derived instruments dirty.
+    df = clean_accounting_ratios(df)
 
     # Compute instruments
     df_aug = compute_loo_instruments(df)

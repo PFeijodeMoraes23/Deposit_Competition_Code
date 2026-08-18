@@ -7,22 +7,21 @@ The sleepiness function was re-estimated locally, changing the demand-prep outpu
 estimation routines are **auto-discovered** from the demand-prep parquets (see
 `discover_estim_strategies()` — id AND prefix, newest file per id wins), so a relabelled
 or new routine needs no code change, just its `demand_<id>_*_spec_12.parquet`. The
-2026-06-24 scheme (base links + their +Time variants):
+lineup (base links + their +Time variants):
 
   E1 Local B-type   E2 Pooled Linear
-  E3 Pooled Logistic            E4 Pooled Logistic + Time
-  E5 Pooled Single-Index        E6 Pooled Single-Index + Time
-  E7 Pooled Joint Single-Index  E8 Pooled Joint Single-Index + Time
+  E3 Pooled Single-Index        E4 Pooled Single-Index + Time
+  E5 Pooled Joint Single-Index  E6 Pooled Joint Single-Index + Time
 
 Each parquet already carries every column the logit needs (spread_ann in bps, share_D /
 share_B_cond, is_B, deposit_type, CodConglomeradoPrudencial, the X_COLS, and all
 LOO/cost/capital instruments), so no separate "finalization" step is required. The
-link-based routines (E4+) are produced by estimation_demand_link_common.py, which mirrors
-estimation_3's demand prep exactly (same columns/scaling), so the logit treats every
-routine identically.
+link-based routines (E3+) are produced by estimation_demand_link_common.py, which mirrors
+the linear demand prep exactly (same columns/scaling), so the logit treats every routine
+identically.
 
 Run all discovered routines with `julia blp_1_logit.jl`, or a single one with
-`julia blp_1_logit.jl --est 8`.
+`julia blp_1_logit.jl --est 3`.
 
 Four sub-models per routine (the in-file LaTeX table generator below reads these keys):
   (a) priceonly:           δ = α · spread
@@ -39,14 +38,14 @@ Usage
   julia --project=. --threads=auto blp_1_logit.jl
 
   # A single routine:
-  julia --project=. blp_1_logit.jl --est 8
+  julia --project=. blp_1_logit.jl --est 3
 
   # Rebuild all LaTeX tables from the existing combined summary (no estimation):
   julia --project=. blp_1_logit.jl --tables-only
 
 LaTeX outputs (→ ESTIMATION_OUTPUT/Rout + Drafts/Deposit Competition):
   est{id}_spec12_logit.tex                 per-routine, 4 sub-model columns
-  est5-8_spec12_logit_comparison.tex       cross-routine, `+ D-Type` column each
+  est1-6_spec12_logit_comparison.tex       cross-routine, `+ D-Type` column each
                                            (tab:demand_logit_spec12_comparison)
 
 References
@@ -172,7 +171,7 @@ combined_summary_path() = joinpath(logit_dir(),
 Auto-discover the estimation routines for spec SPEC_ID by scanning the
 demand-prep directory for `demand_<id>_*_spec_<SPEC_ID>.parquet`, excluding the legacy
 `*_final_*` files. The prefix is the filename minus the `_spec_<SPEC_ID>.parquet` tail
-(e.g. `demand_1`, `demand_3_logistic`). Sorted by id.
+(e.g. `demand_1`, `demand_3_index`). Sorted by id.
 
 Newly-added/relabelled routines are picked up with NO code change. If MULTIPLE non-final
 parquets exist for the same id (e.g. a leftover old-scheme file alongside a freshly
@@ -194,12 +193,13 @@ function discover_estim_strategies()
             best[id] = (mt, replace(f, "_spec_$(SPEC_ID).parquet" => ""))
         end
     end
-    # E3/E4 are DROPPED (2026-08-06). Auto-discovery is by FILE PRESENCE, so a leftover
-    # demand_3/demand_4 parquet silently re-enters the run — and on 08-05 those were rebuilt from
-    # the new panel but the stale 07-28 phi, i.e. mixed-vintage inputs that look current. Filter
-    # here so the logit cannot pick them up even if the parquets exist. SLEEP_ACTIVE_ESTS mirrors
-    # estimation_demand_1_prep.py / export_results.py; set it to include 3 4 to restore them.
-    active = Set(parse.(Int, split(get(ENV, "SLEEP_ACTIVE_ESTS", "1 2 5 6 7 8"))))
+    # Auto-discovery is by FILE PRESENCE, so a parquet left over from a routine that is no
+    # longer in the lineup silently re-enters the run: on 2026-08-05 such files were rebuilt
+    # from the new panel while carrying a stale phi, i.e. mixed-vintage inputs that look
+    # current by mtime. This filter is the guard — the logit cannot pick up an id outside the
+    # active set even if its parquet exists. SLEEP_ACTIVE_ESTS mirrors
+    # estimation_demand_1_prep.py / export_results.py, so the three cannot drift apart.
+    active = Set(parse.(Int, split(get(ENV, "SLEEP_ACTIVE_ESTS", "1 2 3 4 5 6"))))
     ids = sort!(collect(keys(best)))
     skipped = [id for id in ids if !(id in active)]
     if !isempty(skipped)
@@ -591,7 +591,7 @@ const ROW_ORDER = ["alpha", "fgc_covered", "has_ip", "log_total_assets_lag",
 const TABLE_SUBMODELS = [("priceonly", "Price Only"), ("core", "Price + Core"),
                          ("full", "Price + Chars"), ("full_dtype", "+ D-Type"),
                          ("core_dtype", "Price + Core + D-Type")]
-# Cross-estimator comparison table (est5-8_spec12_logit_comparison.tex): one column per
+# Cross-estimator comparison table (est1-6_spec12_logit_comparison.tex): one column per
 # demand routine, each showing its final `+ D-Type` sub-model. Column headers \ref{} the
 # sleepiness-strategy enumerate items in V_Main §(sec:empirical:sleep) — same convention as
 # est5-8_spec12_stage2_comparison.tex. (E3/E4's `estimation:logistic` item is commented out
@@ -679,7 +679,7 @@ function _mean_rho_one_minus_s(estim)
     return any(m) ? mean(ρ[m] .* (1.0 .- s[m])) : NaN
 end
 
-"""Build est5-8_spec12_logit_comparison.tex: columns = routines (each its `+ D-Type`
+"""Build est1-6_spec12_logit_comparison.tex: columns = routines (each its `+ D-Type`
 sub-model), rows = COMPARISON_ROWS, stats block = elasticity / N / Q(dof) / G*.
 Layout, notes and label conventions mirror est5-8_spec12_stage2_comparison.tex."""
 function build_logit_comparison_tex(data::AbstractDict, ids::Vector{Int},
