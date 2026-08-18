@@ -399,18 +399,17 @@ def _calculate_phis(df, results_dict, link):
         # I-spline betas as monomial coefficients. `link` is the fallback for results
         # that carry no tag.
         df[f"phi_mt_{safe_key}"] = phi_from_native(df, ss, getattr(ss, "link", None) or link)
-        # WEIGHT = MARKET POPULATION, i.e. the cell MEAN of market_size (2026-08-05 fix).
-        # market_size (= pop_total) is CONSTANT within a (quarter, municipality) cell, so the
-        # previous M_mt=("market_size","sum") multiplied by the number of bank rows present:
-        # markets were weighted by pop x n_banks, which has no counterpart in the model
-        # (phi_t = sum_m phi_mt*M_mt / sum_m M_mt over MARKETS m). Measured on est6 spec 12,
-        # the two conventions differ by 1.90pp in LEVEL (0.9720 vs 0.9531) with the shape
-        # nearly unchanged. "mean" also aligns this reported series with (a) the bootstrap
-        # bands (_phi_t_group_struct, always pop-only -- the stored bands need no recompute)
-        # and (b) demand prep's own phi_t (estimation_demand_link_common, already pop-only).
-        # MARKET = MCA, not municipality (2026-08-05). V_Main.tex:182 defines the local market
-        # as the Minimal Comparable Area, and :406 sums over that market set; E1/E2 already
-        # grouped by mca_code, so this also removes a cross-estimator inconsistency (~0.21 pp).
+        # WEIGHT = MARKET POPULATION, i.e. the cell MEAN of market_size, matching
+        # phi_t = sum_m phi_mt*M_mt / sum_m M_mt over MARKETS m (V_Main.tex:311). market_size
+        # (= pop_total) is CONSTANT within a (quarter, market) cell, so aggregating it with
+        # "sum" instead would weight each market by pop x n_banks -- a product with no
+        # counterpart in the model, and worth 1.90pp of LEVEL (0.9720 vs 0.9531 on est6
+        # spec 12) at nearly unchanged shape. The same convention carries through the
+        # bootstrap bands (_phi_t_group_struct) and demand prep's own phi_t
+        # (estimation_demand_link_common), so every reported series is on one weighting.
+        # MARKET = MCA, not municipality: V_Main.tex:182 defines the local market as the
+        # Minimal Comparable Area and :406 sums over that market set; E1/E2 group by
+        # mca_code too, so the whole lineup shares one market key (worth ~0.21 pp).
         _mkey = "mca_code" if "mca_code" in df.columns else "CODMUN_IBGE"
         agg = df.groupby(["year_quarter", _mkey], observed=True).agg(
             phi_mt=(f"phi_mt_{safe_key}", "mean"), M_mt=("market_size", "mean")).reset_index()

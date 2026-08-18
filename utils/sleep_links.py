@@ -2139,20 +2139,22 @@ def phi_t_group_struct(df_ss, market_key=None, weight="mean", time_key=None):
     two conventions that actually differ across this codebase.
 
     weight="mean"  each market enters weighted by its POPULATION. This is the estimand as
-                   written down in estimation_1_sleep.py:394 ("phi_t = sum_m phi_mt*M_mt /
-                   sum_m M_mt over MARKETS m") and in this module's header.
+                   written down in V_Main.tex:311 ("phi_t = sum_m phi_mt*M_mt / sum_m M_mt
+                   over MARKETS m") and in this module's header, and it is the convention
+                   every reported phi_t series uses (calculate_phis, calculate_pooled_phis,
+                   _calculate_phis and the bands all aggregate this way).
     weight="sum"   each market enters weighted by population x THE NUMBER OF BANK ROWS in
-                   the cell. pop_total is constant within a (quarter, market) cell, so
-                   M_mt=("market_size","sum") -- what calculate_phis and
-                   calculate_pooled_phis both use -- multiplies by the bank count.
+                   the cell, since pop_total is constant within a (quarter, market) cell and
+                   summing it multiplies by the bank count. Nothing in the model corresponds
+                   to that product; the option is kept only to reproduce a series built
+                   under it.
 
-    Measured 2026-08-04 on est6 spec 12: the two weights move the LEVEL of national
-    sleepiness by 1.90 pp (0.9720 vs 0.9531) from identical phi_mt, against a 3.76 pp
-    movement being interpreted; the RANGE is nearly unchanged (3.76 vs 3.50 pp). The
-    market key matters far less (CODMUN_IBGE vs mca_code: 0.21 pp). The parameter exists
-    so a band can always be built on EXACTLY the convention its own point series uses --
-    the mismatch between the two is what made the stored E5/E6 bands sit 1.5-2.2 pp away
-    from the phi_t they shipped next to.
+    The choice moves the LEVEL of national sleepiness by 1.90 pp (0.9720 vs 0.9531 on est6
+    spec 12) from identical phi_mt, against a 3.76 pp movement being interpreted; the RANGE
+    is nearly unchanged (3.76 vs 3.50 pp). The market key matters far less (CODMUN_IBGE vs
+    mca_code: 0.21 pp). The parameter is explicit so a band is always built on EXACTLY the
+    convention its own point series uses: a mismatch here puts a band 1.5-2.2 pp away from
+    the phi_t it is drawn around.
     """
     if weight not in ("mean", "sum"):
         raise ValueError(f"weight must be 'mean' or 'sum', got {weight!r}")
@@ -2329,13 +2331,12 @@ def _phi_t_group_struct(df_ss, market_key=None):
     national phi_t aggregation: national phi_t = sum_market pop_market *
     mean_market(phi_mt) / sum_market pop_market, per time.
 
-    MARKET = MCA (2026-08-05). V_Main.tex:182 defines the local market as the Minimal
-    Comparable Area -- "B firms compete in local markets - defined here as Minimal Comparable
-    Areas (MCAs)" -- and :303/:406 sum over m in that market set. This function previously
-    hardcoded CODMUN_IBGE (municipality), which splits MCAs that were created precisely to keep
-    territorial units comparable across boundary changes; measured effect on national phi_t is
-    ~0.21 pp, small but wrong by the model's own definition. Pass market_key explicitly to
-    reproduce a legacy CODMUN_IBGE band (the unconditional-band correctness gate does this)."""
+    MARKET = MCA. V_Main.tex:182 defines the local market as the Minimal Comparable Area --
+    "B firms compete in local markets - defined here as Minimal Comparable Areas (MCAs)" --
+    and :303/:406 sum over m in that market set. Keying on CODMUN_IBGE (municipality) instead
+    splits MCAs that exist precisely to keep territorial units comparable across boundary
+    changes, and moves national phi_t by ~0.21 pp. Pass market_key explicitly to build a band
+    on the CODMUN_IBGE key (the unconditional-band correctness gate does this)."""
     t = df_ss["time_id"].astype(str).values
     if market_key is None:
         market_key = next((k for k in ("mca_code", "CODMUN_IBGE") if k in df_ss.columns), None)

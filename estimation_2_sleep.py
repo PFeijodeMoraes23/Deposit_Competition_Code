@@ -410,11 +410,11 @@ def calculate_pooled_phis(df, res_dict, state_blocks):
         safe_key = model_key.replace(' ', '_').replace('.', '')
         df[f'phi_mt_{safe_key}'] = phi_mt
         # phi_t = sum_m phi_mt*M_mt / sum_m M_mt over MARKETS m (a market is an MCA).
-        # WEIGHT = cell MEAN of market_size = the market's POPULATION (2026-08-05 fix).
-        # market_size is constant within a (quarter, MCA) cell, so the previous "sum"
-        # multiplied by the bank count -- pop x n_banks, which has no counterpart in the
-        # model and shifted the reported LEVEL by 1.90pp (est6 spec 12 audit). "mean"
-        # aligns this series with the stored E5-E8 bands and with demand prep's own phi_t.
+        # WEIGHT = cell MEAN of market_size = the market's POPULATION. market_size is
+        # constant within a (quarter, MCA) cell, so aggregating it with "sum" would weight
+        # by pop x n_banks, a product with no counterpart in the model and worth 1.90pp of
+        # reported LEVEL (est6 spec 12 audit). This convention is shared with the stored
+        # bands and with demand prep's own phi_t, so every reported series is on one weight.
         market_agg = df.groupby(['year_quarter', 'mca_code'], observed=True).agg(
             phi_mt=(f'phi_mt_{safe_key}', 'mean'), M_mt=('market_size', 'mean')).reset_index()
         weighted_phi = market_agg['phi_mt'] * market_agg['M_mt']
