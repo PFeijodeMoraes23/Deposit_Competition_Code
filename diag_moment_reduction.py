@@ -43,8 +43,8 @@ Inputs (already on disk): the demand parquets and cluster_processed/rc_delta_E{k
 
 Usage
 -----
-  python diag_moment_reduction.py                       # E5-E8, stage ext1, r = 2..5
-  python diag_moment_reduction.py --routines 6 --grid=-2:0.005:2
+  python diag_moment_reduction.py                       # E3-E4, stage ext1, r = 2..5
+  python diag_moment_reduction.py --routines 4 --grid=-2:0.005:2
 """
 from utils.venv_guard import ensure_project_venv
 ensure_project_venv(__file__)
@@ -101,7 +101,7 @@ def _eff_F(p_t, Z_t, codes, G):
 
     Battery-exact form (weak_iv_analysis._battery): eff-F = ESS / tr(Ŵ₂Q⁻¹) with
     Ŵ₂ = (1/n)Σ_g(Z̃_g'v̂_g)(Z̃_g'v̂_g)' and Q = Z̃'Z̃/n — no CR1 small-sample factor, so the
-    full-16 value reproduces the published 4.20/3.95/4.23/4.11 (E5–E8) exactly.
+    full-16 value reproduces the published single-index anchors 4.20 (E3) / 3.95 (E4) exactly.
     """
     N = len(p_t)
     ZtZ = Z_t.T @ Z_t
@@ -430,7 +430,9 @@ def analyse(k, stage, args, dp, raw, cp):
 
 def main():
     ap = argparse.ArgumentParser(description="Moment-reduction fixes (weakiv_methods.md §7.6) — local test")
-    ap.add_argument("--routines", default="5,6,7,8")
+    # The single-index pair: the routines with an RC-BLP delta export (blp_2_rc.jl DEFAULT_ROUTINES)
+    # and the source of the paper's alpha.
+    ap.add_argument("--routines", default="3,4")
     ap.add_argument("--stage", default="ext1")
     ap.add_argument("--grid", default="-2:0.005:2", help="start:step:stop for the alpha scan "
                     "(use --grid=-2:... — a leading '-' needs the '=' form)")

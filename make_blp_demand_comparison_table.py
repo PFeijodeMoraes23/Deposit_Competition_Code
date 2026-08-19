@@ -28,7 +28,7 @@ Reuses the label maps + formatting (t(G*) stars, on-bound σ dagger, se_note) fr
 Usage
 -----
   python make_blp_demand_comparison_table.py                 # E3/E4, IFT engine, BOTH stages
-  python make_blp_demand_comparison_table.py --routines 5,6,7,8
+  python make_blp_demand_comparison_table.py --routines 3
   python make_blp_demand_comparison_table.py --engine numerical
   python make_blp_demand_comparison_table.py --stages ext1    # only the ext1 (headline) table
 
@@ -231,7 +231,7 @@ def build_table(ests, suffix: str = "", show_segments: bool = True,
 def main():
     ap = argparse.ArgumentParser(description="RC-BLP cross-estimator comparison across E3/E4 "
                                              "(ext1 headline + Full)")
-    ap.add_argument("--routines", default="5,6,7,8")
+    ap.add_argument("--routines", default=",".join(str(e) for e in DEFAULT_ESTS))
     ap.add_argument("--engine", choices=["ift", "numerical", "cue"], default="ift",
                     help="Engine whose results to read (ift→un-suffixed, numerical→_num, cue→_cue). "
                          "The suffix also lands in the output filename, so a non-ift engine writes a "

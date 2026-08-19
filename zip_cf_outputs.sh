@@ -1,5 +1,5 @@
 #!/bin/bash
-# zip_cf_outputs.sh — bundle ONE counterfactual's outputs (across ALL estimations E5–E8) into a
+# zip_cf_outputs.sh — bundle ONE counterfactual's outputs (across ALL estimations E1–E4) into a
 # single archive, MOVING the files out of the working dirs (zip -m), mirroring the BLP auto-zip.
 # Run it after that CF's runs finish for whichever routines you ran.
 #

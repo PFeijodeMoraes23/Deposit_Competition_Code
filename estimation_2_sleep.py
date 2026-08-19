@@ -126,7 +126,7 @@ def demean_variables_2way(df, cols, entity_col, time_col, n_iter=15, tol=1e-9):
     return pd.DataFrame(M, columns=cols, index=df.index)
 
 
-# Time block (E4/E6/E8 "+Time" variants). time_trend was DROPPED: with quarter
+# Time block (the E4 "+Time" variant). time_trend was DROPPED: with quarter
 # fixed effects (delta_t) now absorbing aggregate time additively, a pure-time
 # linear trend in the index is redundant/collinear with the time FE. The block
 # keeps only gdp_growth_yoy (a genuine entity-time business-cycle covariate).
@@ -413,7 +413,7 @@ def calculate_pooled_phis(df, res_dict, state_blocks):
         # WEIGHT = cell MEAN of market_size = the market's POPULATION. market_size is
         # constant within a (quarter, MCA) cell, so aggregating it with "sum" would weight
         # by pop x n_banks, a product with no counterpart in the model and worth 1.90pp of
-        # reported LEVEL (est6 spec 12 audit). This convention is shared with the stored
+        # reported LEVEL (est4 spec 12 audit). This convention is shared with the stored
         # bands and with demand prep's own phi_t, so every reported series is on one weight.
         market_agg = df.groupby(['year_quarter', 'mca_code'], observed=True).agg(
             phi_mt=(f'phi_mt_{safe_key}', 'mean'), M_mt=('market_size', 'mean')).reset_index()

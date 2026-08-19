@@ -1,10 +1,10 @@
 """
 export_sleep_link_common.py
 ================================================================================
-Shared TeX table exporter for the link-based sleepiness routines Est4/Est5/Est6.
-Mirrors export_3_sleep_results.py (first/second-stage longtables, standalone PDF)
-but parametrised by estimation number, link description and notes, so the three
-wrappers (export_4/5/6_sleep_results.py) stay one line each.
+Shared TeX table exporter for the link-based sleepiness routines E3/E4 (see
+EXPORT_CFG at the bottom). Mirrors export_2_sleep_results.py (first/second-stage
+longtables, standalone PDF) but parametrised by estimation number, so one
+`--est N` invocation covers each of them.
 
 Reported second-stage estimates are Average Marginal Effects (REPORTING ONLY);
 phi itself is built from native coefficients in estimation_N_sleep / demand prep.
@@ -19,7 +19,6 @@ import pickle
 import subprocess
 import shutil
 import warnings
-from pathlib import Path
 import numpy as np
 import pandas as pd
 warnings.filterwarnings("ignore", message="covariance of constraints does not have full rank")
@@ -29,9 +28,10 @@ from utils import paths as _paths_mod
 from utils import state_transform as _st
 from utils import se_national as _sen
 
-_DRAFTS_DIR = Path(r"C:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\Drafts\Deposit Competition")
-DATA_DIR = _paths_mod.PROCESSED
-TEX_OUT_DIR = DATA_DIR / "ESTIMATION_OUTPUT" / "Rout"
+_DRAFTS_DIR = _paths_mod.drafts_dir()
+# rout_dir/est_dir follow SLEEP_OUT_ROOT, so a sandboxed run exports the fits it just
+# produced instead of whatever sits in the production tree.
+TEX_OUT_DIR = _paths_mod.rout_dir()
 
 
 def stars(p):
@@ -331,15 +331,19 @@ _STANDALONE_PREAMBLE = r"""\documentclass[12pt]{article}
 
 def export_link_results(est_num, title):
     """Build est{est_num} first/second-stage TeX tables + standalone PDF."""
-    out_dir = DATA_DIR / "ESTIMATION_OUTPUT" / "DEMAND_PREP" / f"est{est_num}"
+    out_dir = _paths_mod.est_dir(est_num)
     results_pickle = out_dir / "estimation_results.pkl"
     print("=" * 70); print(f" EXPORT EST{est_num} SLEEP RESULTS"); print("=" * 70)
+    # A missing pickle is a hard failure, not a skip: without it this routine writes no
+    # table at all, and a silent return leaves the orchestrator reporting success over a
+    # step that produced nothing.
     if not results_pickle.exists():
-        print(f"Results not found. Run estimation_{est_num}_sleep.py first."); return
+        print(f"Results not found at {results_pickle}. "
+              f"Run estimation_sleep_common.py --est {est_num} first.")
+        sys.exit(1)
     with open(results_pickle, 'rb') as fh:
         results_dict = pickle.load(fh)
 
-    TEX_OUT_DIR.mkdir(parents=True, exist_ok=True)
     ss_frag = build_second_stage_table(results_dict, est_num)
     ss_name = f"est{est_num}_second_stage_table.tex"
     (TEX_OUT_DIR / ss_name).write_text(ss_frag + "\n", encoding="utf-8")

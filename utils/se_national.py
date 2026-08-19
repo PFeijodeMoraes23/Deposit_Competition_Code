@@ -127,7 +127,7 @@ def _aggregate_if_by_period(IF_rows: np.ndarray, periods):
 def attach_national_ses_nonlinear(res, IF_rows: np.ndarray, periods, theta, ame_fn, ame_hat,
                                   B: int = 999, scheme: str = "webb", seed: int = 0,
                                   label: str = ""):
-    """Quarter-clustered WCB for the M-estimators (E5-E8).
+    """Quarter-clustered WCB for the M-estimators (E3/E4).
 
     Identical machinery to the reported SEs -- same `cluster_wild_bootstrap`, same `ame_fn`
     mapping parameters to AMEs -- with the influence functions aggregated by QUARTER instead
@@ -174,7 +174,7 @@ def _normal_two_sided(t: float) -> float:
 #
 # The reported cell is the QUARTER-CLUSTERED WCB, not max(quarter, DK). Three reasons:
 #   1. DK exists only for the LINEAR columns (E1/E2). Taking a per-cell max would report DK in
-#      the E1/E2 columns and quarter-WCB in the E5-E8 columns OF THE SAME ROW, so a reader
+#      the E1/E2 columns and quarter-WCB in the E3/E4 columns OF THE SAME ROW, so a reader
 #      comparing across columns could not tell whether a gap is the scheme or the estimator.
 #   2. max() of two variance estimators is not itself an estimator of the sampling variance --
 #      it is upward-biased by construction, and the bias depends on the noise in both.

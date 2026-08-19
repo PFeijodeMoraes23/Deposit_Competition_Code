@@ -27,8 +27,8 @@ Inputs (both already on disk):
 
 Usage
 -----
-  python diag_cue_linear_step.py                              # E5-E8, stage ext1
-  python diag_cue_linear_step.py --routines 6 --sset-grid -1.5:0.125:1.5
+  python diag_cue_linear_step.py                              # E3-E4, stage ext1
+  python diag_cue_linear_step.py --routines 4 --sset-grid -1.5:0.125:1.5
   python diag_cue_linear_step.py --max-witer 25 --ridge 1e-8  # knob sweep
 """
 from utils.venv_guard import ensure_project_venv
@@ -428,7 +428,8 @@ def analyse(k, stage, args, dp, raw, cp):
 
 def main():
     ap = argparse.ArgumentParser(description="Local CUE linear-step preview + engine self-check")
-    ap.add_argument("--routines", default="5,6,7,8")
+    # The single-index pair: the routines with an RC-BLP delta export (blp_2_rc.jl DEFAULT_ROUTINES).
+    ap.add_argument("--routines", default="3,4")
     ap.add_argument("--stage", default="ext1")
     ap.add_argument("--max-witer", type=int, default=10, dest="max_witer")
     ap.add_argument("--wtol", type=float, default=1e-10)

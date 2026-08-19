@@ -134,7 +134,7 @@ def _last_panel_selic_ann():
     parquet ships a deviation (mean ~0). Reading it here anchored the curve at ~2%/yr instead
     of ~11%/yr for 2024Q4. A centred column is rejected rather than silently used.
     """
-    cands = sorted(DEMAND_PREP.glob("demand_6_*spec_12.parquet"))
+    cands = sorted(DEMAND_PREP.glob("demand_3_index*spec_12.parquet"))
     if not cands:
         cands = sorted(DEMAND_PREP.glob("demand_*spec_12.parquet"))
     schema = pq.read_schema(cands[-1]).names

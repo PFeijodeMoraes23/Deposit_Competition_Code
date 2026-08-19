@@ -166,7 +166,7 @@ pool via simultaneous IPC pipe traffic for 400K-row DataFrames (WinError 1450).
             {"id": 5, "file": "export_results.py", "args": ["--estimation", "all"], "desc": "Export 1st/2nd Stage Summaries (Est 1-4)"},
             {"id": 6, "file": "estimation_demand_1_prep.py", "args": ["--estimation", "all", "--spec", spec_arg], "desc": "Universal Demand Prep Orchestrator & Panel Serialization (Est 1-4)"},
             {"id": 7, "file": "export_analyze_spec12.py", "args": [], "desc": "Analyze Specification 12 Results"},
-            # desc_3 reads the E5 second-stage sample (est5/market_panel_phis.csv), so it
+            # desc_3 reads the E3 second-stage sample (est3/market_panel_phis.csv), so it
             # runs after estimation; it is the canonical cluster-imbalance / deposit-
             # concentration exhibit that justifies the wild cluster bootstrap.
             {"id": 8, "file": "desc_3.py", "args": [], "desc": "Cluster-imbalance & deposit-concentration table (WCB justification)"},
@@ -199,7 +199,7 @@ pool via simultaneous IPC pipe traffic for 400K-row DataFrames (WinError 1450).
         print(f"\n[STARTING] {script}: {desc}", flush=True)
         # -u: run the child UNBUFFERED.  Without it Python block-buffers the child's stdout
         # whenever this pipeline is redirected to a file (the normal way it is run), so a
-        # healthy multi-hour estimator (E7/E8 sieve) emits NOTHING to the log for over an
+        # healthy multi-hour estimator emits NOTHING to the log for over an
         # hour and looks dead.  That cost a killed-and-restarted run on 2026-07-23; the
         # process was fine, only its output was invisible.  Never remove this.
         cmd = [sys.executable, "-u", script] + args

@@ -1,10 +1,11 @@
 import os
 import sys
 import shutil
-from pathlib import Path
 import pickle
 
-_DRAFTS_DIR = Path(r"C:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\Drafts\Deposit Competition")
+from utils import paths as _paths_mod
+
+_DRAFTS_DIR = _paths_mod.drafts_dir()
 import pandas as pd
 import numpy as np
 import matplotlib
@@ -15,7 +16,7 @@ from scipy import stats
 
 # Row labels and display units come from the SHARED registry, so the sleepiness tables,
 # the BBL policy functions and the descriptives cannot state different units for the same
-# variable. There used to be four independent copies of the label dict.
+# variable.
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 if _THIS_DIR not in sys.path:
     sys.path.insert(0, _THIS_DIR)
@@ -52,7 +53,7 @@ class NonLinearResults:
             return pd.DataFrame(self.cov_ame, index=self.params.index, columns=self.params.index)
         return pd.DataFrame(np.diag(self.bse ** 2), index=self.params.index, columns=self.params.index)
 
-# Register fake module for unpickling est3 (Pooled Logistic) pickles.
+# Fake module so pickles that reference estimation_3_sleep.NonLinearResults unpickle here.
 sys.modules['estimation_3_sleep'] = type('FakeModule', (), {'NonLinearResults': NonLinearResults})
 
 # Try to respect the project's venv guard
@@ -287,7 +288,7 @@ def build_latex_table(results_dict, order_keys, target_vars, out_path, title="",
     # \textwidth, but the outer \tabcolsep margins on left and right eat 2*3.5pt=7pt,
     # leaving \textwidth-7pt for the cell content.
     _stage_note = ("" if is_first_stage else
-                   r"; the linear strategies report coefficients and the single-index/joint "
+                   r"; the linear strategies report coefficients and the single-index "
                    r"strategies report average marginal effects (AME), in percentage points "
                    r"of the sleepy share per the unit given in the row label, with shares and "
                    r"rates in percentage points and Pix Available a discrete $0\to1$ "
@@ -354,7 +355,7 @@ def build_latex_table(results_dict, order_keys, target_vars, out_path, title="",
                                      else _st.PHI_DISPLAY)
                 # National rows (Pix, Selic) report the quarter-clustered bootstrap; all other
                 # rows keep the conglomerate one. This table mixes linear (E1/E2) and nonlinear
-                # (E5-E8) columns, so the same scheme must hold across a row -- which is why the
+                # (E3/E4) columns, so the same scheme must hold across a row -- which is why the
                 # reported cell is quarter-WCB rather than the wider-of-two (DK is linear-only).
                 _se, _pv, _sch = _sen.select_se(res, v)
                 if _sen.is_national(v):
@@ -374,7 +375,7 @@ def build_latex_table(results_dict, order_keys, target_vars, out_path, title="",
     tex.append(r"\midrule")
 
     # Implied national mean phi: the comparable "level" across linear / single-index / joint.
-    # The single-index/joint estimators carry no constant AME (the level is in the monotone
+    # The single-index estimators carry no constant AME (the level is in the monotone
     # link), so this row gives the interpretable baseline sleepiness for every column.
     if mean_phi is not None and not is_first_stage:
         # phi is a LEVEL here, so it carries PHI_DISPLAY too -- otherwise this would be
@@ -391,7 +392,7 @@ def build_latex_table(results_dict, order_keys, target_vars, out_path, title="",
     row_fstat = ["F-Statistic"]
     row_cluster = ["Clusters ($G$)"]
 
-    # E5-E8 (single-index/joint) carry their own nobs/rsquared; no fallback needed.
+    # E3/E4 (single-index) carry their own nobs/rsquared; no fallback needed.
     _nlls_fallback: dict = {}
 
     for col in order_keys:
@@ -551,7 +552,7 @@ def build_latex_table_landscape(results_dict, order_keys, target_vars, out_path,
         tex.append(" & ".join(r_) + r" \\")
 
     _stage_note = ("" if first_stage else
-                   r"; the linear strategies report coefficients and the single-index/joint "
+                   r"; the linear strategies report coefficients and the single-index "
                    r"strategies report average marginal effects (AME), in percentage points "
                    r"of the sleepy share per the unit given in the row label, with shares and "
                    r"rates in percentage points and Pix Available a discrete $0\to1$ "
@@ -589,23 +590,23 @@ def main():
     args = parser.parse_args()
 
     print("Collecting Estimation results for Spec 12 (IV_HausmanFull x Tech)...")
-    _ROOT = Path(__file__).resolve().parents[2]
-    DATA_DIR = _ROOT / "BCB" / "Egan_et_al_2025_Rep" / "processed"
-    SLEEP_DIR = DATA_DIR / "ESTIMATION_OUTPUT"
+    # demand_prep_root/est_dir/rout_dir all follow SLEEP_OUT_ROOT, so a sandboxed run
+    # compares the fits it just produced instead of whatever sits in the production tree.
+    sleep_root = _paths_mod.demand_prep_root()
 
-    if not SLEEP_DIR.exists():
-        print(f"ERROR: Cannot find {SLEEP_DIR}")
-        return
+    if not sleep_root.exists():
+        print(f"ERROR: Cannot find {sleep_root}")
+        sys.exit(1)
 
     # The lineup is E1/E2 (linear) + E3/E4 (bounded single-index). The joint sieve was dropped:
     # it chose the direction and the link together, so its reported band conditioned on a link
     # that was itself estimated jointly -- re-profiling per draw widened it 1.71x and 7.46x, the
     # latter past its own fitted phi_t range, and its direction was barely identified.
     mapping = {
-        '1 Local':             SLEEP_DIR / "DEMAND_PREP" / "est1",
-        '2 Pooled Linear':     SLEEP_DIR / "DEMAND_PREP" / "est2",
-        '3 Single-Index':      SLEEP_DIR / "DEMAND_PREP" / "est3",
-        '4 Single-Index Time': SLEEP_DIR / "DEMAND_PREP" / "est4",
+        '1 Local':             _paths_mod.est_dir(1),
+        '2 Pooled Linear':     _paths_mod.est_dir(2),
+        '3 Single-Index':      _paths_mod.est_dir(3),
+        '4 Single-Index Time': _paths_mod.est_dir(4),
     }
 
     if getattr(args, 'skip_est2', False):
@@ -663,9 +664,15 @@ def main():
             except Exception as e:
                 print(f"  [Warning] Could not load national phi for {label}: {e}")
 
+    # Per-estimator warnings above are skips, so with none of them loading the run would go
+    # on to write empty comparison tables and an empty model pickle over the real ones.
+    if not models_dict:
+        print(f"ERROR: no estimator supplied spec 12 under {sleep_root}. "
+              "Run the sleep estimators first.")
+        sys.exit(1)
+
     # ---- 1) Export LaTeX Tables ----
-    out_dir = SLEEP_DIR / "Rout"
-    out_dir.mkdir(parents=True, exist_ok=True)
+    out_dir = _paths_mod.rout_dir()
 
     order = list(mapping.keys())
 
@@ -733,17 +740,17 @@ def main():
     print(f"Exported LaTeX tables to {out_dir} and copied to {_DRAFTS_DIR}")
 
     # ---- 2) Pickle Model Information ----
-    with open(out_dir / "est1-3_spec12_all_models.pkl", "wb") as f:
+    with open(out_dir / "est1-4_spec12_all_models.pkl", "wb") as f:
         pickle.dump(models_dict, f)
-    print(f"Exported combined model instances to {out_dir / 'est1-3_spec12_all_models.pkl'}")
+    print(f"Exported combined model instances to {out_dir / 'est1-4_spec12_all_models.pkl'}")
 
-    # ---- 3) Plot Implied National Phi_t (single panel, all six strategies) ----
+    # ---- 3) Plot Implied National Phi_t (single panel, all four strategies) ----
     #
     # Two band sources, by estimator family:
     #   * Linear E1/E2: aggregate per-market phi_mt to national with a delta-method
     #     SE band on the market panel (calc_agg_delta). Columns are saved as
     #     phi_mt_{safe_key}: "IV_HausmanFull x Tech" -> phi_mt_IV_HausmanFull_x_Tech.
-    #   * Single-index / joint sieve E5/E6/E7/E8: plot the bootstrap point path and
+    #   * Single-index E3/E4: plot the bootstrap point path and
     #     the score/multiplier wild-cluster-bootstrap CI band cached in
     #     Rout/ts_link_band_est{N}.pkl (cols time_id, phi_t, lo, hi, _d). Point and
     #     band come from the SAME fit, so the line sits inside its band by
@@ -834,24 +841,24 @@ def main():
         ax.fill_between(x, lo, hi, color=pc, alpha=0.45)
     fig.tight_layout()
 
-    # The figure already carries the pastel-toned confidence-interval bands
-    # (fill_between with pastelize_color above). V_Main.tex includes the
-    # "_ci_pastel" filename, so that is the canonical output name. We also write
-    # the plain name for backward compatibility with any other references.
-    plot_name = "est1-3_spec12_phi_t_comparison_ci_pastel.png"
+    # The figure carries the pastel-toned confidence-interval bands (fill_between with
+    # pastelize_color above), and "_ci_pastel" is the canonical output name. The plain
+    # name is written as a copy for references that omit the suffix. Neither name is
+    # cited by V_Main.tex, so renaming these is a generator-local decision.
+    plot_name = "est1-4_spec12_phi_t_comparison_ci_pastel.png"
     plot_path = out_dir / plot_name
     plt.savefig(plot_path, dpi=300)
     plt.close(fig)
 
     shutil.copy(plot_path, _DRAFTS_DIR / plot_name)
-    shutil.copy(plot_path, out_dir / "est1-3_spec12_phi_t_comparison.png")
-    shutil.copy(plot_path, _DRAFTS_DIR / "est1-3_spec12_phi_t_comparison.png")
+    shutil.copy(plot_path, out_dir / "est1-4_spec12_phi_t_comparison.png")
+    shutil.copy(plot_path, _DRAFTS_DIR / "est1-4_spec12_phi_t_comparison.png")
     print(f"Exported phi_t plot (pastel CIs) to {plot_path}; copied to {_DRAFTS_DIR}")
 
-    # ---- 3b) Base-vs-+Time pair graphs (kept alongside the six-strategy plot above) ----
-    # One for the single index (E5 vs E6), one for the joint sieve (E7 vs E8). The
-    # non-time estimator is a solid BLUE line, the +Time estimator a dashed RED line;
-    # both carry their wild-cluster-bootstrap CI bands; the axis is fixed to [0,1].
+    # ---- 3b) Base-vs-+Time pair graph (alongside the cross-strategy plot above) ----
+    # The single index, E3 vs E4. The non-time estimator is a solid BLUE line, the
+    # +Time estimator a dashed RED line; both carry their wild-cluster-bootstrap CI
+    # bands; the axis is fixed to [0,1].
     def _make_pair_plot(nt_est, t_est, nt_label, t_label, title, out_name):
         figp, axp = plt.subplots(figsize=(11, 5.5))
         drew = False

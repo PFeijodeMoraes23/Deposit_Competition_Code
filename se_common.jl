@@ -102,7 +102,7 @@ function gmm_cluster_ses(method::AbstractString, theta::Vector{Float64},
     #  (b) FLAT direction (any σ OR π): its moment-Jacobian column Z'∂δ/∂θ₂ⱼ is numerically
     #      negligible relative to the largest column of D — the objective simply does not respond
     #      to it. Signature in the stage ladder: Q frozen across stages while the added π optimizes
-    #      to ~0 (e.g. E5-E8 rc4→ext1→ext2 with π(fgc×65+) ≡ 0.0000).
+    #      to ~0 (e.g. the rc4→ext1→ext2 ladder with π(fgc×65+) ≡ 0.0000).
     # Either way the column is ~0, DtWD is near-singular, and inv() inflates EVERY parameter's SE —
     # θ₁'s (incl. α) included — not just the offending parameter's own.
     ZtX  = Z' * X                                                 # (L × K1)

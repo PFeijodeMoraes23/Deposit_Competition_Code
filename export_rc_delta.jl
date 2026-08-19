@@ -9,18 +9,21 @@
 # are unaffected: they are computed from the spread and Z alone and never touch δ.)
 #
 # Row alignment: the engine reads the demand parquet in file order and never reorders, so δ[i]
-# corresponds to parquet row i. Verified 2026-08-12: length(delta) == parquet nrows for E5-E8.
+# corresponds to parquet row i. Verified 2026-08-12: length(delta) == parquet nrows on every
+# routine exported.
 #
 # Format (matches the engine's save_delta_bin): Int64 length, then that many Float64, little-endian.
 #
 # Usage:
-#   julia --project=. export_rc_delta.jl [--stage ext1] [--routines 5,6,7,8] [--outdir DIR]
+#   julia --project=. export_rc_delta.jl [--stage ext1] [--routines 3,4] [--outdir DIR]
 
 using Serialization
 
+include(joinpath(@__DIR__, "of_root.jl"))
+
 function get_paths()
-    root = dirname(dirname(dirname(abspath(@__FILE__))))
-    data = joinpath(root, "BCB", "Egan_et_al_2025_Rep", "processed", "ESTIMATION_OUTPUT", "BLP_RESULTS")
+    data = joinpath(resolve_of_root(), "BCB", "Egan_et_al_2025_Rep", "processed",
+                    "ESTIMATION_OUTPUT", "BLP_RESULTS")
     return joinpath(data, "cluster_raw"), joinpath(data, "cluster_processed")
 end
 
@@ -31,7 +34,7 @@ end
 
 function main()
     stage    = argval("--stage", "ext1")
-    routines = parse.(Int, split(argval("--routines", "5,6,7,8"), ","))
+    routines = parse.(Int, split(argval("--routines", "3,4"), ","))
     raw, processed = get_paths()
     outdir = argval("--outdir", processed)
     mkpath(outdir)

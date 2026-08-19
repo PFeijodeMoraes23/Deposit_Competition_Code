@@ -5,27 +5,26 @@ import os
 import sys
 import json
 import pickle
-from pathlib import Path
 import subprocess
 import shutil
 import warnings
 warnings.filterwarnings("ignore", message="covariance of constraints does not have full rank")
 
-_DRAFTS_DIR = Path(r"C:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\Drafts\Deposit Competition")
-
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 if _THIS_DIR not in sys.path:
     sys.path.insert(0, _THIS_DIR)
 
-_ROOT = Path(__file__).resolve().parents[2]
-DATA_DIR = _ROOT / "BCB" / "Egan_et_al_2025_Rep" / "processed"
-OUTPUT_DIR = DATA_DIR / "ESTIMATION_OUTPUT" / "DEMAND_PREP" / "est2"
+# est_dir/rout_dir follow SLEEP_OUT_ROOT, so a sandboxed run exports the fits it just
+# produced instead of whatever sits in the production tree.
+from utils import paths  # noqa: E402
+
+_DRAFTS_DIR = paths.drafts_dir()
+OUTPUT_DIR = paths.est_dir(2)
 RESULTS_PICKLE = OUTPUT_DIR / "estimation_results.pkl"
 
-TEX_OUT_DIR = DATA_DIR / "ESTIMATION_OUTPUT" / "Rout"
+TEX_OUT_DIR = paths.rout_dir()
 OUT_DIR = str(TEX_OUT_DIR)
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-TEX_OUT_DIR.mkdir(parents=True, exist_ok=True)
 
 def stars(p):
     if p < 0.01: return '***'
@@ -347,9 +346,12 @@ def main():
     print(" EXPORT EST2 SLEEP RESULTS (Pooled B+D Linear)")
     print("=" * 70)
 
+    # A missing pickle is a hard failure, not a skip: without it this script writes no
+    # table at all, and a silent return leaves the orchestrator reporting success over a
+    # step that produced nothing.
     if not RESULTS_PICKLE.exists():
-        print("Results not found. Run estimation_2_sleep.py first.")
-        return
+        print(f"Results not found at {RESULTS_PICKLE}. Run estimation_2_sleep.py first.")
+        sys.exit(1)
 
     print(" - Reading pickled model estimates...")
     with open(RESULTS_PICKLE, 'rb') as fh:

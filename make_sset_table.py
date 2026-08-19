@@ -22,7 +22,7 @@ the table note), which matters here because G* ≈ 5 effective clusters.
 Usage
 -----
   python make_sset_table.py                       # E3/E4, stage ext1
-  python make_sset_table.py --routines 6 --stage ext1
+  python make_sset_table.py --routines 4 --stage ext1
 """
 from utils.venv_guard import ensure_project_venv
 ensure_project_venv(__file__)
@@ -67,7 +67,7 @@ def _fmt(runs, lo_edge, hi_edge):
 
 def main():
     ap = argparse.ArgumentParser(description="Stock-Wright S-set table from the CUE grid runs")
-    ap.add_argument("--routines", default="5,6,7,8")
+    ap.add_argument("--routines", default="3,4")
     ap.add_argument("--stage", default="ext1")
     args = ap.parse_args()
     routines = [int(x) for x in args.routines.split(",") if x.strip()]

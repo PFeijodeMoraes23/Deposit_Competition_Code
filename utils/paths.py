@@ -71,7 +71,7 @@ def data_root() -> str:
 
 
 def demand_prep_root() -> Path:
-    """Directory holding the per-estimator sleepiness outputs (``est1`` … ``est8``).
+    """Directory holding the per-estimator sleepiness outputs (``est1`` … ``est4``).
 
     Normally ``PROCESSED/ESTIMATION_OUTPUT/DEMAND_PREP``. Setting ``SLEEP_OUT_ROOT``
     redirects the whole tree somewhere else, which is how a re-estimation can be run
@@ -92,6 +92,51 @@ def demand_prep_root() -> Path:
     if override:
         return Path(override).expanduser()
     return PROCESSED / "ESTIMATION_OUTPUT" / "DEMAND_PREP"
+
+
+def estimation_output() -> Path:
+    """Root of the estimation output tree (``PROCESSED/ESTIMATION_OUTPUT``).
+
+    Production location in every run: it also holds the BLP, counterfactual and cost
+    trees, which a sleepiness sandbox has no business redirecting. The objects a
+    sleepiness run does own resolve through ``demand_prep_root``/``est_dir``/``rout_dir``.
+    """
+    return PROCESSED / "ESTIMATION_OUTPUT"
+
+
+def est_dir(n: int | str) -> Path:
+    """Per-estimator sleepiness directory ``est{n}`` of the ACTIVE vintage.
+
+    Resolves under :func:`demand_prep_root`, so ``SLEEP_OUT_ROOT`` carries the whole
+    lineup with it. Resolve ``est{n}`` this way rather than off ``PROCESSED``: a script
+    that pins production reads an unrelated vintage during a sandboxed run, and since a
+    missing pickle is a skip in most of the export/demand-prep chain, it reports success
+    on empty output.
+    """
+    return demand_prep_root() / f"est{n}"
+
+
+def rout_dir() -> Path:
+    """``Rout`` — TeX fragments, figures and cached bands — for the ACTIVE vintage.
+
+    ``estimation_output()/Rout``, or ``<SLEEP_OUT_ROOT>/Rout`` beside the per-estimator
+    directories, so a sandboxed run's exhibits describe its own fits instead of
+    overwriting the production ones. Created on demand.
+    """
+    override = os.environ.get("SLEEP_OUT_ROOT", "").strip()
+    d = (Path(override).expanduser() / "Rout") if override else (estimation_output() / "Rout")
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def drafts_dir() -> Path:
+    """Paper directory the exporters mirror their .tex fragments and figures into.
+
+    Follows the ``OPEN_FINANCE`` anchor (so ``OPEN_FINANCE_ROOT`` moves it too) and is
+    never created here: the paper directory is authored, and a copy into a path that does
+    not exist should fail rather than scatter fragments into a fresh empty tree.
+    """
+    return OPEN_FINANCE / "Drafts" / "Deposit Competition"
 
 
 # ---------------------------------------------------------------------------
@@ -178,7 +223,7 @@ def market_panel_csv(processed: Path | None = None) -> Path:
 
 __all__ = [
     "OPEN_FINANCE", "BCB", "DATA_ROOT", "RAW", "PROCESSED", "data_root", "market_panel_csv",
-    "demand_prep_root",
+    "demand_prep_root", "estimation_output", "est_dir", "rout_dir", "drafts_dir",
     "ESTBAN_DIR", "ESTBAN_CSV", "ESTBAN_RAW_MUN", "ESTBAN_RAW_AG",
     "IF_DATA_ROOT", "IF_DATA_LIST", "IF_DATA_PRUDENTIAL", "IF_DATA_FINANCIAL", "IF_DATA_INDIVIDUAL", "IF_DATA_AGG",
     "COSIF_RAW", "SGS_RAW",

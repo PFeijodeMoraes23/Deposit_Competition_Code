@@ -27,12 +27,12 @@ LOWER bound at finite NSAMP -- it can only grow with more samples -- so a report
 factor understates rather than overstates.
 
 Assembly is the estimator's, exactly: knots from _pix_shifted_range, ONE _twoway_demean call
-over the whole design block, two-way entity+quarter FE for BOTH E5 and E6, and vmu/vsd
+over the whole design block, two-way entity+quarter FE for BOTH E3 and E4, and vmu/vsd
 recomputed from the sample. Each of those is a trap that has cost measurable error before.
 
 READ-ONLY. Writes test_inversion_est{E}_{loss}.csv/.pkl into <demand_prep_root>/DIAGNOSTICS.
 
-Usage:  python diag_test_inversion_band.py [--est 5] [--loss robust] [--nsamp 200]
+Usage:  python diag_test_inversion_band.py [--est 3] [--loss robust] [--nsamp 200]
 """
 import argparse
 import os
@@ -115,7 +115,7 @@ def main():
     CF_raw = ss["v_hat_x_lagged_dep"].values.astype(float)
     _, einv = np.unique(ss["entity_id"].values, return_inverse=True)
     ec = np.bincount(einv).astype(float)
-    # BOTH E5 and E6 carry two-way entity+quarter FE: estimation_sleep_common passes
+    # BOTH E3 and E4 carry two-way entity+quarter FE: estimation_sleep_common passes
     # fe_time_col unconditionally, and `time_block` selects the STATE block, not the FE
     # structure. Branching the demeaner on the time block shifts si_b by 2.2e-04.
     _, tinv = np.unique(ss[FE_TIME_COL].values, return_inverse=True)

@@ -1,18 +1,16 @@
 """
 estimation_sleep_common.py
 ================================================================================
-Shared runner for the pooled sleepiness estimators E3-E9. Each estimator is one
-choice of (kind, time_block):
+Shared runner for the pooled sleepiness estimators of the lineup. Each estimator is
+one choice of (kind, time_block), listed in EST_CONFIG at the bottom:
 
-    E3  logit                 (kind="logit",        time_block=False)
-    E4  logit + Time          (kind="logit",        time_block=True)
-    E5  single-index          (kind="single_index", time_block=False)
-    E6  single-index + Time   (kind="single_index", time_block=True)
-    E7  joint single-index, monotone sieve  (kind="joint_sieve",  time_block=False)
-    E8  joint single-index, sieve + Time    (kind="joint_sieve",  time_block=True)
-    E9  joint single-index, kernel (optional/deferred)  (kind="joint_kernel", spec12)
+    E3  single-index          (kind="single_index", time_block=False)
+    E4  single-index + Time   (kind="single_index", time_block=True)
 
-The "+Time" variants add the time block (time_trend, gdp_growth_yoy) to every
+E1 (local linear, B-type) and E2 (pooled linear) are separate estimators with their
+own scripts, estimation_1_sleep.py / estimation_2_sleep.py.
+
+The "+Time" variant adds the time block (time_trend, gdp_growth_yoy) to every
 state block via estimation_2_sleep.define_specifications(time_block=True). phi is
 always built from the native index + link (phi_from_native); AMEs are reporting-only.
 Inference: score/multiplier wild cluster bootstrap (utils.sleep_links).
@@ -82,8 +80,8 @@ JULIA_THREADS = int(os.environ.get("SLEEP_JULIA_THREADS",
                                    str(max(2, min(8, (os.cpu_count() or 4) - 4)))))
 # Starts for the joint sieve. Was hardcoded 2; now env-overridable and matched to threads.
 SIEVE_N_STARTS = int(os.environ.get("SLEEP_SIEVE_N_STARTS", str(max(2, JULIA_THREADS))))
-# Starts for the NLLS logit (E3/E4, and the warm start E5-E8 inherit). Was a single start
-# from zeros. That matters beyond E3/E4: fit_single_index never re-optimises theta, so E5/E6
+# Starts for the NLLS logit that supplies the single-index direction. Was a single start
+# from zeros. That matters because fit_single_index never re-optimises theta, so E3/E4
 # take whatever direction this fit lands on -- and on the joint-sieve full-sample candidate
 # scan the logit direction scored WORST of four (164,913 vs 160,940). Sequential, so each
 # extra start costs one more least_squares solve; 4 is a reasonable default.
@@ -139,13 +137,13 @@ def _exec_spec(args):
     if kind == "single_index":
         # warm start only: fit_single_index reads params_native (+ the index), never the
         # logit's AMEs/SEs -> skip its wild bootstrap.
-        # n_starts matters HERE as much as for E3/E4: fit_single_index never re-optimises
-        # theta, so E5/E6 inherit exactly the direction this call returns.
+        # n_starts matters HERE: fit_single_index never re-optimises theta, so E3/E4
+        # inherit exactly the direction this call returns.
         #
-        # E5/E6 are a HYBRID: the LINK is already least squares (sieve OLS inside
+        # E3/E4 are a HYBRID: the LINK is already least squares (sieve OLS inside
         # fit_single_index) but the DIRECTION comes from this Cauchy NLLS logit. The LS
         # variant below refits only the direction, making the column fully LS and directly
-        # comparable with the linear (OLS) E1/E2 and the LS joint sieve E7/E8.
+        # comparable with the linear (OLS) E1/E2 and with the LS joint sieve.
         def _single_index(loss, band):
             lg = fit_nlls_link(df_target, s_cols, has_cf=has_cf, link="logit", loss=loss,
                                fe_time_col=FE_TIME_COL, bootstrap=False,
@@ -403,7 +401,7 @@ def _calculate_phis(df, results_dict, link):
         # phi_t = sum_m phi_mt*M_mt / sum_m M_mt over MARKETS m (V_Main.tex:311). market_size
         # (= pop_total) is CONSTANT within a (quarter, market) cell, so aggregating it with
         # "sum" instead would weight each market by pop x n_banks -- a product with no
-        # counterpart in the model, and worth 1.90pp of LEVEL (0.9720 vs 0.9531 on est6
+        # counterpart in the model, and worth 1.90pp of LEVEL (0.9720 vs 0.9531 on est4
         # spec 12) at nearly unchanged shape. The same convention carries through the
         # bootstrap bands (_phi_t_group_struct) and demand prep's own phi_t
         # (estimation_demand_link_common), so every reported series is on one weighting.
@@ -476,7 +474,7 @@ def run_sleep_estimator(est_num, kind, time_block=False, spec12_only=False, n_jo
 
     # MERGE-ON-SAVE (2026-07-31). Rebuilding results_dict from scratch and pickle.dump'ing it
     # meant a `--spec12` run silently DESTROYED the other 7 specs of a full-grid pickle (this
-    # happened to est7 on 07-31; restored from _PRE_LSTEST_ backup). _merge_into_pickle loads
+    # happened on 07-31; restored from _PRE_LSTEST_ backup). _merge_into_pickle loads
     # the existing pickle and updates only the specs computed in THIS run:
     #   * res_main (robust) present  -> overwrite second_stage/first_stage as before.
     #   * res_main None, res_ls set  -> LS-only run: attach second_stage_ls to the EXISTING
@@ -509,8 +507,9 @@ def run_sleep_estimator(est_num, kind, time_block=False, spec12_only=False, n_jo
         sp12 = results_dict.get("IV_HausmanFull x Tech", {}).get("second_stage")
         boot = getattr(sp12, "phi_t_boot", None) if sp12 is not None else None
         if boot is not None:
-            rout = _paths_mod.PROCESSED / "ESTIMATION_OUTPUT" / "Rout"
-            rout.mkdir(parents=True, exist_ok=True)
+            # rout_dir() honours SLEEP_OUT_ROOT like _out_dir above, so the band lands with
+            # the fit it came from rather than overwriting the production one.
+            rout = _paths_mod.rout_dir()
             with open(rout / f"ts_link_band_est{est_num}.pkl", "wb") as f:
                 pickle.dump(boot, f)
             print(f"Saved spec-12 phi_t CI band -> ts_link_band_est{est_num}.pkl")

@@ -278,9 +278,9 @@ def fit_nlls_link(df, state_cols, has_cf, link, loss="cauchy", fe_time_col=None,
     K, G = X.shape[1], CF.shape[1]
 
     # `init` lets a caller probe whether this single start is landing in a local
-    # optimum. E3/E4 otherwise run ONE start from zeros, and E5/E6 inherit whatever
-    # direction that produces (fit_single_index never re-optimises theta), so a bad
-    # basin here propagates silently to four reported estimators.
+    # optimum. This fit otherwise runs ONE start from zeros, and E3/E4 inherit whatever
+    # direction it produces (fit_single_index never re-optimises theta), so a bad
+    # basin here propagates silently to both reported single-index estimators.
     _args = (y_dm, X, Z, CF, entity_idx, link, ecounts, tinv, tcounts)
 
     if init is not None:
@@ -289,7 +289,7 @@ def fit_nlls_link(df, state_cols, has_cf, link, loss="cauchy", fe_time_col=None,
             raise ValueError(f"init has shape {starts[0][1].shape}, expected {(K + G,)}")
     else:
         # MULTISTART. This used to be a single start from zeros, which is thin for a
-        # non-convex M-estimator -- and it propagates: fit_single_index (E5/E6) never
+        # non-convex M-estimator -- and it propagates: fit_single_index (E3/E4) never
         # re-optimises theta, it inherits whatever direction this fit produces. On the
         # joint-sieve full-sample candidate scan the logit direction scored WORST of four
         # (164,913 vs 160,940 for the best), so the inherited direction was measurably poor.
@@ -752,7 +752,7 @@ def project_to_shape(p_lin, G, A, lb, ub, tol=1e-10, K=None, cap=1.0, warm=None)
 
 def fit_single_index(df, state_cols, has_cf, logit_res, degree=3, phi_band=False,
                      fe_time_col=None):
-    """Monotone single index in the logit-direction index (approaches III/IV, E5/E6).
+    """Monotone single index in the logit-direction index (approaches III/IV, E3/E4).
 
     The direction theta is INHERITED from the logit and never re-optimised here; only the link
     G is estimated, by least squares on the FE-demeaned multiplicative design.
@@ -769,7 +769,7 @@ def fit_single_index(df, state_cols, has_cf, logit_res, degree=3, phi_band=False
 
     Returns NonLinearResults carrying average-derivative AMEs (params; tables), the index
     direction (params_native), and the link. fe_time_col adds a second additive FE (two-way
-    entity+time concentration) -- note callers pass it for BOTH E5 and E6."""
+    entity+time concentration) -- note callers pass it for BOTH E3 and E4."""
     constrained = link_constrained()
     phi_params = [p for p in logit_res.params.index if not str(p).startswith("v_hat")]
     theta = logit_res.params_native[phi_params].values.astype(float)
@@ -1081,7 +1081,7 @@ def phi_from_native(df: pd.DataFrame, res, link: str) -> np.ndarray:
     X = _build_phi_X(df, phi_params)
     index = X @ native[phi_params].values.astype(float)
     if link == "index_sieve":
-        # E5/E6 shape-constrained link: monotone I-spline stored as a grid over the FULL native
+        # E3/E4 shape-constrained link: monotone I-spline stored as a grid over the FULL native
         # index (constant INCLUDED -- unlike "sieve" below, where the joint estimator absorbs the
         # constant into G and the index must therefore drop `nr_lagged_dep`). Outside the grid the
         # link is flat, which is the correct CDF extension and is why eq.(18)'s Pix-removed index
@@ -1731,7 +1731,7 @@ def _wild_weights(n, scheme, rng):
 # (a) studentisation by a PER-DRAW SE and (b) the null restriction.
 #
 # WHY THE DEFAULT IS **NOT** FLIPPED. utils/sleep_links.py is production code for
-# E1-E8, the BBL policy function, utils/se_national.py and the whole phi-separation
+# E1-E4, the BBL policy function, utils/se_national.py and the whole phi-separation
 # battery. Every p-value archived in Drafts/Deposit Competition (V_Main.tex tables,
 # identification_notes.md, the DIAG_PHI_SEPARATION csvs, sleep_first_stage_pooled*.tex)
 # was produced under the normal reference. Silently changing the default would make
@@ -1762,7 +1762,7 @@ def _wild_weights(n, scheme, rng):
 #
 # TO PROMOTE the corrected reference to default, re-run and re-export, in order:
 #   1. estimation_2_sleep.py (E1/E2, all specs)  -> est1/est2 pickles
-#   2. estimation_sleep_common.py --est 3..8     -> E3-E8 pickles (~11h)
+#   2. estimation_sleep_common.py --est 3, --est 4  -> E3/E4 pickles
 #   3. estimation_bbl_1_polfunc.py               -> BBL policy-function SEs
 #   4. export_1_sleep_results.py + the sleep_first_stage_pooled*.tex exporters
 #   5. run_phi_diagnostics.py (full D0-D12 battery) -> DIAG_PHI_SEPARATION csvs
@@ -2112,7 +2112,7 @@ def nlls_link_wild_bootstrap(res_lsq, X, link, K, G, idx_names, cl_inv, n_cl,
 
 def ols_sieve_wild_bootstrap(Xdm, resid, cl_inv, n_cl, b_full, ame_fn, ame_hat,
                              B=None, scheme=None, seed=0, project=None):
-    """Score/multiplier wild cluster bootstrap for the E5/E6 profiled sieve OLS
+    """Score/multiplier wild cluster bootstrap for the E3/E4 profiled sieve OLS
     (link coefficients conditional on the logit index direction). IF_i for OLS
     is (X'X)^{-1} x_i u_i; perturb the cluster sums, recompute the AME via
     ame_fn(b)->dict, return (bse dict, pvals dict). `project` maps each draw back onto the
@@ -2149,7 +2149,7 @@ def phi_t_group_struct(df_ss, market_key=None, weight="mean", time_key=None):
                    to that product; the option is kept only to reproduce a series built
                    under it.
 
-    The choice moves the LEVEL of national sleepiness by 1.90 pp (0.9720 vs 0.9531 on est6
+    The choice moves the LEVEL of national sleepiness by 1.90 pp (0.9720 vs 0.9531 on est4
     spec 12) from identical phi_mt, against a 3.76 pp movement being interpreted; the RANGE
     is nearly unchanged (3.76 vs 3.50 pp). The market key matters far less (CODMUN_IBGE vs
     mca_code: 0.21 pp). The parameter is explicit so a band is always built on EXACTLY the
@@ -2292,7 +2292,7 @@ def attach_phi_band(national_agg, res, Z, coef_names, df_agg, phi_mt, safe_key,
         # Carry EVERY band column the frame offers, not just lo/hi. The bias-corrected columns
         # (lo_bc/hi_bc/p_below) are computed by _phi_t_band for free, and the linear estimators
         # store their band ONLY here -- there is no phi_t_boot on a statsmodels result to fall
-        # back on, unlike E5-E8. Selecting a fixed lo/hi pair silently dropped them.
+        # back on, unlike E3/E4. Selecting a fixed lo/hi pair silently dropped them.
         ren = {"time_id": time_key, "phi_t": "_band_pt",
                "lo": f"phi_t_lo_{safe_key}", "hi": f"phi_t_hi_{safe_key}",
                "lo_bc": f"phi_t_lobc_{safe_key}", "hi_bc": f"phi_t_hibc_{safe_key}",
@@ -2497,7 +2497,7 @@ def _band_from_draws(pt, draws, tuniq, alpha=0.05, label="phi_t band",
 # joint (direction + link) band without refitting the production estimator:
 #
 #   nlls_direction_if      cluster influence functions of the NLLS direction, reconstructed at
-#                          the STORED solution (they were never persisted: the E5/E6 pipeline
+#                          the STORED solution (they were never persisted: the E3/E4 pipeline
 #                          calls fit_nlls_link with bootstrap=False).
 #   unconditional_phi_t_band
 #                          per wild draw w: theta_b = theta_hat + w@IF_theta; re-standardize

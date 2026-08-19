@@ -48,11 +48,11 @@ DEMAND_PREP = _paths.PROCESSED / "ESTIMATION_OUTPUT" / "DEMAND_PREP"
 def demand_parquet(estim: int = 2):
     """Newest `demand_{estim}_*_spec_12.parquet`.
 
-    The battery was written against E2 and hardcoded its parquet. That is fine for the arms
-    that only need the POOLED PANEL (the frame is shared), but wrong for anything that reads
-    phi: D0's censoring rate is `Dep_t < phi*g*Dep_{t-1}`, which is mechanically increasing in
-    phi, so measuring it on E2 (phi ~ 0.92) understates it for the joint-sieve routines that
-    are the headline (E7/E8, phi ~ 0.99). --estim repoints the phi source.
+    The default is E2's parquet. That is fine for the arms that only need the POOLED PANEL
+    (the frame is shared), but wrong for anything that reads phi: D0's censoring rate is
+    `Dep_t < phi*g*Dep_{t-1}`, which is mechanically increasing in phi, so measuring it on E2
+    (phi ~ 0.92) understates it for a routine that fits a higher phi. --estim repoints the
+    phi source.
     """
     cands = [p for p in DEMAND_PREP.glob(f"demand_{estim}_*spec_12.parquet")
              if "final" not in p.name.lower()]
@@ -81,7 +81,7 @@ DEP_SCALE = 1e9   # sleep frame stores deposits in R$ bn; the demand parquet in 
 MDE_MULT, MDE_LO, MDE_HI = 3.457, 0.676, 2.04
 
 
-def load_blp_theta1(est="E8", stage="extended", spec=12):
+def load_blp_theta1(est="E3", stage="extended", spec=12):
     """theta1 from the downloaded cluster results as {param_name: coef}, or None.
     NB: the BLP spread regressor is spread_ann/100 (annual pp) -- blp_1_logit.jl:219."""
     import json
@@ -750,9 +750,10 @@ if __name__ == "__main__":
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--arm", choices=list(ARMS) + ["all"], required=True)
     ap.add_argument("--estim", type=int, default=2,
-                    help="routine whose phi to test (default 2, the historical hardcoded one). "
-                         "D0's censoring rate is increasing in phi, so run the routine you "
-                         "actually report — E7/E8 carry phi~0.99 against E2's ~0.92.")
+                    help="routine whose phi to test (default 2, whose parquet the pooled-panel "
+                         "arms share). D0's censoring rate is increasing in phi, so run the "
+                         "routine you actually report — a routine fitting a phi above E2's "
+                         "~0.92 censors more.")
     a = ap.parse_args()
 
     # Rebind the module-level parquet BEFORE any arm runs. The arms read PARQUET at call time,

@@ -395,7 +395,7 @@ def calculate_phis(df, res_dict, state_blocks):
                 phi_mt += c * z
                 Zcols.append(z); coef_names.append(col_name)
 
-        key = f"IV_HausmanFull_x_{spec_name}"   # match the E2-E8 phi column naming convention
+        key = f"IV_HausmanFull_x_{spec_name}"   # match the E2-E4 phi column naming convention
         df[f'phi_mt_{key}'] = phi_mt
         # phi_t = sum_m phi_mt*M_mt / sum_m M_mt over MARKETS m (V_Main eq. below sec.4:
         # a market is an MCA, not a municipality).

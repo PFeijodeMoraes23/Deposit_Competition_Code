@@ -16,8 +16,8 @@ Reuses the label maps + formatting helpers from make_blp_rc_table.py.
 Usage
 -----
   python make_blp_compare_table.py            # E3/E4 (the cluster default set)
-  python make_blp_compare_table.py --est 6
-  python make_blp_compare_table.py --routines 5,6,7,8
+  python make_blp_compare_table.py --est 4
+  python make_blp_compare_table.py --routines 1,2,3,4
 
 Output
 ------
@@ -258,7 +258,7 @@ def build_table(est: int) -> str:
 def main():
     ap = argparse.ArgumentParser(description="Logit-vs-RC-stages landscape table")
     ap.add_argument("--est", type=int)
-    ap.add_argument("--routines", default="5,6,7,8")
+    ap.add_argument("--routines", default="3,4")   # the cluster default set
     args = ap.parse_args()
     ests = [args.est] if args.est else [int(x) for x in args.routines.split(",") if x.strip()]
 

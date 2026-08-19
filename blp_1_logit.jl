@@ -593,15 +593,14 @@ const TABLE_SUBMODELS = [("priceonly", "Price Only"), ("core", "Price + Core"),
 # Cross-estimator comparison table (est1-4_spec12_logit_comparison.tex): one column per
 # demand routine, each showing its final `+ D-Type` sub-model. Column headers \ref{} the
 # sleepiness-strategy enumerate items in V_Main §(sec:empirical:sleep) — same convention as
-# est1-4_spec12_stage2_comparison.tex. (the dropped logit pair's `estimation:logistic` item is commented out
-# in V_Main, so they fall back to a plain E<id> header if ever included.)
+# est1-4_spec12_stage2_comparison.tex. ESTIMATION_ENUM_REF below carries a \ref for every id
+# listed here; an id absent from it falls back to a plain E<id> header.
 const COMPARISON_IDS  = [1, 2, 3, 4]
 # Routines that get a per-routine est{id}_spec12_logit.tex. The routines are AUTO-DISCOVERED from the
-# demand parquets, so E3/E4 (pooled logistic — not part of the reported lineup, and their
-# `estimation:logistic` item is commented out in V_Main) were silently getting tables written on every
-# run. Restrict the AUTO-discovered set to the reported lineup; an explicit `--est N` still overrides,
-# so E3/E4 remain reachable on demand.
-const REPORTED_IDS    = [1, 2, 5, 6, 7, 8]
+# demand parquets, so this list is what keeps a stray parquet (an exploratory routine, an id outside
+# the reported lineup) from silently writing a table into the Drafts folder on every run. An explicit
+# `--est N` bypasses the filter, so any discovered routine stays reachable on demand.
+const REPORTED_IDS    = [1, 2, 3, 4]
 const COMPARISON_ROWS = ["alpha", "fgc_covered", "has_ip", "log_total_assets_lag",
                          "is_state_owned", "dummy_D_type"]   # seg_S2-S5 included in the spec, not reported
 const COMPARISON_ROWS_SEG = ["alpha", "fgc_covered", "has_ip", "log_total_assets_lag",

@@ -35,7 +35,7 @@ All first-stage statistics are computed AFTER partialling the included exogenous
 (const + X) out of the spread and the instruments (Frisch–Waugh–Lovell). Writes
 cluster_processed/weak_iv.json (consumed by process_blp_outputs.py) and prints a table.
 
-Run:  python weak_iv_analysis.py [BLP_RESULTS_dir] [--routines 5,6,7,8]
+Run:  python weak_iv_analysis.py [BLP_RESULTS_dir] [--routines 1,2,3,4]
 """
 import os, sys, glob, json, argparse
 import numpy as np
@@ -673,7 +673,7 @@ def main():
         pass
     ap = argparse.ArgumentParser()
     ap.add_argument("results_dir", nargs="?", default=default_results_dir())
-    ap.add_argument("--routines", default="5,6,7,8")
+    ap.add_argument("--routines", default="1,2,3,4")   # the reported lineup
     ap.add_argument("--delta-stage", default=None, metavar="STAGE",
                     help="invert AR/LM against the structural δ of this RC stage (e.g. ext1) instead "
                          "of the log-share δ; writes weak_iv_<STAGE>.json. Requires export_rc_delta.jl.")

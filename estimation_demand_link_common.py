@@ -1,14 +1,14 @@
 """
 estimation_demand_link_common.py
 ================================================================================
-Shared demand-prep for the link-based sleepiness routines Est4/Est5/Est6.
-Mirrors estimation_3_demand_1_prep.py (reshape panel, reconstruct phi_mt, build
-Active Deposits Dep^Act and data-implied conditional B/D shares) but:
+Shared demand-prep for the link-based sleepiness routines E3/E4 (see DEMAND_CFG at
+the bottom). Mirrors estimation_2_demand_1_prep.py (reshape panel, reconstruct
+phi_mt, build Active Deposits Dep^Act and data-implied conditional B/D shares) but:
 
   * phi is reconstructed from the NATIVE index coefficients (params_native),
     not the AMEs (user guardrail: AMEs are reporting-only); and
   * the link is parametrised — 'uniform' (clip), 'probit' (Phi), 'index'
-    (the stored cubic sieve G) — so the three wrappers stay tiny.
+    (the stored cubic sieve G) — so one `--est N` invocation covers each routine.
 
 This reproduces, in demand prep, exactly the phi each estimation_N_sleep.py
 writes to its market_panel_phis.csv.
@@ -36,7 +36,6 @@ from utils import paths
 from utils import state_transform as _st
 from utils.sleep_links import NonLinearResults  # noqa: F401 (needed for unpickling)
 
-DATA_DIR = paths.PROCESSED
 # market_panel.csv, NOT the fees variant — see utils/paths.market_panel_csv (USE_FEE_PANEL=1).
 PANEL_CSV = paths.market_panel_csv()
 BANKED_CSV = paths.INCLUSION_DIR / "bcb_banked_mca_panel.csv"
@@ -541,8 +540,10 @@ def run(est_num, link, tag, time_block=False, spec="all"):
     else:
         spec_ids = [int(spec)]
 
-    sleep_output_dir = DATA_DIR / "ESTIMATION_OUTPUT" / "DEMAND_PREP" / f"est{est_num}"
-    demand_output_dir = DATA_DIR / "ESTIMATION_OUTPUT" / "DEMAND_PREP"
+    # est_dir/demand_prep_root follow SLEEP_OUT_ROOT, so a sandboxed run reads the fit it
+    # just produced and writes its parquets beside it.
+    sleep_output_dir = paths.est_dir(est_num)
+    demand_output_dir = paths.demand_prep_root()
     demand_output_dir.mkdir(parents=True, exist_ok=True)
 
     print(f"Loading Base Panel {PANEL_CSV}...")
@@ -551,7 +552,8 @@ def run(est_num, link, tag, time_block=False, spec="all"):
 
     results_pickle = sleep_output_dir / "estimation_results.pkl"
     if not results_pickle.exists():
-        print(f"[!] No pickle at {results_pickle}. Run estimation_{est_num}_sleep.py first.")
+        print(f"[!] No pickle at {results_pickle}. "
+              f"Run estimation_sleep_common.py --est {est_num} first.")
         return
     with open(results_pickle, 'rb') as f:
         results_dict = pickle.load(f)

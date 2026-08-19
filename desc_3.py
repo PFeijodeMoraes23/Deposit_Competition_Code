@@ -35,7 +35,6 @@ desc_1/desc_2, which read the raw market panel).
 """
 import argparse
 import json
-from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -44,9 +43,10 @@ from utils import paths as P
 from utils.cluster import effective_cluster_stats
 
 CLUSTER_VAR = "CodConglomeradoPrudencial"
-_ROOT = Path(__file__).resolve().parents[2]
-OUTPUT_DIR = P.PROCESSED / "ESTIMATION_OUTPUT" / "Rout"
-DRAFTS_DIR = _ROOT / "Drafts" / "Deposit Competition"
+# rout_dir/est_dir follow SLEEP_OUT_ROOT, so the exhibit describes the sample of the run
+# that produced it rather than whatever sits in the production tree.
+OUTPUT_DIR = P.rout_dir()
+DRAFTS_DIR = P.drafts_dir()
 
 # 8-digit CNPJ root of the prudential-conglomerate leader -> display brand name.
 # The panel's NomeInstituicao is frequently a subsidiary label with folded accents
@@ -101,7 +101,7 @@ def _display_name(cnpj_lider, fallback):
 
 
 def load_sample(est):
-    path = P.PROCESSED / "ESTIMATION_OUTPUT" / "DEMAND_PREP" / f"est{est}" / "market_panel_phis.csv"
+    path = P.est_dir(est) / "market_panel_phis.csv"
     if not path.exists():
         raise FileNotFoundError(f"Second-stage sample not found: {path} (run the sleep estimation first).")
     df = pd.read_csv(path, usecols=[CLUSTER_VAR, "NomeInstituicao", "CNPJ_Lider",
@@ -112,7 +112,7 @@ def load_sample(est):
 def assert_matches_pkl(df, est):
     """Cross-check the sample against the estimator's saved fit so the exhibit is
     provably consistent with the reported Observations / Clusters."""
-    pkl = P.PROCESSED / "ESTIMATION_OUTPUT" / "DEMAND_PREP" / f"est{est}" / "estimation_results.pkl"
+    pkl = P.est_dir(est) / "estimation_results.pkl"
     try:
         import pickle
         ss = pickle.load(open(pkl, "rb")).get("IV_HausmanFull x Tech", {}).get("second_stage")
@@ -241,7 +241,6 @@ def main():
     for i, r in enumerate(st["top_n"], 1):
         print(f"   {i}. {r['name']:<28s} dep={100*r['dep_share']:5.1f}%  cum={100*r['cum_share']:5.1f}%  obs={100*r['obs_share']:5.1f}%")
 
-    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     # LaTeX tables: Panel A and Panel B as SEPARATE, standalone \input-able tables so
     # Panel B (deposit concentration) can be dropped into V_Main.tex on its own.
     tex_a, tex_b = render_panel_a(st), render_panel_b(st)

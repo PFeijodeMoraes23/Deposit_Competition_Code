@@ -23,15 +23,13 @@ Idempotent and re-runnable: drop a freshly downloaded blp_outputs.zip into BLP_R
 (or cluster_raw/) and run again.
 
 Usage:
-    python process_blp_outputs.py [BLP_RESULTS_dir] [--stage extended] [--routines 5,6,7,8]
+    python process_blp_outputs.py [BLP_RESULTS_dir] [--stage extended] [--routines 3,4]
 """
 import os, sys, glob, json, zipfile, shutil, argparse, datetime, math
 
 ROUTINE_LABEL = {
     1: "Local B-type", 2: "Pooled Linear",
-    3: "Pooled Logistic", 4: "Pooled Logistic + Time",
-    5: "Pooled Single-Index", 6: "Pooled Single-Index + Time",
-    7: "Pooled Joint Single-Index", 8: "Pooled Joint Single-Index + Time",
+    3: "Pooled Single-Index", 4: "Pooled Single-Index + Time",
 }
 SUBDIRS = ["logit", "cluster_raw", "cluster_processed", "legacy"]
 # Increasing-complexity RC sequence: each stage frees one more random coefficient
@@ -213,7 +211,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("results_dir", nargs="?", default=default_results_dir())
     ap.add_argument("--stage", default="extended", help="cluster stage to treat as final")
-    ap.add_argument("--routines", default="5,6,7,8")
+    ap.add_argument("--routines", default="3,4")
     args = ap.parse_args()
 
     RES = os.path.abspath(args.results_dir)

@@ -55,22 +55,20 @@ DEP_COLS = ["dep_a1", "dep_a2", "dep_a4"]          # a5 (prepaid) is NaN in ESTB
 
 # figure palette (desc_2.py convention)
 B_COLOR, D_COLOR, INK, GRID = "#1565C0", "#E64A19", "#4F4F4F", "#D5D5D0"
-# every vintage a distinct hue: with only E2/E7/E8 keyed, any other REF_ESTS line fell back
-# to INK and two greys became indistinguishable in the legend (observed 2026-08-10 when the
-# all-six comparison run drew E1/E5/E6 identically).
-MODEL_COLORS = {"E2": "#2E7D32", "E1": "#455A64", "E5": "#6A1B9A",
-                "E6": "#00838F", "E7": "#AD1457", "E8": "#5D4037"}
+# Every routine that can appear in REF_ESTS needs its own hue: an unkeyed line falls back to
+# INK, and two INK lines are indistinguishable in the legend.
+MODEL_COLORS = {"E1": "#455A64", "E2": "#2E7D32",
+                "E3": "#6A1B9A", "E4": "#00838F"}
 
 
 # ----------------------------------------------------------------------------- phi vintages
-# The reference lines are the four NONLINEAR routines. The linear pair is deliberately not
-# drawn here: their agreement with the entry paths is the per-routine tables' result, where
-# each routine is held to its own fitted dispersion, and drawing E2 at its spec-12 average
-# alongside a table that reports its market-mean invites the two numbers to be read as a
-# discrepancy when they are different objects. This panel's job is the levels the entry
-# moment has to adjudicate. Override with SLEEP_ENTRY_REFS (comma-separated, e.g. "E1,E2").
+# The reference lines are the reported lineup, so the figure shows every level the entry
+# moment has to adjudicate. Restrict with SLEEP_ENTRY_REFS (comma-separated) when a panel
+# should carry fewer lines -- e.g. "E3,E4" for the single-index pair alone, which keeps the
+# linear routines' spec-12 averages off a panel whose companion table reports their
+# market-means, two different objects that read as a discrepancy side by side.
 REF_ESTS = tuple(x.strip() for x in
-                 os.environ.get("SLEEP_ENTRY_REFS", "E5,E6,E7,E8").split(",") if x.strip())
+                 os.environ.get("SLEEP_ENTRY_REFS", "E1,E2,E3,E4").split(",") if x.strip())
 
 
 def phi_vintages():
@@ -677,19 +675,18 @@ def build_phi_paths(kept, H, est, mode):
         scalar  average over both. The pure level test, closest to Egan's own.
 
     They are not interchangeable, and which one flatters a routine depends on where that
-    routine put its variance: E7's phi is 75.3% between-quarter and 12.6% between-market,
-    E6's is the mirror image at 3.1% and 60.5%. So averaging over t deletes three quarters of
-    what E7 fitted and almost nothing of what E6 fitted -- an aggregation choice is a choice
-    about whose estimate to amputate, which is why all four are reported rather than one.
-
-    Deposit types are restricted to 1/2/4, matching the deposits an entry path is built
+    routine put its variance: E4's phi is 3.1% between-quarter and 60.5% between-market, so
+    averaging over t costs it almost nothing, while a routine that loads on the time index
+    instead loses most of what it fitted to the same average. An aggregation choice is a
+    choice about whose estimate to amputate, which is why all four are reported rather than
+    one.
 
     Deposit types are restricted to 1/2/4, matching the deposits an entry path is built
     from. That also removes a boundary artifact: within a (market, quarter) cell phi is
-    exactly constant for 99.99% of E7's cells but only 90% of E6's, and the exceptions are
-    rows the single-index link clipped to zero -- in the worst cell, types 1/2/4 sit at 0.0
-    while type 5 sits at 0.984. Averaging across types would mix a clipped value with a live
-    one; averaging within the modelled types does not.
+    exactly constant for 90% of E4's cells, and the exceptions are rows the single-index
+    link clipped to zero -- in the worst cell, types 1/2/4 sit at 0.0 while type 5 sits at
+    0.984. Averaging across types would mix a clipped value with a live one; averaging
+    within the modelled types does not.
     """
     cf = _paths.PROCESSED / "ESTIMATION_OUTPUT" / "CF_FOUNDATION"
     fp = cf / f"phi_nopix_E{est}_spec_12.parquet"
@@ -1097,11 +1094,11 @@ def main(args):
 PANEL_TITLE = {"main": "(a) Egan Fig. 3 normalisation:  $(s_h-s_0)/(s_{end}-s_0)$",
                "alt": "(b) Alt. normalisation:  $s_h/s_{end}$"}
 PANEL_STEM = {"main": "a", "alt": "b"}
-DASHES = {"E2": (5, 2), "E7": (2, 1.5), "E8": (7, 2, 1.5, 2)}
-# The paper enumerates the estimation strategies I-VI in the order E1, E2, E5, E6, E7, E8
-# (see the stage-2 comparison table's column refs). Figures carry those numerals so a reader
-# moves between a figure legend and the specification tables without a translation step.
-ROMAN = {"E1": "(I)", "E2": "(II)", "E5": "(III)", "E6": "(IV)", "E7": "(V)", "E8": "(VI)"}
+DASHES = {"E2": (5, 2), "E3": (2, 1.5), "E4": (7, 2, 1.5, 2)}
+# The paper enumerates the estimation strategies I-IV in the order E1, E2, E3, E4 (see the
+# stage-2 comparison table's column refs). Figures carry those numerals so a reader moves
+# between a figure legend and the specification tables without a translation step.
+ROMAN = {"E1": "(I)", "E2": "(II)", "E3": "(III)", "E4": "(IV)"}
 
 
 def _draw_entry_panel(ax, norm, paths_df, curves_df, vint, g, H, imp=None, title=True):
@@ -1274,7 +1271,7 @@ if __name__ == "__main__":
     ap.add_argument("--window-only", action="store_true",
                     help="restrict to entries from 2016Q1 (the estimation window)")
     ap.add_argument("--routine-curves", nargs="+", default=None,
-                    help="per-routine model paths from each routine's own fitted phi_m (D4c --routine-bands analogue), e.g. --routine-curves 1 2 5 6 7 8")
+                    help="per-routine model paths from each routine's own fitted phi_m (D4c --routine-bands analogue), e.g. --routine-curves 1 2 3 4")
     ap.add_argument("--no-branch-screen", action="store_true",
                     help="skip the ESTBAN branch-timing screen even if the sidecar exists")
     ap.add_argument("--g-mode", choices=GMODE_CHOICES, default="path",

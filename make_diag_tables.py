@@ -33,10 +33,11 @@ from diag_phi_augmented_tests import OUT_DIR  # noqa: E402
 DRAFTS = Path(r"c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance"
               r"\Open-Finance\Drafts\Deposit Competition")
 NOTES = DRAFTS / "identification_notes.md"
-ROMAN = {1: "(I)", 2: "(II)", 5: "(III)", 6: "(IV)", 7: "(V)", 8: "(VI)"}
+ROMAN = {1: "(I)", 2: "(II)", 3: "(III)", 4: "(IV)"}
 LAB = {1: "E1 identity", 2: "E2 pooled linear", 3: "E3 single-index",
        4: "E4 single-index + time"}
-ESTS = (1, 2, 5, 6, 7, 8)
+ESTS = (1, 2, 3, 4)          # every reported routine
+NONLINEAR = (3, 4)           # the single-index pair
 
 
 def w(name: str, lines: list[str]) -> None:
@@ -93,7 +94,7 @@ def tab_d4c():
 def tab_d5():
     obs = None
     rows = []
-    for e in (5, 6, 7, 8):
+    for e in NONLINEAR:
         d = pd.read_csv(OUT_DIR / f"d_augmented_blpelast_E{e}.csv")
         if obs is None:
             r = d[d["param"] == "dDep_drho"].iloc[0]
@@ -145,7 +146,7 @@ def tab_d6_explosive():
         return
     d = pd.read_csv(f).set_index("estim")
     rows = []
-    for e in (5, 6, 7, 8):
+    for e in NONLINEAR:
         if e not in d.index:
             continue
         r = d.loc[e]

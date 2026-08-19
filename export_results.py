@@ -65,7 +65,9 @@ def main():
             est, returncode, output = future.result()
             print(f"\n{'='*50}\nExport {est} output:\n{'='*50}\n{output}")
             if returncode is not None and returncode != 0:
-                print(f"[!] Error: export_{est}_sleep_results.py failed (exit {returncode})")
+                what = (f"export_sleep_link_common.py --est {est}" if est in _LINK_EXPORT
+                        else f"export_{est}_sleep_results.py")
+                print(f"[!] Error: {what} failed (exit {returncode})")
                 failed.append(est)
 
     if failed:

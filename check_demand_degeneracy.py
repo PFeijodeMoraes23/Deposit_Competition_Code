@@ -10,7 +10,7 @@ from a DEMAND_PREP parquet, then:
     so the column whose |R[i,i]|≈0 is exactly the one that triggers SingularException(i).
 
 Usage:
-  python check_demand_degeneracy.py [path/to/demand_*_final_spec_*.parquet]
+  python check_demand_degeneracy.py [path/to/demand_*_spec_*.parquet]
 Default targets E3 spec 12.
 """
 import sys
@@ -40,7 +40,7 @@ KEY_COLS = ["spread_ann", "deposit_type", "is_B", "mca_code", "time_id",
             "CodConglomeradoPrudencial"]
 
 DEFAULT = ("../../BCB/Egan_et_al_2025_Rep/processed/ESTIMATION_OUTPUT/"
-           "DEMAND_PREP/demand_5_logistic_final_spec_12.parquet")
+           "DEMAND_PREP/demand_3_index_spec_12.parquet")
 
 
 def summarize(df, cols, label):

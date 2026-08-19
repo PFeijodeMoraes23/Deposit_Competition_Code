@@ -58,8 +58,6 @@ except Exception:
 from utils import paths
 from utils import state_transform as _st
 from estimation_demand_link_common import build_market_size_and_shares, MAX_YEAR, MIN_YEAR
-_ROOT = Path(__file__).resolve().parents[2]
-DATA_DIR = paths.PROCESSED
 # market_panel.csv, NOT the fees variant — see utils/paths.market_panel_csv (USE_FEE_PANEL=1
 # opts back in). The old "fees panel if it exists" fallback silently pinned the pipeline to a
 # stale vintage: on 2026-08-04 the base panel was 6 days newer than the fees one.
@@ -106,8 +104,10 @@ EXTRA_KEEP_COLS = (X_COLS + D_COLS + IV_BLP_LOO + IV_ESTBAN + IV_COST + IV_CAPIT
 
 def _resolve_runtime_paths() -> tuple[Path, Path, Path]:
     panel_csv = PANEL_CSV
-    sleep_output_dir = DATA_DIR / "ESTIMATION_OUTPUT" / "DEMAND_PREP" / "est1"
-    demand_output_dir = DATA_DIR / "ESTIMATION_OUTPUT" / "DEMAND_PREP"
+    # est_dir/demand_prep_root follow SLEEP_OUT_ROOT, so a sandboxed run reads the fit it
+    # just produced and writes its parquets beside it.
+    sleep_output_dir = paths.est_dir(1)
+    demand_output_dir = paths.demand_prep_root()
     return panel_csv, sleep_output_dir, demand_output_dir
 
 class NonLinearResults:
