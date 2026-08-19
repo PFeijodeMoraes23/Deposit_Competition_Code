@@ -42,8 +42,8 @@ DEMAND_PREP = _paths_mod.PROCESSED / "ESTIMATION_OUTPUT" / "DEMAND_PREP"
 
 # max|d phi| per estimator family. E1/E2 are exactly equivariant (an invertible
 # triangular reparametrisation of the design; two-way demeaning is linear and
-# commutes). E7/E8 standardise S internally, so Sn is bit-identical under any
-# affine pre-transform. E3-E6 run least_squares(trf, cauchy) from zeros with no
+# commutes). A jointly-estimated index would standardise S internally, so Sn would be
+# bit-identical under any affine pre-transform. E3/E4 run least_squares(trf, cauchy) from zeros with no
 # x_scale, so the trust-region PATH is not invariant even though the optimum is.
 TOL_PHI = {1: 1e-9, 2: 1e-9, 3: 2e-3, 4: 2e-3, 5: 5e-4, 6: 5e-4, 7: 1e-8, 8: 1e-8}
 TOL_ORACLE = 1e-10          # the oracle is pure arithmetic; it should be ~1e-15
@@ -76,7 +76,7 @@ def _phi(df, native, link, res):
     if link == "identity":
         return index
     if link == "index_sieve":
-        # E5/E6 shape-constrained link: grid over the FULL native index (constant included),
+        # E3/E4 shape-constrained link: grid over the FULL native index (constant included),
         # unlike "sieve" below which drops it. Mirrors phi_from_native.
         return np.clip(np.interp(index, res.si_vgrid, res.si_ggrid), 0.0, 1.0)
     if link == "index":
@@ -111,9 +111,9 @@ def _shift(native, means):
 def _translate(res, means):
     """The reparametrisation, applied by hand to a fitted result.
 
-    Two shapes exist.  Where the index carries a constant (E1-E6, param
+    Two shapes exist.  Where the index carries a constant (E1-E4, param
     'nr_lagged_dep'), the shift goes into that constant.  Where it does not
-    (E7/E8: the level is absorbed into the monotone link G), the shift goes into
+    (a jointly-estimated index absorbs the level into the monotone link G), the shift goes into
     the link's own grid, which is stored in the native-index frame."""
     native = _native(res).copy()
     s = _shift(native, means)

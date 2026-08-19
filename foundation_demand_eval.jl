@@ -197,8 +197,8 @@ prefix — is AUTO-DISCOVERED … newest mtime per id wins so leftover old-schem
 can't shadow rebuilds"). Discovery is by GLOB, never the static `DEMAND_PREFIXES`
 dict, whose entries go stale the moment a routine is relabelled. The lineup:
   E1 LocalB · E2 PooledLinear ·
-  E3 Single-Index (headline) · E4 Single-Index+Time · E5 Joint · E6 Joint+Time.
-The cluster default set is {3, 4, 5, 6} (the link routines).
+  E3 Single-Index (headline) · E4 Single-Index+Time.
+The cluster default set is {3, 4} (the link routines).
 """
 function discover_demand_parquet(input_dir::String, estim::Int, spec_id::Int)::String
     pat = Regex("^demand_$(estim)_.*spec_$(spec_id)\\.parquet\$")

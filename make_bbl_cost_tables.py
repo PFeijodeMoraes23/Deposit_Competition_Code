@@ -58,7 +58,7 @@ EST_OUT = rc.DATA_DIR / "ESTIMATION_OUTPUT"
 PSI_ZIP = EST_OUT / "BBL_OUTPUT" / "cluster_raw" / "psi_cost.zip"
 COST_DIR = EST_OUT / "BBL_OUTPUT" / "cluster_processed"
 
-ROUTINES = (5, 6, 7, 8)
+ROUTINES = (3, 4)
 BLOCKS = (("B", r"Brick \& mortar"), ("D", "Digital"))
 SPEC, STAGE = 12, "extended"
 
@@ -407,7 +407,7 @@ def build_ridge(ridge):
 
 # Routine labels in paper order; \ref renders these as the Roman numerals of V_Main's
 # enumerate(label=(\Roman*)), which is how every other estimates table heads its columns.
-ROUTINE_ORDER = (5, 6, 7, 8)
+ROUTINE_ORDER = (3, 4)
 # Display names follow the policy-function tables (polfunc_k4/k5), the only house precedent for
 # these four variables. gamma has never been reported before, so there is nothing else to match.
 Z_LABELS = [
@@ -658,7 +658,7 @@ def md_identified_panels(rows):
         row("*Firms*", lambda r: f"{r['n_firms']}")
         row("*Inequalities n*", lambda r: f"{r['n']:,}")
     L += ["",
-          "Columns are estimation routines E5-E8. SEs in parentheses are firm-block bootstrap SDs "
+          "Columns are estimation routines E3/E4. SEs in parentheses are firm-block bootstrap SDs "
           "(200 reps). **None of these parameters is separately identified** — omega, zeta and "
           "gamma slide freely along the ridge (one block returns omega>0 with zeta<0 while c-bar "
           "barely moves); the estimand is c-bar, reported separately. Stars use the normal "

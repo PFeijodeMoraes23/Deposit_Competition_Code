@@ -12,7 +12,7 @@ Layout produced (under BLP_RESULTS/):
     cluster_processed/  ONE artifact per routine: blp_E{k}_spec_12.jls (+ .json metadata)
     legacy/             archived old/loose files that were cluttering the root (non-destructive)
 
-For each routine k in {5,6,7,8} the processed artifact is the FINAL (extended-stage)
+For each routine k in {3,4} the processed artifact is the FINAL (extended-stage)
 IFT result:
     cluster_processed/blp_E{k}_spec_12.jls   <- copy of blp_results_E{k}_spec_12_extended.jls
                                                  (Julia-serialized Dict: delta-hat, theta1, theta2, Q)

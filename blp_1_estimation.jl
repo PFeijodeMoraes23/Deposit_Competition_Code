@@ -156,8 +156,6 @@ const DEMAND_PREFIXES = Dict(
     2 => "demand_2",
     3 => "demand_3_index",
     4 => "demand_4_index_time",
-    5 => "demand_5_sijoint",
-    6 => "demand_6_sijoint_time",
 )
 
 function input_filename(estim::Int, spec_id::Int)::String

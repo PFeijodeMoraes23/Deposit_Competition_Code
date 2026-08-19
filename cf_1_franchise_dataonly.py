@@ -56,7 +56,7 @@ CF_DIR = DATA / "ESTIMATION_OUTPUT" / "CF_FOUNDATION"
 def _discover_demand_parquet(estim: int, spec: int) -> Path:
     """Auto-discover the routine's demand parquet (new 8-routine scheme; newest mtime
     wins). The old static prefix dict is stale after the 2026-06-24 relabel
-    (E5 Single-Index, E7 Joint Single-Index; cluster default {5,6,7,8})."""
+    (E3 Single-Index, E4 Single-Index + Time; cluster default {3,4})."""
     cands = [p for p in DEMAND_PREP.glob(f"demand_{estim}_*spec_{spec}.parquet")
              if "final" not in p.name.lower()]
     if not cands:

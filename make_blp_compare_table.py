@@ -15,7 +15,7 @@ Reuses the label maps + formatting helpers from make_blp_rc_table.py.
 
 Usage
 -----
-  python make_blp_compare_table.py            # E5-E8 (the cluster default set)
+  python make_blp_compare_table.py            # E3/E4 (the cluster default set)
   python make_blp_compare_table.py --est 6
   python make_blp_compare_table.py --routines 5,6,7,8
 

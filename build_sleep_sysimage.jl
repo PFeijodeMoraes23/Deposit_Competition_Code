@@ -2,7 +2,7 @@
 # ========================
 # Build `sleep_sysimage.so` with Optim baked in, so each `sleep_joint_sieve.jl`
 # launch starts in seconds instead of recompiling Optim (~30-60 s per launch, the
-# dominant per-fit startup cost across the 24 E7/E8 sieve fits).
+# dominant per-fit startup cost across the sieve fits).
 #
 # sleep_joint_julia.py picks it up automatically (--sysimage sleep_sysimage.so) when present.
 #

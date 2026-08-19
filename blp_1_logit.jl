@@ -11,7 +11,6 @@ lineup (base links + their +Time variants):
 
   E1 Local B-type   E2 Pooled Linear
   E3 Pooled Single-Index        E4 Pooled Single-Index + Time
-  E5 Pooled Joint Single-Index  E6 Pooled Joint Single-Index + Time
 
 Each parquet already carries every column the logit needs (spread_ann in bps, share_D /
 share_B_cond, is_B, deposit_type, CodConglomeradoPrudencial, the X_COLS, and all
@@ -45,7 +44,7 @@ Usage
 
 LaTeX outputs (→ ESTIMATION_OUTPUT/Rout + Drafts/Deposit Competition):
   est{id}_spec12_logit.tex                 per-routine, 4 sub-model columns
-  est1-6_spec12_logit_comparison.tex       cross-routine, `+ D-Type` column each
+  est1-4_spec12_logit_comparison.tex       cross-routine, `+ D-Type` column each
                                            (tab:demand_logit_spec12_comparison)
 
 References
@@ -199,7 +198,7 @@ function discover_estim_strategies()
     # current by mtime. This filter is the guard — the logit cannot pick up an id outside the
     # active set even if its parquet exists. SLEEP_ACTIVE_ESTS mirrors
     # estimation_demand_1_prep.py / export_results.py, so the three cannot drift apart.
-    active = Set(parse.(Int, split(get(ENV, "SLEEP_ACTIVE_ESTS", "1 2 3 4 5 6"))))
+    active = Set(parse.(Int, split(get(ENV, "SLEEP_ACTIVE_ESTS", "1 2 3 4"))))
     ids = sort!(collect(keys(best)))
     skipped = [id for id in ids if !(id in active)]
     if !isempty(skipped)
@@ -591,12 +590,12 @@ const ROW_ORDER = ["alpha", "fgc_covered", "has_ip", "log_total_assets_lag",
 const TABLE_SUBMODELS = [("priceonly", "Price Only"), ("core", "Price + Core"),
                          ("full", "Price + Chars"), ("full_dtype", "+ D-Type"),
                          ("core_dtype", "Price + Core + D-Type")]
-# Cross-estimator comparison table (est1-6_spec12_logit_comparison.tex): one column per
+# Cross-estimator comparison table (est1-4_spec12_logit_comparison.tex): one column per
 # demand routine, each showing its final `+ D-Type` sub-model. Column headers \ref{} the
 # sleepiness-strategy enumerate items in V_Main §(sec:empirical:sleep) — same convention as
-# est5-8_spec12_stage2_comparison.tex. (E3/E4's `estimation:logistic` item is commented out
+# est1-4_spec12_stage2_comparison.tex. (the dropped logit pair's `estimation:logistic` item is commented out
 # in V_Main, so they fall back to a plain E<id> header if ever included.)
-const COMPARISON_IDS  = [5, 6, 7, 8]
+const COMPARISON_IDS  = [1, 2, 3, 4]
 # Routines that get a per-routine est{id}_spec12_logit.tex. The routines are AUTO-DISCOVERED from the
 # demand parquets, so E3/E4 (pooled logistic — not part of the reported lineup, and their
 # `estimation:logistic` item is commented out in V_Main) were silently getting tables written on every
@@ -610,10 +609,8 @@ const COMPARISON_ROWS_SEG = ["alpha", "fgc_covered", "has_ip", "log_total_assets
 const ESTIMATION_ENUM_REF = Dict(
     1 => raw"\ref{estimation:local}",
     2 => raw"\ref{estimation:pooled}",
-    5 => raw"\ref{estimation:single_idx}",
-    6 => raw"\ref{estimation:single_idx_time}",
-    7 => raw"\ref{estimation:joint_sieve}",
-    8 => raw"\ref{estimation:joint_sieve_time}",
+    3 => raw"\ref{estimation:single_idx}",
+    4 => raw"\ref{estimation:single_idx_time}",
 )
 const DRAFTS_DIR = raw"C:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\Drafts\Deposit Competition"
 const TROW = " \\\\"   # LaTeX row terminator ` \\` (a raw " \\" would collapse to one backslash)
@@ -647,7 +644,7 @@ function format_q_value(qv, L)
     return @sprintf("\$%.4f%s\$", qv, _stars(ccdf(Chisq(L), qv)))
 end
 
-# ── plain-text formatting (comparison table matches est5-8_spec12_stage2_comparison.tex,
+# ── plain-text formatting (comparison table matches est1-4_spec12_stage2_comparison.tex,
 #    which prints `-0.1494***` / `(0.0677)` without math mode) ──────────────────────────
 _stars_plain(p) = p < 0.01 ? "***" : p < 0.05 ? "**" : p < 0.10 ? "*" : ""
 
@@ -679,9 +676,9 @@ function _mean_rho_one_minus_s(estim)
     return any(m) ? mean(ρ[m] .* (1.0 .- s[m])) : NaN
 end
 
-"""Build est1-6_spec12_logit_comparison.tex: columns = routines (each its `+ D-Type`
+"""Build est1-4_spec12_logit_comparison.tex: columns = routines (each its `+ D-Type`
 sub-model), rows = COMPARISON_ROWS, stats block = elasticity / N / Q(dof) / G*.
-Layout, notes and label conventions mirror est5-8_spec12_stage2_comparison.tex."""
+Layout, notes and label conventions mirror est1-4_spec12_stage2_comparison.tex."""
 function build_logit_comparison_tex(data::AbstractDict, ids::Vector{Int},
                                     elas::AbstractDict;
                                     rows::Vector{String}=COMPARISON_ROWS,
@@ -689,7 +686,7 @@ function build_logit_comparison_tex(data::AbstractDict, ids::Vector{Int},
     n    = length(ids)
     hdr  = "Variable & " * join([get(ESTIMATION_ENUM_REF, id, "E$id") for id in ids], " & ") * TROW
     # The segment dummies are nuisance controls already printed IN FULL, per routine, by the appendix
-    # tables est{5..8}_spec12_logit.tex — so we omit them here and point the reader there rather than
+    # tables est{id}_spec12_logit.tex — so we omit them here and point the reader there rather than
     # carrying a duplicate `_seg` twin of this table (four extra rows, no information). Do NOT write
     # "available on request": they ARE reported, just in the per-routine tables.
     seg_sentence = with_seg ? "" :
@@ -769,7 +766,7 @@ function build_logit_comparison_tex(data::AbstractDict, ids::Vector{Int},
     return join(lines, "\n")
 end
 
-"""Write est5-8_spec12_logit_comparison.tex (COMPARISON_IDS × `+ D-Type`) to Rout + Drafts.
+"""Write est1-4_spec12_logit_comparison.tex (COMPARISON_IDS × `+ D-Type`) to Rout + Drafts.
 Computes the mean own-price elasticity per routine from its demand parquet (skipped
 with a '---' cell if the parquet is unavailable)."""
 function write_logit_comparison_table(data::AbstractDict)
@@ -798,11 +795,11 @@ function write_logit_comparison_table(data::AbstractDict)
     mkpath(rout_dir)
     dests = isdir(DRAFTS_DIR) ? [rout_dir, DRAFTS_DIR] : [rout_dir]
     # ONLY the segment-suppressed version is emitted. The `_seg` twin was retired: the segment dummies
-    # it added are already printed per routine by est{5..8}_spec12_logit.tex (both live in the
+    # it added are already printed per routine by est{3,4}_spec12_logit.tex (both live in the
     # appendix), so it duplicated four rows and no information while lengthening the appendix. The
     # footnote now cross-references those tables. Re-add the COMPARISON_ROWS_SEG/`true` tuple here if a
     # referee ever wants the with-segments layout back.
-    for (rws, wseg, fn) in ((COMPARISON_ROWS, false, "est5-8_spec12_logit_comparison.tex"),)
+    for (rws, wseg, fn) in ((COMPARISON_ROWS, false, "est1-4_spec12_logit_comparison.tex"),)
         tex = build_logit_comparison_tex(data, ids, elas; rows=rws, with_seg=wseg)
         for d in dests
             path = joinpath(d, fn)

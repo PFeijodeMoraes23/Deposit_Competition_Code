@@ -53,15 +53,15 @@ def build_first_stage_table(results_dict):
     ivs = [('IV_CostShifters', 'IV Cost'), ('IV_Wholesale', 'IV Wholesale'), ('IV_HausmanFull', 'Hausman')]
     multispan = 4
     # SHARED first stage.  The first stage is the deposit-spread (price) equation and does not
-    # depend on the second-stage link, so it is identical for every pooled estimator without the
-    # Time block: verified numerically that est2 == est5 == est7 (same 10 coefficients, same
-    # N=487,046).  E2 owns this table because it is the only one of the three carrying all three
-    # panels (E5/E7 drop the Base block).  E6/E8 (Time block, 11 coefficients) have their own
-    # shared table, written by export_sleep_link_common.py.  E1 keeps a separate first stage: it
-    # is estimated on the local B-type sample (N=486,233).
+    # depend on the second-stage link, so it is numerically identical to E3's (same pooled
+    # sample, N=487,046, same 10 coefficients). Each routine nonetheless reports its own table
+    # so the panels shown belong to that routine: E2 carries Base/Macro/Tech, while the link
+    # routines have no Base specification because their index excludes the constant. E4 adds
+    # one control (the Time block, 11 coefficients) and E1 runs on the local B-type sample
+    # (N=486,233), so neither matches this one.
     caption = (r"First Stage --- Deposit Spread on Instruments "
-               r"(common to Estimation Strategies~2,~5 and~7)")
-    label = "tab:sleep_first_stage_pooled"
+               r"--- Estimation Strategy~\ref{estimation:pooled}")
+    label = "tab:est2_first_stage"
     notes = (
         r"\footnotesize \textit{Notes:} Standard errors (wild cluster bootstrap at the "
         r"conglomerate level; \textcite{cameron2008bootstrap}, \textcite{mackinnon2017wild}) "
@@ -361,14 +361,13 @@ def main():
     fs_frag = build_first_stage_table(results_dict)
     ss_frag = build_second_stage_table(results_dict)
 
-    # E2 owns the SHARED no-Time pooled first-stage table (serves E2, E5, E7) -- see
-    # build_first_stage_table.  Its second stage stays per-estimator.
-    SHARED_FS_POOLED = "sleep_first_stage_pooled.tex"
-    fs_path = os.path.join(OUT_DIR, SHARED_FS_POOLED)
+    # One first-stage table per routine, matching est1/est3/est4.
+    FS_NAME = "est2_first_stage_table.tex"
+    fs_path = os.path.join(OUT_DIR, FS_NAME)
     ss_path = os.path.join(OUT_DIR, "est2_second_stage_table.tex")
     with open(fs_path, 'w', encoding='utf-8') as fh: fh.write(fs_frag + "\n")
     with open(ss_path, 'w', encoding='utf-8') as fh: fh.write(ss_frag + "\n")
-    shutil.copy(fs_path, _DRAFTS_DIR / SHARED_FS_POOLED)
+    shutil.copy(fs_path, _DRAFTS_DIR / FS_NAME)
     shutil.copy(ss_path, _DRAFTS_DIR / "est2_second_stage_table.tex")
     print(f" - Fragments written and copied to {_DRAFTS_DIR}")
 
@@ -380,7 +379,7 @@ def main():
         + r"\date{\today}" + "\n"
         + r"\maketitle" + "\n\n"
         + r"\section*{First Stage}" + "\n"
-        + rf"\input{{{SHARED_FS_POOLED}}}" + "\n\n"
+        + rf"\input{{{FS_NAME}}}" + "\n\n"
         + r"\section*{Second Stage}" + "\n"
         + r"\input{est2_second_stage_table.tex}" + "\n"
         + r"\end{document}" + "\n"

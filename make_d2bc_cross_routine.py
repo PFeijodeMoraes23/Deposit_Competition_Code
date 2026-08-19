@@ -14,7 +14,7 @@ SCOPE, stated because it is easy to over-read the output. `--estim N` repoints t
 `Dep_Act`, the uncensored inflow rebuilt from it, and the censoring indicator all come from
 routine N. The SECOND STAGE is E2's linear kernel throughout (`run_augmented`), and the first
 stage is shared by construction -- `estimation_sleep_common.py` imports `run_pooled_first_stage`
-from `estimation_2_sleep.py`, so E5-E8 and E2 project the spread on the instruments identically.
+from `estimation_2_sleep.py`, so E3/E4 and E2 project the spread on the instruments identically.
 So each row is "routine N's awake flow tested in a common kernel", not "routine N's own test".
 That is the link-independent part of the identifying assumption, and it is the part the
 assumption actually concerns; the routine's own link is Appendix A's unapplied patch.
@@ -53,8 +53,8 @@ from diag_phi_augmented_tests import OUT_DIR  # noqa: E402
 DRAFTS = Path(r"c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance"
               r"\Open-Finance\Drafts\Deposit Competition")
 
-LABEL = {1: "E1 identity", 2: "E2 pooled linear", 5: "E5 single-index",
-         6: "E6 single-index + time", 7: "E7 joint sieve", 8: "E8 joint sieve + time"}
+LABEL = {1: "E1 identity", 2: "E2 pooled linear", 3: "E3 single-index",
+         4: "E4 single-index + time"}
 
 SPECS = [("spec12(k=4,5)", "spec 12 (k=4,5)"), ("OLSxTech(all k)", "OLS$\\times$Tech (all k)")]
 
@@ -93,7 +93,7 @@ def main() -> int:
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--ests", nargs="+", type=int,
                     default=[int(x) for x in
-                             os.environ.get("SLEEP_ACTIVE_ESTS", "1 2 5 6 7 8").split()])
+                             os.environ.get("SLEEP_ACTIVE_ESTS", "1 2 3 4").split()])
     a = ap.parse_args()
 
     frames = {e: d for e in a.ests if (d := load(e)) is not None}

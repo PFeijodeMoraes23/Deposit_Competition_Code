@@ -1,7 +1,7 @@
 """
 make_blp_demand_comparison_table.py
 =====================================
-Cross-estimator comparison of an RC-BLP model across the sleepiness estimation strategies E5-E8,
+Cross-estimator comparison of an RC-BLP model across the sleepiness estimation strategies E3/E4,
 Spec 12. One column per strategy (\\ref{estimation:*}); rows are the mean-utility coefficients θ₁
 (Panel A) and the random-coefficient parameters θ₂ (Panel B). This is the RC analog of the logit
 cross-estimator comparison (review §1.1): it puts the models side by side so the reader sees how the
@@ -22,12 +22,12 @@ extended are the degenerate rungs (SEs inflate ~6-10x on a flat objective), whic
 is cut at ext1 there; `full` (the old 5-RC rung) is not a stage at all — see
 make_blp_rc_table.STAGES / RC_TABLE_STAGES, the single source of truth for the ladder.
 
-Reads  blp_results_E{5,6,7,8}_spec_12_{stage}{engine_suffix}.json.
+Reads  blp_results_E{3,4}_spec_12_{stage}{engine_suffix}.json.
 Reuses the label maps + formatting (t(G*) stars, on-bound σ dagger, se_note) from make_blp_rc_table.
 
 Usage
 -----
-  python make_blp_demand_comparison_table.py                 # E5-E8, IFT engine, BOTH stages
+  python make_blp_demand_comparison_table.py                 # E3/E4, IFT engine, BOTH stages
   python make_blp_demand_comparison_table.py --routines 5,6,7,8
   python make_blp_demand_comparison_table.py --engine numerical
   python make_blp_demand_comparison_table.py --stages ext1    # only the ext1 (headline) table
@@ -55,7 +55,7 @@ try:
 except Exception:
     pass
 
-DEFAULT_ESTS = [5, 6, 7, 8]
+DEFAULT_ESTS = [3, 4]
 
 # Which RC stage each comparison table reports.
 #   stage        : checkpoint stage read from disk
@@ -229,7 +229,7 @@ def build_table(ests, suffix: str = "", show_segments: bool = True,
 
 
 def main():
-    ap = argparse.ArgumentParser(description="RC-BLP cross-estimator comparison across E5-E8 "
+    ap = argparse.ArgumentParser(description="RC-BLP cross-estimator comparison across E3/E4 "
                                              "(ext1 headline + Full)")
     ap.add_argument("--routines", default="5,6,7,8")
     ap.add_argument("--engine", choices=["ift", "numerical", "cue"], default="ift",

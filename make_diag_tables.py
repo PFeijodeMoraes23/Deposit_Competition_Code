@@ -34,8 +34,8 @@ DRAFTS = Path(r"c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Ope
               r"\Open-Finance\Drafts\Deposit Competition")
 NOTES = DRAFTS / "identification_notes.md"
 ROMAN = {1: "(I)", 2: "(II)", 5: "(III)", 6: "(IV)", 7: "(V)", 8: "(VI)"}
-LAB = {1: "E1 identity", 2: "E2 pooled linear", 5: "E5 single-index",
-       6: "E6 single-index + time", 7: "E7 joint sieve", 8: "E8 joint sieve + time"}
+LAB = {1: "E1 identity", 2: "E2 pooled linear", 3: "E3 single-index",
+       4: "E4 single-index + time"}
 ESTS = (1, 2, 5, 6, 7, 8)
 
 

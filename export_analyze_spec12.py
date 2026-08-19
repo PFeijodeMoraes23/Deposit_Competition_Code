@@ -221,13 +221,14 @@ def nice_var_name(var):
 # (\item\label{estimation:*} at lines ~402-408), so a column reads as its item number
 # ((1)-(6)) rather than a name -- thinner columns, and the strategy is defined once in
 # the text. \ref resolves inside V_Main; standalone/test compiles show "(??)".
+# KEYS MUST MATCH `mapping` in main() exactly -- they are the same routine keys. A key that
+# does not match simply yields no reference, so the column silently loses its strategy number
+# instead of raising.
 REF_LABELS = {
     '1 Local':             r'\ref{estimation:local}',
     '2 Pooled Linear':     r'\ref{estimation:pooled}',
-    '5 Single-Index':      r'\ref{estimation:single_idx}',
-    '6 Single-Index Time': r'\ref{estimation:single_idx_time}',
-    '7 Joint Sieve':       r'\ref{estimation:joint_sieve}',
-    '8 Joint Sieve Time':  r'\ref{estimation:joint_sieve_time}',
+    '3 Single-Index':      r'\ref{estimation:single_idx}',
+    '4 Single-Index Time': r'\ref{estimation:single_idx_time}',
 }
 
 
@@ -585,8 +586,6 @@ import argparse
 def main():
     parser = argparse.ArgumentParser(description="Analyze Specification 12 Results (Est 1-3)")
     parser.add_argument('--skip-est2', action='store_true', help='Skip estimation 2 (Pooled Linear)')
-    parser.add_argument('--include-joint', action='store_true',
-                        help='Also load and export the joint-sieve pair (E5/E6)')
     args = parser.parse_args()
 
     print("Collecting Estimation results for Spec 12 (IV_HausmanFull x Tech)...")
@@ -598,22 +597,16 @@ def main():
         print(f"ERROR: Cannot find {SLEEP_DIR}")
         return
 
-    # The reported lineup is E1/E2 (linear) + E3/E4 (bounded single-index). The joint sieve
-    # (E5/E6) is estimated and kept here for comparison but is NOT exported by default: its
-    # reported band conditions on a link estimated jointly with the direction, and re-profiling
-    # that link per draw widens the band 1.71x (E5) and 7.46x (E6) -- past its own fitted phi_t
-    # range. Pass --include-joint to emit the joint-sieve tables anyway.
+    # The lineup is E1/E2 (linear) + E3/E4 (bounded single-index). The joint sieve was dropped:
+    # it chose the direction and the link together, so its reported band conditioned on a link
+    # that was itself estimated jointly -- re-profiling per draw widened it 1.71x and 7.46x, the
+    # latter past its own fitted phi_t range, and its direction was barely identified.
     mapping = {
         '1 Local':             SLEEP_DIR / "DEMAND_PREP" / "est1",
         '2 Pooled Linear':     SLEEP_DIR / "DEMAND_PREP" / "est2",
         '3 Single-Index':      SLEEP_DIR / "DEMAND_PREP" / "est3",
         '4 Single-Index Time': SLEEP_DIR / "DEMAND_PREP" / "est4",
-        '5 Joint Sieve':       SLEEP_DIR / "DEMAND_PREP" / "est5",
-        '6 Joint Sieve Time':  SLEEP_DIR / "DEMAND_PREP" / "est6",
     }
-    if not getattr(args, 'include_joint', False):
-        for _k in ('5 Joint Sieve', '6 Joint Sieve Time'):
-            mapping.pop(_k, None)
 
     if getattr(args, 'skip_est2', False):
         mapping.pop('2 Pooled Linear', None)
@@ -726,27 +719,10 @@ def main():
         mean_phi=mean_phi, placement="ht",
     )
 
-    # Joint-sieve-only comparison (E5/E6), emitted only under --include-joint: the pair is
-    # estimated but is not part of the reported lineup, so it is not exported by default.
-    # Distinct \labels so it can sit alongside the full tables in V_Main when requested.
+    # The nonlinear-only comparison table is gone with the joint sieve: with the lineup reduced
+    # to E1/E2 + E3/E4, a "nonlinear only" cut would just be the E3/E4 columns of the main
+    # table, so it would restate the same numbers under a second \label.
     joint_tex = []
-    if getattr(args, 'include_joint', False):
-        order_nl = [k for k in order if k.split()[0] in {"5", "6"}]
-        build_latex_table(
-            stage1_res, order_nl, first_stage_target_vars,
-            out_dir / "est5-6_spec12_stage1_comparison.tex",
-            title="First Stage IV Results, Joint-Sieve Estimators (Spec 12)",
-            label="tab:spec12_stage1_comparison_nl",
-        )
-        build_latex_table(
-            stage2_res, order_nl, target_vars,
-            out_dir / "est5-6_spec12_stage2_comparison.tex",
-            title="Second Stage Results, Joint-Sieve Estimators (Spec 12)",
-            label="tab:spec12_stage2_comparison_nl",
-            mean_phi=mean_phi,
-        )
-        joint_tex = ["est5-6_spec12_stage1_comparison.tex",
-                     "est5-6_spec12_stage2_comparison.tex"]
 
     for fn in ("est1-4_spec12_stage1_comparison.tex",
                "est1-4_spec12_stage2_comparison.tex",
@@ -782,16 +758,12 @@ def main():
         '2 Pooled Linear':     '-',
         '3 Single-Index':      '-',
         '4 Single-Index Time': '--',
-        '5 Joint Sieve':       '-',
-        '6 Joint Sieve Time':  '--',
     }
     label_rename = {
         '1 Local':             'Local Linear (E1)',
         '2 Pooled Linear':     'Pooled Linear (E2)',
         '3 Single-Index':      'Single-Index (E3)',
         '4 Single-Index Time': 'Single-Index +Time (E4)',
-        '5 Joint Sieve':       'Joint Sieve (E5)',
-        '6 Joint Sieve Time':  'Joint Sieve +Time (E6)',
     }
 
     fig, ax = plt.subplots(figsize=(12, 6))
@@ -909,12 +881,9 @@ def main():
         shutil.copy(pp, _DRAFTS_DIR / out_name)
         print(f"Exported pair phi_t plot -> {pp}; copied to {_DRAFTS_DIR}")
 
-    _make_pair_plot(5, 6, "Single-Index", "Single-Index + Time",
+    _make_pair_plot(3, 4, "Single-Index", "Single-Index + Time",
                     r"Implied National $\hat{\phi}_t$: Single-Index (Spec 12)",
                     "est_phi_t_single_index_pair.png")
-    _make_pair_plot(7, 8, "Joint Sieve", "Joint Sieve + Time",
-                    r"Implied National $\hat{\phi}_t$: Joint Sieve (Spec 12)",
-                    "est_phi_t_joint_sieve_pair.png")
 
 if __name__ == "__main__":
     main()

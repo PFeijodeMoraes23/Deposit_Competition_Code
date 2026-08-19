@@ -16,7 +16,7 @@
 #   BBL_STEP     fwd_sim | solve                                  (BBL Step-2 chain)
 #                | polfunc                                        (Step-1; usually run LOCALLY, off by default)
 #                | warmup                                         (precompile depot + JIT-load the stack)
-#   BBL_ROUTINE  3 (E3 headline) | 4 | 5 | 6                      → --estim
+#   BBL_ROUTINE  3 (E3 headline) | 4                      → --estim
 #   BBL_STAGE    extended (headline) | full | logit | …           → --stage
 #   R, SEED      draws (default 2000 / 42) — must match the downloaded BLP_DRAWS
 #   BBL_EXTRA    extra CLI flags passed through (e.g. "--shocks 50 --beta 0.9 --policy-csv <csv>";

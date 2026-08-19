@@ -11,7 +11,7 @@ from a DEMAND_PREP parquet, then:
 
 Usage:
   python check_demand_degeneracy.py [path/to/demand_*_final_spec_*.parquet]
-Default targets E5 spec 12.
+Default targets E3 spec 12.
 """
 import sys
 import numpy as np

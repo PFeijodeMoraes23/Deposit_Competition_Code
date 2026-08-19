@@ -13,7 +13,7 @@ produces two things for that spec:
   1. Υ_pix — the `interaction_pix_exists` coefficient (the Pix AME under a nonlinear link), for
      reporting and the identity-link fallback; written to a small JSON.
   2. The EXACT per-row no-Pix φ (nonlinear links only). Sleepiness is φ = G(S′θ) with G the link
-     (identity for E1/E2; logit E3/E4; cubic single-index 'index' E5/E6; joint 'sieve' E7/E8), so
+     (identity for E1/E2; single-index 'index' E3/E4), so
      the level subtraction φ̂ − Υ_pix·pix is exact ONLY for the identity link. For a nonlinear G
      the correct no-Pix φ re-applies the link to the Pix-removed index,
      φ^noPix = G(index − θ_pix·pix) = phi_from_native(df, ss, link) with pix_exists=0. We compute

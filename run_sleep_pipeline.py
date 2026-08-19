@@ -15,7 +15,7 @@ options:
   --sleep-only            Run only the estimation steps (1–3), skip exports & demand prep
   --skip-steps STEP ...   Skip specific step IDs (1–6)
 
-All steps run sequentially. Steps 1–8 are sleep estimators; each spawns its own
+All steps run sequentially. Steps 1–4 are sleep estimators; each spawns its own
 ProcessPoolExecutor internally. Running them concurrently exhausted Windows non-paged
 pool via simultaneous IPC pipe traffic for 400K-row DataFrames (WinError 1450).
 
@@ -23,12 +23,10 @@ pool via simultaneous IPC pipe traffic for 400K-row DataFrames (WinError 1450).
   2. estimation_2_sleep.py              (E2: Pooled B+D Linear)
   3. estimation_sleep_common.py --est 3 (E3: Pooled Single-Index)
   4. estimation_sleep_common.py --est 4 (E4: Pooled Single-Index + Time)
-  5. estimation_sleep_common.py --est 5 (E5: Pooled Joint Single-Index, sieve)
-  6. estimation_sleep_common.py --est 6 (E6: Pooled Joint Single-Index, sieve + Time)
-  7. export_results.py                  (Export 1st/2nd Stage Summaries, Est 1-6)
-  8. estimation_demand_1_prep.py        (Universal Demand Prep Orchestrator, Est 1-6)
-  9. export_analyze_spec12.py           (Analyze Specification 12 Results)
- 10. desc_3.py                          (Cluster-imbalance / deposit-concentration table)
+  5. export_results.py                  (Export 1st/2nd Stage Summaries, Est 1-4)
+  6. estimation_demand_1_prep.py        (Universal Demand Prep Orchestrator, Est 1-4)
+  7. export_analyze_spec12.py           (Analyze Specification 12 Results)
+  8. desc_3.py                          (Cluster-imbalance / deposit-concentration table)
 """
 from utils.venv_guard import ensure_project_venv
 ensure_project_venv(__file__)
@@ -101,7 +99,7 @@ def main():
     parser = argparse.ArgumentParser(
         description="Run the full Sleepiness Estimation Pipeline.",
         epilog="""
-All steps run sequentially. Steps 1–8 are sleep estimators; each spawns its own
+All steps run sequentially. Steps 1–4 are sleep estimators; each spawns its own
 ProcessPoolExecutor internally. Running them concurrently exhausted Windows non-paged
 pool via simultaneous IPC pipe traffic for 400K-row DataFrames (WinError 1450).
 
@@ -109,12 +107,10 @@ pool via simultaneous IPC pipe traffic for 400K-row DataFrames (WinError 1450).
   2. estimation_2_sleep.py              (E2: Pooled B+D Linear)
   3. estimation_sleep_common.py --est 3 (E3: Pooled Single-Index)
   4. estimation_sleep_common.py --est 4 (E4: Pooled Single-Index + Time)
-  5. estimation_sleep_common.py --est 5 (E5: Pooled Joint Single-Index, sieve)
-  6. estimation_sleep_common.py --est 6 (E6: Pooled Joint Single-Index, sieve + Time)
-  7. export_results.py                  (Export 1st/2nd Stage Summaries, Est 1-6)
-  8. estimation_demand_1_prep.py        (Universal Demand Prep Orchestrator, Est 1-6)
-  9. export_analyze_spec12.py           (Analyze Specification 12 Results)
- 10. desc_3.py                          (Cluster-imbalance / deposit-concentration table)
+  5. export_results.py                  (Export 1st/2nd Stage Summaries, Est 1-4)
+  6. estimation_demand_1_prep.py        (Universal Demand Prep Orchestrator, Est 1-4)
+  7. export_analyze_spec12.py           (Analyze Specification 12 Results)
+  8. desc_3.py                          (Cluster-imbalance / deposit-concentration table)
         """,
         formatter_class=argparse.RawDescriptionHelpFormatter
     )
@@ -122,7 +118,7 @@ pool via simultaneous IPC pipe traffic for 400K-row DataFrames (WinError 1450).
     parser.add_argument(
         "--only-spec-12",
         action="store_true",
-        help=("Only run specification 12 for E2-E8 + demand prep instead of all specifications. "
+        help=("Only run specification 12 for E2-E4 + demand prep instead of all specifications. "
               "NOTE: E1 (estimation_1_sleep.py) has no spec selector -- it always runs the full "
               "12-spec grid -- so this flag does not reduce E1's runtime.")
     )
@@ -130,20 +126,20 @@ pool via simultaneous IPC pipe traffic for 400K-row DataFrames (WinError 1450).
     parser.add_argument(
         "--skip-sleep",
         action="store_true",
-        help="Skip executing sleepiness estimators 1-8 and only run exports and demand prep."
+        help="Skip executing sleepiness estimators 1-4 and only run exports and demand prep."
     )
 
     parser.add_argument(
         "--sleep-only",
         action="store_true",
-        help="Only execute the 6 sleepiness estimation steps, skipping exports and demand prep."
+        help="Only execute the sleepiness estimation steps, skipping exports and demand prep."
     )
     parser.add_argument(
         "--skip-steps",
         nargs="+",
         type=int,
         default=[],
-        help="Skip executing specific steps (1-12). E.g., --skip-steps 11 to skip export_analyze."
+        help="Skip executing specific steps (1-8). E.g., --skip-steps 7 to skip export_analyze."
     )
     args = parser.parse_args()
 
@@ -160,22 +156,20 @@ pool via simultaneous IPC pipe traffic for 400K-row DataFrames (WinError 1450).
         scripts_to_run.extend([
             {"id": 1, "file": "estimation_1_sleep.py", "desc": "E1: Local B-type Estimation"},
             {"id": 2, "file": "estimation_2_sleep.py", "args": spec12_arg, "desc": "E2: Pooled B+D Linear"},
-            # E3-E6 are config-driven via the shared dispatcher estimation_sleep_common.py --est N.
+            # E3/E4 are config-driven via the shared dispatcher estimation_sleep_common.py --est N.
             {"id": 3, "file": "estimation_sleep_common.py", "args": ["--est", "3"] + spec12_arg, "desc": "E3: Pooled Single-Index"},
             {"id": 4, "file": "estimation_sleep_common.py", "args": ["--est", "4"] + spec12_arg, "desc": "E4: Pooled Single-Index + Time block"},
-            {"id": 5, "file": "estimation_sleep_common.py", "args": ["--est", "5"] + spec12_arg, "desc": "E5: Pooled Joint Single-Index (sieve)"},
-            {"id": 6, "file": "estimation_sleep_common.py", "args": ["--est", "6"] + spec12_arg, "desc": "E6: Pooled Joint Single-Index (sieve) + Time block"},
         ])
 
     if not getattr(args, 'sleep_only', False):
         scripts_to_run.extend([
-            {"id": 7, "file": "export_results.py", "args": ["--estimation", "all"], "desc": "Export 1st/2nd Stage Summaries (Est 1-6)"},
-            {"id": 8, "file": "estimation_demand_1_prep.py", "args": ["--estimation", "all", "--spec", spec_arg], "desc": "Universal Demand Prep Orchestrator & Panel Serialization (Est 1-6)"},
-            {"id": 9, "file": "export_analyze_spec12.py", "args": [], "desc": "Analyze Specification 12 Results"},
+            {"id": 5, "file": "export_results.py", "args": ["--estimation", "all"], "desc": "Export 1st/2nd Stage Summaries (Est 1-4)"},
+            {"id": 6, "file": "estimation_demand_1_prep.py", "args": ["--estimation", "all", "--spec", spec_arg], "desc": "Universal Demand Prep Orchestrator & Panel Serialization (Est 1-4)"},
+            {"id": 7, "file": "export_analyze_spec12.py", "args": [], "desc": "Analyze Specification 12 Results"},
             # desc_3 reads the E5 second-stage sample (est5/market_panel_phis.csv), so it
             # runs after estimation; it is the canonical cluster-imbalance / deposit-
             # concentration exhibit that justifies the wild cluster bootstrap.
-            {"id": 10, "file": "desc_3.py", "args": [], "desc": "Cluster-imbalance & deposit-concentration table (WCB justification)"},
+            {"id": 8, "file": "desc_3.py", "args": [], "desc": "Cluster-imbalance & deposit-concentration table (WCB justification)"},
         ])
 
     import os
@@ -190,7 +184,7 @@ pool via simultaneous IPC pipe traffic for 400K-row DataFrames (WinError 1450).
     heavy_scripts = []
     post_scripts = []
 
-    _sleep_files = {'estimation_sleep_common.py'}  # config-driven E3-E8 dispatcher
+    _sleep_files = {'estimation_sleep_common.py'}  # config-driven E3/E4 dispatcher
     for s in scripts_to_run:
         if (s['file'].startswith('estimation_') and s['file'].endswith('_sleep.py')) or s['file'] in _sleep_files:
             sleep_scripts.append(s)

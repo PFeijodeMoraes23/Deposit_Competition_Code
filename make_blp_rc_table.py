@@ -11,10 +11,10 @@ blp_2_rc.jl). Select which with --engine.
 
 Usage
 -----
-  python make_blp_rc_table.py              # E6 (default headline routine, IFT engine)
+  python make_blp_rc_table.py              # E3 (default headline routine, IFT engine)
   python make_blp_rc_table.py --est 3      # E3
   python make_blp_rc_table.py --all        # E1-E8
-  python make_blp_rc_table.py --engine numerical --est 6   # E6 numerical-engine results
+  python make_blp_rc_table.py --engine numerical --est 3   # E3 numerical-engine results
 
 Output
 ------
@@ -132,18 +132,20 @@ DEMO_LABELS = {
 }
 
 # Estimator identity → the \ref{estimation:*} enumerate labels in V_Main (sec:empirical:sleep),
-# EXACTLY as the sleepiness comparison tables (est5-8_spec12_stage2_comparison.tex) reference them.
-# The demand routine id (E5) is a code artifact; \ref{estimation:single_idx} renders as the paper's
-# estimator number (3), keeping the demand tables consistent with the text. NO ad-hoc names.
+# EXACTLY as the sleepiness comparison tables (est1-4_spec12_stage2_comparison.tex) reference them.
+# The demand routine id (E3) is a code artifact; \ref{estimation:single_idx} renders as the paper's
+# estimator number, keeping the demand tables consistent with the text. NO ad-hoc names.
+# These keys must match V_Main's `\item\label{estimation:*}` enumerate exactly. V_Main defines
+# four items; a key absent here falls through to a literal "E{id}", which renders as plain text
+# rather than the paper's strategy number -- and an id pointing at a REMOVED label renders as
+# "??". Both fail quietly, so keep this in step with the lineup.
 ESTIMATION_REF = {
     1: r"\ref{estimation:local}",          2: r"\ref{estimation:pooled}",
-    5: r"\ref{estimation:single_idx}",     6: r"\ref{estimation:single_idx_time}",
-    7: r"\ref{estimation:joint_sieve}",    8: r"\ref{estimation:joint_sieve_time}",
+    3: r"\ref{estimation:single_idx}",     4: r"\ref{estimation:single_idx_time}",
 }
 
 def est_ref(est: int) -> str:
-    """Estimator id → V_Main enumerate \\ref (fallback E{id} for ids with no live label, e.g. E3/E4
-    whose 'estimation:logistic' item is commented out)."""
+    """Estimator id → V_Main enumerate \\ref (fallback E{id} for an id with no live label)."""
     return ESTIMATION_REF.get(est, rf"E{est}")
 
 # ── Label helpers ─────────────────────────────────────────────────────────────
@@ -513,7 +515,7 @@ def build_table(est_id: int, suffix: str = "") -> str:
 
 def main():
     parser = argparse.ArgumentParser(description="BLP RC LaTeX table generator")
-    parser.add_argument("--est", type=int, default=6,
+    parser.add_argument("--est", type=int, default=3,
                         help="Estimation strategy (default: 6, the headline single-index routine)")
     parser.add_argument("--all", action="store_true",
                         help="Generate for E1-E8")

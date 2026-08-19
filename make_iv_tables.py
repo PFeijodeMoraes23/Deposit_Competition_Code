@@ -41,7 +41,7 @@ WEAK_IV_EXT1 = WEAK_IV.parent / "weak_iv_ext1.json"          # structural-δ bat
 DIAG_MR      = WEAK_IV.parent / "diag_moment_reduction.json"  # diag_moment_reduction.py output
 TABLES_DIR = DATA_DIR / "ESTIMATION_OUTPUT" / "Rout"
 DRAFTS_DIR = rc.DRAFTS_DIR
-ROUTINES   = [5, 6, 7, 8]
+ROUTINES   = [1, 2, 3, 4]
 SUBS       = [("all", "all"), ("type12", "1+2"), ("type45", "4+5"),
               ("type4", "4"), ("type5", "5")]
 # Tables 1 and 2 report one line per routine, on the engine's own estimation sample. The per-block

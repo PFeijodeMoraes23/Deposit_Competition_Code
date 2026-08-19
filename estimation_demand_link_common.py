@@ -589,7 +589,7 @@ def run(est_num, link, tag, time_block=False, spec="all"):
         print(f"\n[WARNING] No parquets written for Estimation {est_num}")
 
 
-# ── Config-driven CLI for E3-E6 demand prep (link, tag, time_block) ──────────────
+# ── Config-driven CLI for E3/E4 demand prep (link, tag, time_block) ──────────────
 #  (E1/E2 have their own demand-prep scripts.) Run:  python estimation_demand_link_common.py --est N --spec X
 #
 # The link string here is a DEFAULT only: _apply_link prefers the stored result's own tag, so
@@ -598,14 +598,13 @@ def run(est_num, link, tag, time_block=False, spec="all"):
 # (demand_{est}_{tag}_spec_{spec}.parquet) and is what the Julia routine discovery keys on.
 DEMAND_CFG = {
     3: ("index", "index", False),       4: ("index", "index_time", True),
-    5: ("sieve", "sijoint", False),     6: ("sieve", "sijoint_time", True),
 }
 
 if __name__ == "__main__":
     pd.options.mode.chained_assignment = None
-    p = argparse.ArgumentParser(description="Demand prep E3-E6 (config-driven).")
+    p = argparse.ArgumentParser(description="Demand prep E3/E4 (config-driven).")
     p.add_argument("--est", type=int, required=True, choices=sorted(DEMAND_CFG),
-                   help="Estimator id 3-6 (E1/E2 have their own demand-prep scripts)")
+                   help="Estimator id 3 or 4 (E1/E2 have their own demand-prep scripts)")
     p.add_argument("--spec", type=str, default="all", help="Specification ID (1-12) or 'all'")
     a = p.parse_args()
     _link, _tag, _tb = DEMAND_CFG[a.est]

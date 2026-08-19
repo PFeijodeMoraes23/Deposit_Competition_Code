@@ -1,4 +1,4 @@
-"""backup_precenter.py -- snapshot the pre-centering artefacts before E1-E8 are re-run.
+"""backup_precenter.py -- snapshot the pre-centering artefacts before the estimators are re-run.
 
 Author: Pedro Feijó de Moraes
 

@@ -9,7 +9,7 @@ Generates:
 
 Outputs are serialised to BLP_DRAWS/ for consumption by blp_loop.jl or
 blp_estimation.jl.  Separating draw generation from estimation ensures:
-  - Cross-strategy comparability (same draws for E1–E6)
+  - Cross-strategy comparability (same draws for E1–E4)
   - Transparent diagnostics (fallback rate, σ statistics)
   - No re-generation on cluster job restarts
 

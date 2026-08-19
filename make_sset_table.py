@@ -21,7 +21,7 @@ the table note), which matters here because G* ≈ 5 effective clusters.
 
 Usage
 -----
-  python make_sset_table.py                       # E5-E8, stage ext1
+  python make_sset_table.py                       # E3/E4, stage ext1
   python make_sset_table.py --routines 6 --stage ext1
 """
 from utils.venv_guard import ensure_project_venv

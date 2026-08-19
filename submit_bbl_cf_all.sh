@@ -49,9 +49,9 @@ set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")"
 
 # ── Shared config (both stages read these) ────────────────────────────────────────
-# Default to the FULL lineup E1-E6 (E3 is the headline single-index estimator; a single-routine
+# Default to the FULL lineup E1-E4 (E3 is the headline single-index estimator; a single-routine
 # default silently ships one estimator only). Narrow with e.g. ROUTINES="3 4" when iterating.
-export ROUTINES="${ROUTINES:-1 2 3 4 5 6}"
+export ROUTINES="${ROUTINES:-1 2 3 4}"
 export CF_STAGE="${CF_STAGE:-extended}"
 export R="${R:-2000}"
 export SEED="${SEED:-42}"
