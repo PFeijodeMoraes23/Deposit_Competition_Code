@@ -7,7 +7,9 @@
 #   2. the RC results (auto-built from the newest blp_outputs_*.zip)
 #   3. data/input/forward_rf_qoq.csv
 #   4. for cf1_net/cf3/cf5/cf6: the BBL cost params from bbl_run.sh
-#   5. for cf4: data/input/{upsilon_pix,phi_nopix}_E{k}_spec_12.* built locally
+#   5. for cf4: {upsilon_pix,phi_nopix}_E{k}_spec_12.*, either produced by the
+#      sleepiness phase into data/output/CF_FOUNDATION (bash sleep_run.sh, gate G7)
+#      or built locally and uploaded to data/input, which wins when both exist
 # WHAT TO RUN NEXT
 #   bash cf_eq_run.sh --mode cf3|cf5|cf6            (the long equilibrium CFs)
 #   bash cluster_archive.sh --set foundation --copy (and cf1, cf4)
@@ -128,15 +130,18 @@ if [[ "${need_costs}" == "1" ]]; then
 fi
 
 # CF4 needs no BBL costs, but DOES need the exact link-aware phi^noPix + Upsilon_pix
-# built LOCALLY (the sleep pickle is not on the compute nodes) and uploaded to
-# data/input, like the forward r^f curve.
+# from cf_4_upsilon_export.py. That export is no longer local-only: the sleepiness
+# estimators run on the cluster, so the sleep pickle it reads is there too, and
+# sleep_job.sh SLEEP_STEP=upsilon produces the pair into data/output/CF_FOUNDATION
+# (gate G7). An uploaded pair in data/input still wins — cl_cf4_dirs searches it
+# first — so a hand-staged export from a local build keeps working unchanged.
+#
+# cl_cf4_dirs is the SAME order cf_4_pix.jl's cf4_search_dirs uses at run time.
 cf4_note=""
 if want cf4; then
     for k in ${ROUTINES}; do
-        cl_need_file "${CL_DATA_IN}/upsilon_pix_E${k}_spec_12.json" "CF4 Upsilon_pix E${k}" \
-            "build locally then upload: python cf_4_upsilon_export.py --estim ${k} --spec 12" || miss=1
-        cl_need_file "${CL_DATA_IN}/phi_nopix_E${k}_spec_12.parquet" "CF4 phi^noPix E${k}" \
-            "build locally then upload: python cf_4_upsilon_export.py --estim ${k} --spec 12" || miss=1
+        cl_need_cf4_file "upsilon_pix_E${k}_spec_12.json"  "CF4 Upsilon_pix E${k}" || miss=1
+        cl_need_cf4_file "phi_nopix_E${k}_spec_12.parquet" "CF4 phi^noPix E${k}"   || miss=1
     done
     cf4_note=" + CF4 phi_nopix"
 fi

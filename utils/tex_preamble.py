@@ -1,3 +1,5 @@
+from utils import paths as _paths
+
 BASELINE_PREAMBLE = r"""\documentclass[12pt]{article}
 \usepackage[letterpaper, margin=1in]{geometry}
 \usepackage[utf8]{inputenc}
@@ -138,7 +140,7 @@ BASELINE_PREAMBLE = r"""\documentclass[12pt]{article}
 BASELINE_POSTAMBLE = r"""\end{document}
 """
 
-DRAFTS_DIR = r"C:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\Drafts\Deposit Competition"
+DRAFTS_DIR = str(_paths.drafts_dir())
 
 def wrap_table(latex_table_str: str) -> str:
     """Wraps a raw latex table string inside the baseline preamble document wrapper."""

@@ -31,8 +31,17 @@
 #   name | bundle | stages | root | pattern | dest | producer | parent_root | parent_pattern
 #
 #   name           stable logical name, unique after {k} expansion
-#   bundle         data | code   -- which upload zip the file goes into
-#   stages         comma list of cluster stages that CONSUME it: blp, bbl, cf, cf4, all
+#   bundle         data | code | produced
+#                    data      goes into the data upload zip
+#                    code      goes into the code upload zip
+#                    produced  UPLOADED BY NOBODY. The cluster builds it, into
+#                              data/output, during the run. The row stays here
+#                              because the file still has to EXIST before the
+#                              stage that consumes it starts, so cluster_preflight.sh
+#                              checks it -- under data/output, not data/input --
+#                              and reports it as "(produced on cluster --
+#                              checked, not uploaded)". It is never bundled.
+#   stages         comma list of cluster stages that CONSUME it: sleep, blp, bbl, cf, cf4, all
 #   root           local root token, resolved through utils/paths.py (see ROOTS below)
 #   pattern        file name (or glob, for code) under that root
 #   dest           destination under the cluster project root
@@ -47,13 +56,28 @@
 # ROOTS (resolved by stage_cluster_upload.py through utils/paths.py -- no hardcoded paths):
 #   DEMAND_PREP    paths.demand_prep_root()                     active vintage; follows SLEEP_OUT_ROOT
 #   EST{k}         paths.est_dir(k)                             per-routine sleep outputs
-#   SIGMA_DIR      paths.PROCESSED/ESTIMATION_OUTPUT/DEMAND_PREP  panel_8 writes here unconditionally
+#   SIGMA_DIR      paths.PROCESSED/ESTIMATION_OUTPUT/DEMAND_PREP  panel_8 writes here unconditionally;
+#                                                               also utils.state_transform.DEFAULT_JSON
 #   BLP_LOGIT      paths.estimation_output()/BLP_RESULTS/logit
 #   COST_FWD       paths.estimation_output()/COST_FWD
 #   COST_POLFUNC   paths.estimation_output()/COST_POLFUNC
 #   CF_FOUNDATION  paths.estimation_output()/CF_FOUNDATION
 #   PROCESSED      paths.PROCESSED
+#   PANEL_INTERMED paths.PROCESSED/PANEL_INTERMED               panel_5 writes the digital-bank flags here
+#   INCLUSION      paths.INCLUSION_DIR                          BCB/Inclusion, the banked/MCA panels
 #   REPO           this repository
+#
+# PANEL_INTERMED and INCLUSION are NEW. stage_cluster_upload.py's make_root_resolver()
+# must learn them or it exits with "unknown root token" before doing anything else:
+#     "PANEL_INTERMED": paths_mod.PROCESSED / "PANEL_INTERMED",
+#     "INCLUSION":      paths_mod.INCLUSION_DIR,
+# cluster_preflight.sh reads this file with awk and needs no such table.
+#
+# A `pattern` is a BARE FILENAME under its root, never a relative sub-path: the
+# same string is used as the name at the DESTINATION (files land flat in
+# data/input), so 'PANEL_INTERMED/foo.csv' would make the cluster-side check look
+# for data/input/PANEL_INTERMED/foo.csv. That is why PANEL_INTERMED and INCLUSION
+# are roots rather than path prefixes.
 #
 # ---------------------------------------------------------------------------------------
 # DIRECTIVES -- the active routine lineup and each routine's demand-parquet prefix.
@@ -68,14 +92,58 @@
 #!PREFIX 3 demand_3_index
 #!PREFIX 4 demand_4_index_time
 
+# --- 0. the panels the SLEEPINESS estimators read. Sleepiness now runs ON the cluster, so ---
+#        these are inputs to the run rather than something that only ever existed locally.
+#        cl_bootstrap_tree (cluster_lib.sh) symlinks all three into the Open-Finance skeleton
+#        it builds under data/root, which is what OPEN_FINANCE_ROOT points the Python stack at:
+#            processed/market_panel.csv                       -> data/input/market_panel.csv
+#            processed/PANEL_INTERMED/digital_banks_diagnostic.csv -> data/input/...
+#            BCB/Inclusion/bcb_banked_mca_panel.csv           -> data/input/...
+#        UPLOAD market_panel.csv WITHOUT (or BEFORE) any market_panel.parquet sidecar: the
+#        readers pick the parquet when it is NEWER than the csv, so a sidecar copied in
+#        afterwards silently becomes the panel the whole run reads.
+market_panel       | data | sleep      | PROCESSED     | market_panel.csv               | data/input | python run_data_pipeline.py                                    | -         | -
+digital_flags      | data | sleep      | PANEL_INTERMED| digital_banks_diagnostic.csv   | data/input | python panel_5_flag_digital.py                                 | -         | -
+banked_mca         | data | sleep      | INCLUSION     | bcb_banked_mca_panel.csv       | data/input | python scrape_8_bcb_banked.py                                  | -         | -
+# The persisted state transform. STATE_CENTERING_JSON points every cluster job at the uploaded
+# copy, so theta0 keeps meaning "phi-hat at the average market" and the fits stay comparable
+# with the promoted local ones. tier0 is the coverage audit check_state_centering.py reads.
+#
+# NO PARENT ON EITHER ROW, DELIBERATELY -- they are checked for PRESENCE, never for mtime.
+# state_centering_means.json is VERSION-pinned, not mtime-derived: it carries
+# "version": "2026-07-28.1", utils/state_transform.py:73 pins STATE_TRANSFORM_VERSION to the
+# same string, and load_transform() RAISES on any mismatch. Upload it AS IS.
+#
+# Giving it market_panel.csv as a parent would make the stager call it STALE and tell the
+# reader to run --write-centers. That instruction destroys the validation baseline: the means
+# are recomputed from the CURRENT panel, the centering shifts, theta0 shifts, and phi-hat with
+# it -- so the promoted 99.9945 / 99.5400 / 96.5627 / 96.6814 that gate G1 compares against
+# would no longer describe the same estimator. The cluster would diverge from the local vintage
+# for a reason that has nothing to do with this migration, and G1 -- the one end-to-end check on
+# the whole port -- would report a spurious NEW BASIN. load_transform's own error text says the
+# same thing: rebuilding it means rebuilding every demand parquet too.
+#
+# Regenerating these is a deliberate RE-CENTERING decision (new panel vintage promoted on
+# purpose, or STATE_TRANSFORM_VERSION bumped), never routine freshness maintenance.
+state_centering    | data | sleep      | SIGMA_DIR     | state_centering_means.json     | data/input | python estimation_2_sleep.py --write-centers   (RE-CENTERING ONLY) | - | -
+state_tier0        | data | sleep      | SIGMA_DIR     | state_centering_tier0.csv      | data/input | python check_state_centering.py                (RE-CENTERING ONLY) | - | -
+
 # --- 1. demand parquets: the estimation sample the BLP, BBL and CF all read ---------------
+#        PRODUCED ON THE CLUSTER now (sleep_job.sh SLEEP_STEP=prep -> data/output/DEMAND_PREP,
+#        gate G2), but the row stays `data`: uploading a locally-built lineup is still the
+#        supported way to run the BLP/BBL/CF stages without re-estimating, and
+#        blp_1_logit.jl's demand_dirs() searches data/input BEFORE data/output/DEMAND_PREP.
 demand_E{k}        | data | blp,bbl,cf | DEMAND_PREP   | {prefix}_spec_12.parquet       | data/input | python estimation_demand_1_prep.py --estimation {k} --spec 12 | EST{k}    | estimation_results.pkl
 
 # --- 2. demographic sigma for the parametric d-draws (blp_1_draws.jl) ---------------------
 demographics_sigma | data | blp        | SIGMA_DIR     | demographics_sigma.parquet     | data/input | python panel_8_demographics_sigma.py                          | PROCESSED | market_panel.csv
 
 # --- 3. logit delta warm-starts (blp_1_logit.jl -> blp_2_rc.jl / blp_gpu_engine.jl) -------
-logit_delta_E{k}   | data | blp        | BLP_LOGIT     | logit_delta_E{k}_spec_12.bin   | data/input | julia --project=. --threads=auto blp_1_logit.jl --est {k}     | DEMAND_PREP | {prefix}_spec_12.parquet
+#        PRODUCED, not uploaded: logit_job.sh runs blp_1_logit.jl --hpc on the cluster and
+#        delta_dir() is data/output ITSELF, flat, which is where the RC engine reads them.
+#        Gate G4 checks the leading Int64 against the routine's parquet row count -- the
+#        engine SILENTLY skips a mismatched delta and starts cold.
+logit_delta_E{k}   | produced | blp    | BLP_LOGIT     | logit_delta_E{k}_spec_12.bin   | data/output | sbatch logit_job.sh   (gate G4)                            | DEMAND_PREP | {prefix}_spec_12.parquet
 
 # --- 4. forward risk-free curve. MUST be built locally: compute nodes have no outbound ----
 #        internet, and this script calls the BCB SGS + Focus APIs.
@@ -84,10 +152,14 @@ forward_rf         | data | bbl,cf     | COST_FWD      | forward_rf_qoq.csv     
 # --- 5. fitted BBL policy function (deviations are formed around it, not observed spreads) -
 polfunc            | data | bbl        | COST_POLFUNC  | polfunc_fitted.csv             | data/input | python estimation_bbl_1_polfunc.py                            | PROCESSED | market_panel.csv
 
-# --- 6. CF4 Pix inputs. MUST be built locally: the sleep pickle is not on the cluster. -----
-#        Only needed when submit_cf_all.sh runs with DO_CF4=1 (default 0).
-upsilon_pix_E{k}   | data | cf4        | CF_FOUNDATION | upsilon_pix_E{k}_spec_12.json  | data/input | python cf_4_upsilon_export.py --estim {k} --spec 12            | EST{k}    | estimation_results.pkl
-phi_nopix_E{k}     | data | cf4        | CF_FOUNDATION | phi_nopix_E{k}_spec_12.parquet | data/input | python cf_4_upsilon_export.py --estim {k} --spec 12            | EST{k}    | estimation_results.pkl
+# --- 6. CF4 Pix inputs. PRODUCED on the cluster now: the sleep pickle IS there, because the ---
+#        sleepiness estimators run there, so cf_4_upsilon_export.py runs there too
+#        (sleep_job.sh SLEEP_STEP=upsilon, gate G7). It writes to
+#        paths.estimation_output()/CF_FOUNDATION, and cl_bootstrap_tree links
+#        processed/ESTIMATION_OUTPUT at data/output, so the pair lands in
+#        data/output/CF_FOUNDATION. Gate G7 checks exact_nopix and the row alignment.
+upsilon_pix_E{k}   | produced | cf4    | CF_FOUNDATION | upsilon_pix_E{k}_spec_12.json  | data/output | sleep_run.sh (SLEEP_STEP=upsilon; gate G7)                   | EST{k}    | estimation_results.pkl
+phi_nopix_E{k}     | produced | cf4    | CF_FOUNDATION | phi_nopix_E{k}_spec_12.parquet | data/output | sleep_run.sh (SLEEP_STEP=upsilon; gate G7)                   | EST{k}    | estimation_results.pkl
 
 # --- 7. code. Tracked in git, so nothing to build -- but *.sh is rewritten to LF on the ----
 #        way into the zip: bash reads a CRLF shebang as a syntax error on line 1.
@@ -96,3 +168,16 @@ julia_code         | code | all        | REPO          | *.jl                   
 shell_code         | code | all        | REPO          | *.sh                           | scripts    | -                                                             | -         | -
 julia_project      | code | all        | REPO          | Project.toml                   | scripts    | -                                                             | -         | -
 julia_manifest     | code | all        | REPO          | Manifest.toml                  | scripts    | -                                                             | -         | -
+# Python travels too, now that the sleepiness stage runs on the cluster. utils/ is its own
+# row because `from utils import paths` needs the package BESIDE the scripts, at
+# scripts/utils/ -- members are stored as '<dest>/<basename>', so the destination directory
+# has to carry the sub-path, the pattern cannot. utils/ is flat (no sub-packages), so
+# 'utils/*.py' is the whole package.
+python_code        | code | all        | REPO          | *.py                           | scripts       | -                                                          | -         | -
+python_utils       | code | all        | REPO          | utils/*.py                     | scripts/utils | -                                                          | -         | -
+# The lineup registry. Both loaders resolve it as <their dir>/config, so it must land at
+# scripts/config/routines.toml: routines.jl uses @__DIR__/config, utils/routines.py uses
+# parents[1]/config. Without it every Julia entry point and the sleep prep die at
+# include/import -- deliberately, since a hardcoded fallback lineup would rebuild the
+# drift this registry exists to remove.
+routines_config    | code | all        | REPO          | config/routines.toml           | scripts/config | -                                                         | -         | -

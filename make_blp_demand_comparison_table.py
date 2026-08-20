@@ -44,6 +44,7 @@ import argparse
 import math
 
 import make_blp_rc_table as rc   # label maps, decode_theta2, fmt_coef, se_note, est_ref, loaders
+from utils import routines as _routines
 import sys
 
 # Windows consoles default to cp1252 and raise UnicodeEncodeError on any non-ASCII
@@ -55,7 +56,7 @@ try:
 except Exception:
     pass
 
-DEFAULT_ESTS = [3, 4]
+DEFAULT_ESTS = list(_routines.LINK_ESTS)
 
 # Which RC stage each comparison table reports.
 #   stage        : checkpoint stage read from disk
@@ -229,9 +230,10 @@ def build_table(ests, suffix: str = "", show_segments: bool = True,
 
 
 def main():
-    ap = argparse.ArgumentParser(description="RC-BLP cross-estimator comparison across E3/E4 "
-                                             "(ext1 headline + Full)")
-    ap.add_argument("--routines", default=",".join(str(e) for e in DEFAULT_ESTS))
+    _across = "/".join(f"E{e}" for e in DEFAULT_ESTS)
+    ap = argparse.ArgumentParser(description=f"RC-BLP cross-estimator comparison across "
+                                             f"{_across} (ext1 headline + Full)")
+    ap.add_argument("--routines", default=_routines.csv(DEFAULT_ESTS))
     ap.add_argument("--engine", choices=["ift", "numerical", "cue"], default="ift",
                     help="Engine whose results to read (ift→un-suffixed, numerical→_num, cue→_cue). "
                          "The suffix also lands in the output filename, so a non-ift engine writes a "

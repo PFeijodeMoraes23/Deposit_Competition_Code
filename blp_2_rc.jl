@@ -9,7 +9,10 @@ Background
 The BLP RC estimation runs per routine, each consuming its own
 `demand_<id>_*_spec_12.parquet`. The routine list — id AND prefix — is AUTO-DISCOVERED
 from the parquets on disk (`demand_prefix` / `discover_routine_ids`; newest file
-wins per id), so a relabelled/new routine needs NO edit here. The lineup:
+wins per id), so a relabelled/new routine needs NO edit here. On the cluster a parquet may
+sit in `data/input` (uploaded) or `data/output/DEMAND_PREP` (written by the on-cluster
+sleepiness phase); both are searched, data/input first, so an uploaded file always wins —
+see `demand_search_dirs` in of_root.jl, shared with the engine. The lineup:
 
     E1 Local B-type   E2 Pooled Linear
     E3 Pooled Single-Index        E4 Pooled Single-Index + Time
@@ -54,7 +57,12 @@ Routines are selected via `--estim N` / `--all` / `--all-routines`; the cluster 
 scripts (`submit_blp_rc_{all,grouped,stage}.sh`) drive this for the chains.
 """
 
-const RC_SPEC = 12
+# The lineup, the routine descriptions and the headline spec id come from
+# config/routines.toml, which utils/routines.py reads too. Guarded because several files in
+# one session want the consts.
+isdefined(Main, :ROUTINE_REGISTRY) || include(joinpath(@__DIR__, "routines.jl"))
+
+const RC_SPEC = SPEC12_ID
 
 # Warm-start delta suffix. The engine builds its warm-start filename from
 # ENV["BLP_DELTA_SUFFIX"]; the logit (blp_1_logit.jl) writes the un-suffixed
@@ -64,52 +72,53 @@ const DELTA_SUFFIX = ""
 
 # The routine list is AUTO-DISCOVERED at runtime from the demand-prep parquets
 # (demand_<id>_*_spec_<spec>.parquet, excluding legacy *_final_*), so adding a routine
-# (a new routine) needs no edit here — just its parquet on disk. These descriptions are
-# cosmetic labels only.
-# Routine scheme: base links + their +Time variants.
-const ROUTINE_DESC = Dict(
-    1 => "Local B-type",            2 => "Pooled Linear",
-    3 => "Pooled Single-Index",     4 => "Pooled Single-Index + Time",
-)
-routine_desc(id::Int) = get(ROUTINE_DESC, id, "E$id")
+# (a new routine) needs no edit here — just its parquet on disk. ROUTINE_DESC/routine_desc
+# (routines.jl) supply the cosmetic labels for the ids that discovery turns up.
 
-"""Discover routine `estim`'s demand-prep prefix by scanning `input_dir` for
-demand_<estim>_*_spec_<spec>.parquet (excluding legacy *_final_*). If several non-final
-parquets share the id, the MOST RECENTLY MODIFIED wins (so a leftover old-scheme file
-can't shadow a freshly rebuilt one). Returns the prefix or nothing if absent."""
-function demand_prefix(estim::Int, input_dir::String; spec::Int = RC_SPEC)
-    isdir(input_dir) || return nothing
+"""Discover routine `estim`'s demand-prep prefix by scanning `input_dirs` for
+demand_<estim>_*_spec_<spec>.parquet (excluding legacy *_final_*). The directories are
+searched in order and the FIRST one holding a match settles the routine, so an uploaded
+parquet in data/input outranks one the cluster wrote under data/output/DEMAND_PREP. Within
+that directory, if several non-final parquets share the id the MOST RECENTLY MODIFIED wins
+(so a leftover old-scheme file can't shadow a freshly rebuilt one). Returns the prefix or
+nothing if absent everywhere."""
+function demand_prefix(estim::Int, input_dirs::Vector{String}; spec::Int = RC_SPEC)
     pat = Regex("^demand_$(estim)(?:_.*)?_spec_$(spec)\\.parquet\$")
-    best_mt = -Inf; best_pfx = nothing
-    for f in readdir(input_dir)
-        occursin("_final_", f) && continue
-        occursin(pat, f) || continue
-        mt = mtime(joinpath(input_dir, f))
-        if mt > best_mt
-            best_mt = mt
-            best_pfx = replace(f, "_spec_$(spec).parquet" => "")
+    for input_dir in input_dirs
+        isdir(input_dir) || continue
+        best_mt = -Inf; best_pfx = nothing
+        for f in readdir(input_dir)
+            occursin("_final_", f) && continue
+            occursin(pat, f) || continue
+            mt = mtime(joinpath(input_dir, f))
+            if mt > best_mt
+                best_mt = mt
+                best_pfx = replace(f, "_spec_$(spec).parquet" => "")
+            end
         end
+        best_pfx === nothing || return best_pfx
     end
-    return best_pfx
+    return nothing
 end
 
-"""Discover all available routine ids in `input_dir` (sorted)."""
-function discover_routine_ids(input_dir::String; spec::Int = RC_SPEC)
-    isdir(input_dir) || return Int[]
+"""Discover all available routine ids across `input_dirs` (sorted, de-duplicated)."""
+function discover_routine_ids(input_dirs::Vector{String}; spec::Int = RC_SPEC)
     ids = Set{Int}()
     pat = Regex("^demand_(\\d+)(?:_.*)?_spec_$(spec)\\.parquet\$")
-    for f in readdir(input_dir)
-        occursin("_final_", f) && continue
-        m = match(pat, f)
-        m === nothing || push!(ids, parse(Int, m.captures[1]))
+    for input_dir in input_dirs
+        isdir(input_dir) || continue
+        for f in readdir(input_dir)
+            occursin("_final_", f) && continue
+            m = match(pat, f)
+            m === nothing || push!(ids, parse(Int, m.captures[1]))
+        end
     end
     return sort!(collect(ids))
 end
 
-# Default cluster routine set: the single-index links and their +Time variants —
-# E3 (Single-Index), E4 (Single-Index+Time).
+# The default cluster routine set is DEFAULT_ROUTINES (routines.jl): the single-index links
+# and their +Time variants, read from config/routines.toml's `link_ests`.
 # Override with the ROUTINES env in the submit scripts, or --all-routines for all.
-const DEFAULT_ROUTINES = [3, 4]
 
 # Estimation engine (GPU). Both engines live in blp_gpu_engine.jl: the IFT analytical
 # gradient (`main_gpu_ift`, default) and the numerical finite-difference engine
@@ -175,23 +184,27 @@ function run_routine(estim_id::Int; passthrough::Vector{String} = String[])
     end
 
     label = "E$estim_id"
-    in_dir, _, _ = get_paths(is_hpc; local_dir = local_dir)
+    in_dir, _, out_dir = get_paths(is_hpc; local_dir = local_dir)
+    # Same search path the engine uses (of_root.jl `demand_search_dirs`): data/input first,
+    # then data/output/DEMAND_PREP where the on-cluster sleepiness phase writes.
+    in_dirs = demand_search_dirs(in_dir, out_dir)
 
     # Auto-discover the routine's input prefix. A missing parquet hard-fails HERE — the
     # engine would otherwise print "[!] Missing" and silently no-op every stage (empty
     # blp_summary_*.json, exit 0), propagating a fake "success" down the afterok chain.
-    prefix = demand_prefix(estim_id, in_dir)
+    prefix = demand_prefix(estim_id, in_dirs)
     println("\n", "="^72)
     println("  RC-BLP $label: $(routine_desc(estim_id))  |  spec $RC_SPEC")
     if prefix === nothing
-        avail = discover_routine_ids(in_dir)
+        avail = discover_routine_ids(in_dirs)
         error("RC-BLP $label: no demand-prep parquet " *
-              "demand_$(estim_id)_*_spec_$(RC_SPEC).parquet found in\n    $in_dir\n" *
+              "demand_$(estim_id)_*_spec_$(RC_SPEC).parquet found in\n" *
+              describe_search_dirs(in_dirs...) * "\n" *
               "Available routines there: " *
               (isempty(avail) ? "(none)" : join("E" .* string.(avail), ", ")) *
               ". Upload $label's parquet (or run its demand prep) before submitting.")
     end
-    in_path = joinpath(in_dir, "$(prefix)_spec_$(RC_SPEC).parquet")
+    in_path = resolve_in_then_out("$(prefix)_spec_$(RC_SPEC).parquet", in_dirs...)
     println("  input : $(basename(in_path))")
     ws = warm_start_path(estim_id; is_hpc = is_hpc, local_dir = local_dir)
     println("  warm  : $(basename(ws))")
@@ -251,8 +264,9 @@ function _main()
         is_hpc    = "--hpc" in rest
         local_dir = (li = findfirst(==("--local-dir"), rest)) !== nothing && li < length(rest) ?
                     rest[li + 1] : nothing
-        in_dir, _, _ = get_paths(is_hpc; local_dir = local_dir)
-        run_all_routines(; passthrough = rest, ids = discover_routine_ids(in_dir))
+        in_dir, _, out_dir = get_paths(is_hpc; local_dir = local_dir)
+        run_all_routines(; passthrough = rest,
+                         ids = discover_routine_ids(demand_search_dirs(in_dir, out_dir)))
     elseif "--all" in a
         run_all_routines(; passthrough = filter(!=("--all"), a))   # default E3/E4
     else

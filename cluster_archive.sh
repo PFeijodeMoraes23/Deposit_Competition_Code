@@ -109,6 +109,14 @@ case "${SET}" in
   cf4)             BASE=cf4_outputs;        pats=("output/cf/cf4_pix_realloc_E*_spec_${SPEC}_*.parquet") ;;
   cf5)             BASE=cf5_outputs;        pats=("output/cf/cf5_passthrough_E*_spec_${SPEC}_*.parquet" "output/cf/cf5_E*") ;;
   cf6)             BASE=cf6_outputs;        pats=("output/cf/cf6_merger_E*_spec_${SPEC}_*.parquet" "output/cf/cf6_E*") ;;
+  # The estimation sample the BLP, BBL and CF all read, produced on the cluster by the
+  # sleepiness prep step into data/output/DEMAND_PREP (gate G2). Worth pulling down
+  # mid-run: it is what every later result is read against.
+  # COPY ONLY, in practice: pipeline_all.sh always passes --copy, because the whole
+  # rest of the pipeline reads these parquets in place for days afterwards. The
+  # pattern is confined to output/DEMAND_PREP, so guards (1)-(3) keep it inside the
+  # output tree even if someone ever passes --move.
+  demand_prep)     BASE=demand_prep_outputs; pats=("output/DEMAND_PREP/demand_*_spec_${SPEC}.parquet") ;;
   blp_outputs)     BASE=blp_outputs;        pats=("output/blp_results_E*_spec_${SPEC}_*.json" "output/blp_results_E*_spec_${SPEC}_*.jls" "output/blp_summary_E*_gpu_*.json" "output/logit_*") ;;
   blp_checkpoints) BASE=blp_checkpoints;    pats=("output/blp_checkpoint_E*_spec_*.jls") ;;
   bbl_costs)       BASE=bbl_outputs;        pats=("output/cost/cost_params_E*_spec_${SPEC}_*.json") ;;
@@ -116,7 +124,7 @@ case "${SET}" in
   bbl_logs)        BASE=bbl_logs; DOMAIN=logs; pats=("logs/bbl_*.out" "logs/bbl_*.err") ;;
   run_logs)        BASE=run_logs; DOMAIN=logs; pats=("logs/*.out" "logs/*.err") ;;
   *) echo "Unknown --set '${SET}'." >&2
-     echo "  data sets: foundation cf1 cf2 cf3 cf4 cf5 cf6 blp_outputs blp_checkpoints bbl_costs" >&2
+     echo "  data sets: foundation cf1 cf2 cf3 cf4 cf5 cf6 demand_prep blp_outputs blp_checkpoints bbl_costs" >&2
      echo "  log  sets: blp_logs bbl_logs run_logs" >&2
      exit 2 ;;
 esac

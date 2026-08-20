@@ -62,6 +62,7 @@ import statsmodels.api as sm
 from scipy import stats
 
 from utils.window import apply_window
+from utils import paths as _paths
 
 warnings.filterwarnings("ignore")
 
@@ -73,9 +74,7 @@ DATA_DIR    = _ROOT / "BCB" / "Egan_et_al_2025_Rep" / "processed"
 PANEL_CSV        = DATA_DIR / "market_panel.csv"
 MACRO_RATES_CSV  = DATA_DIR / "PANEL_INTERMED" / "quarterly_macro_rates.csv"
 OUTPUT_DIR  = DATA_DIR / "ESTIMATION_OUTPUT" / "Rout"
-DRAFTS_DIR  = Path(r"C:\Users\pedro\OneDrive\Documentos\Yale"
-                   r"\Year 3 (2024 - 2025)\Open Finance\Open-Finance"
-                   r"\Drafts\Deposit Competition")
+DRAFTS_DIR  = _paths.drafts_dir()
 
 REGION_MAPPING = {
     "1": "North",

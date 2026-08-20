@@ -38,21 +38,21 @@ CL_DATA_IN="${CL_DATA_ROOT}/input"
 # is fixed with ONE `export`, not by editing seven files under time pressure.
 #
 #   export JULIA_MODULE=Julia/1.10.4-foss-2022b     # if 1.11.4 is gone
-#   export CONDA_ENV=dep_comp_blp                   # if costsolve was never created
+#   export CONDA_ENV=base                           # if dep_comp_blp is gone
 #
 # JULIA_MODULE is the name handed to `module load`. cluster_preflight.sh prints
 # what `module avail Julia` actually offers when this one does not load.
+# Verified on the login node (module -t avail): 1.9.2, 1.10.4, 1.10.8, 1.11.3,
+# 1.11.4-linux-x86_64, 1.12.1, 1.12.4, 1.12.5 — so the default below loads.
 JULIA_MODULE="${JULIA_MODULE:-Julia/1.11.4-linux-x86_64}"
 # PY_MODULE / CONDA_ENV keep the `${VAR+set}` idiom: UNSET means "apply the
 # default", explicitly EMPTY means "opt out" (no module load / no conda activate).
 [[ -z "${PY_MODULE+set}" ]] && PY_MODULE=miniconda
-# CONDA_ENV reconciliation: costsolve is the name every human-facing remediation
-# string in this repo tells the reader to create, and it matches the one-time
-# setup line below, so it is the default here. If the cluster only has
-# dep_comp_blp, cluster_preflight.sh detects that and prints the one-line unblock.
-#   module load miniconda && conda create -y -n costsolve python=3.11 \
-#          numpy pandas scipy pyarrow statsmodels
-[[ -z "${CONDA_ENV+set}" ]] && CONDA_ENV=costsolve
+# CONDA_ENV: dep_comp_blp. Verified on the login node — `conda env list` offers
+# base, dep_comp_blp and test_env, and dep_comp_blp already imports numpy, pandas,
+# scipy, pyarrow, statsmodels AND matplotlib, i.e. every REQ string below. There is
+# nothing to create and nothing to install.
+[[ -z "${CONDA_ENV+set}" ]] && CONDA_ENV=dep_comp_blp
 CF_PYTHON="${CF_PYTHON:-python3}"
 # What the Python steps actually import. estimation_bbl_3_solve.py needs
 # numpy/pandas/scipy (+pyarrow via pd.read_parquet) and NOT statsmodels — that is
@@ -60,6 +60,13 @@ CF_PYTHON="${CF_PYTHON:-python3}"
 # otherwise-usable env.
 CL_PY_REQ_SOLVE="numpy, pandas, scipy, pyarrow"
 CL_PY_REQ_POLFUNC="numpy, pandas, scipy, pyarrow, statsmodels"
+# The sleepiness stage (sleep_job.sh, every branch) imports the widest stack of the
+# three: statsmodels for the first stages and matplotlib because the export step
+# (export_results.py / export_analyze_spec12.py, run through
+# run_sleep_pipeline.py --skip-sleep) draws figures. MPLBACKEND=Agg keeps that
+# headless; it does not make the import optional. dep_comp_blp already carries all
+# six — this string is the preflight PROBE, not a to-do list.
+CL_PY_REQ_SLEEP="numpy, pandas, scipy, pyarrow, statsmodels, matplotlib"
 
 # ── 2. Julia environment ──────────────────────────────────────────────────────
 # cl_load_julia: `module reset` (the correct command on Bouchet — `module purge`
@@ -375,17 +382,43 @@ cl_validate_routines () {   # cl_validate_routines <routine...>
     cp="$(cl_cp_dir "$@")"
     for k in "$@"; do
         if [[ ! -f "${cp}/blp_E${k}_spec_12.jls" ]]; then
-            echo "  E${k}: no RC result ${cp}/blp_E${k}_spec_12.jls" >&2
-            bad=1
+            # ONE rule decides what a missing input means, and it lives in
+            # cl_need_file. In a live run this still prints and still returns
+            # nonzero; only the end-to-end dry run reports and carries on.
+            if _cl_assume_chained; then
+                echo "[dry-run] MISSING RC result E${k}: ${cp}/blp_E${k}_spec_12.jls"
+                echo "          assumed produced earlier in this graph — a LIVE run REFUSES here."
+            else
+                echo "  E${k}: no RC result ${cp}/blp_E${k}_spec_12.jls" >&2
+                bad=1
+            fi
         fi
     done
     return ${bad}
 }
 
 # ── 6. PREFLIGHT PRIMITIVES — one implementation of each check ───────────────
+# CL_ASSUME_CHAINED: for the end-to-end DRY RUN only. pipeline_all.sh prints one
+# graph spanning sleep -> logit -> BLP -> BBL -> CF -> CF-eq, and every stage after
+# the first consumes a file an EARLIER stage of that same graph produces. On the
+# login node at t=0 those files do not exist yet, so the children's on-disk
+# preflights refuse and the graph stops at the first of them — which is exactly the
+# thing a dry run exists to show.
+#
+# It is inert unless CL_DRYRUN=1 as well, and a dry run submits nothing, so this can
+# never let a real job past a real check. Each softened check still prints its full
+# MISSING line, tagged, so the dry run remains a staging report too.
+CL_ASSUME_CHAINED="${CL_ASSUME_CHAINED:-0}"
+_cl_assume_chained () { [[ "${CL_DRYRUN}" == "1" && "${CL_ASSUME_CHAINED}" == "1" ]]; }
+
 cl_need_file () {   # cl_need_file <path> <label> [remediation...]
     local p="$1" label="$2"; shift 2
     if [[ -f "${p}" ]]; then return 0; fi
+    if _cl_assume_chained; then
+        echo "[dry-run] MISSING ${label}: ${p}"
+        echo "          assumed produced earlier in this graph — a LIVE run REFUSES here."
+        return 0
+    fi
     echo "MISSING ${label}: ${p}"
     [[ $# -gt 0 ]] && printf '   -> %s\n' "$@"
     return 1
@@ -408,9 +441,63 @@ cl_need_costs () {  # cl_need_costs <routine> <stage>
         "run the BBL cost stage first:  bash bbl_run.sh"
 }
 
+# ── CF4's two artefacts: the ONE search order, shared by the preflight and the gate.
+# cf_4_upsilon_export.py used to run only locally, so its output could only be an
+# UPLOAD and data/input was the only place worth looking. It runs on the cluster now
+# (sleep_job.sh SLEEP_STEP=upsilon, gated by G7) and writes to
+# paths.estimation_output()/CF_FOUNDATION. A preflight that still tested data/input
+# alone would refuse a pair that is present and correct.
+#
+# This mirrors cf4_search_dirs() in cf_4_pix.jl candidate-for-candidate, and it has to:
+# a preflight that resolves a different file from the one the job then opens is worse
+# than no preflight at all.
+#
+#   1. data/input                 an uploaded export. FIRST, so a hand-staged pair
+#                                 always beats a cluster-produced one.
+#   2. data/output/CF_FOUNDATION  where the on-cluster export writes.
+#   3. data/output/cf             the subdirectory the rest of the CF stack uses.
+#   4. <of_root>/…/ESTIMATION_OUTPUT/CF_FOUNDATION
+#                                 the anchor the exporter itself resolves. Normally the
+#                                 SAME directory as (2) — cl_bootstrap_tree symlinks
+#                                 ESTIMATION_OUTPUT at data/output — but it is the only
+#                                 candidate that matches when the skeleton was built
+#                                 without that link.
+cl_cf4_dirs () {
+    printf '%s\n' "${CL_DATA_IN}" \
+                  "${CL_DATA_OUT}/CF_FOUNDATION" \
+                  "${CL_DATA_OUT}/cf" \
+                  "$(cl_of_root)/BCB/Egan_et_al_2025_Rep/processed/ESTIMATION_OUTPUT/CF_FOUNDATION"
+}
+
+# cl_need_cf4_file <basename> <label>: 0 as soon as one candidate holds it. On failure
+# it names EVERY directory searched — "missing" without "where I looked" is the report
+# that sends someone hunting in the one place the code never reads.
+cl_need_cf4_file () {
+    local fn="$1" label="$2" d
+    while IFS= read -r d; do
+        [[ -f "${d}/${fn}" ]] && return 0
+    done < <(cl_cf4_dirs)
+    if _cl_assume_chained; then
+        echo "[dry-run] MISSING ${label}: ${fn}"
+        echo "          assumed produced earlier in this graph — a LIVE run REFUSES here."
+        return 0
+    fi
+    echo "MISSING ${label}: ${fn}"
+    echo "   searched, in order:"
+    while IFS= read -r d; do echo "     ${d}"; done < <(cl_cf4_dirs)
+    echo "   -> produced by the sleepiness phase:  bash sleep_run.sh   (gate G7)"
+    echo "   -> or build it locally and upload to data/input:"
+    echo "      python cf_4_upsilon_export.py --estim <k> --spec 12"
+    return 1
+}
+
 # cl_python_probe: LOGIN-NODE probe. Runs in a SUBSHELL so `module load` and
 # `conda activate` cannot leak into the submitting shell. Returns 0/1.
 cl_python_probe () {   # cl_python_probe "<import list>"
+    if _cl_assume_chained; then
+        echo "[dry-run] skipping the login-node Python probe (import $1)" >&2
+        return 0
+    fi
     (
       if [[ -n "${PY_MODULE:-}" ]]; then module load ${PY_MODULE} || true; fi
       if [[ -n "${CONDA_ENV:-}" ]]; then
@@ -435,13 +522,14 @@ cl_setup_python () {   # cl_setup_python "<import list>"
     PYBIN="${CF_PYTHON}"
     command -v "${PYBIN}" >/dev/null 2>&1 || {
         echo "ERROR: Python '${PYBIN}' not found on the node. Set PY_MODULE / CONDA_ENV / CF_PYTHON," >&2
-        echo "  e.g.  PY_MODULE=miniconda CONDA_ENV=costsolve bash bbl_run.sh" >&2
+        echo "  e.g.  PY_MODULE=miniconda CONDA_ENV=dep_comp_blp bash bbl_run.sh" >&2
         exit 127; }
     "${PYBIN}" -c "import ${req}" 2>/dev/null || {
         echo "ERROR: '${PYBIN}' lacks the required stack (${req})." >&2
+        echo "  The cluster offers base, dep_comp_blp and test_env; dep_comp_blp carries the" >&2
+        echo "  whole stack (numpy pandas scipy pyarrow statsmodels matplotlib) and is the default." >&2
         echo "  Use an existing env:  export CONDA_ENV=<name>   (conda env list)" >&2
         echo "  or an interpreter:    export CF_PYTHON=/path/to/python CONDA_ENV=''" >&2
-        echo "  or create it:         module load miniconda && conda create -y -n ${CONDA_ENV:-costsolve} python=3.11 numpy pandas scipy pyarrow statsmodels" >&2
         exit 127; }
     # The scripts' default COST_FWD is the local BCB tree, absent on the cluster.
     # Point it at data/output/cost, where the Julia fwd_sim writes the psi_* this
@@ -543,4 +631,96 @@ cl_banner () {
     echo "=============================================================================="
     printf ' %s\n' "$@"
     echo "=============================================================================="
+}
+
+# ── 9. THE OPEN-FINANCE SKELETON — what the sleepiness stage resolves against ─
+# The Python sleepiness/CF stack anchors every path on utils/paths.py's
+# OPEN_FINANCE root and the Julia entry points on of_root.jl. Both walk three
+# levels up from the source file unless OPEN_FINANCE_ROOT is set — and on the
+# cluster the code lives at HEAD/scripts, so that walk lands on the parent of HEAD,
+# where the reads find nothing and an export can still exit 0.
+#
+# So we build a MINIMAL tree and point OPEN_FINANCE_ROOT at it. Three constraints
+# make this exact rather than approximate:
+#
+#   (a) the BASENAME must be 'Open-Finance'. of_root.jl:resolve_of_root() rejects
+#       anything else outright.
+#   (b) shared/ and BCB/Egan_et_al_2025_Rep/processed/ are of_root.jl's SENTINELS.
+#       It refuses — deliberately, without mkpath'ing — when either is absent,
+#       because a June 2026 run resolved the root one level short and quietly
+#       accumulated 8.9 GB of draws nobody read.
+#   (c) 'Drafts/Deposit Competition/' must EXIST and stay EMPTY. The exporters
+#       mirror .tex fragments and figures into paths.drafts_dir(), which is never
+#       created on demand ("a copy into a path that does not exist should fail").
+#
+# The three panels the sleepiness estimators read are SYMLINKED out of data/input,
+# so the uploaded copy stays the single physical copy and data/input keeps its
+# "uploaded only" meaning. A dangling link is reported, never silently created-over.
+#
+# processed/ESTIMATION_OUTPUT IS ITSELF A SYMLINK TO data/output, and that is the
+# load-bearing piece. utils/paths.estimation_output() is deliberately NOT
+# redirectable by SLEEP_OUT_ROOT — "it also holds the BLP, counterfactual and cost
+# trees, which a sleepiness sandbox has no business redirecting" — so without the
+# link cf_4_upsilon_export.py's CF_FOUNDATION, blp_1_logit.jl's BLP_RESULTS/logit
+# and every Rout/ land INSIDE the skeleton, next to nothing, while the rest of the
+# stack reads data/output. With it the two coincide by construction:
+#     estimation_output()            -> data/output
+#     estimation_output()/DEMAND_PREP-> data/output/DEMAND_PREP == SLEEP_OUT_ROOT
+#     estimation_output()/CF_FOUNDATION, BLP_RESULTS/, Rout/  -> under data/output
+# and cluster-produced files land in the cluster-produced half of the tree, which
+# is what the contract asks for.
+#
+# Idempotent: mkdir -p and ln -sfn. Safe to call from every job start AND from G0.
+cl_of_root () { printf '%s' "${CL_SKEL_ROOT:-${CL_DATA_ROOT}/root/Open-Finance}"; }
+
+_cl_link () {   # _cl_link <target> <linkname> <label>
+    local tgt="$1" lnk="$2" label="$3"
+    if [[ ! -e "${tgt}" ]]; then
+        echo "  [!] ${label}: link source is MISSING — ${tgt}"
+        echo "      upload it (cluster/upload_manifest.txt, RUNBOOK step 0); the link is still made"
+    fi
+    ln -sfn "${tgt}" "${lnk}" 2>/dev/null \
+        || { echo "  [!] ${label}: could not link ${lnk} -> ${tgt}"; return 1; }
+    echo "  link ${label}: $(basename "${lnk}") -> ${tgt}"
+    return 0
+}
+
+cl_bootstrap_tree () {
+    local root proc
+    root="$(cl_of_root)"
+    proc="${root}/BCB/Egan_et_al_2025_Rep/processed"
+    if [[ "${CL_DRYRUN}" == "1" ]]; then
+        echo "[dry-run] would build the Open-Finance skeleton at ${root}"
+        echo "[dry-run]   dirs:  shared/, Drafts/Deposit Competition/, BCB/Inclusion/,"
+        echo "[dry-run]          BCB/Egan_et_al_2025_Rep/processed/PANEL_INTERMED/"
+        echo "[dry-run]   links: processed/market_panel.csv, PANEL_INTERMED/digital_banks_diagnostic.csv,"
+        echo "[dry-run]          BCB/Inclusion/bcb_banked_mca_panel.csv  <- ${CL_DATA_IN}"
+        echo "[dry-run]          processed/ESTIMATION_OUTPUT -> ${CL_DATA_OUT}"
+        echo "[dry-run]          => estimation_output()/DEMAND_PREP == ${CL_DATA_OUT}/DEMAND_PREP == SLEEP_OUT_ROOT"
+        return 0
+    fi
+    mkdir -p "${root}/shared" \
+             "${root}/Drafts/Deposit Competition" \
+             "${root}/BCB/Inclusion" \
+             "${proc}/PANEL_INTERMED" \
+             "${CL_DATA_OUT}" || return 1
+    echo "Open-Finance skeleton: ${root}"
+    _cl_link "${CL_DATA_IN}/market_panel.csv" \
+             "${proc}/market_panel.csv"                            "market panel"
+    _cl_link "${CL_DATA_IN}/digital_banks_diagnostic.csv" \
+             "${proc}/PANEL_INTERMED/digital_banks_diagnostic.csv" "digital-bank flags"
+    _cl_link "${CL_DATA_IN}/bcb_banked_mca_panel.csv" \
+             "${root}/BCB/Inclusion/bcb_banked_mca_panel.csv"      "BCB banked/MCA panel"
+    # A REAL directory here would shadow the link and split the tree in half, so
+    # refuse rather than overwrite: only an absent path or an existing symlink is
+    # replaced. (ln -sfn on a real directory silently creates the link INSIDE it.)
+    if [[ -d "${proc}/ESTIMATION_OUTPUT" && ! -L "${proc}/ESTIMATION_OUTPUT" ]]; then
+        echo "  [!] ESTIMATION_OUTPUT is a REAL directory, not the expected link to data/output:"
+        echo "      ${proc}/ESTIMATION_OUTPUT"
+        echo "      Anything it holds was written to the wrong half of the tree. Move it aside"
+        echo "      (mv ESTIMATION_OUTPUT ESTIMATION_OUTPUT.stray) and re-run."
+        return 1
+    fi
+    _cl_link "${CL_DATA_OUT}" "${proc}/ESTIMATION_OUTPUT" "ESTIMATION_OUTPUT -> data/output"
+    return 0
 }

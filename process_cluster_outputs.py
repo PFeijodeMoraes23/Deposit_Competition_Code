@@ -76,17 +76,17 @@ def tree_for(kind):
     """-> (raw_dir, processed_dir, index_path). processed_dir is where the artifacts the
     table generators read end up; INDEX.json sits beside them, as in process_blp_outputs."""
     if kind == "bbl":
-        root = EST_OUT / "BBL_OUTPUT"
+        root = paths.bbl_output_dir()
         proc = root / "cluster_processed"
         return root / "cluster_raw", proc, proc / "INDEX.json"
-    root = EST_OUT / "CF_FOUNDATION"
+    root = paths.cf_foundation_dir()
     return EST_OUT / "CF_OUTPUT" / "cluster_raw", root, root / "INDEX.json"
 
 
 def search_dirs(kind, extra):
     raw, _, _ = tree_for(kind)
     cands = [Path(d) for d in extra]
-    cands += [raw, EST_OUT, EST_OUT / "BBL_OUTPUT", EST_OUT / "CF_FOUNDATION",
+    cands += [raw, EST_OUT, paths.bbl_output_dir(), paths.cf_foundation_dir(),
               EST_OUT / "CF_OUTPUT" / "cluster_raw",
               Path.home() / "Downloads", Path.home() / "Desktop"]
     seen, out = set(), []

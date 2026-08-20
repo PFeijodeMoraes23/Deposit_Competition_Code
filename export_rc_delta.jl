@@ -20,6 +20,10 @@
 using Serialization
 
 include(joinpath(@__DIR__, "of_root.jl"))
+# --routines defaults to the cluster's routine set, read from config/routines.toml rather
+# than restated here: a default naming ids nobody estimates exports nothing and still
+# exits 0, which reads as a clean run.
+isdefined(Main, :ROUTINE_REGISTRY) || include(joinpath(@__DIR__, "routines.jl"))
 
 function get_paths()
     data = joinpath(resolve_of_root(), "BCB", "Egan_et_al_2025_Rep", "processed",
@@ -34,7 +38,7 @@ end
 
 function main()
     stage    = argval("--stage", "ext1")
-    routines = parse.(Int, split(argval("--routines", "3,4"), ","))
+    routines = parse.(Int, split(argval("--routines", join(DEFAULT_ROUTINES, ",")), ","))
     raw, processed = get_paths()
     outdir = argval("--outdir", processed)
     mkpath(outdir)

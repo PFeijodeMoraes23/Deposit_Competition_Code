@@ -43,6 +43,7 @@ import numpy as np
 import pandas as pd
 
 from utils import paths as _paths
+from utils import routines as _routines
 from utils import load_panel_cached
 
 OUT_DIR = _paths.PROCESSED / "ESTIMATION_OUTPUT" / "DIAG_PHI_SEPARATION"
@@ -68,7 +69,9 @@ MODEL_COLORS = {"E1": "#455A64", "E2": "#2E7D32",
 # linear routines' spec-12 averages off a panel whose companion table reports their
 # market-means, two different objects that read as a discrepancy side by side.
 REF_ESTS = tuple(x.strip() for x in
-                 os.environ.get("SLEEP_ENTRY_REFS", "E1,E2,E3,E4").split(",") if x.strip())
+                 os.environ.get("SLEEP_ENTRY_REFS",
+                                ",".join(f"E{e}" for e in _routines.ACTIVE)
+                                ).split(",") if x.strip())
 
 
 def phi_vintages():

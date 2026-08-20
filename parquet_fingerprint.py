@@ -8,10 +8,13 @@ the two ADDED level columns, nothing downstream that selects columns by name can
 import argparse, hashlib, json, pathlib, sys
 import pandas as pd
 
+from utils import paths as _paths
+
 sys.stdout.reconfigure(encoding="utf-8")
 
-D = pathlib.Path(r"c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance"
-                 r"\Open-Finance\BCB\Egan_et_al_2025_Rep\processed\ESTIMATION_OUTPUT\DEMAND_PREP")
+# demand_prep_root() honours SLEEP_OUT_ROOT, so a fingerprint taken around a sandboxed
+# demand-prep run describes the tree that run actually wrote.
+D = _paths.demand_prep_root()
 
 
 def col_hash(s: pd.Series) -> str:

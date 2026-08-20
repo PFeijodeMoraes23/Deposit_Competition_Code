@@ -42,7 +42,12 @@ Usage
   # Rebuild all LaTeX tables from the existing combined summary (no estimation):
   julia --project=. blp_1_logit.jl --tables-only
 
-LaTeX outputs (→ ESTIMATION_OUTPUT/Rout + Drafts/Deposit Competition):
+  # On the cluster (HEAD/data tree): parquets from data/input or data/output/DEMAND_PREP,
+  # δ warm-starts written flat to data/output where the RC engine looks for them:
+  julia --project=. --threads=auto blp_1_logit.jl --est 3 --hpc
+
+LaTeX outputs (→ ESTIMATION_OUTPUT/Rout + Drafts/Deposit Competition; data/output/Rout on
+the cluster, where the Drafts folder does not exist):
   est{id}_spec12_logit.tex                 per-routine, 4 sub-model columns
   est1-4_spec12_logit_comparison.tex       cross-routine, `+ D-Type` column each
                                            (tab:demand_logit_spec12_comparison)
@@ -61,11 +66,14 @@ using Distributions   # t/χ² p-values for the LaTeX result tables
 using Random          # MersenneTwister for the wild cluster bootstrap
 
 include(joinpath(@__DIR__, "of_root.jl"))
+# The lineup, the \ref map and the demand prefixes come from config/routines.toml, which
+# utils/routines.py reads too. Guarded because several files in one session want the consts.
+isdefined(Main, :ROUTINE_REGISTRY) || include(joinpath(@__DIR__, "routines.jl"))
 
 # ==========================================================================
 # 0. Constants
 # ==========================================================================
-const SPEC_ID = 12
+const SPEC_ID = SPEC12_ID
 
 const X_COLS = ["fgc_covered", "has_ip", "seg_S2", "seg_S3", "seg_S4", "seg_S5",
                 "log_total_assets_lag", "is_state_owned"]
@@ -145,18 +153,71 @@ end
 # ==========================================================================
 # 0b. Paths
 # ==========================================================================
-function get_paths()
+"""Whether this run targets the cluster tree. `--hpc` is the flag blp_1_estimation.jl takes;
+SLURM's own job environment is honoured as well, so a job step that omits the flag still
+resolves data/{input,output} instead of throwing inside `resolve_of_root()` (the local root
+validation cannot pass on a compute node). Neither holds on a local run."""
+is_hpc_run()::Bool = ("--hpc" in ARGS) || haskey(ENV, "SLURM_JOB_ID")
+
+"""
+    get_paths([is_hpc]) -> (input_dir, output_dir)
+
+`input_dir` is the primary demand-prep location, `output_dir` the results root — the same
+two-tuple every call site here already destructures.
+
+On the cluster these are HEAD/data/{input,output}, mirroring `get_paths` in
+blp_1_estimation.jl. The demand parquets arrive either uploaded to data/input or written to
+data/output/DEMAND_PREP by the on-cluster sleepiness phase, so reads go through
+`demand_dirs()`, which searches both in that order. Everything produced here lands under
+data/output: the δ warm-starts flat in it (`delta_dir`), the summary and per-key JLS in its
+`logit/` subfolder, the LaTeX tables in `Rout/`.
+
+Off the cluster the tree is ESTIMATION_OUTPUT/{DEMAND_PREP, BLP_RESULTS}, `demand_dirs()`
+collapses to the single DEMAND_PREP entry, and every path resolves as it does with no flag.
+"""
+function get_paths(is_hpc::Bool = is_hpc_run())
+    if is_hpc
+        return joinpath(@__DIR__, "..", "data", "input"),
+               joinpath(@__DIR__, "..", "data", "output")
+    end
     data_dir  = joinpath(resolve_of_root(), "BCB", "Egan_et_al_2025_Rep", "processed")
     input_dir = joinpath(data_dir, "ESTIMATION_OUTPUT", "DEMAND_PREP")
     output_dir= joinpath(data_dir, "ESTIMATION_OUTPUT", "BLP_RESULTS")
     return input_dir, output_dir
 end
 
-# Local logit outputs live in a dedicated `logit/` subfolder of BLP_RESULTS, kept separate
-# from the cluster RC outputs (see process_blp_outputs.py). Created on demand.
+"""Ordered demand-prep search path (`demand_search_dirs`, of_root.jl): uploads in data/input
+before the on-cluster sleepiness output in data/output/DEMAND_PREP. Resolution is PER FILE
+(`load_spec_data`) and per id (`discover_estim_strategies`), so a lineup split across the two
+directories still runs, with the uploaded copy winning. One entry off the cluster."""
+demand_dirs() = demand_search_dirs(get_paths()...)
+
+# Logit outputs live in a dedicated `logit/` subfolder of the results root, kept separate
+# from the RC outputs (see process_blp_outputs.py). Created on demand.
 function logit_dir()
     d = joinpath(get_paths()[2], "logit")
     isdir(d) || mkpath(d)
+    return d
+end
+
+"""Directory for the δ warm-starts. On the cluster this is data/output ITSELF, flat: the RC
+engine searches data/input then data/output for `logit_delta_E{k}_spec_{s}.{bin,jls}`
+non-recursively, so a copy inside `logit/` would be invisible to it. Locally it is
+`logit_dir()`, alongside the rest of the logit outputs."""
+function delta_dir()
+    out_dir = get_paths()[2]
+    is_cluster_out(out_dir) || return logit_dir()
+    isdir(out_dir) || mkpath(out_dir)
+    return out_dir
+end
+
+"""Directory for the LaTeX tables: ESTIMATION_OUTPUT/Rout locally, data/output/Rout on the
+cluster — everything the cluster produces stays under data/output."""
+function tex_out_dir()
+    out_dir = get_paths()[2]
+    d = is_cluster_out(out_dir) ? joinpath(out_dir, "Rout") :
+                                  joinpath(dirname(out_dir), "Rout")
+    mkpath(d)
     return d
 end
 
@@ -168,37 +229,45 @@ combined_summary_path() = joinpath(logit_dir(),
     discover_estim_strategies() -> Vector of (id, label, prefix)
 
 Auto-discover the estimation routines for spec SPEC_ID by scanning the
-demand-prep directory for `demand_<id>_*_spec_<SPEC_ID>.parquet`, excluding the legacy
-`*_final_*` files. The prefix is the filename minus the `_spec_<SPEC_ID>.parquet` tail
-(e.g. `demand_1`, `demand_3_index`). Sorted by id.
+demand-prep search path (`demand_dirs()`) for `demand_<id>_*_spec_<SPEC_ID>.parquet`,
+excluding the legacy `*_final_*` files. The prefix is the filename minus the
+`_spec_<SPEC_ID>.parquet` tail (e.g. `demand_1`, `demand_3_index`). Sorted by id.
 
 Newly-added/relabelled routines are picked up with NO code change. If MULTIPLE non-final
 parquets exist for the same id (e.g. a leftover old-scheme file alongside a freshly
 rebuilt one), the **most recently modified** wins — so a stale file can't shadow the new
 one. (Still: deleting old `demand_*_spec_<SPEC_ID>.parquet` after a relabel is tidiest.)
+That mtime contest runs WITHIN a directory: an id already resolved from an earlier entry of
+the search path is not reconsidered, so an uploaded parquet outranks a cluster-produced one
+whatever their timestamps say. Off the cluster the path has one entry and the two rules
+coincide.
 """
 function discover_estim_strategies()
-    input_dir, _ = get_paths()
-    isdir(input_dir) || return NamedTuple[]
     best = Dict{Int, Tuple{Float64, String}}()   # id => (mtime, prefix); newest wins
     pat  = Regex("^demand_(\\d+)(?:_.*)?_spec_$(SPEC_ID)\\.parquet\$")
-    for f in readdir(input_dir)
-        occursin("_final_", f) && continue
-        m = match(pat, f)
-        m === nothing && continue
-        id = parse(Int, m.captures[1])
-        mt = mtime(joinpath(input_dir, f))
-        if !haskey(best, id) || mt > best[id][1]
-            best[id] = (mt, replace(f, "_spec_$(SPEC_ID).parquet" => ""))
+    for input_dir in demand_dirs()
+        isdir(input_dir) || continue
+        claimed = Set(keys(best))                # ids resolved from an earlier directory
+        for f in readdir(input_dir)
+            occursin("_final_", f) && continue
+            m = match(pat, f)
+            m === nothing && continue
+            id = parse(Int, m.captures[1])
+            id in claimed && continue
+            mt = mtime(joinpath(input_dir, f))
+            if !haskey(best, id) || mt > best[id][1]
+                best[id] = (mt, replace(f, "_spec_$(SPEC_ID).parquet" => ""))
+            end
         end
     end
     # Auto-discovery is by FILE PRESENCE, so a parquet left over from a routine that is no
     # longer in the lineup silently re-enters the run: on 2026-08-05 such files were rebuilt
     # from the new panel while carrying a stale phi, i.e. mixed-vintage inputs that look
     # current by mtime. This filter is the guard — the logit cannot pick up an id outside the
-    # active set even if its parquet exists. SLEEP_ACTIVE_ESTS mirrors
-    # estimation_demand_1_prep.py / export_results.py, so the three cannot drift apart.
-    active = Set(parse.(Int, split(get(ENV, "SLEEP_ACTIVE_ESTS", "1 2 3 4"))))
+    # active set even if its parquet exists. `active_from_env` (routines.jl) is the same
+    # reader estimation_demand_1_prep.py / export_results.py use through utils/routines.py,
+    # over the same config/routines.toml, so the three cannot drift apart.
+    active = Set(active_from_env())
     ids = sort!(collect(keys(best)))
     skipped = [id for id in ids if !(id in active)]
     if !isempty(skipped)
@@ -214,12 +283,14 @@ const ESTIM_STRATEGIES = discover_estim_strategies()
 # ==========================================================================
 # 1. Data Loading
 # ==========================================================================
-"""Load the demand-prep parquet for one routine (drops the old `_final`)."""
+"""Load the demand-prep parquet for one routine (drops the old `_final`), from the first
+entry of `demand_dirs()` that holds it."""
 function load_spec_data(estim)
-    input_dir, _ = get_paths()
     fname = "$(estim.prefix)_spec_$(SPEC_ID).parquet"
-    path  = joinpath(input_dir, fname)
-    isfile(path) || error("Missing demand-prep parquet: $path")
+    dirs  = demand_dirs()
+    path  = resolve_in_then_out(fname, dirs...)
+    path === nothing && error("Missing demand-prep parquet: $fname. Searched:\n" *
+                              describe_search_dirs(dirs...))
     df = DataFrame(Parquet2.Dataset(path); copycols=true)
     return df
 end
@@ -419,7 +490,9 @@ function run_strategy(estim)
     dep_types = Int.(coalesce.(df.deposit_type, 0))
 
     # ── Save logit δ checkpoint for BLP σ-stage warm-start ──
-    delta_chk_path = joinpath(logit_dir(),
+    # delta_dir() is data/output itself on the cluster, so the RC engine's flat
+    # data/input → data/output search finds these two files without an upload step.
+    delta_chk_path = joinpath(delta_dir(),
         "logit_delta_E$(estim.id)_spec_$(SPEC_ID).jls")
     try
         serialize(delta_chk_path, Dict{String,Any}(
@@ -593,25 +666,19 @@ const TABLE_SUBMODELS = [("priceonly", "Price Only"), ("core", "Price + Core"),
 # Cross-estimator comparison table (est1-4_spec12_logit_comparison.tex): one column per
 # demand routine, each showing its final `+ D-Type` sub-model. Column headers \ref{} the
 # sleepiness-strategy enumerate items in V_Main §(sec:empirical:sleep) — same convention as
-# est1-4_spec12_stage2_comparison.tex. ESTIMATION_ENUM_REF below carries a \ref for every id
-# listed here; an id absent from it falls back to a plain E<id> header.
-const COMPARISON_IDS  = [1, 2, 3, 4]
+# est1-4_spec12_stage2_comparison.tex. ESTIMATION_ENUM_REF (routines.jl) carries a \ref for
+# every id listed here; an id absent from it falls back to a plain E<id> header.
+const COMPARISON_IDS  = ACTIVE_ROUTINES
 # Routines that get a per-routine est{id}_spec12_logit.tex. The routines are AUTO-DISCOVERED from the
 # demand parquets, so this list is what keeps a stray parquet (an exploratory routine, an id outside
 # the reported lineup) from silently writing a table into the Drafts folder on every run. An explicit
 # `--est N` bypasses the filter, so any discovered routine stays reachable on demand.
-const REPORTED_IDS    = [1, 2, 3, 4]
+const REPORTED_IDS    = ACTIVE_ROUTINES
 const COMPARISON_ROWS = ["alpha", "fgc_covered", "has_ip", "log_total_assets_lag",
                          "is_state_owned", "dummy_D_type"]   # seg_S2-S5 included in the spec, not reported
 const COMPARISON_ROWS_SEG = ["alpha", "fgc_covered", "has_ip", "log_total_assets_lag",
                              "seg_S2", "seg_S3", "seg_S4", "seg_S5", "is_state_owned", "dummy_D_type"]  # segments shown
-const ESTIMATION_ENUM_REF = Dict(
-    1 => raw"\ref{estimation:local}",
-    2 => raw"\ref{estimation:pooled}",
-    3 => raw"\ref{estimation:single_idx}",
-    4 => raw"\ref{estimation:single_idx_time}",
-)
-const DRAFTS_DIR = raw"C:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\Drafts\Deposit Competition"
+const DRAFTS_DIR = drafts_dir()
 const TROW = " \\\\"   # LaTeX row terminator ` \\` (a raw " \\" would collapse to one backslash)
 
 map_var(name::AbstractString) = get(VAR_MAP, name, replace(name, "_" => raw"\_"))
@@ -789,9 +856,7 @@ function write_logit_comparison_table(data::AbstractDict)
             println("    [table] WARN: E$id elasticity failed — $_e"); NaN
         end
     end
-    _, output_dir = get_paths()
-    rout_dir = joinpath(dirname(output_dir), "Rout")
-    mkpath(rout_dir)
+    rout_dir = tex_out_dir()
     dests = isdir(DRAFTS_DIR) ? [rout_dir, DRAFTS_DIR] : [rout_dir]
     # ONLY the segment-suppressed version is emitted. The `_seg` twin was retired: the segment dummies
     # it added are already printed per routine by est{3,4}_spec12_logit.tex (both live in the
@@ -894,11 +959,9 @@ function read_combined_summary()
     end
 end
 
-"""Write est{id}_spec12_logit.tex for each id to BLP_RESULTS/../Rout and Drafts."""
+"""Write est{id}_spec12_logit.tex for each id to `tex_out_dir()` and Drafts."""
 function write_logit_tables(ids::Vector{Int}, data::AbstractDict)
-    _, output_dir = get_paths()
-    rout_dir = joinpath(dirname(output_dir), "Rout")     # ESTIMATION_OUTPUT/Rout
-    mkpath(rout_dir)
+    rout_dir = tex_out_dir()                             # ESTIMATION_OUTPUT/Rout
     dests = isdir(DRAFTS_DIR) ? [rout_dir, DRAFTS_DIR] : [rout_dir]
     for id in ids
         tex = build_logit_table_tex(id, data)
@@ -964,8 +1027,10 @@ function main()
         avail = isempty(ESTIM_STRATEGIES) ? "(none)" :
                 join([s.label for s in ESTIM_STRATEGIES], ", ")
         error(sel === nothing ?
-            "No demand-prep parquets found for spec $SPEC_ID in $(get_paths()[1])." :
-            "No demand-prep parquet for E$sel (spec $SPEC_ID). Available: $avail.")
+            "No demand-prep parquets found for spec $SPEC_ID. Searched:\n" *
+                describe_search_dirs(demand_dirs()...) :
+            "No demand-prep parquet for E$sel (spec $SPEC_ID). Available: $avail. Searched:\n" *
+                describe_search_dirs(demand_dirs()...))
     end
 
     println("=" ^ 70)

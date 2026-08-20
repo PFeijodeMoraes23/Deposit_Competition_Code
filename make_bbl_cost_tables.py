@@ -51,16 +51,18 @@ except Exception:
     pass
 
 import make_blp_rc_table as rc     # est_ref + DRAFTS_DIR + TABLES_DIR
+from utils import paths as _paths
+from utils import routines as _routines
 
 TABLES_DIR = rc.TABLES_DIR
 DRAFTS_DIR = rc.DRAFTS_DIR
-EST_OUT = rc.DATA_DIR / "ESTIMATION_OUTPUT"
-PSI_ZIP = EST_OUT / "BBL_OUTPUT" / "cluster_raw" / "psi_cost.zip"
-COST_DIR = EST_OUT / "BBL_OUTPUT" / "cluster_processed"
+EST_OUT = _paths.estimation_output()
+PSI_ZIP = _paths.bbl_output_dir() / "cluster_raw" / "psi_cost.zip"
+COST_DIR = _paths.bbl_output_dir() / "cluster_processed"
 
-ROUTINES = (3, 4)
+ROUTINES = tuple(_routines.LINK_ESTS)
 BLOCKS = (("B", r"Brick \& mortar"), ("D", "Digital"))
-SPEC, STAGE = 12, "extended"
+SPEC, STAGE = _routines.SPEC12_ID, "extended"
 
 # A quarterly rate -> pp/yr uses the code's own x400 convention (estimation_bbl_2_fwd_sim.jl:473).
 PP_YR = 400.0
@@ -407,7 +409,7 @@ def build_ridge(ridge):
 
 # Routine labels in paper order; \ref renders these as the Roman numerals of V_Main's
 # enumerate(label=(\Roman*)), which is how every other estimates table heads its columns.
-ROUTINE_ORDER = (3, 4)
+ROUTINE_ORDER = tuple(_routines.LINK_ESTS)
 # Display names follow the policy-function tables (polfunc_k4/k5), the only house precedent for
 # these four variables. gamma has never been reported before, so there is nothing else to match.
 Z_LABELS = [

@@ -20,6 +20,7 @@ if _THIS_DIR not in sys.path:
 # Paths. est_dir/rout_dir follow SLEEP_OUT_ROOT, so a sandboxed run exports the fits it
 # just produced instead of whatever sits in the production tree.
 from utils import paths  # noqa: E402
+from utils import routines as _routines  # noqa: E402
 
 _DRAFTS_DIR = paths.drafts_dir()
 OUTPUT_DIR = paths.est_dir(1)
@@ -67,7 +68,7 @@ def build_first_stage_table(results_dict):
         ('IV_HausmanFull', 'Hausman'),
     ]
     multispan = 4
-    caption = r"First Stage --- Estimation Strategy~\ref{estimation:local}"
+    caption = f"First Stage --- Estimation Strategy~{_routines.est_ref(1)}"
     label = "tab:est1_first_stage"
     notes = (
         r"\footnotesize \textit{Notes:} Standard errors (wild cluster bootstrap at the "
@@ -224,7 +225,7 @@ def build_second_stage_table(results_dict):
         'risk_free_qoq_lag', 'connections_per100',
     ]
     multispan = 5
-    caption = r"Second Stage --- Estimation Strategy~\ref{estimation:local}"
+    caption = f"Second Stage --- Estimation Strategy~{_routines.est_ref(1)}"
     label = "tab:est1_second_stage"
     notes = (
         r"\footnotesize \textit{Notes:} Standard errors (wild cluster bootstrap at the "

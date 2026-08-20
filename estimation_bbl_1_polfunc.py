@@ -59,7 +59,6 @@ import json
 import pickle
 import argparse
 import time
-from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import numpy as np
@@ -75,15 +74,27 @@ warnings.filterwarnings("ignore", message="covariance of constraints does not ha
 # ==============================================================================
 # 0. Paths & Constants
 # ==============================================================================
-_ROOT = Path(__file__).resolve().parents[2]
-DATA_DIR = _ROOT / "BCB" / "Egan_et_al_2025_Rep" / "processed"
-PANEL_CSV = DATA_DIR / "market_panel.csv"
+# Anchors come from utils.paths, the same accessors the sleep stages use. A
+# `Path(__file__).parents[N]` walk hard-codes the repo's position inside the data tree, which
+# holds on this machine and nowhere else: bbl_job.sh runs this file from HEAD/scripts, where
+# parents[2] is the parent of HEAD and the panel read below finds nothing. market_panel_csv() is
+# also the single source of truth for WHICH panel every estimation stage reads.
+from utils import paths as _paths  # noqa: E402
+DATA_DIR = _paths.PROCESSED
+PANEL_CSV = _paths.market_panel_csv()
 
 # Estimation window [2016, 2024] — defined once in utils/window.py (full rationale + the
 # DEMAND_MIN_YEAR / DEMAND_MAX_YEAR env overrides, which it reads).
 from utils.window import MIN_YEAR as POLFUNC_MIN_YEAR, MAX_YEAR as POLFUNC_MAX_YEAR  # noqa: E402
 from utils.winsorize import winsorize_within_type as _winsorize_within_type  # noqa: E402
-OUTPUT_DIR = DATA_DIR / "ESTIMATION_OUTPUT" / "COST_POLFUNC"
+
+# COST_POLFUNC is pinned to estimation_output(), NOT SLEEP_OUT_ROOT. The policy function is
+# SPEC-INVARIANT (see the module docstring): it regresses the observed spread on the pricing
+# state and reads market_panel.csv, so it never touches an est{e} fit and has no sleepiness
+# vintage to belong to. Following the sandbox would also desync it from its consumers —
+# bbl_job.sh and estimation_bbl_2_fwd_sim.jl set no SLEEP_OUT_ROOT, so they would read a
+# different directory than the one just written.
+OUTPUT_DIR = _paths.estimation_output() / "COST_POLFUNC"
 
 # Endogenous deposit types (spreads set by institutions)
 K_ENDOG = [4, 5]
@@ -779,7 +790,7 @@ def print_summary_table(results: dict) -> None:
 # ==============================================================================
 # 7. LaTeX Export & PDF Compilation
 # ==============================================================================
-DRAFTS_DIR = _ROOT / "Drafts" / "Deposit Competition"
+DRAFTS_DIR = _paths.drafts_dir()
 
 # Human-readable labels for variable names in LaTeX
 _VAR_LABELS = {

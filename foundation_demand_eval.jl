@@ -187,7 +187,7 @@ end
 # Routine → demand-parquet mapping (AUTO-DISCOVERED, new 8-routine scheme)
 # ==========================================================================
 """
-    discover_demand_parquet(input_dir, estim, spec_id) -> String
+    discover_demand_parquet(input_dirs, estim, spec_id) -> String
 
 Find the demand parquet for routine `estim`, spec `spec_id`, by scanning
 `demand_<estim>_*_spec_<spec>.parquet` (any tag; excludes `_final`), newest mtime wins.
@@ -199,22 +199,33 @@ dict, whose entries go stale the moment a routine is relabelled. The lineup:
   E1 LocalB · E2 PooledLinear ·
   E3 Single-Index (headline) · E4 Single-Index+Time.
 The cluster default set is {3, 4} (the link routines).
+
+`input_dirs` is the ordered search path from `demand_search_dirs` (of_root.jl): data/input
+before data/output/DEMAND_PREP. The FIRST directory holding a match settles the routine, so
+an uploaded parquet outranks a cluster-produced one whatever their timestamps say; the mtime
+contest then runs within that directory. Off the cluster the path has one entry and the two
+rules coincide.
 """
-function discover_demand_parquet(input_dir::String, estim::Int, spec_id::Int)::String
+function discover_demand_parquet(input_dirs::Vector{String}, estim::Int, spec_id::Int)::String
     pat = Regex("^demand_$(estim)_.*spec_$(spec_id)\\.parquet\$")
-    cands = String[]
-    for f in readdir(input_dir)
-        (occursin(pat, f) && !occursin("final", lowercase(f))) &&
-            push!(cands, joinpath(input_dir, f))
+    for input_dir in input_dirs
+        isdir(input_dir) || continue
+        cands = String[]
+        for f in readdir(input_dir)
+            (occursin(pat, f) && !occursin("final", lowercase(f))) &&
+                push!(cands, joinpath(input_dir, f))
+        end
+        isempty(cands) && continue
+        path = cands[argmax(mtime.(cands))]
+        length(cands) > 1 && log_status("  [CF] $(length(cands)) parquets for E$estim; using newest: $(basename(path))")
+        return path
     end
-    isempty(cands) && error(
-        "No demand parquet for estim=$estim spec=$spec_id in $input_dir " *
+    error(
+        "No demand parquet for estim=$estim spec=$spec_id. Searched:\n" *
+        describe_search_dirs(input_dirs...) * "\n" *
         "(scanned demand_$(estim)_*spec_$(spec_id).parquet, excluding _final). " *
         "New 8-routine scheme is auto-discovered from the parquet; ensure the routine's " *
         "demand-prep parquet exists (the sleep/BLP side produces it).")
-    path = cands[argmax(mtime.(cands))]
-    length(cands) > 1 && log_status("  [CF] $(length(cands)) parquets for E$estim; using newest: $(basename(path))")
-    return path
 end
 
 # ==========================================================================
@@ -236,7 +247,9 @@ function build_cf_context(estim::Int, spec_id::Int, stage::String;
                           draws_dir_override::Union{Nothing,String}=nothing,
                           suffix::String=get(ENV, "BLP_OUTPUT_SUFFIX", ""))
     input_dir, draws_dir, out_dir = get_paths(hpc; local_dir=local_dir)
-    path = discover_demand_parquet(input_dir, estim, spec_id)   # new 8-routine scheme (auto-discover; not DEMAND_PREFIXES)
+    # new 8-routine scheme (auto-discover; not DEMAND_PREFIXES), over data/input then
+    # data/output/DEMAND_PREP so an on-cluster sleepiness rebuild is found without an upload.
+    path = discover_demand_parquet(demand_search_dirs(input_dir, out_dir), estim, spec_id)
 
     df_full = DataFrame(Parquet2.Dataset(path); copycols=true)
     nrow(df_full) == 0 && error("Empty demand parquet: $path")

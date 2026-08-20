@@ -31,7 +31,9 @@ try:
 except ImportError:
     pass
 
-_LINK_EXPORT = {3, 4}   # config-driven via export_sleep_link_common.py --est N
+from utils import routines
+
+_LINK_EXPORT = set(routines.LINK_ESTS)   # config-driven via export_sleep_link_common.py --est N
 
 def _run_export(est):
     if est in _LINK_EXPORT:
@@ -45,16 +47,15 @@ def _run_export(est):
     return est, result.returncode, result.stdout + result.stderr
 
 def main():
-    parser = argparse.ArgumentParser(description="Export estimation results for steps 1-4.")
-    parser.add_argument("--estimation", choices=['1', '2', '3', '4', 'all'], required=True,
-                        help="Estimation step 1-4, or 'all' (=1-4).")
+    _span = f"{routines.ACTIVE[0]}-{routines.ACTIVE[-1]}"
+    parser = argparse.ArgumentParser(description=f"Export estimation results for steps {_span}.")
+    parser.add_argument("--estimation", choices=routines.id_choices(('all',)), required=True,
+                        help=f"Estimation step {_span}, or 'all' (={_span}).")
     args = parser.parse_args()
 
-    # 'all' = the ACTIVE lineup, read from the SAME env override as demand prep so the two
-    # cannot drift apart (see estimation_demand_1_prep.py).
-    import os as _os
-    _active = _os.environ.get("SLEEP_ACTIVE_ESTS", "1 2 3 4").split()
-    est_list = [int(x) for x in _active] if args.estimation == 'all' else [int(args.estimation)]
+    # 'all' = the ACTIVE lineup, read through the SAME registry helper as demand prep — same
+    # config/routines.toml, same SLEEP_ACTIVE_ESTS override — so the two cannot drift apart.
+    est_list = routines.active_from_env() if args.estimation == 'all' else [int(args.estimation)]
 
     print(f"[Export] Launching {len(est_list)} export script(s) in parallel...")
 

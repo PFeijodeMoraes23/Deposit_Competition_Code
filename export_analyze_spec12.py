@@ -4,6 +4,7 @@ import shutil
 import pickle
 
 from utils import paths as _paths_mod
+from utils import routines as _routines
 
 _DRAFTS_DIR = _paths_mod.drafts_dir()
 import pandas as pd
@@ -270,19 +271,23 @@ def nice_var_name(var):
         return 'Constant'
     return _clean_name(v)
 
+# This table's column/series keys, one per routine. They are ordinary dict keys -- `mapping`
+# in main() and the figure's linestyle/legend maps all key off them -- so they are spelled
+# once here and the rest of the file derives from this map.
+EST_KEYS = {
+    1: '1 Local',
+    2: '2 Pooled Linear',
+    3: '3 Single-Index',
+    4: '4 Single-Index Time',
+}
+
 # Column headers reference the estimation-strategy enumeration in V_Main.tex
 # (\item\label{estimation:*} at lines ~402-408), so a column reads as its item number
 # ((1)-(6)) rather than a name -- thinner columns, and the strategy is defined once in
 # the text. \ref resolves inside V_Main; standalone/test compiles show "(??)".
-# KEYS MUST MATCH `mapping` in main() exactly -- they are the same routine keys. A key that
-# does not match simply yields no reference, so the column silently loses its strategy number
-# instead of raising.
-REF_LABELS = {
-    '1 Local':             r'\ref{estimation:local}',
-    '2 Pooled Linear':     r'\ref{estimation:pooled}',
-    '3 Single-Index':      r'\ref{estimation:single_idx}',
-    '4 Single-Index Time': r'\ref{estimation:single_idx_time}',
-}
+# The refs come from config/routines.toml via est_ref, which yields a plain E{id} for an id
+# with no live label -- the column loses its strategy number rather than raising.
+REF_LABELS = {k: _routines.est_ref(e) for e, k in EST_KEYS.items()}
 
 
 def build_latex_table(results_dict, order_keys, target_vars, out_path, title="", label="",
@@ -663,7 +668,7 @@ def main():
     parser.add_argument('--skip-est2', action='store_true', help='Skip estimation 2 (Pooled Linear)')
     args = parser.parse_args()
 
-    print("Collecting Estimation results for Spec 12 (IV_HausmanFull x Tech)...")
+    print(f"Collecting Estimation results for Spec 12 ({_routines.SPEC12})...")
     # demand_prep_root/est_dir/rout_dir all follow SLEEP_OUT_ROOT, so a sandboxed run
     # compares the fits it just produced instead of whatever sits in the production tree.
     sleep_root = _paths_mod.demand_prep_root()
@@ -676,18 +681,13 @@ def main():
     # it chose the direction and the link together, so its reported band conditioned on a link
     # that was itself estimated jointly -- re-profiling per draw widened it 1.71x and 7.46x, the
     # latter past its own fitted phi_t range, and its direction was barely identified.
-    mapping = {
-        '1 Local':             _paths_mod.est_dir(1),
-        '2 Pooled Linear':     _paths_mod.est_dir(2),
-        '3 Single-Index':      _paths_mod.est_dir(3),
-        '4 Single-Index Time': _paths_mod.est_dir(4),
-    }
+    mapping = {EST_KEYS[e]: _paths_mod.est_dir(e) for e in _routines.ACTIVE}
 
     if getattr(args, 'skip_est2', False):
         mapping.pop('2 Pooled Linear', None)
 
     # All estimators store spec 12 under the same key.
-    target_keys = {k: 'IV_HausmanFull x Tech' for k in mapping}
+    target_keys = {k: _routines.SPEC12 for k in mapping}
 
     stage1_res = {}
     stage2_res = {}
@@ -710,7 +710,7 @@ def main():
                 print(f"  [Error] Failed to load {pkl_path}: {e}")
                 continue
 
-        tk = target_keys.get(label, 'IV_HausmanFull x Tech')
+        tk = target_keys.get(label, _routines.SPEC12)
         spec_data = res_dict.get(tk)
 
         if not spec_data:
@@ -732,7 +732,7 @@ def main():
         if natl_path.exists():
             try:
                 nd = pd.read_csv(natl_path)
-                pc = 'phi_t_IV_HausmanFull_x_Tech'
+                pc = f'phi_t_{_routines.SPEC12_TAG}'
                 if pc in nd.columns:
                     mean_phi[label] = float(nd[pc].mean())
             except Exception as e:
@@ -823,14 +823,14 @@ def main():
     # Two band sources, by estimator family:
     #   * Linear E1/E2: aggregate per-market phi_mt to national with a delta-method
     #     SE band on the market panel (calc_agg_delta). Columns are saved as
-    #     phi_mt_{safe_key}: "IV_HausmanFull x Tech" -> phi_mt_IV_HausmanFull_x_Tech.
+    #     phi_mt_{safe_key}: SPEC12 -> phi_mt_{SPEC12_TAG} (utils/routines.py).
     #   * Single-index E3/E4: plot the bootstrap point path and
     #     the score/multiplier wild-cluster-bootstrap CI band cached in
     #     Rout/ts_link_band_est{N}.pkl (cols time_id, phi_t, lo, hi, _d). Point and
     #     band come from the SAME fit, so the line sits inside its band by
     #     construction; national_phi_t.csv tracks the same *level* (means agree to
     #     ~1e-3) but its per-quarter wiggle is not what the tight band bounds.
-    phi_col_map = {k: 'phi_mt_IV_HausmanFull_x_Tech' for k in mapping}
+    phi_col_map = {k: f'phi_mt_{_routines.SPEC12_TAG}' for k in mapping}
 
     base_colors = plt.rcParams['axes.prop_cycle'].by_key()['color']
     color_map = {lbl: base_colors[i % len(base_colors)] for i, lbl in enumerate(mapping.keys())}
@@ -884,7 +884,7 @@ def main():
                 continue
         if 'year_quarter' not in df_phi.columns:
             continue
-        tar_col = next((cc for cc in ('phi_mt_IV_HausmanFull_x_Tech', 'phi_mt_Tech')
+        tar_col = next((cc for cc in (f'phi_mt_{_routines.SPEC12_TAG}', 'phi_mt_Tech')
                         if cc in df_phi.columns), None)
         if tar_col is None:
             print(f"  [Warning] No phi column found for {label}, skipping plot.")

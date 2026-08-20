@@ -40,6 +40,7 @@ import numpy as np
 import pandas as pd
 
 from utils import paths as P
+from utils import routines as _routines
 from utils.cluster import effective_cluster_stats
 
 CLUSTER_VAR = "CodConglomeradoPrudencial"
@@ -115,7 +116,7 @@ def assert_matches_pkl(df, est):
     pkl = P.est_dir(est) / "estimation_results.pkl"
     try:
         import pickle
-        ss = pickle.load(open(pkl, "rb")).get("IV_HausmanFull x Tech", {}).get("second_stage")
+        ss = pickle.load(open(pkl, "rb")).get(_routines.SPEC12, {}).get("second_stage")
         nobs, G = int(getattr(ss, "nobs", -1)), int(getattr(ss, "G_nominal", -1))
         if nobs > 0 and nobs != len(df):
             print(f"  [WARN] rows {len(df):,} != pkl nobs {nobs:,}")

@@ -12,7 +12,9 @@ Run after process_blp_outputs.py (which regenerates SUMMARY.md):
 """
 import os, re, subprocess, sys, tempfile
 
-DRAFT = r"C:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\Drafts\Deposit Competition"
+from utils import paths as _paths
+
+DRAFT = str(_paths.drafts_dir())
 SRC = os.path.join(DRAFT, "SUMMARY.md")
 PDF = os.path.join(DRAFT, "SUMMARY.pdf")
 # References.bib lives one level up (Drafts/); pandoc --citeproc resolves the [@key] citations.

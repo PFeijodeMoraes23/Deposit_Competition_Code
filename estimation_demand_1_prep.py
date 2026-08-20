@@ -10,8 +10,9 @@ from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from utils import paths
+from utils import routines
 
-_LINK_DEMAND = {3, 4}   # config-driven via estimation_demand_link_common.py --est N
+_LINK_DEMAND = set(routines.LINK_ESTS)   # config-driven via estimation_demand_link_common.py --est N
 
 def _count_parquets(est, since):
     """Demand parquets routine `est` (re)wrote in this run, counted on disk.
@@ -41,22 +42,22 @@ def _run_script(est, spec):
 
 def main():
     parser = argparse.ArgumentParser(description="Unified Demand 1 Prep Orchestrator")
-    parser.add_argument("--estimation", choices=['1', '2', '3', '4', 'all'], required=True,
-                        help="Estimation strategy (1=Local Linear, 2=Pooled Linear, "
-                             "3=Single-Index, 4=Single-Index+Time) or 'all' (=1-4).")
+    _lineup = ", ".join(f"{e}={routines.est_label(e)}" for e in routines.ACTIVE)
+    parser.add_argument("--estimation", choices=routines.id_choices(('all',)), required=True,
+                        help=f"Estimation strategy ({_lineup}) or 'all' "
+                             f"(={routines.ACTIVE[0]}-{routines.ACTIVE[-1]}).")
     parser.add_argument("--spec", default="all", help="Specification ID or 'all'")
     args = parser.parse_args()
 
-    # 'all' = the whole lineup E1-E4. SLEEP_ACTIVE_ESTS narrows it; an explicit --estimation N
-    # always works, so nothing is unreachable.
+    # 'all' = the whole lineup (config/routines.toml). SLEEP_ACTIVE_ESTS narrows it; an explicit
+    # --estimation N always works, so nothing is unreachable.
     #
     # Demand prep discovers routines BY FILE PRESENCE downstream, so an artifact left behind by
     # a routine that is no longer in the lineup re-enters a run on its own: parquets for a
     # dropped routine were once rebuilt from the NEW panel while carrying a STALE phi, which
     # looks current by mtime and then feeds the estimator. Archive the artifacts of any routine
-    # you remove from this list, do not just stop listing it.
-    _active = os.environ.get("SLEEP_ACTIVE_ESTS", "1 2 3 4").split()
-    EST_LIST = [int(x) for x in _active] if args.estimation == 'all' else [int(args.estimation)]
+    # you drop from the registry, do not just stop listing it.
+    EST_LIST = routines.active_from_env() if args.estimation == 'all' else [int(args.estimation)]
 
     # Each child parses its own ~700 MB market_panel_phis.csv, so running all 8 at once
     # exhausts RAM (pandas "C error: out of memory"). Cap concurrency; DEMAND_PREP_JOBS overrides.

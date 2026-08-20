@@ -1,0 +1,101 @@
+# config/routines.toml — the estimator lineup, defined once for both languages.
+#
+# Python reads this with the 3.11 stdlib `tomllib` (utils/routines.py); Julia with the
+# `TOML` stdlib (routines.jl). Neither adds a dependency, and neither language owns the
+# definition: a routine is added, renamed or retired HERE and both sides follow.
+#
+# Why a file rather than a constant in each language: the lineup used to be restated in
+# thirteen Python modules, four Julia entry points and the submit scripts. Each restatement
+# is a place the lineup can rot in silence — a table generator whose label map and id list
+# disagreed raised KeyError on every run, a Julia exporter whose --routines default named
+# ids nobody estimates any more wrote no files and still exited 0, and a submit script kept
+# dispatching a routine set that had been retired.
+#
+# WHAT THE FIELDS MEAN
+#   id             the routine number the whole pipeline keys on (est{id}, demand_{id}_*,
+#                  blp_results_E{id}_*, --est N, --estim N)
+#   slug           the V_Main enumerate label, WITHOUT the \ref wrapper; `tex_ref` is the
+#                  wrapper. Keep the two in step.
+#   name           the routine's description in run logs, JSON metadata and cluster output
+#   tex_name       the routine's column header in .tex tables (LaTeX math allowed)
+#   diag_label     the routine's row label in the identification-battery tables, which name
+#                  the LINK rather than the sample
+#   tex_ref        the \ref into V_Main's `\item\label{estimation:*}` enumerate in
+#                  sec:empirical:sleep. These keys must match V_Main exactly: an id pointing
+#                  at a label V_Main does not define renders as "??", which fails quietly.
+#   demand_prefix  the demand-prep parquet stem, completed as {demand_prefix}_spec_{S}.parquet.
+#                  E1/E2 write the bare demand_{id} from their own prep scripts; E3/E4 get the
+#                  link tag from estimation_demand_link_common.DEMAND_CFG.
+#   time_block     whether the routine carries the Time block (the quarter FE / trend terms)
+#   kind           the estimation engine's routine kind. E3/E4 are the config-driven pair in
+#                  estimation_sleep_common.EST_CONFIG, which spells the kind `single_index`;
+#                  E1/E2 run from their own scripts and have no engine token, so their kinds
+#                  here name what those scripts estimate.
+#
+# Discovery is by FILE PRESENCE in several places downstream (demand parquets, sleepiness
+# pickles), so removing a routine from `active` does not remove its artifacts. Archive the
+# artifacts of a retired routine as well, or a stale parquet re-enters a run on its own.
+
+# The reported lineup, in order.
+active = [1, 2, 3, 4]
+
+# The routines whose sleepiness estimate comes from the shape-constrained single-index link,
+# and which therefore share estimation_sleep_common / estimation_demand_link_common /
+# export_sleep_link_common rather than having their own scripts. This is also the default
+# routine set for the cluster BLP and BBL runs and for every table built from their artifacts.
+link_ests = [3, 4]
+
+# The headline specification: Tech block x the full Hausman instrument set.
+# `spec12`     the key the estimation pickles and results dicts are stored under
+# `spec12_tag` the same name made column-safe, as in phi_mt_{spec12_tag} / phi_t_{spec12_tag}
+# `spec12_id`  its 1-based id in the spec grid (SPEC_MAP numbering: 1-4 Base, 5-8 Macro, 9-12 Tech)
+spec12     = 'IV_HausmanFull x Tech'
+spec12_tag = 'IV_HausmanFull_x_Tech'
+spec12_id  = 12
+
+# The panel's quarter identifier, passed as `fe_time_col` to every two-way-FE fit.
+fe_time_col = 'time_id'
+
+[[routines]]
+id            = 1
+slug          = 'local'
+name          = 'Local B-type'
+tex_name      = 'Local B-type'
+diag_label    = 'E1 identity'
+tex_ref       = '\ref{estimation:local}'
+demand_prefix = 'demand_1'
+time_block    = false
+kind          = 'local_linear'
+
+[[routines]]
+id            = 2
+slug          = 'pooled'
+name          = 'Pooled Linear'
+tex_name      = 'Pooled Linear'
+diag_label    = 'E2 pooled linear'
+tex_ref       = '\ref{estimation:pooled}'
+demand_prefix = 'demand_2'
+time_block    = false
+kind          = 'pooled_linear'
+
+[[routines]]
+id            = 3
+slug          = 'single_idx'
+name          = 'Pooled Single-Index'
+tex_name      = 'Single-Index'
+diag_label    = 'E3 single-index'
+tex_ref       = '\ref{estimation:single_idx}'
+demand_prefix = 'demand_3_index'
+time_block    = false
+kind          = 'single_index'
+
+[[routines]]
+id            = 4
+slug          = 'single_idx_time'
+name          = 'Pooled Single-Index + Time'
+tex_name      = 'Single-Index $+$ Time'
+diag_label    = 'E4 single-index + time'
+tex_ref       = '\ref{estimation:single_idx_time}'
+demand_prefix = 'demand_4_index_time'
+time_block    = true
+kind          = 'single_index'

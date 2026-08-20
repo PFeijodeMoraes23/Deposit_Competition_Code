@@ -44,10 +44,11 @@ import numpy as np
 import pandas as pd
 
 from utils import paths as _paths_mod
+from utils import routines as _routines
 from utils.sleep_links import unconditional_phi_t_band
 
-SPEC = "IV_HausmanFull x Tech"          # spec 12; the only cell this driver serves
-FE_TIME_COL = "time_id"
+SPEC = _routines.SPEC12                 # spec 12; the only cell this driver serves
+FE_TIME_COL = _routines.FE_TIME_COL
 LOSS_OF = {"robust": "cauchy", "ls": "linear"}
 KEY_OF = {"robust": "second_stage", "ls": "second_stage_ls"}
 
@@ -223,7 +224,7 @@ def run_cell(est, loss_lbl, B, attach):
 
 def main():
     p = argparse.ArgumentParser(description=__doc__.splitlines()[2])
-    p.add_argument("--est", type=int, required=True, choices=(3, 4))
+    p.add_argument("--est", type=int, required=True, choices=tuple(_routines.LINK_ESTS))
     p.add_argument("--loss", choices=("robust", "ls", "both"), default="both")
     p.add_argument("--B", type=int, default=400)
     p.add_argument("--attach", action="store_true")

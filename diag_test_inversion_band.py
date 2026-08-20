@@ -49,13 +49,14 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from estimation_2_sleep import (build_pooled_data, define_specifications,  # noqa: E402
                                 run_pooled_first_stage)
 from utils import paths as _paths_mod                                      # noqa: E402
+from utils import routines as _routines                                    # noqa: E402
 from utils.sleep_links import (_agg_phi_t, _build_phi_X, _bspline_design,  # noqa: E402
                                _phi_t_group_struct, _pix_shifted_range,
                                _ramp_design, _twoway_demean, ispline_constraints,
                                nlls_direction_if, solve_ispline_qp, SI_N_INTERIOR)
 
-SPEC = "IV_HausmanFull x Tech"
-FE_TIME_COL = "time_id"
+SPEC = _routines.SPEC12
+FE_TIME_COL = _routines.FE_TIME_COL
 LOSS_OF = {"robust": "cauchy", "ls": "linear"}
 KEY_OF = {"robust": "second_stage", "ls": "second_stage_ls"}
 DEGREE = 3
@@ -63,7 +64,8 @@ DEGREE = 3
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("--est", type=int, default=3, choices=(3, 4))
+    ap.add_argument("--est", type=int, default=_routines.LINK_ESTS[0],
+                    choices=tuple(_routines.LINK_ESTS))
     ap.add_argument("--loss", default="robust", choices=("robust", "ls"))
     ap.add_argument("--nsamp", type=int, default=200)
     ap.add_argument("--seed", type=int, default=20240624)

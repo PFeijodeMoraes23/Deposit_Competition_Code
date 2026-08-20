@@ -72,6 +72,7 @@ from diag_cue_linear_step import (X_COLS, IV_COLS, _build_matrices, _load_delta,
 # cross-checks against the battery exact rather than approximate.
 from weak_iv_analysis import _wild_weights
 from utils.cluster import effective_cluster_stats
+from utils import routines as _routines
 
 # The 5 leave-one-out rival characteristics — the "parsimonious" set that raised eff-F when the
 # 16-instrument dilution was first diagnosed. Named columns, in engine order.
@@ -432,7 +433,7 @@ def main():
     ap = argparse.ArgumentParser(description="Moment-reduction fixes (weakiv_methods.md §7.6) — local test")
     # The single-index pair: the routines with an RC-BLP delta export (blp_2_rc.jl DEFAULT_ROUTINES)
     # and the source of the paper's alpha.
-    ap.add_argument("--routines", default="3,4")
+    ap.add_argument("--routines", default=_routines.csv(_routines.LINK_ESTS))
     ap.add_argument("--stage", default="ext1")
     ap.add_argument("--grid", default="-2:0.005:2", help="start:step:stop for the alpha scan "
                     "(use --grid=-2:... — a leading '-' needs the '=' form)")

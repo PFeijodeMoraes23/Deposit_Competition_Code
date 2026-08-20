@@ -55,7 +55,7 @@ LOGD="$(cl_log_dir)"
 echo "  log dir: ${LOGD}"
 for f in cluster_lib.sh env_job.sh blp_draws_job.sh blp_stage_job.sh blp_run.sh \
          bbl_job.sh bbl_run.sh pipeline_run.sh cf_job.sh cf_run.sh cf_eq_run.sh \
-         cluster_archive.sh; do
+         cluster_archive.sh sleep_job.sh sleep_run.sh logit_job.sh pipeline_all.sh; do
     if [[ -f "${CL_ROOT}/${f}" ]]; then echo "  ok      ${f}"
     else echo "  MISSING ${f}  <- re-upload the code bundle"; note_fail; fi
 done
@@ -132,6 +132,16 @@ if cl_python_probe "${CL_PY_REQ_SOLVE}"; then
     cl_python_probe "${CL_PY_REQ_POLFUNC}" \
         && echo "  ok: it also imports statsmodels (needed only for --polfunc)" \
         || echo "  note: no statsmodels — fine unless you run bbl_run.sh --polfunc"
+    # The sleepiness stage is the widest importer of the three and it is now the
+    # FIRST phase of pipeline_all.sh, so a gap here stops everything, not just one
+    # optional flag. Reported, not fatal: bbl_run.sh/cf_run.sh do not need it.
+    if cl_python_probe "${CL_PY_REQ_SLEEP}"; then
+        echo "  ok: it also imports ${CL_PY_REQ_SLEEP} (the sleepiness stage)"
+    else
+        echo "  [!] it does NOT import ${CL_PY_REQ_SLEEP}"
+        echo "      sleep_run.sh / pipeline_all.sh would fail at their first Python step."
+        echo "      dep_comp_blp carries the whole stack — export CONDA_ENV=dep_comp_blp"
+    fi
 else
     echo "  FAILED: '${CONDA_ENV:-<no conda>}' does not import ${CL_PY_REQ_SOLVE}"
     echo ""
@@ -182,30 +192,59 @@ echo "(7) STAGED INPUTS"
 MANIFEST="${CL_ROOT}/cluster/upload_manifest.txt"
 if [[ -f "${MANIFEST}" ]]; then
     echo "  manifest: ${MANIFEST}  (read-only here)"
-    # Nine '|'-separated fields; field 2 = bundle, 5 = pattern, 6 = dest.
-    MISS=0; SEEN=0
+    # Nine '|'-separated fields; field 1 = name, 2 = bundle, 5 = pattern, 6 = dest.
+    #
+    # TWO bundle classes reach this loop, and they mean opposite things:
+    #   data      UPLOADED. It must already be under data/input, and a missing one
+    #             is a blocker: the run cannot start without it.
+    #   produced  BUILT BY THIS RUN, into data/output. Checking it is still worth
+    #             doing -- it tells you whether a stage can be resumed or skipped --
+    #             but a missing one is NOT a blocker. Before the first run of a
+    #             fresh cluster every single one is absent, by construction.
+    MISS=0; SEEN=0; PROD_SEEN=0; PROD_HAVE=0
     while IFS= read -r line; do
         case "${line}" in \#*|"") continue ;; esac
         echo "${line}" | grep -q '|' || continue
+        name="$(echo "${line}"    | awk -F'|' '{gsub(/^ +| +$/,"",$1); print $1}')"
         bundle="$(echo "${line}"  | awk -F'|' '{gsub(/^ +| +$/,"",$2); print $2}')"
         pattern="$(echo "${line}" | awk -F'|' '{gsub(/^ +| +$/,"",$5); print $5}')"
         dest="$(echo "${line}"    | awk -F'|' '{gsub(/^ +| +$/,"",$6); print $6}')"
-        [[ "${bundle}" == "data" ]] || continue
+        case "${bundle}" in data|produced) ;; *) continue ;; esac
         [[ -n "${pattern}" && -n "${dest}" ]] || continue
         for k in ${ROUTINES}; do
             p="${pattern//\{k\}/${k}}"
             case "${p}" in *"{"*) continue ;; esac       # unexpanded token: skip
-            SEEN=$((SEEN+1))
-            # dest is relative to the cluster project root (scripts/..).
-            full="${CL_ROOT}/../${dest}/${p}"
-            if ! ls ${full} >/dev/null 2>&1; then
-                echo "  MISSING ${dest}/${p}"; MISS=$((MISS+1))
-            fi
+            # Files land FLAT at their destination — stage_cluster_upload.py stores
+            # each member as '<dest>/<basename>'. Patterns are bare filenames today,
+            # so this is a no-op; it keeps the check right if one ever is not.
+            p="${p##*/}"
+            case "${bundle}" in
+                produced)
+                    PROD_SEEN=$((PROD_SEEN+1))
+                    if ls "${CL_DATA_OUT}/${p}" >/dev/null 2>&1; then
+                        PROD_HAVE=$((PROD_HAVE+1))
+                    else
+                        echo "  pending ${name//\{k\}/${k}}: data/output/${p}  (produced on cluster — checked, not uploaded)"
+                    fi
+                    ;;
+                *)
+                    SEEN=$((SEEN+1))
+                    # dest is relative to the cluster project root (scripts/..).
+                    full="${CL_ROOT}/../${dest}/${p}"
+                    if ! ls ${full} >/dev/null 2>&1; then
+                        echo "  MISSING ${dest}/${p}"; MISS=$((MISS+1))
+                    fi
+                    ;;
+            esac
             case "${pattern}" in *"{k}"*) ;; *) break ;; esac
         done
     done < "${MANIFEST}"
     if [[ ${MISS} -eq 0 ]]; then echo "  ok: all ${SEEN} manifest data entries present for routines ${ROUTINES}"
     else echo "  ${MISS} of ${SEEN} manifest data entries missing (upload them, RUNBOOK step 0)"; note_fail; fi
+    if [[ ${PROD_SEEN} -gt 0 ]]; then
+        echo "  produced-on-cluster entries: ${PROD_HAVE}/${PROD_SEEN} already in data/output"
+        echo "    (never uploaded, never a blocker — pipeline_all.sh builds them and gates G4/G7 check them)"
+    fi
 else
     echo "  cluster/upload_manifest.txt not found — falling back to the core checks:"
     cl_need_draws "${R:-2000}" "${SEED:-42}" || note_fail

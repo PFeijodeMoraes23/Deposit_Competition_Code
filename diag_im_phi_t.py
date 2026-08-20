@@ -44,11 +44,12 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from estimation_2_sleep import (build_pooled_data, define_specifications,  # noqa: E402
                                 run_pooled_first_stage)
 from utils import paths as _paths_mod                                      # noqa: E402
+from utils import routines as _routines                                    # noqa: E402
 from utils.sleep_links import (fit_nlls_link, fit_single_index, phi_from_native,  # noqa: E402
                                _phi_t_group_struct, _agg_phi_t, _build_phi_X)
 
-SPEC = "IV_HausmanFull x Tech"
-FE_TIME_COL = "time_id"
+SPEC = _routines.SPEC12
+FE_TIME_COL = _routines.FE_TIME_COL
 LOSS_OF = {"robust": "cauchy", "ls": "linear"}
 KEY_OF = {"robust": "second_stage", "ls": "second_stage_ls"}
 CLUSTER = "CodConglomeradoPrudencial"
@@ -78,7 +79,8 @@ def fit_cell(df, s_cols, loss, tb):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("--est", type=int, default=3, choices=(3, 4))
+    ap.add_argument("--est", type=int, default=_routines.LINK_ESTS[0],
+                    choices=tuple(_routines.LINK_ESTS))
     ap.add_argument("--loss", default="robust", choices=("robust", "ls"))
     ap.add_argument("--qs", default="6,8,12", help="group counts; the primary is --q")
     ap.add_argument("--q", type=int, default=8, help="primary group count (reported band)")

@@ -45,6 +45,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from utils import paths as _paths
 from utils import state_transform as _st
 
 # Our status lines print Greek (Υ, φ, Δ); Windows consoles default to cp1252 and would
@@ -54,9 +55,15 @@ try:
 except Exception:
     pass
 
-_ROOT = Path(__file__).resolve().parents[2]
-DEMAND_PREP = _ROOT / "BCB" / "Egan_et_al_2025_Rep" / "processed" / "ESTIMATION_OUTPUT" / "DEMAND_PREP"
-CF_DIR = _ROOT / "BCB" / "Egan_et_al_2025_Rep" / "processed" / "ESTIMATION_OUTPUT" / "CF_FOUNDATION"
+# Anchors come from utils.paths, the same accessors the rest of the sleepiness/CF chain uses.
+# A `Path(__file__).parents[N]` walk hard-codes the repo's position inside the data tree, which
+# holds on this machine and nowhere else: on the cluster the scripts live at HEAD/scripts and the
+# walk lands on the parent of HEAD, where the reads below find nothing and the export is silently
+# empty. demand_prep_root() also honours SLEEP_OUT_ROOT, so est{e}/estimation_results.pkl,
+# est{e}/market_panel_phis.csv and the demand parquets all follow the vintage being exported.
+# CF_FOUNDATION stays under estimation_output(): it is production CF input, not sandbox output.
+DEMAND_PREP = _paths.demand_prep_root()
+CF_DIR = _paths.cf_foundation_dir()
 
 MERGE_KEYS = ["CodConglomeradoPrudencial", "mca_code", "deposit_type", "time_id"]
 

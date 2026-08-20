@@ -38,6 +38,9 @@ cluster_processed/weak_iv.json (consumed by process_blp_outputs.py) and prints a
 Run:  python weak_iv_analysis.py [BLP_RESULTS_dir] [--routines 1,2,3,4]
 """
 import os, sys, glob, json, argparse
+
+from utils import paths as _paths
+from utils import routines as _routines
 import numpy as np
 
 X_COLS = ["fgc_covered", "has_ip", "seg_S2", "seg_S3", "seg_S4", "seg_S5", "log_total_assets_lag", "is_state_owned"]
@@ -129,10 +132,7 @@ _TF_CV = [
 
 
 def default_results_dir():
-    repo = os.path.dirname(os.path.abspath(__file__))
-    root = os.path.dirname(os.path.dirname(repo))   # .../Open-Finance
-    return os.path.join(root, "BCB", "Egan_et_al_2025_Rep", "processed",
-                        "ESTIMATION_OUTPUT", "BLP_RESULTS")
+    return str(_paths.blp_results_dir())
 
 
 def _resid(M, W):
@@ -673,7 +673,7 @@ def main():
         pass
     ap = argparse.ArgumentParser()
     ap.add_argument("results_dir", nargs="?", default=default_results_dir())
-    ap.add_argument("--routines", default="1,2,3,4")   # the reported lineup
+    ap.add_argument("--routines", default=_routines.csv(_routines.ACTIVE))   # the reported lineup
     ap.add_argument("--delta-stage", default=None, metavar="STAGE",
                     help="invert AR/LM against the structural δ of this RC stage (e.g. ext1) instead "
                          "of the log-share δ; writes weak_iv_<STAGE>.json. Requires export_rc_delta.jl.")

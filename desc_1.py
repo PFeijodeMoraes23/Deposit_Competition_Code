@@ -34,6 +34,7 @@ import pandas as pd
 import numpy as np
 
 from utils.window import apply_window
+from utils import paths as _paths
 
 warnings.filterwarnings("ignore")
 
@@ -189,7 +190,7 @@ def main():
     sum_reg = generate_summary(df_b, ['region'], vars_to_summarize, args.weight_col)
     sum_reg_yr = generate_summary(df_b, ['region', 'year'], vars_to_summarize, args.weight_col)
 
-    DRAFTS_DIR = Path(r"C:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\Drafts\Deposit Competition")
+    DRAFTS_DIR = _paths.drafts_dir()
     DRAFTS_DIR.mkdir(parents=True, exist_ok=True)
 
     # Human-readable labels and display scaling for each variable.

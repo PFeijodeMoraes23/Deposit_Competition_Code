@@ -30,6 +30,7 @@ from pathlib import Path
 import pandas as pd
 
 from utils import paths as _paths
+from utils import routines as _routines
 
 _OUT = _paths.PROCESSED / "ESTIMATION_OUTPUT" / "DIAG_PHI_SEPARATION"
 CACHE = _OUT / "phi_reference_cache.json"
@@ -93,7 +94,7 @@ def phi_e2_avg(verbose=True):
             import pickle
             with open(pkl, "rb") as fh:
                 d = pickle.load(fh)
-            entry = d.get("IV_HausmanFull x Tech")
+            entry = d.get(_routines.SPEC12)
             res = entry.get("second_stage") if isinstance(entry, dict) else entry
             v = float(pd.Series(res.params)["nr_lagged_dep"])
             del d, entry, res

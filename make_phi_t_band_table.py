@@ -39,6 +39,7 @@ import numpy as np
 import pandas as pd
 
 from utils import paths as _paths_mod
+from utils import routines as _routines
 from utils.sleep_links import NonLinearResults  # noqa: F401 (needed for unpickling)
 
 _DRAFTS_DIR = _paths_mod.drafts_dir()
@@ -46,9 +47,11 @@ OUT_NAME = "tab_phi_t_bands_spec12.tex"
 
 # Column header per estimator. These \ref the estimation-strategy enumerate in V_Main
 # (sec:empirical:sleep), the same convention as every other sleepiness table, so a
-# renumbering of the lineup cannot put a stale number in a caption.
-EST_LABEL = {3: "single_idx", 4: "single_idx_time"}
-EST_NAME = {3: "Single-Index", 4: "Single-Index $+$ Time"}
+# renumbering of the lineup cannot put a stale number in a caption. Both maps come from
+# config/routines.toml: EST_LABEL is the enumerate slug the \ref wraps, EST_NAME the
+# human-readable second header row.
+EST_LABEL = {e: _routines.est_slug(e) for e in _routines.LINK_ESTS}
+EST_NAME = {e: _routines.est_name(e) for e in _routines.LINK_ESTS}
 
 
 def _width(df):
@@ -161,8 +164,10 @@ def build_tex(cells):
 
 def main():
     ap = argparse.ArgumentParser(description="National phi_t band table (spec 12).")
-    ap.add_argument("--est", type=int, nargs="+", default=[3, 4], choices=sorted(EST_LABEL),
-                    help="estimators to report (default: 3 4, the reported pair)")
+    _default = list(_routines.LINK_ESTS)
+    ap.add_argument("--est", type=int, nargs="+", default=_default, choices=sorted(EST_LABEL),
+                    help=f"estimators to report (default: {' '.join(map(str, _default))}, "
+                         "the reported pair)")
     ap.add_argument("--loss", nargs="+", default=["robust"],
                     choices=("robust", "ls"), help="loss cells (default: robust only)")
     a = ap.parse_args()

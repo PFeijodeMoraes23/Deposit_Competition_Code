@@ -62,16 +62,20 @@ import numpy as np
 import pandas as pd
 
 from utils import paths as _paths_mod
+from utils import routines as _routines
 from utils.sleep_links import boot_cfg, twostage_ame_boot
 
-SPEC = "IV_HausmanFull x Tech"          # spec 12; the only cell this driver serves
-FE_TIME_COL = "time_id"
+SPEC = _routines.SPEC12                 # spec 12; the only cell this driver serves
+FE_TIME_COL = _routines.FE_TIME_COL
 LOSS_OF = {"robust": "cauchy", "ls": "linear"}
 KEY_OF = {"robust": "second_stage", "ls": "second_stage_ls"}
 
-# Section-1 fixtures: the shared conditional |t| the OFF path has to bring back, and the Pix
-# dummy's, which escapes the cancellation. A mismatch here means the pickle was overwritten
-# off-vintage, not that the bootstrap is wrong.
+# Section-1 fixtures: the shared conditional |t| of the promoted local fit, and the Pix dummy's,
+# which escapes the cancellation. They cross-check that these constants were transcribed right --
+# they are NOT the gate's verdict, which is measured against whatever pickle was loaded. The
+# lineup can be re-estimated on the cluster with a wider multistart, which may settle in another
+# basin and carry its own conditional |t| while the two-stage machinery is still exact;
+# off_path_gate applies the fixtures only when the stored values are already this vintage.
 FIXTURES = {
     3: dict(congl_shared=1.3131210909941156, congl_pix=-1.3745817099672621,
             quarter_shared=1.2327854424803466, quarter_pix=-1.2669177460429395),
@@ -112,12 +116,20 @@ def _prep_frame(time_block):
 
 
 def off_path_gate(est, si_res, out, tol=1e-8):
-    """BLOCKING GATE for `--theta-off`: reproduce the four stored series and the hardcoded |t|.
+    """BLOCKING GATE for `--theta-off`: reproduce the loaded fit's OWN four stored series.
 
     The OFF path is a structural short-circuit of the draw loop, so it should land bit-for-bit
-    on the stored numbers; the achieved maximum relative deviation is reported rather than
-    rounded up. `bse`/`pvalues` come from the conglomerate loop, `bse_time`/`pvalues_time` from
-    the quarter loop that follows it and inherits its projection warm cell."""
+    on the numbers the conditional bootstrap wrote onto this pickle; the achieved maximum
+    relative deviation is reported rather than rounded up. `bse`/`pvalues` come from the
+    conglomerate loop, `bse_time`/`pvalues_time` from the quarter loop that follows it and
+    inherits its projection warm cell. The derived t the tables print is params/bse, which is
+    exactly the `tvalues` stored on the conglomerate scheme; the quarter scheme stores no t and
+    forms it off `bse_time` the same way the exporters do.
+
+    Every reference is read off `si_res`, so the verdict is vintage-independent: it says the
+    two-stage machinery reduces to whatever conditional bootstrap produced the fit, and it holds
+    on a cluster-estimated pickle as well as on the promoted local one. FIXTURES then cross-check
+    the hardcoded constants, but only on the vintage they were taken from."""
     gate = dict(checked=True, ok=True, worst=0.0, detail={}, fixtures={})
     pairs = (("bse", "congl", "bse"), ("pvalues", "congl", "pvalues"),
              ("bse_time", "quarter", "bse"), ("pvalues_time", "quarter", "pvalues"))
@@ -146,13 +158,22 @@ def off_path_gate(est, si_res, out, tol=1e-8):
         pix = [t_got[k] for k in t_got if "pix" in k][0]
         ref_shared = fx["congl_shared"] if scheme == "congl" else fx["quarter_shared"]
         ref_pix = fx["congl_pix"] if scheme == "congl" else fx["quarter_pix"]
+        # `applies` is decided from the STORED t, never from the recomputed one: the fixtures
+        # can only certify the constants on the fit they were read from, and a fit that carries
+        # different conditional |t| is a different vintage, not a regression. When they do not
+        # apply their deviations are still recorded, they just stay out of the verdict.
+        cont_stored = sorted(abs(t_ref[k]) for k in t_ref if "pix" not in k)
+        pix_stored = [t_ref[k] for k in t_ref if "pix" in k][0]
+        stored_dev = max(max(abs(c - ref_shared) / ref_shared for c in cont_stored),
+                         abs(pix_stored - ref_pix) / abs(ref_pix))
         gate["fixtures"][scheme] = dict(
+            applies=bool(stored_dev <= tol), stored_dev=stored_dev,
             shared=cont, shared_spread=float(cont[-1] - cont[0]),
             shared_dev=max(abs(c - ref_shared) / ref_shared for c in cont),
             pix=pix, pix_dev=abs(pix - ref_pix) / abs(ref_pix))
     gate["ok"] = bool(gate["worst"] <= tol
                       and all(v["shared_dev"] <= tol and v["pix_dev"] <= tol
-                              for v in gate["fixtures"].values()))
+                              for v in gate["fixtures"].values() if v["applies"]))
     print(f"  [gate OFF] max relative deviation vs stored: {gate['worst']:.3e}  "
           f"{'REPRODUCED' if gate['ok'] else 'MISMATCH'}")
     for k, v in gate["detail"].items():
@@ -161,7 +182,12 @@ def off_path_gate(est, si_res, out, tol=1e-8):
     for s, v in gate["fixtures"].items():
         print(f"      fixture[{s}] shared |t| = "
               + ", ".join(f"{c:.9f}" for c in v["shared"])
-              + f"  (dev {v['shared_dev']:.2e}); pix {v['pix']:.11f} (dev {v['pix_dev']:.2e})")
+              + f"  (dev {v['shared_dev']:.2e}); pix {v['pix']:.11f} (dev {v['pix_dev']:.2e})"
+              + ("" if v["applies"] else "   [not applied]"))
+        if not v["applies"]:
+            print(f"      [gate OFF] fixture[{s}] SKIPPED (not a failure): the stored fit's own "
+                  f"|t| sits {v['stored_dev']:.2e} from the est{est} constants, so this pickle is "
+                  f"a different vintage; the stored-value check above is the verdict.")
     return gate
 
 
@@ -283,7 +309,7 @@ def _attach(pkl_path, d, si_res, loss_lbl, out, theta_off, B):
 
 def main():
     p = argparse.ArgumentParser(description=__doc__.splitlines()[3])
-    p.add_argument("--est", type=int, required=True, choices=(3, 4))
+    p.add_argument("--est", type=int, required=True, choices=tuple(_routines.LINK_ESTS))
     p.add_argument("--loss", choices=("robust", "ls", "both"), default="robust")
     p.add_argument("--B", type=int, default=None,
                    help="default: SLEEP_BOOT_B (999), matching the stored conditional numbers")

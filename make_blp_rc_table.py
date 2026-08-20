@@ -24,6 +24,7 @@ Output
 
 from utils.venv_guard import ensure_project_venv
 from utils import paths as _paths
+from utils import routines as _routines
 ensure_project_venv(__file__)
 
 import argparse
@@ -45,7 +46,7 @@ except Exception:
 
 ROOT       = pathlib.Path(__file__).resolve().parent
 DATA_DIR   = _paths.PROCESSED
-RESULTS_DIR = _paths.estimation_output() / "BLP_RESULTS"
+RESULTS_DIR = _paths.blp_results_dir()
 # Raw per-stage cluster results live in cluster_raw/ after the 2026-06-25 reorg.
 RAW_DIR    = RESULTS_DIR / "cluster_raw"
 DEMAND_PREP_DIR = _paths.demand_prep_root()                       # demand_{k}_*spec_12.parquet
@@ -135,18 +136,15 @@ DEMO_LABELS = {
 # EXACTLY as the sleepiness comparison tables (est1-4_spec12_stage2_comparison.tex) reference them.
 # The demand routine id (E3) is a code artifact; \ref{estimation:single_idx} renders as the paper's
 # estimator number, keeping the demand tables consistent with the text. NO ad-hoc names.
-# These keys must match V_Main's `\item\label{estimation:*}` enumerate exactly. V_Main defines
-# four items; a key absent here falls through to a literal "E{id}", which renders as plain text
-# rather than the paper's strategy number -- and an id pointing at a REMOVED label renders as
-# "??". Both fail quietly, so keep this in step with the lineup.
-ESTIMATION_REF = {
-    1: r"\ref{estimation:local}",          2: r"\ref{estimation:pooled}",
-    3: r"\ref{estimation:single_idx}",     4: r"\ref{estimation:single_idx_time}",
-}
-
-def est_ref(est: int) -> str:
-    """Estimator id → V_Main enumerate \\ref (fallback E{id} for an id with no live label)."""
-    return ESTIMATION_REF.get(est, rf"E{est}")
+# The map comes from config/routines.toml, whose keys must match V_Main's
+# `\item\label{estimation:*}` enumerate exactly: a key absent from it falls through to a literal
+# "E{id}", which renders as plain text rather than the paper's strategy number -- and an id
+# pointing at a REMOVED label renders as "??". Both fail quietly.
+#
+# Re-exported here under their historical names because six table generators import
+# `ESTIMATION_REF` / `est_ref` / `DRAFTS_DIR` from this module.
+ESTIMATION_REF = _routines.ESTIMATION_REF
+est_ref = _routines.est_ref
 
 # ── Label helpers ─────────────────────────────────────────────────────────────
 
@@ -515,12 +513,13 @@ def build_table(est_id: int, suffix: str = "") -> str:
 
 def main():
     parser = argparse.ArgumentParser(description="BLP RC LaTeX table generator")
-    parser.add_argument("--est", type=int, default=3,
-                        help="Estimation strategy (default: 6, the headline single-index routine)")
+    parser.add_argument("--est", type=int, default=_routines.LINK_ESTS[0],
+                        help=f"Estimation strategy (default: {_routines.LINK_ESTS[0]}, the "
+                             "headline single-index routine)")
     parser.add_argument("--all", action="store_true",
                         help="Generate for every routine in the lineup")
     parser.add_argument("--ests", nargs="+", type=int, default=None,
-                        help="Generate for an explicit subset, e.g. --ests 5 6 7 8. Use this "
+                        help="Generate for an explicit subset, e.g. --ests 3 4. Use this "
                              "rather than --all when some routines' RC chains have not "
                              "reached ext1: a routine that stops earlier still yields a "
                              "table, but a narrower one (fewer stage columns), which is easy "
@@ -538,7 +537,7 @@ def main():
     if args.ests:
         est_ids = args.ests
     elif args.all:
-        est_ids = list(range(1, 9))
+        est_ids = list(_routines.ACTIVE)
     else:
         est_ids = [args.est]
 

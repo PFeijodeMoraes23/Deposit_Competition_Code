@@ -26,6 +26,8 @@ the sleep estimation). Keyed by routine/spec it writes:
   • `phi_nopix_E{e}_spec_{s}.parquet`   — the EXACT per-row no-Pix φ for the NONLINEAR links
     (E3/E4 'index'), computed via `phi_from_native` with pix=0,
     read here by `load_phi_nopix` and joined 1:1 to `ctx.df` on (entity_id, time_id).
+That export runs either locally (uploaded to data/input) or on the cluster (written under
+data/output), so both are searched — data/input first, see `cf4_search_dirs`.
 CF4 prefers the exact parquet and falls back to the scalar subtraction only when it is absent
 (identity-link specs E1/E2, where the subtraction is exact). A missing JSON errors loudly with
 the exact command to run, so a run without the recovery fails rather than silently producing
@@ -37,23 +39,63 @@ include(joinpath(@__DIR__, "foundation_deposit_sim.jl"))
 using DataFrames, Statistics, Printf
 
 """
-    pix_coefficient(cf_dir, estim, spec) -> Float64
+    cf4_search_dirs(out_dir) -> Vector{String}
+
+Where CF4 looks for the two `cf_4_upsilon_export.py` artefacts, in order:
+
+  1. `cf_in_dir(out_dir)`  — data/input on the cluster, where an uploaded export lands;
+  2. `out_dir/CF_FOUNDATION` — where the on-cluster export writes;
+  3. `cf_out_dir(out_dir)` — data/output/cf, the subdirectory the rest of the CF stack uses;
+  4. `<of_root>/…/ESTIMATION_OUTPUT/CF_FOUNDATION` — the anchor cf_4_upsilon_export.py itself
+     resolves (`utils.paths.estimation_output()`), which follows OPEN_FINANCE_ROOT rather
+     than the data tree. Skipped when the root does not validate.
+
+Candidate 4 normally lands ON candidate 2: the cluster bootstrap symlinks the skeleton's
+`ESTIMATION_OUTPUT` at data/output, so `estimation_output()/CF_FOUNDATION` IS
+data/output/CF_FOUNDATION by a different spelling (`search_dirs` de-duplicates by string,
+not by realpath, so both stay in the list and the first hit wins either way). It is kept for
+the case where the skeleton is built without that link, when it is the only candidate that
+matches where the export actually wrote.
+
+data/input wins whenever it holds the file, so a hand-staged export always beats a
+cluster-produced one. Off the cluster (`_hpc_tree` false) only the single legacy
+CF_FOUNDATION directory is searched and the resolution is exactly what it was — candidate 4
+collapses onto it there anyway.
+"""
+function cf4_search_dirs(out_dir)::Vector{String}
+    cf_in = cf_in_dir(out_dir)
+    _hpc_tree(out_dir) || return search_dirs(cf_in)
+    anchored = try
+        joinpath(resolve_of_root(), "BCB", "Egan_et_al_2025_Rep", "processed",
+                 "ESTIMATION_OUTPUT", "CF_FOUNDATION")
+    catch _e
+        nothing              # no validated Open-Finance root here; the data tree is enough
+    end
+    return search_dirs(cf_in, joinpath(String(out_dir), "CF_FOUNDATION"),
+                       cf_out_dir(out_dir), anchored)
+end
+
+"""
+    pix_coefficient(cf_dirs, estim, spec) -> Float64
 
 Return the estimated sleepiness coefficient on `pix_exists` (Υ_pix) for the routine,
-read from `CF_FOUNDATION/upsilon_pix_E{e}_spec_{s}.json` (recovered read-only from the
-sleep pickle by `cf_4_upsilon_export.py` — see that script and the module docstring).
+read from `upsilon_pix_E{e}_spec_{s}.json` in the first of `cf_dirs` that holds it
+(recovered read-only from the sleep pickle by `cf_4_upsilon_export.py` — see that script and
+the module docstring).
 """
-function pix_coefficient(cf_dir::String, estim::Int, spec_id::Int)::Float64
-    f = joinpath(cf_dir, "upsilon_pix_E$(estim)_spec_$(spec_id).json")
-    isfile(f) || error("CF4 needs Υ_pix. Run first:  " *
-                       "python cf_4_upsilon_export.py --estim $estim --spec $spec_id   (missing $f)")
+function pix_coefficient(cf_dirs::Vector{String}, estim::Int, spec_id::Int)::Float64
+    f = resolve_in_then_out("upsilon_pix_E$(estim)_spec_$(spec_id).json", cf_dirs...)
+    f === nothing && error("CF4 needs Υ_pix. Run first:  " *
+                           "python cf_4_upsilon_export.py --estim $estim --spec $spec_id   " *
+                           "(missing upsilon_pix_E$(estim)_spec_$(spec_id).json; searched:\n" *
+                           describe_search_dirs(cf_dirs...) * ")")
     m = match(r"\"upsilon_pix\"\s*:\s*(-?[0-9.eE+]+)", read(f, String))
     m === nothing && error("upsilon_pix not found in $f")
     return parse(Float64, m.captures[1])
 end
 
 """
-    pix_level_zero(cf_dir, estim, spec) -> Float64
+    pix_level_zero(cf_dirs, estim, spec) -> Float64
 
 The value the `pix_exists` COLUMN takes when Pix does not exist, in estimation units.
 The state block is grand-mean centred, so that is −mean(pix_exists) ≈ −0.53, NOT 0.0:
@@ -61,26 +103,27 @@ the identity-link fallback below subtracts Υ_pix·(pix − this), and using 0.0
 would evaluate a "no Pix" world in which 53% of markets still have Pix. Written by
 cf_4_upsilon_export.py alongside Υ_pix; falls back to 0.0 for pre-centering exports.
 """
-function pix_level_zero(cf_dir::String, estim::Int, spec_id::Int)::Float64
-    f = joinpath(cf_dir, "upsilon_pix_E$(estim)_spec_$(spec_id).json")
-    isfile(f) || return 0.0
+function pix_level_zero(cf_dirs::Vector{String}, estim::Int, spec_id::Int)::Float64
+    f = resolve_in_then_out("upsilon_pix_E$(estim)_spec_$(spec_id).json", cf_dirs...)
+    f === nothing && return 0.0
     m = match(r"\"pix_level_zero\"\s*:\s*(-?[0-9.eE+]+)", read(f, String))
     return m === nothing ? 0.0 : parse(Float64, m.captures[1])
 end
 
 """
-    load_phi_nopix(cf_dir, estim, spec, ctx) -> Union{Nothing,Vector{Float64}}
+    load_phi_nopix(cf_dirs, estim, spec, ctx) -> Union{Nothing,Vector{Float64}}
 
 Exact link-aware no-Pix φ, precomputed by `cf_4_upsilon_export.py` via `phi_from_native`
 with `pix_exists` zeroed — the correct counterfactual under a NONLINEAR link G, where the
 level subtraction φ̂ − Υ_pix·pix is only a first-order approximation (Υ_pix is the AME, not
-∂φ/∂pix). Reads `CF_FOUNDATION/phi_nopix_E{e}_spec_{s}.parquet` and returns a per-row vector
-aligned to `ctx.df` by an (entity_id, time_id) join, or `nothing` if the file is absent (→
-caller falls back to the scalar subtraction, exact for the identity-link specs E1/E2).
+∂φ/∂pix). Reads `phi_nopix_E{e}_spec_{s}.parquet` from the first of `cf_dirs` that holds it
+and returns a per-row vector aligned to `ctx.df` by an (entity_id, time_id) join, or
+`nothing` if the file is absent everywhere (→ caller falls back to the scalar subtraction,
+exact for the identity-link specs E1/E2).
 """
-function load_phi_nopix(cf_dir::String, estim::Int, spec_id::Int, ctx::CFDemandCtx)
-    f = joinpath(cf_dir, "phi_nopix_E$(estim)_spec_$(spec_id).parquet")
-    isfile(f) || return nothing
+function load_phi_nopix(cf_dirs::Vector{String}, estim::Int, spec_id::Int, ctx::CFDemandCtx)
+    f = resolve_in_then_out("phi_nopix_E$(estim)_spec_$(spec_id).parquet", cf_dirs...)
+    f === nothing && return nothing
     e = DataFrame(Parquet2.Dataset(f); copycols=true)
     for c in ("entity_id", "time_id", "phi_mt_nopix")
         c in names(e) || error("phi_nopix export $(basename(f)) missing column $c")
@@ -140,14 +183,15 @@ function main_cf4()
                            local_dir=a["local-dir"], suffix=a["suffix"])
     st  = load_sim_state(ctx)
     _, _, out_dir = get_paths(a["hpc"]; local_dir=a["local-dir"])
-    # Υ_pix + φ^noPix are built LOCALLY by cf_4_upsilon_export.py (the sleep pickle is not on the
-    # compute nodes) and UPLOADED → they read from data/input. The reallocation parquet is produced
-    # here → it writes to data/output/cf. Distinct dirs on the cluster; same legacy dir locally.
-    cf_in  = cf_in_dir(out_dir)                        # cluster: data/input
+    # Υ_pix + φ^noPix come from cf_4_upsilon_export.py, which runs either locally (uploaded →
+    # data/input) or on the cluster (→ data/output). `cf4_search_dirs` covers both, data/input
+    # first. The reallocation parquet is produced here → it writes to data/output/cf. Distinct
+    # dirs on the cluster; same legacy dir locally.
+    cf_ins = cf4_search_dirs(out_dir)                  # cluster: data/input, then data/output/…
     cf_dir = cf_out_dir(out_dir)                       # cluster: data/output/cf
-    υ   = pix_coefficient(cf_in, a["estim"], a["spec"])
-    pix0 = pix_level_zero(cf_in, a["estim"], a["spec"])          # centred "no Pix" level (≈ −0.53)
-    phi_np = load_phi_nopix(cf_in, a["estim"], a["spec"], ctx)   # exact link-aware φ^noPix, or nothing
+    υ   = pix_coefficient(cf_ins, a["estim"], a["spec"])
+    pix0 = pix_level_zero(cf_ins, a["estim"], a["spec"])          # centred "no Pix" level (≈ −0.53)
+    phi_np = load_phi_nopix(cf_ins, a["estim"], a["spec"], ctx)   # exact link-aware φ^noPix, or nothing
     # CF4_EXACT_NOPIX=0 forces the identity-link scalar fallback (φ̂ − Υ_pix·(pix−pix0)) even when the
     # exact parquet is present — for the "with vs without re-eval" comparison. The output is tagged
     # "_noeval" so it never overwrites the exact (re-evaluated) run.

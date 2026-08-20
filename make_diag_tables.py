@@ -29,15 +29,15 @@ except Exception:
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from diag_phi_augmented_tests import OUT_DIR  # noqa: E402
+from utils import paths as _paths             # noqa: E402
+from utils import routines as _routines       # noqa: E402
 
-DRAFTS = Path(r"c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance"
-              r"\Open-Finance\Drafts\Deposit Competition")
+DRAFTS = _paths.drafts_dir()
 NOTES = DRAFTS / "identification_notes.md"
-ROMAN = {1: "(I)", 2: "(II)", 3: "(III)", 4: "(IV)"}
-LAB = {1: "E1 identity", 2: "E2 pooled linear", 3: "E3 single-index",
-       4: "E4 single-index + time"}
-ESTS = (1, 2, 3, 4)          # every reported routine
-NONLINEAR = (3, 4)           # the single-index pair
+ROMAN = {e: _routines.est_roman(e) for e in _routines.ACTIVE}
+LAB = {e: _routines.est_diag_label(e) for e in _routines.ACTIVE}
+ESTS = tuple(_routines.ACTIVE)          # every reported routine
+NONLINEAR = tuple(_routines.LINK_ESTS)  # the single-index pair
 
 
 def w(name: str, lines: list[str]) -> None:

@@ -129,6 +129,50 @@ def rout_dir() -> Path:
     return d
 
 
+def blp_results_dir() -> Path:
+    """``ESTIMATION_OUTPUT/BLP_RESULTS`` — the demand-estimation tree (``logit/``,
+    ``cluster_raw/``, ``cluster_processed/``).
+
+    Production location in every run. These are CLUSTER artifacts and are not written per
+    sleepiness vintage, so they resolve through :func:`estimation_output` and a sandboxed
+    run reads the same results the paper reports.
+    """
+    return estimation_output() / "BLP_RESULTS"
+
+
+def bbl_output_dir() -> Path:
+    """``ESTIMATION_OUTPUT/BBL_OUTPUT`` — the dynamic-cost tree (``cluster_raw/psi_cost.zip``,
+    ``cluster_processed/cost_params_*.json``). Cluster artifacts, so production as above."""
+    return estimation_output() / "BBL_OUTPUT"
+
+
+def cf_foundation_dir() -> Path:
+    """``ESTIMATION_OUTPUT/CF_FOUNDATION`` — the counterfactual inputs (``upsilon_pix_E*.json``,
+    ``phi_nopix_E*.parquet``). Production CF input, not sandbox output."""
+    return estimation_output() / "CF_FOUNDATION"
+
+
+def cost_fwd_dir() -> Path:
+    """``ESTIMATION_OUTPUT/COST_FWD`` — the forward-cost inputs the BBL simulation reads
+    (``forward_rf_qoq.csv``). Production, as the rest of the cluster-facing trees."""
+    return estimation_output() / "COST_FWD"
+
+
+def diag_dir(name: str) -> Path:
+    """``ESTIMATION_OUTPUT/DIAG_{name}`` — one diagnostic battery's output tree.
+
+    ``name`` is the suffix, so ``diag_dir("PHI_SEPARATION")`` resolves the identification
+    battery's CSVs and figures and ``diag_dir("K4_SPREAD")`` the type-4 spread probes. These
+    are archival diagnostics, keyed to the production fits the notes and the paper quote, so
+    they resolve through :func:`estimation_output`.
+
+    The per-vintage ``DIAGNOSTICS`` tree is a DIFFERENT object: it holds cross-checks of a
+    particular run's bands and resolves under :func:`demand_prep_root`, beside the bands it
+    checks, so it follows ``SLEEP_OUT_ROOT``.
+    """
+    return estimation_output() / f"DIAG_{name}"
+
+
 def drafts_dir() -> Path:
     """Paper directory the exporters mirror their .tex fragments and figures into.
 
@@ -224,6 +268,7 @@ def market_panel_csv(processed: Path | None = None) -> Path:
 __all__ = [
     "OPEN_FINANCE", "BCB", "DATA_ROOT", "RAW", "PROCESSED", "data_root", "market_panel_csv",
     "demand_prep_root", "estimation_output", "est_dir", "rout_dir", "drafts_dir",
+    "blp_results_dir", "bbl_output_dir", "cf_foundation_dir", "cost_fwd_dir", "diag_dir",
     "ESTBAN_DIR", "ESTBAN_CSV", "ESTBAN_RAW_MUN", "ESTBAN_RAW_AG",
     "IF_DATA_ROOT", "IF_DATA_LIST", "IF_DATA_PRUDENTIAL", "IF_DATA_FINANCIAL", "IF_DATA_INDIVIDUAL", "IF_DATA_AGG",
     "COSIF_RAW", "SGS_RAW",

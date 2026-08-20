@@ -195,8 +195,9 @@ function cf3_setup(a)
     # the fixed point tractable locally; the full run is a cluster job).
     keep = nothing
     if a["n-markets"] > 0
-        input_dir, _, _ = get_paths(a["hpc"]; local_dir=a["local-dir"])
-        meta = DataFrame(Parquet2.Dataset(discover_demand_parquet(input_dir, a["estim"], a["spec"])))
+        input_dir, _, out_dir = get_paths(a["hpc"]; local_dir=a["local-dir"])
+        meta = DataFrame(Parquet2.Dataset(discover_demand_parquet(
+            demand_search_dirs(input_dir, out_dir), a["estim"], a["spec"])))
         tid = string.(meta.time_id)
         inwin = tf === nothing ? trues(length(tid)) : [t in tf for t in tid]
         keyv = string.(string.(meta.mca_code), "|", tid)

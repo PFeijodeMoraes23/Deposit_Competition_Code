@@ -21,6 +21,10 @@ if !isdefined(Main, :X_COLS)
     Base.include(Main, joinpath(@__DIR__, "blp_1_estimation.jl"))
 end
 
+# The three entry points below resolve their demand parquet through `demand_parquet_path`,
+# defined in blp_1_estimation.jl alongside `get_paths`/`input_filename` and pulled in by the
+# include above (data/input first, then data/output/DEMAND_PREP).
+
 # ===================== blp_2_estimation.jl =====================
 """
 blp_2_estimation.jl
@@ -239,10 +243,8 @@ function run_blp_estimation_ift(estim::Int, spec_id::Int, args,
         return run_blp_estimation(estim, spec_id, args, nu_draws, draws_3d, key_index)
     end
 
-    input_dir, _, _ = get_paths(args["hpc"]; local_dir=args["local_dir"])
-    fname = input_filename(estim, spec_id)
-    path  = joinpath(input_dir, fname)
-    isfile(path) || (println("  [!] Missing: $path"); return nothing)
+    path = demand_parquet_path(estim, spec_id, args)
+    path === nothing && return nothing
 
     df = DataFrame(Parquet2.Dataset(path); copycols=true)
     nrow(df) == 0 && (println("  [!] Empty dataframe."); return nothing)
@@ -1534,10 +1536,8 @@ function run_blp_estimation_gpu(estim::Int, spec_id::Int, args,
         return run_blp_estimation(estim, spec_id, args, nu_draws, draws_3d, key_index)
     end
 
-    input_dir, _, _ = get_paths(args["hpc"]; local_dir=args["local_dir"])
-    fname = input_filename(estim, spec_id)
-    path  = joinpath(input_dir, fname)
-    isfile(path) || (println("  [!] Missing: $path"); return nothing)
+    path = demand_parquet_path(estim, spec_id, args)
+    path === nothing && return nothing
 
     df = DataFrame(Parquet2.Dataset(path); copycols=true)
     nrow(df) == 0 && (println("  [!] Empty dataframe."); return nothing)
@@ -2318,10 +2318,8 @@ function run_blp_estimation_ift_gpu(estim::Int, spec_id::Int, args,
         return run_blp_estimation(estim, spec_id, args, nu_draws, draws_3d, key_index)
     end
 
-    input_dir, _, _ = get_paths(args["hpc"]; local_dir=args["local_dir"])
-    fname = input_filename(estim, spec_id)
-    path  = joinpath(input_dir, fname)
-    isfile(path) || (println("  [!] Missing: $path"); return nothing)
+    path = demand_parquet_path(estim, spec_id, args)
+    path === nothing && return nothing
 
     df = DataFrame(Parquet2.Dataset(path); copycols=true)
     nrow(df) == 0 && (println("  [!] Empty dataframe."); return nothing)

@@ -49,6 +49,7 @@ except Exception:
     pass
 
 from utils import paths
+from utils import routines as _routines
 
 # ── Column sets: must match the ENGINE, not weak_iv_analysis.py ────────────────────────────────
 # blp_1_estimation.jl:800 builds Z as vcat(IV_BLP_LOO, IV_ESTBAN, IV_COST, IV_CAPITAL) — note ESTBAN
@@ -429,7 +430,7 @@ def analyse(k, stage, args, dp, raw, cp):
 def main():
     ap = argparse.ArgumentParser(description="Local CUE linear-step preview + engine self-check")
     # The single-index pair: the routines with an RC-BLP delta export (blp_2_rc.jl DEFAULT_ROUTINES).
-    ap.add_argument("--routines", default="3,4")
+    ap.add_argument("--routines", default=_routines.csv(_routines.LINK_ESTS))
     ap.add_argument("--stage", default="ext1")
     ap.add_argument("--max-witer", type=int, default=10, dest="max_witer")
     ap.add_argument("--wtol", type=float, default=1e-10)

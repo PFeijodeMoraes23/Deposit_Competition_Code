@@ -37,6 +37,7 @@ except Exception:
     pass
 
 import make_blp_rc_table as rc      # RAW_DIR / TABLES_DIR / DRAFTS_DIR / est_ref
+from utils import routines as _routines
 
 
 def _intervals(points, crit):
@@ -67,7 +68,7 @@ def _fmt(runs, lo_edge, hi_edge):
 
 def main():
     ap = argparse.ArgumentParser(description="Stock-Wright S-set table from the CUE grid runs")
-    ap.add_argument("--routines", default="3,4")
+    ap.add_argument("--routines", default=_routines.csv(_routines.LINK_ESTS))
     ap.add_argument("--stage", default="ext1")
     args = ap.parse_args()
     routines = [int(x) for x in args.routines.split(",") if x.strip()]

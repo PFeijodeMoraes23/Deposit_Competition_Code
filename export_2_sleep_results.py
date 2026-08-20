@@ -17,6 +17,7 @@ if _THIS_DIR not in sys.path:
 # est_dir/rout_dir follow SLEEP_OUT_ROOT, so a sandboxed run exports the fits it just
 # produced instead of whatever sits in the production tree.
 from utils import paths  # noqa: E402
+from utils import routines as _routines  # noqa: E402
 
 _DRAFTS_DIR = paths.drafts_dir()
 OUTPUT_DIR = paths.est_dir(2)
@@ -58,8 +59,8 @@ def build_first_stage_table(results_dict):
     # routines have no Base specification because their index excludes the constant. E4 adds
     # one control (the Time block, 11 coefficients) and E1 runs on the local B-type sample
     # (N=486,233), so neither matches this one.
-    caption = (r"First Stage --- Deposit Spread on Instruments "
-               r"--- Estimation Strategy~\ref{estimation:pooled}")
+    caption = ("First Stage --- Deposit Spread on Instruments "
+               f"--- Estimation Strategy~{_routines.est_ref(2)}")
     label = "tab:est2_first_stage"
     notes = (
         r"\footnotesize \textit{Notes:} Standard errors (wild cluster bootstrap at the "
@@ -182,7 +183,7 @@ def build_second_stage_table(results_dict):
     }
     estimators = [('OLS', 'OLS'), ('IV_CostShifters', 'IV Cost'), ('IV_Wholesale', 'IV Wholesale'), ('IV_HausmanFull', 'Hausman')]
     multispan = 5
-    caption = r"Second Stage --- Estimation Strategy~\ref{estimation:pooled}"
+    caption = f"Second Stage --- Estimation Strategy~{_routines.est_ref(2)}"
     label = "tab:est2_second_stage"
     notes = (
         r"\footnotesize \textit{Notes:} Standard errors (wild cluster bootstrap at the "

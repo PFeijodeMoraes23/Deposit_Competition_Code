@@ -54,15 +54,28 @@ MANIFEST = REPO / "cluster" / "upload_manifest.txt"
 # submit scripts themselves resolve data as `$(pwd)/../data` from scripts/.
 CLUSTER_ROOT = "/nfs/roberts/project/pi_mf2263/pf382/dep_comp"
 
-DEFAULT_OUT_ROOT = Path(r"C:\egan_cluster_stage")
-DEFAULT_STAGES = ("blp", "bbl", "cf")
+# The dated bundle folder lands under `processed/CLUSTER_STAGE` so it sits with the data it packages.
+# Resolved in main(), not here: utils.paths is imported only after SLEEP_OUT_ROOT is applied, so a
+# module-level constant would miss the override. `--out-root` overrides it — worth doing when the
+# ~470 MB data zip (material that already exists elsewhere in this tree) would otherwise make OneDrive
+# sync a second copy.
+DEFAULT_OUT_SUBDIR = "CLUSTER_STAGE"
+# Pipeline order. `sleep` is here because the sleepiness estimators run on the cluster: without
+# it the panels and the persisted state transform they read are never marked required and would
+# be dropped from the data bundle without a word.
+DEFAULT_STAGES = ("sleep", "blp", "bbl", "cf")
 
 # Members stored uncompressed: parquet and the raw delta binaries are already compressed or
 # incompressible, and deflating 250 MB of them costs minutes for ~1% of size.
 STORE_SUFFIXES = {".parquet", ".bin", ".jls", ".so", ".zip"}
 # Rewritten to LF on the way in: bash reads a CRLF shebang as a syntax error on line 1, and
-# Julia scripts are read by the same shell wrappers.
-LF_SUFFIXES = {".sh", ".jl"}
+# Julia scripts are read by the same shell wrappers. `.py` is here for the same reason even
+# though every cluster invocation goes through "${PYBIN}" <path>.py, where CPython accepts CRLF
+# source: the repo has already lost a run to a CRLF line 1, `.gitattributes eol=lf` does not
+# cover .py, and 66 of the 130 shipped .py files carry CRLF on this machine. Marking one
+# executable, or invoking it by shebang, would resurrect the same failure on a machine we
+# cannot debug interactively. Normalising the whole text payload costs nothing and removes it.
+LF_SUFFIXES = {".sh", ".jl", ".py"}
 EXEC_SUFFIXES = {".sh"}
 
 
@@ -164,6 +177,12 @@ def make_root_resolver(paths_mod):
             "COST_POLFUNC":  est_out / "COST_POLFUNC",
             "CF_FOUNDATION": est_out / "CF_FOUNDATION",
             "PROCESSED":     paths_mod.PROCESSED,
+            # The sleepiness stage runs on the cluster, so the panels it reads are uploads now:
+            # panel_5 writes the digital-bank flags under PANEL_INTERMED, and the banked/MCA
+            # panels live in BCB/Inclusion. Both are roots rather than path prefixes because a
+            # `pattern` doubles as the destination basename (see the manifest's PARSING block).
+            "PANEL_INTERMED": paths_mod.PROCESSED / "PANEL_INTERMED",
+            "INCLUSION":      paths_mod.INCLUSION_DIR,
             "REPO":          REPO,
         }
         if token not in table:
@@ -247,7 +266,15 @@ def entry_size(entry):
 
 
 def required(entry, selected):
-    return "all" in entry.stages or any(s in selected for s in entry.stages)
+    """Is this entry a blocker for the selected stages?
+
+    A `produced` entry never is: nobody uploads it, the cluster builds it into data/output
+    during the run, and cluster_preflight.sh checks it there. It stays in the checklist so the
+    lineup is visibly accounted for, but it is not a local artefact to build and it is not
+    bundled -- `data_entries`/`code_entries` select on the bundle name, so it falls out of both.
+    """
+    return entry.bundle != "produced" and (
+        "all" in entry.stages or any(s in selected for s in entry.stages))
 
 
 def print_checklist(entries, selected, directives, vintage_root, verbose):
@@ -265,7 +292,10 @@ def print_checklist(entries, selected, directives, vintage_root, verbose):
     print("  " + "-" * (len(hdr) - 2))
     fixes = []
     for e in entries:
-        req = "yes" if required(e, selected) else "no"
+        # 'n/a' rather than 'no': a produced entry is not an optional upload, it is not an
+        # upload at all. The distinct marker is also what makes it verifiable at a glance that
+        # nothing in this class reached either zip.
+        req = "n/a" if e.bundle == "produced" else ("yes" if required(e, selected) else "no")
         if e.paths:
             size = _fmt_size(entry_size(e))
             mtime = _fmt_time(min(p.stat().st_mtime for p in e.paths))
@@ -280,7 +310,9 @@ def print_checklist(entries, selected, directives, vintage_root, verbose):
         if e.status != "OK":
             if e.detail:
                 print(f"           {e.detail}")
-            if e.producer != "-":
+            if e.bundle == "produced":
+                print(f"           -> produced on the cluster, not uploaded: {e.producer}")
+            elif e.producer != "-":
                 tag = "" if req == "yes" else "   (optional for the selected stages)"
                 print(f"           -> run: {e.producer}{tag}")
                 if req == "yes" and e.producer not in fixes:
@@ -363,7 +395,7 @@ def build_bundle(kind, entries, out_dir: Path, datestamp: str, next_steps, omitt
 
 def verify_bundle(zip_path: Path, members):
     """Re-open the finished zip and confirm what we claim about it: every member present,
-    every hash matching, and not one CR left in a .sh or .jl."""
+    every hash matching, and not one CR left in anything LF_SUFFIXES normalises."""
     want = {a: h for a, _, h, _ in members}
     with zipfile.ZipFile(zip_path) as zf:
         names = set(zf.namelist())
@@ -376,7 +408,7 @@ def verify_bundle(zip_path: Path, members):
             data = zf.read(arc)
             if hashlib.sha256(data).hexdigest() != h:
                 raise SystemExit(f"ERROR: {zip_path.name}:{arc} hash mismatch after write.")
-            if arc.rsplit(".", 1)[-1].lower() in ("sh", "jl") and b"\r\n" in data:
+            if Path(arc).suffix.lower() in LF_SUFFIXES and b"\r\n" in data:
                 crlf.append(arc)
         if crlf:
             raise SystemExit(f"ERROR: CRLF survived in {len(crlf)} member(s): {crlf[:3]}")
@@ -453,10 +485,10 @@ def render_readme(kind, datestamp, members, next_steps, omitted):
     else:
         lines += [
             "",
-            "Every .sh here is stored with Unix line endings. That is not cosmetic: bash",
-            "reads a Windows line ending on the first line as part of the shebang and every",
-            "submit script fails at line 1. If you ever copy one of these across by hand",
-            "instead of unzipping, check it with `file submit_cf_all.sh` first.",
+            "Every .sh, .jl and .py here is stored with Unix line endings. That is not",
+            "cosmetic: bash reads a Windows line ending on the first line as part of the",
+            "shebang and every submit script fails at line 1. If you ever copy one of these",
+            "across by hand instead of unzipping, check it with `file submit_cf_all.sh` first.",
         ]
     lines += [
         "",
@@ -561,8 +593,9 @@ def main():
     ap.add_argument("--vintage-root", default=None,
                     help="the estimation vintage to stage from; sets SLEEP_OUT_ROOT so every "
                          "utils/paths accessor follows it")
-    ap.add_argument("--out-root", default=str(DEFAULT_OUT_ROOT),
-                    help=f"where the dated staging folder is written (default {DEFAULT_OUT_ROOT})")
+    ap.add_argument("--out-root", default=None,
+                    help=f"where the dated staging folder is written "
+                         f"(default: <processed>/{DEFAULT_OUT_SUBDIR})")
     ap.add_argument("--date", default=None, help="datestamp for the zips (default: today)")
     ap.add_argument("--allow-stale", action="store_true",
                     help="bundle even when a required input is missing or stale")
@@ -644,7 +677,8 @@ def main():
         print()
 
     datestamp = args.date or _dt.datetime.now().strftime("%Y%m%d")
-    out_dir = Path(args.out_root) / datestamp
+    out_root = Path(args.out_root) if args.out_root else paths.PROCESSED / DEFAULT_OUT_SUBDIR
+    out_dir = out_root / datestamp
     out_dir.mkdir(parents=True, exist_ok=True)
 
     print("=" * 100)
@@ -662,7 +696,8 @@ def main():
         results.append((kind, zp, members))
         print(f"  {kind}: {len(members)} files -> {zp.name} "
               f"({_fmt_size(zp.stat().st_size)} on disk)")
-        print(f"         LF check passed for every .sh/.jl member; "
+        print(f"         LF check passed for every "
+              f"{'/'.join(sorted(LF_SUFFIXES))} member; "
               f"sha256SUMS.txt + UPLOAD_README.txt written at the zip root")
     print()
 

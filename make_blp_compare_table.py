@@ -35,6 +35,8 @@ import pathlib
 
 import scipy.stats as stats
 import make_blp_rc_table as rc   # label maps, decode_theta2, sigma_label, pi_label, STAGES
+from utils import paths as _paths
+from utils import routines as _routines
 import sys
 
 # Windows consoles default to cp1252 and raise UnicodeEncodeError on any non-ASCII
@@ -47,11 +49,13 @@ except Exception:
     pass
 
 ROOT       = pathlib.Path(__file__).resolve().parent
-DATA_DIR   = ROOT.parents[1] / "BCB" / "Egan_et_al_2025_Rep" / "processed"
-RES_DIR    = DATA_DIR / "ESTIMATION_OUTPUT" / "BLP_RESULTS"
+DATA_DIR   = _paths.PROCESSED
+RES_DIR    = _paths.blp_results_dir()
 RAW_DIR    = RES_DIR / "cluster_raw"
 LOGIT_DIR  = RES_DIR / "logit"
-TABLES_DIR = DATA_DIR / "ESTIMATION_OUTPUT" / "Rout"
+# Built from CLUSTER artifacts under BLP_RESULTS, which are not written per sleepiness
+# vintage, so the tables resolve to production rather than following SLEEP_OUT_ROOT.
+TABLES_DIR = _paths.estimation_output() / "Rout"
 DRAFTS_DIR = rc.DRAFTS_DIR
 TABLES_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -258,7 +262,7 @@ def build_table(est: int) -> str:
 def main():
     ap = argparse.ArgumentParser(description="Logit-vs-RC-stages landscape table")
     ap.add_argument("--est", type=int)
-    ap.add_argument("--routines", default="3,4")   # the cluster default set
+    ap.add_argument("--routines", default=_routines.csv(_routines.LINK_ESTS))   # the cluster default set
     args = ap.parse_args()
     ests = [args.est] if args.est else [int(x) for x in args.routines.split(",") if x.strip()]
 

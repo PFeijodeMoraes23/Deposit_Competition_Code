@@ -14,6 +14,19 @@ The "+Time" variant adds the time block (time_trend, gdp_growth_yoy) to every
 state block via estimation_2_sleep.define_specifications(time_block=True). phi is
 always built from the native index + link (phi_from_native); AMEs are reporting-only.
 Inference: score/multiplier wild cluster bootstrap (utils.sleep_links).
+
+THREE RUN MODES (see the CLI block at the bottom):
+
+  default              the whole grid in one process, serially, merging into
+                       est{N}/estimation_results.pkl after every state block.
+  --spec-id S          exactly ONE spec, written to est{N}/_specs/spec_{S}.pkl and
+                       NOTHING else. Never reads or writes the shared pickle, so an
+                       arbitrary number of these can run concurrently (one SLURM
+                       array task per spec).
+  --merge-specs        fold every est{N}/_specs/spec_*.pkl into the shared pickle and
+                       rebuild the derived outputs. THE ONLY writer of
+                       estimation_results.pkl, ts_link_band_est{N}.pkl and the phi CSVs
+                       in the split workflow.
 """
 import os
 os.environ.setdefault("OMP_NUM_THREADS", "1")
@@ -23,6 +36,8 @@ os.environ.setdefault("VECLIB_MAXIMUM_THREADS", "1")
 os.environ.setdefault("NUMEXPR_NUM_THREADS", "1")
 
 import pickle
+import tempfile
+from datetime import datetime, timezone
 from functools import reduce
 
 try:
@@ -133,6 +148,112 @@ def _out_dir(est_num):
     d = _paths_mod.demand_prep_root() / f"est{est_num}"
     d.mkdir(parents=True, exist_ok=True)
     return d
+
+
+# ── Spec identity ────────────────────────────────────────────────────────────────
+# The grid is BLOCK-MAJOR: the state blocks in define_specifications order (Base, Macro,
+# Tech), and inside each block the four instrument sets in _IV_ORDER. That is exactly the
+# order the serial runner visits them in (_exec_block over block_tasks, _IV_ORDER inside),
+# and numbering it 1-based reproduces the repo-wide spec ids of
+# estimation_demand_link_common.SPEC_MAP -- 1-4 Base, 5-8 Macro, 9-12 Tech, so "spec 12" is
+# IV_HausmanFull x Tech everywhere: here, in the demand parquets, and in the CF exports.
+# _check_spec_ids() enforces that agreement rather than trusting it.
+#
+# The single-index/joint kinds do not estimate the Base block (a constant-only index has no
+# direction), so ids 1-4 are absent from their grid; the remaining ids keep their canonical
+# value instead of being renumbered 1-8.
+_SPECS_SUBDIR = "_specs"
+
+
+def spec_grid(kind, time_block=False):
+    """-> [(spec_id, iv_name, state_block_name)] in the serial runner's own order."""
+    _, _iv, state_blocks = define_specifications(time_block=time_block)
+    grid = [(bi * len(_IV_ORDER) + ii + 1, iv, s_name)
+            for bi, s_name in enumerate(state_blocks)
+            for ii, iv in enumerate(_IV_ORDER)]
+    return [g for g in grid if not (g[2] == "Base" and kind != "logit")]
+
+
+def spec_name_of(iv_name, s_name):
+    """The dict key a spec is stored under, identical to _exec_spec's spec_name."""
+    return f"{iv_name} x {s_name}"
+
+
+def _check_spec_ids():
+    """Fail loudly if the local numbering ever drifts from the repo-wide SPEC_MAP.
+
+    A silent drift would send `--spec-id 12` to a different cell than the one the demand
+    parquets, the phi_nopix exports and every "spec 12" in the notes mean."""
+    try:
+        from estimation_demand_link_common import SPEC_MAP
+    except Exception:
+        return                                   # not importable here: nothing to check against
+    mine = {sid: spec_name_of(iv, s) for sid, iv, s in spec_grid("logit")}
+    bad = {sid: (mine[sid], SPEC_MAP[sid]) for sid in mine
+           if SPEC_MAP.get(sid) != mine[sid]}
+    if bad:
+        raise RuntimeError(
+            f"spec-id numbering disagrees with estimation_demand_link_common.SPEC_MAP: {bad}")
+
+
+def resolve_spec_id(token, kind, time_block=False):
+    """Accept a 1-based spec id OR a spec name -> (spec_id, iv_name, s_name, spec_name).
+
+    Names may be given in any case and with loose spacing ("iv_hausmanfull x tech")."""
+    _check_spec_ids()
+    grid = spec_grid(kind, time_block=time_block)
+    by_id = {sid: (sid, iv, s) for sid, iv, s in grid}
+    tok = str(token).strip()
+    if tok.isdigit():
+        sid = int(tok)
+        if sid not in by_id:
+            raise SystemExit(
+                f"--spec-id {sid} is not part of the {kind} grid. Runnable ids: "
+                + ", ".join(f"{i}={spec_name_of(iv, s)}" for i, iv, s in grid))
+        sid, iv, s_name = by_id[sid]
+        return sid, iv, s_name, spec_name_of(iv, s_name)
+    key = " ".join(tok.lower().split())
+    for sid, iv, s_name in grid:
+        if " ".join(spec_name_of(iv, s_name).lower().split()) == key:
+            return sid, iv, s_name, spec_name_of(iv, s_name)
+    raise SystemExit(
+        f"--spec-id {token!r} matches no spec of the {kind} grid. Runnable specs: "
+        + ", ".join(f"{i}={spec_name_of(iv, s)}" for i, iv, s in grid))
+
+
+def _specs_dir(est_num):
+    d = _out_dir(est_num) / _SPECS_SUBDIR
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def _spec_artifact(est_num, spec_id):
+    return _specs_dir(est_num) / f"spec_{spec_id}.pkl"
+
+
+def _atomic_pickle_dump(obj, path):
+    """Write a pickle that is either complete or absent, never truncated.
+
+    A killed --spec-id task (SLURM timeout, preemption) must not leave a half-written
+    spec_{S}.pkl behind, because --merge-specs would either crash on it or, worse, load a
+    partial object. The temp file lives in the SAME directory so os.replace is a rename
+    within one filesystem, which is atomic on Windows and POSIX alike. Its name cannot match
+    the spec_*.pkl glob, so even a temp file orphaned by a hard kill is invisible to the merge."""
+    path = str(path)
+    d = os.path.dirname(path)
+    fd, tmp = tempfile.mkstemp(dir=d, prefix="." + os.path.basename(path) + ".", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "wb") as f:
+            pickle.dump(obj, f)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
 
 
 def _init_theta(logit_res, s_cols):
@@ -354,30 +475,38 @@ def _load_existing(est_num):
                            f"against it -- move it aside or run without SLEEP_RESUME") from e
 
 
-def _spec_done(existing, kind):
-    """-> callable(spec_name) returning the stored entry if it can be reused, else None."""
+def _entry_reusable(entry, kind, spec_name):
+    """True if a stored {second_stage, ...} entry can be reused instead of recomputed.
+
+    Shared by the in-process resume (_spec_done) and the per-spec artifact resume
+    (run_one_spec), so both judge a stored fit by exactly the same rules."""
     from utils.sleep_links import link_constrained
     want_constrained = link_constrained()
+    if not entry or entry.get("second_stage") is None:
+        return False
+    if not DROP_LS and entry.get("second_stage_ls") is None:
+        return False                         # an LS column was requested but is missing
+    if kind in ("single_index", "joint_sieve"):
+        for k in ("second_stage", "second_stage_ls"):
+            r = entry.get(k)
+            if r is None:
+                continue
+            if bool(getattr(r, "si_constrained", False)) != want_constrained:
+                print(f"  [resume] {spec_name}: stored under a different link setting "
+                      f"(si_constrained={getattr(r, 'si_constrained', False)}, "
+                      f"want {want_constrained}) -- recomputing")
+                return False
+    return True
+
+
+def _spec_done(existing, kind):
+    """-> callable(spec_name) returning the stored entry if it can be reused, else None."""
 
     def _f(spec_name):
         if not _resume_on():
             return None
         entry = existing.get(spec_name)
-        if not entry or entry.get("second_stage") is None:
-            return None
-        if not DROP_LS and entry.get("second_stage_ls") is None:
-            return None                      # an LS column was requested but is missing
-        if kind in ("single_index", "joint_sieve"):
-            for k in ("second_stage", "second_stage_ls"):
-                r = entry.get(k)
-                if r is None:
-                    continue
-                if bool(getattr(r, "si_constrained", False)) != want_constrained:
-                    print(f"  [resume] {spec_name}: stored under a different link setting "
-                          f"(si_constrained={getattr(r, 'si_constrained', False)}, "
-                          f"want {want_constrained}) -- recomputing")
-                    return None
-        return entry
+        return entry if _entry_reusable(entry, kind, spec_name) else None
 
     return _f
 
@@ -418,6 +547,204 @@ def _merge_into_pickle(est_num, results):
     with open(pkl_path, "wb") as f:
         pickle.dump(results_dict, f)
     return results_dict, fresh_robust
+
+
+# ── Split execution: one spec per process, one merge ─────────────────────────────
+# WHY THIS EXISTS. _merge_into_pickle is load -> merge -> write on ONE file. Two processes
+# doing that concurrently interleave as read(A) read(B) write(A) write(B) and B's write wins,
+# silently dropping every spec that only A computed. That failure mode is not hypothetical
+# here: a --spec12 run destroyed the other seven specs of a full-grid pickle on 2026-07-31.
+# So the split does not make the shared write safe -- it removes it. A --spec-id task writes
+# exactly one file that only it can name, and the merge, which is the sole writer of every
+# shared artifact, runs once, alone, after the tasks are done.
+def run_one_spec(est_num, kind, time_block=False, spec_token=None):
+    """Estimate ONE spec and write est{N}/_specs/spec_{S}.pkl. Touches nothing else.
+
+    Returns the artifact path. This function must never open estimation_results.pkl,
+    ts_link_band_est{N}.pkl or the phi CSVs -- for reading or for writing. Everything shared
+    is built later by merge_spec_artifacts()."""
+    sid, iv, s_name, spec_name = resolve_spec_id(spec_token, kind, time_block=time_block)
+    path = _spec_artifact(est_num, sid)
+    tflag = " + Time" if time_block else ""
+    print(f"\n=== ESTIMATION {est_num}: {kind}{tflag} | spec {sid} [{spec_name}] ===")
+
+    if _resume_on() and path.exists():
+        try:
+            with open(path, "rb") as f:
+                prev = pickle.load(f)
+        except Exception as e:
+            raise RuntimeError(f"existing {path} unreadable ({e}); delete it and re-run") from e
+        if not isinstance(prev, dict) or "result" not in prev:
+            raise RuntimeError(f"existing {path} is not a per-spec artifact; delete it and re-run")
+        res_main, res_ls = prev["result"][0], prev["result"][1]
+        if _entry_reusable({"second_stage": res_main, "second_stage_ls": res_ls},
+                           kind, spec_name):
+            print(f"  [resume] spec {sid}: already on disk -> {path}")
+            return path
+
+    # The warm-start chain of the serial runner (_exec_block) is deliberately not
+    # reproduced: _exec_spec reads warm_theta ONLY in the joint_sieve/joint_kernel branch,
+    # so for the single-index kinds that make up EST_CONFIG a per-spec run is the same
+    # computation as the serial one. For a warm-started kind it would not be, hence the warning.
+    if kind not in ("logit", "single_index"):
+        print(f"  [warn] kind={kind} warm-starts each spec from the previous fit in the same "
+              f"state block; --spec-id starts cold, so results may differ from a serial grid")
+
+    df = build_pooled_data(time_block=time_block)
+    _, iv_specs, state_blocks = define_specifications(time_block=time_block)
+    # .copy() matches _exec_block: run_pooled_first_stage adds v_hat columns in place.
+    result = _exec_spec((df.copy(), iv, iv_specs[iv], s_name, state_blocks[s_name], kind, None))
+    res_main, res_ls, spec_name_out, res_fs = result
+    if res_main is None and res_ls is None:
+        print(f"  [!] spec {sid} [{spec_name}] produced no fit; recording the empty result")
+
+    from utils.sleep_links import link_constrained
+    payload = {
+        "schema": 1,
+        "est_num": est_num,
+        "kind": kind,
+        "time_block": bool(time_block),
+        "spec_id": sid,
+        "spec_name": spec_name_out,
+        "si_constrained": link_constrained(),
+        "drop_ls": DROP_LS,
+        "written_utc": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        # exactly the 4-tuple _merge_into_pickle consumes, so the merge applies the SAME
+        # semantics to a per-spec artifact as the serial runner applies in-process.
+        "result": result,
+    }
+    _atomic_pickle_dump(payload, path)
+    print(f"Saved spec {sid} [{spec_name_out}] -> {path}")
+    return path
+
+
+def _load_spec_artifacts(est_num, kind, time_block):
+    """-> ({spec_id: payload}, [(spec_id, spec_name) expected]). Fails loudly on a bad file."""
+    sdir = _specs_dir(est_num)
+    expected = [(sid, spec_name_of(iv, s)) for sid, iv, s in spec_grid(kind, time_block=time_block)]
+    exp_names = dict(expected)
+    found = {}
+    for p in sorted(sdir.glob("spec_*.pkl")):
+        stem = p.stem[len("spec_"):]
+        if not stem.isdigit():
+            raise RuntimeError(f"unparseable per-spec artifact name: {p}")
+        sid = int(stem)
+        if sid not in exp_names:
+            raise RuntimeError(
+                f"{p} is spec {sid}, which is not part of the {kind} grid "
+                f"({sorted(exp_names)}) -- move it aside before merging")
+        try:
+            with open(p, "rb") as f:
+                payload = pickle.load(f)
+        except Exception as e:
+            raise RuntimeError(
+                f"per-spec artifact {p} is unreadable ({e}) -- delete it and re-run that spec; "
+                f"merging around it would silently drop the spec") from e
+        if not isinstance(payload, dict) or "result" not in payload:
+            raise RuntimeError(f"{p} is not a per-spec artifact written by --spec-id")
+        for key, want in (("est_num", est_num), ("kind", kind), ("time_block", bool(time_block))):
+            if payload.get(key) != want:
+                raise RuntimeError(
+                    f"{p} was written for {key}={payload.get(key)!r} but the merge is for "
+                    f"{key}={want!r} -- the _specs dir holds artifacts of another estimator")
+        if payload.get("spec_id") != sid or payload.get("spec_name") != exp_names.get(sid):
+            raise RuntimeError(
+                f"{p} carries spec_id={payload.get('spec_id')!r} / "
+                f"spec_name={payload.get('spec_name')!r}, which does not match the grid entry "
+                f"{sid}={exp_names.get(sid)!r}")
+        found[sid] = payload
+    return found, expected
+
+
+def merge_spec_artifacts(est_num, kind, time_block=False, allow_partial=False,
+                         write_phi_csv=True):
+    """Fold every est{N}/_specs/spec_*.pkl into the shared pickle; rebuild the derived outputs.
+
+    THE ONLY writer of estimation_results.pkl in the split workflow, and the only writer of
+    the spec-12 band and the phi CSVs -- so no per-spec task ever contends for them. It reuses
+    _merge_into_pickle verbatim, which means a pre-existing pickle's other specs survive
+    exactly as they do in a serial run.
+
+    A missing spec is an ERROR, not a shortfall to be papered over: the whole point of the
+    split is that a task can die silently, and a merge that quietly wrote 7 of 8 specs would
+    reproduce the 07-31 loss with extra steps. --allow-partial is the explicit opt-out."""
+    _check_spec_ids()
+    found, expected = _load_spec_artifacts(est_num, kind, time_block)
+    missing = [(sid, name) for sid, name in expected if sid not in found]
+    if missing:
+        try:
+            existing = _load_existing(est_num)
+        except Exception as e:
+            existing, _why = {}, f"could not read the stored pickle ({e})"
+        else:
+            _why = None
+        lines = []
+        for sid, name in missing:
+            if _why:
+                covered = _why
+            else:
+                covered = "already in estimation_results.pkl" if existing.get(name) else "NOT in the pickle either"
+            lines.append(f"    spec {sid:>2} [{name}] -- {covered}")
+        msg = (f"[!] {len(missing)} of {len(expected)} per-spec artifacts are MISSING from "
+               f"{_specs_dir(est_num)}:\n" + "\n".join(lines))
+        if not allow_partial:
+            raise RuntimeError(
+                msg + "\n    Re-run those specs with --spec-id, or pass --allow-partial to merge "
+                      "what is there anyway.")
+        print(msg + "\n    --allow-partial given: merging the rest anyway.", flush=True)
+
+    results = [found[sid]["result"] for sid in sorted(found)]
+    print(f"[merge] folding {len(results)} per-spec artifact(s) into "
+          f"est{est_num}/estimation_results.pkl", flush=True)
+    results_dict, fresh_robust = _merge_into_pickle(est_num, results)
+    print(f"[merge] pickle now holds {len(results_dict)} spec(s); "
+          f"{len(fresh_robust)} robust fit(s) written this pass")
+
+    out = _out_dir(est_num)
+    if not write_phi_csv:
+        print(f"[merge] --skip-phi-csv: band and phi CSVs left untouched -> {out}")
+        return results_dict
+    # Same rule as the serial runner: nothing new merged and the CSVs already there means the
+    # stored CSVs and band already describe this pickle, so leave their content AND mtimes
+    # alone rather than spending minutes rewriting them identically.
+    if not fresh_robust and (out / "market_panel_phis.csv").exists():
+        print(f"[merge] nothing recomputed; phi CSVs/band untouched -> {out}")
+        return results_dict
+    df = build_pooled_data(time_block=time_block)
+    _write_derived_outputs(est_num, kind, results_dict, df)
+    return results_dict
+
+
+def _write_derived_outputs(est_num, kind, results_dict, df):
+    """Spec-12 phi_t band + the phi CSVs, from the MERGED dict. One writer, always."""
+    out = _out_dir(est_num)
+    # Integrate the time-series report's link-comparison CI band into the main routine:
+    # the spec-12 single-index/joint-sieve fit carries a national phi_t bootstrap band
+    # (phi_t_boot); persist it where estimation_timeseries_test._link_band reads it.
+    # It is written HERE, from the merged dict, and never by a per-spec task: the band is one
+    # file describing one cell, so 12 concurrent tasks must not each have a claim on it. The
+    # spec-12 task still computes phi_t_boot (want_band keys off the spec name) and carries it
+    # inside its own artifact; this step just unpacks it.
+    if kind in ("single_index", "joint_sieve"):
+        sp12 = results_dict.get("IV_HausmanFull x Tech", {}).get("second_stage")
+        boot = getattr(sp12, "phi_t_boot", None) if sp12 is not None else None
+        if boot is not None:
+            # rout_dir() honours SLEEP_OUT_ROOT like _out_dir above, so the band lands with
+            # the fit it came from rather than overwriting the production one.
+            rout = _paths_mod.rout_dir()
+            with open(rout / f"ts_link_band_est{est_num}.pkl", "wb") as f:
+                pickle.dump(boot, f)
+            print(f"Saved spec-12 phi_t CI band -> ts_link_band_est{est_num}.pkl")
+
+    # NOTE: _calculate_phis runs over the MERGED dict, so even a partial robust re-run
+    # rebuilds the phi columns of every stored spec -- the CSVs stay complete.
+    df["year_quarter"] = df["time_id"]
+    df, national_phis = _calculate_phis(df, results_dict, LINK_OF[kind])
+    df.to_csv(out / "market_panel_phis.csv", index=False)
+    if national_phis:
+        agg = reduce(lambda l, r: pd.merge(l, r, on="year_quarter", how="outer"), national_phis.values())
+        agg.to_csv(out / "national_phi_t.csv", index=False)
+    print(f"Saved results and Phis -> {out}")
 
 
 def _calculate_phis(df, results_dict, link):
@@ -537,34 +864,24 @@ def run_sleep_estimator(est_num, kind, time_block=False, spec12_only=False, n_jo
         print("[resume] every spec was already on disk but the phi CSVs are missing "
               "-- rebuilding them from the stored fits")
 
-    # Integrate the time-series report's link-comparison CI band into the main routine:
-    # the spec-12 single-index/joint-sieve fit carries a national phi_t bootstrap band
-    # (phi_t_boot); persist it where estimation_timeseries_test._link_band reads it.
-    if kind in ("single_index", "joint_sieve"):
-        sp12 = results_dict.get("IV_HausmanFull x Tech", {}).get("second_stage")
-        boot = getattr(sp12, "phi_t_boot", None) if sp12 is not None else None
-        if boot is not None:
-            # rout_dir() honours SLEEP_OUT_ROOT like _out_dir above, so the band lands with
-            # the fit it came from rather than overwriting the production one.
-            rout = _paths_mod.rout_dir()
-            with open(rout / f"ts_link_band_est{est_num}.pkl", "wb") as f:
-                pickle.dump(boot, f)
-            print(f"Saved spec-12 phi_t CI band -> ts_link_band_est{est_num}.pkl")
-
-    # NOTE: _calculate_phis runs over the MERGED dict, so even a partial robust re-run
-    # rebuilds the phi columns of every stored spec -- the CSVs stay complete.
-    df["year_quarter"] = df["time_id"]
-    df, national_phis = _calculate_phis(df, results_dict, LINK_OF[kind])
-    df.to_csv(out / "market_panel_phis.csv", index=False)
-    if national_phis:
-        agg = reduce(lambda l, r: pd.merge(l, r, on="year_quarter", how="outer"), national_phis.values())
-        agg.to_csv(out / "national_phi_t.csv", index=False)
-    print(f"Saved results and Phis -> {out}")
+    _write_derived_outputs(est_num, kind, results_dict, df)
 
 
 # ── Config-driven CLI for the lineup E3/E4 ───────────────────────────────────────
 # (E1/E2 are separate estimators with their own scripts.) Run one estimator with:
 #   python estimation_sleep_common.py --est N
+#
+# SPLIT ACROSS A SLURM ARRAY. The grid is a serial loop in one process (E3 2901 s, E4 4724 s
+# measured locally), but the specs are independent, so on a 128-core node the grid costs one
+# spec's wall-clock instead of eight:
+#
+#   sbatch --array=5-12 ... --wrap 'python estimation_sleep_common.py --est 3 \
+#                                     --spec-id $SLURM_ARRAY_TASK_ID'
+#   python estimation_sleep_common.py --est 3 --merge-specs        # afterok the array
+#
+# The array indices ARE the spec ids (5-12 for the single-index kinds, which skip the Base
+# block) -- see spec_grid/`--list-specs`. Each task writes only est{N}/_specs/spec_{S}.pkl;
+# the merge is the only step that opens estimation_results.pkl, the band or the phi CSVs.
 #
 # The lineup is the SINGLE-INDEX pair under the shape-constrained link. The joint sieve was
 # dropped: it estimates the direction and the link together, and its reported band conditions
@@ -583,7 +900,42 @@ if __name__ == "__main__":
     p.add_argument("--est", type=int, required=True, choices=sorted(EST_CONFIG),
                    help="Estimator id 3 or 4 (single-index, without / with the Time block)")
     p.add_argument("--spec12", action="store_true", help="Only run spec 12 (Tech[+Time] x IV_HausmanFull)")
+    p.add_argument("--spec-id", metavar="S",
+                   help="Run ONE spec into est{N}/_specs/spec_{S}.pkl and touch nothing else. "
+                        "S is a 1-based grid id (SPEC_MAP numbering: 1-4 Base, 5-8 Macro, "
+                        "9-12 Tech) or a spec name such as 'IV_HausmanFull x Tech'.")
+    p.add_argument("--merge-specs", action="store_true",
+                   help="Fold est{N}/_specs/spec_*.pkl into estimation_results.pkl and rebuild "
+                        "the band + phi CSVs. The only writer of those files.")
+    p.add_argument("--allow-partial", action="store_true",
+                   help="--merge-specs: merge even though some per-spec artifacts are missing "
+                        "(they are reported either way; without this the merge refuses).")
+    p.add_argument("--skip-phi-csv", action="store_true",
+                   help="--merge-specs: stop after the pickle; leave the band and phi CSVs alone.")
+    p.add_argument("--list-specs", action="store_true",
+                   help="Print the spec id -> spec name grid for --est N and exit.")
     args = p.parse_args()
     _kind, _tb = EST_CONFIG[args.est]
-    run_sleep_estimator(args.est, _kind, time_block=_tb, spec12_only=args.spec12)
-    print(f"\n--- Pipeline {args.est} ({_kind}{' + Time' if _tb else ''}) Completed ---")
+
+    if args.list_specs:
+        _check_spec_ids()
+        for _sid, _iv, _s in spec_grid(_kind, time_block=_tb):
+            print(f"{_sid:>2}  {spec_name_of(_iv, _s)}")
+        raise SystemExit(0)
+    if args.spec_id is not None and args.merge_specs:
+        p.error("--spec-id and --merge-specs are separate steps; run the specs, then the merge")
+    if args.spec_id is not None and args.spec12:
+        p.error("--spec-id and --spec12 both select specs; use --spec-id 12 for the spec-12 cell")
+
+    if args.spec_id is not None:
+        run_one_spec(args.est, _kind, time_block=_tb, spec_token=args.spec_id)
+        print(f"\n--- Spec {args.spec_id} of {args.est} "
+              f"({_kind}{' + Time' if _tb else ''}) Completed ---")
+    elif args.merge_specs:
+        merge_spec_artifacts(args.est, _kind, time_block=_tb,
+                             allow_partial=args.allow_partial,
+                             write_phi_csv=not args.skip_phi_csv)
+        print(f"\n--- Merge {args.est} ({_kind}{' + Time' if _tb else ''}) Completed ---")
+    else:
+        run_sleep_estimator(args.est, _kind, time_block=_tb, spec12_only=args.spec12)
+        print(f"\n--- Pipeline {args.est} ({_kind}{' + Time' if _tb else ''}) Completed ---")

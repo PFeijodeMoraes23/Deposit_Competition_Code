@@ -27,10 +27,10 @@ Usage:
 """
 import os, sys, glob, json, zipfile, shutil, argparse, datetime, math
 
-ROUTINE_LABEL = {
-    1: "Local B-type", 2: "Pooled Linear",
-    3: "Pooled Single-Index", 4: "Pooled Single-Index + Time",
-}
+from utils import paths as _paths
+from utils import routines as _routines   # aliased: `routines` is a local in main()
+
+ROUTINE_LABEL = {e: _routines.est_label(e) for e in _routines.ACTIVE}
 SUBDIRS = ["logit", "cluster_raw", "cluster_processed", "legacy"]
 # Increasing-complexity RC sequence: each stage frees one more random coefficient
 # (sigma = 1 σ ... extended = 8). The per-routine progression of Q across these stages is
@@ -39,7 +39,7 @@ STAGE_SEQUENCE = ["sigma", "rc2", "rc3", "rc4", "full", "ext1", "ext2", "extende
 
 # SUMMARY.md is written next to the paper draft (V_Main.tex) so the results writeup travels
 # with the manuscript. Falls back to cluster_processed/ if that folder is unavailable.
-SUMMARY_DIR = r"C:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\Drafts\Deposit Competition"
+SUMMARY_DIR = str(_paths.drafts_dir())
 
 # Variable names — must mirror blp_1_estimation.jl (X_COLS / D_COLS) so θ₂ indices decode.
 X_COLS = ["fgc_covered", "has_ip", "seg_S2", "seg_S3", "seg_S4", "seg_S5", "log_total_assets_lag", "is_state_owned"]
@@ -192,10 +192,7 @@ def compute_coef_heterogeneity(index, res_dir):
     return out
 
 def default_results_dir():
-    repo = os.path.dirname(os.path.abspath(__file__))
-    root = os.path.dirname(os.path.dirname(repo))  # .../Open-Finance
-    return os.path.join(root, "BCB", "Egan_et_al_2025_Rep", "processed",
-                        "ESTIMATION_OUTPUT", "BLP_RESULTS")
+    return str(_paths.blp_results_dir())
 
 def move_into(path, dest_dir):
     """Move a file into dest_dir, overwriting any same-named file there."""
@@ -211,7 +208,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("results_dir", nargs="?", default=default_results_dir())
     ap.add_argument("--stage", default="extended", help="cluster stage to treat as final")
-    ap.add_argument("--routines", default="3,4")
+    ap.add_argument("--routines", default=_routines.csv(_routines.LINK_ESTS))
     args = ap.parse_args()
 
     RES = os.path.abspath(args.results_dir)

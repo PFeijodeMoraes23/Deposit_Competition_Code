@@ -36,6 +36,9 @@ using JSON3, Serialization, ArgParse, Printf, Dates
 # Shared SE machinery (wild cluster bootstrap + analytical GMM sandwich, BLP_SE_METHOD).
 include(joinpath(@__DIR__, "se_common.jl"))
 include(joinpath(@__DIR__, "of_root.jl"))
+# The lineup and the demand prefixes come from config/routines.toml, which utils/routines.py
+# reads too. Guarded because several files in one session want the consts.
+isdefined(Main, :ROUTINE_REGISTRY) || include(joinpath(@__DIR__, "routines.jl"))
 
 # ── Optional: true L-BFGS-B outer solver (Byrd–Lu–Nocedal–Zhu) ──────────────────
 # LBFGSB.jl handles the box directly (active set + projected line search), whereas
@@ -147,22 +150,13 @@ const IV_ESTBAN  = ["estban_rival_branches_lag"]
 const _log_buf  = String[]
 const _log_lock = ReentrantLock()
 
-# Static fallback map of demand-prep prefixes, used only when the driver hasn't
-# auto-discovered + passed BLP_DEMAND_PREFIX. E1/E2 use the bare demand_{k}; E3+ the
-# link-based variants written by estimation_demand_link_common.py, whose tags come from
-# its DEMAND_CFG — keep the two in step.
-const DEMAND_PREFIXES = Dict(
-    1 => "demand_1",
-    2 => "demand_2",
-    3 => "demand_3_index",
-    4 => "demand_4_index_time",
-)
-
 function input_filename(estim::Int, spec_id::Int)::String
     # Prefer the prefix auto-discovered + passed by blp_2_rc.jl (handles new routines with no
-    # static-map edit); fall back to the static map, then the bare demand_{k}.
+    # registry edit); fall back to DEMAND_PREFIXES (routines.jl, from config/routines.toml,
+    # where E1/E2 carry the bare demand_{k} and E3/E4 the link tags that
+    # estimation_demand_link_common.DEMAND_CFG writes), then the bare demand_{k}.
     pfx = get(ENV, "BLP_DEMAND_PREFIX", "")
-    prefix = isempty(pfx) ? get(DEMAND_PREFIXES, estim, "demand_$(estim)") : pfx
+    prefix = isempty(pfx) ? routine_demand_prefix(estim) : pfx
     return "$(prefix)_spec_$(spec_id).parquet"
 end
 
@@ -223,6 +217,32 @@ function get_paths(is_hpc::Bool; local_dir=nothing)
         output_dir = joinpath(data_dir, "ESTIMATION_OUTPUT", "BLP_RESULTS")
     end
     return input_dir, draws_dir, output_dir
+end
+
+"""
+    demand_parquet_path(estim, spec_id, args) -> Union{String,Nothing}
+
+Locate routine `estim`'s demand-prep parquet for `spec_id`. The name comes from
+`input_filename` (BLP_DEMAND_PREFIX, set by blp_2_rc.jl from the prefix it discovered); the
+directory from `demand_search_dirs` (of_root.jl) — data/input first, then
+data/output/DEMAND_PREP where the on-cluster sleepiness phase writes, so an uploaded parquet
+wins over a cluster-produced one. Off the cluster only the local DEMAND_PREP is searched.
+
+Returns `nothing` after printing the `[!] Missing` line, naming every searched location, so
+each caller keeps its own "missing input ⇒ skip this spec" control flow.
+
+Lives here, in the CPU baseline, rather than in blp_gpu_engine.jl: `run_blp_estimation`
+below needs it, and foundation_demand_eval.jl loads this file WITHOUT the engine when
+CF_GPU=0. The engine include()s this file, so its three entry points see it too.
+"""
+function demand_parquet_path(estim::Int, spec_id::Int, args)
+    in_dir, _, out_dir = get_paths(args["hpc"]; local_dir=get(args, "local_dir", nothing))
+    fname = input_filename(estim, spec_id)
+    dirs  = demand_search_dirs(in_dir, out_dir)
+    path  = resolve_in_then_out(fname, dirs...)
+    path === nothing && println("  [!] Missing: $fname. Searched:\n" *
+                                describe_search_dirs(dirs...))
+    return path
 end
 
 # ==========================================================================
@@ -1185,10 +1205,8 @@ function run_blp_estimation(estim::Int, spec_id::Int, args,
     println("  Estimation $estim — Specification $spec_id")
     println("=" ^ 60)
 
-    input_dir, _, _ = get_paths(args["hpc"]; local_dir=args["local_dir"])
-    fname = input_filename(estim, spec_id)
-    path  = joinpath(input_dir, fname)
-    isfile(path) || (println("  [!] Missing: $path"); return nothing)
+    path = demand_parquet_path(estim, spec_id, args)
+    path === nothing && return nothing
 
     df = DataFrame(Parquet2.Dataset(path); copycols=true)
     nrow(df) == 0 && (println("  [!] Empty dataframe."); return nothing)
