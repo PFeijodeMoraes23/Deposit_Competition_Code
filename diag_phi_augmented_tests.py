@@ -42,7 +42,7 @@ from estimation_2_sleep import (build_pooled_data, define_specifications,
                                 apply_imbalanced_cluster_correction)
 from utils import paths as _paths
 
-DEMAND_PREP = _paths.PROCESSED / "ESTIMATION_OUTPUT" / "DEMAND_PREP"
+DEMAND_PREP = _paths.demand_prep_root()
 
 
 def demand_parquet(estim: int = 2):
@@ -61,11 +61,26 @@ def demand_parquet(estim: int = 2):
     return max(cands, key=lambda p: p.stat().st_mtime)
 
 
-# Module-level default preserved so every existing arm keeps working unchanged; `main` rebinds
-# it when --estim is passed.
-PARQUET = demand_parquet(2)
-ESTIM = 2      # the routine PARQUET points at; set by --estim in main. arm_blpelast
+ESTIM = 2      # the routine the parquet is taken from; set by --estim in main. arm_blpelast
                # reads it to pair the routine's own alpha-hat with its own parquet.
+PARQUET = None  # resolved by parquet_path() on first use
+
+
+def parquet_path():
+    """The demand parquet the arms read, resolved (and cached) on first call.
+
+    Resolution is deferred rather than done at import so that importing this module costs
+    nothing but the imports: the exporters (make_diag_tables.py, make_d2bc_cross_routine.py)
+    and the sibling diagnostics pull only OUT_DIR and the shared helpers from here, and a
+    vintage whose spec-12 parquets are not on disk must not turn that import into a
+    FileNotFoundError. The arms themselves still fail loudly the moment they need the data.
+    """
+    global PARQUET
+    if PARQUET is None:
+        PARQUET = demand_parquet(ESTIM)
+    return PARQUET
+
+
 BLP_RAW = _paths.PROCESSED / "ESTIMATION_OUTPUT" / "BLP_RESULTS" / "cluster_raw"
 OUT_DIR = _paths.PROCESSED / "ESTIMATION_OUTPUT" / "DIAG_PHI_SEPARATION"
 OUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -110,7 +125,7 @@ def load_sleep_frame(time_block=False):
 
 def merge_parquet_cols(df, cols):
     """Bring parquet columns onto the sleep frame in SLEEP-FRAME units."""
-    pq = pd.read_parquet(PARQUET, columns=["entity_id", "time_id"] + cols)
+    pq = pd.read_parquet(parquet_path(), columns=["entity_id", "time_id"] + cols)
     for c in ("Dep_Act", "M_mt", "M_nat"):
         if c in cols:
             pq[c] = pq[c] / DEP_SCALE
@@ -536,7 +551,7 @@ def report_permutation(pr, label, wcb_coef, wcb_p, wcb_se=None, carry=None, alph
 def arm_identity():
     """D0: the accounting identity, its selection, and accrual-rate consistency."""
     print("\n=== D0: identity / tautology check ===")
-    pq = pd.read_parquet(PARQUET)
+    pq = pd.read_parquet(parquet_path())
     b = pq[pq["is_B"].astype(bool)]
     d_ = pq[~pq["is_B"].astype(bool)]
     res_b = (b["deposit_balance"] - b["phi_mt"] * b["gross_return_lag"] * b["lagged_deposits"]
@@ -559,7 +574,7 @@ def arm_identity():
     print(f"  accrual consistency |g_sleep - g_demand|: max={g_diff.max():.3e}")
 
     # censoring measured on the FULL sleep frame (phi mapped from market level)
-    phi_map = (pd.read_parquet(PARQUET, columns=["mca_code", "time_id", "phi_mt"])
+    phi_map = (pd.read_parquet(parquet_path(), columns=["mca_code", "time_id", "phi_mt"])
                .drop_duplicates(["mca_code", "time_id"]))
     df = df.drop(columns=["phi_mt"]).merge(phi_map, on=["mca_code", "time_id"], how="left")
     df["phi_use"] = np.where(df["CODMUN_IBGE"].astype(str) != "0", df["phi_mt"], df["phi_t"])
@@ -599,9 +614,9 @@ def build_uncensored_inflow(df):
     phi is a MARKET-level object (estimation_demand_link_common.py:433-463), so it can be
     mapped to censored rows too: dedupe phi_mt by (mca_code, time_id) and phi_t by time_id.
     """
-    phi_mt = (pd.read_parquet(PARQUET, columns=["mca_code", "time_id", "phi_mt"])
+    phi_mt = (pd.read_parquet(parquet_path(), columns=["mca_code", "time_id", "phi_mt"])
               .dropna().drop_duplicates(["mca_code", "time_id"]))
-    phi_t = (pd.read_parquet(PARQUET, columns=["time_id", "phi_t"])
+    phi_t = (pd.read_parquet(parquet_path(), columns=["time_id", "phi_t"])
              .dropna().drop_duplicates(["time_id"]))
     out = df.drop(columns=[c for c in ("phi_mt", "phi_t") if c in df.columns])
     out = out.merge(phi_mt, on=["mca_code", "time_id"], how="left")
@@ -692,7 +707,7 @@ def arm_blpelast():
     alpha) multiplies objects from two different decompositions and tests nothing coherent.
     The observed side is the shared linear kernel and is common to every routine's run."""
     print("\n=== D5: BLP elasticity consistency (implied vs observed spread response) ===")
-    pq = pd.read_parquet(PARQUET, columns=["entity_id", "time_id", "is_B", "deposit_type",
+    pq = pd.read_parquet(parquet_path(), columns=["entity_id", "time_id", "is_B", "deposit_type",
                                            "share_B_cond", "phi_mt", "M_mt"])
     b = pq[pq["is_B"].astype(bool) & pq["deposit_type"].isin([4, 5])].dropna(
         subset=["share_B_cond", "phi_mt", "M_mt"]).copy()
@@ -756,13 +771,11 @@ if __name__ == "__main__":
                          "~0.92 censors more.")
     a = ap.parse_args()
 
-    # Rebind the module-level parquet BEFORE any arm runs. The arms read PARQUET at call time,
-    # so this repoints every phi source in one place.
-    if a.estim != 2:
-        PARQUET = demand_parquet(a.estim)
-        globals()["PARQUET"] = PARQUET
-        print(f"[estim E{a.estim}] phi source: {PARQUET.name}")
+    # Point the module at the requested routine BEFORE any arm runs. The arms resolve the
+    # parquet through parquet_path() at call time, so this repoints every phi source at once.
     globals()["ESTIM"] = a.estim
+    if a.estim != 2:
+        print(f"[estim E{a.estim}] phi source: {parquet_path().name}")
 
     to_run = list(ARMS) if a.arm == "all" else [a.arm]
     all_rows = []

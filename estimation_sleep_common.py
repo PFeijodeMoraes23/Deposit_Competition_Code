@@ -91,6 +91,40 @@ DROP_LS = os.environ.get("SLEEP_DROP_LS", "1") != "0"
 # SLEEP_LS_ONLY=1: compute ONLY the LS variant (res_robust=None); the saved robust results are
 # preserved by merge-on-save. Requires SLEEP_DROP_LS=0 to have any effect. See _exec_spec.
 LS_ONLY = os.environ.get("SLEEP_LS_ONLY", "0") == "1"
+# SLEEP_AME_TWOSTAGE=1 runs the two-stage (direction + link) AME bootstrap inside the estimation
+# pass, on the frame the fit was just made on, and attaches its results to the stored object --
+# the same numbers estimation_ame_twostage.py produces post hoc from the pickle, without the
+# frame rebuild. OFF by default: it costs ~2 x B re-profiled draws per cell (hours at B=999),
+# whereas the estimator's own link-only bootstrap costs minutes. Spec 12 only unless
+# SLEEP_AME_TWOSTAGE_ALL=1. Workers come from SLEEP_AME_BOOT_JOBS.
+TWOSTAGE_AME = os.environ.get("SLEEP_AME_TWOSTAGE", "0") == "1"
+TWOSTAGE_AME_ALL = os.environ.get("SLEEP_AME_TWOSTAGE_ALL", "0") == "1"
+
+
+def _attach_twostage_ame(si_res, df_target, s_cols, has_cf, loss, spec_name):
+    """Two-stage AME bootstrap on a fit that was just made, attached in place.
+
+    Writes NEW attributes only (plus cov_ame, which is None on every single-index fit): the
+    stored bse/pvalues/bse_time/pvalues_time keep their link-only meaning, because `tvalues` is
+    frozen at construction as params/bse and every downstream consumer reads it. The exporters
+    pick the two-stage numbers up through utils.se_national.select_se under SLEEP_AME_SE."""
+    from utils.sleep_links import twostage_ame_boot
+    jobs = int(os.environ.get("SLEEP_AME_BOOT_JOBS", "1"))
+    print(f"  [2s-AME] {spec_name} / {loss}: two-stage AME bootstrap (workers={jobs})")
+    try:
+        out = twostage_ame_boot(df_target, s_cols, has_cf, si_res, loss, degree=3,
+                                fe_time_col=FE_TIME_COL, workers=jobs, keep_draws=False)
+    except Exception as e:
+        print(f"  [2s-AME] SKIPPED ({type(e).__name__}: {e})")
+        return
+    si_res.ame_boot = {s: out[s] for s in ("congl", "quarter")}
+    si_res.bse_2s = pd.Series(out["congl"]["bse"])
+    si_res.pvalues_2s = pd.Series(out["congl"]["pvalues"])
+    si_res.bse_time_2s = pd.Series(out["quarter"]["bse"])
+    si_res.pvalues_time_2s = pd.Series(out["quarter"]["pvalues"])
+    si_res.ame_2s_meta = out["meta"]
+    _nm = out["meta"]["names"]
+    si_res.cov_ame = pd.DataFrame(out["congl"]["cov"], index=_nm, columns=_nm)
 
 
 def _out_dir(est_num):
@@ -151,8 +185,11 @@ def _exec_spec(args):
             if lg is None:                      # fit_single_index would AttributeError on None
                 print(f"  [single-index/{loss}] logit direction failed -- skipped")
                 return None
-            return fit_single_index(df_target, s_cols, has_cf=has_cf, logit_res=lg, degree=3,
-                                    fe_time_col=FE_TIME_COL, phi_band=band)
+            _si = fit_single_index(df_target, s_cols, has_cf=has_cf, logit_res=lg, degree=3,
+                                   fe_time_col=FE_TIME_COL, phi_band=band)
+            if _si is not None and TWOSTAGE_AME and (is_spec12 or TWOSTAGE_AME_ALL):
+                _attach_twostage_ame(_si, df_target, s_cols, has_cf, loss, spec_name)
+            return _si
 
         res = None if LS_ONLY else _single_index("cauchy", want_band)
         # scipy's plain least squares is loss="linear" (NOT "ls"); the Julia engine spells the

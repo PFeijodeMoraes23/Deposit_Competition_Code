@@ -336,15 +336,15 @@ def do_estimation():
         if res_ss is not None:
             safe_name = f"Spec{spec_number:02d}_" + spec_name.replace(" ", "_").replace("/", "").replace(":", "")
 
-            _ROOT = Path(__file__).resolve().parents[2]
-            drafts_dir = _ROOT / "BCB" / "Egan_et_al_2025_Rep" / "processed" / "ESTIMATION_OUTPUT" / "Rout"
-            drafts_dir.mkdir(parents=True, exist_ok=True)
+            # rout_dir() honours SLEEP_OUT_ROOT like OUTPUT_DIR above (and creates the
+            # directory), so the TeX lands with the fits it was generated from.
+            rout = _paths_mod.rout_dir()
             rout_level = "est1"
-            tex_file = drafts_dir / f"{rout_level}_{safe_name}.tex"
+            tex_file = rout / f"{rout_level}_{safe_name}.tex"
             from utils.tex_preamble import wrap_table
             with open(tex_file, 'w', encoding='utf-8') as f: f.write(wrap_table(res_ss.summary().as_latex()))
             if res_fs is not None:
-                tex_file_fs = drafts_dir / f"{rout_level}_{safe_name}_FirstStage.tex"
+                tex_file_fs = rout / f"{rout_level}_{safe_name}_FirstStage.tex"
                 with open(tex_file_fs, 'w', encoding='utf-8') as f: f.write(wrap_table(res_fs.summary().as_latex()))
             results_dict[spec_name] = {'spec_number': spec_number, 'spec_label': f"({spec_number}) {spec_name}", 'second_stage': res_ss, 'first_stage': res_fs}
 

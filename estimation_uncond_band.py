@@ -204,8 +204,7 @@ def run_cell(est, loss_lbl, B, attach):
     print(f"  foc_norm={out['meta']['foc_norm']:.3e}  refit failures={out['meta']['n_fail']}"
           f"  runtime {out['meta']['runtime_s']/60:.1f} min")
 
-    rout = root / "Rout"
-    rout.mkdir(parents=True, exist_ok=True)
+    rout = _paths_mod.rout_dir()
     fp = rout / f"ts_link_band_est{est}_uncond_{loss_lbl}.pkl"
     with open(fp, "wb") as fh:
         pickle.dump(out, fh)

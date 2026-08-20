@@ -29,13 +29,14 @@ import json
 import math
 import pathlib
 
+from utils import paths as _paths
 import make_blp_rc_table as rc                    # DRAFTS_DIR
 from make_iv_tables import _wrap, _num, _F, _tf, _alpha_se   # reuse the formatting scaffold
 
 ROOT       = pathlib.Path(__file__).resolve().parent
-DATA_DIR   = ROOT.parents[1] / "BCB" / "Egan_et_al_2025_Rep" / "processed"
-WEAK_IV    = DATA_DIR / "ESTIMATION_OUTPUT" / "BLP_RESULTS" / "cluster_processed" / "weak_iv_sleep.json"
-TABLES_DIR = DATA_DIR / "ESTIMATION_OUTPUT" / "Rout"
+DATA_DIR   = _paths.PROCESSED
+WEAK_IV    = _paths.estimation_output() / "BLP_RESULTS" / "cluster_processed" / "weak_iv_sleep.json"
+TABLES_DIR = _paths.estimation_output() / "Rout"   # cluster-derived, not per-vintage
 DRAFTS_DIR = rc.DRAFTS_DIR
 
 SPEC_ORDER = ["IV_CostShifters", "IV_Wholesale", "IV_HausmanFull"]
@@ -161,7 +162,7 @@ def build_phi(wiv):
     header = (r"Link & mean $\hat\phi$ OLS & mean $\hat\phi$ IV & mean$|\Delta|$ & "
               r"Pearson & Spearman & trend OLS & trend IV")
     body = []
-    for link, lbl in (("logit", r"Logit (E3/E4)"), ("sieve", r"Sieve (E7/E8)")):
+    for link, lbl in (("logit", r"Logit link"), ("sieve", r"Monotone sieve link")):
         s = phi.get(link)
         if not s:
             continue
@@ -176,7 +177,9 @@ def build_phi(wiv):
             r"(no control function) vs.\ IV\_HausmanFull (control function), spec~12 "
             r"(IV\_HausmanFull\,$\times$\,Tech), on the common sample where the instruments exist. "
             r"$\hat\phi$ is built from the native index $\times$ link via \texttt{phi\_from\_native} "
-            r"(the logit and the E7/E8 monotone sieve). A strong negative correlation and a reversed "
+            r"under the two link forms \texttt{weak\_iv\_sleep\_analysis.py} fits for this "
+            r"diagnostic---the logit and the monotone sieve---which are link shapes, not the "
+            r"reported estimation strategies. A strong negative correlation and a reversed "
             r"trend indicate the control function materially changes the estimated inattention (it "
             r"pulls $\hat\phi$ off the boundary), so it earns its place.")
     return _wrap(body, col_fmt, r"Does the Control Function Move the Estimated Sleepiness $\hat\phi_t$? (Spec.~12)",

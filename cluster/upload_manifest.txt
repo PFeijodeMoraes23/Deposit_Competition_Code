@@ -1,0 +1,98 @@
+# upload_manifest.txt -- what gets uploaded to Bouchet for a cluster run.
+#
+# ONE source of truth for the staging list. The same list is duplicated as prose in three
+# preflight blocks (submit_cf_all.sh, submit_bbl_all.sh, submit_blp_2_rc_default.sh); those
+# scripts verify on the cluster AFTER upload, this file drives the check BEFORE it.
+# Read by stage_cluster_upload.py; also readable with grep/awk (see PARSING below).
+#
+# ---------------------------------------------------------------------------------------
+# CLUSTER LAYOUT AND THE INPUT/OUTPUT CONVENTION
+# ---------------------------------------------------------------------------------------
+# Project root on Bouchet:   /nfs/roberts/project/pi_mf2263/pf382/dep_comp
+#     scripts/      the code checkout; every submit_*.sh runs from here
+#     data/input/   ONLY files UPLOADED from the Windows machine  <-- this manifest
+#     data/output/  ONLY files PRODUCED on the cluster (BLP_DRAWS, cf/, cost/, *_outputs.zip)
+# The rule is by PRODUCER, not by role: a file the cluster wrote never belongs in data/input,
+# and a file uploaded from local never belongs in data/output.
+#
+# MOVE-VS-COPY HAZARD. zip_cf_outputs.sh archives in MOVE mode by default (add -> verify ->
+# rm) unless KEEP=1. Its cf4 pattern list once included upsilon_pix_E*.json and
+# phi_nopix_E*.parquet -- which are UPLOADED INPUTS, not outputs -- so a routine archive
+# DELETED them and emptied the directory (2026-08-01). Anything listed in this file is an
+# input: never add it to a glob in an archiver, and never let an archiver run in move mode
+# over data/input. Re-uploading is the only recovery.
+#
+# ---------------------------------------------------------------------------------------
+# PARSING
+# ---------------------------------------------------------------------------------------
+# Blank lines and lines starting with '#' are comments, EXCEPT the '#!' directives below.
+# Every other line is one entry, nine '|'-separated fields (surrounding spaces are padding):
+#
+#   name | bundle | stages | root | pattern | dest | producer | parent_root | parent_pattern
+#
+#   name           stable logical name, unique after {k} expansion
+#   bundle         data | code   -- which upload zip the file goes into
+#   stages         comma list of cluster stages that CONSUME it: blp, bbl, cf, cf4, all
+#   root           local root token, resolved through utils/paths.py (see ROOTS below)
+#   pattern        file name (or glob, for code) under that root
+#   dest           destination under the cluster project root
+#   producer       the local command that BUILDS it ('-' = tracked in git, nothing to build)
+#   parent_root    root token of the artefact it derives from ('-' = no local parent)
+#   parent_pattern file name under parent_root; the entry is STALE if it is older than this
+#
+# Shell example -- every data-bundle destination:
+#   grep -v '^#' cluster/upload_manifest.txt | awk -F'|' 'NF>1 {gsub(/ /,"");
+#       if ($2=="data") print $6"/"$5}'
+#
+# ROOTS (resolved by stage_cluster_upload.py through utils/paths.py -- no hardcoded paths):
+#   DEMAND_PREP    paths.demand_prep_root()                     active vintage; follows SLEEP_OUT_ROOT
+#   EST{k}         paths.est_dir(k)                             per-routine sleep outputs
+#   SIGMA_DIR      paths.PROCESSED/ESTIMATION_OUTPUT/DEMAND_PREP  panel_8 writes here unconditionally
+#   BLP_LOGIT      paths.estimation_output()/BLP_RESULTS/logit
+#   COST_FWD       paths.estimation_output()/COST_FWD
+#   COST_POLFUNC   paths.estimation_output()/COST_POLFUNC
+#   CF_FOUNDATION  paths.estimation_output()/CF_FOUNDATION
+#   PROCESSED      paths.PROCESSED
+#   REPO           this repository
+#
+# ---------------------------------------------------------------------------------------
+# DIRECTIVES -- the active routine lineup and each routine's demand-parquet prefix.
+# {k} in any field expands over ROUTINES; {prefix} expands to that routine's PREFIX.
+# PREFIX must match DEMAND_PREFIXES in blp_1_estimation.jl and DEMAND_CFG in
+# estimation_demand_link_common.py. Adding a routine = one line here plus one PREFIX line.
+# ---------------------------------------------------------------------------------------
+#!SPEC 12
+#!ROUTINES 1 2 3 4
+#!PREFIX 1 demand_1
+#!PREFIX 2 demand_2
+#!PREFIX 3 demand_3_index
+#!PREFIX 4 demand_4_index_time
+
+# --- 1. demand parquets: the estimation sample the BLP, BBL and CF all read ---------------
+demand_E{k}        | data | blp,bbl,cf | DEMAND_PREP   | {prefix}_spec_12.parquet       | data/input | python estimation_demand_1_prep.py --estimation {k} --spec 12 | EST{k}    | estimation_results.pkl
+
+# --- 2. demographic sigma for the parametric d-draws (blp_1_draws.jl) ---------------------
+demographics_sigma | data | blp        | SIGMA_DIR     | demographics_sigma.parquet     | data/input | python panel_8_demographics_sigma.py                          | PROCESSED | market_panel.csv
+
+# --- 3. logit delta warm-starts (blp_1_logit.jl -> blp_2_rc.jl / blp_gpu_engine.jl) -------
+logit_delta_E{k}   | data | blp        | BLP_LOGIT     | logit_delta_E{k}_spec_12.bin   | data/input | julia --project=. --threads=auto blp_1_logit.jl --est {k}     | DEMAND_PREP | {prefix}_spec_12.parquet
+
+# --- 4. forward risk-free curve. MUST be built locally: compute nodes have no outbound ----
+#        internet, and this script calls the BCB SGS + Focus APIs.
+forward_rf         | data | bbl,cf     | COST_FWD      | forward_rf_qoq.csv             | data/input | python cf_forward_rf.py --horizon 50 --start 2026Q1            | DEMAND_PREP | demand_3_index_spec_12.parquet
+
+# --- 5. fitted BBL policy function (deviations are formed around it, not observed spreads) -
+polfunc            | data | bbl        | COST_POLFUNC  | polfunc_fitted.csv             | data/input | python estimation_bbl_1_polfunc.py                            | PROCESSED | market_panel.csv
+
+# --- 6. CF4 Pix inputs. MUST be built locally: the sleep pickle is not on the cluster. -----
+#        Only needed when submit_cf_all.sh runs with DO_CF4=1 (default 0).
+upsilon_pix_E{k}   | data | cf4        | CF_FOUNDATION | upsilon_pix_E{k}_spec_12.json  | data/input | python cf_4_upsilon_export.py --estim {k} --spec 12            | EST{k}    | estimation_results.pkl
+phi_nopix_E{k}     | data | cf4        | CF_FOUNDATION | phi_nopix_E{k}_spec_12.parquet | data/input | python cf_4_upsilon_export.py --estim {k} --spec 12            | EST{k}    | estimation_results.pkl
+
+# --- 7. code. Tracked in git, so nothing to build -- but *.sh is rewritten to LF on the ----
+#        way into the zip: bash reads a CRLF shebang as a syntax error on line 1.
+#        Project.toml/Manifest.toml travel with the code or `julia --project=.` cannot resolve.
+julia_code         | code | all        | REPO          | *.jl                           | scripts    | -                                                             | -         | -
+shell_code         | code | all        | REPO          | *.sh                           | scripts    | -                                                             | -         | -
+julia_project      | code | all        | REPO          | Project.toml                   | scripts    | -                                                             | -         | -
+julia_manifest     | code | all        | REPO          | Manifest.toml                  | scripts    | -                                                             | -         | -

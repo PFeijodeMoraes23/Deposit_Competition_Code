@@ -22,6 +22,7 @@ ensure_project_venv(__file__)
 import json
 import math
 import pathlib
+from utils import paths as _paths
 import make_blp_rc_table as rc     # est_ref + DRAFTS_DIR
 import sys
 
@@ -35,11 +36,11 @@ except Exception:
     pass
 
 ROOT       = pathlib.Path(__file__).resolve().parent
-DATA_DIR   = ROOT.parents[1] / "BCB" / "Egan_et_al_2025_Rep" / "processed"
-WEAK_IV    = DATA_DIR / "ESTIMATION_OUTPUT" / "BLP_RESULTS" / "cluster_processed" / "weak_iv.json"
+DATA_DIR   = _paths.PROCESSED
+WEAK_IV    = _paths.estimation_output() / "BLP_RESULTS" / "cluster_processed" / "weak_iv.json"
 WEAK_IV_EXT1 = WEAK_IV.parent / "weak_iv_ext1.json"          # structural-δ battery (--delta-stage ext1)
 DIAG_MR      = WEAK_IV.parent / "diag_moment_reduction.json"  # diag_moment_reduction.py output
-TABLES_DIR = DATA_DIR / "ESTIMATION_OUTPUT" / "Rout"
+TABLES_DIR = _paths.estimation_output() / "Rout"   # cluster-derived, not per-vintage
 DRAFTS_DIR = rc.DRAFTS_DIR
 ROUTINES   = [1, 2, 3, 4]
 SUBS       = [("all", "all"), ("type12", "1+2"), ("type45", "4+5"),

@@ -70,14 +70,66 @@ def get_stars(pval):
     elif pval < 0.1: return "*"
     return ""
 
-def format_value(coef, se, pval, digits=4, mark=""):
+def format_value(coef, se, pval, digits=4, mark="", ci=None, stars=None):
     """`mark` flags a row whose SE comes from a non-default clustering scheme. These cells are
     TEXT mode (no surrounding $), so the marker must carry its own math delimiters -- unlike the
-    sleepiness exporters, where the dagger goes inside the existing $...$."""
+    sleepiness exporters, where the dagger goes inside the existing $...$.
+
+    `ci=(lo,hi)` prints a bracketed interval on the second line in place of the parenthesised
+    SE, for the two-stage AME bootstrap whose reported object is a bias-corrected percentile
+    interval rather than a Wald SE. `stars` overrides the p-value-derived stars so they come
+    from the same interval that is printed."""
     if pd.isna(coef):
         return "-", "-"
-    stars = get_stars(pval)
-    return f"{coef:.{digits}f}{stars}", f"({se:.{digits}f}){mark}"
+    st = get_stars(pval) if stars is None else stars
+    if ci is not None:
+        return f"{coef:.{digits}f}{st}", f"[{ci[0]:.{digits}f}, {ci[1]:.{digits}f}]{mark}"
+    return f"{coef:.{digits}f}{st}", f"({se:.{digits}f}){mark}"
+
+
+AME_CI_TOKEN = "%%AME_CI_NOTE%%"
+
+
+def ame_ci_note(ci_cols, results_dict):
+    """LaTeX sentence for a table whose single-index columns print an interval where its linear
+    columns print a standard error. Emitted only for the columns that actually carried a band,
+    so the note can never describe a construction that did not run."""
+    if not ci_cols:
+        return ""
+    meta = {}
+    for c in ci_cols:
+        m = getattr(results_dict.get(c), "ame_2s_meta", None) or {}
+        meta.setdefault("B", m.get("B"))
+        meta.setdefault("scheme", m.get("scheme"))
+    lbl = ", ".join(sorted(str(c) for c in ci_cols))
+    b_s = (f" $B={meta['B']}$ {meta['scheme']} draws," if meta.get("B") else "")
+    return (r"Column(s) " + lbl + r" report a 95\% bias-corrected percentile interval in "
+            r"brackets, not a standard error: their inference is a TWO-STAGE wild cluster "
+            r"bootstrap in which the index direction is re-solved and the link re-profiled at "
+            r"every draw," + b_s + r" and the reported object is a tangent-cone interval "
+            r"rather than a Wald statistic, because the link's shape constraints are active at "
+            r"the estimate. All other columns report standard errors in parentheses. ")
+
+
+def _twostage_band_row(res, var):
+    """(lo_bc, hi_bc, stars) for `var` from an attached two-stage AME bootstrap, or None.
+
+    National rows read the quarter-clustered band for the same reason their SEs do. Gated on
+    SLEEP_AME_SE so attaching numbers to a pickle cannot silently change a published table."""
+    if not _sen.twostage_se_enabled():
+        return None
+    ab = getattr(res, "ame_boot", None)
+    if not isinstance(ab, dict):
+        return None
+    blk = ab.get("quarter" if _sen.is_national(var) else "congl")
+    band = (blk or {}).get("band")
+    if band is None or "name" not in getattr(band, "columns", []):
+        return None
+    hit = band[band["name"] == var]
+    if hit.empty:
+        return None
+    r = hit.iloc[0]
+    return float(r["lo_bc"]), float(r["hi_bc"]), str(r["stars"])
 
 
 def pastelize_color(color, blend=0.7):
@@ -301,7 +353,7 @@ def build_latex_table(results_dict, order_keys, target_vars, out_path, title="",
                  r"\textcite{mackinnon2017wild}) in parentheses. Columns index the estimation "
                  r"strategies enumerated in Section~\ref{sec:empirical:sleep}" + _stage_note + r". "
                  # Substituted at the write site from the schemes select_se actually returned.
-                 + _sen.NOTE_TOKEN +
+                 + _sen.NOTE_TOKEN + AME_CI_TOKEN +
                  r"Significance levels: *** $p<0.01$, ** $p<0.05$, * $p<0.1$.}")
     tex.append(notes_str)
     tex.append(r"\endlastfoot")
@@ -319,6 +371,7 @@ def build_latex_table(results_dict, order_keys, target_vars, out_path, title="",
     # Target vars first, then any remaining (excluding CF nuisance term)
     ordered_vars = [v for v in target_vars if v in vars_to_print]
     _nat_schemes = set()   # what select_se ACTUALLY returned on the national rows
+    _ci_cols = set()       # columns whose second line is an interval rather than an SE
 
     if not is_first_stage:
         other_vars = [v for v in vars_to_print if v not in ordered_vars]
@@ -361,7 +414,16 @@ def build_latex_table(results_dict, order_keys, target_vars, out_path, title="",
                 if _sen.is_national(v):
                     _nat_schemes.add(_sch)
                 _mark = r"$^{\dagger}$" if _sch != "congl" else ""
-                c_str, se_str = format_value(params[v] * m, _se * m, _pv, digits=4, mark=_mark)
+                # Where a two-stage AME bootstrap is attached, the single-index columns print
+                # its bias-corrected interval instead of an SE -- same display multiplier on
+                # both endpoints, stars from the same interval. The linear columns keep the SE,
+                # so the row is mixed, which the note names explicitly.
+                _bd = _twostage_band_row(res, v)
+                _ci = (_bd[0] * m, _bd[1] * m) if _bd else None
+                c_str, se_str = format_value(params[v] * m, _se * m, _pv, digits=4, mark=_mark,
+                                             ci=_ci, stars=(_bd[2] if _bd else None))
+                if _bd:
+                    _ci_cols.add(col)
                 row_cf.append(c_str)
                 row_se.append(se_str)
             else:
@@ -444,7 +506,8 @@ def build_latex_table(results_dict, order_keys, target_vars, out_path, title="",
 
     with open(out_path, "w", encoding="utf-8") as f:
         f.write("\n".join(tex).replace(
-            _sen.NOTE_TOKEN, _sen.national_note(_nat_schemes)))
+            _sen.NOTE_TOKEN, _sen.national_note(_nat_schemes)).replace(
+            AME_CI_TOKEN, ame_ci_note(_ci_cols, results_dict)))
 
 
 def build_latex_table_landscape(results_dict, order_keys, target_vars, out_path,
@@ -475,6 +538,7 @@ def build_latex_table_landscape(results_dict, order_keys, target_vars, out_path,
                     vars_to_print.append(v)
     ordered_vars = [v for v in target_vars if v in vars_to_print]
     _nat_schemes = set()   # what select_se ACTUALLY returned on the national rows
+    _ci_cols = set()       # columns whose second line is an interval rather than an SE
     if not first_stage:   # second stage also lists any extra coefs; first stage = instruments only
         ordered_vars += [v for v in vars_to_print if v not in ordered_vars and 'v_hat' not in v.lower()]
         ordered_vars = [v for v in ordered_vars if 'v_hat' not in v.lower()]
@@ -511,7 +575,16 @@ def build_latex_table_landscape(results_dict, order_keys, target_vars, out_path,
                 if _sen.is_national(v):
                     _nat_schemes.add(_sch)
                 _mark = r"$^{\dagger}$" if _sch != "congl" else ""
-                c_str, se_str = format_value(params[v] * m, _se * m, _pv, digits=4, mark=_mark)
+                # Where a two-stage AME bootstrap is attached, the single-index columns print
+                # its bias-corrected interval instead of an SE -- same display multiplier on
+                # both endpoints, stars from the same interval. The linear columns keep the SE,
+                # so the row is mixed, which the note names explicitly.
+                _bd = _twostage_band_row(res, v)
+                _ci = (_bd[0] * m, _bd[1] * m) if _bd else None
+                c_str, se_str = format_value(params[v] * m, _se * m, _pv, digits=4, mark=_mark,
+                                             ci=_ci, stars=(_bd[2] if _bd else None))
+                if _bd:
+                    _ci_cols.add(col)
                 row_cf.append(c_str); row_se.append(se_str)
             else:
                 row_cf.append("-"); row_se.append("-")
@@ -570,7 +643,7 @@ def build_latex_table_landscape(results_dict, order_keys, target_vars, out_path,
             _stage_note +
             r". "
             # Substituted at the write site from the schemes select_se actually returned.
-            + _sen.NOTE_TOKEN +
+            + _sen.NOTE_TOKEN + AME_CI_TOKEN +
             r"Significance levels: *** $p<0.01$, ** $p<0.05$, * $p<0.1$.",
             r"\end{tablenotes}",
             r"\end{threeparttable}",
@@ -579,7 +652,8 @@ def build_latex_table_landscape(results_dict, order_keys, target_vars, out_path,
 
     with open(out_path, "w", encoding="utf-8") as f:
         f.write("\n".join(tex).replace(
-            _sen.NOTE_TOKEN, _sen.national_note(_nat_schemes)))
+            _sen.NOTE_TOKEN, _sen.national_note(_nat_schemes)).replace(
+            AME_CI_TOKEN, ame_ci_note(_ci_cols, results_dict)))
 
 
 import argparse

@@ -203,6 +203,50 @@ def build_first_stage_table(results_dict, est_num):
     return "\n".join(lines)
 
 
+AME_CI_TOKEN = "%%AME_CI_NOTE%%"
+
+
+def _ame_band_row(res, var):
+    """(lo_bc, hi_bc, stars) for `var` from an attached two-stage AME bootstrap, or None.
+
+    National rows read the quarter-clustered band for the same reason their SEs do. Gated on
+    SLEEP_AME_SE so attaching numbers to a pickle cannot silently change a published table."""
+    if not _sen.twostage_se_enabled():
+        return None
+    ab = getattr(res, "ame_boot", None)
+    if not isinstance(ab, dict):
+        return None
+    band = (ab.get("quarter" if _sen.is_national(var) else "congl") or {}).get("band")
+    if band is None or "name" not in getattr(band, "columns", []):
+        return None
+    hit = band[band["name"] == var]
+    if hit.empty:
+        return None
+    r = hit.iloc[0]
+    return float(r["lo_bc"]), float(r["hi_bc"]), str(r["stars"])
+
+
+def _ame_ci_note(ci_cols, results_dict, est_num):
+    """LaTeX sentence for a panel in which some columns print an interval and others an SE."""
+    if not ci_cols:
+        return ""
+    B = scheme = None
+    for entry in results_dict.values():
+        r = entry.get("second_stage") if isinstance(entry, dict) else None
+        m = getattr(r, "ame_2s_meta", None)
+        if m:
+            B, scheme = m.get("B"), m.get("scheme")
+            break
+    b_s = (f" $B={B}$ {scheme} draws," if B else "")
+    return (r"The " + ", ".join(sorted(ci_cols)) + r" column(s) report a 95\% bias-corrected "
+            r"percentile interval in brackets, not a standard error: their inference is a "
+            r"TWO-STAGE wild cluster bootstrap in which the index direction is re-solved and "
+            r"the link re-profiled at every draw," + b_s + r" and the reported object is a "
+            r"tangent-cone interval rather than a Wald statistic, because the link's shape "
+            r"constraints are active at the estimate. The remaining columns report standard "
+            r"errors in parentheses. ")
+
+
 def build_second_stage_table(results_dict, est_num):
     panels = _panels_for(est_num)
     panel_labels = {'Base': 'Base Specifications', 'Macro': 'Macro Specifications', 'Tech': 'Tech Specifications'}
@@ -227,7 +271,7 @@ def build_second_stage_table(results_dict, est_num):
         r"estimation-sample means, so the index is evaluated relative to the average market. "
         # Filled in at the END of this function from the schemes select_se actually returned,
         # so the note can never describe a calculation that did not run. See se_national.
-        + _sen.NOTE_TOKEN +
+        + _sen.NOTE_TOKEN + AME_CI_TOKEN +
         r"Significance levels: *** $p<0.01$, ** $p<0.05$, * $p<0.1$."
     )
 
@@ -239,6 +283,7 @@ def build_second_stage_table(results_dict, est_num):
                 'cadunico_families_per1000', 'fraction_65plus', 'fraction_young',
                 'connections_per100', 'time_trend', 'gdp_growth_yoy', 'v_hat_x_lagged_dep']
     _nat_schemes = set()   # what select_se ACTUALLY returned on the national rows
+    _ci_cols = set()       # columns whose second line is an interval rather than an SE
     p0, l0 = panels[0], panel_letters[0]
     est_nums_0 = [(el, ss_spec_numbers[(p0, ek)]) for ek, el in estimators]
     lines = [
@@ -264,7 +309,7 @@ def build_second_stage_table(results_dict, est_num):
                       "    & " + " & ".join(f"({n})" for _, n in est_nums) + r" \\", r"    \midrule"]
         for vshort in all_vars:
             coef_strs, se_strs, has_val = [], [], False
-            for ek, _ in estimators:
+            for ek, _ek_label in estimators:
                 res = _get_res(ek, panel)
                 var = vshort
                 if vshort in ('const', 'constant') and res is not None and 'nr_lagged_dep' in res.params:
@@ -287,8 +332,19 @@ def build_second_stage_table(results_dict, est_num):
                     m = disp(vshort)
                     c, se = c * m, se * m
                     mark = f"^{{{_sen.SE_MARK}}}" if scheme != "congl" else ""
-                    coef_strs.append(f"${c:.4f}^{{{stars(pval)}}}$")
-                    se_strs.append(f"$({se:.4f}){mark}$")
+                    # Where a two-stage AME bootstrap is attached, the second line is its
+                    # bias-corrected interval instead of the standard error, with the display
+                    # multiplier on both endpoints and stars from that same interval. Only
+                    # spec 12 carries one, so within a panel the Hausman column prints intervals
+                    # while the other three print SEs -- said explicitly in the notes.
+                    _bd = _ame_band_row(res, var)
+                    if _bd is not None:
+                        _ci_cols.add(_ek_label)
+                        coef_strs.append(f"${c:.4f}^{{{_bd[2]}}}$")
+                        se_strs.append(f"$[{_bd[0]*m:.4f}, {_bd[1]*m:.4f}]{mark}$")
+                    else:
+                        coef_strs.append(f"${c:.4f}^{{{stars(pval)}}}$")
+                        se_strs.append(f"$({se:.4f}){mark}$")
                 else:
                     coef_strs.append(""); se_strs.append("")
             if has_val:
@@ -306,8 +362,9 @@ def build_second_stage_table(results_dict, est_num):
                   "    $R^2$ & " + " & ".join(rsq_l) + r" \\", "    Fixed Effects & Yes & Yes & Yes & Yes \\\\",
                   "    Clusters ($G$) & " + " & ".join(g_l) + r" \\", r"    \bottomrule"]
     lines += [r"\end{xltabular}", r"\setlength{\tabcolsep}{6pt}", r"\doublespacing"]
-    return "\n".join(lines).replace(_sen.NOTE_TOKEN,
-                                    _sen.national_note(_nat_schemes, dk_bracket=False))
+    return "\n".join(lines).replace(
+        _sen.NOTE_TOKEN, _sen.national_note(_nat_schemes, dk_bracket=False)).replace(
+        AME_CI_TOKEN, _ame_ci_note(_ci_cols, results_dict, est_num))
 
 
 _STANDALONE_PREAMBLE = r"""\documentclass[12pt]{article}

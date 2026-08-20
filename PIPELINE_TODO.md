@@ -3,6 +3,76 @@
 Plan: `C:\Users\pedro\.claude\plans\ok-let-s-do-the-reflective-church.md`
 Started 2026-08-19. Legend: `[ ]` not started · `[~]` in flight · `[x]` done · `[!]` blocked/needs you
 
+## ☀️ READ THIS FIRST IN THE MORNING (2026-08-20)
+
+**Before you upload anything to Bouchet, run these 7 locally.** The stager
+(`python stage_cluster_upload.py`) prints this list itself and refuses `--stage` until they pass:
+
+```
+python panel_8_demographics_sigma.py
+julia --project=. --threads=auto blp_1_logit.jl --est 1     (then --est 2, 3, 4)
+python cf_forward_rf.py --horizon 50 --start 2026Q1
+python estimation_bbl_1_polfunc.py
+```
+
+Then `python stage_cluster_upload.py --stage` → two zips in `C:\egan_cluster_stage\<date>\`, each
+carrying an `UPLOAD_README.txt` with numbered steps. Code bundle ~252 KB, data bundle ~237 MB.
+
+**[FIXED last night]** Those producers resolve `DEMAND_PREP` to **production**, which had zero
+parquets — `blp_1_logit.jl` discovers routines by file presence, so it would have found none and
+**exited 0**, silently. The 44 demand parquets (2.28 GB) are now promoted to production, so they work.
+The `est*/` dirs are deliberately NOT promoted yet — the bootstrap rewrites their SEs.
+
+**[!] On the cluster, pass `ROUTINES="1 2 3 4"` explicitly.** `submit_cf_all.sh`, `submit_bbl_all.sh`
+and `submit_blp_2_rc_default.sh` still default to the dead `"1 2 5 6 7 8"`, so their preflights will
+hunt for E5–E8 files this vintage does not have. W9 (running overnight) may supersede this.
+
+**[!] Toolchain skew — check before submitting.** Scripts hardcode `module load
+Julia/1.11.4-linux-x86_64`; Bouchet's docs list **1.10.4**; `Manifest.toml` was resolved under local
+**1.12.6**. Run `module avail Julia` first. A mismatch triggers a manifest re-resolve, which must go
+through `setup_julia_env.sh` alone (concurrent resolves corrupt the manifest over NFS), and it
+invalidates the sysimage — which fails by silently falling back to CPU while holding an H200.
+
+## OVERNIGHT 2026-08-19 → 20 (running unattended)
+
+- **W11.a** two-stage AME bootstrap: implementing (began writing `utils/sleep_links.py` 21:07) →
+  adversarial verify → parallelism pass (P1–P5) → production B=999 on E3/E4 → regenerate tables.
+  Expected complete ~03:00. **First real signal ~22:15**: does the off-switch reproduce
+  1.313121091 / 1.209007720 exactly?
+- In parallel, disjoint file sets: **W10 Tier 1** (paper-facing joint-sieve strings) + **W0.3b**
+  (out-root path bugs incl. the blocking `diag_phi_augmented_tests.py` import), and **W5.1–5.3**
+  (upload manifest, `stage_cluster_upload.py`, `process_cluster_outputs.py`).
+- File ownership to avoid collisions: the bootstrap implementer owns `utils/sleep_links.py`,
+  `utils/se_national.py`, `export_sleep_link_common.py`, `export_analyze_spec12.py`. Nothing else
+  touches those tonight.
+
+## [!] GAP FOUND 2026-08-19: the unconditional φ_t bands were never run for this vintage
+
+`make_phi_t_band_table.py` reads `ts_link_band_est{N}_uncond_{loss}.pkl` — and **no `*_uncond_*.pkl`
+exists anywhere**, in production or the sandbox. So `tab_phi_t_bands_spec12.tex` reports "no band
+pickle" for every cell regardless of paths. The band step (`estimation_uncond_band.py --est 3 --loss
+robust`, then `--est 4`) has not been run against the new vintage.
+
+Also found: `DEMAND_PREP/Rout` **never existed**, so the old reader path could not resolve even in
+production. Writer and reader are now both on `rout_dir()`.
+
+- [ ] Run the unconditional bands for E3/E4 on the new vintage, then regenerate the band table.
+      Sequence AFTER W11 lands (the two-stage bootstrap changes what a band means for these routines)
+
+## Path + numbering consistency sweep (done 2026-08-19, follow-ups to the paper-facing batch)
+
+- [x] `estimation_uncond_band.py:207` — band **writer** was on `demand_prep_root()/"Rout"`, its reader
+      on `rout_dir()`; both now `rout_dir()`, verified identical under set and unset `SLEEP_OUT_ROOT`
+- [x] `weak_iv_sleep_analysis.py` — 3 stale `E7/E8` routine attributions restated. **The `sieve` LINK
+      is real and stays**: `_fit_phi` fits logit and sieve links inline; they were never routine outputs
+- [x] `make_blp_rc_table.py` — hardcoded production tree and the Drafts literal → `utils.paths`
+      accessors. This is the shared label library **6 generators import**, so it fixes them at the root.
+      `DRAFTS_DIR` verified byte-identical to the literal it replaced
+- [x] `make_iv_tables.py`, `make_iv_sleep_tables.py` — same, plus `--all # E1-E8` help text
+- Convention now explicit in code: sleepiness-vintage outputs follow `rout_dir()` (sandbox-aware);
+  **cluster-artifact-derived tables resolve to production**, since `BLP_RESULTS` is not written per
+  sleepiness vintage. Commented at the definition site rather than left implicit.
+
 ## NEXT UP (in order)
 
 1. **W11.a–c** two-stage AME bootstrap — implement, then run on est3/est4 (~2–5 h). *Blocks the
@@ -199,6 +269,16 @@ Three tiers, in priority order.
 about which stored pickles lacked quarter blocks *at that date*; naming E8 is part of that record.
 
 ## W9 — Consolidate the SLURM submission layer (23 shell scripts)
+
+> **Constraint clarified 2026-08-19: the cluster upload is MANUAL.** The user uploads by hand through
+> Bouchet's interface; there is no scp/rsync automation and none is possible. So the goal of W5/W9 is
+> not "automate the transfer" — it is **fewer artifacts to upload, and a checklist a human can follow
+> half-awake**. W5 now emits exactly two zips (code / data, split because they change at different
+> rates) each carrying an `UPLOAD_README.txt` at its root and an internal layout mirroring the cluster
+> tree, so ONE unzip in the right directory places every file. W9's script consolidation then reduces
+> what goes in the code zip and how much has to load on the cluster — but it stays sequenced AFTER
+> this run, because a rewritten SLURM layer cannot be tested without SLURM.
+
 
 **Assessment: yes, but as TWO layers, not one big script — and sequenced around the cluster re-run.**
 

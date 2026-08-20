@@ -729,6 +729,27 @@ def ispline_constraints(K, n_extra=0):
     return A, lb, ub
 
 
+def _shape_cone_at(A, lb, ub, b_at, tol=1e-7):
+    """Homogeneous tangent cone of {lb <= A p <= ub} at b_at: A_j d <= 0 on upper-active rows,
+    A_j d >= 0 on lower-active ones. Returns (A_c, lb_c, ub_c, active_mask), with A_c None when
+    nothing is active. The cone belongs to the POINT it is taken at, so a bootstrap draw whose
+    own solution sits on a different face must take it at that solution.
+
+    `unconditional_phi_t_band` keeps its own closure over the same algebra: its outputs are gated
+    against stored bands, so it is not rewired here."""
+    _r = np.asarray(A, float) @ np.asarray(b_at, float)
+    _hi = np.isfinite(ub) & (_r >= np.asarray(ub, float) - tol)
+    _lo = np.isfinite(lb) & (_r <= np.asarray(lb, float) + tol)
+    _rows, _clb, _cub = [], [], []
+    for j in np.flatnonzero(_hi):
+        _rows.append(A[j]); _clb.append(-np.inf); _cub.append(0.0)
+    for j in np.flatnonzero(_lo):
+        _rows.append(A[j]); _clb.append(0.0); _cub.append(np.inf)
+    if not _rows:
+        return None, None, None, (_hi | _lo)
+    return (np.vstack(_rows), np.asarray(_clb, float), np.asarray(_cub, float), (_hi | _lo))
+
+
 def project_to_shape(p_lin, G, A, lb, ub, tol=1e-10, K=None, cap=1.0, warm=None):
     """G-norm projection of an unconstrained (linearised) draw onto the constraint set:
         argmin_{p: lb <= Ap <= ub} (p - p_lin)' G (p - p_lin).
@@ -748,6 +769,130 @@ def project_to_shape(p_lin, G, A, lb, ub, tol=1e-10, K=None, cap=1.0, warm=None)
     if K is not None:                      # simplex-box: use the exact solver
         return solve_ispline_qp(Dp, yp, K, cap=cap, warm=warm)
     return solve_shape_qp(Dp, yp, A, lb, ub, p_lin, strict=False)
+
+
+def _si_ame_map(X, phi_params, theta, vs, vsd, P, knots, degree, n_basis,
+                constrained, dummy_spec=None):
+    """Average-marginal-effect map of the single-index link at ONE (direction, geometry) pair.
+
+    Everything the AME depends on besides the link coefficients -- the direction `theta`, the
+    standardised index `vs` and its scale `vsd`, the basis `P` and its `knots` -- is an argument,
+    so a bootstrap draw that moves the direction rebuilds the WHOLE map rather than refreshing a
+    subset of it. That matters because the AMEs are exactly invariant to theta -> a*theta (a>0)
+    and to a shift of the constant coefficient: a map that rescaled `ths` while reusing the
+    estimate's slope weights would produce distinct, plausible and wrong numbers.
+
+    `dummy_spec` (the `_dummy_spec` triple) depends only on X's columns and their names, both
+    fixed across draws, so it is passed in to hoist it out of a draw loop; None recomputes it.
+
+    Returns dict(ame_fn, mean_slope, phi_at, names, ths, slope_w, dcols, dummy_spec).
+    """
+    # ---- link evaluation and its derivative, in the basis actually being used ----------------
+    # Constrained: G = sum_j beta_j R_j = sum_k c_k B_k with c = cumsum(beta), so the derivative
+    # is the B-spline's -- analytic, and no clip is needed anywhere because G is a CDF by
+    # construction. Unconstrained: the raw cubic and its polynomial derivative, clipped on use.
+    if constrained:
+        from scipy.interpolate import BSpline
+
+        _vs_in = np.clip(vs, knots[0], knots[-1])
+
+        def _phi_at(bfull, zz=None):
+            """G evaluated at standardised index zz (default: the sample)."""
+            if zz is None:
+                return P @ np.asarray(bfull, float)[:n_basis]
+            return _ramp_design(zz, knots, degree) @ np.asarray(bfull, float)[:n_basis]
+
+        # PRECOMPUTED AVERAGE DERIVATIVE. G' = sum_k c_k B'_k with c = cumsum(beta), so
+        #   mean_i G'(v_i) = m . c = (L' m) . beta,   m_k = mean_i B'_k(v_i),  L = cumsum matrix,
+        # i.e. the average derivative is a FIXED linear functional of beta. Evaluate the K basis
+        # derivatives once and the AME bootstrap costs a dot product per draw instead of building
+        # a spline and evaluating it on ~487k rows B times. This is exact, and it is available
+        # only because the constrained link needs no clip -- a clip would make the row-average
+        # nonlinear in beta and force the full per-draw evaluation.
+        _m = np.array([float(np.mean(BSpline(knots, np.eye(n_basis)[k], degree,
+                                             extrapolate=True).derivative()(_vs_in)))
+                       for k in range(n_basis)])
+        _slope_w = np.cumsum(_m[::-1])[::-1] / vsd        # (L' m) / vsd
+
+        def _mean_slope(bfull):
+            return float(_slope_w @ np.asarray(bfull, float)[:n_basis])
+    else:
+        _slope_w = None
+        sv_pows = np.column_stack([vs ** (d - 1) for d in range(1, degree + 1)]) \
+            if degree >= 1 else np.empty((len(vs), 0))
+        dcoef = np.arange(1, degree + 1, dtype=float)
+
+        def _phi_at(bfull, zz=None):
+            bb = np.asarray(bfull, float)[:degree + 1]
+            zz = vs if zz is None else zz
+            return np.column_stack([zz ** d for d in range(degree + 1)]) @ bb
+
+        def _mean_slope(bfull):
+            bb = np.asarray(bfull, float)[1:degree + 1]
+            return float(np.mean(sv_pows @ (dcoef * bb))) / vsd if degree >= 1 else 0.0
+
+    names = [nm for nm in phi_params if nm != "nr_lagged_dep"]
+    ths = {nm: th for nm, th in zip(phi_params, theta) if nm != "nr_lagged_dep"}
+
+    # 0/1 DUMMIES get the DISCRETE-DIFFERENCE AME, not the continuous average
+    # derivative: the marginal effect of a binary regressor is
+    # E[G(idx | x=1) - G(idx | x=0)] on the structural link, which is bounded to
+    # [-1,1]. Treating a dummy as continuous (theta_k * mean_slope) is the wrong
+    # estimand and explodes when the inherited (unnormalised) logit direction gives a
+    # weakly-identified dummy a huge coefficient (e.g. pix_exists, near-collinear with
+    # the quarter FE -> theta_pix ~ 300 -> AME ~ 6.9). The flip terms below depend only
+    # on (vs, theta_k, vsd, the dummy column) -- all fixed across the link bootstrap --
+    # so we precompute their basis expansions once.
+    # Levels come from _dummy_spec (registry-driven), so a CENTRED dummy with values
+    # {-p_bar, 1-p_bar} is still recognised; a literal {0,1} test would not see it.
+    _dsub = X[:, [phi_params.index(nm) for nm in names]]
+    if dummy_spec is None:
+        dummy_spec = _dummy_spec(_dsub, len(names), names)
+    _dflag, _dlo, _dhi = dummy_spec
+
+    def _basis_at(zz):
+        if constrained:
+            return _ramp_design(zz, knots, degree)
+        return np.column_stack([zz ** dd for dd in range(degree + 1)])
+
+    dcols = {}
+    for j, nm in enumerate(names):
+        if not _dflag[j]:
+            continue
+        coln = _dsub[:, j]
+        z1 = vs + ths[nm] * (_dhi[j] - coln) / vsd     # standardised index at the HIGH level
+        z0 = vs + ths[nm] * (_dlo[j] - coln) / vsd     # standardised index at the LOW level
+        B1, B0 = _basis_at(z1), _basis_at(z0)
+        # Constrained: E[G(z1) - G(z0)] = (mean B1 - mean B0) . beta, a fixed linear functional,
+        # so collapse the two n x K blocks to one K-vector now and the AME costs a dot product
+        # per bootstrap draw. Unconstrained: the clip sits between the basis and the average, so
+        # the full blocks must be kept and re-evaluated per draw.
+        dcols[nm] = ((B1.mean(axis=0) - B0.mean(axis=0)) if constrained else (B1, B0))
+
+    # CLIP-AWARENESS IS NOW VACUOUS, deliberately. Under the constrained link G is already in
+    # [0,1] everywhere, so the discrete difference needs no clip and the continuous average
+    # derivative needs no pinned-row indicator -- the two AME branches finally measure the same
+    # object. Without the constraints they do not: the dummy branch clips and the continuous
+    # branch does not, which overstates the continuous AMEs by 2.6-4.7x in the robust cells.
+    # That gap is a property of the unconstrained fit, not of the reporting.
+    def _ame_fn(bfull):
+        ms = _mean_slope(bfull)
+        bb = np.asarray(bfull, float)[:n_basis]
+        out = {}
+        for nm in names:
+            if nm in dcols:                              # discrete difference (bounded)
+                if constrained:
+                    out[nm] = float(dcols[nm] @ bb)
+                else:
+                    Pz1, Pz0 = dcols[nm]
+                    out[nm] = float(np.mean(np.clip(Pz1 @ bb, 0.0, 1.0)
+                                            - np.clip(Pz0 @ bb, 0.0, 1.0)))
+            else:                                        # continuous average derivative
+                out[nm] = ths[nm] * ms
+        return out
+
+    return dict(ame_fn=_ame_fn, mean_slope=_mean_slope, phi_at=_phi_at, names=names,
+                ths=ths, slope_w=_slope_w, dcols=dcols, dummy_spec=dummy_spec)
 
 
 def fit_single_index(df, state_cols, has_cf, logit_res, degree=3, phi_band=False,
@@ -836,106 +981,13 @@ def fit_single_index(df, state_cols, has_cf, logit_res, degree=3, phi_band=False
     cl_u, cl_inv = np.unique(cl.values, return_inverse=True)
     n_cl = len(cl_u)
 
-    # ---- link evaluation and its derivative, in the basis actually being used ----------------
-    # Constrained: G = sum_j beta_j R_j = sum_k c_k B_k with c = cumsum(beta), so the derivative
-    # is the B-spline's -- analytic, and no clip is needed anywhere because G is a CDF by
-    # construction. Unconstrained: the raw cubic and its polynomial derivative, clipped on use.
-    if constrained:
-        from scipy.interpolate import BSpline
-
-        _vs_in = np.clip(vs, si_knots[0], si_knots[-1])
-
-        def _phi_at(bfull, zz=None):
-            """G evaluated at standardised index zz (default: the sample)."""
-            if zz is None:
-                return P @ np.asarray(bfull, float)[:n_basis]
-            return _ramp_design(zz, si_knots, degree) @ np.asarray(bfull, float)[:n_basis]
-
-        # PRECOMPUTED AVERAGE DERIVATIVE. G' = sum_k c_k B'_k with c = cumsum(beta), so
-        #   mean_i G'(v_i) = m . c = (L' m) . beta,   m_k = mean_i B'_k(v_i),  L = cumsum matrix,
-        # i.e. the average derivative is a FIXED linear functional of beta. Evaluate the K basis
-        # derivatives once and the AME bootstrap costs a dot product per draw instead of building
-        # a spline and evaluating it on ~487k rows B times. This is exact, and it is available
-        # only because the constrained link needs no clip -- a clip would make the row-average
-        # nonlinear in beta and force the full per-draw evaluation.
-        _m = np.array([float(np.mean(BSpline(si_knots, np.eye(n_basis)[k], degree,
-                                             extrapolate=True).derivative()(_vs_in)))
-                       for k in range(n_basis)])
-        _slope_w = np.cumsum(_m[::-1])[::-1] / vsd        # (L' m) / vsd
-
-        def _mean_slope(bfull):
-            return float(_slope_w @ np.asarray(bfull, float)[:n_basis])
-    else:
-        sv_pows = np.column_stack([vs ** (d - 1) for d in range(1, degree + 1)]) \
-            if degree >= 1 else np.empty((len(vs), 0))
-        dcoef = np.arange(1, degree + 1, dtype=float)
-
-        def _phi_at(bfull, zz=None):
-            bb = np.asarray(bfull, float)[:degree + 1]
-            zz = vs if zz is None else zz
-            return np.column_stack([zz ** d for d in range(degree + 1)]) @ bb
-
-        def _mean_slope(bfull):
-            bb = np.asarray(bfull, float)[1:degree + 1]
-            return float(np.mean(sv_pows @ (dcoef * bb))) / vsd if degree >= 1 else 0.0
-
-    names = [nm for nm in phi_params if nm != "nr_lagged_dep"]
-    ths = {nm: th for nm, th in zip(phi_params, theta) if nm != "nr_lagged_dep"}
-
-    # 0/1 DUMMIES get the DISCRETE-DIFFERENCE AME, not the continuous average
-    # derivative: the marginal effect of a binary regressor is
-    # E[G(idx | x=1) - G(idx | x=0)] on the structural link, which is bounded to
-    # [-1,1]. Treating a dummy as continuous (theta_k * mean_slope) is the wrong
-    # estimand and explodes when the inherited (unnormalised) logit direction gives a
-    # weakly-identified dummy a huge coefficient (e.g. pix_exists, near-collinear with
-    # the quarter FE -> theta_pix ~ 300 -> AME ~ 6.9). The flip terms below depend only
-    # on (vs, theta_k, vsd, the dummy column) -- all fixed across the link bootstrap --
-    # so we precompute their basis expansions once.
-    # Levels come from _dummy_spec (registry-driven), so a CENTRED dummy with values
-    # {-p_bar, 1-p_bar} is still recognised; a literal {0,1} test would not see it.
-    _dsub = X[:, [phi_params.index(nm) for nm in names]]
-    _dflag, _dlo, _dhi = _dummy_spec(_dsub, len(names), names)
-
-    def _basis_at(zz):
-        if constrained:
-            return _ramp_design(zz, si_knots, degree)
-        return np.column_stack([zz ** dd for dd in range(degree + 1)])
-
-    dcols = {}
-    for j, nm in enumerate(names):
-        if not _dflag[j]:
-            continue
-        coln = _dsub[:, j]
-        z1 = vs + ths[nm] * (_dhi[j] - coln) / vsd     # standardised index at the HIGH level
-        z0 = vs + ths[nm] * (_dlo[j] - coln) / vsd     # standardised index at the LOW level
-        B1, B0 = _basis_at(z1), _basis_at(z0)
-        # Constrained: E[G(z1) - G(z0)] = (mean B1 - mean B0) . beta, a fixed linear functional,
-        # so collapse the two n x K blocks to one K-vector now and the AME costs a dot product
-        # per bootstrap draw. Unconstrained: the clip sits between the basis and the average, so
-        # the full blocks must be kept and re-evaluated per draw.
-        dcols[nm] = ((B1.mean(axis=0) - B0.mean(axis=0)) if constrained else (B1, B0))
-
-    # CLIP-AWARENESS IS NOW VACUOUS, deliberately. Under the constrained link G is already in
-    # [0,1] everywhere, so the discrete difference needs no clip and the continuous average
-    # derivative needs no pinned-row indicator -- the two AME branches finally measure the same
-    # object. Without the constraints they do not: the dummy branch clips and the continuous
-    # branch does not, which overstates the continuous AMEs by 2.6-4.7x in the robust cells.
-    # That gap is a property of the unconstrained fit, not of the reporting.
-    def _ame_fn(bfull):
-        ms = _mean_slope(bfull)
-        bb = np.asarray(bfull, float)[:n_basis]
-        out = {}
-        for nm in names:
-            if nm in dcols:                              # discrete difference (bounded)
-                if constrained:
-                    out[nm] = float(dcols[nm] @ bb)
-                else:
-                    Pz1, Pz0 = dcols[nm]
-                    out[nm] = float(np.mean(np.clip(Pz1 @ bb, 0.0, 1.0)
-                                            - np.clip(Pz0 @ bb, 0.0, 1.0)))
-            else:                                        # continuous average derivative
-                out[nm] = ths[nm] * ms
-        return out
+    # The AME map is built by _si_ame_map, which takes every theta-dependent object as an
+    # argument; the two-stage AME bootstrap calls the SAME factory at each drawn direction.
+    _amemap = _si_ame_map(X, phi_params, theta, vs, vsd, P, si_knots, degree, n_basis,
+                          constrained)
+    _ame_fn = _amemap["ame_fn"]
+    _mean_slope = _amemap["mean_slope"]
+    _phi_at = _amemap["phi_at"]
 
     mean_slope = _mean_slope(b_full)
     ame = _ame_fn(b_full)
@@ -2515,9 +2567,16 @@ def _band_from_draws(pt, draws, tuniq, alpha=0.05, label="phi_t band",
 # re-profiling). Not propagated (documented): the first-stage CF v_hat (generated regressor)
 # and the aggregation weights.
 def nlls_direction_if(df, state_cols, has_cf, theta_native, loss, link="logit",
-                      fe_time_col=None, fd_check=True):
+                      fe_time_col=None, fd_check=True,
+                      cluster_col="CodConglomeradoPrudencial", return_parts=False):
     """Cluster IFs of the NLLS direction at a stored solution. Returns a dict:
     IF_cl (n_cl x K, theta rows only), gamma_hat, foc_norm, cl_inv, n_cl, diag.
+
+    `return_parts` adds the raw ingredients a two-stage bootstrap needs (see
+    twostage_ame_boot): the per-row `score_rows` it aggregates its perturbation from, the
+    full-width `IF_rows`, the `bread`, `psi_hat`, the `foc` vector whose norm is `foc_norm`,
+    the cluster label vector and row index for alignment gates, and `refit` -- plain arrays
+    only, so a spawned worker can rebuild the demeaner without re-reading the frame.
 
     The production fit discarded the scipy result, so everything is rebuilt: the arg tuple
     exactly as fit_nlls_link (dropna subset, demean index arrays), the CF coefficient gamma
@@ -2626,15 +2685,22 @@ def nlls_direction_if(df, state_cols, has_cf, theta_native, loss, link="logit",
     foc_norm = float(np.linalg.norm(foc) / max(1.0, float(np.linalg.norm(rho1 * f))))
     bread = np.linalg.pinv((J * w2[:, None]).T @ J)
 
-    cl = df_ss["CodConglomeradoPrudencial"].astype(str)
+    cl = df_ss[cluster_col].astype(str)
     cl_u, cl_inv = np.unique(cl.values, return_inverse=True)
     n_cl = len(cl_u)
     IF_full = _cluster_if(score, bread, cl_inv, n_cl)       # n_cl x (K+G)
 
-    return dict(IF_cl=IF_full[:, :K], gamma_hat=gamma, foc_norm=foc_norm,
-                cl_inv=cl_inv, n_cl=n_cl, theta=theta, idx=idx,
-                diag=dict(jac_fd_relerr=worst, n=len(df_ss), K=K, G=G,
-                          clamped_rows=int(np.sum(w2 <= 0.0))))
+    out = dict(IF_cl=IF_full[:, :K], gamma_hat=gamma, foc_norm=foc_norm,
+               cl_inv=cl_inv, n_cl=n_cl, theta=theta, idx=idx,
+               diag=dict(jac_fd_relerr=worst, n=len(df_ss), K=K, G=G,
+                         clamped_rows=int(np.sum(w2 <= 0.0))))
+    if return_parts:
+        out.update(score_rows=score, IF_rows=score @ bread.T, bread=bread, psi_hat=psi,
+                   foc=foc, cl_labels=cl.values, row_index=df_ss.index,
+                   refit=dict(y_dm=y_dm, X=X, Z=Z, CF=CF, entity_idx=entity_idx,
+                              ecounts=ecounts, tinv=tinv, tcounts=tcounts, CF_dm=CF_dm,
+                              link=link, loss=loss, K=K, G=G))
+    return out
 
 
 def unconditional_phi_t_band(df, state_cols, has_cf, si_res, loss, degree=3,
@@ -3013,4 +3079,803 @@ def unconditional_phi_t_band(df, state_cols, has_cf, si_res, loss, degree=3,
     if keep_draws:
         out["draws"] = dict(total=draws_tot, theta_only=draws_th, link_only=draws_ln,
                             tangent_cone=draws_tc, tangent_cone_total=draws_tct)
+    return out
+
+
+# ==============================================================================
+# TWO-STAGE (direction + link) wild cluster bootstrap of the E3/E4 AMEs
+# ==============================================================================
+# WHAT THIS FIXES. `fit_single_index` bootstraps the LINK ONLY: theta-hat is inherited from the
+# Cauchy NLLS-logit and frozen across every draw, so for a continuous regressor j
+#     AME_j(beta) = (theta_j / sd_j) * mean_slope(beta) = c_j * m,
+# with c_j a fixed scalar and m the only random object. The scalar cancels out of
+# t_j = c_j*m_hat / (|c_j| sd(m*)), and every continuous row of a column reports the SAME
+# |t| -- 1.313121091 across four rows of est3 spec 12, 1.209007720 across five of est4. Each
+# single-index column therefore carries ONE test ("is the link flat") plus the Pix dummy's,
+# whose discrete-difference AME is a different functional of beta and so escapes.
+#
+# THE CONSTRUCTION. One wild weight vector w per draw drives BOTH stages, so the direction-link
+# covariance is estimated rather than assumed away (Kline-Santos 2012 multiplier bootstrap on
+# the stacked estimating equations):
+#
+#   stage A (direction)  perturb the RECENTRED score equation
+#                            R(psi) = Psi(psi) - Psi(psi_hat) + w @ S_g = 0,
+#                        Psi = J'(rho' f) the criterion gradient and S_g its cluster sums, and
+#                        take its first Newton step psi* = psi_hat - bread_A @ (w @ S_g).
+#                        `theta_mode="newton"` iterates that equation by Levenberg-Marquardt
+#                        instead; see _stage_a_perturbed_solve for why the linearisation is what
+#                        is reported and what the iteration measures;
+#   stage B (link)       re-place the knots at the drawn index, re-assemble and re-demean the
+#                        design, and re-solve the estimator's own shape-constrained QP on the
+#                        ORIGINAL y; then add the link's own score channel w @ IF_b;
+#   AMEs                 rebuild the WHOLE AME map at (theta*, geometry*) and evaluate it.
+#
+# Recentring makes psi_hat an exact root of R at w = 0 -- Psi recomputed at psi_hat reproduces
+# the stored foc bit-for-bit, even though psi_hat is only an approximate root of Psi itself
+# (foc_norm 1.10e-04 on est3, 1.91e-04 on est4) -- so a zero-weight draw returns the estimate
+# rather than drifting off it, and the iterated mode starts from a consistent equation.
+#
+# SIGNS. The two stages' scores are built in OPPOSITE orientations in this module:
+# `nlls_direction_if` stores J*(rho1*f) with J = dr/dpsi, i.e. +the gradient of the criterion,
+# while `ols_sieve_wild_bootstrap` stores Xdm*resid, i.e. the moment X'u = -1/2 the gradient.
+# Writing both stages in the moment orientation gives the coherent pairing
+#     psi* = psi_hat - bread_A @ (w @ S_g)      paired with      b* = b_hat + w @ IF_b,
+# i.e. a MINUS on the direction channel. `twostage_ame_boot` verifies that by finite-differencing
+# the criterion (sign_gate) rather than trusting the derivation.
+#
+# NOT PROPAGATED (state it, do not let a referee find it): the first-stage control function
+# v_hat_x_lagged_dep is a generated regressor whose uncertainty enters neither channel; and the
+# link channel is the estimator's own score draw with a directionally-valid treatment of the
+# active constraints (tangent cone), not the exact constrained solution of the perturbed problem.
+def _stage_a_perturbed_solve(psi_hat, foc_hat, g_w, refit, bread_A, mode="if",
+                             max_iter=12, tol=1e-6, max_lam=4, lam0=1e-3):
+    """Perturbed stage-A direction for one bootstrap draw.
+
+    Two modes, both solving the RECENTRED score equation R(psi) = Psi(psi) - foc_hat + g_w = 0:
+
+      mode="if"      (default, reported) the first Newton step psi_hat - bread_A @ g_w, i.e. the
+                     cluster-influence-function perturbation. This is the construction
+                     `unconditional_phi_t_band` uses and the one the AME bootstrap reports.
+      mode="newton"  Levenberg-Marquardt on ||R||, damping lam*diag(H) with H the clamped
+                     Gauss-Newton Hessian, adapted by the usual accept/reject rule. Available
+                     as a diagnostic and nested exactly inside the "if" path, since its first
+                     iterate IS the "if" answer.
+
+    WHY "if" IS THE REPORTED PATH, MEASURED. Recentring makes psi_hat an exact root at w = 0:
+    Psi recomputed at psi_hat reproduces foc_hat bit-for-bit, so R(psi_hat) is exactly zero and
+    a zero-weight draw returns the estimate. But at a real draw the perturbation is enormous
+    relative to the curvature: ||foc_hat|| is 2.53e-03 on est3 spec 12 while ||g_w|| is 2.5-4.6,
+    about a thousand times larger, because the index direction is weakly identified (its own
+    cluster-robust |t| runs 0.32-1.52). Measured on the first three est3 draws, the LM iteration
+    moves the direction cosine to 0.85-0.99 and leaves ||R||/||g_w|| at 3e-2 to 1.9 -- the root
+    of the perturbed score equation, where one exists, is far outside the region in which the
+    quadratic model holds, and no amount of damping brings it inside. Reporting a
+    non-convergent solve would put a different estimator behind every draw; reporting the
+    linearisation is a stated approximation with a known form.
+
+    `res_ratio = ||R|| / ||g_w||` measures the residual against the perturbation being solved
+    for. It is the honest scale: `rel`, which divides by max(1, ||rho1*f||) to be comparable
+    with `foc_norm`, describes the criterion rather than the draw.
+
+    `refit` is the plain-array bundle `nlls_direction_if(..., return_parts=True)["refit"]`.
+    Consumes no RNG. Returns (psi, info)."""
+    psi_hat = np.asarray(psi_hat, float)
+    g_w = np.asarray(g_w, float)
+    psi = psi_hat - bread_A @ g_w
+    if mode == "if":
+        return psi, dict(iters=0, converged=True, rel=np.nan, res_ratio=np.nan,
+                         n_backtrack=0, step_norm=float(np.linalg.norm(psi - psi_hat)))
+    y_dm = refit["y_dm"]; X = refit["X"]; Z = refit["Z"]; CF = refit["CF"]
+    einv = refit["entity_idx"]; ecounts = refit["ecounts"]
+    tinv = refit["tinv"]; tcounts = refit["tcounts"]; CF_dm = refit["CF_dm"]
+    link = refit["link"]; loss = refit["loss"]; K = refit["K"]; G = refit["G"]
+    p = K + G
+
+    def _eval(pv):
+        """(R, ||R||, rel, J, w2) at psi = pv, with Psi and its Jacobian rebuilt exactly as
+        nlls_direction_if builds them. The Jacobian's PER-COLUMN `_twoway_demean` calls are
+        load-bearing: the demeaner's stopping rule is joint across the columns it is handed, so
+        one call over the whole block converges somewhere else."""
+        f = _nlls_resid(pv, y_dm, X, Z, CF, einv, link, ecounts, tinv, tcounts)
+        if loss == "linear":
+            rho1 = np.ones(len(f)); w2 = np.ones(len(f))
+        elif loss == "cauchy":
+            z = f * f
+            rho1 = 1.0 / (1.0 + z)
+            w2 = np.maximum((1.0 - z) / (1.0 + z) ** 2, 0.0)
+        else:
+            raise ValueError(f"unsupported loss {loss!r}")
+        base = _link_density(X @ pv[:K], link) * Z
+        J = np.empty((len(f), p))
+        for k in range(K):
+            J[:, k] = -_twoway_demean(base * X[:, k], einv, ecounts, tinv, tcounts)
+        if G > 0:
+            J[:, K:] = -CF_dm
+        R = J.T @ (rho1 * f) - foc_hat + g_w
+        nrm = float(np.linalg.norm(R))
+        rel = nrm / max(1.0, float(np.linalg.norm(rho1 * f)))
+        return R, nrm, rel, J, w2
+
+    ng = max(float(np.linalg.norm(g_w)), 1e-300)
+    R, nrm, rel, J, w2 = _eval(psi)
+    lam = lam0
+    n_rej = 0
+    it = 0
+    while nrm > tol * ng and it < max_iter:
+        H = (J * w2[:, None]).T @ J
+        Dg = np.maximum(np.diag(H), 1e-300)
+        accepted = False
+        for _ in range(max_lam):
+            try:
+                step = -np.linalg.solve(H + lam * np.diag(Dg), R)
+            except np.linalg.LinAlgError:
+                step = -np.linalg.lstsq(H + lam * np.diag(Dg), R, rcond=None)[0]
+            Rc, nrmc, relc, Jc, w2c = _eval(psi + step)
+            if nrmc < nrm:
+                psi, R, nrm, rel, J, w2 = psi + step, Rc, nrmc, relc, Jc, w2c
+                lam = max(lam / 3.0, 1e-12)
+                accepted = True
+                break
+            lam *= 8.0
+            n_rej += 1
+        it += 1
+        if not accepted:
+            break
+    res_ratio = nrm / ng
+    return psi, dict(iters=it, converged=bool(res_ratio <= tol), rel=rel,
+                     res_ratio=float(res_ratio), n_backtrack=n_rej, lam=float(lam),
+                     step_norm=float(np.linalg.norm(psi - psi_hat)))
+
+
+def _ame_band_from_draws(names, ame_hat, draws, alpha=0.05, label=""):
+    """Per-ROW raw-percentile + Efron (1987) bias-corrected interval for an AME draw matrix.
+
+    Same arithmetic as `_band_from_draws`, one row per regressor instead of one per quarter.
+    It does NOT delegate there: that function's tail parses `time_id` as a PeriodIndex and
+    otherwise sorts by it, which on AME names would silently alphabetise the rows.
+
+    `p_bc` is the p-value implied by the printed BC interval, so stars and interval can never
+    disagree: the BC lower endpoint clears zero iff alpha/2 > Phi(Phi^-1(p_zero) - 2 z0), with
+    p_zero the draw mass below zero. Columns: name, ame, se, lo, hi, lo_bc, hi_bc, p_below,
+    p_bc, stars."""
+    from scipy.stats import norm as _norm
+    draws = np.asarray(draws, float)
+    B = draws.shape[0]
+    pt = np.array([float(ame_hat[k]) for k in names])
+    lo = np.percentile(draws, 100 * alpha / 2, axis=0)
+    hi = np.percentile(draws, 100 * (1 - alpha / 2), axis=0)
+    p_below = (1.0 + np.sum(draws < pt[None, :], axis=0)) / (1.0 + B)
+    z0 = _norm.ppf(np.clip(p_below, 1.0 / (1.0 + B), B / (1.0 + B)))
+    za_lo, za_hi = _norm.ppf(alpha / 2), _norm.ppf(1 - alpha / 2)
+    a_lo = 100.0 * _norm.cdf(2 * z0 + za_lo)
+    a_hi = 100.0 * _norm.cdf(2 * z0 + za_hi)
+    nk = draws.shape[1]
+    lo_bc = np.array([np.percentile(draws[:, j], a_lo[j]) for j in range(nk)])
+    hi_bc = np.array([np.percentile(draws[:, j], a_hi[j]) for j in range(nk)])
+    p_zero = (1.0 + np.sum(draws < 0.0, axis=0)) / (1.0 + B)
+    q = _norm.cdf(_norm.ppf(np.clip(p_zero, 1.0 / (1.0 + B), B / (1.0 + B))) - 2 * z0)
+    p_bc = 2.0 * np.minimum(q, 1.0 - q)
+    st = np.where(p_bc < 0.01, "***", np.where(p_bc < 0.05, "**",
+                                               np.where(p_bc < 0.1, "*", "")))
+    out = pd.DataFrame({"name": list(names), "ame": pt,
+                        "se": np.std(draws, axis=0, ddof=1), "lo": lo, "hi": hi,
+                        "lo_bc": lo_bc, "hi_bc": hi_bc, "p_below": p_below,
+                        "p_bc": p_bc, "stars": st})
+    n_out = int(np.sum((pt < lo) | (pt > hi)))
+    if n_out and label:
+        print(f"  [{label}] RAW percentile interval excludes the point estimate on "
+              f"{n_out}/{nk} row(s); report the BC interval.")
+    return out
+
+
+# --- per-draw kernel, shared by the serial and the worker-process paths ----------------------
+# Every ON draw is a PURE function of its own weight vector: the QP warm start is the fixed
+# b_full (never the previous draw's solution) and no RNG is touched, so draws can be dispatched
+# across processes in any order without moving a number. That is what makes `workers>1`
+# reproduce the serial run bit-for-bit and makes the answer independent of the worker count.
+_TS_CTX = {}
+
+
+def _ts_worker_init(ctx):
+    _TS_CTX.clear()
+    _TS_CTX.update(ctx)
+
+
+def _ts_worker_task(arg):
+    scheme, ib, w, cold = arg
+    return ib, _ts_one_draw(_TS_CTX, scheme, np.asarray(w, float), cold_check=cold)
+
+
+def _ts_worker_ping(_i):
+    """No-op that forces a worker process to finish starting, so the pool's startup cost is
+    paid and measured before the draw loop rather than inside its timing."""
+    return len(_TS_CTX)
+
+
+def _ts_one_draw(ctx, scheme, w, cold_check=False):
+    """One two-stage draw. Returns a dict with the cone/level AME vectors (ordered by
+    ctx['names']) and the per-draw diagnostics."""
+    K = ctx["K"]
+    X = ctx["X"]; Z = ctx["Z"]; y_dm = ctx["y_dm"]; CF_raw = ctx["CF_raw"]
+    degree = ctx["degree"]; n_basis = ctx["n_basis"]; constrained = ctx["constrained"]
+    b_full = ctx["b_full"]; names = ctx["names"]
+    theta_hat = ctx["theta_hat"]
+    d = dict(ok=True, fail=0, newton_fail=0, cos_neg=0, vsd_fail=0, proj=0, knot_tie=0,
+             warm_vs_cold=np.nan)
+
+    g_w = w @ ctx["S"][scheme]
+    psi_star, ninfo = _stage_a_perturbed_solve(ctx["psi_hat"], ctx["foc_hat"], g_w,
+                                               ctx["refit"], ctx["bread_A"],
+                                               mode=ctx["theta_mode"])
+    th_b = psi_star[:K]
+    d["newton_fail"] = int(not ninfo["converged"])
+
+    v_b = X @ th_b
+    vmu_b, vsd_b = float(v_b.mean()), float(v_b.std())
+    if not np.isfinite(vsd_b) or vsd_b <= 0 or not np.all(np.isfinite(v_b)):
+        # The phi_t band substitutes vsd_b = 1.0 here, which is harmless for phi and NOT for an
+        # AME: it would rescale the whole draw by an arbitrary factor. Discard instead.
+        d.update(ok=False, vsd_fail=1)
+        return d
+    vs_b = (v_b - vmu_b) / vsd_b
+    cos_b = float(theta_hat @ th_b / max(1e-300, float(np.linalg.norm(theta_hat))
+                                         * float(np.linalg.norm(th_b))))
+    d["cos_neg"] = int(cos_b < 0)
+
+    if constrained:
+        # The knot placement is INSIDE the estimator (quantiles of the fitted index, extended
+        # over the Pix-removed support), so the draw re-places it at its own index -- and the
+        # counterfactual hull is measured at the DRAWN theta and the DRAWN scale, which is what
+        # fit_single_index does with the theta and scale that built its index. A frozen hull
+        # would leave part of vs_b pinned at `_ramp_design`'s clamp, where the fitted derivative
+        # is zero, dragging every continuous AME draw toward zero.
+        lo_b, hi_b = _pix_shifted_range(X, vs_b, th_b, ctx["phi_params"], vsd_b)
+        _, kn_b = _bspline_design(np.concatenate([vs_b, np.array([lo_b, hi_b])]),
+                                  n_interior=SI_N_INTERIOR, degree=degree)
+        if len(kn_b) != len(ctx["knots0"]):
+            d.update(ok=False, fail=1)
+            return d
+        d["knot_tie"] = int(not np.all(np.diff(kn_b[degree + 1:-(degree + 1)]) > 0))
+        P_b = _ramp_design(vs_b, kn_b, degree)
+    else:
+        kn_b = None
+        P_b = np.column_stack([vs_b ** dd for dd in range(degree + 1)])
+
+    raw = P_b * Z[:, None]
+    if ctx["has_cf"]:
+        raw = np.column_stack([raw, CF_raw])
+    # ONE joint _twoway_demean over the whole block. Demeaning the control-function column on
+    # its own and caching it across draws is the obvious saving and is wrong: the demeaner stops
+    # on max|X-prev| taken JOINTLY across the columns it is given, so a column demeaned alone
+    # converges elsewhere and moves beta by ~2e-3 under an active constraint.
+    D_b = _twoway_demean(raw, ctx["einv"], ctx["ecounts"], ctx["tinv"], ctx["tcounts"])
+
+    qp_A, qp_lb, qp_ub = ctx["qp_A"], ctx["qp_lb"], ctx["qp_ub"]
+    if constrained:
+        # THE EXACT RE-PROFILE: the estimator's own shape-constrained QP, at the drawn index, on
+        # the ORIGINAL y_dm. Solving on the original y is what makes the level noise cancel
+        # between b(th_b) and b(theta_hat), leaving the d beta / d theta channel alone; the
+        # link's own noise enters once, through w @ IF_b below. The warm start is the FIXED
+        # b_full, never the previous draw's solution, which is what keeps each draw a pure
+        # function of its own weights.
+        try:
+            b_th, qp_i = solve_ispline_qp(D_b, y_dm, n_basis, warm=b_full)
+            if not np.all(np.isfinite(b_th)):
+                raise FloatingPointError("non-finite b")
+        except Exception:
+            b_th, qp_i = b_full.copy(), None
+            d["fail"] = 1
+        d["qp_viol"] = _qp_violation(b_th, qp_A, qp_lb, qp_ub)
+        if cold_check and not d["fail"]:
+            # A warm face that keeps a constraint it should release certifies a wrong optimum
+            # silently (measured 8.75e-02 in solve_ispline_qp's own docstring), and this scheme
+            # pays ~2000 warm solves per cell. Compare in PHI, not in coefficients.
+            b_cold, _ = solve_ispline_qp(D_b, y_dm, n_basis)
+            d["warm_vs_cold"] = float(np.max(np.abs(P_b @ (b_th - b_cold)[:n_basis])))
+    else:
+        b_th, *_ = np.linalg.lstsq(D_b, y_dm, rcond=None)
+        qp_i = None
+        d["qp_viol"] = 0.0
+
+    db = w @ ctx["IF_b"][scheme]
+    if constrained:
+        # TANGENT CONE AT THE DRAW'S OWN SOLUTION, not at b_hat: the direction channel is
+        # precisely what moves the active set (Hong-Li / Fang-Santos numerical delta method;
+        # Andrews 2000 for why the projected level is inconsistent on the boundary).
+        A_c, lb_c, ub_c, _act = _shape_cone_at(qp_A, qp_lb, qp_ub, b_th)
+        d_cone = db if A_c is None else project_to_shape(db, ctx["XtX0"], A_c, lb_c, ub_c)[0]
+        b_cone = b_th + d_cone
+        b_lvl = project_to_shape(b_th + db, ctx["XtX0"], qp_A, qp_lb, qp_ub,
+                                 K=n_basis, warm=b_th)[0]
+        d["proj"] = int(float(np.max(np.abs(b_lvl - (b_th + db)))) > 1e-9)
+        d["proj_move"] = float(np.linalg.norm(b_lvl - (b_th + db)))
+        d["n_active"] = int(_act.sum())
+    else:
+        b_cone = b_lvl = b_th + db
+        d["proj_move"] = 0.0
+        d["n_active"] = 0
+
+    m_b = _si_ame_map(X, ctx["phi_params"], th_b, vs_b, vsd_b, P_b, kn_b, degree, n_basis,
+                      constrained, dummy_spec=ctx["dummy_spec0"])
+    a_cone = m_b["ame_fn"](b_cone)
+    a_lvl = m_b["ame_fn"](b_lvl)
+    d["ame_cone"] = np.array([a_cone[k] for k in names])
+    d["ame_level"] = np.array([a_lvl[k] for k in names])
+    d.update(cos=cos_b, rel_pert=float(np.linalg.norm(psi_star - ctx["psi_hat"])
+                                       / max(1e-300, float(np.linalg.norm(ctx["psi_hat"])))),
+             vsd_ratio=vsd_b / ctx["vsd"], newton_iters=ninfo["iters"],
+             newton_rel=ninfo["rel"], newton_res_ratio=ninfo["res_ratio"],
+             newton_converged=bool(ninfo["converged"]), newton_backtrack=ninfo["n_backtrack"],
+             b_shift=float(np.linalg.norm(b_th - b_full)),
+             n_zero=(int(qp_i["n_zero"]) if qp_i else -1),
+             at_cap=(bool(qp_i["at_cap"]) if qp_i else False),
+             sum_beta=(float(qp_i["sum_beta"]) if qp_i else np.nan),
+             ms_ratio=(m_b["mean_slope"](b_cone) / ctx["mean_slope_hat"]
+                       if ctx["mean_slope_hat"] else np.nan))
+    return d
+
+
+def twostage_ame_boot(df, state_cols, has_cf, si_res, loss, degree=3, fe_time_col=None,
+                      B=None, scheme=None, seed=0, theta_channel=True, theta_mode="if",
+                      alpha=0.05, keep_draws=True, cold_check_every=50, progress_every=25,
+                      workers=1):
+    """Two-stage (direction + link) wild cluster bootstrap of the E3/E4 AMEs, from a STORED
+    `fit_single_index` result -- no re-estimation.
+
+    THE OFF SWITCH. `theta_channel=False` is a STRUCTURAL SHORT-CIRCUIT, not `g_w = 0`: the
+    stage-A solve, the knot re-placement, the re-profile and the AME rebuild are not executed at
+    all, and the loop body reduces to `w = W[ib]; b = proj(b_full + w @ IF_b); ame_fn0(b)` --
+    operation-for-operation `cluster_wild_bootstrap`, on the same operands in the same order. It
+    reproduces the stored conditional SEs, which is the regression guard for everything above.
+    Setting g_w = 0 would NOT do that: the QP would still be re-solved and would return b_full
+    only to solver tolerance. The OFF path therefore also runs SERIAL, conglomerate first,
+    sharing ONE projection warm cell -- because the estimator shares `_warm` across its two
+    `ols_sieve_wild_bootstrap` calls, so `bse_time` depends on the conglomerate loop having
+    consumed its draws first.
+
+    Returns dict(congl=..., quarter=..., meta=...); each per-scheme value carries ame, bse,
+    pvalues, band (the reporting object), the level-projected diagnostic variants, cov,
+    the raw draws and the per-draw diagnostics."""
+    import time as _time
+    t0 = _time.time()
+    if wcb_mode() != "normal":
+        raise RuntimeError(f"twostage_ame_boot requires SLEEP_WCB_MODE=normal, got "
+                           f"{wcb_mode()!r}: the studentised path linearises the AME at a "
+                           f"frozen theta, which is the wrong studentiser here.")
+    _B, _scheme = boot_cfg()
+    B = int(_B if B is None else B)
+    scheme = scheme or _scheme
+
+    # ---- index names, asserted elementwise against the stored fit --------------------------
+    idx_expect = [f"interaction_{sv}" if sv != "constant" else "nr_lagged_dep"
+                  for sv in state_cols]
+    phi_params = list(si_res.params_native.index)
+    if phi_params != idx_expect:
+        raise RuntimeError(f"index name mismatch: fit carries {phi_params} but state_cols "
+                           f"imply {idx_expect}")
+    constrained = (getattr(si_res, "si_constrained", False)
+                   or getattr(si_res, "link", None) == "index_sieve")
+
+    # ---- rebuild the estimation frame exactly as fit_single_index --------------------------
+    CF_cols = ["v_hat_x_lagged_dep"] if has_cf else []
+    cols = state_cols + ["deposit_balance", "nr_lagged_dep", "entity_id"]
+    df_ss = df.dropna(subset=cols + CF_cols).copy()
+    X = _build_phi_X(df_ss, phi_params)
+    Z = df_ss["nr_lagged_dep"].values.astype(float)
+    _, einv = np.unique(df_ss["entity_id"].values, return_inverse=True)
+    ecounts = np.bincount(einv).astype(float)
+    if fe_time_col is not None:
+        _, tinv = np.unique(df_ss[fe_time_col].values, return_inverse=True)
+        tcounts = np.bincount(tinv).astype(float)
+    else:
+        tinv = tcounts = None
+    y_dm = _twoway_demean(df_ss["deposit_balance"].values.astype(float),
+                          einv, ecounts, tinv, tcounts)
+    CF_raw = df_ss["v_hat_x_lagged_dep"].values.astype(float) if has_cf else None
+    cl = df_ss["CodConglomeradoPrudencial"].astype(str)
+    cl_u, cl_inv = np.unique(cl.values, return_inverse=True)
+    n_cl = len(cl_u)
+    if fe_time_col is None or fe_time_col not in df_ss.columns:
+        raise RuntimeError("fe_time_col is required: the quarter-clustered scheme is the one "
+                           "the national rows are reported from, and a silent skip there would "
+                           "leave the tables describing a calculation that did not run")
+    _per = df_ss[fe_time_col].astype(str).values
+    _uniq, _t_inv = np.unique(_per, return_inverse=True)
+    n_t = len(_uniq)
+
+    # ---- direction and its standardisation, gated on the stored fingerprint ----------------
+    theta_hat = si_res.params_native[phi_params].values.astype(float)
+    v = X @ theta_hat
+    vmu, vsd = float(v.mean()), float(v.std())
+    if vsd <= 0:
+        vsd = 1.0
+    if abs(vmu - float(si_res.si_vmu)) > 1e-6 * max(1.0, abs(vmu)) or \
+       abs(vsd - float(si_res.si_vsd)) > 1e-6 * max(1.0, abs(vsd)):
+        raise RuntimeError(f"vmu/vsd fingerprint mismatch: rebuilt ({vmu:.10g},{vsd:.10g}) vs "
+                           f"stored ({si_res.si_vmu:.10g},{si_res.si_vsd:.10g}) -- data drift")
+    vs = (v - vmu) / vsd
+
+    # ---- the link at theta-hat, COLD (which is how the estimator solves it) ----------------
+    if constrained:
+        knots0 = np.asarray(si_res.si_knots, float)
+        n_basis = len(knots0) - degree - 1
+        P0 = _ramp_design(vs, knots0, degree)
+        b_stored = np.asarray(si_res.si_beta, float)
+    else:
+        knots0 = None
+        n_basis = degree + 1
+        P0 = np.column_stack([vs ** d for d in range(degree + 1)])
+        b_stored = np.asarray(si_res.si_b, float)
+    raw0 = P0 * Z[:, None]
+    if has_cf:
+        raw0 = np.column_stack([raw0, CF_raw])
+    D0 = _twoway_demean(raw0, einv, ecounts, tinv, tcounts)
+    if constrained:
+        b_full, qp_info0 = solve_ispline_qp(D0, y_dm, n_basis)
+        qp_A, qp_lb, qp_ub = ispline_constraints(n_basis, n_extra=raw0.shape[1] - n_basis)
+    else:
+        b_full, *_ = np.linalg.lstsq(D0, y_dm, rcond=None)
+        qp_info0 = None
+        qp_A = qp_lb = qp_ub = None
+    resid0 = y_dm - D0 @ b_full
+    XtX0 = D0.T @ D0
+    bread_link = np.linalg.pinv(XtX0)
+    # Fingerprint on the LINK, not on the coefficients: the ramp basis is collinear, so two
+    # faithful solves can sit ~1e-3 apart in beta and describe the same function to ~1e-9.
+    d_b = float(np.max(np.abs(b_full[:n_basis] - b_stored)))
+    d_phi = float(np.max(np.abs(P0 @ b_full[:n_basis] - P0 @ b_stored)))
+    if d_phi > 1e-6:
+        raise RuntimeError(f"link fingerprint mismatch: rebuilt link differs from the stored "
+                           f"one by {d_phi:.3e} in phi (coefficient drift {d_b:.3e})")
+
+    # ---- the AME map at theta-hat ----------------------------------------------------------
+    amemap0 = _si_ame_map(X, phi_params, theta_hat, vs, vsd, P0, knots0, degree, n_basis,
+                          constrained)
+    names = amemap0["names"]
+    ame_fn0 = amemap0["ame_fn"]
+    ame_hat = ame_fn0(b_full)
+    mean_slope_hat = amemap0["mean_slope"](b_full)
+    d_ame = max(abs(ame_hat[k] - float(si_res.params[k]))
+                / max(1e-300, abs(float(si_res.params[k]))) for k in names)
+    # d_b / d_phi / d_ame are the reproduction budget of the whole run and are printed every
+    # time, because they set the wording of the theta-frozen reproduction claim: the OFF path
+    # re-solves the link from the rebuilt frame, so whatever separates b_full from the stored
+    # si_beta separates its SEs from the stored ones too. The gate is 1e-6, the same phi
+    # tolerance unconditional_phi_t_band uses -- large enough not to reject a faithful rebuild
+    # of a collinear ramp basis, small enough that every failure encountered while building this
+    # (a solve stopped on the wrong active set, 1.6e-03; the wrong FE structure, 2.2e-04) trips.
+    print(f"  [2s] rebuild: d_beta={d_b:.3e}  d_phi={d_phi:.3e}  d_ame(rel)={d_ame:.3e}  "
+          f"n={len(df_ss)}  G={n_cl}  T={n_t}  K={n_basis}")
+    if d_ame > 1e-6:
+        raise RuntimeError(f"AME fingerprint mismatch: rebuilt AMEs differ from the stored "
+                           f"params by {d_ame:.3e} relative")
+
+    # ---- direction influence functions and the stage-A refit bundle ------------------------
+    dirif = nlls_direction_if(df, state_cols, has_cf, pd.Series(theta_hat, index=idx_expect),
+                              loss, link="logit", fe_time_col=fe_time_col, return_parts=True)
+    if list(dirif["idx"]) != idx_expect:
+        raise RuntimeError("nlls_direction_if index mismatch")
+    # ALIGNMENT. A silent misalignment would pair cluster g's direction influence with cluster
+    # h's link influence and destroy exactly the covariance the shared w exists to capture, so
+    # the two frames are compared row by row rather than by length.
+    d_X = float(np.max(np.abs(np.asarray(dirif["refit"]["X"], float) - X)))
+    if d_X != 0.0 or len(dirif["cl_labels"]) != len(cl.values) \
+            or not np.array_equal(np.asarray(dirif["cl_labels"]), cl.values) \
+            or not dirif["row_index"].equals(df_ss.index):
+        raise RuntimeError(f"stage-A / stage-B frame misalignment (max|dX|={d_X:.3e})")
+    dirif["refit"]["X"] = X            # one array object, so a worker payload carries it once
+    psi_hat = dirif["psi_hat"]; foc_hat = dirif["foc"]; bread_A = dirif["bread"]
+    score_rows = dirif["score_rows"]
+    K = dirif["diag"]["K"]
+
+    # ---- cluster sums of the stage-A score, and the link IFs, per scheme -------------------
+    def _csum(inv, ng):
+        return np.column_stack([np.bincount(inv, weights=score_rows[:, j], minlength=ng)
+                                for j in range(score_rows.shape[1])])
+    S_of = {"congl": _csum(cl_inv, n_cl), "quarter": _csum(_t_inv, n_t)}
+    IF_b_of = {"congl": _cluster_if(D0 * resid0[:, None], bread_link, cl_inv, n_cl),
+               "quarter": _cluster_if(D0 * resid0[:, None], bread_link, _t_inv, n_t)}
+    n_of = {"congl": n_cl, "quarter": n_t}
+
+    # ---- SIGN CALIBRATION by finite difference, not by derivation --------------------------
+    sign_gate = _stage_a_sign_gate(psi_hat, foc_hat, dirif["refit"])
+    print(f"  [2s] sign gate: {sign_gate['verdict']} (rel dev +{sign_gate['rel_plus']:.2e} / "
+          f"-{sign_gate['rel_minus']:.2e} on coords {sign_gate['coords']})")
+    if sign_gate["verdict"] == "FLIPPED":
+        raise RuntimeError("the stage-A score is MINUS the criterion gradient; flip g_w's sign "
+                           "in _ts_one_draw before running -- do not proceed on the derivation")
+    if sign_gate["verdict"] != "OK":
+        print("  [2s] WARNING sign gate inconclusive; the direction channel's sign rests on "
+              "the derivation alone.")
+
+    # ---- PRE-DRAW the full weight matrix in the parent, from the seeded RNG -----------------
+    # One `_wild_weights` call per draw, so the stream is identical to drawing inside the loop;
+    # a fresh generator per scheme, because the estimator's two `ols_sieve_wild_bootstrap` calls
+    # both run on the hardcoded default seed. Workers never seed or advance an RNG -- they are
+    # handed their row of W -- which is what makes the result independent of the worker count.
+    W_of = {}
+    for s in ("congl", "quarter"):
+        rng = np.random.default_rng(seed)
+        W_of[s] = np.stack([_wild_weights(n_of[s], scheme, rng) for _ in range(B)])
+
+    meta = dict(B=B, scheme=scheme, seed=seed, loss=loss, theta_mode=theta_mode,
+                theta_channel=bool(theta_channel), degree=degree, n=len(df_ss),
+                n_cl=n_cl, n_t=n_t, foc_norm=dirif["foc_norm"], gamma_hat=dirif["gamma_hat"],
+                dir_diag=dirif["diag"], vmu=vmu, vsd=vsd, theta=theta_hat, idx=idx_expect,
+                b_full=b_full, d_b=d_b, d_phi=d_phi, d_ame=d_ame, n_basis=int(n_basis),
+                constrained=bool(constrained), mean_slope_hat=mean_slope_hat,
+                sign_gate=sign_gate, names=list(names),
+                n_active_at_estimate=(int(qp_info0["n_active"]) if qp_info0 else 0),
+                workers=int(workers), alpha=alpha)
+
+    out = {"meta": meta}
+    if not theta_channel:
+        out.update(_ts_off_path(names, ame_fn0, ame_hat, b_full, IF_b_of, W_of, B,
+                                constrained, XtX0, qp_A, qp_lb, qp_ub, n_basis, alpha))
+        meta["runtime_s"] = _time.time() - t0
+        return out
+
+    ctx = dict(X=X, Z=Z, y_dm=y_dm, CF_raw=CF_raw, has_cf=bool(has_cf), einv=einv,
+               ecounts=ecounts, tinv=tinv, tcounts=tcounts, phi_params=phi_params,
+               theta_hat=theta_hat, vsd=vsd, knots0=knots0, degree=degree,
+               n_basis=int(n_basis), constrained=bool(constrained), qp_A=qp_A, qp_lb=qp_lb,
+               qp_ub=qp_ub, XtX0=XtX0, b_full=b_full, dummy_spec0=amemap0["dummy_spec"],
+               names=names, refit=dirif["refit"], psi_hat=psi_hat, foc_hat=foc_hat,
+               bread_A=bread_A, theta_mode=theta_mode, K=K, S=S_of, IF_b=IF_b_of,
+               mean_slope_hat=mean_slope_hat)
+
+    # ---- INVARIANCE. Every AME is exactly invariant to theta -> a*theta (a>0) and to a shift
+    # of the constant coefficient, and roughly half the perturbation energy lies in that
+    # subspace -- so a map that refreshed only part of (ths, slope_w, dcols, knots, vs, vsd)
+    # would give distinct, plausible, WRONG t's and fail nothing else. Drive the geometry
+    # rebuild with those two perturbations and require the AMEs back unchanged.
+    meta["invariance_gate"] = _ts_invariance_gate(ctx, ame_hat, names)
+    print(f"  [2s] invariance gate: scale {meta['invariance_gate']['scale']:.2e}  "
+          f"const-shift {meta['invariance_gate']['shift']:.2e}  "
+          f"{meta['invariance_gate']['verdict']}")
+    if meta["invariance_gate"]["verdict"] != "PASS":
+        raise RuntimeError("AME scale/shift invariance violated -- the draw geometry is only "
+                           "partially rebuilt")
+
+    # ONE worker pool for BOTH schemes. On Windows spawn each worker re-imports this module's
+    # dependency stack and unpickles the ~55 MB context, which is minutes on a loaded box --
+    # far more than a scheme's draws cost at small B. A driver calling this with workers > 1
+    # must have an `if __name__ == "__main__":` guard, or spawn re-runs its top-level work in
+    # every worker; estimation_ame_twostage.py has one.
+    pool = None
+    try:
+        if workers and workers > 1:
+            from concurrent.futures import ProcessPoolExecutor
+            print(f"  [2s] starting {int(workers)} worker processes", flush=True)
+            _t_pool = _time.time()
+            pool = ProcessPoolExecutor(max_workers=int(workers), initializer=_ts_worker_init,
+                                       initargs=(ctx,))
+            # Force every worker up and time it. The startup is NOT small: each child re-imports
+            # the caller's whole module graph and unpickles the ~55 MB context, measured at tens
+            # of seconds per worker on this repo (the modules live on a OneDrive-backed path) and
+            # minutes each when the box is busy. It is paid once per call, so it is amortised at
+            # production B and dominates at smoke B -- which is why the number is printed rather
+            # than hidden, and why `workers=1` is the right choice for short runs.
+            list(pool.map(_ts_worker_ping, range(int(workers) * 4)))
+            meta["pool_startup_s"] = _time.time() - _t_pool
+            print(f"  [2s] worker pool ready in {meta['pool_startup_s']:.1f}s", flush=True)
+        for s in ("congl", "quarter"):
+            out[s] = _ts_run_scheme(ctx, s, W_of[s], B, names, ame_hat, alpha, keep_draws,
+                                    cold_check_every, progress_every, workers, pool=pool)
+    finally:
+        if pool is not None:
+            pool.shutdown()
+    meta["runtime_s"] = _time.time() - t0
+    return out
+
+
+def _stage_a_sign_gate(psi_hat, foc_hat, refit, h_rel=1e-5, n_coord=3, tol=1e-2, sep=100.0):
+    """Is the stored stage-A score PLUS or MINUS the gradient of the criterion scipy minimises?
+
+    Central-differences cost(psi) = 0.5*sum(ln(1+f^2)) (cauchy) or 0.5*sum(f^2) (linear) on the
+    coordinates with the largest |foc|, and compares against foc. Verdict 'OK' means
+    Psi = +gradient, hence that the coherent perturbation is psi_hat - bread @ (w @ S) paired
+    with b_hat + w @ IF_b. 'FLIPPED' means the caller must flip g_w's sign.
+
+    The test is about a SIGN, so the tolerance is loose and the discrimination comes from the
+    separation between the two candidate orientations: cost sums ~487k terms of order 40, so a
+    central difference of it carries ~1e-4 relative cancellation error, while the wrong
+    orientation is off by a factor of two. Requiring the winner to be `sep` times better than
+    the loser is what makes 1e-4 versus 2.0 a verdict rather than a coincidence."""
+    y_dm = refit["y_dm"]; X = refit["X"]; Z = refit["Z"]; CF = refit["CF"]
+    einv = refit["entity_idx"]; ecounts = refit["ecounts"]
+    tinv = refit["tinv"]; tcounts = refit["tcounts"]
+    link = refit["link"]; loss = refit["loss"]
+
+    def _cost(p):
+        f = _nlls_resid(p, y_dm, X, Z, CF, einv, link, ecounts, tinv, tcounts)
+        return float(0.5 * np.sum(f * f) if loss == "linear"
+                     else 0.5 * np.sum(np.log1p(f * f)))
+
+    coords = np.argsort(-np.abs(np.asarray(foc_hat, float)))[:n_coord]
+    fd, an = [], []
+    for k in coords:
+        h = h_rel * max(1.0, abs(float(psi_hat[k])))
+        pp = np.asarray(psi_hat, float).copy(); pp[k] += h
+        pm = np.asarray(psi_hat, float).copy(); pm[k] -= h
+        fd.append((_cost(pp) - _cost(pm)) / (2 * h))
+        an.append(float(foc_hat[k]))
+    fd = np.asarray(fd); an = np.asarray(an)
+    rel_plus = float(np.max(np.abs(fd - an) / np.maximum(np.abs(an), 1e-300)))
+    rel_minus = float(np.max(np.abs(fd + an) / np.maximum(np.abs(an), 1e-300)))
+    verdict = ("OK" if rel_plus <= tol and rel_minus >= sep * max(rel_plus, 1e-300) else
+               "FLIPPED" if rel_minus <= tol and rel_plus >= sep * max(rel_minus, 1e-300)
+               else "INCONCLUSIVE")
+    return dict(verdict=verdict, max_rel=min(rel_plus, rel_minus), rel_plus=rel_plus,
+                rel_minus=rel_minus, coords=[int(c) for c in coords],
+                fd=fd.tolist(), foc=an.tolist())
+
+
+def _ts_invariance_gate(ctx, ame_hat, names, tol=1e-9):
+    """Rerun the draw kernel's geometry rebuild at th_b = 1.7*theta_hat and at
+    theta_hat + 0.3*e_const with a ZERO link fluctuation, and require the AMEs back."""
+    a0 = np.array([ame_hat[k] for k in names])
+    res = {}
+    K = ctx["K"]
+    for tag, th_b in (("scale", 1.7 * ctx["theta_hat"]),
+                      ("shift", ctx["theta_hat"] + 0.3 * np.eye(len(ctx["theta_hat"]))[0])):
+        psi_b = np.concatenate([th_b, ctx["psi_hat"][K:]])
+        a = _ts_geometry_ame(ctx, psi_b)
+        res[tag] = float(np.max(np.abs(a - a0) / np.maximum(np.abs(a0), 1e-300)))
+    res["verdict"] = "PASS" if max(res["scale"], res["shift"]) <= tol else "FAIL"
+    return res
+
+
+def _ts_geometry_ame(ctx, psi_b):
+    """AMEs at a GIVEN psi with no link fluctuation: the draw kernel's geometry rebuild and
+    re-profile with db = 0. Used by the invariance gate, which is about the rebuild rather
+    than about the stage-A solve."""
+    K = ctx["K"]
+    th_b = psi_b[:K]
+    X = ctx["X"]; Z = ctx["Z"]
+    v_b = X @ th_b
+    vmu_b, vsd_b = float(v_b.mean()), float(v_b.std())
+    vs_b = (v_b - vmu_b) / vsd_b
+    degree, n_basis = ctx["degree"], ctx["n_basis"]
+    if ctx["constrained"]:
+        lo_b, hi_b = _pix_shifted_range(X, vs_b, th_b, ctx["phi_params"], vsd_b)
+        _, kn_b = _bspline_design(np.concatenate([vs_b, np.array([lo_b, hi_b])]),
+                                  n_interior=SI_N_INTERIOR, degree=degree)
+        P_b = _ramp_design(vs_b, kn_b, degree)
+    else:
+        kn_b = None
+        P_b = np.column_stack([vs_b ** dd for dd in range(degree + 1)])
+    raw = P_b * Z[:, None]
+    if ctx["has_cf"]:
+        raw = np.column_stack([raw, ctx["CF_raw"]])
+    D_b = _twoway_demean(raw, ctx["einv"], ctx["ecounts"], ctx["tinv"], ctx["tcounts"])
+    if ctx["constrained"]:
+        b_th, _ = solve_ispline_qp(D_b, ctx["y_dm"], n_basis, warm=ctx["b_full"])
+    else:
+        b_th, *_ = np.linalg.lstsq(D_b, ctx["y_dm"], rcond=None)
+    m_b = _si_ame_map(X, ctx["phi_params"], th_b, vs_b, vsd_b, P_b, kn_b, degree, n_basis,
+                      ctx["constrained"], dummy_spec=ctx["dummy_spec0"])
+    a = m_b["ame_fn"](b_th)
+    return np.array([a[k] for k in ctx["names"]])
+
+
+def _ts_run_scheme(ctx, s, W, B, names, ame_hat, alpha, keep_draws, cold_check_every,
+                   progress_every, workers, pool=None):
+    """Run one clustering scheme's B draws, serially or on a worker pool.
+
+    `pool` is an already-started executor holding ctx; the caller opens ONE for both schemes,
+    because on Windows spawn each worker re-imports this module's whole dependency stack and
+    unpickles the ~55 MB context, which costs far more than a scheme's worth of draws at smoke
+    sizes."""
+    import time as _time
+    t0 = _time.time()
+    nk = len(names)
+    draws_cone = {k: np.full(B, np.nan) for k in names}
+    draws_level = {k: np.full(B, np.nan) for k in names}
+    diag_rows = [None] * B
+    counters = dict(n_fail=0, n_newton_fail=0, n_cos_neg=0, n_vsd_fail=0, n_proj=0,
+                    n_knot_tie=0, n_drop=0)
+    tasks = [(s, ib, W[ib], bool(cold_check_every and (ib + 1) % cold_check_every == 0))
+             for ib in range(B)]
+
+    def _absorb(ib, d):
+        for key, cnt in (("fail", "n_fail"), ("newton_fail", "n_newton_fail"),
+                         ("cos_neg", "n_cos_neg"), ("vsd_fail", "n_vsd_fail"),
+                         ("proj", "n_proj"), ("knot_tie", "n_knot_tie")):
+            counters[cnt] += int(d.get(key, 0))
+        if not d.get("ok", False):
+            counters["n_drop"] += 1
+            diag_rows[ib] = dict(draw=ib, ok=False)
+            return
+        for j, k in enumerate(names):
+            draws_cone[k][ib] = d["ame_cone"][j]
+            draws_level[k][ib] = d["ame_level"][j]
+        diag_rows[ib] = {kk: vv for kk, vv in d.items()
+                         if kk not in ("ame_cone", "ame_level")}
+        diag_rows[ib]["draw"] = ib
+
+    if pool is not None:
+        for n_done, (ib, d) in enumerate(pool.map(_ts_worker_task, tasks, chunksize=1), 1):
+            _absorb(ib, d)
+            if progress_every and n_done % progress_every == 0:
+                print(f"    [2s {s}] draw {n_done}/{B}  "
+                      f"({(_time.time()-t0)/n_done:.2f}s/draw)", flush=True)
+    else:
+        for n_done, task in enumerate(tasks, 1):
+            _, ib, w, cold = task
+            _absorb(ib, _ts_one_draw(ctx, s, w, cold_check=cold))
+            if progress_every and n_done % progress_every == 0:
+                print(f"    [2s {s}] draw {n_done}/{B}  "
+                      f"({(_time.time()-t0)/n_done:.2f}s/draw)", flush=True)
+
+    keep = np.array([bool(diag_rows[ib].get("ok", False)) for ib in range(B)])
+    Dc = np.column_stack([draws_cone[k][keep] for k in names])
+    Dl = np.column_stack([draws_level[k][keep] for k in names])
+    bse = {k: float(np.std(draws_cone[k][keep], ddof=1)) for k in names}
+    pv = {k: (float(2 * stats.norm.sf(abs(ame_hat[k]) / bse[k])) if bse[k] > 0 else 0.0)
+          for k in names}
+    bse_l = {k: float(np.std(draws_level[k][keep], ddof=1)) for k in names}
+    pv_l = {k: (float(2 * stats.norm.sf(abs(ame_hat[k]) / bse_l[k])) if bse_l[k] > 0 else 0.0)
+            for k in names}
+    cov = np.cov(Dc, rowvar=False, ddof=1).reshape(nk, nk)
+    d_cov = float(np.max(np.abs(np.sqrt(np.diag(cov)) - np.array([bse[k] for k in names]))))
+    if d_cov > 1e-12 * max(1e-300, max(bse.values())):
+        raise RuntimeError(f"cov/bse inconsistency {d_cov:.3e}")
+    diag = pd.DataFrame([r for r in diag_rows if r is not None])
+    if "cos" in diag:
+        q = diag["cos"].quantile([0.05, 0.5, 0.95])
+        wc = diag["warm_vs_cold"].dropna()
+        print(f"  [2s {s}] cos 5/50/95%: {q.iloc[0]:.4f}/{q.iloc[1]:.4f}/{q.iloc[2]:.4f} | "
+              f"newton iters med {diag['newton_iters'].median():.0f} | "
+              f"fail={counters['n_fail']} newton_fail={counters['n_newton_fail']} "
+              f"cos_neg={counters['n_cos_neg']} vsd_fail={counters['n_vsd_fail']} "
+              f"proj={counters['n_proj']}/{int(keep.sum())}"
+              + (f" | warm-vs-cold max {wc.max():.2e} (n={len(wc)})" if len(wc) else "")
+              + f" | {(_time.time()-t0)/60:.1f} min")
+    res = dict(ame=ame_hat, bse=bse, pvalues=pv, bse_level=bse_l, pvalues_level=pv_l,
+               band=_ame_band_from_draws(names, ame_hat, Dc, alpha=alpha,
+                                         label=f"AME 2s [{s}]"),
+               band_level=_ame_band_from_draws(names, ame_hat, Dl, alpha=alpha),
+               cov=cov, per_draw_diag=diag, n_cl=int(W.shape[1]), B_used=int(keep.sum()),
+               runtime_s=_time.time() - t0, **counters)
+    if keep_draws:
+        res["draws_cone"] = {k: draws_cone[k] for k in names}
+        res["draws_level"] = {k: draws_level[k] for k in names}
+    return res
+
+
+def _ts_off_path(names, ame_fn0, ame_hat, b_full, IF_b_of, W_of, B, constrained, XtX0,
+                 qp_A, qp_lb, qp_ub, n_basis, alpha):
+    """The theta-frozen regression guard: `cluster_wild_bootstrap`'s loop body, on the same
+    operands in the same order, with ONE projection warm cell shared across the two schemes and
+    the conglomerate loop run first -- which is how the estimator produces bse then bse_time."""
+    _warm = [b_full.copy()]
+
+    def _proj(b_lin):
+        out = project_to_shape(b_lin, XtX0, qp_A, qp_lb, qp_ub, K=n_basis, warm=_warm[0])[0]
+        _warm[0] = out
+        return out
+
+    out = {}
+    for s in ("congl", "quarter"):
+        IF_b = IF_b_of[s]
+        W = W_of[s]
+        draws = {k: np.empty(B) for k in names}
+        for ib in range(B):
+            b = b_full + W[ib] @ IF_b
+            if constrained:
+                b = _proj(b)
+            a = ame_fn0(b)
+            for k in names:
+                draws[k][ib] = a[k]
+        bse = {k: float(np.std(draws[k], ddof=1)) for k in names}
+        pv = {k: (float(2 * stats.norm.sf(abs(ame_hat[k]) / bse[k])) if bse[k] > 0 else 0.0)
+              for k in names}
+        Dc = np.column_stack([draws[k] for k in names])
+        out[s] = dict(ame=ame_hat, bse=bse, pvalues=pv, bse_level=bse, pvalues_level=pv,
+                      band=_ame_band_from_draws(names, ame_hat, Dc, alpha=alpha),
+                      band_level=None, cov=np.cov(Dc, rowvar=False, ddof=1),
+                      per_draw_diag=pd.DataFrame(), draws_cone=draws, draws_level=None,
+                      n_cl=int(W.shape[1]), B_used=B, n_fail=0, n_newton_fail=0, n_cos_neg=0,
+                      n_vsd_fail=0, n_proj=0, n_knot_tie=0, n_drop=0, runtime_s=np.nan)
     return out

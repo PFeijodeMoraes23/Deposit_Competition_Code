@@ -188,6 +188,14 @@ SCHEME_LABEL = {"congl": "conglomerate WCB", "quarter": "quarter-clustered WCB",
                 "dk": "Driscoll-Kraay"}
 
 
+def twostage_se_enabled() -> bool:
+    """SLEEP_AME_SE='twostage' makes the E3/E4 rows report the two-stage (direction + link)
+    bootstrap of estimation_ame_twostage.py where it has been attached; anything else keeps the
+    link-only numbers the estimator stored. Default 'conditional'."""
+    import os
+    return os.environ.get("SLEEP_AME_SE", "conditional").lower() == "twostage"
+
+
 def select_se(res, name, lead_time_robust: bool = True):
     """Return ``(se, pvalue, scheme)`` for ONE parameter of a fitted result.
 
@@ -200,6 +208,13 @@ def select_se(res, name, lead_time_robust: bool = True):
     matters because the tables must keep building off older fits.
 
     `scheme` is one of 'congl' | 'quarter' | 'dk' and drives the dagger in the table body.
+
+    SLEEP_AME_SE='twostage' switches the E3/E4 single-index rows to the two-stage (direction +
+    link) wild cluster bootstrap of ``estimation_ame_twostage.py``, where it has been attached
+    (``bse_2s`` / ``bse_time_2s``). The gate is an explicit env opt-in rather than attribute
+    presence, so attaching numbers to a pickle cannot silently change a published table. The
+    scheme labels returned are the EXISTING ones: the dagger keeps meaning 'quarter-clustered',
+    so no exporter's dagger logic changes and two-stage-ness belongs in the table note.
     """
     def _get(attr):
         s = getattr(res, attr, None)
@@ -209,6 +224,13 @@ def select_se(res, name, lead_time_robust: bool = True):
             return float(pd.Series(s)[name])
         except Exception:
             return None
+
+    if twostage_se_enabled():
+        nat = lead_time_robust and is_national(name)
+        s2, p2 = ((_get("bse_time_2s"), _get("pvalues_time_2s")) if nat
+                  else (_get("bse_2s"), _get("pvalues_2s")))
+        if s2 is not None and np.isfinite(s2) and s2 > 0:
+            return (s2, p2, "quarter" if nat else "congl")
 
     se_c = _get("bse")
     p_c = _get("pvalues")

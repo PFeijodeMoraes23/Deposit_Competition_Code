@@ -23,10 +23,10 @@ the bias-corrected interval width. Small means the map from coefficients to phi_
 differentiable enough for the bootstrap to be reading a real sampling distribution; the
 robust cells sit two orders of magnitude inside the 0.5pp benchmark, the LS cells fail it.
 
-Reads <demand_prep_root()>/Rout, so SLEEP_OUT_ROOT points it at a sandbox run.
+Reads and writes <rout_dir()>, so SLEEP_OUT_ROOT points it at a sandbox run.
 
   python make_phi_t_band_table.py                    # E3/E4, robust
-  python make_phi_t_band_table.py --est 3 4 5 6 --loss robust ls
+  python make_phi_t_band_table.py --est 3 4 --loss robust ls
 """
 from utils.venv_guard import ensure_project_venv
 ensure_project_venv(__file__)
@@ -34,7 +34,6 @@ ensure_project_venv(__file__)
 import argparse
 import pickle
 import shutil
-from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -42,8 +41,7 @@ import pandas as pd
 from utils import paths as _paths_mod
 from utils.sleep_links import NonLinearResults  # noqa: F401 (needed for unpickling)
 
-_DRAFTS_DIR = Path(r"C:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)"
-                   r"\Open Finance\Open-Finance\Drafts\Deposit Competition")
+_DRAFTS_DIR = _paths_mod.drafts_dir()
 OUT_NAME = "tab_phi_t_bands_spec12.tex"
 
 # Column header per estimator. These \ref the estimation-strategy enumerate in V_Main
@@ -70,7 +68,7 @@ def _method_spread(df):
 
 
 def load_cell(est, loss):
-    p = _paths_mod.demand_prep_root() / "Rout" / f"ts_link_band_est{est}_uncond_{loss}.pkl"
+    p = _paths_mod.rout_dir() / f"ts_link_band_est{est}_uncond_{loss}.pkl"
     if not p.exists():
         return None
     with open(p, "rb") as f:
@@ -185,9 +183,7 @@ def main():
         print("[!] no band pickles found -- run estimation_uncond_band.py first.")
         return
 
-    out_dir = _paths_mod.PROCESSED / "ESTIMATION_OUTPUT" / "Rout"
-    out_dir.mkdir(parents=True, exist_ok=True)
-    out = out_dir / OUT_NAME
+    out = _paths_mod.rout_dir() / OUT_NAME
     out.write_text(build_tex(cells), encoding="utf-8")
     print(f"\nWrote {out}")
     if _DRAFTS_DIR.is_dir():

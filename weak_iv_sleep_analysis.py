@@ -37,7 +37,7 @@ This module therefore reports FOUR non-redundant objects per instrument spec x d
 
   4. (phi) "DO WE NEED IT" MATERIALITY TEST (spec 12 = IV_HausmanFull x Tech) -- reconstruct the
      national deposit-weighted phi_t under OLS (no CF) vs IV_HausmanFull (CF) on BOTH the logit link
-     and the sieve link (E7/E8 headline), on the COMMON sample (rows where the instruments exist);
+     and the monotone sieve link, on the COMMON sample (rows where the instruments exist);
      report Pearson/Spearman correlation, mean|delta|, and trend direction.
 
 CAVEAT flagged throughout: deposits are extremely concentrated by conglomerate, so the effective
@@ -461,7 +461,7 @@ def _write_markdown(out, diag_dir, report_lines):
                      f"{pl['trend_iv']:+.3f} (the CF reverses the trend / pulls phi off the boundary).")
     if phi.get("sieve"):
         ps = phi["sieve"]
-        lines.append(f"- phi (sieve, E7/E8 link) OLS-vs-IV: Pearson {ps['pearson']:+.3f}, mean|delta| "
+        lines.append(f"- phi (monotone sieve link) OLS-vs-IV: Pearson {ps['pearson']:+.3f}, mean|delta| "
                      f"{ps['mean_abs_delta']:.3f}.")
     lines += [
         "",
@@ -530,7 +530,7 @@ def run_phi_tests(df, iv_specs, state_blocks, skip_sieve, report):
     _say(report, "\n[sleep-IV] phi \"do we need it\" test (spec 12) -- fitting logit ...")
     phi["logit"] = _phi_need_test(df, iv12, state_full, "logit")
     if not skip_sieve:
-        _say(report, "[sleep-IV] ... fitting sieve (E7/E8 link; USE_JULIA_SIEVE=0, n_starts=1, no boot) ...")
+        _say(report, "[sleep-IV] ... fitting the monotone sieve link (USE_JULIA_SIEVE=0, n_starts=1, no boot) ...")
         try:
             phi["sieve"] = _phi_need_test(df, iv12, state_full, "sieve")
         except Exception as e:

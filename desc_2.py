@@ -1588,11 +1588,11 @@ def _grouped_rows(groups, n_cols: int) -> list[str]:
 
 
 # Master table A: variables used in estimation, grouped by role.
-# 'Sleep' = sleepiness estimation E1-E8 (state vars enter phi interacted with
+# 'Sleep' = sleepiness estimation E1-E4 (state vars enter phi interacted with
 # lagged deposits; estimation_2_sleep.define_specifications). 'Demand' = the
 # logit/BLP system (X = product chars, pi = demographic interactions actually
-# estimated in blp_1_estimation.jl). gdp_growth_yoy is the +Time block of
-# E4/E6/E8; it was previously undocumented in the appendix dictionaries.
+# estimated in blp_1_estimation.jl). gdp_growth_yoy is the time block of E4, the
+# only +Time routine in the lineup.
 _VARS_MASTER_GROUPS = [
     ("Identifiers and panel structure", [
         (r"CodConglomeradoPrudencial", r"Conglomerate $j$ (prudential C-code)", "BCB", "All"),
@@ -1614,7 +1614,7 @@ _VARS_MASTER_GROUPS = [
         (r"spread\_qoq", r"$r^{\mathrm{f}}_t - r^{\mathrm{dep}}_{jkmt}$, QoQ decimal; the endogenous price in the sleepiness estimation", "Constructed", "Sleep"),
         (r"risk\_free\_ann, deposit\_rate\_ann, spread\_ann", r"Annualized counterparts, $(1+x)^4-1$; \texttt{spread\_ann} is the demand price $\rho_{jkmt}$", "Constructed", "Demand"),
         (r"risk\_free\_qoq\_lag", r"One-quarter lag of the Selic rate (state variable)", "BCB SGS", "Sleep"),
-        (r"gdp\_growth\_yoy", r"Year-over-year GDP growth; the optional time block of the +Time estimators", "IBGE", "Sleep (+Time)"),
+        (r"gdp\_growth\_yoy", r"Year-over-year GDP growth; the time block of the +Time estimator", "IBGE", "Sleep (+Time)"),
     ]),
     ("Market-level state variables and demographics", [
         (r"pix\_exists", r"Pix availability indicator (from 2020Q4)", "BCB", "Sleep"),
@@ -1637,9 +1637,9 @@ _VARS_MASTER_GROUPS = [
 def render_variables_master() -> str:
     notes = (
         r"\footnotesize \textit{Notes:} Only variables entering an estimated "
-        r"specification are listed. ``Sleep'' = sleepiness estimation (E1--E8; "
+        r"specification are listed. ``Sleep'' = sleepiness estimation (E1--E4; "
         r"state variables enter $\phi(S_{mt})$ interacted with lagged deposits), "
-        r"``+Time'' = the E4/E6/E8 time block; ``Demand'' = logit/BLP demand "
+        r"``+Time'' = the E4 time block; ``Demand'' = logit/BLP demand "
         r"system ($X$ = product characteristics, $\pi$ = estimated demographic "
         r"interactions, shares = market-share construction). Auxiliary collected "
         r"variables that enter no estimated specification (additional Pix usage "

@@ -13,7 +13,7 @@ Usage
 -----
   python make_blp_rc_table.py              # E3 (default headline routine, IFT engine)
   python make_blp_rc_table.py --est 3      # E3
-  python make_blp_rc_table.py --all        # E1-E8
+  python make_blp_rc_table.py --all        # every routine in the lineup
   python make_blp_rc_table.py --engine numerical --est 3   # E3 numerical-engine results
 
 Output
@@ -23,6 +23,7 @@ Output
 """
 
 from utils.venv_guard import ensure_project_venv
+from utils import paths as _paths
 ensure_project_venv(__file__)
 
 import argparse
@@ -43,16 +44,15 @@ except Exception:
     pass
 
 ROOT       = pathlib.Path(__file__).resolve().parent
-DATA_DIR   = ROOT.parents[1] / "BCB" / "Egan_et_al_2025_Rep" / "processed"
-RESULTS_DIR = DATA_DIR / "ESTIMATION_OUTPUT" / "BLP_RESULTS"
+DATA_DIR   = _paths.PROCESSED
+RESULTS_DIR = _paths.estimation_output() / "BLP_RESULTS"
 # Raw per-stage cluster results live in cluster_raw/ after the 2026-06-25 reorg.
 RAW_DIR    = RESULTS_DIR / "cluster_raw"
-DEMAND_PREP_DIR = DATA_DIR / "ESTIMATION_OUTPUT" / "DEMAND_PREP"   # demand_{k}_*spec_12.parquet
-TABLES_DIR  = DATA_DIR / "ESTIMATION_OUTPUT" / "Rout"
-DRAFTS_DIR  = pathlib.Path(
-    r"C:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)"
-    r"\Open Finance\Open-Finance\Drafts\Deposit Competition"
-)
+DEMAND_PREP_DIR = _paths.demand_prep_root()                       # demand_{k}_*spec_12.parquet
+# These tables are built from CLUSTER artifacts under BLP_RESULTS, which are not written per
+# sleepiness vintage, so they resolve to the production tree rather than following SLEEP_OUT_ROOT.
+TABLES_DIR  = _paths.estimation_output() / "Rout"
+DRAFTS_DIR  = _paths.drafts_dir()
 TABLES_DIR.mkdir(parents=True, exist_ok=True)
 DRAFTS_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -518,7 +518,7 @@ def main():
     parser.add_argument("--est", type=int, default=3,
                         help="Estimation strategy (default: 6, the headline single-index routine)")
     parser.add_argument("--all", action="store_true",
-                        help="Generate for E1-E8")
+                        help="Generate for every routine in the lineup")
     parser.add_argument("--ests", nargs="+", type=int, default=None,
                         help="Generate for an explicit subset, e.g. --ests 5 6 7 8. Use this "
                              "rather than --all when some routines' RC chains have not "

@@ -12,7 +12,7 @@ within a quarter), so the reported cell is quarter-clustered WCB / Driscoll-Kraa
 utils.se_national.select_se -- the same dagger convention as the paper tables.
 
 Units: E1/E2 are linear, so the coefficient IS d(phi)/d(Selic) per unit of the raw
-regressor. E3-E8 report the INDEX loading (sign-interpretable; magnitude runs through
+regressor. E3/E4 report the INDEX loading (sign-interpretable; magnitude runs through
 the link); the AME row is included when the saved fit carries one.
 
 Outputs: DIAG_PHI_SEPARATION/d7_selic_comovement.csv + tab_selic_wakeup.tex (Rout +
@@ -33,15 +33,16 @@ from utils import se_national as _sen
 import utils.sleep_links  # noqa: F401  (class defs needed to unpickle nonlinear fits)
 
 OUT_DIR = _paths.PROCESSED / "ESTIMATION_OUTPUT" / "DIAG_PHI_SEPARATION"
-TEX_OUT = _paths.PROCESSED / "ESTIMATION_OUTPUT" / "Rout"
-DRAFTS = _paths.OPEN_FINANCE / "Drafts" / "Deposit Competition"
+# rout_dir() honours SLEEP_OUT_ROOT like est_dir() below, so a sandboxed run's table
+# describes the fits it just read instead of overwriting the production fragment.
+TEX_OUT = _paths.rout_dir()
+DRAFTS = _paths.drafts_dir()
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 TEX_OUT.mkdir(parents=True, exist_ok=True)
 
 SPEC = "IV_HausmanFull x Tech"      # spec 12
 VAR = "interaction_risk_free_qoq_lag"
-KIND = {1: "linear", 2: "linear", 3: "logit", 4: "logit+time",
-        5: "single-index", 6: "single-index+time", 7: "joint sieve", 8: "joint sieve+time"}
+KIND = {1: "linear", 2: "linear", 3: "single-index", 4: "single-index+time"}
 
 
 def _series_get(obj, attr, key):
@@ -56,7 +57,7 @@ def _series_get(obj, attr, key):
 
 
 def one_row(est):
-    pkl = _paths.PROCESSED / "ESTIMATION_OUTPUT" / "DEMAND_PREP" / f"est{est}" / "estimation_results.pkl"
+    pkl = _paths.est_dir(est) / "estimation_results.pkl"
     if not pkl.exists():
         return {"est": f"E{est}", "kind": KIND[est], "status": "no pickle"}
     with open(pkl, "rb") as fh:
@@ -85,7 +86,7 @@ def one_row(est):
 
 def main():
     print("=== D7: Selic wake-up comovement (spec 12, all estimators) ===")
-    rows = [one_row(e) for e in range(1, 9)]
+    rows = [one_row(e) for e in sorted(KIND)]
     df = pd.DataFrame(rows)
     df.to_csv(OUT_DIR / "d7_selic_comovement.csv", index=False)
     ok = df[df["status"] == "ok"]
@@ -121,20 +122,12 @@ def main():
         n_neg = int((ok["coef"] < 0).sum())
         sig = ok[ok["p_honest"] < 0.05]
         print(f"\n  VERDICT inputs: {n_neg}/{len(ok)} estimators have the Egan wake-up sign")
-        print("  (NEGATIVE loading: higher Selic -> lower index -> lower phi, since the sieve/")
-        print("  logit link G is monotone increasing; for E1/E2 it is phi directly);")
+        print("  (NEGATIVE loading: higher Selic -> lower index -> lower phi, since the link G")
+        print("  is monotone increasing; for E1/E2 it is phi directly);")
         print(f"  {len(sig)}/{len(ok)} significant at 5% under time-robust (quarter/DK) inference.")
         if len(sig):
             print("  significant rows: " + ", ".join(
                 f"{r['est']} ({r['coef']:+.3f})" for _, r in sig.iterrows()))
-        # E7/E8 caveat: diag_index_identification.py found E7 spec 12 at a corner loading
-        # 0.988 of a unit-norm theta on THIS regressor, so its Selic row is the artifact the
-        # direction diagnostic warned about, not independent evidence.
-        if "E7" in set(sig["est"]) or "E8" in set(sig["est"]):
-            print("  NOTE: E7/E8 are the joint-sieve fits whose index DIRECTION is weakly")
-            print("  identified (diag_index_identification.py: E7 spec 12 sits at a corner with")
-            print("  ~0.99 of unit-norm theta on risk_free_qoq_lag). A significant Selic loading")
-            print("  there reflects that corner; do not read it as wake-up evidence either way.")
         print("  Sign agreement with weak time-robust significance = qualitative corroboration;")
         print("  do NOT lean on magnitudes (T=35 quarters of identifying variation).")
     return 0
