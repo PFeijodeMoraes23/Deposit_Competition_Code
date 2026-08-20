@@ -278,9 +278,20 @@ g0 () {
     if [[ -n "${SKIP_PF}" ]]; then
         echo "  skipped (--skip-preflight)"
     elif [[ "${CL_DRYRUN}" == "1" ]]; then
-        echo "  [dry-run] would run:  bash cluster_preflight.sh --routines '${SLEEP_ROUTINES}'"
+        local wb=""
+        [[ "${BLP_ARGS}" == *--sysimage* ]] && wb="${wb} sysimage"
+        [[ "${BLP_ARGS}" == *--draws*    ]] && wb="${wb} draws"
+        echo "  [dry-run] would run:  bash cluster_preflight.sh --routines '${SLEEP_ROUTINES}'${wb:+ --will-build '${wb# }'}"
     else
-        set +e; bash "${CL_ROOT}/cluster_preflight.sh" --routines "${SLEEP_ROUTINES}"; local rc=$?; set -e
+        # The preflight cannot know that jobs 1 and 2 of the blp phase BUILD the sysimage
+        # and the draws; without this it reports them missing and refuses a run that was
+        # always going to create them. Derived from --blp-args so the two cannot disagree.
+        local wb=""
+        [[ "${BLP_ARGS}" == *--sysimage* ]] && wb="${wb} sysimage"
+        [[ "${BLP_ARGS}" == *--draws*    ]] && wb="${wb} draws"
+        set +e
+        bash "${CL_ROOT}/cluster_preflight.sh" --routines "${SLEEP_ROUTINES}"              ${wb:+--will-build "${wb# }"}
+        local rc=$?; set -e
         if [[ ${rc} -ne 0 ]]; then
             echo "" >&2
             echo "pipeline_all.sh: refusing to submit — the preflight found blockers (above)." >&2

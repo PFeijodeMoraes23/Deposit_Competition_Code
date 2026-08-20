@@ -181,3 +181,8 @@ python_utils       | code | all        | REPO          | utils/*.py             
 # include/import -- deliberately, since a hardcoded fallback lineup would rebuild the
 # drift this registry exists to remove.
 routines_config    | code | all        | REPO          | config/routines.toml           | scripts/config | -                                                         | -         | -
+# The manifest ships ITSELF: cluster_preflight.sh section (7) reads
+# ${CL_ROOT}/cluster/upload_manifest.txt to verify the staged inputs. Without this row
+# it silently degrades to a reduced core check -- it still runs, but it stops checking
+# the thing it exists to check.
+manifest_self      | code | all        | REPO          | cluster/upload_manifest.txt    | scripts/cluster | -                                                        | -         | -

@@ -19,7 +19,9 @@
 # present and still work; they are the fallback and are retired only after one
 # successful cluster cycle. Nothing in them has been modified.
 #
-# Usage:  bash cluster_preflight.sh [--routines "3 4"] [--dry-run] [-h]
+# Usage:  bash cluster_preflight.sh [--routines "3 4"] [--will-build "sysimage draws"]
+#                                   [--dry-run] [-h]
+#         --will-build names artifacts this run creates: reported, but not blocking.
 #         JULIA_MODULE=Julia/1.10.4-foss-2022b bash cluster_preflight.sh
 # --dry-run is accepted and is a NO-OP: this script never submits anything.
 # ==============================================================================
@@ -33,6 +35,11 @@ ROUTINES="${ROUTINES:-${CL_ROUTINES_ALL}}"
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --routines) ROUTINES="$2"; ROUTINES_SRC=flag; shift ;;
+        # Artifacts THIS run creates before anything consumes them. A missing sysimage is a
+        # hard gate for a run that assumes one exists, and a routine no-op for a run whose
+        # first two jobs build it -- the preflight cannot tell those apart on its own, so the
+        # caller says which it is. Still reported either way; only the verdict changes.
+        --will-build) WILL_BUILD="$2"; shift ;;
         --dry-run)  ;;                       # no-op: this script submits nothing
         -h|--help)  sed -n '2,26p' "${BASH_SOURCE[0]}"; exit 0 ;;
         *) echo "unknown option: $1 (see -h)" >&2; exit 2 ;;
@@ -41,7 +48,17 @@ while [[ $# -gt 0 ]]; do
 done
 
 FAIL=0
+WILL_BUILD="${WILL_BUILD:-}"
 note_fail () { FAIL=1; }
+will_build () { [[ " ${WILL_BUILD} " == *" $1 "* ]]; }
+# Anything not named in --will-build still blocks exactly as before.
+note_fail_unless_building () {
+    if will_build "$1"; then
+        echo "    ^ not a blocker: this run builds it (--will-build $1)"
+    else
+        note_fail
+    fi
+}
 
 cl_banner "CLUSTER PREFLIGHT — submits nothing" \
           "scripts: ${CL_ROOT}" \
@@ -118,7 +135,7 @@ fi
 # ── (4) sysimages ────────────────────────────────────────────────────────────
 echo ""
 echo "(4) SYSIMAGE PROVENANCE  (a hard gate at run time, not a warning)"
-for t in gpu cpu; do cl_sysimage_verdict "${t}" || note_fail; done
+for t in gpu cpu; do cl_sysimage_verdict "${t}" || note_fail_unless_building sysimage; done
 echo "  (an image with no <img>.so.json sidecar is UNKNOWN provenance and is refused;"
 echo "   ALLOW_UNSTAMPED_SYSIMAGE=1 accepts it deliberately. On a fresh cluster the"
 echo "   right move is to rebuild both — RUNBOOK step 2.)"
@@ -247,7 +264,7 @@ if [[ -f "${MANIFEST}" ]]; then
     fi
 else
     echo "  cluster/upload_manifest.txt not found — falling back to the core checks:"
-    cl_need_draws "${R:-2000}" "${SEED:-42}" || note_fail
+    cl_need_draws "${R:-2000}" "${SEED:-42}" || note_fail_unless_building draws
     cl_need_rf_curve || note_fail
     cl_need_file "${CL_DATA_IN}/polfunc_fitted.csv" "fitted policy" \
         "build locally then upload: python estimation_bbl_1_polfunc.py" || note_fail
