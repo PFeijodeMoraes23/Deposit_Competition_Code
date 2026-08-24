@@ -35,6 +35,45 @@ SUBDIRS = ["logit", "cluster_raw", "cluster_processed", "legacy"]
 # Increasing-complexity RC sequence: each stage frees one more random coefficient
 # (sigma = 1 σ ... extended = 8). The per-routine progression of Q across these stages is
 # recorded in each processed JSON; the per-stage result .jls stay in cluster_raw/.
+def _flatten_into(root):
+    """Move every nested file up to ``root``, then drop the emptied directories.
+
+    Archives written by cluster_archive.sh keep their domain prefix, so members arrive as
+    ``output/blp_results_E3_spec_12_extended.jls``. Everything below addresses files as
+    ``cluster_raw/<name>``, so without this a dir-prefixed archive yields
+    "MISSING ... skipped" for every routine while the files sit one level down.
+    """
+    moved = 0
+    for dirpath, _dirnames, filenames in os.walk(root):
+        if os.path.abspath(dirpath) == os.path.abspath(root):
+            continue
+        for name in filenames:
+            src = os.path.join(dirpath, name)
+            dest = os.path.join(root, name)
+            if os.path.exists(dest):
+                # same file by size: the flat copy already won, drop the nested duplicate
+                if os.path.getsize(dest) == os.path.getsize(src):
+                    os.remove(src)
+                    continue
+                dest = os.path.join(root, f"{os.path.basename(dirpath)}__{name}")
+            shutil.move(src, dest)
+            moved += 1
+    for dirpath, dirnames, filenames in os.walk(root, topdown=False):
+        if os.path.abspath(dirpath) == os.path.abspath(root):
+            continue
+        if not os.listdir(dirpath):
+            # Best-effort: an emptied dir under OneDrive can still be locked by the sync
+            # client. The files are already where the readers look, so failing to remove
+            # the husk must not abort the ingest.
+            try:
+                os.rmdir(dirpath)
+            except OSError:
+                pass
+    if moved:
+        print(f"[zip] flattened {moved} nested member(s) -> cluster_raw/")
+    return moved
+
+
 STAGE_SEQUENCE = ["sigma", "rc2", "rc3", "rc4", "full", "ext1", "ext2", "extended"]
 
 # SUMMARY.md is written next to the paper draft (V_Main.tex) so the results writeup travels
@@ -238,6 +277,7 @@ def main():
         members = [m for m in z.namelist() if not m.endswith("/")]
         z.extractall(sub["cluster_raw"])
     print(f"[zip] extracted {len(members)} files from {os.path.basename(zip_raw)} -> cluster_raw/")
+    _flatten_into(sub["cluster_raw"])
 
     # ── 2. current logit_* (un-suffixed) -> logit/ ────────────────────────────
     n_logit = 0

@@ -47,7 +47,7 @@ mkdir -p "${HERE}/logs"
 
 # Default routines: the single-index links + their +Time variants E5 (single-index),
 # E6 (single-index+time), E7 (joint), E8 (joint+time).
-ROUTINES="${ROUTINES:-1 2 5 6 7 8}"
+ROUTINES="${ROUTINES:-3 4}"
 # Engines: IFT (blp_2) by default. The numerical (blp_1) cross-check is the single most expensive
 # block (~2.8 h across E5–E8) and only re-validates POINT estimates, which don't change run-to-run —
 # so it is OFF by default. Run it ONCE after a code change, ideally on one representative routine:

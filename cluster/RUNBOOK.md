@@ -299,8 +299,7 @@ The new path needs only `export JULIA_MODULE=...`. Preferring the new scripts is
 | — | `cluster_lib.sh` | new: one site for `JULIA_MODULE` / `PY_MODULE` / `CONDA_ENV`, `cl_pick_zip`, `cl_cp_dir`, routine defaults, the sbatch wrapper |
 | — | `cluster_preflight.sh` | new: the version/sysimage/python/staging verdict block |
 
-21 cluster scripts → 13. `run_sleep_constrained.sh` and `run_sleep_recompute.sh` are local-only and
-out of scope.
+21 cluster scripts → 13. `run_sleep_constrained.sh` is local-only and out of scope.
 
 ---
 

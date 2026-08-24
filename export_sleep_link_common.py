@@ -115,7 +115,7 @@ def _strategy_caption(stage, est_num):
 
 
 def _panels_for(est_num):
-    # E3-E6 (single-index/joint sieve) drop the Base panel: their index excludes the
+    # E3/E4 (single-index) drop the Base panel: their index excludes the
     # constant, so a constant-only Base has no index.
     return ['Macro', 'Tech'] if est_num >= 3 else ['Base', 'Macro', 'Tech']
 

@@ -4,59 +4,19 @@ Plan: `C:\Users\pedro\.claude\plans\ok-let-s-do-the-reflective-church.md`
 Started 2026-08-19. Legend: `[ ]` not started · `[~]` in flight · `[x]` done · `[!]` blocked/needs you
 
 
-> **Reconciled 2026-08-20 14:40.** Today closed: local promotion + verification, the AME off-switch
-> gate (~1e-11, both routines), all Python/Julia/shell cluster-migration edits, the upload tooling,
-> and the paper-facing joint-sieve strings. Bundles are staged at `C:\egan_cluster_stage60820`.
-> **Blocked on the cluster run**: the logit/BLP/BBL/CF exhibits, the full two-stage AME, the bands.
-> **Superseded**: W9 as originally written (a one-command `pipeline_all.sh` now exists; consolidating
-> the 23 legacy `submit_*.sh` is now cleanup, not a prerequisite).
+> **Reconciled 2026-08-24.** This file SHRINKS as work closes - finished sections are deleted, not
+> ticked. Closed since the last pass: the joint-sieve removal (four files, ~1.4k lines; E3/E4
+> reproduce their stored bootstrap to 1.137e-10 / 3.13e-11), W2 registries incl. phase 2, the dead
+> `1 2 5 6 7 8` lineup in five `submit_*.sh`, and the two hardcoded `\ref` ranges that rendered `??`.
+> **Blocked on the cluster**: BLP/BBL/CF exhibits and the E3/E4 table regeneration (W11.d), which
+> needs `ame_twostage_est{3,4}_robust*.pkl` downloaded from `data/output/Rout`.
 
-## ☀️ READ THIS FIRST IN THE MORNING (2026-08-20)
+## NEXT UP
 
-**Before you upload anything to Bouchet, run these 7 locally.** The stager
-(`python stage_cluster_upload.py`) prints this list itself and refuses `--stage` until they pass:
-
-```
-python panel_8_demographics_sigma.py
-julia --project=. --threads=auto blp_1_logit.jl --est 1     (then --est 2, 3, 4)
-python cf_forward_rf.py --horizon 50 --start 2026Q1
-python estimation_bbl_1_polfunc.py
-```
-
-Then `python stage_cluster_upload.py --stage` → two zips in `C:\egan_cluster_stage\<date>\`, each
-carrying an `UPLOAD_README.txt` with numbered steps. Code bundle ~252 KB, data bundle ~237 MB.
-
-**[FIXED last night]** Those producers resolve `DEMAND_PREP` to **production**, which had zero
-parquets — `blp_1_logit.jl` discovers routines by file presence, so it would have found none and
-**exited 0**, silently. The 44 demand parquets (2.28 GB) are now promoted to production, so they work.
-The `est*/` dirs are deliberately NOT promoted yet — the bootstrap rewrites their SEs.
-
-**[!] On the cluster, pass `ROUTINES="1 2 3 4"` explicitly.** `submit_cf_all.sh`, `submit_bbl_all.sh`
-and `submit_blp_2_rc_default.sh` still default to the dead `"1 2 5 6 7 8"`, so their preflights will
-hunt for E5–E8 files this vintage does not have. W9 (running overnight) may supersede this.
-
-**[!] Toolchain skew — check before submitting.** Scripts hardcode `module load
-Julia/1.11.4-linux-x86_64`; Bouchet's docs list **1.10.4**; `Manifest.toml` was resolved under local
-**1.12.6**. Run `module avail Julia` first. A mismatch triggers a manifest re-resolve, which must go
-through `setup_julia_env.sh` alone (concurrent resolves corrupt the manifest over NFS), and it
-invalidates the sysimage — which fails by silently falling back to CPU while holding an H200.
-
-## NEXT UP (in order)
-
-1. **W11.a–c** two-stage AME bootstrap — implement, then run on est3/est4 (~2–5 h). *Blocks the
-   final E3/E4 tables, so it comes before promotion.*
-2. **W0.5b + W11.d** regenerate step 7 tables (note-text fix + new SEs), then **W0.8 promote**
-   sandbox → production and re-run 5/7/8 there
-3. **W1.6** delete `C:\egan_constrained` + `C:\egan_trimmed` (**unblocked** — W0.6 closed the
-   vintage comparison), 40 GB
-4. **W2** registries → **W3** orchestrator (the drift-killer work; everything after gets cheaper)
-5. **W4.2–4.5** battery as an orchestrated stage + staleness guard; **W10 Tier 1** (joint-sieve text
-   that reaches the paper)
-6. **W5** upload/ingest tooling → cluster re-run → **W4.6–4.8**, then **W9** submit-script
-   consolidation *(after the cluster run, not during)*
-
-Deferred until the above lands: **W6** docs, **W7** `diag_`→`step_` rename, **W8** (now narrowed to
-E1/E2 + battery).
+1. **W11.d** regenerate the E3/E4 tables from the downloaded AME pickles
+2. **W3** orchestrator consolidation, then **W7** `diag_` -> `step_`
+3. **W4.2-4.8** battery as an orchestrated stage + staleness guard
+4. **W13** CIR rate-process variant; **W12** move panel_8 + polfunc to the cluster
 
 ---
 
@@ -126,60 +86,15 @@ in the BBL value basis ψ4 = Σ β^t r^f_t · Σ_k Dep_t. A FLAT r^f_t collapses
 Focus curve exists to break that collinearity. Its CSV carries a `source` column so an offline
 fallback path can never be mistaken for the live curve.
 
-## W11 — [!] E3/E4 report one test as five rows — **inferential, affects the headline table**
+## W11 - [!] E3/E4 AME tables still to regenerate
 
-**Verified independently 2026-08-19 against the new-vintage pickles.** In `est1-4_spec12_stage2_comparison.tex`,
-the E3 and E4 columns show 5 and 6 state-variable rows that read as separate significance tests. They are not.
+The two-stage bootstrap is implemented and the cluster has run it; theta is perturbed via its
+cluster influence functions AND the link re-profiled per draw, so every row now carries its own t.
+The off-switch gate reproduces the old conditional numbers to ~1e-10/1e-11.
 
-| routine | rows | distinct \|t\| | shared value |
-|---|---|---|---|
-| est3 | 5 | **2** | \|t\| = 1.313121091 across cadunico, fraction_65plus, risk_free_qoq_lag, connections_per100 |
-| est4 | 6 | **2** | \|t\| = 1.209007720 across those four plus gdp_growth_yoy |
-| est2 (linear control) | 7 | 7 | each coefficient has its own t, as expected |
-
-**Mechanism.** `fit_single_index` does not estimate the index direction θ — it inherits it from a
-separate Cauchy NLLS-logit warm start and estimates only the link G. For a continuous regressor,
-`AME_j = θ_j · (slope_w · β)`. The bootstrap perturbs **β only**, never θ, so the fixed scalar θ_j
-cancels out of `t = AME_j / se(AME_j)`, leaving one common \|t\| with the sign carried by sign(θ_j).
-The dummy (`pix_exists`) is a discrete difference `dcols_j · β` — a different functional of β, hence
-the second distinct t. So each column carries **two** tests: "is the link flat" and "does Pix move it".
-
-**Consequences.**
-**DECIDED 2026-08-19 (user): full two-stage bootstrap of the AMEs.** Each draw perturbs the
-direction θ via its cluster influence functions (`nlls_direction_if`) AND re-profiles the link
-(sieve OLS + QP projection) at the perturbed index, then recomputes every AME — continuous rows as
-θ*_j/sd_j × mean_slope(β*), the Pix dummy as its discrete difference. Every row then carries its own
-t including direction uncertainty. Pattern already proven in `unconditional_phi_t_band`; measured
-cost ≈ 1–2.3 h locally at B=999. Presentation-only and θ-only options rejected.
-
-      driver that recomputes AME SEs from a STORED fit + parquet without re-estimating
-- [ ] **W11.b** Keep both clustering schemes: conglomerate WCB for market-level rows, quarter WCB for
-      the national rows (pix_exists, risk_free_qoq_lag) — same dual scheme as today
-- [ ] **W11.c** Run post-hoc on sandbox est3/est4 (~2×1–2.3 h); **verify per-row t's are now distinct**
-      and the old conditional t (1.313/1.209) is recovered when θ-perturbation is switched off
 - [ ] **W11.d** Regenerate `est{3,4}_second_stage_table.tex` + `est1-4_spec12_stage2_comparison*.tex`
-      (also picks up the W0.5b note-text fix); table note gains one sentence: SEs include
-      direction-estimation uncertainty
-- [ ] **W11.e** Consequence for **W8**: the two-stage bootstrap replaces the WCU/WCR question for the
-      E3/E4 AME rows entirely (it is its own reference). W8.2 narrows to the E1/E2 linear columns and
-      the diagnostics battery
-- Note kept for the record: conditional on inherited θ, all continuous-AME nulls collapse to one
-  restricted fit (φ ≡ 0.9757 flat, violation 7e-16) — this is WHY the two-stage design is required
-
-## W0 — Recover the in-flight run (steps 5–8), verify, promote
-
-
-  | routine | old | **new** | Δ (pp) |
-  |---|---|---|---|
-  | E1 local linear | 99.9669 | **99.9945** | +0.028 |
-  | E2 pooled linear | 99.5041 | **99.5400** | +0.036 |
-  | E3 single-index *(headline)* | 96.5120 | **96.5627** | +0.051 |
-  | E4 single-index + Time | 96.6270 | **96.6814** | +0.054 |
-
-  All four move < 0.06pp: **winsorization-at-source + the φ_t weight unification did not move the
-  headline**. E3/E4 constrained link confirmed genuine (`link='index_sieve'`, `si_constrained=True`,
-  7 active constraints, Σβ = 0.973). Trend "up" preserved on all four.
-  - Cross-check already passing: `desc_3` reproduces the known cluster geometry exactly — G=456, G\*=6.17, CV=8.54, top-5 80.9%. Its two `[WARN]`s (1,142,280 panel rows vs 487,046 pkl nobs; 456 vs 453 clusters) are the documented panel-vs-estimation-sample distinction, not a defect
+      from the downloaded `ame_twostage_est{3,4}_robust*.pkl`; the table note gains one sentence:
+      SEs include direction-estimation uncertainty
 
 ## W0b — V_Main sleepiness exhibits: audit of what today's run owes
 
@@ -195,9 +110,9 @@ Audit of all 41 `\input`/`\includegraphics` in V_Main.tex against disk + generat
 - [ ] `blp_demand_comparison_noseg_spec12.tex` (currently 08-12)
 
 **[!] Must be REMOVED from V_Main — deleted lineup, no generator will ever emit these again:**
-- [ ] `blp_rc_E7_spec12.tex`, `blp_rc_E8_spec12.tex` (joint sieve)
-- [ ] `est7_spec12_logit.tex`, `est8_spec12_logit.tex` (joint sieve)
-- [ ] `est_phi_t_joint_sieve_pair.png` (joint-sieve figure; `_make_pair_plot` now emits only the single-index pair)
+- [ ] `blp_rc_E7_spec12.tex`, `blp_rc_E8_spec12.tex`
+- [ ] `est7_spec12_logit.tex`, `est8_spec12_logit.tex`
+- [ ] `est_phi_t_joint_sieve_pair.png` (`_make_pair_plot` emits only the single-index pair)
 
 **Valid and kept:** `est_phi_t_single_index_pair.png` (built from the genuine `ts_link_band_est{3,4}.pkl`).
 
@@ -210,13 +125,12 @@ Audit of all 41 `\input`/`\includegraphics` in V_Main.tex against disk + generat
       `_ARCHIVE_PRE_RELABEL_20260818/vintage_comparators/` first, so the old-vs-new comparison stays
       reproducible at the reporting level without the multi-GB pickles
 
-## W2 — Single-source registries (drift killer)
+## W2 - Single-source registries
 
-- [ ] **W2.1** `config/routines.toml` — one lineup definition for Python + Julia
-- [ ] **W2.2** `utils/routines.py` + migrate 13 Python declaration sites
-- [ ] **W2.3** `routines.jl` + migrate Julia sites *(ships with cluster batch)*
-- [ ] **W2.4** `utils/paths.py` completion: BLP/BBL/CF/COST_FWD accessors, kill 14 Drafts literals
-- [ ] **W2.5** `submit_*.sh` ROUTINES defaults read the manifest *(cluster batch)*
+- [ ] One duplication left, MEASURED to agree on all 12 specs (2026-08-24): `SPEC_MAP` in
+      `estimation_demand_link_common.py` vs the `_IV_ORDER` x state-block enumeration in
+      `estimation_sleep_common.py:143`. Consolidating touches the estimator's own spec
+      enumeration, so not next to a live cluster run
 
 ## W3 — Orchestrator consolidation
 
@@ -238,59 +152,33 @@ Audit of all 41 `\input`/`\includegraphics` in V_Main.tex against disk + generat
 
 - [ ] **W5.4** Cluster preflight blocks read the manifest *(cluster batch)*
 
-## W10 — Joint-sieve residue: code, live branches, and generated table text
+## W10 - Residue from the joint-sieve removal
 
-The joint sieve left the *lineup*, but its implementation and several user-visible strings remain.
-Three tiers, in priority order.
-
-**Tier 1 — reaches the paper (generated output, not comments):**
-      `tab_alpha_weakiv_sleep.tex` / `tab_phi_need_sleep.tex`
-      the E4/E6/E8 time block)`; the live time block is E4 alone
-
-**Tier 2 — live code, needs a decision not an edit:**
-- [ ] `estimation_sleep_common.py:13` vs `estimation_2_sleep.py:133` — docstring says the +Time block
-      adds `(time_trend, gdp_growth_yoy)`, but `TIME_VARS = ['gdp_growth_yoy']`; `time_trend` was
-      dropped. Pre-dates the relineup — decide whether the doc or the code is wrong
-- [ ] `run_diag_matrix.py:25,133` — `--units d0:1,2,5,6,7,8` in help; the diag-matrix unit ids are
+- [ ] `tab_phi_need_sleep.tex` still holds joint-sieve-vintage numbers. Its sieve arm now fits with
+      `fit_single_index`, so a re-run of `weak_iv_sleep_analysis.py` + `make_iv_sleep_tables.py`
+      will move the numbers. Not `\input` into V_Main, so nothing in the paper moves today
+- [ ] `run_diag_matrix.py:25,133` - `--units d0:1,2,5,6,7,8` in help; the diag-matrix unit ids are
       their own namespace and must be reconciled with `run_phi_diagnostics.py` first (which also has
       the duplicate `D4b` key bug, W3.2)
 
-**Tier 3 — the estimator implementation itself:**
-- [ ] `fit_joint_single_index` and the `"sieve"` link path still exist in `utils/sleep_links.py`
-      (~18 sites incl. `:413-431`, `:1025-1027`, `:1464`, `:2378-2394`), plus references in
-      `estimation_sleep_common.py:61,64,77,234`, `diag_index_identification.py`,
-      `estimation_demand_link_common.py:270,533`, `export_sleep_link_common.py:118,282`.
-      **Decide: delete the joint-sieve estimator, or keep it as an unexported capability?** Comments
-      describing it are correct as long as the code is there, so this is one decision, not a sweep.
-      Note the parallel precedent: the logit *link* code is deliberately kept because E3/E4's
-      direction step is an internal logit fit
-
-**Deliberately keep:** `utils/se_national.py:249` — a dated (2026-07-30) adversarial-review finding
+**Deliberately keep:** `utils/se_national.py:249` - a dated (2026-07-30) adversarial-review finding
 about which stored pickles lacked quarter blocks *at that date*; naming E8 is part of that record.
 
-## W9 — SUPERSEDED 2026-08-20 (was: consolidate 23 submit_*.sh)
+## W9 - Retire the legacy submit_*.sh
 
-A single command now exists — `pipeline_all.sh` plus `sleep_run.sh` / `blp_run.sh` / `bbl_run.sh` /
-`cf_run.sh` / `cf_eq_run.sh` on `cluster_lib.sh`, with gates and self-continuing phases. The 23 legacy
-`submit_*.sh` were deliberately left in place as a fallback. Retiring them is CLEANUP after one
-successful cluster cycle, not a prerequisite, and is not worth doing before the new path is proven.
+- [ ] *(after one green cluster cycle)* delete the 23 superseded `submit_*.sh`; keep
+      `setup_julia_env.sh`. `pipeline_all.sh` is the proven path; these remain only as a fallback
 
-- [ ] *(after one green cluster cycle)* delete the superseded `submit_*.sh`; keep `setup_julia_env.sh`
+## W8 - WCU vs WCR, narrowed to the linear routines
 
-## W8 — LARGELY MOOTED 2026-08-20 by the two-stage bootstrap (W11)
+W11's two-stage bootstrap is its own reference for the E3/E4 AME rows, so this is now only about
+E1/E2 and the battery. Measured sizes at nominal 5%: normal 0.270 / WCU 0.138 / WCR 0.083 / CRVE-t
+0.145 (MC SE 0.0109), so WCR beats WCU but is still oversized.
 
-The WCU-vs-WCR question was about how to get honest SEs for the single-index AMEs. W11's two-stage
-bootstrap replaces that question for E3/E4 entirely: it resamples the direction AND re-profiles the
-link per draw, and reports percentile/BC intervals rather than a symmetric SE with a normal reference.
-The size measurement stands (normal 0.270 · WCU 0.138 · WCR 0.083 · CRVE-t 0.145 at nominal 5%; MC SE
-0.0109, so the WCR-over-WCU gap is real but WCR is itself still oversized).
-
-What genuinely remains, narrowed to the LINEAR routines and the battery:
-- [ ] **W8.2** Choose WCU vs WCR for E1/E2 and the weak-IV battery — **user decision**, no longer
-      blocking the E3/E4 headline
-- [ ] **W8.4** Make the silent fallback loud: `utils/sleep_links.py:1873-1879` coerces `wcr`→`wcu` on
-      the generic score path and warns ONCE PER PROCESS via `_WCB_WARNED`. Record the realised mode in
-      each results object so a table can state its own reference distribution
+- [ ] **W8.2** Choose WCU vs WCR for E1/E2 and the weak-IV battery - **user decision**
+- [ ] **W8.4** `utils/sleep_links.py` coerces `wcr`->`wcu` on the generic score path and warns once
+      per process via `_WCB_WARNED`. Record the realised mode on each results object so a table can
+      state its own reference distribution
 
 ## W7 — Rename pipeline-integrated `diag_*` → `step_*`
 

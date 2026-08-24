@@ -10,8 +10,7 @@ on exactly the two rows with the largest headline coefficients.
 
 Nothing here touches a point estimate. theta-hat minimises the objective; the clustering scheme
 enters only the variance. So these are recomputations of SEs, never re-estimations -- which is
-why they can run off a saved fit (or a tail-only refit with theta_fixed) instead of a full
-re-search.
+why they can run off a saved fit instead of a full re-search.
 
 Two alternatives, which fail in OPPOSITE directions. Both are computed; the TABLES report the
 quarter-clustered bootstrap and show/quote Driscoll-Kraay alongside (see `select_se` for why the

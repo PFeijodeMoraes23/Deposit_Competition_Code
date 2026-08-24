@@ -2,28 +2,25 @@
 
 Author: Pedro Feijó de Moraes
 
-Motivated by 2026-07-29: E7 spec 12 was found sitting at a corner solution (0.988 of a
-unit-norm theta on `risk_free_qoq_lag`) whose monotone link saturated into a 1.5pp band of
-phi, collapsing every AME by ~700x -- at an R2 of 0.95230 against 0.95250 for a completely
+The concern this addresses, measured on spec 12: a direction loading 0.988 of a unit-norm
+theta on `risk_free_qoq_lag` saturates the monotone link into a 1.5pp band of phi and
+collapses every AME by ~700x -- at an R2 of 0.95230 against 0.95250 for a completely
 different, balanced direction. Two directions that disagree economically but agree to 4
 decimal places in fit are not "one right and one wrong optimum": they are evidence that the
 DATA does not pin down the direction, and that the optimizer is choosing it.
 
-This script quantifies that directly. It refits each estimator from several starting points
+This script quantifies that directly. It refits the direction from several starting points
 and reports the SPREAD in attained fit. Reading:
 
     spread ~ 0        -> theta is weakly/set-identified. Report it as such; a better
                          optimizer buys stability, not identification.
     spread meaningful -> the objective does discriminate, and the best start wins.
 
-Scope by routine (checked against the code, 2026-07-29):
+Scope by routine:
   E1/E2  closed-form OLS/2SLS -- no starting values, nothing to diagnose.
-  E3/E4  fit_nlls_link: ONE start from zeros. Probed here via the `init` hook.
-  E5/E6  fit_single_index does NOT re-optimise theta -- it inherits E3/E4's direction and
-         only fits the link. So they are not independent checks of theta; whatever E3/E4
-         lands on propagates. Diagnosing E3/E4 diagnoses these.
-  E7/E8  fit_joint_single_index now scores candidate directions on the full-sample
-         objective and prints the spread itself; this script adds random starts on top.
+  E3/E4  the direction comes from `fit_nlls_link`, probed here through its `init` hook.
+         `fit_single_index` does NOT re-optimise theta, it only fits the link, so whatever
+         that NLLS logit lands on is exactly what both reported routines carry.
 """
 from utils.venv_guard import ensure_project_venv
 ensure_project_venv(__file__)
@@ -34,6 +31,7 @@ import numpy as np
 from estimation_2_sleep import (build_pooled_data, define_specifications,
                                 run_pooled_first_stage)
 from utils.sleep_links import fit_nlls_link
+from utils import routines as R
 import sys
 
 # Windows consoles default to cp1252 and raise UnicodeEncodeError on any non-ASCII
@@ -45,7 +43,7 @@ try:
 except Exception:
     pass
 
-SPEC = "IV_HausmanFull x Tech"   # spec 12
+SPEC = R.SPEC12   # spec 12
 
 
 def main(n_random: int, seed: int, time_block: bool) -> int:
@@ -71,7 +69,7 @@ def main(n_random: int, seed: int, time_block: bool) -> int:
     rows = []
     for nm, s0 in starts:
         res = fit_nlls_link(df, s_cols, has_cf=True, link="logit", loss="cauchy",
-                            fe_time_col="time_id", bootstrap=False, init=s0)
+                            fe_time_col=R.FE_TIME_COL, bootstrap=False, init=s0)
         if res is None:
             print(f"  {nm:<20s}  FAILED")
             continue
@@ -116,6 +114,6 @@ if __name__ == "__main__":
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--n-random", type=int, default=3, help="random unit-vector starts")
     ap.add_argument("--seed", type=int, default=0)
-    ap.add_argument("--time-block", action="store_true", help="E4/E6/E8 variant")
+    ap.add_argument("--time-block", action="store_true", help="the +Time variant (E4)")
     a = ap.parse_args()
     raise SystemExit(main(a.n_random, a.seed, a.time_block))

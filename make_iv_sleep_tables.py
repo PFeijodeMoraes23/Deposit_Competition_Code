@@ -14,8 +14,9 @@ style of make_iv_tables.py:
                                   + tF 95% CI, alongside the STRUCTURAL control-function coefficient
                                   gamma (WCB t). Footnote states in bold that alpha is a linear projection
                                   benchmark, NOT phi, and flags the G* ~ 5-7 precision caveat.
-  3. tab_phi_need_sleep.tex     -- The phi "do we need it" materiality test (spec 12): logit vs sieve
-                                  link, national deposit-weighted phi_t OLS vs IV_HausmanFull.
+  3. tab_phi_need_sleep.tex     -- The phi "do we need it" materiality test (spec 12): the logit
+                                  link vs the shape-constrained monotone sieve link E3/E4 report,
+                                  national deposit-weighted phi_t OLS vs IV_HausmanFull.
 
 Reads BLP_RESULTS/cluster_processed/weak_iv_sleep.json; writes to ESTIMATION_OUTPUT/Rout/ + Drafts/
 Deposit Competition/. Reuses make_iv_tables' formatting helpers (_wrap/_num/_F/_tf/_alpha_se).
@@ -178,8 +179,10 @@ def build_phi(wiv):
             r"(IV\_HausmanFull\,$\times$\,Tech), on the common sample where the instruments exist. "
             r"$\hat\phi$ is built from the native index $\times$ link via \texttt{phi\_from\_native} "
             r"under the two link forms \texttt{weak\_iv\_sleep\_analysis.py} fits for this "
-            r"diagnostic---the logit and the monotone sieve---which are link shapes, not the "
-            r"reported estimation strategies. A strong negative correlation and a reversed "
+            r"diagnostic: the logit that supplies the index direction, and the shape-constrained "
+            r"monotone sieve that Estimation Strategies~3 and~4 report. These are link "
+            r"\emph{shapes} at one specification, not a comparison of estimation strategies. "
+            r"A strong negative correlation and a reversed "
             r"trend indicate the control function materially changes the estimated inattention (it "
             r"pulls $\hat\phi$ off the boundary), so it earns its place.")
     return _wrap(body, col_fmt, r"Does the Control Function Move the Estimated Sleepiness $\hat\phi_t$? (Spec.~12)",

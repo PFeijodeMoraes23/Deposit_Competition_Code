@@ -7,8 +7,9 @@ sleepiness routine into one table and one figure.
 
 Why this exists. `diag_phi_augmented_tests.py --arm lagdepact --estim N` writes one CSV per
 routine, so the cross-routine comparison -- which is the whole point, since the censoring rate
-runs from 23.7% (E1) to 41.8% (E7) and the reconstructed awake flow moves with it -- only
-existed by reading six files side by side. This builds the comparison as an artefact.
+varies by routine (23.7% at E1, higher at the link routines) and the reconstructed awake flow
+moves with it -- only existed by reading the files side by side. This builds the comparison as
+an artefact.
 
 SCOPE, stated because it is easy to over-read the output. `--estim N` repoints the PHI SOURCE:
 `Dep_Act`, the uncensored inflow rebuilt from it, and the censoring indicator all come from
@@ -49,12 +50,12 @@ except Exception:
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from diag_phi_augmented_tests import OUT_DIR  # noqa: E402
+from utils import paths as P  # noqa: E402
+from utils import routines as R  # noqa: E402
 
-DRAFTS = Path(r"c:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance"
-              r"\Open-Finance\Drafts\Deposit Competition")
+DRAFTS = P.drafts_dir()
 
-LABEL = {1: "E1 identity", 2: "E2 pooled linear", 3: "E3 single-index",
-         4: "E4 single-index + time"}
+LABEL = {e: R.est_diag_label(e) for e in R.ACTIVE}
 
 SPECS = [("spec12(k=4,5)", "spec 12 (k=4,5)"), ("OLSxTech(all k)", "OLS$\\times$Tech (all k)")]
 
@@ -93,7 +94,7 @@ def main() -> int:
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--ests", nargs="+", type=int,
                     default=[int(x) for x in
-                             os.environ.get("SLEEP_ACTIVE_ESTS", "1 2 3 4").split()])
+                             os.environ.get("SLEEP_ACTIVE_ESTS", R.ACTIVE_ENV_DEFAULT).split()])
     a = ap.parse_args()
 
     frames = {e: d for e in a.ests if (d := load(e)) is not None}
@@ -205,9 +206,10 @@ def main() -> int:
                bbox_to_anchor=(0.5, -0.06), frameon=False)
 
     # Third panel: D0's censoring rate. This is the quantity that actually VARIES with the
-    # routine -- 23.7% at E1 to 41.8% at E7 -- and it is why a cross-routine D2b/D2c matters at
-    # all: it is how much of the awake flow each routine's phi-hat sends below zero before the
-    # test ever sees it. Plotting the baseline phi here instead would plot a constant.
+    # routine -- 23.7% at E1, higher at the link routines -- and it is why a cross-routine
+    # D2b/D2c matters at all: it is how much of the awake flow each routine's phi-hat sends
+    # below zero before the test ever sees it. Plotting the baseline phi here instead would
+    # plot a constant.
     ax = axes[2]
     cens = []
     for est in T["estim"]:

@@ -161,8 +161,18 @@ sub () {  # sub <jobname> <time> <extra sbatch args...>
     # consequence, in words: a job cancelled as DependencyNeverSatisfied writes
     # NO LOG FILE AT ALL. A missing cf1_net log therefore means "read the
     # corresponding bbl_solve .err", not "cf1_net misbehaved".
+    # CPU steps load blp_sysimage_cpu.so, which is valid ONLY on the cpugen it was built
+    # on, and `day` mixes cpugen:turin (AMD 9575f/9655) with cpugen:emeraldrapids (Intel
+    # 8562Y+). Unpinned, a CPU step lands on the wrong microarchitecture and cf_job.sh's
+    # cl_require_sysimage refuses with "the image does not LOAD on <node>". Must match the
+    # constraint ENV_STEP=sysimage_cpu was built under (cluster_lib.sh) and the one
+    # bbl_run.sh already applies. cf3_shard is the only GPU step (cf_job.sh sets CF_GPU=1
+    # for it alone); it takes the gpu_h200-built image, so it is left unpinned.
+    local cons=""
+    if [[ -z "${GPUS:-}" && "${PARTITION:-day}" != gpu* ]]; then cons="${CPU_CONSTRAINT:-cpugen:turin}"; fi
     cl_sbatch -J "${name}" -t "${tlim}" \
         ${PARTITION:+--partition="${PARTITION}"} ${GPUS:+--gpus="${GPUS}"} ${MEM:+--mem="${MEM}"} \
+        ${cons:+--constraint="${cons}"} \
         -o "${LOGD}/${name}_%A_%a.out" -e "${LOGD}/${name}_%A_%a.err" "$@"
 }
 

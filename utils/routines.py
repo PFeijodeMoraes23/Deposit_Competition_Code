@@ -147,6 +147,16 @@ def demand_prefix(est: int) -> str:
     return r.demand_prefix if r is not None else f"demand_{est}"
 
 
+def demand_tag(est: int) -> str:
+    """The link tag carried inside the demand parquet stem ``demand_{est}_{tag}``.
+
+    Empty for the linear routines, whose stem is just ``demand_{est}``. This is the same
+    string the Julia routine discovery keys on, so it is read from the stem rather than
+    stored twice."""
+    stem, head = demand_prefix(est), f"demand_{int(est)}_"
+    return stem[len(head):] if stem.startswith(head) else ""
+
+
 def est_roman(est: int) -> str:
     """Estimator id -> its parenthesised Roman numeral, e.g. ``(III)``."""
     n, out = int(est), []

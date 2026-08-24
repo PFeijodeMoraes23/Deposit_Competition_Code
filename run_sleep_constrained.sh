@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ===========================================================================================
-# run_sleep_constrained.sh — re-estimate E1/E2/E3-E6 with the shape-constrained link
+# run_sleep_constrained.sh — re-estimate E1/E2/E3/E4 with the shape-constrained link
 # ===========================================================================================
 # WHAT THIS IS FOR.  phi is a probability, so the single-index link G must be a CDF: monotone
 # and valued in [0,1] (V_Main.tex eq.(6)/:296, :408, :414, and :507 which divides by 1-phi).
@@ -11,15 +11,15 @@
 #
 # SANDBOX ONLY, BY CONSTRUCTION.  SLEEP_OUT_ROOT is set to a scratch root and is never unset,
 # so nothing here can write to PROCESSED/ESTIMATION_OUTPUT/DEMAND_PREP.  It also never writes
-# to C:\egan_trimmed, which is the read-only comparator.  Contrast run_sleep_recompute.sh,
-# which deliberately `unset SLEEP_OUT_ROOT` to target production.
+# to C:\egan_trimmed, which is the read-only comparator.  A run that targets production
+# must unset SLEEP_OUT_ROOT explicitly; nothing in this script does.
 #
 # USAGE
-#   bash run_sleep_constrained.sh                     # E1,E2,E3-E6 into C:/egan_constrained
+#   bash run_sleep_constrained.sh                     # E1,E2,E3,E4 into C:/egan_constrained
 #   OUT=C:/egan_other bash run_sleep_constrained.sh   # different sandbox root
-#   bash run_sleep_constrained.sh --from e5           # force the start point
+#   bash run_sleep_constrained.sh --from e3           # force the start point
 #   bash run_sleep_constrained.sh --dry-run           # print the plan, run nothing
-#   ONLY="e5 e6" bash run_sleep_constrained.sh        # just those steps
+#   ONLY="e3 e4" bash run_sleep_constrained.sh        # just those steps
 #   bash run_sleep_constrained.sh --bands             # also build the unconditional bands
 #   bash run_sleep_constrained.sh --fresh             # recompute everything, ignore what is on disk
 #
@@ -27,9 +27,8 @@
 # it continues where it stopped, at SPEC granularity, with no flags to remember.
 #   * each estimator writes its pickle after EVERY state block, so an interruption costs at
 #     most the block in flight (<= 4 specs), not the estimator;
-#   * SLEEP_RESUME=1 (set below) makes an estimator skip specs already on disk, and a stored
-#     spec still feeds the warm-start chain, so a resumed grid follows the same path as an
-#     uninterrupted one;
+#   * SLEEP_RESUME=1 (set below) makes an estimator skip specs already on disk; every spec is
+#     fitted cold, so a resumed grid computes exactly what an uninterrupted one would;
 #   * a spec fitted under a DIFFERENT SLEEP_LINK_CONSTRAINED setting is recomputed rather than
 #     reused, so a resume can never blend two estimators inside one pickle;
 #   * completed estimators are skipped wholesale by the marker check below.
@@ -76,7 +75,7 @@ export SLEEP_RESUME=$([ "$FRESH" = "1" ] && echo 0 || echo 1)
 # per-block checkpointing means a partial grid also has one.
 step_done() {
   case "$1" in
-    e1|e2|e5|e6|e7|e8) [ -s "${SLEEP_OUT_ROOT}/est${1#e}/market_panel_phis.csv" ] ;;
+    e1|e2|e3|e4) [ -s "${SLEEP_OUT_ROOT}/est${1#e}/market_panel_phis.csv" ] ;;
     band3) [ -s "${SLEEP_OUT_ROOT}/Rout/ts_link_band_est3_uncond_ls.pkl" ] ;;
     band4) [ -s "${SLEEP_OUT_ROOT}/Rout/ts_link_band_est4_uncond_ls.pkl" ] ;;
     *) return 1 ;;
@@ -128,7 +127,7 @@ _run() {
   if [ "$rc" -ne 0 ]; then
     echo "[constrained] !! ${label} FAILED (rc=${rc})."
     case "$key" in
-      e1|e2|e5|e6|e7|e8) echo "[constrained] !! aborting: later steps consume this estimator."; exit "$rc" ;;
+      e1|e2|e3|e4) echo "[constrained] !! aborting: later steps consume this estimator."; exit "$rc" ;;
       *) echo "[constrained] continuing (non-fatal step)." ;;
     esac
   fi
@@ -155,22 +154,12 @@ run_step e2 "E2 pooled B+D linear"   estimation_2_sleep.py
 run_step e3 "E3 single-index"        estimation_sleep_common.py --est 3
 run_step e4 "E4 single-index + time" estimation_sleep_common.py --est 4
 
-# E5/E6 (joint sieve): SPEC 12 ONLY by default, matching the comparator vintage in
-# C:\egan_trimmed (its joint-sieve pickles hold exactly one spec, IV_HausmanFull x Tech,
-# while the single-index pair holds 8). The
-# joint sieve runs a Julia theta search per spec at roughly 50 min, so a full 8-spec grid is
-# ~7 h per estimator and would produce cells the comparator has nothing to compare against.
-# E78_FULL=1 runs the whole grid instead.
-_E56_ARGS=$([ "${E78_FULL:-0}" = "1" ] && echo "" || echo "--spec12")
-run_step e5 "E5 joint sieve${_E56_ARGS:+ (spec 12)}"        estimation_sleep_common.py --est 5 ${_E56_ARGS}
-run_step e6 "E6 joint sieve + time${_E56_ARGS:+ (spec 12)}" estimation_sleep_common.py --est 6 ${_E56_ARGS}
-
 # --- unconditional bands (opt-in: the expensive part) ---------------------------------------
 # Each cell re-profiles the constrained link once per draw, and additionally emits the
 # tangent-cone band, which is the valid construction when shape constraints are active
 # (Andrews 2000) — they are active in every cell measured so far.
 if [ "$BANDS" = "1" ]; then
-  for e in 5 6; do
+  for e in 3 4; do
     run_step "band${e}" "Unconditional band E${e} (both losses)" \
       estimation_uncond_band.py --est "${e}" --loss both
   done

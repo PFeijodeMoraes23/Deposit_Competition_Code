@@ -1008,8 +1008,8 @@ if __name__ == "__main__":
                          "are untouched.")
     ap.add_argument("--phi-prod", type=float, default=None,
                     help="production phi for the iso-contour / D4c band. Default: read from "
-                         "the est2 spec-12 fit via utils.phi_reference (pass 0.985 to use "
-                         "the E7/E8 headline instead)")
+                         "the est2 spec-12 fit via utils.phi_reference; pass a literal to band "
+                         "against another routine's level instead")
     a = ap.parse_args()
     if a.phi_prod is None:
         from utils import phi_reference as _pr

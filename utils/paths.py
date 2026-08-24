@@ -78,12 +78,11 @@ def demand_prep_root() -> Path:
     WITHOUT touching production results.
 
     That matters here for two reasons beyond ordinary caution. Adding a column to a
-    stored band requires re-fitting the cell, and re-fitting is not idempotent for the
-    joint sieve: the criterion has multiple near-equivalent optima (2026-08-03 probe),
-    so a rerun can land in a different basin than the fit the uploaded cluster parquets
-    descend from. And the estimators write ~2 GB of derived CSV per grid, which is
-    better kept off OneDrive. Point a sandbox run at a local disk, compare, and promote
-    by explicit copy only if the comparison is clean.
+    stored band requires re-fitting the cell, and the index direction has several
+    near-equivalent optima (2026-08-03 probe), so a rerun can land in a different basin
+    than the fit the uploaded cluster parquets descend from. And the estimators write
+    ~2 GB of derived CSV per grid, which is better kept off OneDrive. Point a sandbox run
+    at a local disk, compare, and promote by explicit copy only if the comparison is clean.
 
     INPUTS ARE UNAFFECTED -- they resolve through the other anchors in this module, so
     a redirected run reads exactly the same panels as production.

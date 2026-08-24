@@ -33,6 +33,7 @@ import numpy as np
 from scipy.stats import norm
 
 from utils import paths
+from utils import routines as R
 from utils import state_transform as _st
 from utils.sleep_links import NonLinearResults  # noqa: F401 (needed for unpickling)
 
@@ -267,10 +268,8 @@ def _apply_link(index_series, link, res_ss):
     elif link == 'probit':
         phi = norm.cdf(idx)
     elif link == 'index_sieve':
-        # E5/E6 shape-constrained link (monotone I-spline, beta>=0 and sum(beta)<=1). Stored as
-        # a grid over the FULL native index -- constant INCLUDED, unlike the 'sieve' branch
-        # below where the joint estimator absorbs the constant into G. Mirrors
-        # phi_from_native exactly.
+        # E3/E4 shape-constrained link (monotone I-spline, beta>=0 and sum(beta)<=1). Stored as
+        # a grid over the FULL native index, constant INCLUDED. Mirrors phi_from_native exactly.
         phi = np.interp(idx.values, res_ss.si_vgrid, res_ss.si_ggrid)
     elif link == 'index':
         b = np.asarray(res_ss.si_b)
@@ -279,11 +278,6 @@ def _apply_link(index_series, link, res_ss):
         phi = np.zeros(len(vs))
         for d in range(len(b)):
             phi = phi + b[d] * vs ** d
-    elif link in ('sieve', 'kernel'):
-        # Joint single index (Est7/Est8): the native index has NO constant (it is
-        # absorbed in G); the monotone link is stored as a grid in the native-index
-        # frame. This mirrors phi_from_native exactly.
-        phi = np.interp(idx.values, res_ss.si_vgrid, res_ss.si_ggrid)
     else:
         raise ValueError(f"unknown link {link!r}")
     return pd.Series(phi, index=index_series.index).clip(lower=0.0, upper=1.0)
@@ -530,7 +524,7 @@ def process_specification(spec_name, spec_res, df_base, link):
 
 def run(est_num, link, tag, time_block=False, spec="all"):
     """Demand prep for Est{est_num} with the given link. spec = 'all' | 'N' | 'a-b'.
-    time_block=True (E4/E6/E8) adds the time block (time_trend + gdp_growth_yoy)
+    time_block=True (E4) adds the time block (time_trend + gdp_growth_yoy)
     to the demand frame so phi reconstructs the time interactions."""
     spec = str(spec)
     if spec.lower() == 'all':
@@ -598,9 +592,7 @@ def run(est_num, link, tag, time_block=False, spec="all"):
 # a constrained single-index fit ("index_sieve") is evaluated on its I-spline grid even though
 # this table says "index". The tag is what lands in the parquet filename
 # (demand_{est}_{tag}_spec_{spec}.parquet) and is what the Julia routine discovery keys on.
-DEMAND_CFG = {
-    3: ("index", "index", False),       4: ("index", "index_time", True),
-}
+DEMAND_CFG = {e: ("index", R.demand_tag(e), R.ROUTINES[e].time_block) for e in R.LINK_ESTS}
 
 if __name__ == "__main__":
     pd.options.mode.chained_assignment = None

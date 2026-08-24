@@ -29,6 +29,7 @@ import numpy as np
 import pandas as pd
 
 from utils import paths as _paths
+from utils import routines as R
 from utils import se_national as _sen
 import utils.sleep_links  # noqa: F401  (class defs needed to unpickle nonlinear fits)
 
@@ -40,7 +41,7 @@ DRAFTS = _paths.drafts_dir()
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 TEX_OUT.mkdir(parents=True, exist_ok=True)
 
-SPEC = "IV_HausmanFull x Tech"      # spec 12
+SPEC = R.SPEC12      # spec 12
 VAR = "interaction_risk_free_qoq_lag"
 KIND = {1: "linear", 2: "linear", 3: "single-index", 4: "single-index+time"}
 

@@ -132,6 +132,50 @@ else
     note_fail
 fi
 
+# ── (3b) IS THE DEPOT ACTUALLY POPULATED? ────────────────────────────────────
+# A version match is NOT evidence the packages are installed. On 2026-08-20 the manifest
+# matched the loaded Julia, this section reported "RESOLVE REQUIRED: no", and the logit job
+# still died on `Package Parquet2 ... is required but does not seem to be installed`: the
+# legacy setup_julia_env.sh had instantiated into the DEFAULT depot (~/.julia) while
+# cluster_lib.sh points every job at ${CL_ROOT}/.julia_depot. Same Manifest.toml, different
+# library. The only decisive test is to load a package the way a job does.
+echo ""
+echo "(3b) DEPOT CONTENTS  (a version match is not proof the packages exist)"
+echo "  depot searched first: ${JULIA_DEPOT_PATH%%:*}"
+# Resolvability, NOT a load. `using` on the LOGIN node recompiles against a CPU target the
+# compute nodes never precompiled for, and the login node's memory cap kills it mid-precompile
+# -- so a perfectly good depot reports as a blocker. Base.find_package resolves a package
+# through the active project and depot WITHOUT compiling anything, and that is exactly the
+# failure this section exists to catch: a package listed in the Manifest but absent from the
+# depot the jobs actually read (which is how the logit phase once died at import).
+DEPOT_PROBE="$(JULIA_PKG_PRECOMPILE_AUTO=0 julia --project="${CL_ROOT}" -e '
+    miss = String[]
+    for p in ("Parquet2", "DataFrames", "JSON3")
+        Base.find_package(p) === nothing && push!(miss, p)
+    end
+    println(isempty(miss) ? "OK" : "FAIL: not installed in this depot: " * join(miss, ", "))
+    ' 2>&1 | tail -3)"
+if [[ "${DEPOT_PROBE}" == OK* ]]; then
+    echo "  ok: Parquet2, DataFrames, JSON3 resolve in this depot"
+else
+    echo "  INCONCLUSIVE — could not confirm the packages from this node:"
+    printf '    %s\n' "${DEPOT_PROBE}"
+    echo ""
+    echo "  This is ADVISORY, not a blocker. The probe runs on the LOGIN node, which has a"
+    echo "  different CPU target and a hard memory cap; a package that is present and fine"
+    echo "  for compute jobs can still fail to load or precompile here. Treat a failure as"
+    echo "  \"go look\", not as \"the depot is broken\" — the authority is whether the jobs run."
+    echo ""
+    echo "  If jobs DO die at import (\"Package X is required but does not seem to be"
+    echo "  installed\"), instantiate into the depot the jobs use. Use env_job.sh, not the"
+    echo "  legacy setup_julia_env.sh: env_job.sh sources cluster_lib.sh and inherits"
+    echo "  JULIA_DEPOT_PATH, while setup_julia_env.sh sets no depot and installs into"
+    echo "  ~/.julia, which no job reads first:"
+    echo "      sbatch --partition=day --time=02:00:00 --cpus-per-task=8 --mem=32G \\"
+    echo "             --export=ALL,ENV_STEP=resolve env_job.sh"
+    echo "  Then confirm:  ls .julia_depot/packages/ | head"
+fi
+
 # ── (4) sysimages ────────────────────────────────────────────────────────────
 echo ""
 echo "(4) SYSIMAGE PROVENANCE  (a hard gate at run time, not a warning)"

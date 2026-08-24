@@ -356,8 +356,7 @@ cl_build_cp_dir () {   # cl_build_cp_dir <cp_dir> <stage> <routine...>
 # ── 5. ROUTINE DEFAULTS — one site, replacing six that disagree ──────────────
 # The live lineup is E1,E2,E3,E4. The RC/CF default set is 3,4, matching
 # blp_2_rc.jl:112 DEFAULT_ROUTINES=[3,4] and cluster/upload_manifest.txt's
-# '#!ROUTINES 1 2 3 4'. The old E5-E8 numbering is dead: E5/E6 became E3/E4 and
-# the joint sieve E7/E8 was deleted.
+# '#!ROUTINES 1 2 3 4'. An E5-E8 id anywhere is pre-relineup numbering.
 CL_ROUTINES_ALL="${CL_ROUTINES_ALL:-1 2 3 4}"
 CL_ROUTINES_RC="${CL_ROUTINES_RC:-3 4}"
 CL_ROUTINES_CF="${CL_ROUTINES_CF:-3 4}"

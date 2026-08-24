@@ -677,10 +677,7 @@ def main():
         print(f"ERROR: Cannot find {sleep_root}")
         sys.exit(1)
 
-    # The lineup is E1/E2 (linear) + E3/E4 (bounded single-index). The joint sieve was dropped:
-    # it chose the direction and the link together, so its reported band conditioned on a link
-    # that was itself estimated jointly -- re-profiling per draw widened it 1.71x and 7.46x, the
-    # latter past its own fitted phi_t range, and its direction was barely identified.
+    # The lineup is E1/E2 (linear) + E3/E4 (bounded single-index).
     mapping = {EST_KEYS[e]: _paths_mod.est_dir(e) for e in _routines.ACTIVE}
 
     if getattr(args, 'skip_est2', False):
@@ -800,9 +797,8 @@ def main():
         mean_phi=mean_phi, placement="ht",
     )
 
-    # The nonlinear-only comparison table is gone with the joint sieve: with the lineup reduced
-    # to E1/E2 + E3/E4, a "nonlinear only" cut would just be the E3/E4 columns of the main
-    # table, so it would restate the same numbers under a second \label.
+    # No nonlinear-only cut is emitted: with the lineup at E1/E2 + E3/E4 it would be the
+    # E3/E4 columns of the main table restated under a second \label.
     joint_tex = []
 
     for fn in ("est1-4_spec12_stage1_comparison.tex",
@@ -858,7 +854,7 @@ def main():
 
         band_pkl = out_dir / f"ts_link_band_est{est_num}.pkl"
         if est_num >= 3 and band_pkl.exists():
-            # Single-index / joint sieve: bootstrap point path + wild-cluster band.
+            # Single-index: bootstrap point path + wild-cluster band.
             try:
                 with open(band_pkl, "rb") as fb:
                     bd = pickle.load(fb)

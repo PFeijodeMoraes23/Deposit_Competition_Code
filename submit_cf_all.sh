@@ -40,7 +40,7 @@
 # already staged from the BLP run or auto-built here from the zip. See runbook §8.
 set -euo pipefail
 
-ROUTINES="${ROUTINES:-${CF_ROUTINE:-1 2 5 6 7 8}}"   # active lineup (E7/E8 headline; E3/E4 dropped 2026-08-06)
+ROUTINES="${ROUTINES:-${CF_ROUTINE:-3 4}}"   # the single-index routines; authority is CL_ROUTINES_CF in cluster_lib.sh
 CF_STAGE="${CF_STAGE:-extended}"
 R="${R:-2000}"; SEED="${SEED:-42}"
 BETA="${BETA:-0.9}"; HORIZON="${HORIZON:-50}"

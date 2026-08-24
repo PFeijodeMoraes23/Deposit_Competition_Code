@@ -87,7 +87,13 @@ cl_warn_wall_cap
 
 # ── Preflight (V2/V3/V5/V6). Never skipped by accident. ──────────────────────
 if [[ "${SKIP_PREFLIGHT}" == "0" && "${CL_DRYRUN}" != "1" ]]; then
-    bash "${CL_ROOT}/cluster_preflight.sh" --routines "${ROUTINES}" || {
+    # Jobs 1 and 2 of this run BUILD the sysimage and the draws when --sysimage/--draws are
+    # passed, so the preflight must not refuse on their absence. Derived from the same two
+    # flags that decide whether those jobs are submitted, so the two cannot disagree.
+    _wb=""
+    [[ "${DO_SYSIMAGE}" == "1" ]] && _wb="${_wb} sysimage"
+    [[ "${DO_DRAWS}"    == "1" ]] && _wb="${_wb} draws"
+    bash "${CL_ROOT}/cluster_preflight.sh" --routines "${ROUTINES}" ${_wb:+--will-build "${_wb# }"} || {
         echo "" >&2
         echo "blp_run.sh: refusing to submit — the preflight found blockers (above)." >&2
         echo "  Act on them, or re-run with --skip-preflight if you know better." >&2
@@ -155,6 +161,18 @@ if [[ "${DO_SYSIMAGE}" == "1" ]]; then
         --export=ALL,ENV_STEP=sysimage_gpu "${CL_ROOT}/env_job.sh")
     sys_dep="${j}"
     echo "-- sysimage build: ${j}  (every chain head afterok this)"
+    # The CPU twin, built in the same breath. pipeline_all.sh runs bbl_run.sh with
+    # --fwd-cpu, whose jobs refuse without blp_sysimage_cpu.so — so a run that builds
+    # only the GPU image cannot reach the BBL phase on a fresh cluster. Deliberately NOT
+    # added to sys_dep: the RC ladders are GPU and do not read this image, and gating them
+    # on a `day`-queued build would idle the H200 reservation for no reason. BBL is
+    # submitted hours later by a continuation job, and bbl_run.sh preflights the image at
+    # submit time, so the worst case is a clean refusal rather than a silent CPU fallback.
+    jc=$(cl_sbatch --partition=day --constraint=cpugen:turin --time=04:00:00 \
+        --cpus-per-task=8 --mem=64G -J blp_build_sysimg_cpu \
+        -o "${LOGD}/blp_build_sysimg_cpu_%j.out" -e "${LOGD}/blp_build_sysimg_cpu_%j.err" \
+        --export=ALL,ENV_STEP=sysimage_cpu "${CL_ROOT}/env_job.sh")
+    echo "-- sysimage build (cpu): ${jc}  (for the BBL --fwd-cpu phase; runs in parallel)"
 fi
 if [[ "${DO_DRAWS}" == "1" ]]; then
     j=$(cl_sbatch -J blp_draws \

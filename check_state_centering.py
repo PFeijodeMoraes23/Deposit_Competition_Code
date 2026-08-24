@@ -76,8 +76,8 @@ def _phi(df, native, link, res):
     if link == "identity":
         return index
     if link == "index_sieve":
-        # E3/E4 shape-constrained link: grid over the FULL native index (constant included),
-        # unlike "sieve" below which drops it. Mirrors phi_from_native.
+        # E3/E4 shape-constrained link: grid over the FULL native index, constant included.
+        # Mirrors phi_from_native.
         return np.clip(np.interp(index, res.si_vgrid, res.si_ggrid), 0.0, 1.0)
     if link == "index":
         b = np.asarray(res.si_b)
@@ -86,11 +86,6 @@ def _phi(df, native, link, res):
         for d in range(len(b)):
             g += b[d] * vs ** d
         return np.clip(g, 0.0, 1.0)
-    if link in ("sieve", "kernel"):
-        idx_params = [p for p in phi_params if p != "nr_lagged_dep"]
-        Xi = _build_phi_X(df, idx_params)
-        vv = Xi @ native[idx_params].values.astype(float)
-        return np.clip(np.interp(vv, res.si_vgrid, res.si_ggrid), 0.0, 1.0)
     return np.clip(link_cdf(index, link), 0.0, 1.0)
 
 

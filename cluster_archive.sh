@@ -130,9 +130,15 @@ case "${SET}" in
 esac
 
 if [[ "${DOMAIN}" == "data" ]]; then ROOT="${CL_DATA_ROOT}"; PREFIX="output/"; else ROOT="${CL_ROOT}"; PREFIX="logs/"; fi
-ROOT_ABS="$(cd "${ROOT}" && pwd)"
-DOMAIN_ABS="$(cd "${ROOT_ABS}/${PREFIX%/}" 2>/dev/null && pwd || echo "${ROOT_ABS}/${PREFIX%/}")"
-INPUT_ABS="${CL_DATA_ROOT}/input"
+ROOT_ABS="$(realpath -m "${ROOT}" 2>/dev/null || readlink -f "${ROOT}" 2>/dev/null || (cd "${ROOT}" && pwd))"
+# realpath, NOT `cd && pwd`: bash pwd returns the LOGICAL path, so reaching the tree through
+# a symlinked home (~/project_pi_... -> /nfs/roberts/project/...) yields a domain root that
+# cannot contain the realpath'd files below, and every archive refuses. Both sides physical.
+DOMAIN_ABS="$(realpath -m "${ROOT_ABS}/${PREFIX%/}" 2>/dev/null || readlink -f "${ROOT_ABS}/${PREFIX%/}" 2>/dev/null || echo "${ROOT_ABS}/${PREFIX%/}")"
+# Physical, like ROOT_ABS and the resolved file paths it is compared against: a logical
+# INPUT_ABS silently never matches, which would disarm the move-mode guard that keeps an
+# archive from deleting a hand-uploaded input.
+INPUT_ABS="$(realpath -m "${CL_DATA_ROOT}/input" 2>/dev/null || readlink -f "${CL_DATA_ROOT}/input" 2>/dev/null || echo "${CL_DATA_ROOT}/input")"
 
 # ── Guard (1): every pattern must be relative and start with the domain prefix.
 for p in "${pats[@]}"; do

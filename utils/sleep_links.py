@@ -253,8 +253,8 @@ def fit_nlls_link(df, state_cols, has_cf, link, loss="cauchy", fe_time_col=None,
     concentration; None reproduces the entity-only within estimator exactly.
 
     bootstrap=False skips the wild cluster bootstrap and returns NaN AMEs/SEs, keeping
-    only params_native (and the index). Used by the single-index/joint-sieve estimators,
-    which fit this logit purely to warm-start theta and never read its AMEs or SEs."""
+    only params_native (and the index). Used by the single-index estimators, which fit this
+    logit purely to warm-start theta and never read its AMEs or SEs."""
     CF_cols = ["v_hat_x_lagged_dep"] if has_cf else []
     cols = state_cols + ["deposit_balance", "nr_lagged_dep", "entity_id"]
     df_ss = df.dropna(subset=cols + CF_cols).copy()
@@ -288,11 +288,11 @@ def fit_nlls_link(df, state_cols, has_cf, link, loss="cauchy", fe_time_col=None,
         if starts[0][1].shape != (K + G,):
             raise ValueError(f"init has shape {starts[0][1].shape}, expected {(K + G,)}")
     else:
-        # MULTISTART. This used to be a single start from zeros, which is thin for a
-        # non-convex M-estimator -- and it propagates: fit_single_index (E3/E4) never
-        # re-optimises theta, it inherits whatever direction this fit produces. On the
-        # joint-sieve full-sample candidate scan the logit direction scored WORST of four
-        # (164,913 vs 160,940 for the best), so the inherited direction was measurably poor.
+        # MULTISTART. A single start from zeros is thin for a non-convex M-estimator, and it
+        # propagates: fit_single_index (E3/E4) never re-optimises theta, it inherits whatever
+        # direction this fit produces. Scored on the full sample against alternative index
+        # directions, the zeros-start logit direction comes last of four (164,913 against
+        # 160,940 for the best), so one start leaves a measurably poor direction in place.
         starts = [("zeros", np.zeros(K + G))]                       # production baseline
         lw = _linear_warm_start(y_dm, X, Z, CF)                     # OLS-implied direction
         if np.all(np.isfinite(lw)):
@@ -415,7 +415,7 @@ def pava_increasing(y, w=None):
 # against 1.79pp unconstrained. That is the FAMILY failing, not a tuning choice, and it happens
 # in both robust cells.
 #
-# WHAT WE DO INSTEAD. Fit the link on the same monotone I-spline ramp basis E7/E8 already use
+# WHAT WE DO INSTEAD. Fit the link on a monotone I-spline ramp basis
 # (`_ramp_design`), with beta >= 0 (monotone, floor at beta_1) AND sum(beta) <= 1 (ceiling: every
 # ramp tends to 1 at the top of the knot hull). That is a valid CDF on the WHOLE real line --
 # `_ramp_design` clips v into the knot hull, so G is flat outside it, which is what makes
@@ -425,10 +425,11 @@ def pava_increasing(y, w=None):
 # nonneg combination of ramps is a cubic B-spline with nondecreasing coefficients.
 #
 # `sum(beta) <= 1` is exactly the constraint BVLS cannot express (`lsq_linear` takes box bounds
-# only), which is why E7/E8 impose monotonicity but still clip the ceiling post hoc.
+# only), so the ceiling is imposed by the shape QP (`solve_ispline_qp`) rather than by a bounded
+# least-squares solve.
 # ------------------------------------------------------------------------------
-SI_N_INTERIOR = int(os.environ.get("SLEEP_SI_KNOTS", "5"))   # matches E7/E8's n_interior default
-SI_GRID_N = 200                                              # matches the E7/E8 link-grid length
+SI_N_INTERIOR = int(os.environ.get("SLEEP_SI_KNOTS", "5"))   # interior knots of the ramp basis
+SI_GRID_N = 200                                              # length of the stored link grid
 
 
 def link_constrained():
@@ -1018,9 +1019,9 @@ def fit_single_index(df, state_cols, has_cf, logit_res, degree=3, phi_band=False
 
     # Quarter-clustered WCB for the national rows (pix_exists, risk_free_qoq_lag). Same
     # bootstrap, same _ame_fn, resampling the QUARTER instead of the conglomerate -- which is
-    # the only dimension along which a national regressor actually varies. Mirrors the block in
-    # fit_joint_single_index; stored separately so `bs` is untouched and the exporters choose
-    # per row. Driscoll-Kraay is not produced here: it is analytic and would need a
+    # the only dimension along which a national regressor actually varies. Stored separately so
+    # `bs` is untouched and the exporters choose per row. Driscoll-Kraay is not produced here:
+    # it is analytic and would need a
     # delta-method push through _ame_fn, which the bootstrap already does exactly.
     _nat_time = _nat_pv = None
     if fe_time_col is not None and fe_time_col in df_ss.columns:
@@ -1074,11 +1075,9 @@ def fit_single_index(df, state_cols, has_cf, logit_res, degree=3, phi_band=False
                                link=("index_sieve" if constrained else "index"))
     res_obj.si_constrained = bool(constrained)
     if constrained:
-        # Store the link the way E7/E8 do -- as a grid -- but in the FULL native index frame,
-        # constant included. E5/E6's index HAS a constant (theta over `nr_lagged_dep` -> a column
-        # of ones); E7/E8's does not (it is absorbed in G), which is why they cannot share the
-        # "sieve" tag: every consumer of "sieve" drops `nr_lagged_dep` from the index. Hence the
-        # distinct link name "index_sieve".
+        # The link is stored as a grid in the FULL native index frame, constant included: this
+        # index HAS a constant (theta over `nr_lagged_dep` -> a column of ones), so the grid is
+        # read against the whole index. That is what the "index_sieve" tag tells every consumer.
         _gv = np.linspace(si_knots[0], si_knots[-1], SI_GRID_N)
         res_obj.si_vgrid = _gv * vsd + vmu                     # native index units
         res_obj.si_ggrid = np.clip(_ramp_design(_gv, si_knots, degree) @ b, 0.0, 1.0)
@@ -1126,7 +1125,7 @@ def fit_single_index(df, state_cols, has_cf, logit_res, degree=3, phi_band=False
 # ==============================================================================
 def phi_from_native(df: pd.DataFrame, res, link: str) -> np.ndarray:
     """phi_mt at each row of df from the native index coefficients + the link.
-    link in {'logit','probit','uniform','index','index_sieve','sieve','kernel'}.
+    link in {'logit','probit','uniform','index','index_sieve'}.
     Returns phi in [0,1]."""
     native = res.params_native
     phi_params = [p for p in native.index if not str(p).startswith("v_hat")]
@@ -1134,10 +1133,9 @@ def phi_from_native(df: pd.DataFrame, res, link: str) -> np.ndarray:
     index = X @ native[phi_params].values.astype(float)
     if link == "index_sieve":
         # E3/E4 shape-constrained link: monotone I-spline stored as a grid over the FULL native
-        # index (constant INCLUDED -- unlike "sieve" below, where the joint estimator absorbs the
-        # constant into G and the index must therefore drop `nr_lagged_dep`). Outside the grid the
-        # link is flat, which is the correct CDF extension and is why eq.(18)'s Pix-removed index
-        # is well defined; the clip is a no-op kept only as a numerical guard.
+        # index, constant INCLUDED. Outside the grid the link is flat, which is the correct CDF
+        # extension and is why eq.(18)'s Pix-removed index is well defined; the clip is a no-op
+        # kept only as a numerical guard.
         return np.clip(np.interp(index, res.si_vgrid, res.si_ggrid), 0.0, 1.0)
     if link == "index":
         b = np.asarray(res.si_b)
@@ -1146,30 +1144,16 @@ def phi_from_native(df: pd.DataFrame, res, link: str) -> np.ndarray:
         for d in range(len(b)):
             g += b[d] * vs ** d
         return np.clip(g, 0.0, 1.0)
-    if link in ("sieve", "kernel"):
-        # Joint single index (Est7/Est8): index over the NON-constant state vars,
-        # link stored as a monotone grid (kernel) or B-spline (sieve). Both are
-        # evaluated through si_vgrid/si_ggrid (a fine monotone lookup) for a single
-        # canonical path. Index uses theta over interaction_* only (no constant).
-        idx_params = [p for p in phi_params if p != "nr_lagged_dep"]
-        Xi = _build_phi_X(df, idx_params)
-        vv = Xi @ native[idx_params].values.astype(float)
-        g = np.interp(vv, res.si_vgrid, res.si_ggrid)
-        return np.clip(g, 0.0, 1.0)
     return np.clip(link_cdf(index, link), 0.0, 1.0)
 
 
 # ==============================================================================
-# JOINT SINGLE INDEX (Est7 sieve, Est8 kernel) — Ichimura (1993) SLS
+# INDEX AND LINK BUILDING BLOCKS
 # ==============================================================================
-# Estimate the index direction theta AND the link G jointly by semiparametric
-# least squares: min over theta (||theta||=1) of the entity-demeaned SSR of
-#   D - G(S'theta)*Z - gamma*(vhat*Z),
-# with G profiled out at each theta. Est7: monotone cubic B-spline link with
-# ordered coefficients (Ramsay 1988; Newey 1997). Est8: kernel local-linear link
-# (Ichimura 1993; Fan 1992), monotonised by rearrangement (CFG 2009). Inference:
-# score/multiplier wild cluster bootstrap (Kline-Santos 2012). phi is built from
-# theta + the stored monotone link via phi_from_native; AMEs are reporting-only.
+# FE concentration plus the spline bases the single-index link is fitted on. The
+# monotone link is a nonneg combination of I-spline ramps built from a cubic
+# B-spline basis with ordered coefficients (Ramsay 1988; Newey 1997), i.e. a cubic
+# B-spline with nondecreasing coefficients, which is what makes it a valid CDF shape.
 def _fast_demean(M, entity_idx, counts):
     """Within-entity demean each column of M (n x k) given integer entity_idx."""
     M = np.asarray(M, float)
@@ -1232,521 +1216,6 @@ def _ramp_design(v, t, degree=3):
     B = BSpline.design_matrix(np.clip(v, lo, hi), t, degree).toarray()
     R = np.cumsum(B[:, ::-1], axis=1)[:, ::-1]   # R[:,j] = sum_{k>=j} B[:,k]
     return R
-
-
-def _fit_link_sieve(R, Z, cf_dm, y_dm, einv, counts, w=None, dm=None, cap_sum=False):
-    """Profiled monotone sieve link given the index. Design = [R_j*Z]_j (+ CF),
-    entity-demeaned; coefficients beta_j >= 0 (monotone, floor at beta_1), gamma free.
-    Solved by bounds-constrained LS (fast). Returns (beta, gamma, resid, ssr, c)
-    where c = cumsum(beta) are the B-spline coefficients of G. `dm`, if given, is a
-    demeaner callable (e.g. two-way entity+time FE) used in place of entity demeaning.
-
-    `cap_sum` additionally imposes the CEILING sum(beta) <= 1, i.e. G <= 1 (every ramp tends to
-    1 at the top of the knot hull). BVLS cannot express it -- `lsq_linear` takes box bounds only
-    -- which is why the joint sieve has always been monotone but NOT bounded above, clipping the
-    ceiling post hoc at the grid instead. Measured 2026-08-06 on the trimmed spec-12 cells, the
-    ceiling BINDS in 2 of 4 (E7/LS truncates 10.5% of the link grid; E8/robust 48.5%, its whole
-    link spanning 0.994-1.000). When it does not bind this branch is a no-op by construction.
-
-    SCOPE: callers enable cap_sum on the FINAL link refit only, not inside the theta search --
-    the Julia engine (sleep_joint_sieve.jl) minimises the uncapped objective, so capping the
-    inner solve would silently profile against a different criterion than the direction was
-    chosen under. See the cross-implementation parity warning in fit_joint_single_index."""
-    from scipy.optimize import lsq_linear
-    K = R.shape[1]
-    Rz = R * Z[:, None]
-    cols = [Rz] + ([cf_dm[:, None]] if cf_dm is not None else [])
-    X = np.column_stack(cols)
-    Xdm = dm(X) if dm is not None else _fast_demean(X, einv, counts)
-    sw = np.ones(len(y_dm)) if w is None else np.sqrt(np.maximum(w, 0.0))
-    p = X.shape[1]
-    lb = np.r_[np.zeros(K), np.full(p - K, -np.inf)]
-    ub = np.full(p, np.inf)
-    sol = lsq_linear(Xdm * sw[:, None], y_dm * sw, bounds=(lb, ub),
-                     method="bvls", max_iter=200)
-    b = sol.x
-    if cap_sum and float(np.sum(b[:K])) > 1.0 + 1e-12:
-        # Two-phase: BVLS first (cheap, and exact whenever the ceiling is slack), then re-solve
-        # with the extra linear inequality only when it is actually violated.
-        A_c, lb_c, ub_c = ispline_constraints(K, n_extra=p - K)
-        b, _info = solve_shape_qp(Xdm * sw[:, None], y_dm * sw, A_c, lb_c, ub_c, b)
-    beta = b[:K]
-    gamma = b[K:] if p > K else np.array([])
-    resid = y_dm - Xdm @ b
-    ww = np.ones(len(y_dm)) if w is None else w
-    ssr = float(np.sum(ww * resid * resid))
-    return beta, gamma, resid, ssr, np.cumsum(beta)
-
-
-def _cauchy_weights(resid, scale=None):
-    """IRLS weights for the Cauchy (Lorentzian) robust loss; scale = MAD-based."""
-    r = np.asarray(resid, float)
-    s = scale if scale else (1.4826 * np.median(np.abs(r - np.median(r))) + 1e-12)
-    return 1.0 / (1.0 + (r / (2.385 * s)) ** 2)
-
-
-# ---- Est8 kernel local-linear link (joint SLS via backfitting) ---------------
-def _kernel_bw(v):
-    """Undersmoothed Gaussian bandwidth (Silverman x undersmoothing factor).
-    Undersmoothing keeps the link bias negligible for sqrt-n theta inference
-    (Hardle-Hall-Ichimura 1993)."""
-    v = np.asarray(v, float)
-    n = len(v)
-    sd = float(np.std(v))
-    q75, q25 = np.percentile(v, [75, 25])
-    iqr = q75 - q25
-    a = min(sd, iqr / 1.349) if iqr > 0 else sd
-    if a <= 0:
-        a = 1.0
-    return 0.7 * (0.9 * a * n ** (-0.2))   # 0.7 = undersmoothing factor
-
-
-def _local_linear_Zweighted(v, Z, a, grid, bw, wts=None, nbins=400):
-    """Binned local-linear fit of the MULTIPLICATIVE model a_i ~ G(v_i)*Z_i,
-    evaluated on grid. At each grid point g it solves
-        min_{al,be} sum_i K_h(v_i-g) [ a_i - (al + be (v_i-g)) Z_i ]^2  (x wts_i)
-    and returns G(g)=al-hat. Binned over v (Fan-Marron 1994) for speed: per-bin
-    moment sums are formed once, then convolved with the Gaussian kernel at each
-    grid point. Local LINEAR (not NW) for the standard O(h^2) boundary bias."""
-    v = np.asarray(v, float); Z = np.asarray(Z, float); a = np.asarray(a, float)
-    Z2 = Z * Z
-    Za = Z * a
-    if wts is not None:
-        wts = np.asarray(wts, float)
-        Z2 = Z2 * wts
-        Za = Za * wts
-    lo, hi = grid[0], grid[-1]
-    if hi <= lo:
-        hi = lo + 1.0
-    edges = np.linspace(lo, hi, nbins + 1)
-    ctr = 0.5 * (edges[:-1] + edges[1:])
-    bidx = np.clip(np.searchsorted(edges, v) - 1, 0, nbins - 1)
-    sZ2 = np.bincount(bidx, weights=Z2, minlength=nbins)
-    sZ2v = np.bincount(bidx, weights=Z2 * v, minlength=nbins)
-    sZ2v2 = np.bincount(bidx, weights=Z2 * v * v, minlength=nbins)
-    sZa = np.bincount(bidx, weights=Za, minlength=nbins)
-    sZav = np.bincount(bidx, weights=Za * v, minlength=nbins)
-    # Vectorised over grid: K is (n_grid x n_bins), all moments via one matmul each.
-    g = np.asarray(grid, float)
-    Kmat = np.exp(-0.5 * ((g[:, None] - ctr[None, :]) / bw) ** 2)
-    S00 = Kmat @ sZ2
-    S0v = Kmat @ sZ2v
-    S01 = S0v - g * S00
-    S11 = (Kmat @ sZ2v2) - 2.0 * g * S0v + g * g * S00
-    b0 = Kmat @ sZa
-    b1 = (Kmat @ sZav) - g * b0
-    det = S00 * S11 - S01 * S01
-    with np.errstate(divide="ignore", invalid="ignore"):
-        G_ll = (S11 * b0 - S01 * b1) / det           # local-linear alpha-hat
-        G_nw = np.where(S00 > 1e-12, b0 / S00, 0.0)   # NW fallback at thin grid points
-    bad = (S00 <= 1e-12) | (np.abs(det) < 1e-12 * (np.abs(S00 * S11) + 1e-12)) | ~np.isfinite(G_ll)
-    return np.where(bad, G_nw, G_ll)
-
-
-def _fit_link_kernel(v, Z, cf_dm, y_dm, einv, counts, bw, grid, wts=None,
-                     G_init=None, tol=1e-4, max_iter=40):
-    """Profiled kernel local-linear link for the FE + multiplicative-Z model, by
-    BACKFITTING (Gauss-Seidel): alternate a weighted local-linear G-step (the
-    entity-mean coupling held at the current G, then added back into the pseudo-
-    response) with a 1-D OLS gamma-step for the control function. G is left
-    UNCONSTRAINED here; monotonicity is imposed ex post by rearrangement (CFG
-    2009) in the caller. Returns (Ggrid, gamma, resid, ssr, G_obs).
-
-    The FE and G(v)Z are strongly coupled, so cold backfitting converges slowly
-    (a fixed few sweeps badly under-shoots the link level). We therefore iterate
-    to a convergence tolerance (max|dG| on the grid) up to max_iter, and accept a
-    warm-start grid G_init (the caller passes a quick exact sieve fit) so the loop
-    starts near the converged level and needs only a handful of sweeps."""
-    n = len(v)
-    if G_init is not None:
-        Ggrid = np.asarray(G_init, float).copy()
-        G_obs = np.interp(v, grid, Ggrid)
-    else:
-        G_obs = np.zeros(n)
-        Ggrid = np.zeros(len(grid))
-    gamma = 0.0
-    wcf = (wts if wts is not None else 1.0)
-    for _ in range(max_iter):
-        Gprev = Ggrid
-        t = G_obs * Z
-        m = (np.bincount(einv, weights=t, minlength=len(counts)) / counts)[einv]
-        if cf_dm is not None:
-            tZ_dm = t - m
-            den = float(np.dot(cf_dm * wcf, cf_dm))
-            num = float(np.dot(cf_dm * wcf, y_dm - tZ_dm))
-            gamma = num / den if den > 0 else 0.0
-            target = y_dm - gamma * cf_dm
-        else:
-            gamma = 0.0
-            target = y_dm
-        a = target + m                      # add back current entity-mean coupling
-        Ggrid = _local_linear_Zweighted(v, Z, a, grid, bw, wts=wts)
-        # phi is structurally a CDF: impose the [0,1] bound IN-LOOP. Without it the
-        # robust (Cauchy) IRLS diverges -- it keeps pushing G past 1 because the
-        # unconstrained local-linear link has nothing keeping it a valid CDF.
-        # (This comment used to add "the sieve gets this for free from its
-        # monotone-bounded basis". Only the LOWER bound is free there: beta >= 0 with
-        # nonneg ramps gives G >= 0, but the ceiling is sum(beta) <= 1, which BVLS
-        # cannot express -- see _fit_link_sieve's cap_sum.) Monotonicity is still
-        # imposed ex post by rearrangement in the caller.
-        Ggrid = np.clip(Ggrid, 0.0, 1.0)
-        G_obs = np.interp(v, grid, Ggrid)
-        if np.max(np.abs(Ggrid - Gprev)) < tol:
-            break
-    t = G_obs * Z
-    m = (np.bincount(einv, weights=t, minlength=len(counts)) / counts)[einv]
-    resid = y_dm - (t - m) - (gamma * cf_dm if cf_dm is not None else 0.0)
-    ww = wts if wts is not None else 1.0
-    ssr = float(np.sum(ww * resid * resid))
-    return Ggrid, gamma, resid, ssr, G_obs
-
-
-def fit_joint_single_index(df, state_cols, has_cf, link="sieve", loss="ls",
-                           n_interior=5, degree=3, n_starts=4, init_theta=None,
-                           boot_B=199, boot_scheme="rademacher", seed=0, label="",
-                           phi_band=False, fe_time_col=None, theta_fixed=None,
-                           polish_evals=0):
-    """Joint single-index sleepiness by Ichimura (1993) SLS: estimate the index
-    direction theta (||theta||=1) and the link G TOGETHER.
-      link='sieve'  (Est7): monotone cubic I-spline ramps, nonneg coefs (shape
-                    restriction built in).
-      link='kernel' (Est8): local-linear link profiled by BACKFITTING for the
-                    entity FE + multiplicative-Z structure (binned, Fan-Marron
-                    1994), monotonised EX POST by rearrangement (CFG 2009).
-    loss in {'ls','robust'} (robust=Cauchy IRLS). Inference: score/multiplier wild
-    cluster bootstrap on theta -> AMEs. Returns a NonLinearResults with theta in
-    params_native (index over non-constant state vars), average-derivative AMEs in
-    params, a stored monotone link grid (si_vgrid/si_ggrid), bootstrap SEs/pvalues,
-    and link in {'sieve','kernel'}."""
-    from scipy.interpolate import BSpline
-    if fe_time_col is not None and link == "kernel":
-        raise NotImplementedError("two-way FE (fe_time_col) is wired for the sieve link only")
-    rng = np.random.default_rng(seed)
-    CF_cols = ["v_hat_x_lagged_dep"] if has_cf else []
-    cols = state_cols + ["deposit_balance", "nr_lagged_dep", "entity_id"]
-    df_ss = df.dropna(subset=cols + CF_cols).copy()
-    if len(df_ss) == 0:
-        return None
-
-    idx_cols = [c for c in state_cols if c != "constant"]   # index excludes the constant (it is in G)
-    S = df_ss[idx_cols].values.astype(float)
-    # standardise index regressors for numerical conditioning of ||theta||=1
-    S_mu = S.mean(0); S_sd = S.std(0); S_sd[S_sd <= 0] = 1.0
-    Sn = (S - S_mu) / S_sd
-    Z = df_ss["nr_lagged_dep"].values.astype(float)
-    y = df_ss["deposit_balance"].values.astype(float)
-    cf = df_ss["v_hat_x_lagged_dep"].values.astype(float) if has_cf else None
-    cl = df_ss["CodConglomeradoPrudencial"].astype(str).values
-    _, einv = np.unique(df_ss["entity_id"].values, return_inverse=True)
-    counts = np.bincount(einv).astype(float)
-    cl_u, cl_inv = np.unique(cl, return_inverse=True)
-    n_cl = len(cl_u)
-    # Optional second additive FE (e.g. time): two-way concentration via alternating
-    # projections. fe_time_col=None reproduces the entity-only within estimator exactly.
-    if fe_time_col is not None:
-        _, tinv = np.unique(df_ss[fe_time_col].values, return_inverse=True)
-        tcounts = np.bincount(tinv).astype(float)
-        demean = lambda M: _twoway_demean(M, einv, counts, tinv, tcounts)
-    else:
-        demean = lambda M: _fast_demean(M, einv, counts)
-    y_dm = demean(y)
-    cf_dm = demean(cf) if has_cf else None
-    d = Sn.shape[1]
-
-    def _cauchy_obj(resid):
-        s = 1.4826 * np.median(np.abs(resid)) + 1e-12
-        return float(np.sum(np.log1p((resid / (2.385 * s)) ** 2)))
-
-    def _fit_link(th, want_grid=False):
-        """Profile the link at direction th. Returns the objective; if want_grid,
-        also returns (v, vgrid_std, ggrid_mono01, gpgrid_nonneg, resid). Both link
-        families share this signature so the multistart and the tail are common."""
-        v = Sn @ th
-        if link == "kernel":
-            lo, hi = np.quantile(v, [0.005, 0.995])
-            vgrid = np.linspace(lo, hi, 200)
-            bw = _kernel_bw(v)
-            # Warm-start the kernel backfit from a quick EXACT sieve fit at this theta:
-            # the sieve solves FE+link in one BVLS, giving a near-converged G so the
-            # backfit needs only a few sweeps (cold backfitting converges slowly here).
-            qs = np.linspace(0, 1, n_interior + 2)[1:-1]
-            interior = np.clip(np.quantile(v, qs), lo + 1e-9, hi - 1e-9)
-            t_ws = np.concatenate(([lo] * (degree + 1), np.sort(interior), [hi] * (degree + 1)))
-            R_ws = _ramp_design(v, t_ws, degree)
-            _b, _g, _r, _s, c_ws = _fit_link_sieve(R_ws, Z, cf_dm, y_dm, einv, counts, None)
-            G_init = np.clip(BSpline(t_ws, c_ws, degree, extrapolate=True)(vgrid), 0.0, 1.0)
-            Gg, gamma, resid, ssr, _ = _fit_link_kernel(v, Z, cf_dm, y_dm, einv, counts, bw,
-                                                        vgrid, G_init=G_init)
-            if loss == "robust":
-                for _ in range(2):
-                    wts = _cauchy_weights(resid)
-                    Gg, gamma, resid, ssr, _ = _fit_link_kernel(v, Z, cf_dm, y_dm, einv,
-                                                                counts, bw, vgrid, wts=wts, G_init=Gg)
-                obj = _cauchy_obj(resid)
-            else:
-                obj = ssr
-            if not want_grid:
-                return obj
-            ggrid_mono = np.clip(np.maximum.accumulate(Gg), 0.0, 1.0)   # rearrange ex post (CFG 2009)
-            gp = np.clip(np.gradient(ggrid_mono, vgrid), 0.0, None)
-            return obj, v, vgrid, ggrid_mono, gp, resid
-        # ---- sieve (Est7): monotone I-spline ramps, nonneg coefs ----
-        lo, hi = np.quantile(v, [0.001, 0.999])
-        qs = np.linspace(0, 1, n_interior + 2)[1:-1]
-        interior = np.clip(np.quantile(v, qs), lo + 1e-9, hi - 1e-9)
-        t = np.concatenate(([lo] * (degree + 1), np.sort(interior), [hi] * (degree + 1)))
-        R = _ramp_design(v, t, degree)
-        # CEILING sum(beta) <= 1 on the FINAL refit only (want_grid=True), never inside the
-        # theta search. The search's job is to reproduce the objective the direction was chosen
-        # under -- Julia's sleep_joint_sieve.jl minimises the uncapped criterion -- so capping
-        # the inner solve would profile against a different objective than theta was selected
-        # by, and the full-sample candidate scan would stop meaning anything (see the 1+2 IRLS
-        # note below for the last time that went wrong). Applying it here makes the reported
-        # link a valid CDF while leaving theta exactly as estimated; the resulting
-        # objective/direction mismatch is deliberate and is documented in the run log.
-        _cap = bool(want_grid and link_constrained())
-        if loss == "robust":
-            # ONE unweighted fit, then TWO weighted IRLS passes -- matching the Julia
-            # engine exactly (sleep_joint_sieve.jl::profile_obj) and the kernel branch
-            # above, both of which do 1+2.
-            #
-            # This branch used to run `for _ in range(2)` with w=None on the first pass,
-            # i.e. only TWO fits, so the objective was read off residuals that were one
-            # IRLS pass less converged. That made Python report a systematically HIGHER
-            # objective than Julia FOR THE SAME theta (E8: 166,865 vs 158,680), and the
-            # full-sample candidate scan then rejected Julia's own -- better -- answer in
-            # favour of a worse one. The two objectives must be the same computation for
-            # the scan to mean anything.
-            beta, gamma, resid, ssr, c = _fit_link_sieve(R, Z, cf_dm, y_dm, einv, counts,
-                                                         None, dm=demean, cap_sum=_cap)
-            for _ in range(2):
-                w = _cauchy_weights(resid)
-                beta, gamma, resid, ssr, c = _fit_link_sieve(R, Z, cf_dm, y_dm, einv, counts,
-                                                             w, dm=demean, cap_sum=_cap)
-            obj = _cauchy_obj(resid)
-        else:
-            beta, gamma, resid, ssr, c = _fit_link_sieve(R, Z, cf_dm, y_dm, einv, counts, None,
-                                                         dm=demean, cap_sum=_cap)
-            obj = ssr
-        if not want_grid:
-            return obj
-        spl = BSpline(t, c, degree, extrapolate=True)
-        vgrid = np.linspace(t[0], t[-1], 200)
-        ggrid_mono = np.clip(np.maximum.accumulate(spl(vgrid)), 0.0, 1.0)
-        gp = np.clip(spl.derivative()(vgrid), 0.0, None)
-        if _cap:
-            _sb = float(np.sum(beta))
-            print(f"  [JointSieve] ceiling sum(beta) <= 1 applied to the final refit: "
-                  f"sum(beta)={_sb:.6f}, link in [{ggrid_mono.min():.6f},{ggrid_mono.max():.6f}]"
-                  f"{'  (constraint was slack -- no-op)' if _sb < 1 - 1e-9 else '  (BINDING)'}")
-        return obj, v, vgrid, ggrid_mono, gp, resid
-
-    # ---- multistart over the unit sphere ----
-    from scipy.optimize import minimize
-    import time as _time
-    # Start order: (1) logit warm start, (2) the deterministic equal-weight
-    # ("ones") direction, (3+) random unit vectors. The ones-vector is a cheap,
-    # reliable second start that reliably settles the sieve optimum; random starts
-    # only kick in for n_starts>=3. n_starts is the true total of starts, so the
-    # kernel can use n_starts=1 (warm only) to avoid a costly random-start wander.
-    starts = []
-    if init_theta is not None:
-        iv = np.asarray(init_theta, float)
-        if len(iv) == d:
-            starts.append(iv / (np.linalg.norm(iv) + 1e-12))
-    ones = np.ones(d) / np.sqrt(d)
-    if not starts:
-        starts.append(ones)                 # no warm start -> ones is start 1
-    elif n_starts >= 2:
-        starts.append(ones)                 # warm + deterministic ones as start 2
-    while len(starts) < n_starts:
-        r = rng.standard_normal(d)
-        starts.append(r / np.linalg.norm(r))
-
-    def _obj(theta):
-        return _fit_link(theta / (np.linalg.norm(theta) + 1e-12), want_grid=False)
-
-    # Kernel evals are dearer and the in-loop CDF clip roughens the objective, so
-    # cap the kernel search HARD: the logit warm-start is already a strong index
-    # direction, so a few dozen refinement steps suffice (vs the sieve's full search).
-    _maxit = (20 * d if link == "kernel" else 300 * d)
-    if theta_fixed is not None:
-        # Trust the direction the Julia engine found; refit the link and run the tail
-        # (AMEs, bootstrap, phi grid) on the FULL sample here. theta arrives in the
-        # standardised Sn frame (same S_mu/S_sd as here).
-        #
-        # 2026-07-29: a Python-side "candidate scan" was added here and then REVERTED --
-        # score several candidate directions on THIS objective, keep the best, polish it.
-        # Two measured reasons it does not work:
-        #
-        #  1. IT PICKS THE WRONG DIRECTION. `external` is Julia's OPTIMISED theta, but
-        #     optimised in JULIA's metric, which is not this one: the engine bins the ramp
-        #     design (nbins=1000) and solves the bounded LS by a different algorithm
-        #     (Gram cross-products + NNLS-normal vs scipy lsq_linear here). Scored on this
-        #     objective against a raw equal-weight vector it LOSES. On E7 that produced a 5x
-        #     flatter link (G span 0.051 vs 0.266), lower R2, and HALF the AMEs compared with
-        #     simply trusting Julia's answer. Cross-implementation objective values are NOT
-        #     comparable; only same-implementation ones are.
-        #
-        #  2. FIXING (1) BY POLISHING EVERY CANDIDATE IS UNAFFORDABLE. Nelder-Mead
-        #     `maxiter=60` is ~180 FUNCTION EVALUATIONS (reflection/expansion/contraction,
-        #     and a shrink evaluates d+1 points), and each evaluation is one _fit_link = 3
-        #     full-sample sieve solves on 487k rows. That is ~540 solves per candidate,
-        #     measured at 3-5 HOURS per spec -- i.e. 24-40h of scan alone per estimator on
-        #     the 8-spec grid.
-        #
-        # What actually fixed the original degeneracy was SLEEP_SUBSAMPLE_FRAC 0.2 -> 1.0
-        # (link span x18, mean slope x570, R2 slightly up) plus passing n_starts through to
-        # julia_theta so the engine really does multistart (objective -5.5%). Neither needs a
-        # Python-side search. Do not re-add one without first counting function evaluations.
-        tf = np.asarray(theta_fixed, float)
-        theta_hat = tf / (np.linalg.norm(tf) + 1e-12)
-        # OPTIONAL POLISH (2026-08-02). The Julia engine minimises a DIFFERENT objective from
-        # this one -- it bins the ramp design and solves the bounded LS by another algorithm --
-        # so its theta is a good START but not the optimum of `_obj`. Measured on E7 spec 12
-        # under LS: Julia 26,054 vs 25,528 for a 33h cold Python search; ~100 Nelder-Mead evals
-        # from Julia's theta recover 80% of that gap. Polishing HERE reuses `_obj` directly, so
-        # each evaluation is one link solve -- not a whole fit+bootstrap+grid pass.
-        # polish_evals=0 (default) keeps the previous behaviour exactly.
-        if polish_evals and int(polish_evals) > 0:
-            _o0 = _obj(theta_hat)
-            _t0 = _time.time()
-            _r = minimize(_obj, theta_hat, method="Nelder-Mead",
-                          options={"maxfev": int(polish_evals), "xatol": 1e-4,
-                                   "fatol": 1e-3, "adaptive": True})
-            if np.isfinite(_r.fun) and _r.fun < _o0:
-                theta_hat = np.asarray(_r.x, float)
-                theta_hat = theta_hat / (np.linalg.norm(theta_hat) + 1e-12)
-            print(f"  [polish/{loss}] {int(_r.nfev)} evals in {(_time.time()-_t0)/60:.1f} min | "
-                  f"obj {_o0:.0f} -> {min(_r.fun, _o0):.0f} "
-                  f"({100*(_o0-min(_r.fun,_o0))/max(_o0,1e-12):.2f}% better)")
-    else:
-        best = None
-        for s0 in starts:
-            res = minimize(_obj, s0, method="Nelder-Mead",
-                           options={"maxiter": _maxit, "xatol": 1e-3, "fatol": 1e-5})
-            if best is None or res.fun < best[0]:
-                best = (res.fun, res.x)
-        theta_hat = best[1] / (np.linalg.norm(best[1]) + 1e-12)
-    obj, v, vgrid, ggrid, gpgrid, resid = _fit_link(theta_hat, want_grid=True)
-
-    # 0/1 DUMMIES use the DISCRETE-DIFFERENCE AME E[G(idx|x=1) - G(idx|x=0)] on the
-    # fixed monotone link (bounded to the link range), NOT the continuous average
-    # derivative theta_k * mean_slope. The unit-norm direction keeps theta_k moderate
-    # here (so the bug is invisible -- pix AME ~ 2e-3), but a binary regressor's
-    # estimand is still the discrete difference, so we treat it correctly and
-    # consistently with the single-index / logit paths. Flip terms are fixed in i.
-    # Levels from _dummy_spec (registry-driven) rather than a literal {0,1} test, which
-    # a CENTRED dummy ({-p_bar, 1-p_bar}) fails silently. Note the flip terms are
-    # INVARIANT to centering: with S_new = a(S - m), S_sd scales by a too, so
-    # (hi - S_new)/S_sd_new = (1 - S_raw)/S_sd_old exactly.
-    _dummy, _dlo, _dhi = _dummy_spec(S, d, idx_cols)
-    _flip1 = [((_dhi[k] - S[:, k]) / S_sd[k]) if _dummy[k] else None for k in range(d)]
-    _flip0 = [((_dlo[k] - S[:, k]) / S_sd[k]) if _dummy[k] else None for k in range(d)]
-
-    def _ames(theta):
-        th = theta / (np.linalg.norm(theta) + 1e-12)
-        vv = Sn @ th
-        gp = np.interp(vv, vgrid, gpgrid)          # link held fixed; only the index moves
-        mean_slope = float(np.mean(gp))
-        out = {}
-        for k in range(d):
-            if _dummy[k]:                          # discrete difference (bounded by the link)
-                # both flips now carry their own sign: _flip0 = (lo - S)/S_sd, so it is
-                # ADDED here. (It used to be S/S_sd and subtracted; same thing at lo=0.)
-                vv1 = vv + th[k] * _flip1[k]
-                vv0 = vv + th[k] * _flip0[k]
-                out[idx_cols[k]] = float(np.mean(np.interp(vv1, vgrid, ggrid)
-                                                 - np.interp(vv0, vgrid, ggrid)))
-            else:                                  # continuous average derivative
-                out[idx_cols[k]] = th[k] / S_sd[k] * mean_slope
-        return out
-
-    ame_hat = _ames(theta_hat)
-
-    # ---- score/multiplier wild cluster bootstrap on theta -> AMEs ----
-    gp_obs = np.interp(v, vgrid, gpgrid)
-    gS = (gp_obs * Z)[:, None] * Sn               # N x d  (d/dtheta of G(v)Z)
-    gS_dm = demean(gS)
-    Minv = np.linalg.pinv(gS_dm.T @ gS_dm)
-    IF = (resid[:, None] * gS_dm) @ Minv.T         # N x d influence functions for theta
-    IF = IF - np.outer(IF @ theta_hat, theta_hat)  # project to the sphere tangent
-    IF_cl = np.zeros((n_cl, d))
-    for k in range(d):
-        IF_cl[:, k] = np.bincount(cl_inv, weights=IF[:, k], minlength=n_cl)
-
-    bse, pvals = cluster_wild_bootstrap(theta_hat, IF_cl, _ames, ame_hat,
-                                        B=boot_B, scheme=boot_scheme, rng=rng)
-
-    ps = pd.Series({f"interaction_{k}": ame_hat[k] for k in idx_cols})
-    bs = pd.Series({f"interaction_{k}": bse[k] for k in idx_cols})
-    pv = pd.Series({f"interaction_{k}": pvals[k] for k in idx_cols})
-
-    # Quarter-clustered WCB for the national rows (pix_exists, risk_free_qoq_lag): same
-    # bootstrap, same _ames map, influence functions aggregated by QUARTER rather than by
-    # conglomerate. Conglomerate clustering cannot see their sampling variation because they
-    # are constant across firms within a period. Stored separately; `bs` is untouched.
-    _nat_time = _nat_pv = None
-    if fe_time_col is not None and fe_time_col in df_ss.columns:
-        try:
-            from utils.se_national import _aggregate_if_by_period
-            IF_t, _n_t = _aggregate_if_by_period(IF, df_ss[fe_time_col])
-            _bt, _pt = cluster_wild_bootstrap(theta_hat, IF_t, _ames, ame_hat,
-                                              B=boot_B, scheme=boot_scheme,
-                                              rng=np.random.default_rng(seed))
-            _nat_time = pd.Series({f"interaction_{k}": _bt[k] for k in idx_cols})
-            _nat_pv = pd.Series({f"interaction_{k}": _pt[k] for k in idx_cols})
-            from utils.se_national import is_national
-            _shown = [k for k in idx_cols if is_national(k)]
-            if _shown:
-                print(f"  [national-SE joint-{link}] T={_n_t} | " + ", ".join(
-                    f"{k}: congl={float(bs['interaction_'+k]):.4g} / "
-                    f"quarter={float(_nat_time['interaction_'+k]):.4g}" for k in _shown))
-        except Exception as _e:
-            print(f"  [national-SE joint-{link}] skipped ({type(_e).__name__}: {_e})")
-    G_star, G_nominal = _G_star(df_ss["CodConglomeradoPrudencial"].astype(str))
-    tss = float(np.sum((y_dm - y_dm.mean()) ** 2))
-    rsq = 1 - float(np.sum(resid ** 2)) / tss if tss > 0 else np.nan
-    theta_native = pd.Series({f"interaction_{idx_cols[k]}": float(theta_hat[k] / S_sd[k]) for k in range(d)})
-    print(f"  [JointSI-{link}-{loss}] starts={len(starts)} | obj={obj:.5g} | "
-          f"||theta||=1 | boot B={boot_B} ({boot_scheme})")
-    res = NonLinearResults(ps, bs, ps / bs.replace(0, np.nan), pv, G_star,
-                           params_native=theta_native, nobs=len(df_ss), rsquared=rsq,
-                           G_nominal=G_nominal, cov_ame=None, link=link)
-    # phi_from_native evaluates the NATIVE (raw) index = sum native_k*S_raw_k, which
-    # equals the standardised index v plus a constant offset; store the grid in that
-    # native-index frame so np.interp aligns.
-    offset = float(np.sum(theta_hat * S_mu / S_sd))
-    res.si_vgrid = vgrid + offset
-    res.si_ggrid = ggrid
-    res.si_degree = degree
-    # Records whether the ceiling sum(beta) <= 1 was imposed on the final link refit. Read by
-    # the resume logic to refuse to mix fits made under different link settings inside one
-    # pickle, and by anything downstream that needs to know the link is a genuine CDF.
-    res.si_constrained = bool(link == "sieve" and link_constrained())
-    res.boot_B = boot_B; res.boot_scheme = boot_scheme
-    # Quarter-clustered SEs for the national rows, computed above. Kept alongside `bse` so the
-    # exporters can choose PER ROW (conglomerate for firm-level regressors, quarter for the
-    # national ones) without a second estimation pass.
-    if _nat_time is not None:
-        res.bse_time = _nat_time
-        res.pvalues_time = _nat_pv
-
-    # National phi_t confidence band: perturb theta by the cluster-summed IFs,
-    # hold the link fixed (matches the AME bootstrap), aggregate to national phi_t.
-    if phi_band:
-        gs = _phi_t_group_struct(df_ss)
-        phi_pt = np.clip(np.interp(v, vgrid, ggrid), 0.0, 1.0)
-
-        def _draw(rng_):
-            w = _wild_weights(n_cl, boot_scheme, rng_)
-            th_b = theta_hat + w @ IF_cl
-            th_b = th_b / (np.linalg.norm(th_b) + 1e-12)
-            return np.clip(np.interp(Sn @ th_b, vgrid, ggrid), 0.0, 1.0)
-
-        res.phi_t_boot = _phi_t_band(gs, phi_pt, _draw, min(boot_B, 400),
-                                     boot_scheme, np.random.default_rng(seed + 12345))
-    return res
 
 
 def _wild_weights(n, scheme, rng):
@@ -2427,14 +1896,13 @@ def _phi_t_band(gs, phi_point, draw_phi_fn, B, scheme, rng, alpha=0.05):
 
     `lo`/`hi` -- the RAW percentile interval (unchanged; every stored band predating
     2026-08-04 is this). It is kept because its failure mode is diagnostic: a raw percentile
-    interval can EXCLUDE its own point estimate, and on E7 spec 12 it does so in 26 of 35
-    quarters. That happens when the map from parameters to phi is nonlinear enough to displace
-    the draw cloud off the estimate. The joint sieve stacks three nonlinearities in one draw --
-    renormalise theta onto the unit sphere, interpolate through a kinked link grid, clip to
-    [0,1] -- and when the fitted link is nearly flat (E7's spans 1.33 pp) with the point sitting
-    ON its floor, the draws end up one-sided. The single-index path cannot do this: its draw is
-    `vpow @ (b + w.IF)`, linear in the perturbed coefficients up to the clip, so the draws are
-    mechanically centred (0 violations in all 32 E5/E6 cells).
+    interval can EXCLUDE its own point estimate whenever the map from parameters to phi is
+    nonlinear enough to displace the draw cloud off the estimate. An estimator that renormalises
+    theta onto the unit sphere, interpolates through a kinked link grid and clips to [0,1] stacks
+    three such nonlinearities, and with a nearly flat fitted link whose point sits ON its floor
+    the draws come out one-sided; measured at 26 of 35 quarters. The E3/E4 path cannot do this:
+    its draw is `vpow @ (b + w.IF)`, linear in the perturbed coefficients up to the clip, so the
+    draws are mechanically centred (0 violations in all 32 cells).
 
     `lo_bc`/`hi_bc` -- Efron's BIAS-CORRECTED percentile interval (Efron 1987), which is the
     repair: measure the median bias of the draw cloud as z0 = Phi^-1(P[draw < estimate]) and read
@@ -2443,7 +1911,7 @@ def _phi_t_band(gs, phi_point, draw_phi_fn, B, scheme, rng, alpha=0.05):
     linear/single-index paths are unaffected.
 
     NOT done here: recentring the draws on the point estimate. That would force containment
-    everywhere and destroy the very signal that exposed E7's degenerate link.
+    everywhere and destroy the very signal a displaced draw cloud carries about a degenerate link.
 
     `p_below` -- P[draw < estimate], the displacement diagnostic itself, computed with the
     (1+.)/(1+B) finite-B correction used elsewhere in this module so z0 stays finite. Quarters
@@ -2540,7 +2008,7 @@ def _band_from_draws(pt, draws, tuniq, alpha=0.05, label="phi_t band",
 
 
 # ==============================================================================
-# UNCONDITIONAL national phi_t band for the single-index estimators (Est5/Est6)
+# UNCONDITIONAL national phi_t band for the single-index estimators (E3/E4)
 # ==============================================================================
 # The stored bands condition on the estimated DIRECTION theta-hat: they perturb only the
 # sieve-link coefficients b through vpow built once at theta-hat. But theta-hat is the object

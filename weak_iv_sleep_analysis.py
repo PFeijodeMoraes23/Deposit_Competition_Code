@@ -6,7 +6,8 @@ stage. The sleepiness first stage (estimation_2_sleep.run_pooled_first_stage) re
 endogenous QoQ deposit spread `spread_qoq` (deposit types 4 and 5) on excluded instruments +
 exogenous state controls, clustered by `CodConglomeradoPrudencial`, producing the residual v_hat;
 the control-function term v_hat x lagged_deposits then enters a TWO-WAY-FE (entity_id + time_id)
-second stage that reconstructs phi via a logit/sieve single index.
+second stage that reconstructs phi via a single index through a logit or a monotone
+sieve link.
 
 Because the sleepiness stage is NONLINEAR in the spread (its residual enters as a control function,
 phi is a link index), there is no verbatim linear structural equation delta = alpha*spread + X*beta.
@@ -36,9 +37,10 @@ This module therefore reports FOUR non-redundant objects per instrument spec x d
      endogeneity test; for gamma != 0 the interval understates uncertainty (v_hat treated as data).
 
   4. (phi) "DO WE NEED IT" MATERIALITY TEST (spec 12 = IV_HausmanFull x Tech) -- reconstruct the
-     national deposit-weighted phi_t under OLS (no CF) vs IV_HausmanFull (CF) on BOTH the logit link
-     and the monotone sieve link, on the COMMON sample (rows where the instruments exist);
-     report Pearson/Spearman correlation, mean|delta|, and trend direction.
+     national deposit-weighted phi_t under OLS (no CF) vs IV_HausmanFull (CF) on BOTH link shapes
+     the estimator can carry -- the logit and the shape-constrained monotone sieve (the reported
+     E3/E4 link) -- on the COMMON sample (rows where the instruments exist); report
+     Pearson/Spearman correlation, mean|delta|, and trend direction.
 
 CAVEAT flagged throughout: deposits are extremely concentrated by conglomerate, so the effective
 cluster count collapses to G* ~ 5-7. The wide confidence sets are a FEW-EFFECTIVE-CLUSTER PRECISION
@@ -57,7 +59,6 @@ Run:  python weak_iv_sleep_analysis.py [BLP_RESULTS_dir]
 """
 import os
 # Import-time env flags MUST precede the estimation imports below.
-os.environ.setdefault("USE_JULIA_SIEVE", "0")   # estimation_sleep_common reads this at import
 os.environ.setdefault("MPLBACKEND", "Agg")
 
 import sys
@@ -80,9 +81,10 @@ import pandas as pd
 
 import weak_iv_analysis as wiv                 # THE demand battery -- imported, never edited
 import estimation_2_sleep as e2                # build_pooled_data / define_specifications / run_pooled_*
-from utils.sleep_links import fit_nlls_link, fit_joint_single_index, phi_from_native
+from utils.sleep_links import fit_nlls_link, fit_single_index, phi_from_native
 from utils.cluster import effective_cluster_stats
 from utils import paths as P
+from utils import routines as R
 
 # ---------------------------------------------------------------------------
 # Sleepiness-stage constants (the swap-ins vs the demand module)
@@ -110,17 +112,6 @@ def _say(report, msg=""):
     except UnicodeEncodeError:
         print(msg.encode("ascii", "replace").decode("ascii"))
     report.append(msg)
-
-
-# ---------------------------------------------------------------------------
-# Warm-theta helper (inlined from estimation_sleep_common._init_theta to avoid the coupling)
-# ---------------------------------------------------------------------------
-def _init_theta(logit_res, state_cols):
-    if logit_res is None:
-        return None
-    nat = logit_res.params_native
-    return np.array([float(nat.get(f"interaction_{sv}", 0.0)) for sv in state_cols if sv != "constant"],
-                    float)
 
 
 # ---------------------------------------------------------------------------
@@ -273,13 +264,15 @@ def _cf_hausman(df, iv_cols, state_full, mask, twoway_eff_F):
 # The phi "do we need it" materiality test (spec 12, logit + sieve)
 # ---------------------------------------------------------------------------
 def _fit_phi(df, state_full, has_cf, link):
+    """The spec-12 phi fit under one link shape. `link="logit"` stops at the NLLS logit;
+    `link="sieve"` carries that logit direction into the shape-constrained monotone link,
+    i.e. exactly the estimator E3/E4 report (utils.sleep_links.fit_single_index)."""
     lg = fit_nlls_link(df, state_full, has_cf=has_cf, link="logit", loss="cauchy",
-                       fe_time_col="time_id", bootstrap=False)
-    if link == "logit":
+                       fe_time_col=R.FE_TIME_COL, bootstrap=False)
+    if link == "logit" or lg is None:
         return lg
-    warm = _init_theta(lg, state_full)
-    return fit_joint_single_index(df, state_full, has_cf=has_cf, link="sieve", loss="robust",
-                                  n_starts=1, boot_B=0, init_theta=warm, seed=0, fe_time_col="time_id")
+    return fit_single_index(df, state_full, has_cf=has_cf, logit_res=lg, degree=3,
+                            fe_time_col=R.FE_TIME_COL)
 
 
 def _wmean_by_time(time_id, phi, w):
@@ -344,9 +337,10 @@ def _phi_need_test(df, iv_cols, state_full, link):
                          "v_hat_x_lagged_dep", "lagged_deposits", "time_id"]).copy()
     if len(common) == 0:
         return None
-    key = "logit" if link == "logit" else "sieve"
-    phi_ols = phi_from_native(common, res_ols, key)
-    phi_iv = phi_from_native(common, res_iv, key)
+    # The fits carry their own link tag ("index_sieve" or "index" for the monotone link);
+    # read it rather than the caller's shape name, which is the phi-CSV bug in miniature.
+    phi_ols = phi_from_native(common, res_ols, getattr(res_ols, "link", None) or link)
+    phi_iv = phi_from_native(common, res_iv, getattr(res_iv, "link", None) or link)
     return _phi_summary(common, phi_ols, phi_iv)
 
 
@@ -439,7 +433,7 @@ def _write_markdown(out, diag_dir, report_lines):
         "2. **Structural CF Hausman gamma** (coefficient on `v_hat_x_lagged_dep`): the WCB test of "
         "gamma=0 is a valid few-cluster endogeneity test; tF is *not* applied (generated regressor).",
         "3. **phi materiality**: does instrumenting move the reconstructed national deposit-weighted "
-        "phi_t path (logit and sieve links, common sample)?",
+        "phi_t path (logit and shape-constrained monotone sieve links, common sample)?",
         "",
         "## Headline numbers (spec 12 = IV_HausmanFull x Tech, types 4+5)",
     ]
@@ -530,7 +524,7 @@ def run_phi_tests(df, iv_specs, state_blocks, skip_sieve, report):
     _say(report, "\n[sleep-IV] phi \"do we need it\" test (spec 12) -- fitting logit ...")
     phi["logit"] = _phi_need_test(df, iv12, state_full, "logit")
     if not skip_sieve:
-        _say(report, "[sleep-IV] ... fitting the monotone sieve link (USE_JULIA_SIEVE=0, n_starts=1, no boot) ...")
+        _say(report, "[sleep-IV] ... fitting the shape-constrained monotone sieve link ...")
         try:
             phi["sieve"] = _phi_need_test(df, iv12, state_full, "sieve")
         except Exception as e:
@@ -546,7 +540,7 @@ def main():
     ap.add_argument("results_dir", nargs="?", default=wiv.default_results_dir())
     ap.add_argument("--specs", default=",".join(SPEC_ORDER))
     ap.add_argument("--subsamples", default=",".join(SUBSAMPLES))
-    ap.add_argument("--skip-sieve", action="store_true", help="skip the (slow) sieve-link phi test")
+    ap.add_argument("--skip-sieve", action="store_true", help="skip the sieve-link phi test")
     ap.add_argument("--phi-only", action="store_true", help="only run the phi materiality test")
     args = ap.parse_args()
 
@@ -575,7 +569,7 @@ def main():
         "cluster_key": CLUSTER_KEY, "endog_types": ENDOG_TYPES,
         "wcb_reps": int(os.environ.get("SLEEP_BOOT_B", "999")),
         "wcb_scheme": os.environ.get("SLEEP_BOOT_SCHEME", "webb"),
-        "headline_spec": "IV_HausmanFull x Tech",
+        "headline_spec": R.SPEC12,
     }
 
     RES = os.path.abspath(args.results_dir)

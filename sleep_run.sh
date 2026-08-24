@@ -90,11 +90,10 @@ MERGE_TIME="${MERGE_TIME:-01:00:00}"; MERGE_CPUS="${MERGE_CPUS:-8}"; MERGE_MEM="
 # carry 128 CPUs and ~2.25 TB, the emeraldrapids ones 64 CPUs and ~991 GB. The
 # earlier 32-96 G figures were guesses against a much smaller node.
 #
-# More cores do NOT buy a wider search on the est array:
-# estimation_sleep_common.py:79-82 pins JULIA_THREADS = max(2, min(8, ncpu-4)) and
-# NLLS_N_STARTS is a hardcoded 4, so 16 cores and 128 cores fit the same direction
-# from the same starts. 16 is what E1/E2's internal 4-way pool plus that 8-thread
-# cap can actually use; the memory is what a full market panel per process needs.
+# More cores do NOT buy a wider search on the est array: NLLS_N_STARTS is a
+# hardcoded 4 in estimation_sleep_common.py, so 16 cores and 128 cores fit the same
+# direction from the same starts. 16 is what E1/E2's internal 4-way pool can
+# actually use; the memory is what a full market panel per process needs.
 EST_TIME="${EST_TIME:-04:00:00}";   EST_CPUS="${EST_CPUS:-16}";   EST_MEM="${EST_MEM:-128G}"
 PREP_TIME="${PREP_TIME:-06:00:00}"; PREP_CPUS="${PREP_CPUS:-16}"; PREP_MEM="${PREP_MEM:-256G}"
 AMEG_TIME="${AMEG_TIME:-00:30:00}"; AMEG_CPUS="${AMEG_CPUS:-4}";  AMEG_MEM="${AMEG_MEM:-16G}"

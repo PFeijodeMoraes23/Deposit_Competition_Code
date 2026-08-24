@@ -34,7 +34,7 @@
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-export ROUTINES="${ROUTINES:-1 2 5 6 7 8}"
+export ROUTINES="${ROUTINES:-3 4}"
 export ENGINES="${ENGINES:-ift numerical}"
 LAYOUT="${LAYOUT:-all}"
 

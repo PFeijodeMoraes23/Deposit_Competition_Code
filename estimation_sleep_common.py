@@ -10,8 +10,11 @@ one choice of (kind, time_block), listed in EST_CONFIG at the bottom:
 E1 (local linear, B-type) and E2 (pooled linear) are separate estimators with their
 own scripts, estimation_1_sleep.py / estimation_2_sleep.py.
 
-The "+Time" variant adds the time block (time_trend, gdp_growth_yoy) to every
-state block via estimation_2_sleep.define_specifications(time_block=True). phi is
+The "+Time" variant adds the time block to every state block via
+estimation_2_sleep.define_specifications(time_block=True). That block is gdp_growth_yoy
+alone -- add_time_variables also builds time_trend on the frame, but TIME_VARS excludes
+it, because a pure-time linear trend is collinear with the quarter fixed effects that
+absorb aggregate time additively. phi is
 always built from the native index + link (phi_from_native); AMEs are reporting-only.
 Inference: score/multiplier wild cluster bootstrap (utils.sleep_links).
 
@@ -50,15 +53,14 @@ import numpy as np
 import pandas as pd
 
 from estimation_2_sleep import build_pooled_data, define_specifications, run_pooled_first_stage
-from utils.sleep_links import (fit_nlls_link, fit_single_index, fit_joint_single_index,
-                               phi_from_native)
+from utils.sleep_links import fit_nlls_link, fit_single_index, phi_from_native
 from utils import paths as _paths_mod
+from utils import routines as R
 
 # kind -> phi_from_native link key. Fallback only: _calculate_phis prefers each
 # result's own .link tag, which distinguishes the constrained single-index
 # ("index_sieve") from the cubic ("index") within the same kind.
-LINK_OF = {"logit": "logit", "single_index": "index",
-           "joint_sieve": "sieve", "joint_kernel": "kernel"}
+LINK_OF = {"logit": "logit", "single_index": "index"}
 
 _IV_ORDER = ["OLS", "IV_CostShifters", "IV_Wholesale", "IV_HausmanFull"]
 
@@ -66,40 +68,13 @@ _IV_ORDER = ["OLS", "IV_CostShifters", "IV_Wholesale", "IV_HausmanFull"]
 # (bank x deposit-type x market) and a quarter time FE (time_id). The time FE
 # absorbs aggregate time shocks additively, outside the link. Set to None to
 # fall back to the entity-only within estimator.
-FE_TIME_COL = "time_id"
+FE_TIME_COL = R.FE_TIME_COL
 
-# Opt 1/4: route the joint-sieve theta-search through the Julia engine on a
-# subsample of entities (the link/phi/inference stay exact on full N in Python).
-# All env-overridable; USE_JULIA_SIEVE=0 falls back to the pure-Python search.
-USE_JULIA_SIEVE = os.environ.get("USE_JULIA_SIEVE", "1") != "0"
-# FIX 1 (2026-07-29): was 0.2. The Julia theta search ran on a 20% subsample and its answer
-# was then FROZEN (theta_fixed) with no full-sample refinement, which drove E7 to a corner
-# solution loading 0.988 of a unit-norm theta on risk_free_qoq_lag -- a national series with
-# ~36 distinct values that a subsample makes look maximally explanatory. The saturated link
-# that produced collapsed every E7 AME by ~700x. Search on the full sample.
-SUBSAMPLE_FRAC = float(os.environ.get("SLEEP_SUBSAMPLE_FRAC", "1.0"))
-# NOTE: a SLEEP_SIEVE_REFINE_MAXITER knob (a Python-side Nelder-Mead polish of the Julia
-# direction) was added on 2026-07-29 and reverted the same day -- see the long comment in
-# utils/sleep_links.fit_joint_single_index. It cost 3-5 HOURS per spec because each of the
-# ~180 function evaluations is 3 full-sample sieve solves on 487k rows, and it selected a
-# WORSE direction than simply trusting the engine. Do not reintroduce it without counting
-# function evaluations first.
-MAXITER_MULT = int(os.environ.get("SLEEP_MAXITER_MULT", "40"))
-# The Julia engine parallelises the multistart across starts (`@threads for s in 1:nst`,
-# sleep_joint_sieve.jl:294), so ADDITIONAL STARTS ARE NEARLY FREE IN WALL-CLOCK as long as
-# threads >= starts. This box has 12 logical cores and we were using 2, i.e. the search was
-# 3x narrower than it could be at the same elapsed time -- which mattered because the
-# objective turned out to be flat and multimodal (E7 landed in a Selic corner at an R2 of
-# 0.95230 vs 0.95235 for the good direction).
-JULIA_THREADS = int(os.environ.get("SLEEP_JULIA_THREADS",
-                                   str(max(2, min(8, (os.cpu_count() or 4) - 4)))))
-# Starts for the joint sieve. Was hardcoded 2; now env-overridable and matched to threads.
-SIEVE_N_STARTS = int(os.environ.get("SLEEP_SIEVE_N_STARTS", str(max(2, JULIA_THREADS))))
-# Starts for the NLLS logit that supplies the single-index direction. Was a single start
-# from zeros. That matters because fit_single_index never re-optimises theta, so E3/E4
-# take whatever direction this fit lands on -- and on the joint-sieve full-sample candidate
-# scan the logit direction scored WORST of four (164,913 vs 160,940). Sequential, so each
-# extra start costs one more least_squares solve; 4 is a reasonable default.
+# Starts for the NLLS logit that supplies the single-index direction. It matters because
+# fit_single_index never re-optimises theta, so E3/E4 take whatever direction this fit lands
+# on -- and scored on the full sample against alternative index directions, the zeros-start
+# logit direction comes last of four (164,913 against 160,940). Sequential, so each extra
+# start costs one more least_squares solve; 4 is a reasonable default.
 NLLS_N_STARTS = int(os.environ.get("SLEEP_NLLS_N_STARTS", "4"))
 # Opt 8: drop the LS loss during the grid (robust feeds phi). Set DROP_LS=0 to keep it.
 DROP_LS = os.environ.get("SLEEP_DROP_LS", "1") != "0"
@@ -159,7 +134,7 @@ def _out_dir(est_num):
 # IV_HausmanFull x Tech everywhere: here, in the demand parquets, and in the CF exports.
 # _check_spec_ids() enforces that agreement rather than trusting it.
 #
-# The single-index/joint kinds do not estimate the Base block (a constant-only index has no
+# The single-index kinds do not estimate the Base block (a constant-only index has no
 # direction), so ids 1-4 are absent from their grid; the remaining ids keep their canonical
 # value instead of being renumbered 1-8.
 _SPECS_SUBDIR = "_specs"
@@ -256,20 +231,11 @@ def _atomic_pickle_dump(obj, path):
         raise
 
 
-def _init_theta(logit_res, s_cols):
-    if logit_res is None:
-        return None
-    nat = logit_res.params_native
-    idx_cols = [c for c in s_cols if c != "constant"]
-    return np.array([float(nat.get(f"interaction_{sv}", 0.0)) for sv in idx_cols], float)
-
-
 def _exec_spec(args):
     df, iv_name, iv_cols, s_name, s_cols, kind = args[:6]
-    warm_theta = args[6] if len(args) > 6 else None   # opt 9: cross-spec warm start (native theta)
     has_cf = len(iv_cols) > 0
     spec_name = f"{iv_name} x {s_name}"
-    # The single-index/joint-sieve link comparison in the time-series report uses spec 12
+    # The single-index link comparison in the time-series report uses spec 12
     # (IV_HausmanFull x Tech); compute its national phi_t CI band in the main routine.
     is_spec12 = (iv_name == "IV_HausmanFull" and s_name == "Tech")
     # SLEEP_PHI_BAND_ALL=1: compute the national phi_t bootstrap band for EVERY spec, not just
@@ -295,10 +261,10 @@ def _exec_spec(args):
         # n_starts matters HERE: fit_single_index never re-optimises theta, so E3/E4
         # inherit exactly the direction this call returns.
         #
-        # E3/E4 are a HYBRID: the LINK is already least squares (sieve OLS inside
+        # E3/E4 are a HYBRID: the LINK is already least squares (profiled sieve OLS inside
         # fit_single_index) but the DIRECTION comes from this Cauchy NLLS logit. The LS
         # variant below refits only the direction, making the column fully LS and directly
-        # comparable with the linear (OLS) E1/E2 and with the LS joint sieve.
+        # comparable with the linear (OLS) E1/E2.
         def _single_index(loss, band):
             lg = fit_nlls_link(df_target, s_cols, has_cf=has_cf, link="logit", loss=loss,
                                fe_time_col=FE_TIME_COL, bootstrap=False,
@@ -313,144 +279,36 @@ def _exec_spec(args):
             return _si
 
         res = None if LS_ONLY else _single_index("cauchy", want_band)
-        # scipy's plain least squares is loss="linear" (NOT "ls"); the Julia engine spells the
-        # same thing "ls". Mapping them wrongly silently re-runs Cauchy.
+        # scipy's plain least squares is loss="linear", NOT "ls": a stray "ls" here falls
+        # through least_squares' default and silently re-runs Cauchy.
         res_ls = None if DROP_LS else _single_index("linear", want_band)
         return res, res_ls, spec_name, res_fs
-
-    if kind in ("joint_sieve", "joint_kernel"):
-        link = "sieve" if kind == "joint_sieve" else "kernel"
-        fe_tc = FE_TIME_COL if link == "sieve" else None   # kernel two-way FE not yet wired
-        # warm start only: _init_theta reads params_native -> skip its wild bootstrap.
-        logit_res = fit_nlls_link(df_target, s_cols, has_cf=has_cf, link="logit", loss="cauchy",
-                                  fe_time_col=fe_tc, bootstrap=False, n_starts=NLLS_N_STARTS)
-        init = _init_theta(logit_res, s_cols)
-        # kernel: multistart impractical at full N. sieve: starts run in PARALLEL threads
-        # in the Julia engine, so widening the search costs wall-clock only when
-        # starts > threads.
-        n_starts = 1 if link == "kernel" else SIEVE_N_STARTS
-        warm = init if warm_theta is None else warm_theta   # opt 9: cross-spec warm start
-        # Opt 1+4: Julia subsample theta-search for the sieve (kernel stays Python).
-        def _julia_search(loss_name):
-            """One Julia direction search; returns theta or None (Python fallback)."""
-            try:
-                from sleep_joint_julia import julia_theta
-                # n_starts MUST be passed: julia_theta defaults to 2 and it is the JULIA
-                # search that actually picks the direction here (the Python multistart is
-                # skipped whenever theta_fixed is returned). Raising only the Python-side
-                # n_starts changed nothing -- the engine still reported "starts=2".
-                return julia_theta(df_target, s_cols, has_cf=has_cf, loss=loss_name,
-                                   fe_time_col=fe_tc, subsample_frac=SUBSAMPLE_FRAC,
-                                   maxiter_mult=MAXITER_MULT, init_theta=warm, seed=0,
-                                   threads=JULIA_THREADS, n_starts=SIEVE_N_STARTS)
-            except Exception as e:
-                print(f"  [julia_theta/{loss_name}] error, Python fallback: {e}")
-                return None
-
-        # SLEEP_LS_ONLY=1: skip the robust search + fit entirely (res_robust=None) and let
-        # merge-on-save leave the stored robust results untouched. Used for retro-fitting the
-        # LS variant onto an already-computed grid without re-paying the robust cost.
-        theta_jl = None
-        res_robust = None
-        if not LS_ONLY:
-            if link == "sieve" and USE_JULIA_SIEVE:
-                theta_jl = _julia_search("robust")
-            res_robust = fit_joint_single_index(df_target, s_cols, has_cf=has_cf, link=link,
-                                                loss="robust", init_theta=warm,
-                                                n_starts=n_starts, boot_B=999, boot_scheme="webb", seed=0,
-                                                label=f"{spec_name}/robust", fe_time_col=fe_tc,
-                                                theta_fixed=theta_jl, phi_band=want_band)
-        # Opt 8: drop the LS loss during the grid (robust feeds phi).
-        if DROP_LS:
-            res_ls = None
-        else:
-            # Two LS modes, mutually exclusive:
-            #   SLEEP_LS_FIXED_THETA=1  (diagnostic): hold theta at the ROBUST Julia direction,
-            #       so robust and LS differ ONLY in the loss. Lower bound on the LS link span.
-            #   default: LS finds its OWN theta through the Julia engine (loss="ls" -- the .jl
-            #       else-branch is plain dot(r,r); ~3x cheaper per eval than robust). Without
-            #       the Julia call the LS branch runs the full Python-side Nelder-Mead search,
-            #       measured at ~14h/spec -- never let it fall through silently, which is why
-            #       the fallback prints loudly above.
-            if os.environ.get("SLEEP_LS_FIXED_THETA", "0") == "1":
-                _ls_theta = theta_jl          # None under LS_ONLY: nothing to hold fixed
-            elif link == "sieve" and USE_JULIA_SIEVE:
-                _ls_theta = _julia_search("ls")
-                if _ls_theta is None and LS_ONLY:
-                    # Without a Julia direction the LS fit falls into the full Python-side
-                    # Nelder-Mead search (~14h/spec, measured 07-30/31). In the retrofit mode
-                    # that is never what was asked for -- fail instead of silently grinding.
-                    raise RuntimeError(
-                        f"[{spec_name}] Julia LS theta search failed and SLEEP_LS_ONLY=1; "
-                        f"refusing the ~14h/spec Python fallback")
-            else:
-                _ls_theta = None
-            _ls_boot = int(os.environ.get("SLEEP_LS_BOOT_B", "999"))
-            # SLEEP_LS_POLISH_EVALS>0: Nelder-Mead polish of the Julia direction on the PYTHON
-            # objective. The two engines minimise DIFFERENT functions (the .jl bins the ramp and
-            # solves the bounded LS another way), so Julia's theta is a good start but not this
-            # objective's optimum: measured on E7 spec 12, Julia 26,054 vs 25,528 for a 33h cold
-            # Python search, and ~100 polish evals recover ~80% of that gap. Needs a start, so it
-            # only fires when _ls_theta exists.
-            _ls_polish = int(os.environ.get("SLEEP_LS_POLISH_EVALS", "0")) if _ls_theta is not None else 0
-            res_ls = fit_joint_single_index(df_target, s_cols, has_cf=has_cf, link=link,
-                                            loss="ls", init_theta=warm, n_starts=n_starts,
-                                            boot_B=_ls_boot, boot_scheme="webb", seed=0,
-                                            label=f"{spec_name}/ls", fe_time_col=fe_tc,
-                                            theta_fixed=_ls_theta, polish_evals=_ls_polish, phi_band=want_band)
-        return res_robust, res_ls, spec_name, res_fs
 
     raise ValueError(f"unknown kind {kind!r}")
 
 
-def _warm_from(res, s_cols):
-    """Extract the native theta from a joint/single-index result as a warm start for
-    the next spec in the same state block (same index regressors)."""
-    if res is None or not hasattr(res, "params_native"):
-        return None
-    nat = res.params_native
-    idx_cols = [c for c in s_cols if c != "constant"]
-    arr = np.array([float(nat.get(f"interaction_{sv}", 0.0)) for sv in idx_cols], float)
-    return arr if np.isfinite(arr).all() and np.linalg.norm(arr) > 0 else None
-
-
 def _exec_block(block_args):
-    """Run the 4 instrument specs of ONE state block sequentially, warm-starting each
-    joint/single-index fit from the previous spec's theta (opt 9). Blocks run in
-    parallel (opt 3), so warm-start stays within a block where the index is shared.
+    """Run the 4 instrument specs of ONE state block sequentially. Blocks run in
+    parallel (opt 3). Every spec is fitted cold, so a block is exactly its four specs.
 
     Under SLEEP_RESUME a spec already on disk (and computed under the SAME link setting) is
-    skipped, and its stored fit still feeds the warm-start chain -- so resuming produces the
-    same sequence of starting values as an uninterrupted run rather than a colder one."""
+    skipped."""
     df, s_name, s_cols, kind, iv_specs = block_args[:5]
     done = block_args[5] if len(block_args) > 5 else (lambda _s: None)
     df = df.copy()      # thread-local copy (run_pooled_first_stage adds v_hat columns in place)
-    out, warm = [], None
+    out = []
     for iv in _IV_ORDER:
         spec_name = f"{iv} x {s_name}"
-        stored = done(spec_name)
-        if stored is not None:
+        if done(spec_name) is not None:
             print(f"  [resume] {spec_name}: already on disk, skipping")
-            w = _warm_from(stored.get("second_stage") or stored.get("second_stage_ls"), s_cols)
-            if w is not None:
-                warm = w
             continue
-        res_main, res_ls, spec_name, res_fs = _exec_spec(
-            (df, iv, iv_specs[iv], s_name, s_cols, kind, warm))
-        out.append((res_main, res_ls, spec_name, res_fs))
-        if kind in ("joint_sieve", "single_index"):
-            # In LS-only mode res_main is None; chain the LS theta instead so an LS grid
-            # warm-starts itself exactly as the robust grid does.
-            w = _warm_from(res_main if res_main is not None else res_ls, s_cols)
-            if w is not None:
-                warm = w
+        out.append(_exec_spec((df, iv, iv_specs[iv], s_name, s_cols, kind)))
     return out
 
 
 # ── Resume support ───────────────────────────────────────────────────────────────
-# A full grid is 9-12 fits and the joint sieve runs ~50 min per spec, so an interrupted run
-# used to lose everything: results were merged and written ONCE, after every spec finished.
-# Two changes make a run restartable:
+# A full grid is 9-12 fits, so an interrupted run that merged and wrote results ONCE, after
+# every spec had finished, would lose everything. Two things make a run restartable:
 #   * the pickle is merged and written after EACH state block, so a stop costs at most the
 #     block in flight (<= 4 specs) rather than the whole estimator;
 #   * with SLEEP_RESUME=1 a spec already on disk is skipped, PROVIDED it was computed under
@@ -486,7 +344,7 @@ def _entry_reusable(entry, kind, spec_name):
         return False
     if not DROP_LS and entry.get("second_stage_ls") is None:
         return False                         # an LS column was requested but is missing
-    if kind in ("single_index", "joint_sieve"):
+    if kind == "single_index":
         for k in ("second_stage", "second_stage_ls"):
             r = entry.get(k)
             if r is None:
@@ -582,18 +440,10 @@ def run_one_spec(est_num, kind, time_block=False, spec_token=None):
             print(f"  [resume] spec {sid}: already on disk -> {path}")
             return path
 
-    # The warm-start chain of the serial runner (_exec_block) is deliberately not
-    # reproduced: _exec_spec reads warm_theta ONLY in the joint_sieve/joint_kernel branch,
-    # so for the single-index kinds that make up EST_CONFIG a per-spec run is the same
-    # computation as the serial one. For a warm-started kind it would not be, hence the warning.
-    if kind not in ("logit", "single_index"):
-        print(f"  [warn] kind={kind} warm-starts each spec from the previous fit in the same "
-              f"state block; --spec-id starts cold, so results may differ from a serial grid")
-
     df = build_pooled_data(time_block=time_block)
     _, iv_specs, state_blocks = define_specifications(time_block=time_block)
     # .copy() matches _exec_block: run_pooled_first_stage adds v_hat columns in place.
-    result = _exec_spec((df.copy(), iv, iv_specs[iv], s_name, state_blocks[s_name], kind, None))
+    result = _exec_spec((df.copy(), iv, iv_specs[iv], s_name, state_blocks[s_name], kind))
     res_main, res_ls, spec_name_out, res_fs = result
     if res_main is None and res_ls is None:
         print(f"  [!] spec {sid} [{spec_name}] produced no fit; recording the empty result")
@@ -719,14 +569,14 @@ def _write_derived_outputs(est_num, kind, results_dict, df):
     """Spec-12 phi_t band + the phi CSVs, from the MERGED dict. One writer, always."""
     out = _out_dir(est_num)
     # Integrate the time-series report's link-comparison CI band into the main routine:
-    # the spec-12 single-index/joint-sieve fit carries a national phi_t bootstrap band
+    # the spec-12 single-index fit carries a national phi_t bootstrap band
     # (phi_t_boot); persist it where estimation_timeseries_test._link_band reads it.
     # It is written HERE, from the merged dict, and never by a per-spec task: the band is one
     # file describing one cell, so 12 concurrent tasks must not each have a claim on it. The
     # spec-12 task still computes phi_t_boot (want_band keys off the spec name) and carries it
     # inside its own artifact; this step just unpacks it.
-    if kind in ("single_index", "joint_sieve"):
-        sp12 = results_dict.get("IV_HausmanFull x Tech", {}).get("second_stage")
+    if kind == "single_index":
+        sp12 = results_dict.get(R.SPEC12, {}).get("second_stage")
         boot = getattr(sp12, "phi_t_boot", None) if sp12 is not None else None
         if boot is not None:
             # rout_dir() honours SLEEP_OUT_ROOT like _out_dir above, so the band lands with
@@ -797,26 +647,24 @@ def run_sleep_estimator(est_num, kind, time_block=False, spec12_only=False, n_jo
         print(f"[resume] SLEEP_RESUME=1 | {len(existing)} spec(s) already on disk")
 
     if spec12_only:
-        _sp12 = "IV_HausmanFull x Tech"
+        _sp12 = R.SPEC12
         if _done(_sp12) is not None:
             print(f"  [resume] {_sp12}: already on disk, skipping")
             results = []
         else:
             results = [_exec_spec(
                 (df, "IV_HausmanFull", iv_specs["IV_HausmanFull"], "Tech",
-                 state_blocks["Tech"], kind, None))]
+                 state_blocks["Tech"], kind))]
     else:
-        # Opt 3+9: parallelise over the 3 state blocks; within each block the 4 instrument
-        # specs run sequentially with a cross-spec theta warm start. With JULIA_THREADS=2
-        # this packs the ~6 fast cores (3 blocks x 2 threads).
-        # single-index/joint strategies drop Base: a constant-only index has no direction.
+        # Opt 3: parallelise over the 3 state blocks; within each block the 4 instrument
+        # specs run sequentially.
+        # The single-index strategies drop Base: a constant-only index has no direction.
         blocks = [s for s in state_blocks if not (s == "Base" and kind != "logit")]
         block_tasks = [(df, s, state_blocks[s], kind, iv_specs, _done) for s in blocks]
         # Default SEQUENTIAL: concurrent statsmodels/scipy/numpy calls across threads
         # segfault (0xC0000005) on this stack, and the loky/process backend pickles the
-        # 400k-row df (WinError 1450). Sequential is the safe default; the per-fit Julia
-        # + sysimage + subsample optimizations keep it fast. SLEEP_BLOCK_JOBS>1 opts into
-        # the (risky) threading backend.
+        # 400k-row df (WinError 1450). Sequential is the safe default. SLEEP_BLOCK_JOBS>1
+        # opts into the (risky) threading backend.
         nblk = int(os.environ.get("SLEEP_BLOCK_JOBS", "1"))
         if nblk <= 1:
             # CHECKPOINT PER BLOCK: merge and write after each one, so an interrupted run keeps
@@ -883,12 +731,10 @@ def run_sleep_estimator(est_num, kind, time_block=False, spec12_only=False, n_jo
 # block) -- see spec_grid/`--list-specs`. Each task writes only est{N}/_specs/spec_{S}.pkl;
 # the merge is the only step that opens estimation_results.pkl, the band or the phi CSVs.
 #
-# The lineup is the SINGLE-INDEX pair under the shape-constrained link. The joint sieve was
-# dropped: it estimates the direction and the link together, and its reported band conditions
-# on a link chosen jointly with that direction, so re-profiling the link per bootstrap draw
-# widens the band 1.71x (no-Time) and 7.46x (+Time) -- the latter to roughly six times its own
-# fitted phi_t range. Its direction was also barely identified (bootstrap draws nearly
-# orthogonal to theta-hat) and its link solve was not reproducible across runs.
+# The lineup is the SINGLE-INDEX pair under the shape-constrained link: the direction comes
+# from the Cauchy NLLS logit and only the monotone link is profiled, so the reported band
+# conditions on one estimated object rather than two, and estimation_uncond_band.py can widen
+# it to the joint (direction + link) band from the same stored fit.
 EST_CONFIG = {
     3: ("single_index", False), 4: ("single_index", True),
 }

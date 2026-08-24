@@ -154,7 +154,7 @@ def section_tier0(scratch):
         print(f"    {nm:<8s} se {float(b_old[nm]):.10f} -> {float(b_new[nm]):.10f} | "
               f"p {float(p_old[nm]):.10f} -> {float(p_new[nm]):.10f}")
 
-    # the generic (nonlinear-AME) entry point too, since E3-E8 and se_national use it
+    # the generic (nonlinear-AME) entry point too, since E3/E4 and se_national use it
     rng_a = np.random.default_rng(3)
     IF = rng_a.normal(0, 0.01, (80, 4))
     th = np.array([0.9, -0.2, 0.05, 0.4])

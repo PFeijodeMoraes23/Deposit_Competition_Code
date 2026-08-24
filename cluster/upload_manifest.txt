@@ -186,3 +186,6 @@ routines_config    | code | all        | REPO          | config/routines.toml   
 # it silently degrades to a reduced core check -- it still runs, but it stops checking
 # the thing it exists to check.
 manifest_self      | code | all        | REPO          | cluster/upload_manifest.txt    | scripts/cluster | -                                                        | -         | -
+# The launch runbook travels WITH the code, so the steps are readable on the cluster
+# rather than only in the local staging folder.
+launch_seq         | code | all        | REPO          | cluster/LAUNCH_SEQUENCE.txt    | scripts/cluster | -                                                        | -         | -

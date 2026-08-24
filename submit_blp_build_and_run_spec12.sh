@@ -39,7 +39,7 @@ set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 mkdir -p "${HERE}/logs"
 
-ROUTINES="${ROUTINES:-1 2 5 6 7 8}"
+ROUTINES="${ROUTINES:-3 4}"
 ENGINES="${ENGINES:-ift}"                       # IFT only by default (no numerical cross-check, no CUE)
 
 # ── CUE (continuously-updated GMM) — opt in with ENGINES="ift cue" ────────────────────────────

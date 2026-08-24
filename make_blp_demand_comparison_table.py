@@ -98,14 +98,18 @@ def build_table(ests, suffix: str = "", show_segments: bool = True,
     sem     = rc.se_note(data.get(avail[-1]) or rep)
     lbl_suffix = "" if show_segments else "_noseg"
     # The segment dummies are nuisance controls whose coefficients are already printed IN FULL, per
-    # routine, by the appendix tables blp_rc_E{5..8}_spec12.tex. So we omit them here and point the
+    # routine, by the per-routine appendix tables. So we omit them here and point the
     # reader at those tables rather than carrying a duplicate with-segments variant of this table
     # (which added four rows and no information). Never write "available on request" — they ARE
     # reported, just elsewhere.
+    # Derived from `avail` rather than written out: these labels are keyed off the routine id,
+    # so a hardcoded range silently becomes a ?? the moment the lineup changes.
+    _seg_refs = (rf"\ref{{tab:blp_rc_est{avail[0]}_spec12}}" if avail[0] == avail[-1] else
+                 rf"\ref{{tab:blp_rc_est{avail[0]}_spec12}}--\ref{{tab:blp_rc_est{avail[-1]}_spec12}}")
     seg_note = "" if show_segments else (
         r" Segment dummies (S2--S5) are included in every strategy but not reported; the full "
         r"coefficient vector, including the segment dummies, appears in the per-routine tables "
-        r"\ref{tab:blp_rc_est5_spec12}--\ref{tab:blp_rc_est8_spec12}.")
+        + _seg_refs + ".")
 
     theta1_params = rep.get("param_names_theta1") or (["alpha"] + rc.X_COLS)
     if not show_segments:

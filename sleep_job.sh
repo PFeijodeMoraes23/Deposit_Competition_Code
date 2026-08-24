@@ -225,9 +225,8 @@ SPEC_KEY = "IV_HausmanFull x Tech"
 #
 # A MATCH IS THE EXPECTED OUTCOME, so a mismatch is worth investigating rather than
 # shrugging at. The cluster does NOT widen the search: estimation_sleep_common.py
-# caps JULIA_THREADS at min(8, cpu_count-4) and hardcodes NLLS_N_STARTS=4, so a
-# 128-core `day` node runs the same multistart from the same starts as the local
-# machine and should land in the same basin.
+# hardcodes NLLS_N_STARTS=4, so a 128-core `day` node runs the same multistart from
+# the same starts as the local machine and should land in the same basin.
 #
 # It stays REPORT-ONLY all the same. If the cluster fit really does differ, the
 # cluster vintage is the one that supersedes -- every downstream object in this
@@ -510,6 +509,26 @@ def g7():
         n_phi, n_dem = parquet_rows(phit), parquet_rows(dh[0])
         chk(f"E{k}: phi_nopix rows == demand rows", n_phi == n_dem,
             f"{n_phi} vs {n_dem} ({dh[0].name})")
+        # Equal ROW COUNTS are not the property CF4 needs. cf_4_pix.jl builds a lookup
+        # keyed by (entity_id, time_id) and errors on ANY uncovered ctx row, so two
+        # files of identical length built from different vintages sail through a count
+        # check and then abort inside cf4 three phases later -- after the RC ladders,
+        # the BBL solves and a 121 GB buffer allocation. Check the coverage cf_4_pix.jl
+        # actually requires, here, at the boundary that owns it.
+        try:
+            import pyarrow.parquet as _pq
+            _kp = _pq.read_table(phit, columns=["entity_id", "time_id"]).to_pydict()
+            _kd = _pq.read_table(dh[0], columns=["entity_id", "time_id"]).to_pydict()
+            _have = {(str(a), str(b)) for a, b in zip(_kp["entity_id"], _kp["time_id"])}
+            _miss = sum(1 for a, b in zip(_kd["entity_id"], _kd["time_id"])
+                        if (str(a), str(b)) not in _have)
+            chk(f"E{k}: every demand (entity_id,time_id) present in phi_nopix",
+                _miss == 0,
+                f"{_miss} uncovered of {n_dem}" + ("" if _miss == 0 else
+                f" -- regenerate: python cf_4_upsilon_export.py --estim {k} --spec {SPEC}"))
+        except Exception as exc:
+            chk(f"E{k}: phi_nopix key coverage readable", False,
+                f"{type(exc).__name__}: {exc}")
 
 
 report = {"gate": GATE, "routines": KS, "spec": SPEC,

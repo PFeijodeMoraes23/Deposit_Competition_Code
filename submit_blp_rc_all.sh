@@ -37,11 +37,11 @@ mkdir -p "${HERE}/logs"
 # overrides the default and the run then SKIPS routines with no error anywhere — the 21525240 run
 # shipped without E1/E2 and the only evidence was one line of submit output (2026-08-07).
 if [[ -n "${ROUTINES+set}" ]]; then
-    echo "ROUTINES='${ROUTINES}' (FROM ENVIRONMENT — default would be '1 2 5 6 7 8'; unset ROUTINES to use it)"
+    echo "ROUTINES='${ROUTINES}' (FROM ENVIRONMENT — default would be '3 4'; unset ROUTINES to use it)"
 else
-    echo "ROUTINES defaulting to '1 2 5 6 7 8'"
+    echo "ROUTINES defaulting to '3 4'"
 fi
-ROUTINES="${ROUTINES:-1 2 5 6 7 8}"
+ROUTINES="${ROUTINES:-3 4}"
 # Engines: IFT (blp_2) + numerical (blp_1) cross-check. Override e.g. ENGINES="ift".
 ENGINES="${ENGINES:-ift numerical}"
 # How the numerical engine is run:

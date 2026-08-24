@@ -18,7 +18,7 @@ Steps run in isolated SUBPROCESSES (the known 0xC0000005 segfaults are threads i
 one process; separate processes are safe). Default is sequential; `--jobs N` runs up to
 N steps concurrently with longest-first scheduling. Each step needs ~3-4 GB (its own
 panel copy) and D1 spawns 8 workers of its own, so on a 32 GB / 12-core box:
-  --jobs 2 is the safe setting; do NOT run alongside the Julia sieve or other heavy jobs.
+  --jobs 2 is the safe setting; do NOT run alongside an estimation or BLP job.
 
 MEMORY GOTCHA (observed 2026-08-03): at `--jobs 3` concurrent lanes were KILLED
 mid-run -- their logs simply stop, with no traceback, which is the signature of an
@@ -129,7 +129,7 @@ def main() -> int:
                     help="run up to N steps concurrently (isolated subprocesses, "
                          "longest-first schedule). 2 is safe on 32GB; 3 has been observed "
                          "to OOM-kill a lane (see the memory note below). Keep 1 if "
-                         "anything heavy (Julia sieve, BLP) is running.")
+                         "anything heavy (estimation, BLP) is running.")
     ap.add_argument("--only", nargs="+", metavar="STEP",
                     help="run only these step keys (e.g. --only D4b D2)")
     ap.add_argument("--skip", nargs="+", metavar="STEP", default=[],

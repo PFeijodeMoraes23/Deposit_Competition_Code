@@ -42,7 +42,7 @@ The codebase:
 ```text
 .
 ├── run_data_pipeline.py                  # Master data pipeline runner (stages 0–5)
-├── run_sleep_pipeline.py                 # Sleepiness estimation pipeline runner (E1–E8 + exports, demand prep, tables)
+├── run_sleep_pipeline.py                 # Sleepiness estimation pipeline runner (E1–E4 + exports, demand prep, tables)
 │                                         # (run_blp_pipeline.py / run_local_pipeline.py were
 │                                         #  removed in a30be201 — call the Julia directly)
 │
@@ -215,9 +215,10 @@ julia --project=. --threads=4 blp_1_estimation.jl --estim 1 --spec 12 --stage si
 > + 9 tables); the draws/GMM lines are transcribed from those headers with the filename
 > corrected, so read the header before committing to a long run.
 
-For the end-to-end local sequence the orchestrator used to provide: run `run_data_pipeline.py`,
-then `run_sleep_recompute.sh` (sleepiness → exports → demand prep → tables → logit), which chains
-the stages behind a free-RAM gate and supports `--from` resume.
+For the end-to-end local sequence: run `run_data_pipeline.py`, then `run_sleep_pipeline.py`
+(estimators → exports → demand prep), which takes `--skip-sleep`, `--sleep-only` and
+`--skip-steps` to resume partway. The full chain — logit, BLP, BBL and the counterfactuals —
+runs on the cluster as a single command via `pipeline_all.sh`.
 
 ---
 
