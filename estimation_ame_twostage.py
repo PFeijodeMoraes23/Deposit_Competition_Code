@@ -48,6 +48,7 @@ os.environ.setdefault("PYTHONIOENCODING", "utf-8")
 
 import pickle
 import shutil
+from pathlib import Path
 import time
 from datetime import datetime
 
@@ -307,6 +308,45 @@ def _attach(pkl_path, d, si_res, loss_lbl, out, theta_off, B):
           f"cov_ame (backup: {bak.name})")
 
 
+def attach_from(est, loss_lbl, src_path):
+    """Attach a PREVIOUS run's saved results to the estimator pickle, without recomputing.
+
+    The bootstrap is expensive, and its conglomerate arm is worker-count dependent: the shape
+    projection is warm-started from the previous draw, so the QP's active-set path -- and the
+    numbers -- depend on how the draws were chunked across workers. Recomputing locally to
+    attach results that already exist would therefore spend hours to land on a DIFFERENT draw
+    path than the run being reported. This reads the saved run instead and puts it through the
+    SAME gates --attach applies, so nothing reaches a table that a live run would have refused.
+    """
+    src = Path(src_path)
+    root = _paths_mod.demand_prep_root()
+    pkl_path = root / f"est{est}" / "estimation_results.pkl"
+    with open(src, "rb") as fh:
+        out = pickle.load(fh)
+    m = out.get("meta", {})
+    # Refuse a mismatched pairing loudly: silently attaching E3's bootstrap to E4's fit would
+    # produce a table that looks entirely normal.
+    if int(m.get("est", est)) != int(est):
+        raise SystemExit(f"--attach-from: {src.name} holds est{m.get('est')}, not est{est}")
+    if m.get("loss_label", loss_lbl) != loss_lbl:
+        raise SystemExit(f"--attach-from: {src.name} is loss={m.get('loss_label')!r}, not {loss_lbl!r}")
+    if m.get("spec", SPEC) != SPEC:
+        raise SystemExit(f"--attach-from: {src.name} is spec {m.get('spec')!r}, not {SPEC!r}")
+    if not m.get("theta_channel", True):
+        raise SystemExit(f"--attach-from: {src.name} was produced with the direction channel OFF "
+                         "(--theta-off); those are the conditional numbers already stored")
+    with open(pkl_path, "rb") as fh:
+        d = pickle.load(fh)
+    si_res = d[SPEC].get(KEY_OF[loss_lbl])
+    if si_res is None:
+        raise SystemExit(f"no {KEY_OF[loss_lbl]} on {SPEC} in {pkl_path}")
+    B_used = int(out["congl"].get("B_used", m.get("B", 0)))
+    print(f"=== attach-from {src.name} -> est{est}/{KEY_OF[loss_lbl]} | B={B_used} "
+          f"theta_mode={m.get('theta_mode')!r} workers={m.get('workers')} "
+          f"created={m.get('created')} ===")
+    _attach(pkl_path, d, si_res, loss_lbl, out, False, B_used)
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__.splitlines()[3])
     p.add_argument("--est", type=int, required=True, choices=tuple(_routines.LINK_ESTS))
@@ -326,10 +366,19 @@ def main():
     p.add_argument("--keep-draws", action="store_true", default=True)
     p.add_argument("--no-keep-draws", dest="keep_draws", action="store_false")
     p.add_argument("--attach", action="store_true")
+    p.add_argument("--attach-from", metavar="PKL", default=None,
+                   help="attach a previous run's Rout/ame_twostage_*.pkl to the estimator "
+                        "pickle instead of recomputing. Same gates as --attach. Use this for "
+                        "cluster results: the canonical run is B=999 on 64 workers and a local "
+                        "recompute would land on a different draw path.")
     a = p.parse_args()
     B = a.B if a.B is not None else boot_cfg()[0]
     workers = a.workers if a.workers is not None else default_workers()
     losses = ("robust", "ls") if a.loss == "both" else (a.loss,)
+    if a.attach_from:
+        for ll in losses:
+            attach_from(a.est, ll, a.attach_from)
+        return
     frame = None
     for ll in losses:
         _, frame = run_cell(a.est, ll, B, a.theta_off, a.theta_mode, workers, a.attach,
