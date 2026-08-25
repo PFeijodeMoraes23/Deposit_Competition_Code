@@ -51,18 +51,18 @@ STATE = HERE / ".diag_matrix_state.json"
 # before the deadline?" decision, so a wrong number here causes either a needless skip or a
 # late finish. Update them when a run reports a materially different duration.
 UNITS = {
-    "d0":   ("diag_phi_augmented_tests.py",   ["--arm", "identity"],     1.0),
-    "d2":  ("diag_phi_augmented_tests.py",   ["--arm", "lagdepact"],    2.5),
-    "d5":   ("diag_phi_augmented_tests.py",   ["--arm", "blpelast"],     2.0),
-    "d4a":   ("diag_phi_interaction_tests.py", ["--arm", "attractiveness"], 6.0),
-    "d4b":   ("diag_phi_interaction_tests.py", ["--arm", "types"],        1.5),
-    "d1s":  ("diag_phi_mc_recovery.py",       ["--mode", "grid", "--smoke"], 0.5),
-    "d1":   ("diag_phi_mc_recovery.py",       ["--mode", "grid", "--stats-under-null"], 3.0),
-    "d4c":   ("diag_phi_mc_recovery.py",       ["--mode", "acf"],         1.0),
+    "d0":   ("step_phi_augmented_tests.py",   ["--arm", "identity"],     1.0),
+    "d2":  ("step_phi_augmented_tests.py",   ["--arm", "lagdepact"],    2.5),
+    "d5":   ("step_phi_augmented_tests.py",   ["--arm", "blpelast"],     2.0),
+    "d4a":   ("step_phi_interaction_tests.py", ["--arm", "attractiveness"], 6.0),
+    "d4b":   ("step_phi_interaction_tests.py", ["--arm", "types"],        1.5),
+    "d1s":  ("step_phi_mc_recovery.py",       ["--mode", "grid", "--smoke"], 0.5),
+    "d1":   ("step_phi_mc_recovery.py",       ["--mode", "grid", "--stats-under-null"], 3.0),
+    "d4c":   ("step_phi_mc_recovery.py",       ["--mode", "acf"],         1.0),
 }
 
-# Units whose script does NOT accept --estim. diag_phi_interaction_tests.py takes only --arm,
-# and diag_phi_mc_recovery.py exposes --mode/--phi-prod but no --estim (its calibration parquet
+# Units whose script does NOT accept --estim. step_phi_interaction_tests.py takes only --arm,
+# and step_phi_mc_recovery.py exposes --mode/--phi-prod but no --estim (its calibration parquet
 # and kernel are E2's by construction) -- appending --estim aborts either one in argparse before
 # a single row is computed. Listed here so the runner omits the flag and reports the E2-only
 # scope, instead of the whole unit dying.

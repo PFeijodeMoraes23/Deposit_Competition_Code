@@ -58,13 +58,13 @@ the case where the skeleton is built without that link, when it is the only cand
 matches where the export actually wrote.
 
 data/input wins whenever it holds the file, so a hand-staged export always beats a
-cluster-produced one. Off the cluster (`_hpc_tree` false) only the single legacy
+cluster-produced one. Off the cluster (`is_cluster_out` false) only the single
 CF_FOUNDATION directory is searched and the resolution is exactly what it was — candidate 4
 collapses onto it there anyway.
 """
 function cf4_search_dirs(out_dir)::Vector{String}
     cf_in = cf_in_dir(out_dir)
-    _hpc_tree(out_dir) || return search_dirs(cf_in)
+    is_cluster_out(out_dir) || return search_dirs(cf_in)
     anchored = try
         joinpath(resolve_of_root(), "BCB", "Egan_et_al_2025_Rep", "processed",
                  "ESTIMATION_OUTPUT", "CF_FOUNDATION")

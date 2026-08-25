@@ -166,14 +166,14 @@ is_hpc_run()::Bool = ("--hpc" in ARGS) || haskey(ENV, "SLURM_JOB_ID")
 two-tuple every call site here already destructures.
 
 On the cluster these are HEAD/data/{input,output}, mirroring `get_paths` in
-blp_1_estimation.jl. The demand parquets arrive either uploaded to data/input or written to
-data/output/DEMAND_PREP by the on-cluster sleepiness phase, so reads go through
-`demand_dirs()`, which searches both in that order. Everything produced here lands under
-data/output: the δ warm-starts flat in it (`delta_dir`), the summary and per-key JLS in its
-`logit/` subfolder, the LaTeX tables in `Rout/`.
+blp_1_estimation.jl. The demand parquets are read through `demand_dirs()`, which resolves to
+the one directory the prep step writes. Everything produced here lands in the output root's
+`logit/` step folder — the δ warm-starts (`delta_dir`), the summary and per-key JLS
+(`logit_dir`), the LaTeX fragments (`tex_out_dir`) — so the step is one directory to package,
+download and read back.
 
-Off the cluster the tree is ESTIMATION_OUTPUT/{DEMAND_PREP, BLP_RESULTS}, `demand_dirs()`
-collapses to the single DEMAND_PREP entry, and every path resolves as it does with no flag.
+Off the cluster the tree is ESTIMATION_OUTPUT/{DEMAND_PREP, BLP_RESULTS}, `demand_dirs()` is
+the single DEMAND_PREP entry, and every path resolves as it does with no flag.
 """
 function get_paths(is_hpc::Bool = is_hpc_run())
     if is_hpc

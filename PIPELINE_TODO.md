@@ -186,7 +186,7 @@ Scripts that became pipeline steps stop advertising themselves as ad-hoc diagnos
 **Sequenced after W3.2 (step list settled) and W4.1–4.5 (those files are being edited now)** — renaming
 before the step list is final would rename the wrong set.
 
-- [ ] **W7.1** Rename the 7 integrated scripts (`git mv`-equivalent, no commit):
+- [x] **W7.1** Rename the 7 integrated scripts (`git mv`-equivalent, no commit):
   - `diag_phi_augmented_tests.py` → `step_phi_augmented_tests.py`
   - `diag_phi_interaction_tests.py` → `step_phi_interaction_tests.py`
   - `diag_phi_mc_recovery.py` → `step_phi_mc_recovery.py`
@@ -194,23 +194,22 @@ before the step list is final would rename the wrong set.
   - `diag_moment_reduction.py` → `step_moment_reduction.py`
   - `diag_cue_linear_step.py` → `step_cue_linear.py` *(avoids `step_..._step`)*
   - `diag_openfinance_freshness.py` → `step_openfinance_freshness.py`
-- [ ] **W7.2** Update all call sites — 18 files, ~65 refs. Load-bearing ones:
+- [x] **W7.2** Update all call sites — 18 files, 67 refs. Load-bearing ones:
   `run_phi_diagnostics.py` (19 refs: STEPS table + docstring), `run_diag_matrix.py` (10: UNITS table + comments),
-  **`diag_moment_reduction.py:68` `from diag_cue_linear_step import (X_COLS, IV_COLS, _build_matrices, _load_delta, …)`**,
+  **`step_moment_reduction.py:68` `from step_cue_linear import (X_COLS, IV_COLS, _build_matrices, _load_delta, …)`**,
   `run_openfinance_monthly.py`, `make_diag_tables.py`, `make_iv_tables.py`, `make_d2bc_cross_routine.py`,
   `panel_10_estban_instruments.py`, `scrape_19_openfinance_fees.py`, `utils/phi_reference.py`, `utils/br_calendar.py`,
   `diag_wcb_reference.py`, plus the new orchestrator's step table
-- [ ] **W7.3** Verify: `grep -rn "diag_(phi_augmented|phi_interaction|phi_mc|entry_dynamics|moment_reduction|cue_linear|openfinance_freshness)"` returns nothing; import-smoke every renamed module and every caller; `run_phi_diagnostics.py --list` and `run_diag_matrix.py --dry-run` still enumerate every unit
+- [x] **W7.3** Verify: `grep -rn "diag_(phi_augmented|phi_interaction|phi_mc|entry_dynamics|moment_reduction|cue_linear|openfinance_freshness)"` returns nothing; import-smoke every renamed module and every caller; `run_phi_diagnostics.py --list` and `run_diag_matrix.py --dry-run` still enumerate every unit
 
 **Stays `diag_`** (genuinely ad-hoc, not pipeline steps): `diag_im_phi_t.py`, `diag_index_identification.py`,
 `diag_k4_spread_local_variation.py`, `diag_openfinance_coverage.py`, `diag_test_inversion_band.py`,
 `diag_wcb_reference.py`. Being deleted: `diag_uncond_band_joint.py`.
 
-- [!] **Open decision (yours)**: do the *output artifact* names follow the scripts?
+- [x] **Decision taken**: the *output artifact* names do NOT follow the scripts.
   `diag_moment_reduction.json`, `diag_cue_linear_step.json`, `.diag_matrix_state.json`, dirs `DIAG_PHI_SEPARATION/`,
-  `DIAG_WEAK_IV_SLEEP/`. **My default: no** — those are data contracts read by table generators and already
-  present in archives/cluster outputs; renaming them breaks reads of existing vintages for cosmetic gain.
-  Say the word if you want them renamed too.
+  `DIAG_WEAK_IV_SLEEP/` keep their spelling — they are data contracts read by the table generators and
+  present in archives/cluster outputs; renaming them would break reads of existing vintages for cosmetic gain.
 
 ## W6 — Docs
 

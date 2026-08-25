@@ -1,4 +1,4 @@
-"""diag_phi_augmented_tests.py -- is phi separately identified from awake-flow persistence?
+"""step_phi_augmented_tests.py -- is phi separately identified from awake-flow persistence?
 
 Author: Pedro Feijo de Moraes
 

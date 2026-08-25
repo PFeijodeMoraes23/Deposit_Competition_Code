@@ -570,19 +570,48 @@ _cl_q () {
     done
 }
 
+# _cl_cpugen_args: the cpugen pin, decided ONCE for every submission in the codebase.
+#
+# blp_sysimage_cpu.so is valid only on the microarchitecture it was BUILT on, and `day` mixes
+# cpugen:turin (AMD 9575f/9655) with cpugen:emeraldrapids (Intel 8562Y+). An unpinned CPU job
+# lands wherever day has room and refuses with "the image does not LOAD on <node>" -- but only
+# when the scheduler happens to pick the wrong family, so it reads as a flaky or
+# routine-specific failure. It cost three separate debug cycles in three different scripts
+# before it was recognised as one bug, which is exactly why the decision belongs here rather
+# than in each caller's own sub() helper.
+#
+# Two exemptions, both load-bearing:
+#   - a GPU submission takes the gpu_h200-built image, and NO gpu node satisfies cpugen:turin;
+#     pinning one makes sbatch reject the job outright with "Requested node configuration is
+#     not available". (Exporting SBATCH_CONSTRAINT globally causes precisely this.)
+#   - a caller that already passes its own --constraint keeps it; we never override.
+# CL_NO_CPUGEN=1 opts a submission out entirely.
+_cl_cpugen_args () {
+    [[ "${CL_NO_CPUGEN:-0}" == "1" ]] && return 0
+    local a
+    for a in "$@"; do
+        case "${a}" in
+            --constraint*|-C) return 0 ;;
+            --gpus*|--gres=gpu*|--partition=gpu*|--partition=scavenge_gpu*) return 0 ;;
+        esac
+    done
+    printf '%s' "--constraint=${CL_CPU_CONSTRAINT:-cpugen:turin}"
+}
+
 cl_sbatch () {
+    local _cg; _cg="$(_cl_cpugen_args "$@")"
     if [[ "${CL_DRYRUN}" == "1" ]]; then
         local n jid
         n=$(( $(cat "${CL_FAKE_COUNTER}" 2>/dev/null || echo 0) + 1 ))
         printf '%s' "${n}" > "${CL_FAKE_COUNTER}"
         jid=$((CL_FAKE_JID_BASE + n))
         { printf '[dry-run] sbatch --parsable --kill-on-invalid-dep=yes'
-          _cl_q "$@"
+          _cl_q ${_cg:+"${_cg}"} "$@"
           printf '\n          -> job id %s\n' "${jid}"; } >&2
         printf '%s\n' "${jid}"
         return 0
     fi
-    sbatch --parsable --kill-on-invalid-dep=yes "$@"
+    sbatch --parsable --kill-on-invalid-dep=yes ${_cg:+"${_cg}"} "$@"
 }
 
 # ── 8. Small shared knobs ────────────────────────────────────────────────────

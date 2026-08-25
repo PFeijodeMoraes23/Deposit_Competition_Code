@@ -8,7 +8,7 @@ Pipeline (in order)
 -------------------
   1. scrape_19_openfinance_fees   — pull the open-data fee APIs (all families by
                                      default), append a data_coleta-tagged snapshot.
-  2. diag_openfinance_freshness   — infer each bank's update-landing business-day
+  2. step_openfinance_freshness   — infer each bank's update-landing business-day
                                      from the accumulated snapshots (the payload has
                                      no reference-date field, so freshness is measured).
   3. panel_11_openfinance_fees    — roll the fees up to the prudential conglomerate
@@ -94,7 +94,7 @@ def main() -> None:
     else:
         log.info("Skipping scrape (--skip-scrape).")
 
-    import diag_openfinance_freshness as diag
+    import step_openfinance_freshness as diag
     ok &= _step("2/3 freshness verifier", diag.main)
 
     import panel_11_openfinance_fees as p11

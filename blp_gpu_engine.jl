@@ -306,15 +306,16 @@ function run_blp_estimation_ift(estim::Int, spec_id::Int, args,
                              pi_interactions, coef_dim)
 
     # ── θ₂ warm-start from previous stage checkpoint ──────────────────────
-    # in_dir is the FIRST get_paths return (on HPC: data/input, where the uploaded
-    # logit_delta warm-starts live); out_dir stays the checkpoint/result dir.
+    # in_dir is the FIRST get_paths return (on HPC: data/input, where an uploaded logit_delta
+    # warm-start would live); out_dir is the output ROOT — checkpoints resolve through blp_dir,
+    # the logit δ̂ through logit_dir, each family in the one directory its producer writes.
     in_dir, _, out_dir = get_paths(args["hpc"])
     prev_stages   = Dict("rc2" => "sigma", "rc3" => "rc2", "rc4" => "rc3",
                          "full" => "rc4", "ext1" => "full", "ext2" => "ext1",
                          "extended" => "ext2")
     theta2_0 = nothing
     if args["stage"] in keys(prev_stages)
-        prev_path = joinpath(out_dir,
+        prev_path = joinpath(blp_dir(out_dir),
             "blp_checkpoint_E$(estim)_spec_$(spec_id)_$(prev_stages[args["stage"]]).jls")
         if isfile(prev_path)
             try
@@ -342,8 +343,8 @@ function run_blp_estimation_ift(estim::Int, spec_id::Int, args,
     delta_work = zeros(N_obs)
     let _loaded = false
         for _bin_cand in [
-                joinpath(in_dir,  "logit_delta_E$(estim)_spec_$(spec_id).bin"),
-                joinpath(out_dir, "logit_delta_E$(estim)_spec_$(spec_id).bin"),
+                joinpath(in_dir,             "logit_delta_E$(estim)_spec_$(spec_id).bin"),
+                joinpath(logit_dir(out_dir), "logit_delta_E$(estim)_spec_$(spec_id).bin"),
             ]
             isfile(_bin_cand) || continue
             _d = load_delta_bin(_bin_cand)
@@ -356,10 +357,10 @@ function run_blp_estimation_ift(estim::Int, spec_id::Int, args,
         end
         if !_loaded
             for _cand in [
-                joinpath(in_dir,  "logit_delta_E$(estim)_spec_$(spec_id).jls"),
-                joinpath(out_dir, "logit_delta_E$(estim)_spec_$(spec_id).jls"),
-                joinpath(out_dir, "blp_checkpoint_E$(estim)_spec_$(spec_id)_logit.jls"),
-                joinpath(out_dir, "blp_results_E$(estim)_spec_$(spec_id)_logit.jls"),
+                joinpath(in_dir,             "logit_delta_E$(estim)_spec_$(spec_id).jls"),
+                joinpath(logit_dir(out_dir), "logit_delta_E$(estim)_spec_$(spec_id).jls"),
+                joinpath(blp_dir(out_dir),   "blp_checkpoint_E$(estim)_spec_$(spec_id)_logit.jls"),
+                joinpath(blp_dir(out_dir),   "blp_results_E$(estim)_spec_$(spec_id)_logit.jls"),
             ]
                 isfile(_cand) || continue
                 try
@@ -456,8 +457,10 @@ function run_blp_estimation_ift(estim::Int, spec_id::Int, args,
     println("  theta1 (alpha): $(round(theta1_star[1], sigdigits=6))")
 
     # ── Save checkpoint ───────────────────────────────────────────────────
-    mkpath(out_dir)
-    chk_path = joinpath(out_dir,
+    # The BLP step directory is where the next stage's warm start and _result_path look.
+    _res_dir = blp_dir(out_dir)
+    mkpath(_res_dir)
+    chk_path = joinpath(_res_dir,
         "blp_checkpoint_E$(estim)_spec_$(spec_id)_$(args["stage"]).jls")
     try
         serialize(chk_path, Dict("theta2_star" => theta2_star,
@@ -490,7 +493,11 @@ function main()
     log_status("  tol_inner=$(args["tol_inner"]) | tol_outer=$(args["tol_outer"]) | threads=$(Threads.nthreads())")
 
     _, draws_dir, out_dir = get_paths(args["hpc"]; local_dir=args["local_dir"])
-    mkpath(out_dir)
+    # Results, per-spec JSON and the stage summary belong to the BLP step directory — the unit the
+    # archiver packages and the one place _result_path resolves. Created before the threaded spec
+    # loop writes into it.
+    res_dir = blp_dir(out_dir)
+    mkpath(res_dir)
 
     nu_draws, draws_3d, key_index = load_precomputed_draws(
         draws_dir, args["R"], args["seed"])
@@ -502,7 +509,7 @@ function main()
     for current_stage in stages_to_run
         args["stage"] = current_stage
 
-        all_done = all(isfile(joinpath(out_dir,
+        all_done = all(isfile(joinpath(res_dir,
             "blp_results_E$(estim)_spec_$(sp)_$(current_stage).jls"))
             for sp in spec_ids)
         if all_done
@@ -515,7 +522,7 @@ function main()
                 "with $(Threads.nthreads()) threads...")
 
         Threads.@threads for sp in spec_ids
-            out_path = joinpath(out_dir,
+            out_path = joinpath(res_dir,
                 "blp_results_E$(estim)_spec_$(sp)_$(current_stage).jls")
             if isfile(out_path)
                 log_status("  [SKIP] Spec $sp already done for '$current_stage'"); continue
@@ -570,7 +577,7 @@ function main()
             end
         end
 
-        summary_path = joinpath(out_dir, "blp_summary_E$(estim)_$(current_stage).json")
+        summary_path = joinpath(res_dir, "blp_summary_E$(estim)_$(current_stage).json")
         open(summary_path, "w") do f; JSON3.write(f, all_results); end
         log_status("Summary saved to: $summary_path")
         log_status("[DONE] BLP IFT E$estim ($current_stage) complete for specs $spec_ids.")
@@ -1614,7 +1621,8 @@ function run_blp_estimation_gpu(estim::Int, spec_id::Int, args,
     log_status("  [GPU] ✓ GPU buffers allocated")
 
     # ── θ₂ warm-start ─────────────────────────────────────────────────────
-    # in_dir = data/input on HPC (uploaded logit_delta warm-starts); out_dir = results/checkpoints.
+    # in_dir = data/input on HPC (an uploaded logit_delta warm-start); out_dir = the output ROOT:
+    # checkpoints resolve through blp_dir, the logit δ̂ through logit_dir.
     in_dir, _, out_dir = get_paths(args["hpc"])
     prev_stages  = Dict("rc2" => "sigma", "rc3" => "rc2", "rc4" => "rc3",
                         "full" => "rc4", "ext1" => "full", "ext2" => "ext1",
@@ -1641,7 +1649,7 @@ function run_blp_estimation_gpu(estim::Int, spec_id::Int, args,
         end
     end
     if theta2_0 === nothing && args["stage"] in keys(prev_stages)
-        prev_path = joinpath(out_dir,
+        prev_path = joinpath(blp_dir(out_dir),
             "blp_checkpoint_E$(estim)_spec_$(spec_id)_$(prev_stages[args["stage"]])$(output_suffix()).jls")
         if isfile(prev_path)
             try
@@ -1687,14 +1695,14 @@ function run_blp_estimation_gpu(estim::Int, spec_id::Int, args,
     delta_work = zeros(N_obs)
     let _loaded = false
         # BLP_DELTA_SUFFIX lets a run warm-start from a suffixed delta; default "" reads
-        # the logit_delta_E{k}_spec_{s}.* the logit step writes. in_dir (data/input on
-        # HPC) is checked first so the uploaded warm-start wins over any legacy data/output copy.
+        # the logit_delta_E{k}_spec_{s}.* the logit step writes. in_dir (data/input on HPC) is
+        # checked first so a δ̂ supplied as an upload wins over the logit step's own output.
         _suffix = get(ENV, "BLP_DELTA_SUFFIX", "")
         for _bin_cand in unique([
-                joinpath(in_dir,  "logit_delta_E$(estim)_spec_$(spec_id)$(_suffix).bin"),
-                joinpath(in_dir,  "logit_delta_E$(estim)_spec_$(spec_id).bin"),
-                joinpath(out_dir, "logit_delta_E$(estim)_spec_$(spec_id)$(_suffix).bin"),
-                joinpath(out_dir, "logit_delta_E$(estim)_spec_$(spec_id).bin"),
+                joinpath(in_dir,             "logit_delta_E$(estim)_spec_$(spec_id)$(_suffix).bin"),
+                joinpath(in_dir,             "logit_delta_E$(estim)_spec_$(spec_id).bin"),
+                joinpath(logit_dir(out_dir), "logit_delta_E$(estim)_spec_$(spec_id)$(_suffix).bin"),
+                joinpath(logit_dir(out_dir), "logit_delta_E$(estim)_spec_$(spec_id).bin"),
             ])
             isfile(_bin_cand) || continue
             _d = load_delta_bin(_bin_cand)
@@ -1707,12 +1715,12 @@ function run_blp_estimation_gpu(estim::Int, spec_id::Int, args,
         end
         if !_loaded
             for _cand in unique([
-                joinpath(in_dir,  "logit_delta_E$(estim)_spec_$(spec_id)$(_suffix).jls"),
-                joinpath(in_dir,  "logit_delta_E$(estim)_spec_$(spec_id).jls"),
-                joinpath(out_dir, "logit_delta_E$(estim)_spec_$(spec_id)$(_suffix).jls"),
-                joinpath(out_dir, "logit_delta_E$(estim)_spec_$(spec_id).jls"),
-                joinpath(out_dir, "blp_checkpoint_E$(estim)_spec_$(spec_id)_logit.jls"),
-                joinpath(out_dir, "blp_results_E$(estim)_spec_$(spec_id)_logit.jls"),
+                joinpath(in_dir,             "logit_delta_E$(estim)_spec_$(spec_id)$(_suffix).jls"),
+                joinpath(in_dir,             "logit_delta_E$(estim)_spec_$(spec_id).jls"),
+                joinpath(logit_dir(out_dir), "logit_delta_E$(estim)_spec_$(spec_id)$(_suffix).jls"),
+                joinpath(logit_dir(out_dir), "logit_delta_E$(estim)_spec_$(spec_id).jls"),
+                joinpath(blp_dir(out_dir),   "blp_checkpoint_E$(estim)_spec_$(spec_id)_logit.jls"),
+                joinpath(blp_dir(out_dir),   "blp_results_E$(estim)_spec_$(spec_id)_logit.jls"),
             ])
                 isfile(_cand) || continue
                 try
@@ -1844,7 +1852,11 @@ function run_blp_estimation_gpu(estim::Int, spec_id::Int, args,
                              "invert {alpha0 : S <= chi2 crit}. Criticals are asymptotic chi2 " *
                              "(WCB criticals for S are out of scope).",
                 "points" => pts)
-            spath = joinpath(out_dir,
+            # The S-set run returns here, before the checkpoint block below, so this is the first
+            # write of the code path and has to create the BLP step directory itself.
+            _sset_dir = blp_dir(out_dir)
+            mkpath(_sset_dir)
+            spath = joinpath(_sset_dir,
                 "blp_results_E$(estim)_spec_$(spec_id)_$(args["stage"])_sset_cue.json")
             open(spath, "w") do io; JSON3.pretty(io, out); end
             log_status("  [S-SET] wrote $(basename(spath))  ($(length(grid)) points)")
@@ -1921,8 +1933,10 @@ function run_blp_estimation_gpu(estim::Int, spec_id::Int, args,
     println("  theta1 (alpha): $(round(theta1_star[1], sigdigits=6))")
 
     # ── Save checkpoint ───────────────────────────────────────────────────
-    mkpath(out_dir)
-    chk_path = joinpath(out_dir,
+    # The BLP step directory is where the next stage's warm start and _result_path look.
+    _res_dir = blp_dir(out_dir)
+    mkpath(_res_dir)
+    chk_path = joinpath(_res_dir,
         "blp_checkpoint_E$(estim)_spec_$(spec_id)_$(args["stage"])$(output_suffix()).jls")
     try
         serialize(chk_path, Dict("theta2_star" => theta2_star,
@@ -1979,7 +1993,10 @@ function main_gpu_numerical()
                "| threads=$(Threads.nthreads())")
 
     _, draws_dir, out_dir = get_paths(args["hpc"]; local_dir=args["local_dir"])
-    mkpath(out_dir)
+    # Results, per-spec JSON and the stage summary belong to the BLP step directory — the unit the
+    # archiver packages and the one place _result_path resolves.
+    res_dir = blp_dir(out_dir)
+    mkpath(res_dir)
 
     nu_draws, draws_3d, key_index = load_precomputed_draws(
         draws_dir, args["R"], args["seed"])
@@ -1999,7 +2016,7 @@ function main_gpu_numerical()
     for current_stage in stages_to_run
         args["stage"] = current_stage
 
-        all_done = all(isfile(joinpath(out_dir,
+        all_done = all(isfile(joinpath(res_dir,
             "blp_results_E$(estim)_spec_$(sp)_$(current_stage)$(output_suffix()).jls"))
             for sp in spec_ids)
         if all_done
@@ -2014,7 +2031,7 @@ function main_gpu_numerical()
 
         # GPU: sequential spec loop — avoids multi-context VRAM contention.
         for sp in spec_ids
-            out_path = joinpath(out_dir,
+            out_path = joinpath(res_dir,
                 "blp_results_E$(estim)_spec_$(sp)_$(current_stage)$(output_suffix()).jls")
             if isfile(out_path)
                 log_status("  [SKIP] Spec $sp already done for '$current_stage'")
@@ -2073,7 +2090,7 @@ function main_gpu_numerical()
             haskey(res, "cue_converged") && (all_results[sp]["cue_converged"] = res["cue_converged"])
         end
 
-        summary_path = joinpath(out_dir, "blp_summary_E$(estim)_$(current_stage)_gpu$(output_suffix()).json")
+        summary_path = joinpath(res_dir, "blp_summary_E$(estim)_$(current_stage)_gpu$(output_suffix()).json")
         open(summary_path, "w") do f; JSON3.write(f, all_results); end
         log_status("Summary saved to: $summary_path")
         log_status("[DONE] BLP GPU E$estim ($current_stage) complete for specs $spec_ids.")
@@ -2387,7 +2404,8 @@ function run_blp_estimation_ift_gpu(estim::Int, spec_id::Int, args,
     gbuf = allocate_gpu_buffers(buf, pc, N_obs, N_B, N_D, R, n_pairs, n_times)
 
     # ── θ₂ warm-start ─────────────────────────────────────────────────────
-    # in_dir = data/input on HPC (uploaded logit_delta warm-starts); out_dir = results/checkpoints.
+    # in_dir = data/input on HPC (an uploaded logit_delta warm-start); out_dir = the output ROOT:
+    # checkpoints resolve through blp_dir, the logit δ̂ through logit_dir.
     in_dir, _, out_dir = get_paths(args["hpc"])
     prev_stages   = Dict("rc2" => "sigma", "rc3" => "rc2", "rc4" => "rc3",
                          "full" => "rc4", "ext1" => "full", "ext2" => "ext1",
@@ -2414,7 +2432,7 @@ function run_blp_estimation_ift_gpu(estim::Int, spec_id::Int, args,
         end
     end
     if theta2_0 === nothing && args["stage"] in keys(prev_stages)
-        prev_path = joinpath(out_dir,
+        prev_path = joinpath(blp_dir(out_dir),
             "blp_checkpoint_E$(estim)_spec_$(spec_id)_$(prev_stages[args["stage"]])$(output_suffix()).jls")
         if isfile(prev_path)
             try
@@ -2464,14 +2482,14 @@ function run_blp_estimation_ift_gpu(estim::Int, spec_id::Int, args,
     let _loaded = false
         # BLP_DELTA_SUFFIX lets a run warm-start from a suffixed delta; default "" reads
         # the logit_delta_E{k}_spec_{s}.* that the logit step writes. A suffixed delta is
-        # preferred when set, the unsuffixed one is the fallback. in_dir (data/input on
-        # HPC) is checked first so the uploaded warm-start wins over any legacy data/output copy.
+        # preferred when set, the unsuffixed one is the fallback. in_dir (data/input on HPC) is
+        # checked first so a δ̂ supplied as an upload wins over the logit step's own output.
         _suffix = get(ENV, "BLP_DELTA_SUFFIX", "")
         for _bin_cand in unique([
-                joinpath(in_dir,  "logit_delta_E$(estim)_spec_$(spec_id)$(_suffix).bin"),
-                joinpath(in_dir,  "logit_delta_E$(estim)_spec_$(spec_id).bin"),
-                joinpath(out_dir, "logit_delta_E$(estim)_spec_$(spec_id)$(_suffix).bin"),
-                joinpath(out_dir, "logit_delta_E$(estim)_spec_$(spec_id).bin"),
+                joinpath(in_dir,             "logit_delta_E$(estim)_spec_$(spec_id)$(_suffix).bin"),
+                joinpath(in_dir,             "logit_delta_E$(estim)_spec_$(spec_id).bin"),
+                joinpath(logit_dir(out_dir), "logit_delta_E$(estim)_spec_$(spec_id)$(_suffix).bin"),
+                joinpath(logit_dir(out_dir), "logit_delta_E$(estim)_spec_$(spec_id).bin"),
             ])
             isfile(_bin_cand) || continue
             _d = load_delta_bin(_bin_cand)
@@ -2484,12 +2502,12 @@ function run_blp_estimation_ift_gpu(estim::Int, spec_id::Int, args,
         end
         if !_loaded
             for _cand in unique([
-                joinpath(in_dir,  "logit_delta_E$(estim)_spec_$(spec_id)$(_suffix).jls"),
-                joinpath(in_dir,  "logit_delta_E$(estim)_spec_$(spec_id).jls"),
-                joinpath(out_dir, "logit_delta_E$(estim)_spec_$(spec_id)$(_suffix).jls"),
-                joinpath(out_dir, "logit_delta_E$(estim)_spec_$(spec_id).jls"),
-                joinpath(out_dir, "blp_checkpoint_E$(estim)_spec_$(spec_id)_logit.jls"),
-                joinpath(out_dir, "blp_results_E$(estim)_spec_$(spec_id)_logit.jls"),
+                joinpath(in_dir,             "logit_delta_E$(estim)_spec_$(spec_id)$(_suffix).jls"),
+                joinpath(in_dir,             "logit_delta_E$(estim)_spec_$(spec_id).jls"),
+                joinpath(logit_dir(out_dir), "logit_delta_E$(estim)_spec_$(spec_id)$(_suffix).jls"),
+                joinpath(logit_dir(out_dir), "logit_delta_E$(estim)_spec_$(spec_id).jls"),
+                joinpath(blp_dir(out_dir),   "blp_checkpoint_E$(estim)_spec_$(spec_id)_logit.jls"),
+                joinpath(blp_dir(out_dir),   "blp_results_E$(estim)_spec_$(spec_id)_logit.jls"),
             ])
                 isfile(_cand) || continue
                 try
@@ -2583,7 +2601,7 @@ function run_blp_estimation_ift_gpu(estim::Int, spec_id::Int, args,
     # its own fixed point, so that single evaluation converges immediately and leaves every GPU
     # buffer in exactly the state the SE block below expects.
     if get(args, "se_only", false)
-        chk = joinpath(out_dir,
+        chk = joinpath(blp_dir(out_dir),
             "blp_checkpoint_E$(estim)_spec_$(spec_id)_$(args["stage"])$(output_suffix()).jls")
         isfile(chk) || error("--se-only: checkpoint not found: $chk (run the stage normally first)")
         ck = deserialize(chk)
@@ -2670,8 +2688,10 @@ function run_blp_estimation_ift_gpu(estim::Int, spec_id::Int, args,
     println("  theta1 (alpha): $(round(theta1_star[1], sigdigits=6))")
 
     # ── Save checkpoint ───────────────────────────────────────────────────
-    mkpath(out_dir)
-    chk_path = joinpath(out_dir,
+    # The BLP step directory is where the next stage's warm start and _result_path look.
+    _res_dir = blp_dir(out_dir)
+    mkpath(_res_dir)
+    chk_path = joinpath(_res_dir,
         "blp_checkpoint_E$(estim)_spec_$(spec_id)_$(args["stage"])$(output_suffix()).jls")
     try
         serialize(chk_path, Dict("theta2_star" => theta2_star,
@@ -2712,7 +2732,10 @@ function main_gpu_ift()
                "| threads=$(Threads.nthreads())")
 
     _, draws_dir, out_dir = get_paths(args["hpc"]; local_dir=args["local_dir"])
-    mkpath(out_dir)
+    # Results, per-spec JSON and the stage summary belong to the BLP step directory — the unit the
+    # archiver packages and the one place _result_path resolves.
+    res_dir = blp_dir(out_dir)
+    mkpath(res_dir)
 
     nu_draws, draws_3d, key_index = load_precomputed_draws(
         draws_dir, args["R"], args["seed"])
@@ -2732,7 +2755,7 @@ function main_gpu_ift()
     for current_stage in stages_to_run
         args["stage"] = current_stage
 
-        all_done = all(isfile(joinpath(out_dir,
+        all_done = all(isfile(joinpath(res_dir,
             "blp_results_E$(estim)_spec_$(sp)_$(current_stage)$(output_suffix()).jls"))
             for sp in spec_ids)
         if all_done
@@ -2745,7 +2768,7 @@ function main_gpu_ift()
         all_results = Dict{Int,Any}()
 
         for sp in spec_ids
-            out_path = joinpath(out_dir,
+            out_path = joinpath(res_dir,
                 "blp_results_E$(estim)_spec_$(sp)_$(current_stage)$(output_suffix()).jls")
             if isfile(out_path)
                 log_status("  [SKIP] Spec $sp already done for '$current_stage'"); continue
@@ -2798,7 +2821,7 @@ function main_gpu_ift()
                 "stage"        => current_stage)
         end
 
-        summary_path = joinpath(out_dir,
+        summary_path = joinpath(res_dir,
             "blp_summary_E$(estim)_$(current_stage)_gpu_ift$(output_suffix()).json")
         open(summary_path, "w") do f; JSON3.write(f, all_results); end
         log_status("Summary saved to: $summary_path")

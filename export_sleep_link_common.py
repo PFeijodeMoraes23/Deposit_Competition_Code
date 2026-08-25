@@ -271,7 +271,7 @@ def build_second_stage_table(results_dict, est_num):
         r"estimation-sample means, so the index is evaluated relative to the average market. "
         # Filled in at the END of this function from the schemes select_se actually returned,
         # so the note can never describe a calculation that did not run. See se_national.
-        + _sen.NOTE_TOKEN + AME_CI_TOKEN +
+        + _sen.NOTE_TOKEN + _sen.AME_SE_TOKEN + AME_CI_TOKEN +
         r"Significance levels: *** $p<0.01$, ** $p<0.05$, * $p<0.1$."
     )
 
@@ -283,6 +283,7 @@ def build_second_stage_table(results_dict, est_num):
                 'cadunico_families_per1000', 'fraction_65plus', 'fraction_young',
                 'connections_per100', 'time_trend', 'gdp_growth_yoy', 'v_hat_x_lagged_dep']
     _nat_schemes = set()   # what select_se ACTUALLY returned on the national rows
+    _sen.reset_ame_se_realised()   # and which AME variance it actually delivered
     _ci_cols = set()       # columns whose second line is an interval rather than an SE
     p0, l0 = panels[0], panel_letters[0]
     est_nums_0 = [(el, ss_spec_numbers[(p0, ek)]) for ek, el in estimators]
@@ -364,7 +365,8 @@ def build_second_stage_table(results_dict, est_num):
     lines += [r"\end{xltabular}", r"\setlength{\tabcolsep}{6pt}", r"\doublespacing"]
     return "\n".join(lines).replace(
         _sen.NOTE_TOKEN, _sen.national_note(_nat_schemes, dk_bracket=False)).replace(
-        AME_CI_TOKEN, _ame_ci_note(_ci_cols, results_dict, est_num))
+        AME_CI_TOKEN, _ame_ci_note(_ci_cols, results_dict, est_num)).replace(
+        _sen.AME_SE_TOKEN, _sen.ame_se_note())
 
 
 _STANDALONE_PREAMBLE = r"""\documentclass[12pt]{article}

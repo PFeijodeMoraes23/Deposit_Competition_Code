@@ -5,14 +5,14 @@ Author: Pedro Feijo de Moraes
 Runs the full D0-D4c diagnostic battery (see identification_notes.md in
 Drafts/Deposit Competition) in the cheapest-most-informative-first order:
 
-    D0  identity/tautology + censoring     diag_phi_augmented_tests.py  --arm identity
-    D4b  deposit-type contrast              diag_phi_interaction_tests.py --arm types
-    D2 lagged-Dep_Act augmentation        diag_phi_augmented_tests.py  --arm lagdepact
-    D4a  attractiveness placebo             diag_phi_interaction_tests.py --arm attractiveness
-    D1s MC recovery smoke (harness check)  diag_phi_mc_recovery.py      --mode grid --smoke
-    D1  MC recovery full + null stats      diag_phi_mc_recovery.py      --mode grid --stats-under-null
-    D4c  ACF overidentification             diag_phi_mc_recovery.py      --mode acf
-    D4b  Pix event study                    diag_phi_augmented_tests.py  --arm pix
+    D0  identity/tautology + censoring     step_phi_augmented_tests.py  --arm identity
+    D4b  deposit-type contrast              step_phi_interaction_tests.py --arm types
+    D2 lagged-Dep_Act augmentation        step_phi_augmented_tests.py  --arm lagdepact
+    D4a  attractiveness placebo             step_phi_interaction_tests.py --arm attractiveness
+    D1s MC recovery smoke (harness check)  step_phi_mc_recovery.py      --mode grid --smoke
+    D1  MC recovery full + null stats      step_phi_mc_recovery.py      --mode grid --stats-under-null
+    D4c  ACF overidentification             step_phi_mc_recovery.py      --mode acf
+    D4b  Pix event study                    step_phi_augmented_tests.py  --arm pix
 
 Steps run in isolated SUBPROCESSES (the known 0xC0000005 segfaults are threads inside
 one process; separate processes are safe). Default is sequential; `--jobs N` runs up to
@@ -67,18 +67,18 @@ LOG_DIR = OUT_DIR / "logs"
 # (key, description, script, args, in_quick, est_minutes)
 # est_minutes drive the longest-first schedule under --jobs; from the 2026-07-29 runs.
 STEPS = [
-    ("D0",  "identity/tautology + censoring",  "diag_phi_augmented_tests.py",   ["--arm", "identity"],       True,   4),
-    ("D4b",  "deposit-type contrast",           "diag_phi_interaction_tests.py", ["--arm", "types"],          True,  12),
-    ("D2", "lagged-Dep_Act augmentation",     "diag_phi_augmented_tests.py",   ["--arm", "lagdepact"],      True,  15),
-    ("D4a",  "attractiveness placebo",          "diag_phi_interaction_tests.py", ["--arm", "attractiveness"], True,  15),
-    ("D1s", "MC recovery smoke (harness)",     "diag_phi_mc_recovery.py",       ["--mode", "grid", "--smoke"], True, 5),
-    ("D1",  "MC recovery full + null stats",   "diag_phi_mc_recovery.py",       ["--mode", "grid", "--stats-under-null"], False, 20),
-    ("D4c",  "ACF overidentification",          "diag_phi_mc_recovery.py",       ["--mode", "acf"],           True,  10),
-    ("D4b",  "Pix event study",                 "diag_phi_augmented_tests.py",   ["--arm", "pix"],            True,  22),
-    ("D5",  "BLP elasticity consistency",      "diag_phi_augmented_tests.py",   ["--arm", "blpelast"],       True,  10),
+    ("D0",  "identity/tautology + censoring",  "step_phi_augmented_tests.py",   ["--arm", "identity"],       True,   4),
+    ("D4b",  "deposit-type contrast",           "step_phi_interaction_tests.py", ["--arm", "types"],          True,  12),
+    ("D2", "lagged-Dep_Act augmentation",     "step_phi_augmented_tests.py",   ["--arm", "lagdepact"],      True,  15),
+    ("D4a",  "attractiveness placebo",          "step_phi_interaction_tests.py", ["--arm", "attractiveness"], True,  15),
+    ("D1s", "MC recovery smoke (harness)",     "step_phi_mc_recovery.py",       ["--mode", "grid", "--smoke"], True, 5),
+    ("D1",  "MC recovery full + null stats",   "step_phi_mc_recovery.py",       ["--mode", "grid", "--stats-under-null"], False, 20),
+    ("D4c",  "ACF overidentification",          "step_phi_mc_recovery.py",       ["--mode", "acf"],           True,  10),
+    ("D4b",  "Pix event study",                 "step_phi_augmented_tests.py",   ["--arm", "pix"],            True,  22),
+    ("D5",  "BLP elasticity consistency",      "step_phi_augmented_tests.py",   ["--arm", "blpelast"],       True,  10),
     # --- Egan-alignment external validation (added 2026-08-03) -----------------------
-    ("D6", "entry dynamics vs closed form",   "diag_entry_dynamics.py",        ["--no-branch-screen"],      True,   6),
-    ("D6b", "Pix pooled post x exposure",      "diag_phi_augmented_tests.py",   ["--arm", "pixpooled"],      True,  20),
+    ("D6", "entry dynamics vs closed form",   "step_entry_dynamics.py",        ["--no-branch-screen"],      True,   6),
+    ("D6b", "Pix pooled post x exposure",      "step_phi_augmented_tests.py",   ["--arm", "pixpooled"],      True,  20),
     ("D7", "Selic wake-up comovement",        "export_selic_wakeup.py",        [],                          True,   1),
 ]
 

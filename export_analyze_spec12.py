@@ -358,7 +358,7 @@ def build_latex_table(results_dict, order_keys, target_vars, out_path, title="",
                  r"\textcite{mackinnon2017wild}) in parentheses. Columns index the estimation "
                  r"strategies enumerated in Section~\ref{sec:empirical:sleep}" + _stage_note + r". "
                  # Substituted at the write site from the schemes select_se actually returned.
-                 + _sen.NOTE_TOKEN + AME_CI_TOKEN +
+                 + _sen.NOTE_TOKEN + _sen.AME_SE_TOKEN + AME_CI_TOKEN +
                  r"Significance levels: *** $p<0.01$, ** $p<0.05$, * $p<0.1$.}")
     tex.append(notes_str)
     tex.append(r"\endlastfoot")
@@ -376,6 +376,7 @@ def build_latex_table(results_dict, order_keys, target_vars, out_path, title="",
     # Target vars first, then any remaining (excluding CF nuisance term)
     ordered_vars = [v for v in target_vars if v in vars_to_print]
     _nat_schemes = set()   # what select_se ACTUALLY returned on the national rows
+    _sen.reset_ame_se_realised()   # and which AME variance it actually delivered
     _ci_cols = set()       # columns whose second line is an interval rather than an SE
 
     if not is_first_stage:
@@ -512,7 +513,8 @@ def build_latex_table(results_dict, order_keys, target_vars, out_path, title="",
     with open(out_path, "w", encoding="utf-8") as f:
         f.write("\n".join(tex).replace(
             _sen.NOTE_TOKEN, _sen.national_note(_nat_schemes)).replace(
-            AME_CI_TOKEN, ame_ci_note(_ci_cols, results_dict)))
+            AME_CI_TOKEN, ame_ci_note(_ci_cols, results_dict)).replace(
+            _sen.AME_SE_TOKEN, _sen.ame_se_note()))
 
 
 def build_latex_table_landscape(results_dict, order_keys, target_vars, out_path,
@@ -543,6 +545,7 @@ def build_latex_table_landscape(results_dict, order_keys, target_vars, out_path,
                     vars_to_print.append(v)
     ordered_vars = [v for v in target_vars if v in vars_to_print]
     _nat_schemes = set()   # what select_se ACTUALLY returned on the national rows
+    _sen.reset_ame_se_realised()   # and which AME variance it actually delivered
     _ci_cols = set()       # columns whose second line is an interval rather than an SE
     if not first_stage:   # second stage also lists any extra coefs; first stage = instruments only
         ordered_vars += [v for v in vars_to_print if v not in ordered_vars and 'v_hat' not in v.lower()]
@@ -648,7 +651,7 @@ def build_latex_table_landscape(results_dict, order_keys, target_vars, out_path,
             _stage_note +
             r". "
             # Substituted at the write site from the schemes select_se actually returned.
-            + _sen.NOTE_TOKEN + AME_CI_TOKEN +
+            + _sen.NOTE_TOKEN + _sen.AME_SE_TOKEN + AME_CI_TOKEN +
             r"Significance levels: *** $p<0.01$, ** $p<0.05$, * $p<0.1$.",
             r"\end{tablenotes}",
             r"\end{threeparttable}",
@@ -658,7 +661,8 @@ def build_latex_table_landscape(results_dict, order_keys, target_vars, out_path,
     with open(out_path, "w", encoding="utf-8") as f:
         f.write("\n".join(tex).replace(
             _sen.NOTE_TOKEN, _sen.national_note(_nat_schemes)).replace(
-            AME_CI_TOKEN, ame_ci_note(_ci_cols, results_dict)))
+            AME_CI_TOKEN, ame_ci_note(_ci_cols, results_dict)).replace(
+            _sen.AME_SE_TOKEN, _sen.ame_se_note()))
 
 
 import argparse

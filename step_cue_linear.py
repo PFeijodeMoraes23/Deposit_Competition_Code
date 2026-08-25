@@ -1,5 +1,5 @@
 """
-diag_cue_linear_step.py
+step_cue_linear.py
 ================================================================================
 LOCAL preview + self-check of the CUE (continuously-updated GMM) linear step, at FIXED θ₂ — no GPU,
 no Julia, no cluster time.
@@ -27,9 +27,9 @@ Inputs (both already on disk):
 
 Usage
 -----
-  python diag_cue_linear_step.py                              # E3-E4, stage ext1
-  python diag_cue_linear_step.py --routines 4 --sset-grid -1.5:0.125:1.5
-  python diag_cue_linear_step.py --max-witer 25 --ridge 1e-8  # knob sweep
+  python step_cue_linear.py                              # E3-E4, stage ext1
+  python step_cue_linear.py --routines 4 --sset-grid -1.5:0.125:1.5
+  python step_cue_linear.py --max-witer 25 --ridge 1e-8  # knob sweep
 """
 from utils.venv_guard import ensure_project_venv
 ensure_project_venv(__file__)

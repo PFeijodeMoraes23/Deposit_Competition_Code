@@ -329,12 +329,12 @@ ARCHIVED = {
 
 
 def _fit_aug(df, s_cols, extra_cols, has_cf):
-    """The augmented second stage EXACTLY as diag_phi_augmented_tests.run_augmented
+    """The augmented second stage EXACTLY as step_phi_augmented_tests.run_augmented
     builds it (same columns, same all-columns dropna, same two-way demeaning, same
     cluster), but fitting only the augmented model -- the baseline fit is not needed
-    here and costs ~20 s. Pinned locally on purpose: diag_phi_augmented_tests.py is
+    here and costs ~20 s. Pinned locally on purpose: step_phi_augmented_tests.py is
     under concurrent edit, and this comparison must not move underneath itself."""
-    from diag_phi_augmented_tests import demean_variables_2way
+    from step_phi_augmented_tests import demean_variables_2way
     df = df.copy()
     X_cols = []
     for sv in s_cols:
@@ -395,7 +395,7 @@ def _print_block(label, spec, rows, n):
 
 def section_battery(arms, B):
     _hr("BATTERY: real phi-separation regressions, three references off one fit")
-    from diag_phi_augmented_tests import (load_sleep_frame, build_uncensored_inflow,
+    from step_phi_augmented_tests import (load_sleep_frame, build_uncensored_inflow,
                                           lag_within_entity)
     print(f"  [{_ts()}] building the sleep frame ...")
     df0, s_cols = load_sleep_frame()
@@ -403,7 +403,7 @@ def section_battery(arms, B):
     rows = []
 
     if "d5" in arms:
-        # D4b (diag_phi_interaction_tests.arm_types): difference-coded type carries.
+        # D4b (step_phi_interaction_tests.arm_types): difference-coded type carries.
         for spec, has_cf, ks, base_k in (("OLSxTech(all k)", False, [1, 2, 4, 5], 1),
                                          ("spec12(k=4,5)", True, [4, 5], 4)):
             d0 = df0.copy()

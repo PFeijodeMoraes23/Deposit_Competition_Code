@@ -1,5 +1,5 @@
 """
-diag_openfinance_freshness.py
+step_openfinance_freshness.py
 =============================
 Empirically verify the Open Finance Brasil open-data update schedule.
 
@@ -30,7 +30,7 @@ Output
 
 Usage
 -----
-  python diag_openfinance_freshness.py
+  python step_openfinance_freshness.py
 """
 
 from __future__ import annotations

@@ -1,4 +1,4 @@
-"""diag_phi_mc_recovery.py -- can the sleep kernel recover phi when awake inflows persist?
+"""step_phi_mc_recovery.py -- can the sleep kernel recover phi when awake inflows persist?
 
 Author: Pedro Feijo de Moraes
 
@@ -105,7 +105,7 @@ D6_CSV = OUT_DIR / "d6_implied_phi.csv"
 
 def d6_reference(kind="B"):
     """D6's entry-dynamics phi as (phi, lo, hi), READ from disk -- never hard-coded, so
-    that re-running diag_entry_dynamics.py updates this script's comparison automatically.
+    that re-running step_entry_dynamics.py updates this script's comparison automatically.
     Returns None if D6 has not been run."""
     try:
         t = pd.read_csv(D6_CSV)
@@ -302,7 +302,7 @@ def estimate_once(rows_dep, rows_lag, ent, stats_null=False, censor=False):
         np.add.at(G3, cl3, X3 * e3[:, None])
         V3 = X3tXi @ (G3.T @ G3) @ X3tXi
         # NB --censor deliberately does NOT touch D4a: the data-side D4a (attractiveness rank
-        # x carry, diag_phi_interaction_tests.py --arm attractiveness) runs on the sleep
+        # x carry, step_phi_interaction_tests.py --arm attractiveness) runs on the sleep
         # frame and never reads Dep_Act, so it never loses the censored rows.
         out["d3_coef"] = float(b3[1])
         out["d3_t"] = float(b3[1] / np.sqrt(V3[1, 1]))
@@ -548,7 +548,7 @@ def _hlist(mask):
 
 def mode_acf(a):
     print("=== D4c: ACF overidentification vs fitted pure-sleepiness model ===")
-    from diag_phi_augmented_tests import load_sleep_frame
+    from step_phi_augmented_tests import load_sleep_frame
 
     df, _ = load_sleep_frame()
     d = df.dropna(subset=["deposit_balance", "nr_lagged_dep"]).copy()

@@ -183,8 +183,21 @@ bbl_extra="--shocks ${SHOCKS} --perturb-scale ${PERTURB_SCALE} --dev-scheme ${DE
 
 sub () {  # sub <jobname> <time> <extra sbatch args...>
     local name="$1" tlim="$2"; shift 2
+    # CPU steps load blp_sysimage_cpu.so, which is valid ONLY on the cpugen it was built on,
+    # and `day` mixes cpugen:turin (AMD 9575f/9655) with cpugen:emeraldrapids (Intel 8562Y+).
+    # warmup and fwd_sim get the pin through FWD_SB; polfunc and solve did not, so they landed
+    # wherever day had room and refused with "the image does not LOAD on <node>" -- and only
+    # sometimes, which is worse than always. Skipped when the caller already pins a constraint
+    # (the --fwd-cpu FWD_SB does) or when this is a GPU submission, whose image is the
+    # gpu_h200-built one and which no cpugen constraint can satisfy.
+    local cons="${CPU_CONSTRAINT:-cpugen:turin}" a
+    for a in "$@"; do
+        case "${a}" in --constraint*|--gpus*|--partition=gpu*) cons=""; break ;; esac
+    done
+    [[ "${PARTITION:-day}" == gpu* ]] && cons=""
     cl_sbatch -J "${name}" -t "${tlim}" \
         ${PARTITION:+--partition="${PARTITION}"} ${MEM:+--mem="${MEM}"} \
+        ${cons:+--constraint="${cons}"} \
         -o "${LOGD}/${name}_%A_%a.out" -e "${LOGD}/${name}_%A_%a.err" "$@"
 }
 

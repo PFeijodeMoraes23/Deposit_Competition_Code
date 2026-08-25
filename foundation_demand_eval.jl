@@ -47,7 +47,8 @@ Usage
   julia --project=\${PROJECT_DIR} --threads=8 foundation_demand_eval.jl --estim 6 \\
       --spec 12 --stage extended --R 2000 --seed 42 --hpc
 
-Outputs `CF_FOUNDATION/shares_elas_E{estim}_spec_{spec}_{stage}{suffix}.parquet`.
+Outputs `shares_elas_E{estim}_spec_{spec}_{stage}{suffix}.parquet` into the counterfactual
+step directory (`cf_out_dir`: cluster `data/output/counterfactuals`, local `CF_FOUNDATION/`).
 """
 
 using Parquet2, DataFrames, Serialization, Statistics, LinearAlgebra, ArgParse
@@ -76,29 +77,9 @@ end
 # so CUDA is never referenced when CF_GPU=0 (and thus need not be imported).
 const _CF_USE_GPU = _CF_GPU_REQUESTED && (try CUDA.functional() catch; false end)
 
-# ==========================================================================
-# Data-layout authority for the CF/BBL stack (cluster vs local)
-# ==========================================================================
-# get_paths(is_hpc=true) returns out_dir = <repo>/../data/output, so dirname(out_dir) == data/.
-# CLUSTER CONVENTION (2026-08-02): data/input holds everything UPLOADED from the local machine;
-# data/output holds everything the CLUSTER PRODUCES — including the BLP draws + RC results the BLP
-# jobs generate (those keep their existing locations; the BLP family is not touched here). The legacy
-# sibling dirs CF_FOUNDATION/ COST_FWD/ COST_POLFUNC/ CF_ZIPS/ are RETIRED on the cluster and replaced
-# by subdirectories of data/output (each holds many files, so nothing is a single-file directory).
-# LOCALLY out_dir is …/ESTIMATION_OUTPUT/BLP_RESULTS and the legacy tree is UNCHANGED — detection is
-# by tree shape, so one code path serves both and no local workflow breaks.
-_hpc_tree(out_dir) = basename(rstrip(String(out_dir), ['/', '\\'])) == "output"
-const _HPC_SUBDIR = Dict("CF_FOUNDATION" => "cf", "COST_FWD" => "cost", "COST_POLFUNC" => "polfunc")
-
-"""Directory the CF/BBL stack WRITES to (cluster: data/output/{cf,cost}; local: legacy sibling)."""
-cf_out_dir(out_dir, which::AbstractString="CF_FOUNDATION") =
-    _hpc_tree(out_dir) ? joinpath(String(out_dir), get(_HPC_SUBDIR, which, lowercase(which))) :
-                         joinpath(dirname(out_dir), which)
-
-"""Directory holding UPLOADED inputs (cluster: data/input; local: legacy sibling)."""
-cf_in_dir(out_dir, which::AbstractString="CF_FOUNDATION") =
-    _hpc_tree(out_dir) ? joinpath(dirname(String(out_dir)), "input") :
-                         joinpath(dirname(out_dir), which)
+# The data-layout authority for the CF/BBL stack (`cf_out_dir`, `cf_in_dir`, `blp_dir`,
+# `logit_dir`, `demand_search_dirs`, `is_cluster_out`) is of_root.jl, reached here through
+# blp_1_estimation.jl.
 
 # ==========================================================================
 # Context: everything needed to evaluate (counterfactual) shares
@@ -129,37 +110,35 @@ end
 """
     _result_path(out_dir, estim, spec, stage, suffix) -> String
 
-Path of the serialized RC result Dict for the counterfactuals.
+Path of the serialized RC result Dict the counterfactuals load.
 
-After the 2026-06-25 `BLP_RESULTS/` reorg (handoff), the canonical CF input is the
-consolidated **`cluster_processed/blp_E{estim}_spec_{spec}.jls`** — a byte-identical
-copy of the cluster's `blp_results_E{estim}_spec_{spec}_extended.jls` (final/most-complex
-`extended` stage, IFT engine; unchanged Julia Dict schema: δ̂, θ̂₁, θ̂₂, Q). It is treated
-as `stage="extended"`, `suffix=""`. The metadata `.json` (per routine) and `INDEX.json`
-sit alongside it; intermediate stages and the numerical-engine `*_num` results remain in
-`cluster_raw/`.
+On the cluster the RC step is the sole producer and writes one file per (routine, spec,
+stage) into the BLP step folder, so the path is fully determined:
+`blp_dir(out_dir)/blp_results_E{estim}_spec_{spec}_{stage}{suffix}.jls`. Resolving through a
+single location is the point — a second candidate is exactly how the CF stack and the
+exporter end up reading two different vintages of the same routine.
 
-`out_dir` is `get_paths()[2]` = the `BLP_RESULTS/` root. For the `extended` stage we point
-at `cluster_processed/`; any other stage falls back to the legacy flat name
-`blp_results_E{estim}_spec_{spec}_{stage}{suffix}.jls` (so an intermediate stage from
-`cluster_raw/` still loads if explicitly requested). The `extended` consolidated path also
-falls back to the flat name if the consolidated artifact is absent. (Logit is loaded by a
-separate branch from `out_dir/logit/`.)
+Locally `out_dir` is the `BLP_RESULTS/` root, and for the final `extended` stage the system
+of record is the consolidated `cluster_processed/blp_E{estim}_spec_{spec}.jls` that the
+ingest writes: a byte-identical copy of the cluster's `extended` result (same Julia Dict
+schema — δ̂, θ̂₁, θ̂₂, Q), with the per-routine metadata `.json` and `INDEX.json` alongside it.
+The three candidates cover the layouts an ingest may have produced under `BLP_RESULTS/`;
+first existing wins, and the flat name is the fallback. Any other stage — an intermediate
+kept in `cluster_raw/` — resolves to the flat name directly.
+
+The logit stage has no RC result Dict; `build_cf_context` loads it in a separate branch from
+`logit_dir(out_dir)`.
 """
 function _result_path(out_dir, estim, spec_id, stage, suffix)
-    flat = joinpath(out_dir, "blp_results_E$(estim)_spec_$(spec_id)_$(stage)$(suffix).jls")
-    if stage == "extended"
-        # RC results are produced by the BLP family, which owns their location. Accept EVERY layout
-        # it may use — flat under out_dir, or nested under a BLP_RESULTS/ root — so the CF/BBL stack
-        # keeps working whichever one is in force (first existing wins; no flag-day coupling).
-        # Keep in sync with the CP_DIR candidate list in submit_cf_all.sh / submit_bbl_all.sh.
+    flat = joinpath(blp_dir(out_dir),
+                    "blp_results_E$(estim)_spec_$(spec_id)_$(stage)$(suffix).jls")
+    if !is_cluster_out(out_dir) && stage == "extended"
         leaf = "blp_E$(estim)_spec_$(spec_id).jls"
         for c in (joinpath(out_dir, "cluster_processed", leaf),
                   joinpath(out_dir, "BLP_RESULTS", "cluster_processed", leaf),
                   joinpath(out_dir, "BLP_RESULTS", leaf))
             isfile(c) && return c
         end
-        return flat
     end
     return flat
 end
@@ -190,7 +169,12 @@ end
     discover_demand_parquet(input_dirs, estim, spec_id) -> String
 
 Find the demand parquet for routine `estim`, spec `spec_id`, by scanning
-`demand_<estim>_*_spec_<spec>.parquet` (any tag; excludes `_final`), newest mtime wins.
+`demand_<estim>[_<tag>]_spec_<spec>.parquet` (tag optional; excludes `_final`), newest mtime
+wins.
+
+The tag is optional because E1/E2 write the bare `demand_{estim}_spec_{spec}.parquet` while
+E3/E4 carry one; the same regex is used by blp_1_logit.jl and blp_2_rc.jl, so the whole
+stack sees the same set of files for a routine.
 
 This mirrors the BLP side's auto-discovery (the note: "the routine list — id AND
 prefix — is AUTO-DISCOVERED … newest mtime per id wins so leftover old-scheme files
@@ -200,14 +184,13 @@ dict, whose entries go stale the moment a routine is relabelled. The lineup:
   E3 Single-Index (headline) · E4 Single-Index+Time.
 The cluster default set is {3, 4} (the link routines).
 
-`input_dirs` is the ordered search path from `demand_search_dirs` (of_root.jl): data/input
-before data/output/DEMAND_PREP. The FIRST directory holding a match settles the routine, so
-an uploaded parquet outranks a cluster-produced one whatever their timestamps say; the mtime
-contest then runs within that directory. Off the cluster the path has one entry and the two
-rules coincide.
+`input_dirs` is the search path from `demand_search_dirs` (of_root.jl): on the cluster the
+single producer directory `data/output/demand_prep`, locally the single
+ESTIMATION_OUTPUT/DEMAND_PREP. The FIRST directory holding a match settles the routine and
+the mtime contest then runs within it; with one entry per tree the two rules coincide.
 """
 function discover_demand_parquet(input_dirs::Vector{String}, estim::Int, spec_id::Int)::String
-    pat = Regex("^demand_$(estim)_.*spec_$(spec_id)\\.parquet\$")
+    pat = Regex("^demand_$(estim)(?:_.*)?_spec_$(spec_id)\\.parquet\$")
     for input_dir in input_dirs
         isdir(input_dir) || continue
         cands = String[]
@@ -223,7 +206,7 @@ function discover_demand_parquet(input_dirs::Vector{String}, estim::Int, spec_id
     error(
         "No demand parquet for estim=$estim spec=$spec_id. Searched:\n" *
         describe_search_dirs(input_dirs...) * "\n" *
-        "(scanned demand_$(estim)_*spec_$(spec_id).parquet, excluding _final). " *
+        "(scanned demand_$(estim)[_<tag>]_spec_$(spec_id).parquet, excluding _final). " *
         "New 8-routine scheme is auto-discovered from the parquet; ensure the routine's " *
         "demand-prep parquet exists (the sleep/BLP side produces it).")
 end
@@ -247,8 +230,8 @@ function build_cf_context(estim::Int, spec_id::Int, stage::String;
                           draws_dir_override::Union{Nothing,String}=nothing,
                           suffix::String=get(ENV, "BLP_OUTPUT_SUFFIX", ""))
     input_dir, draws_dir, out_dir = get_paths(hpc; local_dir=local_dir)
-    # new 8-routine scheme (auto-discover; not DEMAND_PREFIXES), over data/input then
-    # data/output/DEMAND_PREP so an on-cluster sleepiness rebuild is found without an upload.
+    # new 8-routine scheme (auto-discover; not DEMAND_PREFIXES) over the one directory the
+    # prep step writes to, so the CF stack reads the same parquet the BLP was estimated on.
     path = discover_demand_parquet(demand_search_dirs(input_dir, out_dir), estim, spec_id)
 
     df_full = DataFrame(Parquet2.Dataset(path); copycols=true)
@@ -330,11 +313,11 @@ function build_cf_context(estim::Int, spec_id::Int, stage::String;
         # (there is no RC-style result dict). θ₂ is empty ⇒ μ=0 ⇒ plain logit shares.
         # θ₁ is only needed for SPREAD counterfactuals; pull α from the 'full' logit
         # sub-model if present, else 0 (in-sample share reproduction is unaffected).
-        # in_dir (= input_dir; data/input on HPC, where the uploaded delta lives) is checked
-        # first, then the local out_dir/logit write, then a legacy out_dir copy.
+        # input_dir (data/input on the cluster) comes first so a δ̂ supplied as an upload wins
+        # over one the logit step produced; otherwise it is the logit step folder, which is the
+        # only place blp_1_logit.jl writes.
         dbin  = joinpath(input_dir, "logit_delta_E$(estim)_spec_$(spec_id)$(suffix).bin")
-        isfile(dbin) || (dbin = joinpath(out_dir, "logit", "logit_delta_E$(estim)_spec_$(spec_id)$(suffix).bin"))
-        isfile(dbin) || (dbin = joinpath(out_dir, "logit_delta_E$(estim)_spec_$(spec_id)$(suffix).bin"))
+        isfile(dbin) || (dbin = joinpath(logit_dir(out_dir), "logit_delta_E$(estim)_spec_$(spec_id)$(suffix).bin"))
         dfull = load_delta_bin(dbin)
         dfull === nothing && error("Missing logit δ̂ bin: $dbin")
         length(dfull) == N_full ||
@@ -342,8 +325,7 @@ function build_cf_context(estim::Int, spec_id::Int, stage::String;
         delta_hat = all(row_keep) ? dfull : dfull[row_keep]
         theta2 = Float64[]
         theta1 = zeros(coef_dim)
-        lpath  = joinpath(out_dir, "logit", "logit_E$(estim)_full_spec_$(spec_id)$(suffix).jls")
-        isfile(lpath) || (lpath = joinpath(out_dir, "logit_E$(estim)_full_spec_$(spec_id)$(suffix).jls"))
+        lpath  = joinpath(logit_dir(out_dir), "logit_E$(estim)_full_spec_$(spec_id)$(suffix).jls")
         if isfile(lpath)
             lr = deserialize(lpath); t1 = get(lr, "theta1", nothing)
             (t1 !== nothing && !isempty(t1)) && (theta1[1] = Float64(t1[1]))
@@ -596,7 +578,7 @@ function main_cf_demand()
                            draws_dir_override=a["draws-dir"])
     if a["verify-gpu"]; verify_cf_gpu(ctx); return; end
     _, _, out_dir = get_paths(a["hpc"]; local_dir=a["local-dir"])
-    cf_dir = cf_out_dir(out_dir)                       # cluster: data/output/cf
+    cf_dir = cf_out_dir(out_dir)                       # cluster: data/output/counterfactuals
     out_path = joinpath(cf_dir,
         "shares_elas_E$(a["estim"])_spec_$(a["spec"])_$(a["stage"])$(a["suffix"]).parquet")
     cf_export_shares(ctx; out_path=out_path)

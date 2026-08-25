@@ -93,6 +93,25 @@ def demand_prep_root() -> Path:
     return PROCESSED / "ESTIMATION_OUTPUT" / "DEMAND_PREP"
 
 
+def demand_parquet_dir() -> Path:
+    """Directory holding the demand-prep parquets (``demand_{k}[_tag]_spec_{s}.parquet``).
+
+    ``DEMAND_PREP_DIR`` names the cluster's ``data/output/demand_prep`` step folder, the one
+    place the on-cluster prep step writes them. Unset — every local run — this is
+    :func:`demand_prep_root`, where the parquets sit beside the ``est{k}`` fits they are
+    built from.
+
+    It is a separate accessor from :func:`demand_prep_root` because the two coincide only
+    locally: on the cluster the ``est{k}`` pickles belong to the sleep step folder and the
+    parquets to their own. Resolving the parquets through one name with one producer is what
+    keeps the exporter and the CF/BBL stack from reading two vintages of the same routine.
+    """
+    override = os.environ.get("DEMAND_PREP_DIR", "").strip()
+    if override:
+        return Path(override).expanduser()
+    return demand_prep_root()
+
+
 def estimation_output() -> Path:
     """Root of the estimation output tree (``PROCESSED/ESTIMATION_OUTPUT``).
 
@@ -147,14 +166,44 @@ def bbl_output_dir() -> Path:
 
 def cf_foundation_dir() -> Path:
     """``ESTIMATION_OUTPUT/CF_FOUNDATION`` — the counterfactual inputs (``upsilon_pix_E*.json``,
-    ``phi_nopix_E*.parquet``). Production CF input, not sandbox output."""
+    ``phi_nopix_E*.parquet``). Production CF input, not sandbox output.
+
+    ``CF_FOUNDATION_DIR`` points it at the cluster's ``data/output/counterfactuals`` step
+    folder, where the Υ_pix export writes and CF4 reads. Unset locally, so the default stands.
+    """
+    override = os.environ.get("CF_FOUNDATION_DIR", "").strip()
+    if override:
+        return Path(override).expanduser()
     return estimation_output() / "CF_FOUNDATION"
 
 
 def cost_fwd_dir() -> Path:
-    """``ESTIMATION_OUTPUT/COST_FWD`` — the forward-cost inputs the BBL simulation reads
-    (``forward_rf_qoq.csv``). Production, as the rest of the cluster-facing trees."""
+    """``ESTIMATION_OUTPUT/COST_FWD`` — the forward-cost input the BBL simulation reads
+    (``forward_rf_qoq.csv``) and the ψ deviation shards it writes for the solve step.
+
+    ``CF_COST_FWD`` points it at the cluster's ``data/output/bbl`` step folder; the BBL jobs
+    export that name, and estimation_bbl_3_solve.py reads the same variable. Unset locally,
+    so the default stands.
+    """
+    override = os.environ.get("CF_COST_FWD", "").strip()
+    if override:
+        return Path(override).expanduser()
     return estimation_output() / "COST_FWD"
+
+
+def polfunc_dir() -> Path:
+    """``ESTIMATION_OUTPUT/COST_POLFUNC`` — the fitted pricing policy function
+    (``polfunc_fitted.csv`` and its pkl/json/tex siblings) the BBL forward simulation reads.
+
+    ``COST_POLFUNC_DIR`` points it at the cluster's ``data/output/bbl`` step folder, where the
+    polfunc pre-step writes and the forward simulation picks it up via ``--policy-csv``. Unset
+    locally, and pinned to :func:`estimation_output` rather than ``SLEEP_OUT_ROOT``: the policy
+    function is spec-invariant, so it belongs to no sleepiness vintage.
+    """
+    override = os.environ.get("COST_POLFUNC_DIR", "").strip()
+    if override:
+        return Path(override).expanduser()
+    return estimation_output() / "COST_POLFUNC"
 
 
 def diag_dir(name: str) -> Path:
@@ -266,8 +315,9 @@ def market_panel_csv(processed: Path | None = None) -> Path:
 
 __all__ = [
     "OPEN_FINANCE", "BCB", "DATA_ROOT", "RAW", "PROCESSED", "data_root", "market_panel_csv",
-    "demand_prep_root", "estimation_output", "est_dir", "rout_dir", "drafts_dir",
-    "blp_results_dir", "bbl_output_dir", "cf_foundation_dir", "cost_fwd_dir", "diag_dir",
+    "demand_prep_root", "demand_parquet_dir", "estimation_output", "est_dir", "rout_dir",
+    "drafts_dir", "blp_results_dir", "bbl_output_dir", "cf_foundation_dir", "cost_fwd_dir",
+    "polfunc_dir", "diag_dir",
     "ESTBAN_DIR", "ESTBAN_CSV", "ESTBAN_RAW_MUN", "ESTBAN_RAW_AG",
     "IF_DATA_ROOT", "IF_DATA_LIST", "IF_DATA_PRUDENTIAL", "IF_DATA_FINANCIAL", "IF_DATA_INDIVIDUAL", "IF_DATA_AGG",
     "COSIF_RAW", "SGS_RAW",

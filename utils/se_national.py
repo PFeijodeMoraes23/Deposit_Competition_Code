@@ -187,12 +187,55 @@ SCHEME_LABEL = {"congl": "conglomerate WCB", "quarter": "quarter-clustered WCB",
                 "dk": "Driscoll-Kraay"}
 
 
+#: Which AME variance each select_se call actually delivered, for the run in progress.
+#: Populated by select_se, read by ame_se_note. Same discipline as _nat_schemes: the FOOTNOTE
+#: is what has to be honest, because select_se degrades silently by design.
+_AME_SE_REALISED: set = set()
+
+
+def reset_ame_se_realised() -> None:
+    """Clear the realised-mode record. Call once before building a table body."""
+    _AME_SE_REALISED.clear()
+
+
 def twostage_se_enabled() -> bool:
-    """SLEEP_AME_SE='twostage' makes the E3/E4 rows report the two-stage (direction + link)
-    bootstrap of estimation_ame_twostage.py where it has been attached; anything else keeps the
-    link-only numbers the estimator stored. Default 'conditional'."""
+    """Whether the E3/E4 rows report the TWO-STAGE (direction + link) bootstrap.
+
+    Default 'twostage' (adopted 2026-08-24). The conditional numbers hold the index direction
+    theta fixed as though it were known rather than estimated, which understates uncertainty by
+    construction -- and, because theta_j cancels from AME_j/se(AME_j), collapses every continuous
+    row onto ONE shared |t|. SLEEP_AME_SE=conditional restores the link-only numbers.
+
+    The env var survives the default flip because it is how a table is reproduced against an
+    older vintage; it is no longer the safety gate. Safety now lives in ame_se_note(), which
+    states which variance the table in hand actually carries -- a pickle with no bse_2s
+    attached still falls back silently here, and the note is what makes that visible."""
     import os
-    return os.environ.get("SLEEP_AME_SE", "conditional").lower() == "twostage"
+    return os.environ.get("SLEEP_AME_SE", "twostage").lower() == "twostage"
+
+
+def ame_se_note(realised=None) -> str:
+    """LaTeX sentence naming the AME variance the table body ACTUALLY used.
+
+    Never asserts two-stage merely because it was requested: a fit whose pickle predates the
+    attach falls back to the conditional numbers row by row, and a mixed table has to say so."""
+    s = {x for x in (realised if realised is not None else _AME_SE_REALISED)}
+    if not s or s == {"na"}:
+        return ""
+    if s == {"twostage"}:
+        return (r"Standard errors on the average marginal effects are the two-stage wild cluster "
+                r"bootstrap: each draw perturbs the index direction by its cluster influence "
+                r"functions and re-profiles the link, so they include direction-estimation "
+                r"uncertainty and each row carries its own test. ")
+    if s == {"conditional"}:
+        return (r"Standard errors on the average marginal effects are conditional on the "
+                r"estimated index direction, which is held fixed across bootstrap draws; they "
+                r"therefore understate uncertainty, and the continuous rows share a common "
+                r"$t$-statistic by construction. ")
+    return (r"Standard errors on the average marginal effects are two-stage (direction + link) "
+            r"where that bootstrap is available and conditional on the estimated direction "
+            r"otherwise; the conditional rows understate uncertainty and share a common "
+            r"$t$-statistic by construction. ")
 
 
 def select_se(res, name, lead_time_robust: bool = True):
@@ -229,7 +272,11 @@ def select_se(res, name, lead_time_robust: bool = True):
         s2, p2 = ((_get("bse_time_2s"), _get("pvalues_time_2s")) if nat
                   else (_get("bse_2s"), _get("pvalues_2s")))
         if s2 is not None and np.isfinite(s2) and s2 > 0:
+            _AME_SE_REALISED.add("twostage")
             return (s2, p2, "quarter" if nat else "congl")
+        # Requested but absent: this fit predates the attach. Fall through to the conditional
+        # numbers and RECORD it, so ame_se_note cannot claim a bootstrap that never ran.
+        _AME_SE_REALISED.add("conditional")
 
     se_c = _get("bse")
     p_c = _get("pvalues")
@@ -260,6 +307,7 @@ def select_se(res, name, lead_time_robust: bool = True):
 
 
 NOTE_TOKEN = "%%NATIONAL_SE_NOTE%%"
+AME_SE_TOKEN = "%%AME_SE_NOTE%%"     # substituted from ame_se_note() at each write site
 
 
 def national_note(schemes, dk_bracket: bool = False) -> str:

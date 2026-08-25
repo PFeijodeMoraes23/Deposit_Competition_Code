@@ -68,12 +68,38 @@ CF_DIR = _paths.cf_foundation_dir()
 MERGE_KEYS = ["CodConglomeradoPrudencial", "mca_code", "deposit_type", "time_id"]
 
 
+def _demand_search_dirs() -> list:
+    """Same search path the Julia consumers use, in the same order.
+
+    of_root.jl's demand_search_dirs puts the cluster's data/input (uploads) BEFORE
+    data/output/DEMAND_PREP (what the on-cluster sleepiness phase writes), and says outright
+    that it is shared by blp_1_logit.jl, blp_2_rc.jl and blp_gpu_engine.jl "so the three cannot
+    disagree about where a file comes from". This exporter is the fourth consumer and used to
+    disagree: it globbed DEMAND_PREP alone and took the newest mtime. With a parquet present in
+    BOTH places -- an upload plus a fresh on-cluster rebuild -- it therefore read a different
+    file than cf_4_pix.jl, and the phi^noPix export silently failed to cover 2 of 693,093 ctx
+    rows. cf_4_pix.jl requires exact coverage, so that surfaced three phases later as a CF4
+    abort. Off the cluster CL_DATA_IN is unset and this collapses to DEMAND_PREP alone."""
+    import os
+    dirs = []
+    cl_in = os.environ.get("CL_DATA_IN", "").strip()
+    if cl_in:
+        dirs.append(Path(cl_in))
+    dirs.append(DEMAND_PREP)
+    return [d for d in dirs if d.is_dir()]
+
+
 def _discover_demand_parquet(estim: int, spec: int) -> Path:
-    cands = [p for p in DEMAND_PREP.glob(f"demand_{estim}_*spec_{spec}.parquet")
-             if "final" not in p.name.lower()]
-    if not cands:
-        raise FileNotFoundError(f"No demand parquet for estim={estim} spec={spec} in {DEMAND_PREP}")
-    return max(cands, key=lambda p: p.stat().st_mtime)
+    searched = _demand_search_dirs()
+    for d in searched:
+        cands = [p for p in d.glob(f"demand_{estim}_*spec_{spec}.parquet")
+                 if "final" not in p.name.lower()]
+        if cands:
+            # Newest WITHIN the first directory that has one -- never across directories, which
+            # is what let an upload and a rebuild silently trade places.
+            return max(cands, key=lambda p: p.stat().st_mtime)
+    raise FileNotFoundError(f"No demand parquet for estim={estim} spec={spec} in "
+                            + ", ".join(str(d) for d in searched))
 
 
 def _phicol_to_pklkey(phi_col: str) -> str:

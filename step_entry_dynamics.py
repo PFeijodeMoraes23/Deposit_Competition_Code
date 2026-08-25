@@ -1,4 +1,4 @@
-"""diag_entry_dynamics.py -- D6: do entrants accumulate share at the speed phi-hat implies?
+"""step_entry_dynamics.py -- D6: do entrants accumulate share at the speed phi-hat implies?
 
 Author: Pedro Feijo de Moraes
 

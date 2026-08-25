@@ -1,4 +1,4 @@
-"""diag_phi_interaction_tests.py -- restrictions the sleepiness model imposes on the carry.
+"""step_phi_interaction_tests.py -- restrictions the sleepiness model imposes on the carry.
 
 Author: Pedro Feijo de Moraes
 
@@ -25,7 +25,7 @@ Arms (--arm):
                   conglomerates). At G* ~ 6 the WCB reference distribution is the weak
                   link, and D1 puts this arm's power at 0.06-0.11, so a "pass" read off
                   that reference distribution alone is not worth much. See
-                  diag_phi_augmented_tests.cluster_permutation_test for the scheme and,
+                  step_phi_augmented_tests.cluster_permutation_test for the scheme and,
                   in particular, for what the randomization test does NOT deliver.
 
 Sample note: spec 12's CF term restricts it to k=4,5 (v_hat NaN elsewhere), so the types
@@ -39,7 +39,7 @@ import argparse
 import numpy as np
 import pandas as pd
 
-from diag_phi_augmented_tests import (load_sleep_frame, run_augmented, OUT_DIR,
+from step_phi_augmented_tests import (load_sleep_frame, run_augmented, OUT_DIR,
                                       cluster_permutation_test, report_permutation,
                                       design_cols)
 
