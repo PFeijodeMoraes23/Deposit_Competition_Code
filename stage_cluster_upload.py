@@ -52,7 +52,13 @@ MANIFEST = REPO / "cluster" / "upload_manifest.txt"
 # Project root on Bouchet. This is the only absolute cluster path committed to the repo:
 # every script resolves data as `$(pwd)/../data` from scripts/ (cluster_lib.sh CL_DATA_ROOT),
 # so this constant exists purely to print copy-pasteable upload instructions.
-CLUSTER_ROOT = "/nfs/roberts/project/pi_mf2263/pf382/dep_comp"
+# The home-relative spelling, because it is the one that is unambiguous. The project is
+# reachable both as ~/project_pi_mf2263/... and through its physical /nfs/roberts/... path,
+# and the two are the same directory under different names -- which is exactly the ambiguity
+# that made cluster_archive.sh refuse every archive until its containment checks were made to
+# realpath both sides. Printing the ~ form in the upload instructions keeps the operator on one
+# spelling; nothing here depends on which one the shell resolves it to.
+CLUSTER_ROOT = "~/project_pi_mf2263/pf382/dep_comp"
 
 # The dated bundle folder lands under `processed/CLUSTER_STAGE` so it sits with the data it packages.
 # Resolved in main(), not here: utils.paths is imported only after SLEEP_OUT_ROOT is applied, so a
