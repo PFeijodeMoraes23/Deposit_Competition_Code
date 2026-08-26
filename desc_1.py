@@ -52,6 +52,32 @@ REGION_MAPPING = {
     '5': 'Center-West'
 }
 
+def _resolve_is_B(df):
+    """Firm type as a boolean Series: True = B (brick-and-mortar), False = D (digital).
+
+    `is_B` is decided once, in panel_6_market.attach_mca_code, from the physical-network
+    verdict in digital_banks_diagnostic.csv, and stored in market_panel.csv as 0/1. It is
+    used verbatim whenever present -- never recomputed or "corrected" here, and in
+    particular not reconciled with mca_code: firm type and market tier are separate facts.
+    A panel written before the column existed falls back to the CODMUN_IBGE sentinel,
+    which approximates the verdict by where a bank books its deposits.
+    """
+    if 'is_B' in df.columns:
+        s = df['is_B']
+        if pd.api.types.is_bool_dtype(s):
+            return s.astype(bool)
+        if pd.api.types.is_numeric_dtype(s):
+            # 0/1 as stored; a missing value reads as D, matching the Julia side's
+            # Bool.(coalesce.(df.is_B, false)).
+            return pd.to_numeric(s, errors='coerce').fillna(0) != 0
+        # Text, from a CSV writer that spelled the column out ("true"/"True"/"1").
+        return s.astype(str).str.strip().str.lower().isin(('1', 'true', 't', 'yes'))
+    print("[WARNING] Column 'is_B' not found in the market panel: this panel predates the "
+          "stored firm-type column. Falling back to the CODMUN_IBGE sentinel; re-run "
+          "panel_6_market.py to store the authoritative column.")
+    return df['CODMUN_IBGE'].astype(str).str.split('.').str[0] != '0'
+
+
 def weighted_mean_std(df, col, weight_col):
     sub = df[[col, weight_col]].dropna()
     if len(sub) == 0:
@@ -118,10 +144,11 @@ def main():
               .transform(lambda x: x.ffill())
         )
 
-    # 1. Identify Bank Type (D vs B)
-    # The convention dictates B-type are municipal (CODMUN_IBGE != 0), D-type are national (= 0).
+    # 1. Identify Bank Type (D vs B) from the panel's authoritative firm-type column:
+    # is_B = 1 for brick-and-mortar, 0 for D (digital / national).
     df['CODMUN_IBGE_str'] = df['CODMUN_IBGE'].astype(str).str.split('.').str[0]
-    df['bank_type'] = np.where(df['CODMUN_IBGE_str'] == '0', 'D', 'B')
+    df['is_B'] = _resolve_is_B(df)
+    df['bank_type'] = np.where(df['is_B'], 'B', 'D')
     
     # 2. Extract Region for B-type
     df['region_code'] = df['CODMUN_IBGE_str'].str[0]
@@ -1070,7 +1097,7 @@ def main():
     save_region_by_year_panels(sum_reg_yr)
 
     print("Generating D-Type firm summary...")
-    d_firms = df_b[df_b["CODMUN_IBGE"].astype(str) == "0"].copy()
+    d_firms = df[~df["is_B"]].copy()
     d_firms["cnpj_8"] = pd.to_numeric(d_firms["CNPJ_Lider"], errors="coerce").astype("Int64").astype(str).str.zfill(8)
 
     path_flags = list(_ROOT.glob("**/digital_banks_diagnostic.csv"))[0]

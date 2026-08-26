@@ -7,36 +7,29 @@
 #          MCA × year panel of banking access-point density.
 #
 #   Data source:
-#     BCB Dados Abertos — "Nota para Imprensa: Correspondentes Bancários"
-#     Primary endpoint (annual flat files, same Olinda API used for IF Data):
-#       https://olinda.bcb.gov.br/olinda/servico/IFDATA/versao/v1/odata/
-#         IfPorMunicipio(Data=@Data,TipoInstituicao=@TipoInstituicao)
-#         ?@Data='<MM-YYYY>'&@TipoInstituicao=0
-#         &$select=CodMunicipio,NumeroPontosAtendimento,...&$format=json
+#     ESTBAN.csv (BCB "Estatística Bancária por Município"), column
+#     AGEN_PROCESSADAS — the number of full regulated *agências* an institution
+#     reports in a municipality. This is the ONLY source this script reads.
 #
-#     This endpoint is the geographic distribution sub-report of IF Data
-#     (the same API used by if_data_scrape_1.py for deposit data).
-#     It reports, per municipality per reference period:
-#       • Agencias          : number of full bank branches
-#       • PostosAtendimento : service posts (PABs, etc.)
-#       • CorrespondentesNoPais : banking correspondents
-#     Aggregating Agencias + PostosAtendimento + CorrespondentesNoPais gives
-#     total formal-banking access points.
+#   SCOPE LIMIT — `correspondents` IS A ZERO CONSTANT
+#     build_branch_panel() sets correspondents = 0 for every municipality-quarter.
+#     No API is called. Consequently, in bcb_inclusion_mca_panel.csv and in every
+#     panel built from it:
+#         access_points_total  ==  branches_total          (exactly)
+#         access_points_per1000 == branches_per1000        (exactly)
+#     Treat access_points_* as a duplicate of branches_*, not as an independent
+#     regressor. ESTBAN also cannot see *postos de atendimento*, so this measures
+#     full branches only: Agibank reports one agência while operating 991 postos
+#     across 679 municipalities.
 #
-#     Data availability: quarterly reference periods from 2011-Q1 onward.
-#     Published by BCB with ~1 quarter lag.
-#
-#     IF Data institution types (TipoInstituicao parameter):
-#       0  = all consolidated
-#       1  = banks (commercial + universal)
-#       2  = savings banks
-#       3  = credit cooperatives
-#
-#     NOTE: The exact field names (Agencias vs NomeCampo) may vary across
-#     API versions.  The script requests all $select fields and maps them
-#     using column-name aliases.  If empty results come back, the API
-#     endpoint name or parameter format may have changed — check
-#       https://olinda.bcb.gov.br/olinda/servico/IFDATA/versao/v1/swagger-ui.html
+#     Per-INSTITUTION agências, postos and correspondentes ARE available and are
+#     downloaded by scrape_25_bcb_access_points.py from the BCB Informes services
+#     (Informes_Agencias / Informes_PostosDeAtendimento / Informes_Correspondentes).
+#     They are deliberately NOT merged in here: those services publish a single
+#     current snapshot (one Posicao for every row), so broadcasting them back across
+#     2013-2025 would manufacture time variation in a market characteristic that
+#     the estimation treats as a state variable. Filling correspondents properly
+#     needs a genuine historical source.
 #
 #   Output:
 #     BCB/Inclusion/bcb_inclusion_mca_panel.csv
@@ -148,9 +141,13 @@ def build_branch_panel() -> pd.DataFrame:
                          "YEAR": "year", "MONTH": "month",
                          "CODMUN_IBGE": "mun_code"}, inplace=True)
     agg["quarter"]       = agg["month"].map(QUARTER_MONTHS)
+    # Zero constant, not measured data -- see the SCOPE LIMIT note in the header.
+    # access_points_* therefore equals branches_* exactly downstream.
     agg["correspondents"] = 0
 
-    logging.info(f"ESTBAN panel: {len(agg):,} municipality-quarter records")
+    logging.info(f"ESTBAN panel: {len(agg):,} municipality-quarter records "
+                 f"(branches from ESTBAN AGEN_PROCESSADAS; correspondents = 0 constant, "
+                 f"so access_points_* will equal branches_*)")
     return agg[["mun_code", "year", "quarter", "branches", "correspondents"]]
 
 

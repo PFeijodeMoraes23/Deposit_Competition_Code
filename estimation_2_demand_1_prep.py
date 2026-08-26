@@ -57,9 +57,13 @@ except Exception:
 # 0. Global Paths and Parameters
 # ==============================================================================
 from utils import paths
+from utils import load_panel_cached
 from utils import state_transform as _st
 from estimation_demand_link_common import build_market_size_and_shares, MAX_YEAR, MIN_YEAR
 # market_panel.csv, NOT the fees variant — see utils/paths.market_panel_csv (USE_FEE_PANEL=1).
+# The frame is read through load_panel_cached, which serves the .parquet twin of this path
+# whenever that is the authoritative copy. On the cluster it always is: the data bundle ships
+# market_panel.parquet (39 MB) and no market_panel.csv, so a bare read_csv finds nothing.
 PANEL_CSV = paths.market_panel_csv()
 BANKED_CSV = paths.INCLUSION_DIR / "bcb_banked_mca_panel.csv"
 
@@ -100,10 +104,12 @@ EXTRA_KEEP_COLS = (X_COLS + D_COLS + IV_BLP_LOO + IV_ESTBAN + IV_COST + IV_CAPIT
 
 def _resolve_runtime_paths() -> tuple[Path, Path, Path]:
     panel_csv = PANEL_CSV
-    # est_dir/demand_prep_root follow SLEEP_OUT_ROOT, so a sandboxed run reads the fit it
-    # just produced and writes its parquets beside it.
+    # est_dir follows SLEEP_OUT_ROOT, so a sandboxed run reads the fit it just produced.
+    # demand_parquet_dir is the parquets' own seam: it equals demand_prep_root() unless
+    # DEMAND_PREP_DIR names a separate step folder (the cluster's data/output/demand_prep),
+    # where the fits and the parquets they generate live in different step directories.
     sleep_output_dir = paths.est_dir(2)
-    demand_output_dir = paths.demand_prep_root()
+    demand_output_dir = paths.demand_parquet_dir()
     return panel_csv, sleep_output_dir, demand_output_dir
 
 class NonLinearResults:
@@ -128,11 +134,39 @@ def extract_upsilon_terms(res_ss):
             upsilon[clean_name] = coef
     return upsilon
 
+def _resolve_is_B(df: pd.DataFrame) -> pd.Series:
+    """Firm type as a boolean Series: True = B (brick-and-mortar), False = D (digital).
+
+    `is_B` is decided once, in panel_6_market.attach_mca_code, from the physical-network
+    verdict in digital_banks_diagnostic.csv, and stored in market_panel.csv as 0/1. It is
+    used verbatim whenever present -- never recomputed or "corrected" here, and in
+    particular not reconciled with mca_code: firm type and market tier are separate facts.
+    A panel written before the column existed falls back to the CODMUN_IBGE sentinel,
+    which approximates the verdict by where a bank books its deposits.
+    """
+    if 'is_B' in df.columns:
+        s = df['is_B']
+        if pd.api.types.is_bool_dtype(s):
+            return s.astype(bool)
+        if pd.api.types.is_numeric_dtype(s):
+            # 0/1 as stored; a missing value reads as D, matching the Julia side's
+            # Bool.(coalesce.(df.is_B, false)).
+            return pd.to_numeric(s, errors='coerce').fillna(0) != 0
+        # Text, from a CSV writer that spelled the column out ("true"/"True"/"1").
+        return s.astype(str).str.strip().str.lower().isin(('1', 'true', 't', 'yes'))
+    logging.warning(
+        "Column 'is_B' not found in the market panel: this panel predates the stored "
+        "firm-type column. Falling back to the CODMUN_IBGE sentinel; re-run "
+        "panel_6_market.py to store the authoritative column."
+    )
+    return df['CODMUN_IBGE'].astype(str) != '0'
+
+
 def _reshape_panel_from_wide(df_raw: pd.DataFrame) -> pd.DataFrame:
     print("Reshaping panel from wide to long...")
     id_vars = ['CodConglomeradoPrudencial', 'mca_code', 'year', 'quarter']
     df_raw = df_raw.drop_duplicates(subset=id_vars).copy()  # de-fragment
-    df_raw['is_B'] = (df_raw['CODMUN_IBGE'].astype(str) != '0')
+    df_raw['is_B'] = _resolve_is_B(df_raw)
     df = pd.wide_to_long(df_raw, stubnames=['dep_a', 'spread_a', 'spread_ann_a'], i=id_vars, j='deposit_type').reset_index()
     return df.rename(columns={'dep_a': 'deposit_balance', 'spread_a': 'spread_qoq', 'spread_ann_a': 'spread_ann'})
 
@@ -140,7 +174,7 @@ def _reshape_panel(df_raw: pd.DataFrame) -> pd.DataFrame:
     df_raw['mca_code'] = df_raw['mca_code'].astype(str)
     if 'dep_a1' in df_raw.columns: return _reshape_panel_from_wide(df_raw)
     df = df_raw.copy()
-    if 'is_B' not in df.columns: df['is_B'] = (df['CODMUN_IBGE'].astype(str) != '0')
+    df['is_B'] = _resolve_is_B(df)
     if 'deposit_type' in df.columns: df = df[df['deposit_type'] != 3].copy()
     pre_k5_mask = (df['deposit_type'] == 5) & ((df['year'] < 2020) | ((df['year'] == 2020) & (df['quarter'] < 2)))
     if pre_k5_mask.any():
@@ -150,7 +184,7 @@ def _reshape_panel(df_raw: pd.DataFrame) -> pd.DataFrame:
 
 def build_base_panel(panel_csv: Path) -> pd.DataFrame:
     print(f"Loading {panel_csv}...")
-    df_raw = pd.read_csv(panel_csv, dtype={'mca_code': str}, low_memory=False)
+    df_raw = load_panel_cached(panel_csv, dtype={'mca_code': str}, low_memory=False)
     df = _reshape_panel(df_raw)
 
     # fgc_covered: FGC insures types 1 (savings), 2 (demand), 4 (time deposits).
@@ -203,8 +237,8 @@ def build_base_panel(panel_csv: Path) -> pd.DataFrame:
         df['post_2020'] = (df['year'] >= 2020).astype(int)
         df['pix_exists'] = ((df['year'] > 2020) | ((df['year'] == 2020) & (df['quarter'] == 4))).astype(float)
 
-    if 'CODMUN_IBGE' in df.columns:
-        df['dummy_D_type'] = (df['CODMUN_IBGE'].astype(str) == '0').astype(float)
+    # D-type dummy: the complement of the authoritative firm-type column.
+    df['dummy_D_type'] = (~_resolve_is_B(df)).astype(float)
 
     if 'is_coop' in df.columns:
         df['is_coop'] = df['is_coop'].fillna(0.0)

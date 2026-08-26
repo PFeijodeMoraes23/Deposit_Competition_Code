@@ -142,17 +142,22 @@ def coerce_cnpj(series):
     return pd.to_numeric(series, errors="coerce").astype("Int64")
 
 # 2.2) CNPJ to conglomerate map
-def build_cnpj_conglomerate_map() -> dict:
-    """
-    Return {cnpj_int: (CodConglomeradoPrudencial, CNPJ_Lider_int, NomeInstituicao)}
-    by scanning IF Data List files (all quarters).
 
-    Two matching strategies:
-      1. CnpjInstituicaoLider  →  conglomerate  (always available; maps the leader's CNPJ)
-      2. numeric CodInst       →  conglomerate  (when an individual institution's CodInst
-                                                 equals its own CNPJ, i.e. it is the leader)
-    Strategy 1 is applied after strategy 2 so leaders take priority.
+_IF_LIST_SNAPSHOTS: "pd.DataFrame | None" = None
+
+
+def _load_if_list_snapshots() -> pd.DataFrame:
+    """Concatenate every IF Data List snapshot into one frame (cached for the run).
+
+    Columns: CodInst, Data, NomeInstituicao, CodConglomeradoPrudencial,
+    CnpjInstituicaoLider.  ``Data`` is the snapshot stamp (YYYYMM); it is what lets a
+    caller order a conglomerate's spells.  ``build_cnpj_conglomerate_map`` drops it
+    again and de-duplicates on the other four columns.
     """
+    global _IF_LIST_SNAPSHOTS
+    if _IF_LIST_SNAPSHOTS is not None:
+        return _IF_LIST_SNAPSHOTS
+
     list_files = sorted(glob.glob(os.path.join(IF_LIST_DIR, "IF_DATA_List_*.csv")))
     # Skip headers-only stubs (< 500 bytes = no data rows)
     list_files = [f for f in list_files if os.path.getsize(f) > 500]
@@ -163,13 +168,186 @@ def build_cnpj_conglomerate_map() -> dict:
     for path in list_files:
         try:
             df = pd.read_csv(path, encoding="latin1", low_memory=False,
-                             usecols=["CodInst", "NomeInstituicao",
+                             usecols=["CodInst", "Data", "NomeInstituicao",
                                       "CodConglomeradoPrudencial", "CnpjInstituicaoLider"])
             frames.append(df)
         except Exception as e:
             logging.warning(f"Could not read List file {os.path.basename(path)}: {e}")
 
-    lf = pd.concat(frames, ignore_index=True).drop_duplicates()
+    _IF_LIST_SNAPSHOTS = pd.concat(frames, ignore_index=True)
+    return _IF_LIST_SNAPSHOTS
+
+
+# A prudential code only starts carrying reported balances -- IF Data report 3, and
+# bank_chars_panel.csv, which panel_4 builds from the same source -- in 2016.  Spell
+# length is measured from this snapshot on, so a firm's identity is the code it holds
+# over the data the rest of the pipeline can actually price, not over List history no
+# downstream table covers.  Banco PSA Finance/Stellantis is the case that turns on it:
+# C0080594 spans more List snapshots outright (10 vs 9) purely on its 2014-15 rows,
+# while every reported balance the firm has sits under C0087298.
+IDENTITY_SPELL_START = 201603
+
+_CANONICAL_CONGLOMERATE_MAP: "tuple | None" = None
+
+
+def build_conglomerate_canonical_map() -> tuple:
+    """
+    Return ``(canonical_code, canonical_lider)``.
+
+    ``canonical_code``  maps every CodConglomeradoPrudencial appearing in the IF Data
+                        List files to the ONE code that stands for that firm over its
+                        whole life.  A code needing no collapse maps to itself.
+    ``canonical_lider`` maps a canonical code to the CNPJ of its lead institution.
+
+    Why this exists
+    ---------------
+    BCB issues a new prudential code whenever a conglomerate's composition or lead
+    institution changes, so one bank carries several codes over the sample: Banco
+    Gerador C0081809 becomes Agibank C0083694 at the 2016-Q3 acquisition, Banco
+    Indusval C0080415 becomes Banco Pleno C0088668 in 2025-Q3, Banco BBM C0080161
+    becomes Bocom BBM C0084624 in 2017.  The two tiers of ``deposits_panel`` pick the
+    code up at different moments -- ESTBAN once, through the static CNPJ map built
+    below; IF Data quarter by quarter, as reported -- so one bank can end up filed
+    under two codes at the same time.  The ESTBAN/IF Data de-duplication in ``main()``
+    compares CODE to CODE, so it cannot see that collision and the bank's deposits are
+    counted twice: Agibank's 2025 ``dep_a4`` summed to R$162.6bn against a true
+    R$81.3bn, and Industval was simultaneously a national firm and a local bank in 12
+    markets.  Mapping both tiers onto one code per firm BEFORE that comparison is what
+    lets the de-duplication do its job.  It also holds a firm's identity together
+    across codes that merely succeed one another with no overlap at all, which is what
+    the entry-dynamics and BBL steps downstream read as entry and exit.
+
+    How a firm is identified
+    ------------------------
+    By the CNPJ of its lead institution (``CnpjInstituicaoLider``), read ONLY off rows
+    whose ``CodInst`` is a numeric CNPJ, i.e. individual member institutions.  A List
+    file also carries rows whose ``CodInst`` is a *financial* conglomerate code
+    (C005xxxx); on those the leader field names the financial group's leader, a
+    different firm, and using them would chain unrelated prudential codes together --
+    it is why CNPJ 61723847 looks like the leader of both Magliano C0082839 and Neon
+    C0085702.  Each code then takes the leader of its LAST snapshot, which makes
+    code -> firm a partition rather than a graph: Banco Original C0080903 is not
+    swallowed by PicPay C0088022 merely because PicPay's payment institution led it
+    during 2023-24.
+
+    Which of a firm's codes wins
+    ----------------------------
+    The code the firm occupies in the most List snapshots from ``IDENTITY_SPELL_START``
+    on -- its dominant spell over the reported period -- ties broken by the later
+    spell, then alphabetically, so the pick is deterministic.  Dominant spell rather
+    than newest code because the code is also the merge key against the sources that
+    describe the firm: bank_chars_panel.csv (equity, total_assets, segment, is_coop,
+    is_state_owned, and through them the LOO instruments) and the COSIF rates panel_3
+    appends.  Picking a code those files barely cover would blank a firm's
+    characteristics for most of its life without leaving a hole anyone would notice.
+    Measured over the nine firms this collapses, the rule selects the better-covered
+    code in bank_chars_panel.csv in all nine.
+
+    What this does NOT decide
+    -------------------------
+    Whether a firm ends up national (Tier 2) or local (Tier 1).  That is the tier rule
+    in ``main()``, and it returns the same answer whichever code is canonical, because
+    after canonicalisation both tiers carry that one code either way.
+    """
+    global _CANONICAL_CONGLOMERATE_MAP
+    if _CANONICAL_CONGLOMERATE_MAP is not None:
+        return _CANONICAL_CONGLOMERATE_MAP
+
+    lf = _load_if_list_snapshots()
+    lf = lf.dropna(subset=["CodConglomeradoPrudencial"]).copy()
+    lf["Data"] = pd.to_numeric(lf["Data"], errors="coerce")
+    lf = lf.dropna(subset=["Data"])
+    lf["lider_int"]   = coerce_cnpj(lf["CnpjInstituicaoLider"])
+    lf["codinst_int"] = coerce_cnpj(lf["CodInst"])
+
+    # Leader of each code, from member-institution rows in the code's last snapshot.
+    # Modal leader, then highest CNPJ, so the pick never depends on row order.
+    inst = lf[lf["codinst_int"].notna() & lf["lider_int"].notna()]
+    tail = inst[inst["Data"] == inst.groupby("CodConglomeradoPrudencial")["Data"].transform("max")]
+    lider_pick = (
+        tail.groupby(["CodConglomeradoPrudencial", "lider_int"]).size().rename("n").reset_index()
+            .sort_values(["CodConglomeradoPrudencial", "n", "lider_int"],
+                         ascending=[True, False, False])
+            .drop_duplicates(subset=["CodConglomeradoPrudencial"])
+    )
+    code_lider = {row.CodConglomeradoPrudencial: int(row.lider_int)
+                  for row in lider_pick.itertuples(index=False)}
+
+    spells = (lf.groupby("CodConglomeradoPrudencial")["Data"]
+                .agg(n_all="nunique", last_snapshot="max"))
+    n_reported = (lf[lf["Data"] >= IDENTITY_SPELL_START]
+                    .groupby("CodConglomeradoPrudencial")["Data"].nunique()
+                    .rename("n_reported"))
+    spells = spells.join(n_reported, how="left").reset_index()
+    # A code seen only before IDENTITY_SPELL_START keeps its full-history count, so a
+    # firm whose whole life predates the reported period still resolves to something.
+    spells["n_spell"] = spells["n_reported"].fillna(0)
+    spells.loc[spells["n_spell"] == 0, "n_spell"] = spells["n_all"]
+    spells["lider"] = spells["CodConglomeradoPrudencial"].map(code_lider)
+
+    canonical_code  = {c: c for c in spells["CodConglomeradoPrudencial"]}
+    canonical_lider = dict(code_lider)
+
+    n_collapsed = 0
+    for lider, grp in spells.dropna(subset=["lider"]).groupby("lider"):
+        if len(grp) < 2:
+            continue
+        grp = grp.sort_values(["n_spell", "last_snapshot", "CodConglomeradoPrudencial"],
+                              ascending=[False, False, True])
+        keep   = grp["CodConglomeradoPrudencial"].iloc[0]
+        merged = list(grp["CodConglomeradoPrudencial"].iloc[1:])
+        for code in merged:
+            canonical_code[code] = keep
+            canonical_lider.pop(code, None)
+        n_collapsed += len(merged)
+        spans = ", ".join(
+            f"{row.CodConglomeradoPrudencial} ({int(row.n_spell)} snapshots from "
+            f"{IDENTITY_SPELL_START}, last {int(row.last_snapshot)})"
+            for row in grp.itertuples(index=False)
+        )
+        logging.info(f"Conglomerate identity: leader {int(lider)} -> {keep}   [{spans}]")
+
+    logging.info(f"Conglomerate canonical map: {len(canonical_code)} codes, "
+                 f"{n_collapsed} collapsed onto another code of the same firm")
+
+    _CANONICAL_CONGLOMERATE_MAP = (canonical_code, canonical_lider)
+    return _CANONICAL_CONGLOMERATE_MAP
+
+
+def build_cnpj_conglomerate_map() -> dict:
+    """
+    Return {cnpj_int: (CodConglomeradoPrudencial, CNPJ_Lider_int, NomeInstituicao)}
+    by scanning IF Data List files (all quarters).
+
+    Two matching strategies:
+      1. CnpjInstituicaoLider  →  conglomerate  (always available; maps the leader's CNPJ)
+      2. numeric CodInst       →  conglomerate  (when an individual institution's CodInst
+                                                 equals its own CNPJ, i.e. it is the leader)
+    Strategy 1 is applied after strategy 2 so leaders take priority.
+
+    The code returned is the CANONICAL one from ``build_conglomerate_canonical_map``
+    and the leader is that code's leader, so a bank keeps one identity for its whole
+    history and carries the same code IF Data reports for it.  Which of a firm's codes
+    the two strategies happen to land on is therefore immaterial -- they all resolve to
+    the same canonical code.
+    """
+    _snap = _load_if_list_snapshots()
+    _name_cols = ["CodInst", "NomeInstituicao", "CodConglomeradoPrudencial",
+                  "CnpjInstituicaoLider"] + (["Data"] if "Data" in _snap.columns else [])
+    lf = _snap[_name_cols].drop_duplicates()
+
+    # An institution's own display name is the one on ITS OWN List row -- the row whose
+    # CodInst is that CNPJ. Reading a name off any other row of the same conglomerate names
+    # a different company: the Original conglomerate contained PicPay until 2024, Bradesco
+    # contains Agora Corretora, Banco PAN contains an entity called "SS".
+    _own = lf.copy()
+    _own["codinst_int"] = coerce_cnpj(_own["CodInst"])
+    _own = _own.dropna(subset=["codinst_int"])
+    if "Data" in _own.columns:
+        _own = _own.sort_values("Data")          # latest name a firm reported for itself
+    own_name = (_own.drop_duplicates(subset=["codinst_int"], keep="last")
+                    .set_index(_own.drop_duplicates(subset=["codinst_int"], keep="last")
+                               ["codinst_int"].astype(int))["NomeInstituicao"])
 
     # Keep only rows that have a prudential conglomerate code
     lf = lf.dropna(subset=["CodConglomeradoPrudencial"])
@@ -181,6 +359,7 @@ def build_cnpj_conglomerate_map() -> dict:
     lf["codinst_int"] = coerce_cnpj(lf["CodInst"])
     strat2 = lf.dropna(subset=["codinst_int"]).copy()
     strat2["cnpj_k"] = strat2["codinst_int"].astype(int)
+    # strat2 is keyed on CodInst, so its NomeInstituicao is already the institution's own.
     strat2["norm_name"]   = strat2["NomeInstituicao"].map(normalize_str)
     strat2["lider_clean"]  = strat2["lider_int"].where(strat2["lider_int"].notna()).map(
         lambda v: int(v) if pd.notna(v) else None
@@ -189,15 +368,29 @@ def build_cnpj_conglomerate_map() -> dict:
         mapping[row.cnpj_k] = (row.CodConglomeradoPrudencial, row.lider_clean, row.norm_name)
 
     # Strategy 1: CnpjInstituicaoLider (overrides – leaders take precedence)
-    strat1 = lf.dropna(subset=["lider_int"])
-    # Use the most recent name for each leader
+    strat1 = lf.dropna(subset=["lider_int"]).copy()
+    # One row per leader. The code it carries is replaced by the firm's canonical code
+    # below, so the pick has no bearing on identity -- it only has to be reproducible.
     name_map = (strat1.sort_values("NomeInstituicao")
-                      .drop_duplicates(subset=["lider_int"], keep="last"))
-    name_map = name_map.copy()
+                      .drop_duplicates(subset=["lider_int"], keep="last")).copy()
     name_map["cnpj_k"] = name_map["lider_int"].astype(int)
-    name_map["norm_name"]   = name_map["NomeInstituicao"].map(normalize_str)
+    # Display name: the leader's OWN List row, falling back to this row only when the
+    # leader never appears as an institution in its own right.
+    name_map["display"] = (name_map["cnpj_k"].map(own_name)
+                                             .fillna(name_map["NomeInstituicao"]))
+    name_map["norm_name"] = name_map["display"].map(normalize_str)
     for row in name_map[["cnpj_k", "CodConglomeradoPrudencial", "norm_name"]].itertuples(index=False):
         mapping[row.cnpj_k] = (row.CodConglomeradoPrudencial, row.cnpj_k, row.norm_name)
+
+    # Resolve every bank onto its firm's canonical code and that code's leader, so the
+    # ESTBAN side of the panel names a firm exactly the way the IF Data side does.
+    canonical_code, canonical_lider = build_conglomerate_canonical_map()
+    mapping = {
+        cnpj: (canonical_code.get(code, code),
+               canonical_lider.get(canonical_code.get(code, code), lider),
+               name)
+        for cnpj, (code, lider, name) in mapping.items()
+    }
 
     logging.info(f"CNPJ→conglomerate map: {len(mapping)} entries")
     return mapping
@@ -543,11 +736,25 @@ def build_estban_panel(cnpj_map: dict) -> pd.DataFrame:
     # inflating G and violating the panel structure.
     # We instead aggregate purely on the organisational keys and re-attach a
     # representative name afterwards.
-    group_cols = ["CodConglomeradoPrudencial", "CNPJ_Lider", "CODMUN_IBGE", "YEAR", "Quarter"]
+    # CNPJ_Lider is excluded for the same reason and re-attached the same way: it is a
+    # property of the conglomerate, not of the market-quarter, so two member banks
+    # whose List rows name different leaders would split one observation into two rows
+    # carrying the same market and quarter.
+    group_cols = ["CodConglomeradoPrudencial", "CODMUN_IBGE", "YEAR", "Quarter"]
 
     panel = (
         estban.groupby(group_cols, dropna=False).agg(agg_cols).reset_index()
     )
+
+    # Attach representative CNPJ_Lider: the modal leader across the conglomerate's
+    # member banks.  This also carries the 'CNPJ_<cnpj>' fallback rows, where the code
+    # is unique to one bank and the modal leader is that bank's own CNPJ.
+    cong_lider = (
+        estban.dropna(subset=["CNPJ_Lider"])
+              .groupby("CodConglomeradoPrudencial")["CNPJ_Lider"]
+              .agg(lambda s: s.value_counts().idxmax())
+    )
+    panel["CNPJ_Lider"] = panel["CodConglomeradoPrudencial"].map(cong_lider)
 
     # Attach representative NomeInstituicao: prefer the lead institution's own name
     # (i.e. the entry where institution CNPJ == CNPJ_Lider).
@@ -625,6 +832,43 @@ def build_ifdata_panel() -> pd.DataFrame:
     df = df.dropna(subset=["Quarter", "CodConglomeradoPrudencial"])
     df["Quarter"] = df["Quarter"].astype(int)
 
+    # One prudential code can be carried by more than one reporting entity in the same
+    # quarter: the conglomerate's own aggregate row (CNPJ == the code), rows of member
+    # institutions, and the row of a FINANCIAL conglomerate sitting inside it.  Their
+    # values repeat the same balance, so summing them counts it twice -- Nu Pagamentos
+    # C0084693 reports dep_a4 of R$75.3bn for 2022-Q4 under two entities, and the panel
+    # carried both.  Keep the conglomerate's own row wherever it exists; every one of
+    # the 663 repeated account-quarters has exactly one, and the handful of
+    # account-quarters with no such row have only a single row anyway.
+    if "CNPJ" in df.columns:
+        _acct_key = ["CodConglomeradoPrudencial", "Year", "Quarter", "NumeroConta"]
+        df["_own_row"] = (df["CNPJ"].astype(str)
+                          == df["CodConglomeradoPrudencial"].astype(str))
+        _n_before = len(df)
+        df = (df.sort_values("_own_row", ascending=False, kind="stable")
+                .drop_duplicates(subset=_acct_key, keep="first")
+                .drop(columns="_own_row"))
+        if (_repeats := _n_before - len(df)):
+            logging.info(
+                f"IF Data: dropped {_repeats:,} rows repeating a conglomerate's account "
+                f"under a member or financial-conglomerate entity."
+            )
+
+    # Names are keyed on the code AS REPORTED, before canonicalisation, so a code that
+    # survives keeps exactly the name it had.
+    nome_src = (df[["CodConglomeradoPrudencial", "NomeInstituicao"]].copy()
+                if "NomeInstituicao" in df.columns else None)
+
+    # Collapse each firm's successive codes onto its canonical one (see
+    # build_conglomerate_canonical_map).  Done BEFORE the pivot so that a quarter
+    # reported under both an old and a new code -- Agibank's 2016, where Banco Gerador
+    # C0081809 and Agiplan C0083694 overlap until the Q3 acquisition -- becomes one
+    # firm rather than two, and so that the ESTBAN/IF Data de-duplication in main()
+    # compares like with like.
+    canonical_code, canonical_lider = build_conglomerate_canonical_map()
+    _reported_code = df["CodConglomeradoPrudencial"]
+    df["CodConglomeradoPrudencial"] = _reported_code.map(canonical_code).fillna(_reported_code)
+
     # Pivot to wide format.
     # NomeInstituicao is excluded from group_cols: a prudential conglomerate can
     # have multiple member institutions in the report (e.g. XP Investimentos +
@@ -633,18 +877,34 @@ def build_ifdata_panel() -> pd.DataFrame:
     # aggregate purely on the organisational keys and re-attach a representative
     # name afterwards (preferring any entry whose NomeInstituicao contains
     # "PRUDENCIAL", falling back to the first available name).
-    group_cols = ["CodConglomeradoPrudencial", "CNPJ_Lider", "Year", "Quarter"]
+    # CNPJ_Lider is excluded for the same reason: the report's leader field changes
+    # when the lead institution changes, and Nu Pagamentos C0084693 carries two leaders
+    # at once in 2022-Q4 and 2023-Q1/Q2, which split one conglomerate-quarter into two
+    # rows holding the same deposits.  It is re-attached per conglomerate below.
+    group_cols = ["CodConglomeradoPrudencial", "Year", "Quarter"]
     for col in group_cols:
         if col not in df.columns:
             df[col] = pd.NA
+    if "CNPJ_Lider" not in df.columns:
+        df["CNPJ_Lider"] = pd.NA
 
     pivot = (
         df.groupby(group_cols + ["dep_col"], dropna=False)["Value"].sum().unstack("dep_col").reset_index()
     )
 
+    # Attach CNPJ_Lider: the canonical code's lead institution, falling back to the
+    # modal leader the report itself gives for codes the List files do not cover.
+    reported_lider = (df.dropna(subset=["CNPJ_Lider"])
+                        .groupby("CodConglomeradoPrudencial")["CNPJ_Lider"]
+                        .agg(lambda s: s.value_counts().idxmax()))
+    pivot["CNPJ_Lider"] = pivot["CodConglomeradoPrudencial"].map(canonical_lider)
+    pivot["CNPJ_Lider"] = pivot["CNPJ_Lider"].fillna(
+        pivot["CodConglomeradoPrudencial"].map(reported_lider)
+    )
+
     # Derive representative NomeInstituicao: prefer the "PRUDENCIAL" entry.
-    if "NomeInstituicao" in df.columns:
-        nome_df = df[["CodConglomeradoPrudencial", "NomeInstituicao"]].drop_duplicates()
+    if nome_src is not None:
+        nome_df = nome_src.drop_duplicates()
         nome_df = nome_df.dropna(subset=["NomeInstituicao"])
         # sort so "PRUDENCIAL" names appear first, then take first per conglomerate
         nome_df = nome_df.assign(
@@ -680,6 +940,11 @@ def build_ifdata_panel() -> pd.DataFrame:
 ## 3) Main execution:
 
 def main():
+    # Step 0: Resolve one conglomerate code per firm.  Both tiers are built against
+    # this, so ESTBAN and IF Data name the same firm the same way and the Tier-1/Tier-2
+    # de-duplication in step 4c can see when they describe the same deposits.
+    canonical_code, _canonical_lider = build_conglomerate_canonical_map()
+
     # Step 1: Build CNPJ → conglomerate mapping
     cnpj_map = build_cnpj_conglomerate_map()
 
@@ -703,7 +968,15 @@ def main():
     if_a5.rename(columns={"dep_a5": "national_a5"}, inplace=True)
     if_a5 = if_a5.dropna(subset=["national_a5"])
     
-    # 2. Merge into ESTBAN
+    # 2. Merge into ESTBAN.  ifdata_full holds one row per conglomerate-quarter, so
+    #    this left join cannot multiply ESTBAN rows; assert it rather than assume it,
+    #    because a duplicated national row silently doubles a whole municipal footprint.
+    _dup_a5 = if_a5.duplicated(subset=["CodConglomeradoPrudencial", "Year", "Quarter"]).sum()
+    if _dup_a5:
+        raise ValueError(
+            f"IF Data national a5 has {_dup_a5} duplicate conglomerate-quarters; the "
+            f"merge below would multiply ESTBAN rows."
+        )
     estban_panel = estban_panel.merge(
         if_a5, on=["CodConglomeradoPrudencial", "Year", "Quarter"], how="left"
     )
@@ -736,8 +1009,57 @@ def main():
     estban_panel.drop(columns=["national_a5", "national_estban_a1", "a1_weight"], inplace=True)
 
     # Step 4c: Filter IF Data panel to strictly Non-ESTBAN conglomerates (Tier-2)
+    #
+    # TIER RULE, stated explicitly because it now decides cases it used to miss: when a
+    # firm is present in BOTH sources, its ESTBAN municipality rows are what survive and
+    # its IF Data national row is dropped.  That has always been the panel's design --
+    # Tier 2 exists to cover the institutions ESTBAN cannot see -- and canonicalising
+    # the codes only makes the test fire on firms whose two tiers used to carry
+    # different codes and so both survived.  The rule does not depend on which of a
+    # firm's codes is canonical: after canonicalisation both tiers carry that one code
+    # either way, so the same tier wins.
+    #
+    # Consequence to keep in view for Agibank, Industval and BBM.  They stop being
+    # counted twice and stay LOCAL, which for Agibank means its national row goes and
+    # its ESTBAN rows are all that is left.  ESTBAN reports the municipality where a
+    # bank BOOKS a balance, not where it serves, so Agibank's whole balance sits in one
+    # municipality at a time and migrates Recife (2013-16) -> Porto Alegre (2016-21) ->
+    # Campinas (2021-25) as the head office moves.  For a bank with a branch network
+    # that is a fair summary; for one whose network is 991 postos across 679
+    # municipalities it is not, and the moves read downstream as multi-billion entry and
+    # exit events in the two markets involved.
+    _collapsed_codes = {c for c, keep in canonical_code.items() if c != keep}
+    for _keep in sorted({canonical_code[c] for c in _collapsed_codes}):
+        if _keep not in estban_conglomerates:
+            continue
+        _n_est = int((estban_panel["CodConglomeradoPrudencial"] == _keep).sum())
+        _n_ifd = int((ifdata_full["CodConglomeradoPrudencial"] == _keep).sum())
+        _muns = estban_panel.loc[estban_panel["CodConglomeradoPrudencial"] == _keep,
+                                 "CODMUN_IBGE"].nunique()
+        logging.warning(
+            f"Tier rule: {_keep} is reported in both sources once its codes are "
+            f"collapsed. Keeping {_n_est} ESTBAN rows across {_muns} municipalities and "
+            f"dropping {_n_ifd} IF Data national rows; the firm's surviving geography is "
+            f"its ESTBAN booking municipality, not its service network."
+        )
+
     ifdata_panel = ifdata_full[~ifdata_full["CodConglomeradoPrudencial"].isin(estban_conglomerates)].copy()
-    
+
+    # Every firm must now sit in exactly one tier and hold exactly one code.
+    _both = (set(estban_panel["CodConglomeradoPrudencial"].dropna())
+             & set(ifdata_panel["CodConglomeradoPrudencial"].dropna()))
+    if _both:
+        raise ValueError(f"{len(_both)} conglomerates survive in both tiers: {sorted(_both)[:10]}")
+    _codes_per_lider = (pd.concat([estban_panel, ifdata_panel])
+                          .dropna(subset=["CNPJ_Lider"])
+                          .groupby("CNPJ_Lider")["CodConglomeradoPrudencial"].nunique())
+    if (_codes_per_lider > 1).any():
+        raise ValueError(
+            f"{int((_codes_per_lider > 1).sum())} lead institutions still carry more than "
+            f"one conglomerate code: {_codes_per_lider[_codes_per_lider > 1].to_dict()}"
+        )
+
+
     # Step 5: Stack both tiers
     final_col_order = [
         "CodConglomeradoPrudencial", "CNPJ_Lider", "NomeInstituicao",

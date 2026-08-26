@@ -18,18 +18,20 @@
 # a GPU stage job.
 #
 # WHAT MUST EXIST FIRST
-#   bash cluster_preflight.sh must pass (Julia module + Manifest agree), and the
-#   reference demand parquet + demographics must be staged in data/input.
+#   bash cluster_preflight.sh must pass (Julia module + Manifest agree), plus its
+#   TWO inputs, which come from opposite halves of the tree:
+#     data/output/demand_prep/demand_1_spec_12.parquet   the reference panel, built
+#         by the sleepiness prep step and verified by gate G2 — cluster-produced,
+#         never uploaded.
+#     data/input/demographics_sigma.parquet              an UPLOAD. Building it needs
+#         seven muni panels (ANATEL alone is 1.59 GB), so producing 8.7 MB here would
+#         cost a 1.6 GB upload; panel_8_demographics_sigma.py stays local.
 # WHAT TO RUN NEXT
-#   bash blp_run.sh          (or let blp_run.sh --draws submit this for you and
-#                             chain the estimation afterok on it)
+#   bash blp_run.sh          (which submits this itself when the draws are absent,
+#                             and chains the estimation afterok on it)
 #
 # Submit:  sbatch blp_draws_job.sh
 #          R=2000 SEED=42 SPEC=12 sbatch --export=ALL blp_draws_job.sh
-#
-# THIS SCRIPT IS NEW. submit_blp_1_draws.sh is still present and still works; it
-# is the fallback and is retired only after one successful cluster cycle. Nothing
-# in it has been modified.
 # ==============================================================================
 set -uo pipefail
 CL_DIR="${SLURM_SUBMIT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
@@ -37,6 +39,13 @@ CL_DIR="${SLURM_SUBMIT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
 set -e
 
 mkdir -p "${CL_ROOT}/logs"
+
+# The skeleton, then the step dirs. cl_export_step_dirs creates data/output/blp/draws,
+# which is where blp_1_draws.jl writes under --hpc (of_root.jl's draws_dir), and the
+# split block below reads back through the same CL_STEP_DRAWS.
+cl_bootstrap_tree
+cl_export_step_dirs
+
 cl_load_julia
 
 # ── Draw parameters: ONE source of truth for the julia call AND the split below.
@@ -81,7 +90,10 @@ echo "Draws complete: $(date)"
 # halton_nu (KB) and demo_key_index (MB) stay whole. Idempotent: stale parts are
 # cleared first, and the parts + checksum carry RELATIVE names so `sha256sum -c`
 # is portable.
-DRAWS_OUT="${CL_DATA_OUT}/BLP_DRAWS"      # matches blp_1_draws.jl get_paths(is_hpc=true)
+# The one place the draws live on the cluster: CL_STEP_DRAWS is data/output/blp/draws,
+# the same path of_root.jl's draws_dir(out_dir) hands blp_1_draws.jl under --hpc, so the
+# split below cannot address a directory the writer never used.
+DRAWS_OUT="${CL_STEP_DRAWS}"
 DEMO_NAME="demo_draws_R${R}_seed${SEED}.jls"
 DEMO="${DRAWS_OUT}/${DEMO_NAME}"
 if [[ -f "${DEMO}" ]]; then

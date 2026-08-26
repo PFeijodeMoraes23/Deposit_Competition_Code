@@ -515,6 +515,9 @@ def patch_market_panel(
     merged = merged.copy()  # collapses fragmented frame
     out_path = PANEL_DIR / "market_panel_with_fees.csv"
     merged.to_csv(out_path, index=False)
+    # market_panel_with_fees.csv has its own sidecar, served whenever USE_FEE_PANEL=1.
+    from utils import refresh_panel_cache
+    refresh_panel_cache(out_path, merged)
 
     new_cols = [c for c in merged.columns if c not in market.columns or c == "cosif_fee_valid"]
     log.info("Saved: %s | %d rows x %d cols (+%d new fee cols)",

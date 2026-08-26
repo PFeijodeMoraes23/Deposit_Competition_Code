@@ -5,24 +5,28 @@
 #   Prints a numbered verdict block: what Julia the cluster actually offers,
 #   whether Manifest.toml matches it (i.e. whether a Pkg.resolve is required),
 #   whether each sysimage is usable, whether the conda env exists and imports the
-#   stack the BBL solve needs, and which staged inputs are present.
+#   stack the BBL solve needs, whether the output step tree is writable, and which
+#   staged inputs are present.
+#
+# WHERE IT NORMALLY RUNS: inside gate G0, i.e.
+#     sbatch --export=ALL,ENV_STEP=preflight env_job.sh
+#   Nothing here belongs on the login node — it loads a Julia module, LOADS both
+#   sysimages and imports the Python stack — and pipeline_all.sh submits that job
+#   for you. Running it by hand on the login node still works and is still useful
+#   when you are diagnosing a refusal; it just does more work there than it should.
 #
 # WHAT MUST EXIST FIRST
 #   Only the uploaded scripts/ bundle. cluster_lib.sh must sit next to this file.
 #
 # WHAT TO RUN NEXT
 #   Whatever the verdict block tells you: a resolve (env_job.sh ENV_STEP=resolve),
-#   a sysimage build, an `export`, or straight on to blp_run.sh / bbl_run.sh /
-#   cf_run.sh / pipeline_run.sh.
-#
-# THESE SCRIPTS ARE NEW. The submit_*.sh / zip_*.sh scripts they replace are still
-# present and still work; they are the fallback and are retired only after one
-# successful cluster cycle. Nothing in them has been modified.
+#   a sysimage build, an `export`, or straight on to pipeline_all.sh.
 #
 # Usage:  bash cluster_preflight.sh [--routines "3 4"] [--will-build "sysimage draws"]
 #                                   [--dry-run] [-h]
 #         --will-build names artifacts this run creates: reported, but not blocking.
 #         JULIA_MODULE=Julia/1.10.4-foss-2022b bash cluster_preflight.sh
+#         CL_VERBOSE=1 adds the verbatim `module avail Julia` dump.
 # --dry-run is accepted and is a NO-OP: this script never submits anything.
 # ==============================================================================
 set -uo pipefail
@@ -41,7 +45,7 @@ while [[ $# -gt 0 ]]; do
         # caller says which it is. Still reported either way; only the verdict changes.
         --will-build) WILL_BUILD="$2"; shift ;;
         --dry-run)  ;;                       # no-op: this script submits nothing
-        -h|--help)  sed -n '2,26p' "${BASH_SOURCE[0]}"; exit 0 ;;
+        -h|--help)  sed -n '2,30p' "${BASH_SOURCE[0]}"; exit 0 ;;
         *) echo "unknown option: $1 (see -h)" >&2; exit 2 ;;
     esac
     shift
@@ -71,16 +75,50 @@ echo "(0) SCRIPT BUNDLE"
 LOGD="$(cl_log_dir)"
 echo "  log dir: ${LOGD}"
 for f in cluster_lib.sh env_job.sh blp_draws_job.sh blp_stage_job.sh blp_run.sh \
-         bbl_job.sh bbl_run.sh pipeline_run.sh cf_job.sh cf_run.sh cf_eq_run.sh \
+         bbl_job.sh bbl_run.sh cf_job.sh cf_run.sh cf_eq_run.sh \
          cluster_archive.sh sleep_job.sh sleep_run.sh logit_job.sh pipeline_all.sh; do
     if [[ -f "${CL_ROOT}/${f}" ]]; then echo "  ok      ${f}"
     else echo "  MISSING ${f}  <- re-upload the code bundle"; note_fail; fi
 done
 
+# ── (0b) the output step tree ────────────────────────────────────────────────
+# data/output is split one folder per pipeline step, and every producer writes to
+# exactly one of them. A folder that is absent or read-only is a failure mode with
+# no early symptom: Julia's mkpath and Python's os.makedirs both raise deep inside a
+# job that has already burned its queue time, and a full-quota project directory
+# fails the WRITE rather than the mkdir, hours later still. So test both here, by
+# actually creating and removing a probe file. cl_export_step_dirs creates the tree;
+# this section only reports on it, which is why a missing folder is a blocker rather
+# than something to fix silently — its absence means no job has bootstrapped yet.
+echo ""
+echo "(0b) OUTPUT STEP TREE  (exists + writable)"
+echo "  data/output: ${CL_DATA_OUT}"
+for d in "${CL_STEP_SLEEP}" "${CL_STEP_DEMAND}" "${CL_STEP_LOGIT}" "${CL_STEP_BLP}" \
+         "${CL_STEP_DRAWS}" "${CL_STEP_BBL}" "${CL_STEP_CF}" "${CL_STEP_DOWNLOAD}"; do
+    rel="${d#${CL_DATA_OUT}/}"
+    if [[ ! -d "${d}" ]]; then
+        echo "  MISSING ${rel}/  <- no job has bootstrapped yet; ENV_STEP=preflight creates it"
+        note_fail
+    elif ( : > "${d}/.pf_probe" ) 2>/dev/null; then
+        rm -f "${d}/.pf_probe"; echo "  ok      ${rel}/"
+    else
+        echo "  NOT WRITABLE ${rel}/  <- check the project quota and the directory mode"
+        note_fail
+    fi
+done
+
 # ── (1) what Julia does the cluster actually offer? ──────────────────────────
 echo ""
 echo "(1) JULIA MODULES AVAILABLE  (authoritative — nothing local can answer this)"
-cl_julia_candidates
+# The parsed candidate list IS the verdict; the verbatim `module avail Julia` dump is
+# 30+ lines of Lmod formatting that only matters when the parse comes back empty.
+# CL_VERBOSE is 1 inside a job (so G0's .out keeps the whole thing) and 0 on the
+# login node, which is where this script is read by a human.
+if [[ "${CL_VERBOSE}" == "1" ]]; then
+    cl_julia_candidates
+else
+    cl_julia_candidates | sed -n '/--- parsed candidates ---/,$p'
+fi
 
 # ── (2) load the configured module ───────────────────────────────────────────
 echo ""
@@ -95,9 +133,9 @@ else
     echo "  and retry with it, then keep it for the session:"
     echo "      JULIA_MODULE=<candidate> bash cluster_preflight.sh"
     echo "      export JULIA_MODULE=<candidate>"
-    echo "  Every consolidated script reads it from cluster_lib.sh; nothing else"
-    echo "  needs editing. (The OLD submit_*.sh scripts hardcode the module name at"
-    echo "  7 sites and would each need a hand edit — see cluster/RUNBOOK.md.)"
+    echo "  Every script reads it from cluster_lib.sh — that is the one site, and"
+    echo "  nothing else needs editing. Inside a job, pass it through:"
+    echo "      sbatch --export=ALL,ENV_STEP=preflight,JULIA_MODULE=<candidate> env_job.sh"
     echo "  -----------------------------------------------------------------------"
     exit 2
 fi
@@ -136,9 +174,10 @@ fi
 # A version match is NOT evidence the packages are installed. On 2026-08-20 the manifest
 # matched the loaded Julia, this section reported "RESOLVE REQUIRED: no", and the logit job
 # still died on `Package Parquet2 ... is required but does not seem to be installed`: the
-# legacy setup_julia_env.sh had instantiated into the DEFAULT depot (~/.julia) while
-# cluster_lib.sh points every job at ${CL_ROOT}/.julia_depot. Same Manifest.toml, different
-# library. The only decisive test is to load a package the way a job does.
+# instantiate had gone into the DEFAULT depot (~/.julia) while cluster_lib.sh points every
+# job at ${CL_ROOT}/.julia_depot. Same Manifest.toml, different library — which is why
+# env_job.sh sources cluster_lib.sh before it resolves, and why anything that installs
+# packages must do the same. The only decisive test is to load a package the way a job does.
 echo ""
 echo "(3b) DEPOT CONTENTS  (a version match is not proof the packages exist)"
 echo "  depot searched first: ${JULIA_DEPOT_PATH%%:*}"
@@ -167,9 +206,9 @@ else
     echo "  \"go look\", not as \"the depot is broken\" — the authority is whether the jobs run."
     echo ""
     echo "  If jobs DO die at import (\"Package X is required but does not seem to be"
-    echo "  installed\"), instantiate into the depot the jobs use. Use env_job.sh, not the"
-    echo "  legacy setup_julia_env.sh: env_job.sh sources cluster_lib.sh and inherits"
-    echo "  JULIA_DEPOT_PATH, while setup_julia_env.sh sets no depot and installs into"
+    echo "  installed\"), instantiate into the depot the jobs actually use. env_job.sh is"
+    echo "  the way to do that: it sources cluster_lib.sh and so inherits JULIA_DEPOT_PATH,"
+    echo "  which a bare \`julia -e 'Pkg.instantiate()'\` does not — that installs into"
     echo "  ~/.julia, which no job reads first:"
     echo "      sbatch --partition=day --time=02:00:00 --cpus-per-task=8 --mem=32G \\"
     echo "             --export=ALL,ENV_STEP=resolve env_job.sh"
@@ -309,36 +348,34 @@ if [[ -f "${MANIFEST}" ]]; then
 else
     echo "  cluster/upload_manifest.txt not found — falling back to the core checks:"
     cl_need_draws "${R:-2000}" "${SEED:-42}" || note_fail_unless_building draws
+    # forward_rf_qoq.csv is the one BBL input that can only be built off-cluster
+    # (cf_forward_rf.py talks to the BCB API and compute nodes have no internet), so
+    # it blocks. The fitted policy does NOT: bbl_run.sh runs it as a pre-step by
+    # default, into data/output/bbl.
     cl_need_rf_curve || note_fail
-    cl_need_file "${CL_DATA_IN}/polfunc_fitted.csv" "fitted policy" \
-        "build locally then upload: python estimation_bbl_1_polfunc.py" || note_fail
 fi
-CPD="$(cl_cp_dir ${ROUTINES})"
-echo "  RC results dir (Julia's first-existing candidate): ${CPD}"
+# The RC results, in the ONE place the RC ladder writes them and the CF/BBL stack
+# reads them: data/output/blp. Reported, never a blocker — on a fresh cluster the RC
+# phase has not run yet, and bbl_run.sh / cf_run.sh preflight the same file at their
+# own submit time, when its absence actually means something.
+echo "  RC results dir: ${CL_STEP_BLP}"
 for k in ${ROUTINES}; do
-    [[ -f "${CPD}/blp_E${k}_spec_12.jls" ]] && echo "    E${k} ok" \
-        || echo "    E${k} --  (bbl_run.sh/cf_run.sh auto-build it from the newest blp_outputs_*.zip)"
+    [[ -f "${CL_STEP_BLP}/blp_results_E${k}_spec_12_${CF_STAGE:-extended}.jls" ]] \
+        && echo "    E${k} ok" \
+        || echo "    E${k} --  (produced by the BLP phase:  bash blp_run.sh --routines ${k})"
 done
-
-# ── (8) sigma-directory layout note for cf_eq_run.sh ─────────────────────────
-FLAT="$(ls -d "${CL_DATA_OUT}"/cf/cf5_base_E* "${CL_DATA_OUT}"/cf/cf5_shock_E* 2>/dev/null || true)"
-if [[ -n "${FLAT}" ]]; then
-    echo ""
-    echo "(8) NOTE: flat cf5_base_/cf5_shock_ sigma directories exist:"
-    printf '    %s\n' ${FLAT}
-    echo "  cf_eq_run.sh writes the NESTED layout (cf5_E{k}_{stage}/{base,shock}), which is"
-    echo "  what the cf5 archive pattern matches. Archive or move these with the old"
-    echo "  zip_cf_outputs.sh before the new driver runs. This preflight does not move them."
-fi
 
 echo ""
 if [[ ${FAIL} -eq 0 ]]; then
     cl_banner "PREFLIGHT OK — nothing blocking." \
-              "next:  bash blp_run.sh --dry-run   then   bash blp_run.sh" \
-              "       bash pipeline_run.sh --dry-run   then   bash pipeline_run.sh"
+              "next:  bash pipeline_all.sh --dry-run   then   bash pipeline_all.sh" \
+              "       (pipeline_all.sh submits this preflight itself, as gate G0:" \
+              "        sbatch --export=ALL,ENV_STEP=preflight env_job.sh)"
     exit 0
 else
     cl_banner "PREFLIGHT FOUND BLOCKERS — act on the REMEDIATION blocks above." \
-              "Re-run this script until it prints PREFLIGHT OK."
+              "Re-run it until it prints PREFLIGHT OK:" \
+              "  sbatch --partition=day --time=00:30:00 --cpus-per-task=2 --mem=8G \\" \
+              "         --export=ALL,ENV_STEP=preflight env_job.sh"
     exit 1
 fi

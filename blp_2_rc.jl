@@ -9,24 +9,25 @@ Background
 The BLP RC estimation runs per routine, each consuming its own
 `demand_<id>_*_spec_12.parquet`. The routine list — id AND prefix — is AUTO-DISCOVERED
 from the parquets on disk (`demand_prefix` / `discover_routine_ids`; newest file
-wins per id), so a relabelled/new routine needs NO edit here. On the cluster a parquet may
-sit in `data/input` (uploaded) or `data/output/DEMAND_PREP` (written by the on-cluster
-sleepiness phase); both are searched, data/input first, so an uploaded file always wins —
-see `demand_search_dirs` in of_root.jl, shared with the engine. The lineup:
+wins per id), so a relabelled/new routine needs NO edit here. The parquets are read from the
+one directory the sleepiness phase's prep step writes — `data/output/demand_prep` on the
+cluster, the local DEMAND_PREP off it — via `demand_search_dirs` in of_root.jl, shared with
+the engine so the two cannot disagree about a routine's panel. The lineup:
 
     E1 Local B-type   E2 Pooled Linear
     E3 Pooled Single-Index        E4 Pooled Single-Index + Time
 
 The DEFAULT cluster run targets **E3/E4** (the single-index links); the
 rest stay available (ROUTINES env / --all-routines) for robustness. Each routine is
-warm-started from the local logit delta produced beforehand:
+warm-started from the δ the logit step produced beforehand:
 
-    data/input/logit_delta_E{k}_spec_12.bin    (uploaded from the local blp_1_logit.jl
-                                                output; on the cluster the engine reads it
-                                                from data/input, with data/output as fallback)
+    logit_delta_E{k}_spec_12.bin    (the engine resolves it in data/input, where a
+                                     hand-staged delta may be uploaded, then in the logit
+                                     step folder `logit_dir(out_dir)` — data/output/logit —
+                                     which is where blp_1_logit.jl writes it in either tree)
 
-(the logit step is owned by the local-logit workflow; this orchestrator only
-*consumes* those deltas — see `warm_start_path`).  If a delta is missing the
+(the logit step owns those files; this orchestrator only
+*consumes* them — see `warm_start_path`).  If a delta is missing the
 underlying engine falls back to a log-share initialisation, but a warm start is
 preferred, so its absence is surfaced as a warning.
 
@@ -65,9 +66,8 @@ isdefined(Main, :ROUTINE_REGISTRY) || include(joinpath(@__DIR__, "routines.jl"))
 const RC_SPEC = SPEC12_ID
 
 # Warm-start delta suffix. The engine builds its warm-start filename from
-# ENV["BLP_DELTA_SUFFIX"]; the logit (blp_1_logit.jl) writes the un-suffixed
-# logit_delta_E{k}_spec_12.{bin,jls} (uploaded to data/input on the cluster), so the
-# default "" is correct.
+# ENV["BLP_DELTA_SUFFIX"]; the logit step (blp_1_logit.jl) writes the un-suffixed
+# logit_delta_E{k}_spec_12.{bin,jls} into `logit_dir(out_dir)`, so the default "" is correct.
 const DELTA_SUFFIX = ""
 
 # The routine list is AUTO-DISCOVERED at runtime from the demand-prep parquets
@@ -77,11 +77,11 @@ const DELTA_SUFFIX = ""
 
 """Discover routine `estim`'s demand-prep prefix by scanning `input_dirs` for
 demand_<estim>_*_spec_<spec>.parquet (excluding legacy *_final_*). The directories are
-searched in order and the FIRST one holding a match settles the routine, so an uploaded
-parquet in data/input outranks one the cluster wrote under data/output/DEMAND_PREP. Within
-that directory, if several non-final parquets share the id the MOST RECENTLY MODIFIED wins
-(so a leftover old-scheme file can't shadow a freshly rebuilt one). Returns the prefix or
-nothing if absent everywhere."""
+searched in order and the FIRST one holding a match settles the routine; `demand_search_dirs`
+hands over one directory per tree, so that rule never has to arbitrate. Within that directory,
+if several non-final parquets share the id the MOST RECENTLY MODIFIED wins (so a leftover
+old-scheme file can't shadow a freshly rebuilt one). Returns the prefix or nothing if
+absent."""
 function demand_prefix(estim::Int, input_dirs::Vector{String}; spec::Int = RC_SPEC)
     pat = Regex("^demand_$(estim)(?:_.*)?_spec_$(spec)\\.parquet\$")
     for input_dir in input_dirs
@@ -139,17 +139,20 @@ if !isdefined(Main, :main_gpu_ift)
     include(joinpath(@__DIR__, "blp_gpu_engine.jl"))
 end
 
-"""Resolve the expected warm-start delta path for a routine, the same way the
-engine does: in_dir (data/input on HPC, where the uploaded delta lives) first, then
-out_dir as a fallback. Returns the first existing candidate, or the in_dir path (the
-primary expected location) when neither is present — used only for the missing-delta warning."""
+"""Resolve the expected warm-start delta path for a routine, in the SAME order the engine
+resolves it: in_dir (data/input, an operator-supplied delta) first, then `logit_dir(out_dir)`,
+where the logit step writes on both trees. Returns the first existing candidate, or — when
+neither is present — the `logit_dir` path, because that is the location the producing step
+fills: a warning naming it points at the step that failed rather than at an upload slot the
+pipeline does not fill on its own. Used only for the missing-delta warning; the engine does its
+own resolution."""
 function warm_start_path(estim_id::Int; is_hpc::Bool, local_dir=nothing)
     in_dir, _, out_dir = get_paths(is_hpc; local_dir = local_dir)
     _fname = "logit_delta_E$(estim_id)_spec_$(RC_SPEC)$(DELTA_SUFFIX).bin"
-    for _cand in (joinpath(in_dir, _fname), joinpath(out_dir, _fname))
+    for _cand in (joinpath(in_dir, _fname), joinpath(logit_dir(out_dir), _fname))
         isfile(_cand) && return _cand
     end
-    return joinpath(in_dir, _fname)
+    return joinpath(logit_dir(out_dir), _fname)
 end
 
 """Strip routine-controlled flags (`--estim`, `--spec`) from a passthrough vector
@@ -185,8 +188,8 @@ function run_routine(estim_id::Int; passthrough::Vector{String} = String[])
 
     label = "E$estim_id"
     in_dir, _, out_dir = get_paths(is_hpc; local_dir = local_dir)
-    # Same search path the engine uses (of_root.jl `demand_search_dirs`): data/input first,
-    # then data/output/DEMAND_PREP where the on-cluster sleepiness phase writes.
+    # Same search path the engine uses (of_root.jl `demand_search_dirs`): the single directory
+    # the sleepiness phase's prep step writes, data/output/demand_prep on the cluster.
     in_dirs = demand_search_dirs(in_dir, out_dir)
 
     # Auto-discover the routine's input prefix. A missing parquet hard-fails HERE — the

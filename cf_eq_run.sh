@@ -11,31 +11,29 @@
 # followed by a merge into the next sigma. Sweeps chain afterok. This uses the
 # exact full-panel psi_under; it only parallelises the firms.
 #
+# IT IS OPT-IN. pipeline_all.sh runs it only with --cfeq: the headline CF phase is
+# demand_eval + cf1 + cf1_net + cf4, and these equilibria are days of GPU array time
+# that nothing in the paper's main results depends on.
+#
 # WHAT MUST EXIST FIRST
-#   the BBL cost params:  data/output/cost/cost_params_E{k}_spec_12_{stage}.json
+#   the BBL cost params:  data/output/bbl/cost_params_E{k}_spec_12_{stage}.json
+#   and the RC results:   data/output/blp/blp_results_E{k}_spec_12_{stage}.jls
 #   i.e. run  bash bbl_run.sh  first.
 # WHAT TO RUN NEXT
-#   bash cluster_archive.sh --set cf3|cf5|cf6 --copy   (--move once nothing else needs them)
-#
-# THIS SCRIPT IS NEW. submit_cf3_jacobi.sh / submit_cf5_all.sh /
-# submit_cf5_passthrough.sh / submit_cf6_merger.sh are still present and still
-# work; they are the fallback and are retired only after one successful cluster
-# cycle. Nothing in them has been modified.
+#   bash cluster_archive.sh --set counterfactuals --copy
 #
 # WHAT IT SUBMITS
 #   --mode cf3   warm(GPU) -> init(CPU) -> N_SWEEPS x [ shard array(GPU) -> merge(CPU) ]
-#                                                                 -> [zip cf3]
-#   --mode cf5   the same chain TWICE (base, Selic-shocked) -> cf5_compare afterok BOTH -> [zip cf5]
-#   --mode cf6   the same chain TWICE (base, merged)        -> cf6_compare afterok BOTH -> [zip cf6]
+#                                                                 -> [zip counterfactuals]
+#   --mode cf5   the same chain TWICE (base, Selic-shocked) -> cf5_compare afterok BOTH -> [zip counterfactuals]
+#   --mode cf6   the same chain TWICE (base, merged)        -> cf6_compare afterok BOTH -> [zip counterfactuals]
 #
-# SIGMA LAYOUT (one convention, nested):
-#   cf3   data/output/cf/cf3_jacobi_E{k}_{stage}/
-#   cf5   data/output/cf/cf5_E{k}_{stage}/{base,shock}/
-#   cf6   data/output/cf/cf6_E{k}_{stage}/{base,merged}/
-#   This is the layout the cf5/cf6 archive patterns (output/cf/cf5_E*, cf6_E*)
-#   actually match. If FLAT cf5_base_E*/cf5_shock_E* directories from an earlier
-#   run are on the cluster, archive them with the old zip_cf_outputs.sh BEFORE
-#   running this driver — cluster_preflight.sh reports them; it does not move them.
+# SIGMA LAYOUT (one convention, nested, under the counterfactuals step folder):
+#   cf3   cf3_jacobi_E{k}_{stage}/
+#   cf5   cf5_E{k}_{stage}/{base,shock}/
+#   cf6   cf6_E{k}_{stage}/{base,merged}/
+#   Nesting is what lets one archive pattern per mode match a whole equilibrium,
+#   sweeps and shards included, instead of a directory name per leg.
 #
 # Usage
 #   bash cf_eq_run.sh --mode cf3 --routine 3 --dry-run
@@ -51,7 +49,8 @@
 #   --selic-shock X      cf5 only, annual (default 0.01 = 100bp)
 #   --merge "A,B"        cf6 only, required: the conglomerate pair
 #   --base-sigma PATH    reuse an already-solved base sigma instead of re-solving
-#   --no-zip             suppress the terminal archive job
+#   --no-zip             suppress the terminal archive job (pipeline_all.sh passes it:
+#                        it submits pipe_download_cfeq once for the whole group)
 #   --dry-run            print, submit nothing
 #   -h                   this header
 # ==============================================================================
@@ -75,11 +74,14 @@ WARM_TIME="${WARM_TIME:-01:00:00}"; COMPARE_TIME="${COMPARE_TIME:-02:00:00}"
 GPU_PARTITION="${GPU_PARTITION:-gpu_h200}"; GPUS="${GPUS:-h200:1}"; CPU_PARTITION="${CPU_PARTITION:-day}"
 DO_WARMUP="${DO_WARMUP:-1}"
 DO_ZIP="${DO_ZIP:-1}"
-# ZIP_AFTER keeps its single-dash ${ZIP_AFTER-...} semantics: UNSET means "default
-# to the mode's own archive", while an explicit EMPTY value turns the terminal
-# archive off mid-run. The two must stay distinguishable, hence the flag.
-_ZIP_AFTER_WAS_SET=0; [[ -n "${ZIP_AFTER+set}" ]] && _ZIP_AFTER_WAS_SET=1
-ZIP_AFTER="${ZIP_AFTER-}"
+# ZIP_AFTER is the cluster_archive.sh SET the terminal zip job packages, and all
+# three modes write under the counterfactuals step folder (cf_out_dir), so there is
+# ONE set to name and it is the same for cf3, cf5 and cf6.
+# The single-dash ${ZIP_AFTER-...} is load-bearing: UNSET takes the default, while
+# an explicit EMPTY value turns the terminal archive off (submit_zip returns early
+# on an empty set name) without touching DO_ZIP. A colon-dash would collapse the
+# two and make that override unreachable.
+ZIP_AFTER="${ZIP_AFTER-counterfactuals}"
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -94,24 +96,25 @@ while [[ $# -gt 0 ]]; do
         --no-warmup)   DO_WARMUP=0 ;;
         --no-zip)      DO_ZIP=0 ;;
         --dry-run)     CL_DRYRUN=1 ;;
-        -h|--help)     sed -n '2,62p' "${BASH_SOURCE[0]}"; exit 0 ;;
+        -h|--help)     sed -n '2,55p' "${BASH_SOURCE[0]}"; exit 0 ;;
         *) echo "unknown option: $1 (see -h)" >&2; exit 2 ;;
     esac
     shift
 done
 case "${MODE}" in cf3|cf5|cf6) ;; *) echo "--mode must be cf3|cf5|cf6 (got '${MODE}')" >&2; exit 2 ;; esac
 [[ "${MODE}" == "cf6" && -z "${MERGE}" ]] && { echo "--mode cf6 requires --merge \"firmA,firmB\"" >&2; exit 2; }
-[[ "${_ZIP_AFTER_WAS_SET}" == "1" ]] || ZIP_AFTER="${MODE}"
 
 LOGD="$(cl_log_dir)"
-ROOT="${CL_DATA_OUT}/cf"
+ROOT="${CL_STEP_CF}"
 
 # Fail fast on the shared prerequisites, once and up front, so we never submit a
 # half-chain: a cf5 run is TWO Jacobi chains plus a compare, and discovering a
-# missing cost file after the first array has queued wastes GPU hours.
+# missing cost file after the first array has queued wastes GPU hours. Both checks
+# test the exact file the job opens, in the exact step folder its producer wrote it
+# to — cl_need_costs the BBL params under data/output/bbl, cl_need_rc_jls the RC
+# result under data/output/blp.
 cl_need_costs "${CF_ROUTINE}" "${CF_STAGE}" || exit 1
-cl_validate_routines "${CF_ROUTINE}" || {
-    echo "  -> run the BLP stage first, or drop its blp_outputs_*.zip in ${CL_DATA_OUT}" >&2; exit 1; }
+cl_need_rc_jls "${CF_ROUTINE}" || exit 1
 
 cl_banner "Equilibrium CF: ${MODE}$([[ "${CL_DRYRUN}" == "1" ]] && echo '  [DRY RUN — nothing is submitted]')" \
           "E${CF_ROUTINE} ${CF_STAGE} | R=${R} | ${N_FIRM_SHARDS} shards x ${N_SWEEPS} sweeps per equilibrium" \

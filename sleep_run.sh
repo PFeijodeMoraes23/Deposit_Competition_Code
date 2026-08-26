@@ -3,9 +3,13 @@
 # sleep_run.sh — THE single front door for the sleepiness (A-phase) stage.
 #
 # WHAT MUST EXIST FIRST
-#   1. bash cluster_preflight.sh                     (must print PREFLIGHT OK)
+#   1. gate G0 green — sbatch --export=ALL,ENV_STEP=preflight env_job.sh. Run standalone,
+#      this script runs cluster_preflight.sh itself instead (--skip-preflight opts out);
+#      under pipeline_all.sh, G0 has already run and its id arrives through --after.
 #   2. FIVE uploaded inputs, all tracked in cluster/upload_manifest.txt:
-#        data/input/market_panel.csv
+#        data/input/market_panel.parquet   (the panel travels as parquet, 39 MB not 724 MB;
+#                                           utils.load_panel_cached reads it as the source
+#                                           because no market_panel.csv exists here)
 #        data/input/digital_banks_diagnostic.csv
 #        data/input/bcb_banked_mca_panel.csv
 #        data/input/state_centering_means.json
@@ -20,7 +24,9 @@
 #
 # WHAT IT SUBMITS
 #
-#   est ARRAY (1 job per routine)
+#   sleep_est_lin --array=1,2          (E1/E2: one task per routine, whole grid)
+#   sleep_spec_E3 --array=5-12 --> sleep_merge_E3   (E3/E4: one task per SPEC)
+#   sleep_spec_E4 --array=5-12 --> sleep_merge_E4
 #        |
 #     afterok
 #        v
@@ -51,11 +57,17 @@
 #
 # Flags
 #   --routines "1 2 3 4"  routine set (default from cluster_lib.sh: all four)
-#   --spec-array          fan E3/E4 out one SLURM task PER SPEC instead of one per routine,
-#                         then one merge job per routine. Cuts the estimator phase from
-#                         E4-bound (~79 min) to about one spec (~7 min). OFF by default:
-#                         the default routine array is the proven path.
-#   --spec-ids "5-12"     the spec grid for --spec-array (default 5-12, the eight
+#   --after <jid>         make every FIRST-TIER submission (the est/spec arrays, or prep
+#                         under --skip-est) --dependency=afterok this job id. That is how
+#                         pipeline_all.sh hangs the whole A-phase off gate G0 without this
+#                         script having to know what G0 is.
+#   --no-spec-array       fan E3/E4 out one task PER ROUTINE instead of one per SPEC, and
+#                         drop the merge jobs. The spec fan-out is the default: it cuts the
+#                         estimator phase from E4-bound (~79 min) to about one spec (~7 min)
+#                         and reproduces the serial grid to 0.000e+00 across all eight specs.
+#   --spec-array          accepted and a NO-OP — it names the default. Kept so an existing
+#                         command line keeps working.
+#   --spec-ids "5-12"     the spec grid for the fan-out (default 5-12, the eight
 #                         Macro/Tech x IV cells E3/E4 run; `--list-specs` prints the map)
 #   --skip-est            do not re-estimate; start at prep, against the est{k}
 #                         output already on disk. G1 is skipped with it — it gates
@@ -76,11 +88,14 @@ if [[ -n "${ROUTINES+set}" ]]; then ROUTINES_SRC=env; fi
 ROUTINES="${ROUTINES:-${CL_ROUTINES_ALL}}"
 SPEC="${SPEC:-12}"
 DO_EST=1; DO_AME=1; DO_UPSILON=1; SKIP_PREFLIGHT=0
-# Spec-level fan-out is OPT IN. estimation_sleep_common.py grew --spec-id/--merge-specs so a
-# spec task writes only _specs/spec_{S}.pkl and one merge writes the shared pickle; that was
-# verified to reproduce the serial grid to 0.000e+00 across all eight specs. It stays off
-# until a cluster cycle has run green on the default path.
-SPEC_ARRAY=0; SPEC_IDS="${SPEC_IDS:-5-12}"
+# AFTER_JID: the job every first-tier submission waits on. Empty means "start now".
+AFTER_JID=""
+# Spec-level fan-out is the DEFAULT. estimation_sleep_common.py's --spec-id/--merge-specs
+# split makes a spec task's entire write set _specs/spec_{S}.pkl, with one merge job as the
+# only writer of the shared pickle — so concurrent spec tasks have no shared write to race
+# on, rather than a guarded one, and the result reproduces the serial grid to 0.000e+00
+# across all eight specs. --no-spec-array falls back to one task per routine.
+SPEC_ARRAY=1; SPEC_IDS="${SPEC_IDS:-5-12}"
 MERGE_TIME="${MERGE_TIME:-01:00:00}"; MERGE_CPUS="${MERGE_CPUS:-8}"; MERGE_MEM="${MERGE_MEM:-128G}"
 
 # Per-step resources. One site, so a wall-clock surprise is fixed here and not in
@@ -114,14 +129,16 @@ SLEEP_AME_BOOT_JOBS="${SLEEP_AME_BOOT_JOBS:-64}"
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --routines)       ROUTINES="$2"; ROUTINES_SRC=flag; shift ;;
-        --spec-array)     SPEC_ARRAY=1 ;;
+        --after)          AFTER_JID="$2"; shift ;;
+        --spec-array)     SPEC_ARRAY=1 ;;          # names the default; kept so old command lines still parse
+        --no-spec-array)  SPEC_ARRAY=0 ;;
         --spec-ids)       SPEC_IDS="$2"; shift ;;
         --skip-est)       DO_EST=0 ;;
         --no-ame)         DO_AME=0 ;;
         --no-upsilon)     DO_UPSILON=0 ;;
         --skip-preflight) SKIP_PREFLIGHT=1 ;;
         --dry-run)        CL_DRYRUN=1 ;;
-        -h|--help)        sed -n '2,62p' "${BASH_SOURCE[0]}"; exit 0 ;;
+        -h|--help)        sed -n '2,77p' "${BASH_SOURCE[0]}"; exit 0 ;;
         *) echo "unknown option: $1 (see -h)" >&2; exit 2 ;;
     esac
     shift
@@ -130,10 +147,15 @@ done
 for k in ${ROUTINES}; do
     case "${k}" in 1|2|3|4) ;; *) echo "--routines: '${k}' is not in the lineup (1 2 3 4)" >&2; exit 2 ;; esac
 done
-# The AME two-stage driver serves E3/E4 only (--est choices=(3,4)); so does the
-# CF4 upsilon export, whose exact phi^noPix exists only for a nonlinear link.
+# The AME two-stage driver serves E3/E4 only, by construction: estimation_ame_twostage.py
+# takes --est choices=(3,4), because the two-stage AME is defined off a single-index link.
 AME_ROUTINES="$(for k in ${ROUTINES}; do [[ "${k}" == "3" || "${k}" == "4" ]] && printf '%s ' "${k}"; done)"
 AME_ROUTINES="${AME_ROUTINES% }"
+# The CF4 upsilon export carries NO such restriction, and it must not: cf_4_pix.jl needs an
+# upsilon_pix/phi^noPix pair for every routine that reaches the CF phase, and
+# cf_4_upsilon_export.py's identity branch writes phi_nopix with exact_nopix=True for the
+# linear routines exactly as the single-index branch does for E3/E4. Gate G7 checks all four.
+UPSILON_ROUTINES="${ROUTINES}"
 
 LOGD="$(cl_log_dir)"
 if [[ "${SKIP_PREFLIGHT}" == "0" && "${CL_DRYRUN}" != "1" ]]; then
@@ -146,16 +168,21 @@ fi
 
 cl_banner "Sleepiness A-phase$([[ "${CL_DRYRUN}" == "1" ]] && echo '  [DRY RUN — nothing is submitted]')" \
           "$(cl_routines_provenance "${ROUTINES}" "${ROUTINES_SRC}" "${CL_ROUTINES_ALL}")" \
-          "spec=${SPEC}  est=${DO_EST}  ame=${DO_AME} (routines '${AME_ROUTINES:-none}')  upsilon=${DO_UPSILON}" \
-          "vintage: SLEEP_OUT_ROOT = ${CL_DATA_OUT}/DEMAND_PREP" \
-          "skeleton: OPEN_FINANCE_ROOT = $(cl_of_root)"
+          "spec=${SPEC}  est=${DO_EST} (spec-array=${SPEC_ARRAY})  ame=${DO_AME} (routines '${AME_ROUTINES:-none}')" \
+          "upsilon=${DO_UPSILON} (routines '${UPSILON_ROUTINES}')" \
+          "SLEEP_OUT_ROOT = ${CL_STEP_SLEEP}   DEMAND_PREP_DIR = ${CL_STEP_DEMAND}" \
+          "${AFTER_JID:+first-tier jobs wait afterok ${AFTER_JID}}"
 
-# ── The Open-Finance skeleton, built ONCE here as well as in every job. ──────
-# Building it at submit time means a broken/absent uploaded panel is reported on
-# the login node, in seconds, instead of inside the first array task.
-cl_bootstrap_tree || echo "[!] skeleton bootstrap reported a problem (above) — the jobs retry it."
+# NOTHING RUNS ON THE LOGIN NODE. The Open-Finance skeleton is built by sleep_job.sh
+# itself (cl_bootstrap_tree + cl_export_step_dirs at the top of every branch), so this
+# script only ever parses flags and calls sbatch. A broken or absent uploaded panel is
+# reported by gate G0, which is a job, and pipeline_all.sh passes its id in via --after.
 
 JOB="${CL_ROOT}/sleep_job.sh"
+# FIRST_DEP: the sbatch fragment every first-tier submission carries. Second-tier jobs
+# (gates, prep behind G1, the AME and upsilon branches behind G2) inherit the wait
+# transitively through their own afterok edges, so it belongs here and nowhere else.
+FIRST_DEP="${AFTER_JID:+--dependency=afterok:${AFTER_JID}}"
 ALL_JIDS=""
 add_jid () { [[ -n "$1" ]] && ALL_JIDS="${ALL_JIDS:+${ALL_JIDS}:}$1"; return 0; }
 
@@ -175,7 +202,7 @@ gate_after () {   # gate_after <G1|G2|G3|G4|G7> <dep_ids|""> -> job id
         ${dep:+--dependency=afterok:${dep}} \
         --export=ALL,SLEEP_STEP=gate,SLEEP_GATE=${g},SLEEP_GATE_ROUTINES="${ROUTINES}",SPEC=${SPEC} \
         "${JOB}")
-    echo "  [${g}] gate -> job ${jid}${dep:+  (afterok ${dep})}   -> data/output/.gate_${g}.json" >&2
+    cl_say "  gate ${g} -> ${jid}${dep:+  (afterok ${dep})}" >&2
     printf '%s\n' "${jid}"
 }
 
@@ -204,47 +231,49 @@ if [[ "${DO_EST}" == "1" && "${SPEC_ARRAY}" == "1" ]]; then
     if [[ -n "${lin// /}" ]]; then
         lin_spec="$(echo ${lin} | tr ' ' ',')"
         lin_jid=$(sub "sleep_est_lin" "${EST_TIME}" "${EST_CPUS}" "${EST_MEM}" \
-            --array="${lin_spec}" \
+            --array="${lin_spec}" ${FIRST_DEP} \
             --export=ALL,SLEEP_STEP=est,SPEC=${SPEC} "${JOB}")
-        echo "  linear est array (--array=${lin_spec}) -> job ${lin_jid}  (task id = routine id)"
+        cl_say "  sleep_est_lin --array=${lin_spec} -> ${lin_jid}${AFTER_JID:+  (afterok ${AFTER_JID})}"
         add_jid "${lin_jid}"; est_deps="${est_deps}:${lin_jid}"
     fi
     for k in ${link}; do
         sp_jid=$(sub "sleep_spec_E${k}" "${EST_TIME}" "${EST_CPUS}" "${EST_MEM}" \
-            --array="${SPEC_IDS}" \
+            --array="${SPEC_IDS}" ${FIRST_DEP} \
             --export=ALL,SLEEP_STEP=est,SLEEP_SPEC_MODE=1,SLEEP_EST=${k},SPEC=${SPEC} "${JOB}")
-        echo "  E${k} spec array (--array=${SPEC_IDS}) -> job ${sp_jid}  (task id = SPEC id)"
+        cl_say "  sleep_spec_E${k} --array=${SPEC_IDS} -> ${sp_jid}${AFTER_JID:+  (afterok ${AFTER_JID})}"
         add_jid "${sp_jid}"
         mg_jid=$(sub "sleep_merge_E${k}" "${MERGE_TIME}" "${MERGE_CPUS}" "${MERGE_MEM}" \
             --dependency=afterok:"${sp_jid}" \
             --export=ALL,SLEEP_STEP=merge,SLEEP_EST=${k},SPEC=${SPEC} "${JOB}")
-        echo "    E${k} merge-specs -> job ${mg_jid}  (afterok ${sp_jid}; the only writer of the shared pickle)"
+        cl_say "  sleep_merge_E${k} -> ${mg_jid}  (afterok ${sp_jid}; the only writer of the shared pickle)"
         add_jid "${mg_jid}"; est_deps="${est_deps}:${mg_jid}"
     done
     est_jid="${est_deps#:}"
     g1_jid=$(gate_after G1 "${est_jid}")
     add_jid "${g1_jid}"
 elif [[ "${DO_EST}" == "1" ]]; then
-    echo "-- estimators: one array, task id = routine id --"
     est_jid=$(sub "sleep_est" "${EST_TIME}" "${EST_CPUS}" "${EST_MEM}" \
-        --array="$(array_spec)" \
+        --array="$(array_spec)" ${FIRST_DEP} \
         --export=ALL,SLEEP_STEP=est,SPEC=${SPEC} "${JOB}")
-    echo "  est array (--array=$(array_spec)) -> job ${est_jid}  (wall=${EST_TIME}, ${EST_CPUS} cpus, ${EST_MEM})"
+    cl_say "  sleep_est --array=$(array_spec) -> ${est_jid}  (task id = routine id)${AFTER_JID:+  (afterok ${AFTER_JID})}"
     add_jid "${est_jid}"
     g1_jid=$(gate_after G1 "${est_jid}")
     add_jid "${g1_jid}"
 else
-    echo "-- estimators SKIPPED (--skip-est): prep runs against the est{k} output already on disk."
-    echo "   G1 is skipped with them: it gates THIS run's estimators, and there are none."
+    cl_log "-- estimators SKIPPED (--skip-est): prep runs against the est{k} output already on disk."
+    cl_log "   G1 is skipped with them: it gates THIS run's estimators, and there are none."
 fi
 
 # ── prep: exports + the universal demand prep + the spec-12 analysis + desc_3 ─
-prep_dep="${g1_jid}"
+# With the estimators in the graph, prep waits on G1 and inherits the --after wait
+# through it. Under --skip-est there is no G1, so prep IS the first tier and takes
+# --after directly — otherwise a resumed A-phase would start before its gate.
+prep_dep="${g1_jid:-${AFTER_JID}}"
 prep_jid=$(sub "sleep_prep" "${PREP_TIME}" "${PREP_CPUS}" "${PREP_MEM}" \
     ${prep_dep:+--dependency=afterok:${prep_dep}} \
     --export=ALL,SLEEP_STEP=prep,SPEC=${SPEC},DEMAND_PREP_JOBS=${DEMAND_PREP_JOBS},SLEEP_ACTIVE_ESTS="${ROUTINES}" \
     "${JOB}")
-echo "-- prep (run_sleep_pipeline.py --skip-sleep, DEMAND_PREP_JOBS=${DEMAND_PREP_JOBS}) -> job ${prep_jid}${prep_dep:+  (afterok ${prep_dep})}"
+cl_say "  sleep_prep -> ${prep_jid}${prep_dep:+  (afterok ${prep_dep})}"
 add_jid "${prep_jid}"
 g2_jid=$(gate_after G2 "${prep_jid}")
 add_jid "${g2_jid}"
@@ -252,12 +281,11 @@ add_jid "${g2_jid}"
 # ── AME branch: the off-path guard, then one full bootstrap per routine ──────
 g3_jid=""
 if [[ "${DO_AME}" == "1" && -n "${AME_ROUTINES}" ]]; then
-    echo "-- AME branch (afterok G2) --"
     ameg_jid=$(sub "sleep_ame_gate" "${AMEG_TIME}" "${AMEG_CPUS}" "${AMEG_MEM}" \
         --dependency=afterok:"${g2_jid}" \
         --export=ALL,SLEEP_STEP=ame_gate,SPEC=${SPEC},SLEEP_AME_ROUTINES="${AME_ROUTINES}" \
         "${JOB}")
-    echo "  off-path guard (--theta-off, routines '${AME_ROUTINES}') -> job ${ameg_jid}  (afterok ${g2_jid})"
+    cl_say "  sleep_ame_gate (--theta-off, routines '${AME_ROUTINES}') -> ${ameg_jid}  (afterok ${g2_jid})"
     add_jid "${ameg_jid}"
     ame_dep=""
     for k in ${AME_ROUTINES}; do
@@ -265,33 +293,30 @@ if [[ "${DO_AME}" == "1" && -n "${AME_ROUTINES}" ]]; then
             --dependency=afterok:"${ameg_jid}" \
             --export=ALL,SLEEP_STEP=ame,SLEEP_EST=${k},SPEC=${SPEC},SLEEP_AME_BOOT_JOBS=${SLEEP_AME_BOOT_JOBS} \
             "${JOB}")
-        echo "  AME E${k} (--loss robust, full B, ${SLEEP_AME_BOOT_JOBS} workers) -> job ${j}  (afterok ${ameg_jid})"
+        cl_say "  sleep_ame_E${k} (full B, ${SLEEP_AME_BOOT_JOBS} workers) -> ${j}  (afterok ${ameg_jid})"
         ame_dep="${ame_dep:+${ame_dep}:}${j}"; add_jid "${j}"
     done
     g3_jid=$(gate_after G3 "${ame_dep}")
     add_jid "${g3_jid}"
 elif [[ "${DO_AME}" == "1" ]]; then
-    echo "-- AME branch skipped: no routine in '${ROUTINES}' is served by the two-stage driver (E3/E4 only)."
+    cl_say "  AME branch skipped: no routine in '${ROUTINES}' is served by the two-stage driver (E3/E4 only)."
 else
-    echo "-- AME branch skipped (--no-ame)."
+    cl_log "-- AME branch skipped (--no-ame)."
 fi
 
 # ── CF4 upsilon branch: parallel to the AME, both afterok G2 ────────────────
 g7_jid=""
-if [[ "${DO_UPSILON}" == "1" && -n "${AME_ROUTINES}" ]]; then
-    echo "-- CF4 upsilon branch (afterok G2, parallel to the AME) --"
+if [[ "${DO_UPSILON}" == "1" ]]; then
     ups_jid=$(sub "sleep_upsilon" "${UPS_TIME}" "${UPS_CPUS}" "${UPS_MEM}" \
         --dependency=afterok:"${g2_jid}" \
-        --export=ALL,SLEEP_STEP=upsilon,SPEC=${SPEC},SLEEP_AME_ROUTINES="${AME_ROUTINES}" \
+        --export=ALL,SLEEP_STEP=upsilon,SPEC=${SPEC},SLEEP_UPSILON_ROUTINES="${UPSILON_ROUTINES}" \
         "${JOB}")
-    echo "  upsilon_pix + phi^noPix (routines '${AME_ROUTINES}') -> job ${ups_jid}  (afterok ${g2_jid})"
+    cl_say "  sleep_upsilon (upsilon_pix + phi^noPix, routines '${UPSILON_ROUTINES}') -> ${ups_jid}  (afterok ${g2_jid})"
     add_jid "${ups_jid}"
     g7_jid=$(gate_after G7 "${ups_jid}")
     add_jid "${g7_jid}"
-elif [[ "${DO_UPSILON}" == "1" ]]; then
-    echo "-- CF4 upsilon branch skipped: it serves E3/E4 only."
 else
-    echo "-- CF4 upsilon branch skipped (--no-upsilon)."
+    cl_log "-- CF4 upsilon branch skipped (--no-upsilon)."
 fi
 
 echo

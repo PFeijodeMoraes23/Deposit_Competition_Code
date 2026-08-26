@@ -261,8 +261,8 @@ def main():
     print(f"subfolders  = {', '.join(SUBDIRS)}\n")
 
     # ── 1. zip -> cluster_raw/ + extract ──────────────────────────────────────
-    # Accept either the legacy literal `blp_outputs.zip` or the auto-named
-    # `blp_outputs_<jobid>.zip` produced by submit_blp_rc_all.sh — newest wins, no rename needed.
+    # Accept either the bare `blp_outputs.zip` or the tagged `blp_outputs_<jobid>.zip`
+    # cluster_archive.sh writes — newest wins, no rename needed.
     def _newest_zip(d):
         zs = glob.glob(os.path.join(d, "blp_outputs*.zip"))
         return max(zs, key=os.path.getmtime) if zs else None

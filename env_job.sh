@@ -12,14 +12,27 @@
 #SBATCH --mail-user=pedro.feijodemoraes@yale.edu
 # ==============================================================================
 # env_job.sh — ONE toolchain job. Dispatches on ENV_STEP:
+#     preflight     GATE G0: build the tree, load Julia, run cluster_preflight.sh
+#                   and write data/output/.gate_G0.json. This is the ONLY thing
+#                   pipeline_all.sh's first phase waits on.
 #     resolve       the SOLE Pkg.resolve() site: rebuild Manifest.toml for the
 #                   Julia this cluster actually has. Run ALONE, never in an array,
 #                   never inside a chain (concurrent resolves on NFS corrupt it).
 #     sysimage_gpu  build blp_sysimage.so     (run on gpu_h200 WITH a GPU)
 #     sysimage_cpu  build blp_sysimage_cpu.so (run on day, --constraint=cpugen:turin)
 #
+# WHY THE PREFLIGHT IS A JOB. It loads a Julia module, probes both sysimages by
+# LOADING them, walks the upload manifest and imports the Python stack. None of that
+# belongs on the login node — the shared login host has a hard memory cap and a
+# different CPU target, so the checks are both antisocial and less reliable there.
+# Making it a job is also what lets pipeline_all.sh be a pure submitter: it hangs
+# every first-tier submission off this job id, and --kill-on-invalid-dep turns a
+# blocking verdict into "nothing downstream ever starts".
+#
 # The #SBATCH block above is a SAFE FLOOR only. Resources arrive as sbatch CLI
 # flags, which override these directives:
+#   sbatch --partition=day --time=00:30:00 --cpus-per-task=2 --mem=8G \
+#          --export=ALL,ENV_STEP=preflight env_job.sh
 #   sbatch --partition=day --time=00:30:00 --cpus-per-task=4 --mem=16G \
 #          --export=ALL,ENV_STEP=resolve env_job.sh
 #   sbatch --partition=gpu_h200 --gpus=h200:1 --time=04:00:00 --cpus-per-task=8 \
@@ -27,35 +40,51 @@
 #   sbatch --partition=day --constraint=cpugen:turin --time=04:00:00 \
 #          --cpus-per-task=8 --mem=64G --export=ALL,ENV_STEP=sysimage_cpu env_job.sh
 #
-# WHAT MUST EXIST FIRST: bash cluster_preflight.sh, and act on what it says.
-# WHAT TO RUN NEXT:      re-run cluster_preflight.sh; then blp_run.sh.
+# Env vars read by ENV_STEP=preflight:
+#   PF_ROUTINES    routine set to check (default '1 2 3 4')
+#   PF_WILL_BUILD  space-separated artifacts THIS run creates before anything
+#                  consumes them ('sysimage', 'draws') — reported, not blocking
+#
+# WHAT MUST EXIST FIRST: the uploaded code + data bundles, nothing else.
+# WHAT TO RUN NEXT:      whatever .gate_G0.json / the log says; then
+#                        bash pipeline_all.sh, which submits this step itself.
 #
 # A sysimage build ends in a FATAL LOAD PROOF and writes a provenance sidecar
 # <img>.so.json. A build whose proof fails exits non-zero and the .so is renamed
 # .so.failed, so a broken image never sits on disk looking done.
-#
-# THIS SCRIPT IS NEW. setup_julia_env.sh / submit_build_sysimage.sh /
-# submit_build_sysimage_cpu.sh are still present and still work; they are the
-# fallback and are retired only after one successful cluster cycle. Nothing in
-# them has been modified.
 # ==============================================================================
 set -uo pipefail
 CL_DIR="${SLURM_SUBMIT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
 . "${CL_DIR}/cluster_lib.sh"
 set -e
 
-: "${ENV_STEP:?set ENV_STEP (resolve|sysimage_gpu|sysimage_cpu)}"
-case "${ENV_STEP}" in resolve|sysimage_gpu|sysimage_cpu) ;;
-    *) echo "ENV_STEP='${ENV_STEP}' is not recognised (resolve|sysimage_gpu|sysimage_cpu)" >&2; exit 2 ;;
+: "${ENV_STEP:?set ENV_STEP (preflight|resolve|sysimage_gpu|sysimage_cpu)}"
+case "${ENV_STEP}" in preflight|resolve|sysimage_gpu|sysimage_cpu) ;;
+    *) echo "ENV_STEP='${ENV_STEP}' is not recognised (preflight|resolve|sysimage_gpu|sysimage_cpu)" >&2; exit 2 ;;
 esac
 
 mkdir -p "${CL_ROOT}/logs"
-cl_load_julia
+# The skeleton and the step dirs, on every branch. G0 is the first job of a fresh
+# cluster, so this is where data/output and its eight step folders come into
+# existence — the preflight below then CHECKS them rather than creating them.
+cl_bootstrap_tree
+cl_export_step_dirs
+
+# A module that does not load is FATAL for the three build steps — they have nothing
+# to do without Julia — but it is the preflight's whole job to REPORT that, in the
+# gate json, rather than die before writing one. So the load is captured here and the
+# refusal is per step.
+JULIA_LOADED=1
+cl_load_julia || JULIA_LOADED=0
+if [[ "${JULIA_LOADED}" != "1" && "${ENV_STEP}" != "preflight" ]]; then
+    echo "ERROR: ENV_STEP=${ENV_STEP} needs Julia and '${JULIA_MODULE}' did not load (candidates above)." >&2
+    exit 2
+fi
 NPROC="${SLURM_CPUS_PER_TASK:-4}"
 
 cl_banner "env_job: ENV_STEP=${ENV_STEP}" \
           "node    $(hostname)" \
-          "julia   $(julia --version)" \
+          "julia   $(julia --version 2>/dev/null || echo '<module did not load>')" \
           "module  ${JULIA_MODULE}" \
           "depot   ${JULIA_DEPOT_PATH%%:*}" \
           "date    $(date)"
@@ -124,6 +153,159 @@ EOF
 }
 
 case "${ENV_STEP}" in
+
+preflight)
+    # ── GATE G0 ───────────────────────────────────────────────────────────────
+    # Two products, and the order matters: a HUMAN log (cluster_preflight.sh's own
+    # numbered verdict block, verbatim) and a MACHINE verdict, .gate_G0.json, which
+    # is written whatever the outcome — a gate that fails without leaving a json is
+    # a gate nobody can read after the fact, and every downstream job of a failed G0
+    # is cancelled as DependencyNeverSatisfied and writes no log of its own.
+    PF_ROUTINES="${PF_ROUTINES:-${CL_ROUTINES_ALL}}"
+    PF_WILL_BUILD="${PF_WILL_BUILD:-}"
+    GATE_JSON="${CL_DATA_OUT}/.gate_G0.json"
+    PF_LOG="${CL_ROOT}/logs/preflight_${SLURM_JOB_ID:-manual}.log"
+
+    echo ""
+    echo "=== (1) TOOLCHAIN IDENTITY ==="
+    JV="$(cl_loaded_julia_version || echo '')"
+    MV="$(cl_manifest_julia_version || echo '')"
+    echo "  julia module   ${JULIA_MODULE}  -> ${JV:-<did not load>}"
+    echo "  manifest       julia_version = ${MV:-<none>}"
+    MANIFEST_MATCH=false
+    if [[ "${JULIA_LOADED}" == "1" ]] && cl_check_julia_version; then MANIFEST_MATCH=true; fi
+    echo "  resolve required: $([[ "${MANIFEST_MATCH}" == "true" ]] && echo no || echo yes)"
+
+    echo ""
+    echo "=== (2) SYSIMAGE VERDICTS ==="
+    SYS_GPU=ok; cl_sysimage_verdict gpu || SYS_GPU=unusable
+    SYS_CPU=ok; cl_sysimage_verdict cpu || SYS_CPU=unusable
+
+    echo ""
+    echo "=== (3) cluster_preflight.sh --routines '${PF_ROUTINES}'${PF_WILL_BUILD:+ --will-build '${PF_WILL_BUILD}'} ==="
+    # tee, not a redirect: the .out file stays the readable record AND the json below
+    # is built by parsing what the preflight actually reported, so the two can never
+    # disagree about which inputs were missing.
+    set +e
+    bash "${CL_ROOT}/cluster_preflight.sh" --routines "${PF_ROUTINES}" \
+         ${PF_WILL_BUILD:+--will-build "${PF_WILL_BUILD}"} 2>&1 | tee "${PF_LOG}"
+    PF_RC=${PIPESTATUS[0]}
+    set -e
+
+    # Every MISSING line the preflight printed, de-duplicated, with the trailing
+    # "<- do this" hint stripped so the array holds paths and not prose.
+    MISSING_JSON=""
+    while IFS= read -r m; do
+        [[ -n "${m}" ]] || continue
+        m="${m//\"/\'}"
+        MISSING_JSON="${MISSING_JSON:+${MISSING_JSON}, }\"${m}\""
+    done < <(sed -n 's/^[[:space:]]*MISSING[[:space:]]*//p' "${PF_LOG}" \
+             | sed 's/[[:space:]]*<-.*$//; s/[[:space:]]*$//' | sort -u)
+
+    echo ""
+    echo "=== (4) UPLOADED MARKET PANEL ==="
+    # The panel arrives as market_panel.parquet and NOTHING on this cluster can
+    # re-derive it: the 724 MB market_panel.csv it was built from stays on the local
+    # machine, so utils.load_panel_cached reads this file as the source rather than as
+    # a cache to validate. Section (3) only established that the file EXISTS. A
+    # truncated or corrupted upload of the right name passes that and then surfaces six
+    # hours later as a pyarrow traceback inside an estimator, after the sleep array has
+    # burned its allocation — so open it here, decode a column, and count the rows.
+    # source_csv_bytes is the stamp stage_cluster_upload.py matched against the local
+    # CSV before bundling; recording it makes the two ends of the transfer comparable.
+    PANEL_PQ="${CL_DATA_IN}/market_panel.parquet"
+    PANEL_ROWS=-1; PANEL_COLS=-1; PANEL_SRC=-1; PANEL_OK=false; PANEL_ERR=""
+    if [[ ! -f "${PANEL_PQ}" ]]; then
+        PANEL_ERR="not on disk: ${PANEL_PQ}"
+    else
+        PANEL_OUT="$(
+            if [[ -n "${PY_MODULE:-}" ]]; then module load ${PY_MODULE} >/dev/null 2>&1 || true; fi
+            if [[ -n "${CONDA_ENV:-}" ]]; then
+                source activate "${CONDA_ENV}" >/dev/null 2>&1 || conda activate "${CONDA_ENV}" >/dev/null 2>&1 || true
+            fi
+            "${CF_PYTHON}" -c '
+import sys
+import pyarrow.parquet as pq
+path = sys.argv[1]
+handle = pq.ParquetFile(path)
+schema = handle.schema_arrow
+meta = schema.metadata or {}
+stamp = meta.get(b"source_csv_bytes")
+# Read ONE column in full: the footer alone would still parse on a file whose data
+# pages were cut short, and a row count taken from the footer would then be a lie.
+rows = pq.read_table(path, columns=[schema.names[0]]).num_rows
+print(rows)
+print(len(schema.names))
+print(int(stamp) if stamp is not None else -1)
+' "${PANEL_PQ}" 2>&1
+        )" || true
+        # The LAST three lines, not the first: a conda/module banner on stdout would
+        # otherwise shift the fields and fail a perfectly good panel. A python that
+        # raised has a traceback in those three, which the numeric test below rejects.
+        PANEL_TAIL="$(echo "${PANEL_OUT}" | tail -n 3)"
+        PANEL_ROWS="$(echo "${PANEL_TAIL}" | sed -n '1p')"
+        PANEL_COLS="$(echo "${PANEL_TAIL}" | sed -n '2p')"
+        PANEL_SRC="$(echo "${PANEL_TAIL}"  | sed -n '3p')"
+        case "${PANEL_ROWS}${PANEL_COLS}${PANEL_SRC}" in
+            *[!0-9-]*|"") PANEL_ERR="unreadable: ${PANEL_OUT}"; PANEL_ROWS=-1; PANEL_COLS=-1; PANEL_SRC=-1 ;;
+            *) if [[ "${PANEL_ROWS}" -gt 0 && "${PANEL_COLS}" -gt 0 ]]; then PANEL_OK=true
+               else PANEL_ERR="opened but empty (${PANEL_ROWS} rows, ${PANEL_COLS} cols)"; fi ;;
+        esac
+    fi
+    if [[ "${PANEL_OK}" == "true" ]]; then
+        PANEL_BYTES="$(stat -c%s "${PANEL_PQ}" 2>/dev/null || echo '?')"
+        echo "  market_panel.parquet: ${PANEL_ROWS} rows x ${PANEL_COLS} cols, ${PANEL_BYTES} bytes on disk"
+        echo "  source_csv_bytes    : ${PANEL_SRC}  (size of the market_panel.csv it was built from)"
+        if [[ "${PANEL_SRC}" == "-1" ]]; then
+            echo "  [!] no source_csv_bytes stamp — this parquet was not written by utils.refresh_panel_cache"
+        fi
+    else
+        echo "  [X] market_panel.parquet is NOT usable: ${PANEL_ERR}"
+        echo "      Re-upload the data bundle (cluster/upload_manifest.txt row 'market_panel')."
+        echo "      Build it locally with: python run_data_pipeline.py, then"
+        echo "      python stage_cluster_upload.py --stage  (it checks the stamp before bundling)."
+    fi
+
+    OK=true; [[ ${PF_RC} -eq 0 ]] || OK=false
+    [[ "${PANEL_OK}" == "true" ]] || OK=false
+    cat > "${GATE_JSON}" <<EOF
+{
+  "gate": "G0",
+  "ok": ${OK},
+  "job_id": "${SLURM_JOB_ID:-manual}",
+  "routines": "${PF_ROUTINES}",
+  "will_build": "${PF_WILL_BUILD}",
+  "julia_module": "${JULIA_MODULE}",
+  "julia_version": "${JV}",
+  "manifest_julia_version": "${MV}",
+  "manifest_match": ${MANIFEST_MATCH},
+  "sysimage_gpu": "${SYS_GPU}",
+  "sysimage_cpu": "${SYS_CPU}",
+  "missing_inputs": [${MISSING_JSON}],
+  "panel_ok": ${PANEL_OK},
+  "panel_rows": ${PANEL_ROWS},
+  "panel_cols": ${PANEL_COLS},
+  "panel_source_csv_bytes": ${PANEL_SRC},
+  "preflight_rc": ${PF_RC},
+  "log": "${PF_LOG}",
+  "checked_utc": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+}
+EOF
+    echo ""
+    echo "── .gate_G0.json ──"
+    cat "${GATE_JSON}"
+    if [[ "${OK}" != "true" ]]; then
+        # A non-zero preflight keeps its own code; a panel-only failure exits 1, so the
+        # gate blocks on a corrupt panel exactly as it blocks on a missing input.
+        G0_RC=${PF_RC}; if [[ ${G0_RC} -eq 0 ]]; then G0_RC=1; fi
+        echo "" >&2
+        echo "G0 FOUND BLOCKERS — exiting ${G0_RC} so nothing downstream starts." >&2
+        [[ "${PANEL_OK}" == "true" ]] || echo "  the uploaded market panel could not be read (see section 4)." >&2
+        echo "  Act on the REMEDIATION blocks above, then re-submit the pipeline." >&2
+        echo "  --skip-preflight on pipeline_all.sh submits without this gate." >&2
+        exit ${G0_RC}
+    fi
+    ;;
 
 resolve)
     # ── THE ONE Pkg.resolve() SITE ────────────────────────────────────────────

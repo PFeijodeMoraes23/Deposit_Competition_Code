@@ -59,34 +59,32 @@ except Exception:
 # A `Path(__file__).parents[N]` walk hard-codes the repo's position inside the data tree, which
 # holds on this machine and nowhere else: on the cluster the scripts live at HEAD/scripts and the
 # walk lands on the parent of HEAD, where the reads below find nothing and the export is silently
-# empty. demand_prep_root() also honours SLEEP_OUT_ROOT, so est{e}/estimation_results.pkl,
-# est{e}/market_panel_phis.csv and the demand parquets all follow the vintage being exported.
+# empty. est_dir() honours SLEEP_OUT_ROOT, so est{e}/estimation_results.pkl and
+# est{e}/market_panel_phis.csv follow the vintage being exported; demand_parquet_dir() is the
+# parquets' own seam, equal to that tree locally and a separate step folder on the cluster.
 # CF_FOUNDATION stays under estimation_output(): it is production CF input, not sandbox output.
-DEMAND_PREP = _paths.demand_prep_root()
+DEMAND_PREP = _paths.demand_parquet_dir()
 CF_DIR = _paths.cf_foundation_dir()
 
 MERGE_KEYS = ["CodConglomeradoPrudencial", "mca_code", "deposit_type", "time_id"]
 
 
 def _demand_search_dirs() -> list:
-    """Same search path the Julia consumers use, in the same order.
+    """The one directory the demand parquets can be in: `demand_parquet_dir()`.
 
-    of_root.jl's demand_search_dirs puts the cluster's data/input (uploads) BEFORE
-    data/output/DEMAND_PREP (what the on-cluster sleepiness phase writes), and says outright
-    that it is shared by blp_1_logit.jl, blp_2_rc.jl and blp_gpu_engine.jl "so the three cannot
-    disagree about where a file comes from". This exporter is the fourth consumer and used to
-    disagree: it globbed DEMAND_PREP alone and took the newest mtime. With a parquet present in
-    BOTH places -- an upload plus a fresh on-cluster rebuild -- it therefore read a different
-    file than cf_4_pix.jl, and the phi^noPix export silently failed to cover 2 of 693,093 ctx
-    rows. cf_4_pix.jl requires exact coverage, so that surfaced three phases later as a CF4
-    abort. Off the cluster CL_DATA_IN is unset and this collapses to DEMAND_PREP alone."""
-    import os
-    dirs = []
-    cl_in = os.environ.get("CL_DATA_IN", "").strip()
-    if cl_in:
-        dirs.append(Path(cl_in))
-    dirs.append(DEMAND_PREP)
-    return [d for d in dirs if d.is_dir()]
+    One producer, one location. The demand-prep step is the only thing that writes these
+    parquets, and both trees give it a single home -- DEMAND_PREP locally, the cluster's
+    data/output/demand_prep step folder under DEMAND_PREP_DIR -- so there is nothing for a
+    multi-directory search to arbitrate. That is the point of keeping it to one candidate:
+    with two, a routine present in both places resolves by search ORDER, and this exporter and
+    of_root.jl's `demand_search_dirs` (the Julia consumers' seam) could pick different vintages
+    of the same routine. That cost a CF4 abort three phases downstream when the phi^noPix
+    export covered all but 2 of 693,093 ctx rows and cf_4_pix.jl requires exact coverage. With
+    one candidate a missing parquet is an unambiguous error naming the only place it belongs.
+
+    Returned as a list (filtered to existing) so the caller's loop and its
+    "searched here" error message need no special case for the empty tree."""
+    return [d for d in (DEMAND_PREP,) if d.is_dir()]
 
 
 def _discover_demand_parquet(estim: int, spec: int) -> Path:
@@ -95,11 +93,12 @@ def _discover_demand_parquet(estim: int, spec: int) -> Path:
         cands = [p for p in d.glob(f"demand_{estim}_*spec_{spec}.parquet")
                  if "final" not in p.name.lower()]
         if cands:
-            # Newest WITHIN the first directory that has one -- never across directories, which
-            # is what let an upload and a rebuild silently trade places.
+            # Several link tags can share one routine id in the directory, so the NEWEST wins:
+            # a leftover parquet from an earlier tag must not shadow a freshly rebuilt one.
+            # The tie-break is within the directory only, which the single candidate guarantees.
             return max(cands, key=lambda p: p.stat().st_mtime)
     raise FileNotFoundError(f"No demand parquet for estim={estim} spec={spec} in "
-                            + ", ".join(str(d) for d in searched))
+                            + (", ".join(str(d) for d in searched) or str(DEMAND_PREP)))
 
 
 def _phicol_to_pklkey(phi_col: str) -> str:
@@ -116,7 +115,9 @@ def main():
     args = ap.parse_args()
     e, s = args.estim, args.spec
 
-    est_dir = DEMAND_PREP / f"est{e}"
+    # The sleep fit, NOT the parquet directory: on the cluster the est{e} pickles belong to the
+    # sleep step folder and the parquets to their own, so this resolves through est_dir().
+    est_dir = _paths.est_dir(e)
     pkl_path = est_dir / "estimation_results.pkl"
     mp_path = est_dir / "market_panel_phis.csv"
     for p in (pkl_path, mp_path):

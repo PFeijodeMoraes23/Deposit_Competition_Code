@@ -12,9 +12,10 @@ from utils import paths as _paths
 
 sys.stdout.reconfigure(encoding="utf-8")
 
-# demand_prep_root() honours SLEEP_OUT_ROOT, so a fingerprint taken around a sandboxed
-# demand-prep run describes the tree that run actually wrote.
-D = _paths.demand_prep_root()
+# demand_parquet_dir() is the seam the demand-prep step writes its parquets through, so a
+# fingerprint taken around a run describes the directory that run actually filled. It follows
+# SLEEP_OUT_ROOT for a sandboxed run and DEMAND_PREP_DIR for a per-step tree.
+D = _paths.demand_parquet_dir()
 
 
 def col_hash(s: pd.Series) -> str:

@@ -209,11 +209,147 @@ def load_deposits() -> pd.DataFrame:
 ## 4) ADD mca_code TO DEPOSIT PANEL (Tier-1 rows only)
 ## -----------------------------------------------------------------------------
 
+def load_digital_conglomerates(digital_flags_csv: str) -> tuple[set, pd.DataFrame]:
+    """
+    Conglomerate-level digital flag.
+
+    panel_5_flag_digital.py flags digital candidates at the level of the ESTBAN reporting
+    BANK (CNPJ_root). The deposit panel is keyed on the prudential CONGLOMERATE
+    (CodConglomeradoPrudencial), whose leader need not be that bank: PicPay Bank
+    (09516419) sits in C0088022 led by the payment institution 22896431, Omni Banco in
+    C0080460 led by the Omni CFI. Keying the flag on the leader CNPJ therefore misses
+    them, and keying it on "any member is a candidate" would flag Bradesco (via Bradesco
+    Financiamentos) or Safra (via J. Safra). The rule used here: a conglomerate is digital
+    iff EVERY ESTBAN bank that panel_1 maps into it is a digital candidate, i.e. the
+    conglomerate's whole ESTBAN deposit footprint is single-municipality.
+
+    Bank -> conglomerate uses panel_1's build_cnpj_conglomerate_map, the same lookup that
+    built deposits_panel.csv (latest List spell wins; unmapped banks fall back to
+    'CNPJ_<cnpj>' exactly as panel_1 does), so the two sides of the join agree.
+
+    Returns (set of digital CodConglomeradoPrudencial, member table for logging).
+    """
+    from panel_1_deposits import build_cnpj_conglomerate_map
+
+    flags = pd.read_csv(digital_flags_csv)
+    flags = flags[flags["Inst_Total_Dep"] > 0].copy()
+    cnpj_map = build_cnpj_conglomerate_map()
+
+    def _congl(cnpj) -> str:
+        hit = cnpj_map.get(int(cnpj))
+        return str(hit[0]) if hit and hit[0] is not None else f"CNPJ_{int(cnpj)}"
+
+    flags["CodConglomeradoPrudencial"] = flags["CNPJ_root"].map(_congl)
+    flags["is_digital_candidate"] = flags["is_digital_candidate"].astype(bool)
+    # Physical-network evidence behind the verdict (panel_5_flag_digital.py reads it from
+    # the BCB access-point data): branch / service-point counts summed over the
+    # conglomerate's ESTBAN member banks, so the basis for the B/D call travels with the
+    # panel instead of living only in the diagnostic CSV.
+    _net_sum = [c for c in ("n_agencias", "n_postos", "n_own_points", "n_mun_own",
+                            "n_correspondentes") if c in flags.columns]
+    _agg = dict(n_banks=("CNPJ_root", "size"),
+                n_candidates=("is_digital_candidate", "sum"),
+                banks=("NOME_INSTITUICAO", lambda s: " | ".join(s)))
+    _agg.update({c: (c, "sum") for c in _net_sum})
+    if "has_access_point_data" in flags.columns:
+        _agg["has_access_point_data"] = ("has_access_point_data", "max")
+    members = flags.groupby("CodConglomeradoPrudencial").agg(**_agg).reset_index()
+    members["is_digital"] = members["n_candidates"] == members["n_banks"]
+    digital = set(members.loc[members["is_digital"], "CodConglomeradoPrudencial"])
+
+    for _, r in members[members["is_digital"]].iterrows():
+        logging.info(f"  digital conglomerate {r.CodConglomeradoPrudencial}: {r.banks}")
+    mixed = members[(~members["is_digital"]) & (members["n_candidates"] > 0)]
+    for _, r in mixed.iterrows():
+        logging.info(f"  candidate bank(s) inside a branch-network conglomerate, NOT digital: "
+                     f"{r.CodConglomeradoPrudencial} ({r.n_candidates}/{r.n_banks}): {r.banks}")
+    return digital, members
+
+
+NETWORK_EVIDENCE_COLS = ["n_agencias", "n_postos", "n_own_points", "n_mun_own",
+                         "n_correspondentes", "has_access_point_data"]
+
+
+def attach_network_evidence(dep: pd.DataFrame, members: pd.DataFrame) -> pd.DataFrame:
+    """Merge the conglomerate-level physical-network evidence onto the deposit panel.
+
+    These columns are the observable basis for the is_B verdict: branch, service-point and
+    correspondent counts from the BCB access-point data, summed over the conglomerate's
+    ESTBAN member banks by load_digital_conglomerates. Rows for conglomerates with no
+    ESTBAN footprint (IF-Data national aggregates) get NaN, which is itself the reason
+    those rows are D.
+
+    `members` is one row per conglomerate, so this cannot change the row count.
+    """
+    cols = [c for c in NETWORK_EVIDENCE_COLS if c in members.columns]
+    if not cols:
+        logging.warning("digital_banks_diagnostic.csv carries no physical-network columns; "
+                        "is_B is stored without its supporting evidence.")
+        return dep
+
+    ev = members[["CodConglomeradoPrudencial", "is_digital"] + cols].copy()
+    ev = ev.rename(columns={"is_digital": "congl_is_digital"})
+    ev["CodConglomeradoPrudencial"] = ev["CodConglomeradoPrudencial"].astype(str)
+    # Nullable dtypes: the left join leaves NA on rows whose conglomerate has no ESTBAN
+    # member bank, and a plain int/bool column would be upcast to float/object there,
+    # writing "1.0" or an unparseable mix into the CSV.
+    ev["congl_is_digital"] = ev["congl_is_digital"].astype("boolean")
+    if "has_access_point_data" in ev.columns:
+        ev["has_access_point_data"] = ev["has_access_point_data"].astype("boolean")
+    for c in [c for c in cols if c != "has_access_point_data"]:
+        ev[c] = pd.to_numeric(ev[c], errors="coerce").astype("Int64")
+
+    n_before = len(dep)
+    idx = dep.index
+    dep = dep.copy()
+    dep["_congl_key"] = dep["CodConglomeradoPrudencial"].astype(str)
+    dep = dep.merge(ev.rename(columns={"CodConglomeradoPrudencial": "_congl_key"}),
+                    on="_congl_key", how="left")
+    dep.drop(columns=["_congl_key"], inplace=True)
+    assert len(dep) == n_before, f"network-evidence merge changed rows {n_before:,} -> {len(dep):,}"
+    # merge() hands back a fresh RangeIndex; restore the caller's so masks built on the
+    # pre-merge frame keep aligning.
+    dep.index = idx
+
+    n_matched = int(dep["congl_is_digital"].notna().sum())
+    logging.info(
+        f"Physical-network evidence merged onto {n_matched:,} of {len(dep):,} deposit rows "
+        f"({', '.join(cols)}); the rest have no ESTBAN member bank in the diagnostic."
+    )
+    return dep
+
+
+def count_type_tier_disagreement(df: pd.DataFrame) -> int:
+    """Rows where the firm-type verdict and the market tier disagree.
+
+    is_B says whether the firm runs a physical network; mca_code says whether its deposits
+    sit in a local market. A brick-and-mortar firm whose whole ESTBAN footprint is booked
+    at one head office is is_B=1 with no honest local market, and a digital firm re-keyed
+    to the Tier-2 sentinel is is_B=0 and NATIONAL. Nothing forces the two to agree; this
+    is the measurement, not a repair.
+    """
+    if "is_B" not in df.columns or "mca_code" not in df.columns:
+        return 0
+    local_market = (df["mca_code"] != "NATIONAL").astype("int8")
+    return int((df["is_B"].fillna(-1).astype("int8") != local_market).sum())
+
+
 def attach_mca_code(dep: pd.DataFrame) -> pd.DataFrame:
     """
     Map CODMUN_IBGE (7-digit) -> mca_code using the MCA crosswalk.
     Tier-1 (ESTBAN) rows have a real municipality code.
     Tier-2 (IF Data national, CODMUN_IBGE = 0) get mca_code = 'NATIONAL'.
+
+    This is also the one site where the firm-type verdict is decided and stored, as
+    `is_B` (1 = brick-and-mortar, 0 = D / digital). Every downstream step reads that
+    column instead of re-testing CODMUN_IBGE.
+
+    Firm type and market assignment are separate facts. `is_B` comes from the
+    physical-network verdict in digital_banks_diagnostic.csv, plus the Tier-2 sentinel
+    for rows that arrive with no ESTBAN municipality at all; `mca_code` says which market
+    the row deposits sit in. A brick-and-mortar firm that books its whole ESTBAN
+    footprint at one head office has no honest local market, so the two can disagree.
+    They are not reconciled here -- the disagreement is counted and reported.
     """
     xwalk = pd.read_csv(MCA_XWALK_CSV,
                         usecols=["municipality_code", "mca_code", "year"],
@@ -224,14 +360,56 @@ def attach_mca_code(dep: pd.DataFrame) -> pd.DataFrame:
     # Tier-2 sentinel
     dep["mca_code"] = "NATIONAL"
 
+    # Rows arriving with no ESTBAN municipality are IF-Data national aggregates: D for a
+    # reason independent of the network verdict below. Recorded before the digital
+    # re-keying overwrites CODMUN_IBGE.
+    tier2_sentinel = (dep["CODMUN_IBGE"].isna() | (dep["CODMUN_IBGE"] == 0)).fillna(True).astype(bool)
+
+    # Digital conglomerates (see load_digital_conglomerates): every ESTBAN bank in the
+    # conglomerate is a panel_5 digital candidate. Their ESTBAN rows carry a real
+    # CODMUN_IBGE (the single municipality the bank books all deposits in) and are
+    # re-keyed to the Tier-2 sentinel so they become NATIONAL like the IF-Data fintechs.
+    mask_dig = pd.Series(False, index=dep.index)
+    members = None
     digital_flags = os.path.join(PANEL_DIR, "PANEL_INTERMED", "digital_banks_diagnostic.csv")
     if os.path.exists(digital_flags):
-        df_flags = pd.read_csv(digital_flags)
-        dig_cands = set(df_flags[df_flags["is_digital_candidate"] == True]["CNPJ_root"].astype(str).str.zfill(8))
-        dep_cnpj8 = dep["CNPJ_Lider"].astype(str).str[:8].str.zfill(8)
-        mask_dig = dep_cnpj8.isin(dig_cands)
+        digital_congls, members = load_digital_conglomerates(digital_flags)
+        mask_dig = dep["CodConglomeradoPrudencial"].astype(str).isin(digital_congls)
+        n_flip = int((mask_dig & dep["CODMUN_IBGE"].notna() & (dep["CODMUN_IBGE"] != 0)).sum())
         dep.loc[mask_dig, "CODMUN_IBGE"] = 0
-        logging.info(f"Overwrote CODMUN_IBGE=0 for {mask_dig.sum()} rows of ESTBAN retail digital candidates.")
+        logging.info(
+            f"Digital conglomerates: {len(digital_congls)} flagged, "
+            f"{dep.loc[mask_dig, 'CodConglomeradoPrudencial'].nunique()} present in the deposit "
+            f"panel; CODMUN_IBGE=0 set on {mask_dig.sum():,} rows ({n_flip:,} were Tier-1)."
+        )
+        _absent = sorted(digital_congls - set(dep["CodConglomeradoPrudencial"].astype(str)))
+        if _absent:
+            logging.warning(f"Digital conglomerates with no deposit-panel rows: {_absent}")
+    else:
+        logging.warning(
+            f"{digital_flags} not found: no physical-network verdict is available, so is_B "
+            f"rests on the Tier-2 sentinel (CODMUN_IBGE == 0) alone. Run "
+            f"panel_5_flag_digital.py."
+        )
+
+    # is_B is the pipeline authoritative firm-type column: 1 = brick-and-mortar (the firm
+    # runs a physical network), 0 = D (digital, or a national aggregate with no ESTBAN
+    # footprint). Decided HERE and nowhere else. Stored as int8: market_panel.csv is
+    # rewritten several times in stage 4 by two different writers (pyarrow emits lowercase
+    # true/false for booleans, pandas emits True/False), and 0/1 reads back identically
+    # under both, whereas a boolean that is ever parsed as text would make astype(bool)
+    # return True for the string "false".
+    dep["is_B"] = (~(mask_dig.astype(bool) | tier2_sentinel)).astype("int8")
+    logging.info(
+        f"Firm type: is_B=1 on {int((dep['is_B'] == 1).sum()):,} rows (brick-and-mortar), "
+        f"is_B=0 on {int((dep['is_B'] == 0).sum()):,} rows "
+        f"({int((mask_dig & ~tier2_sentinel).sum()):,} by the network verdict, "
+        f"{int(tier2_sentinel.sum()):,} with no ESTBAN municipality)."
+    )
+
+    # The evidence behind that verdict rides along with it.
+    if members is not None:
+        dep = attach_network_evidence(dep, members)
 
     # Merge mca_code for Tier-1 rows (CODMUN_IBGE is a real 7-digit code)
     tier1_mask = dep["CODMUN_IBGE"].notna() & (dep["CODMUN_IBGE"] != 0)
@@ -277,6 +455,10 @@ def attach_mca_code(dep: pd.DataFrame) -> pd.DataFrame:
     logging.info(
         f"MCA mapping: {result['mca_code'].nunique()} unique mca_code values  "
         f"(including NATIONAL={( result['mca_code'] == 'NATIONAL').sum():,} rows)"
+    )
+    logging.info(
+        f"Firm type vs market tier: {count_type_tier_disagreement(result):,} rows where is_B "
+        f"disagrees with (mca_code != 'NATIONAL'). Separate facts, left as they fall."
     )
     return result
 
@@ -738,7 +920,9 @@ def calculate_hausman_iv_wide(panel: pd.DataFrame) -> pd.DataFrame:
 _COL_ORDER = [
     # Identifiers
     "CodConglomeradoPrudencial", "CNPJ_Lider", "NomeInstituicao",
-    "CODMUN_IBGE", "mca_code",
+    "CODMUN_IBGE", "mca_code", "is_B",
+    "congl_is_digital", "n_agencias", "n_postos", "n_own_points", "n_mun_own",
+    "n_correspondentes", "has_access_point_data",
     "year", "quarter",
     "Source",
     # Deposit balances
@@ -773,6 +957,26 @@ def save(panel: pd.DataFrame) -> None:
     import pyarrow as pa
     import pyarrow.csv as pa_csv
 
+    # is_B is the authoritative firm-type column; it must reach the CSV as 0/1 and it must
+    # reach it unmodified. Firm type and market tier are separate facts, so a disagreement
+    # with mca_code is reported, never reconciled.
+    if "is_B" not in panel.columns:
+        raise AssertionError(
+            "is_B is missing from the market panel -- attach_mca_code() must set it."
+        )
+    panel["is_B"] = panel["is_B"].fillna(0).astype("int8")
+    _disagree = count_type_tier_disagreement(panel)
+    if _disagree:
+        _rows = panel.loc[panel["is_B"].astype(bool) != (panel["mca_code"] != "NATIONAL")]
+        logging.warning(
+            f"is_B disagrees with the market tier on {_disagree:,} rows across "
+            f"{_rows['CodConglomeradoPrudencial'].nunique()} conglomerate(s): "
+            f"{sorted(_rows['CodConglomeradoPrudencial'].astype(str).unique())[:10]}. "
+            f"Firm type and market assignment are separate facts; both are written as-is."
+        )
+    else:
+        logging.info("is_B agrees with the market tier (mca_code != 'NATIONAL') on every row.")
+
     # Put columns in desired order, then any remaining columns alphabetically
     ordered   = [c for c in _COL_ORDER if c in panel.columns]
     remaining = sorted([c for c in panel.columns if c not in ordered])
@@ -796,6 +1000,11 @@ def save(panel: pd.DataFrame) -> None:
     table = pa.Table.from_pandas(panel, preserve_index=False)
     pa_csv.write_csv(table, OUTPUT_CSV)
     logging.info(f"Saved market panel to {OUTPUT_CSV}")
+    # Keep the Parquet sidecar in step with the CSV. estimation_1_sleep reads the panel
+    # through utils.load_panel_cached, which serves that sidecar, so leaving it stale
+    # here would hand the sleepiness estimation the previous build.
+    from utils import refresh_panel_cache
+    refresh_panel_cache(OUTPUT_CSV, panel)
 
 
 def get_pure_wholesale_cnpjs() -> set:
@@ -901,7 +1110,7 @@ def main() -> None:
 
     # E. Enforce Global Data Exclusions
     # 1. D-type firms (digital, without physical branch network) should launch strictly > 2013
-    d_type_early_mask = (panel['CODMUN_IBGE'].astype(str) == '0') & (panel['year'] <= 2013)
+    d_type_early_mask = (panel['is_B'] == 0) & (panel['year'] <= 2013)
     before_d_drop = len(panel)
     panel = panel[~d_type_early_mask].copy()
     after_d_drop = len(panel)
@@ -940,6 +1149,9 @@ def main() -> None:
         f"\n  -- Tier-1 (ESTBAN, local):   {len(tier1):,}  rows  "
          f"({tier1['mca_code'].nunique()} MCAs)"
         f"\n  -- Tier-2 (IF Data, national): {len(tier2):,}  rows"
+        f"\n  is_B=1 (brick-and-mortar):    {int((panel['is_B'] == 1).sum()):,}  rows"
+        f"\n  is_B=0 (D / digital):        {int((panel['is_B'] == 0).sum()):,}  rows"
+        f"\n  is_B vs market-tier disagreements: {count_type_tier_disagreement(panel):,}  rows"
         f"\n  Conglomerates:               {panel['CodConglomeradoPrudencial'].nunique()}"
         f"\n  Years:                       {panel['year'].min()} - {panel['year'].max()}"
         f"\n  Columns:                     {len(panel.columns)}"

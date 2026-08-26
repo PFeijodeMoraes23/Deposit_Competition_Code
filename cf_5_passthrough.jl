@@ -48,7 +48,7 @@ function cf5_compare(a)
     @printf("  ΣDep: base=%.4g  shock=%.4g  ∂Dep/∂Selic=%.4g\n", dep0, dep1, (dep1 - dep0) / shock)
     df = DataFrame(CodConglomeradoPrudencial=string.(P.ctx.df.CodConglomeradoPrudencial),
                    deposit_type=P.st.dep_type, endog=endog, sigma_base=σ0, sigma_shock=σ1)
-    cf_dir = cf_out_dir(P.out_dir); mkpath(cf_dir)    # cluster: data/output/cf
+    cf_dir = cf_out_dir(P.out_dir); mkpath(cf_dir)    # cluster: data/output/counterfactuals
     Parquet2.writefile(joinpath(cf_dir, "cf5_passthrough_$(P.tag).parquet"), df)
     log_status("  [CF5] wrote cf5_passthrough_$(P.tag).parquet")
 end
@@ -87,7 +87,7 @@ function main_cf5()
     df = DataFrame(CodConglomeradoPrudencial=string.(P.ctx.df.CodConglomeradoPrudencial),
                    deposit_type=P.st.dep_type, endog=endog,
                    sigma_base=eq0.sigma, sigma_shock=eq1.sigma)
-    cf_dir = cf_out_dir(P.out_dir); mkpath(cf_dir)    # cluster: data/output/cf
+    cf_dir = cf_out_dir(P.out_dir); mkpath(cf_dir)    # cluster: data/output/counterfactuals
     out_path = joinpath(cf_dir, "cf5_passthrough_$(P.tag).parquet")
     Parquet2.writefile(out_path, df)
     log_status("  [CF5] wrote $(basename(out_path))")

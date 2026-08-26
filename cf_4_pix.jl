@@ -26,8 +26,8 @@ the sleep estimation). Keyed by routine/spec it writes:
   • `phi_nopix_E{e}_spec_{s}.parquet`   — the EXACT per-row no-Pix φ for the NONLINEAR links
     (E3/E4 'index'), computed via `phi_from_native` with pix=0,
     read here by `load_phi_nopix` and joined 1:1 to `ctx.df` on (entity_id, time_id).
-That export runs either locally (uploaded to data/input) or on the cluster (written under
-data/output), so both are searched — data/input first, see `cf4_search_dirs`.
+Both land in the counterfactual step directory — the one place that export writes, resolved
+here by `cf4_search_dirs`.
 CF4 prefers the exact parquet and falls back to the scalar subtraction only when it is absent
 (identity-link specs E1/E2, where the subtraction is exact). A missing JSON errors loudly with
 the exact command to run, so a run without the recovery fails rather than silently producing
@@ -41,38 +41,22 @@ using DataFrames, Statistics, Printf
 """
     cf4_search_dirs(out_dir) -> Vector{String}
 
-Where CF4 looks for the two `cf_4_upsilon_export.py` artefacts, in order:
+The ONE directory holding the two `cf_4_upsilon_export.py` artefacts: on the cluster
+`cf_out_dir(out_dir)` = `data/output/counterfactuals`, the counterfactual step folder that
+export writes into; off the cluster `cf_in_dir(out_dir)`, the local CF_FOUNDATION directory,
+which is both where the export writes and where CF4 reads (the two helpers return the same
+path there — the split exists only on the cluster, where produced and uploaded files live in
+different trees).
 
-  1. `cf_in_dir(out_dir)`  — data/input on the cluster, where an uploaded export lands;
-  2. `out_dir/CF_FOUNDATION` — where the on-cluster export writes;
-  3. `cf_out_dir(out_dir)` — data/output/cf, the subdirectory the rest of the CF stack uses;
-  4. `<of_root>/…/ESTIMATION_OUTPUT/CF_FOUNDATION` — the anchor cf_4_upsilon_export.py itself
-     resolves (`utils.paths.estimation_output()`), which follows OPEN_FINANCE_ROOT rather
-     than the data tree. Skipped when the root does not validate.
-
-Candidate 4 normally lands ON candidate 2: the cluster bootstrap symlinks the skeleton's
-`ESTIMATION_OUTPUT` at data/output, so `estimation_output()/CF_FOUNDATION` IS
-data/output/CF_FOUNDATION by a different spelling (`search_dirs` de-duplicates by string,
-not by realpath, so both stay in the list and the first hit wins either way). It is kept for
-the case where the skeleton is built without that link, when it is the only candidate that
-matches where the export actually wrote.
-
-data/input wins whenever it holds the file, so a hand-staged export always beats a
-cluster-produced one. Off the cluster (`is_cluster_out` false) only the single
-CF_FOUNDATION directory is searched and the resolution is exactly what it was — candidate 4
-collapses onto it there anyway.
+Υ_pix and φ^noPix have exactly one producer and, in either tree, exactly one location, so the
+list is one entry long by construction. That is the point: a second candidate is how CF4 ends
+up evaluating a φ^noPix from one sleep vintage against a φ̂ from another, and the failure is
+silent — the numbers come out, just wrong. With a single candidate a missing export is an
+immediate error naming the one directory the file belongs in.
 """
 function cf4_search_dirs(out_dir)::Vector{String}
-    cf_in = cf_in_dir(out_dir)
-    is_cluster_out(out_dir) || return search_dirs(cf_in)
-    anchored = try
-        joinpath(resolve_of_root(), "BCB", "Egan_et_al_2025_Rep", "processed",
-                 "ESTIMATION_OUTPUT", "CF_FOUNDATION")
-    catch _e
-        nothing              # no validated Open-Finance root here; the data tree is enough
-    end
-    return search_dirs(cf_in, joinpath(String(out_dir), "CF_FOUNDATION"),
-                       cf_out_dir(out_dir), anchored)
+    is_cluster_out(out_dir) || return search_dirs(cf_in_dir(out_dir))
+    return search_dirs(cf_out_dir(out_dir))
 end
 
 """
@@ -183,12 +167,11 @@ function main_cf4()
                            local_dir=a["local-dir"], suffix=a["suffix"])
     st  = load_sim_state(ctx)
     _, _, out_dir = get_paths(a["hpc"]; local_dir=a["local-dir"])
-    # Υ_pix + φ^noPix come from cf_4_upsilon_export.py, which runs either locally (uploaded →
-    # data/input) or on the cluster (→ data/output). `cf4_search_dirs` covers both, data/input
-    # first. The reallocation parquet is produced here → it writes to data/output/cf. Distinct
-    # dirs on the cluster; same legacy dir locally.
-    cf_ins = cf4_search_dirs(out_dir)                  # cluster: data/input, then data/output/…
-    cf_dir = cf_out_dir(out_dir)                       # cluster: data/output/cf
+    # Υ_pix + φ^noPix come from cf_4_upsilon_export.py, and the reallocation parquet is produced
+    # here; all three belong to the counterfactual step, so read and write resolve to the same
+    # directory in either tree.
+    cf_ins = cf4_search_dirs(out_dir)                  # cluster: data/output/counterfactuals
+    cf_dir = cf_out_dir(out_dir)                       # cluster: data/output/counterfactuals
     υ   = pix_coefficient(cf_ins, a["estim"], a["spec"])
     pix0 = pix_level_zero(cf_ins, a["estim"], a["spec"])          # centred "no Pix" level (≈ −0.53)
     phi_np = load_phi_nopix(cf_ins, a["estim"], a["spec"], ctx)   # exact link-aware φ^noPix, or nothing

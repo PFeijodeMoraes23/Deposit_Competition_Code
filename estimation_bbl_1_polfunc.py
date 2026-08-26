@@ -83,18 +83,36 @@ from utils import paths as _paths  # noqa: E402
 DATA_DIR = _paths.PROCESSED
 PANEL_CSV = _paths.market_panel_csv()
 
+# The panel goes through the cached loader, exactly as estimation_1_sleep /
+# estimation_2_sleep read it. It picks the .parquet twin of PANEL_CSV whenever that is
+# the authoritative copy, which on the cluster is ALWAYS: the data bundle ships
+# market_panel.parquet (39 MB) and no market_panel.csv, so a bare pd.read_csv here finds
+# nothing. Locally it is the same frame, read 3-5x faster.
+# The guard keeps this file runnable from a checkout where utils/ has not been imported
+# yet (the same reason the sleep estimators carry it), falling back to the raw CSV read.
+try:
+    from utils import load_panel_cached  # noqa: E402
+except Exception:
+    load_panel_cached = None
+
 # Estimation window [2016, 2024] — defined once in utils/window.py (full rationale + the
 # DEMAND_MIN_YEAR / DEMAND_MAX_YEAR env overrides, which it reads).
 from utils.window import MIN_YEAR as POLFUNC_MIN_YEAR, MAX_YEAR as POLFUNC_MAX_YEAR  # noqa: E402
 from utils.winsorize import winsorize_within_type as _winsorize_within_type  # noqa: E402
 
-# COST_POLFUNC is pinned to estimation_output(), NOT SLEEP_OUT_ROOT. The policy function is
-# SPEC-INVARIANT (see the module docstring): it regresses the observed spread on the pricing
-# state and reads market_panel.csv, so it never touches an est{e} fit and has no sleepiness
-# vintage to belong to. Following the sandbox would also desync it from its consumers —
-# bbl_job.sh and estimation_bbl_2_fwd_sim.jl set no SLEEP_OUT_ROOT, so they would read a
-# different directory than the one just written.
-OUTPUT_DIR = _paths.estimation_output() / "COST_POLFUNC"
+# polfunc_dir() is the ONE place this file's outputs are decided, shared with every consumer:
+# it defaults to estimation_output()/COST_POLFUNC and honours COST_POLFUNC_DIR.
+#
+# COST_POLFUNC_DIR is a STEP-LOCATION seam, not a vintage seam — it names which folder of a
+# per-step output tree holds this step's artifacts (the cluster's data/output/bbl, where
+# bbl_job.sh exports it and estimation_bbl_2_fwd_sim.jl picks polfunc_fitted.csv up via
+# --policy-csv). It moves writer and reader together, which is exactly what a vintage override
+# would not do here: the policy function is SPEC-INVARIANT (see the module docstring) — it
+# regresses the observed spread on the pricing state and reads market_panel.csv, never touching
+# an est{e} fit — so it belongs to no sleepiness vintage, and SLEEP_OUT_ROOT is deliberately not
+# consulted. Its consumers set no SLEEP_OUT_ROOT, so following the sandbox would aim them at a
+# directory this step never fills.
+OUTPUT_DIR = _paths.polfunc_dir()
 
 # Endogenous deposit types (spreads set by institutions)
 K_ENDOG = [4, 5]
@@ -249,14 +267,42 @@ def winsorize_within_type(df: pd.DataFrame, pct: float = None, verbose: bool = T
                                   type_key='is_B', verbose=verbose)
 
 
+def _resolve_is_B(df: pd.DataFrame) -> pd.Series:
+    """Firm type as a boolean Series: True = B (brick-and-mortar), False = D (digital).
+
+    `is_B` is decided once, in panel_6_market.attach_mca_code, from the physical-network
+    verdict in digital_banks_diagnostic.csv, and stored in market_panel.csv as 0/1. It is
+    used verbatim whenever present -- never recomputed or "corrected" here, and in
+    particular not reconciled with mca_code: firm type and market tier are separate facts.
+    A panel written before the column existed falls back to the CODMUN_IBGE sentinel,
+    which approximates the verdict by where a bank books its deposits.
+    """
+    if 'is_B' in df.columns:
+        s = df['is_B']
+        if pd.api.types.is_bool_dtype(s):
+            return s.astype(bool)
+        if pd.api.types.is_numeric_dtype(s):
+            # 0/1 as stored; a missing value reads as D, matching the Julia side's
+            # Bool.(coalesce.(df.is_B, false)).
+            return pd.to_numeric(s, errors='coerce').fillna(0) != 0
+        # Text, from a CSV writer that spelled the column out ("true"/"True"/"1").
+        return s.astype(str).str.strip().str.lower().isin(('1', 'true', 't', 'yes'))
+    print("[WARNING] Column 'is_B' not found in the market panel: this panel predates the "
+          "stored firm-type column. Falling back to the CODMUN_IBGE sentinel; re-run "
+          "panel_6_market.py to store the authoritative column.")
+    return df['CODMUN_IBGE'].astype(str) != '0'
+
+
 def load_and_prepare_panel() -> pd.DataFrame:
-    """Load market_panel.csv, reshape to long for k=4,5, and construct lags.
+    """Load the market panel, reshape to long for k=4,5, and construct lags.
 
     Returns a long-format DataFrame with one row per (conglomerate, deposit_type,
     mca_code, year, quarter) tuple, restricted to deposit types 4 and 5.
     """
     print(f"Loading panel from {PANEL_CSV}...")
-    df_raw = pd.read_csv(PANEL_CSV, dtype={'mca_code': str}, low_memory=False)
+    df_raw = (load_panel_cached(PANEL_CSV, dtype={'mca_code': str}, low_memory=False)
+              if load_panel_cached
+              else pd.read_csv(PANEL_CSV, dtype={'mca_code': str}, low_memory=False))
     print(f"  Raw panel: {len(df_raw):,} rows, {len(df_raw.columns)} columns")
 
     # Restrict to the estimation window (2016-2024), matching the sleep/demand/cost stages.
@@ -295,7 +341,8 @@ def load_and_prepare_panel() -> pd.DataFrame:
     df['rate_ann'] = (1.0 + df['rate_qoq']) ** 4 - 1.0
 
     # ----- Firm type classification ---------------------------------------
-    df['is_B'] = (df['CODMUN_IBGE'].astype(str) != '0')
+    # Read the panel's stored verdict; see _resolve_is_B.
+    df['is_B'] = _resolve_is_B(df)
 
     # ----- Entity key & time identifiers ----------------------------------
     df['entity_id'] = (

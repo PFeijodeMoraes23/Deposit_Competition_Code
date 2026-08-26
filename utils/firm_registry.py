@@ -136,12 +136,26 @@ def _norm(s: str) -> str:
 def _load_ifdata_namemap(base: str) -> list[dict]:
     """Build [{name_norm, cnpj_root, cong_prud}] from IF Data List CSVs."""
     import pandas as pd
-    # IF-Data List now lives under the consolidated raw tree (see utils/paths.py:IF_DATA_LIST)
-    _if_list = os.path.join(base, "BCB", "Egan_et_al_2025_Rep", "raw", "IF_DATA", "List")
-    files = sorted(glob.glob(os.path.join(_if_list, "IF_DATA_List*.csv")))
-    if not files:
-        # alternate naming used by scrape_1
-        files = sorted(glob.glob(os.path.join(_if_list, "*.csv")))
+    # utils.paths is the one source of truth for where the IF-Data List lives; it currently
+    # resolves to <OPEN_FINANCE>/shared/IF_DATA/List. Imported locally so this module stays
+    # usable with an explicit `base` when paths cannot be imported.
+    _candidates = []
+    try:
+        from utils import paths as _paths
+        _candidates.append(str(_paths.IF_DATA_LIST))
+    except Exception:  # noqa: BLE001 - fall back to the base-relative layout below
+        pass
+    _candidates.append(os.path.join(base, "shared", "IF_DATA", "List"))
+    _candidates.append(os.path.join(base, "BCB", "Egan_et_al_2025_Rep", "raw", "IF_DATA", "List"))
+
+    files: list[str] = []
+    for _if_list in _candidates:
+        files = sorted(glob.glob(os.path.join(_if_list, "IF_DATA_List*.csv")))
+        if not files:
+            # alternate naming used by scrape_1
+            files = sorted(glob.glob(os.path.join(_if_list, "*.csv")))
+        if files:
+            break
     rows: list[dict] = []
     for f in files:
         try:

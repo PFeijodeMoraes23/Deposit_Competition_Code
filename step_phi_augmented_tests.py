@@ -42,7 +42,7 @@ from estimation_2_sleep import (build_pooled_data, define_specifications,
                                 apply_imbalanced_cluster_correction)
 from utils import paths as _paths
 
-DEMAND_PREP = _paths.demand_prep_root()
+DEMAND_PREP = _paths.demand_parquet_dir()
 
 
 def demand_parquet(estim: int = 2):

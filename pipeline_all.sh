@@ -9,33 +9,42 @@
 #   bash pipeline_all.sh --from blp    # resume at a phase
 #
 # WHAT MUST EXIST FIRST
-#   the uploaded inputs (cluster/upload_manifest.txt) and the two sysimages.
-#   Everything else this run builds for itself.
+#   the uploaded inputs (cluster/upload_manifest.txt). Everything else — the step
+#   tree, both sysimages, the draws, every intermediate — this run builds for itself.
 # WHAT TO RUN NEXT
 #   Nothing. Watch it with `squeue -u $USER` and read the gate jsons:
-#       for g in G1 G2 G3 G4 G7; do python -m json.tool ../data/output/.gate_$g.json; done
+#       for g in G0 G1 G2 G3 G4 G7; do python -m json.tool ../data/output/.gate_$g.json; done
+#
+# RULE 0: NOTHING RUNS ON THE LOGIN NODE. This script parses flags and calls sbatch;
+# that is all it does. It loads no Julia, runs no preflight, creates no data
+# directory and follows no symlink. Every check that needs the toolchain is inside
+# gate G0, which is a job, and every first-tier submission waits afterok on it.
 #
 # ------------------------------------------------------------------------------
 # THE SHAPE OF THE RUN, and why it is not one flat dependency graph
 # ------------------------------------------------------------------------------
-#   G0 (login node, inline — not a job)
-#     |
-#   sleep_run.sh ....... est array -> [G1] -> prep -> [G2] -+-> ame_gate -> ame -> [G3]
-#     |                                                     +-> upsilon -> [G7]
+#   pipe_G0 (env_job.sh ENV_STEP=preflight; day 2c/8G 30m) -> .gate_G0.json
+#     |  afterok
+#   sleep_run.sh ..... est_lin array + spec arrays -> merges -> [G1] -> prep -> [G2]
+#     |                                             [G2] -+-> ame_gate -> ame -> [G3]
+#     |                                                   +-> upsilon E1-4 -> [G7]
+#     |                                                   +-> pipe_demand_prep_zip
 #   logit_job.sh (afterok G2) -> [G4]
 #     |
 #   =====  continuation job, afterok G2:G4  ==============================
-#   blp_run.sh ......... sysimage/draws -> per-routine RC ladders -> archive
-#   rc_stage ........... unpack the newest blp_outputs zip into cluster_processed/
+#   blp_run.sh ....... [auto] sysimage gpu+cpu, draws -> per-routine RC ladders
+#                      -> blp_zip (--copy; the results STAY in data/output/blp)
 #     |
-#   =====  continuation job, afterok rc_stage  ===========================
+#   =====  continuation job, afterok the RC terminals  ===================
 #   bbl_run.sh --fwd-cpu ....... warmup -> polfunc -> fwd_sim array -> solve
 #   cf_run.sh (phase 1b) ....... demand_eval + cf4, no re-eval, needs no costs
 #   cf_run.sh (phase 2) ........ cf1 + cf1_net + cf4 re-eval, --cost-afterok the solves
+#   pipe_download .............. afterANY the CF jobs and the BBL solves: every set
+#                                into data/output/download, --copy
 #     |
-#   =====  continuation job, afterok the CF results  =====================
+#   =====  continuation job (--cfeq only), afterok the CF results  =======
 #   cf_eq_run.sh ....... the firm-sharded Jacobi equilibria
-#   terminal archives .. afterany, --copy
+#   pipe_download_cfeq . the sets those equilibria changed
 #
 # THE CONTINUATION JOBS ARE THE POINT, so they are worth stating plainly.
 # blp_run.sh, bbl_run.sh and cf_eq_run.sh all preflight their inputs ON DISK at
@@ -44,7 +53,7 @@
 # Submitting all six phases at t=0 would therefore refuse at phase 3 with a
 # perfectly correct MISSING report, because at t=0 the file really is missing.
 #
-# So each phase boundary submits a ten-minute CPU job that re-invokes THIS script
+# So each phase boundary submits a thirty-minute CPU job that re-invokes THIS script
 # with --from <next-phase>. The preflight then runs at the moment its inputs
 # exist, which is the moment it is actually informative, and a resume by hand is
 # the same command the pipeline runs itself. `--dry-run` walks every phase inline
@@ -64,13 +73,19 @@
 #   --no-blp           skip the RC-BLP phase (its results must be on disk)
 #   --no-bbl           skip the BBL cost phase (cost params must be on disk)
 #   --no-cf            skip the CF phase
-#   --no-cfeq          skip the equilibrium CF phase
+#   --cfeq             ALSO run the equilibrium CFs (CF3/CF5/CF6). OFF by default:
+#                      they are days of GPU array time and no headline result reads them
+#   --no-cfeq          accepted and a NO-OP — it names the default
 #   --cfeq-modes "cf3" which equilibrium CFs to run (cf3 cf5 cf6; cf6 needs CF_MERGE)
-#   --blp-args "..."   extra flags forwarded verbatim to blp_run.sh (e.g. "--draws --sysimage")
-#   --skip-preflight   skip G0's cluster_preflight.sh
+#   --blp-args "..."   extra flags forwarded verbatim to blp_run.sh (e.g. "--draws --sysimage");
+#                      blp_run.sh builds what is missing without them
+#   --skip-preflight   do not submit gate G0
 #   --resumed          internal: set by the continuation jobs; skips G0
 #   --dry-run          print every sbatch line, submit nothing
 #   -h                 this header
+#
+# Env: DOWNLOAD_SETS names what pipe_download packages (default: every step).
+#      CL_VERBOSE=1 restores each child orchestrator's full output.
 # ==============================================================================
 set -uo pipefail
 CL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -88,8 +103,17 @@ R="${R:-2000}"; SEED="${SEED:-42}"
 CFEQ_MODES="${CFEQ_MODES:-cf3}"
 BLP_ARGS="${BLP_ARGS:-}"
 SKIP_EST=""; SKIP_PF=""; RESUMED=0; DRY=""
-DO_SLEEP=1; DO_LOGIT=1; DO_BLP=1; DO_BBL=1; DO_CF=1; DO_CFEQ=1
-FINAL_ZIP_SETS="${FINAL_ZIP_SETS:-foundation cf1 cf4}"
+DO_SLEEP=1; DO_LOGIT=1; DO_BLP=1; DO_BBL=1; DO_CF=1
+# The equilibrium CFs are OFF by default. They are days of GPU array time and nothing
+# in the headline results reads them; --cfeq opts in, and --no-cfeq names the default.
+DO_CFEQ=0
+# What comes home. One set per step folder plus the gate jsons and the logs, i.e. the
+# whole of data/output — the cluster is scratch and the local disk is the record, so a
+# partial download is the one failure mode there is no recovering from once the
+# allocation is cleaned. cluster_archive.sh splits anything over ~3 GB.
+DOWNLOAD_SETS="${DOWNLOAD_SETS:-sleep demand_prep logit blp bbl counterfactuals gates logs}"
+# What group D re-packages: only the sets an equilibrium CF run can change.
+DOWNLOAD_SETS_CFEQ="${DOWNLOAD_SETS_CFEQ:-counterfactuals gates logs}"
 # gpu_h200 is the default and stays the default: it is the only partition whose
 # 141 GB of vRAM the RC ladders are known to fit in. The cluster also offers
 # gpu_h100 (12 jobs / 32 GPUs, 80 GB) and gpu_rtx6000 (16 jobs / 16 GPUs), and
@@ -108,13 +132,14 @@ while [[ $# -gt 0 ]]; do
         --no-blp)         DO_BLP=0 ;;
         --no-bbl)         DO_BBL=0 ;;
         --no-cf)          DO_CF=0 ;;
-        --no-cfeq)        DO_CFEQ=0 ;;
+        --cfeq)           DO_CFEQ=1 ;;
+        --no-cfeq)        DO_CFEQ=0 ;;          # names the default; kept so old command lines still parse
         --cfeq-modes)     CFEQ_MODES="$2"; shift ;;
         --blp-args)       BLP_ARGS="$2"; shift ;;
         --skip-preflight) SKIP_PF="--skip-preflight" ;;
         --resumed)        RESUMED=1 ;;
         --dry-run)        CL_DRYRUN=1; DRY="--dry-run" ;;
-        -h|--help)        sed -n '2,74p' "${BASH_SOURCE[0]}"; exit 0 ;;
+        -h|--help)        sed -n '2,88p' "${BASH_SOURCE[0]}"; exit 0 ;;
         *) echo "unknown option: $1 (see -h)" >&2; exit 2 ;;
     esac
     shift
@@ -138,7 +163,7 @@ FROM_IX="$(phase_index "${FROM}")"
 # later one needs no file the earlier one has yet to write, only a job id.
 #   A = sleep + logit  logit is one sbatch chained afterok G2; nothing to preflight
 #   C = bbl   + cf     cf_run.sh --cost-afterok takes the solve job ids INSTEAD of
-#                      the cost params, which is exactly pipeline_run.sh's phase 2
+#                      the cost params on disk, so SLURM enforces the ordering
 # B (blp) and D (cfeq) stand alone: blp_run.sh needs the parquets and deltas ON
 # DISK, cf_eq_run.sh needs the cost params and RC results ON DISK, and neither
 # takes a dependency flag. They get a continuation job instead.
@@ -177,12 +202,27 @@ add_jid () { [[ -n "$1" ]] && ALL_JIDS="${ALL_JIDS:+${ALL_JIDS}:}$1"; return 0; 
 # Capture a child WITHOUT letting set -e abort before its output is shown. The
 # child's preflight prints its MISSING diagnostics on stdout, and dying on the
 # $(...) assignment swallows them entirely. Same pattern at every capture site.
+#
+# The capture is UNCONDITIONAL — child_field parses it either way — but the ECHO of
+# it is not, and there are three cases:
+#   verbose / dry run / the child FAILED  -> print all of it. A dry run exists to show
+#       the graph, so hiding the graph would make --dry-run useless; a failed child's
+#       MISSING report is the only thing worth reading at that moment.
+#   otherwise -> the whole transcript goes to the orchestrator log, and the terminal
+#       keeps one line per submission. The filter is ' -> <jobid>', which is the shape
+#       every submission line in every child has, so a run reads as its own job graph
+#       rather than as six concatenated banners.
 CHILD_OUT=""; CHILD_RC=0
 run_child () {   # run_child <label> <command...>
     local label="$1"; shift
-    echo; echo "=== ${label} ==="
+    cl_log ""; cl_log "=== ${label} ==="
     set +e; CHILD_OUT="$("$@")"; CHILD_RC=$?; set -e
-    printf '%s\n' "${CHILD_OUT}"
+    if [[ "${CL_VERBOSE}" == "1" || "${CL_DRYRUN}" == "1" || ${CHILD_RC} -ne 0 ]]; then
+        printf '%s\n' "${CHILD_OUT}"
+    else
+        _cl_to_log "${CHILD_OUT}"
+        printf '%s\n' "${CHILD_OUT}" | grep -E ' -> [0-9]+' || true
+    fi
     return 0
 }
 child_field () { printf '%s\n' "${CHILD_OUT}" | sed -n "s/^$1=//p" | tail -n1; }
@@ -202,7 +242,9 @@ continue_at () {   # continue_at <phase> <dep_ids> -> job id
     [[ "${DO_BLP}"  == "1" ]] || wrap="${wrap} --no-blp"
     [[ "${DO_BBL}"  == "1" ]] || wrap="${wrap} --no-bbl"
     [[ "${DO_CF}"   == "1" ]] || wrap="${wrap} --no-cf"
-    [[ "${DO_CFEQ}" == "1" ]] || wrap="${wrap} --no-cfeq"
+    # --cfeq is opt-IN, so the continuation carries it forward only when it was asked
+    # for. The other three are opt-OUT and carry their negation instead.
+    [[ "${DO_CFEQ}" == "1" ]] && wrap="${wrap} --cfeq"
     [[ -n "${BLP_ARGS}" ]] && wrap="${wrap} --blp-args '${BLP_ARGS}'"
     # 30 minutes, not 10: the resumed invocation runs the next phase's FULL preflight
     # (and the bbl+cf group runs three of them), each of which loads the Julia module
@@ -243,73 +285,52 @@ defer_to () {   # defer_to <phase> <dep_ids>
     exit 0
 }
 
-# ── G0: the login-node gate. Inline, not a job — everything it checks is a ────
-#    property of the login node, and a job would have to be submitted before the
-#    checks that decide whether submitting is a good idea.
-g0 () {
-    cl_banner "G0 — login-node preflight (inline; submits nothing)"
-    echo "(a) THE OPEN-FINANCE SKELETON"
-    cl_bootstrap_tree || echo "  [!] skeleton bootstrap reported a problem (above)."
-    echo "    OPEN_FINANCE_ROOT   = $(cl_of_root)"
-    echo "    SLEEP_OUT_ROOT      = ${CL_DATA_OUT}/DEMAND_PREP"
-    echo "    estimation_output() = ${CL_DATA_OUT}   (via the ESTIMATION_OUTPUT symlink)"
-    echo
-    echo "(b) JULIA: WHAT THE CLUSTER OFFERS vs WHAT THE MANIFEST WAS RESOLVED UNDER"
-    cl_julia_candidates || true
-    echo "  Manifest.toml julia_version = $(cl_manifest_julia_version || echo '<none>')"
-    echo "  JULIA_MODULE                = ${JULIA_MODULE}"
-    if cl_load_julia >/dev/null 2>&1; then
-        echo "  loaded: $(julia --version 2>/dev/null || echo '??')"
-        if cl_check_julia_version; then
-            echo "  -> no resolve needed."
-        else
-            echo "  -> A RESOLVE IS EXPECTED, and it is not an error. The manifest was resolved"
-            echo "     under a different Julia; setup_julia_env.sh deletes and re-resolves it"
-            echo "     ONCE, which is its documented job. Run it ALONE (concurrent Pkg.resolve()"
-            echo "     on NFS corrupts Manifest.toml), wait for it, then re-run this script:"
-            echo "         sbatch --partition=day --time=00:30:00 --cpus-per-task=4 --mem=16G \\"
-            echo "                --export=ALL,ENV_STEP=resolve env_job.sh"
-        fi
-    else
-        echo "  [!] '${JULIA_MODULE}' did not load. Pick a candidate above:  export JULIA_MODULE=<candidate>"
-    fi
-    echo
-    echo "(c) cluster_preflight.sh"
-    if [[ -n "${SKIP_PF}" ]]; then
-        echo "  skipped (--skip-preflight)"
-    elif [[ "${CL_DRYRUN}" == "1" ]]; then
-        local wb=""
-        [[ "${BLP_ARGS}" == *--sysimage* ]] && wb="${wb} sysimage"
-        [[ "${BLP_ARGS}" == *--draws*    ]] && wb="${wb} draws"
-        echo "  [dry-run] would run:  bash cluster_preflight.sh --routines '${SLEEP_ROUTINES}'${wb:+ --will-build '${wb# }'}"
-    else
-        # The preflight cannot know that jobs 1 and 2 of the blp phase BUILD the sysimage
-        # and the draws; without this it reports them missing and refuses a run that was
-        # always going to create them. Derived from --blp-args so the two cannot disagree.
-        local wb=""
-        [[ "${BLP_ARGS}" == *--sysimage* ]] && wb="${wb} sysimage"
-        [[ "${BLP_ARGS}" == *--draws*    ]] && wb="${wb} draws"
-        set +e
-        bash "${CL_ROOT}/cluster_preflight.sh" --routines "${SLEEP_ROUTINES}"              ${wb:+--will-build "${wb# }"}
-        local rc=$?; set -e
-        if [[ ${rc} -ne 0 ]]; then
-            echo "" >&2
-            echo "pipeline_all.sh: refusing to submit — the preflight found blockers (above)." >&2
-            echo "  If RESOLVE REQUIRED was the ONLY one, it is the expected one-time step:" >&2
-            echo "  run the env_job.sh resolve printed above, then re-run this script." >&2
-            echo "  --skip-preflight submits anyway." >&2
-            exit 1
-        fi
-    fi
+# ── G0: a JOB, and the first tier of the graph ───────────────────────────────
+# It builds the tree, loads the toolchain, LOADS both sysimages and imports the
+# Python stack — none of which belongs on a shared login host, and all of which is
+# more reliable on a compute node with the same CPU target the real jobs get. So it
+# is submitted like everything else, and the A-phase hangs off it afterok:
+# --kill-on-invalid-dep then turns a blocking verdict into "nothing downstream ever
+# starts", which is exactly the semantics an inline refusal had.
+#
+# It echoes the job id on stdout and its narration on stderr, so
+# `G0_JID="$(submit_g0)"` captures an id and not a paragraph.
+submit_g0 () {
+    local wb="" jid
+    # The preflight cannot know that the BLP phase BUILDS the sysimage and the draws
+    # when they are absent; without --will-build it reports them missing and refuses a
+    # run that was always going to create them. Derived from --blp-args, the only place
+    # a caller can force those builds, so the two cannot disagree. blp_run.sh's own
+    # auto-build is silent here on purpose: it decides from disk, at its own submit
+    # time, and by then G0 has already run.
+    [[ "${BLP_ARGS}" == *--sysimage* ]] && wb="${wb} sysimage"
+    [[ "${BLP_ARGS}" == *--draws*    ]] && wb="${wb} draws"
+    jid=$(cl_sbatch -J pipe_G0 --partition="${SLEEP_PARTITION:-day}" --time=00:30:00 \
+        --nodes=1 --ntasks=1 --cpus-per-task=2 --mem=8G \
+        --export=ALL,ENV_STEP=preflight,PF_ROUTINES="${SLEEP_ROUTINES}",PF_WILL_BUILD="${wb# }" \
+        -o "${LOGD}/pipe_G0_%j.out" -e "${LOGD}/pipe_G0_%j.err" \
+        "${CL_ROOT}/env_job.sh")
+    cl_say "  pipe_G0 -> ${jid}  (ENV_STEP=preflight; -> data/output/.gate_G0.json)" >&2
+    printf '%s\n' "${jid}"
 }
 
-[[ "${RESUMED}" == "1" ]] || g0
+G0_JID=""
+if [[ "${RESUMED}" != "1" && -z "${SKIP_PF}" ]]; then
+    G0_JID="$(submit_g0)"
+    add_jid "${G0_JID}"
+elif [[ -n "${SKIP_PF}" ]]; then
+    cl_say "  G0 skipped (--skip-preflight) — nothing verifies the toolchain or the inputs."
+fi
 
 # ── Phase: sleepiness ───────────────────────────────────────────────────────
 G2_JID=""; G4_JID=""; SLEEP_TERM=""
 if want_phase sleep && [[ "${DO_SLEEP}" == "1" ]]; then
+    # --after ${G0_JID}: every first-tier A-phase submission waits on the gate.
+    # --skip-preflight: G0 IS the preflight, and running a second one here would put
+    # it back on the login node, which is the thing this design removes.
     run_child "Phase sleep: sleep_run.sh" \
-        bash "${CL_ROOT}/sleep_run.sh" --routines "${SLEEP_ROUTINES}" ${SKIP_EST} ${DRY} --skip-preflight
+        bash "${CL_ROOT}/sleep_run.sh" --routines "${SLEEP_ROUTINES}" ${SKIP_EST} ${DRY} \
+             --skip-preflight ${G0_JID:+--after} ${G0_JID:+${G0_JID}}
     [[ ${CHILD_RC} -eq 0 ]] || die_child "sleep_run.sh" "${CHILD_RC}"
     G2_JID="$(child_field SLEEP_G2_JOBID)"
     SLEEP_TERM="$(child_field SLEEP_RESULT_JOBIDS)"
@@ -318,7 +339,7 @@ if want_phase sleep && [[ "${DO_SLEEP}" == "1" ]]; then
         echo "ERROR: sleep_run.sh emitted no SLEEP_G2_JOBID — nothing downstream can be chained." >&2
         exit 1
     fi
-    echo "  -> G2 (demand parquets verified) = ${G2_JID};  A-phase terminals = ${SLEEP_TERM:-<none>}"
+    cl_log "  -> G2 (demand parquets verified) = ${G2_JID};  A-phase terminals = ${SLEEP_TERM:-<none>}"
 
     # The demand parquets are the one A-phase product worth pulling down mid-run
     # (they are the estimation sample everything else is read against). afterANY
@@ -333,21 +354,25 @@ if want_phase sleep && [[ "${DO_SLEEP}" == "1" ]]; then
             --nodes=1 --ntasks=1 --cpus-per-task=2 --mem=8G \
             -o "${LOGD}/pipe_demand_prep_zip_%j.out" -e "${LOGD}/pipe_demand_prep_zip_%j.err" \
             --wrap "${DPWRAP}")
-        echo "  -> demand-prep archive: job ${j} (afterANY ${G2_JID}, --copy) -> data/output/demand_prep_outputs*.zip"
+        cl_say "  pipe_demand_prep_zip -> ${j}  (afterANY ${G2_JID}, --copy)"
         add_jid "${j}"
     fi
 fi
 
 # ── Phase: logit ────────────────────────────────────────────────────────────
 if want_phase logit && [[ "${DO_LOGIT}" == "1" ]]; then
-    echo; echo "=== Phase logit: blp_1_logit.jl --hpc + gate G4 ==="
-    lj=$(cl_sbatch ${G2_JID:+--dependency=afterok:${G2_JID}} \
+    # Normally afterok G2 — the logit reads the demand parquets that gate verifies.
+    # On `--from logit` there is no G2 in this graph, so it falls back to G0: the
+    # parquets are already on disk from an earlier run, and what still has to hold
+    # is that the toolchain checks passed.
+    LOGIT_DEP="${G2_JID:-${G0_JID}}"
+    lj=$(cl_sbatch ${LOGIT_DEP:+--dependency=afterok:${LOGIT_DEP}} \
         -J blp_logit --partition="${SLEEP_PARTITION:-day}" --time=02:00:00 \
         --nodes=1 --ntasks=1 --cpus-per-task=8 --mem=64G \
         --export=ALL,SLEEP_ACTIVE_ESTS="${SLEEP_ROUTINES}",SPEC=12 \
         -o "${LOGD}/blp_logit_%j.out" -e "${LOGD}/blp_logit_%j.err" \
         "${CL_ROOT}/logit_job.sh")
-    echo "  logit -> job ${lj}${G2_JID:+  (afterok G2 ${G2_JID})}"
+    cl_say "  blp_logit -> ${lj}${LOGIT_DEP:+  (afterok ${LOGIT_DEP})}"
     add_jid "${lj}"
     G4_JID=$(cl_sbatch --dependency=afterok:"${lj}" \
         -J sleep_gate_G4 --partition="${SLEEP_PARTITION:-day}" --time=00:10:00 \
@@ -355,7 +380,7 @@ if want_phase logit && [[ "${DO_LOGIT}" == "1" ]]; then
         --export=ALL,SLEEP_STEP=gate,SLEEP_GATE=G4,SLEEP_GATE_ROUTINES="${SLEEP_ROUTINES}",SPEC=12 \
         -o "${LOGD}/sleep_gate_G4_%j.out" -e "${LOGD}/sleep_gate_G4_%j.err" \
         "${CL_ROOT}/sleep_job.sh")
-    echo "  [G4] gate -> job ${G4_JID}  (afterok ${lj})   -> data/output/.gate_G4.json"
+    cl_say "  gate G4 -> ${G4_JID}  (afterok ${lj})"
     add_jid "${G4_JID}"
 fi
 
@@ -370,41 +395,32 @@ elif [[ -z "${BLP_DEP}" ]] && ! runs_now blp && [[ "${DO_BLP}" == "1" ]] \
     # Neither gate produced a job id — both phases were switched off — so there is
     # nothing to chain the RC ladders on. Say so rather than exit silently having
     # submitted nothing.
-    echo
-    echo "-- nothing to chain the RC phase on: both the sleep and logit phases were skipped."
-    echo "   Start there instead:  bash pipeline_all.sh --from blp"
+    cl_say "  nothing to chain the RC phase on: both the sleep and logit phases were skipped."
+    cl_say "  Start there instead:  bash pipeline_all.sh --from blp"
 fi
 
 # ── Phase: RC-BLP ───────────────────────────────────────────────────────────
-RC_STAGE_JID=""
+BLP_TERM=""
 if want_phase blp && [[ "${DO_BLP}" == "1" ]]; then
+    # --skip-preflight always: G0 already ran it, as a job. blp_run.sh still decides
+    # the sysimage/draws builds for itself, from disk.
     run_child "Phase blp: blp_run.sh" \
-        bash "${CL_ROOT}/blp_run.sh" --routines "${ROUTINES}" ${BLP_ARGS} ${DRY} ${SKIP_PF}
+        bash "${CL_ROOT}/blp_run.sh" --routines "${ROUTINES}" ${BLP_ARGS} ${DRY} --skip-preflight
     [[ ${CHILD_RC} -eq 0 ]] || die_child "blp_run.sh" "${CHILD_RC}"
-    blp_term="$(child_field BLP_TERM_JOBIDS)"
-    add_jid "${blp_term}"
-    echo "  -> RC terminals = ${blp_term:-<none>}"
-    if [[ -n "${blp_term}" ]]; then
-        # The RC results reach the BBL/CF stack as cluster_processed/blp_E{k}_spec_12.jls,
-        # unpacked from the newest blp_outputs_*.zip. cf_run.sh/bbl_run.sh do that at
-        # SUBMIT time, which at t=0 is before the zip exists — so do it here, as a job,
-        # once the ladders have finished and the archive has been written.
-        RCWRAP="cd '${CL_ROOT}' && . ./cluster_lib.sh && cl_build_cp_dir \"\$(cl_cp_dir ${ROUTINES})\" '${CF_STAGE}' ${ROUTINES}"
-        RC_STAGE_JID=$(cl_sbatch --dependency=afterany:"${blp_term}" \
-            -J pipe_rc_stage --partition="${ZIP_PARTITION:-day}" --time=00:30:00 \
-            --nodes=1 --ntasks=1 --cpus-per-task=2 --mem=16G \
-            -o "${LOGD}/pipe_rc_stage_%j.out" -e "${LOGD}/pipe_rc_stage_%j.err" \
-            --wrap "${RCWRAP}")
-        echo "  -> rc_stage (unpack cluster_processed/) : job ${RC_STAGE_JID}  (afterANY ${blp_term})"
-        add_jid "${RC_STAGE_JID}"
-    fi
+    BLP_TERM="$(child_field BLP_TERM_JOBIDS)"
+    add_jid "${BLP_TERM}"
+    cl_log "  -> RC terminals = ${BLP_TERM:-<none>}"
 fi
 
 # ── Hand-off B -> C ─────────────────────────────────────────────────────────
-if [[ -n "${RC_STAGE_JID}" ]] && ! runs_now bbl && ! runs_now cf \
+# Straight onto the RC terminals. The ladders persist their results in
+# data/output/blp and nothing stages, unpacks or renames them afterwards, so the
+# moment the last rung reports COMPLETED the file bbl_run.sh and cf_run.sh preflight
+# is the file that is there.
+if [[ -n "${BLP_TERM}" ]] && ! runs_now bbl && ! runs_now cf \
    && { [[ "${DO_BBL}" == "1" ]] || [[ "${DO_CF}" == "1" ]]; }; then
     echo
-    defer_to bbl "${RC_STAGE_JID}"
+    defer_to bbl "${BLP_TERM}"
 fi
 
 # ── Phase: BBL costs ────────────────────────────────────────────────────────
@@ -413,15 +429,21 @@ if want_phase bbl && [[ "${DO_BBL}" == "1" ]]; then
     # --fwd-cpu deliberately. A memory note records fwd_sim as memory-bandwidth
     # bound at ~0% GPU utilisation, and a job that holds an H200 at ~0% gets
     # flagged by YCRC and costs later priority.
+    #
+    # PY_PREFLIGHT=0 with --skip-preflight: both of bbl_run.sh's checks import the
+    # Python stack, and G0 has already done exactly that on a compute node. Leaving
+    # them on here would put an interpreter back on the login host for no new
+    # information.
     run_child "Phase bbl: bbl_run.sh --fwd-cpu" \
-        bash "${CL_ROOT}/bbl_run.sh" --routines "${ROUTINES}" --fwd-cpu ${DRY} ${SKIP_PF}
+        env PY_PREFLIGHT=0 bash "${CL_ROOT}/bbl_run.sh" --routines "${ROUTINES}" --fwd-cpu \
+            ${DRY} --skip-preflight
     [[ ${CHILD_RC} -eq 0 ]] || die_child "bbl_run.sh" "${CHILD_RC}"
     COST_AFTEROK="$(child_field BBL_SOLVE_JOBIDS)"
     add_jid "$(child_field BBL_ALL_JOBIDS)"
-    echo "  -> BBL solve jobs for the CF1-net afterok: ${COST_AFTEROK:-<none>}"
+    cl_log "  -> BBL solve jobs for the CF1-net afterok: ${COST_AFTEROK:-<none>}"
 fi
 
-# ── Phase: counterfactuals (mirrors pipeline_run.sh's two-phase logic) ──────
+# ── Phase: counterfactuals, in two sub-phases ───────────────────────────────
 CF_JOBIDS=""; WARMUP_JOBID=""
 capture_cf () {
     local ids w
@@ -431,17 +453,16 @@ capture_cf () {
     return 0
 }
 
-# CF4 consumes upsilon_pix + phi^noPix, produced by our own upsilon job and gated by
-# G7. cf_run.sh resolves them through cl_cf4_dirs — data/input first, then
-# data/output/CF_FOUNDATION — which is the same order cf_4_pix.jl uses at run time, so
-# both a cluster-produced pair and a hand-uploaded one satisfy it. Nothing to detect
-# and nothing to drop.
+# CF4 consumes upsilon_pix + phi^noPix, produced by this run's own upsilon job into
+# data/output/counterfactuals and gated by G7. cf_run.sh resolves them through
+# cl_cf4_dirs, which names that one directory — the same one cf_4_pix.jl reads at run
+# time — so the pair the preflight sees is the pair the job opens.
 if want_phase cf && [[ "${DO_CF}" == "1" ]]; then
     # Phase 1b: CF4 with NO re-eval + the one baseline demand_eval. Needs no costs.
     steps="demand_eval cf4"
     run_child "Phase cf (1b): CF4 no re-eval (CF4_EXACT_NOPIX=0)" \
         env CF4_EXACT_NOPIX=0 bash "${CL_ROOT}/cf_run.sh" --routines "${ROUTINES}" \
-            --do "${steps}" ${DRY} ${SKIP_PF}
+            --do "${steps}" ${DRY} --skip-preflight
     [[ ${CHILD_RC} -eq 0 ]] || die_child "cf_run.sh (phase 1b)" "${CHILD_RC}"
     capture_cf
 
@@ -454,10 +475,42 @@ if want_phase cf && [[ "${DO_CF}" == "1" ]]; then
             --do "${steps}" \
             ${WARMUP_JOBID:+--warmup-jobid} ${WARMUP_JOBID:+${WARMUP_JOBID}} \
             ${COST_AFTEROK:+--cost-afterok} ${COST_AFTEROK:+${COST_AFTEROK}} \
-            ${DRY} ${SKIP_PF}
+            ${DRY} --skip-preflight
     [[ ${CHILD_RC} -eq 0 ]] || die_child "cf_run.sh (phase 2)" "${CHILD_RC}"
     capture_cf
-    echo "  -> CF result jobs = ${CF_JOBIDS:-<none>}"
+    cl_log "  -> CF result jobs = ${CF_JOBIDS:-<none>}"
+fi
+
+# ── THE DOWNLOAD: one job, every set, afterANY ──────────────────────────────
+# It belongs to the CF phase, not to the equilibrium phase, because group C is where
+# the run ends by default. Hanging it off --cfeq would mean a default run finished
+# with nothing packaged and the whole point of a complete download lost.
+#
+# afterANY the CF jobs AND the BBL solves: a wall-killed CF still packages, and the
+# bbl set is only complete once the solves have written cost_params. The sha256SUMS
+# the archiver writes prove TRANSPORT, not completeness — which is why the gates and
+# logs sets travel alongside, so the local side can tell a short zip from a short run.
+#
+# Chained with && rather than ;: one failing set then fails the job, visibly, instead
+# of leaving a silently missing family to be discovered after the allocation is gone.
+if want_phase cf && [[ "${DO_CF}" == "1" ]]; then
+    dl_dep="$(echo "${CF_JOBIDS}:${COST_AFTEROK}" | sed 's/^://; s/:$//; s/::/:/g')"
+    if [[ -n "${dl_dep}" ]]; then
+        cmd="cd '${CL_ROOT}'"
+        for s in ${DOWNLOAD_SETS}; do
+            cmd="${cmd} && bash cluster_archive.sh --set ${s} --copy --tag \"\${SLURM_JOB_ID}\""
+        done
+        dj=$(cl_sbatch --dependency=afterany:"${dl_dep}" \
+            -J pipe_download --partition="${ZIP_PARTITION:-day}" --time=02:00:00 \
+            --nodes=1 --ntasks=1 --cpus-per-task=4 --mem=16G \
+            -o "${LOGD}/pipe_download_%j.out" -e "${LOGD}/pipe_download_%j.err" \
+            --wrap "${cmd}")
+        cl_say "  pipe_download -> ${dj}  (afterANY ${dl_dep})"
+        cl_say "     sets: ${DOWNLOAD_SETS}  -> data/output/download"
+        add_jid "${dj}"
+    else
+        cl_say "  pipe_download skipped: no CF or BBL job was submitted in this invocation."
+    fi
 fi
 
 # ── Hand-off C -> D ─────────────────────────────────────────────────────────
@@ -474,47 +527,48 @@ if want_phase cfeq && [[ "${DO_CFEQ}" == "1" ]]; then
             *) echo "--cfeq-modes: '${mode}' is not cf3|cf5|cf6" >&2; exit 2 ;;
         esac
         if [[ "${mode}" == "cf6" && -z "${CF_MERGE:-}" ]]; then
-            echo "-- cf6 skipped: it needs the conglomerate pair, e.g. CF_MERGE='firmA,firmB'"
+            cl_say "  cf6 skipped: it needs the conglomerate pair, e.g. CF_MERGE='firmA,firmB'"
             continue
         fi
         for k in ${ROUTINES}; do
+            # --no-zip: every mode and every routine writes into the SAME step folder,
+            # and pipe_download_cfeq below packages that folder once, afterany all of
+            # them. Left to itself each cf_eq_run.sh would submit its own terminal
+            # archive of the whole counterfactuals set, so a "cf3 cf5" x "3 4" group
+            # would re-zip the identical tree four extra times, each one a --copy pass
+            # over every earlier equilibrium's output. Run by hand, cf_eq_run.sh keeps
+            # its own zip: nothing else is watching that chain to package it.
             run_child "Phase cfeq: cf_eq_run.sh --mode ${mode} --routine ${k}" \
                 bash "${CL_ROOT}/cf_eq_run.sh" --mode "${mode}" --routine "${k}" \
-                    ${CF_MERGE:+--merge} ${CF_MERGE:+${CF_MERGE}} ${DRY}
+                    ${CF_MERGE:+--merge} ${CF_MERGE:+${CF_MERGE}} --no-zip ${DRY}
             [[ ${CHILD_RC} -eq 0 ]] || die_child "cf_eq_run.sh --mode ${mode} --routine ${k}" "${CHILD_RC}"
             fj="$(child_field FINAL_JOB)"
             [[ -n "${fj}" ]] && { CFEQ_TERM="${CFEQ_TERM:+${CFEQ_TERM}:}${fj}"; add_jid "${fj}"; }
         done
     done
-    echo "  -> equilibrium CF terminals = ${CFEQ_TERM:-<none>}"
-fi
+    cl_log "  -> equilibrium CF terminals = ${CFEQ_TERM:-<none>}"
 
-# ── Terminal archives: afterANY, --copy, at the very end ────────────────────
-# afterany, not afterok, so partial results still get bundled if a stage
-# wall-kills. --copy, always: cost_params and the sigma directories are read IN
-# PLACE by anything still running, and the cf4 set sits next to uploaded inputs.
-if want_phase cfeq; then
-    dep="$(echo "${CFEQ_TERM}:${CF_JOBIDS}" | sed 's/^://; s/:$//; s/::/:/g')"
-    if [[ -n "${dep}" ]]; then
-        sets="${FINAL_ZIP_SETS}"
-        for m in ${CFEQ_MODES}; do sets="${sets} ${m}"; done
+    # A SECOND download, for the sets these equilibria change. The first one has long
+    # since run — group D can start days later — so the counterfactuals, gates and logs
+    # zips are re-cut with this job's tag rather than overwriting the earlier ones.
+    if [[ -n "${CFEQ_TERM}" ]]; then
         cmd="cd '${CL_ROOT}'"
-        for s in ${sets}; do cmd="${cmd} && bash cluster_archive.sh --set ${s} --copy"; done
-        zj=$(cl_sbatch --dependency=afterany:"${dep}" \
-            -J pipe_final_zip --partition="${ZIP_PARTITION:-day}" --time=00:30:00 \
-            --nodes=1 --ntasks=1 --cpus-per-task=2 --mem=8G \
-            -o "${LOGD}/pipe_final_zip_%j.out" -e "${LOGD}/pipe_final_zip_%j.err" \
+        for s in ${DOWNLOAD_SETS_CFEQ}; do
+            cmd="${cmd} && bash cluster_archive.sh --set ${s} --copy --tag \"\${SLURM_JOB_ID}\""
+        done
+        dj=$(cl_sbatch --dependency=afterany:"${CFEQ_TERM}" \
+            -J pipe_download_cfeq --partition="${ZIP_PARTITION:-day}" --time=02:00:00 \
+            --nodes=1 --ntasks=1 --cpus-per-task=4 --mem=16G \
+            -o "${LOGD}/pipe_download_cfeq_%j.out" -e "${LOGD}/pipe_download_cfeq_%j.err" \
             --wrap "${cmd}")
-        echo; echo "-- terminal archive: job ${zj}  (afterany ${dep})  sets: ${sets}"
-        add_jid "${zj}"
-    else
-        echo; echo "-- terminal archive skipped: no CF/CF-eq jobs were submitted in this invocation."
+        cl_say "  pipe_download_cfeq -> ${dj}  (afterANY ${CFEQ_TERM}; sets: ${DOWNLOAD_SETS_CFEQ})"
+        add_jid "${dj}"
     fi
 fi
 
 echo
-cl_banner "Submitted. Track:  squeue -u \$USER" \
-          "Gate verdicts: data/output/.gate_G{1,2,3,4,7}.json — written BEFORE a gate exits." \
-          "A phase that never starts means the gate before it failed; read its json first." \
-          "Resume by hand at any point:  bash pipeline_all.sh --from <sleep|logit|blp|bbl|cf|cfeq>"
+cl_say "track:    squeue -u \$USER          (details: $(cl_orch_log))"
+cl_say "gates:    data/output/.gate_G{0,1,2,3,4,7}.json — each written BEFORE its gate exits;"
+cl_say "          a phase that never starts means the gate before it failed, so read that json first."
+cl_say "download: data/output/download/ once pipe_download reports COMPLETED, then sha256sum -c sha256SUMS there."
 echo "PIPELINE_ALL_JOBIDS=${ALL_JIDS}"

@@ -96,13 +96,24 @@
 #        these are inputs to the run rather than something that only ever existed locally.
 #        cl_bootstrap_tree (cluster_lib.sh) symlinks all three into the Open-Finance skeleton
 #        it builds under data/root, which is what OPEN_FINANCE_ROOT points the Python stack at:
-#            processed/market_panel.csv                       -> data/input/market_panel.csv
+#            processed/market_panel.parquet                   -> data/input/market_panel.parquet
 #            processed/PANEL_INTERMED/digital_banks_diagnostic.csv -> data/input/...
 #            BCB/Inclusion/bcb_banked_mca_panel.csv           -> data/input/...
-#        UPLOAD market_panel.csv WITHOUT (or BEFORE) any market_panel.parquet sidecar: the
-#        readers pick the parquet when it is NEWER than the csv, so a sidecar copied in
-#        afterwards silently becomes the panel the whole run reads.
-market_panel       | data | sleep      | PROCESSED     | market_panel.csv               | data/input | python run_data_pipeline.py                                    | -         | -
+#
+#        THE PANEL TRAVELS AS PARQUET. market_panel.parquet is 39 MB against the CSV's 724 MB
+#        — same frame, 18x less to push through a browser upload — so the parquet IS the panel
+#        on the cluster, not a cache of one. utils.load_panel_cached reads it directly whenever
+#        market_panel.csv is absent, which on the cluster it always is.
+#
+#        DO NOT ALSO UPLOAD market_panel.csv. Two copies means two sources, and which one wins
+#        is then decided by _cache_is_current's mtime/size comparison rather than by anyone's
+#        intent: a CSV that lands after the parquet makes every estimator re-read 724 MB and
+#        rewrite the sidecar, and a CSV of a DIFFERENT vintage silently invalidates the parquet
+#        and becomes the panel. The freshness question is settled locally instead —
+#        stage_cluster_upload.py refuses to bundle a parquet whose source_csv_bytes stamp does
+#        not match the local market_panel.csv, and gate G0 re-opens the uploaded file and counts
+#        its rows before any estimator starts.
+market_panel       | data | sleep      | PROCESSED     | market_panel.parquet           | data/input | python run_data_pipeline.py                                    | -         | -
 digital_flags      | data | sleep      | PANEL_INTERMED| digital_banks_diagnostic.csv   | data/input | python panel_5_flag_digital.py                                 | -         | -
 banked_mca         | data | sleep      | INCLUSION     | bcb_banked_mca_panel.csv       | data/input | python scrape_8_bcb_banked.py                                  | -         | -
 # The persisted state transform. STATE_CENTERING_JSON points every cluster job at the uploaded
@@ -133,7 +144,7 @@ state_tier0        | data | sleep      | SIGMA_DIR     | state_centering_tier0.c
 #        gate G2), but the row stays `data`: uploading a locally-built lineup is still the
 #        supported way to run the BLP/BBL/CF stages without re-estimating, and
 #        blp_1_logit.jl's demand_dirs() searches data/input BEFORE data/output/DEMAND_PREP.
-demand_E{k}        | data | blp,bbl,cf | DEMAND_PREP   | {prefix}_spec_12.parquet       | data/input | python estimation_demand_1_prep.py --estimation {k} --spec 12 | EST{k}    | estimation_results.pkl
+demand_E{k}        | produced | blp,bbl,cf | DEMAND_PREP | {prefix}_spec_12.parquet     | data/output/demand_prep | sleep_job.sh SLEEP_STEP=prep (gate G2)                | -         | -
 
 # --- 2. demographic sigma for the parametric d-draws (blp_1_draws.jl) ---------------------
 demographics_sigma | data | blp        | SIGMA_DIR     | demographics_sigma.parquet     | data/input | python panel_8_demographics_sigma.py                          | PROCESSED | market_panel.csv
@@ -150,7 +161,7 @@ logit_delta_E{k}   | produced | blp    | BLP_LOGIT     | logit_delta_E{k}_spec_1
 forward_rf         | data | bbl,cf     | COST_FWD      | forward_rf_qoq.csv             | data/input | python cf_forward_rf.py --horizon 50 --start 2026Q1            | DEMAND_PREP | demand_3_index_spec_12.parquet
 
 # --- 5. fitted BBL policy function (deviations are formed around it, not observed spreads) -
-polfunc            | data | bbl        | COST_POLFUNC  | polfunc_fitted.csv             | data/input | python estimation_bbl_1_polfunc.py                            | PROCESSED | market_panel.csv
+polfunc            | produced | bbl      | COST_POLFUNC  | polfunc_fitted.csv           | data/output/bbl | bbl_run.sh (BBL_STEP=polfunc, default)                       | -         | -
 
 # --- 6. CF4 Pix inputs. PRODUCED on the cluster now: the sleep pickle IS there, because the ---
 #        sleepiness estimators run there, so cf_4_upsilon_export.py runs there too

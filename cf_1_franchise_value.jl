@@ -187,7 +187,7 @@ function main_cf1()
 
     dec = franchise_decomposition(ctx, st; beta=a["beta"], T=a["horizon"],
                                   markdown_q=markdown_q)
-    cf_dir = cf_out_dir(out_dir)                       # cluster: data/output/cf
+    cf_dir = cf_out_dir(out_dir)                       # cluster: data/output/counterfactuals
     out_path = joinpath(cf_dir,
         "cf1_franchise_$(kind)_E$(a["estim"])_spec_$(a["spec"])_$(a["stage"])$(a["suffix"]).parquet")
     summarize_and_export(ctx, st, dec; out_path=out_path)

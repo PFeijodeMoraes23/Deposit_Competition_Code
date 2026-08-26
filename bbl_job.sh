@@ -10,8 +10,11 @@
 # (job-name + .out/.err are set per submission by bbl_run.sh via sbatch -J/-o/-e)
 # ==============================================================================
 # bbl_job.sh — THE generic BBL worker. This is the marginal-cost ESTIMATION
-# stage: it produces data/output/cost/cost_params_*.json, which the
-# counterfactuals CONSUME.
+# stage: every artifact of it — polfunc_fitted.csv, the psi_eq/psi_dev shards and
+# cost_params_*.json, which the counterfactuals CONSUME — lands in ONE folder,
+# data/output/bbl. of_root.jl maps both COST_FWD and COST_POLFUNC there and
+# cl_export_step_dirs points the Python halves (COST_POLFUNC_DIR, CF_COST_FWD) at
+# the same place, so the fit, the shards and the solve share one directory.
 #
 # The #SBATCH block is a FLOOR (the panel iterates ~700k demand rows, so it is
 # sized above the CF driver). bbl_run.sh overrides --partition/--gpus/--mem/-t
@@ -27,12 +30,9 @@
 #   SHARD_ID     fwd_sim only: this shard (default = SLURM_ARRAY_TASK_ID, else 0)
 #   CF_GPU       1 -> GPU path (gpu sysimage); 0 -> CPU path (cpu sysimage)
 #
-# WHAT MUST EXIST FIRST: cluster_preflight.sh green; both sysimages built.
+# WHAT MUST EXIST FIRST: cluster_preflight.sh green; both sysimages built; the RC
+#   results in data/output/blp.
 # WHAT TO RUN NEXT: nothing directly — bbl_run.sh owns the chain.
-#
-# THIS SCRIPT IS NEW. submit_bbl.sh is still present and still works; it is the
-# fallback and is retired only after one successful cluster cycle. Nothing in it
-# has been modified.
 # ==============================================================================
 set -uo pipefail
 CL_DIR="${SLURM_SUBMIT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
@@ -49,6 +49,14 @@ R="${R:-2000}"; SEED="${SEED:-42}"
 BBL_EXTRA="${BBL_EXTRA:-}"
 
 mkdir -p "${CL_ROOT}/logs"
+
+# The skeleton, then the step dirs. The polfunc branch below is PYTHON and resolves
+# its output through utils/paths.polfunc_dir(), which reads COST_POLFUNC_DIR — set
+# here and nowhere else, so a job that skipped this call would write the policy CSV
+# into the local-layout default, exit 0, and strand every fwd_sim task behind it.
+cl_bootstrap_tree
+cl_export_step_dirs
+
 cl_load_julia
 
 # CF_GPU is set by bbl_run.sh (FWD_GPU=1 -> warmup + fwd_sim on the H200;
@@ -107,12 +115,15 @@ case "${BBL_STEP}" in
         echo "warmup complete: BBL stack loaded — the array can launch warm" ;;
 
     polfunc)
-        # BBL Step 1: fit the parametric policy function. Usually run LOCALLY and
-        # uploaded; this cluster path exists for reproducibility and is off by
-        # default in bbl_run.sh. Reads market_panel.csv -> writes
-        # polfunc_fitted.csv. The policy function is SPEC-INVARIANT, so it takes
-        # no --spec (unlike fwd_sim/solve, whose --spec 12 selects the BLP demand
-        # specification).
+        # BBL Step 1, and the DEFAULT pre-step of every bbl_run.sh chain: fit the
+        # parametric policy function. It needs only the market panel (uploaded as
+        # market_panel.parquet), which is already there for the sleepiness stage,
+        # so running it here costs one
+        # short CPU job and removes a 59 MB upload that could go stale against the
+        # panel. Writes ${COST_POLFUNC_DIR}/polfunc_fitted.csv — data/output/bbl —
+        # which the fwd_sim tasks take through --policy-csv. The policy function is
+        # SPEC-INVARIANT, so it takes no --spec (unlike fwd_sim/solve, whose
+        # --spec 12 selects the BLP demand specification).
         cl_setup_python "${CL_PY_REQ_POLFUNC}"
         "${PYBIN}" "${CL_ROOT}/estimation_bbl_1_polfunc.py" ${BBL_EXTRA} ;;
 
@@ -136,7 +147,7 @@ case "${BBL_STEP}" in
         run_julia estimation_bbl_2_fwd_sim.jl --n-shards "${N_SHARDS}" --shard-id "${SHARD_ID}" ;;
 
     solve)
-        # BBL Step 2 part 2: the eq:17 minimisation -> data/output/cost/cost_params_*.json.
+        # BBL Step 2 part 2: the eq:17 minimisation -> data/output/bbl/cost_params_*.json.
         cl_setup_python "${CL_PY_REQ_SOLVE}"
         "${PYBIN}" "${CL_ROOT}/estimation_bbl_3_solve.py" \
             --estim "${BBL_ROUTINE}" --spec 12 --stage "${BBL_STAGE}" ${BBL_EXTRA} ;;

@@ -49,9 +49,9 @@ if str(REPO) not in sys.path:
 
 MANIFEST = REPO / "cluster" / "upload_manifest.txt"
 
-# Project root on Bouchet. Taken from the #SBATCH --output lines in submit_blp_1_draws.sh /
-# setup_julia_env.sh, which are the only absolute cluster paths committed to this repo; the
-# submit scripts themselves resolve data as `$(pwd)/../data` from scripts/.
+# Project root on Bouchet. This is the only absolute cluster path committed to the repo:
+# every script resolves data as `$(pwd)/../data` from scripts/ (cluster_lib.sh CL_DATA_ROOT),
+# so this constant exists purely to print copy-pasteable upload instructions.
 CLUSTER_ROOT = "/nfs/roberts/project/pi_mf2263/pf382/dep_comp"
 
 # The dated bundle folder lands under `processed/CLUSTER_STAGE` so it sits with the data it packages.
@@ -250,6 +250,63 @@ def evaluate(entry: Entry):
     entry.status = "OK"
 
 
+# The manifest row that ships the market panel. It ships market_panel.PARQUET, because the
+# parquet is 39 MB against the CSV's 724 MB; see panel_sidecar_report for what that costs.
+PANEL_ENTRY_NAME = "market_panel"
+
+
+def panel_sidecar_report(entries, paths_mod):
+    """Verify the panel parquet against the local CSV it was built from. -> (ok, lines).
+
+    The parquet is normally a CACHE of market_panel.csv, and `utils._cache_is_current`
+    keeps it honest by re-checking it against that CSV on every read. On the cluster the
+    CSV does not exist, so that check has nothing to run against and the parquet is simply
+    trusted -- which is only safe if the trust is established HERE, before it is uploaded.
+
+    Two things are recorded, and the first is a refusal: the parquet stamps the size of the
+    CSV it was written from into its schema metadata (`source_csv_bytes`), so a stamp that
+    is absent, or that disagrees with the market_panel.csv now on disk, means the file about
+    to be uploaded is not this panel. That is the exact mixed-vintage failure this script
+    exists to prevent, made invisible by the fact that nothing on the cluster can detect it.
+    Second, its sha256 goes into the bundle README so the arriving file can be compared
+    against the one that left.
+    """
+    ent = next((e for e in entries if e.name == PANEL_ENTRY_NAME), None)
+    if ent is None or not ent.paths:
+        return True, []          # nothing staged; the checklist already reports MISSING
+    pq = ent.paths[0]
+    if pq.suffix.lower() != ".parquet":
+        return True, []          # the manifest ships the CSV itself: no stamp to check
+    from utils import _recorded_source_size
+    recorded = _recorded_source_size(pq)
+    csv = paths_mod.market_panel_csv()
+    have = csv.stat().st_size if csv.is_file() else None
+    lines = [
+        f"  file             : {pq.name}  ({_fmt_size(pq.stat().st_size)})",
+        f"  sha256           : {sha256_file(pq)}",
+        f"  source_csv_bytes : "
+        f"{format(recorded, ',') if recorded is not None else '(NOT STAMPED)'}"
+        f"   <- the CSV this parquet was written from",
+        f"  local CSV bytes  : "
+        f"{format(have, ',') if have is not None else '(NOT ON DISK)'}"
+        f"   <- {csv.name} as it stands now",
+    ]
+    if recorded is None:
+        lines.append("  VERDICT          : REFUSED -- no source_csv_bytes stamp, so which "
+                     "panel this is cannot be established")
+        return False, lines
+    if have is None:
+        lines.append(f"  VERDICT          : REFUSED -- {csv} is not on disk, so the stamp "
+                     f"cannot be checked against anything")
+        return False, lines
+    if recorded != have:
+        lines.append("  VERDICT          : REFUSED -- the stamp and the local CSV disagree: "
+                     "this parquet was built from a DIFFERENT panel")
+        return False, lines
+    lines.append("  VERDICT          : OK -- built from the market_panel.csv now on disk")
+    return True, lines
+
+
 def _fmt_time(ts):
     return _dt.datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M")
 
@@ -373,7 +430,8 @@ def _zip_add(zf, arcname, data, suffix):
     zf.writestr(info, data)
 
 
-def build_bundle(kind, entries, out_dir: Path, datestamp: str, next_steps, omitted):
+def build_bundle(kind, entries, out_dir: Path, datestamp: str, next_steps, omitted,
+                 panel_lines=()):
     """Write one zip; -> (path, [(arcname, size, sha256, producer)])."""
     zip_path = out_dir / f"bouchet_{kind}_{datestamp}.zip"
     members = []
@@ -387,7 +445,7 @@ def build_bundle(kind, entries, out_dir: Path, datestamp: str, next_steps, omitt
                                 e.producer_short))
         sums = "".join(f"{h}  {a}\n" for a, _, h, _ in sorted(members))
         _zip_add(zf, "sha256SUMS.txt", sums.encode("ascii"), ".txt")
-        readme = render_readme(kind, datestamp, members, next_steps, omitted)
+        readme = render_readme(kind, datestamp, members, next_steps, omitted, panel_lines)
         _zip_add(zf, "UPLOAD_README.txt", readme.encode("ascii"), ".txt")
     verify_bundle(zip_path, members)
     return zip_path, members
@@ -435,7 +493,7 @@ def _wrap(text, width=76, indent=""):
     return out
 
 
-def render_readme(kind, datestamp, members, next_steps, omitted):
+def render_readme(kind, datestamp, members, next_steps, omitted, panel_lines=()):
     payload = [m for m in members]
     total = sum(sz for _, sz, _, _ in payload)
     what = ("the CODE for the run: every Julia and shell script in the repository, plus "
@@ -473,14 +531,27 @@ def render_readme(kind, datestamp, members, next_steps, omitted):
         for name, producer, detail in stale:
             lines.append(f"    {name:<20} {detail}")
             lines.append(f"    {'':<20} rebuild with: {producer}")
+    if kind == "data" and panel_lines:
+        lines += [
+            "",
+            "THE MARKET PANEL TRAVELS AS PARQUET.",
+            "  market_panel.parquet is 39 MB where market_panel.csv is 724 MB, and it holds",
+            "  the same frame. It is the ONLY copy of the panel on the cluster, so nothing",
+            "  there can re-derive it or check it against a CSV; utils.load_panel_cached reads",
+            "  it as the source precisely because no market_panel.csv is present. Do NOT",
+            "  upload a market_panel.csv alongside it -- that makes two sources, and an",
+            "  mtime/size comparison, not you, decides which one every estimator reads.",
+            "  Checked before this bundle was written:",
+        ]
+        lines += list(panel_lines)
     if kind == "data":
         lines += [
             "",
             "Everything inside is an UPLOADED INPUT. On this cluster data/input holds only",
             "files that came from the local machine and data/output holds only files the",
-            "cluster made. Never let an archiver script run in move mode over data/input:",
-            "zip_cf_outputs.sh deletes what it archives unless KEEP=1, and it once emptied",
-            "a directory that way.",
+            "cluster made. Never run cluster_archive.sh in --move mode over data/input: a",
+            "move-mode archive over an input glob once emptied a directory that way, which",
+            "is why every pattern in that script is confined to output/ and logs/.",
         ]
     else:
         lines += [
@@ -488,7 +559,7 @@ def render_readme(kind, datestamp, members, next_steps, omitted):
             "Every .sh, .jl and .py here is stored with Unix line endings. That is not",
             "cosmetic: bash reads a Windows line ending on the first line as part of the",
             "shebang and every submit script fails at line 1. If you ever copy one of these",
-            "across by hand instead of unzipping, check it with `file submit_cf_all.sh` first.",
+            "across by hand instead of unzipping, check it with `file cf_run.sh` first.",
         ]
     lines += [
         "",
@@ -554,17 +625,18 @@ def next_steps_for(kind):
             f"  cd {CLUSTER_ROOT}/scripts",
             "  chmod +x *.sh",
             "",
-            "  Only if Project.toml or Manifest.toml changed in this bundle:",
-            "      sbatch setup_julia_env.sh          # 5-15 min, wait for it to finish",
+            "  Only if Project.toml or Manifest.toml changed in this bundle - run it ALONE,",
+            "  and wait for it (concurrent Pkg.resolve() on NFS corrupts Manifest.toml):",
+            "      sbatch --partition=day --time=02:00:00 --cpus-per-task=8 --mem=32G \\",
+            "             --export=ALL,ENV_STEP=resolve env_job.sh",
             "",
-            "  Then, in this order (each waits on the one before it):",
-            "      sbatch submit_blp_1_draws.sh       # only if data/output/BLP_DRAWS is empty",
-            "      bash   submit_blp_2_rc_default.sh  # the RC-BLP chains",
-            "      bash   submit_bbl_all.sh           # BBL costs (needs the RC results)",
-            "      bash   submit_cf_all.sh            # counterfactuals (needs the BBL costs)",
+            "  Then the whole run, from one command:",
+            "      bash pipeline_all.sh --dry-run     # print the job graph, submit nothing",
+            "      bash pipeline_all.sh               # do it",
             "",
-            "  Each of those prints its own preflight and stops with a list of anything it",
-            "  cannot find, so a missing piece is reported before any job is submitted.",
+            "  It submits gate G0 first (env_job.sh ENV_STEP=preflight), and every other job",
+            "  waits on it, so a missing input stops the run before anything expensive starts.",
+            "  Nothing runs on the login node: pipeline_all.sh only calls sbatch.",
         ]
     return [
         "  Nothing. This bundle is only input data - no job reads it until a submit script",
@@ -598,7 +670,9 @@ def main():
                          f"(default: <processed>/{DEFAULT_OUT_SUBDIR})")
     ap.add_argument("--date", default=None, help="datestamp for the zips (default: today)")
     ap.add_argument("--allow-stale", action="store_true",
-                    help="bundle even when a required input is missing or stale")
+                    help="bundle even when a required input is missing or stale, or when the "
+                         "panel parquet's source_csv_bytes stamp does not match the local "
+                         "market_panel.csv")
     ap.add_argument("--verbose", action="store_true", help="print the full producer command")
     args = ap.parse_args()
 
@@ -623,6 +697,15 @@ def main():
     blockers = [e for e in entries if required(e, selected) and e.status in ("MISSING", "STALE")]
     unknown = [e for e in entries if required(e, selected) and e.status == "UNKNOWN"]
     ok = [e for e in entries if e.paths and e.status != "MISSING"]
+
+    # The panel's mtime-vs-parent check does not apply to it (it has no parent row), and on
+    # the cluster nothing can re-validate it, so the stamp check is the whole guarantee.
+    panel_ok, panel_lines = panel_sidecar_report(entries, paths)
+    if panel_lines:
+        print("MARKET PANEL SIDECAR")
+        for line in panel_lines:
+            print(line)
+        print()
 
     if fixes:
         print("TO FIX -- run these locally, then re-run this script:")
@@ -656,7 +739,27 @@ def main():
         if blockers:
             print(f"As it stands --stage would REFUSE: {len(blockers)} required input(s) "
                   f"missing or stale.")
-        return 0 if not blockers else 1
+        if not panel_ok:
+            print("As it stands --stage would REFUSE: the panel parquet does not match the "
+                  "local market_panel.csv (see MARKET PANEL SIDECAR above).")
+        return 0 if (not blockers and panel_ok) else 1
+
+    if not panel_ok and not args.allow_stale:
+        print("REFUSING TO STAGE -- the market panel parquet is not the local panel.")
+        print()
+        print("This one is not recoverable on the cluster. The parquet is the ONLY copy of the")
+        print("panel there, so no cluster-side check can compare it with anything; a parquet")
+        print("built from a different market_panel.csv would simply BE the panel for the whole")
+        print("run. Rebuild the sidecar from the panel now on disk:")
+        print("    python -c \"from utils import refresh_panel_cache, paths; "
+              "refresh_panel_cache(paths.market_panel_csv())\"")
+        print("or re-run `python run_data_pipeline.py`, whose panel writers call it. "
+              "--allow-stale overrides this.")
+        return 1
+    if not panel_ok and args.allow_stale:
+        print("WARNING: --allow-stale -- bundling a panel parquet that does not match the "
+              "local market_panel.csv. The cluster will read THAT frame as the panel.")
+        print()
 
     if blockers and not args.allow_stale:
         print("REFUSING TO STAGE.")
@@ -692,7 +795,8 @@ def main():
         omitted = [(e.name, e.producer, e.status, e.detail) for e in entries
                    if e.bundle == kind and e.status in ("MISSING", "STALE")]
         zp, members = build_bundle(kind, ents, out_dir, datestamp,
-                                   next_steps_for(kind), omitted)
+                                   next_steps_for(kind), omitted,
+                                   panel_lines if kind == "data" else ())
         results.append((kind, zp, members))
         print(f"  {kind}: {len(members)} files -> {zp.name} "
               f"({_fmt_size(zp.stat().st_size)} on disk)")

@@ -4,8 +4,9 @@ blp_estimation.jl
 Self-contained BLP demand estimation using pre-computed draws from blp_draws.jl.
 
 All BLP core functions are inlined here — blp_loop.jl is NOT loaded at runtime.
-Pre-computed ν-draws and demographic draws are loaded from BLP_DRAWS/ once and
-shared across all specs/stages, ensuring cross-strategy comparability.
+Pre-computed ν-draws and demographic draws are loaded once from the draws directory
+(`draws_dir`, of_root.jl: data/output/blp/draws on the cluster, ESTIMATION_OUTPUT/BLP_DRAWS
+locally) and shared across all specs/stages, ensuring cross-strategy comparability.
 
 Differences from blp_loop.jl:
   1. Draws are LOADED (not generated) — blp_draws.jl must run first

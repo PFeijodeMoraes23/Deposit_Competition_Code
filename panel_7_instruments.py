@@ -132,10 +132,10 @@ def derive_has_ip_from_list_files(df: pd.DataFrame, list_dir: Path) -> pd.DataFr
 def clean_accounting_ratios(df: pd.DataFrame) -> pd.DataFrame:
     """Bound and winsorize the accounting ratios (see WINSOR_RATIOS at the top of the module).
 
-    Firm type comes from CODMUN_IBGE: a D (national) firm carries the '0' sentinel, a B firm
-    a real municipality. Splitting on it is the point -- B and D have genuinely different
-    balance sheets, so pooled percentiles would clip real cross-type variation rather than
-    the tail.
+    Firm type comes from `is_B`, the verdict panel_6_market stores on the panel, falling back
+    to the CODMUN_IBGE sentinel for panels built before that column existed. Splitting on it is
+    the point -- B and D have genuinely different balance sheets, so pooled percentiles would
+    clip real cross-type variation rather than the tail.
     """
     df = df.copy()
     cols = [c for base in WINSOR_RATIOS for c in (base, f"{base}_lag") if c in df.columns]
@@ -144,10 +144,15 @@ def clean_accounting_ratios(df: pd.DataFrame) -> pd.DataFrame:
         return df
 
     logging.info("Cleaning accounting ratios before the LOO build")
-    is_B = df['CODMUN_IBGE'].astype(str) != '0' if 'CODMUN_IBGE' in df.columns else None
-    if is_B is None:
-        logging.warning("  [winsorize] no CODMUN_IBGE column; percentiles will be pooled "
-                        "across firm types")
+    if 'is_B' in df.columns and df['is_B'].notna().any():
+        is_B = df['is_B'].astype(bool)
+    elif 'CODMUN_IBGE' in df.columns:
+        logging.warning("  [winsorize] no is_B column; falling back to CODMUN_IBGE != '0'")
+        is_B = df['CODMUN_IBGE'].astype(str) != '0'
+    else:
+        is_B = None
+        logging.warning("  [winsorize] neither is_B nor CODMUN_IBGE; percentiles will be "
+                        "pooled across firm types")
     apply_validity_bounds(df, verbose=True)
     winsorize_within_type(df, cols, pct=WINSOR_PCT, type_key=is_B,
                           dedup_keys=[k for k in WINSOR_UNIT_KEYS if k in df.columns] or None,
@@ -260,6 +265,11 @@ def main():
     import pyarrow.csv as pa_csv
     table = pa.Table.from_pandas(df_aug, preserve_index=False)
     pa_csv.write_csv(table, str(PANEL_CSV))
+    # Keep the Parquet sidecar in step with the CSV. estimation_1_sleep reads the panel
+    # through utils.load_panel_cached, which serves that sidecar, so leaving it stale
+    # here would hand the sleepiness estimation the previous build.
+    from utils import refresh_panel_cache
+    refresh_panel_cache(PANEL_CSV, df_aug)
     logging.info("Done.")
 
 if __name__ == '__main__':

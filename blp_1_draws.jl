@@ -7,8 +7,9 @@ Generates:
   1. Scrambled Halton ν-draws (CG2020-compliant) for random coefficients
   2. Demographic d-draws using market-specific σ from demographics_sigma.parquet
 
-Outputs are serialised to BLP_DRAWS/ for consumption by blp_loop.jl or
-blp_estimation.jl.  Separating draw generation from estimation ensures:
+Outputs are serialised to the draws directory (`draws_dir`, of_root.jl: the BLP step folder
+`data/output/blp/draws` on the cluster, ESTIMATION_OUTPUT/BLP_DRAWS locally) for consumption
+by blp_1_estimation.jl.  Separating draw generation from estimation ensures:
   - Cross-strategy comparability (same draws for E1–E4)
   - Transparent diagnostics (fallback rate, σ statistics)
   - No re-generation on cluster job restarts
@@ -66,10 +67,25 @@ const D_SCALE = Dict("gdp_per_capita"            => 10000.0,
 # ==========================================================================
 # 0b. Paths
 # ==========================================================================
+"""
+    get_paths(is_hpc; local_dir) -> (input_dir, output_dir, out_root)
+
+`input_dir` holds the uploaded `demographics_sigma.parquet`, `output_dir` is where the draws
+are written, and `out_root` is the results root the step directories hang off — the tree shape
+that `draws_dir`/`demand_search_dirs` (of_root.jl) branch on, and the reason the demand panels
+below can be found without a second spelling of their location.
+
+On the cluster the root is HEAD/data/output and `draws_dir` puts the draws in its BLP step
+folder, `blp/draws`, so they travel in the BLP download beside the results that consume them;
+blp_1_estimation.jl's reader resolves that same call, so producer and consumer cannot drift
+apart. Off the cluster the tree is ESTIMATION_OUTPUT/{DEMAND_PREP, BLP_DRAWS, BLP_RESULTS} and
+the draws keep their own sibling directory.
+"""
 function get_paths(is_hpc::Bool; local_dir=nothing)
     if is_hpc
         input_dir  = joinpath(@__DIR__, "..", "data", "input")
-        output_dir = joinpath(@__DIR__, "..", "data", "output", "BLP_DRAWS")
+        out_root   = joinpath(@__DIR__, "..", "data", "output")
+        output_dir = draws_dir(out_root)
     else
         if local_dir !== nothing
             data_dir = local_dir
@@ -78,8 +94,9 @@ function get_paths(is_hpc::Bool; local_dir=nothing)
         end
         input_dir  = joinpath(data_dir, "ESTIMATION_OUTPUT", "DEMAND_PREP")
         output_dir = joinpath(data_dir, "ESTIMATION_OUTPUT", "BLP_DRAWS")
+        out_root   = joinpath(data_dir, "ESTIMATION_OUTPUT", "BLP_RESULTS")
     end
-    return input_dir, output_dir
+    return input_dir, output_dir, out_root
 end
 
 # ==========================================================================
@@ -134,7 +151,12 @@ end
 # ==========================================================================
 # 2. Demographics Sigma Loading
 # ==========================================================================
-"""Load demographics_sigma.parquet → Dict{(mca_code, time_id), Vector{Float64}}."""
+"""Load demographics_sigma.parquet → Dict{(mca_code, time_id), Vector{Float64}}.
+
+`input_dir` is the UPLOAD directory (data/input on the cluster), unlike the demand panels
+above: panel_8_demographics_sigma.py builds this 8.7 MB table from seven municipal panels
+totalling ~1.6 GB (ANATEL alone is 1.59 GB), so producing it on the cluster would cost a
+1.6 GB upload to save an 8.7 MB one. It is built locally and shipped."""
 function load_sigma_table(input_dir::String)
     path = joinpath(input_dir, "demographics_sigma.parquet")
     if !isfile(path)
@@ -314,7 +336,7 @@ function main()
     is_hpc  = args["hpc"]
     local_dir = args["local_dir"]
 
-    input_dir, output_dir = get_paths(is_hpc; local_dir=local_dir)
+    input_dir, output_dir, out_root = get_paths(is_hpc; local_dir=local_dir)
     mkpath(output_dir)
 
     println("=" ^ 60)
@@ -343,21 +365,39 @@ function main()
     # estimation time those silently fell back to the pad row (mean demographics) rather than
     # erroring. The union (23,126 keys) covers every routine.
     #
+    # The panels live where the prep step writes them — `demand_search_dirs` (of_root.jl) is the
+    # one definition of that, so the draws read the same directory the logit, the RC engine and
+    # the CF stack do and every routine's demographics come from one vintage. On the cluster the
+    # panels are a cluster PRODUCT (data/output/demand_prep), never an upload, which is why
+    # data/input is not a candidate — only `demographics_sigma.parquet` below is read from there.
+    # The routine tag between id and spec is optional (E1/E2 write bare `demand_1_spec_12`),
+    # hence `(?:_.*)?`, matching the discovery regexes in blp_2_rc.jl and foundation_demand_eval.jl.
+    #
     # The routine panels are found by GLOB, never by a static id -> prefix map: such a map goes
     # stale the moment a routine is relabelled, and it fails silently because --estim defaults
     # to 1, so demand_1 is read and the routines actually estimated are never covered.
-    rx = Regex("^demand_\\d+(_[A-Za-z0-9_]+)?_spec_$(spec)\\.parquet\$")
-    files = sort(filter(f -> occursin(rx, f), readdir(input_dir)))
-    isempty(files) && error("No demand_*_spec_$(spec).parquet in $input_dir — the draws need at " *
-                            "least one routine panel for the demographic means.")
-    println("\n  Market keys + demographic means ← UNION over $(length(files)) routine panel(s):")
+    rx = Regex("^demand_\\d+(?:_.*)?_spec_$(spec)\\.parquet\$")
+    panel_dirs = demand_search_dirs(input_dir, out_root)
+    panels = String[]
+    for dir in panel_dirs
+        isdir(dir) || continue
+        for f in sort(readdir(dir))
+            occursin(rx, f) || continue
+            any(p -> basename(p) == f, panels) && continue   # earlier directory settles the name
+            push!(panels, joinpath(dir, f))
+        end
+    end
+    isempty(panels) && error("No demand_*_spec_$(spec).parquet found — the draws need at least " *
+                            "one routine panel for the demographic means. Searched:\n" *
+                            describe_search_dirs(panel_dirs...))
+    println("\n  Market keys + demographic means ← UNION over $(length(panels)) routine panel(s):")
     df = DataFrame()
-    for f in files
-        d = DataFrame(Parquet2.Dataset(joinpath(input_dir, f)); copycols=true)
+    for p in panels
+        d = DataFrame(Parquet2.Dataset(p); copycols=true)
         cols = vcat(["mca_code", "time_id"], [c for c in D_COLS if c in names(d)])
         k = unique(d[:, cols])
         k.mca_code = string.(k.mca_code); k.time_id = string.(k.time_id)
-        println("    $(rpad(f, 44)) $(nrow(k)) keys")
+        println("    $(rpad(basename(p), 44)) $(nrow(k)) keys")
         df = isempty(df) ? k : vcat(df, k; cols=:union)
     end
     df = unique(df, [:mca_code, :time_id])

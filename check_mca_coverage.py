@@ -44,18 +44,27 @@ MIN_CV = 0.01
 
 
 def main(year: int, strict: bool) -> int:
-    pc = _paths_mod.PROCESSED / "market_panel_with_fees.csv"
-    if not pc.exists():
-        pc = _paths_mod.PROCESSED / "market_panel.csv"
+    # Resolve the panel exactly as the estimators do, via utils.paths.market_panel_csv():
+    # market_panel.csv unless USE_FEE_PANEL=1. Auditing market_panel_with_fees.csv while the
+    # estimators read market_panel.csv would let this check pass on a file nothing estimates
+    # from -- and the fee panel is rebuilt by a later pipeline step than the base panel, so
+    # the two can disagree.
+    pc = _paths_mod.market_panel_csv()
     head = pd.read_csv(pc, nrows=0)
     sv = [c for c in STATE_VARS + DEMO_VARS if c in head.columns]
     print(f"panel: {pc.name}")
 
-    df = pd.read_csv(pc, usecols=['mca_code', 'CODMUN_IBGE', 'year'] + sv,
+    _id = [c for c in ('mca_code', 'CODMUN_IBGE', 'is_B', 'year') if c in head.columns]
+    df = pd.read_csv(pc, usecols=_id + sv,
                      dtype={'mca_code': str, 'CODMUN_IBGE': str}, low_memory=False)
     # D-type rows carry national pop-weighted fills by construction, so coverage is only
-    # meaningful on the LOCAL (B-type) rows.
-    b = df[df['CODMUN_IBGE'].astype(str) != '0']
+    # meaningful on the LOCAL (B-type) rows. `is_B` is the verdict panel_6_market stores on
+    # the panel; CODMUN_IBGE is the fallback for panels built before that column existed.
+    if 'is_B' in df.columns and df['is_B'].notna().any():
+        b = df[df['is_B'].astype(bool)]
+    else:
+        print("  (no is_B column -- using CODMUN_IBGE != '0')")
+        b = df[df['CODMUN_IBGE'].astype(str) != '0']
     n_mca = b['mca_code'].nunique()
     # one row per (MCA, year): these are market attributes repeated across banks, and
     # leaving them repeated would weight each MCA by how many banks operate in it.

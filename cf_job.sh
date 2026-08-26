@@ -37,13 +37,13 @@
 # --partition/--gpus/--mem/-t on the sbatch command line; on gpu_h200 you MUST
 # request a GPU or the QOS rejects the job ("QOSMinGRES").
 #
-# WHAT MUST EXIST FIRST: cluster_preflight.sh green; both sysimages built; for the
-#   equilibrium steps, the BBL cost params from bbl_run.sh.
+# WHAT MUST EXIST FIRST: cluster_preflight.sh green; both sysimages built; the RC
+#   results in data/output/blp; for the equilibrium steps, the BBL cost params in
+#   data/output/bbl from bbl_run.sh.
+# WHERE ITS ARTIFACTS GO: data/output/counterfactuals — cf_out_dir(out_dir) maps
+#   every CF family there, and cf_4_pix.jl reads its upsilon/phi^noPix pair from the
+#   same single folder the sleepiness upsilon step wrote them to.
 # WHAT TO RUN NEXT: nothing directly — cf_run.sh / cf_eq_run.sh own the chains.
-#
-# THIS SCRIPT IS NEW. submit_cf.sh is still present and still works; it is the
-# fallback and is retired only after one successful cluster cycle. Nothing in it
-# has been modified.
 # ==============================================================================
 set -uo pipefail
 CL_DIR="${SLURM_SUBMIT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
@@ -62,7 +62,9 @@ CF_EXTRA="${CF_EXTRA:-}"
 
 # ── The zip step needs no Julia at all; handle it before loading anything. ────
 if [[ "${CF_STEP}" == "zip" ]]; then
-    : "${CF_WHICH:?set CF_WHICH (foundation|cf1|cf2|cf3|cf4|cf5|cf6)}"
+    # CF_WHICH is a cluster_archive.sh SET NAME, not a CF family: every CF step
+    # writes into cf_out_dir, so 'counterfactuals' is the set that holds all of them.
+    : "${CF_WHICH:?set CF_WHICH to a cluster_archive.sh set (counterfactuals)}"
     # EXPLICIT mode, always. --move at the end of a finished equilibrium, --copy
     # mid-pipeline (cost_params feeds CF3/CF5/CF6 and CF3's sig_N feeds CF5 long
     # after the orchestrator exits).
@@ -72,6 +74,13 @@ if [[ "${CF_STEP}" == "zip" ]]; then
 fi
 
 mkdir -p "${CL_ROOT}/logs"
+
+# The skeleton, then the step dirs. CF_FOUNDATION_DIR and CF_COST_FWD come from
+# cl_export_step_dirs, so the Python half of the CF stack (cf_4_upsilon_export.py,
+# the BBL solve) resolves the same folders the Julia half does.
+cl_bootstrap_tree
+cl_export_step_dirs
+
 cl_load_julia
 # IFT results/deltas are un-suffixed (the default), so no BLP_OUTPUT_SUFFIX /
 # BLP_DELTA_SUFFIX override is needed. For numerical-engine results, export
@@ -135,8 +144,10 @@ case "${CF_STEP}" in
 
     cf4)          # Descriptive Pix reallocation. Consumes the exact link-aware
                   # phi^noPix parquet + Upsilon_pix JSON from cf_4_upsilon_export.py,
-                  # which are BUILT LOCALLY and uploaded to data/input (compute
-                  # nodes lack the sleep pickle). cf_run.sh preflights both.
+                  # written by the sleepiness upsilon step into
+                  # data/output/counterfactuals and verified by gate G7. That is the
+                  # only place cf_4_pix.jl looks, so the pair it reads is the pair
+                  # this run produced. cf_run.sh preflights both.
         run_julia cf_4_pix.jl ;;
 
     cf1_net)      run_julia cf_1_franchise_value.jl --net ;;

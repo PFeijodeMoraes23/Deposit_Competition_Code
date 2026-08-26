@@ -77,25 +77,26 @@ import pandas as pd
 from scipy.optimize import minimize
 
 # COST_FWD holds the ψ parquets (from estimation_bbl_2_fwd_sim) + the cost_params json.
-# CF_COST_FWD wins and is what the cluster runs on: cluster_lib.sh's cl_setup_python exports it to
-# data/output/cost before bbl_job.sh invokes this file, and submit_bbl.sh sets it too — the script's
-# own dir doesn't contain the BCB tree there.
+# cost_fwd_dir() is the ONE implementation of that location: it defaults to
+# estimation_output()/COST_FWD and honours CF_COST_FWD, the env the BBL jobs export to point the
+# whole step at the cluster's data/output/bbl folder. Reading the env here as well would be a
+# second implementation of the same rule, free to drift from the writer's.
 #
-# The fallback is the local processed-data layout, resolved through utils.paths so it follows
-# OPEN_FINANCE_ROOT instead of assuming the repo sits two levels inside the data tree. utils/ is
-# not part of the cluster code payload, so it is imported under the same ModuleNotFoundError
-# guard as the venv helper above and the walk stays as the last resort.
+# The location is pinned to estimation_output(), NOT SLEEP_OUT_ROOT: estimation_bbl_2_fwd_sim.jl
+# writes these parquets and knows nothing of the sleepiness sandbox, so redirecting the reader
+# alone would aim it at a directory the writer never fills.
 #
-# Pinned to estimation_output(), NOT SLEEP_OUT_ROOT: estimation_bbl_2_fwd_sim.jl writes these
-# parquets and knows nothing of the sleepiness sandbox, so redirecting the reader alone would aim
-# it at a directory the writer never fills.
+# utils/ is not part of the cluster code payload in every deployment, so the import sits under the
+# same ModuleNotFoundError guard as the venv helper above. That branch spells the rule out by
+# hand — the parents[2] walk assumes the repo sits two levels inside the data tree, which is why
+# it is the last resort and not the primary.
 try:
     from utils import paths as _paths
-    _COST_FWD_DEFAULT = _paths.estimation_output() / "COST_FWD"
+    COST_FWD = _paths.cost_fwd_dir()
 except ModuleNotFoundError:
     _COST_FWD_DEFAULT = (Path(__file__).resolve().parents[2] / "BCB" / "Egan_et_al_2025_Rep"
                          / "processed" / "ESTIMATION_OUTPUT" / "COST_FWD")
-COST_FWD = Path(os.environ.get("CF_COST_FWD") or _COST_FWD_DEFAULT)
+    COST_FWD = Path(os.environ.get("CF_COST_FWD") or _COST_FWD_DEFAULT)
 
 
 # ==========================================================================

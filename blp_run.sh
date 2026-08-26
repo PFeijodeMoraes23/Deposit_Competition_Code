@@ -3,21 +3,28 @@
 # blp_run.sh — THE single front door for the RC-BLP demand-estimation sweep.
 #
 # WHAT MUST EXIST FIRST
-#   1. bash cluster_preflight.sh            (must print PREFLIGHT OK)
-#   2. the GPU sysimage                     (RUNBOOK step 2, or pass --sysimage)
-#   3. the R=2000 draws                     (or pass --draws the first time)
+#   1. gate G0 green                        (env_job.sh ENV_STEP=preflight)
+#   2. the demand parquets and the logit deltas — gates G2 and G4
+#   The sysimages and the draws are NOT prerequisites: this script builds whichever
+#   of them is missing, which is what makes a bare run work on an empty cluster.
 # WHAT TO RUN NEXT
-#   bash pipeline_run.sh                    (BBL costs -> the counterfactuals)
-#
-# THIS SCRIPT IS NEW. submit_blp_rc_all.sh / submit_blp_rc_grouped.sh /
-# submit_blp_build_and_run_spec12.sh / submit_blp_2_rc_default.sh are still
-# present and still work; they are the fallback and are retired only after one
-# successful cluster cycle. Nothing in them has been modified.
+#   bash pipeline_all.sh --from bbl         (BBL costs -> the counterfactuals),
+#   which pipeline_all.sh chains for you when it runs this phase.
 #
 # WHAT IT SUBMITS
-#   [sysimage build] ---.
-#                        >-- afterok --> per-routine chain --> afterany --> archive
-#   [draws build]    ---'
+#   [sysimage build gpu+cpu] ---.
+#                                >-- afterok --> per-routine chain --> afterany --> archive
+#   [draws build]            ---'
+#
+#   AUTO-BUILD. With neither --sysimage nor --no-sysimage, the sysimage job is
+#   submitted exactly when the image or its provenance sidecar is missing; with
+#   neither --draws nor --no-draws, the draws job is submitted exactly when this
+#   R/seed's halton_nu or demo_key_index is missing. An explicit flag always wins,
+#   in both directions, and the decision is printed as one line before anything is
+#   submitted. Nothing is rebuilt that already exists, so the common case — editing
+#   our own .jl source — still submits neither: the sysimage bakes only third-party
+#   PACKAGES (our files are include()d at runtime, blp_1_estimation.jl:37) and the
+#   draws depend on the demographics/panel and R, not on our source.
 #
 #   --layout grouped (default)   HEAD(sigma+rc2+rc3+rc4+ext1) -> ext2 -> extended
 #   --layout all                 sigma -> rc2 -> rc3 -> rc4 -> full -> ext1 -> ext2 -> extended
@@ -27,8 +34,8 @@
 #
 # Usage
 #   bash blp_run.sh --dry-run                 # print every sbatch line + the graph
-#   bash blp_run.sh                           # the usual run
-#   bash blp_run.sh --draws                   # first run on a fresh cluster
+#   bash blp_run.sh                           # the usual run; builds what is missing
+#   bash blp_run.sh --draws                   # force a rebuild of the draws
 #   bash blp_run.sh --layout all
 #   bash blp_run.sh --routines "1 2 3 4"
 #   bash blp_run.sh --engines "ift numerical" # + the numerical cross-check
@@ -39,8 +46,11 @@
 #   --layout all|grouped   job packaging (default grouped)
 #   --routines "3 4"       routine set (default from cluster_lib.sh)
 #   --engines  "ift ..."   ift | numerical | cue (default ift)
-#   --sysimage             rebuild blp_sysimage.so first (afterok prerequisite)
-#   --draws                regenerate the nu + demographic draws first
+#   --sysimage             force the sysimage builds (gpu + cpu) as an afterok prerequisite
+#   --no-sysimage          never build them, whatever is on disk
+#   --draws                force regenerating the nu + demographic draws first
+#   --no-draws             never build them, whatever is on disk
+#                          (omit all four and the decision is made from what is on disk)
 #   --se-only              SE-only rerun: all stages in ONE short job per routine
 #   --sset                 add the Stock-Wright S-set grid job (needs cue)
 #   --no-zip               do not submit the terminal archive job
@@ -57,6 +67,13 @@ LAYOUT="${LAYOUT:-grouped}"
 ENGINES="${ENGINES:-ift}"
 DO_SYSIMAGE=0; DO_DRAWS=0; SE_ONLY="${SE_ONLY:-0}"; DO_SSET="${CUE_SSET:-0}"
 DO_ZIP=1; SKIP_PREFLIGHT=0
+# R and SEED name the draw FILES the auto-build below tests for and the engine then
+# reads, so they must be decided here rather than left to each consumer's own default:
+# a mismatch would build halton_nu at one R and look for it at another.
+R="${R:-2000}"; SEED="${SEED:-42}"
+# _SET flags distinguish "the user chose" from "nobody said", which is what makes the
+# auto-build possible: DO_SYSIMAGE=0 alone cannot tell --no-sysimage from silence.
+SYS_SET=0; DRAWS_SET=0
 ROUTINES_SRC=default
 if [[ -n "${ROUTINES+set}" ]]; then ROUTINES_SRC=env; fi
 ROUTINES="${ROUTINES:-${CL_ROUTINES_RC}}"
@@ -66,16 +83,16 @@ while [[ $# -gt 0 ]]; do
         --layout)          LAYOUT="$2"; shift ;;
         --routines)        ROUTINES="$2"; ROUTINES_SRC=flag; shift ;;
         --engines)         ENGINES="$2"; shift ;;
-        --sysimage)        DO_SYSIMAGE=1 ;;
-        --no-sysimage)     DO_SYSIMAGE=0 ;;
-        --draws)           DO_DRAWS=1 ;;
-        --no-draws)        DO_DRAWS=0 ;;
+        --sysimage)        DO_SYSIMAGE=1; SYS_SET=1 ;;
+        --no-sysimage)     DO_SYSIMAGE=0; SYS_SET=1 ;;
+        --draws)           DO_DRAWS=1; DRAWS_SET=1 ;;
+        --no-draws)        DO_DRAWS=0; DRAWS_SET=1 ;;
         --se-only)         SE_ONLY=1 ;;
         --sset)            DO_SSET=1 ;;
         --no-zip)          DO_ZIP=0 ;;
         --skip-preflight)  SKIP_PREFLIGHT=1 ;;
         --dry-run)         CL_DRYRUN=1 ;;
-        -h|--help)         sed -n '2,58p' "${BASH_SOURCE[0]}"; exit 0 ;;
+        -h|--help)         sed -n '2,59p' "${BASH_SOURCE[0]}"; exit 0 ;;
         *) echo "unknown option: $1 (see -h)" >&2; exit 2 ;;
     esac
     shift
@@ -85,11 +102,33 @@ case "${LAYOUT}" in all|grouped) ;; *) echo "--layout must be all|grouped (got '
 LOGD="$(cl_log_dir)"
 cl_warn_wall_cap
 
+# ── AUTO-BUILD: decide the two prerequisites from what is on disk ────────────
+# This is what makes `bash pipeline_all.sh` work on an EMPTY cluster without anyone
+# having to know which build flags a fresh tree needs. The tests are the artifacts
+# themselves, at the paths their producers write:
+#   sysimage  the .so AND its .json provenance sidecar — an image with no sidecar is
+#             refused at run time by cl_require_sysimage, so a sidecar-less image is
+#             not a usable image and must be rebuilt like a missing one.
+#   draws     halton_nu AND demo_key_index for THIS R/seed. demo_draws itself is not
+#             tested: it is the 14 GB member and it is written in the same job as the
+#             key index, so the index standing in for it costs nothing and avoids a
+#             stat on a file that may be mid-split.
+# An explicit flag wins in both directions and skips the test entirely.
+if [[ "${SYS_SET}" == "0" ]]; then
+    _img="$(cl_sysimage_for gpu)"
+    if [[ ! -f "${_img}" || ! -f "${_img}.json" ]]; then DO_SYSIMAGE=1; fi
+fi
+if [[ "${DRAWS_SET}" == "0" ]]; then
+    if [[ ! -f "${CL_STEP_DRAWS}/halton_nu_R${R}_seed${SEED}.jls" \
+       || ! -f "${CL_STEP_DRAWS}/demo_key_index_R${R}_seed${SEED}.jls" ]]; then DO_DRAWS=1; fi
+fi
+cl_say "prereqs: sysimage=${DO_SYSIMAGE} draws=${DO_DRAWS}  (sysimage $([[ "${SYS_SET}" == "1" ]] && echo 'from the flag' || echo 'auto, from disk'), draws $([[ "${DRAWS_SET}" == "1" ]] && echo 'from the flag' || echo "auto, from disk at R=${R}/seed=${SEED}"))"
+
 # ── Preflight (V2/V3/V5/V6). Never skipped by accident. ──────────────────────
 if [[ "${SKIP_PREFLIGHT}" == "0" && "${CL_DRYRUN}" != "1" ]]; then
-    # Jobs 1 and 2 of this run BUILD the sysimage and the draws when --sysimage/--draws are
-    # passed, so the preflight must not refuse on their absence. Derived from the same two
-    # flags that decide whether those jobs are submitted, so the two cannot disagree.
+    # Jobs 1 and 2 of this run BUILD the sysimage and the draws, so the preflight must not
+    # refuse on their absence. Derived from the SAME two booleans that decide whether those
+    # jobs are submitted — flag or auto — so the two cannot disagree.
     _wb=""
     [[ "${DO_SYSIMAGE}" == "1" ]] && _wb="${_wb} sysimage"
     [[ "${DO_DRAWS}"    == "1" ]] && _wb="${_wb} draws"
@@ -117,6 +156,10 @@ SE_METHOD="${SE_METHOD:-wcb}"          # wcb (default, matches the sleepiness in
 WCB_REPS="${WCB_REPS:-999}"; WCB_SCHEME="${WCB_SCHEME:-webb}"
 export BLP_SE_METHOD="${SE_METHOD}" BLP_WCB_REPS="${WCB_REPS}" BLP_WCB_SCHEME="${WCB_SCHEME}"
 export BLP_SE_ONLY="${SE_ONLY}"
+# EXPORTED so --export=ALL carries the SAME R/seed to the draws builder and to every
+# stage job that then loads those draws. The auto-build test above is only meaningful
+# if the value it tested is the value the jobs use.
+export R SEED
 
 # ── CUE (continuously-updated GMM): a SIDE-BY-SIDE variant, never a replacement.
 # W(theta)=pinv(Omega-hat(theta)) recomputed at every objective evaluation (the
@@ -144,15 +187,13 @@ cl_banner "RC-BLP sweep${CL_DRYRUN:+ }$([[ "${CL_DRYRUN}" == "1" ]] && echo '[DR
           "layout=${LAYOUT}  engines='${ENGINES}'  se_only=${SE_ONLY}  sset=${DO_SSET}" \
           "SE: ${SE_METHOD} (WCB reps=${WCB_REPS}, scheme=${WCB_SCHEME}) — propagated via --export=ALL" \
           "mem: E1/E2=${CL_MEM_BIG}, others=${CL_MEM_DEFAULT}   wall_deep=${CL_WALL_DEEP}" \
-          "prereqs: sysimage=${DO_SYSIMAGE} draws=${DO_DRAWS}   zip=${DO_ZIP}"
+          "R=${R} seed=${SEED}   prereqs: sysimage=${DO_SYSIMAGE} draws=${DO_DRAWS}   zip=${DO_ZIP}" \
+          "results persist in ${CL_STEP_BLP}; draws in ${CL_STEP_DRAWS}"
 [[ "${LAYOUT}" == "all" ]] && \
     echo "[note] --layout all includes the 'full' stage; --layout grouped omits it (see the header)."
 
 # ── 1. Build prerequisites, in PARALLEL; every chain head waits afterok on BOTH.
-# Both are OPT-IN because the common case — editing our own .jl source — needs
-# NEITHER: the sysimage bakes only third-party PACKAGES (our files are include()d
-# at runtime, blp_1_estimation.jl:37), and the draws depend on the
-# demographics/panel and R, not on the instruments or on our source.
+# Whether either is submitted was decided above, from disk or from an explicit flag.
 sys_dep=""
 if [[ "${DO_SYSIMAGE}" == "1" ]]; then
     j=$(cl_sbatch --partition=gpu_h200 --gpus=h200:1 --time=04:00:00 \
@@ -160,7 +201,7 @@ if [[ "${DO_SYSIMAGE}" == "1" ]]; then
         -o "${LOGD}/blp_build_sysimg_%j.out" -e "${LOGD}/blp_build_sysimg_%j.err" \
         --export=ALL,ENV_STEP=sysimage_gpu "${CL_ROOT}/env_job.sh")
     sys_dep="${j}"
-    echo "-- sysimage build: ${j}  (every chain head afterok this)"
+    cl_say "  blp_build_sysimg -> ${j}  (every chain head afterok this)"
     # The CPU twin, built in the same breath. pipeline_all.sh runs bbl_run.sh with
     # --fwd-cpu, whose jobs refuse without blp_sysimage_cpu.so — so a run that builds
     # only the GPU image cannot reach the BBL phase on a fresh cluster. Deliberately NOT
@@ -172,14 +213,14 @@ if [[ "${DO_SYSIMAGE}" == "1" ]]; then
         --cpus-per-task=8 --mem=64G -J blp_build_sysimg_cpu \
         -o "${LOGD}/blp_build_sysimg_cpu_%j.out" -e "${LOGD}/blp_build_sysimg_cpu_%j.err" \
         --export=ALL,ENV_STEP=sysimage_cpu "${CL_ROOT}/env_job.sh")
-    echo "-- sysimage build (cpu): ${jc}  (for the BBL --fwd-cpu phase; runs in parallel)"
+    cl_say "  blp_build_sysimg_cpu -> ${jc}  (for the BBL --fwd-cpu phase; runs in parallel)"
 fi
 if [[ "${DO_DRAWS}" == "1" ]]; then
     j=$(cl_sbatch -J blp_draws \
         -o "${LOGD}/blp_draws_%j.out" -e "${LOGD}/blp_draws_%j.err" \
         --export=ALL "${CL_ROOT}/blp_draws_job.sh")
     sys_dep="${sys_dep:+${sys_dep}:}${j}"
-    echo "-- draws build:    ${j}  (every chain head afterok this; runs parallel to the sysimage)"
+    cl_say "  blp_draws -> ${j}  (every chain head afterok this; runs parallel to the sysimage)"
 fi
 
 # ── 2. One stage submission. cl_mem_for is applied on EVERY submit. ──────────
@@ -224,7 +265,7 @@ submit_chain () {   # submit_chain <routine> <engine> <tag> -> terminal job id
 # ONE job at `extended`, afterok the IFT terminal and seeded from its theta2.
 submit_crosscheck () {   # submit_crosscheck <routine> <ift_terminal_jid>
     local k="$1" dep="$2" ckpt jid
-    ckpt="${CL_DATA_OUT}/blp_checkpoint_E${k}_spec_12_extended.jls"
+    ckpt="${CL_STEP_BLP}/blp_checkpoint_E${k}_spec_12_extended.jls"
     jid=$(submit_one "${k}" numerical num extended "$(cl_stage_wall extended)" xcheck "${dep}" \
                      "BLP_THETA2_INIT_FILE=${ckpt}")
     echo "    numerical xcheck: ${jid}  (afterok ${dep}; seed $(basename "${ckpt}"))" >&2
@@ -233,20 +274,19 @@ submit_crosscheck () {   # submit_crosscheck <routine> <ift_terminal_jid>
 
 # ── 3. Submit ────────────────────────────────────────────────────────────────
 njobs=0; term_jids=""
-MARKER="$(cl_run_marker blp)"
 for k in ${ROUTINES}; do
     if [[ "${SE_ONLY}" == "1" ]]; then
         # No homotopy chain: every stage reloads its own checkpoint, so one job
         # does them all. Checkpoints live in data/output — if a previous run's
         # archive MOVED them into blp_checkpoints_<jid>.zip, unzip them back first.
         jid=$(submit_one "${k}" ift se "${ALL_STAGES}" "${WALL_SE}" seonly "${sys_dep}")
-        echo "-- E${k}: SE-only, all stages in ONE job: ${jid}"
+        cl_say "  rc_se_E${k}_seonly -> ${jid}  (SE-only: all stages in ONE job)"
         njobs=$((njobs+1)); term_jids="${term_jids} ${jid}"
         continue
     fi
     ift_term=""
     if [[ "${do_ift}" == "1" ]]; then
-        echo "-- chain: E${k} / ift (${LAYOUT}) --"
+        cl_log "-- chain: E${k} / ift (${LAYOUT}) --"
         ift_term=$(submit_chain "${k}" ift ift)
         njobs=$(( njobs + $([[ "${LAYOUT}" == "all" ]] && echo 8 || echo 3) ))
         term_jids="${term_jids} ${ift_term}"
@@ -271,7 +311,7 @@ for k in ${ROUTINES}; do
             # prev-stage checkpoint chain does not exist. Each is seeded from the
             # IFT checkpoint of the SAME stage.
             for st in $(echo "${CUE_STAGES}" | tr '+' ' '); do
-                ckpt="${CL_DATA_OUT}/blp_checkpoint_E${k}_spec_12_${st}.jls"
+                ckpt="${CL_STEP_BLP}/blp_checkpoint_E${k}_spec_12_${st}.jls"
                 jid=$(submit_one "${k}" cue cue "${st}" "$(cl_stage_wall "${st}")" "cue_${st}" "${ift_term}" \
                                  "BLP_THETA2_INIT_FILE=${ckpt}")
                 echo "    CUE ${st}: ${jid}  (afterok ${ift_term}; seed $(basename "${ckpt}"))"
@@ -281,7 +321,7 @@ for k in ${ROUTINES}; do
                 # Stock-Wright S-set: S(alpha0)=min_{theta2,beta} N*g'W(theta)g on a
                 # grid of pinned alpha0, inverted into an identification-robust set
                 # that ACCOUNTS for theta2 being estimated (unlike conditional AR/LM).
-                ckpt="${CL_DATA_OUT}/blp_checkpoint_E${k}_spec_12_${SSET_STAGE}.jls"
+                ckpt="${CL_STEP_BLP}/blp_checkpoint_E${k}_spec_12_${SSET_STAGE}.jls"
                 jid=$(submit_one "${k}" cue sset "${SSET_STAGE}" "$(cl_stage_wall "${SSET_STAGE}")" sset "${ift_term}" \
                                  "BLP_THETA2_INIT_FILE=${ckpt},BLP_ALPHA_GRID=${SSET_GRID}")
                 echo "    S-set ${SSET_STAGE} [${SSET_GRID}]: ${jid}  (afterok ${ift_term})"
@@ -290,34 +330,35 @@ for k in ${ROUTINES}; do
         fi
     fi
 done
-echo "Submitted ${njobs} RC-BLP jobs (routines: ${ROUTINES}; engines: ${ENGINES}; layout: ${LAYOUT})${sys_dep:+ + build prereqs [afterok ${sys_dep}]}."
+cl_log "Submitted ${njobs} RC-BLP jobs (routines: ${ROUTINES}; engines: ${ENGINES}; layout: ${LAYOUT})${sys_dep:+ + build prereqs [afterok ${sys_dep}]}."
 
 # ── 4. Terminal archive, afterANY every chain, on EVERY layout ───────────────
 # afterany (not afterok) so partial results + logs still get bundled if a stage
-# wall-kills. MOVE mode with --newer ${MARKER}: only files this run produced are
-# taken, so an earlier run's outputs are neither re-archived nor deleted.
+# wall-kills.
+#
+# COPY, never MOVE, and no --newer filter. The RC results have to STAY in
+# data/output/blp: foundation_demand_eval.jl's _result_path opens them there for the
+# whole BBL and CF phase, an --se-only rerun reloads the checkpoints in place, and
+# the download is meant to be complete rather than incremental — a --newer window
+# would silently drop a rung an earlier resume produced. The archiver writes the zip
+# into data/output/download, alongside every other set.
 dep_csv="$(echo ${term_jids} | tr ' ' ':' | sed 's/^://; s/:$//')"
 if [[ "${DO_ZIP}" == "1" && -n "${dep_csv}" ]]; then
     ZWRAP="cd '${CL_ROOT}'"
-    for s in blp_outputs blp_logs blp_checkpoints; do
-        ZWRAP="${ZWRAP}; bash cluster_archive.sh --set ${s} --move --newer '${MARKER}' --tag \"\${SLURM_JOB_ID}\""
+    for s in blp logs; do
+        ZWRAP="${ZWRAP} && bash cluster_archive.sh --set ${s} --copy --tag \"\${SLURM_JOB_ID}\""
     done
-    ZWRAP="${ZWRAP}; rm -f '${MARKER}'"
     zip_jid=$(cl_sbatch --dependency=afterany:${dep_csv} \
         -J blp_zip --partition="${ZIP_PARTITION:-day}" --time=00:20:00 \
         --nodes=1 --ntasks=1 --cpus-per-task=2 --mem=8G \
         -o "${LOGD}/blp_zip_%j.out" -e "${LOGD}/blp_zip_%j.err" \
         --wrap "${ZWRAP}")
-    echo "-- archive: ${zip_jid}  (afterany ${dep_csv//:/, })"
-    echo "   -> ${CL_DATA_OUT}/blp_outputs_<${zip_jid}>.zip      (process_blp_outputs.py auto-discovers blp_outputs_*.zip)"
-    echo "   -> ${CL_DATA_OUT}/blp_logs_<${zip_jid}>.zip"
-    echo "   -> ${CL_DATA_OUT}/blp_checkpoints_<${zip_jid}>.zip  (warm-start .jls MOVED off data/output;"
-    echo "      unzip them back into data/output before any --se-only run or stage resume)"
+    cl_say "  blp_zip -> ${zip_jid}  (afterany ${dep_csv//:/, }; sets: blp logs, --copy)"
+    cl_log "   -> ${CL_STEP_DOWNLOAD}/blp_outputs_<tag>.zip and logs_<tag>.zip"
+    cl_log "      the results themselves stay in ${CL_STEP_BLP} for the BBL/CF phases"
 else
-    [[ "${CL_DRYRUN}" == "1" ]] || rm -f "${MARKER}"
-    [[ "${DO_ZIP}" == "1" ]] || echo "-- archive skipped (--no-zip). Archive by hand later:"
-    [[ "${DO_ZIP}" == "1" ]] || echo "     bash cluster_archive.sh --set blp_outputs --copy"
+    [[ "${DO_ZIP}" == "1" ]] || cl_say "  archive skipped (--no-zip). By hand later:  bash cluster_archive.sh --set blp --copy"
 fi
 
-echo "Watch with: squeue -u \$USER"
+cl_log "Watch with: squeue -u \$USER"
 echo "BLP_TERM_JOBIDS=${dep_csv}"

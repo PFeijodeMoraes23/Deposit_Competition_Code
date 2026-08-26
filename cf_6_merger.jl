@@ -43,7 +43,7 @@ function cf6_compare(a)
     @printf("\n  === CF6 merger (%s + %s) ===\n", fA, fB)
     @printf("  pre-merger V_A+V_B = %.4g | post-merger V_(AB) = %.4g  (Δ = %.4g, %.2f%%)\n",
             Vpre, Vpost, Vpost - Vpre, 100*(Vpost - Vpre)/max(abs(Vpre), 1e-12))
-    cf_dir = cf_out_dir(P1.out_dir); mkpath(cf_dir)   # cluster: data/output/cf
+    cf_dir = cf_out_dir(P1.out_dir); mkpath(cf_dir)   # cluster: data/output/counterfactuals
     Parquet2.writefile(joinpath(cf_dir, "cf6_merger_$(P1.tag).parquet"),
                        DataFrame(firm=P1.firms, is_B=collect(P1.isB), V_merged_eq=V1))
     log_status("  [CF6] wrote cf6_merger_$(P1.tag).parquet")
@@ -99,7 +99,7 @@ function main_cf6()
     @printf("  merged-firm spread change vs base: mean Δσ on k∈{4,5} = %.4g\n", mean(dσ))
 
     df = DataFrame(firm=firms1, is_B=collect(isB1), V_merged_eq=V1)
-    cf_dir = cf_out_dir(P.out_dir); mkpath(cf_dir)    # cluster: data/output/cf
+    cf_dir = cf_out_dir(P.out_dir); mkpath(cf_dir)    # cluster: data/output/counterfactuals
     out_path = joinpath(cf_dir, "cf6_merger_$(P.tag).parquet")
     Parquet2.writefile(out_path, df)
     log_status("  [CF6] wrote $(basename(out_path))")

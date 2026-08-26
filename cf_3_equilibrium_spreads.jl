@@ -362,7 +362,7 @@ function main_cf3()
     df = DataFrame(CodConglomeradoPrudencial=string.(ctx.df.CodConglomeradoPrudencial),
                    deposit_type=st.dep_type, is_B=st.is_B,
                    rho_hat=ctx.rho_hat, sigma_star=eq.sigma, endog=endog)
-    cf_dir = cf_out_dir(out_dir); mkpath(cf_dir)       # cluster: data/output/cf
+    cf_dir = cf_out_dir(out_dir); mkpath(cf_dir)       # cluster: data/output/counterfactuals
     out_path = joinpath(cf_dir, "cf3_equilibrium_$tag.parquet")
     Parquet2.writefile(out_path, df)
     log_status("  [CF3] wrote $(basename(out_path))")

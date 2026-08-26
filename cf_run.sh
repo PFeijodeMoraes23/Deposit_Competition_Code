@@ -3,20 +3,15 @@
 # cf_run.sh — THE single front door for the counterfactual pipeline.
 #
 # WHAT MUST EXIST FIRST
-#   1. bash cluster_preflight.sh                     (must print PREFLIGHT OK)
-#   2. the RC results (auto-built from the newest blp_outputs_*.zip)
+#   1. gate G0 green                                 (env_job.sh ENV_STEP=preflight)
+#   2. the RC results in data/output/blp, where blp_run.sh's ladder wrote them
 #   3. data/input/forward_rf_qoq.csv
-#   4. for cf1_net/cf3/cf5/cf6: the BBL cost params from bbl_run.sh
-#   5. for cf4: {upsilon_pix,phi_nopix}_E{k}_spec_12.*, either produced by the
-#      sleepiness phase into data/output/CF_FOUNDATION (bash sleep_run.sh, gate G7)
-#      or built locally and uploaded to data/input, which wins when both exist
+#   4. for cf1_net/cf3/cf5/cf6: the BBL cost params in data/output/bbl from bbl_run.sh
+#   5. for cf4: {upsilon_pix,phi_nopix}_E{k}_spec_12.* in data/output/counterfactuals,
+#      produced by the sleepiness phase (bash sleep_run.sh, gate G7)
 # WHAT TO RUN NEXT
 #   bash cf_eq_run.sh --mode cf3|cf5|cf6            (the long equilibrium CFs)
-#   bash cluster_archive.sh --set foundation --copy (and cf1, cf4)
-#
-# THIS SCRIPT IS NEW. submit_cf_all.sh is still present and still works; it is the
-# fallback and is retired only after one successful cluster cycle. Nothing in it
-# has been modified.
+#   bash cluster_archive.sh --set counterfactuals --copy
 #
 # WHAT IT SUBMITS
 #   cf_warmup --afterok--> demand_eval / cf1 / cf4        (no costs needed)
@@ -63,7 +58,6 @@ DO_STEPS="${DO_STEPS:-demand_eval cf1 cf1_net}"
 DO_WARMUP="${DO_WARMUP:-1}"
 WARMUP_JOBID="${WARMUP_JOBID:-}"
 CF_COST_AFTEROK="${CF_COST_AFTEROK:-}"
-AUTO_PROCESS="${AUTO_PROCESS:-1}"
 SHARD_TIME="${SHARD_TIME:-08:00:00}"; SOLVE_TIME="${SOLVE_TIME:-01:00:00}"
 EQ_TIME="${EQ_TIME:-12:00:00}"
 SKIP_PREFLIGHT=0
@@ -77,7 +71,7 @@ while [[ $# -gt 0 ]]; do
         --cost-afterok)   CF_COST_AFTEROK="$2"; shift ;;
         --skip-preflight) SKIP_PREFLIGHT=1 ;;
         --dry-run)        CL_DRYRUN=1 ;;
-        -h|--help)        sed -n '2,50p' "${BASH_SOURCE[0]}"; exit 0 ;;
+        -h|--help)        sed -n '2,44p' "${BASH_SOURCE[0]}"; exit 0 ;;
         *) echo "unknown option: $1 (see -h)" >&2; exit 2 ;;
     esac
     shift
@@ -101,19 +95,11 @@ cl_banner "Counterfactual pipeline$([[ "${CL_DRYRUN}" == "1" ]] && echo '  [DRY 
           "steps: ${DO_STEPS}" \
           "stage=${CF_STAGE} R=${R} seed=${SEED} beta=${BETA} horizon=${HORIZON}"
 
-# ── Step 1: build cluster_processed/ from the newest RC zip if a routine is missing
-CP_DIR="$(cl_cp_dir ${ROUTINES})"
-need_process=0
-for k in ${ROUTINES}; do [[ -f "${CP_DIR}/blp_E${k}_spec_12.jls" ]] || need_process=1; done
-if [[ "${need_process}" == "1" && "${AUTO_PROCESS}" == "1" ]]; then
-    cl_build_cp_dir "${CP_DIR}" "${CF_STAGE}" ${ROUTINES}
-fi
-
-# ── Step 2: preflight ────────────────────────────────────────────────────────
+# ── Preflight ────────────────────────────────────────────────────────────────
 miss=0
 cl_need_draws "${R}" "${SEED}" || miss=1
 cl_need_rf_curve || miss=1
-for k in ${ROUTINES}; do cl_need_rc_jls "${CP_DIR}" "${k}" || miss=1; done
+for k in ${ROUTINES}; do cl_need_rc_jls "${k}" || miss=1; done
 
 # The equilibrium CFs consume the BBL cost params, produced by the SEPARATE BBL
 # stage. Preflight the JSON on disk rather than chaining across orchestrators —
@@ -130,13 +116,11 @@ if [[ "${need_costs}" == "1" ]]; then
 fi
 
 # CF4 needs no BBL costs, but DOES need the exact link-aware phi^noPix + Upsilon_pix
-# from cf_4_upsilon_export.py. That export is no longer local-only: the sleepiness
-# estimators run on the cluster, so the sleep pickle it reads is there too, and
-# sleep_job.sh SLEEP_STEP=upsilon produces the pair into data/output/CF_FOUNDATION
-# (gate G7). An uploaded pair in data/input still wins — cl_cf4_dirs searches it
-# first — so a hand-staged export from a local build keeps working unchanged.
-#
-# cl_cf4_dirs is the SAME order cf_4_pix.jl's cf4_search_dirs uses at run time.
+# from cf_4_upsilon_export.py. The sleepiness estimators run on the cluster, so the
+# sleep pickle that export reads is there too, and sleep_job.sh SLEEP_STEP=upsilon
+# writes the pair into data/output/counterfactuals (gate G7). That is the ONE place
+# cl_cf4_dirs looks, and the same one cf_4_pix.jl's cf4_search_dirs uses at run time,
+# so what this preflight tests is exactly what the job will open.
 cf4_note=""
 if want cf4; then
     for k in ${ROUTINES}; do
@@ -150,7 +134,7 @@ fi
 # `${need_costs:+...}` expansion would fire even when the cost preflight was
 # skipped and claim "+ BBL cost params" on a run where nothing was verified.
 costs_note=""; [[ "${need_costs}" == "1" ]] && costs_note=" + BBL cost params"
-echo "Preflight OK: R=${R} draws + forward r^f curve + RC results${costs_note}${cf4_note} for routines: ${ROUTINES}"
+cl_log "Preflight OK: R=${R} draws + forward r^f curve + RC results${costs_note}${cf4_note} for routines: ${ROUTINES}"
 
 # ── Step 3: submit ───────────────────────────────────────────────────────────
 sub () {  # sub <jobname> <time> <extra sbatch args...>
@@ -182,9 +166,9 @@ if [[ -z "${wj}" && "${DO_WARMUP}" == "1" ]]; then
     wj=$(sub "cf_warmup" "${SOLVE_TIME}" \
         --export=ALL,CF_ROUTINE=${ROUTINES%% *},CF_STAGE=${CF_STAGE},R=${R},SEED=${SEED},CF_STEP=warmup \
         "${CL_ROOT}/cf_job.sh")
-    echo "-- pre-warm barrier -> job ${wj} (every CF waits on it, afterok) --"
+    cl_say "  cf_warmup -> ${wj}  (every CF waits on it, afterok)"
 elif [[ -n "${wj}" ]]; then
-    echo "-- pre-warm barrier: REUSING job ${wj} (--warmup-jobid) --"
+    cl_log "-- pre-warm barrier: REUSING job ${wj} (--warmup-jobid) --"
 fi
 warm_dep="${wj:+--dependency=afterok:${wj}}"
 
@@ -201,43 +185,41 @@ eq_extra="--beta ${BETA} --horizon ${HORIZON}"
 found_dep=""; cf1_dep=""; cf4_dep=""; cf3_dep=""; cf5_dep=""; cf6_dep=""
 for k in ${ROUTINES}; do
     base_export="CF_ROUTINE=${k},CF_STAGE=${CF_STAGE},R=${R},SEED=${SEED}"
-    echo "-- E${k} ${CF_STAGE} | R=${R} --"
+    cl_log "-- E${k} ${CF_STAGE} | R=${R} --"
     # demand_eval runs PER ROUTINE: shares_elas_E{k} is the in-sample share
     # reproduction for THAT estimator, so one routine's copy validates only that one.
     if want demand_eval; then
         j=$(sub "cf_demaneval_E${k}" "${SOLVE_TIME}" ${warm_dep} \
             --export=ALL,${base_export},CF_STEP=demand_eval "${CL_ROOT}/cf_job.sh")
-        echo "  demand_eval  -> job ${j}"; found_dep="${found_dep}:${j}"
+        cl_say "  cf_demaneval_E${k} -> ${j}"; found_dep="${found_dep}:${j}"
     fi
     if want cf1; then
         j=$(sub "cf_cf1_E${k}" "${SHARD_TIME}" ${warm_dep} \
             --export=ALL,${base_export},CF_STEP=cf1,CF_EXTRA="${cf1_extra}" "${CL_ROOT}/cf_job.sh")
-        echo "  cf1          -> job ${j}"; cf1_dep="${cf1_dep}:${j}"
+        cl_say "  cf_cf1_E${k} -> ${j}"; cf1_dep="${cf1_dep}:${j}"
     fi
     if want cf4; then
         j=$(sub "cf_cf4_E${k}" "${SHARD_TIME}" ${warm_dep} \
             --export=ALL,${base_export},CF_STEP=cf4 "${CL_ROOT}/cf_job.sh")
-        echo "  cf4          -> job ${j}"; cf4_dep="${cf4_dep}:${j}"
+        cl_say "  cf_cf4_E${k} -> ${j}"; cf4_dep="${cf4_dep}:${j}"
     fi
     if want cf1_net; then
         j=$(sub "cf_cf1net_E${k}" "${SOLVE_TIME}" ${cost_dep} \
             --export=ALL,${base_export},CF_STEP=cf1_net,CF_EXTRA="${eq_extra}" "${CL_ROOT}/cf_job.sh")
-        echo "  cf1_net      -> job ${j}"; cf1_dep="${cf1_dep}:${j}"   # net -> same cf1 archive
+        cl_say "  cf_cf1net_E${k} -> ${j}"; cf1_dep="${cf1_dep}:${j}"
     fi
     for step in cf3 cf5 cf6; do
         want "${step}" || continue
         j=$(sub "cf_${step}_E${k}" "${EQ_TIME}" ${cost_dep} \
             --export=ALL,${base_export},CF_STEP=${step},CF_EXTRA="${eq_extra} ${CF_EQ_EXTRA:-}" \
             "${CL_ROOT}/cf_job.sh")
-        echo "  ${step}          -> job ${j}"
+        cl_say "  cf_${step}_E${k} -> ${j}"
         case "${step}" in cf3) cf3_dep="${cf3_dep}:${j}";; cf5) cf5_dep="${cf5_dep}:${j}";; cf6) cf6_dep="${cf6_dep}:${j}";; esac
     done
 done
 
-echo "Submitted CFs for routines: ${ROUTINES}. Watch with: squeue -u \$USER"
-echo "When the WHOLE chain (incl. CF3/CF5/CF6) is done, archive with:"
-echo "  bash cluster_archive.sh --all --copy      # then --move once nothing downstream runs"
-# Machine-parseable handles for pipeline_run.sh. CF_RESULT_JOBIDS stays the LAST
+cl_log "Submitted CFs for routines: ${ROUTINES}. Watch with: squeue -u \$USER"
+# Machine-parseable handles for pipeline_all.sh. CF_RESULT_JOBIDS stays the LAST
 # line so `sed -n 's/^CF_RESULT_JOBIDS=//p' | tail -1` captures it cleanly.
 echo "CF_WARMUP_JOBID=${wj}"
 cf_all_ids="$(echo "${found_dep}${cf1_dep}${cf4_dep}${cf3_dep}${cf5_dep}${cf6_dep}" | sed 's/^://')"

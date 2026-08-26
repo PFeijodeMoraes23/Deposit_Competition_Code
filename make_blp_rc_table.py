@@ -49,7 +49,7 @@ DATA_DIR   = _paths.PROCESSED
 RESULTS_DIR = _paths.blp_results_dir()
 # Raw per-stage cluster results live in cluster_raw/ after the 2026-06-25 reorg.
 RAW_DIR    = RESULTS_DIR / "cluster_raw"
-DEMAND_PREP_DIR = _paths.demand_prep_root()                       # demand_{k}_*spec_12.parquet
+DEMAND_PREP_DIR = _paths.demand_parquet_dir()                     # demand_{k}_*spec_12.parquet
 # These tables are built from CLUSTER artifacts under BLP_RESULTS, which are not written per
 # sleepiness vintage, so they resolve to the production tree rather than following SLEEP_OUT_ROOT.
 TABLES_DIR  = _paths.estimation_output() / "Rout"

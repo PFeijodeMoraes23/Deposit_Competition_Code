@@ -135,6 +135,11 @@ def main() -> None:
                  f"({n_match:,} = {n_match / len(merged):.1%} matched ESTBAN)")
 
     merged.to_csv(PANEL_CSV, index=False)
+    # Keep the Parquet sidecar in step with the CSV. estimation_1_sleep reads the panel
+    # through utils.load_panel_cached, which serves that sidecar, so leaving it stale
+    # here would hand the sleepiness estimation the previous build.
+    from utils import refresh_panel_cache
+    refresh_panel_cache(PANEL_CSV, merged)
     logging.info(f"Wrote {PANEL_CSV} with {INSTRUMENT}")
 
 

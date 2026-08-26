@@ -23,6 +23,51 @@ INTERMED_DIR = os.path.join(str(paths.PROCESSED), "PANEL_INTERMED")
 os.makedirs(INTERMED_DIR, exist_ok=True)
 OUTPUT_PATH = os.path.join(INTERMED_DIR, "digital_banks_diagnostic.csv")
 
+# Per-institution physical access points, built by scrape_25_bcb_access_points.py from the
+# BCB Informes services (agencias / postos de atendimento / correspondentes).
+ACCESS_POINTS_CSV = os.path.join(str(paths.INCLUSION_DIR), "bcb_access_points_by_institution.csv")
+
+# Physical-network counts are RECORDED for every institution (see load_access_points) but do
+# NOT decide the B/D split. The B category in this pipeline means a bank whose deposits sit in
+# a local market, and that is a statement about deposit BOOKING, which is what the geo test
+# below measures. An institution booking its whole balance at one head office has no local
+# market to belong to however many storefronts it runs, so a wide service network is not on its
+# own grounds to call it brick-and-mortar.
+#
+# Setting DIGITAL_MAX_OWN_MUNS to a positive integer turns the network evidence into a demotion
+# rule: a candidate operating its own points (agencias + postos de atendimento, NOT
+# correspondentes) in more than that many municipalities is reclassified brick-and-mortar. The
+# candidate distribution is strongly bimodal -- Agibank at 679 municipalities, then a gap down
+# to 18 (Banco PAN), 14 (C6, BTG) and 8 or fewer for the rest -- so any value between about 20
+# and 600 isolates Agibank alone. Correspondentes are excluded from the count because a purely
+# digital bank can contract thousands for cash-in/cash-out without holding any premises
+# (Banco Votorantim has 14,844 against a single own-network municipality).
+#
+# Unset (the default) means the network evidence is reported and never acts.
+_max_own = os.environ.get("DIGITAL_MAX_OWN_MUNS", "").strip()
+DIGITAL_MAX_OWN_MUNS = int(_max_own) if _max_own else None
+
+
+def load_access_points() -> pd.DataFrame:
+    """Per-institution own-network reach, keyed on the 8-digit CNPJ root.
+
+    Returns an empty frame with the expected columns when the file is absent, so the
+    deposit-side heuristic still runs (it just cannot demote anyone).
+    """
+    cols = ["cnpj8", "n_agencias", "n_postos", "n_own_points", "n_mun_own", "n_correspondentes"]
+    if not os.path.exists(ACCESS_POINTS_CSV):
+        logging.warning(
+            f"Access-point file not found at {ACCESS_POINTS_CSV} -- the digital verdict will "
+            f"rest on deposit booking alone. Run scrape_25_bcb_access_points.py.")
+        return pd.DataFrame(columns=cols)
+    ap = pd.read_csv(ACCESS_POINTS_CSV, dtype={"cnpj8": str})
+    keep = [c for c in cols if c in ap.columns]
+    ap = ap[keep].copy()
+    ap["cnpj8"] = ap["cnpj8"].astype(str).str.zfill(8)
+    logging.info(f"Access points: {len(ap):,} institutions from {os.path.basename(ACCESS_POINTS_CSV)}")
+    return ap
+
+
 def main():
     if not os.path.exists(ESTBAN_CSV):
         logging.error(f"Raw ESTBAN data not found at: {ESTBAN_CSV}")
@@ -171,11 +216,45 @@ def main():
     metrics.loc[wholesale_mask,    'Flag'] = 'Wholesale/Investment Bank (Regulatory Filtered)'
     metrics.drop(columns=['_ativ', '_seg', '_nome'], inplace=True)
 
+    # -- Physical-network evidence -------------------------------------------------------
+    # Everything above reads deposit BOOKING. This step reads the actual retail footprint and
+    # demotes any candidate that turns out to operate premises across many municipalities.
+    ap = load_access_points()
+    metrics["cnpj8"] = metrics["CNPJ_root"].astype(str).str.zfill(8)
+    metrics = metrics.merge(ap, on="cnpj8", how="left")
+    for c in ["n_agencias", "n_postos", "n_own_points", "n_mun_own", "n_correspondentes"]:
+        if c not in metrics.columns:
+            metrics[c] = 0
+        metrics[c] = pd.to_numeric(metrics[c], errors="coerce").fillna(0).astype(int)
+    metrics["has_access_point_data"] = (metrics["cnpj8"].isin(set(ap["cnpj8"]))
+                                        if len(ap) else False)
+
+    geo_digital = metrics["Flag"] == "True Digital Retail Bank"
+    wide_network = geo_digital & (metrics["n_mun_own"] > (DIGITAL_MAX_OWN_MUNS
+                                                         if DIGITAL_MAX_OWN_MUNS is not None
+                                                         else float("inf")))
+    if DIGITAL_MAX_OWN_MUNS is not None:
+        metrics.loc[wide_network, "Flag"] = "Brick-and-Mortar (Physical Network)"
+
+    # Report the wide-network candidates either way: whether or not the rule is armed, an
+    # institution booking centrally while running premises in hundreds of municipalities is
+    # worth seeing in the log.
+    _wide = geo_digital & (metrics["n_mun_own"] > 25)
+    for _, r in metrics[_wide].sort_values("n_mun_own", ascending=False).iterrows():
+        verb = "demoted to brick-and-mortar" if DIGITAL_MAX_OWN_MUNS is not None else                "kept digital (DIGITAL_MAX_OWN_MUNS unset), wide physical network"
+        logging.info(
+            f"  {verb}: {r['NOME_INSTITUICAO']} "
+            f"({r['n_agencias']} agencias + {r['n_postos']} postos across {r['n_mun_own']} "
+            f"municipalities; books deposits in {r['N_mun']})")
+
+    # THE VERDICT. panel_6_market.load_digital_conglomerates reads this column and nothing else.
     metrics["is_digital_candidate"] = metrics["Flag"] == "True Digital Retail Bank"
 
     
     # Reorder and Sort
-    out_cols = ["CNPJ_root", "NOME_INSTITUICAO", "Inst_Total_Dep", "Demand_Dep", "Savings_Dep", "Retail_Dep", "Time_Dep", "Max_Mun_Dep", "N_mun", "Max_Share", "Flag", "is_digital_candidate"]
+    out_cols = ["CNPJ_root", "NOME_INSTITUICAO", "Inst_Total_Dep", "Demand_Dep", "Savings_Dep", "Retail_Dep", "Time_Dep", "Max_Mun_Dep", "N_mun", "Max_Share",
+                "n_agencias", "n_postos", "n_own_points", "n_mun_own", "n_correspondentes", "has_access_point_data",
+                "Flag", "is_digital_candidate"]
     out_df = metrics[out_cols].sort_values(by=["is_digital_candidate", "Inst_Total_Dep"], ascending=[False, False])
     
     # Drop zero-deposit ones visually to clear noise
@@ -189,7 +268,10 @@ def main():
     digital_count = sum(out_df["is_digital_candidate"])
     print(f"\n--- Raw ESTBAN Diagnostic Complete ---")
     print(f"Total Institutions analyzing: {len(out_df)}")
-    print(f"Digital candidates (1-5 Municipalities & >95% share): {digital_count}")
+    _rule = (f"AND own network <= {DIGITAL_MAX_OWN_MUNS} municipalities"
+             if DIGITAL_MAX_OWN_MUNS is not None else "(network evidence recorded, not applied)")
+    print(f"Digital candidates (booking geo-test {_rule}): {digital_count}")
+    print(f"Demoted by physical network: {int((out_df['Flag'] == 'Brick-and-Mortar (Physical Network)').sum())}")
     print(f"Sample Digital candidates:")
     top_cands = out_df[out_df["is_digital_candidate"]][["NOME_INSTITUICAO", "Inst_Total_Dep", "N_mun"]].head(10)
     for _, r in top_cands.iterrows():

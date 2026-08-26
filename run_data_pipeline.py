@@ -56,7 +56,8 @@ Pipeline stages
     3b. panel_2_rates_ip.py         Extract IP explicit deposit rates from raw COSIF (parallel to deposits)
     3c. panel_3_master_panel_build.py            Compute and append deposit rates/spreads (COSIF + SGS; corrected k=4 CDB rate) to deposit panel
     3d. panel_4_bank_chars.py               IF Data -> conglomerate x quarter bank size and solvency characteristics panel
-    3e. panel_5_flag_digital.py                   Analyze raw ESTBAN to identify purely digital banks -> PANEL_INTERMED
+    3e0. scrape_25_bcb_access_points.py           BCB Informes -> per-institution agencias/postos/correspondentes (MUST precede 3e)
+    3e. panel_5_flag_digital.py                   Deposit booking + physical network -> brick-and-mortar vs digital verdict
 
   Stage 4 - Master analysis panel   [ORDER IS LOAD-BEARING - see the STEPS comment]
     4a. panel_6_market.py                   Merge all MCA panels + deposit panel -> master analysis dataset
@@ -255,8 +256,11 @@ STEPS = [
      "Compute and append deposit rates/spreads (COSIF + SGS; corrected k=4 CDB rate) to deposit panel"),
     (3, "17", "panel_4_bank_chars.py",
      "IF Data -> conglomerate x quarter bank size and solvency characteristics panel"),
+    (3, "38", "scrape_25_bcb_access_points.py",
+     "BCB Informes -> per-institution agencias/postos/correspondentes by municipality "
+     "(physical-network evidence; MUST precede panel_5)"),
     (3, "18", "panel_5_flag_digital.py",
-     "Analyze raw ESTBAN to identify purely digital banks -> PANEL_INTERMED"),
+     "Deposit booking + physical network -> brick-and-mortar vs digital verdict -> PANEL_INTERMED"),
 
     # Stage 4 -- master analysis panel
     #
@@ -460,7 +464,8 @@ WAVES: list[list[str]] = [
     ["12"],                                    # Wave 2h: COSIF extract (custos_implicitos + foundation)
     ["13"],                                    # Wave 2i: COSIF calibrate (corrected k=4 CDB rate)
     ["14", "15"],                               # Wave 3: deposits + IP rates
-    ["16", "17", "18"],                         # Wave 4: deposit rates/spreads + bank chars + digital flags (parallel)
+    ["38"],                                   # Wave 3b: per-institution access points (panel_5 reads them)
+    ["16", "17", "18"],                         # Wave 4: deposit rates/spreads + bank chars + digital verdict (parallel)
     ["19"],                                    # Wave 5: master merge (panel_6)
     ["20", "21"],                             # Wave 6: LOO instruments (panel_7, OVERWRITES market_panel)
                                               #         + demographics sigma (panel_8, independent)

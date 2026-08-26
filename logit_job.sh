@@ -14,14 +14,15 @@
 #   julia --project=. blp_1_logit.jl --hpc
 #
 # WHAT IT PRODUCES, and why the RC stage wants it
-#   data/output/logit_delta_E{k}_spec_12.bin   the delta warm-start blp_2_rc.jl /
-#       blp_gpu_engine.jl load before the sigma stage. Version-agnostic binary:
-#       one leading Int64 length, then that many Float64. delta_dir() is
-#       data/output ITSELF on the cluster — flat, which is where the RC engine
-#       looks.
-#   data/output/logit/logit_summary_spec_12.json  the combined 2SLS summary
-#       (alpha and the X coefficients per routine x sub-model) and the per-key JLS.
-#   data/output/Rout/*.tex                     the logit tables.
+#   Everything lands in ONE folder, data/output/logit — blp_1_logit.jl's delta_dir()
+#   and tex_out_dir() both resolve to of_root.jl's logit_dir(out_dir), the same call
+#   the RC engine uses to FIND the warm-starts, so writer and reader name one path:
+#     logit_delta_E{k}_spec_12.bin   the delta warm-start blp_2_rc.jl /
+#         blp_gpu_engine.jl load before the sigma stage. Version-agnostic binary:
+#         one leading Int64 length, then that many Float64.
+#     logit_summary_spec_12.json     the combined 2SLS summary (alpha and the X
+#         coefficients per routine x sub-model), plus the per-key .jls fits.
+#     *.tex                          the logit tables.
 #
 # WHY IT IS ITS OWN JOB AND NOT PART OF THE RC CHAIN
 #   It reads the demand parquets and nothing else, so it can run the moment G2 is
@@ -31,9 +32,11 @@
 #   this job to the shared-NFS precompile race for a package it never calls.
 #
 # WHAT MUST EXIST FIRST
-#   the demand parquets — data/output/DEMAND_PREP/demand_*_spec_12.parquet from
-#   the sleepiness prep step (gate G2), or uploaded to data/input. blp_1_logit.jl
-#   searches data/input first, then data/output/DEMAND_PREP.
+#   the demand parquets — data/output/demand_prep/demand_*_spec_12.parquet, written
+#   by the sleepiness prep step and verified by gate G2. That is the ONE place
+#   blp_1_logit.jl looks on the cluster (of_root.jl's demand_search_dirs), so a
+#   second vintage of a routine cannot be picked up here and disagreed with by the
+#   RC stack later.
 # WHAT TO RUN NEXT
 #   gate G4 (pipeline_all.sh submits it afterok this job), then blp_run.sh.
 #
@@ -56,14 +59,16 @@ set -e
 SPEC="${SPEC:-12}"
 export SLEEP_ACTIVE_ESTS="${SLEEP_ACTIVE_ESTS:-${CL_ROUTINES_ALL}}"
 
-mkdir -p "${CL_ROOT}/logs" "${CL_DATA_OUT}"
+mkdir -p "${CL_ROOT}/logs"
 
-# --hpc resolves data/{input,output} directly and never calls resolve_of_root(),
-# so the skeleton is not on this job's critical path. Build it anyway: it is
-# idempotent and it keeps the ONE path that would otherwise throw — a run where
-# the flag is dropped — resolving to the same tree as every other job.
-cl_bootstrap_tree || echo "[!] skeleton bootstrap reported a problem (above) — --hpc does not need it."
-export OPEN_FINANCE_ROOT="$(cl_of_root)"
+# --hpc resolves data/{input,output} directly and never calls resolve_of_root(), so the
+# skeleton is not on this job's critical path. Build it anyway: it is idempotent and it
+# keeps the ONE path that would otherwise throw — a run where the flag is dropped —
+# resolving to the same tree as every other job. cl_export_step_dirs then creates the
+# step folders and exports OPEN_FINANCE_ROOT with them, so this job and every other one
+# agree on where each family is written by construction rather than by repetition.
+cl_bootstrap_tree
+cl_export_step_dirs
 
 cl_load_julia
 
@@ -72,6 +77,8 @@ cl_load_julia
 # stack. The cost is one cold JIT of the logit stack, ~1 minute.
 cl_banner "Logit delta warm-starts | spec ${SPEC}" \
           "active lineup: SLEEP_ACTIVE_ESTS='${SLEEP_ACTIVE_ESTS}'" \
+          "reads  ${DEMAND_PREP_DIR}" \
+          "writes ${CL_STEP_LOGIT}" \
           "julia $(julia --version 2>/dev/null | sed 's/^julia version //') | threads=${SLURM_CPUS_PER_TASK:-8}" \
           "node=$(hostname) | $(date)"
 
@@ -80,6 +87,6 @@ julia --project="${CL_ROOT}" --threads="${SLURM_CPUS_PER_TASK:-8}" \
 
 echo
 echo "-- what landed --"
-ls -la "${CL_DATA_OUT}"/logit_delta_E*_spec_"${SPEC}".bin 2>/dev/null || echo "  (no logit_delta_E*_spec_${SPEC}.bin — gate G4 will say so)"
-ls -la "${CL_DATA_OUT}"/logit/logit_summary_spec_"${SPEC}".json 2>/dev/null || true
+ls -la "${CL_STEP_LOGIT}"/logit_delta_E*_spec_"${SPEC}".bin 2>/dev/null || echo "  (no logit_delta_E*_spec_${SPEC}.bin — gate G4 will say so)"
+ls -la "${CL_STEP_LOGIT}"/logit_summary_spec_"${SPEC}".json 2>/dev/null || true
 echo "logit job complete: $(date)"

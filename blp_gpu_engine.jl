@@ -23,7 +23,8 @@ end
 
 # The three entry points below resolve their demand parquet through `demand_parquet_path`,
 # defined in blp_1_estimation.jl alongside `get_paths`/`input_filename` and pulled in by the
-# include above (data/input first, then data/output/DEMAND_PREP).
+# include above (`demand_search_dirs`: the single directory the prep step writes —
+# data/output/demand_prep on the cluster, the local DEMAND_PREP off it).
 
 # ===================== blp_2_estimation.jl =====================
 """

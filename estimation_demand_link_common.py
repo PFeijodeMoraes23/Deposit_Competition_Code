@@ -33,11 +33,15 @@ import numpy as np
 from scipy.stats import norm
 
 from utils import paths
+from utils import load_panel_cached
 from utils import routines as R
 from utils import state_transform as _st
 from utils.sleep_links import NonLinearResults  # noqa: F401 (needed for unpickling)
 
 # market_panel.csv, NOT the fees variant — see utils/paths.market_panel_csv (USE_FEE_PANEL=1).
+# The frame is read through load_panel_cached, which serves the .parquet twin of this path
+# whenever that is the authoritative copy. On the cluster it always is: the data bundle ships
+# market_panel.parquet (39 MB) and no market_panel.csv, so a bare read_csv finds nothing.
 PANEL_CSV = paths.market_panel_csv()
 BANKED_CSV = paths.INCLUSION_DIR / "bcb_banked_mca_panel.csv"
 
@@ -131,10 +135,30 @@ def extract_upsilon_terms(res_ss):
     return upsilon
 
 
+def _ensure_is_B(df, where):
+    """Attach the firm-type verdict, preferring the column stored on the panel.
+
+    `is_B` is decided once in panel_6_market and written to market_panel.csv: True for a
+    brick-and-mortar (local) firm, False for a digital/national one. Deriving it again from
+    CODMUN_IBGE here would silently overrule that verdict, so the stored column wins whenever
+    it is present and CODMUN_IBGE is only a fallback for panels built before it existed.
+    """
+    if 'is_B' in df.columns and df['is_B'].notna().any():
+        df['is_B'] = df['is_B'].astype(bool)
+        return df
+    if 'CODMUN_IBGE' not in df.columns:
+        raise KeyError(f"{where}: neither is_B nor CODMUN_IBGE is available to set firm type")
+    logging.warning(
+        f"{where}: market panel has no is_B column -- falling back to CODMUN_IBGE != '0'. "
+        f"Rebuild the panel with panel_6_market.py to get the stored verdict.")
+    df['is_B'] = (df['CODMUN_IBGE'].astype(str) != '0')
+    return df
+
+
 def _reshape_panel_from_wide(df_raw):
     id_vars = ['CodConglomeradoPrudencial', 'mca_code', 'year', 'quarter']
     df_raw = df_raw.drop_duplicates(subset=id_vars).copy()
-    df_raw['is_B'] = (df_raw['CODMUN_IBGE'].astype(str) != '0')
+    df_raw = _ensure_is_B(df_raw, "_reshape_panel_from_wide")
     df = pd.wide_to_long(df_raw, stubnames=['dep_a', 'spread_a', 'spread_ann_a'], i=id_vars, j='deposit_type').reset_index()
     return df.rename(columns={'dep_a': 'deposit_balance', 'spread_a': 'spread_qoq', 'spread_ann_a': 'spread_ann'})
 
@@ -143,9 +167,7 @@ def _reshape_panel(df_raw):
     df_raw['mca_code'] = df_raw['mca_code'].astype(str)
     if 'dep_a1' in df_raw.columns:
         return _reshape_panel_from_wide(df_raw)
-    df = df_raw.copy()
-    if 'is_B' not in df.columns:
-        df['is_B'] = (df['CODMUN_IBGE'].astype(str) != '0')
+    df = _ensure_is_B(df_raw.copy(), "_reshape_panel")
     if 'deposit_type' in df.columns:
         df = df[df['deposit_type'] != 3].copy()
     pre_k5 = (df['deposit_type'] == 5) & ((df['year'] < 2020) | ((df['year'] == 2020) & (df['quarter'] < 2)))
@@ -163,7 +185,7 @@ def build_base_panel(panel_csv, time_block=False):
     (a ratio is scale-invariant but not shift-invariant -- centring first puts
     near-zero values in that denominator)."""
     print(f"Loading {panel_csv}...")
-    df_raw = pd.read_csv(panel_csv, dtype={'mca_code': str}, low_memory=False)
+    df_raw = load_panel_cached(panel_csv, dtype={'mca_code': str}, low_memory=False)
     df = _reshape_panel(df_raw)
     df['fgc_covered'] = df['deposit_type'].astype('Int64').isin([1, 2, 4]).astype(int)
     if 'has_ip' not in df.columns:
@@ -198,7 +220,11 @@ def build_base_panel(panel_csv, time_block=False):
     if 'year' in df.columns:
         df['post_2020'] = (df['year'] >= 2020).astype(int)
         df['pix_exists'] = ((df['year'] > 2020) | ((df['year'] == 2020) & (df['quarter'] == 4))).astype(float)
-    if 'CODMUN_IBGE' in df.columns:
+    # The D-type dummy is the complement of the stored verdict, never an independent test.
+    if 'is_B' in df.columns:
+        df['dummy_D_type'] = (~df['is_B'].astype(bool)).astype(float)
+    elif 'CODMUN_IBGE' in df.columns:
+        logging.warning("dummy_D_type: no is_B column -- falling back to CODMUN_IBGE == '0'")
         df['dummy_D_type'] = (df['CODMUN_IBGE'].astype(str) == '0').astype(float)
     for c in ('is_coop', 'is_state_owned'):
         # is_state_owned arrives as bool (Tc==1); cast to float 0/1 since it is now a demand regressor.
@@ -534,10 +560,12 @@ def run(est_num, link, tag, time_block=False, spec="all"):
     else:
         spec_ids = [int(spec)]
 
-    # est_dir/demand_prep_root follow SLEEP_OUT_ROOT, so a sandboxed run reads the fit it
-    # just produced and writes its parquets beside it.
+    # est_dir follows SLEEP_OUT_ROOT, so a sandboxed run reads the fit it just produced.
+    # demand_parquet_dir is the parquets' own seam: it equals demand_prep_root() unless
+    # DEMAND_PREP_DIR names a separate step folder (the cluster's data/output/demand_prep),
+    # where the fits and the parquets they generate live in different step directories.
     sleep_output_dir = paths.est_dir(est_num)
-    demand_output_dir = paths.demand_prep_root()
+    demand_output_dir = paths.demand_parquet_dir()
     demand_output_dir.mkdir(parents=True, exist_ok=True)
 
     print(f"Loading Base Panel {PANEL_CSV}...")

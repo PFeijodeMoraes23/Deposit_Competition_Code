@@ -12,12 +12,13 @@
 #   "No such file or directory" instead of halfway through a submission.
 #
 # WHAT TO RUN NEXT
-#   Never this. Run  bash cluster_preflight.sh  first, then blp_run.sh /
-#   bbl_run.sh / cf_run.sh / pipeline_run.sh / cf_eq_run.sh.
-#
-# THESE SCRIPTS ARE NEW. The submit_*.sh / zip_*.sh scripts they replace are still
-# present and still work; they are the fallback and are retired only after one
-# successful cluster cycle. Nothing in them has been modified.
+#   Never this. Two entry points sit above it:
+#     env_job.sh       submitted, never run on the login node. ENV_STEP=resolve
+#                      (Pkg.resolve, alone), sysimage_gpu / sysimage_cpu, preflight (G0).
+#     pipeline_all.sh  the whole graph. It only SUBMITS; every check is a job.
+#   The per-phase orchestrators it calls — sleep_run.sh, blp_run.sh, bbl_run.sh,
+#   cf_run.sh, cf_eq_run.sh — each submit one phase and are also usable alone for a
+#   resume. cluster_archive.sh packages a finished step into data/output/download.
 #
 # HOW TO SOURCE IT
 #   login-node script:  CL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -32,6 +33,62 @@ CL_DATA_ROOT="${DATA_ROOT:-$(cd "${CL_ROOT}/.." && pwd)/data}"
 DATA_ROOT="${CL_DATA_ROOT}"
 CL_DATA_OUT="${CL_DATA_ROOT}/output"
 CL_DATA_IN="${CL_DATA_ROOT}/input"
+# EXPORTED, not merely assigned: the Python and Julia steps read the tree out of the
+# environment, and sbatch propagates only exported variables, so an assignment alone
+# reaches a job or a --wrap child as unset and the step silently falls back to its
+# local-layout default.
+export CL_ROOT CL_DATA_ROOT DATA_ROOT CL_DATA_OUT CL_DATA_IN
+
+# ── 0b. THE STEP TREE — one folder per pipeline step under data/output ────────
+# data/input is UPLOADS ONLY and data/output is everything the cluster produced, split
+# so that every produced family has exactly ONE producer writing to exactly ONE
+# directory. That is what makes a consumer unable to resolve a second, older copy of
+# the same routine, and it is also the unit cluster_archive.sh packages.
+#
+# of_root.jl holds the other half of this agreement: blp_dir(out), logit_dir(out),
+# draws_dir(out) and cf_out_dir(out, ...) build these same paths from out_dir ==
+# data/output, so the shell and Julia sides agree by construction rather than by two
+# lists that have to be kept in step by hand. Changing a folder name here means
+# changing it there in the same edit.
+CL_STEP_SLEEP="${CL_DATA_OUT}/sleep"
+CL_STEP_DEMAND="${CL_DATA_OUT}/demand_prep"
+CL_STEP_LOGIT="${CL_DATA_OUT}/logit"
+CL_STEP_BLP="${CL_DATA_OUT}/blp"
+CL_STEP_DRAWS="${CL_STEP_BLP}/draws"
+CL_STEP_BBL="${CL_DATA_OUT}/bbl"
+CL_STEP_CF="${CL_DATA_OUT}/counterfactuals"
+CL_STEP_DOWNLOAD="${CL_DATA_OUT}/download"
+export CL_STEP_SLEEP CL_STEP_DEMAND CL_STEP_LOGIT CL_STEP_BLP CL_STEP_DRAWS \
+       CL_STEP_BBL CL_STEP_CF CL_STEP_DOWNLOAD
+
+# cl_export_step_dirs: the ONE place the Python layer learns where each step writes.
+# utils/paths.py resolves each step folder from exactly one environment variable
+# (SLEEP_OUT_ROOT, DEMAND_PREP_DIR, CF_FOUNDATION_DIR, CF_COST_FWD, COST_POLFUNC_DIR)
+# and falls back to the local ESTIMATION_OUTPUT layout when it is unset — so a job that
+# does not call this writes a real output into a tree nobody downloads, exits 0, and the
+# loss surfaces phases later. Every *_job.sh therefore calls it immediately after
+# cl_bootstrap_tree, which is what makes OPEN_FINANCE_ROOT and the step dirs one
+# decision instead of a per-branch export that can drift between branches.
+#
+# Idempotent: plain assignments plus mkdir -p, so calling it twice, or in a job whose
+# tree already exists, does nothing. cl_of_root is defined in section 10; a function
+# body resolves its calls at call time, so the forward reference is safe.
+cl_export_step_dirs () {
+    export OPEN_FINANCE_ROOT="$(cl_of_root)"
+    export SLEEP_OUT_ROOT="${CL_STEP_SLEEP}"
+    export DEMAND_PREP_DIR="${CL_STEP_DEMAND}"
+    export CF_FOUNDATION_DIR="${CL_STEP_CF}"
+    export CF_COST_FWD="${CL_STEP_BBL}"
+    export COST_POLFUNC_DIR="${CL_STEP_BBL}"
+    export STATE_CENTERING_JSON="${CL_DATA_IN}/state_centering_means.json"
+    export CL_ROOT CL_DATA_IN CL_DATA_OUT
+    # A dry run submits nothing and must leave nothing behind, so it exports the
+    # paths (the point of a dry run is to show them) without creating the tree.
+    [[ "${CL_DRYRUN:-0}" == "1" ]] && return 0
+    mkdir -p "${CL_STEP_SLEEP}" "${CL_STEP_DEMAND}" "${CL_STEP_LOGIT}" \
+             "${CL_STEP_BLP}" "${CL_STEP_DRAWS}" "${CL_STEP_BBL}" \
+             "${CL_STEP_CF}" "${CL_STEP_DOWNLOAD}"
+}
 
 # ── 1. TOOLCHAIN IDENTITY — the single site for every module/env name ─────────
 # Every one of these is env-overridable, so a toolchain drift discovered at login
@@ -295,71 +352,15 @@ cl_gpu_gate () {
     exit 1
 }
 
-# ── 4. RC-result staging: pick_zip + CP_DIR, ONE copy, Julia-consistent order ─
-# Candidate order matches _result_path() in foundation_demand_eval.jl:157-159:
-#   out/cluster_processed, out/BLP_RESULTS/cluster_processed, out/BLP_RESULTS
-# and the test is on the LEAF FILE, not on directory existence — Julia takes the
-# first candidate whose file exists, so testing dirs can preflight one file while
-# Julia reads another.
-cl_pick_zip () {
-    if [[ -n "${BLP_ZIP:-}" ]]; then printf '%s\n' "${BLP_ZIP}"; return; fi
-    local best="" bestid=-1 f id
-    for f in "${CL_DATA_OUT}"/blp_outputs_*.zip "${CL_DATA_OUT}"/cluster_raw/blp_outputs_*.zip; do
-        [[ -f "$f" ]] || continue
-        id="$(basename "$f" | sed -E 's/^blp_outputs_([0-9]+)\.zip$/\1/')"
-        if [[ "$id" =~ ^[0-9]+$ ]] && (( id > bestid )); then bestid=$id; best="$f"; fi
-    done
-    [[ -n "$best" ]] || best="$(ls -t "${CL_DATA_OUT}"/blp_outputs*.zip "${CL_DATA_OUT}"/cluster_raw/blp_outputs*.zip 2>/dev/null | head -1 || true)"
-    printf '%s\n' "${best}"
-}
-
-cl_cp_dir () {   # cl_cp_dir <routine...>  -> the dir the CF/BBL stack will read
-    if [[ -n "${CP_DIR:-}" ]]; then printf '%s\n' "${CP_DIR}"; return; fi
-    local c k
-    for c in "${CL_DATA_OUT}/cluster_processed" \
-             "${CL_DATA_OUT}/BLP_RESULTS/cluster_processed" \
-             "${CL_DATA_OUT}/BLP_RESULTS"; do
-        for k in "$@"; do
-            [[ -f "${c}/blp_E${k}_spec_12.jls" ]] && { printf '%s\n' "${c}"; return; }
-        done
-    done
-    printf '%s\n' "${CL_DATA_OUT}/cluster_processed"    # build target when none exists yet
-}
-
-# cl_build_cp_dir: extract the extended RC .jls out of the newest blp_outputs zip.
-# Minimal and robust: unzip + cp, no python. The RC zips are FLAT, so -j plus the
-# member name lands each .jls in cluster_raw/; a find fallback covers a
-# dir-prefixed member.
-cl_build_cp_dir () {   # cl_build_cp_dir <cp_dir> <stage> <routine...>
-    local cp="$1" stage="$2"; shift 2
-    local zip craw k src found
-    zip="$(cl_pick_zip)"; craw="${CL_DATA_OUT}/cluster_raw"
-    if [[ -z "${zip}" || ! -f "${zip}" ]]; then
-        echo "── no blp_outputs_*.zip under ${CL_DATA_OUT} — cannot auto-build cluster_processed/ (has the RC run finished?)"
-        return 0
-    fi
-    echo "── building $(basename "${cp}")/ from $(basename "${zip}") (routines $*) ──"
-    mkdir -p "${cp}" "${craw}"
-    for k in "$@"; do
-        src="blp_results_E${k}_spec_12_${stage}.jls"
-        unzip -o -j "${zip}" "${src}" "*/${src}" -d "${craw}" >/dev/null 2>&1 || true
-        found="${craw}/${src}"
-        [[ -f "${found}" ]] || found="$(find "${craw}" -name "${src}" 2>/dev/null | head -1)"
-        if [[ -n "${found}" && -f "${found}" ]]; then
-            cp -f "${found}" "${cp}/blp_E${k}_spec_12.jls"; echo "     E${k} ok  (${src})"
-        else
-            echo "     E${k} --  ${src} not found in $(basename "${zip}")"
-        fi
-    done
-}
-
 # ── 5. ROUTINE DEFAULTS — one site, replacing six that disagree ──────────────
-# The live lineup is E1,E2,E3,E4. The RC/CF default set is 3,4, matching
-# blp_2_rc.jl:112 DEFAULT_ROUTINES=[3,4] and cluster/upload_manifest.txt's
-# '#!ROUTINES 1 2 3 4'. An E5-E8 id anywhere is pre-relineup numbering.
+# The lineup is E1,E2,E3,E4 and all four go through EVERY phase — sleep, demand prep,
+# logit, RC-BLP, BBL, CF — which is why the three lists hold the same value. They stay
+# three variables because a resume narrows ONE phase (`--routines "3 4"` on bbl_run.sh
+# after two ladders survive) without silently narrowing the others. An E5-E8 id
+# anywhere is pre-relineup numbering.
 CL_ROUTINES_ALL="${CL_ROUTINES_ALL:-1 2 3 4}"
-CL_ROUTINES_RC="${CL_ROUTINES_RC:-3 4}"
-CL_ROUTINES_CF="${CL_ROUTINES_CF:-3 4}"
+CL_ROUTINES_RC="${CL_ROUTINES_RC:-1 2 3 4}"
+CL_ROUTINES_CF="${CL_ROUTINES_CF:-1 2 3 4}"
 
 # cl_routines_provenance: says where the value came from. No consolidated script
 # does an unconditional `export ROUTINES=`, so an ENVIRONMENT warning here means
@@ -370,30 +371,6 @@ cl_routines_provenance () {   # cl_routines_provenance <value> <source> <default
         env)  echo "routines='$1'  (FROM ENVIRONMENT — the default is '$3'; unset ROUTINES to use it)" ;;
         *)    echo "routines='$1'  (DEFAULT)" ;;
     esac
-}
-
-# cl_validate_routines: refuse at t=0 for a routine whose RC result is not on
-# disk, so the failure is a 2-second login-node error instead of N chains that
-# die at their first stage and take every afterok successor with them. The test
-# is the exact file the CF/BBL stack opens, in the exact directory Julia picks.
-cl_validate_routines () {   # cl_validate_routines <routine...>
-    local k bad=0 cp
-    cp="$(cl_cp_dir "$@")"
-    for k in "$@"; do
-        if [[ ! -f "${cp}/blp_E${k}_spec_12.jls" ]]; then
-            # ONE rule decides what a missing input means, and it lives in
-            # cl_need_file. In a live run this still prints and still returns
-            # nonzero; only the end-to-end dry run reports and carries on.
-            if _cl_assume_chained; then
-                echo "[dry-run] MISSING RC result E${k}: ${cp}/blp_E${k}_spec_12.jls"
-                echo "          assumed produced earlier in this graph — a LIVE run REFUSES here."
-            else
-                echo "  E${k}: no RC result ${cp}/blp_E${k}_spec_12.jls" >&2
-                bad=1
-            fi
-        fi
-    done
-    return ${bad}
 }
 
 # ── 6. PREFLIGHT PRIMITIVES — one implementation of each check ───────────────
@@ -423,49 +400,68 @@ cl_need_file () {   # cl_need_file <path> <label> [remediation...]
     return 1
 }
 cl_need_draws () {  # cl_need_draws <R> <SEED>
-    cl_need_file "${CL_DATA_OUT}/BLP_DRAWS/halton_nu_R${1}_seed${2}.jls" "R=${1} draws" \
-        "build them: bash blp_run.sh --draws   (or sbatch blp_draws_job.sh)"
+    cl_need_file "${CL_STEP_DRAWS}/halton_nu_R${1}_seed${2}.jls" "R=${1} draws" \
+        "the BLP phase builds them when they are absent:  bash blp_run.sh   (force with --draws)"
 }
 cl_need_rf_curve () {
     cl_need_file "${CL_DATA_IN}/forward_rf_qoq.csv" "forward r^f curve" \
         "build locally then upload: python cf_forward_rf.py --horizon ${HORIZON:-50} --start 2026Q1"
 }
-cl_need_rc_jls () { # cl_need_rc_jls <cp_dir> <routine>
-    cl_need_file "$1/blp_E$2_spec_12.jls" "RC result E$2" \
-        "drop the RC blp_outputs_*.zip in ${CL_DATA_OUT} and re-run (auto-built via unzip+cp)," \
-        "or pin one with BLP_ZIP=<path>."
+# cl_need_rc_jls <routine>: the RC result the CF/BBL stack opens. It tests the exact file
+# blp_dir(out_dir) names in foundation_demand_eval.jl's _result_path, in the exact place
+# the RC job writes it — the ladder persists its results in the blp step folder and nothing
+# stages or renames them afterwards, so preflight and run resolve one path by construction.
+# CF_STAGE picks which rung (the CF/BBL default is the deepest, `extended`).
+cl_need_rc_jls () { # cl_need_rc_jls <routine>
+    cl_need_file "${CL_STEP_BLP}/blp_results_E$1_spec_12_${CF_STAGE:-extended}.jls" \
+        "RC result E$1 (stage ${CF_STAGE:-extended})" \
+        "run the RC ladder first:  bash blp_run.sh --routines $1"
 }
 cl_need_costs () {  # cl_need_costs <routine> <stage>
-    cl_need_file "${CL_DATA_OUT}/cost/cost_params_E$1_spec_12_$2.json" "BBL cost params E$1" \
+    cl_need_file "${CL_STEP_BBL}/cost_params_E$1_spec_12_$2.json" "BBL cost params E$1" \
         "run the BBL cost stage first:  bash bbl_run.sh"
 }
 
-# ── CF4's two artefacts: the ONE search order, shared by the preflight and the gate.
-# cf_4_upsilon_export.py used to run only locally, so its output could only be an
-# UPLOAD and data/input was the only place worth looking. It runs on the cluster now
-# (sleep_job.sh SLEEP_STEP=upsilon, gated by G7) and writes to
-# paths.estimation_output()/CF_FOUNDATION. A preflight that still tested data/input
-# alone would refuse a pair that is present and correct.
+# cl_need_polfunc: the fitted policy function estimation_bbl_2_fwd_sim.jl reads through
+# --policy-csv. Two locations, in this order: the bbl step folder, where the polfunc job
+# writes it (COST_POLFUNC_DIR == CL_STEP_BBL), then data/input, which covers a resume that
+# skips the polfunc job and hand-stages the CSV instead. It PRINTS the resolved path on
+# stdout, so a caller both tests and captures in one call:
+#     POLICY_CSV="$(cl_need_polfunc)" || exit 1
+# which is why every diagnostic line here goes to stderr.
+cl_need_polfunc () {
+    local c
+    for c in "${CL_STEP_BBL}/polfunc_fitted.csv" "${CL_DATA_IN}/polfunc_fitted.csv"; do
+        [[ -f "${c}" ]] && { printf '%s\n' "${c}"; return 0; }
+    done
+    if _cl_assume_chained; then
+        printf '%s\n' "${CL_STEP_BBL}/polfunc_fitted.csv"
+        echo "[dry-run] MISSING polfunc_fitted.csv" >&2
+        echo "          assumed produced earlier in this graph — a LIVE run REFUSES here." >&2
+        return 0
+    fi
+    echo "MISSING policy function: polfunc_fitted.csv" >&2
+    echo "   searched, in order:" >&2
+    echo "     ${CL_STEP_BBL}" >&2
+    echo "     ${CL_DATA_IN}" >&2
+    echo "   -> produced by the BBL phase:  bash bbl_run.sh   (its polfunc pre-step)" >&2
+    return 1
+}
+
+# ── CF4's two artefacts: ONE producer, ONE location, hence one candidate.
+# upsilon_pix_E{k} and phi_nopix_E{k} are written by cf_4_upsilon_export.py running on the
+# cluster (sleep_job.sh SLEEP_STEP=upsilon, gated by G7) into CF_FOUNDATION_DIR, which
+# cl_export_step_dirs points at the counterfactuals step folder. Nothing else writes them
+# and nothing copies them afterwards, so there is exactly one place to look.
 #
-# This mirrors cf4_search_dirs() in cf_4_pix.jl candidate-for-candidate, and it has to:
-# a preflight that resolves a different file from the one the job then opens is worse
-# than no preflight at all.
-#
-#   1. data/input                 an uploaded export. FIRST, so a hand-staged pair
-#                                 always beats a cluster-produced one.
-#   2. data/output/CF_FOUNDATION  where the on-cluster export writes.
-#   3. data/output/cf             the subdirectory the rest of the CF stack uses.
-#   4. <of_root>/…/ESTIMATION_OUTPUT/CF_FOUNDATION
-#                                 the anchor the exporter itself resolves. Normally the
-#                                 SAME directory as (2) — cl_bootstrap_tree symlinks
-#                                 ESTIMATION_OUTPUT at data/output — but it is the only
-#                                 candidate that matches when the skeleton was built
-#                                 without that link.
+# The single candidate is the point, not an economy: a second candidate is how a stale
+# uploaded pair and a fresh cluster-produced pair coexist and different consumers resolve
+# different vintages of the same routine — the collision that aborts cf4 three phases
+# later, after the RC ladders and the BBL solves. cf4_search_dirs() in cf_4_pix.jl and
+# gate G7 in sleep_job.sh resolve this same lone directory, so preflight, gate and run
+# cannot open different files.
 cl_cf4_dirs () {
-    printf '%s\n' "${CL_DATA_IN}" \
-                  "${CL_DATA_OUT}/CF_FOUNDATION" \
-                  "${CL_DATA_OUT}/cf" \
-                  "$(cl_of_root)/BCB/Egan_et_al_2025_Rep/processed/ESTIMATION_OUTPUT/CF_FOUNDATION"
+    printf '%s\n' "${CL_STEP_CF}"
 }
 
 # cl_need_cf4_file <basename> <label>: 0 as soon as one candidate holds it. On failure
@@ -482,11 +478,9 @@ cl_need_cf4_file () {
         return 0
     fi
     echo "MISSING ${label}: ${fn}"
-    echo "   searched, in order:"
+    echo "   searched:"
     while IFS= read -r d; do echo "     ${d}"; done < <(cl_cf4_dirs)
     echo "   -> produced by the sleepiness phase:  bash sleep_run.sh   (gate G7)"
-    echo "   -> or build it locally and upload to data/input:"
-    echo "      python cf_4_upsilon_export.py --estim <k> --spec 12"
     return 1
 }
 
@@ -506,7 +500,7 @@ cl_python_probe () {   # cl_python_probe "<import list>"
     ) >/dev/null 2>&1
 }
 
-# cl_setup_python: IN-JOB activation + verification. Sets PYBIN and CF_COST_FWD.
+# cl_setup_python: IN-JOB activation + verification. Sets PYBIN.
 # Exits 127 on failure — bare compute-node python3 has no scientific stack, and a
 # Traceback 14 h into the pipeline (after the fwd_sim array drains) is exactly the
 # failure this prevents.
@@ -530,11 +524,11 @@ cl_setup_python () {   # cl_setup_python "<import list>"
         echo "  Use an existing env:  export CONDA_ENV=<name>   (conda env list)" >&2
         echo "  or an interpreter:    export CF_PYTHON=/path/to/python CONDA_ENV=''" >&2
         exit 127; }
-    # The scripts' default COST_FWD is the local BCB tree, absent on the cluster.
-    # Point it at data/output/cost, where the Julia fwd_sim writes the psi_* this
-    # solve reads (matches cf_out_dir(out_dir,"COST_FWD")).
-    export CF_COST_FWD="${CF_COST_FWD:-${CL_DATA_OUT}/cost}"
-    echo "COST_FWD = ${CF_COST_FWD}"
+    # Informational only: CF_COST_FWD is owned by cl_export_step_dirs, the single site
+    # that decides every step folder. Printing the value this job actually received is
+    # how a missing cl_export_step_dirs call shows up here, in the first ten lines of
+    # the log, instead of as a psi_* file written where the solve does not read.
+    echo "COST_FWD = ${CF_COST_FWD:-<unset: cl_export_step_dirs has not run>}"
 }
 
 # ── 7. THE ONE sbatch WRAPPER ────────────────────────────────────────────────
@@ -552,7 +546,7 @@ CL_FAKE_JID_BASE="${CL_FAKE_JID_BASE:-9000000}"
 # inside $( ), i.e. in a subshell, so an in-memory counter would reset on every
 # call and print the same id for every job — making the dependency graph
 # unreadable and unverifiable.
-# It is EXPORTED so a child orchestrator (pipeline_run.sh -> bbl_run.sh /
+# It is EXPORTED so a child orchestrator (pipeline_all.sh -> bbl_run.sh /
 # cf_run.sh) keeps counting from the parent's numbers instead of restarting, and
 # it is keyed on the top-level PID so a second dry run starts clean. The file is
 # created lazily, inside cl_sbatch, so sourcing this library still has no side
@@ -605,12 +599,18 @@ cl_sbatch () {
         n=$(( $(cat "${CL_FAKE_COUNTER}" 2>/dev/null || echo 0) + 1 ))
         printf '%s' "${n}" > "${CL_FAKE_COUNTER}"
         jid=$((CL_FAKE_JID_BASE + n))
-        { printf '[dry-run] sbatch --parsable --kill-on-invalid-dep=yes'
-          _cl_q ${_cg:+"${_cg}"} "$@"
-          printf '\n          -> job id %s\n' "${jid}"; } >&2
+        # Through cl_log, so the full command text is narration: on the terminal only
+        # under CL_VERBOSE=1, and in the orchestrator log otherwise. Redirected to
+        # stderr because every caller runs cl_sbatch inside $( ) — anything on stdout
+        # but the job id lands in the caller's jobid variable and poisons the
+        # dependency it is about to build.
+        { cl_log "[dry-run] sbatch --parsable --kill-on-invalid-dep=yes$(_cl_q ${_cg:+"${_cg}"} "$@")"
+          cl_log "          -> job id ${jid}"; } >&2
         printf '%s\n' "${jid}"
         return 0
     fi
+    # The live path prints NOTHING but the job id sbatch --parsable returns: the caller
+    # owns the one "name -> jobid" line, because only it knows the name and the deps.
     sbatch --parsable --kill-on-invalid-dep=yes ${_cg:+"${_cg}"} "$@"
 }
 
@@ -655,13 +655,67 @@ cl_run_marker () {   # cl_run_marker <prefix>
     mktemp "${CL_DATA_OUT}/.$1_marker.XXXXXX"
 }
 
-cl_banner () {
-    echo "=============================================================================="
-    printf ' %s\n' "$@"
-    echo "=============================================================================="
+# ── 9. QUIET OUTPUT — three sinks, one decision per line ─────────────────────
+# A full submission is ~20 lines the operator has to act on: what was submitted with
+# which id and dependency, which verdict a gate returned, where the download lands.
+# Everything else — banners, env dumps, the dry-run command text, a child
+# orchestrator's own narration — is detail that belongs in a file, because a terminal
+# scrolling 800 lines hides the one line that matters and there is no way to tell
+# afterwards which id belonged to which phase.
+#
+#   cl_say  facts the operator needs   -> terminal AND log
+#   cl_log  narration                  -> log; terminal only when CL_VERBOSE=1
+#   cl_err  failures                   -> stderr AND log, always visible
+#
+# Inside a compute job the default flips to verbose: Slurm is already capturing stdout
+# to logs/<name>.out, that file IS the job's record, and a job whose banner and env
+# dump went somewhere else is a job nobody can debug from its own log. The flip works
+# because the orchestrator only ASSIGNS CL_VERBOSE, never exports it, so a job inherits
+# the variable unset and picks the in-job default.
+CL_VERBOSE="${CL_VERBOSE:-$([[ -n "${SLURM_JOB_ID:-}" ]] && echo 1 || echo 0)}"
+
+# _cl_orch_log_init: decide the log path ONCE and leave it in CL_ORCH_LOG. It assigns in
+# the CURRENT shell and is never called through $( ) from the writers below — a command
+# substitution runs in a subshell, so an assignment made there is discarded and the next
+# line, a second later, names a new file. It is EXPORTED, so a child orchestrator
+# (pipeline_all.sh -> bbl_run.sh) appends to the parent's file and one run stays one file
+# in submission order.
+#
+# Two sinks are /dev/null on purpose: a dry run must leave nothing behind, and inside a
+# compute job stdout is already the record — a second sink would duplicate every line
+# and, from a 100-task array, have a hundred tasks appending to one shared file.
+_cl_orch_log_init () {
+    if [[ "${CL_DRYRUN:-0}" == "1" || -n "${SLURM_JOB_ID:-}" ]]; then
+        CL_ORCH_LOG="/dev/null"; export CL_ORCH_LOG; return 0
+    fi
+    [[ -n "${CL_ORCH_LOG:-}" ]] && return 0
+    mkdir -p "${CL_ROOT}/logs" 2>/dev/null || true
+    CL_ORCH_LOG="${CL_ROOT}/logs/orchestrator_$(date +%Y%m%d_%H%M%S)_$$.log"
+    export CL_ORCH_LOG
+    return 0
 }
 
-# ── 9. THE OPEN-FINANCE SKELETON — what the sleepiness stage resolves against ─
+# cl_orch_log: the log path on stdout, for the closing "details in <file>" line.
+cl_orch_log () { _cl_orch_log_init; printf '%s' "${CL_ORCH_LOG}"; }
+
+# The log append never fails the caller: losing a narration line to a full quota must
+# not take down a submission that is otherwise fine.
+_cl_to_log () { _cl_orch_log_init; printf '%s\n' "$*" >> "${CL_ORCH_LOG}" 2>/dev/null || true; }
+
+cl_say () { printf '%s\n' "$*"; _cl_to_log "$*"; return 0; }
+cl_log () { [[ "${CL_VERBOSE}" == "1" ]] && printf '%s\n' "$*"; _cl_to_log "$*"; return 0; }
+cl_err () { printf '%s\n' "$*" >&2;  _cl_to_log "$*"; return 0; }
+
+# cl_banner is narration by definition — it identifies a phase, it never reports a
+# result — so it goes through cl_log and the terminal keeps the ~20 lines that matter.
+cl_banner () {
+    local l
+    cl_log "=============================================================================="
+    for l in "$@"; do cl_log " ${l}"; done
+    cl_log "=============================================================================="
+}
+
+# ── 10. THE OPEN-FINANCE SKELETON — what the sleepiness stage resolves against ─
 # The Python sleepiness/CF stack anchors every path on utils/paths.py's
 # OPEN_FINANCE root and the Julia entry points on of_root.jl. Both walk three
 # levels up from the source file unless OPEN_FINANCE_ROOT is set — and on the
@@ -689,12 +743,13 @@ cl_banner () {
 # load-bearing piece. utils/paths.estimation_output() is deliberately NOT
 # redirectable by SLEEP_OUT_ROOT — "it also holds the BLP, counterfactual and cost
 # trees, which a sleepiness sandbox has no business redirecting" — so without the
-# link cf_4_upsilon_export.py's CF_FOUNDATION, blp_1_logit.jl's BLP_RESULTS/logit
-# and every Rout/ land INSIDE the skeleton, next to nothing, while the rest of the
-# stack reads data/output. With it the two coincide by construction:
-#     estimation_output()            -> data/output
-#     estimation_output()/DEMAND_PREP-> data/output/DEMAND_PREP == SLEEP_OUT_ROOT
-#     estimation_output()/CF_FOUNDATION, BLP_RESULTS/, Rout/  -> under data/output
+# link everything that resolves through it lands INSIDE the skeleton, next to nothing,
+# while the rest of the stack reads data/output. With it the two coincide by
+# construction:
+#     estimation_output()  -> data/output
+#     every accessor cl_export_step_dirs overrides (SLEEP_OUT_ROOT, DEMAND_PREP_DIR,
+#     CF_FOUNDATION_DIR, CF_COST_FWD, COST_POLFUNC_DIR) -> its step folder under it
+#     everything else utils/paths.py resolves (Rout/, BLP_RESULTS/) -> under it too
 # and cluster-produced files land in the cluster-produced half of the tree, which
 # is what the contract asks for.
 #
@@ -721,10 +776,10 @@ cl_bootstrap_tree () {
         echo "[dry-run] would build the Open-Finance skeleton at ${root}"
         echo "[dry-run]   dirs:  shared/, Drafts/Deposit Competition/, BCB/Inclusion/,"
         echo "[dry-run]          BCB/Egan_et_al_2025_Rep/processed/PANEL_INTERMED/"
-        echo "[dry-run]   links: processed/market_panel.csv, PANEL_INTERMED/digital_banks_diagnostic.csv,"
+        echo "[dry-run]   links: processed/market_panel.parquet, PANEL_INTERMED/digital_banks_diagnostic.csv,"
         echo "[dry-run]          BCB/Inclusion/bcb_banked_mca_panel.csv  <- ${CL_DATA_IN}"
         echo "[dry-run]          processed/ESTIMATION_OUTPUT -> ${CL_DATA_OUT}"
-        echo "[dry-run]          => estimation_output()/DEMAND_PREP == ${CL_DATA_OUT}/DEMAND_PREP == SLEEP_OUT_ROOT"
+        echo "[dry-run]          => estimation_output() == ${CL_DATA_OUT}, the step dirs under it"
         return 0
     fi
     mkdir -p "${root}/shared" \
@@ -733,8 +788,28 @@ cl_bootstrap_tree () {
              "${proc}/PANEL_INTERMED" \
              "${CL_DATA_OUT}" || return 1
     echo "Open-Finance skeleton: ${root}"
-    _cl_link "${CL_DATA_IN}/market_panel.csv" \
-             "${proc}/market_panel.csv"                            "market panel"
+    # The panel is uploaded as PARQUET (39 MB) and only as parquet — the 724 MB CSV never
+    # exists on this cluster. utils.paths.market_panel_csv() still names market_panel.csv
+    # and utils.sidecar_path() derives the twin from it with .with_suffix('.parquet'), so
+    # linking the parquet under its own name is what the Python stack looks for, and the
+    # ABSENCE of processed/market_panel.csv is what tells load_panel_cached the parquet is
+    # the source rather than a cache to validate. Deliberately NO market_panel.csv link:
+    # pointing that name at the parquet bytes would feed pd.read_csv a parquet file.
+    _cl_link "${CL_DATA_IN}/market_panel.parquet" \
+             "${proc}/market_panel.parquet"                        "market panel (parquet)"
+    # A skeleton built before the panel moved to parquet holds a market_panel.csv link.
+    # This function is idempotent and runs at every job start, so it heals that here:
+    # a CSV that resolves keeps the loader in cache-validation mode against a file the
+    # bundle no longer refreshes. Only a SYMLINK is removed — a real file at that path
+    # is somebody's deliberate copy and is reported instead.
+    if [[ -L "${proc}/market_panel.csv" ]]; then
+        rm -f "${proc}/market_panel.csv"
+        echo "  removed the stale processed/market_panel.csv link (the panel is parquet now)"
+    elif [[ -e "${proc}/market_panel.csv" ]]; then
+        echo "  [!] ${proc}/market_panel.csv is a REAL file. The panel ships as parquet;"
+        echo "      with a CSV present the loader validates the parquet against THAT file"
+        echo "      and may re-read it instead. Move it aside unless you put it there on purpose."
+    fi
     _cl_link "${CL_DATA_IN}/digital_banks_diagnostic.csv" \
              "${proc}/PANEL_INTERMED/digital_banks_diagnostic.csv" "digital-bank flags"
     _cl_link "${CL_DATA_IN}/bcb_banked_mca_panel.csv" \

@@ -287,6 +287,32 @@ def _stars(p: float) -> str:
 # ---------------------------------------------------------------------------
 # Data preparation
 # ---------------------------------------------------------------------------
+def _resolve_is_B(df):
+    """Firm type as a boolean Series: True = B (brick-and-mortar), False = D (digital).
+
+    `is_B` is decided once, in panel_6_market.attach_mca_code, from the physical-network
+    verdict in digital_banks_diagnostic.csv, and stored in market_panel.csv as 0/1. It is
+    used verbatim whenever present -- never recomputed or "corrected" here, and in
+    particular not reconciled with mca_code: firm type and market tier are separate facts.
+    A panel written before the column existed falls back to the CODMUN_IBGE sentinel,
+    which approximates the verdict by where a bank books its deposits.
+    """
+    if 'is_B' in df.columns:
+        s = df['is_B']
+        if pd.api.types.is_bool_dtype(s):
+            return s.astype(bool)
+        if pd.api.types.is_numeric_dtype(s):
+            # 0/1 as stored; a missing value reads as D, matching the Julia side's
+            # Bool.(coalesce.(df.is_B, false)).
+            return pd.to_numeric(s, errors='coerce').fillna(0) != 0
+        # Text, from a CSV writer that spelled the column out ("true"/"True"/"1").
+        return s.astype(str).str.strip().str.lower().isin(('1', 'true', 't', 'yes'))
+    print("[WARNING] Column 'is_B' not found in the market panel: this panel predates the "
+          "stored firm-type column. Falling back to the CODMUN_IBGE sentinel; re-run "
+          "panel_6_market.py to store the authoritative column.")
+    return df['CODMUN_IBGE'].astype(str).str.split('.').str[0] != '0'
+
+
 def load_panel() -> pd.DataFrame:
     print(f"Loading {PANEL_CSV.name} ...")
     df = pd.read_csv(PANEL_CSV, low_memory=False)
@@ -295,7 +321,7 @@ def load_panel() -> pd.DataFrame:
     df = apply_window(df, label="desc_2 panel")
 
     df["CODMUN_IBGE_str"] = df["CODMUN_IBGE"].astype(str).str.split(".").str[0]
-    df["bank_type"] = np.where(df["CODMUN_IBGE_str"] == "0", "D", "B")
+    df["bank_type"] = np.where(_resolve_is_B(df), "B", "D")
     df["region_code"] = df["CODMUN_IBGE_str"].str[0]
     df["region"]      = df["region_code"].map(REGION_MAPPING)
     df.loc[df["bank_type"] == "D", "region"] = "National"

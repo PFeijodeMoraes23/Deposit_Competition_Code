@@ -60,14 +60,14 @@ import process_blp_outputs as blp                         # noqa: E402  (move_in
 EST_OUT = paths.estimation_output()
 
 # Archive families, newest of each is processed unless --zip/--cf pins one. The names are
-# fixed by the producers: submit_bbl_all.sh writes bbl_outputs_<jobid>.zip, and
-# zip_cf_outputs.sh writes <cf>_outputs[_<tag>].zip with member paths relative to data/.
+# fixed by the producer: cluster_archive.sh writes <set>_outputs[_<tag>].zip, with member
+# paths relative to data/ and the tag taken from the archiving job id.
 BBL_FAMILIES = ("bbl_outputs", "psi_cost", "cf2_outputs")
 CF_FAMILIES = ("foundation_outputs", "cf1_outputs", "cf3_outputs",
                "cf4_outputs", "cf5_outputs", "cf6_outputs")
 
-# Member prefixes inside the archives, as written by zip_cf_outputs.sh (paths relative to
-# data/). bbl_outputs_*.zip is flat (zip -j), so a bare basename counts as output/cost.
+# Member prefixes inside the archives, as written by cluster_archive.sh (paths relative to
+# data/). A flat archive stores bare basenames, so one of those counts as output/cost.
 CF_PREFIX = "output/cf/"
 COST_PREFIX = "output/cost/"
 
@@ -98,16 +98,15 @@ def search_dirs(kind, extra):
 
 
 def _job_id(name):
-    """Trailing _<digits> before .zip, as submit_bbl_all.sh stamps it. -1 when absent, so a
-    family whose archives carry no job id falls back to mtime ordering."""
+    """Trailing _<digits> before .zip, as cluster_archive.sh --tag stamps it. -1 when absent,
+    so a family whose archives carry no job id falls back to mtime ordering."""
     stem = name[:-4] if name.lower().endswith(".zip") else name
     tail = stem.rsplit("_", 1)[-1]
     return int(tail) if tail.isdigit() else -1
 
 
 def newest(paths_list):
-    """Highest job id wins; among archives with no job id, newest mtime wins. Mirrors
-    pick_zip() in submit_cf_all.sh / submit_bbl_all.sh."""
+    """Highest job id wins; among archives with no job id, newest mtime wins."""
     if not paths_list:
         return None
     return max(paths_list, key=lambda p: (_job_id(p.name), p.stat().st_mtime))
@@ -359,7 +358,7 @@ def main():
             print("       The ridge diagnostic also needs the psi archive (psi_cost.zip or "
                   "cf2_outputs.zip);")
             print("       it is produced on the cluster by "
-                  "`KEEP=1 CFS=\"cf2\" bash zip_all_cf.sh` -- download it and re-run "
+                  "`bash cluster_archive.sh --set cf2 --copy` -- download it and re-run "
                   "with --kind bbl.")
     else:
         print()

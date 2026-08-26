@@ -18,27 +18,29 @@
 #                2 -> estimation_2_sleep.py            (E2: pooled B+D linear)
 #                3 -> estimation_sleep_common.py --est 3   (E3: single index)
 #                4 -> estimation_sleep_common.py --est 4   (E4: single index + time)
+#   merge      SPEC MODE only: estimation_sleep_common.py --merge-specs, the one
+#              writer of est{K}/estimation_results.pkl once the spec array has drained
 #   prep       run_sleep_pipeline.py --skip-sleep — steps 5-8 (exports, the
 #              universal demand prep, the spec-12 analysis, desc_3)
 #   ame_gate   estimation_ame_twostage.py --theta-off for BOTH routines. The
 #              regression guard: it reproduces the stored conditional numbers
 #              bit-for-bit or it fails, and the full AME jobs chain afterok it.
 #   ame        one routine's full two-stage AME bootstrap (--loss robust, full B)
-#   upsilon    cf_4_upsilon_export.py --estim {3,4} --spec 12 — the CF4 inputs
+#   upsilon    cf_4_upsilon_export.py --spec 12 for each SLEEP_UPSILON_ROUTINES id —
+#              the CF4 inputs, one pair per routine the CF phase will run
 #   gate       one content gate (SLEEP_GATE=G1|G2|G3|G4|G7); see THE GATES below
 #
-# Env vars: SLEEP_STEP SLEEP_EST SLEEP_GATE SLEEP_GATE_ROUTINES
-#           SLEEP_EST_EXTRA SLEEP_PREP_EXTRA SLEEP_AME_EXTRA SPEC
+# Env vars: SLEEP_STEP SLEEP_EST SLEEP_GATE SLEEP_GATE_ROUTINES SLEEP_AME_ROUTINES
+#           SLEEP_UPSILON_ROUTINES SLEEP_EST_EXTRA SLEEP_PREP_EXTRA SLEEP_AME_EXTRA SPEC
 #
 # WHY THE ENV BLOCK IS IDENTICAL ON EVERY BRANCH
-#   Sleepiness now runs ON the cluster, so the Python stack has to resolve the
-#   Open-Finance data root, write its outputs somewhere the cluster contract
-#   allows, and find the state-centering transform. Three exports do that
-#   (OPEN_FINANCE_ROOT / SLEEP_OUT_ROOT / STATE_CENTERING_JSON) and every branch
-#   needs all three: the estimators write the vintage, the exports and the AME
-#   read it back, and cf_4_upsilon_export reads it AND the centering json. Setting
-#   them per-branch is how one branch ends up writing to a different vintage than
-#   the next one reads.
+#   The Python stack has to resolve the Open-Finance data root, write each output
+#   into its own step folder under data/output, and find the state-centering
+#   transform. cl_bootstrap_tree + cl_export_step_dirs do all of that, unconditionally,
+#   before the dispatch — one decision for every branch. Per-branch exports are how
+#   one branch writes a vintage into a directory the next branch does not read: the
+#   estimators write it, prep and the AME read it back, and cf_4_upsilon_export reads
+#   it and the centering json to build the CF4 pair.
 #
 # THE GATES
 #   A gate is a content check, not a file-presence check, and it writes
@@ -58,25 +60,33 @@ CL_DIR="${SLURM_SUBMIT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
 . "${CL_DIR}/cluster_lib.sh"
 set -e
 
-: "${SLEEP_STEP:?set SLEEP_STEP (est|prep|ame_gate|ame|upsilon|gate)}"
+: "${SLEEP_STEP:?set SLEEP_STEP (est|merge|prep|ame_gate|ame|upsilon|gate)}"
 case "${SLEEP_STEP}" in
-    est|prep|ame_gate|ame|upsilon|gate) ;;
-    *) echo "Unknown SLEEP_STEP='${SLEEP_STEP}' — see the header for all six." >&2; exit 2 ;;
+    est|merge|prep|ame_gate|ame|upsilon|gate) ;;
+    *) echo "Unknown SLEEP_STEP='${SLEEP_STEP}' — see the header for all seven." >&2; exit 2 ;;
 esac
 
 SPEC="${SPEC:-12}"
 SLEEP_AME_ROUTINES="${SLEEP_AME_ROUTINES:-3 4}"
+# The AME two-stage driver serves the single-index routines only, by construction; the CF4
+# export does not. cf_4_pix.jl needs an upsilon_pix/phi_nopix pair for EVERY routine that
+# goes through the CF phase, and E1/E2 get theirs from cf_4_upsilon_export.py's identity
+# branch, which writes phi_nopix and sets exact_nopix just as the single-index branch does.
+# So upsilon carries its own list — sleep_run.sh sets it to the full routine set — and
+# falls back to the AME pair only when nothing supplies one.
+SLEEP_UPSILON_ROUTINES="${SLEEP_UPSILON_ROUTINES:-${SLEEP_AME_ROUTINES}}"
 SLEEP_EST_EXTRA="${SLEEP_EST_EXTRA:-}"
 SLEEP_PREP_EXTRA="${SLEEP_PREP_EXTRA:-}"
 SLEEP_AME_EXTRA="${SLEEP_AME_EXTRA:-}"
 
 mkdir -p "${CL_ROOT}/logs"
 
-# ── The Open-Finance skeleton, then the env block. Both on EVERY branch. ─────
+# ── The Open-Finance skeleton, then the step dirs. Both on EVERY branch. ─────
+# cl_export_step_dirs is the single site that decides where each step writes: it exports
+# OPEN_FINANCE_ROOT, SLEEP_OUT_ROOT, DEMAND_PREP_DIR, CF_FOUNDATION_DIR and
+# STATE_CENTERING_JSON and creates every step folder, so nothing below has to.
 cl_bootstrap_tree
-export OPEN_FINANCE_ROOT="$(cl_of_root)"
-export SLEEP_OUT_ROOT="${CL_DATA_OUT}/DEMAND_PREP"
-export STATE_CENTERING_JSON="${CL_DATA_IN}/state_centering_means.json"
+cl_export_step_dirs
 # The venv guard re-execs into a Windows .venv it cannot find here; ENFORCED=1 is
 # the documented way to tell it the interpreter is already the right one (the
 # conda env cl_setup_python activates below).
@@ -85,7 +95,6 @@ export OPEN_FINANCE_VENV_ENFORCED=1 PYTHONUTF8=1 PYTHONUNBUFFERED=1 PYTHONIOENCO
 # ProcessPoolExecutor, and workers x a full pool oversubscribes the node and runs
 # SLOWER than serial.
 export OMP_NUM_THREADS=2 MKL_NUM_THREADS=2 OPENBLAS_NUM_THREADS=2 VECLIB_MAXIMUM_THREADS=2 NUMEXPR_NUM_THREADS=2
-mkdir -p "${SLEEP_OUT_ROOT}"
 
 cl_setup_python "${CL_PY_REQ_SLEEP}"
 cd "${CL_ROOT}"
@@ -93,6 +102,7 @@ cd "${CL_ROOT}"
 cl_banner "Sleepiness stage | step=${SLEEP_STEP}${SLEEP_GATE:+ (${SLEEP_GATE})}" \
           "OPEN_FINANCE_ROOT = ${OPEN_FINANCE_ROOT}" \
           "SLEEP_OUT_ROOT    = ${SLEEP_OUT_ROOT}" \
+          "DEMAND_PREP_DIR   = ${DEMAND_PREP_DIR}" \
           "cpus=${SLURM_CPUS_PER_TASK:-8} node=$(hostname) | $(date)"
 
 run_py () { local s="$1"; shift; echo "+ ${PYBIN} ${s} $*"; "${PYBIN}" "${CL_ROOT}/${s}" "$@"; }
@@ -182,16 +192,19 @@ case "${SLEEP_STEP}" in
 
     upsilon)
         # READ-ONLY w.r.t. the estimation: it reads est{k}/estimation_results.pkl +
-        # market_panel_phis.csv and writes the CF4 pair. Both routines in one job —
-        # it is minutes, and CF4 needs the pair for both.
-        for K in ${SLEEP_AME_ROUTINES}; do
+        # market_panel_phis.csv and writes the CF4 pair. Every routine in one job — it is
+        # minutes per routine, and CF4 opens the pair for each routine it runs.
+        for K in ${SLEEP_UPSILON_ROUTINES}; do
             echo "-- Upsilon_pix / phi^noPix export: E${K} spec ${SPEC} --"
             run_py cf_4_upsilon_export.py --estim "${K}" --spec "${SPEC}"
         done ;;
 
     gate)
         : "${SLEEP_GATE:?set SLEEP_GATE (G1|G2|G3|G4|G7)}"
-        export CL_ROOT CL_DATA_IN CL_DATA_OUT SPEC
+        # CL_ROOT / CL_DATA_IN / CL_DATA_OUT and the step dirs the gate reads reach the
+        # embedded Python through cl_export_step_dirs; SPEC and the routine list are this
+        # branch's own inputs.
+        export SPEC
         export SLEEP_GATE_ROUTINES="${SLEEP_GATE_ROUTINES:-${CL_ROUTINES_ALL}}"
         echo "-- gate ${SLEEP_GATE} | routines '${SLEEP_GATE_ROUTINES}' | spec ${SPEC} --"
         "${PYBIN}" - "${SLEEP_GATE}" <<'PYGATE'
@@ -213,8 +226,13 @@ from pathlib import Path
 GATE = (sys.argv[1] if len(sys.argv) > 1 else os.environ.get("SLEEP_GATE", "")).upper()
 ROOT = Path(os.environ["CL_ROOT"])
 OUT = Path(os.environ["CL_DATA_OUT"])
-IN_ = Path(os.environ["CL_DATA_IN"])
-PREP = Path(os.environ.get("SLEEP_OUT_ROOT") or (OUT / "DEMAND_PREP"))
+# PREP is the sleepiness step folder: est{k}/ and Rout/ live under it. DEMAND is the
+# demand-prep step folder, the ONE place the parquets are written and read. They are
+# separate steps with separate producers, and the gates below follow that split — G1/G3
+# under PREP, G2/G4/G7 against DEMAND — so a gate cannot certify a file the consumer
+# will not open.
+PREP = Path(os.environ.get("SLEEP_OUT_ROOT") or (OUT / "sleep"))
+DEMAND = Path(os.environ.get("DEMAND_PREP_DIR") or (OUT / "demand_prep"))
 SPEC = os.environ.get("SPEC", "12")
 KS = [int(x) for x in os.environ.get("SLEEP_GATE_ROUTINES", "1 2 3 4").replace(",", " ").split()]
 AME_KS = [k for k in KS if k in (3, 4)] or [3, 4]
@@ -261,13 +279,13 @@ def note(name, detail):
 
 
 def demand_parquets(k):
-    """Non-final demand parquets for routine k, by the SAME regex
+    """Non-final demand parquets for routine k under DEMAND, by the SAME regex
     blp_1_logit.jl:discover_estim_strategies uses. A glob of demand_{k}_*_spec_N
     would miss E1/E2, whose prefixes carry no middle segment at all."""
-    if not PREP.is_dir():
+    if not DEMAND.is_dir():
         return []
     pat = re.compile(rf"^demand_{k}(?:_.*)?_spec_{SPEC}\.parquet$")
-    return sorted(PREP / f for f in os.listdir(PREP)
+    return sorted(DEMAND / f for f in os.listdir(DEMAND)
                   if pat.match(f) and "_final_" not in f)
 
 
@@ -344,7 +362,7 @@ def g2():
         # failure mode with no symptom: blp_1_logit.jl silently takes the NEWEST,
         # and a relabelled leftover then rides through the whole stack.
         if not chk(f"E{k}: exactly ONE non-final demand parquet", len(hits) == 1,
-                   f"{len(hits)} match(es) under {PREP}: {[p.name for p in hits]}"):
+                   f"{len(hits)} match(es) under {DEMAND}: {[p.name for p in hits]}"):
             continue
         p = hits[0]
         try:
@@ -403,19 +421,16 @@ def g3():
 
 # ── G4: the logit deltas match the parquets they warm-start ─────────────────
 def g4():
-    # Candidate order, first hit wins, and the first entry of each list is where
-    # blp_1_logit.jl --hpc actually writes: delta_dir() is data/output ITSELF, flat
-    # (that is the path the RC engine reads), while logit_dir() is its logit/
-    # subfolder and carries combined_summary_path(). The trailing entries cover the
-    # off-cluster layout, reached through the ESTIMATION_OUTPUT -> data/output link
-    # if the --hpc flag is ever dropped.
+    # One location, because there is one producer: blp_1_logit.jl writes the deltas and
+    # the summary through logit_dir(), which is the logit step folder for both trees. The
+    # RC engine warm-starts from that same directory, so what this gate reads is what the
+    # engine will read — a second candidate here would let the gate certify one delta
+    # while the engine silently starts cold from another.
     def delta_candidates(k):
-        n = f"logit_delta_E{k}_spec_{SPEC}.bin"
-        return [OUT / n, OUT / "logit" / n, OUT / "BLP_RESULTS" / "logit" / n]
+        return [OUT / "logit" / f"logit_delta_E{k}_spec_{SPEC}.bin"]
 
     def summary_candidates():
-        n = f"logit_summary_spec_{SPEC}.json"
-        return [OUT / "logit" / n, OUT / n, OUT / "BLP_RESULTS" / "logit" / n]
+        return [OUT / "logit" / f"logit_summary_spec_{SPEC}.json"]
 
     for k in KS:
         cands = delta_candidates(k)
@@ -468,19 +483,13 @@ def g4():
 
 # ── G7: the CF4 pair is exact and aligned ───────────────────────────────────
 def g7():
-    for k in AME_KS:
-        # THE SAME four candidates, in THE SAME order, as cf4_search_dirs() in
-        # cf_4_pix.jl and cl_cf4_dirs() in cluster_lib.sh. The gate has to resolve the
-        # file CF4 will actually open, not the one the export happened to write: if a
-        # stale uploaded pair sits in data/input it is what CF4 reads, so it is what
-        # deserves the row-count check. (The gate runs afterok the export, so the
-        # export having silently produced nothing is not a case this can reach.)
-        skel = Path(os.environ.get("OPEN_FINANCE_ROOT", "")) / "BCB" / "Egan_et_al_2025_Rep" \
-            / "processed" / "ESTIMATION_OUTPUT" / "CF_FOUNDATION"
-        jc = [IN_ / f"upsilon_pix_E{k}_spec_{SPEC}.json",
-              OUT / "CF_FOUNDATION" / f"upsilon_pix_E{k}_spec_{SPEC}.json",
-              OUT / "cf" / f"upsilon_pix_E{k}_spec_{SPEC}.json",
-              skel / f"upsilon_pix_E{k}_spec_{SPEC}.json"]
+    for k in KS:
+        # THE SAME single candidate as cf4_search_dirs() in cf_4_pix.jl and cl_cf4_dirs()
+        # in cluster_lib.sh: the counterfactuals step folder, where cf_4_upsilon_export.py
+        # writes the pair and where CF4 opens it. The gate has to check the file CF4 will
+        # actually read, and with one producer writing to one location that is the same
+        # file by construction — no ordering to keep in step across three places.
+        jc = [OUT / "counterfactuals" / f"upsilon_pix_E{k}_spec_{SPEC}.json"]
         hit = next((c for c in jc if c.is_file()), None)
         if not chk(f"E{k}: upsilon_pix json present", hit is not None,
                    "looked in " + ", ".join(str(c.parent) for c in jc)):
@@ -491,8 +500,11 @@ def g7():
             chk(f"E{k}: upsilon_pix json parses", False, f"{type(exc).__name__}: {exc}")
             continue
         chk(f"E{k}: upsilon_pix json parses", True, str(hit))
-        # exact_nopix false means the identity-link fallback, which is exact only
-        # for E1/E2. On a single-index routine it is the wrong object for CF4.
+        # exact_nopix true == a per-row phi_nopix parquet was written, and BOTH branches
+        # of cf_4_upsilon_export.py write one: phi_from_native for the single-index
+        # routines, the closed-form identity link for E1/E2. So the check is the same for
+        # all four. False means CF4 gets no per-row φ^noPix and falls back to its scalar
+        # approximation — the wrong object, silently.
         chk(f"E{k}: exact_nopix is true", bool(u.get("exact_nopix")),
             f"exact_nopix={u.get('exact_nopix')!r}, link={u.get('link')!r}")
         pq_path = u.get("phi_nopix_parquet")
@@ -533,7 +545,8 @@ def g7():
 
 report = {"gate": GATE, "routines": KS, "spec": SPEC,
           "slurm_job_id": os.environ.get("SLURM_JOB_ID", ""),
-          "sleep_out_root": str(PREP), "data_output": str(OUT)}
+          "sleep_out_root": str(PREP), "demand_prep_dir": str(DEMAND),
+          "data_output": str(OUT)}
 
 try:
     fn = {"G1": g1, "G2": g2, "G3": g3, "G4": g4, "G7": g7}.get(GATE)

@@ -42,11 +42,11 @@ Usage
   # Rebuild all LaTeX tables from the existing combined summary (no estimation):
   julia --project=. blp_1_logit.jl --tables-only
 
-  # On the cluster (HEAD/data tree): parquets from data/input or data/output/DEMAND_PREP,
-  # δ warm-starts written flat to data/output where the RC engine looks for them:
+  # On the cluster (HEAD/data tree): parquets from data/output/demand_prep, everything this
+  # step produces into data/output/logit — δ warm-starts, .jls fits, summary and .tex:
   julia --project=. --threads=auto blp_1_logit.jl --est 3 --hpc
 
-LaTeX outputs (→ ESTIMATION_OUTPUT/Rout + Drafts/Deposit Competition; data/output/Rout on
+LaTeX outputs (→ ESTIMATION_OUTPUT/Rout + Drafts/Deposit Competition; data/output/logit on
 the cluster, where the Drafts folder does not exist):
   est{id}_spec12_logit.tex                 per-routine, 4 sub-model columns
   est1-4_spec12_logit_comparison.tex       cross-routine, `+ D-Type` column each
@@ -186,36 +186,36 @@ function get_paths(is_hpc::Bool = is_hpc_run())
     return input_dir, output_dir
 end
 
-"""Ordered demand-prep search path (`demand_search_dirs`, of_root.jl): uploads in data/input
-before the on-cluster sleepiness output in data/output/DEMAND_PREP. Resolution is PER FILE
-(`load_spec_data`) and per id (`discover_estim_strategies`), so a lineup split across the two
-directories still runs, with the uploaded copy winning. One entry off the cluster."""
+"""Demand-prep search path (`demand_search_dirs`, of_root.jl): one directory in either tree —
+on the cluster the single one the prep step writes, `data/output/demand_prep`; off it the local
+ESTIMATION_OUTPUT/DEMAND_PREP. Resolution is PER FILE (`load_spec_data`) and per id
+(`discover_estim_strategies`), and with a single candidate neither can pick up a second vintage
+of a routine that the RC stack would then disagree with."""
 demand_dirs() = demand_search_dirs(get_paths()...)
 
-# Logit outputs live in a dedicated `logit/` subfolder of the results root, kept separate
-# from the RC outputs (see process_blp_outputs.py). Created on demand.
+# Logit outputs live in a dedicated `logit/` subfolder of the results root, kept separate from
+# the RC outputs (see process_blp_outputs.py). `logit_dir(out_dir)` in of_root.jl is the single
+# definition of that path — the RC engine resolves the warm-start deltas through the same call —
+# and this method pins it to this run's output root and creates it on demand.
 function logit_dir()
-    d = joinpath(get_paths()[2], "logit")
+    d = logit_dir(get_paths()[2])
     isdir(d) || mkpath(d)
     return d
 end
 
-"""Directory for the δ warm-starts. On the cluster this is data/output ITSELF, flat: the RC
-engine searches data/input then data/output for `logit_delta_E{k}_spec_{s}.{bin,jls}`
-non-recursively, so a copy inside `logit/` would be invisible to it. Locally it is
-`logit_dir()`, alongside the rest of the logit outputs."""
-function delta_dir()
-    out_dir = get_paths()[2]
-    is_cluster_out(out_dir) || return logit_dir()
-    isdir(out_dir) || mkpath(out_dir)
-    return out_dir
-end
+"""Directory for the δ warm-starts: `logit_dir()` in either tree. The RC engine resolves
+`logit_delta_E{k}_spec_{s}.{bin,jls}` through the same `logit_dir(out_dir)` helper, so writer
+and reader name one directory and a warm start cannot land somewhere the engine never looks."""
+delta_dir() = logit_dir()
 
-"""Directory for the LaTeX tables: ESTIMATION_OUTPUT/Rout locally, data/output/Rout on the
-cluster — everything the cluster produces stays under data/output."""
+"""Directory for the LaTeX tables. On the cluster it is `logit_dir()`: the fragments are
+products of this step, so they belong with the δ warm-starts, the .jls fits and the summary in
+the one folder the archiver packages and the download brings back whole. Locally they join the
+rest of the paper's tables in ESTIMATION_OUTPUT/Rout, a sibling of the results root, which is
+where the exporters mirror from."""
 function tex_out_dir()
     out_dir = get_paths()[2]
-    d = is_cluster_out(out_dir) ? joinpath(out_dir, "Rout") :
+    d = is_cluster_out(out_dir) ? logit_dir(out_dir) :
                                   joinpath(dirname(out_dir), "Rout")
     mkpath(d)
     return d
@@ -490,8 +490,8 @@ function run_strategy(estim)
     dep_types = Int.(coalesce.(df.deposit_type, 0))
 
     # ── Save logit δ checkpoint for BLP σ-stage warm-start ──
-    # delta_dir() is data/output itself on the cluster, so the RC engine's flat
-    # data/input → data/output search finds these two files without an upload step.
+    # delta_dir() is the logit step folder, the same `logit_dir(out_dir)` the RC engine
+    # searches, so these two files reach the warm start with no upload step in between.
     delta_chk_path = joinpath(delta_dir(),
         "logit_delta_E$(estim.id)_spec_$(SPEC_ID).jls")
     try
@@ -967,7 +967,7 @@ end
 
 """Write est{id}_spec12_logit.tex for each id to `tex_out_dir()` and Drafts."""
 function write_logit_tables(ids::Vector{Int}, data::AbstractDict)
-    rout_dir = tex_out_dir()                             # ESTIMATION_OUTPUT/Rout
+    rout_dir = tex_out_dir()                             # ESTIMATION_OUTPUT/Rout, or logit/ on the cluster
     dests = isdir(DRAFTS_DIR) ? [rout_dir, DRAFTS_DIR] : [rout_dir]
     for id in ids
         tex = build_logit_table_tex(id, data)

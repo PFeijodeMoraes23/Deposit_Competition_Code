@@ -21,8 +21,11 @@ def _count_parquets(est, since):
     both covered by the glob. Counting the artifacts rather than trusting the child's own
     report is the point: a child that reads the wrong tree finds no fit, writes nothing and
     still exits 0, and it is these files the demand estimation consumes next.
+
+    Counted in `demand_parquet_dir()` — the same accessor the children write through, so the
+    count cannot be taken in a different directory than the one that was just filled.
     """
-    root = paths.demand_prep_root()
+    root = paths.demand_parquet_dir()
     if not root.exists():
         return 0
     return sum(1 for p in root.glob(f"demand_{est}_*spec_*.parquet")
@@ -89,8 +92,8 @@ def main():
             print(f"\n[FAILED] Estimations {failed} had errors.")
         if empty:
             print(f"\n[FAILED] Estimations {empty} produced no demand parquets in "
-                  f"{paths.demand_prep_root()}. Check that the sleep estimators wrote "
-                  f"estimation_results.pkl to the SAME tree (SLEEP_OUT_ROOT).")
+                  f"{paths.demand_parquet_dir()}. Check that the sleep estimators wrote "
+                  f"estimation_results.pkl under {paths.demand_prep_root()} (SLEEP_OUT_ROOT).")
         sys.exit(1)
 
     print("\n[SUCCESS] Universal Demand Prep Orchestrator Finished successfully.")

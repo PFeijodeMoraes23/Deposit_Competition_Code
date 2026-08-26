@@ -4,9 +4,12 @@
 # CUDA — baked in, so each cluster job starts in seconds instead of re-running
 # `Pkg.precompile()` + `using CUDA` (the dominant per-job startup cost across 27-48 jobs).
 #
-# Build it ON a GPU node (gpu_devel) so CUDA's GPU-specific code is included — see
-# `submit_build_sysimage.sh`. Output goes next to this file; the estimation submit scripts
-# pick it up automatically (`--sysimage blp_sysimage.so`) when present.
+# Build it ON a GPU node so CUDA's GPU-specific code is included:
+#   sbatch --partition=gpu_h200 --gpus=h200:1 --export=ALL,ENV_STEP=sysimage_gpu env_job.sh
+# BLP_SYSIMAGE_CPU=1 (ENV_STEP=sysimage_cpu) builds the CPU twin instead. Output goes next
+# to this file, and cl_require_sysimage in cluster_lib.sh is what every job resolves it
+# through — it checks the provenance sidecar env_job.sh writes and REFUSES a mismatch
+# rather than degrading to a cold precompile.
 #
 #   BLP_SYSIMAGE_WORKLOAD=1  also runs `sysimage_precompile_workload.jl` during the build
 #   (a tiny --dry-run that bakes the estimation hot path too — needs data + a GPU present).

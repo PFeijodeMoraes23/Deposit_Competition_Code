@@ -13,7 +13,9 @@ Pipeline
 --------
   σ̂  (equilibrium)  → simulate deposits → accumulate ψ_eq         (per firm)
   σ̃₁…σ̃_S (deviations)→ simulate deposits → accumulate ψ_dev[s]     (per firm)
-  export {ψ_eq, ψ_dev, firms, firm_is_B, Z_names}  → COST_FWD/psi_bbl_*.jls
+  export {ψ_eq, ψ_dev, firms, firm_is_B, Z_names}  → psi_bbl_*.jls in the BBL step folder
+                                                    (`cf_out_dir(out_dir, "COST_FWD")`:
+                                                     data/output/bbl; local COST_FWD/)
   estimation_bbl_3_solve.py reads these and minimizes Σ min{g,0}² (eq:17).
 
 DEVIATING STRATEGY σ̃ (`--dev-scheme`, default `grid`):
@@ -31,7 +33,8 @@ DEVIATING STRATEGY σ̃ (`--dev-scheme`, default `grid`):
   the share denominator, which IS the business stealing eq:17 prices. A common industry-wide
   shift is the collusive direction and would certify a false inequality; see the loop comment.
 
-FORWARD r^f (`--rf-curve`, default `COST_FWD/forward_rf_qoq.csv` from cf_forward_rf.py):
+FORWARD r^f (`--rf-curve`, default the uploaded `forward_rf_qoq.csv` from cf_forward_rf.py —
+  data/input on the cluster, local COST_FWD/; see `load_forward_rf`):
   the market Selic curve enters ψ4. A FLAT r^f makes ψ4 collinear with ψ2, leaving ζ
   unidentified; the time-varying curve separates ζ from ω.
 
@@ -293,7 +296,7 @@ end
     load_forward_rf(path, out_dir, T, ctx) -> Vector{Float64}
 
 Quarterly forward r^f path (length T) from the market Selic curve written by
-cf_forward_rf.py (`COST_FWD/forward_rf_qoq.csv`, column `rf_qoq`), padded/truncated to
+cf_forward_rf.py (`forward_rf_qoq.csv`, column `rf_qoq`, read from `cf_in_dir`), padded/truncated to
 T. A FLAT r^f makes ψ4 = r^f·Σβ^t Dep a rescaling of ψ2 = Σβ^t Dep (collinear) so ζ is
 unidentified; the time-varying curve breaks that. Falls back to the flat panel median
 (with a warning) if the curve file is absent.
@@ -400,7 +403,7 @@ function _parse_cost2_args()
         # (even/|odd| of Δψ1 ≈ 0.002 vs 0.16 at 200bp), leaving the FOC as the only signal.
         "--perturb-scale"; arg_type = Float64; default = 2.0
         "--dev-scheme";    arg_type = String;  default = "grid"  # grid (directed) | normal (legacy)
-        "--rf-curve";      arg_type = String;  default = nothing # forward-r^f CSV; default COST_FWD/forward_rf_qoq.csv
+        "--rf-curve";      arg_type = String;  default = nothing # forward-r^f CSV; default the uploaded forward_rf_qoq.csv (cf_in_dir)
         "--asset-return-col"; arg_type = String; default = nothing # r^j source col (e.g. gross_return_lag)
         "--asset-margin";  arg_type = Float64; default = 0.0     # constant quarterly (r^j−r^f) if no col
         "--dbar";          arg_type = Float64; default = -1.0   # <=0 => per-type auto-calibrate
@@ -527,7 +530,7 @@ function main_cost2()
         li % 25 == 0 && log_status("    [BBL] shard $sid: $li/$(length(loc)) sims done")
     end
 
-    cost_dir = cf_out_dir(out_dir, "COST_FWD"); mkpath(cost_dir)   # cluster: data/output/cost
+    cost_dir = cf_out_dir(out_dir, "COST_FWD"); mkpath(cost_dir)   # cluster: data/output/bbl
     tag = "E$(a["estim"])_spec_$(a["spec"])_$(a["stage"])$(a["suffix"])"
     blocks = vcat(["psi1", "psi2_omega"], ["psi3_gamma_$z" for z in znames], ["psi4_zeta"])
 

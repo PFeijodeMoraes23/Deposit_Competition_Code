@@ -316,7 +316,7 @@ def _exec_block(block_args):
 #     would silently mix two estimators inside one pickle, which is exactly the failure the
 #     fingerprint gates elsewhere exist to prevent.
 # Default is OFF: an unqualified re-run still recomputes everything, which is what a
-# reproduction run should do. run_sleep_constrained.sh opts in.
+# reproduction run should do. Set SLEEP_RESUME=1 to opt in.
 def _resume_on():
     return os.environ.get("SLEEP_RESUME", "0") == "1"
 

@@ -26,13 +26,16 @@
 #   R SEED TOL_INNER MAX_INNER TOL_OUTER   engine knobs
 #   BLP_SE_ONLY=1                          recompute SEs from existing checkpoints
 #
-# WHAT MUST EXIST FIRST: cluster_preflight.sh green, the GPU sysimage built, the
-#   R=2000 draws, and data/input/logit_delta_E{k}_spec_12.bin for the sigma stage.
-# WHAT TO RUN NEXT: nothing directly — blp_run.sh owns the chain.
+# WHERE ITS ARTIFACTS GO: data/output/blp — results, checkpoints and summaries all
+#   land in the one folder of_root.jl's blp_dir(out_dir) names, and they STAY there.
+#   foundation_demand_eval.jl's _result_path reads the same call, so the BBL and CF
+#   stacks open exactly the file this job wrote, with nothing staged or renamed in
+#   between.
 #
-# THIS SCRIPT IS NEW. submit_blp_rc_stage.sh is still present and still works; it
-# is the fallback and is retired only after one successful cluster cycle. Nothing
-# in it has been modified.
+# WHAT MUST EXIST FIRST: cluster_preflight.sh green, the GPU sysimage built, the
+#   R=2000 draws under data/output/blp/draws, and the sigma stage's warm-start
+#   data/output/logit/logit_delta_E{k}_spec_12.bin from logit_job.sh.
+# WHAT TO RUN NEXT: nothing directly — blp_run.sh owns the chain.
 # ==============================================================================
 set -uo pipefail
 CL_DIR="${SLURM_SUBMIT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
@@ -55,6 +58,13 @@ case "${RC_ENGINE}" in
 esac
 
 mkdir -p "${CL_ROOT}/logs"
+
+# The skeleton, then the step dirs, on every job — cl_export_step_dirs is the single
+# site that decides where each step writes, and it creates data/output/blp and its
+# draws/ subfolder so the engine's mkpath never has to race a sibling task for them.
+cl_bootstrap_tree
+cl_export_step_dirs
+
 cl_load_julia
 export BLP_ENGINE="${RC_ENGINE}"                 # read by blp_2_rc.jl
 
