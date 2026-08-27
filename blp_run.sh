@@ -234,6 +234,17 @@ submit_one () {   # submit_one <routine> <engine> <tag> <stage> <wall> <jobtag> 
         "${GENERIC}"
 }
 
+# Every rung is the next rung's afterok dependency, so a refused submission cannot be
+# absorbed: "afterok:" carrying no id reads to SLURM as NO dependency, and the rest of
+# the ladder would run unsequenced against a sysimage that is still building. bash does
+# not inherit errexit into a command substitution, so the check has to be explicit.
+submit_rung () {   # same arguments as submit_one; prints the id, or fails loudly
+    local jid
+    jid=$(submit_one "$@") || true
+    cl_require_jid "${jid}" "rc_$3_E$1_$6" || return 1
+    printf '%s\n' "${jid}"
+}
+
 # ONE chain builder for both layouts. Echoes the TERMINAL job id on stdout;
 # progress goes to stderr.
 submit_chain () {   # submit_chain <routine> <engine> <tag> -> terminal job id
@@ -241,18 +252,18 @@ submit_chain () {   # submit_chain <routine> <engine> <tag> -> terminal job id
     if [[ "${LAYOUT}" == "all" ]]; then
         for st in "${STAGES_ALL[@]}"; do
             wall="$(cl_stage_wall "${st}")"
-            jid=$(submit_one "${k}" "${eng}" "${tag}" "${st}" "${wall}" "${st}" "${prev}")
+            jid=$(submit_rung "${k}" "${eng}" "${tag}" "${st}" "${wall}" "${st}" "${prev}") || return 1
             echo "    ${st}: ${jid}  (${prev:+afterok ${prev}, }wall=${wall}, mem=$(cl_mem_for "${k}"))" >&2
             prev="${jid}"
         done
     else
-        jid=$(submit_one "${k}" "${eng}" "${tag}" "${HEAD_STAGES}" "${WALL_HEAD}" "head" "${prev}")
+        jid=$(submit_rung "${k}" "${eng}" "${tag}" "${HEAD_STAGES}" "${WALL_HEAD}" "head" "${prev}") || return 1
         echo "    head (${HEAD_STAGES}): ${jid}  (${prev:+afterok ${prev}, }wall=${WALL_HEAD}, mem=$(cl_mem_for "${k}"))" >&2
         prev="${jid}"
-        jid=$(submit_one "${k}" "${eng}" "${tag}" "ext2" "$(cl_stage_wall ext2)" "ext2" "${prev}")
+        jid=$(submit_rung "${k}" "${eng}" "${tag}" "ext2" "$(cl_stage_wall ext2)" "ext2" "${prev}") || return 1
         echo "    ext2: ${jid}  (afterok ${prev}, wall=$(cl_stage_wall ext2))" >&2
         prev="${jid}"
-        jid=$(submit_one "${k}" "${eng}" "${tag}" "extended" "$(cl_stage_wall extended)" "ext" "${prev}")
+        jid=$(submit_rung "${k}" "${eng}" "${tag}" "extended" "$(cl_stage_wall extended)" "ext" "${prev}") || return 1
         echo "    extended: ${jid}  (afterok ${prev}, wall=$(cl_stage_wall extended))" >&2
         prev="${jid}"
     fi
@@ -265,8 +276,8 @@ submit_chain () {   # submit_chain <routine> <engine> <tag> -> terminal job id
 submit_crosscheck () {   # submit_crosscheck <routine> <ift_terminal_jid>
     local k="$1" dep="$2" ckpt jid
     ckpt="${CL_STEP_BLP}/blp_checkpoint_E${k}_spec_12_extended.jls"
-    jid=$(submit_one "${k}" numerical num extended "$(cl_stage_wall extended)" xcheck "${dep}" \
-                     "BLP_THETA2_INIT_FILE=${ckpt}")
+    jid=$(submit_rung "${k}" numerical num extended "$(cl_stage_wall extended)" xcheck "${dep}" \
+                     "BLP_THETA2_INIT_FILE=${ckpt}") || return 1
     echo "    numerical xcheck: ${jid}  (afterok ${dep}; seed $(basename "${ckpt}"))" >&2
     printf '%s\n' "${jid}"
 }
@@ -278,7 +289,7 @@ for k in ${ROUTINES}; do
         # No homotopy chain: every stage reloads its own checkpoint, so one job
         # does them all. Checkpoints live in data/output — if a previous run's
         # archive MOVED them into blp_checkpoints_<jid>.zip, unzip them back first.
-        jid=$(submit_one "${k}" ift se "${ALL_STAGES}" "${WALL_SE}" seonly "${sys_dep}")
+        jid=$(submit_rung "${k}" ift se "${ALL_STAGES}" "${WALL_SE}" seonly "${sys_dep}")
         cl_say "  rc_se_E${k}_seonly -> ${jid}  (SE-only: all stages in ONE job)"
         njobs=$((njobs+1)); term_jids="${term_jids} ${jid}"
         continue
@@ -311,7 +322,7 @@ for k in ${ROUTINES}; do
             # IFT checkpoint of the SAME stage.
             for st in $(echo "${CUE_STAGES}" | tr '+' ' '); do
                 ckpt="${CL_STEP_BLP}/blp_checkpoint_E${k}_spec_12_${st}.jls"
-                jid=$(submit_one "${k}" cue cue "${st}" "$(cl_stage_wall "${st}")" "cue_${st}" "${ift_term}" \
+                jid=$(submit_rung "${k}" cue cue "${st}" "$(cl_stage_wall "${st}")" "cue_${st}" "${ift_term}" \
                                  "BLP_THETA2_INIT_FILE=${ckpt}")
                 echo "    CUE ${st}: ${jid}  (afterok ${ift_term}; seed $(basename "${ckpt}"))"
                 njobs=$((njobs+1)); term_jids="${term_jids} ${jid}"
@@ -321,7 +332,7 @@ for k in ${ROUTINES}; do
                 # grid of pinned alpha0, inverted into an identification-robust set
                 # that ACCOUNTS for theta2 being estimated (unlike conditional AR/LM).
                 ckpt="${CL_STEP_BLP}/blp_checkpoint_E${k}_spec_12_${SSET_STAGE}.jls"
-                jid=$(submit_one "${k}" cue sset "${SSET_STAGE}" "$(cl_stage_wall "${SSET_STAGE}")" sset "${ift_term}" \
+                jid=$(submit_rung "${k}" cue sset "${SSET_STAGE}" "$(cl_stage_wall "${SSET_STAGE}")" sset "${ift_term}" \
                                  "BLP_THETA2_INIT_FILE=${ckpt},BLP_ALPHA_GRID=${SSET_GRID}")
                 echo "    S-set ${SSET_STAGE} [${SSET_GRID}]: ${jid}  (afterok ${ift_term})"
                 njobs=$((njobs+1)); term_jids="${term_jids} ${jid}"
@@ -342,7 +353,15 @@ cl_log "Submitted ${njobs} RC-BLP jobs (routines: ${ROUTINES}; engines: ${ENGINE
 # would silently drop a rung an earlier resume produced. The archiver writes the zip
 # into data/output/download, alongside every other set.
 dep_csv="$(echo ${term_jids} | tr ' ' ':' | sed 's/^://; s/:$//')"
-if [[ "${DO_ZIP}" == "1" && -n "${dep_csv}" ]]; then
+# pipeline_all.sh reads BLP_TERM_JOBIDS to build the BBL hand-off. Exiting nonzero is
+# the honest verdict when no ladder was sequenced: a COMPLETED job publishing an empty
+# terminal list strands the BBL phase with nothing to wait on and no error to explain it.
+if [[ -z "${dep_csv}" ]]; then
+    cl_err "FATAL: no RC-BLP job was sequenced (routines: ${ROUTINES}); see the refusals above."
+    echo "BLP_TERM_JOBIDS="
+    exit 1
+fi
+if [[ "${DO_ZIP}" == "1" ]]; then
     ZWRAP="cd '${CL_ROOT}'"
     for s in blp logs; do
         ZWRAP="${ZWRAP} && bash cluster_archive.sh --set ${s} --copy --tag \"\${SLURM_JOB_ID}\""

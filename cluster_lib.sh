@@ -340,9 +340,17 @@ cl_sysimage_verdict () {
 # cl_sysimage_missing: 0 (true) when the image OR its provenance sidecar is absent. The
 # sidecar counts: cl_require_sysimage refuses an unstamped image at run time, so an image
 # without one is not a usable image and has to be rebuilt exactly like a missing one.
+# cl_sysimage_missing: 0 (true) when the image cannot be used as it stands. This is the
+# auto-build decision in blp_run.sh, so it asks the same question the G0 gate asks --
+# cl_sysimage_verdict -- rather than testing for the files alone. A present-but-invalid
+# image (Manifest.toml re-resolved under a different Julia, a rebuilt environment, a
+# sidecar sha that no longer matches) is exactly the case that must trigger a rebuild:
+# the RC ladders load it, fail in seconds, and leave the mismatch to be read off a stack
+# trace. Diagnostics are silenced here because the caller reports its own one-line verdict.
 cl_sysimage_missing () {   # cl_sysimage_missing gpu|cpu
     local img; img="$(cl_sysimage_for "$1")" || return 2
-    [[ -f "${img}" && -f "${img}.json" ]] && return 1
+    [[ -f "${img}" && -f "${img}.json" ]] || return 0
+    cl_sysimage_verdict "$1" >/dev/null 2>&1 && return 1
     return 0
 }
 # cl_draws_missing: 0 (true) when THIS R/seed's draws are not both on disk. demo_draws
@@ -650,13 +658,24 @@ _cl_q () {
 # CL_NO_CPUGEN=1 opts a submission out entirely.
 _cl_cpugen_args () {
     [[ "${CL_NO_CPUGEN:-0}" == "1" ]] && return 0
-    local a
+    local a last=""
     for a in "$@"; do
         case "${a}" in
             --constraint*|-C) return 0 ;;
             --gpus*|--gres=gpu*|--partition=gpu*|--partition=scavenge_gpu*) return 0 ;;
         esac
+        last="${a}"
     done
+    # A job script declares its partition in its own #SBATCH block, and that
+    # declaration never reaches this function through "$@" -- blp_stage_job.sh names
+    # gpu_h200 there and is submitted with neither flag on the command line. A GPU
+    # submission carrying a CPU feature is refused outright ("Requested node
+    # configuration is not available"), so the script named last is read before the
+    # constraint is added. --wrap submissions leave a command string here, not a
+    # path, and keep the pin.
+    if [[ -f "${last}" ]] &&        grep -Eq '^#SBATCH[[:space:]]+--(gpus|gres=gpu|partition=(gpu|scavenge_gpu))' "${last}"; then
+        return 0
+    fi
     printf '%s' "--constraint=${CL_CPU_CONSTRAINT:-cpugen:turin}"
 }
 
@@ -679,7 +698,53 @@ cl_sbatch () {
     fi
     # The live path prints NOTHING but the job id sbatch --parsable returns: the caller
     # owns the one "name -> jobid" line, because only it knows the name and the deps.
-    sbatch --parsable --kill-on-invalid-dep=yes ${_cg:+"${_cg}"} "$@"
+    #
+    # A refusal is reported here rather than returned as an empty string. Callers run
+    # cl_sbatch inside $( ), and bash does not inherit errexit into a command
+    # substitution, so an unreported failure becomes an empty job id that flows into
+    # the next --dependency -- where "afterok:" with no id reads as NO dependency and
+    # the rest of the ladder runs unsequenced.
+    # A dependency whose id list came back empty is the most expensive typo in this
+    # pipeline: SLURM reads "afterok:" with nothing after it as NO dependency, so the
+    # job starts IMMEDIATELY instead of waiting, against inputs that do not exist yet.
+    # Every orchestrator builds these from a captured job id, so the check lives here
+    # rather than being repeated at the ~15 call sites that construct one.
+    local _a _v _ids
+    for _a in "$@"; do
+        case "${_a}" in
+            --dependency=*)
+                _v="${_a#--dependency=}"
+                case "${_v}" in
+                    *:*)
+                        _ids="${_v#*:}"
+                        if [[ -z "${_ids}" || "${_ids}" == *::* || "${_ids}" == *: ]]; then
+                            cl_err "REFUSING to submit: malformed dependency '${_v}' -- empty id list."
+                            cl_err "  SLURM reads that as NO dependency and would start the job at once."
+                            return 1
+                        fi ;;
+                esac ;;
+        esac
+    done
+    local _out _rc
+    _out="$(sbatch --parsable --kill-on-invalid-dep=yes ${_cg:+"${_cg}"} "$@")"; _rc=$?
+    if (( _rc != 0 )) || [[ -z "${_out}" ]]; then
+        cl_err "sbatch REFUSED this submission (rc=${_rc}); sbatch's own message is above."
+        cl_err "  args:$(_cl_q ${_cg:+"${_cg}"} "$@")"
+        return 1
+    fi
+    printf '%s
+' "${_out}"
+}
+
+# cl_require_jid: a job id, or a hard stop naming what failed. Every dependency in
+# the graph is built from a captured id, and an empty one silently detaches the job
+# that was meant to wait.
+cl_require_jid () {   # cl_require_jid <jobid> <what>
+    if [[ -z "${1:-}" ]]; then
+        cl_err "FATAL: no job id for '${2:-submission}' -- it was refused, so nothing downstream of it can be sequenced."
+        return 1
+    fi
+    return 0
 }
 
 # ── 8. Small shared knobs ────────────────────────────────────────────────────

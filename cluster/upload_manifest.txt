@@ -177,11 +177,15 @@ phi_nopix_E{k}     | produced | cf4    | CF_FOUNDATION | phi_nopix_E{k}_spec_12.
 
 # --- 7. code. Tracked in git, so nothing to build -- but *.sh is rewritten to LF on the ----
 #        way into the zip: bash reads a CRLF shebang as a syntax error on line 1.
-#        Project.toml/Manifest.toml travel with the code or `julia --project=.` cannot resolve.
+#        Project.toml travels with the code; Manifest.toml does NOT. The manifest is a
+#        CLUSTER-RESOLVED artifact: env_job.sh ENV_STEP=resolve generates it under the
+#        cluster's Julia and the sysimage sidecars record its sha256. This machine resolves
+#        against a different Julia minor version, so a bundled manifest would overwrite the
+#        cluster's on every code re-upload and invalidate both sysimages. Project.toml's
+#        compat bounds are what pin the environment; the resolve does the rest.
 julia_code         | code | all        | REPO          | *.jl                           | scripts    | -                                                             | -         | -
 shell_code         | code | all        | REPO          | *.sh                           | scripts    | -                                                             | -         | -
 julia_project      | code | all        | REPO          | Project.toml                   | scripts    | -                                                             | -         | -
-julia_manifest     | code | all        | REPO          | Manifest.toml                  | scripts    | -                                                             | -         | -
 # Python travels too, now that the sleepiness stage runs on the cluster. utils/ is its own
 # row because `from utils import paths` needs the package BESIDE the scripts, at
 # scripts/utils/ -- members are stored as '<dest>/<basename>', so the destination directory
