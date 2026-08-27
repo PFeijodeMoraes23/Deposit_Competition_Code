@@ -573,7 +573,8 @@ def render_readme(kind, datestamp, members, next_steps, omitted, panel_lines=())
         "STEPS",
         "-" * 78,
         "",
-        f"1. Put this zip in your home directory on Bouchet:   ~/bouchet_{kind}_{datestamp}.zip",
+        f"1. Upload this zip INTO the project root on Bouchet (not your home directory):",
+          f"      {CLUSTER_ROOT}/bouchet_{kind}_{datestamp}.zip",
         "",
         "2. Open a terminal on the login node and go to the PROJECT ROOT.",
         "   This is the directory you unzip FROM. It is the parent of both scripts/ and data/:",
@@ -583,11 +584,19 @@ def render_readme(kind, datestamp, members, next_steps, omitted, panel_lines=())
         "3. Unzip. The paths inside the zip already match the tree, so this one command puts",
         "   every file in its final place - nothing to move by hand:",
         "",
-        f"      unzip -o ~/bouchet_{kind}_{datestamp}.zip",
+        f"      unzip -o bouchet_{kind}_{datestamp}.zip",
+        "",
+        "3b. Create the log directory. EVERY sbatch in this project writes --output into",
+        "    scripts/logs/, and SLURM does not create it: if the directory is missing the job",
+        "    is killed before it starts, in about a second, with no log to say why - which",
+        "    looks exactly like a broken script and is not one. A zip cannot carry an empty",
+        "    directory, so this is a step rather than a file:",
+        "",
+        "      mkdir -p scripts/logs",
         "",
         "4. Check the file count. It should print exactly this many files:",
         "",
-        f"      unzip -l ~/bouchet_{kind}_{datestamp}.zip | tail -1",
+        f"      unzip -l bouchet_{kind}_{datestamp}.zip | tail -1",
         f"          expected: {len(payload) + 2} files "
         f"({len(payload)} + this README + sha256SUMS.txt)",
         "",
@@ -817,7 +826,7 @@ def main():
     print(f"  1. Open  {out_dir}")
     for i, (kind, zp, members) in enumerate(results, start=2):
         print(f"  {i}. Upload  {zp.name}  ({_fmt_size(zp.stat().st_size)}, "
-              f"{len(members)} files) to your Bouchet home directory.")
+              f"{len(members)} files) INTO {CLUSTER_ROOT} (the project root, NOT your home dir).")
     n = len(results) + 2
     print(f"  {n}. On Bouchet:  cd {CLUSTER_ROOT}")
     print(f"  {n + 1}. For EACH zip, in turn: unzip it, check the count, run "

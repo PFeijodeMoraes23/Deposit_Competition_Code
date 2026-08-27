@@ -6,8 +6,11 @@
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=64G
 #SBATCH --time=04:00:00
-#SBATCH --output=logs/env_%x_%j.out
-#SBATCH --error=logs/env_%x_%j.err
+# No --output/--error here on purpose. SLURM will not create a missing directory, and a
+# job whose log path cannot be opened is killed before it runs -- one second, no log, no
+# clue. This script is submitted BY HAND on a fresh tree, where scripts/logs/ may not
+# exist yet, so it falls back to slurm-<jobid>.out in the submit directory, which always
+# does. pipeline_all.sh passes -o/-e explicitly when it submits this as the G0 job.
 #SBATCH --mail-type=END,FAIL
 #SBATCH --mail-user=pedro.feijodemoraes@yale.edu
 # ==============================================================================

@@ -6,8 +6,8 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=64G
-#SBATCH --output=logs/blp_draws_%j.out
-#SBATCH --error=logs/blp_draws_%j.err
+# No --output/--error here: see env_job.sh. blp_run.sh passes -o/-e explicitly, and it
+# calls cl_log_dir first, so the directory exists by then.
 #SBATCH --mail-type=BEGIN,END,FAIL,TIME_LIMIT_90
 #SBATCH --mail-user=pedro.feijodemoraes@yale.edu
 # ==============================================================================

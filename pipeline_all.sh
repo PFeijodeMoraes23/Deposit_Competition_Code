@@ -1,12 +1,33 @@
 #!/bin/bash
+#SBATCH --partition=day
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=1
+#SBATCH --mem=2G
+#SBATCH --time=00:30:00
+#SBATCH --job-name=pipeline_all
 # ==============================================================================
 # pipeline_all.sh — THE single command. Sleepiness -> logit -> RC-BLP -> BBL costs
 # -> the counterfactuals -> the equilibrium counterfactuals, in order, on the
 # cluster, from one invocation.
 #
-#   bash pipeline_all.sh --dry-run     # print the whole graph, submit nothing
-#   bash pipeline_all.sh               # do it
-#   bash pipeline_all.sh --from blp    # resume at a phase
+#   sbatch pipeline_all.sh               # do it
+#   sbatch pipeline_all.sh --from blp    # resume at a phase
+#   sbatch pipeline_all.sh --cfeq        # add the equilibrium counterfactuals
+#
+# IT IS SUBMITTED, NOT RUN. Nothing in this project executes on the login node —
+# not the estimators, not the preflight (G0 is its own job), and not this
+# orchestrator. The #SBATCH block above is what lets `sbatch pipeline_all.sh`
+# work directly; flags after the script name are passed through to it, and SLURM
+# writes the job's own output to slurm-<jobid>.out in the submit directory.
+#
+# The work this job does is ONLY: parse flags, and sbatch the phase chains. It
+# holds one core and 2 GB for the seconds that takes, then exits — the chains it
+# submits outlive it, and each phase boundary submits a continuation job that
+# re-enters this script with --from <next> --resumed.
+#
+#   bash pipeline_all.sh --dry-run     # the ONE exception: prints the graph and
+#                                      # submits nothing, so it is safe anywhere
 #
 # WHAT MUST EXIST FIRST
 #   the uploaded inputs (cluster/upload_manifest.txt). Everything else — the step
