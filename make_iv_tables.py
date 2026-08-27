@@ -107,6 +107,15 @@ def _wrap(body_lines, col_fmt, caption, label, header, footnote, ncols, width=r"
     # slack in the LAST inter-column gap -- a chasm before the final column (@{\extracolsep{\fill}} does
     # not redistribute it here). Sizing the notes near the natural content width removes the slack at
     # the source; \extracolsep spreads whatever little remains.
+    # A table whose body came out empty still renders as a valid longtable -- header, notes and
+    # no rows -- so it reaches the draft looking finished. Every row is keyed off a routine found
+    # in weak_iv.json, so an empty body means the JSON held none of ROUTINES: a weak_iv.json left
+    # over from an earlier estimator lineup, or one written for a different spec. Refusing here is
+    # what surfaces that before the \input reaches the paper.
+    if not body_lines:
+        raise ValueError(
+            f"{label}: no rows to write -- weak_iv.json matched none of the routines this table "
+            f"reports. Re-run weak_iv_analysis.py for the current lineup before regenerating.")
     trow = r" \\"
     return "\n".join([
         *([r"\begin{landscape}"] if landscape else []),

@@ -74,11 +74,9 @@ STEPS = [
     ("D1s", "MC recovery smoke (harness)",     "step_phi_mc_recovery.py",       ["--mode", "grid", "--smoke"], True, 5),
     ("D1",  "MC recovery full + null stats",   "step_phi_mc_recovery.py",       ["--mode", "grid", "--stats-under-null"], False, 20),
     ("D4c",  "ACF overidentification",          "step_phi_mc_recovery.py",       ["--mode", "acf"],           True,  10),
-    ("D4b",  "Pix event study",                 "step_phi_augmented_tests.py",   ["--arm", "pix"],            True,  22),
     ("D5",  "BLP elasticity consistency",      "step_phi_augmented_tests.py",   ["--arm", "blpelast"],       True,  10),
     # --- Egan-alignment external validation (added 2026-08-03) -----------------------
     ("D6", "entry dynamics vs closed form",   "step_entry_dynamics.py",        ["--no-branch-screen"],      True,   6),
-    ("D6b", "Pix pooled post x exposure",      "step_phi_augmented_tests.py",   ["--arm", "pixpooled"],      True,  20),
     ("D7", "Selic wake-up comovement",        "export_selic_wakeup.py",        [],                          True,   1),
 ]
 

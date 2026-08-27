@@ -22,8 +22,8 @@ Nothing is started after the deadline; a unit already running is allowed to fini
 mid-write is what this exists to prevent). --grace lets you cap that too.
 
 Usage:
-    python run_diag_matrix.py --units d0:1,2,5,6,7,8 --until 16:00
-    python run_diag_matrix.py --units d0:5,6 d2:5,6 --for 2h --dry-run
+    python run_diag_matrix.py --units d0:1,2,3,4 --until 16:00
+    python run_diag_matrix.py --units d0:3,4 d2:3,4 --for 2h --dry-run
     python run_diag_matrix.py --resume            # continue the last run
 """
 from __future__ import annotations
@@ -99,7 +99,7 @@ def parse_units(specs: list[str]) -> list[tuple[str, int]]:
     out = []
     for spec in specs:
         if ":" not in spec:
-            raise SystemExit(f"--units wants unit:routines, e.g. d0:5,6 — got {spec!r}")
+            raise SystemExit(f"--units wants unit:routines, e.g. d0:3,4 — got {spec!r}")
         key, routines = spec.split(":", 1)
         key = key.strip().lower()
         if key not in UNITS:
@@ -130,7 +130,7 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--units", nargs="+", metavar="UNIT:ROUTINES",
-                    help="e.g. d0:1,2,5,6,7,8 d2:5,6")
+                    help="e.g. d0:1,2,3,4 d2:3,4")
     ap.add_argument("--until", help="stop starting new units after this local time (HH:MM or ISO)")
     ap.add_argument("--for", dest="for_", help="relative deadline, e.g. 90m or 2h")
     ap.add_argument("--grace", type=float, default=0,
