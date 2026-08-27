@@ -1,26 +1,30 @@
 # upload_manifest.txt -- what gets uploaded to Bouchet for a cluster run.
 #
-# ONE source of truth for the staging list. The same list is duplicated as prose in three
-# preflight blocks (submit_cf_all.sh, submit_bbl_all.sh, submit_blp_2_rc_default.sh); those
-# scripts verify on the cluster AFTER upload, this file drives the check BEFORE it.
+# ONE source of truth for the staging list. stage_cluster_upload.py bundles from it BEFORE the
+# upload and cluster_preflight.sh section (7) verifies against it AFTER, on the cluster; the
+# manifest ships itself in the code bundle so both ends read the same file.
 # Read by stage_cluster_upload.py; also readable with grep/awk (see PARSING below).
 #
 # ---------------------------------------------------------------------------------------
 # CLUSTER LAYOUT AND THE INPUT/OUTPUT CONVENTION
 # ---------------------------------------------------------------------------------------
 # Project root on Bouchet:   /nfs/roberts/project/pi_mf2263/pf382/dep_comp
-#     scripts/      the code checkout; every submit_*.sh runs from here
+#     scripts/      the code checkout; every job runs from here
 #     data/input/   ONLY files UPLOADED from the Windows machine  <-- this manifest
-#     data/output/  ONLY files PRODUCED on the cluster (BLP_DRAWS, cf/, cost/, *_outputs.zip)
+#     data/output/  ONLY files PRODUCED on the cluster, one folder per pipeline step:
+#                   sleep/ demand_prep/ logit/ blp/ (+blp/draws/) bbl/ counterfactuals/
+#                   download/, plus the .gate_G*.json verdicts
 # The rule is by PRODUCER, not by role: a file the cluster wrote never belongs in data/input,
 # and a file uploaded from local never belongs in data/output.
 #
-# MOVE-VS-COPY HAZARD. zip_cf_outputs.sh archives in MOVE mode by default (add -> verify ->
-# rm) unless KEEP=1. Its cf4 pattern list once included upsilon_pix_E*.json and
-# phi_nopix_E*.parquet -- which are UPLOADED INPUTS, not outputs -- so a routine archive
-# DELETED them and emptied the directory (2026-08-01). Anything listed in this file is an
-# input: never add it to a glob in an archiver, and never let an archiver run in move mode
-# over data/input. Re-uploading is the only recovery.
+# MOVE-VS-COPY HAZARD. cluster_archive.sh takes --copy or --move, with no default and no
+# inference, and every caller in the pipeline passes --copy. A move-mode archive whose cf4
+# pattern list reached upsilon_pix_E*.json and phi_nopix_E*.parquet -- UPLOADED INPUTS at the
+# time, not outputs -- deleted them and emptied the directory (2026-08-01). Anything listed
+# in this file as `data` is an input: never add it to a glob in an archiver, and never let an
+# archiver run in move mode over data/input. Re-uploading is the only recovery. Every pattern
+# in cluster_archive.sh is confined to output/ and logs/, and a move-mode run that resolves
+# any path under data/input refuses outright.
 #
 # ---------------------------------------------------------------------------------------
 # PARSING
@@ -67,8 +71,8 @@
 #   INCLUSION      paths.INCLUSION_DIR                          BCB/Inclusion, the banked/MCA panels
 #   REPO           this repository
 #
-# PANEL_INTERMED and INCLUSION are NEW. stage_cluster_upload.py's make_root_resolver()
-# must learn them or it exits with "unknown root token" before doing anything else:
+# Every token above is resolved by stage_cluster_upload.py's make_root_resolver(); adding a
+# root here without adding it there exits with "unknown root token" before anything else runs:
 #     "PANEL_INTERMED": paths_mod.PROCESSED / "PANEL_INTERMED",
 #     "INCLUSION":      paths_mod.INCLUSION_DIR,
 # cluster_preflight.sh reads this file with awk and needs no such table.
@@ -140,10 +144,10 @@ state_centering    | data | sleep      | SIGMA_DIR     | state_centering_means.j
 state_tier0        | data | sleep      | SIGMA_DIR     | state_centering_tier0.csv      | data/input | python check_state_centering.py                (RE-CENTERING ONLY) | - | -
 
 # --- 1. demand parquets: the estimation sample the BLP, BBL and CF all read ---------------
-#        PRODUCED ON THE CLUSTER now (sleep_job.sh SLEEP_STEP=prep -> data/output/DEMAND_PREP,
-#        gate G2), but the row stays `data`: uploading a locally-built lineup is still the
-#        supported way to run the BLP/BBL/CF stages without re-estimating, and
-#        blp_1_logit.jl's demand_dirs() searches data/input BEFORE data/output/DEMAND_PREP.
+#        PRODUCED ON THE CLUSTER: sleep_job.sh SLEEP_STEP=prep writes them into
+#        data/output/demand_prep and gate G2 verifies exactly one per routine. That folder is
+#        the ONLY place any cluster consumer looks -- demand_search_dirs(), the logit, the RC
+#        engine, the CF stack -- so a stale upload cannot shadow the run's own sample.
 demand_E{k}        | produced | blp,bbl,cf | DEMAND_PREP | {prefix}_spec_12.parquet     | data/output/demand_prep | sleep_job.sh SLEEP_STEP=prep (gate G2)                | -         | -
 
 # --- 2. demographic sigma for the parametric d-draws (blp_1_draws.jl) ---------------------
@@ -151,10 +155,10 @@ demographics_sigma | data | blp        | SIGMA_DIR     | demographics_sigma.parq
 
 # --- 3. logit delta warm-starts (blp_1_logit.jl -> blp_2_rc.jl / blp_gpu_engine.jl) -------
 #        PRODUCED, not uploaded: logit_job.sh runs blp_1_logit.jl --hpc on the cluster and
-#        delta_dir() is data/output ITSELF, flat, which is where the RC engine reads them.
+#        delta_dir() is data/output/logit, which is where the RC engine reads them.
 #        Gate G4 checks the leading Int64 against the routine's parquet row count -- the
 #        engine SILENTLY skips a mismatched delta and starts cold.
-logit_delta_E{k}   | produced | blp    | BLP_LOGIT     | logit_delta_E{k}_spec_12.bin   | data/output | sbatch logit_job.sh   (gate G4)                            | DEMAND_PREP | {prefix}_spec_12.parquet
+logit_delta_E{k}   | produced | blp    | BLP_LOGIT     | logit_delta_E{k}_spec_12.bin   | data/output/logit | sbatch logit_job.sh   (gate G4)                      | DEMAND_PREP | {prefix}_spec_12.parquet
 
 # --- 4. forward risk-free curve. MUST be built locally: compute nodes have no outbound ----
 #        internet, and this script calls the BCB SGS + Focus APIs.
@@ -163,14 +167,13 @@ forward_rf         | data | bbl,cf     | COST_FWD      | forward_rf_qoq.csv     
 # --- 5. fitted BBL policy function (deviations are formed around it, not observed spreads) -
 polfunc            | produced | bbl      | COST_POLFUNC  | polfunc_fitted.csv           | data/output/bbl | bbl_run.sh (BBL_STEP=polfunc, default)                       | -         | -
 
-# --- 6. CF4 Pix inputs. PRODUCED on the cluster now: the sleep pickle IS there, because the ---
+# --- 6. CF4 Pix inputs. PRODUCED on the cluster: the sleep pickle IS there, because the -------
 #        sleepiness estimators run there, so cf_4_upsilon_export.py runs there too
-#        (sleep_job.sh SLEEP_STEP=upsilon, gate G7). It writes to
-#        paths.estimation_output()/CF_FOUNDATION, and cl_bootstrap_tree links
-#        processed/ESTIMATION_OUTPUT at data/output, so the pair lands in
-#        data/output/CF_FOUNDATION. Gate G7 checks exact_nopix and the row alignment.
-upsilon_pix_E{k}   | produced | cf4    | CF_FOUNDATION | upsilon_pix_E{k}_spec_12.json  | data/output | sleep_run.sh (SLEEP_STEP=upsilon; gate G7)                   | EST{k}    | estimation_results.pkl
-phi_nopix_E{k}     | produced | cf4    | CF_FOUNDATION | phi_nopix_E{k}_spec_12.parquet | data/output | sleep_run.sh (SLEEP_STEP=upsilon; gate G7)                   | EST{k}    | estimation_results.pkl
+#        (sleep_job.sh SLEEP_STEP=upsilon, gate G7, all four routines). CF_FOUNDATION_DIR
+#        points it at data/output/counterfactuals, which is the one directory cf_4_pix.jl
+#        opens at run time. Gate G7 checks exact_nopix and the row alignment.
+upsilon_pix_E{k}   | produced | cf4    | CF_FOUNDATION | upsilon_pix_E{k}_spec_12.json  | data/output/counterfactuals | sleep_run.sh (SLEEP_STEP=upsilon; gate G7)     | EST{k}    | estimation_results.pkl
+phi_nopix_E{k}     | produced | cf4    | CF_FOUNDATION | phi_nopix_E{k}_spec_12.parquet | data/output/counterfactuals | sleep_run.sh (SLEEP_STEP=upsilon; gate G7)     | EST{k}    | estimation_results.pkl
 
 # --- 7. code. Tracked in git, so nothing to build -- but *.sh is rewritten to LF on the ----
 #        way into the zip: bash reads a CRLF shebang as a syntax error on line 1.

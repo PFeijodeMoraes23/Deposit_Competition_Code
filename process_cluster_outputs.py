@@ -10,22 +10,28 @@ mirrors process_blp_outputs.py -- same cluster_raw/cluster_processed split, same
 newest-zip-wins discovery, same INDEX.json beside the processed artifacts -- rather than
 inventing a second set of conventions for the same job.
 
-    --kind bbl    bbl_outputs_<jobid>.zip / psi_cost.zip / cf2_outputs.zip
+    --kind bbl    bbl_outputs[_<jobid>].zip, whose members carry the output/bbl/ prefix
                   -> BBL_OUTPUT/cluster_raw/       the archive itself (copied)
                   -> BBL_OUTPUT/cluster_processed/ cost_params_E{k}_spec_{s}_{stage}.json
+                                                   and the polfunc_fitted.* family
                   The psi_eq / psi_dev shards stay INSIDE the archive on purpose: a full
                   psi run is ~400 shard parquets and make_bbl_cost_tables.py reads them
                   from the zip in place ("so 400 shard parquets are not duplicated onto
                   disk"). The --psi-zip path to hand it is printed at the end.
 
-    --kind cf     foundation/cf1/cf3/cf4/cf5/cf6_outputs[_tag].zip
+    --kind cf     counterfactuals_outputs[_<jobid>].zip, members prefixed output/counterfactuals/
                   -> CF_OUTPUT/cluster_raw/  the archive itself (copied)
-                  -> CF_FOUNDATION/          everything under the archive's output/cf/,
-                                             keeping any sub-directory (the sharded
+                  -> CF_FOUNDATION/          everything under that prefix, keeping any
+                                             sub-directory (the sharded
                                              cf3_jacobi_E*/cf5_E*/cf6_E* folders) so
                                              export_cf1_franchise.py and friends find the
                                              flat top-level parquets exactly where they
                                              look for them.
+
+Archives downloaded before the step-folder tree carried one family per counterfactual
+(foundation/cf1/cf3/... ) and split BBL across psi_cost/cf2_outputs, with members under
+output/cf/ and output/cost/. Those names and prefixes are listed in the *_LEGACY tuples
+below and still ingest, so a re-run over an older download folder lands the same files.
 
 A source zip is only ever READ or COPIED, never moved out of a download folder and never
 deleted -- these archives are the only copy of some cluster output (the psi shards have no
@@ -34,8 +40,10 @@ second copy anywhere), and this script is re-runnable precisely because it leave
 Usage:
     python process_cluster_outputs.py --kind bbl
     python process_cluster_outputs.py --kind cf
-    python process_cluster_outputs.py --kind cf --cf cf1 --zip D:/downloads/cf1_outputs.zip
+    python process_cluster_outputs.py --kind cf --zip D:/downloads/counterfactuals_outputs_9911.zip
     python process_cluster_outputs.py --kind bbl --dry-run
+
+ingest_cluster_downloads.py calls both kinds for you as part of one whole-download ingest.
 """
 from __future__ import annotations
 
@@ -61,15 +69,23 @@ EST_OUT = paths.estimation_output()
 
 # Archive families, newest of each is processed unless --zip/--cf pins one. The names are
 # fixed by the producer: cluster_archive.sh writes <set>_outputs[_<tag>].zip, with member
-# paths relative to data/ and the tag taken from the archiving job id.
-BBL_FAMILIES = ("bbl_outputs", "psi_cost", "cf2_outputs")
-CF_FAMILIES = ("foundation_outputs", "cf1_outputs", "cf3_outputs",
-               "cf4_outputs", "cf5_outputs", "cf6_outputs")
+# paths relative to data/ and the tag taken from the archiving job id. One set per step
+# folder, so one family per kind; the _LEGACY tuples are the per-counterfactual and
+# psi/cf2 archives an earlier download folder holds, kept discoverable so re-running over
+# one still works.
+BBL_FAMILIES = ("bbl_outputs",)
+BBL_FAMILIES_LEGACY = ("psi_cost", "cf2_outputs")
+CF_FAMILIES = ("counterfactuals_outputs",)
+CF_FAMILIES_LEGACY = ("foundation_outputs", "cf1_outputs", "cf3_outputs",
+                      "cf4_outputs", "cf5_outputs", "cf6_outputs")
 
 # Member prefixes inside the archives, as written by cluster_archive.sh (paths relative to
-# data/). A flat archive stores bare basenames, so one of those counts as output/cost.
-CF_PREFIX = "output/cf/"
-COST_PREFIX = "output/cost/"
+# data/): one step folder per set. A flat archive stores bare basenames, so one of those
+# counts as a BBL member. The _LEGACY spellings are the pre-step-folder layout.
+CF_PREFIX = "output/counterfactuals/"
+COST_PREFIX = "output/bbl/"
+CF_PREFIX_LEGACY = "output/cf/"
+COST_PREFIX_LEGACY = "output/cost/"
 
 
 def tree_for(kind):
@@ -156,16 +172,22 @@ def classify(kind, member):
         return None, "unsafe member name" if rel is None else None
     base = os.path.basename(rel)
     if kind == "bbl":
-        # cost_params are the artifact make_bbl_cost_tables.py reads out of
-        # cluster_processed; psi_eq / psi_dev shards stay archived.
+        # Two families land in cluster_processed: cost_params, which make_bbl_cost_tables.py
+        # reads, and polfunc_fitted.* (csv/pkl/json/tex), which the forward simulation takes
+        # as --policy-csv and make_polfunc_tables.py reads. psi_eq / psi_dev shards stay
+        # archived -- see the module docstring.
         if base.startswith("cost_params_") and base.endswith(".json"):
+            return base, None
+        if base.startswith("polfunc_"):
             return base, None
         if base.startswith("psi_eq_") or base.startswith("psi_dev_"):
             return None, "psi (left in the archive; pass it with --psi-zip)"
         return None, "not a BBL artifact"
-    if rel.startswith(CF_PREFIX):
-        return rel[len(CF_PREFIX):], None
-    if rel.startswith(COST_PREFIX) or base.startswith("cost_params_"):
+    for pre in (CF_PREFIX, CF_PREFIX_LEGACY):
+        if rel.startswith(pre):
+            return rel[len(pre):], None
+    if rel.startswith(COST_PREFIX) or rel.startswith(COST_PREFIX_LEGACY) \
+            or base.startswith("cost_params_"):
         return None, "cost artifact -- ingest this archive with --kind bbl instead"
     return None, "not a CF artifact"
 
@@ -190,11 +212,13 @@ def ingest(kind, family, zip_path: Path, raw_dir: Path, proc_dir: Path, index, d
           f"{datetime.datetime.fromtimestamp(zmtime):%Y-%m-%d %H:%M})")
     print(f"   source: {zip_path.parent}")
 
-    landed, skipped = [], {}
+    landed, skipped, n_psi = [], {}, 0
     with zipfile.ZipFile(zip_path) as z:
         members = [m for m in z.namelist() if not m.endswith("/")]
         for m in members:
             dest_rel, note = classify(kind, m)
+            if note and note.startswith("psi ("):
+                n_psi += 1
             if dest_rel is None:
                 skipped[note or "unknown"] = skipped.get(note or "unknown", 0) + 1
                 continue
@@ -251,6 +275,9 @@ def ingest(kind, family, zip_path: Path, raw_dir: Path, proc_dir: Path, index, d
         "zip_sha256": None if dry else sha256_file(raw_copy if raw_copy.is_file() else zip_path),
         "ingested": datetime.datetime.now().isoformat(timespec="seconds"),
         "n_files": len(landed),
+        # The ridge diagnostic reads the psi shards straight out of the archive, so what
+        # matters downstream is which zip HOLDS them, not which family name it goes by.
+        "n_psi": n_psi,
         "files": sorted(d for d, _ in landed),
     }
     return record, landed
@@ -262,7 +289,8 @@ def main():
     ap.add_argument("--kind", required=True, choices=("bbl", "cf"))
     ap.add_argument("--zip", default=None, help="pin one archive instead of discovering it")
     ap.add_argument("--cf", default=None,
-                    help="restrict to one CF family: foundation, cf1, cf3, cf4, cf5, cf6")
+                    help="restrict to one CF family: counterfactuals (or an older "
+                         "per-counterfactual name: foundation, cf1, cf3, cf4, cf5, cf6)")
     ap.add_argument("--search-dir", action="append", default=[],
                     help="extra directory to look for archives in (repeatable)")
     ap.add_argument("--dry-run", action="store_true",
@@ -282,17 +310,21 @@ def main():
         zp = Path(args.zip).expanduser()
         if not zp.is_file():
             sys.exit(f"ERROR: --zip not found: {zp}")
-        fam = next((f for f in (BBL_FAMILIES + CF_FAMILIES) if zp.name.startswith(f)),
-                   zp.stem)
+        known = BBL_FAMILIES + BBL_FAMILIES_LEGACY + CF_FAMILIES + CF_FAMILIES_LEGACY
+        # Longest first: "counterfactuals_outputs" must win over any shorter name that
+        # happens to prefix the same file.
+        fam = next((f for f in sorted(known, key=len, reverse=True)
+                    if zp.name.startswith(f)), zp.stem)
         picks = {fam: zp}
     else:
-        families = BBL_FAMILIES if args.kind == "bbl" else CF_FAMILIES
+        families = (BBL_FAMILIES + BBL_FAMILIES_LEGACY if args.kind == "bbl"
+                    else CF_FAMILIES + CF_FAMILIES_LEGACY)
         if args.cf:
             want = args.cf if args.cf.endswith("_outputs") else f"{args.cf}_outputs"
             families = tuple(f for f in families if f == want)
             if not families:
                 sys.exit(f"ERROR: --cf {args.cf} is not one of "
-                         f"{', '.join(f[:-8] for f in CF_FAMILIES)}")
+                         f"{', '.join(f[:-8] for f in CF_FAMILIES + CF_FAMILIES_LEGACY)}")
         dirs = search_dirs(args.kind, args.search_dir)
         print(f"  searched : {len(dirs)} directories")
         picks = discover(args.kind, families, dirs)
@@ -343,8 +375,8 @@ def main():
     print(f"{total} file(s) {verb} from {len(picks)} archive(s); "
           f"{len(index['files'])} file(s) tracked in {index_path.name}")
     if args.kind == "bbl":
-        psi = index["ingests"]
-        psi = [r for r in psi if r["family"] in ("psi_cost", "cf2_outputs")]
+        psi = [r for r in index["ingests"]
+               if r.get("n_psi") or r["family"] in BBL_FAMILIES_LEGACY]
         if psi:
             print()
             print("Next:  python make_bbl_cost_tables.py"
@@ -355,11 +387,12 @@ def main():
         else:
             print()
             print("Next:  python make_bbl_cost_tables.py")
-            print("       The ridge diagnostic also needs the psi archive (psi_cost.zip or "
-                  "cf2_outputs.zip);")
-            print("       it is produced on the cluster by "
-                  "`bash cluster_archive.sh --set cf2 --copy` -- download it and re-run "
-                  "with --kind bbl.")
+            print("       The ridge diagnostic also needs the psi shards. They travel in "
+                  "bbl_outputs.zip")
+            print("       unless the archiving run set INCLUDE_PSI=0; re-archive on the "
+                  "cluster with")
+            print("       `bash cluster_archive.sh --set bbl --copy`, download it and "
+                  "re-run with --kind bbl.")
     else:
         print()
         print("Next:  python export_cf1_franchise.py --estim <k> --spec 12 --stage extended")

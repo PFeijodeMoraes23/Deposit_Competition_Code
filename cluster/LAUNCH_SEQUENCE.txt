@@ -1,141 +1,221 @@
 ==============================================================================
- BOUCHET LAUNCH SEQUENCE  -  rev 2, 2026-08-20 16:30
+ BOUCHET LAUNCH SEQUENCE  -  rev 3
 ==============================================================================
- STATE AS OF THIS REVISION
-   - DATA bundle: ALREADY UPLOADED, unzipped and verified. Do NOT re-upload.
-     Its checksum changed when the archive was rebuilt, but all 12 members are
-     byte-identical (verified by hashing each member against its source; newest
-     source is polfunc_fitted.csv at 14:29, before the first build at 15:57).
-     A zip stores per-member write timestamps, so the container differs while
-     the contents do not.
-   - JULIA DEPOT: use `env_job.sh ENV_STEP=resolve`, NOT setup_julia_env.sh.
-     setup_julia_env.sh is the LEGACY script: it sets no depot, so it installs
-     into ~/.julia, while cluster_lib.sh points every job at scripts/.julia_depot.
-     On 2026-08-20 that cost a cycle -- its log said 'Packages installed / All key
-     packages loaded OK' and the logit job still died on
-        Package Parquet2 ... is required but does not seem to be installed.
-     Same Manifest.toml, different library. The preflight now probes the depot
-     directly (section 3b) instead of trusting the version match.
-         sbatch --partition=day --time=02:00:00 --cpus-per-task=8 --mem=32G \n                --export=ALL,ENV_STEP=resolve env_job.sh
-         # then:  ls .julia_depot/packages/ | head
-   - CODE bundle: RE-UPLOAD THIS ONE. It gained the lineup registry
-     (config/routines.toml), the manifest self-row, and the preflight
-     --will-build fix.
-   - Conda env dep_comp_blp exists and imports everything incl. matplotlib.
-   - No sysimage, no Halton draws on the cluster: the run builds both.
+ RULE 0: NOTHING RUNS ON THE LOGIN NODE.
 
- PROJECT ROOT (everything runs from here):
+   On the login node you do six things and no others: upload, unzip, chmod,
+   sha256sum, sbatch, and look (squeue / ls / cat). No Julia, no Python, no
+   preflight, no estimator.
+
+   pipeline_all.sh is SUBMITTED, never run with bash. It carries its own #SBATCH
+   block, and all it does is parse flags and call sbatch. Every check that needs
+   the toolchain lives inside gate G0, which is itself a job (env_job.sh
+   ENV_STEP=preflight), and every first-tier submission waits afterok on it.
+
+   THE ONE EXCEPTION:  bash pipeline_all.sh --dry-run
+   That prints the whole job graph and submits nothing, so it is safe anywhere.
+
+ PROJECT ROOT - every path below is relative to it, and both zips unzip FROM it:
      cd ~/project_pi_mf2263/pf382/dep_comp
+   It is the parent of scripts/ and data/.
 
 ------------------------------------------------------------------------------
-1. UPLOAD  -  code bundle only
+0. LOCAL PREP  (Windows machine, in the repo)
 ------------------------------------------------------------------------------
-     bouchet_code_20260820.zip     1.3 MB   219 files
-     sha256 d6d56bdd288344e2cefe5a77bc22a1fc91005f291244d4e26f6ea5fa3ad71518
+   The forward risk-free curve is the ONE input that cannot be produced on the
+   cluster: cf_forward_rf.py calls the BCB SGS + Focus APIs and compute nodes
+   have no outbound internet.
 
-   Put it in the PROJECT ROOT (not data/input, not ~). The member paths are
-   prefixed scripts/, so one unzip from the root places every file.
+     python cf_forward_rf.py --horizon 50 --start 2026Q1
+     python stage_cluster_upload.py                  # pre-flight only, writes nothing
+     python stage_cluster_upload.py --stage          # build both zips
+
+   It writes  <processed>/CLUSTER_STAGE/<YYYYMMDD>/  containing
+
+     bouchet_data_<YYYYMMDD>.zip    7 files, ~50 MB   -> data/input/
+     bouchet_code_<YYYYMMDD>.zip    the .jl/.sh/.py/.toml checkout -> scripts/
+
+   The data bundle is market_panel.parquet, digital_banks_diagnostic.csv,
+   bcb_banked_mca_panel.csv, state_centering_means.json, state_centering_tier0.csv,
+   demographics_sigma.parquet, forward_rf_qoq.csv - and nothing else.
+
+   THE PANEL TRAVELS AS PARQUET (39 MB against the CSV's 724 MB). Do NOT upload
+   market_panel.csv beside it: two copies means an mtime/size comparison decides
+   which one every estimator reads.
+
+   The demand parquets, the logit deltas, polfunc_fitted.csv and the CF4
+   upsilon/phi^noPix pair are NOT uploaded. The run produces all of them.
 
 ------------------------------------------------------------------------------
-2. UNZIP + VERIFY
+1. UPLOAD BOTH ZIPS INTO THE PROJECT ROOT
 ------------------------------------------------------------------------------
-     unzip -o bouchet_code_20260820.zip
-     sha256sum -c sha256SUMS.txt          # 216 code lines, all OK
-     chmod +x scripts/*.sh
+   Browser file-manager, into ~/project_pi_mf2263/pf382/dep_comp - the PROJECT
+   ROOT, not your home directory and not data/input. The member paths inside the
+   zips are already prefixed scripts/ and data/input/, so one unzip from the root
+   puts every file in its final place.
+
+   Do one bundle at a time, all the way through step 2, before touching the
+   other: each carries its own sha256SUMS.txt at the root and the second
+   overwrites the first.
+
+------------------------------------------------------------------------------
+2. UNZIP, MAKE THE LOG DIR, VERIFY
+------------------------------------------------------------------------------
+     cd ~/project_pi_mf2263/pf382/dep_comp
+     unzip -o bouchet_data_<YYYYMMDD>.zip
+     sha256sum -c sha256SUMS.txt          # every line must end in OK
      rm -f UPLOAD_README.txt sha256SUMS.txt
 
-   NOTE this replaces the data bundle's sha256SUMS.txt at the root. Harmless:
-   the data files are already extracted and were verified when you uploaded them.
+     unzip -o bouchet_code_<YYYYMMDD>.zip
+     sha256sum -c sha256SUMS.txt
+     rm -f UPLOAD_README.txt sha256SUMS.txt
+
+     mkdir -p scripts/logs
+     chmod +x scripts/*.sh
+
+   mkdir -p scripts/logs IS A STEP, not a formality. A zip cannot carry an empty
+   directory, every sbatch in this project writes --output into scripts/logs/,
+   and SLURM does not create a missing --output directory: the job is killed in
+   about a second with no log at all, which looks exactly like a broken script.
 
 ------------------------------------------------------------------------------
-3. PREFLIGHT   -  should now print PREFLIGHT OK
+3. RESOLVE THE JULIA MANIFEST  -  one job, alone
 ------------------------------------------------------------------------------
-     cd scripts
-     bash cluster_preflight.sh --will-build "sysimage draws"
+     cd ~/project_pi_mf2263/pf382/dep_comp/scripts
+     sbatch --partition=day --time=02:00:00 --cpus-per-task=8 --mem=32G \
+            --export=ALL,ENV_STEP=resolve env_job.sh
 
-   --will-build tells it the missing sysimage and draws are built by jobs 1 and 2
-   of this run. They are still REPORTED, with an added
-       ^ not a blocker: this run builds it
-   line; only the verdict changes. WITHOUT the flag they still block, and anything
-   NOT named still blocks either way.
+   Wait for COMPLETED (squeue -u $USER) and submit nothing else meanwhile:
+   concurrent Pkg.resolve() on NFS corrupts Manifest.toml. This is the sole
+   Pkg.resolve() site; it backs the manifest up to Manifest.toml.bak.<ver> first
+   and installs into scripts/.julia_depot, which is the depot every job reads.
 
-   Section (7) now reads cluster/upload_manifest.txt properly (the manifest ships
-   itself in this bundle), so the staged-input check is the real one rather than
-   the reduced fallback.
+     ls .julia_depot/packages/ | head          # sanity check afterwards
 
-------------------------------------------------------------------------------
-4. DRY RUN   -  read the graph before committing
-------------------------------------------------------------------------------
-     bash pipeline_all.sh --dry-run --blp-args "--draws --sysimage"
-
-   Expect ~72 sbatch lines, 6 phases, 3 continuation jobs, 5 gates. The line
-       [dry-run] would run:  bash cluster_preflight.sh --routines '1 2 3 4' --will-build 'sysimage draws'
-   confirms the flag is derived from --blp-args and forwarded automatically.
+   If the module name has drifted, the log prints the parsed candidates:
+     export JULIA_MODULE=<candidate>           # every script reads it from cluster_lib.sh
 
 ------------------------------------------------------------------------------
-5. LAUNCH
+4. LAUNCH  -  one command
 ------------------------------------------------------------------------------
-     bash pipeline_all.sh --blp-args "--draws --sysimage"
+     cd ~/project_pi_mf2263/pf382/dep_comp/scripts
+     bash pipeline_all.sh --dry-run       # read the graph first; submits nothing
+     sbatch pipeline_all.sh               # do it
 
-   *** --blp-args IS NOT OPTIONAL ON THIS CLUSTER. ***
-   blp_run.sh defaults to DO_SYSIMAGE=0 and DO_DRAWS=0 -- it assumes both exist.
-   Without the flags the BLP phase either refuses on missing draws or, worse,
-   runs with no sysimage: CUDA.functional() fails, the CF stack catches it and
-   silently falls back to CPU while holding an H200.
+   Submit from scripts/: pipeline_all.sh finds cluster_lib.sh through
+   SLURM_SUBMIT_DIR, because sbatch runs a spool copy of the file, not the file.
 
-   --skip-preflight is NO LONGER NEEDED. G0 now passes on its own.
+   Defaults, all four routines E1-E4 through every phase:
+     sleepiness (spec arrays) -> logit -> RC-BLP -> BBL costs -> counterfactuals
+   The equilibrium CFs (CF3/CF5/CF6) are OFF; add --cfeq for them.
 
-   EXPECT THE LIVE RUN TO STOP AFTER THE LOGIT PHASE. That is by design: a
-   continuation job resumes at --from blp once G2 and G4 pass, because
-   blp_run.sh/bbl_run.sh/cf_eq_run.sh preflight their inputs at SUBMIT time and
-   those inputs do not exist at t=0. squeue will show far fewer jobs than the
-   dry run printed. This is correct.
+   NOTHING ELSE IS NEEDED. Both sysimages and the Halton/demographic draws are
+   built by the BLP phase when they are absent - blp_run.sh decides from what is
+   on disk and prints the decision. --blp-args only FORCES a rebuild.
+   --skip-preflight is not needed either: G0 runs as a job and passes.
+
+------------------------------------------------------------------------------
+5. THE RUN STOPS AFTER THE LOGIT PHASE. THAT IS THE DESIGN.
+------------------------------------------------------------------------------
+   squeue will show far fewer jobs than the dry run printed. blp_run.sh,
+   bbl_run.sh and cf_eq_run.sh preflight their inputs ON DISK at SUBMIT time -
+   RC .jls, cost params, draws - and at t=0 those files genuinely do not exist.
+
+   So each phase boundary submits a 30-minute CPU job that re-invokes
+   pipeline_all.sh with --from <next-phase>:
+
+     pipe_next_blp    afterok gates G2 and G4    -> the RC ladders
+     pipe_next_bbl    afterok the RC terminals   -> BBL costs + the CFs
+     pipe_next_cfeq   afterok the CF results     -> only with --cfeq
+
+   Their logs are scripts/logs/pipe_next_*.out. Read those at each hand-off.
 
 ------------------------------------------------------------------------------
 6. WATCH
 ------------------------------------------------------------------------------
+   From the PROJECT ROOT:
+
      squeue -u $USER
      ls -la data/output/.gate_*.json
+     for g in G0 G1 G2 G3 G4 G7; do echo "-- $g"; cat data/output/.gate_$g.json; done
+     tail -f scripts/logs/pipe_next_blp_*.out
 
-   FIRST REAL SIGNAL -- gate G1, after the estimators:
-       cat data/output/.gate_G1.json
-   It compares cluster phi-hat against the promoted local values
+   FIRST REAL SIGNAL: .gate_G0.json. It is the toolchain-and-inputs verdict, and
+   nothing downstream starts until it passes.
+
+   GATE ORDER
+     G0  toolchain, uploads, step dirs, both sysimages probed by LOADING them
+     G1  the estimators landed         (after the est / spec arrays + merges)
+     G2  exactly one demand parquet per routine in data/output/demand_prep
+     G4  logit deltas match their routine's parquet row count
+     G3  the AME two-stage bootstrap   |  G7  upsilon_pix + phi^noPix, all four routines
+   G3 and G7 hang off G2 in parallel with the logit; each gate writes its json
+   BEFORE it exits nonzero.
+
+   G1 compares cluster phi-hat against the promoted local values
        E1 99.9945   E2 99.5400   E3 96.5627   E4 96.6814
-   The multistart caps at 8 threads / 4 starts on ANY node size, so these SHOULD
-   match. A match validates the whole port end to end. A move is a red flag worth
-   stopping for -- the gate reports it and never fails the chain.
+   The multistart caps at 8 threads / 4 starts on any node size, so these should
+   match: a match validates the whole port end to end. G1 REPORTS a move and
+   never fails the chain - but a move is worth stopping for.
 
-   Gate order: G1 estimators -> G2 demand parquets -> G3 AME / G7 upsilon,
-   G4 after the logit. Each writes its json BEFORE exiting.
+   IF A GATE FAILS, its downstream cone is cancelled as DependencyNeverSatisfied
+   and those jobs write NO LOG AT ALL. A phase that never started is the SYMPTOM.
+   Read the gate json first, then the .err of the job before it - never the
+   silent ones.
 
-   IF A GATE FAILS its downstream cone is cancelled as DependencyNeverSatisfied
-   and those jobs write NO log at all. Read the .gate_*.json first, then the .err
-   of the job that actually failed -- not the silent ones.
-
-   GPU capacity: gpu_h200 allows 6 concurrent jobs. The cf3 sweeps submit
-   --array=0-39 GPU arrays, so they drain 6 at a time. Slow, not broken.
-
-------------------------------------------------------------------------------
-7. DOWNLOADS AS PHASES COMPLETE
-------------------------------------------------------------------------------
-   demand parquets   data/output/demand_prep_outputs*.zip   (afterany G2)
-   logit results     after G4
-   RC / BBL / CF     the archive zips at the end
-   Ingest locally with:  python process_cluster_outputs.py --kind bbl|cf
+   GPU CAPACITY: the gpu_h200 QOS caps concurrent jobs per user (sacctmgr -n -P
+   show qos gpu_h200 format=MaxJobsPU; G0 reports it). GPU arrays drain in
+   batches of that size. Slow, not broken.
 
 ------------------------------------------------------------------------------
-8. RESUME AFTER A FIX
+7. DOWNLOAD  -  one folder, everything in it
 ------------------------------------------------------------------------------
-     bash pipeline_all.sh --from <sleep|logit|blp|bbl|cf|cfeq> --resumed           --blp-args "--draws --sysimage"
+   pipe_download runs afterANY the CF jobs and the BBL solves and packages all
+   eight sets into data/output/download:
 
-   The same command the continuation jobs run internally. --resumed skips G0.
+     sleep_outputs  demand_prep_outputs  logit_outputs  blp_outputs
+     bbl_outputs    counterfactuals_outputs            gates   logs
+
+   Anything over ~3 GB arrives as <name>.zip.part.NN plus a .sha256 of the whole
+   zip; one sha256SUMS covers every emitted file.
+
+     cd ~/project_pi_mf2263/pf382/dep_comp/data/output/download
+     ls -la
+     sha256sum -c sha256SUMS
+
+   Then download the WHOLE folder into, on the local machine,
+     <processed>/ESTIMATION_OUTPUT/CLUSTER_IN/
+
+   The cluster is scratch and the local disk is the record: a partial download is
+   the one failure mode there is no recovering from once the allocation is cleaned.
 
 ------------------------------------------------------------------------------
-9. NOT ENABLED THIS RUN
+8. LOCAL INGEST  -  one command
 ------------------------------------------------------------------------------
-   --spec-array on sleep_run.sh fans E3/E4 out one task PER SPEC (18 tasks
-   instead of 4) with a merge job per routine, cutting the estimator phase from
-   ~79 min to ~13. It is built and verified (8 concurrent spec tasks reproduce
-   the serial grid to 0.000e+00) but deliberately OFF for the first cycle: the
-   default routine array is the proven path. Turn it on for run 2.
+     python ingest_cluster_downloads.py --dry-run     # every check, writes nothing
+     python ingest_cluster_downloads.py
+
+   It scans CLUSTER_IN, takes the newest tag per family, reassembles split parts,
+   verifies them against sha256SUMS, and routes all eight families into the local
+   tree (backing up anything it would overwrite under DEMAND_PREP). A checksum
+   mismatch refuses THAT FAMILY ONLY; the others still land and the run exits 1.
+
+     python ingest_cluster_downloads.py --family sleep --family gates
+     python ingest_cluster_downloads.py --in D:/downloads/20260826 --no-backup
+
+   The reviewed promotion into Drafts stays a separate step.
+
+------------------------------------------------------------------------------
+9. RESUME AFTER A FIX
+------------------------------------------------------------------------------
+     sbatch pipeline_all.sh --from <sleep|logit|blp|bbl|cf|cfeq>
+
+   The same command the continuation jobs run internally. Add --resumed to skip
+   gate G0 as they do; from the login node, leave it off and let G0 re-verify.
+   --routines "<survivors>" narrows a resume to the routines that still need work.
+
+   One set on its own, when only the packaging failed:
+     sbatch --partition=day --time=02:00:00 --cpus-per-task=4 --mem=16G \
+            --wrap "cd ~/project_pi_mf2263/pf382/dep_comp/scripts && \
+                    bash cluster_archive.sh --set blp --copy"
 ==============================================================================
