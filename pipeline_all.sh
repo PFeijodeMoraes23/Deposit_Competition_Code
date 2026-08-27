@@ -109,7 +109,27 @@
 #      CL_VERBOSE=1 restores each child orchestrator's full output.
 # ==============================================================================
 set -uo pipefail
-CL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Where this script's siblings live. Two candidates, because `sbatch pipeline_all.sh` does NOT
+# run the file you submitted: SLURM copies it into a spool directory first, so
+# dirname "${BASH_SOURCE[0]}" then names the spool, where cluster_lib.sh does not exist and the
+# source below would die before printing anything. SLURM_SUBMIT_DIR names the directory the
+# submission was made FROM, which is the checkout when you `cd scripts && sbatch pipeline_all.sh`
+# — but it is whatever your shell was in, so it is a candidate to be TESTED, not trusted.
+# Both are probed for cluster_lib.sh and the first that has it wins; run with `bash` (the dry
+# run) only the second exists, and it is correct.
+_cl_pick_dir () {
+    local d
+    for d in "$@"; do
+        [[ -n "${d}" && -f "${d}/cluster_lib.sh" ]] && { (cd "${d}" && pwd); return 0; }
+    done
+    return 1
+}
+CL_DIR="$(_cl_pick_dir "${SLURM_SUBMIT_DIR:-}" "$(dirname "${BASH_SOURCE[0]}")")" || {
+    echo "pipeline_all.sh: cannot find cluster_lib.sh beside this script." >&2
+    echo "  looked in SLURM_SUBMIT_DIR='${SLURM_SUBMIT_DIR:-<unset>}'" >&2
+    echo "         and '$(dirname "${BASH_SOURCE[0]}")'" >&2
+    echo "  Submit from the scripts directory:  cd -P <project>/scripts && sbatch pipeline_all.sh" >&2
+    exit 2; }
 . "${CL_DIR}/cluster_lib.sh"
 set -e
 
