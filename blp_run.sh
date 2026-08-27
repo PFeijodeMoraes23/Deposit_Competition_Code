@@ -114,14 +114,13 @@ cl_warn_wall_cap
 #             key index, so the index standing in for it costs nothing and avoids a
 #             stat on a file that may be mid-split.
 # An explicit flag wins in both directions and skips the test entirely.
-if [[ "${SYS_SET}" == "0" ]]; then
-    _img="$(cl_sysimage_for gpu)"
-    if [[ ! -f "${_img}" || ! -f "${_img}.json" ]]; then DO_SYSIMAGE=1; fi
-fi
-if [[ "${DRAWS_SET}" == "0" ]]; then
-    if [[ ! -f "${CL_STEP_DRAWS}/halton_nu_R${R}_seed${SEED}.jls" \
-       || ! -f "${CL_STEP_DRAWS}/demo_key_index_R${R}_seed${SEED}.jls" ]]; then DO_DRAWS=1; fi
-fi
+#
+# The tests themselves are cl_sysimage_missing / cl_draws_missing in cluster_lib.sh, not
+# inline stats, because gate G0 has to excuse exactly what this decides to build:
+# pipeline_all.sh's submit_g0 calls the same two functions to derive --will-build, so the
+# gate and the builder read one predicate instead of two copies of it.
+if [[ "${SYS_SET}" == "0" ]] && cl_sysimage_missing gpu; then DO_SYSIMAGE=1; fi
+if [[ "${DRAWS_SET}" == "0" ]] && cl_draws_missing "${R}" "${SEED}"; then DO_DRAWS=1; fi
 cl_say "prereqs: sysimage=${DO_SYSIMAGE} draws=${DO_DRAWS}  (sysimage $([[ "${SYS_SET}" == "1" ]] && echo 'from the flag' || echo 'auto, from disk'), draws $([[ "${DRAWS_SET}" == "1" ]] && echo 'from the flag' || echo "auto, from disk at R=${R}/seed=${SEED}"))"
 
 # ── Preflight (V2/V3/V5/V6). Never skipped by accident. ──────────────────────

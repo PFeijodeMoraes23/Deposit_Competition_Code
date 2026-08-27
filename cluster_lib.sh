@@ -160,11 +160,41 @@ cl_julia_candidates () {
     else echo "  (none parsed — read the verbatim block above)"; fi
 }
 
-# cl_manifest_julia_version: the julia_version line 3 of Manifest.toml records.
+# cl_manifest_path: the manifest file JULIA ITSELF would read for this project, printed
+# on stdout. Base.manifest_names() searches four names in this order and takes the first
+# that exists, so a project can legitimately carry a version-pinned manifest instead of
+# (or alongside) the plain one, and a check hardcoded to Manifest.toml then reports "no
+# manifest" about a project Pkg resolves fine. When none of the four exists it prints the
+# path Pkg would CREATE — the caller still gets a name to put in a message — and returns 1,
+# which is the one signal that distinguishes "no manifest at all" from "cannot parse it".
+cl_manifest_path () {
+    local d="${1:-${CL_ROOT}}" n v
+    v="$(cl_loaded_julia_version 2>/dev/null || true)"; v="$(_cl_majmin "${v}")"
+    for n in ${v:+"JuliaManifest-v${v}.toml"} "JuliaManifest.toml" \
+             ${v:+"Manifest-v${v}.toml"} "Manifest.toml"; do
+        [[ -f "${d}/${n}" ]] && { printf '%s' "${d}/${n}"; return 0; }
+    done
+    printf '%s' "${d}/Manifest.toml"
+    return 1
+}
+
+# cl_manifest_julia_version: the julia_version the manifest records, on stdout.
+# THREE outcomes, and they are three different return codes because the gate json has to
+# be able to say which one happened: an empty string alone cannot tell "the resolve wiped
+# the manifest" from "the manifest is there and unparsable", and .gate_G0.json once
+# reported "" for the first while every other section looked healthy.
+#   0  parsed        -> prints the version
+#   1  no julia_version line in a manifest that does exist
+#   2  no manifest file at all
 cl_manifest_julia_version () {
-    local mf="${1:-${CL_ROOT}/Manifest.toml}"
-    [[ -f "${mf}" ]] || { echo ""; return 1; }
-    sed -n 's/^[[:space:]]*julia_version[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' "${mf}" | head -1
+    local mf ver rc=0
+    if [[ $# -gt 0 ]]; then mf="$1"; [[ -f "${mf}" ]] || { echo ""; return 2; }
+    else mf="$(cl_manifest_path)" || { echo ""; return 2; }
+    fi
+    ver="$(sed -n 's/^[[:space:]]*julia_version[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' "${mf}" | head -1)"
+    [[ -n "${ver}" ]] || rc=1
+    printf '%s\n' "${ver}"
+    return ${rc}
 }
 
 cl_loaded_julia_version () {
@@ -180,16 +210,23 @@ _cl_majmin () { printf '%s' "${1%%-*}" | cut -d. -f1,2; }
 # env_job.sh ENV_STEP=resolve, run ALONE, never inside an array or a chain,
 # because concurrent Pkg.resolve() on NFS corrupts Manifest.toml.
 cl_check_julia_version () {
-    local mv lv
-    mv="$(cl_manifest_julia_version || true)"
+    local mv lv mrc mf
+    mv="$(cl_manifest_julia_version)"; mrc=$?
+    mf="$(cl_manifest_path || true)"
     lv="$(cl_loaded_julia_version || true)"
     if [[ -z "${lv}" ]]; then echo "  julia not on PATH — load the module first"; return 2; fi
-    if [[ -z "${mv}" ]]; then echo "  Manifest.toml absent or has no julia_version — a resolve will create it"; return 1; fi
+    if [[ ${mrc} -eq 2 ]]; then
+        echo "  NO MANIFEST at ${mf} — a resolve creates it"
+        echo "  (ENV_STEP=resolve moves an incompatible manifest aside and writes a new one;"
+        echo "   a tree with no manifest at all means that resolve did not finish.)"
+        return 1
+    fi
+    if [[ -z "${mv}" ]]; then echo "  $(basename "${mf}") has no julia_version line — a resolve rewrites it"; return 1; fi
     if [[ "$(_cl_majmin "${mv}")" == "$(_cl_majmin "${lv}")" ]]; then
-        echo "  Manifest julia_version=${mv} matches loaded julia ${lv}"
+        echo "  $(basename "${mf}") julia_version=${mv} matches loaded julia ${lv}"
         return 0
     fi
-    echo "  Manifest julia_version=${mv} does NOT match loaded julia ${lv}"
+    echo "  $(basename "${mf}") julia_version=${mv} does NOT match loaded julia ${lv}"
     return 1
 }
 
@@ -234,16 +271,20 @@ _cl_json_get () {  # _cl_json_get <file> <key>  (flat one-key-per-line JSON)
     sed -n "s/.*\"$2\"[[:space:]]*:[[:space:]]*\"\([^\"]*\)\".*/\1/p" "$1" | head -1
 }
 
+# The sidecar's manifest_sha256 has to be taken over the manifest JULIA reads, which is
+# what cl_manifest_path resolves — a sha of a Manifest.toml that Pkg ignores in favour of
+# a version-pinned twin would compare a file nothing loads against a build nothing broke.
 cl_manifest_sha () {
-    [[ -f "${CL_ROOT}/Manifest.toml" ]] || { echo "none"; return 0; }
-    sha256sum "${CL_ROOT}/Manifest.toml" 2>/dev/null | cut -d' ' -f1
+    local mf
+    mf="$(cl_manifest_path)" || { echo "none"; return 0; }
+    sha256sum "${mf}" 2>/dev/null | cut -d' ' -f1
 }
 
 # cl_sysimage_verdict TARGET -> prints a verdict, returns 0 OK / 1 refuse.
 # Login-node safe: runs signals (a) (b) (c-version/sha) only. The node-local
 # cpu_target check needs the node, so it lives in cl_require_sysimage.
 cl_sysimage_verdict () {
-    local tgt="$1" img side rc=0 sv ss lv
+    local tgt="$1" img side rc=0 sv ss lv mf
     img="$(cl_sysimage_for "${tgt}")" || return 2
     side="${img}.json"
     if [[ ! -f "${img}" ]]; then
@@ -251,7 +292,8 @@ cl_sysimage_verdict () {
         echo "     REMEDIATION: $(cl_sysimage_build_cmd "${tgt}")"
         return 1
     fi
-    if [[ -f "${CL_ROOT}/Manifest.toml" && "${CL_ROOT}/Manifest.toml" -nt "${img}" ]] \
+    mf="$(cl_manifest_path || true)"
+    if [[ -f "${mf}" && "${mf}" -nt "${img}" ]] \
        || [[ -f "${CL_ROOT}/Project.toml" && "${CL_ROOT}/Project.toml" -nt "${img}" ]]; then
         echo "  ${tgt}: Manifest/Project.toml is NEWER than $(basename "${img}") (mtime pre-filter)"
         rc=1
@@ -287,6 +329,32 @@ cl_sysimage_verdict () {
 # cl_require_sysimage TARGET: the in-job hard gate. On success it sets the global
 # array CL_JULIA_SYS=(--sysimage <img>); on failure it either exits 1 (default) or,
 # with ALLOW_SYSIMAGE_FALLBACK=1, clears CL_JULIA_SYS and continues loudly.
+# ── The two BUILD PROBES the RC phase decides from, and the gate has to agree with.
+#
+# blp_run.sh decides whether to submit the sysimage build and the draws build by looking
+# at these exact artifacts on disk; gate G0 runs BEFORE either job exists and must not
+# refuse the run for the absence of the very things the run is about to create. Two
+# callers, one implementation, so "what blp_run.sh will build" and "what G0 excuses" are
+# the same predicate rather than two lists that drift apart.
+#
+# cl_sysimage_missing: 0 (true) when the image OR its provenance sidecar is absent. The
+# sidecar counts: cl_require_sysimage refuses an unstamped image at run time, so an image
+# without one is not a usable image and has to be rebuilt exactly like a missing one.
+cl_sysimage_missing () {   # cl_sysimage_missing gpu|cpu
+    local img; img="$(cl_sysimage_for "$1")" || return 2
+    [[ -f "${img}" && -f "${img}.json" ]] && return 1
+    return 0
+}
+# cl_draws_missing: 0 (true) when THIS R/seed's draws are not both on disk. demo_draws
+# itself is deliberately not tested — it is the 14 GB member, written in the same job as
+# the key index, so the index stands in for it and no stat lands on a file that may be
+# mid-split.
+cl_draws_missing () {   # cl_draws_missing <R> <SEED>
+    [[ -f "${CL_STEP_DRAWS}/halton_nu_R${1}_seed${2}.jls" \
+    && -f "${CL_STEP_DRAWS}/demo_key_index_R${1}_seed${2}.jls" ]] && return 1
+    return 0
+}
+
 cl_require_sysimage () {
     local tgt="$1" img side want got
     CL_JULIA_SYS=()

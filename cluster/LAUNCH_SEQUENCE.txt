@@ -85,12 +85,21 @@
      sbatch --partition=day --time=02:00:00 --cpus-per-task=8 --mem=32G \
             --export=ALL,ENV_STEP=resolve env_job.sh
 
+   THIS STEP BELONGS AFTER EVERY CODE-BUNDLE UPLOAD, not only the first one.
+   The bundle carries the Manifest.toml resolved on the LOCAL machine (Julia
+   1.12.6 as staged), unzip -o overwrites whatever the cluster's own resolve
+   wrote, and Bouchet loads Julia 1.11.4 - so a re-upload puts the mismatch back
+   and gate G0 blocks at section (3) with "RESOLVE REQUIRED: yes".
+
    Wait for COMPLETED (squeue -u $USER) and submit nothing else meanwhile:
    concurrent Pkg.resolve() on NFS corrupts Manifest.toml. This is the sole
-   Pkg.resolve() site; it backs the manifest up to Manifest.toml.bak.<ver> first
-   and installs into scripts/.julia_depot, which is the depot every job reads.
+   Pkg.resolve() site; it backs the manifest up to Manifest.toml.bak.<ver>,
+   moves it aside, resolves, and RESTORES the backup if the resolve leaves no
+   readable manifest - so a failed resolve cannot leave the tree with none. It
+   installs into scripts/.julia_depot, which is the depot every job reads.
 
      ls .julia_depot/packages/ | head          # sanity check afterwards
+     grep julia_version Manifest.toml          # must read 1.11.x before step 4
 
    If the module name has drifted, the log prints the parsed candidates:
      export JULIA_MODULE=<candidate>           # every script reads it from cluster_lib.sh

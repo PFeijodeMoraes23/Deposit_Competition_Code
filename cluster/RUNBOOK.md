@@ -99,10 +99,20 @@ sbatch --partition=day --time=02:00:00 --cpus-per-task=8 --mem=32G \
        --export=ALL,ENV_STEP=resolve env_job.sh
 ```
 
+**Run this after every code-bundle upload, not only the first.** The bundle ships the
+`Manifest.toml` resolved on the local machine (Julia 1.12.6 as staged), `unzip -o` overwrites
+whatever the cluster's own resolve wrote, and Bouchet loads Julia 1.11.4 — so a re-upload puts the
+mismatch back and gate G0 blocks at section (3). `grep julia_version Manifest.toml` must read
+`1.11.x` before step 2.
+
 Wait for it (`squeue -u $USER`) and submit nothing else meanwhile — concurrent `Pkg.resolve()` on NFS
 corrupts `Manifest.toml`. This is the sole `Pkg.resolve()` site. It backs the manifest up to
 `Manifest.toml.bak.<ver>`, derives the accepted version from the **loaded** Julia rather than a
-hardcoded literal, and installs into `scripts/.julia_depot` — the depot every job reads.
+hardcoded literal, and installs into `scripts/.julia_depot` — the depot every job reads. An
+incompatible manifest is moved aside before the resolve and **restored if the resolve leaves no
+readable manifest**, so a resolve that dies (a `day` node with no route to the registry, a wall
+kill) cannot leave the tree with no manifest at all — the state that made `.gate_G0.json` report an
+empty `manifest_julia_version`.
 
 That depot is the point. A resolve that installs into `~/.julia` reports "all key packages loaded OK"
 and the next job still dies on `Package Parquet2 … is required but does not seem to be installed`:

@@ -237,6 +237,21 @@ cl_banner "FULL PIPELINE$([[ "${CL_DRYRUN}" == "1" ]] && echo '  [DRY RUN — no
           "sleep routines='${SLEEP_ROUTINES}'  stage=${CF_STAGE}  R=${R}  seed=${SEED}" \
           "phases: sleep=${DO_SLEEP} logit=${DO_LOGIT} blp=${DO_BLP} bbl=${DO_BBL} cf=${DO_CF} cfeq=${DO_CFEQ}"
 
+# TWO routine sets, and the CF phase consumes what the sleepiness phase produced.
+# sleep_run.sh runs the CF4 upsilon export for SLEEP_ROUTINES, and cf_run.sh preflights an
+# upsilon_pix/phi^noPix pair for every routine in ROUTINES; a routine in the second set and
+# not the first therefore has no pair to open, and the run dies at the group-C continuation
+# — a day into the schedule, in a job whose refusal nobody is watching for. Said here, at
+# t=0, where narrowing one set is still a keystroke away.
+for _k in ${ROUTINES}; do
+    case " ${SLEEP_ROUTINES} " in
+        *" ${_k} "*) ;;
+        *) cl_err "[!] routine ${_k} is in --routines but not in --sleep-routines ('${SLEEP_ROUTINES}')."
+           cl_err "    Its CF4 pair (upsilon_pix_E${_k}, phi_nopix_E${_k}) is never produced, and the CF"
+           cl_err "    phase refuses on it hours from now. Widen --sleep-routines or narrow --routines." ;;
+    esac
+done
+
 ALL_JIDS=""
 add_jid () { [[ -n "$1" ]] && ALL_JIDS="${ALL_JIDS:+${ALL_JIDS}:}$1"; return 0; }
 
@@ -337,15 +352,42 @@ defer_to () {   # defer_to <phase> <dep_ids>
 # It echoes the job id on stdout and its narration on stderr, so
 # `G0_JID="$(submit_g0)"` captures an id and not a paragraph.
 submit_g0 () {
-    local wb="" jid
-    # The preflight cannot know that the BLP phase BUILDS the sysimage and the draws
-    # when they are absent; without --will-build it reports them missing and refuses a
-    # run that was always going to create them. Derived from --blp-args, the only place
-    # a caller can force those builds, so the two cannot disagree. blp_run.sh's own
-    # auto-build is silent here on purpose: it decides from disk, at its own submit
-    # time, and by then G0 has already run.
-    [[ "${BLP_ARGS}" == *--sysimage* ]] && wb="${wb} sysimage"
-    [[ "${BLP_ARGS}" == *--draws*    ]] && wb="${wb} draws"
+    local wb="" jid t need_sys=0 need_draws=0
+    # The preflight cannot know that the BLP phase BUILDS the sysimage and the draws when
+    # they are absent; without --will-build it reports them missing and refuses a run that
+    # was always going to create them. TWO sources say what this run will build, and both
+    # are needed:
+    #
+    #   the FLAGS. --blp-args is the only place a caller forces a build that the disk does
+    #   not ask for, so a forced rebuild is excused even though the artifact is present.
+    #
+    #   the DISK. A bare `sbatch pipeline_all.sh` carries no blp-args at all — auto-build
+    #   made the flags unnecessary — so flags alone leave wb empty and the two missing
+    #   sysimages of an empty cluster read as hard blockers, which cancels the entire
+    #   chain at G0. The probe has to live here because G0 runs long before the BLP phase
+    #   exists to speak for itself, and it is the SAME predicate blp_run.sh decides from
+    #   (cl_sysimage_missing / cl_draws_missing in cluster_lib.sh), so the gate cannot
+    #   excuse something the builder will not build, or refuse something it will.
+    #
+    # Only when the BLP phase is part of THIS run: with --no-blp nothing builds either
+    # artifact and their absence is a real blocker again. These are stats, not work — the
+    # login-node ban is on running the toolchain, not on reading a directory.
+    [[ "${BLP_ARGS}" == *--sysimage* ]] && need_sys=1
+    [[ "${BLP_ARGS}" == *--draws*    ]] && need_draws=1
+    if [[ "${DO_BLP}" == "1" ]]; then
+        # Both targets, one token: blp_run.sh's decision is taken on the GPU image but the
+        # job it then submits builds the CPU twin in the same breath, so either one missing
+        # is answered by the same build and de-duplicates to the same "sysimage".
+        for t in gpu cpu; do
+            if cl_sysimage_missing "${t}"; then need_sys=1; fi
+        done
+        if cl_draws_missing "${R}" "${SEED}"; then need_draws=1; fi
+    fi
+    [[ ${need_sys}   -eq 1 ]] && wb="${wb} sysimage"
+    [[ ${need_draws} -eq 1 ]] && wb="${wb} draws"
+    # >&2 like every other line in this function: the caller runs it inside $( ), so
+    # anything on stdout but the job id lands in G0_JID and poisons the dependency.
+    cl_log "  G0 --will-build='${wb# }'  (blp phase=${DO_BLP}; sysimage/draws probed on disk at R=${R}/seed=${SEED})" >&2
     jid=$(cl_sbatch -J pipe_G0 --partition="${SLEEP_PARTITION:-day}" --time=00:30:00 \
         --nodes=1 --ntasks=1 --cpus-per-task=2 --mem=8G \
         --export=ALL,ENV_STEP=preflight,PF_ROUTINES="${SLEEP_ROUTINES}",PF_WILL_BUILD="${wb# }" \

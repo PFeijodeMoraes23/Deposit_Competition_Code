@@ -143,6 +143,10 @@ fi
 # ── (3) manifest vs loaded julia — does a resolve have to happen? ────────────
 echo ""
 echo "(3) MANIFEST vs LOADED JULIA"
+# The path first, then the verdict. Which file Julia reads is decided by
+# Base.manifest_names() (a version-pinned twin wins over the plain name), and a verdict
+# that does not name it cannot be checked against the tree by whoever reads this block.
+echo "  manifest file: $(cl_manifest_path || true)"
 cl_check_julia_version
 RESOLVE_RC=$?
 if [[ ${RESOLVE_RC} -eq 0 ]]; then
@@ -151,9 +155,12 @@ else
     echo "RESOLVE REQUIRED: yes"
     echo ""
     echo "  REMEDIATION -----------------------------------------------------------"
-    echo "  Manifest.toml was resolved under a different Julia. Re-resolve it ONCE,"
-    echo "  ALONE, through env_job.sh — never concurrently, never inside an array"
-    echo "  job (concurrent Pkg.resolve() on NFS corrupts Manifest.toml):"
+    echo "  The manifest was resolved under a different Julia — or is not there at all."
+    echo "  EVERY code-bundle upload re-introduces this: the bundle carries the manifest"
+    echo "  resolved on the LOCAL machine, and unzip -o overwrites whatever the cluster's"
+    echo "  own resolve wrote. So this step belongs after every upload, not only the first."
+    echo "  Re-resolve ONCE, ALONE, through env_job.sh — never concurrently, never inside"
+    echo "  an array job (concurrent Pkg.resolve() on NFS corrupts the manifest):"
     echo ""
     echo "      sbatch --partition=day --time=00:30:00 --cpus-per-task=4 --mem=16G \\"
     echo "             --export=ALL,ENV_STEP=resolve env_job.sh"

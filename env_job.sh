@@ -172,11 +172,32 @@ preflight)
     echo ""
     echo "=== (1) TOOLCHAIN IDENTITY ==="
     JV="$(cl_loaded_julia_version || echo '')"
-    MV="$(cl_manifest_julia_version || echo '')"
+    # The manifest read is reported as PATH + VERSION + REASON, never as a bare string.
+    # .gate_G0.json once carried manifest_julia_version:"" next to a healthy julia_version
+    # and a passing input check, and an empty string cannot say which of the two states it
+    # meant: no manifest on disk at all (ENV_STEP=resolve moves an incompatible one aside
+    # before it rewrites it, so a resolve that does not finish leaves the tree with none),
+    # or a manifest present but carrying no julia_version line. cl_manifest_julia_version
+    # returns 2 and 1 for those; the reason string below is what the gate records.
+    MF_PATH="$(cl_manifest_path || true)"
+    set +e
+    MV="$(cl_manifest_julia_version)"; MV_RC=$?
+    set -e
+    case "${MV_RC}" in
+        0) MV_WHY="read from $(basename "${MF_PATH}")" ;;
+        1) MV_WHY="$(basename "${MF_PATH}") exists but has NO julia_version line" ;;
+        *) MV_WHY="NO manifest file at ${MF_PATH} — the resolve did not leave one" ;;
+    esac
     echo "  julia module   ${JULIA_MODULE}  -> ${JV:-<did not load>}"
-    echo "  manifest       julia_version = ${MV:-<none>}"
+    echo "  manifest file  ${MF_PATH}"
+    echo "  manifest       julia_version = ${MV:-<none>}   (${MV_WHY})"
+    # MANIFEST_MATCH is derived from the SAME two strings the json reports, by the same
+    # major.minor comparison cl_check_julia_version makes, so the boolean and the printed
+    # verdict below cannot disagree about a tree neither of them changed.
     MANIFEST_MATCH=false
-    if [[ "${JULIA_LOADED}" == "1" ]] && cl_check_julia_version; then MANIFEST_MATCH=true; fi
+    if [[ "${JULIA_LOADED}" == "1" && -n "${JV}" && -n "${MV}" \
+       && "$(_cl_majmin "${MV}")" == "$(_cl_majmin "${JV}")" ]]; then MANIFEST_MATCH=true; fi
+    cl_check_julia_version || true
     echo "  resolve required: $([[ "${MANIFEST_MATCH}" == "true" ]] && echo no || echo yes)"
 
     echo ""
@@ -280,7 +301,9 @@ print(int(stamp) if stamp is not None else -1)
   "will_build": "${PF_WILL_BUILD}",
   "julia_module": "${JULIA_MODULE}",
   "julia_version": "${JV}",
+  "manifest_path": "${MF_PATH}",
   "manifest_julia_version": "${MV}",
+  "manifest_read": "${MV_WHY}",
   "manifest_match": ${MANIFEST_MATCH},
   "sysimage_gpu": "${SYS_GPU}",
   "sysimage_cpu": "${SYS_CPU}",
@@ -315,31 +338,86 @@ resolve)
     # The accepted version is derived from the LOADED julia, not from a hardcoded
     # '1.11' literal, so this keeps working whatever module the cluster offers.
     ACCEPT="$(julia -e 'print(VERSION.major, ".", VERSION.minor)')"
-    MF="${CL_ROOT}/Manifest.toml"
+    MF="$(cl_manifest_path || true)"
+    MF_BAK=""
     echo "Accepted manifest julia_version prefix: ${ACCEPT}"
     if [[ -f "${MF}" ]]; then
-        MV="$(cl_manifest_julia_version || echo unknown)"
-        echo "Found Manifest.toml (julia_version = ${MV})"
+        # Two steps, not `$(f || echo unknown)`: on a manifest that exists but carries no
+        # julia_version the function prints an empty line AND returns non-zero, so the
+        # fallback would append to it and MV would hold an embedded newline — which then
+        # goes into the backup FILENAME below.
+        MV="$(cl_manifest_julia_version || true)"; MV="${MV:-unknown}"
+        echo "Found $(basename "${MF}") (julia_version = ${MV})"
         if [[ "${MV}" == ${ACCEPT}.* || "${MV}" == "${ACCEPT}" ]]; then
             echo "  compatible with ${ACCEPT} — keeping; this run only instantiates + precompiles."
         else
-            cp -f "${MF}" "${MF}.bak.${MV}"
-            echo "  incompatible with ${ACCEPT} — backed up to $(basename "${MF}").bak.${MV}, removing before the resolve."
+            # The manifest has to be out of the way before the resolve — Pkg will not
+            # downgrade one resolved under a newer Julia — but moving it aside is the step
+            # that can leave the tree with NO manifest at all, and every consumer of
+            # cl_manifest_julia_version then reports an empty version with no way to say
+            # why. So the removal is paired with a restore: MF_BAK holds the original
+            # until the resolve has both exited zero and left a parsable manifest behind,
+            # and the trap below puts it back on any other outcome, including a wall-kill.
+            MF_BAK="${MF}.bak.${MV}"
+            cp -f "${MF}" "${MF_BAK}"
+            echo "  incompatible with ${ACCEPT} — backed up to $(basename "${MF_BAK}") and moved aside for the resolve."
+            echo "  (it is restored automatically if the resolve does not produce a usable manifest)"
             rm -f "${MF}"
+            trap 'if [[ -n "${MF_BAK}" && -f "${MF_BAK}" && ! -f "${MF}" ]]; then
+                      cp -f "${MF_BAK}" "${MF}"
+                      echo "  [restore] the resolve left no manifest — put $(basename "${MF_BAK}") back at $(basename "${MF}")." >&2
+                  fi' EXIT
         fi
     else
-        echo "No Manifest.toml — the resolve will create one."
+        echo "No manifest at ${MF} — the resolve will create one."
     fi
 
     echo ""
     echo "=== Resolving packages: $(date) ==="
+    # Registry.update is ADVISORY here. It is the one step in this job that wants the
+    # network, `day` nodes do not always have it, and an uncaught throw would abort the
+    # resolve after the manifest has already been moved aside — turning a stale registry
+    # into a tree with no manifest. The resolve itself then either succeeds against the
+    # registry already in the depot or fails on its own terms, which is a verdict worth
+    # having; a registry that could not be refreshed is not.
     julia --project="${CL_ROOT}" -e '
         using Pkg
-        println("  Updating package registry...");  Pkg.Registry.update()
+        # A resolve needs a registry to look package UUIDs up in, and this depot is
+        # project-local: a fresh one has NO registry at all. Registry.update() only
+        # refreshes registries that are already installed -- on an empty depot it
+        # succeeds having done nothing, and the resolve then dies on the first package
+        # it cannot find ("expected package CUDA [052768ef] to be registered"), which
+        # reads like a broken environment rather than a missing index. So: install
+        # General when nothing is reachable, refresh it when something is.
+        regs = try Pkg.Registry.reachable_registries() catch; [] end
+        if isempty(regs)
+            println("  No registry in this depot — installing General...")
+            Pkg.Registry.add("General")
+        else
+            println("  Updating package registry (", length(regs), " installed)...")
+            try
+                Pkg.Registry.update()
+            catch err
+                println("  [!] registry update failed: ", sprint(showerror, err))
+                println("      continuing against the registry already in this depot.")
+            end
+        end
         Pkg.resolve();      println("  Manifest written.")
         Pkg.instantiate();  println("  Packages installed.")
         Pkg.precompile();   println("  Precompilation done.")
     '
+
+    # The resolve is only done when a manifest Julia can read is back on disk. Exiting
+    # zero here without one is how the NEXT run's gate G0 ends up reporting an empty
+    # manifest_julia_version about a resolve that was believed to have worked.
+    MF="$(cl_manifest_path || true)"
+    if ! cl_manifest_julia_version >/dev/null; then
+        echo "ERROR: the resolve exited zero but left no readable manifest at ${MF}." >&2
+        echo "  The backup is restored on exit; re-run this step once the cause is fixed." >&2
+        exit 1
+    fi
+    # Nothing left to restore: the tree carries a usable manifest again.
+    MF_BAK=""; trap - EXIT
 
     echo ""
     echo "=== Smoke test: $(date) ==="
@@ -371,7 +449,7 @@ resolve)
     fi
 
     echo ""
-    echo "Manifest.toml now records: $(cl_manifest_julia_version)"
+    echo "$(basename "${MF}") now records: $(cl_manifest_julia_version)"
     echo "NEXT: bash cluster_preflight.sh   (it should now print 'RESOLVE REQUIRED: no')"
     ;;
 
