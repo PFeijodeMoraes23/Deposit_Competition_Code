@@ -11,3 +11,4 @@ Manifest.toml
 .env
 
 audit/_audit_output/
+.env
