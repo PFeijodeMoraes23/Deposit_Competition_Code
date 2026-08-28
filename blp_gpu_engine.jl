@@ -1,28 +1,28 @@
-# blp_gpu_engine.jl
+# blp_engine_gpu.jl
 # =================
 # AUTO-GENERATED 2026-06-24 — merge of the three GPU engine files, in the order Julia
 # loaded them on the IFT path:
 #   blp_2_estimation.jl (IFT CPU) + blp_1_estimation_gpu.jl (numerical GPU)
 #   + blp_2_estimation_gpu.jl (IFT GPU).
-# The shared CPU baseline blp_1_estimation.jl is KEPT as a separate file (it's also used
-# CPU-only, without CUDA, by foundation_demand_eval.jl) and is include()d below.
+# The shared CPU baseline blp_engine_cpu.jl is KEPT as a separate file (it's also used
+# CPU-only, without CUDA, by cf_demand_eval.jl) and is include()d below.
 # Inter-file include()s were dropped; the two GPU entrypoints were renamed
 #   main_gpu (blp_1 numerical) -> main_gpu_numerical ;  main_gpu (blp_2 IFT) -> main_gpu_ift
-# so both engines coexist. blp_2_rc.jl include()s this file and calls the right
+# so both engines coexist. blp_rc.jl include()s this file and calls the right
 # one per BLP_ENGINE; for DIRECT execution the single dispatch block at the bottom
 # picks the engine from BLP_ENGINE (default ift).
 # EDIT THIS FILE for engine changes (the three originals were removed).
 
-# CPU baseline — separate file (shared CPU-only with foundation_demand_eval.jl).
+# CPU baseline — separate file (shared CPU-only with cf_demand_eval.jl).
 # The isdefined guard makes this load-once: several drivers reach the baseline both through this
 # engine and on their own CPU-only path. `Base.include(Main, …)` is what a top-level `include` call
 # expands to, spelled so the static include graph carries one edge per driver instead of two.
 if !isdefined(Main, :X_COLS)
-    Base.include(Main, joinpath(@__DIR__, "blp_1_estimation.jl"))
+    Base.include(Main, joinpath(@__DIR__, "blp_engine_cpu.jl"))
 end
 
 # The three entry points below resolve their demand parquet through `demand_parquet_path`,
-# defined in blp_1_estimation.jl alongside `get_paths`/`input_filename` and pulled in by the
+# defined in blp_engine_cpu.jl alongside `get_paths`/`input_filename` and pulled in by the
 # include above (`demand_search_dirs`: the single directory the prep step writes —
 # data/output/demand_prep on the cluster, the local DEMAND_PREP off it).
 
@@ -32,7 +32,7 @@ blp_2_estimation.jl
 ===================
 BLP demand estimation with IFT (Implicit Function Theorem) analytical gradient.
 
-Key difference from blp_1_estimation.jl
+Key difference from blp_engine_cpu.jl
 -----------------------------------------
 blp_1 computes ∂Q/∂θ₂ via Optim's built-in numerical finite differences, which
 requires (n_params + 1) full inner-loop evaluations per outer L-BFGS step.
@@ -82,7 +82,7 @@ Local test
 
 # Load all shared BLP functions from blp_1_estimation.jl.
 # The `if abspath(PROGRAM_FILE) == @__FILE__` guard there prevents auto-execution.
-# [merged] include(joinpath(@__DIR__, "blp_1_estimation.jl"))
+# [merged] include(joinpath(@__DIR__, "blp_engine_cpu.jl"))
 
 # ==========================================================================
 # 8. IFT Analytical Gradient
@@ -625,7 +625,7 @@ Usage (cluster GPU node)
 # Check if baseline has already been loaded (e.g., via blp_2_estimation.jl)
 # to avoid constant redefinition warnings when both blp_1 and blp_2 GPU scripts run.
 if !isdefined(Main, :X_COLS)
-# [merged] include(joinpath(@__DIR__, "blp_1_estimation.jl"))
+# [merged] include(joinpath(@__DIR__, "blp_engine_cpu.jl"))
 end
 
 using CUDA
@@ -1468,7 +1468,7 @@ end
     gmm_objective_cue_gpu!(...same as gmm_objective_gpu! + opts::CueOpts[, alpha0])
 
 CUE twin of `gmm_objective_gpu!` (BLP_ENGINE=cue): identical GPU contraction, then the clustered
-continuously-updated fixed point (`cue_fixed_point`, blp_1_estimation.jl §7b) instead of the fixed-W
+continuously-updated fixed point (`cue_fixed_point`, blp_engine_cpu.jl §7b) instead of the fixed-W
 one-step. W0 is retained only for the one-time self-check log. With `alpha0 !== nothing` it runs the
 Stock–Wright variant (`cue_fixed_point_alpha0`): α pinned, β-only concentration → S(α₀).
 Q is in Hansen-J units (N-scaled) — NOT comparable to the ift/numerical Q.
@@ -2133,7 +2133,7 @@ Usage (Bouchet H200 cluster)
 """
 
 # ── CPU baseline (IFT) ───────────────────────────────────────────────────────
-# The IFT gradient code (formerly blp_2_estimation.jl, which included blp_1_estimation.jl)
+# The IFT gradient code (formerly blp_2_estimation.jl, which included blp_engine_cpu.jl)
 # is merged inline into this engine.
 
 using CUDA
@@ -2596,7 +2596,7 @@ function run_blp_estimation_ift_gpu(estim::Int, spec_id::Int, args,
     g_obj!(G, t2) = (ift_compute_gpu!(t2); copyto!(G, cache_grad); G)
     # ── SE-ONLY: skip the outer optimisation, recompute SEs from this stage's checkpoint ──────
     # The SE routine runs strictly AFTER optimisation, so a change confined to it (e.g. the
-    # degenerate-direction profiling in se_common.jl) provably cannot move the point estimates.
+    # degenerate-direction profiling in blp_se_common.jl) provably cannot move the point estimates.
     # We reload θ₂* (and δ*) and do ONE objective evaluation instead of a full L-BFGS-B solve —
     # a ~1.5 h/routine stage becomes a couple of minutes. δ* warm-starts the inner contraction at
     # its own fixed point, so that single evaluation converges immediately and leaves every GPU
@@ -2833,7 +2833,7 @@ end
 # [merged: per-file autorun removed — see dispatch at end]
 
 # ── Single entrypoint for DIRECT execution ──────────────────────────────────────
-# Inert when this file is include()d (PROGRAM_FILE != @__FILE__), e.g. by the blp_2_rc.jl
+# Inert when this file is include()d (PROGRAM_FILE != @__FILE__), e.g. by the blp_rc.jl
 # driver, which calls main_gpu_ift()/main_gpu_numerical() itself.
 if abspath(PROGRAM_FILE) == @__FILE__
     let _eng = lowercase(get(ENV, "BLP_ENGINE", "ift"))
@@ -2843,7 +2843,7 @@ if abspath(PROGRAM_FILE) == @__FILE__
         # Likewise, a non-ift engine with an empty suffix writes to the ift filenames.
         if _eng != "ift" && isempty(output_suffix())
             error("BLP_ENGINE=$(_eng) with an empty BLP_OUTPUT_SUFFIX would overwrite the " *
-                  "production (IFT) artifacts. Run via blp_2_rc.jl, which sets the suffix, or " *
+                  "production (IFT) artifacts. Run via blp_rc.jl, which sets the suffix, or " *
                   "export BLP_OUTPUT_SUFFIX explicitly.")
         end
         _eng == "ift" ? main_gpu_ift() : main_gpu_numerical()

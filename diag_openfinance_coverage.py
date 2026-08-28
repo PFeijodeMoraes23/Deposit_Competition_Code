@@ -33,7 +33,7 @@ logging.basicConfig(level=logging.INFO, format="%(message)s")
 log = logging.getLogger(__name__)
 
 from utils import paths
-import panel_9_cosif_fees as p9
+import panel_fee_merge as p9
 import sys
 
 # Windows consoles default to cp1252 and raise UnicodeEncodeError on any non-ASCII

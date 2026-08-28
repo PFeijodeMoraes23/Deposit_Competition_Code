@@ -1,5 +1,5 @@
 """
-cf_6_merger.jl
+cf6_merger.jl
 ==============
 CF6 — merger simulation (SCAFFOLD, reuses the CF3 equilibrium engine).
 
@@ -14,11 +14,11 @@ SCAFFOLD: products stay distinct (demand unchanged); only the pricing decision i
 post-merger cost synergies. Runs at logit for validation; the headline needs RC costs (cluster).
 
 Local dev (auto-picks the two biggest choosers if --merge is omitted):
-  julia --project=. cf_6_merger.jl --estim 6 --spec 12 --stage logit --R 50 \\
+  julia --project=. cf6_merger.jl --estim 6 --spec 12 --stage logit --R 50 \\
       --time-filter 2025Q4 --n-markets 15 [--merge "CONGL_A,CONGL_B"]
 """
 
-include(joinpath(@__DIR__, "cf_3_equilibrium_spreads.jl"))
+include(joinpath(@__DIR__, "cf3_equilibrium.jl"))
 
 using Printf, Statistics
 

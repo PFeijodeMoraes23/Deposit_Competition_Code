@@ -1,5 +1,5 @@
 """
-blp_2_rc.jl
+blp_rc.jl
 ===========
 Orchestrator for the random-coefficients BLP estimation on the Yale Bouchet HPC
 cluster (GPU), specification 12.
@@ -24,7 +24,7 @@ warm-started from the δ the logit step produced beforehand:
     logit_delta_E{k}_spec_12.bin    (the engine resolves it in data/input, where a
                                      hand-staged delta may be uploaded, then in the logit
                                      step folder `logit_dir(out_dir)` — data/output/logit —
-                                     which is where blp_1_logit.jl writes it in either tree)
+                                     which is where blp_logit.jl writes it in either tree)
 
 (the logit step owns those files; this orchestrator only
 *consumes* them — see `warm_start_path`).  If a delta is missing the
@@ -36,23 +36,23 @@ Results/checkpoints/summaries are written un-suffixed for the IFT engine, e.g.
 engines never clobber each other (via ENV["BLP_OUTPUT_SUFFIX"]).
 
 This file is a THIN driver over the merged GPU estimation engine
-(`blp_gpu_engine.jl`, IFT analytical gradient by default).  It does not re-implement the
+(`blp_engine_gpu.jl`, IFT analytical gradient by default).  It does not re-implement the
 estimation; it only fixes spec=12, maps routine -> `--estim`, and forwards engine
 flags.  Switch to the numerical-gradient engine by exporting `BLP_ENGINE=numerical`.
 
 Usage
 -----
   # one routine (one GPU job — the normal cluster pattern):
-  julia --project=. --threads=auto blp_2_rc.jl --estim 6 --hpc --R 2000
+  julia --project=. --threads=auto blp_rc.jl --estim 6 --hpc --R 2000
 
   # the default routine set (E3 + E4) sequentially on a single GPU:
-  julia --project=. --threads=auto blp_2_rc.jl --all --hpc --R 2000
+  julia --project=. --threads=auto blp_rc.jl --all --hpc --R 2000
 
   # every discovered routine sequentially on a single GPU:
-  julia --project=. --threads=auto blp_2_rc.jl --all-routines --hpc --R 2000
+  julia --project=. --threads=auto blp_rc.jl --all-routines --hpc --R 2000
 
   # local dry-run timing (needs a CUDA GPU):
-  julia --project=. blp_2_rc.jl --estim 6 --dry-run
+  julia --project=. blp_rc.jl --estim 6 --dry-run
 
 Routines are selected via `--estim N` / `--all` / `--all-routines`; the cluster submit
 scripts (`submit_blp_rc_{all,grouped,stage}.sh`) drive this for the chains.
@@ -66,7 +66,7 @@ isdefined(Main, :ROUTINE_REGISTRY) || include(joinpath(@__DIR__, "routines.jl"))
 const RC_SPEC = SPEC12_ID
 
 # Warm-start delta suffix. The engine builds its warm-start filename from
-# ENV["BLP_DELTA_SUFFIX"]; the logit step (blp_1_logit.jl) writes the un-suffixed
+# ENV["BLP_DELTA_SUFFIX"]; the logit step (blp_logit.jl) writes the un-suffixed
 # logit_delta_E{k}_spec_12.{bin,jls} into `logit_dir(out_dir)`, so the default "" is correct.
 const DELTA_SUFFIX = ""
 
@@ -120,10 +120,10 @@ end
 # and their +Time variants, read from config/routines.toml's `link_ests`.
 # Override with the ROUTINES env in the submit scripts, or --all-routines for all.
 
-# Estimation engine (GPU). Both engines live in blp_gpu_engine.jl: the IFT analytical
+# Estimation engine (GPU). Both engines live in blp_engine_gpu.jl: the IFT analytical
 # gradient (`main_gpu_ift`, default) and the numerical finite-difference engine
 # (`main_gpu_numerical`, BLP_ENGINE=numerical). They share input_filename,
-# get_paths, log_status, … and the CPU baseline blp_1_estimation.jl (include()d there).
+# get_paths, log_status, … and the CPU baseline blp_engine_cpu.jl (include()d there).
 const ENGINE = lowercase(get(ENV, "BLP_ENGINE", "ift"))
 # Engine → output suffix. This Dict is the ONLY authority for suffixes, and membership in it is the
 # engine allow-list. Guard placed BEFORE the engine include below so a typo fails in <1s with no CUDA
@@ -136,7 +136,7 @@ haskey(ENGINE_SUFFIX, ENGINE) || error(
     "would fall through to IFT with an empty output suffix and overwrite the production artifacts.")
 
 if !isdefined(Main, :main_gpu_ift)
-    include(joinpath(@__DIR__, "blp_gpu_engine.jl"))
+    include(joinpath(@__DIR__, "blp_engine_gpu.jl"))
 end
 
 """Resolve the expected warm-start delta path for a routine, in the SAME order the engine

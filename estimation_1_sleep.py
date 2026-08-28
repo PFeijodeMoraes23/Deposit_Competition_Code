@@ -1,5 +1,5 @@
 """
-estimation_1_sleep.py
+sleep_est_e1.py
 ================================================================================
 Estimates the depositor sleepiness function (Eq-11 and Eq-12) for B-type institutions,
 then immediately computes the local phi_mt and national phi_t aggregates.
@@ -18,7 +18,7 @@ Pipeline stages
 
 Usage
 -----
-  python estimation_1_sleep.py
+  python sleep_est_e1.py
 
 CLI Flags
 ---------
@@ -27,7 +27,7 @@ CLI Flags
 
 CLI Options:
 ------------
-usage: estimation_1_sleep.py [-h] [--skip-estimation] [--skip-phi]
+usage: sleep_est_e1.py [-h] [--skip-estimation] [--skip-phi]
 
 Unified Estimation 1 Sleep script.
 
@@ -109,7 +109,7 @@ def apply_imbalanced_cluster_correction(res, cluster_series, periods=None):
     """Delegates to the E2 implementation so there is ONE inference path (and one place
     where the national-regressor SEs get attached). E1 previously carried a byte-identical
     copy of this helper, which is how the two drifted before."""
-    from estimation_2_sleep import apply_imbalanced_cluster_correction as _apply
+    from sleep_est_e2 import apply_imbalanced_cluster_correction as _apply
     return _apply(res, cluster_series, periods=periods)
 
 def demean_variables(df, cols, entity_col):
@@ -143,7 +143,7 @@ def _drop_digital_banks(df):
     pipeline's classifier (PANEL_INTERMED/digital_banks_diagnostic.csv,
     is_digital_candidate), matched on the 8-digit CNPJ root of the lead institution.
 
-    This is the SAME classification panel_6_market.py uses to overwrite
+    This is the SAME classification panel_market.py uses to overwrite
     CODMUN_IBGE=0 for digital firms. We drop only the classified digital firms,
     so B-type prepaid (k=5) national aggregates (also at CODMUN_IBGE=0) are kept.
     """
@@ -182,7 +182,7 @@ def build_unified_frame():
     """
     # Lazy import: est1 has already re-exec'd into the project venv, so importing
     # est2 here is a no-op for its venv guard and avoids import-time side effects.
-    from estimation_2_sleep import build_pooled_data
+    from sleep_est_e2 import build_pooled_data
     df = build_pooled_data()
     df = _drop_digital_banks(df)
     return df
@@ -349,7 +349,7 @@ def do_estimation():
             results_dict[spec_name] = {'spec_number': spec_number, 'spec_label': f"({spec_number}) {spec_name}", 'second_stage': res_ss, 'first_stage': res_fs}
 
     # Cluster-imbalance reporting (G, G*, CV, top-conglomerate concentration) now lives
-    # solely in desc_3.py, computed on the spec-12 second-stage sample. No cluster
+    # solely in sleep_desc_clusters.py, computed on the spec-12 second-stage sample. No cluster
     # diagnostics json is written here anymore.
     results_pickle = output_dir / "estimation_results.pkl"
     with open(results_pickle, 'wb') as f: pickle.dump(results_dict, f)

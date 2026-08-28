@@ -182,7 +182,7 @@ def cost_fwd_dir() -> Path:
     (``forward_rf_qoq.csv``) and the ψ deviation shards it writes for the solve step.
 
     ``CF_COST_FWD`` points it at the cluster's ``data/output/bbl`` step folder; the BBL jobs
-    export that name, and estimation_bbl_3_solve.py reads the same variable. Unset locally,
+    export that name, and bbl_solve.py reads the same variable. Unset locally,
     so the default stands.
     """
     override = os.environ.get("CF_COST_FWD", "").strip()
@@ -307,17 +307,28 @@ def market_panel_csv(processed: Path | None = None) -> Path:
         if not fees.exists():
             raise FileNotFoundError(
                 f"USE_FEE_PANEL=1 but {fees} does not exist. Build it with "
-                "`python panel_9_cosif_fees.py --patch-market` (it must run AFTER "
+                "`python panel_fee_merge.py --patch-market` (it must run AFTER "
                 "panel_7/panel_10/panel_12), or unset USE_FEE_PANEL to use market_panel.csv.")
         return fees
     return base
 
 
+def on_cluster() -> bool:
+    """True when running inside the cluster's step-directory layout.
+
+    cluster_lib.sh's ``cl_export_step_dirs`` exports ``CL_DATA_OUT`` for every job and
+    nothing off-cluster sets it. The table exporters branch on this to decide where a
+    fragment belongs: on the cluster the archiver packages ``data/output/sleep/Rout``, so a
+    .tex written anywhere else never comes home in the download; locally the paper
+    directory is the only copy that matters.
+    """
+    return bool(os.environ.get("CL_DATA_OUT", "").strip())
+
 __all__ = [
     "OPEN_FINANCE", "BCB", "DATA_ROOT", "RAW", "PROCESSED", "data_root", "market_panel_csv",
     "demand_prep_root", "demand_parquet_dir", "estimation_output", "est_dir", "rout_dir",
     "drafts_dir", "blp_results_dir", "bbl_output_dir", "cf_foundation_dir", "cost_fwd_dir",
-    "polfunc_dir", "diag_dir",
+    "polfunc_dir", "diag_dir", "on_cluster",
     "ESTBAN_DIR", "ESTBAN_CSV", "ESTBAN_RAW_MUN", "ESTBAN_RAW_AG",
     "IF_DATA_ROOT", "IF_DATA_LIST", "IF_DATA_PRUDENTIAL", "IF_DATA_FINANCIAL", "IF_DATA_INDIVIDUAL", "IF_DATA_AGG",
     "COSIF_RAW", "SGS_RAW",

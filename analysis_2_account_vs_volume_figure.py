@@ -1,4 +1,4 @@
-## analysis_2_account_vs_volume_figure.py
+## make_account_vs_volume_figure.py
 # Author: Pedro Feijó de Moraes
 #
 # Last edited: 2026-05-31
@@ -25,8 +25,8 @@
 #   Output: processed/DESCRIPTIVES/account_vs_volume.{png,pdf}
 #
 #   CLI:
-#     python analysis_2_account_vs_volume_figure.py
-#     python analysis_2_account_vs_volume_figure.py --period 4Q2024
+#     python make_account_vs_volume_figure.py
+#     python make_account_vs_volume_figure.py --period 4Q2024
 ###────────────────────────────────────────────────────────────────────────────
 
 import os
@@ -69,7 +69,7 @@ def _seg_color(seg: str) -> str:
 
 def load() -> pd.DataFrame:
     if not os.path.exists(JOIN_CSV):
-        log.error(f"join table not found: {JOIN_CSV}\nRun analysis_1_disclosure_join.py first.")
+        log.error(f"join table not found: {JOIN_CSV}\nRun panel_disclosure_join.py first.")
         sys.exit(1)
     df = pd.read_csv(JOIN_CSV)
     # unify a single customer column: prefer Brazil, else broad (consolidated/latam)

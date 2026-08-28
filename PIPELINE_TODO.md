@@ -33,7 +33,7 @@ every grid point, then forward-simulate over **1000 drawn paths**, assigning eac
 floor() and averaging discounted profits. The same 1000 paths are reused from their baseline two-step
 estimation.
 
-**Ours today**: `cf_forward_rf.py` builds ONE deterministic path from live BCB data (SGS 4189 anchor +
+**Ours today**: `scrape_forward_rf.py` builds ONE deterministic path from live BCB data (SGS 4189 anchor +
 Focus/Olinda median, declining to the long-run median, held flat past the Focus horizon). Both designs
 break the omega/zeta collinearity because both are time-varying — but a single path yields no rate-risk
 dispersion, so franchise-value VARIANCE and tail outcomes (their >20% default probability) are not
@@ -61,9 +61,9 @@ genuinely local:
 
 | producer | must be local? | why |
 |---|---|---|
-| `cf_forward_rf.py` | **YES, permanently** | hits BCB SGS 4189 + Focus/Olinda; compute nodes have no outbound internet |
-| `panel_8_demographics_sigma.py` | no | pure pandas over `market_panel.csv`, which the run uploads anyway |
-| `estimation_bbl_1_polfunc.py` | no | same; a cluster path already exists (`bbl_run.sh --polfunc`, off by default) |
+| `scrape_forward_rf.py` | **YES, permanently** | hits BCB SGS 4189 + Focus/Olinda; compute nodes have no outbound internet |
+| `panel_demographics_sigma.py` | no | pure pandas over `market_panel.csv`, which the run uploads anyway |
+| `bbl_polfunc.py` | no | same; a cluster path already exists (`bbl_run.sh --polfunc`, off by default) |
 
 Moving the latter two into the chain would cut ~30 min of local compute per run and ~68 MB from
 the data bundle (`polfunc_fitted.csv` 59 MB + `demographics_sigma.parquet` 8.7 MB), and make them
@@ -75,7 +75,7 @@ classification predates the sleepiness phase moving to the cluster.
 - **Deferred by decision 2026-08-20**: ship the first cycle as-is; revisit once one full cluster run
   has succeeded end-to-end. Do not do this while the chain is still unproven.
 
-**Why `cf_forward_rf.py` can never move** (worth recording — it is not just an API convenience):
+**Why `scrape_forward_rf.py` can never move** (worth recording — it is not just an API convenience):
 in the BBL value basis ψ4 = Σ β^t r^f_t · Σ_k Dep_t. A FLAT r^f_t collapses ψ4 to a rescaling of
 ψ2, making ω and ζ collinear and leaving **ζ (funding-cost pass-through) unidentified**. The live
 Focus curve exists to break that collinearity. Its CSV carries a `source` column so an offline
@@ -90,7 +90,7 @@ fallback path can never be mistaken for the live curve.
 ## W0b — V_Main sleepiness exhibits: audit of what today's run owes
 
 **Needs the local Julia logit after demand parquets exist (W3.2 step 14):**
-- [ ] `est3_spec12_logit.tex`, `est4_spec12_logit.tex`, `est1-4_spec12_logit_comparison.tex` ← `blp_1_logit.jl`
+- [ ] `est3_spec12_logit.tex`, `est4_spec12_logit.tex`, `est1-4_spec12_logit_comparison.tex` ← `blp_logit.jl`
 
 **Needs the cluster re-run:**
 - [ ] `blp_rc_E3_spec12.tex`, `blp_rc_E4_spec12.tex` ← `make_blp_rc_table.py`
@@ -103,23 +103,23 @@ fallback path can never be mistaken for the live curve.
 ## W2 - Single-source registries
 
 - [ ] One duplication left, MEASURED to agree on all 12 specs (2026-08-24): `SPEC_MAP` in
-      `estimation_demand_link_common.py` vs the `_IV_ORDER` x state-block enumeration in
-      `estimation_sleep_common.py:143`. Consolidating touches the estimator's own spec
+      `sleep_demand_prep_link.py` vs the `_IV_ORDER` x state-block enumeration in
+      `sleep_est_single.py:143`. Consolidating touches the estimator's own spec
       enumeration, so not next to a live cluster run
 
 ## W3 — Orchestrator consolidation
 
 - [ ] **W3.1** Extract `utils/pipeline_runner.py` (waves, resume predicates, RAM gate, env hardening, RUN_MANIFEST.json)
-- [ ] **W3.2** Rebuild `run_sleep_pipeline.py` on it — 15 steps through bands, diagnostics, battery, tables
-- [ ] **W3.3** Wire `check_mca_coverage.py` into a data-pipeline gate — today it is referenced by no orchestrator, so a failed MCA merge reaches estimation as median-filled coverage
+- [ ] **W3.2** Rebuild `sleep_pipeline.py` on it — 15 steps through bands, diagnostics, battery, tables
+- [ ] **W3.3** Wire `panel_audit_mca_coverage.py` into a data-pipeline gate — today it is referenced by no orchestrator, so a failed MCA merge reaches estimation as median-filled coverage
 
 ## W4 — Weak-IV integration into the BLP pipeline (hybrid)
 
 - [ ] **W4.2** Battery becomes an orchestrated stage (sleep-side + demand-side)
 - [ ] **W4.3** Staleness guard: `input_fingerprint` on every battery json
 - [ ] **W4.4** `make_iv_tables.py` hard-fails instead of emitting empty tables
-- [ ] **W4.5** Ingest hook: `process_blp_outputs.py` auto-runs export_rc_delta → battery → tables
-- [ ] **W4.6** *(cluster batch)* `se_common.jl` emits per-cluster moment blocks (spread_hat, A_g, B_g)
+- [ ] **W4.5** Ingest hook: `cluster_ingest_blp.py` auto-runs export_rc_delta → battery → tables
+- [ ] **W4.6** *(cluster batch)* `blp_se_common.jl` emits per-cluster moment blocks (spread_hat, A_g, B_g)
 - [ ] **W4.7** *(cluster batch)* Battery fast path reads blocks; cross-check vs parquet path
 - [ ] **W4.8** *(after cluster re-run)* Regenerate iv tables + update `weakiv_report.tex` prose
 
@@ -130,7 +130,7 @@ fallback path can never be mistaken for the live curve.
 ## W10 - Residue from the joint-sieve removal
 
 - [ ] `tab_phi_need_sleep.tex` still holds joint-sieve-vintage numbers. Its sieve arm now fits with
-      `fit_single_index`, so a re-run of `weak_iv_sleep_analysis.py` + `make_iv_sleep_tables.py`
+      `fit_single_index`, so a re-run of `sleep_weak_iv.py` + `make_iv_sleep_tables.py`
       will move the numbers. Not `\input` into V_Main, so nothing in the paper moves today
 **Deliberately keep:** `utils/se_national.py:249` - a dated (2026-07-30) adversarial-review finding
 about which stored pickles lacked quarter blocks *at that date*; naming E8 is part of that record.

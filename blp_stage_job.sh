@@ -16,7 +16,7 @@
 #
 # The #SBATCH block is a FLOOR. --time and --mem always arrive as sbatch CLI
 # overrides from blp_run.sh (cl_mem_for gives E1/E2 600G; 200G OOM-killed them at
-# ext1 in job 21525240 — the n_pi*N*R hot buffer at blp_1_estimation.jl:357 grows
+# ext1 in job 21525240 — the n_pi*N*R hot buffer at blp_engine_cpu.jl:357 grows
 # ~38 GB -> ~51 GB from rc4 to ext1).
 #
 # Driven by env vars exported through sbatch --export=ALL:
@@ -28,7 +28,7 @@
 #
 # WHERE ITS ARTIFACTS GO: data/output/blp — results, checkpoints and summaries all
 #   land in the one folder of_root.jl's blp_dir(out_dir) names, and they STAY there.
-#   foundation_demand_eval.jl's _result_path reads the same call, so the BBL and CF
+#   cf_demand_eval.jl's _result_path reads the same call, so the BBL and CF
 #   stacks open exactly the file this job wrote, with nothing staged or renamed in
 #   between.
 #
@@ -49,7 +49,7 @@ set -e
 # ${VAR:?} only catches unset/empty, so validate the VALUE too. An unrecognised
 # engine falls through to IFT with an EMPTY output suffix and OVERWRITES the
 # production artifacts. This allow-list is deliberately duplicated in
-# blp_2_rc.jl:123-127 and blp_gpu_engine.jl:2817-2824 — defence in depth against
+# blp_rc.jl:123-127 and blp_engine_gpu.jl:2817-2824 — defence in depth against
 # data loss, not waste. Failing here costs seconds instead of a module load plus
 # Julia/CUDA startup.
 case "${RC_ENGINE}" in
@@ -66,7 +66,7 @@ cl_bootstrap_tree
 cl_export_step_dirs
 
 cl_load_julia
-export BLP_ENGINE="${RC_ENGINE}"                 # read by blp_2_rc.jl
+export BLP_ENGINE="${RC_ENGINE}"                 # read by blp_rc.jl
 
 echo "GPU node: $(hostname)"
 nvidia-smi --query-gpu=name,memory.total --format=csv,noheader || true
@@ -123,7 +123,7 @@ SE_ONLY_ARG=()
 
 julia --project="${CL_ROOT}" ${CL_JULIA_SYS[@]+"${CL_JULIA_SYS[@]}"} \
     --threads="${SLURM_CPUS_PER_TASK:-6}" \
-    "${CL_ROOT}/blp_2_rc.jl" \
+    "${CL_ROOT}/blp_rc.jl" \
     --estim "${RC_ROUTINE}" --stage "${STAGE_ARG}" \
     --hpc --R "${R}" --seed "${SEED}" \
     --tol-inner "${TOL_INNER}" --max-inner "${MAX_INNER}" --tol-outer "${TOL_OUTER}" \

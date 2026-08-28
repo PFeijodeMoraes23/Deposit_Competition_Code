@@ -5,7 +5,7 @@ metadata:
   type: project
 ---
 
-BLP demand estimation has GPU variants `blp_1_estimation_gpu.jl` (numerical-gradient) and `blp_2_estimation_gpu.jl` (IFT analytical gradient). blp_2 includes blp_1's GPU file, which guards its include of `blp_1_estimation.jl` with `if !isdefined(Main, :X_COLS)` to avoid double-load.
+BLP demand estimation has GPU variants `blp_1_estimation_gpu.jl` (numerical-gradient) and `blp_2_estimation_gpu.jl` (IFT analytical gradient). blp_2 includes blp_1's GPU file, which guards its include of `blp_engine_cpu.jl` with `if !isdefined(Main, :X_COLS)` to avoid double-load.
 
 Work done 2026-06-02:
 - **On-device SQUAREM**: rewrote `blp_contraction_gpu!` to keep δ, the contraction map, norms, and acceleration all on-device (new helper `model_shares_dev!` with pre-gathered `mu_B`/`mu_D`). Fixes YCRC "you did not use the GPU" emails — previously per-step CPU↔GPU sync left H200 at ~0% sampled utilization. `compute_model_shares_gpu!` kept as-is for blp_2's IFT forward passes (they need `buf.s_B`/`s_D` on CPU).

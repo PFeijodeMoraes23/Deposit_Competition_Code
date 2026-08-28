@@ -1,4 +1,4 @@
-"""step_phi_augmented_tests.py -- is phi separately identified from awake-flow persistence?
+"""sleep_ident_augmented.py -- is phi separately identified from awake-flow persistence?
 
 Author: Pedro Feijo de Moraes
 
@@ -23,7 +23,7 @@ Arms (--arm):
   blpelast    D5: implied-vs-observed spread response, using the cluster BLP alpha-hat.
 
 Sample note: the production spec 12 (IV_HausmanFull x Tech) second stage is restricted to
-deposit types 4,5 because v_hat is NaN elsewhere (estimation_2_sleep.py:299-301). Every
+deposit types 4,5 because v_hat is NaN elsewhere (sleep_est_e2.py:299-301). Every
 arm therefore reports BOTH spec 12 and OLS x Tech (full k in {1,2,4,5} sample).
 """
 from utils.venv_guard import ensure_project_venv
@@ -37,7 +37,7 @@ import numpy as np
 import pandas as pd
 import statsmodels.api as sm
 
-from estimation_2_sleep import (build_pooled_data, define_specifications,
+from sleep_est_e2 import (build_pooled_data, define_specifications,
                                 run_pooled_first_stage, demean_variables_2way,
                                 apply_imbalanced_cluster_correction)
 from utils import paths as _paths
@@ -98,7 +98,7 @@ MDE_MULT, MDE_LO, MDE_HI = 3.457, 0.676, 2.04
 
 def load_blp_theta1(est="E3", stage="extended", spec=12):
     """theta1 from the downloaded cluster results as {param_name: coef}, or None.
-    NB: the BLP spread regressor is spread_ann/100 (annual pp) -- blp_1_logit.jl:219."""
+    NB: the BLP spread regressor is spread_ann/100 (annual pp) -- blp_logit.jl:219."""
     import json
     fp = BLP_RAW / f"blp_results_{est}_spec_{spec}_{stage}.json"
     if not fp.exists():
@@ -611,7 +611,7 @@ def build_uncensored_inflow(df):
     two-way demeaning returns phi-hat ~ 0.80 against ~0.91 on the full frame, so the
     augmentation was being asked about a different carry coefficient from the headline.
 
-    phi is a MARKET-level object (estimation_demand_link_common.py:433-463), so it can be
+    phi is a MARKET-level object (sleep_demand_prep_link.py:433-463), so it can be
     mapped to censored rows too: dedupe phi_mt by (mca_code, time_id) and phi_t by time_id.
     """
     phi_mt = (pd.read_parquet(parquet_path(), columns=["mca_code", "time_id", "phi_mt"])

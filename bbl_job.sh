@@ -71,7 +71,7 @@ cl_load_julia
 # Loading the wrong one fails with "Unable to find compatible target in cached
 # code image" and drops the task back to precompiling against the shared NFS
 # depot; a task that loses that race gets CUDA.functional()==false, which
-# foundation_demand_eval.jl catches and silently downgrades to the CPU share path
+# cf_demand_eval.jl catches and silently downgrades to the CPU share path
 # — the job then holds its H200 at 0% util. (Diagnosed 2026-07-31: 5/11 fwd_sim
 # tasks fell back to CPU on FillArrays/StaticArrays cache races.)
 if [[ "${CF_GPU}" != "0" ]]; then cl_require_sysimage gpu; else cl_require_sysimage cpu; fi
@@ -111,7 +111,7 @@ case "${BBL_STEP}" in
         echo "Loading the BBL stack (CF_GPU=${CF_GPU})..."
         julia --project="${CL_ROOT}" ${CL_JULIA_SYS[@]+"${CL_JULIA_SYS[@]}"} \
             --threads="${SLURM_CPUS_PER_TASK:-8}" \
-            -e "include(joinpath(\"${CL_ROOT}\", \"estimation_bbl_2_fwd_sim.jl\"))" || true
+            -e "include(joinpath(\"${CL_ROOT}\", \"bbl_fwd_sim.jl\"))" || true
         echo "warmup complete: BBL stack loaded — the array can launch warm" ;;
 
     polfunc)
@@ -125,7 +125,7 @@ case "${BBL_STEP}" in
         # SPEC-INVARIANT, so it takes no --spec (unlike fwd_sim/solve, whose
         # --spec 12 selects the BLP demand specification).
         cl_setup_python "${CL_PY_REQ_POLFUNC}"
-        "${PYBIN}" "${CL_ROOT}/estimation_bbl_1_polfunc.py" ${BBL_EXTRA} ;;
+        "${PYBIN}" "${CL_ROOT}/bbl_polfunc.py" ${BBL_EXTRA} ;;
 
     fwd_sim)
         # BBL Step 2 part 1: psi under sigma-hat and sigma-tilde deviations
@@ -137,19 +137,19 @@ case "${BBL_STEP}" in
         if [[ ! -f "${RF_CURVE}" ]]; then
             echo "ERROR: forward r^f curve missing: ${RF_CURVE}" >&2
             echo "  Generate locally (needs internet) and upload to data/input/:" >&2
-            echo "    python cf_forward_rf.py --horizon 50 --start 2026Q1" >&2
+            echo "    python scrape_forward_rf.py --horizon 50 --start 2026Q1" >&2
             echo "  Refusing to run: a flat r^f leaves zeta unidentified." >&2
             exit 1
         fi
         echo "forward r^f curve OK: ${RF_CURVE}"
         SHARD_ID="${SLURM_ARRAY_TASK_ID:-${SHARD_ID:-0}}"
         N_SHARDS="${N_SHARDS:-1}"
-        run_julia estimation_bbl_2_fwd_sim.jl --n-shards "${N_SHARDS}" --shard-id "${SHARD_ID}" ;;
+        run_julia bbl_fwd_sim.jl --n-shards "${N_SHARDS}" --shard-id "${SHARD_ID}" ;;
 
     solve)
         # BBL Step 2 part 2: the eq:17 minimisation -> data/output/bbl/cost_params_*.json.
         cl_setup_python "${CL_PY_REQ_SOLVE}"
-        "${PYBIN}" "${CL_ROOT}/estimation_bbl_3_solve.py" \
+        "${PYBIN}" "${CL_ROOT}/bbl_solve.py" \
             --estim "${BBL_ROUTINE}" --spec 12 --stage "${BBL_STAGE}" ${BBL_EXTRA} ;;
 
 esac

@@ -1,4 +1,4 @@
-"""step_entry_dynamics.py -- D6: do entrants accumulate share at the speed phi-hat implies?
+"""sleep_ident_entry_dynamics.py -- D6: do entrants accumulate share at the speed phi-hat implies?
 
 Author: Pedro Feijo de Moraes
 
@@ -11,7 +11,7 @@ discriminates SLEEPINESS from PERSISTENT PREFERENCES, and the piece our draft la
     share accumulates slowly, with a curvature pinned by phi.
 
 The model line is CLOSED FORM. With frozen spreads the law of motion
-(foundation_deposit_sim.jl:192)
+(cf_deposit_sim.jl:192)
 
     Dep_{t+1} = (1-phi)*M*s + phi*g*Dep_t,      g = 1 + r^dep_q
 
@@ -54,7 +54,7 @@ PANEL_CSV = _paths.PROCESSED / "market_panel.csv"
 BRANCH_SIDECAR = _paths.PROCESSED / "PANEL_INTERMED" / "estban_own_branches.csv"
 DEP_COLS = ["dep_a1", "dep_a2", "dep_a4"]          # a5 (prepaid) is NaN in ESTBAN
 
-# figure palette (desc_2.py convention)
+# figure palette (make_desc_compressed_tables.py convention)
 B_COLOR, D_COLOR, INK, GRID = "#1565C0", "#E64A19", "#4F4F4F", "#D5D5D0"
 # Every routine that can appear in REF_ESTS needs its own hue: an unkeyed line falls back to
 # INK, and two INK lines are indistinguishable in the legend.
@@ -274,7 +274,7 @@ def load_branch_entry(args):
         return None
     if not BRANCH_SIDECAR.exists():
         print(f"  [branch] {BRANCH_SIDECAR.name} absent -- screen skipped "
-              "(run panel_10_estban_instruments.py to create it)")
+              "(run panel_estban_instrument.py to create it)")
         return None
     br = pd.read_csv(BRANCH_SIDECAR, dtype={"mca_code": str})
     br = br[br["own_br"] > 0]
@@ -922,7 +922,7 @@ def main(args):
 
     usecols = ["CodConglomeradoPrudencial", "CNPJ_Lider", "CODMUN_IBGE", "mca_code",
                "year", "quarter", "Source"] + DEP_COLS
-    # GOTCHA (hit 2026-08-03): panel_10_estban_instruments.py rewrites market_panel.csv in
+    # GOTCHA (hit 2026-08-03): panel_estban_instrument.py rewrites market_panel.csv in
     # place and takes minutes to do it. Reading concurrently yields a TRUNCATED frame -- the
     # run looked fine but silently lost half the entry events (B 327 -> 194, D 65 -> 8).
     # Row count is the cheap tripwire; the panel has ~500k rows.

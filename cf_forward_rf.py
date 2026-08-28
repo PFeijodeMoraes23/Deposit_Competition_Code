@@ -1,8 +1,8 @@
 """
-cf_forward_rf.py
+scrape_forward_rf.py
 ================
 Build the forward risk-free (Selic) path r^f_t for the counterfactual horizon and
-cache it as a CSV that the Julia CF engines read (estimation_bbl_2_fwd_sim.jl ψ4 funding base;
+cache it as a CSV that the Julia CF engines read (bbl_fwd_sim.jl ψ4 funding base;
 later CF3/CF5 equilibrium re-solves).
 
 WHY A REAL FORWARD CURVE (not a flat placeholder). In the BBL value basis (eq:16),
@@ -31,8 +31,8 @@ Output:
     columns: h (1..T), cal_q, selic_ann_pct, rf_qoq, source
 
 Usage:
-  python cf_forward_rf.py --horizon 50 --start 2026Q1
-  python cf_forward_rf.py --horizon 50 --start 2026Q1 --offline   # force fallback
+  python scrape_forward_rf.py --horizon 50 --start 2026Q1
+  python scrape_forward_rf.py --horizon 50 --start 2026Q1 --offline   # force fallback
 """
 from utils.venv_guard import ensure_project_venv
 ensure_project_venv(__file__)
@@ -143,7 +143,7 @@ def _last_panel_selic_ann():
         raise SystemExit(
             f"{cands[-1].name} carries no LEVEL r^f column (looked for risk_free_qoq, "
             "risk_free_qoq_lag_level). Rebuild the demand parquets — see "
-            "estimation_1_demand_1_prep.py CF_COST_COLS.")
+            "sleep_demand_prep_e1.py CF_COST_COLS.")
     df = pd.read_parquet(cands[-1], columns=["time_id", col])
     df["t"] = df["time_id"].astype(str)
     last = df[df["t"] == df["t"].max()]

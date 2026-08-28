@@ -1,9 +1,9 @@
 """
-d_rate_scrape_5_format.py
+scrape_deposit_rate_format.py
 ==============================
-Formats the raw rate mentions extracted by d_rate_scrape_4_parse.py into a
+Formats the raw rate mentions extracted by scrape_deposit_rate_parse.py into a
 clean conglomerate x quarter panel that merges directly with the main
-deposit panel (panel_3_master_panel_build.py).
+deposit panel (panel_deposit_rates.py).
 
 Inputs
 ------
@@ -19,7 +19,7 @@ Outputs
 
 Periodization
 -------------
-The deposit panel (panel_3_master_panel_build.py) keys observations by AnoMes (yyyyMM)
+The deposit panel (panel_deposit_rates.py) keys observations by AnoMes (yyyyMM)
 with month in {3, 6, 9, 12} -- i.e. quarter-end.  Each archival snapshot is
 assigned to the AnoMes of the quarter it falls in (e.g. 2020-04-15 ->
 202006 = 2020Q2).  Multiple snapshots within the same (cod, quarter, type)
@@ -200,7 +200,7 @@ def rescue_abs_rates(dropped, macro_rates):
 
 def load_raw(in_path):
     if not in_path.exists():
-        raise FileNotFoundError(f"{in_path} not found. Run d_rate_scrape_4_parse.py first.")
+        raise FileNotFoundError(f"{in_path} not found. Run scrape_deposit_rate_parse.py first.")
     df = pd.read_csv(in_path)
     needed = {'CodConglomerado', 'Snapshot_Date', 'Rate_Type', 'Rate_Value', 'Context', 'Source'}
     missing = needed - set(df.columns)

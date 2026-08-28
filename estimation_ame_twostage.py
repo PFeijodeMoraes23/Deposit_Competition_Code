@@ -1,5 +1,5 @@
 """
-estimation_ame_twostage.py
+sleep_ame_twostage.py
 ================================================================================
 TWO-STAGE (direction + link) wild cluster bootstrap of the E3/E4 average marginal
 effects at spec 12, from STORED fits -- no re-estimation.
@@ -26,8 +26,8 @@ and never touches the estimator pickle unless --attach is passed (off by default
 makes a timestamped .bak first, and writes NEW attributes plus cov_ame only).
 
 Usage:
-    python estimation_ame_twostage.py --est 3 --loss robust --B 999 --workers 6
-    python estimation_ame_twostage.py --est 3 --loss robust --theta-off
+    python sleep_ame_twostage.py --est 3 --loss robust --B 999 --workers 6
+    python sleep_ame_twostage.py --est 3 --loss robust --theta-off
 """
 import argparse
 import os
@@ -104,7 +104,7 @@ def _prep_frame(time_block):
     """Rebuild the estimation frame for spec 12 exactly as estimation_sleep_common._exec_spec:
     pooled panel -> first stage with the spec-12 instruments and active exogenous controls.
     Built ONCE per routine and reused across losses and across both clustering schemes."""
-    from estimation_2_sleep import (build_pooled_data, define_specifications,
+    from sleep_est_e2 import (build_pooled_data, define_specifications,
                                     run_pooled_first_stage)
     df = build_pooled_data(time_block=time_block)
     _, iv_specs, state_blocks = define_specifications(time_block=time_block)

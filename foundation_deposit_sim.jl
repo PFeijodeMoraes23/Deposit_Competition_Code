@@ -1,5 +1,5 @@
 """
-foundation_deposit_sim.jl
+cf_deposit_sim.jl
 ===================
 Foundation 0b: forward simulator for the deposit law of motion (eqs 9-B / 9-D),
 built on the demand-evaluation context from foundation_demand_eval.jl.
@@ -32,7 +32,7 @@ This file defines reusable functions; running it as a script does a small smoke
 simulation (only once data is present and you've authorized running).
 """
 
-include(joinpath(@__DIR__, "foundation_demand_eval.jl"))
+include(joinpath(@__DIR__, "cf_demand_eval.jl"))
 
 using DataFrames, Statistics
 
@@ -89,7 +89,7 @@ function _first_present_rf_level(df::DataFrame, candidates::Vector{String};
         error("$what column '$c' looks GRAND-MEAN CENTRED (median $(round(med, sigdigits=4)), " *
               "min $(round(minimum(fin), sigdigits=4))): a quarterly Selic level is strictly " *
               "positive. The BBL/CF stack needs a LEVEL. Rebuild the demand parquets so they " *
-              "carry `risk_free_qoq_lag_level` (see estimation_1_demand_1_prep.py), or check " *
+              "carry `risk_free_qoq_lag_level` (see sleep_demand_prep_e1.py), or check " *
               "utils/state_transform.py CENTER.")
     end
     return (v, c)

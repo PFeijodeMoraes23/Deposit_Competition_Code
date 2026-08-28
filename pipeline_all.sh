@@ -538,7 +538,7 @@ capture_cf () {
 
 # CF4 consumes upsilon_pix + phi^noPix, produced by this run's own upsilon job into
 # data/output/counterfactuals and gated by G7. cf_run.sh resolves them through
-# cl_cf4_dirs, which names that one directory — the same one cf_4_pix.jl reads at run
+# cl_cf4_dirs, which names that one directory — the same one cf4_pix.jl reads at run
 # time — so the pair the preflight sees is the pair the job opens.
 if want_phase cf && [[ "${DO_CF}" == "1" ]]; then
     # Phase 1b: CF4 with NO re-eval + the one baseline demand_eval. Needs no costs.

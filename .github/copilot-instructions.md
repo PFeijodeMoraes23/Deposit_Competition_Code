@@ -5,12 +5,12 @@ This project implements a large-scale data pipeline and economic estimation fram
 
 - **Data Gathering**: Scrapers (`scrape_*.py`, `if_data_scrape_1.py`) for Brazilian APIs (BCB Olinda, CadUnico, Anatel).
 - **Panel Building**: Generates intermediate datasets and merges them into a master 1.4GB `market_panel.csv` (`panel_5_market.py`).
-- **Sleepiness Pipeline**: Estimates consumer inertia at national and firm levels (`run_sleep_pipeline.py`).
+- **Sleepiness Pipeline**: Estimates consumer inertia at national and firm levels (`sleep_pipeline.py`).
 - **BLP Estimation**: Partitioned between local prep and HPC parallel loop execution to protect against RAM exhaustion. See `HPC_README.md` for full HPC execution instructions.
 
 ## Build and Test Commands
-- **Full Data Pipeline**: `python run_data_pipeline.py` (Supports `--from <stage>`, `--only <stage>`, or `--skip <steps>`). 
-- **Sleepiness Estimations**: `python run_sleep_pipeline.py`
+- **Full Data Pipeline**: `python panel_pipeline.py` (Supports `--from <stage>`, `--only <stage>`, or `--skip <steps>`). 
+- **Sleepiness Estimations**: `python sleep_pipeline.py`
 - **HPC BLP Loop**: See `HPC_README.md` for SLURM payload commands and multiprocessing notes (e.g., `sbatch submit_blp_hpc.sh`). The main loop script is `estimation_1_demand_3_loop.py`.
 
 ## Conventions & Gotchas

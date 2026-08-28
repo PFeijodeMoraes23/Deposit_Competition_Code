@@ -1,5 +1,5 @@
 """
-panel_8_demographics_sigma.py
+panel_demographics_sigma.py
 =============================
 Pipeline Step 4c — Compute within-MCA demographic dispersion for BLP draws.
 
@@ -388,7 +388,7 @@ def main():
     skeleton["time_id"] = skeleton["year"].astype(str) + "Q" + skeleton["quarter"].astype(str)
 
     # ── Demographic MEANS, alongside the sigmas ──────────────────────────
-    # blp_1_draws.jl builds each draw as  mean + sigma * nu, so it needs BOTH per market-quarter.
+    # blp_draws.jl builds each draw as  mean + sigma * nu, so it needs BOTH per market-quarter.
     # It used to take the MEANS off a demand parquet (--estim), which was a bad key reference: the
     # routines' key sets are NOT identical (each sleep stage filters Dep_Act differently, so they
     # differ by up to ~25 market-quarters), and any single reference left the other routines' extra
@@ -412,7 +412,7 @@ def main():
                          f"({_cov:.1f}% of market-quarters complete)")
     else:
         logging.warning(f"market_panel.csv not found at {mp}; demographic MEANS not emitted — "
-                        f"blp_1_draws.jl will have to fall back to a demand parquet.")
+                        f"blp_draws.jl will have to fall back to a demand parquet.")
 
     sigma_cols = [f"{c}_sigma" for c in D_COLS]
     col_order = ["mca_code", "year", "quarter", "time_id"] + mean_cols + sigma_cols

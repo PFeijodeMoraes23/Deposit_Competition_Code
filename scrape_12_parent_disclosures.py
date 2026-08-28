@@ -1,4 +1,4 @@
-## scrape_12_parent_disclosures.py
+## scrape_parent_disclosures.py
 # Author: Pedro Feijó de Moraes
 #
 # Last edited: 2026-05-31
@@ -27,8 +27,8 @@
 #     manual_parent_counts.csv         — seeded manual template (C6, PicPay)
 #
 #   CLI:
-#     python scrape_12_parent_disclosures.py
-#     python scrape_12_parent_disclosures.py --since 2019 --max-filings 30
+#     python scrape_parent_disclosures.py
+#     python scrape_parent_disclosures.py --since 2019 --max-filings 30
 ###────────────────────────────────────────────────────────────────────────────
 
 import os
@@ -49,7 +49,7 @@ from utils.disclosure_common import (
 )
 from utils.firm_registry import load_registry
 # reuse EDGAR plumbing
-from scrape_11_edgar_disclosures import fetch_submissions, _pick_documents, EARNINGS_FORMS
+from scrape_edgar_disclosures import fetch_submissions, _pick_documents, EARNINGS_FORMS
 
 # MELI publishes its KPI tables in 8-K earnings exhibits (ex99.1), not in the
 # 10-K/10-Q body, so the parent scan must include 8-K.

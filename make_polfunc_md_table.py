@@ -5,7 +5,7 @@ make_polfunc_md_table.py
 Regenerate a policy-function results section of `counterfactuals_plan.md` from the
 BBL Step-1 estimation summary JSON. Reproducible counterpart of the paper fragments
 `polfunc_k{4,5}.tex` / `polfunc_rate_k{4,5}.tex` (written by
-estimation_bbl_1_polfunc.py). Reads the CURRENT .md, replaces the block between
+bbl_polfunc.py). Reads the CURRENT .md, replaces the block between
 sentinels, and writes the WHOLE .md back (narrative untouched).
 
 Two variants, keyed by --depvar (matching the estimator's --depvar):
@@ -29,8 +29,8 @@ ANCHOR = "## 3. The execution plan (easiest → hardest)"   # §2.6/§2.7 are in
 
 # Display units and the segment-dummy list are IMPORTED from the estimator, not duplicated, so the
 # .md and the .tex fragments can never drift apart. Units are pinned to the sleepiness/demand tables
-# (see the _DISPLAY_UNITS comment in estimation_bbl_1_polfunc.py).
-from estimation_bbl_1_polfunc import _DISPLAY_UNITS, _SEGMENT_VARS, CFG as _CFG_SPREAD, _CFG_RATE
+# (see the _DISPLAY_UNITS comment in bbl_polfunc.py).
+from bbl_polfunc import _DISPLAY_UNITS, _SEGMENT_VARS, CFG as _CFG_SPREAD, _CFG_RATE
 import sys
 
 # Windows consoles default to cp1252 and raise UnicodeEncodeError on any non-ASCII
@@ -276,7 +276,7 @@ def main():
     summary_path = SUMMARY_DIR / f"{cfg['summary_prefix']}_summary.json"
     if not summary_path.exists():
         raise SystemExit(f"[FATAL] summary not found: {summary_path}\n"
-                         f"  Run estimation_bbl_1_polfunc.py --depvar {args.depvar} first.")
+                         f"  Run bbl_polfunc.py --depvar {args.depvar} first.")
     summary = json.loads(summary_path.read_text(encoding="utf-8"))
     block = build_section(args.depvar, summary)
 

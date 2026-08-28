@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-process_blp_outputs.py — organize BLP_RESULTS and build per-routine CF inputs.
+cluster_ingest_blp.py — organize BLP_RESULTS and build per-routine CF inputs.
 
 Reorganizes the BLP_RESULTS folder into a clean layout and turns the raw cluster
 zip (blp_outputs.zip, downloaded from Bouchet) into one consolidated artifact per
@@ -23,7 +23,7 @@ Idempotent and re-runnable: drop a freshly downloaded blp_outputs.zip into BLP_R
 (or cluster_raw/) and run again.
 
 Usage:
-    python process_blp_outputs.py [BLP_RESULTS_dir] [--stage extended] [--routines 3,4]
+    python cluster_ingest_blp.py [BLP_RESULTS_dir] [--stage extended] [--routines 3,4]
 """
 import os, sys, glob, json, zipfile, shutil, argparse, datetime, math
 
@@ -80,7 +80,7 @@ STAGE_SEQUENCE = ["sigma", "rc2", "rc3", "rc4", "full", "ext1", "ext2", "extende
 # with the manuscript. Falls back to cluster_processed/ if that folder is unavailable.
 SUMMARY_DIR = str(_paths.drafts_dir())
 
-# Variable names — must mirror blp_1_estimation.jl (X_COLS / D_COLS) so θ₂ indices decode.
+# Variable names — must mirror blp_engine_cpu.jl (X_COLS / D_COLS) so θ₂ indices decode.
 X_COLS = ["fgc_covered", "has_ip", "seg_S2", "seg_S3", "seg_S4", "seg_S5", "log_total_assets_lag", "is_state_owned"]
 COEF_NAMES = ["spread"] + X_COLS                       # θ₁/random-coef characteristics (1-based)
 D_COLS = ["gdp_per_capita", "fraction_65plus", "fraction_young", "pix_users_pf_per1000",
@@ -344,7 +344,7 @@ def main():
             "theta1": rj.get("theta1"),
             "theta1_se": rj.get("theta1_se"),
             "theta1_pval": rj.get("theta1_pval"),
-            # θ₂ SEs exist since the on-bound-σ profiling fix in se_common.jl (gmm_cluster_ses):
+            # θ₂ SEs exist since the on-bound-σ profiling fix in blp_se_common.jl (gmm_cluster_ses):
             # on-bound σ's are profiled out of the SE computation and come back as 0/NaN, rendered
             # as a dagger in the summary. se_method records the scheme (wcb = wild cluster bootstrap).
             "theta2_se": rj.get("theta2_se"),
@@ -381,7 +381,7 @@ def write_summary_md(sub, index, stage, het=None):
     """Emit a human-readable SUMMARY.md alongside the processed artifacts (auto-regenerated
     each run, so it never goes stale). `het` = compute_coef_heterogeneity() output (or None)."""
     ts = datetime.datetime.now().isoformat(timespec="minutes")
-    BOUND = 5.0  # current θ₂ box half-width (blp_2_rc.jl sets BLP_SIGMA_UB / BLP_PI_BOUND)
+    BOUND = 5.0  # current θ₂ box half-width (blp_rc.jl sets BLP_SIGMA_UB / BLP_PI_BOUND)
     # MD013 (line-length) and MD060 (table-pipe spacing) are both unfixable for the wide compact
     # tables this report uses, so disable them file-wide (the only markdownlint rules it trips).
     # Recognised by the markdownlint VS Code extension / markdownlint-cli2.
@@ -544,7 +544,7 @@ def write_summary_md(sub, index, stage, het=None):
               "- **`fgc_covered`** carries the largest interaction (`π(fgc×65+)`), so its β_i spreads "
               "most around θ₁; `has_ip` and the segment dummies have no interaction (β_i = θ₁)."]
 
-    # ── weak-instruments diagnostics (from weak_iv_analysis.py → cluster_processed/weak_iv.json) ──
+    # ── weak-instruments diagnostics (from blp_weak_iv.py → cluster_processed/weak_iv.json) ──
     try:
         wiv = json.load(open(os.path.join(sub["cluster_processed"], "weak_iv.json")))
     except Exception:
@@ -724,7 +724,7 @@ def write_summary_md(sub, index, stage, het=None):
           "`.json` (scalars + `stage_progression`); labeled parameter tables in "
           "`Rout/blp_compare_E{k}_spec12.tex`."]
     # References — pandoc-citeproc resolves the [@key] citations above against Drafts/References.bib
-    # and renders the bibliography under this heading in the PDF (build_summary_pdf.py).
+    # and renders the bibliography under this heading in the PDF (make_summary_pdf.py).
     L += ["", "## References"]
     L = [ln for i, ln in enumerate(L) if not (ln == "" and i and L[i-1] == "")]  # collapse blank runs (MD012/MD022)
     while L and L[-1] == "":                       # no trailing blank (MD012 on final newline)

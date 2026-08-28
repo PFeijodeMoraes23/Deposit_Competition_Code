@@ -1,7 +1,7 @@
 """
 make_iv_tables.py
 =================
-Two LaTeX tables from the weak-instruments battery (weak_iv_analysis.py -> cluster_processed/weak_iv.json),
+Two LaTeX tables from the weak-instruments battery (blp_weak_iv.py -> cluster_processed/weak_iv.json),
 in the landscape-longtable style of the demand tables:
 
   1. tab_firststage_spec12.tex   -- First-stage instrument strength, one line per routine on the
@@ -11,7 +11,7 @@ in the landscape-longtable style of the demand tables:
                                     alpha, effective-F, partial R^2 WITHOUT (15) vs WITH (16) ESTBAN
                                     (from the leave-one-group-out battery), isolating its contribution.
 
-Reads BLP_RESULTS/cluster_processed/weak_iv.json; writes to ESTIMATION_OUTPUT/Rout/ + Drafts/Deposit
+Reads BLP_RESULTS/cluster_processed/weak_iv.json; writes to Drafts/Deposit
 Competition/. Routine labels use the V_Main \ref{estimation:*} enumerate (make_blp_rc_table.est_ref).
 
 Usage:  python make_iv_tables.py
@@ -40,7 +40,7 @@ ROOT       = pathlib.Path(__file__).resolve().parent
 DATA_DIR   = _paths.PROCESSED
 WEAK_IV    = _paths.blp_results_dir() / "cluster_processed" / "weak_iv.json"
 WEAK_IV_EXT1 = WEAK_IV.parent / "weak_iv_ext1.json"          # structural-δ battery (--delta-stage ext1)
-DIAG_MR      = WEAK_IV.parent / "diag_moment_reduction.json"  # step_moment_reduction.py output
+DIAG_MR      = WEAK_IV.parent / "diag_moment_reduction.json"  # blp_moment_reduction.py output
 TABLES_DIR = _paths.estimation_output() / "Rout"   # cluster-derived, not per-vintage
 DRAFTS_DIR = rc.DRAFTS_DIR
 ROUTINES   = list(_routines.ACTIVE)
@@ -115,7 +115,7 @@ def _wrap(body_lines, col_fmt, caption, label, header, footnote, ncols, width=r"
     if not body_lines:
         raise ValueError(
             f"{label}: no rows to write -- weak_iv.json matched none of the routines this table "
-            f"reports. Re-run weak_iv_analysis.py for the current lineup before regenerating.")
+            f"reports. Re-run blp_weak_iv.py for the current lineup before regenerating.")
     trow = r" \\"
     return "\n".join([
         *([r"\begin{landscape}"] if landscape else []),
@@ -364,7 +364,7 @@ def build_ji(wiv, wiv_ext1, diag):
 
 def main():
     if not WEAK_IV.exists():
-        raise FileNotFoundError(f"weak_iv.json not found at {WEAK_IV} — run weak_iv_analysis.py first.")
+        raise FileNotFoundError(f"weak_iv.json not found at {WEAK_IV} — run blp_weak_iv.py first.")
     wiv = json.load(open(WEAK_IV))
     # The JI table's two extra inputs are allowed to be missing or stale (the generator must not go
     # red because a diagnostic upstream has not been re-run) — absent entries render as ---.
@@ -390,7 +390,7 @@ def main():
         "tab_alpha_ji_spec12.tex": build_ji(wiv, wiv_ext1, diag),
     }
     for name, tex in tables.items():
-        for dest in (TABLES_DIR, DRAFTS_DIR):
+        for dest in (DRAFTS_DIR,):
             dest.mkdir(parents=True, exist_ok=True)
             (dest / name).write_text(tex, encoding="utf-8")
         print(f"  wrote {name}")

@@ -11,7 +11,7 @@ places and drift:
    S_est = (S_raw / SCALE[k]) - mean_scaled[k]
 
    * SCALE was previously copy-pasted into four Python build sites plus a Julia
-     mirror (`D_SCALE` in blp_1_draws.jl).  Every copy carried the comment "same
+     mirror (`D_SCALE` in blp_draws.jl).  Every copy carried the comment "same
      scaling as estimation_*_sleep.build_pooled_data so the native index
      matches" -- which is exactly the invariant a copy cannot enforce.  phi is
      rebuilt DOWNSTREAM as params_native x parquet columns, so a site that
@@ -26,7 +26,7 @@ places and drift:
      average market".
 
    WRITE ONCE / LOAD ALWAYS.  The means are computed by exactly one deliberate
-   action (`estimation_2_sleep.py --write-centers`) and every other caller only
+   action (`sleep_est_e2.py --write-centers`) and every other caller only
    ever LOADS them.  That is what makes E1 -- which drops digital banks after
    the shared prep and therefore has a different sample mean -- use the SAME
    S_bar as everyone else, which is the whole point of a constant that can be
@@ -51,7 +51,7 @@ places and drift:
    stated unit was.  Only genuine levels (gdp_per_capita, cadunico) move.
 
    The same registry serves the BBL policy functions
-   (estimation_bbl_1_polfunc.py), whose units were previously pinned to the
+   (bbl_polfunc.py), whose units were previously pinned to the
    sleepiness tables BY COMMENT, and the descriptive tables, which report
    LEVELS and therefore divide by `u` instead of multiplying.
 """
@@ -93,8 +93,8 @@ def centering_enabled() -> bool:
 # 1. THE ESTIMATION TRANSFORM
 # ==============================================================================
 # raw panel units -> estimation units, as a DIVISOR.  These are the numbers that
-# were duplicated at estimation_2_sleep.py:214-217, estimation_demand_link_common.py:193-196,
-# estimation_1_demand_1_prep.py:225-228 and estimation_2_demand_1_prep.py:223-226.
+# were duplicated at sleep_est_e2.py:214-217, sleep_demand_prep_link.py:193-196,
+# sleep_demand_prep_e1.py:225-228 and sleep_demand_prep_e2.py:223-226.
 # `indice_basileia_lag` is a MULTIPLY-by-100 at those sites, i.e. a divisor of 0.01.
 SCALE = {
     'gdp_per_capita':            1e4,    # -> 10k R$
@@ -253,7 +253,7 @@ def load_transform(path: Path | None = None, required: bool = True) -> StateTran
             return None
         raise FileNotFoundError(
             f"state_transform: {path} not found. Build it once with\n"
-            f"    python estimation_2_sleep.py --write-centers\n"
+            f"    python sleep_est_e2.py --write-centers\n"
             "and re-run. It is never regenerated implicitly."
         )
     with open(path, "r", encoding="utf-8") as fh:

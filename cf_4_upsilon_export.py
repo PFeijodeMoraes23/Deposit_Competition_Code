@@ -1,11 +1,11 @@
 """
-cf_4_upsilon_export.py
+sleep_upsilon_export.py
 ======================
 READ-ONLY recovery of the Pix sleepiness effect for CF4 (Pix-as-switching).
 
 The sleep step does not export the sleepiness model in a Julia-readable form — it pickles the
 whole results object (`est{e}/estimation_results.pkl`) and writes only the already-built φ_mt.
-CF4 (`cf_4_pix.jl`) needs to form the no-Pix counterfactual φ^noPix. This script recovers what it
+CF4 (`cf4_pix.jl`) needs to form the no-Pix counterfactual φ^noPix. This script recovers what it
 needs WITHOUT touching the sleep estimation: it reads the routine's pickle, figures out WHICH
 φ-spec feeds the demand parquet's `phi_mt` (matching against `est{e}/market_panel_phis.csv`), and
 produces two things for that spec:
@@ -31,7 +31,7 @@ Output:
     [entity_id, time_id, CodConglomeradoPrudencial, deposit_type, mca_code, phi_mt, phi_mt_nopix]
 
 Usage:
-  python cf_4_upsilon_export.py --estim 6 --spec 12
+  python sleep_upsilon_export.py --estim 6 --spec 12
 """
 from utils.venv_guard import ensure_project_venv
 ensure_project_venv(__file__)
@@ -79,7 +79,7 @@ def _demand_search_dirs() -> list:
     with two, a routine present in both places resolves by search ORDER, and this exporter and
     of_root.jl's `demand_search_dirs` (the Julia consumers' seam) could pick different vintages
     of the same routine. That cost a CF4 abort three phases downstream when the phi^noPix
-    export covered all but 2 of 693,093 ctx rows and cf_4_pix.jl requires exact coverage. With
+    export covered all but 2 of 693,093 ctx rows and cf4_pix.jl requires exact coverage. With
     one candidate a missing parquet is an unambiguous error naming the only place it belongs.
 
     Returned as a list (filtered to existing) so the caller's loop and its
@@ -142,24 +142,38 @@ def main():
         dm[k] = dm[k].astype(str); mp[k] = mp[k].astype(str)
     m = dm.merge(mp[MERGE_KEYS + phi_cols].drop_duplicates(MERGE_KEYS), on=MERGE_KEYS, how="left")
 
-    # ── which φ-spec feeds demand phi_mt? lowest median |Δ| wins ──────────────
+    # ── which φ-spec feeds demand phi_mt? The SPEC ID says so. ───────────────
+    # SPEC_MAP is the canonical spec -> 'IV x block' mapping the estimators use, and the
+    # parquet is named for its spec, so the source spec is known and needs no inference.
+    # Matching numerically cannot recover it: for E1/E2 no est column reproduces the parquet's
+    # phi (best median |Δ| ~1.4e-02 at corr ~0.76) and the three Tech columns sit within 0.002
+    # correlation of one another, so a proximity rule picks between near-ties on noise — it
+    # chose 'IV_CostShifters x Tech' for E2 (spec 10), and an uncorrelated 'x Base' column
+    # with no Pix regressor for E1. E3/E4 reproduce their column to ~1e-16, which is what an
+    # actual match looks like.
+    from sleep_demand_prep_link import SPEC_MAP
+    src_key = SPEC_MAP.get(s)
+    if src_key is None:
+        raise KeyError(f"spec {s} is not in SPEC_MAP (known: {sorted(SPEC_MAP)})")
+
+    # The numeric comparison stays as a DIAGNOSTIC on the declared column: it reports how well
+    # the parquet tracks the spec it claims, and a poor score belongs in the log.
     a = m["phi_mt"].to_numpy(float)
-    best = None
-    for c in phi_cols:
-        b = m[c].to_numpy(float)
+    phi_col = "phi_mt_" + src_key.replace(" x ", "_x_")
+    corr = med = float("nan")
+    if phi_col in m.columns:
+        b = m[phi_col].to_numpy(float)
         ok = np.isfinite(a) & np.isfinite(b)
-        if ok.sum() < 100:
-            continue
-        med = float(np.median(np.abs(a[ok] - b[ok])))
-        corr = float(np.corrcoef(a[ok], b[ok])[0, 1])
-        # prefer smaller median |Δ|; tie-break toward the sleep headline IV (HausmanFull)
-        rank = (med, 0 if "IV_HausmanFull" in c else 1)
-        if best is None or rank < best[0]:
-            best = (rank, c, corr, med)
-    if best is None:
-        raise RuntimeError("Could not match demand phi_mt to any est phi column.")
-    _, phi_col, corr, med = best
-    src_key = _phicol_to_pklkey(phi_col)
+        if ok.sum() >= 100:
+            med = float(np.median(np.abs(a[ok] - b[ok])))
+            with np.errstate(invalid="ignore"):
+                corr = float(np.corrcoef(a[ok], b[ok])[0, 1])
+            if not np.isfinite(corr) or corr < 0.10:
+                print(f"    [warn] demand phi_mt tracks {src_key} poorly "
+                      f"(corr={corr:+.5f}, med|Δ|={med:.2e})")
+    else:
+        print(f"    [warn] {phi_col} absent from market_panel_phis.csv; reporting "
+              f"Υ_pix from {src_key} without a phi cross-check")
 
     # ── pull Υ_pix from the pickle for that spec ─────────────────────────────
     with open(pkl_path, "rb") as f:
@@ -177,7 +191,7 @@ def main():
     # G ≠ identity. The exact no-Pix counterfactual re-applies the link to the
     # Pix-removed index, φ^noPix = G(index − θ_pix·pix) = phi_from_native(df, ss, link)
     # with pix_exists = 0. We compute it per demand-parquet row (the exact CF grain)
-    # and export it; cf_4_pix.jl consumes this instead of the scalar subtraction.
+    # and export it; cf4_pix.jl consumes this instead of the scalar subtraction.
     # Identity links (E1/E2: a statsmodels result with no .link/.params_native) skip
     # this branch — there the scalar subtraction is exact and CF4 falls back to it.
     link = getattr(ss, "link", None)
@@ -185,7 +199,7 @@ def main():
     phi_nopix_name = None
     audit = {}
     # The estimation-units value of "no Pix". Exported for BOTH branches: the identity
-    # branch never builds a phi_nopix parquet, so cf_4_pix.jl needs it to form the
+    # branch never builds a phi_nopix parquet, so cf4_pix.jl needs it to form the
     # scalar subtraction as Υ_pix·(pix − pix_level_zero) rather than Υ_pix·pix.
     _tf = _st.load_transform()
     pix_level_zero = _tf.level_of("pix_exists", raw=0.0)
@@ -247,7 +261,7 @@ def main():
         # phi_from_native path above cannot run. For an identity link φ = S′θ, so the no-Pix
         # counterfactual is exact in closed form and PER ROW:
         #     φ^noPix = φ̂ − θ_pix · (pix − pix_level_zero)
-        # This is numerically identical to the scalar fallback cf_4_pix.jl already performs, so
+        # This is numerically identical to the scalar fallback cf4_pix.jl already performs, so
         # it buys no accuracy — what it buys is UNIFORMITY: every active routine now ships the
         # same artifact and CF4 takes one code path instead of branching on link type. The
         # fallback stays in place, so an older export without this file still works.

@@ -1,4 +1,4 @@
-## analysis_pix_timeline.py
+## make_pix_timeline.py
 # Author: Pedro Feijó de Moraes
 #
 # Last edited: 2026-06-09

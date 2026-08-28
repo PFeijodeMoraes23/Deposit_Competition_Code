@@ -11,14 +11,14 @@
 # ==============================================================================
 # logit_job.sh — the plain-logit delta warm-starts, on the cluster.
 #
-#   julia --project=. blp_1_logit.jl --hpc
+#   julia --project=. blp_logit.jl --hpc
 #
 # WHAT IT PRODUCES, and why the RC stage wants it
-#   Everything lands in ONE folder, data/output/logit — blp_1_logit.jl's delta_dir()
+#   Everything lands in ONE folder, data/output/logit — blp_logit.jl's delta_dir()
 #   and tex_out_dir() both resolve to of_root.jl's logit_dir(out_dir), the same call
 #   the RC engine uses to FIND the warm-starts, so writer and reader name one path:
-#     logit_delta_E{k}_spec_12.bin   the delta warm-start blp_2_rc.jl /
-#         blp_gpu_engine.jl load before the sigma stage. Version-agnostic binary:
+#     logit_delta_E{k}_spec_12.bin   the delta warm-start blp_rc.jl /
+#         blp_engine_gpu.jl load before the sigma stage. Version-agnostic binary:
 #         one leading Int64 length, then that many Float64.
 #     logit_summary_spec_12.json     the combined 2SLS summary (alpha and the X
 #         coefficients per routine x sub-model), plus the per-key .jls fits.
@@ -34,17 +34,17 @@
 # WHAT MUST EXIST FIRST
 #   the demand parquets — data/output/demand_prep/demand_*_spec_12.parquet, written
 #   by the sleepiness prep step and verified by gate G2. That is the ONE place
-#   blp_1_logit.jl looks on the cluster (of_root.jl's demand_search_dirs), so a
+#   blp_logit.jl looks on the cluster (of_root.jl's demand_search_dirs), so a
 #   second vintage of a routine cannot be picked up here and disagreed with by the
 #   RC stack later.
 # WHAT TO RUN NEXT
 #   gate G4 (pipeline_all.sh submits it afterok this job), then blp_run.sh.
 #
 # Env vars: SLEEP_ACTIVE_ESTS (default '1 2 3 4') — the ACTIVE lineup filter.
-#   blp_1_logit.jl discovers routines by FILE PRESENCE, so a demand parquet left
+#   blp_logit.jl discovers routines by FILE PRESENCE, so a demand parquet left
 #   over from a routine no longer in the lineup silently re-enters the run. This
-#   is the guard, and it must agree with estimation_demand_1_prep.py and
-#   export_results.py, which read the same variable.
+#   is the guard, and it must agree with sleep_demand_prep.py and
+#   sleep_export_all.py, which read the same variable.
 #
 # Usage
 #   sbatch logit_job.sh                          # standalone, the whole lineup
@@ -83,7 +83,7 @@ cl_banner "Logit delta warm-starts | spec ${SPEC}" \
           "node=$(hostname) | $(date)"
 
 julia --project="${CL_ROOT}" --threads="${SLURM_CPUS_PER_TASK:-8}" \
-      "${CL_ROOT}/blp_1_logit.jl" --hpc ${LOGIT_EXTRA:-}
+      "${CL_ROOT}/blp_logit.jl" --hpc ${LOGIT_EXTRA:-}
 
 echo
 echo "-- what landed --"

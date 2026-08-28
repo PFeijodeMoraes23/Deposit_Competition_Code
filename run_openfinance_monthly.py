@@ -1,5 +1,5 @@
 """
-run_openfinance_monthly.py
+scrape_openfinance_monthly.py
 ==========================
 One-shot driver for the Open Finance Brasil fee collection + verification, meant to
 be run on a WEEKLY SWEEP around each month's update window.
@@ -29,7 +29,7 @@ Run WEEKLY (fires ~4x/month; the append+dedup design makes re-runs idempotent pe
 
   schtasks /Create /TN "OFB_fees_weekly" /SC WEEKLY /D SUN /ST 06:00 ^
     /TR "\"C:\\...\\Egan_et_al_2025_Rep\\.venv\\Scripts\\python.exe\" ^
-         \"C:\\...\\Egan_et_al_2025_Rep\\run_openfinance_monthly.py\""
+         \"C:\\...\\Egan_et_al_2025_Rep\\scrape_openfinance_monthly.py\""
 
 (Adjust the absolute paths. Do NOT auto-create the task; create it deliberately.)
 
@@ -39,10 +39,10 @@ the appended panel + raw JSONL.
 
 Usage
 -----
-  python run_openfinance_monthly.py
-  python run_openfinance_monthly.py --families accounts,creditcards,loans
-  python run_openfinance_monthly.py --skip-scrape        # re-run diag + rollup only
-  python run_openfinance_monthly.py --no-cache
+  python scrape_openfinance_monthly.py
+  python scrape_openfinance_monthly.py --families accounts,creditcards,loans
+  python scrape_openfinance_monthly.py --skip-scrape        # re-run diag + rollup only
+  python scrape_openfinance_monthly.py --no-cache
 """
 
 from __future__ import annotations
@@ -86,7 +86,7 @@ def main() -> None:
 
     ok = True
     if not args.skip_scrape:
-        import scrape_19_openfinance_fees as s19
+        import scrape_openfinance_fees as s19
         ok &= _step(
             f"1/3 scrape_19 (families={args.families})",
             lambda: s19.main(test_n=None, use_cache=not args.no_cache, families=args.families),
@@ -94,10 +94,10 @@ def main() -> None:
     else:
         log.info("Skipping scrape (--skip-scrape).")
 
-    import step_openfinance_freshness as diag
+    import scrape_openfinance_freshness as diag
     ok &= _step("2/3 freshness verifier", diag.main)
 
-    import panel_11_openfinance_fees as p11
+    import panel_openfinance_fees as p11
     ok &= _step("3/3 conglomerate rollup", lambda: p11.main(customer_type=args.customer_type))
 
     log.info("=== %s ===", "ALL STEPS OK" if ok else "COMPLETED WITH FAILURES (see log)")

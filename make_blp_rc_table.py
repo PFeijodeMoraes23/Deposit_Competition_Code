@@ -7,7 +7,7 @@ Generate a LaTeX table from BLP random-coefficient estimation results
 Reads blp_results_E{est}_spec_12_{stage}{suffix}.json files produced on the cluster
 and dropped into the local BLP_RESULTS folder. The IFT engine writes un-suffixed
 results; the numerical engine appends ``_num`` (matches ENV["BLP_OUTPUT_SUFFIX"] set by
-blp_2_rc.jl). Select which with --engine.
+blp_rc.jl). Select which with --engine.
 
 Usage
 -----
@@ -66,7 +66,7 @@ D_COLS = ["gdp_per_capita", "fraction_65plus", "fraction_young",
           "pix_users_pf_per1000", "connections_per100", "frac_4g5g",
           "branches_per1000", "cadunico_families_per1000"]
 
-# Engine → result-file suffix. Mirrors ENGINE_SUFFIX in blp_2_rc.jl, which is the authority; keep the
+# Engine → result-file suffix. Mirrors ENGINE_SUFFIX in blp_rc.jl, which is the authority; keep the
 # two in sync. `cue` is the continuously-updated-GMM variant (the LIML analogue) and is a side-by-side
 # robustness engine — its files never collide with the ift headline.
 ENGINE_SUFFIX = {"ift": "", "numerical": "_num", "cue": "_cue"}
@@ -90,7 +90,7 @@ STAGE_LABELS = {
 }
 
 # Human-readable labels for θ₁ parameters. The price coefficient uses the SAME wording as the
-# non-RC logit table (blp_1_logit.jl VAR_MAP) and V_Main eq. (1), where α is the coefficient on
+# non-RC logit table (blp_logit.jl VAR_MAP) and V_Main eq. (1), where α is the coefficient on
 # the price/spread ρ — so the logit and RC columns of the compare table share one row label.
 THETA1_LABELS = {
     "alpha":                r"Price coefficient ($\alpha$)",
@@ -306,7 +306,7 @@ def fmt_coef(val: float, se: float, G_star: float | None = None,
     """Return (coef_cell, se_cell) with significance stars.
 
     Significance uses a Student-t reference with df = G* effective clusters (few-cluster
-    correction), matching the logit tables (blp_1_logit.jl); a supplied bootstrap `pval` and the
+    correction), matching the logit tables (blp_logit.jl); a supplied bootstrap `pval` and the
     Normal are fallbacks only when G* is absent. `on_bound=True` marks a σ pinned at the σ≥0
     boundary: the point is reported with a dagger and NO two-sided SE/stars (Andrews 1999/2001)."""
     if val is None or (isinstance(val, float) and math.isnan(val)):
@@ -529,7 +529,7 @@ def main():
                              "numerical→_num, cue→_cue).")
     args = parser.parse_args()
 
-    # Result-file suffix — must match ENGINE_SUFFIX in blp_2_rc.jl (the single authority).
+    # Result-file suffix — must match ENGINE_SUFFIX in blp_rc.jl (the single authority).
     # It flows into the OUTPUT filename too, so a non-ift engine writes a NEW .tex beside the
     # headline rather than overwriting it.
     suffix = ENGINE_SUFFIX[args.engine]
@@ -548,7 +548,7 @@ def main():
             continue
 
         fname = f"blp_rc_E{est_id}_spec12{suffix}.tex"
-        for dest in [TABLES_DIR, DRAFTS_DIR]:
+        for dest in [DRAFTS_DIR]:
             out = dest / fname
             with open(out, "w", encoding="utf-8") as f:
                 f.write(tex)

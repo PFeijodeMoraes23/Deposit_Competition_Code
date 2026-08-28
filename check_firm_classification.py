@@ -1,4 +1,4 @@
-"""check_firm_classification.py -- READ-ONLY audit of the brick-and-mortar (B) vs digital (D)
+"""panel_audit_firm_class.py -- READ-ONLY audit of the brick-and-mortar (B) vs digital (D)
 firm classification and of firm identity in market_panel.csv.
 
 Author: Pedro Feijó de Moraes
@@ -22,9 +22,9 @@ Four things are checked, because each can break independently:
   STABILITY   -- no firm's booking municipality moves, which would fabricate entry/exit
                  events in local markets (Agibank moved Recife -> Porto Alegre -> Campinas).
 
-Usage:  python check_firm_classification.py
-        python check_firm_classification.py --baseline out.json    # write a summary snapshot
-        python check_firm_classification.py --compare out.json     # diff against a snapshot
+Usage:  python panel_audit_firm_class.py
+        python panel_audit_firm_class.py --baseline out.json    # write a summary snapshot
+        python panel_audit_firm_class.py --compare out.json     # diff against a snapshot
 """
 from utils.venv_guard import ensure_project_venv
 ensure_project_venv(__file__)

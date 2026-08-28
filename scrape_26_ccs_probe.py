@@ -1,4 +1,4 @@
-"""scrape_26_ccs_probe.py -- does BCB publish CCS relationship counts (and INCLUSIONS)?
+"""scrape_ccs_probe.py -- does BCB publish CCS relationship counts (and INCLUSIONS)?
 
 Author: Pedro Feijo de Moraes
 
@@ -109,7 +109,7 @@ def main():
         return 1
     if not hits:
         print("\n  Nothing CCS-shaped is published as open data. Consistent with "
-              "scrape_14_bcb_accounts.py:6-30, which documents that BCB exposes no public "
+              "scrape_bcb_accounts.py:6-30, which documents that BCB exposes no public "
               "per-institution client/account counts (CCS itself is access-restricted: it "
               "answers judicial/authority queries, it is not a statistical release).")
         print("\nVERDICT: NOT-FOUND -- no usable CCS series. Do not build a scraper.")

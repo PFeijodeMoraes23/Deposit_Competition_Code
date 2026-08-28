@@ -1,11 +1,11 @@
 """
-panel_11_openfinance_fees.py
+panel_openfinance_fees.py
 ============================
 Roll the Open Finance Brazil (OFB) open-data fee panel up to the model's firm —
 the prudential conglomerate (CodConglomeradoPrudencial) — and build the
 cross-bank comparable measure.
 
-Input   scrape_19_openfinance_fees.py → BCB/Tarifas/processed/openfinance_fees_panel_long.csv
+Input   scrape_openfinance_fees.py → BCB/Tarifas/processed/openfinance_fees_panel_long.csv
 Output  BCB/Tarifas/processed/
           openfinance_fees_conglomerate_long.csv   cong × ref-period × service (per-event fees)
           openfinance_fees_conglomerate_wide.csv    cong × ref-period, one row (core basket + annual cost)
@@ -55,8 +55,8 @@ patch market_panel (that stays a one-line call away via build_conglomerate_panel
 
 Usage
 -----
-  python panel_11_openfinance_fees.py
-  python panel_11_openfinance_fees.py --customer-type PF   # default PF
+  python panel_openfinance_fees.py
+  python panel_openfinance_fees.py --customer-type PF   # default PF
 """
 
 from __future__ import annotations
@@ -80,7 +80,7 @@ log = logging.getLogger(__name__)
 
 from utils import paths
 # Reuse panel_9's conglomerate map, deposit-weight loader, listed-price loader.
-import panel_9_cosif_fees as p9
+import panel_fee_merge as p9
 
 TARIF_DIR = paths.TARIFAS_PROC
 OFB_LONG_CSV = TARIF_DIR / "openfinance_fees_panel_long.csv"
@@ -131,7 +131,7 @@ LISTED_CROSSWALK: dict[str, list[str]] = {
 def load_ofb_long(customer_type: str = "PF") -> pd.DataFrame:
     if not OFB_LONG_CSV.exists():
         raise FileNotFoundError(f"OFB long panel not found at {OFB_LONG_CSV} "
-                                f"(run scrape_19_openfinance_fees.py first)")
+                                f"(run scrape_openfinance_fees.py first)")
     df = pd.read_csv(OFB_LONG_CSV, low_memory=False, dtype={"cnpj8": str})
     df["cnpj8"] = df["cnpj8"].astype(str).str.zfill(8)
 

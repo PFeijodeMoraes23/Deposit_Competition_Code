@@ -2,7 +2,7 @@
 make_iv_sleep_tables.py
 =======================
 LaTeX tables from the SLEEPINESS (phi) first-stage weak-instruments battery
-(weak_iv_sleep_analysis.py -> cluster_processed/weak_iv_sleep.json), in the landscape-longtable
+(sleep_weak_iv.py -> cluster_processed/weak_iv_sleep.json), in the landscape-longtable
 style of make_iv_tables.py:
 
   1. tab_firststage_sleep.tex  -- First-stage instrument strength per instrument spec x deposit-type
@@ -18,7 +18,7 @@ style of make_iv_tables.py:
                                   link vs the shape-constrained monotone sieve link E3/E4 report,
                                   national deposit-weighted phi_t OLS vs IV_HausmanFull.
 
-Reads BLP_RESULTS/cluster_processed/weak_iv_sleep.json; writes to ESTIMATION_OUTPUT/Rout/ + Drafts/
+Reads BLP_RESULTS/cluster_processed/weak_iv_sleep.json; writes to Drafts/
 Deposit Competition/. Reuses make_iv_tables' formatting helpers (_wrap/_num/_F/_tf/_alpha_se).
 
 Usage:  python make_iv_sleep_tables.py
@@ -191,7 +191,7 @@ def build_phi(wiv):
 
 def main():
     if not WEAK_IV.exists():
-        raise FileNotFoundError(f"weak_iv_sleep.json not found at {WEAK_IV} -- run weak_iv_sleep_analysis.py first.")
+        raise FileNotFoundError(f"weak_iv_sleep.json not found at {WEAK_IV} -- run sleep_weak_iv.py first.")
     wiv = json.load(open(WEAK_IV, encoding="utf-8"))
     tables = {
         "tab_firststage_sleep.tex": build_firststage(wiv),
@@ -199,7 +199,7 @@ def main():
         "tab_phi_need_sleep.tex": build_phi(wiv),
     }
     for name, tex in tables.items():
-        for dest in (TABLES_DIR, DRAFTS_DIR):
+        for dest in (DRAFTS_DIR,):
             dest.mkdir(parents=True, exist_ok=True)
             (dest / name).write_text(tex, encoding="utf-8")
         print(f"  wrote {name}")

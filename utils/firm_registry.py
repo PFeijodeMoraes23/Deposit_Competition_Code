@@ -8,7 +8,7 @@
 # Each entry carries:
 #   - identifiers for the public-disclosure sources (SEC CIK, B3 ticker, CVM code)
 #   - a *seed* CNPJ root and a list of name fragments
-#   - segment ('digital'/'payment'/'incumbent') matching panel_5_flag_digital.py
+#   - segment ('digital'/'payment'/'incumbent') matching panel_digital_flags.py
 #   - country_scope: what geography the firm's HEADLINE figures cover. SEC filers
 #     such as NU/MELI report consolidated Latam numbers but break Brazil out in
 #     segment notes; PAGS/STNE/INTR and the BR ADRs are effectively Brazil-only.

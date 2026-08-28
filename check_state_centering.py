@@ -1,4 +1,4 @@
-"""check_state_centering.py -- verification for the grand-mean centering of the
+"""sleep_audit_state_centering.py -- verification for the grand-mean centering of the
 sleepiness state block.  READ-ONLY: it never writes an estimation artefact.
 
 Author: Pedro Feijó de Moraes
@@ -149,7 +149,7 @@ def tier0(estimators, spec_filter):
           ", ".join(f"{k}={v:.6g}" for k, v in means.items()))
 
     print("\nbuilding the pooled frame once (uncentred), then a centred copy ...")
-    from estimation_2_sleep import build_pooled_data
+    from sleep_est_e2 import build_pooled_data
     df_unc = build_pooled_data(time_block=True, center=False)
     df_cen = df_unc.copy()
     tf.center(df_cen)
@@ -211,7 +211,7 @@ def tier0(estimators, spec_filter):
 # ==============================================================================
 def _phi_frame(path):
     """phi_mt_* columns keyed on the panel identifiers.  Accepts either the live
-    market_panel_phis.csv or the reduced parquet backup_precenter.py writes (the
+    market_panel_phis.csv or the reduced parquet sleep_backup_precenter.py writes (the
     full CSV is ~2 GB of columns this gate never reads)."""
     keys = ["CodConglomeradoPrudencial", "mca_code", "deposit_type", "year", "quarter"]
     path = Path(path)

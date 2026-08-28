@@ -1,13 +1,13 @@
 """
-desc_2.py
+make_desc_compressed_tables.py
 =========
 Compressed, literature-style descriptive tables built from
 ``market_panel.csv``.  Complements the exhaustive panel-style tables produced
-by ``desc_1.py``.
+by ``make_desc_panel_tables.py``.
 
 Generates four compact tables, each saved to ``OUTPUT_DIR`` (CSV + TeX) and
-mirrored to the V_Main draft directory, following the same naming convention
-as ``desc_1.py`` (``_weighted_by_<col>`` or ``_unweighted`` suffix):
+written to the V_Main draft directory, following the same naming convention
+as ``make_desc_panel_tables.py`` (``_weighted_by_<col>`` or ``_unweighted`` suffix):
 
   1.  ``Compressed_BankType_CrossSection``
         Firm-quarter cross-section, Panel A = type B, Panel B = type D.
@@ -38,8 +38,8 @@ as ``desc_1.py`` (``_weighted_by_<col>`` or ``_unweighted`` suffix):
 
 Usage
 -----
-    python desc_2.py                          # unweighted variant
-    python desc_2.py --weight-col pop_total   # population-weighted variant
+    python make_desc_compressed_tables.py                          # unweighted variant
+    python make_desc_compressed_tables.py --weight-col pop_total   # population-weighted variant
 """
 from __future__ import annotations
 
@@ -67,7 +67,7 @@ from utils import paths as _paths
 warnings.filterwarnings("ignore")
 
 # ---------------------------------------------------------------------------
-# Paths (mirror desc_1.py)
+# Paths (mirror make_desc_panel_tables.py)
 # ---------------------------------------------------------------------------
 _ROOT = Path(__file__).resolve().parents[2]
 DATA_DIR    = _ROOT / "BCB" / "Egan_et_al_2025_Rep" / "processed"
@@ -88,7 +88,7 @@ REGION_MAPPING = {
 PIX_POST_START = (2020, 4)
 
 # ---------------------------------------------------------------------------
-# Display formatting (consistent with desc_1.py)
+# Display formatting (consistent with make_desc_panel_tables.py)
 # ---------------------------------------------------------------------------
 # (label, unit string, scale divisor or None, decimals)
 LABEL_MAP = {
@@ -309,7 +309,7 @@ def _resolve_is_B(df):
         return s.astype(str).str.strip().str.lower().isin(('1', 'true', 't', 'yes'))
     print("[WARNING] Column 'is_B' not found in the market panel: this panel predates the "
           "stored firm-type column. Falling back to the CODMUN_IBGE sentinel; re-run "
-          "panel_6_market.py to store the authoritative column.")
+          "panel_market.py to store the authoritative column.")
     return df['CODMUN_IBGE'].astype(str).str.split('.').str[0] != '0'
 
 
@@ -1068,7 +1068,7 @@ def render_table2b(t2_df, weight_col, suffix) -> str:
 # left; spreads vs the policy rate on the right).
 #
 # Colours reuse the paper's existing bank-type convention from
-# analysis_3_additional_figures.py (incumbent/B blue, digital/D orange-red).
+# make_margin_figures.py (incumbent/B blue, digital/D orange-red).
 B_COLOR    = "#1565C0"   # brick-and-mortar (B) / incumbent
 D_COLOR    = "#E64A19"   # digital (D)
 NATL_COLOR = "#4F4F4F"   # pooled B+D / policy series (not a bank type)
@@ -1221,12 +1221,10 @@ def render_market_structure_figure(t2_df: pd.DataFrame, suffix: str = "") -> Non
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     DRAFTS_DIR.mkdir(parents=True, exist_ok=True)
     name = f"fig_market_structure_by_year{suffix}.png"
-    p = OUTPUT_DIR / name
+    p = DRAFTS_DIR / name
     fig.savefig(p, dpi=300, bbox_inches="tight", facecolor="white")
     plt.close(fig)
-    shutil.copy(p, DRAFTS_DIR / name)
     print(f"  Wrote {p}")
-    print(f"  Wrote {DRAFTS_DIR / name}")
 
 
 # ---------------------------------------------------------------------------
@@ -1616,7 +1614,7 @@ def _grouped_rows(groups, n_cols: int) -> list[str]:
 # 'Sleep' = sleepiness estimation E1-E4 (state vars enter phi interacted with
 # lagged deposits; estimation_2_sleep.define_specifications). 'Demand' = the
 # logit/BLP system (X = product chars, pi = demographic interactions actually
-# estimated in blp_1_estimation.jl). gdp_growth_yoy is the time block of E4, the
+# estimated in blp_engine_cpu.jl). gdp_growth_yoy is the time block of E4, the
 # only +Time routine in the lineup.
 _VARS_MASTER_GROUPS = [
     ("Identifiers and panel structure", [
@@ -1697,7 +1695,7 @@ def render_variables_master() -> str:
 # Master table B: instruments with the stage they enter. Stage strings follow
 # the estimated sets exactly: the sleepiness first stage (nested IV sets in
 # estimation_2_sleep.define_specifications) and the K=16 demand vector
-# vcat(IV_BLP_LOO, IV_ESTBAN, IV_COST, IV_CAPITAL) in blp_1_estimation.jl /
+# vcat(IV_BLP_LOO, IV_ESTBAN, IV_COST, IV_CAPITAL) in blp_engine_cpu.jl /
 # blp_1_logit.jl. leave_one_out_mean_spread (the Hausman IV) was previously
 # undocumented; the LOO lci/wholesale pairs listed in the old BLP-LOO table are
 # NOT in the estimated demand vector and are therefore not printed.

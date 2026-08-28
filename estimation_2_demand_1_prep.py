@@ -1,5 +1,5 @@
 """
-estimation_2_demand_1_prep.py
+sleep_demand_prep_e2.py
 ================================================================================
 Prepares demand-side variables for the BLP step (Eq-15 and Eq-16 in V_Main.tex).
 
@@ -8,18 +8,18 @@ B-type (branch-based) and D-type (digital/national) institutions using a linear
 specification.  The depositor sleepiness function phi_mt is applied to all
 B-type rows; D-type rows receive the market-level aggregate phi_t.
 
-Reads the output of `estimation_2_sleep.py` (12 specifications for phi_mt) and
+Reads the output of `sleep_est_e2.py` (12 specifications for phi_mt) and
 the market panel.  For each specification it computes phi_mt, aggregates to the
 national phi_t, computes Active Deposits (Dep^Act), and builds data-implied
 conditional market shares for B-type and D-type institutions.
 
 ``has_ip`` and ``fgc_covered`` are expected to be pre-computed in the panel
-pipeline (panel_5_flag_digital.py / panel_6_market.py) and read from the CSV.
+pipeline (panel_digital_flags.py / panel_market.py) and read from the CSV.
 
 Usage
 -----
-  python estimation_2_demand_1_prep.py --spec all
-  python estimation_2_demand_1_prep.py --spec 12
+  python sleep_demand_prep_e2.py --spec all
+  python sleep_demand_prep_e2.py --spec 12
 
 CLI Options:
 ------------
@@ -59,7 +59,7 @@ except Exception:
 from utils import paths
 from utils import load_panel_cached
 from utils import state_transform as _st
-from estimation_demand_link_common import build_market_size_and_shares, MAX_YEAR, MIN_YEAR
+from sleep_demand_prep_link import build_market_size_and_shares, MAX_YEAR, MIN_YEAR
 # market_panel.csv, NOT the fees variant — see utils/paths.market_panel_csv (USE_FEE_PANEL=1).
 # The frame is read through load_panel_cached, which serves the .parquet twin of this path
 # whenever that is the authoritative copy. On the cluster it always is: the data bundle ships
@@ -157,7 +157,7 @@ def _resolve_is_B(df: pd.DataFrame) -> pd.Series:
     logging.warning(
         "Column 'is_B' not found in the market panel: this panel predates the stored "
         "firm-type column. Falling back to the CODMUN_IBGE sentinel; re-run "
-        "panel_6_market.py to store the authoritative column."
+        "panel_market.py to store the authoritative column."
     )
     return df['CODMUN_IBGE'].astype(str) != '0'
 
@@ -192,11 +192,11 @@ def build_base_panel(panel_csv: Path) -> pd.DataFrame:
     # The market panel is wide (no deposit_type column), so compute here post-reshape.
     df['fgc_covered'] = df['deposit_type'].astype('Int64').isin([1, 2, 4]).astype(int)
 
-    # has_ip comes from bank_chars_panel.csv (panel_4_bank_chars.py reads IF-Data List files).
+    # has_ip comes from bank_chars_panel.csv (panel_bank_chars.py reads IF-Data List files).
     if 'has_ip' not in df.columns:
         logging.warning(
             "Column 'has_ip' not found in panel CSV. "
-            "Re-run panel_4_bank_chars.py to derive it from IF-Data List files. Defaulting to 0."
+            "Re-run panel_bank_chars.py to derive it from IF-Data List files. Defaulting to 0."
         )
         df['has_ip'] = 0
 
@@ -286,9 +286,9 @@ def build_base_panel(panel_csv: Path) -> pd.DataFrame:
     # GRAND-MEAN CENTERING -- last, and by the SAME persisted means the sleepiness
     # estimation used (loaded, never recomputed: this frame is a different sample, so a
     # locally-computed mean would silently shift the index phi is rebuilt from).
-    # Snapshot the UNCENTRED lagged r^f before centring. estimation_bbl_2_fwd_sim.jl and
-    # cf_1_franchise_value.jl need a LEVEL (a centred r^f biases omega-hat by the grand
-    # mean, 0.0216/q = 8.6pp/yr) and foundation_deposit_sim.jl's accrual clamp pins 82%
+    # Snapshot the UNCENTRED lagged r^f before centring. bbl_fwd_sim.jl and
+    # cf1_franchise.jl need a LEVEL (a centred r^f biases omega-hat by the grand
+    # mean, 0.0216/q = 8.6pp/yr) and cf_deposit_sim.jl's accrual clamp pins 82%
     # of rows at zero when handed a deviation. See identification_notes.md section 9.
     if 'risk_free_qoq_lag' in df.columns:
         df['risk_free_qoq_lag_level'] = df['risk_free_qoq_lag']
@@ -428,7 +428,7 @@ def main():
 
     results_pickle = sleep_output_dir / "estimation_results.pkl"
     if not results_pickle.exists():
-        print(f"[!] No pickle found at {results_pickle}. Run estimation_2_sleep.py first.")
+        print(f"[!] No pickle found at {results_pickle}. Run sleep_est_e2.py first.")
     else:
         print(f"\n=== Processing est2 (Pooled B+D Linear) from {results_pickle} ===")
         with open(results_pickle, 'rb') as f: results_dict = pickle.load(f)

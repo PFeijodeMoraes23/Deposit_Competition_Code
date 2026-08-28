@@ -14,19 +14,19 @@
 #
 #   est        one estimator. The routine comes from SLURM_ARRAY_TASK_ID (or
 #              SLEEP_EST), so ONE array covers the lineup:
-#                1 -> estimation_1_sleep.py            (E1: local B-type)
-#                2 -> estimation_2_sleep.py            (E2: pooled B+D linear)
-#                3 -> estimation_sleep_common.py --est 3   (E3: single index)
-#                4 -> estimation_sleep_common.py --est 4   (E4: single index + time)
-#   merge      SPEC MODE only: estimation_sleep_common.py --merge-specs, the one
+#                1 -> sleep_est_e1.py            (E1: local B-type)
+#                2 -> sleep_est_e2.py            (E2: pooled B+D linear)
+#                3 -> sleep_est_single.py --est 3   (E3: single index)
+#                4 -> sleep_est_single.py --est 4   (E4: single index + time)
+#   merge      SPEC MODE only: sleep_est_single.py --merge-specs, the one
 #              writer of est{K}/estimation_results.pkl once the spec array has drained
-#   prep       run_sleep_pipeline.py --skip-sleep — steps 5-8 (exports, the
+#   prep       sleep_pipeline.py --skip-sleep — steps 5-8 (exports, the
 #              universal demand prep, the spec-12 analysis, desc_3)
-#   ame_gate   estimation_ame_twostage.py --theta-off for BOTH routines. The
+#   ame_gate   sleep_ame_twostage.py --theta-off for BOTH routines. The
 #              regression guard: it reproduces the stored conditional numbers
 #              bit-for-bit or it fails, and the full AME jobs chain afterok it.
 #   ame        one routine's full two-stage AME bootstrap (--loss robust, full B)
-#   upsilon    cf_4_upsilon_export.py --spec 12 for each SLEEP_UPSILON_ROUTINES id —
+#   upsilon    sleep_upsilon_export.py --spec 12 for each SLEEP_UPSILON_ROUTINES id —
 #              the CF4 inputs, one pair per routine the CF phase will run
 #   gate       one content gate (SLEEP_GATE=G1|G2|G3|G4|G7); see THE GATES below
 #
@@ -69,8 +69,8 @@ esac
 SPEC="${SPEC:-12}"
 SLEEP_AME_ROUTINES="${SLEEP_AME_ROUTINES:-3 4}"
 # The AME two-stage driver serves the single-index routines only, by construction; the CF4
-# export does not. cf_4_pix.jl needs an upsilon_pix/phi_nopix pair for EVERY routine that
-# goes through the CF phase, and E1/E2 get theirs from cf_4_upsilon_export.py's identity
+# export does not. cf4_pix.jl needs an upsilon_pix/phi_nopix pair for EVERY routine that
+# goes through the CF phase, and E1/E2 get theirs from sleep_upsilon_export.py's identity
 # branch, which writes phi_nopix and sets exact_nopix just as the single-index branch does.
 # So upsilon carries its own list — sleep_run.sh sets it to the full routine set — and
 # falls back to the AME pair only when nothing supplies one.
@@ -135,15 +135,15 @@ case "${SLEEP_STEP}" in
                    exit 2 ;;
             esac
             echo "-- E${K} spec ${S} --"
-            run_py estimation_sleep_common.py --est "${K}" --spec-id "${S}" ${SLEEP_EST_EXTRA}
+            run_py sleep_est_single.py --est "${K}" --spec-id "${S}" ${SLEEP_EST_EXTRA}
         else
             K="${SLEEP_EST:-${SLURM_ARRAY_TASK_ID:-}}"
             [[ -n "${K}" ]] || { echo "est: neither SLEEP_EST nor SLURM_ARRAY_TASK_ID is set" >&2; exit 2; }
             echo "-- E${K} --"
             case "${K}" in
-                1) run_py estimation_1_sleep.py       ${SLEEP_EST_EXTRA} ;;
-                2) run_py estimation_2_sleep.py       ${SLEEP_EST_EXTRA} ;;
-                3|4) run_py estimation_sleep_common.py --est "${K}" ${SLEEP_EST_EXTRA} ;;
+                1) run_py sleep_est_e1.py       ${SLEEP_EST_EXTRA} ;;
+                2) run_py sleep_est_e2.py       ${SLEEP_EST_EXTRA} ;;
+                3|4) run_py sleep_est_single.py --est "${K}" ${SLEEP_EST_EXTRA} ;;
                 *) echo "est: routine '${K}' is not in the lineup (1|2|3|4)" >&2; exit 2 ;;
             esac
         fi ;;
@@ -157,14 +157,14 @@ case "${SLEEP_STEP}" in
         K="${SLEEP_EST:-}"
         [[ -n "${K}" ]] || { echo "merge: SLEEP_EST is not set" >&2; exit 2; }
         echo "-- E${K} merge-specs --"
-        run_py estimation_sleep_common.py --est "${K}" --merge-specs ${SLEEP_MERGE_EXTRA:-} ;;
+        run_py sleep_est_single.py --est "${K}" --merge-specs ${SLEEP_MERGE_EXTRA:-} ;;
 
     prep)
         # Steps 5-8. --skip-sleep is what makes it steps 5-8 and not 1-8: the
         # estimators already ran as the array above, and re-running them here would
         # overwrite the array's fits with a serial re-fit that need not land in the
         # same basin.
-        run_py run_sleep_pipeline.py --skip-sleep ${SLEEP_PREP_EXTRA} ;;
+        run_py sleep_pipeline.py --skip-sleep ${SLEEP_PREP_EXTRA} ;;
 
     ame_gate)
         # BLOCKING and BOTH routines in ONE job: the off path is ~5 min per routine
@@ -172,7 +172,7 @@ case "${SLEEP_STEP}" in
         # driver raises on a mismatch, so `set -e` is the gate.
         for K in ${SLEEP_AME_ROUTINES}; do
             echo "-- AME off-path regression guard: E${K} --"
-            run_py estimation_ame_twostage.py --est "${K}" --loss robust --theta-off
+            run_py sleep_ame_twostage.py --est "${K}" --loss robust --theta-off
         done
         echo "AME off-path guard PASSED for routines: ${SLEEP_AME_ROUTINES}" ;;
 
@@ -188,7 +188,7 @@ case "${SLEEP_STEP}" in
             echo "    The driver's default is 1, and anything else changes v_hat in the last ulp."
         fi
         echo "-- AME two-stage bootstrap: E${K} (workers <- SLEEP_AME_BOOT_JOBS=${SLEEP_AME_BOOT_JOBS:-<unset>}) --"
-        run_py estimation_ame_twostage.py --est "${K}" --loss robust ${SLEEP_AME_EXTRA} ;;
+        run_py sleep_ame_twostage.py --est "${K}" --loss robust ${SLEEP_AME_EXTRA} ;;
 
     upsilon)
         # READ-ONLY w.r.t. the estimation: it reads est{k}/estimation_results.pkl +
@@ -196,7 +196,7 @@ case "${SLEEP_STEP}" in
         # minutes per routine, and CF4 opens the pair for each routine it runs.
         for K in ${SLEEP_UPSILON_ROUTINES}; do
             echo "-- Upsilon_pix / phi^noPix export: E${K} spec ${SPEC} --"
-            run_py cf_4_upsilon_export.py --estim "${K}" --spec "${SPEC}"
+            run_py sleep_upsilon_export.py --estim "${K}" --spec "${SPEC}"
         done ;;
 
     gate)
@@ -242,7 +242,7 @@ SPEC_KEY = "IV_HausmanFull x Tech"
 # mean(phi_t_IV_HausmanFull_x_Tech) * 100 over that routine's national_phi_t.csv.
 #
 # A MATCH IS THE EXPECTED OUTCOME, so a mismatch is worth investigating rather than
-# shrugging at. The cluster does NOT widen the search: estimation_sleep_common.py
+# shrugging at. The cluster does NOT widen the search: sleep_est_single.py
 # hardcodes NLLS_N_STARTS=4, so a 128-core `day` node runs the same multistart from
 # the same starts as the local machine and should land in the same basin.
 #
@@ -280,7 +280,7 @@ def note(name, detail):
 
 def demand_parquets(k):
     """Non-final demand parquets for routine k under DEMAND, by the SAME regex
-    blp_1_logit.jl:discover_estim_strategies uses. A glob of demand_{k}_*_spec_N
+    blp_logit.jl:discover_estim_strategies uses. A glob of demand_{k}_*_spec_N
     would miss E1/E2, whose prefixes carry no middle segment at all."""
     if not DEMAND.is_dir():
         return []
@@ -359,7 +359,7 @@ def g2():
     for k in KS:
         hits = demand_parquets(k)
         # count == 1, not >= 1. Two non-final parquets for one routine is the
-        # failure mode with no symptom: blp_1_logit.jl silently takes the NEWEST,
+        # failure mode with no symptom: blp_logit.jl silently takes the NEWEST,
         # and a relabelled leftover then rides through the whole stack.
         if not chk(f"E{k}: exactly ONE non-final demand parquet", len(hits) == 1,
                    f"{len(hits)} match(es) under {DEMAND}: {[p.name for p in hits]}"):
@@ -421,7 +421,7 @@ def g3():
 
 # ── G4: the logit deltas match the parquets they warm-start ─────────────────
 def g4():
-    # One location, because there is one producer: blp_1_logit.jl writes the deltas and
+    # One location, because there is one producer: blp_logit.jl writes the deltas and
     # the summary through logit_dir(), which is the logit step folder for both trees. The
     # RC engine warm-starts from that same directory, so what this gate reads is what the
     # engine will read — a second candidate here would let the gate certify one delta
@@ -484,8 +484,8 @@ def g4():
 # ── G7: the CF4 pair is exact and aligned ───────────────────────────────────
 def g7():
     for k in KS:
-        # THE SAME single candidate as cf4_search_dirs() in cf_4_pix.jl and cl_cf4_dirs()
-        # in cluster_lib.sh: the counterfactuals step folder, where cf_4_upsilon_export.py
+        # THE SAME single candidate as cf4_search_dirs() in cf4_pix.jl and cl_cf4_dirs()
+        # in cluster_lib.sh: the counterfactuals step folder, where sleep_upsilon_export.py
         # writes the pair and where CF4 opens it. The gate has to check the file CF4 will
         # actually read, and with one producer writing to one location that is the same
         # file by construction — no ordering to keep in step across three places.
@@ -501,7 +501,7 @@ def g7():
             continue
         chk(f"E{k}: upsilon_pix json parses", True, str(hit))
         # exact_nopix true == a per-row phi_nopix parquet was written, and BOTH branches
-        # of cf_4_upsilon_export.py write one: phi_from_native for the single-index
+        # of sleep_upsilon_export.py write one: phi_from_native for the single-index
         # routines, the closed-form identity link for E1/E2. So the check is the same for
         # all four. False means CF4 gets no per-row φ^noPix and falls back to its scalar
         # approximation — the wrong object, silently.
@@ -521,11 +521,11 @@ def g7():
         n_phi, n_dem = parquet_rows(phit), parquet_rows(dh[0])
         chk(f"E{k}: phi_nopix rows == demand rows", n_phi == n_dem,
             f"{n_phi} vs {n_dem} ({dh[0].name})")
-        # Equal ROW COUNTS are not the property CF4 needs. cf_4_pix.jl builds a lookup
+        # Equal ROW COUNTS are not the property CF4 needs. cf4_pix.jl builds a lookup
         # keyed by (entity_id, time_id) and errors on ANY uncovered ctx row, so two
         # files of identical length built from different vintages sail through a count
         # check and then abort inside cf4 three phases later -- after the RC ladders,
-        # the BBL solves and a 121 GB buffer allocation. Check the coverage cf_4_pix.jl
+        # the BBL solves and a 121 GB buffer allocation. Check the coverage cf4_pix.jl
         # actually requires, here, at the boundary that owns it.
         try:
             import pyarrow.parquet as _pq
@@ -537,7 +537,7 @@ def g7():
             chk(f"E{k}: every demand (entity_id,time_id) present in phi_nopix",
                 _miss == 0,
                 f"{_miss} uncovered of {n_dem}" + ("" if _miss == 0 else
-                f" -- regenerate: python cf_4_upsilon_export.py --estim {k} --spec {SPEC}"))
+                f" -- regenerate: python sleep_upsilon_export.py --estim {k} --spec {SPEC}"))
         except Exception as exc:
             chk(f"E{k}: phi_nopix key coverage readable", False,
                 f"{type(exc).__name__}: {exc}")

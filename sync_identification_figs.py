@@ -1,11 +1,11 @@
 #!/usr/bin/env python
 """
-sync_identification_figs.py
+make_ident_figs_sync.py
 ===========================
 Refresh the figure COPIES that identification_notes.md renders from, then (optionally) rebuild
 the PDF.
 
-Why this exists. The phi battery (run_phi_diagnostics.py) regenerates its figures into
+Why this exists. The phi battery (sleep_diag_battery.py) regenerates its figures into
     processed/ESTIMATION_OUTPUT/DIAG_PHI_SEPARATION/
 but identification_notes.md references
     identification_figs/<name>
@@ -21,9 +21,9 @@ It is deliberately conservative:
     points at something the battery no longer produces.
 
 Usage:
-  python sync_identification_figs.py              # sync only, report what changed
-  python sync_identification_figs.py --render     # sync, then rebuild the PDF
-  python sync_identification_figs.py --dry-run
+  python make_ident_figs_sync.py              # sync only, report what changed
+  python make_ident_figs_sync.py --render     # sync, then rebuild the PDF
+  python make_ident_figs_sync.py --dry-run
 """
 from __future__ import annotations
 

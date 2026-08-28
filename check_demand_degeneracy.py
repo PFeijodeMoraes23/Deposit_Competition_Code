@@ -1,16 +1,16 @@
 """
-check_demand_degeneracy.py
+blp_diag_degeneracy.py
 ===========================
 Local diagnostic for the BLP SingularException(3) / θ₂→0 issue.
 
-Reproduces how blp_1_estimation.jl builds the design matrix X_hat = [spread_hat | x_mat]
+Reproduces how blp_engine_cpu.jl builds the design matrix X_hat = [spread_hat | x_mat]
 from a DEMAND_PREP parquet, then:
   * reports which X_COLS / D_COLS / IV columns are missing, all-zero, or zero-variance
   * runs the SAME unpivoted QR that blp_2's IFT gradient uses and prints diag(R),
     so the column whose |R[i,i]|≈0 is exactly the one that triggers SingularException(i).
 
 Usage:
-  python check_demand_degeneracy.py [path/to/demand_*_spec_*.parquet]
+  python blp_diag_degeneracy.py [path/to/demand_*_spec_*.parquet]
 Default targets E3 spec 12.
 """
 import sys
@@ -22,7 +22,7 @@ try:
 except Exception:
     pass
 
-# ── Column lists copied verbatim from blp_1_estimation.jl ────────────────────
+# ── Column lists copied verbatim from blp_engine_cpu.jl ────────────────────
 X_COLS = ["fgc_covered", "has_ip", "seg_S2", "seg_S3", "seg_S4", "seg_S5",
           "log_total_assets_lag", "is_state_owned"]
 D_COLS = ["gdp_per_capita", "fraction_65plus", "fraction_young",

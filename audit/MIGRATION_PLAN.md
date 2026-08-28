@@ -82,7 +82,7 @@ pattern once (find the two parent dirs, decide which is canonical) and apply to 
      `duplicates_exact.csv` ≈ empty and reclaimable ≈ 0.
   2. `path_refs.csv` / SUMMARY "Path hygiene" shows **every** project
      `has path module = yes`.
-  3. Smoke-run the Egan pipeline (`run_data_pipeline.py`) and one representative
+  3. Smoke-run the Egan pipeline (`panel_pipeline.py`) and one representative
      loose script per language (e.g. a `public_RAIS_*.py` and an `SCR_*.R`) to
      confirm all paths resolve with no hardcoded fallbacks.
   4. Set `OPEN_FINANCE_ROOT` to a throwaway copy and confirm the whole thing

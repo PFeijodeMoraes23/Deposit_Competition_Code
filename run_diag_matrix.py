@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 """
-run_diag_matrix.py
+sleep_diag_matrix.py
 ==================
 Run a (routine x diagnostic) matrix with a HARD WALL-CLOCK DEADLINE, one unit at a time.
 
@@ -22,9 +22,9 @@ Nothing is started after the deadline; a unit already running is allowed to fini
 mid-write is what this exists to prevent). --grace lets you cap that too.
 
 Usage:
-    python run_diag_matrix.py --units d0:1,2,3,4 --until 16:00
-    python run_diag_matrix.py --units d0:3,4 d2:3,4 --for 2h --dry-run
-    python run_diag_matrix.py --resume            # continue the last run
+    python sleep_diag_matrix.py --units d0:1,2,3,4 --until 16:00
+    python sleep_diag_matrix.py --units d0:3,4 d2:3,4 --for 2h --dry-run
+    python sleep_diag_matrix.py --resume            # continue the last run
 """
 from __future__ import annotations
 
@@ -51,18 +51,18 @@ STATE = HERE / ".diag_matrix_state.json"
 # before the deadline?" decision, so a wrong number here causes either a needless skip or a
 # late finish. Update them when a run reports a materially different duration.
 UNITS = {
-    "d0":   ("step_phi_augmented_tests.py",   ["--arm", "identity"],     1.0),
-    "d2":  ("step_phi_augmented_tests.py",   ["--arm", "lagdepact"],    2.5),
-    "d5":   ("step_phi_augmented_tests.py",   ["--arm", "blpelast"],     2.0),
-    "d4a":   ("step_phi_interaction_tests.py", ["--arm", "attractiveness"], 6.0),
-    "d4b":   ("step_phi_interaction_tests.py", ["--arm", "types"],        1.5),
-    "d1s":  ("step_phi_mc_recovery.py",       ["--mode", "grid", "--smoke"], 0.5),
-    "d1":   ("step_phi_mc_recovery.py",       ["--mode", "grid", "--stats-under-null"], 3.0),
-    "d4c":   ("step_phi_mc_recovery.py",       ["--mode", "acf"],         1.0),
+    "d0":   ("sleep_ident_augmented.py",   ["--arm", "identity"],     1.0),
+    "d2":  ("sleep_ident_augmented.py",   ["--arm", "lagdepact"],    2.5),
+    "d5":   ("sleep_ident_augmented.py",   ["--arm", "blpelast"],     2.0),
+    "d4a":   ("sleep_ident_interaction.py", ["--arm", "attractiveness"], 6.0),
+    "d4b":   ("sleep_ident_interaction.py", ["--arm", "types"],        1.5),
+    "d1s":  ("sleep_ident_mc_recovery.py",       ["--mode", "grid", "--smoke"], 0.5),
+    "d1":   ("sleep_ident_mc_recovery.py",       ["--mode", "grid", "--stats-under-null"], 3.0),
+    "d4c":   ("sleep_ident_mc_recovery.py",       ["--mode", "acf"],         1.0),
 }
 
-# Units whose script does NOT accept --estim. step_phi_interaction_tests.py takes only --arm,
-# and step_phi_mc_recovery.py exposes --mode/--phi-prod but no --estim (its calibration parquet
+# Units whose script does NOT accept --estim. sleep_ident_interaction.py takes only --arm,
+# and sleep_ident_mc_recovery.py exposes --mode/--phi-prod but no --estim (its calibration parquet
 # and kernel are E2's by construction) -- appending --estim aborts either one in argparse before
 # a single row is computed. Listed here so the runner omits the flag and reports the E2-only
 # scope, instead of the whole unit dying.

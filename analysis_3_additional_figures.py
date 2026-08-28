@@ -1,4 +1,4 @@
-## analysis_3_additional_figures.py
+## make_margin_figures.py
 # Author: Pedro Feijó de Moraes
 # Last edited: 2026-06-02
 #

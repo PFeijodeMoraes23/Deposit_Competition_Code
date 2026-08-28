@@ -1,5 +1,5 @@
 """
-d_rate_scrape_3_fetch.py
+scrape_deposit_rate_fetch.py
 ==============================
 Fetches historical HTML and PDF snapshots from the Internet Archive (Wayback Machine).
 Uses an asynchronous queue and session pool to download the discovered URLs efficiently
@@ -344,7 +344,7 @@ if __name__ == '__main__':
     _MIME_PRIORITY = args.mime_priority
 
     if not urls_file.exists():
-        print(f"{urls_file} not found! Run d_rate_scrape_2_cdx.py first.")
+        print(f"{urls_file} not found! Run scrape_deposit_rate_cdx.py first.")
         exit(1)
     with open(urls_file, 'r', encoding='utf-8') as f:
         urls_to_fetch = json.load(f)

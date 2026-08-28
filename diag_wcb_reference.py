@@ -67,7 +67,7 @@ import statsmodels.api as sm
 from scipy import stats
 
 from utils import paths as _paths
-from utils.cluster import effective_cluster_stats
+from utils.cluster_stats import effective_cluster_stats
 from utils.sleep_links import (cluster_wild_bootstrap, linear_wild_cluster_bootstrap,
                                wcb_mode, _boot_pval, _linear_wcb_t)
 
@@ -332,9 +332,9 @@ def _fit_aug(df, s_cols, extra_cols, has_cf):
     """The augmented second stage EXACTLY as step_phi_augmented_tests.run_augmented
     builds it (same columns, same all-columns dropna, same two-way demeaning, same
     cluster), but fitting only the augmented model -- the baseline fit is not needed
-    here and costs ~20 s. Pinned locally on purpose: step_phi_augmented_tests.py is
+    here and costs ~20 s. Pinned locally on purpose: sleep_ident_augmented.py is
     under concurrent edit, and this comparison must not move underneath itself."""
-    from step_phi_augmented_tests import demean_variables_2way
+    from sleep_ident_augmented import demean_variables_2way
     df = df.copy()
     X_cols = []
     for sv in s_cols:
@@ -395,7 +395,7 @@ def _print_block(label, spec, rows, n):
 
 def section_battery(arms, B):
     _hr("BATTERY: real phi-separation regressions, three references off one fit")
-    from step_phi_augmented_tests import (load_sleep_frame, build_uncensored_inflow,
+    from sleep_ident_augmented import (load_sleep_frame, build_uncensored_inflow,
                                           lag_within_entity)
     print(f"  [{_ts()}] building the sleep frame ...")
     df0, s_cols = load_sleep_frame()

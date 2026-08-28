@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""weak_iv_analysis.py — weak-instruments battery for the BLP/logit demand first stage.
+"""blp_weak_iv.py — weak-instruments battery for the BLP/logit demand first stage.
 
 The demand model's ONLY endogenous regressor is the deposit spread (rf − dep_rate, the
-markdown). The engine (`blp_1_logit.jl::project_spreads`) instruments it for deposit types 4
+markdown). The engine (`blp_logit.jl::project_spreads`) instruments it for deposit types 4
 and 5 with 15 excluded instruments: leave-one-out rival characteristics (`loo_*`/`mean_loo_*`),
 the rival count (`n_rivals`), cost ratios, and the capital ratio. The structural (logit) equation
 is δ = α·spread + Xβ + ξ, with δ = ln(s_data) (share_D for D-type, share_B_cond for B-type) and
@@ -33,9 +33,9 @@ instruments are highly correlated within conglomerate.
 
 All first-stage statistics are computed AFTER partialling the included exogenous controls
 (const + X) out of the spread and the instruments (Frisch–Waugh–Lovell). Writes
-cluster_processed/weak_iv.json (consumed by process_blp_outputs.py) and prints a table.
+cluster_processed/weak_iv.json (consumed by cluster_ingest_blp.py) and prints a table.
 
-Run:  python weak_iv_analysis.py [BLP_RESULTS_dir] [--routines 1,2,3,4]
+Run:  python blp_weak_iv.py [BLP_RESULTS_dir] [--routines 1,2,3,4]
 """
 import os, sys, glob, json, argparse
 
@@ -62,7 +62,7 @@ AR_GRID = np.linspace(-2.0, 2.0, 4001)   # α grid (spread coef, percentage-poin
 # (θ₂ = 0) δ built below. The first-stage block (eff-F, KP-F, Cragg-Donald, partial R², collinearity)
 # is θ₂-INVARIANT — it is computed from the spread and Z alone and never touches δ — so only the
 # AR/LM/Hansen-J sets and the α̂ ladder change. Export the δ first with
-#   julia --project=. export_rc_delta.jl --stage ext1
+#   julia --project=. blp_delta_export.jl --stage ext1
 # which writes cluster_processed/rc_delta_E{k}_spec_12_{stage}.bin (Int64 n, then n Float64).
 DELTA_STAGE = None       # set from the CLI in main()
 DELTA_DIR = None
@@ -73,7 +73,7 @@ def _load_rc_delta(k, stage, ddir, n_expect):
     a silent fallback to the log-share δ would mislabel the whole run."""
     path = os.path.join(ddir, f"rc_delta_E{k}_spec_12_{stage}.bin")
     if not os.path.isfile(path):
-        print(f"[weak-IV] E{k}: {os.path.basename(path)} not found — run export_rc_delta.jl first")
+        print(f"[weak-IV] E{k}: {os.path.basename(path)} not found — run blp_delta_export.jl first")
         return None
     with open(path, "rb") as f:
         n = int(np.frombuffer(f.read(8), dtype="<i8")[0])
@@ -153,7 +153,7 @@ def _group_sum(A, codes, G):
 
 def _wild_weights(B, G, scheme, rng):
     """(B×G) wild bootstrap weights: 6-point Webb (default; robust to few/imbalanced clusters) or
-    2-point Rademacher. Mean 0, variance 1 — mirrors se_common.jl `wild_weights`."""
+    2-point Rademacher. Mean 0, variance 1 — mirrors blp_se_common.jl `wild_weights`."""
     if scheme == "webb":
         vals = np.array([-np.sqrt(1.5), -1.0, -np.sqrt(0.5), np.sqrt(0.5), 1.0, np.sqrt(1.5)])
         return vals[rng.integers(0, 6, size=(B, G))]

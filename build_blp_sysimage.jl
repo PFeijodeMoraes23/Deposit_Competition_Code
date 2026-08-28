@@ -1,4 +1,4 @@
-# build_blp_sysimage.jl
+# blp_build_sysimage.jl
 # =====================
 # Build a Julia sysimage (`blp_sysimage.so`) with the heavy BLP packages — above all
 # CUDA — baked in, so each cluster job starts in seconds instead of re-running
@@ -11,11 +11,11 @@
 # through — it checks the provenance sidecar env_job.sh writes and REFUSES a mismatch
 # rather than degrading to a cold precompile.
 #
-#   BLP_SYSIMAGE_WORKLOAD=1  also runs `sysimage_precompile_workload.jl` during the build
+#   BLP_SYSIMAGE_WORKLOAD=1  also runs `blp_build_sysimage_workload.jl` during the build
 #   (a tiny --dry-run that bakes the estimation hot path too — needs data + a GPU present).
 #
 # Usage (on a GPU node):
-#   julia --project=. build_blp_sysimage.jl
+#   julia --project=. blp_build_sysimage.jl
 
 using Pkg
 Pkg.activate(@__DIR__)
@@ -26,7 +26,7 @@ end
 using PackageCompiler
 
 # BLP_SYSIMAGE_CPU=1 builds the CPU-partition image: no CUDA (with CF_GPU=0 the CF/BBL stack never
-# includes blp_gpu_engine.jl, so CUDA is dead weight) and a DIFFERENT output name. This exists
+# includes blp_engine_gpu.jl, so CUDA is dead weight) and a DIFFERENT output name. This exists
 # because a sysimage bakes the BUILD node's CPU target: the gpu_h200 image (sapphirerapids) is
 # REJECTED on `day` nodes ("Unable to find compatible target in cached code image"), which sends
 # every task back to precompiling and stampedes the shared NFS depot. Build this one ON a day node.
@@ -41,7 +41,7 @@ pkgs   = Symbol.(filter(in(direct), wanted))
 @info "Baking packages into sysimage" pkgs cpu_only=CPU_ONLY
 
 sysimg   = joinpath(@__DIR__, CPU_ONLY ? "blp_sysimage_cpu.so" : "blp_sysimage.so")
-workload = joinpath(@__DIR__, "sysimage_precompile_workload.jl")
+workload = joinpath(@__DIR__, "blp_build_sysimage_workload.jl")
 kw = Dict{Symbol,Any}(:sysimage_path => sysimg)
 if get(ENV, "BLP_SYSIMAGE_WORKLOAD", "0") == "1" && isfile(workload)
     @info "Including precompile workload (bakes the estimation hot path)" workload

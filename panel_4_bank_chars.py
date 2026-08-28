@@ -438,7 +438,7 @@ def build_panel() -> pd.DataFrame:
     present_lag_cols = [c for c in lag_cols if c in panel.columns]
     panel[[c + '_lag' for c in present_lag_cols]] = panel.groupby('CodConglomeradoPrudencial')[present_lag_cols].shift(1)
 
-    # Gross factor for the Julia consumer (estimation_bbl_2_fwd_sim.jl --asset-return-col), which does
+    # Gross factor for the Julia consumer (bbl_fwd_sim.jl --asset-return-col), which does
     #     gr = col − 1 ;  asset_ret = gr − risk_free_qoq_lag
     # so this must be 1 + a LAGGED quarterly DECIMAL rate — the same vintage and units as
     # gross_return_lag = 1 + deposit_rate_lag (≈1.0126) and risk_free_qoq_lag (≈0.0253).

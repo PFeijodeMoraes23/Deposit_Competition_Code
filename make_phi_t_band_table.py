@@ -185,15 +185,12 @@ def main():
                   f"{c['band_link']:.2f}) spread={c['spread']:.3f}pp "
                   f"constrained={c['constrained']}")
     if not cells:
-        print("[!] no band pickles found -- run estimation_uncond_band.py first.")
+        print("[!] no band pickles found -- run sleep_band_uncond.py first.")
         return
 
-    out = _paths_mod.rout_dir() / OUT_NAME
+    out = _DRAFTS_DIR / OUT_NAME
     out.write_text(build_tex(cells), encoding="utf-8")
     print(f"\nWrote {out}")
-    if _DRAFTS_DIR.is_dir():
-        shutil.copy(out, _DRAFTS_DIR / OUT_NAME)
-        print(f"Copied to {_DRAFTS_DIR / OUT_NAME}")
 
 
 if __name__ == "__main__":

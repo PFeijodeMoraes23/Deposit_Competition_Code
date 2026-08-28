@@ -46,8 +46,8 @@ every other file sources first. Every driver takes `--dry-run` and `-h`.
 | `sbatch` reaches it | payload |
 |---|---|
 | `sleep_job.sh` | the sleepiness steps and every content gate (`SLEEP_STEP`, `SLEEP_GATE`) |
-| `logit_job.sh` | `blp_1_logit.jl --hpc` |
-| `blp_draws_job.sh` | `blp_1_draws.jl` |
+| `logit_job.sh` | `blp_logit.jl --hpc` |
+| `blp_draws_job.sh` | `blp_draws.jl` |
 | `blp_stage_job.sh` | one RC stage (`RC_ROUTINE` / `RC_ENGINE` / `RC_STAGE`) |
 | `bbl_job.sh` | one BBL step (`BBL_STEP`) |
 | `cf_job.sh` | one CF step (`CF_STEP`) |
@@ -73,7 +73,7 @@ sbatch --wrap "cd ~/project_pi_mf2263/pf382/dep_comp/scripts && bash blp_run.sh 
 Both zips go **into the project root** (not `~`, not `data/input`): the member paths are already
 prefixed `scripts/` and `data/input/`, so one `unzip -o` from the root places every file.
 
-Build them locally with `python stage_cluster_upload.py --stage`; the manifest is
+Build them locally with `python cluster_upload.py --stage`; the manifest is
 `cluster/upload_manifest.txt`. The data bundle is **seven** files, ~50 MB — the market panel travels
 as `market_panel.parquet`, not the 724 MB CSV.
 
@@ -285,8 +285,8 @@ Then, on the local machine, download `data/output/download` whole into
 `<processed>/ESTIMATION_OUTPUT/CLUSTER_IN/` and run:
 
 ```
-python ingest_cluster_downloads.py --dry-run
-python ingest_cluster_downloads.py
+python cluster_ingest.py --dry-run
+python cluster_ingest.py
 ```
 
 It reassembles parts, verifies against `sha256SUMS`, and routes all eight families into the local

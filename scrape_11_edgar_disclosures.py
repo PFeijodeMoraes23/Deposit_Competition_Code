@@ -1,4 +1,4 @@
-## scrape_11_edgar_disclosures.py
+## scrape_edgar_disclosures.py
 # Author: Pedro Feijó de Moraes
 #
 # Last edited: 2026-05-31
@@ -35,11 +35,11 @@
 #     FirmDisclosures/SEC/raw/<firm>/<accession>.txt (archived filing text)
 #
 #   CLI:
-#     python scrape_11_edgar_disclosures.py                 # all SEC firms, since 2018
-#     python scrape_11_edgar_disclosures.py --firms nubank,pagseguro
-#     python scrape_11_edgar_disclosures.py --since 2020 --max-filings 40
-#     python scrape_11_edgar_disclosures.py --deposits-only # XBRL only, no text
-#     python scrape_11_edgar_disclosures.py --list
+#     python scrape_edgar_disclosures.py                 # all SEC firms, since 2018
+#     python scrape_edgar_disclosures.py --firms nubank,pagseguro
+#     python scrape_edgar_disclosures.py --since 2020 --max-filings 40
+#     python scrape_edgar_disclosures.py --deposits-only # XBRL only, no text
+#     python scrape_edgar_disclosures.py --list
 ###────────────────────────────────────────────────────────────────────────────
 
 import os

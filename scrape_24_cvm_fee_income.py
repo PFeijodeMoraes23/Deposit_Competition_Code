@@ -1,4 +1,4 @@
-## scrape_24_cvm_fee_income.py
+## scrape_cvm_fee_income.py
 # Author: Pedro Feijó de Moraes
 #
 # Last edited: 2026-06-19
@@ -25,9 +25,9 @@
 #   Cache:  FirmDisclosures/CVM/raw/<doc>_<year>.zip  (shared with scrape_23)
 #
 #   CLI:
-#     python scrape_24_cvm_fee_income.py                 # 2018..current, DFP+ITR
-#     python scrape_24_cvm_fee_income.py --since 2015 --docs DFP
-#     python scrape_24_cvm_fee_income.py --firms bb,itau,bradesco --dump-accounts
+#     python scrape_cvm_fee_income.py                 # 2018..current, DFP+ITR
+#     python scrape_cvm_fee_income.py --since 2015 --docs DFP
+#     python scrape_cvm_fee_income.py --firms bb,itau,bradesco --dump-accounts
 #
 #   --dump-accounts: instead of saving the panel, print all unique DRE account
 #   descriptions found for the matched firms (for exploratory mapping).

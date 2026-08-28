@@ -1,8 +1,8 @@
 """
-estimation_demand_link_common.py
+sleep_demand_prep_link.py
 ================================================================================
 Shared demand-prep for the link-based sleepiness routines E3/E4 (see DEMAND_CFG at
-the bottom). Mirrors estimation_2_demand_1_prep.py (reshape panel, reconstruct
+the bottom). Mirrors sleep_demand_prep_e2.py (reshape panel, reconstruct
 phi_mt, build Active Deposits Dep^Act and data-implied conditional B/D shares) but:
 
   * phi is reconstructed from the NATIVE index coefficients (params_native),
@@ -55,7 +55,7 @@ IV_BLP_LOO = ['loo_log_assets', 'mean_loo_log_assets', 'loo_equity_ratio', 'mean
               'loo_npl_provision', 'mean_loo_npl_provision', 'n_rivals']
 IV_COST = ['personnel_cost_ratio_lag', 'admin_cost_ratio_lag', 'tax_cost_ratio_lag']
 IV_CAPITAL = ['indice_basileia_lag']
-# ESTBAN branch-competition instrument (panel_10_estban_instruments.py): log1p lagged count of RIVAL
+# ESTBAN branch-competition instrument (panel_estban_instrument.py): log1p lagged count of RIVAL
 # branches in the local market (MCA). Unlike the accounting IVs it has within-conglomerate variation
 # (across the conglomerate's municipalities) and is independent + relevant for demand-deposit spreads.
 IV_ESTBAN = ['estban_rival_branches_lag']
@@ -63,8 +63,8 @@ IV_FEE = ['cosif_fee_ratio_all', 'cosif_fee_ratio_total_deposits', 'cosif_fee_va
           'listed_fee_atm_withdrawal_pf', 'listed_fee_statement_pf',
           'tarifa_stickiness_yrs', 'tarifa_stickiness_n']
 # CF2 needs the bank's ASSET return r^j (V_Main eq 16, ψ1 row): the return on what deposits fund.
-# `asset_gross_return_lag` = 1 + lagged quarterly asset yield (built in panel_4_bank_chars.py).
-# Consumed by estimation_bbl_2_fwd_sim.jl --asset-return-col. NOT `gross_return_lag`, which is 1 + the
+# `asset_gross_return_lag` = 1 + lagged quarterly asset yield (built in panel_bank_chars.py).
+# Consumed by bbl_fwd_sim.jl --asset-return-col. NOT `gross_return_lag`, which is 1 + the
 # DEPOSIT rate (liability side) — see counterfactuals_plan.md §9.4.
 CF_COST_COLS = ['asset_gross_return_lag', 'asset_return_imputed',
                 # LEVEL r^f for the BBL/CF stack. `risk_free_qoq_lag` is grand-mean
@@ -150,7 +150,7 @@ def _ensure_is_B(df, where):
         raise KeyError(f"{where}: neither is_B nor CODMUN_IBGE is available to set firm type")
     logging.warning(
         f"{where}: market panel has no is_B column -- falling back to CODMUN_IBGE != '0'. "
-        f"Rebuild the panel with panel_6_market.py to get the stored verdict.")
+        f"Rebuild the panel with panel_market.py to get the stored verdict.")
     df['is_B'] = (df['CODMUN_IBGE'].astype(str) != '0')
     return df
 
@@ -255,7 +255,7 @@ def build_base_panel(panel_csv, time_block=False):
         df['findex_banked_frac'] = np.nan
 
     if time_block:
-        from estimation_2_sleep import add_time_variables
+        from sleep_est_e2 import add_time_variables
         df = add_time_variables(df)
         print("  [+Time] added time_trend + gdp_growth_yoy to the demand frame")
 
@@ -263,9 +263,9 @@ def build_base_panel(panel_csv, time_block=False):
     # persisted means the sleepiness estimation used (loaded, never recomputed: this
     # frame is a different sample, so a locally-computed mean would silently shift the
     # index phi is rebuilt from).
-    # Snapshot the UNCENTRED lagged r^f before centring. estimation_bbl_2_fwd_sim.jl and
-    # cf_1_franchise_value.jl need a LEVEL (a centred r^f biases omega-hat by the grand
-    # mean, 0.0216/q = 8.6pp/yr) and foundation_deposit_sim.jl's accrual clamp pins 82%
+    # Snapshot the UNCENTRED lagged r^f before centring. bbl_fwd_sim.jl and
+    # cf1_franchise.jl need a LEVEL (a centred r^f biases omega-hat by the grand
+    # mean, 0.0216/q = 8.6pp/yr) and cf_deposit_sim.jl's accrual clamp pins 82%
     # of rows at zero when handed a deviation. See identification_notes.md section 9.
     if 'risk_free_qoq_lag' in df.columns:
         df['risk_free_qoq_lag_level'] = df['risk_free_qoq_lag']
@@ -313,7 +313,7 @@ def _apply_link(index_series, link, res_ss):
 # ==============================================================================
 # SHARED market size + ACTIVE-depositor shares  (V_Main pp.26-27; see
 # counterfactuals_plan.md §0). This lives in ONE place and is imported by
-# estimation_1_demand_1_prep.py and estimation_2_demand_1_prep.py.
+# sleep_demand_prep_e1.py and estimation_2_demand_1_prep.py.
 #
 # It used to be copy-pasted into all three scripts, which is exactly how the
 # (1-phi) / anchor / bc defects survived: a fix in one copy never reached the
@@ -458,7 +458,7 @@ def build_market_size_and_shares(df_spec: pd.DataFrame) -> pd.DataFrame:
     # so the counterfactuals could not see it and each re-invented their own market size as a
     # per-type scalar dbar·pop_total that ignores banked_correction entirely. That meant the demand
     # model was ESTIMATED under one market size and the CFs SIMULATED under another. Keeping these
-    # two columns lets foundation_deposit_sim.jl consume the estimation's own M. See §9.8.
+    # two columns lets cf_deposit_sim.jl consume the estimation's own M. See §9.8.
     df_spec['M_mt'] = df_spec['_b_mkt']      # local market size (B firms)
     df_spec['M_nat'] = df_spec['_d_mkt']     # national market size (D firms)
     df_spec.drop(columns=['_b_mkt', '_d_mkt', '_bc'], inplace=True)
@@ -575,7 +575,7 @@ def run(est_num, link, tag, time_block=False, spec="all"):
     results_pickle = sleep_output_dir / "estimation_results.pkl"
     if not results_pickle.exists():
         print(f"[!] No pickle at {results_pickle}. "
-              f"Run estimation_sleep_common.py --est {est_num} first.")
+              f"Run sleep_est_single.py --est {est_num} first.")
         return
     with open(results_pickle, 'rb') as f:
         results_dict = pickle.load(f)
@@ -614,7 +614,7 @@ def run(est_num, link, tag, time_block=False, spec="all"):
 
 
 # ── Config-driven CLI for E3/E4 demand prep (link, tag, time_block) ──────────────
-#  (E1/E2 have their own demand-prep scripts.) Run:  python estimation_demand_link_common.py --est N --spec X
+#  (E1/E2 have their own demand-prep scripts.) Run:  python sleep_demand_prep_link.py --est N --spec X
 #
 # The link string here is a DEFAULT only: _apply_link prefers the stored result's own tag, so
 # a constrained single-index fit ("index_sieve") is evaluated on its I-spline grid even though

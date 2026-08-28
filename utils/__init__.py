@@ -17,7 +17,7 @@ def load_panel_cached(panel_csv, **read_csv_kwargs):
     cluster the CSV never exists at all and the Parquet is the only copy of the
     panel there is.  There is then nothing to validate the sidecar against and
     nothing to refresh, so it is read directly.  Its integrity is established
-    before it leaves the local machine (stage_cluster_upload.py checks its
+    before it leaves the local machine (cluster_upload.py checks its
     `source_csv_bytes` stamp against the local CSV and records its sha256) and on
     arrival (gate G0, env_job.sh ENV_STEP=preflight, opens it and counts rows).
 

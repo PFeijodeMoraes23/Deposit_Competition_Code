@@ -1,9 +1,9 @@
 # upload_manifest.txt -- what gets uploaded to Bouchet for a cluster run.
 #
-# ONE source of truth for the staging list. stage_cluster_upload.py bundles from it BEFORE the
+# ONE source of truth for the staging list. cluster_upload.py bundles from it BEFORE the
 # upload and cluster_preflight.sh section (7) verifies against it AFTER, on the cluster; the
 # manifest ships itself in the code bundle so both ends read the same file.
-# Read by stage_cluster_upload.py; also readable with grep/awk (see PARSING below).
+# Read by cluster_upload.py; also readable with grep/awk (see PARSING below).
 #
 # ---------------------------------------------------------------------------------------
 # CLUSTER LAYOUT AND THE INPUT/OUTPUT CONVENTION
@@ -57,7 +57,7 @@
 #   grep -v '^#' cluster/upload_manifest.txt | awk -F'|' 'NF>1 {gsub(/ /,"");
 #       if ($2=="data") print $6"/"$5}'
 #
-# ROOTS (resolved by stage_cluster_upload.py through utils/paths.py -- no hardcoded paths):
+# ROOTS (resolved by cluster_upload.py through utils/paths.py -- no hardcoded paths):
 #   DEMAND_PREP    paths.demand_prep_root()                     active vintage; follows SLEEP_OUT_ROOT
 #   EST{k}         paths.est_dir(k)                             per-routine sleep outputs
 #   SIGMA_DIR      paths.PROCESSED/ESTIMATION_OUTPUT/DEMAND_PREP  panel_8 writes here unconditionally;
@@ -71,7 +71,7 @@
 #   INCLUSION      paths.INCLUSION_DIR                          BCB/Inclusion, the banked/MCA panels
 #   REPO           this repository
 #
-# Every token above is resolved by stage_cluster_upload.py's make_root_resolver(); adding a
+# Every token above is resolved by cluster_upload.py's make_root_resolver(); adding a
 # root here without adding it there exits with "unknown root token" before anything else runs:
 #     "PANEL_INTERMED": paths_mod.PROCESSED / "PANEL_INTERMED",
 #     "INCLUSION":      paths_mod.INCLUSION_DIR,
@@ -86,7 +86,7 @@
 # ---------------------------------------------------------------------------------------
 # DIRECTIVES -- the active routine lineup and each routine's demand-parquet prefix.
 # {k} in any field expands over ROUTINES; {prefix} expands to that routine's PREFIX.
-# PREFIX must match DEMAND_PREFIXES in blp_1_estimation.jl and DEMAND_CFG in
+# PREFIX must match DEMAND_PREFIXES in blp_engine_cpu.jl and DEMAND_CFG in
 # estimation_demand_link_common.py. Adding a routine = one line here plus one PREFIX line.
 # ---------------------------------------------------------------------------------------
 #!SPEC 12
@@ -114,15 +114,15 @@
 #        intent: a CSV that lands after the parquet makes every estimator re-read 724 MB and
 #        rewrite the sidecar, and a CSV of a DIFFERENT vintage silently invalidates the parquet
 #        and becomes the panel. The freshness question is settled locally instead —
-#        stage_cluster_upload.py refuses to bundle a parquet whose source_csv_bytes stamp does
+#        cluster_upload.py refuses to bundle a parquet whose source_csv_bytes stamp does
 #        not match the local market_panel.csv, and gate G0 re-opens the uploaded file and counts
 #        its rows before any estimator starts.
-market_panel       | data | sleep      | PROCESSED     | market_panel.parquet           | data/input | python run_data_pipeline.py                                    | -         | -
-digital_flags      | data | sleep      | PANEL_INTERMED| digital_banks_diagnostic.csv   | data/input | python panel_5_flag_digital.py                                 | -         | -
-banked_mca         | data | sleep      | INCLUSION     | bcb_banked_mca_panel.csv       | data/input | python scrape_8_bcb_banked.py                                  | -         | -
+market_panel       | data | sleep      | PROCESSED     | market_panel.parquet           | data/input | python panel_pipeline.py                                    | -         | -
+digital_flags      | data | sleep      | PANEL_INTERMED| digital_banks_diagnostic.csv   | data/input | python panel_digital_flags.py                                 | -         | -
+banked_mca         | data | sleep      | INCLUSION     | bcb_banked_mca_panel.csv       | data/input | python scrape_bcb_banked.py                                  | -         | -
 # The persisted state transform. STATE_CENTERING_JSON points every cluster job at the uploaded
 # copy, so theta0 keeps meaning "phi-hat at the average market" and the fits stay comparable
-# with the promoted local ones. tier0 is the coverage audit check_state_centering.py reads.
+# with the promoted local ones. tier0 is the coverage audit sleep_audit_state_centering.py reads.
 #
 # NO PARENT ON EITHER ROW, DELIBERATELY -- they are checked for PRESENCE, never for mtime.
 # state_centering_means.json is VERSION-pinned, not mtime-derived: it carries
@@ -140,8 +140,8 @@ banked_mca         | data | sleep      | INCLUSION     | bcb_banked_mca_panel.cs
 #
 # Regenerating these is a deliberate RE-CENTERING decision (new panel vintage promoted on
 # purpose, or STATE_TRANSFORM_VERSION bumped), never routine freshness maintenance.
-state_centering    | data | sleep      | SIGMA_DIR     | state_centering_means.json     | data/input | python estimation_2_sleep.py --write-centers   (RE-CENTERING ONLY) | - | -
-state_tier0        | data | sleep      | SIGMA_DIR     | state_centering_tier0.csv      | data/input | python check_state_centering.py                (RE-CENTERING ONLY) | - | -
+state_centering    | data | sleep      | SIGMA_DIR     | state_centering_means.json     | data/input | python sleep_est_e2.py --write-centers   (RE-CENTERING ONLY) | - | -
+state_tier0        | data | sleep      | SIGMA_DIR     | state_centering_tier0.csv      | data/input | python sleep_audit_state_centering.py                (RE-CENTERING ONLY) | - | -
 
 # --- 1. demand parquets: the estimation sample the BLP, BBL and CF all read ---------------
 #        PRODUCED ON THE CLUSTER: sleep_job.sh SLEEP_STEP=prep writes them into
@@ -150,11 +150,11 @@ state_tier0        | data | sleep      | SIGMA_DIR     | state_centering_tier0.c
 #        engine, the CF stack -- so a stale upload cannot shadow the run's own sample.
 demand_E{k}        | produced | blp,bbl,cf | DEMAND_PREP | {prefix}_spec_12.parquet     | data/output/demand_prep | sleep_job.sh SLEEP_STEP=prep (gate G2)                | -         | -
 
-# --- 2. demographic sigma for the parametric d-draws (blp_1_draws.jl) ---------------------
-demographics_sigma | data | blp        | SIGMA_DIR     | demographics_sigma.parquet     | data/input | python panel_8_demographics_sigma.py                          | PROCESSED | market_panel.csv
+# --- 2. demographic sigma for the parametric d-draws (blp_draws.jl) ---------------------
+demographics_sigma | data | blp        | SIGMA_DIR     | demographics_sigma.parquet     | data/input | python panel_demographics_sigma.py                          | PROCESSED | market_panel.csv
 
-# --- 3. logit delta warm-starts (blp_1_logit.jl -> blp_2_rc.jl / blp_gpu_engine.jl) -------
-#        PRODUCED, not uploaded: logit_job.sh runs blp_1_logit.jl --hpc on the cluster and
+# --- 3. logit delta warm-starts (blp_logit.jl -> blp_rc.jl / blp_engine_gpu.jl) -------
+#        PRODUCED, not uploaded: logit_job.sh runs blp_logit.jl --hpc on the cluster and
 #        delta_dir() is data/output/logit, which is where the RC engine reads them.
 #        Gate G4 checks the leading Int64 against the routine's parquet row count -- the
 #        engine SILENTLY skips a mismatched delta and starts cold.
@@ -162,15 +162,15 @@ logit_delta_E{k}   | produced | blp    | BLP_LOGIT     | logit_delta_E{k}_spec_1
 
 # --- 4. forward risk-free curve. MUST be built locally: compute nodes have no outbound ----
 #        internet, and this script calls the BCB SGS + Focus APIs.
-forward_rf         | data | bbl,cf     | COST_FWD      | forward_rf_qoq.csv             | data/input | python cf_forward_rf.py --horizon 50 --start 2026Q1            | DEMAND_PREP | demand_3_index_spec_12.parquet
+forward_rf         | data | bbl,cf     | COST_FWD      | forward_rf_qoq.csv             | data/input | python scrape_forward_rf.py --horizon 50 --start 2026Q1            | DEMAND_PREP | demand_3_index_spec_12.parquet
 
 # --- 5. fitted BBL policy function (deviations are formed around it, not observed spreads) -
 polfunc            | produced | bbl      | COST_POLFUNC  | polfunc_fitted.csv           | data/output/bbl | bbl_run.sh (BBL_STEP=polfunc, default)                       | -         | -
 
 # --- 6. CF4 Pix inputs. PRODUCED on the cluster: the sleep pickle IS there, because the -------
-#        sleepiness estimators run there, so cf_4_upsilon_export.py runs there too
+#        sleepiness estimators run there, so sleep_upsilon_export.py runs there too
 #        (sleep_job.sh SLEEP_STEP=upsilon, gate G7, all four routines). CF_FOUNDATION_DIR
-#        points it at data/output/counterfactuals, which is the one directory cf_4_pix.jl
+#        points it at data/output/counterfactuals, which is the one directory cf4_pix.jl
 #        opens at run time. Gate G7 checks exact_nopix and the row alignment.
 upsilon_pix_E{k}   | produced | cf4    | CF_FOUNDATION | upsilon_pix_E{k}_spec_12.json  | data/output/counterfactuals | sleep_run.sh (SLEEP_STEP=upsilon; gate G7)     | EST{k}    | estimation_results.pkl
 phi_nopix_E{k}     | produced | cf4    | CF_FOUNDATION | phi_nopix_E{k}_spec_12.parquet | data/output/counterfactuals | sleep_run.sh (SLEEP_STEP=upsilon; gate G7)     | EST{k}    | estimation_results.pkl

@@ -1,9 +1,9 @@
 #!/usr/bin/env julia
-# export_rc_delta.jl — dump the RC-BLP mean utility δ(θ̂₂) from a stage result into a plain binary,
+# blp_delta_export.jl — dump the RC-BLP mean utility δ(θ̂₂) from a stage result into a plain binary,
 # so the Python weak-IV battery can invert AR/LM against the STRUCTURAL δ instead of the log-share
 # (θ₂ = 0) δ it builds itself.
 #
-# Why this exists: weak_iv_analysis.py constructs δ = ln(s_data) — the logit moment. In the RC model δ
+# Why this exists: blp_weak_iv.py constructs δ = ln(s_data) — the logit moment. In the RC model δ
 # is θ₂-dependent, so the AR/LM/Hansen-J sets it reports characterise the logit moment, not the rung
 # actually reported in the paper. (The FIRST-STAGE statistics — eff-F, KP-F, Cragg-Donald, partial R² —
 # are unaffected: they are computed from the spread and Z alone and never touch δ.)
@@ -15,7 +15,7 @@
 # Format (matches the engine's save_delta_bin): Int64 length, then that many Float64, little-endian.
 #
 # Usage:
-#   julia --project=. export_rc_delta.jl [--stage ext1] [--routines 3,4] [--outdir DIR]
+#   julia --project=. blp_delta_export.jl [--stage ext1] [--routines 3,4] [--outdir DIR]
 
 using Serialization
 

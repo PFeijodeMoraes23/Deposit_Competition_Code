@@ -119,7 +119,7 @@ fi
 # from cf_4_upsilon_export.py. The sleepiness estimators run on the cluster, so the
 # sleep pickle that export reads is there too, and sleep_job.sh SLEEP_STEP=upsilon
 # writes the pair into data/output/counterfactuals (gate G7). That is the ONE place
-# cl_cf4_dirs looks, and the same one cf_4_pix.jl's cf4_search_dirs uses at run time,
+# cl_cf4_dirs looks, and the same one cf4_pix.jl's cf4_search_dirs uses at run time,
 # so what this preflight tests is exactly what the job will open.
 cf4_note=""
 if want cf4; then

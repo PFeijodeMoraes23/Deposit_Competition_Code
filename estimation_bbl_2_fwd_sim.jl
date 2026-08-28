@@ -1,9 +1,9 @@
 """
-estimation_bbl_2_fwd_sim.jl
+bbl_fwd_sim.jl
 =================
 BBL Step 2, part 1: forward-simulate the value-function basis ψ under the
 EQUILIBRIUM strategy σ̂ and under a battery of DEVIATING strategies σ̃, then export
-the firm-level ψ's for the eq:17 minimization (estimation_bbl_3_solve.py).
+the firm-level ψ's for the eq:17 minimization (bbl_solve.py).
 
 Shares come from the real RC demand (foundation_demand_eval), deposits from the real
 law of motion (foundation_deposit_sim), and ψ from the exact basis (foundation_psi_basis)
@@ -16,7 +16,7 @@ Pipeline
   export {ψ_eq, ψ_dev, firms, firm_is_B, Z_names}  → psi_bbl_*.jls in the BBL step folder
                                                     (`cf_out_dir(out_dir, "COST_FWD")`:
                                                      data/output/bbl; local COST_FWD/)
-  estimation_bbl_3_solve.py reads these and minimizes Σ min{g,0}² (eq:17).
+  bbl_solve.py reads these and minimizes Σ min{g,0}² (eq:17).
 
 DEVIATING STRATEGY σ̃ (`--dev-scheme`, default `grid`):
   σ̃ shifts the CHOICE spreads (k∈{4,5}) by Δ and holds the perturbed policy for the
@@ -33,7 +33,7 @@ DEVIATING STRATEGY σ̃ (`--dev-scheme`, default `grid`):
   the share denominator, which IS the business stealing eq:17 prices. A common industry-wide
   shift is the collusive direction and would certify a false inequality; see the loop comment.
 
-FORWARD r^f (`--rf-curve`, default the uploaded `forward_rf_qoq.csv` from cf_forward_rf.py —
+FORWARD r^f (`--rf-curve`, default the uploaded `forward_rf_qoq.csv` from scrape_forward_rf.py —
   data/input on the cluster, local COST_FWD/; see `load_forward_rf`):
   the market Selic curve enters ψ4. A FLAT r^f makes ψ4 collinear with ψ2, leaving ζ
   unidentified; the time-varying curve separates ζ from ω.
@@ -42,7 +42,7 @@ ASSET RETURN r^j (`--asset-return-col` / `--asset-margin`, default 0): enters ψ
   eq 16, row 1). Both flags are read as the QUARTERLY NET margin (r^j − r^f); foundation_psi_basis
   adds r^f back so ψ1 carries the GROSS r^j the paper requires.
     ⚠ DO NOT pass `--asset-return-col gross_return_lag`. Despite the name, that column is
-      `1 + deposit_rate_lag` (estimation_1_demand_1_prep.py:167) — the rate the bank PAYS
+      `1 + deposit_rate_lag` (sleep_demand_prep_e1.py:167) — the rate the bank PAYS
       DEPOSITORS (liability side), not what it earns on assets. It sits BELOW r^f by
       construction (that gap IS the markdown this paper estimates); using it as r^j would
       hand the model a negative asset margin.
@@ -62,7 +62,7 @@ ASSET RETURN r^j (`--asset-return-col` / `--asset-margin`, default 0): enters ψ
 EQUILIBRIUM σ̂ (knob):
   Default σ̂ = observed spreads ρ̂ (the data IS the equilibrium). Pass
   `--policy-csv` to instead use the smoothed fitted policy from
-  estimation_bbl_1_polfunc.py (polfunc_fitted.csv).
+  bbl_polfunc.py (polfunc_fitted.csv).
 
 ⚠ COMPUTE: each σ̃ costs one deposit simulation (≈ one share evaluation when spreads
 are held flat). With S deviations on the full panel at R=2000 this is the heavy,
@@ -70,11 +70,11 @@ GPU/cluster step. Develop locally with --R small, --time-filter one quarter, and
 --shocks small; run headline on Bouchet.
 
 Usage (write-only here; run only after data is downloaded AND author authorizes):
-  julia --project=. --threads=4 estimation_bbl_2_fwd_sim.jl --estim 6 --spec 12 \\
+  julia --project=. --threads=4 bbl_fwd_sim.jl --estim 6 --spec 12 \\
       --stage extended --R 300 --time-filter 2024Q4 --shocks 20 --beta 0.9 --horizon 50
 """
 
-include(joinpath(@__DIR__, "foundation_psi_basis.jl"))
+include(joinpath(@__DIR__, "cf_psi_basis.jl"))
 
 using DataFrames, Random, Serialization, Statistics
 
@@ -87,7 +87,7 @@ using DataFrames, Random, Serialization, Statistics
 # fraction→pp) converts the fitted policy to ρ̂ units. VERIFIED empirically: on the matched k∈{4,5}
 # rows the OBSERVED spread_qoq×400 reproduces ρ̂ to corr≈0.999 (k4) / 1.000 (k5).
 const _POLFUNC_QOQ_TO_ANN_PP = 400.0
-# estimation_bbl_1_polfunc.py::compute_fitted_values predicts with missing regressors filled to 0
+# bbl_polfunc.py::compute_fitted_values predicts with missing regressors filled to 0
 # (`fillna(0)`), which pins ~19% of early-panel (2013–2016) B rows at the ≈190pp regression intercept —
 # absurd for a deposit spread (real ρ̂ never exceeds ~16pp). Any |fitted|>this cap is an upstream
 # extrapolation artifact and is NOT adopted; that row keeps its observed spread. The cap is far above
@@ -102,7 +102,7 @@ _polkey(firm, mca, k::Int, tid) = string(firm, '\x1f', mca, '\x1f', k, '\x1f', t
     _load_policy_map(path) -> Dict{String,Float64}
 
 Parse the BBL Step-1 fitted-policy CSV (`polfunc_fitted.csv` from
-estimation_bbl_1_polfunc.py) into `(firm,mca,k,time) → fitted spread (annual pp)`, keeping only
+bbl_polfunc.py) into `(firm,mca,k,time) → fitted spread (annual pp)`, keeping only
 k∈{4,5} rows with a finite fitted value. Per firm type we take that type's OWN Step-1 regression: B
 firms → the `_B` column, D firms → the `_D_optB` column (national pop-weighted demographics — the
 best-fitting D spec). Values are converted qoq-fraction → annual pp (×`_POLFUNC_QOQ_TO_ANN_PP`).
@@ -118,7 +118,7 @@ function _load_policy_map(path::String)::Dict{String,Float64}
             "fitted_k5_Prepaid_B", "fitted_k5_Prepaid_D_optB"]
     for c in need
         haskey(ci, c) || error("policy-csv missing column '$c' in $(basename(path)). " *
-                               "Re-run estimation_bbl_1_polfunc.py --spec <spec>.")
+                               "Re-run bbl_polfunc.py --spec <spec>.")
     end
     i_firm = ci["CodConglomeradoPrudencial"]; i_mca = ci["mca_code"]; i_k = ci["deposit_type"]
     i_isB = ci["is_B"]; i_t = ci["time_id"]
@@ -222,7 +222,7 @@ function equilibrium_spreads(ctx::CFDemandCtx; policy_csv::Union{Nothing,String}
     if n_untrusted > 0
         @warn "  [BBL] $n_untrusted/$n_endog matched k∈{4,5} fitted spreads exceeded " *
               "$(_POLFUNC_SANE_CAP_PP)pp and fell back to observed. Cause: " *
-              "estimation_bbl_1_polfunc.py::compute_fitted_values fills missing regressors with 0, " *
+              "bbl_polfunc.py::compute_fitted_values fills missing regressors with 0, " *
               "pinning early-panel B rows at the ≈190pp intercept. Restrict that prediction to complete " *
               "cases to adopt the fitted policy on those rows too."
     end
@@ -296,7 +296,7 @@ end
     load_forward_rf(path, out_dir, T, ctx) -> Vector{Float64}
 
 Quarterly forward r^f path (length T) from the market Selic curve written by
-cf_forward_rf.py (`forward_rf_qoq.csv`, column `rf_qoq`, read from `cf_in_dir`), padded/truncated to
+scrape_forward_rf.py (`forward_rf_qoq.csv`, column `rf_qoq`, read from `cf_in_dir`), padded/truncated to
 T. A FLAT r^f makes ψ4 = r^f·Σβ^t Dep a rescaling of ψ2 = Σβ^t Dep (collinear) so ζ is
 unidentified; the time-varying curve breaks that. Falls back to the flat panel median
 (with a warning) if the curve file is absent.
@@ -321,7 +321,7 @@ function load_forward_rf(path::Union{Nothing,String}, out_dir::String, T::Int, c
     # fall back so dev/smoke tests still run.
     msg = "Forward r^f curve not found at:\n    $csv\n" *
           "Generate it locally (needs internet) and upload it there:\n" *
-          "    python cf_forward_rf.py --horizon $T --start 2026Q1"
+          "    python scrape_forward_rf.py --horizon $T --start 2026Q1"
     require && error(msg)
     rf_q0, rfc = _first_present_rf_level(ctx.df, RF_LEVEL_CANDIDATES; default=NaN, what="fallback flat r^f")
     lvl = median(filter(isfinite, rf_q0))
@@ -439,7 +439,7 @@ function main_cost2()
 
     _, _, out_dir = get_paths(a["hpc"]; local_dir=a["local-dir"])
 
-    # Forward r^f path for ψ4 (BCB market Selic curve via cf_forward_rf.py). A FLAT path
+    # Forward r^f path for ψ4 (BCB market Selic curve via scrape_forward_rf.py). A FLAT path
     # makes ψ4 = r^f·Σβ^t Dep a rescaling of ψ2 = Σβ^t Dep (collinear) ⇒ ζ unidentified;
     # the time-varying curve breaks that. Fallback: flat panel median (warns).
     rf_path = load_forward_rf(a["rf-curve"], out_dir, a["horizon"], ctx; require=a["hpc"])
@@ -453,7 +453,7 @@ function main_cost2()
         col = a["asset-return-col"]
         col in names(ctx.df) || error("--asset-return-col '$col' not in demand parquet")
         # LAGGED level, to match the vintage of asset_gross_return_lag (= 1 + LAGGED quarterly
-        # asset yield; see the producer contract at panel_4_bank_chars.py:441-444). The
+        # asset yield; see the producer contract at panel_bank_chars.py:441-444). The
         # contemporaneous `risk_free_qoq` must NOT be used here — it would introduce a
         # one-quarter vintage error on top of the level fix.
         rfq, rfq_c = _first_present_rf_level(ctx.df, RF_LEVEL_LAG_CANDIDATES; default=0.0,
@@ -555,7 +555,7 @@ function main_cost2()
     shard_tag = nsh == 1 ? "" : "_shard$(sid)of$(nsh)"
     Parquet2.writefile(joinpath(cost_dir, "psi_dev_$tag$shard_tag.parquet"), dev_df)
     log_status("  [BBL] wrote psi_dev_$tag$shard_tag.parquet ($nloc firm×Δ deviations)")
-    log_status("[DONE] estimation_bbl_2_fwd_sim shard $sid — run estimation_bbl_3_solve.py after ALL shards")
+    log_status("[DONE] estimation_bbl_2_fwd_sim shard $sid — run bbl_solve.py after ALL shards")
 end
 
 if abspath(PROGRAM_FILE) == @__FILE__

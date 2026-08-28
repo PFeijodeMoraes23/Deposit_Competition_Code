@@ -1403,8 +1403,8 @@ def build_mca_crosswalk_direct(start_year=2000, end_year=2010, year_min=2010, ye
     The mapping comes from `list_code_muni_2010` on the comparable-areas file -- NOT from
     generate_mca_main()'s spatial joins. Those sjoins only attach micro/meso/immediate/
     intermediate region columns, which NOTHING in this repo reads (verified: the only
-    consumers are panel_6_market.py:218 usecols=[municipality_code, mca_code, year],
-    scrape_4 itself, and panel_8_demographics_sigma.py:285 usecols=[mca_code, state_code,
+    consumers are panel_market.py:218 usecols=[municipality_code, mca_code, year],
+    scrape_4 itself, and panel_demographics_sigma.py:285 usecols=[mca_code, state_code,
     year]). Producing them costs ~656 sharded per-state URLs, and geobr's metadata has no
     `municipality` year past 2024, so read_municipality(2025) raises and generate_mca_main's
     blanket except silently DROPS 2025 from the output.

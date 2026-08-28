@@ -111,7 +111,7 @@ JULIA_MODULE="${JULIA_MODULE:-Julia/1.11.4-linux-x86_64}"
 # nothing to create and nothing to install.
 [[ -z "${CONDA_ENV+set}" ]] && CONDA_ENV=dep_comp_blp
 CF_PYTHON="${CF_PYTHON:-python3}"
-# What the Python steps actually import. estimation_bbl_3_solve.py needs
+# What the Python steps actually import. bbl_solve.py needs
 # numpy/pandas/scipy (+pyarrow via pd.read_parquet) and NOT statsmodels — that is
 # a Step-1 polfunc dependency only, so requiring it always would reject an
 # otherwise-usable env.
@@ -119,8 +119,8 @@ CL_PY_REQ_SOLVE="numpy, pandas, scipy, pyarrow"
 CL_PY_REQ_POLFUNC="numpy, pandas, scipy, pyarrow, statsmodels"
 # The sleepiness stage (sleep_job.sh, every branch) imports the widest stack of the
 # three: statsmodels for the first stages and matplotlib because the export step
-# (export_results.py / export_analyze_spec12.py, run through
-# run_sleep_pipeline.py --skip-sleep) draws figures. MPLBACKEND=Agg keeps that
+# (sleep_export_all.py / sleep_export_spec12_compare.py, run through
+# sleep_pipeline.py --skip-sleep) draws figures. MPLBACKEND=Agg keeps that
 # headless; it does not make the import optional. dep_comp_blp already carries all
 # six — this string is the preflight PROBE, not a to-do list.
 CL_PY_REQ_SLEEP="numpy, pandas, scipy, pyarrow, statsmodels, matplotlib"
@@ -233,7 +233,7 @@ cl_check_julia_version () {
 # ── 3. SYSIMAGE POLICY (a hard check, not a comment) ─────────────────────────
 # A sysimage is BOTH Julia-version-specific AND CPU-target-specific. Built on
 # gpu_h200 (sapphirerapids) it is REJECTED on `day` nodes, and when the load
-# fails CUDA.functional() goes false and foundation_demand_eval.jl (~line 77)
+# fails CUDA.functional() goes false and cf_demand_eval.jl (~line 77)
 # takes the CPU share path while the job still holds an H200 at ~0% util.
 # So: refuse, loudly, rather than degrade silently.
 #
@@ -420,7 +420,7 @@ cl_gpu_gate () {
     fi
     echo "" >&2
     echo "REFUSING TO RUN: this job holds a GPU but CUDA is not functional." >&2
-    echo "  foundation_demand_eval.jl would take the CPU share path and the H200 would sit" >&2
+    echo "  cf_demand_eval.jl would take the CPU share path and the H200 would sit" >&2
     echo "  at ~0% util for the whole wall. Almost always a sysimage/CPU-target mismatch:" >&2
     echo "      $(cl_sysimage_build_cmd gpu)" >&2
     echo "  ALLOW_SYSIMAGE_FALLBACK=1 continues on CPU anyway." >&2
@@ -481,10 +481,10 @@ cl_need_draws () {  # cl_need_draws <R> <SEED>
 }
 cl_need_rf_curve () {
     cl_need_file "${CL_DATA_IN}/forward_rf_qoq.csv" "forward r^f curve" \
-        "build locally then upload: python cf_forward_rf.py --horizon ${HORIZON:-50} --start 2026Q1"
+        "build locally then upload: python scrape_forward_rf.py --horizon ${HORIZON:-50} --start 2026Q1"
 }
 # cl_need_rc_jls <routine>: the RC result the CF/BBL stack opens. It tests the exact file
-# blp_dir(out_dir) names in foundation_demand_eval.jl's _result_path, in the exact place
+# blp_dir(out_dir) names in cf_demand_eval.jl's _result_path, in the exact place
 # the RC job writes it — the ladder persists its results in the blp step folder and nothing
 # stages or renames them afterwards, so preflight and run resolve one path by construction.
 # CF_STAGE picks which rung (the CF/BBL default is the deepest, `extended`).
@@ -498,7 +498,7 @@ cl_need_costs () {  # cl_need_costs <routine> <stage>
         "run the BBL cost stage first:  bash bbl_run.sh"
 }
 
-# cl_need_polfunc: the fitted policy function estimation_bbl_2_fwd_sim.jl reads through
+# cl_need_polfunc: the fitted policy function bbl_fwd_sim.jl reads through
 # --policy-csv. Two locations, in this order: the bbl step folder, where the polfunc job
 # writes it (COST_POLFUNC_DIR == CL_STEP_BBL), then data/input, which covers a resume that
 # skips the polfunc job and hand-stages the CSV instead. It PRINTS the resolved path on
@@ -525,7 +525,7 @@ cl_need_polfunc () {
 }
 
 # ── CF4's two artefacts: ONE producer, ONE location, hence one candidate.
-# upsilon_pix_E{k} and phi_nopix_E{k} are written by cf_4_upsilon_export.py running on the
+# upsilon_pix_E{k} and phi_nopix_E{k} are written by sleep_upsilon_export.py running on the
 # cluster (sleep_job.sh SLEEP_STEP=upsilon, gated by G7) into CF_FOUNDATION_DIR, which
 # cl_export_step_dirs points at the counterfactuals step folder. Nothing else writes them
 # and nothing copies them afterwards, so there is exactly one place to look.
@@ -533,7 +533,7 @@ cl_need_polfunc () {
 # The single candidate is the point, not an economy: a second candidate is how a stale
 # uploaded pair and a fresh cluster-produced pair coexist and different consumers resolve
 # different vintages of the same routine — the collision that aborts cf4 three phases
-# later, after the RC ladders and the BBL solves. cf4_search_dirs() in cf_4_pix.jl and
+# later, after the RC ladders and the BBL solves. cf4_search_dirs() in cf4_pix.jl and
 # gate G7 in sleep_job.sh resolve this same lone directory, so preflight, gate and run
 # cannot open different files.
 cl_cf4_dirs () {
@@ -750,7 +750,7 @@ cl_require_jid () {   # cl_require_jid <jobid> <what>
 # ── 8. Small shared knobs ────────────────────────────────────────────────────
 # Per-routine memory. E1/E2 are the LARGEST panels (E1 = 796,154 obs) and 200G
 # OOM-killed them at ext1 (job 21525240): the hot buffer in
-# blp_1_estimation.jl:357 scales as n_pi*N*R and rc4 -> ext1 takes n_pi 3 -> 4.
+# blp_engine_cpu.jl:357 scales as n_pi*N*R and rc4 -> ext1 takes n_pi 3 -> 4.
 # gpu_h200 nodes carry ~1.95 TiB, so 600G is ~30% of a node and schedules freely.
 CL_MEM_DEFAULT="${CL_MEM_DEFAULT:-200G}"
 CL_MEM_BIG="${CL_MEM_BIG:-600G}"

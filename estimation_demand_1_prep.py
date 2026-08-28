@@ -12,7 +12,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from utils import paths
 from utils import routines
 
-_LINK_DEMAND = set(routines.LINK_ESTS)   # config-driven via estimation_demand_link_common.py --est N
+_LINK_DEMAND = set(routines.LINK_ESTS)   # config-driven via sleep_demand_prep_link.py --est N
 
 def _count_parquets(est, since):
     """Demand parquets routine `est` (re)wrote in this run, counted on disk.
@@ -33,11 +33,15 @@ def _count_parquets(est, since):
 
 def _run_script(est, spec):
     if est in _LINK_DEMAND:
-        cmd = [sys.executable, "estimation_demand_link_common.py", "--est", str(est), "--spec", str(spec)]
+        cmd = [sys.executable, "sleep_demand_prep_link.py", "--est", str(est), "--spec", str(spec)]
     else:                            # E1/E2 have their own demand-prep scripts
-        script_name = f"estimation_{est}_demand_1_prep.py"
+        script_name = f"sleep_demand_prep_e{est}.py"
         if not (Path(__file__).parent / script_name).exists():
-            return est, None, f"[!] Warning: {script_name} not found. Skipping.", 0
+            # 127 (command not found), NOT a skip: the caller counts a skipped routine as
+            # neither failed nor empty, prints [SUCCESS] and exits 0 having written no demand
+            # parquet -- and every consumer downstream resolves these by file presence, so it
+            # would run on the previous vintage.
+            return est, 127, f"[!] {script_name} not found in {Path(__file__).parent}.", 0
         cmd = [sys.executable, script_name, "--spec", str(spec)]
     started = time.time() - 1      # 1s of slack for filesystem timestamp granularity
     result = subprocess.run(cmd, capture_output=True, text=True)
@@ -73,10 +77,8 @@ def main():
         for future in as_completed(futures):
             est, returncode, output, n_parquets = future.result()
             print(f"\n{'='*50}\nEstimation {est} output:\n{'='*50}\n{output}")
-            if returncode is None:       # script absent; the warning above is the report
-                continue
             if returncode != 0:
-                print(f"[!] Error: estimation_{est}_demand_1_prep.py failed (exit {returncode})")
+                print(f"[!] Error: sleep_demand_prep_e{est}.py failed (exit {returncode})")
                 failed.append(est)
             elif n_parquets == 0:
                 # A requested routine that writes nothing is a failure however the child

@@ -23,7 +23,7 @@ INTERMED_DIR = os.path.join(str(paths.PROCESSED), "PANEL_INTERMED")
 os.makedirs(INTERMED_DIR, exist_ok=True)
 OUTPUT_PATH = os.path.join(INTERMED_DIR, "digital_banks_diagnostic.csv")
 
-# Per-institution physical access points, built by scrape_25_bcb_access_points.py from the
+# Per-institution physical access points, built by scrape_bcb_access_points.py from the
 # BCB Informes services (agencias / postos de atendimento / correspondentes).
 ACCESS_POINTS_CSV = os.path.join(str(paths.INCLUSION_DIR), "bcb_access_points_by_institution.csv")
 

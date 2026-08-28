@@ -1,4 +1,4 @@
-## cosif_process_1_extract.py
+## panel_cosif_extract.py
 # Author: Pedro Feijo de Moraes
 # Objective: CANONICAL COSIF extractor for the deposit-rate pipeline.  Reads the
 #            shared monthly COSIF *BANCOS* files and writes the processed

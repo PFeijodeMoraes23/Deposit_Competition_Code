@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-stage_cluster_upload.py -- pre-flight the Bouchet inputs and bundle them into two zips.
+cluster_upload.py -- pre-flight the Bouchet inputs and bundle them into two zips.
 
 The upload itself is MANUAL (Yale's web interface), so this script optimises for a human
 doing it by hand: it checks every input declared in cluster/upload_manifest.txt, refuses to
@@ -26,11 +26,11 @@ mixed-vintage run whose results are wrong in a way no cluster-side preflight can
 entry whose mtime predates its parent's is refused here, before it is ever uploaded.
 
 Usage:
-    python stage_cluster_upload.py                       # pre-flight only (default)
-    python stage_cluster_upload.py --stage               # pre-flight, then build both zips
-    python stage_cluster_upload.py --vintage-root C:\\egan_relineup_20260819
-    python stage_cluster_upload.py --stages blp,bbl,cf,cf4
-    python stage_cluster_upload.py --stage --allow-stale # explicit override; says so loudly
+    python cluster_upload.py                       # pre-flight only (default)
+    python cluster_upload.py --stage               # pre-flight, then build both zips
+    python cluster_upload.py --vintage-root C:\\egan_relineup_20260819
+    python cluster_upload.py --stages blp,bbl,cf,cf4
+    python cluster_upload.py --stage --allow-stale # explicit override; says so loudly
 """
 from __future__ import annotations
 
@@ -388,9 +388,9 @@ def print_checklist(entries, selected, directives, vintage_root, verbose):
 # SLEEP_OUT_ROOT does not move them. Reading the demand parquets from the production tree
 # while the vintage sits in a sandbox is how they find nothing and exit reporting success.
 HARDCODED_PRODUCERS = (
-    ("blp_1_logit.jl",         "get_paths(): input_dir = processed/ESTIMATION_OUTPUT/DEMAND_PREP"),
-    ("cf_forward_rf.py",       "globs DEMAND_PREP/demand_3_index*spec_12.parquet"),
-    ("cf_4_upsilon_export.py", "globs DEMAND_PREP/demand_{k}_* and reads DEMAND_PREP/est{k}"),
+    ("blp_logit.jl",         "get_paths(): input_dir = processed/ESTIMATION_OUTPUT/DEMAND_PREP"),
+    ("scrape_forward_rf.py",       "globs DEMAND_PREP/demand_3_index*spec_12.parquet"),
+    ("sleep_upsilon_export.py", "globs DEMAND_PREP/demand_{k}_* and reads DEMAND_PREP/est{k}"),
 )
 
 
@@ -768,7 +768,7 @@ def main():
         print("run. Rebuild the sidecar from the panel now on disk:")
         print("    python -c \"from utils import refresh_panel_cache, paths; "
               "refresh_panel_cache(paths.market_panel_csv())\"")
-        print("or re-run `python run_data_pipeline.py`, whose panel writers call it. "
+        print("or re-run `python panel_pipeline.py`, whose panel writers call it. "
               "--allow-stale overrides this.")
         return 1
     if not panel_ok and args.allow_stale:

@@ -1,5 +1,5 @@
 """
-cf_diag_spreads.py
+diag_spread_dist.py
 ==================
 Diagnostic for the deposit-spread variable feeding CF1/CF2 and demand. Negative
 spreads are economically valid (a bank paying above the risk-free rate, e.g. CDBs
@@ -12,7 +12,7 @@ Outputs:
   prints per-type percentile table + extreme-tail deposit-weight shares.
 
 Usage:
-  python cf_diag_spreads.py --estim 6 --spec 12
+  python diag_spread_dist.py --estim 6 --spec 12
 """
 from utils.venv_guard import ensure_project_venv
 ensure_project_venv(__file__)

@@ -1,4 +1,4 @@
-## scrape_14_bcb_accounts.py
+## scrape_bcb_accounts.py
 # Author: Pedro Feijó de Moraes
 #
 # Last edited: 2026-05-31
@@ -37,8 +37,8 @@
 #     manual_bcb_account_counts.csv        — seeded manual template (panel schema)
 #
 #   CLI:
-#     python scrape_14_bcb_accounts.py
-#     python scrape_14_bcb_accounts.py --no-reports   # skip PDF discovery
+#     python scrape_bcb_accounts.py
+#     python scrape_bcb_accounts.py --no-reports   # skip PDF discovery
 ###────────────────────────────────────────────────────────────────────────────
 
 import os

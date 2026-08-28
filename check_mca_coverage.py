@@ -1,4 +1,4 @@
-"""check_mca_coverage.py -- READ-ONLY audit of the MCA-level state/demographic variables.
+"""panel_audit_mca_coverage.py -- READ-ONLY audit of the MCA-level state/demographic variables.
 
 Author: Pedro Feijó de Moraes
 

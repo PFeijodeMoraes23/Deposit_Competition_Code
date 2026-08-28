@@ -52,9 +52,9 @@ const D_COLS  = ["gdp_per_capita", "fraction_65plus", "fraction_young",
 const D_DIM   = length(D_COLS)
 
 # The demographic MEANS come from the demand parquets, where the prep rescales four
-# of the eight columns (estimation_demand_link_common.py L168-171, mirroring
+# of the eight columns (sleep_demand_prep_link.py L168-171, mirroring
 # estimation_2_sleep.build_pooled_data so the native index matches).  The σ table
-# (panel_8_demographics_sigma.py) is written in NATURAL units and rescales nothing.
+# (panel_demographics_sigma.py) is written in NATURAL units and rescales nothing.
 # Pairing a scaled μ with a raw σ makes the draw N(μ_scaled, σ_raw): for
 # gdp_per_capita that is σ=5175 against a between-market SD of 3.9, i.e. the draw is
 # ~99.9% noise and the demographic carries no cross-market signal.  Divide σ by the
@@ -77,7 +77,7 @@ below can be found without a second spelling of their location.
 
 On the cluster the root is HEAD/data/output and `draws_dir` puts the draws in its BLP step
 folder, `blp/draws`, so they travel in the BLP download beside the results that consume them;
-blp_1_estimation.jl's reader resolves that same call, so producer and consumer cannot drift
+blp_engine_cpu.jl's reader resolves that same call, so producer and consumer cannot drift
 apart. Off the cluster the tree is ESTIMATION_OUTPUT/{DEMAND_PREP, BLP_DRAWS, BLP_RESULTS} and
 the draws keep their own sibling directory.
 """
@@ -154,7 +154,7 @@ end
 """Load demographics_sigma.parquet → Dict{(mca_code, time_id), Vector{Float64}}.
 
 `input_dir` is the UPLOAD directory (data/input on the cluster), unlike the demand panels
-above: panel_8_demographics_sigma.py builds this 8.7 MB table from seven municipal panels
+above: panel_demographics_sigma.py builds this 8.7 MB table from seven municipal panels
 totalling ~1.6 GB (ANATEL alone is 1.59 GB), so producing it on the cluster would cost a
 1.6 GB upload to save an 8.7 MB one. It is built locally and shipped."""
 function load_sigma_table(input_dir::String)
@@ -257,7 +257,7 @@ function generate_demographic_draws(df::DataFrame, R::Int, seed::Int;
     # Stack into 3D array: (n_keys+1, R, D) with zero-padding row at index 1.
     # NB: draws are saved in their NATURAL scale here. The σ-scaling AND the
     # mean-centering (D̃ = (D − D̄)/σ, so reported θ₁ is the average-market coefficient)
-    # are applied at load time in `load_precomputed_draws` (blp_1_estimation.jl) — that is
+    # are applied at load time in `load_precomputed_draws` (blp_engine_cpu.jl) — that is
     # the canonical normalization site, so these .jls stay valid without regeneration.
     draws_3d = zeros(n_keys + 1, R, D)
     for (i, mat) in enumerate(draws_list)
@@ -371,7 +371,7 @@ function main()
     # panels are a cluster PRODUCT (data/output/demand_prep), never an upload, which is why
     # data/input is not a candidate — only `demographics_sigma.parquet` below is read from there.
     # The routine tag between id and spec is optional (E1/E2 write bare `demand_1_spec_12`),
-    # hence `(?:_.*)?`, matching the discovery regexes in blp_2_rc.jl and foundation_demand_eval.jl.
+    # hence `(?:_.*)?`, matching the discovery regexes in blp_rc.jl and foundation_demand_eval.jl.
     #
     # The routine panels are found by GLOB, never by a static id -> prefix map: such a map goes
     # stale the moment a routine is relabelled, and it fails silently because --estim defaults

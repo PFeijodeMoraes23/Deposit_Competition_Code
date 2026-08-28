@@ -2,7 +2,7 @@
 # Clear geobr cache
 # Author: Pedro Feijo de Moraes
 # Last edited: 2025-11-11
-# Adopted 2026-07-29 from Code/_utils/ (the geobr consumer, scrape_4_ibge_demographics.py,
+# Adopted 2026-07-29 from Code/_utils/ (the geobr consumer, scrape_ibge_demographics.py,
 # lives in this repo).
 #------------------------------------------------------------------------------------
 

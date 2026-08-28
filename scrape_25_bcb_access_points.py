@@ -1,5 +1,5 @@
 ###─────────────────────────────────────────────────────────────────────────────
-# scrape_25_bcb_access_points.py
+# scrape_bcb_access_points.py
 #
 # Author: Pedro Feijó de Moraes
 #
@@ -18,7 +18,7 @@
 #   on ESTBAN alone therefore labels a hybrid bank "digital".
 #
 #   Note also that bcb_inclusion_mca_panel.csv carries correspondents = 0 for
-#   every row (scrape_7_bcb_inclusion.py sets the column to a constant and never
+#   every row (scrape_bcb_inclusion.py sets the column to a constant and never
 #   calls an API), so access_points_total there equals branches_total exactly.
 #   This script does NOT patch that panel — see the VINTAGE caveat below.
 #
@@ -51,8 +51,8 @@
 #   bcb_access_points_by_institution.csv   cnpj8 x counts + municipality spread
 #   bcb_access_points_by_inst_muni.csv     cnpj8 x municipality x counts
 #
-# Usage:  python scrape_25_bcb_access_points.py            # cached if present
-#         python scrape_25_bcb_access_points.py --refresh  # force re-download
+# Usage:  python scrape_bcb_access_points.py            # cached if present
+#         python scrape_bcb_access_points.py --refresh  # force re-download
 ###─────────────────────────────────────────────────────────────────────────────
 from __future__ import annotations
 

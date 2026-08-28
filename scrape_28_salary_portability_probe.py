@@ -1,4 +1,4 @@
-"""scrape_28_salary_portability_probe.py -- does BCB publish salary-account portability counts?
+"""scrape_salary_portability_probe.py -- does BCB publish salary-account portability counts?
 
 Author: Pedro Feijo de Moraes
 

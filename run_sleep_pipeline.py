@@ -1,9 +1,9 @@
 """
-run_sleep_pipeline.py — Sleepiness Estimation Pipeline Orchestrator
+sleep_pipeline.py — Sleepiness Estimation Pipeline Orchestrator
 
 CLI Options:
 ------------
-usage: run_sleep_pipeline.py [-h] [--only-spec-12] [--skip-sleep] [--sleep-only]
+usage: sleep_pipeline.py [-h] [--only-spec-12] [--skip-sleep] [--sleep-only]
                              [--skip-steps STEP [STEP ...]]
 
 Run the full Sleepiness Estimation Pipeline (3 estimators → exports → demand prep).
@@ -19,14 +19,14 @@ All steps run sequentially. Steps 1–4 are sleep estimators; each spawns its ow
 ProcessPoolExecutor internally. Running them concurrently exhausted Windows non-paged
 pool via simultaneous IPC pipe traffic for 400K-row DataFrames (WinError 1450).
 
-  1. estimation_1_sleep.py              (E1: Local B-type)
-  2. estimation_2_sleep.py              (E2: Pooled B+D Linear)
-  3. estimation_sleep_common.py --est 3 (E3: Pooled Single-Index)
-  4. estimation_sleep_common.py --est 4 (E4: Pooled Single-Index + Time)
-  5. export_results.py                  (Export 1st/2nd Stage Summaries, Est 1-4)
-  6. estimation_demand_1_prep.py        (Universal Demand Prep Orchestrator, Est 1-4)
-  7. export_analyze_spec12.py           (Analyze Specification 12 Results)
-  8. desc_3.py                          (Cluster-imbalance / deposit-concentration table)
+  1. sleep_est_e1.py              (E1: Local B-type)
+  2. sleep_est_e2.py              (E2: Pooled B+D Linear)
+  3. sleep_est_single.py --est 3 (E3: Pooled Single-Index)
+  4. sleep_est_single.py --est 4 (E4: Pooled Single-Index + Time)
+  5. sleep_export_all.py                  (Export 1st/2nd Stage Summaries, Est 1-4)
+  6. sleep_demand_prep.py        (Universal Demand Prep Orchestrator, Est 1-4)
+  7. sleep_export_spec12_compare.py           (Analyze Specification 12 Results)
+  8. sleep_desc_clusters.py                          (Cluster-imbalance / deposit-concentration table)
 """
 from utils.venv_guard import ensure_project_venv
 ensure_project_venv(__file__)
@@ -36,7 +36,7 @@ import sys
 import time
 from pathlib import Path
 
-# Line-buffer our OWN output (mirrors run_data_pipeline.py).  Python block-buffers stdout when
+# Line-buffer our OWN output (mirrors panel_pipeline.py).  Python block-buffers stdout when
 # it is a file/pipe rather than a tty, so without this the [STARTING]/Finished banners sit in
 # the buffer for hours and the log looks stalled even though the pipeline is healthy.
 if hasattr(sys.stdout, "reconfigure"):
@@ -103,14 +103,14 @@ All steps run sequentially. Steps 1–4 are sleep estimators; each spawns its ow
 ProcessPoolExecutor internally. Running them concurrently exhausted Windows non-paged
 pool via simultaneous IPC pipe traffic for 400K-row DataFrames (WinError 1450).
 
-  1. estimation_1_sleep.py              (E1: Local B-type)
-  2. estimation_2_sleep.py              (E2: Pooled B+D Linear)
-  3. estimation_sleep_common.py --est 3 (E3: Pooled Single-Index)
-  4. estimation_sleep_common.py --est 4 (E4: Pooled Single-Index + Time)
-  5. export_results.py                  (Export 1st/2nd Stage Summaries, Est 1-4)
-  6. estimation_demand_1_prep.py        (Universal Demand Prep Orchestrator, Est 1-4)
-  7. export_analyze_spec12.py           (Analyze Specification 12 Results)
-  8. desc_3.py                          (Cluster-imbalance / deposit-concentration table)
+  1. sleep_est_e1.py              (E1: Local B-type)
+  2. sleep_est_e2.py              (E2: Pooled B+D Linear)
+  3. sleep_est_single.py --est 3 (E3: Pooled Single-Index)
+  4. sleep_est_single.py --est 4 (E4: Pooled Single-Index + Time)
+  5. sleep_export_all.py                  (Export 1st/2nd Stage Summaries, Est 1-4)
+  6. sleep_demand_prep.py        (Universal Demand Prep Orchestrator, Est 1-4)
+  7. sleep_export_spec12_compare.py           (Analyze Specification 12 Results)
+  8. sleep_desc_clusters.py                          (Cluster-imbalance / deposit-concentration table)
         """,
         formatter_class=argparse.RawDescriptionHelpFormatter
     )
@@ -119,7 +119,7 @@ pool via simultaneous IPC pipe traffic for 400K-row DataFrames (WinError 1450).
         "--only-spec-12",
         action="store_true",
         help=("Only run specification 12 for E2-E4 + demand prep instead of all specifications. "
-              "NOTE: E1 (estimation_1_sleep.py) has no spec selector -- it always runs the full "
+              "NOTE: E1 (sleep_est_e1.py) has no spec selector -- it always runs the full "
               "12-spec grid -- so this flag does not reduce E1's runtime.")
     )
 
@@ -154,22 +154,22 @@ pool via simultaneous IPC pipe traffic for 400K-row DataFrames (WinError 1450).
 
     if not getattr(args, 'skip_sleep', False):
         scripts_to_run.extend([
-            {"id": 1, "file": "estimation_1_sleep.py", "desc": "E1: Local B-type Estimation"},
-            {"id": 2, "file": "estimation_2_sleep.py", "args": spec12_arg, "desc": "E2: Pooled B+D Linear"},
-            # E3/E4 are config-driven via the shared dispatcher estimation_sleep_common.py --est N.
-            {"id": 3, "file": "estimation_sleep_common.py", "args": ["--est", "3"] + spec12_arg, "desc": "E3: Pooled Single-Index"},
-            {"id": 4, "file": "estimation_sleep_common.py", "args": ["--est", "4"] + spec12_arg, "desc": "E4: Pooled Single-Index + Time block"},
+            {"id": 1, "lane": "sleep", "file": "sleep_est_e1.py", "desc": "E1: Local B-type Estimation"},
+            {"id": 2, "lane": "sleep", "file": "sleep_est_e2.py", "args": spec12_arg, "desc": "E2: Pooled B+D Linear"},
+            # E3/E4 are config-driven via the shared dispatcher sleep_est_single.py --est N.
+            {"id": 3, "lane": "sleep", "file": "sleep_est_single.py", "args": ["--est", "3"] + spec12_arg, "desc": "E3: Pooled Single-Index"},
+            {"id": 4, "lane": "sleep", "file": "sleep_est_single.py", "args": ["--est", "4"] + spec12_arg, "desc": "E4: Pooled Single-Index + Time block"},
         ])
 
     if not getattr(args, 'sleep_only', False):
         scripts_to_run.extend([
-            {"id": 5, "file": "export_results.py", "args": ["--estimation", "all"], "desc": "Export 1st/2nd Stage Summaries (Est 1-4)"},
-            {"id": 6, "file": "estimation_demand_1_prep.py", "args": ["--estimation", "all", "--spec", spec_arg], "desc": "Universal Demand Prep Orchestrator & Panel Serialization (Est 1-4)"},
-            {"id": 7, "file": "export_analyze_spec12.py", "args": [], "desc": "Analyze Specification 12 Results"},
+            {"id": 5, "lane": "post", "file": "sleep_export_all.py", "args": ["--estimation", "all"], "desc": "Export 1st/2nd Stage Summaries (Est 1-4)"},
+            {"id": 6, "lane": "post", "file": "sleep_demand_prep.py", "args": ["--estimation", "all", "--spec", spec_arg], "desc": "Universal Demand Prep Orchestrator & Panel Serialization (Est 1-4)"},
+            {"id": 7, "lane": "post", "file": "sleep_export_spec12_compare.py", "args": [], "desc": "Analyze Specification 12 Results"},
             # desc_3 reads the E3 second-stage sample (est3/market_panel_phis.csv), so it
             # runs after estimation; it is the canonical cluster-imbalance / deposit-
             # concentration exhibit that justifies the wild cluster bootstrap.
-            {"id": 8, "file": "desc_3.py", "args": [], "desc": "Cluster-imbalance & deposit-concentration table (WCB justification)"},
+            {"id": 8, "lane": "post", "file": "sleep_desc_clusters.py", "args": [], "desc": "Cluster-imbalance & deposit-concentration table (WCB justification)"},
         ])
 
     import os
@@ -184,9 +184,13 @@ pool via simultaneous IPC pipe traffic for 400K-row DataFrames (WinError 1450).
     heavy_scripts = []
     post_scripts = []
 
-    _sleep_files = {'estimation_sleep_common.py'}  # config-driven E3/E4 dispatcher
+    # The lane is declared per step, not inferred from the filename. A pattern over
+    # 'estimation_*_sleep.py' silently reclassifies every estimator the moment a file is
+    # renamed: they fall to post_scripts, so --sleep-only skips the estimators it exists to
+    # run and --skip-sleep runs them. sleep_job.sh passes --skip-sleep on Bouchet, so that
+    # inversion would re-run E1/E2 estimation over the demand prep it was meant to do.
     for s in scripts_to_run:
-        if (s['file'].startswith('estimation_') and s['file'].endswith('_sleep.py')) or s['file'] in _sleep_files:
+        if s.get("lane") == "sleep":
             sleep_scripts.append(s)
         else:
             post_scripts.append(s)

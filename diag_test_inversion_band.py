@@ -46,7 +46,7 @@ from scipy.stats import chi2
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from estimation_2_sleep import (build_pooled_data, define_specifications,  # noqa: E402
+from sleep_est_e2 import (build_pooled_data, define_specifications,  # noqa: E402
                                 run_pooled_first_stage)
 from utils import paths as _paths_mod                                      # noqa: E402
 from utils import routines as _routines                                    # noqa: E402

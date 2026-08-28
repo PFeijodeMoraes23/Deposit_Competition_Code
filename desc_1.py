@@ -74,7 +74,7 @@ def _resolve_is_B(df):
         return s.astype(str).str.strip().str.lower().isin(('1', 'true', 't', 'yes'))
     print("[WARNING] Column 'is_B' not found in the market panel: this panel predates the "
           "stored firm-type column. Falling back to the CODMUN_IBGE sentinel; re-run "
-          "panel_6_market.py to store the authoritative column.")
+          "panel_market.py to store the authoritative column.")
     return df['CODMUN_IBGE'].astype(str).str.split('.').str[0] != '0'
 
 
@@ -276,8 +276,7 @@ def main():
         res_df.to_csv(out_path, index=False)
 
         _tex_name       = tex_name if tex_name is not None else name
-        tex_path        = OUTPUT_DIR  / f"{_tex_name}{weight_str}.tex"
-        drafts_tex_path = DRAFTS_DIR  / f"{_tex_name}{weight_str}.tex"
+        tex_path        = DRAFTS_DIR  / f"{_tex_name}{weight_str}.tex"
         try:
             transposed = res_df.set_index('Group').T
             groups      = list(transposed.columns)
@@ -414,7 +413,7 @@ def main():
             ]
             latex_str = '\n'.join(lines)
 
-            for path in [tex_path, drafts_tex_path]:
+            for path in [tex_path]:
                 mode = 'a' if append else 'w'
                 with open(path, mode, encoding='utf-8') as f:
                     if append:
@@ -566,9 +565,8 @@ def main():
         ]
         latex_str = "\n".join(lines)
 
-        tex_path        = OUTPUT_DIR / f"{name}{weight_str}.tex"
-        drafts_tex_path = DRAFTS_DIR / f"{name}{weight_str}.tex"
-        for path in [tex_path, drafts_tex_path]:
+        tex_path        = DRAFTS_DIR / f"{name}{weight_str}.tex"
+        for path in [tex_path]:
             with open(path, "w", encoding="utf-8") as f:
                 f.write(latex_str)
         print(f"  Saved landscape by-year table: {tex_path.name}")
@@ -746,9 +744,8 @@ def main():
         ]
         latex_str = "\n".join(lines)
 
-        tex_path        = OUTPUT_DIR / f"{name}{weight_str}.tex"
-        drafts_tex_path = DRAFTS_DIR / f"{name}{weight_str}.tex"
-        for path in [tex_path, drafts_tex_path]:
+        tex_path        = DRAFTS_DIR / f"{name}{weight_str}.tex"
+        for path in [tex_path]:
             with open(path, "w", encoding="utf-8") as f:
                 f.write(latex_str)
         print(f"  Saved combined two-panel landscape table: {tex_path.name}")
@@ -893,9 +890,8 @@ def main():
         ]
         latex_str = "\n".join(lines)
 
-        tex_path        = OUTPUT_DIR / f"{name}{weight_str}.tex"
-        drafts_tex_path = DRAFTS_DIR / f"{name}{weight_str}.tex"
-        for path in [tex_path, drafts_tex_path]:
+        tex_path        = DRAFTS_DIR / f"{name}{weight_str}.tex"
+        for path in [tex_path]:
             with open(path, "w", encoding="utf-8") as f:
                 f.write(latex_str)
         print(f"  Saved BankType table: {tex_path.name}")
@@ -1075,9 +1071,8 @@ def main():
         ]
         latex_str = "\n".join(lines)
 
-        tex_path        = OUTPUT_DIR / f"{name}{weight_str}.tex"
-        drafts_tex_path = DRAFTS_DIR / f"{name}{weight_str}.tex"
-        for path in [tex_path, drafts_tex_path]:
+        tex_path        = DRAFTS_DIR / f"{name}{weight_str}.tex"
+        for path in [tex_path]:
             with open(path, "w", encoding="utf-8") as f:
                 f.write(latex_str)
         print(f"  Saved per-region landscape table: {tex_path.name}")

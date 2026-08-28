@@ -28,7 +28,7 @@ except Exception:
     pass
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from step_phi_augmented_tests import OUT_DIR  # noqa: E402
+from sleep_ident_augmented import OUT_DIR  # noqa: E402
 from utils import paths as _paths             # noqa: E402
 from utils import routines as _routines       # noqa: E402
 
@@ -142,7 +142,7 @@ def tab_d6_explosive():
     """
     f = OUT_DIR / "d6_explosive_diag_phipath.csv"
     if not f.exists():
-        print(f"  [skip] {f.name} absent -- run step_entry_dynamics.py --phi-mode path")
+        print(f"  [skip] {f.name} absent -- run sleep_ident_entry_dynamics.py --phi-mode path")
         return
     d = pd.read_csv(f).set_index("estim")
     rows = []

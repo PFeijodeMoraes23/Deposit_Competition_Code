@@ -1,5 +1,5 @@
 """
-estimation_bbl_3_solve.py
+bbl_solve.py
 ============================
 BBL Step 2, part 2: recover marginal-cost parameters (ω, ζ, γ)^κ for
 κ ∈ {B, D} by minimizing the sum of squared FOC-inequality violations, using the
@@ -10,7 +10,7 @@ V_Main \\label{eq:17}:
 
     g_j(σ̂, σ̃) = (ψ_eq,j − ψ_dev,j,σ̃)' · [ 1 , −ω , −γ' , −(1+ζ) ]  ≥ 0
 
-with the ψ block layout written by estimation_bbl_2_fwd_sim.jl:
+with the ψ block layout written by bbl_fwd_sim.jl:
     [ psi1 ,  psi2_omega ,  psi3_gamma_<z>… ,  psi4_zeta ]
 so, writing Δ = ψ_eq − ψ_dev,
 
@@ -22,7 +22,7 @@ Deviations should make the bank worse off, so g ≥ 0 in equilibrium; we minimiz
 
 separately for B- and D-type firms. χ (private cost shock) is dropped, as in the draft.
 
-Inputs (from estimation_bbl_2_fwd_sim.jl):
+Inputs (from bbl_fwd_sim.jl):
     COST_FWD/psi_eq_{tag}.parquet   — firm, is_B, psi1, psi2_omega, psi3_gamma_*, psi4_zeta
     COST_FWD/psi_dev_{tag}.parquet  — shock, firm, is_B, <same blocks>
 where tag = E{estim}_spec_{spec}_{stage}{suffix}.
@@ -52,12 +52,12 @@ counterfactuals_plan.md for the propagation recipe.
 (a pass-through parameter) is identified off one macro path, not off n independent firms.
 No firm-resampling scheme — bootstrap or subsample — delivers honest uncertainty for it.
 
-⚠ Run only after estimation_bbl_2_fwd_sim.jl has produced its parquets, AND only with σ̂ from
+⚠ Run only after bbl_fwd_sim.jl has produced its parquets, AND only with σ̂ from
 the FITTED policy (--policy-csv upstream): with deviations around raw observed spreads,
 frac_bind ≈ ½ mechanically and nothing here is interpretable.
 
 Usage:
-  python estimation_bbl_3_solve.py --estim 6 --spec 12 --stage extended \\
+  python bbl_solve.py --estim 6 --spec 12 --stage extended \\
       --subsample 200 --profile --ci-level 0.95      # headline
   ... --bootstrap 200                                 # legacy SEs, for comparison
 """
@@ -82,7 +82,7 @@ from scipy.optimize import minimize
 # whole step at the cluster's data/output/bbl folder. Reading the env here as well would be a
 # second implementation of the same rule, free to drift from the writer's.
 #
-# The location is pinned to estimation_output(), NOT SLEEP_OUT_ROOT: estimation_bbl_2_fwd_sim.jl
+# The location is pinned to estimation_output(), NOT SLEEP_OUT_ROOT: bbl_fwd_sim.jl
 # writes these parquets and knows nothing of the sleepiness sandbox, so redirecting the reader
 # alone would aim it at a directory the writer never fills.
 #
@@ -199,7 +199,7 @@ def solve_kappa(blk):
 
     so the fitted ψ4 design coefficient (unscaled: b[1+nZ]·s1/s_ze) equals (1+ζ). We
     SUBTRACT 1 to report ζ itself, matching V_Main eq:17 / B-6 and the downstream Julia
-    theta_c in foundation_psi_basis.jl, which reconstructs the loading as −(1+ζ) and also uses ζ
+    theta_c in cf_psi_basis.jl, which reconstructs the loading as −(1+ζ) and also uses ζ
     as the r^f cost coefficient. (2026-07-16: this is a fix. Prior JSONs stored b[1+nZ]·… with
     NO −1, i.e. they reported 1+ζ mislabeled as ζ; the old solve_kappa docstring claiming
     "gross ψ1 ⇒ ψ4 loading IS ζ" had the algebra backwards. All cost_params_*.json written
@@ -579,11 +579,11 @@ def main():
     tag = f"E{args.estim}_spec_{args.spec}_{args.stage}{args.suffix}"
     eq_path = COST_FWD / f"psi_eq_{tag}.parquet"
     if not eq_path.exists():
-        raise FileNotFoundError(f"Missing {eq_path.name} — run estimation_bbl_2_fwd_sim.jl first.")
+        raise FileNotFoundError(f"Missing {eq_path.name} — run bbl_fwd_sim.jl first.")
     # Deviation ψ may be a single file (n-shards=1) or several shard files; merge all.
     dev_files = sorted(COST_FWD.glob(f"psi_dev_{tag}*.parquet"))
     if not dev_files:
-        raise FileNotFoundError(f"No psi_dev_{tag}*.parquet — run estimation_bbl_2_fwd_sim.jl (all shards) first.")
+        raise FileNotFoundError(f"No psi_dev_{tag}*.parquet — run bbl_fwd_sim.jl (all shards) first.")
 
     eq = pd.read_parquet(eq_path)
     dev = pd.concat([pd.read_parquet(f) for f in dev_files], ignore_index=True)

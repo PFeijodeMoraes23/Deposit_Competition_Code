@@ -5,7 +5,7 @@ make_d2bc_cross_routine.py
 Collate the D2b (lagged awake inflow) and D2c (censoring margin) augmented tests across every
 sleepiness routine into one table and one figure.
 
-Why this exists. `step_phi_augmented_tests.py --arm lagdepact --estim N` writes one CSV per
+Why this exists. `sleep_ident_augmented.py --arm lagdepact --estim N` writes one CSV per
 routine, so the cross-routine comparison -- which is the whole point, since the censoring rate
 varies by routine (23.7% at E1, higher at the link routines) and the reconstructed awake flow
 moves with it -- only existed by reading the files side by side. This builds the comparison as
@@ -14,8 +14,8 @@ an artefact.
 SCOPE, stated because it is easy to over-read the output. `--estim N` repoints the PHI SOURCE:
 `Dep_Act`, the uncensored inflow rebuilt from it, and the censoring indicator all come from
 routine N. The SECOND STAGE is E2's linear kernel throughout (`run_augmented`), and the first
-stage is shared by construction -- `estimation_sleep_common.py` imports `run_pooled_first_stage`
-from `estimation_2_sleep.py`, so E3/E4 and E2 project the spread on the instruments identically.
+stage is shared by construction -- `sleep_est_single.py` imports `run_pooled_first_stage`
+from `sleep_est_e2.py`, so E3/E4 and E2 project the spread on the instruments identically.
 So each row is "routine N's awake flow tested in a common kernel", not "routine N's own test".
 That is the link-independent part of the identifying assumption, and it is the part the
 assumption actually concerns; the routine's own link is Appendix A's unapplied patch.
@@ -49,7 +49,7 @@ except Exception:
     pass
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from step_phi_augmented_tests import OUT_DIR  # noqa: E402
+from sleep_ident_augmented import OUT_DIR  # noqa: E402
 from utils import paths as P  # noqa: E402
 from utils import routines as R  # noqa: E402
 
@@ -64,7 +64,7 @@ def load(est: int) -> pd.DataFrame | None:
     """Read one routine's lagdepact CSV. E2 is the unsuffixed file (the historical default)."""
     fp = OUT_DIR / (f"d_augmented_lagdepact{'' if est == 2 else f'_E{est}'}.csv")
     if not fp.exists():
-        print(f"  [E{est}] MISSING {fp.name} -- run: python step_phi_augmented_tests.py "
+        print(f"  [E{est}] MISSING {fp.name} -- run: python sleep_ident_augmented.py "
               f"--arm lagdepact --estim {est}")
         return None
     d = pd.read_csv(fp)

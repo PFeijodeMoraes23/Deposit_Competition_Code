@@ -1,5 +1,5 @@
 """
-scrape_19_openfinance_fees.py
+scrape_openfinance_fees.py
 ==============================
 Collect banking service-fee schedules from the Open Finance Brazil (OFB) public
 open-data product APIs — no OAuth required, pure open data.
@@ -40,7 +40,7 @@ on the 10th BUSINESS day referencing the previous month. This is a recent
 short-panel / cross-sectional source — NOT the historical backbone. Pre-2021
 history comes from scrape_20 (BCB DataVigencia listed prices) and scrape_18
 (COSIF realized revenue). The response carries NO reference-period field, so
-freshness must be inferred empirically (see step_openfinance_freshness.py).
+freshness must be inferred empirically (see scrape_openfinance_freshness.py).
 
 Data flow
 ---------
@@ -63,11 +63,11 @@ Output files  (BCB/Tarifas/processed/)
 
 Usage
 -----
-  python scrape_19_openfinance_fees.py                       # accounts only (default)
-  python scrape_19_openfinance_fees.py --families accounts,creditcards,loans
-  python scrape_19_openfinance_fees.py --families all
-  python scrape_19_openfinance_fees.py --test 15             # first 15 endpoints
-  python scrape_19_openfinance_fees.py --no-cache            # bypass disk cache
+  python scrape_openfinance_fees.py                       # accounts only (default)
+  python scrape_openfinance_fees.py --families accounts,creditcards,loans
+  python scrape_openfinance_fees.py --families all
+  python scrape_openfinance_fees.py --test 15             # first 15 endpoints
+  python scrape_openfinance_fees.py --no-cache            # bypass disk cache
 """
 
 from __future__ import annotations

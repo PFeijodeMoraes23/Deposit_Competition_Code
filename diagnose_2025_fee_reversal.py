@@ -1,5 +1,5 @@
 """
-diagnose_2025_fee_reversal.py
+panel_diag_fee_reversal.py
 ==============================
 Diagnostic and validation figures for COSIF bank service-fee data.
 

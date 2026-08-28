@@ -1,5 +1,5 @@
 """
-scrape_25_openfinance_fees_wayback.py
+scrape_openfinance_fees_wayback.py
 =====================================
 Assess (and, if worthwhile, execute) a HISTORICAL reconstruction of Open Finance
 Brasil open-data fees from the Wayback Machine.
@@ -38,16 +38,16 @@ Pipeline
        data_coleta = capture date, and append to openfinance_fees_panel_long.csv
        (same dedup key as the live scraper).
 
-Reuses the CDX request pattern from d_rate_scrape_2_cdx.py / scrape_23_pix_roster.py
+Reuses the CDX request pattern from scrape_deposit_rate_cdx.py / scrape_pix_roster.py
 (no-retry, per-endpoint resumable cache, politeness sleep, soft-ban handling).
 
 Usage
 -----
-  python scrape_25_openfinance_fees_wayback.py                      # probe, current endpoints
-  python scrape_25_openfinance_fees_wayback.py --families all
-  python scrape_25_openfinance_fees_wayback.py --historical-endpoints
-  python scrape_25_openfinance_fees_wayback.py --backfill           # probe + reconstruct (gated)
-  python scrape_25_openfinance_fees_wayback.py --backfill --force-backfill   # ignore the gate
+  python scrape_openfinance_fees_wayback.py                      # probe, current endpoints
+  python scrape_openfinance_fees_wayback.py --families all
+  python scrape_openfinance_fees_wayback.py --historical-endpoints
+  python scrape_openfinance_fees_wayback.py --backfill           # probe + reconstruct (gated)
+  python scrape_openfinance_fees_wayback.py --backfill --force-backfill   # ignore the gate
 """
 
 from __future__ import annotations
@@ -72,7 +72,7 @@ logging.basicConfig(
 log = logging.getLogger(__name__)
 
 from utils import paths
-import scrape_19_openfinance_fees as s19
+import scrape_openfinance_fees as s19
 
 CDX_URL   = "https://web.archive.org/cdx/search/cdx"     # https (port 443) — port 80 gets refused
 WB_RAW    = "https://web.archive.org/web/{ts}id_/{url}"  # id_ = original bytes, no IA rewrite

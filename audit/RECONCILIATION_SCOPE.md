@@ -4,7 +4,7 @@ Prereq to the folder reorg. Diagnosis from `_audit_output/` + direct inspection,
 2026-06-18. See memory `ifdata-aggregated-inconsistency`.
 
 ## What is actually wrong (and what is NOT)
-`scrape_3_ifdata_aggregate.py` builds `Aggregated Data/IF_DATA_type_{t}_report_{r}.csv`
+`scrape_ifdata_aggregate.py` builds `Aggregated Data/IF_DATA_type_{t}_report_{r}.csv`
 where **t = 1 Prudential / 2 Financial / 3 Individual** and r = `NumeroRelatorio`,
 by concatenating rows from the per-period `IF_DATA_Values_{year}_{q}.csv` inputs in
 each conglomerate folder. Per-type status:

@@ -321,7 +321,7 @@ if [[ -f "${MANIFEST}" ]]; then
         for k in ${ROUTINES}; do
             p="${pattern//\{k\}/${k}}"
             case "${p}" in *"{"*) continue ;; esac       # unexpanded token: skip
-            # Files land FLAT at their destination — stage_cluster_upload.py stores
+            # Files land FLAT at their destination — cluster_upload.py stores
             # each member as '<dest>/<basename>'. Patterns are bare filenames today,
             # so this is a no-op; it keeps the check right if one ever is not.
             p="${p##*/}"
@@ -356,7 +356,7 @@ else
     echo "  cluster/upload_manifest.txt not found — falling back to the core checks:"
     cl_need_draws "${R:-2000}" "${SEED:-42}" || note_fail_unless_building draws
     # forward_rf_qoq.csv is the one BBL input that can only be built off-cluster
-    # (cf_forward_rf.py talks to the BCB API and compute nodes have no internet), so
+    # (scrape_forward_rf.py talks to the BCB API and compute nodes have no internet), so
     # it blocks. The fitted policy does NOT: bbl_run.sh runs it as a pre-step by
     # default, into data/output/bbl.
     cl_need_rf_curve || note_fail

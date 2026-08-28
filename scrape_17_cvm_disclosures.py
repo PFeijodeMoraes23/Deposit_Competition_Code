@@ -1,4 +1,4 @@
-## scrape_17_cvm_disclosures.py
+## scrape_cvm_deposits.py
 # Author: Pedro Feijó de Moraes
 #
 # Last edited: 2026-05-31
@@ -25,9 +25,9 @@
 #   Cache:  FirmDisclosures/CVM/raw/<doc>_<year>.zip
 #
 #   CLI:
-#     python scrape_17_cvm_disclosures.py                 # 2018..current, DFP+ITR
-#     python scrape_17_cvm_disclosures.py --since 2015 --docs DFP
-#     python scrape_17_cvm_disclosures.py --firms bb,itau,bradesco
+#     python scrape_cvm_deposits.py                 # 2018..current, DFP+ITR
+#     python scrape_cvm_deposits.py --since 2015 --docs DFP
+#     python scrape_cvm_deposits.py --firms bb,itau,bradesco
 ###────────────────────────────────────────────────────────────────────────────
 
 import os

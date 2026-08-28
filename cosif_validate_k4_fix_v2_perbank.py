@@ -1,4 +1,4 @@
-## cosif_validate_k4_fix_v2_perbank.py
+## diag_cosif_k4_validate_perbank.py
 # Author: Pedro Feijo de Moraes (k=4 fix, v2 = per-bank + segment shrinkage)
 # Objective: Replace the v1 UNIFORM repo/bills rates and UNIFORM strip de-bias
 #            factor with PER-BANK effective rates and a per-bank de-bias factor
@@ -12,11 +12,11 @@
 # estimates are estimated at the conglomerate level too -- consistent units.
 #
 # Reuses, unchanged:
-#   * custos_implicitos_v2_foundation.csv  (from cosif_process_1_extract.py)
+#   * custos_implicitos_v2_foundation.csv  (from panel_cosif_extract.py)
 #   * the CNPJ<->conglomerate merge_asof mapping  (imported from v1 module)
 #   * the macro fraction loader and the 2025+ leaf column scheme
 #
-# GUARDRAILS: NEW files only; does NOT modify panel_3_master_panel_build.py / panel_6_market.py,
+# GUARDRAILS: NEW files only; does NOT modify panel_deposit_rates.py / panel_market.py,
 # does NOT overwrite canonical custos_implicitos_*/market_panel.csv, does NOT
 # rebuild market_panel or demand parquets.  PAUSE after validating.
 
@@ -35,7 +35,7 @@ if SCRIPT_DIR not in sys.path:
 
 from utils import paths
 # Reuse the v1 building blocks verbatim.
-from cosif_validate_k4_fix import (
+from diag_cosif_k4_validate import (
     annualize, load_macro_fraction, build_cnpj_to_congl,
     map_foundation_to_congl, STOCK_COLS, EXPENSE_COLS, FOUNDATION,
 )

@@ -1,9 +1,9 @@
-# se_common.jl
+# blp_se_common.jl
 # ============
 # Shared standard-error machinery for demand estimation: a score/no-refit WILD CLUSTER BOOTSTRAP
 # (matching the sleepiness estimation's inference, utils/sleep_links.py) and the analytical
-# cluster-robust GMM sandwich, selected by BLP_SE_METHOD. Included by both blp_1_logit.jl (pure
-# logit θ₁) and blp_1_estimation.jl / blp_gpu_engine.jl (RC-BLP θ₁+θ₂) so every parameter's SE is
+# cluster-robust GMM sandwich, selected by BLP_SE_METHOD. Included by both blp_logit.jl (pure
+# logit θ₁) and blp_engine_cpu.jl / blp_engine_gpu.jl (RC-BLP θ₁+θ₂) so every parameter's SE is
 # produced "in the same manner". Requires (from the includer's `using`s): Random, Statistics,
 # Distributions, LinearAlgebra.
 
@@ -25,7 +25,7 @@ function wild_weights(n::Int, scheme::AbstractString, rng::AbstractRNG)
 end
 
 """Effective number of clusters G* = G/(1+CV²), CV = coefficient of variation of cluster sizes.
-This is the few-cluster degrees-of-freedom used for the Student-t reference (matching desc_3.py's
+This is the few-cluster degrees-of-freedom used for the Student-t reference (matching sleep_desc_clusters.py's
 G*/CV table and the logit tables' t(G*)). With one conglomerate holding ~17% of obs, G*≈7 ≪ G≈506."""
 function effective_clusters(cl::AbstractVector)
     counts = Dict{eltype(cl),Int}()

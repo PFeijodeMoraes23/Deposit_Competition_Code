@@ -1,5 +1,5 @@
 """
-proto_3_estban_local_instruments.py
+panel_proto_estban_iv.py
 ===================================
 SEPARATE-PANEL PROTOTYPE (Option 3).  Does NOT touch market_panel.csv.  Builds
 candidate ESTBAN-derived instruments for the NATIONAL type-4 deposit spread and
@@ -28,7 +28,7 @@ Outputs (processed/ESTIMATION_OUTPUT/DIAG_K4_SPREAD/):
   proto3_first_stage.csv              first-stage strength table
   report_proto3.txt
 
-Usage:  python proto_3_estban_local_instruments.py [--routine 4]
+Usage:  python panel_proto_estban_iv.py [--routine 4]
 """
 from __future__ import annotations
 import os, sys, glob, argparse
@@ -41,8 +41,8 @@ import numpy as np
 import pandas as pd
 
 from utils import paths
-import cosif_process_2_calibrate as cc
-import weak_iv_analysis as wia
+import panel_cosif_calibrate as cc
+import blp_weak_iv as wia
 
 ESTBAN_CSV = paths.ESTBAN_CSV
 MCA_XWALK = paths.IBGE_DIR / "muni_mca_regions_2010_2024_panel.csv"

@@ -1,5 +1,5 @@
 """
-foundation_psi_basis.jl
+cf_psi_basis.jl
 =================
 Foundation 0c: accumulate the BBL value-function basis ψ along a simulated deposit
 path. The value function is LINEAR in the cost parameters (eqs 16-B / 16-D):
@@ -22,21 +22,21 @@ OPEN MODELING KNOBS (confirm before headline run — see counterfactuals_plan.md
     to r^f_t (i.e. (r^j − r^f)=0, treating the object as the deposit-FUNDING value).
     Supply a margin or column to include a positive asset spread.
   * Z_j cost shifters: the γ regressors. Default = the lagged cost/capital ratios
-    used by the policy-function step (estimation_bbl_1_polfunc.py COST_SHIFTERS +
+    used by the policy-function step (bbl_polfunc.py COST_SHIFTERS +
     CAPITAL_WHOLESALE), resolved by name from the parquet/sidecar.
   * β (per quarter, default 0.9), horizon T (default 50), r^f path (default flat).
 
-This module is `include`d by estimation_bbl_2_fwd_sim.jl; it is not a standalone entry point.
+This module is `include`d by bbl_fwd_sim.jl; it is not a standalone entry point.
 """
 
-include(joinpath(@__DIR__, "foundation_deposit_sim.jl"))
+include(joinpath(@__DIR__, "cf_deposit_sim.jl"))
 
 using DataFrames, LinearAlgebra, Statistics
 import JSON3
 
 # Cost-shifter (Z) columns entering c = ω + ζ·r^f_q + γ′Z (V_Main eq 8).
 # ACTIVE SET — the four actually present in the demand-prep parquets. Mirrors the corresponding
-# subset of estimation_bbl_1_polfunc.py's COST_SHIFTERS (personnel/admin/tax, COSIF DRE) +
+# subset of bbl_polfunc.py's COST_SHIFTERS (personnel/admin/tax, COSIF DRE) +
 # CAPITAL_WHOLESALE (indice_basileia), so γ stays comparable with the policy function.
 const Z_COST_COLS = ["personnel_cost_ratio_lag", "admin_cost_ratio_lag",
                      "tax_cost_ratio_lag", "indice_basileia_lag"]
@@ -44,7 +44,7 @@ const Z_COST_COLS = ["personnel_cost_ratio_lag", "admin_cost_ratio_lag",
 # DEFERRED (2026-08-02) — these live in market_panel.csv and ARE used by polfunc
 # (CAPITAL_WHOLESALE), but were never propagated into the demand-prep parquets, so the ψ basis
 # never saw them: load_Z silently kept whatever was present and γ was identified on 4, not 6.
-# This is a PREP-WIRING gap, not missing data. Until estimation_1_demand_1_prep.py carries them
+# This is a PREP-WIRING gap, not missing data. Until sleep_demand_prep_e1.py carries them
 # through (needs a re-prep + re-upload), their explanatory power loads onto ω.
 const Z_COST_DEFERRED = ["wholesale_ratio_lag", "lci_lca_ratio_lag"]
 
@@ -104,7 +104,7 @@ function load_Z(ctx::CFDemandCtx; sidecar::Union{Nothing,DataFrame}=nothing)
         Z[:, i] .= v
     end
 
-    # ---- WINSORIZE, matching estimation_bbl_1_polfunc.py -----------------------------------
+    # ---- WINSORIZE, matching bbl_polfunc.py -----------------------------------
     # Until 2026-08-06 the BBL read these RAW while polfunc winsorized the same columns at the
     # 1st/99th percentile within firm type — so the policy function and the cost equation were
     # fitted on DIFFERENT versions of the same regressors, and γ̂ was not what the write-up
@@ -146,7 +146,7 @@ function load_Z(ctx::CFDemandCtx; sidecar::Union{Nothing,DataFrame}=nothing)
                                      "$(round(before, sigdigits=6)) → $(round(maximum(view(Z,:,i)), sigdigits=6))")
         end
         log_status("  [ψ] Z winsorized at $(round(100*pct, digits=1))%/$(round(100*(1-pct), digits=1))% within firm type " *
-                   "(matches estimation_bbl_1_polfunc.py)")
+                   "(matches bbl_polfunc.py)")
     else
         @warn "  [ψ] BBL_WINSOR_Z=0 — Z cost-shifters RAW; γ̂ will be driven by the corrupt tail " *
               "and is NOT comparable to the policy function's regressors."
@@ -162,12 +162,12 @@ end
 """
     load_cost_params(path, znames) -> Dict("B"=>(omega,zeta,gamma::Vector), "D"=>(…))
 
-Read `COST_FWD/cost_params_{tag}.json` (estimation_bbl_3_solve.py) and align each type's
+Read `COST_FWD/cost_params_{tag}.json` (bbl_solve.py) and align each type's
 γ to the ψ-basis Z-column order `znames`.
 """
 function load_cost_params(path::String, znames::Vector{String})
-    isfile(path) || error("Missing cost params $path — run estimation_bbl_2_fwd_sim.jl → " *
-                          "estimation_bbl_3_solve.py first (or pass --cost-json).")
+    isfile(path) || error("Missing cost params $path — run bbl_fwd_sim.jl → " *
+                          "bbl_solve.py first (or pass --cost-json).")
     j = JSON3.read(read(path, String))
     out = Dict{String,Any}()
     for κ in ("B", "D")

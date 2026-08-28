@@ -1,10 +1,10 @@
-## cosif_validate_k4_fix.py
-# Author: Pedro Feijo de Moraes (validation, paired with cosif_process_1_extract.py)
+## diag_cosif_k4_validate.py
+# Author: Pedro Feijo de Moraes (validation, paired with panel_cosif_extract.py)
 # Objective: Calibrate repo/bills effective rates, compute the CORRECTED k=4
 #            (CDB) implicit rate from the v2 foundation table, and produce a
 #            top-10 before/after validation (table + ONE figure).
 #
-# Conglomerate mapping: built from the IF-Data List exactly as panel_3_master_panel_build.py
+# Conglomerate mapping: built from the IF-Data List exactly as panel_deposit_rates.py
 # does -- the List CodInst for individual institutions (Td=='I') IS the 8-digit
 # CNPJ root that COSIF uses, so we aggregate ALL member CNPJs up to each
 # CodConglomeradoPrudencial (the conglomerate's deposit-taking subsidiary, e.g.

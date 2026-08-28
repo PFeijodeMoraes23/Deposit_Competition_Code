@@ -1,5 +1,5 @@
 """
-d_rate_scrape_2_cdx.py
+scrape_deposit_rate_cdx.py
 ==============================
 Interrogates the Wayback Machine CDX API to fetch URLs with snapshots containing
 relevant keywords or PDF content, ensuring we only query valid data points 
@@ -103,7 +103,7 @@ def main():
 
     targets_file = ip_scrape_dir / 'scraper_targets.json'
     if not targets_file.exists():
-        print(f"{targets_file} not found! Run d_rate_scrape_1_targets.py first.")
+        print(f"{targets_file} not found! Run scrape_deposit_rate_targets.py first.")
         return 1
 
     with open(targets_file, 'r', encoding='utf-8') as f:

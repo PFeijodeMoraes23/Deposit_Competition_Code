@@ -1,5 +1,5 @@
 """
-proto_1_member_cnpj_local_panel.py
+panel_proto_local_cdb_spread.py
 ==================================
 SEPARATE-PANEL PROTOTYPE (Option 1).  Does NOT touch market_panel.csv or any
 production demand parquet.  Builds a parallel type-4 demand panel in which the
@@ -22,7 +22,7 @@ Outputs (processed/ESTIMATION_OUTPUT/DIAG_K4_SPREAD/):
   proto1_sensitivity.csv              α̂, SE, first-stage F, partial R² tables
   report_proto1.txt
 
-Usage:  python proto_1_member_cnpj_local_panel.py [--routine 4]
+Usage:  python panel_proto_local_cdb_spread.py [--routine 4]
 """
 from __future__ import annotations
 import os, sys, glob, argparse
@@ -35,8 +35,8 @@ import numpy as np
 import pandas as pd
 
 from utils import paths
-import cosif_process_2_calibrate as cc
-import weak_iv_analysis as wia   # reuse the validated battery (import has no side effects)
+import panel_cosif_calibrate as cc
+import blp_weak_iv as wia   # reuse the validated battery (import has no side effects)
 
 FOUNDATION = paths.PROCESSED / "COSIF_PROCESSED" / "custos_implicitos_v2_foundation.csv"
 ESTBAN_CSV = paths.ESTBAN_CSV

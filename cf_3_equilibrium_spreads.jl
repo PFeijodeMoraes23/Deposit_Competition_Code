@@ -1,5 +1,5 @@
 """
-cf_3_equilibrium_spreads.jl
+cf3_equilibrium.jl
 ===========================
 CF3 — equilibrium deposit spreads (dynamic MPE, Egan-style forward-sim continuation).
 
@@ -23,16 +23,16 @@ SCAFFOLD SIMPLIFICATIONS (first pass; refine for the headline):
     every firm; a production version would re-simulate only firm j's markets).
 
 Local dev (validate the machinery at logit with the logit costs already on disk):
-  julia --project=. cf_3_equilibrium_spreads.jl --estim 6 --spec 12 --stage logit --R 50 \\
+  julia --project=. cf3_equilibrium.jl --estim 6 --spec 12 --stage logit --R 50 \\
       --time-filter 2025Q4 --fixed-point gauss-seidel
 
 Headline (after credible RC costs land): --stage extended --R 2000 on the cluster.
 """
 
-include(joinpath(@__DIR__, "estimation_bbl_2_fwd_sim.jl"))
+include(joinpath(@__DIR__, "bbl_fwd_sim.jl"))
 
 using DataFrames, Statistics, Printf, LinearAlgebra
-# load_cost_params / theta_c / marginal_cost_per_obs come from foundation_psi_basis.jl (shared with CF1-net).
+# load_cost_params / theta_c / marginal_cost_per_obs come from cf_psi_basis.jl (shared with CF1-net).
 
 # ==========================================================================
 # Firm value V_j(σ) under a stationary spread vector

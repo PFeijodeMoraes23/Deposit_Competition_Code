@@ -1,4 +1,4 @@
-## scrape_22_pix_participants.py
+## scrape_pix_participants.py
 # Author: Pedro Feijó de Moraes
 #
 # Last edited: 2026-06-09
@@ -7,9 +7,9 @@
 #          participant (ISPB) first appears in the Pix environment. This is the
 #          "key-based" leg of a cross-validated timeline; the "roster-based" leg
 #          (participation type: direct/indirect, mandatory/voluntary) is built by
-#          scrape_23_pix_roster.py and the two are reconciled there.
+#          scrape_pix_roster.py and the two are reconciled there.
 #
-#          Distinct from scrape_5_pix_panel.py, which uses the geographic
+#          Distinct from scrape_pix_municipal.py, which uses the geographic
 #          TransacoesPixPorMunicipio endpoint (MCA × quarter adoption). This
 #          script uses the ChavesPix endpoint (monthly stock of registered Pix
 #          keys by participant), which nothing else in the pipeline touches.

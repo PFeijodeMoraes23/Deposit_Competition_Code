@@ -1,5 +1,5 @@
 """
-blp_1_logit.jl
+blp_logit.jl
 ==============
 Non-random-coefficients logit demand estimation for BLP (θ₂ = 0).
 
@@ -15,12 +15,12 @@ lineup (base links + their +Time variants):
 Each parquet already carries every column the logit needs (spread_ann in bps, share_D /
 share_B_cond, is_B, deposit_type, CodConglomeradoPrudencial, the X_COLS, and all
 LOO/cost/capital instruments), so no separate "finalization" step is required. The
-link-based routines (E3+) are produced by estimation_demand_link_common.py, which mirrors
+link-based routines (E3+) are produced by sleep_demand_prep_link.py, which mirrors
 the linear demand prep exactly (same columns/scaling), so the logit treats every routine
 identically.
 
-Run all discovered routines with `julia blp_1_logit.jl`, or a single one with
-`julia blp_1_logit.jl --est 3`.
+Run all discovered routines with `julia blp_logit.jl`, or a single one with
+`julia blp_logit.jl --est 3`.
 
 Four sub-models per routine (the in-file LaTeX table generator below reads these keys):
   (a) priceonly:           δ = α · spread
@@ -34,17 +34,17 @@ IK2016 effective clusters G*.
 Usage
 -----
   # All discovered routines + combined summary + LaTeX tables:
-  julia --project=. --threads=auto blp_1_logit.jl
+  julia --project=. --threads=auto blp_logit.jl
 
   # A single routine:
-  julia --project=. blp_1_logit.jl --est 3
+  julia --project=. blp_logit.jl --est 3
 
   # Rebuild all LaTeX tables from the existing combined summary (no estimation):
-  julia --project=. blp_1_logit.jl --tables-only
+  julia --project=. blp_logit.jl --tables-only
 
   # On the cluster (HEAD/data tree): parquets from data/output/demand_prep, everything this
   # step produces into data/output/logit — δ warm-starts, .jls fits, summary and .tex:
-  julia --project=. --threads=auto blp_1_logit.jl --est 3 --hpc
+  julia --project=. --threads=auto blp_logit.jl --est 3 --hpc
 
 LaTeX outputs (→ ESTIMATION_OUTPUT/Rout + Drafts/Deposit Competition; data/output/logit on
 the cluster, where the Drafts folder does not exist):
@@ -83,7 +83,7 @@ const CORE_COLS = ["fgc_covered", "has_ip", "log_total_assets_lag"]
 # 2026-07-09 and REJECTED: dropping the aggregates roughly doubled the logit α SE and made it
 # insignificant (t −2.2→−0.75), even though the subsample eff-F rose (13→21, a mechanical dilution
 # effect) — the `mean_loo_` contribute identifying variation despite their collinearity. Kept only
-# as a robustness discussion (review §4). See weak_iv_analysis.py PARSIMONIOUS_IV for the diagnostic.
+# as a robustness discussion (review §4). See blp_weak_iv.py PARSIMONIOUS_IV for the diagnostic.
 const IV_BLP_LOO = ["loo_log_assets", "mean_loo_log_assets",
                     "loo_equity_ratio", "mean_loo_equity_ratio",
                     "loo_basileia", "mean_loo_basileia",
@@ -153,7 +153,7 @@ end
 # ==========================================================================
 # 0b. Paths
 # ==========================================================================
-"""Whether this run targets the cluster tree. `--hpc` is the flag blp_1_estimation.jl takes;
+"""Whether this run targets the cluster tree. `--hpc` is the flag blp_engine_cpu.jl takes;
 SLURM's own job environment is honoured as well, so a job step that omits the flag still
 resolves data/{input,output} instead of throwing inside `resolve_of_root()` (the local root
 validation cannot pass on a compute node). Neither holds on a local run."""
@@ -194,7 +194,7 @@ of a routine that the RC stack would then disagree with."""
 demand_dirs() = demand_search_dirs(get_paths()...)
 
 # Logit outputs live in a dedicated `logit/` subfolder of the results root, kept separate from
-# the RC outputs (see process_blp_outputs.py). `logit_dir(out_dir)` in of_root.jl is the single
+# the RC outputs (see cluster_ingest_blp.py). `logit_dir(out_dir)` in of_root.jl is the single
 # definition of that path — the RC engine resolves the warm-start deltas through the same call —
 # and this method pins it to this run's output root and creates it on demand.
 function logit_dir()
@@ -265,7 +265,7 @@ function discover_estim_strategies()
     # from the new panel while carrying a stale phi, i.e. mixed-vintage inputs that look
     # current by mtime. This filter is the guard — the logit cannot pick up an id outside the
     # active set even if its parquet exists. `active_from_env` (routines.jl) is the same
-    # reader estimation_demand_1_prep.py / export_results.py use through utils/routines.py,
+    # reader sleep_demand_prep.py / sleep_export_all.py use through utils/routines.py,
     # over the same config/routines.toml, so the three cannot drift apart.
     active = Set(active_from_env())
     ids = sort!(collect(keys(best)))
@@ -326,7 +326,7 @@ function build_matrices(df::DataFrame, xcols::Vector{String}, add_dtype::Bool)
     all_iv_names = vcat(IV_BLP_LOO, IV_ESTBAN, IV_COST, IV_CAPITAL)
 
     # A missing instrument COLUMN used to be dropped in silence, which is how the entire IV_BLP_LOO
-    # block vanished when a market_panel rebuild skipped panel_7_instruments.py (it OVERWRITES
+    # block vanished when a market_panel rebuild skipped panel_loo_instruments.py (it OVERWRITES
     # market_panel.csv with the LOO instruments + FGC dummy). The logit then ran on the cost shifters
     # alone. A missing column is a broken panel, not a modelling choice — say so.
     _absent = [c for c in all_iv_names if !(c in names(df))]

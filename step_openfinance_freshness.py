@@ -1,5 +1,5 @@
 """
-step_openfinance_freshness.py
+scrape_openfinance_freshness.py
 =============================
 Empirically verify the Open Finance Brasil open-data update schedule.
 
@@ -9,7 +9,7 @@ OFB fee values are supposed to refresh monthly, published on the 10th BUSINESS d
 (BCB IN 32/2020), referencing the previous month. But the API response carries NO
 reference-period/timestamp field, so freshness cannot be read from the payload — it
 must be INFERRED by watching values change across scrapes. This is why the collector
-is run on a weekly sweep (see run_openfinance_monthly.py): several snapshots per month
+is run on a weekly sweep (see scrape_openfinance_monthly.py): several snapshots per month
 let us see, per bank, on which day its monthly update actually landed.
 
 What this does
@@ -30,7 +30,7 @@ Output
 
 Usage
 -----
-  python step_openfinance_freshness.py
+  python scrape_openfinance_freshness.py
 """
 
 from __future__ import annotations

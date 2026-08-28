@@ -1,12 +1,12 @@
 """
-d_rate_scrape_1_targets.py
+scrape_deposit_rate_targets.py
 ==============================
 Initializes the target list for historical Internet Archive deposit rate scraping.
 
 Self-sufficient: if `d_type_firms_summary_final.csv` is missing or empty
 (header-only), this script regenerates it directly from `market_panel.csv`
 + `digital_banks_diagnostic.csv` + `ip_rates_quarterly.csv` using the same
-logic as the D-Type block in `desc_1.py` (with the `df_b`/`df` filter bug
+logic as the D-Type block in `make_desc_panel_tables.py` (with the `df_b`/`df` filter bug
 fixed). It then proceeds to build the scraper target list.
 """
 from utils.venv_guard import ensure_project_venv
@@ -44,7 +44,7 @@ AGGREGATOR_DOMAINS = [
 def _build_d_type_summary(panel_csv: Path, processed_dir: Path, out_path: Path) -> pd.DataFrame:
     """Rebuild d_type_firms_summary_final.csv from market_panel + diagnostics.
 
-    Mirrors the D-Type block in desc_1.py but uses the full panel (filtered to
+    Mirrors the D-Type block in make_desc_panel_tables.py but uses the full panel (filtered to
     CODMUN_IBGE == "0", i.e. national/D-type rows) instead of the buggy
     df_b-then-filter chain.
     """

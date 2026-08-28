@@ -1,5 +1,5 @@
 """
-desc_3.py
+sleep_desc_clusters.py
 ================================================================================
 Descriptive statistics: banking-conglomerate CLUSTER-SIZE IMBALANCE and DEPOSIT
 CONCENTRATION. This is the single, canonical home for cluster-imbalance reporting
@@ -12,13 +12,13 @@ we report (the pooled single-index estimator, E3), read from
 so the table's Observations / Clusters match the estimation tables (441,331 / 506).
 
 Metrics (Panel A): nominal clusters G vs effective G* = G/(1+CV^2)
-(Carter-Schnepel-Steigerwald 2017; via utils.cluster.effective_cluster_stats), the
+(Carter-Schnepel-Steigerwald 2017; via utils.cluster_stats.effective_cluster_stats), the
 coefficient of variation of cluster sizes (the quantity in MacKinnon-Webb 2017),
 mean/median/max obs per cluster, and the deposit HHI with its numbers-equivalent
 1/HHI. Panel B: the top-N conglomerates by time-averaged national deposit share, with
 cumulative share and each cluster's observation share.
 
-Outputs (CSV + LaTeX to ESTIMATION_OUTPUT/Rout, mirrored to Drafts/Deposit Competition):
+Outputs (CSV + LaTeX; Drafts/Deposit Competition locally, ESTIMATION_OUTPUT/Rout on the cluster):
     cluster_imbalance_panelA.tex  (\\input-able standalone table [H]: cluster structure / WCB justification; \\label{tab:cluster_imbalance})
     cluster_imbalance_panelB.tex  (\\input-able standalone table [H], spans \\textwidth: deposit concentration, top-N, for V_Main.tex; \\label{tab:deposit_concentration})
     cluster_imbalance.csv
@@ -27,8 +27,8 @@ Panels A and B are separate, self-contained tables (no cross-\\ref) so Panel B c
 \\input into V_Main.tex on its own.
 
 Usage:
-    python desc_3.py                 # est3, top-5
-    python desc_3.py --est 3 --top-n 10
+    python sleep_desc_clusters.py                 # est3, top-5
+    python sleep_desc_clusters.py --est 3 --top-n 10
 
 NOTE: reads estimation output, so it runs AFTER the sleep estimation (unlike
 desc_1/desc_2, which read the raw market panel).
@@ -41,13 +41,19 @@ import pandas as pd
 
 from utils import paths as P
 from utils import routines as _routines
-from utils.cluster import effective_cluster_stats
+from utils.cluster_stats import effective_cluster_stats
 
 CLUSTER_VAR = "CodConglomeradoPrudencial"
 # rout_dir/est_dir follow SLEEP_OUT_ROOT, so the exhibit describes the sample of the run
 # that produced it rather than whatever sits in the production tree.
 OUTPUT_DIR = P.rout_dir()
 DRAFTS_DIR = P.drafts_dir()
+
+# ONE copy, chosen by environment. On the cluster only data/output/sleep/Rout is packaged by
+# cluster_archive.sh, so a fragment written to the skeleton Drafts dir never reaches the
+# download; locally the paper directory is the copy that matters and Rout would just be a
+# second, divergeable one.
+TEX_TARGETS = (OUTPUT_DIR,) if P.on_cluster() else (DRAFTS_DIR,)
 
 # 8-digit CNPJ root of the prudential-conglomerate leader -> display brand name.
 # The panel's NomeInstituicao is frequently a subsidiary label with folded accents
@@ -245,15 +251,15 @@ def main():
     # LaTeX tables: Panel A and Panel B as SEPARATE, standalone \input-able tables so
     # Panel B (deposit concentration) can be dropped into V_Main.tex on its own.
     tex_a, tex_b = render_panel_a(st), render_panel_b(st)
-    for d in (OUTPUT_DIR, DRAFTS_DIR):
+    for d in TEX_TARGETS:
         (d / "cluster_imbalance_panelA.tex").write_text(tex_a, encoding="utf-8")
         (d / "cluster_imbalance_panelB.tex").write_text(tex_b, encoding="utf-8")
         # drop the superseded combined two-panel table so no stale orphan remains
         (d / "cluster_imbalance.tex").unlink(missing_ok=True)
     # CSV of the underlying numbers
     csv = pd.DataFrame(st["top_n"])
-    csv.to_csv(OUTPUT_DIR / "cluster_imbalance.csv", index=False, encoding="utf-8")
-    csv.to_csv(DRAFTS_DIR / "cluster_imbalance.csv", index=False, encoding="utf-8")
+    for d in TEX_TARGETS:
+        csv.to_csv(d / "cluster_imbalance.csv", index=False, encoding="utf-8")
     # relocated cluster diagnostics (E3 sample)
     diag = {"est": args.est, "sample": "spec12_second_stage",
             "G_nominal": st["G_nominal"], "G_star": st["G_star"], "coefficient_variation": st["cv"],
@@ -261,8 +267,8 @@ def main():
             "max_obs_per_cluster": st["max_size"], "total_observations": int(st["total_obs"]),
             "deposit_hhi": st["hhi"], "inv_hhi": st["inv_hhi"],
             "top_n_by_deposit_share": st["top_n"]}
-    (OUTPUT_DIR / "cluster_imbalance.json").write_text(json.dumps(diag, indent=2, ensure_ascii=False), encoding="utf-8")
-    print(f"[OK] wrote cluster_imbalance_panel{{A,B}}.tex + .csv/.json to {OUTPUT_DIR} and mirrored to {DRAFTS_DIR}")
+    (TEX_TARGETS[0] / "cluster_imbalance.json").write_text(json.dumps(diag, indent=2, ensure_ascii=False), encoding="utf-8")
+    print(f"[OK] wrote cluster_imbalance_panel{{A,B}}.tex + .csv/.json to {TEX_TARGETS[0]}")
 
 
 if __name__ == "__main__":

@@ -1,9 +1,9 @@
-"""step_phi_mc_recovery.py -- can the sleep kernel recover phi when awake inflows persist?
+"""sleep_ident_mc_recovery.py -- can the sleep kernel recover phi when awake inflows persist?
 
 Author: Pedro Feijo de Moraes
 
 The map rho_xi -> bias(phi-hat) through the production estimator. Panels are simulated
-from the model's own law of motion (foundation_deposit_sim.jl:192):
+from the model's own law of motion (cf_deposit_sim.jl:192):
 
     Dep_jt = phi_true * accr_j * Dep_j,t-1 + A_jt
     ln A_jt = ln a_j + delta_t + xi_jt,     xi_jt = rho_xi * xi_j,t-1 + eps_jt
@@ -65,7 +65,7 @@ D4c sub-modes (all default OFF, so the archived d4c_acf_overid.* are reproducibl
 Grid sub-mode:
   --censor      apply the demand-step rule inside each simulated panel before the D2
                 statistic: Dep_Act = max(0, Dep_t - phi_hat*accr*Dep_{t-1}), rows with
-                Dep_Act <= 1e-6 raw R$ dropped (estimation_2_demand_1_prep.py:314-322).
+                Dep_Act <= 1e-6 raw R$ dropped (sleep_demand_prep_e2.py:314-322).
                 The data test can only use surviving rows, so this is what D2's power
                 actually is.
 
@@ -94,10 +94,10 @@ HMAX = 12        # ACF horizons; 12 quarters = 3 years
 
 # The demand step's censoring rule, in RAW R$ (the simulated panels inherit the parquet's
 # raw-R$ units through dep0=lagged_deposits): Dep_Act = max{0, Dep - phi*g*L} and rows with
-# Dep_Act <= CENSOR_EPS are dropped -- estimation_2_demand_1_prep.py:314-322.
+# Dep_Act <= CENSOR_EPS are dropped -- sleep_demand_prep_e2.py:314-322.
 CENSOR_EPS = 1e-6
 
-# desc_2.py palette
+# make_desc_compressed_tables.py palette
 PAL_B, PAL_D, PAL_GRID = "#1565C0", "#E64A19", "#D5D5D0"
 
 D6_CSV = OUT_DIR / "d6_implied_phi.csv"
@@ -105,7 +105,7 @@ D6_CSV = OUT_DIR / "d6_implied_phi.csv"
 
 def d6_reference(kind="B"):
     """D6's entry-dynamics phi as (phi, lo, hi), READ from disk -- never hard-coded, so
-    that re-running step_entry_dynamics.py updates this script's comparison automatically.
+    that re-running sleep_ident_entry_dynamics.py updates this script's comparison automatically.
     Returns None if D6 has not been run."""
     try:
         t = pd.read_csv(D6_CSV)
@@ -302,7 +302,7 @@ def estimate_once(rows_dep, rows_lag, ent, stats_null=False, censor=False):
         np.add.at(G3, cl3, X3 * e3[:, None])
         V3 = X3tXi @ (G3.T @ G3) @ X3tXi
         # NB --censor deliberately does NOT touch D4a: the data-side D4a (attractiveness rank
-        # x carry, step_phi_interaction_tests.py --arm attractiveness) runs on the sleep
+        # x carry, sleep_ident_interaction.py --arm attractiveness) runs on the sleep
         # frame and never reads Dep_Act, so it never loses the censored rows.
         out["d3_coef"] = float(b3[1])
         out["d3_t"] = float(b3[1] / np.sqrt(V3[1, 1]))
@@ -343,7 +343,7 @@ def mode_grid(a):
     rng = np.random.default_rng(a.seed)
     rows_dep, rows_lag = simulate_panel(ent, sd_t, 0.9, 0.0, rng)
     fast = estimate_once(rows_dep, rows_lag, ent)["phi_hat"]
-    from estimation_2_sleep import run_pooled_second_stage
+    from sleep_est_e2 import run_pooled_second_stage
     T, N = rows_dep.shape
     df_chk = pd.DataFrame({
         "deposit_balance": rows_dep.reshape(-1), "nr_lagged_dep": rows_lag.reshape(-1),
@@ -498,7 +498,7 @@ def _data_acf(dd, col, hmax=HMAX):
 def _transform_data(dd, detrend):
     """Two-way within residual of deposits (+ optional entity detrend) -- the DATA side of
     the identical transform applied to every simulated panel."""
-    from estimation_2_sleep import demean_variables_2way
+    from sleep_est_e2 import demean_variables_2way
     e = demean_variables_2way(dd, ["deposit_balance"], "entity_id",
                               "time_id")["deposit_balance"]
     if detrend:
@@ -548,7 +548,7 @@ def _hlist(mask):
 
 def mode_acf(a):
     print("=== D4c: ACF overidentification vs fitted pure-sleepiness model ===")
-    from step_phi_augmented_tests import load_sleep_frame
+    from sleep_ident_augmented import load_sleep_frame
 
     df, _ = load_sleep_frame()
     d = df.dropna(subset=["deposit_balance", "nr_lagged_dep"]).copy()
@@ -677,7 +677,7 @@ def mode_acf(a):
             for e_id in a.routine_bands:
                 fp = cf_dir / f"phi_nopix_E{e_id}_spec_12.parquet"
                 if not fp.exists():
-                    print(f"  [E{e_id}] MISSING {fp.name} -- run cf_4_upsilon_export.py "
+                    print(f"  [E{e_id}] MISSING {fp.name} -- run sleep_upsilon_export.py "
                           f"--estim {e_id}; skipped")
                     continue
                 pm = (pd.read_parquet(fp, columns=["entity_id", "phi_mt"])

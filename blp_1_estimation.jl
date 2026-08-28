@@ -35,7 +35,7 @@ using Random, Optim, QuasiMonteCarlo, Distributions
 using JSON3, Serialization, ArgParse, Printf, Dates
 
 # Shared SE machinery (wild cluster bootstrap + analytical GMM sandwich, BLP_SE_METHOD).
-include(joinpath(@__DIR__, "se_common.jl"))
+include(joinpath(@__DIR__, "blp_se_common.jl"))
 include(joinpath(@__DIR__, "of_root.jl"))
 # The lineup and the demand prefixes come from config/routines.toml, which utils/routines.py
 # reads too. Guarded because several files in one session want the consts.
@@ -133,7 +133,7 @@ const D_DIM   = length(D_COLS)
 # Full instrument set (15 = these 11 + IV_COST + IV_CAPITAL). A trim (dropping the near-singular
 # duplicate `mean_loo_basileia`, VIF ≈ 707) was considered 2026-07-09 but NOT adopted — the GMM
 # `pinv` weight matrix already handles the collinearity, and the linear-logit trim was rejected
-# for weakening α (see blp_1_logit.jl). Kept consistent with the logit; trimming is a robustness
+# for weakening α (see blp_logit.jl). Kept consistent with the logit; trimming is a robustness
 # discussion only (review §4).
 const IV_BLP_LOO = ["loo_log_assets", "mean_loo_log_assets",
                     "loo_equity_ratio", "mean_loo_equity_ratio",
@@ -152,7 +152,7 @@ const _log_buf  = String[]
 const _log_lock = ReentrantLock()
 
 function input_filename(estim::Int, spec_id::Int)::String
-    # Prefer the prefix auto-discovered + passed by blp_2_rc.jl (handles new routines with no
+    # Prefer the prefix auto-discovered + passed by blp_rc.jl (handles new routines with no
     # registry edit); fall back to DEMAND_PREFIXES (routines.jl, from config/routines.toml,
     # where E1/E2 carry the bare demand_{k} and E3/E4 the link tags that
     # estimation_demand_link_common.DEMAND_CFG writes), then the bare demand_{k}.
@@ -229,15 +229,15 @@ end
     demand_parquet_path(estim, spec_id, args) -> Union{String,Nothing}
 
 Locate routine `estim`'s demand-prep parquet for `spec_id`. The name comes from
-`input_filename` (BLP_DEMAND_PREFIX, set by blp_2_rc.jl from the prefix it discovered); the
+`input_filename` (BLP_DEMAND_PREFIX, set by blp_rc.jl from the prefix it discovered); the
 directory from `demand_search_dirs` (of_root.jl) — on the cluster the single directory the
 prep step writes, `data/output/demand_prep`, off the cluster the local DEMAND_PREP.
 
 Returns `nothing` after printing the `[!] Missing` line, naming every searched location, so
 each caller keeps its own "missing input ⇒ skip this spec" control flow.
 
-Lives here, in the CPU baseline, rather than in blp_gpu_engine.jl: `run_blp_estimation`
-below needs it, and foundation_demand_eval.jl loads this file WITHOUT the engine when
+Lives here, in the CPU baseline, rather than in blp_engine_gpu.jl: `run_blp_estimation`
+below needs it, and cf_demand_eval.jl loads this file WITHOUT the engine when
 CF_GPU=0. The engine include()s this file, so its three entry points see it too.
 """
 function demand_parquet_path(estim::Int, spec_id::Int, args)
@@ -803,7 +803,7 @@ function build_regressor_matrices(df::DataFrame)
     # back to a column of zeros, and `iv_cols = [... if c in names(df)]` simply dropped the missing
     # instrument from Z.  That is how the ENTIRE IV_BLP_LOO block (loo_log_assets, mean_loo_log_assets,
     # loo_equity_ratio, loo_basileia, leave_one_out_mean_spread) disappeared without a word when a
-    # market_panel rebuild skipped panel_7_instruments.py — leaving the BLP identified off the cost
+    # market_panel rebuild skipped panel_loo_instruments.py — leaving the BLP identified off the cost
     # shifters alone, and α̂ flipping positive.  Fail loudly instead.  (Missing VALUES are still fine;
     # they are coalesced to 0 below.  It is a missing COLUMN that is fatal.)  See plan §0B.
     _absent_x  = [c for c in X_COLS if !(c in names(df))]
@@ -1012,7 +1012,7 @@ end
 # CUE replaces the weight with W(θ) = pinv(Ω̂(θ)), Ω̂ clustered on conglomerate, recomputed at EVERY
 # objective evaluation, and solves the concentrated θ₁ by W-weighted linear GMM iterated to a fixed
 # point — so α inherits LIML's weak-identification behaviour (no bias toward OLS). Selected via
-# BLP_ENGINE=cue (suffix "_cue" on every artifact; see blp_2_rc.jl). It rides the NUMERICAL engine:
+# BLP_ENGINE=cue (suffix "_cue" on every artifact; see blp_rc.jl). It rides the NUMERICAL engine:
 # its gradient is pure forward finite differences of the objective, so changing only the objective
 # keeps objective/gradient consistent automatically. The IFT analytic gradient assumes ∂W/∂θ₂ = 0 and
 # is NOT valid for CUE.
@@ -1044,7 +1044,7 @@ function CueOpts(clusters::Vector{String})
                    Ref(0), Ref(0), Ref(0))
 end
 
-"""Clustered moment covariance Ω̂ = (1/N)Σ_g (Z_g'ξ_g)(Z_g'ξ_g)' — the se_common.jl:128 meat pattern,
+"""Clustered moment covariance Ω̂ = (1/N)Σ_g (Z_g'ξ_g)(Z_g'ξ_g)' — the blp_se_common.jl:128 meat pattern,
 code-indexed. ALL rows, unmasked (mirrors `compute_gmm_moments`)."""
 function cue_weight(xi::Vector{Float64}, Z::Matrix{Float64}, opts::CueOpts)
     N, L = size(Z)
@@ -1236,7 +1236,7 @@ function run_blp_estimation(estim::Int, spec_id::Int, args,
 
         # Save δ as version-agnostic binary — survives Julia version upgrades on cluster.
         # Into the logit step directory, the one place the δ readers (this file's warm start,
-        # foundation_demand_eval.jl's logit stage) look for it.
+        # cf_demand_eval.jl's logit stage) look for it.
         let _logit_out = logit_dir(get_paths(args["hpc"]; local_dir=args["local_dir"])[3])
             mkpath(_logit_out)
             _bin = joinpath(_logit_out, "logit_delta_E$(estim)_spec_$(spec_id).bin")
@@ -1398,7 +1398,7 @@ function run_blp_estimation(estim::Int, spec_id::Int, args,
     delta_work = zeros(N_obs)
     let _loaded = false
         # 1. Try version-agnostic binary first (no Julia serialization version dependency)
-        #    Generated by blp_1_logit.jl or blp_1_estimation.jl --stage logit
+        #    Generated by blp_logit.jl or blp_engine_cpu.jl --stage logit
         #    in_dir (data/input on HPC) is checked first so a δ̂ supplied as an upload wins over
         #    one the logit step produced in this run; otherwise the logit step directory.
         for _bin_cand in [
@@ -1512,7 +1512,7 @@ function run_blp_estimation(estim::Int, spec_id::Int, args,
     println("  theta1 (alpha): $(round(theta1_star[1], sigdigits=6))")
 
     # Save checkpoint into the BLP step directory — the same place the warm-start reader above
-    # and _result_path (foundation_demand_eval.jl) look, so a checkpoint written here is the one
+    # and _result_path (cf_demand_eval.jl) look, so a checkpoint written here is the one
     # the next stage and the CF stack pick up.
     _res_dir = blp_dir(out_dir)
     mkpath(_res_dir)
@@ -1553,7 +1553,7 @@ function parse_args_est()
         "--local-dir"; arg_type=String; default=nothing; dest_name="local_dir"
         "--dry-run"; action=:store_true; dest_name="dry_run"
         # Recompute SEs from this stage's existing checkpoint instead of re-optimising. Valid ONLY
-        # when the change is confined to the SE routine (se_common.jl / BLP_SE_METHOD / WCB knobs),
+        # when the change is confined to the SE routine (blp_se_common.jl / BLP_SE_METHOD / WCB knobs),
         # which runs after optimisation and cannot move the point estimates. Requires
         # blp_checkpoint_E{estim}_spec_{spec}_{stage}.jls from a prior normal run.
         "--se-only"; action=:store_true; dest_name="se_only"

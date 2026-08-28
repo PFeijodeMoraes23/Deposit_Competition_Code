@@ -114,7 +114,7 @@ def phi_k(verbose=True):
     """Type-specific carries {k: phi_k} from D5's output (OLSxTech covers all four types).
 
     Source of truth: DIAG_PHI_SEPARATION/d_interactions_types.csv, written by
-    step_phi_interaction_tests.py --arm types.
+    sleep_ident_interaction.py --arm types.
     """
     fp = _OUT / "d_interactions_types.csv"
     if fp.exists():

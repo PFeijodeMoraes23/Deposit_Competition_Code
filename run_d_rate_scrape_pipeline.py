@@ -1,46 +1,46 @@
 """
-run_d_rate_scrape_pipeline.py
+scrape_drate_pipeline.py
 ==============================
 Master orchestrator for the digital-bank advertised-rate scraping chain.
 
 Pipeline (strictly sequential — each stage depends on the previous):
 
-  Stage 1 - d_rate_scrape_1_targets.py
+  Stage 1 - scrape_deposit_rate_targets.py
             Build the target URL list for each digital-bank conglomerate.
 
-  Stage 2 - d_rate_scrape_2_cdx.py
+  Stage 2 - scrape_deposit_rate_cdx.py
             Query the Wayback Machine CDX index for archived snapshots of
             those URLs. Writes scraper_urls.json.
 
-  Stage 3 - d_rate_scrape_3_fetch.py
+  Stage 3 - scrape_deposit_rate_fetch.py
             Download archived HTML/PDF snapshots into archive_html/ and
             archive_pdfs/. RESUMABLE: skips any URL whose target file is
             already on disk. Slowest step (Wayback Machine rate limits).
 
-  Stage 4 - d_rate_scrape_4_parse.py
+  Stage 4 - scrape_deposit_rate_parse.py
             Extract CDI/SELIC rate mentions from cached HTML/PDFs into
             extracted_historical_rates.csv. CPU-bound, ~17 min.
 
-  Stage 5 - d_rate_scrape_5_format.py
+  Stage 5 - scrape_deposit_rate_format.py
             Aggregate raw mentions to a quarter x conglomerate panel.
             Produces advertised_rates_quarterly{,_wide}.csv and a dropped
             audit CSV.
 
-  Stage 6 - d_rate_scrape_6_diagnose.py
-            Compare scraped rates against the panel_3_master_panel_build.py output;
+  Stage 6 - scrape_deposit_rate_diagnose.py
+            Compare scraped rates against the panel_deposit_rates.py output;
             decide which CDI-fallback cells (deposit types 4 & 5 only) to
             override. Produces recommended_merge.csv.
 
 Usage
 -----
-  python run_d_rate_scrape_pipeline.py                    # all stages
-  python run_d_rate_scrape_pipeline.py --from 4           # start from stage 4
-  python run_d_rate_scrape_pipeline.py --only 6           # run only stage 6
-  python run_d_rate_scrape_pipeline.py --skip 1,2         # skip listed stages
-  python run_d_rate_scrape_pipeline.py --list             # print steps & exit
-  python run_d_rate_scrape_pipeline.py --dry-run-fetch    # pass --dry-run to stage 3
-  python run_d_rate_scrape_pipeline.py --fetch-workers 2  # raise fetch concurrency
-  python run_d_rate_scrape_pipeline.py --parse-workers 8 --parse-pages 5
+  python scrape_drate_pipeline.py                    # all stages
+  python scrape_drate_pipeline.py --from 4           # start from stage 4
+  python scrape_drate_pipeline.py --only 6           # run only stage 6
+  python scrape_drate_pipeline.py --skip 1,2         # skip listed stages
+  python scrape_drate_pipeline.py --list             # print steps & exit
+  python scrape_drate_pipeline.py --dry-run-fetch    # pass --dry-run to stage 3
+  python scrape_drate_pipeline.py --fetch-workers 2  # raise fetch concurrency
+  python scrape_drate_pipeline.py --parse-workers 8 --parse-pages 5
 
 If any stage exits non-zero, the pipeline halts. Fix the issue and resume
 with `--from <stage>`.  Stage 3 is idempotent: a partial fetch can be
@@ -68,17 +68,17 @@ PYTHON     = sys.executable
 
 # Each entry: (stage_int, script_filename, description)
 STEPS = [
-    (1, "d_rate_scrape_1_targets.py",
+    (1, "scrape_deposit_rate_targets.py",
         "Build target URL list for digital-bank conglomerates"),
-    (2, "d_rate_scrape_2_cdx.py",
+    (2, "scrape_deposit_rate_cdx.py",
         "Wayback CDX -> scraper_urls.json"),
-    (3, "d_rate_scrape_3_fetch.py",
+    (3, "scrape_deposit_rate_fetch.py",
         "Fetch archive snapshots (RESUMABLE — skips cached files)"),
-    (4, "d_rate_scrape_4_parse.py",
+    (4, "scrape_deposit_rate_parse.py",
         "Extract CDI/SELIC mentions -> extracted_historical_rates.csv"),
-    (5, "d_rate_scrape_5_format.py",
+    (5, "scrape_deposit_rate_format.py",
         "Aggregate -> advertised_rates_quarterly{,_wide}.csv"),
-    (6, "d_rate_scrape_6_diagnose.py",
+    (6, "scrape_deposit_rate_diagnose.py",
         "Compare to panel_3 fallbacks -> recommended_merge.csv"),
 ]
 

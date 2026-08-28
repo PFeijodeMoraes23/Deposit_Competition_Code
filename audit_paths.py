@@ -277,11 +277,11 @@ def audit_julia(a: Audit, out: Path) -> None:
     eq("demand_search_cluster", str(out / "demand_prep"))
     eq("demand_search_local",   str(loc_in))
 
-    # blp_1_logit.jl's delta_dir()/tex_out_dir() need a full run context (get_paths()), so they
+    # blp_logit.jl's delta_dir()/tex_out_dir() need a full run context (get_paths()), so they
     # are not invoked here. Both delegate to of_root.jl — delta_dir() forwards to logit_dir(),
     # tex_out_dir() branches on is_cluster_out — so the delegation is checked statically and the
     # behaviour it delegates to is covered by the assertions above.
-    src = (REPO / "blp_1_logit.jl").read_text(encoding="utf-8", errors="replace")
+    src = (REPO / "blp_logit.jl").read_text(encoding="utf-8", errors="replace")
     a.check("delta_dir() = logit_dir()" in src,
             "blp_1_logit delta_dir delegates to logit_dir")
     a.check("is_cluster_out(out_dir) ? logit_dir(out_dir)" in src,

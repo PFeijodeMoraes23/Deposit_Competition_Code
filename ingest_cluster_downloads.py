@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-ingest_cluster_downloads.py -- the ONE front door for a finished cluster run.
+cluster_ingest.py -- the ONE front door for a finished cluster run.
 
 cluster_archive.sh packages the Bouchet run into data/output/download as eight
 archives, one per step folder plus gates and logs:
@@ -26,7 +26,7 @@ WHAT IT DOES
 
         sleep            -> DEMAND_PREP/            (est{k}/, Rout/, DIAGNOSTICS/)
         demand_prep      -> DEMAND_PREP/            (the demand_*_spec_*.parquet)
-        logit            -> BLP_RESULTS/logit/
+        logit            -> BLP_RESULTS/logit/  (.tex exhibits -> Drafts/Deposit Competition)
         blp              -> BLP_RESULTS/cluster_raw/ then process_blp_outputs
         bbl              -> process_cluster_outputs --kind bbl
         counterfactuals  -> process_cluster_outputs --kind cf
@@ -38,9 +38,9 @@ run exits 1. A missing checksum is reported, not fatal -- an archive can legitim
 arrive without its sha256SUMS line (a hand-made single-set zip, a partial download of
 the folder), and refusing it would make the common case need a flag.
 
-IT WRAPS THE TWO CONSOLIDATORS, it does not reimplement them. process_blp_outputs.py
+IT WRAPS THE TWO CONSOLIDATORS, it does not reimplement them. cluster_ingest_blp.py
 (zip -> cluster_raw + cluster_processed/blp_E{k}_spec_12.jls + INDEX.json) and
-process_cluster_outputs.py (--kind bbl | cf) stay the authority on what a BLP/BBL/CF
+cluster_ingest_bbl_cf.py (--kind bbl | cf) stay the authority on what a BLP/BBL/CF
 artifact is and where it goes; both remain callable on their own. process_blp_outputs
 writes its own SUMMARY.md next to the paper draft -- that is its behaviour, unchanged,
 and the only thing in this path that touches Drafts. Nothing here writes there:
@@ -58,10 +58,10 @@ carry two-stage AME attributes (bse_2s / pvalues_2s / cov_ame) attached locally 
 the cluster wrote them, and a cluster pickle of the same name does not have them.
 
 Usage:
-    python ingest_cluster_downloads.py                       # everything in CLUSTER_IN
-    python ingest_cluster_downloads.py --dry-run             # every check, writes nothing
-    python ingest_cluster_downloads.py --family sleep --family gates
-    python ingest_cluster_downloads.py --in D:/downloads/20260826 --no-backup
+    python cluster_ingest.py                       # everything in CLUSTER_IN
+    python cluster_ingest.py --dry-run             # every check, writes nothing
+    python cluster_ingest.py --family sleep --family gates
+    python cluster_ingest.py --in D:/downloads/20260826 --no-backup
 """
 from __future__ import annotations
 
@@ -77,6 +77,15 @@ import sys
 import zipfile
 import zlib
 from pathlib import Path
+
+# Windows consoles default to cp1252 and the processors this drives print Greek (sigma, phi,
+# delta) in their summaries. Without this an ingest that transported and verified perfectly is
+# reported as a REFUSED family, sending the operator to re-download a sound archive. Same
+# reconfigure the CF scripts use.
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8")
 
 REPO = Path(__file__).resolve().parent
 if str(REPO) not in sys.path:
@@ -541,6 +550,21 @@ def meta_tag(arc: Archive):
     return f"untagged_{datetime.datetime.fromtimestamp(arc.mtime):%Y%m%d}"
 
 
+def member_dest(family, rel: Path, root: Path) -> Path:
+    """Where one member belongs. Families land in one directory, with a single exception.
+
+    The logit family carries two different KINDS of product: the delta warm-starts, .jls fits
+    and summary json, which belong with the BLP results the RC engine reads, and three .tex
+    fragments that are paper exhibits. Sending the fragments to BLP_RESULTS leaves the paper
+    reading whatever it read last: the cluster recomputes them every run and V_Main never sees
+    the new numbers. Table generators write their .tex to the paper directory and nowhere else,
+    and a downloaded exhibit is the same kind of object, so it follows the same rule.
+    """
+    if family == "logit" and rel.suffix.lower() == ".tex":
+        return paths.drafts_dir() / rel.name
+    return root / rel
+
+
 def extract(opener, family, root: Path, backup: Backup, dry: bool, note):
     """Extract every member into `root` with the domain prefix stripped.
     -> (n_files, n_bytes, n_backed_up)."""
@@ -558,7 +582,7 @@ def extract(opener, family, root: Path, backup: Backup, dry: bool, note):
             rel = strip_prefix(rel, family)
             if not rel:
                 continue
-            dest = root / rel
+            dest = member_dest(family, rel, root)
             if backup.add(dest, info):
                 nbak += 1
             if not dry:
@@ -626,8 +650,8 @@ def route(arc: Archive, zip_path, opener, dry: bool, backup: Backup, note):
         if zip_path.resolve() != target.resolve():
             shutil.copy2(zip_path, target)
         note(f"copied {arc.name} -> {raw}")
-        import process_blp_outputs as blp_mod
-        if call_main(blp_mod, ["process_blp_outputs.py"]) != 0:
+        import cluster_ingest_blp as blp_mod
+        if call_main(blp_mod, ["cluster_ingest_blp.py"]) != 0:
             raise Refused("process_blp_outputs failed")
         return n, raw
 
@@ -635,8 +659,8 @@ def route(arc: Archive, zip_path, opener, dry: bool, backup: Backup, note):
     if zip_path is None:                             # dry run over an unassembled split
         note(f"would run process_cluster_outputs --kind {kind}")
         return n, dest_root(fam, None)
-    import process_cluster_outputs as cco
-    argv = ["process_cluster_outputs.py", "--kind", kind, "--zip", str(zip_path)]
+    import cluster_ingest_bbl_cf as cco
+    argv = ["cluster_ingest_bbl_cf.py", "--kind", kind, "--zip", str(zip_path)]
     if dry:
         argv.append("--dry-run")
     if call_main(cco, argv) != 0:
@@ -767,7 +791,8 @@ def main(argv=None):
           f"{f'; {refused} REFUSED' if refused else ''}.")
     print("Source archives were left where they were found; nothing was moved or deleted.")
     if refused:
-        print("Re-download the refused family and run again; the rest of the tree is current.")
+        print("The rest of the tree is current. A checksum mismatch means re-download that")
+        print("family; any other error is local processing — the archive on disk is intact.")
     return 1 if refused else 0
 
 

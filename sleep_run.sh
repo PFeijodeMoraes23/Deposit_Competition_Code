@@ -90,7 +90,7 @@ SPEC="${SPEC:-12}"
 DO_EST=1; DO_AME=1; DO_UPSILON=1; SKIP_PREFLIGHT=0
 # AFTER_JID: the job every first-tier submission waits on. Empty means "start now".
 AFTER_JID=""
-# Spec-level fan-out is the DEFAULT. estimation_sleep_common.py's --spec-id/--merge-specs
+# Spec-level fan-out is the DEFAULT. sleep_est_single.py's --spec-id/--merge-specs
 # split makes a spec task's entire write set _specs/spec_{S}.pkl, with one merge job as the
 # only writer of the shared pickle — so concurrent spec tasks have no shared write to race
 # on, rather than a guarded one, and the result reproduces the serial grid to 0.000e+00
@@ -106,7 +106,7 @@ MERGE_TIME="${MERGE_TIME:-01:00:00}"; MERGE_CPUS="${MERGE_CPUS:-8}"; MERGE_MEM="
 # earlier 32-96 G figures were guesses against a much smaller node.
 #
 # More cores do NOT buy a wider search on the est array: NLLS_N_STARTS is a
-# hardcoded 4 in estimation_sleep_common.py, so 16 cores and 128 cores fit the same
+# hardcoded 4 in sleep_est_single.py, so 16 cores and 128 cores fit the same
 # direction from the same starts. 16 is what E1/E2's internal 4-way pool can
 # actually use; the memory is what a full market panel per process needs.
 EST_TIME="${EST_TIME:-04:00:00}";   EST_CPUS="${EST_CPUS:-16}";   EST_MEM="${EST_MEM:-128G}"
@@ -115,7 +115,7 @@ AMEG_TIME="${AMEG_TIME:-00:30:00}"; AMEG_CPUS="${AMEG_CPUS:-4}";  AMEG_MEM="${AM
 AME_TIME="${AME_TIME:-06:00:00}";   AME_CPUS="${AME_CPUS:-64}";   AME_MEM="${AME_MEM:-256G}"
 UPS_TIME="${UPS_TIME:-01:00:00}";   UPS_CPUS="${UPS_CPUS:-4}";    UPS_MEM="${UPS_MEM:-64G}"
 GATE_TIME="${GATE_TIME:-00:10:00}"; GATE_CPUS="${GATE_CPUS:-2}";  GATE_MEM="${GATE_MEM:-8G}"
-# estimation_demand_1_prep.py runs the routines concurrently and each holds a full
+# sleep_demand_prep.py runs the routines concurrently and each holds a full
 # market panel. Its own default of 2 is a cap against "C error: out of memory" on a
 # 32 GB desktop; at 256 G all four routines fit side by side.
 DEMAND_PREP_JOBS="${DEMAND_PREP_JOBS:-4}"
@@ -147,13 +147,13 @@ done
 for k in ${ROUTINES}; do
     case "${k}" in 1|2|3|4) ;; *) echo "--routines: '${k}' is not in the lineup (1 2 3 4)" >&2; exit 2 ;; esac
 done
-# The AME two-stage driver serves E3/E4 only, by construction: estimation_ame_twostage.py
+# The AME two-stage driver serves E3/E4 only, by construction: sleep_ame_twostage.py
 # takes --est choices=(3,4), because the two-stage AME is defined off a single-index link.
 AME_ROUTINES="$(for k in ${ROUTINES}; do [[ "${k}" == "3" || "${k}" == "4" ]] && printf '%s ' "${k}"; done)"
 AME_ROUTINES="${AME_ROUTINES% }"
-# The CF4 upsilon export carries NO such restriction, and it must not: cf_4_pix.jl needs an
+# The CF4 upsilon export carries NO such restriction, and it must not: cf4_pix.jl needs an
 # upsilon_pix/phi^noPix pair for every routine that reaches the CF phase, and
-# cf_4_upsilon_export.py's identity branch writes phi_nopix with exact_nopix=True for the
+# sleep_upsilon_export.py's identity branch writes phi_nopix with exact_nopix=True for the
 # linear routines exactly as the single-index branch does for E3/E4. Gate G7 checks all four.
 UPSILON_ROUTINES="${ROUTINES}"
 

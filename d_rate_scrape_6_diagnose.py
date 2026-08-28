@@ -1,5 +1,5 @@
 """
-d_rate_scrape_6_diagnose.py
+scrape_deposit_rate_diagnose.py
 ==============================
 Diagnostic for merging scraped advertised rates into panel_3_master_panel_build.py.
 
@@ -44,7 +44,7 @@ Outputs (in processed/IP_SCRAPE/diagnose/)
   recommended_merge.csv         (cod, AnoMes, deposit_type, use_scraped,
                                  advertised_rate_qoq, reason)
 
-The recommended_merge.csv is what panel_3_master_panel_build.py should consume.
+The recommended_merge.csv is what panel_deposit_rates.py should consume.
 """
 from utils.venv_guard import ensure_project_venv
 ensure_project_venv(__file__)

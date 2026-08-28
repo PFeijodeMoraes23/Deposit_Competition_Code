@@ -1,4 +1,4 @@
-## scrape_13_incumbent_clients.py
+## scrape_incumbent_clients.py
 # Author: Pedro Feijó de Moraes
 #
 # Last edited: 2026-06-01
@@ -26,10 +26,10 @@
 #   Raw:    FirmDisclosures/Incumbents/raw/<firm>/<yyyymmdd>_<protocol>.pdf
 #
 #   CLI:
-#     python scrape_13_incumbent_clients.py                   # all target firms
-#     python scrape_13_incumbent_clients.py --firms bb,pan    # specific firms
-#     python scrape_13_incumbent_clients.py --since 2018 --no-vision
-#     python scrape_13_incumbent_clients.py --vision-test bb  # test Tier-4 on one firm
+#     python scrape_incumbent_clients.py                   # all target firms
+#     python scrape_incumbent_clients.py --firms bb,pan    # specific firms
+#     python scrape_incumbent_clients.py --since 2018 --no-vision
+#     python scrape_incumbent_clients.py --vision-test bb  # test Tier-4 on one firm
 ###─────────────────────────────────────────────────────────────────────────────
 
 import os

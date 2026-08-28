@@ -103,7 +103,7 @@ def _demean_col(df_ss, col):
 
 
 def _G_star(cluster_series):
-    from utils.cluster import effective_cluster_stats   # single source of G*/CV
+    from utils.cluster_stats import effective_cluster_stats   # single source of G*/CV
     st = effective_cluster_stats(cluster_series.value_counts().values)
     return st["G_star"], st["G_nominal"]
 
@@ -188,7 +188,7 @@ def _dummy_spec(X, K, names=None):
                     f"state_transform: '{nm}' carries levels {tuple(np.round(u, 8))} but the "
                     f"registry says {tuple(np.round(lv, 8))}. The frame was built under a "
                     "different centering than state_centering_means.json. Rebuild the frame, "
-                    "or rebuild the JSON with `python estimation_2_sleep.py --write-centers`."
+                    "or rebuild the JSON with `python sleep_est_e2.py --write-centers`."
                 )
         else:
             u = np.unique(X[:, k][~np.isnan(X[:, k])])
@@ -1282,11 +1282,11 @@ def _wild_weights(n, scheme, rng):
 #     all 11 coefficients, so the mode changes the p-value, not the standard error.
 #
 # TO PROMOTE the corrected reference to default, re-run and re-export, in order:
-#   1. estimation_2_sleep.py (E1/E2, all specs)  -> est1/est2 pickles
-#   2. estimation_sleep_common.py --est 3, --est 4  -> E3/E4 pickles
-#   3. estimation_bbl_1_polfunc.py               -> BBL policy-function SEs
-#   4. export_1_sleep_results.py + the sleep_first_stage_pooled*.tex exporters
-#   5. run_phi_diagnostics.py (full D0-D12 battery) -> DIAG_PHI_SEPARATION csvs
+#   1. sleep_est_e2.py (E1/E2, all specs)  -> est1/est2 pickles
+#   2. sleep_est_single.py --est 3, --est 4  -> E3/E4 pickles
+#   3. bbl_polfunc.py               -> BBL policy-function SEs
+#   4. sleep_export_e1.py + the sleep_first_stage_pooled*.tex exporters
+#   5. sleep_diag_battery.py (full D0-D12 battery) -> DIAG_PHI_SEPARATION csvs
 #   6. hand-update the p-values quoted in identification_notes.md and V_Main.tex
 # Point estimates are untouched by any of this: the mode changes only the reference
 # distribution used to convert a statistic into a p-value.
@@ -3109,7 +3109,7 @@ def twostage_ame_boot(df, state_cols, has_cf, si_res, loss, degree=3, fe_time_co
     # dependency stack and unpickles the ~55 MB context, which is minutes on a loaded box --
     # far more than a scheme's draws cost at small B. A driver calling this with workers > 1
     # must have an `if __name__ == "__main__":` guard, or spawn re-runs its top-level work in
-    # every worker; estimation_ame_twostage.py has one.
+    # every worker; sleep_ame_twostage.py has one.
     pool = None
     try:
         if workers and workers > 1:

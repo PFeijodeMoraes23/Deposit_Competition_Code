@@ -1,6 +1,6 @@
-# sysimage_precompile_workload.jl
+# blp_build_sysimage_workload.jl
 # ===============================
-# OPTIONAL precompile workload for build_blp_sysimage.jl (enabled with
+# OPTIONAL precompile workload for blp_build_sysimage.jl (enabled with
 # BLP_SYSIMAGE_WORKLOAD=1). Runs a tiny IFT --dry-run so PackageCompiler also bakes the
 # estimation HOT PATH (share kernels, GPU contraction, GMM) into the sysimage, not just
 # the package loads. Best-effort: if data or a GPU is unavailable during the build, it
@@ -13,7 +13,7 @@ try
     empty!(ARGS)
     append!(ARGS, ["--estim", "3", "--spec", "12", "--stage", "sigma",
                    "--hpc", "--R", "50", "--seed", "42", "--dry-run"])
-    include(joinpath(@__DIR__, "blp_2_rc.jl"))
+    include(joinpath(@__DIR__, "blp_rc.jl"))
     @info "[sysimage workload] dry-run completed — hot path traced."
 catch e
     @info "[sysimage workload] dry-run skipped (data/GPU not available) — packages " *

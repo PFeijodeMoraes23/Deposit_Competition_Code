@@ -1,5 +1,5 @@
 """
-d_rate_scrape_4_parse.py
+scrape_deposit_rate_parse.py
 ==============================
 Parses downloaded archival HTML and PDF files to extract historical deposit yields.
 Relies on NLP heuristics matching common Brazilian CDI and Selic rate phrasing,
@@ -62,7 +62,7 @@ except ImportError:  # pragma: no cover
 #   "rentabilidade 100% do CDI"        "taxa Selic + 1,5%"
 # Numbers may carry a comma decimal ("100,5%"). The capture group 1 is always
 # the numeric percent (string). The downstream filter (MIN/MAX_PCT in
-# d_rate_scrape_5_format.py) drops out-of-range matches; the BAD_CONTEXT
+# scrape_deposit_rate_format.py) drops out-of-range matches; the BAD_CONTEXT
 # blocklist drops loan/fee phrasing.
 CDI_PATTERNS = [
     # Classic: "100% do CDI" or "100 % do CDI"

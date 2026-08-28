@@ -11,7 +11,7 @@
 #SBATCH --mail-type=BEGIN,END,FAIL,TIME_LIMIT_90
 #SBATCH --mail-user=pedro.feijodemoraes@yale.edu
 # ==============================================================================
-# blp_draws_job.sh — the nu + demographic draw builder (blp_1_draws.jl).
+# blp_draws_job.sh — the nu + demographic draw builder (blp_draws.jl).
 #
 # Its own file because a human runs it once, standalone, and its resource profile
 # is unique: `day`, no GPU, 8 cpu, 64G, 2 h. Everything else in the BLP family is
@@ -25,7 +25,7 @@
 #         never uploaded.
 #     data/input/demographics_sigma.parquet              an UPLOAD. Building it needs
 #         seven muni panels (ANATEL alone is 1.59 GB), so producing 8.7 MB here would
-#         cost a 1.6 GB upload; panel_8_demographics_sigma.py stays local.
+#         cost a 1.6 GB upload; panel_demographics_sigma.py stays local.
 # WHAT TO RUN NEXT
 #   bash blp_run.sh          (which submits this itself when the draws are absent,
 #                             and chains the estimation afterok on it)
@@ -41,7 +41,7 @@ set -e
 mkdir -p "${CL_ROOT}/logs"
 
 # The skeleton, then the step dirs. cl_export_step_dirs creates data/output/blp/draws,
-# which is where blp_1_draws.jl writes under --hpc (of_root.jl's draws_dir), and the
+# which is where blp_draws.jl writes under --hpc (of_root.jl's draws_dir), and the
 # split block below reads back through the same CL_STEP_DRAWS.
 cl_bootstrap_tree
 cl_export_step_dirs
@@ -68,14 +68,14 @@ fi
 echo "Instantiating Julia packages: $(date)"
 julia --project="${CL_ROOT}" -e 'using Pkg; Pkg.instantiate()'
 
-cl_banner "BLP draws — blp_1_draws.jl" \
+cl_banner "BLP draws — blp_draws.jl" \
           "R=${R} | seed=${SEED} | spec=${SPEC} | threads=${SLURM_CPUS_PER_TASK:-8}" \
           "node $(hostname) | $(date)"
 
 # Draws are routine-independent; --estim 1 just selects the reference panel
 # (demand_1_spec_12.parquet) for the market keys.
 julia --project="${CL_ROOT}" --threads="${SLURM_CPUS_PER_TASK:-8}" \
-    "${CL_ROOT}/blp_1_draws.jl" \
+    "${CL_ROOT}/blp_draws.jl" \
     --R "${R}" --seed "${SEED}" --spec "${SPEC}" --estim 1 --hpc
 
 echo "Draws complete: $(date)"
@@ -91,7 +91,7 @@ echo "Draws complete: $(date)"
 # cleared first, and the parts + checksum carry RELATIVE names so `sha256sum -c`
 # is portable.
 # The one place the draws live on the cluster: CL_STEP_DRAWS is data/output/blp/draws,
-# the same path of_root.jl's draws_dir(out_dir) hands blp_1_draws.jl under --hpc, so the
+# the same path of_root.jl's draws_dir(out_dir) hands blp_draws.jl under --hpc, so the
 # split below cannot address a directory the writer never used.
 DRAWS_OUT="${CL_STEP_DRAWS}"
 DEMO_NAME="demo_draws_R${R}_seed${SEED}.jls"

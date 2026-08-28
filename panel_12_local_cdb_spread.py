@@ -1,5 +1,5 @@
 """
-panel_12_local_cdb_spread.py
+panel_local_cdb_spread.py
 ============================
 Pipeline Step 4d-bis.  Toggleable, idempotent, REVERSIBLE patch that gives the
 type-4 (CDB / time-deposit) spread genuine LOCAL (MCA) variation, layered on top
@@ -17,7 +17,7 @@ balance per municipality — and adds ONLY the within-conglomerate deviation
 
 to the national rate.  The national level / identification is untouched; single-
 CNPJ conglomerates get dev=0 (local == national).  See diag_k4_spread_local_variation.py
-and proto_1_member_cnpj_local_panel.py for the diagnostics that motivated this.
+and panel_proto_local_cdb_spread.py for the diagnostics that motivated this.
 
 TOGGLE.  Gated by env LOCAL_CDB_SPREAD (default "1" = ON).  "0" restores the
 national columns from the *_national snapshots and drops the patch columns.
@@ -47,13 +47,13 @@ spread_ann_a4 -> spread_ann feed the parquet), but it is patched for consistency
 with desc_*/cosif_*.  leave_one_out_mean_spread_a4 IS a sleep HausmanFull instrument
 (specs 4/8/12), so it is recomputed to reflect the new spread.
 
-PIPELINE PLACEMENT.  Run AFTER panel_10_estban_instruments.py (so estban_rival_branches_lag
-is present) and BEFORE panel_9_cosif_fees.py --patch-market (so the local spread propagates
+PIPELINE PLACEMENT.  Run AFTER panel_estban_instrument.py (so estban_rival_branches_lag
+is present) and BEFORE panel_fee_merge.py --patch-market (so the local spread propagates
 into market_panel_with_fees.csv, the file the estimators actually read).  Keyed
 (CodConglomeradoPrudencial, mca_code, year, quarter); the merge is 1:1 with the wide panel.
 
-Usage:  python panel_12_local_cdb_spread.py            # apply (or LOCAL_CDB_SPREAD=1)
-        LOCAL_CDB_SPREAD=0 python panel_12_local_cdb_spread.py   # revert to national
+Usage:  python panel_local_cdb_spread.py            # apply (or LOCAL_CDB_SPREAD=1)
+        LOCAL_CDB_SPREAD=0 python panel_local_cdb_spread.py   # revert to national
 """
 from __future__ import annotations
 import os
@@ -70,7 +70,7 @@ except Exception:
     pass
 
 from utils import paths
-import cosif_process_2_calibrate as cc
+import panel_cosif_calibrate as cc
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("panel_12")

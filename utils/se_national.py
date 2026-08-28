@@ -252,7 +252,7 @@ def select_se(res, name, lead_time_robust: bool = True):
     `scheme` is one of 'congl' | 'quarter' | 'dk' and drives the dagger in the table body.
 
     SLEEP_AME_SE='twostage' switches the E3/E4 single-index rows to the two-stage (direction +
-    link) wild cluster bootstrap of ``estimation_ame_twostage.py``, where it has been attached
+    link) wild cluster bootstrap of ``sleep_ame_twostage.py``, where it has been attached
     (``bse_2s`` / ``bse_time_2s``). The gate is an explicit env opt-in rather than attribute
     presence, so attaching numbers to a pickle cannot silently change a published table. The
     scheme labels returned are the EXISTING ones: the dagger keeps meaning 'quarter-clustered',

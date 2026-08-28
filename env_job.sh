@@ -92,7 +92,7 @@ cl_banner "env_job: ENV_STEP=${ENV_STEP}" \
           "depot   ${JULIA_DEPOT_PATH%%:*}" \
           "date    $(date)"
 
-# ── The build/load workload lives in build_blp_sysimage.jl; nothing here edits it.
+# ── The build/load workload lives in blp_build_sysimage.jl; nothing here edits it.
 build_one () {   # build_one gpu|cpu
     local tgt="$1" img side cpu_only=0 rc
     img="$(cl_sysimage_for "${tgt}")"; side="${img}.json"
@@ -112,7 +112,7 @@ build_one () {   # build_one gpu|cpu
     rm -f "${img}.failed" "${side}"
     echo "── building $(basename "${img}") : $(date) ──"
     BLP_SYSIMAGE_CPU="${cpu_only}" BLP_SYSIMAGE_WORKLOAD="${BLP_SYSIMAGE_WORKLOAD:-0}" \
-        julia --project="${CL_ROOT}" --threads="${NPROC}" "${CL_ROOT}/build_blp_sysimage.jl"
+        julia --project="${CL_ROOT}" --threads="${NPROC}" "${CL_ROOT}/blp_build_sysimage.jl"
     [[ -f "${img}" ]] || { echo "ERROR: ${img} was not produced — see the log above." >&2; exit 1; }
     ls -la "${img}"
 
@@ -235,7 +235,7 @@ preflight)
     # truncated or corrupted upload of the right name passes that and then surfaces six
     # hours later as a pyarrow traceback inside an estimator, after the sleep array has
     # burned its allocation — so open it here, decode a column, and count the rows.
-    # source_csv_bytes is the stamp stage_cluster_upload.py matched against the local
+    # source_csv_bytes is the stamp cluster_upload.py matched against the local
     # CSV before bundling; recording it makes the two ends of the transfer comparable.
     PANEL_PQ="${CL_DATA_IN}/market_panel.parquet"
     PANEL_ROWS=-1; PANEL_COLS=-1; PANEL_SRC=-1; PANEL_OK=false; PANEL_ERR=""
@@ -286,8 +286,8 @@ print(int(stamp) if stamp is not None else -1)
     else
         echo "  [X] market_panel.parquet is NOT usable: ${PANEL_ERR}"
         echo "      Re-upload the data bundle (cluster/upload_manifest.txt row 'market_panel')."
-        echo "      Build it locally with: python run_data_pipeline.py, then"
-        echo "      python stage_cluster_upload.py --stage  (it checks the stamp before bundling)."
+        echo "      Build it locally with: python panel_pipeline.py, then"
+        echo "      python cluster_upload.py --stage  (it checks the stamp before bundling)."
     fi
 
     OK=true; [[ ${PF_RC} -eq 0 ]] || OK=false

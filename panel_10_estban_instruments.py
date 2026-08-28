@@ -1,5 +1,5 @@
 """
-panel_10_estban_instruments.py
+panel_estban_instrument.py
 ==============================
 Append the ESTBAN branch-competition instrument to market_panel.csv.
 
@@ -21,12 +21,12 @@ crosswalk (cosif_process_2_calibrate helpers); CODMUN_IBGE→mca via the IBGE MC
 instrument is LAGGED one quarter (predetermined branch network → strengthens the exclusion argument)
 and log1p-transformed (branch counts are right-skewed).
 
-PIPELINE PLACEMENT.  Run AFTER panel_7_instruments.py (which overwrites market_panel.csv with the LOO
-instruments) and BEFORE panel_9_cosif_fees.py --patch-market (which passes all columns through to
+PIPELINE PLACEMENT.  Run AFTER panel_loo_instruments.py (which overwrites market_panel.csv with the LOO
+instruments) and BEFORE panel_fee_merge.py --patch-market (which passes all columns through to
 market_panel_with_fees.csv). Adds ONE column, keyed on (CodConglomeradoPrudencial, mca_code, year,
 quarter); the merge is 1:1 with the wide market panel. Idempotent: re-running overwrites the column.
 
-Usage:  python panel_10_estban_instruments.py
+Usage:  python panel_estban_instrument.py
 """
 from __future__ import annotations
 import logging
@@ -34,7 +34,7 @@ import numpy as np
 import pandas as pd
 
 from utils import paths
-import cosif_process_2_calibrate as cc
+import panel_cosif_calibrate as cc
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
@@ -45,7 +45,7 @@ INSTRUMENT = "estban_rival_branches_lag"
 KEYS = ["CodConglomeradoPrudencial", "mca_code", "year", "quarter"]
 # Own branch counts per (conglomerate, MCA, quarter). Computed here anyway as the input to the
 # leave-one-out rival count; persisted as a sidecar because it is the only branch-network
-# series at market granularity in the project. step_entry_dynamics.py uses it to date entry
+# series at market granularity in the project. sleep_ident_entry_dynamics.py uses it to date entry
 # by BRANCHES rather than by deposits, which screens out markets where deposits are booked
 # before any branch exists (the analogue of Egan et al.'s Summary-of-Deposits caveat).
 # Sidecar only -- market_panel.csv keeps exactly the one instrument column it had before.

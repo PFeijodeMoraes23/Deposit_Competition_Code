@@ -1,4 +1,4 @@
-## scrape_16_fgc_statistics.py
+## scrape_fgc_statistics.py
 # Author: Pedro Feijó de Moraes
 #
 # Last edited: 2026-05-31
@@ -28,7 +28,7 @@
 #     reports/*.pdf                  — archived FGC reports (if discoverable)
 #     manual_fgc_brackets.csv        — seeded manual bracket template
 #
-#   CLI: python scrape_16_fgc_statistics.py
+#   CLI: python scrape_fgc_statistics.py
 ###────────────────────────────────────────────────────────────────────────────
 
 import os

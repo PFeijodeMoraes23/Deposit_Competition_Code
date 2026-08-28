@@ -1,9 +1,9 @@
-# scrape_2_estban_concat.py
+# scrape_estban_concat.py
 # Last edited: 2026-06-02
 # -----------------------------------------------------------------------------
 # Concatenate the raw monthly ESTBAN municipality files into the processed
 # BCB/ESTBAN/ESTBAN.csv that the rest of the pipeline consumes
-# (panel_1_deposits.py, panel_5_flag_digital.py, scrape_7_bcb_inclusion.py).
+# (panel_deposits.py, panel_digital_flags.py, scrape_bcb_inclusion.py).
 #
 # This is a faithful Python port of the now-DEPRECATED ESTBAN_Process_1.R.
 # It reuses panel_1_deposits.process_raw_estban_csv() for the per-file
@@ -22,8 +22,8 @@
 # the panel automatically -- no constants to bump.
 #
 # Usage:
-#     python scrape_2_estban_concat.py            # rebuild ESTBAN.csv
-#     python scrape_2_estban_concat.py --verify   # rebuild + compare vs .bak
+#     python scrape_estban_concat.py            # rebuild ESTBAN.csv
+#     python scrape_estban_concat.py --verify   # rebuild + compare vs .bak
 # -----------------------------------------------------------------------------
 import argparse
 import glob
@@ -44,7 +44,7 @@ if ensure_project_venv is not None:
     ensure_project_venv(__file__)
 
 # Reuse the proven per-file transform from the deposits builder.
-from panel_1_deposits import process_raw_estban_csv, coerce_cnpj
+from panel_deposits import process_raw_estban_csv, coerce_cnpj
 from utils import paths
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")

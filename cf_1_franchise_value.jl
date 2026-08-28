@@ -1,5 +1,5 @@
 """
-cf_1_franchise_value.jl
+cf1_franchise.jl
 =======================
 CF1 — franchise value attributable to depositor sleepiness (the paper's headline
 counterfactual object): the discounted deposit-funding value under the estimated
@@ -29,14 +29,14 @@ UNITS / TIMING (confirm with author before headline run):
 
 Usage (after data is downloaded AND running is authorized):
   # local dev (approximate, one quarter, low memory):
-  julia --project=. --threads=4 cf_1_franchise_value.jl --estim 6 --spec 12 \\
+  julia --project=. --threads=4 cf1_franchise.jl --estim 6 --spec 12 \\
       --stage extended --R 300 --time-filter 2024Q4 --beta 0.9 --horizon 50
   # cluster headline:
-  julia --project=\${PROJECT_DIR} --threads=8 cf_1_franchise_value.jl --estim 6 \\
+  julia --project=\${PROJECT_DIR} --threads=8 cf1_franchise.jl --estim 6 \\
       --spec 12 --stage extended --R 2000 --hpc --beta 0.9 --horizon 50
 """
 
-include(joinpath(@__DIR__, "foundation_psi_basis.jl"))   # → foundation_deposit_sim + load_Z / load_cost_params (for --net)
+include(joinpath(@__DIR__, "cf_psi_basis.jl"))   # → foundation_deposit_sim + load_Z / load_cost_params (for --net)
 
 using DataFrames, Statistics, Printf
 

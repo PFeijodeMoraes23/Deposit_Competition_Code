@@ -23,7 +23,7 @@
 #   in both directions, and the decision is printed as one line before anything is
 #   submitted. Nothing is rebuilt that already exists, so the common case — editing
 #   our own .jl source — still submits neither: the sysimage bakes only third-party
-#   PACKAGES (our files are include()d at runtime, blp_1_estimation.jl:37) and the
+#   PACKAGES (our files are include()d at runtime, blp_engine_cpu.jl:37) and the
 #   draws depend on the demographics/panel and R, not on our source.
 #
 #   --layout grouped (default)   HEAD(sigma+rc2+rc3+rc4+ext1) -> ext2 -> extended
@@ -163,7 +163,7 @@ export R SEED
 # ── CUE (continuously-updated GMM): a SIDE-BY-SIDE variant, never a replacement.
 # W(theta)=pinv(Omega-hat(theta)) recomputed at every objective evaluation (the
 # LIML analogue) instead of the fixed W=(Z'Z/N)^-1. Every artifact carries the
-# _cue suffix (blp_2_rc.jl ENGINE_SUFFIX), so the IFT results — and every
+# _cue suffix (blp_rc.jl ENGINE_SUFFIX), so the IFT results — and every
 # downstream consumer, which reads exact ift filenames — are untouched.
 CUE_STAGES="${CUE_STAGES:-ext1}"       # '+'-separated; ext1 is the reported headline rung
 SSET_STAGE="${SSET_STAGE:-ext1}"
@@ -171,7 +171,7 @@ SSET_GRID="${SSET_GRID:--1.5:0.125:1.5}"
 
 GENERIC="${CL_ROOT}/blp_stage_job.sh"
 STAGES_ALL=(sigma rc2 rc3 rc4 full ext1 ext2 extended)
-# `full` is in the 'all' ladder and NOT in 'grouped': blp_1_estimation.jl:1334
+# `full` is in the 'all' ladder and NOT in 'grouped': blp_engine_cpu.jl:1334
 # documents it as reproducing rc4 exactly since sigma(ln assets) was dropped, and
 # ext1 warm-starts from rc4, not from full. Which of the two is right is a
 # computational-semantics call belonging to the .jl author, so both are preserved
@@ -347,7 +347,7 @@ cl_log "Submitted ${njobs} RC-BLP jobs (routines: ${ROUTINES}; engines: ${ENGINE
 # wall-kills.
 #
 # COPY, never MOVE, and no --newer filter. The RC results have to STAY in
-# data/output/blp: foundation_demand_eval.jl's _result_path opens them there for the
+# data/output/blp: cf_demand_eval.jl's _result_path opens them there for the
 # whole BBL and CF phase, an --se-only rerun reloads the checkpoints in place, and
 # the download is meant to be complete rather than incremental — a --newer window
 # would silently drop a rung an earlier resume produced. The archiver writes the zip

@@ -34,8 +34,8 @@ Usage
 
 Output (× {with-seg, _noseg})
 ------
-  ext1:  BLP_RESULTS/Rout/ + Drafts/  blp_demand_comparison{_noseg}_spec12{engine}.tex
-  full:  BLP_RESULTS/Rout/ + Drafts/  blp_demand_comparison_full{_noseg}_spec12{engine}.tex
+  ext1:  Drafts/  blp_demand_comparison{_noseg}_spec12{engine}.tex
+  full:  Drafts/  blp_demand_comparison_full{_noseg}_spec12{engine}.tex
 """
 from utils.venv_guard import ensure_project_venv
 ensure_project_venv(__file__)
@@ -266,7 +266,7 @@ def main():
             if not tex:
                 continue
             fname = f"blp_demand_comparison{spec['file_lbl']}{seg_lbl}_spec12{suffix}.tex"
-            for dest in (rc.TABLES_DIR, rc.DRAFTS_DIR):
+            for dest in (rc.DRAFTS_DIR,):
                 dest.mkdir(parents=True, exist_ok=True)
                 (dest / fname).write_text(tex, encoding="utf-8")
                 print(f"  saved [{key}]: {dest / fname}")

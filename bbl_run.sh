@@ -7,7 +7,7 @@
 #   2. the RC results, in data/output/blp: blp_results_E{k}_spec_12_{stage}.jls,
 #      exactly where the RC ladder wrote them and where _result_path opens them
 #   3. ONE uploaded input:
-#        data/input/forward_rf_qoq.csv     (cf_forward_rf.py — needs internet, so it
+#        data/input/forward_rf_qoq.csv     (scrape_forward_rf.py — needs internet, so it
 #                                           cannot be produced on a compute node)
 #      The fitted policy is NOT an upload: this script's polfunc pre-step builds it.
 # WHAT TO RUN NEXT

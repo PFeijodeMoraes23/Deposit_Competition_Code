@@ -1,4 +1,4 @@
-## scrape_8_bcb_banked.py
+## scrape_bcb_banked.py
 # Author: Pedro Feijó de Moraes
 #
 # Last edited: 2026-04-16

@@ -1,4 +1,4 @@
-# scrape_3_ifdata_aggregate.py
+# scrape_ifdata_aggregate.py
 # Last edited: 2026-06-02
 # -----------------------------------------------------------------------------
 # Build the IF-Data "Aggregated Data" reports (IF_DATA_type_<t>_report_<r>.csv)
@@ -15,13 +15,13 @@
 #   * --verify compares the regenerated type-1 reports against the backup on the
 #     overlapping (Year,Month) cells and reports ADDED periods vs CHANGED values.
 #
-# Consumers: panel_1_deposits.py and panel_4_bank_chars.py read
+# Consumers: panel_deposits.py and panel_bank_chars.py read
 #   Aggregated Data/IF_DATA_type_1_report_<r>.csv  (type 1 = Prudential Cong.).
-# (panel_3_master_panel_build.py reads the per-period Prudential files directly, not these.)
+# (panel_deposit_rates.py reads the per-period Prudential files directly, not these.)
 #
 # Usage:
-#     python scrape_3_ifdata_aggregate.py            # rebuild Aggregated Data
-#     python scrape_3_ifdata_aggregate.py --verify   # rebuild + overlap report
+#     python scrape_ifdata_aggregate.py            # rebuild Aggregated Data
+#     python scrape_ifdata_aggregate.py --verify   # rebuild + overlap report
 # -----------------------------------------------------------------------------
 import argparse
 import glob

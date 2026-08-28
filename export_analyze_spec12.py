@@ -23,7 +23,7 @@ if _THIS_DIR not in sys.path:
     sys.path.insert(0, _THIS_DIR)
 from utils import state_transform as _st  # noqa: E402
 from utils import se_national as _sen  # noqa: E402
-from export_sleep_link_common import clean_name as _clean_name  # noqa: E402
+from sleep_export_link import clean_name as _clean_name  # noqa: E402
 
 # Mock NonLinearResults for unpickling estimation_3_sleep pickles.
 # Must match the real class's __init__ signature so pickle restores __dict__ correctly.
@@ -747,7 +747,11 @@ def main():
         sys.exit(1)
 
     # ---- 1) Export LaTeX Tables ----
-    out_dir = _paths_mod.rout_dir()
+    # ONE destination, chosen by environment. cluster_archive.sh packages only
+    # data/output/sleep/Rout, so on the cluster a fragment written to the skeleton Drafts
+    # dir never reaches the download; locally the paper directory is the only copy that
+    # matters and Rout would just be a second one free to diverge from it.
+    out_dir = _paths_mod.rout_dir() if _paths_mod.on_cluster() else _DRAFTS_DIR
 
     order = list(mapping.keys())
 
@@ -803,15 +807,8 @@ def main():
 
     # No nonlinear-only cut is emitted: with the lineup at E1/E2 + E3/E4 it would be the
     # E3/E4 columns of the main table restated under a second \label.
-    joint_tex = []
 
-    for fn in ("est1-4_spec12_stage1_comparison.tex",
-               "est1-4_spec12_stage2_comparison.tex",
-               "est1-4_spec12_stage1_comparison_landscape.tex",
-               "est1-4_spec12_stage2_comparison_landscape.tex",
-               *joint_tex):
-        shutil.copy(out_dir / fn, _DRAFTS_DIR / fn)
-    print(f"Exported LaTeX tables to {out_dir} and copied to {_DRAFTS_DIR}")
+    print(f"Exported LaTeX tables to {out_dir}")
 
     # ---- 2) Pickle Model Information ----
     with open(out_dir / "est1-4_spec12_all_models.pkl", "wb") as f:
@@ -924,10 +921,8 @@ def main():
     plt.savefig(plot_path, dpi=300)
     plt.close(fig)
 
-    shutil.copy(plot_path, _DRAFTS_DIR / plot_name)
     shutil.copy(plot_path, out_dir / "est1-4_spec12_phi_t_comparison.png")
-    shutil.copy(plot_path, _DRAFTS_DIR / "est1-4_spec12_phi_t_comparison.png")
-    print(f"Exported phi_t plot (pastel CIs) to {plot_path}; copied to {_DRAFTS_DIR}")
+    print(f"Exported phi_t plot (pastel CIs) to {plot_path}")
 
     # ---- 3b) Base-vs-+Time pair graph (alongside the cross-strategy plot above) ----
     # The single index, E3 vs E4. The non-time estimator is a solid BLUE line, the
@@ -959,8 +954,7 @@ def main():
         pp = out_dir / out_name
         plt.savefig(pp, dpi=300)
         plt.close(figp)
-        shutil.copy(pp, _DRAFTS_DIR / out_name)
-        print(f"Exported pair phi_t plot -> {pp}; copied to {_DRAFTS_DIR}")
+        print(f"Exported pair phi_t plot -> {pp}")
 
     _make_pair_plot(3, 4, "Single-Index", "Single-Index + Time",
                     r"Implied National $\hat{\phi}_t$: Single-Index (Spec 12)",

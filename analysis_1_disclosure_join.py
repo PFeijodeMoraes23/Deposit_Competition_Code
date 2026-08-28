@@ -1,4 +1,4 @@
-## analysis_1_disclosure_join.py
+## panel_disclosure_join.py
 # Author: Pedro Feijó de Moraes
 #
 # Last edited: 2026-05-31
@@ -37,7 +37,7 @@
 #
 #   OUTPUT: BASE/BCB/Egan_et_al_2025_Rep/processed/DESCRIPTIVES/account_vs_volume_panel.csv
 #
-#   CLI:  PYTHONIOENCODING=utf-8 python analysis_1_disclosure_join.py
+#   CLI:  PYTHONIOENCODING=utf-8 python panel_disclosure_join.py
 ###────────────────────────────────────────────────────────────────────────────
 
 from __future__ import annotations

@@ -1,9 +1,9 @@
-"""backup_precenter.py -- snapshot the pre-centering artefacts before the estimators are re-run.
+"""sleep_backup_precenter.py -- snapshot the pre-centering artefacts before the estimators are re-run.
 
 Author: Pedro Feijó de Moraes
 
-Written to a SIBLING of DEMAND_PREP, never a subdirectory of it: blp_1_logit.jl and
-blp_2_rc.jl auto-discover `demand_*_spec_*.parquet` by scanning DEMAND_PREP, and their
+Written to a SIBLING of DEMAND_PREP, never a subdirectory of it: blp_logit.jl and
+blp_rc.jl auto-discover `demand_*_spec_*.parquet` by scanning DEMAND_PREP, and their
 "newest mtime per estimator id" rule would happily promote a backup copy to the input of
 record.  A sibling cannot be seen by that scan at all.
 
@@ -89,7 +89,7 @@ def main():
             shutil.copy2(f, dest / f.name)
 
     print(f"\ntotal {total/1e9:.2f} GB")
-    print(f"\ngate with:\n  .venv/Scripts/python check_state_centering.py --gate \"{dest}\"")
+    print(f"\ngate with:\n  .venv/Scripts/python sleep_audit_state_centering.py --gate \"{dest}\"")
     return dest
 
 

@@ -213,7 +213,7 @@ def load_digital_conglomerates(digital_flags_csv: str) -> tuple[set, pd.DataFram
     """
     Conglomerate-level digital flag.
 
-    panel_5_flag_digital.py flags digital candidates at the level of the ESTBAN reporting
+    panel_digital_flags.py flags digital candidates at the level of the ESTBAN reporting
     BANK (CNPJ_root). The deposit panel is keyed on the prudential CONGLOMERATE
     (CodConglomeradoPrudencial), whose leader need not be that bank: PicPay Bank
     (09516419) sits in C0088022 led by the payment institution 22896431, Omni Banco in
@@ -229,7 +229,7 @@ def load_digital_conglomerates(digital_flags_csv: str) -> tuple[set, pd.DataFram
 
     Returns (set of digital CodConglomeradoPrudencial, member table for logging).
     """
-    from panel_1_deposits import build_cnpj_conglomerate_map
+    from panel_deposits import build_cnpj_conglomerate_map
 
     flags = pd.read_csv(digital_flags_csv)
     flags = flags[flags["Inst_Total_Dep"] > 0].copy()
@@ -241,7 +241,7 @@ def load_digital_conglomerates(digital_flags_csv: str) -> tuple[set, pd.DataFram
 
     flags["CodConglomeradoPrudencial"] = flags["CNPJ_root"].map(_congl)
     flags["is_digital_candidate"] = flags["is_digital_candidate"].astype(bool)
-    # Physical-network evidence behind the verdict (panel_5_flag_digital.py reads it from
+    # Physical-network evidence behind the verdict (panel_digital_flags.py reads it from
     # the BCB access-point data): branch / service-point counts summed over the
     # conglomerate's ESTBAN member banks, so the basis for the B/D call travels with the
     # panel instead of living only in the diagnostic CSV.

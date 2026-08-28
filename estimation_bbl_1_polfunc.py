@@ -1,5 +1,5 @@
 """
-estimation_bbl_1_polfunc.py
+bbl_polfunc.py
 ================================
 Estimates parametric policy functions for endogenous deposit types k=4,5
 (BBL Step 1, sec:empirical:cost in V_Main.tex).
@@ -39,8 +39,8 @@ as descriptive cluster-paucity statistics, not as the inference. (Previously: CR
 
 Usage
 -----
-  python estimation_bbl_1_polfunc.py                  # spread (feeds BBL Step 2)
-  python estimation_bbl_1_polfunc.py --depvar rate    # annualized deposit rate (robustness)
+  python bbl_polfunc.py                  # spread (feeds BBL Step 2)
+  python bbl_polfunc.py --depvar rate    # annualized deposit rate (robustness)
 
 References
 ----------
@@ -105,7 +105,7 @@ from utils.winsorize import winsorize_within_type as _winsorize_within_type  # n
 #
 # COST_POLFUNC_DIR is a STEP-LOCATION seam, not a vintage seam — it names which folder of a
 # per-step output tree holds this step's artifacts (the cluster's data/output/bbl, where
-# bbl_job.sh exports it and estimation_bbl_2_fwd_sim.jl picks polfunc_fitted.csv up via
+# bbl_job.sh exports it and bbl_fwd_sim.jl picks polfunc_fitted.csv up via
 # --policy-csv). It moves writer and reader together, which is exactly what a vintage override
 # would not do here: the policy function is SPEC-INVARIANT (see the module docstring) — it
 # regresses the observed spread on the pricing state and reads market_panel.csv, never touching
@@ -289,7 +289,7 @@ def _resolve_is_B(df: pd.DataFrame) -> pd.Series:
         return s.astype(str).str.strip().str.lower().isin(('1', 'true', 't', 'yes'))
     print("[WARNING] Column 'is_B' not found in the market panel: this panel predates the "
           "stored firm-type column. Falling back to the CODMUN_IBGE sentinel; re-run "
-          "panel_6_market.py to store the authoritative column.")
+          "panel_market.py to store the authoritative column.")
     return df['CODMUN_IBGE'].astype(str) != '0'
 
 
@@ -442,7 +442,7 @@ def cluster_structure(cluster_series: pd.Series):
     count of Imbens-Kolesar (2016) / Carter-Schnepel-Steigerwald (2017).
 
     NOTE (2026-07-20): G* is now reported as a DESCRIPTIVE statistic only — it is the
-    cluster-paucity measure that MOTIVATES the wild cluster bootstrap (see desc_3.py), not
+    cluster-paucity measure that MOTIVATES the wild cluster bootstrap (see sleep_desc_clusters.py), not
     the inference itself. Inference used to be CRVE + t(G*) here; it is now the same
     score/multiplier wild cluster bootstrap the rest of the paper uses, so every standard
     error in the paper is produced by one scheme. See run_single_regression.
@@ -1061,7 +1061,7 @@ def _display_unit(v):
 
     The table now lives in utils/state_transform.DISPLAY, shared with the sleepiness
     exporters and the descriptive tables. The comment above used to ask a reader to keep
-    this dict in sync with export_sleep_link_common.py by hand; the units are now a single
+    this dict in sync with sleep_export_link.py by hand; the units are now a single
     object, so cross-table comparability is structural rather than aspirational.
 
     NOTE the polfunc builds its regressors in RAW panel units (it does not go through

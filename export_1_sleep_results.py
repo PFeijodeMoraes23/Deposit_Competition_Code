@@ -26,7 +26,10 @@ _DRAFTS_DIR = paths.drafts_dir()
 OUTPUT_DIR = paths.est_dir(1)
 RESULTS_PICKLE = OUTPUT_DIR / "estimation_results.pkl"
 
-TEX_OUT_DIR = paths.rout_dir()
+# The paper directory is the ONE destination: the fragments V_Main.tex \input, the
+# standalone wrapper and the preview PDF are all built here, so there is no second copy
+# free to diverge from the one the paper reads.
+TEX_OUT_DIR = _DRAFTS_DIR
 OUT_DIR = str(TEX_OUT_DIR)
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -39,7 +42,7 @@ def stars(p):
 # Row labels and display units come from the SHARED registry so that every table in the
 # paper -- sleepiness, BBL policy functions, descriptives -- states the same unit for the
 # same variable. There used to be four independent copies of this dict.
-from export_sleep_link_common import clean_name, disp  # noqa: E402
+from sleep_export_link import clean_name, disp  # noqa: E402
 from utils import state_transform as _st  # noqa: E402
 from utils import se_national as _sen  # noqa: E402
 
@@ -389,7 +392,7 @@ def main():
     # table at all, and a silent return leaves the orchestrator reporting success over a
     # step that produced nothing.
     if not RESULTS_PICKLE.exists():
-        print(f"Results not found at {RESULTS_PICKLE}. Run estimation_1_sleep.py first.")
+        print(f"Results not found at {RESULTS_PICKLE}. Run sleep_est_e1.py first.")
         sys.exit(1)
 
     print(" - Reading pickled model estimates...")
@@ -408,9 +411,7 @@ def main():
         fh.write(fs_frag + "\n")
     with open(ss_path, 'w', encoding='utf-8') as fh:
         fh.write(ss_frag + "\n")
-    shutil.copy(fs_path, _DRAFTS_DIR / "est1_first_stage_table.tex")
-    shutil.copy(ss_path, _DRAFTS_DIR / "est1_second_stage_table.tex")
-    print(f" - Fragments written and copied to {_DRAFTS_DIR}")
+    print(f" - Fragments written to {_DRAFTS_DIR}")
 
     tex_doc = (
         _STANDALONE_PREAMBLE
@@ -429,8 +430,7 @@ def main():
     wrapper_path = os.path.join(OUT_DIR, "est1_sleep_results.tex")
     with open(wrapper_path, 'w', encoding='utf-8') as fh:
         fh.write(tex_doc)
-    shutil.copy(wrapper_path, _DRAFTS_DIR / "est1_sleep_results.tex")
-    print(f" - Standalone wrapper written and copied to {_DRAFTS_DIR}")
+    print(f" - Standalone wrapper written to {_DRAFTS_DIR}")
 
     print(" - Compiling PDF...")
     try:

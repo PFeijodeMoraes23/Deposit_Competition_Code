@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """
-process_cluster_outputs.py -- unpack the BBL and CF cluster archives into the local tree.
+cluster_ingest_bbl_cf.py -- unpack the BBL and CF cluster archives into the local tree.
 
-The BLP return trip is automated by process_blp_outputs.py (zip -> cluster_raw/ +
+The BLP return trip is automated by cluster_ingest_blp.py (zip -> cluster_raw/ +
 cluster_processed/ + INDEX.json + SUMMARY.md). BBL and CF had no counterpart:
-make_bbl_cost_tables.py and export_cf1_franchise.py both assume somebody already unzipped
+make_bbl_cost_tables.py and make_cf1_franchise_table.py both assume somebody already unzipped
 the download by hand into the right place. This is that counterpart, and it deliberately
-mirrors process_blp_outputs.py -- same cluster_raw/cluster_processed split, same
+mirrors cluster_ingest_blp.py -- same cluster_raw/cluster_processed split, same
 newest-zip-wins discovery, same INDEX.json beside the processed artifacts -- rather than
 inventing a second set of conventions for the same job.
 
@@ -24,7 +24,7 @@ inventing a second set of conventions for the same job.
                   -> CF_FOUNDATION/          everything under that prefix, keeping any
                                              sub-directory (the sharded
                                              cf3_jacobi_E*/cf5_E*/cf6_E* folders) so
-                                             export_cf1_franchise.py and friends find the
+                                             make_cf1_franchise_table.py and friends find the
                                              flat top-level parquets exactly where they
                                              look for them.
 
@@ -38,12 +38,12 @@ deleted -- these archives are the only copy of some cluster output (the psi shar
 second copy anywhere), and this script is re-runnable precisely because it leaves them be.
 
 Usage:
-    python process_cluster_outputs.py --kind bbl
-    python process_cluster_outputs.py --kind cf
-    python process_cluster_outputs.py --kind cf --zip D:/downloads/counterfactuals_outputs_9911.zip
-    python process_cluster_outputs.py --kind bbl --dry-run
+    python cluster_ingest_bbl_cf.py --kind bbl
+    python cluster_ingest_bbl_cf.py --kind cf
+    python cluster_ingest_bbl_cf.py --kind cf --zip D:/downloads/counterfactuals_outputs_9911.zip
+    python cluster_ingest_bbl_cf.py --kind bbl --dry-run
 
-ingest_cluster_downloads.py calls both kinds for you as part of one whole-download ingest.
+cluster_ingest.py calls both kinds for you as part of one whole-download ingest.
 """
 from __future__ import annotations
 
@@ -63,7 +63,7 @@ if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 
 from utils import paths                                   # noqa: E402
-import process_blp_outputs as blp                         # noqa: E402  (move_into reused)
+import cluster_ingest_blp as blp                         # noqa: E402  (move_into reused)
 
 EST_OUT = paths.estimation_output()
 
@@ -395,7 +395,7 @@ def main():
                   "re-run with --kind bbl.")
     else:
         print()
-        print("Next:  python export_cf1_franchise.py --estim <k> --spec 12 --stage extended")
+        print("Next:  python make_cf1_franchise_table.py --estim <k> --spec 12 --stage extended")
     print("Source archives were left where they were found; nothing was deleted.")
     return 0
 

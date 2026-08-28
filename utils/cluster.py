@@ -2,7 +2,7 @@
 
 Single source of the effective-number-of-clusters formula used across the
 sleepiness estimators (inference-time G*) and the descriptive cluster-imbalance
-reporting (`desc_3.py`). Effective clusters follow Carter, Schnepel & Steigerwald
+reporting (`sleep_desc_clusters.py`). Effective clusters follow Carter, Schnepel & Steigerwald
 (2017): G* = G / (1 + CV^2), where CV is the coefficient of variation of the
 per-cluster observation counts. Under wildly unequal cluster sizes G* collapses
 far below the nominal G, which is what motivates the wild cluster bootstrap over

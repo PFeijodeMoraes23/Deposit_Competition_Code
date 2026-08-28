@@ -1,5 +1,5 @@
 """
-estimation_uncond_band.py
+sleep_band_uncond.py
 ================================================================================
 UNCONDITIONAL (direction + link) national phi_t bands for the single-index
 sleepiness estimators E3/E4 at spec 12, from STORED fits -- no re-estimation.
@@ -20,7 +20,7 @@ and never touches the estimator pickle unless --attach is passed (off by
 default; makes a timestamped .bak first).
 
 Usage:
-    python estimation_uncond_band.py --est 3 --loss both [--B 400] [--attach]
+    python sleep_band_uncond.py --est 3 --loss both [--B 400] [--attach]
 """
 import argparse
 import os
@@ -56,7 +56,7 @@ KEY_OF = {"robust": "second_stage", "ls": "second_stage_ls"}
 def _prep_frame(time_block):
     """Rebuild the estimation frame for spec 12 exactly as estimation_sleep_common._exec_spec:
     pooled panel -> first stage with the spec-12 instruments and active exogenous controls."""
-    from estimation_2_sleep import (build_pooled_data, define_specifications,
+    from sleep_est_e2 import (build_pooled_data, define_specifications,
                                     run_pooled_first_stage)
     df = build_pooled_data(time_block=time_block)
     _, iv_specs, state_blocks = define_specifications(time_block=time_block)

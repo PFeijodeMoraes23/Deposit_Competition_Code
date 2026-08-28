@@ -11,7 +11,7 @@ Open Finance Brasil open-data fee values are published on the **10th business da
 depending on weekends and national holidays, so a fixed calendar-15 scrape is
 borderline. This module computes the nth business day of a month (for scheduling the
 collector safely after the update) and the business-day index of an arbitrary date
-(for the empirical schedule verifier, step_openfinance_freshness.py, which reports on
+(for the empirical schedule verifier, scrape_openfinance_freshness.py, which reports on
 which business day each bank's values actually changed).
 
 Holidays covered: Brazilian NATIONAL holidays (the ANBIMA banking-calendar basis),

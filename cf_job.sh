@@ -41,7 +41,7 @@
 #   results in data/output/blp; for the equilibrium steps, the BBL cost params in
 #   data/output/bbl from bbl_run.sh.
 # WHERE ITS ARTIFACTS GO: data/output/counterfactuals — cf_out_dir(out_dir) maps
-#   every CF family there, and cf_4_pix.jl reads its upsilon/phi^noPix pair from the
+#   every CF family there, and cf4_pix.jl reads its upsilon/phi^noPix pair from the
 #   same single folder the sleepiness upsilon step wrote them to.
 # WHAT TO RUN NEXT: nothing directly — cf_run.sh / cf_eq_run.sh own the chains.
 # ==============================================================================
@@ -76,7 +76,7 @@ fi
 mkdir -p "${CL_ROOT}/logs"
 
 # The skeleton, then the step dirs. CF_FOUNDATION_DIR and CF_COST_FWD come from
-# cl_export_step_dirs, so the Python half of the CF stack (cf_4_upsilon_export.py,
+# cl_export_step_dirs, so the Python half of the CF stack (sleep_upsilon_export.py,
 # the BBL solve) resolves the same folders the Julia half does.
 cl_bootstrap_tree
 cl_export_step_dirs
@@ -97,7 +97,7 @@ export CF_GPU
 # The 40-wide cf3_shard GPU array otherwise precompiles CUDA cold against ONE
 # shared NFS depot, and that race is precisely what produces
 # CUDA.functional()==false and the silent CPU fall-back at
-# foundation_demand_eval.jl:77. So the CF worker takes a sysimage like every
+# cf_demand_eval.jl:77. So the CF worker takes a sysimage like every
 # other worker, and refuses rather than degrading.
 if [[ "${CF_GPU}" != "0" ]]; then cl_require_sysimage gpu; else cl_require_sysimage cpu; fi
 if [[ "${CF_GPU}" != "0" && -n "${SLURM_JOB_GPUS:-${SLURM_GPUS_ON_NODE:-}}" ]]; then
@@ -135,45 +135,45 @@ case "${CF_STEP}" in
         echo "Loading the CF stack (CF_GPU=${CF_GPU})..."
         julia --project="${CL_ROOT}" ${CL_JULIA_SYS[@]+"${CL_JULIA_SYS[@]}"} \
             --threads="${SLURM_CPUS_PER_TASK:-8}" \
-            -e "include(joinpath(\"${CL_ROOT}\", \"foundation_demand_eval.jl\"))" || true
+            -e "include(joinpath(\"${CL_ROOT}\", \"cf_demand_eval.jl\"))" || true
         echo "warmup complete: depot warm + CF stack loaded" ;;
 
-    demand_eval)  run_julia foundation_demand_eval.jl ;;
+    demand_eval)  run_julia cf_demand_eval.jl ;;
 
-    cf1)          run_julia cf_1_franchise_value.jl ;;
+    cf1)          run_julia cf1_franchise.jl ;;
 
     cf4)          # Descriptive Pix reallocation. Consumes the exact link-aware
-                  # phi^noPix parquet + Upsilon_pix JSON from cf_4_upsilon_export.py,
+                  # phi^noPix parquet + Upsilon_pix JSON from sleep_upsilon_export.py,
                   # written by the sleepiness upsilon step into
                   # data/output/counterfactuals and verified by gate G7. That is the
-                  # only place cf_4_pix.jl looks, so the pair it reads is the pair
+                  # only place cf4_pix.jl looks, so the pair it reads is the pair
                   # this run produced. cf_run.sh preflights both.
-        run_julia cf_4_pix.jl ;;
+        run_julia cf4_pix.jl ;;
 
-    cf1_net)      run_julia cf_1_franchise_value.jl --net ;;
+    cf1_net)      run_julia cf1_franchise.jl --net ;;
 
-    cf3)          run_julia cf_3_equilibrium_spreads.jl ;;
+    cf3)          run_julia cf3_equilibrium.jl ;;
 
-    cf3_init)     run_julia cf_3_equilibrium_spreads.jl --write-sigma0 \
+    cf3_init)     run_julia cf3_equilibrium.jl --write-sigma0 \
                       --sigma-out "${SIGMA_DIR:?set SIGMA_DIR}/sig_0.parquet" ;;
 
     cf3_shard)    SID="${SLURM_ARRAY_TASK_ID:-${SHARD_ID:-0}}"
-        run_julia cf_3_equilibrium_spreads.jl \
+        run_julia cf3_equilibrium.jl \
             --n-firm-shards "${N_FIRM_SHARDS:?set N_FIRM_SHARDS}" --firm-shard-id "${SID}" \
             --sigma-in  "${SIGMA_DIR:?set SIGMA_DIR}/sig_$((SWEEP-1)).parquet" \
             --sigma-out "${SIGMA_DIR}/sh_${SWEEP}_${SID}.parquet" ;;
 
-    cf3_merge)    run_julia cf_3_equilibrium_spreads.jl --jacobi-merge \
+    cf3_merge)    run_julia cf3_equilibrium.jl --jacobi-merge \
             --sigma-in   "${SIGMA_DIR:?set SIGMA_DIR}/sig_$((SWEEP-1)).parquet" \
             --sigma-glob "${SIGMA_DIR}/sh_${SWEEP}_*.parquet" \
             --sigma-out  "${SIGMA_DIR}/sig_${SWEEP}.parquet" ;;
 
-    cf5)          run_julia cf_5_passthrough.jl ;;
-    cf6)          run_julia cf_6_merger.jl ;;
+    cf5)          run_julia cf5_passthrough.jl ;;
+    cf6)          run_julia cf6_merger.jl ;;
 
-    cf5_compare)  run_julia cf_5_passthrough.jl --compare \
+    cf5_compare)  run_julia cf5_passthrough.jl --compare \
                       --sigma-base "${SIGMA_BASE:?}" --sigma-scn "${SIGMA_SCN:?}" ;;
-    cf6_compare)  run_julia cf_6_merger.jl --compare \
+    cf6_compare)  run_julia cf6_merger.jl --compare \
                       --sigma-base "${SIGMA_BASE:?}" --sigma-scn "${SIGMA_SCN:?}" ;;
 
 esac

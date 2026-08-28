@@ -1,5 +1,5 @@
 """
-cf_1_franchise_dataonly.py
+diag_cf1_franchise_dataonly.py
 ==========================
 LOCAL-NOW descriptive version of CF1 (franchise value — sleepiness decomposition),
 computable RIGHT NOW from the local demand-prep parquet, WITHOUT the BLP results
@@ -8,7 +8,7 @@ computable RIGHT NOW from the local demand-prep parquet, WITHOUT the BLP results
 It uses the already-estimated sleeper share φ̂ and the data-implied active deposits
 Dep^Act (both carried in the demand-prep parquet) instead of re-solving the demand
 model. This gives a first, honest magnitude for the headline object; the
-model-based cf_1_franchise_value.jl reproduces it (and enables spread counterfactuals)
+model-based cf1_franchise.jl reproduces it (and enables spread counterfactuals)
 once results land.
 
 Decomposition (mirrors foundation_deposit_sim so the two are directly comparable):
@@ -26,8 +26,8 @@ in ΔV, exactly as in the model-based simulator.
 spread response, no re-solve). Not a substitute for the model-based version.
 
 Usage (runs on LOCAL data; needs phî & Dep^Act columns in the parquet):
-  python cf_1_franchise_dataonly.py --estim 6 --spec 12 --beta 0.9 --horizon 50
-  python cf_1_franchise_dataonly.py --parquet <path> --beta 0.9
+  python diag_cf1_franchise_dataonly.py --estim 6 --spec 12 --beta 0.9 --horizon 50
+  python diag_cf1_franchise_dataonly.py --parquet <path> --beta 0.9
 """
 from utils.venv_guard import ensure_project_venv
 ensure_project_venv(__file__)
@@ -39,7 +39,7 @@ from pathlib import Path
 # Status lines print arrows ("phi <- phi_mt"); Windows consoles default to cp1252 and raise
 # UnicodeEncodeError on them, which kills the script AFTER the data is loaded -- i.e. it
 # reports failure for work that succeeded. Force UTF-8 (no-op where already UTF-8). Same
-# guard as cf_4_upsilon_export.py and cf_forward_rf.py.
+# guard as sleep_upsilon_export.py and cf_forward_rf.py.
 try:
     sys.stdout.reconfigure(encoding="utf-8")
 except Exception:
@@ -148,7 +148,7 @@ def main():
         if m.any():
             vp, dv = V_phi[m].sum(), dV[m].sum()
             print(f"    {lbl}: V(φ̂)={vp/1e9:,.3f}  ΔV={dv/1e9:,.3f}  ({100*dv/max(abs(vp),1e-12):.1f}%)")
-    print(f"  Wrote → {out_path.name}  (feed to export_cf1_franchise.py)")
+    print(f"  Wrote → {out_path.name}  (feed to make_cf1_franchise_table.py)")
 
 
 if __name__ == "__main__":

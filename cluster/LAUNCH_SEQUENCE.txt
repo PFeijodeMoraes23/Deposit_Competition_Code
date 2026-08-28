@@ -23,12 +23,12 @@
 0. LOCAL PREP  (Windows machine, in the repo)
 ------------------------------------------------------------------------------
    The forward risk-free curve is the ONE input that cannot be produced on the
-   cluster: cf_forward_rf.py calls the BCB SGS + Focus APIs and compute nodes
+   cluster: scrape_forward_rf.py calls the BCB SGS + Focus APIs and compute nodes
    have no outbound internet.
 
-     python cf_forward_rf.py --horizon 50 --start 2026Q1
-     python stage_cluster_upload.py                  # pre-flight only, writes nothing
-     python stage_cluster_upload.py --stage          # build both zips
+     python scrape_forward_rf.py --horizon 50 --start 2026Q1
+     python cluster_upload.py                  # pre-flight only, writes nothing
+     python cluster_upload.py --stage          # build both zips
 
    It writes  <processed>/CLUSTER_STAGE/<YYYYMMDD>/  containing
 
@@ -201,16 +201,16 @@
 ------------------------------------------------------------------------------
 8. LOCAL INGEST  -  one command
 ------------------------------------------------------------------------------
-     python ingest_cluster_downloads.py --dry-run     # every check, writes nothing
-     python ingest_cluster_downloads.py
+     python cluster_ingest.py --dry-run     # every check, writes nothing
+     python cluster_ingest.py
 
    It scans CLUSTER_IN, takes the newest tag per family, reassembles split parts,
    verifies them against sha256SUMS, and routes all eight families into the local
    tree (backing up anything it would overwrite under DEMAND_PREP). A checksum
    mismatch refuses THAT FAMILY ONLY; the others still land and the run exits 1.
 
-     python ingest_cluster_downloads.py --family sleep --family gates
-     python ingest_cluster_downloads.py --in D:/downloads/20260826 --no-backup
+     python cluster_ingest.py --family sleep --family gates
+     python cluster_ingest.py --in D:/downloads/20260826 --no-backup
 
    The reviewed promotion into Drafts stays a separate step.
 

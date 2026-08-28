@@ -1,4 +1,4 @@
-"""export_selic_wakeup.py -- D7: the Selic wake-up comovement row (Egan alignment).
+"""make_selic_wakeup_table.py -- D7: the Selic wake-up comovement row (Egan alignment).
 
 Author: Pedro Feijo de Moraes
 

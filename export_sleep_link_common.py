@@ -1,8 +1,8 @@
 """
-export_sleep_link_common.py
+sleep_export_link.py
 ================================================================================
 Shared TeX table exporter for the link-based sleepiness routines E3/E4 (see
-EXPORT_CFG at the bottom). Mirrors export_2_sleep_results.py (first/second-stage
+EXPORT_CFG at the bottom). Mirrors sleep_export_e2.py (first/second-stage
 longtables, standalone PDF) but parametrised by estimation number, so one
 `--est N` invocation covers each of them.
 
@@ -31,7 +31,10 @@ from utils import se_national as _sen
 _DRAFTS_DIR = _paths_mod.drafts_dir()
 # rout_dir/est_dir follow SLEEP_OUT_ROOT, so a sandboxed run exports the fits it just
 # produced instead of whatever sits in the production tree.
-TEX_OUT_DIR = _paths_mod.rout_dir()
+# The paper directory is the ONE destination: the fragments V_Main.tex \input, the
+# standalone wrapper and the preview PDF are all built here, so there is no second copy
+# free to diverge from the one the paper reads.
+TEX_OUT_DIR = _DRAFTS_DIR
 
 
 def stars(p):
@@ -398,7 +401,7 @@ def export_link_results(est_num, title):
     # step that produced nothing.
     if not results_pickle.exists():
         print(f"Results not found at {results_pickle}. "
-              f"Run estimation_sleep_common.py --est {est_num} first.")
+              f"Run sleep_est_single.py --est {est_num} first.")
         sys.exit(1)
     with open(results_pickle, 'rb') as fh:
         results_dict = pickle.load(fh)
@@ -406,15 +409,13 @@ def export_link_results(est_num, title):
     ss_frag = build_second_stage_table(results_dict, est_num)
     ss_name = f"est{est_num}_second_stage_table.tex"
     (TEX_OUT_DIR / ss_name).write_text(ss_frag + "\n", encoding="utf-8")
-    shutil.copy(TEX_OUT_DIR / ss_name, _DRAFTS_DIR / ss_name)
 
     # First stage: every routine writes its own, alongside its second stage.
     fs_frag = build_first_stage_table(results_dict, est_num)
     fs_name = f"est{est_num}_first_stage_table.tex"
     (TEX_OUT_DIR / fs_name).write_text(fs_frag + "\n", encoding="utf-8")
-    shutil.copy(TEX_OUT_DIR / fs_name, _DRAFTS_DIR / fs_name)
     print(f" - First-stage table written ({fs_name})")
-    print(f" - Fragments written and copied to {_DRAFTS_DIR}")
+    print(f" - Fragments written to {_DRAFTS_DIR}")
 
     fs_section = r"\section*{First Stage}" + "\n" + rf"\input{{{fs_name}}}" + "\n\n"
     tex_doc = (
@@ -427,8 +428,7 @@ def export_link_results(est_num, title):
     )
     wrapper_name = f"est{est_num}_sleep_results.tex"
     (TEX_OUT_DIR / wrapper_name).write_text(tex_doc, encoding="utf-8")
-    shutil.copy(TEX_OUT_DIR / wrapper_name, _DRAFTS_DIR / wrapper_name)
-    print(f" - Standalone wrapper written and copied to {_DRAFTS_DIR}")
+    print(f" - Standalone wrapper written to {_DRAFTS_DIR}")
 
     print(" - Compiling PDF...")
     try:
@@ -447,7 +447,7 @@ def export_link_results(est_num, title):
 
 # ── Config-driven CLI for E3/E4 tables (E1/E2 have their own export scripts) ──
 #  Standalone-preview title per estimator; captions/notes are derived from est_num.
-#  Run:  python export_sleep_link_common.py --est N
+#  Run:  python sleep_export_link.py --est N
 EXPORT_CFG = {
     3: r"E3: Pooled Single-Index (nonparametric link)",
     4: r"E4: Pooled Single-Index + Time block",

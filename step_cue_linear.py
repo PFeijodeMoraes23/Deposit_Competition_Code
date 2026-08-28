@@ -1,5 +1,5 @@
 """
-step_cue_linear.py
+blp_cue_linear.py
 ================================================================================
 LOCAL preview + self-check of the CUE (continuously-updated GMM) linear step, at FIXED θ₂ — no GPU,
 no Julia, no cluster time.
@@ -10,11 +10,11 @@ moves when W = (Z'Z/N)⁻¹ is replaced by W(θ) = pinv(Ω̂(θ)) — and that c
 already-estimated θ̂₂ using the exported δ(θ̂₂). So this script:
 
   1. Replicates the engine's linear step EXACTLY (`build_regressor_matrices` +
-     `project_endogenous_spreads` + `estimate_theta1`, blp_1_estimation.jl) and ASSERTS that the
+     `project_endogenous_spreads` + `estimate_theta1`, blp_engine_cpu.jl) and ASSERTS that the
      resulting α matches the engine's reported θ₁[1] to ~5 decimals. That single assertion validates
      row alignment, instrument order, the per-type spread projection and W₀ in one shot — if it
      passes, the replication is trustworthy.
-  2. Runs the same CUE fixed point as `cue_fixed_point` (blp_1_estimation.jl §7b) and reports α_cue,
+  2. Runs the same CUE fixed point as `cue_fixed_point` (blp_engine_cpu.jl §7b) and reports α_cue,
      the iteration trace, Q₀ vs Q_cue, and the Ω̂ spectrum (which decides whether the pinv rtol / ridge
      defaults need tuning BEFORE cluster time).
   3. `--sset-grid`: a fixed-θ₂ Stock–Wright S-curve over α₀. NOT the true S-set (that re-optimises θ₂
@@ -22,14 +22,14 @@ already-estimated θ̂₂ using the exported δ(θ̂₂). So this script:
 
 Inputs (both already on disk):
   DEMAND_PREP/demand_{k}_*spec_12.parquet             the estimation sample
-  cluster_processed/rc_delta_E{k}_spec_12_{stage}.bin δ(θ̂₂), written by export_rc_delta.jl
+  cluster_processed/rc_delta_E{k}_spec_12_{stage}.bin δ(θ̂₂), written by blp_delta_export.jl
   cluster_raw/blp_results_E{k}_spec_12_{stage}.json   the engine's own θ₁/Q, for the assertions
 
 Usage
 -----
-  python step_cue_linear.py                              # E3-E4, stage ext1
-  python step_cue_linear.py --routines 4 --sset-grid -1.5:0.125:1.5
-  python step_cue_linear.py --max-witer 25 --ridge 1e-8  # knob sweep
+  python blp_cue_linear.py                              # E3-E4, stage ext1
+  python blp_cue_linear.py --routines 4 --sset-grid -1.5:0.125:1.5
+  python blp_cue_linear.py --max-witer 25 --ridge 1e-8  # knob sweep
 """
 from utils.venv_guard import ensure_project_venv
 ensure_project_venv(__file__)
@@ -51,9 +51,9 @@ except Exception:
 from utils import paths
 from utils import routines as _routines
 
-# ── Column sets: must match the ENGINE, not weak_iv_analysis.py ────────────────────────────────
-# blp_1_estimation.jl:800 builds Z as vcat(IV_BLP_LOO, IV_ESTBAN, IV_COST, IV_CAPITAL) — note ESTBAN
-# sits 12th, BEFORE the cost block. weak_iv_analysis.py lists it last; using that order here would
+# ── Column sets: must match the ENGINE, not blp_weak_iv.py ────────────────────────────────
+# blp_engine_cpu.jl:800 builds Z as vcat(IV_BLP_LOO, IV_ESTBAN, IV_COST, IV_CAPITAL) — note ESTBAN
+# sits 12th, BEFORE the cost block. blp_weak_iv.py lists it last; using that order here would
 # silently permute Z's columns (harmless for 2SLS, but it would scramble the per-instrument reporting).
 X_COLS = ["fgc_covered", "has_ip", "seg_S2", "seg_S3", "seg_S4", "seg_S5",
           "log_total_assets_lag", "is_state_owned"]
@@ -79,10 +79,10 @@ def _dirs():
 
 
 def _load_delta(cp_dir, k, stage):
-    """δ(θ̂₂) as written by export_rc_delta.jl: Int64 n, then n Float64 (little-endian)."""
+    """δ(θ̂₂) as written by blp_delta_export.jl: Int64 n, then n Float64 (little-endian)."""
     p = cp_dir / f"rc_delta_E{k}_spec_12_{stage}.bin"
     if not p.is_file():
-        return None, f"{p.name} not found — run: julia --project=. export_rc_delta.jl --stage {stage}"
+        return None, f"{p.name} not found — run: julia --project=. blp_delta_export.jl --stage {stage}"
     with open(p, "rb") as f:
         n = int(np.frombuffer(f.read(8), dtype="<i8")[0])
         d = np.frombuffer(f.read(n * 8), dtype="<f8")
@@ -93,7 +93,7 @@ def _load_delta(cp_dir, k, stage):
 
 # ── Engine replication ─────────────────────────────────────────────────────────────────────────
 def _build_matrices(df):
-    """Mirror of build_regressor_matrices + project_endogenous_spreads (blp_1_estimation.jl:774-831).
+    """Mirror of build_regressor_matrices + project_endogenous_spreads (blp_engine_cpu.jl:774-831).
     Missing values coalesce to 0.0 and ±Inf to 0.0, exactly as the engine does."""
     spread = np.nan_to_num(df["spread_ann"].to_numpy(float), nan=0.0) / 100.0
     x_mat = np.column_stack([np.nan_to_num(df[c].to_numpy(float), nan=0.0) if c in df.columns
@@ -312,7 +312,7 @@ def analyse(k, stage, args, dp, raw, cp):
         delta, spread, x_mat, z_mat = delta[m], spread[m], x_mat[m], z_mat[m]
         X_full, X_hat, dtype, clus_all = X_full[m], X_hat[m], dtype[m], clus_all[m]
 
-    # The engine drops zero-variance instruments before building Z (blp_gpu_engine.jl:1568-1574).
+    # The engine drops zero-variance instruments before building Z (blp_engine_gpu.jl:1568-1574).
     keep = z_mat.std(axis=0) > 1e-10
     Z, iv_kept = z_mat[:, keep], [c for c, kp in zip(IV_COLS, keep) if kp]
     valid = np.all(np.isfinite(X_hat), axis=1) & np.isfinite(delta)
@@ -429,7 +429,7 @@ def analyse(k, stage, args, dp, raw, cp):
 
 def main():
     ap = argparse.ArgumentParser(description="Local CUE linear-step preview + engine self-check")
-    # The single-index pair: the routines with an RC-BLP delta export (blp_2_rc.jl DEFAULT_ROUTINES).
+    # The single-index pair: the routines with an RC-BLP delta export (blp_rc.jl DEFAULT_ROUTINES).
     ap.add_argument("--routines", default=_routines.csv(_routines.LINK_ESTS))
     ap.add_argument("--stage", default="ext1")
     ap.add_argument("--max-witer", type=int, default=10, dest="max_witer")

@@ -1,4 +1,4 @@
-## cosif_process_2_calibrate.py
+## panel_cosif_calibrate.py
 # Author: Pedro Feijo de Moraes
 # Objective: Build the CORRECTED k=4 (CDB / time-deposit) implicit rate per
 #            (CodConglomeradoPrudencial x quarter), fixing the artifact in the

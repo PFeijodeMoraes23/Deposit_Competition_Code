@@ -1,5 +1,5 @@
 """
-estimation_sleep_common.py
+sleep_est_single.py
 ================================================================================
 Shared runner for the pooled sleepiness estimators of the lineup. Each estimator is
 one choice of (kind, time_block), listed in EST_CONFIG at the bottom:
@@ -8,7 +8,7 @@ one choice of (kind, time_block), listed in EST_CONFIG at the bottom:
     E4  single-index + Time   (kind="single_index", time_block=True)
 
 E1 (local linear, B-type) and E2 (pooled linear) are separate estimators with their
-own scripts, estimation_1_sleep.py / estimation_2_sleep.py.
+own scripts, sleep_est_e1.py / estimation_2_sleep.py.
 
 The "+Time" variant adds the time block to every state block via
 estimation_2_sleep.define_specifications(time_block=True). That block is gdp_growth_yoy
@@ -52,7 +52,7 @@ except Exception:
 import numpy as np
 import pandas as pd
 
-from estimation_2_sleep import build_pooled_data, define_specifications, run_pooled_first_stage
+from sleep_est_e2 import build_pooled_data, define_specifications, run_pooled_first_stage
 from utils.sleep_links import fit_nlls_link, fit_single_index, phi_from_native
 from utils import paths as _paths_mod
 from utils import routines as R
@@ -83,7 +83,7 @@ DROP_LS = os.environ.get("SLEEP_DROP_LS", "1") != "0"
 LS_ONLY = os.environ.get("SLEEP_LS_ONLY", "0") == "1"
 # SLEEP_AME_TWOSTAGE=1 runs the two-stage (direction + link) AME bootstrap inside the estimation
 # pass, on the frame the fit was just made on, and attaches its results to the stored object --
-# the same numbers estimation_ame_twostage.py produces post hoc from the pickle, without the
+# the same numbers sleep_ame_twostage.py produces post hoc from the pickle, without the
 # frame rebuild. OFF by default: it costs ~2 x B re-profiled draws per cell (hours at B=999),
 # whereas the estimator's own link-only bootstrap costs minutes. Spec 12 only unless
 # SLEEP_AME_TWOSTAGE_ALL=1. Workers come from SLEEP_AME_BOOT_JOBS.
@@ -160,7 +160,7 @@ def _check_spec_ids():
     A silent drift would send `--spec-id 12` to a different cell than the one the demand
     parquets, the phi_nopix exports and every "spec 12" in the notes mean."""
     try:
-        from estimation_demand_link_common import SPEC_MAP
+        from sleep_demand_prep_link import SPEC_MAP
     except Exception:
         return                                   # not importable here: nothing to check against
     mine = {sid: spec_name_of(iv, s) for sid, iv, s in spec_grid("logit")}
@@ -717,15 +717,15 @@ def run_sleep_estimator(est_num, kind, time_block=False, spec12_only=False, n_jo
 
 # ── Config-driven CLI for the lineup E3/E4 ───────────────────────────────────────
 # (E1/E2 are separate estimators with their own scripts.) Run one estimator with:
-#   python estimation_sleep_common.py --est N
+#   python sleep_est_single.py --est N
 #
 # SPLIT ACROSS A SLURM ARRAY. The grid is a serial loop in one process (E3 2901 s, E4 4724 s
 # measured locally), but the specs are independent, so on a 128-core node the grid costs one
 # spec's wall-clock instead of eight:
 #
-#   sbatch --array=5-12 ... --wrap 'python estimation_sleep_common.py --est 3 \
+#   sbatch --array=5-12 ... --wrap 'python sleep_est_single.py --est 3 \
 #                                     --spec-id $SLURM_ARRAY_TASK_ID'
-#   python estimation_sleep_common.py --est 3 --merge-specs        # afterok the array
+#   python sleep_est_single.py --est 3 --merge-specs        # afterok the array
 #
 # The array indices ARE the spec ids (5-12 for the single-index kinds, which skip the Base
 # block) -- see spec_grid/`--list-specs`. Each task writes only est{N}/_specs/spec_{S}.pkl;
@@ -733,7 +733,7 @@ def run_sleep_estimator(est_num, kind, time_block=False, spec12_only=False, n_jo
 #
 # The lineup is the SINGLE-INDEX pair under the shape-constrained link: the direction comes
 # from the Cauchy NLLS logit and only the monotone link is profiled, so the reported band
-# conditions on one estimated object rather than two, and estimation_uncond_band.py can widen
+# conditions on one estimated object rather than two, and sleep_band_uncond.py can widen
 # it to the joint (direction + link) band from the same stored fit.
 EST_CONFIG = {
     3: ("single_index", False), 4: ("single_index", True),

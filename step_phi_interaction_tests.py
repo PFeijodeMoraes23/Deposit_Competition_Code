@@ -1,4 +1,4 @@
-"""step_phi_interaction_tests.py -- restrictions the sleepiness model imposes on the carry.
+"""sleep_ident_interaction.py -- restrictions the sleepiness model imposes on the carry.
 
 Author: Pedro Feijo de Moraes
 
@@ -39,7 +39,7 @@ import argparse
 import numpy as np
 import pandas as pd
 
-from step_phi_augmented_tests import (load_sleep_frame, run_augmented, OUT_DIR,
+from sleep_ident_augmented import (load_sleep_frame, run_augmented, OUT_DIR,
                                       cluster_permutation_test, report_permutation,
                                       design_cols)
 

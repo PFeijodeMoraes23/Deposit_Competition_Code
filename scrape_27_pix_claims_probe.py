@@ -1,4 +1,4 @@
-"""scrape_27_pix_claims_probe.py -- does BCB publish Pix key CLAIMS (portability) data?
+"""scrape_pix_claims_probe.py -- does BCB publish Pix key CLAIMS (portability) data?
 
 Author: Pedro Feijo de Moraes
 

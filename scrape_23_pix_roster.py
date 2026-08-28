@@ -1,4 +1,4 @@
-## scrape_23_pix_roster.py
+## scrape_pix_roster.py
 # Author: Pedro Feijó de Moraes
 #
 # Last edited: 2026-06-09

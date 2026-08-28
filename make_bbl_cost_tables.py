@@ -64,7 +64,7 @@ ROUTINES = tuple(_routines.LINK_ESTS)
 BLOCKS = (("B", r"Brick \& mortar"), ("D", "Digital"))
 SPEC, STAGE = _routines.SPEC12_ID, "extended"
 
-# A quarterly rate -> pp/yr uses the code's own x400 convention (estimation_bbl_2_fwd_sim.jl:473).
+# A quarterly rate -> pp/yr uses the code's own x400 convention (bbl_fwd_sim.jl:473).
 PP_YR = 400.0
 
 # How the solver's `frac_bind` is presented to a reader. Deliberately NOT "share binding":
@@ -100,7 +100,7 @@ def load_from_zip(zpath: pathlib.Path):
             dv_n = sorted(n for n in names
                           if re.search(rf"psi_dev_E{E}_spec_{SPEC}_{STAGE}_shard\d+of\d+\.parquet$", n))
             # cost_params come from cluster_processed, NOT the archive: the archived copies
-            # predate the c_bar/ridge fields that estimation_bbl_3_solve.py now persists.
+            # predate the c_bar/ridge fields that bbl_solve.py now persists.
             # Fall back to the archived copy so the script still runs on an untouched tree.
             cp_live = COST_DIR / f"cost_params_E{E}_spec_{SPEC}_{STAGE}.json"
             cp_n = [n for n in names if n.endswith(f"cost_params_E{E}_spec_{SPEC}_{STAGE}.json")]
@@ -170,7 +170,7 @@ def ridge_stats(eq: pd.DataFrame, dev: pd.DataFrame, is_B: bool | None = None) -
 def load_cost_only() -> dict:
     """-> {routine: cost_params dict}, straight from cluster_processed, no psi involved.
 
-    estimation_bbl_3_solve.py persists the design diagnostics it measured on ITS OWN psi
+    bbl_solve.py persists the design diagnostics it measured on ITS OWN psi
     (rbar_f, ridge_corr, ridge_cond, ridge_one_minus_R2, n_rows, n_firms). Everything both
     tables need is therefore already inside cost_params, and building from it alone makes a
     vintage mismatch impossible rather than merely detectable.
@@ -244,7 +244,7 @@ def check_psi_matches_solve(data: dict, rtol: float = 1e-6) -> list[str]:
     dimension matched. Tables generated in that state pair a ridge diagnostic computed from one
     psi with cost parameters fitted on another.
 
-    The test uses the fields estimation_bbl_3_solve.py persists from ITS OWN psi:
+    The test uses the fields bbl_solve.py persists from ITS OWN psi:
 
         rbar_f              = median(dpsi4/dpsi2)  -- contains no parameters at all
         ridge_corr          = corr(dpsi2, dpsi4)
@@ -712,9 +712,9 @@ def main_from_json():
     # written here, so a cost-side rebuild cannot restyle or overwrite it.
     for name, txt in {"tab_bbl_cbar.tex": build_cbar_panels(rows),
                       "tab_bbl_cost_identified.tex": build_identified_panels(rows)}.items():
-        for dest in (TABLES_DIR, DRAFTS_DIR):
+        for dest in (DRAFTS_DIR,):
             (dest / name).write_text(txt, encoding="utf-8")
-        print(f"  wrote {name} -> Rout/ + Drafts/")
+        print(f"  wrote {name} -> Drafts/")
     for name, txt in {"tab_bbl_cbar.md": md_cbar_panels(rows),
                       "tab_bbl_cost_identified.md": md_identified_panels(rows)}.items():
         (DRAFTS_DIR / name).write_text(txt + "\n", encoding="utf-8")
@@ -776,9 +776,9 @@ def main():
     # the pooled columns (Ratio, CV%, the shared #Delta) cannot be recovered from JSON. The two
     # cost tables come from cost_params via the default path and are left untouched here.
     for name, txt in {"tab_bbl_ridge_diagnostic.tex": build_ridge(ridge)}.items():
-        for dest in (TABLES_DIR, DRAFTS_DIR):
+        for dest in (DRAFTS_DIR,):
             (dest / name).write_text(txt, encoding="utf-8")
-        print(f"  wrote {name} -> Rout/ + Drafts/")
+        print(f"  wrote {name} -> Drafts/")
     for name, txt in {"tab_bbl_ridge_diagnostic.md": md_ridge(ridge)}.items():
         (DRAFTS_DIR / name).write_text(txt + "\n", encoding="utf-8")
         print(f"  wrote {name} -> Drafts/")

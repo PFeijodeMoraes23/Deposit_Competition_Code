@@ -1,5 +1,5 @@
 """
-cosif_timeagg_diag.py
+diag_cosif_timeagg.py
 =====================
 Diagnostic for the COSIF time-aggregation see-saw that pollutes inferred
 spreads and the sleepiness estimation.  Confirms two defects before we fix
@@ -23,7 +23,7 @@ them:
 Read-only.  Writes a short text report next to this script.
 
 Usage:
-  python cosif_timeagg_diag.py
+  python diag_cosif_timeagg.py
 """
 from __future__ import annotations
 

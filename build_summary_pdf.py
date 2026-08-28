@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """
-build_summary_pdf.py — compile Drafts/Deposit Competition/SUMMARY.md to SUMMARY.pdf.
+make_summary_pdf.py — compile Drafts/Deposit Competition/SUMMARY.md to SUMMARY.pdf.
 
 PORTRAIT document, with the wide "Logit vs RC-BLP stages" compare tables placed on
 LANDSCAPE pages (pdflscape). The source SUMMARY.md stays pure markdown — the landscape
 wrapping and the folding of the few unicode glyphs standard Windows text fonts lack happen
 here, on a temp copy. Requires pandoc + xelatex (Cambria/Consolas system fonts).
 
-Run after process_blp_outputs.py (which regenerates SUMMARY.md):
-    python build_summary_pdf.py
+Run after cluster_ingest_blp.py (which regenerates SUMMARY.md):
+    python make_summary_pdf.py
 """
 import os, re, subprocess, sys, tempfile
 
@@ -34,7 +34,7 @@ HEADER_TEX = (r"\usepackage{pdflscape}" "\n"
 
 def main():
     if not os.path.exists(SRC):
-        sys.exit(f"ERROR: {SRC} not found — run process_blp_outputs.py first.")
+        sys.exit(f"ERROR: {SRC} not found — run cluster_ingest_blp.py first.")
     t = open(SRC, encoding="utf-8").read()
     for k, v in FOLD.items():
         t = t.replace(k, v)

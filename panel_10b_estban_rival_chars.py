@@ -1,5 +1,5 @@
 """
-panel_10b_estban_rival_chars.py
+panel_estban_rival_chars.py
 ===============================
 Branch-overlap-weighted rival CHARACTERISTIC instruments, at the
 CONGLOMERATE x QUARTER grain.
@@ -8,7 +8,7 @@ WHY THIS GRAIN (read before "improving" it).  The endogenous deposit spread is
 NATIONAL: it is built at CodConglomeradoPrudencial x deposit_type x AnoMes and is
 *exactly constant across the MCAs* of a conglomerate-quarter (verified:
 std(spread across MCA within congl x type x quarter) = 0 in 100% of multi-MCA
-cells; panel_6_market.py:300-302 documents it). So an MCA-level instrument has no
+cells; panel_market.py:300-302 documents it). So an MCA-level instrument has no
 matching price variation to identify off of. The only variation the spread has is
 between conglomerates and over time — so an instrument must live at (conglomerate
 x quarter) to help. panel_10's ESTBAN branch COUNT already helps only via its
@@ -35,7 +35,7 @@ panel_9 --patch-market. Merges 5 columns onto market_panel keyed on
 (CodConglomeradoPrudencial, year, quarter) — broadcast across the conglomerate's
 MCAs, matching the national spread grain. Idempotent.
 
-Usage:  python panel_10b_estban_rival_chars.py           # write into market_panel.csv
+Usage:  python panel_estban_rival_chars.py           # write into market_panel.csv
         (or import build_estban_rival_chars() for a diagnostic preview)
 """
 from __future__ import annotations
@@ -44,7 +44,7 @@ import numpy as np
 import pandas as pd
 
 from utils import paths
-import cosif_process_2_calibrate as cc
+import panel_cosif_calibrate as cc
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 

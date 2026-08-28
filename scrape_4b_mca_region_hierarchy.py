@@ -1,10 +1,10 @@
 """
-scrape_4b_mca_region_hierarchy.py
+scrape_ibge_region_hierarchy.py
 =================================
 Populate the region-hierarchy columns of the municipality<->MCA crosswalk
 (``IBGE/muni_mca_regions_2010_2024_panel.csv``) from the IBGE Divisão Territorial
 Brasileira (DTB), replacing the ``"N/A"`` placeholders that
-``scrape_4_ibge_demographics.py::build_mca_crosswalk_direct`` writes for
+``scrape_ibge_demographics.py::build_mca_crosswalk_direct`` writes for
 ``micro_*/meso_*/immgr_*/intgr_*``.
 
 WHY.  The crosswalk carries slots for four nested geographies but they were left
@@ -28,7 +28,7 @@ NB: the decisive use-case (a spatial IV for the deposit spread) is dead because 
 spread is national (constant across MCAs); this data is for spatial descriptives /
 less-sparse rival sets / any future ring, not for identifying the price coefficient.
 
-Usage:  python scrape_4b_mca_region_hierarchy.py
+Usage:  python scrape_ibge_region_hierarchy.py
 """
 from __future__ import annotations
 import io

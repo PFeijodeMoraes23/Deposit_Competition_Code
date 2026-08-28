@@ -1,5 +1,5 @@
 """
-cf_5_passthrough.jl
+cf5_passthrough.jl
 ===================
 CF5 — monetary pass-through (SCAFFOLD, reuses the CF3 equilibrium engine).
 
@@ -15,11 +15,11 @@ base; banks then re-optimize their k∈{4,5} spreads. This is a SCAFFOLD: it run
 at logit for validation; the credible headline needs the RC costs (cluster).
 
 Local dev:
-  julia --project=. cf_5_passthrough.jl --estim 6 --spec 12 --stage logit --R 50 \\
+  julia --project=. cf5_passthrough.jl --estim 6 --spec 12 --stage logit --R 50 \\
       --time-filter 2025Q4 --n-markets 15 --selic-shock 0.01
 """
 
-include(joinpath(@__DIR__, "cf_3_equilibrium_spreads.jl"))
+include(joinpath(@__DIR__, "cf3_equilibrium.jl"))
 
 using Printf, Statistics
 

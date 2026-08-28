@@ -1,5 +1,5 @@
 """
-step_moment_reduction.py
+blp_moment_reduction.py
 ================================================================================
 LOCAL test of the two moment-reduction fixes for the weight-matrix problem (weakiv_methods.md §7.6,
 options 1 and 2) — no GPU, no Julia, no cluster time.
@@ -35,7 +35,7 @@ measures whether that is true, at FIXED θ₂ on the structural δ(θ̂₂):
 Everything is in the PARTIALLED representation: X (product characteristics + constant) is projected
 out of δ, the spread and Z, leaving a 1-parameter problem in α. This matches the weak-IV battery's
 conventions (uniform instrumenting — NOT the engine's per-type projection; the engine-replication
-self-check of step_cue_linear.py is re-run here only to validate row alignment). The full
+self-check of blp_cue_linear.py is re-run here only to validate row alignment). The full
 16-moment 1-parameter CUE is computed as the within-script baseline the reductions are judged
 against.
 
@@ -43,8 +43,8 @@ Inputs (already on disk): the demand parquets and cluster_processed/rc_delta_E{k
 
 Usage
 -----
-  python step_moment_reduction.py                       # E3-E4, stage ext1, r = 2..5
-  python step_moment_reduction.py --routines 4 --grid=-2:0.005:2
+  python blp_moment_reduction.py                       # E3-E4, stage ext1, r = 2..5
+  python blp_moment_reduction.py --routines 4 --grid=-2:0.005:2
 """
 from utils.venv_guard import ensure_project_venv
 ensure_project_venv(__file__)
@@ -65,13 +65,13 @@ except Exception:
 
 from scipy.stats import chi2, t as student_t
 
-from step_cue_linear import (X_COLS, IV_COLS, _build_matrices, _load_delta,
+from blp_cue_linear import (X_COLS, IV_COLS, _build_matrices, _load_delta,
                              _cluster_codes, _dirs)
 # _wild_weights imported from the battery so the WCB draws are BIT-IDENTICAL to the ji_ci_*/ar_ci_*
 # sets in weak_iv*.json (same generator, same seed, same (B×G) shape) — that is what makes the
 # cross-checks against the battery exact rather than approximate.
-from weak_iv_analysis import _wild_weights
-from utils.cluster import effective_cluster_stats
+from blp_weak_iv import _wild_weights
+from utils.cluster_stats import effective_cluster_stats
 from utils import routines as _routines
 
 # The 5 leave-one-out rival characteristics — the "parsimonious" set that raised eff-F when the
@@ -431,7 +431,7 @@ def analyse(k, stage, args, dp, raw, cp):
 
 def main():
     ap = argparse.ArgumentParser(description="Moment-reduction fixes (weakiv_methods.md §7.6) — local test")
-    # The single-index pair: the routines with an RC-BLP delta export (blp_2_rc.jl DEFAULT_ROUTINES)
+    # The single-index pair: the routines with an RC-BLP delta export (blp_rc.jl DEFAULT_ROUTINES)
     # and the source of the paper's alpha.
     ap.add_argument("--routines", default=_routines.csv(_routines.LINK_ESTS))
     ap.add_argument("--stage", default="ext1")

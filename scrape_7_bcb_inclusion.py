@@ -23,7 +23,7 @@
 #     across 679 municipalities.
 #
 #     Per-INSTITUTION agências, postos and correspondentes ARE available and are
-#     downloaded by scrape_25_bcb_access_points.py from the BCB Informes services
+#     downloaded by scrape_bcb_access_points.py from the BCB Informes services
 #     (Informes_Agencias / Informes_PostosDeAtendimento / Informes_Correspondentes).
 #     They are deliberately NOT merged in here: those services publish a single
 #     current snapshot (one Posicao for every row), so broadcasting them back across

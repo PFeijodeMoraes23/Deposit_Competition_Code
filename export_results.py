@@ -1,8 +1,8 @@
 """
-export_results.py
+sleep_export_all.py
 =================
 Orchestrator: dispatches exports in parallel. E1/E2 have their own
-export_{N}_sleep_results.py; E3/E4 route to the shared export_sleep_link_common.py --est N.
+export_{N}_sleep_results.py; E3/E4 route to the shared sleep_export_link.py --est N.
 
 Each individual script writes:
   - Data/summaries (txt, csv): DEMAND_PREP/rout_*/EXPORTS/
@@ -10,12 +10,12 @@ Each individual script writes:
 
 CLI Usage Examples:
 -------------------
-  python export_results.py --estimation 1
-  python export_results.py --estimation all
+  python sleep_export_all.py --estimation 1
+  python sleep_export_all.py --estimation all
 
 Estimation map:
-  1, 2  -> export_1_sleep_results.py / export_2_sleep_results.py  (E1 Local B-type, E2 Pooled Linear)
-  3-4   -> export_sleep_link_common.py --est N                    (E3 Single-Index, E4 +Time)
+  1, 2  -> sleep_export_e1.py / sleep_export_e2.py  (E1 Local B-type, E2 Pooled Linear)
+  3-4   -> sleep_export_link.py --est N                    (E3 Single-Index, E4 +Time)
 """
 
 import sys
@@ -33,15 +33,19 @@ except ImportError:
 
 from utils import routines
 
-_LINK_EXPORT = set(routines.LINK_ESTS)   # config-driven via export_sleep_link_common.py --est N
+_LINK_EXPORT = set(routines.LINK_ESTS)   # config-driven via sleep_export_link.py --est N
 
 def _run_export(est):
     if est in _LINK_EXPORT:
-        cmd = [sys.executable, "export_sleep_link_common.py", "--est", str(est)]
+        cmd = [sys.executable, "sleep_export_link.py", "--est", str(est)]
     else:                            # E1/E2 have their own export scripts
-        script_name = f"export_{est}_sleep_results.py"
+        script_name = f"sleep_export_e{est}.py"
         if not (Path(__file__).parent / script_name).exists():
-            return est, None, f"[!] Warning: {script_name} not found. Skipping."
+            # 127 (command not found), NOT a skip. A skipped routine never reaches failed[],
+            # so the orchestrator prints its success line and exits 0 with no table
+            # regenerated -- and because the previous .tex files are still on disk the paper
+            # then compiles against stale numbers with no signal at all.
+            return est, 127, f"[!] {script_name} not found in {Path(__file__).parent}."
         cmd = [sys.executable, script_name]
     result = subprocess.run(cmd, capture_output=True, text=True)
     return est, result.returncode, result.stdout + result.stderr
@@ -65,9 +69,9 @@ def main():
         for future in as_completed(futures):
             est, returncode, output = future.result()
             print(f"\n{'='*50}\nExport {est} output:\n{'='*50}\n{output}")
-            if returncode is not None and returncode != 0:
-                what = (f"export_sleep_link_common.py --est {est}" if est in _LINK_EXPORT
-                        else f"export_{est}_sleep_results.py")
+            if returncode != 0:
+                what = (f"sleep_export_link.py --est {est}" if est in _LINK_EXPORT
+                        else f"sleep_export_e{est}.py")
                 print(f"[!] Error: {what} failed (exit {returncode})")
                 failed.append(est)
 

@@ -1,5 +1,5 @@
 """
-cf_4_pix.jl
+cf4_pix.jl
 ===========
 CF4 — Pix as a switching function (DESCRIPTIVE, volume reallocation).
 
@@ -13,13 +13,13 @@ and no equilibrium re-solve needed (the user's CF4: "requires volume reallocatio
 no need for decomposition").
 
   φ_cf_mt   = G( S_mt′θ − θ_pix·pix_exists_mt )     (EXACT no-Pix φ under a nonlinear link G;
-              built by phi_from_native with pix=0, loaded from the cf_4_upsilon_export.py parquet)
+              built by phi_from_native with pix=0, loaded from the sleep_upsilon_export.py parquet)
             = φ̂_mt − Υ_pix · pix_exists_mt          (identity-link fallback E1/E2 only; here
               Υ_pix is the AME, so subtracting it is a 1st-order approximation when G≠identity)
   Dep_cf    = simulate_deposits(ctx, st with φ=φ_cf, spreads = ρ̂)   [foundation_deposit_sim]
   Δvolume_j = Dep_cf_j − Dep_obs_j                                  (per institution)
 
-DEPENDENCY: the no-Pix φ is prepared read-only by `cf_4_upsilon_export.py` (it does NOT touch
+DEPENDENCY: the no-Pix φ is prepared read-only by `sleep_upsilon_export.py` (it does NOT touch
 the sleep estimation). Keyed by routine/spec it writes:
   • `upsilon_pix_E{e}_spec_{s}.json`    — Υ_pix (the Pix AME; reporting + the identity-link
     fallback), read here by `pix_coefficient`;
@@ -34,14 +34,14 @@ the exact command to run, so a run without the recovery fails rather than silent
 wrong numbers.
 """
 
-include(joinpath(@__DIR__, "foundation_deposit_sim.jl"))
+include(joinpath(@__DIR__, "cf_deposit_sim.jl"))
 
 using DataFrames, Statistics, Printf
 
 """
     cf4_search_dirs(out_dir) -> Vector{String}
 
-The ONE directory holding the two `cf_4_upsilon_export.py` artefacts: on the cluster
+The ONE directory holding the two `sleep_upsilon_export.py` artefacts: on the cluster
 `cf_out_dir(out_dir)` = `data/output/counterfactuals`, the counterfactual step folder that
 export writes into; off the cluster `cf_in_dir(out_dir)`, the local CF_FOUNDATION directory,
 which is both where the export writes and where CF4 reads (the two helpers return the same
@@ -64,13 +64,13 @@ end
 
 Return the estimated sleepiness coefficient on `pix_exists` (Υ_pix) for the routine,
 read from `upsilon_pix_E{e}_spec_{s}.json` in the first of `cf_dirs` that holds it
-(recovered read-only from the sleep pickle by `cf_4_upsilon_export.py` — see that script and
+(recovered read-only from the sleep pickle by `sleep_upsilon_export.py` — see that script and
 the module docstring).
 """
 function pix_coefficient(cf_dirs::Vector{String}, estim::Int, spec_id::Int)::Float64
     f = resolve_in_then_out("upsilon_pix_E$(estim)_spec_$(spec_id).json", cf_dirs...)
     f === nothing && error("CF4 needs Υ_pix. Run first:  " *
-                           "python cf_4_upsilon_export.py --estim $estim --spec $spec_id   " *
+                           "python sleep_upsilon_export.py --estim $estim --spec $spec_id   " *
                            "(missing upsilon_pix_E$(estim)_spec_$(spec_id).json; searched:\n" *
                            describe_search_dirs(cf_dirs...) * ")")
     m = match(r"\"upsilon_pix\"\s*:\s*(-?[0-9.eE+]+)", read(f, String))
@@ -85,7 +85,7 @@ The value the `pix_exists` COLUMN takes when Pix does not exist, in estimation u
 The state block is grand-mean centred, so that is −mean(pix_exists) ≈ −0.53, NOT 0.0:
 the identity-link fallback below subtracts Υ_pix·(pix − this), and using 0.0 instead
 would evaluate a "no Pix" world in which 53% of markets still have Pix. Written by
-cf_4_upsilon_export.py alongside Υ_pix; falls back to 0.0 for pre-centering exports.
+sleep_upsilon_export.py alongside Υ_pix; falls back to 0.0 for pre-centering exports.
 """
 function pix_level_zero(cf_dirs::Vector{String}, estim::Int, spec_id::Int)::Float64
     f = resolve_in_then_out("upsilon_pix_E$(estim)_spec_$(spec_id).json", cf_dirs...)
@@ -97,7 +97,7 @@ end
 """
     load_phi_nopix(cf_dirs, estim, spec, ctx) -> Union{Nothing,Vector{Float64}}
 
-Exact link-aware no-Pix φ, precomputed by `cf_4_upsilon_export.py` via `phi_from_native`
+Exact link-aware no-Pix φ, precomputed by `sleep_upsilon_export.py` via `phi_from_native`
 with `pix_exists` zeroed — the correct counterfactual under a NONLINEAR link G, where the
 level subtraction φ̂ − Υ_pix·pix is only a first-order approximation (Υ_pix is the AME, not
 ∂φ/∂pix). Reads `phi_nopix_E{e}_spec_{s}.parquet` from the first of `cf_dirs` that holds it
@@ -125,7 +125,7 @@ function load_phi_nopix(cf_dirs::Vector{String}, estim::Int, spec_id::Int, ctx::
         haskey(lut, k) ? (out[i] = lut[k]) : (miss += 1; out[i] = NaN)
     end
     miss == 0 || error("phi_nopix export misses $miss/$(nrow(ctx.df)) ctx rows (stale? " *
-                       "regenerate: python cf_4_upsilon_export.py --estim $estim --spec $spec_id)")
+                       "regenerate: python sleep_upsilon_export.py --estim $estim --spec $spec_id)")
     return out
 end
 
@@ -167,7 +167,7 @@ function main_cf4()
                            local_dir=a["local-dir"], suffix=a["suffix"])
     st  = load_sim_state(ctx)
     _, _, out_dir = get_paths(a["hpc"]; local_dir=a["local-dir"])
-    # Υ_pix + φ^noPix come from cf_4_upsilon_export.py, and the reallocation parquet is produced
+    # Υ_pix + φ^noPix come from sleep_upsilon_export.py, and the reallocation parquet is produced
     # here; all three belong to the counterfactual step, so read and write resolve to the same
     # directory in either tree.
     cf_ins = cf4_search_dirs(out_dir)                  # cluster: data/output/counterfactuals
@@ -188,7 +188,7 @@ function main_cf4()
     if phi_np === nothing
         log_status("  [CF4] Υ_pix=$(round(υ, sigdigits=4)) | horizon=$T | no-Pix φ via LEVEL " *
                    "subtraction (exact for identity-link E1/E2; for a NONLINEAR link run " *
-                   "cf_4_upsilon_export.py to get the exact per-row φ^noPix)")
+                   "sleep_upsilon_export.py to get the exact per-row φ^noPix)")
     else
         log_status("  [CF4] exact link-aware no-Pix φ loaded (phi_from_native, Pix zeroed), " *
                    "$(length(phi_np)) rows | horizon=$T | Υ_pix=$(round(υ, sigdigits=4)) [AME, reporting]")

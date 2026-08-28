@@ -4,9 +4,9 @@ make_sset_table.py
 Turn the Stock-Wright S-curves produced by the CUE engine into a confidence-set table.
 
 Input : cluster_raw/blp_results_E{k}_spec_12_{stage}_sset_cue.json  (one per routine; written by the
-        BLP_ALPHA_GRID grid mode in blp_gpu_engine.jl — each point is a CONSTRAINED solve, i.e. α is
+        BLP_ALPHA_GRID grid mode in blp_engine_gpu.jl — each point is a CONSTRAINED solve, i.e. α is
         pinned at α₀ and θ₂/β are re-optimised, so the resulting set accounts for θ₂ being estimated).
-Output: tab_alpha_sset_spec12_cue.tex  → ESTIMATION_OUTPUT/Rout/ + Drafts/Deposit Competition/
+Output: tab_alpha_sset_spec12_cue.tex  → Drafts/Deposit Competition/
         (a NEW file; nothing existing is touched).
 
 Why this is the right object: the AR/LM sets in weak_iv.json hold δ fixed at δ(θ̂₂) and treat θ̂₂ as
@@ -136,7 +136,7 @@ def main():
     L += [r"\end{longtable}", r"\end{spacing}", r"\end{landscape}"]
     tex = "\n".join(L)
 
-    for d in (rc.TABLES_DIR, rc.DRAFTS_DIR):
+    for d in (rc.DRAFTS_DIR,):
         if d.is_dir():
             (d / "tab_alpha_sset_spec12_cue.tex").write_text(tex, encoding="utf-8")
             print(f"  saved: {d / 'tab_alpha_sset_spec12_cue.tex'}")

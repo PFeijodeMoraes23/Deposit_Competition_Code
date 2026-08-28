@@ -1,5 +1,5 @@
 """
-foundation_demand_eval.jl
+cf_demand_eval.jl
 ===================
 Foundation 0a for the counterfactual pipeline: a demand-evaluation + composite
 elasticity module that REUSES the estimator's exact share kernels so that
@@ -14,18 +14,18 @@ What it provides
   * `cf_shares_at(ctx, ρ′)`  — active shares under a COUNTERFACTUAL spread vector ρ′,
     holding ξ̂ and all other characteristics fixed. δ′ = δ̂ + α̂·(ρ′ − ρ̂) and μ is
     recomputed for ρ′ (the spread enters the random coefficient, coef index 1).
-    This is the building block reused by foundation_deposit_sim.jl / CF1 / CF2.
+    This is the building block reused by cf_deposit_sim.jl / CF1 / CF2.
   * `cf_dDep_dρ(ctx; ...)`   — composite deposit semi-elasticity ∂Dep/∂ρ via finite
     differences on `cf_shares_at`, scaled by the deposit law of motion (1−φ)·M.
 
 Design notes
 ------------
-  * REUSE, do not reimplement: we `include("blp_1_estimation.jl")` (CPU baseline,
+  * REUSE, do not reimplement: we `include("blp_engine_cpu.jl")` (CPU baseline,
     no CUDA) and call its `compute_mu!`, `compute_model_shares!`, `build_precomp`,
     `build_regressor_matrices`, `project_endogenous_spreads`, `estimate_theta1`,
     `build_theta2_structure`, `unpack_theta2`, `load_precomputed_draws`,
     `precompute_pi_products!`. The CPU path is portable to a laptop; the GPU path is
-    only needed for the heavy CF2 forward simulation (see estimation_bbl_2_fwd_sim.jl).
+    only needed for the heavy CF2 forward simulation (see bbl_fwd_sim.jl).
   * Spread convention (must match the estimator exactly): ρ = spread_ann / 100
     (bps → percentage points). θ̂₁[1] = α̂ is the mean spread coefficient.
   * s^Act: for B-firms `buf.s_B` is the CONDITIONAL within-market share
@@ -40,11 +40,11 @@ Design notes
 Usage
 -----
   # Local quick-look (approximate, low memory):
-  julia --project=. --threads=4 foundation_demand_eval.jl --estim 6 --spec 12 \\
+  julia --project=. --threads=4 cf_demand_eval.jl --estim 6 --spec 12 \\
       --stage extended --R 200 --seed 42
 
   # Cluster exact (matches the estimated shares):
-  julia --project=\${PROJECT_DIR} --threads=8 foundation_demand_eval.jl --estim 6 \\
+  julia --project=\${PROJECT_DIR} --threads=8 cf_demand_eval.jl --estim 6 \\
       --spec 12 --stage extended --R 2000 --seed 42 --hpc
 
 Outputs `shares_elas_E{estim}_spec_{spec}_{stage}{suffix}.parquet` into the counterfactual
@@ -58,7 +58,7 @@ using Parquet2, DataFrames, Serialization, Statistics, LinearAlgebra, ArgParse
 # cluster, where many concurrent CPU jobs sharing one NFS depot would otherwise stampede the Julia
 # precompile/load lock just to load a package they don't use.
 #
-# blp_1_estimation.jl (the CPU kernels & constants: X_COLS, get_paths, log_status, …) is pulled in
+# blp_engine_cpu.jl (the CPU kernels & constants: X_COLS, get_paths, log_status, …) is pulled in
 # exactly once on either branch — via the engine when we take the GPU path, directly otherwise. Do
 # NOT also include it unconditionally above: that would load it twice on the GPU branch (the engine
 # loads it too), guarded only by the engine's isdefined check. The CPU-branch load goes through
@@ -68,10 +68,10 @@ const _CF_GPU_REQUESTED = get(ENV, "CF_GPU", "1") != "0"
 if _CF_GPU_REQUESTED
     # blp_gpu_engine brings in CUDA + the GPU share kernels AND the CPU baseline. It LOADS on a
     # no-GPU machine (verified): CUDA.functional()==false and we fall back to the CPU share path.
-    include(joinpath(@__DIR__, "blp_gpu_engine.jl"))
+    include(joinpath(@__DIR__, "blp_engine_gpu.jl"))
     import CUDA
 else
-    Base.include(Main, joinpath(@__DIR__, "blp_1_estimation.jl"))
+    Base.include(Main, joinpath(@__DIR__, "blp_engine_cpu.jl"))
 end
 # Use the GPU share kernel only when opted in AND a GPU is actually present. The `&&` short-circuits,
 # so CUDA is never referenced when CF_GPU=0 (and thus need not be imported).
@@ -173,7 +173,7 @@ Find the demand parquet for routine `estim`, spec `spec_id`, by scanning
 wins.
 
 The tag is optional because E1/E2 write the bare `demand_{estim}_spec_{spec}.parquet` while
-E3/E4 carry one; the same regex is used by blp_1_logit.jl and blp_2_rc.jl, so the whole
+E3/E4 carry one; the same regex is used by blp_logit.jl and blp_rc.jl, so the whole
 stack sees the same set of files for a routine.
 
 This mirrors the BLP side's auto-discovery (the note: "the routine list — id AND
@@ -304,7 +304,7 @@ function build_cf_context(estim::Int, spec_id::Int, stage::String;
     # ── Load estimated parameters & δ̂ for this stage ───────────────────────
     # PLACEHOLDER mode (smoke test before the BLP finishes): no RC result needed —
     # set θ₂=0, θ₁=0, and δ = log-share init (the estimator's own fallback, lines
-    # 357–361 of blp_1_estimation.jl). This exercises the WHOLE pipeline
+    # 357–361 of blp_engine_cpu.jl). This exercises the WHOLE pipeline
     # (parquet→pc→buf→μ→shares→deposits→ψ→CF1/CF2) on real local data with draws,
     # catching plumbing bugs now; swap in δ̂/θ̂ once results land.
     rpath = _result_path(out_dir, estim, spec_id, stage, suffix)
@@ -315,7 +315,7 @@ function build_cf_context(estim::Int, spec_id::Int, stage::String;
         # sub-model if present, else 0 (in-sample share reproduction is unaffected).
         # input_dir (data/input on the cluster) comes first so a δ̂ supplied as an upload wins
         # over one the logit step produced; otherwise it is the logit step folder, which is the
-        # only place blp_1_logit.jl writes.
+        # only place blp_logit.jl writes.
         dbin  = joinpath(input_dir, "logit_delta_E$(estim)_spec_$(spec_id)$(suffix).bin")
         isfile(dbin) || (dbin = joinpath(logit_dir(out_dir), "logit_delta_E$(estim)_spec_$(spec_id)$(suffix).bin"))
         dfull = load_delta_bin(dbin)
@@ -366,7 +366,7 @@ function build_cf_context(estim::Int, spec_id::Int, stage::String;
         if saved_sig !== nothing && collect(saved_sig) != collect(sigma_indices)
             error("θ₂ σ-structure mismatch for stage '$stage': result has sigma_indices=" *
                   "$(collect(saved_sig)) but local build_theta2_structure gives $(sigma_indices). " *
-                  "Re-sync blp_1_estimation.jl / rebuild the sysimage to match the run that wrote " *
+                  "Re-sync blp_engine_cpu.jl / rebuild the sysimage to match the run that wrote " *
                   "$(basename(rpath)).")
         end
         if saved_pi !== nothing && collect(Tuple.(saved_pi)) != collect(Tuple.(pi_interactions))
@@ -415,7 +415,7 @@ function cf_model_shares(ctx::CFDemandCtx)::Vector{Float64}
 end
 
 # ── B.2 + B.1 helpers: incremental Pi-product maintenance for cf_shares_at ─────────────────────────
-# These operate on `HotBuffers` (defined in the included blp_1_estimation.jl) but are pure CF/BBL
+# These operate on `HotBuffers` (defined in the included blp_engine_cpu.jl) but are pure CF/BBL
 # machinery — kept here, next to their only caller cf_shares_at, so the demand-estimation engine
 # carries nothing beyond the inert `pi_base` field. A spread deviation perturbs ONLY prod_vec[:,
 # target_cidx] (the spread, cidx==1), so only the Pi products whose product-char index is target_cidx
@@ -497,7 +497,7 @@ pass). Returns the share derivative `ds_dρ = (s(ρ̂+eps) − s(ρ̂))/eps` and
 NOTE: this is the response to a *uniform* spread shift, which folds in within-market
 cross-substitution; it is the right object for aggregate pass-through intuition but
 is NOT the pure own-spread Jacobian diagonal. The exact own/cross Jacobian is built
-inside CF2 by perturbing each strategy and re-simulating (see estimation_bbl_2_fwd_sim.jl).
+inside CF2 by perturbing each strategy and re-simulating (see bbl_fwd_sim.jl).
 """
 function cf_dDep_dρ(ctx::CFDemandCtx; eps::Float64=1e-4,
                     market_size=nothing, phi=nothing)
@@ -557,7 +557,7 @@ end
 """
     verify_cf_gpu(ctx; rtol) — assert the GPU share kernel matches the CPU one at (δ̂, θ̂₂).
 
-Run once on the cluster (`foundation_demand_eval.jl … --verify-gpu`) to gate the GPU path. Errors if
+Run once on the cluster (`cf_demand_eval.jl … --verify-gpu`) to gate the GPU path. Errors if
 the max relative / log-floor share difference exceeds `rtol`. No-op (warns) without a GPU.
 """
 function verify_cf_gpu(ctx::CFDemandCtx; rtol::Float64=1e-7)

@@ -272,7 +272,7 @@ def main():
         if not tex:
             continue
         fname = f"blp_compare_E{est}_spec12.tex"
-        for dest in (TABLES_DIR, DRAFTS_DIR):
+        for dest in (DRAFTS_DIR,):
             dest.mkdir(parents=True, exist_ok=True)
             (dest / fname).write_text(tex, encoding="utf-8")
             print(f"  saved: {dest / fname}")

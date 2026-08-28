@@ -61,8 +61,8 @@ end
 # the same vintage.  Locally out_dir is a results directory under ESTIMATION_OUTPUT and the
 # sibling-directory layout applies instead; the split is decided by tree shape
 # (`is_cluster_out`), so one code path serves both trees.  These live here because of_root.jl
-# is the one path module every Julia entry point already reaches (blp_1_logit.jl directly,
-# the BLP/CF stack through blp_1_estimation.jl), so sharing them adds no include edge.
+# is the one path module every Julia entry point already reaches (blp_logit.jl directly,
+# the BLP/CF stack through blp_engine_cpu.jl), so sharing them adds no include edge.
 
 """
     search_dirs(dirs...) -> Vector{String}
@@ -178,8 +178,8 @@ Search path for the demand-prep parquets. On the cluster it is the single direct
 `out_dir/demand_prep`: the parquets have one producer (the sleepiness phase's prep step) writing
 to one place, and offering no second candidate is what stops the exporter and the CF/BBL stack
 from resolving two different vintages of the same routine. Off the cluster the list is just
-`in_dir`, the local ESTIMATION_OUTPUT/DEMAND_PREP. Shared by blp_1_logit.jl, blp_2_rc.jl and
-blp_gpu_engine.jl so the three cannot disagree about where a routine's parquet lives.
+`in_dir`, the local ESTIMATION_OUTPUT/DEMAND_PREP. Shared by blp_logit.jl, blp_rc.jl and
+blp_engine_gpu.jl so the three cannot disagree about where a routine's parquet lives.
 """
 demand_search_dirs(in_dir, out_dir)::Vector{String} =
     is_cluster_out(out_dir) ?

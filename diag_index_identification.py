@@ -28,7 +28,7 @@ ensure_project_venv(__file__)
 import argparse
 import numpy as np
 
-from estimation_2_sleep import (build_pooled_data, define_specifications,
+from sleep_est_e2 import (build_pooled_data, define_specifications,
                                 run_pooled_first_stage)
 from utils.sleep_links import fit_nlls_link
 from utils import routines as R
