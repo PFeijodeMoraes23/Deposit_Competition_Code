@@ -388,7 +388,7 @@ def merge_population(panel: pd.DataFrame) -> pd.DataFrame:
     if not os.path.exists(DEMO_CSV):
         logging.warning(
             f"Demographics panel not found at {DEMO_CSV}. "
-            "Run ibge_demographics_panel.py first. "
+            "Run scrape_ibge_demographics.py first. "
             "pix_users_pf_per1000 will be NaN."
         )
         panel["pix_users_pf_per1000"] = np.nan

@@ -313,7 +313,7 @@ def _apply_link(index_series, link, res_ss):
 # ==============================================================================
 # SHARED market size + ACTIVE-depositor shares  (V_Main pp.26-27; see
 # counterfactuals_plan.md §0). This lives in ONE place and is imported by
-# sleep_demand_prep_e1.py and estimation_2_demand_1_prep.py.
+# sleep_demand_prep_e1.py and sleep_demand_prep_e2.py.
 #
 # It used to be copy-pasted into all three scripts, which is exactly how the
 # (1-phi) / anchor / bc defects survived: a fix in one copy never reached the

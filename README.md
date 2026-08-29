@@ -43,7 +43,6 @@ The codebase:
 .
 ├── panel_pipeline.py                  # Master data pipeline runner (stages 0–5)
 ├── sleep_pipeline.py                 # Sleepiness estimation pipeline runner (E1–E4 + exports, demand prep, tables)
-│                                         # (run_blp_pipeline.py / run_local_pipeline.py were
 │                                         #  removed in a30be201 — call the Julia directly)
 │
 ├── ── Stage 0: Raw Data Downloads ──
@@ -92,38 +91,25 @@ The codebase:
 ├── ── Sleepiness Estimation ──
 ├── sleep_est_e1.py                 # B-type CFA estimation (Υ); phi_mt and phi_t construction
 ├── sleep_est_e2.py                 # Robustness: omit post-2020 structural break dummy
-├── estimation_3_sleep.py                 # Robustness: pooled B + D firms with D-type dummy
-├── estimation_4_sleep.py                 # Robustness: NLLS logistic link function
-├── estimation_5_sleep.py                 # Robustness: cooperative / state-owned institution controls
 │
 ├── ── Demand Estimation (BLP) ──
 ├── sleep_demand_prep.py           # Universal demand prep orchestrator (runs est. 1–5 in parallel)
 ├── sleep_demand_prep_e1.py         # Demand prep round 1: active shares and market sizes
 ├── sleep_demand_prep_e2.py         # Demand prep round 2
-├── estimation_3_demand_1_prep.py         # Demand prep round 3
-├── estimation_4_demand_1_prep.py         # Demand prep round 4
-├── estimation_5_demand_1_prep.py         # Demand prep round 5
-├── blp_logit_local.jl                    # Julia: non-RC logit demand (sanity check, θ₂ = 0)
 ├── blp_draws.jl                          # Julia: pre-compute Halton/quasi-Monte Carlo simulation draws
-├── blp_estimation.jl                     # Julia: full BLP GMM estimation (loads draws, solves BLP)
 │
 ├── ── Cost Estimation (BBL) ──
 ├── bbl_polfunc.py           # BBL Step 1: parametric policy functions for endogenous rates (k=4,5)
 ├── bbl_fwd_sim.jl           # BBL Step 2a: forward-simulate the ψ value-function basis (Julia)
 ├── bbl_solve.py             # BBL Step 2b: recover (ω,ζ,γ) via the eq:17 squared-hinge solve
-│   #   cluster: submit_bbl.sh (driver) + submit_bbl_all.sh (orchestrator)
 │
 ├── ── Export & Results ──
 ├── sleep_export_all.py                     # Orchestrator: dispatches export_*_sleep_results.py in parallel
 ├── sleep_export_e1.py             # Export sleep results for estimation round 1 (tables, plots)
 ├── sleep_export_e2.py             # Export sleep results for estimation round 2
-├── export_3_sleep_results.py             # Export sleep results for estimation round 3
-├── export_4_sleep_results.py             # Export sleep results for estimation round 4
-├── export_5_sleep_results.py             # Export sleep results for estimation round 5
 ├── sleep_export_spec12_compare.py              # Comparative analysis and plots across specification 1 & 2 variants
 │
 ├── ── Tables ──
-├── make_blp_latex_tables.py              # Compile BLP demand estimation results into LaTeX tables
 │
 ├── ── HPC Submission Scripts (Yale HPC / SLURM) ──
 ├── submit_blp_E1.sh                      # SLURM: BLP estimation strategy 1
@@ -131,7 +117,6 @@ The codebase:
 ├── submit_blp_E3.sh                      # SLURM: BLP estimation strategy 3
 ├── submit_blp_E4.sh                      # SLURM: BLP estimation strategy 4
 ├── submit_blp_E5.sh                      # SLURM: BLP estimation strategy 5
-├── submit_blp_draws.sh                   # SLURM: pre-compute simulation draws
 │
 ├── ── Utilities ──
 ├── utils/
@@ -178,11 +163,8 @@ Runs the full sleepiness estimation sequence:
 ```
 Step 1 : sleep_est_e1.py         B-type CFA + phi construction
 Step 2 : sleep_est_e2.py         Robustness: no break dummy
-Step 3 : estimation_3_sleep.py         Robustness: pooled B+D firms
-Step 4 : estimation_4_sleep.py         Robustness: NLLS logistic
-Step 5 : estimation_5_sleep.py         Robustness: coop/state controls
 Step 6 : sleep_export_all.py             Export 1st/2nd stage summaries
-Step 7 : sleep_demand_prep.py   Demand prep for all 5 rounds
+Step 7 : sleep_demand_prep.py   Demand prep for every active routine
 ```
 
 ```bash
@@ -209,11 +191,9 @@ julia --project=. blp_draws.jl --R 2000 --seed 42
 julia --project=. --threads=4 blp_engine_cpu.jl --estim 1 --spec 12 --stage sigma --R 50 --seed 42
 ```
 
-> **Stale-doc warning.** The *Usage* headers inside `blp_draws.jl` and `blp_engine_cpu.jl`
-> still show PRE-RENAME filenames (`blp_draws.jl`, `blp_estimation.jl`). Use the `blp_1_` names
-> above. Only the logit line has been re-verified end-to-end (2026-08-06: clean, 57 result files
-> + 9 tables); the draws/GMM lines are transcribed from those headers with the filename
-> corrected, so read the header before committing to a long run.
+> **Verification note.** Only the logit line has been re-verified end-to-end (2026-08-06:
+> clean, 57 result files + 9 tables). The draws and GMM lines are transcribed from each
+> script's own *Usage* header, so read that header before committing to a long run.
 
 For the end-to-end local sequence: run `panel_pipeline.py`, then `sleep_pipeline.py`
 (estimators → exports → demand prep), which takes `--skip-sleep`, `--sleep-only` and
@@ -260,7 +240,7 @@ log(s_active_jkt) = α_k · σ_jkt + δ_j + μ_kt + e_jkt
 where `σ_jkt` is the deposit spread (opportunity cost) and `δ_j` is a bank×type fixed effect.
 
 ### Cost Estimation (BBL)
-Following Bajari, Benkard & Levin (2007), parametric policy functions for endogenous deposit types (k=4,5) are estimated in `bbl_polfunc.py` (Step 1). The ψ value-function basis is then forward-simulated under the equilibrium and deviating strategies in `bbl_fwd_sim.jl` (Step 2a), and marginal costs `(ω,ζ,γ)` are recovered from the eq:17 squared-hinge minimization in `bbl_solve.py` (Step 2b). On the cluster the stage runs via `submit_bbl_all.sh`; it writes `cost_params_E*_spec_12_*.json`, which the counterfactuals then consume.
+Following Bajari, Benkard & Levin (2007), parametric policy functions for endogenous deposit types (k=4,5) are estimated in `bbl_polfunc.py` (Step 1). The ψ value-function basis is then forward-simulated under the equilibrium and deviating strategies in `bbl_fwd_sim.jl` (Step 2a), and marginal costs `(ω,ζ,γ)` are recovered from the eq:17 squared-hinge minimization in `bbl_solve.py` (Step 2b). On the cluster the stage runs via `bbl_run.sh`; it writes `cost_params_E*_spec_12_*.json`, which the counterfactuals then consume.
 
 ---
 
@@ -275,7 +255,7 @@ The primary geographic unit is the **MCA (Minimum Comparable Area)** — a time-
 | Technology | Purpose |
 | ---------- | ------- |
 | **Python 3.x** | All data processing, estimation, and export scripts |
-| **Julia** | BLP GMM demand estimation (`blp_draws.jl`, `blp_estimation.jl`, `blp_logit_local.jl`) |
+| **Julia** | BLP GMM demand estimation (`blp_draws.jl`, `blp_engine_cpu.jl`, `blp_logit.jl`) |
 | **pandas** | Data manipulation and panel construction |
 | **numpy** | Numerical arrays and computations |
 | **scipy** | Statistical utilities, NLLS optimisation, Halton draws |

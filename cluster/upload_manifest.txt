@@ -87,7 +87,7 @@
 # DIRECTIVES -- the active routine lineup and each routine's demand-parquet prefix.
 # {k} in any field expands over ROUTINES; {prefix} expands to that routine's PREFIX.
 # PREFIX must match DEMAND_PREFIXES in blp_engine_cpu.jl and DEMAND_CFG in
-# estimation_demand_link_common.py. Adding a routine = one line here plus one PREFIX line.
+# sleep_demand_prep_link.py. Adding a routine = one line here plus one PREFIX line.
 # ---------------------------------------------------------------------------------------
 #!SPEC 12
 #!ROUTINES 1 2 3 4

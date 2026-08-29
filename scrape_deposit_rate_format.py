@@ -395,7 +395,7 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument('--in', dest='in_path',
                     default=str(ip_scrape_dir / 'extracted_historical_rates.csv'),
-                    help='Input CSV from d_rate_scrape_4_parse.py.')
+                    help='Input CSV from scrape_deposit_rate_parse.py.')
     ap.add_argument('--out-long',
                     default=str(ip_scrape_dir / 'advertised_rates_quarterly.csv'),
                     help='Long-form output CSV.')

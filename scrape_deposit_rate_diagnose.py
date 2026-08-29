@@ -1,7 +1,7 @@
 """
 scrape_deposit_rate_diagnose.py
 ==============================
-Diagnostic for merging scraped advertised rates into panel_3_master_panel_build.py.
+Diagnostic for merging scraped advertised rates into panel_deposit_rates.py.
 
 Scope
 -----

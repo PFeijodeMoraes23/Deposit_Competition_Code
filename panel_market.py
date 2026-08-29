@@ -389,7 +389,7 @@ def attach_mca_code(dep: pd.DataFrame) -> pd.DataFrame:
         logging.warning(
             f"{digital_flags} not found: no physical-network verdict is available, so is_B "
             f"rests on the Tier-2 sentinel (CODMUN_IBGE == 0) alone. Run "
-            f"panel_5_flag_digital.py."
+            f"panel_digital_flags.py."
         )
 
     # is_B is the pipeline authoritative firm-type column: 1 = brick-and-mortar (the firm

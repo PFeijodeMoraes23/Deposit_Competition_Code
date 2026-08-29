@@ -7,7 +7,7 @@
 #   Per-INSTITUTION physical access points (agências, postos de atendimento,
 #   correspondentes) by municipality, from the three BCB "Informes" open-data
 #   services. This is the evidence base for the brick-and-mortar (B) vs digital
-#   (D) firm classification consumed by panel_5_flag_digital.py.
+#   (D) firm classification consumed by panel_digital_flags.py.
 #
 # WHY THIS EXISTS
 #   ESTBAN's AGEN_PROCESSADAS counts only full regulated *agências*. A bank that

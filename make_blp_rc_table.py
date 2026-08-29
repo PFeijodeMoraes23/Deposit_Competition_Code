@@ -207,7 +207,7 @@ def mean_rho_one_minus_s(est_id: int):
     """mean(ρ·(1−s)) over the routine's demand sample: ρ = spread_ann/100, s = share_B_cond if is_B
     else share_D, masked to finite ρ,s and 0≤s<1. Times a column's α̂ this gives the mean own-price
     ELASTICITY ∂ln s/∂ln ρ = α̂·ρ·(1−s) — unit-free, since the spread ρ enters in levels (a
-    semi-elasticity would be α̂·(1−s), per pp); average-market plug-in, matches blp_1_logit.jl.
+    semi-elasticity would be α̂·(1−s), per pp); average-market plug-in, matches blp_logit.jl.
     None if the parquet is missing."""
     if est_id in _RHO_CACHE:
         return _RHO_CACHE[est_id]

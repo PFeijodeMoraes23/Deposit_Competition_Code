@@ -80,7 +80,7 @@ Local test
       --estim 1 --spec 12 --stage sigma --R 50 --seed 42
 """
 
-# Load all shared BLP functions from blp_1_estimation.jl.
+# Load all shared BLP functions from blp_engine_cpu.jl.
 # The `if abspath(PROGRAM_FILE) == @__FILE__` guard there prevents auto-execution.
 # [merged] include(joinpath(@__DIR__, "blp_engine_cpu.jl"))
 
@@ -1532,7 +1532,7 @@ function run_blp_estimation_gpu(estim::Int, spec_id::Int, args,
     println("=" ^ 60)
 
     # CUE (BLP_ENGINE=cue): clustered continuously-updated weight matrix — see §7b in
-    # blp_1_estimation.jl. Lives ONLY on this GPU-numerical path (FD gradients stay consistent
+    # blp_engine_cpu.jl. Lives ONLY on this GPU-numerical path (FD gradients stay consistent
     # automatically when the objective changes; the IFT analytic gradient assumes ∂W/∂θ₂ = 0).
     use_cue = lowercase(get(ENV, "BLP_ENGINE", "ift")) == "cue"
 

@@ -14,7 +14,7 @@ Columns:  mca_code, year, quarter,
           pix_users_pf_per1000_sigma, connections_per100_sigma, frac_4g5g_sigma,
           branches_per1000_sigma, cadunico_families_per1000_sigma
 
-This file is consumed by blp_loop.jl to replace the ad-hoc 0.1 × σ_national
+This file is consumed by blp_draws.jl to replace the ad-hoc 0.1 × σ_national
 scaling with market-specific parametric draws:  d_im ~ N(μ_m, σ_m).
 
 Inputs (municipality-level intermediates saved by the scrapers):

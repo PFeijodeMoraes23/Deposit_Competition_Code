@@ -572,7 +572,7 @@ def _build_mun_pop_weights(years: list[int]) -> pd.DataFrame:
     if not os.path.exists(DEMO_CSV):
         raise RuntimeError(
             f"Demographics panel not found at {DEMO_CSV}. "
-            "Run ibge_demographics_panel.py first."
+            "Run scrape_ibge_demographics.py first."
         )
     demo = pd.read_csv(
         DEMO_CSV,

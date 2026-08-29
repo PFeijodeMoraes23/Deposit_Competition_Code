@@ -10,7 +10,7 @@
 #             - SPI participation:   DIRETA vs INDIRETA
 #             - institution type, modalidade, authorisation status
 #          Then derives a per-institution first_seen date and reconciles against
-#          the key-based entry dates from scrape_22_pix_participants.py.
+#          the key-based entry dates from scrape_pix_participants.py.
 #
 #          BCB serves only the *current* roster; the history lives on the Wayback
 #          Machine across three naming regimes (continuous May 2020 -> present):

@@ -116,7 +116,7 @@ if [[ "${need_costs}" == "1" ]]; then
 fi
 
 # CF4 needs no BBL costs, but DOES need the exact link-aware phi^noPix + Upsilon_pix
-# from cf_4_upsilon_export.py. The sleepiness estimators run on the cluster, so the
+# from sleep_upsilon_export.py. The sleepiness estimators run on the cluster, so the
 # sleep pickle that export reads is there too, and sleep_job.sh SLEEP_STEP=upsilon
 # writes the pair into data/output/counterfactuals (gate G7). That is the ONE place
 # cl_cf4_dirs looks, and the same one cf4_pix.jl's cf4_search_dirs uses at run time,

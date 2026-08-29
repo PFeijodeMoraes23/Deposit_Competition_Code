@@ -146,7 +146,7 @@ function cf4_pix_reallocation(ctx::CFDemandCtx, st::DepositSimState; upsilon_pix
         # The DEVIATION from the no-Pix level is what Υ_pix multiplies -- with the state block
         # centred, the column's "no Pix" value is pix_zero ≈ −0.53, not 0. For a nonlinear link
         # G this is a first-order approximation (Υ_pix is the AME); prefer the exact per-row
-        # export from cf_4_upsilon_export.py.
+        # export from sleep_upsilon_export.py.
         phi_cf = clamp.(st.phi .- upsilon_pix .* (pix .- pix_zero), 0.0, 0.999)
     else
         # Exact: φ^noPix = G(index − θ_pix·pix), already in [0,1] from phi_from_native.

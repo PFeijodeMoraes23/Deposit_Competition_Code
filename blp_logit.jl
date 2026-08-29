@@ -166,7 +166,7 @@ is_hpc_run()::Bool = ("--hpc" in ARGS) || haskey(ENV, "SLURM_JOB_ID")
 two-tuple every call site here already destructures.
 
 On the cluster these are HEAD/data/{input,output}, mirroring `get_paths` in
-blp_1_estimation.jl. The demand parquets are read through `demand_dirs()`, which resolves to
+blp_engine_cpu.jl. The demand parquets are read through `demand_dirs()`, which resolves to
 the one directory the prep step writes. Everything produced here lands in the output root's
 `logit/` step folder — the δ warm-starts (`delta_dir`), the summary and per-key JLS
 (`logit_dir`), the LaTeX fragments (`tex_out_dir`) — so the step is one directory to package,

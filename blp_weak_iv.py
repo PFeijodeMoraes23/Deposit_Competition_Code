@@ -676,7 +676,7 @@ def main():
     ap.add_argument("--routines", default=_routines.csv(_routines.ACTIVE))   # the reported lineup
     ap.add_argument("--delta-stage", default=None, metavar="STAGE",
                     help="invert AR/LM against the structural δ of this RC stage (e.g. ext1) instead "
-                         "of the log-share δ; writes weak_iv_<STAGE>.json. Requires export_rc_delta.jl.")
+                         "of the log-share δ; writes weak_iv_<STAGE>.json. Requires blp_delta_export.jl.")
     args = ap.parse_args()
     RES = os.path.abspath(args.results_dir)
     dp = os.path.join(os.path.dirname(RES), "DEMAND_PREP")

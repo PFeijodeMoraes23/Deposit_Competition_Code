@@ -79,7 +79,7 @@ const _CF_USE_GPU = _CF_GPU_REQUESTED && (try CUDA.functional() catch; false end
 
 # The data-layout authority for the CF/BBL stack (`cf_out_dir`, `cf_in_dir`, `blp_dir`,
 # `logit_dir`, `demand_search_dirs`, `is_cluster_out`) is of_root.jl, reached here through
-# blp_1_estimation.jl.
+# blp_engine_cpu.jl.
 
 # ==========================================================================
 # Context: everything needed to evaluate (counterfactual) shares

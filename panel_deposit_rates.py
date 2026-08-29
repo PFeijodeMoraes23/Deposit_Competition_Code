@@ -43,12 +43,12 @@
 #   - IF-Data List (BCB/IF Data/List/): CNPJ -> conglomerate mapping
 #   - COSIF processed (BCB/Egan_et_al_2025_Rep/processed/COSIF_PROCESSED/):
 #     institution-level implicit funding costs (monthly, by CNPJ)
-#   - SGS macro series (pre-downloaded by data_collection_1.py)
+#   - SGS macro series (SGS_RAW/macro_series_full.csv, downloaded out of band)
 #
 # Prerequisites:
 #   pip install pandas numpy
-#   Run data_collection_1.py first to download SGS macro series
-#   Run cosif_process_1.py first to process COSIF data (COSIF data is downloaded manually)
+#   SGS_RAW/macro_series_full.csv must already be present (no in-repo downloader)
+#   Run panel_cosif_extract.py first to process COSIF data (COSIF data is downloaded manually)
 ## ---------------------------------------------------------------------------
 
 
@@ -89,7 +89,7 @@ SGS_PATH       = os.path.join(RAW_PATH, "SGS_RAW")
 PROCESSED_PATH = os.path.join(EGAN_PATH, "processed")
 OUTPUT_PATH    = os.path.join(PROCESSED_PATH, "PANEL_INTERMED")
 
-# COSIF processed output (from cosif_process_1.py)
+# COSIF processed output (from panel_cosif_extract.py)
 COSIF_PROCESSED_PATH = os.path.join(PROCESSED_PATH, "COSIF_PROCESSED")
 
 for _p in [RAW_PATH, SGS_PATH, PROCESSED_PATH, OUTPUT_PATH, COSIF_PROCESSED_PATH]:
@@ -279,8 +279,8 @@ def load_if_data(source_dir: str = IF_DATA_DIR) -> pd.DataFrame:
 
 def load_macro_series() -> pd.DataFrame:
     """
-    Load daily macro series from the pre-downloaded CSV produced by
-    data_collection_1.py.
+    Load daily macro series from the pre-downloaded SGS_RAW/macro_series_full.csv
+    (staged out of band; no script in this repo produces it).
 
     Returns a DataFrame indexed by date with columns:
         Selic_Over, Meta_Selic, CDI_Anualizado, TR
@@ -290,7 +290,7 @@ def load_macro_series() -> pd.DataFrame:
     if not os.path.exists(macro_file):
         raise FileNotFoundError(
             f"Macro series file not found: {macro_file}\n"
-            "Please run data_collection_1.py first to download SGS data."
+            "No script in this repo downloads it: stage the SGS macro series there."
         )
 
     df = pd.read_csv(macro_file, index_col=0, parse_dates=True)
@@ -298,7 +298,7 @@ def load_macro_series() -> pd.DataFrame:
     if df.empty:
         raise ValueError(
             f"Macro series file is empty: {macro_file}\n"
-            "Please re-run data_collection_1.py to download SGS data."
+            "Re-stage the SGS macro series; no in-repo script regenerates it."
         )
 
     # Ensure the index is a proper DatetimeIndex (handles CSV round-trip issues)
@@ -428,7 +428,7 @@ def load_conglomerate_mapping(list_dir: str = IF_DATA_LIST_DIR) -> pd.DataFrame:
 
 def load_cosif_processed(cosif_dir: str = COSIF_PROCESSED_PATH) -> pd.DataFrame:
     """
-    Load all COSIF processed files (output of cosif_process_1.py).
+    Load all COSIF processed files (output of panel_cosif_extract.py).
 
     Each file is a CNPJ x DATA_BASE panel for one taxonomy type, with
     deposit stocks, disaccumulated funding expense, and a blended
@@ -1695,7 +1695,7 @@ def __egan_aux_main__():
         print(f"Please ensure IF-Data files exist in:\n  {IF_DATA_DIR}")
         exit(1)
 
-    # ---- 4.2: Load macro series (pre-downloaded by data_collection_1.py) ----
+    # ---- 4.2: Load macro series (SGS_RAW/macro_series_full.csv, staged out of band) ----
     print("Step 2/6: Loading macro series (Selic, CDI, TR) ...")
     try:
         df_macro = load_macro_series()

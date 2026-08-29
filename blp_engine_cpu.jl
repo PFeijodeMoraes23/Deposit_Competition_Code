@@ -1226,7 +1226,7 @@ function run_blp_estimation(estim::Int, spec_id::Int, args,
                                 "stage" => args["stage"])
 
     if args["stage"] == "logit"
-        println("  Stage: LOGIT — delegating to blp_logit_local.jl logic")
+        println("  Stage: LOGIT — delegating to blp_logit.jl logic")
         is_B = Bool.(coalesce.(df.is_B, false))
         share_D      = Float64.(coalesce.(df.share_D,      0.0))
         share_B_cond = Float64.(coalesce.(df.share_B_cond, 0.0))
@@ -1392,7 +1392,7 @@ function run_blp_estimation(estim::Int, spec_id::Int, args,
     println("  Bounds: [$(lo[1]), $(hi[1])]")
 
     # ── δ warm-start from logit checkpoint ──────────────────────────────────
-    # blp_logit_local.jl saves logit_delta_E{id}_spec_{sp}.jls locally.
+    # blp_logit.jl saves logit_delta_E{id}_spec_{sp}.jls locally.
     # Rsync that file to the cluster output dir before submitting sigma jobs.
     # Starting from logit δ* saves 50–200 SQUAREM iters per outer GMM call.
     delta_work = zeros(N_obs)

@@ -1133,7 +1133,7 @@ def render_market_structure_figure(t2_df: pd.DataFrame, suffix: str = "") -> Non
             ax.spines[s].set_linewidth(0.8)
         ax.tick_params(labelsize=9, colors=MUTED_INK, length=3)
         # Pix is a genuine event threshold, so a dashed rule is correct here
-        # (gridlines stay solid); matches analysis_3_additional_figures.py.
+        # (gridlines stay solid); matches make_margin_figures.py.
         ax.axvline(PIX_YEAR, color="grey", lw=0.8, ls="--", alpha=0.6, zorder=1)
         if pix_label:
             ax.text(PIX_YEAR + 0.08, 0.97, "Pix", transform=ax.get_xaxis_transform(),
@@ -1696,7 +1696,7 @@ def render_variables_master() -> str:
 # the estimated sets exactly: the sleepiness first stage (nested IV sets in
 # estimation_2_sleep.define_specifications) and the K=16 demand vector
 # vcat(IV_BLP_LOO, IV_ESTBAN, IV_COST, IV_CAPITAL) in blp_engine_cpu.jl /
-# blp_1_logit.jl. leave_one_out_mean_spread (the Hausman IV) was previously
+# blp_logit.jl. leave_one_out_mean_spread (the Hausman IV) was previously
 # undocumented; the LOO lci/wholesale pairs listed in the old BLP-LOO table are
 # NOT in the estimated demand vector and are therefore not printed.
 _STAGE_BOTH   = "Sleep 1st stage; Demand"

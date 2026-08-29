@@ -8,7 +8,7 @@ one choice of (kind, time_block), listed in EST_CONFIG at the bottom:
     E4  single-index + Time   (kind="single_index", time_block=True)
 
 E1 (local linear, B-type) and E2 (pooled linear) are separate estimators with their
-own scripts, sleep_est_e1.py / estimation_2_sleep.py.
+own scripts, sleep_est_e1.py / sleep_est_e2.py.
 
 The "+Time" variant adds the time block to every state block via
 estimation_2_sleep.define_specifications(time_block=True). That block is gdp_growth_yoy

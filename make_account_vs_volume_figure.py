@@ -5,7 +5,7 @@
 #
 # Purpose: Produce the account-share-vs-volume-share (extensive-vs-intensive
 #          deposit margin) figure for V_Main.tex sec:inst_setting:desc, from the
-#          conglomerate x quarter table built by analysis_1_disclosure_join.py.
+#          conglomerate x quarter table built by panel_disclosure_join.py.
 #
 #   The motivating fact: digital entrants (D firms, type-5 prepaid) hold a large
 #   CUSTOMER/ACCOUNT base but a small DEPOSIT-VOLUME share, while incumbents (B

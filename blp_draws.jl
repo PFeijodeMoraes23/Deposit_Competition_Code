@@ -9,7 +9,7 @@ Generates:
 
 Outputs are serialised to the draws directory (`draws_dir`, of_root.jl: the BLP step folder
 `data/output/blp/draws` on the cluster, ESTIMATION_OUTPUT/BLP_DRAWS locally) for consumption
-by blp_1_estimation.jl.  Separating draw generation from estimation ensures:
+by blp_engine_cpu.jl.  Separating draw generation from estimation ensures:
   - Cross-strategy comparability (same draws for E1–E4)
   - Transparent diagnostics (fallback rate, σ statistics)
   - No re-generation on cluster job restarts
@@ -371,7 +371,7 @@ function main()
     # panels are a cluster PRODUCT (data/output/demand_prep), never an upload, which is why
     # data/input is not a candidate — only `demographics_sigma.parquet` below is read from there.
     # The routine tag between id and spec is optional (E1/E2 write bare `demand_1_spec_12`),
-    # hence `(?:_.*)?`, matching the discovery regexes in blp_rc.jl and foundation_demand_eval.jl.
+    # hence `(?:_.*)?`, matching the discovery regexes in blp_rc.jl and cf_demand_eval.jl.
     #
     # The routine panels are found by GLOB, never by a static id -> prefix map: such a map goes
     # stale the moment a routine is relabelled, and it fails silently because --estim defaults

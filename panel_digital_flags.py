@@ -58,7 +58,7 @@ def load_access_points() -> pd.DataFrame:
     if not os.path.exists(ACCESS_POINTS_CSV):
         logging.warning(
             f"Access-point file not found at {ACCESS_POINTS_CSV} -- the digital verdict will "
-            f"rest on deposit booking alone. Run scrape_25_bcb_access_points.py.")
+            f"rest on deposit booking alone. Run scrape_bcb_access_points.py.")
         return pd.DataFrame(columns=cols)
     ap = pd.read_csv(ACCESS_POINTS_CSV, dtype={"cnpj8": str})
     keep = [c for c in cols if c in ap.columns]

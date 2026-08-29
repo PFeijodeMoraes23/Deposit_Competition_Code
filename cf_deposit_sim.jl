@@ -2,7 +2,7 @@
 cf_deposit_sim.jl
 ===================
 Foundation 0b: forward simulator for the deposit law of motion (eqs 9-B / 9-D),
-built on the demand-evaluation context from foundation_demand_eval.jl.
+built on the demand-evaluation context from cf_demand_eval.jl.
 
 Law of motion (per jkmt, with sleeper persistence φ):
 

@@ -3,7 +3,7 @@ bbl_solve.py
 ============================
 BBL Step 2, part 2: recover marginal-cost parameters (ω, ζ, γ)^κ for
 κ ∈ {B, D} by minimizing the sum of squared FOC-inequality violations, using the
-firm-level ψ basis produced by estimation_bbl_2_fwd_sim.jl.
+firm-level ψ basis produced by bbl_fwd_sim.jl.
 
 Moment inequality (per firm j, deviation σ̃) — the unnumbered display above
 V_Main \\label{eq:17}:
