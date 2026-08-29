@@ -64,7 +64,7 @@ from utils.firm_registry import load_registry
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s",
                     stream=sys.stdout)
-log = logging.getLogger("scrape_17")
+log = logging.getLogger("scrape_edgar_disclosures")
 
 BASE = data_root(__file__)
 OUT_DIR = os.path.join(BASE, "FirmDisclosures", "SEC")

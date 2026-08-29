@@ -49,7 +49,7 @@ from utils.disclosure_common import get_json, http_get, data_root, now_iso
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s",
                     stream=sys.stdout)
-log = logging.getLogger("scrape_21")
+log = logging.getLogger("scrape_worldbank_findex")
 
 BASE = data_root(__file__)
 OUT_DIR = os.path.join(BASE, "WorldBank", "Findex")

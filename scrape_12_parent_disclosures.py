@@ -57,7 +57,7 @@ PARENT_FORMS = set(EARNINGS_FORMS) | {"8-K", "8-K/A"}
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s",
                     stream=sys.stdout)
-log = logging.getLogger("scrape_18")
+log = logging.getLogger("scrape_parent_disclosures")
 
 BASE = data_root(__file__)
 OUT_DIR = os.path.join(BASE, "FirmDisclosures", "Parent")

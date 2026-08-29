@@ -71,7 +71,7 @@ logging.basicConfig(
     format="%(asctime)s - %(levelname)s - %(message)s",
     handlers=[logging.StreamHandler(sys.stdout)],
 )
-log = logging.getLogger("cosif_extract")
+log = logging.getLogger("panel_cosif_extract")
 
 # ---------------------------------------------------------------------------
 # COSIF account codes (raw CONTA has NO dots/dashes: 8-digit pre-2025,

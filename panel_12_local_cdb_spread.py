@@ -73,7 +73,7 @@ from utils import paths
 import panel_cosif_calibrate as cc
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-log = logging.getLogger("panel_12")
+log = logging.getLogger("panel_local_cdb_spread")
 
 PANEL_CSV = paths.PROCESSED / "market_panel.csv"
 FOUNDATION = paths.PROCESSED / "COSIF_PROCESSED" / "custos_implicitos_v2_foundation.csv"

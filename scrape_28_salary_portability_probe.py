@@ -10,9 +10,8 @@ Counts per period (ideally per institution) would give an eq-(8)-style flow meas
 awake share 1-phi that is completely independent of deposit autocorrelation, and unlike the
 Pix-key proxy in D11 it is a genuine gross flow rather than a net stock change.
 
-Note the repo already holds CREDIT portability (shared/SCR/Portabilidade, processed by the
-sibling SCR_Portability_PIX project) -- that is loan refinancing, a different margin, and
-not a deposit-relationship flow. This probe is specifically about SALARY portability.
+CREDIT portability is a different margin: loan refinancing, not a deposit-relationship
+flow. This probe is specifically about SALARY portability.
 
 Method: probe the SGS series catalogue and the open-data (CKAN) portal for portability
 series, then fetch the "Cidadania Financeira" / statistics pages and list downloadable

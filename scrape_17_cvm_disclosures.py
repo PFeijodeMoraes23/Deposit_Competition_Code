@@ -52,7 +52,7 @@ from utils.firm_registry import load_registry, _norm
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s",
                     stream=sys.stdout)
-log = logging.getLogger("scrape_23")
+log = logging.getLogger("scrape_cvm_deposits")
 
 BASE = data_root(__file__)
 OUT_DIR = os.path.join(BASE, "FirmDisclosures", "CVM")

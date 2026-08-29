@@ -65,7 +65,7 @@ logging.basicConfig(
     format="%(asctime)s - %(levelname)s - %(message)s",
     handlers=[logging.StreamHandler(sys.stdout)],
 )
-log = logging.getLogger("cosif_calibrate")
+log = logging.getLogger("panel_cosif_calibrate")
 
 STOCK_COLS = ["stk_total", "stk_demand", "stk_savings", "stk_interb",
               "stk_time", "stk_repos", "stk_bills", "stk_prepaid"]

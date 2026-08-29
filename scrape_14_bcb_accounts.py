@@ -60,7 +60,7 @@ from utils.disclosure_common import (
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s",
                     stream=sys.stdout)
-log = logging.getLogger("scrape_20")
+log = logging.getLogger("scrape_bcb_accounts")
 
 BASE = data_root(__file__)
 OUT_DIR = os.path.join(BASE, "BCB", "Accounts")

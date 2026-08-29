@@ -49,7 +49,7 @@ from utils.disclosure_common import http_get, data_root, now_iso
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s",
                     stream=sys.stdout)
-log = logging.getLogger("scrape_22")
+log = logging.getLogger("scrape_fgc_statistics")
 
 BASE = data_root(__file__)
 OUT_DIR = os.path.join(BASE, "FGC")
