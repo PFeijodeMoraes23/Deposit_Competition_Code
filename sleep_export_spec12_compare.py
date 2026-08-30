@@ -752,6 +752,13 @@ def main():
     # dir never reaches the download; locally the paper directory is the only copy that
     # matters and Rout would just be a second one free to diverge from it.
     out_dir = _paths_mod.rout_dir() if _paths_mod.on_cluster() else _DRAFTS_DIR
+    # EXHIBITS vs DATA. .tex/.png are what the paper reads, so they follow out_dir. The
+    # .pkl files are intermediates -- a serialized model bundle and the per-routine band
+    # pickles -- and they belong in Rout on BOTH sides: they are not exhibits, the paper
+    # never \input's them, and the band pickles are READ back below, so pointing them at
+    # the paper directory both misfiles ~1.1 GB and makes the read miss.
+    data_dir = _paths_mod.rout_dir()
+    data_dir.mkdir(parents=True, exist_ok=True)
 
     order = list(mapping.keys())
 
@@ -811,9 +818,9 @@ def main():
     print(f"Exported LaTeX tables to {out_dir}")
 
     # ---- 2) Pickle Model Information ----
-    with open(out_dir / "est1-4_spec12_all_models.pkl", "wb") as f:
+    with open(data_dir / "est1-4_spec12_all_models.pkl", "wb") as f:
         pickle.dump(models_dict, f)
-    print(f"Exported combined model instances to {out_dir / 'est1-4_spec12_all_models.pkl'}")
+    print(f"Exported combined model instances to {data_dir / 'est1-4_spec12_all_models.pkl'}")
 
     # ---- 3) Plot Implied National Phi_t (single panel, all four strategies) ----
     #
@@ -853,7 +860,7 @@ def main():
         ls = linestyle_map.get(label, '-')
         plot_label = label_rename.get(label, label)
 
-        band_pkl = out_dir / f"ts_link_band_est{est_num}.pkl"
+        band_pkl = data_dir / f"ts_link_band_est{est_num}.pkl"
         if est_num >= 3 and band_pkl.exists():
             # Single-index: bootstrap point path + wild-cluster band.
             try:
@@ -933,7 +940,7 @@ def main():
         drew = False
         for est_num, lab, col, lstyle in ((nt_est, nt_label, "tab:blue", "-"),
                                           (t_est, t_label, "tab:red", "--")):
-            bpkl = out_dir / f"ts_link_band_est{est_num}.pkl"
+            bpkl = data_dir / f"ts_link_band_est{est_num}.pkl"
             if not bpkl.exists():
                 print(f"  [Warning] no band pkl for est{est_num}; skipping in {out_name}")
                 continue

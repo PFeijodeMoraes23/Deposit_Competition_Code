@@ -54,6 +54,10 @@ DRAFTS_DIR = P.drafts_dir()
 # download; locally the paper directory is the copy that matters and Rout would just be a
 # second, divergeable one.
 TEX_TARGETS = (OUTPUT_DIR,) if P.on_cluster() else (DRAFTS_DIR,)
+# The .tex fragments are exhibits and follow TEX_TARGETS. The .csv/.json are the numbers
+# BEHIND the table -- data, not exhibits -- so they stay in Rout on both sides, where the
+# rest of the run's intermediates live and where the archiver already packages them.
+DATA_DIR = OUTPUT_DIR
 
 # 8-digit CNPJ root of the prudential-conglomerate leader -> display brand name.
 # The panel's NomeInstituicao is frequently a subsidiary label with folded accents
@@ -258,8 +262,8 @@ def main():
         (d / "cluster_imbalance.tex").unlink(missing_ok=True)
     # CSV of the underlying numbers
     csv = pd.DataFrame(st["top_n"])
-    for d in TEX_TARGETS:
-        csv.to_csv(d / "cluster_imbalance.csv", index=False, encoding="utf-8")
+    if True:
+        csv.to_csv(DATA_DIR / "cluster_imbalance.csv", index=False, encoding="utf-8")
     # relocated cluster diagnostics (E3 sample)
     diag = {"est": args.est, "sample": "spec12_second_stage",
             "G_nominal": st["G_nominal"], "G_star": st["G_star"], "coefficient_variation": st["cv"],
@@ -267,8 +271,9 @@ def main():
             "max_obs_per_cluster": st["max_size"], "total_observations": int(st["total_obs"]),
             "deposit_hhi": st["hhi"], "inv_hhi": st["inv_hhi"],
             "top_n_by_deposit_share": st["top_n"]}
-    (TEX_TARGETS[0] / "cluster_imbalance.json").write_text(json.dumps(diag, indent=2, ensure_ascii=False), encoding="utf-8")
-    print(f"[OK] wrote cluster_imbalance_panel{{A,B}}.tex + .csv/.json to {TEX_TARGETS[0]}")
+    (DATA_DIR / "cluster_imbalance.json").write_text(json.dumps(diag, indent=2, ensure_ascii=False), encoding="utf-8")
+    print(f"[OK] cluster_imbalance_panel{{A,B}}.tex -> {TEX_TARGETS[0]}; "
+          f".csv/.json -> {DATA_DIR}")
 
 
 if __name__ == "__main__":
