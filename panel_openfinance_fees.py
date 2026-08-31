@@ -208,9 +208,14 @@ def build_service_conglomerate(customer_type: str = "PF") -> pd.DataFrame:
     cmap = p9.build_cnpj_cong_map()               # cnpj (8) -> cod_cong_prudencial
     cmap = cmap.rename(columns={"cnpj": "cnpj8"})
     ofb = ofb.merge(cmap, on="cnpj8", how="left")
-    # Fallback: cnpj8 as its own conglomerate (payment institutions not in the
-    # prudential framework — matches panel_9/scrape_20 convention).
-    ofb["cod_cong_prudencial"] = ofb["cod_cong_prudencial"].fillna(ofb["cnpj8"]).astype(str).str.strip()
+    # Fallback for payment institutions, which the Prudential report does not cover:
+    # 'CNPJ_<int>', the key the market panel files them under (see
+    # panel_fee_merge.cnpj_fallback_key).
+    ofb["cod_cong_prudencial"] = (
+        ofb["cod_cong_prudencial"]
+        .fillna(p9.cnpj_fallback_key(ofb["cnpj8"]))
+        .astype(str).str.strip()
+    )
 
     ofb = ofb.merge(deposit_weights(), on="cnpj8", how="left")
 

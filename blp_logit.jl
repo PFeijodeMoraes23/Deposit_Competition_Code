@@ -651,7 +651,7 @@ end
 const VAR_MAP = Dict(
     "alpha"                => raw"Price coefficient ($\alpha$)",
     "fgc_covered"          => "FGC Covered",
-    "has_ip"               => "Has Payment Institution",
+    "has_ip"               => "Group Contains IP",
     "log_total_assets_lag" => raw"$\ln(\text{Total Assets}_{t-1})$",
     "seg_S2" => "Segment S2", "seg_S3" => "Segment S3",
     "seg_S4" => "Segment S4", "seg_S5" => "Segment S5",

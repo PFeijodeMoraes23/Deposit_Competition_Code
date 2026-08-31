@@ -202,6 +202,21 @@ def load_index(path: Path):
     return {}
 
 
+def dest_root_for(kind, proc_dir: Path, dest_rel: str) -> Path:
+    """Where one classified member is written.
+
+    cluster_processed holds what the table generators read. polfunc is the exception:
+    utils.paths.polfunc_dir() is the location declared authoritative for it, and
+    bbl_polfunc.py writes its own fit there. Landing an ingested polfunc in
+    cluster_processed instead leaves two polfunc_fitted.csv on disk with nothing
+    choosing between them, so a table built from polfunc_dir() and a cost_params built
+    from the cluster can silently come from different estimates.
+    """
+    if kind == "bbl" and Path(dest_rel).name.startswith("polfunc"):
+        return paths.polfunc_dir()
+    return proc_dir
+
+
 def ingest(kind, family, zip_path: Path, raw_dir: Path, proc_dir: Path, index, dry):
     """Copy the archive into cluster_raw/, extract its artifacts into proc_dir.
     -> (record, [(dest_rel, size)])."""
@@ -235,7 +250,7 @@ def ingest(kind, family, zip_path: Path, raw_dir: Path, proc_dir: Path, index, d
                 continue
             info = z.getinfo(m)
             if not dry:
-                out = proc_dir / dest_rel
+                out = dest_root_for(kind, proc_dir, dest_rel) / dest_rel
                 out.parent.mkdir(parents=True, exist_ok=True)
                 with z.open(m) as src, open(out, "wb") as dst:
                     shutil.copyfileobj(src, dst)
@@ -260,11 +275,16 @@ def ingest(kind, family, zip_path: Path, raw_dir: Path, proc_dir: Path, index, d
 
     for note, n in sorted(skipped.items()):
         print(f"   {n:>4} member(s) skipped -- {note}")
-    print(f"   {len(landed)} file(s) -> {proc_dir}")
-    for dest_rel, size in sorted(landed)[:40]:
-        print(f"        {fmt_size(size):>9}  {dest_rel}")
-    if len(landed) > 40:
-        print(f"        ... and {len(landed) - 40} more")
+    by_root = {}
+    for dest_rel, size in landed:
+        by_root.setdefault(dest_root_for(kind, proc_dir, dest_rel), []).append((dest_rel, size))
+    for root in sorted(by_root, key=str):
+        rows = sorted(by_root[root])
+        print(f"   {len(rows)} file(s) -> {root}")
+        for dest_rel, size in rows[:40]:
+            print(f"        {fmt_size(size):>9}  {dest_rel}")
+        if len(rows) > 40:
+            print(f"        ... and {len(rows) - 40} more")
 
     record = {
         "family": family,

@@ -116,7 +116,6 @@ ANATEL_CSV     = os.path.join(ANATEL_DIR,                 "anatel_mca_panel.csv"
 INSS_CSV       = os.path.join(INSS_DIR,                   "inss_mca_panel.csv")
 INCLUSION_CSV  = os.path.join(BCB_DIR, "Inclusion",       "bcb_inclusion_mca_panel.csv")
 CADUNICO_CSV   = os.path.join(CAD_DIR,                    "cadunico_mca_panel.csv")
-TARIFAS_FEE_CSV = os.path.join(BCB_DIR, "Tarifas", "processed", "tarifas_fee_summary.csv")
 BANK_CHARS_CSV = os.path.join(PANEL_DIR,                  "bank_chars_panel.csv")
 
 OUTPUT_CSV     = os.path.join(PANEL_DIR,                  "market_panel.csv")
@@ -138,7 +137,6 @@ if resolve_script_paths is not None:
             "inss_csv": INSS_CSV,
             "inclusion_csv": INCLUSION_CSV,
             "cadunico_csv": CADUNICO_CSV,
-            "tarifas_fee_csv": TARIFAS_FEE_CSV,
             "bank_chars_csv": BANK_CHARS_CSV,
             "output_csv": OUTPUT_CSV,
         },
@@ -152,7 +150,6 @@ if resolve_script_paths is not None:
     INSS_CSV = _paths["inss_csv"]
     INCLUSION_CSV = _paths["inclusion_csv"]
     CADUNICO_CSV = _paths["cadunico_csv"]
-    TARIFAS_FEE_CSV = _paths["tarifas_fee_csv"]
     BANK_CHARS_CSV = _paths["bank_chars_csv"]
     OUTPUT_CSV = _paths["output_csv"]
 
@@ -658,99 +655,6 @@ def merge_characteristics(dep: pd.DataFrame) -> pd.DataFrame:
     return result
 
 
-## ---------------------------------------------------------------------------------
-## 6.5) LOAD AND MERGE TARIFF FEE SUMMARY
-## ---------------------------------------------------------------------------------
-#
-# Tariff fees are conglomerate-level product characteristics (not MCA-level).
-# They are joined on CodConglomeradoPrudencial x year x quarter using the
-# most recent tariff snapshot available on or before the quarter’s end date.
-# With only a single snapshot the join degenerates to a simple left-merge.
-# ---------------------------------------------------------------------------------
-
-def load_tarifas() -> pd.DataFrame | None:
-    """Load the fee summary panel produced by tarifas_scrape_1.py."""
-    if not os.path.exists(TARIFAS_FEE_CSV):
-        logging.warning(
-            f"Tarifas fee summary not found -- fee columns will be NaN: {TARIFAS_FEE_CSV}"
-        )
-        return None
-    df = pd.read_csv(TARIFAS_FEE_CSV, dtype={"cod_cong_prudencial": str})
-    df["data_coleta"] = pd.to_datetime(df["data_coleta"], errors="coerce")
-    logging.info(
-        f"Loaded tarifas fee summary: {len(df):,} rows  "
-        f"({df['cod_cong_prudencial'].nunique()} conglomerates  "
-        f"{len(df.columns) - 2} fee columns)"
-    )
-    return df
-
-
-def merge_tarifas(panel: pd.DataFrame, tarifs: pd.DataFrame | None) -> pd.DataFrame:
-    """
-    Left-join tariff fee columns onto the market panel on CodConglomeradoPrudencial.
-
-    Time matching
-    -------------
-    For each panel (year, quarter), the most recent scrape whose data_coleta falls
-    on or before the quarter’s end date is used.  With a single snapshot this is
-    trivially the one available snapshot.  When multiple scrapes exist the join
-    becomes a time-varying last-observation-carried-forward.
-    """
-    if tarifs is None or tarifs.empty:
-        return panel
-
-    # Build a quarter-end date for each (year, quarter) in the panel
-    qends = (
-        panel[["year", "quarter"]]
-        .drop_duplicates()
-        .copy()
-    )
-    # Quarter Q ends on month Q*3, last day: use period arithmetic
-    qends["qend"] = pd.PeriodIndex(
-        qends["year"].astype(str) + "Q" + qends["quarter"].astype(str), freq="Q"
-    ).to_timestamp(how="end").normalize()
-
-    # For each (CodConglPrud, year, quarter), pick the most recent scrape date
-    # that is <= qend.  Build a merge table: (CodConglPrud, year, quarter) -> fees.
-    snapshots = tarifs["data_coleta"].sort_values().unique()  # sorted asc
-    as_of_rows: list[dict] = []
-    fee_cols = [c for c in tarifs.columns if c.startswith("fee_")]
-
-    for _, qrow in qends.iterrows():
-        valid = [s for s in snapshots if s <= qrow["qend"]]
-        if not valid:
-            continue
-        snap = max(valid)  # most recent snapshot <= quarter end
-        snap_fees = tarifs[tarifs["data_coleta"] == snap].copy()
-        snap_fees = snap_fees.drop(columns=["data_coleta"])
-        snap_fees["year"]    = qrow["year"]
-        snap_fees["quarter"] = qrow["quarter"]
-        as_of_rows.append(snap_fees)
-
-    if not as_of_rows:
-        logging.warning("merge_tarifas: no valid snapshot found for any panel quarter.")
-        return panel
-
-    as_of_df = pd.concat(as_of_rows, ignore_index=True)
-    as_of_df = as_of_df.rename(columns={"cod_cong_prudencial": "CodConglomeradoPrudencial"})
-    as_of_df["CodConglomeradoPrudencial"] = as_of_df["CodConglomeradoPrudencial"].astype(str)
-
-    before = len(panel)
-    panel = panel.merge(
-        as_of_df,
-        on=["CodConglomeradoPrudencial", "year", "quarter"],
-        how="left",
-    )
-    assert len(panel) == before, "merge_tarifas unexpectedly duplicated rows"
-
-    matched = panel[fee_cols[0]].notna().sum() if fee_cols else 0
-    logging.info(
-        f"  Tarifas merged: {len(fee_cols)} fee columns  "
-        f"{matched:,}/{len(panel):,} rows matched"
-    )
-    return panel
-
-
 ## -----------------------------------------------------------------------------
 ## 7) FILL NATIONAL ROWS WITH POPULATION-WEIGHTED NATIONAL AVERAGES
 ## -----------------------------------------------------------------------------
@@ -1090,9 +994,8 @@ def main() -> None:
     # D. Fill NATIONAL (fintech) rows with pop-weighted national averages
     panel = fill_national_averages(panel)
 
-    # D2. Merge tariff fee columns (conglomerate-level, time-matched)
-    tarifs = load_tarifas()
-    panel = merge_tarifas(panel, tarifs)
+    # Fee columns live in market_panel_with_fees.csv, built by
+    # `python panel_fee_merge.py --patch-market` after this script.
 
     # D3. Merge bank characteristics (total assets, etc.)
     bank_chars = load_bank_chars()

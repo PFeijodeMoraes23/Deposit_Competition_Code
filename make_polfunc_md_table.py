@@ -57,7 +57,7 @@ LABELS = {
     "const": "Constant",
     "log_total_assets_lag": "Log total assets (t−1)",
     "equity_ratio_lag": "Equity ratio (t−1)",
-    "has_ip": "IP subsidiary",
+    "has_ip": "Group Contains IP",
     "asset_return_qoq_lag": "Asset return (QoQ, t−1)",
     "npl_provision_ratio_lag": "NPL provisions ratio (t−1)",
     "credit_assets_lag": "Credit / assets (t−1)",

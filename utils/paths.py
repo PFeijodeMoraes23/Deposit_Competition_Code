@@ -271,6 +271,13 @@ TARIFAS_PROC: Path  = TARIFAS_DIR / "processed"
 TARIFAS_CACHE: Path = TARIFAS_DIR / "cache"
 TARIFAS_RAW: Path   = TARIFAS_DIR / "raw"
 
+# Service quality: BCB complaints ranking, app-store ratings, Reclame Aqui.
+# Raw subtrees are created by their scrapers: complaints/, app_play/, app_ios/,
+# reclameaqui/, wayback_cdx/, wayback_html/.
+QUALITY_DIR: Path  = BCB / "Quality"
+QUALITY_RAW: Path  = QUALITY_DIR / "raw"
+QUALITY_PROC: Path = QUALITY_DIR / "processed"
+
 # ---------------------------------------------------------------------------
 # Stage-6 firm disclosures & other sources (unchanged location)
 # ---------------------------------------------------------------------------
@@ -335,5 +342,6 @@ __all__ = [
     "ANATEL_RAW", "CADUNICO_RAW", "PIX_RAW", "IBGE_RAW",
     "ANATEL_DIR", "CADUNICO_DIR", "IBGE_DIR", "INCLUSION_DIR", "PIX_DIR",
     "TARIFAS_DIR", "TARIFAS_PROC", "TARIFAS_CACHE", "TARIFAS_RAW",
+    "QUALITY_DIR", "QUALITY_RAW", "QUALITY_PROC",
     "FIRM_DISCLOSURES", "WORLDBANK", "FGC", "ACCOUNTS",
 ]

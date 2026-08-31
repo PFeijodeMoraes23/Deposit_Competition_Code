@@ -58,6 +58,7 @@ import os
 import json
 import pickle
 import argparse
+import pathlib
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -801,6 +802,11 @@ def save_outputs(results: dict, df_fitted: pd.DataFrame) -> None:
             'coefficients': res_dict['coefficients'],
             'std_errors': res_dict['std_errors'],
             'pvalues': res_dict['pvalues'],
+            # build_polfunc_table anchors the intercept's scale on this row, and it
+            # blanks the row rather than raising when the key is absent -- so a summary
+            # without it renders a table that looks complete and is missing a statistic.
+            'mean_depvar': res_dict.get('mean_depvar'),
+            'regressors': res_dict.get('regressors'),
         }
 
     json_path = OUTPUT_DIR / f"{CFG['out_prefix']}_summary.json"
@@ -844,7 +850,7 @@ _VAR_LABELS = {
     'const': 'Constant',
     'log_total_assets_lag': 'Log Total Assets ($t-1$)',
     'equity_ratio_lag': 'Equity Ratio ($t-1$)',
-    'has_ip': 'IP Subsidiary',
+    'has_ip': 'Group Contains IP',
     'asset_return_qoq_lag': 'Asset Return (QoQ, $t-1$)',
     'npl_provision_ratio_lag': 'NPL Provisions Ratio ($t-1$)',
     'credit_assets_lag': 'Credit / Assets ($t-1$)',
@@ -1206,6 +1212,64 @@ def compile_polfunc_preview(frags: dict) -> None:
         print(f"  [WARN] preview compilation error: {exc}")
 
 
+def _resolve_results_pkl(spec: str):
+    """-> the pickle to render from. A bare --from-pkl prefers polfunc_dir(), which
+    utils.paths declares authoritative, then the BBL cluster_processed tree that older
+    ingests wrote into."""
+    name = f"{CFG['out_prefix']}_results.pkl"
+    if spec != 'auto':
+        p = pathlib.Path(spec)
+        if not p.exists():
+            sys.exit(f"[FATAL] --from-pkl path does not exist: {p}")
+        return p
+    cands = [OUTPUT_DIR / name,
+             _paths.bbl_output_dir() / 'cluster_processed' / name]
+    for c in cands:
+        if c.exists():
+            return c
+    sys.exit("[FATAL] no {} found in: {}".format(name, "  |  ".join(str(c) for c in cands)))
+
+
+def render_fragments_from_pkl(spec: str) -> None:
+    """Rebuild the paper fragments from a stored fit, estimating nothing.
+
+    build_polfunc_table reads plain values only -- regressors, coefficients, std_errors,
+    pvalues, r_squared, n_obs, n_clusters, G_star, mean_depvar -- so refreshing the tables
+    after a new fit lands does not require re-running the regressions. The identifying
+    statistics are printed so the vintage being rendered is visible in the log rather than
+    inferred from a file date.
+    """
+    p = _resolve_results_pkl(spec)
+    st = p.stat()
+    print(f"  source : {p}")
+    print(f"  written: {time.strftime('%Y-%m-%d %H:%M', time.localtime(st.st_mtime))}"
+          f"  ({st.st_size:,} B)")
+    with open(p, 'rb') as f:
+        results = pickle.load(f)
+    if not results:
+        sys.exit("[FATAL] the pickle holds no results.")
+
+    print("")
+    print(f"  {'variant':26s} {'N':>10s} {'G':>6s} {'R2':>9s}  mean_depvar")
+    missing = []
+    for label in sorted(results):
+        r = results[label]
+        if 'mean_depvar' not in r:
+            missing.append(label)
+        mdv = r.get('mean_depvar')
+        shown = '--' if mdv is None else format(mdv, '.6g')
+        print(f"  {label:26s} {r['n_obs']:>10,} {r['n_clusters']:>6} "
+              f"{r['r_squared']:>9.5f}  {shown}")
+    if missing:
+        print(f"  [WARN] {len(missing)} variant(s) carry no mean_depvar; that row will be "
+              f"blank: {', '.join(missing)}")
+
+    print("")
+    print("  --- Paper table fragments + preview ---")
+    frags = write_polfunc_fragments(results)
+    compile_polfunc_preview(frags)
+
+
 # ==============================================================================
 # 8. Main
 # ==============================================================================
@@ -1217,11 +1281,26 @@ def main():
         help='Regressand: "spread" (default; QoQ deposit spread, fed to BBL Step 2) or '
              '"rate" (annualized deposit rate = (1+rate_qoq)^4-1). "rate" writes a SEPARATE '
              'polfunc_rate_* namespace and does NOT overwrite the spread policy.')
+    parser.add_argument(
+        '--from-pkl', nargs='?', const='auto', default=None, metavar='PATH',
+        help='Render the paper table fragments from an EXISTING results pickle '
+             'instead of re-fitting. A bare --from-pkl resolves it from '
+             'polfunc_dir(), then the BBL cluster_processed tree. Only the .tex '
+             'fragments and the preview are written; the fitted CSV and summary '
+             'JSON are left alone.')
     args = parser.parse_args()
 
     # Regressand selection: switch CFG to the rate namespace if requested.
     if args.depvar == 'rate':
         CFG.update(_CFG_RATE)
+
+    if args.from_pkl is not None:
+        print("=" * 70)
+        print("  Policy Function table fragments -- rendered from a stored fit")
+        print(f"  Namespace: {CFG['out_prefix']}_*   (no estimation is run)")
+        print("=" * 70)
+        render_fragments_from_pkl(args.from_pkl)
+        return
 
     print("=" * 70)
     print("  Policy Function Estimation (BBL Step 1)")

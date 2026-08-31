@@ -95,7 +95,7 @@ STAGE_LABELS = {
 THETA1_LABELS = {
     "alpha":                r"Price coefficient ($\alpha$)",
     "fgc_covered":          r"FGC Covered",
-    "has_ip":               r"Has Payment Institution",
+    "has_ip":               r"Group Contains IP",
     "seg_S2":               r"Segment S2",
     "seg_S3":               r"Segment S3",
     "seg_S4":               r"Segment S4",
@@ -109,7 +109,7 @@ THETA1_LABELS = {
 COEF_LABELS = {
     "spread":               r"Spread",
     "fgc_covered":          r"FGC",
-    "has_ip":               r"Payment Inst.",
+    "has_ip":               r"Group Contains IP",
     "seg_S2":               r"Seg.\ S2",
     "seg_S3":               r"Seg.\ S3",
     "seg_S4":               r"Seg.\ S4",

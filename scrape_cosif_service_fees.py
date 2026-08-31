@@ -38,9 +38,13 @@ File naming conventions
 Output files  (BCB/Tarifas/processed/)
 ---------------------------------------
   cosif_service_fees_institution.parquet   institution × month panel
-  cosif_service_fees_conglomerate.parquet  conglomerate × month panel
   cosif_service_fees_institution.csv       same, CSV copy
-  cosif_service_fees_conglomerate.csv      same, CSV copy
+
+The conglomerate-level object is cosif_fee_quarterly_conglomerate.csv, built by
+panel_fee_merge.py from this institution panel and the IF Data conglomerate map.
+This script does not write one: document 4020 stops appearing after 2022, so the
+4020 rows carry no COD_CONGL at all and a panel built from them is a single
+national time series with an empty key.
 
 Design
 ------
@@ -101,7 +105,6 @@ DEP_ALL_PREFIX = "410"       # Total deposits header (41000007)
 KEEP_PREFIXES = (SVC_PREFIX, DEP_DEMAND, DEP_SAVINGS, DEP_TIME, DEP_ALL_PREFIX)
 
 INST_DOC  = "4010"           # institution-level (always present)
-CONG_DOC  = "4020"           # conglomerate-level (only pre-2023 files)
 
 
 # ---------------------------------------------------------------------------
@@ -144,12 +147,12 @@ def _process_zip(zip_path: str) -> list[dict]:
     df.columns = [c.replace("#", "").strip() for c in df.columns]
 
     required = {"DATA_BASE", "DOCUMENTO", "CNPJ", "NOME_INSTITUICAO",
-                "COD_CONGL", "NOME_CONGL", "CONTA", "NOME_CONTA", "SALDO"}
+                "CONTA", "NOME_CONTA", "SALDO"}
     if not required.issubset(df.columns):
         return []
 
     # Filter to relevant documents and accounts
-    doc_mask  = df["DOCUMENTO"].isin([INST_DOC, CONG_DOC])
+    doc_mask  = df["DOCUMENTO"] == INST_DOC
     acct_mask = df["CONTA"].str.startswith(KEEP_PREFIXES, na=False)
     sub = df[doc_mask & acct_mask].copy()
 
@@ -168,14 +171,11 @@ def _process_zip(zip_path: str) -> list[dict]:
     sub["cnpj"] = sub["CNPJ"].str.strip().str.zfill(8)
     sub["data_base"] = pd.to_numeric(sub["DATA_BASE"], errors="coerce").astype("Int64")
 
-    keep_cols = ["data_base", "DOCUMENTO", "cnpj", "NOME_INSTITUICAO",
-                 "COD_CONGL", "NOME_CONGL", "CONTA", "NOME_CONTA", "saldo_num"]
+    keep_cols = ["data_base", "cnpj", "NOME_INSTITUICAO",
+                 "CONTA", "NOME_CONTA", "saldo_num"]
     sub = sub[[c for c in keep_cols if c in sub.columns]]
     sub = sub.rename(columns={
-        "DOCUMENTO": "documento",
         "NOME_INSTITUICAO": "nome_instituicao",
-        "COD_CONGL": "cod_congl",
-        "NOME_CONGL": "nome_congl",
         "CONTA": "conta",
         "NOME_CONTA": "nome_conta",
     })
@@ -187,20 +187,15 @@ def _process_zip(zip_path: str) -> list[dict]:
 # Build ratio panel from long records
 # ---------------------------------------------------------------------------
 
-def _build_panel(records: list[dict], doc_code: str) -> pd.DataFrame:
-    """
-    Pivot long records into a wide panel with fee/deposit ratios.
-
-    doc_code: INST_DOC or CONG_DOC
-    """
+def _build_panel(records: list[dict]) -> pd.DataFrame:
+    """Pivot long institution records into a wide panel with fee/deposit ratios."""
     df = pd.DataFrame(records)
-    df = df[df["documento"] == doc_code].copy()
 
     if df.empty:
         return pd.DataFrame()
 
-    id_col   = "cnpj"     if doc_code == INST_DOC else "cod_congl"
-    name_col = "nome_instituicao" if doc_code == INST_DOC else "nome_congl"
+    id_col   = "cnpj"
+    name_col = "nome_instituicao"
 
     # Fill NaN strings so groupby doesn't silently drop rows
     for col in (id_col, name_col, "conta"):
@@ -359,11 +354,7 @@ def main(workers: int | None = None, test: bool = False) -> None:
 
     # Build institution panel (4010)
     log.info("Building institution panel …")
-    inst_panel = _build_panel(all_records, INST_DOC)
-
-    # Build conglomerate panel (4020)
-    log.info("Building conglomerate panel …")
-    cong_panel = _build_panel(all_records, CONG_DOC)
+    inst_panel = _build_panel(all_records)
 
     # Save with Polars (fast parquet) or pandas fallback
     try:
@@ -373,19 +364,17 @@ def main(workers: int | None = None, test: bool = False) -> None:
         _use_polars = False
         log.warning("polars not installed — saving as CSV only (run: pip install polars)")
 
-    for panel, tag in [(inst_panel, "institution"), (cong_panel, "conglomerate")]:
-        if panel.empty:
-            log.warning("Panel %s is empty — skipping.", tag)
-            continue
-
-        csv_path = OUT_DIR / f"cosif_service_fees_{tag}.csv"
-        panel.to_csv(csv_path, index=False)
-        log.info("%s panel: %d rows × %d cols → %s",
-                 tag, len(panel), len(panel.columns), csv_path.name)
+    if inst_panel.empty:
+        log.warning("Institution panel is empty — nothing saved.")
+    else:
+        csv_path = OUT_DIR / "cosif_service_fees_institution.csv"
+        inst_panel.to_csv(csv_path, index=False)
+        log.info("institution panel: %d rows × %d cols → %s",
+                 len(inst_panel), len(inst_panel.columns), csv_path.name)
 
         if _use_polars:
-            pq_path = OUT_DIR / f"cosif_service_fees_{tag}.parquet"
-            pl.from_pandas(panel).write_parquet(str(pq_path), compression="zstd")
+            pq_path = OUT_DIR / "cosif_service_fees_institution.parquet"
+            pl.from_pandas(inst_panel).write_parquet(str(pq_path), compression="zstd")
             log.info("  parquet → %s", pq_path.name)
 
     log.info("=== Done ===")
