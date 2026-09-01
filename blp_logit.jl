@@ -752,19 +752,11 @@ function build_logit_comparison_tex(data::AbstractDict, ids::Vector{Int},
     n    = length(ids)
     hdr  = "Variable & " * join([get(ESTIMATION_ENUM_REF, id, "E$id") for id in ids], " & ") * TROW
     # The segment dummies are nuisance controls already printed IN FULL, per routine, by the appendix
-    # tables est{id}_spec12_logit.tex — so we omit them here and point the reader there rather than
-    # carrying a duplicate `_seg` twin of this table (four extra rows, no information). Do NOT write
-    # "available on request": they ARE reported, just in the per-routine tables.
-    # The per-routine appendix tables take their label from the routine id (see the \label
-    # emitted below), so this range is derived from `ids` rather than written out. A lineup
-    # change then moves both ends by itself instead of leaving a \ref that compiles to ??.
-    seg_refs = length(ids) == 1 ?
-        "\\ref{tab:demand_logit_est$(ids[1])_spec12}" :
-        "\\ref{tab:demand_logit_est$(first(ids))_spec12}--\\ref{tab:demand_logit_est$(last(ids))_spec12}"
+    # tables est{id}_spec12_logit.tex — so we omit them here rather than carrying a duplicate `_seg`
+    # twin of this table (four extra rows, no information). Do NOT write "available on request":
+    # they ARE reported, just in the per-routine tables.
     seg_sentence = with_seg ? "" :
-        raw"Segment dummies (S2--S5) are included in every strategy but not reported; the full " *
-        raw"coefficient vector, including the segment dummies, appears in the per-routine tables " *
-        seg_refs * ". "
+        raw"Segment dummies (S2--S5) are included in every strategy but not reported. "
     note = raw"\multicolumn{" * string(n + 1) *
         raw"}{p{\dimexpr\textwidth-2\tabcolsep\relax}}{\scriptsize \textit{Notes:} " *
         seg_sentence *
