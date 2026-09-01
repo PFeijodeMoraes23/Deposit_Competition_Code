@@ -70,7 +70,7 @@ MODEL_COLORS = {"E1": "#455A64", "E2": "#2E7D32",
 # market-means, two different objects that read as a discrepancy side by side.
 REF_ESTS = tuple(x.strip() for x in
                  os.environ.get("SLEEP_ENTRY_REFS",
-                                ",".join(f"E{e}" for e in _routines.ACTIVE)
+                                ",".join(f"E{e}" for e in _routines.LINK_ESTS)
                                 ).split(",") if x.strip())
 
 

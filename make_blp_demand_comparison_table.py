@@ -56,6 +56,9 @@ try:
 except Exception:
     pass
 
+# Display covers the whole reported lineup. link_ests names the routines that share the
+# single-index link and drives the cluster run set; which routines a TABLE shows is a
+# separate choice, so these read `active` instead.
 DEFAULT_ESTS = list(_routines.LINK_ESTS)
 
 # Which RC stage each comparison table reports.

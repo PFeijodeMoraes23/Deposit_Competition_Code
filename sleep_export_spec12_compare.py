@@ -23,6 +23,7 @@ if _THIS_DIR not in sys.path:
     sys.path.insert(0, _THIS_DIR)
 from utils import state_transform as _st  # noqa: E402
 from utils import se_national as _sen  # noqa: E402
+from utils import sleep_notes as _notes
 from sleep_export_link import clean_name as _clean_name  # noqa: E402
 
 # Mock NonLinearResults for unpickling estimation_3_sleep pickles.
@@ -104,12 +105,17 @@ def ame_ci_note(ci_cols, results_dict):
         meta.setdefault("scheme", m.get("scheme"))
     lbl = ", ".join(sorted(str(c) for c in ci_cols))
     b_s = (f" $B={meta['B']}$ {meta['scheme']} draws," if meta.get("B") else "")
-    return (r"Column(s) " + lbl + r" report a 95\% bias-corrected percentile interval in "
-            r"brackets, not a standard error: their inference is a TWO-STAGE wild cluster "
-            r"bootstrap in which the index direction is re-solved and the link re-profiled at "
+    return (r"Column(s) " + lbl + r" report a 95\% bias-corrected percentile interval "
+            r"(\textcite{efron1987better}) in brackets, not a standard error: their "
+            r"inference is a TWO-STAGE wild cluster bootstrap (\textcite{klinesantos2012}) "
+            r"in which the index direction is re-solved and the link re-profiled at "
             r"every draw," + b_s + r" and the reported object is a tangent-cone interval "
             r"rather than a Wald statistic, because the link's shape constraints are active at "
-            r"the estimate. All other columns report standard errors in parentheses. ")
+            r"the estimate: on that boundary the bootstrap of the constrained estimator is "
+            r"inconsistent (\textcite{andrews2000inconsistency}) and the average marginal "
+            r"effect is only directionally differentiable, so the cone construction is the "
+            r"numerical delta method of \textcite{fangsantos2019} and \textcite{hongli2018}. "
+            r"All other columns report standard errors in parentheses. ")
 
 
 def _twostage_band_row(res, var):
@@ -352,14 +358,25 @@ def build_latex_table(results_dict, order_keys, target_vars, out_path, title="",
                    r"difference. $t$-statistics and stars are invariant to these units. State "
                    r"variables are grand-mean centered, so the Constant is $\hat{\phi}$ at the "
                    r"average market")
-    notes_str = (r"\multicolumn{" + str(len(order_keys) + 1) + r"}{p{\dimexpr\textwidth-2\tabcolsep\relax}}"
-                 r"{\scriptsize\textit{Notes:} Standard errors (wild cluster bootstrap at the "
-                 r"conglomerate level, except on the rows marked $\dagger$ below; \textcite{cameron2008bootstrap}, "
-                 r"\textcite{mackinnon2017wild}) in parentheses. Columns index the estimation "
-                 r"strategies enumerated in Section~\ref{sec:empirical:sleep}" + _stage_note + r". "
-                 # Substituted at the write site from the schemes select_se actually returned.
-                 + _sen.NOTE_TOKEN + _sen.AME_SE_TOKEN + AME_CI_TOKEN +
-                 r"Significance levels: *** $p<0.01$, ** $p<0.05$, * $p<0.1$.}")
+    if is_first_stage:
+        notes_str = (r"\multicolumn{" + str(len(order_keys) + 1) + r"}{p{\dimexpr\textwidth-2\tabcolsep\relax}}"
+                     r"{\scriptsize\textit{Notes:} First-stage coefficients; the dependent variable is "
+                     r"the quarterly deposit spread. Standard errors (wild cluster bootstrap at the "
+                     r"conglomerate level; \textcite{cameron2008bootstrap}, \textcite{mackinnon2017wild}) "
+                     r"in parentheses. Columns index the estimation strategies enumerated in "
+                     r"Section~\ref{sec:empirical:sleep}. Coefficients are in \emph{percentage points of "
+                     r"the quarterly deposit spread} per the unit given in the row label, matching the "
+                     r"units of the second-stage tables. $t$-statistics and stars are invariant to these "
+                     r"units. "
+                     # Expands to nothing while no DISPLAYED row is national; if one ever is, it
+                     # names the clustering that row actually used.
+                     + _sen.NOTE_TOKEN +
+                     r"Significance levels: *** $p<0.01$, ** $p<0.05$, * $p<0.1$.}")
+    else:
+        # The shared second-stage note: defined once in utils/sleep_notes so the wording cannot
+        # drift between this table and the per-routine appendix tables of the same estimates.
+        notes_str = (r"\multicolumn{" + str(len(order_keys) + 1) + r"}{p{\dimexpr\textwidth-2\tabcolsep\relax}}"
+                     r"{\scriptsize\textit{Notes:} " + _notes.second_stage_note() + r"}")
     tex.append(notes_str)
     tex.append(r"\endlastfoot")
 
@@ -644,15 +661,16 @@ def build_latex_table_landscape(results_dict, order_keys, target_vars, out_path,
             r"\end{tabular}",
             r"\begin{tablenotes}[flushleft]",
             r"\footnotesize",
-            r"\item \textit{Notes:} Standard errors (wild cluster bootstrap at the "
-            r"conglomerate level, except on the rows marked $\dagger$ below; "
-            r"\textcite{cameron2008bootstrap}, \textcite{mackinnon2017wild}) in parentheses. Columns "
-            r"index the estimation strategies enumerated in Section~\ref{sec:empirical:sleep}" +
-            _stage_note +
-            r". "
-            # Substituted at the write site from the schemes select_se actually returned.
-            + _sen.NOTE_TOKEN + _sen.AME_SE_TOKEN + AME_CI_TOKEN +
-            r"Significance levels: *** $p<0.01$, ** $p<0.05$, * $p<0.1$.",
+            (r"\item \textit{Notes:} " + _notes.second_stage_note()) if not first_stage else
+            (r"\item \textit{Notes:} First-stage coefficients; the dependent variable is the "
+             r"quarterly deposit spread. Standard errors (wild cluster bootstrap at the "
+             r"conglomerate level; \textcite{cameron2008bootstrap}, \textcite{mackinnon2017wild}) in "
+             r"parentheses. Columns index the estimation strategies enumerated in "
+             r"Section~\ref{sec:empirical:sleep}. Coefficients are in \emph{percentage points of the "
+             r"quarterly deposit spread} per the unit given in the row label, matching the units of "
+             r"the second-stage tables. $t$-statistics and stars are invariant to these units. "
+             + _sen.NOTE_TOKEN +
+             r"Significance levels: *** $p<0.01$, ** $p<0.05$, * $p<0.1$."),
             r"\end{tablenotes}",
             r"\end{threeparttable}",
             r"\end{table}",

@@ -668,7 +668,7 @@ const TABLE_SUBMODELS = [("priceonly", "Price Only"), ("core", "Price + Core"),
 # sleepiness-strategy enumerate items in V_Main §(sec:empirical:sleep) — same convention as
 # est1-4_spec12_stage2_comparison.tex. ESTIMATION_ENUM_REF (routines.jl) carries a \ref for
 # every id listed here; an id absent from it falls back to a plain E<id> header.
-const COMPARISON_IDS  = ACTIVE_ROUTINES
+const COMPARISON_IDS  = LINK_ROUTINES
 # Routines that get a per-routine est{id}_spec12_logit.tex. The routines are AUTO-DISCOVERED from the
 # demand parquets, so this list is what keeps a stray parquet (an exploratory routine, an id outside
 # the reported lineup) from silently writing a table into the Drafts folder on every run. An explicit

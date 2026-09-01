@@ -496,7 +496,8 @@ def build_table1(df: pd.DataFrame, weight_col: str | None) -> tuple[pd.DataFrame
     moments_b = _moments(fq_b, T1_VARS_B)
     moments_d = _moments(fq_d, T1_VARS_D)
 
-    # Combined (pooled) panel for Panel C — variables common to both types
+    # Pooled B+D moments — variables common to both types. The rendered table shows
+    # the B and D panels only; these feed the *_All companion CSV.
     T1_VARS_COMMON = T1_VARS_D   # n_mcas_served is B-type only; all others shared
     cols_keep = (["CodConglomeradoPrudencial", "year", "quarter"]
                  + T1_VARS_COMMON
@@ -562,8 +563,6 @@ def render_table1(moments_b, moments_d, moments_all, meta, weight_col, suffix) -
                    moments_b, meta["n_firms_B"], meta["n_firm_quarters_B"])
     body += _panel("Panel B: Digital (D) Firms",
                    moments_d, meta["n_firms_D"], meta["n_firm_quarters_D"])
-    body += _panel("Panel C: All Firms (Pooled)",
-                   moments_all, meta["n_firms_all"], meta["n_firm_quarters_all"])
 
     tex = "\n".join([
         r"\setstretch{1.0}",
@@ -1074,6 +1073,9 @@ D_COLOR    = "#E64A19"   # digital (D)
 NATL_COLOR = "#4F4F4F"   # pooled B+D / policy series (not a bank type)
 GRID_COLOR = "#D5D5D0"
 MUTED_INK  = "#5A5A57"
+# Axis frame, ticks and axis labels. Kept distinct from MUTED_INK so annotation ink
+# (gridlines, the Pix rule, threshold labels) stays light while the axes read solid.
+AXIS_INK   = "#000000"
 PIX_YEAR   = 2020.5      # Pix launched Nov 2020
 
 
@@ -1123,15 +1125,15 @@ def render_market_structure_figure(t2_df: pd.DataFrame, suffix: str = "") -> Non
 
     def _style(ax, title, ylabel, pix_label=False):
         ax.set_title(title, fontsize=10.5, loc="left", pad=6, color="#111111")
-        ax.set_ylabel(ylabel, fontsize=9, color=MUTED_INK)
+        ax.set_ylabel(ylabel, fontsize=9, color=AXIS_INK)
         ax.grid(True, axis="y", color=GRID_COLOR, linewidth=0.6, alpha=0.9)
         ax.set_axisbelow(True)
         for s in ("top", "right"):
             ax.spines[s].set_visible(False)
         for s in ("left", "bottom"):
-            ax.spines[s].set_color("#BFBFBA")
+            ax.spines[s].set_color(AXIS_INK)
             ax.spines[s].set_linewidth(0.8)
-        ax.tick_params(labelsize=9, colors=MUTED_INK, length=3)
+        ax.tick_params(labelsize=9, colors=AXIS_INK, length=3)
         # Pix is a genuine event threshold, so a dashed rule is correct here
         # (gridlines stay solid); matches make_margin_figures.py.
         ax.axvline(PIX_YEAR, color="grey", lw=0.8, ls="--", alpha=0.6, zorder=1)

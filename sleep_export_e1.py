@@ -45,6 +45,7 @@ def stars(p):
 from sleep_export_link import clean_name, disp  # noqa: E402
 from utils import state_transform as _st  # noqa: E402
 from utils import se_national as _sen  # noqa: E402
+from utils import sleep_notes as _notes
 
 def build_first_stage_table(results_dict):
     panels = ['Base', 'Macro', 'Tech']
@@ -92,6 +93,7 @@ def build_first_stage_table(results_dict):
 
     lines = [
         r"\setstretch{1.0}",
+        r"\footnotesize",
         r"\begin{xltabular}{\textwidth}{>{\raggedright\arraybackslash}p{0.34\textwidth} *{3}{>{\centering\arraybackslash}X}}",
         rf"    \caption{{{caption}}}\label{{{label}}} \\",
         r"    \toprule",
@@ -231,20 +233,7 @@ def build_second_stage_table(results_dict):
     caption = f"Second Stage --- Estimation Strategy~{_routines.est_ref(1)}"
     label = "tab:est1_second_stage"
     notes = (
-        r"\footnotesize \textit{Notes:} Standard errors (wild cluster bootstrap at the "
-        r"conglomerate level; \textcite{cameron2008bootstrap}, \textcite{mackinnon2017wild}) "
-        r"in parentheses. Coefficients are effects on $\phi$, expressed in "
-        r"\emph{percentage points of the sleepy share} per the unit given in the row "
-        r"label; shares and rates are in percentage points, and Pix Available is a discrete "
-        r"$0\to1$ difference. $t$-statistics, $p$-values and significance stars are "
-        r"invariant to these units. State variables are grand-mean centred at their pooled "
-        r"estimation-sample means, so the Constant is $\hat{\phi}$ at the average market. "
-        # Filled in at the END of this function from the schemes select_se actually returned,
-        # so the note can never describe a calculation that did not run (adversarial review,
-        # 2026-07-30: the previous unconditional wording claimed a quarter-clustered bootstrap
-        # on tables where every national cell had fallen back to conglomerate).
-        + _sen.NOTE_TOKEN +
-        r"Significance levels: *** $p<0.01$, ** $p<0.05$, * $p<0.1$."
+        r"\footnotesize \textit{Notes:} " + _notes.second_stage_note()
     )
 
     def _get_res(ek, p):
@@ -256,6 +245,7 @@ def build_second_stage_table(results_dict):
 
     lines = [
         r"\setstretch{1.0}",
+        r"\footnotesize",
         r"\setlength{\tabcolsep}{3pt}",
         r"\begin{xltabular}{\textwidth}{>{\raggedright\arraybackslash}p{0.34\textwidth} *{4}{>{\centering\arraybackslash}X}}",
         rf"    \caption{{{caption}}}\label{{{label}}} \\",

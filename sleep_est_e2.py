@@ -321,8 +321,10 @@ def run_pooled_first_stage(df, spec_instruments, exogenous_controls):
     df_fs = df[valid_mask].copy()
 
     if len(df_fs) == 0:
-        df['v_hat'] = 0.0
-        df['v_hat_x_lagged_dep'] = 0.0
+        # No first stage ran, so every k=4,5 row is uninstrumented and must not enter the
+        # control-function second stage; k=1,2 are exogenous and stay in at zero.
+        df['v_hat'] = np.where(endog_mask, np.nan, 0.0)
+        df['v_hat_x_lagged_dep'] = df['v_hat'] * df['lagged_deposits']
         return df, None
 
     mod = sm.OLS(df_fs['spread_qoq'], sm.add_constant(df_fs[first_stage_vars]))
@@ -331,14 +333,30 @@ def run_pooled_first_stage(df, spec_instruments, exogenous_controls):
     res = apply_imbalanced_cluster_correction(res, cluster_series,
                                               periods=df_fs['time_id'])
 
-    # Rows excluded from the first stage (endogenous k=4,5 rows whose instruments are missing — chiefly
-    # 2013-2015, where prudential-conglomerate bank characteristics do not exist) get v_hat = NaN, NOT 0.
-    # A zero here would smuggle those rows into the control-function (IV) second stage treating their
-    # endogenous spread as exogenous, biasing the very coefficients that reconstruct φ̂ downstream. With
-    # NaN, v_hat_x_lagged_dep is NaN there and the second stage's dropna(X_cols) drops them — so the
-    # INSTRUMENTED specs are cleanly floored to where the instruments exist (~2016+), while the OLS/state
-    # specs (has_cf=False, no v_hat term) keep the full 2013+ sample. See counterfactuals_plan.md §0A.
-    df['v_hat'] = np.nan
+    # v_hat is set by which of three populations a row belongs to. The first stage is k=4,5
+    # only (endog_mask); the second stage runs on all of k=1,2,4,5.
+    #
+    #   k in {1,2}                      -> 0.0  exogenous by construction. They never enter the
+    #                                          first stage, and the control-function term for a
+    #                                          row with no endogeneity to correct IS zero, so a
+    #                                          zero keeps them in the second stage where they
+    #                                          belong.
+    #   k in {4,5}, instruments present -> the first-stage residual.
+    #   k in {4,5}, instruments missing -> NaN. Chiefly 2013-2015, where prudential-conglomerate
+    #                                          bank characteristics do not exist. A zero here
+    #                                          would smuggle a genuinely endogenous spread into
+    #                                          the control-function second stage as if it were
+    #                                          exogenous, biasing the coefficients that
+    #                                          reconstruct phi-hat downstream. NaN makes the
+    #                                          second stage's dropna(X_cols) remove them, so the
+    #                                          INSTRUMENTED specs are floored to where the
+    #                                          instruments exist while the OLS/state specs
+    #                                          (has_cf=False, no v_hat term) keep the full 2013+
+    #                                          sample. See counterfactuals_plan.md section 0A.
+    #
+    # Initialising the whole column to a single value cannot express this: 0.0 everywhere admits
+    # the uninstrumented k=4,5 rows, NaN everywhere drops k=1,2.
+    df['v_hat'] = np.where(endog_mask, np.nan, 0.0)
     df.loc[valid_mask, 'v_hat'] = res.resid
     df['v_hat_x_lagged_dep'] = df['v_hat'] * df['lagged_deposits']
     return df, res
