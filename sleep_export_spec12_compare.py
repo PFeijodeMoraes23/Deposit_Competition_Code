@@ -802,13 +802,13 @@ def main():
     build_latex_table(
         stage1_res, order, first_stage_target_vars,
         out_dir / "est1-4_spec12_stage1_comparison.tex",
-        title="First Stage IV Results across Specifications (Spec 12)",
+        title="First Stage IV Results across Specifications",
         label="tab:spec12_stage1_comparison",
     )
     build_latex_table(
         stage2_res, order, target_vars,
         out_dir / "est1-4_spec12_stage2_comparison.tex",
-        title="Second Stage Results across Specifications (Spec 12)",
+        title="Second Stage Results across Specifications",
         label="tab:spec12_stage2_comparison",
         mean_phi=mean_phi,
     )
@@ -818,14 +818,14 @@ def main():
     build_latex_table_landscape(
         stage1_res, order, first_stage_target_vars,
         out_dir / "est1-4_spec12_stage1_comparison_landscape.tex",
-        title="First Stage IV Results across Specifications (Spec 12)",
+        title="First Stage IV Results across Specifications",
         label="tab:spec12_stage1_comparison",
         placement="ht", first_stage=True,
     )
     build_latex_table_landscape(
         stage2_res, order, target_vars,
         out_dir / "est1-4_spec12_stage2_comparison_landscape.tex",
-        title="Second Stage Results across Specifications (Spec 12)",
+        title="Second Stage Results across Specifications",
         label="tab:spec12_stage2_comparison",
         mean_phi=mean_phi, placement="ht",
     )
@@ -982,7 +982,7 @@ def main():
         print(f"Exported pair phi_t plot -> {pp}")
 
     _make_pair_plot(3, 4, "Single-Index", "Single-Index + Time",
-                    r"Implied National $\hat{\phi}_t$: Single-Index (Spec 12)",
+                    r"Implied National $\hat{\phi}_t$: Single-Index",
                     "est_phi_t_single_index_pair.png")
 
 if __name__ == "__main__":
