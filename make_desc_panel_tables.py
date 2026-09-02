@@ -234,7 +234,7 @@ def main():
         'spread_a3': ('Spread (A3)',                   'bp',           0.01),
         'spread_a4': ('Spread (A4)',                   'bp',           0.01),
         'spread_a5': ('Spread (A5)',                   'bp',           0.01),
-        'gdp_per_capita':             ('GDP per Capita',             'R\\$',         None),
+        'gdp_per_capita':             ('GDP \\textit{per capita}',   'R\\$',         None),
         'pop_total':                  ('Population',                  'Thousands',    1e3),
         # Shares in PERCENTAGE POINTS, matching the unit their coefficients carry in the
         # sleepiness / BBL tables (utils/state_transform.DISPLAY: fraction_65plus = (0.01,'pp')).

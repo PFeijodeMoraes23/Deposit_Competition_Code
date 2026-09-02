@@ -11,7 +11,7 @@ command and appends its own significance-level line; this module returns the bod
 
 SECOND_STAGE_NOTE = (
     r"Columns \ref{estimation:local} and \ref{estimation:pooled} exhibit standard errors "
-    r"(wild cluster bootstrap at the conglomerate level, except on the rows marked "
+    r"(WCB at the conglomerate level, except on the rows marked "
     r"$\dagger$ below; \textcite{cameron2008bootstrap}, \textcite{mackinnon2017wild}) in "
     r"parentheses. Columns \ref{estimation:single_idx} and "
     r"\ref{estimation:single_idx_time} display \textcite{efron1987better}'s "

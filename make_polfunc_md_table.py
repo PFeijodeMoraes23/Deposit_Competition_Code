@@ -206,7 +206,7 @@ def _intro(depvar, summary, cfg):
         "firm-type/demographic specifications — estimated by OLS over the 2016–2024 window. **B and D "
         "firms are estimated separately, each with its own coefficient vector**; downstream, Step 2 takes "
         "**B → the `B-type` column and D → the `D (natl. demo.)` column** (the `D (no demo.)` column asks whether the national demographics do any work). A pooled B=D specification is also estimated but not shown. "
-        "Standard errors are a score/multiplier **wild cluster bootstrap at the conglomerate level** — "
+        "Standard errors are a score/multiplier **WCB at the conglomerate level** — "
         "the same scheme and clustering unit as the sleepiness and BLP stages, so every SE in the paper "
         "is produced one way; G and G\* are reported as the cluster-paucity statistics that motivate it, "
         "not as the inference. That paucity is severe on the B side: with conglomerate clusters the "

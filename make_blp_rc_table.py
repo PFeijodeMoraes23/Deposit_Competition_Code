@@ -122,7 +122,7 @@ COEF_LABELS = {
 # tab:demographic_chars (units dropped: BLP demographics enter STANDARDIZED, D̃=(D−D̄)/σ, so
 # "per 1k" / "10k R$" would be misleading). Covers all 8 D_COLS → no raw fallbacks.
 DEMO_LABELS = {
-    "gdp_per_capita":            r"GDP per capita",
+    "gdp_per_capita":            r"GDP \textit{per capita}",
     "fraction_65plus":           r"Fraction 65+",
     "fraction_young":            r"Fraction Young",
     "pix_users_pf_per1000":      r"PIX Users",
@@ -305,20 +305,22 @@ def fmt_coef(val: float, se: float, G_star: float | None = None,
              pval: float | None = None, on_bound: bool = False) -> tuple[str, str]:
     """Return (coef_cell, se_cell) with significance stars.
 
-    Significance uses a Student-t reference with df = G* effective clusters (few-cluster
-    correction), matching the logit tables (blp_logit.jl); a supplied bootstrap `pval` and the
-    Normal are fallbacks only when G* is absent. `on_bound=True` marks a σ pinned at the σ≥0
-    boundary: the point is reported with a dagger and NO two-sided SE/stars (Andrews 1999/2001)."""
+    Significance uses the stored wild-bootstrap `pval` when available, else a Student-t
+    reference with df = G* effective clusters (few-cluster correction) — the same priority as
+    the logit tables (blp_logit.jl `format_cell_plain`), so stars mean the same thing across
+    the demand tables; the Normal is the last fallback. `on_bound=True` marks a σ pinned at
+    the σ≥0 boundary: the point is reported with a dagger and NO two-sided SE/stars
+    (Andrews 1999/2001)."""
     if val is None or (isinstance(val, float) and math.isnan(val)):
         return "-", ""
     coef_str = f"{val:.4f}"
     if on_bound:
         return rf"${coef_str}^{{\dagger}}$", ""
     if se and se > 0 and not (isinstance(se, float) and math.isnan(se)):
-        if G_star and G_star > 1:
+        if pval is not None and not (isinstance(pval, float) and math.isnan(pval)):
+            pv = pval                                          # stored WCB Wald p-value
+        elif G_star and G_star > 1:
             pv = 2 * stats.t.sf(abs(val / se), df=G_star)      # t(G*): few-cluster reference
-        elif pval is not None and not (isinstance(pval, float) and math.isnan(pval)):
-            pv = pval
         else:
             pv = 2 * (1 - stats.norm.cdf(abs(val / se)))
         coef_str += _stars(pv)
@@ -333,7 +335,7 @@ def se_note(data: dict | None) -> str:
     method used on the cluster (BLP_SE_METHOD); 'none' means θ₂ SEs were not computed."""
     m = (data or {}).get("se_method", "none")
     if m == "wcb":
-        return (r"Wild cluster bootstrap standard errors (conglomerate clusters) in parentheses, "
+        return (r"WCB standard errors (conglomerate clusters) in parentheses, "
                 r"for both $\theta_1$ and $\theta_2$")
     if m == "sandwich":
         return (r"Cluster-robust GMM sandwich standard errors (conglomerate clusters) in "
@@ -398,7 +400,7 @@ def build_table(est_id: int, suffix: str = "") -> str:
         r"*** $p<0.01$, ** $p<0.05$, * $p<0.1$. "
         r"$\theta_1$: mean utility coefficients (linear IV); demographics are centered "
         r"($\tilde D=(D-\bar D)/\sigma$), so $\theta_1$ is the average-market coefficient. "
-        r"$\theta_2$: random coefficient parameters ($\Sigma$ = std.\ dev., $\Pi$ = demographic "
+        r"$\theta_2$: random-coefficient parameters ($\Sigma$ = std.\ dev., $\Pi$ = demographic "
         r"interaction); the $\Sigma$'s are bounded $\Sigma\ge0$. "
         r"A $\dagger$ marks a $\Sigma$ estimated at the boundary ($\hat\Sigma\approx0$): we report "
         r"the point on the bound and \emph{no} two-sided standard error, since a symmetric interval "

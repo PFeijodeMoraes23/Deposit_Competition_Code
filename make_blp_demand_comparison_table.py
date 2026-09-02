@@ -23,7 +23,7 @@ is cut at ext1 there; `full` (the old 5-RC rung) is not a stage at all — see
 make_blp_rc_table.STAGES / RC_TABLE_STAGES, the single source of truth for the ladder.
 
 Reads  blp_results_E{3,4}_spec_12_{stage}{engine_suffix}.json.
-Reuses the label maps + formatting (t(G*) stars, on-bound σ dagger, se_note) from make_blp_rc_table.
+Reuses the label maps + formatting (WCB-p/t(G*) stars, on-bound σ dagger, se_note) from make_blp_rc_table.
 
 Usage
 -----
@@ -65,25 +65,16 @@ DEFAULT_ESTS = list(_routines.LINK_ESTS)
 #   stage        : checkpoint stage read from disk
 #   file_lbl     : filename/label infix ("" => the default no-subscript table; "_full" => the Full one)
 #   caption_tail : appended to the "BLP Demand Estimation" caption
-#   blurb        : the "Each column is <blurb> ..." phrase in the notes
+# (What each column IS is described in V_Main's prose next to the \input, not in the note.)
 STAGE_SPECS = {
-    "ext1": dict(
-        stage="ext1", file_lbl="", caption_tail="",
-        blurb=(r"the random-coefficients model with a random coefficient on the deposit spread, its "
-               r"interactions with market demographics, and the $\ln$-assets $\times$ income "
-               r"interaction (the last rung of the ladder reported per routine)"),
-    ),
-    "full": dict(
-        stage="extended", file_lbl="_full", caption_tail=r" --- Full Specification",
-        blurb=(r"the Full random-coefficients model, freeing every random coefficient and "
-               r"demographic interaction"),
-    ),
+    "ext1": dict(stage="ext1", file_lbl="", caption_tail=""),
+    "full": dict(stage="extended", file_lbl="_full", caption_tail=r" --- Full Specification"),
 }
 
 
 def build_table(ests, suffix: str = "", show_segments: bool = True,
                 stage: str = "extended", file_lbl: str = "",
-                caption_tail: str = "", blurb: str = "") -> str:
+                caption_tail: str = "") -> str:
     data  = {e: rc.load_stage(e, stage, suffix) for e in ests}
     data  = {e: d for e, d in data.items() if d is not None}
     avail = [e for e in ests if e in data]
@@ -98,21 +89,21 @@ def build_table(ests, suffix: str = "", show_segments: bool = True,
     hdr     = " & ".join(rc.est_ref(e) for e in avail)        # bare \ref{estimation:*} column heads
     G_map   = {e: data[e].get("G_star") for e in avail}
     rep     = data[avail[0]]
+    # One SE sentence must describe every column. A mix of se_method across routines means the
+    # checkpoints on disk are from different vintages/runs — publishing one sentence over mixed
+    # columns misdescribes at least one of them, so refuse instead.
+    _methods = {e: (data[e] or {}).get("se_method", "none") for e in avail}
+    if len(set(_methods.values())) > 1:
+        raise SystemExit(f"[demand-comparison] mixed se_method across routines {_methods} — "
+                         "stale checkpoint vintage; re-run/ingest the missing routine first.")
     sem     = rc.se_note(data.get(avail[-1]) or rep)
     lbl_suffix = "" if show_segments else "_noseg"
-    # The segment dummies are nuisance controls whose coefficients are already printed IN FULL, per
-    # routine, by the per-routine appendix tables. So we omit them here and point the
-    # reader at those tables rather than carrying a duplicate with-segments variant of this table
-    # (which added four rows and no information). Never write "available on request" — they ARE
-    # reported, just elsewhere.
-    # Derived from `avail` rather than written out: these labels are keyed off the routine id,
-    # so a hardcoded range silently becomes a ?? the moment the lineup changes.
-    _seg_refs = (rf"\ref{{tab:blp_rc_est{avail[0]}_spec12}}" if avail[0] == avail[-1] else
-                 rf"\ref{{tab:blp_rc_est{avail[0]}_spec12}}--\ref{{tab:blp_rc_est{avail[-1]}_spec12}}")
+    # The segment dummies are nuisance controls omitted from this table rather than carrying a
+    # duplicate with-segments variant (four extra rows, no information). Wording matches the
+    # logit comparison note (blp_logit.jl seg_sentence) verbatim; no \ref to the per-routine
+    # tables, which are not \input in V_Main.
     seg_note = "" if show_segments else (
-        r" Segment dummies (S2--S5) are included in every strategy but not reported; the full "
-        r"coefficient vector, including the segment dummies, appears in the per-routine tables "
-        + _seg_refs + ".")
+        r"Segment dummies (S2--S5) are included in every strategy but not reported. ")
 
     theta1_params = rep.get("param_names_theta1") or (["alpha"] + rc.X_COLS)
     if not show_segments:
@@ -145,8 +136,8 @@ def build_table(ests, suffix: str = "", show_segments: bool = True,
         "",
         r"    \bottomrule",
         r"    \multicolumn{" + str(ncols + 1) + r"}{@{}p{\dimexpr" + TABLE_W + r"-2\tabcolsep\relax}@{}}{"
-        rf"\scriptsize \textit{{Notes:}} {sem}. "
-        r"Significance from a "
+        rf"\scriptsize \textit{{Notes:}} {seg_note}{sem}. "
+        r"Significance stars use WCB $p$-values where available, otherwise a "
         r"Student-$t$ reference with $G^*$ effective clusters: *** $p<0.01$, ** $p<0.05$, * $p<0.1$. "
         r"The $\Sigma$'s are bounded $\Sigma\ge0$, and a $\dagger$ marks a $\Sigma$ at "
         r"the boundary ($\widehat{\Sigma}\approx0$), reported on the bound with no two-sided standard "
@@ -258,14 +249,14 @@ def main():
             print(f"[demand-comparison] unknown stage '{key}' (have {list(STAGE_SPECS)}) — skipped")
             continue
         # ONLY the no-segment variant is emitted. The with-segments twin was retired: the segment
-        # dummies it added are already printed per routine by blp_rc_E{5..8}_spec12.tex (both are in
-        # the appendix), so it duplicated four rows and no information — and kept the appendix long.
-        # The footnote now cross-references those tables. Pass show_segments=True to build_table if a
-        # referee ever wants the with-segments layout back.
+        # dummies it added duplicated four rows and no information — and kept the appendix long.
+        # The footnote states they are included but not reported (same sentence as the logit
+        # comparison note). Pass show_segments=True to build_table if a referee ever wants the
+        # with-segments layout back.
         for show_seg, seg_lbl in ((False, "_noseg"),):
             tex = build_table(ests, suffix, show_segments=show_seg,
                               stage=spec["stage"], file_lbl=spec["file_lbl"],
-                              caption_tail=spec["caption_tail"], blurb=spec["blurb"])
+                              caption_tail=spec["caption_tail"])
             if not tex:
                 continue
             fname = f"blp_demand_comparison{spec['file_lbl']}{seg_lbl}_spec12{suffix}.tex"

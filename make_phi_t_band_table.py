@@ -143,7 +143,7 @@ def build_tex(cells):
         r"influence functions and the link is re-profiled at each draw, with the link "
         r"fluctuation projected onto the tangent cone of the active constraints at that "
         r"draw's own solution (\textcite{geyer1994}; \textcite{andrews2000inconsistency}; "
-        r"\textcite{hongli2018}; \textcite{fangsantos2019}). Wild cluster bootstrap at the "
+        r"\textcite{hongli2018}; \textcite{fangsantos2019}). WCB at the "
         r"conglomerate level (\textcite{cameron2008bootstrap}; "
         r"\textcite{mackinnon2017wild}), Webb six-point weights, WCU-$t$.",
         r"\item[b] Largest gap between the percentile and bias-corrected interval widths. "

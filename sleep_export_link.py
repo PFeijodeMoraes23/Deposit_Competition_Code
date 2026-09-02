@@ -138,7 +138,7 @@ def build_first_stage_table(results_dict, est_num):
     caption = _strategy_caption("First Stage --- Deposit Spread on Instruments", est_num)
     label = f"tab:est{est_num}_first_stage"
     notes = (
-        r"\footnotesize \textit{Notes:} Standard errors (wild cluster bootstrap at the "
+        r"\footnotesize \textit{Notes:} Standard errors (WCB at the "
         r"conglomerate level; \textcite{cameron2008bootstrap}, \textcite{mackinnon2017wild}) "
         r"in parentheses. Coefficients are in \emph{percentage points of the quarterly "
         r"deposit spread} per the unit given in the row label, matching the units of the "
@@ -245,7 +245,7 @@ def _ame_ci_note(ci_cols, results_dict, est_num):
     b_s = (f" $B={B}$ {scheme} draws," if B else "")
     return (r"The " + ", ".join(sorted(ci_cols)) + r" column(s) report a 95\% bias-corrected "
             r"percentile interval in brackets, not a standard error: their inference is a "
-            r"TWO-STAGE wild cluster bootstrap in which the index direction is re-solved and "
+            r"TWO-STAGE WCB in which the index direction is re-solved and "
             r"the link re-profiled at every draw," + b_s + r" and the reported object is a "
             r"tangent-cone interval rather than a Wald statistic, because the link's shape "
             r"constraints are active at the estimate. The remaining columns report standard "

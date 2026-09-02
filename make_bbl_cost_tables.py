@@ -401,7 +401,7 @@ def build_ridge(ridge):
     foot = (
         r"\textit{Notes:} Collinearity of the two $\psi$ columns that carry $\omega$ and $\zeta$ "
         r"in the \emph{differenced} design $g=\Delta\psi_1-\omega\Delta\psi_2-\gamma'\Delta\psi_3"
-        r"-(1+\zeta)\Delta\psi_4$ of \eqref{eq:17}."
+        r"-(1+\zeta)\Delta\psi_4$ of \eqref{eq:16}."
     )
     return _wrap(body, col_fmt, r"$\psi_2/\psi_4$ Ridge",
                  "tab:bbl_ridge_diagnostic", header, foot, 9)
@@ -425,7 +425,7 @@ def _stars(est, se):
     *** p<0.01, ** p<0.05, * p<0.1 (polfunc_k4.tex convention, which renders `^{}` when none).
 
     Reported because the estimates table conventionally carries them, but see the table note:
-    the eq:17 criterion is kinked and potentially set-identified, so a normal approximation is
+    the eq:16 criterion is kinked and potentially set-identified, so a normal approximation is
     not the right reference distribution and these should not be read as tests.
     """
     if est is None or se is None or not np.isfinite(est) or not np.isfinite(se) or se <= 0:
@@ -479,19 +479,18 @@ def build_cbar_panels(rows):
                             if r.get("frac_bind") is not None else "---") + r" \\")
     foot = (
         r"\textit{Notes:} $\bar c^\kappa = \omega^\kappa + \bar r^f\zeta^\kappa$ is the marginal "
-        r"cost of deposits at the mean forward risk-free rate, and \emph{the only cost object "
-        r"this design identifies}: $\Delta\psi_2$ and $\Delta\psi_4$ are collinear at "
+        r"cost of deposits at the mean forward risk-free rate, and the only cost object "
+        r"this design identifies: $\Delta\psi_2$ and $\Delta\psi_4$ are collinear at "
         r"$\mathrm{corr}>0.9999$ (Table~\ref{tab:bbl_ridge_diagnostic}), so $\omega^\kappa$ and "
         r"$\zeta^\kappa$ are separately unidentified and are reported in "
         r"Table~\ref{tab:bbl_cost_identified} for completeness only. Quarterly units, and "
         r"excluding the $\boldsymbol{\gamma}'\boldsymbol{Z}$ shifters. "
-        r"The standard error is a firm-block bootstrap SD (200 reps); the interval is "
-        r"the subsampling $\sqrt{n}$-rate quantile CI ($b=n^{2/3}$ firms, 200 reps), which is the "
+        r"The standard error is a firm-block bootstrap standard deviation and the interval is the subsampling "
+        r"from Section~\ref{sec:empirical:cost}, which is the "
         r"appropriate route for a criterion that is kinked and potentially set-identified. "
         r"The last row is the share of the firm~$\times$~deviation revealed-preference "
         r"inequalities $g=V(\hat\sigma)-V(\tilde\sigma)\ge 0$ that \emph{fail} at "
-        r"$\hat\theta$ --- deviations the fitted model says would have raised the firm's "
-        r"value; a policy that is a genuine best response implies a share near $0$."
+        r"$\hat\theta$, see Section~\ref{sec:empirical:cost}."
     )
     return _wrap(body, col_fmt,
                  r"BBL Identified Marginal Cost $\bar c^\kappa$ and Criterion Health",
@@ -578,6 +577,12 @@ def build_identified_panels(rows):
         return out
 
     body = []
+    # The kinked-criterion caveat, in the table itself and not only mid-footnote: the reader
+    # meets it before scanning any stars. The full statement stays in the Notes.
+    body.append(
+        rf"\multicolumn{{{ncol}}}{{l}}{{\scriptsize\itshape Significance stars are shown by "
+        rf"convention only --- the kinked criterion admits no normal reference (see Notes).}} \\")
+    body.append(r"\addlinespace[0.4ex]")
     for pi, (kappa, _lbl) in enumerate(BLOCKS):
         if not any((E, kappa) in by for E in Es):
             continue
@@ -609,20 +614,17 @@ def build_identified_panels(rows):
 
     foot = (
         r"\textit{Notes:} Deposit-servicing marginal cost parameters of \eqref{eq:8} from the "
-        r"\textcite{bajari2007estimating} moment-inequality problem \eqref{eq:17}, spec.~12, "
-        r"extended stage, estimated separately by firm type; columns are the estimation routines "
+        r"BBL moment-inequality problem \eqref{eq:16}, "
+        r"estimated separately by firm type; columns are the estimation routines "
         r"of Section~\ref{sec:empirical:sleep}. Quarterly units; the cost-shifter ratios are in "
         r"percentage points and the Basel index a fraction, both lagged one quarter. Standard "
-        r"errors in parentheses are firm-block bootstrap SDs (200 reps). "
-        r"\emph{None of these parameters is separately identified}: $\Delta\psi_2$ and "
-        r"$\Delta\psi_4$ are collinear at $\mathrm{corr}>0.9999$ "
-        r"(Table~\ref{tab:bbl_ridge_diagnostic}), so the criterion is flat along "
-        r"$\omega=-\bar r^f\zeta$ and $\hat\omega^\kappa$, $\hat\zeta^\kappa$ and "
-        r"$\hat{\boldsymbol{\gamma}}^\kappa$ slide freely along that ridge --- one block returns "
-        r"$\hat\omega>0$ with $\hat\zeta<0$ while the identified combination barely moves. The "
+        r"errors: firm-block bootstrap SDs, descriptive only, see "
+        r"Section~\ref{sec:empirical:cost} and diagnostics in "
+        r"Table~\ref{tab:bbl_ridge_diagnostic}. "
+        r"None of these parameters is separately identified. The "
         r"table is reported for completeness; the estimand is $\bar c^\kappa$ in "
         r"Table~\ref{tab:bbl_cbar}. Significance markers use the normal approximation to the "
-        r"bootstrap SD and are shown by convention only --- the criterion in \eqref{eq:17} is "
+        r"bootstrap SD and are shown by convention only --- the criterion in \eqref{eq:16} is "
         r"kinked and potentially set-identified, so that reference distribution does not apply "
         r"and they should not be read as tests. *** $p<0.01$, ** $p<0.05$, * $p<0.1$."
     )

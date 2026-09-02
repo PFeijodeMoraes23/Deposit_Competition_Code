@@ -550,7 +550,7 @@ def meta_tag(arc: Archive):
     return f"untagged_{datetime.datetime.fromtimestamp(arc.mtime):%Y%m%d}"
 
 
-def member_dest(family, rel: Path, root: Path) -> Path:
+def member_dest(family, rel: "str | Path", root: Path) -> Path:
     """Where one member belongs. Families land in one directory, with a single exception.
 
     The logit family carries two different KINDS of product: the delta warm-starts, .jls fits
@@ -560,6 +560,7 @@ def member_dest(family, rel: Path, root: Path) -> Path:
     the new numbers. Table generators write their .tex to the paper directory and nowhere else,
     and a downloaded exhibit is the same kind of object, so it follows the same rule.
     """
+    rel = Path(rel)   # extract() hands over the slash-joined str from strip_prefix
     if family == "logit" and rel.suffix.lower() == ".tex":
         return paths.drafts_dir() / rel.name
     return root / rel

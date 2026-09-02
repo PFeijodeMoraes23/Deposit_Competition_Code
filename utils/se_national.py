@@ -341,7 +341,7 @@ def national_note(schemes, dk_bracket: bool = False) -> str:
 
     if "congl" in s:
         # MIXED -- the honest, and unfortunately verbose, case.
-        body = (r"Where marked, those rows report a wild bootstrap clustered on the "
+        body = (r"Where marked, those rows report a WCB clustered on the "
                 r"\emph{quarter}, with stars computed from it; unmarked national cells "
                 r"retain conglomerate clustering, so standard errors are not comparable across "
                 r"columns within those rows. ")

@@ -49,7 +49,8 @@ Usage
 LaTeX outputs (→ ESTIMATION_OUTPUT/Rout + Drafts/Deposit Competition; data/output/logit on
 the cluster, where the Drafts folder does not exist):
   est{id}_spec12_logit.tex                 per-routine, 4 sub-model columns
-  est1-4_spec12_logit_comparison.tex       cross-routine, `+ D-Type` column each
+  est1-4_spec12_logit_comparison.tex       cross-routine, `Price + Chars` column each —
+                                           the sub-model whose X matches the BLP X₁
                                            (tab:demand_logit_spec12_comparison)
 
 References
@@ -664,10 +665,15 @@ const TABLE_SUBMODELS = [("priceonly", "Price Only"), ("core", "Price + Core"),
                          ("full", "Price + Chars"), ("full_dtype", "+ D-Type"),
                          ("core_dtype", "Price + Core + D-Type")]
 # Cross-estimator comparison table (est1-4_spec12_logit_comparison.tex): one column per
-# demand routine, each showing its final `+ D-Type` sub-model. Column headers \ref{} the
-# sleepiness-strategy enumerate items in V_Main §(sec:empirical:sleep) — same convention as
-# est1-4_spec12_stage2_comparison.tex. ESTIMATION_ENUM_REF (routines.jl) carries a \ref for
-# every id listed here; an id absent from it falls back to a plain E<id> header.
+# demand routine, each showing its `full` (Price + Chars) sub-model. That sub-model's X is
+# exactly the BLP X₁ (X_COLS, no dummy_D_type), so the published logit column is the literal
+# θ₂ = 0 nest of the RC model in blp_engine_cpu/gpu — the paper's nesting claim depends on
+# this key staying aligned with the engines' X_COLS. The D-type variant (full_dtype) remains
+# in the per-routine tables. Column headers \ref{} the sleepiness-strategy enumerate items
+# in V_Main §(sec:empirical:sleep) — same convention as est1-4_spec12_stage2_comparison.tex.
+# ESTIMATION_ENUM_REF (routines.jl) carries a \ref for every id listed here; an id absent
+# from it falls back to a plain E<id> header.
+const COMPARISON_SUBMODEL = "full"
 const COMPARISON_IDS  = LINK_ROUTINES
 # Routines that get a per-routine est{id}_spec12_logit.tex. The routines are AUTO-DISCOVERED from the
 # demand parquets, so this list is what keeps a stray parquet (an exploratory routine, an id outside
@@ -675,9 +681,9 @@ const COMPARISON_IDS  = LINK_ROUTINES
 # `--est N` bypasses the filter, so any discovered routine stays reachable on demand.
 const REPORTED_IDS    = ACTIVE_ROUTINES
 const COMPARISON_ROWS = ["alpha", "fgc_covered", "has_ip", "log_total_assets_lag",
-                         "is_state_owned", "dummy_D_type"]   # seg_S2-S5 included in the spec, not reported
+                         "is_state_owned"]   # seg_S2-S5 included in the spec, not reported
 const COMPARISON_ROWS_SEG = ["alpha", "fgc_covered", "has_ip", "log_total_assets_lag",
-                             "seg_S2", "seg_S3", "seg_S4", "seg_S5", "is_state_owned", "dummy_D_type"]  # segments shown
+                             "seg_S2", "seg_S3", "seg_S4", "seg_S5", "is_state_owned"]  # segments shown
 const DRAFTS_DIR = drafts_dir()
 const TROW = " \\\\"   # LaTeX row terminator ` \\` (a raw " \\" would collapse to one backslash)
 
@@ -742,8 +748,9 @@ function _mean_rho_one_minus_s(estim)
     return any(m) ? mean(ρ[m] .* (1.0 .- s[m])) : NaN
 end
 
-"""Build est1-4_spec12_logit_comparison.tex: columns = routines (each its `+ D-Type`
-sub-model), rows = COMPARISON_ROWS, stats block = elasticity / N / Q(dof) / G*.
+"""Build est1-4_spec12_logit_comparison.tex: columns = routines (each its COMPARISON_SUBMODEL
+sub-model — `full`, the BLP-X₁-matching spec), rows = COMPARISON_ROWS, stats block =
+elasticity / N / Q(dof) / G*.
 Layout, notes and label conventions mirror est1-4_spec12_stage2_comparison.tex."""
 function build_logit_comparison_tex(data::AbstractDict, ids::Vector{Int},
                                     elas::AbstractDict;
@@ -760,8 +767,9 @@ function build_logit_comparison_tex(data::AbstractDict, ids::Vector{Int},
     note = raw"\multicolumn{" * string(n + 1) *
         raw"}{p{\dimexpr\textwidth-2\tabcolsep\relax}}{\scriptsize \textit{Notes:} " *
         seg_sentence *
-        raw"Wild cluster bootstrap standard errors (conglomerate clusters) in parentheses. " *
-        raw"Significance: *** $p<0.01$, ** $p<0.05$, * $p<0.1$. $Q$ is the GMM " *
+        raw"WCB standard errors (conglomerate clusters) in parentheses. " *
+        raw"Significance stars use WCB $p$-values where available, otherwise a " *
+        raw"Student-$t$ reference with $G^*$ effective clusters: *** $p<0.01$, ** $p<0.05$, * $p<0.1$. $Q$ is the GMM " *
         raw"overidentification statistic ($\chi^2_L$, $L$ = \# instruments); $G^*$ is " *
         raw"effective clusters. The mean own-price elasticity is " *
         raw"$\hat{\alpha}\,\rho_{jkmt}(1-s_{jkmt})$ averaged over the estimation sample " *
@@ -784,7 +792,7 @@ function build_logit_comparison_tex(data::AbstractDict, ids::Vector{Int},
     for (i, p) in enumerate(rows)
         row_c = String[]; row_s = String[]
         for id in ids
-            entry  = get(data, "E$(id)_full_dtype", Dict{String,Any}())
+            entry  = get(data, "E$(id)_$(COMPARISON_SUBMODEL)", Dict{String,Any}())
             pnames = String.(get(entry, "param_names", String[]))
             j = findfirst(==(p), pnames)
             if j !== nothing
@@ -806,7 +814,7 @@ function build_logit_comparison_tex(data::AbstractDict, ids::Vector{Int},
     push!(lines, raw"\midrule")
     elas_l = String[]; obs_l = String[]; q_l = String[]; niv_l = String[]; gstar_l = String[]
     for id in ids
-        entry = get(data, "E$(id)_full_dtype", Dict{String,Any}())
+        entry = get(data, "E$(id)_$(COMPARISON_SUBMODEL)", Dict{String,Any}())
         ev = get(elas, id, NaN)
         push!(elas_l, isfinite(ev) ? @sprintf("%.3f", ev) : "---")
         obs = get(entry, "n_obs", nothing)
@@ -830,18 +838,18 @@ function build_logit_comparison_tex(data::AbstractDict, ids::Vector{Int},
     return join(lines, "\n")
 end
 
-"""Write est1-4_spec12_logit_comparison.tex (COMPARISON_IDS × `+ D-Type`) to Rout + Drafts.
-Computes the mean own-price elasticity per routine from its demand parquet (skipped
-with a '---' cell if the parquet is unavailable)."""
+"""Write est1-4_spec12_logit_comparison.tex (COMPARISON_IDS × COMPARISON_SUBMODEL) to
+Rout + Drafts. Computes the mean own-price elasticity per routine from its demand parquet
+(skipped with a '---' cell if the parquet is unavailable)."""
 function write_logit_comparison_table(data::AbstractDict)
-    ids = [id for id in COMPARISON_IDS if haskey(data, "E$(id)_full_dtype")]
+    ids = [id for id in COMPARISON_IDS if haskey(data, "E$(id)_$(COMPARISON_SUBMODEL)")]
     if length(ids) < 2
-        println("    [table] comparison skipped — need ≥2 of E$(COMPARISON_IDS) full_dtype entries")
+        println("    [table] comparison skipped — need ≥2 of E$(COMPARISON_IDS) $(COMPARISON_SUBMODEL) entries")
         return
     end
     elas = Dict{Int,Float64}()
     for id in ids
-        entry  = data["E$(id)_full_dtype"]
+        entry  = data["E$(id)_$(COMPARISON_SUBMODEL)"]
         pnames = String.(get(entry, "param_names", String[]))
         j = findfirst(==("alpha"), pnames)
         estim = findfirst(s -> s.id == id, ESTIM_STRATEGIES)
@@ -897,7 +905,7 @@ function build_logit_table_tex(est_id::Int, data::AbstractDict)::String
         raw"    \bottomrule",
         raw"    \multicolumn{" * string(ncols+1) *
             raw"}{p{\dimexpr\textwidth-2\tabcolsep\relax}}{\scriptsize \textit{Notes:} " *
-            raw"Wild cluster bootstrap standard errors (conglomerate clusters) in parentheses. " *
+            raw"WCB standard errors (conglomerate clusters) in parentheses. " *
             raw"Significance: *** $p<0.01$, ** $p<0.05$, * $p<0.1$. $Q$ denotes the GMM " *
             raw"overidentification test statistic ($\chi^2_L$, $L$ = \# instruments); $G^*$ is " *
             raw"effective clusters.}" * TROW,

@@ -107,7 +107,7 @@ def ame_ci_note(ci_cols, results_dict):
     b_s = (f" $B={meta['B']}$ {meta['scheme']} draws," if meta.get("B") else "")
     return (r"Column(s) " + lbl + r" report a 95\% bias-corrected percentile interval "
             r"(\textcite{efron1987better}) in brackets, not a standard error: their "
-            r"inference is a TWO-STAGE wild cluster bootstrap (\textcite{klinesantos2012}) "
+            r"inference is a TWO-STAGE WCB (\textcite{klinesantos2012}) "
             r"in which the index direction is re-solved and the link re-profiled at "
             r"every draw," + b_s + r" and the reported object is a tangent-cone interval "
             r"rather than a Wald statistic, because the link's shape constraints are active at "
@@ -361,7 +361,7 @@ def build_latex_table(results_dict, order_keys, target_vars, out_path, title="",
     if is_first_stage:
         notes_str = (r"\multicolumn{" + str(len(order_keys) + 1) + r"}{p{\dimexpr\textwidth-2\tabcolsep\relax}}"
                      r"{\scriptsize\textit{Notes:} First-stage coefficients; the dependent variable is "
-                     r"the quarterly deposit spread. Standard errors (wild cluster bootstrap at the "
+                     r"the quarterly deposit spread. Standard errors (WCB at the "
                      r"conglomerate level; \textcite{cameron2008bootstrap}, \textcite{mackinnon2017wild}) "
                      r"in parentheses. Columns index the estimation strategies enumerated in "
                      r"Section~\ref{sec:empirical:sleep}. Coefficients are in \emph{percentage points of "
@@ -663,7 +663,7 @@ def build_latex_table_landscape(results_dict, order_keys, target_vars, out_path,
             r"\footnotesize",
             (r"\item \textit{Notes:} " + _notes.second_stage_note()) if not first_stage else
             (r"\item \textit{Notes:} First-stage coefficients; the dependent variable is the "
-             r"quarterly deposit spread. Standard errors (wild cluster bootstrap at the "
+             r"quarterly deposit spread. Standard errors (WCB at the "
              r"conglomerate level; \textcite{cameron2008bootstrap}, \textcite{mackinnon2017wild}) in "
              r"parentheses. Columns index the estimation strategies enumerated in "
              r"Section~\ref{sec:empirical:sleep}. Coefficients are in \emph{percentage points of the "

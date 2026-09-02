@@ -67,7 +67,7 @@ def build_first_stage_table(results_dict):
                f"--- Estimation Strategy~{_routines.est_ref(2)}")
     label = "tab:est2_first_stage"
     notes = (
-        r"\footnotesize \textit{Notes:} Standard errors (wild cluster bootstrap at the "
+        r"\footnotesize \textit{Notes:} Standard errors (WCB at the "
         r"conglomerate level; \textcite{cameron2008bootstrap}, \textcite{mackinnon2017wild}) "
         r"in parentheses. Coefficients are in \emph{percentage points of the quarterly "
         r"deposit spread} per the unit given in the row label, matching the units of the "

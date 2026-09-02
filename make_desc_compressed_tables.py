@@ -130,7 +130,7 @@ LABEL_MAP = {
     "n_d_firms_natl":            ("Number of D Firms (nat.)", "count",       None, 0),
     # Table 3 specific
     "pop_total":                 ("Population",              "Thousands",    1e3,  1),
-    "gdp_per_capita":            ("GDP per Capita",          r"R\$",         None, 0),
+    "gdp_per_capita":            (r"GDP \textit{per capita}", r"R\$",         None, 0),
     # Shares are reported in PERCENTAGE POINTS, matching the unit their coefficients carry
     # in the sleepiness and BBL policy-function tables (utils/state_transform.DISPLAY, where
     # fraction_65plus is (0.01, 'pp')). Printing a bare 0.109 here while the coefficient
@@ -1429,6 +1429,10 @@ def render_table4(t4_df, meta, suffix) -> str:
         r"reported because they are zero by construction prior to 2020Q4. "
         r"Deposit spreads are annualized: $(1 + r_{\text{qoq}})^4 - 1$. "
         r"Deposit spreads are defined as the risk-free rate minus the offered deposit rate. "
+        r"$G$ is the number of conglomerate clusters entering the test; $G^{\star} = "
+        r"G/(1+\mathrm{CV}^2)$, with $\mathrm{CV}$ the coefficient of variation of cluster "
+        r"sizes, is the \textcite{carter2017asymptotic} effective number of clusters, used as "
+        r"the Student-$t$ degrees of freedom for the $p$-values. "
         r"Stars: $^{*}\,p<0.10$, $^{**}\,p<0.05$, $^{***}\,p<0.01$."
     )
 
@@ -1623,7 +1627,9 @@ _VARS_MASTER_GROUPS = [
         (r"CodConglomeradoPrudencial", r"Conglomerate $j$ (prudential C-code)", "BCB", "All"),
         (r"CNPJ\_Lider, CNPJ", r"Lead-institution and root-level CNPJ of the conglomerate", "BCB", "All"),
         (r"CODMUN\_IBGE", r"7-digit IBGE municipality code; \texttt{0} = nationally active D institution", "IBGE", "All"),
-        (r"mca\_code", r"Market $m$ --- one of 468 MCAs, or \texttt{NATIONAL} for D institutions", "Constructed", "All"),
+        # 3,737 = market_panel.csv mca_code nunique excl. the national code (2026-09-01 rebuild);
+        # refresh after any crosswalk change (the old crosswalk's 468 was stale).
+        (r"mca\_code", r"Market $m$ --- one of 3,737 MCAs, or \texttt{NATIONAL} for D institutions", "Constructed", "All"),
         (r"year, quarter, AnoMes", r"Period $t$; \texttt{AnoMes} is the BCB IF-Data code YYYYMM", "BCB", "All"),
         (r"deposit\_type", r"Category $k$: 1 = demand, 2 = savings, 3 = interbank, 4 = time/CDB, 5 = prepaid", "BCB", "All"),
     ]),
@@ -1631,7 +1637,7 @@ _VARS_MASTER_GROUPS = [
         (r"dep\_a1--dep\_a5, deposit\_balance", r"Type-$k$ deposit stock $\mathrm{Dep}_{jkmt}$; MCA level for B firms, national for D firms", "ESTBAN, IF-Data", "Sleep; Demand"),
         (r"lagged\_deposits", r"\texttt{deposit\_balance} shifted one quarter within institution $\times$ type", "Constructed", "Sleep"),
         (r"total\_deposits, lagged\_total\_deposits", r"Sum across the five deposit types, and its one-quarter lag", "Constructed", "Sleep"),
-        (r"pop\_total", r"Market size $M_{mt}$", "IBGE", "Demand (shares)"),
+        (r"pop\_total", r"Total MCA population $\mathrm{Pop}_{mt}$; scales the market size $M_{mt} = \hat{\bar{d}}_{mt}\cdot\mathrm{Pop}_{mt}$", "IBGE", "Demand (shares)"),
     ]),
     ("Rates and spreads", [
         (r"selic\_qoq, risk\_free\_qoq", r"SELIC overnight compounded QoQ, $(1+r_{\text{daily}})^{63}-1$; the risk-free benchmark", "BCB SGS", "Sleep; Demand"),
@@ -1662,9 +1668,11 @@ _VARS_MASTER_GROUPS = [
 def render_variables_master() -> str:
     notes = (
         r"\footnotesize \textit{Notes:} Only variables entering an estimated "
-        r"specification are listed. ``Sleep'' = sleepiness estimation (E1--E4; "
-        r"state variables enter $\phi(S_{mt})$ interacted with lagged deposits), "
-        r"``+Time'' = the E4 time block; ``Demand'' = logit/BLP demand "
+        r"specification are listed. ``Sleep'' = sleepiness estimation, approaches "
+        r"\ref{estimation:local}--\ref{estimation:single_idx_time} of "
+        r"Section~\ref{sec:empirical:sleep} (state variables enter "
+        r"$\phi(\boldsymbol{S}_{mt})$ interacted with lagged deposits); "
+        r"``+Time'' = the \ref{estimation:single_idx_time} time block; ``Demand'' = logit/BLP demand "
         r"system ($X$ = product characteristics, $\pi$ = estimated demographic "
         r"interactions, shares = market-share construction). Auxiliary collected "
         r"variables that enter no estimated specification (additional Pix usage "
@@ -1721,7 +1729,7 @@ _INSTR_MASTER_GROUPS = [
     ("Hausman-style", [
         (r"leave\_one\_out\_mean\_spread", r"Leave-one-out mean spread of rivals in the same deposit type $\times$ quarter", _STAGE_SLEEP),
     ]),
-    (r"BLP leave-one-out rival characteristics, group $g=(\texttt{deposit\_type},\texttt{AnoMes})$", [
+    (r"BLP leave-one-out rival characteristics, group $g=(\text{MCA},\text{quarter})$", [
         (r"loo\_log\_assets, mean\_loo\_log\_assets", r"LOO sum and mean of rival $\ln(\text{Total Assets}_{t-1})$", _STAGE_DEMAND),
         (r"loo\_equity\_ratio, mean\_loo\_equity\_ratio", r"LOO sum and mean of rival equity ratio", _STAGE_DEMAND),
         (r"loo\_basileia, mean\_loo\_basileia", r"LOO sum and mean of rival Basel index", _STAGE_DEMAND),
@@ -1742,7 +1750,7 @@ def render_instruments_master() -> str:
         r"$\subset$ wholesale $\subset$ Hausman); ``Demand'' instruments form "
         r"the $K=16$ vector $Z_{jt}$ of the logit/BLP moment conditions. "
         r"Leave-one-out (LOO) instruments are built within group "
-        r"$g=(\texttt{deposit\_type},\texttt{AnoMes})$: "
+        r"$g=(\text{MCA},\text{quarter})$: "
         r"$\texttt{loo\_x}_j=\sum_{l\in g,\,l\neq j}x_l$ and "
         r"$\texttt{mean\_loo\_x}_j=\texttt{loo\_x}_j/n_{\mathrm{rivals},j}$."
     )
