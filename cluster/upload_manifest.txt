@@ -163,6 +163,24 @@ logit_delta_E{k}   | produced | blp    | BLP_LOGIT     | logit_delta_E{k}_spec_1
 # --- 4. forward risk-free curve. MUST be built locally: compute nodes have no outbound ----
 #        internet, and this script calls the BCB SGS + Focus APIs.
 forward_rf         | data | bbl,cf     | COST_FWD      | forward_rf_qoq.csv             | data/input | python scrape_forward_rf.py --horizon 50 --start 2026Q1            | DEMAND_PREP | demand_3_index_spec_12.parquet
+# --- 4b. the MULTI-START pair, consumed by bbl_run.sh --multi-start (bbl_fwd_sim.jl reads both) -
+#        Same reason as row 4 and one more: these are the only two inputs the multi-start design
+#        adds, and both are tiny -- measured 2026-09-09: forward_rf_vintages.csv 162 kB, 1,836
+#        rows (36 launch quarters x h=0..50, h=0 the realised anchor, every row from a live Focus
+#        survey), and bbl_transitions.json 13 kB. That is the whole
+#        point of staging PARAMETERS rather than paths: the S simulated rate paths are rebuilt on
+#        the compute node from rate.process plus the sim's own seed, so the upload does not grow
+#        with --n-paths, with the horizon, or with the panel. Never stage simulated paths.
+#
+#        NO PARENT ON EITHER ROW. The vintages are a fixed historical object -- 36 Focus surveys
+#        that were published on 36 past dates and do not change when the panel is rebuilt -- and
+#        the transitions are estimated FROM the vintages plus the panel's own cost/state columns,
+#        so an mtime comparison against a demand parquet would call them stale on every panel
+#        rebuild and invite a regeneration that re-fits the AR(1) blocks for no reason. Both are
+#        checked for PRESENCE. Re-generate them deliberately: a new Focus vintage worth adding
+#        (scrape_forward_rf.py, needs internet) or a re-estimated transition block.
+forward_rf_vint    | data | bbl        | COST_FWD      | forward_rf_vintages.csv        | data/input | python scrape_forward_rf.py --vintage-from 2016Q1 --vintage-to 2024Q4 --horizon 50 | - | -
+bbl_transitions    | data | bbl        | COST_FWD      | bbl_transitions.json           | data/input | python bbl_transitions.py                                          | -         | -
 
 # --- 5. fitted BBL policy function (deviations are formed around it, not observed spreads) -
 polfunc            | produced | bbl      | COST_POLFUNC  | polfunc_fitted.csv           | data/output/bbl | bbl_run.sh (BBL_STEP=polfunc, default)                       | -         | -

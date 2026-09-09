@@ -1364,7 +1364,8 @@ def _ame_cluster_if(theta_hat, IF_cl, ame_fn, keys, h_rel=1e-5):
 
 
 def cluster_wild_bootstrap(theta_hat, IF_cl, ame_fn, ame_hat, B=199,
-                           scheme="rademacher", rng=None, mode=None, project=None):
+                           scheme="rademacher", rng=None, mode=None, project=None,
+                           draws_out=None):
     """Score/multiplier wild cluster bootstrap (Kline & Santos 2012): perturb the
     cluster-summed influence functions by wild weights, recompute the (linearised)
     AME via ame_fn, and read SEs/p-values off the bootstrap distribution.
@@ -1417,6 +1418,11 @@ def cluster_wild_bootstrap(theta_hat, IF_cl, ame_fn, ame_hat, B=199,
             draws[k][b] = a_b[k]
         if stud:
             Vb[b] = (wv ** 2) @ IF_a2       # diag of the bootstrap-draw CRVE
+    # `draws_out`, when given, receives a copy of the per-key draw vectors so a caller can
+    # form a percentile interval instead of a Wald SE. It is filled AFTER the draw loop, so
+    # it cannot affect the draw path: same weights, same RNG consumption, same numbers.
+    if draws_out is not None:
+        draws_out.update({k: np.array(v, copy=True) for k, v in draws.items()})
     bse, pvals = {}, {}
     for ki, k in enumerate(keys):
         sd = float(np.std(draws[k], ddof=1))
@@ -1520,8 +1526,84 @@ def _linear_wcb_t(res, B, scheme, seed, restricted, tstats_out=None):
     return bse, pvals
 
 
+
+_BAND_SIDECAR_CACHE = {}
+
+
+def _load_band_sidecar(est):
+    """The stored band file for a LINEAR routine, or None. Read once per process.
+
+    Produced on the cluster by sleep_wcb_band.py. Nothing here computes: an exporter that
+    cannot find a band prints the standard error and says so, which is a visible gap rather
+    than a number invented at render time from whatever the local machine happened to hold.
+    """
+    if est in _BAND_SIDECAR_CACHE:
+        return _BAND_SIDECAR_CACHE[est]
+    out = None
+    try:
+        import pickle
+        from utils import paths as _p
+        fp = _p.demand_prep_root() / "Rout" / f"wcb_band_est{est}.pkl"
+        if fp.exists():
+            with open(fp, "rb") as fh:
+                out = pickle.load(fh)
+            if out.get("meta", {}).get("counters_ok") is False:
+                print(f"  [band] est{est}: sidecar reports counters_ok=False -- not used.")
+                out = None
+        else:
+            print(f"  [band] est{est}: {fp.name} absent -- column falls back to the SE.")
+    except Exception as exc:
+        print(f"  [band] est{est}: sidecar unreadable ({type(exc).__name__}: {exc}).")
+        out = None
+    _BAND_SIDECAR_CACHE[est] = out
+    return out
+
+
+def band_row(res, var, est=None, spec=None):
+    """(lo_bc, hi_bc, stars) for `var` from a STORED percentile band, or None.
+
+    One reader for both column families, because both bands are built by
+    `_ame_band_from_draws` and carry the same columns:
+      * single-index (E3/E4) -- `res.ame_boot`, attached by sleep_ame_twostage.py --attach-from.
+        An attached band has already passed gate G10, so it needs no second check here. The
+        two-stage bootstrap runs on the headline spec, so `spec` does not select within it.
+      * linear (E1/E2) -- the `wcb_band_est{k}.pkl` sidecar from sleep_wcb_band.py, which
+        carries one band per IV x state cell because the appendix tables print the whole grid.
+        `spec` picks the cell; `meta.counters_ok` is checked on load.
+
+    The arm follows the same rule the standard errors do (utils.se_national.select_se): national
+    regressors read the quarter-clustered band, everything else the conglomerate one.
+
+    Returns None -- caller falls back to the SE -- when no band is stored, when the routine or
+    cell is unknown, or when the row is absent from the band. This function never bootstraps:
+    the cluster computes, the exporters render.
+    """
+    # Imported here, not at module scope: utils.se_national imports this module, so a top-level
+    # import would close the cycle.
+    from utils import se_national as _sen
+    src = getattr(res, "ame_boot", None)
+    if not isinstance(src, dict) and est is not None:
+        side = _load_band_sidecar(est)
+        if isinstance(side, dict):
+            cells = side.get("specs", {})
+            src = cells.get(spec if spec is not None else side.get("meta", {}).get("headline"))
+    if not isinstance(src, dict):
+        return None
+    if not _sen.twostage_se_enabled():
+        return None
+    blk = src.get("quarter" if _sen.is_national(var) else "congl")
+    band = (blk or {}).get("band")
+    if band is None or "name" not in getattr(band, "columns", []):
+        return None
+    hit = band[band["name"] == var]
+    if hit.empty:
+        return None
+    r = hit.iloc[0]
+    return float(r["lo_bc"]), float(r["hi_bc"]), str(r["stars"])
+
+
 def linear_wild_cluster_bootstrap(res, B=999, scheme="webb", seed=0, mode=None,
-                                  tstats_out=None):
+                                  tstats_out=None, band_out=None):
     """Score/multiplier wild cluster bootstrap SEs/p-values for a fitted statsmodels
     cluster-OLS result, so the LINEAR sleepiness estimators (Est1/Est2) share ONE
     inference method with the single-index/joint columns (Cameron-Gelbach-Miller 2008;
@@ -1559,8 +1641,17 @@ def linear_wild_cluster_bootstrap(res, B=999, scheme="webb", seed=0, mode=None,
     IF_cl = s_cl @ bread.T                                   # n_cl x K cluster IFs on beta
     ame_hat = {nm: float(b) for nm, b in zip(names, beta)}
     ame_fn = lambda th: {nm: float(th[i]) for i, nm in enumerate(names)}
+    _draws = {} if band_out is not None else None
     bse, pvals = cluster_wild_bootstrap(beta, IF_cl, ame_fn, ame_hat, B=B, scheme=scheme,
-                                        rng=np.random.default_rng(seed), mode="normal")
+                                        rng=np.random.default_rng(seed), mode="normal",
+                                        draws_out=_draws)
+    # A percentile interval, not a Wald SE: with G* of about 5.5 effective clusters the
+    # t(G*) reference behind coef +/- t*se is itself an approximation, and the bootstrap
+    # distribution is the object the WCB literature recommends reading. Same builder the
+    # single-index AMEs use, so both column families report one construction.
+    if band_out is not None:
+        _M = np.column_stack([_draws[nm] for nm in names])
+        band_out['band'] = _ame_band_from_draws(names, ame_hat, _M, label='linear-wcb')
     bse_s = pd.Series({nm: bse[nm] for nm in names}).reindex(idx)
     pv_s = pd.Series({nm: pvals[nm] for nm in names}).reindex(idx)
     tv_s = pd.Series({nm: (ame_hat[nm] / bse[nm] if bse[nm] else np.nan)
@@ -2613,13 +2704,19 @@ def _stage_a_perturbed_solve(psi_hat, foc_hat, g_w, refit, bread_A, mode="if",
     Psi recomputed at psi_hat reproduces foc_hat bit-for-bit, so R(psi_hat) is exactly zero and
     a zero-weight draw returns the estimate. But at a real draw the perturbation is enormous
     relative to the curvature: ||foc_hat|| is 2.53e-03 on est3 spec 12 while ||g_w|| is 2.5-4.6,
-    about a thousand times larger, because the index direction is weakly identified (its own
+    about a thousand times larger, because the individual loadings are imprecise (their own
     cluster-robust |t| runs 0.32-1.52). Measured on the first three est3 draws, the LM iteration
     moves the direction cosine to 0.85-0.99 and leaves ||R||/||g_w|| at 3e-2 to 1.9 -- the root
     of the perturbed score equation, where one exists, is far outside the region in which the
     quadratic model holds, and no amount of damping brings it inside. Reporting a
     non-convergent solve would put a different estimator behind every draw; reporting the
     linearisation is a stated approximation with a known form.
+
+    Per-loading imprecision is NOT the same as an unidentified index: measured on the
+    2026-09-01 production cloud, the drawn index keeps its correlation with the point index
+    even on draws where the raw coefficient cosine turns negative (which one large-unit
+    loading can do on its own). `cos_idx` in the per-draw kernel is the test that separates
+    the two; `cos` is retained as the evidence trail.
 
     `res_ratio = ||R|| / ||g_w||` measures the residual against the perturbation being solved
     for. It is the honest scale: `rel`, which divides by max(1, ||rho1*f||) to be comparable
@@ -2768,8 +2865,8 @@ def _ts_one_draw(ctx, scheme, w, cold_check=False):
     degree = ctx["degree"]; n_basis = ctx["n_basis"]; constrained = ctx["constrained"]
     b_full = ctx["b_full"]; names = ctx["names"]
     theta_hat = ctx["theta_hat"]
-    d = dict(ok=True, fail=0, newton_fail=0, cos_neg=0, vsd_fail=0, proj=0, knot_tie=0,
-             warm_vs_cold=np.nan)
+    d = dict(ok=True, fail=0, newton_fail=0, cos_neg=0, cos_idx_neg=0, vsd_fail=0, proj=0,
+             knot_tie=0, warm_vs_cold=np.nan)
 
     g_w = w @ ctx["S"][scheme]
     psi_star, ninfo = _stage_a_perturbed_solve(ctx["psi_hat"], ctx["foc_hat"], g_w,
@@ -2786,9 +2883,34 @@ def _ts_one_draw(ctx, scheme, w, cold_check=False):
         d.update(ok=False, vsd_fail=1)
         return d
     vs_b = (v_b - vmu_b) / vsd_b
+
+    # TWO direction diagnostics, and only the second one is a direction test.
+    #
+    # `cos` is the cosine between the raw coefficient vectors. It is taken in NATIVE parameter
+    # units, so its norm is dominated by whichever regressor carries the largest loading -- on
+    # spec 12 that is the lagged Selic rate (pp per quarter, tiny variance, loading about -59),
+    # which alone holds ~87% of ||theta||^2. A draw in which only that one loading crosses zero
+    # flips `cos` while the index itself is intact: measured on the 2026-09-01 production cloud,
+    # the flagged draws keep 0.73-1.00 AME sign agreement with the point estimate on every other
+    # row, hold sum(beta) at the QP cap, and keep the index SD at 0.78 of the point. So `cos < 0`
+    # says "the Selic coefficient changed sign", which is a fact about ONE weakly-determined
+    # national loading -- exactly the uncertainty the dagger already flags -- not about the index.
+    # It is kept, and counted, as the evidence trail; it does not gate.
+    #
+    # `cos_idx` is the correlation between the point index and the drawn index across
+    # observations. That is the object the link and every AME actually see; it is invariant to
+    # the units of each regressor and to theta -> a*theta (a>0), and it respects the regressor
+    # correlations that a per-coefficient rescaling would ignore. A genuinely reversed index is
+    # one the monotone link cannot represent, so THIS is the gating counter.
     cos_b = float(theta_hat @ th_b / max(1e-300, float(np.linalg.norm(theta_hat))
                                          * float(np.linalg.norm(th_b))))
     d["cos_neg"] = int(cos_b < 0)
+    _vh = ctx["v_hat"]
+    _sh, _sb = float(np.std(_vh)), float(np.std(v_b))
+    cos_idx_b = (float(np.mean((_vh - np.mean(_vh)) * (v_b - vmu_b)) / (_sh * _sb))
+                 if _sh > 0 and _sb > 0 else np.nan)
+    d["cos_idx"] = cos_idx_b
+    d["cos_idx_neg"] = int(np.isfinite(cos_idx_b) and cos_idx_b < 0)
 
     if constrained:
         # The knot placement is INSIDE the estimator (quantiles of the fitted index, extended
@@ -3085,7 +3207,7 @@ def twostage_ame_boot(df, state_cols, has_cf, si_res, loss, degree=3, fe_time_co
 
     ctx = dict(X=X, Z=Z, y_dm=y_dm, CF_raw=CF_raw, has_cf=bool(has_cf), einv=einv,
                ecounts=ecounts, tinv=tinv, tcounts=tcounts, phi_params=phi_params,
-               theta_hat=theta_hat, vsd=vsd, knots0=knots0, degree=degree,
+               theta_hat=theta_hat, vsd=vsd, v_hat=v, knots0=knots0, degree=degree,
                n_basis=int(n_basis), constrained=bool(constrained), qp_A=qp_A, qp_lb=qp_lb,
                qp_ub=qp_ub, XtX0=XtX0, b_full=b_full, dummy_spec0=amemap0["dummy_spec"],
                names=names, refit=dirif["refit"], psi_hat=psi_hat, foc_hat=foc_hat,
@@ -3241,14 +3363,15 @@ def _ts_run_scheme(ctx, s, W, B, names, ame_hat, alpha, keep_draws, cold_check_e
     draws_cone = {k: np.full(B, np.nan) for k in names}
     draws_level = {k: np.full(B, np.nan) for k in names}
     diag_rows = [None] * B
-    counters = dict(n_fail=0, n_newton_fail=0, n_cos_neg=0, n_vsd_fail=0, n_proj=0,
-                    n_knot_tie=0, n_drop=0)
+    counters = dict(n_fail=0, n_newton_fail=0, n_cos_neg=0, n_cos_idx_neg=0, n_vsd_fail=0,
+                    n_proj=0, n_knot_tie=0, n_drop=0)
     tasks = [(s, ib, W[ib], bool(cold_check_every and (ib + 1) % cold_check_every == 0))
              for ib in range(B)]
 
     def _absorb(ib, d):
         for key, cnt in (("fail", "n_fail"), ("newton_fail", "n_newton_fail"),
-                         ("cos_neg", "n_cos_neg"), ("vsd_fail", "n_vsd_fail"),
+                         ("cos_neg", "n_cos_neg"), ("cos_idx_neg", "n_cos_idx_neg"),
+                         ("vsd_fail", "n_vsd_fail"),
                          ("proj", "n_proj"), ("knot_tie", "n_knot_tie")):
             counters[cnt] += int(d.get(key, 0))
         if not d.get("ok", False):
@@ -3296,7 +3419,8 @@ def _ts_run_scheme(ctx, s, W, B, names, ame_hat, alpha, keep_draws, cold_check_e
         print(f"  [2s {s}] cos 5/50/95%: {q.iloc[0]:.4f}/{q.iloc[1]:.4f}/{q.iloc[2]:.4f} | "
               f"newton iters med {diag['newton_iters'].median():.0f} | "
               f"fail={counters['n_fail']} newton_fail={counters['n_newton_fail']} "
-              f"cos_neg={counters['n_cos_neg']} vsd_fail={counters['n_vsd_fail']} "
+              f"cos_neg={counters['n_cos_neg']} (diagnostic) "
+              f"cos_idx_neg={counters['n_cos_idx_neg']} vsd_fail={counters['n_vsd_fail']} "
               f"proj={counters['n_proj']}/{int(keep.sum())}"
               + (f" | warm-vs-cold max {wc.max():.2e} (n={len(wc)})" if len(wc) else "")
               + f" | {(_time.time()-t0)/60:.1f} min")
@@ -3345,5 +3469,6 @@ def _ts_off_path(names, ame_fn0, ame_hat, b_full, IF_b_of, W_of, B, constrained,
                       band_level=None, cov=np.cov(Dc, rowvar=False, ddof=1),
                       per_draw_diag=pd.DataFrame(), draws_cone=draws, draws_level=None,
                       n_cl=int(W.shape[1]), B_used=B, n_fail=0, n_newton_fail=0, n_cos_neg=0,
-                      n_vsd_fail=0, n_proj=0, n_knot_tie=0, n_drop=0, runtime_s=np.nan)
+                      n_cos_idx_neg=0, n_vsd_fail=0, n_proj=0, n_knot_tie=0, n_drop=0,
+                      runtime_s=np.nan)
     return out

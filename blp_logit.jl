@@ -31,6 +31,17 @@ Four sub-models per routine (the in-file LaTeX table generator below reads these
 Outputs cluster-robust standard errors (conglomerate clustering), GMM Q-values, and
 IK2016 effective clusters G*.
 
+THE ESTIMATOR (and why it is the θ₂ = 0 nest of the RC model)
+  δ is the Berry (1994) inversion δ_jkmt = ln s_jkmt − ln s_0mt, with the outside share
+  recovered in closed form from the SAME market structure the RC engine integrates over —
+  see `berry_inversion`, which reproduces the engine's θ₂ = 0 contraction fixed point to
+  ~1e-15. θ₁ is then OLS of δ on [spread_hat, X]: only the k = 4,5 spread is endogenous and
+  it carries its own per-type first-stage projection as the instrument, while the product
+  characteristics are exogenous. That is exactly `estimate_theta1` in blp_engine_cpu.jl, so
+  running this file and the RC engine's `logit` stage on one parquet must return the same α.
+  Both properties were absent before 2026-09: δ omitted −ln s_0, and the linear step projected
+  the whole design (characteristics included) onto the 16 EXCLUDED instruments.
+
 Usage
 -----
   # All discovered routines + combined summary + LaTeX tables:
@@ -114,42 +125,22 @@ const SUB_MODELS = [
 # ==========================================================================
 # 0c. Standard-error method (shared convention with the RC engine + sleepiness)
 # ==========================================================================
-# BLP_SE_METHOD: "wcb" (wild cluster bootstrap, default — matches the sleepiness estimation's
-# inference) or "sandwich" (analytical cluster-robust). BLP_WCB_REPS / BLP_WCB_SCHEME mirror the
-# sleepiness SLEEP_BOOT_B / SLEEP_BOOT_SCHEME defaults (999 replications, Webb 6-point weights).
-se_method()  = lowercase(get(ENV, "BLP_SE_METHOD", "wcb"))
-wcb_reps()   = parse(Int, get(ENV, "BLP_WCB_REPS", get(ENV, "SLEEP_BOOT_B", "999")))
-wcb_scheme() = lowercase(get(ENV, "BLP_WCB_SCHEME", get(ENV, "SLEEP_BOOT_SCHEME", "webb")))
+# `se_method`, `wcb_reps`, `wcb_scheme`, `wild_weights` and `wcb_se` come from the SHARED module
+# blp_se_common.jl — the same definitions blp_engine_cpu.jl / blp_engine_gpu.jl use, so every
+# demand SE in the paper is produced by one implementation. This file used to carry a private
+# copy of them; the copy had drifted, referencing a NORMAL null distribution where the shared
+# `wcb_se` takes a Student-t(G*) few-cluster reference (`dof`), which is the convention every
+# other table in the paper reports. Guarded because a session that has already included an
+# engine has these definitions.
+isdefined(Main, :gmm_cluster_ses) || include(joinpath(@__DIR__, "blp_se_common.jl"))
 
-"""Wild bootstrap weights, one per cluster: 6-point Webb (default; robust to few/imbalanced
-clusters) or 2-point Rademacher. Matches utils/sleep_links.py `_wild_weights`."""
-function wild_weights(n::Int, scheme::AbstractString, rng::AbstractRNG)
-    if scheme == "webb"
-        vals = (-sqrt(1.5), -1.0, -sqrt(0.5), sqrt(0.5), 1.0, sqrt(1.5))
-        return Float64[vals[rand(rng, 1:6)] for _ in 1:n]
-    end
-    return Float64[rand(rng) < 0.5 ? -1.0 : 1.0 for _ in 1:n]   # Rademacher
-end
-
-"""Score/no-refit wild cluster bootstrap (Kline–Santos; same primitive as the sleepiness
-`cluster_wild_bootstrap`). Given per-cluster influence functions `IF_cl` (G×K) for θ̂, draws
-`B` wild-weighted perturbations θ_b = θ̂ + Σ_g w_g·IF_g and returns (se, pval): the bootstrap SD
-and a symmetric Wald p, 2·Φ̄(|θ̂_k|/se_k). No refit, no small-sample factor (unit-variance
-weights supply it)."""
-function wcb_se(theta::Vector{Float64}, IF_cl::Matrix{Float64};
-                B::Int=wcb_reps(), scheme::AbstractString=wcb_scheme(), seed::Int=0)
-    G, K = size(IF_cl)
-    (G < 2 || K == 0) && return (fill(NaN, K), fill(NaN, K))
-    rng   = MersenneTwister(seed)
-    draws = Matrix{Float64}(undef, B, K)
-    for b in 1:B
-        wv = wild_weights(G, scheme, rng)          # one weight per cluster
-        @views draws[b, :] .= theta .+ IF_cl' * wv  # θ_b = θ̂ + Σ_g w_g IF_g
-    end
-    se   = Float64[std(@view(draws[:, k]); corrected=true) for k in 1:K]
-    pval = Float64[se[k] > 0 ? 2 * ccdf(Normal(), abs(theta[k]) / se[k]) : 0.0 for k in 1:K]
-    return se, pval
-end
+# BLP_LOGIT_INTERCEPT=1 adds a constant to the logit design. It is OFF by default and should
+# stay off for anything the paper reports: the published logit column is the literal θ₂ = 0
+# nest of the RC model, and the RC engines' X₁ (`X_COLS` in blp_engine_cpu.jl) carries NO
+# constant, so an intercept here would break that nesting — and the equality check against the
+# engine's own logit stage with it. Deposit-type / quarter fixed effects (which nest a constant)
+# belong to the identification battery, not to this estimator.
+logit_intercept() = get(ENV, "BLP_LOGIT_INTERCEPT", "0") == "1"
 
 # ==========================================================================
 # 0b. Paths
@@ -297,6 +288,113 @@ function load_spec_data(estim)
 end
 
 # ==========================================================================
+# 1b. Mean utility: the Berry (1994) inversion, in the engine's market structure
+# ==========================================================================
+"""
+    berry_inversion(df) -> (delta, diag)
+
+Mean utility δ from the data shares, inverted in the SAME market structure the RC engine
+integrates over (`compute_model_shares!`, blp_engine_cpu.jl): inside a market (m,t) the choice
+set is the outside option, the B products of that market, and EVERY D product of that quarter,
+while a D product's reported share is the population-weighted average of its local shares
+across markets (eq. B-3-D).
+
+Write `A_mt = Σ_{j∈B(m,t)} e^{δ_j}`, `C_t = Σ_{j∈D(t)} e^{δ_j}` and let `g_mt = 1/(1+A_mt+C_t)`
+be the outside share. The data then satisfy
+
+    S^B_mt ≡ Σ_{j∈B(m,t)} s_j = A_mt · g_mt              (local,    observed)
+    S^D_t  ≡ Σ_{j∈D(t)}  s_j = C_t · Σ_m w_mt · g_mt     (national, observed)
+
+with `w_mt` the engine's own D-aggregation weights (`pop_weights` in `build_precomp`: the
+per-pair mean of `banked_correction · pop_total`, normalised within the quarter). Eliminating
+A and C leaves a CLOSED FORM — no contraction is needed at θ₂ = 0:
+
+    K_t  = Σ_m w_mt (1 − S^B_mt)
+    G_t  ≡ Σ_m w_mt g_mt = K_t − S^D_t
+    g_mt = (1 − S^B_mt) · G_t / K_t
+    δ_j  = ln s_j − ln g_mt   (B rows)      δ_j = ln s_j − ln G_t   (D rows)
+
+VERIFIED against the engine's own kernel: pushing this δ back through the θ₂ = 0 share map
+returns the data shares to 2.8e-16 (B) and 6.6e-16 (D) on E3/spec 12 — it *is* the fixed point
+the contraction converges to, so the logit is the exact θ₂ = 0 nest of the RC model.
+
+Why this replaced `δ = ln s_j`: the missing `− ln s_0` is not a constant. On E3/spec 12 it has
+mean 0.45, sd 0.72 and range [0, 3.11] — it varies with market structure (it is a function of
+how much of the market the incumbents already hold), so dropping it is an omitted regressor
+correlated with the spread, not an intercept the design absorbs.
+"""
+function berry_inversion(df::DataFrame)
+    N    = nrow(df)
+    is_B = BitVector(Bool.(coalesce.(df.is_B, false)))
+    mca  = string.(df.mca_code)
+    tid  = string.(df.time_id)
+    sB   = Float64.(coalesce.(df.share_B_cond, NaN))
+    sD   = Float64.(coalesce.(df.share_D,      NaN))
+    pop  = Float64.(coalesce.(df.pop_total, 0.0))
+    bc   = Float64.(coalesce.(df.banked_correction, 1.1))   # engine default (build_precomp)
+
+    # Quarter index (every row) and market index (B rows only: a D row's mca_code is NATIONAL).
+    time_idx = Dict{String,Int}(); row_time = zeros(Int, N); n_times = 0
+    for i in 1:N
+        j = get(time_idx, tid[i], 0)
+        if j == 0; n_times += 1; time_idx[tid[i]] = n_times; j = n_times; end
+        row_time[i] = j
+    end
+    pair_idx = Dict{Tuple{String,String},Int}(); row_pair = zeros(Int, N); n_pairs = 0
+    for i in 1:N
+        is_B[i] || continue
+        k = (mca[i], tid[i]); j = get(pair_idx, k, 0)
+        if j == 0; n_pairs += 1; pair_idx[k] = n_pairs; j = n_pairs; end
+        row_pair[i] = j
+    end
+    n_pairs == 0 && error("berry_inversion: no B rows — cannot build the market structure.")
+
+    pair_time = zeros(Int, n_pairs)
+    SB        = zeros(n_pairs)      # Σ_j share_B_cond within the market
+    bcpop     = zeros(n_pairs)      # Σ over B rows of bc·pop, divided below by the row count
+    n_rows_p  = zeros(Int, n_pairs)
+    @inbounds for i in 1:N
+        is_B[i] || continue
+        p = row_pair[i]
+        pair_time[p] = row_time[i]
+        isfinite(sB[i]) && (SB[p] += sB[i])
+        bcpop[p]    += bc[i] * pop[i]
+        n_rows_p[p] += 1
+    end
+    bcpop ./= max.(n_rows_p, 1)                       # per-pair mean, exactly as build_precomp
+    tot_bcpop = zeros(n_times)
+    @inbounds for p in 1:n_pairs; tot_bcpop[pair_time[p]] += bcpop[p]; end
+    w = @inbounds [bcpop[p] / max(tot_bcpop[pair_time[p]], 1e-30) for p in 1:n_pairs]
+
+    K = zeros(n_times)
+    @inbounds for p in 1:n_pairs; K[pair_time[p]] += w[p] * (1.0 - SB[p]); end
+    SD = zeros(n_times)
+    @inbounds for i in 1:N
+        (!is_B[i] && isfinite(sD[i])) && (SD[row_time[i]] += sD[i])
+    end
+    G = K .- SD                                        # G_t = Σ_m w_mt g_mt
+
+    bad = findall(t -> !(G[t] > 0.0), 1:n_times)
+    isempty(bad) || error("berry_inversion: Σ_m w·(1−S^B) ≤ Σ_j s^D in $(length(bad)) quarter(s) " *
+                          "(e.g. t=$(first(bad)): K=$(K[first(bad)]), S^D=$(SD[first(bad)])). " *
+                          "The implied outside share is non-positive, so δ is undefined — the " *
+                          "market-size construction in the demand prep needs revisiting.")
+
+    g_pair = @inbounds [clamp((1.0 - SB[p]) * G[pair_time[p]] / max(K[pair_time[p]], 1e-30),
+                              1e-12, 1.0) for p in 1:n_pairs]
+    delta  = zeros(N)
+    @inbounds for i in 1:N
+        delta[i] = is_B[i] ? log(clamp(sB[i], 1e-15, Inf)) - log(g_pair[row_pair[i]]) :
+                             log(clamp(sD[i], 1e-15, Inf)) - log(G[row_time[i]])
+    end
+
+    diag = (n_pairs = n_pairs, n_times = n_times,
+            s0_min = minimum(g_pair), s0_med = median(g_pair), s0_max = maximum(g_pair),
+            G_min = minimum(G), G_max = maximum(G))
+    return delta, diag
+end
+
+# ==========================================================================
 # 2. Regressor and IV Construction
 # ==========================================================================
 """Build spread vector, product-characteristics matrix, and IV matrix."""
@@ -306,12 +404,20 @@ function build_matrices(df::DataFrame, xcols::Vector{String}, add_dtype::Bool)
     # Spread in percentage points (÷100 to convert from bps stored in parquet)
     spread = Float64.(coalesce.(df.spread_ann, 0.0)) ./ 100.0
 
-    # Product characteristics matrix X
-    n_x = length(xcols) + (add_dtype ? 1 : 0)
-    X = zeros(N, n_x)
+    # Product characteristics matrix X. A constant is prepended only under
+    # BLP_LOGIT_INTERCEPT=1 (off by default — see `logit_intercept`), so the reported design
+    # is exactly the RC engines' X₁.
+    use_const = logit_intercept()
+    n_x = length(xcols) + (add_dtype ? 1 : 0) + (use_const ? 1 : 0)
+    X   = zeros(N, n_x)
+    off = 0
+    if use_const
+        X[:, 1] .= 1.0
+        off = 1
+    end
     for (i, col) in enumerate(xcols)
         if col in names(df)
-            X[:, i] .= Float64.(coalesce.(df[!, col], 0.0))
+            X[:, off + i] .= Float64.(coalesce.(df[!, col], 0.0))
         end
     end
     if add_dtype
@@ -381,12 +487,33 @@ end
 # 3. 2SLS/IV Estimation with Cluster-Robust SEs
 # ==========================================================================
 """
-2SLS estimation: δ = X_hat \\ delta, where X_hat uses projected spreads.
-Returns (theta1, se, xi, Q_value, n_clusters, G_star).
+Linear step θ₁ given the generated instrument: OLS of δ on `X_hat = [spread_hat, X]`.
+
+This is the RC engines' own θ₁ step (`estimate_theta1`, blp_engine_cpu.jl) and it encodes the
+paper's identification design (Appendix B, step 4): **only the spread on the bank-set deposit
+types k = 4,5 is endogenous**, and it is instrumented by its own per-type first-stage
+projection `spread_hat` (built on `H = [X, Z]` by `project_spreads`); the regulated types 1–2
+enter with the raw spread, and every product characteristic is exogenous — its own instrument.
+Because the per-type projection makes `spread − spread_hat` orthogonal to `[spread_hat, X]`
+block by block, `X̂′X_full = X̂′X̂` exactly, so this OLS *is* exactly-identified IV
+(Frisch–Waugh–Lovell) and the sandwich below is the corresponding 2SLS sandwich.
+
+It replaced a projection of the WHOLE design onto the 16 EXCLUDED instruments, i.e.
+`θ̂ = (X̃′X)⁻¹X̃′δ` with `X̃ = Z(Z′Z)⁻¹Z′X`. That treated `fgc_covered`, the segment dummies,
+`log_total_assets_lag` and `is_state_owned` as endogenous — instrumenting exogenous regressors
+with rival accounting variables, which is neither the paper's design nor the engines', and
+made this file a different estimator from the RC model it is supposed to nest.
+
+`Q` is retained as a DIAGNOSTIC: the one-step GMM criterion `ḡ′Wḡ` on the 16 excluded moments
+with `W = (Z′Z/N)⁻¹`, exactly as the engines form it. Its overidentification df is `L − 1`, not
+`L`: the estimator sets the X-moments to zero exactly (they are not in Z) and pins only the
+single `spread_hat` direction of the Z-space, leaving `L − 1` overidentifying restrictions.
+
+Returns `(theta1, se, pval, xi, Q, q_df, n_clusters, G_star)`.
 """
-function estimate_2sls(delta::Vector{Float64}, X_full::Matrix{Float64},
-                       X_hat::Matrix{Float64}, Z::Matrix{Float64},
-                       clusters::Vector{String})
+function estimate_theta1_logit(delta::Vector{Float64}, X_full::Matrix{Float64},
+                               X_hat::Matrix{Float64}, Z::Matrix{Float64},
+                               clusters::Vector{String})
     N, K = size(X_full)
     L    = size(Z, 2)
 
@@ -401,59 +528,50 @@ function estimate_2sls(delta::Vector{Float64}, X_full::Matrix{Float64},
     cl_v = clusters[valid]
     N_v  = sum(valid)
 
-    # --- 2SLS point estimates ---
-    # Project X onto Z-space: X̃ = Z(Z'Z)⁻¹Z'X
-    # Avoid materializing the N×N projection matrix Pz = Z(Z'Z)⁻¹Z'
-    ZtZ     = Z_v' * Z_v
-    ZtZ_inv = try inv(ZtZ) catch; pinv(ZtZ) end
-    ZtX     = Z_v' * X_v             # (L, K)
-    X_proj  = Z_v * (ZtZ_inv * ZtX)  # (N_v, K) — projected regressors
+    # --- θ₁ = (X̂′X̂)⁻¹ X̂′δ  (= exactly-identified IV; see the docstring) ---
+    XhX     = X_v' * X_v
+    XhX_inv = try inv(XhX) catch; pinv(XhX) end
+    theta1  = XhX_inv * (X_v' * d_v)
 
-    # IV estimator: (X̃'X)⁻¹ X̃'δ
-    XpX    = X_proj' * X_v
-    XpX_inv= try inv(XpX) catch; pinv(XpX) end
-    theta1 = XpX_inv * (X_proj' * d_v)
+    # Residuals on the ORIGINAL design (raw spread), as the structural ξ requires
+    xi_v = d_v .- Xf_v * theta1
+    xi   = delta .- X_full * theta1
 
-    # Residuals (use original X, not projected)
-    xi_v  = d_v .- Xf_v * theta1
-    xi    = delta .- X_full * theta1
-
-    # --- GMM Q-value: g'Wg, g = Z'ξ/N ---
-    W      = try inv(Z_v' * Z_v ./ N_v) catch; Matrix(1.0I, L, L) end
-    g      = vec(mean(xi_v .* Z_v; dims=1))
-    Q      = dot(g, W * g)
+    # --- GMM Q diagnostic: ḡ′Wḡ, ḡ = mean(ξ ⊙ Z), W = (Z′Z/N)⁻¹ ---
+    W    = try inv(Z_v' * Z_v ./ N_v) catch; Matrix(1.0I, L, L) end
+    g    = vec(mean(xi_v .* Z_v; dims=1))
+    Q    = dot(g, W * g)
+    q_df = max(L - 1, 1)
 
     # --- Cluster-robust sandwich + per-cluster influence functions (for the WCB) ---
-    # Bread: (X̃'X)⁻¹.  Meat: Σ_c (X̃_c' ξ_c)(X̃_c' ξ_c)'.  IF_g = (X̃'X)⁻¹ (X̃_c' ξ_c).
+    # Bread: (X̂′X̂)⁻¹.  Meat: Σ_c (X̂_c′ξ_c)(X̂_c′ξ_c)′.  IF_g = (X̂′X̂)⁻¹ (X̂_c′ξ_c).
     unique_cl = unique(cl_v)
     G         = length(unique_cl)
     meat      = zeros(K, K)
     IF_cl     = zeros(G, K)
     for (gi, c) in enumerate(unique_cl)
         c_mask  = cl_v .== c
-        score_c = X_proj[c_mask, :]' * xi_v[c_mask]   # (K,)
+        score_c = X_v[c_mask, :]' * xi_v[c_mask]   # (K,)
         meat   .+= score_c * score_c'
-        IF_cl[gi, :] = XpX_inv * score_c
+        IF_cl[gi, :] = XhX_inv * score_c
     end
     # Small-sample correction: G/(G-1) × N/(N-K)
     correction = (G / (G - 1)) * (N_v / (N_v - K))
-    se_sand    = sqrt.(max.(diag(XpX_inv * meat * XpX_inv' .* correction), 0.0))
+    se_sand    = sqrt.(max.(diag(XhX_inv * meat * XhX_inv' .* correction), 0.0))
 
-    # IK2016 effective clusters: G* = G / (1 + CV²)
-    cl_sizes = [count(==(c), cl_v) for c in unique_cl]
-    mu_G     = Statistics.mean(cl_sizes)
-    cv_G     = mu_G > 0 ? Statistics.std(cl_sizes; corrected=false) / mu_G : 0.0
-    G_star   = max(1.0, G / (1.0 + cv_G^2))
+    # IK2016 effective clusters G* = G/(1+CV²), from the shared helper (blp_se_common.jl)
+    G_star = max(1.0, effective_clusters(cl_v))
 
     # --- SE method: analytical sandwich or wild cluster bootstrap (default) ---
+    # Both take the t(G*) few-cluster reference — the convention every other table reports.
     if se_method() == "sandwich"
         se   = se_sand
         pval = Float64[2 * ccdf(TDist(G_star), abs(theta1[k]) / max(se[k], 1e-15)) for k in 1:K]
     else  # "wcb" — score wild cluster bootstrap, matching the sleepiness estimation
-        se, pval = wcb_se(theta1, IF_cl)
+        se, pval = wcb_se(theta1, IF_cl; dof=G_star)
     end
 
-    return theta1, se, pval, xi, Q, G, G_star
+    return theta1, se, pval, xi, Q, q_df, G, G_star
 end
 
 # ==========================================================================
@@ -475,14 +593,13 @@ function run_strategy(estim)
     df = load_spec_data(estim)
     println("    Loaded: $(nrow(df)) observations ($(estim.prefix)_spec_$(SPEC_ID).parquet)")
 
-    # Construct delta = ln(s_data): D-type use share_D, B-type use conditional share_B_cond
-    is_B = BitVector(Bool.(coalesce.(df.is_B, false)))
-    share_D      = Float64.(coalesce.(df.share_D,      0.0))
-    share_B_cond = Float64.(coalesce.(df.share_B_cond, 0.0))
-
-    delta = zeros(nrow(df))
-    delta[.!is_B] .= log.(clamp.(share_D[.!is_B],      1e-15, Inf))
-    delta[is_B]   .= log.(clamp.(share_B_cond[is_B],   1e-15, Inf))
+    # Mean utility by the Berry inversion, δ = ln s_j − ln s_0, in the engine's market
+    # structure (see `berry_inversion`). The outside share is NOT 1 − Σ_j s_j of one column:
+    # a market's choice set holds the B products of that market AND every D product of the
+    # quarter, and a D share is the population-weighted average of local shares.
+    delta, inv_diag = berry_inversion(df)
+    @printf("    δ = ln s − ln s₀ | outside share s₀: min %.4f  median %.4f  max %.4f  (%d markets, %d quarters)\n",
+            inv_diag.s0_min, inv_diag.s0_med, inv_diag.s0_max, inv_diag.n_pairs, inv_diag.n_times)
 
     # Cluster identifiers: CodConglomeradoPrudencial (matches sleep estimation)
     clusters = string.(df.CodConglomeradoPrudencial)
@@ -531,15 +648,17 @@ function run_strategy(estim)
         spread_hat = project_spreads(spread, X, Z, dep_types)
         X_hat = hcat(spread_hat, X)
 
-        # Parameter names
-        pnames = vcat(["alpha"], sm.xcols)
-        if sm.add_dtype
-            pnames = vcat(pnames, ["dummy_D_type"])
-        end
+        # Parameter names — must track build_matrices' column order:
+        # [spread, (constant), xcols…, (dummy_D_type)]
+        pnames = vcat(["alpha"],
+                      logit_intercept() ? ["constant"] : String[],
+                      sm.xcols,
+                      sm.add_dtype ? ["dummy_D_type"] : String[])
 
-        # 2SLS estimation. SEs by BLP_SE_METHOD (WCB by default); `pval` are the matching
-        # p-values (WCB Wald or sandwich t(G*)) used for the table significance stars.
-        theta1, se, pval, _xi, Q, n_cl, G_star = estimate_2sls(delta, X_full, X_hat, Z, clusters)
+        # Linear step given the generated instrument. SEs by BLP_SE_METHOD (WCB by default);
+        # `pval` are the matching p-values (t(G*) reference) used for the significance stars.
+        theta1, se, pval, _xi, Q, q_df, n_cl, G_star =
+            estimate_theta1_logit(delta, X_full, X_hat, Z, clusters)
 
         # t-statistics
         tstat = theta1 ./ max.(se, 1e-15)
@@ -570,6 +689,7 @@ function run_strategy(estim)
             "pval"        => pval,
             "se_method"   => se_method(),
             "Q_value"     => Q,
+            "q_df"        => q_df,            # overid df = L − 1 (see estimate_theta1_logit)
             "n_obs"       => nrow(df),
             "n_iv"        => length(iv_names),
             "iv_names"    => iv_names,
@@ -651,6 +771,7 @@ end
 
 const VAR_MAP = Dict(
     "alpha"                => raw"Price coefficient ($\alpha$)",
+    "constant"             => "Constant",
     "fgc_covered"          => "FGC Covered",
     "has_ip"               => "Group Contains IP",
     "log_total_assets_lag" => raw"$\ln(\text{Total Assets}_{t-1})$",
@@ -659,7 +780,7 @@ const VAR_MAP = Dict(
     "is_state_owned"       => "State-Owned",
     "dummy_D_type"         => "D Type",
 )
-const ROW_ORDER = ["alpha", "fgc_covered", "has_ip", "log_total_assets_lag",
+const ROW_ORDER = ["alpha", "constant", "fgc_covered", "has_ip", "log_total_assets_lag",
                    "seg_S2", "seg_S3", "seg_S4", "seg_S5", "is_state_owned", "dummy_D_type"]
 const TABLE_SUBMODELS = [("priceonly", "Price Only"), ("core", "Price + Core"),
                          ("full", "Price + Chars"), ("full_dtype", "+ D-Type"),
@@ -710,10 +831,20 @@ function format_cell(coef, se, gstar, pval=nothing)
     return (@sprintf("\$%.4f%s\$", coef, _stars(p)), @sprintf("\$(%.4f)\$", se))
 end
 
-"""Q-value cell with χ²(L) overidentification p-value stars; '---' if missing."""
-function format_q_value(qv, L)
-    (qv === nothing || isnan(qv) || L <= 0) && return "---"
-    return @sprintf("\$%.4f%s\$", qv, _stars(ccdf(Chisq(L), qv)))
+"""Q-value cell with χ²(df) overidentification p-value stars; '---' if missing. `df` is the
+number of OVERIDENTIFYING restrictions (L − 1, `q_df` in the results), not the instrument
+count: the estimator imposes the X-moments exactly and pins one direction of the Z-space."""
+function format_q_value(qv, df)
+    (qv === nothing || isnan(qv) || df <= 0) && return "---"
+    return @sprintf("\$%.4f%s\$", qv, _stars(ccdf(Chisq(df), qv)))
+end
+
+"""Overidentification df for one summary entry: the stored `q_df`, else `n_iv − 1` for a
+summary written before `q_df` existed."""
+function _q_df(entry)
+    v = get(entry, "q_df", nothing)
+    v !== nothing && return Int(v)
+    return max(Int(get(entry, "n_iv", 1)) - 1, 1)
 end
 
 # ── plain-text formatting (comparison table matches est1-4_spec12_stage2_comparison.tex,
@@ -769,8 +900,13 @@ function build_logit_comparison_tex(data::AbstractDict, ids::Vector{Int},
         seg_sentence *
         raw"WCB standard errors (conglomerate clusters) in parentheses. " *
         raw"Significance stars use WCB $p$-values where available, otherwise a " *
-        raw"Student-$t$ reference with $G^*$ effective clusters: *** $p<0.01$, ** $p<0.05$, * $p<0.1$. $Q$ is the GMM " *
-        raw"overidentification statistic ($\chi^2_L$, $L$ = \# instruments); $G^*$ is " *
+        raw"Student-$t$ reference with $G^*$ effective clusters: *** $p<0.01$, ** $p<0.05$, * $p<0.1$. " *
+        raw"Mean utility is the \textcite{berry1994estimating} inversion " *
+        raw"$\delta_{jkmt}=\ln \hat{s}^{\mathrm{Act}}_{jkmt}-\ln \hat{s}^{\mathrm{Act}}_{\varnothing mt}$, and the " *
+        raw"deposit spread is instrumented by its first-stage projection on deposit types 4 and 5 only, " *
+        raw"the types over which institutions exercise pricing discretion; the product characteristics are " *
+        raw"exogenous. $Q$ is the GMM criterion on the excluded instruments and the Degrees of Freedom row " *
+        raw"its overidentification count ($\chi^2$); $G^*$ is " *
         raw"effective clusters. The mean own-price elasticity is " *
         raw"$\hat{\alpha}\,\rho_{jkmt}(1-s_{jkmt})$ averaged over the estimation sample " *
         raw"(spread $\rho$ in percentage points).}"   # no trailing TROW (matches stage2 template)
@@ -819,10 +955,10 @@ function build_logit_comparison_tex(data::AbstractDict, ids::Vector{Int},
         push!(elas_l, isfinite(ev) ? @sprintf("%.3f", ev) : "---")
         obs = get(entry, "n_obs", nothing)
         push!(obs_l, (obs === nothing || obs == 0) ? "---" : _commas(Int(obs)))
-        qv = get(entry, "Q_value", nothing); niv = Int(get(entry, "n_iv", 0))
-        push!(niv_l, string(niv))
+        qv = get(entry, "Q_value", nothing); qdf = _q_df(entry)
+        push!(niv_l, string(qdf))
         push!(q_l, qv === nothing ? "---" :
-                   @sprintf("%.4f%s", Float64(qv), _stars_plain(ccdf(Chisq(niv), Float64(qv)))))
+                   @sprintf("%.4f%s", Float64(qv), _stars_plain(ccdf(Chisq(qdf), Float64(qv)))))
         gs = get(entry, "G_star", nothing)
         push!(gstar_l, gs === nothing ? "---" : @sprintf("%.2f", Float64(gs)))
     end
@@ -906,12 +1042,24 @@ function build_logit_table_tex(est_id::Int, data::AbstractDict)::String
         raw"    \multicolumn{" * string(ncols+1) *
             raw"}{p{\dimexpr\textwidth-2\tabcolsep\relax}}{\scriptsize \textit{Notes:} " *
             raw"WCB standard errors (conglomerate clusters) in parentheses. " *
-            raw"Significance: *** $p<0.01$, ** $p<0.05$, * $p<0.1$. $Q$ denotes the GMM " *
-            raw"overidentification test statistic ($\chi^2_L$, $L$ = \# instruments); $G^*$ is " *
+            raw"Significance: *** $p<0.01$, ** $p<0.05$, * $p<0.1$. Mean utility is the " *
+            raw"\textcite{berry1994estimating} inversion $\delta_{jkmt}=\ln \hat{s}^{\mathrm{Act}}_{jkmt}-" *
+            raw"\ln \hat{s}^{\mathrm{Act}}_{\varnothing mt}$; the deposit spread is instrumented on deposit " *
+            raw"types 4 and 5 only and the product characteristics are exogenous. $Q$ denotes the GMM " *
+            raw"criterion on the excluded instruments and the Degrees of Freedom row its " *
+            raw"overidentification count ($\chi^2$); $G^*$ is " *
             raw"effective clusters.}" * TROW,
         raw"    \endlastfoot", "",
     ]
-    for (i, p) in enumerate(ROW_ORDER)
+    # Only rows some sub-model actually estimated. `constant` is in ROW_ORDER for the
+    # BLP_LOGIT_INTERCEPT=1 diagnostic run; with the intercept off (the reported design) it is
+    # in no `param_names`, and this filter keeps it out of the table instead of printing a row
+    # of dashes.
+    _row_present(p) = any(sm -> p in String.(get(get(data, "E$(est_id)_$(sm[1])",
+                                                     Dict{String,Any}()), "param_names", String[])),
+                          TABLE_SUBMODELS)
+    rows_used = [p for p in ROW_ORDER if _row_present(p)]
+    for (i, p) in enumerate(rows_used)
         row_c = String[map_var(p)]; row_s = String[""]
         for (sm_key, _) in TABLE_SUBMODELS
             entry  = get(data, "E$(est_id)_$(sm_key)", Dict{String,Any}())
@@ -930,7 +1078,7 @@ function build_logit_table_tex(est_id::Int, data::AbstractDict)::String
         end
         push!(lines, "    " * join(row_c, " & ") * TROW)
         push!(lines, "    " * join(row_s, " & ") * TROW)
-        i < length(ROW_ORDER) && push!(lines, raw"    \addlinespace")
+        i < length(rows_used) && push!(lines, raw"    \addlinespace")
     end
     push!(lines, raw"    \midrule")
     obs_l = String[]; q_l = String[]; gstar_l = String[]; niv_l = String[]
@@ -938,9 +1086,9 @@ function build_logit_table_tex(est_id::Int, data::AbstractDict)::String
         entry = get(data, "E$(est_id)_$(sm_key)", Dict{String,Any}())
         obs   = get(entry, "n_obs", nothing)
         push!(obs_l, (obs === nothing || obs == 0) ? "---" : _commas(Int(obs)))
-        qv  = get(entry, "Q_value", nothing); niv = Int(get(entry, "n_iv", 0))
-        push!(niv_l, string(niv))
-        push!(q_l, qv === nothing ? "---" : format_q_value(Float64(qv), niv))
+        qv  = get(entry, "Q_value", nothing); qdf = _q_df(entry)
+        push!(niv_l, string(qdf))
+        push!(q_l, qv === nothing ? "---" : format_q_value(Float64(qv), qdf))
         gs = get(entry, "G_star", nothing)
         push!(gstar_l, gs === nothing ? "---" : @sprintf("%.2f", Float64(gs)))
     end

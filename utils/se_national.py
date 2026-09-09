@@ -93,11 +93,16 @@ def driscoll_kraay(score: np.ndarray, bread: np.ndarray, periods, lags: int | No
 
 
 def time_clustered_wcb(score: np.ndarray, bread: np.ndarray, periods, beta: np.ndarray,
-                       names, B: int = 999, scheme: str = "webb", seed: int = 0):
+                       names, B: int = 999, scheme: str = "webb", seed: int = 0,
+                       band_out=None):
     """Wild cluster bootstrap with the QUARTER as the cluster. Reuses the same
     cluster_wild_bootstrap the rest of the repo uses, so the only thing that changes versus the
-    reported SEs is which dimension is resampled."""
-    from utils.sleep_links import cluster_wild_bootstrap
+    reported SEs is which dimension is resampled.
+
+    `band_out`, when given a dict, additionally receives `band` -- the bias-corrected
+    percentile interval per coefficient, built by the same `_ame_band_from_draws` the
+    single-index AMEs use. It is read off the draws already taken, so it cannot move an SE."""
+    from utils.sleep_links import cluster_wild_bootstrap, _ame_band_from_draws
     per = pd.Series(np.asarray(periods)).astype(str).values
     uniq, t_inv = np.unique(per, return_inverse=True)
     n_t = len(uniq)
@@ -105,8 +110,14 @@ def time_clustered_wcb(score: np.ndarray, bread: np.ndarray, periods, beta: np.n
     nm = list(names)
     ame_hat = {n: float(b) for n, b in zip(nm, beta)}
     ame_fn = lambda th: {n: float(th[i]) for i, n in enumerate(nm)}
+    _draws = {} if band_out is not None else None
     bse, pvals = cluster_wild_bootstrap(np.asarray(beta, float), IF_t, ame_fn, ame_hat,
-                                        B=B, scheme=scheme, rng=np.random.default_rng(seed))
+                                        B=B, scheme=scheme, rng=np.random.default_rng(seed),
+                                        draws_out=_draws)
+    if band_out is not None:
+        _M = np.column_stack([_draws[n] for n in nm])
+        band_out["band"] = _ame_band_from_draws(nm, ame_hat, _M, label="quarter-wcb")
+        band_out["n_t"] = n_t
     return (pd.Series({n: bse[n] for n in nm}),
             pd.Series({n: pvals[n] for n in nm}), n_t)
 

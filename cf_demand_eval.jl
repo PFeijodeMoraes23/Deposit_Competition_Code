@@ -52,6 +52,7 @@ step directory (`cf_out_dir`: cluster `data/output/counterfactuals`, local `CF_F
 """
 
 using Parquet2, DataFrames, Serialization, Statistics, LinearAlgebra, ArgParse
+import JSON3   # bbl_transitions.json (market-state AR(1)s) — see the evolving-states block below
 
 # Load CUDA + the GPU share engine ONLY when the CF opts in (CF_GPU!=0). CPU-only steps (cost2,
 # cost_solve, cf1, the Jacobi init/merge) set CF_GPU=0 so they never import CUDA — critical on the
@@ -82,6 +83,299 @@ const _CF_USE_GPU = _CF_GPU_REQUESTED && (try CUDA.functional() catch; false end
 # blp_engine_cpu.jl.
 
 # ==========================================================================
+# Evolving market states: the demographics the forward simulation walks through
+# ==========================================================================
+"""
+    StateEvolution
+
+The per-(market key, demographic) deviation from that MCA's own long-run level, in the SAME
+scaled space the draws live in, plus the per-demographic AR(1) persistence. Together they
+give the horizon-h demographic of a market as a pure SHIFT of its h=0 value:
+
+    d_{m,h} = dbar_m + rho_d^h (d_{m,0} - dbar_m)
+    shift_{m,d}(h) = d_{m,h} - d_{m,0} = (rho_d^h - 1) * dev_{m,d},   dev = d_{m,0} - dbar_m
+
+`dev` is indexed by the DRAW-ROW index (the `obs_key_idx` a panel row gathers with), one row
+per (mca_code, time_id) market key, so a horizon-h shift is a lookup into a matrix that is
+built ONCE — it is identical across every deviation, every rate path and every period, which
+is why nothing in this struct is recomputed inside the BBL deviation loop. Draw rows the
+panel never gathers stay 0.
+
+WHY A SHIFT AND NOT A REBUILD. The draws are market-specific draws around the market mean
+(`generate_demographic_draws`: d_r = mu_m + sigma_m * eps_r), so moving the mean moves all R
+draws of that market by the same amount. The r-dimension is untouched, which is what makes
+the evaluator below exact and nearly free (see `cf_state_dmu!`).
+
+SCALING. `load_precomputed_draws` divides each demographic dimension by its cross-market sd
+and centres it, so pi is "utility per 1-sd unit of demographic". A deviation taken from the
+demand parquet is in the parquet's own units, so it must be divided by that same sd or the
+shift is silently sd_d times too large. `inv_sd[d]` is that 1/sd_d. It is CALIBRATED against
+the loaded draws rather than recomputed: the pre-normalisation draws are a 14 GB array and
+the load-time sd is not returned, while one regression of the draws' per-key mean on the
+parquet column recovers 1/sd_d to ~1e-5 relative from a subsample.
+
+`rho[d] == 1.0` marks a dimension with no usable transition: (rho^h - 1) == 0, so that
+demographic stays frozen at its h=0 value and costs nothing.
+"""
+struct StateEvolution
+    dev     ::Matrix{Float64}   # (n_draw_rows x D) scaled deviation from the MCA's own long-run level
+    rho     ::Vector{Float64}   # (D) within-MCA AR(1) persistence; 1.0 = frozen dimension
+    inv_sd  ::Vector{Float64}   # (D) parquet units -> scaled draw units
+    used    ::Vector{Int}       # demographic dims that actually enter mu through a pi interaction
+    src     ::String            # transitions file the rho's came from (logged, not re-read)
+end
+
+const CF_STATE_JSON = "bbl_transitions.json"
+
+# Evolving states are ON by default: the user chose full consistency between the demand block
+# and the state block over the cheap frozen-state approximation. `CF_EVOLVING_STATES=0` gets the
+# frozen run back for the cost comparison and to bisect a regression.
+_cf_states_on() = get(ENV, "CF_EVOLVING_STATES", "1") != "0"
+
+"""
+    _state_transitions_path(out_dir) -> String
+
+Where `bbl_transitions.json` lives. It is bbl_transitions.py's ~8 kB output, so on the cluster
+it travels as an UPLOAD into `data/input` (`cf_in_dir`) rather than being reproduced there;
+locally it sits in the COST_FWD step folder that produced it. The upload wins, matching
+`load_forward_rf`. The `cf_in_dir` spelling is returned when neither exists so the error names
+the location the file has to be staged to.
+"""
+function _state_transitions_path(out_dir)
+    for d in (cf_in_dir(out_dir, "COST_FWD"), cf_out_dir(out_dir, "COST_FWD"))
+        p = joinpath(d, CF_STATE_JSON)
+        isfile(p) && return p
+    end
+    return joinpath(cf_in_dir(out_dir, "COST_FWD"), CF_STATE_JSON)
+end
+
+"""
+    _calibrate_inv_sd(draws_3d, keys, mu, d, cap) -> (slope, r2)
+
+OLS slope of the draws' per-key mean on the demand parquet's column for demographic `d`,
+over an evenly spaced subsample of at most `cap` market keys.
+
+The loaded draws are (mu_k + sigma_k*eps)/sd_d - centre_d, so the mean over r of key k is
+mu_k/sd_d - centre_d plus a Monte-Carlo error of sigma_k/(sd_d*sqrt(R)). That error is
+uncorrelated with mu_k, so the slope is 1/sd_d and the intercept -centre_d; only the slope is
+needed because a DEVIATION kills the centre. Subsampling is enough: at R=2000 and 20k keys the
+slope's relative error is ~1e-5, four orders below the shift it scales.
+
+`r2` is the guard, not a diagnostic. Any affine re-scaling of the parquet column between draw
+generation and now is absorbed by the slope and leaves r2 at 1, so an r2 that is NOT near 1
+means the column is not the mean the draws were built from and the caller falls back to the
+draws' own per-key mean rather than scaling the wrong series. "Near 1" has to be read against
+R: the within-market draw noise costs r2 exactly mean(sigma_k^2)/(R*var(mu)), which at R=2000
+is 4e-5 for fraction_65plus (the noisiest demographic that enters a pi interaction) but 1.3e-3
+at R=64, so a fixed 0.999 would reject a perfectly good column on a low-R development run. The
+caller's threshold scales with R for that reason.
+"""
+function _calibrate_inv_sd(draws_3d::Array{Float64,3}, keys::Vector{Int},
+                           mu::Vector{Float64}, d::Int, cap::Int)
+    n    = length(keys)
+    step = max(1, cld(n, max(cap, 1)))
+    sel  = keys[1:step:n]
+    R    = size(draws_3d, 2)
+    xb = 0.0; zb = 0.0
+    z  = Vector{Float64}(undef, length(sel))
+    @inbounds for (j, k) in enumerate(sel)
+        s = 0.0
+        for r in 1:R; s += draws_3d[k, r, d]; end
+        z[j] = s / R
+        zb += z[j]; xb += mu[k]
+    end
+    m = length(sel)
+    m < 3 && return (NaN, NaN)
+    xb /= m; zb /= m
+    sxx = 0.0; sxz = 0.0; szz = 0.0
+    @inbounds for (j, k) in enumerate(sel)
+        dx = mu[k] - xb; dz = z[j] - zb
+        sxx += dx * dx; sxz += dx * dz; szz += dz * dz
+    end
+    (sxx > 0.0 && szz > 0.0) || return (NaN, NaN)
+    return (sxz / sxx, (sxz * sxz) / (sxx * szz))
+end
+
+"""
+    build_state_evolution(df, draws_3d, obs_key_idx, pi_interactions, coef_dim; kwargs...)
+        -> Union{Nothing,StateEvolution}
+
+Assemble the horizon shift for the market states from `bbl_transitions.json`. Returns
+`nothing` — meaning "demographics frozen at the launch quarter", the pre-existing behaviour —
+when the flag is off, when the stage has no demographic pi interaction (no share can move with
+a state, so there is nothing to do), or when the transitions file is absent and `require` is
+false.
+
+Keywords:
+  * `out_dir` / `transitions_path` : where to find the JSON (`_state_transitions_path`).
+  * `enabled`  : the OFF switch, defaulting to `CF_EVOLVING_STATES != 0`.
+  * `require`  : error instead of falling back when the JSON is missing. `build_cf_context`
+    passes `hpc`, so a cluster run cannot quietly become a frozen-state run — the fallback
+    would change the model without changing anything visible in the job log.
+  * `rho_field`: which persistence to read, `CF_STATE_RHO_FIELD`. The default `rho` is the raw
+    within-MCA slope. `rho_nickell_corrected` is available for a robustness pass but is >= 1
+    for three of the five states (cadunico 1.021, fraction_65plus 1.018, fraction_young 1.018),
+    which over a 50-quarter horizon is an explosive demographic; the 0 < rho < 1 guard below
+    freezes any such dimension rather than letting it diverge.
+
+ONLY the demographics that enter mu are touched: `used` is the set of pi-interaction
+demographic indices, at most 4 of the 8 D_COLS for the `extended` stage. The rest cannot move
+a share whatever their transition says, so they are neither calibrated nor stored.
+"""
+function build_state_evolution(df::DataFrame, draws_3d::Array{Float64,3},
+                               obs_key_idx::Vector{Int},
+                               pi_interactions::Vector{Tuple{Int,Int}},
+                               coef_dim::Int;
+                               out_dir=nothing,
+                               transitions_path::Union{Nothing,String}=nothing,
+                               enabled::Bool=_cf_states_on(),
+                               require::Bool=false,
+                               rho_field::String=get(ENV, "CF_STATE_RHO_FIELD", "rho"),
+                               calib_keys::Int=20_000)
+    if !enabled
+        log_status("  [CF-STATE] OFF (CF_EVOLVING_STATES=0): demographics frozen at each row's launch quarter")
+        return nothing
+    end
+    D_dim = size(draws_3d, 3)
+    used  = sort(unique([didx for (cidx, didx) in pi_interactions
+                         if cidx <= coef_dim && didx <= D_dim]))
+    if isempty(used)
+        log_status("  [CF-STATE] OFF: no demographic pi interaction in this stage, so no share responds to a state")
+        return nothing
+    end
+
+    path = transitions_path !== nothing ? transitions_path :
+           (out_dir === nothing ?
+            error("build_state_evolution needs `out_dir` or `transitions_path`") :
+            _state_transitions_path(out_dir))
+    if !isfile(path)
+        msg = "Market-state transitions not found at:\n    $path\n" *
+              "This is bbl_transitions.py's ~8 kB JSON; on the cluster it is an UPLOAD into data/input."
+        require && error(msg * "\nEvolving states are ON, so this is fatal: falling back to frozen " *
+                               "demographics would change the model without changing the log.")
+        @warn "$msg\n  -> FALLING BACK to FROZEN demographics (the h=0 state held over the horizon)."
+        return nothing
+    end
+    ms = get(JSON3.read(read(path, String)), :market_states, nothing)
+    if ms === nothing
+        require && error("$path has no `market_states` block.")
+        @warn "$(basename(path)) has no `market_states` block -> FROZEN demographics."
+        return nothing
+    end
+
+    rho = ones(D_dim)
+    for d in used
+        e = get(ms, Symbol(D_COLS[d]), nothing)
+        e === nothing && continue
+        r = get(e, Symbol(rho_field), nothing)
+        (r isa Real && isfinite(r) && 0.0 < Float64(r) < 1.0) || continue
+        rho[d] = Float64(r)
+    end
+
+    # ── One representative panel row and one MCA per DRAW row ────────────────────────────────
+    # The draws are keyed (mca_code, time_id); the deviation is against the MCA's own level, so
+    # the draw rows have to be grouped back up to the MCA. Both maps come from the panel itself,
+    # which is also what guarantees the parquet value read below is the mu that key's draws were
+    # generated from.
+    n_rows = size(draws_3d, 1)
+    N      = nrow(df)
+    mca    = string.(df.mca_code)
+    seen   = falses(n_rows)
+    row_of = zeros(Int, n_rows)
+    gid    = zeros(Int, n_rows)
+    mca_id = Dict{String,Int}()
+    @inbounds for i in 1:N
+        k = obs_key_idx[i]
+        seen[k] && continue
+        seen[k] = true; row_of[k] = i
+        gid[k]  = get!(mca_id, mca[i], length(mca_id) + 1)
+    end
+    kept = findall(seen)
+    G    = length(mca_id)
+
+    dev    = zeros(n_rows, D_dim)
+    inv_sd = ones(D_dim)
+    r2s    = fill(NaN, D_dim)
+    from_draws = Int[]
+    mu = zeros(n_rows)
+    for d in used
+        name  = D_COLS[d]
+        use_parquet = name in names(df)
+        if use_parquet
+            v = Float64.(coalesce.(df[!, name], NaN))
+            @inbounds for k in kept; mu[k] = v[row_of[k]]; end
+            use_parquet = all(isfinite, @view(mu[kept]))
+        end
+        if use_parquet
+            s, r2 = _calibrate_inv_sd(draws_3d, kept, mu, d, calib_keys)
+            r2s[d] = r2
+            # Scale-aware acceptance: reject a column that is not an affine image of the draw
+            # mean, without rejecting one whose r2 is only dented by the R draws' own noise.
+            r2_min = max(0.90, 1.0 - 25.0 / size(draws_3d, 2))
+            use_parquet = isfinite(s) && s != 0.0 && isfinite(r2) && r2 > r2_min
+            use_parquet && (inv_sd[d] = s)
+        end
+        if !use_parquet
+            # No usable parquet column for this demographic: take the market level straight from
+            # the draws' own per-key mean, which is ALREADY in the scaled space (inv_sd = 1). It
+            # carries the sigma_k/sqrt(R) Monte-Carlo error of the within-market draws, which is a
+            # few percent of the across-quarter movement for gdp_per_capita, so it is the fallback
+            # and not the default.
+            R = size(draws_3d, 2)
+            @inbounds for k in kept
+                s = 0.0
+                for r in 1:R; s += draws_3d[k, r, d]; end
+                mu[k] = s / R
+            end
+            inv_sd[d] = 1.0
+            push!(from_draws, d)
+        end
+        # dbar_m = the MCA's mean over the quarters the panel observes — the same object the
+        # within transform in bbl_transitions.py demeans by, so rho and dbar refer to one level.
+        gs = zeros(G); gn = zeros(Int, G)
+        @inbounds for k in kept; g = gid[k]; gs[g] += mu[k]; gn[g] += 1; end
+        @inbounds for k in kept
+            dev[k, d] = (mu[k] - gs[gid[k]] / gn[gid[k]]) * inv_sd[d]
+        end
+    end
+
+    log_status("  [CF-STATE] evolving demographics ON <- $(basename(path)) (rho_field=$rho_field, " *
+               "$(length(kept)) market keys, $G MCAs)")
+    for d in used
+        hl  = rho[d] < 1.0 ? string(round(log(0.5) / log(rho[d]), digits=1)) : "frozen"
+        dv  = @view dev[kept, d]
+        s50 = abs.((rho[d]^50 - 1.0) .* dv)
+        log_status("    d=$d $(rpad(D_COLS[d], 26)) rho=$(rpad(round(rho[d], digits=4), 6)) " *
+                   "half-life=$(rpad(hl, 6))q  1/sd=$(round(inv_sd[d], sigdigits=5))" *
+                   (d in from_draws ? " [from draws]" : " [r2=$(round(r2s[d], digits=6))]") *
+                   "  dev sd=$(round(std(dv), sigdigits=4))  |shift| h=50: " *
+                   "mean=$(round(mean(s50), sigdigits=4)) p95=$(round(quantile(s50, 0.95), sigdigits=4))")
+    end
+    return StateEvolution(dev, rho, inv_sd, used, path)
+end
+
+"""
+    state_shift(ev, h) -> Matrix (n_draw_rows x D)
+
+The explicit per-(market key, demographic) shift at horizon `h`, in scaled draw units:
+`(rho_d^h - 1) * dev`. Zero at `h == 0` by construction, in every column.
+
+This is the shift tensor in materialised form — it allocates, so it is for inspection and for
+the numerical gates, not for the deviation loop. `cf_state_dmu!` consumes the same `(rho, dev)`
+without ever forming it.
+"""
+function state_shift(ev::StateEvolution, h::Int)::Matrix{Float64}
+    S = zeros(size(ev.dev))
+    h == 0 && return S
+    @inbounds for d in ev.used
+        f = ev.rho[d]^h - 1.0
+        f == 0.0 && continue
+        @views S[:, d] .= f .* ev.dev[:, d]
+    end
+    return S
+end
+
+# ==========================================================================
 # Context: everything needed to evaluate (counterfactual) shares
 # ==========================================================================
 struct CFDemandCtx
@@ -105,6 +399,7 @@ struct CFDemandCtx
     rho_hat        ::Vector{Float64}      # in-sample spread (= prod_vec[:,1])
     alpha          ::Float64              # θ̂₁[1], mean spread coefficient
     gbuf           ::Any                          # GPU share buffers (nothing ⇒ CPU share path; typed Any so the struct loads without CUDA when CF_GPU=0)
+    state_ev       ::Union{Nothing,StateEvolution} # evolving market states; nothing ⇒ demographics frozen at each row's launch quarter
 end
 
 """
@@ -228,6 +523,7 @@ function build_cf_context(estim::Int, spec_id::Int, stage::String;
                           keep::Union{Nothing,BitVector}=nothing,
                           placeholder::Bool=false,
                           draws_dir_override::Union{Nothing,String}=nothing,
+                          evolving_states::Bool=_cf_states_on(),
                           suffix::String=get(ENV, "BLP_OUTPUT_SUFFIX", ""))
     input_dir, draws_dir, out_dir = get_paths(hpc; local_dir=local_dir)
     # new 8-routine scheme (auto-discover; not DEMAND_PREFIXES) over the one directory the
@@ -381,9 +677,22 @@ function build_cf_context(estim::Int, spec_id::Int, stage::String;
                   "stage '$stage' — results/code mismatch in $(basename(rpath)).")
     end
 
+    # Evolving market states. Built HERE, once per context, because the shift it carries is the
+    # same for every deviation, every rate path and every period of the forward simulation — the
+    # only place it can be hoisted out of all three loops at once.
+    #
+    # A missing transitions file is a WARNING here, not an error, because most holders of a
+    # context (cf1, cf3, cf4, cost_solve) never advance a state and would be broken by a hard
+    # requirement on a file they do not read. The step that DOES consume it asserts instead —
+    # `assert_state_evolution`, called by bbl_fwd_sim.jl's psi_under — so the BBL forward
+    # simulation still cannot quietly become a frozen-state run.
+    state_ev = build_state_evolution(df, draws_3d, obs_key_idx, pi_interactions, coef_dim;
+                                     out_dir=out_dir, enabled=evolving_states)
+
     return CFDemandCtx(estim, spec_id, stage, R, coef_dim, df, pc, buf, prod_vec,
                        nu_draws, draws_3d, obs_key_idx, sigma_indices, pi_interactions,
-                       theta1, theta2, delta_hat, copy(prod_vec[:, 1]), theta1[1], gbuf)
+                       theta1, theta2, delta_hat, copy(prod_vec[:, 1]), theta1[1], gbuf,
+                       state_ev)
 end
 
 # ==========================================================================
@@ -454,8 +763,13 @@ Active shares under a counterfactual spread vector `rho_new` (same units as
 `rho_new` must be length N (one spread per jkmt row). For the deposit simulator,
 only the endogenous types k=4,5 will differ from ρ̂; regulated types are passed
 through unchanged.
+
+`delta_shift` adds a per-row constant to δ′. Its one caller is the evolving-states path
+(`cf_shares_at_h`), where the horizon-h demographic shift lands in δ rather than in μ; see
+`cf_state_dmu!` for why the two are the same object here.
 """
-function cf_shares_at(ctx::CFDemandCtx, rho_new::Vector{Float64})::Vector{Float64}
+function cf_shares_at(ctx::CFDemandCtx, rho_new::Vector{Float64};
+                      delta_shift::Union{Nothing,AbstractVector{Float64}}=nothing)::Vector{Float64}
     length(rho_new) == nrow(ctx.df) || error("rho_new length ≠ N_obs")
     # A spread change perturbs ONLY prod_vec[:, 1], so only the cidx==1 Pi products change. Refresh
     # just those, IN PLACE (B.2) — the non-spread products are invariant, and this avoids rebuilding
@@ -467,6 +781,7 @@ function cf_shares_at(ctx::CFDemandCtx, rho_new::Vector{Float64})::Vector{Float6
     compute_mu!(ctx.buf, ctx.prod_vec, ctx.nu_draws, sv, ctx.sigma_indices, pv,
                 ctx.R, ctx.coef_dim)
     delta_cf = ctx.delta_hat .+ ctx.alpha .* (rho_new .- ctx.rho_hat)
+    delta_shift === nothing || (delta_cf .+= delta_shift)
     _cf_model_shares!(ctx, delta_cf)
     s = collect_shares(ctx.buf, ctx.pc, nrow(ctx.df))
     # Restore the in-sample spread + its Pi products so the context is reusable. Restore the spread
@@ -483,6 +798,157 @@ function cf_shares_at(ctx::CFDemandCtx, rho_new::Vector{Float64})::Vector{Float6
                                   ctx.pi_interactions, ctx.coef_dim, 1)
     end
     return s
+end
+
+# ==========================================================================
+# Shares at a horizon: the demand block reading the same states as the state block
+# ==========================================================================
+"""
+    build_state_evolution(ctx; kwargs...) -> Union{Nothing,StateEvolution}
+
+Rebuild the state evolution for an existing context — the switch for a frozen-vs-evolving
+comparison (`build_state_evolution(ctx; enabled=false)`) without paying for a second context.
+`out_dir` is required here because the context does not carry it.
+"""
+build_state_evolution(ctx::CFDemandCtx; kwargs...) =
+    build_state_evolution(ctx.df, ctx.draws_3d, ctx.obs_key_idx,
+                          ctx.pi_interactions, ctx.coef_dim; kwargs...)
+
+"""
+    assert_state_evolution(ctx)
+
+Error when `CF_EVOLVING_STATES` asks for evolving market states but the context has none —
+the transitions JSON was missing, or the stage carries no demographic π interaction.
+
+`build_cf_context` only warns, because most contexts never advance a state. The steps that do
+call this, so that a run whose whole point is the evolving-state path cannot finish as a
+frozen-state run with nothing but a warning to show for it. The OFF switch is the environment
+variable: `CF_EVOLVING_STATES=0` satisfies this check by design.
+"""
+function assert_state_evolution(ctx::CFDemandCtx)
+    (ctx.state_ev !== nothing || !_cf_states_on()) && return nothing
+    error("Evolving market states are ON (CF_EVOLVING_STATES != 0) but this context has none. " *
+          "Either stage $(CF_STATE_JSON) where `_state_transitions_path` looks (on the cluster " *
+          "that is data/input — see the [CF-STATE] warning above for the exact path), or set " *
+          "CF_EVOLVING_STATES=0 to run the frozen-state model deliberately.")
+end
+
+"""
+    cf_state_dmu!(out, ctx, ev, h, rho_row) -> out
+
+The per-row utility shift the horizon-h demographics produce, written into `out` (length N).
+
+WHY THIS IS EXACT AND NOT AN APPROXIMATION. Demographics reach the shares only through
+μ = Σ_c prod_vec[:,c]·(Π d_mt + Σ ν_i)_c, i.e. only through the π products
+`prod_vec[:,cidx] .* draws[key, :, didx]`. A horizon-h state is the h=0 draw plus a shift that
+depends on (market, demographic) and NOT on the draw r, so
+
+    μ_h[n,r] = μ_0[n,r] + Σ_i π_i · prod_vec[n,cidx_i] · shift_h[key_n, didx_i]
+
+and the correction is constant across r. `compute_model_shares!` uses μ only as
+V = δ[n] + μ[n,r], so an r-constant addition to μ is the same object as an addition to δ.
+That is what this function returns. The consequences are the point of the design:
+
+  * no π product is rebuilt and no draw array is mutated — the O(n_pi·N·R) refresh and the
+    O(N·R·coef_dim) μ build both drop out of the per-period loop;
+  * the cost of moving one period forward is O(N·n_pi), ~3e6 flops against the ~1e9 of the
+    share kernel it feeds;
+  * at h=0 the factor (ρ_d^0 − 1) is exactly 0, so the frozen result is reproduced bit for
+    bit rather than to a tolerance.
+
+`rho_row` is the period's spread vector, passed explicitly rather than read from
+`ctx.prod_vec[:,1]`: the spread column is restored to ρ̂ between `cf_shares_at` calls, so
+reading it here would silently price the demographic interaction at ρ̂ instead of ρ_t.
+"""
+function cf_state_dmu!(out::Vector{Float64}, ctx::CFDemandCtx, ev::StateEvolution,
+                       h::Int, rho_row::AbstractVector{Float64})
+    fill!(out, 0.0)
+    h == 0 && return out
+    _, pv = unpack_theta2(ctx.theta2, ctx.sigma_indices, ctx.pi_interactions)
+    D_dim = size(ctx.draws_3d, 3)
+    N     = length(out)
+    @inbounds for (i, (cidx, didx)) in enumerate(ctx.pi_interactions)
+        (cidx <= ctx.coef_dim && didx <= D_dim) || continue
+        c = pv[i] * (ev.rho[didx]^h - 1.0)
+        c == 0.0 && continue
+        dcol = @view ev.dev[:, didx]
+        if cidx == 1
+            for n in 1:N; out[n] += c * rho_row[n] * dcol[ctx.obs_key_idx[n]]; end
+        else
+            for n in 1:N; out[n] += c * ctx.prod_vec[n, cidx] * dcol[ctx.obs_key_idx[n]]; end
+        end
+    end
+    return out
+end
+
+"""
+    cf_shares_at_h(ctx, rho_new, ev, h; work=nothing) -> Vector{Float64}
+
+`cf_shares_at` with the market states advanced `h` quarters from each row's own launch
+quarter. `ev === nothing` or `h == 0` is the frozen call, unchanged. `work` is an optional
+length-N scratch vector so a per-period loop allocates nothing.
+"""
+function cf_shares_at_h(ctx::CFDemandCtx, rho_new::Vector{Float64},
+                        ev::Union{Nothing,StateEvolution}, h::Int;
+                        work::Union{Nothing,Vector{Float64}}=nothing)::Vector{Float64}
+    (ev === nothing || h == 0) && return cf_shares_at(ctx, rho_new)
+    dmu = work === nothing ? zeros(nrow(ctx.df)) : work
+    cf_state_dmu!(dmu, ctx, ev, h, rho_new)
+    return cf_shares_at(ctx, rho_new; delta_shift=dmu)
+end
+
+"""
+    cf_shares_path(ctx, spreads_ann, ev; T=50) -> Vector{Float64} | Matrix{Float64}
+
+The active share the forward simulation should use in each of periods 1…T at the STATIONARY
+spread vector `spreads_ann`.
+
+Returns the plain length-N share vector when `ev === nothing` — the frozen state is constant
+over t, so there is one share and the existing hoist stands. With evolving states it returns
+an N×T matrix, because the share now moves with the demographics even at a fixed spread.
+
+THE EXPENSIVE PART IS STILL EVALUATED ONCE. The spread does not change over t, so μ is built
+once for the whole path; every period after that is one share aggregation over a δ that
+differs by the r-constant `cf_state_dmu!` shift. Nothing here depends on r^f either, so the
+matrix is hoisted out of the rate-path loop exactly as the single share vector was — P rate
+paths still cost 1× the share kernel, now T times rather than once.
+"""
+function cf_shares_path(ctx::CFDemandCtx, spreads_ann::Vector{Float64},
+                        ev::Union{Nothing,StateEvolution}; T::Int=50)
+    ev === nothing && return cf_shares_at(ctx, spreads_ann)
+    N = nrow(ctx.df)
+    length(spreads_ann) == N || error("spreads_ann length ≠ N_obs")
+
+    ctx.prod_vec[:, 1] .= spreads_ann
+    refresh_pi_products_cidx!(ctx.buf, ctx.prod_vec, ctx.draws_3d, ctx.obs_key_idx,
+                              ctx.pi_interactions, ctx.coef_dim, 1)
+    sv, pv = unpack_theta2(ctx.theta2, ctx.sigma_indices, ctx.pi_interactions)
+    compute_mu!(ctx.buf, ctx.prod_vec, ctx.nu_draws, sv, ctx.sigma_indices, pv,
+                ctx.R, ctx.coef_dim)
+
+    base = ctx.delta_hat .+ ctx.alpha .* (spreads_ann .- ctx.rho_hat)
+    S    = zeros(N, T)
+    dmu  = zeros(N)
+    dl   = zeros(N)
+    for t in 1:T
+        cf_state_dmu!(dmu, ctx, ev, t, spreads_ann)
+        dl .= base .+ dmu
+        _cf_model_shares!(ctx, dl)
+        S[:, t] .= collect_shares(ctx.buf, ctx.pc, N)
+    end
+
+    # Restore ρ̂ and its π products, same contract as cf_shares_at: the context is reusable.
+    ctx.prod_vec[:, 1] .= ctx.rho_hat
+    if length(ctx.buf.pi_base) == length(ctx.pi_interactions)
+        @inbounds for (i, (c, _)) in enumerate(ctx.pi_interactions)
+            (c == 1 && size(ctx.buf.pi_base[i], 1) > 0) || continue
+            ctx.buf.pi_products[i] .= ctx.buf.pi_base[i]
+        end
+    else
+        refresh_pi_products_cidx!(ctx.buf, ctx.prod_vec, ctx.draws_3d, ctx.obs_key_idx,
+                                  ctx.pi_interactions, ctx.coef_dim, 1)
+    end
+    return S
 end
 
 """

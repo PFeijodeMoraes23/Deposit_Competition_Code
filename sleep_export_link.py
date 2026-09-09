@@ -211,24 +211,10 @@ def build_first_stage_table(results_dict, est_num):
 AME_CI_TOKEN = "%%AME_CI_NOTE%%"
 
 
-def _ame_band_row(res, var):
-    """(lo_bc, hi_bc, stars) for `var` from an attached two-stage AME bootstrap, or None.
-
-    National rows read the quarter-clustered band for the same reason their SEs do. Gated on
-    SLEEP_AME_SE so attaching numbers to a pickle cannot silently change a published table."""
-    if not _sen.twostage_se_enabled():
-        return None
-    ab = getattr(res, "ame_boot", None)
-    if not isinstance(ab, dict):
-        return None
-    band = (ab.get("quarter" if _sen.is_national(var) else "congl") or {}).get("band")
-    if band is None or "name" not in getattr(band, "columns", []):
-        return None
-    hit = band[band["name"] == var]
-    if hit.empty:
-        return None
-    r = hit.iloc[0]
-    return float(r["lo_bc"]), float(r["hi_bc"]), str(r["stars"])
+# The band lookup is utils.sleep_links.band_row -- one reader for the single-index and linear
+# families alike, since both bands come from `_ame_band_from_draws` with the same columns.
+# Kept as a thin alias so this module's call sites read as before.
+from utils.sleep_links import band_row as _ame_band_row  # noqa: E402
 
 
 def _ame_ci_note(ci_cols, results_dict, est_num):
@@ -358,7 +344,11 @@ def build_second_stage_table(results_dict, est_num):
                   "    $R^2$ & " + " & ".join(rsq_l) + r" \\", "    Fixed Effects & Yes & Yes & Yes & Yes \\\\",
                   "    Clusters ($G$) & " + " & ".join(g_l) + r" \\", r"    \bottomrule"]
     lines += [r"\end{xltabular}", r"\setlength{\tabcolsep}{6pt}", r"\doublespacing"]
+    # The opening describes what the cells printed: this table is one routine, so a band either
+    # was attached for it or was not.
+    _bands = bool(_ci_cols)
     return "\n".join(lines).replace(
+        _notes.OPEN_TOKEN, _notes.note_open(_bands)).replace(
         _sen.NOTE_TOKEN, _sen.national_note(_nat_schemes, dk_bracket=False)).replace(
         AME_CI_TOKEN, _ame_ci_note(_ci_cols, results_dict, est_num)).replace(
         _sen.AME_SE_TOKEN, _sen.ame_se_note())

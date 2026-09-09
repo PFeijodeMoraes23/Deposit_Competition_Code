@@ -22,6 +22,7 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 if _THIS_DIR not in sys.path:
     sys.path.insert(0, _THIS_DIR)
 from utils import state_transform as _st  # noqa: E402
+from utils.sleep_links import band_row as _band_row  # noqa: E402
 from utils import se_national as _sen  # noqa: E402
 from utils import sleep_notes as _notes
 from sleep_export_link import clean_name as _clean_name  # noqa: E402
@@ -118,25 +119,9 @@ def ame_ci_note(ci_cols, results_dict):
             r"All other columns report standard errors in parentheses. ")
 
 
-def _twostage_band_row(res, var):
-    """(lo_bc, hi_bc, stars) for `var` from an attached two-stage AME bootstrap, or None.
-
-    National rows read the quarter-clustered band for the same reason their SEs do. Gated on
-    SLEEP_AME_SE so attaching numbers to a pickle cannot silently change a published table."""
-    if not _sen.twostage_se_enabled():
-        return None
-    ab = getattr(res, "ame_boot", None)
-    if not isinstance(ab, dict):
-        return None
-    blk = ab.get("quarter" if _sen.is_national(var) else "congl")
-    band = (blk or {}).get("band")
-    if band is None or "name" not in getattr(band, "columns", []):
-        return None
-    hit = band[band["name"] == var]
-    if hit.empty:
-        return None
-    r = hit.iloc[0]
-    return float(r["lo_bc"]), float(r["hi_bc"]), str(r["stars"])
+# The band lookup lives in utils.sleep_links.band_row: one reader for both column families,
+# since the two-stage AME band and the linear WCB band are built by the same function and
+# carry the same columns. It reads only -- see the division of labour in its docstring.
 
 
 def pastelize_color(color, blend=0.7):
@@ -294,6 +279,9 @@ EST_KEYS = {
 # The refs come from config/routines.toml via est_ref, which yields a plain E{id} for an id
 # with no live label -- the column loses its strategy number rather than raising.
 REF_LABELS = {k: _routines.est_ref(e) for e, k in EST_KEYS.items()}
+# Column key -> routine id. `band_row` needs the id to find a linear routine's band sidecar
+# when the result carries no attached band of its own.
+EST_OF_KEY = {k: e for e, k in EST_KEYS.items()}
 
 
 def build_latex_table(results_dict, order_keys, target_vars, out_path, title="", label="",
@@ -437,11 +425,13 @@ def build_latex_table(results_dict, order_keys, target_vars, out_path, title="",
                 if _sen.is_national(v):
                     _nat_schemes.add(_sch)
                 _mark = r"$^{\dagger}$" if _sch != "congl" else ""
-                # Where a two-stage AME bootstrap is attached, the single-index columns print
-                # its bias-corrected interval instead of an SE -- same display multiplier on
-                # both endpoints, stars from the same interval. The linear columns keep the SE,
-                # so the row is mixed, which the note names explicitly.
-                _bd = _twostage_band_row(res, v)
+                # Every column prints a bias-corrected percentile interval: the single-index
+                # ones from the attached two-stage AME band, the linear ones from their band
+                # sidecar. Both come from the same builder, so widths are comparable across a
+                # row -- which they were not while half the row reported a standard error. Same
+                # display multiplier on both endpoints; stars from the same interval. A column
+                # whose band is missing falls back to the SE and the note says which did.
+                _bd = _band_row(res, v, est=EST_OF_KEY.get(col), spec=_routines.SPEC12)
                 _ci = (_bd[0] * m, _bd[1] * m) if _bd else None
                 c_str, se_str = format_value(params[v] * m, _se * m, _pv, digits=4, mark=_mark,
                                              ci=_ci, stars=(_bd[2] if _bd else None))
@@ -527,8 +517,12 @@ def build_latex_table(results_dict, order_keys, target_vars, out_path, title="",
     # table suppressed it, so without this the following body text stays single-spaced.
     tex.append(r"\doublespacing")
 
+    # Which opening the note gets is decided by what the cells actually printed: every data
+    # column carrying a band, none, or some. `_ci_cols` was filled during rendering.
+    _bands = True if len(_ci_cols) == n_data else (False if not _ci_cols else "mixed")
     with open(out_path, "w", encoding="utf-8") as f:
         f.write("\n".join(tex).replace(
+            _notes.OPEN_TOKEN, _notes.note_open(_bands)).replace(
             _sen.NOTE_TOKEN, _sen.national_note(_nat_schemes)).replace(
             AME_CI_TOKEN, ame_ci_note(_ci_cols, results_dict)).replace(
             _sen.AME_SE_TOKEN, _sen.ame_se_note()))
@@ -600,11 +594,13 @@ def build_latex_table_landscape(results_dict, order_keys, target_vars, out_path,
                 if _sen.is_national(v):
                     _nat_schemes.add(_sch)
                 _mark = r"$^{\dagger}$" if _sch != "congl" else ""
-                # Where a two-stage AME bootstrap is attached, the single-index columns print
-                # its bias-corrected interval instead of an SE -- same display multiplier on
-                # both endpoints, stars from the same interval. The linear columns keep the SE,
-                # so the row is mixed, which the note names explicitly.
-                _bd = _twostage_band_row(res, v)
+                # Every column prints a bias-corrected percentile interval: the single-index
+                # ones from the attached two-stage AME band, the linear ones from their band
+                # sidecar. Both come from the same builder, so widths are comparable across a
+                # row -- which they were not while half the row reported a standard error. Same
+                # display multiplier on both endpoints; stars from the same interval. A column
+                # whose band is missing falls back to the SE and the note says which did.
+                _bd = _band_row(res, v, est=EST_OF_KEY.get(col), spec=_routines.SPEC12)
                 _ci = (_bd[0] * m, _bd[1] * m) if _bd else None
                 c_str, se_str = format_value(params[v] * m, _se * m, _pv, digits=4, mark=_mark,
                                              ci=_ci, stars=(_bd[2] if _bd else None))
@@ -676,8 +672,11 @@ def build_latex_table_landscape(results_dict, order_keys, target_vars, out_path,
             r"\end{table}",
             r"\end{landscape}"]
 
+    _bands = (True if len(_ci_cols) == len(order_keys)
+              else (False if not _ci_cols else "mixed"))
     with open(out_path, "w", encoding="utf-8") as f:
         f.write("\n".join(tex).replace(
+            _notes.OPEN_TOKEN, _notes.note_open(_bands)).replace(
             _sen.NOTE_TOKEN, _sen.national_note(_nat_schemes)).replace(
             AME_CI_TOKEN, ame_ci_note(_ci_cols, results_dict)).replace(
             _sen.AME_SE_TOKEN, _sen.ame_se_note()))

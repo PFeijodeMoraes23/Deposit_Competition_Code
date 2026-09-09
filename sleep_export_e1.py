@@ -46,6 +46,7 @@ from sleep_export_link import clean_name, disp  # noqa: E402
 from utils import state_transform as _st  # noqa: E402
 from utils import se_national as _sen  # noqa: E402
 from utils import sleep_notes as _notes
+from utils.sleep_links import band_row as _band_row
 
 def build_first_stage_table(results_dict):
     panels = ['Base', 'Macro', 'Tech']
@@ -235,6 +236,9 @@ def build_second_stage_table(results_dict):
     notes = (
         r"\footnotesize \textit{Notes:} " + _notes.second_stage_note()
     )
+    # Function-scope, unlike _nat_schemes: the note's opening describes the WHOLE table, so a
+    # per-panel set would report only the last panel's state.
+    _band_cols = set()
 
     def _get_res(ek, p):
         entry = results_dict.get(f"{ek} x {p}")
@@ -293,7 +297,7 @@ def build_second_stage_table(results_dict):
         _nat_schemes = set()
 
         for vshort in all_vars:
-            coef_strs, se_strs, dk_strs, has_val = [], [], [], False
+            coef_strs, se_strs, has_val = [], [], False
             for ek, _ in estimators:
                 res = _get_res(ek, panel)
                 var = vshort
@@ -312,21 +316,26 @@ def build_second_stage_table(results_dict):
                     m = disp(vshort)          # coefficient and SE only; pval/stars unchanged
                     c, se = c * m, se * m
                     mark = f"^{{{_sen.SE_MARK}}}" if scheme != "congl" else ""
-                    # Driscoll-Kraay, in brackets, on the national rows only. Every column of
-                    # this table is linear, so DK is defined throughout and nothing is mixed.
-                    dkv = _sen.dk_se(res, var) if _sen.is_national(var) else None
-                    dk_strs.append(f"$[{dkv * m:.4f}]$" if dkv is not None else "")
-                    coef_strs.append(f"${c:.4f}^{{{stars(pval)}}}$")
-                    se_strs.append(f"$({se:.4f}){mark}$")
+                    # Second line: the bias-corrected percentile interval from the stored band,
+                    # both endpoints on the display multiplier, stars from the same interval so
+                    # the two can never disagree. The Driscoll-Kraay line that used to sit under
+                    # the national rows is gone: it was a third SE in brackets, which is the
+                    # delimiter the interval needs, and the quarter-clustered band already
+                    # carries the national-regressor correction it existed to supply.
+                    _bd = _band_row(res, var, est=1, spec=f"{ek} x {panel}")
+                    if _bd:
+                        _band_cols.add(ek)
+                        coef_strs.append(f"${c:.4f}^{{{_bd[2]}}}$")
+                        se_strs.append(f"$[{_bd[0] * m:.4f}, {_bd[1] * m:.4f}]{mark}$")
+                    else:
+                        coef_strs.append(f"${c:.4f}^{{{stars(pval)}}}$")
+                        se_strs.append(f"$({se:.4f}){mark}$")
                 else:
                     coef_strs.append("")
                     se_strs.append("")
-                    dk_strs.append("")
             if has_val:
                 lines.append(f"    {clean_name(vshort)} & " + " & ".join(coef_strs) + r" \\")
                 lines.append("    & " + " & ".join(se_strs) + r" \\")
-                if any(dk_strs):
-                    lines.append("    & " + " & ".join(dk_strs) + r" \\")
 
         obs_l, rsq_l, g_l = [], [], []
         for ek, _ in estimators:
@@ -351,8 +360,13 @@ def build_second_stage_table(results_dict):
         ]
 
     lines += [r"\end{xltabular}", r"\setlength{\tabcolsep}{6pt}", r"\doublespacing"]
+    # dk_bracket=False: the Driscoll-Kraay line this table used to print under the national
+    # rows is gone (brackets now carry the percentile interval), so the note must not promise it.
+    _bands = (True if len(_band_cols) == len(estimators)
+              else (False if not _band_cols else "mixed"))
     return "\n".join(lines).replace(
-        _sen.NOTE_TOKEN, _sen.national_note(_nat_schemes, dk_bracket=True))
+        _notes.OPEN_TOKEN, _notes.note_open(_bands)).replace(
+        _sen.NOTE_TOKEN, _sen.national_note(_nat_schemes, dk_bracket=False))
 
 _STANDALONE_PREAMBLE = r"""\documentclass[12pt]{article}
 \usepackage[letterpaper, margin=1in]{geometry}

@@ -73,6 +73,8 @@
 #                         output already on disk. G1 is skipped with it — it gates
 #                         THIS run's estimators, and there are none.
 #   --no-ame              skip the AME off-path guard, both AME jobs and G3
+#   --no-wcb              skip the linear percentile bands (E1/E2); their columns then
+#                         fall back to standard errors and the note says so
 #   --no-upsilon          skip the CF4 upsilon export and G7
 #   --skip-preflight      skip cluster_preflight.sh
 #   --dry-run             print every sbatch line, submit nothing
@@ -87,7 +89,7 @@ ROUTINES_SRC=default
 if [[ -n "${ROUTINES+set}" ]]; then ROUTINES_SRC=env; fi
 ROUTINES="${ROUTINES:-${CL_ROUTINES_ALL}}"
 SPEC="${SPEC:-12}"
-DO_EST=1; DO_AME=1; DO_UPSILON=1; SKIP_PREFLIGHT=0
+DO_EST=1; DO_AME=1; DO_UPSILON=1; DO_WCB=1; SKIP_PREFLIGHT=0
 # AFTER_JID: the job every first-tier submission waits on. Empty means "start now".
 AFTER_JID=""
 # Spec-level fan-out is the DEFAULT. sleep_est_single.py's --spec-id/--merge-specs
@@ -114,6 +116,10 @@ PREP_TIME="${PREP_TIME:-06:00:00}"; PREP_CPUS="${PREP_CPUS:-16}"; PREP_MEM="${PR
 AMEG_TIME="${AMEG_TIME:-00:30:00}"; AMEG_CPUS="${AMEG_CPUS:-4}";  AMEG_MEM="${AMEG_MEM:-16G}"
 AME_TIME="${AME_TIME:-06:00:00}";   AME_CPUS="${AME_CPUS:-64}";   AME_MEM="${AME_MEM:-256G}"
 UPS_TIME="${UPS_TIME:-01:00:00}";   UPS_CPUS="${UPS_CPUS:-4}";    UPS_MEM="${UPS_MEM:-64G}"
+# The linear bands rebuild one demeaned OLS per routine and take B draws off its influence
+# functions -- no refit, no parallel draw loop. The memory is a full market panel per routine,
+# the same reason the est array asks for 128 G; the wall clock is the panel read.
+WCB_TIME="${WCB_TIME:-01:30:00}";   WCB_CPUS="${WCB_CPUS:-8}";    WCB_MEM="${WCB_MEM:-128G}"
 GATE_TIME="${GATE_TIME:-00:10:00}"; GATE_CPUS="${GATE_CPUS:-2}";  GATE_MEM="${GATE_MEM:-8G}"
 # sleep_demand_prep.py runs the routines concurrently and each holds a full
 # market panel. Its own default of 2 is a cap against "C error: out of memory" on a
@@ -135,6 +141,7 @@ while [[ $# -gt 0 ]]; do
         --spec-ids)       SPEC_IDS="$2"; shift ;;
         --skip-est)       DO_EST=0 ;;
         --no-ame)         DO_AME=0 ;;
+        --no-wcb)         DO_WCB=0 ;;
         --no-upsilon)     DO_UPSILON=0 ;;
         --skip-preflight) SKIP_PREFLIGHT=1 ;;
         --dry-run)        CL_DRYRUN=1 ;;
@@ -151,6 +158,11 @@ done
 # takes --est choices=(3,4), because the two-stage AME is defined off a single-index link.
 AME_ROUTINES="$(for k in ${ROUTINES}; do [[ "${k}" == "3" || "${k}" == "4" ]] && printf '%s ' "${k}"; done)"
 AME_ROUTINES="${AME_ROUTINES% }"
+# The mirror image: sleep_wcb_band.py serves E1/E2 only, because the linear estimators are the
+# ones whose second stage stored a standard error and no percentile band. Between the two, all
+# four columns of the comparison table can report an interval.
+WCB_ROUTINES="$(for k in ${ROUTINES}; do [[ "${k}" == "1" || "${k}" == "2" ]] && printf '%s ' "${k}"; done)"
+WCB_ROUTINES="${WCB_ROUTINES% }"
 # The CF4 upsilon export carries NO such restriction, and it must not: cf4_pix.jl needs an
 # upsilon_pix/phi^noPix pair for every routine that reaches the CF phase, and
 # sleep_upsilon_export.py's identity branch writes phi_nopix with exact_nopix=True for the
@@ -278,6 +290,25 @@ add_jid "${prep_jid}"
 g2_jid=$(gate_after G2 "${prep_jid}")
 add_jid "${g2_jid}"
 
+# ── Linear percentile bands (E1/E2): beside the AME branch, not inside it ────
+# They share only the requirement that the estimators exist (G2). Kept independent of DO_AME
+# because a run restricted to the linear routines still needs its intervals, and folded into
+# G3's dependency below when the AME branch is also running, so the phase terminal does not
+# clear while half the second-stage table's inference is still missing.
+wcb_jid=""
+if [[ "${DO_WCB}" == "1" && -n "${WCB_ROUTINES}" ]]; then
+    wcb_jid=$(sub "sleep_wcb_band" "${WCB_TIME}" "${WCB_CPUS}" "${WCB_MEM}" \
+        --dependency=afterok:"${g2_jid}" \
+        --export=ALL,SLEEP_STEP=wcb_band,SPEC=${SPEC},SLEEP_WCB_ROUTINES="${WCB_ROUTINES}" \
+        "${JOB}")
+    cl_say "  sleep_wcb_band (linear percentile bands, routines '${WCB_ROUTINES}') -> ${wcb_jid}  (afterok ${g2_jid})"
+    add_jid "${wcb_jid}"
+elif [[ "${DO_WCB}" == "1" ]]; then
+    cl_log "-- WCB band branch skipped: no linear routine (E1/E2) in '${ROUTINES}'."
+else
+    cl_log "-- WCB band branch skipped (--no-wcb)."
+fi
+
 # ── AME branch: the off-path guard, then one full bootstrap per routine ──────
 g3_jid=""
 if [[ "${DO_AME}" == "1" && -n "${AME_ROUTINES}" ]]; then
@@ -296,6 +327,11 @@ if [[ "${DO_AME}" == "1" && -n "${AME_ROUTINES}" ]]; then
         cl_say "  sleep_ame_E${k} (full B, ${SLEEP_AME_BOOT_JOBS} workers) -> ${j}  (afterok ${ameg_jid})"
         ame_dep="${ame_dep:+${ame_dep}:}${j}"; add_jid "${j}"
     done
+    # Append only when the band job exists: an empty wcb_jid here would leave a trailing
+    # colon and sbatch rejects `afterok:1:2:` outright.
+    if [[ -n "${wcb_jid}" ]]; then
+        ame_dep="${ame_dep:+${ame_dep}:}${wcb_jid}"
+    fi
     g3_jid=$(gate_after G3 "${ame_dep}")
     add_jid "${g3_jid}"
 elif [[ "${DO_AME}" == "1" ]]; then

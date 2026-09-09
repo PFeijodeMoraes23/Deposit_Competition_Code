@@ -228,7 +228,10 @@ function accumulate_psi(ctx::CFDemandCtx, st::DepositSimState,
                         Z::Matrix{Float64};
                         beta::Float64=0.9,
                         asset_return_q::Union{Nothing,Vector{Float64}}=nothing,
-                        rf_path_q::Union{Nothing,Vector{Float64}}=nothing)
+                        rf_path_q::Union{Nothing,Vector{Float64}}=nothing,
+                        rf_curves::Union{Nothing,Matrix{Float64}}=nothing,
+                        row_curve::Union{Nothing,Vector{Int}}=nothing,
+                        row_start::Union{Nothing,Vector{String}}=nothing)
     N, Tp1 = size(Dep); T = Tp1 - 1
     n_Z = size(Z, 2)
     rj = asset_return_q === nothing ? zeros(N) : asset_return_q   # (r^j − r^f); 0 ⇒ funding value
@@ -236,39 +239,72 @@ function accumulate_psi(ctx::CFDemandCtx, st::DepositSimState,
     # ambiguous, so default to a zero contribution unless rf_path_q is given.
     rf_flat = rf_path_q === nothing ? zeros(T) : rf_path_q
 
+    # MULTI-START. `rf_curves` (S×T) with `row_curve` (row → curve index) gives every row the
+    # forward curve of ITS OWN launch quarter, so one pass over the panel is S per-quarter
+    # simulations at once. That is exact, not an approximation: a market is keyed (MCA,
+    # quarter), so rows from different quarters never enter one another's share denominator
+    # and never interact in the deposit recursion. Rows are then grouped by (firm, start) via
+    # `row_start`, which is what gives eq:16 the time index it has always been written with
+    # and never had — until now a firm's rows from every quarter were summed into ONE ψ as
+    # though they were simultaneous.
+    per_row_rf = rf_curves !== nothing && row_curve !== nothing
+    per_row_rf && (length(row_curve) == N || error("row_curve length ≠ N"))
+    per_row_rf && (size(rf_curves, 2) >= T || error("rf_curves has < T periods"))
+    rfv = zeros(N)
+
     # Per-observation ψ blocks (then summed to firms).
     psi1 = zeros(N); psi2 = zeros(N); psi4 = zeros(N)
     psi3 = zeros(N, n_Z)
     @inbounds for t in 0:T
         bt = beta^t
         dep_t = @view Dep[:, t+1]
-        rf_t = t == 0 ? 0.0 : rf_flat[t]
         # ψ1 (V_Main eq 16, row 1) carries the GROSS asset return r^j: Dep·(r^j + ρ).
         # `asset_return_q` is supplied as the NET margin (r^j − r^f), so add r^f back here.
         # The single −r^f (funding cost) is then delivered by the −(1+ζ)·ψ4 term in θ_c.
         # Using the NET rj here subtracted r^f TWICE (V/Dep = ρ − c − r^f), which made the
         # deposit franchise value negative and forced ω to its ≥0 bound in the eq:17 solve.
-        psi1 .+= bt .* dep_t .* (rj .+ rf_t .+ markdown_q)
+        if per_row_rf
+            if t == 0
+                fill!(rfv, 0.0)
+            else
+                for i in 1:N; rfv[i] = rf_curves[row_curve[i], t]; end
+            end
+            psi1 .+= bt .* dep_t .* (rj .+ rfv .+ markdown_q)
+            psi4 .+= bt .* rfv .* dep_t
+        else
+            rf_t = t == 0 ? 0.0 : rf_flat[t]
+            psi1 .+= bt .* dep_t .* (rj .+ rf_t .+ markdown_q)
+            psi4 .+= bt .* rf_t .* dep_t
+        end
         psi2 .+= bt .* dep_t
         for z in 1:n_Z
             @views psi3[:, z] .+= bt .* dep_t .* Z[:, z]
         end
-        psi4 .+= bt .* rf_t .* dep_t
     end
 
-    # Aggregate observations → firms.
+    # Aggregate observations → firms, or → (firm, start) when a start label is supplied.
+    # The key is joined with a unit separator that cannot occur in either component, so the
+    # solver can split it back apart unambiguously; `firm_of_key` saves it the trouble.
     firm_key = string.(ctx.df.CodConglomeradoPrudencial)
-    firms = sort(unique(firm_key))
+    keys_row = row_start === nothing ? firm_key :
+               (length(row_start) == N ? firm_key .* "\x1f" .* row_start :
+                error("row_start length ≠ N"))
+    firms = sort(unique(keys_row))
     fidx = Dict(f => i for (i, f) in enumerate(firms))
     nf = length(firms)
     psi_firm = zeros(nf, 3 + n_Z)
     @inbounds for i in 1:N
-        r = fidx[firm_key[i]]
+        r = fidx[keys_row[i]]
         psi_firm[r, 1] += psi1[i]
         psi_firm[r, 2] += psi2[i]
         for z in 1:n_Z; psi_firm[r, 2+z] += psi3[i, z]; end
         psi_firm[r, 3+n_Z] += psi4[i]
     end
+    firm_of_key = row_start === nothing ? firms :
+                  [String(split(k, "\x1f")[1]) for k in firms]
+    start_of_key = row_start === nothing ? fill("all", nf) :
+                   [String(split(k, "\x1f")[2]) for k in firms]
     return (psi_firm=psi_firm, firms=firms,
+            firm_of_key=firm_of_key, start_of_key=start_of_key,
             blocks=(psi1=psi1, psi2=psi2, psi3=psi3, psi4=psi4))
 end

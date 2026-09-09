@@ -184,16 +184,39 @@ Arguments:
     r^dep_q = r^f_q − ρ_q only if you choose to recompute it; by default the
     accrual uses `st.rdep_q` held constant (banks-believe-state-constant).
   * `phi_override`: replace φ (e.g. zeros(N) for the φ=0 counterfactual in CF1).
+  * `s_const_in`  : a PRECOMPUTED active share, to skip the `cf_shares_at` call this
+    function would otherwise make. A length-N VECTOR is a constant-spread share, valid only
+    when the spread is constant over t (it is ignored on the time-varying path); an N×T
+    MATRIX is a per-period share path (what `cf_shares_path` returns under evolving states)
+    and is used column by column. See PERFORMANCE.
+  * `state_ev`    : a `StateEvolution` (`ctx.state_ev`) to advance the market states with the
+    horizon, so the share the demand block sees walks through the same demographics the state
+    block does. `nothing` freezes them at each row's launch quarter.
 
 PERFORMANCE: if `spreads_ann` is constant over t, the active share is computed ONCE
 (one forward pass) and reused — so a constant-spread sim is ~1 share evaluation,
-not T. Time-varying spreads cost one `cf_shares_at` per period.
+not T. Time-varying spreads cost one `cf_shares_at` per period. Evolving states also make
+the share move over t at a fixed spread; that path costs T share aggregations but still only
+ONE μ build, because the state enters δ and not μ (`cf_shares_path`).
+
+WHY `s_const_in` EXISTS. The share kernel is a function of the SPREAD only — the risk-free
+path never enters it (`cf_shares_at`). So when the same deviation is simulated under many
+r^f paths to take an expectation over rate risk, the share is identical across those paths
+and recomputing it per path would repeat the single most expensive step in the BBL forward
+simulation for no change in the answer. Hoisting it out turns "N rate paths" from N times
+the cost into N times the (cheap) deposit recursion. The caller is responsible for passing a
+share vector that corresponds to `spreads_ann`; `psi_under` in bbl_fwd_sim.jl is the
+intended user and computes it from exactly that vector.
 """
 function simulate_deposits(ctx::CFDemandCtx, st::DepositSimState;
                            T::Int=50,
                            spreads_ann::Union{Nothing,Vector{Float64},Matrix{Float64}}=nothing,
                            rf_path_q::Union{Nothing,Vector{Float64}}=nothing,
-                           phi_override::Union{Nothing,Vector{Float64}}=nothing)
+                           phi_override::Union{Nothing,Vector{Float64}}=nothing,
+                           s_const_in::Union{Nothing,Vector{Float64},Matrix{Float64}}=nothing,
+                           rf_curves::Union{Nothing,Matrix{Float64}}=nothing,
+                           row_curve::Union{Nothing,Vector{Int}}=nothing,
+                           state_ev::Union{Nothing,StateEvolution}=nothing)
     N = nrow(ctx.df)
     φ = phi_override === nothing ? st.phi : phi_override
     length(φ) == N || error("phi length ≠ N")
@@ -209,13 +232,48 @@ function simulate_deposits(ctx::CFDemandCtx, st::DepositSimState;
     s_out = zeros(N, T)
     sp_out = zeros(N, T)
 
-    s_const = time_varying ? nothing : cf_shares_at(ctx, base_spread)
+    # Three ways the period share is resolved, in the order they are checked below:
+    #   s_path  — an N×T path, either supplied (the caller hoisted it over its rate paths) or
+    #             built here once when evolving states make the share move at a fixed spread;
+    #   s_const — one share for every period, the constant-spread frozen-state case;
+    #   neither — recomputed per period, the time-varying-spread case.
+    s_path  = s_const_in isa Matrix ? s_const_in : nothing
+    (s_const_in isa Vector && state_ev !== nothing) &&
+        error("s_const_in is a constant-spread share VECTOR but state_ev advances the market " *
+              "states, so the share is not constant over t. Hoist `cf_shares_path(ctx, " *
+              "spreads_ann, state_ev; T=T)` instead and pass the N×T matrix.")
+    s_const = (time_varying || s_path !== nothing) ? nothing :
+              (s_const_in isa Vector ? s_const_in :
+               (state_ev === nothing ? cf_shares_at(ctx, base_spread) : nothing))
+    if s_const === nothing && s_path === nothing && !time_varying
+        s_path = cf_shares_path(ctx, base_spread, state_ev; T=T)
+    end
+    if s_const !== nothing && length(s_const) != N
+        error("s_const_in length $(length(s_const)) ≠ N=$N")
+    end
+    if s_path !== nothing && (size(s_path, 1) != N || size(s_path, 2) < T)
+        error("share path is $(size(s_path)); need N=$N rows and at least T=$T columns")
+    end
+    dmu_work = (s_path === nothing && time_varying && state_ev !== nothing) ? zeros(N) : nothing
+
+    per_row_rf = rf_curves !== nothing && row_curve !== nothing
+    if per_row_rf
+        length(row_curve) == N || error("row_curve length $(length(row_curve)) ≠ N=$N")
+        size(rf_curves, 2) >= T || error("rf_curves has $(size(rf_curves,2)) periods < T=$T")
+    end
+    rfv = zeros(N)
 
     @inbounds for t in 1:T
         ρ_t = time_varying ? spreads_ann[:, t] : base_spread
-        s_t = time_varying ? cf_shares_at(ctx, ρ_t) : s_const
-        # Quarterly accrual: prefer recompute from forward r^f if provided.
-        rdep_t = if rf_path_q === nothing
+        s_t = s_path !== nothing ? @view(s_path[:, t]) :
+              (time_varying ? cf_shares_at_h(ctx, ρ_t, state_ev, t; work=dmu_work) : s_const)
+        # Quarterly accrual: prefer recompute from forward r^f if provided. With `rf_curves`
+        # every row accrues at ITS OWN launch quarter's forward curve (multi-start), which is
+        # what makes one pass over the panel equivalent to S per-quarter simulations.
+        rdep_t = if per_row_rf
+            @inbounds for i in 1:N; rfv[i] = rf_curves[row_curve[i], t]; end
+            rfv .- (ρ_t ./ 4.0)
+        elseif rf_path_q === nothing
             st.rdep_q
         else
             rf_path_q[t] .- (ρ_t ./ 4.0)   # NOTE: ρ is annualized; quarterly ≈ ρ/4 (confirm convention)

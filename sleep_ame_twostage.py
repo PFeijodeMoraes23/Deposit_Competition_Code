@@ -193,7 +193,21 @@ def off_path_gate(est, si_res, out, tol=1e-8):
 
 
 def counters_ok(out, B):
-    """G10: refuse to write or attach when the draw cloud is contaminated."""
+    """G10: refuse to write or attach when the draw cloud is contaminated.
+
+    The direction test is `n_cos_idx_neg` -- draws whose INDEX (X @ theta) is anti-correlated
+    with the point index. That is the object the link and every AME see, and a reversed one is
+    a shape the monotone link cannot represent, so it is refused with zero tolerance.
+
+    `n_cos_neg` -- the cosine between the raw COEFFICIENT vectors -- is reported but does not
+    gate. Its norm is dominated by the largest-unit loading (the lagged Selic rate holds ~87%
+    of ||theta||^2 on spec 12), so it fires when one weakly-determined national coefficient
+    changes sign while the index is intact. That is uncertainty the interval should carry, not
+    contamination. See the kernel comment in utils/sleep_links.py for the measured evidence.
+
+    A cloud produced before `n_cos_idx_neg` existed has no such key; it is refused as `missing`
+    rather than silently passing on a test that never ran.
+    """
     bad = []
     for s in ("congl", "quarter"):
         r = out.get(s)
@@ -204,8 +218,11 @@ def counters_ok(out, B):
             bad.append(f"{s}: n_newton_fail={r['n_newton_fail']} > 1% of B")
         if r["n_fail"] > 0.01 * B:
             bad.append(f"{s}: n_fail={r['n_fail']} > 1% of B")
-        for k in ("n_cos_neg", "n_vsd_fail", "n_drop"):
-            if r[k]:
+        if "n_cos_idx_neg" not in r:
+            bad.append(f"{s}: n_cos_idx_neg missing (cloud predates the index-space "
+                       "direction test; re-run the bootstrap)")
+        for k in ("n_cos_idx_neg", "n_vsd_fail", "n_drop"):
+            if r.get(k):
                 bad.append(f"{s}: {k}={r[k]}")
     return bad
 

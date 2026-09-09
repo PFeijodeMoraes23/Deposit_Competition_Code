@@ -23,16 +23,43 @@ Deviations should make the bank worse off, so g ≥ 0 in equilibrium; we minimiz
 separately for B- and D-type firms. χ (private cost shock) is dropped, as in the draft.
 
 Inputs (from bbl_fwd_sim.jl):
-    COST_FWD/psi_eq_{tag}.parquet   — firm, is_B, psi1, psi2_omega, psi3_gamma_*, psi4_zeta
-    COST_FWD/psi_dev_{tag}.parquet  — shock, firm, is_B, <same blocks>
-where tag = E{estim}_spec_{spec}_{stage}{suffix}.
+    COST_FWD/psi_eq_{tag}.parquet   — firm, start_q, rf_source, rf_bar_beta, is_B,
+                                      psi1, psi2_omega, psi3_gamma_*, psi4_zeta
+    COST_FWD/psi_dev_{tag}.parquet  — shock, firm, start_q, is_B, <same blocks>
+where tag = E{estim}_spec_{spec}_{stage}{suffix}{psi_tag} and --psi-tag carries the
+multi-start marker the driver stamps on its filenames (default "_ms{S}", empty for a
+single-start run).
 
 Outputs:
     COST_FWD/cost_params_{tag}.json — (ω, ζ, γ) per type, optimizer-health diagnostics, and
     inference: `subsample` (critical values + √n-rate comparison CI) and, with --profile,
     `ci_omega`/`ci_zeta` (the criterion inverted at the subsampled critical value).
     `omega_se`/`zeta_se`/`gamma_se` are the legacy firm-block bootstrap SDs, RETAINED FOR
-    COMPARISON ONLY.
+    COMPARISON ONLY.  Two extra top-level keys, `run` and `identification`, carry the
+    multi-start provenance and the gate verdict (see PROMOTION GATE below); the per-type
+    blocks stay "B"/"D" so cf_psi_basis.jl:load_cost_params and make_bbl_cost_tables.py
+    read them unchanged.
+
+THE START-QUARTER DIMENSION.  ω and ζ separate only if Δψ₄/Δψ₂ — the β-weighted mean forward
+r^f — MOVES across observations.  One launch quarter means one forward curve for every firm,
+so that ratio is a near-constant and only c̄ = ω + r̄^f·ζ is identified (corr(Δψ₂,Δψ₄) =
+0.99997 measured on the single-curve production run).  Simulating each firm from SEVERAL
+launch quarters, each discounted by the Focus curve of ITS OWN vintage, is what puts spread in
+the ratio: the sample Selic runs 14.25 → 2 → 13.75%, and crossing 36 vintage curves with the
+deposit paths was measured at corr 0.852.  Every row therefore carries a `start_q`, and
+alignment, diagnostics and the promotion gate are all organised around it.
+
+PROMOTION GATE.  The split ω vs ζ is a CLAIM about the design, so it is tested, not assumed.
+ridge_by_start reports the BKW condition index of the two unit-length-scaled columns per start
+and pooled; `identified_split` is (pooled index ≤ --ridge-cond-max, default 30 — the BKW rule
+of thumb) for EVERY firm type present.  The tagged json is always written.  --promote copies
+it onto the UNTAGGED cost_params name (the one cf1_net/cf3/cf5/cf6 read) only if the gate
+passes, or if --force-ridge overrides it; otherwise the per-start table is printed and the
+process EXITS 3.  A nonzero exit fails the SLURM solve job, and the cost-consuming CF jobs
+chain afterok on it (cf_run.sh --cost-afterok), so they are CANCELLED rather than left to
+consume a stale untagged file.  A cancelled dependent writes NO log at all — an absent
+cf1_net .out is the expected symptom of a refused promotion, and the reason is in THIS job's
+log, not in a missing one.
 
 INFERENCE (2026-07-17).  F is a squared hinge over moment INEQUALITIES: kinked and possibly
 SET-identified, so the nonparametric bootstrap is inconsistent here — it neither handles a
@@ -48,9 +75,13 @@ precomputed — only the fast hinge minimisation is re-run.
 dominate.  (2) SIMULATION: ψ carries Monte-Carlo error from the R draws.  See §2.8 of
 counterfactuals_plan.md for the propagation recipe.
 
-⚠ ζ SPECIFICALLY: every firm is simulated against the SAME realised forward r^f path, so ζ
-(a pass-through parameter) is identified off one macro path, not off n independent firms.
-No firm-resampling scheme — bootstrap or subsample — delivers honest uncertainty for it.
+⚠ ζ SPECIFICALLY: within one launch quarter every firm is simulated against the SAME forward
+r^f path, so ζ (a pass-through parameter) is identified off macro variation — across the
+launch quarters — not off n independent firms.  With S starts the effective sample for ζ is
+closer to S than to n, and the launch quarters are themselves serially dependent draws of one
+Selic cycle.  No firm-resampling scheme — bootstrap or subsample — delivers honest uncertainty
+for that; the firm-level intervals below understate it, and `identification.ratio_cv` is the
+statistic that says how much rate variation the design actually bought.
 
 ⚠ Run only after bbl_fwd_sim.jl has produced its parquets, AND only with σ̂ from
 the FITTED policy (--policy-csv upstream): with deviations around raw observed spreads,
@@ -59,7 +90,8 @@ frac_bind ≈ ½ mechanically and nothing here is interpretable.
 Usage:
   python bbl_solve.py --estim 6 --spec 12 --stage extended \\
       --subsample 200 --profile --ci-level 0.95      # headline
-  ... --bootstrap 200                                 # legacy SEs, for comparison
+  ... --bootstrap 200                                 # firm-block SEs, for comparison
+  ... --psi-tag _ms36 --promote                       # multi-start psi, gated promotion
 """
 try:
     from utils.venv_guard import ensure_project_venv
@@ -70,6 +102,8 @@ except ModuleNotFoundError:
 import argparse
 import json
 import os
+import re
+import shutil
 from pathlib import Path
 
 import numpy as np
@@ -115,15 +149,43 @@ def _block_columns(df: pd.DataFrame):
 
 
 def build_delta(eq: pd.DataFrame, dev: pd.DataFrame):
-    """Δψ = ψ_eq − ψ_dev, broadcast eq to each (firm, shock) row of dev.
+    """Δψ = ψ_eq − ψ_dev, broadcast eq to each (firm, start_q, shock) row of dev.
+
+    ALIGNMENT KEY = (firm, start_q), NOT firm.  With vintage-matched forward curves a firm
+    carries one equilibrium ψ per launch quarter, and the whole point of the multi-start design
+    is that those rows sit at different points of the Selic cycle.  Aligning on firm alone
+    would difference a 2016Q1 deviation against a 2024Q4 equilibrium and book the rate cycle as
+    a deviation effect — a firm with S starts would also silently fan out into S copies of every
+    deviation row.  Single-start parquets get start_q = "all" injected by main(), so the key is
+    uniform and this reduces to the firm-only alignment there.
+
+    A firm therefore contributes one row per (start × deviation).  THE DEPENDENCE UNIT IS STILL
+    THE FIRM — see bootstrap_kappa / subsample_kappa.
 
     Returns a dict with, for each firm type κ ∈ {'B','D'}, the arrays
-    (d1, d_omega, d_gamma [n×nZ], d_zeta) over all (firm, shock) rows of that type.
+    (d1, d_omega, d_gamma [n×nZ], d_zeta) over all (firm, start, shock) rows of that type, plus
+    the parallel label arrays `firms` and `starts`.
     """
     psi1, omega, gamma, zeta = _block_columns(eq)
-    eq_idx = eq.set_index("firm")
-    # Align eq to dev rows by firm.
-    eq_aligned = eq_idx.loc[dev["firm"].values]
+    for nm, df in (("psi_eq", eq), ("psi_dev", dev)):
+        if "start_q" not in df.columns:
+            raise ValueError(f"{nm} has no start_q column — main() injects 'all' before this")
+
+    eq_idx = eq.set_index(["firm", "start_q"])
+    if eq_idx.index.has_duplicates:
+        dup = eq_idx.index[eq_idx.index.duplicated()].unique().tolist()[:5]
+        raise ValueError(f"psi_eq has duplicate (firm, start_q) rows, e.g. {dup} — the "
+                         f"equilibrium ψ must be one row per firm per launch quarter")
+    key = pd.MultiIndex.from_arrays([dev["firm"].values, dev["start_q"].values])
+    missing = ~key.isin(eq_idx.index)
+    if missing.any():
+        ex = sorted(set(map(tuple, np.column_stack(
+            [dev["firm"].values[missing], dev["start_q"].values[missing]]).tolist())))[:5]
+        raise ValueError(f"{int(missing.sum())} psi_dev rows have no matching psi_eq "
+                         f"(firm, start_q), e.g. {ex} — psi_eq and the psi_dev shards are "
+                         f"different vintages or were built over different launch quarters")
+    eq_aligned = eq_idx.reindex(key)
+
     out = {}
     for kappa, mask in (("B", dev["is_B"].values.astype(bool)),
                         ("D", ~dev["is_B"].values.astype(bool))):
@@ -134,8 +196,9 @@ def build_delta(eq: pd.DataFrame, dev: pd.DataFrame):
         d_ze = (eq_aligned[zeta].values - dev[zeta].values)[mask]
         d_ga = (eq_aligned[gamma].values - dev[gamma].values)[mask]  # (n, nZ)
         firms = dev["firm"].values[mask]
+        starts = dev["start_q"].values[mask]
         out[kappa] = dict(d1=d1, d_omega=d_om, d_gamma=d_ga, d_zeta=d_ze,
-                          firms=firms, gamma_names=gamma)
+                          firms=firms, starts=starts, gamma_names=gamma)
     return out
 
 
@@ -286,8 +349,128 @@ def rbar_of_block(blk):
     )
 
 
+def _bkw_cond(d2, d4):
+    """Belsley–Kuh–Welsch condition index of the two-column design [Δψ₂, Δψ₄].
+
+    BKW scale each column to unit LENGTH (2-norm) and take σ_max/σ_min of the scaled,
+    UNCENTERED matrix; their rule of thumb calls >30 damaging collinearity, which is where
+    --ridge-cond-max defaults. Uncentered is both the BKW definition and the right object here:
+    the eq:17 design has no intercept, so the near-dependence that starves ζ is the raw
+    proportionality Δψ₄ ≈ r̄^f·Δψ₂, not a correlation about column means.
+
+    Unit-LENGTH scaling (not RMS) is what makes the index scale-free, so it is comparable
+    across starts and across blocks of different size — unlike `ridge_cond`, which is taken on
+    the raw columns and therefore also carries the ~1/r̄^f units gap between them.
+    """
+    X = np.column_stack([np.asarray(d2, float), np.asarray(d4, float)])
+    nrm = np.sqrt((X ** 2).sum(axis=0))
+    nrm[nrm <= 0.0] = 1.0
+    s = np.linalg.svd(X / nrm, compute_uv=False)
+    return float(s[0] / s[-1]) if s[-1] > 0.0 else float("inf")
+
+
+def _ridge_diag_rows(blk, rows, fit=None):
+    """Ridge geometry + a hinge refit on one row subset (one start, or all rows pooled).
+
+    `fit` short-circuits the refit when the caller already solved exactly these rows (the
+    pooled case), so the printed pooled line is the SAME optimum the json reports rather than a
+    second solve that could differ in the last digits.
+    """
+    rows = np.asarray(rows)
+    if rows.dtype == bool:          # positions, so `n` counts rows and not the mask length
+        rows = np.flatnonzero(rows)
+    d2 = np.asarray(blk["d_omega"], float)[rows]
+    d4 = np.asarray(blk["d_zeta"], float)[rows]
+    out = dict(n=int(rows.size), n_firms=int(np.unique(blk["firms"][rows]).size))
+    ok = np.isfinite(d2) & np.isfinite(d4) & (d2 != 0.0)
+    out["n_ratio"] = int(ok.sum())
+    if ok.sum() >= 2:
+        ratio = d4[ok] / d2[ok]
+        with np.errstate(invalid="ignore"):
+            cc = float(np.corrcoef(d2[ok], d4[ok])[0, 1])
+        out.update(corr=cc if np.isfinite(cc) else float("nan"),
+                   bkw_cond=_bkw_cond(d2[ok], d4[ok]),
+                   rbar_f=float(np.median(ratio)),
+                   rbar_f_mean=float(ratio.mean()))
+    else:
+        out.update(corr=float("nan"), bkw_cond=float("inf"),
+                   rbar_f=float("nan"), rbar_f_mean=float("nan"))
+
+    # A within-start refit is what makes c̄ per start meaningful: inside one start the two
+    # columns are collinear again (one curve for every firm), so ω_s and ζ_s are arbitrary
+    # points on that start's ridge, but c̄_s = ω_s + r̄^f_s·ζ_s — marginal cost at THAT
+    # quarter's mean forward rate — is pinned. Those c̄_s are the quantities whose movement
+    # across starts is the ζ identification, which cbar_slope_across_starts then reads off.
+    ndim = 2 + int(blk["d_gamma"].shape[1])
+    if rows.size > ndim:
+        f = fit if fit is not None else solve_kappa(_sub_block(blk, rows))
+        out.update(omega=float(f["omega"]), zeta=float(f["zeta"]),
+                   frac_bind=float(f["frac_bind"]), objective=float(f["objective"]),
+                   c_bar=float(f["omega"] + out["rbar_f"] * f["zeta"]))
+    return out
+
+
+def ridge_by_start(blk, fit=None, cond_max=30.0):
+    r"""Per-start and pooled ω/ζ ridge diagnostics — the identification claim, tested.
+
+    For every launch quarter and for the pool it reports n, corr(Δψ₂,Δψ₄), the BKW condition
+    index of the two unit-length-scaled columns, r̄^f = median(Δψ₄/Δψ₂), frac_bind and c̄.
+
+    WHAT THE NUMBERS SHOULD LOOK LIKE. Within ONE start every firm discounts the same forward
+    curve, so each per-start line is expected to stay on the ridge (corr ≈ 0.99997, index in
+    the hundreds) — that is not a failure. The identification comes from POOLING starts whose
+    curves sit at different points of the Selic cycle: crossing 36 vintage curves with the
+    deposit paths was measured at corr 0.852, index ≈ 3.5. So the pooled line is the one the
+    gate reads, and a pooled corr that matches the per-start corr on multi-start input means
+    the starts are not actually differing — a driver-side wiring failure (row_start / vintage
+    curves not reaching the sim), not a marginal result. main() says so loudly.
+
+    `ratio_cv` is the coefficient of variation of the per-start MEAN ratio across starts: the
+    spread in r̄^f the multi-start design bought, in the units ζ is identified from. It is
+    reported next to the condition index because they answer different questions — the index
+    says whether the pooled columns are separable, the CV says how much of the rate cycle the
+    launch quarters actually span.
+
+    `identified_split` = (pooled BKW index ≤ cond_max).
+    """
+    starts = np.asarray(blk["starts"])
+    uniq = sorted(set(starts.tolist()))
+    per = {s: _ridge_diag_rows(blk, np.where(starts == s)[0]) for s in uniq}
+    pooled = _ridge_diag_rows(blk, np.arange(starts.size), fit=fit)
+
+    means = np.array([per[s].get("rbar_f_mean", np.nan) for s in uniq], float)
+    m = means[np.isfinite(means)]
+    ratio_cv = (float(m.std(ddof=0) / abs(m.mean()))
+                if m.size >= 2 and m.mean() != 0.0 else float("nan"))
+
+    # c̄_s against r̄^f_s across starts: OLS slope ≈ ζ, intercept ≈ ω, by the definition of c̄.
+    # It uses only per-start quantities that are identified WITHIN a start, so it is an
+    # independent read on the split that never touches the pooled hinge. Agreement with the
+    # pooled ω̂/ζ̂ is the check that the pooled solve is using the cross-start variation and not
+    # some within-start residual.
+    slope = dict(n_starts=int(len(uniq)))
+    rv = np.array([per[s].get("rbar_f", np.nan) for s in uniq], float)
+    cv_ = np.array([per[s].get("c_bar", np.nan) for s in uniq], float)
+    good = np.isfinite(rv) & np.isfinite(cv_)
+    if good.sum() >= 3 and np.ptp(rv[good]) > 0.0:
+        A = np.column_stack([np.ones(good.sum()), rv[good]])
+        coef, *_ = np.linalg.lstsq(A, cv_[good], rcond=None)
+        resid = cv_[good] - A @ coef
+        sst = float(((cv_[good] - cv_[good].mean()) ** 2).sum())
+        slope.update(omega_from_cbar=float(coef[0]), zeta_from_cbar=float(coef[1]),
+                     r2=float(1.0 - (resid @ resid) / sst) if sst > 0 else float("nan"),
+                     rbar_f_span=float(np.ptp(rv[good])))
+
+    identified = bool(np.isfinite(pooled["bkw_cond"]) and pooled["bkw_cond"] <= float(cond_max))
+    return dict(starts=uniq, n_starts=int(len(uniq)), per_start=per, pooled=pooled,
+                pooled_corr=pooled["corr"], pooled_bkw_cond=pooled["bkw_cond"],
+                ratio_cv=ratio_cv, ratio_cv_pct=100.0 * ratio_cv,
+                ridge_cond_max=float(cond_max), identified_split=identified,
+                cbar_slope_across_starts=slope)
+
+
 def cbar_stats(fit, rbar, boot_draws=None, sub_thetas=None, n_firms=None, b_firms=None,
-               levels=(0.90, 0.95)):
+               levels=(0.90, 0.95), by_start=None):
     r"""Point estimate and inference for c̄ = ω + r̄^f·ζ.
 
     Two inference routes, mirroring exactly what this file already does for ω and ζ separately:
@@ -300,8 +483,18 @@ def cbar_stats(fit, rbar, boot_draws=None, sub_thetas=None, n_firms=None, b_firm
     Because c̄ is a scalar LINEAR functional of θ, both are exact transformations of the draws
     already computed — no extra refits. The gain over quoting ω̂ and ζ̂ separately is real:
     their marginal SDs are inflated by the ridge, whereas c̄ is the direction the data pins.
+
+    `by_start` (a ridge_by_start()["per_start"] map) adds `c_bar_by_start`: the POOLED (ω̂, ζ̂)
+    evaluated at each launch quarter's own r̄^f, i.e. the fitted marginal cost across the rate
+    cycle. It is deliberately NOT ridge_by_start's per-start c̄, which refits inside the start;
+    comparing the two is how a reader sees whether one pooled (ω, ζ) reproduces the level each
+    start identifies on its own.
     """
     out = dict(c_bar=float(fit["omega"] + rbar * fit["zeta"]))
+    if by_start:
+        out["c_bar_by_start"] = {
+            s: float(fit["omega"] + d["rbar_f"] * fit["zeta"])
+            for s, d in by_start.items() if np.isfinite(d.get("rbar_f", np.nan))}
     if not np.isfinite(rbar):
         return out
 
@@ -334,6 +527,14 @@ def cbar_stats(fit, rbar, boot_draws=None, sub_thetas=None, n_firms=None, b_firm
 def bootstrap_kappa(blk, n_boot, seed=42):
     """Resample FIRMS with replacement (block bootstrap), refit, collect params.
 
+    THE DEPENDENCE UNIT IS THE FIRM, INCLUDING ACROSS STARTS. `idx_by_firm` collects every row
+    of a firm — all of its (start × deviation) pairs — so a firm moves in or out whole. Starts
+    are NEVER resampled independently: a firm's 2016Q1 and 2016Q3 rows are the same firm walked
+    forward through one Selic cycle, not two independent draws, and treating them as such would
+    manufacture precision out of the serial correlation the multi-start design deliberately
+    introduces. It would also break the design in the other direction — the cross-start spread
+    in r̄^f is exactly what identifies ζ, and a start-level resample would shuffle it.
+
     Refits go through the (fixed) solve_kappa, so bootstrap draws use the same
     ζ = (unscaled ψ4 coef) − 1 convention; a constant −1 shift leaves the SE unchanged.
     """
@@ -345,10 +546,7 @@ def bootstrap_kappa(blk, n_boot, seed=42):
     for _ in range(n_boot):
         chosen = rng.choice(uniq, size=len(uniq), replace=True)
         rows = np.concatenate([idx_by_firm[f] for f in chosen])
-        sub = dict(d1=blk["d1"][rows], d_omega=blk["d_omega"][rows],
-                   d_gamma=blk["d_gamma"][rows], d_zeta=blk["d_zeta"][rows],
-                   firms=firms[rows], gamma_names=blk["gamma_names"])
-        draws.append(solve_kappa(sub)["theta"])
+        draws.append(solve_kappa(_sub_block(blk, rows))["theta"])
     arr = np.vstack(draws)
     # Return the DRAWS as well as the SDs. ω and ζ are near-perfectly collinear in this design
     # (see rbar_of_block), so their marginal SDs say nothing about the precision of the one
@@ -380,9 +578,12 @@ def _rows_for_firms(idx_by_firm, sel):
 
 
 def _sub_block(blk, rows):
+    """Row subset of a Δψ block. `starts` rides along so any sub-block stays a full block —
+    ridge_by_start refits on subsets and needs the labels to line up with the rows."""
     return dict(d1=blk["d1"][rows], d_omega=blk["d_omega"][rows],
                 d_gamma=blk["d_gamma"][rows], d_zeta=blk["d_zeta"][rows],
-                firms=blk["firms"][rows], gamma_names=blk["gamma_names"])
+                firms=blk["firms"][rows], starts=blk["starts"][rows],
+                gamma_names=blk["gamma_names"])
 
 
 def subsample_kappa(blk, fit, n_sub=200, b_firms=None, seed=4242, levels=(0.90, 0.95)):
@@ -395,8 +596,12 @@ def subsample_kappa(blk, fit, n_sub=200, b_firms=None, seed=4242, levels=(0.90, 
     critical value.  This is cheap here because ψ is PRECOMPUTED — only the fast,
     linear-in-θ hinge minimisation is re-run.
 
-    PROCEDURE.  Draw `n_sub` subsamples of `b_firms` FIRMS without replacement (the firm is
-    the dependence unit: a firm's ψ_eq is reused across all of its deviations).  With
+    PROCEDURE.  Draw `n_sub` subsamples of `b_firms` FIRMS without replacement — the firm is
+    the dependence unit, and it stays the dependence unit under multi-start ψ: a firm's ψ_eq is
+    reused across all of its deviations, and its rows at different launch quarters are one firm
+    followed through the rate cycle, not independent draws.  Subsampling STARTS instead (or as
+    well) would both understate dependence and destroy the cross-start spread in r̄^f that
+    identifies ζ.  With
     Q(θ) = F(θ)/n_rows the mean squared violation (comparable across sample sizes),
 
         T_s = b · [ Q_b(θ̂_n) − min_θ Q_b(θ) ]
@@ -556,14 +761,116 @@ def multistart_check(fit, f_opt, n=5, seed=12345):
     return max_dF
 
 
+# ==========================================================================
+# Reporting: everything below must survive in the SLURM log
+# ==========================================================================
+# NOTHING IS DOWNLOADED FROM THE CLUSTER, so a number that exists only inside a parquet or a
+# json on the compute node's filesystem does not exist for the paper. Every diagnostic this
+# file computes is therefore printed as well as stored, and printed in full (one line per
+# launch quarter, not a summary), so the run can be read back from the .out alone.
+def _jsonable(x):
+    """Recursively turn non-finite floats into None so the json stays strict JSON.
+
+    Applied to the multi-start blocks only. The older per-type fields keep their NaNs: their
+    readers (make_bbl_cost_tables.py's float(blk.get(...)) and cf_psi_basis.jl's JSON3 +
+    Float64) accept a NaN and would fail on a null, so silently changing their type here would
+    break the table build rather than protect it.
+    """
+    if isinstance(x, dict):
+        return {str(k): _jsonable(v) for k, v in x.items()}
+    if isinstance(x, (list, tuple)):
+        return [_jsonable(v) for v in x]
+    if isinstance(x, (np.floating, float)):
+        v = float(x)
+        return v if np.isfinite(v) else None
+    if isinstance(x, (np.integer,)):
+        return int(x)
+    if isinstance(x, (np.bool_, bool)):
+        return bool(x)
+    return x
+
+
+def _fmt(v, spec):
+    """Format a possibly-missing number; a missing one still fills the column width, so the
+    per-start table stays aligned when a start has too few rows to diagnose."""
+    try:
+        x = float(v)
+    except (TypeError, ValueError):
+        x = float("nan")
+    if np.isfinite(x):
+        return format(x, spec)
+    w = re.match(r"^[<>^]?(\d+)", spec)
+    return format("-", f">{w.group(1)}") if w else "-"
+
+
+def _print_start_table(kappa, rbs, rf_bar_beta=None, rf_source=None):
+    """The per-start ridge table, one line per launch quarter plus the pooled line."""
+    rf_bar_beta = rf_bar_beta or {}
+    rf_source = rf_source or {}
+    print(f"  [{kappa}] per-start ridge diagnostics -- rows are (firm x start x deviation); "
+          f"the dependence unit is the FIRM, starts are never resampled")
+    print(f"    {'start':<9}{'n':>8}{'firms':>7}{'corr(d2,d4)':>14}{'BKW cond':>11}"
+          f"{'rbar_f':>11}{'rf_bar_beta':>13}{'frac_bind':>11}{'c_bar':>15}  rf_source")
+    for s in rbs["starts"] + ["POOLED"]:
+        d = rbs["pooled"] if s == "POOLED" else rbs["per_start"][s]
+        src = "" if s == "POOLED" else ",".join(rf_source.get(s, []))
+        rfb = None if s == "POOLED" else rf_bar_beta.get(s)
+        print(f"    {s:<9}{d['n']:>8d}{d['n_firms']:>7d}{_fmt(d.get('corr'), '>14.6f')}"
+              f"{_fmt(d.get('bkw_cond'), '>11.4g')}{_fmt(d.get('rbar_f'), '>11.6f')}"
+              f"{_fmt(rfb, '>13.6f')}{_fmt(d.get('frac_bind'), '>11.3f')}"
+              f"{_fmt(d.get('c_bar'), '>15.6g')}  {src}")
+    print(f"    ratio CV of the per-start mean Dpsi4/Dpsi2 across starts = "
+          f"{_fmt(rbs.get('ratio_cv_pct'), '.2f')}%"
+          f"  |  pooled BKW cond = {_fmt(rbs.get('pooled_bkw_cond'), '.4g')}"
+          f" (max {rbs['ridge_cond_max']:.4g})  ->  identified_split="
+          f"{rbs['identified_split']}")
+    sl = rbs.get("cbar_slope_across_starts") or {}
+    if "zeta_from_cbar" in sl:
+        print(f"    cross-check, OLS of c_bar_s on rbar_f_s over {sl['n_starts']} starts: "
+              f"omega={sl['omega_from_cbar']:.6g} zeta={sl['zeta_from_cbar']:.6g} "
+              f"R2={sl['r2']:.4f} (rbar_f span {sl['rbar_f_span']:.6f}) -- these use only "
+              f"within-start-identified quantities, so they should track the pooled fit")
+
+
+def _print_final(kappa, rec, level):
+    """Point estimates and intervals, spelled out. This is the deliverable of the whole step."""
+    print(f"  [{kappa}] FINAL PARAMETERS -- estimand={rec['estimand']} "
+          f"(identified_split={rec['identified_split']}, "
+          f"n_firms={rec['n_firms']}, n_rows={rec['n_rows']}, n_starts={rec['n_starts']})")
+    print(f"        omega  = {rec['omega']:.10g}   (se {_fmt(rec.get('omega_se'), '.4g')})")
+    print(f"        zeta   = {rec['zeta']:.10g}   (se {_fmt(rec.get('zeta_se'), '.4g')})")
+    for z, v in (rec.get("gamma") or {}).items():
+        print(f"        gamma[{z}] = {float(v):.10g}   "
+              f"(se {_fmt((rec.get('gamma_se') or {}).get(z), '.4g')})")
+    print(f"        rbar_f = {_fmt(rec.get('rbar_f'), '.10g')}   "
+          f"c_bar = {rec['c_bar']:.10g}   "
+          f"(sd_rate_adj {_fmt(rec.get('c_bar_sd_rate_adj'), '.4g')})")
+    lvl = f"{level:.2f}"
+    ci = (rec.get("c_bar_ci_sqrtn") or {}).get(lvl)
+    if ci:
+        print(f"        c_bar CI({lvl}) = [{ci['lo']:.10g}, {ci['hi']:.10g}]")
+    for nm, sym in (("omega", "omega"), ("zeta", "zeta")):
+        p = rec.get(f"ci_{nm}")
+        if p and not p["empty"]:
+            print(f"        {sym} profile CI({lvl}) = [{p['ci_lo']:.10g}, {p['ci_hi']:.10g}]")
+    if rec["estimand"] == "c_bar":
+        print(f"        omega and zeta above are a point ON the ridge, not separately "
+              f"identified -- report c_bar.")
+
+
 def main():
     ap = argparse.ArgumentParser(description="BBL Step 2 cost solver (V_Main eq:17).")
     ap.add_argument("--estim", type=int, default=6)
     ap.add_argument("--spec", type=int, default=12)
     ap.add_argument("--stage", type=str, default="extended")
     ap.add_argument("--suffix", type=str, default="")
+    ap.add_argument("--psi-tag", type=str, default="",
+                    help="marker the forward sim stamped on the psi filenames for a multi-start "
+                         "run (it writes _ms{S}); appended to the tag when LOCATING the "
+                         "parquets and kept on the tagged cost_params name. Empty = the "
+                         "single-start naming.")
     ap.add_argument("--bootstrap", type=int, default=200,
-                    help="firm-block bootstrap reps (COMPARISON ONLY — the bootstrap is not "
+                    help="firm-block bootstrap reps (COMPARISON ONLY -- the bootstrap is not "
                          "valid for this kinked/possibly set-identified criterion; 0 to skip)")
     ap.add_argument("--subsample", type=int, default=200,
                     help="subsampling reps for the HEADLINE inference (BBL/CHT); 0 to skip")
@@ -572,29 +879,80 @@ def main():
     ap.add_argument("--ci-level", type=float, default=0.95,
                     help="confidence level for the subsampled criterion inversion")
     ap.add_argument("--profile", action="store_true",
-                    help="invert the criterion into ω/ζ confidence intervals (true profile, "
-                         "re-minimising nuisance coefficients; needs --subsample > 0)")
+                    help="invert the criterion into omega/zeta confidence intervals (true "
+                         "profile, re-minimising nuisance coefficients; needs --subsample > 0)")
+    ap.add_argument("--promote", action="store_true",
+                    help="copy the tagged cost_params onto the UNTAGGED name the "
+                         "counterfactuals read, but only if the identification gate passes; "
+                         "otherwise exit 3 so the afterok dependents are cancelled")
+    ap.add_argument("--ridge-cond-max", type=float, default=30.0,
+                    help="gate threshold: the pooled BKW condition index of [Dpsi2, Dpsi4] "
+                         "must be <= this for the omega/zeta split to count as identified "
+                         "(30 is the BKW rule of thumb; 0.99 corr is about 20)")
+    ap.add_argument("--force-ridge", action="store_true",
+                    help="promote even if the gate fails. The json records forced=true; the "
+                         "downstream counterfactuals then run on an omega/zeta split the "
+                         "design does not identify, and only c_bar is defensible.")
     args = ap.parse_args()
 
-    tag = f"E{args.estim}_spec_{args.spec}_{args.stage}{args.suffix}"
+    # base_tag names what the counterfactuals read; tag names this run's psi and its json.
+    base_tag = f"E{args.estim}_spec_{args.spec}_{args.stage}{args.suffix}"
+    tag = f"{base_tag}{args.psi_tag}"
     eq_path = COST_FWD / f"psi_eq_{tag}.parquet"
     if not eq_path.exists():
-        raise FileNotFoundError(f"Missing {eq_path.name} — run bbl_fwd_sim.jl first.")
-    # Deviation ψ may be a single file (n-shards=1) or several shard files; merge all.
-    dev_files = sorted(COST_FWD.glob(f"psi_dev_{tag}*.parquet"))
+        raise FileNotFoundError(f"Missing {eq_path.name} -- run bbl_fwd_sim.jl first.")
+
+    # Deviation psi may be a single file (n-shards=1) or several shard files; merge all. The
+    # glob keeps its trailing wildcard, but only the writer's two spellings are accepted after
+    # the tag ("" and "_shard{i}of{N}"): with --psi-tag empty the wildcard would otherwise also
+    # swallow the multi-start files sitting in the same folder (psi_dev_<base>_ms36_shard*),
+    # mixing two vintages of psi into one solve with nothing on screen to show for it.
+    shard_ok = re.compile(r"^(?:_shard\d+of\d+)?$")
+    pre = f"psi_dev_{tag}"
+    all_dev = sorted(COST_FWD.glob(f"{pre}*.parquet"))
+    dev_files = [p for p in all_dev if shard_ok.match(p.stem[len(pre):])]
     if not dev_files:
-        raise FileNotFoundError(f"No psi_dev_{tag}*.parquet — run bbl_fwd_sim.jl (all shards) first.")
+        raise FileNotFoundError(f"No psi_dev_{tag}*.parquet -- run bbl_fwd_sim.jl "
+                                f"(all shards) first.")
+    other = [p.name for p in all_dev if p not in dev_files]
+    if other:
+        print(f"  Ignoring {len(other)} psi_dev file(s) carrying a different --psi-tag: "
+              f"{', '.join(other[:4])}{' ...' if len(other) > 4 else ''}")
 
     eq = pd.read_parquet(eq_path)
     dev = pd.concat([pd.read_parquet(f) for f in dev_files], ignore_index=True)
-    # Drop any accidental duplicate (firm, shock) rows from re-runs.
-    if "shock" in dev.columns:
-        dev = dev.drop_duplicates(subset=["firm", "shock"]).reset_index(drop=True)
-    print(f"  Loaded ψ_eq ({len(eq)} firms) and ψ_dev ({len(dev)} firm×shock rows) "
-          f"from {len(dev_files)} shard file(s)")
+    # A single-start run has no start_q column. Injecting "all" here rather than branching later
+    # is what keeps ONE code path: alignment, the per-start table, the gate and the json all see
+    # a start dimension that happens to have size 1, and report it as such.
+    for df in (eq, dev):
+        if "start_q" not in df.columns:
+            df["start_q"] = "all"
+        df["start_q"] = df["start_q"].astype(str)
+    # Drop any accidental duplicate (firm, start, shock) rows from re-runs.
+    dedup = [c for c in ("firm", "start_q", "shock") if c in dev.columns]
+    dev = dev.drop_duplicates(subset=dedup).reset_index(drop=True)
+
+    starts_all = sorted(eq["start_q"].unique().tolist())
+    rf_source_by_start, rf_bar_beta_by_start = {}, {}
+    if "rf_source" in eq.columns:
+        rf_source_by_start = {str(s): sorted(set(g.astype(str)))
+                              for s, g in eq.groupby("start_q")["rf_source"]}
+    if "rf_bar_beta" in eq.columns:
+        rf_bar_beta_by_start = {str(s): float(np.nanmedian(g.astype(float)))
+                                for s, g in eq.groupby("start_q")["rf_bar_beta"]}
+    rf_sources = sorted({v for vs in rf_source_by_start.values() for v in vs})
+
+    print(f"  tag={tag}  (psi_tag={args.psi_tag or '(none)'}, promoted name "
+          f"cost_params_{base_tag}.json)")
+    print(f"  Loaded psi_eq ({len(eq)} firm x start rows) and psi_dev ({len(dev)} "
+          f"firm x start x shock rows) from {len(dev_files)} shard file(s)")
+    print(f"  starts={len(starts_all)}: {', '.join(starts_all[:8])}"
+          f"{' ...' if len(starts_all) > 8 else ''}"
+          f"  |  rf_source(s): {', '.join(rf_sources) if rf_sources else '(not recorded)'}")
 
     blocks = build_delta(eq, dev)
     results = {}
+    ident = {}
     for kappa, blk in blocks.items():
         nZ = blk["d_gamma"].shape[1]
         fit = solve_kappa(blk)
@@ -626,42 +984,64 @@ def main():
         sub = subsample_kappa(blk, fit, n_sub=args.subsample,
                               b_firms=args.subsample_b) if args.subsample > 0 else None
         if sub is not None:
-            # `_thetas` is a private ndarray handle for cbar_stats — never serialize it.
+            # `_thetas` is a private ndarray handle for cbar_stats -- never serialize it.
             rec["subsample"] = {k: v for k, v in sub.items() if not k.startswith("_")}
 
-        # ---- The identified combination c̄ = ω + r̄^f·ζ ---------------------------------
-        # ω and ζ are not separately identified here (Δψ₂ and Δψ₄ collinear at corr > 0.99997);
-        # c̄ is the direction the data does pin down, so it carries the interpretable SE.
+        # ---- Is the omega/zeta split identified in THIS design? ------------------------
+        # Pooled ridge geometry as before, plus the per-start decomposition that says whether
+        # the launch quarters bought any spread in rbar_f. The verdict drives which estimand is
+        # reported and whether --promote is allowed to overwrite the counterfactuals' input.
+        rbs = ridge_by_start(blk, fit=fit, cond_max=args.ridge_cond_max)
+        rec["n_starts"] = rbs["n_starts"]
+        rec["by_start"] = _jsonable(rbs)
+        rec["identified_split"] = rbs["identified_split"]
+        rec["estimand"] = "omega_zeta" if rbs["identified_split"] else "c_bar"
+        ident[kappa] = dict(identified_split=rbs["identified_split"],
+                            pooled_bkw_cond=rbs["pooled_bkw_cond"],
+                            pooled_corr=rbs["pooled_corr"],
+                            ratio_cv=rbs["ratio_cv"], n_starts=rbs["n_starts"],
+                            n_firms=rec["n_firms"], n_rows=rec["n_rows"])
+
+        # ---- The identified combination c_bar = omega + rbar_f*zeta --------------------
+        # When the split is NOT identified, c_bar is the estimand: it is the direction the data
+        # pins whatever the design does with the split, so it is computed either way.
         ridge = rbar_of_block(blk)
         rec.update(ridge)
         rec.update(cbar_stats(
             fit, ridge["rbar_f"], boot_draws=boot_draws,
             sub_thetas=(sub or {}).get("_thetas"),
-            n_firms=(sub or {}).get("n_firms"), b_firms=(sub or {}).get("b_firms")))
+            n_firms=(sub or {}).get("n_firms"), b_firms=(sub or {}).get("b_firms"),
+            by_start=rbs["per_start"]))
 
-        # ---- Invert the criterion into ω/ζ confidence intervals -----------------------
+        # ---- Invert the criterion into omega/zeta confidence intervals -----------------
         if args.profile:
             lvl = f"{args.ci_level:.2f}"
             crit = (sub or {}).get("crit", {}).get(lvl)
             if crit is None:
-                print(f"  [{kappa}] --profile needs --subsample > 0 for a critical value; skipped.")
+                print(f"  [{kappa}] --profile needs --subsample > 0 for a critical value; "
+                      f"skipped.")
             else:
                 rec["ci_omega"] = profile_ci(blk, fit, "omega", crit)
                 rec["ci_zeta"] = profile_ci(blk, fit, "zeta", crit)
+        elif rbs["identified_split"]:
+            print(f"  [{kappa}] the omega/zeta split IS identified here but --profile was not "
+                  f"passed, so the headline parameters ship without their criterion-inversion "
+                  f"intervals. Re-run with --profile --subsample N.")
 
         results[kappa] = rec
 
-        se0 = f"{se[0]:.3g}" if se[0] is not None else "—"
-        se1 = f"{se[1]:.3g}" if se[1] is not None else "—"
-        diag = " | ω<0 (misspecification diagnostic — see docstring)" if fit["omega"] < 0 else ""
-        print(f"  [{kappa}] ω={fit['omega']:.4g} (se {se0}) | "
-              f"ζ={fit['zeta']:.4g} (se {se1}) | obj={fit['objective']:.4g} | "
-              f"bind={100*fit['frac_bind']:.0f}% | firms={rec['n_firms']}")
+        se0 = f"{se[0]:.3g}" if se[0] is not None else "-"
+        se1 = f"{se[1]:.3g}" if se[1] is not None else "-"
+        diag = " | omega<0 (misspecification diagnostic -- see docstring)" if fit["omega"] < 0 else ""
+        print(f"  [{kappa}] omega={fit['omega']:.4g} (se {se0}) | "
+              f"zeta={fit['zeta']:.4g} (se {se1}) | obj={fit['objective']:.4g} | "
+              f"bind={100*fit['frac_bind']:.0f}% | firms={rec['n_firms']} | "
+              f"starts={rbs['n_starts']}")
         print(f"        opt: success={fit['opt_success']} status={fit['opt_status']} "
-              f"nit={fit['opt_nit']} ‖∇‖∞={fit['opt_grad_inf']:.2e} "
-              f"msΔF={ms_max_dF:.2e}{diag}")
+              f"nit={fit['opt_nit']} grad_inf={fit['opt_grad_inf']:.2e} "
+              f"ms_dF={ms_max_dF:.2e}{diag}")
         if ms_max_dF > 1e-6:
-            print(f"  !!!! [{kappa}] MULTISTART DISAGREEMENT max ΔF={ms_max_dF:.3e} > 1e-6 — "
+            print(f"  !!!! [{kappa}] MULTISTART DISAGREEMENT max dF={ms_max_dF:.3e} > 1e-6 -- "
                   f"convex hinge should have a unique optimum; suspect a gradient/scaling bug !!!!")
         if sub is not None and "skipped" not in sub:
             print(f"        subsample: b={sub['b_firms']}/{sub['n_firms']} firms, "
@@ -670,30 +1050,112 @@ def main():
         elif sub is not None:
             print(f"        subsample: {sub['skipped']}")
 
+        _print_start_table(kappa, rbs, rf_bar_beta_by_start, rf_source_by_start)
+
+        # Multi-start psi whose pooled columns are still as collinear as one curve is a WIRING
+        # failure upstream, not a marginal result: 36 vintage curves crossed with the deposit
+        # paths measured corr 0.852, against 0.99997 for a single curve. Report it here rather
+        # than letting the gate refusal below be read as "the idea did not work".
+        pc = rbs["pooled_corr"]
+        if rbs["n_starts"] > 1 and np.isfinite(pc) and abs(pc) > 0.999:
+            print(f"  !!!! [{kappa}] {rbs['n_starts']} starts BUT pooled corr(Dpsi2,Dpsi4)="
+                  f"{pc:.6f} -- as collinear as a single curve (reference: 36 vintage curves "
+                  f"= 0.852). The starts are not carrying different forward curves. Suspect the "
+                  f"driver (row_start / rf_curve_paths not reaching psi_under, or one curve "
+                  f"reused for every start) before reading anything below as a result. !!!!")
+        if rbs["n_starts"] > 1 and np.isfinite(rbs["ratio_cv"]) and rbs["ratio_cv"] < 0.02:
+            print(f"  !!!! [{kappa}] the per-start mean Dpsi4/Dpsi2 varies by only "
+                  f"{100*rbs['ratio_cv']:.3f}% across {rbs['n_starts']} starts -- the launch "
+                  f"quarters span almost no rate variation, so zeta has nothing to load on !!!!")
+
         for nm in ("omega", "zeta"):
             ci = rec.get(f"ci_{nm}")
             if not ci:
                 continue
-            sym = "ω" if nm == "omega" else "ζ"
             if ci["empty"]:
-                print(f"        CI {sym}: EMPTY at the {args.ci_level:.0%} level "
-                      f"(criterion never within crit — check identification)")
+                print(f"        CI {nm}: EMPTY at the {args.ci_level:.0%} level "
+                      f"(criterion never within crit -- check identification)")
             else:
-                trunc = ("  ⚠ WINDOW-TRUNCATED (not a set boundary)"
+                trunc = ("  !! WINDOW-TRUNCATED (not a set boundary)"
                          if (ci["truncated_lo"] or ci["truncated_hi"]) else "")
-                print(f"        CI {sym}: [{ci['ci_lo']:.4g}, {ci['ci_hi']:.4g}] "
+                print(f"        CI {nm}: [{ci['ci_lo']:.4g}, {ci['ci_hi']:.4g}] "
                       f"width={ci['ci_hi']-ci['ci_lo']:.4g}{trunc}")
         if 0.45 <= fit["frac_bind"] <= 0.55:
-            print(f"  !!!! [{kappa}] frac_bind={fit['frac_bind']:.3f} — suspiciously close to ½. "
-                  f"A symmetric ± grid around a σ̂ that is NOT a turning point of the simulated "
-                  f"value makes exactly one of each ± pair bind for ANY θ, so the moments carry "
-                  f"little/no identifying content and NOTHING below (point estimates, SEs, CIs) "
-                  f"should be read as a result. Deviate around the FITTED policy (--policy-csv). !!!!")
+            print(f"  !!!! [{kappa}] frac_bind={fit['frac_bind']:.3f} -- suspiciously close to "
+                  f"1/2. A symmetric +/- grid around a sigma-hat that is NOT a turning point of "
+                  f"the simulated value makes exactly one of each +/- pair bind for ANY theta, "
+                  f"so the moments carry little/no identifying content and NOTHING below (point "
+                  f"estimates, SEs, CIs) should be read as a result. Deviate around the FITTED "
+                  f"policy (--policy-csv). !!!!")
 
+    # ---- Gate verdict, json, promotion -------------------------------------------------
+    # The gate is ALL-TYPES: cf3 solves the equilibrium with B and D costs together, so a split
+    # identified for one type and not the other is not a usable promotion.
+    gate_pass = bool(ident) and all(v["identified_split"] for v in ident.values())
+    promoted_path = COST_FWD / f"cost_params_{base_tag}.json"
     out_path = COST_FWD / f"cost_params_{tag}.json"
+    same_name = out_path.name == promoted_path.name
+    do_promote = bool(args.promote and (gate_pass or args.force_ridge))
+
+    results["run"] = _jsonable(dict(
+        tag=tag, base_tag=base_tag, psi_tag=args.psi_tag,
+        starts=starts_all, n_starts=len(starts_all),
+        rf_sources=rf_sources, rf_source_by_start=rf_source_by_start,
+        rf_bar_beta_by_start=rf_bar_beta_by_start,
+        n_dev_files=len(dev_files), n_eq_rows=int(len(eq)), n_dev_rows=int(len(dev)),
+        bootstrap=int(args.bootstrap), subsample=int(args.subsample),
+        ci_level=float(args.ci_level), profile=bool(args.profile)))
+    results["identification"] = _jsonable(dict(
+        per_type=ident, gate_pass=gate_pass,
+        ridge_cond_max=float(args.ridge_cond_max),
+        promote_requested=bool(args.promote), forced=bool(args.force_ridge),
+        promoted=do_promote, promoted_name=promoted_path.name if do_promote else None))
+
     with open(out_path, "w") as f:
         json.dump(results, f, indent=2)
-    print(f"  Saved cost parameters → {out_path.name}")
+    print(f"  Saved cost parameters -> {out_path.name}")
+
+    for kappa in blocks:
+        _print_final(kappa, results[kappa], args.ci_level)
+
+    conds = ", ".join(f"{k}: {v['pooled_bkw_cond']:.4g}" for k, v in ident.items())
+    print(f"  GATE: pooled BKW cond <= {args.ridge_cond_max:.4g} for every type? "
+          f"{gate_pass}  ({conds})")
+    if not args.promote:
+        print(f"  --promote not passed: cost_params_{base_tag}.json left untouched.")
+        return
+    if gate_pass or args.force_ridge:
+        note = "" if gate_pass else "  (FORCED past a failed gate -- only c_bar is defensible)"
+        if same_name:
+            print(f"  Promotion is a no-op: --psi-tag is empty, so the file just written IS "
+                  f"{promoted_path.name}.{note}")
+        else:
+            shutil.copyfile(out_path, promoted_path)
+            print(f"  Promoted {out_path.name} -> {promoted_path.name}{note}")
+        return
+
+    # Refused. Exit 3 rather than 0: the counterfactual jobs chain afterok on this job
+    # (cf_run.sh --cost-afterok), so a failure CANCELS them instead of letting them consume a
+    # stale untagged cost_params. A cancelled job writes NO log at all -- if cf1_net/cf3/cf5/cf6
+    # produced no .out, this refusal is why, and the reason is here rather than in a file that
+    # was never created.
+    print(f"  REFUSING TO PROMOTE: the omega/zeta split is not identified at "
+          f"--ridge-cond-max {args.ridge_cond_max:.4g}.")
+    for k, v in ident.items():
+        print(f"    [{k}] pooled BKW cond={_fmt(v['pooled_bkw_cond'], '.4g')} "
+              f"corr={_fmt(v['pooled_corr'], '.6f')} "
+              f"ratio CV={_fmt(100 * v['ratio_cv'], '.2f')}% starts={v['n_starts']}")
+    if same_name:
+        print(f"    NOTE: --psi-tag is empty, so {out_path.name} IS BOTH this run's json and "
+              f"the promoted name -- it was already written and cannot be un-written. The exit "
+              f"code, not the file, is what stops the dependents.")
+    else:
+        print(f"    cost_params_{base_tag}.json is untouched -- whatever the counterfactuals "
+              f"were going to read, they still would.")
+    print(f"    Report c_bar, or re-run with --force-ridge to promote anyway.")
+    print(f"    Dependent CF jobs chained afterok on this one are now CANCELLED and will "
+          f"leave no log of their own.")
+    raise SystemExit(3)
 
 
 if __name__ == "__main__":

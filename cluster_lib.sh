@@ -483,6 +483,22 @@ cl_need_rf_curve () {
     cl_need_file "${CL_DATA_IN}/forward_rf_qoq.csv" "forward r^f curve" \
         "build locally then upload: python scrape_forward_rf.py --horizon ${HORIZON:-50} --start 2026Q1"
 }
+# The two multi-start inputs. Both are BCB-API products (Focus surveys), so like
+# forward_rf_qoq.csv they cannot be produced on a compute node — no outbound internet — and both
+# are small enough to stage every run: 1,836 rows of vintages (~120 kB) and ~8 kB of transition
+# parameters. Small is what makes the multi-start design affordable at all: the S simulated rate
+# paths are REGENERATED on the node from these parameters plus a fixed seed, so nothing that
+# scales with S or with the panel ever crosses the upload.
+cl_need_rf_vintages () {
+    cl_need_file "${CL_DATA_IN}/forward_rf_vintages.csv" "forward r^f curve vintages (per launch quarter)" \
+        "build locally then upload: python scrape_forward_rf.py --vintages --horizon ${HORIZON:-50}" \
+        "36 launch quarters 2016Q1..2024Q4 x h=0..50; h=0 is the realised anchor rate"
+}
+cl_need_transitions () {
+    cl_need_file "${CL_DATA_IN}/bbl_transitions.json" "BBL transition parameters" \
+        "build locally then upload: python bbl_transitions.py" \
+        "carries rate.process (focus_mean_plus_horizon_shock), cost_shifters and market_states"
+}
 # cl_need_rc_jls <routine>: the RC result the CF/BBL stack opens. It tests the exact file
 # blp_dir(out_dir) names in cf_demand_eval.jl's _result_path, in the exact place
 # the RC job writes it — the ladder persists its results in the blp step folder and nothing

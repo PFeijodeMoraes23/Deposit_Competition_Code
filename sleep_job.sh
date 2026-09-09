@@ -26,6 +26,9 @@
 #              regression guard: it reproduces the stored conditional numbers
 #              bit-for-bit or it fails, and the full AME jobs chain afterok it.
 #   ame        one routine's full two-stage AME bootstrap (--loss robust, full B)
+#   wcb_band   sleep_wcb_band.py for E1/E2 — the LINEAR percentile bands, so every
+#              column of the second-stage tables reports an interval. Minutes; it
+#              re-estimates nothing and refuses if its rebuild misses the stored fit.
 #   upsilon    sleep_upsilon_export.py --spec 12 for each SLEEP_UPSILON_ROUTINES id —
 #              the CF4 inputs, one pair per routine the CF phase will run
 #   gate       one content gate (SLEEP_GATE=G1|G2|G3|G4|G7); see THE GATES below
@@ -60,7 +63,7 @@ CL_DIR="${SLURM_SUBMIT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
 . "${CL_DIR}/cluster_lib.sh"
 set -e
 
-: "${SLEEP_STEP:?set SLEEP_STEP (est|merge|prep|ame_gate|ame|upsilon|gate)}"
+: "${SLEEP_STEP:?set SLEEP_STEP (est|merge|prep|ame_gate|ame|wcb_band|upsilon|gate)}"
 case "${SLEEP_STEP}" in
     est|merge|prep|ame_gate|ame|upsilon|gate) ;;
     *) echo "Unknown SLEEP_STEP='${SLEEP_STEP}' — see the header for all seven." >&2; exit 2 ;;
@@ -189,6 +192,19 @@ case "${SLEEP_STEP}" in
         fi
         echo "-- AME two-stage bootstrap: E${K} (workers <- SLEEP_AME_BOOT_JOBS=${SLEEP_AME_BOOT_JOBS:-<unset>}) --"
         run_py sleep_ame_twostage.py --est "${K}" --loss robust ${SLEEP_AME_EXTRA} ;;
+
+    wcb_band)
+        # The LINEAR counterpart of `ame`: percentile bands for E1/E2's second stage, so every
+        # column of the comparison table reports an interval rather than mixing formats. Both
+        # routines in one job -- each is a rebuild of one demeaned OLS plus B=999 draws off its
+        # influence functions, minutes, not the hours the AME path takes. It re-estimates
+        # nothing: the driver asserts the rebuilt coefficients reproduce the stored fit and
+        # exits nonzero if they do not, so `set -e` is the gate.
+        for K in ${SLEEP_WCB_ROUTINES:-1 2}; do
+            echo "-- WCB percentile bands: E${K} --"
+            run_py sleep_wcb_band.py --est "${K}"
+        done
+        echo "WCB bands written for routines: ${SLEEP_WCB_ROUTINES:-1 2}" ;;
 
     upsilon)
         # READ-ONLY w.r.t. the estimation: it reads est{k}/estimation_results.pkl +
@@ -409,9 +425,17 @@ def g3():
             for key in ("n_newton_fail", "n_fail"):
                 if float(r.get(key, 0)) > 0.01 * float(B):
                     bad.append(f"{s}: {key}={r.get(key)} > 1% of B={B}")
-            for key in ("n_cos_neg", "n_vsd_fail", "n_drop"):
+            # Mirrors sleep_ame_twostage.counters_ok: the INDEX-space cosine gates, the raw
+            # coefficient cosine is reported only. A cloud without n_cos_idx_neg predates the
+            # index-space test and is refused rather than passed on a test that never ran.
+            if "n_cos_idx_neg" not in r:
+                bad.append(f"{s}: n_cos_idx_neg missing (cloud predates the index-space test)")
+            for key in ("n_cos_idx_neg", "n_vsd_fail", "n_drop"):
                 if float(r.get(key, 0)):
                     bad.append(f"{s}: {key}={r.get(key)}")
+            if float(r.get("n_cos_neg", 0)):
+                note(f"E{k}/{s}: raw-coefficient cos_neg",
+                     f"{r.get('n_cos_neg')} of B={B} (diagnostic, not gating)")
         chk(f"E{k}: draw-cloud counters clean", not bad, "; ".join(bad) if bad else f"B={B}")
         stored = meta.get("counters_ok")
         if stored is not None:
