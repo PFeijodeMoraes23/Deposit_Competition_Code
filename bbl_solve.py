@@ -27,8 +27,8 @@ Inputs (from bbl_fwd_sim.jl):
                                       psi1, psi2_omega, psi3_gamma_*, psi4_zeta
     COST_FWD/psi_dev_{tag}.parquet  — shock, firm, start_q, is_B, <same blocks>
 where tag = E{estim}_spec_{spec}_{stage}{suffix}{psi_tag} and --psi-tag carries the
-multi-start marker the driver stamps on its filenames (default "_ms{S}", empty for a
-single-start run).
+multi-start marker stamped on its filenames ("_ms{P}", P = rate paths per deviation, as
+bbl_run.sh sets it; empty for a single-start run).
 
 Outputs:
     COST_FWD/cost_params_{tag}.json — (ω, ζ, γ) per type, optimizer-health diagnostics, and
@@ -91,7 +91,7 @@ Usage:
   python bbl_solve.py --estim 6 --spec 12 --stage extended \\
       --subsample 200 --profile --ci-level 0.95      # headline
   ... --bootstrap 200                                 # firm-block SEs, for comparison
-  ... --psi-tag _ms36 --promote                       # multi-start psi, gated promotion
+  ... --psi-tag _ms8 --promote                        # multi-start psi, gated promotion
 """
 try:
     from utils.venv_guard import ensure_project_venv
@@ -306,6 +306,12 @@ def solve_kappa(blk):
                 opt_success=bool(res.success), opt_status=int(res.status),
                 opt_message=str(res.message), opt_nit=int(res.nit),
                 opt_grad_inf=grad_inf,
+                # The criterion is a sum of squared SHORTFALLS, so it is exactly 0.0 whenever
+                # every inequality holds, and then the gradient is 0 too. An optimum with F == 0
+                # is one point inside a set of equally good theta, not an estimate; if the
+                # optimiser also never moved (nit == 0), the point it reports is its start,
+                # b = 0, i.e. omega = 0, zeta = -1, gamma = 0.
+                objective_zero=bool(float(res.fun) == 0.0), at_init=bool(int(res.nit) == 0),
                 # private handles for profiling / multistart (not serialized)
                 _b=b, _c1=c1, _Xs=Xs, _scales=sc)
 
@@ -687,7 +693,7 @@ def _profile_min_F(b_idx, b_val, c1, Xs, b0):
     return float(res.fun)
 
 
-def profile_ci(blk, fit, which, crit_value, npts=81, max_expand=6):
+def profile_ci(blk, fit, which, crit_value, npts=81, max_expand=6, min_inside=11, max_refine=4):
     """TRUE profile of the criterion in ω or ζ, inverted at a subsampled critical value.
 
     Two fixes over the earlier `profile_param`:
@@ -738,10 +744,33 @@ def profile_ci(blk, fit, which, crit_value, npts=81, max_expand=6):
                     empty=True, half_width=float(hw),
                     grid=grid.tolist(), T=T.tolist())
     lo, hi = float(inside.min()), float(inside.max())
+    truncated_lo = bool(lo <= grid[0] + 1e-12)
+    truncated_hi = bool(hi >= grid[-1] - 1e-12)
+    # REFINE. The loop above only ever WIDENS the window, so its resolution is 2*hw/(npts-1) and
+    # never finer than 2/(npts-1), because hw is floored at 1.0. A region narrower than one step
+    # contains a single grid point -- the optimum, which sits at the grid's centre -- and came
+    # back as a ZERO-WIDTH interval, exactly when the design identifies the split well. So
+    # re-grid on the bracket between the nearest outside points until the region spans at least
+    # `min_inside` points. A truncated region is left alone: its problem is the window, not the
+    # resolution.
+    refined = 0
+    while (inside.size < min_inside and refined < max_refine
+           and not (truncated_lo or truncated_hi)):
+        i_lo = int(np.flatnonzero(grid >= lo)[0])
+        i_hi = int(np.flatnonzero(grid <= hi)[-1])
+        g2 = np.linspace(grid[max(i_lo - 1, 0)], grid[min(i_hi + 1, grid.size - 1)], npts)
+        T2 = np.array([T_of(v) for v in g2])
+        in2 = g2[T2 <= crit_value]
+        refined += 1
+        if in2.size == 0:
+            break
+        grid, T, inside = g2, T2, in2
+        lo, hi = float(inside.min()), float(inside.max())
     return dict(which=which, crit=float(crit_value), ci_lo=lo, ci_hi=hi, empty=False,
-                truncated_lo=bool(lo <= grid[0] + 1e-12),
-                truncated_hi=bool(hi >= grid[-1] - 1e-12),
-                half_width=float(hw), grid=grid.tolist(), T=T.tolist())
+                truncated_lo=truncated_lo, truncated_hi=truncated_hi,
+                half_width=float(hw), grid_step=float(grid[1] - grid[0]),
+                n_inside=int(inside.size), refined=int(refined), zero_width=bool(hi <= lo),
+                grid=grid.tolist(), T=T.tolist())
 
 
 def multistart_check(fit, f_opt, n=5, seed=12345):
@@ -837,6 +866,9 @@ def _print_final(kappa, rec, level):
     print(f"  [{kappa}] FINAL PARAMETERS -- estimand={rec['estimand']} "
           f"(identified_split={rec['identified_split']}, "
           f"n_firms={rec['n_firms']}, n_rows={rec['n_rows']}, n_starts={rec['n_starts']})")
+    if rec.get("objective_zero"):
+        print(f"        !! criterion == 0: set-identified, the point below is arbitrary"
+              f"{' (the optimiser start)' if rec.get('at_init') else ''}")
     print(f"        omega  = {rec['omega']:.10g}   (se {_fmt(rec.get('omega_se'), '.4g')})")
     print(f"        zeta   = {rec['zeta']:.10g}   (se {_fmt(rec.get('zeta_se'), '.4g')})")
     for z, v in (rec.get("gamma") or {}).items():
@@ -866,7 +898,7 @@ def main():
     ap.add_argument("--suffix", type=str, default="")
     ap.add_argument("--psi-tag", type=str, default="",
                     help="marker the forward sim stamped on the psi filenames for a multi-start "
-                         "run (it writes _ms{S}); appended to the tag when LOCATING the "
+                         "run (bbl_run.sh stamps _ms{P}, P = rate paths); appended to the tag when LOCATING the "
                          "parquets and kept on the tagged cost_params name. Empty = the "
                          "single-start naming.")
     ap.add_argument("--bootstrap", type=int, default=200,
@@ -905,7 +937,7 @@ def main():
     # Deviation psi may be a single file (n-shards=1) or several shard files; merge all. The
     # glob keeps its trailing wildcard, but only the writer's two spellings are accepted after
     # the tag ("" and "_shard{i}of{N}"): with --psi-tag empty the wildcard would otherwise also
-    # swallow the multi-start files sitting in the same folder (psi_dev_<base>_ms36_shard*),
+    # swallow the multi-start files sitting in the same folder (psi_dev_<base>_ms8_shard*),
     # mixing two vintages of psi into one solve with nothing on screen to show for it.
     shard_ok = re.compile(r"^(?:_shard\d+of\d+)?$")
     pre = f"psi_dev_{tag}"
@@ -919,6 +951,20 @@ def main():
         print(f"  Ignoring {len(other)} psi_dev file(s) carrying a different --psi-tag: "
               f"{', '.join(other[:4])}{' ...' if len(other) > 4 else ''}")
 
+    # ONE run's shards, never two. The tag carries P (rate paths) but not the start set or the
+    # shard count, so two designs sharing a tag write into the same names; a different
+    # --n-shards leaves BOTH shard families on disk, and the glob above would pool them.
+    # Refuse that here rather than let the dedup below quietly average two designs.
+    n_of = set()
+    for p in dev_files:
+        m = re.search(r"_shard\d+of(\d+)$", p.stem)
+        n_of.add(int(m.group(1)) if m else 0)
+    if len(n_of) > 1:
+        raise SystemExit(
+            f"REFUSING: psi_dev_{tag}* holds shards from more than one run (shard counts "
+            f"{sorted(n_of)}; 0 = an unsharded file). Two designs share the tag "
+            f"'{args.psi_tag}'. Remove the stale family or re-run under a distinct --psi-tag.")
+
     eq = pd.read_parquet(eq_path)
     dev = pd.concat([pd.read_parquet(f) for f in dev_files], ignore_index=True)
     # A single-start run has no start_q column. Injecting "all" here rather than branching later
@@ -928,6 +974,13 @@ def main():
         if "start_q" not in df.columns:
             df["start_q"] = "all"
         df["start_q"] = df["start_q"].astype(str)
+    # Same shard count but a different start set is the other way two runs collide under one tag.
+    extra = sorted(set(dev["start_q"]) - set(eq["start_q"]))
+    if extra:
+        raise SystemExit(
+            f"REFUSING: psi_dev rows carry launch quarters psi_eq_{tag} does not "
+            f"({', '.join(extra[:6])}{' ...' if len(extra) > 6 else ''}). They come from "
+            f"different runs under one tag; re-run the forward simulation.")
     # Drop any accidental duplicate (firm, start, shock) rows from re-runs.
     dedup = [c for c in ("firm", "start_q", "shock") if c in dev.columns]
     dev = dev.drop_duplicates(subset=dedup).reset_index(drop=True)
@@ -975,6 +1028,7 @@ def main():
             opt_success=fit["opt_success"], opt_status=fit["opt_status"],
             opt_message=fit["opt_message"], opt_nit=fit["opt_nit"],
             opt_grad_inf=fit["opt_grad_inf"],
+            objective_zero=fit["objective_zero"], at_init=fit["at_init"],
             multistart_max_dF=float(ms_max_dF),
             n_firms=int(np.unique(blk["firms"]).size),
             n_rows=int(blk["d1"].size),
@@ -1000,7 +1054,13 @@ def main():
                             pooled_bkw_cond=rbs["pooled_bkw_cond"],
                             pooled_corr=rbs["pooled_corr"],
                             ratio_cv=rbs["ratio_cv"], n_starts=rbs["n_starts"],
-                            n_firms=rec["n_firms"], n_rows=rec["n_rows"])
+                            n_firms=rec["n_firms"], n_rows=rec["n_rows"],
+                            objective_zero=rec["objective_zero"], at_init=rec["at_init"])
+        if rec["objective_zero"]:
+            print(f"  [{kappa}] !!!! the criterion is EXACTLY 0 at the optimum: every inequality "
+                  f"holds, so omega/zeta are SET-identified and the reported point is arbitrary"
+                  f"{' -- it is the optimiser start b=0 (omega=0, zeta=-1, gamma=0)' if rec['at_init'] else ''}"
+                  f". It will not be promoted. !!!!")
 
         # ---- The identified combination c_bar = omega + rbar_f*zeta --------------------
         # When the split is NOT identified, c_bar is the estimand: it is the direction the data
@@ -1091,7 +1151,10 @@ def main():
     # ---- Gate verdict, json, promotion -------------------------------------------------
     # The gate is ALL-TYPES: cf3 solves the equilibrium with B and D costs together, so a split
     # identified for one type and not the other is not a usable promotion.
-    gate_pass = bool(ident) and all(v["identified_split"] for v in ident.values())
+    # ...and a type whose criterion is exactly 0 has no point estimate to promote, whatever the
+    # ridge geometry says: the geometry tests the DESIGN, not whether the moments bound theta.
+    gate_pass = (bool(ident) and all(v["identified_split"] for v in ident.values())
+                 and not any(v["objective_zero"] for v in ident.values()))
     promoted_path = COST_FWD / f"cost_params_{base_tag}.json"
     out_path = COST_FWD / f"cost_params_{tag}.json"
     same_name = out_path.name == promoted_path.name
@@ -1118,9 +1181,10 @@ def main():
     for kappa in blocks:
         _print_final(kappa, results[kappa], args.ci_level)
 
-    conds = ", ".join(f"{k}: {v['pooled_bkw_cond']:.4g}" for k, v in ident.items())
-    print(f"  GATE: pooled BKW cond <= {args.ridge_cond_max:.4g} for every type? "
-          f"{gate_pass}  ({conds})")
+    conds = ", ".join(f"{k}: {v['pooled_bkw_cond']:.4g}{' (criterion==0)' if v['objective_zero'] else ''}"
+                      for k, v in ident.items())
+    print(f"  GATE: pooled BKW cond <= {args.ridge_cond_max:.4g} and criterion > 0 for every "
+          f"type? {gate_pass}  ({conds})")
     if not args.promote:
         print(f"  --promote not passed: cost_params_{base_tag}.json left untouched.")
         return
@@ -1139,12 +1203,14 @@ def main():
     # stale untagged cost_params. A cancelled job writes NO log at all -- if cf1_net/cf3/cf5/cf6
     # produced no .out, this refusal is why, and the reason is here rather than in a file that
     # was never created.
-    print(f"  REFUSING TO PROMOTE: the omega/zeta split is not identified at "
-          f"--ridge-cond-max {args.ridge_cond_max:.4g}.")
+    print(f"  REFUSING TO PROMOTE: for at least one firm type the omega/zeta split is not "
+          f"identified at --ridge-cond-max {args.ridge_cond_max:.4g}, or the criterion is "
+          f"exactly 0 so there is no point estimate.")
     for k, v in ident.items():
         print(f"    [{k}] pooled BKW cond={_fmt(v['pooled_bkw_cond'], '.4g')} "
               f"corr={_fmt(v['pooled_corr'], '.6f')} "
-              f"ratio CV={_fmt(100 * v['ratio_cv'], '.2f')}% starts={v['n_starts']}")
+              f"ratio CV={_fmt(100 * v['ratio_cv'], '.2f')}% starts={v['n_starts']}"
+              f"{'  CRITERION == 0 (set-identified)' if v['objective_zero'] else ''}")
     if same_name:
         print(f"    NOTE: --psi-tag is empty, so {out_path.name} IS BOTH this run's json and "
               f"the promoted name -- it was already written and cannot be un-written. The exit "

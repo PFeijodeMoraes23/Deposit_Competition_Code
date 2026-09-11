@@ -29,12 +29,23 @@
 #   wcb_band   sleep_wcb_band.py for E1/E2 — the LINEAR percentile bands, so every
 #              column of the second-stage tables reports an interval. Minutes; it
 #              re-estimates nothing and refuses if its rebuild misses the stored fit.
+#   weakiv     sleep_weak_iv.py — the phi first stage's instrument-quality battery and
+#              the phi materiality test. Rebuilds the first stage from the panel, so it
+#              reads no estimator output and runs beside `ame` and `wcb_band`. Its two
+#              outputs land in the BLP tree and DIAG_WEAK_IV_SLEEP/, so they come home
+#              in `cluster_archive.sh --set blp`, not --set sleep.
 #   upsilon    sleep_upsilon_export.py --spec 12 for each SLEEP_UPSILON_ROUTINES id —
 #              the CF4 inputs, one pair per routine the CF phase will run
+#   entry      sleep_ident_entry_dynamics.py --compute-only — the D6 entry moment and its
+#              event bootstrap. AFTER G7: the per-routine curves read phi_nopix, which the
+#              upsilon step writes. Figures are NOT drawn here; they render locally from
+#              the CSVs with --figures-only.
 #   gate       one content gate (SLEEP_GATE=G1|G2|G3|G4|G7); see THE GATES below
 #
 # Env vars: SLEEP_STEP SLEEP_EST SLEEP_GATE SLEEP_GATE_ROUTINES SLEEP_AME_ROUTINES
-#           SLEEP_UPSILON_ROUTINES SLEEP_EST_EXTRA SLEEP_PREP_EXTRA SLEEP_AME_EXTRA SPEC
+#           SLEEP_UPSILON_ROUTINES SLEEP_WCB_ROUTINES SLEEP_ENTRY_ROUTINES SLEEP_EST_EXTRA
+#           SLEEP_PREP_EXTRA SLEEP_AME_EXTRA SLEEP_WEAKIV_EXTRA SLEEP_WEAKIV_SPECS
+#           SLEEP_WEAKIV_SUBS SLEEP_ENTRY_EXTRA SPEC
 #
 # WHY THE ENV BLOCK IS IDENTICAL ON EVERY BRANCH
 #   The Python stack has to resolve the Open-Finance data root, write each output
@@ -63,10 +74,12 @@ CL_DIR="${SLURM_SUBMIT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
 . "${CL_DIR}/cluster_lib.sh"
 set -e
 
-: "${SLEEP_STEP:?set SLEEP_STEP (est|merge|prep|ame_gate|ame|wcb_band|upsilon|gate)}"
+: "${SLEEP_STEP:?set SLEEP_STEP (est|merge|prep|ame_gate|ame|wcb_band|weakiv|entry|upsilon|gate)}"
+# Keep this list, the message above and the header block in step: the dispatch below is a
+# SECOND case, so a step missing here is rejected at startup even though its branch exists.
 case "${SLEEP_STEP}" in
-    est|merge|prep|ame_gate|ame|upsilon|gate) ;;
-    *) echo "Unknown SLEEP_STEP='${SLEEP_STEP}' — see the header for all seven." >&2; exit 2 ;;
+    est|merge|prep|ame_gate|ame|wcb_band|weakiv|entry|upsilon|gate) ;;
+    *) echo "Unknown SLEEP_STEP='${SLEEP_STEP}' — see the header for all ten." >&2; exit 2 ;;
 esac
 
 SPEC="${SPEC:-12}"
@@ -81,6 +94,11 @@ SLEEP_UPSILON_ROUTINES="${SLEEP_UPSILON_ROUTINES:-${SLEEP_AME_ROUTINES}}"
 SLEEP_EST_EXTRA="${SLEEP_EST_EXTRA:-}"
 SLEEP_PREP_EXTRA="${SLEEP_PREP_EXTRA:-}"
 SLEEP_AME_EXTRA="${SLEEP_AME_EXTRA:-}"
+SLEEP_WEAKIV_EXTRA="${SLEEP_WEAKIV_EXTRA:-}"
+SLEEP_ENTRY_EXTRA="${SLEEP_ENTRY_EXTRA:-}"
+# The routines whose fitted phi dispersion gets its own entry curve. Defaults to the AME pair
+# for the same reason the reference lines do: those are the routines the figure adjudicates.
+SLEEP_ENTRY_ROUTINES="${SLEEP_ENTRY_ROUTINES:-${SLEEP_AME_ROUTINES}}"
 
 mkdir -p "${CL_ROOT}/logs"
 
@@ -205,6 +223,44 @@ case "${SLEEP_STEP}" in
             run_py sleep_wcb_band.py --est "${K}"
         done
         echo "WCB bands written for routines: ${SLEEP_WCB_ROUTINES:-1 2}" ;;
+
+    weakiv)
+        # The sleepiness counterpart of blp_weakiv_job.sh: the phi first stage's own
+        # instrument-quality battery (eff-F / KP-F / CD, the AR and LM inversions, the
+        # 2SLS/LIML/Fuller ladder) plus the phi materiality test, across the IV specs and
+        # the deposit-type subsamples. It rebuilds the first stage from the panel through
+        # sleep_est_e2.build_pooled_data rather than reading est{k}/estimation_results.pkl,
+        # so it needs no estimator output and can run beside the AME and band jobs.
+        #
+        # Two outputs, two trees, both cluster-side: BLP_RESULTS/cluster_processed/
+        # weak_iv_sleep.json (what make_iv_sleep_tables.py renders) and the methodology
+        # note under DIAG_WEAK_IV_SLEEP/. cluster_archive.sh --set blp carries both --
+        # not --set sleep -- because that is where the files physically land.
+        #
+        # SLEEP_BOOT_B / SLEEP_BOOT_SCHEME are read by the script itself and recorded in
+        # the JSON's _meta, so the bootstrap conventions travel with the numbers.
+        echo "-- weak-IV battery: sleepiness (phi) first stage --"
+        run_py sleep_weak_iv.py \
+            ${SLEEP_WEAKIV_SPECS:+--specs "${SLEEP_WEAKIV_SPECS}"} \
+            ${SLEEP_WEAKIV_SUBS:+--subsamples "${SLEEP_WEAKIV_SUBS}"} \
+            ${SLEEP_WEAKIV_EXTRA}
+        echo "Sleepiness weak-IV battery COMPLETE." ;;
+
+    entry)
+        # D6: the entry-dynamics moment (Egan Fig. 3) and the phi it implies. --compute-only
+        # writes every result CSV plus d6_meta.json into DIAG_PHI_SEPARATION and draws
+        # nothing; the figures render locally off those files with --figures-only.
+        #
+        # It runs AFTER G7 because the per-routine curves read each routine's phi_nopix
+        # export -- CF_FOUNDATION/phi_nopix_E{k}_spec_12.parquet, which the `upsilon` step
+        # writes and G7 checks. Without that gate the routine curves would silently skip
+        # every routine ("phi_nopix_E{k}... absent -- skipped") and still exit 0, leaving a
+        # reference-curve figure with no routine lines on it.
+        echo "-- D6 entry dynamics (compute; routines '${SLEEP_ENTRY_ROUTINES}') --"
+        run_py sleep_ident_entry_dynamics.py --compute-only \
+            --routine-curves ${SLEEP_ENTRY_ROUTINES} \
+            ${SLEEP_ENTRY_EXTRA}
+        echo "D6 entry moment COMPLETE (figures render locally: --figures-only)." ;;
 
     upsilon)
         # READ-ONLY w.r.t. the estimation: it reads est{k}/estimation_results.pkl +

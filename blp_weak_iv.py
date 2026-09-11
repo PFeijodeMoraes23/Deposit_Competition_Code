@@ -679,7 +679,13 @@ def main():
                          "of the log-share δ; writes weak_iv_<STAGE>.json. Requires blp_delta_export.jl.")
     args = ap.parse_args()
     RES = os.path.abspath(args.results_dir)
-    dp = os.path.join(os.path.dirname(RES), "DEMAND_PREP")
+    # The demand parquets resolve through the ACCESSOR, not by string surgery off RES.
+    # os.path.dirname(blp_results_dir()) is ESTIMATION_OUTPUT, which on the cluster is a
+    # symlink to data/output -- so the literal names data/output/DEMAND_PREP, a folder nothing
+    # writes. The prep step writes to DEMAND_PREP_DIR (data/output/demand_prep), which
+    # demand_parquet_dir() honours. Off-cluster the two are the same directory, so this is a
+    # no-op locally; on Bouchet it is the difference between a battery and "nothing computed".
+    dp = str(_paths.demand_parquet_dir())
     global DELTA_STAGE, DELTA_DIR
     DELTA_STAGE = args.delta_stage
     DELTA_DIR = os.path.join(RES, "cluster_processed")

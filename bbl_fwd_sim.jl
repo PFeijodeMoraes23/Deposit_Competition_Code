@@ -671,8 +671,10 @@ function _parse_cost2_args()
         "--shard-id";      arg_type = Int;     default = 0       # 0-based; = SLURM_ARRAY_TASK_ID
         # ── MULTI-START × RATE RISK ───────────────────────────────────────────────────────────
         # OFF by default: without --multi-start every row is simulated under the ONE curve
-        # --rf-curve resolves and every artifact keeps the name it has always had, so an existing
-        # run reproduces byte for byte.
+        # --rf-curve resolves, and every artifact keeps its untagged name. The CONTENTS are not
+        # those of a frozen-accrual run: psi_under routes that curve into the deposit accrual and
+        # the market states evolve (CF_EVOLVING_STATES), so a single-curve run reproduces only a
+        # run made with the same code and inputs.
         "--multi-start";   action   = :store_true
         # Both default to the uploaded COST_FWD inputs, resolved in main_cost2 because the path
         # needs `out_dir`, which the arg table cannot see (same `nothing` sentinel as --rf-curve).
@@ -683,7 +685,7 @@ function _parse_cost2_args()
         # the share out because the share kernel is a function of the spread only.
         "--n-paths";       arg_type = Int;     default = 1
         # Filename tag separating a multi-start artifact from a single-start one. Empty auto-fills
-        # to "_ms{S}" (S = launch quarters) under --multi-start and stays "" otherwise; bbl_solve.py
+        # to "_ms{P}" (P = --n-paths) under --multi-start and stays "" otherwise; bbl_solve.py
         # and make_bbl_cost_tables.py select a vintage by this tag.
         "--psi-tag";       arg_type = String;  default = ""
     end
@@ -887,7 +889,9 @@ function main_cost2()
                               "path, so the low-rate starts are biased UP and the r̄^f spread " *
                               "across launch quarters is compressed. Lower --n-paths (fewer " *
                               "extreme z) or take the shock to a log/shifted rate."
-        isempty(psi_tag) && (psi_tag = "_ms$(S_ms)")
+        # "_ms{P}", P = rate paths per deviation: the number bbl_run.sh stamps, so a standalone
+        # run and a bbl_run.sh run name the same design alike.
+        isempty(psi_tag) && (psi_tag = "_ms$(n_paths)")
     end
 
     # Equilibrium ψ

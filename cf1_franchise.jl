@@ -65,6 +65,11 @@ end
 
 Compute V^gross(φ̂), V^gross(φ=0), and ΔV^sleep per observation, plus the
 inertia share ΔV/V(φ̂). Shares are evaluated at the observed (flat) spreads.
+
+The market states are FROZEN at t=0 in these numbers. `ev` holds the same decomposition with the
+states EVOLVING, as in the BBL forward simulation that produced the cost parameters (or
+`nothing` when the context has no evolving states); it is reported beside the frozen numbers as
+a robustness check, not in place of them.
 """
 function franchise_decomposition(ctx::CFDemandCtx, st::DepositSimState;
                                  beta::Float64=0.9, T::Int=50,
@@ -76,7 +81,25 @@ function franchise_decomposition(ctx::CFDemandCtx, st::DepositSimState;
     dV    = V_phi .- V_0
     share = dV ./ max.(abs.(V_phi), 1e-12)
     return (V_phi=V_phi, V_0=V_0, dV_sleep=dV, inertia_share=share,
-            Dep_phi_T=sim_phi.Dep[:, end], Dep_0_T=sim_0.Dep[:, end])
+            Dep_phi_T=sim_phi.Dep[:, end], Dep_0_T=sim_0.Dep[:, end],
+            ev=_franchise_evolving(ctx, st, markdown_q; beta=beta, T=T))
+end
+
+# The same decomposition with the market states EVOLVING, as psi_under simulates them when it
+# builds the psi the cost parameters are estimated from. Returns nothing when the context carries
+# no state evolution (CF_EVOLVING_STATES=0, or a stage with no demographic interaction), so a
+# duplicate of the frozen numbers is never written under the evolving name.
+function _franchise_evolving(ctx::CFDemandCtx, st::DepositSimState, markdown_q::Vector{Float64};
+                             beta::Float64, T::Int)
+    ctx.state_ev === nothing && return nothing
+    # φ̂ and φ=0 run at the same spreads, so they share one share PATH: build it once.
+    s_path = cf_shares_path(ctx, ctx.rho_hat, ctx.state_ev; T=T)
+    sim_phi = simulate_deposits(ctx, st; T=T, state_ev=ctx.state_ev, s_const_in=s_path)
+    sim_0   = simulate_deposits(ctx, st; T=T, state_ev=ctx.state_ev, s_const_in=s_path,
+                                phi_override=zeros(length(st.phi)))
+    V_phi = gross_value(sim_phi.Dep, markdown_q; beta=beta)
+    V_0   = gross_value(sim_0.Dep,   markdown_q; beta=beta)
+    return (V_phi=V_phi, V_0=V_0, dV_sleep=V_phi .- V_0)
 end
 
 # ==========================================================================
@@ -92,13 +115,17 @@ function summarize_and_export(ctx::CFDemandCtx, st::DepositSimState, dec;
         V_0          = dec.V_0,
         dV_sleep     = dec.dV_sleep,
     )
+    # Evolving-state robustness columns, beside the frozen ones the tables read by name.
+    if dec.ev !== nothing
+        df.V_phi_ev = dec.ev.V_phi; df.V_0_ev = dec.ev.V_0; df.dV_sleep_ev = dec.ev.dV_sleep
+    end
     mkpath(dirname(out_path))
     Parquet2.writefile(out_path, df)
     log_status("  [CF1] Wrote per-obs decomposition → $(basename(out_path))")
 
     # Console summary: totals and inertia share by firm type and deposit type.
     tot_phi = sum(dec.V_phi); tot_0 = sum(dec.V_0); tot_dV = sum(dec.dV_sleep)
-    @printf("\n  === CF1 Franchise value (GROSS, deposit-funding) ===\n")
+    @printf("\n  === CF1 Franchise value (GROSS, deposit-funding; market states FROZEN at t=0) ===\n")
     @printf("  Total V(φ̂)=%.4g  V(φ=0)=%.4g  ΔV_sleep=%.4g  (%.1f%% of V(φ̂))\n",
             tot_phi, tot_0, tot_dV, 100 * tot_dV / max(abs(tot_phi), 1e-12))
     for (lbl, mask) in (("B-firms", st.is_B), ("D-firms", .!st.is_B))
@@ -112,6 +139,25 @@ function summarize_and_export(ctx::CFDemandCtx, st::DepositSimState, dec;
         vp = sum(dec.V_phi[mask]); dv = sum(dec.dV_sleep[mask])
         @printf("    k=%d      V(φ̂)=%.4g  ΔV_sleep=%.4g  (%.1f%%)\n",
                 k, vp, dv, 100 * dv / max(abs(vp), 1e-12))
+    end
+    if dec.ev === nothing
+        log_status("  [CF1] robustness: this context has no evolving market states " *
+                   "(CF_EVOLVING_STATES=0, or no demographic interaction); frozen numbers only")
+    else
+        e = dec.ev
+        te_phi = sum(e.V_phi); te_dV = sum(e.dV_sleep)
+        pc(a, b) = 100 * (a / (abs(b) > 1e-12 ? b : 1e-12) - 1)
+        @printf("\n  --- robustness: market states EVOLVING (as in the BBL cost estimation) ---\n")
+        @printf("  Total V(φ̂)=%.4g  ΔV_sleep=%.4g  (%.1f%% of V(φ̂))\n",
+                te_phi, te_dV, 100 * te_dV / max(abs(te_phi), 1e-12))
+        @printf("  evolving vs frozen:  V(φ̂) %+.2f%%   ΔV_sleep %+.2f%%\n",
+                pc(te_phi, tot_phi), pc(te_dV, tot_dV))
+        for (lbl, mask) in (("B-firms", st.is_B), ("D-firms", .!st.is_B))
+            any(mask) || continue
+            @printf("    %-8s ΔV_sleep evolving=%.4g  frozen=%.4g  (%+.2f%%)\n", lbl,
+                    sum(e.dV_sleep[mask]), sum(dec.dV_sleep[mask]),
+                    pc(sum(e.dV_sleep[mask]), sum(dec.dV_sleep[mask])))
+        end
     end
     return out_path
 end
@@ -158,8 +204,11 @@ function main_cf1()
     # Per-period (quarterly) markdown ρ^q for the value flow.
     markdown_q, mc = _first_present(ctx.df, ["spread_qoq", "spread_q"]; default=NaN)
     if all(isnan, markdown_q)
-        markdown_q = ctx.rho_hat ./ 4.0   # annualized → quarterly fallback (confirm convention)
-        mc = "rho_hat/4"
+        # /400, not /4: rho_hat is an ANNUALIZED PERCENTAGE POINT (cf_demand_eval.jl:567 builds it
+        # as df.spread_ann/100, and spread_ann is bps), so the conversion is x0.01 pp->fraction
+        # then /4 annual->quarter. bbl_fwd_sim.jl:719 is this same fallback, spelled /400.
+        markdown_q = clamp.(ctx.rho_hat ./ 400.0, -0.1, 0.1)
+        mc = "rho_hat/400"
     else
         markdown_q = clamp.(markdown_q ./ 1e4, -0.1, 0.1)  # bps -> per-quarter fraction; clip residual artifact tail (±10%/qtr)
         mc = "$(mc)/1e4"

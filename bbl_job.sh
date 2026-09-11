@@ -178,7 +178,6 @@ case "${BBL_STEP}" in
         # S paths collapse onto the Focus mean and --n-paths becomes an S-fold repeat of one path.
         if [[ "${BBL_EXTRA}" == *"--multi-start"* ]]; then
             RF_VINT="${RF_VINTAGES:-${CL_DATA_IN}/forward_rf_vintages.csv}"
-            TRANS="${BBL_TRANSITIONS:-${CL_DATA_IN}/bbl_transitions.json}"
             ms_miss=0
             if [[ ! -f "${RF_VINT}" ]]; then
                 echo "ERROR: forward r^f curve VINTAGES missing: ${RF_VINT}" >&2
@@ -188,17 +187,30 @@ case "${BBL_STEP}" in
                 echo "  r^f, which is the flat-ridge design multi-start exists to break." >&2
                 ms_miss=1
             fi
+            [[ "${ms_miss}" == "0" ]] || exit 1
+            echo "multi-start inputs OK: ${RF_VINT}"
+        fi
+        # bbl_transitions.json is checked OUTSIDE the multi-start branch, because psi_under
+        # calls assert_state_evolution on EVERY path and evolving states default ON
+        # (cf_demand_eval.jl:133). Gated on --multi-start, a plain single-start array passed
+        # this check and then died task by task inside Julia instead. CF_EVOLVING_STATES=0 is
+        # the deliberate frozen-state opt-out; honour it here so the shell and Julia agree.
+        # Multi-start OR evolving states -- see bbl_run.sh. Gating on the state switch alone
+        # would let a multi-start run past this check with no rate.process to build paths from.
+        if [[ "${BBL_EXTRA}" == *"--multi-start"* || "${CF_EVOLVING_STATES:-1}" != "0" ]]; then
+            TRANS="${BBL_TRANSITIONS:-${CL_DATA_IN}/bbl_transitions.json}"
             if [[ ! -f "${TRANS}" ]]; then
                 echo "ERROR: BBL transition parameters missing: ${TRANS}" >&2
                 echo "  Generate locally and upload to data/input/:" >&2
                 echo "    python bbl_transitions.py" >&2
-                echo "  Refusing to run: without rate.process the simulated paths carry no shock" >&2
-                echo "  and --n-paths repeats the Focus mean N times." >&2
-                ms_miss=1
+                echo "  Refusing to run: psi_under asserts evolving states on every path, so" >&2
+                echo "  without this file the sim errors per task rather than freezing states." >&2
+                echo "  Deliberate frozen-state run: export CF_EVOLVING_STATES=0" >&2
+                exit 1
             fi
-            [[ "${ms_miss}" == "0" ]] || exit 1
-            echo "multi-start inputs OK: ${RF_VINT}"
-            echo "                       ${TRANS}"
+            echo "transitions OK: ${TRANS}"
+        else
+            echo "CF_EVOLVING_STATES=0 -- frozen-state run, bbl_transitions.json not required"
         fi
         SHARD_ID="${SLURM_ARRAY_TASK_ID:-${SHARD_ID:-0}}"
         N_SHARDS="${N_SHARDS:-1}"
@@ -242,11 +254,15 @@ case "${BBL_STEP}" in
         # A vintage mismatch is not a reason to produce nothing here: the from-psi pass is the
         # ridge half, and the cost half comes from cost_params either way, so the two passes are
         # run separately and the second is allowed to fail without taking the step down.
+        # --psi-tag is passed even when EMPTY. make_bbl_cost_tables.py reads "" as "the untagged
+        # single-start vintage only" but an ABSENT flag as "either vintage, preferring the largest
+        # multi-start run" -- so dropping it for a single-start run reported a leftover
+        # multi-start run's numbers under a single-start job.
         "${PYBIN}" "${CL_ROOT}/make_bbl_cost_tables.py" \
-            --cost-dir "${CF_COST_FWD}" ${PSI_TAG:+--psi-tag "${PSI_TAG}"}
+            --cost-dir "${CF_COST_FWD}" --psi-tag "${PSI_TAG}"
         "${PYBIN}" "${CL_ROOT}/make_bbl_cost_tables.py" --from-psi \
             --psi-dir "${CF_COST_FWD}" --cost-dir "${CF_COST_FWD}" \
-            ${PSI_TAG:+--psi-tag "${PSI_TAG}"} \
+            --psi-tag "${PSI_TAG}" \
             || echo "[!] the --from-psi (ridge) pass failed; the cost tables above still stand." ;;
 
     report)

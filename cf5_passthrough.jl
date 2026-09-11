@@ -24,9 +24,26 @@ include(joinpath(@__DIR__, "cf3_equilibrium.jl"))
 using Printf, Statistics
 
 # Total deposits at a given equilibrium spread vector (last-period stock), reusing the sim.
-function _total_deposits(P, σ; T, rf=P.rf)
-    sim = simulate_deposits(P.ctx, P.st; T=T, spreads_ann=σ, rf_path_q=rf)
+# `state_ev=nothing` keeps the market states frozen (the reported numbers); pass the context's
+# state evolution for the robustness leg.
+function _total_deposits(P, σ; T, rf=P.rf, state_ev=nothing)
+    sim = simulate_deposits(P.ctx, P.st; T=T, spreads_ann=σ, rf_path_q=rf, state_ev=state_ev)
     return sum(@view sim.Dep[:, end])
+end
+
+# Robustness (first-review #4, run both and report the difference): the same deposit totals with
+# the market states EVOLVING, as they do inside psi_under -- i.e. as in the equilibrium that
+# produced σ and in the BBL estimation of the costs. The frozen totals stay the reported ones.
+function _report_evolving_passthrough(P, σ0, σ1, shock, Δq; T)
+    if P.ctx.state_ev === nothing
+        log_status("  [CF5] robustness: this context has no evolving market states; frozen totals only")
+        return nothing
+    end
+    d0 = _total_deposits(P, σ0; T=T, state_ev=P.ctx.state_ev)
+    d1 = _total_deposits(P, σ1; T=T, rf=P.rf .+ Δq, state_ev=P.ctx.state_ev)
+    @printf("  --- robustness: market states EVOLVING ---\n")
+    @printf("  ΣDep: base=%.4g  shock=%.4g  ∂Dep/∂Selic=%.4g\n", d0, d1, (d1 - d0) / shock)
+    return (d0, d1)
 end
 
 """CF5 compare: read the base + Selic-shocked equilibria (σ solved by the cluster Jacobi) and
@@ -45,7 +62,8 @@ function cf5_compare(a)
     dep1 = _total_deposits(P, σ1; T=a["horizon"], rf=P.rf .+ Δq)
     @printf("\n  === CF5 monetary pass-through (Selic +%.3g) ===\n", shock)
     @printf("  ∂ρ*/∂Selic on k∈{4,5}:  mean=%.4g  median=%.4g\n", mean(dσ), median(dσ))
-    @printf("  ΣDep: base=%.4g  shock=%.4g  ∂Dep/∂Selic=%.4g\n", dep0, dep1, (dep1 - dep0) / shock)
+    @printf("  ΣDep (states frozen): base=%.4g  shock=%.4g  ∂Dep/∂Selic=%.4g\n", dep0, dep1, (dep1 - dep0) / shock)
+    _report_evolving_passthrough(P, σ0, σ1, shock, Δq; T=a["horizon"])
     df = DataFrame(CodConglomeradoPrudencial=string.(P.ctx.df.CodConglomeradoPrudencial),
                    deposit_type=P.st.dep_type, endog=endog, sigma_base=σ0, sigma_shock=σ1)
     cf_dir = cf_out_dir(P.out_dir); mkpath(cf_dir)    # cluster: data/output/counterfactuals
@@ -82,7 +100,8 @@ function main_cf5()
     @printf("\n  === CF5 monetary pass-through (Selic +%.3g) ===\n", shock)
     @printf("  ∂ρ*/∂Selic on k∈{4,5}:  mean=%.4g  median=%.4g  (spread units per unit Selic)\n",
             mean(dσ), median(dσ))
-    @printf("  ΣDep: base=%.4g  shock=%.4g  ∂Dep/∂Selic=%.4g\n", dep0, dep1, (dep1 - dep0) / shock)
+    @printf("  ΣDep (states frozen): base=%.4g  shock=%.4g  ∂Dep/∂Selic=%.4g\n", dep0, dep1, (dep1 - dep0) / shock)
+    _report_evolving_passthrough(P, eq0.sigma, eq1.sigma, shock, Δq; T=a["horizon"])
 
     df = DataFrame(CodConglomeradoPrudencial=string.(P.ctx.df.CodConglomeradoPrudencial),
                    deposit_type=P.st.dep_type, endog=endog,

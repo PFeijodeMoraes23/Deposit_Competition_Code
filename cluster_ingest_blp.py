@@ -76,6 +76,22 @@ def _flatten_into(root):
 
 STAGE_SEQUENCE = ["sigma", "rc2", "rc3", "rc4", "full", "ext1", "ext2", "extended"]
 
+# The weak-IV batteries write these ON THE CLUSTER — the α battery from blp_weakiv_job.sh, the
+# φ first-stage battery from sleep_job.sh's `weakiv` step — and cluster_archive.sh --set blp
+# ships them. They travel inside blp_outputs.zip like every other member, so _flatten_into
+# deposits them in cluster_raw/, one directory away from every reader.
+#
+# Keys are globs matched against cluster_raw/ AFTER flattening. Values are destinations
+# relative to ESTIMATION_OUTPUT, not to BLP_RESULTS: sleep_weak_iv.py's methodology note
+# belongs under DIAG_WEAK_IV_SLEEP/, outside BLP_RESULTS entirely, and PIPELINE_TODO.md
+# pins that folder name as a data contract.
+DIAG_FROM_CLUSTER = {
+    "weak_iv*.json":              "BLP_RESULTS/cluster_processed",
+    "diag_moment_reduction.json": "BLP_RESULTS/cluster_processed",
+    "rc_delta_*.bin":             "BLP_RESULTS/cluster_processed",
+    "weak_iv_sleep_notes.md":     "DIAG_WEAK_IV_SLEEP",
+}
+
 # SUMMARY.md is written next to the paper draft (V_Main.tex) so the results writeup travels
 # with the manuscript. Falls back to cluster_processed/ if that folder is unavailable.
 SUMMARY_DIR = str(_paths.drafts_dir())
@@ -278,6 +294,22 @@ def main():
         z.extractall(sub["cluster_raw"])
     print(f"[zip] extracted {len(members)} files from {os.path.basename(zip_raw)} -> cluster_raw/")
     _flatten_into(sub["cluster_raw"])
+
+    # ── 1b. cluster-computed weak-IV diagnostics -> where their readers look ──
+    # Put back where their producers named them. write_summary_md opens
+    # cluster_processed/weak_iv.json; blp_weak_iv.py --delta-stage and
+    # blp_moment_reduction.py both resolve the structural δ as
+    # cluster_processed/rc_delta_E{k}_spec_12_{stage}.bin; make_iv_tables.py and
+    # make_iv_sleep_tables.py read weak_iv*.json and diag_moment_reduction.json from the same
+    # folder. Leaving them in cluster_raw/ would not error — every one of those readers would
+    # silently fall back to whatever this machine last computed locally, which is exactly the
+    # staleness that kept weak_iv_ext1.json at its 2026-08-17 vintage.
+    EST_OUT = os.path.dirname(RES)          # BLP_RESULTS' parent — see DIAG_FROM_CLUSTER
+    n_diag = 0
+    for pat, rel in DIAG_FROM_CLUSTER.items():
+        for p in sorted(glob.glob(os.path.join(sub["cluster_raw"], pat))):
+            move_into(p, os.path.join(EST_OUT, *rel.split("/"))); n_diag += 1
+    print(f"[diag] promoted {n_diag} cluster-computed weak-IV diagnostic(s) out of cluster_raw/")
 
     # ── 2. current logit_* (un-suffixed) -> logit/ ────────────────────────────
     n_logit = 0

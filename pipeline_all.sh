@@ -92,6 +92,7 @@
 #   --no-sleep         skip the sleepiness phase entirely (same as --from logit)
 #   --no-logit         skip logit_job.sh and G4
 #   --no-blp           skip the RC-BLP phase (its results must be on disk)
+#   --no-weakiv        skip the alpha weak-IV battery (blp_weakiv_job.sh)
 #   --no-bbl           skip the BBL cost phase (cost params must be on disk)
 #   --no-cf            skip the CF phase
 #   --cfeq             ALSO run the equilibrium CFs (CF3/CF5/CF6). OFF by default:
@@ -144,7 +145,7 @@ R="${R:-2000}"; SEED="${SEED:-42}"
 CFEQ_MODES="${CFEQ_MODES:-cf3}"
 BLP_ARGS="${BLP_ARGS:-}"
 SKIP_EST=""; SKIP_PF=""; RESUMED=0; DRY=""
-DO_SLEEP=1; DO_LOGIT=1; DO_BLP=1; DO_BBL=1; DO_CF=1
+DO_SLEEP=1; DO_LOGIT=1; DO_BLP=1; DO_BBL=1; DO_CF=1; DO_WEAKIV=1
 # The equilibrium CFs are OFF by default. They are days of GPU array time and nothing
 # in the headline results reads them; --cfeq opts in, and --no-cfeq names the default.
 DO_CFEQ=0
@@ -171,6 +172,7 @@ while [[ $# -gt 0 ]]; do
         --no-sleep)       DO_SLEEP=0 ;;
         --no-logit)       DO_LOGIT=0 ;;
         --no-blp)         DO_BLP=0 ;;
+        --no-weakiv)      DO_WEAKIV=0 ;;
         --no-bbl)         DO_BBL=0 ;;
         --no-cf)          DO_CF=0 ;;
         --cfeq)           DO_CFEQ=1 ;;
@@ -295,6 +297,10 @@ continue_at () {   # continue_at <phase> <dep_ids> -> job id
     wrap="cd '${CL_ROOT}' && bash pipeline_all.sh --from ${ph} --resumed"
     wrap="${wrap} --routines '${ROUTINES}' --sleep-routines '${SLEEP_ROUTINES}'"
     wrap="${wrap} --cfeq-modes '${CFEQ_MODES}'"
+    # --no-weakiv must survive the hand-off too: the weak-IV block is guarded on `want_phase
+    # blp`, which is only true in the CONTINUATION that owns the blp phase -- so a flag dropped
+    # here is a flag that never reaches the invocation it was meant to disable.
+    [[ "${DO_WEAKIV}" == "1" ]] || wrap="${wrap} --no-weakiv"
     [[ "${DO_BLP}"  == "1" ]] || wrap="${wrap} --no-blp"
     [[ "${DO_BBL}"  == "1" ]] || wrap="${wrap} --no-bbl"
     [[ "${DO_CF}"   == "1" ]] || wrap="${wrap} --no-cf"
@@ -493,6 +499,44 @@ if want_phase blp && [[ "${DO_BLP}" == "1" ]]; then
     BLP_TERM="$(child_field BLP_TERM_JOBIDS)"
     add_jid "${BLP_TERM}"
     cl_log "  -> RC terminals = ${BLP_TERM:-<none>}"
+fi
+
+# ── alpha weak-IV battery: afterok the RC terminals, PARALLEL with BBL ───────────────
+# It reads the RC .jls of the WIV_STAGE rung plus the demand parquets, and writes
+# BLP_RESULTS/cluster_processed/weak_iv*.json + diag_moment_reduction.json. NOTHING in the
+# BBL or CF phases consumes those, so it hangs off the RC terminals and runs BESIDE the cost
+# phase instead of delaying it. Submitted here rather than by hand because the dependency is
+# the whole point: run standalone before the RC ladder finishes and it reads a half-written
+# or absent rung.
+#
+# The job carries its own #SBATCH block (day, 8c, 64G, 2h), so only the dependency and the log
+# paths are passed. With --no-blp there is no terminal to wait on and the RC results must
+# already be on disk, which is the same contract --no-blp already implies for BBL/CF.
+WEAKIV_JID=""
+if [[ "${DO_WEAKIV}" == "1" ]] && want_phase blp; then
+    wiv_dep=""
+    if [[ -n "${BLP_TERM}" ]]; then wiv_dep="--dependency=afterok:${BLP_TERM}"; fi
+    WEAKIV_JID=$(cl_sbatch ${wiv_dep} \
+        -o "${LOGD}/blp_weakiv_%j.out" -e "${LOGD}/blp_weakiv_%j.err" \
+        "${CL_ROOT}/blp_weakiv_job.sh")
+    cl_say "  blp_weakiv -> ${WEAKIV_JID}${BLP_TERM:+  (afterok ${BLP_TERM})}"
+    add_jid "${WEAKIV_JID}"
+    # The battery's outputs need their own trip home. blp_run.sh's blp_zip runs afterany the
+    # SAME RC terminals this job waits on, so it packages the blp set before the battery has
+    # written anything; and pipe_download is submitted only when a CF or BBL job is, so under
+    # --no-bbl --no-cf nothing else would carry weak_iv*.json or diag_moment_reduction.json.
+    # The WHOLE blp set is packaged again, not only the new files: cluster_ingest_blp.py
+    # extracts just the NEWEST blp_outputs*.zip, so this zip has to be a superset of blp_zip's.
+    # afterany, like every archive job: a failed battery still leaves a log worth reading.
+    WZ_JID=$(cl_sbatch --dependency=afterany:"${WEAKIV_JID}" \
+        -J blp_weakiv_zip --partition="${ZIP_PARTITION:-day}" --time=00:20:00 \
+        --nodes=1 --ntasks=1 --cpus-per-task=2 --mem=8G \
+        -o "${LOGD}/blp_weakiv_zip_%j.out" -e "${LOGD}/blp_weakiv_zip_%j.err" \
+        --wrap "cd '${CL_ROOT}' && bash cluster_archive.sh --set blp --copy --tag \"\${SLURM_JOB_ID}\"")
+    cl_say "  blp_weakiv_zip -> ${WZ_JID}  (afterany ${WEAKIV_JID}; the newest blp_outputs_<id>.zip -- download that one)"
+    add_jid "${WZ_JID}"
+else
+    cl_log "-- alpha weak-IV battery skipped ($( [[ "${DO_WEAKIV}" == "1" ]] && echo 'blp phase not in this run' || echo '--no-weakiv' ))."
 fi
 
 # ── Hand-off B -> C ─────────────────────────────────────────────────────────

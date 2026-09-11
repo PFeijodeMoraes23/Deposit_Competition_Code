@@ -491,7 +491,7 @@ cl_need_rf_curve () {
 # scales with S or with the panel ever crosses the upload.
 cl_need_rf_vintages () {
     cl_need_file "${CL_DATA_IN}/forward_rf_vintages.csv" "forward r^f curve vintages (per launch quarter)" \
-        "build locally then upload: python scrape_forward_rf.py --vintages --horizon ${HORIZON:-50}" \
+        "build locally then upload: python scrape_forward_rf.py --vintage-from 2016Q1 --vintage-to 2024Q4 --horizon ${HORIZON:-50}" \
         "36 launch quarters 2016Q1..2024Q4 x h=0..50; h=0 is the realised anchor rate"
 }
 cl_need_transitions () {
@@ -926,6 +926,7 @@ cl_bootstrap_tree () {
         echo "[dry-run]   dirs:  shared/, Drafts/Deposit Competition/, BCB/Inclusion/,"
         echo "[dry-run]          BCB/Egan_et_al_2025_Rep/processed/PANEL_INTERMED/"
         echo "[dry-run]   links: processed/market_panel.parquet, PANEL_INTERMED/digital_banks_diagnostic.csv,"
+        echo "[dry-run]          PANEL_INTERMED/estban_own_branches.csv,"
         echo "[dry-run]          BCB/Inclusion/bcb_banked_mca_panel.csv  <- ${CL_DATA_IN}"
         echo "[dry-run]          processed/ESTIMATION_OUTPUT -> ${CL_DATA_OUT}"
         echo "[dry-run]          => estimation_output() == ${CL_DATA_OUT}, the step dirs under it"
@@ -963,6 +964,12 @@ cl_bootstrap_tree () {
              "${proc}/PANEL_INTERMED/digital_banks_diagnostic.csv" "digital-bank flags"
     _cl_link "${CL_DATA_IN}/bcb_banked_mca_panel.csv" \
              "${root}/BCB/Inclusion/bcb_banked_mca_panel.csv"      "BCB banked/MCA panel"
+    # The D6 event screen (sleep_ident_entry_dynamics.py BRANCH_SIDECAR) reads the ESTBAN
+    # own-branch timing sidecar from PANEL_INTERMED. Absent, the screen is skipped with only a
+    # printed line, and the cluster keeps entry events the local run drops for branch timing --
+    # a different kept-event set, so a different D6 moment, with nothing in the log saying why.
+    _cl_link "${CL_DATA_IN}/estban_own_branches.csv" \
+             "${proc}/PANEL_INTERMED/estban_own_branches.csv"       "ESTBAN own-branch timing"
     # A REAL directory here would shadow the link and split the tree in half, so
     # refuse rather than overwrite: only an absent path or an existing symlink is
     # replaced. (ln -sfn on a real directory silently creates the link INSIDE it.)

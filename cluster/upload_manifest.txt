@@ -98,10 +98,11 @@
 
 # --- 0. the panels the SLEEPINESS estimators read. Sleepiness now runs ON the cluster, so ---
 #        these are inputs to the run rather than something that only ever existed locally.
-#        cl_bootstrap_tree (cluster_lib.sh) symlinks all three into the Open-Finance skeleton
+#        cl_bootstrap_tree (cluster_lib.sh) symlinks all four into the Open-Finance skeleton
 #        it builds under data/root, which is what OPEN_FINANCE_ROOT points the Python stack at:
 #            processed/market_panel.parquet                   -> data/input/market_panel.parquet
 #            processed/PANEL_INTERMED/digital_banks_diagnostic.csv -> data/input/...
+#            processed/PANEL_INTERMED/estban_own_branches.csv      -> data/input/...
 #            BCB/Inclusion/bcb_banked_mca_panel.csv           -> data/input/...
 #
 #        THE PANEL TRAVELS AS PARQUET. market_panel.parquet is 39 MB against the CSV's 724 MB
@@ -119,6 +120,10 @@
 #        its rows before any estimator starts.
 market_panel       | data | sleep      | PROCESSED     | market_panel.parquet           | data/input | python panel_pipeline.py                                    | -         | -
 digital_flags      | data | sleep      | PANEL_INTERMED| digital_banks_diagnostic.csv   | data/input | python panel_digital_flags.py                                 | -         | -
+# The D6 entry step's branch-timing screen reads this (sleep_ident_entry_dynamics.py
+# BRANCH_SIDECAR); cl_bootstrap_tree links it into processed/PANEL_INTERMED. Unstaged, the
+# screen is skipped silently and the cluster D6 moment is built on a larger event set.
+estban_branches    | data | sleep      | PANEL_INTERMED| estban_own_branches.csv        | data/input | python panel_estban_instrument.py                             | -         | -
 banked_mca         | data | sleep      | INCLUSION     | bcb_banked_mca_panel.csv       | data/input | python scrape_bcb_banked.py                                  | -         | -
 # The persisted state transform. STATE_CENTERING_JSON points every cluster job at the uploaded
 # copy, so theta0 keeps meaning "phi-hat at the average market" and the fits stay comparable
@@ -172,15 +177,34 @@ forward_rf         | data | bbl,cf     | COST_FWD      | forward_rf_qoq.csv     
 #        the compute node from rate.process plus the sim's own seed, so the upload does not grow
 #        with --n-paths, with the horizon, or with the panel. Never stage simulated paths.
 #
-#        NO PARENT ON EITHER ROW. The vintages are a fixed historical object -- 36 Focus surveys
-#        that were published on 36 past dates and do not change when the panel is rebuilt -- and
-#        the transitions are estimated FROM the vintages plus the panel's own cost/state columns,
-#        so an mtime comparison against a demand parquet would call them stale on every panel
-#        rebuild and invite a regeneration that re-fits the AR(1) blocks for no reason. Both are
-#        checked for PRESENCE. Re-generate them deliberately: a new Focus vintage worth adding
-#        (scrape_forward_rf.py, needs internet) or a re-estimated transition block.
+#        NO PARENT ON THE VINTAGES ROW. They are a fixed historical object -- 36 Focus surveys
+#        published on 36 past dates, which do not change when the panel is rebuilt -- so an
+#        mtime comparison against any panel would call them stale for no reason. Checked for
+#        PRESENCE. Re-generate them deliberately, when a new Focus vintage is worth adding
+#        (scrape_forward_rf.py, needs internet).
+#
+#        STAGES ARE `bbl,cf`, NOT `bbl`. cf3_equilibrium.jl and cf6_merger.jl both call
+#        psi_under, which calls assert_state_evolution -- and evolving states are ON by default
+#        (`CF_EVOLVING_STATES` unset => on, cf_demand_eval.jl:133). So a CF-family run without
+#        this file staged does not fall back to frozen states, it ERRORS before the first
+#        fixed-point iteration. Staging it for `cf` too is the fix; weakening the assert is not,
+#        because the assert is what stops a silent frozen-state demotion.
+#
+#        THE TRANSITIONS ROW DERIVES FROM market_panel.csv, so it carries that parent. Two of
+#        its three blocks are fitted to panel columns: the cost-shifter and market-state AR(1)s
+#        read Z_COLS/S_COLS through bbl_transitions.py's load_panel, which is why the default
+#        run (no --rate-only) opens the panel at all. A panel rebuild therefore dates them for
+#        real, and a multi-start run pairing new panel columns with old persistence coefficients
+#        is precisely the mixed-vintage failure the staleness check exists to catch -- invisible
+#        on the cluster, because the file is present and well-formed either way.
+#
+#        This is NOT the state_centering case above. Nothing here is version-pinned and no
+#        promoted gate value has to be reproduced, so re-running `python bbl_transitions.py` is
+#        routine freshness maintenance rather than a re-centering decision. The rate block is
+#        estimated from the vintages alone and comes back bit-for-bit, so a re-fit changes only
+#        the two blocks that the new panel actually moved.
 forward_rf_vint    | data | bbl        | COST_FWD      | forward_rf_vintages.csv        | data/input | python scrape_forward_rf.py --vintage-from 2016Q1 --vintage-to 2024Q4 --horizon 50 | - | -
-bbl_transitions    | data | bbl        | COST_FWD      | bbl_transitions.json           | data/input | python bbl_transitions.py                                          | -         | -
+bbl_transitions    | data | bbl,cf     | COST_FWD      | bbl_transitions.json           | data/input | python bbl_transitions.py                                          | PROCESSED | market_panel.csv
 
 # --- 5. fitted BBL policy function (deviations are formed around it, not observed spreads) -
 polfunc            | produced | bbl      | COST_POLFUNC  | polfunc_fitted.csv           | data/output/bbl | bbl_run.sh (BBL_STEP=polfunc, default)                       | -         | -

@@ -43,6 +43,17 @@ Also writes markdown twins next to identification_notes.md for the notes documen
   tab_bbl_cost_identified.md, tab_bbl_cbar.md, tab_bbl_ridge_diagnostic.md,
   tab_bbl_ridge_by_start.md
 
+WHICH PASS PRODUCES THE REPORTED TABLES. Both, and both on the cluster: bbl_job.sh's `tables`
+step runs the default pass and then the --from-psi pass against the shards in ${CF_COST_FWD},
+and the .tex/.md they write into the BBL step folder are what cluster_archive.sh --set bbl
+brings home. The two passes write DISJOINT files, so neither can overwrite the other's.
+
+--from-psi is not a local convenience that could be dropped in favour of reading cost_params:
+the ridge tables are per ROUTINE over the pooled design, while cost_params stores its ridge
+fields per FIRM TYPE, so the pooled columns (Ratio, CV%, the shared #Delta) have no JSON
+source -- see the comment at the head of that branch. Run it locally only to inspect a
+downloaded psi_cost.zip; the numbers in the paper come from the cluster pass.
+
 Usage:
   python make_bbl_cost_tables.py                       # cost_params only (vintage-safe)
   python make_bbl_cost_tables.py --from-psi            # + the ridge tables, from psi_cost.zip

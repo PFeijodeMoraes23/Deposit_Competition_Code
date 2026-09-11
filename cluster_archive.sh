@@ -138,7 +138,12 @@ case "${SET}" in
   # est{k} pickles and phi CSVs, the Rout exports (tex, figures, ame pickles) and
   # the DIAGNOSTICS tree. The two top-level globs take national_phi_t and the
   # summary jsons the merge step writes beside the est dirs.
-  sleep)            BASE=sleep_outputs;   pats=("output/sleep/est*" "output/sleep/Rout" "output/sleep/DIAGNOSTICS" "output/sleep/*.csv" "output/sleep/*.json") ;;
+  # DIAG_PHI_SEPARATION is a SIBLING of the step folders, not a child of output/sleep: the D6
+  # entry job resolves it through utils.paths.estimation_output(), which cl_export_step_dirs
+  # deliberately does not redirect. It rides in this set because the sleep phase is what
+  # produces it, and cluster_ingest.member_dest sends it back to ESTIMATION_OUTPUT rather
+  # than into DEMAND_PREP with the rest of the family.
+  sleep)            BASE=sleep_outputs;   pats=("output/sleep/est*" "output/sleep/Rout" "output/sleep/DIAGNOSTICS" "output/sleep/*.csv" "output/sleep/*.json" "output/DIAG_PHI_SEPARATION") ;;
   # The estimation sample every later phase is read against. Archived mid-run
   # (pipeline_all.sh, afterany G2) as well as in the terminal download.
   demand_prep)      BASE=demand_prep_outputs; pats=("output/demand_prep") ;;
@@ -147,7 +152,33 @@ case "${SET}" in
   # demo_draws_R2000_seed42.jls is ~14 GB of Float64 randn noise that the local
   # machine can regenerate from (R, seed) in minutes, so it is opt-in: shipping it
   # by default would triple the whole download for a file nobody reads locally.
-  blp)              BASE=blp_outputs;     pats=("output/blp/*.jls" "output/blp/*.json" "output/blp/draws/halton_nu_*" "output/blp/draws/demo_key_index_*" "output/blp/draws/*.json")
+  # blp_weakiv_job.sh writes to BLP_RESULTS/cluster_processed, NOT to output/blp. The two are
+  # separate seams: ${CL_STEP_BLP} is output/blp, while the battery's writers resolve
+  # processed/ESTIMATION_OUTPUT/BLP_RESULTS -- utils.paths.blp_results_dir() in Python,
+  # the same path spelled out in blp_delta_export.jl:29-31 for Julia. That resolves to
+  # output/BLP_RESULTS here because cl_link_of_skeleton points processed/ESTIMATION_OUTPUT
+  # at data/output (cluster_lib.sh:891). The glob below is written against the real
+  # data/output side, so guard (2) sees a path inside the domain root and no symlink is
+  # traversed. Without these two patterns weak_iv.json, weak_iv_ext1.json,
+  # diag_moment_reduction.json and the rc_delta bins would stay on the cluster and the
+  # alpha tables would keep rendering whatever the local tree already held.
+  #
+  # NAMED, never `cluster_processed/*.json`: that directory also holds what
+  # cluster_ingest_blp.py itself WRITES locally (blp_E{k}_spec_12.json, INDEX.json,
+  # coef_heterogeneity.json). Globbing it would ship the ingest's own products back to the
+  # machine that made them, and the ingest re-flattens every member into cluster_raw/, so
+  # they would return as duplicates under _flatten_into's `<dir>__<name>` collision rule.
+  # `weak_iv_ext*` rather than a bare `weak_iv_*` so the job's WIV_STAGE can move to ext2
+  # without a second edit here.
+  #
+  # The last two patterns are the SLEEPINESS battery (sleep_job.sh SLEEP_STEP=weakiv), and
+  # they are in the blp set on purpose: sleep_weak_iv.py writes weak_iv_sleep.json into
+  # BLP_RESULTS/cluster_processed and its note into ESTIMATION_OUTPUT/DIAG_WEAK_IV_SLEEP,
+  # neither of which is under output/sleep/ -- and the sleep FAMILY strips `output/sleep/`
+  # and lands everything in DEMAND_PREP, so shipping them there would put both files in the
+  # wrong tree. A set follows where its files live, not which job wrote them; the blp ingest
+  # promotes both to the folders their readers name (cluster_ingest_blp.DIAG_FROM_CLUSTER).
+  blp)              BASE=blp_outputs;     pats=("output/blp/*.jls" "output/blp/*.json" "output/blp/draws/halton_nu_*" "output/blp/draws/demo_key_index_*" "output/blp/draws/*.json" "output/BLP_RESULTS/cluster_processed/weak_iv.json" "output/BLP_RESULTS/cluster_processed/weak_iv_ext*.json" "output/BLP_RESULTS/cluster_processed/diag_moment_reduction.json" "output/BLP_RESULTS/cluster_processed/rc_delta_*.bin" "output/BLP_RESULTS/cluster_processed/weak_iv_sleep.json" "output/DIAG_WEAK_IV_SLEEP/*.md")
                     [[ "${INCLUDE_DRAWS:-0}" == "1" ]] && pats+=("output/blp/draws/demo_draws_*") ;;
   # polfunc, the psi shards and the cost params: one family, one producer.
   # INCLUDE_PSI=0 is the escape hatch for the case the ~100-shard psi_dev array

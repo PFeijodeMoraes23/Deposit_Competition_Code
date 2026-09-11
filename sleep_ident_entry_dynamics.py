@@ -20,7 +20,9 @@ is a scalar affine map, so from Dep_0 = 0
     Dep_h = A*(1-(phi g)^h)/(1-phi g),   A = (1-phi)*M*s,   Dep_h/Dep_inf = 1-(phi g)^h.
 
 Rivals enter only through A (the level), which BOTH Egan normalisations cancel. So the
-model curve needs phi-hat and g alone -- no BLP context, no draws, no cluster.
+model curve needs phi-hat and g alone -- no BLP context and no simulation draws. What DOES
+cost is everything around it: the full market panel, every routine's phi_nopix export, and
+a 999-draw resample of the entry events behind the implied-phi interval.
 
 Two normalisations, exactly as in the paper:
   main (their Fig. 3):  n_h = (s_h - s_0)/(s_end - s_0)
@@ -29,12 +31,25 @@ Two normalisations, exactly as in the paper:
                         drawn on the ALT panel only -- same as the paper).
 
 Outputs -> DIAG_PHI_SEPARATION/d6_entry_{events,paths,model_curves}.csv,
+           d6_implied_phi.csv, d6_routine_{curves,panel}*.csv, d6_meta.json,
            d6_entry_dynamics.png/.pdf, and fig_entry_dynamics.png/.pdf in Drafts.
+
+TWO HALVES, ONE PASS BY DEFAULT.
+  --compute-only   every moment, every bootstrap, every CSV + d6_meta.json; no figure.
+                   This is the cluster half (sleep_job.sh SLEEP_STEP=entry).
+  --figures-only   every exhibit, drawn from those CSVs; nothing recomputed. The local half.
+  neither          compute and draw in one pass, which is what it has always done.
+Nothing about the split changes a number: the figure functions already took only the frames
+the compute half writes, so the seam is where the data already was. d6_meta.json carries the
+handful of scalars no CSV holds -- g, the horizon, the phi vintages and the settings the run
+used -- and --figures-only adopts those settings rather than its own, so a render cannot
+caption a figure with a construction the CSVs were not built under.
 """
 from utils.venv_guard import ensure_project_venv
 ensure_project_venv(__file__)
 
 import argparse
+import json
 import os
 os.environ.setdefault("MPLBACKEND", "Agg")
 import shutil
@@ -79,7 +94,7 @@ def phi_vintages():
     exports so every line is the same object measured the same way. Nothing here is a frozen
     literal -- a stale model line plotted against fresh data is the one failure this figure
     cannot survive."""
-    cf = _paths.PROCESSED / "ESTIMATION_OUTPUT" / "CF_FOUNDATION"
+    cf = _paths.cf_foundation_dir()
     out = []
     for est in REF_ESTS:
         fp = cf / f"phi_nopix_{est}_spec_12.parquet"
@@ -92,8 +107,18 @@ def phi_vintages():
     return out
 
 
+# WHY THE ACCESSORS AND NOT PROCESSED/"ESTIMATION_OUTPUT"/... . Both inputs move on the cluster
+# and only there: cl_export_step_dirs exports DEMAND_PREP_DIR -> data/output/demand_prep and
+# CF_FOUNDATION_DIR -> data/output/counterfactuals (cluster_lib.sh:79-80), and
+# demand_parquet_dir()/cf_foundation_dir() are the accessors that honour them. Spelled as the
+# literal, this script reads data/output/DEMAND_PREP and data/output/CF_FOUNDATION -- folders
+# nothing writes -- so SLEEP_STEP=entry dies on median_g()'s first read, and the phi_nopix lookups
+# below degrade to a printed "absent -- skipped" that leaves the exhibit empty while the job still
+# exits 0. OUT_DIR above is deliberately NOT converted: estimation_output() is the one anchor
+# cl_export_step_dirs does not redirect, so DIAG_PHI_SEPARATION resolves to data/output there,
+# which is exactly where cluster_archive.sh --set sleep globs it from.
 def median_g():
-    fp = _paths.PROCESSED / "ESTIMATION_OUTPUT" / "DEMAND_PREP" / "demand_2_spec_12.parquet"
+    fp = _paths.demand_parquet_dir() / "demand_2_spec_12.parquet"
     g = float(pd.read_parquet(fp, columns=["gross_return_lag"])["gross_return_lag"].median())
     assert 1.0 < g < 1.06, f"implausible accrual g={g}"
     return g
@@ -147,7 +172,7 @@ def build_g_paths(reg, H, mode, scalar_g):
     if mode == "scalar" or n == 0:
         return np.full((n, H + 1), float(scalar_g)), None
 
-    fp = _paths.PROCESSED / "ESTIMATION_OUTPUT" / "DEMAND_PREP" / "demand_2_spec_12.parquet"
+    fp = _paths.demand_parquet_dir() / "demand_2_spec_12.parquet"
     d = pd.read_parquet(fp, columns=["CodConglomeradoPrudencial", "mca_code", "deposit_type",
                                      "year", "quarter", "gross_return_lag", "deposit_balance"])
     d = d[d["deposit_type"].astype(int).isin(G_TYPES)].copy()
@@ -561,9 +586,8 @@ def phi_in_interval(ests, lo, hi):
     interpretable is the same yardstick applied to every routine -- and in particular a share
     of exactly zero, which says a routine has no admissible cell anywhere.
     """
-    cf = _paths.PROCESSED / "ESTIMATION_OUTPUT" / "CF_FOUNDATION"
-    dp = (_paths.PROCESSED / "ESTIMATION_OUTPUT" / "DEMAND_PREP"
-          / "demand_2_spec_12.parquet")
+    cf = _paths.cf_foundation_dir()
+    dp = _paths.demand_parquet_dir() / "demand_2_spec_12.parquet"
     w = pd.read_parquet(dp, columns=["mca_code", "time_id", "deposit_type",
                                      "deposit_balance"])
     w = w[w["deposit_type"].astype(int).isin(G_TYPES)]
@@ -612,13 +636,12 @@ def population_stationarity(est):
     This is the same bound evaluated over every market-quarter the routine fits, which is
     the population the counterfactuals actually simulate.
     """
-    cf = _paths.PROCESSED / "ESTIMATION_OUTPUT" / "CF_FOUNDATION"
+    cf = _paths.cf_foundation_dir()
     fp = cf / f"phi_nopix_E{est}_spec_12.parquet"
     if not fp.exists():
         return {}
     if "g" not in _POP_G_CACHE:
-        dp = (_paths.PROCESSED / "ESTIMATION_OUTPUT" / "DEMAND_PREP"
-              / "demand_2_spec_12.parquet")
+        dp = _paths.demand_parquet_dir() / "demand_2_spec_12.parquet"
         q = pd.read_parquet(dp, columns=["mca_code", "time_id", "deposit_type",
                                          "gross_return_lag", "deposit_balance"])
         q = q[q["deposit_type"].astype(int).isin(G_TYPES)].copy()
@@ -691,7 +714,7 @@ def build_phi_paths(kept, H, est, mode):
     0.984. Averaging across types would mix a clipped value with a live one; averaging
     within the modelled types does not.
     """
-    cf = _paths.PROCESSED / "ESTIMATION_OUTPUT" / "CF_FOUNDATION"
+    cf = _paths.cf_foundation_dir()
     fp = cf / f"phi_nopix_E{est}_spec_12.parquet"
     if not fp.exists():
         return None, None
@@ -751,7 +774,7 @@ def routine_event_curves(reg, paths, H, plateau_w, g, ests, phi_mode="market"):
     convex -- see model_curve), and the SSE against the empirical median path on the same
     horizons the implied-phi fit uses.
     """
-    cf = _paths.PROCESSED / "ESTIMATION_OUTPUT" / "CF_FOUNDATION"
+    cf = _paths.cf_foundation_dir()
     M = _path_matrix(reg, paths, H, "main", plateau_w)
     if M is None:
         print("  [routine curves] no usable events"); return None
@@ -816,27 +839,56 @@ def routine_event_curves(reg, paths, H, plateau_w, g, ests, phi_mode="market"):
     # successive versions of one -- they are written side by side.
     sfx = PHI_SFX[phi_mode]
     pd.DataFrame(rows).to_csv(OUT_DIR / f"d6_routine_curves{sfx}.csv", index=False)
+    # The two-panel exhibit's own input. It used to reach the figure only as a return value,
+    # which meant the panel could not be redrawn without re-running the whole construction --
+    # every phi_nopix parquet, every per-event recursion. Persisted, the figure is a read.
+    panel_df = pd.DataFrame(panel_rows)
+    panel_df.to_csv(OUT_DIR / f"d6_routine_panel{sfx}.csv", index=False)
     if expl_rows:
         pd.DataFrame(expl_rows).to_csv(OUT_DIR / f"d6_explosive_diag{sfx}.csv",
                                        index=False)
         print(f"  -> d6_explosive_diag{sfx}.csv")
+    print(f"  -> d6_routine_curves{sfx}.csv / d6_routine_panel{sfx}.csv "
+          f"(phi resolution: {phi_mode})")
+    return rows, panel_df
 
+
+def _draw_routine_curves(rows_df, H, phi_mode):
+    """The standalone per-routine exhibit.
+
+    Drawn from d6_routine_curves{sfx}.csv and nothing else: its per-horizon rows carry
+    `data_median` and each routine's `model_median` / `model_q25` / `model_q75`, which is
+    exactly what this panel plots. Keeping it out of routine_event_curves is what lets the
+    curve construction run as a cluster job and the figure render locally from the CSV.
+    """
     import matplotlib.pyplot as plt
+    per_h = rows_df[rows_df["h"].notna()] if "h" in rows_df.columns else rows_df.iloc[0:0]
+    if per_h.empty:
+        print("  [routine curves] no per-horizon rows to draw"); return
+    sfx = PHI_SFX[phi_mode]
+    hgrid = np.arange(H + 1)
+    # data_median is the same empirical path repeated under every routine, so one row per h.
+    _e = per_h.drop_duplicates("h")
+    emp = (_e.set_index(_e["h"].astype(int))["data_median"]
+             .reindex(hgrid).to_numpy(dtype=float))
+
     fig, ax = plt.subplots(figsize=(7.2, 4.6))
     ax.grid(color=GRID, lw=0.6)
-    hgrid = np.arange(H + 1)
     ax.plot(hgrid, emp, "o-", color=D_COLOR, lw=2.0, ms=4, label="data (median B path)",
             zorder=5)
     # Drawn set follows REF_ESTS, the same switch that selects Figure 4's reference lines, so
     # the two exhibits cannot end up showing different line-ups. Every routine passed in is
     # still computed and written to the CSV -- the filter is presentational.
-    shown = {e: v for e, v in curves.items() if f"E{e}" in REF_ESTS} or curves
+    ests = [int(e) for e in sorted(per_h["estim"].dropna().unique())]
+    shown = [e for e in ests if f"E{e}" in REF_ESTS] or ests
     # Colour and label come from the same registries Figure 4 uses, keyed by routine rather
     # than by position, so a routine keeps its identity across every exhibit.
-    for est, (med, q25, q75) in shown.items():
+    for est in shown:
+        s = per_h[per_h["estim"] == est].sort_values("h")
         c = MODEL_COLORS.get(f"E{est}", INK)
-        ax.plot(hgrid, med, "-", color=c, lw=1.4, label=ROMAN.get(f"E{est}", f"E{est}"))
-        ax.fill_between(hgrid, q25, q75, color=c, alpha=0.10)
+        ax.plot(s["h"], s["model_median"], "-", color=c, lw=1.4,
+                label=ROMAN.get(f"E{est}", f"E{est}"))
+        ax.fill_between(s["h"], s["model_q25"], s["model_q75"], color=c, alpha=0.10)
     ax.axhline(1.0, color="0.6", lw=0.8, ls=":")
     ax.set_xlabel("Quarters Since Entry ($h$)")
     ax.set_ylabel("Normalized Entrant Deposits")
@@ -855,8 +907,7 @@ def routine_event_curves(reg, paths, H, plateau_w, g, ests, phi_mode="market"):
     except OSError as e:
         print(f"  [fig] Drafts copy failed: {e}")
     plt.close(fig)
-    print(f"  -> d6_routine_curves{sfx}.csv / .png  (phi resolution: {phi_mode})")
-    return rows, pd.DataFrame(panel_rows)
+    print(f"  -> d6_routine_curves{sfx}.png")
 
 
 def event_paths(reg, paths, H, norm, plateau_w, boot, seed):
@@ -1051,28 +1102,27 @@ def main(args):
             phi_in_interval([int(x) for x in args.routine_curves],
                             float(imp["B"]["lo"]), float(imp["B"]["hi"]))
 
+    # ── the compute/render seam ──────────────────────────────────────────────────────────
+    # Everything above is computation and has landed in OUT_DIR as CSV. This records the few
+    # scalars no CSV carries, so --figures-only is a pure read.
+    _write_meta(g, H, plateau_w, vint, imp, args)
+
     if args.routine_curves:
         print("\n  per-routine model paths from each routine's own fitted phi_m dispersion:")
         _rc = routine_event_curves(reg_b, paths_b, H, plateau_w, gB,
                                    [int(x) for x in args.routine_curves], args.phi_mode)
-        if _rc is not None:
+        if _rc is not None and not args.compute_only:
             _rows, _panel = _rc
-            if not _panel.empty:
-                # Same two-panel treatment as the reference-curve exhibit, but every line is
-                # a routine evaluated at ITS OWN fitted dispersion rather than one level.
-                _shown = [e for e in REF_ESTS
-                          if e in set(_panel["vintage"].astype(str))]
-                _vint = [(e, float(_panel.loc[_panel["vintage"] == e, "phi"].iloc[0]),
-                          f"per-event phi ({args.phi_mode})") for e in _shown]
-                # One figure family per cell of the aggregation 2x2, so the four can be
-                # compared side by side instead of overwriting each other.
-                _stem = f"fig_routine_dynamics{PHI_SFX[args.phi_mode]}"
-                make_panel_figures(paths_df, _panel, _vint, g, args, imp, _stem,
-                                   suptitle=("Entrant accumulation vs each routine's own "
-                                             + PHI_LABEL[args.phi_mode]),
-                                   per_routine=True)
+            _draw_routine_curves(pd.DataFrame(_rows), H, args.phi_mode)
+            # Same two-panel treatment as the reference-curve exhibit, but every line is a
+            # routine evaluated at ITS OWN fitted dispersion rather than one level.
+            _routine_panel_figure(paths_df, _panel, g, args, imp)
 
-    make_figure(paths_df, curves_df, vint, g, args, imp)
+    if args.compute_only:
+        print("\n[compute-only] every result CSV and " + META_NAME + " written; no figure "
+              "drawn. Render them with --figures-only.")
+    else:
+        make_figure(paths_df, curves_df, vint, g, args, imp)
 
     # verdict
     sub = paths_df[(paths_df["kind"] == "B") & (paths_df["norm"] == "alt")]
@@ -1260,6 +1310,98 @@ def make_panel_figures(paths_df, curves_df, vint, g, args, imp=None,
           f"per-panel {stem}_{{a,b}}.{{png,pdf,tex}})")
 
 
+def _routine_panel_figure(paths_df, panel_df, g, args, imp):
+    """The two-panel exhibit with every line at its routine's own fitted dispersion.
+
+    Split out of main() so the compute run and the --figures-only run derive the vintage
+    list and the file stem the same way rather than from two copies of the same expression.
+    """
+    if panel_df is None or panel_df.empty:
+        return
+    _shown = [e for e in REF_ESTS if e in set(panel_df["vintage"].astype(str))]
+    _vint = [(e, float(panel_df.loc[panel_df["vintage"] == e, "phi"].iloc[0]),
+              f"per-event phi ({args.phi_mode})") for e in _shown]
+    # One figure family per cell of the aggregation 2x2, so the four can be compared side by
+    # side instead of overwriting each other.
+    _stem = f"fig_routine_dynamics{PHI_SFX[args.phi_mode]}"
+    make_panel_figures(paths_df, panel_df, _vint, g, args, imp, _stem,
+                       suptitle=("Entrant accumulation vs each routine's own "
+                                 + PHI_LABEL[args.phi_mode]),
+                       per_routine=True)
+
+
+# The few things the figures need that no result CSV carries: the accrual scalar, the horizon,
+# and the phi vintages with their labels and provenance. Written beside the CSVs so a
+# --figures-only run is a pure read and cannot silently re-derive g from a different panel
+# than the one the numbers came from.
+META_NAME = "d6_meta.json"
+
+
+def _write_meta(g, H, plateau_w, vint, imp, args):
+    meta = {
+        "g": float(g),
+        "horizon": int(H),
+        "plateau_w": [int(h) for h in plateau_w],
+        "vintages": [[str(lab), float(p), str(src)] for lab, p, src in vint],
+        "ref_ests": list(REF_ESTS),
+        # settings that shaped the numbers; the render adopts these rather than its own
+        "g_mode": args.g_mode,
+        "phi_mode": args.phi_mode,
+        "boot": int(args.boot),
+        "seed": int(args.seed),
+        "inversion_loss": args.inversion_loss,
+        "window_only": bool(args.window_only),
+        "routine_curves": list(args.routine_curves) if args.routine_curves else None,
+        "implied_phi_kinds": sorted(imp.keys()) if imp else [],
+    }
+    (OUT_DIR / META_NAME).write_text(json.dumps(meta, indent=2), encoding="utf-8")
+    print(f"  -> {META_NAME}")
+
+
+def render_figures(args):
+    """Draw every D6 exhibit from what a --compute-only run left in OUT_DIR.
+
+    This is the local half of the split: no panel read, no bootstrap, no phi_nopix parquet,
+    no refit. Everything it plots was computed on the cluster and written to
+    DIAG_PHI_SEPARATION, so the figure in the paper and the numbers in the notes come from
+    one run by construction.
+    """
+    mp = OUT_DIR / META_NAME
+    if not mp.exists():
+        raise SystemExit(f"{META_NAME} not found in {OUT_DIR} -- run the compute half first "
+                         f"(sleep_job.sh SLEEP_STEP=entry, or --compute-only locally).")
+    meta = json.loads(mp.read_text(encoding="utf-8"))
+    g, H = float(meta["g"]), int(meta["horizon"])
+    vint = [(str(lab), float(p), str(src)) for lab, p, src in meta["vintages"]]
+    # Anything that shaped the stored numbers is taken from the computing run, not from this
+    # invocation: a --figures-only call with a different --g-mode would otherwise caption the
+    # figure with a construction the CSVs were not built under.
+    args.horizon, args.g_mode, args.phi_mode = H, meta["g_mode"], meta["phi_mode"]
+    args.boot, args.seed = int(meta["boot"]), int(meta["seed"])
+    args.window_only = bool(meta["window_only"])
+    print(f"=== D6 figures from {OUT_DIR} ===")
+    print(f"  g={g:.5f}  horizon={H}  g-mode={args.g_mode}  phi-mode={args.phi_mode}")
+
+    paths_df = pd.read_csv(OUT_DIR / "d6_entry_paths.csv")
+    curves_df = pd.read_csv(OUT_DIR / "d6_model_curves.csv")
+
+    imp = {}
+    ip = OUT_DIR / "d6_implied_phi.csv"
+    if ip.exists():
+        for _, r in pd.read_csv(ip).iterrows():
+            imp[str(r["kind"])] = {k: r[k] for k in r.index if k != "kind"}
+
+    sfx = PHI_SFX[args.phi_mode]
+    rc, pn = OUT_DIR / f"d6_routine_curves{sfx}.csv", OUT_DIR / f"d6_routine_panel{sfx}.csv"
+    if rc.exists():
+        _draw_routine_curves(pd.read_csv(rc), H, args.phi_mode)
+    if pn.exists():
+        _routine_panel_figure(paths_df, pd.read_csv(pn), g, args, imp)
+    make_figure(paths_df, curves_df, vint, g, args, imp)
+    print(f"\nfigures -> {OUT_DIR}  (+ Drafts)")
+    return 0
+
+
 if __name__ == "__main__":
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -1294,4 +1436,17 @@ if __name__ == "__main__":
     ap.add_argument("--g-selftest", action="store_true",
                     help="force every per-event g to the scalar median; 'path' must then "
                          "reproduce '--g-mode scalar'")
-    raise SystemExit(main(ap.parse_args()))
+    # The compute/render split. The moment and its bootstrap read the full market panel and
+    # every routine's phi_nopix export and resample events 999 times, so they run on the
+    # cluster (sleep_job.sh SLEEP_STEP=entry); the figures are a read of the CSVs that run
+    # leaves in DIAG_PHI_SEPARATION. Neither flag changes a number: with both omitted the
+    # script computes and draws in one pass exactly as before.
+    g_split = ap.add_mutually_exclusive_group()
+    g_split.add_argument("--compute-only", action="store_true", dest="compute_only",
+                         help="compute every moment and write the result CSVs + "
+                              "d6_meta.json; draw nothing (the cluster half)")
+    g_split.add_argument("--figures-only", action="store_true", dest="figures_only",
+                         help="draw every exhibit from the CSVs a --compute-only run left "
+                              "in DIAG_PHI_SEPARATION; compute nothing (the local half)")
+    _args = ap.parse_args()
+    raise SystemExit(render_figures(_args) if _args.figures_only else main(_args))

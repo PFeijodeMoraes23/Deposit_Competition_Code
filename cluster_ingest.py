@@ -25,6 +25,8 @@ WHAT IT DOES
      their local readers already look:
 
         sleep            -> DEMAND_PREP/            (est{k}/, Rout/, DIAGNOSTICS/)
+                            ESTIMATION_OUTPUT/      (DIAG_PHI_SEPARATION/ — see
+                                                     SLEEP_ESTOUT_DIRS)
         demand_prep      -> DEMAND_PREP/            (the demand_*_spec_*.parquet)
         logit            -> BLP_RESULTS/logit/  (.tex exhibits -> Drafts/Deposit Competition)
         blp              -> BLP_RESULTS/cluster_raw/ then process_blp_outputs
@@ -550,8 +552,17 @@ def meta_tag(arc: Archive):
     return f"untagged_{datetime.datetime.fromtimestamp(arc.mtime):%Y%m%d}"
 
 
+# Sleep-family members that belong BESIDE DEMAND_PREP under ESTIMATION_OUTPUT, not inside it.
+# The D6 entry job resolves its output through utils.paths.estimation_output(), which is
+# deliberately not redirectable per sleepiness vintage, so on the cluster these sit next to the
+# step folders rather than under output/sleep. Named one by one on purpose: output/sleep's own
+# DIAGNOSTICS/ is a genuine child of the step folder and must keep landing in DEMAND_PREP, so a
+# prefix rule like "starts with DIAG" would send it to the wrong tree.
+SLEEP_ESTOUT_DIRS = ("DIAG_PHI_SEPARATION",)
+
+
 def member_dest(family, rel: "str | Path", root: Path) -> Path:
-    """Where one member belongs. Families land in one directory, with a single exception.
+    """Where one member belongs. Families land in one directory, with two exceptions.
 
     The logit family carries two different KINDS of product: the delta warm-starts, .jls fits
     and summary json, which belong with the BLP results the RC engine reads, and three .tex
@@ -559,10 +570,16 @@ def member_dest(family, rel: "str | Path", root: Path) -> Path:
     reading whatever it read last: the cluster recomputes them every run and V_Main never sees
     the new numbers. Table generators write their .tex to the paper directory and nowhere else,
     and a downloaded exhibit is the same kind of object, so it follows the same rule.
+
+    The sleep family carries SLEEP_ESTOUT_DIRS for the same reason in the other direction:
+    those are written one level above the step folder, and routing them into DEMAND_PREP with
+    the rest of the family would put them where no local reader looks.
     """
     rel = Path(rel)   # extract() hands over the slash-joined str from strip_prefix
     if family == "logit" and rel.suffix.lower() == ".tex":
         return paths.drafts_dir() / rel.name
+    if family == "sleep" and rel.parts and rel.parts[0] in SLEEP_ESTOUT_DIRS:
+        return paths.estimation_output() / rel
     return root / rel
 
 

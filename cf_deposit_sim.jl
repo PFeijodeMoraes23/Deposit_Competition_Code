@@ -95,6 +95,45 @@ function _first_present_rf_level(df::DataFrame, candidates::Vector{String};
     return (v, c)
 end
 
+# The r^dep accrual bounds. Named once so load_sim_state and the recomputed branches in
+# simulate_deposits cannot drift apart. The two ends have DIFFERENT reasons, given at the
+# load_sim_state clamp: the floor is the zero lower bound on nominal deposit rates, the ceiling
+# is the stability bound on the sleeper accrual.
+const RDEP_MIN = 0.0
+const RDEP_MAX = 0.10
+# Set by the first simulate_deposits call that recomputes r^dep, so the bound incidence is
+# logged once per job instead of once per deviation.
+const _RDEP_BOUND_LOGGED = Ref(false)
+
+"""
+    _rdep_from_annual(rf_q, rho_ann_pp) -> r^dep_q
+
+Recover the QUARTERLY depositor rate from a quarterly r^f and an ANNUALISED spread.
+
+The panel builds `spread_ann = (1+r^f_q)^4 - (1+r^dep_q)^4` (verified to machine precision;
+see bbl_polfunc.py:339), so inverting it needs the quartic root, NOT a division by 4:
+
+    r^dep_q = ((1 + r^f_q)^4 - rho)^(1/4) - 1,     rho = spread_ann as a FRACTION
+
+`rho_ann_pp` arrives in `ctx.rho_hat` units -- annual PERCENTAGE POINTS, i.e. spread_ann/100 --
+so the /100 here takes it the rest of the way to a fraction.
+
+WHY NOT rho/400. That linearisation overstates the quarterly spread by ~4.6% of its own size
+(median 0.007430 against the panel's own 0.007200). r^dep is a small difference of two larger
+numbers, so a 4.6% error in the subtrahend is amplified near zero. Measured on the 630,307 rows
+of demand_3_index_spec_12 at each row's OWN quarterly r^f, the exact form reproduces the panel's
+r^dep = r^f_q - spread_qoq/1e4 to 2.2e-16 and implies a negative r^dep for none of them; the
+linearisation errs by up to 1.5e-2 and implies a negative r^dep for 28.7%.
+
+`inner <= 0` would mean the annual spread exceeds the entire annualised gross return. It occurs
+for none of those rows at any horizon h=0..50 of the shipped forward-curve vintages; it returns
+the floor rather than a NaN so a pathological deviation cannot silently poison the whole psi path.
+"""
+@inline function _rdep_from_annual(rf_q::Real, rho_ann_pp::Real)
+    inner = (1.0 + rf_q)^4 - rho_ann_pp / 100.0
+    inner > 0.0 ? inner^0.25 - 1.0 : RDEP_MIN
+end
+
 """
     load_sim_state(ctx; dbar=1.0, sidecar=nothing, ...) -> DepositSimState
 
@@ -103,6 +142,8 @@ merged 1:1 on the same row order, e.g. the demand-prep parquet that carries φ̂
 Dep^Act if the BLP input parquet does not). Column names are resolved against
 candidate lists; missing essentials raise a clear error.
 """
+
+
 function load_sim_state(ctx::CFDemandCtx; dbar::Union{Float64,AbstractVector{<:Real}}=1.0,
                         sidecar::Union{Nothing,DataFrame}=nothing)
     df = sidecar === nothing ? ctx.df : hcat(ctx.df, sidecar; makeunique=true)
@@ -153,12 +194,18 @@ function load_sim_state(ctx::CFDemandCtx; dbar::Union{Float64,AbstractVector{<:R
         log_status("  [SIM] φ←$phi_c  Dep₀←$dep_c  M←$(pop_c)·dbar($(dbar isa Number ? round(dbar,sigdigits=4) : "per-row"))  r^dep_q←$rdep_c")
     end
 
-    # Bound the quarterly deposit rate to an economically sensible, STABILITY-
-    # guaranteeing range: r^dep in [0, 0.10] keeps the sleeper accrual β·φ̂·(1+r^dep)<1
-    # (β=0.9, φ̂≤0.999 ⇒ need r^dep<0.11), so the franchise-value integral converges.
-    # Values outside this are residual implicit-rate artifacts (≈0.3% of cells).
+    # Bound the quarterly deposit rate to [RDEP_MIN, RDEP_MAX] = [0, 0.10]. The ends have
+    # different reasons:
+    #   floor 0      the zero lower bound on NOMINAL deposit rates. Depositors in this market
+    #                are not charged to hold a deposit (Selic 2-14.25% over 2016-2024), so a
+    #                negative r^dep describes a world that does not exist.
+    #   ceiling 0.10 stability: β·φ̂·(1+r^dep) < 1 (β=0.9, φ̂≤0.999 ⇒ r^dep < 0.11) keeps the
+    #                franchise-value integral convergent. This argument bounds ONLY the ceiling;
+    #                a negative r^dep would make the integral converge faster, not slower.
+    # On this OBSERVED column both bind rarely: 0.15% of cells above the ceiling, and below the
+    # floor only at floating-point noise around zero.
     return DepositSimState(clamp.(phi, 0.0, 0.999), max.(Dep0, 0.0),
-                           clamp.(rdep, 0.0, 0.10),
+                           clamp.(rdep, RDEP_MIN, RDEP_MAX),
                            M, dep_type, is_B, endog)
 end
 
@@ -263,6 +310,15 @@ function simulate_deposits(ctx::CFDemandCtx, st::DepositSimState;
     end
     rfv = zeros(N)
 
+    # Bound incidence, tallied on the FIRST call that recomputes r^dep and on no other. In
+    # bbl_fwd_sim.jl that call is the equilibrium σ̂ simulation (psi_eq is built before any
+    # deviation), and a deviation moves the spread by a small Δ, so one tally describes the run.
+    # The flag is claimed before the loop so concurrent callers do not both tally.
+    tally = (per_row_rf || rf_path_q !== nothing) && !_RDEP_BOUND_LOGGED[]
+    tally && (_RDEP_BOUND_LOGGED[] = true)
+    ncurve = per_row_rf ? size(rf_curves, 1) : 1
+    nlo = zeros(Int, ncurve); nhi = zeros(Int, ncurve); ncnt = zeros(Int, ncurve)
+
     @inbounds for t in 1:T
         ρ_t = time_varying ? spreads_ann[:, t] : base_spread
         s_t = s_path !== nothing ? @view(s_path[:, t]) :
@@ -270,20 +326,72 @@ function simulate_deposits(ctx::CFDemandCtx, st::DepositSimState;
         # Quarterly accrual: prefer recompute from forward r^f if provided. With `rf_curves`
         # every row accrues at ITS OWN launch quarter's forward curve (multi-start), which is
         # what makes one pass over the panel equivalent to S per-quarter simulations.
+        # r^dep is recovered from the ANNUALISED spread by the exact quartic inverse the panel
+        # itself defines -- see _rdep_from_annual. Neither /4 (which is 100x wrong: the accrual
+        # factor runs [-2.69, 9.64] instead of [0.039, 1.108], ~40% of rows accruing NEGATIVE and
+        # 13-33% exploding over T=50, all finite and NaN-free, which is why it does not announce
+        # itself) nor /400 (right by 100x but still a linearisation of a compounded quantity).
+        #
+        # Same [RDEP_MIN, RDEP_MAX] bounds as load_sim_state, for the same two reasons (see there).
+        # On a FORWARD path the floor does real work. Spreads are frozen at the launch quarter
+        # (constant-state belief, V_Main:601) while the forward curve moves, so wherever the curve
+        # falls below the frozen markdown the implied r^dep would go negative. Clamping at 0 is
+        # the corner solution -- the bank compresses its markdown to r^f rather than charge
+        # depositors. On the shipped vintages it binds on ~16% of row-periods over h=0..50, and
+        # UNEVENLY: ~0% for low-rate launch quarters (2018Q2, 2020Q4-2021Q2), up to ~40% for the
+        # 2016 starts, whose high frozen markdowns meet a declining curve. That lands one-signed on
+        # the across-start variation that identifies zeta (V_Main:629), so its per-start incidence
+        # is logged once per job (_log_rdep_bounds) rather than left invisible.
         rdep_t = if per_row_rf
             @inbounds for i in 1:N; rfv[i] = rf_curves[row_curve[i], t]; end
-            rfv .- (ρ_t ./ 4.0)
+            raw = _rdep_from_annual.(rfv, ρ_t)
+            tally && _tally_rdep_bounds!(nlo, nhi, ncnt, raw, row_curve)
+            clamp.(raw, RDEP_MIN, RDEP_MAX)
         elseif rf_path_q === nothing
             st.rdep_q
         else
-            rf_path_q[t] .- (ρ_t ./ 4.0)   # NOTE: ρ is annualized; quarterly ≈ ρ/4 (confirm convention)
+            raw = _rdep_from_annual.(rf_path_q[t], ρ_t)
+            tally && _tally_rdep_bounds!(nlo, nhi, ncnt, raw, nothing)
+            clamp.(raw, RDEP_MIN, RDEP_MAX)
         end
         accr = 1.0 .+ rdep_t
         Dep[:, t+1] .= (1.0 .- φ) .* st.M .* s_t .+ φ .* accr .* Dep[:, t]
         s_out[:, t] .= s_t
         sp_out[:, t] .= ρ_t
     end
+    tally && _log_rdep_bounds(nlo, nhi, ncnt, per_row_rf ? rf_curves : nothing)
     return (Dep=Dep, s_act=s_out, spreads=sp_out)
+end
+
+# Count, per forward curve, how many recomputed r^dep values fall outside [RDEP_MIN, RDEP_MAX]
+# BEFORE the clamp. `row_curve === nothing` is the single-path branch: everything is curve 1.
+function _tally_rdep_bounds!(nlo::Vector{Int}, nhi::Vector{Int}, ncnt::Vector{Int},
+                             raw::AbstractVector{<:Real}, row_curve)
+    @inbounds for i in eachindex(raw)
+        c = row_curve === nothing ? 1 : row_curve[i]
+        ncnt[c] += 1
+        raw[i] < RDEP_MIN && (nlo[c] += 1)
+        raw[i] > RDEP_MAX && (nhi[c] += 1)
+    end
+    return nothing
+end
+
+# One log block per job. Per-curve lines are sorted by floor incidence, worst first, and labelled
+# by the curve's row in rf_curves and its first-period r^f.
+function _log_rdep_bounds(nlo::Vector{Int}, nhi::Vector{Int}, ncnt::Vector{Int}, rf_curves)
+    tot = sum(ncnt)
+    tot == 0 && return nothing
+    pct(a, b) = round(100 * a / b, digits=2)
+    log_status("  [SIM] r^dep bounds (first recomputed simulation, h=1..T): floor 0 binds on " *
+               "$(pct(sum(nlo), tot))% of row-periods, ceiling $(RDEP_MAX) on $(pct(sum(nhi), tot))%")
+    length(ncnt) == 1 && return nothing
+    order = sortperm([ncnt[c] == 0 ? -1.0 : nlo[c] / ncnt[c] for c in eachindex(ncnt)]; rev=true)
+    for c in order
+        ncnt[c] == 0 && continue
+        log_status("  [SIM]   curve $(lpad(c, 2)) (r^f_1=$(round(rf_curves[c, 1], digits=5))): " *
+                   "floor $(pct(nlo[c], ncnt[c]))%  ceiling $(pct(nhi[c], ncnt[c]))%")
+    end
+    return nothing
 end
 
 # ==========================================================================

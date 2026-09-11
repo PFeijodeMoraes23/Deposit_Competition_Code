@@ -156,8 +156,21 @@ function cf4_pix_reallocation(ctx::CFDemandCtx, st::DepositSimState; upsilon_pix
     sim_cf  = simulate_deposits(ctx, st; T=T, phi_override=phi_cf)
     dvol    = sim_cf.Dep[:, end] .- sim_obs.Dep[:, end]
     firm    = string.(ctx.df.CodConglomeradoPrudencial)
+    # Robustness: the same reallocation with the market states EVOLVING, as in the BBL cost
+    # estimation. The frozen numbers above stay the reported ones; `ev` is nothing when the
+    # context has no state evolution. Both legs run at the observed spreads, so they share one
+    # share path.
+    ev = nothing
+    if ctx.state_ev !== nothing
+        s_path = cf_shares_path(ctx, ctx.rho_hat, ctx.state_ev; T=T)
+        e_obs = simulate_deposits(ctx, st; T=T, state_ev=ctx.state_ev, s_const_in=s_path)
+        e_cf  = simulate_deposits(ctx, st; T=T, state_ev=ctx.state_ev, s_const_in=s_path,
+                                  phi_override=phi_cf)
+        ev = (dep_obs=e_obs.Dep[:, end], dep_cf=e_cf.Dep[:, end],
+              dvol=e_cf.Dep[:, end] .- e_obs.Dep[:, end])
+    end
     return (firm=firm, is_B=st.is_B, dep_type=st.dep_type, phi=st.phi, phi_cf=phi_cf, pix=pix,
-            dep_obs=sim_obs.Dep[:, end], dep_cf=sim_cf.Dep[:, end], dvol=dvol)
+            dep_obs=sim_obs.Dep[:, end], dep_cf=sim_cf.Dep[:, end], dvol=dvol, ev=ev)
 end
 
 function main_cf4()
@@ -201,11 +214,14 @@ function main_cf4()
     df = DataFrame(CodConglomeradoPrudencial=res.firm, is_B=res.is_B, deposit_type=res.dep_type,
                    pix_exists=res.pix, phi=res.phi, phi_cf=res.phi_cf,
                    dep_obs=res.dep_obs, dep_cf=res.dep_cf, dvol=res.dvol)
+    if res.ev !== nothing
+        df.dep_obs_ev = res.ev.dep_obs; df.dep_cf_ev = res.ev.dep_cf; df.dvol_ev = res.ev.dvol
+    end
     out_path = joinpath(cf_dir, "cf4_pix_realloc_E$(a["estim"])_spec_$(a["spec"])_$(a["stage"])$(sfx).parquet")
     mkpath(cf_dir); Parquet2.writefile(out_path, df)
 
     tot_obs = sum(res.dep_obs); tot_cf = sum(res.dep_cf)
-    @printf("\n  === CF4 Pix reallocation (descriptive, no-Pix vs observed, T=%d) ===\n", T)
+    @printf("\n  === CF4 Pix reallocation (descriptive, no-Pix vs observed, T=%d; states FROZEN) ===\n", T)
     @printf("  Σ Dep obs=%.4g  no-Pix=%.4g  ΔΣ=%.4g (%.2f%%)\n",
             tot_obs, tot_cf, tot_cf - tot_obs, 100*(tot_cf-tot_obs)/max(abs(tot_obs),1e-12))
     for (lbl, mask) in (("B-firms", res.is_B), ("D-firms", .!res.is_B))
@@ -216,6 +232,19 @@ function main_cf4()
     for k in sort(unique(res.dep_type))
         m = res.dep_type .== k
         @printf("    k=%d      Δvolume=%.4g\n", k, sum(res.dvol[m]))
+    end
+    if res.ev === nothing
+        log_status("  [CF4] robustness: this context has no evolving market states; frozen numbers only")
+    else
+        eo = sum(res.ev.dep_obs); ec = sum(res.ev.dep_cf)
+        @printf("  --- robustness: market states EVOLVING ---\n")
+        @printf("  Σ Dep obs=%.4g  no-Pix=%.4g  ΔΣ=%.4g (%.2f%%)   [frozen ΔΣ=%.4g]\n",
+                eo, ec, ec - eo, 100 * (ec - eo) / max(abs(eo), 1e-12), tot_cf - tot_obs)
+        for (lbl, mask) in (("B-firms", res.is_B), ("D-firms", .!res.is_B))
+            any(mask) || continue
+            @printf("    %-8s Δvolume evolving=%.4g  frozen=%.4g\n", lbl,
+                    sum(res.ev.dvol[mask]), sum(res.dvol[mask]))
+        end
     end
     log_status("  [CF4] wrote $(basename(out_path))")
     log_status("[DONE] cf_4_pix (descriptive Pix reallocation)")

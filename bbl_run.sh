@@ -55,6 +55,8 @@
 #   --starts|--multi-start   one forward curve PER LAUNCH QUARTER instead of one shared curve
 #   --n-paths N        multi-start only: simulated rate paths averaged per deviation (default 8)
 #   --psi-tag T        override the artifact tag (default _ms<N> with --multi-start, else empty)
+#   --promote          let the solve copy its tagged cost_params onto the UNTAGGED name the
+#                      counterfactuals read, but ONLY if the identification gate passes
 #   --fwd-cpu|--fwd-gpu  where the fwd_sim array runs (default: GPU — see the advisory below)
 #   --shards N         fwd_sim shard count (default 100)
 #   --array-spec S     re-run a SUBSET of shards, e.g. 96-99 or 3,17,88
@@ -88,6 +90,13 @@ FWD_GPU="${FWD_GPU:-1}"
 # N_PATHS simulated rate paths averaged per deviation. OFF by default — it changes the design,
 # not a tuning knob — and it is the only thing that needs the two extra uploads.
 MULTI_START="${MULTI_START:-0}"; N_PATHS="${N_PATHS:-8}"; PSI_TAG="${PSI_TAG:-}"
+# --promote is OFF by default, which is the behaviour this script has always had. It matters
+# because bbl_solve.py's identification gate is only load-bearing when it is passed: without it
+# the solve returns 0 whatever the gate says (bbl_solve.py:1124-1126), so exit 3 never fires and
+# cf1_net/cf3/cf5/cf6 keep reading the OLD untagged cost_params. Opting in turns the gate on in
+# BOTH directions -- a pass overwrites the production file, a failure exits 3 and cancels the
+# afterok dependents with no log of their own.
+PROMOTE="${PROMOTE:-0}"
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -98,6 +107,7 @@ while [[ $# -gt 0 ]]; do
         --starts|--multi-start) MULTI_START=1 ;;
         --n-paths)        N_PATHS="$2"; shift ;;
         --psi-tag)        PSI_TAG="$2"; shift ;;
+        --promote)        PROMOTE=1 ;;
         --fwd-cpu)        FWD_GPU=0 ;;
         --fwd-gpu)        FWD_GPU=1 ;;
         --shards)         N_SHARDS="$2"; shift ;;
@@ -106,7 +116,7 @@ while [[ $# -gt 0 ]]; do
         --no-zip)         DO_ZIP=0 ;;
         --skip-preflight) SKIP_PREFLIGHT=1 ;;
         --dry-run)        CL_DRYRUN=1 ;;
-        -h|--help)        sed -n '2,66p' "${BASH_SOURCE[0]}"; exit 0 ;;
+        -h|--help)        sed -n '2,68p' "${BASH_SOURCE[0]}"; exit 0 ;;
         *) echo "unknown option: $1 (see -h)" >&2; exit 2 ;;
     esac
     shift
@@ -180,6 +190,19 @@ cl_need_rf_curve || miss=1
 # t+10 min is not.
 if [[ "${MULTI_START}" == "1" ]]; then
     cl_need_rf_vintages || miss=1
+fi
+# The vintages are multi-start only; the TRANSITIONS are not. psi_under calls
+# assert_state_evolution on EVERY path (bbl_fwd_sim.jl), and evolving states default ON
+# (cf_demand_eval.jl:133, CF_EVOLVING_STATES unset => on), so a plain single-start array
+# without bbl_transitions.json does not quietly fall back to frozen states -- it dies task by
+# task. Gating this check on --multi-start hid that. CF_EVOLVING_STATES=0 is the deliberate
+# frozen-state opt-out, and it is honoured here so the two agree.
+# Multi-start OR evolving states. Two independent reasons this file must exist, and the
+# first is NOT covered by CF_EVOLVING_STATES: a multi-start run builds its rate paths from
+# rate.process, so without the file --n-paths silently repeats the Focus mean N times.
+# Gating on the state switch ALONE was a regression -- CF_EVOLVING_STATES=0 would have let
+# a multi-start run through unchecked while still logging 'Preflight OK: ... transitions'.
+if [[ "${MULTI_START}" == "1" || "${CF_EVOLVING_STATES:-1}" != "0" ]]; then
     cl_need_transitions || miss=1
 fi
 
@@ -249,7 +272,16 @@ bbl_extra="--shocks ${SHOCKS} --perturb-scale ${PERTURB_SCALE} --dev-scheme ${DE
 # --suffix: the suffix is part of the stage name in every other consumer, and reusing it here
 # would make cost_params_E3_spec_12_extended_ms8.json look like a different STAGE to anything
 # that parses the tag.
-solve_extra="--bootstrap 200${PSI_TAG:+ --psi-tag ${PSI_TAG}}"
+# Built with an explicit `if`, never `$([[ ... ]] && echo ...)`: this file runs under
+# `set -e` (line 72), and a command substitution whose test is FALSE returns nonzero,
+# which makes the assignment itself nonzero and ends the script -- on the DEFAULT path,
+# where PROMOTE=0.
+promote_flag=""
+if [[ "${PROMOTE}" == "1" ]]; then promote_flag=" --promote"; fi
+# --profile inverts the subsampled criterion into omega/zeta confidence intervals; without it
+# the identified branch of the cost table prints a dash in every 95% CI cell. It needs
+# --subsample > 0, which bbl_solve.py defaults to 200.
+solve_extra="--bootstrap 200 --profile${PSI_TAG:+ --psi-tag ${PSI_TAG}}${promote_flag}"
 
 sub () {  # sub <jobname> <time> <extra sbatch args...>
     local name="$1" tlim="$2"; shift 2
@@ -315,7 +347,7 @@ for k in ${ROUTINES}; do
         "${CL_ROOT}/bbl_job.sh")
     cl_say "  bbl_fwd_E${k} --array=${ARRAY_SPEC:-0-$((N_SHARDS-1))}${THROTTLE} -> ${arr}"
     slv=$(sub "bbl_solve_E${k}" "${SOLVE_TIME}" --dependency=afterany:"${arr}" \
-        --export=ALL,${base_export},BBL_STEP=solve,BBL_EXTRA="${solve_extra}" \
+        --export=ALL,${base_export},BBL_STEP=solve,BBL_EXTRA="${solve_extra}",PSI_TAG="${PSI_TAG}" \
         "${CL_ROOT}/bbl_job.sh")
     cl_say "  bbl_solve_E${k} -> ${slv}  (afterANY ${arr} — it globs the surviving psi_dev shards)"
     solve_dep="${solve_dep}:${slv}"

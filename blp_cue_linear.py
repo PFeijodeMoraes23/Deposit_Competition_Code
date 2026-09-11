@@ -74,8 +74,13 @@ ALPHA_TOL   = 5e-6            # engine-vs-replication tolerance on α
 
 # ── Paths ──────────────────────────────────────────────────────────────────────────────────────
 def _dirs():
+    # demand_parquet_dir() rather than the ESTIMATION_OUTPUT literal: on the cluster the prep
+    # step writes the parquets to DEMAND_PREP_DIR (data/output/demand_prep), not to
+    # data/output/DEMAND_PREP. Identical locally; on Bouchet the literal finds an empty folder
+    # and every routine reports "no demand parquet -- skipped" while the job still exits 0.
     est = paths.PROCESSED / "ESTIMATION_OUTPUT"
-    return est / "DEMAND_PREP", est / "BLP_RESULTS" / "cluster_raw", est / "BLP_RESULTS" / "cluster_processed"
+    return (paths.demand_parquet_dir(),
+            est / "BLP_RESULTS" / "cluster_raw", est / "BLP_RESULTS" / "cluster_processed")
 
 
 def _load_delta(cp_dir, k, stage):

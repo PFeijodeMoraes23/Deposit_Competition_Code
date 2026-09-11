@@ -1,8 +1,11 @@
 """
 blp_moment_reduction.py
 ================================================================================
-LOCAL test of the two moment-reduction fixes for the weight-matrix problem (weakiv_methods.md §7.6,
-options 1 and 2) — no GPU, no Julia, no cluster time.
+The two moment-reduction fixes for the weight-matrix problem (weakiv_methods.md §7.6, options 1
+and 2). Pure NumPy/SciPy: no GPU and no Julia, but it refits a ladder per variant and inverts a
+1-parameter CUE and an AR/S-set over a 801-point α grid with a 999-draw WCB at every point, so it
+runs as step 4 of blp_weakiv_job.sh. Its output, cluster_processed/diag_moment_reduction.json, is
+what the α tables read for their weight-matrix columns; nothing local recomputes it.
 
 The finding this responds to: CUE and the Stock–Wright S-set fail on the 16-moment design because
 G* ≈ 5.5 effective clusters cannot support a 16×16 clustered Ω̂ (~6 of 16 eigen-directions truncated
@@ -430,7 +433,8 @@ def analyse(k, stage, args, dp, raw, cp):
 
 
 def main():
-    ap = argparse.ArgumentParser(description="Moment-reduction fixes (weakiv_methods.md §7.6) — local test")
+    ap = argparse.ArgumentParser(
+        description="Moment-reduction fixes (weakiv_methods.md §7.6); step 4 of blp_weakiv_job.sh")
     # The single-index pair: the routines with an RC-BLP delta export (blp_rc.jl DEFAULT_ROUTINES)
     # and the source of the paper's alpha.
     ap.add_argument("--routines", default=_routines.csv(_routines.LINK_ESTS))
