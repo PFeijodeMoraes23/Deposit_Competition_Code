@@ -46,7 +46,7 @@ import pandas as pd
 
 from utils.venv_guard import ensure_project_venv
 
-ensure_project_venv()
+ensure_project_venv(__file__)
 
 from utils import paths as _paths                                      # noqa: E402
 from utils import routines as _routines                                # noqa: E402

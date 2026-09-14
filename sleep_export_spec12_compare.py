@@ -116,7 +116,7 @@ def ame_ci_note(ci_cols, results_dict):
             r"inconsistent (\textcite{andrews2000inconsistency}) and the average marginal "
             r"effect is only directionally differentiable, so the cone construction is the "
             r"numerical delta method of \textcite{fangsantos2019} and \textcite{hongli2018}. "
-            r"All other columns report standard errors in parentheses. ")
+            + _notes.reversed_draws_note(results_dict.get(c) for c in ci_cols))
 
 
 # The band lookup lives in utils.sleep_links.band_row: one reader for both column families,
@@ -522,7 +522,8 @@ def build_latex_table(results_dict, order_keys, target_vars, out_path, title="",
     _bands = True if len(_ci_cols) == n_data else (False if not _ci_cols else "mixed")
     with open(out_path, "w", encoding="utf-8") as f:
         f.write("\n".join(tex).replace(
-            _notes.OPEN_TOKEN, _notes.note_open(_bands)).replace(
+            _notes.OPEN_TOKEN, _notes.note_open(_bands)
+            + _notes.reversed_draws_note(results_dict.get(c) for c in _ci_cols)).replace(
             _sen.NOTE_TOKEN, _sen.national_note(_nat_schemes)).replace(
             AME_CI_TOKEN, ame_ci_note(_ci_cols, results_dict)).replace(
             _sen.AME_SE_TOKEN, _sen.ame_se_note()))
@@ -676,7 +677,8 @@ def build_latex_table_landscape(results_dict, order_keys, target_vars, out_path,
               else (False if not _ci_cols else "mixed"))
     with open(out_path, "w", encoding="utf-8") as f:
         f.write("\n".join(tex).replace(
-            _notes.OPEN_TOKEN, _notes.note_open(_bands)).replace(
+            _notes.OPEN_TOKEN, _notes.note_open(_bands)
+            + _notes.reversed_draws_note(results_dict.get(c) for c in _ci_cols)).replace(
             _sen.NOTE_TOKEN, _sen.national_note(_nat_schemes)).replace(
             AME_CI_TOKEN, ame_ci_note(_ci_cols, results_dict)).replace(
             _sen.AME_SE_TOKEN, _sen.ame_se_note()))

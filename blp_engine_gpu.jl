@@ -1040,15 +1040,27 @@ to Float64 when written back to buf.
 """
 function compute_model_shares_gpu!(buf::HotBuffers, gbuf::GpuBuffers,
                                     delta::Vector{Float64},
-                                    pc::Precomp, R::Int)
+                                    pc::Precomp, R::Int; upload_mu::Bool=true)
 
     N_B     = gbuf.N_B
     N_D     = gbuf.N_D
     n_pairs = gbuf.n_pairs
     n_times = gbuf.n_times
 
-    # ── 1. Copy mu (CPU Float64 → GPU Float32) ──────────────────────────
-    copyto!(gbuf.mu_gpu, GPU_T.(buf.mu))
+    # ── 1. Copy mu (CPU → GPU) ───────────────────────────────────────────
+    # `upload_mu=false` skips it when the caller has already uploaded THIS mu. cf_shares_path
+    # re-evaluates shares once per horizon at a FIXED mu -- only delta moves with the evolving
+    # state -- and re-sending the N x R matrix on each of those T calls dominated the GPU forward
+    # simulation. mu_gpu is only ever read below, so a skipped upload is exact.
+    # When the element types already agree (GPU_T is Float64), copy buf.mu directly:
+    # `GPU_T.(buf.mu)` would first build a second full host copy of the matrix for nothing.
+    if upload_mu
+        if eltype(buf.mu) === GPU_T
+            copyto!(gbuf.mu_gpu, buf.mu)
+        else
+            copyto!(gbuf.mu_gpu, GPU_T.(buf.mu))
+        end
+    end
 
     # ── 2. Scatter δ → delta_B / delta_D ────────────────────────────────
     delta_gpu_full = CuVector{GPU_T}(GPU_T.(delta))

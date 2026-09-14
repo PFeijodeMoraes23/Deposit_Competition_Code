@@ -47,8 +47,8 @@
 #
 # PACKAGING — three decisions, all about the browser download at the far end:
 #   compression  `zip -n <suffixes>`: float payloads are STORED, text DEFLATEd.
-#   splitting    anything over ${SPLIT_BYTES:-3000000000} becomes .part.NN of
-#                ${CHUNK:-2G} plus a .sha256 of the whole zip. A browser download
+#   splitting    anything over ${SPLIT_BYTES:-1000000000} becomes .part.NN of
+#                ${CHUNK:-1G} plus a .sha256 of the whole zip. A browser download
 #                has no resume, so one 10 GB file is one point of failure.
 #   checksums    every emitted file is appended to ONE download/sha256SUMS.
 #
@@ -107,8 +107,10 @@ done
 # to pull to the local machine. It sits under data/output, which is why guard (5)
 # exists: the archiver would otherwise be able to reach its own output.
 OUT_DIR="${OUT_DIR:-${CL_STEP_DOWNLOAD}}"
-SPLIT_BYTES="${SPLIT_BYTES:-3000000000}"
-CHUNK="${CHUNK:-2G}"
+SPLIT_BYTES="${SPLIT_BYTES:-1000000000}"
+# 1 GB parts: the browser download from Open OnDemand fails on multi-GB files, and a
+# failed part costs one re-download of at most this much.
+CHUNK="${CHUNK:-1G}"
 
 [[ -n "${MODE}" ]] || { cl_err "ERROR: one of --copy / --move is REQUIRED (there is no default)."; exit 2; }
 if [[ "${DO_ALL}" == "1" ]]; then

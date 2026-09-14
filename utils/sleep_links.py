@@ -662,7 +662,25 @@ def solve_ispline_qp(D, y, K, cap=1.0, iters=5000, tol=1e-12, warm=None):
         for _ in range(6 * K + 16):
             at_cap = cap_active
             if not free.any():
-                return bb, True
+                # EMPTY FACE: every coordinate is held at zero, so the candidate is the origin --
+                # feasible, with the ceiling slack (mu = 0). It is optimal only if no coordinate's
+                # reduced cost says to release it, which is the same test the feasible branch
+                # below applies. Only a design with no free trailing column can get here (the
+                # OLS cells: with a control function that column is always free). Returning the
+                # previous point here instead certified whatever the warm start was: measured on
+                # E3 `OLS x Macro`, a vertex (beta_9 = 1) 1.0 away from the cold solve, which the
+                # bootstrap chain then returned on every later draw -- a quarter-clustered SE of
+                # ~1e-20 on every row.
+                cand = np.zeros(p)
+                g = G @ cand - c
+                gs_ = max(1.0, float(np.max(np.abs(g))))
+                r_ = g[:K]
+                if float(np.min(r_)) < -1e-11 * gs_:
+                    free[int(np.argmin(r_))] = True
+                    cap_active = False
+                    bb = cand
+                    continue
+                return cand, True
             idx = np.flatnonzero(free)
             Gf, cf_ = G[np.ix_(idx, idx)], c[idx]
             e = (idx < K).astype(float)
@@ -1565,8 +1583,8 @@ def band_row(res, var, est=None, spec=None):
     One reader for both column families, because both bands are built by
     `_ame_band_from_draws` and carry the same columns:
       * single-index (E3/E4) -- `res.ame_boot`, attached by sleep_ame_twostage.py --attach-from.
-        An attached band has already passed gate G10, so it needs no second check here. The
-        two-stage bootstrap runs on the headline spec, so `spec` does not select within it.
+        An attached band has already passed gate G10, so it needs no second check here. Each
+        cell's fit carries its own attached band, so `spec` does not select within it.
       * linear (E1/E2) -- the `wcb_band_est{k}.pkl` sidecar from sleep_wcb_band.py, which
         carries one band per IV x state cell because the appendix tables print the whole grid.
         `spec` picks the cell; `meta.counters_ok` is checked on load.

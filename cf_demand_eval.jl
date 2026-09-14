@@ -701,11 +701,13 @@ end
 # Dispatch the share aggregation to the GPU kernel (H200) when a GPU context is present,
 # else the CPU kernel. Both consume ctx.buf.mu (filled by compute_mu! on CPU) and write
 # results into ctx.buf.s_B / ctx.buf.s_D (Float64), so callers/collect_shares are unchanged.
-@inline function _cf_model_shares!(ctx::CFDemandCtx, delta::Vector{Float64})
+# `upload_mu` is GPU-only: pass false when ctx.buf.mu is unchanged since the last GPU call, so the
+# N x R matrix is not re-sent. The CPU kernel reads ctx.buf.mu in place and ignores it.
+@inline function _cf_model_shares!(ctx::CFDemandCtx, delta::Vector{Float64}; upload_mu::Bool=true)
     if ctx.gbuf === nothing
         compute_model_shares!(ctx.buf, delta, ctx.pc, ctx.R)
     else
-        compute_model_shares_gpu!(ctx.buf, ctx.gbuf, delta, ctx.pc, ctx.R)
+        compute_model_shares_gpu!(ctx.buf, ctx.gbuf, delta, ctx.pc, ctx.R; upload_mu=upload_mu)
     end
 end
 
@@ -933,7 +935,9 @@ function cf_shares_path(ctx::CFDemandCtx, spreads_ann::Vector{Float64},
     for t in 1:T
         cf_state_dmu!(dmu, ctx, ev, t, spreads_ann)
         dl .= base .+ dmu
-        _cf_model_shares!(ctx, dl)
+        # mu was built once above and nothing in this loop changes it (the state shift enters
+        # through delta, see cf_state_dmu!), so the GPU receives it on the first horizon only.
+        _cf_model_shares!(ctx, dl; upload_mu=(t == 1))
         S[:, t] .= collect_shares(ctx.buf, ctx.pc, N)
     end
 

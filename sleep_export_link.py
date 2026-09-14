@@ -234,8 +234,9 @@ def _ame_ci_note(ci_cols, results_dict, est_num):
             r"TWO-STAGE WCB in which the index direction is re-solved and "
             r"the link re-profiled at every draw," + b_s + r" and the reported object is a "
             r"tangent-cone interval rather than a Wald statistic, because the link's shape "
-            r"constraints are active at the estimate. The remaining columns report standard "
-            r"errors in parentheses. ")
+            r"constraints are active at the estimate. "
+            + _notes.reversed_draws_note(
+                e.get("second_stage") for e in results_dict.values() if isinstance(e, dict)))
 
 
 def build_second_stage_table(results_dict, est_num):
@@ -265,6 +266,7 @@ def build_second_stage_table(results_dict, est_num):
     _nat_schemes = set()   # what select_se ACTUALLY returned on the national rows
     _sen.reset_ame_se_realised()   # and which AME variance it actually delivered
     _ci_cols = set()       # columns whose second line is an interval rather than an SE
+    _n_se_cells = 0        # cells that printed an SE: the two-stage band exists for spec 12 only
     p0, l0 = panels[0], panel_letters[0]
     est_nums_0 = [(el, ss_spec_numbers[(p0, ek)]) for ek, el in estimators]
     lines = [
@@ -316,15 +318,16 @@ def build_second_stage_table(results_dict, est_num):
                     mark = f"^{{{_sen.SE_MARK}}}" if scheme != "congl" else ""
                     # Where a two-stage AME bootstrap is attached, the second line is its
                     # bias-corrected interval instead of the standard error, with the display
-                    # multiplier on both endpoints and stars from that same interval. Only
-                    # spec 12 carries one, so within a panel the Hausman column prints intervals
-                    # while the other three print SEs -- said explicitly in the notes.
+                    # multiplier on both endpoints and stars from that same interval. A cell with
+                    # no attached band prints its SE, and the note opening then switches to the
+                    # mixed wording (see _bands below).
                     _bd = _ame_band_row(res, var)
                     if _bd is not None:
                         _ci_cols.add(_ek_label)
                         coef_strs.append(f"${c:.4f}^{{{_bd[2]}}}$")
                         se_strs.append(f"$[{_bd[0]*m:.4f}, {_bd[1]*m:.4f}]{mark}$")
                     else:
+                        _n_se_cells += 1
                         coef_strs.append(f"${c:.4f}^{{{stars(pval)}}}$")
                         se_strs.append(f"$({se:.4f}){mark}$")
                 else:
@@ -344,11 +347,14 @@ def build_second_stage_table(results_dict, est_num):
                   "    $R^2$ & " + " & ".join(rsq_l) + r" \\", "    Fixed Effects & Yes & Yes & Yes & Yes \\\\",
                   "    Clusters ($G$) & " + " & ".join(g_l) + r" \\", r"    \bottomrule"]
     lines += [r"\end{xltabular}", r"\setlength{\tabcolsep}{6pt}", r"\doublespacing"]
-    # The opening describes what the cells printed: this table is one routine, so a band either
-    # was attached for it or was not.
-    _bands = bool(_ci_cols)
+    # The opening describes what the cells printed. A column label is not enough: the band is
+    # attached to the spec-12 fit only, so the same Hausman column prints an interval in one
+    # panel and an SE in another. Count cells.
+    _bands = (True if not _n_se_cells else (False if not _ci_cols else "mixed"))
     return "\n".join(lines).replace(
-        _notes.OPEN_TOKEN, _notes.note_open(_bands)).replace(
+        _notes.OPEN_TOKEN, _notes.note_open(_bands) + (_notes.reversed_draws_note(
+            e.get("second_stage") for e in results_dict.values() if isinstance(e, dict))
+            if _bands else "")).replace(
         _sen.NOTE_TOKEN, _sen.national_note(_nat_schemes, dk_bracket=False)).replace(
         AME_CI_TOKEN, _ame_ci_note(_ci_cols, results_dict, est_num)).replace(
         _sen.AME_SE_TOKEN, _sen.ame_se_note())

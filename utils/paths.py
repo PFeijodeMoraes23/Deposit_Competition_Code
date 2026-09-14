@@ -278,6 +278,12 @@ QUALITY_DIR: Path  = BCB / "Quality"
 QUALITY_RAW: Path  = QUALITY_DIR / "raw"
 QUALITY_PROC: Path = QUALITY_DIR / "processed"
 
+# Awareness, advertising and perception series: the COSIF advertising accounts, advertising
+# lines from securities filings, and state-owned banks' own advertising disclosures.
+AWARENESS_DIR: Path  = BCB / "Awareness"
+AWARENESS_RAW: Path  = AWARENESS_DIR / "raw"
+AWARENESS_PROC: Path = AWARENESS_DIR / "processed"
+
 # ---------------------------------------------------------------------------
 # Stage-6 firm disclosures & other sources (unchanged location)
 # ---------------------------------------------------------------------------
@@ -343,5 +349,6 @@ __all__ = [
     "ANATEL_DIR", "CADUNICO_DIR", "IBGE_DIR", "INCLUSION_DIR", "PIX_DIR",
     "TARIFAS_DIR", "TARIFAS_PROC", "TARIFAS_CACHE", "TARIFAS_RAW",
     "QUALITY_DIR", "QUALITY_RAW", "QUALITY_PROC",
+    "AWARENESS_DIR", "AWARENESS_RAW", "AWARENESS_PROC",
     "FIRM_DISCLOSURES", "WORLDBANK", "FGC", "ACCOUNTS",
 ]

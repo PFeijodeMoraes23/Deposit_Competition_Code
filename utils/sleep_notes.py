@@ -24,7 +24,9 @@ _OPEN_INTERVAL = (
     r"\textcite{cameron2008bootstrap}, \textcite{mackinnon2017wild}); columns "
     r"\ref{estimation:single_idx} and \ref{estimation:single_idx_time} additionally re-solve the "
     r"index direction and re-profile the link at every draw, so their intervals carry that "
-    r"uncertainty too. Stars are read from the printed interval in every column. "
+    r"uncertainty too. Stars come from the same bias-corrected bootstrap distribution: ** and "
+    r"*** mean the 95\% and 99\% intervals exclude zero, * only the 90\% interval, so the "
+    r"printed 95\% interval of a one-star estimate covers zero. "
 )
 
 _OPEN_SE = (
@@ -39,7 +41,9 @@ _OPEN_MIXED = (
     r"interval at this many effective clusters being several times a standard error. Both come "
     r"from a WCB at the conglomerate level, except on the rows marked $\dagger$ below "
     r"(\textcite{cameron2008bootstrap}, \textcite{mackinnon2017wild}). Where an interval is "
-    r"printed, the stars are read from it. "
+    r"printed, its stars come from the same bias-corrected bootstrap distribution: ** and *** "
+    r"mean the 95\% and 99\% intervals exclude zero, * only the 90\% interval, so the printed "
+    r"95\% interval of a one-star estimate covers zero. "
 )
 
 _BODY = (
@@ -87,3 +91,30 @@ def note_open(bands=True) -> str:
     if not bands:
         return _OPEN_SE
     return _OPEN_MIXED
+
+
+def reversed_draws_note(fits) -> str:
+    """The sentence reporting reversed-index draws RETAINED in the two-stage intervals, or "".
+
+    `fits` is any iterable of fitted results; those carrying an attached `ame_boot` contribute.
+    The count is the largest over the columns, per clustering arm, because the note speaks for
+    the table rather than for one column. Nothing is said when every count is zero.
+    """
+    worst = {"conglomerate": 0, "quarter": 0}
+    B = None
+    for r in fits:
+        boot = getattr(r, "ame_boot", None)
+        if not isinstance(boot, dict):
+            continue
+        for arm, lab in (("congl", "conglomerate"), ("quarter", "quarter")):
+            blk = boot.get(arm) or {}
+            worst[lab] = max(worst[lab], int(blk.get("n_cos_idx_neg", 0) or 0))
+            b = blk.get("B_used") or (getattr(r, "ame_2s_meta", None) or {}).get("B")
+            if b:
+                B = int(b)
+    if not any(worst.values()):
+        return ""
+    of_b = rf" of the $B={B}$" if B else ""
+    return (rf"At most {worst['conglomerate']} (conglomerate) and {worst['quarter']} (quarter){of_b} "
+            r"draws per column re-estimated an index anti-correlated with the point estimate's; "
+            r"they are retained in the interval, not dropped. ")

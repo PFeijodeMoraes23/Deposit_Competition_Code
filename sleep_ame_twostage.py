@@ -2,7 +2,8 @@
 sleep_ame_twostage.py
 ================================================================================
 TWO-STAGE (direction + link) wild cluster bootstrap of the E3/E4 average marginal
-effects at spec 12, from STORED fits -- no re-estimation.
+effects, from STORED fits -- no re-estimation. Spec 12 (the headline, `--spec` default)
+or any other IV x state cell of the appendix grid (`--spec KEY|others|all`).
 
 Why: the SEs on the estimator pickles bootstrap the LINK ONLY. The index direction
 theta-hat is fitted by the Cauchy NLLS-logit and then frozen, so every continuous
@@ -21,13 +22,16 @@ should be run on every change to the touched functions (~5 min per routine).
 
 Reads the estimator pickle from utils.paths.demand_prep_root() -- set
 SLEEP_OUT_ROOT to run against the sandbox. Writes standalone result pickles to
-    <root>/Rout/ame_twostage_est{N}_{robust,ls}.pkl
+    <root>/Rout/ame_twostage_est{N}_{robust,ls}[_{off,if}].pkl              (spec 12)
+    <root>/Rout/ame_twostage_est{N}_{robust,ls}[_{off,if}]__{IV}_x_{S}.pkl  (other cells)
 and never touches the estimator pickle unless --attach is passed (off by default;
 makes a timestamped .bak first, and writes NEW attributes plus cov_ame only).
 
 Usage:
     python sleep_ame_twostage.py --est 3 --loss robust --B 999 --workers 6
     python sleep_ame_twostage.py --est 3 --loss robust --theta-off
+    python sleep_ame_twostage.py --est 3 --spec others          # the seven non-headline cells
+    python sleep_ame_twostage.py --est 3 --spec "OLS x Macro" --theta-off
 """
 import argparse
 import os
@@ -66,7 +70,7 @@ from utils import paths as _paths_mod
 from utils import routines as _routines
 from utils.sleep_links import boot_cfg, twostage_ame_boot
 
-SPEC = _routines.SPEC12                 # spec 12; the only cell this driver serves
+SPEC = _routines.SPEC12                 # spec 12, the headline cell and the --spec default
 FE_TIME_COL = _routines.FE_TIME_COL
 LOSS_OF = {"robust": "cauchy", "ls": "linear"}
 KEY_OF = {"robust": "second_stage", "ls": "second_stage_ls"}
@@ -100,23 +104,51 @@ def default_workers():
     return max(1, min(6, (os.cpu_count() or 2) - 2))
 
 
-def _prep_frame(time_block):
-    """Rebuild the estimation frame for spec 12 exactly as estimation_sleep_common._exec_spec:
-    pooled panel -> first stage with the spec-12 instruments and active exogenous controls.
-    Built ONCE per routine and reused across losses and across both clustering schemes."""
+def _spec_slug(spec):
+    """'OLS x Macro' -> 'OLS_x_Macro', the suffix a non-headline cell's result file carries."""
+    return spec.replace(" x ", "_x_").replace(" ", "_")
+
+
+def _out_path(rout, est, loss_lbl, tag, spec):
+    """Spec 12 keeps its original file name -- gate G3, the archive and --attach-from read it
+    by that name -- and every other cell is suffixed, so the two can never overwrite each other."""
+    stem = f"ame_twostage_est{est}_{loss_lbl}" + (f"_{tag}" if tag else "")
+    if spec != SPEC:
+        stem += f"__{_spec_slug(spec)}"
+    return rout / f"{stem}.pkl"
+
+
+def _prep_frame(time_block, spec, cache):
+    """Rebuild the estimation frame for one IV x state cell exactly as sleep_est_single._exec_spec:
+    pooled panel -> (IV cells only) first stage with that cell's instruments and active exogenous
+    controls. Returns (df_t, s_cols, has_cf).
+
+    The pooled panel is the expensive part and is identical across cells, so it is built once
+    and held in `cache`; the first stage is per cell. run_pooled_first_stage writes its v_hat
+    columns onto the frame it is given, so each IV cell works on a COPY of the cached panel.
+    Whether the rebuilt frame is the one the fit was estimated on is not assumed: twostage_ame_boot
+    refuses on any vmu/vsd, link or AME fingerprint mismatch."""
     from sleep_est_e2 import (build_pooled_data, define_specifications,
                                     run_pooled_first_stage)
-    df = build_pooled_data(time_block=time_block)
+    if "df" not in cache:
+        cache["df"] = build_pooled_data(time_block=time_block)
+    df = cache["df"]
+    iv_name, s_name = (p.strip() for p in spec.split(" x "))
     _, iv_specs, state_blocks = define_specifications(time_block=time_block)
-    s_cols = state_blocks["Tech"]
-    iv_act = [c for c in iv_specs["IV_HausmanFull"]
-              if c in df.columns and df[c].notnull().sum() > 0]
+    s_cols = state_blocks[s_name]
+    iv_cols = iv_specs[iv_name]
+    has_cf = len(iv_cols) > 0
+    if not has_cf:
+        return df, s_cols, False
+    iv_act = [c for c in iv_cols if c in df.columns and df[c].notnull().sum() > 0]
     exog_act = [c for c in s_cols if c in df.columns and df[c].notnull().sum() > 0]
-    df_t, _ = run_pooled_first_stage(df, iv_act, exog_act)
-    return df_t, s_cols
+    if not iv_act:
+        raise SystemExit(f"{spec}: no active instrument in the rebuilt panel")
+    df_t, _ = run_pooled_first_stage(df.copy(), iv_act, exog_act)
+    return df_t, s_cols, True
 
 
-def off_path_gate(est, si_res, out, tol=1e-8):
+def off_path_gate(est, si_res, out, tol=1e-8, spec=SPEC):
     """BLOCKING GATE for `--theta-off`: reproduce the loaded fit's OWN four stored series.
 
     The OFF path is a structural short-circuit of the draw loop, so it should land bit-for-bit
@@ -154,6 +186,8 @@ def off_path_gate(est, si_res, out, tol=1e-8):
         d = max(abs(t_got[k] - t_ref[k]) / max(1e-300, abs(t_ref[k])) for k in t_got)
         gate["detail"][f"t[{scheme}]"] = d
         gate["worst"] = max(gate["worst"], d)
+        if spec != SPEC:                   # the fixtures were read off spec 12 and only there
+            continue
         fx = FIXTURES[est]
         cont = sorted((abs(t_got[k]) for k in t_got if "pix" not in k))
         pix = [t_got[k] for k in t_got if "pix" in k][0]
@@ -192,12 +226,30 @@ def off_path_gate(est, si_res, out, tol=1e-8):
     return gate
 
 
+# Share of B draws whose re-estimated index may point against the point estimate's before the
+# cloud is refused. Those draws are RETAINED -- dropping them would select the interval.
+COS_IDX_NEG_MAX_SHARE = 0.01
+# A draw SD at or below this multiple of |AME| is no sampling variation (see counters_ok).
+DEGENERATE_SE_REL = 1e-10
+
+
 def counters_ok(out, B):
     """G10: refuse to write or attach when the draw cloud is contaminated.
 
     The direction test is `n_cos_idx_neg` -- draws whose INDEX (X @ theta) is anti-correlated
-    with the point index. That is the object the link and every AME see, and a reversed one is
-    a shape the monotone link cannot represent, so it is refused with zero tolerance.
+    with the point index. That is the object the link and every AME see, and the monotone link
+    cannot represent a reversed index faithfully. A handful is sampling noise in the direction:
+    a 95% percentile interval is set by roughly the B/40 most extreme draws in each tail, so a
+    few reversed draws move an endpoint by a few order statistics at most. Up to
+    COS_IDX_NEG_MAX_SHARE of B therefore passes, with the draws kept in the cloud and their count
+    reported in the table note; more than that means the index direction is badly determined and
+    the cloud is refused. `n_vsd_fail` and `n_drop` stay zero-tolerance.
+
+    A DEGENERATE arm -- some AME whose draws do not vary -- is refused as well. Its standard
+    error is zero, its p-value zero and its stars three, so it would print as the most precise
+    number in the table while describing no sampling variation at all. The conditional bootstrap
+    stored on the E3/E4 `OLS x Macro` fits does exactly that on its quarter arm (bse_time ~1e-20
+    on every row); this keeps a two-stage cloud from doing the same silently.
 
     `n_cos_neg` -- the cosine between the raw COEFFICIENT vectors -- is reported but does not
     gate. Its norm is dominated by the largest-unit loading (the lagged Selic rate holds ~87%
@@ -221,41 +273,46 @@ def counters_ok(out, B):
         if "n_cos_idx_neg" not in r:
             bad.append(f"{s}: n_cos_idx_neg missing (cloud predates the index-space "
                        "direction test; re-run the bootstrap)")
-        for k in ("n_cos_idx_neg", "n_vsd_fail", "n_drop"):
+        if r.get("n_cos_idx_neg", 0) > COS_IDX_NEG_MAX_SHARE * B:
+            bad.append(f"{s}: n_cos_idx_neg={r['n_cos_idx_neg']} > {COS_IDX_NEG_MAX_SHARE:.0%} of B")
+        for k in ("n_vsd_fail", "n_drop"):
             if r.get(k):
                 bad.append(f"{s}: {k}={r[k]}")
+        flat = [n for n, se in (r.get("bse") or {}).items()
+                if not se > DEGENERATE_SE_REL * max(1e-300, abs(float(r["ame"][n])))]
+        if flat:
+            bad.append(f"{s}: degenerate draws (sd <= {DEGENERATE_SE_REL:.0e} x |AME|) on {flat}")
     return bad
 
 
 def run_cell(est, loss_lbl, B, theta_off, theta_mode, workers, attach, keep_draws,
-             frame=None, seed=0):
+             spec=SPEC, cache=None, seed=0):
     t0 = time.time()
+    cache = {} if cache is None else cache
     root = _paths_mod.demand_prep_root()
     pkl_path = root / f"est{est}" / "estimation_results.pkl"
-    print(f"\n=== est{est} / {loss_lbl} | B={B} | "
+    print(f"\n=== est{est} / {spec} / {loss_lbl} | B={B} | "
           f"{'theta OFF (conditional)' if theta_off else f'theta ON ({theta_mode})'} | "
           f"workers={1 if theta_off else workers} | root={root} ===")
     with open(pkl_path, "rb") as fh:
         d = pickle.load(fh)
-    si_res = d[SPEC].get(KEY_OF[loss_lbl])
+    si_res = (d.get(spec) or {}).get(KEY_OF[loss_lbl])
     if si_res is None:
-        print(f"  no {KEY_OF[loss_lbl]} on {SPEC}; skipped")
-        return None, frame
+        print(f"  no {KEY_OF[loss_lbl]} on {spec}; skipped")
+        return None
 
-    if frame is None:
-        frame = _prep_frame(time_block=(est == 4))
-    df_t, s_cols = frame
+    df_t, s_cols, has_cf = _prep_frame(time_block=(est == 4), spec=spec, cache=cache)
 
-    out = twostage_ame_boot(df_t, s_cols, True, si_res, LOSS_OF[loss_lbl], degree=3,
+    out = twostage_ame_boot(df_t, s_cols, has_cf, si_res, LOSS_OF[loss_lbl], degree=3,
                             fe_time_col=FE_TIME_COL, B=B, seed=seed,
                             theta_channel=not theta_off, theta_mode=theta_mode,
                             keep_draws=keep_draws, workers=(1 if theta_off else workers))
-    out["meta"].update(est=est, loss_label=loss_lbl, spec=SPEC,
+    out["meta"].update(est=est, loss_label=loss_lbl, spec=spec,
                        driver_runtime_s=time.time() - t0,
                        created=datetime.now().isoformat(timespec="seconds"))
 
     if theta_off:
-        out["meta"]["off_path_gate"] = off_path_gate(est, si_res, out)
+        out["meta"]["off_path_gate"] = off_path_gate(est, si_res, out, spec=spec)
     else:
         bad = counters_ok(out, B)
         out["meta"]["counters_ok"] = not bad
@@ -273,42 +330,41 @@ def run_cell(est, loss_lbl, B, theta_off, theta_mode, workers, attach, keep_draw
     rout = root / "Rout"
     rout.mkdir(parents=True, exist_ok=True)
     tag = "off" if theta_off else ("if" if theta_mode == "if" else "")
-    fp = rout / (f"ame_twostage_est{est}_{loss_lbl}" + (f"_{tag}" if tag else "") + ".pkl")
+    fp = _out_path(rout, est, loss_lbl, tag, spec)
     with open(fp, "wb") as fh:
         pickle.dump(out, fh)
     print(f"  saved -> {fp}   ({(time.time()-t0)/60:.1f} min)")
 
-    if attach:
-        _attach(pkl_path, d, si_res, loss_lbl, out, theta_off, B)
-    return out, frame
+    if attach and not theta_off:
+        if _attach_into(d, spec, si_res, loss_lbl, out, B):
+            _save_with_backup(pkl_path, d)
+    elif attach:
+        print("  [attach] refused: --theta-off produces the conditional numbers already stored")
+    return out
 
 
-def _attach(pkl_path, d, si_res, loss_lbl, out, theta_off, B):
-    """Write the two-stage results onto the stored fit. NEW attributes only, plus cov_ame --
-    the one pre-existing attribute this touches, and None on every stored E3/E4 fit today.
+def _attach_into(d, spec, si_res, loss_lbl, out, B):
+    """Put the two-stage results onto one stored fit held in `d` (in memory; the caller saves).
+    NEW attributes only, plus cov_ame -- the one pre-existing attribute this touches, and None on
+    every stored E3/E4 fit before its first attach. Returns whether it attached.
 
     bse/pvalues/bse_time/pvalues_time are deliberately NOT overwritten: `tvalues` was frozen at
     construction as params/bse, so every downstream consumer of the stored object would silently
     change meaning. The exporters read the two-stage numbers through
     utils.se_national.select_se under SLEEP_AME_SE=twostage instead."""
-    if theta_off:
-        print("  [attach] refused: --theta-off produces the conditional numbers already stored")
-        return
     bad = counters_ok(out, B)
     gates_ok = (out["meta"].get("invariance_gate", {}).get("verdict") == "PASS"
                 and out["meta"].get("sign_gate", {}).get("verdict") == "OK")
     if bad or not gates_ok:
-        print(f"  [attach] refused: gates={gates_ok} counters={bad}")
-        return
+        print(f"  [attach] {spec}: refused: gates={gates_ok} counters={bad}")
+        return False
     names = out["meta"]["names"]
     cov = np.asarray(out["congl"]["cov"], float)
     bse2 = pd.Series(out["congl"]["bse"])
     d_cov = float(np.max(np.abs(np.sqrt(np.diag(cov)) - bse2[names].values)))
     if d_cov > 1e-12 * float(bse2.max()):
-        print(f"  [attach] refused: cov_ame and bse_2s describe different runs ({d_cov:.3e})")
-        return
-    bak = pkl_path.with_suffix(f".pkl.bak_{datetime.now():%Y%m%d_%H%M%S}")
-    shutil.copy2(pkl_path, bak)
+        print(f"  [attach] {spec}: refused: cov_ame and bse_2s describe different runs ({d_cov:.3e})")
+        return False
     si_res.ame_boot = {s: {k: v for k, v in out[s].items()
                            if k not in ("draws_cone", "draws_level")}
                        for s in ("congl", "quarter")}
@@ -318,15 +374,27 @@ def _attach(pkl_path, d, si_res, loss_lbl, out, theta_off, B):
     si_res.pvalues_time_2s = pd.Series(out["quarter"]["pvalues"])
     si_res.ame_2s_meta = out["meta"]
     si_res.cov_ame = pd.DataFrame(cov, index=names, columns=names)
-    d[SPEC][KEY_OF[loss_lbl]] = si_res
+    d[spec][KEY_OF[loss_lbl]] = si_res
+    print(f"  [attach] {spec}: bse_2s / pvalues_2s / bse_time_2s / pvalues_time_2s / ame_boot / "
+          f"cov_ame")
+    return True
+
+
+def _save_with_backup(pkl_path, d):
+    """One timestamped backup, then one write, however many cells were attached."""
+    bak = pkl_path.with_suffix(f".pkl.bak_{datetime.now():%Y%m%d_%H%M%S}")
+    shutil.copy2(pkl_path, bak)
     with open(pkl_path, "wb") as fh:
         pickle.dump(d, fh)
-    print(f"  [attach] wrote bse_2s / pvalues_2s / bse_time_2s / pvalues_time_2s / ame_boot / "
-          f"cov_ame (backup: {bak.name})")
+    print(f"  [attach] wrote {pkl_path.name} (backup: {bak.name})")
 
 
-def attach_from(est, loss_lbl, src_path):
-    """Attach a PREVIOUS run's saved results to the estimator pickle, without recomputing.
+def attach_from(est, loss_lbl, src_paths):
+    """Attach PREVIOUS runs' saved results to the estimator pickle, without recomputing.
+
+    Each file names its own cell in `meta.spec`, so the headline file and the grid files can be
+    passed together; the pickle is backed up once and written once, after every file has been
+    through the gates.
 
     The bootstrap is expensive, and its conglomerate arm is worker-count dependent: the shape
     projection is warm-started from the previous draw, so the QP's active-set path -- and the
@@ -335,39 +403,67 @@ def attach_from(est, loss_lbl, src_path):
     path than the run being reported. This reads the saved run instead and puts it through the
     SAME gates --attach applies, so nothing reaches a table that a live run would have refused.
     """
-    src = Path(src_path)
     root = _paths_mod.demand_prep_root()
     pkl_path = root / f"est{est}" / "estimation_results.pkl"
-    with open(src, "rb") as fh:
-        out = pickle.load(fh)
-    m = out.get("meta", {})
-    # Refuse a mismatched pairing loudly: silently attaching E3's bootstrap to E4's fit would
-    # produce a table that looks entirely normal.
-    if int(m.get("est", est)) != int(est):
-        raise SystemExit(f"--attach-from: {src.name} holds est{m.get('est')}, not est{est}")
-    if m.get("loss_label", loss_lbl) != loss_lbl:
-        raise SystemExit(f"--attach-from: {src.name} is loss={m.get('loss_label')!r}, not {loss_lbl!r}")
-    if m.get("spec", SPEC) != SPEC:
-        raise SystemExit(f"--attach-from: {src.name} is spec {m.get('spec')!r}, not {SPEC!r}")
-    if not m.get("theta_channel", True):
-        raise SystemExit(f"--attach-from: {src.name} was produced with the direction channel OFF "
-                         "(--theta-off); those are the conditional numbers already stored")
     with open(pkl_path, "rb") as fh:
         d = pickle.load(fh)
-    si_res = d[SPEC].get(KEY_OF[loss_lbl])
-    if si_res is None:
-        raise SystemExit(f"no {KEY_OF[loss_lbl]} on {SPEC} in {pkl_path}")
-    B_used = int(out["congl"].get("B_used", m.get("B", 0)))
-    print(f"=== attach-from {src.name} -> est{est}/{KEY_OF[loss_lbl]} | B={B_used} "
-          f"theta_mode={m.get('theta_mode')!r} workers={m.get('workers')} "
-          f"created={m.get('created')} ===")
-    _attach(pkl_path, d, si_res, loss_lbl, out, False, B_used)
+    n_ok = 0
+    seen = set()
+    for src_path in src_paths:
+        src = Path(src_path)
+        with open(src, "rb") as fh:
+            out = pickle.load(fh)
+        m = out.get("meta", {})
+        spec = m.get("spec", SPEC)
+        # Refuse a mismatched pairing loudly: silently attaching E3's bootstrap to E4's fit, or
+        # one cell's to another's, would produce a table that looks entirely normal.
+        if int(m.get("est", est)) != int(est):
+            raise SystemExit(f"--attach-from: {src.name} holds est{m.get('est')}, not est{est}")
+        if m.get("loss_label", loss_lbl) != loss_lbl:
+            raise SystemExit(f"--attach-from: {src.name} is loss={m.get('loss_label')!r}, "
+                             f"not {loss_lbl!r}")
+        if not m.get("theta_channel", True):
+            raise SystemExit(f"--attach-from: {src.name} was produced with the direction channel "
+                             "OFF (--theta-off); those are the conditional numbers already stored")
+        if spec in seen:
+            raise SystemExit(f"--attach-from: two files for {spec!r}")
+        seen.add(spec)
+        si_res = (d.get(spec) or {}).get(KEY_OF[loss_lbl])
+        if si_res is None:
+            raise SystemExit(f"--attach-from: no {KEY_OF[loss_lbl]} on {spec!r} in {pkl_path}")
+        B_used = int(out["congl"].get("B_used", m.get("B", 0)))
+        print(f"=== attach-from {src.name} -> est{est}/{spec}/{KEY_OF[loss_lbl]} | B={B_used} "
+              f"theta_mode={m.get('theta_mode')!r} workers={m.get('workers')} "
+              f"created={m.get('created')} ===")
+        n_ok += bool(_attach_into(d, spec, si_res, loss_lbl, out, B_used))
+    if n_ok:
+        _save_with_backup(pkl_path, d)
+    print(f"  [attach] {n_ok}/{len(src_paths)} file(s) attached")
+
+
+def _resolve_specs(est, loss_lbl, spec_arg):
+    """--spec -> the list of cells to run. A cell key runs that cell; `all` every IV x state cell
+    the stored pickle carries a fit for; `others` the same minus the headline."""
+    if spec_arg not in ("all", "others"):
+        return [spec_arg]
+    pkl_path = _paths_mod.demand_prep_root() / f"est{est}" / "estimation_results.pkl"
+    with open(pkl_path, "rb") as fh:
+        d = pickle.load(fh)
+    cells = [k for k, e in d.items()
+             if " x " in str(k) and isinstance(e, dict) and e.get(KEY_OF[loss_lbl]) is not None]
+    if spec_arg == "others":
+        cells = [k for k in cells if k != SPEC]
+    print(f"  --spec {spec_arg}: {len(cells)} cell(s): {cells}")
+    return cells
 
 
 def main():
     p = argparse.ArgumentParser(description=__doc__.splitlines()[3])
     p.add_argument("--est", type=int, required=True, choices=tuple(_routines.LINK_ESTS))
     p.add_argument("--loss", choices=("robust", "ls", "both"), default="robust")
+    p.add_argument("--spec", default=SPEC,
+                   help=f"cell to bootstrap: a key such as 'OLS x Macro', 'all', or 'others' "
+                        f"(every stored cell but the headline). Default: {SPEC!r}")
     p.add_argument("--B", type=int, default=None,
                    help="default: SLEEP_BOOT_B (999), matching the stored conditional numbers")
     p.add_argument("--theta-mode", choices=("if", "newton"), default="if",
@@ -383,11 +479,11 @@ def main():
     p.add_argument("--keep-draws", action="store_true", default=True)
     p.add_argument("--no-keep-draws", dest="keep_draws", action="store_false")
     p.add_argument("--attach", action="store_true")
-    p.add_argument("--attach-from", metavar="PKL", default=None,
-                   help="attach a previous run's Rout/ame_twostage_*.pkl to the estimator "
-                        "pickle instead of recomputing. Same gates as --attach. Use this for "
-                        "cluster results: the canonical run is B=999 on 64 workers and a local "
-                        "recompute would land on a different draw path.")
+    p.add_argument("--attach-from", metavar="PKL", nargs="+", default=None,
+                   help="attach previous runs' Rout/ame_twostage_*.pkl to the estimator pickle "
+                        "instead of recomputing; each file's own meta names its cell. Same gates "
+                        "as --attach. Use this for cluster results: the canonical run is B=999 "
+                        "on 64 workers and a local recompute would land on a different draw path.")
     a = p.parse_args()
     B = a.B if a.B is not None else boot_cfg()[0]
     workers = a.workers if a.workers is not None else default_workers()
@@ -396,10 +492,23 @@ def main():
         for ll in losses:
             attach_from(a.est, ll, a.attach_from)
         return
-    frame = None
+    cache = {}
+    failed = []
     for ll in losses:
-        _, frame = run_cell(a.est, ll, B, a.theta_off, a.theta_mode, workers, a.attach,
-                            a.keep_draws, frame=frame, seed=a.seed)
+        specs = _resolve_specs(a.est, ll, a.spec)
+        for spec in specs:
+            try:
+                run_cell(a.est, ll, B, a.theta_off, a.theta_mode, workers, a.attach,
+                         a.keep_draws, spec=spec, cache=cache, seed=a.seed)
+            except (RuntimeError, SystemExit) as exc:
+                # One cell's fingerprint refusal must not cost the others their run when the grid
+                # is requested; the job still exits nonzero below, so the gate sees it.
+                if len(specs) == 1:
+                    raise
+                print(f"  [!] {spec} / {ll} FAILED: {type(exc).__name__}: {exc}")
+                failed.append(f"{spec}/{ll}")
+    if failed:
+        raise SystemExit(f"{len(failed)} cell(s) failed: {failed}")
 
 
 if __name__ == "__main__":

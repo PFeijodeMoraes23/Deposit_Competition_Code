@@ -452,51 +452,73 @@ def g2():
 
 
 # ── G3: the AME bootstrap's own counters ────────────────────────────────────
-def g3():
+def _g3_cloud(k, hit, label):
+    """One two-stage result file through the counters sleep_ame_twostage.counters_ok applies."""
     import pickle
+    try:
+        with open(hit, "rb") as fh:
+            out = pickle.load(fh)
+    except Exception as exc:
+        chk(f"E{k}{label}: {hit.name} loads", False, f"{type(exc).__name__}: {exc}")
+        return
+    meta = out.get("meta", {})
+    B = meta.get("B")
+    if not chk(f"E{k}{label}: {hit.name} records B", isinstance(B, (int, float)) and B > 0, f"B={B}"):
+        return
+    bad = []
+    for s in ("congl", "quarter"):
+        r = out.get(s)
+        if r is None:
+            bad.append(f"{s}: missing")
+            continue
+        for key in ("n_newton_fail", "n_fail"):
+            if float(r.get(key, 0)) > 0.01 * float(B):
+                bad.append(f"{s}: {key}={r.get(key)} > 1% of B={B}")
+        # Mirrors sleep_ame_twostage.counters_ok: the INDEX-space cosine gates, the raw
+        # coefficient cosine is reported only. A cloud without n_cos_idx_neg predates the
+        # index-space test and is refused rather than passed on a test that never ran.
+        # Reversed-index draws pass up to 1% of B (COS_IDX_NEG_MAX_SHARE there) and are kept.
+        if "n_cos_idx_neg" not in r:
+            bad.append(f"{s}: n_cos_idx_neg missing (cloud predates the index-space test)")
+        elif float(r.get("n_cos_idx_neg", 0)) > 0.01 * float(B):
+            bad.append(f"{s}: n_cos_idx_neg={r.get('n_cos_idx_neg')} > 1% of B={B}")
+        elif float(r.get("n_cos_idx_neg", 0)):
+            note(f"E{k}{label}/{s}: reversed-index draws retained",
+                 f"{r.get('n_cos_idx_neg')} of B={B} (within the 1% tolerance)")
+        for key in ("n_vsd_fail", "n_drop"):
+            if float(r.get(key, 0)):
+                bad.append(f"{s}: {key}={r.get(key)}")
+        # A zero-variance AME prints as SE 0, p 0, three stars: refused (DEGENERATE_SE_REL there).
+        flat = [n for n, se in (r.get("bse") or {}).items()
+                if not float(se) > 1e-10 * max(1e-300, abs(float(r["ame"][n])))]
+        if flat:
+            bad.append(f"{s}: degenerate draws on {flat}")
+        if float(r.get("n_cos_neg", 0)):
+            note(f"E{k}{label}/{s}: raw-coefficient cos_neg",
+                 f"{r.get('n_cos_neg')} of B={B} (diagnostic, not gating)")
+    chk(f"E{k}{label}: draw-cloud counters clean", not bad, "; ".join(bad) if bad else f"B={B}")
+    stored = meta.get("counters_ok")
+    if stored is not None:
+        note(f"E{k}{label}: stored counters_ok", stored)
+    report.setdefault("ame", {})[f"{k}{label}"] = {"path": str(hit), "B": B}
+
+
+def g3():
     rout = PREP / "Rout"
     for k in AME_KS:
         cands = [rout / f"ame_twostage_est{k}_robust_if.pkl",
                  rout / f"ame_twostage_est{k}_robust.pkl"]
         hit = next((c for c in cands if c.is_file()), None)
-        if not chk(f"E{k}: AME result pkl present", hit is not None,
-                   f"looked for {[c.name for c in cands]} under {rout}"):
-            continue
-        try:
-            with open(hit, "rb") as fh:
-                out = pickle.load(fh)
-        except Exception as exc:
-            chk(f"E{k}: {hit.name} loads", False, f"{type(exc).__name__}: {exc}")
-            continue
-        meta = out.get("meta", {})
-        B = meta.get("B")
-        if not chk(f"E{k}: {hit.name} records B", isinstance(B, (int, float)) and B > 0, f"B={B}"):
-            continue
-        bad = []
-        for s in ("congl", "quarter"):
-            r = out.get(s)
-            if r is None:
-                bad.append(f"{s}: missing")
-                continue
-            for key in ("n_newton_fail", "n_fail"):
-                if float(r.get(key, 0)) > 0.01 * float(B):
-                    bad.append(f"{s}: {key}={r.get(key)} > 1% of B={B}")
-            # Mirrors sleep_ame_twostage.counters_ok: the INDEX-space cosine gates, the raw
-            # coefficient cosine is reported only. A cloud without n_cos_idx_neg predates the
-            # index-space test and is refused rather than passed on a test that never ran.
-            if "n_cos_idx_neg" not in r:
-                bad.append(f"{s}: n_cos_idx_neg missing (cloud predates the index-space test)")
-            for key in ("n_cos_idx_neg", "n_vsd_fail", "n_drop"):
-                if float(r.get(key, 0)):
-                    bad.append(f"{s}: {key}={r.get(key)}")
-            if float(r.get("n_cos_neg", 0)):
-                note(f"E{k}/{s}: raw-coefficient cos_neg",
-                     f"{r.get('n_cos_neg')} of B={B} (diagnostic, not gating)")
-        chk(f"E{k}: draw-cloud counters clean", not bad, "; ".join(bad) if bad else f"B={B}")
-        stored = meta.get("counters_ok")
-        if stored is not None:
-            note(f"E{k}: stored counters_ok", stored)
-        report.setdefault("ame", {})[str(k)] = {"path": str(hit), "B": B}
+        if chk(f"E{k}: AME result pkl present", hit is not None,
+               f"looked for {[c.name for c in cands]} under {rout}"):
+            _g3_cloud(k, hit, "")
+        # The appendix-grid cells (`sleep_ame_twostage.py --spec others`) are optional -- the
+        # headline run does not produce them -- but every one that exists is gated the same way.
+        grid = sorted(rout.glob(f"ame_twostage_est{k}_robust_if__*.pkl"))
+        if grid:
+            note(f"E{k}: appendix-grid AME files", f"{len(grid)}: {[g.name for g in grid]}")
+        for g in grid:
+            _g3_cloud(k, g, f" [{g.stem.split('__', 1)[1]}]")
 
 
 # ── G4: the logit deltas match the parquets they warm-start ─────────────────
