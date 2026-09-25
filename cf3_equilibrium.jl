@@ -149,8 +149,8 @@ function _parse_cf3_args()
         "--hpc";         action   = :store_true
         "--local-dir";   arg_type = String;  default = nothing
         "--suffix";      arg_type = String;  default = ""
-        "--beta";        arg_type = Float64; default = 0.9
-        "--horizon";     arg_type = Int;     default = 50
+        "--beta";        arg_type = Float64; default = nothing  # nothing = BBL_BETA (bbl_discount.env)
+        "--horizon";     arg_type = Int;     default = 50       # the CF's own horizon, not BBL_HORIZON
         "--time-filter"; arg_type = String;  default = nothing
         "--cost-json";   arg_type = String;  default = nothing  # default COST_FWD/cost_params_{tag}.json
         "--fixed-point"; arg_type = String;  default = "gauss-seidel"  # gauss-seidel | jacobi
@@ -177,7 +177,9 @@ function _parse_cf3_args()
         "--sigma-base";    arg_type = String; default = ""    # base-scenario equilibrium σ parquet
         "--sigma-scn";     arg_type = String; default = ""    # shocked (CF5) / merged (CF6) equilibrium σ
     end
-    return parse_args(s)
+    # β shared with the BBL cost estimation (bbl_discount.env unless --beta); the horizon is the
+    # counterfactual's own. Resolved here so CF3, CF5 and CF6 (all parse with this table) agree.
+    return resolve_discount!(parse_args(s); horizon=false, who="CF3/5/6")
 end
 
 """

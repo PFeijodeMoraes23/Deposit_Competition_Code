@@ -53,7 +53,10 @@ if [[ -n "${ROUTINES+set}" ]]; then ROUTINES_SRC=env; fi
 ROUTINES="${ROUTINES:-${CL_ROUTINES_CF}}"
 CF_STAGE="${CF_STAGE:-extended}"
 R="${R:-2000}"; SEED="${SEED:-42}"
-BETA="${BETA:-0.9}"; HORIZON="${HORIZON:-50}"
+# beta is the one the cost parameters were estimated under: BBL_BETA from bbl_discount.env unless
+# BETA is set (cl_bbl_discount_fill, after the flags). HORIZON is the counterfactuals' OWN
+# horizon, 50 quarters, and deliberately does not follow BBL_HORIZON (the forward-sim horizon).
+BETA="${BETA:-}"; BETA_SRC="env BETA"; HORIZON="${HORIZON:-50}"
 DO_STEPS="${DO_STEPS:-demand_eval cf1 cf1_net}"
 DO_WARMUP="${DO_WARMUP:-1}"
 WARMUP_JOBID="${WARMUP_JOBID:-}"
@@ -77,6 +80,8 @@ while [[ $# -gt 0 ]]; do
     shift
 done
 
+cl_bbl_discount_fill BETA BBL_BETA || exit 2
+
 want () { case " ${DO_STEPS} " in *" $1 "*) return 0 ;; *) return 1 ;; esac; }
 for s in ${DO_STEPS}; do
     case "${s}" in demand_eval|cf1|cf4|cf1_net|cf3|cf5|cf6) ;;
@@ -93,7 +98,7 @@ fi
 cl_banner "Counterfactual pipeline$([[ "${CL_DRYRUN}" == "1" ]] && echo '  [DRY RUN — nothing is submitted]')" \
           "$(cl_routines_provenance "${ROUTINES}" "${ROUTINES_SRC}" "${CL_ROUTINES_CF}")" \
           "steps: ${DO_STEPS}" \
-          "stage=${CF_STAGE} R=${R} seed=${SEED} beta=${BETA} horizon=${HORIZON}"
+          "stage=${CF_STAGE} R=${R} seed=${SEED} beta=${BETA} (${BETA_SRC}) horizon=${HORIZON}"
 
 # ── Preflight ────────────────────────────────────────────────────────────────
 miss=0

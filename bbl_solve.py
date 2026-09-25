@@ -890,6 +890,18 @@ def _print_final(kappa, rec, level):
               f"identified -- report c_bar.")
 
 
+# (N, present, missing) for a list of psi_dev paths, read from their names alone. ONE
+# implementation, shared with the sweep job that re-runs missing shards (bbl_job.sh
+# BBL_STEP=sweep -> bbl_shards.py coverage), so "complete" means the same thing to the step that
+# repairs a gap and to the step that refuses one. The caller refuses on `missing`: E1's costs were
+# once estimated from 293 of 300 shards (2026-09-19) with nothing on screen to show it.
+from bbl_shards import shard_coverage as _shard_coverage, compress_ranges as _compress_ranges
+# (beta, T, source) the psi were simulated under -- from psi_starts_<tag>.json, else the
+# bbl_run.sh launch record. Recorded in the run block of cost_params so every table built from it
+# can state its discounting from provenance rather than from a constant in the table code.
+from bbl_shards import psi_discount as _psi_discount, read_bbl_discount as _read_bbl_discount
+
+
 def main():
     ap = argparse.ArgumentParser(description="BBL Step 2 cost solver (V_Main eq:17).")
     ap.add_argument("--estim", type=int, default=6)
@@ -965,6 +977,23 @@ def main():
             f"{sorted(n_of)}; 0 = an unsharded file). Two designs share the tag "
             f"'{args.psi_tag}'. Remove the stale family or re-run under a distinct --psi-tag.")
 
+    # EVERY shard, or none of them. See _shard_coverage: a shard file appears only when its whole
+    # slice finished, so a gap is missing SIMULATION, not a missing file, and averaging over what
+    # survived silently reports a subsample as the estimate.
+    n_shards, shards_present, shards_missing = _shard_coverage(dev_files)
+    if shards_missing:
+        miss = _compress_ranges(shards_missing)
+        raise SystemExit(
+            f"REFUSING: psi_dev_{tag}* is missing {len(shards_missing)} of {n_shards} shards: "
+            f"{miss}\n"
+            f"  Those (firm x shock) deviations were never simulated -- the solve would report a "
+            f"subsample as the estimate.\n"
+            f"  The sweep job re-runs gaps by itself; a solve that reaches this line ran without "
+            f"it (--no-sweep) or after its retries were spent. Fill exactly these shards and "
+            f"re-chain solve -> tables -> archive with one command (BBL_RUNBOOK.md, recovery):\n"
+            f"    bash bbl_run.sh --routines {args.estim} --shards {n_shards} "
+            f"--psi-tag '{args.psi_tag}' --repair")
+
     eq = pd.read_parquet(eq_path)
     dev = pd.concat([pd.read_parquet(f) for f in dev_files], ignore_index=True)
     # A single-start run has no start_q column. Injecting "all" here rather than branching later
@@ -998,10 +1027,24 @@ def main():
     print(f"  tag={tag}  (psi_tag={args.psi_tag or '(none)'}, promoted name "
           f"cost_params_{base_tag}.json)")
     print(f"  Loaded psi_eq ({len(eq)} firm x start rows) and psi_dev ({len(dev)} "
-          f"firm x start x shock rows) from {len(dev_files)} shard file(s)")
+          f"firm x start x shock rows) from {len(dev_files)} shard file(s)"
+          + (f" -- shards {len(shards_present)}/{n_shards}, complete" if n_shards > 1 else ""))
     print(f"  starts={len(starts_all)}: {', '.join(starts_all[:8])}"
           f"{' ...' if len(starts_all) > 8 else ''}"
           f"  |  rf_source(s): {', '.join(rf_sources) if rf_sources else '(not recorded)'}")
+    # Provenance only: the solve never uses beta or T (the psi are already discounted sums).
+    psi_beta, psi_T, disc_src = _psi_discount(COST_FWD, tag)
+    print(f"  psi simulated at beta={psi_beta if psi_beta is not None else '?'} "
+          f"T={psi_T if psi_T is not None else '?'}  <- {disc_src}")
+    try:
+        _reg = _read_bbl_discount()
+        if psi_beta is not None and (abs(psi_beta - _reg["BBL_BETA"]) > 1e-12
+                                     or psi_T != _reg["BBL_HORIZON"]):
+            print(f"  NOTE: bbl_discount.env now says beta={_reg['BBL_BETA']} "
+                  f"T={_reg['BBL_HORIZON']}; these psi were simulated under beta={psi_beta} "
+                  f"T={psi_T}. The json records the psi's own values.")
+    except (OSError, KeyError, ValueError):
+        pass
 
     blocks = build_delta(eq, dev)
     results = {}
@@ -1166,6 +1209,8 @@ def main():
         rf_sources=rf_sources, rf_source_by_start=rf_source_by_start,
         rf_bar_beta_by_start=rf_bar_beta_by_start,
         n_dev_files=len(dev_files), n_eq_rows=int(len(eq)), n_dev_rows=int(len(dev)),
+        n_shards_expected=int(n_shards), n_shards_found=len(shards_present),
+        beta=psi_beta, T=psi_T, discount_source=disc_src,
         bootstrap=int(args.bootstrap), subsample=int(args.subsample),
         ci_level=float(args.ci_level), profile=bool(args.profile)))
     results["identification"] = _jsonable(dict(

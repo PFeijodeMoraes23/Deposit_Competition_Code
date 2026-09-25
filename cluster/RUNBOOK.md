@@ -36,7 +36,11 @@ every other file sources first. Every driver takes `--dry-run` and `-h`.
 | `pipeline_all.sh` | **the** command. `sbatch pipeline_all.sh` runs the whole chain |
 | `sleep_run.sh` | the sleepiness (A) phase: estimators → prep → AME + upsilon |
 | `blp_run.sh` | the RC-BLP demand sweep, plus the sysimage/draws builds it decides it needs |
-| `bbl_run.sh` | the BBL cost stage: polfunc → `fwd_sim` array → solve |
+| `bbl_run.sh` | the BBL cost stage: polfunc → packed `fwd_sim` jobs → sweep (re-runs gaps) → solve. Operated from `BBL_RUNBOOK.md` |
+| `bbl_status.sh` | one screen of BBL state and the next action (shards, fwd R/P/F, sweep retries, solve). Login-safe |
+| `bbl_sizing.sh` | reads the memory probe (`bbl_run.sh --probe`) and prints MEM, PACK_H200, PACK_H100 and the launch command. Login-safe |
+| `bbl_cancel.sh` | cancels a BBL chain dependents-first (tables/zip → solves → sweeps → arrays). Login-safe |
+| `bbl_discount.env` | the registry of the BBL discount factor and horizon (`BBL_BETA`, `BBL_HORIZON`); every BBL/CF script reads it |
 | `cf_run.sh` | the counterfactuals (`demand_eval`, `cf1`, `cf1_net`, `cf4`) |
 | `cf_eq_run.sh` | the long equilibrium CFs (CF3 / CF5 / CF6), opt-in |
 | `cluster_archive.sh` | the one packager: a step folder → `data/output/download` |

@@ -69,9 +69,13 @@ are held flat). With S deviations on the full panel at R=2000 this is the heavy,
 GPU/cluster step. Develop locally with --R small, --time-filter one quarter, and
 --shocks small; run headline on Bouchet.
 
+β AND T: --beta / --horizon; when omitted, BBL_BETA / BBL_HORIZON from bbl_discount.env (the one
+registry of both, read by `bbl_discount` in cf_psi_basis.jl). The log line "[BBL] discount:" says
+which source each value came from.
+
 Usage (write-only here; run only after data is downloaded AND author authorizes):
   julia --project=. --threads=4 bbl_fwd_sim.jl --estim 6 --spec 12 \\
-      --stage extended --R 300 --time-filter 2024Q4 --shocks 20 --beta 0.9 --horizon 50
+      --stage extended --R 300 --time-filter 2024Q4 --shocks 20
 """
 
 include(joinpath(@__DIR__, "cf_psi_basis.jl"))
@@ -311,6 +315,14 @@ function load_forward_rf(path::Union{Nothing,String}, out_dir::String, T::Int, c
         ci = findfirst(==("rf_qoq"), hdr)
         ci === nothing && error("rf_qoq column not found in $csv")
         rf = [parse(Float64, strip(split(l, ',')[ci])) for l in lines[2:end]]
+        # Shorter than T: on the cluster (require) a refusal, as in cl_bbl_check_curve, unless
+        # ALLOW_RF_PAD=1 accepts the flat tail deliberately; locally the tail repeats the last rate.
+        if length(rf) < T && require && get(ENV, "ALLOW_RF_PAD", "0") != "1"
+            error("$(basename(csv)) runs to h=$(length(rf)) but T=$T: the last $(T - length(rf)) quarters " *
+                  "would repeat the last quoted rate. Rebuild it locally and upload it:\n" *
+                  "    python scrape_forward_rf.py --horizon $T --start 2026Q1\n" *
+                  "  (ALLOW_RF_PAD=1 accepts the padding deliberately.)")
+        end
         length(rf) >= T || (rf = vcat(rf, fill(rf[end], T - length(rf))))
         log_status("  [BBL] forward r^f ← $(basename(csv)) (T=$T; " *
                    "$(round(rf[1],sigdigits=4))→$(round(rf[T],sigdigits=4)))")
@@ -366,7 +378,7 @@ is unchanged, because the demographic path is identical across deviations and ra
 """
 function psi_under(ctx::CFDemandCtx, st::DepositSimState, Z::Matrix{Float64},
                    markdown_q0::Vector{Float64}, spreads_ann::Vector{Float64};
-                   beta::Float64=0.9, T::Int=50,
+                   beta::Float64=bbl_beta(), T::Int=bbl_horizon(),
                    asset_return_q::Union{Nothing,Vector{Float64}}=nothing,
                    rf_path_q::Union{Nothing,Vector{Float64}}=nothing,
                    rf_paths::Union{Nothing,Matrix{Float64}}=nothing,
@@ -490,7 +502,7 @@ function _quarter_labels(df::DataFrame)
 end
 
 """
-    _load_rf_vintages(path, T) -> (starts, curves, anchor, source)
+    _load_rf_vintages(path, T; strict=false) -> (starts, curves, anchor, source)
 
 Parse `forward_rf_vintages.csv` (scrape_forward_rf.py) into, per launch quarter `start_q`:
 `curves[q]` = the length-T forward path (h=1…T of `rf_qoq`), `anchor[q]` = h=0, the realised rate
@@ -498,14 +510,15 @@ at the launch quarter, and `source[q]` = the provenance string. `starts` is sort
 
 h=1…h_max must be COMPLETE for a quarter: a hole would otherwise be filled by whatever the padding
 rule reached for, putting one horizon of one vintage on a rate it was never quoted at. Horizons
-beyond h_max repeat h_max (the same rule `load_forward_rf` uses for the single curve). Minimal
-comma split, as in `_load_policy_map` — verified that no field in the file contains a comma (the
-`source` field separates its parts with `|`).
+beyond h_max repeat h_max (the same rule `load_forward_rf` uses for the single curve); with
+`strict` (the cluster, --hpc) a vintage shorter than T is a refusal instead, as in
+cl_bbl_check_curve, unless ALLOW_RF_PAD=1. Minimal comma split, as in `_load_policy_map` —
+verified that no field in the file contains a comma (the `source` field separates its parts with `|`).
 """
-function _load_rf_vintages(path::String, T::Int)
+function _load_rf_vintages(path::String, T::Int; strict::Bool=false)
     isfile(path) || error("--rf-vintages file not found:\n    $path\n" *
                           "Generate it locally (needs internet) and upload it:\n" *
-                          "    python scrape_forward_rf.py --vintage-from 2016Q1 --vintage-to 2024Q4")
+                          "    python scrape_forward_rf.py --vintage-from 2016Q1 --vintage-to 2024Q4 --horizon $T")
     lines = filter(l -> !isempty(strip(l)), readlines(path))
     length(lines) < 2 && error("rf-vintages has no data rows: $path")
     hdr = [String(strip(String(h))) for h in split(lines[1], ',')]
@@ -528,7 +541,7 @@ function _load_rf_vintages(path::String, T::Int)
 
     starts = sort(collect(keys(raw)))
     curves = Dict{String,Vector{Float64}}(); anchor = Dict{String,Float64}()
-    n_pad = 0
+    n_pad = 0; hmin = typemax(Int)
     for q in starts
         d = raw[q]
         hmax = maximum(h for h in keys(d) if h >= 1; init=0)
@@ -538,7 +551,15 @@ function _load_rf_vintages(path::String, T::Int)
         end
         curves[q] = [d[min(h, hmax)] for h in 1:T]
         T > hmax && (n_pad += 1)
+        hmin = min(hmin, hmax)
         haskey(d, 0) && (anchor[q] = d[0])
+    end
+    if n_pad > 0 && strict && get(ENV, "ALLOW_RF_PAD", "0") != "1"
+        error("$(basename(path)): $n_pad/$(length(starts)) vintages are shorter than T=$T (the " *
+              "shortest runs to h=$hmin), so their tails would repeat the last quoted rate. Rebuild " *
+              "it locally and upload it:\n" *
+              "    python scrape_forward_rf.py --vintage-from 2016Q1 --vintage-to 2024Q4 --horizon $T\n" *
+              "  (ALLOW_RF_PAD=1 accepts the padding deliberately.)")
     end
     n_pad == 0 || @warn "  [BBL] $n_pad/$(length(starts)) vintages are shorter than T=$T; their " *
                         "tail horizons repeat the last quoted rate."
@@ -639,6 +660,49 @@ function _horizon_shock_paths(rf_mean::Matrix{Float64}, sd::Vector{Float64}, P::
 end
 
 # ==========================================================================
+# Atomic artifact writes
+# ==========================================================================
+"""
+    _atomic_write(write_fn, final) -> final
+
+Write `final` through a temporary name in the SAME directory, then rename it into place.
+
+WHY. A psi file is the only evidence that its shard finished, and the sweep job and the solve both
+decide completeness from what sits under the final name. Written in place, a task killed at the
+wall mid-write, or two tasks writing the same shard (overlapping arrays did this on 2026-09-21),
+leave a truncated parquet that passes a file-exists check. rename(2) within one directory is
+atomic: the final name holds either the previous complete file or the new complete file, never a
+fragment. Concurrent writers each use their own temporary (job id + pid), so the last rename wins
+and both candidates are complete — the sim is deterministic, so they are also identical.
+
+The temporary starts with `.tmp_` and does not end in `.parquet`/`.json`, so no `psi_*` or
+`*.parquet` glob (bbl_solve.py, make_bbl_cost_tables.py, bbl_shards.py) can ever pick it up. A
+temporary left by a killed task is inert debris; cluster_archive.sh excludes it.
+"""
+function _atomic_write(write_fn::Function, final::AbstractString)
+    dir, base = dirname(final), basename(final)
+    tmp = joinpath(dir, ".tmp_" * base * "." * get(ENV, "SLURM_JOB_ID", "local") * "_" *
+                        string(getpid()))
+    try
+        write_fn(tmp)
+        _rename_replace(tmp, final)
+    catch
+        isfile(tmp) && rm(tmp; force=true)
+        rethrow()
+    end
+    return final
+end
+
+# libuv rename: POSIX rename(2) on Linux, MoveFileEx(REPLACE_EXISTING) on Windows. Called
+# directly rather than through `mv(...; force=true)`, which on some Julia versions removes the
+# destination FIRST and so reopens exactly the window this exists to close.
+function _rename_replace(src::AbstractString, dst::AbstractString)
+    rc = ccall(:jl_fs_rename, Int32, (Cstring, Cstring), src, dst)
+    rc == 0 || error("atomic rename failed ($rc): $src -> $dst")
+    return nothing
+end
+
+# ==========================================================================
 # Driver
 # ==========================================================================
 function _parse_cost2_args()
@@ -652,8 +716,10 @@ function _parse_cost2_args()
         "--hpc";           action   = :store_true
         "--local-dir";     arg_type = String;  default = nothing
         "--suffix";        arg_type = String;  default = ""
-        "--beta";          arg_type = Float64; default = 0.9
-        "--horizon";       arg_type = Int;     default = 50
+        # nothing = BBL_BETA / BBL_HORIZON from bbl_discount.env (resolve_discount!); bbl_run.sh
+        # always passes both explicitly.
+        "--beta";          arg_type = Float64; default = nothing
+        "--horizon";       arg_type = Int;     default = nothing
         "--shocks";        arg_type = Int;     default = 50      # TOTAL number of σ̃ deviations
         # σ̃ grid half-width in annualized ρ units (pp). 2.0 = 200bp ≈ 54% of the median observed
         # choice spread (~3.7pp); the ± grid gives graduated magnitudes up to that. The old default
@@ -694,6 +760,7 @@ end
 
 function main_cost2()
     a = _parse_cost2_args()
+    resolve_discount!(a; horizon=true, who="BBL")
     # --time-filter takes a COMMA-SEPARATED list of quarters, so a --multi-start smoke can span a
     # few launch quarters ("2016Q1,2020Q2,2024Q4") and still keep whole (mca, quarter) markets
     # together — the property build_cf_context needs for its share aggregation to stay exact. One
@@ -795,7 +862,7 @@ function main_cost2()
         Tms = a["horizon"]; βms = a["beta"]
         vpath = a["rf-vintages"] === nothing ?
                 joinpath(cf_in_dir(out_dir, "COST_FWD"), "forward_rf_vintages.csv") : a["rf-vintages"]
-        _, curves, anchor, srcmap = _load_rf_vintages(vpath, Tms)
+        _, curves, anchor, srcmap = _load_rf_vintages(vpath, Tms; strict=a["hpc"])
 
         # Every panel row must land on a curve. `starts` is the intersection by construction —
         # sorted panel quarters, each of which is checked to exist in the CSV — and an unmatched
@@ -1031,7 +1098,9 @@ function main_cost2()
             eq_df[!, "rf_bar_beta"] = [get(rf_bar, q, NaN) for q in skey]
         end
         for (j, b) in enumerate(blocks); eq_df[!, b] = psi_eq[:, j]; end
-        Parquet2.writefile(joinpath(cost_dir, "psi_eq_$tag.parquet"), eq_df)
+        _atomic_write(joinpath(cost_dir, "psi_eq_$tag.parquet")) do tmp
+            Parquet2.writefile(tmp, eq_df)
+        end
         log_status("  [BBL] wrote psi_eq_$tag.parquet")
 
         # Provenance sidecar: what the ψ files were simulated under. Written from shard 0 only,
@@ -1049,7 +1118,9 @@ function main_cost2()
                         "psi_tag"     => psi_tag,
                         "rf_vintages" => basename(vpath),
                         "transitions" => isempty(tpath) ? "" : basename(tpath))
-            open(joinpath(cost_dir, "psi_starts_$tag.json"), "w") do f; JSON3.write(f, meta); end
+            _atomic_write(joinpath(cost_dir, "psi_starts_$tag.json")) do tmp
+                open(tmp, "w") do f; JSON3.write(f, meta); end
+            end
             log_status("  [BBL] wrote psi_starts_$tag.json (S=$(length(starts)) P=$n_paths " *
                        "seed=$(a["seed"]))")
         end
@@ -1066,9 +1137,19 @@ function main_cost2()
         dev_df[!, b] = psi_dev[:, c]
     end
     shard_tag = nsh == 1 ? "" : "_shard$(sid)of$(nsh)"
-    Parquet2.writefile(joinpath(cost_dir, "psi_dev_$tag$shard_tag.parquet"), dev_df)
+    # Through a temporary + rename (see _atomic_write): this file's existence is what tells the
+    # sweep and the solve that shard `sid` is done, so it must never exist half-written.
+    _atomic_write(joinpath(cost_dir, "psi_dev_$tag$shard_tag.parquet")) do tmp
+        Parquet2.writefile(tmp, dev_df)
+    end
     log_status("  [BBL] wrote psi_dev_$tag$shard_tag.parquet ($nloc firm×Δ deviations" *
                (ms ? " → $nout firm×Δ×start rows)" : ")"))
+    # This process's peak resident memory (Sys.maxrss is in bytes). Measurement only: a packed job
+    # runs k shards in one allocation, where sacct's MaxRSS of the .batch step sums them, so each
+    # shard reports its own on ONE greppable line that bbl_job.sh, bbl_sizing.sh and
+    # bbl_status.sh --rss read.
+    log_status("  [BBL] shard $sid peak RSS $(round(Sys.maxrss() / 2^30; digits=1)) GiB " *
+               "(T=$(a["horizon"]), this process)")
     log_status("[DONE] estimation_bbl_2_fwd_sim shard $sid — run bbl_solve.py after ALL shards")
 end
 

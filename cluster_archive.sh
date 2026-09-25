@@ -4,8 +4,15 @@
 # download-ready zips in data/output/download, and does nothing else.
 #
 #   bash cluster_archive.sh --set <name> (--copy | --move) \
-#        [--newer <marker>] [--tag <t>] [--dry-run] [-h]
+#        [--newer <marker>] [--tag <t>] [--slim --psi-tag <T>] [--dry-run] [-h]
 #   bash cluster_archive.sh --all --copy
+#
+# --slim --psi-tag <T>  (bbl set only; ignored by the others) packages ONLY what the local side
+#   reads from one BBL run: psi_eq / psi_dev / psi_starts of tag T (T="" = the untagged
+#   single-start family), every cost_params_*.json, the tab_bbl_* tables and the polfunc_*
+#   outputs. Other tags' psi (a stale single-curve family, _benchgpu, a <tag>probe run), the
+#   sweep's .dispatch state and write debris stay on the cluster. Without --slim the whole folder
+#   is packaged, as before. The 2026-09-22 archive was ~1 GB because of exactly those extras.
 #
 # THE EIGHT SETS — one per step folder of the output tree, plus gates and logs:
 #
@@ -85,7 +92,7 @@ CL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "${CL_DIR}/cluster_lib.sh"
 set -e
 
-SET=""; MODE=""; NEWER=""; TAG=""; DRY=0; DO_ALL=0
+SET=""; MODE=""; NEWER=""; TAG=""; DRY=0; DO_ALL=0; SLIM=0; SLIM_TAG=""; SLIM_TAG_SET=0
 ALL_SETS="${ALL_SETS:-sleep demand_prep logit blp bbl counterfactuals gates logs}"
 
 while [[ $# -gt 0 ]]; do
@@ -96,12 +103,18 @@ while [[ $# -gt 0 ]]; do
         --move)     MODE=move ;;
         --newer)    NEWER="$2"; shift ;;
         --tag)      TAG="$2"; shift ;;
+        --slim)     SLIM=1 ;;
+        --psi-tag)  SLIM_TAG="$2"; SLIM_TAG_SET=1; shift ;;
         --dry-run)  DRY=1 ;;
-        -h|--help)  sed -n '2,81p' "${BASH_SOURCE[0]}"; exit 0 ;;
+        -h|--help)  sed -n '2,88p' "${BASH_SOURCE[0]}"; exit 0 ;;
         *) cl_err "unknown option: $1 (see -h)"; exit 2 ;;
     esac
     shift
 done
+if [[ "${SLIM}" == "1" ]]; then
+    [[ "${SLIM_TAG_SET}" == "1" ]] || { cl_err "ERROR: --slim needs --psi-tag <T> (use --psi-tag '' for the untagged family)."; exit 2; }
+    [[ "${SLIM_TAG}" =~ ^[A-Za-z0-9_]*$ ]] || { cl_err "ERROR: --psi-tag '${SLIM_TAG}' has characters no psi tag carries."; exit 2; }
+fi
 
 # Every zip, part and checksum lands in the download folder — the ONE directory
 # to pull to the local machine. It sits under data/output, which is why guard (5)
@@ -117,7 +130,10 @@ if [[ "${DO_ALL}" == "1" ]]; then
     [[ -z "${SET}" ]] || { cl_err "ERROR: --all and --set are mutually exclusive."; exit 2; }
     rc=0
     for s in ${ALL_SETS}; do
+        _slim_args=()
+        if [[ "${SLIM}" == "1" ]]; then _slim_args=(--slim --psi-tag "${SLIM_TAG}"); fi
         bash "${BASH_SOURCE[0]}" --set "${s}" "--${MODE}" ${NEWER:+--newer "${NEWER}"} ${TAG:+--tag "${TAG}"} \
+            ${_slim_args[@]+"${_slim_args[@]}"} \
             $([[ "${DRY}" == "1" ]] && echo --dry-run) || { cl_err "${s}: skipped/failed — continuing"; rc=1; }
     done
     cl_say "archives in ${OUT_DIR}"
@@ -186,7 +202,10 @@ case "${SET}" in
   # INCLUDE_PSI=0 is the escape hatch for the case the ~100-shard psi_dev array
   # turns out to dominate the download; it defaults to INCLUDED because the
   # shards are the fwd_sim product and nothing recomputes them locally.
+  # `.tmp_*` is always left out: it is a psi file a killed task was still writing (bbl_fwd_sim.jl
+  # writes through a temporary and renames), never a result.
   bbl)              BASE=bbl_outputs;     pats=("output/bbl")
+                    EXCLUDES+=("output/bbl/.tmp_*")
                     [[ "${INCLUDE_PSI:-1}" == "0" ]] && EXCLUDES+=("output/bbl/psi_*") ;;
   # upsilon_pix / phi_nopix, shares_elas, cf1_*, cf4_* and any equilibrium sigma
   # trees cf_eq_run.sh nested here.
@@ -246,16 +265,35 @@ done
 SELF_RE=""
 [[ -n "${SLURM_JOB_ID:-}" ]] && SELF_RE="${SLURM_JOB_ID}"
 
+# --slim (bbl only): keep a file iff it sits directly in output/bbl and is this tag's psi, a
+# cost_params json, a tab_bbl_* table or a polfunc_* output. The tag is matched as the WHOLE
+# remainder after the stage, so _ms1 keeps neither _ms1probe nor _ms10 nor the untagged family.
+if [[ "${SLIM}" == "1" && "${SET}" != "bbl" ]]; then
+    cl_log "${SET}: --slim applies to the bbl set only; packaging this set in full."
+    SLIM=0
+fi
+SLIM_RE="^psi_(eq|dev|starts)_E[0-9]+_spec_[0-9]+_[A-Za-z0-9]+${SLIM_TAG}(_shard[0-9]+of[0-9]+)?\.(parquet|json)$"
+_slim_keep () {
+    local b="${1##*/}"
+    [[ "${1%/*}" == "output/bbl" ]] || return 1
+    case "${b}" in cost_params_*.json|tab_bbl_*|polfunc_*) return 0 ;; esac
+    [[ "${b}" =~ ${SLIM_RE} ]]
+}
+slim_dropped=0
 scoped=()
 for f in "${files[@]}"; do
     skip=0
     for x in ${EXCLUDES[@]+"${EXCLUDES[@]}"}; do [[ "${f}" == ${x} ]] && { skip=1; break; }; done
     [[ ${skip} -eq 1 ]] && continue
+    if [[ "${SLIM}" == "1" ]] && ! _slim_keep "${f}"; then slim_dropped=$(( slim_dropped + 1 )); continue; fi
     [[ -n "${NEWER}" && ! "${f}" -nt "${NEWER}" ]] && continue
     [[ -n "${SELF_RE}" && "${f}" == *"${SELF_RE}"* ]] && continue
     scoped+=("${f}")
 done
 files=(${scoped[@]+"${scoped[@]}"})
+if [[ "${SLIM}" == "1" ]]; then
+    cl_say "${SET} --slim (psi tag '${SLIM_TAG}'): ${#files[@]} file(s) kept, ${slim_dropped} left on the cluster (other tags' psi, dispatch state)"
+fi
 if [[ ${#files[@]} -eq 0 ]]; then
     if [[ -n "${NEWER}" ]]; then
         cl_say "${SET}: ${#paths[@]} pattern match(es), none newer than $(basename "${NEWER}") — nothing to archive."

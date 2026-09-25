@@ -25,7 +25,7 @@ Idempotent and re-runnable: drop a freshly downloaded blp_outputs.zip into BLP_R
 Usage:
     python cluster_ingest_blp.py [BLP_RESULTS_dir] [--stage extended] [--routines 3,4]
 """
-import os, sys, glob, json, zipfile, shutil, argparse, datetime, math
+import os, sys, glob, json, zipfile, shutil, argparse, datetime, math, hashlib, re, time
 
 from utils import paths as _paths
 from utils import routines as _routines   # aliased: `routines` is a local in main()
@@ -35,15 +35,50 @@ SUBDIRS = ["logit", "cluster_raw", "cluster_processed", "legacy"]
 # Increasing-complexity RC sequence: each stage frees one more random coefficient
 # (sigma = 1 σ ... extended = 8). The per-routine progression of Q across these stages is
 # recorded in each processed JSON; the per-stage result .jls stay in cluster_raw/.
-def _flatten_into(root):
+def _same_content(a, b):
+    """True when two files hold identical bytes. Size is only the fast NEGATIVE: two JSON
+    results of fixed-width floats from different runs routinely share a byte count, so equal
+    size is never taken as identity."""
+    if os.path.getsize(a) != os.path.getsize(b):
+        return False
+    h = []
+    for p in (a, b):
+        d = hashlib.sha256()
+        with open(p, "rb") as fh:
+            for chunk in iter(lambda: fh.read(1 << 20), b""):
+                d.update(chunk)
+        h.append(d.digest())
+    return h[0] == h[1]
+
+
+def _flatten_into(root, backup_dir=None):
     """Move every nested file up to ``root``, then drop the emptied directories.
 
     Archives written by cluster_archive.sh keep their domain prefix, so members arrive as
-    ``output/blp_results_E3_spec_12_extended.jls``. Everything below addresses files as
+    ``output/blp/blp_results_E3_spec_12_extended.jls``. Everything below addresses files as
     ``cluster_raw/<name>``, so without this a dir-prefixed archive yields
     "MISSING ... skipped" for every routine while the files sit one level down.
+
+    A file already flat in ``root`` BEFORE this call is the previous ingest's vintage, and the
+    archive just extracted is the newer one, so the incoming member REPLACES it. When the
+    content differs the displaced file is moved to ``backup_dir`` (never deleted); identical
+    content just drops the nested duplicate. Only two members of the SAME archive sharing a
+    basename are genuinely ambiguous, and the later one keeps the ``<dir>__<name>`` form.
+
+    This replaced a rule that let the old flat copy win every collision -- deleting the new
+    member when the byte sizes matched, parking it as ``<dir>__<name>`` otherwise. On
+    2026-09-14 it sidelined 114 files of the 09-11 BLP run while every reader kept the 08-31
+    files, which is why the RC tables stayed on the old estimates.
     """
-    moved = 0
+    moved = replaced = 0
+    this_call = set()          # basenames placed flat by THIS archive
+    backup_dir = backup_dir or os.path.join(root, os.pardir, "legacy",
+                                            "superseded_" + time.strftime("%Y%m%dT%H%M%S"))
+
+    def _stash(path):
+        os.makedirs(backup_dir, exist_ok=True)
+        shutil.move(path, os.path.join(backup_dir, os.path.basename(path)))
+
     for dirpath, _dirnames, filenames in os.walk(root):
         if os.path.abspath(dirpath) == os.path.abspath(root):
             continue
@@ -51,13 +86,33 @@ def _flatten_into(root):
             src = os.path.join(dirpath, name)
             dest = os.path.join(root, name)
             if os.path.exists(dest):
-                # same file by size: the flat copy already won, drop the nested duplicate
-                if os.path.getsize(dest) == os.path.getsize(src):
-                    os.remove(src)
+                if name in this_call:
+                    # two members of this archive share a basename: keep both, prefix the later
+                    if _same_content(dest, src):
+                        os.remove(src)
+                        continue
+                    dest = os.path.join(root, f"{os.path.basename(dirpath)}__{name}")
+                elif _same_content(dest, src):
+                    os.remove(src)             # previous vintage already identical
+                    this_call.add(name)
                     continue
-                dest = os.path.join(root, f"{os.path.basename(dirpath)}__{name}")
+                else:
+                    _stash(dest)               # previous vintage: back it up, then replace
+                    replaced += 1
             shutil.move(src, dest)
+            this_call.add(name)
             moved += 1
+    # Leftovers of the old rule: `<dir>__<name>` parked beside a `<name>` that now holds the
+    # same bytes are redundant copies of the current file. Relocated, not deleted.
+    swept = 0
+    for name in os.listdir(root):
+        m = re.match(r"^(.+?)__(.+)$", name)
+        p = os.path.join(root, name)
+        if m and os.path.isfile(p):
+            base = os.path.join(root, m.group(2))
+            if os.path.isfile(base) and _same_content(base, p):
+                _stash(p)
+                swept += 1
     for dirpath, dirnames, filenames in os.walk(root, topdown=False):
         if os.path.abspath(dirpath) == os.path.abspath(root):
             continue
@@ -71,6 +126,9 @@ def _flatten_into(root):
                 pass
     if moved:
         print(f"[zip] flattened {moved} nested member(s) -> cluster_raw/")
+    if replaced or swept:
+        print(f"[zip] {replaced} previous-vintage file(s) replaced and {swept} parked duplicate(s) "
+              f"relocated -> {os.path.normpath(backup_dir)}")
     return moved
 
 

@@ -65,7 +65,10 @@ CF_STAGE="${CF_STAGE:-extended}"
 R="${R:-2000}"; SEED="${SEED:-42}"
 N_FIRM_SHARDS="${N_FIRM_SHARDS:-40}"; N_SWEEPS="${N_SWEEPS:-6}"
 BR_GRID="${BR_GRID:-7}"; BR_WINDOW="${BR_WINDOW:-0.02}"
-BETA="${BETA:-0.9}"; HORIZON="${HORIZON:-50}"
+# beta is the one the cost parameters were estimated under: BBL_BETA from bbl_discount.env unless
+# BETA is set (cl_bbl_discount_fill, after the flags). HORIZON is the equilibrium CFs' OWN
+# horizon, 50 quarters, and deliberately does not follow BBL_HORIZON (the forward-sim horizon).
+BETA="${BETA:-}"; BETA_SRC="env BETA"; HORIZON="${HORIZON:-50}"
 SELIC_SHOCK="${SELIC_SHOCK:-0.01}"
 MERGE="${MERGE:-}"
 BASE_SIGMA="${BASE_SIGMA:-}"
@@ -103,6 +106,7 @@ while [[ $# -gt 0 ]]; do
 done
 case "${MODE}" in cf3|cf5|cf6) ;; *) echo "--mode must be cf3|cf5|cf6 (got '${MODE}')" >&2; exit 2 ;; esac
 [[ "${MODE}" == "cf6" && -z "${MERGE}" ]] && { echo "--mode cf6 requires --merge \"firmA,firmB\"" >&2; exit 2; }
+cl_bbl_discount_fill BETA BBL_BETA || exit 2
 
 LOGD="$(cl_log_dir)"
 ROOT="${CL_STEP_CF}"
@@ -119,6 +123,7 @@ cl_need_rc_jls "${CF_ROUTINE}" || exit 1
 cl_banner "Equilibrium CF: ${MODE}$([[ "${CL_DRYRUN}" == "1" ]] && echo '  [DRY RUN — nothing is submitted]')" \
           "E${CF_ROUTINE} ${CF_STAGE} | R=${R} | ${N_FIRM_SHARDS} shards x ${N_SWEEPS} sweeps per equilibrium" \
           "shards -> ${GPU_PARTITION} (--gpus=${GPUS}) | init/merge/compare -> ${CPU_PARTITION}" \
+          "beta=${BETA} (${BETA_SRC}) horizon=${HORIZON}" \
           "$([[ "${MODE}" == "cf5" ]] && echo "Selic shock +${SELIC_SHOCK}")$([[ "${MODE}" == "cf6" ]] && echo "merge ${MERGE}")"
 
 base_export="CF_ROUTINE=${CF_ROUTINE},CF_STAGE=${CF_STAGE},R=${R},SEED=${SEED},N_FIRM_SHARDS=${N_FIRM_SHARDS}"

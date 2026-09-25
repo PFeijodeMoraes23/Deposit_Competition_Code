@@ -18,8 +18,10 @@ NET-of-cost version (subtracting ĉ and adding the asset-return term) is produce
 later, once CF2 delivers cost parameters; see counterfactuals_plan.md.
 
 UNITS / TIMING (confirm with author before headline run):
-  * Periods are QUARTERS (panel frequency). β is per-period; default 0.9 per the
-    draft ("β=0.9, 50 periods forward"). Override with --beta.
+  * Periods are QUARTERS (panel frequency). β is per-period: BBL_BETA from bbl_discount.env,
+    the factor the cost parameters were estimated under, unless --beta is given. The horizon
+    (--horizon, default 50 quarters) is this counterfactual's own and does not follow the BBL
+    forward-simulation horizon.
   * The per-period markdown is the QUARTERLY spread ρ^q (spread_qoq), NOT the
     annualized ρ used by the demand shares. We hold ρ flat over the horizon
     (banks-believe-state-constant), so shares are computed once per scenario.
@@ -30,10 +32,10 @@ UNITS / TIMING (confirm with author before headline run):
 Usage (after data is downloaded AND running is authorized):
   # local dev (approximate, one quarter, low memory):
   julia --project=. --threads=4 cf1_franchise.jl --estim 6 --spec 12 \\
-      --stage extended --R 300 --time-filter 2024Q4 --beta 0.9 --horizon 50
+      --stage extended --R 300 --time-filter 2024Q4 --horizon 50
   # cluster headline:
   julia --project=\${PROJECT_DIR} --threads=8 cf1_franchise.jl --estim 6 \\
-      --spec 12 --stage extended --R 2000 --hpc --beta 0.9 --horizon 50
+      --spec 12 --stage extended --R 2000 --hpc --horizon 50
 """
 
 include(joinpath(@__DIR__, "cf_psi_basis.jl"))   # → foundation_deposit_sim + load_Z / load_cost_params (for --net)
@@ -72,7 +74,7 @@ states EVOLVING, as in the BBL forward simulation that produced the cost paramet
 a robustness check, not in place of them.
 """
 function franchise_decomposition(ctx::CFDemandCtx, st::DepositSimState;
-                                 beta::Float64=0.9, T::Int=50,
+                                 beta::Float64=bbl_beta(), T::Int=50,
                                  markdown_q::Vector{Float64})
     sim_phi = simulate_deposits(ctx, st; T=T)                                 # φ = φ̂
     sim_0   = simulate_deposits(ctx, st; T=T, phi_override=zeros(length(st.phi)))  # φ = 0
@@ -176,8 +178,8 @@ function _parse_cf1_args()
         "--hpc";         action   = :store_true
         "--local-dir";   arg_type = String;  default = nothing
         "--suffix";      arg_type = String;  default = ""
-        "--beta";        arg_type = Float64; default = 0.9
-        "--horizon";     arg_type = Int;     default = 50
+        "--beta";        arg_type = Float64; default = nothing   # nothing = BBL_BETA (bbl_discount.env)
+        "--horizon";     arg_type = Int;     default = 50        # the CF's own horizon, not BBL_HORIZON
         "--time-filter"; arg_type = String;  default = nothing   # e.g. "2024Q4" (local dev)
         "--dbar";        arg_type = Float64; default = -1.0   # <=0 => auto-calibrate globally
         "--net";         action   = :store_true             # net-of-cost value flow: ρ^q − ĉ (needs CF2 costs)
@@ -188,6 +190,7 @@ end
 
 function main_cf1()
     a = _parse_cf1_args()
+    resolve_discount!(a; horizon=false, who="CF1")
     tf = a["time-filter"] === nothing ? nothing : String[a["time-filter"]]
     ctx = build_cf_context(a["estim"], a["spec"], a["stage"];
                            R=a["R"], seed=a["seed"], hpc=a["hpc"],

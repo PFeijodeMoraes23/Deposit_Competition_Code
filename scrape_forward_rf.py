@@ -37,10 +37,12 @@ SOURCE (BCB open APIs, no key):
 
 WHY ExpectativasMercadoAnuais AND NOT ExpectativasMercadoSelic. The meeting-level
 resource (ExpectativasMercadoSelic) carries a median per COPOM meeting and would give a
-finer near-term shape, which matters under beta=0.9 discounting. It is NOT used because:
+finer near-term shape. It is NOT used because:
   (a) HORIZON. A 2016 or 2020 vintage covers only 12 meetings there -- roughly 1.5 years
-      -- against 5 reference years in the annual resource. The BBL horizon is 50
-      quarters, so the annual resource is the one that actually spans the simulation.
+      -- against 5 reference years in the annual resource. The BBL horizon (BBL_HORIZON in
+      bbl_discount.env, read as the --horizon default) runs well past both, so the annual
+      resource is the one that spans the most of the simulation; beyond its last reference
+      year every curve is held flat at that year's median, the market's neutral rate.
   (b) NO DATE ON A MEETING. Its key is a label ("R3/2017"), not a date. Mapping labels to
       calendar quarters needs the COPOM meeting calendar, an external dependency that
       changes (the meetings-per-year count has not always been 8) and that would fail
@@ -88,9 +90,12 @@ Outputs (processed/ESTIMATION_OUTPUT/COST_FWD/):
                            forward leg -- h=0 is realised regardless of what it says.
   forward_rf_vintages.png  overlay of the vintage curves (--plot).
 
+--horizon defaults to BBL_HORIZON from bbl_discount.env (utils/bbl_discount.py), the horizon
+the BBL forward simulation runs, so both CSVs reach every quarter it discounts.
+
 Usage:
-  python scrape_forward_rf.py --horizon 50 --start 2026Q1          # terminal curve
-  python scrape_forward_rf.py --horizon 50 --start 2026Q1 --offline
+  python scrape_forward_rf.py --start 2026Q1                       # terminal curve, h = 1..BBL_HORIZON
+  python scrape_forward_rf.py --start 2026Q1 --offline
   python scrape_forward_rf.py --vintage-from 2016Q1 --vintage-to 2024Q4 --plot
   python scrape_forward_rf.py --vintages "2016Q1,2018Q3,2020Q4,2023Q1"
   python scrape_forward_rf.py --vintage-from 2016Q1 --vintage-to 2024Q4 --force-splice
@@ -120,6 +125,8 @@ except Exception:
 import numpy as np
 import pandas as pd
 import pyarrow.parquet as pq
+
+from utils import bbl_discount as _bbl_discount
 
 _ROOT = Path(__file__).resolve().parents[2]
 COST_FWD = _ROOT / "BCB" / "Egan_et_al_2025_Rep" / "processed" / "ESTIMATION_OUTPUT" / "COST_FWD"
@@ -671,7 +678,8 @@ def _run_vintages(args):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--horizon", type=int, default=50)
+    ap.add_argument("--horizon", type=int, default=_bbl_discount.horizon(),
+                    help="forward quarters per curve (default: BBL_HORIZON in bbl_discount.env)")
     ap.add_argument("--start", type=str, default="2026Q1", help="first forward quarter YYYYQn")
     ap.add_argument("--offline", action="store_true", help="force the mean-reversion fallback")
     ap.add_argument("--out", type=str, default=None)

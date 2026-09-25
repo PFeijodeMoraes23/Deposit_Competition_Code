@@ -328,10 +328,14 @@ if [[ -f "${MANIFEST}" ]]; then
             case "${bundle}" in
                 produced)
                     PROD_SEEN=$((PROD_SEEN+1))
-                    if ls "${CL_DATA_OUT}/${p}" >/dev/null 2>&1; then
+                    # dest is the data/output SUBFOLDER the producing stage writes to
+                    # (data/output/bbl, data/output/logit, ...), relative to the project
+                    # root exactly as for uploaded data -- not the data/output top level.
+                    full="${CL_ROOT}/../${dest}/${p}"
+                    if ls ${full} >/dev/null 2>&1; then
                         PROD_HAVE=$((PROD_HAVE+1))
                     else
-                        echo "  pending ${name//\{k\}/${k}}: data/output/${p}  (produced on cluster — checked, not uploaded)"
+                        echo "  pending ${name//\{k\}/${k}}: ${dest}/${p}  (produced on cluster — checked, not uploaded)"
                     fi
                     ;;
                 *)

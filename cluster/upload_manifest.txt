@@ -166,13 +166,18 @@ demographics_sigma | data | blp        | SIGMA_DIR     | demographics_sigma.parq
 logit_delta_E{k}   | produced | blp    | BLP_LOGIT     | logit_delta_E{k}_spec_12.bin   | data/output/logit | sbatch logit_job.sh   (gate G4)                      | DEMAND_PREP | {prefix}_spec_12.parquet
 
 # --- 4. forward risk-free curve. MUST be built locally: compute nodes have no outbound ----
-#        internet, and this script calls the BCB SGS + Focus APIs.
-forward_rf         | data | bbl,cf     | COST_FWD      | forward_rf_qoq.csv             | data/input | python scrape_forward_rf.py --horizon 50 --start 2026Q1            | DEMAND_PREP | demand_3_index_spec_12.parquet
+#        internet, and this script calls the BCB SGS + Focus APIs. h = 1..250 (BBL_HORIZON in
+#        bbl_discount.env, the --horizon default). The staged copy is the 2026-09-04 Focus survey
+#        for h <= 50, held flat at that survey's neutral rate for h = 51..250 -- the script's own
+#        rule beyond the last reference year -- so its h <= 50 rows are byte-identical to the
+#        2026-09-09 build. Re-running the command reads the NEWEST survey and moves them.
+forward_rf         | data | bbl,cf     | COST_FWD      | forward_rf_qoq.csv             | data/input | python scrape_forward_rf.py --horizon 250 --start 2026Q1           | DEMAND_PREP | demand_3_index_spec_12.parquet
 # --- 4b. the MULTI-START pair, consumed by bbl_run.sh --multi-start (bbl_fwd_sim.jl reads both) -
 #        Same reason as row 4 and one more: these are the only two inputs the multi-start design
-#        adds, and both are tiny -- measured 2026-09-09: forward_rf_vintages.csv 162 kB, 1,836
-#        rows (36 launch quarters x h=0..50, h=0 the realised anchor, every row from a live Focus
-#        survey), and bbl_transitions.json 13 kB. That is the whole
+#        adds, and both are small -- measured 2026-09-24: forward_rf_vintages.csv 797 kB, 9,036
+#        rows (36 launch quarters x h=0..250, h=0 the realised anchor, h=1..250 from each
+#        quarter's own Focus survey, flat at its neutral rate past the last reference year), and
+#        bbl_transitions.json 13 kB. That is the whole
 #        point of staging PARAMETERS rather than paths: the S simulated rate paths are rebuilt on
 #        the compute node from rate.process plus the sim's own seed, so the upload does not grow
 #        with --n-paths, with the horizon, or with the panel. Never stage simulated paths.
@@ -203,7 +208,7 @@ forward_rf         | data | bbl,cf     | COST_FWD      | forward_rf_qoq.csv     
 #        routine freshness maintenance rather than a re-centering decision. The rate block is
 #        estimated from the vintages alone and comes back bit-for-bit, so a re-fit changes only
 #        the two blocks that the new panel actually moved.
-forward_rf_vint    | data | bbl        | COST_FWD      | forward_rf_vintages.csv        | data/input | python scrape_forward_rf.py --vintage-from 2016Q1 --vintage-to 2024Q4 --horizon 50 | - | -
+forward_rf_vint    | data | bbl        | COST_FWD      | forward_rf_vintages.csv        | data/input | python scrape_forward_rf.py --vintage-from 2016Q1 --vintage-to 2024Q4 --horizon 250 | - | -
 bbl_transitions    | data | bbl,cf     | COST_FWD      | bbl_transitions.json           | data/input | python bbl_transitions.py                                          | PROCESSED | market_panel.csv
 
 # --- 5. fitted BBL policy function (deviations are formed around it, not observed spreads) -
@@ -228,6 +233,10 @@ phi_nopix_E{k}     | produced | cf4    | CF_FOUNDATION | phi_nopix_E{k}_spec_12.
 julia_code         | code | all        | REPO          | *.jl                           | scripts    | -                                                             | -         | -
 shell_code         | code | all        | REPO          | *.sh                           | scripts    | -                                                             | -         | -
 julia_project      | code | all        | REPO          | Project.toml                   | scripts    | -                                                             | -         | -
+# The BBL discount registry (BBL_BETA, BBL_HORIZON). Not *.sh/*.jl/*.py, so it needs its own row;
+# bbl_run.sh, cf_run.sh, cf_eq_run.sh and the Julia entry points read it from scripts/ and REFUSE
+# to run on a default when it is missing.
+bbl_discount       | code | all        | REPO          | bbl_discount.env               | scripts    | -                                                             | -         | -
 # Python travels too, now that the sleepiness stage runs on the cluster. utils/ is its own
 # row because `from utils import paths` needs the package BESIDE the scripts, at
 # scripts/utils/ -- members are stored as '<dest>/<basename>', so the destination directory

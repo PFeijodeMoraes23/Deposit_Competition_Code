@@ -26,8 +26,12 @@ in ΔV, exactly as in the model-based simulator.
 spread response, no re-solve). Not a substitute for the model-based version.
 
 Usage (runs on LOCAL data; needs phî & Dep^Act columns in the parquet):
-  python diag_cf1_franchise_dataonly.py --estim 6 --spec 12 --beta 0.9 --horizon 50
-  python diag_cf1_franchise_dataonly.py --parquet <path> --beta 0.9
+  python diag_cf1_franchise_dataonly.py --estim 6 --spec 12 --horizon 50
+  python diag_cf1_franchise_dataonly.py --parquet <path> --beta 0.95
+
+β is BBL_BETA from bbl_discount.env (the factor the cost parameters were estimated under) unless
+--beta is given. The horizon (--horizon, default 50) mirrors cf1_franchise.jl's own horizon and
+does not follow the BBL forward-simulation horizon.
 """
 from utils.venv_guard import ensure_project_venv
 ensure_project_venv(__file__)
@@ -82,9 +86,17 @@ def main():
     ap.add_argument("--spec", type=int, default=12)
     ap.add_argument("--suffix", type=str, default="")
     ap.add_argument("--parquet", type=str, default=None)
-    ap.add_argument("--beta", type=float, default=0.9)
-    ap.add_argument("--horizon", type=int, default=50)
+    ap.add_argument("--beta", type=float, default=None,
+                    help="per-quarter discount factor (default: BBL_BETA from bbl_discount.env)")
+    ap.add_argument("--horizon", type=int, default=50,
+                    help="CF1's own horizon in quarters (not the BBL forward-sim horizon)")
     args = ap.parse_args()
+    if args.beta is None:
+        from bbl_shards import read_bbl_discount
+        args.beta = float(read_bbl_discount()["BBL_BETA"])
+        print(f"  beta={args.beta} <- bbl_discount.env")
+    else:
+        print(f"  beta={args.beta} <- --beta")
 
     if args.parquet:
         path = Path(args.parquet)

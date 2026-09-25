@@ -24,7 +24,8 @@ OPEN MODELING KNOBS (confirm before headline run — see counterfactuals_plan.md
   * Z_j cost shifters: the γ regressors. Default = the lagged cost/capital ratios
     used by the policy-function step (bbl_polfunc.py COST_SHIFTERS +
     CAPITAL_WHOLESALE), resolved by name from the parquet/sidecar.
-  * β (per quarter, default 0.9), horizon T (default 50), r^f path (default flat).
+  * β (per quarter) and the BBL horizon T: BBL_BETA / BBL_HORIZON from bbl_discount.env (see
+    `bbl_discount` below) unless a caller passes them; r^f path (default flat).
 
 This module is `include`d by bbl_fwd_sim.jl; it is not a standalone entry point.
 """
@@ -33,6 +34,67 @@ include(joinpath(@__DIR__, "cf_deposit_sim.jl"))
 
 using DataFrames, LinearAlgebra, Statistics
 import JSON3
+
+# ==========================================================================
+# The discount registry: bbl_discount.env
+# ==========================================================================
+"""
+    bbl_discount(key) -> String
+
+One value of `bbl_discount.env`, the single place the BBL discount factor (`BBL_BETA`) and the
+forward-simulation horizon (`BBL_HORIZON`) are set. The file sits beside this one (the scripts
+folder on the cluster); `BBL_DISCOUNT_ENV` names another file. Plain `KEY=VALUE` lines with `#`
+comments, read with Base alone. A missing file or key is an error, never a fallback literal:
+a silent default is how a discount factor nobody chose reaches a run.
+"""
+function bbl_discount(key::AbstractString)
+    path = get(ENV, "BBL_DISCOUNT_ENV", joinpath(@__DIR__, "bbl_discount.env"))
+    isfile(path) || error("BBL discount registry not found: $path\n" *
+                          "  It sets BBL_BETA and BBL_HORIZON. Upload bbl_discount.env beside the " *
+                          "scripts, or pass --beta/--horizon explicitly.")
+    val = nothing
+    for ln in eachline(path)
+        s = strip(ln)
+        (isempty(s) || startswith(s, '#')) && continue
+        i = findfirst('=', s)
+        i === nothing && continue
+        strip(s[1:prevind(s, i)]) == key || continue
+        v = strip(s[nextind(s, i):end])
+        j = findfirst('#', v)
+        j === nothing || (v = strip(v[1:prevind(v, j)]))
+        isempty(v) || (val = String(v))
+    end
+    val === nothing && error("$key is not set in $path")
+    return val
+end
+bbl_beta()    = parse(Float64, bbl_discount("BBL_BETA"))
+bbl_horizon() = parse(Int, bbl_discount("BBL_HORIZON"))
+
+"""
+    resolve_discount!(a; horizon=true, who="BBL") -> a
+
+Fill the parsed-argument dict's `"beta"` (and, when `horizon`, `"horizon"`) from bbl_discount.env
+when the flag was not given (`nothing`), and log where each value came from. `horizon=false` is
+for the counterfactual entry points: their horizon is their own, and only β is shared with the
+BBL cost estimation.
+"""
+function resolve_discount!(a::AbstractDict; horizon::Bool=true, who::AbstractString="BBL")
+    src = String[]
+    if a["beta"] === nothing
+        a["beta"] = bbl_beta(); push!(src, "β=$(a["beta"]) ← bbl_discount.env")
+    else
+        push!(src, "β=$(a["beta"]) ← --beta")
+    end
+    if horizon
+        if a["horizon"] === nothing
+            a["horizon"] = bbl_horizon(); push!(src, "T=$(a["horizon"]) ← bbl_discount.env")
+        else
+            push!(src, "T=$(a["horizon"]) ← --horizon")
+        end
+    end
+    log_status("  [$who] discount: " * join(src, " | "))
+    return a
+end
 
 # Cost-shifter (Z) columns entering c = ω + ζ·r^f_q + γ′Z (V_Main eq 8).
 # ACTIVE SET — the four actually present in the demand-prep parquets. Mirrors the corresponding
@@ -226,7 +288,7 @@ with column layout [ψ1, ψ2, ψ3(1..n_Z), ψ4].
 function accumulate_psi(ctx::CFDemandCtx, st::DepositSimState,
                         Dep::Matrix{Float64}, markdown_q::Vector{Float64},
                         Z::Matrix{Float64};
-                        beta::Float64=0.9,
+                        beta::Float64=bbl_beta(),
                         asset_return_q::Union{Nothing,Vector{Float64}}=nothing,
                         rf_path_q::Union{Nothing,Vector{Float64}}=nothing,
                         rf_curves::Union{Nothing,Matrix{Float64}}=nothing,

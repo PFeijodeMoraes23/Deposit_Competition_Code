@@ -124,6 +124,9 @@ CL_PY_REQ_POLFUNC="numpy, pandas, scipy, pyarrow, statsmodels"
 # headless; it does not make the import optional. dep_comp_blp already carries all
 # six — this string is the preflight PROBE, not a to-do list.
 CL_PY_REQ_SLEEP="numpy, pandas, scipy, pyarrow, statsmodels, matplotlib"
+# The BBL sweep (bbl_job.sh BBL_STEP=sweep) runs bbl_shards.py, which is stdlib-only and opens
+# the parquet shards with pyarrow to tell a complete file from a truncated one.
+CL_PY_REQ_SWEEP="pyarrow"
 
 # ── 2. Julia environment ──────────────────────────────────────────────────────
 # cl_load_julia: `module reset` (the correct command on Bouchet — `module purge`
@@ -408,13 +411,32 @@ _cl_sysimage_refuse () {
 # cl_gpu_gate: a FATAL, cheap CUDA check run BEFORE the real work, so a mismatched
 # toolchain costs seconds instead of a 16-hour H200 reservation at 0% util. Only
 # call it from a job that actually holds a GPU.
+#
+# EVERY device the job holds is checked, not just the first: a packed BBL job (bbl_job.sh,
+# PACK=k) gives each of its k shard processes one device, and a device that is not functional
+# would turn exactly one shard into a silent CPU run. `cl_gpu_gate [n]` requires at least n
+# visible devices (default: as many as CUDA_VISIBLE_DEVICES lists) and runs a trivial kernel on
+# each. With one device this is the check it always was.
+_cl_visible_gpus () {
+    local v="${CUDA_VISIBLE_DEVICES:-}"
+    [[ -n "${v}" ]] || { printf '1'; return 0; }
+    awk -F, '{print NF}' <<< "${v}"
+}
 cl_gpu_gate () {
-    local t="${CL_GPU_GATE_TIMEOUT:-300}"
-    echo "── CUDA gate (fatal, ${t}s budget) ──"
-    if timeout "${t}" julia --project="${CL_ROOT}" ${CL_JULIA_SYS[@]+"${CL_JULIA_SYS[@]}"} -e '
+    local t="${CL_GPU_GATE_TIMEOUT:-300}" need="${1:-$(_cl_visible_gpus)}"
+    echo "── CUDA gate (fatal, ${t}s budget, ${need} device(s)) ──"
+    if CL_GPU_GATE_NEED="${need}" timeout "${t}" julia --project="${CL_ROOT}" ${CL_JULIA_SYS[@]+"${CL_JULIA_SYS[@]}"} -e '
         using CUDA
         CUDA.functional() || (println(stderr, "CUDA.functional() == false"); exit(3))
-        println("CUDA OK: ", CUDA.name(CUDA.device()), "  driver ", CUDA.driver_version())
+        need = parse(Int, get(ENV, "CL_GPU_GATE_NEED", "1"))
+        devs = collect(CUDA.devices())
+        length(devs) >= need || (println(stderr, "only ", length(devs), " CUDA device(s) visible, the job needs ", need); exit(4))
+        for d in devs
+            CUDA.device!(d)
+            s = sum(CUDA.ones(Float32, 1024))
+            s == 1024f0 || (println(stderr, "device ", CUDA.deviceid(d), " failed a trivial kernel"); exit(5))
+            println("CUDA OK: device ", CUDA.deviceid(d), " ", CUDA.name(d), "  driver ", CUDA.driver_version())
+        end
     '; then
         return 0
     fi
@@ -479,20 +501,31 @@ cl_need_draws () {  # cl_need_draws <R> <SEED>
     cl_need_file "${CL_STEP_DRAWS}/halton_nu_R${1}_seed${2}.jls" "R=${1} draws" \
         "the BLP phase builds them when they are absent:  bash blp_run.sh   (force with --draws)"
 }
+# The horizon a rebuilt curve must reach: the BBL forward-simulation horizon from the registry
+# (bbl_discount.env), or HORIZON when that is longer. The curve files are shared by the BBL stage
+# and the counterfactuals, and the BBL horizon is the longer consumer, so a hint printed from a
+# counterfactual script (whose own HORIZON is shorter) must not tell anyone to truncate them.
+_cl_rf_hint_h () {
+    local h
+    h="$(cl_bbl_discount_get BBL_HORIZON 2>/dev/null)" || h=""
+    if [[ "${HORIZON:-}" =~ ^[0-9]+$ ]] && { [[ -z "${h}" ]] || (( HORIZON > h )); }; then h="${HORIZON}"; fi
+    printf '%s' "${h:-<BBL_HORIZON from bbl_discount.env>}"
+}
 cl_need_rf_curve () {
     cl_need_file "${CL_DATA_IN}/forward_rf_qoq.csv" "forward r^f curve" \
-        "build locally then upload: python scrape_forward_rf.py --horizon ${HORIZON:-50} --start 2026Q1"
+        "build locally then upload: python scrape_forward_rf.py --horizon $(_cl_rf_hint_h) --start 2026Q1"
 }
 # The two multi-start inputs. Both are BCB-API products (Focus surveys), so like
 # forward_rf_qoq.csv they cannot be produced on a compute node — no outbound internet — and both
-# are small enough to stage every run: 1,836 rows of vintages (~120 kB) and ~8 kB of transition
-# parameters. Small is what makes the multi-start design affordable at all: the S simulated rate
-# paths are REGENERATED on the node from these parameters plus a fixed seed, so nothing that
-# scales with S or with the panel ever crosses the upload.
+# are small enough to stage every run: 36 x (T+1) rows of vintages (under 1 MB at T=250) and ~8 kB
+# of transition parameters. Small is what makes the multi-start design affordable at all: the S
+# simulated rate paths are REGENERATED on the node from these parameters plus a fixed seed, so
+# nothing that scales with S or with the panel ever crosses the upload.
 cl_need_rf_vintages () {
+    local h; h="$(_cl_rf_hint_h)"
     cl_need_file "${CL_DATA_IN}/forward_rf_vintages.csv" "forward r^f curve vintages (per launch quarter)" \
-        "build locally then upload: python scrape_forward_rf.py --vintage-from 2016Q1 --vintage-to 2024Q4 --horizon ${HORIZON:-50}" \
-        "36 launch quarters 2016Q1..2024Q4 x h=0..50; h=0 is the realised anchor rate"
+        "build locally then upload: python scrape_forward_rf.py --vintage-from 2016Q1 --vintage-to 2024Q4 --horizon ${h}" \
+        "36 launch quarters 2016Q1..2024Q4 x h=0..${h}; h=0 is the realised anchor rate"
 }
 cl_need_transitions () {
     cl_need_file "${CL_DATA_IN}/bbl_transitions.json" "BBL transition parameters" \
@@ -982,4 +1015,531 @@ cl_bootstrap_tree () {
     fi
     _cl_link "${CL_DATA_OUT}" "${proc}/ESTIMATION_OUTPUT" "ESTIMATION_OUTPUT -> data/output"
     return 0
+}
+
+# ── 11. BBL SHARD DISPATCH — one implementation for bbl_run.sh AND the sweep job ──
+# The forward-sim array is submitted from two places: bbl_run.sh at launch, and the sweep job
+# (bbl_job.sh BBL_STEP=sweep) when it re-runs the shards a launch left missing. Both go through
+# cl_bbl_dispatch_fwd, so a re-run is built exactly like the original — same partitions, same
+# packing rule, same export list — and the only thing the sweep decides is WHICH indices.
+#
+# NODE AND QOS SPECS. Hard-coded defaults, each overridable by the env var named in cl_bbl_part.
+#   node shape, from   sinfo -p gpu_h100,gpu_h200 -N -o "%N %m %c %G"   (2026-09-24):
+#     gpu_h200   2,043,833 MB   48 CPUs   8 x H200
+#     gpu_h100   1,000,000 MB   48 CPUs   4 x H100
+#   per-user QOS caps (a job counts once however many GPUs it holds; an array TASK is a job):
+#     gpu_h200   MaxJobsPU=6    gres/gpu=16
+#     gpu_h100   MaxJobsPU=12   gres/gpu=32      a SEPARATE QOS, so the two caps add up
+# At one shard per job that is 6 + 12 = 18 GPUs of the 48 allowed; packing k shards into one
+# job (one GPU each) is what reaches the GPU cap instead of the job cap.
+#
+# MEASURED SHARD COST (the 2026-09 run: T=50, 50 shocks, 300 shards, multi-start S=36, P=1;
+# COMPLETED GPU shards, whole-job ElapsedRaw and the sacct MaxRSS of the .batch step):
+#     time    gpu_h200 n=398 median 19 / p90 23 / max 26 min;  gpu_h100 n=141 median 18 / max 22
+#     MaxRSS  median 164 GiB, max 179 GiB  -> MEM=256G is ~30% headroom at T=50
+# RSS grows with T (cf_shares_path and simulate_deposits hold N x T paths), so none of this is a
+# promise at T=250: the memory probe (bbl_run.sh --probe, BBL_RUNBOOK.md section 1) measures
+# per-shard peak RSS and time there, and bbl_sizing.sh turns them into MEM / PACK_H200 / PACK_H100.
+#
+# DISPATCH STATE lives in data/output/bbl/.dispatch/<key>/, key = E{k}_spec_12_{stage}{psi_tag}:
+#   context.env   the run's settings (bbl_run.sh writes it; the sweep and --repair read it)
+#   <jobid>.map   the shard indices that fwd job claims, one array task per line
+#   map_*.txt     the index list a packed array reads (BBL_SHARD_MAP), one task per line
+#   solve.jid     the solve the sweep re-targets when it re-runs a gap
+#   probe.env     --probe only: the packed and the unpacked job ids (read by bbl_sizing.sh)
+#   events.log    SUBMIT / SWEEP lines, read by bbl_status.sh
+#   STOP          written by bbl_cancel.sh: a sweep that finds it re-submits nothing
+# A dry run reads this tree but writes nothing to it.
+
+# ── THE DISCOUNT REGISTRY: bbl_discount.env ─────────────────────────────────
+# bbl_discount.env, beside this library, is the ONE place the BBL discount factor (BBL_BETA)
+# and the forward-simulation horizon (BBL_HORIZON) are set. Every consumer reads it: bbl_run.sh
+# (and through it the sim, the wall derivation and the sweep's provenance check), cf_run.sh and
+# cf_eq_run.sh (beta only: their horizon is the counterfactual's own), the Julia entry points
+# through bbl_discount() in cf_psi_basis.jl, and the Python ones through bbl_shards.read_bbl_discount.
+# An explicit flag or environment variable still overrides it, and every consumer logs which of
+# the three a value came from. BBL_DISCOUNT_ENV points the readers at another file (tests).
+#
+# The file is READ, never sourced: KEY=VALUE lines, '#' comments, a trailing CR tolerated, and
+# nothing in it is executed.
+CL_BBL_DISCOUNT_FILE="${BBL_DISCOUNT_ENV:-${CL_ROOT}/bbl_discount.env}"
+cl_bbl_discount_get () {   # cl_bbl_discount_get <KEY> -> the value on stdout; rc 1 if file or key is missing
+    local f="${CL_BBL_DISCOUNT_FILE}" line v=""
+    [[ -f "${f}" ]] || return 1
+    while IFS= read -r line || [[ -n "${line}" ]]; do
+        line="${line%$'\r'}"
+        [[ "${line}" =~ ^[[:space:]]*([A-Za-z_][A-Za-z0-9_]*)[[:space:]]*=[[:space:]]*([^#[:space:]]+) ]] || continue
+        [[ "${BASH_REMATCH[1]}" == "$1" ]] && v="${BASH_REMATCH[2]}"
+    done < "${f}"
+    [[ -n "${v}" ]] || return 1
+    printf '%s' "${v}"
+}
+# cl_bbl_discount_fill <VAR> <KEY>: when VAR is empty, set it from the registry and set VAR_SRC to
+# "bbl_discount.env"; otherwise leave both as the caller set them. rc 1 (with the reason on
+# stderr) when VAR is empty and the registry cannot supply it -- callers refuse rather than fall
+# back to a literal, which is how a beta nobody chose used to reach a run.
+cl_bbl_discount_fill () {
+    local var="$1" key="$2" v
+    [[ -n "${!var:-}" ]] && return 0
+    if v="$(cl_bbl_discount_get "${key}")"; then
+        printf -v "${var}" '%s' "${v}"
+        printf -v "${var}_SRC" '%s' "$(basename "${CL_BBL_DISCOUNT_FILE}")"
+        return 0
+    fi
+    cl_err "REFUSING: ${var} is not set and ${key} cannot be read from ${CL_BBL_DISCOUNT_FILE}."
+    cl_err "  That file is the single source of the BBL discount factor and horizon: upload it beside"
+    cl_err "  the scripts, or pass the value explicitly (flag or ${var}=...)."
+    return 1
+}
+
+cl_bbl_pkey () {   # partition -> H200 | H100 | GPU? | CPU
+    case "$1" in gpu_h200) printf 'H200' ;; gpu_h100) printf 'H100' ;; gpu*) printf 'GPU?' ;; *) printf 'CPU' ;; esac
+}
+cl_bbl_part () {   # cl_bbl_part <partition> <field>
+    local K; K="$(cl_bbl_pkey "$1")"
+    case "${K}:$2" in
+        H200:node_mem_mb) printf '%s' "${BBL_H200_NODE_MEM_MB:-2043833}" ;;
+        H200:node_cpus)   printf '%s' "${BBL_H200_NODE_CPUS:-48}" ;;
+        H200:node_gpus)   printf '%s' "${BBL_H200_NODE_GPUS:-8}" ;;
+        H200:gpu_type)    printf '%s' "${BBL_H200_GPU_TYPE:-h200}" ;;
+        H200:gpu_mem_mib) printf '%s' "${BBL_H200_GPU_MEM_MIB:-143771}" ;;
+        H200:max_jobs)    printf '%s' "${BBL_H200_MAX_JOBS:-6}" ;;
+        H200:max_gpus)    printf '%s' "${BBL_H200_MAX_GPUS:-16}" ;;
+        H200:wall_cap)    printf '%s' "${BBL_H200_WALL_CAP:-2-00:00:00}" ;;
+        H200:pack)        printf '%s' "${PACK_H200:-${PACK:-4}}" ;;
+        H200:mem)         printf '%s' "${MEM_H200:-${MEM:-256G}}" ;;
+        H100:node_mem_mb) printf '%s' "${BBL_H100_NODE_MEM_MB:-1000000}" ;;
+        H100:node_cpus)   printf '%s' "${BBL_H100_NODE_CPUS:-48}" ;;
+        H100:node_gpus)   printf '%s' "${BBL_H100_NODE_GPUS:-4}" ;;
+        H100:gpu_type)    printf '%s' "${BBL_H100_GPU_TYPE:-h100}" ;;
+        # ASSUMED 80 GB parts (nvidia-smi reports 81559 MiB). Not measured on Bouchet: read it
+        # off `nvidia-smi` in any gpu_h100 job log and override if it differs.
+        H100:gpu_mem_mib) printf '%s' "${BBL_H100_GPU_MEM_MIB:-81559}" ;;
+        H100:max_jobs)    printf '%s' "${BBL_H100_MAX_JOBS:-12}" ;;
+        H100:max_gpus)    printf '%s' "${BBL_H100_MAX_GPUS:-32}" ;;
+        H100:wall_cap)    printf '%s' "${BBL_H100_WALL_CAP:-2-00:00:00}" ;;
+        # PACK is the common default of both partitions; unset, h200 takes 4 and h100 3, because
+        # at the default MEM=256G four shards (1,048,576 MB) do not fit a 1,000,000 MB h100 node.
+        # MEM=256G is the T=50 sizing: at another T, MEM and PACK come from the memory probe
+        # (bbl_sizing.sh prints --mem-h200/--mem-h100/--pack-h200/--pack-h100).
+        H100:pack)        printf '%s' "${PACK_H100:-${PACK:-3}}" ;;
+        H100:mem)         printf '%s' "${MEM_H100:-${MEM:-256G}}" ;;
+        CPU:wall_cap)     printf '%s' "${BBL_CPU_WALL_CAP:-1-00:00:00}" ;;
+        CPU:pack)         printf '1' ;;
+        CPU:mem)          printf '%s' "${MEM:-256G}" ;;
+        *) return 1 ;;
+    esac
+}
+
+cl_mem_mb () {   # "256G" -> 262144 (SLURM units: K M G T, bare number = MB)
+    local s="${1^^}"
+    [[ "${s}" =~ ^([0-9]+)([KMGT]?)B?$ ]] || { echo "cl_mem_mb: cannot parse '$1'" >&2; return 2; }
+    case "${BASH_REMATCH[2]}" in
+        K) printf '%s' $(( (BASH_REMATCH[1] + 1023) / 1024 )) ;;
+        ""|M) printf '%s' "${BASH_REMATCH[1]}" ;;
+        G) printf '%s' $(( BASH_REMATCH[1] * 1024 )) ;;
+        T) printf '%s' $(( BASH_REMATCH[1] * 1048576 )) ;;
+    esac
+}
+cl_wall_min () {   # SLURM time (M, M:S, H:M:S, D-H, D-H:M, D-H:M:S) -> whole minutes, rounded up
+    local w="$1" d=0 h=0 m=0 s=0 a b c
+    if [[ "${w}" == *-* ]]; then
+        d="${w%%-*}"; w="${w#*-}"
+        IFS=: read -r a b c <<< "${w}"
+        h="${a:-0}"; m="${b:-0}"; s="${c:-0}"
+    else
+        IFS=: read -r a b c <<< "${w}"
+        if [[ -n "${c}" ]]; then h="${a}"; m="${b}"; s="${c}"
+        elif [[ -n "${b}" ]]; then m="${a}"; s="${b}"
+        else m="${a}"; fi
+    fi
+    printf '%s' $(( 10#${d} * 1440 + 10#${h} * 60 + 10#${m} + (10#${s} + 59) / 60 ))
+}
+cl_min_to_wall () {   # minutes -> D-HH:MM:00 | HH:MM:00
+    local t="$1" d h m
+    d=$(( t / 1440 )); h=$(( (t % 1440) / 60 )); m=$(( t % 60 ))
+    if (( d > 0 )); then printf '%d-%02d:%02d:00' "${d}" "${h}" "${m}"; else printf '%02d:%02d:00' "${h}" "${m}"; fi
+}
+
+# Index specs. bbl_shards.py carries the Python twins (compress_ranges / expand_spec / pack) and
+# the check suite runs both on the same inputs, so the sweep's Python view of a gap and the
+# shell's submission of it cannot disagree about which indices "3,50-299" names.
+cl_compress_ranges () {   # cl_compress_ranges 3 50 51 52 -> "3,50-52"   ("" for no input)
+    printf '%s\n' "$@" | awk 'NF' | sort -n -u | awk '
+        NR == 1 { a = $1; b = $1; next }
+        $1 == b + 1 { b = $1; next }
+        { o = o (o == "" ? "" : ",") (a == b ? a : a "-" b); a = $1; b = $1 }
+        END { if (NR) o = o (o == "" ? "" : ",") (a == b ? a : a "-" b); print o }'
+}
+cl_expand_spec () {   # cl_expand_spec "3,50-52%8" -> "3 50 51 52"   (a %throttle suffix is ignored)
+    local s="${1%%\%*}"
+    printf '%s\n' "${s}" | tr ', ' '\n\n' | awk '
+        !NF { next }
+        /^[0-9]+-[0-9]+$/ { split($0, r, "-"); if (r[2] + 0 < r[1] + 0) { print "descending range " $0 > "/dev/stderr"; bad = 1; exit }
+                             for (i = r[1] + 0; i <= r[2] + 0; i++) print i; next }
+        /^[0-9]+$/ { print $0 + 0; next }
+        { print "not an index or a range: " $0 > "/dev/stderr"; bad = 1; exit }
+        END { exit bad }' | sort -n -u | paste -sd' ' -
+}
+cl_bbl_pack_tasks () {   # cl_bbl_pack_tasks <k> <ids...> -> one task per line, k ids each (last may be short)
+    local k="$1"; shift
+    printf '%s\n' "$@" | awk 'NF' | sort -n -u | awk -v k="${k}" '
+        { t = t (t == "" ? "" : " ") $1; if (++n % k == 0) { print t; t = "" } }
+        END { if (t != "") print t }'
+}
+
+cl_bbl_key ()  { printf 'E%s_spec_12_%s%s' "$1" "$2" "${3:-}"; }   # <routine> <stage> <psi_tag>
+cl_bbl_rtag () {                                                     # job-name tag: E3_ms1
+    if [[ "$2" == "extended" ]]; then printf 'E%s%s' "$1" "${3:-}"; else printf 'E%s_%s%s' "$1" "$2" "${3:-}"; fi
+}
+cl_bbl_dispatch_dir () { printf '%s/%s' "${CL_BBL_DISPATCH_ROOT:-${CL_STEP_BBL}/.dispatch}" "$1"; }
+
+cl_bbl_event () {   # cl_bbl_event <key> <text>
+    local d; d="$(cl_bbl_dispatch_dir "$1")"
+    if [[ "${CL_DRYRUN:-0}" == "1" ]]; then cl_log "  [dry-run] event ${1}: ${2}"; return 0; fi
+    mkdir -p "${d}" 2>/dev/null || return 0
+    printf '%s %s\n' "$(date +%Y-%m-%dT%H:%M:%S)" "$2" >> "${d}/events.log" 2>/dev/null || true
+    return 0
+}
+
+# The run's settings, saved once at launch so every later re-run is built from the SAME values
+# rather than from whatever the environment of the job that re-submits happens to hold.
+CL_BBL_CTX_VARS="BBL_KEY BBL_RTAG BBL_ROUTINE BBL_STAGE R SEED N_SHARDS SHOCKS HORIZON BETA \
+HORIZON_SRC BETA_SRC PSI_TAG MULTI_START N_PATHS BBL_FWD_EXTRA POLICY_CSV FWD_GPU FWD_PARTITIONS \
+SWEEP_PARTITIONS PACK PACK_H200 PACK_H100 MEM MEM_H200 MEM_H100 BBL_THREADS_PER_SHARD CPU_PARTITION \
+CPU_CONSTRAINT SHARD_TIME BBL_SHARD_MIN_T50 BBL_SHARD_MIN_T50_CPU BBL_PACK_CONTENTION BBL_WALL_SAFETY \
+BBL_WALL_FLOOR_MIN BBL_WALL_ROUND_MIN BBL_RETRY_WALL_MULT BBL_MAX_RETRIES RUN_EPOCH BBL_FRESH PROBE"
+cl_bbl_ctx_write () {   # cl_bbl_ctx_write <key>
+    local d f v
+    d="$(cl_bbl_dispatch_dir "$1")"
+    if [[ "${CL_DRYRUN:-0}" == "1" ]]; then cl_log "  [dry-run] would write ${d}/context.env"; return 0; fi
+    mkdir -p "${d}" || return 1
+    f="${d}/.context.env.$$"
+    {
+        echo "# bbl_run.sh $(date +%Y-%m-%dT%H:%M:%S) -- read by the sweep job and by --repair; do not edit mid-run"
+        for v in ${CL_BBL_CTX_VARS}; do printf '%s=%q\n' "${v}" "${!v-}"; done
+        if [[ -n "${ARRAY_THROTTLE+set}" ]]; then printf 'ARRAY_THROTTLE_SET=1\nARRAY_THROTTLE=%q\n' "${ARRAY_THROTTLE}"
+        else echo "ARRAY_THROTTLE_SET=0"; fi
+    } > "${f}" && mv -f "${f}" "${d}/context.env"
+}
+cl_bbl_ctx_load () {   # cl_bbl_ctx_load <file>: sets every CL_BBL_CTX_VARS variable in THIS shell
+    [[ -f "$1" ]] || return 1
+    ARRAY_THROTTLE_SET=0
+    . "$1"
+    if [[ "${ARRAY_THROTTLE_SET}" != "1" ]]; then unset ARRAY_THROTTLE; fi
+    return 0
+}
+
+# cl_bbl_check_packing <partition>: the submit-time refusal. A packed job is ONE node, so k
+# shards must fit its GPUs, its memory and its CPUs; asking for more is a job that never starts
+# (or, for memory, one whose k shards share an OOM kill).
+cl_bbl_check_packing () {
+    local p="$1" K k mem mb node gpus cpus thr rc=0
+    K="$(cl_bbl_pkey "${p}")"
+    [[ "${K}" == "CPU" ]] && return 0
+    if [[ "${K}" == "GPU?" ]]; then
+        cl_err "REFUSING: no node/QOS specs for GPU partition '${p}' (known: gpu_h200, gpu_h100); add them to cl_bbl_part."
+        return 1
+    fi
+    k="$(cl_bbl_part "${p}" pack)"; mem="$(cl_bbl_part "${p}" mem)"
+    [[ "${k}" =~ ^[1-9][0-9]*$ ]] || { cl_err "REFUSING: PACK for ${p} is '${k}'; a positive integer is required."; return 1; }
+    mb="$(cl_mem_mb "${mem}")" || { cl_err "REFUSING: cannot read MEM '${mem}' for ${p}."; return 1; }
+    node="$(cl_bbl_part "${p}" node_mem_mb)"; gpus="$(cl_bbl_part "${p}" node_gpus)"
+    cpus="$(cl_bbl_part "${p}" node_cpus)"; thr="${BBL_THREADS_PER_SHARD:-8}"
+    if (( k > gpus )); then
+        cl_err "REFUSING: PACK=${k} on ${p} exceeds the ${gpus} GPUs of one node (a packed job is one node)."; rc=1
+    fi
+    if (( k * mb > node )); then
+        cl_err "REFUSING: PACK=${k} x MEM ${mem} = $(( k * mb )) MB on ${p}, but one node schedules ${node} MB."
+        cl_err "  Size MEM and PACK from the memory probe: bash bbl_sizing.sh (BBL_RUNBOOK.md section 1)."
+        rc=1
+    fi
+    if (( k * thr > cpus )); then
+        cl_err "REFUSING: PACK=${k} x ${thr} threads = $(( k * thr )) CPUs on ${p}; one node has ${cpus}."; rc=1
+    fi
+    return ${rc}
+}
+
+# cl_bbl_throttle <partition> <pack> -> "N|why"   (N empty = no throttle)
+# The binding QOS limit is whichever runs out first, the job count or the GPU count, so the
+# array concurrency is min(MaxJobsPU, floor(MaxGPU / PACK)). ARRAY_THROTTLE, when SET (even
+# empty, which means none), overrides the derivation on every partition.
+cl_bbl_throttle () {
+    local p="$1" k="$2" mj mg t
+    if [[ -n "${ARRAY_THROTTLE+set}" ]]; then
+        printf '%s|ARRAY_THROTTLE=%s (explicit override)' "${ARRAY_THROTTLE}" "${ARRAY_THROTTLE:-<empty: none>}"; return 0
+    fi
+    if [[ "$(cl_bbl_pkey "${p}")" == "CPU" ]]; then printf '|none (CPU partition)'; return 0; fi
+    mj="$(cl_bbl_part "${p}" max_jobs)"; mg="$(cl_bbl_part "${p}" max_gpus)"
+    t=$(( mg / k )); (( t > mj )) && t=${mj}; (( t < 1 )) && t=1
+    printf '%s|min(MaxJobsPU=%s, floor(MaxGPU=%s / PACK=%s) = %s) = %s jobs = %s shards at once' \
+        "${t}" "${mj}" "${mg}" "${k}" "$(( mg / k ))" "${t}" "$(( t * k ))"
+}
+
+# cl_bbl_wall_minutes <partition> <pack> [mult] [mult_label] -> "minutes|arithmetic"
+# The wall is DERIVED unless SHARD_TIME is set:
+#     BBL_SHARD_MIN_T50    26 min, the slowest COMPLETED GPU shard of the 2026-09 run at T=50
+#   x T/50                 evolving states re-evaluate the shares every period: linear in T
+#   x shard size           (SHOCKS/50) x (300/N_SHARDS), relative to the measured shard
+#   x BBL_PACK_CONTENTION  1.3, for shards sharing a node (memory bandwidth, PCIe, other jobs)
+#   x BBL_WALL_SAFETY      1.5
+#   x mult                 1.5^n on the sweep's n-th re-run; BBL_PROBE_WALL_MULT for the probe
+# rounded UP to a multiple of BBL_WALL_ROUND_MIN (30), floored at BBL_WALL_FLOOR_MIN (30) and
+# capped at the partition's per-job limit. At T=250: 26 x 5 x 1 x 1.3 x 1.5 = 253.5 min, rounded
+# up to 270 min = 04:30:00. A packed job's wall is its slowest child's. The CPU base is NOT a
+# measurement: the last CPU run hit its 16 h wall.
+cl_bbl_wall_minutes () {
+    local p="$1" k="$2" mult="${3:-1}" lab="${4:-retry}" K base capm m why
+    K="$(cl_bbl_pkey "${p}")"
+    capm="$(cl_wall_min "$(cl_bbl_part "${p}" wall_cap)")"
+    if [[ -n "${SHARD_TIME:-}" ]]; then
+        m="$(awk -v b="$(cl_wall_min "${SHARD_TIME}")" -v x="${mult}" 'BEGIN{ v = b * x; i = int(v); if (i < v) i++; print i }')"
+        why="SHARD_TIME=${SHARD_TIME} (explicit)$( [[ "${mult}" == "1" ]] || printf ' x %s %s' "${lab}" "${mult}" )"
+    else
+        if [[ "${K}" == "CPU" ]]; then base="${BBL_SHARD_MIN_T50_CPU:-960}"; else base="${BBL_SHARD_MIN_T50:-26}"; fi
+        read -r m why < <(awk -v b="${base}" -v T="${HORIZON:-50}" -v sh="${SHOCKS:-50}" -v ns="${N_SHARDS:-300}" \
+            -v c="${BBL_PACK_CONTENTION:-1.3}" -v s="${BBL_WALL_SAFETY:-1.5}" -v x="${mult}" -v lab="${lab}" \
+            -v fl="${BBL_WALL_FLOOR_MIN:-30}" -v rd="${BBL_WALL_ROUND_MIN:-30}" -v k="${k}" 'BEGIN{
+            r = (sh / 50) * (300 / ns); v = b * (T / 50) * r * c * s * x
+            i = int(v); if (i < v) i++
+            if (rd > 0) i = int((i + rd - 1) / rd) * rd
+            if (i < fl) i = fl
+            printf "%d %g min x T/50 (%g/50 = %.3g) x shard size (%g shocks / %g shards vs 50/300 = %.3g) x contention %g x safety %g%s = %.1f min, rounded up to a multiple of %g = %d min (PACK=%d)", \
+                i, b, T, T / 50, sh, ns, r, c, s, (x != 1 ? sprintf(" x %s %g", lab, x) : ""), v, rd, i, k }')
+        if [[ "${K}" == "CPU" ]]; then why="${why} [CPU base ${base} min is NOT measured: the last CPU run hit its 16 h wall]"; fi
+    fi
+    if (( m > capm )); then
+        why="${why}; CAPPED at the ${p} limit $(cl_bbl_part "${p}" wall_cap): a shard that needs longer can never finish there"
+        m="${capm}"
+    fi
+    printf '%s|%s' "${m}" "${why}"
+}
+
+_cl_bbl_pack_for () { if [[ "${FWD_GPU:-1}" == "1" ]]; then cl_bbl_part "$1" pack; else printf '1'; fi; }
+
+_cl_bbl_claim () {   # _cl_bbl_claim <jobid> <one task per line>: what that job computes
+    cl_bbl_event "${BBL_KEY}" "SUBMIT fwd jid=$1 shards=$(cl_compress_ranges $2)"
+    [[ "${CL_DRYRUN:-0}" == "1" ]] && return 0
+    local d; d="$(cl_bbl_dispatch_dir "${BBL_KEY}")"
+    mkdir -p "${d}" && printf '%s\n' "$2" > "${d}/$1.map"
+}
+
+# cl_bbl_dispatch_fwd "<ids>" [wall_mult] [--dependency=...]
+# Submits the fwd_sim work for exactly these shard indices and leaves the job ids, colon-joined,
+# in CL_BBL_JIDS. Call it directly, never inside $( ): it reports with cl_say. wall_mult scales
+# the derived wall (the sweep's 1.5^n, the probe's BBL_PROBE_WALL_MULT); BBL_MULT_LABEL names it
+# in the logged arithmetic (default "retry").
+#   FWD_PARTITIONS  one or more GPU partitions ("gpu_h200 gpu_h100"); each gets a DISJOINT
+#                   contiguous block of the indices, sized in proportion to its concurrent
+#                   capacity (throttle x PACK), so both QOS caps fill at the same pace.
+#   PACK=1          the one-shard-per-job submission: --array=<the indices themselves>,
+#                   --gpus=<type>:1, and the task id IS the shard id.
+#   PACK=k>1        an index LIST, not a range: the indices are chunked into tasks of k, written
+#                   to a map file (one task per line) and the array runs 0..tasks-1 with
+#                   --gpus=<type>:k. A short last chunk goes out as its own job requesting only
+#                   the GPUs it uses.
+# Reads: BBL_KEY BBL_RTAG BBL_ROUTINE BBL_STAGE R SEED N_SHARDS BBL_FWD_EXTRA PSI_TAG FWD_GPU
+#        FWD_PARTITIONS CPU_PARTITION CPU_CONSTRAINT LOGD + the knobs cl_bbl_part/_wall/_throttle read.
+cl_bbl_dispatch_fwd () {
+    local -a ids parts caps
+    local mult="${2:-1}" dep="${3:-}" p k thr tot=0 j n start=0 cnt
+    read -r -a ids <<< "$(printf '%s\n' $1 | awk 'NF' | sort -n -u | paste -sd' ' -)"
+    CL_BBL_JIDS=""
+    (( ${#ids[@]} > 0 )) || return 0
+    if [[ "${FWD_GPU:-1}" == "1" ]]; then read -r -a parts <<< "${FWD_PARTITIONS:-gpu_h200}"
+    else parts=("${CPU_PARTITION:-day}"); fi
+    n=${#ids[@]}
+    for j in "${!parts[@]}"; do
+        p="${parts[$j]}"
+        cl_bbl_check_packing "${p}" || return 1
+        k="$(_cl_bbl_pack_for "${p}")"
+        thr="$(cl_bbl_throttle "${p}" "${k}")"; thr="${thr%%|*}"
+        caps[$j]=$(( ${thr:-${n}} * k ))
+        tot=$(( tot + caps[j] ))
+    done
+    for j in "${!parts[@]}"; do
+        p="${parts[$j]}"; k="$(_cl_bbl_pack_for "${p}")"
+        if (( j == ${#parts[@]} - 1 )); then
+            cnt=$(( n - start ))
+        else
+            cnt=$(( n * caps[j] / tot )); cnt=$(( (cnt + k / 2) / k * k ))
+            if (( cnt > n - start )); then cnt=$(( n - start )); fi
+        fi
+        (( cnt > 0 )) || continue
+        _cl_bbl_submit_part "${p}" "${k}" "${mult}" "${dep}" "${ids[@]:start:cnt}" || return 1
+        start=$(( start + cnt ))
+    done
+    return 0
+}
+
+_cl_bbl_submit_part () {   # <partition> <pack> <retry_mult> <dep> <ids...>
+    local p="$1" k="$2" mult="$3" dep="$4"; shift 4
+    local -a ids=("$@") lines last
+    local wi wall ti thr thrs name ex spec jid mem type nfull
+    wi="$(cl_bbl_wall_minutes "${p}" "${k}" "${mult}" "${BBL_MULT_LABEL:-retry}")"; wall="$(cl_min_to_wall "${wi%%|*}")"
+    ti="$(cl_bbl_throttle "${p}" "${k}")"; thr="${ti%%|*}"; thrs="${thr:+%${thr}}"
+    name="bbl_fwd_${BBL_RTAG}"
+    ex="ALL,BBL_ROUTINE=${BBL_ROUTINE},BBL_STAGE=${BBL_STAGE},R=${R},SEED=${SEED},BBL_STEP=fwd_sim,N_SHARDS=${N_SHARDS},BBL_EXTRA=${BBL_FWD_EXTRA},BBL_RTAG=${BBL_RTAG},BBL_KEY=${BBL_KEY},PSI_TAG=${PSI_TAG}"
+    cl_log "  ${name} [${p}] wall ${wall} = ${wi#*|}"
+    cl_log "  ${name} [${p}] throttle ${ti#*|}"
+    mem="$(cl_bbl_part "${p}" mem)"
+    if [[ "${FWD_GPU:-1}" != "1" ]]; then
+        spec="$(cl_compress_ranges "${ids[@]}")"
+        jid=$(cl_sbatch -J "${name}" -t "${wall}" --mem="${mem}" \
+            -o "${LOGD}/${name}_%A_%a.out" -e "${LOGD}/${name}_%A_%a.err" ${dep} \
+            --partition="${p}" --constraint="${CPU_CONSTRAINT:-cpugen:turin}" \
+            --array="${spec}${thrs}" --export="${ex},CF_GPU=0" "${CL_ROOT}/bbl_job.sh") || return 1
+        cl_require_jid "${jid}" "${name}" || return 1
+        _cl_bbl_claim "${jid}" "$(printf '%s\n' "${ids[@]}")"
+        CL_BBL_JIDS="${CL_BBL_JIDS:+${CL_BBL_JIDS}:}${jid}"
+        cl_say "  ${name} [${p}] ${#ids[@]} shards, 1 per job, --array=${spec}${thrs} -> ${jid}"
+        return 0
+    fi
+    type="$(cl_bbl_part "${p}" gpu_type)"
+    if (( k == 1 )); then
+        spec="$(cl_compress_ranges "${ids[@]}")"
+        jid=$(cl_sbatch -J "${name}" -t "${wall}" --mem="${mem}" \
+            -o "${LOGD}/${name}_%A_%a.out" -e "${LOGD}/${name}_%A_%a.err" ${dep} \
+            --partition="${p}" --gpus="${type}:1" \
+            --array="${spec}${thrs}" --export="${ex},CF_GPU=1" "${CL_ROOT}/bbl_job.sh") || return 1
+        cl_require_jid "${jid}" "${name}" || return 1
+        _cl_bbl_claim "${jid}" "$(printf '%s\n' "${ids[@]}")"
+        CL_BBL_JIDS="${CL_BBL_JIDS:+${CL_BBL_JIDS}:}${jid}"
+        cl_say "  ${name} [${p}] ${#ids[@]} shards, 1 per job (--gpus=${type}:1), --array=${spec}${thrs} -> ${jid}"
+        return 0
+    fi
+    mapfile -t lines < <(cl_bbl_pack_tasks "${k}" "${ids[@]}")
+    read -r -a last <<< "${lines[${#lines[@]}-1]}"
+    nfull=${#lines[@]}
+    if (( ${#last[@]} < k )); then nfull=$(( nfull - 1 )); fi
+    if (( nfull > 0 )); then
+        _cl_bbl_submit_packed "${p}" "${k}" "${wall}" "${thrs}" "${dep}" "${ex}" "${lines[@]:0:nfull}" || return 1
+    fi
+    if (( nfull < ${#lines[@]} )); then
+        _cl_bbl_submit_packed "${p}" "${#last[@]}" "${wall}" "" "${dep}" "${ex}" "${lines[@]:nfull}" || return 1
+    fi
+    return 0
+}
+
+_cl_bbl_submit_packed () {   # <partition> <gpus per job> <wall> <%throttle> <dep> <export> <task lines...>
+    local p="$1" g="$2" wall="$3" thrs="$4" dep="$5" ex="$6"; shift 6
+    local -a lines=("$@")
+    local name="bbl_fwd_${BBL_RTAG}" type mem mb tps d map arr jid n=${#lines[@]} l
+    type="$(cl_bbl_part "${p}" gpu_type)"; mem="$(cl_bbl_part "${p}" mem)"; mb="$(cl_mem_mb "${mem}")"
+    tps="${BBL_THREADS_PER_SHARD:-8}"
+    d="$(cl_bbl_dispatch_dir "${BBL_KEY}")"
+    map="${d}/map_$(date +%Y%m%d_%H%M%S)_${RANDOM}${RANDOM}_${p}_x${g}.txt"
+    if [[ "${CL_DRYRUN:-0}" == "1" ]]; then
+        cl_log "  [dry-run] would write ${map} (${n} task line(s)):"
+        for l in "${lines[@]}"; do cl_log "      ${l}"; done
+    else
+        mkdir -p "${d}" && printf '%s\n' "${lines[@]}" > "${map}" || { cl_err "cannot write shard map ${map}"; return 1; }
+    fi
+    if (( n > 1 )); then arr="0-$(( n - 1 ))${thrs}"; else arr="0"; fi
+    jid=$(cl_sbatch -J "${name}" -t "${wall}" --mem="$(( g * mb ))M" --cpus-per-task="$(( g * tps ))" \
+        -o "${LOGD}/${name}_pack_%A_%a.out" -e "${LOGD}/${name}_pack_%A_%a.err" ${dep} \
+        --partition="${p}" --gpus="${type}:${g}" --array="${arr}" \
+        --export="${ex},CF_GPU=1,BBL_SHARD_MAP=${map},BBL_PACK=${g},BBL_THREADS_PER_SHARD=${tps}" \
+        "${CL_ROOT}/bbl_job.sh") || return 1
+    cl_require_jid "${jid}" "${name}" || return 1
+    _cl_bbl_claim "${jid}" "$(printf '%s\n' "${lines[@]}")"
+    CL_BBL_JIDS="${CL_BBL_JIDS:+${CL_BBL_JIDS}:}${jid}"
+    cl_say "  ${name} [${p}] PACK=${g}: ${n} job(s) x ${g} shard(s) ($(cl_compress_ranges ${lines[*]})), --gpus=${type}:${g} --mem=$(( g * mb ))M --cpus-per-task=$(( g * tps )), --array=${arr} -> ${jid}"
+}
+
+# Live jobs, by name. squeue only: safe on the login node, and absent (so: nothing live) on a
+# machine without SLURM, which is what a local dry run sees. COMPLETING is not live: an array the
+# sweep was chained afterany can still list its last tasks as CG for a moment, and counting those
+# would make the sweep wait on work that is already over.
+cl_bbl_live_named () {   # cl_bbl_live_named <name>[,<name>...] -> base job ids, space-separated
+    command -v squeue >/dev/null 2>&1 || return 0
+    squeue -h -u "${USER:-$(id -un)}" -n "$1" -t PENDING,RUNNING,CONFIGURING,SUSPENDED,REQUEUED -o '%F' 2>/dev/null \
+        | awk 'NF' | sort -u | paste -sd' ' -
+}
+# cl_bbl_live_claims <key> <rtag> -> one line per live fwd job: "<jid> <shard ids...>", or
+# "<jid> UNKNOWN" for a live job this tree has no claim for (submitted by hand, or before the
+# dispatch registry existed) -- which callers must treat as claiming EVERY index.
+cl_bbl_live_claims () {
+    local d j
+    d="$(cl_bbl_dispatch_dir "$1")"
+    for j in $(cl_bbl_live_named "bbl_fwd_$2"); do
+        if [[ -f "${d}/${j}.map" ]]; then printf '%s %s\n' "${j}" "$(tr -s ' \n' '  ' < "${d}/${j}.map")"
+        else printf '%s UNKNOWN\n' "${j}"; fi
+    done
+}
+
+# cl_bbl_submit_sweep <retry> [sbatch args, e.g. --hold --dependency=afterany:...] -> job id on
+# stdout ONLY. A small `day` job (no Julia, no GPU); no cpugen pin, since it loads no sysimage.
+# Callers submit it --hold and release it once the solve it will re-target is registered.
+cl_bbl_submit_sweep () {
+    local r="$1" name="bbl_sweep_${BBL_RTAG}"; shift
+    CL_NO_CPUGEN=1 cl_sbatch -J "${name}" -t "${BBL_SWEEP_TIME:-00:30:00}" \
+        --partition="${SWEEP_PARTITION:-day}" --nodes=1 --ntasks=1 --cpus-per-task=1 --mem=4G \
+        -o "${LOGD}/${name}_%j.out" -e "${LOGD}/${name}_%j.err" "$@" \
+        --export="ALL,BBL_STEP=sweep,BBL_KEY=${BBL_KEY},BBL_RTAG=${BBL_RTAG},BBL_ROUTINE=${BBL_ROUTINE},BBL_STAGE=${BBL_STAGE},R=${R},SEED=${SEED},PSI_TAG=${PSI_TAG},BBL_RETRY=${r}" \
+        "${CL_ROOT}/bbl_job.sh"
+}
+
+# cl_bbl_retarget_solve <key> <new sweep jid>: move the pending solve's afterok onto the next
+# sweep. This is what keeps ONE solve job id for the life of a routine however many re-runs its
+# shards need, so the tables, the archive and the CF jobs (all afterok that id) never have to be
+# re-chained. Returns 1 when there is a registered solve that cannot be moved (it is gone or no
+# longer pending): the caller then withdraws its re-run instead of leaving an orphan chain.
+cl_bbl_retarget_solve () {
+    local d s st
+    d="$(cl_bbl_dispatch_dir "$1")"
+    s="$(cat "${d}/solve.jid" 2>/dev/null || true)"
+    if [[ -z "${s}" ]]; then cl_say "  no solve registered for $1 (--no-solve?): nothing to re-target"; return 0; fi
+    if [[ "${CL_DRYRUN:-0}" == "1" ]]; then cl_say "  [dry-run] scontrol update JobId=${s} Dependency=afterok:$2"; return 0; fi
+    st="$(squeue -h -j "${s}" -o '%T' 2>/dev/null | head -1 || true)"
+    if [[ "${st}" != "PENDING" ]]; then
+        cl_err "solve ${s} is ${st:-no longer queued}, not PENDING: its dependency cannot be moved."
+        return 1
+    fi
+    scontrol update JobId="${s}" Dependency="afterok:$2" || return 1
+    cl_say "  solve ${s}: dependency moved to afterok:$2"
+}
+
+# cl_bbl_check_curve <T> <multi_start 0|1> [csv] [note]: the Focus forward curve must reach h=T.
+# Beyond its last horizon bbl_fwd_sim.jl repeats the last quoted rate (load_forward_rf,
+# _load_rf_vintages), which at T=250 against a curve built to h=50 would be a flat tail over
+# 200 of the 250 quarters. Refused unless ALLOW_RF_PAD=1. Multi-start reads the vintages file
+# and checks its SHORTEST vintage; single-start reads forward_rf_qoq.csv. A missing file is not
+# this check's business (cl_need_rf_curve / cl_need_rf_vintages report it). note=1 checks a file
+# the run does NOT read: a short one is reported on one line and never refused.
+cl_bbl_check_curve () {
+    local T="$1" ms="${2:-0}" f="${3:-}" note="${4:-0}" hmax what
+    if [[ -z "${f}" ]]; then
+        if [[ "${ms}" == "1" ]]; then f="${CL_DATA_IN}/forward_rf_vintages.csv"; else f="${CL_DATA_IN}/forward_rf_qoq.csv"; fi
+    fi
+    [[ -f "${f}" ]] || return 0
+    hmax="$(awk -F, -v ms="${ms}" '
+        NR == 1 { for (i = 1; i <= NF; i++) { g = $i; gsub(/^[ \t\r"]+|[ \t\r"]+$/, "", g); c[g] = i }
+                  if (!("h" in c) || (ms == "1" && !("start_q" in c))) { bad = 1; exit }
+                  next }
+        { h = $(c["h"]) + 0
+          if (ms == "1") { s = $(c["start_q"]); if (h >= 1 && h > m[s]) m[s] = h }
+          else if (h > mx) mx = h }
+        END { if (bad) { print -1; exit }
+              if (ms == "1") { n = 0; for (s in m) { if (n == 0 || m[s] < mn) mn = m[s]; n++ }; print (n ? mn : 0) }
+              else print mx + 0 }' "${f}")"
+    if [[ "${ms}" == "1" ]]; then what="$(basename "${f}") (its SHORTEST launch-quarter vintage)"; else what="$(basename "${f}")"; fi
+    if (( hmax < 0 )); then cl_err "curve-length check: ${f} has no 'h'$([[ "${ms}" == "1" ]] && printf "/'start_q'" || true) column."; return 1; fi
+    if (( T <= hmax )); then cl_log "  forward curve OK: T=${T} <= h_max=${hmax} in ${what}"; return 0; fi
+    if [[ "${note}" == "1" ]]; then
+        cl_say "  note: ${what} runs to h=${hmax} < T=${T}. This run does not read it; rebuild it to h >= ${T} before a run that does."
+        return 0
+    fi
+    cl_err "T=${T} EXCEEDS the forward-curve length: ${what} runs to h=${hmax}."
+    cl_err "  bbl_fwd_sim.jl would fill h=$(( hmax + 1 ))..${T} by repeating the last quoted rate, a flat tail nobody"
+    cl_err "  forecast over $(( T - hmax )) of the ${T} quarters the discounted sums integrate."
+    cl_err "  Rebuild the curve to h >= ${T} locally (needs internet) and upload it to data/input/:"
+    if [[ "${ms}" == "1" ]]; then
+        cl_err "     python scrape_forward_rf.py --vintage-from 2016Q1 --vintage-to 2024Q4 --horizon ${T}"
+    else
+        cl_err "     python scrape_forward_rf.py --horizon ${T} --start 2026Q1"
+    fi
+    if [[ "${ALLOW_RF_PAD:-0}" == "1" ]]; then cl_err "  ALLOW_RF_PAD=1: continuing WITH the padded tail, deliberately."; return 0; fi
+    cl_err "  ALLOW_RF_PAD=1 accepts the padding deliberately."
+    return 1
 }
