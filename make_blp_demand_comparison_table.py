@@ -97,6 +97,9 @@ def build_table(ests, suffix: str = "", show_segments: bool = True,
         raise SystemExit(f"[demand-comparison] mixed se_method across routines {_methods} — "
                          "stale checkpoint vintage; re-run/ingest the missing routine first.")
     sem     = rc.se_note(data.get(avail[-1]) or rep)
+    # Present only when some column has a Σ on the bound (the dagger rows): the other SEs are then
+    # conditional on it (blp_se_common.jl gmm_cluster_ses profiles it out of the covariance).
+    bound_note = (rc.BOUNDARY_SE_NOTE + " ") if rc.sigma_on_bound(data[e] for e in avail) else ""
     lbl_suffix = "" if show_segments else "_noseg"
     # The segment dummies are nuisance controls omitted from this table rather than carrying a
     # duplicate with-segments variant (four extra rows, no information). Wording matches the
@@ -141,7 +144,9 @@ def build_table(ests, suffix: str = "", show_segments: bool = True,
         r"Student-$t$ reference with $G^*$ effective clusters: *** $p<0.01$, ** $p<0.05$, * $p<0.1$. "
         r"The $\Sigma$'s are bounded $\Sigma\ge0$, and a $\dagger$ marks a $\Sigma$ at "
         r"the boundary ($\widehat{\Sigma}\approx0$), reported on the bound with no two-sided standard "
-        r"errors \parencite{andrews1999}. $Q$: GMM overidentification statistic. Mean own-price elasticity is "
+        r"errors \parencite{andrews1999}. "
+        + bound_note + rc.Q_NOTE + " " +
+        r"Mean own-price elasticity is "
         r"the average-market plug-in $\hat\alpha\cdot\overline{\rho(1-s)}$. Spread in percentage points."
         r"} \\",
         r"    \endlastfoot",
@@ -216,11 +221,13 @@ def build_table(ests, suffix: str = "", show_segments: bool = True,
         g = data[e].get("G_star");   return f"{g:.2f}" if g is not None else "---"
     def se_of(e):
         return rc.semi_elast_cell(data[e], e)         # α̂·mean(ρ(1−s)), average-market plug-in
+    # Same labels and order as the logit comparison footer (blp_logit.jl), so the two demand
+    # tables read row for row.
     lines += [
-        stat(r"Mean own-price elast.", se_of),
-        stat(r"$Q$ (GMM)", q_of),
+        stat(rc.ELAST_ROW_LABEL, se_of),
         stat(r"Observations", n_of),
-        stat(r"Eff.\ Clusters ($G^*$)", g_of),
+        stat(rc.Q_ROW_LABEL, q_of),
+        stat(rc.GSTAR_ROW_LABEL, g_of),
         r"\end{xltabular}",
         r"\end{spacing}",
     ]

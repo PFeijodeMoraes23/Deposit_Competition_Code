@@ -396,7 +396,7 @@ function psi_under(ctx::CFDemandCtx, st::DepositSimState, Z::Matrix{Float64},
     # Legacy single deterministic path (one curve for the whole panel).
     if rf_paths === nothing && rf_curve_paths === nothing
         sim = simulate_deposits(ctx, st; T=T, spreads_ann=spreads_ann, rf_path_q=rf_path_q,
-                                state_ev=ctx.state_ev)
+                                state_ev=ctx.state_ev, beta=beta)
         res = accumulate_psi(ctx, st, sim.Dep, markdown_q, Z;
                              beta=beta, asset_return_q=asset_return_q, rf_path_q=rf_path_q)
         return res.psi_firm, res.firms
@@ -417,7 +417,8 @@ function psi_under(ctx::CFDemandCtx, st::DepositSimState, Z::Matrix{Float64},
         @inbounds for p in 1:P
             cur = Matrix{Float64}(rf_curve_paths[p, :, :])
             sim = simulate_deposits(ctx, st; T=T, spreads_ann=spreads_ann,
-                                    s_const_in=s_const, rf_curves=cur, row_curve=row_curve)
+                                    s_const_in=s_const, rf_curves=cur, row_curve=row_curve,
+                                    beta=beta)
             res = accumulate_psi(ctx, st, sim.Dep, markdown_q, Z;
                                  beta=beta, asset_return_q=asset_return_q,
                                  rf_curves=cur, row_curve=row_curve, row_start=row_start)
@@ -433,7 +434,7 @@ function psi_under(ctx::CFDemandCtx, st::DepositSimState, Z::Matrix{Float64},
     @inbounds for p in 1:P
         rp = Vector{Float64}(vec(rf_paths[p, 1:T]))
         sim = simulate_deposits(ctx, st; T=T, spreads_ann=spreads_ann,
-                                rf_path_q=rp, s_const_in=s_const)
+                                rf_path_q=rp, s_const_in=s_const, beta=beta)
         res = accumulate_psi(ctx, st, sim.Dep, markdown_q, Z;
                              beta=beta, asset_return_q=asset_return_q, rf_path_q=rp)
         acc = acc === nothing ? copy(res.psi_firm) : (acc .+ res.psi_firm)

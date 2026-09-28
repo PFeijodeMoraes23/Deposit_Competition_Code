@@ -12,16 +12,17 @@ The opening sentence is chosen by what the table ACTUALLY printed, not by what i
 to print. A band is a cluster artifact (sleep_ame_twostage.py for the single-index routines,
 sleep_wcb_band.py for the linear ones); when one has not landed, the cell falls back to a
 standard error, and a note that still promised an interval would be describing a calculation
-that did not run. `second_stage_note(bands=...)` is how the caller says which happened.
+that did not run. `note_open(bands)` is how the caller says which happened.
 """
 
 _OPEN_INTERVAL = (
     r"All columns report \textcite{efron1987better}'s bias-corrected percentile interval in "
     r"brackets, not a standard error: with roughly six effective clusters the $t$ reference "
     r"behind a Wald interval is itself an approximation, so the bootstrap distribution is read "
-    r"directly. Columns \ref{estimation:local} and \ref{estimation:pooled} bootstrap the "
-    r"coefficients (WCB at the conglomerate level, except on the rows marked $\dagger$ below; "
-    r"\textcite{cameron2008bootstrap}, \textcite{mackinnon2017wild}); columns "
+    r"directly. The linear strategies \ref{estimation:local} and \ref{estimation:pooled} "
+    r"bootstrap the coefficients (WCB at the conglomerate level, except on the rows marked "
+    r"$\dagger$ below; \textcite{cameron2008bootstrap}, \textcite{mackinnon2017wild}); the "
+    r"single-index strategies "
     r"\ref{estimation:single_idx} and \ref{estimation:single_idx_time} additionally re-solve the "
     r"index direction and re-profile the link at every draw, so their intervals carry that "
     r"uncertainty too. Stars come from the same bias-corrected bootstrap distribution: ** and "
@@ -46,9 +47,19 @@ _OPEN_MIXED = (
     r"95\% interval of a one-star estimate covers zero. "
 )
 
+# What a column is. The spec-12 comparison puts one estimation strategy in each column; the
+# per-routine appendix tables hold the strategy fixed and put one specification of the grid in
+# each column (instrument set across columns, state vector across panels).
+_COLUMNS = {
+    "strategies": (r"Columns index the estimation strategies enumerated in "
+                   r"Section~\ref{sec:empirical:sleep}"),
+    "specifications": (r"Columns are the specifications numbered in "
+                       r"Table~\ref{tab:sleep_specifications_guide}, the instrument set varying "
+                       r"across columns and the state vector across panels"),
+}
+
 _BODY = (
-    r"Columns index the estimation strategies "
-    r"enumerated in Section~\ref{sec:empirical:sleep}; the linear strategies report "
+    r"; the linear strategies report "
     r"coefficients and the single-index strategies report average marginal effects (AME), "
     r"in percentage points of the sleepy share per the unit given in the row label, with "
     r"shares and rates in percentage points and Pix Available a discrete $0\to1$ "
@@ -65,17 +76,20 @@ _BODY = (
 # describe what ran, not what was planned.
 OPEN_TOKEN = "%%SECOND_STAGE_OPEN%%"
 
-# Kept for callers that want the all-intervals wording verbatim.
-SECOND_STAGE_NOTE = _OPEN_INTERVAL + _BODY
+# Kept for callers that want the all-intervals wording verbatim (comparison-table columns).
+SECOND_STAGE_NOTE = _OPEN_INTERVAL + _COLUMNS["strategies"] + _BODY
 
 
-def second_stage_note() -> str:
+def second_stage_note(columns: str = "strategies") -> str:
     """-> the shared second-stage note body with the opening left as OPEN_TOKEN.
 
-    Substitute it with `note_open(bands)` after rendering. A caller that forgets will emit a
-    visible `%%SECOND_STAGE_OPEN%%` in the .tex rather than a plausible-but-wrong sentence.
+    `columns` says what a column of the calling table is: "strategies" for the spec-12
+    comparison, "specifications" for a per-routine appendix table.
+
+    Substitute the opening with `note_open(bands)` after rendering. A caller that forgets will
+    emit a visible `%%SECOND_STAGE_OPEN%%` in the .tex rather than a plausible-but-wrong sentence.
     """
-    return OPEN_TOKEN + _BODY
+    return OPEN_TOKEN + _COLUMNS[columns] + _BODY
 
 
 def note_open(bands=True) -> str:

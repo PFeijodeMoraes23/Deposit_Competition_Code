@@ -9,8 +9,9 @@
 #
 # --slim --psi-tag <T>  (bbl set only; ignored by the others) packages ONLY what the local side
 #   reads from one BBL run: psi_eq / psi_dev / psi_starts of tag T (T="" = the untagged
-#   single-start family), every cost_params_*.json, the tab_bbl_* tables and the polfunc_*
-#   outputs. Other tags' psi (a stale single-curve family, _benchgpu, a <tag>probe run), the
+#   single-start family), the cost_params json of tag T, the tab_bbl_* tables and the polfunc_*
+#   outputs. Other tags' psi and cost_params (a stale single-curve family, _benchgpu, a <tag>probe
+#   run, the untagged file the counterfactuals read), the
 #   sweep's .dispatch state and write debris stay on the cluster. Without --slim the whole folder
 #   is packaged, as before. The 2026-09-22 archive was ~1 GB because of exactly those extras.
 #
@@ -265,7 +266,7 @@ done
 SELF_RE=""
 [[ -n "${SLURM_JOB_ID:-}" ]] && SELF_RE="${SLURM_JOB_ID}"
 
-# --slim (bbl only): keep a file iff it sits directly in output/bbl and is this tag's psi, a
+# --slim (bbl only): keep a file iff it sits directly in output/bbl and is this tag's psi or
 # cost_params json, a tab_bbl_* table or a polfunc_* output. The tag is matched as the WHOLE
 # remainder after the stage, so _ms1 keeps neither _ms1probe nor _ms10 nor the untagged family.
 if [[ "${SLIM}" == "1" && "${SET}" != "bbl" ]]; then
@@ -273,11 +274,12 @@ if [[ "${SLIM}" == "1" && "${SET}" != "bbl" ]]; then
     SLIM=0
 fi
 SLIM_RE="^psi_(eq|dev|starts)_E[0-9]+_spec_[0-9]+_[A-Za-z0-9]+${SLIM_TAG}(_shard[0-9]+of[0-9]+)?\.(parquet|json)$"
+SLIM_CP_RE="^cost_params_E[0-9]+_spec_[0-9]+_[A-Za-z0-9]+${SLIM_TAG}\.json$"
 _slim_keep () {
     local b="${1##*/}"
     [[ "${1%/*}" == "output/bbl" ]] || return 1
-    case "${b}" in cost_params_*.json|tab_bbl_*|polfunc_*) return 0 ;; esac
-    [[ "${b}" =~ ${SLIM_RE} ]]
+    case "${b}" in tab_bbl_*|polfunc_*) return 0 ;; esac
+    [[ "${b}" =~ ${SLIM_RE} || "${b}" =~ ${SLIM_CP_RE} ]]
 }
 slim_dropped=0
 scoped=()

@@ -728,6 +728,32 @@ _cl_cpugen_args () {
     printf '%s' "--constraint=${CL_CPU_CONSTRAINT:-cpugen:turin}"
 }
 
+# Per-job resource variables a job carries only when ITS OWN submission requested them: SLURM
+# sets SLURM_CPUS_PER_TASK only for -c, SLURM_MEM_PER_NODE only for --mem, and so on. sbatch
+# --export=ALL (the default) copies the submitting shell's whole environment into the new job, so
+# a job submitted from inside another one (the bbl_submit wrap and the sweep both run -c 1
+# --mem=4G) would start with the parent's values and keep every one its own flags and #SBATCH
+# lines do not set -- and the job scripts size Julia's threads from SLURM_CPUS_PER_TASK. The
+# allocation itself is never affected (sbatch reads SBATCH_* input variables, not these), only
+# what the job sees. cl_sbatch submits with these unset, so a job sees what its own submission set.
+_CL_PARENT_JOB_VARS="SLURM_CPUS_PER_TASK SLURM_CPUS_PER_GPU SLURM_TRES_PER_TASK SLURM_MEM_PER_NODE SLURM_MEM_PER_CPU SLURM_MEM_PER_GPU"
+
+# The submission record. With CL_SUBMIT_LOG set (a plain shell variable, never exported, so no job
+# inherits it: bbl_run.sh sets it to cancel what a failed invocation already submitted), every job
+# id cl_sbatch obtains, live or dry-run, is appended as "<jobid><TAB><job name>" in submission
+# order. Unset, nothing is written.
+_cl_submit_record () {   # _cl_submit_record <jobid> <the sbatch args>
+    [[ -n "${CL_SUBMIT_LOG:-}" ]] || return 0
+    local jid="$1" a prev="" name=""; shift
+    for a in "$@"; do
+        if [[ "${prev}" == "-J" || "${prev}" == "--job-name" ]]; then name="${a}"; fi
+        case "${a}" in --job-name=*) name="${a#--job-name=}" ;; esac
+        prev="${a}"
+    done
+    printf '%s\t%s\n' "${jid}" "${name:-?}" >> "${CL_SUBMIT_LOG}" 2>/dev/null || true
+    return 0
+}
+
 cl_sbatch () {
     local _cg; _cg="$(_cl_cpugen_args "$@")"
     if [[ "${CL_DRYRUN}" == "1" ]]; then
@@ -742,6 +768,7 @@ cl_sbatch () {
         # dependency it is about to build.
         { cl_log "[dry-run] sbatch --parsable --kill-on-invalid-dep=yes$(_cl_q ${_cg:+"${_cg}"} "$@")"
           cl_log "          -> job id ${jid}"; } >&2
+        _cl_submit_record "${jid}" "$@"
         printf '%s\n' "${jid}"
         return 0
     fi
@@ -775,12 +802,13 @@ cl_sbatch () {
         esac
     done
     local _out _rc
-    _out="$(sbatch --parsable --kill-on-invalid-dep=yes ${_cg:+"${_cg}"} "$@")"; _rc=$?
+    _out="$(unset ${_CL_PARENT_JOB_VARS}; sbatch --parsable --kill-on-invalid-dep=yes ${_cg:+"${_cg}"} "$@")"; _rc=$?
     if (( _rc != 0 )) || [[ -z "${_out}" ]]; then
         cl_err "sbatch REFUSED this submission (rc=${_rc}); sbatch's own message is above."
         cl_err "  args:$(_cl_q ${_cg:+"${_cg}"} "$@")"
         return 1
     fi
+    _cl_submit_record "${_out}" "$@"
     printf '%s
 ' "${_out}"
 }
@@ -1036,10 +1064,33 @@ cl_bootstrap_tree () {
 # MEASURED SHARD COST (the 2026-09 run: T=50, 50 shocks, 300 shards, multi-start S=36, P=1;
 # COMPLETED GPU shards, whole-job ElapsedRaw and the sacct MaxRSS of the .batch step):
 #     time    gpu_h200 n=398 median 19 / p90 23 / max 26 min;  gpu_h100 n=141 median 18 / max 22
-#     MaxRSS  median 164 GiB, max 179 GiB  -> MEM=256G is ~30% headroom at T=50
-# RSS grows with T (cf_shares_path and simulate_deposits hold N x T paths), so none of this is a
-# promise at T=250: the memory probe (bbl_run.sh --probe, BBL_RUNBOOK.md section 1) measures
-# per-shard peak RSS and time there, and bbl_sizing.sh turns them into MEM / PACK_H200 / PACK_H100.
+#     MaxRSS  median 164 GiB, max 179 GiB
+# and at T=250 (probe job 27455290, 2026-09-24: gpu_h100, E3 shards 1 and 8 of 300, one shard per
+# job, beta=0.979):
+#     time    35:06 and 37:04 elapsed (x1.8 the T=50 median for 5x the horizon: NOT linear in T);
+#             38-40 s per simulation, 50 per shard; startup + psi_eq 2-2.7 min
+#     MaxRSS  185.0 and 200.75 GiB;  GPU memory 71-74 GB of an H100's 80 GB
+# THE LAUNCH SIZING (the defaults below; every value stays overridable by flag or environment):
+#     MEM        per shard, against the measured peak of 200.75 GiB (probe shard 8, T=250):
+#                  gpu_h200  240G (x1.20)   4 x 240G =   983,040 MB of a 2,043,833 MB node
+#                  gpu_h100  230G (x1.15)   4 x 230G =   942,080 MB of a 1,000,000 MB node
+#                gpu_h100 has its own default because a packed job there is nearly a whole node:
+#                4 x 240G left 16,960 MB, and sbatch refuses a job that asks for more than the
+#                node's RealMemory minus whatever SLURM reserves for itself (MemSpecLimit).
+#                230G leaves 57,920 MB. --mem-h100 / MEM_H100 overrides it; --mem / MEM sets
+#                every partition, gpu_h100 included.
+#     PACK       4 on gpu_h200, 4 on gpu_h100
+#     throttle   derived: min(MaxJobsPU, floor(MaxGPU / PACK)) = 4 jobs on h200, 8 on h100
+#                = 16 + 32 = 48 shards at once
+#     SHARD_TIME 01:45:00 = 37 min x 1.37 (T=50 max/median, 26/19) x 1.3 (packing contention)
+#                x 1.5 (safety) = 98.9 min, rounded up (BBL_SHARD_TIME_DEFAULT)
+# The T-based wall formula in cl_bbl_wall_minutes is a documented FALLBACK only (--shard-time
+# derive): it assumes time linear in T, which the probe refuted.
+BBL_SHARD_TIME_DEFAULT="${BBL_SHARD_TIME_DEFAULT:-01:45:00}"
+BBL_MEM_DEFAULT="${BBL_MEM_DEFAULT:-240G}"
+BBL_MEM_DEFAULT_H100="${BBL_MEM_DEFAULT_H100:-230G}"
+# The horizon the defaults were measured at: a launch beyond it that names no memory is warned.
+BBL_SIZING_T="${BBL_SIZING_T:-250}"
 #
 # DISPATCH STATE lives in data/output/bbl/.dispatch/<key>/, key = E{k}_spec_12_{stage}{psi_tag}:
 #   context.env   the run's settings (bbl_run.sh writes it; the sweep and --repair read it)
@@ -1107,7 +1158,7 @@ cl_bbl_part () {   # cl_bbl_part <partition> <field>
         H200:max_gpus)    printf '%s' "${BBL_H200_MAX_GPUS:-16}" ;;
         H200:wall_cap)    printf '%s' "${BBL_H200_WALL_CAP:-2-00:00:00}" ;;
         H200:pack)        printf '%s' "${PACK_H200:-${PACK:-4}}" ;;
-        H200:mem)         printf '%s' "${MEM_H200:-${MEM:-256G}}" ;;
+        H200:mem)         printf '%s' "${MEM_H200:-${MEM:-${BBL_MEM_DEFAULT}}}" ;;
         H100:node_mem_mb) printf '%s' "${BBL_H100_NODE_MEM_MB:-1000000}" ;;
         H100:node_cpus)   printf '%s' "${BBL_H100_NODE_CPUS:-48}" ;;
         H100:node_gpus)   printf '%s' "${BBL_H100_NODE_GPUS:-4}" ;;
@@ -1118,15 +1169,17 @@ cl_bbl_part () {   # cl_bbl_part <partition> <field>
         H100:max_jobs)    printf '%s' "${BBL_H100_MAX_JOBS:-12}" ;;
         H100:max_gpus)    printf '%s' "${BBL_H100_MAX_GPUS:-32}" ;;
         H100:wall_cap)    printf '%s' "${BBL_H100_WALL_CAP:-2-00:00:00}" ;;
-        # PACK is the common default of both partitions; unset, h200 takes 4 and h100 3, because
-        # at the default MEM=256G four shards (1,048,576 MB) do not fit a 1,000,000 MB h100 node.
-        # MEM=256G is the T=50 sizing: at another T, MEM and PACK come from the memory probe
-        # (bbl_sizing.sh prints --mem-h200/--mem-h100/--pack-h200/--pack-h100).
-        H100:pack)        printf '%s' "${PACK_H100:-${PACK:-3}}" ;;
-        H100:mem)         printf '%s' "${MEM_H100:-${MEM:-256G}}" ;;
+        # PACK is the common default of both partitions (4 each: the launch sizing above). Four
+        # shards fit an h100 node only at MEM <= 244G (1,000,000 MB / 4); a larger MEM with PACK 4
+        # on gpu_h100 is refused by cl_bbl_check_packing, so pass --pack-h100 3 with it. MEM here
+        # falls back to BBL_MEM_DEFAULT_H100 (230G, the headroom rule above); bbl_run.sh, which
+        # always fills MEM, sets MEM_H100 to that default itself when neither --mem nor
+        # --mem-h100 was given.
+        H100:pack)        printf '%s' "${PACK_H100:-${PACK:-4}}" ;;
+        H100:mem)         printf '%s' "${MEM_H100:-${MEM:-${BBL_MEM_DEFAULT_H100}}}" ;;
         CPU:wall_cap)     printf '%s' "${BBL_CPU_WALL_CAP:-1-00:00:00}" ;;
         CPU:pack)         printf '1' ;;
-        CPU:mem)          printf '%s' "${MEM:-256G}" ;;
+        CPU:mem)          printf '%s' "${MEM:-${BBL_MEM_DEFAULT}}" ;;
         *) return 1 ;;
     esac
 }
@@ -1207,8 +1260,8 @@ cl_bbl_event () {   # cl_bbl_event <key> <text>
 CL_BBL_CTX_VARS="BBL_KEY BBL_RTAG BBL_ROUTINE BBL_STAGE R SEED N_SHARDS SHOCKS HORIZON BETA \
 HORIZON_SRC BETA_SRC PSI_TAG MULTI_START N_PATHS BBL_FWD_EXTRA POLICY_CSV FWD_GPU FWD_PARTITIONS \
 SWEEP_PARTITIONS PACK PACK_H200 PACK_H100 MEM MEM_H200 MEM_H100 BBL_THREADS_PER_SHARD CPU_PARTITION \
-CPU_CONSTRAINT SHARD_TIME BBL_SHARD_MIN_T50 BBL_SHARD_MIN_T50_CPU BBL_PACK_CONTENTION BBL_WALL_SAFETY \
-BBL_WALL_FLOOR_MIN BBL_WALL_ROUND_MIN BBL_RETRY_WALL_MULT BBL_MAX_RETRIES RUN_EPOCH BBL_FRESH PROBE"
+CPU_CONSTRAINT SHARD_TIME SHARD_TIME_SRC BBL_SHARD_MIN_T50 BBL_SHARD_MIN_T50_CPU BBL_PACK_CONTENTION BBL_WALL_SAFETY \
+BBL_WALL_FLOOR_MIN BBL_WALL_ROUND_MIN BBL_RETRY_WALL_MULT BBL_MAX_RETRIES RUN_EPOCH BBL_FRESH PROBE SHARD_PROBE"
 cl_bbl_ctx_write () {   # cl_bbl_ctx_write <key>
     local d f v
     d="$(cl_bbl_dispatch_dir "$1")"
@@ -1277,24 +1330,28 @@ cl_bbl_throttle () {
 }
 
 # cl_bbl_wall_minutes <partition> <pack> [mult] [mult_label] -> "minutes|arithmetic"
-# The wall is DERIVED unless SHARD_TIME is set:
+# The wall is SHARD_TIME x mult when SHARD_TIME is set. bbl_run.sh sets it on every GPU launch:
+# to --shard-time, else to BBL_SHARD_TIME_DEFAULT (01:45:00, from the T=250 probe; see the
+# measurement block above); SHARD_TIME_SRC names which. mult is 1.5^n on the sweep's n-th re-run
+# and BBL_PROBE_WALL_MULT for the probe.
+# FALLBACK (SHARD_TIME empty: --shard-time derive, and the CPU path) -- the T-based formula:
 #     BBL_SHARD_MIN_T50    26 min, the slowest COMPLETED GPU shard of the 2026-09 run at T=50
-#   x T/50                 evolving states re-evaluate the shares every period: linear in T
+#   x T/50                 linear in T (an upper bound: the T=250 probe took x1.8, not x5)
 #   x shard size           (SHOCKS/50) x (300/N_SHARDS), relative to the measured shard
 #   x BBL_PACK_CONTENTION  1.3, for shards sharing a node (memory bandwidth, PCIe, other jobs)
 #   x BBL_WALL_SAFETY      1.5
-#   x mult                 1.5^n on the sweep's n-th re-run; BBL_PROBE_WALL_MULT for the probe
-# rounded UP to a multiple of BBL_WALL_ROUND_MIN (30), floored at BBL_WALL_FLOOR_MIN (30) and
-# capped at the partition's per-job limit. At T=250: 26 x 5 x 1 x 1.3 x 1.5 = 253.5 min, rounded
-# up to 270 min = 04:30:00. A packed job's wall is its slowest child's. The CPU base is NOT a
-# measurement: the last CPU run hit its 16 h wall.
+#   x mult
+# rounded UP to a multiple of BBL_WALL_ROUND_MIN (30) and floored at BBL_WALL_FLOOR_MIN (30).
+# Either way the wall is capped at the partition's per-job limit. At T=250 the formula gives
+# 26 x 5 x 1 x 1.3 x 1.5 = 253.5 min -> 04:30:00. A packed job's wall is its slowest child's.
+# The CPU base is NOT a measurement: the last CPU run hit its 16 h wall.
 cl_bbl_wall_minutes () {
     local p="$1" k="$2" mult="${3:-1}" lab="${4:-retry}" K base capm m why
     K="$(cl_bbl_pkey "${p}")"
     capm="$(cl_wall_min "$(cl_bbl_part "${p}" wall_cap)")"
     if [[ -n "${SHARD_TIME:-}" ]]; then
         m="$(awk -v b="$(cl_wall_min "${SHARD_TIME}")" -v x="${mult}" 'BEGIN{ v = b * x; i = int(v); if (i < v) i++; print i }')"
-        why="SHARD_TIME=${SHARD_TIME} (explicit)$( [[ "${mult}" == "1" ]] || printf ' x %s %s' "${lab}" "${mult}" )"
+        why="SHARD_TIME=${SHARD_TIME} (${SHARD_TIME_SRC:-explicit})$( [[ "${mult}" == "1" ]] || printf ' x %s %s' "${lab}" "${mult}" )"
     else
         if [[ "${K}" == "CPU" ]]; then base="${BBL_SHARD_MIN_T50_CPU:-960}"; else base="${BBL_SHARD_MIN_T50:-26}"; fi
         read -r m why < <(awk -v b="${base}" -v T="${HORIZON:-50}" -v sh="${SHOCKS:-50}" -v ns="${N_SHARDS:-300}" \
@@ -1375,7 +1432,7 @@ cl_bbl_dispatch_fwd () {
 _cl_bbl_submit_part () {   # <partition> <pack> <retry_mult> <dep> <ids...>
     local p="$1" k="$2" mult="$3" dep="$4"; shift 4
     local -a ids=("$@") lines last
-    local wi wall ti thr thrs name ex spec jid mem type nfull
+    local wi wall ti thr thrs name ex spec jid mem type nfull tps
     wi="$(cl_bbl_wall_minutes "${p}" "${k}" "${mult}" "${BBL_MULT_LABEL:-retry}")"; wall="$(cl_min_to_wall "${wi%%|*}")"
     ti="$(cl_bbl_throttle "${p}" "${k}")"; thr="${ti%%|*}"; thrs="${thr:+%${thr}}"
     name="bbl_fwd_${BBL_RTAG}"
@@ -1397,15 +1454,20 @@ _cl_bbl_submit_part () {   # <partition> <pack> <retry_mult> <dep> <ids...>
     fi
     type="$(cl_bbl_part "${p}" gpu_type)"
     if (( k == 1 )); then
+        # -c is explicit here exactly as in the packed branch: a job with no -c of its own reads
+        # its Julia thread count from whatever SLURM_CPUS_PER_TASK it was handed, and a job
+        # submitted from inside another one (the bbl_submit wrap, a sweep: both -c 1) used to be
+        # handed the parent's 1 (cl_sbatch now also strips it; see _CL_PARENT_JOB_VARS).
+        tps="${BBL_THREADS_PER_SHARD:-8}"
         spec="$(cl_compress_ranges "${ids[@]}")"
-        jid=$(cl_sbatch -J "${name}" -t "${wall}" --mem="${mem}" \
+        jid=$(cl_sbatch -J "${name}" -t "${wall}" --mem="${mem}" --cpus-per-task="${tps}" \
             -o "${LOGD}/${name}_%A_%a.out" -e "${LOGD}/${name}_%A_%a.err" ${dep} \
             --partition="${p}" --gpus="${type}:1" \
             --array="${spec}${thrs}" --export="${ex},CF_GPU=1" "${CL_ROOT}/bbl_job.sh") || return 1
         cl_require_jid "${jid}" "${name}" || return 1
         _cl_bbl_claim "${jid}" "$(printf '%s\n' "${ids[@]}")"
         CL_BBL_JIDS="${CL_BBL_JIDS:+${CL_BBL_JIDS}:}${jid}"
-        cl_say "  ${name} [${p}] ${#ids[@]} shards, 1 per job (--gpus=${type}:1), --array=${spec}${thrs} -> ${jid}"
+        cl_say "  ${name} [${p}] ${#ids[@]} shards, 1 per job (--gpus=${type}:1 --cpus-per-task=${tps}), --array=${spec}${thrs} -> ${jid}"
         return 0
     fi
     mapfile -t lines < <(cl_bbl_pack_tasks "${k}" "${ids[@]}")

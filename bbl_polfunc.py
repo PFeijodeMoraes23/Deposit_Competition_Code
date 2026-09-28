@@ -227,8 +227,16 @@ CFG = {
     'lhs_display': 400.0,
     'lhs_unit':    r'pp, simple-annualized ($4\times$QoQ)',
     'lhs_short':   'quarterly deposit spread',
-    'depvar_note': (r'Dependent variable: quarterly deposit spread '
-                    r'$\rho_{jkmt}=r^{f}_{t}-r^{\mathrm{dep}}_{jkmt}$, 2016--2024.'),
+    # The regressand is the per-quarter FRACTION spread_a{k} = risk_free_qoq - rate_a{k}; every
+    # displayed coefficient, SE and the mean are that times 400. The note says so and, beside it,
+    # how far that simple annualization sits from the compounded one at the panel's own rates
+    # (_annualization_gap), since the rest of the paper quotes compounded annualized spreads.
+    'depvar_note': (r'Dependent variable: the deposit spread '
+                    r'$\rho_{jkmt}=r^{f}_{t}-r^{\mathrm{dep}}_{jkmt}$ between quarterly rates, '
+                    r'2016--2024, estimated as a quarterly fraction and shown in percentage points '
+                    r'at a simple annualization ($\times4$): coefficients, standard errors and the '
+                    r'mean are $400$ times their quarterly-fraction values.'),
+    'gap_clause':  True,
 }
 
 _CFG_RATE = {
@@ -247,6 +255,7 @@ _CFG_RATE = {
     'lhs_short':   'annualized deposit rate',
     'depvar_note': (r'Dependent variable: annualized deposit rate '
                     r'$r^{\mathrm{dep,ann}}_{jkmt}=(1+r^{\mathrm{dep}}_{jkmt})^{4}-1$, 2016--2024.'),
+    'gap_clause':  False,
 }
 
 
@@ -910,12 +919,20 @@ def _polfunc_col_keys(k: int) -> list:
     return [f'k{k}_{kl}_B', f'k{k}_{kl}_D_optA', f'k{k}_{kl}_D_optB']
 
 
-# Column headers, in the order of _polfunc_col_keys.
-# The two D columns sit under ONE spanning 'D-type' header, formatted exactly like 'B-type'.
-# They stay distinguishable without per-column labels because the Demographics indicator row
-# reads Yes/No/Yes: the D column marked No is the no-demographics specification, the one marked
-# Yes carries the population-weighted national demographics.
-_COL_HEADERS = ['B-type', 'D-type']
+# Column headers, one per column, in the order of _polfunc_col_keys. Each of the three says what
+# it is on its own: a shared 'D-type' spanner over the two D columns left the reader to work out
+# from the Demographics indicator row which D specification was which.
+_COL_HEADERS = ['B', 'D without demographics', 'D with demographics at national means']
+
+# The two lines that make every page break of the xltabular carry the continued head and foot:
+# a zero kern closing \endlastfoot (so the notes' depth counts as height in longtable's own test)
+# and, after the last body row, a reservation of the notes' height that the page builder must fit
+# together with that row. make_bbl_cost_tables.py _wrap() documents the failure they close; the
+# two tables share the house pattern and so share the fix.
+_LASTFOOT_KERN = r'\noalign{\kern0pt}'
+_LASTROW_RESERVE = (r'\noalign{\nobreak\dimen0=\dimexpr\ht\csname LT@lastfoot\endcsname'
+                    r'+\dp\csname LT@lastfoot\endcsname-\ht\csname LT@foot\endcsname+2pt\relax'
+                    r'\ifdim\dimen0<0pt \dimen0=0pt\fi\kern\dimen0\penalty9999\kern-\dimen0}')
 
 # Demographic bases whose local and `_natl` variants are collapsed to ONE display row:
 # each column shows its own geography (B/Pooled = local MCA, D natl. = national averages).
@@ -1017,19 +1034,52 @@ def _polfunc_stat_row(label, values, fmt) -> str:
     return f'{label} & ' + ' & '.join(cells) + r' \\'
 
 
-def _polfunc_notes() -> str:
-    """Table Notes: the inference paragraph only.
+def _annualization_gap(k: int):
+    """{'B'|'D': (mean simple-annualized spread, mean compounded-minus-simple gap), both in pp}
+    over the panel rows of deposit type k in the estimation window, or None when the panel cannot
+    be read (the clause is then left out, and said so).
 
-    Deliberately short. Everything the notes used to carry -- units, winsorization, centering,
-    the segment/demographic indicators, the column definitions -- is documented in the prose of
-    the paper and in this module\'s comments, and repeating it under every table crowded out the
-    one thing a reader needs at the table: how the standard errors were produced.
+    Simple: 400 * spread_a{k}, the display of these tables. Compounded:
+    100 * ((1 + r^f)^4 - (1 + r^dep)^4) with r^dep = r^f - spread_a{k}, the convention the rest of
+    the paper is moving to. Every window row with a spread, rather than the complete-case
+    regression sample, which the stored fit does not carry; the two differ by a few percent of
+    rows (B, k=4: 319,829 regression rows of 331,133)."""
+    try:
+        import pyarrow.parquet as pq
+        pth = pathlib.Path(str(PANEL_CSV)).with_suffix('.parquet')
+        col = f'spread_a{k}'
+        t = pq.read_table(pth, columns=['is_B', 'year', 'risk_free_qoq', col]).to_pandas()
+    except Exception as exc:                                        # noqa: BLE001
+        print(f"  [WARN] annualization gap for k={k} not computed ({type(exc).__name__}: {exc}); "
+              f"the note gives the convention without it")
+        return None
+    t = t[(t['year'] >= POLFUNC_MIN_YEAR) & (t['year'] <= POLFUNC_MAX_YEAR) & t[col].notna()]
+    rf = t['risk_free_qoq'].astype(float)
+    s = t[col].astype(float)
+    simple = 400.0 * s
+    gap = 100.0 * ((1.0 + rf) ** 4 - (1.0 + rf - s) ** 4) - simple
+    out = {}
+    for lab, mk in (('B', t['is_B'].astype(bool)), ('D', ~t['is_B'].astype(bool))):
+        if mk.any():
+            out[lab] = (float(simple[mk].mean()), float(gap[mk].mean()))
+    return out or None
+
+
+def _polfunc_notes(k: int | None = None, results: dict | None = None) -> str:
+    """Table Notes: the inference paragraph, then what the dependent variable is.
+
+    Deliberately short. Everything the notes used to carry -- winsorization, centering, the
+    segment/demographic indicators -- is documented in the prose of the paper and in this
+    module\'s comments. What stays is what a reader needs at the table: how the standard errors
+    were produced, and the exact regressand and display scaling, with how far that scaling sits
+    from the compounded annualized spread the other tables quote. For k=5 a D column whose
+    regressors explain almost nothing is said to be what it is, a constant near zero.
 
     Citations are real \\parencite keys, not typeset-by-hand author strings, so they resolve
     against References.bib and stay correct if an entry changes. The paper uses biblatex/biber
     (authoryear-comp), where \\parencite is the parenthetical form.
     """
-    return (
+    note = (
         r'\textit{Notes:} Standard errors in parentheses are from a score/multiplier wild cluster '
         r'bootstrap at the conglomerate level (Webb weights) '
         r'\parencite{cameron2008bootstrap,mackinnon2017wild,webb2023reworking}. '
@@ -1039,6 +1089,35 @@ def _polfunc_notes() -> str:
         r'inference. *** $p<0.01$, ** $p<0.05$, * $p<0.1$. '
         + CFG['depvar_note']
     )
+    if k is not None and CFG.get('gap_clause'):
+        gap = _annualization_gap(k)
+        if gap:
+            # The gap relative to the same rows' mean spread, not to the Mean dep. var. row: the
+            # panel rows are not the complete-case regression sample (see _annualization_gap).
+            if all(abs(g) < 0.005 for _m, g in gap.values()):
+                size = 'under 0.01 pp for both firm types'
+            else:
+                size = ' and '.join(
+                    (rf'{g:.2f} pp for {lab} (${100 * g / m:.1f}\%$ of its mean spread)'
+                     if abs(g) >= 0.005 and m else f'under 0.01 pp for {lab}')
+                    for lab, (m, g) in gap.items())
+            note += (r" At the panel's 2016--2024 rates the compounded "
+                     r"convention $(1+r^{f}_{t})^{4}-(1+r^{\mathrm{dep}}_{jkmt})^{4}$ is higher on "
+                     r"average by " + size + '.')
+    if k == 5 and results:
+        d_cols = [ck for ck in _polfunc_col_keys(k)[1:] if ck in results]
+        r2 = [float(results[ck]['r_squared']) for ck in d_cols]
+        mdv = [results[ck].get('mean_depvar') for ck in d_cols]
+        if r2 and max(r2) < 0.05:
+            mean_txt = ''
+            if all(v is not None for v in mdv):
+                mean_txt = (rf' around a mean of ${float(mdv[0]) * float(CFG["lhs_display"]):.3f}$'
+                            r' pp')
+            note += (r' In both D columns the fitted $k=5$ policy is essentially a constant near '
+                     r'zero: the regressors explain '
+                     + ' and '.join(f'${100 * v:.1f}\\%$' for v in r2)
+                     + r' of the variance' + mean_txt + '.')
+    return note
 
 
 _K_TITLE = {4: r'Time Deposits / CDB ($k=4$)', 5: r'Prepaid Accounts ($k=5$)'}
@@ -1085,9 +1164,8 @@ def build_polfunc_table(results: dict, k: int, include_segments: bool = False) -
     `include_segments=False` (the main table) hides the four segment dummies and reports them as a
     'Segment FE: Yes' indicator row; `True` builds the `_segment` companion that shows them."""
     colspec = r'>{\raggedright\arraybackslash}p{5.4cm} *{3}{>{\centering\arraybackslash}X}'
-    # 'D-type' spans the two D columns via \multicolumn. No \cmidrule under it: the \midrule that
-    # follows already closes the header, and adding one stacks a second rule on top of it.
-    head = ' & ' + _COL_HEADERS[0] + r' & \multicolumn{2}{c}{' + _COL_HEADERS[1] + r'} \\'
+    # One label per column; the centered X columns wrap the longer two onto a second line.
+    head = ' & ' + ' & '.join(_COL_HEADERS) + r' \\'
     caption = 'Policy Function Estimates: ' + _K_TITLE[k] + CFG.get('caption_suffix', '')
     label = CFG['tab_label'] + f'_k{k}' + ('_segment' if include_segments else '')
     cols = _polfunc_col_keys(k)
@@ -1112,7 +1190,8 @@ def build_polfunc_table(results: dict, k: int, include_segments: bool = False) -
         r'\endfoot',
         r'\bottomrule',
         r'\multicolumn{4}{@{}p{\dimexpr\textwidth-2\tabcolsep\relax}@{}}{\scriptsize '
-        + _polfunc_notes() + r'} \\',
+        + _polfunc_notes(k, results) + r'} \\',
+        _LASTFOOT_KERN,
         r'\endlastfoot',
     ]
 
@@ -1148,6 +1227,7 @@ def build_polfunc_table(results: dict, k: int, include_segments: bool = False) -
     L.append(_polfunc_stat_row(r'Clusters ($G$)', G, lambda x: f'{x}'))
     L.append(_polfunc_stat_row(r'Eff.\ clusters ($G^{*}$)', Gs, lambda x: f'{x:.1f}'))
 
+    L.append(_LASTROW_RESERVE)
     L.append(r'\end{xltabular}')
     L.append(r'\end{spacing}')
     return '\n'.join(L)

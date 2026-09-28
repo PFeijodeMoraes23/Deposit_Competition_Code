@@ -1154,9 +1154,19 @@ DASHES = {"E2": (5, 2), "E3": (2, 1.5), "E4": (7, 2, 1.5, 2)}
 ROMAN = {"E1": "(I)", "E2": "(II)", "E3": "(III)", "E4": "(IV)"}
 
 
-def _draw_entry_panel(ax, norm, paths_df, curves_df, vint, g, H, imp=None, title=True):
+# Legend text for a model line's phi. Every vintage in phi_vintages() is the UNWEIGHTED mean
+# of the routine's fitted phi_{m,t} over its spec-12 cells (conglomerate x type x market x
+# quarter), which is not the Mean phi-hat of the stage-2 comparison table (population-weighted
+# national phi_t averaged over quarters). The label names the average so the two are not read
+# as the same number.
+PHI_VINTAGE_LABEL = r"mean $\hat\phi_{m,t}$"
+
+
+def _draw_entry_panel(ax, norm, paths_df, curves_df, vint, g, H, imp=None, title=True,
+                      phi_label=PHI_VINTAGE_LABEL):
     """One normalisation's panel. Shared by the two-panel exhibit and the standalone
     per-panel figures the paper inserts use, so the two can never drift apart."""
+    from matplotlib.patches import Patch
     for kind, color in (("B", B_COLOR), ("D", D_COLOR)):
         sub = paths_df[(paths_df["kind"] == kind) & (paths_df["norm"] == norm)]
         if sub.empty:
@@ -1164,8 +1174,10 @@ def _draw_entry_panel(ax, norm, paths_df, curves_df, vint, g, H, imp=None, title
         # Bootstrap CI of the median only. The IQR describes how much entrants differ from
         # one another, which is not what this exhibit is asking -- the question is where the
         # median path sits relative to each model level, and two overlapping bands made that
-        # harder to read.
-        ax.fill_between(sub["h"], sub["ci_lo"], sub["ci_hi"], color=color, alpha=0.28, lw=0)
+        # harder to read. The narrow B band sits above the wide D band so the overlap does
+        # not hide the comparison the model curves are drawn for.
+        ax.fill_between(sub["h"], sub["ci_lo"], sub["ci_hi"], color=color, alpha=0.28, lw=0,
+                        zorder=1.2 if kind == "B" else 1.0)
         n0 = int(sub["n"].iloc[0])
         ax.plot(sub["h"], sub["median"], color=color, lw=2, marker="o", ms=4.5,
                 markeredgecolor="white", markeredgewidth=1.0, zorder=3,
@@ -1174,7 +1186,11 @@ def _draw_entry_panel(ax, norm, paths_df, curves_df, vint, g, H, imp=None, title
         c = curves_df[(curves_df["vintage"] == lab) & (curves_df["norm"] == norm)]
         ax.plot(c["h"], c["value"], color=MODEL_COLORS.get(lab, INK), lw=1.6,
                 ls=(0, DASHES.get(lab, (5, 2))), zorder=2,
-                label=f"{ROMAN.get(lab, lab)} $\\hat\\phi$={phi:.3f}")
+                label=f"{ROMAN.get(lab, lab)} {phi_label} = {phi:.3f}")
+    # The shading is named in the legend as well as in the caption: the model curves carry
+    # no band, and a reader should not have to guess which lines the shading belongs to.
+    band_key = Patch(facecolor="#9E9E9E", alpha=0.45, lw=0,
+                     label="95% bootstrap CI of the median")
     if norm == "alt":
         # The benchmark stays as a rule; naming it in the legend spent a row on a
         # line the caption already explains.
@@ -1196,16 +1212,26 @@ def _draw_entry_panel(ax, norm, paths_df, curves_df, vint, g, H, imp=None, title
     ax.set_xlim(-0.3, H + 0.3)
     # Opaque box: the curves converge into the lower-right corner at the short horizons, so
     # a transparent legend would sit on top of them.
-    leg = ax.legend(loc="lower right", fontsize=7.5, frameon=True, framealpha=1.0,
-                    facecolor="white", edgecolor="#BFBFBA", borderpad=0.6)
+    handles, labels = ax.get_legend_handles_labels()
+    n_data = sum(1 for lb in labels if "entries" in lb)
+    handles.insert(n_data, band_key)
+    labels.insert(n_data, band_key.get_label())
+    leg = ax.legend(handles, labels, loc="lower right", fontsize=7.5, frameon=True,
+                    framealpha=1.0, facecolor="white", edgecolor="#BFBFBA", borderpad=0.6)
     leg.set_zorder(10)
     leg.get_frame().set_linewidth(0.8)
 
 
-def _panel_tex(norm, vint, imp, gmode, n_b, stem="fig_entry_dynamics", per_routine=False):
+def _panel_tex(norm, vint, imp, gmode, n_b, stem="fig_entry_dynamics", per_routine=False,
+               n_by=None):
     r"""A standalone \input-able float for one panel. The image carries no title or footnote
-    -- the caption states the content, which is what a paper float wants."""
-    labs = ", ".join(f"{ROMAN.get(lab, lab)} ($\\hat\\phi$ = {phi:.3f})" for lab, phi, _ in vint)
+    -- the caption states the content, which is what a paper float wants.
+
+    `n_by` maps (kind, norm) to the number of events the panel's median is taken over, so the
+    caption can say when the two normalisations do not keep the same events."""
+    phi_desc = (r"mean over the events of their fitted $\hat\phi_m$" if per_routine
+                else r"unweighted mean of the fitted $\hat\phi_{m,t}$")
+    labs = ", ".join(f"{ROMAN.get(lab, lab)} ({phi_desc} = {phi:.3f})" for lab, phi, _ in vint)
     accrual = ("each entrant's own deposit-weighted accrual path" if gmode != "scalar"
                else "the median gross accrual across the panel")
     if norm == "main":
@@ -1223,6 +1249,11 @@ def _panel_tex(norm, vint, imp, gmode, n_b, stem="fig_entry_dynamics", per_routi
                 r"$(s_h-s_0)/(s_{\mathrm{end}}-s_0)$, with $s_{\mathrm{end}}$ the average over "
                 r"$h\in\{10,11,12\}$; the normalisation cancels the level of the awake inflow, "
                 r"so the path depends on $\phi$ and the accrual alone.")
+        if not per_routine:
+            what += (r" The mean is taken over the routine's specification-(12) cells "
+                     r"(conglomerate $\times$ deposit type $\times$ market $\times$ quarter); it "
+                     r"is not the Mean $\hat{\phi}$ of the second-stage comparison table, which "
+                     r"averages the population-weighted national $\hat{\phi}_t$ over quarters.")
         if imp and "B" in imp:
             r_ = imp["B"]
             what += (r" Inverting the comparison, the paths alone imply $\phi = "
@@ -1233,13 +1264,20 @@ def _panel_tex(norm, vint, imp, gmode, n_b, stem="fig_entry_dynamics", per_routi
                "Entrant share accumulation against the sleepiness-implied path")
         lab = stem.replace("fig_", "") + "_main"
     else:
-        what = (r"The same entry events under the alternative normalisation $s_h/s_{\mathrm{end}}$, "
+        what = (r"The entry events under the alternative normalisation $s_h/s_{\mathrm{end}}$, "
                 r"in which \emph{instant sorting} --- the persistent-preferences benchmark with no "
                 r"sleepiness, under which an entrant reaches its steady-state share immediately --- "
                 r"is the flat line at one. The observed median one quarter after entry is far below "
                 r"it, which is the qualitative content of the test: entry is gradual. Model curves "
                 r"as in the preceding figure. The vertical range is clipped for legibility; D-firm "
                 r"dispersion is wide because those shares are national and few.")
+        for kind in ("B", "D"):
+            nm, na = (n_by or {}).get((kind, "main")), (n_by or {}).get((kind, "alt"))
+            if nm is not None and na is not None and nm != na:
+                what += (f" The {kind}-firm median is over {na} events here and {nm} under "
+                         r"the plateau normalisation, which drops an event whose plateau "
+                         r"share is within $10^{-6}$ of its entry share (a zero denominator "
+                         r"for $(s_h-s_0)/(s_{\mathrm{end}}-s_0)$).")
         cap = "Entrant share accumulation against the instant-sorting benchmark"
         lab = stem.replace("fig_", "") + "_alt"
     return ("\\begin{figure}[htbp]\n"
@@ -1266,15 +1304,16 @@ def make_panel_figures(paths_df, curves_df, vint, g, args, imp=None,
         print("  [fig] no paths to plot")
         return
     H = args.horizon
+    phi_label = r"event-mean $\hat\phi_m$" if per_routine else PHI_VINTAGE_LABEL
     fig, axes = plt.subplots(1, 2, figsize=(11, 4.6), sharey=False)
     for ax, norm in ((axes[0], "main"), (axes[1], "alt")):
-        _draw_entry_panel(ax, norm, paths_df, curves_df, vint, g, H, imp)
+        _draw_entry_panel(ax, norm, paths_df, curves_df, vint, g, H, imp, phi_label=phi_label)
     out_stem = out_stem or stem.replace("fig_", "d6_")
     fig.suptitle(suptitle, x=0.008, ha="left", fontsize=12)
     accrual = ("each event's own accrual path" if args.g_mode != "scalar"
                else "$g$ = median gross accrual")
     fig.text(0.008, 0.005,
-             "Medians across entry events; shaded = IQR and bootstrap CI of the median. "
+             "Medians across entry events; shaded = 95% bootstrap CI of the median. "
              "Model curves iterate the estimated law of motion under frozen spreads "
              f"($\\mathrm{{lvl}}_h=\\hat\\phi g_h\\mathrm{{lvl}}_{{h-1}}+1$, {accrual}), "
              "medianed over events exactly as the data is.",
@@ -1291,9 +1330,13 @@ def make_panel_figures(paths_df, curves_df, vint, g, args, imp=None,
     # Standalone panels + their \input-able floats, for V_Main. Drawn from the same helper
     # as the combined exhibit, so the paper and the notes cannot show different pictures.
     n_b = int(paths_df.loc[paths_df["kind"] == "B", "n"].max()) if (paths_df["kind"] == "B").any() else 0
+    # The legend's n: the events at the first horizon of each (kind, normalisation) median.
+    n_by = {(k, nm): int(s["n"].iloc[0])
+            for (k, nm), s in paths_df.groupby(["kind", "norm"], sort=False) if len(s)}
     for norm in ("main", "alt"):
         f1, a1 = plt.subplots(figsize=(6.4, 4.6))
-        _draw_entry_panel(a1, norm, paths_df, curves_df, vint, g, H, imp, title=False)
+        _draw_entry_panel(a1, norm, paths_df, curves_df, vint, g, H, imp, title=False,
+                          phi_label=phi_label)
         f1.tight_layout()
         pstem = f"{stem}_{PANEL_STEM[norm]}"
         try:
@@ -1301,7 +1344,7 @@ def make_panel_figures(paths_df, curves_df, vint, g, args, imp=None,
                 f1.savefig(DRAFTS / f"{pstem}.{ext}", dpi=300, bbox_inches="tight",
                            facecolor="white")
             (DRAFTS / f"{pstem}.tex").write_text(
-                _panel_tex(norm, vint, imp, args.g_mode, n_b, stem, per_routine),
+                _panel_tex(norm, vint, imp, args.g_mode, n_b, stem, per_routine, n_by),
                 encoding="utf-8")
         except OSError as e:
             print(f"  [fig] panel save failed: {e}")

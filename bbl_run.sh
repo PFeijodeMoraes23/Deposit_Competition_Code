@@ -33,14 +33,24 @@
 #                      and MOVE the solve's afterok onto that sweep (same solve job id)
 #            retries spent: exit 1 --> the solve is CANCELLED, never run on a partial set
 #
-#   solve E_1..E_n --afterok (all)--> tables --afterok--> archive (slim: this tag only)
+#   solve E_1..E_n --afterok (all)--> tables
+#   solve E_1..E_n --afterok (all)--> archive (slim: this tag only)
 #
-#   The solve is afterok its FINAL sweep, and the tables and archive are afterok EVERY solve:
-#   nothing downstream ever renders or zips a partial result. (Before the sweep existed the
-#   solve was afterany the array and E1 was once estimated from 293 of 300 shards.)
+#   The solve is afterok its FINAL sweep, and the tables and the archive are each afterok EVERY
+#   solve: nothing downstream ever renders or zips a partial result. (Before the sweep existed
+#   the solve was afterany the array and E1 was once estimated from 293 of 300 shards.) The
+#   archive does NOT wait for the tables: they are rendered locally from the archived
+#   cost_params too, so a failed tables job must not cancel the download.
 #
 #   THE TABLES STEP IS NOT OPTIONAL POLISH. Nothing is downloaded from this cluster but the
 #   archive, and bbl_tables echoes every table into its own SLURM log.
+#
+# ALL OR NOTHING. Every job an invocation submits is recorded. If the invocation then exits
+#   nonzero -- an sbatch refused, or a refusal after something was already submitted (E4 refused
+#   after E3's chain went in) -- it cancels every one of them, dependents first (tables and
+#   archive, solves, sweeps, fwd jobs, then polfunc and warmup: the bbl_cancel.sh order), writes
+#   a STOP marker for each routine it touched, prints what it cancelled, and exits nonzero. No
+#   half-submitted graph is left in the queue.
 #
 #   POLFUNC IS A DEFAULT PRE-STEP, not an option. It needs only the market panel, costs one short
 #   CPU job and removes a 59 MB upload that could drift out of step with the panel. Every
@@ -52,14 +62,16 @@
 #   QOS) 12 jobs / 32 GPUs. One shard per job therefore uses 18 of the 48 GPUs allowed. PACK=k
 #   runs k shards in one job, one GPU each (--gpus=<type>:k, --mem=k*MEM, --cpus-per-task=k*8),
 #   and the array throttle becomes min(MaxJobsPU, floor(MaxGPU/k)), logged per partition.
-#   PACK is the common default (unset: h200 4, h100 3); PACK_H200 / PACK_H100 set one partition.
-#   PACK=1 is the one-shard-per-job submission, unchanged. Any PACK x MEM beyond a node, or
-#   PACK beyond a node's GPUs, is refused here (cl_bbl_check_packing). MEM=256G is the T=50
-#   sizing; at another T take MEM and PACK from the memory probe (bbl_sizing.sh).
+#   PACK is the common default (unset: 4 on both partitions); PACK_H200 / PACK_H100 set one
+#   partition. PACK=1 is the one-shard-per-job submission, unchanged. Any PACK x MEM beyond a
+#   node, or PACK beyond a node's GPUs, is refused here (cl_bbl_check_packing). The defaults
+#   MEM 240G per shard on gpu_h200, 230G on gpu_h100, and PACK 4/4 are the T=250 launch sizing
+#   (the probe numbers and the h100 headroom rule are in cluster_lib.sh §11).
 #
-# WALL TIME is derived unless --shard-time is given: 26 min (the measured max GPU shard at T=50)
-#   x T/50 x shard size x contention 1.3 x safety 1.5, rounded up to 30 min and capped at the
-#   partition limit, and logged: 04:30:00 at T=250. A sweep re-run multiplies it by 1.5 per attempt.
+# WALL TIME: --shard-time as given; unset on a GPU launch, BBL_SHARD_TIME_DEFAULT = 01:45:00, the
+#   T=250 probe's 37 min x 1.37 (T=50 max/median) x 1.3 (packing) x 1.5 (safety). A sweep re-run
+#   multiplies it by 1.5 per attempt. `--shard-time derive` selects the T-based fallback formula
+#   (26 min x T/50 x shard size x 1.3 x 1.5, rounded up to 30 min), which the CPU path always uses.
 #
 # BETA AND HORIZON come from bbl_discount.env (BBL_BETA, BBL_HORIZON), the one registry of both.
 #   --beta / --horizon (or BETA / HORIZON in the environment) override it; the banner says which
@@ -70,10 +82,10 @@
 # Usage
 #   bash bbl_run.sh --dry-run
 #   bash bbl_run.sh --probe --shards 300 --multi-start --n-paths 1
-#   bash bbl_run.sh --routines "3 4" --fwd-gpu --multi-partition --shards 300 --multi-start \
-#        --n-paths 1 --psi-tag _ms2 --no-warmup --no-polfunc --mem-h200 <M> --mem-h100 <M> \
-#        --pack-h200 <k> --pack-h100 <k>                  (bbl_sizing.sh prints this line)
-#   bash bbl_run.sh --routines 3 --shards 300 --psi-tag _ms2 --repair
+#   bash bbl_run.sh --routines "3 4" --fwd-gpu --multi-partition --shards 300 --multi-start --n-paths 1 --psi-tag _ms979 --no-warmup --no-polfunc --mem-h200 240G --mem-h100 230G --pack-h200 4 --pack-h100 4 --shard-time 01:45:00
+#   bash bbl_run.sh --shard-probe --routines 3 --shards 300 --array-spec 1 --multi-start --n-paths 1 --psi-tag _probe250cap --partitions gpu_h100
+#   bash bbl_run.sh --routines 3 --shards 300 --psi-tag _ms979 --repair
+#   (always submitted through sbatch --wrap on ONE line: BBL_RUNBOOK.md "MORNING LAUNCH")
 #
 # Flags
 #   --routines "3 4"   routine set (default from cluster_lib.sh)
@@ -82,7 +94,10 @@
 #   --no-warmup        skip the pre-warm barrier
 #   --starts|--multi-start   one forward curve PER LAUNCH QUARTER instead of one shared curve
 #   --n-paths N        multi-start only: simulated rate paths averaged per deviation (default 8)
-#   --psi-tag T        override the artifact tag (default _ms<N> with --multi-start, else empty)
+#   --psi-tag T        override the artifact tag (default _ms<N> with --multi-start, else empty).
+#                      Keep it of the form _ms<digits>: make_bbl_cost_tables.py recognises only
+#                      that shape. A tag whose psi_starts on disk records another beta or T is
+#                      refused (--force overrides), so a run never overwrites another design.
 #   --promote          let the solve copy its tagged cost_params onto the UNTAGGED name the
 #                      counterfactuals read, but ONLY if the identification gate passes
 #   --beta B --horizon T   override bbl_discount.env (env BETA / HORIZON do the same)
@@ -90,10 +105,13 @@
 #   --fwd-cpu|--fwd-gpu  where the fwd_sim array runs (default: GPU)
 #   --partitions "P.." GPU partitions for fwd_sim (default gpu_h200); indices split DISJOINTLY
 #   --multi-partition  = --partitions "gpu_h200 gpu_h100"
-#   --pack K           shards per job on every GPU partition (env PACK; default h200 4, h100 3)
+#   --pack K           shards per job on every GPU partition (env PACK; default 4 on both)
 #   --pack-h200 K --pack-h100 K --mem-h200 X --mem-h100 X   per-partition packing / memory
-#   --mem X            per-shard memory on every partition (env MEM; default 256G, the T=50 sizing)
-#   --shard-time HH:MM:SS   fix the fwd wall instead of deriving it
+#                      (--mem-h100 default 230G, BBL_MEM_DEFAULT_H100: the h100 headroom rule)
+#   --mem X            per-shard memory on every partition, gpu_h100 included (env MEM; default
+#                      240G, the T=250 sizing, and 230G on gpu_h100 when --mem is not given)
+#   --shard-time HH:MM:SS   the fwd wall per job (default 01:45:00 on GPU); "derive" = the
+#                      T-based fallback formula
 #   --shards N         fwd_sim shard count (default 100). NEVER change it between a run and its
 #                      re-runs: it is baked into every file name and the round-robin split.
 #   --shard-list S     launch only these shards, e.g. 0-3 or 3,50-299 (alias: --array-spec)
@@ -109,6 +127,12 @@
 #                      and shard PROBE_PACK alone (PROBE_MEM_UNPACKED=500G); wall x BBL_PROBE_WALL_MULT
 #                      (2). No sweep/solve/tables/archive. Read it with: bash bbl_sizing.sh
 #   --no-probe-control the probe without its unpacked job
+#   --shard-probe      the CODE PROBE: exactly the shards of --array-spec (REQUIRED; refused
+#                      without it), one per job, under an explicit --psi-tag containing 'probe',
+#                      and nothing else: no warmup, polfunc, sweep, solve, tables or archive, so
+#                      nothing ever simulates the other shards of the tag. beta/T come from the
+#                      registry as for any launch. A shard file already on disk under the tag is
+#                      refused (--force overwrites), and --repair refuses every probe tag.
 #   --force            submit even though a live job of this routine/tag claims the same shards
 #   --zip-full         archive the whole bbl folder (default: slim, this tag's psi + results)
 #   --no-tables        do not submit the terminal tables job
@@ -142,10 +166,13 @@ BETA="${BETA:-}"; HORIZON="${HORIZON:-}"
 BETA_SRC=""; HORIZON_SRC=""
 if [[ -n "${BETA}" ]]; then BETA_SRC="env BETA"; fi
 if [[ -n "${HORIZON}" ]]; then HORIZON_SRC="env HORIZON"; fi
-# Empty SHARD_TIME = derived from HORIZON (cl_bbl_wall_minutes); a value fixes it.
-SHARD_TIME="${SHARD_TIME:-}"; SOLVE_TIME="${SOLVE_TIME:-01:00:00}"
+# SHARD_TIME: a value fixes the fwd wall; "derive" selects the T-based fallback formula; unset,
+# a GPU launch takes BBL_SHARD_TIME_DEFAULT (resolved after the flags, once FWD_GPU is known).
+SHARD_TIME="${SHARD_TIME:-}"; SHARD_TIME_SRC=""; SOLVE_TIME="${SOLVE_TIME:-01:00:00}"
+if [[ -n "${SHARD_TIME}" ]]; then SHARD_TIME_SRC="env SHARD_TIME"; fi
 _MEM_GIVEN="${MEM:-}${MEM_H200:-}${MEM_H100:-}"
-MEM="${MEM:-256G}"
+_MEM_ALL_GIVEN="${MEM:-}"   # MEM itself, by flag or environment: it then sets gpu_h100 too
+MEM="${MEM:-${BBL_MEM_DEFAULT}}"
 DO_POLFUNC="${DO_POLFUNC:-1}"
 DO_WARMUP="${DO_WARMUP:-1}"
 DO_ZIP=1; DO_TABLES="${DO_TABLES:-1}"; SKIP_PREFLIGHT=0
@@ -166,7 +193,7 @@ MULTI_START="${MULTI_START:-0}"; N_PATHS="${N_PATHS:-8}"; PSI_TAG="${PSI_TAG:-}"
 # BOTH directions -- a pass overwrites the production file, a failure exits 3 and cancels the
 # afterok dependents (here: the tables and the archive too) with no log of their own.
 PROMOTE="${PROMOTE:-0}"
-FORCE=0; REPAIR=0; PROBE=0; PROBE_CONTROL=1
+FORCE=0; REPAIR=0; PROBE=0; PROBE_CONTROL=1; SHARD_PROBE=0
 ZIP_SLIM="${ZIP_SLIM:-1}"
 
 while [[ $# -gt 0 ]]; do
@@ -190,10 +217,10 @@ while [[ $# -gt 0 ]]; do
         --pack)             PACK="$2"; shift ;;
         --pack-h200)        PACK_H200="$2"; shift ;;
         --pack-h100)        PACK_H100="$2"; shift ;;
-        --mem)              MEM="$2"; _MEM_GIVEN="${_MEM_GIVEN}$2"; shift ;;
+        --mem)              MEM="$2"; _MEM_GIVEN="${_MEM_GIVEN}$2"; _MEM_ALL_GIVEN="$2"; shift ;;
         --mem-h200)         MEM_H200="$2"; _MEM_GIVEN="${_MEM_GIVEN}$2"; shift ;;
         --mem-h100)         MEM_H100="$2"; _MEM_GIVEN="${_MEM_GIVEN}$2"; shift ;;
-        --shard-time)       SHARD_TIME="$2"; shift ;;
+        --shard-time)       SHARD_TIME="$2"; SHARD_TIME_SRC="--shard-time"; shift ;;
         --shards)           N_SHARDS="$2"; _GIVEN="${_GIVEN}N_SHARDS "; shift ;;
         --shard-list|--array-spec) SHARD_LIST="$2"; shift ;;
         --max-retries)      BBL_MAX_RETRIES="$2"; shift ;;
@@ -202,17 +229,35 @@ while [[ $# -gt 0 ]]; do
         --repair)           REPAIR=1 ;;
         --probe)            PROBE=1 ;;
         --no-probe-control) PROBE_CONTROL=0 ;;
+        --shard-probe)      SHARD_PROBE=1 ;;
         --force)            FORCE=1 ;;
         --zip-full)         ZIP_SLIM=0 ;;
         --no-tables)        DO_TABLES=0 ;;
         --no-zip)           DO_ZIP=0 ;;
         --skip-preflight)   SKIP_PREFLIGHT=1 ;;
         --dry-run)          CL_DRYRUN=1 ;;
-        -h|--help)          sed -n '2,119p' "${BASH_SOURCE[0]}"; exit 0 ;;
+        -h|--help)          sed -n '2,/^# =\{20,\}$/p' "${BASH_SOURCE[0]}"; exit 0 ;;
         *) echo "unknown option: $1 (see -h)" >&2; exit 2 ;;
     esac
     shift
 done
+
+# ── gpu_h100 memory: its own default (230G), not MEM's ──────────────────────────────────
+# A packed h100 job is nearly a whole node (4 x 240G = 983,040 of 1,000,000 MB), and sbatch
+# refuses a job that asks for more than the node schedules once SLURM's own reservation is taken
+# out. Set HERE, explicitly, so the run's context records it and every sweep re-run on gpu_h100
+# gets the same value. --mem (or MEM) still sets every partition; --mem-h100 sets this one.
+if [[ -z "${MEM_H100:-}" && -z "${_MEM_ALL_GIVEN}" ]]; then MEM_H100="${BBL_MEM_DEFAULT_H100}"; fi
+
+# ── the fwd wall: flag / env > "derive" (the T-based fallback) > the measured default ──────
+if [[ "${SHARD_TIME}" == "derive" ]]; then
+    SHARD_TIME=""; SHARD_TIME_SRC="derived"
+elif [[ -z "${SHARD_TIME}" && "${FWD_GPU}" == "1" ]]; then
+    SHARD_TIME="${BBL_SHARD_TIME_DEFAULT}"; SHARD_TIME_SRC="measured T=250 default, BBL_SHARD_TIME_DEFAULT"
+fi
+if [[ -n "${SHARD_TIME}" && ! "${SHARD_TIME}" =~ ^([0-9]+-)?[0-9]+(:[0-9]{1,2}){0,2}$ ]]; then
+    echo "REFUSING: --shard-time '${SHARD_TIME}' is not a SLURM time (HH:MM:SS, D-HH:MM:SS) or 'derive'." >&2; exit 2
+fi
 
 # ── beta and T: flag > environment > bbl_discount.env ────────────────────────
 cl_bbl_discount_fill BETA BBL_BETA || exit 2
@@ -246,10 +291,27 @@ if [[ "${PROBE}" == "1" ]]; then
     PSI_TAG="${PSI_TAG:-_probe${HORIZON}}"
     [[ "${PSI_TAG}" == *probe* ]] || { cl_err "REFUSING --probe: tag '${PSI_TAG}' must contain 'probe', so a probe can never write under a production tag."; exit 2; }
 fi
+# --shard-probe: the CODE PROBE. The shards named by --array-spec, one per job, and nothing
+# downstream: no warmup, polfunc, sweep, solve, tables or archive. The sweep is what re-runs
+# missing shards, so without one nothing ever simulates the other N-1 shards of the tag; N_SHARDS
+# still fixes the round-robin split, so shard i of the probe is shard i of a production run and
+# its psi_dev compares row for row. Its tag must be given and must contain 'probe' (the memory
+# probe's rule), and step (2) below refuses to overwrite a shard file already under it.
+if [[ "${SHARD_PROBE}" == "1" ]]; then
+    [[ "${REPAIR}" == "0" && "${PROBE}" == "0" ]] || { echo "--shard-probe excludes --repair and --probe" >&2; exit 2; }
+    [[ -n "${SHARD_LIST}" ]] || { cl_err "REFUSING --shard-probe: name the shard(s) with --array-spec (for example --array-spec 1). A probe never launches a whole array."; exit 2; }
+    [[ "${PSI_TAG}" == *probe* ]] || { cl_err "REFUSING --shard-probe: --psi-tag '${PSI_TAG}' must be given and contain 'probe', so a probe can never write under a production tag."; exit 2; }
+    DO_WARMUP=0; DO_POLFUNC=0; DO_SWEEP=0; DO_SOLVE=0; DO_TABLES=0; DO_ZIP=0; PY_PREFLIGHT=0
+    PACK=1; PACK_H200=1; PACK_H100=1
+fi
 # --repair: no new launch. A sweep starts at once and re-runs whatever is missing (or nothing),
 # then solve -> tables -> archive exactly as in a full run. The policy CSV must already be on
-# disk, and it must be the one the original shards were simulated with.
-if [[ "${REPAIR}" == "1" ]]; then DO_WARMUP=0; DO_POLFUNC=0; DO_SWEEP=1; fi
+# disk, and it must be the one the original shards were simulated with. A probe tag is refused:
+# its sweep would simulate every shard the probe deliberately left out.
+if [[ "${REPAIR}" == "1" ]]; then
+    [[ "${PSI_TAG}" != *probe* ]] || { cl_err "REFUSING --repair of the probe tag '${PSI_TAG}': a repair re-runs every missing shard, and a probe leaves all but a few missing on purpose."; exit 2; }
+    DO_WARMUP=0; DO_POLFUNC=0; DO_SWEEP=1
+fi
 
 # The tag every artifact of this run carries: psi_eq_<tag>.parquet, psi_dev_<tag>_shard*.parquet
 # and cost_params_<tag>.json, where <tag> = E{k}_spec_12_{stage}{PSI_TAG}. It has to be decided
@@ -265,6 +327,7 @@ if [[ "${SKIP_PREFLIGHT}" == "0" && "${CL_DRYRUN}" != "1" ]]; then
 fi
 
 _mode="launch"; [[ "${REPAIR}" == "1" ]] && _mode="REPAIR"; [[ "${PROBE}" == "1" ]] && _mode="PROBE"
+[[ "${SHARD_PROBE}" == "1" ]] && _mode="SHARD-PROBE"
 cl_banner "BBL cost estimation (${_mode})$([[ "${CL_DRYRUN}" == "1" ]] && echo '  [DRY RUN — nothing is submitted]')" \
           "$(cl_routines_provenance "${ROUTINES}" "${ROUTINES_SRC}" "${CL_ROUTINES_CF}")" \
           "stage=${CF_STAGE} R=${R} seed=${SEED} shocks=${SHOCKS} shards=${N_SHARDS} mem=${MEM}" \
@@ -309,12 +372,13 @@ for _p in ${FWD_PARTITIONS}; do
     fi
     cl_say "fwd_sim [${_p}] wall $(cl_min_to_wall "${_wi%%|*}") = ${_wi#*|}"
 done
-# MEM=256G was sized at T=50 (max shard 179 GiB). RSS grows with T, so a launch at another T that
-# names no memory is flagged loudly; the memory probe and bbl_sizing.sh give the value to pass.
-if [[ "${PROBE}" != "1" && -z "${_MEM_GIVEN}" && "${HORIZON}" != "50" ]]; then
-    cl_err "[!] WARNING: no --mem/--mem-h200/--mem-h100 given, so every shard gets the default ${MEM}, which was"
-    cl_err "    sized at T=50. This run is T=${HORIZON}; RSS grows with T. Run the memory probe and pass what"
-    cl_err "    bash bbl_sizing.sh prints (BBL_RUNBOOK.md section 1), or the shards may be OOM-killed."
+# The default MEM (BBL_MEM_DEFAULT=240G, BBL_MEM_DEFAULT_H100=230G) was sized at T=BBL_SIZING_T=250
+# (max shard 200.75 GiB). RSS grows with T, so a launch BEYOND that horizon that names no memory
+# is flagged loudly.
+if [[ "${PROBE}" != "1" && -z "${_MEM_GIVEN}" ]] && (( HORIZON > BBL_SIZING_T )); then
+    cl_err "[!] WARNING: no --mem/--mem-h200/--mem-h100 given, so every shard gets the default ${MEM} (${MEM_H100} on gpu_h100),"
+    cl_err "    sized at T=${BBL_SIZING_T}. This run is T=${HORIZON}; RSS grows with T. Probe first (bbl_run.sh --probe,"
+    cl_err "    BBL_RUNBOOK.md section 1) and pass the memory it supports, or the shards may be OOM-killed."
 fi
 
 # ── Preflight — every required input, INCLUDING the login-node Python probe ──
@@ -417,6 +481,68 @@ if [[ "${PROMOTE}" == "1" ]]; then promote_flag=" --promote"; fi
 # the identified branch of the cost table prints a dash in every 95% CI cell.
 solve_extra="--bootstrap 200 --profile${PSI_TAG:+ --psi-tag ${PSI_TAG}}${promote_flag}"
 
+# ── ALL OR NOTHING: a failed invocation cancels what it already submitted ────────────────
+# cl_sbatch appends "<jobid><TAB><name>" for every job it submits to CL_SUBMIT_LOG (a plain
+# shell variable: no job inherits it). The EXIT trap reads it back when this script ends nonzero
+# -- an sbatch refused (cl_sbatch returns 1 and the caller stops), or any refusal after the
+# first submission -- and cancels those jobs in the bbl_cancel.sh order, dependents first,
+# because `afterany` is satisfied by a CANCELLED job: a fwd array cancelled before its sweep
+# would start that sweep, which re-submits the shards. Each group waits (<= 60 s) until its
+# jobs have left the queue. The routines whose context this invocation wrote get a STOP marker
+# first, so a sweep caught running re-submits nothing. The nonzero exit status is kept.
+CL_SUBMIT_LOG="$(mktemp "${TMPDIR:-/tmp}/bbl_run_submitted.XXXXXX")" \
+    || { cl_err "REFUSING: cannot create the submission record in ${TMPDIR:-/tmp}"; exit 1; }
+_CTX_KEYS=""    # dispatch keys whose context.env this invocation wrote
+_bbl_rollback_group () {   # _bbl_rollback_group <label> <ids...>
+    local label="$1" i; shift
+    (( $# > 0 )) || return 0
+    if [[ "${CL_DRYRUN}" == "1" ]]; then cl_err "  ${label}: [dry-run] would scancel $*"; return 0; fi
+    cl_err "  ${label}: scancel $*"
+    scancel "$@" || cl_err "  ${label}: [!] scancel returned nonzero (a job that already ended cannot be cancelled)"
+    for i in $(seq 1 30); do
+        [[ -z "$(squeue -h -j "$(IFS=,; printf '%s' "$*")" -o '%i' 2>/dev/null)" ]] && return 0
+        sleep 2
+    done
+    cl_err "  ${label}: [!] still listed after 60 s (COMPLETING?); continuing"
+}
+_bbl_rollback () {
+    local rc=$? jid name k g1=() g2=() g3=() g4=() g5=()
+    trap - EXIT
+    if (( rc != 0 )) && [[ -s "${CL_SUBMIT_LOG}" ]]; then
+        # reverse submission order, so within a group a later (dependent) job goes first
+        while IFS=$'\t' read -r jid name; do
+            [[ -n "${jid}" ]] || continue
+            case "${name}" in
+                bbl_tables*|bbl_zip*) g1+=("${jid}") ;;
+                bbl_solve_*)          g2+=("${jid}") ;;
+                bbl_sweep_*)          g3+=("${jid}") ;;
+                bbl_fwd_*)            g4+=("${jid}") ;;
+                *)                    g5+=("${jid}") ;;
+            esac
+        done < <(awk '{ l[NR] = $0 } END { for (i = NR; i >= 1; i--) print l[i] }' "${CL_SUBMIT_LOG}")
+        cl_err ""
+        cl_err "ROLLBACK: bbl_run.sh is exiting with rc=${rc} after submitting $(awk 'NF' "${CL_SUBMIT_LOG}" | wc -l | tr -d ' ') job(s):"
+        cl_err "  $(awk -F'\t' 'NF { printf "%s%s (%s)", (NR > 1 ? ", " : ""), $1, $2 }' "${CL_SUBMIT_LOG}")"
+        cl_err "  Cancelling every one of them, dependents first, so no half-submitted graph is left."
+        if [[ "${CL_DRYRUN}" != "1" ]]; then
+            for k in ${_CTX_KEYS}; do
+                mkdir -p "$(cl_bbl_dispatch_dir "${k}")" && : > "$(cl_bbl_dispatch_dir "${k}")/STOP" \
+                    && cl_err "  STOP marker: $(cl_bbl_dispatch_dir "${k}")/STOP"
+                cl_bbl_event "${k}" "ROLLBACK rc=${rc}: every job of this invocation cancelled"
+            done
+        fi
+        _bbl_rollback_group "1 tables + archive" ${g1[@]+"${g1[@]}"}
+        _bbl_rollback_group "2 solves" ${g2[@]+"${g2[@]}"}
+        _bbl_rollback_group "3 sweeps" ${g3[@]+"${g3[@]}"}
+        _bbl_rollback_group "4 fwd jobs" ${g4[@]+"${g4[@]}"}
+        _bbl_rollback_group "5 polfunc + warmup" ${g5[@]+"${g5[@]}"}
+        cl_err "ROLLBACK done$([[ "${CL_DRYRUN}" == "1" ]] && printf ' [dry-run: nothing was submitted, nothing cancelled]' || true). Fix the cause above, then submit again."
+    fi
+    rm -f "${CL_SUBMIT_LOG}"
+    exit "${rc}"
+}
+trap _bbl_rollback EXIT
+
 sub () {  # sub <jobname> <time> <extra sbatch args...>
     local name="$1" tlim="$2"; shift 2
     # CPU steps load blp_sysimage_cpu.so, valid ONLY on the cpugen it was built on; `day` mixes
@@ -435,6 +561,8 @@ sub () {  # sub <jobname> <time> <extra sbatch args...>
 _ctx_get () { ( . "$1"; printf '%s' "${!2-}" ); }   # one value out of a context.env
 
 ALL_JIDS=""     # EVERY job id this run creates (declared BEFORE the first append)
+JOB_NAMES=""    # every job NAME this run submits, in order: printed as BBL_JOB_NAMES= at the end
+_jn () { JOB_NAMES="${JOB_NAMES:+${JOB_NAMES},}$1"; }
 solve_dep=""    # colon-joined solve job ids -> the tables and the archive wait on all of them
 
 # ── Pre-warm barrier: precompile/load ONCE so the fwd_sim array does not stampede
@@ -449,7 +577,7 @@ if [[ "${DO_WARMUP}" == "1" ]]; then
     wj=$(sub "bbl_warmup" "${SOLVE_TIME}" "${WARM_SB[@]}" \
         --export=ALL,BBL_ROUTINE=${ROUTINES%% *},BBL_STAGE=${CF_STAGE},R=${R},SEED=${SEED},BBL_STEP=warmup,${FWD_GPU_ENV} \
         "${CL_ROOT}/bbl_job.sh")
-    cl_say "  bbl_warmup -> ${wj}"
+    cl_say "  bbl_warmup -> ${wj}"; _jn bbl_warmup
     warm_dep="--dependency=afterok:${wj}"
     ALL_JIDS="${ALL_JIDS:+${ALL_JIDS}:}${wj}"
 fi
@@ -461,7 +589,7 @@ if [[ "${DO_POLFUNC}" == "1" ]]; then
     pj=$(sub "bbl_polfunc" "${SOLVE_TIME}" ${warm_dep} --mem=64G \
         --export=ALL,BBL_STAGE=${CF_STAGE},R=${R},SEED=${SEED},BBL_STEP=polfunc \
         "${CL_ROOT}/bbl_job.sh")
-    cl_say "  bbl_polfunc -> ${pj}  (--mem=64G; every fwd_sim waits afterok on it)"
+    cl_say "  bbl_polfunc -> ${pj}  (--mem=64G; every fwd_sim waits afterok on it)"; _jn bbl_polfunc
     fwd_dep="--dependency=afterok:${pj}"
     ALL_JIDS="${ALL_JIDS:+${ALL_JIDS}:}${pj}"
 fi
@@ -564,6 +692,35 @@ for k in ${ROUTINES}; do
             cl_err "  Move those files aside, pick a new --psi-tag, or --force."
             exit 1
         fi
+        # A tag whose psi were simulated under ANOTHER beta or T belongs to another design (the
+        # beta=0.9 / T=50 files are _ms1): a fresh launch under it would overwrite them shard by
+        # shard. psi_starts_<key>.json is the sim's own record of both (one line of JSON).
+        _ps="${CL_STEP_BBL}/psi_starts_${BBL_KEY}.json"
+        if [[ -f "${_ps}" && "${FORCE}" != "1" ]]; then
+            _ob="$(sed -n 's/.*"beta"[[:space:]]*:[[:space:]]*\([0-9.eE+-]*\).*/\1/p' "${_ps}" | head -1)"
+            _oT="$(sed -n 's/.*"T"[[:space:]]*:[[:space:]]*\([0-9]*\).*/\1/p' "${_ps}" | head -1)"
+            if [[ -n "${_ob}${_oT}" ]] && ! awk -v a="${_ob:-nan}" -v b="${BETA}" -v s="${_oT:-x}" -v t="${HORIZON}" \
+                    'BEGIN{ d = a - b; if (d < 0) d = -d; exit !(d <= 1e-12 && s == t) }'; then
+                cl_err "REFUSING E${k}: $(basename "${_ps}") records beta=${_ob:-?} T=${_oT:-?}, but this run is beta=${BETA} T=${HORIZON}."
+                cl_err "  Those psi belong to another design and this launch would overwrite them. Use a new"
+                cl_err "  --psi-tag of the form _ms<digits> (for example _ms979), or --force to overwrite deliberately."
+                exit 1
+            fi
+        fi
+        # A shard probe writes one file per shard and is read by comparison with other tags' files
+        # (bbl_probe_compare.py), so it never replaces one silently: a mistyped tag would otherwise
+        # overwrite the very baseline it is meant to be compared with.
+        if [[ "${SHARD_PROBE}" == "1" && "${FORCE}" != "1" ]]; then
+            _there=""
+            for _s in ${want}; do
+                if [[ -e "${CL_STEP_BBL}/psi_dev_${BBL_KEY}_shard${_s}of${N_SHARDS}.parquet" ]]; then _there="${_there} ${_s}"; fi
+            done
+            if [[ -n "${_there}" ]]; then
+                cl_err "REFUSING --shard-probe E${k}: psi_dev_${BBL_KEY}_shard<i>of${N_SHARDS}.parquet already exists for shard(s) $(cl_compress_ranges ${_there})."
+                cl_err "  A probe never overwrites a shard file. Use a new --psi-tag, or --force to replace it deliberately."
+                exit 1
+            fi
+        fi
         _nsame="$(ls "${CL_STEP_BBL}" 2>/dev/null | grep -c "^psi_dev_${BBL_KEY}_shard[0-9]*of${N_SHARDS}\.parquet$" || true)"
         if [[ "${BBL_FRESH}" == "1" ]] && (( ${_nsame:-0} > 0 )); then
             cl_say "   note: ${_nsame} psi_dev file(s) of ${BBL_KEY} from an earlier run are on disk. Each is replaced when"
@@ -573,6 +730,7 @@ for k in ${ROUTINES}; do
 
     # ── (3) the run's context: what every later re-run of this routine is built from ──
     cl_bbl_ctx_write "${BBL_KEY}" || { cl_err "cannot write ${DD}/context.env"; exit 1; }
+    _CTX_KEYS="${_CTX_KEYS} ${BBL_KEY}"
     if [[ "${CL_DRYRUN}" != "1" ]]; then rm -f "${DD}/STOP" "${DD}/solve.jid"; fi
     cl_bbl_event "${BBL_KEY}" "LAUNCH mode=${_mode} n=${N_SHARDS} T=${HORIZON} beta=${BETA} shards=$(cl_compress_ranges ${want})"
 
@@ -646,6 +804,9 @@ for k in ${ROUTINES}; do
             cl_err "  could not release sweep ${sweep_jid}: it stays HELD. Release it by hand:  scontrol release ${sweep_jid}"
         fi
     fi
+    if [[ -n "${FWD_JIDS}" ]]; then _jn "bbl_fwd_${BBL_RTAG}"; fi
+    if [[ -n "${sweep_jid}" ]]; then _jn "bbl_sweep_${BBL_RTAG}"; fi
+    if [[ -n "${slv}" ]]; then _jn "bbl_solve_${BBL_RTAG}"; fi
     ALL_JIDS="${ALL_JIDS:+${ALL_JIDS}:}$(echo "${FWD_JIDS}:${sweep_jid}:${slv}" | sed 's/::*/:/g; s/^://; s/:$//')"
 done
 
@@ -655,21 +816,24 @@ dep_csv="$(echo ${solve_dep} | sed 's/^://')"
 #    Nothing comes back from this cluster but the archive, so this step turns the solves into
 #    the .tex/.md tables AND echoes them into its own SLURM log. afterok, not afterany: a
 #    routine whose solve did not finish must not be rendered from whatever else is on disk.
-zip_dep="${dep_csv}"
 if [[ "${DO_TABLES}" == "1" && -n "${dep_csv}" ]]; then
     tab_jid=$(sub "bbl_tables${PSI_TAG}" "00:30:00" --dependency=afterok:${dep_csv} --mem=16G \
         --export=ALL,BBL_STAGE=${CF_STAGE},BBL_STEP=tables,PSI_TAG="${PSI_TAG}" \
         "${CL_ROOT}/bbl_job.sh")
     cl_say "  bbl_tables${PSI_TAG} afterok ${dep_csv//:/, } -> ${tab_jid}  (tables are ECHOED to its log)"
     cl_log "   -> read them with: cat ${LOGD}/bbl_tables${PSI_TAG}_${tab_jid}_*.out"
-    ALL_JIDS="${ALL_JIDS:+${ALL_JIDS}:}${tab_jid}"
-    zip_dep="${dep_csv}:${tab_jid}"
+    ALL_JIDS="${ALL_JIDS:+${ALL_JIDS}:}${tab_jid}"; _jn "bbl_tables${PSI_TAG}"
 fi
 
-# ── The archive, afterOK every solve and the tables. COPY is MANDATORY: cf1_net/cf3/cf5/cf6
-#    read cost_params_*.json IN PLACE. SLIM by default: this tag's psi, cost_params, tables and
+# ── The archive, afterOK every solve -- and NOT the tables. The tables are rendered locally from
+#    the archived cost_params as well, so a tables job that fails must not cancel the download;
+#    the two start together once the solves are done, and the tab_bbl_* files in the archive are
+#    whatever the step folder holds at that moment (possibly an earlier run's, or none).
+#    COPY is MANDATORY: cf1_net/cf3/cf5/cf6
+#    read cost_params_*.json IN PLACE. SLIM by default: this tag's psi and cost_params, the tables and
 #    polfunc outputs, without the untagged single-curve psi, bench/probe files and dispatch state
 #    that inflated the 2026-09-22 archive to ~1 GB. --zip-full packages the whole folder.
+zip_dep="${dep_csv}"
 if [[ "${DO_ZIP}" == "1" && -n "${dep_csv}" ]]; then
     _slim=""
     if [[ "${ZIP_SLIM}" == "1" ]]; then _slim=" --slim --psi-tag '${PSI_TAG}'"; fi
@@ -679,16 +843,22 @@ if [[ "${DO_ZIP}" == "1" && -n "${dep_csv}" ]]; then
         --nodes=1 --ntasks=1 --cpus-per-task=2 --mem=8G \
         -o "${LOGD}/bbl_zip${PSI_TAG}_%j.out" -e "${LOGD}/bbl_zip${PSI_TAG}_%j.err" \
         --wrap "${ZWRAP}")
-    ALL_JIDS="${ALL_JIDS:+${ALL_JIDS}:}${zip_jid}"
+    ALL_JIDS="${ALL_JIDS:+${ALL_JIDS}:}${zip_jid}"; _jn "bbl_zip${PSI_TAG}"
     cl_say "  bbl_zip${PSI_TAG} afterok ${zip_dep//:/, } -> ${zip_jid}  ($([[ "${ZIP_SLIM}" == "1" ]] && echo "slim, tag '${PSI_TAG}'" || echo 'whole bbl folder'), --copy)"
     cl_log "   -> ${CL_STEP_DOWNLOAD}/bbl_outputs_<jobid>.zip  (cost_params COPIED — originals stay for the CFs)"
 fi
 
 if [[ "${PROBE}" == "1" ]]; then
     cl_say "Probe submitted (tag '${PSI_TAG}'). When both jobs have left squeue:  bash bbl_sizing.sh"
+elif [[ "${SHARD_PROBE}" == "1" ]]; then
+    cl_say "Shard probe submitted: routine(s) ${ROUTINES}, shard(s) $(cl_compress_ranges $(cl_expand_spec "${SHARD_LIST}")) of ${N_SHARDS}, tag '${PSI_TAG}'."
+    cl_say "  Nothing follows it (no sweep, solve, tables or archive). Its output: ${CL_STEP_BBL}/psi_dev_<key>_shard<i>of${N_SHARDS}.parquet"
 else
     cl_say "Submitted BBL (${_mode}) for routines: ${ROUTINES}. Watch with:  bash bbl_status.sh --psi-tag '${PSI_TAG}'"
 fi
+# The job NAMES this invocation submitted, on one line: a mis-parsed command line (a broken
+# continuation, a lost quote) shows here at once as an unexpected routine, tag or pre-step.
+echo "BBL_JOB_NAMES=${JOB_NAMES}"
 # Machine-parseable handles for pipeline_all.sh. Keep BBL_ALL_JOBIDS the LAST line
 # so `sed -n 's/^BBL_ALL_JOBIDS=//p' | tail -1` captures it cleanly.
 echo "BBL_SOLVE_JOBIDS=${dep_csv}"

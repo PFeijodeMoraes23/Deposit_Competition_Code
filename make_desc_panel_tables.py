@@ -33,8 +33,11 @@ if ensure_project_venv is not None:
 import pandas as pd
 import numpy as np
 
-from utils.window import apply_window
+from utils.window import apply_window, MIN_YEAR, MAX_YEAR
 from utils import paths as _paths
+# One definition of the spread unit for every descriptive table: annualized, compounded,
+# percentage points (see make_desc_compressed_tables.annualized_spread_pp).
+from make_desc_compressed_tables import annualized_spread_pp, SPREAD_UNIT, SPREAD_CONVENTION_TEX
 
 warnings.filterwarnings("ignore")
 
@@ -157,10 +160,27 @@ def main():
 
     df["total_deposits"] = df[["dep_a1", "dep_a2", "dep_a4", "dep_a5"]].sum(axis=1, min_count=1)
 
+    # market_panel stores spread_a{k} and risk_free_qoq as quarterly fractions; the tables
+    # report spreads annualized, compounded and in percentage points.
+    for k in (1, 2, 3, 4, 5):
+        if f'spread_a{k}' in df.columns:
+            df[f'spread_pp_a{k}'] = annualized_spread_pp(df[f'spread_a{k}'], df['risk_free_qoq'])
+
+    # Undefined periods are missing, not zero. Type-5 (prepaid) spreads exist only where a
+    # type-5 balance is recorded (from 2020Q2), and Pix usage only from the launch (2020Q4);
+    # the panel's pre-period placeholders would otherwise average structural zeros into the
+    # pooled means.
+    post_pix = (df['year'] > 2020) | ((df['year'] == 2020) & (df['quarter'] >= 4))
+    if 'spread_pp_a5' in df.columns and 'dep_a5' in df.columns:
+        df.loc[df['dep_a5'].isna(), 'spread_pp_a5'] = np.nan
+    for c in ('pix_users_pf_per1000', 'pix_txns_pf'):
+        if c in df.columns:
+            df.loc[~post_pix, c] = np.nan
+
     # Defining target analytical variables
     vars_to_summarize = [
         'dep_a1', 'dep_a2', 'dep_a3', 'dep_a4', 'dep_a5', 'total_deposits',
-        'spread_a1', 'spread_a2', 'spread_a3', 'spread_a4', 'spread_a5',
+        'spread_pp_a1', 'spread_pp_a2', 'spread_pp_a3', 'spread_pp_a4', 'spread_pp_a5',
         'gdp_per_capita', 'pop_total', 'fraction_65plus', 'cadunico_families_per1000',
         'pix_users_pf_per1000', 'pix_txns_pf', 'has_ip', 'connections_per100', 'branches_per1000',
         'total_assets', 'equity_ratio'
@@ -169,7 +189,8 @@ def main():
     UNIT_MAP = {
         'dep_a1': 'R$', 'dep_a2': 'R$', 'dep_a3': 'R$', 'dep_a4': 'R$', 'dep_a5': 'R$',
         'total_deposits': 'R$',
-        'spread_a1': '%', 'spread_a2': '%', 'spread_a3': '%', 'spread_a4': '%', 'spread_a5': '%',
+        'spread_pp_a1': 'pp p.a.', 'spread_pp_a2': 'pp p.a.', 'spread_pp_a3': 'pp p.a.',
+        'spread_pp_a4': 'pp p.a.', 'spread_pp_a5': 'pp p.a.',
         'gdp_per_capita': 'R$', 'pop_total': 'Count', 'fraction_65plus': 'Fraction',
         'cadunico_families_per1000': 'Per 1000', 'pix_users_pf_per1000': 'Per 1000',
         'pix_txns_pf': 'Count', 'has_ip': 'Binary', 'connections_per100': 'Per 100',
@@ -220,20 +241,30 @@ def main():
     DRAFTS_DIR = _paths.drafts_dir()
     DRAFTS_DIR.mkdir(parents=True, exist_ok=True)
 
+    # Where the type-5 and Pix rows are defined (see the blanking above), and what the
+    # spread rows average over.
+    PERIOD_NOTE = (
+        "Spread rows average over all market-quarters, including those where the conglomerate "
+        "holds no deposits of that type. Type-5 rows cover the quarters with a recorded type-5 "
+        "balance (from 2020Q2) and Pix rows the quarters from 2020Q4."
+    )
+
     # Human-readable labels and display scaling for each variable.
     # Tuple: (display label, display unit string, scale divisor or None)
+    # Monetary values are all nominal R$ millions (deposits and assets on one scale).
     LABEL_MAP = {
-        'dep_a1':   ('Deposits (A1)',                  'R\\$M',        1e6),
-        'dep_a2':   ('Deposits (A2)',                  'R\\$M',        1e6),
-        'dep_a3':   ('Deposits (A3)',                  'R\\$M',        1e6),
-        'dep_a4':   ('Deposits (A4)',                  'R\\$M',        1e6),
-        'dep_a5':   ('Deposits (A5)',                  'R\\$M',        1e6),
+        'dep_a1':   ('Deposits (1)',                   'R\\$M',        1e6),
+        'dep_a2':   ('Deposits (2)',                   'R\\$M',        1e6),
+        'dep_a3':   ('Deposits (3)',                   'R\\$M',        1e6),
+        'dep_a4':   ('Deposits (4)',                   'R\\$M',        1e6),
+        'dep_a5':   ('Deposits (5)',                   'R\\$M',        1e6),
         'total_deposits': ('Total Deposits (1+2+4+5)', 'R\\$M',        1e6),
-        'spread_a1': ('Spread (A1)',                   'bp',           0.01),
-        'spread_a2': ('Spread (A2)',                   'bp',           0.01),
-        'spread_a3': ('Spread (A3)',                   'bp',           0.01),
-        'spread_a4': ('Spread (A4)',                   'bp',           0.01),
-        'spread_a5': ('Spread (A5)',                   'bp',           0.01),
+        # Already annualized percentage points (annualized_spread_pp): no rescaling.
+        'spread_pp_a1': ('Spread (1)',                 SPREAD_UNIT,    None),
+        'spread_pp_a2': ('Spread (2)',                 SPREAD_UNIT,    None),
+        'spread_pp_a3': ('Spread (3)',                 SPREAD_UNIT,    None),
+        'spread_pp_a4': ('Spread (4)',                 SPREAD_UNIT,    None),
+        'spread_pp_a5': ('Spread (5)',                 SPREAD_UNIT,    None),
         'gdp_per_capita':             ('GDP \\textit{per capita}',   'R\\$',         None),
         'pop_total':                  ('Population',                  'Thousands',    1e3),
         # Shares in PERCENTAGE POINTS, matching the unit their coefficients carry in the
@@ -243,13 +274,14 @@ def main():
         'pix_users_pf_per1000':       ('PIX Users (PF)',              'per 1,000',    None),
         'pix_txns_pf':                ('PIX Transactions (PF)',       'Millions',     1e6),
         'has_ip':                     ('Has IP Rate',                 'Indicator',    None),
-        'connections_per100':         ('Internet Connections',        'per 100',      None),
+        # ANATEL active mobile-telephony accesses, all technologies (scrape_anatel_mobile.py).
+        'connections_per100':         ('Mobile Lines',                'per 100 inhabitants', None),
         'branches_per1000':           ('Bank Branches',               'per 1,000',    None),
-        'total_assets':               ('Total Assets',                'R\\$B',        1e9),
+        'total_assets':               ('Total Assets',                'R\\$M',        1e6),
         'equity_ratio':               ('Equity Ratio',                '',             None),
     }
 
-    def _fmt_val(val, var_base, compact=False):
+    def _fmt_num(val, var_base, compact=False):
         """Format a cell value according to the variable's scale and unit."""
         if pd.isna(val):
             return '--'
@@ -260,12 +292,19 @@ def main():
         v = val / scale if scale is not None else val
         if unit in ('R\\$M', 'R\\$B', 'Thousands', 'Millions'):
             return f"{v:,.0f}" if compact else f"{v:,.2f}"
-        elif unit in ('pp', 'bp'):
+        elif unit in ('pp', 'bp', SPREAD_UNIT):
             return f"{v:.2f}"
         elif unit == 'R\\$':
             return f"{v:,.0f}" if compact else f"{v:,.2f}"
         else:
-            return f"{v:.2f}" if compact else f"{v:.3f}"
+            return f"{v:,.2f}" if compact else f"{v:,.3f}"
+
+    def _fmt_val(val, var_base, compact=False):
+        # A value that rounds to zero prints unsigned ("-0.00" carries no sign information).
+        s = _fmt_num(val, var_base, compact)
+        if s.startswith('-') and s[1:].replace(',', '').replace('.', '').strip('0') == '':
+            s = s[1:]
+        return s
 
     def _esc(s):
         return str(s).replace('_', '\\_').replace('&', '\\&').replace('%', '\\%')
@@ -293,7 +332,7 @@ def main():
                 col_spec  = 'l@{\\hspace{0.35em}}' + '>{\\centering\\arraybackslash}X' * n_groups
             # Fixed width scaled to the column count so the footnote can match the
             # table width exactly; X columns share it evenly (no lopsided last gap).
-            narrow_w = f'{min(1.0, 0.30 + 0.11 * n_groups):.2f}\\textwidth'
+            narrow_w = f'{min(1.0, 0.40 + 0.12 * n_groups):.2f}\\textwidth'
 
             weight_label = (' (Population Weighted)'
                             if args.weight_col else ' (Unweighted)')
@@ -367,7 +406,8 @@ def main():
             notes_text = (
                 f"\\scriptsize \\textit{{Notes:}} Means are reported with standard deviations "
                 f"in parentheses below, computed over all market-quarter observations. "
-                f"Deposit and asset values scaled from nominal BRL.{weight_note}"
+                f"Monetary values are nominal R\\$ millions. {SPREAD_CONVENTION_TEX}"
+                f"{PERIOD_NOTE}{weight_note}"
             )
 
             font_cmd  = '\\tiny'       if wide else '\\footnotesize'
@@ -522,9 +562,9 @@ def main():
             "\\scriptsize \\textit{Notes:} Means are reported with standard deviations in "
             "parentheses immediately below, computed over market-quarter observations within "
             f"each calendar year.{scope_note} Cells left blank denote variables that are "
-            "undefined or unobserved for that year (e.g., PIX usage and tier-A5 products are "
-            "not defined before 2020)."
-            f"{weight_note}"
+            "undefined or unobserved for that year (Pix usage and type-5 products are not "
+            f"defined before 2020). Monetary values are nominal R\\$ millions. {SPREAD_CONVENTION_TEX}"
+            f"{PERIOD_NOTE}{weight_note}"
         )
 
         lines = [
@@ -691,9 +731,9 @@ def main():
             "parentheses immediately below, computed over market-quarter observations within "
             "each calendar year. Panel A reports B-type firms (municipal deposit markets); "
             "Panel B reports D-type firms (national digital banks). Cells left blank denote "
-            "variables that are undefined or unobserved for that year (e.g., PIX usage and "
-            "tier-A5 products are not defined before 2020)."
-            f"{weight_note}"
+            "variables that are undefined or unobserved for that year (Pix usage and "
+            "type-5 products are not defined before 2020). Monetary values are nominal "
+            f"R\\$ millions. {SPREAD_CONVENTION_TEX}{PERIOD_NOTE}{weight_note}"
         )
 
         panel_a_rows = _build_panel_rows(df_b_summary)
@@ -783,7 +823,14 @@ def main():
                 lbl = f"Spread ({vb.split('_a')[-1]})"
             return lbl + (f" ({unit})" if unit else "")
 
-        def _is_blank_cell(mean_val, sd_val):
+        # Population is the MCA population on B rows and the national population on D rows
+        # (the D firms' single national market), so a pooled mean mixes two different
+        # geographic units: the "All" cell is left blank.
+        NOT_POOLED = {"pop_total"}
+
+        def _is_blank_cell(vb, group, mean_val, sd_val):
+            if group == "All" and vb in NOT_POOLED:
+                return True
             m_empty = pd.isna(mean_val) or float(mean_val) == 0.0
             s_empty = pd.isna(sd_val)   or float(sd_val)   == 0.0
             return m_empty and s_empty
@@ -814,7 +861,7 @@ def main():
             for g in groups:
                 mean_val = gset.loc[g, f"{vb}_Mean"] if f"{vb}_Mean" in gset.columns else float("nan")
                 sd_val   = gset.loc[g, f"{vb}_SD"]   if f"{vb}_SD"   in gset.columns else float("nan")
-                if _is_blank_cell(mean_val, sd_val):
+                if _is_blank_cell(vb, g, mean_val, sd_val):
                     mean_cells.append(r"\multirow{2}{*}{}")
                     sd_cells.append("")
                 else:
@@ -835,7 +882,7 @@ def main():
 
         # Portrait, fixed-width so the footnote (below) can match the table width
         # exactly; X data columns share the width evenly (no lopsided last gap).
-        table_w  = r"0.75\textwidth"
+        table_w  = r"0.80\textwidth"
         col_spec = "l@{\\hspace{0.35em}}" + ">{\\centering\\arraybackslash}X" * n_groups
         weight_label = (" (Population Weighted)"
                         if args.weight_col else " (Unweighted)")
@@ -847,11 +894,14 @@ def main():
                        if args.weight_col else "")
         notes_text = (
             "\\scriptsize \\textit{Notes:} Means are reported with standard deviations in "
-            "parentheses immediately below, computed over all market-quarter observations. "
-            "Column ``All'' pools both bank types; column ``B'' covers municipal deposit "
-            "markets; column ``D'' covers national digital banks. Cells left blank denote "
-            "variables that are undefined or unobserved for the corresponding bank type."
-            f"{weight_note}"
+            "parentheses immediately below, computed over all market-quarter observations, "
+            f"{MIN_YEAR}--{MAX_YEAR}. Column ``B'' covers B firms in their MCA deposit markets; "
+            "column ``D'' covers D firms, whose single national market carries the national "
+            "population and population-weighted national averages of the other market-level "
+            "variables; column ``All'' pools both. Population is therefore the MCA population "
+            "for B and the national population for D, and is not pooled (blank under ``All''). "
+            "Monetary values are nominal R\\$ millions. "
+            f"{SPREAD_CONVENTION_TEX}{PERIOD_NOTE}{weight_note}"
         )
 
         lines = [
@@ -1015,9 +1065,9 @@ def main():
             "parentheses immediately below, computed over market-quarter observations within "
             "each region-year cell, restricted to B-type firms (municipal deposit markets). "
             "Each panel covers one of the five Brazilian macro-regions. Cells left blank denote "
-            "variables that are undefined or unobserved for that year (e.g., PIX usage and "
-            "tier-A5 products are not defined before 2020)."
-            f"{weight_note}"
+            "variables that are undefined or unobserved for that year (Pix usage and "
+            "type-5 products are not defined before 2020). Monetary values are nominal "
+            f"R\\$ millions. {SPREAD_CONVENTION_TEX}{PERIOD_NOTE}{weight_note}"
         )
 
         panel_blocks = []

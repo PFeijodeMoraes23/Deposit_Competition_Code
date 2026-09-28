@@ -17,8 +17,8 @@ WHAT THE COUNT MEASURES, AND WHAT IT MISSES
   - One CRT covers up to 5 versions of a film (50 for retail). The count is of FILMS, not of
     airings, insertions or spend.
   - CONDECINE is charged per title per market segment, so one film can carry one CRT per
-    segment. `n_titles_distinct` counts a (normalised title, advertiser CNPJ8) pair once per
-    month, which undoes that multiplication.
+    segment. `n_titles_distinct` counts a (normalised title, advertiser) pair once per month,
+    which undoes that multiplication.
 
 THE FILE
 --------
@@ -29,9 +29,9 @@ THE FILE
   appears on several rows (14,941 CRTs do) when it names several producers, directors, agencies
   or advertisers. Measured over the whole file, the rows of one CRT differ in PRODUTOR, DIRETOR,
   AGENCIA, CNPJ_AGENCIA, ANUNCIANTE and CNPJ_ANUNCIANTE, and for a single CRT in the five
-  requester columns; the other 13 columns (title, the three dates, status, segment, version
-  count and duration among them) never vary within a CRT. Every count here is therefore of
-  DISTINCT CRT numbers, never rows. Check 6 below re-tests title, request date and segment on
+  requester columns; the other 13 columns (title, product, the three dates, status, segment,
+  version count and duration among them) never vary within a CRT. Every count here is therefore
+  of DISTINCT CRT numbers, never rows. Check 6 below re-tests title, request date and segment on
   the mapped CRTs on every run. The last request month is incomplete: this vintage's latest
   request and issue dates are both 2026-08-24, a week before its Last-Modified (2026-09-01).
   The encoding and delimiter are detected from the file's first bytes on every run and the
@@ -41,47 +41,120 @@ THE FILE
   issued by 2025-05-31, 1.2% fewer than the 500,663 on ANCINE's dashboard for the same window;
   the gate below therefore tests the whole file against that figure, not the window.
 
-MAPPING ADVERTISERS TO CONGLOMERATES
-------------------------------------
+MAPPING ADVERTISERS TO CONGLOMERATES (attribution 'own')
+--------------------------------------------------------
 CNPJ Anunciante is reduced to 14 digits (placeholders such as 'PESSOA FISICA' and 'NAO
 INFORMADO' carry no CNPJ and are never zero-filled into one) and then to its 8-digit root. The
 root is matched against the IF.data lists with build_advertising_crosswalk's own registry
 loader and candidate rule, including its guard that only digit-bearing CNPJ fields are
 compared: Banco do Brasil's root is 00000000, so a zero-filled blank would match it. For each
 CRT the quarter of its REQUEST date decides the code, in this order:
-  panel_leader       the root is the leader CNPJ of a market-panel conglomerate that exists in
-                     that quarter, and the IF.data lists confirm that leadership. The panel's own
-                     identity wins over a later registry move: the registry folds Banco Pan into
-                     BTG's conglomerate from 2021Q2 and PicPay into Original's in 2019Q4-2024Q3,
-                     while the market panel keeps both as their own entities with their own
-                     deposits. `registry_code` and `code_conflict` keep the disagreement visible.
+  panel_leader       the root is the leader CNPJ of a market-panel conglomerate whose first-to-
+                     last panel span contains that quarter, and the IF.data lists confirm that
+                     leadership. The span is tested, not the per-quarter presence: 20 codes have
+                     holes in their span, and a CRT requested in a hole keeps the code with
+                     `in_panel` False (testing presence instead would move those rows to the
+                     registry step, so the span is kept to leave every mapping as it is). The
+                     panel's own identity wins over a later registry move: the registry folds
+                     Banco Pan into BTG's conglomerate from 2021Q2 and PicPay into Original's in
+                     2019Q4-2024Q3, while the market panel keeps both as their own entities with
+                     their own deposits. `registry_code`, `registry_reason` and `code_conflict`
+                     keep the disagreement visible; code_conflict is also True where the lists
+                     give the root NO code in a quarter inside their window.
   registry_quarter   the IF.data conglomerate code whose dated span contains the quarter
   registry_nearest   the quarter lies before the first IF.data list that carries conglomerate
                      codes (201403) or after the last list (202512), where the lists cannot
-                     speak: the nearest span's code. Inside that window a root with no span
-                     covering the quarter had no conglomerate code then; its rows stay
-                     unmapped with reason `no_code_in_quarter` instead of borrowing a
-                     neighbouring span.
+                     speak. The nearest span is used only when it reaches that edge: before the
+                     first list, a span that starts AT the first list; after the last list, a
+                     span that ends AT the last list. A root whose nearest span starts later (or
+                     ends earlier) had no code at the edge the lists do speak for, so it gets
+                     `no_code_in_quarter` instead of a membership it did not yet (or no longer)
+                     have. Inside the window a root with no span covering the quarter had no
+                     conglomerate code then; its rows stay unmapped with `no_code_in_quarter`.
 A code is kept only when it is a market-panel code. Quarters outside the panel window are
 evaluated at the window's nearest edge (`map_quarter` records the quarter actually used). Both
 window edges are read from the data on every run and logged.
-Holding companies and group affiliates that the prudential registry does not contain (insurers,
-card issuers, asset managers, foreign holdings) are NOT guessed into a bank: they are listed in
-ancine_unmatched_financial for the user to decide.
+
+ATTRIBUTION BEYOND THE ADVERTISER'S OWN CNPJ
+--------------------------------------------
+Films that promote a bank are also registered by firms outside its prudential conglomerate.
+Rows that did not map as 'own' are attributed by the rules below; each rule maps through the
+bank's own CNPJ root with the same Mapper, so the code follows the registry and the panel
+quarter by quarter exactly as an own row would.
+  affiliate        the advertiser is a bank-owned insurer or other bank affiliate in no
+                   prudential conglomerate, listed in AFFILIATES by CNPJ root. It qualifies when
+                   it carries the bank's brand or the bank's group controls it; `attach_basis`
+                   records which (brand, control, brand_and_control) and `evidence` the source
+                   URL or registry fact. Brand decides where the two differ, because awareness is
+                   of the brand: Caixa Seguradora is attached to Caixa though CNP controls it
+                   (and only while it sold under the Caixa brand), Itau Seguros de Auto e
+                   Residencia to Itau though Porto controls it. Every CRT of the affiliate counts.
+                   A registry root in the table (Redecard, Banco Bradesco Cartoes) is attributed
+                   only in the quarters it maps to no code; its other rows stay own.
+                   Foundations and institutes (Fundacao Bradesco, Fundacao Itau, Instituto
+                   Porto Seguro, Instituto Banese) are attached with naming_rights_suspect True.
+  holding          the advertiser is the bank's parent holding (HOLDINGS: J&F -> PicPay and
+                   Original, C6 Holding -> C6, UOL -> PagSeguro, Itausa -> Itau, Votorantim ->
+                   BV, Americanas -> Ame, Porto Seguro S.A. -> Porto, Banco Santander S.A. ->
+                   Santander). Only CRTs whose product or title names that bank count: a holding
+                   also advertises its other businesses (JBS, Shoptime, cement).
+  media_sponsored  the advertiser is a broadcaster, media or production company (MEDIA, by
+                   name) and the product or title names a bank. The bank paid the media for the
+                   content, so it is the bank's advertising. `naming_rights_suspect` marks CRTs
+                   whose product or title is an event, venue or institute name (EVENT_VENUE:
+                   'COPA SANTANDER LIBERTADORES', 'CAIXA CULTURAL', 'FEIRAO DA CAIXA', 'ARENA
+                   BANCO ORIGINAL'), where the brand may be only a sponsor's naming right.
+  coop_system      the advertiser is a Sicoob- or Sicredi-branded credit cooperative (single,
+                   central or confederation) or a Sicoob/Sicredi system company: its name, or
+                   the product or title of its films, carries the system brand and no other
+                   system's. All its CRTs go to BANCO SICOOB (C0080879) or BANCO COOPERATIVO
+                   SICREDI (C0080745), the only two cooperative banks in the market panel. A
+                   media company's film naming Sicoob or Sicredi is coop_system too: the payer is
+                   a cooperative, not the bank. This class is kept OUT of the bank total.
+                   Cooperatives of other systems (Cresol, Unicred, Ailos) stay unattached with
+                   their system recorded in the review queue.
+Not attributed:
+  joint ventures   multi-bank firms (Elo, Livelo, Alelo, Cielo) stay with no bank; their
+                   verified owners are recorded (JOINT_VENTURES) in the advertiser map and the
+                   review queue. Alelo and Cielo keep their own panel codes where the registry
+                   gives them one.
+  other filers     a filer that is neither the bank, its affiliate or holding, a media company
+                   nor a cooperative of the bank's system (a retailer's co-branded card, a car
+                   dealer's financing fair, an agency, an employee association) is listed for
+                   review as `other_filer_named_bank` and counts nowhere.
+Brand words are matched in the folded product and title (BANK_BRANDS). Words that are also
+ordinary words or other firms' names match only next to a word that makes them the bank: SAFRA
+is a harvest ('PLANO SAFRA', 'PROMO SAFRA') unless 'BANCO SAFRA', 'SAFRAPAY' or 'J SAFRA'; INTER,
+PAN, NEON, XP, ORIGINAL, C6, BRB, BMG, BV, NU, CAIXA, BB, NEXT, STONE and CIELO likewise
+('BANCO INTER', 'BANCO PAN', 'XP INVESTIMENTOS', 'C6 BANK', 'CAIXA ECONOMICA'); ITAU does not
+match the town (ITAU DE MINAS), the mall (ITAU POWER) or the coffee (CAFE ITAU). A film that
+names its own advertiser's root is not re-attributed.
+Each (panel code, CRT) is counted once, under the first class it has in the order own,
+affiliate, holding, media_sponsored, coop_system (`counted_as`).
 
 OUTPUTS (paths.AWARENESS_PROC, parquet + csv, written atomically)
 -----------------------------------------------------------------
-  ancine_ad_films_lines        every CRT row whose advertiser maps to a panel conglomerate, all
-                               25 original fields as published plus cnpj14, cnpj_valid, cnpj8,
-                               the parsed request and issue dates, year/month/quarter of the
-                               request, map_quarter, registry_code, panel_code, match_method,
-                               code_conflict, outside_panel_window, in_panel, partial_month,
-                               panel_name and title_norm
+  ancine_ad_films_lines        every CRT row attributed to a panel conglomerate, all 25 original
+                               fields as published plus cnpj14, cnpj_valid, cnpj8,
+                               advertiser_key, the parsed request and issue dates, year/month/
+                               quarter of the request, map_quarter, registry_code,
+                               registry_reason, panel_code, match_method, code_conflict,
+                               outside_panel_window, in_panel, partial_month, panel_name,
+                               title_norm, and the attribution: `attribution` (own, affiliate,
+                               holding, media_sponsored, coop_system), `counted_as`,
+                               `target_cnpj8` (the root the code was mapped through),
+                               `bank_named`, `filer_type`, `attach_basis`, `evidence`,
+                               `naming_rights_suspect`. A row attributed to two banks appears
+                               once per bank.
   ancine_ad_films_monthly      panel_code x year x month of the REQUEST date, balanced over
                                2013-01 to the last request month for every conglomerate with at
-                               least one CRT: n_crt, n_titles_distinct, n_crt_seg_<segment>,
+                               least one CRT: n_crt_own, n_crt_affiliate, n_crt_holding,
+                               n_crt_media_sponsored, n_crt (their sum, the bank total),
+                               n_crt_naming_rights_suspect (CRTs inside n_crt flagged as
+                               possible naming rights), n_crt_coop_system (NOT in n_crt), and,
+                               over the CRTs in n_crt: n_titles_distinct, n_crt_seg_<segment>,
                                sum_qtd_versoes (over CRTs that report a version count),
-                               n_crt_versoes_reported, coverage_note, and two flags:
+                               n_crt_versoes_reported; then coverage_note and two flags:
                                  in_panel       the code has market-panel rows in that month's
                                                 quarter. A month without a CRT is a zero only
                                                 where in_panel is True; elsewhere the
@@ -93,12 +166,21 @@ OUTPUTS (paths.AWARENESS_PROC, parquet + csv, written atomically)
                                                 data cutoff (the earlier of the manifest's
                                                 Last-Modified and the day after the file's
                                                 latest issue date). The row is kept.
-  ancine_advertiser_map        cnpj8 -> panel_code, match_method, first/last quarter, names on
-                               both sides and `names_agree` (a review flag only: renames such
-                               as Aymore -> Santander SCFI share no word, and the CNPJ root, not
-                               the name, is the legal identity)
-  ancine_unmatched_financial   advertisers that did not map and whose ANCINE or registry name
-                               looks financial (or whose reason is no_code_in_quarter), with
+  ancine_advertiser_map        advertiser_key -> panel_code, attribution, match_method, first/
+                               last quarter, CRTs (and CRTs counted under that attribution),
+                               names on both sides, `names_agree` (own rows only; a review flag:
+                               renames such as Aymore -> Santander SCFI share no word, and the
+                               CNPJ root, not the name, is the legal identity), attach_basis,
+                               evidence and `jv_owners` for joint ventures that map to their own
+                               code
+  ancine_brand_attributions    review file: every row attributed by product/title or by
+                               cooperative system (holding, media_sponsored, coop_system) and
+                               every other_filer_named_bank, with advertiser, filer type,
+                               product, title, the bank named, the code (for
+                               other_filer_named_bank, the code the named bank maps to; it
+                               counts nowhere), class, counted_as and naming_rights_suspect
+  ancine_unmatched_financial   advertisers that did not map as own and whose ANCINE or registry
+                               name looks financial (or whose reason is no_code_in_quarter), with
                                CRT counts and the reason:
                                  not_in_registry             root absent from the IF.data lists
                                                              (insurers, capitalizacao, card
@@ -109,22 +191,27 @@ OUTPUTS (paths.AWARENESS_PROC, parquet + csv, written atomically)
                                                              holds no cooperative)
                                  no_code_in_quarter          in a conglomerate in other
                                                              quarters, but no span covers the
-                                                             request quarter inside the lists'
-                                                             window; always queued, whatever
-                                                             its name
+                                                             request quarter (inside the lists'
+                                                             window, or beyond an edge its span
+                                                             does not reach); always queued,
+                                                             whatever its name
                                  registry_code_not_in_panel  its conglomerate is not a market-
                                                              panel code (BNDES, no deposits)
                                  ambiguous                   overlapping registry spans, or two
                                                              spans equally near
                                  ambiguous_panel_leader      two panel codes led by the same root
                                  no_cnpj, invalid_cnpj       placeholder or failed check digits
-                               plus `kind` and `brand_word`, review aids that sort the queue
+                               plus `kind` and `brand_word`, review aids that sort the queue,
+                               `n_crt_attributed` and `attributed_as` (CRTs the attribution rules
+                               took, and where), `jv_owners`/`jv_evidence` and `coop_system`
   ancine_ad_films_provenance.json   sidecar: the source file's URL, source_last_modified,
                                source_sha256 (re-verified against the file on disk), size and
                                retrieval time, the data cutoff and the registry and panel
                                windows the run used, and each table's row count
 The download is cached under paths.AWARENESS_RAW/ancine with a manifest (URL, status, bytes,
-Content-Length, SHA-256, Last-Modified, retrieval time, file name).
+Content-Length, SHA-256, Last-Modified, retrieval time, file name, final URL and redirect hops).
+It follows a redirect only to https://dados.ancine.gov.br on the default port; any other target
+stops the download before that target is contacted.
 
 VALIDATION (any failure aborts before writing)
 ----------------------------------------------
@@ -132,14 +219,21 @@ VALIDATION (any failure aborts before writing)
   2. At least 500,663 rows and 500,663 distinct CRTs (ANCINE's dashboard count of advertising
      CRTs issued 2013 to May 2025); every CRT number has 14 digits.
   3. At least 95% of the request and the issue dates parse.
-  4. No panel_code-month appears twice in the monthly table; segment counts add up to n_crt.
-  5. Every mapped CNPJ8 exists in the IF.data registry; every panel_code exists in the market
-     panel; for each of the crosswalk's anchors (Banco do Brasil, Caixa, Itau holding, Nu) whose
-     root is on any row of the file (a valid CNPJ, counted before the registry filter), EVERY
-     such row maps to its code (an unmapped row, or one that never reached the mapping, fails
-     too), and Banco do Brasil, Caixa and Nu must have rows, so the check cannot pass by
-     finding nothing.
+  4. No panel_code-month appears twice in the monthly table; segment counts add up to n_crt;
+     n_crt is the sum of the four bank classes; the naming-rights count fits inside the
+     non-own part of n_crt.
+  5. Every CNPJ8 a line was mapped through (the own root, or the bank root an attribution
+     names) exists in the IF.data registry; every panel_code exists in the market panel; for
+     each of the crosswalk's anchors (Banco do Brasil, Caixa, Itau holding, Nu) whose root is on
+     any row of the file (a valid CNPJ, counted before the registry filter), EVERY such row maps
+     to its code as own (an unmapped row, or one that never reached the mapping, fails too),
+     and Banco do Brasil, Caixa and Nu must have rows, so the check cannot pass by finding
+     nothing.
   6. Title, request date and segment never vary within a mapped CRT.
+  7. Attribution: every class is one of the five; affiliate and holding rows come from filers in
+     AFFILIATES and HOLDINGS, a holding row names one of its holding's banks, media rows come
+     from media filers, no joint venture is attributed, and each (panel code, CRT) has exactly
+     one counted_as.
 Each check logs what it measured when it passes.
 
 Usage
@@ -147,7 +241,7 @@ Usage
   python scrape_ancine_ad_films.py                  # uses the cached download
   python scrape_ancine_ad_films.py --refresh        # downloads the current vintage first
   python scrape_ancine_ad_films.py --download-only
-  python scrape_ancine_ad_films.py --out-dir <dir>  # writes the four tables and the
+  python scrape_ancine_ad_films.py --out-dir <dir>  # writes the five tables and the
                                                     # provenance file elsewhere
 """
 
@@ -155,6 +249,7 @@ from __future__ import annotations
 
 import argparse
 import codecs
+import contextlib
 import csv
 import hashlib
 import io
@@ -164,6 +259,7 @@ import os
 import re
 import time
 import unicodedata
+import urllib.parse
 import urllib.request
 from datetime import timezone
 from email.utils import parsedate_to_datetime
@@ -181,6 +277,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s  %(levelname)-7s  %(
 log = logging.getLogger(__name__)
 
 URL = "https://dados.ancine.gov.br/dados-abertos/crt-obras-publicitarias.csv"
+ALLOWED_HOST = "dados.ancine.gov.br"
 RAW_DIR = paths.AWARENESS_RAW / "ancine"
 CSV_PATH = RAW_DIR / "crt-obras-publicitarias.csv"
 MANIFEST = RAW_DIR / "manifest.json"
@@ -192,11 +289,11 @@ USER_AGENT = "deposit-competition-research (academic; bulk open-data download)"
 
 DASHBOARD_CRTS = 500_663          # ANCINE dashboard: advertising CRTs issued 2013 to May 2025
 MIN_DATE_PARSE = 0.95
-# A CRT enters the file when it is issued, which can be days after its request: of the CRTs
-# requested in 2025, 9.8% were issued after their request month ended and 2.6% more than 10
-# days after it. A request month therefore counts as complete only once this many days past
-# its end fall inside the file's data. The months just before it can still gain a few CRTs in
-# a later vintage.
+# A CRT enters the file when it is issued, which can be days after its request: of the 35,643
+# CRTs requested in 2025, 10.9% were issued on or after the 1st of the following month and 3.3%
+# on or after its 11th, i.e. more than this many days after the request month ended. A request
+# month therefore counts as complete only once this many days past its end fall inside the
+# file's data; the 3.3% is what a month so marked can still gain in a later vintage.
 ISSUE_LAG_DAYS = 10
 # Anchors that must have CRT rows. Their absence means the file or the CNPJ parsing changed,
 # and the anchor check would otherwise pass by finding nothing to test. The Itau holding
@@ -210,8 +307,9 @@ COL_TITLE, COL_CRT = "TITULO_ORIGINAL", "CRT"
 COL_REQ, COL_ISSUE, COL_VALID = "DATA_REQUERIMENTO_CRT", "DATA_EMISSAO_CRT", "DATA_VALIDADE_CRT"
 COL_SEG, COL_VERS = "SEGMENTO", "QTD_VERSOES"
 COL_ADV, COL_ADV_CNPJ = "ANUNCIANTE", "CNPJ_ANUNCIANTE"
+COL_PROD = "PRODUTO_SERVICO_ANUNCIADO"
 REQUIRED = [COL_TITLE, COL_CRT, COL_REQ, COL_ISSUE, COL_VALID, COL_SEG, COL_VERS, COL_ADV,
-            COL_ADV_CNPJ]
+            COL_ADV_CNPJ, COL_PROD]
 
 COVERAGE_NOTE = ("CRT counts cover films for TV, cinema, home video and other regulated segments; "
                  "ads shown only online, on YouTube or on social media are exempt from "
@@ -252,8 +350,10 @@ NOT_FINANCIAL = re.compile(r"\b(?:MUNICIPIO|PREFEITURA|SECRETARIA|CONDOMINIO|CON
                            r"BANCO DE (?:OLHOS|ALIMENTOS|SANGUE|LEITE|TECIDOS))\b")
 
 # Review aids for the unmatched list, never used to map. `kind` sorts the queue; `brand_word`
-# names the panel-bank brand an affiliate carries (BRADESCO SEGUROS, CAIXA SEGURADORA), which is
-# the decision the user has to make: whether such an affiliate's films count for the bank.
+# names the bank or bank-owned brand a name carries (BRADESCO SEGUROS, CAIXA SEGURADORA, ELO,
+# LIVELO, B3), which is the decision the user has to make: whether such a firm's films count for
+# a bank. It is a whole-word match, so short brands (ELO, VERO, BOLSA, B3) also tag unrelated
+# firms that share the word; NOT_BRAND removes the tag from the ones that say what they are.
 KINDS = (("cooperative", r"\b(?:COOPERATIVA|COOP|SICOOB|SICREDI|UNICRED|CRESOL|CONFEDERACAO)\b"),
          ("insurance_pension", r"\b(?:SEGURO|SEGUROS|SEGURADORA|SEGURIDADE|CAPITALIZACAO|"
                                r"PREVIDENCIA|PREVIDENCIAL|BRASILPREV|BRASILSEG)\b"),
@@ -270,10 +370,14 @@ BRANDS = re.compile(r"\b(BRADESCO|ITAU|UNIBANCO|SANTANDER|CAIXA|BB|BANCO DO BRAS
                     r"BANRISUL|BMG|VOTORANTIM|BV|MERCADO PAGO|PAGSEGURO|PAGBANK|NEON|AGIBANK|"
                     r"ORIGINAL|PAN|ELO|LIVELO|VERO|BOLSA|B3)\b")
 # Several brand words are also ordinary words or other firms' names (SAFRA is a harvest, INTER
-# and PAN start many company names). A name that also says it is a builder, a farm, a food
-# maker or an industry is such a firm, so it gets no brand_word; it stays in the queue.
+# and PAN start many company names, ELO and B3 name agencies). A name that also says it is a
+# builder, a farm, a food maker, an industry, an advertising or communication agency, a
+# pharmacy, an estate agent or an optician is such a firm, so it gets no brand_word; it stays in
+# the queue. The names are accent-folded before the test (COMUNICACAO for COMUNICAÇÃO, OTICA
+# for ÓTICA).
 NOT_BRAND = re.compile(r"\b(?:INCORPORACAO|INCORPORACOES|CONSTRUTORA|AGROPECUARIA|ALIMENTICIOS|"
-                       r"INDUSTRIA|INDUSTRIAS|FERTILIZANTES)\b")
+                       r"INDUSTRIA|INDUSTRIAS|FERTILIZANTES|COMUNICACAO|PUBLICIDADE|PROPAGANDA|"
+                       r"DROGARIA|IMOVEIS|OTICA)\b")
 
 # Words too common in institution names to show that two names refer to the same firm.
 NAME_STOP = {"BANCO", "BCO", "BANK", "S", "A", "SA", "S/A", "LTDA", "HOLDING", "DO", "DA", "DE",
@@ -285,6 +389,320 @@ NAME_STOP = {"BANCO", "BCO", "BANK", "S", "A", "SA", "S/A", "LTDA", "HOLDING", "
              "VALORES", "MOBILIARIOS", "CORRETORA", "CAMBIO", "PRUDENCIAL", "ESTADO", "ME",
              "EPP", "EIRELI", "GRUPO", "PARTICIPACOES", "NACIONAL", "REGIONAL", "SUL", "NORTE",
              "DESENVOLVIMENTO", "SICOOB", "SICREDI", "CRESOL", "UNICRED", "RURAL"}
+
+# ---------------------------------------------------------------------------
+# Attribution tables
+# ---------------------------------------------------------------------------
+# Bank brands a film's product or title can name: label, the CNPJ8 of the institution whose code
+# the brand stands for, and the pattern on the folded text (brand_text). The code is found by
+# mapping that root with Mapper, so a brand follows its bank's registry and panel history.
+# Bare words that are also ordinary words or other firms' names match only beside a word that
+# makes them the bank: SAFRA is a harvest ('PLANO SAFRA', 'OURO SAFRA' seeds, 'SAFRA COTRISAL'),
+# PAN the Pan American games, CAIXA a box or a till ('NO CAIXA', 'CAIXA DE SOM'), C6 a GloboNews
+# programme code ('GNEWS C6'), NEXT, INTER, ORIGINAL, BV, STONE and CIELO the start of many firm
+# names, and BB, NU and XP letters in any title. ITAU excludes the town (ITAU DE MINAS), the mall
+# (ITAU POWER) and a coffee brand (CAFE ITAU).
+BANK_BRANDS = (
+    ("Bradesco", "60746948", r"\bBRADESCO\b|\bBANCO NEXT\b|\bNEXT BANK\b|\b(?:CONTA|APP) NEXT\b"),
+    ("Itau", "60701190", r"(?<!\bCAFE )\bITAU\b(?! DE MINAS\b| POWER\b)|\bITAUCARD\b|"
+                         r"\bUNIBANCO\b|\bHIPERCARD\b|\bCREDICARD\b|\bREDECARD\b|\bPERSONNALITE\b"),
+    ("Santander", "90400888", r"\bSANTANDER\b"),
+    ("Caixa", "00360305", r"\bCAIXA (?:ECONOMICA|FEDERAL|SEGURADORA|SEGUROS|SEGURIDADE|VIDA|"
+                          r"CAPITALIZACAO|CONSORCIO\w*|TEM|AQUI|CULTURAL|CARTO\w*|ASSET|"
+                          r"RESIDENCIAL|POUPANCA|HABITACAO|PRA ELAS)\b|\bCAIXAPRAELAS|"
+                          r"\bFEIRAO (?:DA )?CAIXA\b|\bLOTERIAS? (?:DA )?CAIXA\b|"
+                          r"\b(?:CARTAO|APP|BANCO|CONTA|POUPANCA|FINANCIAMENTO|CREDITO|"
+                          r"CONSORCIO|SEGURO) (?:DA )?CAIXA\b"),
+    ("Banco do Brasil", "00000000", r"\bBANCO DO BRASIL\b|\bBB (?:SEGUROS|SEGURIDADE|MAPFRE|DTVM|"
+                                    r"ASSET|CONSORCIO\w*|PREVIDENCIA|CARTO\w*|CREDITO|"
+                                    r"INVESTIMENTOS|AGRO|PAY|CAPITALIZACAO|CONTA|APP)\b|"
+                                    r"\b(?:CARTAO|APP|CONTA) BB\b|\bOUROCARD\b|\bOUROCAP\b|"
+                                    r"\bBRASILPREV\b|\bBRASILCAP\b|\bBRASILSEG\b|\bCCBB\b"),
+    ("Nubank", "18236120", r"\bNUBANK\b|\bNU (?:PAGAMENTOS|BANK|CONTA|INVEST|CARTAO)\b|"
+                           r"\bNUCONTA\b|\bNUINVEST\b|\b(?:CARTAO|CONTA|APP) (?:DO )?NU\b"),
+    ("Inter", "00416968", r"\bBANCO INTER\b|\bINTERMEDIUM\b|\bINTER ?& ?CO\b|"
+                          r"\bINTER (?:BANK|INVEST\w*|SHOP|PAG|CONTA)\b|"
+                          r"\b(?:CONTA|APP|CARTAO) (?:DO )?INTER\b"),
+    ("C6", "31872495", r"\bC6 (?:BANK|CARBON|CONTA|INVEST\w*|PAY|FEST|CARTAO)\b|\bBANCO C6\b|"
+                       r"\b(?:CONTA|CARTAO|APP) C6\b"),
+    ("PicPay", "22896431", r"\bPICPAY\b|\bPIC PAY\b"),
+    ("BTG", "30306294", r"\bBTG PACTUAL\b|\bBANCO BTG\b|\bBTG ?\+|\bBTG (?:BANK|INVEST\w*)\b"),
+    ("Safra", "58160789", r"\bBANCO SAFRA\b|\bSAFRA ?PAY\b|\bSAFRA (?:NATIONAL|INVEST\w*|WEALTH|"
+                          r"ASSET|BANK)\b|\bJ ?SAFRA\b|\b(?:CONTA|CARTAO|APP) SAFRA\b"),
+    ("XP", "02332886", r"\bXP (?:INVESTIMENTOS|INVEST|INC|CORRETORA|BANK|CARTAO|VISA)\b|"
+                       r"\bBANCO XP\b|\b(?:CARTAO|CONTA|APP) XP\b"),
+    ("Banrisul", "92702067", r"\bBANRISUL\b|\bBANRICOMPRAS\b"),
+    ("BMG", "61186680", r"\bBANCO BMG\b|\bBMG (?:CARD|BANK|CARTAO|ARMOR|CONSIGNADO)\b|"
+                        r"\b(?:CARTAO|CONTA|APP) BMG\b"),
+    ("BV", "59588111", r"\bBANCO VOTORANTIM\b|\bBANCO BV\b|\bBV FINANCEIRA\b|"
+                       r"\b(?:CONTA|CARTAO|APP) BV\b"),
+    ("Mercado Pago", "10573521", r"\bMERCADO ?PAGO\b"),
+    ("PagSeguro", "08561701", r"\bPAGSEGURO\b|\bPAGBANK\b|\bPAG SEGURO\b"),
+    ("Neon", "20855875", r"\bNEON (?:PAGAMENTOS|BANK)\b|\bBANCO NEON\b|"
+                         r"\b(?:CONTA|CARTAO|APP) NEON\b"),
+    ("Agibank", "10664513", r"\bAGIBANK\b|\bAGIPLAN\b"),
+    ("Original", "92894922", r"\bBANCO ORIGINAL\b"),
+    ("Pan", "59285411", r"\bBANCO PAN\b|\bBANCOPAN\b|\bBANCO PANAMERICANO\b"),
+    ("Banese", "13009717", r"\bBANESE\b|\bBANESCARD\b"),
+    ("Banestes", "28127603", r"\bBANESTES\b"),
+    ("BRB", "00000208", r"\bBANCO BRB\b|\bBANCO DE BRASILIA\b|\bBRB (?:BANCO|CARD|CARTAO|"
+                        r"MOBILIDADE|CONTA|SEGUROS|CORRETORA|FINANCEIRA|NACAO|FLA|PAY)\b|"
+                        r"\b(?:CARTAO|CONTA|APP|ARENA|NACAO) BRB\b"),
+    ("Banpara", "04913711", r"\bBANPARA\b"),
+    ("BASA", "04902979", r"\bBANCO DA AMAZONIA\b"),
+    ("BNB", "07237373", r"\bBANCO DO NORDESTE\b|\bCREDIAMIGO\b"),
+    ("Daycoval", "62232889", r"\bDAYCOVAL\b"),
+    ("Crefisa", "60779196", r"\bCREFISA\b"),
+    ("Digio", "27098060", r"\bDIGIO\b"),
+    ("Citibank", "33479023", r"\bCITIBANK\b"),
+    ("Mercantil", "17184037", r"\bBANCO MERCANTIL\b"),
+    ("Cielo", "01027058", r"\bCIELO (?:LIO|PAGAMENTOS|MAQUININHA)\b|\bMAQUININHA (?:DA )?CIELO\b"),
+    ("Stone", "16501555", r"\bSTONE (?:PAGAMENTOS|CO|MAQUININHA|CONTA)\b|\bSTONECO\b|"
+                          r"\bMAQUININHA (?:DA )?STONE\b"),
+    ("Getnet", "10440482", r"\bGETNET\b"),
+    ("SumUp", "16668076", r"\bSUMUP\b"),
+    ("Ame", "32778350", r"\bAME DIGITAL\b"),
+    ("Will", "36272465", r"\bWILL BANK\b|\bBANCO WILL\b"),
+    ("Porto", "04862600", r"\bPORTO BANK\b|\bPORTOSEG\b|\bCARTAO PORTO\b|"
+                          r"\bPORTO SEGURO (?:CARTAO|CARTOES|BANK|CONSORCIO\w*|SEGUROS?|AUTO|"
+                          r"SAUDE|CAPITALIZACAO|RESIDENCIA|VIDA|CIA|COMPANHIA)\b"),
+)
+# Cooperative systems. Sicoob and Sicredi map to their banks (the market panel's only two
+# cooperative banks) as coop_system; the others have no panel bank and stay unattached.
+COOP_SYSTEMS = (("Sicoob", "02038232", r"\bSICOO+B\w*|\bBANCOOB\b|\bSIPAG\b"),
+                ("Sicredi", "01181521", r"\bSICREDI\b|\bSICRED\b"),
+                ("Cresol", None, r"\bCRESOL\b"),
+                ("Unicred", None, r"\bUNICRED\w*"),
+                ("Ailos", None, r"\bAILOS\b|\bCECRED\b"))
+ATTACHED_SYSTEMS = {lab for lab, root, _ in COOP_SYSTEMS if root}
+BRAND_RX = tuple((lab, root, re.compile(p)) for lab, root, p in BANK_BRANDS + COOP_SYSTEMS)
+BRAND_ROOT = {lab: root for lab, root, _ in BANK_BRANDS + COOP_SYSTEMS}
+BRAND_ANY = re.compile("|".join(f"(?:{p})" for _, _, p in BANK_BRANDS + COOP_SYSTEMS))
+SYSTEM_RX = tuple((lab, re.compile(p)) for lab, _, p in COOP_SYSTEMS)
+
+# A credit cooperative, by the words its legal name uses (singles, centrals, confederations),
+# or by a system name in it. Medical and farm cooperatives say COOPERATIVA too but not CREDITO.
+CREDIT_COOP = re.compile(
+    r"\bCOOP\w* (?:DE |DOS? |DAS? )?(?:\w+ ){0,4}?(?:CREDITO|CRED|ECONOMIA E CREDITO|POUPANCA)\b|"
+    r"\bCENTRAL DAS COOPERATIVAS DE (?:ECONOMIA E )?CREDITO\b|"
+    r"\bCONFEDERACAO\b.*\bCOOPERATIVAS\b|\bCCPI\b|\bCREDICOOP\b|"
+    r"\bSICOO+B\b|\bSICREDI\b|\bSICRED\b|\bCRESOL\b|\bUNICRED\w*|\bAILOS\b")
+# Broadcasters, media groups and audiovisual or event producers, by name. An advertising agency
+# is not media (AGENCY): the user decides on agencies from the review file.
+MEDIA = re.compile(
+    r"\b(?:TELEVISAO|TELEVISOES|TV|TVS|TVSBT|RADIO|RADIOS|RADIODIFUSAO|RADIODIFUSORA|EMISSORA|"
+    r"EMISSORAS|PROGRAMADORA|CHANNELS?|NETWORKS?|BROADCAST\w*|CANAL|CANAIS|MIDIA|MEDIA|JORNAL|"
+    r"EDITORA|PRODUCOES|PRODUTORA|FILMES|FILMS|CINEMATOGRAFICA|AUDIOVISUAL|ENTRETENIMENTO|"
+    r"ESPETACULOS|EVENTOS|STUDIOS?|ESTUDIOS?)\b|"
+    r"\bPRODUCAO (?:E |DE )?(?:\w+ )?(?:EVENTOS|AUDIOVISUAL|ARTISTICA|CULTURAL|FILMES|VIDEO)\b|"
+    r"\bGLOBO COMUNICACAO\b|\bGLOBOSAT\b|\bINFOGLOBO\b|\bENDEMOL\b|\bTFCF\b|"
+    r"\bRBS PARTICIPACOES\b|\bFUNDACAO ROBERTO MARINHO\b|\bSISTEMA MASSA\b")
+AGENCY = re.compile(r"\b(?:PUBLICIDADE|PROPAGANDA|PUBLICITARIA|AGENCIA|MARKETING|COMUNICACAO|"
+                    r"COMUNICACOES)\b")
+# Event, venue and institute words: where one is in the product or title of a sponsored film,
+# the bank's name may be only a naming right (COPA SANTANDER LIBERTADORES, CAIXA CULTURAL,
+# FEIRAO DA CAIXA, ARENA BANCO ORIGINAL, BRADESCO ESPORTES FM).
+EVENT_VENUE = re.compile(
+    r"\b(?:COPA|LIGA|LALIGA|CAMPEONATO|TORNEIO|TROFEU|TACA|CIRCUITO|CORRIDA|MARATONA|IRONMAN|"
+    r"TRIATHLON|RALLY|TOUR|TURNE|FESTIVAL|FEST|FESTA|FEIRA|FEIRAO|SALAO|EXPO\w*|EVENTO|EVENTOS|"
+    r"SHOW|SHOWS|CONCERTO|SINFONIA|ORQUESTRA|TEATRO|CINEMA|CINEMAS|ESPACO|ARENA|ESTADIO|HALL|"
+    r"CULTURAL|MUSEU|EXPOSICAO|INSTITUTO|FUNDACAO|PREMIO|OLIMPIADA|RODEIO|CARNAVAL|FM)\b")
+
+# Bank-owned insurers and other bank affiliates outside any prudential conglomerate, by CNPJ
+# root (or 'name:' + folded name where the CRT carries no CNPJ). bank/root: the bank the films
+# count for and its CNPJ8; basis: brand, control or brand_and_control; institute: a foundation
+# or institute whose films are about itself, flagged naming_rights_suspect; until: the last
+# request quarter (YYYYMM) the brand applies to.
+_BRADESCO_GROUP = ("Grupo Bradesco Seguros companies (Bradesco Seguros, Vida e Previdencia, Saude, "
+                   "Capitalizacao, Auto/RE), subsidiaries of Banco Bradesco: "
+                   "https://www.bradescoseguros.com.br/clientes/institucional/empresas-do-grupo ; "
+                   "https://en.wikipedia.org/wiki/Bradesco_Seguros")
+_BB_SEGURIDADE = ("BB Seguridade (controlled by Banco do Brasil) holds it through BB Seguros: "
+                  "https://www.bbseguridaderi.com.br/en/bb-security/corporate-structure/")
+_PORTO = ("Porto Seguro S.A. controls Porto Seguro Cia de Seguros Gerais and, through Porto Bank, "
+          "Portoseg (the panel's Porto conglomerate): https://en.wikipedia.org/wiki/"
+          "Porto_Seguro_S.A. ; https://ri.portoseguro.com.br/en/the-company/"
+          "corporate-presentation/")
+AFFILIATES = {
+    "33055146": dict(bank="Bradesco", root="60746948", basis="brand_and_control",
+                     evidence=_BRADESCO_GROUP),
+    "92682038": dict(bank="Bradesco", root="60746948", basis="brand_and_control",
+                     evidence=_BRADESCO_GROUP),
+    "92693118": dict(bank="Bradesco", root="60746948", basis="brand_and_control",
+                     evidence=_BRADESCO_GROUP),
+    "51990695": dict(bank="Bradesco", root="60746948", basis="brand_and_control",
+                     evidence=_BRADESCO_GROUP),
+    "33010851": dict(bank="Bradesco", root="60746948", basis="brand_and_control",
+                     evidence=_BRADESCO_GROUP),
+    "60701521": dict(bank="Bradesco", root="60746948", basis="brand", institute=True,
+                     evidence="Fundacao Bradesco, part of Bradesco's controlling group (it holds "
+                              "Bradesco shares directly and through Cidade de Deus and NCF): "
+                              "https://www.bradescori.com.br/en/bradesco/corporate-governance/"
+                              "ownership-structure/"),
+    "15011336": dict(bank="Bradesco", root="60746948", basis="brand_and_control",
+                     evidence="next, Bradesco's digital bank (brand), a Bradesco Organization "
+                              "company: https://pt.wikipedia.org/wiki/Next_(fintech) ; "
+                              "https://next.me/sobre-nos"),
+    "59438325": dict(bank="Bradesco", root="60746948", basis="brand_and_control",
+                     evidence="IF.data lists Banco Bradesco Cartoes in Bradesco's conglomerate "
+                              "in the quarters around the one it has no code in"),
+    # A registry root: only its rows that map to no code (2013-2016, before the lists put it
+    # in Itau's conglomerate in 201703) are attributed here; its later rows are own.
+    "01425787": dict(bank="Itau", root="60701190", basis="control",
+                     evidence="Redecard, 98% Itau Unibanco after the 2012 tender offer, delisted "
+                              "October 2012: https://exame.com/invest/mercados/itau-investiu-r-11-"
+                              "3-bi-na-compra-de-acoes-da-redecard/"),
+    "61557039": dict(bank="Itau", root="60701190", basis="brand_and_control",
+                     evidence="Itau Seguros, an Itau Unibanco company: https://www.itau.com.br/"
+                              "seguros"),
+    "92661388": dict(bank="Itau", root="60701190", basis="brand_and_control",
+                     evidence="Itau Vida e Previdencia, 'company of the Itau Unibanco Financial "
+                              "Conglomerate' (management report 2024): https://www.itau.com.br/"
+                              "download-file/v2/d/42787847-4cf6-4461-94a5-40ed237dca33/"
+                              "2a625af4-fc67-eb67-7588-576e3346f0f7?origin=1"),
+    "23025711": dict(bank="Itau", root="60701190", basis="brand",
+                     evidence="name carries ITAU (Cia Itau de Capitalizacao); control not "
+                              "verified"),
+    "08816067": dict(bank="Itau", root="60701190", basis="brand",
+                     evidence="Itau-branded auto and home insurer of the 2009 Porto Seguro-Itau "
+                              "association, controlled by Porto: https://www.infomoney.com.br/"
+                              "minhas-financas/acionistas-do-itau-unibanco-firmam-associacao-com-"
+                              "a-porto-seguro/"),
+    "59573030": dict(bank="Itau", root="60701190", basis="brand", institute=True,
+                     evidence="Fundacao Itau Social / Fundacao Itau para a Educacao e Cultura "
+                              "(Itau Cultural): name carries ITAU"),
+    "42786803": dict(bank="Itau", root="60701190", basis="control",
+                     evidence="iupp, Itau Unibanco's points programme, integrated into the Itau "
+                              "apps: https://tecnoblog.net/noticias/iupp-programa-de-pontos-do-"
+                              "itau-e-integrado-ao-app-e-fica-restrito-a-clientes/"),
+    "04270778": dict(bank="Santander", root="90400888", basis="brand_and_control",
+                     evidence="Santander Corretora de Seguros, Investimentos e Servicos, "
+                              "controlled entirely by Banco Santander (Brasil): https://www.dnb.com/"
+                              "business-directory/company-profiles.santander_corretora_de_seguros_"
+                              "investimentos_e_servicos_sa.1ece257424fce8b09523d1256de8a139.html"),
+    "61472676": dict(bank="Santander", root="90400888", basis="brand",
+                     evidence="IF.data lists 61472676 as BANCO SANTANDER BRASIL S.A. with no "
+                              "prudential conglomerate code in any list 201303-202512; its CRTs "
+                              "(2013-2014) advertise Santander products (Select, Conta Combinada)"),
+    "34020354": dict(bank="Caixa", root="00360305", basis="brand", until=202103,
+                     evidence="Caixa Seguradora: CNP 51.75%, Caixa Seguridade 48.25%; sold Caixa-"
+                              "branded insurance in the Caixa network until 2021: "
+                              "https://pt.wikipedia.org/wiki/Caixa_Seguridade ; "
+                              "https://www.ri.caixaseguridade.com.br/en/a-companhia/empresas-do-"
+                              "grupo/"),
+    "01599296": dict(bank="Caixa", root="00360305", basis="brand",
+                     evidence="name carries CAIXA (Caixa Capitalizacao, a Caixa Seguridade "
+                              "partnership): https://www.ri.caixaseguridade.com.br/en/a-companhia/"
+                              "empresas-do-grupo/"),
+    "03730204": dict(bank="Caixa", root="00360305", basis="brand",
+                     evidence="name carries CAIXA (Caixa Vida e Previdencia, a Caixa Seguridade "
+                              "partnership): https://www.ri.caixaseguridade.com.br/en/a-companhia/"
+                              "empresas-do-grupo/"),
+    "28196889": dict(bank="Banco do Brasil", root="00000000", basis="brand_and_control",
+                     evidence="Brasilseg, its films sold as BB Seguros; " + _BB_SEGURIDADE),
+    "27665207": dict(bank="Banco do Brasil", root="00000000", basis="control",
+                     evidence="Brasilprev: BB Seguros holds 74.99% of the economics (49.99% of "
+                              "votes); " + _BB_SEGURIDADE),
+    "15138043": dict(bank="Banco do Brasil", root="00000000", basis="control",
+                     evidence="Brasilcap: BB Seguros holds 66.77% of the economics (49.99% of "
+                              "votes); " + _BB_SEGURIDADE),
+    "01984199": dict(bank="BRB", root="00000208", basis="brand_and_control",
+                     evidence="Cartao BRB S.A. (BRBCARD), controlled by BRB - Banco de Brasilia: "
+                              "https://novo.brb.com.br/sobre-o-brb/empresas-com-marca-brb/brbcard/"),
+    "42597575": dict(bank="BRB", root="00000208", basis="brand_and_control",
+                     evidence="BRB's insurance broker, held through Cartao BRB: "
+                              "https://novo.brb.com.br/servico-de-informacao-ao-cidadao/coligadas/"),
+    "44705886": dict(bank="BRB", root="00000208", basis="brand_and_control",
+                     evidence="BRB's insurance broker, held through Cartao BRB: "
+                              "https://novo.brb.com.br/servico-de-informacao-ao-cidadao/coligadas/"),
+    "27053230": dict(bank="Banestes", root="28127603", basis="brand_and_control",
+                     evidence="Banestes S.A. holds 100% of Banestes Seguros: "
+                              "https://ri.banestes.com.br/o-banestes/empresas-controladas"),
+    "13180351": dict(bank="Banese", root="13009717", basis="brand_and_control",
+                     evidence="Banese's insurance broker, a Banese group company: "
+                              "https://www.banese.com.br/o-banese/sobre-nos"),
+    "10645538": dict(bank="Banese", root="13009717", basis="brand", institute=True,
+                     evidence="name carries BANESE (Instituto Banese)"),
+    "61198164": dict(bank="Porto", root="04862600", basis="brand_and_control", evidence=_PORTO),
+    "33448150": dict(bank="Porto", root="04862600", basis="control",
+                     evidence="Azul Seguros, controlled by Porto Seguro since 2003: "
+                              "https://www.azulseguros.com.br/institucional/quem-somos/"),
+    "06864650": dict(bank="Porto", root="04862600", basis="brand_and_control", institute=True,
+                     evidence="Instituto Porto Seguro, maintained by Porto: "
+                              "https://gife.org.br/associados/instituto-porto-seguro/"),
+    "19091996": dict(bank="Porto", root="04862600", basis="brand",
+                     evidence="Porto Seguro Locadora de Veiculos, the company behind Porto's "
+                              "Carro Facil: https://www.portoseguro.com.br/carro-facil/"),
+    "08279191": dict(bank="BNP Paribas", root="01522368", basis="control",
+                     evidence="BNP Paribas Cardif, a BNP Paribas subsidiary: "
+                              "https://bnpparibascardif.com.br/quem-somos/quem-somos/"),
+    "03546261": dict(bank="BNP Paribas", root="01522368", basis="control",
+                     evidence="BNP Paribas Cardif, a BNP Paribas subsidiary: "
+                              "https://bnpparibascardif.com.br/quem-somos/quem-somos/"),
+    "name:INTER & CO PAYMENTS": dict(bank="Inter", root="00416968", basis="brand_and_control",
+                                     evidence="Inter&Co Payments, Inc., a subsidiary of "
+                                              "Inter&Co, Inc. (Banco Inter's parent): "
+                                              "https://us.inter.co/compliance"),
+}
+# Parent holdings: only CRTs whose product or title names one of `banks` are attributed.
+HOLDINGS = {
+    "07570673": dict(banks=("PicPay", "Original"),
+                     evidence="J&F Participacoes, the Batista family's holding that controls "
+                              "PicPay: https://euqueroinvestir.com/acoes/ipo-picpay-estrutura-"
+                              "acionaria-controle-fundadores ; https://jfinvest.com.br/en/"
+                              "business/picpay/"),
+    "00350763": dict(banks=("PicPay", "Original"),
+                     evidence="J&F Investimentos controls Banco Original (and PicPay through J&F "
+                              "Participacoes): https://pt.wikipedia.org/wiki/J%26F_Investimentos"),
+    "29694063": dict(banks=("C6",),
+                     evidence="C6 Holding S.A., indirect controller of Banco C6 (Banco C6 "
+                              "financial statements 2019): https://cdn.c6bank.com.br/c6-site-docs/"
+                              "demonstracoes-financeiras-31-12-2019-c6bank.pdf"),
+    "01109184": dict(banks=("PagSeguro",),
+                     evidence="UOL, controlling shareholder of PagSeguro Digital (85% of votes): "
+                              "https://en.wikipedia.org/wiki/PagSeguro"),
+    "61532644": dict(banks=("Itau",),
+                     evidence="Itausa controls Itau Unibanco through IUPAR: "
+                              "https://www.nordinvestimentos.com.br/blog/itau-ou-itausa/"),
+    "03407049": dict(banks=("BV",),
+                     evidence="Votorantim S.A. controls Banco BV through Votorantim Financas "
+                              "(50.01% of votes): https://ri.bv.com.br/en/corporate-governance/"
+                              "shareholding-structure/"),
+    "00776574": dict(banks=("Ame",),
+                     evidence="Americanas (Lojas Americanas and B2W) controls Ame Digital: "
+                              "https://conteudos.xpi.com.br/acoes/relatorios/curtas-b2w-e-lojas-"
+                              "americanas-anunciam-estrutura-societaria-da-ame-digital/"),
+    "02149205": dict(banks=("Porto",),
+                     evidence="Porto Seguro S.A., the listed holding over Porto Bank and Portoseg: "
+                              "https://ri.portoseguro.com.br/en/the-company/corporate-"
+                              "presentation/"),
+    "name:SANTANDER": dict(banks=("Santander",),
+                           evidence="Santander group (no CNPJ on the CRT); Banco Santander S.A. "
+                                    "controls Santander Brasil: https://en.wikipedia.org/wiki/"
+                                    "Santander_Brasil"),
+    "name:BANCO SANTANDER SA": dict(banks=("Santander",),
+                                    evidence="Banco Santander S.A. (Spain, no CNPJ on the CRT), "
+                                             "controlling shareholder of Santander Brasil: "
+                                             "https://en.wikipedia.org/wiki/Santander_Brasil"),
+}
+# Multi-bank joint ventures: never attributed to a bank; owners recorded for the user.
+_ELOPAR = "https://pt.wikipedia.org/wiki/Elo_Participa%C3%A7%C3%B5es_S/A"
+JOINT_VENTURES = {
+    "09227084": dict(owners="EloPar (Bradesco 50.01%, Banco do Brasil 49.99%) 66.665%; Caixa "
+                            "33.335%",
+                     evidence="https://www.infomoney.com.br/minhas-financas/banco-do-brasil-"
+                              "bradesco-e-caixa-formalizam-acordo-para-criar-elo-servicos/ ; "
+                              + _ELOPAR),
+    "12888241": dict(owners="Banco do Brasil and Bradesco (EloPar)", evidence=_ELOPAR),
+    "04740876": dict(owners="Banco do Brasil and Bradesco (EloPar); brands Alelo, Veloe",
+                     evidence=_ELOPAR),
+    "01027058": dict(owners="Banco do Brasil and Bradesco (directly and through EloPar)",
+                     evidence="https://www.cnnbrasil.com.br/economia/negocios/cielo-anuncia-"
+                              "proposta-de-bradesco-e-bb-para-sair-da-bolsa/ ; " + _ELOPAR),
+}
+ATTRIBUTIONS = ("own", "affiliate", "holding", "media_sponsored", "coop_system")
+BANK_CLASSES = ATTRIBUTIONS[:4]
+RANK = {c: i for i, c in enumerate(ATTRIBUTIONS)}
 
 
 # ---------------------------------------------------------------------------
@@ -301,6 +719,20 @@ def norm_title(text) -> str:
     """Title key: folded, punctuation and quote marks dropped. ANCINE titles arrive as
     '"SORT 03 FEV 13"', "''CORES DA SORTE''" or plain, for the same kind of film."""
     return re.sub(r"\s+", " ", re.sub(r"[^A-Z0-9 ]+", " ", fold(text))).strip()
+
+
+def brand_text(product, title) -> str:
+    """Product and title, folded, punctuation turned to spaces (keeping & and + for 'INTER&CO'
+    and 'BTG+'), joined by ' | ' so no brand phrase spans the two fields."""
+    def one(t):
+        return re.sub(r"\s+", " ", re.sub(r"[^A-Z0-9&+ ]+", " ", fold(t))).strip()
+    return one("" if pd.isna(product) else product) + " | " + one("" if pd.isna(title) else title)
+
+
+def advertiser_key(cnpj8: pd.Series, name_folded: pd.Series) -> pd.Series:
+    """The advertiser's identity: its CNPJ root, or 'name:' + folded name when the CRT carries
+    no valid CNPJ."""
+    return cnpj8.astype("object").where(cnpj8.notna(), "name:" + name_folded)
 
 
 LEGAL_FORM = {"S", "A", "SA", "LTDA", "ME", "EPP", "EIRELI"}
@@ -356,6 +788,11 @@ def ym_label(ym: int) -> str:
     return f"{ym // 100}Q{(ym % 100) // 3}"
 
 
+def ym_from_label(label: str) -> int:
+    y, q = label.split("Q")
+    return int(y) * 100 + int(q) * 3
+
+
 # ---------------------------------------------------------------------------
 # Download
 # ---------------------------------------------------------------------------
@@ -365,13 +802,74 @@ def write_json_atomic(path: Path, obj: dict) -> None:
     os.replace(tmp, path)
 
 
+def url_refusal(url: str) -> str | None:
+    """Why `url` may not be requested, or None when it may: only https on ALLOWED_HOST, with no
+    user information and at most the default port. The last test asks urllib which host it would
+    connect to (`Request.host`), so a user name ('dados.ancine.gov.br@elsewhere') or another port
+    cannot make the connection differ from the name that was checked."""
+    parts = urllib.parse.urlsplit(url)
+    if parts.scheme.lower() != "https":
+        return f"scheme {parts.scheme or '(none)'!r} is not https"
+    host = (parts.hostname or "").lower()
+    if host != ALLOWED_HOST:
+        return f"host {host or '(none)'} is not {ALLOWED_HOST}"
+    if parts.username is not None or parts.password is not None:
+        return "it carries user information"
+    try:
+        port = parts.port
+    except ValueError:
+        return "its port is not a number"
+    if port not in (None, 443):
+        return f"port {port} is not 443"
+    try:
+        connect = (urllib.request.Request(url).host or "").lower()
+    except ValueError as exc:
+        return f"urllib cannot parse it ({exc})"
+    if connect not in (host, f"{host}:443"):
+        return f"urllib would connect to {connect!r}, not to {host}"
+    return None
+
+
+class UnapprovedRedirect(RuntimeError):
+    """A redirect to a target `url_refusal` refuses. Raised before the target is contacted. Not
+    an OSError on purpose: download() retries network errors, and a refusal is no transient
+    failure."""
+
+    def __init__(self, code: int, source: str, target: str, reason: str):
+        self.code, self.source, self.target, self.reason = code, source, target, reason
+        super().__init__(f"{source} redirected (HTTP {code}) to {target}: {reason}")
+
+
+class _CheckedRedirects(urllib.request.HTTPRedirectHandler):
+    """urllib's redirect handling, but a hop is followed only to a URL `url_refusal` accepts,
+    and every hop followed is recorded. urllib's default handler follows a 30x to any host,
+    port or scheme."""
+
+    def __init__(self, hops: list):
+        super().__init__()
+        self.hops = hops
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        # urllib calls this with the target already made absolute and before requesting it, so
+        # a refusal here means the target is never contacted.
+        why = url_refusal(newurl)
+        if why:
+            with contextlib.suppress(Exception):
+                fp.close()
+            raise UnapprovedRedirect(int(code), req.full_url, newurl, why)
+        self.hops.append([int(code), newurl])
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
 def download(refresh: bool) -> dict:
     """Fetch the CRT file once and record what the server said about it.
 
     The body is streamed to a '.part' file and moved into place only after its byte count
     equals the server's Content-Length, so an interrupted transfer never leaves a truncated
     file under the real name. Compression is refused (Accept-Encoding: identity) because a
-    compressed body would make the Content-Length comparison meaningless.
+    compressed body would make the Content-Length comparison meaningless. Redirects are
+    followed only to https://dados.ancine.gov.br (url_refusal); a refused one stops the run
+    without a retry, since the server would answer the same way.
     """
     RAW_DIR.mkdir(parents=True, exist_ok=True)
     manifest = json.loads(MANIFEST.read_text(encoding="utf-8")) if MANIFEST.exists() else {}
@@ -381,14 +879,20 @@ def download(refresh: bool) -> dict:
                  manifest["bytes"], manifest.get("last_modified"), manifest.get("retrieved_at"))
         return manifest
 
+    why = url_refusal(URL)
+    if why:
+        raise SystemExit(f"{URL} may not be requested: {why}")
     part = CSV_PATH.with_name(CSV_PATH.name + ".part")
     headers = {"User-Agent": USER_AGENT, "Accept-Encoding": "identity", "Accept": "*/*"}
     for attempt in range(1, 4):
+        hops: list = []
         try:
+            opener = urllib.request.build_opener(_CheckedRedirects(hops))
             req = urllib.request.Request(URL, headers=headers)
             digest, n = hashlib.sha256(), 0
-            with urllib.request.urlopen(req, timeout=180) as resp, part.open("wb") as fh:
+            with opener.open(req, timeout=180) as resp, part.open("wb") as fh:
                 status = getattr(resp, "status", None)
+                final_url = resp.geturl()
                 length = resp.headers.get("Content-Length")
                 last_mod = resp.headers.get("Last-Modified")
                 encoding = resp.headers.get("Content-Encoding")
@@ -404,6 +908,10 @@ def download(refresh: bool) -> dict:
             if length is None or n != int(length):
                 raise RuntimeError(f"received {n} bytes, Content-Length {length}")
             break
+        except UnapprovedRedirect as exc:
+            if part.exists():
+                part.unlink()
+            raise SystemExit(f"refused a redirect: {exc}")
         except Exception as exc:  # noqa: BLE001
             log.warning("download attempt %d/3 failed: %s: %s", attempt, type(exc).__name__, exc)
             if part.exists():
@@ -414,9 +922,11 @@ def download(refresh: bool) -> dict:
     os.replace(part, CSV_PATH)
     manifest = {"url": URL, "status": status, "bytes": n, "content_length": int(length),
                 "sha256": digest.hexdigest(), "last_modified": last_mod,
-                "retrieved_at": now_iso(), "file": CSV_PATH.name}
+                "retrieved_at": now_iso(), "file": CSV_PATH.name, "final_url": final_url,
+                "redirects": hops}
     write_json_atomic(MANIFEST, manifest)
-    log.info("GET %s %s: %d bytes, Last-Modified %s", status, URL, n, last_mod)
+    log.info("GET %s %s: %d bytes, Last-Modified %s%s", status, URL, n, last_mod,
+             f" (via {len(hops)} redirect(s) to {final_url})" if hops else "")
     return manifest
 
 
@@ -491,13 +1001,16 @@ class ReadStats:
 
 
 def read_crt(enc: str, delim: str, roots: set[str]) -> tuple[pd.DataFrame, pd.DataFrame,
-                                                              ReadStats]:
-    """Stream the file. Returns the full rows whose advertiser root is in the IF.data registry,
-    a compact frame of the other rows whose advertiser name looks financial, and the stats."""
+                                                              pd.DataFrame, ReadStats]:
+    """Stream the file. Returns the full rows whose advertiser root is in the IF.data registry;
+    the full rows outside it that the attribution rules can take (the advertiser is in
+    AFFILIATES or HOLDINGS, is a credit cooperative, or the product or title names a bank); a
+    compact frame of the other rows whose advertiser name looks financial; and the stats."""
     st = ReadStats()
     fold_cache: dict[str, str] = {}
     valid_cache: dict[str, bool] = {}
-    keep, fin = [], []
+    keep, cand, fin = [], [], []
+    attach_keys = set(AFFILIATES) | set(HOLDINGS)
     reader = pd.read_csv(CSV_PATH, sep=delim, encoding=enc, encoding_errors="strict", dtype=str,
                          keep_default_na=False, na_values=[""], chunksize=CHUNK_ROWS)
     for chunk in reader:
@@ -534,15 +1047,24 @@ def read_crt(enc: str, delim: str, roots: set[str]) -> tuple[pd.DataFrame, pd.Da
         in_reg = cnpj8.isin(roots)
         keep.append(chunk[in_reg])
 
-        names = chunk.loc[~in_reg, COL_ADV].fillna("")
+        names = chunk[COL_ADV].fillna("")
         for nm in names.unique():
             if nm not in fold_cache:
                 fold_cache[nm] = fold(nm)
-        looks = names.map(fold_cache).str.contains(FINANCIAL)
+        folded = names.map(fold_cache)
+        # Titles are nearly all distinct, so the brand test is cached per chunk only.
+        text = [brand_text(p, t) for p, t in zip(chunk[COL_PROD], chunk[COL_TITLE])]
+        pt_hit = pd.Series([bool(BRAND_ANY.search(t)) for t in text], index=chunk.index)
+        key = advertiser_key(cnpj8, folded)
+        take = ~in_reg & (key.isin(attach_keys) | folded.str.contains(CREDIT_COOP) | pt_hit)
+        cand.append(chunk[take])
+
+        looks = folded[~in_reg].str.contains(FINANCIAL)
         fin.append(chunk.loc[looks[looks].index, [COL_CRT, COL_ADV, COL_ADV_CNPJ, "cnpj14",
                                                    "cnpj_valid", "cnpj8", "request_date"]])
         log.info("  read %7d rows", st.rows)
-    return pd.concat(keep, ignore_index=True), pd.concat(fin, ignore_index=True), st
+    return (pd.concat(keep, ignore_index=True), pd.concat(cand, ignore_index=True),
+            pd.concat(fin, ignore_index=True), st)
 
 
 # ---------------------------------------------------------------------------
@@ -643,8 +1165,6 @@ class Mapper:
         # Inside the lists' window the lists are the record: a root with no span covering the
         # quarter belonged to no conglomerate then (before joining one, after leaving one, or
         # between two), and the nearest span would assign it a membership it did not have.
-        # Only before the first coded list or after the last one is the nearest span the best
-        # available guess.
         if self.reg_first <= ym <= self.reg_last:
             return None, "no_code_in_quarter"
         q = qindex(ym)
@@ -652,16 +1172,26 @@ class Mapper:
         best = np.flatnonzero(dist == dist.min())
         if len(best) > 1:
             return None, "ambiguous"
-        return per["code"].iloc[best[0]], "registry_nearest"
+        span = per.iloc[best[0]]
+        # Outside the window the nearest span stands in only if it reaches the edge the lists
+        # speak for: a span that starts after the first coded list (Redecard's Itau span starts
+        # 201703) says the root had no code at 201403, so it had none before either.
+        if ym < self.reg_first and span["min"] != self.reg_first:
+            return None, "no_code_in_quarter"
+        if ym > self.reg_last and span["max"] != self.reg_last:
+            return None, "no_code_in_quarter"
+        return span["code"], "registry_nearest"
 
     def assign(self, cnpj8: str, ym: int) -> dict:
         ym_p = min(max(ym, self.panel_first), self.panel_last)
+        # The panel span (first to last quarter) is tested, not per-quarter presence; in_panel
+        # marks the CRTs that fall in a hole of that span.
         lead = [c for c in self.leader_codes.get(cnpj8, ())
                 if self.spans.at[c, "first"] <= ym_p <= self.spans.at[c, "last"]]
         reg_code, how = self.registry_code(cnpj8, ym_p)
         out = {"cnpj8": cnpj8, "ym": ym, "map_quarter": ym_label(ym_p),
-               "registry_code": reg_code, "panel_code": None, "match_method": None,
-               "unmapped_reason": None}
+               "registry_code": reg_code, "registry_reason": how, "panel_code": None,
+               "match_method": None, "unmapped_reason": None}
         if len(lead) == 1:
             out.update(panel_code=lead[0], match_method="panel_leader")
         elif len(lead) > 1:
@@ -673,6 +1203,141 @@ class Mapper:
         else:
             out.update(panel_code=reg_code, match_method=how)
         return out
+
+
+# ---------------------------------------------------------------------------
+# Attribution beyond the advertiser's own CNPJ
+# ---------------------------------------------------------------------------
+def filer_type(key: str, name: str, in_registry: bool) -> str:
+    """What kind of firm filed the CRT, for the attribution rules (tables first, then names)."""
+    if key in AFFILIATES:
+        return "affiliate"
+    if key in HOLDINGS:
+        return "holding"
+    if key in JOINT_VENTURES:
+        return "joint_venture"
+    if CREDIT_COOP.search(name):
+        return "credit_coop"
+    if in_registry:
+        return "registry_institution"
+    if MEDIA.search(name):
+        return "media"
+    if AGENCY.search(name):
+        return "agency"
+    return "other"
+
+
+def coop_systems(u: pd.DataFrame) -> dict[str, str]:
+    """System of each credit-cooperative advertiser: the system word in its own name; else the
+    one system its films name, if they name exactly one; else 'ambiguous: A; B' or ''."""
+    out = {}
+    coops = u[u["filer_type"] == "credit_coop"]
+    for key, g in coops.groupby("advertiser_key"):
+        name = " | ".join(g["adv_fold"].unique())
+        in_name = [lab for lab, rx in SYSTEM_RX if rx.search(name)]
+        if in_name:
+            out[key] = in_name[0]
+            continue
+        named = {lab for lab, rx in SYSTEM_RX for t in g["brand_text"].unique() if rx.search(t)}
+        out[key] = (named.pop() if len(named) == 1
+                    else "ambiguous: " + "; ".join(sorted(named)) if named else "")
+    return out
+
+
+def attribute(u: pd.DataFrame, mapper: Mapper, roots: set[str]) -> tuple[pd.DataFrame,
+                                                                          dict[str, str]]:
+    """Attribution records for rows that did not map as own.
+
+    `u` holds the unmapped registry rows and the non-registry candidate rows. Returns one record
+    per (row, bank) with the class (affiliate, holding, media_sponsored, coop_system or
+    other_filer_named_bank), the bank root it maps through and the Mapper's answer for it, and
+    the system of every credit-cooperative advertiser."""
+    u = u.copy()
+    u["adv_fold"] = u[COL_ADV].fillna("").map(fold)
+    u["advertiser_key"] = advertiser_key(u["cnpj8"], u["adv_fold"])
+    u["brand_text"] = [brand_text(p, t) for p, t in zip(u[COL_PROD], u[COL_TITLE])]
+    types = {}
+    for key, name, reg in u[["advertiser_key", "adv_fold", "in_registry"]].drop_duplicates() \
+            .itertuples(index=False):
+        types[(key, name, reg)] = filer_type(key, name, reg)
+    u["filer_type"] = [types[k] for k in zip(u["advertiser_key"], u["adv_fold"], u["in_registry"])]
+    systems = coop_systems(u)
+
+    recs = []
+    for idx, r in zip(u.index, u.itertuples(index=False)):
+        text = r.brand_text
+        # A film that names its own advertiser's root is that advertiser's own film, left
+        # unmapped by the registry rule; it is not re-attributed.
+        named = [lab for lab, root, rx in BRAND_RX
+                 if rx.search(text) and (root is None or root != r.cnpj8)]
+        suspect = bool(EVENT_VENUE.search(text))
+        ft = r.filer_type
+
+        def add(cls, bank, basis=None, evidence=None, flag=False):
+            recs.append({"row": idx, "attribution": cls, "bank_named": bank,
+                         "target_cnpj8": BRAND_ROOT.get(bank) if cls != "affiliate" else None,
+                         "attach_basis": basis, "evidence": evidence,
+                         "naming_rights_suspect": flag})
+
+        taken: set[str] = set()
+        if ft == "affiliate":
+            a = AFFILIATES[r.advertiser_key]
+            if a.get("until") is None or r.ym <= a["until"]:
+                add("affiliate", a["bank"], a["basis"], a["evidence"], a.get("institute", False))
+                recs[-1]["target_cnpj8"] = a["root"]
+                taken.add(a["bank"])
+        elif ft == "holding":
+            h = HOLDINGS[r.advertiser_key]
+            for lab in named:
+                if lab in h["banks"]:
+                    add("holding", lab, "control", h["evidence"], suspect)
+                    taken.add(lab)
+        elif ft == "credit_coop":
+            sysname = systems.get(r.advertiser_key, "")
+            if sysname in ATTACHED_SYSTEMS:
+                how = ("its name carries " if any(rx.search(r.adv_fold) for lab, rx in SYSTEM_RX
+                                                  if lab == sysname)
+                       else "its films name ") + sysname.upper()
+                add("coop_system", sysname, "brand", f"{sysname} system cooperative: {how}")
+                taken.add(sysname)
+            # Its own system named in its films is the same attribution, not another bank.
+            taken.update(lab for lab, _ in SYSTEM_RX)
+        elif ft == "media":
+            for lab in named:
+                if lab in ATTACHED_SYSTEMS:
+                    add("coop_system", lab, "brand",
+                        f"media film naming {lab.upper()} (a cooperative's sponsorship)", suspect)
+                    taken.add(lab)
+                elif BRAND_ROOT.get(lab):
+                    add("media_sponsored", lab, None, None, suspect)
+                    taken.add(lab)
+        for lab in named:
+            if lab not in taken:
+                add("other_filer_named_bank", lab, None, None, suspect)
+    rec = pd.DataFrame(recs, columns=["row", "attribution", "bank_named", "target_cnpj8",
+                                      "attach_basis", "evidence", "naming_rights_suspect"])
+    stray = set(rec["target_cnpj8"].dropna()) - roots
+    if stray:
+        raise AssertionError(f"attribution roots absent from the IF.data registry: {stray}")
+    pairs = rec.loc[rec["target_cnpj8"].notna(), ["target_cnpj8"]].assign(
+        ym=u.loc[rec.loc[rec["target_cnpj8"].notna(), "row"], "ym"].to_numpy()).drop_duplicates()
+    assigned = pd.DataFrame([mapper.assign(c, int(y)) for c, y in pairs.itertuples(index=False)],
+                            columns=["cnpj8", "ym", "map_quarter", "registry_code",
+                                     "registry_reason", "panel_code", "match_method",
+                                     "unmapped_reason"]).rename(columns={"cnpj8": "target_cnpj8"})
+    body = u.drop(columns=["map_quarter", "registry_code", "registry_reason", "panel_code",
+                           "match_method", "unmapped_reason"], errors="ignore")
+    out = (rec.merge(body, left_on="row", right_index=True, how="left", validate="many_to_one")
+              .merge(assigned, on=["target_cnpj8", "ym"], how="left", validate="many_to_one"))
+    return out.drop(columns="row"), systems
+
+
+def with_counted_as(lines: pd.DataFrame) -> pd.DataFrame:
+    """`counted_as`: the class each (panel code, CRT) is counted under, the first in
+    ATTRIBUTIONS order among its rows."""
+    rank = lines["attribution"].map(RANK)
+    best = rank.groupby([lines["panel_code"], lines[COL_CRT]]).transform("min")
+    return lines.assign(counted_as=best.map(dict(enumerate(ATTRIBUTIONS))))
 
 
 # ---------------------------------------------------------------------------
@@ -707,20 +1372,34 @@ def partial_month(year: pd.Series, month: pd.Series, cutoff: pd.Timestamp) -> np
 def monthly_table(lines: pd.DataFrame, spans: pd.DataFrame, present: pd.MultiIndex,
                   cutoff: pd.Timestamp) -> pd.DataFrame:
     keys = ["panel_code", "year", "month"]
-    per_crt = lines.drop_duplicates(["panel_code", COL_CRT]).copy()
-    per_crt["seg"] = per_crt[COL_SEG].map(segment_slug)
-    per_crt["versoes"] = pd.to_numeric(per_crt[COL_VERS], errors="coerce")
-    base = (per_crt.groupby(keys)
-                   .agg(n_crt=(COL_CRT, "nunique"),
-                        sum_qtd_versoes=("versoes", "sum"),
-                        n_crt_versoes_reported=("versoes", "count")))
-    titles = lines.groupby(keys)["title_key"].nunique().rename("n_titles_distinct")
-    seg = (per_crt.pivot_table(index=keys, columns="seg", values=COL_CRT, aggfunc="nunique",
-                               fill_value=0)
-                  .reindex(columns=sorted(set(SEGMENTS.values()) | set(per_crt["seg"])),
-                           fill_value=0)
-                  .add_prefix("n_crt_seg_"))
-    obs = base.join(titles).join(seg)
+    # One record per (code, CRT) under the class it is counted as; the flag is taken from the
+    # rows of that class only.
+    own_class = lines[lines["attribution"] == lines["counted_as"]]
+    per_crt = (own_class.groupby(["panel_code", COL_CRT], sort=False)
+                        .agg(year=("year", "first"), month=("month", "first"),
+                             counted_as=("counted_as", "first"), seg_label=(COL_SEG, "first"),
+                             versoes=(COL_VERS, "first"),
+                             suspect=("naming_rights_suspect", "any"))
+                        .reset_index())
+    per_crt["seg"] = per_crt["seg_label"].map(segment_slug)
+    per_crt["versoes"] = pd.to_numeric(per_crt["versoes"], errors="coerce")
+    bank = per_crt[per_crt["counted_as"].isin(BANK_CLASSES)]
+    base = (bank.groupby(keys).agg(n_crt=(COL_CRT, "nunique"),
+                                   sum_qtd_versoes=("versoes", "sum"),
+                                   n_crt_versoes_reported=("versoes", "count")))
+    classes = (per_crt.pivot_table(index=keys, columns="counted_as", values=COL_CRT,
+                                   aggfunc="nunique", fill_value=0)
+                      .reindex(columns=list(ATTRIBUTIONS), fill_value=0)
+                      .add_prefix("n_crt_"))
+    suspect = (bank[bank["suspect"].fillna(False).astype(bool)]
+               .groupby(keys)[COL_CRT].nunique().rename("n_crt_naming_rights_suspect"))
+    bank_rows = own_class[own_class["counted_as"].isin(BANK_CLASSES)]
+    titles = bank_rows.groupby(keys)["title_key"].nunique().rename("n_titles_distinct")
+    seg = (bank.pivot_table(index=keys, columns="seg", values=COL_CRT, aggfunc="nunique",
+                            fill_value=0)
+               .reindex(columns=sorted(set(SEGMENTS.values()) | set(bank["seg"])), fill_value=0)
+               .add_prefix("n_crt_seg_"))
+    obs = classes.join(base).join(suspect).join(titles).join(seg)
 
     last = int(lines["year"].max()) * 12 + int(lines.loc[lines["year"] == lines["year"].max(),
                                                          "month"].max()) - 1
@@ -736,6 +1415,9 @@ def monthly_table(lines: pd.DataFrame, spans: pd.DataFrame, present: pd.MultiInd
         if c != "sum_qtd_versoes":
             out[c] = out[c].astype("int64")
     out = out.reset_index()
+    first = ["panel_code", "year", "month", "n_crt_own", "n_crt_affiliate", "n_crt_holding",
+             "n_crt_media_sponsored", "n_crt", "n_crt_naming_rights_suspect", "n_crt_coop_system"]
+    out = out[first + [c for c in out.columns if c not in first]]
     out.insert(1, "panel_name", out["panel_code"].map(spans["panel_name"]))
     # The grid runs every conglomerate over every month, including months when its code had no
     # market-panel rows; there a zero is not an observation, and in_panel says so.
@@ -748,23 +1430,34 @@ def monthly_table(lines: pd.DataFrame, spans: pd.DataFrame, present: pd.MultiInd
 
 def advertiser_map(lines: pd.DataFrame, reg_sub: pd.DataFrame,
                    spans: pd.DataFrame) -> pd.DataFrame:
-    g = (lines.groupby(["cnpj8", "panel_code", "match_method"])
-              .agg(first_ym=("ym", "min"), last_ym=("ym", "max"), n_crt=(COL_CRT, "nunique"),
+    counted = lines["attribution"] == lines["counted_as"]
+    g = (lines.assign(crt_counted=lines[COL_CRT].where(counted))
+              .groupby(["advertiser_key", "panel_code", "attribution", "match_method"],
+                       dropna=False)
+              .agg(cnpj8=("cnpj8", "first"), first_ym=("ym", "min"), last_ym=("ym", "max"),
+                   n_crt=(COL_CRT, "nunique"), n_crt_counted=("crt_counted", "nunique"),
                    n_rows=(COL_CRT, "size"), code_conflict_rows=("code_conflict", "sum"),
-                   names=(COL_ADV, lambda s: list(s.value_counts().index[:3])))
+                   names=(COL_ADV, lambda s: list(s.value_counts().index[:3])),
+                   attach_basis=("attach_basis", "first"), evidence=("evidence", "first"))
               .reset_index())
+    g = g[g["n_rows"] > 0]
     g["first_quarter"] = g["first_ym"].map(ym_label)
     g["last_quarter"] = g["last_ym"].map(ym_label)
     reg_names = registry_names(reg_sub)
     g["advertiser_names"] = g["names"].map(" | ".join)
-    g["registry_name"] = g["cnpj8"].map(lambda r: xw.registry_name(reg_sub, r))
+    g["registry_name"] = g["cnpj8"].map(lambda r: xw.registry_name(reg_sub, r) if pd.notna(r)
+                                        else "")
     g["panel_name"] = g["panel_code"].map(spans["panel_name"])
     # Printed for review, never used to unmap: renames (Aymore -> Santander SCFI, SEAC ->
-    # Mulvi) legitimately share no word, and the CNPJ root is the legal identity.
-    g["names_agree"] = [names_agree(a, reg_names.get(r, []))
-                        for a, r in zip(g["names"], g["cnpj8"])]
+    # Mulvi) legitimately share no word, and the CNPJ root is the legal identity. Only an own
+    # row claims the advertiser is the institution, so only own rows are compared.
+    g["names_agree"] = [names_agree(a, reg_names.get(r, [])) if att == "own" else pd.NA
+                        for a, r, att in zip(g["names"], g["cnpj8"], g["attribution"])]
+    g["names_agree"] = g["names_agree"].astype("boolean")
+    g["jv_owners"] = g["advertiser_key"].map(lambda k: JOINT_VENTURES.get(k, {}).get("owners"))
     return (g.drop(columns=["first_ym", "last_ym", "names"])
-             .sort_values(["n_crt", "cnpj8"], ascending=[False, True]).reset_index(drop=True))
+             .sort_values(["n_crt", "advertiser_key"], ascending=[False, True])
+             .reset_index(drop=True))
 
 
 def registry_names(reg_sub: pd.DataFrame) -> dict[str, list[str]]:
@@ -774,9 +1467,31 @@ def registry_names(reg_sub: pd.DataFrame) -> dict[str, list[str]]:
              .agg(lambda s: sorted(set(s.dropna()))).to_dict())
 
 
+def brand_attributions(att: pd.DataFrame, lines: pd.DataFrame,
+                       spans: pd.DataFrame) -> pd.DataFrame:
+    """The review file: every attribution made by product/title or by cooperative system, and
+    every other filer's film that names a bank, with the class each (code, CRT) counts as."""
+    keep = att[att["attribution"].isin(["holding", "media_sponsored", "coop_system",
+                                        "other_filer_named_bank"])].copy()
+    counted = (lines.drop_duplicates(["panel_code", COL_CRT])
+                    .set_index(["panel_code", COL_CRT])["counted_as"])
+    idx = pd.MultiIndex.from_arrays([keep["panel_code"], keep[COL_CRT]])
+    keep["counted_as"] = counted.reindex(idx).to_numpy()
+    keep.loc[keep["attribution"] == "other_filer_named_bank", "counted_as"] = pd.NA
+    keep["panel_name"] = keep["panel_code"].map(spans["panel_name"])
+    cols = [COL_CRT, "request_date", "year", "month", COL_ADV, COL_ADV_CNPJ, "advertiser_key",
+            "filer_type", COL_PROD, COL_TITLE, COL_SEG, "bank_named", "target_cnpj8",
+            "attribution", "panel_code", "panel_name", "counted_as", "naming_rights_suspect",
+            "in_panel", "map_quarter", "match_method", "unmapped_reason", "evidence"]
+    return (keep[cols].sort_values(["attribution", "bank_named", "request_date", COL_CRT])
+                      .reset_index(drop=True))
+
+
 def unmatched_financial(unmapped_reg: pd.DataFrame, fin: pd.DataFrame, reg_sub: pd.DataFrame,
-                        mapper: Mapper) -> pd.DataFrame:
-    """Advertisers left unmapped whose ANCINE name, or registry name, looks financial."""
+                        mapper: Mapper, attributed: pd.DataFrame,
+                        systems: dict[str, str]) -> pd.DataFrame:
+    """Advertisers left unmapped as own whose ANCINE name, or registry name, looks financial,
+    with what the attribution rules took of their CRTs."""
     names = registry_names(reg_sub)
     a = unmapped_reg.assign(in_registry=True)
     b = fin.assign(in_registry=False,
@@ -784,7 +1499,7 @@ def unmatched_financial(unmapped_reg: pd.DataFrame, fin: pd.DataFrame, reg_sub: 
                                             np.where(fin["cnpj8"].isna(), "invalid_cnpj",
                                                      "not_in_registry")))
     both = pd.concat([a, b], ignore_index=True)
-    both["key"] = both["cnpj8"].fillna("name:" + both[COL_ADV].fillna("").map(fold))
+    both["key"] = advertiser_key(both["cnpj8"], both[COL_ADV].fillna("").map(fold))
     # A root the lists place in a conglomerate in other quarters is a supervised institution
     # whose rows were held back by the rule, not by its name, so it is queued whatever its name.
     both["held_back"] = both["unmapped_reason"].eq("no_code_in_quarter")
@@ -797,8 +1512,20 @@ def unmatched_financial(unmapped_reg: pd.DataFrame, fin: pd.DataFrame, reg_sub: 
                                    lambda s: "; ".join(f"{k} ({v})" for k, v in
                                                        s.value_counts().items())),
                   advertiser_names=(COL_ADV, lambda s: " | ".join(s.value_counts().index[:3])),
-                  example_cnpj=(COL_ADV_CNPJ, "first"))
-             .reset_index(drop=True))
+                  example_cnpj=(COL_ADV_CNPJ, "first")))
+    took = attributed[attributed["advertiser_key"].isin(g.index)]
+    g["n_crt_attributed"] = (took.groupby("advertiser_key")[COL_CRT].nunique()
+                                 .reindex(g.index).fillna(0).astype("int64"))
+    g["attributed_as"] = (took.groupby(["advertiser_key", "attribution", "panel_code"])[COL_CRT]
+                              .nunique().reset_index()
+                              .assign(t=lambda d: d["attribution"] + " -> " + d["panel_code"]
+                                      + " (" + d[COL_CRT].astype(str) + ")")
+                              .groupby("advertiser_key")["t"].agg("; ".join)
+                              .reindex(g.index).fillna(""))
+    g = g.reset_index(drop=True).assign(key=g.index.to_numpy())
+    g["jv_owners"] = g["key"].map(lambda k: JOINT_VENTURES.get(k, {}).get("owners", ""))
+    g["jv_evidence"] = g["key"].map(lambda k: JOINT_VENTURES.get(k, {}).get("evidence", ""))
+    g["coop_system"] = g["key"].map(systems).fillna("")
     g["registry_name"] = g["cnpj8"].map(lambda r: "; ".join(names.get(r, [])) if pd.notna(r)
                                         else "")
     g["registry_candidates"] = g["cnpj8"].map(
@@ -815,7 +1542,7 @@ def unmatched_financial(unmapped_reg: pd.DataFrame, fin: pd.DataFrame, reg_sub: 
         g.loc[both_names.str.contains(pattern), "kind"] = kind
     g["brand_word"] = (ancine.str.extract(BRANDS, expand=False).fillna("")
                              .where(~ancine.str.contains(NOT_BRAND), ""))
-    return (g[looks].drop(columns="held_back")
+    return (g[looks].drop(columns=["held_back", "key"])
              .sort_values(["n_crt", "advertiser_names"], ascending=[False, True])
              .reset_index(drop=True))
 
@@ -871,57 +1598,95 @@ def validate(manifest: dict, header: list[str], st: ReadStats, lines: pd.DataFra
     seg_cols = [c for c in monthly.columns if c.startswith("n_crt_seg_")]
     if not (monthly[seg_cols].sum(axis=1) == monthly["n_crt"]).all():
         raise AssertionError("segment counts do not add up to n_crt")
+    parts = monthly[[f"n_crt_{c}" for c in BANK_CLASSES]].sum(axis=1)
+    if not (parts == monthly["n_crt"]).all():
+        raise AssertionError("n_crt is not the sum of n_crt_own, _affiliate, _holding and "
+                             "_media_sponsored")
+    if not (monthly["n_crt_naming_rights_suspect"] <= monthly["n_crt"]
+            - monthly["n_crt_own"]).all():
+        raise AssertionError("n_crt_naming_rights_suspect exceeds the non-own part of n_crt")
     log.info("check 4 passed: %d panel_code-months, none repeated; %d segment columns add up "
-             "to n_crt on every row", len(monthly), len(seg_cols))
-    stray = set(lines["cnpj8"]) - roots                                               # check 5
+             "to n_crt, and n_crt = own + affiliate + holding + media_sponsored, on every row "
+             "(n_crt_coop_system %d CRT-months kept out)", len(monthly), len(seg_cols),
+             int(monthly["n_crt_coop_system"].sum()))
+    stray = set(lines["target_cnpj8"]) - roots                                        # check 5
     if stray:
         raise AssertionError("mapped CNPJ8s absent from the IF.data registry: "
                              f"{sorted(stray)[:10]}")
     off_panel = set(lines["panel_code"]) - set(spans.index)
     if off_panel:
         raise AssertionError(f"panel codes absent from the market panel: {sorted(off_panel)}")
-    log.info("check 5 passed: %d mapped CNPJ8s all in the IF.data registry; %d panel codes all "
-             "in the market panel", lines["cnpj8"].nunique(), lines["panel_code"].nunique())
+    own = lines[lines["attribution"] == "own"]
+    log.info("check 5 passed: %d CNPJ8s mapped through (%d own advertiser roots) all in the "
+             "IF.data registry; %d panel codes all in the market panel",
+             lines["target_cnpj8"].nunique(), own["cnpj8"].nunique(),
+             lines["panel_code"].nunique())
     # Tested on every row of the file that carries the anchor's root, not only on the mapped
     # lines: an anchor row that fails to map would be absent from `lines`, and a root missing
     # from the registry would be absent from `rows`; either would otherwise pass unseen.
     for cnpj8, code in xw.ANCHORS.items():
         n_raw = st.anchor_rows.get(cnpj8, 0)
-        own = rows[rows["cnpj8"] == cnpj8]
+        own_rows = rows[rows["cnpj8"] == cnpj8]
         if n_raw == 0:
             if cnpj8 in REQUIRED_ANCHORS:
                 raise AssertionError(f"anchor {cnpj8} ({code}) has no CRT row")
             log.info("check 5: anchor %s (%s) has no CRT row, nothing to test", cnpj8, code)
             continue
-        if len(own) != n_raw:
+        if len(own_rows) != n_raw:
             raise AssertionError(f"anchor {cnpj8}: {n_raw} rows in the file carry the root but "
-                                 f"{len(own)} reached the mapping (root absent from the "
+                                 f"{len(own_rows)} reached the mapping (root absent from the "
                                  "IF.data registry?)")
-        wrong = own[own["panel_code"].fillna("") != code]
+        wrong = own_rows[own_rows["panel_code"].fillna("") != code]
         if len(wrong):
             raise AssertionError(
-                f"anchor {cnpj8}: {len(wrong)} of {len(own)} rows do not map to {code}:\n"
+                f"anchor {cnpj8}: {len(wrong)} of {len(own_rows)} rows do not map to {code}:\n"
                 + wrong.groupby(["map_quarter", "panel_code", "unmapped_reason"], dropna=False)
                        .size().to_string())
         log.info("check 5 passed: anchor %s -> %s on all %d of its rows (%d CRTs, %s)", cnpj8,
-                 code, n_raw, own[COL_CRT].nunique(),
-                 own["match_method"].value_counts().to_dict())
+                 code, n_raw, own_rows[COL_CRT].nunique(),
+                 own_rows["match_method"].value_counts().to_dict())
     for col in (COL_TITLE, COL_REQ, COL_SEG):                                         # check 6
         varying = lines.groupby(COL_CRT)[col].nunique(dropna=False)
         if (varying > 1).any():
             raise AssertionError(f"{col} varies within {int((varying > 1).sum())} CRTs")
     log.info("check 6 passed: title, request date and segment constant within each of the %d "
              "mapped CRTs", lines[COL_CRT].nunique())
+    bad = set(lines["attribution"]) - set(ATTRIBUTIONS)                               # check 7
+    if bad:
+        raise AssertionError(f"unknown attribution classes: {bad}")
+    rules = {"affiliate": ~lines["advertiser_key"].isin(set(AFFILIATES)),
+             "holding": ~lines["advertiser_key"].isin(set(HOLDINGS)),
+             "media_sponsored": lines["filer_type"] != "media"}
+    for cls, broken in rules.items():
+        n = int((broken & (lines["attribution"] == cls)).sum())
+        if n:
+            raise AssertionError(f"{n} {cls} rows come from filers the rule does not cover")
+    hold = lines[lines["attribution"] == "holding"]
+    off = [b not in HOLDINGS[k]["banks"] for k, b in zip(hold["advertiser_key"],
+                                                        hold["bank_named"])]
+    if any(off):
+        raise AssertionError(f"{sum(off)} holding rows name a bank outside their holding's list")
+    jv = lines[lines["advertiser_key"].isin(set(JOINT_VENTURES))
+               & (lines["attribution"] != "own")]
+    if len(jv):
+        raise AssertionError(f"{len(jv)} joint-venture rows attributed to a bank")
+    per = lines.groupby(["panel_code", COL_CRT])["counted_as"].nunique()
+    if (per != 1).any():
+        raise AssertionError(f"{int((per != 1).sum())} (code, CRT) pairs without one counted_as")
+    log.info("check 7 passed: attribution classes %s; affiliate/holding/media rows all from the "
+             "filers their rule covers; no joint venture attributed; each of %d (code, CRT) "
+             "pairs counted once", lines["attribution"].value_counts().to_dict(), len(per))
 
 
 def summary(manifest: dict, header: list[str], st: ReadStats, lines: pd.DataFrame,
             monthly: pd.DataFrame, amap: pd.DataFrame, unmatched: pd.DataFrame,
-            spans: pd.DataFrame, dep_q4: pd.Series, mapper: Mapper,
+            review: pd.DataFrame, spans: pd.DataFrame, dep_q4: pd.Series, mapper: Mapper,
             cutoff: pd.Timestamp) -> None:
     log.info("file: %s, %d bytes, Last-Modified %s, sha256 %s", manifest["url"],
              manifest["bytes"], manifest["last_modified"], manifest["sha256"][:16])
-    log.info("IF.data lists with conglomerate codes %s-%s (nearest-span fallback only outside); "
-             "market panel %s-%s", ym_label(mapper.reg_first), ym_label(mapper.reg_last),
+    log.info("IF.data lists with conglomerate codes %s-%s (nearest-span fallback only outside, "
+             "and only to a span reaching that edge); market panel %s-%s",
+             ym_label(mapper.reg_first), ym_label(mapper.reg_last),
              ym_label(mapper.panel_first), ym_label(mapper.panel_last))
     log.info("header (%d columns): %s", len(header), ";".join(header))
     log.info("rows %d, distinct CRTs %d (%d issued by 2025-05-31; dashboard %d)", st.rows,
@@ -936,26 +1701,25 @@ def summary(manifest: dict, header: list[str], st: ReadStats, lines: pd.DataFram
              100 * st.cnpj14 / st.rows, st.cnpj14, st.cnpj_valid,
              100 * len(st.crts_with_cnpj) / len(st.crts), st.cnpj_text)
     per_crt = lines.drop_duplicates(["panel_code", COL_CRT])
-    log.info("mapped: %d rows, %d distinct CRTs (%.2f%% of all), %d advertiser CNPJ8s, "
-             "%d conglomerates with at least one CRT", len(lines), lines[COL_CRT].nunique(),
-             100 * lines[COL_CRT].nunique() / len(st.crts), lines["cnpj8"].nunique(),
-             lines["panel_code"].nunique())
-    log.info("match methods (rows): %s", lines["match_method"].value_counts().to_dict())
+    own = lines[lines["attribution"] == "own"]
+    log.info("own: %d rows, %d distinct CRTs (%.2f%% of all), %d advertiser CNPJ8s; all "
+             "classes: %d rows, %d (code, CRT) pairs, %d conglomerates", len(own),
+             own[COL_CRT].nunique(), 100 * own[COL_CRT].nunique() / len(st.crts),
+             own["cnpj8"].nunique(), len(lines), len(per_crt), lines["panel_code"].nunique())
+    log.info("(code, CRT) pairs by counted_as: %s",
+             per_crt["counted_as"].value_counts().reindex(list(ATTRIBUTIONS)).to_dict())
+    log.info("own match methods (rows): %s", own["match_method"].value_counts().to_dict())
     conflict = lines[lines["code_conflict"]]
     if len(conflict):
-        log.info("registry code differs from the panel code on %d rows (the panel wins by "
-                 "design):\n%s", len(conflict),
-                 conflict.groupby(["cnpj8", COL_ADV, "registry_code", "panel_code"])[COL_CRT]
+        log.info("code_conflict on %d rows (the panel wins by design; registry_reason says "
+                 "whether the lists gave another code or none):\n%s", len(conflict),
+                 conflict.groupby(["target_cnpj8", "registry_reason", "registry_code",
+                                   "panel_code"], dropna=False)[COL_CRT]
                          .nunique().rename("n_crt").reset_index().to_string(index=False))
     off = per_crt[~per_crt["in_panel"]]
     log.info("CRTs requested in a month when their code has no market-panel rows: %d of %d "
              "code-CRT pairs, %d of them after the panel's last quarter", len(off), len(per_crt),
              int(off["outside_panel_window"].sum()))
-    if len(off[~off["outside_panel_window"]]):
-        log.info("  inside the panel window, by code:\n%s",
-                 off[~off["outside_panel_window"]]
-                 .groupby(["panel_code", "panel_name", "map_quarter"])[COL_CRT].nunique()
-                 .rename("n_crt").reset_index().to_string(index=False))
     part = monthly.loc[monthly["partial_month"], ["year", "month"]].drop_duplicates()
     log.info("partial request months (data cutoff %s, issue lag %d days): %s; their CRTs: %d",
              cutoff.date(), ISSUE_LAG_DAYS,
@@ -964,30 +1728,41 @@ def summary(manifest: dict, header: list[str], st: ReadStats, lines: pd.DataFram
     # Months outside the panel are excluded, so a conglomerate is ranked only on the months it
     # can enter an estimation with.
     win = monthly[monthly["in_panel"] & monthly["year"].between(2016, 2024)]
-    top = (win.groupby("panel_code")["n_crt"].sum().rename("n_crt_2016_2024")
-              .sort_values(ascending=False).head(15).to_frame())
+    cols = ["n_crt", "n_crt_own", "n_crt_affiliate", "n_crt_holding", "n_crt_media_sponsored",
+            "n_crt_naming_rights_suspect", "n_crt_coop_system"]
+    top = win.groupby("panel_code")[cols].sum().sort_values("n_crt", ascending=False).head(15)
     top["in_panel_months"] = win.groupby("panel_code").size().reindex(top.index)
     top["panel_name"] = top.index.map(spans["panel_name"])
     log.info("top 15 conglomerates by CRTs requested 2016-2024, in-panel months only:\n%s",
              top.to_string())
-    adv24 = set(per_crt.loc[per_crt["year"] == 2024, "panel_code"])
+    att = lines[lines["attribution"] != "own"]
+    log.info("attributed CRTs by class and filer:\n%s",
+             att.groupby(["attribution", "advertiser_key", "panel_code"])
+                .agg(n_crt=(COL_CRT, "nunique"), name=(COL_ADV, "first"))
+                .reset_index().sort_values(["attribution", "n_crt"], ascending=[True, False])
+                .to_string(index=False))
+    log.info("review file: %s", review["attribution"].value_counts().to_dict())
+    adv24 = set(per_crt.loc[(per_crt["year"] == 2024)
+                            & per_crt["counted_as"].isin(BANK_CLASSES), "panel_code"])
     total = float(dep_q4.sum())
     share = float(dep_q4[dep_q4.index.isin(adv24)].sum()) / total if total else float("nan")
     log.info("2024Q4 panel deposits (dep_a1+a2+a4+a5): %.1f%% held by the %d conglomerates with "
-             "at least one CRT requested in 2024 (%d of them have 2024Q4 panel rows; %d "
-             "conglomerates hold positive 2024Q4 deposits)", 100 * share, len(adv24),
+             "at least one bank-class CRT requested in 2024 (%d of them have 2024Q4 panel rows; "
+             "%d conglomerates hold positive 2024Q4 deposits)", 100 * share, len(adv24),
              len(adv24 & set(dep_q4.index)), int((dep_q4 > 0).sum()))
-    odd = amap[~amap["names_agree"]]
+    odd = amap[amap["names_agree"].eq(False).fillna(False).astype(bool)]
     if len(odd):
-        log.info("mapped CNPJ8s whose ANCINE and registry names do not agree (renames or a "
+        log.info("own CNPJ8s whose ANCINE and registry names do not agree (renames or a "
                  "wrong CNPJ on the CRT; review):\n%s",
                  odd[["cnpj8", "advertiser_names", "registry_name", "panel_code", "n_crt"]]
                  .to_string(index=False))
     show = unmatched.assign(advertiser_names=unmatched["advertiser_names"].str[:60],
                             unmapped_reason=unmatched["unmapped_reason"].str[:40])
-    cols = ["cnpj8", "advertiser_names", "n_crt", "kind", "brand_word", "unmapped_reason"]
-    log.info("unmatched advertisers that look financial: %d (%s CRTs); by kind: %s",
-             len(unmatched), f"{int(unmatched['n_crt'].sum()):,}",
+    cols = ["cnpj8", "advertiser_names", "n_crt", "n_crt_attributed", "kind", "brand_word",
+            "unmapped_reason"]
+    log.info("unmatched advertisers that look financial: %d (%s CRTs, %s of them attributed); "
+             "by kind: %s", len(unmatched), f"{int(unmatched['n_crt'].sum()):,}",
+             f"{int(unmatched['n_crt_attributed'].sum()):,}",
              unmatched.groupby("kind")["n_crt"].agg(["size", "sum"]).to_dict("index"))
     log.info("top 40 by CRTs:\n%s", show.head(40)[cols].to_string(index=False))
     log.info("top 30 carrying a brand word:\n%s",
@@ -1013,6 +1788,19 @@ def write_atomic(frame: pd.DataFrame, out_dir: Path, name: str) -> None:
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
+def add_dates(frame: pd.DataFrame) -> pd.DataFrame:
+    """Request year/month/quarter and the IF.data quarter key `ym`."""
+    frame = frame.copy()
+    frame["year"] = frame["request_date"].dt.year.astype("Int64")
+    frame["month"] = frame["request_date"].dt.month.astype("Int64")
+    frame["quarter"] = frame["request_date"].dt.quarter.astype("Int64")
+    if frame["year"].isna().any():
+        raise AssertionError(f"{int(frame['year'].isna().sum())} candidate rows have no request "
+                             "date")
+    frame["ym"] = frame["year"].astype(int) * 100 + frame["quarter"].astype(int) * 3
+    return frame
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description="ANCINE advertising-film registrations (CRT)")
     ap.add_argument("--refresh", action="store_true", help="download again even when cached")
@@ -1027,57 +1815,85 @@ def main() -> None:
 
     reg = xw.load_registry()
     roots = registry_roots(reg)
-    rows, fin, st = read_crt(enc, delim, roots)
-    log.info("rows whose advertiser root is in the IF.data registry: %d (%d roots)", len(rows),
-             rows["cnpj8"].nunique())
+    rows, cand, fin, st = read_crt(enc, delim, roots)
+    log.info("rows whose advertiser root is in the IF.data registry: %d (%d roots); rows outside "
+             "it the attribution rules can take: %d", len(rows), rows["cnpj8"].nunique(),
+             len(cand))
 
     spans, dep_q4, present = panel_identity()
-    reg_sub = registry_subset(reg, set(rows["cnpj8"]))
-    mapper = Mapper(reg_sub, spans, sorted(set(rows["cnpj8"])), registry_window(reg))
+    targets = ({a_["root"] for a_ in AFFILIATES.values()}
+               | {r for r in BRAND_ROOT.values() if r})
+    map_roots = set(rows["cnpj8"]) | targets
+    reg_sub = registry_subset(reg, map_roots)
+    mapper = Mapper(reg_sub, spans, sorted(map_roots), registry_window(reg))
     cutoff = data_cutoff(manifest, st)
 
-    rows["year"] = rows["request_date"].dt.year.astype("Int64")
-    rows["month"] = rows["request_date"].dt.month.astype("Int64")
-    rows["quarter"] = rows["request_date"].dt.quarter.astype("Int64")
-    if rows["year"].isna().any():
-        raise AssertionError(f"{int(rows['year'].isna().sum())} registry-advertiser rows have "
-                             "no request date")
-    rows["ym"] = rows["year"].astype(int) * 100 + rows["quarter"].astype(int) * 3
+    rows = add_dates(rows)
     pairs = rows[["cnpj8", "ym"]].drop_duplicates()
     assigned = pd.DataFrame([mapper.assign(c, int(y)) for c, y in pairs.itertuples(index=False)])
     rows = rows.merge(assigned, on=["cnpj8", "ym"], how="left", validate="many_to_one")
 
-    lines = rows[rows["panel_code"].notna()].copy()
-    lines["code_conflict"] = lines["registry_code"].notna() & (lines["registry_code"]
-                                                               != lines["panel_code"])
+    own = rows[rows["panel_code"].notna()].copy()
+    own["adv_fold"] = own[COL_ADV].fillna("").map(fold)
+    own = own.assign(attribution="own", target_cnpj8=own["cnpj8"], bank_named=None,
+                     filer_type="own", attach_basis=None, evidence=None,
+                     naming_rights_suspect=False,
+                     advertiser_key=advertiser_key(own["cnpj8"], own["adv_fold"]))
+    unmapped = rows[rows["panel_code"].isna()]
+    log.info("registry-root rows left unmapped as own, by reason: %s",
+             unmapped["unmapped_reason"].value_counts().to_dict())
+    u = pd.concat([unmapped.assign(in_registry=True),
+                   add_dates(cand).assign(in_registry=False)], ignore_index=True)
+    att, systems = attribute(u, mapper, roots)
+    attributed = att[att["attribution"].isin(ATTRIBUTIONS) & att["panel_code"].notna()]
+    log.info("attribution records: %s; mapped to a panel code: %s",
+             att["attribution"].value_counts().to_dict(),
+             attributed["attribution"].value_counts().to_dict())
+
+    lines = pd.concat([own, attributed], ignore_index=True)
+    lines = lines.drop(columns=[c for c in ("adv_fold", "brand_text", "in_registry")
+                                if c in lines.columns])
+    map_ym = lines["map_quarter"].map(ym_from_label)
+    # The panel wins over the registry by design; the flag keeps both disagreements in view:
+    # the lists gave another code, or (inside their window) no code at all.
+    lines["code_conflict"] = ((lines["registry_code"].notna()
+                               & (lines["registry_code"] != lines["panel_code"]))
+                              | ((lines["match_method"] == "panel_leader")
+                                 & lines["registry_code"].isna()
+                                 & map_ym.between(mapper.reg_first, mapper.reg_last)))
     lines["outside_panel_window"] = ((lines["ym"] < mapper.panel_first)
                                      | (lines["ym"] > mapper.panel_last))
     lines["in_panel"] = in_panel(lines["panel_code"], lines["year"], lines["quarter"], present)
     lines["partial_month"] = partial_month(lines["year"], lines["month"], cutoff)
     lines["panel_name"] = lines["panel_code"].map(spans["panel_name"])
     lines["title_norm"] = lines[COL_TITLE].map(norm_title)
-    lines["title_key"] = lines["title_norm"] + "|" + lines["cnpj8"]
-    unmapped = rows[rows["panel_code"].isna()]
-    log.info("registry-root rows left unmapped, by reason: %s",
-             unmapped["unmapped_reason"].value_counts().to_dict())
+    lines["title_key"] = lines["title_norm"] + "|" + lines["advertiser_key"]
+    lines["naming_rights_suspect"] = lines["naming_rights_suspect"].fillna(False).astype(bool)
+    lines = with_counted_as(lines)
+    att = att.assign(in_panel=in_panel(att["panel_code"].fillna(""), att["year"],
+                                       att["quarter"], present))
 
     monthly = monthly_table(lines, spans, present, cutoff)
     amap = advertiser_map(lines, reg_sub, spans)
-    unmatched = unmatched_financial(unmapped, fin, reg_sub, mapper)
+    review = brand_attributions(att, lines, spans)
+    unmatched = unmatched_financial(unmapped, fin, reg_sub, mapper,
+                                    lines[lines["attribution"] != "own"], systems)
 
     validate(manifest, header, st, lines, rows, monthly, roots, spans)
-    summary(manifest, header, st, lines, monthly, amap, unmatched, spans, dep_q4, mapper, cutoff)
+    summary(manifest, header, st, lines, monthly, amap, unmatched, review, spans, dep_q4, mapper,
+            cutoff)
 
     a.out_dir.mkdir(parents=True, exist_ok=True)
     out_lines = lines.drop(columns=["ym", "title_key", "unmapped_reason"]).sort_values(
-        ["panel_code", "request_date", COL_CRT]).reset_index(drop=True)
+        ["panel_code", "request_date", COL_CRT, "attribution"]).reset_index(drop=True)
     tables = (("ancine_ad_films_lines", out_lines),
               ("ancine_ad_films_monthly", monthly),
               ("ancine_advertiser_map", amap),
+              ("ancine_brand_attributions", review),
               ("ancine_unmatched_financial", unmatched))
     # The previous run's sidecar goes first and the new one is written last, so a sidecar on
-    # disk always describes four tables written in full by the same run. validate() has
-    # checked the file's SHA-256 against the manifest's.
+    # disk always describes tables written in full by the same run. validate() has checked the
+    # file's SHA-256 against the manifest's.
     sidecar = a.out_dir / "ancine_ad_films_provenance.json"
     sidecar.unlink(missing_ok=True)
     for name, frame in tables:
@@ -1094,6 +1910,8 @@ def main() -> None:
                   "market_panel": str(MARKET_PANEL),
                   "market_panel_quarters": [ym_label(mapper.panel_first),
                                             ym_label(mapper.panel_last)],
+                  "attribution_classes": list(ATTRIBUTIONS),
+                  "bank_total_classes": list(BANK_CLASSES),
                   "tables": {name: len(frame) for name, frame in tables},
                   "written_at": now_iso(),
                   "script": Path(__file__).name}

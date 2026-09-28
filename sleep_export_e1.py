@@ -42,7 +42,8 @@ def stars(p):
 # Row labels and display units come from the SHARED registry so that every table in the
 # paper -- sleepiness, BBL policy functions, descriptives -- states the same unit for the
 # same variable. There used to be four independent copies of this dict.
-from sleep_export_link import clean_name, disp  # noqa: E402
+from sleep_export_link import (clean_name, disp, ss_colspec, ss_label_cell,  # noqa: E402
+                               SS_TABCOLSEP)
 from utils import state_transform as _st  # noqa: E402
 from utils import se_national as _sen  # noqa: E402
 from utils import sleep_notes as _notes
@@ -73,7 +74,8 @@ def build_first_stage_table(results_dict):
         ('IV_HausmanFull', 'Hausman'),
     ]
     multispan = 4
-    caption = f"First Stage --- Estimation Strategy~{_routines.est_ref(1)}"
+    caption = ("First Stage --- Deposit Spread on Instruments "
+               f"--- Estimation Strategy~{_routines.est_ref(1)}")
     label = "tab:est1_first_stage"
     notes = (
         r"\footnotesize \textit{Notes:} Standard errors (WCB at the "
@@ -234,7 +236,7 @@ def build_second_stage_table(results_dict):
     caption = f"Second Stage --- Estimation Strategy~{_routines.est_ref(1)}"
     label = "tab:est1_second_stage"
     notes = (
-        r"\footnotesize \textit{Notes:} " + _notes.second_stage_note()
+        r"\footnotesize \textit{Notes:} " + _notes.second_stage_note(columns="specifications")
     )
     # Function-scope, unlike _nat_schemes: the note's opening describes the WHOLE table, so a
     # per-panel set would report only the last panel's state.
@@ -247,11 +249,14 @@ def build_second_stage_table(results_dict):
     p0, l0 = panels[0], panel_letters[0]
     est_nums_0 = [(el, ss_spec_numbers[(p0, ek)]) for ek, el in estimators]
 
+    # \begingroup keeps the narrow \tabcolsep local, so the paper's own setting is back in
+    # force for whatever table follows.
     lines = [
+        r"\begingroup",
         r"\setstretch{1.0}",
         r"\footnotesize",
-        r"\setlength{\tabcolsep}{3pt}",
-        r"\begin{xltabular}{\textwidth}{>{\raggedright\arraybackslash}p{0.34\textwidth} *{4}{>{\centering\arraybackslash}X}}",
+        rf"\setlength{{\tabcolsep}}{{{SS_TABCOLSEP}}}",
+        ss_colspec(),
         rf"    \caption{{{caption}}}\label{{{label}}} \\",
         r"    \toprule",
         rf"    \multicolumn{{{multispan}}}{{l}}{{\textbf{{Panel {l0}: {panel_labels[p0]}}}}} \\",
@@ -334,7 +339,8 @@ def build_second_stage_table(results_dict):
                     coef_strs.append("")
                     se_strs.append("")
             if has_val:
-                lines.append(f"    {clean_name(vshort)} & " + " & ".join(coef_strs) + r" \\")
+                lines.append(f"    {ss_label_cell(clean_name(vshort))} & "
+                             + " & ".join(coef_strs) + r" \\*")
                 lines.append("    & " + " & ".join(se_strs) + r" \\")
 
         obs_l, rsq_l, g_l = [], [], []
@@ -359,7 +365,7 @@ def build_second_stage_table(results_dict):
             r"    \bottomrule",
         ]
 
-    lines += [r"\end{xltabular}", r"\setlength{\tabcolsep}{6pt}", r"\doublespacing"]
+    lines += [r"\end{xltabular}", r"\endgroup", r"\doublespacing"]
     # dk_bracket=False: the Driscoll-Kraay line this table used to print under the national
     # rows is gone (brackets now carry the percentile interval), so the note must not promise it.
     _bands = (True if len(_band_cols) == len(estimators)

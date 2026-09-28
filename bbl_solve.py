@@ -49,6 +49,25 @@ the ratio: the sample Selic runs 14.25 → 2 → 13.75%, and crossing 36 vintage
 deposit paths was measured at corr 0.852.  Every row therefore carries a `start_q`, and
 alignment, diagnostics and the promotion gate are all organised around it.
 
+DEAD FIRM-QUARTERS (multi-start psi only).  A (firm, start_q) is dropped before the Δψ blocks
+are built (drop_dead_fq) when none of its deviations moves the deposit-side sum ψ₂ beyond
+round-off: max over its deviations of |Δψ₂| ≤ 1e-12·|ψ₂_eq|.  These are firms with no
+deposit_type 4/5 product in that launch quarter, so no spread deviation reaches their deposits
+and every Δψ of theirs is floating-point noise with g ≈ 0.  They carry ~1e-33 of the criterion,
+so θ̂ does not move, but kept they would count in n_rows and frac_bind and put noise ratios into
+r̄^f and the per-start lines (measured on the _ms1 archive: E3 601 firm-quarters / 30,050 rows,
+B frac_bind 0.401 with them, 0.483 without).  Every consumer below — the fit, frac_bind, r̄^f,
+the ridge table, bootstrap, subsampling, the profile's n_rows — sees only the kept rows.  Each
+per-type block of the json records `n_null_fq` / `n_null_rows`, `run.null_fq` the rule and
+per-type counts.  --keep-null-fq keeps every row, the ratio statistics then skipping only the
+rows with Δψ₂ exactly 0 (the counts are then 0 and `run.keep_null_fq` is true).
+The rule applies only to psi that carry their OWN start_q column (a multi-start run).  A
+single-curve psi, whose start_q main() injects as "all", is solved on every row as loaded, with
+no n_null_* fields in its per-type blocks.  `run.null_fq.path` records which of the three ran:
+multi_start_drop, multi_start_keep (--keep-null-fq) or single_curve.  If the drop leaves a firm
+type with NO rows, the solve prints a WARNING, lists the type in `run.null_fq.types_emptied` and
+writes no block for it; it does not fail.
+
 PROMOTION GATE.  The split ω vs ζ is a CLAIM about the design, so it is tested, not assumed.
 ridge_by_start reports the BKW condition index of the two unit-length-scaled columns per start
 and pooled; `identified_split` is (pooled index ≤ --ridge-cond-max, default 30 — the BKW rule
@@ -148,25 +167,10 @@ def _block_columns(df: pd.DataFrame):
     return psi1, omega, gamma, zeta
 
 
-def build_delta(eq: pd.DataFrame, dev: pd.DataFrame):
-    """Δψ = ψ_eq − ψ_dev, broadcast eq to each (firm, start_q, shock) row of dev.
-
-    ALIGNMENT KEY = (firm, start_q), NOT firm.  With vintage-matched forward curves a firm
-    carries one equilibrium ψ per launch quarter, and the whole point of the multi-start design
-    is that those rows sit at different points of the Selic cycle.  Aligning on firm alone
-    would difference a 2016Q1 deviation against a 2024Q4 equilibrium and book the rate cycle as
-    a deviation effect — a firm with S starts would also silently fan out into S copies of every
-    deviation row.  Single-start parquets get start_q = "all" injected by main(), so the key is
-    uniform and this reduces to the firm-only alignment there.
-
-    A firm therefore contributes one row per (start × deviation).  THE DEPENDENCE UNIT IS STILL
-    THE FIRM — see bootstrap_kappa / subsample_kappa.
-
-    Returns a dict with, for each firm type κ ∈ {'B','D'}, the arrays
-    (d1, d_omega, d_gamma [n×nZ], d_zeta) over all (firm, start, shock) rows of that type, plus
-    the parallel label arrays `firms` and `starts`.
-    """
-    psi1, omega, gamma, zeta = _block_columns(eq)
+def _align_eq(eq: pd.DataFrame, dev: pd.DataFrame) -> pd.DataFrame:
+    """ψ_eq broadcast onto the rows of dev by (firm, start_q) — see build_delta for why the key
+    carries start_q.  Refuses a psi_eq that is not one row per (firm, start_q) and psi_dev rows
+    with no psi_eq partner, so every caller of the alignment gets the same checks."""
     for nm, df in (("psi_eq", eq), ("psi_dev", dev)):
         if "start_q" not in df.columns:
             raise ValueError(f"{nm} has no start_q column — main() injects 'all' before this")
@@ -184,7 +188,85 @@ def build_delta(eq: pd.DataFrame, dev: pd.DataFrame):
         raise ValueError(f"{int(missing.sum())} psi_dev rows have no matching psi_eq "
                          f"(firm, start_q), e.g. {ex} — psi_eq and the psi_dev shards are "
                          f"different vintages or were built over different launch quarters")
-    eq_aligned = eq_idx.reindex(key)
+    return eq_idx.reindex(key)
+
+
+# A (firm, start_q) is DEAD when no deviation moves its ψ₂ beyond this multiple of |ψ₂_eq|.
+# The gap it sits in is wide: on the _ms1 archive (E1-E4) the dead firm-quarters' max relative
+# |Δψ₂| is ≤ 8.5e-16 (a few ulps of ψ₂_eq), the responsive ones' is ≥ 6.7e-7, and no responsive
+# firm-quarter has a single deviation row with Δψ₂ exactly 0.
+DEAD_FQ_TOL = 1e-12
+DEAD_FQ_RULE = ("a (firm, start_q) is dropped when max over its deviations of "
+                "|psi2_eq - psi2_dev| <= tol * |psi2_eq|")
+
+
+def dead_fq_mask(eq: pd.DataFrame, dev: pd.DataFrame, tol: float = DEAD_FQ_TOL) -> np.ndarray:
+    """Boolean over the rows of dev: True where the row's (firm, start_q) is DEAD, i.e. every one
+    of its deviations leaves ψ₂ within tol·|ψ₂_eq| of equilibrium.
+
+    Written as |Δψ₂| ≤ tol·|ψ₂_eq| rather than as a ratio, so ψ₂_eq = 0 needs no guard: such a
+    firm-quarter is dead only if every Δψ₂ is exactly 0.  A non-finite ψ₂ fails the comparison,
+    so its firm-quarter is never dead — a broken row stays in view instead of vanishing here.
+    """
+    _, omega, _, _ = _block_columns(eq)
+    psi2_eq = _align_eq(eq, dev)[omega].to_numpy(float)
+    quiet = np.abs(psi2_eq - dev[omega].to_numpy(float)) <= tol * np.abs(psi2_eq)
+    return (pd.Series(quiet, index=dev.index)
+            .groupby([dev["firm"], dev["start_q"]], sort=False, dropna=False)
+            .transform("all").to_numpy(bool))
+
+
+def drop_dead_fq(eq: pd.DataFrame, dev: pd.DataFrame, tol: float = DEAD_FQ_TOL,
+                 keep: bool = False):
+    """-> (dev without its dead firm-quarters, record of what was dropped).
+
+    The ONE place dead firm-quarters leave the solve: main() hands the returned frame to
+    build_delta, so the fit, frac_bind, r̄^f, the ridge table, the bootstrap, the subsampling and
+    the profile's n_rows all see the same rows.  `keep` (--keep-null-fq) returns dev itself and
+    zero counts.  The record is {rule, tol, relative_to, applied, by_type: {κ: {n_null_fq,
+    n_null_rows}}, types_emptied} over the firm types present in dev; a firm-quarter is counted
+    under the is_B of its rows, and types_emptied lists the types every row of which is dead (the
+    kept frame has none of them).  main() calls this for multi-start psi only.
+    """
+    is_b = dev["is_B"].to_numpy().astype(bool)
+    dead = np.zeros(len(dev), bool) if keep else dead_fq_mask(eq, dev, tol)
+    by_type, emptied = {}, []
+    for kappa, mk in (("B", is_b), ("D", ~is_b)):
+        if not mk.any():
+            continue
+        dm = dead & mk
+        by_type[kappa] = dict(
+            n_null_fq=int(len(dev.loc[dm, ["firm", "start_q"]].drop_duplicates())),
+            n_null_rows=int(dm.sum()))
+        if dm.sum() == mk.sum():
+            emptied.append(kappa)
+    rec = dict(rule=DEAD_FQ_RULE, tol=float(tol), relative_to="|psi2_eq|", applied=not keep,
+               by_type=by_type, types_emptied=emptied)
+    kept = dev.loc[~dead].reset_index(drop=True) if dead.any() else dev
+    return kept, rec
+
+
+def build_delta(eq: pd.DataFrame, dev: pd.DataFrame):
+    """Δψ = ψ_eq − ψ_dev, broadcast eq to each (firm, start_q, shock) row of dev.
+
+    ALIGNMENT KEY = (firm, start_q), NOT firm.  With vintage-matched forward curves a firm
+    carries one equilibrium ψ per launch quarter, and the whole point of the multi-start design
+    is that those rows sit at different points of the Selic cycle.  Aligning on firm alone
+    would difference a 2016Q1 deviation against a 2024Q4 equilibrium and book the rate cycle as
+    a deviation effect — a firm with S starts would also silently fan out into S copies of every
+    deviation row.  Single-start parquets get start_q = "all" injected by main(), so the key is
+    uniform and this reduces to the firm-only alignment there.
+
+    A firm therefore contributes one row per (start × deviation).  THE DEPENDENCE UNIT IS STILL
+    THE FIRM — see bootstrap_kappa / subsample_kappa.
+
+    Returns a dict with, for each firm type κ ∈ {'B','D'}, the arrays
+    (d1, d_omega, d_gamma [n×nZ], d_zeta) over all (firm, start, shock) rows of that type, plus
+    the parallel label arrays `firms` and `starts`.  Every row of dev enters; main() passes dev
+    through drop_dead_fq first.
+    """
+    psi1, omega, gamma, zeta = _block_columns(eq)
+    eq_aligned = _align_eq(eq, dev)
 
     out = {}
     for kappa, mask in (("B", dev["is_B"].values.astype(bool)),
@@ -338,6 +420,9 @@ def rbar_of_block(blk):
     """
     d2 = np.asarray(blk["d_omega"], float)
     d4 = np.asarray(blk["d_zeta"], float)
+    # The ratio is undefined where Δψ₂ == 0. The dead firm-quarters, whose Δψ₂ is round-off
+    # whether or not it is exactly 0, are already out of the block (drop_dead_fq); under
+    # --keep-null-fq they are in it, and this test removes only their exact zeros.
     ok = np.isfinite(d2) & np.isfinite(d4) & (d2 != 0.0)
     d2, d4 = d2[ok], d4[ok]
     if d2.size == 0:
@@ -388,7 +473,7 @@ def _ridge_diag_rows(blk, rows, fit=None):
     d2 = np.asarray(blk["d_omega"], float)[rows]
     d4 = np.asarray(blk["d_zeta"], float)[rows]
     out = dict(n=int(rows.size), n_firms=int(np.unique(blk["firms"][rows]).size))
-    ok = np.isfinite(d2) & np.isfinite(d4) & (d2 != 0.0)
+    ok = np.isfinite(d2) & np.isfinite(d4) & (d2 != 0.0)     # the ratio's domain (rbar_of_block)
     out["n_ratio"] = int(ok.sum())
     if ok.sum() >= 2:
         ratio = d4[ok] / d2[ok]
@@ -937,6 +1022,11 @@ def main():
                     help="promote even if the gate fails. The json records forced=true; the "
                          "downstream counterfactuals then run on an omega/zeta split the "
                          "design does not identify, and only c_bar is defensible.")
+    ap.add_argument("--keep-null-fq", action="store_true",
+                    help="keep the dead firm-quarters (max over deviations of |Dpsi2| <= "
+                         f"{DEAD_FQ_TOL:g}*|psi2_eq|) in the solve instead of dropping them "
+                         "before the blocks are built; the ratio statistics then skip only the "
+                         "rows with Dpsi2 exactly 0. For comparison with the default.")
     args = ap.parse_args()
 
     # base_tag names what the counterfactuals read; tag names this run's psi and its json.
@@ -996,6 +1086,10 @@ def main():
 
     eq = pd.read_parquet(eq_path)
     dev = pd.concat([pd.read_parquet(f) for f in dev_files], ignore_index=True)
+    # Whether these psi carry their OWN launch quarters (a multi-start run), read before the
+    # injection below gives every frame a start_q column. It decides one thing only: whether the
+    # dead firm-quarter rule applies (see the drop below).
+    psi_multi_start = "start_q" in eq.columns and "start_q" in dev.columns
     # A single-start run has no start_q column. Injecting "all" here rather than branching later
     # is what keeps ONE code path: alignment, the per-start table, the gate and the json all see
     # a start dimension that happens to have size 1, and report it as such.
@@ -1046,7 +1140,32 @@ def main():
     except (OSError, KeyError, ValueError):
         pass
 
-    blocks = build_delta(eq, dev)
+    # Dead firm-quarters leave HERE, once, so every statistic below is taken over the same rows
+    # (DEAD FIRM-QUARTERS in the module docstring) -- for multi-start psi only. A single-curve psi
+    # is solved on every row as loaded. `dev` stays the frame as loaded: the run block's
+    # n_dev_rows is what was read, each type's n_rows what was solved; run.null_fq.path says
+    # which of the three paths ran.
+    if psi_multi_start:
+        dev_solve, null_fq = drop_dead_fq(eq, dev, keep=args.keep_null_fq)
+        null_fq["path"] = "multi_start_keep" if args.keep_null_fq else "multi_start_drop"
+        for kappa, c in null_fq["by_type"].items():
+            what = ("kept (--keep-null-fq)" if args.keep_null_fq
+                    else f"{c['n_null_fq']:,} fq / {c['n_null_rows']:,} rows dropped")
+            print(f"  dead firm-quarters (max|dpsi2| <= {null_fq['tol']:g}*|psi2_eq|): {kappa} {what}")
+        for kappa in null_fq["types_emptied"]:
+            c = null_fq["by_type"][kappa]
+            print(f"  !!!! WARNING: EVERY {kappa} firm-quarter is dead ({c['n_null_fq']:,} fq / "
+                  f"{c['n_null_rows']:,} rows): the drop leaves NO {kappa} rows, so this json has no "
+                  f"{kappa} block and no {kappa} estimate (run.null_fq.types_emptied). Read the "
+                  f"{kappa} psi before anything else; --keep-null-fq solves them as loaded. !!!!")
+    else:
+        dev_solve = dev
+        null_fq = dict(rule=DEAD_FQ_RULE, tol=float(DEAD_FQ_TOL), relative_to="|psi2_eq|",
+                       applied=False, by_type={}, types_emptied=[], path="single_curve")
+        print("  dead firm-quarters: rule not applied -- single-curve psi (no start_q of its own); "
+              "every row is solved as loaded")
+
+    blocks = build_delta(eq, dev_solve)
     results = {}
     ident = {}
     for kappa, blk in blocks.items():
@@ -1076,6 +1195,10 @@ def main():
             n_firms=int(np.unique(blk["firms"]).size),
             n_rows=int(blk["d1"].size),
         )
+        if psi_multi_start:
+            # dead firm-quarters of this type left out of n_rows, and their deviation rows
+            rec.update(n_null_fq=int(null_fq["by_type"][kappa]["n_null_fq"]),
+                       n_null_rows=int(null_fq["by_type"][kappa]["n_null_rows"]))
 
         # ---- Subsampling: the headline inference for this criterion --------------------
         sub = subsample_kappa(blk, fit, n_sub=args.subsample,
@@ -1212,7 +1335,8 @@ def main():
         n_shards_expected=int(n_shards), n_shards_found=len(shards_present),
         beta=psi_beta, T=psi_T, discount_source=disc_src,
         bootstrap=int(args.bootstrap), subsample=int(args.subsample),
-        ci_level=float(args.ci_level), profile=bool(args.profile)))
+        ci_level=float(args.ci_level), profile=bool(args.profile),
+        keep_null_fq=bool(args.keep_null_fq), null_fq=null_fq))
     results["identification"] = _jsonable(dict(
         per_type=ident, gate_pass=gate_pass,
         ridge_cond_max=float(args.ridge_cond_max),

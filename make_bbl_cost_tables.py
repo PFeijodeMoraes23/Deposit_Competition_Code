@@ -50,9 +50,19 @@ is the forward rate that row's change in deposits is priced at. The tables summa
   * the MEAN and CV over every row of a routine (tab_bbl_ridge_diagnostic), which a handful of
     rows with a nearly cancelling dpsi2 dominate -- reported next to the median and IQR, never
     instead of them.
-All of them are taken over the rows with dpsi2 != 0 only (the ratio is undefined elsewhere), so
-the ridge tables' n is below the inequality count n_rows of tab_bbl_cost_identified; both counts
-are printed in the notes so the two reconcile on the page.
+All of them are taken over the rows with dpsi2 != 0 only (the ratio is undefined elsewhere); when
+that leaves the ridge tables' n below the inequality count n_rows of tab_bbl_cost_identified, both
+counts are printed in the notes so the two reconcile on the page.
+
+DEAD FIRM-QUARTERS. A (firm, start_q) of a multi-start psi is dead when none of its deviations
+moves psi2 beyond round-off (max |dpsi2| <= 1e-12 |psi2_eq|): the firm has no time-deposit or
+prepaid product that quarter, so its rows are rounding noise. bbl_solve.py drops them before the
+Delta-psi blocks and records the counts; every table follows what the solve did (_null_fq_mode):
+the ratio statistics, rbar_f, the violation share and every n are over the remaining rows, and
+the notes state the count. A multi-start cost_params written before the rule has no record: the
+--from-psi pass then finds the dead firm-quarters in the psi itself, says so, and writes
+null_fq_<tag>.json into the step folder, from which the default pass restates the cost tables over
+the same rows (_overlay_null_fq). The two passes stay order-free once that file exists.
 All are \input-ready in the V_Main house style (spacing + xltabular at \textwidth + booktabs,
 caption/label inside the table, notes in \endlastfoot) -- see _wrap() and polfunc_k4.tex.
 
@@ -160,21 +170,24 @@ FRAC_BIND_LABEL_MD = "Share of deviation inequalities violated (1/2 = mechanical
 # both c-bar tables so the symbol cannot drift between them; every other summary of the ratio is
 # named by its statistic ("Median", "Mean") and never by this symbol. `rows_note` qualifies the row
 # grain and nothing else: tab_bbl_cbar_design sets the multi-start design beside the single-curve
-# one, whose rows have no launch quarter.
-def _rbar_def(rows_note: str = "") -> str:
+# one, whose rows have no launch quarter. `dead` adds the row filter of a run whose dead
+# firm-quarters are out of the rows (see DEAD FIRM-QUARTERS in the module docstring).
+def _rbar_def(rows_note: str = "", dead: bool = False) -> str:
     return (r"$\bar r^{f,\kappa}$ is the median, over the type-$\kappa$ "
             r"firm~$\times$~launch-quarter~$\times$~deviation rows" + rows_note
-            + r" with $\Delta\psi_2\neq0$, of "
+            + r" with $\Delta\psi_2\neq0$"
+            + (r" outside dead firm-quarters" if dead else "") + r", of "
             r"$\Delta\psi_4/\Delta\psi_2=\sum_t\beta^t r^f_t\Delta\mathrm{Dep}_t/"
             r"\sum_t\beta^t\Delta\mathrm{Dep}_t$, the $\beta^t\Delta\mathrm{Dep}_t$-weighted mean "
             r"forward rate at which a deviation's change in deposits is priced")
 
 
-def _rbar_def_md(rows_note: str = "") -> str:
+def _rbar_def_md(rows_note: str = "", dead: bool = False) -> str:
     return ("rbar_f^kappa = the median, over the type-kappa firm × launch-quarter × deviation "
-            "rows" + rows_note + " with dpsi_2 != 0, of dpsi_4/dpsi_2 = sum_t beta^t r^f_t dDep_t / "
-            "sum_t beta^t dDep_t, the beta^t dDep_t-weighted mean forward rate a deviation's "
-            "change in deposits is priced at")
+            "rows" + rows_note + " with dpsi_2 != 0"
+            + (" outside dead firm-quarters" if dead else "") + ", of dpsi_4/dpsi_2 = "
+            "sum_t beta^t r^f_t dDep_t / sum_t beta^t dDep_t, the beta^t dDep_t-weighted mean "
+            "forward rate a deviation's change in deposits is priced at")
 
 
 RBAR_DEF = _rbar_def()
@@ -650,8 +663,360 @@ def _merge_keys(eq: pd.DataFrame, dev: pd.DataFrame) -> list:
     return keys
 
 
+# ── dead firm-quarters ───────────────────────────────────────────────────────
+# The rule is bbl_solve.py's (dead_fq_mask / drop_dead_fq), restated here rather than imported:
+# importing bbl_solve runs its venv guard, which re-executes that FILE when the interpreter is not
+# the project venv. test_null_fq_mask.py checks the two masks agree row for row.
+#   solve_drop  the solve dropped them (run.null_fq.path multi_start_drop): cost_params is already
+#               over the live rows; --from-psi applies the mask with the recorded tol and checks
+#               the counts against the solve's.
+#   solve_keep  --keep-null-fq: the solve kept them, and so do the tables.
+#   table_mask  a multi-start cost_params written before the rule (no run.null_fq): --from-psi
+#               finds them in the psi, and the default pass restates the cost tables from the
+#               record that pass writes (_null_fq_record / _overlay_null_fq).
+#   none        a single-curve psi, which has no start_q of its own: the rule does not apply.
+DEAD_FQ_TOL = 1e-12          # bbl_solve.DEAD_FQ_TOL: |dpsi2| <= tol * |psi2_eq| on every deviation
+DEAD_FQ_DEF = (r"a firm~$\times$~launch quarter is dead when none of its deviations moves "
+               r"$\psi_2$ by more than $10^{-12}|\psi_2|$, i.e.\ the firm has no time-deposit "
+               r"($k=4$) or prepaid ($k=5$) product that quarter, so no spread deviation reaches "
+               r"its deposits and its inequalities are rounding noise")
+DEAD_FQ_DEF_MD = ("a firm × launch quarter is dead when none of its deviations moves psi_2 by more "
+                  "than 1e-12 |psi_2|, i.e. the firm has no time-deposit (k=4) or prepaid (k=5) "
+                  "product that quarter, so no spread deviation reaches its deposits and its "
+                  "inequalities are rounding noise")
+
+
+def _null_fq_mode(cost: dict, multi: bool | None = None) -> str:
+    """Which of the four paths above a routine is on. `multi` is whether its psi carries its own
+    launch quarters; None infers it from the cost_params run record (the default pass has no psi)."""
+    run = (cost or {}).get("run") or {}
+    rec = run.get("null_fq")
+    if isinstance(rec, dict):
+        path = rec.get("path")
+        if path == "table_mask":                 # a cost_params restated by _overlay_null_fq
+            return "table_mask"
+        if path == "multi_start_keep" or run.get("keep_null_fq"):
+            return "solve_keep"
+        if path == "multi_start_drop" or (path is None and rec.get("applied")):
+            return "solve_drop"
+        return "none"
+    if multi is None:
+        multi = str(run.get("psi_tag") or "").startswith("_ms") or bool(run.get("n_starts"))
+    return "table_mask" if multi else "none"
+
+
+def _null_fq_tol(cost: dict) -> float:
+    """The tolerance the solve applied, when it recorded one; the solve's constant otherwise."""
+    t = (((cost or {}).get("run") or {}).get("null_fq") or {}).get("tol")
+    return float(t) if t is not None else DEAD_FQ_TOL
+
+
+def dead_fq_mask(eq: pd.DataFrame, dev: pd.DataFrame, tol: float = DEAD_FQ_TOL) -> np.ndarray:
+    """Boolean over the rows of dev: True where the row's (firm, start_q) is dead, i.e. every one
+    of its deviations leaves psi2 within tol*|psi2_eq| of equilibrium (bbl_solve.dead_fq_mask).
+    A dev row with no psi_eq partner, or a non-finite psi2, fails the comparison and so is never
+    dead, as in the solve."""
+    sq = dev["start_q"].astype(str)
+    e = eq.assign(start_q=eq["start_q"].astype(str)).set_index(["firm", "start_q"])["psi2_omega"]
+    if e.index.has_duplicates:
+        raise ValueError("psi_eq has duplicate (firm, start_q) rows")
+    p2e = e.reindex(pd.MultiIndex.from_arrays([dev["firm"].to_numpy(), sq.to_numpy()])).to_numpy(float)
+    quiet = np.abs(p2e - dev["psi2_omega"].to_numpy(float)) <= tol * np.abs(p2e)
+    return (pd.Series(quiet, index=dev.index)
+            .groupby([dev["firm"], sq], sort=False, dropna=False)
+            .transform("all").to_numpy(bool))
+
+
+def _dead_counts(dev: pd.DataFrame, dead: np.ndarray) -> dict:
+    """{kappa: {n_null_fq, n_null_rows}} over the firm types present in dev, counted as the solve
+    counts them (a firm-quarter under the is_B of its rows)."""
+    isb = dev["is_B"].to_numpy().astype(bool)
+    out = {}
+    for kappa, mk in (("B", isb), ("D", ~isb)):
+        if not mk.any():
+            continue
+        dm = dead & mk
+        out[kappa] = dict(n_null_fq=int(len(dev.loc[dm, ["firm", "start_q"]].drop_duplicates())),
+                          n_null_rows=int(dm.sum()))
+    return out
+
+
+def _solve_dead_counts(cost: dict) -> dict:
+    """The per-type counts the solve recorded: the block fields, else run.null_fq.by_type."""
+    by = ((((cost or {}).get("run") or {}).get("null_fq") or {}).get("by_type")) or {}
+    out = {}
+    for kappa, _lbl in BLOCKS:
+        blk, alt = (cost or {}).get(kappa) or {}, by.get(kappa) or {}
+        fq, rows = blk.get("n_null_fq", alt.get("n_null_fq")), blk.get("n_null_rows",
+                                                                     alt.get("n_null_rows"))
+        if fq is not None or rows is not None:
+            out[kappa] = dict(n_null_fq=fq, n_null_rows=rows)
+    return out
+
+
+def _g_rows(m: pd.DataFrame, blk: dict) -> np.ndarray:
+    """g = dpsi1 - omega dpsi2 - gamma'dpsi3 - (1+zeta) dpsi4 at one block's theta-hat, over the
+    rows of a psi_dev x psi_eq merge (suffixes _d/_e; Delta-psi = psi_eq - psi_dev, as in
+    bbl_solve.build_delta). Its sign is the solve's frac_bind test."""
+    d = lambda c: (m[c + "_e"] - m[c + "_d"]).to_numpy(float)  # noqa: E731
+    g = d("psi1") - float(blk["omega"]) * d("psi2_omega") - (1.0 + float(blk["zeta"])) * d("psi4_zeta")
+    for c, v in (blk.get("gamma") or {}).items():
+        if c + "_e" in m.columns:
+            g = g - float(v) * d(c)
+    return g
+
+
+def _cbar_se_at(blk: dict, rbar: float):
+    """The firm-block bootstrap SD of omega + rbar*zeta from the recorded SDs and correlation.
+
+    Exact rather than approximate: the solve's c_bar_se_boot is std(omega_b + rbar*zeta_b) over the
+    draws and omega_se/zeta_se/omega_zeta_corr_boot are the same draws' std and correlation, so
+    the SD at any rate is the quadratic form. Returned only when it reproduces the solve's own
+    figure at the solve's rate; None otherwise."""
+    so, sz, rho = blk.get("omega_se"), blk.get("zeta_se"), blk.get("omega_zeta_corr_boot")
+    if None in (so, sz, rho, blk.get("c_bar_se_boot"), blk.get("rbar_f")):
+        return None
+
+    def sd(r):
+        return float(np.sqrt(max(so * so + r * r * sz * sz + 2.0 * r * rho * so * sz, 0.0)))
+    base = float(blk["c_bar_se_boot"])
+    if abs(sd(float(blk["rbar_f"])) - base) > 1e-9 * max(1.0, abs(base)):
+        return None
+    return sd(float(rbar))
+
+
+def _merged(eq: pd.DataFrame, dev: pd.DataFrame) -> pd.DataFrame:
+    return dev.merge(eq, on=_merge_keys(eq, dev), suffixes=("_d", "_e"))
+
+
+def _null_fq_record(E, eq: pd.DataFrame, dev: pd.DataFrame, dead: np.ndarray, cost: dict,
+                    source: str) -> dict:
+    """What the default pass needs to restate one routine's cost tables without the dead
+    firm-quarters, for a cost_params that predates the rule (table_mask). Computed from the psi at
+    the solve's own theta-hat; `solve` fingerprints the cost_params it belongs to, and every
+    all-row figure is recomputed here first, so a psi that is not the solve's is refused."""
+    m = _merged(eq, dev.assign(_dead=dead))
+    isb = m["is_B"].to_numpy().astype(bool)
+    dead_m = m["_dead"].to_numpy(bool)
+    d2 = (m["psi2_omega_e"] - m["psi2_omega_d"]).to_numpy(float)
+    d4 = (m["psi4_zeta_e"] - m["psi4_zeta_d"]).to_numpy(float)
+    okr = np.isfinite(d2) & np.isfinite(d4) & (d2 != 0)
+    ratio = np.where(okr, d4 / np.where(okr, d2, 1.0), np.nan)
+    sq = m["start_q"].astype(str).to_numpy()
+    rec = dict(kind="null_fq_overlay", E=int(E), tag=_cost_tag(cost, PSI_TAG), psi_source=source,
+               rule=("max over a firm-quarter's deviations of |psi2_eq - psi2_dev| <= "
+                     "tol * |psi2_eq|"), tol=DEAD_FQ_TOL, by_type={}, solve={})
+    for kappa, mk in (("B", isb), ("D", ~isb)):
+        blk = (cost or {}).get(kappa)
+        if not blk or not mk.any():
+            continue
+        live = mk & ~dead_m
+        g = _g_rows(m.loc[mk], blk)
+        fb_all = float(np.mean(g < 0))
+        if abs(fb_all - float(blk["frac_bind"])) > 1e-9:
+            raise ValueError(f"E{E}-{kappa}: frac_bind at the solve's theta over all rows is "
+                             f"{fb_all:.10f} here, {blk['frac_bind']:.10f} in cost_params")
+        st = ridge_stats(None, None, m=m.loc[live])
+        per = {}
+        for q in sorted(set(sq[mk])):
+            inq = mk & (sq == q)
+            lq = inq & ~dead_m
+            rq = ratio[lq & okr]
+            per[q] = dict(n=int(lq.sum()), n_ratio=int(rq.size), n_null_rows=int((inq & dead_m).sum()),
+                          rbar_f=float(np.median(rq)) if rq.size else None,
+                          all_dead=bool(inq.any() and not lq.any()))
+        rec["solve"][kappa] = {k: blk.get(k) for k in ("n_rows", "n_firms", "rbar_f", "frac_bind",
+                                                      "omega", "zeta", "c_bar", "c_bar_se_boot")}
+        rec["by_type"][kappa] = dict(
+            **_dead_counts(m.loc[mk], dead_m[mk])[kappa],
+            n_rows=int(live.sum()), n_ratio=int((live & okr).sum()),
+            n_firms=int(m.loc[live, "firm"].nunique()),
+            rbar_f=float(np.median(ratio[live & okr])),
+            frac_bind=float(np.mean(g[~dead_m[mk]] < 0)),
+            pooled_corr=st["corr"], pooled_bkw_cond=st["cond"],
+            g_dead_absmax=float(np.max(np.abs(g[dead_m[mk]]))) if dead_m[mk].any() else 0.0,
+            per_start=per)
+    return rec
+
+
+def _null_fq_record_path(E, tag: str) -> pathlib.Path:
+    return STEP_DIR / f"null_fq_E{E}_spec_{SPEC}_{STAGE}{tag}.json"
+
+
+def _read_null_fq_record(E, cost: dict):
+    """The table_mask record for one routine, when it exists AND fingerprints this cost_params;
+    None (said on stdout) otherwise."""
+    p = _null_fq_record_path(E, _cost_tag(cost, PSI_TAG))
+    if not p.is_file():
+        print(f"  !!!! [dead fq] E{E}: cost_params predates the dead firm-quarter rule and "
+              f"{p.name} is missing -- the cost tables keep the dead firm-quarters. Run the "
+              f"--from-psi pass (it writes that file), then this pass again. !!!!")
+        return None
+    rec = json.loads(p.read_text(encoding="utf-8"))
+    for kappa, fp in (rec.get("solve") or {}).items():
+        blk = (cost or {}).get(kappa) or {}
+        bad = [k for k, v in fp.items() if blk.get(k) != v]
+        if bad:
+            print(f"  !!!! [dead fq] E{E}-{kappa}: {p.name} was computed for another solve "
+                  f"({', '.join(bad)} differ) -- ignored; the cost tables keep the dead "
+                  f"firm-quarters. !!!!")
+            return None
+    print(f"  [dead fq] E{E}: cost_params predates the rule; restating it without the dead "
+          f"firm-quarters from {p.name} (computed from {rec.get('psi_source')})")
+    return rec
+
+
+def _overlay_null_fq(cost: dict, rec: dict) -> dict:
+    """A copy of one routine's cost_params restated over the live rows (table_mask).
+
+    theta-hat and its intervals are the solve's: the dead rows' g is rounding noise, so they do
+    not load the criterion. What changes is every figure that counts or averages rows: n_rows,
+    frac_bind, rbar_f, the pooled corr/condition index, and c-bar evaluated at the new rbar_f,
+    with its bootstrap SD re-evaluated exactly (_cbar_se_at). The subsampling interval of c-bar
+    cannot be: its draws are not stored, so it stays the solve's, evaluated at the solve's rbar_f,
+    which `_ci_rbar` records for the Notes. Per launch quarter the refit's (omega, zeta) are kept
+    and c-bar re-evaluated at the quarter's live median; its frac_bind, which would need the
+    refit's gamma, is dropped."""
+    out = json.loads(json.dumps(cost))
+    for kappa, t in (rec.get("by_type") or {}).items():
+        blk = out.get(kappa)
+        if not blk:
+            continue
+        w, z, r_new = float(blk["omega"]), float(blk["zeta"]), float(t["rbar_f"])
+        se = _cbar_se_at(blk, r_new)
+        blk["_ci_rbar"] = blk.get("rbar_f")
+        blk.update(n_rows=t["n_rows"], n_firms=t["n_firms"], n_null_fq=t["n_null_fq"],
+                   n_null_rows=t["n_null_rows"], rbar_f=r_new, frac_bind=t["frac_bind"],
+                   c_bar=w + r_new * z)
+        if se is not None:
+            blk["c_bar_se_boot"] = se
+        else:
+            print(f"  !!!! [dead fq] {kappa}: the bootstrap SD of c-bar does not reproduce from "
+                  f"omega_se/zeta_se/corr -- left at the solve's rate !!!!")
+        bs = blk.get("by_start")
+        if isinstance(bs, dict):
+            bs["pooled_corr"], bs["pooled_bkw_cond"] = t["pooled_corr"], t["pooled_bkw_cond"]
+            pooled = bs.get("pooled")
+            if isinstance(pooled, dict):
+                pooled.update(n=t["n_rows"], n_ratio=t["n_ratio"], rbar_f=r_new,
+                              corr=t["pooled_corr"], bkw_cond=t["pooled_bkw_cond"],
+                              frac_bind=t["frac_bind"], c_bar=w + r_new * z)
+            per = bs.get("per_start") if isinstance(bs.get("per_start"), dict) else None
+            for q, pq in (t.get("per_start") or {}).items():
+                src = (per or {}).get(q)
+                if per is None or src is None:
+                    continue
+                if pq["all_dead"]:
+                    per[q] = dict(n=0, n_ratio=0, all_dead=True)
+                    continue
+                cb = (float(src["omega"]) + pq["rbar_f"] * float(src["zeta"])
+                      if pq["rbar_f"] is not None and src.get("omega") is not None else None)
+                per[q] = dict(src, n=pq["n"], n_ratio=pq["n_ratio"], rbar_f=pq["rbar_f"],
+                              c_bar=cb, frac_bind=None, all_dead=False)
+        ident = (blk.get("by_start") or {}).get("identified_split", blk.get("identified_split"))
+        thr = float((blk.get("by_start") or {}).get("ridge_cond_max") or 30.0)
+        if ident is not None and bool(ident) != (t["pooled_bkw_cond"] <= thr):
+            print(f"  !!!! [dead fq] {kappa}: without the dead firm-quarters the pooled condition "
+                  f"index is {t['pooled_bkw_cond']:.1f}, the other side of {thr:g} from the "
+                  f"solve's verdict -- the verdict shown is the solve's !!!!")
+    run = out.setdefault("run", {})
+    run["null_fq"] = dict(path="table_mask", applied=True, tol=rec.get("tol"), rule=rec.get("rule"),
+                          by_type={k: dict(n_null_fq=v["n_null_fq"], n_null_rows=v["n_null_rows"])
+                                   for k, v in (rec.get("by_type") or {}).items()},
+                          source=rec.get("psi_source"))
+    return out
+
+
+def apply_null_fq(data: dict) -> None:
+    """The --from-psi side of the rule, routine by routine, in place. Adds to each entry:
+      psi_dev_solve  the rows the solve used (what check_psi_matches_solve compares against),
+      psi_dev        the rows the tables describe,
+      psi_dev_all    every row loaded,
+      cost_solve     the cost_params as the solve wrote it,
+      null           {mode, tol, dropped, n_loaded, dead_rows, dead_fq, counts, solve_counts,
+                      dead_q}: dead_q is {quarter: [firm types all of whose firm-quarters are
+                      dead there]}, the rows of tab_bbl_ridge_by_start dashed for that reason.
+    A table_mask routine keeps its every-row frame as psi_dev until restate_table_mask(), which
+    runs after the vintage check, since its record is computed at the solve's own theta-hat."""
+    for E, d in sorted(data.items()):
+        eq, dev, cost = d["psi_eq"], d["psi_dev"], d["cost"]
+        multi = "start_q" in eq.columns and "start_q" in dev.columns
+        mode = _null_fq_mode(cost, multi=multi)
+        if not multi and mode != "none":
+            print(f"  !!!! [dead fq] E{E}: cost_params records the rule ({mode}) but the psi has no "
+                  f"start_q of its own -- no mask applied !!!!")
+            mode = "none"
+        d.update(cost_solve=cost, psi_dev_solve=dev, psi_dev_all=dev)
+        nf = dict(mode=mode, n_loaded=int(len(dev)), dropped=False, dead_q={})
+        d["null"] = nf
+        if mode == "none":
+            continue
+        tol = _null_fq_tol(cost)
+        dead = dead_fq_mask(eq, dev, tol)
+        counts = _dead_counts(dev, dead)
+        g = (pd.DataFrame({"q": dev["start_q"].astype(str).to_numpy(),
+                           "t": np.where(dev["is_B"].to_numpy().astype(bool), "B", "D"),
+                           "dead": dead})
+             .groupby(["q", "t"])["dead"].all())
+        dead_q = {}
+        for (q, t), v in g.items():
+            if v:
+                dead_q.setdefault(q, []).append(t)
+        nf.update(tol=tol, counts=counts, dead_q=dead_q, dead_mask=dead,
+                  dead_rows=int(dead.sum()),
+                  dead_fq=int(sum(c["n_null_fq"] for c in counts.values())))
+        lst = ", ".join(f"{k} {c['n_null_fq']:,} fq / {c['n_null_rows']:,} rows"
+                        for k, c in counts.items())
+        if mode == "solve_drop":
+            nf["solve_counts"] = _solve_dead_counts(cost)
+            live = dev.loc[~dead].reset_index(drop=True)
+            d.update(psi_dev_solve=live, psi_dev=live)
+            nf["dropped"] = True
+            print(f"  [dead fq] E{E}: the solve dropped the dead firm-quarters (tol {tol:g}); the "
+                  f"psi mask finds {lst} -- checked against the solve's counts below")
+        elif mode == "solve_keep":
+            print(f"  [dead fq] E{E}: the solve KEPT the dead firm-quarters (--keep-null-fq), and "
+                  f"so do the tables; the psi mask finds {lst}")
+        else:
+            print(f"  [dead fq] E{E}: cost_params predates the dead firm-quarter rule (no "
+                  f"run.null_fq), so the mask is computed here from the psi (tol {tol:g}): {lst}")
+
+
+def restate_table_mask(data: dict, source: str) -> None:
+    """For every table_mask routine: build the record at the solve's theta-hat, restate the
+    cost_params from it for the tables of this pass, and write it where the default pass reads it.
+    The file is rewritten only when its content changes, and a change is announced, because the
+    default pass has to run again to carry it into tab_bbl_cost_identified / _cbar / _cbar_design."""
+    for E, d in sorted(data.items()):
+        nf = d.get("null") or {}
+        if nf.get("mode") != "table_mask":
+            continue
+        dead = nf["dead_mask"]
+        rec = _null_fq_record(E, d["psi_eq"], d["psi_dev_all"], dead, d["cost_solve"], source)
+        d["cost"] = _overlay_null_fq(d["cost_solve"], rec)
+        d["psi_dev"] = d["psi_dev_all"].loc[~dead].reset_index(drop=True)
+        nf["dropped"] = True
+        for kappa, t in rec["by_type"].items():
+            s = rec["solve"][kappa]
+            print(f"  [dead fq] E{E}-{kappa}: n {s['n_rows']:,} -> {t['n_rows']:,}; frac_bind "
+                  f"{s['frac_bind']:.4f} -> {t['frac_bind']:.4f}; rbar_f {s['rbar_f']:.5f} -> "
+                  f"{t['rbar_f']:.5f}; pooled cond {t['pooled_bkw_cond']:.2f}; max |g| over dead "
+                  f"rows {t['g_dead_absmax']:.2e}")
+        p = _null_fq_record_path(E, rec["tag"])
+        txt = json.dumps(rec, indent=1, sort_keys=True)
+        old = p.read_text(encoding="utf-8") if p.is_file() else None
+        if old == txt:
+            print(f"  [dead fq] E{E}: {p.name} unchanged")
+            continue
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(txt, encoding="utf-8")
+        print(f"  !!!! [dead fq] E{E}: wrote {p} -- run the default pass (without --from-psi) "
+              f"again so tab_bbl_cost_identified / tab_bbl_cbar / tab_bbl_cbar_design leave the "
+              f"dead firm-quarters out as well !!!!")
+
+
 def ridge_stats(eq: pd.DataFrame, dev: pd.DataFrame, is_B: bool | None = None,
-                start: str | None = None) -> dict:
+                start: str | None = None, m: pd.DataFrame | None = None) -> dict:
     """Collinearity of the two columns that carry omega and zeta in the DIFFERENCED design.
 
     is_B selects a single firm type (True=B, False=D); None pools both, which is what the
@@ -660,8 +1025,12 @@ def ridge_stats(eq: pd.DataFrame, dev: pd.DataFrame, is_B: bool | None = None,
 
     start selects one launch quarter of a multi-start psi; None pools every quarter, which is
     what the pooled row of the by-start table and the whole of the per-routine ridge table use.
+
+    m is the psi_dev x psi_eq merge when the caller already holds it (_merged), so a loop over
+    quarters or types does not repeat the join.
     """
-    m = dev.merge(eq, on=_merge_keys(eq, dev), suffixes=("_d", "_e"))
+    if m is None:
+        m = _merged(eq, dev)
     if is_B is not None:
         m = m[m["is_B"].to_numpy().astype(bool) == is_B]
     if start is not None and "start_q" in m.columns:
@@ -671,10 +1040,14 @@ def ridge_stats(eq: pd.DataFrame, dev: pd.DataFrame, is_B: bool | None = None,
     # The same row filter as bbl_solve.rbar_of_block: the ratio is undefined where dpsi2 == 0,
     # i.e. where the deviation leaves the firm's discounted deposits unchanged. Those rows still
     # enter the eq:16 criterion (they are in the solve's n_rows), so the three counts are kept to
-    # let the tables reconcile n here with the inequality count of tab_bbl_cost_identified.
+    # let the tables reconcile n here with the inequality count of tab_bbl_cost_identified. The
+    # dead firm-quarters are not a filter of this function: the caller passes the rows the tables
+    # describe (DEAD FIRM-QUARTERS in the module docstring).
     fin = np.isfinite(d2) & np.isfinite(d4)
     ok = fin & (d2 != 0)
     n_all, n_nonfinite, n_d2_zero = int(d2.size), int((~fin).sum()), int((fin & (d2 == 0)).sum())
+    if ok.sum() < 2:
+        raise ValueError(f"{int(ok.sum())} row(s) with dpsi2 != 0 -- no ratio statistics")
     d2, d4 = d2[ok], d4[ok]
     ratio = d4 / d2
 
@@ -744,14 +1117,15 @@ def ridge_by_start(eq: pd.DataFrame, dev: pd.DataFrame) -> dict:
     qs = start_quarters(eq)
     if not qs:
         return {}
+    m = _merged(eq, dev)
     out = {}
     for q in qs:
         try:
-            out[q] = ridge_stats(eq, dev, start=q)
-        except (ValueError, ZeroDivisionError, FloatingPointError) as exc:
+            out[q] = ridge_stats(None, None, start=q, m=m)
+        except (ValueError, ZeroDivisionError, FloatingPointError, IndexError) as exc:
             # One empty or degenerate quarter must not cost the other 35 their row.
             print(f"  [skip] start {q}: {type(exc).__name__}: {exc}")
-    out["pooled"] = ridge_stats(eq, dev)
+    out["pooled"] = ridge_stats(None, None, m=m)
     return out
 
 
@@ -834,6 +1208,7 @@ def collect_json(cost: dict) -> tuple[list, list]:
     the grain the solver actually measured on."""
     ridge_blocks, rows = [], []
     for E in sorted(cost):
+        mode, dead_by = _null_fq_mode(cost[E]), _solve_dead_counts(cost[E])
         for key, lbl in BLOCKS:
             blk = cost[E].get(key)
             if not blk:
@@ -882,6 +1257,14 @@ def collect_json(cost: dict) -> tuple[list, list]:
                 cond_pooled=(blk.get("by_start") or {}).get("pooled_bkw_cond"),
                 corr_pooled=(blk.get("by_start") or {}).get("pooled_corr"),
                 cond_max=(blk.get("by_start") or {}).get("ridge_cond_max"),
+                # Dead firm-quarters (DEAD FIRM-QUARTERS in the module docstring): how this
+                # routine's rows were filtered, the per-type counts, and -- when the default pass
+                # restated a cost_params that predates the rule -- the rate the solve's c-bar
+                # interval was evaluated at.
+                null_mode=mode,
+                n_null_fq=(dead_by.get(key) or {}).get("n_null_fq"),
+                n_null_rows=(dead_by.get(key) or {}).get("n_null_rows"),
+                ci_rbar=blk.get("_ci_rbar"),
             ))
     return ridge_blocks, rows
 
@@ -904,14 +1287,29 @@ def check_psi_matches_solve(data: dict, rtol: float = 1e-6) -> list[str]:
     Being theta-free, they are pure functions of the design: if the psi matches, they reproduce
     exactly (measured: 0.0e+00), and any real difference is proof of a vintage mismatch rather
     than of a solver disagreement. Returns a list of human-readable mismatches (empty = clean).
+
+    The comparison runs on the rows the SOLVE used (`psi_dev_solve`): without the dead
+    firm-quarters when it dropped them, every row when it kept them or predates the rule. The
+    record it is compared against is the solve's own (`cost_solve`), never a restated copy.
+    The dead firm-quarter counts the solve recorded must equal the mask's, too (`null`).
     """
     problems, checked = [], 0
     for E, d in sorted(data.items()):
+        nf = d.get("null") or {}
+        for kappa, want in (nf.get("solve_counts") or {}).items():
+            got = (nf.get("counts") or {}).get(kappa) or {}
+            for f in ("n_null_fq", "n_null_rows"):
+                checked += 1
+                if want.get(f) is not None and want.get(f) != got.get(f):
+                    problems.append(f"E{E}-{kappa} {f}: the psi has {got.get(f)} dead, the solve "
+                                    f"recorded {want.get(f)} (rule tol {nf.get('tol'):g})")
+        cost = d.get("cost_solve", d["cost"]) or {}
+        dev = d.get("psi_dev_solve", d["psi_dev"])
         for key, _lbl in BLOCKS:
-            blk = (d["cost"] or {}).get(key)
+            blk = cost.get(key)
             if not blk:
                 continue
-            st = ridge_stats(d["psi_eq"], d["psi_dev"], is_B=(key == "B"))
+            st = ridge_stats(d["psi_eq"], dev, is_B=(key == "B"))
             # Within one firm type the median ratio IS the solve's rbar_f.
             for field, mine in (("rbar_f", st["ratio_median"]),
                                 ("ridge_corr", st["corr"]),
@@ -939,6 +1337,13 @@ def collect(data: dict) -> tuple[dict, list]:
     for E, d in sorted(data.items()):
         st = ridge_stats(d["psi_eq"], d["psi_dev"])
         st["n_shards"] = d["n_shards"]
+        # The rows loaded and the dead firm-quarters taken out of them before `n_all`, so the
+        # Notes can walk from the psi to n (_n_recon). Zero when nothing was dropped.
+        nf = d.get("null") or {}
+        st["null_mode"] = nf.get("mode", "none")
+        st["n_loaded"] = int(nf.get("n_loaded", st["n_all"]))
+        st["n_dead_rows"] = int(nf.get("dead_rows", 0)) if nf.get("dropped") else 0
+        st["n_dead_fq"] = int(nf.get("dead_fq", 0)) if nf.get("dropped") else 0
         # The solve's inequality count for the routine (tab_bbl_cost_identified's n, B + D). The
         # psi merge must reproduce it row for row, or n here and n there are not the same design.
         n_ineq = [(d["cost"].get(k) or {}).get("n_rows") for k, _ in BLOCKS]
@@ -1013,6 +1418,24 @@ def _wrap(body, col_fmt, caption, label, header, footnote, ncols):
     padding so the note aligns with the rules above it.
 
     V_Main loads xltabular (L20), setspace (L28) and booktabs (L129) already.
+
+    EVERY PAGE BREAK CARRIES THE CONTINUED HEAD AND FOOT. longtable reserves room for \endfoot
+    only, and tests whether the last page can take \endlastfoot on the HEIGHT of that box. The
+    notes row is a p-column, whose paragraph hangs below the row's first baseline, so the box is
+    ~12pt high and ~120pt deep: the test passes, the notes are appended after the table has
+    closed, and when they do not fit the ordinary output routine breaks the page between the last
+    rows, with neither "Continued on next page" below nor "Table N (continued)" above. Measured in
+    V_Main (tab_bbl_cbar_design, 2026-09-28) and in a V_Main-geometry harness at every filler
+    offset from 216pt to 336pt. Two lines close it, both inside the table:
+      * a zero kern after the notes row makes the last item of the \endlastfoot box a kern, so the
+        box's depth moves into its height and longtable's own test sees the notes;
+      * after the last body row, a kern of (lastfoot - foot) with a legal break right after it and
+        an equal negative kern behind: the page builder must fit the last row TOGETHER with the
+        room the notes will need, so when they do not fit it breaks before that row -- a normal
+        longtable break, with the continued head and foot -- and the row moves over with the
+        notes. The two kerns cancel, so a table that fits looks exactly as before. \nobreak ahead
+        of them keeps the last row from being split from its own reservation.
+    The notes stay in \endlastfoot: the look of the table does not change, only where it breaks.
     """
     return "\n".join([
         r"\begin{spacing}{1.0}",
@@ -1039,12 +1462,24 @@ def _wrap(body, col_fmt, caption, label, header, footnote, ncols):
         r"\bottomrule",
         rf"\multicolumn{{{ncols}}}{{@{{}}p{{\dimexpr\textwidth-2\tabcolsep\relax}}@{{}}}}"
         rf"{{\scriptsize {footnote}}} \\",
+        LASTFOOT_KERN,
         r"\endlastfoot",
         *body,
+        LASTROW_RESERVE,
         r"\end{xltabular}",
         r"\end{spacing}",
         "",
     ])
+
+
+# The two lines _wrap adds so that every page break of an xltabular carries the continued head
+# and foot (see its docstring). \csname...\endcsname reaches longtable's box registers without a
+# \makeatletter, which a fragment \input mid-document cannot rely on. bbl_polfunc.py's tables use
+# the same two lines.
+LASTFOOT_KERN = r"\noalign{\kern0pt}"
+LASTROW_RESERVE = (r"\noalign{\nobreak\dimen0=\dimexpr\ht\csname LT@lastfoot\endcsname"
+                   r"+\dp\csname LT@lastfoot\endcsname-\ht\csname LT@foot\endcsname+2pt\relax"
+                   r"\ifdim\dimen0<0pt \dimen0=0pt\fi\kern\dimen0\penalty9999\kern-\dimen0}")
 
 
 def _small_cell(x):
@@ -1057,12 +1492,61 @@ def _small_cell(x):
     return _f(float(x), 4) if abs(float(x)) >= 1e-3 else _sci(float(x), 1)
 
 
-def _n_recon(s) -> str:
-    r"""'223,200 $-$ 24,316 $=$ 198,884': the routine's inequality count, the rows the ratio drops,
-    and the n the ridge tables report. Built from the psi's own counts, so it holds by
-    construction; collect() separately checks the first figure against the solve's n_rows."""
+def _n_recon(s, md: bool = False) -> str:
+    r"""'223,200 $-$ 30,050 in 601 dead firm-quarters $=$ 193,150': the rows the psi holds, the
+    rows of dead firm-quarters taken out, the rows the ratio drops (dpsi2 == 0 or non-finite) when
+    there are any, and the n the ridge tables report. Built from the psi's own counts, so it holds
+    by construction; collect() separately checks the rows left after the dead firm-quarters
+    against the solve's n_rows."""
+    minus, eq = (" - ", " = ") if md else (r" $-$ ", r" $=$ ")
     drop = s["n_d2_zero"] + s["n_nonfinite"]
-    return rf"{_num(s['n_all'])} $-$ {_num(drop)} $=$ {_num(s['n'])}"
+    out = _num(s.get("n_loaded", s["n_all"]))
+    if s.get("n_dead_rows"):
+        out += f"{minus}{_num(s['n_dead_rows'])} in {_num(s['n_dead_fq'])} dead firm-quarters"
+    if drop:
+        out += (f"{minus}{_num(drop)}" + (" with dpsi_2 = 0" if md else r" with $\Delta\psi_2=0$")
+                if s.get("n_dead_rows") else f"{minus}{_num(drop)}")
+    return out + f"{eq}{_num(s['n'])}"
+
+
+def _ridge_rows_note(ridge, md: bool = False) -> str:
+    """The Notes sentence of tab_bbl_ridge_diagnostic that says what a row is and walks each
+    routine's psi rows to its n (the dead firm-quarters, then the rows with dpsi2 == 0)."""
+    Es = sorted(ridge)
+    recon = "; ".join((f"E{E} " if md else rf"{rc.est_ref(E)} ") + _n_recon(ridge[E], md)
+                      for E in Es)
+    dead = any(ridge[E].get("n_dead_rows") for E in Es)
+    same = all(ridge[E]["n"] == ridge[E].get("n_ineq") for E in Es)
+    kept = [E for E in Es if ridge[E].get("null_mode") == "solve_keep"]
+    if md:
+        if dead:
+            return ("A row is one firm × launch-quarter × deviation inequality outside the dead "
+                    "firm-quarters, which are left out as in the parameter table (" + DEAD_FQ_DEF_MD
+                    + "); n counts those with dpsi_2 != 0, on which dpsi_4/dpsi_2 is defined: "
+                    + recon + (", the inequality count of the parameter table. " if same else
+                               "; the rows with dpsi_2 = 0 still enter the inequality count of "
+                               "the parameter table. "))
+        return ("A row is one firm × launch-quarter × deviation inequality, firm types and "
+                "quarters pooled. *n* counts only the rows with dpsi_2 != 0, on which "
+                "dpsi_4/dpsi_2 is defined, so it is below the inequality count of the parameter "
+                "table by the rows whose deviation leaves discounted deposits unchanged "
+                f"(dpsi_2 = 0): {recon}. "
+                + ("Dead firm-quarters are kept, as in the solve. " if kept else ""))
+    if dead:
+        return (r"A row is one firm~$\times$~launch-quarter~$\times$~deviation inequality outside "
+                r"the dead firm-quarters, which are left out as in "
+                r"Table~\ref{tab:bbl_cost_identified} (" + DEAD_FQ_DEF + r"); $n$ counts those "
+                r"with $\Delta\psi_2\neq0$, on which $\Delta\psi_4/\Delta\psi_2$ is defined: "
+                + recon + (r", the inequality count of Table~\ref{tab:bbl_cost_identified}. "
+                           if same else
+                           r"; the rows with $\Delta\psi_2=0$ still enter the inequality count "
+                           r"of Table~\ref{tab:bbl_cost_identified}. "))
+    return (r"A row is one firm~$\times$~launch-quarter~$\times$~deviation inequality; $n$ counts "
+            r"only the rows with $\Delta\psi_2\neq0$, on which $\Delta\psi_4/\Delta\psi_2$ is "
+            r"defined, so it falls short of the inequality count of "
+            r"Table~\ref{tab:bbl_cost_identified} by the rows whose deviation leaves the firm's "
+            r"discounted deposits unchanged ($\Delta\psi_2=0$): " + recon + r". "
+            + (r"Dead firm-quarters are kept, as in the solve. " if kept else ""))
 
 
 def build_ridge(ridge, disc=""):
@@ -1090,7 +1574,6 @@ def build_ridge(ridge, disc=""):
             _f(s["ratio_mean"], 5), _num(s["cv"]), _small_cell(s["one_minus_r2"]),
         ]) + r" \\")
     Es = sorted(ridge)
-    recon = "; ".join(rf"{rc.est_ref(E)} {_n_recon(ridge[E])}" for E in Es)
     top10 = " and ".join(rf"{ridge[E]['cv_top10_ss_pct']:.1f}\% under {rc.est_ref(E)}"
                          for E in Es if np.isfinite(ridge[E].get("cv_top10_ss_pct", np.nan)))
     # #Delta is the number of SIGNED deviations. bbl_fwd_sim.jl deviation_shifts (grid scheme)
@@ -1110,12 +1593,8 @@ def build_ridge(ridge, disc=""):
     foot = (
         r"\textit{Notes:} Collinearity of the two $\psi$ columns that carry $\omega$ and $\zeta$ "
         r"in the \emph{differenced} design $g=\Delta\psi_1-\omega\Delta\psi_2-\gamma'\Delta\psi_3"
-        r"-(1+\zeta)\Delta\psi_4$ of \eqref{eq:16}, pooling firm types and launch quarters. A row "
-        r"is one firm~$\times$~launch-quarter~$\times$~deviation inequality; $n$ counts only the "
-        r"rows with $\Delta\psi_2\neq0$, on which $\Delta\psi_4/\Delta\psi_2$ is defined, so it "
-        r"falls short of the inequality count of Table~\ref{tab:bbl_cost_identified} by the rows "
-        r"whose deviation leaves the firm's discounted deposits unchanged ($\Delta\psi_2=0$): "
-        + recon + r". " + dev_clause +
+        r"-(1+\zeta)\Delta\psi_4$ of \eqref{eq:16}, pooling firm types and launch quarters. "
+        + _ridge_rows_note(ridge) + dev_clause +
         r"\emph{Corr} and \emph{Cond.} are the correlation and the Belsley--Kuh--Welsch "
         r"condition index of $[\Delta\psi_2\;\Delta\psi_4]$ with the columns scaled to unit "
         r"length. The $\Delta\psi_4/\Delta\psi_2$ columns summarize that ratio over the $n$ rows: "
@@ -1175,7 +1654,7 @@ def _per_start(blk: dict) -> dict:
     return inner if isinstance(inner, dict) else bs
 
 
-def _solve_at(rec: dict, q: str | None) -> tuple:
+def _solve_at(rec: dict, q: str | None, dead=()) -> tuple:
     r"""-> (frac_bind, c_bar) for one routine at one launch quarter, pooled across firm types.
 
     q=None takes the block's own pooled figures. A per-quarter figure exists only when the solve
@@ -1186,14 +1665,24 @@ def _solve_at(rec: dict, q: str | None) -> tuple:
     Pooled across B and D by the inequality count, the same weight the criterion itself gives
     each block, so the pooled row equals what a single-block solve of the union would report if
     the two types shared a theta.
+
+    `dead` names the firm types every firm-quarter of which is dead in quarter q (measured on the
+    psi). Such a quarter has no fit for that type -- the solve that drops dead firm-quarters has no
+    rows to refit, and one that kept them refitted rounding noise -- so both cells are dashed
+    rather than reported for the other type alone under a "pooled" heading. A per-quarter record
+    the default pass marked all_dead (_overlay_null_fq) counts the same way.
     """
     fb_num = cb_num = w_tot = 0.0
     seen = False
     for key, _lbl in BLOCKS:
         blk = (rec or {}).get(key)
+        if q is not None and key in (dead or ()):
+            return None, None
         if not blk:
             continue
         src = blk if q is None else _per_start(blk).get(q)
+        if q is not None and (src or {}).get("all_dead"):
+            return None, None
         if not src:
             continue
         fb, cb = src.get("frac_bind"), src.get("c_bar")
@@ -1209,7 +1698,28 @@ def _solve_at(rec: dict, q: str | None) -> tuple:
     return fb_num / w_tot, cb_num / w_tot
 
 
-def build_ridge_by_start(by_start: dict, cost: dict, disc=""):
+def _dead_cells(dead_q: dict, Es: list, md: bool = False) -> str:
+    """'2016Q1 (D), in both panels': the launch quarters in which every firm-quarter of one type is
+    dead, i.e. the rows of tab_bbl_ridge_by_start whose solve columns are dashed for that reason."""
+    cells = {}
+    for E in Es:
+        for q, types in sorted(((dead_q or {}).get(E) or {}).items()):
+            for k in types:
+                cells.setdefault((q, k), []).append(E)
+    parts = []
+    for (q, k), where in sorted(cells.items()):
+        if len(Es) > 1 and len(where) == len(Es):
+            loc = ", in both panels" if len(Es) == 2 else ", in every panel"
+        elif len(Es) > 1:
+            loc = ", " + _join([(f"E{E}" if md else rf"Panel~{chr(65 + Es.index(E))}")
+                                for E in where])
+        else:
+            loc = ""
+        parts.append(f"{q} ({k}){loc}")
+    return "; ".join(parts)
+
+
+def build_ridge_by_start(by_start: dict, cost: dict, disc="", dead_q=None):
     r"""The ridge measured one LAUNCH QUARTER at a time, one panel per routine.
 
     Separate from tab:bbl_ridge_diagnostic rather than added to it as extra rows: that table is
@@ -1218,6 +1728,9 @@ def build_ridge_by_start(by_start: dict, cost: dict, disc=""):
     MOVE across quarters -- which needs the quarters down the rows and the routines split into
     panels. The column is headed by the statistic, not by \bar r^f: that symbol is the per-type
     rate c-bar is evaluated at, and a quarter's median over both types is a different number.
+
+    `dead_q` is {routine: {quarter: [firm types all of whose firm-quarters are dead there]}},
+    measured on the psi; those rows have their two solve columns dashed (_solve_at).
     """
     col_fmt = (r">{\raggedright\arraybackslash}p{1.7cm} "
                r"*{6}{>{\centering\arraybackslash}X}")
@@ -1236,7 +1749,8 @@ def build_ridge_by_start(by_start: dict, cost: dict, disc=""):
         blocks = by_start[E]
         for q in [k for k in blocks if k != "pooled"] + ["pooled"]:
             s = blocks[q]
-            fb, cb = _solve_at(cost.get(E) or {}, None if q == "pooled" else q)
+            fb, cb = _solve_at(cost.get(E) or {}, None if q == "pooled" else q,
+                               ((dead_q or {}).get(E) or {}).get(q, ()))
             lbl = r"\textit{Pooled}" if q == "pooled" else q
             if q == "pooled":
                 body.append(r"\addlinespace[0.3ex]")
@@ -1245,12 +1759,17 @@ def build_ridge_by_start(by_start: dict, cost: dict, disc=""):
                 f"${s['corr']:.6f}$", _cond_cell(s["cond"]),
                 _f(fb, 3), _f(cb, 4),
             ]) + r" \\")
+    modes = {_null_fq_mode(cost.get(E) or {}) for E in Es}
+    dropped = bool(modes & {"solve_drop", "table_mask"})
+    cells = _dead_cells(dead_q, Es)
     foot = (
         r"\textit{Notes:} The differenced design of \eqref{eq:16} measured separately at each "
         r"forward-curve launch quarter, pooling firm types. $n$ counts the quarter's "
-        r"firm~$\times$~deviation rows with $\Delta\psi_2\neq0$, as in "
-        r"Table~\ref{tab:bbl_ridge_diagnostic}; the quarters sum to the \emph{Pooled} row, which "
-        r"is that table's $n$. \emph{Median} is the median of the row ratio "
+        r"firm~$\times$~launch-quarter~$\times$~deviation rows with $\Delta\psi_2\neq0$"
+        + (r" outside dead firm-quarters (defined in Table~\ref{tab:bbl_cost_identified})"
+           if dropped else "")
+        + r", as in Table~\ref{tab:bbl_ridge_diagnostic}; the quarters sum to the \emph{Pooled} "
+        r"row, which is that table's $n$. \emph{Median} is the median of the row ratio "
         r"$\Delta\psi_4/\Delta\psi_2=\sum_t\beta^t r^f_t\Delta\mathrm{Dep}_t/"
         r"\sum_t\beta^t\Delta\mathrm{Dep}_t$, the forward rate at which a deviation's change in "
         r"deposits is priced. The \emph{Pooled} row takes it over every quarter and both firm "
@@ -1265,34 +1784,50 @@ def build_ridge_by_start(by_start: dict, cost: dict, disc=""):
         r"from the solve and are "
         r"pooled across firm types by the inequality count. In a quarter's row they come from a "
         r"refit on that quarter alone, with $\bar c$ evaluated at the quarter's own median ratio "
-        r"for each firm type, and are dashed where undefined (no separate fit, or a firm type with "
-        r"no row with $\Delta\psi_2\neq0$ in that quarter); in the \emph{Pooled} row they are the "
+        r"for each firm type: one forward curve prices every row of a quarter, so the refit pins "
+        r"$\bar c$ but not $\omega$ and $\zeta$ apart, and how that $\bar c$ moves with the median "
+        r"down a panel is the cross-quarter variation the full-sample fit separates them by. "
+        r"They are dashed where undefined (no separate fit, or a firm type "
+        + (r"all of whose firm-quarters in that quarter are dead: " + cells if cells else
+           r"with no row with $\Delta\psi_2\neq0$ in that quarter")
+        + r"); in the \emph{Pooled} row they are the "
         r"full-sample fit, so its $\bar c$ is the $\hat{\bar c}^\kappa$ of "
         r"Table~\ref{tab:bbl_cbar} averaged over the two firm types."
+        + (r" For this run the per-quarter refits kept the dead firm-quarters and did not store "
+           r"their $\boldsymbol{\gamma}$, so their violation share cannot be restated without "
+           r"those rows and is dashed; their $\bar c$ is re-evaluated at the quarter's median "
+           r"ratio outside dead firm-quarters." if "table_mask" in modes else "")
     )
     return _wrap(body, col_fmt, r"$\psi_2/\psi_4$ Ridge by Forward-Curve Launch Quarter",
                  "tab:bbl_ridge_by_start", header, _with(foot, disc), ncol)
 
 
-def md_ridge_by_start(by_start: dict, cost: dict, disc=""):
+def md_ridge_by_start(by_start: dict, cost: dict, disc="", dead_q=None):
     L = []
-    for E in [E for E in ROUTINE_ORDER if E in by_start and by_start[E]]:
+    Es = [E for E in ROUTINE_ORDER if E in by_start and by_start[E]]
+    for E in Es:
         blocks = by_start[E]
         L += [f"**E{E}**", "",
               "| Start | n | Median dpsi_4/dpsi_2 | Corr | Cond. | Frac. viol. | c-bar |",
               "|---|---:|---:|---:|---:|---:|---:|"]
         for q in [k for k in blocks if k != "pooled"] + ["pooled"]:
             s = blocks[q]
-            fb, cb = _solve_at(cost.get(E) or {}, None if q == "pooled" else q)
+            fb, cb = _solve_at(cost.get(E) or {}, None if q == "pooled" else q,
+                               ((dead_q or {}).get(E) or {}).get(q, ()))
             L.append(f"| {'*pooled*' if q == 'pooled' else q} | {s['n']:,} | "
                      f"{s['ratio_median']:.5f} | "
                      f"{s['corr']:.6f} | {_md_cond(s['cond'])} | "
                      f"{'--' if fb is None or not np.isfinite(fb) else f'{fb:.3f}'} | "
                      f"{'--' if cb is None or not np.isfinite(cb) else f'{cb:.4f}'} |")
         L.append("")
+    modes = {_null_fq_mode(cost.get(E) or {}) for E in Es}
+    dropped = bool(modes & {"solve_drop", "table_mask"})
+    cells = _dead_cells(dead_q, Es, md=True)
     L += ["The differenced design measured per forward-curve launch quarter, firm types pooled. "
-          "*n* counts the quarter's firm × deviation rows with dpsi_2 != 0 (as in the ridge "
-          "table), so the quarters sum to the pooled row. *Median dpsi_4/dpsi_2* is the median "
+          "*n* counts the quarter's firm × launch-quarter × deviation rows with dpsi_2 != 0"
+          + (" outside dead firm-quarters (defined with the parameter table)" if dropped else "")
+          + ", as in the ridge "
+          "table, so the quarters sum to the pooled row. *Median dpsi_4/dpsi_2* is the median "
           "row ratio, the forward rate a deviation's change in deposits is priced at; the pooled "
           "row takes it over all quarters and both firm types, while rbar_f^kappa (c-bar table) is "
           "the same median within one firm type. Movement in the median down a panel is the "
@@ -1300,9 +1835,16 @@ def md_ridge_by_start(by_start: dict, cost: dict, disc=""):
           "inequalities violated at the fit, as in the last row of the c-bar table) and *c-bar* "
           "come from the "
           "solve, pooled across firm types by the inequality count: per quarter from a refit on "
-          "that quarter alone (c-bar at the quarter's own median ratio per type; dashed where "
-          "undefined), in the pooled row from the full-sample fit (the c-bar table's c-bar^kappa "
-          "averaged over the two types)." + (" " + disc if disc else "")]
+          "that quarter alone (c-bar at the quarter's own median ratio per type, which one "
+          "forward curve pins although it does not split omega from zeta; dashed where undefined"
+          + (", including a firm type all of whose firm-quarters in the quarter are dead: "
+             + cells if cells else "")
+          + "), in the pooled row from the full-sample fit (the c-bar table's c-bar^kappa "
+          "averaged over the two types)."
+          + (" For this run the per-quarter refits kept the dead firm-quarters and did not store "
+             "their gamma, so their violation share is dashed; their c-bar is re-evaluated at the "
+             "quarter's median outside dead firm-quarters." if "table_mask" in modes else "")
+          + (" " + disc if disc else "")]
     return "\n".join(L)
 
 
@@ -1353,10 +1895,11 @@ def _unidentified_note(rows):
         worst = max((r.get("cond_pooled") or 0.0) for r in rows)
         return (rf"every block clears the threshold of {thr:.0f} on the pooled "
                 rf"Belsley--Kuh--Welsch condition index of $[\Delta\psi_2\;\Delta\psi_4]$ "
-                rf"(largest {_fmt_cond(worst)})")
+                rf"(row \emph{{Condition index}}; largest {_fmt_cond(worst)})")
     lst = "; ".join(rf"{rc.est_ref(E)}, {k}: {_fmt_cond(c)}" for E, k, c in bad)
     return (rf"identification is assessed per block by the pooled Belsley--Kuh--Welsch "
-            rf"condition index of $[\Delta\psi_2\;\Delta\psi_4]$ against a threshold of "
+            rf"condition index of $[\Delta\psi_2\;\Delta\psi_4]$ (row \emph{{Condition index}}, "
+            rf"the columns scaled to unit length) against a threshold of "
             rf"{thr:.0f}; the block(s) marked $\ddagger$ exceed it ({lst}), so there "
             rf"$\omega^\kappa$ and $\zeta^\kappa$ are not separately identified and only "
             rf"$\bar c^\kappa$ is interpretable")
@@ -1404,6 +1947,64 @@ def _n_pairs(rows):
     return out
 
 
+def _dead_by_E(rows) -> dict:
+    """{routine: {kappa: (n_null_fq, n_null_rows)}} for the routines whose dead firm-quarters are
+    out of every figure (the solve dropped them, or the default pass restated it without them)."""
+    out = {}
+    for r in rows:
+        if r.get("null_mode") in ("solve_drop", "table_mask") and r.get("n_null_fq") is not None:
+            out.setdefault(r["E"], {})[r["block"]] = (int(r["n_null_fq"]),
+                                                      int(r.get("n_null_rows") or 0))
+    return out
+
+
+def _dead_list(rows, md: bool = False, with_rows: bool = True) -> str:
+    """'(III): 412 B and 189 D firm-quarters (20,600 and 9,450 rows); (IV): ...'."""
+    by = _dead_by_E(rows)
+    parts = []
+    for E in [E for E in ROUTINE_ORDER if E in by]:
+        d = by[E]
+        ks = [k for k, _ in BLOCKS if k in d]
+        s = ((f"E{E}" if md else rc.est_ref(E)) + ": "
+             + _join([f"{_num(d[k][0])} {k}" for k in ks]) + " firm-quarters")
+        if with_rows:
+            s += ", " + _join([_num(d[k][1]) for k in ks]) + " rows"
+        parts.append(s)
+    return "; ".join(parts)
+
+
+def _dead_note(rows, md: bool = False) -> str:
+    """The Notes clause of the parameter table that defines a dead firm-quarter and counts them;
+    the other tables point to it (_dead_ref). Empty when no routine's rows were filtered."""
+    by = _dead_by_E(rows)
+    if not by:
+        kept = any(r.get("null_mode") == "solve_keep" for r in rows)
+        return ("Dead firm-quarters are kept, as in the solve. " if kept else "")
+    mask = any(r.get("null_mode") == "table_mask" for r in rows if r["E"] in by)
+    lead = ("Dead firm-quarters are left out of every count, share and rate" if mask else
+            "The solve leaves out dead firm-quarters")
+    if md:
+        return (lead + " (" + _dead_list(rows, md=True) + "): " + DEAD_FQ_DEF_MD + ". "
+                + ("This run's solve predates that rule and kept them; they are found here in its "
+                   "psi, and the estimates are the solve's, on which those rows carry no weight. "
+                   if mask else ""))
+    return (lead + " (" + _dead_list(rows) + r"): " + DEAD_FQ_DEF + r". "
+            + (r"This run's solve predates that rule and kept them; they are found here in its "
+               r"$\psi$, and the estimates are the solve's, on which those rows carry no weight. "
+               if mask else ""))
+
+
+def _dead_ref(rows, md: bool = False) -> str:
+    """Short form for the tables after the parameter table: the count, and where the definition is."""
+    by = _dead_by_E(rows)
+    if not by:
+        return ""
+    return (("Dead firm-quarters (defined with the parameter table) are left out: "
+             + _dead_list(rows, md=True, with_rows=False) + ". ") if md else
+            (r"Dead firm-quarters (Table~\ref{tab:bbl_cost_identified}) are left out: "
+             + _dead_list(rows, with_rows=False) + r". "))
+
+
 def _n_ineq_note(rows):
     r"""The Notes clause that reconciles this table's $n$ with the ridge tables' $n$.
 
@@ -1411,13 +2012,21 @@ def _n_ineq_note(rows):
     one of them enters the eq:16 criterion. The ridge tables report statistics of
     dpsi4/dpsi2 and so count only the rows with dpsi2 != 0; the rest are deviations that leave the
     firm's discounted deposits unchanged (measured 2026-09-24: 24,316 of 223,200 rows under E3 and
-    23,439 of 223,400 under E4, all with dpsi2 exactly 0, none non-finite). Without this clause the
-    two tables print different n for what reads as the same sample."""
+    23,439 of 223,400 under E4, all with dpsi2 exactly 0, none non-finite -- and every one of them
+    in a dead firm-quarter, so once those are out the two counts coincide). Without this clause
+    the two tables print different n for what reads as the same sample."""
+    dead = bool(_dead_by_E(rows))
     head = (r"Inequalities $n$ counts every firm~$\times$~launch-quarter~$\times$~deviation row "
-            r"of the block, all of which enter \eqref{eq:16}; "
-            r"Tables~\ref{tab:bbl_ridge_diagnostic} and~\ref{tab:bbl_ridge_by_start} count only "
-            r"the rows with $\Delta\psi_2\neq0$, on which $\Delta\psi_4/\Delta\psi_2$ is defined")
+            r"of the block" + (r" outside dead firm-quarters" if dead else "")
+            + r", all of which enter \eqref{eq:16}")
     pairs = _n_pairs(rows)
+    if pairs and all(rb == nb and rd == nd for _E, nb, nd, rb, rd in pairs):
+        return (head + r"; every one has $\Delta\psi_2\neq0$, so "
+                r"Tables~\ref{tab:bbl_ridge_diagnostic} and~\ref{tab:bbl_ridge_by_start} count "
+                r"the same rows. ")
+    head += (r"; Tables~\ref{tab:bbl_ridge_diagnostic} and~\ref{tab:bbl_ridge_by_start} count "
+             r"only the rows with $\Delta\psi_2\neq0$, on which $\Delta\psi_4/\Delta\psi_2$ is "
+             r"defined")
     if not pairs:
         return head + r". "
     lst = "; ".join(rf"{rc.est_ref(E)} {_num(rb)} $+$ {_num(rd)} $=$ {_num(rb + rd)} of "
@@ -1428,15 +2037,62 @@ def _n_ineq_note(rows):
 
 def _md_n_ineq(rows):
     pairs = _n_pairs(rows)
-    s = ("Inequalities n counts every firm × launch-quarter × deviation row of the block, all of "
-         "which enter eq:16; the ridge tables count only the rows with dpsi_2 != 0, on which "
-         "dpsi_4/dpsi_2 is defined")
+    dead = bool(_dead_by_E(rows))
+    s = ("Inequalities n counts every firm × launch-quarter × deviation row of the block"
+         + (" outside dead firm-quarters" if dead else "") + ", all of which enter eq:16")
+    if pairs and all(rb == nb and rd == nd for _E, nb, nd, rb, rd in pairs):
+        return s + "; every one has dpsi_2 != 0, so the ridge tables count the same rows."
+    s += ("; the ridge tables count only the rows with dpsi_2 != 0, on which dpsi_4/dpsi_2 is "
+          "defined")
     if not pairs:
         return s + "."
     return (s + " (B + D: " + "; ".join(f"E{E} {rb:,} + {rd:,} = {rb + rd:,} of {nb + nd:,}"
                                         for E, nb, nd, rb, rd in pairs)
             + "). The rows left out are deviations that leave the firm's discounted deposits "
               "unchanged (dpsi_2 = 0).")
+
+
+# The violation share reads as "no information about fit" only when it sits at its mechanical
+# value: a symmetric +/- grid around a policy with no interior turning point fails exactly one of
+# each pair for ANY theta. The band is bbl_solve.py's own warning band (0.45 <= frac_bind <= 0.55).
+# Measured on the 2026-09-22 run: with the dead firm-quarters counted the B shares were 0.401 and
+# 0.410, outside it, because their rows are g = 0 up to rounding and so never "fail"; without
+# them all four shares are 0.471-0.484.
+MECH_BAND = 0.05
+_MECH_TEX = (r"every share lies within $0.05$ of $1/2$, the mechanical value of a symmetric "
+             r"$\pm$ grid around a policy with no interior turning point (one deviation of each "
+             r"pair fails for any $\theta$), so the row carries no information about fit and "
+             r"these magnitudes are diagnostics rather than estimates")
+
+
+def _mechanical(rows) -> bool:
+    fbs = [float(r["frac_bind"]) for r in rows if r.get("frac_bind") is not None]
+    return bool(fbs) and all(abs(f - 0.5) <= MECH_BAND for f in fbs)
+
+
+def _ci_rbar_note(rows, md: bool = False) -> str:
+    """For a cost_params the default pass restated without the dead firm-quarters: the interval is
+    the solve's, evaluated at the solve's rbar_f, and says so, with that rate and how far the
+    point estimate moved. Empty for every other run."""
+    rs = [r for r in rows if r.get("ci_rbar") is not None]
+    if not rs:
+        return ""
+    shift = max(abs(r["cbar"] - (r["omega"] + float(r["ci_rbar"]) * r["zeta"])) for r in rs)
+    Es = [E for E in ROUTINE_ORDER if any(r["E"] == E for r in rs)]
+    lst = "; ".join(
+        (f"E{E} " if md else rf"{rc.est_ref(E)} ")
+        + ", ".join((f"{r['block']} {float(r['ci_rbar']):.5f}" if md else
+                     rf"{r['block']} ${float(r['ci_rbar']):.5f}$")
+                    for r in rs if r["E"] == E) for E in Es)
+    if md:
+        return ("For this run the interval is the solve's, evaluated at rbar_f over every row, "
+                f"dead firm-quarters included ({lst}); its subsampling draws are not stored, so it "
+                "is not re-evaluated at the rate shown, which moves c-bar by at most "
+                f"{shift:.4f}. ")
+    return (r"For this run the interval is the solve's, evaluated at $\bar r^{f,\kappa}$ over "
+            r"every row, dead firm-quarters included (" + lst + r"); its subsampling draws are "
+            r"not stored, so it is not re-evaluated at the rate shown, which moves "
+            rf"$\hat{{\bar c}}^\kappa$ by at most ${shift:.4f}$. ")
 
 
 def build_cbar_panels(rows, identified=False, disc=""):
@@ -1490,19 +2146,24 @@ def build_cbar_panels(rows, identified=False, disc=""):
         body.append(FRAC_BIND_LABEL + " & "
                     + cells(lambda r: f"${r['frac_bind']:.3f}$"
                             if r.get("frac_bind") is not None else "---") + r" \\")
+    dead = bool(_dead_by_E(rows))
     lead = (r"\textit{Notes:} $\bar c^\kappa=\omega^\kappa+\bar r^{f,\kappa}\zeta^\kappa$ is the "
             r"marginal cost of deposits at the forward risk-free rate $\bar r^{f,\kappa}$ in the "
-            r"first row of each panel, where " + RBAR_DEF + r". ")
+            r"first row of each panel, where " + _rbar_def(dead=dead) + r". ")
     common = (
         r"Quarterly units, and excluding the $\boldsymbol{\gamma}'\boldsymbol{Z}$ shifters. "
         r"The standard error is a firm-block bootstrap standard deviation and the interval is "
         r"the subsampling one from Section~\ref{sec:empirical:cost}, which is the appropriate "
         r"route for a criterion that is kinked and potentially set-identified. "
-        r"The last row is the share of the firm~$\times$~launch-quarter~$\times$~deviation "
+        + _ci_rbar_note(rows)
+        + r"The last row is the share of the firm~$\times$~launch-quarter~$\times$~deviation "
         r"revealed-preference inequalities $g=V(\hat\sigma)-V(\tilde\sigma)\ge 0$ that "
         r"\emph{fail} at "
-        r"$\hat\theta$, see Section~\ref{sec:empirical:cost}."
-    )
+        r"$\hat\theta$, see Section~\ref{sec:empirical:cost}"
+        + (r"; " + _MECH_TEX if (not identified or _mechanical(rows)) else "") + r". "
+        + _dead_ref(rows)
+    ).rstrip()
+
     # The caption calls c-bar identified, and it is, in every block and in both regimes; what the
     # regime changes is whether it is ALSO a restatement of a separately identified (omega, zeta)
     # or the only interpretable cost object. The notes say which, block by block.
@@ -1559,7 +2220,7 @@ def md_cbar_panels(rows, identified=False, disc=""):
     fbs = [r["frac_bind"] for r in rows if r.get("frac_bind") is not None]
     lead = ("c-bar^kappa = omega^kappa + rbar_f^kappa * zeta^kappa, the marginal cost of deposits "
             "at the type's forward rate rbar_f^kappa (first row of each panel), where "
-            + RBAR_DEF_MD + ". ")
+            + _rbar_def_md(dead=bool(_dead_by_E(rows))) + ". ")
     if identified and _unidentified(rows):
         lead += ("c-bar is identified in every block. Where omega and zeta are separately "
                  "identified as well (launch-quarter variation in dpsi_4/dpsi_2, see the by-start "
@@ -1576,7 +2237,8 @@ def md_cbar_panels(rows, identified=False, disc=""):
           lead +
           "SE is a "
           "firm-block bootstrap SD (200 reps); the CI is the subsampling sqrt(n)-rate quantile "
-          "interval (b = n^(2/3) firms, 200 reps). The last row is the share of the "
+          "interval (b = n^(2/3) firms, 200 reps). " + _ci_rbar_note(rows, md=True)
+          + "The last row is the share of the "
           "firm × launch-quarter × deviation revealed-preference inequalities that FAIL at "
           "theta-hat — "
           "deviations the model says would have raised the firm's value, i.e. price moves the "
@@ -1584,10 +2246,12 @@ def md_cbar_panels(rows, identified=False, disc=""):
           f"here it is [{min(fbs):.3f}, {max(fbs):.3f}], and 1/2 is the mechanical value of a "
           "symmetric ± grid around a policy with no interior turning point (exactly one of each "
           "± pair fails for ANY theta)."
-          # Only where the split is unidentified: with separately identified omega/zeta the
-          # violation share has moved off 1/2 and the magnitudes are the estimates.
-          + ("" if identified else " It carries no information about fit, so these magnitudes "
-             "are diagnostics rather than estimates.")
+          # Wherever the share sits at its mechanical value -- always where the split is
+          # unidentified, and in the identified regime when every share is within MECH_BAND of
+          # 1/2 (the 2026-09-22 run once its dead firm-quarters are out).
+          + (" It carries no information about fit, so these magnitudes are diagnostics rather "
+             "than estimates." if (not identified or _mechanical(rows)) else "")
+          + (" " + _dead_ref(rows, md=True).rstrip() if _dead_by_E(rows) else "")
           + (" " + disc if disc else "")]
     return "\n".join(L)
 
@@ -1646,10 +2310,11 @@ def build_cbar_design(rows_single, rows_multi, n_starts=None, disc=""):
     starts = f"{n_starts} launch quarters" if n_starts else "several launch quarters"
     # A multi-start block that failed the gate is not separated; say so rather than claim it.
     ms_bad = _unidentified(rows_multi)
+    dead = bool(_dead_by_E(rows_multi))
     foot = (
         r"\textit{Notes:} The deposit marginal cost "
         r"$\bar c^\kappa=\omega^\kappa+\bar r^{f,\kappa}\zeta^\kappa$ under the two "
-        r"forward-simulation designs, where " + _rbar_def(SINGLE_ROWS)
+        r"forward-simulation designs, where " + _rbar_def(SINGLE_ROWS, dead=dead)
         + r"; it is computed identically in "
         r"both designs (Table~\ref{tab:bbl_cbar}). \emph{Single curve}: every simulated path is "
         r"priced off one Focus forward curve, so $\Delta\psi_2$ and $\Delta\psi_4$ are "
@@ -1664,10 +2329,17 @@ def build_cbar_design(rows_single, rows_multi, n_starts=None, disc=""):
         r"estimate. "
         r"Quarterly units, excluding the $\boldsymbol{\gamma}'\boldsymbol{Z}$ "
         r"shifters. The standard error is a firm-block bootstrap standard deviation and the "
-        r"interval is the subsampling one from Section~\ref{sec:empirical:cost}. The last row is "
+        r"interval is the subsampling one from Section~\ref{sec:empirical:cost}. "
+        + _ci_rbar_note(rows_multi).replace(r"For this run", r"For the multi-start run")
+        + r"The last row is "
         r"the share of the firm~$\times$~launch-quarter~$\times$~deviation revealed-preference "
-        r"inequalities that fail at $\hat\theta$; $1/2$ is its mechanical value."
-    )
+        r"inequalities that fail at $\hat\theta$; $1/2$ is its mechanical value"
+        + (r", and every share in the table lies within $0.05$ of it, so the row carries no "
+           r"information about fit" if _mechanical(list(rows_single) + list(rows_multi)) else "")
+        + r". "
+        + (_dead_ref(rows_multi).replace(r"Dead firm-quarters", r"In the multi-start design, "
+                                         r"dead firm-quarters", 1) if dead else "")
+    ).rstrip()
     return _wrap(body, col_fmt,
                  r"BBL Marginal Cost $\bar c^\kappa$: Single-Curve and Multi-Start Designs",
                  "tab:bbl_cbar_design", header, _with(foot, disc), ncol)
@@ -1698,14 +2370,24 @@ def md_cbar_design(rows_single, rows_multi, disc=""):
         row("violated share", lambda r: f"{r['frac_bind']:.3f}"
             if r.get("frac_bind") is not None else "--")
     ms_bad = _unidentified(rows_multi)
+    dead = bool(_dead_by_E(rows_multi))
     L += ["", "c-bar^kappa = omega^kappa + rbar_f^kappa * zeta^kappa, where "
-              + _rbar_def_md(SINGLE_ROWS_MD)
+              + _rbar_def_md(SINGLE_ROWS_MD, dead=dead)
               + "; computed identically in both designs. Single curve: one Focus forward curve "
               "for every path (c-bar the only identified cost object). Multi-start: one curve per "
               "launch quarter (omega and zeta separately identified"
               + (", except in the ‡ block of the parameter table" if ms_bad else "")
-              + "). Each design evaluates c-bar at its own rbar_f^kappa."
-              + (" " + disc if disc else "")]
+              + "). Each design evaluates c-bar at its own rbar_f^kappa. "
+              + _ci_rbar_note(rows_multi, md=True).replace("For this run", "For the multi-start run")
+              + "The violated share's mechanical value is 1/2"
+              + ("; every share in the table lies within 0.05 of it, so the row carries no "
+                 "information about fit" if _mechanical(list(rows_single) + list(rows_multi))
+                 else "") + ". "
+              + (_dead_ref(rows_multi, md=True).replace("Dead firm-quarters", "In the multi-start "
+                                                        "design, dead firm-quarters", 1)
+                 if dead else "")
+              + (disc if disc else "")]
+    L[-1] = L[-1].rstrip()
     return "\n".join(L)
 
 
@@ -1794,22 +2476,17 @@ def build_identified_panels(rows, identified=False, disc=""):
         return [label + " & " + " & ".join(cells) + r" \\"]
 
     body = []
-    if identified:
-        # The interval, not the star, is the claim in this branch — said once, at the top, so a
-        # reader who scans only the numbers still meets it. The full statement stays in the Notes.
-        body.append(
-            rf"\multicolumn{{{ncol}}}{{@{{}}p{{\dimexpr\textwidth-2\tabcolsep\relax}}@{{}}}}{{\scriptsize\itshape Intervals invert the criterion "
-            rf"at a subsampled critical value; $\dagger$ marks a profile-window endpoint"
-            + (r"; $\ddagger$ a block whose $\omega/\zeta$ split is not separately identified"
-               if _unidentified(rows) else "")
-            + r" (see Notes).} \\")
-    else:
+    has_cond = any(r.get("cond_pooled") is not None for r in rows)
+    # In the identified branch the symbols the cells carry (the dagger on a profile-window
+    # endpoint, the double dagger on a block whose split failed the gate) are defined in the
+    # Notes, like every other symbol of these tables, and the body opens on Panel A.
+    if not identified:
         # The kinked-criterion caveat, in the table itself and not only mid-footnote: the reader
         # meets it before scanning any stars. The full statement stays in the Notes.
         body.append(
             rf"\multicolumn{{{ncol}}}{{@{{}}p{{\dimexpr\textwidth-2\tabcolsep\relax}}@{{}}}}{{\scriptsize\itshape Significance stars are shown by "
             rf"convention only --- the kinked criterion admits no normal reference (see Notes).}} \\")
-    body.append(r"\addlinespace[0.4ex]")
+        body.append(r"\addlinespace[0.4ex]")
     for pi, (kappa, _lbl) in enumerate(BLOCKS):
         if not any((E, kappa) in by for E in Es):
             continue
@@ -1845,26 +2522,36 @@ def build_identified_panels(rows, identified=False, disc=""):
         body.append(r"\midrule")
         body += line(r"Firms", lambda r: r["n_firms"], fmt="{:.0f}")
         body += line(r"Inequalities $n$", lambda r: r["n"], fmt="{:,.0f}")
+        # The statistic the omega/zeta split is judged on, per block: the pooled condition index
+        # of [dpsi2 dpsi4] the solve's gate reads. Kept here, beside the double dagger it decides,
+        # because the ridge tables pool the two firm types and so never show it.
+        if has_cond:
+            body += line(r"Condition index", lambda r: r.get("cond_pooled"), fmt="{:.1f}",
+                         flag=identified)
 
     common = (
         r"\textit{Notes:} Deposit-servicing marginal cost parameters of \eqref{eq:8} from the "
         r"BBL moment-inequality problem \eqref{eq:16}, "
         r"estimated separately by firm type; columns are the estimation routines "
-        r"of Section~\ref{sec:empirical:sleep}. Quarterly units; the cost-shifter ratios are in "
-        r"percentage points and the Basel index a fraction, both lagged one quarter. "
-        + _n_ineq_note(rows)
+        r"of Section~\ref{sec:empirical:sleep}. Quarterly units; in $\psi_3$ the personnel, "
+        r"administrative and tax cost ratios are fractions of total assets and the Basel index "
+        r"is in percentage points, all lagged one quarter, and each coefficient of "
+        r"$\hat{\boldsymbol{\gamma}}$ is per unit of its shifter. "
+        + _dead_note(rows) + _n_ineq_note(rows)
     )
     if identified:
         foot = (
             common +
-            r"$\omega^\kappa$ and $\zeta^\kappa$ are separately identified here: each market is "
-            r"simulated from the forward curve of its own launch quarter, so "
+            r"$\omega^\kappa$ and $\zeta^\kappa$ are separately identified here: each launch "
+            r"quarter is simulated from the Focus forward curve published at that quarter, so "
             r"$\Delta\psi_4/\Delta\psi_2$ varies across quarters and $\Delta\psi_2$ and "
-            r"$\Delta\psi_4$ are no longer collinear "
+            r"$\Delta\psi_4$ fall below the collinearity threshold "
             r"(Table~\ref{tab:bbl_ridge_by_start}); " + _unidentified_note(rows) + r". "
             r"The bracketed interval is the "
             r"\eqref{eq:16} criterion inverted at a subsampled critical value, which is the "
-            r"appropriate route for a kinked and potentially set-identified criterion; "
+            r"appropriate route for a kinked and potentially set-identified criterion; the "
+            r"inversion profiled $\omega^\kappa$ and $\zeta^\kappa$ only, so "
+            r"$\hat{\boldsymbol{\gamma}}^\kappa$ carries no interval. "
             r"$\dagger$ marks an endpoint at the edge of the profile window, i.e. a limit of the "
             r"search rather than a boundary of the identified set, and \textit{empty} means the "
             r"criterion was never within the critical value at the reported level. Parenthesized "
@@ -1876,6 +2563,9 @@ def build_identified_panels(rows, identified=False, disc=""):
     else:
         foot = (
             common +
+            (r"\emph{Condition index} is the pooled Belsley--Kuh--Welsch index of "
+             r"$[\Delta\psi_2\;\Delta\psi_4]$ in the block, the columns scaled to unit length. "
+             if has_cond else "") +
             r"Standard errors: firm-block bootstrap SDs, descriptive only, see "
             r"Section~\ref{sec:empirical:cost} and diagnostics in "
             r"Table~\ref{tab:bbl_ridge_diagnostic}. "
@@ -1939,14 +2629,26 @@ def md_identified_panels(rows, identified=False, disc=""):
                     f"({(r['gamma_se'] or {}).get(k, float('nan')):.3f})"))(key))
         row("*Firms*", lambda r: f"{r['n_firms']}")
         row("*Inequalities n*", lambda r: f"{r['n']:,}")
+        if any(r.get("cond_pooled") is not None for r in rows):
+            row("*Condition index*", lambda r: (
+                "--" if r.get("cond_pooled") is None else
+                f"{r['cond_pooled']:.1f}{'‡' if identified and r.get('identified') is False else ''}"))
+    units = ("Quarterly units; in psi_3 the personnel, administrative and tax cost ratios are "
+             "fractions of total assets and the Basel index is in percentage points, all lagged "
+             "one quarter, and each gamma coefficient is per unit of its shifter. ")
     if identified:
         L += ["",
-              "Columns are estimation routines. **omega and zeta are separately identified "
-              "here**: each market is simulated from its own launch quarter's forward curve, so "
-              "dpsi_4/dpsi_2 varies across quarters and dpsi_2/dpsi_4 are no longer collinear "
-              "(see the by-start ridge table). The bracketed 95% CI inverts the eq:16 criterion "
+              "Columns are estimation routines. " + units + _dead_note(rows, md=True)
+              + "**omega and zeta are separately identified "
+              "here**: each launch quarter is simulated from the Focus forward curve published at "
+              "that quarter, so dpsi_4/dpsi_2 varies across quarters and dpsi_2 and dpsi_4 fall "
+              "below the collinearity threshold "
+              "(see the by-start ridge table); *Condition index* is the pooled Belsley-Kuh-Welsch "
+              "index of [dpsi_2 dpsi_4] in the block, judged against 30. The bracketed 95% CI "
+              "inverts the eq:16 criterion "
               "at a subsampled critical value — the appropriate route for a kinked, potentially "
-              "set-identified criterion; † marks a profile-window endpoint (a limit "
+              "set-identified criterion; the inversion profiled omega and zeta only, so gamma "
+              "carries no interval. † marks a profile-window endpoint (a limit "
               "of the search, not a set boundary) and *empty* means the criterion was never "
               "within the critical value. Parenthesized figures are firm-block bootstrap SDs, "
               "descriptive only. c-bar^kappa restates the pair at the type's forward rate "
@@ -1954,7 +2656,8 @@ def md_identified_panels(rows, identified=False, disc=""):
               + " " + _md_n_ineq(rows) + (" " + disc if disc else "")]
     else:
         L += ["",
-              "Columns are estimation routines. SEs in parentheses are firm-block bootstrap SDs "
+              "Columns are estimation routines. " + units + _dead_note(rows, md=True)
+              + "SEs in parentheses are firm-block bootstrap SDs "
               "(200 reps). **None of these parameters is separately identified** — omega, zeta and "
               "gamma slide freely along the ridge (one block returns omega>0 with zeta<0 while c-bar "
               "barely moves); the estimand is c-bar, reported separately. Stars use the normal "
@@ -1978,9 +2681,6 @@ def md_ridge(ridge, disc=""):
                  f"{s['cond']:,.0f} | {s['ratio_median']:.5f} | {s['iqr_pct']:.1f} | "
                  f"{s['ratio_mean']:.5f} | {s['cv']:,.0f} | "
                  f"{_md_small(s['one_minus_r2'])} |")
-    recon = "; ".join(f"E{E} {ridge[E]['n_all']:,} - "
-                      f"{ridge[E]['n_d2_zero'] + ridge[E]['n_nonfinite']:,} = {ridge[E]['n']:,}"
-                      for E in sorted(ridge))
     top10 = " and ".join(f"{ridge[E]['cv_top10_ss_pct']:.1f}% (E{E})" for E in sorted(ridge)
                          if np.isfinite(ridge[E].get("cv_top10_ss_pct", np.nan)))
     shocks = {ridge[E]["n_shock"] for E in ridge}
@@ -1990,10 +2690,7 @@ def md_ridge(ridge, disc=""):
            if s_dev and s_dev > 0 and s_dev % 2 == 0 else
            "*#Delta* = number of signed deviations (magnitude and direction). ")
     L += ["",
-          "A row is one firm × launch-quarter × deviation inequality, firm types and quarters "
-          "pooled. *n* counts only the rows with dpsi_2 != 0, on which dpsi_4/dpsi_2 is defined, "
-          "so it is below the inequality count of the parameter table by the rows whose deviation "
-          f"leaves discounted deposits unchanged (dpsi_2 = 0): {recon}. " + dev +
+          _ridge_rows_note(ridge, md=True) + dev +
           "*Corr* = corr(dpsi_2, dpsi_4); *Cond.* = Belsley-Kuh-Welsch (1980) condition index of "
           "[dpsi_2 dpsi_4], i.e. with the columns scaled to unit length, so it measures "
           "collinearity alone and not the columns' units; >30 is the usual threshold. "
@@ -2014,6 +2711,24 @@ def main_from_json(compare_single=False):
     cost = load_cost_only()
     if not cost:
         raise SystemExit(f"no cost_params found in {COST_DIR}")
+    # Dead firm-quarters (DEAD FIRM-QUARTERS in the module docstring). A solve that applied the
+    # rule is read as written; a multi-start cost_params that predates it is restated from the
+    # record the --from-psi pass writes, and left as the solve wrote it (said loudly) without one.
+    for E in sorted(cost):
+        mode = _null_fq_mode(cost[E])
+        if mode == "table_mask":
+            rec = _read_null_fq_record(E, cost[E])
+            if rec:
+                cost[E] = _overlay_null_fq(cost[E], rec)
+        elif mode in ("solve_drop", "solve_keep"):
+            c = _solve_dead_counts(cost[E])
+            print(f"  [dead fq] E{E}: {mode}; the solve recorded "
+                  + ", ".join(f"{k} {v.get('n_null_fq')} fq / {v.get('n_null_rows')} rows"
+                              for k, v in c.items()))
+            for kappa in ((((cost[E].get("run") or {}).get("null_fq") or {})
+                           .get("types_emptied")) or []):
+                print(f"  !!!! [dead fq] E{E}: every {kappa} firm-quarter is dead, so the solve "
+                      f"wrote no {kappa} block -- its cells are dashed !!!!")
     rb, rows = collect_json(cost)
     if not rows:
         raise SystemExit("cost_params contained no B/D blocks.")
@@ -2137,6 +2852,15 @@ def main():
     data = load_psi(zp, PSI_TAG)
     if not data:
         raise SystemExit("no routines recovered from the psi source.")
+    return render_from_psi(data, zp, allow_vintage_mismatch=a.allow_vintage_mismatch)
+
+
+def render_from_psi(data: dict, zp: pathlib.Path, allow_vintage_mismatch: bool = False):
+    """The --from-psi pass on psi already loaded ({routine: load_psi entry}); `zp` is where it came
+    from, searched for the psi_starts sidecar that records beta/T. Split from main() so the pass
+    can be run on psi held in memory."""
+    # Dead firm-quarters: which rows the solve used, and which the tables describe.
+    apply_null_fq(data)
 
     # The ridge table is computed here from the psi archive while every cost figure comes from
     # cost_params. Those must be the same design or the table is a chimera — see
@@ -2148,14 +2872,21 @@ def main():
                + "\n\nThe ridge columns would describe a different psi than the cost columns."
                  "\nFetch the psi that the solve actually consumed, or pass"
                  " --allow-vintage-mismatch to emit anyway (not reportable).")
-        if not a.allow_vintage_mismatch:
+        if not allow_vintage_mismatch:
             raise SystemExit("ERROR: " + msg)
         print("WARNING: " + msg + "\n")
+
+    # A cost_params that predates the rule is restated without the dead firm-quarters (the rows
+    # the tables describe), and the record the default pass restates it from is written.
+    restate_table_mask(data, zp.name)
 
     ridge, rows = collect(data)
 
     for E in sorted(ridge):
         s = ridge[E]
+        if s["n_dead_rows"]:
+            print(f"  E{E}: {s['n_loaded']:,} psi rows - {s['n_dead_rows']:,} in "
+                  f"{s['n_dead_fq']:,} dead firm-quarters ({s['null_mode']}) = {s['n_all']:,}")
         print(f"  E{E}: n={s['n']:,} of {s['n_all']:,} rows (dpsi2==0: {s['n_d2_zero']:,}, "
               f"non-finite: {s['n_nonfinite']:,}; solve n_rows B+D: "
               f"{s['n_ineq'] if s['n_ineq'] is None else format(s['n_ineq'], ',')}) "
@@ -2167,11 +2898,12 @@ def main():
               f"1-R2={s['one_minus_r2']:.2e}  "
               f"across-D={s['across_delta_pct']:.1f}%  starts={s['n_starts']}")
 
-    # The ridge tables are the ONLY thing this path writes. They are per routine over the pooled
-    # design, which needs the psi itself — cost_params stores its ridge fields per firm type, so
-    # the pooled columns (the ratio's median/IQR/mean/CV, the shared #Delta) cannot be recovered
-    # from JSON. The two cost tables come from cost_params via the default path and are left
-    # untouched here.
+    # The ridge tables are the only TABLES this path writes (plus, for a cost_params that predates
+    # the dead firm-quarter rule, the record restate_table_mask wrote above). They are per routine
+    # over the pooled design, which needs the psi itself — cost_params stores its ridge fields per
+    # firm type, so the pooled columns (the ratio's median/IQR/mean/CV, the shared #Delta) cannot
+    # be recovered from JSON. The two cost tables come from cost_params via the default path and
+    # are left untouched here.
     # beta and T of the psi these tables are computed from: the sidecar sits in the same archive
     # (or folder) as the shards, and is matched to the solve by its per-start rbar_f.
     prov = {E: _run_discount(E, d.get("psi_tag") or "", d["cost"], extra=[zp])
@@ -2197,8 +2929,15 @@ def main():
                   f"{n_q:,} vs pooled {blocks['pooled']['n']:,}")
         d10 = _discount_report("tab_bbl_ridge_by_start",
                                _routine_entries([E for E in ROUTINE_ORDER if E in by_start], prov))
-        tex["tab_bbl_ridge_by_start.tex"] = build_ridge_by_start(by_start, cost, disc=d10[0])
-        md["tab_bbl_ridge_by_start.md"] = md_ridge_by_start(by_start, cost, disc=d10[1])
+        dead_q = {E: (d.get("null") or {}).get("dead_q") or {} for E, d in data.items()}
+        for E, qs in sorted(dead_q.items()):
+            for q, ks in sorted(qs.items()):
+                print(f"  E{E} {q}: every {'/'.join(ks)} firm-quarter is dead -- Frac. viol. and "
+                      f"c-bar dashed in that row")
+        tex["tab_bbl_ridge_by_start.tex"] = build_ridge_by_start(by_start, cost, disc=d10[0],
+                                                                 dead_q=dead_q)
+        md["tab_bbl_ridge_by_start.md"] = md_ridge_by_start(by_start, cost, disc=d10[1],
+                                                            dead_q=dead_q)
     else:
         print("  no start_q column in psi — single-start design, "
               "tab_bbl_ridge_by_start not written.")

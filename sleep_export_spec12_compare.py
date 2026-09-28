@@ -283,6 +283,65 @@ REF_LABELS = {k: _routines.est_ref(e) for e, k in EST_KEYS.items()}
 # when the result carries no attached band of its own.
 EST_OF_KEY = {k: e for e, k in EST_KEYS.items()}
 
+# The columns of these tables are estimation strategies under ONE specification, so the title
+# names the strategies as the varying dimension and states which specification is held fixed,
+# in the words of the specification guide (Table tab:sleep_specifications_guide).
+_IV_WORDS = {'OLS': 'No Instruments (OLS)',
+             'IV_CostShifters': 'Cost-Shifter Instruments',
+             'IV_Wholesale': 'Cost-Shifter and Wholesale Instruments',
+             'IV_HausmanFull': 'Hausman Instruments'}
+
+
+def spec12_title(stage):
+    iv, state = (p.strip() for p in _routines.SPEC12.split(" x "))
+    return (rf"{stage} Results by Estimation Strategy --- Specification "
+            rf"({_routines.SPEC12_ID}): {state} State Vector, {_IV_WORDS.get(iv, iv)}")
+
+
+def n_clusters(res):
+    """Cluster count exactly as the Clusters ($G$) row reads it; 0 when unknown."""
+    if hasattr(res, 'cov_kwds') and res.cov_kwds.get('groups', None) is not None:
+        groups = res.cov_kwds.get('groups', None)
+        return int(groups.nunique() if hasattr(groups, 'nunique') else len(set(groups)))
+    g = getattr(res, 'G_nominal', np.nan)
+    return int(g) if g is not None and not pd.isna(g) else 0
+
+
+def compare_note(results_dict, order_keys, mean_phi):
+    """Second-stage sentences that belong to this table alone, appended to the shared note:
+    what the Mean phi-hat row averages and why it can exceed 100 under the linear strategies,
+    and why column (I) has fewer observations. Every number is read off the fits, so the note
+    cannot describe a sample the table does not show."""
+    parts = []
+    shown = [k for k in order_keys if mean_phi and mean_phi.get(k) is not None]
+    if shown:
+        lin = [k for k in shown if EST_OF_KEY.get(k) in (1, 2)]
+        s = (r"Mean $\hat{\phi}$ is the population-weighted national $\hat{\phi}_t$ averaged "
+             r"over the quarters of the sample. ")
+        if lin:
+            refs = " and ".join(REF_LABELS[k] for k in lin)
+            s += (rf"Under {refs} the link is linear and unconstrained, so a fitted sleepy share, "
+                  r"and its average, can exceed 100: a value above 100 is the estimate, not an "
+                  r"error, and it is what the bounded single-index strategies are built to rule "
+                  r"out. ")
+        parts.append(s)
+    loc = next((k for k in order_keys if EST_OF_KEY.get(k) == 1), None)
+    pooled = [k for k in order_keys if k != loc and results_dict.get(k) is not None]
+    r1 = results_dict.get(loc) if loc else None
+    if r1 is not None and pooled:
+        n_p = {int(getattr(results_dict[k], 'nobs', 0) or 0) for k in pooled}
+        g_p = {n_clusters(results_dict[k]) for k in pooled}
+        n1 = int(getattr(r1, 'nobs', 0) or 0)
+        g1 = n_clusters(r1)
+        if len(n_p) == 1 and len(g_p) == 1 and n1 and n1 < min(n_p):
+            dn, dg = min(n_p) - n1, min(g_p) - g1
+            parts.append(
+                rf"Strategy {REF_LABELS[loc]} is estimated on $\mathrm{{B}}$ firms only: it "
+                r"excludes the institutions classified as digital ($\mathrm{D}$) banks, which "
+                rf"the pooled strategies include, so its sample has {dn:,} fewer observations"
+                + (rf" and {dg} fewer conglomerate clusters" if dg > 0 else "") + ". ")
+    return "".join(parts)
+
 
 def build_latex_table(results_dict, order_keys, target_vars, out_path, title="", label="",
                       mean_phi=None):
@@ -364,7 +423,8 @@ def build_latex_table(results_dict, order_keys, target_vars, out_path, title="",
         # The shared second-stage note: defined once in utils/sleep_notes so the wording cannot
         # drift between this table and the per-routine appendix tables of the same estimates.
         notes_str = (r"\multicolumn{" + str(len(order_keys) + 1) + r"}{p{\dimexpr\textwidth-2\tabcolsep\relax}}"
-                     r"{\scriptsize\textit{Notes:} " + _notes.second_stage_note() + r"}")
+                     r"{\scriptsize\textit{Notes:} " + _notes.second_stage_note()
+                     + compare_note(results_dict, order_keys, mean_phi) + r"}")
     tex.append(notes_str)
     tex.append(r"\endlastfoot")
 
@@ -658,7 +718,8 @@ def build_latex_table_landscape(results_dict, order_keys, target_vars, out_path,
             r"\end{tabular}",
             r"\begin{tablenotes}[flushleft]",
             r"\footnotesize",
-            (r"\item \textit{Notes:} " + _notes.second_stage_note()) if not first_stage else
+            (r"\item \textit{Notes:} " + _notes.second_stage_note()
+             + compare_note(results_dict, order_keys, mean_phi)) if not first_stage else
             (r"\item \textit{Notes:} First-stage coefficients; the dependent variable is the "
              r"quarterly deposit spread. Standard errors (WCB at the "
              r"conglomerate level; \textcite{cameron2008bootstrap}, \textcite{mackinnon2017wild}) in "
@@ -689,6 +750,9 @@ import argparse
 def main():
     parser = argparse.ArgumentParser(description="Analyze Specification 12 Results (Est 1-3)")
     parser.add_argument('--skip-est2', action='store_true', help='Skip estimation 2 (Pooled Linear)')
+    parser.add_argument('--tables-only', action='store_true',
+                        help="write the tables and the model bundle, skip the phi_t plots (the "
+                             "linear routines' plot reads each ~2 GB market_panel_phis.csv)")
     args = parser.parse_args()
 
     print(f"Collecting Estimation results for Spec 12 ({_routines.SPEC12})...")
@@ -803,13 +867,13 @@ def main():
     build_latex_table(
         stage1_res, order, first_stage_target_vars,
         out_dir / "est1-4_spec12_stage1_comparison.tex",
-        title="First Stage IV Results across Specifications",
+        title=spec12_title("First Stage"),
         label="tab:spec12_stage1_comparison",
     )
     build_latex_table(
         stage2_res, order, target_vars,
         out_dir / "est1-4_spec12_stage2_comparison.tex",
-        title="Second Stage Results across Specifications",
+        title=spec12_title("Second Stage"),
         label="tab:spec12_stage2_comparison",
         mean_phi=mean_phi,
     )
@@ -819,14 +883,14 @@ def main():
     build_latex_table_landscape(
         stage1_res, order, first_stage_target_vars,
         out_dir / "est1-4_spec12_stage1_comparison_landscape.tex",
-        title="First Stage IV Results across Specifications",
+        title=spec12_title("First Stage"),
         label="tab:spec12_stage1_comparison",
         placement="ht", first_stage=True,
     )
     build_latex_table_landscape(
         stage2_res, order, target_vars,
         out_dir / "est1-4_spec12_stage2_comparison_landscape.tex",
-        title="Second Stage Results across Specifications",
+        title=spec12_title("Second Stage"),
         label="tab:spec12_stage2_comparison",
         mean_phi=mean_phi, placement="ht",
     )
@@ -840,6 +904,8 @@ def main():
     with open(data_dir / "est1-4_spec12_all_models.pkl", "wb") as f:
         pickle.dump(models_dict, f)
     print(f"Exported combined model instances to {data_dir / 'est1-4_spec12_all_models.pkl'}")
+    if args.tables_only:
+        return
 
     # ---- 3) Plot Implied National Phi_t (single panel, all four strategies) ----
     #

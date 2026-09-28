@@ -55,7 +55,10 @@ _BASE_LABELS = {
     'fraction_65plus': 'Fraction 65+',
     'fraction_young': 'Fraction Young',
     'risk_free_qoq_lag': 'Lagged Selic Rate',
-    'connections_per100': 'Broadband Connections',
+    # ANATEL "Acessos em Telefonia Movel": every active mobile-telephony access (2G-5G),
+    # end-of-quarter stock per 100 inhabitants (scrape_anatel_mobile.py) -- not fixed broadband,
+    # which is why it exceeds 100 in the median market. Full label in _FULL_LABELS below.
+    'connections_per100': 'Mobile Lines',
     'pix_exists': 'Pix Available',
     'const': 'Constant', 'constant': 'Constant',
     'tax_cost_ratio_lag': 'Tax Cost Ratio ($t-1$)',
@@ -76,13 +79,39 @@ _BASE_LABELS = {
 # Rows whose label must NOT carry a state-block unit: they are not state variables.
 _NO_UNIT = {'nr_lagged_dep', 'const', 'constant', 'v_hat_x_lagged_dep'}
 
+# Rows printed with the registry's unit spelled out, in the wording the demand tables use for
+# the same variable. Same unit as utils/state_transform.DISPLAY ('per 100 inhab.').
+_FULL_LABELS = {'connections_per100': 'Mobile Lines (per 100 inhabitants)'}
+
 
 def clean_name(v, with_unit=True):
     v = str(v).replace('interaction_', '')
+    if with_unit and v in _FULL_LABELS:
+        return _FULL_LABELS[v]
     base = _BASE_LABELS.get(v)
     if base is None:
         return v.replace('_', '\\_')
     return base if (not with_unit or v in _NO_UNIT) else _st.label_with_unit(base, v)
+
+
+# SECOND-STAGE APPENDIX LAYOUT, shared by sleep_export_e1/_e2 and this module. Every data
+# cell's second line is a bias-corrected interval, which at four decimals plus a dagger is wider
+# than a quarter of what a 0.34\textwidth label column leaves (up to 17pt overfull on the E4
+# Macro panel). The label column is narrowed instead, and each label spans its coefficient AND
+# interval rows via \multirow[t]{2}, so a label that wraps uses the interval row rather than
+# opening a gap between a coefficient and its interval. The width is passed explicitly because
+# multirow's `=` misjudges it under V_Main's \doublespacing (see sleep_export_spec12_compare).
+SS_LABEL_W = r"0.22\textwidth"
+SS_TABCOLSEP = "2pt"
+
+
+def ss_label_cell(label):
+    return rf"\multirow[t]{{2}}{{{SS_LABEL_W}}}{{\raggedright {label}}}"
+
+
+def ss_colspec():
+    return (r"\begin{xltabular}{\textwidth}{>{\raggedright\arraybackslash}p{" + SS_LABEL_W
+            + r"} *{4}{>{\centering\arraybackslash}X}}")
 
 
 def disp(v, lhs=None):
@@ -103,7 +132,7 @@ EST_LABEL = {3: "single_idx", 4: "single_idx_time"}
 # identical coefficients (verified on the saved pickles, spec 'IV_CostShifters x Macro'):
 #     est2 == est3           (10 coefficients, no Time block)
 #     est4                   (11 coefficients: the Time block adds one first-stage control)
-#     est1                    stands alone (local B-type sample, nobs 486,233 vs 487,046)
+#     est1                    stands alone (the pooled sample less the digital-bank D firms)
 # The tables are nonetheless emitted per routine rather than shared. Sharing saved a page but
 # forced a reader to hold the mapping in their head, and it put a Base panel that exists only
 # for the linear estimator into a table captioned as covering a link routine too -- E2 carries
@@ -253,7 +282,7 @@ def build_second_stage_table(results_dict, est_num):
     label = f"tab:est{est_num}_second_stage"
     caption = _strategy_caption("Second Stage", est_num)
     notes = (
-        r"\footnotesize \textit{Notes:} " + _notes.second_stage_note()
+        r"\footnotesize \textit{Notes:} " + _notes.second_stage_note(columns="specifications")
     )
 
     def _get_res(ek, p):
@@ -269,11 +298,14 @@ def build_second_stage_table(results_dict, est_num):
     _n_se_cells = 0        # cells that printed an SE: the two-stage band exists for spec 12 only
     p0, l0 = panels[0], panel_letters[0]
     est_nums_0 = [(el, ss_spec_numbers[(p0, ek)]) for ek, el in estimators]
+    # \begingroup keeps the narrow \tabcolsep local, so the paper's own setting is back in
+    # force for whatever table follows.
     lines = [
+        r"\begingroup",
         r"\setstretch{1.0}",
         r"\footnotesize",
-        r"\setlength{\tabcolsep}{3pt}",
-        r"\begin{xltabular}{\textwidth}{>{\raggedright\arraybackslash}p{0.34\textwidth} *{4}{>{\centering\arraybackslash}X}}",
+        rf"\setlength{{\tabcolsep}}{{{SS_TABCOLSEP}}}",
+        ss_colspec(),
         rf"    \caption{{{caption}}}\label{{{label}}} \\", r"    \toprule",
         rf"    \multicolumn{{{multispan}}}{{l}}{{\textbf{{Panel {l0}: {panel_labels[p0]}}}}} \\", r"    \midrule",
         "     & " + " & ".join(el for el, _ in est_nums_0) + r" \\",
@@ -333,7 +365,8 @@ def build_second_stage_table(results_dict, est_num):
                 else:
                     coef_strs.append(""); se_strs.append("")
             if has_val:
-                lines.append(f"    {clean_name(vshort)} & " + " & ".join(coef_strs) + r" \\")
+                lines.append(f"    {ss_label_cell(clean_name(vshort))} & "
+                             + " & ".join(coef_strs) + r" \\*")
                 lines.append("    & " + " & ".join(se_strs) + r" \\")
         obs_l, rsq_l, g_l = [], [], []
         for ek, _ in estimators:
@@ -346,7 +379,7 @@ def build_second_stage_table(results_dict, est_num):
         lines += [r"    \midrule", "    Observations & " + " & ".join(obs_l) + r" \\",
                   "    $R^2$ & " + " & ".join(rsq_l) + r" \\", "    Fixed Effects & Yes & Yes & Yes & Yes \\\\",
                   "    Clusters ($G$) & " + " & ".join(g_l) + r" \\", r"    \bottomrule"]
-    lines += [r"\end{xltabular}", r"\setlength{\tabcolsep}{6pt}", r"\doublespacing"]
+    lines += [r"\end{xltabular}", r"\endgroup", r"\doublespacing"]
     # The opening describes what the cells printed. A column label is not enough: the band is
     # attached to the spec-12 fit only, so the same Hausman column prints an interval in one
     # panel and an SE in another. Count cells.

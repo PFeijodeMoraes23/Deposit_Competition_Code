@@ -39,7 +39,8 @@ def stars(p):
 # Row labels and display units come from the SHARED registry so that every table in the
 # paper -- sleepiness, BBL policy functions, descriptives -- states the same unit for the
 # same variable. There used to be four independent copies of this dict.
-from sleep_export_link import clean_name, disp  # noqa: E402
+from sleep_export_link import (clean_name, disp, ss_colspec, ss_label_cell,  # noqa: E402
+                               SS_TABCOLSEP)
 from utils import state_transform as _st  # noqa: E402
 from utils import se_national as _sen  # noqa: E402
 from utils import sleep_notes as _notes
@@ -59,11 +60,11 @@ def build_first_stage_table(results_dict):
     multispan = 4
     # SHARED first stage.  The first stage is the deposit-spread (price) equation and does not
     # depend on the second-stage link, so it is numerically identical to E3's (same pooled
-    # sample, N=487,046, same 10 coefficients). Each routine nonetheless reports its own table
+    # sample, same 10 coefficients). Each routine nonetheless reports its own table
     # so the panels shown belong to that routine: E2 carries Base/Macro/Tech, while the link
     # routines have no Base specification because their index excludes the constant. E4 adds
-    # one control (the Time block, 11 coefficients) and E1 runs on the local B-type sample
-    # (N=486,233), so neither matches this one.
+    # one control (the Time block, 11 coefficients) and E1 runs on the pooled sample less the
+    # digital-bank D firms, so neither matches this one.
     caption = ("First Stage --- Deposit Spread on Instruments "
                f"--- Estimation Strategy~{_routines.est_ref(2)}")
     label = "tab:est2_first_stage"
@@ -192,7 +193,7 @@ def build_second_stage_table(results_dict):
     caption = f"Second Stage --- Estimation Strategy~{_routines.est_ref(2)}"
     label = "tab:est2_second_stage"
     notes = (
-        r"\footnotesize \textit{Notes:} " + _notes.second_stage_note()
+        r"\footnotesize \textit{Notes:} " + _notes.second_stage_note(columns="specifications")
         # (the note's opening is substituted at the end, from what the cells actually printed)
     )
     # Function-scope, unlike _nat_schemes: the note's opening describes the WHOLE table, so a
@@ -215,8 +216,8 @@ def build_second_stage_table(results_dict):
     lines = [
         r"\begin{spacing}{1.0}",
         r"\footnotesize",
-        r"\setlength{\tabcolsep}{3pt}",
-        r"\begin{xltabular}{\textwidth}{>{\raggedright\arraybackslash}p{0.34\textwidth} *{4}{>{\centering\arraybackslash}X}}",
+        rf"\setlength{{\tabcolsep}}{{{SS_TABCOLSEP}}}",
+        ss_colspec(),
         rf"    \caption{{{caption}}}\label{{{label}}} \\",
         r"    \toprule",
         rf"    \multicolumn{{{multispan}}}{{l}}{{\textbf{{Panel {l0}: {panel_labels[p0]}}}}} \\",
@@ -297,7 +298,8 @@ def build_second_stage_table(results_dict):
                 else:
                     coef_strs.append(""); se_strs.append("")
             if has_val:
-                lines.append(f"    {clean_name(vshort)} & " + " & ".join(coef_strs) + r" \\")
+                lines.append(f"    {ss_label_cell(clean_name(vshort))} & "
+                             + " & ".join(coef_strs) + r" \\*")
                 lines.append("    & " + " & ".join(se_strs) + r" \\")
 
         obs_l, rsq_l, g_l = [], [], []

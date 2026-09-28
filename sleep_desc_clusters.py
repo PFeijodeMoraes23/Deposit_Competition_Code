@@ -218,11 +218,15 @@ def render_panel_a(st):
 
 
 def render_panel_b(st):
-    """Standalone Panel B: deposit concentration among the largest conglomerates.
-    Self-contained so it can be \\input on its own into V_Main.tex."""
+    """Standalone Panel B: deposit concentration and cluster size among the largest
+    conglomerates. Self-contained so it can be \\input on its own into V_Main.tex."""
     def pct(x):
         return f"{100 * x:.1f}\\%"
-    L = _table_open(r"Deposit Shares", r"tab:deposit_concentration", full_width=True)
+    n = len(st["top_n"])
+    n_word = {3: "Three", 4: "Four", 5: "Five", 6: "Six", 7: "Seven", 8: "Eight",
+              9: "Nine", 10: "Ten"}.get(n, str(n))
+    caption = f"Deposit Concentration and Cluster Size, {n_word} Largest Conglomerates"
+    L = _table_open(caption, r"tab:deposit_concentration", full_width=True)
     L += [_tabular_full_width(r"l r r r"), r"\toprule",
           r" & Dep.\ share & Cumulative & Obs.\ share \\", r"\midrule"]
     for i, r in enumerate(st["top_n"], 1):

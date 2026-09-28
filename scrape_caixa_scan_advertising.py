@@ -11,8 +11,11 @@ about 69.5%. Every file is already on disk; nothing here downloads.
 
 Why this is a SEPARATE builder and not an extension of `scrape_caixa_advertising.py`: a scan needs
 tolerant label matching, box splitting and glyph repairs, and that tolerance has no business inside
-the parser that reads 142 months of clean text at 100% accuracy. The two write the same row shape,
-so they merge downstream, and the text path is provably untouched.
+the parser that reads 142 months of clean text at 100% accuracy, which stays provably untouched. The
+two builders do NOT write the same row shape: a scanned cell carries a column index, not an agency,
+and the two lines tables share only `period`, `amount_brl` and `parse_method`. The interface a panel
+merges, at month level, is the monthly table here: `period`, `amount_brl` (the recovered total),
+`validated`, `validation_status`, `tolerance_flagged` and `max_gap_cents`. No panel reads it yet.
 
 What OCR gets wrong on these scans
 ----------------------------------
@@ -22,9 +25,20 @@ scans OCR makes errors the benchmark never showed, and each is handled here:
   - MERGED BOXES. Adjacent cells, or a label and its figure, come back as one box: November 2013's
     whole TOTAL row is '11.996.341,75 9.736.540,75 7.200.055,6413.460.353,42', and labels arrive
     fused to amounts ('VIDEO/PROD.EMAILMARKETING 675.271,12'). The box is split on the amount
-    pattern; the two-digit cents make every boundary unambiguous, so a split changes no character.
+    pattern. Between two amounts the two-digit cents make the boundary unambiguous, so that split
+    changes no character. The LEFT edge of an amount is less sure: up to three digits in front of
+    it are read into it, whatever they belong to. A lone digit touching it is a seam glyph (below)
+    and is tested as one. Anything else run straight into it - two or more digits, a digit after a
+    dot or comma, a '-', ',', '/' or '(' - may be a tax number, a code, an unread figure or a sign,
+    and so may a '%' anywhere in the box, so such a box is left unread, with a note. So is text in
+    front of the first amount that itself reads as an amount ('1.000 - 2.345,67'): it is not a
+    label, and not a figure the split can vouch for. A digit of a label read into a figure
+    ('CANAL21.234,56') cannot be seen this way; unless it is a 0, which changes nothing, it moves
+    the figure by at least R$ 10, and the gate below fails the month.
   - COMMA READ AS DOT. '3.070.118.35' for 3.070.118,35 - six to eight cells in each of February to
-    April 2014. The dot before the cents is restored to a comma; tax numbers are never touched.
+    April 2014. The dot before the cents is restored to a comma. A string holding a tax number is
+    left alone, since tax numbers are dotted digit groups too: a CNPJ with its slash, or with the
+    slash misread as a dot or a 1, or lost, and a CPF with or without its hyphen.
   - GLYPH DUPLICATED AT A BOX SEAM. Where two detections overlap, the edge glyph of one is read into
     the other as well: May 2016's '36.047.860,02' is 6.047.860,02 beside '5.861.407,03', and May
     2013's '60,00' is 0,00 beside 'BANNERS/GRANDES FORMATOS', whose S became the 6.
@@ -35,17 +49,33 @@ Layout, from the scans themselves
 ---------------------------------
 Each table is a matrix: a leftmost column of category labels (TELEVISAO ABERTA, RADIO, JORNAL,
 REVISTA, INTERNET, CINEMA, MERCHANDISING, ...), one column per agency, and at the foot a TOTAL row
-(one figure per agency) and a TOTAL GERAL (one figure). The figures are LEFT-aligned in their
-column, so columns are found from LEFT edges: the centres are the median left edge, position by
+(one figure per agency) and a TOTAL GERAL (one figure). The figures are left-aligned in their
+column in every month except January 2013, a spreadsheet-grid scan whose figures are right-aligned.
+Columns are found from LEFT edges all the same: the centres are the median left edge, position by
 position, over the rows that carry a figure in every column, and each figure goes to the ONE nearest
-centre. The number of columns is decided once per month, because every page of the table carries
-the same agencies; deciding it per page once gave June 2013's second page two columns out of four.
+centre. January 2013 still works, because each figure's left edge stays within half a column
+spacing of its column's centre, the window a figure must fall in; a figure outside every window is
+dropped with a note. The number of columns is decided once per month, because every page of the
+table carries the same agencies; deciding it per page once gave June 2013's second page two columns
+out of four.
+
+A row's label is the text that starts left of the first column, less two things OCR adds to it. The
+side headings FORNECEDORES, VEICULOS, PRODUCAO and SERVICOS run down the table's left edge, rotated
+or as stacked letters, and come back as fragments ('FORNECE', 'VEi', 'S', 'R', '0'): a box lying
+wholly left of the leftmost label word (three or more letters, wider than tall), or rotated and
+starting left of it, is dropped. And a first-column '0,00' fused onto its label comes back as
+'BANNERS/GRANDESFORMATOSO,00': that tail is dropped. `label_as_read` keeps the label as OCR
+returned it. The gate below certifies the AMOUNTS - each column against its printed total, and the
+TOTAL row against the TOTAL GERAL - and not which category each amount is paired with: a figure on
+the wrong row of the right column adds up just the same.
 
 The table is read from every page region that holds an image and no text layer: the scanned pages
 whole, plus any image covering a quarter of a page on which no word of the text layer lies. That
 second case is January 2014's page 2, which is double width - its left half is the scanned
-continuation of the table, with the TOTAL rows, and its right half a text supplier list. The other
-pages carry the supplier lists: names and tax numbers, no amounts.
+continuation of the table, with the TOTAL rows, and its right half a text supplier list. December
+2013's page 2 is double width too, but scanned whole, so it is read whole: its right half is the
+supplier list, names and tax numbers with no amount among them, all of it outside every column. The
+other pages have a text layer and carry the supplier lists.
 
 The gate
 --------
@@ -62,19 +92,24 @@ TOTAL GERAL. Then, on the gaps in centavos:
                                monthly row gives `max_gap_cents` and names each check and its gap.
   not_validated                any gap is above 5 centavos, or the month could not be checked.
 `validated` is True for the first two statuses. A month that fails is still written, with every
-gap recorded, so nothing is silently dropped and nothing unvalidated is silently used.
+gap recorded, so nothing is silently dropped and nothing unvalidated is silently used. Every gap is
+recorded AS READ, and so is `max_gap_cents`; it and `grand_gap_cents` are None when the month could
+not be checked, since a maximum over the checks that happened to be made would read as a verdict.
+Where a refused seam repair would move a gap, the gap it would give is recorded beside it (2014-06).
 
 TWO TOLERANCES, NOT ONE. The 5-centavo allowance is there to admit a month whose PRINTED totals
 disagree with each other by a slip (May 2014, where every cell is checked exactly by its column and
 only the TOTAL GERAL is 4 centavos off). Arithmetic alone cannot tell such a slip from a misread
 final digit, which is why the month is flagged rather than folded into `validated_exact`. The
 allowance never admits an OCR repair. A repair that changes a character - a comma restored for a
-dot, a seam glyph dropped - is kept only if the check of the column it sits in then closes to
-EXACTLY 0 centavos; otherwise it is undone and the cell keeps what OCR read, which for those two
-repairs is no amount at all. Were the allowance applied to repairs, a wrong repair landing within 5
-centavos of a total would pass as validated. A split changes no character and needs no such test.
-Every repair is recorded on its cell (`amount_as_read`, `amount_brl`, `repair`), and no value is
-changed without one.
+dot, a seam glyph dropped - is kept only if the check it sits in (its column's, or the grand check
+for the TOTAL GERAL) then closes to EXACTLY 0 centavos; otherwise it is undone: a restored comma or
+a split-off glyph leaves no amount, and a seam candidate leaves the figure as OCR read it (2014-06's
+915.422.471,37). Were the allowance applied to repairs, a wrong repair landing within 5 centavos of
+a total would pass as validated. A split between two amounts changes no character and needs no such
+test. Every repair is recorded on its cell (`amount_as_read`, `amount_brl`, `repair`), and no value
+is changed without one: before writing, the builder refuses any cell or printed total that carries
+no repair and differs from what OCR read.
 
 Months whose printed tables do not add up
 -----------------------------------------
@@ -84,16 +119,29 @@ In these the cells are read as printed, and the publisher's own totals disagree 
   2013-12  column 3: the components exceed the printed total by 246,240.00, which is exactly the
            printed cell PAINEL ELETRONICO 246.240,00 - the total seems to omit it (an inference).
   2014-05  every column closes exactly; the TOTAL row sums 4 centavos below the TOTAL GERAL. This
-           is the month the 5-centavo allowance admits, flagged.
-  2014-06  columns 0-2 close exactly. Column 3's printed total reads 915.422.471,37 - a '9'
-           duplicated at the seam of 15.422.471,37 - and its cells sum to 15,222,714.57, 199,756.80
-           short even of the true figure, so the seam repair does not close and is refused.
+           is the month the 5-centavo allowance admits, flagged. Checked by eye on the scan, the
+           disagreement is in the print: the printed TOTAL row adds up to 40.272.216,56 and the
+           printed TOTAL GERAL is 40.272.216,60. Arithmetic alone could not have said so.
+  2014-06  columns 0-2 close exactly. Column 3's printed total, 15.422.471,37, is read by OCR as
+           915.422.471,37 - a '9' duplicated at the seam with its neighbour 9.506.178,29 - and the
+           column's cells sum to 15,222,714.57, 199,756.80 short of the printed figure, so the seam
+           repair does not close and is refused. The checks, `gap_detail` and `max_gap_cents` hold
+           the gaps AS READ: column 3 at -90,019,975,680 centavos and the grand check at
+           +90,000,000,005, an OCR artifact of some R$900m and not a gap in the document. What the
+           refused repair would give is recorded beside them - column 3 at -19,975,680 and the grand
+           check at +5 - in the checks' `gap_cents_if_seam_glyph_dropped` (with the suspect figure
+           in `stated_suspect_text`), in `gap_detail`, and in the month's
+           `max_gap_cents_if_seam_glyph_dropped`.
 
 Outputs (paths.AWARENESS_PROC)
 ------------------------------
-  caixa_scan_advertising_lines.{parquet,csv}     one row per recovered cell, with its repair
-  caixa_scan_advertising_monthly.{parquet,csv}   one row per month, with the reconciliation
+  caixa_scan_advertising_lines.{parquet,csv}     one row per recovered cell, with its repair, and
+                                                 its label cleaned and as read
+  caixa_scan_advertising_monthly.{parquet,csv}   one row per month, with the reconciliation; the
+                                                 interface a panel merges at month level
   caixa_scan_advertising_checks.{parquet,csv}    every arithmetic check, with its gap in centavos
+                                                 as read and, where a refused seam repair would
+                                                 move it, the gap that repair would give
 
 Usage
 -----
@@ -143,7 +191,19 @@ INT_TOKEN = re.compile(r"\d{1,3}(?:\.\d{3})+")
 # One printed amount inside a longer string. The cents are always two digits, so the end of each
 # amount is unambiguous even with nothing between two of them: '7.200.055,6413.460.353,42'.
 AMOUNT_IN_TEXT = re.compile(r"\d{1,3}(?:\.\d{3})*,\d{2}")
+# The characters that, run straight into an amount's first digit, leave its left edge in doubt:
+# digits and the punctuation of tax numbers, codes, dates and signs.
+EDGE_RUN = re.compile(r"[\d.,/(\-]*$")
+# Tax numbers are dotted digit groups too, and a comma repair would make one an amount
+# ('123.456.789-01' into 123.456,78). A CNPJ is recognised with its slash, or with the slash misread
+# as a dot or a 1, or lost; a CPF with or without its hyphen. The lookarounds keep the last two from
+# matching inside merged amounts, which are dotted digit groups end to end ('2.190.740.00264...').
 CNPJ = re.compile(r"\d{2}\.\d{3}\.\d{3}/\d{4}")
+CNPJ_NO_SLASH = re.compile(r"(?<![\d.])\d{2}\.\d{3}\.\d{3}[./1]?\d{4}-?\d{2}(?![\d.,])")
+CPF = re.compile(r"(?<![\d.])\d{3}\.\d{3}\.\d{3}-?\d{2}(?![\d.,])")
+TAX_NUMBERS = (CNPJ, CNPJ_NO_SLASH, CPF)
+# A first-column '0,00' OCR fused onto the end of a label ('BANNERS/GRANDESFORMATOSO,00').
+ZERO_TAIL = re.compile(r"\s*[O0][.,][O0]{2}$")
 # A decimal comma read as a dot. The strict form requires that no digit follow the cents; the loose
 # form also accepts a glyph straight after them ('3.410.000.006'), and is used only where no valid
 # amount already stands, so that it cannot cut into a figure that reads correctly.
@@ -211,6 +271,8 @@ class Box:
     raw: str = ""                        # the detection's text exactly as OCR returned it
     repairs: tuple[str, ...] = ()
     detail: str = ""
+    # Why the box is not read as a figure although its text may parse as one; empty when it is read.
+    unread: str = ""
 
     @property
     def xmid(self) -> float:
@@ -222,7 +284,7 @@ class Box:
 
     @property
     def cents(self) -> int | None:
-        return cents_of(self.text)
+        return None if self.unread else cents_of(self.text)
 
     @property
     def key(self) -> tuple[int, int]:
@@ -243,10 +305,15 @@ class Check:
         return self.components - self.stated
 
 
+def check_name(key: tuple[str, int]) -> str:
+    return f"column {key[1]}" if key[0] == "column" else "the grand check"
+
+
 @dataclass
 class Table:
     k: int = 0
     labels: list[str] = field(default_factory=list)
+    labels_read: list[str] = field(default_factory=list)
     pages: list[int] = field(default_factory=list)
     values: list[list[int | None]] = field(default_factory=list)
     boxes: list[list[Box | None]] = field(default_factory=list)
@@ -383,9 +450,10 @@ def comma_for_dot(text: str) -> tuple[str, list[int]]:
     """`text` with each decimal comma OCR read as a dot restored, and the positions changed.
 
     The replacement keeps the length, so a position in the result is a position in `text`. A string
-    holding a CNPJ is left alone, since tax numbers are dotted digit groups too.
+    holding a tax number (a CNPJ, with or without its slash, or a CPF) is left alone, since tax
+    numbers are dotted digit groups too.
     """
-    if CNPJ.search(text):
+    if any(p.search(text) for p in TAX_NUMBERS):
         return text, []
     chars = list(text)
     changed = [m.start(2) - 1 for m in DOT_CENTS_STRICT.finditer(text)]
@@ -405,18 +473,45 @@ def comma_for_dot(text: str) -> tuple[str, list[int]]:
     return "".join(chars), sorted(changed)
 
 
-def split_box(b: Box, text: str, comma_at: list[int], refused: set) -> list[Box]:
+def edge_doubt(text: str, toks: list[re.Match]) -> str:
+    """Why the left edge of an amount inside `text` is in doubt, or '' when every edge is sound.
+
+    Up to three digits in front of an amount are read into it, whatever they belong to; between two
+    amounts the cents of the first fix the boundary, but nothing fixes the left edge. A lone digit
+    touching an amount is a seam glyph and is tested as one. Anything else run straight into it -
+    two or more digits, a digit after a dot or comma, a '-', ',', '/' or '(' - may be a tax number,
+    a code, an unread figure or a sign, and a '%' anywhere makes the figures percentages. A split
+    there would read a figure the table may not print, with nothing to mark it but `split_merged`.
+    """
+    if "%" in text:
+        return "it holds a '%', so its figures may be percentages"
+    end = 0
+    for t in toks:
+        run = EDGE_RUN.search(text, end, t.start()).group()
+        if run and not (len(run) == 1 and run.isdigit()):
+            return (f"{run!r} runs into {t.group()!r}, so where that amount starts is in doubt "
+                    "(a tax number, a code, an unread figure or a sign)")
+        end = t.end()
+    return ""
+
+
+def split_box(b: Box, text: str, comma_at: list[int], refused: set, notes: list[str]) -> list[Box]:
     """The amounts inside a box that is not itself one amount, each as a box of its own.
 
     The label in front of the first amount is kept as a label box; x-positions are shared out in
     proportion to the characters, which is close enough for the nearest-centre assignment. A digit
     touching an amount that no amount takes - '1.008.076,882' - is a glyph duplicated from the
     neighbouring box at the seam. Dropping it changes what was read, so it is a seam repair, and a
-    refused one leaves that cell unread.
+    refused one leaves that cell unread. A box whose amounts have a doubtful left edge (see
+    `edge_doubt`) is left unread whole, as OCR returned it.
     """
     toks = list(AMOUNT_IN_TEXT.finditer(text))
     if not toks:
         return [replace(b, text=text)]
+    doubt = edge_doubt(text, toks)
+    if doubt:
+        notes.append(f"p{b.page} {b.raw!r} left unread: {doubt}")
+        return [replace(b, unread=doubt)]
     glyphs: list[list[str]] = []
     for idx, t in enumerate(toks):
         prev_end = toks[idx - 1].end() if idx else 0
@@ -434,31 +529,38 @@ def split_box(b: Box, text: str, comma_at: list[int], refused: set) -> list[Box]
     n = max(1, len(text))
     w = b.x1 - b.x0
     out: list[Box] = []
-    pre = text[:toks[0].start()]
-    if pre.strip():
-        out.append(replace(b, text=pre.strip(), x1=b.x0 + w * toks[0].start() / n, part=0,
-                           repairs=(), detail=""))
+    pre = text[:toks[0].start()].strip()
+    if pre:
+        # A label piece that reads as an amount ('1.000 -' of '1.000 - 2.345,67') is not a label,
+        # and no split vouches for it as a figure: it is kept, unread, so no value enters a cell
+        # without a repair label saying where it came from.
+        unread = ("text in front of the first amount reads as an amount, which no split vouches "
+                  "for" if cents_of(pre) is not None else "")
+        if unread:
+            notes.append(f"p{b.page} {pre!r} of {b.raw!r} left unread: {unread}")
+        out.append(replace(b, text=pre, x1=b.x0 + w * toks[0].start() / n, part=0,
+                           repairs=(), detail="", unread=unread))
     for idx, t in enumerate(toks):
         s, e = t.start(), t.end()
-        steps, notes = [], []
+        steps, said = [], []
         if any(s <= i < e for i in comma_at):
             steps.append(COMMA_AS_DOT)
-            notes.append(f"comma read as dot, restored: {b.raw!r}")
+            said.append(f"comma read as dot, restored: {b.raw!r}")
         if merged:
             steps.append(SPLIT_MERGED)
-            notes.append(f"split from {b.raw!r}")
+            said.append(f"split from {b.raw!r}")
         if glyphs[idx]:
             if (b.uid, SEAM_GLYPH) in refused:
                 continue
             steps.append(SEAM_GLYPH)
-            notes.append(f"dropped {' and '.join(glyphs[idx])} touching {t.group()!r}: "
-                         "a seam glyph")
+            said.append(f"dropped {' and '.join(glyphs[idx])} touching {t.group()!r}: "
+                        "a seam glyph")
         out.append(replace(b, text=t.group(), x0=b.x0 + w * s / n, x1=b.x0 + w * e / n,
-                           part=idx + 1, repairs=tuple(steps), detail="; ".join(notes)))
+                           part=idx + 1, repairs=tuple(steps), detail="; ".join(said)))
     return out
 
 
-def prepare(raw: list[Box], refused: set) -> list[Box]:
+def prepare(raw: list[Box], refused: set, notes: list[str]) -> list[Box]:
     """The boxes with comma repairs and splits applied, less any repair already refused."""
     out: list[Box] = []
     for b in raw:
@@ -468,7 +570,7 @@ def prepare(raw: list[Box], refused: set) -> list[Box]:
         text, comma_at = b.text, []
         if (b.uid, COMMA_AS_DOT) not in refused:
             text, comma_at = comma_for_dot(b.text)
-        out.extend(split_box(b, text, comma_at, refused))
+        out.extend(split_box(b, text, comma_at, refused, notes))
     return out
 
 
@@ -535,9 +637,11 @@ def column_count(rows: list[list[Box]]) -> int:
 def column_centres(rows: list[list[Box]], page: int, k: int) -> list[float] | None:
     """The left edge of each column: position by position, the median over rows with k figures.
 
-    The figures are LEFT-aligned. Clustering right edges made the ranges of neighbouring columns
-    overlap, and a figure falling in two ranges blanked its cell. A row that carries a figure in
-    every column says which edge belongs to which column without any clustering at all.
+    The figures are left-aligned in every month except January 2013, whose right-aligned figures
+    still keep their left edges within half a column spacing of the centre. Clustering right edges
+    made the ranges of neighbouring columns overlap, and a figure falling in two ranges blanked its
+    cell. A row that carries a figure in every column says which edge belongs to which column
+    without any clustering at all.
     """
     seeds = [sorted(b.x0 for b in r if b.page == page and b.cents is not None) for r in rows]
     seeds = [s for s in seeds if len(s) == k]
@@ -546,36 +650,63 @@ def column_centres(rows: list[list[Box]], page: int, k: int) -> list[float] | No
     return [float(x) for x in np.median(np.array(seeds), axis=0)]
 
 
+def is_sidebar(b: Box, frame_x: float | None) -> bool:
+    """A fragment of the side headings (FORNECEDORES, VEICULOS, PRODUCAO, SERVICOS) down the left.
+
+    They lie left of every label word, rotated ('FORNECE', 'VEi') or as stacked letters ('S', 'R',
+    '0'). A box lying wholly left of the leftmost label word, or rotated and starting left of it, is
+    one: no label of the table lies left of its own leftmost word.
+    """
+    if frame_x is None:
+        return False
+    rotated = b.y1 - b.y0 > b.x1 - b.x0 and len(b.text.strip()) >= 2
+    return b.x1 <= frame_x or (rotated and b.x0 < frame_x)
+
+
 def page_matrix(rows: list[list[Box]], page: int, centres: list[float], notes: list[str]):
-    """(labels, values, boxes) for one page: a row per label, each figure in its nearest column."""
+    """One page's (labels, labels as read, values, boxes): a row per label, each figure in its
+    nearest column. A label drops the sidebar fragments and a fused '0,00' tail; as read, it keeps
+    them."""
     k = len(centres)
     spacing = float(min(np.diff(centres))) if k > 1 else 400.0
     first_x = centres[0] - 0.3 * spacing
+    lines = [row for row in rows if any(b.page == page for b in row)
+             and any(b.cents is not None for b in row)]
+    # The left edge of the label area: the leftmost word of three or more letters, wider than
+    # tall. Rotated and single-letter sidebar fragments are neither, so they cannot set it.
+    words = [b.x0 for row in lines for b in row if b.x0 < first_x and b.cents is None
+             and b.x1 - b.x0 >= b.y1 - b.y0 and sum(c.isalpha() for c in b.text) >= 3]
+    frame_x = min(words) if words else None
     labels: list[str] = []
+    labels_read: list[str] = []
     values: list[list[int | None]] = []
     boxes: list[list[Box | None]] = []
-    for row in rows:
-        if not any(b.page == page for b in row):
-            continue
-        amounts = [b for b in row if b.cents is not None]
-        if not amounts:
-            continue
+    for row in lines:
+        # A label is any text that STARTS left of the first column. Testing where it ends instead
+        # loses the labels OCR fused to a figure ('BANNERS/GRANDES FORMATOS0,00'), whose label
+        # piece, once split off, reaches into the first column.
+        texts = [b for b in row if b.x0 < first_x and b.cents is None]
+        label_read = " ".join(b.text for b in texts).strip()
+        label = " ".join(t for t in (ZERO_TAIL.sub("", b.text).strip() for b in texts
+                                     if not is_sidebar(b, frame_x)) if t)
         line: list[int | None] = [None] * k
         where: list[Box | None] = [None] * k
         hits = [0] * k
-        for b in amounts:
+        for b in row:
+            if b.cents is None:
+                continue
             d = [abs(b.x0 - x) for x in centres]
             j = int(np.argmin(d))
             if d[j] > 0.5 * spacing:
+                # Recorded: if the figure belongs to the table, its column comes up short, and the
+                # note says where the shortfall went.
+                notes.append(f"p{page} {label[:30]!r}: {b.text!r} lies outside every column, so "
+                             "it is not read")
                 continue
             hits[j] += 1
             # Two figures in one cell is a misplaced box; leave the cell empty rather than guess,
             # and let the arithmetic report the shortfall.
             line[j], where[j] = (b.cents, b) if hits[j] == 1 else (None, None)
-        # A label is any text that STARTS left of the first column. Testing where it ends instead
-        # loses the labels OCR fused to a figure ('BANNERS/GRANDES FORMATOS0,00'), whose label
-        # piece, once split off, reaches into the first column.
-        label = " ".join(b.text for b in row if b.x0 < first_x and b.cents is None).strip()
         for j in range(k):
             if hits[j] > 1:
                 notes.append(f"p{page} {label[:30]!r}: {hits[j]} figures fell in column {j}, "
@@ -583,9 +714,10 @@ def page_matrix(rows: list[list[Box]], page: int, centres: list[float], notes: l
         if all(v is None for v in line):
             continue
         labels.append(label)
+        labels_read.append(label_read)
         values.append(line)
         boxes.append(where)
-    return labels, values, boxes
+    return labels, labels_read, values, boxes
 
 
 def evaluate(boxes: list[Box]) -> Table:
@@ -608,8 +740,9 @@ def evaluate(boxes: list[Box]) -> Table:
             cen = found[0]
             t.notes.append(f"p{p}: no row carries all {t.k} figures; "
                            "columns taken from another page")
-        labels, values, where = page_matrix(rows, p, cen, t.notes)
+        labels, labels_read, values, where = page_matrix(rows, p, cen, t.notes)
         t.labels += labels
+        t.labels_read += labels_read
         t.values += values
         t.boxes += where
         t.pages += [p] * len(labels)
@@ -666,33 +799,51 @@ def evaluate(boxes: list[Box]) -> Table:
     return t
 
 
-def unverified_repairs(t: Table) -> set[tuple[int, str]]:
-    """(detection, repair) for every character repair whose own check does not close exactly.
+def unverified_repairs(t: Table) -> dict[tuple[int, str], str]:
+    """(detection, repair) -> why, for each character repair whose own check does not close exactly.
 
     The 5-centavo allowance plays no part here: it admits a month whose printed totals disagree,
     never a change to what OCR read. A repair is kept only at a gap of exactly 0.
     """
-    bad = set()
+    bad: dict[tuple[int, str], str] = {}
     gaps = t.gaps()
     for i, line in enumerate(t.boxes):
         for j, b in enumerate(line):
             if b is None or not CHARACTER_REPAIRS.intersection(b.repairs):
                 continue
             key = t.check_for(i, j)
-            if key is None or gaps.get(key) != 0:
-                bad |= {(b.uid, r) for r in CHARACTER_REPAIRS.intersection(b.repairs)}
+            gap = gaps.get(key) if key is not None else None
+            if gap == 0:
+                continue
+            why = ("its cell is in no check" if key is None else
+                   f"{check_name(key)} is not checked" if gap is None else
+                   f"with it {check_name(key)} does not close exactly (gap {gap:+,d} centavos)")
+            for r in CHARACTER_REPAIRS.intersection(b.repairs):
+                bad[(b.uid, r)] = why
     return bad
 
 
-def settle_seams(boxes: list[Box], refused: set, notes: list[str]) -> tuple[list[Box], Table]:
+@dataclass
+class RefusedSeam:
+    """A seam candidate that was not taken: the box, its text as it stood, and the candidate."""
+    key: tuple[int, int]
+    text: str
+    new: str
+    why: str
+
+
+def settle_seams(boxes: list[Box], refused: set,
+                 notes: list[str]) -> tuple[list[Box], Table, list[RefusedSeam]]:
     """Drop a duplicated seam glyph wherever doing so closes that cell's own check EXACTLY.
 
     A candidate is accepted only if the check of the cell it changes goes from non-zero to exactly
     0 centavos and no check that was 0 moves. Two candidates that would close the same check are
-    ambiguous, and neither is taken. The 5-centavo allowance plays no part.
+    ambiguous, and neither is taken. The 5-centavo allowance plays no part. The candidates not
+    taken are returned, so that what each would have given can be recorded beside the gaps as read.
     """
     table = evaluate(boxes)
     tried: set[tuple[tuple[int, int], str]] = set()
+    passed_over: list[RefusedSeam] = []
     while any(g != 0 for g in table.gaps().values()) or table.reason:
         gaps0 = table.gaps()
         passing: dict[tuple[str, int], list] = {}
@@ -714,11 +865,12 @@ def settle_seams(boxes: list[Box], refused: set, notes: list[str]) -> tuple[list
                 passing.setdefault(check, []).append((idx, new, why, trial, t2))
                 continue
             tried.add((b.key, new))
+            passed_over.append(RefusedSeam(b.key, b.text, new, why))
             if check is None:
                 notes.append(f"seam candidate refused, its cell is in no check: {why}")
             elif not closes:
                 after = f"{gaps1[check]:+,d}" if check in gaps1 else "absent"
-                notes.append(f"seam candidate refused, {check[0]} {check[1]} would not close "
+                notes.append(f"seam candidate refused, {check_name(check)} would not close "
                              f"exactly (gap {after} centavos): {why}")
             else:
                 notes.append(f"seam candidate refused, it would move a check that closes: {why}")
@@ -727,7 +879,8 @@ def settle_seams(boxes: list[Box], refused: set, notes: list[str]) -> tuple[list
             if len(found) > 1:
                 for idx, new, why, *_ in found:
                     tried.add((boxes[idx].key, new))
-                notes.append(f"{len(found)} seam candidates would each close {check}; "
+                    passed_over.append(RefusedSeam(boxes[idx].key, boxes[idx].text, new, why))
+                notes.append(f"{len(found)} seam candidates would each close {check_name(check)}; "
                              "ambiguous, none taken")
                 continue
             idx, new, why, trial, t2 = found[0]
@@ -736,22 +889,53 @@ def settle_seams(boxes: list[Box], refused: set, notes: list[str]) -> tuple[list
             break
         if not accepted:
             break
-    return boxes, table
+    return boxes, table, passed_over
 
 
-def solve(raw: list[Box]) -> tuple[list[Box], Table, list[str], set]:
+@dataclass
+class Solved:
+    boxes: list[Box]
+    table: Table
+    notes: list[str]
+    refused: dict[tuple[int, str], str]   # (detection, repair) -> why it was refused
+    seams: list[RefusedSeam]              # seam candidates not taken
+
+
+def solve(raw: list[Box]) -> Solved:
     """Apply the repairs, keep only those that close exactly, and return the settled table."""
-    refused: set[tuple[int, str]] = set()
-    notes: list[str] = []
+    refused: dict[tuple[int, str], str] = {}
     # Each pass refuses at least one new (detection, repair) pair, so this ends in bounded passes.
     for _ in range(2 * len(raw) + 1):
-        notes = []
-        boxes, table = settle_seams(prepare(raw, refused), refused, notes)
+        notes: list[str] = []
+        boxes, table, seams = settle_seams(prepare(raw, set(refused), notes), set(refused), notes)
         bad = unverified_repairs(table)
         if not bad:
-            return boxes, table, notes, refused
-        refused |= bad
+            return Solved(boxes, table, notes, refused, seams)
+        refused.update(bad)
     raise RuntimeError("repair refusal did not settle")
+
+
+def seam_alternatives(boxes: list[Box], t: Table, seams: list[RefusedSeam]
+                      ) -> dict[tuple[str, int], list[tuple[int, RefusedSeam]]]:
+    """For each check a refused seam candidate would move: (the gap it would then have, candidate).
+
+    The gaps as read stay the record; this is written beside them, so that a figure OCR misread at
+    a seam (2014-06's 915.422.471,37 for 15.422.471,37) is not taken for a gap in the document.
+    Each candidate is tried alone on the settled table.
+    """
+    gaps = t.gaps()
+    moved: dict[tuple[str, int], list[tuple[int, RefusedSeam]]] = {}
+    for s in seams:
+        idx = next((i for i, b in enumerate(boxes) if b.key == s.key and b.text == s.text), None)
+        if idx is None:
+            continue
+        trial = list(boxes)
+        trial[idx] = replace(boxes[idx], text=s.new)
+        after = evaluate(trial).gaps()
+        for check, gap in gaps.items():
+            if check in after and after[check] != gap:
+                moved.setdefault(check, []).append((after[check], s))
+    return moved
 
 
 # ---------------------------------------------------------------------------
@@ -767,12 +951,18 @@ def parse_boxes(period: str, raw: list[Box], dpi: int, debug: bool = False) -> M
     """Everything after OCR: the repairs, the table, the gate and the rows written out."""
     out = MonthParse(period=period, n_boxes=len(raw))
     out.mean_conf = float(np.mean([b.conf for b in raw])) if raw else float("nan")
-    raw = [replace(b, uid=i, raw=b.text, repairs=(), detail="") for i, b in enumerate(raw)]
-    boxes, t, seam_notes, refused = solve(raw)
-    out.notes += t.notes + seam_notes
-    for uid, kind in sorted(refused):
-        out.notes.append(f"{kind} repair refused, its column does not close exactly: "
-                         f"{raw[uid].text!r} left as read")
+    raw = [replace(b, uid=i, raw=b.text, repairs=(), detail="", unread="")
+           for i, b in enumerate(raw)]
+    solved = solve(raw)
+    boxes, t = solved.boxes, solved.table
+    out.notes += t.notes + solved.notes
+    for (uid, kind), why in sorted(solved.refused.items()):
+        out.notes.append(f"{kind} repair refused, {why}: {raw[uid].text!r} left as read")
+    moved = seam_alternatives(boxes, t, solved.seams)
+
+    def gap_list(checks) -> str:
+        return "; ".join(f"column {c.column}: {c.gap:+,d}" if c.kind == "column" else
+                         f"grand: {c.gap:+,d}" for c in checks)
 
     gaps = t.gaps()
     if t.reason:
@@ -780,15 +970,16 @@ def parse_boxes(period: str, raw: list[Box], dpi: int, debug: bool = False) -> M
     elif all(g == 0 for g in gaps.values()):
         status, reason = EXACT, ""
     elif all(abs(g) <= TOLERANCE_CENTS for g in gaps.values()):
-        # Admitted, and registered as such: the printed totals disagree by a few centavos.
+        # Admitted, and registered as such. Whether the print or the OCR is off by those centavos
+        # is not something the arithmetic can say (2014-05's was settled by eye: the print).
         status = WITHIN
-        reason = (f"printed totals disagree by at most {TOLERANCE_CENTS} centavos; admitted and "
-                  "flagged")
+        reason = (f"every gap within {TOLERANCE_CENTS} centavos "
+                  f"({gap_list(c for c in t.checks.values() if c.gap != 0)}); admitted and "
+                  "flagged; arithmetic does not say whether the print or the OCR is off")
     else:
         status = NOT_VALIDATED
-        reason = "gap above 5 centavos: " + "; ".join(
-            f"{c.kind} {c.column}: {c.gap:+,d}" if c.kind == "column" else f"grand: {c.gap:+,d}"
-            for c in t.checks.values() if abs(c.gap) > TOLERANCE_CENTS)
+        reason = "gap above 5 centavos: " + gap_list(
+            c for c in t.checks.values() if abs(c.gap) > TOLERANCE_CENTS)
     validated = status in (EXACT, WITHIN)
 
     if debug:
@@ -810,6 +1001,7 @@ def parse_boxes(period: str, raw: list[Box], dpi: int, debug: bool = False) -> M
             as_read = cents_of(b.raw)
             out.cells.append({
                 "period": period, "page": t.pages[i], "label_as_published": t.labels[i],
+                "label_as_read": t.labels_read[i],
                 "column_index": j, "amount_brl": brl(v), "amount_cents": v,
                 "amount_as_read": brl(as_read), "text_as_read": b.raw,
                 "repair": repair_label(b), "repair_detail": b.detail or None,
@@ -819,9 +1011,15 @@ def parse_boxes(period: str, raw: list[Box], dpi: int, debug: bool = False) -> M
                                     "as_read": as_read, "final": v, "repair": repair_label(b),
                                     "detail": b.detail})
 
+    # The gap each check would have if the one refused seam candidate that moves it were taken.
+    # With two or more candidates on one check there is no single alternative, so none is given.
+    alt_gap = {key: alts[0][0] for key, alts in moved.items() if len(alts) == 1}
     for c in t.checks.values():
         sb = c.stated_box
         as_read = cents_of(sb.raw) if sb is not None else None
+        key = (c.kind, c.column)
+        alts = moved.get(key, [])
+        suspect = next((s.text for _, s in alts if sb is not None and s.key == sb.key), None)
         out.checks.append({
             "period": period, "check": c.kind, "column_index": c.column, "label": c.label,
             "stated": brl(c.stated), "components": brl(c.components), "diff": brl(c.gap),
@@ -831,11 +1029,26 @@ def parse_boxes(period: str, raw: list[Box], dpi: int, debug: bool = False) -> M
                              "outside_tolerance"),
             "exact": c.gap == 0, "within_tolerance": abs(c.gap) <= TOLERANCE_CENTS,
             "stated_as_read": brl(as_read), "stated_text_as_read": sb.raw if sb else None,
-            "stated_repair": repair_label(sb), "month_status": status})
+            "stated_repair": repair_label(sb), "month_status": status,
+            "gap_cents_if_seam_glyph_dropped": alt_gap.get(key),
+            "stated_suspect_text": suspect,
+            "seam_candidate": "; ".join(f"refused: {s.why}; would give a gap of {g:+,d} centavos"
+                                        for g, s in alts) or None})
         if sb is not None and sb.repairs:
             out.repairs.append({"row": c.label, "column": c.column, "text_as_read": sb.raw,
                                 "as_read": as_read, "final": c.stated,
                                 "repair": repair_label(sb), "detail": sb.detail})
+
+    def gap_text(c: Check) -> str:
+        text = (f"column {c.column} ({c.label}): components minus printed total = {c.gap:+,d} "
+                "centavos" if c.kind == "column" else
+                f"grand: TOTAL row sum minus TOTAL GERAL = {c.gap:+,d} centavos")
+        alts = moved.get((c.kind, c.column), [])
+        if not alts:
+            return text
+        return text + " as read, " + ", ".join(
+            f"{g:+,d} if the seam glyph is dropped from {s.text!r} (reading {s.new!r})"
+            for g, s in alts)
 
     nonzero = [c for c in t.checks.values() if c.gap != 0]
     grand = t.checks.get(("grand", -1))
@@ -844,6 +1057,9 @@ def parse_boxes(period: str, raw: list[Box], dpi: int, debug: bool = False) -> M
     geral = (next(v for v in t.values[t.grand_row] if v is not None)
              if t.grand_row is not None else None)
     amount = sum(c["amount_cents"] for c in out.cells)
+    # A month that could not be checked has no largest gap: the maximum over the checks that
+    # happened to be made could read 0 and pass for a verdict.
+    checked = not t.reason
     out.summary = {
         "n_columns": t.k, "amount_cents": amount, "total_row_cents": total_row,
         "total_geral_cents": geral,
@@ -852,13 +1068,13 @@ def parse_boxes(period: str, raw: list[Box], dpi: int, debug: bool = False) -> M
                                          for c in t.checks.values()),
         "validated": validated, "validation_status": status, "validation_reason": reason,
         "tolerance_flagged": status == WITHIN,
-        "max_gap_cents": max((abs(c.gap) for c in t.checks.values()), default=None),
-        "gap_detail": "; ".join(
-            (f"column {c.column} ({c.label}): components minus printed total = {c.gap:+,d} "
-             "centavos") if c.kind == "column" else
-            f"grand: TOTAL row sum minus TOTAL GERAL = {c.gap:+,d} centavos"
-            for c in nonzero) or None,
-        "grand_gap_cents": grand.gap if grand else None,
+        "max_gap_cents": (max((abs(c.gap) for c in t.checks.values()), default=None)
+                          if checked else None),
+        "max_gap_cents_if_seam_glyph_dropped": (
+            max(abs(alt_gap.get(k, c.gap)) for k, c in t.checks.items())
+            if checked and alt_gap else None),
+        "gap_detail": "; ".join(gap_text(c) for c in nonzero) or None,
+        "grand_gap_cents": grand.gap if grand and checked else None,
     }
     return out
 
@@ -874,6 +1090,29 @@ def parse_month(engine, period: str, pdf: bytes, dpi: int, debug: bool = False) 
     out = parse_boxes(period, read_boxes(engine, pdf, regions, dpi), dpi, debug)
     out.regions = describe_regions(regions)
     return out
+
+
+def unlabelled_changes(frames: dict[str, pd.DataFrame]) -> list[str]:
+    """Every cell or printed total whose value is not what OCR read and that carries no repair.
+
+    The rule that no value changes without a repair label is kept by construction; this checks the
+    rows about to be written, so that a path that breaks it stops the run instead of reaching the
+    outputs. An unread value (as read None) with no repair is caught too, since NaN equals nothing.
+    """
+    bad = []
+    for name, value, read, repair, what in (
+            ("caixa_scan_advertising_lines", "amount_brl", "amount_as_read", "repair",
+             "text_as_read"),
+            ("caixa_scan_advertising_checks", "stated", "stated_as_read", "stated_repair",
+             "stated_text_as_read")):
+        df = frames[name]
+        if df.empty or repair not in df:
+            continue
+        bare = df[df[repair].isna()]
+        same = (bare[read] * 100).round().eq((bare[value] * 100).round())
+        bad += [f"{r['period']} {name}: {r[what]!r} as read {r[read]}, written {r[value]}"
+                for _, r in bare[~same].iterrows()]
+    return bad
 
 
 def main() -> None:
@@ -916,6 +1155,7 @@ def main() -> None:
             "validated": s["validated"], "validation_status": s["validation_status"],
             "validation_reason": s["validation_reason"] or None,
             "tolerance_flagged": s["tolerance_flagged"], "max_gap_cents": s.get("max_gap_cents"),
+            "max_gap_cents_if_seam_glyph_dropped": s.get("max_gap_cents_if_seam_glyph_dropped"),
             "grand_gap_cents": s.get("grand_gap_cents"), "gap_detail": s.get("gap_detail"),
             "n_repairs": len(p.repairs),
             "repairs": "; ".join(
@@ -932,17 +1172,24 @@ def main() -> None:
     frames = {"caixa_scan_advertising_lines": pd.DataFrame(cells),
               "caixa_scan_advertising_checks": pd.DataFrame(checks),
               "caixa_scan_advertising_monthly": pd.DataFrame(months)}
-    # A run restricted with --periods replaces only those months. Writing the frames as they stand
-    # would overwrite every other month with nothing: a four-month diagnostic run once left the
-    # outputs holding four months and none of the validated ones.
+    # A run restricted with --periods replaces only the months it re-read. Writing the frames as
+    # they stand would overwrite every other month with nothing: a four-month diagnostic run once
+    # left the outputs holding four months and none of the validated ones. A requested month that
+    # was not re-read (its PDF missing) keeps its earlier rows rather than vanishing.
     if a.periods:
-        done = {str(p) for p in a.periods}
+        done = {m["period"] for m in months}
+        for p in sorted({str(p) for p in a.periods} - done):
+            log.warning("  %s was not re-read; its earlier rows are kept", p)
         for name in frames:
             old = a.out_dir / f"{name}.parquet"
             if old.exists():
                 prev = pd.read_parquet(old)
                 prev = prev[~prev["period"].astype(str).isin(done)] if "period" in prev else prev
                 frames[name] = pd.concat([prev, frames[name]], ignore_index=True)
+    bad = unlabelled_changes(frames)
+    if bad:
+        raise SystemExit("values changed without a repair label, nothing written:\n  "
+                         + "\n  ".join(bad))
     for name, df in frames.items():
         if "period" in df:
             df = df.sort_values("period", kind="stable").reset_index(drop=True)

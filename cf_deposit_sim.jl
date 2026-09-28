@@ -101,6 +101,9 @@ end
 # is the stability bound on the sleeper accrual.
 const RDEP_MIN = 0.0
 const RDEP_MAX = 0.10
+# Margin of the per-row stability ceiling that simulate_deposits applies when it is given β
+# (_rdep_stability_cap): the discounted sleeper stock shrinks by at least 0.5% a quarter.
+const RDEP_STABILITY_KAPPA = 0.995
 # Set by the first simulate_deposits call that recomputes r^dep, so the bound incidence is
 # logged once per job instead of once per deviation.
 const _RDEP_BOUND_LOGGED = Ref(false)
@@ -132,6 +135,30 @@ the floor rather than a NaN so a pathological deviation cannot silently poison t
 @inline function _rdep_from_annual(rf_q::Real, rho_ann_pp::Real)
     inner = (1.0 + rf_q)^4 - rho_ann_pp / 100.0
     inner > 0.0 ? inner^0.25 - 1.0 : RDEP_MIN
+end
+
+"""
+    _rdep_stability_cap(phi, beta, kappa=RDEP_STABILITY_KAPPA) -> quarterly r^dep ceiling
+
+The largest deposit rate at which a row's DISCOUNTED sleeper stock still shrinks:
+β·φ·(1 + r^dep) ≤ κ, i.e. r^dep ≤ κ/(β·φ) − 1, kept inside [RDEP_MIN, RDEP_MAX].
+
+simulate_deposits compounds a balance by φ·(1 + r^dep) each quarter, so every ψ sum
+Σ_t β^t·(…)·Dep_t converges only while β·φ·(1 + r^dep) < 1; above it the balance outgrows the
+discount and the last horizons dominate the sum, however long the horizon.
+
+  β = 0.9    the bound is ≥ 0.995/(0.9·0.999) − 1 = 10.7% for every φ ≤ 0.999, so RDEP_MAX
+             binds first and the cap changes nothing.
+  β = 0.979  the bound is 1.7% a quarter at φ = 0.999. Measured on the 630,308 launch-quarter
+             rows of demand_3_index_spec_12 at each vintage's terminal forward rate, 9,992
+             CDB/prepaid rows (0.9% of deposits: spreads below zero, i.e. paid above r^f, with
+             φ̂ ≈ 1) exceed 1 without the cap, and the 1,859 of them with spreads below −10 pp
+             carry ~98% of the aggregate discounted deposit stock at T = 250. The cap binds on
+             ~3% of deposits.
+"""
+@inline function _rdep_stability_cap(phi::Real, beta::Real, kappa::Real=RDEP_STABILITY_KAPPA)
+    (phi > 0.0 && beta > 0.0) || return RDEP_MAX
+    return clamp(kappa / (beta * phi) - 1.0, RDEP_MIN, RDEP_MAX)
 end
 
 """
@@ -199,9 +226,11 @@ function load_sim_state(ctx::CFDemandCtx; dbar::Union{Float64,AbstractVector{<:R
     #   floor 0      the zero lower bound on NOMINAL deposit rates. Depositors in this market
     #                are not charged to hold a deposit (Selic 2-14.25% over 2016-2024), so a
     #                negative r^dep describes a world that does not exist.
-    #   ceiling 0.10 stability: β·φ̂·(1+r^dep) < 1 (β=0.9, φ̂≤0.999 ⇒ r^dep < 0.11) keeps the
-    #                franchise-value integral convergent. This argument bounds ONLY the ceiling;
-    #                a negative r^dep would make the integral converge faster, not slower.
+    #   ceiling 0.10 an outer bound. What makes the franchise-value integral converge is
+    #                β·φ̂·(1+r^dep) < 1, which depends on β, and this loader does not see β:
+    #                simulate_deposits(...; beta) tightens the ceiling row by row to
+    #                _rdep_stability_cap(φ̂, β). This argument bounds ONLY the ceiling; a
+    #                negative r^dep would make the integral converge faster, not slower.
     # On this OBSERVED column both bind rarely: 0.15% of cells above the ceiling, and below the
     # floor only at floating-point noise around zero.
     return DepositSimState(clamp.(phi, 0.0, 0.999), max.(Dep0, 0.0),
@@ -239,6 +268,9 @@ Arguments:
   * `state_ev`    : a `StateEvolution` (`ctx.state_ev`) to advance the market states with the
     horizon, so the share the demand block sees walks through the same demographics the state
     block does. `nothing` freezes them at each row's launch quarter.
+  * `beta`        : the discount factor the caller sums this path with. Given, every row's r^dep
+    ceiling becomes `_rdep_stability_cap(φ, beta)`, so no discounted balance outgrows the
+    discount; `nothing` keeps the fixed RDEP_MAX ceiling.
 
 PERFORMANCE: if `spreads_ann` is constant over t, the active share is computed ONCE
 (one forward pass) and reused — so a constant-spread sim is ~1 share evaluation,
@@ -263,10 +295,14 @@ function simulate_deposits(ctx::CFDemandCtx, st::DepositSimState;
                            s_const_in::Union{Nothing,Vector{Float64},Matrix{Float64}}=nothing,
                            rf_curves::Union{Nothing,Matrix{Float64}}=nothing,
                            row_curve::Union{Nothing,Vector{Int}}=nothing,
-                           state_ev::Union{Nothing,StateEvolution}=nothing)
+                           state_ev::Union{Nothing,StateEvolution}=nothing,
+                           beta::Union{Nothing,Float64}=nothing)
     N = nrow(ctx.df)
     φ = phi_override === nothing ? st.phi : phi_override
     length(φ) == N || error("phi length ≠ N")
+    # Per-row r^dep ceiling from the stability condition at the caller's β (_rdep_stability_cap).
+    rcap = beta === nothing ? nothing : _rdep_stability_cap.(φ, beta)
+    rdep_static = rcap === nothing ? st.rdep_q : min.(st.rdep_q, rcap)
 
     # Resolve the spread path into an N×T view and detect the constant-spread fast path.
     time_varying = spreads_ann isa Matrix
@@ -318,6 +354,7 @@ function simulate_deposits(ctx::CFDemandCtx, st::DepositSimState;
     tally && (_RDEP_BOUND_LOGGED[] = true)
     ncurve = per_row_rf ? size(rf_curves, 1) : 1
     nlo = zeros(Int, ncurve); nhi = zeros(Int, ncurve); ncnt = zeros(Int, ncurve)
+    nst = rcap === nothing ? nothing : zeros(Int, ncurve)
 
     @inbounds for t in 1:T
         ρ_t = time_varying ? spreads_ann[:, t] : base_spread
@@ -332,7 +369,8 @@ function simulate_deposits(ctx::CFDemandCtx, st::DepositSimState;
         # 13-33% exploding over T=50, all finite and NaN-free, which is why it does not announce
         # itself) nor /400 (right by 100x but still a linearisation of a compounded quantity).
         #
-        # Same [RDEP_MIN, RDEP_MAX] bounds as load_sim_state, for the same two reasons (see there).
+        # Same [RDEP_MIN, RDEP_MAX] bounds as load_sim_state, for the same two reasons (see there);
+        # with `beta` given the ceiling is each row's stability cap instead.
         # On a FORWARD path the floor does real work. Spreads are frozen at the launch quarter
         # (constant-state belief, V_Main:601) while the forward curve moves, so wherever the curve
         # falls below the frozen markdown the implied r^dep would go negative. Clamping at 0 is
@@ -345,51 +383,61 @@ function simulate_deposits(ctx::CFDemandCtx, st::DepositSimState;
         rdep_t = if per_row_rf
             @inbounds for i in 1:N; rfv[i] = rf_curves[row_curve[i], t]; end
             raw = _rdep_from_annual.(rfv, ρ_t)
-            tally && _tally_rdep_bounds!(nlo, nhi, ncnt, raw, row_curve)
-            clamp.(raw, RDEP_MIN, RDEP_MAX)
+            tally && _tally_rdep_bounds!(nlo, nhi, ncnt, raw, row_curve; nst=nst, rcap=rcap)
+            rcap === nothing ? clamp.(raw, RDEP_MIN, RDEP_MAX) : clamp.(raw, RDEP_MIN, rcap)
         elseif rf_path_q === nothing
-            st.rdep_q
+            rdep_static
         else
             raw = _rdep_from_annual.(rf_path_q[t], ρ_t)
-            tally && _tally_rdep_bounds!(nlo, nhi, ncnt, raw, nothing)
-            clamp.(raw, RDEP_MIN, RDEP_MAX)
+            tally && _tally_rdep_bounds!(nlo, nhi, ncnt, raw, nothing; nst=nst, rcap=rcap)
+            rcap === nothing ? clamp.(raw, RDEP_MIN, RDEP_MAX) : clamp.(raw, RDEP_MIN, rcap)
         end
         accr = 1.0 .+ rdep_t
         Dep[:, t+1] .= (1.0 .- φ) .* st.M .* s_t .+ φ .* accr .* Dep[:, t]
         s_out[:, t] .= s_t
         sp_out[:, t] .= ρ_t
     end
-    tally && _log_rdep_bounds(nlo, nhi, ncnt, per_row_rf ? rf_curves : nothing)
+    tally && _log_rdep_bounds(nlo, nhi, ncnt, per_row_rf ? rf_curves : nothing; nst=nst)
     return (Dep=Dep, s_act=s_out, spreads=sp_out)
 end
 
 # Count, per forward curve, how many recomputed r^dep values fall outside [RDEP_MIN, RDEP_MAX]
-# BEFORE the clamp. `row_curve === nothing` is the single-path branch: everything is curve 1.
+# BEFORE the clamp, and (with `rcap`) how many exceed their row's stability cap.
+# `row_curve === nothing` is the single-path branch: everything is curve 1.
 function _tally_rdep_bounds!(nlo::Vector{Int}, nhi::Vector{Int}, ncnt::Vector{Int},
-                             raw::AbstractVector{<:Real}, row_curve)
+                             raw::AbstractVector{<:Real}, row_curve;
+                             nst::Union{Nothing,Vector{Int}}=nothing,
+                             rcap::Union{Nothing,AbstractVector{<:Real}}=nothing)
     @inbounds for i in eachindex(raw)
         c = row_curve === nothing ? 1 : row_curve[i]
         ncnt[c] += 1
         raw[i] < RDEP_MIN && (nlo[c] += 1)
         raw[i] > RDEP_MAX && (nhi[c] += 1)
+        (nst !== nothing && rcap !== nothing && raw[i] > rcap[i]) && (nst[c] += 1)
     end
     return nothing
 end
 
 # One log block per job. Per-curve lines are sorted by floor incidence, worst first, and labelled
-# by the curve's row in rf_curves and its first-period r^f.
-function _log_rdep_bounds(nlo::Vector{Int}, nhi::Vector{Int}, ncnt::Vector{Int}, rf_curves)
+# by the curve's row in rf_curves and its first-period r^f. `nst` (given when simulate_deposits
+# ran with `beta`) adds the stability cap's incidence, which includes the RDEP_MAX excess.
+function _log_rdep_bounds(nlo::Vector{Int}, nhi::Vector{Int}, ncnt::Vector{Int}, rf_curves;
+                          nst::Union{Nothing,Vector{Int}}=nothing)
     tot = sum(ncnt)
     tot == 0 && return nothing
     pct(a, b) = round(100 * a / b, digits=2)
+    stab = nst === nothing ? "" :
+           ", stability cap β·φ̂·(1+r^dep) ≤ $(RDEP_STABILITY_KAPPA) on $(pct(sum(nst), tot))%"
     log_status("  [SIM] r^dep bounds (first recomputed simulation, h=1..T): floor 0 binds on " *
-               "$(pct(sum(nlo), tot))% of row-periods, ceiling $(RDEP_MAX) on $(pct(sum(nhi), tot))%")
+               "$(pct(sum(nlo), tot))% of row-periods, ceiling $(RDEP_MAX) on $(pct(sum(nhi), tot))%" *
+               stab)
     length(ncnt) == 1 && return nothing
     order = sortperm([ncnt[c] == 0 ? -1.0 : nlo[c] / ncnt[c] for c in eachindex(ncnt)]; rev=true)
     for c in order
         ncnt[c] == 0 && continue
         log_status("  [SIM]   curve $(lpad(c, 2)) (r^f_1=$(round(rf_curves[c, 1], digits=5))): " *
-                   "floor $(pct(nlo[c], ncnt[c]))%  ceiling $(pct(nhi[c], ncnt[c]))%")
+                   "floor $(pct(nlo[c], ncnt[c]))%  ceiling $(pct(nhi[c], ncnt[c]))%" *
+                   (nst === nothing ? "" : "  stability $(pct(nst[c], ncnt[c]))%"))
     end
     return nothing
 end

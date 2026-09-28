@@ -505,9 +505,12 @@ with rival accounting variables, which is neither the paper's design nor the eng
 made this file a different estimator from the RC model it is supposed to nest.
 
 `Q` is retained as a DIAGNOSTIC: the one-step GMM criterion `ḡ′Wḡ` on the 16 excluded moments
-with `W = (Z′Z/N)⁻¹`, exactly as the engines form it. Its overidentification df is `L − 1`, not
-`L`: the estimator sets the X-moments to zero exactly (they are not in Z) and pins only the
-single `spread_hat` direction of the Z-space, leaving `L − 1` overidentifying restrictions.
+with `W = (Z′Z/N)⁻¹`, exactly as the engines form it. It is not a test statistic: `W` is not the
+inverse of the clustered moment covariance and `ḡ` is not scaled by the variance of ξ, so `N·Q`
+(= ξ′P_Z ξ) is neither a Hansen J nor a Sargan statistic, and the tables print `Q` with no χ²
+reference. `q_df = L − 1` counts the overidentifying restrictions (the estimator sets the
+X-moments to zero exactly and pins only the `spread_hat` direction of the Z-space); it is stored
+in the summary but not printed.
 
 Returns `(theta1, se, pval, xi, Q, q_df, n_clusters, G_star)`.
 """
@@ -766,7 +769,7 @@ end
 # 5b. LaTeX result tables (ported from make_blp_logit_table.py)
 # ==========================================================================
 # Writes est{id}_spec12_logit.tex (xltabular: 4 sub-model cols, parameter rows
-# with SE underneath + IK2016 t(G*) significance stars, footer with obs/Q/dof/G*). Output
+# with SE underneath + IK2016 t(G*) significance stars, footer with obs/Q/G*). Output
 # matches the former Python generator so V_Main.tex \input{} stays unchanged.
 
 const VAR_MAP = Dict(
@@ -831,20 +834,70 @@ function format_cell(coef, se, gstar, pval=nothing)
     return (@sprintf("\$%.4f%s\$", coef, _stars(p)), @sprintf("\$(%.4f)\$", se))
 end
 
-"""Q-value cell with χ²(df) overidentification p-value stars; '---' if missing. `df` is the
-number of OVERIDENTIFYING restrictions (L − 1, `q_df` in the results), not the instrument
-count: the estimator imposes the X-moments exactly and pins one direction of the Z-space."""
-function format_q_value(qv, df)
-    (qv === nothing || isnan(qv) || df <= 0) && return "---"
-    return @sprintf("\$%.4f%s\$", qv, _stars(ccdf(Chisq(df), qv)))
+"""Q-value cell (the GMM criterion), '---' if missing. No stars and no degrees of freedom: `Q`
+is not scaled by the moment variance and `W` is not the efficient weight, so it has no χ²
+reference distribution (see `estimate_theta1_logit`)."""
+function format_q_value(qv)
+    (qv === nothing || isnan(qv)) && return "---"
+    return @sprintf("\$%.4f\$", qv)
 end
 
-"""Overidentification df for one summary entry: the stored `q_df`, else `n_iv − 1` for a
-summary written before `q_df` existed."""
-function _q_df(entry)
-    v = get(entry, "q_df", nothing)
-    v !== nothing && return Int(v)
-    return max(Int(get(entry, "n_iv", 1)) - 1, 1)
+# Footer label and note sentence for Q. make_blp_rc_table.py (Q_ROW_LABEL / Q_NOTE) prints the
+# same words under the RC tables, so the logit and RC columns describe one object one way.
+const Q_ROW_LABEL = raw"GMM Criterion ($Q$)"
+const Q_NOTE = raw"$Q=\bar g'W\bar g$ is the GMM criterion at the estimates, with $\bar g$ the sample " *
+    raw"moments of $\xi$ on the excluded instruments and the one-step weight $W=(Z'Z/N)^{-1}$; " *
+    raw"because $W$ is not the inverse of the clustered moment covariance, $Q$ is a measure of fit " *
+    raw"and not an overidentification test statistic. "
+
+"""Path of the demand weak-IV battery written by blp_weak_iv.py: `cluster_processed/weak_iv.json`
+under the BLP results directory (`data/output/BLP_RESULTS` on the cluster)."""
+function weak_iv_path()
+    out_dir = get_paths()[2]
+    res_dir = is_cluster_out(out_dir) ? joinpath(out_dir, "BLP_RESULTS") : out_dir
+    return joinpath(res_dir, "cluster_processed", "weak_iv.json")
+end
+
+"""
+    first_stage_eff_F(data, ids) -> Dict{Int, NTuple{2,Float64}}
+
+Effective first-stage F of the spread for each routine, read from the weak-IV battery
+(blp_weak_iv.py): the Montiel Olea–Pflueger cluster-robust F on the excluded instruments within
+deposit type 4 and within type 5 — the two blocks `project_spreads` instruments, each with its
+own first stage — after partialling out a constant and X_COLS. Those controls are the `full`
+sub-model's X, so the values belong to the comparison table only.
+
+A routine is kept only when the battery's full-sample block has the logit fit's observation
+count, i.e. both were computed on the same demand parquet; otherwise it is skipped with a
+warning and its cells print '---'. Returns id => (type 4, type 5), NaN for a missing block.
+"""
+function first_stage_eff_F(data::AbstractDict, ids::Vector{Int})
+    out = Dict{Int,NTuple{2,Float64}}()
+    p = weak_iv_path()
+    if !isfile(p)
+        println("    [table] no weak-IV battery at $p — first-stage F rows omitted")
+        return out
+    end
+    wk = try
+        copy(JSON3.read(read(p, String), Dict{String,Any}))
+    catch _e
+        println("    [table] WARN: could not read $(basename(p)) — $_e"); return out
+    end
+    for id in ids
+        blk = get(wk, string(id), nothing)
+        blk === nothing && continue
+        n_fit = get(get(data, "E$(id)_$(COMPARISON_SUBMODEL)", Dict{String,Any}()), "n_obs", nothing)
+        n_bat = get(get(blk, "all", Dict{String,Any}()), "n_obs", nothing)
+        if n_fit === nothing || n_bat === nothing || Int(n_fit) != Int(n_bat)
+            println("    [table] WARN: E$id weak-IV battery N=$(n_bat) ≠ logit N=$(n_fit) — " *
+                    "different demand-prep vintage; first-stage F omitted for E$id")
+            continue
+        end
+        effF(t) = (v = get(get(blk, t, Dict{String,Any}()), "effective_F", nothing);
+                   v === nothing ? NaN : Float64(v))
+        out[id] = (effF("type4"), effF("type5"))
+    end
+    return out
 end
 
 # ── plain-text formatting (comparison table matches est1-4_spec12_stage2_comparison.tex,
@@ -881,12 +934,14 @@ end
 
 """Build est1-4_spec12_logit_comparison.tex: columns = routines (each its COMPARISON_SUBMODEL
 sub-model — `full`, the BLP-X₁-matching spec), rows = COMPARISON_ROWS, stats block =
-elasticity / N / Q(dof) / G*.
+elasticity / N / Q / effective first-stage F (types 4 and 5, from `eff_f`; the two rows and
+their note sentence are omitted when `eff_f` is empty) / G*.
 Layout, notes and label conventions mirror est1-4_spec12_stage2_comparison.tex."""
 function build_logit_comparison_tex(data::AbstractDict, ids::Vector{Int},
                                     elas::AbstractDict;
                                     rows::Vector{String}=COMPARISON_ROWS,
-                                    with_seg::Bool=false)::String
+                                    with_seg::Bool=false,
+                                    eff_f::AbstractDict=Dict{Int,NTuple{2,Float64}}())::String
     n    = length(ids)
     hdr  = "Variable & " * join([get(ESTIMATION_ENUM_REF, id, "E$id") for id in ids], " & ") * TROW
     # The segment dummies are nuisance controls already printed IN FULL, per routine, by the appendix
@@ -895,6 +950,11 @@ function build_logit_comparison_tex(data::AbstractDict, ids::Vector{Int},
     # they ARE reported, just in the per-routine tables.
     seg_sentence = with_seg ? "" :
         raw"Segment dummies (S2--S5) are included in every strategy but not reported. "
+    # Types 1 and 2 carry the raw spread, so only types 4 and 5 have a first stage to report.
+    f_sentence = isempty(eff_f) ? "" :
+        raw"Effective $F$ is the \textcite{oleapflueger2013} cluster-robust first-stage statistic " *
+        raw"for the spread on the excluded instruments, computed separately within deposit types 4 " *
+        raw"and 5 after partialling out a constant and the product characteristics. "
     note = raw"\multicolumn{" * string(n + 1) *
         raw"}{p{\dimexpr\textwidth-2\tabcolsep\relax}}{\scriptsize \textit{Notes:} " *
         seg_sentence *
@@ -905,8 +965,7 @@ function build_logit_comparison_tex(data::AbstractDict, ids::Vector{Int},
         raw"$\delta_{jkmt}=\ln \hat{s}^{\mathrm{Act}}_{jkmt}-\ln \hat{s}^{\mathrm{Act}}_{\varnothing mt}$, and the " *
         raw"deposit spread is instrumented by its first-stage projection on deposit types 4 and 5 only, " *
         raw"the types over which institutions exercise pricing discretion; the product characteristics are " *
-        raw"exogenous. $Q$ is the GMM criterion on the excluded instruments and the Degrees of Freedom row " *
-        raw"its overidentification count ($\chi^2$); $G^*$ is " *
+        raw"exogenous. " * Q_NOTE * f_sentence * raw"$G^*$ is " *
         raw"effective clusters. The mean own-price elasticity is " *
         raw"$\hat{\alpha}\,\rho_{jkmt}(1-s_{jkmt})$ averaged over the estimation sample " *
         raw"(spread $\rho$ in percentage points).}"   # no trailing TROW (matches stage2 template)
@@ -948,25 +1007,32 @@ function build_logit_comparison_tex(data::AbstractDict, ids::Vector{Int},
         i < length(rows) && push!(lines, raw"\addlinespace")
     end
     push!(lines, raw"\midrule")
-    elas_l = String[]; obs_l = String[]; q_l = String[]; niv_l = String[]; gstar_l = String[]
+    elas_l = String[]; obs_l = String[]; q_l = String[]; gstar_l = String[]
+    f4_l = String[]; f5_l = String[]
+    _fcell(v) = isfinite(v) ? @sprintf("%.2f", v) : "---"
     for id in ids
         entry = get(data, "E$(id)_$(COMPARISON_SUBMODEL)", Dict{String,Any}())
         ev = get(elas, id, NaN)
         push!(elas_l, isfinite(ev) ? @sprintf("%.3f", ev) : "---")
         obs = get(entry, "n_obs", nothing)
         push!(obs_l, (obs === nothing || obs == 0) ? "---" : _commas(Int(obs)))
-        qv = get(entry, "Q_value", nothing); qdf = _q_df(entry)
-        push!(niv_l, string(qdf))
-        push!(q_l, qv === nothing ? "---" :
-                   @sprintf("%.4f%s", Float64(qv), _stars_plain(ccdf(Chisq(qdf), Float64(qv)))))
+        qv = get(entry, "Q_value", nothing)
+        push!(q_l, qv === nothing ? "---" : @sprintf("%.4f", Float64(qv)))
+        f4, f5 = get(eff_f, id, (NaN, NaN))
+        push!(f4_l, _fcell(f4)); push!(f5_l, _fcell(f5))
         gs = get(entry, "G_star", nothing)
         push!(gstar_l, gs === nothing ? "---" : @sprintf("%.2f", Float64(gs)))
     end
     append!(lines, [
         "Mean own-price elasticity & " * join(elas_l, " & ") * TROW,
         "Observations & " * join(obs_l, " & ") * TROW,
-        "\$Q\$ & " * join(q_l, " & ") * TROW,
-        "Degrees of Freedom & " * join(niv_l, " & ") * TROW,
+        Q_ROW_LABEL * " & " * join(q_l, " & ") * TROW,
+    ])
+    isempty(eff_f) || append!(lines, [
+        "Effective \$F\$, Type 4 & " * join(f4_l, " & ") * TROW,
+        "Effective \$F\$, Type 5 & " * join(f5_l, " & ") * TROW,
+    ])
+    append!(lines, [
         "Effective Clusters (\$G^*\$) & " * join(gstar_l, " & ") * TROW,
         raw"\end{xltabular}",
         raw"\doublespacing",
@@ -976,7 +1042,8 @@ end
 
 """Write est1-4_spec12_logit_comparison.tex (COMPARISON_IDS × COMPARISON_SUBMODEL) to
 Rout + Drafts. Computes the mean own-price elasticity per routine from its demand parquet
-(skipped with a '---' cell if the parquet is unavailable)."""
+(skipped with a '---' cell if the parquet is unavailable) and reads the effective first-stage F
+from the weak-IV battery (`first_stage_eff_F`)."""
 function write_logit_comparison_table(data::AbstractDict)
     ids = [id for id in COMPARISON_IDS if haskey(data, "E$(id)_$(COMPARISON_SUBMODEL)")]
     if length(ids) < 2
@@ -998,6 +1065,7 @@ function write_logit_comparison_table(data::AbstractDict)
             println("    [table] WARN: E$id elasticity failed — $_e"); NaN
         end
     end
+    eff_f = first_stage_eff_F(data, ids)
     rout_dir = tex_out_dir()
     dests = isdir(DRAFTS_DIR) ? [rout_dir, DRAFTS_DIR] : [rout_dir]
     # ONLY the segment-suppressed version is emitted. The `_seg` twin was retired: the segment dummies
@@ -1006,7 +1074,7 @@ function write_logit_comparison_table(data::AbstractDict)
     # footnote now cross-references those tables. Re-add the COMPARISON_ROWS_SEG/`true` tuple here if a
     # referee ever wants the with-segments layout back.
     for (rws, wseg, fn) in ((COMPARISON_ROWS, false, "est1-4_spec12_logit_comparison.tex"),)
-        tex = build_logit_comparison_tex(data, ids, elas; rows=rws, with_seg=wseg)
+        tex = build_logit_comparison_tex(data, ids, elas; rows=rws, with_seg=wseg, eff_f=eff_f)
         for d in dests
             path = joinpath(d, fn)
             try
@@ -1045,10 +1113,8 @@ function build_logit_table_tex(est_id::Int, data::AbstractDict)::String
             raw"Significance: *** $p<0.01$, ** $p<0.05$, * $p<0.1$. Mean utility is the " *
             raw"\textcite{berry1994estimating} inversion $\delta_{jkmt}=\ln \hat{s}^{\mathrm{Act}}_{jkmt}-" *
             raw"\ln \hat{s}^{\mathrm{Act}}_{\varnothing mt}$; the deposit spread is instrumented on deposit " *
-            raw"types 4 and 5 only and the product characteristics are exogenous. $Q$ denotes the GMM " *
-            raw"criterion on the excluded instruments and the Degrees of Freedom row its " *
-            raw"overidentification count ($\chi^2$); $G^*$ is " *
-            raw"effective clusters.}" * TROW,
+            raw"types 4 and 5 only and the product characteristics are exogenous. " * Q_NOTE *
+            raw"$G^*$ is effective clusters.}" * TROW,
         raw"    \endlastfoot", "",
     ]
     # Only rows some sub-model actually estimated. `constant` is in ROW_ORDER for the
@@ -1081,21 +1147,19 @@ function build_logit_table_tex(est_id::Int, data::AbstractDict)::String
         i < length(rows_used) && push!(lines, raw"    \addlinespace")
     end
     push!(lines, raw"    \midrule")
-    obs_l = String[]; q_l = String[]; gstar_l = String[]; niv_l = String[]
+    obs_l = String[]; q_l = String[]; gstar_l = String[]
     for (sm_key, _) in TABLE_SUBMODELS
         entry = get(data, "E$(est_id)_$(sm_key)", Dict{String,Any}())
         obs   = get(entry, "n_obs", nothing)
         push!(obs_l, (obs === nothing || obs == 0) ? "---" : _commas(Int(obs)))
-        qv  = get(entry, "Q_value", nothing); qdf = _q_df(entry)
-        push!(niv_l, string(qdf))
-        push!(q_l, qv === nothing ? "---" : format_q_value(Float64(qv), qdf))
+        qv  = get(entry, "Q_value", nothing)
+        push!(q_l, qv === nothing ? "---" : format_q_value(Float64(qv)))
         gs = get(entry, "G_star", nothing)
         push!(gstar_l, gs === nothing ? "---" : @sprintf("%.2f", Float64(gs)))
     end
     append!(lines, [
         "    Observations & " * join(obs_l, " & ") * TROW,
-        "    \$Q\$ & " * join(q_l, " & ") * TROW,
-        "    Degrees of Freedom & " * join(niv_l, " & ") * TROW,
+        "    " * Q_ROW_LABEL * " & " * join(q_l, " & ") * TROW,
         "    Effective Clusters (\$G^*\$) & " * join(gstar_l, " & ") * TROW,
         raw"\end{xltabular}", raw"\end{spacing}",
     ])

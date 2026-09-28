@@ -9,6 +9,9 @@
 #   bash bbl_status.sh --routines "3 4" --psi-tag _ms1
 #   bash bbl_status.sh --rss                  + MaxRSS of the COMPLETED fwd jobs (sacct .batch)
 #   bash bbl_status.sh --probe                = bash bbl_sizing.sh: the memory probe -> MEM/PACK + launch
+#   bash bbl_status.sh --routines "3 4" --psi-tag _ms979 --timing
+#                                             the first-hour check of a packed launch: GPU kernel per
+#                                             shard, peak RSS, elapsed vs the unpacked T=250 probe, GO/NO-GO
 #
 # COLUMNS
 #   shards   psi_dev files of this run on disk / N_SHARDS. Names only: the sweep is what opens
@@ -32,7 +35,7 @@ CL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "${CL_DIR}/cluster_lib.sh"
 
 ROUTINES="${CL_ROUTINES_CF}"; STAGE="${CF_STAGE:-extended}"
-TAG=""; TAG_SET=0; DO_RSS=0; DO_PROBE=0; ROUTINES_SET=0
+TAG=""; TAG_SET=0; DO_RSS=0; DO_PROBE=0; DO_TIMING=0; ROUTINES_SET=0
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --routines) ROUTINES="$2"; ROUTINES_SET=1; shift ;;
@@ -40,7 +43,8 @@ while [[ $# -gt 0 ]]; do
         --stage)    STAGE="$2"; shift ;;
         --rss)      DO_RSS=1 ;;
         --probe)    DO_PROBE=1 ;;
-        -h|--help)  sed -n '2,29p' "${BASH_SOURCE[0]}"; exit 0 ;;
+        --timing)   DO_TIMING=1 ;;
+        -h|--help)  sed -n '2,/^# =\{20,\}$/p' "${BASH_SOURCE[0]}"; exit 0 ;;
         *) echo "unknown option: $1 (see -h)" >&2; exit 2 ;;
     esac
     shift
@@ -71,6 +75,66 @@ if [[ "${TAG_SET}" == "0" ]]; then
     # The newest dispatched run that is not a memory probe (a probe dir holds probe.env).
     _newest="$(ls -td "${DROOT}"/E* 2>/dev/null | while read -r _d; do [[ -f "${_d}/probe.env" ]] || { printf '%s\n' "${_d}"; break; }; done)"
     if [[ -n "${_newest}" ]]; then TAG="$(_ctxval "${_newest}/context.env" PSI_TAG)"; fi
+fi
+
+# ── --timing: the first-hour check of a packed launch against the unpacked T=250 probe ─────
+# Reads the shard logs only (grep/awk): every packed child writes logs/bbl_fwd_<rtag>_shard<i>_<jobid>.out,
+# and a shard run alone writes its Julia output into its job's own log. Per routine it reports:
+#   GPU      children whose log has "GPU share kernel enabled" (the rest took the CPU share path)
+#   RSS      shards that logged "[BBL] shard i peak RSS X GiB", and the largest X
+#   done     finished shards: elapsed ([child] start_epoch .. end_epoch) / BBL_PROBE_REF_MIN
+#   running  shards past their first 25 simulations: seconds per simulation / BBL_PROBE_SIM_S
+# The reference is probe job 27455290 (gpu_h100, one shard per job, T=250): 35:06 and 37:04 per
+# shard (BBL_PROBE_REF_MIN=36) and 38-40 s per simulation (BBL_PROBE_SIM_S=39). GO while the worst
+# ratio is <= BBL_PACK_GO_MAX (1.3). Log timestamps are read with gawk's mktime.
+if [[ "${DO_TIMING}" == "1" ]]; then
+    REF_MIN="${BBL_PROBE_REF_MIN:-36}"; REF_SIM="${BBL_PROBE_SIM_S:-39}"; GO_MAX="${BBL_PACK_GO_MAX:-1.3}"
+    printf 'timing vs the unpacked T=250 probe (%s min per shard, %s s per simulation); GO while the worst ratio <= %s\n' \
+        "${REF_MIN}" "${REF_SIM}" "${GO_MAX}"
+    for k in ${ROUTINES}; do
+        rt="$(cl_bbl_rtag "${k}" "${STAGE}" "${TAG}")"
+        _tf=()
+        for _f in "${LOGS}"/bbl_fwd_"${rt}"_*.out; do [[ -f "${_f}" ]] && _tf+=("${_f}"); done
+        if (( ${#_tf[@]} == 0 )); then printf '  E%-3s no fwd logs under %s yet\n' "${k}" "${LOGS}"; continue; fi
+        awk -v rt="E${k}" -v ref="${REF_MIN}" -v rsim="${REF_SIM}" -v go="${GO_MAX}" '
+            function ts(line,   s) {
+                if (substr(line, 1, 1) != "[" || substr(line, 21, 1) != "]") return 0
+                s = substr(line, 2, 19); gsub(/[-:]/, " ", s); return mktime(s)
+            }
+            function close_file() {
+                if (!sim) return                     # a packed job log: its children report themselves
+                nlog++
+                if (kern) nk++; else nokern = nokern " " shard
+                if (rss != "") { nr++; if (rss + 0 > maxr) { maxr = rss + 0; maxs = shard } }
+                if (en && st) el = en - st
+                if (el > 0) {
+                    nd++; r = el / 60 / ref
+                    if (r > wd) { wd = r; wds = shard }
+                } else if (k0 > 0 && t0 && tk) {
+                    nrun++; r = (tk - t0) / k0 / rsim
+                    if (r > wr) { wr = r; wrs = shard }
+                }
+            }
+            function reset() { sim = 0; kern = 0; rss = ""; st = 0; en = 0; el = 0; t0 = 0; tk = 0; k0 = 0; shard = "?" }
+            FNR == 1 { if (NR > 1) close_file(); reset() }
+            /^\[child\] shard=[0-9]+ device=.*start_epoch=/ { if (match($0, /start_epoch=[0-9]+/)) st = substr($0, RSTART + 12, RLENGTH - 12) + 0 }
+            /^\[child\] shard=[0-9]+ end_epoch=[0-9]+ rc=0/ { if (match($0, /end_epoch=[0-9]+/)) en = substr($0, RSTART + 10, RLENGTH - 10) + 0 }
+            /^\[pack\] shard=[0-9]+ rc=0 elapsed_s=[0-9]+ gpu=see-this-log/ { if (match($0, /elapsed_s=[0-9]+/)) el = substr($0, RSTART + 10, RLENGTH - 10) + 0 }
+            /GPU share kernel enabled/ { kern = 1 }
+            /\[BBL\] shard [0-9]+\/[0-9]+ / { sim = 1; t0 = ts($0); split($0, w, /\[BBL\] shard /); split(w[2], v, "/"); shard = v[1] }
+            /\[BBL\] shard [0-9]+: [0-9]+\/[0-9]+ sims done/ { tk = ts($0); split($0, w, ": "); split(w[2], v, "/"); k0 = v[1] + 0 }
+            /\[BBL\] shard [0-9]+ peak RSS [0-9.]+ GiB/ { split($0, w, " peak RSS "); split(w[2], v, " "); rss = v[1] }
+            END {
+                if (NR > 0) close_file()
+                verdict = (wd > go || wr > go) ? "NO-GO" : ((nd + nrun) ? "GO" : "too early")
+                printf "  %-4s GPU %d/%d%s | RSS %d logged, max %.1f GiB%s | done %d, worst x%.2f%s | running %d past 25 sims, worst x%.2f%s | %s\n",
+                    rt, nk, nlog, (nokern != "" ? " (NO KERNEL: shard" nokern ")" : ""),
+                    nr, maxr, (nr ? " (shard " maxs ")" : ""),
+                    nd, wd, (nd ? " (shard " wds ")" : ""),
+                    nrun, wr, (nrun ? " (shard " wrs ")" : ""), verdict
+            }' "${_tf[@]}"
+    done
+    exit 0
 fi
 
 NAMES=""; SINCE_EPOCH=""

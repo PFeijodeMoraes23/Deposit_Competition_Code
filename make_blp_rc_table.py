@@ -121,12 +121,16 @@ COEF_LABELS = {
 # Demographic labels — descriptive names consistent with the sleepiness tables and
 # tab:demographic_chars (units dropped: BLP demographics enter STANDARDIZED, D̃=(D−D̄)/σ, so
 # "per 1k" / "10k R$" would be misleading). Covers all 8 D_COLS → no raw fallbacks.
+# `connections_per100` is ANATEL's "Acessos em Telefonia Móvel" (every active mobile-telephony
+# access, all technologies 2G-5G) per 100 inhabitants (scrape_anatel_mobile.py), i.e. active mobile
+# lines — not broadband and not all internet connections; its mean exceeds 100. "Mobile Lines"
+# keeps the Π row on one line of the 4.9cm label column.
 DEMO_LABELS = {
     "gdp_per_capita":            r"GDP \textit{per capita}",
     "fraction_65plus":           r"Fraction 65+",
     "fraction_young":            r"Fraction Young",
     "pix_users_pf_per1000":      r"PIX Users",
-    "connections_per100":        r"Broadband Connections",
+    "connections_per100":        r"Mobile Lines",
     "frac_4g5g":                 r"4G/5G Share",
     "branches_per1000":          r"Bank Branches",
     "cadunico_families_per1000": r"Cad\'Unico Families",
@@ -298,7 +302,37 @@ def _stars(pval: float) -> str:
 # symmetric ±1.96·SE interval would straddle the inadmissible σ<0 region (Andrews 1999/2001).
 # We flag such σ with a dagger and report the point on the bound, no two-sided SE. (These are also
 # exactly the directions where the WCB SD is degenerate because ∂s/∂σ=0 at σ=0 — false precision.)
+# Equal to `bound_tol` in blp_se_common.jl `gmm_cluster_ses`, so a dagger marks exactly the σ's
+# that routine profiles out of the covariance.
 SIGMA_BOUND_TOL = 1e-3
+
+# Footer labels shared by the RC tables (this file, make_blp_demand_comparison_table.py) and worded
+# as in the logit comparison (blp_logit.jl Q_ROW_LABEL / Q_NOTE), so one object reads one way.
+ELAST_ROW_LABEL = r"Mean own-price elasticity"
+Q_ROW_LABEL     = r"GMM Criterion ($Q$)"
+GSTAR_ROW_LABEL = r"Effective Clusters ($G^*$)"
+# The engines form Q = ḡ'Wḡ with the one-step W = (Z'Z/N)⁻¹, which is not the inverse of the
+# clustered moment covariance, so Q has no χ² reference and no degrees-of-freedom row is printed.
+Q_NOTE = (r"$Q=\bar g'W\bar g$ is the GMM criterion at the estimates, with $\bar g$ the sample "
+          r"moments of $\xi$ on the excluded instruments and the one-step weight $W=(Z'Z/N)^{-1}$; "
+          r"because $W$ is not the inverse of the clustered moment covariance, $Q$ is a measure of fit "
+          r"and not an overidentification test statistic.")
+# `gmm_cluster_ses` drops an on-bound σ's column from the GMM Jacobian before forming the
+# covariance, so every other standard error in the column is conditional on that σ = 0.
+BOUNDARY_SE_NOTE = (r"Standard errors of $\theta_1$ and of the remaining $\theta_2$ are conditional on "
+                    r"each $\dagger$ $\Sigma$ held at zero: its direction is dropped from the GMM "
+                    r"Jacobian before the covariance is formed.")
+
+
+def sigma_on_bound(entries) -> bool:
+    """Whether any Σ in the given stage results sits on the Σ≥0 bound (|Σ̂| < SIGMA_BOUND_TOL),
+    i.e. whether a table showing them carries a dagger and needs BOUNDARY_SE_NOTE."""
+    for d in entries:
+        for lbl, v, *_ in decode_theta2(d or {}):
+            if (lbl.startswith(r"$\Sigma$") and v is not None
+                    and not (isinstance(v, float) and math.isnan(v)) and abs(v) < SIGMA_BOUND_TOL):
+                return True
+    return False
 
 
 def fmt_coef(val: float, se: float, G_star: float | None = None,
@@ -369,6 +403,7 @@ def build_table(est_id: int, suffix: str = "") -> str:
     n_obs = rep.get("n_obs") or rep.get("n_clusters", "---")
     G_star_map = {s: stage_results[s].get("G_star") for s in available}
     sem_note   = se_note(stage_results.get("extended") or rep)
+    bound_note = (BOUNDARY_SE_NOTE + " ") if sigma_on_bound(stage_results[s] for s in available) else ""
 
     lines = [
         r"\begin{spacing}{1.0}",
@@ -405,7 +440,8 @@ def build_table(est_id: int, suffix: str = "") -> str:
         r"A $\dagger$ marks a $\Sigma$ estimated at the boundary ($\hat\Sigma\approx0$): we report "
         r"the point on the bound and \emph{no} two-sided standard error, since a symmetric interval "
         r"would straddle $\Sigma<0$ (Andrews 1999) and the bootstrap is degenerate there. "
-        r"$Q$: GMM overidentification statistic. Mean own-price elasticity is the average-market "
+        + bound_note + Q_NOTE + " " +
+        r"Mean own-price elasticity is the average-market "
         r"plug-in $\hat\alpha\cdot\overline{\rho(1-s)}$. "
         r"Spread in percentage points (÷100 from basis points)."
         r"} \\",
@@ -497,10 +533,10 @@ def build_table(est_id: int, suffix: str = "") -> str:
         se_vals.append(f"{a * rho:.3f}" if (rho is not None and a is not None) else "---")
 
     lines += [
-        "    $Q$ (GMM) & "       + " & ".join(q_vals)    + r" \\",
-        r"    Mean own-price elasticity & " + " & ".join(se_vals) + r" \\",
-        "    Observations & "     + " & ".join(nobs_vals) + r" \\",
-        r"    Eff.\ Clusters ($G^*$) & " + " & ".join(gstar_vals) + r" \\",
+        "    " + ELAST_ROW_LABEL + " & " + " & ".join(se_vals)    + r" \\",
+        "    Observations & "            + " & ".join(nobs_vals)  + r" \\",
+        "    " + Q_ROW_LABEL + " & "     + " & ".join(q_vals)     + r" \\",
+        "    " + GSTAR_ROW_LABEL + " & " + " & ".join(gstar_vals) + r" \\",
     ]
 
     lines += [
