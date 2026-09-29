@@ -210,6 +210,16 @@ forward_rf         | data | bbl,cf     | COST_FWD      | forward_rf_qoq.csv     
 #        the two blocks that the new panel actually moved.
 forward_rf_vint    | data | bbl        | COST_FWD      | forward_rf_vintages.csv        | data/input | python scrape_forward_rf.py --vintage-from 2016Q1 --vintage-to 2024Q4 --horizon 250 | - | -
 bbl_transitions    | data | bbl,cf     | COST_FWD      | bbl_transitions.json           | data/input | python bbl_transitions.py                                          | PROCESSED | market_panel.csv
+# --- 4c. the SLEEPINESS LINK of each BBL routine (bbl_fwd_sim.jl --phi-path evolving, the default) -
+#        The forward simulation re-evaluates the sleepy share every period from the routine's own
+#        spec-12 fit: index direction, the monotone link as a grid, state roles and the centring
+#        constants, exported by bbl_sleep_link.py from the est{k} pickle (~15 kB each). The export
+#        refuses to write a link that does not reproduce the demand parquet's phi_mt at t = 0, and
+#        the sim repeats that check on the cluster. One row per routine: only the link routines
+#        (3, 4) have one, so a {k} row would expand over routines that never do.
+#        --phi-path frozen is the only run that does not read it.
+sleep_link_E3      | data | bbl        | COST_FWD      | sleep_link_E3_spec_12.json     | data/input | python bbl_sleep_link.py --est 3                                   | EST3      | estimation_results.pkl
+sleep_link_E4      | data | bbl        | COST_FWD      | sleep_link_E4_spec_12.json     | data/input | python bbl_sleep_link.py --est 4                                   | EST4      | estimation_results.pkl
 
 # --- 5. fitted BBL policy function (deviations are formed around it, not observed spreads) -
 polfunc            | produced | bbl      | COST_POLFUNC  | polfunc_fitted.csv           | data/output/bbl | bbl_run.sh (BBL_STEP=polfunc, default)                       | -         | -
@@ -250,6 +260,10 @@ python_utils       | code | all        | REPO          | utils/*.py             
 # include/import -- deliberately, since a hardcoded fallback lineup would rebuild the
 # drift this registry exists to remove.
 routines_config    | code | all        | REPO          | config/routines.toml           | scripts/config | -                                                         | -         | -
+# The shared table-note wording. blp_logit.jl reads @__DIR__/config/table_notes.toml and
+# make_blp_rc_table.py <scripts>/config/table_notes.toml, so it lands beside routines.toml. Without it
+# blp_logit.jl skips its .tex output.
+table_notes_config | code | blp        | REPO          | config/table_notes.toml        | scripts/config | -                                                         | -         | -
 # The manifest ships ITSELF: cluster_preflight.sh section (7) reads
 # ${CL_ROOT}/cluster/upload_manifest.txt to verify the staged inputs. Without this row
 # it silently degrades to a reduced core check -- it still runs, but it stops checking

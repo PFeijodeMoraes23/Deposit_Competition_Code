@@ -39,7 +39,7 @@ as descriptive cluster-paucity statistics, not as the inference. (Previously: CR
 
 Usage
 -----
-  python bbl_polfunc.py                  # spread (feeds BBL Step 2)
+  python bbl_polfunc.py                  # compounded annual spread (feeds BBL Step 2)
   python bbl_polfunc.py --depvar rate    # annualized deposit rate (robustness)
 
 References
@@ -207,11 +207,14 @@ D_DEMO_LABELS = {
 }
 
 # ---- Regressand configuration (the default; overridden by --depvar in main) ----------------
-# Default LHS is the QoQ deposit spread `spread_qoq` (the policy fed to BBL Step 2). `--depvar rate`
-# switches the LHS to the ANNUALIZED deposit rate rate_ann = (1+rate_qoq)^4 - 1 and writes to a
-# SEPARATE `polfunc_rate_*` namespace, so it never overwrites the spread policy Step 2 consumes.
+# Default LHS is the COMPOUNDED annual deposit spread `spread_ann` = the panel's spread_ann_a{k} =
+# (1 + r^f_q)^4 - (1 + r^dep_q)^4, a fraction: the definition of the demand price (blp_logit.jl reads
+# the same column) and of the simulator's rho (cf_deposit_sim.jl _rdep_from_annual inverts exactly
+# this). It is the policy fed to BBL Step 2. `--depvar rate` switches the LHS to the ANNUALIZED
+# deposit rate rate_ann = (1+rate_qoq)^4 - 1 and writes to a SEPARATE `polfunc_rate_*` namespace, so
+# it never overwrites the spread policy Step 2 consumes.
 CFG = {
-    'regressand':  'spread_qoq',
+    'regressand':  'spread_ann',
     'out_prefix':  'polfunc',
     'tab_label':   'tab:polfunc',
     'caption':     'Policy Function Estimates for Endogenous Deposit Spreads (BBL Step~1)',
@@ -219,24 +222,24 @@ CFG = {
     # Appended to the table caption. Empty for the spread tables (the headline): their caption is
     # just "Policy Function Estimates: <deposit type>".
     'caption_suffix': '',
-    # 400 = 4 x 100: SIMPLE annualization of the QoQ spread, the same convention Step 2's
-    # forward-sim uses (_POLFUNC_QOQ_TO_ANN_PP = 400.0). This is NOT the panel's exact compounded
-    # spread_ann_a{k} = (1+rf)^4-(1+rate)^4, which differs by ~0.4pp on average (p99 ~0.9pp), so the
-    # unit is labelled "simple-annualized" rather than "annualized". The REGRESSAND stays spread_qoq:
-    # Step 2 consumes the QoQ policy, and OLS is scale-equivariant so this is display-only.
-    'lhs_display': 400.0,
-    'lhs_unit':    r'pp, simple-annualized ($4\times$QoQ)',
-    'lhs_short':   'quarterly deposit spread',
-    # The regressand is the per-quarter FRACTION spread_a{k} = risk_free_qoq - rate_a{k}; every
-    # displayed coefficient, SE and the mean are that times 400. The note says so and, beside it,
-    # how far that simple annualization sits from the compounded one at the panel's own rates
-    # (_annualization_gap), since the rest of the paper quotes compounded annualized spreads.
-    'depvar_note': (r'Dependent variable: the deposit spread '
-                    r'$\rho_{jkmt}=r^{f}_{t}-r^{\mathrm{dep}}_{jkmt}$ between quarterly rates, '
-                    r'2016--2024, estimated as a quarterly fraction and shown in percentage points '
-                    r'at a simple annualization ($\times4$): coefficients, standard errors and the '
-                    r'mean are $400$ times their quarterly-fraction values.'),
-    'gap_clause':  True,
+    # 100 = fraction -> pp: the regressand is already the compounded annual spread.
+    'lhs_display': 100.0,
+    'lhs_unit':    'pp, compounded annual',
+    'lhs_short':   'compounded annual deposit spread',
+    # The prepaid (k=5) spread is itself about zero, so at three decimals in pp most of its table
+    # would print 0.000: that table -- coefficients, SEs, the mean -- is shown in BASIS POINTS
+    # (user decision 2026-09-29), x100 on the pp display. C.10 (k=4) stays in pp.
+    'lhs_display_by_k': {5: 10000.0},
+    'lhs_unit_name':    'percentage points',
+    'lhs_unit_name_by_k': {5: 'basis points'},
+    # {unit} is filled per deposit type from lhs_unit_name(_by_k).
+    'depvar_note': (r'The dependent variable is the deposit spread '
+                    r'$\rho_{jkmt} = r^f_t - r^{\mathrm{dep}}_{jkmt}$, annualized by compounding, '
+                    r'$(1 + r)^4 - 1$, in {unit}, the same definition as the demand price.'),
+    # The fitted-policy CSV (the contract with bbl_fwd_sim.jl): the observed column it has always
+    # carried, and the unit of its fitted_* columns, written on every row as `lhs_unit`.
+    'csv_obs_col': 'spread_qoq',
+    'fitted_unit': 'spread_ann_frac',
 }
 
 _CFG_RATE = {
@@ -251,12 +254,30 @@ _CFG_RATE = {
     # 100 = fraction -> pp. The regressand is ALREADY exactly compounded (rate_ann), so unlike the
     # spread variant this is the exact annualized rate, not a simple-annualization approximation.
     'lhs_display': 100.0,
+    # No per-type override: the prepaid deposit RATE is not near zero. Explicit, because --depvar
+    # rate applies this dict with CFG.update, which would otherwise keep the spread's k=5 override.
+    'lhs_display_by_k': {},
+    'lhs_unit_name':    'percentage points',
+    'lhs_unit_name_by_k': {},
     'lhs_unit':    'pp of the annualized deposit rate',
     'lhs_short':   'annualized deposit rate',
     'depvar_note': (r'Dependent variable: annualized deposit rate '
                     r'$r^{\mathrm{dep,ann}}_{jkmt}=(1+r^{\mathrm{dep}}_{jkmt})^{4}-1$, 2016--2024.'),
-    'gap_clause':  False,
+    'csv_obs_col': 'rate_ann',
+    'fitted_unit': 'rate_ann_frac',
 }
+
+
+def _lhs_display(k: int, cfg: dict | None = None) -> float:
+    """The dependent variable's display multiplier for deposit type k: the variant's lhs_display,
+    or its per-type override (k=5 spread: basis points)."""
+    c = CFG if cfg is None else cfg
+    return float((c.get('lhs_display_by_k') or {}).get(k, c.get('lhs_display', 1.0)))
+
+
+def _lhs_unit_name(k: int, cfg: dict | None = None) -> str:
+    c = CFG if cfg is None else cfg
+    return (c.get('lhs_unit_name_by_k') or {}).get(k, c.get('lhs_unit_name', 'percentage points'))
 
 
 # ==============================================================================
@@ -303,6 +324,24 @@ def _resolve_is_B(df: pd.DataFrame) -> pd.Series:
     return df['CODMUN_IBGE'].astype(str) != '0'
 
 
+def _check_compounded_spread(df: pd.DataFrame, tol: float = 1e-10) -> None:
+    """The regressand must be the compounded annual spread of the rows' own quarterly rates:
+    spread_ann = (1 + r^f_q)^4 - (1 + r^f_q - spread_qoq)^4 on every estimation row. Measured on
+    the 2016-2024 panel the largest deviation is at machine precision (~1e-16); a larger one means
+    the panel's spread_ann_a{k} was built from different rates than spread_a{k}, and the fit stops."""
+    rf = pd.to_numeric(df['risk_free_qoq'], errors='coerce')
+    sq = pd.to_numeric(df['spread_qoq'], errors='coerce')
+    implied = (1.0 + rf) ** 4 - (1.0 + rf - sq) ** 4
+    diff = (pd.to_numeric(df['spread_ann'], errors='coerce') - implied).abs()
+    ok = diff.notna()
+    worst = float(diff[ok].max()) if ok.any() else float('nan')
+    print(f"  spread_ann vs (1+r^f)^4-(1+r^f-spread_qoq)^4 on {int(ok.sum()):,} rows: "
+          f"max |diff| = {worst:.2e}  ({int((~ok).sum()):,} rows without r^f or spread_qoq)")
+    if not worst <= tol:
+        raise SystemExit(f"[FATAL] spread_ann is not the compounded annual spread of spread_qoq "
+                         f"(max |diff| {worst:.3e} > {tol:g}): the panel's spread columns disagree.")
+
+
 def load_and_prepare_panel() -> pd.DataFrame:
     """Load the market panel, reshape to long for k=4,5, and construct lags.
 
@@ -330,15 +369,18 @@ def load_and_prepare_panel() -> pd.DataFrame:
     id_vars = ['CodConglomeradoPrudencial', 'mca_code', 'year', 'quarter']
     df_raw = df_raw.drop_duplicates(subset=id_vars)
 
+    # spread_ann_a{k} is the panel's compounded annual spread (the default regressand). The stub
+    # regexes are anchored (^stub\d+$), so 'spread_a' never picks up spread_ann_a{k} and neither
+    # stub picks up the *_national columns.
     df = pd.wide_to_long(
         df_raw,
-        stubnames=['dep_a', 'spread_a', 'rate_a'],
+        stubnames=['dep_a', 'spread_a', 'rate_a', 'spread_ann_a'],
         i=id_vars,
         j='deposit_type'
     ).reset_index()
 
     df = df.rename(columns={'dep_a': 'deposit_balance', 'spread_a': 'spread_qoq',
-                            'rate_a': 'rate_qoq'})
+                            'rate_a': 'rate_qoq', 'spread_ann_a': 'spread_ann'})
 
     # Restrict to endogenous deposit types
     df = df[df['deposit_type'].isin(K_ENDOG)].copy()
@@ -387,6 +429,8 @@ def load_and_prepare_panel() -> pd.DataFrame:
     n_before = len(df)
     df = df.dropna(subset=[regressand])
     print(f"  Dropped {n_before - len(df):,} rows with missing {regressand}")
+    if regressand == 'spread_ann':
+        _check_compounded_spread(df)
 
     print(f"  Final panel: {len(df):,} rows "
           f"(B={df['is_B'].sum():,}, D={(~df['is_B']).sum():,})")
@@ -708,8 +752,13 @@ def compute_fitted_values(df: pd.DataFrame, results: dict) -> pd.DataFrame:
     For each regression result, produce predicted values for the corresponding
     subset of the data. Returns a DataFrame with fitted value columns appended.
     """
+    # The CSV's columns are a contract with bbl_fwd_sim.jl (_load_policy_map): the identifiers, the
+    # observed column it has always carried (csv_obs_col), the fitted_* columns in the REGRESSAND's
+    # unit, and `lhs_unit`, which names that unit on every row (spread_ann_frac: the compounded
+    # annual spread as a fraction).
     df_out = df[['CodConglomeradoPrudencial', 'mca_code', 'year', 'quarter',
-                 'deposit_type', 'is_B', CFG['regressand'], 'entity_id', 'time_id']].copy()
+                 'deposit_type', 'is_B', CFG.get('csv_obs_col', CFG['regressand']),
+                 'entity_id', 'time_id']].copy()
 
     for label, res_dict in results.items():
         res = res_dict['res']
@@ -775,7 +824,42 @@ def compute_fitted_values(df: pd.DataFrame, results: dict) -> pd.DataFrame:
             print(f"    [{label}] {n_inc:,} of {len(df_pred):,} rows left NaN "
                   f"(incomplete regressors — not fabricated to the intercept)")
 
+    df_out['lhs_unit'] = CFG.get('fitted_unit', CFG['regressand'])
     return df_out
+
+
+def fitted_csv_frame(df_fitted: pd.DataFrame) -> pd.DataFrame:
+    """The fitted-policy CSV's columns in a FIXED order: the identifier and observed columns in the
+    order compute_fitted_values builds them, then the fitted_* columns sorted by name, then
+    `lhs_unit` last. The regressions finish in thread order (as_completed), so the order their
+    columns were added in differs from run to run; fixing it here makes the file byte-reproducible,
+    which the BBL sweep relies on (it compares the CSV's sha256 with the one the psi recorded).
+    bbl_fwd_sim.jl matches the columns by name, so it reads every order alike."""
+    fitted = sorted(c for c in df_fitted.columns if str(c).startswith('fitted_'))
+    ids = [c for c in df_fitted.columns if not str(c).startswith('fitted_') and c != 'lhs_unit']
+    tail = ['lhs_unit'] if 'lhs_unit' in df_fitted.columns else []
+    return df_fitted[ids + fitted + tail]
+
+
+def write_fitted_csv(df_fitted: pd.DataFrame, csv_path) -> None:
+    """Write the fitted-policy CSV atomically and byte-reproducibly (%.6f, fitted_csv_frame's order).
+
+    Through a temporary name in the same folder, renamed into place: the forward simulation's
+    shards read this file at startup and the sweep hashes it, so a reader must see either the
+    previous complete file or the new complete one, never a partial write. os.replace is atomic
+    within one filesystem on POSIX and Windows alike. The temporary does not end in .csv, so no
+    glob picks it up."""
+    csv_path = pathlib.Path(csv_path)
+    tmp_path = csv_path.with_name(f".tmp_{csv_path.name}.{os.getpid()}")
+    try:
+        fitted_csv_frame(df_fitted).to_csv(tmp_path, index=False, float_format='%.6f')
+        os.replace(tmp_path, csv_path)
+    except BaseException:
+        try:
+            tmp_path.unlink()
+        except OSError:
+            pass
+        raise
 
 
 def save_outputs(results: dict, df_fitted: pd.DataFrame) -> None:
@@ -796,7 +880,7 @@ def save_outputs(results: dict, df_fitted: pd.DataFrame) -> None:
 
     # --- 2. Fitted values CSV ---------------------------------------------
     csv_path = OUTPUT_DIR / f"{CFG['out_prefix']}_fitted.csv"
-    df_fitted.to_csv(csv_path, index=False, float_format='%.6f')
+    write_fitted_csv(df_fitted, csv_path)
     print(f"  Saved fitted values: {csv_path.name}")
 
     # --- 3. Summary JSON --------------------------------------------------
@@ -876,19 +960,21 @@ _VAR_LABELS = {
     'risk_free_qoq': 'Risk-Free Rate (QoQ)',
     'log_total_assets_lag_sq': 'Log Total Assets$^2$',
     'equity_ratio_lag_sq': 'Equity Ratio$^2$',
-    'risk_free_qoq_sq': 'Risk-Free Rate$^2$',
+    'risk_free_qoq_sq': 'Risk-Free Rate (QoQ)$^2$',
     'gdp_per_capita': r'GDP \textit{per capita}',
     'fraction_65plus': 'Fraction 65+',
     'fraction_young': 'Fraction Young',
     'pix_users_pf_per1000': 'Pix Users',
-    'connections_per100': 'Broadband Connections',
+    # ANATEL "Acessos em Telefonia Movel": active mobile-telephony accesses (2G-5G) per 100
+    # inhabitants (scrape_anatel_mobile.py), not broadband -- the label every other table uses.
+    'connections_per100': 'Mobile Lines',
     'branches_per1000': 'Branches',
     'cadunico_families_per1000': 'CadUnico Families',
     'gdp_per_capita_natl': r'GDP \textit{per capita} (Natl.)',
     'fraction_65plus_natl': 'Fraction 65+ (Natl.)',
     'fraction_young_natl': 'Fraction Young (Natl.)',
     'pix_users_pf_per1000_natl': 'Pix Users (Natl.)',
-    'connections_per100_natl': 'Broadband Connections (Natl.)',
+    'connections_per100_natl': 'Mobile Lines (Natl.)',
     'branches_per1000_natl': 'Branches (Natl.)',
     'cadunico_families_per1000_natl': 'CadUnico Families (Natl.)',
 }
@@ -922,7 +1008,7 @@ def _polfunc_col_keys(k: int) -> list:
 # Column headers, one per column, in the order of _polfunc_col_keys. Each of the three says what
 # it is on its own: a shared 'D-type' spanner over the two D columns left the reader to work out
 # from the Demographics indicator row which D specification was which.
-_COL_HEADERS = ['B', 'D without demographics', 'D with demographics at national means']
+_COL_HEADERS = ['B', 'D, no demographics', 'D, demographics at national means']
 
 # The two lines that make every page break of the xltabular carry the continued head and foot:
 # a zero kern closing \endlastfoot (so the notes' depth counts as height in longtable's own test)
@@ -958,20 +1044,40 @@ def _polfunc_variant_cell(res_dict, base):
     return None
 
 
-def _polfunc_emit_rows(label, cells, rows, mult=1.0):
+# ---- Number display (V_Main rule, 2026-09-28) -------------------------------------------------
+# Every displayed number has exactly three decimals and counts are integers with thousands
+# separators. A value that rounds to zero prints 0.000, never -0.000; a NONZERO value that prints
+# 0.000 is kept as it is (the display unit is not changed for it) and listed in _ZERO_PRINTS,
+# which write_polfunc_fragments reports on stdout.
+_ND = 3
+_ZERO_PRINTS: list = []
+
+
+def _fmt3(x, where: str = '') -> str:
+    v = float(x)
+    s = f'{v:,.{_ND}f}'
+    if float(s.replace(',', '')) == 0.0:
+        if v != 0.0 and where:
+            _ZERO_PRINTS.append((where, v))
+        s = f'{0.0:.{_ND}f}'
+    return s
+
+
+def _polfunc_emit_rows(label, cells, rows, mult=1.0, where=''):
     """Append a coefficient line + a standard-error line for one regressor across columns.
 
     `mult` = LHS_display · unit_scale rescales coefficient AND standard error together (a pure
     change of units, so t-stats and stars are unaffected)."""
     coef_cells, se_cells = [], []
-    for c in cells:
+    for j, c in enumerate(cells):
         if c is None:
             coef_cells.append('')
             se_cells.append('')
         else:
             cf, se, p = c
-            coef_cells.append(f'${cf * mult:.4f}^{{{_stars(p)}}}$')
-            se_cells.append(f'$({se * mult:.4f})$')
+            w = f'{where} {label} [{_COL_HEADERS[j]}]'
+            coef_cells.append(f"${_fmt3(cf * mult, w).replace(',', '{,}')}^{{{_stars(p)}}}$")
+            se_cells.append(f"$({_fmt3(se * mult, w + ' SE').replace(',', '{,}')})$")
     rows.append(f'{label} & ' + ' & '.join(coef_cells) + r' \\')
     rows.append(' & ' + ' & '.join(se_cells) + r' \\')
 
@@ -992,7 +1098,7 @@ def _polfunc_panel_rows(results: dict, k: int, include_segments: bool = False) -
     Every coefficient is shown in its display unit (see _DISPLAY_UNITS)."""
     cols = _polfunc_col_keys(k)
     demo_all = set(_DEMO_BASES) | {d + '_natl' for d in _DEMO_BASES}
-    lhs = float(CFG.get('lhs_display', 1.0))
+    lhs = _lhs_display(k)
 
     # ordered union of NON-demographic regressors (first appearance across columns)
     order, seen = [], set()
@@ -1008,9 +1114,11 @@ def _polfunc_panel_rows(results: dict, k: int, include_segments: bool = False) -
             seen.add(v)
 
     rows = []
+    where = f"C k={k}" + (" segment" if include_segments else "")
     for v in order:
         cells = [_polfunc_cell(results[ck], v) if ck in results else None for ck in cols]
-        _polfunc_emit_rows(_row_label(v), cells, rows, mult=lhs * _display_unit(v)[0])
+        _polfunc_emit_rows(_row_label(v), cells, rows, mult=lhs * _display_unit(v)[0],
+                           where=where)
 
     # Merged demographic rows -- DETAIL ONLY. In the main table they collapse to a
     # 'Demographics' indicator row (Yes/No/Yes: B carries local MCA demographics, D~(no demo.)
@@ -1022,7 +1130,8 @@ def _polfunc_panel_rows(results: dict, k: int, include_segments: bool = False) -
         cells = [_polfunc_variant_cell(results[ck], base) if ck in results else None for ck in cols]
         if all(c is None for c in cells):
             continue
-        _polfunc_emit_rows(_row_label(base), cells, demo_rows, mult=lhs * _display_unit(base)[0])
+        _polfunc_emit_rows(_row_label(base), cells, demo_rows, mult=lhs * _display_unit(base)[0],
+                           where=where)
     if demo_rows:
         rows.append(r'\addlinespace[0.3ex]')
         rows.extend(demo_rows)
@@ -1034,89 +1143,41 @@ def _polfunc_stat_row(label, values, fmt) -> str:
     return f'{label} & ' + ' & '.join(cells) + r' \\'
 
 
-def _annualization_gap(k: int):
-    """{'B'|'D': (mean simple-annualized spread, mean compounded-minus-simple gap), both in pp}
-    over the panel rows of deposit type k in the estimation window, or None when the panel cannot
-    be read (the clause is then left out, and said so).
-
-    Simple: 400 * spread_a{k}, the display of these tables. Compounded:
-    100 * ((1 + r^f)^4 - (1 + r^dep)^4) with r^dep = r^f - spread_a{k}, the convention the rest of
-    the paper is moving to. Every window row with a spread, rather than the complete-case
-    regression sample, which the stored fit does not carry; the two differ by a few percent of
-    rows (B, k=4: 319,829 regression rows of 331,133)."""
-    try:
-        import pyarrow.parquet as pq
-        pth = pathlib.Path(str(PANEL_CSV)).with_suffix('.parquet')
-        col = f'spread_a{k}'
-        t = pq.read_table(pth, columns=['is_B', 'year', 'risk_free_qoq', col]).to_pandas()
-    except Exception as exc:                                        # noqa: BLE001
-        print(f"  [WARN] annualization gap for k={k} not computed ({type(exc).__name__}: {exc}); "
-              f"the note gives the convention without it")
-        return None
-    t = t[(t['year'] >= POLFUNC_MIN_YEAR) & (t['year'] <= POLFUNC_MAX_YEAR) & t[col].notna()]
-    rf = t['risk_free_qoq'].astype(float)
-    s = t[col].astype(float)
-    simple = 400.0 * s
-    gap = 100.0 * ((1.0 + rf) ** 4 - (1.0 + rf - s) ** 4) - simple
-    out = {}
-    for lab, mk in (('B', t['is_B'].astype(bool)), ('D', ~t['is_B'].astype(bool))):
-        if mk.any():
-            out[lab] = (float(simple[mk].mean()), float(gap[mk].mean()))
-    return out or None
-
-
 def _polfunc_notes(k: int | None = None, results: dict | None = None) -> str:
-    """Table Notes: the inference paragraph, then what the dependent variable is.
+    """Table Notes: the inference paragraph, the regressor units, then what the dependent variable is.
 
     Deliberately short. Everything the notes used to carry -- winsorization, centering, the
     segment/demographic indicators -- is documented in the prose of the paper and in this
     module\'s comments. What stays is what a reader needs at the table: how the standard errors
-    were produced, and the exact regressand and display scaling, with how far that scaling sits
-    from the compounded annualized spread the other tables quote. For k=5 a D column whose
-    regressors explain almost nothing is said to be what it is, a constant near zero.
+    were produced, the units the row labels do not carry, and the exact regressand. For k=5 a D
+    column whose regressors explain almost nothing is said to be what it is, a constant near zero.
 
-    Citations are real \\parencite keys, not typeset-by-hand author strings, so they resolve
+    Citations are real \parencite keys, not typeset-by-hand author strings, so they resolve
     against References.bib and stay correct if an entry changes. The paper uses biblatex/biber
-    (authoryear-comp), where \\parencite is the parenthetical form.
+    (authoryear-comp), where \parencite is the parenthetical form.
     """
+    # Held to the appendix length of the V_Main style guide (2026-09-28): ~150 words at
+    # \footnotesize. The regressor units are stated once here: the ratios, the Basel index included,
+    # are fractions in the panel but their coefficients are per percentage point, and the two rates
+    # (risk-free, asset return) are quarterly, as their labels say.
     note = (
-        r'\textit{Notes:} Standard errors in parentheses are from a score/multiplier wild cluster '
-        r'bootstrap at the conglomerate level (Webb weights) '
-        r'\parencite{cameron2008bootstrap,mackinnon2017wild,webb2023reworking}. '
-        r'$G$ and the effective cluster count '
-        r'$G^{*}=G/(1+\mathrm{cv}^{2})$ \parencite{imbens2016robust,carter2017asymptotic} are '
-        r'reported as the cluster-paucity statistics that motivate the bootstrap, not as the '
-        r'inference. *** $p<0.01$, ** $p<0.05$, * $p<0.1$. '
-        + CFG['depvar_note']
+        r'\textit{Notes:} Standard errors in parentheses: score/multiplier wild cluster bootstrap '
+        r'by conglomerate, Webb weights '
+        r'\parencite{cameron2008bootstrap,mackinnon2017wild,webb2023reworking}; $G$ and '
+        r'$G^{*}=G/(1+\mathrm{cv}^{2})$ \parencite{imbens2016robust,carter2017asymptotic} '
+        r'measure cluster paucity and are not the inference. *** $p<0.01$, ** $p<0.05$, '
+        r'* $p<0.1$. Ratios and rates, the Basel index included, are fractions in the panel; '
+        r'their coefficients are per percentage point (per pp$^{2}$ for squares), and the '
+        r'risk-free rate and asset return are quarterly. '
+        # str.replace, not str.format: the note is LaTeX and full of braces.
+        + CFG['depvar_note'].replace('{unit}', _lhs_unit_name(k if k is not None else 4))
     )
-    if k is not None and CFG.get('gap_clause'):
-        gap = _annualization_gap(k)
-        if gap:
-            # The gap relative to the same rows' mean spread, not to the Mean dep. var. row: the
-            # panel rows are not the complete-case regression sample (see _annualization_gap).
-            if all(abs(g) < 0.005 for _m, g in gap.values()):
-                size = 'under 0.01 pp for both firm types'
-            else:
-                size = ' and '.join(
-                    (rf'{g:.2f} pp for {lab} (${100 * g / m:.1f}\%$ of its mean spread)'
-                     if abs(g) >= 0.005 and m else f'under 0.01 pp for {lab}')
-                    for lab, (m, g) in gap.items())
-            note += (r" At the panel's 2016--2024 rates the compounded "
-                     r"convention $(1+r^{f}_{t})^{4}-(1+r^{\mathrm{dep}}_{jkmt})^{4}$ is higher on "
-                     r"average by " + size + '.')
     if k == 5 and results:
         d_cols = [ck for ck in _polfunc_col_keys(k)[1:] if ck in results]
         r2 = [float(results[ck]['r_squared']) for ck in d_cols]
-        mdv = [results[ck].get('mean_depvar') for ck in d_cols]
         if r2 and max(r2) < 0.05:
-            mean_txt = ''
-            if all(v is not None for v in mdv):
-                mean_txt = (rf' around a mean of ${float(mdv[0]) * float(CFG["lhs_display"]):.3f}$'
-                            r' pp')
-            note += (r' In both D columns the fitted $k=5$ policy is essentially a constant near '
-                     r'zero: the regressors explain '
-                     + ' and '.join(f'${100 * v:.1f}\\%$' for v in r2)
-                     + r' of the variance' + mean_txt + '.')
+            note += (r' In both D columns the fitted policy is essentially a constant near zero '
+                     r'($R^{2}$ of ' + ' and '.join(f'${v:.3f}$' for v in r2) + ').')
     return note
 
 
@@ -1189,7 +1250,7 @@ def build_polfunc_table(results: dict, k: int, include_segments: bool = False) -
         r'\multicolumn{4}{r}{\textit{Continued on next page}} \\',
         r'\endfoot',
         r'\bottomrule',
-        r'\multicolumn{4}{@{}p{\dimexpr\textwidth-2\tabcolsep\relax}@{}}{\scriptsize '
+        r'\multicolumn{4}{@{}p{\dimexpr\textwidth-2\tabcolsep\relax}@{}}{\footnotesize '
         + _polfunc_notes(k, results) + r'} \\',
         _LASTFOOT_KERN,
         r'\endlastfoot',
@@ -1218,14 +1279,16 @@ def build_polfunc_table(results: dict, k: int, include_segments: bool = False) -
     # Scale anchor for the intercept: the constant is the prediction at x=0 (assets of R$1), which
     # is out of support and therefore large; mean(fitted) == mean(y) under OLS, so this row IS the
     # fitted value at the average state and is what the reader should read the levels against.
-    _lhs = float(CFG.get('lhs_display', 1.0))
+    _lhs = _lhs_display(k)
     mdv = [results[ck]['mean_depvar'] * _lhs if ck in results and 'mean_depvar' in results[ck]
            else None for ck in cols]
-    L.append(_polfunc_stat_row('Mean dep.\\ var.', mdv, lambda x: f'{x:.4f}'))
-    L.append(_polfunc_stat_row(r'$R^{2}$', r2, lambda x: f'{x:.4f}'))
-    L.append(_polfunc_stat_row('Observations', obs, lambda x: f'{x:,}'))
-    L.append(_polfunc_stat_row(r'Clusters ($G$)', G, lambda x: f'{x}'))
-    L.append(_polfunc_stat_row(r'Eff.\ clusters ($G^{*}$)', Gs, lambda x: f'{x:.1f}'))
+    where = f"C k={k}" + (" segment" if include_segments else "")
+    L.append(_polfunc_stat_row('Mean dep.\\ var.', mdv,
+                               lambda x: _fmt3(x, f'{where} Mean dep. var.')))
+    L.append(_polfunc_stat_row(r'$R^{2}$', r2, lambda x: _fmt3(x, f'{where} R2')))
+    L.append(_polfunc_stat_row('Observations', obs, lambda x: f'{int(x):,}'))
+    L.append(_polfunc_stat_row(r'Clusters ($G$)', G, lambda x: f'{int(x):,}'))
+    L.append(_polfunc_stat_row(r'Eff.\ clusters ($G^{*}$)', Gs, lambda x: _fmt3(x)))
 
     L.append(_LASTROW_RESERVE)
     L.append(r'\end{xltabular}')
@@ -1237,6 +1300,7 @@ def write_polfunc_fragments(results: dict) -> dict:
     """Write the `\\input`-able fragments: one MAIN table per deposit type (segment dummies
     collapsed to an FE indicator) plus a `_segment` companion that shows them explicitly."""
     DRAFTS_DIR.mkdir(parents=True, exist_ok=True)
+    _ZERO_PRINTS.clear()
     frags = {}
     for k in K_ENDOG:
         for seg in (False, True):
@@ -1248,6 +1312,11 @@ def write_polfunc_fragments(results: dict) -> dict:
             print(f"  Wrote fragment: {path.name}  (label {CFG['tab_label']}_k{k}{suffix})")
             if not seg:
                 frags[k] = frag          # preview shows the MAIN tables
+    if _ZERO_PRINTS:
+        print(f"  [display] {len(_ZERO_PRINTS)} nonzero value(s) print as 0.000 at {_ND} decimals "
+              f"(not rescaled):")
+        for where, v in _ZERO_PRINTS:
+            print(f"      {where}: {v:.3e}")
     return frags
 
 
@@ -1358,7 +1427,7 @@ def main():
         description="Policy Function Estimation for Deposit Types k=4,5 (BBL Step 1)")
     parser.add_argument(
         '--depvar', choices=['spread', 'rate'], default='spread',
-        help='Regressand: "spread" (default; QoQ deposit spread, fed to BBL Step 2) or '
+        help='Regressand: "spread" (default; compounded annual deposit spread, fed to BBL Step 2) or '
              '"rate" (annualized deposit rate = (1+rate_qoq)^4-1). "rate" writes a SEPARATE '
              'polfunc_rate_* namespace and does NOT overwrite the spread policy.')
     parser.add_argument(

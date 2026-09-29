@@ -219,6 +219,97 @@ function load_Z(ctx::CFDemandCtx; sidecar::Union{Nothing,DataFrame}=nothing)
 end
 
 # ==========================================================================
+# Cost shifters along the simulated path
+# ==========================================================================
+"""
+    ZEvolution
+
+The cost shifters' own law of motion over the forward horizon, as bbl_transitions.py estimates
+it (`cost_shifters`): mean reversion to a FIRM-SPECIFIC level with a persistence per firm type,
+
+    z_{j,t+1} = (1 − ρ_κ)·μ_j + ρ_κ·z_{j,t} + u       ⇒       E z_{j,t} = μ_j + ρ_κ^t·(z_{j,0} − μ_j),
+
+ρ_κ the pooled within-firm OLS slope of type κ ∈ {B, D} and μ_j firm j's own level — the mean the
+within transform removes. It is stored as the equivalent SHIFT of the launch value,
+
+    Z_{i,t} = Z_{i,0} + (ρ_κ^t − 1)·(Z_{i,0} − μ_{j(i)}),
+
+which is exactly Z_{i,0} at t = 0 and for ρ = 1, so ρ = 1 reproduces the constant-Z ψ3 bit for
+bit. μ_j is the firm's mean over the quarters the panel observes, taken on the SAME Z that enters
+ψ3 (load_Z: within-type median imputation, 1/99 within-type winsorisation, parquet units — the
+Basel index is in percentage points there and a fraction in the market panel, which ρ does not
+see but a level does). A row's ρ is its own type's, the split bbl_transitions.py estimates on.
+"""
+struct ZEvolution
+    dz   ::Matrix{Float64}   # N × n_Z: Z_{i,0} − μ_{j(i)}
+    rhoB ::Vector{Float64}   # n_Z, B firms (1.0 = the shifter does not move)
+    rhoD ::Vector{Float64}   # n_Z, D firms
+    isB  ::BitVector         # N, the row's firm type
+    src  ::String            # the transitions file the ρ came from
+end
+
+"""
+    _firm_level(zcol, firm, tid) -> μ per row
+
+The firm's long-run level of one shifter: the firm-quarter value (mean over the firm's rows in
+that quarter; a firm-level ratio is the same on all of them) averaged over the firm's quarters.
+"""
+function _firm_level(zcol::AbstractVector{Float64}, firm::Vector{String}, tid::Vector{String})
+    N = length(zcol)
+    fq = Dict{Tuple{String,String},Tuple{Float64,Int}}()
+    @inbounds for i in 1:N
+        k = (firm[i], tid[i]); s, c = get(fq, k, (0.0, 0))
+        fq[k] = (s + zcol[i], c + 1)
+    end
+    fs = Dict{String,Tuple{Float64,Int}}()
+    for ((f, _), (s, c)) in fq
+        a, n = get(fs, f, (0.0, 0))
+        fs[f] = (a + s / c, n + 1)
+    end
+    return [(p = fs[firm[i]]; p[1] / p[2]) for i in 1:N]
+end
+
+"""
+    build_z_evolution(df, Z, znames, isB; transitions_path, rho_field="rho") -> ZEvolution
+
+ρ from `cost_shifters[z][B|D][rho_field]` of bbl_transitions.json, kept when 0 < ρ < 1 and
+otherwise 1.0 (frozen, logged) — the guard the market states use. `df` supplies the firm and
+quarter keys (CodConglomeradoPrudencial, time_id) of the rows `Z` belongs to.
+"""
+function build_z_evolution(df::DataFrame, Z::Matrix{Float64}, znames::Vector{String},
+                           isB::AbstractVector{Bool}; transitions_path::AbstractString,
+                           rho_field::String="rho")
+    isfile(transitions_path) || error("bbl_transitions.json not found: $transitions_path")
+    cs = get(JSON3.read(read(transitions_path, String)), :cost_shifters, nothing)
+    cs === nothing && error("$(basename(transitions_path)) has no `cost_shifters` block.")
+    nZ = length(znames); N = size(Z, 1)
+    rhoB = ones(nZ); rhoD = ones(nZ)
+    firm = string.(df.CodConglomeradoPrudencial); tid = string.(df.time_id)
+    dz = Matrix{Float64}(undef, N, nZ)
+    for (z, name) in enumerate(znames)
+        e = get(cs, Symbol(name), nothing)
+        for (κ, dest) in (("B", rhoB), ("D", rhoD))
+            r = e === nothing ? nothing : get(get(e, Symbol(κ), Dict()), Symbol(rho_field), nothing)
+            if r isa Real && isfinite(r) && 0.0 < Float64(r) < 1.0
+                dest[z] = Float64(r)
+            else
+                log_status("  [ψ-Z] $name ($κ): no usable cost_shifters.$κ.$rho_field ($(r === nothing ? "missing" : r)) -> frozen")
+            end
+        end
+        dz[:, z] .= view(Z, :, z) .- _firm_level(view(Z, :, z), firm, tid)
+    end
+    ev = ZEvolution(dz, rhoB, rhoD, BitVector(isB), String(transitions_path))
+    for (z, name) in enumerate(znames)
+        hl(r) = r < 1.0 ? string(round(log(0.5) / log(r), digits=1)) : "frozen"
+        d = view(dz, :, z)
+        log_status("  [ψ-Z] $(rpad(name, 26)) ρ_B=$(round(rhoB[z], digits=4)) (half-life $(hl(rhoB[z]))q) " *
+                   "ρ_D=$(round(rhoD[z], digits=4)) (half-life $(hl(rhoD[z]))q) | " *
+                   "|Z_0 − μ_j|: mean $(round(mean(abs.(d)), sigdigits=4)) max $(round(maximum(abs.(d)), sigdigits=4))")
+    end
+    return ev
+end
+
+# ==========================================================================
 # Marginal-cost parameters (CF2 output) — shared by CF3 (equilibrium) and CF1-net
 # ==========================================================================
 """
@@ -284,6 +375,9 @@ with column layout [ψ1, ψ2, ψ3(1..n_Z), ψ4].
 
 `markdown_q` (ρ^q, length N), `asset_return_q` (r^j_q, length N; default r^f_q),
 `rf_path_q` (length T; default flat from per-obs r^f implied by st). All quarterly.
+
+`z_evol` moves the cost shifters in ψ3 along their estimated mean reversion (ZEvolution):
+period t uses Z_t = Z_0 + (ρ_κ^t − 1)(Z_0 − μ_j). `nothing` holds Z at its launch values.
 """
 function accumulate_psi(ctx::CFDemandCtx, st::DepositSimState,
                         Dep::Matrix{Float64}, markdown_q::Vector{Float64},
@@ -293,9 +387,12 @@ function accumulate_psi(ctx::CFDemandCtx, st::DepositSimState,
                         rf_path_q::Union{Nothing,Vector{Float64}}=nothing,
                         rf_curves::Union{Nothing,Matrix{Float64}}=nothing,
                         row_curve::Union{Nothing,Vector{Int}}=nothing,
-                        row_start::Union{Nothing,Vector{String}}=nothing)
+                        row_start::Union{Nothing,Vector{String}}=nothing,
+                        z_evol::Union{Nothing,ZEvolution}=nothing)
     N, Tp1 = size(Dep); T = Tp1 - 1
     n_Z = size(Z, 2)
+    z_evol === nothing || (size(z_evol.dz) == size(Z) && length(z_evol.isB) == N) ||
+        error("z_evol is $(size(z_evol.dz)) for a Z of $(size(Z))")
     rj = asset_return_q === nothing ? zeros(N) : asset_return_q   # (r^j − r^f); 0 ⇒ funding value
     # Per-obs flat r^f for ψ4 if no path supplied: infer from accrual identity is
     # ambiguous, so default to a zero contribution unless rf_path_q is given.
@@ -339,8 +436,18 @@ function accumulate_psi(ctx::CFDemandCtx, st::DepositSimState,
             psi4 .+= bt .* rf_t .* dep_t
         end
         psi2 .+= bt .* dep_t
-        for z in 1:n_Z
-            @views psi3[:, z] .+= bt .* dep_t .* Z[:, z]
+        if z_evol === nothing
+            for z in 1:n_Z
+                @views psi3[:, z] .+= bt .* dep_t .* Z[:, z]
+            end
+        else
+            for z in 1:n_Z
+                fB = z_evol.rhoB[z]^t - 1.0; fD = z_evol.rhoD[z]^t - 1.0   # 0 at t = 0 and ρ = 1
+                for i in 1:N
+                    zt = Z[i, z] + (z_evol.isB[i] ? fB : fD) * z_evol.dz[i, z]
+                    psi3[i, z] += bt * dep_t[i] * zt
+                end
+            end
         end
     end
 

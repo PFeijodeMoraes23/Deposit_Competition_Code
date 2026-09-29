@@ -985,6 +985,10 @@ from bbl_shards import shard_coverage as _shard_coverage, compress_ranges as _co
 # bbl_run.sh launch record. Recorded in the run block of cost_params so every table built from it
 # can state its discounting from provenance rather than from a constant in the table code.
 from bbl_shards import psi_discount as _psi_discount, read_bbl_discount as _read_bbl_discount
+# How the psi were simulated: the forward sim's three model switches (evolving phi, mean-reverting
+# Z, the carry's timing) and the hashes of the sleep link and transitions behind them. Copied into
+# the run block so a table can say which model its costs came from.
+from bbl_shards import psi_sim_paths as _psi_sim_paths
 
 
 def main():
@@ -1139,6 +1143,9 @@ def main():
                   f"T={psi_T}. The json records the psi's own values.")
     except (OSError, KeyError, ValueError):
         pass
+    sim_paths = _psi_sim_paths(COST_FWD, tag)
+    print(f"  psi simulated with phi_path={sim_paths['phi_path']} z_path={sim_paths['z_path']} "
+          f"rdep_timing={sim_paths['rdep_timing']}  <- {sim_paths['source']}")
 
     # Dead firm-quarters leave HERE, once, so every statistic below is taken over the same rows
     # (DEAD FIRM-QUARTERS in the module docstring) -- for multi-start psi only. A single-curve psi
@@ -1334,6 +1341,7 @@ def main():
         n_dev_files=len(dev_files), n_eq_rows=int(len(eq)), n_dev_rows=int(len(dev)),
         n_shards_expected=int(n_shards), n_shards_found=len(shards_present),
         beta=psi_beta, T=psi_T, discount_source=disc_src,
+        sim_paths=sim_paths,
         bootstrap=int(args.bootstrap), subsample=int(args.subsample),
         ci_level=float(args.ci_level), profile=bool(args.profile),
         keep_null_fq=bool(args.keep_null_fq), null_fq=null_fq))

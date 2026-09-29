@@ -29,7 +29,16 @@ median of |psi|, each also as a ratio to the baseline's value. Then, on psi2_ome
 and a four-line SUMMARY that answers the question above in numbers.
 
 The beta/T labels above are the defaults' designs; each tag's psi_starts sidecar, where one
-exists, is printed as the file's own record. Reads only; writes nothing.
+exists, is printed as the file's own record, and so are the model switches each psi_dev file
+carries in its parquet metadata (phi_path, z_path, rdep_timing; a file written before they
+existed carries none and was simulated frozen / frozen / contemporaneous). Reads only; writes
+nothing.
+
+The same three-way comparison serves any pair of designs at one T: --tags BASELINE,REFERENCE,
+CANDIDATE, with --what naming the change in the SUMMARY. For the evolving-phi / mean-reverting-Z /
+lagged-carry probe against the capped probe:
+    python bbl_probe_compare.py --key E3_spec_12_extended --shard 1 --n-shards 300 --tags _ms1,_probe250cap,_probe250phi --what "evolving phi/Z + lagged carry"
+(the columns keep their names: 'uncapped' is the REFERENCE, 'capped' the CANDIDATE).
 
 Runs on the cluster in the BBL solve's Python environment (numpy, pandas, pyarrow):
     python bbl_probe_compare.py --key E3_spec_12_extended --shard 1 --n-shards 300
@@ -47,7 +56,9 @@ import pandas as pd
 ROW_KEY = ("shock", "firm", "start_q")
 DESIGN = {"_ms1": "beta=0.9   T=50  baseline",
           "_probe250": "beta=0.979 T=250 no cap",
-          "_probe250cap": "beta=0.979 T=250 capped"}
+          "_probe250cap": "beta=0.979 T=250 capped",
+          "_probe250phi": "beta=0.979 T=250 capped, phi_t/Z_t, lagged"}
+SWITCHES = (("phi_path", "frozen"), ("z_path", "frozen"), ("rdep_timing", "contemporaneous"))
 REL_SAME = 1e-12      # |cap - uncapped| <= this x |uncapped| counts as unchanged
 REL_MOVED = 1e-6      # ... and above this as moved, in the SUMMARY
 
@@ -109,6 +120,20 @@ def sidecar(bbl_dir: Path, key: str, tag: str) -> str:
         return f"psi_starts unreadable ({exc})"
 
 
+def switches(path: Path) -> str:
+    """The model switches a psi parquet records in its key-value metadata ('bbl.<name>')."""
+    if not path.is_file():
+        return ""
+    try:
+        import pyarrow.parquet as pq
+        kv = pq.ParquetFile(path).metadata.metadata or {}
+        kv = {k.decode(): v.decode() for k, v in kv.items()}
+    except Exception as exc:  # noqa: BLE001 -- a report line, never a failure
+        return f"switches unreadable ({exc.__class__.__name__})"
+    got = [f"{k}={kv.get('bbl.' + k, d + '*')}" for k, d in SWITCHES]
+    return " ".join(got) + (" (*not recorded: pre-switch value)" if any("*" in g for g in got) else "")
+
+
 def stats_table(title, frames, base, cols):
     """One block per component: max / p99 / median of |psi| per tag, and each over the base's."""
     print(f"\n== {title} ==")
@@ -150,6 +175,8 @@ def main():
     ap.add_argument("--top", type=int, default=10)
     ap.add_argument("--explosive-mult", type=float, default=100.0,
                     help="a row is explosive when |col| > this x the tag's own median |col|")
+    ap.add_argument("--what", default="the cap",
+                    help="what separates the third tag from the second, for the SUMMARY line")
     a = ap.parse_args()
 
     bbl_dir = a.dir or default_dir()
@@ -178,6 +205,9 @@ def main():
         what_eq = f"{len(eq[t])} rows" if eq[t] is not None else "none"
         print(f"  {t:<14} {DESIGN.get(t, ''):<26} psi_dev: {what} | psi_eq: {what_eq} | "
               f"{sidecar(bbl_dir, a.key, t)}")
+        sw = switches(p_dev)
+        if sw:
+            print(f"  {'':<14} {'':<26} {sw}")
     if dev[unc] is None or dev[cap] is None:
         sys.exit(f"REFUSING: the comparison needs both probe shards ({unc}, {cap}); see MISSING above.")
 
@@ -279,7 +309,7 @@ def main():
     print(f"  median |{c}|: {unc} {f(su['med'])} -> {cap} {f(sc['med'])} (x{f(ratio(sc['med'], su['med']), '.6g')});"
           f" {base} {f(sb['med']) if sb else '-'}")
     if summary_typ:
-        print(f"  typical rows (not explosive under {unc}): the cap moved {summary_typ[0]} by more than "
+        print(f"  typical rows (not explosive under {unc}): {a.what} moved {summary_typ[0]} by more than "
               f"{REL_MOVED:g} relative; median change {f(summary_typ[1], '.2e')}, p99 {f(summary_typ[2], '.2e')}")
 
 

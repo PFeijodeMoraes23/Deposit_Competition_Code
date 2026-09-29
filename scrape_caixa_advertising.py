@@ -33,9 +33,10 @@ Document layouts
                           per agency. Parsed from word positions: each amount is attached to the
                           nearest label line (flag ambiguous_rows when that line is more than
                           4.5pt away), labels wrapped onto a value-less line are joined. In the
-                          amount columns a lone thousands-grouped integer ("14.250", May 2017) is
-                          read as whole reais and noted; any other word with digits there is
-                          noted as not read, never dropped silently.
+                          amount columns a lone thousands-grouped integer ("14.250") is a
+                          whole-number cell (rule below), a US-format amount ("4,641,371.16",
+                          April 2015) is read on a TOTAL row only, and any other word with digits
+                          there is noted as not read, never dropped silently.
   2015-05, 2015-06, 2019-01 .. 2026-06  ruled table. Parsed from the table cells; merged cells
                           carry their label down; vertical (rotated) labels are read bottom-to-top
                           from the characters; a table split across pages continues.
@@ -47,6 +48,14 @@ Rules
 -----
   - Amounts are reais as published. Blank, "-" and 0,00 cells are not lines (the 2014-15 layout
     prints 0,00 in every empty cell, later layouts leave them blank).
+  - A whole-number cell (a thousands-grouped integer with no decimals, "14.250") is read as money
+    only when Caixa's printed totals include it: its agency's printed TOTAL or the TOTAL GERAL
+    closes with the cell and does not close without it. Otherwise it is not read, and the month's
+    notes give its page, row and column. May 2017's NOVA/SB JORNAL "14.250" is read (both totals
+    close only with it); October 2017's NOVA/SB BANNERS DIGITAIS "138.500", printed beside
+    HEADS's 138.500,00 on the same row, is not (both totals close without it).
+  - A US-format amount ("4,641,371.16") is read on a total row only, and noted; April 2015
+    prints one agency's TOTAL so. Anywhere else it is noted as not read.
   - Labels are kept as published, with whitespace collapsed. Nothing is reclassified: events,
     fees (cachês), research, copyright and similar rows stay in, each under its own label.
   - One source per month (parse_method): the spreadsheet where one parses (xlsx, or template for
@@ -78,15 +87,20 @@ total (spreadsheet minus PDF for pdf_xlsx_agree). A gap of 0 is exact, a gap of 
 MAX_GAP_CENTS (5 centavos) either way is accepted and flagged, anything larger fails.
   validation_status        validated_exact (every check 0) | validated_within_5_centavos (every
                            check within 5 centavos, one or more not 0) | not_validated_document
-                           (some check above 5 centavos, and the evidence below puts the gap in
-                           Caixa's document) | not_validated_parser (some check above 5
-                           centavos, and anything else: the parser missed an amount, or the
-                           evidence is inconclusive, or the image could not be read) |
-                           no_stated_total (no printed total was read, which includes the months
-                           with no parsed document; see status)
+                           (some check above 5 centavos, the month is on the reviewed list with
+                           exactly these gaps, and its image evidence is complete; below) |
+                           not_validated_parser (some check above 5 centavos, and anything else:
+                           the parser missed an amount, the evidence is incomplete or refused,
+                           the image could not be read, or the month looks like the document's
+                           but no person has reviewed it with these gaps) | no_stated_total (no
+                           printed total was read, which includes the months with no parsed
+                           document; see status)
   validated                True for validated_exact and validated_within_5_centavos only; a
                            document-inconsistent month is never validated
-  validation_reason        for a month not validated, why it is the document's or the parser's
+  validation_reason        for a month not validated, why it is the document's or the parser's;
+                           a month the evidence puts on the document's side but that is not on
+                           the reviewed list with these gaps starts "unreviewed document
+                           candidate"
   total_gap_cents          lines minus the stated total, in cents (NA without a stated total)
   max_gap_cents            largest absolute gap over the month's checks (NA when none ran)
   tolerance_flagged        validation_status is validated_within_5_centavos, as in
@@ -103,8 +117,12 @@ MAX_GAP_CENTS (5 centavos) either way is accepted and flagged, anything larger f
                            the parser did not use, with page and nearest agency header),
                            image_missing and image_missing_brl (parser amounts OCR did not find),
                            image_totals_missing (printed totals OCR did not find),
-                           image_unreadable (OCR text with a decimal comma that could not be read
-                           as amounts)
+                           image_unreadable (OCR text that could not be read as amounts: a run
+                           with a decimal comma, or of 4 or more digits with a dot or comma),
+                           image_outside_amounts (Brazilian-format amounts where the image is not
+                           read: the text layer of the pages not imaged, and the text layer and
+                           OCR above the header row), image_lines_on_total_rows (parser lines
+                           whose amount the image shows only on a row labelled TOTAL)
   printed_totals_conflict  for a month that fails: the printed agency totals do not add up to the
                            printed TOTAL GERAL, in a way that accounts for every failing check
   total_matches            the total check passed (gap within 5 centavos)
@@ -121,19 +139,50 @@ Whose gap is it (months that fail only; explain_failure)
 --------------------------------------------------------
 The pages of the chosen document that hold the summary table (those the parser read it from, and
 any page without a text layer) are rendered with PyMuPDF at 200 dpi and read with RapidOCR; for a
-spreadsheet month, the pages of the PDF published beside it. Every nonzero Brazilian-format
-amount OCR finds is set against the amounts the parser used (as a multiset of amounts) and the
-printed totals. An amount the image shows that the parser did not use makes the month a parser
-failure. If the parser's amounts are exactly the image's, the lines add up to what the document
-prints, and a TOTAL GERAL that does not close is the document's. A second, independent sign is
-printed totals that disagree with each other (April 2017: its agency totals sum to 10.00 less
-than its TOTAL GERAL). It is required where the amounts cannot settle the question: when OCR
-missed some of the parser's amounts, and when only per-agency totals fail (the lines match the
-TOTAL GERAL, and which column a cell belongs to is not something a comparison of amounts sees).
+spreadsheet month, the pages of the PDF published beside it. Every nonzero amount OCR finds is set
+against the amounts the parser used (as a multiset of amounts) and the printed totals. OCR's known
+misreads of an amount are read as the amount: the decimal comma read as a dot ("26.453.70"), a
+space before the cents ("26.453, 70"), US format ("26,453.70"). The steps, in order:
+  1. An amount the image shows that the parser did not use: parser failure.
+  2. Incomplete evidence: parser failure. The evidence is complete only if OCR read at least one
+     amount, found every parser amount and every printed total, left no run of digits unreadable,
+     and no Brazilian-format amount lies where the image is not read (the text layer of the pages
+     not imaged, i.e. supplier lists and any page after the TOTAL GERAL, which the parser never
+     opens; and the text layer and OCR above the header row). Printed totals that disagree with
+     each other do not stand in for missing evidence: the parser read those totals itself, and a
+     misread total produces exactly such a disagreement.
+  3. Refusals, a parser failure whatever else holds: the total gap equals, within 5 centavos, a
+     sum of amounts printed on total rows (a total row read as data doubles those amounts); or a
+     parser line's amount is one the image shows only on a row labelled TOTAL.
+  4. With complete evidence the lines add up to what the document prints. A TOTAL GERAL that does
+     not close, or (when only per-agency totals fail, which a comparison of amounts cannot settle
+     because it does not see columns) printed totals that disagree with each other in a way that
+     accounts for every failing check (April 2017), make the month a document candidate. An
+     agency-only failure without such a disagreement stays a parser failure.
+  5. A document candidate is not_validated_document only if REVIEWED_DOCUMENT_MONTHS lists it with
+     exactly its failing checks and gaps in cents. Otherwise it is not_validated_parser, reason
+     "unreviewed document candidate", and counts against the gate until a person reviews it. The
+     list is what keeps a parser that counts amounts it should not (a total row read as data, a
+     block read twice) from passing: its months also show every image amount used.
 
-Months whose printed tables do not add up (not_validated_document, as of the 2026-09 files)
-------------------------------------------------------------------------------------------
-The cells are kept as printed; each gap is lines minus the printed figure.
+Reviewing a month and adding it to REVIEWED_DOCUMENT_MONTHS
+-----------------------------------------------------------
+  1. Take the month's gap_detail and validation_reason from the log ("unreviewed document
+     candidate") and the pages in image_pages.
+  2. Render those pages (200 dpi) and check by eye that every amount printed in the table is a
+     line or a printed total, and that the failing agency's cells, summed by hand, differ from its
+     printed total by the logged gap.
+  3. Search every page of the document, supplier lists included, for the gap amount (OCR where
+     there is no text layer); it must not be printed anywhere the parser does not read.
+  4. Add period: dict(gaps={check: gap in cents, for every check above 5 centavos, exactly as
+     gap_detail prints them}, reason=<one line>, reviewed=<date>) to the list and a line below.
+A parse change that moves any gap by a centavo, or adds or removes a failing check, sends the
+month back to not_validated_parser until it is reviewed again.
+
+Months whose printed tables do not add up (REVIEWED_DOCUMENT_MONTHS, as of the 2026-09 files)
+---------------------------------------------------------------------------------------------
+The cells are kept as printed; each gap is lines minus the printed figure. Each month was read
+by eye and checked by an independent OCR of every page.
   2015-07  TOTAL GERAL +295,004.21: ARTPLAN +121,801.26, exactly its BANNERS/GRANDES FORMATOS
            cell (printed again, and counted, in August); HEADS -138,512.00; NOVA/SB +311,714.98.
   2015-08  +225,798.10: NOVA/SB +227,048.10, exactly one of its two cells printed 227.048,10;
@@ -145,8 +194,6 @@ The cells are kept as printed; each gap is lines minus the printed figure.
            above: the totals seem to count it under PROPEG (an inference).
   2017-04  lines match the TOTAL GERAL; NOVA/SB's printed total is 10.00 below its cells, so the
            agency totals sum to 10.00 less than the TOTAL GERAL.
-  2017-10  +138,500.00: NOVA/SB's BANNERS DIGITAIS cell is printed "138.500", without decimals,
-           beside HEADS's 138.500,00 on the same row, and neither printed total counts it.
   2023-07  -40,392.00, all BINDER (spreadsheet and PDF alike; the totals are typed values).
   2024-05  the TOTAL row adds up to the cells and the TOTAL GERAL does not: -264,748.96 in May,
   2024-07  -175,357.83 in July (typed values in the spreadsheet, not formulas).
@@ -158,9 +205,10 @@ Validation (a hard failure aborts before writing)
   1. Every month from 2013-01 to the latest published month has a status.
   2. Parser health. Of the months with a stated total, validated months plus
      not_validated_document months must be at least 95%, i.e. parser failures at most 5%. The
-     gate exists to catch a broken parser; a document's own inconsistency is logged with its
-     evidence and never validated, but does not count against the parser. The count of months
-     per validation_status is logged, and so is every month not validated.
+     gate exists to catch a broken parser; a reviewed document inconsistency is logged with its
+     evidence and never validated, but does not count against the parser, while an unreviewed
+     document candidate does. The count of months per validation_status is logged, and so is
+     every month not validated.
   3. Spreadsheet and PDF agree on every agency sum within 5 centavos wherever both parse.
   4. No negative amount.
   5. April, May and June 2020 reproduce R$ 2.4m, 17.2m and 35.6m.
@@ -195,6 +243,7 @@ from pathlib import Path
 import numpy as np
 import openpyxl
 import pandas as pd
+from openpyxl.utils import get_column_letter
 import pdfplumber
 import requests
 import xlrd
@@ -225,12 +274,16 @@ MONTHS_PT = {"janeiro": 1, "fevereiro": 2, "marco": 3, "abril": 4, "maio": 5, "j
              "julho": 7, "agosto": 8, "setembro": 9, "outubro": 10, "novembro": 11,
              "dezembro": 12}
 MONEY_RE = re.compile(r"^-?\d{1,3}(?:\.\d{3})*,\d{1,4}$|^-?\d+,\d{1,4}$")
-# A whole number of reais printed with thousands dots and no decimal comma: May 2017 prints the
-# NOVA/SB JORNAL cell as "14.250", and its agency total and TOTAL GERAL close only with it as
-# 14,250.00. Read as money only in the amount columns of the unruled layout and only when the
-# word stands alone (see _isolated_word). No leading zero, so a CNPJ root ("00.360.305") never
-# matches.
+# A whole-number cell: thousands dots and no decimal comma. The corpus has two. May 2017 prints
+# NOVA/SB JORNAL as "14.250", and its agency total and TOTAL GERAL close only with it as
+# 14,250.00. October 2017 prints NOVA/SB BANNERS DIGITAIS as "138.500" beside HEADS's
+# 138.500,00 on the same row, and both totals close without it. So such a cell is read only when
+# the printed totals include it (resolve_whole_numbers), which also keeps a stray CNPJ root
+# ("11.222.333") or a percentage whose '%' sits apart from being read as money. No leading zero,
+# so a CNPJ root such as "00.360.305" is never even a candidate.
 INT_AMOUNT_RE = re.compile(r"^[1-9]\d{0,2}(?:\.\d{3})+$")
+# US format, read on a total row only: April 2015 prints one agency's TOTAL as "4,641,371.16".
+US_AMOUNT_RE = re.compile(r"^\d{1,3}(?:,\d{3})+\.\d{2}$")
 # Recognising a total row printed without a label (parse_pdf_ruled) only; see within_tol.
 TOL_ABS, TOL_REL = 1.0, 0.001
 # The documents print cents, so components and the total printed for them agree to the cent or
@@ -239,6 +292,46 @@ TOL_ABS, TOL_REL = 1.0, 0.001
 # A relative tolerance would accept tens of thousands of reais on a R$40m month.
 MAX_GAP_CENTS = 5
 MIN_MATCH_SHARE = 0.95
+# Months a person has reviewed and found to be Caixa's own inconsistency (module docstring:
+# "Reviewing a month"). period -> every check above MAX_GAP_CENTS with its exact gap in cents
+# (lines minus the printed figure), a one-line reason, and the date of the review. The evidence
+# alone cannot tell a Caixa typo from a parser that counts amounts it should not (a total row read
+# as data leaves every image amount used and the TOTAL GERAL unclosed), so no month is the
+# document's until someone has looked at it with exactly these gaps.
+REVIEWED_DOCUMENT_MONTHS: dict[str, dict] = {
+    "201507": dict(gaps={"total": 29500421, "agency_total ARTPLAN": 12180126,
+                         "agency_total HEADS": -13851200, "agency_total NOVA/SB": 31171498},
+                   reason="TOTAL GERAL does not close; ARTPLAN's gap is exactly its BANNERS/"
+                          "GRANDES FORMATOS cell", reviewed="2026-09-28"),
+    "201508": dict(gaps={"total": 22579810, "agency_total ARTPLAN": -125000,
+                         "agency_total NOVA/SB": 22704810},
+                   reason="TOTAL GERAL does not close; NOVA/SB's gap is exactly one of its two "
+                          "cells printed 227.048,10", reviewed="2026-09-28"),
+    "201603": dict(gaps={"total": -3017988, "agency_total HEADS": -3017988},
+                   reason="HEADS's printed total exceeds its cells; the gap is printed nowhere",
+                   reviewed="2026-09-28"),
+    "201606": dict(gaps={"total": -2645370, "agency_total PROPEG": -2645370},
+                   reason="PROPEG's printed total exceeds its cells; 26.453,70 is printed nowhere "
+                          "in the document", reviewed="2026-09-28"),
+    "201607": dict(gaps={"total": -4320000, "agency_total ARTPLAN": -4320000,
+                         "agency_total NOVA/SB": 1439831, "agency_total PROPEG": -1439831},
+                   reason="ARTPLAN's printed total exceeds its cells (43.200,00 printed nowhere); "
+                          "the FOTO cell 14.398,31 printed under NOVA/SB is totalled under PROPEG",
+                   reviewed="2026-09-28"),
+    "201704": dict(gaps={"agency_total NOVA/SB": 1000},
+                   reason="lines match the TOTAL GERAL; NOVA/SB's printed total is 10.00 below its "
+                          "cells and the agency totals sum to 10.00 less than the TOTAL GERAL",
+                   reviewed="2026-09-28"),
+    "202307": dict(gaps={"total": -4039200, "agency_total BINDER": -4039200},
+                   reason="BINDER's typed total exceeds its cells, spreadsheet and PDF alike",
+                   reviewed="2026-09-28"),
+    "202405": dict(gaps={"total": -26474896},
+                   reason="the TOTAL row equals the cells; the typed TOTAL GERAL is higher",
+                   reviewed="2026-09-28"),
+    "202407": dict(gaps={"total": -17535783},
+                   reason="the TOTAL row equals the cells; the typed TOTAL GERAL is higher",
+                   reviewed="2026-09-28"),
+}
 AMBIGUOUS_PT = 4.5
 KNOWN_TOTALS_M = {"202004": 2.4, "202005": 17.2, "202006": 35.6}
 
@@ -547,11 +640,71 @@ def resolve_sections(rows: list[dict], n_section_cols: int) -> None:
         rows[i]["section"] = " > ".join(p[pos] for p in parts if p[pos])
 
 
+def cell_position(r: dict, agency: str) -> str:
+    """Where a cell sits, for a note: page or sheet, row label, agency column, and the cell's
+    coordinates or address where the parser kept them."""
+    label = (" / ".join(t for t in (r.get("group"), r.get("item")) if t)
+             or " ".join(t for t in r.get("label_texts", []) if t) or "(no label)")
+    at = r.get("pos", {}).get(agency)
+    return f"{r['where']}, row {label!r}, column {agency}" + (f" ({at})" if at else "")
+
+
+def total_cell_amount(raw, r: dict, agency: str, parsed: Parsed) -> float | None:
+    """An amount printed on a total row: Brazilian format, or US format, which is noted."""
+    if isinstance(raw, str) and US_AMOUNT_RE.fullmatch(clean(raw)):
+        t = clean(raw)
+        parsed.notes.append(f"US-format amount on a total row read as {t.replace(',', '')}: "
+                            f"{t!r} at {cell_position(r, agency)}")
+        return float(t.replace(",", ""))
+    return parse_brl(raw)
+
+
+def resolve_whole_numbers(whole: list[tuple[dict, str, str, int]], parsed: Parsed) -> None:
+    """Read each whole-number cell as money only when Caixa's printed totals include it: its
+    agency's printed TOTAL or the TOTAL GERAL closes (within MAX_GAP_CENTS) with the cell and does
+    not close without it. The sums without it leave out every whole-number cell of the document,
+    so several such cells that the totals need only together are none of them read; the month
+    then fails, and the image check finds them unparsed. A cell read is inserted where its row
+    put it among the lines (the index kept with it)."""
+    base_all = parsed.total_cents()
+    base_agency = parsed.agency_cents()
+    stated = None if parsed.stated_total is None else cents([parsed.stated_total])
+
+    def closes(sum_cents: int, printed: int) -> bool:
+        return abs(sum_cents - printed) <= MAX_GAP_CENTS
+
+    accepted = []
+    for r, agency, text, at in whole:
+        c = cents([parse_brl(text)])
+        why = []
+        if agency in parsed.agency_totals:
+            own, base = cents([parsed.agency_totals[agency]]), base_agency.get(agency, 0)
+            if closes(base + c, own) and not closes(base, own):
+                why.append(f"{agency}'s printed TOTAL")
+        if stated is not None and closes(base_all + c, stated) and not closes(base_all, stated):
+            why.append("the TOTAL GERAL")
+        where = cell_position(r, agency)
+        if why:
+            accepted.append((at, dict(agency=agency, section=r["section"], category=r["group"],
+                                      subcategory=r["item"], amount_brl=c / 100,
+                                      page_or_sheet=r["where"])))
+            verb = "close" if len(why) > 1 else "closes"
+            parsed.notes.append(f"whole-number cell {text!r} at {where} read as {brl_text(c)}: "
+                                f"{' and '.join(why)} {verb} with it and not without it")
+        else:
+            parsed.notes.append(f"whole-number cell {text!r} at {where} not read: Caixa's printed "
+                                f"totals do not include it")
+    for _, (at, line) in sorted(enumerate(accepted), key=lambda x: (-x[1][0], -x[0])):
+        parsed.lines.insert(at, line)
+
+
 def lines_from_rows(rows: list[dict], agencies: list[str], parsed: Parsed) -> None:
-    """rows: dicts with kind, section, group, item, values {agency: raw}, where."""
+    """rows: dicts with kind, section, group, item, values {agency: raw}, where, and optionally
+    pos {agency: coordinates or cell address} for notes."""
+    whole: list[tuple[dict, str, str, int]] = []
     for r in rows:
         if r["kind"] == "grand_total":
-            vals = [parse_brl(v) for v in r["values"].values()]
+            vals = [total_cell_amount(v, r, a, parsed) for a, v in r["values"].items()]
             vals = [v for v in vals if v is not None]
             if not vals:
                 m = re.search(r"R?\$?\s*([\d.]+,\d{2})", " ".join(r["label_texts"]))
@@ -567,7 +720,7 @@ def lines_from_rows(rows: list[dict], agencies: list[str], parsed: Parsed) -> No
             continue
         if r["kind"] == "agency_total":
             for a, v in r["values"].items():
-                v = parse_brl(v)
+                v = total_cell_amount(v, r, a, parsed)
                 if v is not None:
                     parsed.agency_totals[a] = v
                     parsed.total_row_amounts.append(v)
@@ -577,12 +730,21 @@ def lines_from_rows(rows: list[dict], agencies: list[str], parsed: Parsed) -> No
                 if raw.strip(" -–R$"):
                     parsed.notes.append(f"text in an amount cell: {clean(raw)!r}")
                 continue
+            if isinstance(raw, str) and INT_AMOUNT_RE.fullmatch(clean(raw)):
+                whole.append((r, a, clean(raw), len(parsed.lines)))
+                continue
+            if isinstance(raw, str) and US_AMOUNT_RE.fullmatch(clean(raw)):
+                parsed.notes.append(f"US-format amount outside a total row not read: "
+                                    f"{clean(raw)!r} at {cell_position(r, a)}")
+                continue
             v = parse_brl(raw)
             if v is None or v == 0:
                 continue
             parsed.lines.append(dict(agency=a, section=r["section"], category=r["group"],
                                      subcategory=r["item"], amount_brl=v,
                                      page_or_sheet=r["where"]))
+    if whole:
+        resolve_whole_numbers(whole, parsed)
 
 
 # ---------------------------------------------------------------------------
@@ -709,6 +871,7 @@ def parse_pdf_ruled(pdf, parsed: Parsed) -> bool:
                         labels.append(c["text"])
                 carry = labels
                 values: dict[str, str] = {}
+                pos: dict[str, str] = {}
                 for j in range(n_label, len(raw)):
                     if raw[j] is None or not clean(raw[j]) or not boxes[j]:
                         continue
@@ -717,10 +880,11 @@ def parse_pdf_ruled(pdf, parsed: Parsed) -> bool:
                     if agency in values:
                         raise ValueError(f"p{pno + 1}: two cells for {agency} in row {raw}")
                     values[agency] = raw[j]
+                    pos[agency] = f"x {boxes[j][0]:.0f}, y {boxes[j][1]:.0f}"
                 own = [c["text"] for c in cells if c and c["text"]]
                 raw_rows.append(dict(kind=row_kind(own), own_label=bool(own), cells=cells,
                                      labels=labels, values=values, where=f"p{pno + 1}",
-                                     label_texts=own, uncached=[]))
+                                     label_texts=own, uncached=[], pos=pos))
                 if raw_rows[-1]["kind"] == "grand_total":
                     done = True
                     break
@@ -732,9 +896,11 @@ def parse_pdf_ruled(pdf, parsed: Parsed) -> bool:
 
     # Rows without any label of their own that repeat the running sums are total rows printed
     # without a label (February 2019).
+    # A US-format cell is left to lines_from_rows, which reads it on a total row only.
     running = {a: 0.0 for a in parsed.agencies}
     for r in raw_rows:
-        vals = {a: parse_brl(v) for a, v in r["values"].items() if re.search(r"\d", v)}
+        vals = {a: parse_brl(v) for a, v in r["values"].items()
+                if re.search(r"\d", v) and not US_AMOUNT_RE.fullmatch(clean(v))}
         vals = {a: v for a, v in vals.items() if v}
         if r["kind"] == "data" and not r["own_label"] and vals:
             if len(vals) >= 2 and all(within_tol(v, running[a]) for a, v in vals.items()):
@@ -796,7 +962,9 @@ def _isolated_word(w: dict, words: list[dict], gap: float = 4.0) -> bool:
     """No other word on w's line within `gap` points of either side. A CNPJ, a date, a phone
     number or a percentage can carry thousands-style dots, but it comes glued to a '/', a '-', a
     '%' or another group of digits ("11.222.333/0001-44", "12.500 %"); a cell of the amount
-    columns is set apart from its neighbours by the column spacing."""
+    columns is set apart from its neighbours by the column spacing. A word that passes is only a
+    whole-number candidate: resolve_whole_numbers reads it only when the printed totals need it,
+    which covers what spacing cannot (a lone CNPJ root, a '%' printed a column away)."""
     for o in words:
         if o is w or abs(o["top"] - w["top"]) >= 2:
             continue
@@ -841,7 +1009,9 @@ def parse_pdf_unruled(pdf, parsed: Parsed) -> bool:
             elif w["x0"] >= first_x0 - 2:
                 # The amount columns. A word here is either an amount or dropped, so a dropped
                 # word that carries digits is recorded: May 2017's "14.250" was dropped silently.
-                if INT_AMOUNT_RE.match(t) and _isolated_word(w, body):
+                # A whole-number cell and a US-format amount go on to lines_from_rows, which
+                # decides whether they are read (the printed totals; a total row).
+                if (INT_AMOUNT_RE.match(t) and _isolated_word(w, body)) or US_AMOUNT_RE.match(t):
                     money.append(w)
                 elif re.search(r"\d", t):
                     parsed.notes.append(f"p{pno + 1}: word with digits in the amount columns "
@@ -862,7 +1032,7 @@ def parse_pdf_unruled(pdf, parsed: Parsed) -> bool:
             page_lines.append(dict(
                 top=min(w["top"] for w in line), bottom=max(w["bottom"] for w in line),
                 x0=line[0]["x0"], segs=[(s[0]["x0"], " ".join(w["text"] for w in s)) for s in segs],
-                values={}, where=f"p{pno + 1}", dist=0.0))
+                values={}, pos={}, where=f"p{pno + 1}", dist=0.0))
         if not page_lines:
             continue
         for w in money:
@@ -871,13 +1041,11 @@ def parse_pdf_unruled(pdf, parsed: Parsed) -> bool:
             d = abs((best["top"] + best["bottom"]) / 2 - yc)
             xc = (w["x0"] + w["x1"]) / 2
             agency = min(cols, key=lambda c: abs(c[0] - xc))[1]
-            if INT_AMOUNT_RE.match(w["text"]):
-                parsed.notes.append(f"p{pno + 1}: amount printed without decimals read as whole "
-                                    f"reais: {agency} {w['text']}")
             if agency in best["values"]:
                 best["values"][agency] += " + " + w["text"]
             else:
                 best["values"][agency] = w["text"]
+                best["pos"][agency] = f"x {w['x0']:.0f}, y {w['top']:.0f}"
             best["dist"] = max(best["dist"], d)
         label_lines.extend(page_lines)
         parsed.table_pages.append(pno + 1)
@@ -904,7 +1072,7 @@ def parse_pdf_unruled(pdf, parsed: Parsed) -> bool:
             raise ValueError(f"two amounts for one agency on the line {g} {it}: {ln['values']}")
         row = dict(kind=kind, section="", group=group if kind == "data" else "", item=it,
                    values=ln["values"], where=ln["where"], label_texts=[g, it], uncached=[],
-                   bottom=ln["bottom"])
+                   bottom=ln["bottom"], pos=ln["pos"])
         if kind == "data" and ln["values"] and ln["dist"] > AMBIGUOUS_PT:
             parsed.ambiguous_rows += 1
         rows.append(row)
@@ -1040,7 +1208,8 @@ def parse_spreadsheet(b: bytes, member: str, kind: str, method: str) -> Parsed:
                 g, it, secs = "", "", []
             rows.append(dict(kind=kind_r, section=" > ".join(s for s in secs if s), group=g,
                              item=it, values=values, where=name, label_texts=labels,
-                             uncached=flags))
+                             uncached=flags, pos={a: f"cell {get_column_letter(c + 1)}{r + 1}"
+                                                  for c, a in agency_cols}))
         lines_from_rows(rows, parsed.agencies, parsed)
         return parsed
     raise ValueError(f"{member}: no sheet with an agency header")
@@ -1116,15 +1285,23 @@ def gap_fields(checks: list[tuple[str, int]], has_total: bool,
 IMAGE_DPI = 200
 # OCR can put several cells of a row in one box, spaced ("14.191.628,55 11.150.869,67") or run
 # together ("6.162.385,8312.850.749,717.321.259,75", October 2017's TOTAL row). A run of digits,
-# dots and commas that is one Brazilian-format amount is read as it stands; any other run is cut
-# into amounts of two decimals, as the cells are normally printed, and is kept only if those
-# amounts rebuild it character for character. What cannot be read either way is recorded
-# (image_unreadable), because an amount could hide in it.
+# dots and commas that is one amount is read as it stands; any other run with a decimal comma is
+# cut into amounts of two decimals, as the cells are normally printed, and is kept only if those
+# amounts rebuild it character for character. OCR's known misreads of one amount are read as
+# that amount: the decimal comma read as a dot ("26.453.70"), a space before the cents
+# ("26.453, 70", joined first), US format ("26,453.70"); a thousands-grouped integer ("14.250")
+# is read as the whole number the page shows. Any other run with a decimal comma, or of 4 or more
+# digits with a dot or comma, is recorded (image_unreadable), because an amount could hide in it
+# and the evidence is then incomplete.
 OCR_RUN_RE = re.compile(r"[\d.,]+")
 OCR_AMOUNT_RE = re.compile(r"\d{1,3}(?:\.\d{3})*,\d{1,4}")
 OCR_CELL_RE = re.compile(r"\d{1,3}(?:\.\d{3})*,\d{2}")
+OCR_DOT_CENTS_RE = re.compile(r"\d{1,3}(?:\.\d{3})+\.\d{2}")
+OCR_SPACED_CENTS_RE = re.compile(r"(?<![\d.,])(\d{1,3}(?:\.\d{3})*),\s+(\d{2})(?![\d.,])")
 # A word of an OCR box, keeping "NOVA / SB" whole when OCR spaces the slash.
 OCR_WORD_RE = re.compile(r"\S+?\s*/\s*\S+|\S+")
+# A Brazilian-format amount in the text layer where the image is not read (text_layer_outside).
+TEXT_AMOUNT_RE = re.compile(r"(?<![\d.,])\d{1,3}(?:\.\d{3})*,\d{2}(?![\d,])")
 _OCR_ENGINE = None
 
 
@@ -1144,9 +1321,12 @@ def member_bytes(path: Path, member: str) -> bytes | None:
 def ocr_pages(pdf_bytes: bytes, table_pages: list[int]) -> tuple[list[dict], list[int]]:
     """OCR boxes of the pages that hold the summary table, rendered with PyMuPDF at IMAGE_DPI one
     page at a time, and the page numbers read. Those are the pages the parser read the table from
-    and every page without a text layer, which the parser cannot have read at all. The other
-    pages carry text the parser did see and rejected, the supplier lists (names and CNPJs, no
-    amounts); at about 25 seconds a page, July 2016's 20 of them would cost minutes."""
+    and every page without a text layer, which the parser cannot have read at all. No other page
+    is imaged: the supplier lists the parser skips, and any page after the one that carries the
+    TOTAL GERAL, where the parser stops and never looks. At about 25 seconds a page, July 2016's
+    20 supplier pages would cost minutes, so those pages are covered by a scan of their text
+    layer instead (text_layer_outside), as is the region above the header row of an imaged page,
+    which image_amounts does not count as table."""
     import fitz
     with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
         pages = [i for i, pg in enumerate(pdf.pages)
@@ -1171,6 +1351,38 @@ def ocr_pages(pdf_bytes: bytes, table_pages: list[int]) -> tuple[list[dict], lis
     return boxes, [i + 1 for i in pages]
 
 
+def _header_top(page) -> float | None:
+    """Top of the first text-layer line with two agency names, or None."""
+    for line in _cluster_lines(_words(page)):
+        if sum(agency_name(w["text"]) is not None for w in line) >= 2:
+            return min(w["top"] for w in line)
+    return None
+
+
+def text_layer_outside(pdf_bytes: bytes, imaged: list[int]) -> list[str]:
+    """Nonzero Brazilian-format amounts in the text layer where the image is not read: every page
+    not imaged (ocr_pages), and on an imaged page the region above its header row. The parser
+    does not read these places either, so an amount there would be invisible to both; reading a
+    text layer costs little next to OCR. A page without a text layer is imaged whole."""
+    hits = []
+    with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
+        for i, page in enumerate(pdf.pages):
+            if not page.chars:
+                continue
+            where, words = f"p{i + 1}", page.extract_words(x_tolerance=1.5, y_tolerance=2)
+            if i + 1 in imaged:
+                top = _header_top(page)
+                if top is None:
+                    continue
+                where += ", text layer above the header row"
+                words = [w for w in words if w["bottom"] <= top]
+            for w in words:
+                for m in TEXT_AMOUNT_RE.finditer(w["text"]):
+                    if cents([parse_brl(m.group(0))]):
+                        hits.append(f"{m.group(0)} ({where})")
+    return hits
+
+
 def _box_x(box: dict, start: int, end: int) -> float:
     """Horizontal centre of characters start:end of an OCR box, placed by their offsets within
     the box text, for a box that holds several cells."""
@@ -1183,39 +1395,54 @@ def _box_tokens(box: dict, pattern: re.Pattern) -> list[tuple[str, float]]:
 
 
 def _box_amounts(box: dict) -> tuple[list[tuple[str, float]], list[str]]:
-    """(amount text, horizontal centre) for each amount in an OCR box, and the runs that could not
-    be read as amounts (see OCR_RUN_RE). A box that is a lone thousands-grouped integer is an
-    amount, as in parse_pdf_unruled."""
-    if INT_AMOUNT_RE.match(box["text"].strip()):
-        return [(box["text"].strip(), (box["x0"] + box["x1"]) / 2)], []
+    """(amount in Brazilian format, horizontal centre) for each amount in an OCR box, and the runs
+    that could not be read as amounts (see OCR_RUN_RE)."""
+    joined = dict(box, text=OCR_SPACED_CENTS_RE.sub(r"\1,\2", box["text"]))
     found, unreadable = [], []
-    for run in OCR_RUN_RE.finditer(box["text"]):
+    for run in OCR_RUN_RE.finditer(joined["text"]):
         text = run.group(0).strip(".,")
-        if "," not in text:
+        if not text:
             continue
         start = run.start() + run.group(0).index(text)
-        if OCR_AMOUNT_RE.fullmatch(text):
-            found.append((text, _box_x(box, start, start + len(text))))
-            continue
-        cells = list(OCR_CELL_RE.finditer(text))
-        if "".join(c.group(0) for c in cells) == text:
-            found += [(c.group(0), _box_x(box, start + c.start(), start + c.end())) for c in cells]
-        else:
+        centre = _box_x(joined, start, start + len(text))
+        if OCR_AMOUNT_RE.fullmatch(text) or INT_AMOUNT_RE.match(text):
+            found.append((text, centre))
+        elif OCR_DOT_CENTS_RE.fullmatch(text):
+            found.append((f"{text[:-3]},{text[-2:]}", centre))
+        elif US_AMOUNT_RE.match(text):
+            found.append((text.replace(",", "_").replace(".", ",").replace("_", "."), centre))
+        elif "," in text and "".join(c.group(0) for c in OCR_CELL_RE.finditer(text)) == text:
+            found += [(c.group(0), _box_x(joined, start + c.start(), start + c.end()))
+                      for c in OCR_CELL_RE.finditer(text)]
+        elif "," in text or ("." in text and sum(ch.isdigit() for ch in text) >= 4):
             unreadable.append(text)
     return found, unreadable
 
 
-def image_amounts(boxes: list[dict]) -> tuple[list[tuple[str | None, int, int]], list[str]]:
-    """(nearest agency header, cents, page) for every nonzero amount OCR read, and the runs it
-    could not read as amounts. The headers are the first OCR row with two agency names, on that
-    page or the last page that had one; on a page with a header row only what lies below it is
-    read, which keeps the title out. The nearest header only says where an amount sits, for the
-    log: it is not a column reading. The ruled tables right-align amounts in cells whose header
-    is centred, so a centre rule puts July 2023's amounts one column to the right of the
-    spreadsheet's, and in the unruled layout it is the parser's own rule, so agreeing with it
-    would prove nothing."""
-    out: list[tuple[str | None, int, int]] = []
+def _total_label(text: str) -> bool:
+    """An OCR box that labels a total row, by row_kind's words; words with digits and "R$" are
+    left out, so a box that runs the label into its amounts still counts."""
+    words = [w for w in text.split() if not re.search(r"\d", w) and w != "R$"]
+    return row_kind([" ".join(words)]) != "data"
+
+
+def image_amounts(boxes: list[dict]) -> tuple[list[tuple[str | None, int, int, bool]], list[str],
+                                               list[str]]:
+    """Every nonzero amount OCR read below the header row, as (nearest agency header, cents, page,
+    on a total row); the runs it could not read as amounts; and the amounts it read above the
+    header row.
+
+    The headers are the first OCR row with two agency names, on that page or the last page that
+    had one; on a page with a header row what lies above it is the title, not table, and an amount
+    there is returned apart (incomplete evidence, like the text layer outside the image). An
+    amount is on a total row when a box labelled TOTAL (TOTAL GERAL, TOTAL POR ...) sits at its
+    height. The nearest header only says where an amount sits, for the log: it is not a column
+    reading. The ruled tables right-align amounts in cells whose header is centred, so a centre
+    rule puts July 2023's amounts one column to the right of the spreadsheet's, and in the
+    unruled layout it is the parser's own rule, so agreeing with it would prove nothing."""
+    out: list[tuple[str | None, int, int, bool]] = []
     unreadable: list[str] = []
+    above: list[str] = []
     centers: list[tuple[float, str]] = []
     for page in sorted({b["page"] for b in boxes}):
         on_page = sorted((b for b in boxes if b["page"] == page), key=lambda b: b["top"])
@@ -1228,58 +1455,99 @@ def image_amounts(boxes: list[dict]) -> tuple[list[tuple[str | None, int, int]],
             if len(row) >= 2:
                 centers, header_top = sorted(row), b["top"]
                 break
+        labels = [b for b in on_page if _total_label(b["text"])]
         for b in on_page:
-            if header_top is not None and b["top"] <= header_top:
-                continue
             found, bad = _box_amounts(b)
+            if header_top is not None and b["top"] <= header_top:
+                above += [f"{tok} (p{page}, OCR above the header row)" for tok, _ in found
+                          if cents([parse_brl(tok)])]
+                continue
             unreadable += [f"{t!r} (p{page})" for t in bad]
+            yc = (b["top"] + b["bottom"]) / 2
+            on_total = any(abs((t["top"] + t["bottom"]) / 2 - yc) < 0.5 * (t["bottom"] - t["top"])
+                           for t in labels)
             for tok, xc in found:
                 c = cents([parse_brl(tok)])
                 if c:
                     agency = min(centers, key=lambda h: abs(h[0] - xc))[1] if centers else None
-                    out.append((agency, c, page))
-    return out, unreadable
+                    out.append((agency, c, page, on_total))
+    return out, unreadable, above
 
 
 def brl_text(c: int) -> str:
     return f"{c / 100:,.2f}"
 
 
-def image_evidence(pdf_bytes: bytes, image_doc: Parsed, lines: list[dict]) -> dict:
+def image_evidence(pdf_bytes: bytes, image_doc: Parsed, lines: list[dict]) -> tuple[dict,
+                                                                                     list[int]]:
     """Compare the multiset of amounts the page images show with the amounts the parser used.
+    Returns the image_* columns and the cents of every amount printed on a total row (those the
+    image shows on a row labelled TOTAL, and any printed total of the parser's that is not among
+    them), for the refusal in explain_failure.
 
-    Each nonzero amount OCR finds is paired with a parser line of the same amount, and what is
-    left with an amount of a total row of the imaged document. An image amount still unpaired is
-    one the parser did not use (image_unparsed). A parser line left unpaired is one OCR did not
-    find (image_missing), which makes the image reading incomplete, not the parser wrong. The
-    parser's zero cells are not lines and the image's zeros are dropped, so neither is
-    compared."""
+    Each printed total of the imaged document is paired with an image amount of the same cents,
+    one on a total row if there is one; each parser line then with one of the rest, one off a
+    total row if there is one. A line that can only take an amount the image shows on a total row
+    is a total read as data (image_lines_on_total_rows). An image amount still unpaired is one the
+    parser did not use (image_unparsed). A parser line or printed total left unpaired is one OCR
+    did not find (image_missing, image_totals_missing), which makes the image reading incomplete,
+    not the parser wrong. The parser's zero cells are not lines and the image's zeros are dropped,
+    so neither is compared."""
     boxes, pages = ocr_pages(pdf_bytes, image_doc.table_pages)
-    found, unreadable = image_amounts(boxes)
+    found, unreadable, above = image_amounts(boxes)
+    outside = above + text_layer_outside(pdf_bytes, pages)
     pool = list(found)
 
-    def take(c: int) -> bool:
-        k = next((i for i, f in enumerate(pool) if f[1] == c), None)
-        if k is not None:
-            pool.pop(k)
-        return k is not None
+    def take(c: int, on_total: bool) -> tuple | None:
+        k = next((i for i, f in enumerate(pool) if f[1] == c and f[3] == on_total), None)
+        if k is None:
+            k = next((i for i, f in enumerate(pool) if f[1] == c), None)
+        return None if k is None else pool.pop(k)
 
-    missing = []
+    printed = [c for c in (cents([v]) for v in image_doc.total_row_amounts) if c]
+    totals_missing = [c for c in printed if take(c, True) is None]
+    missing, on_total_rows = [], []
     for x in lines:
         c = cents([x["amount_brl"]])
-        if not take(c):
+        f = take(c, False)
+        if f is None:
             missing.append((x["agency"], c))
-    totals_missing = [c for c in (cents([v]) for v in image_doc.total_row_amounts)
-                      if c and not take(c)]
+        elif f[3]:
+            on_total_rows.append((x["agency"], c, f[2]))
+    total_row_cents = [f[1] for f in found if f[3]]
+    unmatched = list(total_row_cents)
+    for c in printed:
+        if c in unmatched:
+            unmatched.remove(c)
+        else:
+            total_row_cents.append(c)
     return dict(
         image_check="ran", image_pages=",".join(f"p{p}" for p in pages),
         image_amounts=len(found), image_unparsed=len(pool),
         image_unparsed_brl="; ".join(f"{brl_text(c)} (p{p}, nearest header "
-                                     f"{a or 'none'})" for a, c, p in pool),
+                                     f"{a or 'none'})" for a, c, p, _ in pool),
         image_missing=len(missing),
         image_missing_brl="; ".join(f"{brl_text(c)} ({a})" for a, c in missing),
         image_totals_missing="; ".join(brl_text(c) for c in totals_missing),
-        image_unreadable="; ".join(unreadable))
+        image_unreadable="; ".join(unreadable),
+        image_outside_amounts="; ".join(outside),
+        image_lines_on_total_rows="; ".join(f"{brl_text(c)} ({a}, p{p})"
+                                            for a, c, p in on_total_rows)), total_row_cents
+
+
+def total_row_subset(target: int, amounts: list[int]) -> list[int]:
+    """Some of the amounts (at least one) whose sum is within MAX_GAP_CENTS of target, or [].
+    A document has a few total-row amounts (one per agency and the TOTAL GERAL), and sums past
+    the target are dropped as the search goes, so trying every combination is cheap."""
+    reach: dict[int, list[int]] = {0: []}
+    for a in amounts:
+        if a <= 0:
+            continue
+        for s, used in list(reach.items()):
+            if s + a <= target + MAX_GAP_CENTS and s + a not in reach:
+                reach[s + a] = used + [a]
+    return next((used for s, used in reach.items()
+                 if used and abs(s - target) <= MAX_GAP_CENTS), [])
 
 
 def printed_totals_conflict(doc: Parsed, checks: list[tuple[str, int]]) -> str:
@@ -1287,7 +1555,8 @@ def printed_totals_conflict(doc: Parsed, checks: list[tuple[str, int]]) -> str:
     with each other. Returns a description when the printed agency totals do not add up to the
     printed grand total AND that disagreement accounts for every failing check (the lines agree
     with one side of it; April 2017 prints agency totals that sum to 10.00 less than its TOTAL
-    GERAL, and its lines match the TOTAL GERAL). Otherwise ''."""
+    GERAL, and its lines match the TOTAL GERAL). Otherwise ''. It is read from the parser's own
+    reading of the totals, so it counts only with complete image evidence (explain_failure)."""
     if not doc.agency_totals or doc.stated_total is None:
         return ""
     diff = cents(doc.agency_totals.values()) - cents([doc.stated_total])
@@ -1310,63 +1579,97 @@ def printed_totals_conflict(doc: Parsed, checks: list[tuple[str, int]]) -> str:
             f"which accounts for every failing check")
 
 
-def explain_failure(checks: list[tuple[str, int]], lines: list[dict], totals_doc: Parsed,
-                    image_doc: tuple[bytes, Parsed] | None) -> dict:
-    """not_validated_document or not_validated_parser for a failing month, with the evidence.
+def _gaps_text(gaps: dict[str, int]) -> str:
+    return "; ".join(f"{c} {g:+d}" for c, g in gaps.items())
 
-    The page image decides. An amount the image shows and the parser did not use is a parser
-    failure. When the amounts the parser used are exactly the amounts the image shows (OCR
-    found every one of them and every printed total, and left nothing unreadable), the lines add
-    up to what the document prints, so a TOTAL GERAL gap is the document's. A month whose only
-    failing checks are per-agency totals is different: its lines already match the TOTAL GERAL,
-    and what remains is which column a cell belongs to, which a comparison of amounts cannot
-    see. That month, and one whose image reading is incomplete, is the document's only if its
-    printed totals disagree with each other in a way that accounts for every failing check
-    (printed_totals_conflict). Anything else, including a month whose image could not be read,
-    stays a parser failure."""
+
+def explain_failure(period: str, checks: list[tuple[str, int]], lines: list[dict],
+                    totals_doc: Parsed, image_doc: tuple[bytes, Parsed] | None) -> dict:
+    """not_validated_document or not_validated_parser for a failing month, with the evidence.
+    The steps are those of the module docstring ("Whose gap is it").
+
+    The page image decides what the parser missed: an amount the image shows and the parser did
+    not use is a parser failure (1). The image can only clear the parser when its evidence is
+    complete (2): OCR read amounts, found every parser amount and every printed total, left nothing
+    unreadable, and no amount lies where the image is not read. Printed totals that disagree with
+    each other are no substitute for that evidence, since the parser read those totals itself and a
+    misread total produces the same disagreement; a month whose image could not be read, or read
+    incompletely, is a parser failure whatever its totals say. A gap that equals printed total-row
+    amounts, or a line the image shows only on a TOTAL row, is refused (3). With complete
+    evidence an unclosed TOTAL GERAL, or for an agency-only failure a printed-totals conflict,
+    makes the month a document candidate (4), and REVIEWED_DOCUMENT_MONTHS decides (5): listed
+    with exactly these failing gaps, not_validated_document; otherwise not_validated_parser,
+    "unreviewed document candidate"."""
     conflict = printed_totals_conflict(totals_doc, checks)
     out = dict(printed_totals_conflict=conflict)
+
+    def parser(reason: str) -> dict:
+        return out | dict(validation_status=NOT_VALIDATED_PARSER, validation_reason=reason)
+
     if image_doc is None:
         out.update(image_check="no PDF to render")
-        reason = "image check could not run: no PDF of this month parsed"
-        return out | dict(validation_status=NOT_VALIDATED_PARSER, validation_reason=reason)
+        return parser("image check could not run: no PDF of this month parsed")
     try:
-        ev = image_evidence(image_doc[0], image_doc[1], lines)
+        ev, total_row_cents = image_evidence(image_doc[0], image_doc[1], lines)
     except Exception as e:                                   # noqa: BLE001 - recorded, not hidden
         out.update(image_check=f"failed: {type(e).__name__}: {e}")
-        return out | dict(validation_status=NOT_VALIDATED_PARSER,
-                          validation_reason=f"image check could not run: {type(e).__name__}: {e}")
+        return parser(f"image check could not run: {type(e).__name__}: {e}")
     out.update(ev)
-    if ev["image_unparsed"]:
-        return out | dict(validation_status=NOT_VALIDATED_PARSER, validation_reason=(
-            f"the image shows {ev['image_unparsed']} amount(s) the parser did not use: "
-            f"{ev['image_unparsed_brl']}"))
-    complete = not (ev["image_missing"] or ev["image_totals_missing"] or ev["image_unreadable"])
-    total_fails = any(c == "total" and abs(g) > MAX_GAP_CENTS for c, g in checks)
+    if ev["image_unparsed"]:                                                            # step 1
+        return parser(f"the image shows {ev['image_unparsed']} amount(s) the parser did not use: "
+                      f"{ev['image_unparsed_brl']}")
+    incomplete = [x for x in (                                                          # step 2
+        not ev["image_amounts"] and "OCR read no amount",
+        ev["image_missing"] and f"OCR did not find {ev['image_missing']} parser amount(s): "
+                                f"{ev['image_missing_brl']}",
+        ev["image_totals_missing"] and f"printed totals not found in the image: "
+                                       f"{ev['image_totals_missing']}",
+        ev["image_unreadable"] and f"OCR text not readable as amounts: {ev['image_unreadable']}",
+        ev["image_outside_amounts"] and f"amounts where the image is not read: "
+                                        f"{ev['image_outside_amounts']}") if x]
+    if incomplete:
+        reason = "image evidence incomplete: " + "; ".join(incomplete)
+        if conflict:
+            reason += (f"; the printed totals disagree ({conflict}), which does not count "
+                       f"without complete image evidence")
+        return parser(reason)
+    refused = []                                                                        # step 3
+    if ev["image_lines_on_total_rows"]:
+        refused.append(f"the parser used as lines amounts the image shows only on a TOTAL row: "
+                       f"{ev['image_lines_on_total_rows']}")
+    total_gap = next((g for c, g in checks if c == "total"), 0)
+    subset = total_row_subset(abs(total_gap), total_row_cents) \
+        if abs(total_gap) > MAX_GAP_CENTS else []
+    if subset:
+        refused.append(f"the total gap {total_gap:+d} cents equals printed total-row amount(s) "
+                       f"{' + '.join(brl_text(c) for c in subset)}")
+    if refused:
+        return parser("refused as the document's: " + "; ".join(refused))
     used_all = (f"the parser used every nonzero amount the image shows ({ev['image_amounts']} on "
                 f"{ev['image_pages']}, printed totals included)")
-    if complete and total_fails:
-        reason = f"{used_all}; those amounts do not add up to the printed TOTAL GERAL"
+    if abs(total_gap) > MAX_GAP_CENTS:                                                  # step 4
+        candidate = f"{used_all}; those amounts do not add up to the printed TOTAL GERAL"
         if conflict:
-            reason += f"; also {conflict}"
-        return out | dict(validation_status=NOT_VALIDATED_DOCUMENT, validation_reason=reason)
-    if complete:
-        unsettled = (f"{used_all} and they match the TOTAL GERAL; the per-agency sums disagree "
-                     f"with the printed agency totals, which a comparison of amounts cannot settle")
+            candidate += f"; also {conflict}"
+    elif conflict:
+        candidate = (f"{conflict}; {used_all} and they match the TOTAL GERAL, while the per-agency "
+                     f"sums disagree with the printed agency totals")
     else:
-        unsettled = "; ".join(x for x in (
-            ev["image_missing"] and f"OCR did not find {ev['image_missing']} parser amount(s): "
-                                    f"{ev['image_missing_brl']}",
-            ev["image_totals_missing"] and f"printed totals not found in the image: "
-                                           f"{ev['image_totals_missing']}",
-            ev["image_unreadable"] and f"OCR text not readable as amounts: "
-                                       f"{ev['image_unreadable']}") if x)
-        unsettled = f"the image shows no amount the parser did not use, but {unsettled}"
-    if conflict:
-        return out | dict(validation_status=NOT_VALIDATED_DOCUMENT,
-                          validation_reason=f"{conflict}; {unsettled}")
-    return out | dict(validation_status=NOT_VALIDATED_PARSER,
-                      validation_reason=f"not settled: {unsettled}")
+        return parser(f"not settled: {used_all} and they match the TOTAL GERAL; the per-agency "
+                      f"sums disagree with the printed agency totals, which a comparison of "
+                      f"amounts cannot settle, and the printed totals agree with each other")
+    failing = {c: g for c, g in checks if abs(g) > MAX_GAP_CENTS}                       # step 5
+    listed = REVIEWED_DOCUMENT_MONTHS.get(period)
+    if listed is None:
+        return parser(f"unreviewed document candidate (not in REVIEWED_DOCUMENT_MONTHS; failing "
+                      f"{_gaps_text(failing)}): {candidate}")
+    if failing != listed["gaps"]:
+        return parser(f"unreviewed document candidate: failing {_gaps_text(failing)}, but "
+                      f"reviewed on {listed['reviewed']} with {_gaps_text(listed['gaps'])}: "
+                      f"{candidate}")
+    return out | dict(validation_status=NOT_VALIDATED_DOCUMENT,
+                      validation_reason=f"{candidate}; reviewed {listed['reviewed']}: "
+                                        f"{listed['reason']}")
 
 
 def build_month(period: str, files: dict[str, tuple[Path, str]]) -> tuple[dict, list[dict]]:
@@ -1377,7 +1680,7 @@ def build_month(period: str, files: dict[str, tuple[Path, str]]) -> tuple[dict, 
                printed_totals_conflict="", image_check="", image_pages="",
                image_amounts=pd.NA, image_unparsed=pd.NA, image_unparsed_brl="",
                image_missing=pd.NA, image_missing_brl="", image_totals_missing="",
-               image_unreadable="",
+               image_unreadable="", image_outside_amounts="", image_lines_on_total_rows="",
                n_lines=0, n_agencies=0, agencies="", status="missing_file",
                parse_method="", source_file="", source_url="", agency_totals_match=pd.NA,
                pdf_xlsx_agree=pd.NA, pdf_xlsx_resolution="", pdf_xlsx_diff_brl=np.nan,
@@ -1477,7 +1780,7 @@ def build_month(period: str, files: dict[str, tuple[Path, str]]) -> tuple[dict, 
                       if d[0].method in ("text_pdf", "pdf_in_xlsx_slot")), None)
         log.info("  %s fails validation (%s); reading its page images", period,
                  rec["gap_detail"])
-        rec.update(explain_failure(checks, main.lines, main,
+        rec.update(explain_failure(period, checks, main.lines, main,
                                    image if image and image[0] is not None else None))
     notes += main.notes
     rec["notes"] = "; ".join(dict.fromkeys(notes))
@@ -1656,16 +1959,31 @@ def validate(monthly: pd.DataFrame, lines: pd.DataFrame, contracts: pd.DataFrame
                     "    image shows, parser did not use: %s\n    evidence: %s", r.period,
                     r.parse_method, r.total_gap_cents, r.gap_detail,
                     r.image_unparsed_brl or "(none)", r.validation_reason)
+    unreviewed = parser[parser["validation_reason"].str.startswith("unreviewed document candidate")]
+    if len(unreviewed):
+        log.warning("%d month(s) look like Caixa's inconsistency but are not in "
+                    "REVIEWED_DOCUMENT_MONTHS with these gaps; they count as parser failures until "
+                    "a person reviews them (module docstring, 'Reviewing a month'): %s",
+                    len(unreviewed), ", ".join(f"{r.period} ({r.gap_detail})"
+                                               for r in unreviewed.itertuples()))
+    stale = sorted(set(REVIEWED_DOCUMENT_MONTHS) - set(document["period"]))
+    if stale:
+        status_of = dict(zip(monthly["period"], monthly["validation_status"]))
+        log.warning("reviewed document months that did not come out as the document's this run "
+                    "(their gaps or evidence changed; see their status): %s",
+                    ", ".join(f"{p} {status_of.get(p, '(no such month)')}" for p in stale))
 
     stated = monthly[monthly["stated_total_brl"].notna()]
     log.info("check 2: %d of %d months with a stated total match it within %d centavos",
              int(stated["total_matches"].astype(bool).sum()), len(stated), MAX_GAP_CENTS)
-    # The gate is there to catch a broken parser, so it counts parser failures only. A month
-    # whose page image shows no amount the parser left out, and whose sums still do not close, is
-    # an inconsistency in Caixa's document (a typo in a printed total, a cell the totals leave
-    # out): no parser change can fix it, and counting it would let Caixa's typos trip a gate
-    # meant for the parser, or push the threshold down until a real parser failure slipped
-    # through. Such a month is never validated; it is only kept out of this count.
+    # The gate is there to catch a broken parser, so it counts parser failures only. A month a
+    # person has reviewed as an inconsistency in Caixa's document (a typo in a printed total, a
+    # cell the totals leave out) cannot be fixed by any parser change, and counting it would let
+    # Caixa's typos trip a gate meant for the parser, or push the threshold down until a real
+    # parser failure slipped through. Such a month is never validated; it is only kept out of
+    # this count. Only reviewed months are: a parser that counts amounts it should not (a total
+    # row read as data) also leaves every image amount used and the TOTAL GERAL unclosed, so an
+    # unreviewed candidate counts as a parser failure.
     healthy = stated["validation_status"].isin(VALIDATED_STATUSES + (NOT_VALIDATED_DOCUMENT,))
     share = float(healthy.mean()) if len(stated) else 0.0
     log.info("check 2 (parser health): %d validated + %d document inconsistencies = %d of %d "

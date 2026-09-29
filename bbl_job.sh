@@ -248,7 +248,21 @@ case "${BBL_STEP}" in
         # the deliberate frozen-state opt-out; honour it here so the shell and Julia agree.
         # Multi-start OR evolving states -- see bbl_run.sh. Gating on the state switch alone
         # would let a multi-start run past this check with no rate.process to build paths from.
-        if [[ "${BBL_EXTRA}" == *"--multi-start"* || "${CF_EVOLVING_STATES:-1}" != "0" ]]; then
+        # The evolving sleepy share evaluates the routine's exported link; `--phi-path frozen` is
+        # the only way this run does not need it (bbl_run.sh always passes the flag).
+        if [[ "${BBL_EXTRA}" != *"--phi-path frozen"* ]]; then
+            SLINK="$(sed -n 's/.*--sleep-link[ =]\([^ ]*\).*/\1/p' <<< "${BBL_EXTRA}")"
+            SLINK="${SLINK:-${CL_DATA_IN}/sleep_link_E${BBL_ROUTINE}_spec_12.json}"
+            if [[ ! -f "${SLINK}" ]]; then
+                echo "ERROR: sleepiness link missing: ${SLINK}" >&2
+                echo "  Generate locally and upload to data/input/:  python bbl_sleep_link.py --est ${BBL_ROUTINE}" >&2
+                echo "  Refusing to run: --phi-path evolving re-evaluates phi from it every period." >&2
+                exit 1
+            fi
+            echo "sleep link OK: ${SLINK}"
+        fi
+        if [[ "${BBL_EXTRA}" == *"--multi-start"* || "${CF_EVOLVING_STATES:-1}" != "0" \
+              || "${BBL_EXTRA}" != *"--phi-path frozen"* || "${BBL_EXTRA}" != *"--z-path frozen"* ]]; then
             TRANS="${BBL_TRANSITIONS:-${CL_DATA_IN}/bbl_transitions.json}"
             if [[ ! -f "${TRANS}" ]]; then
                 echo "ERROR: BBL transition parameters missing: ${TRANS}" >&2
@@ -407,10 +421,24 @@ case "${BBL_STEP}" in
             cl_bbl_event "${BBL_KEY}" "SWEEP retry=${RETRY} result=stopped"
             exit 1
         fi
+        # A run this code did not launch (another design version, or none recorded) is never
+        # completed by it: its missing shards would be simulated under a different design.
+        if ! cl_bbl_version_guard "${BBL_KEY}" "the sweep" 2>&1; then
+            cl_bbl_event "${BBL_KEY}" "SWEEP retry=${RETRY} result=problem (sim_version)"
+            echo "SWEEP REFUSES ${BBL_KEY}: design version (see above). The solve (afterok this job) is cancelled."
+            echo "SWEEP REFUSES ${BBL_KEY} (sim_version)" >&2
+            exit 2
+        fi
         cl_setup_python "${CL_PY_REQ_SWEEP}"
         COV=(coverage --dir "${CF_COST_FWD}" --key "${BBL_KEY}" --n-shards "${N_SHARDS}" --validate)
         if [[ "${MULTI_START}" == "1" ]]; then
             COV+=(--expect-starts --expect-beta "${BETA}" --expect-horizon "${HORIZON}")
+            # The run's own switches and version (its context passed cl_bbl_version_guard above),
+            # and the policy CSV the re-run shards would read: it must be the one the psi on disk
+            # were simulated around (psi_starts records its sha256).
+            COV+=(--expect-phi-path "${PHI_PATH}" --expect-z-path "${Z_PATH}" --expect-rdep-timing "${RDEP_TIMING}")
+            COV+=(--expect-sim-version "${BBL_SIM_VERSION}")
+            if [[ -n "${POLICY_CSV:-}" ]]; then COV+=(--policy-csv "${POLICY_CSV}"); fi
         fi
         if [[ "${BBL_FRESH:-0}" == "1" ]]; then COV+=(--newer-than "${RUN_EPOCH}"); fi
         # tr keeps the parse immune to a CRLF interpreter; pipefail keeps Python's exit code.

@@ -33,6 +33,8 @@ provenance note, diag_cf1_franchise_dataonly.py).
 CLI
   python bbl_shards.py coverage --dir DIR --key KEY --n-shards N [--validate] [--newer-than EPOCH]
                                 [--expect-starts] [--expect-beta B] [--expect-horizon T]
+                                [--expect-phi-path P] [--expect-z-path Z] [--expect-rdep-timing R]
+                                [--expect-sim-version V] [--policy-csv CSV]
       exit 0 complete, 1 gaps (MISSING_* lines name them), 2 a problem no re-run can fix
   python bbl_shards.py compress 3 50 51 52          -> 3,50-52
   python bbl_shards.py expand 3,50-52               -> 3 50 51 52
@@ -116,6 +118,60 @@ def psi_discount(bbl_dir, key):
         except (KeyError, ValueError):
             pass
     return None, None, "not recorded (no psi_starts sidecar and no launch context)"
+
+
+# The model switches of bbl_fwd_sim.jl and the files behind them, as the psi record them. A psi
+# written before the switches existed records none, and was simulated with these values.
+SIM_SWITCH_DEFAULTS = {"phi_path": "frozen", "z_path": "frozen", "rdep_timing": "contemporaneous"}
+SIM_PROV_KEYS = ("phi_path", "z_path", "rdep_timing", "sleep_link", "sleep_link_sha256",
+                 "state_transitions", "state_transitions_sha256", "phi_t0_max_abs_diff",
+                 "phi_d_rows", "sim_version", "spread_units", "policy_csv", "policy_csv_sha256")
+
+
+def file_sha256(path, chunk=1 << 22):
+    """sha256 of a file, hex (the value bbl_fwd_sim.jl records for its inputs)."""
+    import hashlib
+    h = hashlib.sha256()
+    with open(path, "rb") as fh:
+        for blk in iter(lambda: fh.read(chunk), b""):
+            h.update(blk)
+    return h.hexdigest()
+
+
+def psi_sim_paths(bbl_dir, key):
+    """dict of SIM_PROV_KEYS plus 'source': how the psi of run `key` were simulated.
+
+    First psi_starts_<key>.json (shard 0, --multi-start), else the file-level key-value metadata
+    ('bbl.<field>') of psi_eq_<key>.parquet, which every run writes. A switch neither records is
+    reported at its SIM_SWITCH_DEFAULTS value, with 'source' saying so.
+    """
+    d = Path(bbl_dir)
+    out, src = {}, None
+    sj = d / f"psi_starts_{key}.json"
+    if sj.is_file():
+        try:
+            meta = json.loads(sj.read_text(encoding="utf-8"))
+            out = {k: meta[k] for k in SIM_PROV_KEYS if k in meta}
+            src = sj.name
+        except (OSError, ValueError):
+            pass
+    if not out:
+        eq = d / f"psi_eq_{key}.parquet"
+        if eq.is_file():
+            try:
+                import pyarrow.parquet as pq
+                kv = pq.ParquetFile(eq).metadata.metadata or {}
+                kv = {k.decode(): v.decode() for k, v in kv.items()}
+                out = {k: kv[f"bbl.{k}"] for k in SIM_PROV_KEYS if f"bbl.{k}" in kv}
+                src = f"{eq.name} (parquet metadata)" if out else None
+            except Exception:   # noqa: BLE001 -- provenance only; the solve must not die on it
+                pass
+    missing = [k for k in SIM_SWITCH_DEFAULTS if k not in out]
+    for k in missing:
+        out[k] = SIM_SWITCH_DEFAULTS[k]
+    out["source"] = (src or "not recorded") + (
+        f"; {', '.join(missing)} not recorded -> the pre-switch value" if missing else "")
+    return out
 
 
 # ==========================================================================
@@ -247,7 +303,8 @@ def validate_parquet(path, required=()):
 # The sweep's report
 # ==========================================================================
 def coverage_report(bbl_dir, key, n_shards, validate=False, newer_than=None,
-                    expect_starts=False, expect_beta=None, expect_horizon=None):
+                    expect_starts=False, expect_beta=None, expect_horizon=None,
+                    expect_switches=None, expect_sim_version=None, policy_csv=None):
     """Everything the sweep decides from. `missing` already includes bad and stale indices."""
     d = Path(bbl_dir)
     n_shards = int(n_shards)
@@ -344,6 +401,38 @@ def coverage_report(bbl_dir, key, n_shards, validate=False, newer_than=None,
                         f"psi_starts_{key}.json records T={meta['T']} but this run uses "
                         f"T={expect_horizon}: the shards on disk were simulated under another "
                         f"horizon. Use a new --psi-tag or move the old files aside.")
+                # The model switches, recorded since they exist; a sidecar without them was
+                # written by a frozen / frozen / contemporaneous simulation.
+                for sw, want in (expect_switches or {}).items():
+                    if want is None:
+                        continue
+                    got = meta.get(sw, SIM_SWITCH_DEFAULTS[sw])
+                    if got != want:
+                        rep["problems"].append(
+                            f"psi_starts_{key}.json records {sw}={got} but this run uses "
+                            f"{sw}={want}: the shards on disk were simulated under another model. "
+                            f"Use a new --psi-tag or move the old files aside.")
+                # The design version: a sidecar of another version, or of none (every run
+                # launched before 2026-09-29), belongs to another design.
+                if expect_sim_version is not None and meta.get("sim_version") != expect_sim_version:
+                    rep["problems"].append(
+                        f"psi_starts_{key}.json records sim_version={meta.get('sim_version', 'none')} "
+                        f"but this code is {expect_sim_version}: the shards on disk were simulated "
+                        f"under another design. Launch it again under a new --psi-tag.")
+                # The policy the re-run shards would read must be the one these psi were
+                # simulated around: a polfunc re-fit since then changes sigma-hat under them.
+                if policy_csv is not None:
+                    pcsv = Path(policy_csv)
+                    if not pcsv.is_file():
+                        rep["problems"].append(f"policy CSV {policy_csv} not found: no shard can be re-run.")
+                    else:
+                        now, then = file_sha256(pcsv), meta.get("policy_csv_sha256", "")
+                        if now != then:
+                            rep["problems"].append(
+                                f"{pcsv.name} (sha256 {now[:12]}) is not the policy CSV the psi on disk "
+                                f"were simulated around (psi_starts_{key}.json records "
+                                f"{then[:12] or 'none'}): re-running shards now would pool two "
+                                f"policies. Restore that CSV, or launch again under a new --psi-tag.")
             except (OSError, ValueError) as e:
                 rep["starts"] = f"bad ({e.__class__.__name__})"
     if rep["eq"] != "ok" or rep["starts"] not in ("ok", "n/a"):
@@ -389,6 +478,13 @@ def main(argv=None):
                    help="multi-start run: require start_q and psi_starts_<key>.json")
     c.add_argument("--expect-beta", type=float, default=None)
     c.add_argument("--expect-horizon", type=int, default=None)
+    c.add_argument("--expect-phi-path", default=None, choices=("evolving", "frozen"))
+    c.add_argument("--expect-z-path", default=None, choices=("mean_reverting", "frozen"))
+    c.add_argument("--expect-rdep-timing", default=None, choices=("lagged", "contemporaneous"))
+    c.add_argument("--expect-sim-version", default=None,
+                   help="the design version the sidecar must record (cluster_lib.sh BBL_SIM_VERSION)")
+    c.add_argument("--policy-csv", default=None,
+                   help="the policy CSV re-run shards would read; its sha256 must be the sidecar's")
     p = sub.add_parser("compress", help="indices -> 3,50-299")
     p.add_argument("idx", nargs="*", type=int)
     e = sub.add_parser("expand", help="3,50-299 -> indices")
@@ -416,7 +512,11 @@ def main(argv=None):
         return 0
     rep = coverage_report(a.dir, a.key, a.n_shards, validate=a.validate,
                           newer_than=a.newer_than, expect_starts=a.expect_starts,
-                          expect_beta=a.expect_beta, expect_horizon=a.expect_horizon)
+                          expect_beta=a.expect_beta, expect_horizon=a.expect_horizon,
+                          expect_switches={"phi_path": a.expect_phi_path,
+                                           "z_path": a.expect_z_path,
+                                           "rdep_timing": a.expect_rdep_timing},
+                          expect_sim_version=a.expect_sim_version, policy_csv=a.policy_csv)
     _print_report(rep)
     if rep["problems"]:
         return 2

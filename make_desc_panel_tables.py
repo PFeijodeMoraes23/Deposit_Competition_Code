@@ -37,7 +37,8 @@ from utils.window import apply_window, MIN_YEAR, MAX_YEAR
 from utils import paths as _paths
 # One definition of the spread unit for every descriptive table: annualized, compounded,
 # percentage points (see make_desc_compressed_tables.annualized_spread_pp).
-from make_desc_compressed_tables import annualized_spread_pp, SPREAD_UNIT, SPREAD_CONVENTION_TEX
+from make_desc_compressed_tables import (annualized_spread_pp, SPREAD_UNIT, NOTE_FONT,
+                                         NOTE_SPREAD, NOTE_MONEY, table_note)
 
 warnings.filterwarnings("ignore")
 
@@ -241,13 +242,13 @@ def main():
     DRAFTS_DIR = _paths.drafts_dir()
     DRAFTS_DIR.mkdir(parents=True, exist_ok=True)
 
-    # Where the type-5 and Pix rows are defined (see the blanking above), and what the
-    # spread rows average over.
-    PERIOD_NOTE = (
-        "Spread rows average over all market-quarters, including those where the conglomerate "
-        "holds no deposits of that type. Type-5 rows cover the quarters with a recorded type-5 "
-        "balance (from 2020Q2) and Pix rows the quarters from 2020Q4."
-    )
+    # Shared note sentences: what the spread rows average over, and where the type-5 and
+    # Pix rows are defined (see the blanking above).
+    PERIOD_NOTE = ("Spread rows include market-quarters without deposits of that type. "
+                   "Type-5 rows from 2020Q2, Pix rows from 2020Q4.")
+    BLANK_NOTE = "Blank: undefined in that year (Pix and type 5 before 2020)."
+    WEIGHT_NOTE = ("Population-weighted (\\texttt{" + args.weight_col.replace("_", "\\_") + "})."
+                   if args.weight_col else "Unweighted.")
 
     # Human-readable labels and display scaling for each variable.
     # Tuple: (display label, display unit string, scale divisor or None)
@@ -281,23 +282,27 @@ def main():
         'equity_ratio':               ('Equity Ratio',                '',             None),
     }
 
+    # LEVELS (a monetary R$ amount, or a population/transaction count expressed in
+    # Thousands/Millions) print as integers with thousands separators, per the author's
+    # decision. Every other unit -- rates, shares, spreads, ratios and densities (per 100 /
+    # per 1,000 inhabitants) -- prints to 3 decimals.
+    LEVEL_UNITS = {'R\\$M', 'R\\$B', 'R\\$', 'Thousands', 'Millions'}
+
     def _fmt_num(val, var_base, compact=False):
-        """Format a cell value according to the variable's scale and unit."""
+        """Format a cell value according to the variable's scale. LEVEL_UNITS print as
+        integers with thousands separators; everything else prints to 3 decimals,
+        regardless of table width -- `compact` is kept only for signature compatibility
+        with every call site."""
         if pd.isna(val):
             return '--'
         info = LABEL_MAP.get(var_base)
         if info is None:
-            return f"{val:.3f}"
+            return f"{val:,.3f}"
         _lbl, unit, scale = info
         v = val / scale if scale is not None else val
-        if unit in ('R\\$M', 'R\\$B', 'Thousands', 'Millions'):
-            return f"{v:,.0f}" if compact else f"{v:,.2f}"
-        elif unit in ('pp', 'bp', SPREAD_UNIT):
-            return f"{v:.2f}"
-        elif unit == 'R\\$':
-            return f"{v:,.0f}" if compact else f"{v:,.2f}"
-        else:
-            return f"{v:,.2f}" if compact else f"{v:,.3f}"
+        if unit in LEVEL_UNITS:
+            return f"{v:,.0f}"
+        return f"{v:,.3f}"
 
     def _fmt_val(val, var_base, compact=False):
         # A value that rounds to zero prints unsigned ("-0.00" carries no sign information).
@@ -401,14 +406,9 @@ def main():
 
             rows_text = '\n'.join(row_lines)
 
-            weight_note = (f" Population-weighted using \\texttt{{{_esc(args.weight_col)}}}."
-                           if args.weight_col else "")
-            notes_text = (
-                f"\\scriptsize \\textit{{Notes:}} Means are reported with standard deviations "
-                f"in parentheses below, computed over all market-quarter observations. "
-                f"Monetary values are nominal R\\$ millions. {SPREAD_CONVENTION_TEX}"
-                f"{PERIOD_NOTE}{weight_note}"
-            )
+            notes_text = NOTE_FONT + " " + table_note(
+                f"B-firm market-quarters, {MIN_YEAR}--{MAX_YEAR}: means, standard deviations "
+                "in parentheses.", WEIGHT_NOTE, NOTE_MONEY, NOTE_SPREAD, PERIOD_NOTE)
 
             font_cmd  = '\\tiny'       if wide else '\\footnotesize'
             tabcolsep = '1pt'          if wide else '3pt'
@@ -555,17 +555,9 @@ def main():
         full_caption = caption_title + weight_label
         group_header = " & ".join([_esc(str(g)) for g in years])
 
-        weight_note = (f" Population-weighted using \\texttt{{{_esc(args.weight_col)}}}."
-                       if args.weight_col else "")
-        scope_note = f" {panel_descr}" if panel_descr else ""
-        notes_text = (
-            "\\scriptsize \\textit{Notes:} Means are reported with standard deviations in "
-            "parentheses immediately below, computed over market-quarter observations within "
-            f"each calendar year.{scope_note} Cells left blank denote variables that are "
-            "undefined or unobserved for that year (Pix usage and type-5 products are not "
-            f"defined before 2020). Monetary values are nominal R\\$ millions. {SPREAD_CONVENTION_TEX}"
-            f"{PERIOD_NOTE}{weight_note}"
-        )
+        notes_text = NOTE_FONT + " " + table_note(
+            "Market-quarters by calendar year: means, standard deviations in parentheses.",
+            panel_descr, WEIGHT_NOTE, NOTE_MONEY, NOTE_SPREAD, PERIOD_NOTE, BLANK_NOTE)
 
         lines = [
             r"\begin{landscape}",
@@ -724,17 +716,10 @@ def main():
         full_caption = caption_title + weight_label
         group_header = " & ".join([_esc(str(g)) for g in years])
 
-        weight_note = (f" Population-weighted using \\texttt{{{_esc(args.weight_col)}}}."
-                       if args.weight_col else "")
-        notes_text = (
-            "\\scriptsize \\textit{Notes:} Means are reported with standard deviations in "
-            "parentheses immediately below, computed over market-quarter observations within "
-            "each calendar year. Panel A reports B-type firms (municipal deposit markets); "
-            "Panel B reports D-type firms (national digital banks). Cells left blank denote "
-            "variables that are undefined or unobserved for that year (Pix usage and "
-            "type-5 products are not defined before 2020). Monetary values are nominal "
-            f"R\\$ millions. {SPREAD_CONVENTION_TEX}{PERIOD_NOTE}{weight_note}"
-        )
+        notes_text = NOTE_FONT + " " + table_note(
+            "Market-quarters by calendar year: means, standard deviations in parentheses. "
+            "Panel A: B firms in MCA markets; Panel B: D firms, one national market.",
+            WEIGHT_NOTE, NOTE_MONEY, NOTE_SPREAD, PERIOD_NOTE, BLANK_NOTE)
 
         panel_a_rows = _build_panel_rows(df_b_summary)
         panel_b_rows = _build_panel_rows(df_d_summary)
@@ -889,20 +874,14 @@ def main():
         full_caption = caption_title + weight_label
         group_header = " & ".join([_esc(str(g)) for g in groups])
 
-        weight_note = (f" Population-weighted using \\texttt{{{_esc(args.weight_col)}}}."
-                       " The unweighted version of this table is available upon request."
-                       if args.weight_col else "")
-        notes_text = (
-            "\\scriptsize \\textit{Notes:} Means are reported with standard deviations in "
-            "parentheses immediately below, computed over all market-quarter observations, "
-            f"{MIN_YEAR}--{MAX_YEAR}. Column ``B'' covers B firms in their MCA deposit markets; "
-            "column ``D'' covers D firms, whose single national market carries the national "
-            "population and population-weighted national averages of the other market-level "
-            "variables; column ``All'' pools both. Population is therefore the MCA population "
-            "for B and the national population for D, and is not pooled (blank under ``All''). "
-            "Monetary values are nominal R\\$ millions. "
-            f"{SPREAD_CONVENTION_TEX}{PERIOD_NOTE}{weight_note}"
-        )
+        notes_text = NOTE_FONT + " " + table_note(
+            f"Market-quarters, {MIN_YEAR}--{MAX_YEAR}: means, standard deviations in parentheses.",
+            WEIGHT_NOTE,
+            "B: MCA markets; D: one national market, with national population and "
+            "population-weighted national averages of other market variables; All pools both "
+            "except population (blank).",
+            NOTE_MONEY, NOTE_SPREAD, PERIOD_NOTE,
+            "Unweighted version available upon request." if args.weight_col else "")
 
         lines = [
             r"\setstretch{1.0}",
@@ -1058,17 +1037,10 @@ def main():
         full_caption = caption_title + weight_label
         group_header = " & ".join([_esc(str(y)) for y in years])
 
-        weight_note = (f" Population-weighted using \\texttt{{{_esc(args.weight_col)}}}."
-                       if args.weight_col else "")
-        notes_text = (
-            "\\scriptsize \\textit{Notes:} Means are reported with standard deviations in "
-            "parentheses immediately below, computed over market-quarter observations within "
-            "each region-year cell, restricted to B-type firms (municipal deposit markets). "
-            "Each panel covers one of the five Brazilian macro-regions. Cells left blank denote "
-            "variables that are undefined or unobserved for that year (Pix usage and "
-            "type-5 products are not defined before 2020). Monetary values are nominal "
-            f"R\\$ millions. {SPREAD_CONVENTION_TEX}{PERIOD_NOTE}{weight_note}"
-        )
+        notes_text = NOTE_FONT + " " + table_note(
+            "B-firm market-quarters by macro-region (panels) and year: means, standard "
+            "deviations in parentheses.",
+            WEIGHT_NOTE, NOTE_MONEY, NOTE_SPREAD, PERIOD_NOTE, BLANK_NOTE)
 
         panel_blocks = []
         for k, region in enumerate(regions):

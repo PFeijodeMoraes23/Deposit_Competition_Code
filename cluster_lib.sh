@@ -532,6 +532,13 @@ cl_need_transitions () {
         "build locally then upload: python bbl_transitions.py" \
         "carries rate.process (focus_mean_plus_horizon_shock), cost_shifters and market_states"
 }
+# cl_need_sleep_link <routine>: the sleepiness link the evolving-phi forward simulation evaluates
+# (bbl_fwd_sim.jl --phi-path evolving). Exported locally from the est{k} fit and uploaded.
+cl_need_sleep_link () {   # cl_need_sleep_link <routine>
+    cl_need_file "${CL_DATA_IN}/sleep_link_E$1_spec_12.json" "sleepiness link E$1 (evolving phi)" \
+        "build locally then upload: python bbl_sleep_link.py --est $1" \
+        "or run the sim with --phi-path frozen (phi held at the launch phi_mt)"
+}
 # cl_need_rc_jls <routine>: the RC result the CF/BBL stack opens. It tests the exact file
 # blp_dir(out_dir) names in cf_demand_eval.jl's _result_path, in the exact place
 # the RC job writes it — the ladder persists its results in the blp step folder and nothing
@@ -1087,6 +1094,12 @@ cl_bootstrap_tree () {
 # The T-based wall formula in cl_bbl_wall_minutes is a documented FALLBACK only (--shard-time
 # derive): it assumes time linear in T, which the probe refuted.
 BBL_SHARD_TIME_DEFAULT="${BBL_SHARD_TIME_DEFAULT:-01:45:00}"
+# The forward-simulation DESIGN version: bbl_fwd_sim.jl's BBL_SIM_VERSION (a test checks the two
+# agree). Every psi sidecar, psi parquet and run context records it, and a tag whose records carry
+# another version, or none (every run launched before 2026-09-29: _ms1, _ms979, the probes), is
+# never extended, swept or repaired by this code (cl_bbl_version_guard): its missing shards would be
+# simulated under a different design and pooled with the old ones. Not taken from the environment.
+BBL_SIM_VERSION="2026-09-29.1"
 BBL_MEM_DEFAULT="${BBL_MEM_DEFAULT:-240G}"
 BBL_MEM_DEFAULT_H100="${BBL_MEM_DEFAULT_H100:-230G}"
 # The horizon the defaults were measured at: a launch beyond it that names no memory is warned.
@@ -1261,7 +1274,8 @@ CL_BBL_CTX_VARS="BBL_KEY BBL_RTAG BBL_ROUTINE BBL_STAGE R SEED N_SHARDS SHOCKS H
 HORIZON_SRC BETA_SRC PSI_TAG MULTI_START N_PATHS BBL_FWD_EXTRA POLICY_CSV FWD_GPU FWD_PARTITIONS \
 SWEEP_PARTITIONS PACK PACK_H200 PACK_H100 MEM MEM_H200 MEM_H100 BBL_THREADS_PER_SHARD CPU_PARTITION \
 CPU_CONSTRAINT SHARD_TIME SHARD_TIME_SRC BBL_SHARD_MIN_T50 BBL_SHARD_MIN_T50_CPU BBL_PACK_CONTENTION BBL_WALL_SAFETY \
-BBL_WALL_FLOOR_MIN BBL_WALL_ROUND_MIN BBL_RETRY_WALL_MULT BBL_MAX_RETRIES RUN_EPOCH BBL_FRESH PROBE SHARD_PROBE"
+BBL_WALL_FLOOR_MIN BBL_WALL_ROUND_MIN BBL_RETRY_WALL_MULT BBL_MAX_RETRIES RUN_EPOCH BBL_FRESH PROBE SHARD_PROBE \
+PHI_PATH Z_PATH RDEP_TIMING SIM_VERSION"
 cl_bbl_ctx_write () {   # cl_bbl_ctx_write <key>
     local d f v
     d="$(cl_bbl_dispatch_dir "$1")"
@@ -1278,8 +1292,73 @@ cl_bbl_ctx_write () {   # cl_bbl_ctx_write <key>
 cl_bbl_ctx_load () {   # cl_bbl_ctx_load <file>: sets every CL_BBL_CTX_VARS variable in THIS shell
     [[ -f "$1" ]] || return 1
     ARRAY_THROTTLE_SET=0
+    # The design fields are unset first: a context that does not record them (a run launched
+    # before they existed) must load with them EMPTY, never with a value left in the environment.
+    # The callers refuse such a run (cl_bbl_version_guard); nothing here pins a default.
+    unset PHI_PATH Z_PATH RDEP_TIMING SIM_VERSION
     . "$1"
     if [[ "${ARRAY_THROTTLE_SET}" != "1" ]]; then unset ARRAY_THROTTLE; fi
+    return 0
+}
+
+# cl_bbl_json_str <json file> <field>: the value of a top-level STRING field of a one-line JSON
+# sidecar (psi_starts_<key>.json), or "" when the file or the field is absent.
+cl_bbl_json_str () {
+    [[ -f "$1" ]] || return 0
+    sed -n "s/.*\"$2\"[[:space:]]*:[[:space:]]*\"\([^\"]*\)\".*/\1/p" "$1" | head -1
+}
+
+# cl_bbl_version_guard <key> <what>: 0 when run <key> may be extended by THIS code, i.e. its
+# psi_starts sidecar and its dispatch context, where they exist, both record sim_version ==
+# BBL_SIM_VERSION. Otherwise it names what it found and returns 1. <what> is the operation being
+# refused ("--repair", "the sweep", "a launch under this tag"), for the message.
+cl_bbl_version_guard () {
+    local key="$1" what="$2" ps ctx sv cv rc=0
+    ps="${CL_STEP_BBL}/psi_starts_${key}.json"
+    ctx="$(cl_bbl_dispatch_dir "${key}")/context.env"
+    if [[ -f "${ps}" ]]; then
+        sv="$(cl_bbl_json_str "${ps}" sim_version)"
+        if [[ "${sv}" != "${BBL_SIM_VERSION}" ]]; then
+            cl_err "REFUSING ${what} of ${key}: $(basename "${ps}") records sim_version '${sv:-none}', this code is '${BBL_SIM_VERSION}'."
+            rc=1
+        fi
+    fi
+    if [[ -f "${ctx}" ]]; then
+        cv="$( ( unset SIM_VERSION; . "${ctx}"; printf '%s' "${SIM_VERSION:-}" ) 2>/dev/null )"
+        if [[ "${cv}" != "${BBL_SIM_VERSION}" ]]; then
+            cl_err "REFUSING ${what} of ${key}: its launch context records sim_version '${cv:-none}', this code is '${BBL_SIM_VERSION}'."
+            rc=1
+        fi
+    fi
+    if (( rc != 0 )); then
+        cl_err "  Its psi were simulated under another design (a run launched before 2026-09-29 records none:"
+        cl_err "  frozen phi and Z, a contemporaneous carry, the x400 policy units). Shards simulated now would"
+        cl_err "  be pooled with those. Launch the design again under a NEW --psi-tag (for example _ms981)."
+    fi
+    return "${rc}"
+}
+
+# cl_check_policy_units <polfunc_fitted.csv>: the policy CSV states the COMPOUNDED annual spread on
+# every row (column lhs_unit == spread_ann_frac), which bbl_fwd_sim.jl's _load_policy_map requires.
+# Checked at submit time when the polfunc pre-step is skipped (--no-polfunc), so a stale CSV is a
+# refusal here rather than an error in every fwd task.
+cl_check_policy_units () {
+    local csv="$1" out
+    [[ -f "${csv}" ]] || { cl_err "policy CSV not found: ${csv}"; return 1; }
+    out="$(awk -F, 'NR == 1 { gsub(/\r/, ""); for (i = 1; i <= NF; i++) if ($i == "lhs_unit") c = i
+                              if (!c) { print "NOCOL"; exit } ; next }
+                    { gsub(/\r/, ""); if ($c != "spread_ann_frac") { bad++; if (!first) first = $c } }
+                    END { if (c) printf "%d %s", bad + 0, first }' "${csv}")"
+    if [[ -z "${out}" || "${out}" == "NOCOL" ]]; then          # empty file, or no lhs_unit column
+        cl_err "REFUSING: ${csv} has no lhs_unit column: it was fitted on the quarterly spread (x400 units)."
+        cl_err "  Regenerate it with the current bbl_polfunc.py: drop --no-polfunc (the pre-step refits it)."
+        return 1
+    fi
+    if [[ "${out%% *}" != "0" ]]; then
+        cl_err "REFUSING: ${csv}: ${out%% *} row(s) with lhs_unit != spread_ann_frac (first: '${out#* }')."
+        cl_err "  Regenerate it with the current bbl_polfunc.py: drop --no-polfunc (the pre-step refits it)."
+        return 1
+    fi
     return 0
 }
 

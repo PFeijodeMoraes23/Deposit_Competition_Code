@@ -23,7 +23,8 @@ is cut at ext1 there; `full` (the old 5-RC rung) is not a stage at all — see
 make_blp_rc_table.STAGES / RC_TABLE_STAGES, the single source of truth for the ladder.
 
 Reads  blp_results_E{3,4}_spec_12_{stage}{engine_suffix}.json.
-Reuses the label maps + formatting (WCB-p/t(G*) stars, on-bound σ dagger, se_note) from make_blp_rc_table.
+Reuses the label maps + formatting (WCB-p/t(G*) stars, on-bound σ dagger) and the shared note
+wording (demand_note, from config/table_notes.toml) from make_blp_rc_table.
 
 Usage
 -----
@@ -43,7 +44,7 @@ ensure_project_venv(__file__)
 import argparse
 import math
 
-import make_blp_rc_table as rc   # label maps, decode_theta2, fmt_coef, se_note, est_ref, loaders
+import make_blp_rc_table as rc   # label maps, decode_theta2, fmt_coef, demand_note, est_ref, loaders
 from utils import routines as _routines
 import sys
 
@@ -96,17 +97,18 @@ def build_table(ests, suffix: str = "", show_segments: bool = True,
     if len(set(_methods.values())) > 1:
         raise SystemExit(f"[demand-comparison] mixed se_method across routines {_methods} — "
                          "stale checkpoint vintage; re-run/ingest the missing routine first.")
-    sem     = rc.se_note(data.get(avail[-1]) or rep)
-    # Present only when some column has a Σ on the bound (the dagger rows): the other SEs are then
-    # conditional on it (blp_se_common.jl gmm_cluster_ses profiles it out of the covariance).
-    bound_note = (rc.BOUNDARY_SE_NOTE + " ") if rc.sigma_on_bound(data[e] for e in avail) else ""
     lbl_suffix = "" if show_segments else "_noseg"
-    # The segment dummies are nuisance controls omitted from this table rather than carrying a
-    # duplicate with-segments variant (four extra rows, no information). Wording matches the
-    # logit comparison note (blp_logit.jl seg_sentence) verbatim; no \ref to the per-routine
-    # tables, which are not \input in V_Main.
-    seg_note = "" if show_segments else (
-        r"Segment dummies (S2--S5) are included in every strategy but not reported. ")
+    # The note is the wording shared with the logit comparison (config/table_notes.toml, read by
+    # blp_logit.jl too). The headline table (`rc_comparison`) leaves the omitted segment dummies to
+    # V_Main's text, which states them before the \input; the _full appendix table (`rc_full`) has
+    # no such sentence and says it in the note. The boundary clause appears only when some column
+    # has a Σ on the bound (the dagger rows), whose other SEs are then conditional on it
+    # (blp_se_common.jl gmm_cluster_ses profiles it out of the covariance).
+    skip = ["segments"] if show_segments else []
+    if not rc.sigma_on_bound(data[e] for e in avail):
+        skip.append("boundary")
+    note_body = rc.demand_note("rc_full" if file_lbl else "rc_comparison",
+                               se_method=_methods[avail[0]], skip=skip)
 
     theta1_params = rep.get("param_names_theta1") or (["alpha"] + rc.X_COLS)
     if not show_segments:
@@ -139,15 +141,7 @@ def build_table(ests, suffix: str = "", show_segments: bool = True,
         "",
         r"    \bottomrule",
         r"    \multicolumn{" + str(ncols + 1) + r"}{@{}p{\dimexpr" + TABLE_W + r"-2\tabcolsep\relax}@{}}{"
-        rf"\scriptsize \textit{{Notes:}} {seg_note}{sem}. "
-        r"Significance stars use WCB $p$-values where available, otherwise a "
-        r"Student-$t$ reference with $G^*$ effective clusters: *** $p<0.01$, ** $p<0.05$, * $p<0.1$. "
-        r"The $\Sigma$'s are bounded $\Sigma\ge0$, and a $\dagger$ marks a $\Sigma$ at "
-        r"the boundary ($\widehat{\Sigma}\approx0$), reported on the bound with no two-sided standard "
-        r"errors \parencite{andrews1999}. "
-        + bound_note + rc.Q_NOTE + " " +
-        r"Mean own-price elasticity is "
-        r"the average-market plug-in $\hat\alpha\cdot\overline{\rho(1-s)}$. Spread in percentage points."
+        + rc.note_cell(note_body) +
         r"} \\",
         r"    \endlastfoot",
         "",
@@ -214,11 +208,11 @@ def build_table(ests, suffix: str = "", show_segments: bool = True,
     def stat(name, fn):
         return "    " + name + " & " + " & ".join(fn(e) for e in avail) + r" \\"
     def q_of(e):
-        q = data[e].get("Q_value");  return f"${q:.4f}$" if q is not None else "---"
+        q = data[e].get("Q_value");  return f"${rc.fmt3(q)}$" if q is not None else "---"
     def n_of(e):
         n = data[e].get("n_obs");    return f"{n:,}" if n is not None else "---"
     def g_of(e):
-        g = data[e].get("G_star");   return f"{g:.2f}" if g is not None else "---"
+        g = data[e].get("G_star");   return rc.fmt3(g) if g is not None else "---"
     def se_of(e):
         return rc.semi_elast_cell(data[e], e)         # α̂·mean(ρ(1−s)), average-market plug-in
     # Same labels and order as the logit comparison footer (blp_logit.jl), so the two demand

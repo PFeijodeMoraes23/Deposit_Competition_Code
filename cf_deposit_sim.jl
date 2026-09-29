@@ -13,6 +13,17 @@ The active term uses the BLP active share s^Act recomputed at the period's sprea
 (via `cf_shares_at`); the sleeper term accrues last period's stock at the depositor
 deposit rate r^dep.
 
+TIMING OF THE CARRY (`simulate_deposits(...; rdep_timing)`). `:lagged` is the equation above:
+period t's carry accrues at r^dep built from the forward curve's horizon t−1 (h = 0, the launch
+quarter's own rate, at t = 1), which is also how the demand prep backs out Dep^Act
+(φ·(1 + r^f_lag − spread_lag)·Dep_lag). `:contemporaneous` accrues it at horizon t instead. The
+function default is `:contemporaneous`, so the counterfactual callers keep their results; the BBL
+forward simulation passes `:lagged` (CF_RDEP_TIMING / --rdep-timing in bbl_fwd_sim.jl).
+
+EVOLVING φ (`simulate_deposits(...; phi_path)`). φ_mt above is the launch-quarter value held over
+the horizon unless a φ path is given: column t of the N×T `phi_path` (cf_phi_path.jl) is then φ
+in period t, in both terms of the recursion and in that period's stability cap.
+
 ⚠ TWO DISTINCT RATE CONCEPTS — keep them separate:
   * DEMAND spread ρ (annualized, = spread_ann/100): the variable that enters utility
     and therefore the shares. `cf_shares_at` expects spreads in THESE units.
@@ -270,7 +281,17 @@ Arguments:
     block does. `nothing` freezes them at each row's launch quarter.
   * `beta`        : the discount factor the caller sums this path with. Given, every row's r^dep
     ceiling becomes `_rdep_stability_cap(φ, beta)`, so no discounted balance outgrows the
-    discount; `nothing` keeps the fixed RDEP_MAX ceiling.
+    discount; `nothing` keeps the fixed RDEP_MAX ceiling. With `phi_path` the ceiling is taken
+    at each period's φ_t (β·φ_t·(1 + r^dep_t) ≤ κ, period by period).
+  * `phi_path`    : an N×T matrix whose column t is φ in period t (cf_phi_path.jl builds it from
+    the sleepiness link and the state path). `nothing` holds φ at `st.phi` (or `phi_override`)
+    for the whole horizon. Exclusive with `phi_override`.
+  * `rdep_timing` : `:lagged` accrues period t's carry at r^dep from horizon t−1 of the rate
+    path (eq 9-B); `:contemporaneous` (the default) at horizon t. The floor, the ceiling, the
+    stability cap and the bound tally all apply to whichever rate the carry uses. The constant
+    `st.rdep_q` branch has no horizon and is the same under both.
+  * `rf_h0`       : each row's h = 0 rate (length N), the launch quarter's own realised r^f —
+    what `:lagged` accrues period 1 at, on the per-row curve, rate-risk and single-path branches.
 
 PERFORMANCE: if `spreads_ann` is constant over t, the active share is computed ONCE
 (one forward pass) and reused — so a constant-spread sim is ~1 share evaluation,
@@ -296,13 +317,29 @@ function simulate_deposits(ctx::CFDemandCtx, st::DepositSimState;
                            rf_curves::Union{Nothing,Matrix{Float64}}=nothing,
                            row_curve::Union{Nothing,Vector{Int}}=nothing,
                            state_ev::Union{Nothing,StateEvolution}=nothing,
-                           beta::Union{Nothing,Float64}=nothing)
+                           beta::Union{Nothing,Float64}=nothing,
+                           phi_path::Union{Nothing,Matrix{Float64}}=nothing,
+                           rdep_timing::Symbol=:contemporaneous,
+                           rf_h0::Union{Nothing,Vector{Float64}}=nothing)
     N = nrow(ctx.df)
     φ = phi_override === nothing ? st.phi : phi_override
     length(φ) == N || error("phi length ≠ N")
+    evolving = phi_path !== nothing
+    if evolving
+        phi_override === nothing ||
+            error("phi_override and phi_path are exclusive: phi_path already sets φ in every period")
+        (size(phi_path, 1) == N && size(phi_path, 2) >= T) ||
+            error("phi_path is $(size(phi_path)); need N=$N rows and at least T=$T columns")
+    end
+    rdep_timing in (:contemporaneous, :lagged) ||
+        error("rdep_timing must be :contemporaneous or :lagged (got $rdep_timing)")
+    lagged = rdep_timing == :lagged
     # Per-row r^dep ceiling from the stability condition at the caller's β (_rdep_stability_cap).
-    rcap = beta === nothing ? nothing : _rdep_stability_cap.(φ, beta)
+    # A fixed φ gives one ceiling for the whole horizon; a φ path gives one per period, computed
+    # at that period's φ_t inside the loop (rcap_t).
+    rcap = (beta === nothing || evolving) ? nothing : _rdep_stability_cap.(φ, beta)
     rdep_static = rcap === nothing ? st.rdep_q : min.(st.rdep_q, rcap)
+    rcap_buf = (beta !== nothing && evolving) ? zeros(N) : nothing
 
     # Resolve the spread path into an N×T view and detect the constant-spread fast path.
     time_varying = spreads_ann isa Matrix
@@ -344,6 +381,11 @@ function simulate_deposits(ctx::CFDemandCtx, st::DepositSimState;
         length(row_curve) == N || error("row_curve length $(length(row_curve)) ≠ N=$N")
         size(rf_curves, 2) >= T || error("rf_curves has $(size(rf_curves,2)) periods < T=$T")
     end
+    if lagged && (per_row_rf || rf_path_q !== nothing)
+        (rf_h0 !== nothing && length(rf_h0) == N) ||
+            error("rdep_timing = :lagged accrues period 1 at h = 0: pass rf_h0, each row's " *
+                  "launch-quarter rate (length N)")
+    end
     rfv = zeros(N)
 
     # Bound incidence, tallied on the FIRST call that recomputes r^dep and on no other. In
@@ -354,7 +396,7 @@ function simulate_deposits(ctx::CFDemandCtx, st::DepositSimState;
     tally && (_RDEP_BOUND_LOGGED[] = true)
     ncurve = per_row_rf ? size(rf_curves, 1) : 1
     nlo = zeros(Int, ncurve); nhi = zeros(Int, ncurve); ncnt = zeros(Int, ncurve)
-    nst = rcap === nothing ? nothing : zeros(Int, ncurve)
+    nst = beta === nothing ? nothing : zeros(Int, ncurve)
 
     @inbounds for t in 1:T
         ρ_t = time_varying ? spreads_ann[:, t] : base_spread
@@ -380,24 +422,40 @@ function simulate_deposits(ctx::CFDemandCtx, st::DepositSimState;
         # 2016 starts, whose high frozen markdowns meet a declining curve. That lands one-signed on
         # the across-start variation that identifies zeta (V_Main:629), so its per-start incidence
         # is logged once per job (_log_rdep_bounds) rather than left invisible.
+        #
+        # φ_t and the period's ceiling. With a φ path the stability cap is re-evaluated at THIS
+        # period's φ_t, so the bound the tally counts is the one the carry actually faces.
+        φt = evolving ? view(phi_path, :, t) : φ
+        rcap_t = rcap_buf === nothing ? rcap : (rcap_buf .= _rdep_stability_cap.(φt, beta))
+        # The carry's rate. :lagged reads horizon t−1 of the row's rate path (h = 0, the launch
+        # quarter's own rate, at t = 1) and the spread in force in period t−1; :contemporaneous
+        # reads horizon t. A stationary spread is the same in both periods.
+        ρ_acc = (lagged && time_varying) ? spreads_ann[:, max(t - 1, 1)] : ρ_t
         rdep_t = if per_row_rf
-            @inbounds for i in 1:N; rfv[i] = rf_curves[row_curve[i], t]; end
-            raw = _rdep_from_annual.(rfv, ρ_t)
-            tally && _tally_rdep_bounds!(nlo, nhi, ncnt, raw, row_curve; nst=nst, rcap=rcap)
-            rcap === nothing ? clamp.(raw, RDEP_MIN, RDEP_MAX) : clamp.(raw, RDEP_MIN, rcap)
+            if lagged
+                @inbounds for i in 1:N; rfv[i] = t == 1 ? rf_h0[i] : rf_curves[row_curve[i], t - 1]; end
+            else
+                @inbounds for i in 1:N; rfv[i] = rf_curves[row_curve[i], t]; end
+            end
+            raw = _rdep_from_annual.(rfv, ρ_acc)
+            tally && _tally_rdep_bounds!(nlo, nhi, ncnt, raw, row_curve; nst=nst, rcap=rcap_t)
+            rcap_t === nothing ? clamp.(raw, RDEP_MIN, RDEP_MAX) : clamp.(raw, RDEP_MIN, rcap_t)
         elseif rf_path_q === nothing
-            rdep_static
+            rcap_buf === nothing ? rdep_static : min.(st.rdep_q, rcap_t)
         else
-            raw = _rdep_from_annual.(rf_path_q[t], ρ_t)
-            tally && _tally_rdep_bounds!(nlo, nhi, ncnt, raw, nothing; nst=nst, rcap=rcap)
-            rcap === nothing ? clamp.(raw, RDEP_MIN, RDEP_MAX) : clamp.(raw, RDEP_MIN, rcap)
+            raw = !lagged ? _rdep_from_annual.(rf_path_q[t], ρ_acc) :
+                  (t == 1 ? _rdep_from_annual.(rf_h0, ρ_acc) : _rdep_from_annual.(rf_path_q[t - 1], ρ_acc))
+            tally && _tally_rdep_bounds!(nlo, nhi, ncnt, raw, nothing; nst=nst, rcap=rcap_t)
+            rcap_t === nothing ? clamp.(raw, RDEP_MIN, RDEP_MAX) : clamp.(raw, RDEP_MIN, rcap_t)
         end
         accr = 1.0 .+ rdep_t
-        Dep[:, t+1] .= (1.0 .- φ) .* st.M .* s_t .+ φ .* accr .* Dep[:, t]
+        Dep[:, t+1] .= (1.0 .- φt) .* st.M .* s_t .+ φt .* accr .* Dep[:, t]
         s_out[:, t] .= s_t
         sp_out[:, t] .= ρ_t
     end
-    tally && _log_rdep_bounds(nlo, nhi, ncnt, per_row_rf ? rf_curves : nothing; nst=nst)
+    tally && _log_rdep_bounds(nlo, nhi, ncnt, per_row_rf ? rf_curves : nothing; nst=nst,
+                              horizons=lagged ? "carry at h=t−1, h=0..T−1" : "h=1..T",
+                              phi_label=evolving ? "φ_t" : "φ̂")
     return (Dep=Dep, s_act=s_out, spreads=sp_out)
 end
 
@@ -421,14 +479,17 @@ end
 # One log block per job. Per-curve lines are sorted by floor incidence, worst first, and labelled
 # by the curve's row in rf_curves and its first-period r^f. `nst` (given when simulate_deposits
 # ran with `beta`) adds the stability cap's incidence, which includes the RDEP_MAX excess.
+# `horizons` names the rates the carry used and `phi_label` the φ the cap was taken at (φ_t when
+# it was re-evaluated every period).
 function _log_rdep_bounds(nlo::Vector{Int}, nhi::Vector{Int}, ncnt::Vector{Int}, rf_curves;
-                          nst::Union{Nothing,Vector{Int}}=nothing)
+                          nst::Union{Nothing,Vector{Int}}=nothing,
+                          horizons::AbstractString="h=1..T", phi_label::AbstractString="φ̂")
     tot = sum(ncnt)
     tot == 0 && return nothing
     pct(a, b) = round(100 * a / b, digits=2)
     stab = nst === nothing ? "" :
-           ", stability cap β·φ̂·(1+r^dep) ≤ $(RDEP_STABILITY_KAPPA) on $(pct(sum(nst), tot))%"
-    log_status("  [SIM] r^dep bounds (first recomputed simulation, h=1..T): floor 0 binds on " *
+           ", stability cap β·$(phi_label)·(1+r^dep) ≤ $(RDEP_STABILITY_KAPPA) on $(pct(sum(nst), tot))%"
+    log_status("  [SIM] r^dep bounds (first recomputed simulation, $(horizons)): floor 0 binds on " *
                "$(pct(sum(nlo), tot))% of row-periods, ceiling $(RDEP_MAX) on $(pct(sum(nhi), tot))%" *
                stab)
     length(ncnt) == 1 && return nothing

@@ -9,7 +9,8 @@ bbl_polfunc.py). Reads the CURRENT .md, replaces the block between
 sentinels, and writes the WHOLE .md back (narrative untouched).
 
 Two variants, keyed by --depvar (matching the estimator's --depvar):
-    spread : §2.6, LHS = QoQ deposit spread  (the policy fed to Step 2)   [default]
+    spread : §2.6, LHS = compounded annual deposit spread (1+r^f)^4-(1+r^dep)^4 (the policy fed
+             to Step 2), k=4 in percentage points and k=5 in basis points   [default]
     rate   : §2.7, LHS = annualized deposit rate (1+rate_qoq)^4-1
 
     python make_polfunc_md_table.py                  # spread
@@ -30,7 +31,8 @@ ANCHOR = "## 3. The execution plan (easiest → hardest)"   # §2.6/§2.7 are in
 # Display units and the segment-dummy list are IMPORTED from the estimator, not duplicated, so the
 # .md and the .tex fragments can never drift apart. Units are pinned to the sleepiness/demand tables
 # (see the _DISPLAY_UNITS comment in bbl_polfunc.py).
-from bbl_polfunc import _DISPLAY_UNITS, _SEGMENT_VARS, CFG as _CFG_SPREAD, _CFG_RATE
+from bbl_polfunc import (_DISPLAY_UNITS, _SEGMENT_VARS, CFG as _CFG_SPREAD, _CFG_RATE,
+                         _lhs_display, _lhs_unit_name)
 import sys
 
 # Windows consoles default to cp1252 and raise UnicodeEncodeError on any non-ASCII
@@ -76,7 +78,7 @@ LABELS = {
     "fraction_65plus": "Fraction 65+",
     "fraction_young": "Fraction young",
     "pix_users_pf_per1000": "Pix users",
-    "connections_per100": "Broadband connections",
+    "connections_per100": "Mobile lines",
     "branches_per1000": "Branches",
     "cadunico_families_per1000": "CadUnico families",
 }
@@ -100,6 +102,21 @@ VARIANTS = {
         "tab_base": "tab:polfunc_rate",
     },
 }
+
+
+# Three decimals on every number, never -0.000, as in the .tex fragments (V_Main display rule,
+# 2026-09-28). Nonzero values that still print 0.000 are counted in ZERO_PRINTS and reported.
+ZERO_PRINTS = []
+
+
+def _f3(x, where=""):
+    v = float(x)
+    s = f"{v:,.3f}"
+    if float(s.replace(",", "")) == 0.0:
+        if v != 0.0 and where:
+            ZERO_PRINTS.append((where, v))
+        s = "0.000"
+    return s
 
 
 def _stars(p):
@@ -126,23 +143,23 @@ def _colkey(k, suffix):
 
 
 def _cell(res, v, lhs=1.0):
-    """Formatted cell. `lhs` is the dependent-variable display multiplier (400 for the spread,
-    100 for the rate) and MUST be applied here as well as to Mean dep. var. -- the .tex fragments
-    scale by lhs * unit, and without it the .md printed raw QoQ-fraction coefficients (0.0040
-    where the .tex showed 1.6097) for the same regression."""
+    """Formatted cell. `lhs` is the dependent-variable display multiplier of the deposit type
+    (bbl_polfunc._lhs_display: spread 100 = pp, k=5 spread 10,000 = basis points; rate 100) and
+    MUST be applied here as well as to Mean dep. var. -- the .tex fragments scale by lhs * unit,
+    and without it the .md prints raw fraction coefficients for the same regression."""
     coefs = res.get("coefficients", {})
     if v not in coefs:
         return ""
     mult = _display_unit(v)[0] * lhs
     c = float(coefs[v]) * mult; se = float(res["std_errors"][v]) * mult; p = res["pvalues"].get(v)
     stars = _stars(p).replace("*", r"\*")
-    return f"{c:.4f}{stars} ({se:.4f})"
+    return f"{_f3(c, v)}{stars} ({_f3(se, v + ' SE')})"
 
 
-def _variant_cell(res, base):
+def _variant_cell(res, base, lhs=1.0):
     for v in (base, base + "_natl"):
         if v in res.get("coefficients", {}):
-            return _cell(res, v)
+            return _cell(res, v, lhs)
     return ""
 
 
@@ -163,10 +180,11 @@ def _panel_rows(summary, k, lhs=1.0):
     return rows
 
 
-def build_table(summary, lhs=1.0):
+def build_table(summary, cfg_units):
     lines = ["| Regressor | " + " | ".join(COL_HEADERS) + " |", "|---|---|---|---|"]
     for k in (4, 5):
-        lines.append(f"| **{K_TITLES[k]}** | | | |")
+        lhs = _lhs_display(k, cfg_units)
+        lines.append(f"| **{K_TITLES[k]}, {_lhs_unit_name(k, cfg_units)}** | | | |")
         lines.extend(_panel_rows(summary, k, lhs))
         seg = ["Yes" if any(v in summary.get(_colkey(k, s), {}).get("coefficients", {})
                             for v in _SEGMENT_VARS) else "No" for s in COLS]
@@ -177,16 +195,16 @@ def build_table(summary, lhs=1.0):
         lines.append("| Demographics | " + " | ".join(demo) + " |")
         mdv = [summary.get(_colkey(k, s), {}).get("mean_depvar") for s in COLS]
         lines.append("| Mean dep. var. | " + " | ".join(
-            f"{x*lhs:.4f}" if x is not None else "" for x in mdv) + " |")
+            _f3(x * lhs, f'k={k} mean') if x is not None else "" for x in mdv) + " |")
         r2 = [summary.get(_colkey(k, s), {}).get("r_squared") for s in COLS]
-        lines.append("| R² | " + " | ".join(f"{x:.4f}" if x is not None else "" for x in r2) + " |")
+        lines.append("| R² | " + " | ".join(_f3(x) if x is not None else "" for x in r2) + " |")
 
     def stat(key, fmt):
         vals = [summary.get(_colkey(4, s), {}).get(key) for s in COLS]
         return " | ".join(fmt(v) if v is not None else "" for v in vals)
     lines.append("| **Observations** | " + stat("n_obs", lambda x: f"{int(x):,}") + " |")
-    lines.append("| Clusters (G) | " + stat("n_clusters", lambda x: f"{int(x)}") + " |")
-    lines.append("| Eff. clusters (G*) | " + stat("G_star", lambda x: f"{float(x):.1f}") + " |")
+    lines.append("| Clusters (G) | " + stat("n_clusters", lambda x: f"{int(x):,}") + " |")
+    lines.append("| Eff. clusters (G*) | " + stat("G_star", lambda x: _f3(x)) + " |")
     return "\n".join(lines)
 
 
@@ -195,7 +213,7 @@ def _stat(summary, col, key, nd):
     v = summary.get(_colkey(4, col), {}).get(key)
     if v is None:
         return "—"
-    return f"{int(v)}" if nd == 0 else f"{float(v):.{nd}f}"
+    return f"{int(v):,}" if nd == 0 else _f3(v)
 
 
 def _intro(depvar, summary, cfg):
@@ -217,10 +235,10 @@ def _intro(depvar, summary, cfg):
         "credit/assets) are **winsorized at 1/99 within firm type** — the reported D-firm balance "
         "sheets contain near-zero-denominator artifacts (Basel index up to 16,070 against a B-firm "
         "max of 7.10) that otherwise drive both the point estimates and the bootstrap SEs. "
-        "Coefficients 4-decimal, standard errors in parentheses, significance \*\*\*/\*\*/\* at 1/5/10%. "
+        "Coefficients at three decimals, standard errors in parentheses, significance \*\*\*/\*\*/\* at 1/5/10%. "
         "**Demographic units are pinned to the sleepiness tables** so those coefficients are comparable "
         "across the two: GDP *per capita* in 10k R$ and CadUnico families in 100s per 1k (the two "
-        "variables the demand prep rescales), population shares as raw fractions, broadband per 100 "
+        "variables the demand prep rescales), population shares as raw fractions, mobile lines per 100 "
         "inhabitants; Pix users (absent there) per 100 per 1k. **All other ratios are in percentage "
         "points** — equity, Basel, cost, wholesale, LCI/LCA, asset return, NPL provisions, credit/assets "
         "and the risk-free rate — so a coefficient is the effect of a 1pp move rather than of an "
@@ -230,8 +248,10 @@ def _intro(depvar, summary, cfg):
     )
     if depvar == "spread":
         head = (
-            "The dependent variable is the observed **quarterly deposit spread** "
-            "ρ = r^f − r^dep (the policy fed to BBL Step 2). "
+            "The dependent variable is the **compounded annual deposit spread** "
+            "ρ = (1+r^f)⁴ − (1+r^dep)⁴ of the quarterly rates, the definition of the demand price "
+            "(the policy fed to BBL Step 2), in percentage points for k=4 and in **basis points for "
+            "k=5**, whose spread is itself about zero. "
             f"The fit is asymmetric — B-firm CDB R²={r2(4,'B'):.2f}, B-firm prepaid R²={r2(5,'B'):.2f}, "
             f"but the digital/national D regressions fit prepaid poorly (R²≈{r2(5,'D_optB'):.02f}). "
         )
@@ -259,10 +279,10 @@ def build_section(depvar, summary):
     cfg = VARIANTS[depvar]
     heading = cfg["heading"]
     intro = _intro(depvar, summary, cfg)
-    # LHS display multiplier, imported from the estimator so the .md and .tex agree by construction
-    # (spread: 400 = simple-annualized pp; rate: 100 = pp).
+    # LHS display multipliers per deposit type, imported from the estimator so the .md and .tex
+    # agree by construction (spread: pp, k=5 in basis points; rate: pp).
     cfg_units = _CFG_SPREAD if depvar == "spread" else _CFG_RATE
-    tbl = build_table(summary, lhs=float(cfg_units.get("lhs_display", 1.0)))
+    tbl = build_table(summary, cfg_units)
     return f"{cfg['start']}\n{heading}\n\n{intro}\n{tbl}\n{cfg['end']}"
 
 
@@ -297,6 +317,9 @@ def main():
         action = "inserted"
 
     MD_PATH.write_text(md, encoding="utf-8", newline="\n")
+    if ZERO_PRINTS:
+        print(f"[display] {len(ZERO_PRINTS)} nonzero value(s) print as 0.000 at three decimals "
+              f"(not rescaled): " + ", ".join(f"{w} {v:.2e}" for w, v in ZERO_PRINTS))
     n_rows = block.count("\n| ")
     print(f"[OK] {args.depvar} policy-function section {action} in {MD_PATH.name} "
           f"({n_rows} table rows).")

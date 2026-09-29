@@ -89,7 +89,9 @@
 #
 # Flags
 #   --routines "3 4"   routine set (default from cluster_lib.sh)
-#   --polfunc          accepted and a NO-OP — it names the default
+#   --polfunc          names the default; with --shard-probe it puts the polfunc pre-step in the
+#                      probe's graph (polfunc --afterok--> the probe shard), which --shard-probe
+#                      otherwise leaves out
 #   --no-polfunc       skip the polfunc pre-step and use the CSV already on disk
 #   --no-warmup        skip the pre-warm barrier
 #   --starts|--multi-start   one forward curve PER LAUNCH QUARTER instead of one shared curve
@@ -101,6 +103,18 @@
 #   --promote          let the solve copy its tagged cost_params onto the UNTAGGED name the
 #                      counterfactuals read, but ONLY if the identification gate passes
 #   --beta B --horizon T   override bbl_discount.env (env BETA / HORIZON do the same)
+#   --phi-path P       evolving (default) | frozen: the sleepy share re-evaluated each period from
+#                      the sleepiness link, or held at the launch phi_mt (env CF_PHI_PATH).
+#                      evolving needs data/input/sleep_link_E{k}_spec_12.json (bbl_sleep_link.py)
+#   --z-path Z         mean_reverting (default) | frozen: the cost shifters in psi3 (env CF_Z_PATH)
+#   --rdep-timing R    lagged (default) | contemporaneous: the sleeper carry accrues at horizon
+#                      t-1 (eq 9-B) or t (env CF_RDEP_TIMING). All three are passed to the sim
+#                      explicitly, recorded in every psi file, and part of the tag guard: a tag
+#                      whose psi_starts records other values is refused (--force overrides).
+#                      So is a tag whose psi_starts or context records another design version
+#                      (BBL_SIM_VERSION, cluster_lib.sh) or none, i.e. any run launched before
+#                      2026-09-29 (_ms1, _ms979): --repair, --shard-list and the sweep never add
+#                      shards to it, and a launch over it needs --force.
 #   --shocks S         deviations per firm (env SHOCKS; default 50)
 #   --fwd-cpu|--fwd-gpu  where the fwd_sim array runs (default: GPU)
 #   --partitions "P.." GPU partitions for fwd_sim (default gpu_h200); indices split DISJOINTLY
@@ -129,8 +143,9 @@
 #   --no-probe-control the probe without its unpacked job
 #   --shard-probe      the CODE PROBE: exactly the shards of --array-spec (REQUIRED; refused
 #                      without it), one per job, under an explicit --psi-tag containing 'probe',
-#                      and nothing else: no warmup, polfunc, sweep, solve, tables or archive, so
-#                      nothing ever simulates the other shards of the tag. beta/T come from the
+#                      and nothing else: no warmup, polfunc (unless --polfunc), sweep, solve,
+#                      tables or archive, so nothing ever simulates the other shards of the tag.
+#                      beta/T come from the
 #                      registry as for any launch. A shard file already on disk under the tag is
 #                      refused (--force overwrites), and --repair refuses every probe tag.
 #   --force            submit even though a live job of this routine/tag claims the same shards
@@ -193,19 +208,26 @@ MULTI_START="${MULTI_START:-0}"; N_PATHS="${N_PATHS:-8}"; PSI_TAG="${PSI_TAG:-}"
 # BOTH directions -- a pass overwrites the production file, a failure exits 3 and cancels the
 # afterok dependents (here: the tables and the archive too) with no log of their own.
 PROMOTE="${PROMOTE:-0}"
-FORCE=0; REPAIR=0; PROBE=0; PROBE_CONTROL=1; SHARD_PROBE=0
+FORCE=0; REPAIR=0; PROBE=0; PROBE_CONTROL=1; SHARD_PROBE=0; POLFUNC_FLAG=0
+# The three model switches of the forward simulation (bbl_fwd_sim.jl): flag > the sim's own
+# environment variables > the defaults. Always passed to the sim explicitly.
+PHI_PATH="${CF_PHI_PATH:-evolving}"; Z_PATH="${CF_Z_PATH:-mean_reverting}"
+RDEP_TIMING="${CF_RDEP_TIMING:-lagged}"
 ZIP_SLIM="${ZIP_SLIM:-1}"
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --routines)         ROUTINES="$2"; ROUTINES_SRC=flag; shift ;;
-        --polfunc)          DO_POLFUNC=1 ;;          # names the default; kept so existing command lines still parse
+        --polfunc)          DO_POLFUNC=1; POLFUNC_FLAG=1 ;;   # names the default (and see --shard-probe)
         --no-polfunc)       DO_POLFUNC=0 ;;
         --no-warmup)        DO_WARMUP=0 ;;
         --starts|--multi-start) MULTI_START=1 ;;
         --n-paths)          N_PATHS="$2"; shift ;;
         --psi-tag)          PSI_TAG="$2"; shift ;;
         --promote)          PROMOTE=1 ;;
+        --phi-path)         PHI_PATH="$2"; _GIVEN="${_GIVEN}PHI_PATH "; shift ;;
+        --z-path)           Z_PATH="$2"; _GIVEN="${_GIVEN}Z_PATH "; shift ;;
+        --rdep-timing)      RDEP_TIMING="$2"; _GIVEN="${_GIVEN}RDEP_TIMING "; shift ;;
         --beta)             BETA="$2"; BETA_SRC="--beta"; _GIVEN="${_GIVEN}BETA "; shift ;;
         --horizon)          HORIZON="$2"; HORIZON_SRC="--horizon"; _GIVEN="${_GIVEN}HORIZON "; shift ;;
         --shocks)           SHOCKS="$2"; _GIVEN="${_GIVEN}SHOCKS "; shift ;;
@@ -264,6 +286,9 @@ cl_bbl_discount_fill BETA BBL_BETA || exit 2
 cl_bbl_discount_fill HORIZON BBL_HORIZON || exit 2
 [[ "${BETA}" =~ ^0?\.[0-9]+$|^1(\.0*)?$ ]] || { cl_err "REFUSING: beta '${BETA}' (${BETA_SRC}) is not a number in (0, 1]."; exit 2; }
 [[ "${HORIZON}" =~ ^[1-9][0-9]*$ ]] || { cl_err "REFUSING: horizon '${HORIZON}' (${HORIZON_SRC}) is not a positive integer."; exit 2; }
+[[ "${PHI_PATH}" == "evolving" || "${PHI_PATH}" == "frozen" ]] || { cl_err "REFUSING: --phi-path '${PHI_PATH}' is not evolving|frozen."; exit 2; }
+[[ "${Z_PATH}" == "mean_reverting" || "${Z_PATH}" == "frozen" ]] || { cl_err "REFUSING: --z-path '${Z_PATH}' is not mean_reverting|frozen."; exit 2; }
+[[ "${RDEP_TIMING}" == "lagged" || "${RDEP_TIMING}" == "contemporaneous" ]] || { cl_err "REFUSING: --rdep-timing '${RDEP_TIMING}' is not lagged|contemporaneous."; exit 2; }
 
 # ── The two special modes ────────────────────────────────────────────────────
 # --probe: the MEMORY PROBE. Two concurrent jobs on the same partition at the same T, both with
@@ -297,11 +322,14 @@ fi
 # still fixes the round-robin split, so shard i of the probe is shard i of a production run and
 # its psi_dev compares row for row. Its tag must be given and must contain 'probe' (the memory
 # probe's rule), and step (2) below refuses to overwrite a shard file already under it.
+# An explicit --polfunc keeps the polfunc pre-step: the probe then runs on a policy fitted in this
+# graph (it rewrites the one shared polfunc_fitted.csv, as any launch without --no-polfunc does).
 if [[ "${SHARD_PROBE}" == "1" ]]; then
     [[ "${REPAIR}" == "0" && "${PROBE}" == "0" ]] || { echo "--shard-probe excludes --repair and --probe" >&2; exit 2; }
     [[ -n "${SHARD_LIST}" ]] || { cl_err "REFUSING --shard-probe: name the shard(s) with --array-spec (for example --array-spec 1). A probe never launches a whole array."; exit 2; }
     [[ "${PSI_TAG}" == *probe* ]] || { cl_err "REFUSING --shard-probe: --psi-tag '${PSI_TAG}' must be given and contain 'probe', so a probe can never write under a production tag."; exit 2; }
-    DO_WARMUP=0; DO_POLFUNC=0; DO_SWEEP=0; DO_SOLVE=0; DO_TABLES=0; DO_ZIP=0; PY_PREFLIGHT=0
+    DO_WARMUP=0; DO_SWEEP=0; DO_SOLVE=0; DO_TABLES=0; DO_ZIP=0; PY_PREFLIGHT=0
+    if [[ "${POLFUNC_FLAG}" != "1" ]]; then DO_POLFUNC=0; fi
     PACK=1; PACK_H200=1; PACK_H100=1
 fi
 # --repair: no new launch. A sweep starts at once and re-runs whatever is missing (or nothing),
@@ -335,6 +363,13 @@ cl_banner "BBL cost estimation (${_mode})$([[ "${CL_DRYRUN}" == "1" ]] && echo '
           "python: PY_MODULE='${PY_MODULE:-}' CONDA_ENV='${CONDA_ENV:-}' CF_PYTHON='${CF_PYTHON}'"
 export PY_MODULE CONDA_ENV CF_PYTHON
 cl_say "BBL ${_mode}: routines ${ROUTINES} | tag '${PSI_TAG}' | ${N_SHARDS} shards | beta=${BETA} (${BETA_SRC}) T=${HORIZON} (${HORIZON_SRC}) shocks=${SHOCKS}"
+_model_note=""
+if [[ "${PHI_PATH}" == "evolving" && "${CF_EVOLVING_STATES:-1}" == "0" ]]; then
+    cl_err "[!] WARNING: CF_EVOLVING_STATES=0 freezes the demand block's demographics while --phi-path evolving"
+    cl_err "    moves them inside phi: the share and the sleepy share would read different state paths."
+fi
+if [[ "${REPAIR}" == "1" ]]; then _model_note="  (a --repair uses the values recorded in each routine context)"; fi
+cl_say "BBL model: phi_path=${PHI_PATH} z_path=${Z_PATH} rdep_timing=${RDEP_TIMING}${_model_note}"
 
 # ── fwd_sim placement ────────────────────────────────────────────────────────
 if [[ "${FWD_GPU}" == "1" ]]; then
@@ -400,8 +435,12 @@ fi
 # Multi-start OR evolving states. Two independent reasons this file must exist, and the
 # first is NOT covered by CF_EVOLVING_STATES: a multi-start run builds its rate paths from
 # rate.process, so without the file --n-paths silently repeats the Focus mean N times.
-if [[ "${MULTI_START}" == "1" || "${CF_EVOLVING_STATES:-1}" != "0" ]]; then
+if [[ "${MULTI_START}" == "1" || "${CF_EVOLVING_STATES:-1}" != "0" || "${PHI_PATH}" == "evolving" || "${Z_PATH}" == "mean_reverting" ]]; then
     cl_need_transitions || miss=1
+fi
+# The evolving sleepy share evaluates each routine's own exported link (bbl_sleep_link.py).
+if [[ "${PHI_PATH}" == "evolving" && "${REPAIR}" != "1" ]]; then
+    for k in ${ROUTINES}; do cl_need_sleep_link "${k}" || miss=1; done
 fi
 # The Focus curves must reach the horizon (cl_bbl_check_curve). The file this run's sim reads is
 # a refusal; the other one (forward_rf_qoq.csv under --multi-start) is a one-line note, since the
@@ -420,6 +459,8 @@ if [[ "${DO_POLFUNC}" == "1" ]]; then
     POLICY_CSV="${CL_STEP_BBL}/polfunc_fitted.csv"
 else
     POLICY_CSV="${POLICY_CSV:-$(cl_need_polfunc)}" || miss=1
+    # Skipping the pre-step means trusting the CSV on disk: it must be the compounded-spread fit.
+    if [[ -n "${POLICY_CSV}" && -f "${POLICY_CSV}" ]]; then cl_check_policy_units "${POLICY_CSV}" || miss=1; fi
 fi
 for k in ${ROUTINES}; do cl_need_rc_jls "${k}" || miss=1; done
 # The BBL solve is PYTHON. Verify the env NOW, on the login node, instead of discovering it when
@@ -468,8 +509,9 @@ elif [[ -n "${PSI_TAG}" ]]; then
     ms_flags="--psi-tag ${PSI_TAG}"
 fi
 # beta and T are ALWAYS passed explicitly, so the sim never falls back to its own registry read
-# and the value in every job's command line is the one this banner printed.
-bbl_extra="--shocks ${SHOCKS} --perturb-scale ${PERTURB_SCALE} --dev-scheme ${DEV_SCHEME} --beta ${BETA} --horizon ${HORIZON}${asset_flags:+ ${asset_flags}} ${policy_flag}${ms_flags:+ ${ms_flags}}"
+# and the value in every job's command line is the one this banner printed. The same holds for
+# the three model switches: the sim's own defaults never decide a run.
+bbl_extra="--shocks ${SHOCKS} --perturb-scale ${PERTURB_SCALE} --dev-scheme ${DEV_SCHEME} --beta ${BETA} --horizon ${HORIZON} --phi-path ${PHI_PATH} --z-path ${Z_PATH} --rdep-timing ${RDEP_TIMING}${asset_flags:+ ${asset_flags}} ${policy_flag}${ms_flags:+ ${ms_flags}}"
 # The solve reads the SAME tag it was written under. Passed as --psi-tag rather than folded into
 # --suffix: the suffix is part of the stage name in every other consumer.
 # Built with an explicit `if`, never `$([[ ... ]] && echo ...)`: this file runs under
@@ -595,6 +637,7 @@ if [[ "${DO_POLFUNC}" == "1" ]]; then
 fi
 
 RUN_EPOCH_NOW="$(date +%s)"
+SIM_VERSION="${BBL_SIM_VERSION}"      # recorded in every context this run writes (cl_bbl_ctx_write)
 for k in ${ROUTINES}; do
     BBL_ROUTINE="${k}"; BBL_STAGE="${CF_STAGE}"
     BBL_KEY="$(cl_bbl_key "${k}" "${CF_STAGE}" "${PSI_TAG}")"
@@ -619,26 +662,28 @@ for k in ${ROUTINES}; do
             BBL_FWD_EXTRA="$(_ctx_get "${DD}/context.env" BBL_FWD_EXTRA)"
             MULTI_START="$(_ctx_get "${DD}/context.env" MULTI_START)"
             RUN_EPOCH="$(_ctx_get "${DD}/context.env" RUN_EPOCH)"
+            # The design version: a run this code did not launch is never repaired by it, whatever
+            # its other settings — its missing shards would be simulated under another design.
+            cl_bbl_version_guard "${BBL_KEY}" "--repair" || exit 2
+            # The model switches come from the context; a flag that contradicts them is refused.
+            declare -A _gsw=([PHI_PATH]="${PHI_PATH}" [Z_PATH]="${Z_PATH}" [RDEP_TIMING]="${RDEP_TIMING}")
+            PHI_PATH="$(_ctx_get "${DD}/context.env" PHI_PATH)"; Z_PATH="$(_ctx_get "${DD}/context.env" Z_PATH)"
+            RDEP_TIMING="$(_ctx_get "${DD}/context.env" RDEP_TIMING)"
+            for _v in PHI_PATH Z_PATH RDEP_TIMING; do
+                if [[ "${_GIVEN}" == *" ${_v} "* && "${_gsw[${_v}]}" != "${!_v}" ]]; then
+                    cl_err "REFUSING --repair E${k}: ${_v}=${_gsw[${_v}]} here, but the original run used ${_v}=${!_v}."
+                    cl_err "  A repair re-runs THAT design; omit the flag or pass ${!_v}."
+                    exit 2
+                fi
+            done
             cl_say "  --repair E${k}: design from the original context (N_SHARDS=${N_SHARDS} T=${HORIZON} beta=${BETA} shocks=${SHOCKS}); placement from these flags"
         else
-            _ns="$(ls "${CL_STEP_BBL}" 2>/dev/null | sed -n "s/^psi_dev_${BBL_KEY}_shard[0-9]*of\([0-9]*\)\.parquet$/\1/p" | sort -u | paste -sd' ' - || true)"
-            if [[ -z "${_ns}" ]]; then
-                cl_err "REFUSING --repair E${k}: no context and no psi_dev_${BBL_KEY}_shard* on disk — nothing to repair; launch it instead."
-                exit 2
-            fi
-            if [[ "${_ns}" == *" "* ]]; then
-                cl_err "REFUSING --repair E${k}: shard files of more than one count on disk (of ${_ns}); the solve refuses the mix."
-                exit 2
-            fi
-            if [[ "${_ns}" != "${N_SHARDS}" ]]; then
-                if [[ "${_GIVEN}" == *" N_SHARDS "* ]]; then
-                    cl_err "REFUSING --repair E${k}: --shards ${N_SHARDS}, but the files on disk are of${_ns}."; exit 2
-                fi
-                N_SHARDS="${_ns}"
-            fi
-            cl_say "  --repair E${k}: no context (launched before the sweep existed): N_SHARDS=${N_SHARDS} from the files,"
-            cl_say "     every other setting from THESE flags and bbl_discount.env — they must match the original"
-            cl_say "     (the sweep checks beta/T against psi_starts)"
+            # No context: the run was launched before the sweep existed, which is long before the
+            # current design version. Nothing this code simulates can complete it.
+            cl_err "REFUSING --repair E${k}: ${BBL_KEY} has no launch context (${DD}/context.env), so it was launched"
+            cl_err "  before the sweep existed, under an earlier forward-simulation design than '${BBL_SIM_VERSION}'."
+            cl_err "  Its missing shards cannot be simulated by this code. Launch the design again under a NEW --psi-tag."
+            exit 2
         fi
         cl_bbl_check_curve "${HORIZON}" "${MULTI_START}" || exit 1
     elif [[ "${PROBE}" != "1" ]]; then
@@ -706,6 +751,24 @@ for k in ${ROUTINES}; do
                 cl_err "  --psi-tag of the form _ms<digits> (for example _ms979), or --force to overwrite deliberately."
                 exit 1
             fi
+            # The design version, then the model switches: a sidecar written by another version
+            # (or before versions existed: _ms1, _ms979) belongs to another design.
+            cl_bbl_version_guard "${BBL_KEY}" "a launch under this tag" || {
+                cl_err "  (--force launches over it deliberately.)"; exit 1; }
+            _ophi="$(cl_bbl_json_str "${_ps}" phi_path)"; _oz="$(cl_bbl_json_str "${_ps}" z_path)"
+            _ort="$(cl_bbl_json_str "${_ps}" rdep_timing)"
+            if [[ "${_ophi} ${_oz} ${_ort}" != "${PHI_PATH} ${Z_PATH} ${RDEP_TIMING}" ]]; then
+                cl_err "REFUSING E${k}: $(basename "${_ps}") records phi_path=${_ophi} z_path=${_oz} rdep_timing=${_ort},"
+                cl_err "  but this run is phi_path=${PHI_PATH} z_path=${Z_PATH} rdep_timing=${RDEP_TIMING}."
+                cl_err "  Those psi belong to another design and this launch would overwrite them. Use a new"
+                cl_err "  --psi-tag of the form _ms<digits> (for example _ms981), or --force to overwrite deliberately."
+                exit 1
+            fi
+        fi
+        # A launch context of another version (a run whose shard 0 has not written its sidecar yet).
+        if [[ ! -f "${_ps}" && -f "${DD}/context.env" && "${FORCE}" != "1" ]]; then
+            cl_bbl_version_guard "${BBL_KEY}" "a launch under this tag" || {
+                cl_err "  (--force launches over it deliberately.)"; exit 1; }
         fi
         # A shard probe writes one file per shard and is read by comparison with other tags' files
         # (bbl_probe_compare.py), so it never replaces one silently: a mistyped tag would otherwise

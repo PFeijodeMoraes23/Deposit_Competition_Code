@@ -34,6 +34,11 @@ measures whether that is true, at FIXED θ₂ on the structural δ(θ̂₂):
                ji_split — 2-fold CLUSTER-level cross-fit z* (first stage fitted on the complement
              fold) purging the generated-regressor optimism of the in-sample z*; the in-sample-vs-
              split eff-F gap is the measurement, and a collapsed fold is a finding, not a bug.
+               ji_engine_split — ji_engine with the generated part of its instrument (the types 4–5
+             projection) fitted on the complement fold; types 1–2 keep the raw spread.
+               ji_engine_t12 / ji_engine_t45 — the engine's linear step on one deposit-type block
+             alone (β re-fitted on the block): OLS on the regulated types 1–2, IV with the per-type
+             projection on types 4–5. Their α̂'s decompose the full-sample α̂ by block.
 
 Everything is in the PARTIALLED representation: X (product characteristics + constant) is projected
 out of δ, the spread and Z, leaving a 1-parameter problem in α. This matches the weak-IV battery's
@@ -397,10 +402,56 @@ def analyse(k, stage, args, dp, raw, cp):
     ji_s["fold"] = fold_meta
     variants.append(ji_s)
 
-    # Few-cluster t(G*-1)^2 reading for all three JI variants (needs _S_full, so before the strip).
-    for v in (ji, ji_e, ji_s):
-        v["crit_t_gstar_sq"] = crit_t
-        v["sset_t_gstar"] = _set_from_curve(grid, v["_S_full"], crit_t)
+    # option 1, engine-grade cross-fit — the engine's own instrument with its generated part fitted
+    # out of fold: for types 4–5 the per-type projection on H = [x_mat, Z] is fitted on the
+    # complement cluster fold (same folds as ji_split), for types 1–2 the raw spread is kept (it is
+    # not generated, so there is nothing to cross-fit). Same partialling and WCB as ji_engine.
+    H = np.column_stack([x_mat, z_mat])
+    hat_cf = spread.copy()
+    ok_h = np.all(np.isfinite(H), axis=1) & np.isfinite(spread)
+    for f in (0, 1):
+        for kv in (4, 5):
+            tr = (dtype == kv) & (fr != f) & ok_h
+            te = (dtype == kv) & (fr == f)
+            if tr.sum() > H.shape[1] and te.any():
+                b_f, *_ = np.linalg.lstsq(H[tr], spread[tr], rcond=None)
+                hat_cf[te] = H[te] @ b_f
+    z_ecf = _resid(hat_cf[m_ok].reshape(-1, 1), Xe)
+    ji_ecf = _variant("ji_engine_split", z_ecf, d_e, p_e, codes_e, G_e, grid, args,
+                      jdf_offset=1, wcb=Wb_e)
+    ji_ecf["fold"] = {k_: v_ for k_, v_ in fold_meta.items() if k_ != "eff_F_fold"}
+    variants.append(ji_ecf)
+
+    # The engine's linear step run on each deposit-type block alone (β re-fitted on the block): on
+    # types 1–2 the instrument is the raw spread, so the step is OLS; on types 4–5 it is the per-type
+    # projected spread. The full-sample α is a blend of the two, and the split shows which block
+    # carries its sign. Same WCB (draws regenerated at the block's cluster count, seed 0).
+    ji_blocks = []
+    for bname, btypes in (("ji_engine_t12", (1, 2)), ("ji_engine_t45", (4, 5))):
+        mb = np.isin(dtype, btypes) & valid
+        if mb.sum() <= x_mat.shape[1] + 1:
+            continue
+        Xb = x_mat[mb]
+        codes_b, G_b = _cluster_codes(df["CodConglomeradoPrudencial"].astype(str).to_numpy()[mb])
+        Wb_b = (_wild_weights(args.wcb, G_b, args.wcb_scheme, np.random.default_rng(0))
+                if args.wcb > 0 else None)
+        vb = _variant(bname, _resid(X_hat[mb, 0].reshape(-1, 1), Xb),
+                      _resid(delta[mb].reshape(-1, 1), Xb).ravel(),
+                      _resid(spread[mb].reshape(-1, 1), Xb).ravel(),
+                      codes_b, G_b, grid, args, jdf_offset=1, wcb=Wb_b)
+        vb["n_obs"], vb["n_clusters"] = int(mb.sum()), int(G_b)
+        vb["row_share"] = float(mb.sum() / valid.sum())
+        vb["gstar"] = float(effective_cluster_stats(np.bincount(codes_b, minlength=G_b))["G_star"])
+        variants.append(vb)
+        ji_blocks.append(vb)
+
+    # Few-cluster t(G*-1)^2 reading for the JI variants (needs _S_full, so before the strip); a
+    # block variant is read at its own block's G*.
+    for v in (ji, ji_e, ji_s, ji_ecf, *ji_blocks):
+        c_v = (float(student_t.ppf(0.975, max(v["gstar"] - 1, 1)) ** 2) if "gstar" in v
+               else crit_t)
+        v["crit_t_gstar_sq"] = c_v
+        v["sset_t_gstar"] = _set_from_curve(grid, v["_S_full"], c_v)
     for v in variants:
         del v["_S_full"]
 
@@ -422,7 +473,7 @@ def analyse(k, stage, args, dp, raw, cp):
         print(f"     ji_split folds: shares {fm['row_share'][0]:.2f}/{fm['row_share'][1]:.2f}, "
               f"G {fm['n_clusters'][0]}/{fm['n_clusters'][1]}, "
               f"per-fold first-stage eff-F {fm['eff_F_fold'][0]:.2f}/{fm['eff_F_fold'][1]:.2f}")
-    for v in (ji, ji_e, ji_s):
+    for v in (ji, ji_e, ji_s, ji_ecf, *ji_blocks):
         print(f"     {v['variant']:9s} t(G*-1)^2 reading: {_fmt_set(v['sset_t_gstar'])}")
     return {"routine": k, "stage": stage, "n_obs": N, "n_clusters": G,
             "grid": args.grid, "gstar_used": float(gstar),
@@ -457,6 +508,8 @@ def main():
                     help="how many largest clusters get deterministic greedy fold balancing")
     ap.add_argument("--curve-thin", type=int, default=8, dest="curve_thin",
                     help="store every k-th grid point of each S-curve in the JSON")
+    ap.add_argument("--out", default=None,
+                    help="output JSON path (default cluster_processed/diag_moment_reduction.json)")
     args = ap.parse_args()
 
     dp, raw, cp = _dirs()
@@ -466,7 +519,7 @@ def main():
     out = [r for r in (analyse(k, args.stage, args, dp, raw, cp) for k in routines) if r]
     if not out:
         print("\nnothing computed."); return
-    path = cp / "diag_moment_reduction.json"
+    path = args.out or (cp / "diag_moment_reduction.json")
     with open(path, "w") as f:
         json.dump(out, f, indent=2)
     print(f"\nwrote {path}")

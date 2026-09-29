@@ -1,114 +1,112 @@
 """utils/sleep_notes.py
 
-The note text shared by the sleepiness SECOND-STAGE tables: the four-routine spec-12
-comparison and the per-routine appendix tables written by sleep_export_e1 /
-sleep_export_e2 / sleep_export_link.
+The note text shared by the sleepiness tables: the spec-12 comparison (first and second stage)
+and the per-routine appendix tables written by sleep_export_e1 / sleep_export_e2 /
+sleep_export_link.
 
-Defined once here so the wording cannot drift between the comparison table and the
-appendix tables that report the same estimates. Each caller keeps its own size/wrapper
-command and appends its own significance-level line; this module returns the body only.
+Each convention is spelled ONCE here -- the unit of observation, the effect units, what the
+brackets or parentheses hold, the star rule, the reversed-draw count -- so every table states it
+in the same words. Notes carry only what a reader needs to read the numbers; the method and its
+justification live in V_Main's Section sec:empirical:sleep, which the inference clause cites.
+Callers keep their own size/wrapper command; these functions return note text only.
 
-The opening sentence is chosen by what the table ACTUALLY printed, not by what it was meant
-to print. A band is a cluster artifact (sleep_ame_twostage.py for the single-index routines,
+The inference clause is chosen by what the table ACTUALLY printed, not by what it was meant to
+print. A band is a cluster artifact (sleep_ame_twostage.py for the single-index routines,
 sleep_wcb_band.py for the linear ones); when one has not landed, the cell falls back to a
 standard error, and a note that still promised an interval would be describing a calculation
 that did not run. `note_open(bands)` is how the caller says which happened.
 """
 
-_OPEN_INTERVAL = (
-    r"All columns report \textcite{efron1987better}'s bias-corrected percentile interval in "
-    r"brackets, not a standard error: with roughly six effective clusters the $t$ reference "
-    r"behind a Wald interval is itself an approximation, so the bootstrap distribution is read "
-    r"directly. The linear strategies \ref{estimation:local} and \ref{estimation:pooled} "
-    r"bootstrap the coefficients (WCB at the conglomerate level, except on the rows marked "
-    r"$\dagger$ below; \textcite{cameron2008bootstrap}, \textcite{mackinnon2017wild}); the "
-    r"single-index strategies "
-    r"\ref{estimation:single_idx} and \ref{estimation:single_idx_time} additionally re-solve the "
-    r"index direction and re-profile the link at every draw, so their intervals carry that "
-    r"uncertainty too. Stars come from the same bias-corrected bootstrap distribution: ** and "
-    r"*** mean the 95\% and 99\% intervals exclude zero, * only the 90\% interval, so the "
-    r"printed 95\% interval of a one-star estimate covers zero. "
-)
+SECTION_REF = r"Section~\ref{sec:empirical:sleep}"
+UNIT_OBS = r"conglomerate $\times$ deposit type $\times$ MCA $\times$ quarter"
+PER_UNIT = r"in pp of the sleepy share per row-label unit"
+_NATIONAL = rf"$\dagger$: quarter-clustered, national regressors ({SECTION_REF})"
+_STARS_INTERVAL = r"*/**/***: the 90/95/99\% interval excludes zero. "
+_STARS_P = r"*** $p<0.01$, ** $p<0.05$, * $p<0.1$. "
 
-_OPEN_SE = (
-    r"All columns report standard errors in parentheses (WCB at the conglomerate level, except "
-    r"on the rows marked $\dagger$ below; \textcite{cameron2008bootstrap}, "
-    r"\textcite{mackinnon2017wild}). "
-)
 
-_OPEN_MIXED = (
-    r"Standard errors appear in parentheses and bias-corrected percentile intervals "
-    r"(\textcite{efron1987better}) in brackets; the two are not comparable in width, an "
-    r"interval at this many effective clusters being several times a standard error. Both come "
-    r"from a WCB at the conglomerate level, except on the rows marked $\dagger$ below "
-    r"(\textcite{cameron2008bootstrap}, \textcite{mackinnon2017wild}). Where an interval is "
-    r"printed, its stars come from the same bias-corrected bootstrap distribution: ** and *** "
-    r"mean the 95\% and 99\% intervals exclude zero, * only the 90\% interval, so the printed "
-    r"95\% interval of a one-star estimate covers zero. "
-)
+def _unit_obs(pooled: bool) -> str:
+    """The unit-of-observation phrase, shared by `sample_clause` and `first_stage_note`.
+    D-firm rows are national cells rather than MCAs, so whenever the sample pools D firms in
+    with B firms the clause carries that qualifier; a B-only sample has no D-firm row to
+    qualify, so it keeps the plain phrase."""
+    return (r"conglomerate $\times$ deposit type $\times$ MCA (national for D firms) "
+            r"$\times$ quarter" if pooled else UNIT_OBS)
 
-# What a column is. The spec-12 comparison puts one estimation strategy in each column; the
-# per-routine appendix tables hold the strategy fixed and put one specification of the grid in
-# each column (instrument set across columns, state vector across panels).
-_COLUMNS = {
-    "strategies": (r"Columns index the estimation strategies enumerated in "
-                   r"Section~\ref{sec:empirical:sleep}"),
-    "specifications": (r"Columns are the specifications numbered in "
-                       r"Table~\ref{tab:sleep_specifications_guide}, the instrument set varying "
-                       r"across columns and the state vector across panels"),
-}
 
-_BODY = (
-    r"; the linear strategies report "
-    r"coefficients and the single-index strategies report average marginal effects (AME), "
-    r"in percentage points of the sleepy share per the unit given in the row label, with "
-    r"shares and rates in percentage points and Pix Available a discrete $0\to1$ "
-    r"difference. $t$-statistics and stars are invariant to these units. State variables "
-    r"are grand-mean centered. Rows marked $\dagger$ are national regressors: Pix "
-    r"Available and the lagged Selic rate take a common value across all conglomerates "
-    r"within a quarter, so clustering on the conglomerate treats each firm's copy of a "
-    r"national value as independent evidence and understates their sampling uncertainty. "
-)
+def sample_clause(pooled: bool = True, extra: str = "") -> str:
+    """Unit of observation and which firms enter. `extra` appends a caveat to the same clause
+    (e.g. that one column of a comparison drops the D firms)."""
+    who = (r"$\mathrm{B}$ and $\mathrm{D}$ firms" if pooled
+           else r"$\mathrm{B}$ firms only ($\mathrm{D}$ firms excluded)")
+    return rf"Unit: {_unit_obs(pooled)}; {who}{extra}. "
 
-# The note is built BEFORE the cells are rendered, so which opening applies is not yet known.
-# Emit a placeholder and let the caller substitute it once the table is assembled -- the same
-# mechanism the AME_CI / national-SE notes already use, and for the same reason: the note must
-# describe what ran, not what was planned.
+
+def effects_clause(kind: str, linear_cols: str = "", link_cols: str = "") -> str:
+    """What the numbers are: 'coef' (linear routine), 'ame' (single-index routine) or 'both'
+    (a comparison; `linear_cols` / `link_cols` name the columns of each family)."""
+    if kind == "coef":
+        return rf"Coefficients {PER_UNIT}. "
+    if kind == "ame":
+        return rf"Average marginal effects {PER_UNIT}. "
+    return (rf"Coefficients ({linear_cols}) and average marginal effects ({link_cols}) "
+            rf"{PER_UNIT}. ")
+
+
+def linear_link_caveat(obj: str, where: str = "") -> str:
+    """The one caveat every linear-link table needs: nothing bounds the fitted share. `where`
+    names the columns when only some of the table is linear, e.g. " of (I)--(II)"."""
+    return rf"The linear link{where} is unconstrained, so {obj} can exceed 100. "
+
+
+# The inference clause is only known once the cells are rendered, so the note carries a
+# placeholder that the caller substitutes -- the same mechanism the AME_CI / national-SE notes
+# use, and for the same reason: the note must describe what ran, not what was planned.
 OPEN_TOKEN = "%%SECOND_STAGE_OPEN%%"
 
-# Kept for callers that want the all-intervals wording verbatim (comparison-table columns).
-SECOND_STAGE_NOTE = _OPEN_INTERVAL + _COLUMNS["strategies"] + _BODY
 
+def second_stage_note(sample: str, effects: str, caveats: str = "") -> str:
+    """-> sample + effects + caveats, then OPEN_TOKEN for the inference clause.
 
-def second_stage_note(columns: str = "strategies") -> str:
-    """-> the shared second-stage note body with the opening left as OPEN_TOKEN.
-
-    `columns` says what a column of the calling table is: "strategies" for the spec-12
-    comparison, "specifications" for a per-routine appendix table.
-
-    Substitute the opening with `note_open(bands)` after rendering. A caller that forgets will
-    emit a visible `%%SECOND_STAGE_OPEN%%` in the .tex rather than a plausible-but-wrong sentence.
+    Substitute the token with `note_open(bands, two_stage)` (plus `reversed_draws_note`) after
+    rendering. A caller that forgets will emit a visible `%%SECOND_STAGE_OPEN%%` in the .tex
+    rather than a plausible-but-wrong sentence.
     """
-    return OPEN_TOKEN + _COLUMNS[columns] + _BODY
+    return sample + effects + caveats + OPEN_TOKEN
 
 
-def note_open(bands=True) -> str:
-    """The opening sentence, chosen by what the table actually printed.
+def note_open(bands=True, two_stage: str = "") -> str:
+    """The inference clause and star rule, chosen by what the table actually printed.
 
       True    -- every second line is an interval (the intended state)
       False   -- no band was available; every second line is a standard error
-      'mixed' -- some columns had a band and some did not, so the note describes both and
-                 warns against comparing their widths
+      'mixed' -- some cells carry an interval and some an SE
+
+    `two_stage` qualifies the bootstrap where the index direction is re-solved at every draw,
+    e.g. ", two-stage" for a single-index routine.
     """
     if bands is True:
-        return _OPEN_INTERVAL
+        return (rf"Brackets: bias-corrected 95\% WCB intervals, conglomerate-clustered{two_stage}; "
+                rf"{_NATIONAL}. {_STARS_INTERVAL}")
     if not bands:
-        return _OPEN_SE
-    return _OPEN_MIXED
+        return (rf"Parentheses: WCB standard errors, conglomerate-clustered; {_NATIONAL}. "
+                rf"{_STARS_P}")
+    return (rf"Brackets: bias-corrected 95\% WCB intervals{two_stage}, starred when the "
+            r"90/95/99\% interval excludes zero; parentheses: WCB standard errors, starred at "
+            r"$p<0.1/0.05/0.01$; both conglomerate-clustered; " + _NATIONAL + ". ")
+
+
+def first_stage_note(pooled: bool = True, extra: str = "") -> str:
+    """The first-stage (deposit-spread) note: dependent variable and units, sample, SEs, stars."""
+    who = (r"$\mathrm{B}$ and $\mathrm{D}$ firms" if pooled
+           else r"$\mathrm{B}$ firms only ($\mathrm{D}$ firms excluded)")
+    return (r"Dependent variable: quarterly deposit spread, in pp per row-label unit. "
+            rf"Unit: {_unit_obs(pooled)}, endogenously priced types $k=4,5$; {who}{extra}. "
+            r"Parentheses: WCB standard errors, conglomerate-clustered. " + _STARS_P)
 
 
 def reversed_draws_note(fits) -> str:
-    """The sentence reporting reversed-index draws RETAINED in the two-stage intervals, or "".
+    """The clause reporting reversed-index draws RETAINED in the two-stage intervals, or "".
 
     `fits` is any iterable of fitted results; those carrying an attached `ame_boot` contribute.
     The count is the largest over the columns, per clustering arm, because the note speaks for
@@ -128,7 +126,6 @@ def reversed_draws_note(fits) -> str:
                 B = int(b)
     if not any(worst.values()):
         return ""
-    of_b = rf" of the $B={B}$" if B else ""
-    return (rf"At most {worst['conglomerate']} (conglomerate) and {worst['quarter']} (quarter){of_b} "
-            r"draws per column re-estimated an index anti-correlated with the point estimate's; "
-            r"they are retained in the interval, not dropped. ")
+    of_b = rf" of $B={B}$" if B else ""
+    return (rf"Retained reversed-index draws: at most {worst['conglomerate']} (conglomerate) and "
+            rf"{worst['quarter']} (quarter){of_b} per column. ")

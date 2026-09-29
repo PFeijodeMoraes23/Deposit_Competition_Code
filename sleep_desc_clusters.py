@@ -6,10 +6,13 @@ CONCENTRATION. This is the single, canonical home for cluster-imbalance reportin
 used to justify the wild cluster bootstrap (WCB) over cluster-robust / Delta-method
 standard errors.
 
-Everything is computed on the EXACT specification-12 second-stage estimation sample
-we report (the pooled single-index estimator, E3), read from
-    ESTIMATION_OUTPUT/DEMAND_PREP/est3/market_panel_phis.csv,
-so the table's Observations / Clusters match the estimation tables (441,331 / 506).
+Everything is computed on the EXACT specification-12 second-stage estimation sample we
+report (the pooled single-index estimator, E3): the raw
+    ESTIMATION_OUTPUT/DEMAND_PREP/est3/market_panel_phis.csv
+minus the type-4/5 rows whose IV_HausmanFull instruments are missing (load_sample), so the
+table's Observations / Clusters match the estimation tables (1,141,234 / 453). That match is
+enforced, not just asserted in this docstring: assert_matches_pkl hard-fails if the sample
+built from the CSV ever disagrees with estimation_results.pkl.
 
 Metrics (Panel A): nominal clusters G vs effective G* = G/(1+CV^2)
 (Carter-Schnepel-Steigerwald 2017; via utils.cluster_stats.effective_cluster_stats), the
@@ -35,10 +38,12 @@ desc_1/desc_2, which read the raw market panel).
 """
 import argparse
 import json
+import pickle
 
 import numpy as np
 import pandas as pd
 
+from sleep_est_e2 import define_specifications
 from utils import paths as P
 from utils import routines as _routines
 from utils.cluster_stats import effective_cluster_stats
@@ -112,30 +117,43 @@ def _display_name(cnpj_lider, fallback):
 
 
 def load_sample(est):
+    """Spec-12 second-stage estimation sample: the raw CSV minus type-4/5 rows whose
+    IV_HausmanFull instruments are missing. Those rows have an undefined control-function
+    residual (v_hat) and are excluded from the second stage by
+    utils.sleep_links.fit_nlls_link's `df.dropna(subset=cols + CF_cols)`, CF_cols =
+    ['v_hat_x_lagged_dep']. v_hat itself isn't a column of this CSV, but a row's v_hat is
+    undefined exactly when one of the instruments it is built from is missing, so the same
+    exclusion is reproduced here from the instrument columns alone -- imported from the
+    estimation code (define_specifications) rather than hardcoded.
+    """
     path = P.est_dir(est) / "market_panel_phis.csv"
     if not path.exists():
         raise FileNotFoundError(f"Second-stage sample not found: {path} (run the sleep estimation first).")
+    _, iv_specs, _ = define_specifications()
+    hausman_cols = iv_specs["IV_HausmanFull"]
     df = pd.read_csv(path, usecols=[CLUSTER_VAR, "NomeInstituicao", "CNPJ_Lider",
-                                    "deposit_balance", "time_id"])
-    return df, path
+                                    "deposit_balance", "time_id", "deposit_type"] + hausman_cols)
+    drop = df["deposit_type"].isin([4, 5]) & df[hausman_cols].isna().any(axis=1)
+    n_dropped = int(drop.sum())
+    df = df.loc[~drop].reset_index(drop=True)
+    return df, path, n_dropped
 
 
 def assert_matches_pkl(df, est):
-    """Cross-check the sample against the estimator's saved fit so the exhibit is
-    provably consistent with the reported Observations / Clusters."""
+    """Cross-check the sample against the estimator's saved fit so the exhibit is provably
+    consistent with the reported Observations / Clusters. Hard-fails (rather than warning):
+    Panel B's cell values are wrong, not just cosmetically off, if the sample disagrees with
+    the pickle the estimation tables are built from.
+    """
     pkl = P.est_dir(est) / "estimation_results.pkl"
-    try:
-        import pickle
-        ss = pickle.load(open(pkl, "rb")).get(_routines.SPEC12, {}).get("second_stage")
-        nobs, G = int(getattr(ss, "nobs", -1)), int(getattr(ss, "G_nominal", -1))
-        if nobs > 0 and nobs != len(df):
-            print(f"  [WARN] rows {len(df):,} != pkl nobs {nobs:,}")
-        if G > 0 and G != df[CLUSTER_VAR].nunique():
-            print(f"  [WARN] clusters {df[CLUSTER_VAR].nunique()} != pkl G_nominal {G}")
-        return nobs, G
-    except Exception as e:
-        print(f"  [note] could not cross-check vs pkl: {e}")
-        return None, None
+    ss = pickle.load(open(pkl, "rb")).get(_routines.SPEC12, {}).get("second_stage")
+    nobs, G = int(getattr(ss, "nobs", -1)), int(getattr(ss, "G_nominal", -1))
+    n_actual, g_actual = len(df), df[CLUSTER_VAR].nunique()
+    assert nobs > 0 and nobs == n_actual, (
+        f"rows {n_actual:,} != pkl nobs {nobs:,} (est{est}, spec {_routines.SPEC12!r})")
+    assert G > 0 and G == g_actual, (
+        f"clusters {g_actual} != pkl G_nominal {G} (est{est}, spec {_routines.SPEC12!r})")
+    return nobs, G
 
 
 def build_stats(df, top_n=5):
@@ -221,7 +239,7 @@ def render_panel_b(st):
     """Standalone Panel B: deposit concentration and cluster size among the largest
     conglomerates. Self-contained so it can be \\input on its own into V_Main.tex."""
     def pct(x):
-        return f"{100 * x:.1f}\\%"
+        return f"{100 * x:.3f}\\%"
     n = len(st["top_n"])
     n_word = {3: "Three", 4: "Four", 5: "Five", 6: "Six", 7: "Seven", 8: "Eight",
               9: "Nine", 10: "Ten"}.get(n, str(n))
@@ -233,7 +251,12 @@ def render_panel_b(st):
         L.append(f"{_ordinal(i)} & {pct(r['dep_share'])} & {pct(r['cum_share'])} & {pct(r['obs_share'])} " + r"\\")
     L += [r"\bottomrule", r"\end{tabular*}",
           r"\begin{tablenotes}[flushleft]", r"\footnotesize",
-          r"\item \textit{Notes:} Conglomerates are ranked by their time-averaged national share of "
+          r"\item \textit{Notes:} Specification-12 second-stage estimation sample ("
+          + f"{st['G_nominal']:,}"
+          + r" conglomerates), which excludes "
+          + f"{st['n_dropped_hausman']:,}"
+          + r" type-4/5 cells lacking the instruments of the control-function correction. "
+          r"Conglomerates are ranked by their time-averaged national share of "
           r"total deposits (``Dep.\ share''). ``Obs.\ share'' is a conglomerate's share of estimation "
           r"observations (its cluster size).",
           r"\end{tablenotes}", r"\end{threeparttable}", r"\end{table}"]
@@ -247,11 +270,13 @@ def main():
     args = ap.parse_args()
 
     print(f"Loading spec-12 second-stage sample (est{args.est})...")
-    df, path = load_sample(args.est)
-    print(f"  rows={len(df):,}  clusters={df[CLUSTER_VAR].nunique()}  ({path.name})")
+    df, path, n_dropped = load_sample(args.est)
+    print(f"  rows={len(df):,}  clusters={df[CLUSTER_VAR].nunique()}  ({path.name}; "
+          f"{n_dropped:,} type-4/5 rows dropped for missing IV_HausmanFull instruments)")
     assert_matches_pkl(df, args.est)
 
     st, sizes = build_stats(df, top_n=args.top_n)
+    st["n_dropped_hausman"] = n_dropped
     print(f"  G={st['G_nominal']}  G*={st['G_star']:.2f}  CV={st['cv']:.2f}  HHI={st['hhi']:.3f} (1/HHI={st['inv_hhi']:.2f})")
     for i, r in enumerate(st["top_n"], 1):
         print(f"   {i}. {r['name']:<28s} dep={100*r['dep_share']:5.1f}%  cum={100*r['cum_share']:5.1f}%  obs={100*r['obs_share']:5.1f}%")

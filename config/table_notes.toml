@@ -1,0 +1,49 @@
+# config/table_notes.toml -- note sentences shared by the demand-estimation tables.
+#
+# The logit comparison (Table 5, blp_logit.jl), the RC-BLP comparison (Table 6,
+# make_blp_demand_comparison_table.py) and their appendix variants (est{k}_spec12_logit,
+# blp_rc_E{k}, blp_demand_comparison_full) print the conventions they share from this one file:
+# blp_logit.jl parses it with the TOML stdlib and make_blp_rc_table.py with tomllib, so the Julia
+# and Python tables carry the same words in the same order.
+#
+# Literal strings ('...') keep LaTeX backslashes verbatim. @NAME@ tokens are filled by the
+# generators: @CV4@ / @CV5@ = the Montiel Olea-Pflueger 10% worst-case-bias critical values, read
+# from weak_iv.json with the F's.
+#
+# `alpha` and `boundary` are the author's wording, verbatim. `alpha` names the wild cluster
+# bootstrap, the method every reported demand table uses (se_method = wcb). Under either method
+# the stars are a Student-t(G*) Wald p on the printed standard error (blp_se_common.jl wcb_se,
+# `dof = G*`), which is what `se_*` says.
+#
+# Budget: main-text notes (Tables 5, 6) about 100 words; appendix notes at most about 8 lines.
+# What V_Main's text already states is left to the text: the segment dummies (S2-S5, in every
+# column, not shown) are said right before the \input of both tables.
+
+[demand]
+note_size   = '\footnotesize'
+unit        = 'Unit: institution--deposit type--market--quarter, 2016Q1--2024Q4.'
+se_wcb      = 'Parentheses: WCB standard errors, conglomerate clusters; stars from Student-$t(G^*)$: *** 1\%, ** 5\%, * 10\%.'
+se_sandwich = 'Parentheses: cluster-robust sandwich standard errors, conglomerate clusters; stars from Student-$t(G^*)$: *** 1\%, ** 5\%, * 10\%.'
+# Not in any [demand.order] list below: no table prints the alpha sentence until Table
+# \ref{tab:weakiv_spec12} exists. Restore by adding 'alpha' back to the lists that had it.
+alpha       = 'The stars on $\alpha$ use the conventional wild-cluster-bootstrap standard error and are shown by convention only. Inference on $\alpha$ that is robust to weak instruments is in Table \ref{tab:weakiv_spec12}.'
+spread      = 'Spread $\rho$ in pp, instrumented for types 4 and 5 only.'
+# Not in any [demand.order] list below: no table prints the eff_f sentence until Table
+# \ref{tab:weakiv_spec12} exists. Restore by adding 'eff_f' back to logit_comparison.
+eff_f       = 'Effective $F$: \textcite{oleapflueger2013}, 10\% worst-case-bias critical values @CV4@ and @CV5@.'
+boundary    = 'Standard errors on $\theta_1$ are conditional on $\Sigma$ at its boundary value of zero.'
+pi_units    = '$\Pi$ per standard deviation of the demographic.'
+q           = '$Q$: GMM criterion, a fit measure, not an overidentification test.'
+elasticity  = 'Elasticity: $\hat\alpha\,\overline{\rho(1-s)}$.'
+segments    = 'Segment dummies S2--S5 included, not shown.'
+
+# Sentence order per table. `se` resolves to se_wcb / se_sandwich by the stored se_method;
+# `boundary` is dropped when no Sigma is on its bound, `segments` when the table prints the
+# segment rows. `alpha` and `eff_f` are withheld from every list (see their comments above)
+# until Table \ref{tab:weakiv_spec12} exists.
+[demand.order]
+logit_comparison = ['unit', 'se', 'spread', 'q', 'elasticity']
+logit_routine    = ['unit', 'se', 'spread', 'q']
+rc_comparison    = ['unit', 'se', 'spread', 'boundary', 'pi_units', 'q', 'elasticity']
+rc_full          = ['unit', 'segments', 'se', 'spread', 'boundary', 'pi_units', 'q', 'elasticity']
+rc_routine       = ['unit', 'se', 'spread', 'boundary', 'pi_units', 'q', 'elasticity']

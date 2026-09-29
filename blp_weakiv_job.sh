@@ -24,8 +24,8 @@
 #        is why weak_iv_ext1.json has been stale since 2026-08-17: this export has
 #        never run on the cluster.
 #   2. blp_weak_iv.py
-#        cluster_processed/weak_iv.json — the battery against the LOGIT (log-share)
-#        delta.
+#        cluster_processed/weak_iv.json — the battery against the LOGIT delta
+#        ln s − ln s0, read from the logit step's logit/logit_delta_E{k}_spec_12.bin.
 #   3. blp_weak_iv.py --delta-stage ext1
 #        cluster_processed/weak_iv_ext1.json — the same battery against the
 #        structural delta from step 1.
@@ -122,7 +122,7 @@ julia --project="${CL_ROOT}" --threads="${SLURM_CPUS_PER_TASK:-8}" \
 # they converge and falls back to the numpy path where they do not.
 cl_setup_python "${CL_PY_REQ_POLFUNC}"
 
-echo "-- weak-IV battery: logit (log-share) delta --"
+echo "-- weak-IV battery: logit delta --"
 "${PYBIN}" "${CL_ROOT}/blp_weak_iv.py" --routines "${ROUTINES_CSV}"
 
 echo "-- weak-IV battery: structural delta (--delta-stage ${STAGE}) --"

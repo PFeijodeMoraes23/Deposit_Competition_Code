@@ -25,7 +25,7 @@ from utils import state_transform as _st  # noqa: E402
 from utils.sleep_links import band_row as _band_row  # noqa: E402
 from utils import se_national as _sen  # noqa: E402
 from utils import sleep_notes as _notes
-from sleep_export_link import clean_name as _clean_name  # noqa: E402
+from sleep_export_link import clean_name as _clean_name, fmt3 as _fmt3  # noqa: E402
 
 # Mock NonLinearResults for unpickling estimation_3_sleep pickles.
 # Must match the real class's __init__ signature so pickle restores __dict__ correctly.
@@ -73,7 +73,7 @@ def get_stars(pval):
     elif pval < 0.1: return "*"
     return ""
 
-def format_value(coef, se, pval, digits=4, mark="", ci=None, stars=None):
+def format_value(coef, se, pval, digits=3, mark="", ci=None, stars=None):
     """`mark` flags a row whose SE comes from a non-default clustering scheme. These cells are
     TEXT mode (no surrounding $), so the marker must carry its own math delimiters -- unlike the
     sleepiness exporters, where the dagger goes inside the existing $...$.
@@ -86,8 +86,8 @@ def format_value(coef, se, pval, digits=4, mark="", ci=None, stars=None):
         return "-", "-"
     st = get_stars(pval) if stars is None else stars
     if ci is not None:
-        return f"{coef:.{digits}f}{st}", f"[{ci[0]:.{digits}f}, {ci[1]:.{digits}f}]{mark}"
-    return f"{coef:.{digits}f}{st}", f"({se:.{digits}f}){mark}"
+        return f"{_fmt3(coef, digits)}{st}", f"[{_fmt3(ci[0], digits)}, {_fmt3(ci[1], digits)}]{mark}"
+    return f"{_fmt3(coef, digits)}{st}", f"({_fmt3(se, digits)}){mark}"
 
 
 AME_CI_TOKEN = "%%AME_CI_NOTE%%"
@@ -307,40 +307,59 @@ def n_clusters(res):
     return int(g) if g is not None and not pd.isna(g) else 0
 
 
-def compare_note(results_dict, order_keys, mean_phi):
-    """Second-stage sentences that belong to this table alone, appended to the shared note:
-    what the Mean phi-hat row averages and why it can exceed 100 under the linear strategies,
-    and why column (I) has fewer observations. Every number is read off the fits, so the note
-    cannot describe a sample the table does not show."""
-    parts = []
-    shown = [k for k in order_keys if mean_phi and mean_phi.get(k) is not None]
-    if shown:
-        lin = [k for k in shown if EST_OF_KEY.get(k) in (1, 2)]
-        s = (r"Mean $\hat{\phi}$ is the population-weighted national $\hat{\phi}_t$ averaged "
-             r"over the quarters of the sample. ")
-        if lin:
-            refs = " and ".join(REF_LABELS[k] for k in lin)
-            s += (rf"Under {refs} the link is linear and unconstrained, so a fitted sleepy share, "
-                  r"and its average, can exceed 100: a value above 100 is the estimate, not an "
-                  r"error, and it is what the bounded single-index strategies are built to rule "
-                  r"out. ")
-        parts.append(s)
+def _span(refs):
+    """'(I)--(II)' for two adjacent column refs, a comma list otherwise."""
+    return rf"{refs[0]}--{refs[-1]}" if len(refs) == 2 else ", ".join(refs)
+
+
+def _cols(order_keys, ests):
+    return [REF_LABELS[k] for k in order_keys if EST_OF_KEY.get(k) in ests]
+
+
+def _local_exclusion(results_dict, order_keys):
+    """The sample clause's caveat for column (I), which drops the D firms the pooled columns
+    keep, with the observation and cluster gap read off the fits; "" when (I) is absent or its
+    sample is not smaller."""
     loc = next((k for k in order_keys if EST_OF_KEY.get(k) == 1), None)
     pooled = [k for k in order_keys if k != loc and results_dict.get(k) is not None]
     r1 = results_dict.get(loc) if loc else None
-    if r1 is not None and pooled:
-        n_p = {int(getattr(results_dict[k], 'nobs', 0) or 0) for k in pooled}
-        g_p = {n_clusters(results_dict[k]) for k in pooled}
-        n1 = int(getattr(r1, 'nobs', 0) or 0)
-        g1 = n_clusters(r1)
-        if len(n_p) == 1 and len(g_p) == 1 and n1 and n1 < min(n_p):
-            dn, dg = min(n_p) - n1, min(g_p) - g1
-            parts.append(
-                rf"Strategy {REF_LABELS[loc]} is estimated on $\mathrm{{B}}$ firms only: it "
-                r"excludes the institutions classified as digital ($\mathrm{D}$) banks, which "
-                rf"the pooled strategies include, so its sample has {dn:,} fewer observations"
-                + (rf" and {dg} fewer conglomerate clusters" if dg > 0 else "") + ". ")
-    return "".join(parts)
+    if r1 is None or not pooled:
+        return ""
+    n_p = {int(getattr(results_dict[k], 'nobs', 0) or 0) for k in pooled}
+    g_p = {n_clusters(results_dict[k]) for k in pooled}
+    n1, g1 = int(getattr(r1, 'nobs', 0) or 0), n_clusters(r1)
+    if len(n_p) != 1 or len(g_p) != 1 or not n1 or n1 >= min(n_p):
+        return ""
+    dn, dg = min(n_p) - n1, min(g_p) - g1
+    gap = f"{dn:,} observations" + (f", {dg} clusters" if dg > 0 else "")
+    return rf"; {REF_LABELS[loc]} excludes $\mathrm{{D}}$ firms ({gap} fewer)"
+
+
+def compare_note(results_dict, order_keys, mean_phi=None, first_stage=False):
+    """The note body of these tables, assembled from the shared clauses in utils/sleep_notes so
+    it states each convention in the words the appendix tables use. What belongs to this table
+    alone -- column (I)'s smaller sample, what Mean phi-hat averages, that it is unbounded under
+    the linear link -- is read off the fits, so the note cannot describe a sample it does not
+    show."""
+    extra = _local_exclusion(results_dict, order_keys)
+    if first_stage:
+        return _notes.first_stage_note(pooled=True, extra=extra) + _sen.NOTE_TOKEN
+    lin, lnk = _cols(order_keys, (1, 2)), _cols(order_keys, (3, 4))
+    effects = (_notes.effects_clause("both", _span(lin), _span(lnk)) if lin and lnk
+               else _notes.effects_clause("coef" if lin else "ame"))
+    caveats = ""
+    if mean_phi and any(mean_phi.get(k) is not None for k in order_keys):
+        caveats += (r"Mean $\hat{\phi}$: population-weighted national $\hat{\phi}_t$ averaged "
+                    r"over quarters. ")
+    if lin:
+        caveats += _notes.linear_link_caveat(r"$\hat{\phi}$", where=f" of {_span(lin)}")
+    return _notes.second_stage_note(_notes.sample_clause(True, extra), effects, caveats)
+
+
+def two_stage_tag(order_keys):
+    """The inference clause's qualifier naming the columns bootstrapped in two stages."""
+    lnk = _cols(order_keys, (3, 4))
+    return rf", two-stage for {_span(lnk)}" if lnk else ""
 
 
 def build_latex_table(results_dict, order_keys, target_vars, out_path, title="", label="",
@@ -358,9 +377,9 @@ def build_latex_table(results_dict, order_keys, target_vars, out_path, title="",
     # xltabular pins the table to \textwidth and distributes the remaining width
     # equally among the X data columns (same as tabularx but supports longtable
     # headers/footers). The first column is a fixed-width raggedright p column so
-    # long labels (e.g. "Broadband Connections (per 100 inhabitants)") wrap rather
-    # than forcing the table past the text block. 0.26\textwidth leaves enough room
-    # for "Pooled (Logistic AME)" to fit on one line in each X column.
+    # long labels (e.g. "Mobile Lines (per 100 inhabitants)") wrap rather
+    # than forcing the table past the text block. 0.26\textwidth leaves each X column room
+    # for a bracketed interval on one line.
     n_data = len(order_keys)
     col_def = (r">{\raggedright\arraybackslash}p{0.26\textwidth} "
                r"*{" + str(n_data) + r"}{>{\centering\arraybackslash}X}")
@@ -390,41 +409,18 @@ def build_latex_table(results_dict, order_keys, target_vars, out_path, title="",
     tex.append(r"\multicolumn{" + str(len(order_keys) + 1) + r"}{r}{{Continued on next page}} \\")
     tex.append(r"\endfoot")
 
-    # Last Footer — notes style matches the paper's other sleep tables:
-    # \scriptsize font, stars in descending order (***/**/*), p{} column type.
+    # Last Footer: the note in \footnotesize, the size every sleepiness table note uses.
     tex.append(r"\bottomrule")
     # \dimexpr\textwidth-2\tabcolsep\relax is exactly the usable width of a
     # full-span multicolumn in a \textwidth-wide xltabular: the table occupies
     # \textwidth, but the outer \tabcolsep margins on left and right eat 2*3.5pt=7pt,
     # leaving \textwidth-7pt for the cell content.
-    _stage_note = ("" if is_first_stage else
-                   r"; the linear strategies report coefficients and the single-index "
-                   r"strategies report average marginal effects (AME), in percentage points "
-                   r"of the sleepy share per the unit given in the row label, with shares and "
-                   r"rates in percentage points and Pix Available a discrete $0\to1$ "
-                   r"difference. $t$-statistics and stars are invariant to these units. State "
-                   r"variables are grand-mean centered, so the Constant is $\hat{\phi}$ at the "
-                   r"average market")
-    if is_first_stage:
-        notes_str = (r"\multicolumn{" + str(len(order_keys) + 1) + r"}{p{\dimexpr\textwidth-2\tabcolsep\relax}}"
-                     r"{\scriptsize\textit{Notes:} First-stage coefficients; the dependent variable is "
-                     r"the quarterly deposit spread. Standard errors (WCB at the "
-                     r"conglomerate level; \textcite{cameron2008bootstrap}, \textcite{mackinnon2017wild}) "
-                     r"in parentheses. Columns index the estimation strategies enumerated in "
-                     r"Section~\ref{sec:empirical:sleep}. Coefficients are in \emph{percentage points of "
-                     r"the quarterly deposit spread} per the unit given in the row label, matching the "
-                     r"units of the second-stage tables. $t$-statistics and stars are invariant to these "
-                     r"units. "
-                     # Expands to nothing while no DISPLAYED row is national; if one ever is, it
-                     # names the clustering that row actually used.
-                     + _sen.NOTE_TOKEN +
-                     r"Significance levels: *** $p<0.01$, ** $p<0.05$, * $p<0.1$.}")
-    else:
-        # The shared second-stage note: defined once in utils/sleep_notes so the wording cannot
-        # drift between this table and the per-routine appendix tables of the same estimates.
-        notes_str = (r"\multicolumn{" + str(len(order_keys) + 1) + r"}{p{\dimexpr\textwidth-2\tabcolsep\relax}}"
-                     r"{\scriptsize\textit{Notes:} " + _notes.second_stage_note()
-                     + compare_note(results_dict, order_keys, mean_phi) + r"}")
+    # The first-stage note carries _sen.NOTE_TOKEN, which expands to nothing while no DISPLAYED
+    # row is national; if one ever is, it names the clustering that row actually used.
+    notes_str = (r"\multicolumn{" + str(len(order_keys) + 1) + r"}{p{\dimexpr\textwidth-2\tabcolsep\relax}}"
+                 r"{\footnotesize\textit{Notes:} "
+                 + compare_note(results_dict, order_keys, mean_phi, first_stage=is_first_stage)
+                 + r"}")
     tex.append(notes_str)
     tex.append(r"\endlastfoot")
 
@@ -493,7 +489,7 @@ def build_latex_table(results_dict, order_keys, target_vars, out_path, title="",
                 # whose band is missing falls back to the SE and the note says which did.
                 _bd = _band_row(res, v, est=EST_OF_KEY.get(col), spec=_routines.SPEC12)
                 _ci = (_bd[0] * m, _bd[1] * m) if _bd else None
-                c_str, se_str = format_value(params[v] * m, _se * m, _pv, digits=4, mark=_mark,
+                c_str, se_str = format_value(params[v] * m, _se * m, _pv, digits=3, mark=_mark,
                                              ci=_ci, stars=(_bd[2] if _bd else None))
                 if _bd:
                     _ci_cols.add(col)
@@ -518,7 +514,7 @@ def build_latex_table(results_dict, order_keys, target_vars, out_path, title="",
         row_meanphi = [r"Mean $\hat{\phi}$ (pp)"]
         for col in order_keys:
             mp = mean_phi.get(col)
-            row_meanphi.append(f"{mp * _st.PHI_DISPLAY:.2f}"
+            row_meanphi.append(_fmt3(mp * _st.PHI_DISPLAY)
                                if mp is not None and pd.notna(mp) else "-")
         tex.append(" & ".join(row_meanphi) + r" \\")
 
@@ -559,10 +555,10 @@ def build_latex_table(results_dict, order_keys, target_vars, out_path, title="",
         elif hasattr(res, 'G_nominal') and not pd.isna(getattr(res, 'G_nominal', np.nan)):
             clusters = str(int(res.G_nominal))
 
-        fstat_str = f"{fstat:.3f}{get_stars(fpval)}" if pd.notna(fstat) else "-"
+        fstat_str = f"{_fmt3(fstat)}{get_stars(fpval)}" if pd.notna(fstat) else "-"
 
         row_nobs.append(f"{nobs:,.0f}" if pd.notna(nobs) else "-")
-        row_r2.append(f"{r2:.3f}" if pd.notna(r2) else "-")
+        row_r2.append(_fmt3(r2) if pd.notna(r2) else "-")
         row_fstat.append(fstat_str)
         row_cluster.append(clusters)
 
@@ -582,7 +578,7 @@ def build_latex_table(results_dict, order_keys, target_vars, out_path, title="",
     _bands = True if len(_ci_cols) == n_data else (False if not _ci_cols else "mixed")
     with open(out_path, "w", encoding="utf-8") as f:
         f.write("\n".join(tex).replace(
-            _notes.OPEN_TOKEN, _notes.note_open(_bands)
+            _notes.OPEN_TOKEN, _notes.note_open(_bands, two_stage=two_stage_tag(order_keys))
             + _notes.reversed_draws_note(results_dict.get(c) for c in _ci_cols)).replace(
             _sen.NOTE_TOKEN, _sen.national_note(_nat_schemes)).replace(
             AME_CI_TOKEN, ame_ci_note(_ci_cols, results_dict)).replace(
@@ -663,7 +659,7 @@ def build_latex_table_landscape(results_dict, order_keys, target_vars, out_path,
                 # whose band is missing falls back to the SE and the note says which did.
                 _bd = _band_row(res, v, est=EST_OF_KEY.get(col), spec=_routines.SPEC12)
                 _ci = (_bd[0] * m, _bd[1] * m) if _bd else None
-                c_str, se_str = format_value(params[v] * m, _se * m, _pv, digits=4, mark=_mark,
+                c_str, se_str = format_value(params[v] * m, _se * m, _pv, digits=3, mark=_mark,
                                              ci=_ci, stars=(_bd[2] if _bd else None))
                 if _bd:
                     _ci_cols.add(col)
@@ -679,7 +675,7 @@ def build_latex_table_landscape(results_dict, order_keys, target_vars, out_path,
         row_mp = [r"Mean $\hat{\phi}$ (pp)"]
         for col in order_keys:
             mp = mean_phi.get(col)
-            row_mp.append(f"{mp * _st.PHI_DISPLAY:.2f}"
+            row_mp.append(_fmt3(mp * _st.PHI_DISPLAY)
                           if mp is not None and pd.notna(mp) else "-")
         tex.append(" & ".join(row_mp) + r" \\")
 
@@ -699,36 +695,19 @@ def build_latex_table_landscape(results_dict, order_keys, target_vars, out_path,
         elif hasattr(res, 'G_nominal') and not pd.isna(getattr(res, 'G_nominal', np.nan)):
             clusters = str(int(res.G_nominal))
         row_nobs.append(f"{nobs:,.0f}" if pd.notna(nobs) else "-")
-        row_r2.append(f"{r2:.3f}" if pd.notna(r2) else "-")
-        row_fstat.append(f"{fstat:.3f}{get_stars(fpval)}" if pd.notna(fstat) else "-")
+        row_r2.append(_fmt3(r2) if pd.notna(r2) else "-")
+        row_fstat.append(f"{_fmt3(fstat)}{get_stars(fpval)}" if pd.notna(fstat) else "-")
         row_cl.append(clusters)
     diag_rows = [row_nobs, row_r2] + ([row_fstat] if first_stage else []) + [row_cl]
     for r_ in diag_rows:
         tex.append(" & ".join(r_) + r" \\")
 
-    _stage_note = ("" if first_stage else
-                   r"; the linear strategies report coefficients and the single-index "
-                   r"strategies report average marginal effects (AME), in percentage points "
-                   r"of the sleepy share per the unit given in the row label, with shares and "
-                   r"rates in percentage points and Pix Available a discrete $0\to1$ "
-                   r"difference. $t$-statistics and stars are invariant to these units. State "
-                   r"variables are grand-mean centered, so the constant is $\hat{\phi}$ at the "
-                   r"average market")
     tex += [r"\bottomrule",
             r"\end{tabular}",
             r"\begin{tablenotes}[flushleft]",
             r"\footnotesize",
-            (r"\item \textit{Notes:} " + _notes.second_stage_note()
-             + compare_note(results_dict, order_keys, mean_phi)) if not first_stage else
-            (r"\item \textit{Notes:} First-stage coefficients; the dependent variable is the "
-             r"quarterly deposit spread. Standard errors (WCB at the "
-             r"conglomerate level; \textcite{cameron2008bootstrap}, \textcite{mackinnon2017wild}) in "
-             r"parentheses. Columns index the estimation strategies enumerated in "
-             r"Section~\ref{sec:empirical:sleep}. Coefficients are in \emph{percentage points of the "
-             r"quarterly deposit spread} per the unit given in the row label, matching the units of "
-             r"the second-stage tables. $t$-statistics and stars are invariant to these units. "
-             + _sen.NOTE_TOKEN +
-             r"Significance levels: *** $p<0.01$, ** $p<0.05$, * $p<0.1$."),
+            r"\item \textit{Notes:} "
+            + compare_note(results_dict, order_keys, mean_phi, first_stage=first_stage),
             r"\end{tablenotes}",
             r"\end{threeparttable}",
             r"\end{table}",
@@ -738,7 +717,7 @@ def build_latex_table_landscape(results_dict, order_keys, target_vars, out_path,
               else (False if not _ci_cols else "mixed"))
     with open(out_path, "w", encoding="utf-8") as f:
         f.write("\n".join(tex).replace(
-            _notes.OPEN_TOKEN, _notes.note_open(_bands)
+            _notes.OPEN_TOKEN, _notes.note_open(_bands, two_stage=two_stage_tag(order_keys))
             + _notes.reversed_draws_note(results_dict.get(c) for c in _ci_cols)).replace(
             _sen.NOTE_TOKEN, _sen.national_note(_nat_schemes)).replace(
             AME_CI_TOKEN, ame_ci_note(_ci_cols, results_dict)).replace(

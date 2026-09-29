@@ -73,31 +73,72 @@ GPU/cluster step. Develop locally with --R small, --time-filter one quarter, and
 registry of both, read by `bbl_discount` in cf_psi_basis.jl). The log line "[BBL] discount:" says
 which source each value came from.
 
+THREE MODEL SWITCHES (flag > environment > default; the log line "[BBL] model switches:" says
+which source each came from, and every psi file records all three):
+  --phi-path    CF_PHI_PATH     evolving (default) | frozen
+      evolving: the sleepy share φ_{i,t} is re-evaluated every period with the routine's own
+      fitted link along the row's state path (cf_phi_path.jl, from sleep_link_E{k}_spec_{s}.json
+      in data/input, --sleep-link to override): Pix and the +Time block held at launch, the
+      lagged Selic on the launch vintage, the demographics mean-reverting within their MCA.
+      frozen: φ held at the parquet's launch-quarter phi_mt for the whole horizon.
+  --z-path      CF_Z_PATH       mean_reverting (default) | frozen
+      mean_reverting: the cost shifters in ψ3 follow bbl_transitions.json's cost_shifters AR(1),
+      Z_t = Z_0 + (ρ_κ^t − 1)(Z_0 − μ_j) (ZEvolution in cf_psi_basis.jl). frozen: launch values.
+  --rdep-timing CF_RDEP_TIMING  lagged (default) | contemporaneous
+      lagged: period t's sleeper carry accrues at r^dep from horizon t−1 of the rate path (h = 0,
+      the launch quarter's own rate, at t = 1), as V_Main eq (9-B) and the demand prep's Dep^Act
+      have it. contemporaneous: at horizon t. ψ4 is unaffected either way: the funding cost uses
+      the contemporaneous r^f_t (eq 8).
+frozen + frozen + contemporaneous is the simulation this file ran before the switches existed.
+The counterfactual entry points (cf1, cf3, cf4, cf5, cf6) read none of these switches.
+
 Usage (write-only here; run only after data is downloaded AND author authorizes):
-  julia --project=. --threads=4 bbl_fwd_sim.jl --estim 6 --spec 12 \\
-      --stage extended --R 300 --time-filter 2024Q4 --shocks 20
+  julia --project=. --threads=4 bbl_fwd_sim.jl --estim 3 --spec 12 --stage extended --R 300 --time-filter 2024Q4 --shocks 20
+
+VERSION. `BBL_SIM_VERSION` names the forward-simulation design this file implements (the three
+switches, the national φ_t path of the D rows, compounded spreads throughout). Every psi file and
+sidecar records it, and bbl_run.sh / the sweep refuse to add shards to, or repair, a tag whose
+psi record another version or none: cluster_lib.sh carries the same value, which a test checks.
 """
 
 include(joinpath(@__DIR__, "cf_psi_basis.jl"))
+include(joinpath(@__DIR__, "cf_phi_path.jl"))
 
 using DataFrames, Random, Serialization, Statistics
+
+# The design of the simulation (see VERSION in the module docstring). Bump it with any change that
+# moves the psi, and bump cluster_lib.sh's BBL_SIM_VERSION with it.
+const BBL_SIM_VERSION = "2026-09-29.1"
+# Every spread is the compounded annual spread (ρ̂ units); recorded next to the version.
+const BBL_SPREAD_UNITS = "compounded"
 
 # ==========================================================================
 # Spread scenarios
 # ==========================================================================
 # ── BBL Step-1 fitted-policy merge constants ────────────────────────────────────────────────────
-# The polfunc regressand `spread_qoq` (= market_panel spread_a{k}) is a per-QUARTER FRACTION, whereas
-# ρ̂ = spread_ann/100 is an ANNUALIZED percentage point. So fitted × 400 (=×4 quarter→year, ×100
-# fraction→pp) converts the fitted policy to ρ̂ units. VERIFIED empirically: on the matched k∈{4,5}
-# rows the OBSERVED spread_qoq×400 reproduces ρ̂ to corr≈0.999 (k4) / 1.000 (k5).
-const _POLFUNC_QOQ_TO_ANN_PP = 400.0
-# bbl_polfunc.py::compute_fitted_values predicts with missing regressors filled to 0
-# (`fillna(0)`), which pins ~19% of early-panel (2013–2016) B rows at the ≈190pp regression intercept —
-# absurd for a deposit spread (real ρ̂ never exceeds ~16pp). Any |fitted|>this cap is an upstream
-# extrapolation artifact and is NOT adopted; that row keeps its observed spread. The cap is far above
-# every real spread and far below the intercept plateau, so it is insensitive (same fallback set for a
-# 20–50pp cap).
+# UNITS. ρ̂ = spread_ann/100 is the COMPOUNDED annual spread in percentage points,
+# 100·[(1+r^f_q)^4 − (1+r^dep_q)^4], and every consumer reads it that way: the demand utility, and
+# `_rdep_from_annual`'s exact quartic inverse in the deposit accrual. The fitted policy therefore has
+# to be in the same compounded units. bbl_polfunc.py fits the panel's compounded annual spread
+# (spread_ann_a{k}, a FRACTION) and stamps `lhs_unit = spread_ann_frac` on every row; ×100 takes a
+# fraction to percentage points. The earlier regressand, the quarterly spread spread_qoq annualised
+# by ×400, is a simple annualisation: measured on the k=4 market panel 2016–2024 the compounded
+# spread is 1.062× it at the median (1.089 in 2016, 1.023 in 2020, 1.084 in 2023), a level gap a
+# correlation check cannot see. A CSV without that stamp is refused (`_load_policy_map`).
+const _POLFUNC_LHS_UNIT = "spread_ann_frac"
+const _POLFUNC_ANN_FRAC_TO_PP = 100.0
+# bbl_polfunc.py::compute_fitted_values predicts with missing regressors filled to 0 (`fillna(0)`),
+# which pins early-panel rows at the regression intercept, far beyond any real deposit spread (real
+# ρ̂ never exceeds ~16pp). Any |fitted| > this cap is an upstream extrapolation artifact and is NOT
+# adopted; that row keeps its observed spread.
 const _POLFUNC_SANE_CAP_PP = 40.0
+# LEVEL gate on the adopted rows: the slope of the observed ρ̂ on the fitted σ̂ through the origin,
+# Σ ρ̂·σ̂ / Σ σ̂². For an in-sample least-squares fit it is exactly 1 on the estimation rows (the normal
+# equations make the residual orthogonal to the fit), and it is not attenuated by the fit's R² the
+# way a ratio σ̂/ρ̂ is: on the 246,008 adopted rows of demand_3_index_spec_12 the quarterly fit gave
+# 1.0025 against its own simple-annualised spread, and 1.078 against ρ̂ — the size of the unit
+# error — while the median of σ̂/ρ̂ read 0.83 and 0.88 for the same two cases.
+const _POLFUNC_LEVEL_BAND = (0.95, 1.05)
 
 # Composite row key for the (CodConglomeradoPrudencial × mca_code × deposit_type × time_id) match.
 _polkey(firm, mca, k::Int, tid) = string(firm, '\x1f', mca, '\x1f', k, '\x1f', tid)
@@ -109,14 +150,22 @@ Parse the BBL Step-1 fitted-policy CSV (`polfunc_fitted.csv` from
 bbl_polfunc.py) into `(firm,mca,k,time) → fitted spread (annual pp)`, keeping only
 k∈{4,5} rows with a finite fitted value. Per firm type we take that type's OWN Step-1 regression: B
 firms → the `_B` column, D firms → the `_D_optB` column (national pop-weighted demographics — the
-best-fitting D spec). Values are converted qoq-fraction → annual pp (×`_POLFUNC_QOQ_TO_ANN_PP`).
-Uses a minimal comma split (no CSV.jl dependency; the file's fields never contain commas or quotes).
+best-fitting D spec). The fitted values are COMPOUNDED annual spreads as a fraction, which every row
+must state (`lhs_unit` == `_POLFUNC_LHS_UNIT`, else the file is refused); ×`_POLFUNC_ANN_FRAC_TO_PP`
+takes them to ρ̂'s percentage points. Uses a minimal comma split (no CSV.jl dependency; the file's
+fields never contain commas or quotes).
 """
 function _load_policy_map(path::String)::Dict{String,Float64}
     lines = readlines(path)
     isempty(lines) && error("policy-csv is empty: $path")
     hdr = split(strip(lines[1]), ',')
     ci  = Dict(String(strip(String(h))) => i for (i, h) in enumerate(hdr))
+    regen = "Regenerate it with the current bbl_polfunc.py, which fits the compounded annual " *
+            "spread and stamps lhs_unit=$(_POLFUNC_LHS_UNIT) on every row (bbl_run.sh runs it as " *
+            "the polfunc pre-step unless --no-polfunc is passed)."
+    haskey(ci, "lhs_unit") || error(
+        "policy-csv $(basename(path)) has no `lhs_unit` column: it predates the compounded-spread " *
+        "policy function, and its fitted values are not in ρ̂'s units. " * regen)
     need = ["CodConglomeradoPrudencial", "mca_code", "deposit_type", "is_B", "time_id",
             "fitted_k4_Time_CDB_B", "fitted_k4_Time_CDB_D_optB",
             "fitted_k5_Prepaid_B", "fitted_k5_Prepaid_D_optB"]
@@ -125,15 +174,21 @@ function _load_policy_map(path::String)::Dict{String,Float64}
                                "Re-run bbl_polfunc.py --spec <spec>.")
     end
     i_firm = ci["CodConglomeradoPrudencial"]; i_mca = ci["mca_code"]; i_k = ci["deposit_type"]
-    i_isB = ci["is_B"]; i_t = ci["time_id"]
+    i_isB = ci["is_B"]; i_t = ci["time_id"]; i_u = ci["lhs_unit"]
     i_k4B = ci["fitted_k4_Time_CDB_B"]; i_k4D = ci["fitted_k4_Time_CDB_D_optB"]
     i_k5B = ci["fitted_k5_Prepaid_B"]; i_k5D = ci["fitted_k5_Prepaid_D_optB"]
     ncol = length(hdr)
     m = Dict{String,Float64}()
+    n_bad_unit = 0; first_bad = ""
     @inbounds for line in Iterators.drop(lines, 1)   # drop(…, 1) skips the header row
         isempty(line) && continue
         f = split(line, ',')
         length(f) < ncol && continue
+        u = strip(String(f[i_u]))
+        if u != _POLFUNC_LHS_UNIT
+            n_bad_unit += 1; isempty(first_bad) && (first_bad = String(u))
+            continue
+        end
         k = tryparse(Int, strip(String(f[i_k])))
         (k === nothing || !(k == 4 || k == 5)) && continue
         isB = strip(String(f[i_isB])) == "True"
@@ -144,8 +199,11 @@ function _load_policy_map(path::String)::Dict{String,Float64}
         (v === nothing || !isfinite(v)) && continue
         key = _polkey(String(strip(String(f[i_firm]))), String(strip(String(f[i_mca]))),
                       k, String(strip(String(f[i_t]))))
-        m[key] = v * _POLFUNC_QOQ_TO_ANN_PP            # qoq-fraction → annual pp (ρ̂ units)
+        m[key] = v * _POLFUNC_ANN_FRAC_TO_PP           # compounded annual fraction → pp (ρ̂ units)
     end
+    n_bad_unit == 0 || error(
+        "policy-csv $(basename(path)): $n_bad_unit row(s) with lhs_unit ≠ '$(_POLFUNC_LHS_UNIT)' " *
+        "(first: '$first_bad'). " * regen)
     isempty(m) && error("policy-csv parsed 0 usable k∈{4,5} fitted rows: $path")
     return m
 end
@@ -161,14 +219,24 @@ k∈{4,5} are replaced by the FITTED policy so that Step-2 deviations perturb th
 than raw noisy spreads (author decision 2026-07-16 — observed-spread deviations make frac_bind≈0.5
 mechanically, since σ̂ is not then a turning point of the simulated value). Regulated types k∈{1,2}
 always keep their observed (exogenous) spread. Matching is on
-(CodConglomeradoPrudencial × mca_code × deposit_type × time_id); units are converted qoq-fraction →
-annual pp via ×`_POLFUNC_QOQ_TO_ANN_PP` (see the const's note for the empirical verification).
+(CodConglomeradoPrudencial × mca_code × deposit_type × time_id); the fitted values are compounded
+annual fractions, ×`_POLFUNC_ANN_FRAC_TO_PP` → ρ̂'s percentage points (see `_load_policy_map`).
 
-ROBUSTNESS: the Step-1 CSV pins ~19% of early-panel B rows at the ≈190pp intercept (upstream
+ROBUSTNESS: the Step-1 CSV pins some early-panel rows at the regression intercept (upstream
 `fillna(0)` extrapolation). Those implausible rows (|fit|>`_POLFUNC_SANE_CAP_PP`) and any non-finite
 or unmatched rows fall back to the observed spread, with a loud count. The units/key SANITY GATE
-(match rate, |fit−obs| gap, correlation) is then evaluated on the ADOPTED rows and THROWS on a
-genuine units or key bug (which would corrupt the adopted rows too).
+(match rate, |fit−obs| gap, correlation, and the LEVEL: the slope of ρ̂ on σ̂ through the origin
+inside `_POLFUNC_LEVEL_BAND`) is then evaluated on the ADOPTED rows and THROWS on a genuine units or
+key bug (which would corrupt the adopted rows too). The correlation cannot see a level error, such as
+a simple ×4 annualisation read as a compounded one (corr is scale-free); the slope does.
+
+WHY THE SLOPE AND NOT median(σ̂/ρ̂). The fitted policy is a regression prediction, so each row's
+σ̂ = E[ρ | x] sits closer to the mean than its ρ̂ does, and the ratio σ̂/ρ̂ is dragged below 1 by the
+fit's noise whatever the units: measured on the 246,008 adopted rows of demand_3_index_spec_12, its
+median is 0.88 with the fit in the RIGHT (compounded) units. The slope of ρ̂ on σ̂ through the origin,
+Σ ρ̂·σ̂ / Σ σ̂², is exactly 1 for an in-sample least-squares fit (the residual is orthogonal to the fit)
+and is not attenuated: it reads 1.00 in the right units and 1.078 under the ×400 error, which is the
+separation the band (0.95, 1.05) needs. The median ratio is still logged, for reference only.
 """
 function equilibrium_spreads(ctx::CFDemandCtx; policy_csv::Union{Nothing,String}=nothing)
     σ̂ = copy(ctx.rho_hat)
@@ -204,8 +272,8 @@ function equilibrium_spreads(ctx::CFDemandCtx; policy_csv::Union{Nothing,String}
     match_rate  = n_matched / n_endog
     n_untrusted = n_matched - n_adopted
     n_unmatched = n_endog - n_matched
-    log_status("  [BBL] policy-csv ← $(basename(policy_csv)); fitted qoq-fraction × " *
-               "$(_POLFUNC_QOQ_TO_ANN_PP) → annual pp (ρ̂ units)")
+    log_status("  [BBL] policy-csv ← $(basename(policy_csv)); lhs_unit=$(_POLFUNC_LHS_UNIT): " *
+               "fitted compounded annual fraction × $(_POLFUNC_ANN_FRAC_TO_PP) → pp (ρ̂ units)")
     log_status("  [BBL] k∈{4,5}: $n_endog rows | matched $n_matched " *
                "($(round(100 * match_rate, digits=1))%) | adopted $n_adopted | " *
                "fell back to observed: $n_unmatched unmatched + $n_untrusted implausible " *
@@ -221,22 +289,35 @@ function equilibrium_spreads(ctx::CFDemandCtx; policy_csv::Union{Nothing,String}
     med_gap    = median(abs.(fit_adopt .- obs_adopt))
     med_spread = median(abs.(obs_adopt))
     ρcorr      = cor(fit_adopt, obs_adopt)
+    # LEVEL: slope of ρ̂ on σ̂ through the origin (see _POLFUNC_LEVEL_BAND); the median ratio on rows
+    # with |ρ̂| ≥ 0.5pp is logged beside it for reference only — it is attenuated by the fit's noise.
+    lvl_slope  = sum(obs_adopt .* fit_adopt) / sum(abs2, fit_adopt)
+    bigobs     = abs.(obs_adopt) .>= 0.5
+    med_ratio  = any(bigobs) ? median(fit_adopt[bigobs] ./ obs_adopt[bigobs]) : NaN
     log_status("  [BBL] adopted-row sanity: median|fit−obs|=$(round(med_gap, digits=3))pp | " *
                "median|obs|=$(round(med_spread, digits=3))pp | corr(fit,obs)=$(round(ρcorr, digits=3))")
+    log_status("  [BBL] adopted-row LEVEL: slope of ρ̂ on σ̂ through the origin = " *
+               "$(round(lvl_slope, digits=4)) (band $(_POLFUNC_LEVEL_BAND)) | median(σ̂/ρ̂ | |ρ̂|≥0.5pp) = " *
+               "$(round(med_ratio, digits=4)) (reference only)")
     if n_untrusted > 0
         @warn "  [BBL] $n_untrusted/$n_endog matched k∈{4,5} fitted spreads exceeded " *
               "$(_POLFUNC_SANE_CAP_PP)pp and fell back to observed. Cause: " *
               "bbl_polfunc.py::compute_fitted_values fills missing regressors with 0, " *
-              "pinning early-panel B rows at the ≈190pp intercept. Restrict that prediction to complete " *
-              "cases to adopt the fitted policy on those rows too."
+              "pinning early-panel rows at the regression intercept. Restrict that prediction to " *
+              "complete cases to adopt the fitted policy on those rows too."
     end
     ρcorr < 0.3 && error(
         "policy-csv sanity: corr(fitted,observed)=$(round(ρcorr, digits=3)) < 0.3 on adopted k∈{4,5} " *
         "rows — likely a units or key bug (the fitted policy should track observed spreads).")
     med_gap > med_spread && error(
         "policy-csv sanity: median|fit−obs|=$(round(med_gap, digits=3))pp > median|obs|=" *
-        "$(round(med_spread, digits=3))pp — likely a units bug (check the ×$(_POLFUNC_QOQ_TO_ANN_PP) " *
-        "qoq→annual-pp conversion).")
+        "$(round(med_spread, digits=3))pp — likely a units bug (check the ×$(_POLFUNC_ANN_FRAC_TO_PP) " *
+        "fraction→pp conversion and lhs_unit).")
+    (_POLFUNC_LEVEL_BAND[1] <= lvl_slope <= _POLFUNC_LEVEL_BAND[2]) || error(
+        "policy-csv LEVEL: the slope of ρ̂ on the fitted σ̂ through the origin is " *
+        "$(round(lvl_slope, digits=4)), outside $(_POLFUNC_LEVEL_BAND) on $n_adopted adopted k∈{4,5} " *
+        "rows. The fitted policy and ρ̂ are not in the same units (a simple ×400 annualisation of the " *
+        "quarterly spread reads ≈1.08 here); both must be the COMPOUNDED annual spread.")
     return σ̂
 end
 
@@ -342,6 +423,43 @@ function load_forward_rf(path::Union{Nothing,String}, out_dir::String, T::Int, c
 end
 
 # ==========================================================================
+# The quarterly markdown implied by a compounded annual spread
+# ==========================================================================
+"""
+    _spread_q_from_annual(rf_q, rho_pp) -> quarterly spread r^f_q − r^dep_q
+
+The EXACT quarterly spread that a compounded annual spread `rho_pp` (ρ units: percentage points
+of 100·[(1+r^f_q)^4 − (1+r^dep_q)^4]) implies at the quarterly rate `rf_q`: r^f_q − r^dep_q with
+r^dep_q from `_rdep_from_annual`'s quartic inverse. Its inverse is `_spread_ann_pp`.
+"""
+@inline _spread_q_from_annual(rf_q::Real, rho_pp::Real) = rf_q - _rdep_from_annual(rf_q, rho_pp)
+
+"""
+    _spread_ann_pp(rf_q, spread_q) -> compounded annual spread in pp
+
+100·[(1+r^f_q)^4 − (1+r^f_q − spread_q)^4]: the panel's own definition of spread_ann (as pp), from
+a quarterly rate and a quarterly spread. The inverse of `_spread_q_from_annual`.
+"""
+@inline _spread_ann_pp(rf_q::Real, spread_q::Real) = 100.0 * ((1.0 + rf_q)^4 - (1.0 + rf_q - spread_q)^4)
+
+"""
+    scenario_markdown(markdown_q0, rho_hat, spreads_ann, rf_q) -> Vector{Float64}
+
+The quarterly markdown under the scenario spreads σ = `spreads_ann`: the observed markdown moved by
+the EXACT change of the quarterly spread that the compounded annual spreads imply,
+
+    m(σ) = m0 + [ r^dep(r^f, ρ̂) − r^dep(r^f, σ) ],     r^dep(r, ρ) = ((1 + r)^4 − ρ/100)^(1/4) − 1,
+
+at `rf_q`, each row's LAUNCH-QUARTER rate (h = 0: the rate the lagged carry accrues period 1 at and
+the lagged Selic state reads at t = 1). The bracket is formed first, so σ = ρ̂ returns m0 exactly.
+Where m0 is the observed spread_qoq, m0 = r^f − r^dep(r^f, ρ̂) to ~2e-16 at the row's own panel r^f,
+so m(σ) is the exact quarterly spread r^f − r^dep(r^f, σ).
+"""
+scenario_markdown(markdown_q0::AbstractVector{Float64}, rho_hat::AbstractVector{Float64},
+                  spreads_ann::AbstractVector{Float64}, rf_q::AbstractVector{Float64}) =
+    markdown_q0 .+ (_rdep_from_annual.(rf_q, rho_hat) .- _rdep_from_annual.(rf_q, spreads_ann))
+
+# ==========================================================================
 # ψ under a given (stationary) spread scenario
 # ==========================================================================
 """
@@ -351,9 +469,10 @@ end
 Simulate deposits forward under the stationary spread vector `spreads_ann`
 (annualized, for shares) and accumulate the firm-level ψ basis. The per-period
 markdown for the value flow is `markdown_q` (quarterly); for a deviation that
-changes spreads, the markdown should move with it — by default we recompute the
-quarterly markdown from the scenario spreads as `spreads_ann/4` shifted by the
-observed wedge (see note) to stay consistent.
+changes spreads, the markdown moves with it EXACTLY: `scenario_markdown` shifts the observed
+markdown by the change in the quarterly spread that the compounded annual spreads imply, at each
+row's launch-quarter rate `rf_h0` (the panel's contemporaneous r^f when no `rf_h0` is given, as for
+the counterfactual callers).
 
 THE RISK-FREE PATH NOW REACHES THE DEPOSITS. `rf_path_q` used to be handed to
 `accumulate_psi` alone, so the same r^f was moving inside ψ4 while the sleeper accrual in
@@ -375,6 +494,15 @@ their own estimated mean reversion instead of being pinned at the launch quarter
 demand block reads the same states the state block does. The share is then a function of the
 horizon as well as the spread, and the hoisted object becomes an N×T path; the hoist itself
 is unchanged, because the demographic path is identical across deviations and rate paths.
+
+EVOLVING φ, COST SHIFTERS AND THE CARRY'S TIMING (`phi_path`, `z_evol`, `rdep_timing`, `rf_h0`).
+All four are passed straight through to `simulate_deposits` / `accumulate_psi`; their defaults
+(`nothing`, `nothing`, `:contemporaneous`, `nothing`) are the frozen-φ, frozen-Z,
+contemporaneous-carry simulation that cf3_equilibrium.jl and cf6_merger.jl call. Like the share
+path, the φ path depends on the states alone, so main_cost2 builds it once per shard and every
+call here reads the same matrix. With rate risk (P > 1 paths) that one φ path follows the Focus
+MEAN curve while the carry follows each shocked path; with P = 1 (the production design) the two
+read the same rates.
 """
 function psi_under(ctx::CFDemandCtx, st::DepositSimState, Z::Matrix{Float64},
                    markdown_q0::Vector{Float64}, spreads_ann::Vector{Float64};
@@ -384,21 +512,27 @@ function psi_under(ctx::CFDemandCtx, st::DepositSimState, Z::Matrix{Float64},
                    rf_paths::Union{Nothing,Matrix{Float64}}=nothing,
                    rf_curve_paths::Union{Nothing,Array{Float64,3}}=nothing,
                    row_curve::Union{Nothing,Vector{Int}}=nothing,
-                   row_start::Union{Nothing,Vector{String}}=nothing)
-    # Move the quarterly markdown with the scenario spread: Δρ^q ≈ Δρ_ann/4.
-    # (Confirm annual→quarterly convention; only matters for k∈{4,5} deviations.)
-    # markdown_q0 is the observed quarterly markdown (fraction); a scenario change in
-    # the ANNUAL spread (pp = spread_ann/100) maps to a quarterly-fraction change via
-    # /400 (×0.01 pp→fraction, ÷4 annual→quarter).
-    markdown_q = markdown_q0 .+ (spreads_ann .- ctx.rho_hat) ./ 400.0
+                   row_start::Union{Nothing,Vector{String}}=nothing,
+                   phi_path::Union{Nothing,Matrix{Float64}}=nothing,
+                   z_evol::Union{Nothing,ZEvolution}=nothing,
+                   rdep_timing::Symbol=:contemporaneous,
+                   rf_h0::Union{Nothing,Vector{Float64}}=nothing)
+    # Move the quarterly markdown with the scenario spread, exactly (scenario_markdown), at each
+    # row's launch-quarter rate.
+    rf_mk = rf_h0 !== nothing ? rf_h0 :
+            _first_present_rf_level(ctx.df, RF_LEVEL_CANDIDATES; default=NaN,
+                                    what="markdown r^f (the launch quarter's own rate)")[1]
+    markdown_q = scenario_markdown(markdown_q0, ctx.rho_hat, spreads_ann, rf_mk)
     assert_state_evolution(ctx)   # a missing transitions upload must not demote this to frozen states
 
-    # Legacy single deterministic path (one curve for the whole panel).
+    # One deterministic path (one curve for the whole panel).
     if rf_paths === nothing && rf_curve_paths === nothing
         sim = simulate_deposits(ctx, st; T=T, spreads_ann=spreads_ann, rf_path_q=rf_path_q,
-                                state_ev=ctx.state_ev, beta=beta)
+                                state_ev=ctx.state_ev, beta=beta,
+                                phi_path=phi_path, rdep_timing=rdep_timing, rf_h0=rf_h0)
         res = accumulate_psi(ctx, st, sim.Dep, markdown_q, Z;
-                             beta=beta, asset_return_q=asset_return_q, rf_path_q=rf_path_q)
+                             beta=beta, asset_return_q=asset_return_q, rf_path_q=rf_path_q,
+                             z_evol=z_evol)
         return res.psi_firm, res.firms
     end
 
@@ -418,10 +552,12 @@ function psi_under(ctx::CFDemandCtx, st::DepositSimState, Z::Matrix{Float64},
             cur = Matrix{Float64}(rf_curve_paths[p, :, :])
             sim = simulate_deposits(ctx, st; T=T, spreads_ann=spreads_ann,
                                     s_const_in=s_const, rf_curves=cur, row_curve=row_curve,
-                                    beta=beta)
+                                    beta=beta,
+                                    phi_path=phi_path, rdep_timing=rdep_timing, rf_h0=rf_h0)
             res = accumulate_psi(ctx, st, sim.Dep, markdown_q, Z;
                                  beta=beta, asset_return_q=asset_return_q,
-                                 rf_curves=cur, row_curve=row_curve, row_start=row_start)
+                                 rf_curves=cur, row_curve=row_curve, row_start=row_start,
+                                 z_evol=z_evol)
             acc = acc === nothing ? copy(res.psi_firm) : (acc .+ res.psi_firm)
             firms = res.firms; fkey = res.firm_of_key; skey = res.start_of_key
         end
@@ -434,9 +570,11 @@ function psi_under(ctx::CFDemandCtx, st::DepositSimState, Z::Matrix{Float64},
     @inbounds for p in 1:P
         rp = Vector{Float64}(vec(rf_paths[p, 1:T]))
         sim = simulate_deposits(ctx, st; T=T, spreads_ann=spreads_ann,
-                                rf_path_q=rp, s_const_in=s_const, beta=beta)
+                                rf_path_q=rp, s_const_in=s_const, beta=beta,
+                                phi_path=phi_path, rdep_timing=rdep_timing, rf_h0=rf_h0)
         res = accumulate_psi(ctx, st, sim.Dep, markdown_q, Z;
-                             beta=beta, asset_return_q=asset_return_q, rf_path_q=rp)
+                             beta=beta, asset_return_q=asset_return_q, rf_path_q=rp,
+                             z_evol=z_evol)
         acc = acc === nothing ? copy(res.psi_firm) : (acc .+ res.psi_firm)
         firms = res.firms
     end
@@ -755,13 +893,64 @@ function _parse_cost2_args()
         # to "_ms{P}" (P = --n-paths) under --multi-start and stays "" otherwise; bbl_solve.py
         # and make_bbl_cost_tables.py select a vintage by this tag.
         "--psi-tag";       arg_type = String;  default = ""
+        # ── the three model switches (see the module docstring); nothing = environment, then
+        # the default. bbl_run.sh always passes all three explicitly.
+        "--phi-path";      arg_type = String;  default = nothing # evolving | frozen   (CF_PHI_PATH)
+        "--z-path";        arg_type = String;  default = nothing # mean_reverting | frozen (CF_Z_PATH)
+        "--rdep-timing";   arg_type = String;  default = nothing # lagged | contemporaneous (CF_RDEP_TIMING)
+        # sleep_link_E{estim}_spec_{spec}.json (bbl_sleep_link.py); default: data/input, then the
+        # bbl step folder (cf_in_dir / cf_out_dir of COST_FWD). Read only under --phi-path evolving.
+        "--sleep-link";    arg_type = String;  default = nothing
     end
     return parse_args(s)
+end
+
+# The model switches: (flag, environment variable, allowed values, default). The default is the
+# design the BBL cost estimation runs; each `frozen`/`contemporaneous` value is the simulation
+# before that change.
+const _SIM_SWITCHES = (
+    ("phi-path",    "CF_PHI_PATH",    ("evolving", "frozen"),          "evolving"),
+    ("z-path",      "CF_Z_PATH",      ("mean_reverting", "frozen"),    "mean_reverting"),
+    ("rdep-timing", "CF_RDEP_TIMING", ("lagged", "contemporaneous"),   "lagged"),
+)
+
+"""
+    resolve_sim_switches!(a) -> a
+
+Fill `a["phi-path"]`, `a["z-path"]`, `a["rdep-timing"]`: the flag when given, else the
+environment variable, else the default; an unknown value is an error. Logs one line naming the
+source of each.
+"""
+function resolve_sim_switches!(a::AbstractDict)
+    src = String[]
+    for (key, env, allowed, dflt) in _SIM_SWITCHES
+        v, from = a[key] !== nothing ? (String(a[key]), "--$key") :
+                  !isempty(strip(get(ENV, env, ""))) ? (String(strip(ENV[env])), env) :
+                  (dflt, "default")
+        v in allowed || error("$from = '$v' is not one of $(join(allowed, " | "))")
+        a[key] = v
+        push!(src, "$key=$v ← $from")
+    end
+    log_status("  [BBL] model switches: " * join(src, " | "))
+    return a
+end
+
+# The sleep link of routine `estim`: --sleep-link, else the upload (data/input), else the bbl
+# step folder, where bbl_sleep_link.py writes it when it runs on the cluster.
+function _sleep_link_path(a::AbstractDict, out_dir::String)
+    a["sleep-link"] !== nothing && return String(a["sleep-link"])
+    leaf = "sleep_link_E$(a["estim"])_spec_$(a["spec"]).json"
+    for d in (cf_in_dir(out_dir, "COST_FWD"), cf_out_dir(out_dir, "COST_FWD"))
+        p = joinpath(d, leaf)
+        isfile(p) && return p
+    end
+    return joinpath(cf_in_dir(out_dir, "COST_FWD"), leaf)
 end
 
 function main_cost2()
     a = _parse_cost2_args()
     resolve_discount!(a; horizon=true, who="BBL")
+    resolve_sim_switches!(a)
     # --time-filter takes a COMMA-SEPARATED list of quarters, so a --multi-start smoke can span a
     # few launch quarters ("2016Q1,2020Q2,2024Q4") and still keep whole (mca, quarter) markets
     # together — the property build_cf_context needs for its share aggregation to stay exact. One
@@ -785,8 +974,11 @@ function main_cost2()
     st  = load_sim_state(ctx; dbar=dbar)
     Z, znames = load_Z(ctx)
     markdown_q0, mc = _first_present(ctx.df, ["spread_qoq", "spread_q"]; default=NaN)
-    if all(isnan, markdown_q0)
-        markdown_q0 = ctx.rho_hat ./ 400.0; mc = "rho_hat/400"          # annual pp -> quarterly fraction
+    # Without a quarterly spread column the markdown is the exact quarterly spread ρ̂ implies at the
+    # launch-quarter rate, built once that rate (rf_h0) is known, below.
+    mk_from_rho = all(isnan, markdown_q0)
+    if mk_from_rho
+        mc = "r^f_h0 − r^dep(r^f_h0, ρ̂), exact"
     else
         markdown_q0 = clamp.(markdown_q0 ./ 1e4, -0.1, 0.1); mc = "$(mc)/1e4"  # bps -> quarterly fraction
     end
@@ -828,7 +1020,7 @@ function main_cost2()
         med = median(asset_ret[fin]); n_imp = count(!, fin)
         asset_ret[.!fin] .= med
         log_status("  [BBL] r^j ← ($col − 1) − $rfq_c | median net margin " *
-                   "$(round(med, sigdigits=3))/q = $(round(med*400, sigdigits=3)) pp/yr | " *
+                   "$(round(med, sigdigits=3))/q = $(round(100 * ((1 + med)^4 - 1), sigdigits=3)) pp/yr compounded | " *
                    "$n_imp/$(length(asset_ret)) rows imputed at the median")
         med > 0 || @warn "  [BBL] median asset margin is NOT positive ($med) — deposits earn less " *
                          "than r^f, which will force ω̂ < 0. Check the asset-return column."
@@ -848,6 +1040,7 @@ function main_cost2()
     # spans 2% to 14.25% is what separates them.
     starts = String[]; row_curve = Int[]; row_start = String[]
     rf_curve_paths = nothing
+    anchor = Dict{String,Float64}(); rf_mean = Matrix{Float64}(undef, 0, 0)
     rf_src = Dict{String,String}(); rf_bar = Dict{String,Float64}()
     nfirm_by_start = Dict{String,Int}()
     vpath = ""; tpath = ""
@@ -953,7 +1146,7 @@ function main_cost2()
         # tolerance the same quarters already have to clear.
         zbias > 1e-4 && @warn "  [BBL] the r^f≥0 floor moved the P-path mean off the Focus curve " *
                               "by up to $(round(zbias, sigdigits=3))/quarter " *
-                              "($(round(400 * zbias, sigdigits=3)) pp/yr). It only ever raises a " *
+                              "($(round(100 * ((1 + zbias)^4 - 1), sigdigits=3)) pp/yr compounded). It only ever raises a " *
                               "path, so the low-rate starts are biased UP and the r̄^f spread " *
                               "across launch quarters is compressed. Lower --n-paths (fewer " *
                               "extreme z) or take the shock to a log/shifted rate."
@@ -961,6 +1154,101 @@ function main_cost2()
         # run and a bbl_run.sh run name the same design alike.
         isempty(psi_tag) && (psi_tag = "_ms$(n_paths)")
     end
+
+    # ── The three model switches: evolving φ, mean-reverting Z, the carry's timing ───────────
+    # Built ONCE here and shared by the equilibrium and every deviation: none of them depends on
+    # a spread. `rf_h0` is each row's h = 0 rate — its vintage's own h = 0 row under
+    # --multi-start (the realised launch-quarter rate, which the anchor check above holds within
+    # _MS_ANCHOR_TOL of the panel's), else the row's own panel r^f. It is what the lagged carry
+    # and the lagged Selic state read at t = 1, and the rate at which a scenario spread is turned
+    # into its quarterly markdown (scenario_markdown), whatever the switches. From t = 2 on the
+    # carry and φ read the row's curve at h = t − 1: the Focus mean for φ, the simulated rate path
+    # for the carry (the same curve when --n-paths 1; with rate risk φ stays on the Focus mean, the
+    # market's expected path, and is not re-evaluated per shocked path).
+    Tsim = a["horizon"]; βsim = a["beta"]
+    phi_evolving = a["phi-path"] == "evolving"
+    z_moving     = a["z-path"] == "mean_reverting"
+    rdep_timing  = Symbol(a["rdep-timing"])
+    state_trans  = a["transitions"] !== nothing ? String(a["transitions"]) :
+                   _state_transitions_path(out_dir)
+    if phi_evolving && !_cf_states_on()
+        @warn "  [BBL] CF_EVOLVING_STATES=0 freezes the demand block's demographics while " *
+              "--phi-path evolving moves them inside φ: the share and the sleepy share read " *
+              "different state paths in this run."
+    end
+    if phi_evolving || z_moving
+        isfile(state_trans) || error(
+            "bbl_transitions.json not found at $state_trans: --phi-path evolving and --z-path " *
+            "mean_reverting read their AR(1)s from it. Upload it (python bbl_transitions.py), or " *
+            "run --phi-path frozen --z-path frozen deliberately.")
+        if ctx.state_ev !== nothing && isfile(ctx.state_ev.src) &&
+                realpath(ctx.state_ev.src) != realpath(state_trans)
+            @warn "  [BBL] the demand block's market states read $(ctx.state_ev.src) but φ/Z " *
+                  "read $(state_trans): two transition files in one run."
+        end
+    end
+    rf_h0 = if ms
+        selic_h0_rows(row_curve, starts, anchor)
+    else
+        v, c = _first_present_rf_level(ctx.df, RF_LEVEL_CANDIDATES; default=NaN,
+                                       what="h=0 r^f (the launch quarter's own rate)")
+        all(isfinite, v) || error("h=0 r^f column '$c' has non-finite rows")
+        v
+    end
+    log_status("  [BBL] h=0 rate per row ← " * (ms ? "the vintage's own h=0 row (anchor)" :
+               "the panel's contemporaneous r^f") *
+               ": $(round(minimum(rf_h0), sigdigits=4))…$(round(maximum(rf_h0), sigdigits=4))/q")
+    if mk_from_rho
+        markdown_q0 = _spread_q_from_annual.(rf_h0, ctx.rho_hat)
+        log_status("  [BBL] markdown ρ^q ← r^f_h0 − r^dep(r^f_h0, ρ̂) (exact; no spread_qoq column)")
+    end
+    phi_path = nothing; phi_inp = nothing; sleep_link = ""; sleep_link_sha = ""
+    if phi_evolving
+        lpath = _sleep_link_path(a, out_dir)
+        link = load_sleep_link(lpath; estim=a["estim"], spec=a["spec"])
+        sleep_link = lpath; sleep_link_sha = link.sha256
+        phi_inp = phi_path_inputs(ctx.df, link; transitions_path=state_trans)
+        fwd_phi, rc_phi = ms ? (rf_mean, row_curve) :
+                          (reshape(Float64.(rf_path), 1, :), ones(Int, nrow(ctx.df)))
+        phi_path = build_phi_path(phi_inp, Tsim; rf_h0=rf_h0, fwd=fwd_phi, row_curve=rc_phi)
+        phi_path_report(phi_path, phi_inp; w=st.Dep0)
+        log_status("  [BBL] φ path N×T = $(size(phi_path)) Float64, " *
+                   "$(round(sizeof(phi_path) / 2^30, digits=2)) GiB")
+    else
+        log_status("  [BBL] φ frozen at the parquet's phi_mt (clamped to [0, $(PHI_SIM_MAX)])")
+    end
+    z_evol = nothing
+    if z_moving
+        z_evol = build_z_evolution(ctx.df, Z, znames, st.is_B; transitions_path=state_trans)
+    else
+        log_status("  [BBL] Z frozen at the launch values")
+    end
+    log_status("  [BBL] r^dep carry timing: $(rdep_timing)" *
+               (rdep_timing == :lagged ? " (period t accrues at horizon t−1; t=1 at h=0)" :
+                " (period t accrues at horizon t)"))
+    sim_kw = (phi_path=phi_path, z_evol=z_evol, rdep_timing=rdep_timing, rf_h0=rf_h0)
+    # What the psi files record about the simulation they came from (sidecar + parquet metadata).
+    # The sweep compares the policy CSV's sha256 with the one recorded here, so an empty hash would
+    # make every later sweep refuse the run: stop now instead. (SHA is a stdlib and is already
+    # loaded through Parquet2 -> UUIDs; this only fires on a broken installation.)
+    _PHI_SHA === nothing && error("the SHA standard library could not be loaded, so the psi could not " *
+                                  "record the sha256 of the policy CSV and the sleep link that the sweep checks.")
+    trans_sha = (phi_evolving || z_moving) ? _file_sha256(state_trans) : ""
+    sim_prov = Dict{String,String}(
+        "phi_path" => a["phi-path"], "z_path" => a["z-path"], "rdep_timing" => a["rdep-timing"],
+        "sleep_link" => isempty(sleep_link) ? "" : basename(sleep_link),
+        "sleep_link_sha256" => sleep_link_sha,
+        "state_transitions" => (phi_evolving || z_moving) ? basename(state_trans) : "",
+        "state_transitions_sha256" => trans_sha,
+        "phi_t0_max_abs_diff" => phi_inp === nothing ? "" : string(phi_inp.t0_maxdiff),
+        "phi_d_rows" => phi_evolving ? "national_phi_t" : "",
+        "sim_version" => BBL_SIM_VERSION, "spread_units" => BBL_SPREAD_UNITS,
+        "policy_csv" => a["policy-csv"] === nothing ? "" : basename(String(a["policy-csv"])),
+        "policy_csv_sha256" => a["policy-csv"] === nothing ? "" : _file_sha256(String(a["policy-csv"])),
+        "beta" => string(βsim), "T" => string(Tsim))
+    log_status("  [BBL] sim_version $(BBL_SIM_VERSION), spreads $(BBL_SPREAD_UNITS)" *
+               (a["policy-csv"] === nothing ? "" :
+                " | policy $(basename(String(a["policy-csv"]))) sha256 $(first(sim_prov["policy_csv_sha256"], 12))"))
 
     # Equilibrium ψ
     σ̂ = equilibrium_spreads(ctx; policy_csv=a["policy-csv"])
@@ -973,10 +1261,11 @@ function main_cost2()
         psi_eq, keys_eq, fkey, skey = psi_under(ctx, st, Z, markdown_q0, σ̂; beta=a["beta"],
                                                 T=a["horizon"], asset_return_q=asset_ret,
                                                 rf_curve_paths=rf_curve_paths,
-                                                row_curve=row_curve, row_start=row_start)
+                                                row_curve=row_curve, row_start=row_start,
+                                                sim_kw...)
     else
         psi_eq, keys_eq = psi_under(ctx, st, Z, markdown_q0, σ̂; beta=a["beta"], T=a["horizon"],
-                                    asset_return_q=asset_ret, rf_path_q=rf_path)
+                                    asset_return_q=asset_ret, rf_path_q=rf_path, sim_kw...)
         fkey = keys_eq; skey = fill("all", length(keys_eq))
     end
     isB = firm_is_B(ctx, fkey)
@@ -997,7 +1286,7 @@ function main_cost2()
         for q in starts
             log_status("    " * rpad(q, 10) *
                        rpad(string(round(rf_bar[q], sigdigits=6)), 13) *
-                       rpad(string(round(400 * rf_bar[q], digits=3)), 15) *
+                       rpad(string(round(100 * ((1 + rf_bar[q])^4 - 1), digits=3)), 15) *
                        rpad(string(get(nfirm_by_start, q, 0)), 10) * get(rf_src, q, ""))
         end
         rb = [rf_bar[q] for q in starts]
@@ -1068,10 +1357,10 @@ function main_cost2()
         pd = if ms
             psi_under(ctx, st, Z, markdown_q0, σ̃; beta=a["beta"], T=a["horizon"],
                       asset_return_q=asset_ret, rf_curve_paths=rf_curve_paths,
-                      row_curve=row_curve, row_start=row_start)[1]
+                      row_curve=row_curve, row_start=row_start, sim_kw...)[1]
         else
             psi_under(ctx, st, Z, markdown_q0, σ̃; beta=a["beta"], T=a["horizon"],
-                      asset_return_q=asset_ret, rf_path_q=rf_path)[1]
+                      asset_return_q=asset_ret, rf_path_q=rf_path, sim_kw...)[1]
         end
         for r in keys_of_firm[j]
             li += 1
@@ -1086,6 +1375,12 @@ function main_cost2()
     # has and a multi-start run cannot overwrite them (bbl_solve.py --psi-tag selects a vintage).
     tag = "E$(a["estim"])_spec_$(a["spec"])_$(a["stage"])$(a["suffix"])$psi_tag"
     blocks = vcat(["psi1", "psi2_omega"], ["psi3_gamma_$z" for z in znames], ["psi4_zeta"])
+    # File-level key-value metadata of every psi parquet: the model switches and the hashes of
+    # the files behind them. A shard other than 0 writes no sidecar, so for a shard probe this
+    # is the only record of how its psi were simulated.
+    pq_meta = Dict{String,String}("bbl.$k" => v for (k, v) in sim_prov)
+    pq_meta["bbl.psi_tag"] = psi_tag
+    pq_meta["bbl.dev_scheme"] = a["dev-scheme"]; pq_meta["bbl.perturb_scale"] = string(a["perturb-scale"])
 
     # Equilibrium ψ is shard-invariant → write once (shard 0).
     if sid == 0
@@ -1100,7 +1395,7 @@ function main_cost2()
         end
         for (j, b) in enumerate(blocks); eq_df[!, b] = psi_eq[:, j]; end
         _atomic_write(joinpath(cost_dir, "psi_eq_$tag.parquet")) do tmp
-            Parquet2.writefile(tmp, eq_df)
+            Parquet2.writefile(tmp, eq_df; metadata=pq_meta)
         end
         log_status("  [BBL] wrote psi_eq_$tag.parquet")
 
@@ -1118,7 +1413,28 @@ function main_cost2()
                         "seed"        => a["seed"],
                         "psi_tag"     => psi_tag,
                         "rf_vintages" => basename(vpath),
-                        "transitions" => isempty(tpath) ? "" : basename(tpath))
+                        "transitions" => isempty(tpath) ? "" : basename(tpath),
+                        # the model switches and their inputs (bbl_run.sh's tag guard reads the
+                        # three switches; bbl_solve.py copies all of it into the run record)
+                        "phi_path"    => sim_prov["phi_path"],
+                        "z_path"      => sim_prov["z_path"],
+                        "rdep_timing" => sim_prov["rdep_timing"],
+                        "sleep_link"  => sim_prov["sleep_link"],
+                        "sleep_link_sha256" => sim_prov["sleep_link_sha256"],
+                        "state_transitions" => sim_prov["state_transitions"],
+                        "state_transitions_sha256" => sim_prov["state_transitions_sha256"],
+                        "phi_t0_max_abs_diff" => sim_prov["phi_t0_max_abs_diff"],
+                        "phi_d_rows"  => sim_prov["phi_d_rows"],
+                        # the design version and the policy the psi were simulated around
+                        # (bbl_run.sh and the sweep refuse to extend a tag of another version,
+                        # and the sweep one whose policy CSV has changed since)
+                        "sim_version"  => sim_prov["sim_version"],
+                        "spread_units" => sim_prov["spread_units"],
+                        "policy_csv"   => sim_prov["policy_csv"],
+                        "policy_csv_sha256" => sim_prov["policy_csv_sha256"],
+                        # the deviation grid: psi_dev's shift_pp is shifts[shock] under it
+                        "dev_scheme"    => a["dev-scheme"],
+                        "perturb_scale" => a["perturb-scale"])
             _atomic_write(joinpath(cost_dir, "psi_starts_$tag.json")) do tmp
                 open(tmp, "w") do f; JSON3.write(f, meta); end
             end
@@ -1134,6 +1450,10 @@ function main_cost2()
     nloc = length(loc)
     dev_df = DataFrame(shock=d_shock, firm=d_firm, is_B=d_isB)
     ms && (dev_df[!, "start_q"] = d_start)
+    # Δ_s of the row's deviation, in ρ units (compounded annual pp): the sign splits raising from
+    # lowering the spread. Not a ψ block — every reader selects the blocks by name (psi1,
+    # psi2_omega, psi3_gamma_*, psi4_zeta).
+    dev_df[!, "shift_pp"] = Float64[shifts[s] for s in d_shock]
     for (c, b) in enumerate(blocks)
         dev_df[!, b] = psi_dev[:, c]
     end
@@ -1141,7 +1461,7 @@ function main_cost2()
     # Through a temporary + rename (see _atomic_write): this file's existence is what tells the
     # sweep and the solve that shard `sid` is done, so it must never exist half-written.
     _atomic_write(joinpath(cost_dir, "psi_dev_$tag$shard_tag.parquet")) do tmp
-        Parquet2.writefile(tmp, dev_df)
+        Parquet2.writefile(tmp, dev_df; metadata=pq_meta)
     end
     log_status("  [BBL] wrote psi_dev_$tag$shard_tag.parquet ($nloc firm×Δ deviations" *
                (ms ? " → $nout firm×Δ×start rows)" : ")"))

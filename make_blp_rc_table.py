@@ -31,6 +31,7 @@ import argparse
 import json
 import math
 import pathlib
+import tomllib
 import numpy as np
 import scipy.stats as stats
 import sys
@@ -247,7 +248,7 @@ def semi_elast_cell(entry: dict, est_id: int) -> str:
     """α̂·mean(ρ(1−s)) formatted (the average-market own-price elasticity), or '---'."""
     rho = mean_rho_one_minus_s(est_id)
     a   = alpha_of(entry)
-    return f"{a * rho:.3f}" if (rho is not None and a is not None) else "---"
+    return fmt3(a * rho) if (rho is not None and a is not None) else "---"
 
 
 def decode_theta2(data: dict) -> list[tuple[str, float, float, float | None]]:
@@ -291,6 +292,18 @@ def build_global_theta2_labels(stage_results: dict) -> list[str]:
 
 # ── Formatting ────────────────────────────────────────────────────────────────
 
+def fmt3(v: float) -> str:
+    """Round to exactly 3 decimals (the DISPLAY RULE every demand table follows: coefficients,
+    SEs, Q, elasticities, Pi/Sigma entries, G*, means and shares). A value that rounds to zero
+    prints '0.000', never '-0.000' -- the sign of a zero display is meaningless, so this only
+    normalizes the sign; it never rescales, so a nonzero value that rounds to 0.000 at 3dp still
+    prints '0.000'."""
+    r = round(float(v), 3)
+    if r == 0.0:
+        r = 0.0   # collapses -0.0 -> 0.0 so f"{r:.3f}" can never show "-0.000"
+    return f"{r:.3f}"
+
+
 def _stars(pval: float) -> str:
     if pval < 0.01:  return r"^{***}"
     if pval < 0.05:  return r"^{**}"
@@ -307,26 +320,55 @@ def _stars(pval: float) -> str:
 SIGMA_BOUND_TOL = 1e-3
 
 # Footer labels shared by the RC tables (this file, make_blp_demand_comparison_table.py) and worded
-# as in the logit comparison (blp_logit.jl Q_ROW_LABEL / Q_NOTE), so one object reads one way.
+# as in the logit comparison (blp_logit.jl Q_ROW_LABEL), so one object reads one way.
 ELAST_ROW_LABEL = r"Mean own-price elasticity"
 Q_ROW_LABEL     = r"GMM Criterion ($Q$)"
 GSTAR_ROW_LABEL = r"Effective Clusters ($G^*$)"
-# The engines form Q = ḡ'Wḡ with the one-step W = (Z'Z/N)⁻¹, which is not the inverse of the
-# clustered moment covariance, so Q has no χ² reference and no degrees-of-freedom row is printed.
-Q_NOTE = (r"$Q=\bar g'W\bar g$ is the GMM criterion at the estimates, with $\bar g$ the sample "
-          r"moments of $\xi$ on the excluded instruments and the one-step weight $W=(Z'Z/N)^{-1}$; "
-          r"because $W$ is not the inverse of the clustered moment covariance, $Q$ is a measure of fit "
-          r"and not an overidentification test statistic.")
-# `gmm_cluster_ses` drops an on-bound σ's column from the GMM Jacobian before forming the
-# covariance, so every other standard error in the column is conditional on that σ = 0.
-BOUNDARY_SE_NOTE = (r"Standard errors of $\theta_1$ and of the remaining $\theta_2$ are conditional on "
-                    r"each $\dagger$ $\Sigma$ held at zero: its direction is dropped from the GMM "
-                    r"Jacobian before the covariance is formed.")
+
+# Note sentences shared with the logit tables: config/table_notes.toml, which blp_logit.jl reads
+# too. Among them: Q is the one-step criterion ḡ'Wḡ with W = (Z'Z/N)⁻¹, not an overidentification
+# test (no degrees-of-freedom row), and the boundary clause — `gmm_cluster_ses` drops an on-bound
+# σ's column from the GMM Jacobian, so every other standard error is conditional on that σ = 0.
+TABLE_NOTES_TOML = ROOT / "config" / "table_notes.toml"
+
+
+def demand_notes() -> dict:
+    """The `[demand]` table of config/table_notes.toml."""
+    with open(TABLE_NOTES_TOML, "rb") as fh:
+        return tomllib.load(fh)["demand"]
+
+
+def demand_note(which: str, se_method: str = "wcb", skip=(), subs: dict | None = None) -> str:
+    """Note body for table `which` (a key of `[demand.order]`): its sentences in order, `se`
+    resolved by `se_method` (a method with no stored standard errors falls back to `se_note`),
+    keys in `skip` left out and `@NAME@` tokens filled from `subs`. blp_logit.jl `demand_note`
+    assembles the logit notes the same way."""
+    notes = demand_notes()
+    parts = []
+    for k in notes["order"][which]:
+        if k in skip:
+            continue
+        if k == "se":
+            if se_method in ("wcb", "sandwich"):
+                parts.append(notes["se_" + se_method])
+            else:
+                parts.append(se_note({"se_method": se_method}) + ".")
+            continue
+        parts.append(notes[k])
+    txt = " ".join(parts)
+    for k, v in (subs or {}).items():
+        txt = txt.replace(f"@{k}@", v)
+    return txt
+
+
+def note_cell(body: str) -> str:
+    r"""`\footnotesize \textit{Notes:} <body>` in the size config/table_notes.toml sets."""
+    return demand_notes()["note_size"] + r" \textit{Notes:} " + body
 
 
 def sigma_on_bound(entries) -> bool:
     """Whether any Σ in the given stage results sits on the Σ≥0 bound (|Σ̂| < SIGMA_BOUND_TOL),
-    i.e. whether a table showing them carries a dagger and needs BOUNDARY_SE_NOTE."""
+    i.e. whether a table showing them carries a dagger and needs the `boundary` note sentence."""
     for d in entries:
         for lbl, v, *_ in decode_theta2(d or {}):
             if (lbl.startswith(r"$\Sigma$") and v is not None
@@ -347,7 +389,7 @@ def fmt_coef(val: float, se: float, G_star: float | None = None,
     (Andrews 1999/2001)."""
     if val is None or (isinstance(val, float) and math.isnan(val)):
         return "-", ""
-    coef_str = f"{val:.4f}"
+    coef_str = fmt3(val)
     if on_bound:
         return rf"${coef_str}^{{\dagger}}$", ""
     if se and se > 0 and not (isinstance(se, float) and math.isnan(se)):
@@ -358,7 +400,7 @@ def fmt_coef(val: float, se: float, G_star: float | None = None,
         else:
             pv = 2 * (1 - stats.norm.cdf(abs(val / se)))
         coef_str += _stars(pv)
-        se_str = f"$({se:.4f})$"
+        se_str = f"$({fmt3(se)})$"
     else:
         se_str = ""
     return f"${coef_str}$", se_str
@@ -402,8 +444,11 @@ def build_table(est_id: int, suffix: str = "") -> str:
     rep = stage_results[available[0]]
     n_obs = rep.get("n_obs") or rep.get("n_clusters", "---")
     G_star_map = {s: stage_results[s].get("G_star") for s in available}
-    sem_note   = se_note(stage_results.get("extended") or rep)
-    bound_note = (BOUNDARY_SE_NOTE + " ") if sigma_on_bound(stage_results[s] for s in available) else ""
+    # Shared note wording (config/table_notes.toml, order `rc_routine`); the boundary clause only
+    # when some column has a Σ on the bound.
+    note_body  = demand_note(
+        "rc_routine", se_method=(stage_results.get(available[-1]) or rep).get("se_method", "none"),
+        skip=() if sigma_on_bound(stage_results[s] for s in available) else ("boundary",))
 
     lines = [
         r"\begin{spacing}{1.0}",
@@ -429,21 +474,7 @@ def build_table(est_id: int, suffix: str = "") -> str:
         "",
         r"    \bottomrule",
         r"    \multicolumn{" + str(ncols + 1) + r"}{p{\dimexpr\linewidth-2\tabcolsep\relax}}{"  # \linewidth = \textwidth (portrait)
-        r"\scriptsize \textit{Notes:} The estimation strategy is enumerated in "
-        rf"Section~\ref{{sec:empirical:sleep}}. {sem_note}. Significance from a Student-$t$ "
-        r"reference with $G^*$ effective clusters (few-cluster correction): "
-        r"*** $p<0.01$, ** $p<0.05$, * $p<0.1$. "
-        r"$\theta_1$: mean utility coefficients (linear IV); demographics are centered "
-        r"($\tilde D=(D-\bar D)/\sigma$), so $\theta_1$ is the average-market coefficient. "
-        r"$\theta_2$: random-coefficient parameters ($\Sigma$ = std.\ dev., $\Pi$ = demographic "
-        r"interaction); the $\Sigma$'s are bounded $\Sigma\ge0$. "
-        r"A $\dagger$ marks a $\Sigma$ estimated at the boundary ($\hat\Sigma\approx0$): we report "
-        r"the point on the bound and \emph{no} two-sided standard error, since a symmetric interval "
-        r"would straddle $\Sigma<0$ (Andrews 1999) and the bootstrap is degenerate there. "
-        + bound_note + Q_NOTE + " " +
-        r"Mean own-price elasticity is the average-market "
-        r"plug-in $\hat\alpha\cdot\overline{\rho(1-s)}$. "
-        r"Spread in percentage points (÷100 from basis points)."
+        + note_cell(note_body) +
         r"} \\",
         r"    \endlastfoot",
         "",
@@ -526,11 +557,11 @@ def build_table(est_id: int, suffix: str = "") -> str:
         qv   = d.get("Q_value")
         nob  = d.get("n_obs")
         G    = d.get("G_star")
-        q_vals.append(   f"${qv:.4f}$"     if qv   is not None else "---")
+        q_vals.append(   f"${fmt3(qv)}$"    if qv   is not None else "---")
         nobs_vals.append(f"{nob:,}"         if nob  is not None else "---")
-        gstar_vals.append(f"{G:.2f}"        if G    is not None else "---")
+        gstar_vals.append(fmt3(G)           if G    is not None else "---")
         a = alpha_of(d)
-        se_vals.append(f"{a * rho:.3f}" if (rho is not None and a is not None) else "---")
+        se_vals.append(fmt3(a * rho) if (rho is not None and a is not None) else "---")
 
     lines += [
         "    " + ELAST_ROW_LABEL + " & " + " & ".join(se_vals)    + r" \\",

@@ -40,7 +40,7 @@ def stars(p):
 # paper -- sleepiness, BBL policy functions, descriptives -- states the same unit for the
 # same variable. There used to be four independent copies of this dict.
 from sleep_export_link import (clean_name, disp, ss_colspec, ss_label_cell,  # noqa: E402
-                               SS_TABCOLSEP)
+                               SS_TABCOLSEP, fmt3, pdflatex_clean)
 from utils import state_transform as _st  # noqa: E402
 from utils import se_national as _sen  # noqa: E402
 from utils import sleep_notes as _notes
@@ -68,15 +68,7 @@ def build_first_stage_table(results_dict):
     caption = ("First Stage --- Deposit Spread on Instruments "
                f"--- Estimation Strategy~{_routines.est_ref(2)}")
     label = "tab:est2_first_stage"
-    notes = (
-        r"\footnotesize \textit{Notes:} Standard errors (WCB at the "
-        r"conglomerate level; \textcite{cameron2008bootstrap}, \textcite{mackinnon2017wild}) "
-        r"in parentheses. Coefficients are in \emph{percentage points of the quarterly "
-        r"deposit spread} per the unit given in the row label, matching the units of the "
-        r"second-stage tables. $t$-statistics, $p$-values and significance stars are "
-        r"invariant to these units. "
-        r"Significance levels: *** $p<0.01$, ** $p<0.05$, * $p<0.1$."
-    )
+    notes = r"\footnotesize \textit{Notes:} " + _notes.first_stage_note(pooled=True)
 
     def _get_res(iv_key, p):
         entry = results_dict.get(f"{iv_key} x {p}")
@@ -144,8 +136,8 @@ def build_first_stage_table(results_dict):
                     c, se, pval = res.params[var], res.bse[var], res.pvalues[var]
                     m = disp(var, lhs=_st.SPREAD_DISPLAY)   # LHS here is the spread, not phi
                     c, se = c * m, se * m
-                    coef_strs.append(f"${c:.4f}^{{{stars(pval)}}}$")
-                    se_strs.append(f"$({se:.4f})$")
+                    coef_strs.append(f"${fmt3(c)}^{{{stars(pval)}}}$")
+                    se_strs.append(f"$({fmt3(se)})$")
                 else:
                     coef_strs.append(""); se_strs.append("")
             if has_val:
@@ -160,9 +152,9 @@ def build_first_stage_table(results_dict):
                 g_l.append("---")
                 continue
             obs_l.append(f"{int(res.nobs):,}")
-            rsq_l.append(f"{res.rsquared:.4f}")
+            rsq_l.append(fmt3(res.rsquared))
             fv = getattr(res, 'fvalue', None); fp = getattr(res, 'f_pvalue', 1.0)
-            fstat_l.append(f"${fv:.2f}^{{{stars(fp)}}}$" if fv is not None else "---")
+            fstat_l.append(f"${fmt3(fv)}^{{{stars(fp)}}}$" if fv is not None else "---")
             g_l.append(str(getattr(res, 'G_nominal', '---')))
 
         lines += [
@@ -193,7 +185,9 @@ def build_second_stage_table(results_dict):
     caption = f"Second Stage --- Estimation Strategy~{_routines.est_ref(2)}"
     label = "tab:est2_second_stage"
     notes = (
-        r"\footnotesize \textit{Notes:} " + _notes.second_stage_note(columns="specifications")
+        r"\footnotesize \textit{Notes:} " + _notes.second_stage_note(
+            _notes.sample_clause(pooled=True), _notes.effects_clause("coef"),
+            _notes.linear_link_caveat(r"the Constant, $\hat{\phi}$ at the average market,"))
         # (the note's opening is substituted at the end, from what the cells actually printed)
     )
     # Function-scope, unlike _nat_schemes: the note's opening describes the WHOLE table, so a
@@ -290,11 +284,11 @@ def build_second_stage_table(results_dict):
                     _bd = _band_row(res, var, est=2, spec=f"{ek} x {panel}")
                     if _bd:
                         _band_cols.add(ek)
-                        coef_strs.append(f"${c:.4f}^{{{_bd[2]}}}$")
-                        se_strs.append(f"$[{_bd[0] * m:.4f}, {_bd[1] * m:.4f}]{mark}$")
+                        coef_strs.append(f"${fmt3(c)}^{{{_bd[2]}}}$")
+                        se_strs.append(f"$[{fmt3(_bd[0] * m)}, {fmt3(_bd[1] * m)}]{mark}$")
                     else:
-                        coef_strs.append(f"${c:.4f}^{{{stars(pval)}}}$")
-                        se_strs.append(f"$({se:.4f}){mark}$")
+                        coef_strs.append(f"${fmt3(c)}^{{{stars(pval)}}}$")
+                        se_strs.append(f"$({fmt3(se)}){mark}$")
                 else:
                     coef_strs.append(""); se_strs.append("")
             if has_val:
@@ -312,7 +306,7 @@ def build_second_stage_table(results_dict):
             nv = getattr(res, 'nobs', None)
             obs_l.append(f"{int(nv):,}" if nv is not None else "---")
             rv = getattr(res, 'rsquared', None)
-            rsq_l.append(f"{rv:.4f}" if rv is not None else "---")
+            rsq_l.append(fmt3(rv) if rv is not None else "---")
             g_l.append(str(getattr(res, 'G_nominal', '---')))
 
         lines += [
@@ -341,6 +335,7 @@ _STANDALONE_PREAMBLE = r"""\documentclass[12pt]{article}
 \usepackage[english]{babel}
 \usepackage{amssymb, mathrsfs, amsthm, mathtools}
 \usepackage{graphicx, float}
+\usepackage{xltabular}
 \usepackage{setspace}
 \usepackage{multirow}
 \usepackage{booktabs}
@@ -408,7 +403,8 @@ def main():
         res_final = subprocess.run(["pdflatex", "-interaction=nonstopmode", "est2_sleep_results.tex"],
                                    cwd=OUT_DIR, capture_output=True, text=True)
         pdf_path = os.path.join(OUT_DIR, "est2_sleep_results.pdf")
-        if os.path.exists(pdf_path) and os.path.getsize(pdf_path) > 0:
+        if (os.path.exists(pdf_path) and os.path.getsize(pdf_path) > 0
+                and pdflatex_clean(res_final.stdout)):
             print("\n *** PDF SUCCESSFULLY GENERATED. ***\n")
         else:
             print(f"\n *** PDF GENERATION FAILED. Log tail:\n{res_final.stdout[-800:]}\n ***\n")

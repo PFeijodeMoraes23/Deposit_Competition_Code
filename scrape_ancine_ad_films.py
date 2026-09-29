@@ -104,15 +104,20 @@ quarter by quarter exactly as an own row would.
                    whose product or title is an event, venue or institute name (EVENT_VENUE:
                    'COPA SANTANDER LIBERTADORES', 'CAIXA CULTURAL', 'FEIRAO DA CAIXA', 'ARENA
                    BANCO ORIGINAL'), where the brand may be only a sponsor's naming right.
-  coop_system      the advertiser is a Sicoob- or Sicredi-branded credit cooperative (single,
-                   central or confederation) or a Sicoob/Sicredi system company: its name, or
-                   the product or title of its films, carries the system brand and no other
-                   system's. All its CRTs go to BANCO SICOOB (C0080879) or BANCO COOPERATIVO
-                   SICREDI (C0080745), the only two cooperative banks in the market panel. A
-                   media company's film naming Sicoob or Sicredi is coop_system too: the payer is
-                   a cooperative, not the bank. This class is kept OUT of the bank total.
-                   Cooperatives of other systems (Cresol, Unicred, Ailos) stay unattached with
-                   their system recorded in the review queue.
+  coop_system      the advertiser is a credit cooperative (single, central or confederation, by
+                   its ANCINE or IF.data name) or a system company, and the CRT is Sicoob- or
+                   Sicredi-branded. The system is decided per CRT from the most specific
+                   evidence: the system its film names; else the one the advertiser's IF.data
+                   name carries in that quarter; else the one its ANCINE name carries (ANCINE
+                   keeps one name per firm, undated); else the single system all its films and
+                   names carry. Cooperatives change systems (UNICRED CEARA CENTRO NORTE is SICREDI
+                   in the lists from 2016), so each film keeps the system of its time, and an
+                   advertiser whose evidence points two ways gets none. Sicoob CRTs go to BANCO SICOOB (C0080879), Sicredi CRTs to
+                   BANCO COOPERATIVO SICREDI (C0080745), the only two cooperative banks in the
+                   market panel. A media company's film naming Sicoob or Sicredi is coop_system
+                   too: the payer is a cooperative, not the bank. This class is kept OUT of the
+                   bank total. Cooperatives of other systems (Cresol, Unicred, Ailos) stay
+                   unattached with their system recorded in the review queue.
 Not attributed:
   joint ventures   multi-bank firms (Elo, Livelo, Alelo, Cielo) stay with no bank; their
                    verified owners are recorded (JOINT_VENTURES) in the advertiser map and the
@@ -120,8 +125,9 @@ Not attributed:
                    gives them one.
   other filers     a filer that is neither the bank, its affiliate or holding, a media company
                    nor a cooperative of the bank's system (a retailer's co-branded card, a car
-                   dealer's financing fair, an agency, an employee association) is listed for
-                   review as `other_filer_named_bank` and counts nowhere.
+                   dealer's financing fair, an advertising agency, a public body, an employee
+                   association) is listed for review as `other_filer_named_bank` and counts
+                   nowhere; `filer_type` says which kind it is.
 Brand words are matched in the folded product and title (BANK_BRANDS). Words that are also
 ordinary words or other firms' names match only next to a word that makes them the bank: SAFRA
 is a harvest ('PLANO SAFRA', 'PROMO SAFRA') unless 'BANCO SAFRA', 'SAFRAPAY' or 'J SAFRA'; INTER,
@@ -374,10 +380,10 @@ BRANDS = re.compile(r"\b(BRADESCO|ITAU|UNIBANCO|SANTANDER|CAIXA|BB|BANCO DO BRAS
 # builder, a farm, a food maker, an industry, an advertising or communication agency, a
 # pharmacy, an estate agent or an optician is such a firm, so it gets no brand_word; it stays in
 # the queue. The names are accent-folded before the test (COMUNICACAO for COMUNICAÇÃO, OTICA
-# for ÓTICA).
+# for ÓTICA); opticians also spell it OPTICA/OPTICOS (the ELO optics shop does).
 NOT_BRAND = re.compile(r"\b(?:INCORPORACAO|INCORPORACOES|CONSTRUTORA|AGROPECUARIA|ALIMENTICIOS|"
                        r"INDUSTRIA|INDUSTRIAS|FERTILIZANTES|COMUNICACAO|PUBLICIDADE|PROPAGANDA|"
-                       r"DROGARIA|IMOVEIS|OTICA)\b")
+                       r"DROGARIA|IMOVEIS|OTICA|OTICAS|OPTICA|OPTICAS|OPTICOS)\b")
 
 # Words too common in institution names to show that two names refer to the same firm.
 NAME_STOP = {"BANCO", "BCO", "BANK", "S", "A", "SA", "S/A", "LTDA", "HOLDING", "DO", "DA", "DE",
@@ -482,6 +488,8 @@ SYSTEM_RX = tuple((lab, re.compile(p)) for lab, _, p in COOP_SYSTEMS)
 
 # A credit cooperative, by the words its legal name uses (singles, centrals, confederations),
 # or by a system name in it. Medical and farm cooperatives say COOPERATIVA too but not CREDITO.
+# Tested on the name with punctuation turned to spaces (name_words), because ANCINE abbreviates
+# ('COOP. ECON. E CRED. MUTUO').
 CREDIT_COOP = re.compile(
     r"\bCOOP\w* (?:DE |DOS? |DAS? )?(?:\w+ ){0,4}?(?:CREDITO|CRED|ECONOMIA E CREDITO|POUPANCA)\b|"
     r"\bCENTRAL DAS COOPERATIVAS DE (?:ECONOMIA E )?CREDITO\b|"
@@ -499,6 +507,10 @@ MEDIA = re.compile(
     r"\bRBS PARTICIPACOES\b|\bFUNDACAO ROBERTO MARINHO\b|\bSISTEMA MASSA\b")
 AGENCY = re.compile(r"\b(?:PUBLICIDADE|PROPAGANDA|PUBLICITARIA|AGENCIA|MARKETING|COMUNICACAO|"
                     r"COMUNICACOES)\b")
+# Public bodies say COMUNICACAO too ('SECRETARIA DE COMUNICACAO SOCIAL'); they are neither
+# media nor agencies.
+PUBLIC_BODY = re.compile(r"\b(?:MUNICIPIO|PREFEITURA|SECRETARIA|GOVERNO|MINISTERIO|TRIBUNAL|"
+                         r"ASSEMBLEIA LEGISLATIVA|CAMARA MUNICIPAL)\b")
 # Event, venue and institute words: where one is in the product or title of a sponsored film,
 # the bank's name may be only a naming right (COPA SANTANDER LIBERTADORES, CAIXA CULTURAL,
 # FEIRAO DA CAIXA, ARENA BANCO ORIGINAL, BRADESCO ESPORTES FM).
@@ -577,7 +589,8 @@ AFFILIATES = {
                               "itau-e-integrado-ao-app-e-fica-restrito-a-clientes/"),
     "04270778": dict(bank="Santander", root="90400888", basis="brand_and_control",
                      evidence="Santander Corretora de Seguros, Investimentos e Servicos, "
-                              "controlled entirely by Banco Santander (Brasil): https://www.dnb.com/"
+                              "controlled entirely by Banco Santander (Brasil): "
+                              "https://www.dnb.com/"
                               "business-directory/company-profiles.santander_corretora_de_seguros_"
                               "investimentos_e_servicos_sa.1ece257424fce8b09523d1256de8a139.html"),
     "61472676": dict(bank="Santander", root="90400888", basis="brand",
@@ -608,13 +621,16 @@ AFFILIATES = {
                               "votes); " + _BB_SEGURIDADE),
     "01984199": dict(bank="BRB", root="00000208", basis="brand_and_control",
                      evidence="Cartao BRB S.A. (BRBCARD), controlled by BRB - Banco de Brasilia: "
-                              "https://novo.brb.com.br/sobre-o-brb/empresas-com-marca-brb/brbcard/"),
+                              "https://novo.brb.com.br/sobre-o-brb/empresas-com-marca-brb/"
+                              "brbcard/"),
     "42597575": dict(bank="BRB", root="00000208", basis="brand_and_control",
                      evidence="BRB's insurance broker, held through Cartao BRB: "
-                              "https://novo.brb.com.br/servico-de-informacao-ao-cidadao/coligadas/"),
+                              "https://novo.brb.com.br/servico-de-informacao-ao-cidadao/"
+                              "coligadas/"),
     "44705886": dict(bank="BRB", root="00000208", basis="brand_and_control",
                      evidence="BRB's insurance broker, held through Cartao BRB: "
-                              "https://novo.brb.com.br/servico-de-informacao-ao-cidadao/coligadas/"),
+                              "https://novo.brb.com.br/servico-de-informacao-ao-cidadao/"
+                              "coligadas/"),
     "27053230": dict(bank="Banestes", root="28127603", basis="brand_and_control",
                      evidence="Banestes S.A. holds 100% of Banestes Seguros: "
                               "https://ri.banestes.com.br/o-banestes/empresas-controladas"),
@@ -727,6 +743,12 @@ def brand_text(product, title) -> str:
     def one(t):
         return re.sub(r"\s+", " ", re.sub(r"[^A-Z0-9&+ ]+", " ", fold(t))).strip()
     return one("" if pd.isna(product) else product) + " | " + one("" if pd.isna(title) else title)
+
+
+def name_words(text) -> str:
+    """Folded name with punctuation turned to spaces, for the name patterns (CREDIT_COOP, MEDIA,
+    AGENCY, PUBLIC_BODY): 'COOP. ECON. E CRED.' -> 'COOP ECON E CRED'."""
+    return re.sub(r"\s+", " ", re.sub(r"[^A-Z0-9&+ ]+", " ", fold(text))).strip()
 
 
 def advertiser_key(cnpj8: pd.Series, name_folded: pd.Series) -> pd.Series:
@@ -1009,6 +1031,7 @@ def read_crt(enc: str, delim: str, roots: set[str]) -> tuple[pd.DataFrame, pd.Da
     st = ReadStats()
     fold_cache: dict[str, str] = {}
     valid_cache: dict[str, bool] = {}
+    coop_cache: dict[str, bool] = {}
     keep, cand, fin = [], [], []
     attach_keys = set(AFFILIATES) | set(HOLDINGS)
     reader = pd.read_csv(CSV_PATH, sep=delim, encoding=enc, encoding_errors="strict", dtype=str,
@@ -1051,12 +1074,13 @@ def read_crt(enc: str, delim: str, roots: set[str]) -> tuple[pd.DataFrame, pd.Da
         for nm in names.unique():
             if nm not in fold_cache:
                 fold_cache[nm] = fold(nm)
+                coop_cache[nm] = bool(CREDIT_COOP.search(name_words(nm)))
         folded = names.map(fold_cache)
         # Titles are nearly all distinct, so the brand test is cached per chunk only.
         text = [brand_text(p, t) for p, t in zip(chunk[COL_PROD], chunk[COL_TITLE])]
         pt_hit = pd.Series([bool(BRAND_ANY.search(t)) for t in text], index=chunk.index)
         key = advertiser_key(cnpj8, folded)
-        take = ~in_reg & (key.isin(attach_keys) | folded.str.contains(CREDIT_COOP) | pt_hit)
+        take = ~in_reg & (key.isin(attach_keys) | names.map(coop_cache) | pt_hit)
         cand.append(chunk[take])
 
         looks = folded[~in_reg].str.contains(FINANCIAL)
@@ -1208,62 +1232,90 @@ class Mapper:
 # ---------------------------------------------------------------------------
 # Attribution beyond the advertiser's own CNPJ
 # ---------------------------------------------------------------------------
-def filer_type(key: str, name: str, in_registry: bool) -> str:
-    """What kind of firm filed the CRT, for the attribution rules (tables first, then names)."""
+def dated_registry_names(reg_sub: pd.DataFrame) -> dict[str, tuple[np.ndarray, list[str]]]:
+    """Per CNPJ8, the IF.data lists' dates and the institution's name in each (folded, with
+    punctuation as spaces). Names change: cooperatives move between systems (UNICRED
+    MANTIQUEIRA is SICOOB MANTIQUEIRA in later lists), so a name is read at a CRT's quarter."""
+    m = reg_sub[reg_sub["CodInst"].str.fullmatch(r"\d{1,8}", na=False)]
+    m = m.assign(r=m["CodInst"].str.zfill(8), d=m["Data"].astype(int))
+    out = {}
+    for r, g in m.sort_values("d").drop_duplicates(["r", "d"], keep="last").groupby("r"):
+        out[r] = (g["d"].to_numpy(), [name_words(n) for n in g["NomeInstituicao"].fillna("")])
+    return out
+
+
+def name_at(names: dict[str, tuple[np.ndarray, list[str]]], root, ym: int) -> str:
+    """The registry name of `root` in the latest list up to `ym` (the first list before any)."""
+    if not isinstance(root, str) or root not in names:
+        return ""
+    dates, texts = names[root]
+    return texts[max(int(np.searchsorted(dates, ym, side="right")) - 1, 0)]
+
+
+def systems_in(text: str) -> list[str]:
+    return [lab for lab, rx in SYSTEM_RX if rx.search(text)]
+
+
+def filer_type(key: str, names: str, registry_name: str, in_registry: bool) -> str:
+    """What kind of firm filed the CRT, for the attribution rules: the tables first, then the
+    advertiser's names (all its ANCINE names joined, and its latest registry name)."""
     if key in AFFILIATES:
         return "affiliate"
     if key in HOLDINGS:
         return "holding"
     if key in JOINT_VENTURES:
         return "joint_venture"
-    if CREDIT_COOP.search(name):
+    if CREDIT_COOP.search(names) or CREDIT_COOP.search(registry_name):
         return "credit_coop"
+    if PUBLIC_BODY.search(names):
+        return "public_body"
     if in_registry:
         return "registry_institution"
-    if MEDIA.search(name):
+    if MEDIA.search(names):
         return "media"
-    if AGENCY.search(name):
+    if AGENCY.search(names):
         return "agency"
     return "other"
 
 
-def coop_systems(u: pd.DataFrame) -> dict[str, str]:
-    """System of each credit-cooperative advertiser: the system word in its own name; else the
-    one system its films name, if they name exactly one; else 'ambiguous: A; B' or ''."""
-    out = {}
-    coops = u[u["filer_type"] == "credit_coop"]
-    for key, g in coops.groupby("advertiser_key"):
-        name = " | ".join(g["adv_fold"].unique())
-        in_name = [lab for lab, rx in SYSTEM_RX if rx.search(name)]
-        if in_name:
-            out[key] = in_name[0]
-            continue
-        named = {lab for lab, rx in SYSTEM_RX for t in g["brand_text"].unique() if rx.search(t)}
-        out[key] = (named.pop() if len(named) == 1
-                    else "ambiguous: " + "; ".join(sorted(named)) if named else "")
-    return out
-
-
-def attribute(u: pd.DataFrame, mapper: Mapper, roots: set[str]) -> tuple[pd.DataFrame,
-                                                                          dict[str, str]]:
+def attribute(u: pd.DataFrame, mapper: Mapper, roots: set[str],
+              reg_sub: pd.DataFrame) -> tuple[pd.DataFrame, dict[str, str]]:
     """Attribution records for rows that did not map as own.
 
     `u` holds the unmapped registry rows and the non-registry candidate rows. Returns one record
     per (row, bank) with the class (affiliate, holding, media_sponsored, coop_system or
-    other_filer_named_bank), the bank root it maps through and the Mapper's answer for it, and
-    the system of every credit-cooperative advertiser."""
+    other_filer_named_bank), the bank root it maps through and the Mapper's answer for it; and,
+    per credit-cooperative advertiser, the systems its rows were given.
+
+    A cooperative's system is decided per CRT, from the most specific evidence: the system its
+    film names; else the one its IF.data name carries in that quarter; else the one its ANCINE
+    name carries; else the single system all its films and ANCINE names carry. The IF.data name
+    is dated and the ANCINE name is not: UNICRED CEARA CENTRO NORTE keeps that name on its CRTs
+    of 2015-2026, while the lists call it SICREDI from 2016. A cooperative that changed systems
+    therefore keeps each film with the system of its time, and one whose evidence points two
+    ways gets no system."""
     u = u.copy()
     u["adv_fold"] = u[COL_ADV].fillna("").map(fold)
+    u["adv_words"] = u[COL_ADV].fillna("").map(name_words)
     u["advertiser_key"] = advertiser_key(u["cnpj8"], u["adv_fold"])
     u["brand_text"] = [brand_text(p, t) for p, t in zip(u[COL_PROD], u[COL_TITLE])]
-    types = {}
-    for key, name, reg in u[["advertiser_key", "adv_fold", "in_registry"]].drop_duplicates() \
-            .itertuples(index=False):
-        types[(key, name, reg)] = filer_type(key, name, reg)
-    u["filer_type"] = [types[k] for k in zip(u["advertiser_key"], u["adv_fold"], u["in_registry"])]
-    systems = coop_systems(u)
+    reg_names = dated_registry_names(reg_sub)
+    # One type per advertiser: a CNPJ root is one legal entity whatever name a row spells.
+    per_key = u.groupby("advertiser_key").agg(
+        names=("adv_words", lambda s: " | ".join(sorted(set(s)))),
+        in_registry=("in_registry", "any"),
+        texts=("brand_text", lambda s: " | ".join(sorted(set(s)))))
+    ftype = {k: filer_type(k, r["names"], name_at(reg_names, k, 999999),
+                           bool(r["in_registry"]))
+             for k, r in per_key.iterrows()}
+    u["filer_type"] = u["advertiser_key"].map(ftype)
+    key_system = {}
+    for k, r in per_key[per_key.index.map(ftype) == "credit_coop"].iterrows():
+        found = set(systems_in(r["names"])) | set(systems_in(r["texts"]))
+        key_system[k] = found.pop() if len(found) == 1 else None
 
     recs = []
+    given: dict[str, set[str]] = {}
     for idx, r in zip(u.index, u.itertuples(index=False)):
         text = r.brand_text
         # A film that names its own advertiser's root is that advertiser's own film, left
@@ -1273,9 +1325,9 @@ def attribute(u: pd.DataFrame, mapper: Mapper, roots: set[str]) -> tuple[pd.Data
         suspect = bool(EVENT_VENUE.search(text))
         ft = r.filer_type
 
-        def add(cls, bank, basis=None, evidence=None, flag=False):
+        def add(cls, bank, basis=None, evidence=None, flag=False, target=None):
             recs.append({"row": idx, "attribution": cls, "bank_named": bank,
-                         "target_cnpj8": BRAND_ROOT.get(bank) if cls != "affiliate" else None,
+                         "target_cnpj8": target or BRAND_ROOT.get(bank),
                          "attach_basis": basis, "evidence": evidence,
                          "naming_rights_suspect": flag})
 
@@ -1283,8 +1335,8 @@ def attribute(u: pd.DataFrame, mapper: Mapper, roots: set[str]) -> tuple[pd.Data
         if ft == "affiliate":
             a = AFFILIATES[r.advertiser_key]
             if a.get("until") is None or r.ym <= a["until"]:
-                add("affiliate", a["bank"], a["basis"], a["evidence"], a.get("institute", False))
-                recs[-1]["target_cnpj8"] = a["root"]
+                add("affiliate", a["bank"], a["basis"], a["evidence"], a.get("institute", False),
+                    target=a["root"])
                 taken.add(a["bank"])
         elif ft == "holding":
             h = HOLDINGS[r.advertiser_key]
@@ -1293,14 +1345,26 @@ def attribute(u: pd.DataFrame, mapper: Mapper, roots: set[str]) -> tuple[pd.Data
                     add("holding", lab, "control", h["evidence"], suspect)
                     taken.add(lab)
         elif ft == "credit_coop":
-            sysname = systems.get(r.advertiser_key, "")
+            in_text = systems_in(text)
+            in_name = systems_in(r.adv_words)
+            in_reg = systems_in(name_at(reg_names, r.cnpj8, r.ym))
+            if len(in_text) == 1:
+                sysname, how = in_text[0], "its film names " + in_text[0].upper()
+            elif in_reg:
+                sysname, how = in_reg[0], ("its IF.data name in that quarter carries "
+                                           + in_reg[0].upper())
+            elif in_name:
+                sysname, how = in_name[0], "its ANCINE name carries " + in_name[0].upper()
+            elif key_system.get(r.advertiser_key):
+                sysname = key_system[r.advertiser_key]
+                how = "its other films or names carry " + sysname.upper()
+            else:
+                sysname, how = None, None
+            if sysname:
+                given.setdefault(r.advertiser_key, set()).add(sysname)
             if sysname in ATTACHED_SYSTEMS:
-                how = ("its name carries " if any(rx.search(r.adv_fold) for lab, rx in SYSTEM_RX
-                                                  if lab == sysname)
-                       else "its films name ") + sysname.upper()
                 add("coop_system", sysname, "brand", f"{sysname} system cooperative: {how}")
-                taken.add(sysname)
-            # Its own system named in its films is the same attribution, not another bank.
+            # Its own system named in its films is that same attribution, not another bank.
             taken.update(lab for lab, _ in SYSTEM_RX)
         elif ft == "media":
             for lab in named:
@@ -1326,9 +1390,10 @@ def attribute(u: pd.DataFrame, mapper: Mapper, roots: set[str]) -> tuple[pd.Data
                                      "registry_reason", "panel_code", "match_method",
                                      "unmapped_reason"]).rename(columns={"cnpj8": "target_cnpj8"})
     body = u.drop(columns=["map_quarter", "registry_code", "registry_reason", "panel_code",
-                           "match_method", "unmapped_reason"], errors="ignore")
+                           "match_method", "unmapped_reason", "adv_words"], errors="ignore")
     out = (rec.merge(body, left_on="row", right_index=True, how="left", validate="many_to_one")
               .merge(assigned, on=["target_cnpj8", "ym"], how="left", validate="many_to_one"))
+    systems = {k: "; ".join(sorted(v)) for k, v in given.items()}
     return out.drop(columns="row"), systems
 
 
@@ -1739,7 +1804,9 @@ def summary(manifest: dict, header: list[str], st: ReadStats, lines: pd.DataFram
     log.info("attributed CRTs by class and filer:\n%s",
              att.groupby(["attribution", "advertiser_key", "panel_code"])
                 .agg(n_crt=(COL_CRT, "nunique"), name=(COL_ADV, "first"))
-                .reset_index().sort_values(["attribution", "n_crt"], ascending=[True, False])
+                .reset_index().assign(advertiser_key=lambda d: d["advertiser_key"].str[:30],
+                                      name=lambda d: d["name"].str[:60])
+                .sort_values(["attribution", "n_crt"], ascending=[True, False])
                 .to_string(index=False))
     log.info("review file: %s", review["attribution"].value_counts().to_dict())
     adv24 = set(per_crt.loc[(per_crt["year"] == 2024)
@@ -1844,7 +1911,7 @@ def main() -> None:
              unmapped["unmapped_reason"].value_counts().to_dict())
     u = pd.concat([unmapped.assign(in_registry=True),
                    add_dates(cand).assign(in_registry=False)], ignore_index=True)
-    att, systems = attribute(u, mapper, roots)
+    att, systems = attribute(u, mapper, roots, reg_sub)
     attributed = att[att["attribution"].isin(ATTRIBUTIONS) & att["panel_code"].notna()]
     log.info("attribution records: %s; mapped to a panel code: %s",
              att["attribution"].value_counts().to_dict(),

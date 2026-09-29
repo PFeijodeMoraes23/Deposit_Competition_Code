@@ -120,6 +120,25 @@ def disp(v, lhs=None):
     return _st.display_mult(v, lhs=_st.PHI_DISPLAY if lhs is None else lhs)
 
 
+def fmt3(x, digits=3):
+    """Fixed-point display at `digits` decimals -- the paper's rounding rule for every
+    displayed coefficient, SE, interval bound and other statistic. A value that is negative but
+    rounds to zero at this precision must never print as a spurious -0.000, so the sign is
+    dropped whenever the formatted magnitude comes out all zeros."""
+    s = f"{x:.{digits}f}"
+    if s.startswith("-") and float(s) == 0.0:
+        s = s[1:]
+    return s
+
+
+def pdflatex_clean(stdout: str) -> bool:
+    """True unless the pdflatex transcript contains a LaTeX error (a line starting with '!').
+    -interaction=nonstopmode keeps going after an error -- inserting placeholders, skipping the
+    offending construct -- and can still leave a non-empty PDF behind, so checking only that the
+    PDF exists and has a nonzero size calls a page of cascading errors a success."""
+    return not any(line.startswith('!') for line in stdout.splitlines())
+
+
 # Appendix caption = stage + a reference to the estimation strategy enumerated in V_Main
 # (Section ref{sec:empirical:sleep}); no ad-hoc strategy names. An estimator with no
 # enumerate label falls back to a plain (Est. N) tag.
@@ -166,15 +185,7 @@ def build_first_stage_table(results_dict, est_num):
     multispan = 4
     caption = _strategy_caption("First Stage --- Deposit Spread on Instruments", est_num)
     label = f"tab:est{est_num}_first_stage"
-    notes = (
-        r"\footnotesize \textit{Notes:} Standard errors (WCB at the "
-        r"conglomerate level; \textcite{cameron2008bootstrap}, \textcite{mackinnon2017wild}) "
-        r"in parentheses. Coefficients are in \emph{percentage points of the quarterly "
-        r"deposit spread} per the unit given in the row label, matching the units of the "
-        r"second-stage tables. $t$-statistics, $p$-values and significance stars are "
-        r"invariant to these units. "
-        r"Significance levels: *** $p<0.01$, ** $p<0.05$, * $p<0.1$."
-    )
+    notes = r"\footnotesize \textit{Notes:} " + _notes.first_stage_note(pooled=True)
 
     def _get_res(iv_key, p):
         entry = results_dict.get(f"{iv_key} x {p}")
@@ -214,7 +225,7 @@ def build_first_stage_table(results_dict, est_num):
                     c, se, pval = res.params[var], res.bse[var], res.pvalues[var]
                     m = disp(var, lhs=_st.SPREAD_DISPLAY)   # LHS here is the spread, not phi
                     c, se = c * m, se * m
-                    coef_strs.append(f"${c:.4f}^{{{stars(pval)}}}$"); se_strs.append(f"$({se:.4f})$")
+                    coef_strs.append(f"${fmt3(c)}^{{{stars(pval)}}}$"); se_strs.append(f"$({fmt3(se)})$")
                 else:
                     coef_strs.append(""); se_strs.append("")
             if has_val:
@@ -225,9 +236,9 @@ def build_first_stage_table(results_dict, est_num):
             res = _get_res(ik, panel)
             if res is None:
                 obs_l.append("---"); rsq_l.append("---"); fstat_l.append("---"); g_l.append("---"); continue
-            obs_l.append(f"{int(res.nobs):,}"); rsq_l.append(f"{res.rsquared:.4f}")
+            obs_l.append(f"{int(res.nobs):,}"); rsq_l.append(fmt3(res.rsquared))
             fv = getattr(res, 'fvalue', None); fp = getattr(res, 'f_pvalue', 1.0)
-            fstat_l.append(f"${fv:.2f}^{{{stars(fp)}}}$" if fv is not None else "---")
+            fstat_l.append(f"${fmt3(fv)}^{{{stars(fp)}}}$" if fv is not None else "---")
             g_l.append(str(getattr(res, 'G_nominal', '---')))
         lines += [r"    \midrule", "    Observations & " + " & ".join(obs_l) + r" \\",
                   "    $R^2$ & " + " & ".join(rsq_l) + r" \\", "    F-Statistic & " + " & ".join(fstat_l) + r" \\",
@@ -282,7 +293,8 @@ def build_second_stage_table(results_dict, est_num):
     label = f"tab:est{est_num}_second_stage"
     caption = _strategy_caption("Second Stage", est_num)
     notes = (
-        r"\footnotesize \textit{Notes:} " + _notes.second_stage_note(columns="specifications")
+        r"\footnotesize \textit{Notes:} " + _notes.second_stage_note(
+            _notes.sample_clause(pooled=True), _notes.effects_clause("ame"))
     )
 
     def _get_res(ek, p):
@@ -356,12 +368,12 @@ def build_second_stage_table(results_dict, est_num):
                     _bd = _ame_band_row(res, var)
                     if _bd is not None:
                         _ci_cols.add(_ek_label)
-                        coef_strs.append(f"${c:.4f}^{{{_bd[2]}}}$")
-                        se_strs.append(f"$[{_bd[0]*m:.4f}, {_bd[1]*m:.4f}]{mark}$")
+                        coef_strs.append(f"${fmt3(c)}^{{{_bd[2]}}}$")
+                        se_strs.append(f"$[{fmt3(_bd[0]*m)}, {fmt3(_bd[1]*m)}]{mark}$")
                     else:
                         _n_se_cells += 1
-                        coef_strs.append(f"${c:.4f}^{{{stars(pval)}}}$")
-                        se_strs.append(f"$({se:.4f}){mark}$")
+                        coef_strs.append(f"${fmt3(c)}^{{{stars(pval)}}}$")
+                        se_strs.append(f"$({fmt3(se)}){mark}$")
                 else:
                     coef_strs.append(""); se_strs.append("")
             if has_val:
@@ -374,18 +386,19 @@ def build_second_stage_table(results_dict, est_num):
             if res is None:
                 obs_l.append("---"); rsq_l.append("---"); g_l.append("---"); continue
             nv = getattr(res, 'nobs', None); obs_l.append(f"{int(nv):,}" if nv is not None else "---")
-            rv = getattr(res, 'rsquared', None); rsq_l.append(f"{rv:.4f}" if rv is not None else "---")
+            rv = getattr(res, 'rsquared', None); rsq_l.append(fmt3(rv) if rv is not None else "---")
             g_l.append(str(getattr(res, 'G_nominal', '---')))
         lines += [r"    \midrule", "    Observations & " + " & ".join(obs_l) + r" \\",
                   "    $R^2$ & " + " & ".join(rsq_l) + r" \\", "    Fixed Effects & Yes & Yes & Yes & Yes \\\\",
                   "    Clusters ($G$) & " + " & ".join(g_l) + r" \\", r"    \bottomrule"]
     lines += [r"\end{xltabular}", r"\endgroup", r"\doublespacing"]
-    # The opening describes what the cells printed. A column label is not enough: the band is
-    # attached to the spec-12 fit only, so the same Hausman column prints an interval in one
-    # panel and an SE in another. Count cells.
+    # The inference clause describes what the cells printed. A column label is not enough: a
+    # band is attached fit by fit, so a column whose attach is missing in one panel prints an
+    # interval there and an SE in the other. Count cells.
     _bands = (True if not _n_se_cells else (False if not _ci_cols else "mixed"))
     return "\n".join(lines).replace(
-        _notes.OPEN_TOKEN, _notes.note_open(_bands) + (_notes.reversed_draws_note(
+        _notes.OPEN_TOKEN, _notes.note_open(_bands, two_stage=", two-stage")
+        + (_notes.reversed_draws_note(
             e.get("second_stage") for e in results_dict.values() if isinstance(e, dict))
             if _bands else "")).replace(
         _sen.NOTE_TOKEN, _sen.national_note(_nat_schemes, dk_bracket=False)).replace(
@@ -400,6 +413,7 @@ _STANDALONE_PREAMBLE = r"""\documentclass[12pt]{article}
 \usepackage[english]{babel}
 \usepackage{amssymb, mathrsfs, amsthm, mathtools}
 \usepackage{graphicx, float}
+\usepackage{xltabular}
 \usepackage{setspace}
 \usepackage{multirow}
 \usepackage{booktabs}
@@ -457,7 +471,7 @@ def export_link_results(est_num, title):
             res_final = subprocess.run(["pdflatex", "-interaction=nonstopmode", wrapper_name],
                                        cwd=str(TEX_OUT_DIR), capture_output=True, text=True)
         pdf_path = TEX_OUT_DIR / f"est{est_num}_sleep_results.pdf"
-        if pdf_path.exists() and pdf_path.stat().st_size > 0:
+        if pdf_path.exists() and pdf_path.stat().st_size > 0 and pdflatex_clean(res_final.stdout):
             print("\n *** PDF SUCCESSFULLY GENERATED. ***\n")
         else:
             print(f"\n *** PDF GENERATION FAILED. Log tail:\n{res_final.stdout[-800:]}\n ***\n")

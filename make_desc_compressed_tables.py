@@ -99,12 +99,22 @@ PIX_POST_START = (2020, 4)
 # reads in the same unit as the price coefficient. The Selic rate is reported on the same
 # compounding: 100 * [(1 + r^f_q)^4 - 1], in percent per year.
 SPREAD_UNIT = "pp p.a."
-SPREAD_CONVENTION_TEX = (
-    r"Spreads are annualized, compounded and in percentage points: "
-    r"$100\,[(1+r^{f}_{q})^{4}-(1+r^{\mathrm{dep}}_{q})^{4}]$, with "
-    r"$r^{\mathrm{dep}}_{q}=r^{f}_{q}-s_{q}$, where $r^{f}_{q}$ is the quarterly Selic rate "
-    r"and $s_{q}$ the quarterly spread (the risk-free rate minus the offered deposit rate). "
-)
+
+# ---------------------------------------------------------------------------
+# Table-note building blocks. Every descriptive table (Tables 1-2, A.3, A.4 and the
+# Summary_* family in make_desc_panel_tables.py) states a shared convention with the
+# same words, so the notes read identically across the paper. Notes are set in
+# \footnotesize and kept short: sample, units not in the labels, inference, caveats.
+# ---------------------------------------------------------------------------
+NOTE_FONT   = r"\footnotesize"
+NOTE_SPREAD = r"Spreads: Selic minus deposit rate, both compounded to annual rates, in pp."
+NOTE_MONEY  = r"Values in nominal R\$ millions."
+NOTE_STARS  = r"$^{*}\,p<0.10$, $^{**}\,p<0.05$, $^{***}\,p<0.01$."
+
+
+def table_note(*sentences: str) -> str:
+    """'Notes:' paragraph body (no font switch) from sentences; empty items are skipped."""
+    return r"\textit{Notes:} " + " ".join(s.strip() for s in sentences if s and s.strip())
 
 
 def annualized_spread_pp(spread_qoq, rf_qoq):
@@ -120,53 +130,66 @@ def annualized_rate_pct(r_qoq):
 # ---------------------------------------------------------------------------
 # Display formatting (consistent with make_desc_panel_tables.py)
 # ---------------------------------------------------------------------------
-# (label, unit string, scale divisor or None, decimals)
+# (label, unit string, scale divisor or None)
 # Monetary values are all nominal R$ millions, so deposits and assets read on one scale.
 LABEL_MAP = {
-    "total_deposits":            ("Total Deposits", r"R\$M",        1e6,  2),
-    "total_assets":              ("Total Assets",            r"R\$M",        1e6,  2),
-    "log_total_assets":          ("Log Total Assets",        "",             None, 3),
-    "log_dep":                   ("Log Deposits",  "",             None, 3),
-    "equity_ratio":              ("Equity Ratio",            "",             None, 3),
-    "dep_a1":                    ("Deposits (1)",            r"R\$M",        1e6,  2),
-    "dep_a2":                    ("Deposits (2)",            r"R\$M",        1e6,  2),
-    "dep_a4":                    ("Deposits (4)",            r"R\$M",        1e6,  2),
-    "dep_a5":                    ("Deposits (5)",            r"R\$M",        1e6,  2),
-    "log_dep_a4":                ("Log Deposits (4)",        "",             None, 3),
-    "n_mcas_served":             ("MCAs Served",             "count",        None, 1),
+    "total_deposits":            ("Total Deposits", r"R\$M",        1e6),
+    "total_assets":              ("Total Assets",            r"R\$M",        1e6),
+    "log_total_assets":          ("Log Total Assets",        "",             None),
+    "log_dep":                   ("Log Deposits",  "",             None),
+    "equity_ratio":              ("Equity Ratio",            "",             None),
+    "dep_a1":                    ("Deposits (1)",            r"R\$M",        1e6),
+    "dep_a2":                    ("Deposits (2)",            r"R\$M",        1e6),
+    "dep_a4":                    ("Deposits (4)",            r"R\$M",        1e6),
+    "dep_a5":                    ("Deposits (5)",            r"R\$M",        1e6),
+    "log_dep_a4":                ("Log Deposits (4)",        "",             None),
+    "n_mcas_served":             ("MCAs Served",             "count",        None),
     # Table 2 specific
-    "n_b_firms":                 ("Number of B Firms",       "count",        None, 2),
-    "hhi_b":                     ("HHI (B firms)",           "",              None, 0),
-    "hhi_d_natl":                ("HHI (D firms, national)", "",              None, 0),
-    "hhi_combined_natl":         ("HHI (B+D, national)",     "",              None, 0),
-    "risk_free_qoq":              ("SELIC (risk-free)",         r"\% qoq",      0.01, 2),
+    "n_b_firms":                 ("Number of B Firms",       "count",        None),
+    "hhi_b":                     ("HHI (B firms)",           "",              None),
+    "hhi_d_natl":                ("HHI (D firms, national)", "",              None),
+    "hhi_combined_natl":         ("HHI (B+D, national)",     "",              None),
+    "risk_free_qoq":              ("SELIC (risk-free)",         r"\% qoq",      0.01),
     # Annualized spreads (percentage points) and the annualized Selic rate (percent),
     # both already on the display scale when computed (see annualized_spread_pp).
-    "spread_ann_a4":             ("Spread (4)",              SPREAD_UNIT,    None, 2),
-    "spread_ann_a5":             ("Spread (5)",              SPREAD_UNIT,    None, 2),
-    "spread_ann_a4_w":           ("Spread (4), B firms",     SPREAD_UNIT,    None, 2),
-    "spread_ann_a5_w":           ("Spread (5), B firms",     SPREAD_UNIT,    None, 2),
-    "spread_ann_a4_d_w":         ("Spread (4), D firms",     SPREAD_UNIT,    None, 2),
-    "spread_ann_a5_d_w":         ("Spread (5), D firms",     SPREAD_UNIT,    None, 2),
-    "spread_ann_a4_natl_w":      ("Spread (4), National (B+D)", SPREAD_UNIT, None, 2),
-    "spread_ann_a5_natl_w":      ("Spread (5), National (B+D)", SPREAD_UNIT, None, 2),
-    "risk_free_ann":             ("SELIC (risk-free)",        r"\% p.a.",     None, 2),
-    "n_d_firms_natl":            ("Number of D Firms (nat.)", "count",       None, 0),
+    "spread_ann_a4":             ("Spread (4)",              SPREAD_UNIT,    None),
+    "spread_ann_a5":             ("Spread (5)",              SPREAD_UNIT,    None),
+    "spread_ann_a4_w":           ("Spread (4), B firms",     SPREAD_UNIT,    None),
+    "spread_ann_a5_w":           ("Spread (5), B firms",     SPREAD_UNIT,    None),
+    "spread_ann_a4_d_w":         ("Spread (4), D firms",     SPREAD_UNIT,    None),
+    "spread_ann_a5_d_w":         ("Spread (5), D firms",     SPREAD_UNIT,    None),
+    "spread_ann_a4_natl_w":      ("Spread (4), National (B+D)", SPREAD_UNIT, None),
+    "spread_ann_a5_natl_w":      ("Spread (5), National (B+D)", SPREAD_UNIT, None),
+    "risk_free_ann":             ("SELIC (risk-free)",        r"\% p.a.",     None),
+    "n_d_firms_natl":            ("Number of D Firms (nat.)", "count",       None),
     # Table 3 specific
-    "pop_total":                 ("Population",              "Thousands",    1e3,  1),
-    "gdp_per_capita":            (r"GDP \textit{per capita}", r"R\$",         None, 0),
+    "pop_total":                 ("Population",              "Thousands",    1e3),
+    "gdp_per_capita":            (r"GDP \textit{per capita}", r"R\$",         None),
     # Shares are reported in PERCENTAGE POINTS, matching the unit their coefficients carry
     # in the sleepiness and BBL policy-function tables (utils/state_transform.DISPLAY, where
     # fraction_65plus is (0.01, 'pp')). Printing a bare 0.109 here while the coefficient
     # reads "per pp" is what makes SD x coefficient impossible to do in one's head.
-    "fraction_65plus":           ("Share Aged 65+",          "pp",           0.01, 1),
-    "cadunico_families_per1000": (r"Cad\'Unico Families",    "per 1{,}000",  None, 2),
-    "branches_per1000":          ("Bank Branches",           "per 1{,}000",  None, 3),
+    "fraction_65plus":           ("Share Aged 65+",          "pp",           0.01),
+    "cadunico_families_per1000": (r"Cad\'Unico Families",    "per 1{,}000",  None),
+    "branches_per1000":          ("Bank Branches",           "per 1{,}000",  None),
     # ANATEL active mobile-telephony accesses, all technologies (scrape_anatel_mobile.py).
-    "connections_per100":        ("Mobile Lines",            "per 100 inhabitants", None, 2),
-    "pix_users_pf_per1000":      ("PIX Users (PF)",          "per 1{,}000",  None, 2),
-    "pix_txns_pf":               ("PIX Transactions (PF)",   "Millions",     1e6,  2),
+    "connections_per100":        ("Mobile Lines",            "per 100 inhabitants", None),
+    "pix_users_pf_per1000":      ("PIX Users (PF)",          "per 1{,}000",  None),
+    "pix_txns_pf":               ("PIX Transactions (PF)",   "Millions",     1e6),
 }
+
+# LEVELS (a monetary amount, an HHI on the 0-10,000 concentration-index scale, or a
+# population/transaction count expressed in Thousands/Millions) print as integers with
+# thousands separators, per the author's decision. Every other variable -- rates, shares,
+# spreads, ratios, densities (per 100 / per 1,000 inhabitants) and log/coefficient-like
+# values -- prints to 3 decimals. n_d_firms_natl is handled next to LEVEL_VARS in _fmt_val
+# (same integer formatting) but is kept out of this set: it is an exact firm headcount, not
+# a rounded aggregate.
+LEVEL_VARS = frozenset({
+    "total_deposits", "total_assets", "dep_a1", "dep_a2", "dep_a4", "dep_a5",
+    "hhi_b", "hhi_d_natl", "hhi_combined_natl",
+    "pop_total", "gdp_per_capita", "pix_txns_pf",
+})
 
 
 def _esc(s) -> str:
@@ -178,9 +201,12 @@ def _fmt_val(val, var_base):
         return "--"
     info = LABEL_MAP.get(var_base)
     if info is None:
-        return f"{val:.3f}"
-    _lbl, _unit, scale, dec = info
+        return f"{val:,.3f}"
+    _lbl, _unit, scale = info
     v = val / scale if scale is not None else val
+    # Levels (LEVEL_VARS) and n_d_firms_natl (an exact firm headcount) print as integers;
+    # every rate, share, spread, ratio, density and log/coefficient prints to 3 decimals.
+    dec = 0 if (var_base in LEVEL_VARS or var_base == "n_d_firms_natl") else 3
     s = f"{v:,.{dec}f}"
     # A value that rounds to zero prints unsigned ("-0.00" carries no sign information).
     if s.startswith("-") and float(s[1:].replace(",", "")) == 0.0:
@@ -192,7 +218,7 @@ def _row_label(var_base) -> str:
     info = LABEL_MAP.get(var_base)
     if info is None:
         return _esc(var_base)
-    lbl, unit, _, _ = info
+    lbl, unit, _ = info
     return lbl + (f" ({unit})" if unit else "")
 
 
@@ -594,22 +620,21 @@ def render_table1(moments_b, moments_d, moments_all, meta, weight_col, suffix) -
     body += _panel("Panel B: Digital (D) Firms",
                    moments_d, meta["n_firms_D"], meta["n_firm_quarters_D"])
 
+    # The closing \par sits inside the group so the note is set single-spaced in
+    # \footnotesize before the \doublespacing that follows the table takes effect.
     notes = (
-        r"\par\noindent{\footnotesize \textit{Notes:} Each observation is a prudential "
-        f"conglomerate $\\times$ quarter, {MIN_YEAR}Q1--{MAX_YEAR}Q4. Monetary values are nominal "
-        r"R\$ millions; deposits are summed across MCAs within the firm-quarter. A zero type-$k$ "
-        r"balance means the product is not offered and is excluded from that row, so $N$ varies "
-        f"across rows: {meta['n_firms_B_no_savings']} of the {meta['n_firms_B']} B conglomerates, "
-        r"mostly wholesale, foreign and mid-sized banks, report no savings (type-2) balance in any "
-        r"quarter. Type-5 (prepaid) rows start in 2020Q4. Spreads are deposit-weighted within "
-        r"firm-quarter and deposit type, over firm-quarters with a positive balance of that type. "
-        + SPREAD_CONVENTION_TEX
-        + r"Panel B includes conglomerates that take no retail deposits: "
-        f"{meta['n_firms_D_no_deposits']} of the {meta['n_firms_D']} D conglomerates "
-        r"(microenterprise-credit, direct-credit, finance and leasing companies) report no deposits "
-        f"in any quarter, and {meta['n_fq_D_no_deposits']:,} of the "
-        f"{meta['n_firm_quarters_D']:,} D firm-quarters carry none. These firm-quarters enter only "
-        r"the total-assets and equity-ratio rows.}"
+        r"\par\noindent{" + NOTE_FONT + " " + table_note(
+            f"Conglomerate-quarters, {MIN_YEAR}Q1--{MAX_YEAR}Q4; deposits summed across MCAs.",
+            NOTE_MONEY,
+            r"Zero balances (product not offered) are excluded, so $N$ varies by row; "
+            f"{meta['n_firms_B_no_savings']} of {meta['n_firms_B']} B conglomerates never offer "
+            r"savings. Type 5 from 2020Q4.",
+            r"Spreads are deposit-weighted within firm-quarter and type.",
+            NOTE_SPREAD,
+            f"Panel B includes {meta['n_firms_D_no_deposits']} D conglomerates that never take "
+            r"deposits (credit, finance and leasing firms); they enter only the assets and "
+            r"equity rows.",
+        ) + r"\par}"
     )
 
     tex = "\n".join([
@@ -992,21 +1017,16 @@ def render_table2a(t2_df, weight_col, suffix) -> str:
         rows_b.append(" & ".join(cells) + r" \\")
 
     unit_b = f"({SPREAD_UNIT})"
-    notes = (
-        r"\scriptsize \textit{Notes:} Annual averages of quarterly values, "
-        f"{MIN_YEAR}--{MAX_YEAR}. "
-        r"Panel A: No.\ B Firms counts the conglomerates with positive deposits in the "
-        r"MCA-quarter and HHI (B) is the within-MCA HHI of B-firm deposit shares; both are "
-        r"averaged over the year's MCA-quarters weighted by MCA deposits. No.\ D Firms counts "
-        r"the D conglomerates with positive deposits in the year, and HHI (B+D) is the national "
-        r"HHI of B and D conglomerates' deposits. MCA-Qtrs.\ ($N$) counts the MCA-quarters with "
-        r"B-firm presence. "
-        r"Panel B: SELIC is the year's mean quarterly rate compounded to an annual percent. "
-        + SPREAD_CONVENTION_TEX
-        + r"B spreads are deposit-weighted within each MCA-quarter, then averaged over "
-        r"MCA-quarters weighted by MCA deposits; D spreads are deposit-weighted over the year's "
-        r"D firm-quarters. Type-5 spreads are defined from 2020Q4 (the 2020 value covers that "
-        r"quarter only) and are blank before."
+    notes = NOTE_FONT + " " + table_note(
+        f"Annual means of quarterly values, {MIN_YEAR}--{MAX_YEAR}.",
+        r"Panel A: No.\ B Firms counts conglomerates with positive deposits in the MCA-quarter "
+        r"and HHI (B) is the within-MCA HHI of B deposits, both averaged across MCA-quarters "
+        r"weighted by MCA deposits; No.\ D Firms counts D conglomerates with positive deposits; "
+        r"HHI (B+D) is national; $N$ counts MCA-quarters with B presence.",
+        r"Panel B: SELIC is the mean quarterly rate compounded to an annual rate.",
+        NOTE_SPREAD,
+        r"B spreads are deposit-weighted within and across MCA-quarters, D spreads across "
+        r"firm-quarters. Type 5 from 2020Q4 (2020 covers Q4 only).",
     )
 
     tex = "\n".join([
@@ -1111,9 +1131,10 @@ def render_table2b(t2_df, weight_col, suffix) -> str:
         r"\bottomrule",
         r"\end{tabular}",
         r"\begin{tablenotes}[flushleft]",
-        r"\item \scriptsize \textit{Notes:} SELIC is the year's mean quarterly rate compounded "
-        r"to an annual percent. " + SPREAD_CONVENTION_TEX
-        + r"Spread\,(5) is defined from 2020Q4 and shown as blank before 2020.",
+        r"\item " + NOTE_FONT + " " + table_note(
+            r"SELIC is the mean quarterly rate compounded to an annual rate.",
+            NOTE_SPREAD,
+            r"Spread\,(5) from 2020Q4; blank before 2020."),
         r"\end{tablenotes}",
         r"\end{threeparttable}",
         r"\end{table}",
@@ -1363,7 +1384,7 @@ def render_table3(t3_df, weight_col, suffix, latest_year) -> str:
             f"{int(n_row.iloc[0][c]):,}" for c in region_cols) + r" \\")
 
     notes = (
-        r"\scriptsize \textit{Notes:} Each cell is the cross-MCA mean within "
+        NOTE_FONT + r" \textit{Notes:} Each cell is the cross-MCA mean within "
         r"the macro-region, using only B-firm coverage to identify local "
         r"markets. MCA-level values are obtained by averaging across firms "
         r"and quarters within the latest sample year "
@@ -1409,7 +1430,7 @@ T4_DIFF_UNIT = {
     "spread_ann_a4":    "pp",
     "equity_ratio_pct": "pp",
 }
-LABEL_MAP["equity_ratio_pct"] = ("Equity Ratio", r"\% of assets", None, 2)
+LABEL_MAP["equity_ratio_pct"] = ("Equity Ratio", r"\% of assets", None)
 
 
 def build_table4(df: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
@@ -1483,8 +1504,8 @@ def render_table4(t4_df, meta, suffix) -> str:
             f"{_fmt_val(r['post_mean'], vb)} & "
             f"{diff_cell} & "
             f"{T4_DIFF_UNIT.get(vb, '')} & "
-            f"{int(r['G'])} & "
-            f"{r['G_star']:.1f} \\\\"
+            f"{int(r['G']):,} & "
+            f"{r['G_star']:.3f} \\\\"
         )
         body.append(
             f" & & & {se_cell} & & & \\\\[0.3em]"
@@ -1501,28 +1522,19 @@ def render_table4(t4_df, meta, suffix) -> str:
         r"& count & \multicolumn{2}{c}{\textit{(no test)}} \\"
     )
 
-    notes = (
-        r"\scriptsize \textit{Notes:} The PIX threshold is "
-        r"$t \geq 2020\mathrm{Q}4$, the activation of the Brazilian instant "
-        r"payment system on Nov.\ 16, 2020. $\Delta$ is the post-minus-pre difference in means, in "
-        r"log points for the log rows ($100\,\Delta$ approximates a percent change) and in "
-        r"percentage points for the spread and the equity ratio. The pre and post samples differ "
-        f"in composition: {meta['n_d_firms_pre']:,} D conglomerates are active (positive total "
-        f"assets) before Pix and {meta['n_d_firms_post']:,} after, so $\\Delta$ compares pooled means "
-        r"over a changing set of firms rather than within-firm changes. Type-5 (prepaid) outcomes "
-        r"are not reported because type-5 balances are first recorded in 2020, leaving no pre-Pix "
-        r"comparison. Log Deposits is the log of total deposits defined as in "
-        r"Table~\ref{tab:Compressed_BankType_CrossSection}, the sum of types 1, 2, 4 and 5. "
-        + SPREAD_CONVENTION_TEX
-        + r"The spread row is restricted to firm-quarters with positive type-4 (time) deposits "
-        f"({meta['n_fq_dep4']:,} of the {meta['n_fq']:,} D firm-quarters, the sample of the D "
-        r"spread row in Table~\ref{tab:Compressed_BankType_CrossSection}); firm-quarters without "
-        r"time deposits have no observed time-deposit rate. "
-        r"$G$ is the number of conglomerate clusters entering the test; $G^{\star} = "
-        r"G/(1+\mathrm{CV}^2)$, with $\mathrm{CV}$ the coefficient of variation of cluster "
-        r"sizes, is the \textcite{carter2017asymptotic} effective number of clusters, used as "
-        r"the Student-$t$ degrees of freedom for the $p$-values. "
-        r"Stars: $^{*}\,p<0.10$, $^{**}\,p<0.05$, $^{***}\,p<0.01$."
+    notes = NOTE_FONT + " " + table_note(
+        f"D conglomerate-quarters, {MIN_YEAR}--{MAX_YEAR}; post: from 2020Q4 (Pix).",
+        r"$\Delta$: post minus pre mean, conglomerate-clustered SEs in parentheses, "
+        r"$p$-values from $t(G^{\star})$; $G$: clusters; $G^{\star}$: "
+        r"\textcite{carter2017asymptotic} effective clusters.",
+        f"Composition changes: {meta['n_d_firms_pre']:,} active D conglomerates pre, "
+        f"{meta['n_d_firms_post']:,} post.",
+        r"Log Deposits sums types 1, 2, 4 and 5, as in "
+        r"Table~\ref{tab:Compressed_BankType_CrossSection}.",
+        f"Spread row: firm-quarters with time deposits only ({meta['n_fq_dep4']:,} of "
+        f"{meta['n_fq']:,}).",
+        NOTE_SPREAD,
+        NOTE_STARS,
     )
 
     tex = "\n".join([
@@ -1606,7 +1618,7 @@ def render_appendix_rates(df: pd.DataFrame) -> str:
         )
 
     notes = (
-        r"\scriptsize \textit{Notes:} "
+        NOTE_FONT + r" \textit{Notes:} "
         r"SELIC overnight, CDI, and savings rates are quarterly rates compounded to annual: "
         r"$(1 + r_{\text{qoq}})^{4} - 1$, then averaged over the four quarters of each year. "
         r"COPOM Target is the last policy rate set by the Monetary Policy Committee within the year. "
@@ -1760,19 +1772,17 @@ _VARS_MASTER_GROUPS = [
 
 
 def render_variables_master() -> str:
-    notes = (
-        r"\footnotesize \textit{Notes:} Only variables entering an estimated "
-        r"specification are listed. ``Sleep'' = sleepiness estimation at specification (12), "
-        r"approaches \ref{estimation:local}--\ref{estimation:single_idx_time} of "
-        r"Section~\ref{sec:empirical:sleep} (state variables enter "
-        r"$\phi(\boldsymbol{S}_{mt})$ interacted with lagged deposits); "
-        r"``+Time'' = the \ref{estimation:single_idx_time} time block; ``Demand'' = logit/BLP demand "
-        r"system ($X$ = product characteristics, $\pi$ = estimated demographic "
-        r"interactions, shares = market-share construction). Auxiliary collected "
-        r"variables that enter no estimated specification (the population share aged "
-        r"15--20, additional Pix usage measures, 4G/5G share, branch and access-point "
-        r"densities, Cad\'Unico poverty shares, imputation and interpolation flags) are "
-        r"documented in the replication package's data dictionary."
+    notes = NOTE_FONT + " " + table_note(
+        r"Only variables entering an estimated specification are listed.",
+        r"``Sleep'': sleepiness estimation, specification (12), approaches "
+        r"\ref{estimation:local}--\ref{estimation:single_idx_time} of "
+        r"Section~\ref{sec:empirical:sleep}; ``+Time'': the \ref{estimation:single_idx_time} "
+        r"time block; ``Demand'': logit/BLP ($X$: product characteristics; $\pi$: estimated "
+        r"demographic interactions; shares: market-share construction).",
+        r"Collected variables that enter no specification (population share aged 15--20, other "
+        r"Pix measures, 4G/5G share, branch and access-point densities, Cad\'Unico poverty "
+        r"shares, imputation and interpolation flags) are documented in the replication "
+        r"package's data dictionary.",
     )
     rows = _grouped_rows(
         [(g, [(rf"{n}", d, s, u) for n, d, s, u in rws]) for g, rws in _VARS_MASTER_GROUPS],
@@ -1838,15 +1848,13 @@ _INSTR_MASTER_GROUPS = [
 
 
 def render_instruments_master() -> str:
-    notes = (
-        r"\footnotesize \textit{Notes:} ``Sleep 1st stage'' instruments enter "
-        r"the deposit-spread equation under the nested IV sets (cost shifters "
-        r"$\subset$ wholesale $\subset$ Hausman); ``Demand'' instruments form "
-        r"the $K=16$ vector $Z_{jt}$ of the logit/BLP moment conditions. "
+    notes = NOTE_FONT + " " + table_note(
+        r"``Sleep 1st stage'' instruments enter the deposit-spread equation under the nested "
+        r"IV sets (cost shifters $\subset$ wholesale $\subset$ Hausman); ``Demand'' instruments "
+        r"form the $K=16$ vector $Z_{jt}$ of the logit/BLP moment conditions.",
         r"Leave-one-out (LOO) instruments are built within group "
-        r"$g=(\text{MCA},\text{quarter})$: "
-        r"$\texttt{loo\_x}_j=\sum_{l\in g,\,l\neq j}x_l$ and "
-        r"$\texttt{mean\_loo\_x}_j=\texttt{loo\_x}_j/n_{\mathrm{rivals},j}$."
+        r"$g=(\text{MCA},\text{quarter})$: $\texttt{loo\_x}_j=\sum_{l\in g,\,l\neq j}x_l$ and "
+        r"$\texttt{mean\_loo\_x}_j=\texttt{loo\_x}_j/n_{\mathrm{rivals},j}$.",
     )
     rows = _grouped_rows(_INSTR_MASTER_GROUPS, n_cols=3)
     return _master_longtable(

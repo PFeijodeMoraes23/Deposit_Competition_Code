@@ -5,8 +5,9 @@ The demand model's ONLY endogenous regressor is the deposit spread (rf − dep_r
 markdown). The engine (`blp_logit.jl::project_spreads`) instruments it for deposit types 4
 and 5 with 15 excluded instruments: leave-one-out rival characteristics (`loo_*`/`mean_loo_*`),
 the rival count (`n_rivals`), cost ratios, and the capital ratio. The structural (logit) equation
-is δ = α·spread + Xβ + ξ, with δ = ln(s_data) (share_D for D-type, share_B_cond for B-type) and
-controls X = the product characteristics. Clustering is by `CodConglomeradoPrudencial`.
+is δ = α·spread + Xβ + ξ, with δ the logit mean utility ln s − ln s₀ that blp_logit.jl inverts
+(or, with --delta-stage, the RC δ(θ̂₂) of that stage) and controls X = the product
+characteristics. Clustering is by `CodConglomeradoPrudencial`.
 
 For each routine and each endogenous subsample (type 4, type 5, types 4+5 pooled) this reports:
 
@@ -58,22 +59,27 @@ PARSIMONIOUS_IV = ["loo_log_assets", "loo_equity_ratio", "loo_basileia",
                    "loo_credit_assets", "loo_npl_provision"]
 AR_GRID = np.linspace(-2.0, 2.0, 4001)   # α grid (spread coef, percentage-point units)
 
-# --delta-stage: invert AR/LM against the STRUCTURAL δ(θ̂₂) of an RC stage instead of the log-share
-# (θ₂ = 0) δ built below. The first-stage block (eff-F, KP-F, Cragg-Donald, partial R², collinearity)
-# is θ₂-INVARIANT — it is computed from the spread and Z alone and never touches δ — so only the
-# AR/LM/Hansen-J sets and the α̂ ladder change. Export the δ first with
+# The regressand δ. Default: the LOGIT (θ₂ = 0) mean utility that blp_logit.jl writes to
+# logit/logit_delta_E{k}_spec_12.bin — the Berry inversion δ = ln s − ln s₀ in the engine's market
+# structure (B products local, D products national, one outside option). Reading it rather than
+# rebuilding it here keeps one definition of the benchmark: the outside share is not a constant
+# (it varies with market structure), so a regressand of ln s alone is a different moment.
+# --delta-stage: invert AR/LM against the STRUCTURAL δ(θ̂₂) of an RC stage instead. The first-stage
+# block (eff-F, KP-F, Cragg-Donald, partial R², collinearity) is θ₂-INVARIANT — it is computed from
+# the spread and Z alone and never touches δ — so only the AR/LM/Hansen-J sets and the α̂ ladder
+# change. Export the δ first with
 #   julia --project=. blp_delta_export.jl --stage ext1
 # which writes cluster_processed/rc_delta_E{k}_spec_12_{stage}.bin (Int64 n, then n Float64).
 DELTA_STAGE = None       # set from the CLI in main()
 DELTA_DIR = None
+RES_DIR = None
 
 
-def _load_rc_delta(k, stage, ddir, n_expect):
-    """Read rc_delta_E{k}_spec_12_{stage}.bin. Returns None (with a printed reason) if unusable —
-    a silent fallback to the log-share δ would mislabel the whole run."""
-    path = os.path.join(ddir, f"rc_delta_E{k}_spec_12_{stage}.bin")
+def _read_delta_bin(path, k, n_expect):
+    """Int64 n, then n Float64 (little-endian) — the engine's save_delta_bin format. Returns None
+    (with a printed reason) if unusable: a silent fallback to another δ would mislabel the run."""
     if not os.path.isfile(path):
-        print(f"[weak-IV] E{k}: {os.path.basename(path)} not found — run blp_delta_export.jl first")
+        print(f"[weak-IV] E{k}: {path} not found")
         return None
     with open(path, "rb") as f:
         n = int(np.frombuffer(f.read(8), dtype="<i8")[0])
@@ -85,6 +91,25 @@ def _load_rc_delta(k, stage, ddir, n_expect):
         print(f"[weak-IV] E{k}: δ length {n:,} != parquet rows {n_expect:,} — REFUSING to align")
         return None
     return d.astype(float).copy()
+
+
+def _load_rc_delta(k, stage, ddir, n_expect):
+    """rc_delta_E{k}_spec_12_{stage}.bin, written by blp_delta_export.jl."""
+    return _read_delta_bin(os.path.join(ddir, f"rc_delta_E{k}_spec_12_{stage}.bin"), k, n_expect)
+
+
+def _load_logit_delta(k, res, n_expect):
+    """logit_delta_E{k}_spec_12.bin from the logit step's folder. Locally that folder is
+    BLP_RESULTS/logit; on the cluster the logit step writes data/output/logit, a SIBLING of
+    BLP_RESULTS (of_root.jl `logit_dir(out_dir)` with out_dir = data/output). Both are tried."""
+    name = f"logit_delta_E{k}_spec_12.bin"
+    for d in (os.path.join(res, "logit"), os.path.join(os.path.dirname(res), "logit")):
+        p = os.path.join(d, name)
+        if os.path.isfile(p):
+            return _read_delta_bin(p, k, n_expect)
+    print(f"[weak-IV] E{k}: {name} not found under {res}/logit or its sibling logit/ — "
+          f"run blp_logit.jl first")
+    return None
 
 # Named instrument groups (for the leave-one-group-out sensitivity). mean_loo is the collinear block.
 IV_GROUPS = {
@@ -296,11 +321,16 @@ def _battery(delta, spread, X, Z, codes, G):
             acc_lm[j] = acc_lm_a[j] = True          # statistic ≡ 0 ⇒ accept
     def _ci(acc):
         if not acc.any():
-            return dict(low=None, high=None, bounded=True, disconnected=False)
+            return dict(low=None, high=None, bounded=True, disconnected=False, segments=[])
         idx = np.where(acc)[0]
+        # Connected runs of accepted grid points, as [lo, hi] pairs: a disconnected set is a union
+        # of intervals, and its outer hull alone would print a gap as if it were accepted.
+        brk = np.where(np.diff(idx) > 1)[0]
+        starts, ends = np.r_[idx[0], idx[brk + 1]], np.r_[idx[brk], idx[-1]]
         return dict(low=float(AR_GRID[idx[0]]), high=float(AR_GRID[idx[-1]]),
                     bounded=not (acc[0] or acc[-1]),
-                    disconnected=bool((idx[-1] - idx[0] + 1) != len(idx)))
+                    disconnected=bool((idx[-1] - idx[0] + 1) != len(idx)),
+                    segments=[[float(AR_GRID[a]), float(AR_GRID[b])] for a, b in zip(starts, ends)])
     ar_ci, lm_ci = _ci(acc_ar), _ci(acc_lm)             # WCB (primary)
     ar_ci_a, lm_ci_a = _ci(acc_ar_a), _ci(acc_lm_a)     # asymptotic χ² (reference)
     # Just-identified robust CI: collapse to the single optimal instrument ŝ = Z̃π̂ (fitted first
@@ -329,14 +359,19 @@ def _battery(delta, spread, X, Z, codes, G):
         "mop_cv": mop_cv,                                  # simplified MOP effective-F critical values
         "ji_ci_low": ji_ci["low"], "ji_ci_high": ji_ci["high"], "ji_ci_bounded": ji_ci["bounded"],
         "ji_ci_disconnected": ji_ci["disconnected"],       # just-identified (single optimal IV) robust CI
+        "ji_ci_segments": ji_ci["segments"],
         # AR/LM confidence sets: wild-cluster-bootstrap criticals (few-cluster valid at G*≈7).
         "ci_method": "wcb", "wcb_reps": int(Bwcb), "wcb_scheme": scheme,
+        "grid": [float(AR_GRID[0]), float(AR_GRID[-1]), float(AR_GRID[1] - AR_GRID[0])],
         "lm_ci_low": lm_ci["low"], "lm_ci_high": lm_ci["high"],
         "lm_ci_bounded": lm_ci["bounded"], "lm_ci_disconnected": lm_ci["disconnected"],
+        "lm_ci_segments": lm_ci["segments"],
         "ar_ci_low": ar_ci["low"], "ar_ci_high": ar_ci["high"], "ar_ci_bounded": ar_ci["bounded"],
+        "ar_ci_segments": ar_ci["segments"],
         # asymptotic-χ² sets kept for reference (not few-cluster valid; the collapse to these shows
         # how much the WCB correction moves the CI).
         "lm_ci_chi2_low": lm_ci_a["low"], "lm_ci_chi2_high": lm_ci_a["high"],
+        "lm_ci_chi2_segments": lm_ci_a["segments"],
         "ar_ci_chi2_low": ar_ci_a["low"], "ar_ci_chi2_high": ar_ci_a["high"],
         "hansen_J": float(J), "hansen_J_df": int(Jdf),
         "hansen_J_p": float(1.0 - chi2.cdf(J, Jdf)),
@@ -568,21 +603,17 @@ def analyze_routine(k, dp):
         print(f"[weak-IV] E{k}: no demand parquet — skipped"); return None
     fs.sort(key=os.path.getmtime)
     need = list(dict.fromkeys(
-        ["spread_ann", "share_D", "share_B_cond", "is_B", "deposit_type",
-         "CodConglomeradoPrudencial"] + X_COLS + IV_COLS))
+        ["spread_ann", "deposit_type", "CodConglomeradoPrudencial"] + X_COLS + IV_COLS))
     df = pd.read_parquet(fs[-1], columns=[c for c in need if c is not None])
-    is_B = df["is_B"].fillna(False).astype(bool).to_numpy()
-    sD = df["share_D"].fillna(0.0).to_numpy(float)
-    sB = df["share_B_cond"].fillna(0.0).to_numpy(float)
-    delta = np.where(is_B, np.log(np.clip(sB, 1e-15, None)), np.log(np.clip(sD, 1e-15, None)))
     if DELTA_STAGE:
-        rc_delta = _load_rc_delta(k, DELTA_STAGE, DELTA_DIR, len(df))
-        if rc_delta is None:
-            print(f"[weak-IV] E{k}: skipped (no usable {DELTA_STAGE} δ)"); return None
-        delta = rc_delta
-        print(f"[weak-IV] E{k}: using STRUCTURAL δ from stage {DELTA_STAGE} "
-              f"(mean {delta.mean():+.3f}, sd {delta.std():.3f}); "
-              f"log-share δ would be (mean {np.where(is_B, np.log(np.clip(sB,1e-15,None)), np.log(np.clip(sD,1e-15,None))).mean():+.3f})")
+        delta = _load_rc_delta(k, DELTA_STAGE, DELTA_DIR, len(df))
+        src = f"STRUCTURAL δ from RC stage {DELTA_STAGE}"
+    else:
+        delta = _load_logit_delta(k, RES_DIR, len(df))
+        src = "LOGIT δ = ln s − ln s₀ (blp_logit.jl Berry inversion)"
+    if delta is None:
+        print(f"[weak-IV] E{k}: skipped (no usable δ)"); return None
+    print(f"[weak-IV] E{k}: {src} (mean {delta.mean():+.3f}, sd {delta.std():.3f})")
     spread = df["spread_ann"].fillna(0.0).to_numpy(float) / 100.0
     Xmat = np.column_stack([np.ones(len(df))] +
                            [df[c].fillna(0.0).to_numpy(float) if c in df else np.zeros(len(df))
@@ -620,6 +651,16 @@ def analyze_routine(k, dp):
         G = len(uniq)
         rec = _battery(d, s, X, Z, codes, G)
         rec = _add_linearmodels(rec, d, s, X, Z, cl)
+        if rec.get("alpha_2sls") is None:
+            # linearmodels absent (the cluster's Python stack does not install it): the numpy 2SLS
+            # is the same estimator, so α̂ and its cluster SE — and with them the tF interval — are
+            # still reported. The SE carries the CR1 factor; linearmodels' clustered SE does not.
+            a_np, se_np = _iv2sls_alpha(d, s, X, Z, codes, G)
+            if np.isfinite(a_np):
+                rec["alpha_2sls"], rec["alpha_se"] = a_np, se_np
+                rec["alpha_2sls_source"] = "numpy"
+        else:
+            rec["alpha_2sls_source"] = "linearmodels"
         # Parsimonious subset (rival characteristics only): dilution / many-weak-instruments check.
         pcols = [i for i, c in enumerate(iv_kept) if c in PARSIMONIOUS_IV]
         if 0 < len(pcols) < Z.shape[1]:
@@ -676,7 +717,7 @@ def main():
     ap.add_argument("--routines", default=_routines.csv(_routines.LINK_ESTS))  # the single-index pair
     ap.add_argument("--delta-stage", default=None, metavar="STAGE",
                     help="invert AR/LM against the structural δ of this RC stage (e.g. ext1) instead "
-                         "of the log-share δ; writes weak_iv_<STAGE>.json. Requires blp_delta_export.jl.")
+                         "of the logit δ; writes weak_iv_<STAGE>.json. Requires blp_delta_export.jl.")
     args = ap.parse_args()
     RES = os.path.abspath(args.results_dir)
     # The demand parquets resolve through the ACCESSOR, not by string surgery off RES.
@@ -686,15 +727,16 @@ def main():
     # demand_parquet_dir() honours. Off-cluster the two are the same directory, so this is a
     # no-op locally; on Bouchet it is the difference between a battery and "nothing computed".
     dp = str(_paths.demand_parquet_dir())
-    global DELTA_STAGE, DELTA_DIR
+    global DELTA_STAGE, DELTA_DIR, RES_DIR
     DELTA_STAGE = args.delta_stage
     DELTA_DIR = os.path.join(RES, "cluster_processed")
+    RES_DIR = RES
     routines = [int(x) for x in args.routines.split(",") if x.strip()]
     try:
         import linearmodels  # noqa: F401
     except Exception:
-        print("[weak-IV] NOTE: linearmodels not installed — 2SLS α̂/SE + partial R² will be "
-              "omitted (effective-F, Cragg-Donald, KP-F, AR-CI still computed). "
+        print("[weak-IV] NOTE: linearmodels not installed — LIML/Fuller and partial R² will be "
+              "omitted (2SLS α̂/SE from numpy; effective-F, Cragg-Donald, KP-F, AR-CI still computed). "
               "Install with: pip install linearmodels")
     out = {}
     for k in routines:
@@ -703,7 +745,7 @@ def main():
             out[str(k)] = r
     if out:
         os.makedirs(os.path.join(RES, "cluster_processed"), exist_ok=True)
-        # Never clobber the log-share benchmark: a --delta-stage run is a robustness variant and gets
+        # Never clobber the logit benchmark: a --delta-stage run is a robustness variant and gets
         # its own file, so make_iv_tables.py keeps reading the benchmark it documents.
         fname = f"weak_iv_{DELTA_STAGE}.json" if DELTA_STAGE else "weak_iv.json"
         path = os.path.join(RES, "cluster_processed", fname)
