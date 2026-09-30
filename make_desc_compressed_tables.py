@@ -1749,7 +1749,7 @@ _VARS_MASTER_GROUPS = [
         (r"deposit\_rate\_qoq", r"Type-specific deposit rate, QoQ decimal", "BCB, COSIF", "Sleep; Demand"),
         (r"spread\_qoq", r"$r^{\mathrm{f}}_t - r^{\mathrm{dep}}_{jkmt}$, QoQ decimal; the endogenous price in the sleepiness estimation", "Constructed", "Sleep"),
         (r"risk\_free\_ann, deposit\_rate\_ann", r"Annualized counterparts, $(1+x)^4-1$", "Constructed", "Demand"),
-        (r"spread\_ann", r"$(1+r^{\mathrm{f}}_t)^4-(1+r^{\mathrm{dep}}_{jkmt})^4$; in percentage points it is the demand price $\rho_{jkmt}$", "Constructed", "Demand"),
+        (r"spread\_ann", r"$(1+r^{\mathrm{f}}_t)^4-(1+r^{\mathrm{dep}}_{jkmt})^4$; in pp it is the demand price $\rho_{jkmt}$", "Constructed", "Demand"),
         (r"risk\_free\_qoq\_lag", r"One-quarter lag of the Selic rate (state variable)", "BCB SGS", "Sleep"),
         (r"gdp\_growth\_yoy", r"Year-over-year growth of MCA GDP \textit{per capita}; the time block of the +Time estimator", "IBGE", "Sleep (+Time)"),
     ]),

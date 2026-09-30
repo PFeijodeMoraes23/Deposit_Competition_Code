@@ -13,7 +13,12 @@ inventing a second set of conventions for the same job.
     --kind bbl    bbl_outputs[_<jobid>].zip, whose members carry the output/bbl/ prefix
                   -> BBL_OUTPUT/cluster_raw/       the archive itself (copied)
                   -> BBL_OUTPUT/cluster_processed/ cost_params_E{k}_spec_{s}_{stage}.json
-                                                   and the polfunc_fitted.* family
+                  -> COST_POLFUNC/ (polfunc_dir())  the polfunc_* family, decided by the
+                                                   archive's polfunc_fitted.csv: byte-identical
+                                                   to the local one -> the local files are kept;
+                                                   different -> the ingest refuses and writes
+                                                   nothing (--accept-cluster-polfunc replaces
+                                                   them); no local one -> they land
                   The psi_eq / psi_dev shards stay INSIDE the archive on purpose: a full
                   psi run is ~400 shard parquets and make_bbl_cost_tables.py reads them
                   from the zip in place ("so 400 shard parquets are not duplicated onto
@@ -42,6 +47,7 @@ Usage:
     python cluster_ingest_bbl_cf.py --kind cf
     python cluster_ingest_bbl_cf.py --kind cf --zip D:/downloads/counterfactuals_outputs_9911.zip
     python cluster_ingest_bbl_cf.py --kind bbl --dry-run
+    python cluster_ingest_bbl_cf.py --kind bbl --accept-cluster-polfunc   # take the cluster's polfunc
 
 cluster_ingest.py calls both kinds for you as part of one whole-download ingest.
 """
@@ -202,6 +208,52 @@ def load_index(path: Path):
     return {}
 
 
+POLFUNC_CSV = "polfunc_fitted.csv"
+
+
+def polfunc_decision(zip_path: Path, accept_cluster: bool):
+    """What to do with an archive's polfunc_* members. -> (mode, message), mode one of
+    "none" (the archive carries none), "land" (write them to polfunc_dir()), "keep" (skip them,
+    the local ones stay) or "refuse" (write nothing from this ingest).
+
+    The cluster's polfunc step refits the policy function with the code shipped to it, which
+    can lag the local fit's inference (standard errors, tables) while producing the same
+    fitted values. polfunc_fitted.csv is what the forward simulation reads, so it decides:
+    byte-identical to the local one -> the simulation used the local policy, and the local
+    polfunc_* files are kept; different -> the cluster simulated another policy than the local
+    tables describe, and the ingest refuses unless --accept-cluster-polfunc says to replace
+    the local files with the cluster's."""
+    with zipfile.ZipFile(zip_path) as z:
+        pf = [m for m in z.namelist()
+              if not m.endswith("/") and os.path.basename(_safe_rel(m) or "").startswith("polfunc_")]
+        if not pf:
+            return "none", None
+        local = paths.polfunc_dir() / POLFUNC_CSV
+        if accept_cluster:
+            return "land", ("--accept-cluster-polfunc: the archive's polfunc_* files replace the "
+                            f"local ones in {paths.polfunc_dir()}")
+        if not local.is_file():
+            return "land", f"no local {POLFUNC_CSV}; the archive's polfunc_* files land in {paths.polfunc_dir()}"
+        csv = [m for m in pf if os.path.basename(m) == POLFUNC_CSV]
+        if not csv:
+            return "keep", (f"the archive carries polfunc_* files but no {POLFUNC_CSV} to check them "
+                            "against; the local ones are kept")
+        h = hashlib.sha256()
+        with z.open(csv[0]) as fh:
+            for blk in iter(lambda: fh.read(1 << 20), b""):
+                h.update(blk)
+    cluster_sha, local_sha = h.hexdigest(), sha256_file(local)
+    if cluster_sha == local_sha:
+        return "keep", (f"the archive's {POLFUNC_CSV} is byte-identical to the local one (sha256 "
+                        f"{local_sha[:12]}): the cluster simulated the local policy, so the local "
+                        "polfunc_* files (fit, inference, tables) are kept")
+    return "refuse", (f"the archive's {POLFUNC_CSV} (sha256 {cluster_sha[:12]}) differs from the local "
+                      f"one (sha256 {local_sha[:12]}): the cluster's forward simulation used another "
+                      "fitted policy than the local tables describe. Nothing was written. Re-run with "
+                      "--accept-cluster-polfunc to replace the local polfunc_* files with the "
+                      "cluster's, or refit locally so the two agree.")
+
+
 def dest_root_for(kind, proc_dir: Path, dest_rel: str) -> Path:
     """Where one classified member is written.
 
@@ -217,15 +269,19 @@ def dest_root_for(kind, proc_dir: Path, dest_rel: str) -> Path:
     return proc_dir
 
 
-def ingest(kind, family, zip_path: Path, raw_dir: Path, proc_dir: Path, index, dry):
-    """Copy the archive into cluster_raw/, extract its artifacts into proc_dir.
-    -> (record, [(dest_rel, size)])."""
+def ingest(kind, family, zip_path: Path, raw_dir: Path, proc_dir: Path, index, dry,
+           polfunc=("none", None)):
+    """Copy the archive into cluster_raw/, extract its artifacts into proc_dir. `polfunc` is
+    polfunc_decision()'s (mode, message) for this archive; mode "keep" skips its polfunc_*
+    members. -> (record, [(dest_rel, size)])."""
     zmtime = zip_path.stat().st_mtime
     zstamp = datetime.datetime.fromtimestamp(zmtime).isoformat(timespec="seconds")
     print(f"\n-- {family}: {zip_path.name} "
           f"({fmt_size(zip_path.stat().st_size)}, "
           f"{datetime.datetime.fromtimestamp(zmtime):%Y-%m-%d %H:%M})")
     print(f"   source: {zip_path.parent}")
+    if polfunc[1]:
+        print(f"   polfunc: {polfunc[1]}")
 
     landed, skipped, n_psi = [], {}, 0
     with zipfile.ZipFile(zip_path) as z:
@@ -234,6 +290,8 @@ def ingest(kind, family, zip_path: Path, raw_dir: Path, proc_dir: Path, index, d
             dest_rel, note = classify(kind, m)
             if note and note.startswith("psi ("):
                 n_psi += 1
+            if dest_rel is not None and polfunc[0] == "keep" and dest_rel.startswith("polfunc_"):
+                dest_rel, note = None, "polfunc (the local fit is kept; see above)"
             if dest_rel is None:
                 skipped[note or "unknown"] = skipped.get(note or "unknown", 0) + 1
                 continue
@@ -315,6 +373,9 @@ def main():
                     help="extra directory to look for archives in (repeatable)")
     ap.add_argument("--dry-run", action="store_true",
                     help="report what would land where; write nothing")
+    ap.add_argument("--accept-cluster-polfunc", action="store_true",
+                    help="bbl: replace the local polfunc_* files with the archive's even when its "
+                         f"{POLFUNC_CSV} differs from the local one (by default the ingest refuses)")
     args = ap.parse_args()
 
     raw_dir, proc_dir, index_path = tree_for(args.kind)
@@ -358,6 +419,17 @@ def main():
                   "data/output/ there), or pass --zip.")
             return 1
 
+    # Every archive's polfunc_* members are judged before anything is written, so a refusal
+    # leaves the local tree exactly as it was.
+    pf_mode = {fam: (polfunc_decision(picks[fam], args.accept_cluster_polfunc)
+                     if args.kind == "bbl" else ("none", None)) for fam in picks}
+    refused = {fam: msg for fam, (mode, msg) in pf_mode.items() if mode == "refuse"}
+    if refused:
+        print()
+        for fam, msg in refused.items():
+            print(f"REFUSED ({picks[fam].name}): {msg}")
+        return 2
+
     if not args.dry_run:
         raw_dir.mkdir(parents=True, exist_ok=True)
         proc_dir.mkdir(parents=True, exist_ok=True)
@@ -373,7 +445,7 @@ def main():
     total = 0
     for fam in sorted(picks, key=lambda f: picks[f].stat().st_mtime):
         record, landed = ingest(args.kind, fam, picks[fam], raw_dir, proc_dir,
-                                index, args.dry_run)
+                                index, args.dry_run, polfunc=pf_mode[fam])
         total += len(landed)
         index["ingests"] = [r for r in index["ingests"]
                             if not (r.get("family") == fam and r.get("zip") == record["zip"])]

@@ -26,12 +26,20 @@ _DRAFTS_DIR = paths.drafts_dir()
 OUTPUT_DIR = paths.est_dir(1)
 RESULTS_PICKLE = OUTPUT_DIR / "estimation_results.pkl"
 
-# The paper directory is the ONE destination: the fragments V_Main.tex \input, the
-# standalone wrapper and the preview PDF are all built here, so there is no second copy
-# free to diverge from the one the paper reads.
-TEX_OUT_DIR = _DRAFTS_DIR
+# The paper directory is the destination in production: the fragments V_Main.tex \input, the
+# standalone wrapper and the preview PDF are all built here, so there is no second copy free
+# to diverge from the one the paper reads. drafts_dir() does not itself follow SLEEP_OUT_ROOT,
+# so a locally sandboxed run (RESULTS_PICKLE redirected, this constant not) would otherwise
+# overwrite the paper's own est1 tables with the sandbox's numbers; on the cluster this stays
+# Drafts exactly as before -- SLEEP_OUT_ROOT is set there too (cl_export_step_dirs), but that is
+# CL_DATA_OUT's case to handle, not this script's, and this script has never branched on it.
+_SANDBOXED = paths.sleep_out_root_set() and not paths.on_cluster()
+TEX_OUT_DIR = paths.rout_dir() if _SANDBOXED else _DRAFTS_DIR
 OUT_DIR = str(TEX_OUT_DIR)
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+if _SANDBOXED:
+    print(f"  [sandbox] SLEEP_OUT_ROOT redirects this run: est1 fragments go to {TEX_OUT_DIR}, "
+          f"not Drafts.")
 
 def stars(p):
     if p < 0.01: return '***'
@@ -74,8 +82,8 @@ def build_first_stage_table(results_dict):
         ('IV_HausmanFull', 'Hausman'),
     ]
     multispan = 4
-    caption = ("First Stage --- Deposit Spread on Instruments "
-               f"--- Estimation Strategy~{_routines.est_ref(1)}")
+    caption = ("First Stage, Deposit Spread on Instruments, "
+               f"Estimation Strategy~{_routines.est_ref(1)}")
     label = "tab:est1_first_stage"
     notes = r"\footnotesize \textit{Notes:} " + _notes.first_stage_note(pooled=False)
 
@@ -225,7 +233,7 @@ def build_second_stage_table(results_dict):
         'risk_free_qoq_lag', 'connections_per100',
     ]
     multispan = 5
-    caption = f"Second Stage --- Estimation Strategy~{_routines.est_ref(1)}"
+    caption = f"Second Stage, Estimation Strategy~{_routines.est_ref(1)}"
     label = "tab:est1_second_stage"
     notes = (
         r"\footnotesize \textit{Notes:} " + _notes.second_stage_note(
@@ -416,7 +424,7 @@ def main():
         fh.write(fs_frag + "\n")
     with open(ss_path, 'w', encoding='utf-8') as fh:
         fh.write(ss_frag + "\n")
-    print(f" - Fragments written to {_DRAFTS_DIR}")
+    print(f" - Fragments written to {TEX_OUT_DIR}")
 
     tex_doc = (
         _STANDALONE_PREAMBLE
@@ -435,7 +443,7 @@ def main():
     wrapper_path = os.path.join(OUT_DIR, "est1_sleep_results.tex")
     with open(wrapper_path, 'w', encoding='utf-8') as fh:
         fh.write(tex_doc)
-    print(f" - Standalone wrapper written to {_DRAFTS_DIR}")
+    print(f" - Standalone wrapper written to {TEX_OUT_DIR}")
 
     print(" - Compiling PDF...")
     try:

@@ -32,7 +32,8 @@ ANCHOR = "## 3. The execution plan (easiest → hardest)"   # §2.6/§2.7 are in
 # .md and the .tex fragments can never drift apart. Units are pinned to the sleepiness/demand tables
 # (see the _DISPLAY_UNITS comment in bbl_polfunc.py).
 from bbl_polfunc import (_DISPLAY_UNITS, _SEGMENT_VARS, CFG as _CFG_SPREAD, _CFG_RATE,
-                         _lhs_display, _lhs_unit_name)
+                         _lhs_display, _lhs_unit_name, _boot_clause, _mostly_small,
+                         _small_spread_sentence)
 import sys
 
 # Windows consoles default to cp1252 and raise UnicodeEncodeError on any non-ASCII
@@ -80,7 +81,7 @@ LABELS = {
     "pix_users_pf_per1000": "Pix users",
     "connections_per100": "Mobile lines",
     "branches_per1000": "Branches",
-    "cadunico_families_per1000": "CadUnico families",
+    "cadunico_families_per1000": "CadÚnico families",
 }
 
 # Per-variant configuration.
@@ -146,14 +147,17 @@ def _cell(res, v, lhs=1.0):
     """Formatted cell. `lhs` is the dependent-variable display multiplier of the deposit type
     (bbl_polfunc._lhs_display: spread 100 = pp, k=5 spread 10,000 = basis points; rate 100) and
     MUST be applied here as well as to Mean dep. var. -- the .tex fragments scale by lhs * unit,
-    and without it the .md prints raw fraction coefficients for the same regression."""
+    and without it the .md prints raw fraction coefficients for the same regression.
+    A national regressor whose SE is the quarter-clustered WCB (se_scheme 'quarter', see
+    bbl_polfunc.NATIONAL_BY_NAME) carries a dagger after the SE, as in the .tex fragments."""
     coefs = res.get("coefficients", {})
     if v not in coefs:
         return ""
     mult = _display_unit(v)[0] * lhs
     c = float(coefs[v]) * mult; se = float(res["std_errors"][v]) * mult; p = res["pvalues"].get(v)
     stars = _stars(p).replace("*", r"\*")
-    return f"{_f3(c, v)}{stars} ({_f3(se, v + ' SE')})"
+    mark = "†" if (res.get("se_scheme") or {}).get(v) == "quarter" else ""
+    return f"{_f3(c, v)}{stars} ({_f3(se, v + ' SE')}){mark}"
 
 
 def _variant_cell(res, base, lhs=1.0):
@@ -216,18 +220,55 @@ def _stat(summary, col, key, nd):
     return f"{int(v):,}" if nd == 0 else _f3(v)
 
 
-def _intro(depvar, summary, cfg):
+def _small_notes(summary, cfg_units):
+    """The sentence for each firm type whose displayed coefficients print mostly below 0.010, as in
+    the .tex notes (bbl_polfunc._mostly_small, _small_spread_sentence): B from its column, D from
+    the first D column that does. Tested on the coefficient cells the table prints."""
+    demo_all = set(DEMO_BASES) | {d + "_natl" for d in DEMO_BASES}
+    out = []
+    for k in (4, 5):
+        lhs = _lhs_display(k, cfg_units)
+        for ftype, cols in (("B", ("B",)), ("D", ("D_optA", "D_optB"))):
+            for s in cols:
+                res = summary.get(_colkey(k, s), {})
+                txt = [_f3(float(c) * _display_unit(v)[0] * lhs)
+                       for v, c in res.get("coefficients", {}).items()
+                       if v not in demo_all and v not in _SEGMENT_VARS]
+                if _mostly_small(txt):
+                    sent = _small_spread_sentence(res, k, ftype, md=True, cfg=cfg_units)
+                    if sent:
+                        out.append(sent)
+                    break
+    return out
+
+
+def _intro(depvar, summary, cfg, dagger=False, small=()):
+    """The section's opening paragraph. `dagger` (some displayed SE is quarter-clustered) adds the
+    sentence explaining the mark; `small` (_small_notes) follows the regressand's units."""
     def r2(k, s):
         return summary.get(_colkey(k, s), {}).get("r_squared")
+    national = (
+        "Rows marked † are national regressors, the risk-free rate and its square, which take one "
+        "value per quarter across all firms: they report the same bootstrap clustered on the "
+        "**quarter**, with stars from it, as in the sleepiness tables. "
+    ) if dagger else ""
+    # The draws, weights and seed, as the .tex notes state them (bbl_polfunc._boot_clause): one
+    # statement when both deposit types' columns record the same bootstrap.
+    boots = {_boot_clause(summary, k, md=True) for k in (4, 5)}
+    boot = f" ({next(iter(boots))})" if len(boots) == 1 and "" not in boots else ""
     shared = (
         "Eight regressions — two endogenous deposit types (k=4 Time/CDB, k=5 Prepaid) × four "
-        "firm-type/demographic specifications — estimated by OLS over the 2016–2024 window. **B and D "
+        "firm-type/demographic specifications — estimated by OLS over the 2016–2024 window, on "
+        "firm–market–quarters with a positive balance of the type (fitted values are computed for "
+        "every row). **B and D "
         "firms are estimated separately, each with its own coefficient vector**; downstream, Step 2 takes "
         "**B → the `B-type` column and D → the `D (natl. demo.)` column** (the `D (no demo.)` column asks whether the national demographics do any work). A pooled B=D specification is also estimated but not shown. "
-        "Standard errors are a score/multiplier **WCB at the conglomerate level** — "
+        "Standard errors are a score/multiplier **WCB at the conglomerate level**" + boot + " — "
         "the same scheme and clustering unit as the sleepiness and BLP stages, so every SE in the paper "
         "is produced one way; G and G\* are reported as the cluster-paucity statistics that motivate it, "
-        "not as the inference. That paucity is severe on the B side: with conglomerate clusters the "
+        "not as the inference. "
+        + national
+        + "That paucity is severe on the B side: with conglomerate clusters the "
         f"B-type column has only G={_stat(summary,'B','n_clusters',0)} nominal and "
         f"**G\*≈{_stat(summary,'B','G_star',1)} effective** clusters. Webb weights are used for exactly "
         "this regime; read the B column's inference with that in mind. "
@@ -237,7 +278,7 @@ def _intro(depvar, summary, cfg):
         "max of 7.10) that otherwise drive both the point estimates and the bootstrap SEs. "
         "Coefficients at three decimals, standard errors in parentheses, significance \*\*\*/\*\*/\* at 1/5/10%. "
         "**Demographic units are pinned to the sleepiness tables** so those coefficients are comparable "
-        "across the two: GDP *per capita* in 10k R$ and CadUnico families in 100s per 1k (the two "
+        "across the two: GDP *per capita* in 10k R$ and CadÚnico families in 100s per 1k (the two "
         "variables the demand prep rescales), population shares as raw fractions, mobile lines per 100 "
         "inhabitants; Pix users (absent there) per 100 per 1k. **All other ratios are in percentage "
         "points** — equity, Basel, cost, wholesale, LCI/LCA, asset return, NPL provisions, credit/assets "
@@ -246,13 +287,15 @@ def _intro(depvar, summary, cfg):
         "Rescaling is a change of units only: it leaves the fit, t-statistics and stars untouched "
         "(verified — R² and p-values identical to 1e-14)."
     )
+    extra = "".join(s + " " for s in small)
     if depvar == "spread":
         head = (
             "The dependent variable is the **compounded annual deposit spread** "
             "ρ = (1+r^f)⁴ − (1+r^dep)⁴ of the quarterly rates, the definition of the demand price "
             "(the policy fed to BBL Step 2), in percentage points for k=4 and in **basis points for "
             "k=5**, whose spread is itself about zero. "
-            f"The fit is asymmetric — B-firm CDB R²={r2(4,'B'):.2f}, B-firm prepaid R²={r2(5,'B'):.2f}, "
+            + extra
+            + f"The fit is asymmetric — B-firm CDB R²={r2(4,'B'):.2f}, B-firm prepaid R²={r2(5,'B'):.2f}, "
             f"but the digital/national D regressions fit prepaid poorly (R²≈{r2(5,'D_optB'):.02f}). "
         )
     else:
@@ -266,7 +309,7 @@ def _intro(depvar, summary, cfg):
             f"(B R²={r2(4,'B'):.2f}, D R²={r2(4,'D_optB'):.2f}). Note the contrast with §2.6: prepaid "
             "*rates* are easy to fit precisely because they barely move, yet prepaid *spreads* are not, "
             "since the spread is dominated by the moving risk-free rate. "
-        )
+        ) + extra
     ptr = (
         "The same estimates are the paper fragments, split by deposit type: "
         f"`{cfg['tex_pattern'].format(k=4)}` (`{cfg['tab_base']}_k4`) and "
@@ -278,11 +321,11 @@ def _intro(depvar, summary, cfg):
 def build_section(depvar, summary):
     cfg = VARIANTS[depvar]
     heading = cfg["heading"]
-    intro = _intro(depvar, summary, cfg)
     # LHS display multipliers per deposit type, imported from the estimator so the .md and .tex
     # agree by construction (spread: pp, k=5 in basis points; rate: pp).
     cfg_units = _CFG_SPREAD if depvar == "spread" else _CFG_RATE
     tbl = build_table(summary, cfg_units)
+    intro = _intro(depvar, summary, cfg, dagger="†" in tbl, small=_small_notes(summary, cfg_units))
     return f"{cfg['start']}\n{heading}\n\n{intro}\n{tbl}\n{cfg['end']}"
 
 

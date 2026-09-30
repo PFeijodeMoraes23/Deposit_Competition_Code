@@ -337,11 +337,28 @@ def on_cluster() -> bool:
     """
     return bool(os.environ.get("CL_DATA_OUT", "").strip())
 
+
+def sleep_out_root_set() -> bool:
+    """True when ``SLEEP_OUT_ROOT`` is exported to a non-empty value -- the same check
+    :func:`demand_prep_root`/:func:`rout_dir` make internally to decide whether they are
+    pointed at a sandbox.
+
+    ``cl_export_step_dirs`` exports it too, to the cluster step's own ``data/output/sleep``
+    folder, at the same time as ``CL_DATA_OUT`` (so :func:`on_cluster` is also true there).
+    A caller whose own default is :func:`drafts_dir` -- which never follows
+    ``SLEEP_OUT_ROOT`` -- therefore cannot treat this flag alone as "write beside the
+    sandbox instead of Drafts": on the cluster that would change behaviour that has nothing
+    to do with sandboxing. Combine it with :func:`on_cluster` at the call site to keep the
+    two cases distinct, the way each exporter's existing cluster routing requires.
+    """
+    return bool(os.environ.get("SLEEP_OUT_ROOT", "").strip())
+
+
 __all__ = [
     "OPEN_FINANCE", "BCB", "DATA_ROOT", "RAW", "PROCESSED", "data_root", "market_panel_csv",
     "demand_prep_root", "demand_parquet_dir", "estimation_output", "est_dir", "rout_dir",
     "drafts_dir", "blp_results_dir", "bbl_output_dir", "cf_foundation_dir", "cost_fwd_dir",
-    "polfunc_dir", "diag_dir", "on_cluster",
+    "polfunc_dir", "diag_dir", "on_cluster", "sleep_out_root_set",
     "ESTBAN_DIR", "ESTBAN_CSV", "ESTBAN_RAW_MUN", "ESTBAN_RAW_AG",
     "IF_DATA_ROOT", "IF_DATA_LIST", "IF_DATA_PRUDENTIAL", "IF_DATA_FINANCIAL", "IF_DATA_INDIVIDUAL", "IF_DATA_AGG",
     "COSIF_RAW", "SGS_RAW",

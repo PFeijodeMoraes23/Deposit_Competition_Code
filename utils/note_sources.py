@@ -56,6 +56,9 @@ NOTE_HOSTS: dict[str, tuple[str, bool]] = {
     "www.agibank.com.br": ("Agibank statements", False),
     "www.mercadopago.com.br": ("Mercado Pago IP statements", False),
     "www.pagbank.com.br": ("PagBank group, including BancoSeguro", False),
+    # PagBank's listing links its statement PDFs to PagSeguro's static-file server (user approved
+    # 2026-09-30).
+    "acq-static-pages.pagseguro.com.br": ("PagSeguro static files: PagBank statement PDFs", False),
     "www.vwfs.com.br": ("Volkswagen Financial Services Brasil, Banco Volkswagen", False),
     # Groups listed abroad (Nu Holdings, Inter & Co, XP Inc), so the Brazilian bank's statements sit
     # on no regulator path and only its own domain serves them. Approved by the user 2026-09-23.

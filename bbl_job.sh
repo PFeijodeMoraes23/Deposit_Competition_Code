@@ -431,15 +431,16 @@ case "${BBL_STEP}" in
         fi
         cl_setup_python "${CL_PY_REQ_SWEEP}"
         COV=(coverage --dir "${CF_COST_FWD}" --key "${BBL_KEY}" --n-shards "${N_SHARDS}" --validate)
-        if [[ "${MULTI_START}" == "1" ]]; then
-            COV+=(--expect-starts --expect-beta "${BETA}" --expect-horizon "${HORIZON}")
-            # The run's own switches and version (its context passed cl_bbl_version_guard above),
-            # and the policy CSV the re-run shards would read: it must be the one the psi on disk
-            # were simulated around (psi_starts records its sha256).
-            COV+=(--expect-phi-path "${PHI_PATH}" --expect-z-path "${Z_PATH}" --expect-rdep-timing "${RDEP_TIMING}")
-            COV+=(--expect-sim-version "${BBL_SIM_VERSION}")
-            if [[ -n "${POLICY_CSV:-}" ]]; then COV+=(--policy-csv "${POLICY_CSV}"); fi
-        fi
+        # Both designs write the psi_starts sidecar (a multi-start run with its launch quarters and
+        # the start_q column, a single-curve run with its one curve), and the sweep checks it
+        # against the run's own beta/T, switches and version (its context passed
+        # cl_bbl_version_guard above), and the policy CSV the re-run shards would read against the
+        # one the psi on disk were simulated around (psi_starts records its sha256).
+        if [[ "${MULTI_START}" == "1" ]]; then COV+=(--expect-starts); else COV+=(--expect-sidecar); fi
+        COV+=(--expect-beta "${BETA}" --expect-horizon "${HORIZON}")
+        COV+=(--expect-phi-path "${PHI_PATH}" --expect-z-path "${Z_PATH}" --expect-rdep-timing "${RDEP_TIMING}")
+        COV+=(--expect-sim-version "${BBL_SIM_VERSION}")
+        if [[ -n "${POLICY_CSV:-}" ]]; then COV+=(--policy-csv "${POLICY_CSV}"); fi
         if [[ "${BBL_FRESH:-0}" == "1" ]]; then COV+=(--newer-than "${RUN_EPOCH}"); fi
         # tr keeps the parse immune to a CRLF interpreter; pipefail keeps Python's exit code.
         if COUT="$("${PYBIN}" "${CL_ROOT}/bbl_shards.py" "${COV[@]}" | tr -d '\r')"; then CRC=0; else CRC=$?; fi

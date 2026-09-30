@@ -1405,8 +1405,17 @@ def _box_amounts(box: dict) -> tuple[list[tuple[str, float]], list[str]]:
             continue
         start = run.start() + run.group(0).index(text)
         centre = _box_x(joined, start, start + len(text))
-        if OCR_AMOUNT_RE.fullmatch(text) or INT_AMOUNT_RE.match(text):
+        if OCR_AMOUNT_RE.fullmatch(text):
             found.append((text, centre))
+        elif INT_AMOUNT_RE.match(text):
+            # A whole number counts as an amount only when it is the whole box. Inside a longer box
+            # it is as likely a CNPJ root, a CEP or a label digit ('CNPJ 11.222.333/0001-44',
+            # 'ITEM 1.500'), and counting it as found would let a coincidence vouch for a parser
+            # line. Recording it as unreadable leaves the evidence incomplete instead.
+            if joined["text"].strip() == run.group(0).strip():
+                found.append((text, centre))
+            else:
+                unreadable.append(text)
         elif OCR_DOT_CENTS_RE.fullmatch(text):
             found.append((f"{text[:-3]},{text[-2:]}", centre))
         elif US_AMOUNT_RE.match(text):

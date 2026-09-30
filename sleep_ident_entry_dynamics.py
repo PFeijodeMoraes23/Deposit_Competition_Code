@@ -31,19 +31,29 @@ Two normalisations, exactly as in the paper:
                         drawn on the ALT panel only -- same as the paper).
 
 Outputs -> DIAG_PHI_SEPARATION/d6_entry_{events,paths,model_curves}.csv,
-           d6_implied_phi.csv, d6_routine_{curves,panel}*.csv, d6_meta.json,
-           d6_entry_dynamics.png/.pdf, and fig_entry_dynamics.png/.pdf in Drafts.
+           d6_implied_phi.csv, d6_drop_robustness.{csv,json}, d6_routine_{curves,panel}*.csv,
+           d6_meta.json, d6_entry_dynamics.png/.pdf, and fig_entry_dynamics.png/.pdf in Drafts.
 
-TWO HALVES, ONE PASS BY DEFAULT.
-  --compute-only   every moment, every bootstrap, every CSV + d6_meta.json; no figure.
-                   This is the cluster half (sleep_job.sh SLEEP_STEP=entry).
-  --figures-only   every exhibit, drawn from those CSVs; nothing recomputed. The local half.
-  neither          compute and draw in one pass, which is what it has always done.
-Nothing about the split changes a number: the figure functions already took only the frames
-the compute half writes, so the seam is where the data already was. d6_meta.json carries the
-handful of scalars no CSV holds -- g, the horizon, the phi vintages and the settings the run
-used -- and --figures-only adopts those settings rather than its own, so a render cannot
-caption a figure with a construction the CSVs were not built under.
+d6_drop_robustness.{csv,json}: does event_paths()'s |den|<1e-6 guard, which drops two D-firm
+events under the plateau ("main") normalisation, delete evidence against the paper's account,
+or exclude an undefined ratio? The median path and bootstrap CI with vs. without those events
+(their actual, tiny denominators used when included), plus the B/D dropped- and censored-event
+census -- see build_drop_robustness()'s docstring for the fidelity guarantee against the
+published d6_entry_paths.csv.
+
+SEVERAL PARTIAL-REBUILD FLAGS, ONE FULL PASS BY DEFAULT.
+  --compute-only     every moment, every bootstrap, every CSV + d6_meta.json; no figure.
+                     This is the cluster half (sleep_job.sh SLEEP_STEP=entry).
+  --figures-only     every exhibit, drawn from those CSVs; nothing recomputed. The local half.
+  --curves-only      rebuilds d6_model_curves.csv + d6_meta.json's vintages entry from a fresh
+                     phi_vintages() reading; no bootstrap, no other file touched.
+  --robustness-only  rebuilds ONLY d6_drop_robustness.{csv,json}; no other file touched.
+  neither            compute and draw in one pass, which is what it has always done.
+Nothing about any of these splits changes a number: each partial rebuild reuses exactly the
+cached settings (g, horizon, plateau_w, window_only, ...) d6_meta.json records from the run
+that produced everything else, rather than this invocation's own CLI defaults, so a partial
+rebuild cannot caption or compute a result under a construction the rest of the outputs were
+not built under.
 """
 from utils.venv_guard import ensure_project_venv
 ensure_project_venv(__file__)
@@ -62,7 +72,14 @@ from utils import routines as _routines
 from utils import load_panel_cached
 
 OUT_DIR = _paths.PROCESSED / "ESTIMATION_OUTPUT" / "DIAG_PHI_SEPARATION"
-DRAFTS = _paths.OPEN_FINANCE / "Drafts" / "Deposit Competition"
+# drafts_dir() is OPEN_FINANCE / "Drafts" / "Deposit Competition" -- the same path this used
+# to spell out literally -- but, unlike the literal, it does not follow SLEEP_OUT_ROOT, so a
+# locally sandboxed run (the est{N} pickles it reads ARE redirected, via OUT_DIR/est_dir) would
+# otherwise overwrite the paper's own Figure 2 with the sandbox's exhibits. Route those runs to
+# rout_dir() instead, same as sleep_export_link.py's TEX_OUT_DIR; on the cluster this stays
+# Drafts exactly as before (SLEEP_OUT_ROOT is set there too, but that is CL_DATA_OUT's case).
+_SANDBOXED = _paths.sleep_out_root_set() and not _paths.on_cluster()
+DRAFTS = _paths.rout_dir() if _SANDBOXED else _paths.drafts_dir()
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 
 PANEL_CSV = _paths.PROCESSED / "market_panel.csv"
@@ -90,20 +107,32 @@ REF_ESTS = tuple(x.strip() for x in
 
 
 def phi_vintages():
-    """(label, phi, source) for each model line, all from the CF_FOUNDATION phi_nopix
-    exports so every line is the same object measured the same way. Nothing here is a frozen
-    literal -- a stale model line plotted against fresh data is the one failure this figure
-    cannot survive."""
-    cf = _paths.cf_foundation_dir()
+    """(label, phi, source) for each model line of Figure 2 (make_figure/fig_entry_dynamics),
+    read as Table 4's Mean phi-hat: the population-weighted national phi_t, averaged over
+    quarters, from each routine's own national_phi_t.csv -- the same file, column and
+    pd.read_csv(...)[col].mean() that make_paper_numbers.py's national_mean_phi() reads Table
+    4's row from, so the figure cannot show a different Mean phi-hat than the table prints.
+
+    This is the ONLY thing phi_vintages() feeds. routine_event_curves() (the separate
+    fig_routine_dynamics exhibit) keeps reading each event's own MARKET-level phi_m from the
+    CF_FOUNDATION phi_nopix exports, which national_phi_t.csv has no equivalent for -- that
+    function does not call this one."""
     out = []
     for est in REF_ESTS:
-        fp = cf / f"phi_nopix_{est}_spec_12.parquet"
-        if not fp.exists():
-            print(f"  [phi] {est}: {fp.name} absent -- line skipped")
+        e = int(est.lstrip("E"))
+        p = _paths.est_dir(e) / "national_phi_t.csv"
+        if not p.exists():
+            print(f"  [phi] {est}: {p.name} absent -- line skipped")
             continue
-        m = float(pd.read_parquet(fp, columns=["phi_mt"])["phi_mt"].mean())
-        ts = pd.Timestamp(fp.stat().st_mtime, unit="s").strftime("%Y-%m-%d %H:%M")
-        out.append((est, m, f"mean phi_mt of {fp.name} [{ts}]"))
+        col = f"phi_t_{_routines.SPEC12_TAG}"
+        nd = pd.read_csv(p)
+        if col not in nd.columns:
+            print(f"  [phi] {est}: {col} absent from {p.name} -- line skipped")
+            continue
+        nq = int(nd[col].notna().sum())
+        m = float(nd[col].mean())
+        out.append((est, m,
+                    f"mean of {col} over {nq} quarters of {p.name} (Table 4's Mean phi-hat)"))
     return out
 
 
@@ -947,9 +976,187 @@ def event_paths(reg, paths, H, norm, plateau_w, boot, seed):
     return pd.DataFrame(out)
 
 
+# --------------------------------------------------------------------- drop-robustness check
+def _qidx_to_yq(qidx):
+    """qidx (year*4 + quarter - 1) -> 'YYYYQ#'. Inverts the qidx built in main()/event_paths'
+    callers: qidx % 4 recovers the quarter (0-indexed) and qidx // 4 the year, since the
+    forward map is qidx = year*4 + (quarter - 1)."""
+    return f"{qidx // 4}Q{qidx % 4 + 1}"
+
+
+def _normalized_rows_main(reg, paths, H, plateau_w):
+    """Every KEPT event's row under the MAIN (plateau) normalisation, (v[h]-v0)/den, from its
+    ACTUAL denominator however small -- i.e. what event_paths() computes per event BEFORE it
+    applies the `abs(den) < 1e-6` guard, not after. Each row is tagged `guard_drop` so a caller
+    can reproduce either side of that guard from the same pass. A separate tally, `n_censored`,
+    counts events with no observation at all in the plateau window (den itself undefined, or
+    exactly zero): those cannot be "included with their actual denominator" under EITHER
+    normalisation because they have none -- this is the same skip event_paths() applies before
+    it ever reaches the guard, for both norm="main" and norm="alt" alike.
+
+    Returns (rows, n_censored). Each row: congl, mkt, q_entry, entry_quarter, v0, end, den,
+    guard_drop, row (the length-(H+1) normalised path)."""
+    kept = reg[reg["keep"]]
+    rows, n_censored = [], 0
+    for _, e in kept.iterrows():
+        key = (str(e["congl"]), str(e["mkt"]))
+        s = paths[key].astype(float)
+        v = np.full(H + 1, np.nan)
+        v[:len(s)] = s.values[:H + 1]
+        w = [h for h in plateau_w if h < len(s) and np.isfinite(v[h])]
+        if not w:
+            n_censored += 1
+            continue
+        end = np.nanmean(v[w])
+        den = end - v[0]
+        if not np.isfinite(den) or den == 0:
+            n_censored += 1
+            continue
+        rows.append(dict(congl=key[0], mkt=key[1], q_entry=int(e["q_entry"]),
+                         entry_quarter=_qidx_to_yq(int(e["q_entry"])),
+                         v0=float(v[0]), end=float(end), den=float(den),
+                         guard_drop=bool(abs(den) < 1e-6), row=(v - v[0]) / den))
+    return rows, n_censored
+
+
+def _bootstrap_median_ci(M, H, boot, seed):
+    """Median + 95% bootstrap CI per horizon, the SAME algorithm and rng call sequence as
+    event_paths() (one rng created once, drawn in h order) -- so calling this on a matrix of
+    exactly the rows event_paths() would have kept, in the same order, reproduces its output
+    bit for bit. That identity is what build_drop_robustness's fidelity check relies on."""
+    rng = np.random.default_rng(seed)
+    median = np.full(H + 1, np.nan)
+    ci_lo = np.full(H + 1, np.nan)
+    ci_hi = np.full(H + 1, np.nan)
+    n = np.zeros(H + 1, dtype=int)
+    for h in range(H + 1):
+        col = M[:, h] if M.shape[0] else np.empty(0)
+        col = col[np.isfinite(col)]
+        n[h] = len(col)
+        if len(col) == 0:
+            continue
+        median[h] = float(np.median(col))
+        bs = [np.median(rng.choice(col, len(col), replace=True)) for _ in range(boot)]
+        ci_lo[h] = float(np.percentile(bs, 2.5))
+        ci_hi[h] = float(np.percentile(bs, 97.5))
+    return median, ci_lo, ci_hi, n
+
+
+def build_drop_robustness(reg_b, paths_b, reg_d, paths_d, H, plateau_w, boot, seed):
+    """Does dropping the two zero-denominator D events under the plateau ("main") normalisation
+    delete evidence, or exclude an undefined ratio? Rebuilds the D-firm main-norm median path
+    and its bootstrap CI BOTH with (n_kept, the published figure) and without (n_all) the guard
+    in event_paths() that skips |den| < 1e-6 -- using the two events' actual tiny denominators
+    when they are included -- and separately tallies, for both B and D, how many events the
+    guard drops (n_dropped) versus how many have no plateau-window observation at all and so
+    cannot be included under any denominator (n_censored_both: dropped from BOTH normalisations
+    alike, which is why B's count is the same in both panels while D's is not).
+
+    FIDELITY: the n_kept median/CI recomputed here must reproduce the published
+    d6_entry_paths.csv's D/main rows exactly (same algorithm, same seed, same surviving events
+    in the same order -- see _bootstrap_median_ci). If they differ by more than a floating-point
+    tolerance, this function refuses to write d6_drop_robustness.* and raises SystemExit naming
+    the mismatch: writing a robustness check that cannot be verified against the paper's own
+    numbers would be worse than not writing one.
+
+    Writes DIAG_PHI_SEPARATION/d6_drop_robustness.csv (one row per h) and
+    d6_drop_robustness.json (the dropped/censored event census and the headline deltas)."""
+    rows_d, n_censored_d = _normalized_rows_main(reg_d, paths_d, H, plateau_w)
+    rows_b, n_censored_b = _normalized_rows_main(reg_b, paths_b, H, plateau_w)
+    dropped_d = [r for r in rows_d if r["guard_drop"]]
+    dropped_b = [r for r in rows_b if r["guard_drop"]]
+
+    mat_kept = (np.vstack([r["row"] for r in rows_d if not r["guard_drop"]])
+               if any(not r["guard_drop"] for r in rows_d) else np.empty((0, H + 1)))
+    mat_all = np.vstack([r["row"] for r in rows_d]) if rows_d else np.empty((0, H + 1))
+    med_kept, lo_kept, hi_kept, n_kept_h = _bootstrap_median_ci(mat_kept, H, boot, seed)
+    med_all, lo_all, hi_all, n_all_h = _bootstrap_median_ci(mat_all, H, boot, seed)
+
+    pub_path = OUT_DIR / "d6_entry_paths.csv"
+    if not pub_path.exists():
+        raise SystemExit(f"[drop-robustness] {pub_path.name} not found in {OUT_DIR} -- the "
+                         "compute half must write it first; the fidelity check has nothing "
+                         "published to verify against.")
+    pub = pd.read_csv(pub_path)
+    pub_d_main = (pub[(pub["kind"] == "D") & (pub["norm"] == "main")]
+                 .sort_values("h").reset_index(drop=True))
+    if len(pub_d_main) != H + 1:
+        raise SystemExit(f"[drop-robustness] {pub_path.name} has {len(pub_d_main)} D/main rows, "
+                         f"expected {H + 1} (h=0..{H}) -- cannot verify fidelity against it.")
+    diffs = []
+    for h in range(H + 1):
+        prow = pub_d_main.iloc[h]
+        if int(prow["h"]) != h:
+            raise SystemExit(f"[drop-robustness] {pub_path.name}'s D/main rows are not sorted "
+                             f"by h as expected (row {h} has h={int(prow['h'])}).")
+        diffs += [abs(prow["median"] - med_kept[h]), abs(prow["ci_lo"] - lo_kept[h]),
+                 abs(prow["ci_hi"] - hi_kept[h])]
+    max_fid_diff = max(diffs)
+    FID_TOL = 1e-9
+    if max_fid_diff > FID_TOL:
+        raise SystemExit(
+            f"[drop-robustness] FIDELITY CHECK FAILED: the independently recomputed 'kept' "
+            f"(n={mat_kept.shape[0]}) median/CI for D/main differs from the published "
+            f"{pub_path.name} by up to {max_fid_diff:.3e} (tolerance {FID_TOL:.0e}). This means "
+            "this function's reconstruction of event_paths()'s D/main path has drifted from "
+            "the production one -- refusing to write d6_drop_robustness.* over a result that "
+            "cannot be verified against the paper's own numbers. Check for a change to the "
+            "guard threshold, the bootstrap, or reg_d/paths_d construction on one side only.")
+    print(f"  [drop-robustness] fidelity OK: recomputed n={mat_kept.shape[0]} D/main matches "
+         f"published {pub_path.name} (max |diff| = {max_fid_diff:.2e})")
+
+    csv_rows = []
+    for h in range(H + 1):
+        csv_rows.append(dict(
+            h=h, n_kept=int(n_kept_h[h]), n_all=int(n_all_h[h]),
+            median_kept=med_kept[h], median_all=med_all[h],
+            abs_diff=abs(med_all[h] - med_kept[h]),
+            ci_lo_kept=lo_kept[h], ci_hi_kept=hi_kept[h],
+            ci_lo_all=lo_all[h], ci_hi_all=hi_all[h],
+            width_kept=hi_kept[h] - lo_kept[h], width_all=hi_all[h] - lo_all[h]))
+    csv_df = pd.DataFrame(csv_rows)
+    csv_df.to_csv(OUT_DIR / "d6_drop_robustness.csv", index=False)
+
+    abs_diff_arr = csv_df["abs_diff"].to_numpy()
+    h_star = int(csv_df["h"].iloc[int(np.argmax(abs_diff_arr))])
+    width_diff_arr = (csv_df["width_all"] - csv_df["width_kept"]).abs().to_numpy()
+    h_width_star = int(csv_df["h"].iloc[int(np.argmax(width_diff_arr))])
+
+    def _event_json(r, kind):
+        return dict(kind=kind, congl=r["congl"], mkt=r["mkt"], q_entry=r["q_entry"],
+                   entry_quarter=r["entry_quarter"], v0=r["v0"], end=r["end"], den=r["den"])
+
+    summary = dict(
+        description=("D-firm, plateau (\"main\") normalisation: the median path and its "
+                    "bootstrap CI with (n_all) and without (n_kept, the published figure) the "
+                    "events event_paths()'s |den|<1e-6 guard drops, included via their actual "
+                    "denominators when present."),
+        seed=int(seed), boot=int(boot),
+        n_dropped=dict(D=len(dropped_d), B=len(dropped_b)),
+        dropped_events=[_event_json(r, "D") for r in dropped_d]
+                      + [_event_json(r, "B") for r in dropped_b],
+        n_censored_both=dict(D=n_censored_d, B=n_censored_b),
+        max_abs_diff=float(abs_diff_arr.max()), max_abs_diff_h=h_star,
+        max_abs_width_change=float(width_diff_arr.max()), max_abs_width_change_h=h_width_star,
+        fidelity_max_abs_diff=float(max_fid_diff), fidelity_tol=FID_TOL,
+        source=f"market_panel.csv + build_events (D, B); kept-side cross-checked against "
+              f"{pub_path.name}'s D/main rows, not read from them",
+    )
+    (OUT_DIR / "d6_drop_robustness.json").write_text(json.dumps(summary, indent=2),
+                                                      encoding="utf-8")
+    print(f"  -> d6_drop_robustness.csv / d6_drop_robustness.json  "
+         f"(n_dropped D={len(dropped_d)} B={len(dropped_b)}; "
+         f"max|diff|={summary['max_abs_diff']:.4f} at h={h_star}; "
+         f"max width change={summary['max_abs_width_change']:.4f} at h={h_width_star})")
+    return summary
+
+
 # ----------------------------------------------------------------------------- main
 def main(args):
     print("=== D6: entry dynamics vs the closed-form accumulation path (Egan Fig. 3) ===")
+    if _SANDBOXED:
+        print(f"  [sandbox] SLEEP_OUT_ROOT redirects this run: exhibits go to {DRAFTS}, "
+              "not Drafts.")
     g = median_g()
     vint = phi_vintages()
     H = args.horizon
@@ -1062,6 +1269,11 @@ def main(args):
     paths_df.to_csv(OUT_DIR / "d6_entry_paths.csv", index=False)
     curves_df.to_csv(OUT_DIR / "d6_model_curves.csv", index=False)
 
+    # Does dropping the two near-zero-denominator D events delete evidence? Reads the
+    # d6_entry_paths.csv just written above as its fidelity reference, so it belongs after
+    # that write, not before it.
+    build_drop_robustness(reg_b, paths_b, reg_d, paths_d, H, plateau_w, args.boot, args.seed)
+
     if not paths_df.empty:
         print("\n  normalised median share paths (main normalisation):")
         for kind in ("B", "D"):
@@ -1161,12 +1373,43 @@ ROMAN = {"E1": "(I)", "E2": "(II)", "E3": "(III)", "E4": "(IV)"}
 # as the same number.
 PHI_VINTAGE_LABEL = r"mean $\hat\phi_{m,t}$"
 
+# Title/axis-label/tick/legend sizes for a panel DRAWN at (6.4, 4.6) in and then shrunk by
+# LaTeX to fit the page -- the combined two-panel exhibit (d6_entry_dynamics, not in V_Main)
+# and the per-routine panels (fig_routine_dynamics*, also not currently \input by V_Main)
+# both still use this. The standalone fig_entry_dynamics_a/b panels instead pass
+# ENTRY_DYN_PRINT_FONTSIZES below, at print size, so `_draw_entry_panel` takes an override.
+DEFAULT_FONTSIZES = dict(title=10, label=10, tick=10, legend=7.5)
+
+
+# Default legend placement/spacing: inside the axes, bottom-right corner, opaque. Overridden
+# per-panel by ENTRY_DYN_LEGEND_KWARGS (see make_figure) for the print-size standalone panels,
+# where the axes are small enough that this footprint can reach into the plotted curves.
+DEFAULT_LEGEND_KWARGS = dict(loc="lower right", frameon=True, framealpha=1.0,
+                             facecolor="white", edgecolor="#BFBFBA", borderpad=0.6)
+
 
 def _draw_entry_panel(ax, norm, paths_df, curves_df, vint, g, H, imp=None, title=True,
-                      phi_label=PHI_VINTAGE_LABEL):
+                      phi_label=PHI_VINTAGE_LABEL, fontsizes=None, legend_kwargs=None,
+                      compact_labels=False):
     """One normalisation's panel. Shared by the two-panel exhibit and the standalone
-    per-panel figures the paper inserts use, so the two can never drift apart."""
+    per-panel figures the paper inserts use, so the two can never drift apart.
+
+    `fontsizes` overrides DEFAULT_FONTSIZES's title/axis-label/tick/legend sizes; callers that
+    draw the panel at print size (rather than drawing big and letting \\includegraphics shrink
+    it) pass larger values here so the text is still legible once placed.
+
+    `legend_kwargs` overrides DEFAULT_LEGEND_KWARGS (loc/bbox_to_anchor/ncol/spacing/frame);
+    the print-size panels need this because a legend sized to be READABLE at that scale covers
+    a much bigger fraction of a small axes than the same legend did on the large drawing
+    canvas, so 'lower right' at the old padding can reach into the data.
+
+    `compact_labels`: shortens the legend's own text (not the caption, which keeps the full
+    wording) so the print-size legend can sit inside the axes without widening past its empty
+    corner. Same numbers (n, phi) as the verbose labels, read from the same variables."""
+    fs = {**DEFAULT_FONTSIZES, **(fontsizes or {})}
+    lk = {**DEFAULT_LEGEND_KWARGS, **(legend_kwargs or {})}
     from matplotlib.patches import Patch
+    firm_handles = []
     for kind, color in (("B", B_COLOR), ("D", D_COLOR)):
         sub = paths_df[(paths_df["kind"] == kind) & (paths_df["norm"] == norm)]
         if sub.empty:
@@ -1179,29 +1422,54 @@ def _draw_entry_panel(ax, norm, paths_df, curves_df, vint, g, H, imp=None, title
         ax.fill_between(sub["h"], sub["ci_lo"], sub["ci_hi"], color=color, alpha=0.28, lw=0,
                         zorder=1.2 if kind == "B" else 1.0)
         n0 = int(sub["n"].iloc[0])
-        ax.plot(sub["h"], sub["median"], color=color, lw=2, marker="o", ms=4.5,
-                markeredgecolor="white", markeredgewidth=1.0, zorder=3,
-                label=f"{kind}-firm entries (n={n0})")
+        entry_lbl = (f"{kind} firms (n = {n0})" if compact_labels
+                    else f"{kind}-firm entries (n={n0})")
+        line, = ax.plot(sub["h"], sub["median"], color=color, lw=2, marker="o", ms=4.5,
+                        markeredgecolor="white", markeredgewidth=1.0, zorder=3)
+        firm_handles.append((line, entry_lbl))
+    vint_lines = []
     for lab, phi, _ in vint:
         c = curves_df[(curves_df["vintage"] == lab) & (curves_df["norm"] == norm)]
-        ax.plot(c["h"], c["value"], color=MODEL_COLORS.get(lab, INK), lw=1.6,
-                ls=(0, DASHES.get(lab, (5, 2))), zorder=2,
-                label=f"{ROMAN.get(lab, lab)} {phi_label} = {phi:.3f}")
+        line, = ax.plot(c["h"], c["value"], color=MODEL_COLORS.get(lab, INK), lw=1.6,
+                        ls=(0, DASHES.get(lab, (5, 2))), zorder=2)
+        vint_lines.append((lab, phi, line))
     # The shading is named in the legend as well as in the caption: the model curves carry
     # no band, and a reader should not have to guess which lines the shading belongs to.
     band_key = Patch(facecolor="#9E9E9E", alpha=0.45, lw=0,
-                     label="95% bootstrap CI of the median")
+                     label="95% CI of median" if compact_labels
+                     else "95% bootstrap CI of the median")
+    benchmark_line = None
     if norm == "alt":
-        # The benchmark stays as a rule; naming it in the legend spent a row on a
-        # line the caption already explains.
-        ax.axhline(1.0, color="#B71C1C", lw=1.6, ls=":", zorder=4, label="_nolegend_")
-        # D-firm dispersion is wide (n is small and shares are national); clip so the
-        # comparison of interest -- B vs the model curves -- stays legible.
+        # Instant sorting / no sleepiness: under s_h/s_end, a fully-reoptimising entrant with
+        # no sleepiness reaches its steady-state share immediately, so the ratio sits at 1
+        # every horizon -- the benchmark this panel tests the data against (see the caption).
+        # Grey, not red: red is already the D-firm series' colour, and this rule is not a
+        # series over events, so giving it a colour of its own avoids reading it as one.
+        benchmark_line = ax.axhline(1.0, color=INK, lw=1.6, ls=":", zorder=4,
+                                    label="_nolegend_")
+    if compact_labels:
+        # y-limits from what is actually plotted (both firms' CI bands, the model curves, and
+        # -- in panel "alt" -- the benchmark rule) plus a small margin, rather than a fixed
+        # guess: D-firm dispersion is wide (n is small and shares are national) and routinely
+        # exceeds any single fixed ceiling, which silently clipped part of the CI band above it.
+        _sub = paths_df[paths_df["norm"] == norm]
+        _cur = curves_df[curves_df["norm"] == norm]
+        _vals = pd.concat([_sub["ci_lo"], _sub["ci_hi"], _cur["value"]])
+        if norm == "alt":
+            _vals = pd.concat([_vals, pd.Series([1.0])])
+        y_lo, y_hi = float(_vals.min()), float(_vals.max())
+        pad = 0.05 * (y_hi - y_lo)
+        ax.set_ylim(y_lo - pad, y_hi + pad)
+    elif norm == "alt":
+        # fig_routine_dynamics*/the combined exhibit keep the original fixed ceiling
+        # unchanged -- only the print-size Figure 2 panels (compact_labels) get the
+        # data-driven y-limit above.
         ax.set_ylim(-0.05, 1.65)
     if title:
-        ax.set_title(PANEL_TITLE[norm], loc="left", fontsize=10)
-    ax.set_xlabel("Quarters Since Entry ($h$)")
-    ax.set_ylabel("Normalized Market Share")
+        ax.set_title(PANEL_TITLE[norm], loc="left", fontsize=fs["title"])
+    ax.set_xlabel("Quarters Since Entry ($h$)", fontsize=fs["label"])
+    ax.set_ylabel("Normalized Market Share", fontsize=fs["label"])
+    ax.tick_params(axis="both", which="major", labelsize=fs["tick"])
     ax.grid(axis="y", color=GRID, lw=0.8)
     ax.set_axisbelow(True)
     for sp in ("top", "right"):
@@ -1210,14 +1478,53 @@ def _draw_entry_panel(ax, norm, paths_df, curves_df, vint, g, H, imp=None, title
         ax.spines[sp].set_color("#BFBFBA")
         ax.spines[sp].set_linewidth(0.8)
     ax.set_xlim(-0.3, H + 0.3)
-    # Opaque box: the curves converge into the lower-right corner at the short horizons, so
-    # a transparent legend would sit on top of them.
-    handles, labels = ax.get_legend_handles_labels()
-    n_data = sum(1 for lb in labels if "entries" in lb)
-    handles.insert(n_data, band_key)
-    labels.insert(n_data, band_key.get_label())
-    leg = ax.legend(handles, labels, loc="lower right", fontsize=7.5, frameon=True,
-                    framealpha=1.0, facecolor="white", edgecolor="#BFBFBA", borderpad=0.6)
+    if compact_labels:
+        # h is discrete (whole quarters); matplotlib's own default locator here picks
+        # 2.5-quarter ticks, which name a horizon that was never observed.
+        from matplotlib.ticker import MaxNLocator
+        ax.xaxis.set_major_locator(MaxNLocator(integer=True))
+    # Explicit handles/labels (rather than ax.get_legend_handles_labels(), which pulls
+    # whatever `label=` was passed to plot()): the compact-label model-curve entries below are
+    # merged into ONE row via a tuple handle, which get_legend_handles_labels() cannot express.
+    # Row order: compact (fig_entry_dynamics_a/b) puts the CI-band swatch first, matching the
+    # layout already checked against the data; the verbose/default path (fig_routine_dynamics*,
+    # the combined two-panel exhibit) keeps its original order -- B, D, then the band, then the
+    # model curves -- unchanged from before this function took an explicit handle list.
+    handles, labels = [], []
+    if compact_labels:
+        handles.append(band_key)
+        labels.append(band_key.get_label())
+    for line, lbl in firm_handles:
+        handles.append(line)
+        labels.append(lbl)
+    if not compact_labels:
+        handles.append(band_key)
+        labels.append(band_key.get_label())
+    if compact_labels and len(vint_lines) >= 2:
+        # One row for every vint curve: "Model (III), (IV)" -- no phi values in the legend
+        # (those moved to V_Main's figure note, set from the same d6_meta.json vintages this
+        # loop reads its phi from, via make_paper_numbers.py macros -- not printed here so
+        # the row stays short). The handle is a tuple of the actual Line2D objects (both
+        # colours/dashes draw in the swatch via HandlerTuple below), not a re-styled stand-in.
+        romans = [ROMAN.get(lab, lab) for lab, _, _ in vint_lines]
+        combined_lbl = "Model " + ", ".join(romans)
+        handles.append(tuple(line for _, _, line in vint_lines))
+        labels.append(combined_lbl)
+    else:
+        for lab, phi, line in vint_lines:
+            handles.append(line)
+            labels.append(f"{ROMAN.get(lab, lab)}: mean $\\hat\\phi$ = {phi:.3f}" if compact_labels
+                          else f"{ROMAN.get(lab, lab)} {phi_label} = {phi:.3f}")
+    if compact_labels and norm == "alt" and benchmark_line is not None:
+        # Named here only (panel "alt"/b): panel "main"/a never draws this rule, and the
+        # verbose/default path (fig_routine_dynamics*) still leaves it to the caption.
+        handles.append(benchmark_line)
+        labels.append("No sleepiness")
+    # Opaque-by-default box (frame alpha in `lk`, not necessarily 1.0): where the legend does
+    # sit over the axes, it should occlude rather than let a curve show through it half-drawn.
+    from matplotlib.legend_handler import HandlerTuple
+    leg = ax.legend(handles, labels, fontsize=fs["legend"],
+                    handler_map={tuple: HandlerTuple(ndivide=None, pad=0.3)}, **lk)
     leg.set_zorder(10)
     leg.get_frame().set_linewidth(0.8)
 
@@ -1230,7 +1537,7 @@ def _panel_tex(norm, vint, imp, gmode, n_b, stem="fig_entry_dynamics", per_routi
     `n_by` maps (kind, norm) to the number of events the panel's median is taken over, so the
     caption can say when the two normalisations do not keep the same events."""
     phi_desc = (r"mean over the events of their fitted $\hat\phi_m$" if per_routine
-                else r"unweighted mean of the fitted $\hat\phi_{m,t}$")
+                else r"Table 4's Mean $\hat{\phi}$")
     labs = ", ".join(f"{ROMAN.get(lab, lab)} ({phi_desc} = {phi:.3f})" for lab, phi, _ in vint)
     accrual = ("each entrant's own deposit-weighted accrual path" if gmode != "scalar"
                else "the median gross accrual across the panel")
@@ -1249,11 +1556,6 @@ def _panel_tex(norm, vint, imp, gmode, n_b, stem="fig_entry_dynamics", per_routi
                 r"$(s_h-s_0)/(s_{\mathrm{end}}-s_0)$, with $s_{\mathrm{end}}$ the average over "
                 r"$h\in\{10,11,12\}$; the normalisation cancels the level of the awake inflow, "
                 r"so the path depends on $\phi$ and the accrual alone.")
-        if not per_routine:
-            what += (r" The mean is taken over the routine's specification-(12) cells "
-                     r"(conglomerate $\times$ deposit type $\times$ market $\times$ quarter); it "
-                     r"is not the Mean $\hat{\phi}$ of the second-stage comparison table, which "
-                     r"averages the population-weighted national $\hat{\phi}_t$ over quarters.")
         if imp and "B" in imp:
             r_ = imp["B"]
             what += (r" Inverting the comparison, the paths alone imply $\phi = "
@@ -1264,20 +1566,34 @@ def _panel_tex(norm, vint, imp, gmode, n_b, stem="fig_entry_dynamics", per_routi
                "Entrant share accumulation against the sleepiness-implied path")
         lab = stem.replace("fig_", "") + "_main"
     else:
+        # "labelled ... in the legend" and the y-range sentence both describe something that
+        # is true of THIS panel's own axes, not of fig_routine_dynamics*'s alt panel (per_routine
+        # =True): that one still leaves the rule unlabelled (see _draw_entry_panel's
+        # compact_labels gate) and keeps the original fixed y-ceiling, so it gets the original
+        # wording instead of silently claiming a legend entry or a range it does not have.
+        benchmark_clause = ("" if per_routine else
+                            ", labelled ``No sleepiness'' in the legend")
+        range_clause = (r"The vertical range is clipped for legibility" if per_routine else
+                        r"The vertical range includes the full 95\% band")
         what = (r"The entry events under the alternative normalisation $s_h/s_{\mathrm{end}}$, "
-                r"in which \emph{instant sorting} --- the persistent-preferences benchmark with no "
-                r"sleepiness, under which an entrant reaches its steady-state share immediately --- "
-                r"is the flat line at one. The observed median one quarter after entry is far below "
-                r"it, which is the qualitative content of the test: entry is gradual. Model curves "
-                r"as in the preceding figure. The vertical range is clipped for legibility; D-firm "
-                r"dispersion is wide because those shares are national and few.")
+                r"in which \emph{instant sorting} (the persistent-preferences benchmark with no "
+                r"sleepiness, under which an entrant reaches its steady-state share immediately) "
+                r"is the flat line at one" + benchmark_clause + r". The observed "
+                r"median one quarter after entry is far below it, which is the qualitative content "
+                r"of the test: entry is gradual. Model curves as in the preceding figure. "
+                + range_clause + r"; D-firm dispersion is wide because "
+                r"those shares are national and few.")
         for kind in ("B", "D"):
             nm, na = (n_by or {}).get((kind, "main")), (n_by or {}).get((kind, "alt"))
             if nm is not None and na is not None and nm != na:
+                diff = na - nm
+                drop_desc = (r"an event whose plateau share is within $10^{-6}$ of its entry "
+                            r"share" if diff == 1 else
+                            f"{diff} events" + r" whose plateau shares are within $10^{-6}$ of "
+                            r"their entry shares")
                 what += (f" The {kind}-firm median is over {na} events here and {nm} under "
-                         r"the plateau normalisation, which drops an event whose plateau "
-                         r"share is within $10^{-6}$ of its entry share (a zero denominator "
-                         r"for $(s_h-s_0)/(s_{\mathrm{end}}-s_0)$).")
+                         r"the plateau normalisation, which drops " + drop_desc +
+                         r" (a zero denominator for $(s_h-s_0)/(s_{\mathrm{end}}-s_0)$).")
         cap = "Entrant share accumulation against the instant-sorting benchmark"
         lab = stem.replace("fig_", "") + "_alt"
     return ("\\begin{figure}[htbp]\n"
@@ -1288,17 +1604,56 @@ def _panel_tex(norm, vint, imp, gmode, n_b, stem="fig_entry_dynamics", per_routi
             "\\end{figure}\n")
 
 
+# fig_entry_dynamics_a/b (Figure 2 of V_Main, label fig:phi_entry_dyn_fixed_phi) are each
+# placed in a 0.49\textwidth minipage at \includegraphics[width=\linewidth]. V_Main's
+# \textwidth is 6.5in (12pt article, letterpaper, margin=1in), so each panel prints at
+# 0.49 * 6.5 = 3.185in wide. Saving the standalone panel AT that size, with fonts sized for
+# it, keeps tick/axis/legend text at roughly 8-9pt on the page; drawing it big (as the
+# combined exhibit and the per-routine panels still do) and letting LaTeX shrink it by ~2x
+# is what a reviewer flagged as illegible.
+ENTRY_DYN_PRINT_FIGSIZE = (3.19, 2.55)
+# legend=8 (axis label=10, tick=9 -- both up from the previous 9/8.5): the model-curve row no
+# longer prints phi values (just "Model (III), (IV)"; the phi's moved to V_Main's figure note),
+# which is what makes legend=8 possible with genuinely relaxed padding below -- measured
+# (legend.get_window_extent(), not eyeballed) against d6_entry_paths.csv's ci_lo and
+# d6_model_curves.csv. legend=8.5 was tried first (the target) and rejected: at
+# handlelength=1.8 with tight padding it JUST clears panel "main" (margin +0.0015, a sliver),
+# and every more relaxed padding at 8.5 overlaps -- not a comfortable fit at the size this
+# reviewer asked for. legend=8 clears both panels with room at the SAME padding, so that is
+# what ships; see the caller's report for the exact margins.
+ENTRY_DYN_PRINT_FONTSIZES = dict(title=10, label=10, tick=9, legend=8)
+# Per-panel again: panel "main" keeps the fully relaxed padding this reviewer originally
+# suggested (handlelength~1.5, handletextpad~0.4, borderpad~0.3, labelspacing~0.25) -- it
+# clears its data with room (see the caller's report for the exact margin). Panel "alt" grew
+# a fifth row ("No sleepiness", naming the benchmark rule) AND a taller y-range (the y-limit
+# fix below shows the full CI band, up to ~1.83 instead of the old fixed 1.65 ceiling), so the
+# same box now spans more data-units vertically and reaches into the D-firm curve at the old
+# padding. Tightened just enough to clear again (handlelength unchanged at 1.5, so the B/D
+# swatches still read as solid lines; textpad/borderpad/labelspacing pulled in).
+ENTRY_DYN_LEGEND_KWARGS = {
+    "main": dict(loc="lower right", framealpha=0.85, handlelength=1.5, handletextpad=0.4,
+                borderpad=0.3, labelspacing=0.25, borderaxespad=0.15),
+    "alt": dict(loc="lower right", framealpha=0.85, handlelength=1.5, handletextpad=0.3,
+               borderpad=0.2, labelspacing=0.15, borderaxespad=0.15),
+}
+
+
 def make_figure(paths_df, curves_df, vint, g, args, imp=None):
     """The reference-curve exhibit: one scalar phi per routine."""
     make_panel_figures(paths_df, curves_df, vint, g, args, imp,
                        stem="fig_entry_dynamics", out_stem="d6_entry_dynamics",
                        suptitle="Entrant share accumulation: data vs the "
-                                "sleepiness-implied path")
+                                "sleepiness-implied path",
+                       panel_figsize=ENTRY_DYN_PRINT_FIGSIZE,
+                       panel_fontsizes=ENTRY_DYN_PRINT_FONTSIZES,
+                       panel_legend_kwargs=ENTRY_DYN_LEGEND_KWARGS,
+                       panel_compact_labels=True)
 
 
 def make_panel_figures(paths_df, curves_df, vint, g, args, imp=None,
                        stem="fig_entry_dynamics", out_stem=None, suptitle="",
-                       per_routine=False):
+                       per_routine=False, panel_figsize=(6.4, 4.6), panel_fontsizes=None,
+                       panel_legend_kwargs=None, panel_compact_labels=False):
     import matplotlib.pyplot as plt
     if paths_df.empty:
         print("  [fig] no paths to plot")
@@ -1334,9 +1689,17 @@ def make_panel_figures(paths_df, curves_df, vint, g, args, imp=None,
     n_by = {(k, nm): int(s["n"].iloc[0])
             for (k, nm), s in paths_df.groupby(["kind", "norm"], sort=False) if len(s)}
     for norm in ("main", "alt"):
-        f1, a1 = plt.subplots(figsize=(6.4, 4.6))
+        f1, a1 = plt.subplots(figsize=panel_figsize)
+        # panel_legend_kwargs may be one dict shared by both panels, or {"main": {...},
+        # "alt": {...}} when the two need different padding to clear their own data.
+        if isinstance(panel_legend_kwargs, dict) and {"main", "alt"} & panel_legend_kwargs.keys():
+            norm_legend_kwargs = panel_legend_kwargs.get(norm)
+        else:
+            norm_legend_kwargs = panel_legend_kwargs
         _draw_entry_panel(a1, norm, paths_df, curves_df, vint, g, H, imp, title=False,
-                          phi_label=phi_label)
+                          phi_label=phi_label, fontsizes=panel_fontsizes,
+                          legend_kwargs=norm_legend_kwargs,
+                          compact_labels=panel_compact_labels)
         f1.tight_layout()
         pstem = f"{stem}_{PANEL_STEM[norm]}"
         try:
@@ -1401,6 +1764,136 @@ def _write_meta(g, H, plateau_w, vint, imp, args):
     print(f"  -> {META_NAME}")
 
 
+def rebuild_curves_only(args):
+    """Rebuild d6_model_curves.csv, and d6_meta.json's "vintages" entry, from a fresh
+    phi_vintages() reading -- WITHOUT the entry-path bootstrap.
+
+    model_curve()/vintage_curve() are pure functions of (phi, g, H, plateau_w, norm): nothing
+    in them resamples an event. The only bootstrap-adjacent input they need is the per-event
+    accrual matrix (gB, under g-mode 'path'/'event'), which main() never persists as such --
+    only its diagnostic SUMMARY columns (g_e_mean/min/max, the g_e_* counts) reach
+    d6_entry_events.csv. gB itself has no randomness in it either: build_g_paths is a
+    groupby/reindex/ffill over the already-written demand parquet, keyed only on
+    (congl, mkt, q_entry, keep) -- all four already sit in d6_entry_events.csv (split by its
+    'kind' column) -- so it is cheap to rebuild here (one parquet, a few seconds) rather than
+    reloading the full market panel and re-deriving the events, and certainly rather than
+    re-running the 999-draw bootstrap that produces d6_entry_paths.csv and d6_implied_phi.csv.
+    Neither of those two files, nor d6_entry_events.csv, is written by this function.
+    """
+    mp = OUT_DIR / META_NAME
+    if not mp.exists():
+        raise SystemExit(f"{META_NAME} not found in {OUT_DIR} -- run the compute half first "
+                         f"(sleep_job.sh SLEEP_STEP=entry, or --compute-only locally).")
+    meta = json.loads(mp.read_text(encoding="utf-8"))
+    g, H = float(meta["g"]), int(meta["horizon"])
+    plateau_w = [int(h) for h in meta["plateau_w"]]
+    gmode = meta["g_mode"]
+    print(f"=== D6 curves-only rebuild from {OUT_DIR} ===")
+    print(f"  g={g:.5f}  horizon={H}  g-mode={gmode}  plateau_w={plateau_w}")
+
+    if gmode == "scalar":
+        # main()'s own gB collapses to the plain scalar in this mode (build_g_paths' array is
+        # computed but then discarded there too -- see gB = G_b if gmode != "scalar" else g),
+        # so there is nothing per-event to rebuild and d6_entry_events.csv is not needed.
+        gB = g
+        print("  [g] g-mode=scalar: gB is the cached scalar g -- no per-event g to rebuild")
+    else:
+        ev_path = OUT_DIR / "d6_entry_events.csv"
+        if not ev_path.exists():
+            raise SystemExit(f"{ev_path.name} not found in {OUT_DIR} -- needed to rebuild the "
+                             f"per-event g path under g-mode={gmode!r}. Run the compute half "
+                             "first.")
+        events = pd.read_csv(ev_path)
+        reg_b = events[events["kind"] == "B"].copy()
+        gB, _ = build_g_paths(reg_b, H, gmode, g)
+        print(f"  [g] rebuilt the per-event g path for {len(reg_b):,} B candidates "
+              f"({int(reg_b['keep'].sum()):,} kept) from {ev_path.name} + the demand parquet "
+              "-- deterministic, no resampling")
+
+    vint = phi_vintages()
+    if not vint:
+        raise SystemExit("phi_vintages() returned nothing -- no national_phi_t.csv found for "
+                         f"any of {REF_ESTS}")
+    for lab, p, src in vint:
+        print(f"  phi[{lab}] = {p:.4f}  ({src})   phi*g = {p*g:.4f}")
+
+    curves = []
+    for norm in ("main", "alt"):
+        for lab, phi, _ in vint:
+            c = vintage_curve(phi, gB, H, norm, plateau_w)
+            curves.append(pd.DataFrame({"h": range(H + 1), "value": c,
+                                        "vintage": lab, "phi": phi, "norm": norm}))
+    curves_df = pd.concat(curves, ignore_index=True)
+    curves_df.to_csv(OUT_DIR / "d6_model_curves.csv", index=False)
+    print(f"  -> d6_model_curves.csv ({len(curves_df)} rows)")
+
+    # Only "vintages" changes; every other cached setting (g, horizon, plateau_w, g_mode,
+    # boot, seed, implied_phi_kinds, ...) describes the bootstrap run that is NOT re-run here,
+    # so it is left exactly as that run wrote it rather than rebuilt from this call's args.
+    meta["vintages"] = [[str(lab), float(p), str(src)] for lab, p, src in vint]
+    mp.write_text(json.dumps(meta, indent=2), encoding="utf-8")
+    print(f"  -> {META_NAME} (vintages updated; every other key left as the compute run wrote it)")
+    print("\nd6_entry_paths.csv, d6_implied_phi.csv, d6_phi_in_interval.csv and "
+          "d6_entry_events.csv were not touched by this run.")
+    return 0
+
+
+def run_robustness_only(args):
+    """Rebuild ONLY d6_drop_robustness.csv/.json -- does not touch any other d6_* file.
+
+    Unlike --curves-only, this needs the raw per-event share PATHS (paths_b/paths_d), not just
+    the registry columns d6_entry_events.csv caches, so it re-derives them the same
+    deterministic way main() does: reload market_panel.csv and re-run build_events for both
+    kinds. That is the real cost here (no bootstrap of consequence: build_drop_robustness's own
+    two D/main resamples are cheap next to it) -- still far cheaper than a full compute run,
+    which also resamples B and D under both normalisations, inverts phi from the entry shape,
+    and rebuilds every model curve.
+    """
+    mp = OUT_DIR / META_NAME
+    if not mp.exists():
+        raise SystemExit(f"{META_NAME} not found in {OUT_DIR} -- run the compute half first "
+                         f"(sleep_job.sh SLEEP_STEP=entry, or --compute-only locally).")
+    meta = json.loads(mp.read_text(encoding="utf-8"))
+    H = int(meta["horizon"])
+    plateau_w = [int(h) for h in meta["plateau_w"]]
+    # build_events() reads args.horizon and args.window_only directly (it has no H/plateau_w
+    # parameters of its own), so these must be synced from the compute run BEFORE calling it --
+    # the same reason render_figures() overrides them from meta rather than trusting this
+    # invocation's own CLI defaults.
+    args.horizon = H
+    args.window_only = bool(meta["window_only"])
+    print(f"=== D6 drop-robustness rebuild from {OUT_DIR} ===")
+    print(f"  horizon={H}  plateau_w={plateau_w}  boot={args.boot}  seed={args.seed}  "
+         f"window_only={args.window_only}")
+
+    usecols = (["CodConglomeradoPrudencial", "CNPJ_Lider", "CODMUN_IBGE", "mca_code",
+               "year", "quarter", "Source"] + DEP_COLS)
+    df = load_panel_cached(PANEL_CSV)
+    if len(df) < 400_000:
+        raise SystemExit(f"market_panel has only {len(df):,} rows -- it is probably being "
+                         "rewritten right now (panel_10/panel_6). Re-run once that finishes.")
+    df = df[[c for c in usecols if c in df.columns]].copy()
+    df["qidx"] = df["year"].astype(int) * 4 + df["quarter"].astype(int) - 1
+    df["dep"] = df[DEP_COLS].fillna(0).sum(axis=1)
+    df = df[df["dep"] > 0]
+    df["congl"] = df["CodConglomeradoPrudencial"].astype(str)
+    df["cnpj_root"] = (df["CNPJ_Lider"].astype(str).str.replace(r"\D", "", regex=True)
+                       .str[:8].replace({"": np.nan, "nan": np.nan}))
+    is_d = df["CODMUN_IBGE"].astype(str).str.strip().isin(["0", "0.0"])
+    args.window_q0 = 2016 * 4
+    print(f"  panel rows with positive deposits: {len(df):,}  (D rows {int(is_d.sum()):,})")
+
+    branch = load_branch_entry(args)
+    b = df[~is_d].copy(); b["mkt"] = b["mca_code"].astype(str)
+    d = df[is_d].copy(); d["mkt"] = "NATIONAL"
+    reg_b, paths_b = build_events(b, "B", args, branch)
+    reg_d, paths_d = build_events(d, "D", args)
+
+    build_drop_robustness(reg_b, paths_b, reg_d, paths_d, H, plateau_w, args.boot, args.seed)
+    print("\nOnly d6_drop_robustness.csv/.json were written; every other d6_* file is untouched.")
+    return 0
+
+
 def render_figures(args):
     """Draw every D6 exhibit from what a --compute-only run left in OUT_DIR.
 
@@ -1423,6 +1916,9 @@ def render_figures(args):
     args.boot, args.seed = int(meta["boot"]), int(meta["seed"])
     args.window_only = bool(meta["window_only"])
     print(f"=== D6 figures from {OUT_DIR} ===")
+    if _SANDBOXED:
+        print(f"  [sandbox] SLEEP_OUT_ROOT redirects this run: exhibits go to {DRAFTS}, "
+              "not Drafts.")
     print(f"  g={g:.5f}  horizon={H}  g-mode={args.g_mode}  phi-mode={args.phi_mode}")
 
     paths_df = pd.read_csv(OUT_DIR / "d6_entry_paths.csv")
@@ -1491,5 +1987,28 @@ if __name__ == "__main__":
     g_split.add_argument("--figures-only", action="store_true", dest="figures_only",
                          help="draw every exhibit from the CSVs a --compute-only run left "
                               "in DIAG_PHI_SEPARATION; compute nothing (the local half)")
+    g_split.add_argument("--curves-only", action="store_true", dest="curves_only",
+                         help="rebuild d6_model_curves.csv and d6_meta.json's vintages entry "
+                              "from a fresh phi_vintages() reading, reusing the cached g/"
+                              "horizon/plateau_w and (deterministically) the per-event g path; "
+                              "does not touch d6_entry_paths.csv or d6_implied_phi.csv, and "
+                              "runs no bootstrap. Follow with --figures-only to redraw.")
+    g_split.add_argument("--robustness-only", action="store_true", dest="robustness_only",
+                         help="rebuild ONLY d6_drop_robustness.csv/.json -- the D-firm "
+                              "plateau-norm median/CI with vs. without the two near-zero-"
+                              "denominator events event_paths() drops, plus the B/D "
+                              "dropped/censored-event census. Reuses the cached horizon/"
+                              "plateau_w/window_only and re-derives B/D events deterministically "
+                              "(no bootstrap beyond its own two small D/main resamples); "
+                              "verifies its 'kept' side against the published "
+                              "d6_entry_paths.csv and refuses to write on a mismatch. Touches "
+                              "no other d6_* file.")
     _args = ap.parse_args()
-    raise SystemExit(render_figures(_args) if _args.figures_only else main(_args))
+    if _args.figures_only:
+        raise SystemExit(render_figures(_args))
+    elif _args.curves_only:
+        raise SystemExit(rebuild_curves_only(_args))
+    elif _args.robustness_only:
+        raise SystemExit(run_robustness_only(_args))
+    else:
+        raise SystemExit(main(_args))

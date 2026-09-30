@@ -49,7 +49,7 @@ def effects_clause(kind: str, linear_cols: str = "", link_cols: str = "") -> str
         return rf"Coefficients {PER_UNIT}. "
     if kind == "ame":
         return rf"Average marginal effects {PER_UNIT}. "
-    return (rf"Coefficients ({linear_cols}) and average marginal effects ({link_cols}) "
+    return (rf"Coefficients {linear_cols} and average marginal effects {link_cols} "
             rf"{PER_UNIT}. ")
 
 
@@ -127,5 +127,6 @@ def reversed_draws_note(fits) -> str:
     if not any(worst.values()):
         return ""
     of_b = rf" of $B={B}$" if B else ""
-    return (rf"Retained reversed-index draws: at most {worst['conglomerate']} (conglomerate) and "
-            rf"{worst['quarter']} (quarter){of_b} per column. ")
+    return (rf"Bootstrap draws whose re-solved index reverses sign are kept: at most "
+            rf"{worst['conglomerate']} (conglomerate) and {worst['quarter']} (quarter){of_b} "
+            rf"per column. ")

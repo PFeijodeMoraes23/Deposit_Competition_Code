@@ -348,7 +348,11 @@ LINE_COLUMNS = ["bank_key", "cnpj8", "entity", "period", "frequency", "agency", 
                 # (if any), and the earlier publication a line supersedes
                 "entity_rule", "entity_cnpj8", "published", "republished", "supersedes",
                 # the amount as printed; differs from amount_brl only where `imputed`
-                "amount_as_printed", "imputed", "imputation_rule"]
+                "amount_as_printed", "imputed", "imputation_rule",
+                # BRB: which later notice this row-specific text correction is from, when one
+                # zeroed this line (`brb_apply_notice_corrections`); None on every other line,
+                # including one changed only by `imputed_from_row_total`
+                "corrected_by"]
 
 
 @dataclass
@@ -997,6 +1001,12 @@ AMOUNT_RE = r"-?R?\$?\s?-?\d[\d.]*,\d{2}"
 
 BRB_SPONSOR_CATEGORY = re.compile(r"ESPORTE|ESPORTIVO|ARTEECULTURA|ENTRETENIMENTO"
                                   r"|RELACIONAMENTOINSTITUCIO|CAUSASSOCIAIS|PATROCIN")
+BRB_ACCRUAL_RE = re.compile(r"REGIME\w*DECOMPETENCIA")
+# A retification or republication marker. Plain "REPUBLIC" also matches "REPUBLICA" the noun
+# ("Aberto da Republica de Tenis", a sponsored tournament's own name, or "Republica Federativa do
+# Brasil"), which is not a notice about republishing anything, so the verb forms are spelled out
+# instead of the bare stem.
+BRB_RETIFIC_RE = re.compile(r"RETIFIC|REPUBLICAD|REPUBLICAR|REPUBLICACA")
 
 
 def brb_group(classification: str, purpose: str, sponsorship_table: bool) -> str:
@@ -1161,6 +1171,13 @@ BRB_SIGN_GAP = 6.0            # pt: a minus sign this close to an amount belongs
 # passed) the header's text as its beneficiary, which also flipped it to the sponsorship series.
 BRB_PAGE_FURNITURE = re.compile(r"DIARIO OFICIAL|PAGINA \d|ICP-BRASIL|DOCUMENTO ASSINADO"
                                 r"|INFRAESTRUTURA DE CHAVES|WWW[.]|HTTP")
+# The same furniture, but for `brb_recover_text_tables` only: plain "DIARIO OFICIAL" also matches
+# "Diario Oficial do DF", a real BENEFICIARY in several 2016Q1 rows (the gazette itself, paid for
+# publishing legal notices) - excluding it the way `brb_sweep_outside` does dropped three real rows
+# (R$16,995.00) that each reconcile through their own TOTAL cell. The running header always
+# completes "do Distrito Federal"; the beneficiary's short form never does.
+BRB_TEXT_TABLE_FURNITURE = re.compile(r"DIARIO OFICIAL DO DISTRITO FEDERAL|PAGINA \d|ICP-BRASIL"
+                                      r"|DOCUMENTO ASSINADO|INFRAESTRUTURA DE CHAVES|WWW[.]|HTTP")
 
 
 @dataclass
@@ -1187,6 +1204,21 @@ class BrbContext:
     tables: dict[str, dict] = field(default_factory=dict)
     line_scopes: set[str] = field(default_factory=set)
     imputations: list[dict] = field(default_factory=list)
+    # The table state as it stood at the end of the last page read for each DODF issue, keyed by
+    # that page's number: what lets a page numbered page+1 of the SAME issue continue the table
+    # even when it is read from a different cached file (MAJOR A, 09-28 review). `state` is None
+    # once the table has closed (its own VALOR TOTAL row was read) - there is then nothing to
+    # continue, so a later page starting a new table is never mistaken for a continuation.
+    continuations: dict[int, dict] = field(default_factory=dict)
+    # Filing order for tables the gazette never dates (a bank-produced extract, a signature dated
+    # "1o de <mes>" with no DODF issue, an "EXTRA" edition the running-header regex does not
+    # parse): the order `parse_brb` is called in, i.e. the bank's own document listing order.
+    file_order: int = 0
+    # (entity, year, quarter) triples that already have a line or a total somewhere, checked by
+    # `brb_recover_text_tables` before it registers a new table off a heading whose own table the
+    # grid never read: an entity whose OTHER table on the SAME page already carries real data
+    # (Cartao BRB's, e.g.) is never re-read a second way, only one that has none at all.
+    observed: set[tuple[str, int, int]] = field(default_factory=set)
 
 
 # A QDD notice opens with "PLANO ANUAL DE PUBLICIDADE/<year>" and the title "DEMONSTRATIVO DAS
@@ -1276,11 +1308,14 @@ MONTHS_PT_RE = "|".join(MONTHS_PT)
 
 def brb_publication(page_text: str) -> dict | None:
     """Date, issue and page of a gazette page, from its running header ("No 66, sexta-feira,
-    6 de abril de 2018 PAGINA 37", the No written with an ordinal or a degree sign). Pages the bank
-    produced itself carry none."""
+    6 de abril de 2018 PAGINA 37", the No written with an ordinal or a degree sign, an "EXTRA"
+    edition's issue written "No 66 - EXTRA," before the weekday). Pages the bank produced itself
+    carry none - a bank-produced extract, a signature dated "1o de <mes> de <year>" with no DODF
+    issue, or the like; those go through `brb_finish`'s filing-order fallback instead, since this
+    function only ever returns an actual gazette date, never a guess."""
     t = fold(page_text)
-    m = re.search(r"\bN\s*[O0\xb0]\.?\s*(\d{1,4})\s*,\s*[A-Z]+(?:-FEIRA)?\s*,\s*(\d{1,2})\s*DE\s*"
-                  rf"({MONTHS_PT_RE.upper()})\s*DE\s*(20\d{{2}})", t)
+    m = re.search(r"\bN\s*[O0\xb0]\.?\s*(\d{1,4})\s*(?:[\-–]?\s*EXTRA\s*)?,\s*[A-Z]+(?:-FEIRA)?"
+                  r"\s*,\s*(\d{1,2})\s*DE\s*" rf"({MONTHS_PT_RE.upper()})\s*DE\s*(20\d{{2}})", t)
     if not m:
         return None
     p = re.search(r"PAGINA\s*(\d{1,4})", t)
@@ -1289,20 +1324,41 @@ def brb_publication(page_text: str) -> dict | None:
             "label": f"DODF {m.group(1)}" + (f" p.{p.group(1)}" if p else "") + f" ({date})"}
 
 
+# The word that must follow TOTAL/TOTAIS once the label's whitespace has been stripped, so
+# "TOTALIZADOR", "TOTALMENTE" or a beneficiary named "Totalcred" never pass as a total row: either
+# nothing (end of the cell), any single character that is not itself an uppercase letter -
+# punctuation (a trailing "." some tables print after every label, a colon, a dash), a digit (a
+# year or a "1o TRIMESTRE" heading fused onto the word by the whitespace strip) - or one of the
+# words the gazette actually appends to TOTAL in this table ("TOTAL R$", "TOTAL PAGO", "TOTAL
+# REALIZADO", "TOTAL CONTABILIZADO", "TOTAL GERAL", "TOTAL ORCADO", "VALOR TOTAL NO 2o TRIMESTRE",
+# "Total Recebido"), which start with a letter and so are not caught by the single-character rule.
+BRB_TOTAL_SUFFIX_RE = re.compile(
+    r"^(?:VALOR)?(?:SUB-?)?(?:TOTAL|TOTAIS)"
+    r"(?:$|[^A-Z]|R\$|GERAL|PAGO|REALIZADO|CONTABILIZADO|ORCADO|RECEBIDO|NO)")
+
+
 def brb_is_total_row(labels: list[str]) -> bool:
-    """A printed total or subtotal row, judged on each label cell folded and stripped of whitespace
-    and leading punctuation, so the letter-spaced "TO TA L" of 2016 and the brokerage's "SUBTOTAL
-    1o TRIMESTRE" rows read as totals. Read as detail, 2016Q2's bank "TO TA L" row adds R$5.49m
-    and the SUBTOTAL rows double the brokerage's table in ten quarters (2021Q3-2025Q1). The test
-    is on the START of a cell, so a beneficiary or purpose that merely
-    contains the word ("... PATROCINIO TOTAL ...") stays a detail row. A cell reading "TOTAL R$" in
-    a row whose other cells name a beneficiary is the gazette printing a one-row table's detail and
-    total on one line; it is read as the total, as the table publishes nothing else."""
-    for lab in labels:
+    """A printed total or subtotal row.
+
+    The test runs on the FIRST label cell, or on any single cell that is the row's only non-blank
+    label - the gazette's one-row tables print a "TOTAL R$" cell beside a beneficiary and purpose
+    that state what the total is for, with nothing else printed for that row (see
+    `brb_group`); testing every cell there read the SAME word twice, but testing only the first
+    cell missed the ones printed with the total in cell 2 or 3. Each candidate cell is folded and
+    stripped of whitespace and leading punctuation, so the letter-spaced "TO TA L" of 2016 and the
+    brokerage's "SUBTOTAL 1o TRIMESTRE" rows still read as totals. Read as detail rows instead,
+    2016Q2's bank "TO TA L" row added R$5.49m and the SUBTOTAL rows doubled the brokerage's table
+    in ten quarters (2021Q3-2025Q1). A required word boundary after TOTAL/TOTAIS
+    (`BRB_TOTAL_SUFFIX_RE`) keeps a beneficiary or purpose that merely starts with a look-alike word
+    from matching; a bare prefix match let "TOTALIZADOR ..." beneficiaries through undetected."""
+    def hit(lab: str) -> bool:
         s = re.sub(r"^[^A-Z0-9]+", "", re.sub(r"\s", "", fold(lab)))
-        if re.match(r"(VALOR)?(SUB)?TOTAL", s):
-            return True
-    return False
+        return bool(BRB_TOTAL_SUFFIX_RE.match(s))
+
+    if labels and hit(labels[0]):
+        return True
+    non_blank = [i for i, lab in enumerate(labels) if str(lab or "").strip()]
+    return len(non_blank) == 1 and hit(labels[non_blank[0]])
 
 
 def brb_outside_candidate(words: list[dict], ref: dict) -> dict | None:
@@ -1365,17 +1421,79 @@ def brb_outside_ok(cand: dict) -> bool:
     return abs(cand["total"] - sum(cand["amounts"].values())) <= 0.5
 
 
+def brb_cluster_rows(wrows: list[list[dict]], gap: float = BRB_SPLIT_GAP
+                     ) -> list[list[tuple[float, list]]]:
+    """Groups a page's printed word-lines into logical-row candidates: consecutive lines within
+    `gap` of each other are tried merged before being tried alone in `brb_try_accept_row`, because
+    one logical row can print as two lines (a month cell on one, the row TOTAL on the other -
+    2021Q3: a Bosque Formosa row with July below and its total on the line above)."""
+    tops = sorted(((min(w["top"] for w in r), r) for r in wrows), key=lambda t: t[0])
+    clusters: list[list[tuple[float, list]]] = []
+    for top, wrow in tops:
+        if clusters and top - clusters[-1][-1][0] <= gap:
+            clusters[-1].append((top, wrow))
+        else:
+            clusters.append([(top, wrow)])
+    return clusters
+
+
+def brb_try_accept_row(out: Parsed, doc: Doc, cl: list[tuple[float, list]], ref: dict, pno: int,
+                       page_key: str, keep_row, key_ns: str, source: str) -> bool:
+    """Tries one clustered candidate row against `ref`'s columns, admitting it only through its
+    own TOTAL column (`brb_outside_ok`) and emitting its month amounts as lines on success; a
+    candidate that does not reconcile is reported in a note and left out, never forced in. Shared
+    by `brb_sweep_outside` (rows lying outside every table pdfplumber's finder returns) and
+    `brb_recover_text_tables` (a table's own rows, read by column position because its grid never
+    gave it a usable header - `key_ns` keeps their row keys from ever colliding). `source` names
+    what is being read, for the notes."""
+    merged = brb_outside_candidate([w for _, wr in cl for w in wr], ref)
+    singles = [brb_outside_candidate(wr, ref) for _, wr in cl] if len(cl) > 1 else []
+    accepted = ([merged] if merged and brb_outside_ok(merged)
+                else [c for c in singles if c and brb_outside_ok(c)])
+    if not accepted:
+        for c in [merged] + singles:
+            if c is None or re.search(r"(^|[^A-Z])TOTAL([^A-Z]|$)|VALOR OR", fold(c["label"])):
+                continue
+            shown = "no total" if c["total"] is None else f"{c['total']:,.2f}"
+            out.notes.append(
+                f"{ref['scope']}: a row {source} on p{pno} does not reconcile with its TOTAL "
+                f"column and was left out ({c['label'][:40]}; "
+                f"months {sum(c['amounts'].values()):,.2f} vs {shown})")
+        return False
+    for k, c in enumerate(accepted):
+        where = "merged from two printed lines" if c is merged and len(cl) > 1 else "one line"
+        row_key = f"{page_key}:{key_ns}{int(round(cl[0][0]))}:{k}"
+        if not keep_row(row_key):
+            continue
+        for mo, v in c["amounts"].items():
+            rec = line(
+                doc, period=f"{ref['year']}{mo:02d}",
+                frequency="monthly", period_rule="document month column",
+                section="PATROCINIOS" if ref["sponsorship"] else "PUBLICIDADE",
+                category=c["label"][:60], detail=c["label"],
+                # the recovered row has no separate classification cell, so its label serves as
+                # both, and brb_group's own rules outrank the table-level guess
+                category_group=brb_group(c["label"], c["label"], bool(ref["sponsorship"])),
+                amount_brl=v, amount_kind="total", reversal=v < 0,
+                total_scope=f"{ref['scope']}:{mo:02d}",
+                extra_scopes=[f"{ref['scope']}:quarter"],
+                line_id=f"{row_key}:m{mo:02d}", content_key=f"{row_key}:m{mo:02d}",
+                table_id=ref["scope"], page_or_sheet=f"p{pno}",
+                parse_method=f"pdfplumber words, {source} ({where})")
+            rec["_table"], rec["_month"] = ref["scope"], mo
+            out.lines.append(rec)
+        out.notes.append(f"{ref['scope']}: recovered a row {source} on p{pno}, {where}, "
+                         f"TOTAL column reconciles ({c['label'][:40]})")
+    return True
+
+
 def brb_sweep_outside(out: Parsed, doc: Doc, page, pno: int, state: dict, snap: dict,
                       page_key: str, keep_row) -> None:
     """Recover rows lying outside every table the finder returns, admitting only those that prove
-    themselves through their own TOTAL column (`brb_outside_ok`).
+    themselves through their own TOTAL column (`brb_outside_ok`, via `brb_try_accept_row`).
 
-    Two shapes of loss are handled. The ruling lines stop short of rows they belong to, and the cut
-    falls at either end - a 2025Q3 Capital Clube row sat ABOVE its box - so no geometric rule finds
-    these rows. And one logical row can be printed as two lines, the month cell on one and the row
-    TOTAL on the other (2021Q3: a Bosque Formosa row with July below and its total on the line
-    above), so consecutive outside lines within BRB_SPLIT_GAP are tried merged before being tried
-    alone; a merge that would put two amounts in one column is refused as two separate rows.
+    The ruling lines stop short of rows they belong to, and the cut falls at either end - a 2025Q3
+    Capital Clube row sat ABOVE its box - so no geometric rule finds these rows.
 
     A row above the page's first table continues the table that ended on the previous page, so it
     takes the scope and section in force when the page began. Attributing it to the current table
@@ -1388,76 +1506,314 @@ def brb_sweep_outside(out: Parsed, doc: Doc, page, pno: int, state: dict, snap: 
     """
     boxes = [t.bbox for t in page.find_tables()]
     first_top = min((b[1] for b in boxes), default=None)
-    lines = []
+    wrows = []
     for wrow in rows_of(page):
         top = min(w["top"] for w in wrow)
         if any(b[1] - 2 <= top <= b[3] + 2 for b in boxes):
             continue
         if BRB_PAGE_FURNITURE.search(fold(row_text(wrow))):
             continue
-        lines.append((top, wrow))
-    lines.sort(key=lambda t: t[0])
-    clusters: list[list[tuple[float, list]]] = []
-    for top, wrow in lines:
-        if clusters and top - clusters[-1][-1][0] <= BRB_SPLIT_GAP:
-            clusters[-1].append((top, wrow))
-        else:
-            clusters.append([(top, wrow)])
+        wrows.append(wrow)
 
-    for cl in clusters:
+    for cl in brb_cluster_rows(wrows):
         above = first_top is not None and cl[0][0] < first_top
         ref = snap if above else state
         if not (ref.get("month_cols") and ref.get("col_x") and ref.get("scope")):
             continue
-        merged = brb_outside_candidate([w for _, wr in cl for w in wr], ref)
-        singles = [brb_outside_candidate(wr, ref) for _, wr in cl] if len(cl) > 1 else []
-        accepted = ([merged] if merged and brb_outside_ok(merged)
-                    else [c for c in singles if c and brb_outside_ok(c)])
-        if not accepted:
-            for c in [merged] + singles:
-                if c is None or re.search(r"(^|[^A-Z])TOTAL([^A-Z]|$)|VALOR OR",
-                                          fold(c["label"])):
-                    continue
-                shown = "no total" if c["total"] is None else f"{c['total']:,.2f}"
+        brb_try_accept_row(out, doc, cl, ref, pno, page_key, keep_row,
+                           key_ns="sweep", source="outside the detected table")
+
+
+# A notice's own closing total line, its TABLE'S quarter, never the annual figure a few lines
+# below it ("TOTAL PAGO EM <year>", which names no trimester and would otherwise match "TOTAL...
+# PAGO" too) -- requiring TRIMESTRE as well keeps the two apart regardless of which one a search
+# meets first.
+BRB_TEXT_TOTAL_RE = re.compile(r"TOTAL.{0,20}(PAGO|REALIZADO|CONTABILIZADO).{0,20}TRIMESTRE")
+# A single printed token that is unambiguously an amount: comma decimals or dotted-thousands
+# grouping, or a bare dash for a published zero. `brb_cell_amount` alone is not used to pick these
+# out of a row's words because its own last, most permissive branch also accepts a bare integer
+# ("2016", a year sitting a few words away on the same or a neighbouring line) as 2016.00.
+BRB_MONEY_WORD_RE = re.compile(r"-?(?:\d{1,3}(?:\.\d{3})+,\d{1,2}|\d+,\d{1,2}|\d{1,3}(?:\.\d{3})+)")
+
+
+def brb_is_money_word(text: str) -> bool:
+    return bool(re.fullmatch(r"-+", text) or BRB_MONEY_WORD_RE.fullmatch(text))
+
+
+def brb_find_quarter_total_row(wrows: list[list[dict]]) -> list[dict] | None:
+    """The FIRST row (top to bottom) whose words read 'TOTAL ... PAGO/REALIZADO/CONTABILIZADO ...
+    TRIMESTRE': a notice's own closing total, which the gazette always prints in full even where
+    the table around it has no column header pdfplumber's grid can read (`brb_recover_text_tables`).
+    """
+    for wr in wrows:
+        if BRB_TEXT_TOTAL_RE.search(fold(re.sub(r"\s", "", row_text(wr)))):
+            return wr
+    return None
+
+
+def brb_col_bands(xmids: list[float], pad: float = 45.0) -> dict[int, tuple[float, float]]:
+    """Splits the gaps between a row's own amount x-midpoints in half, giving the outermost ones a
+    fixed fallback pad -- a Voronoi split standing in for column boundaries a table recovered this
+    way never had pdfplumber read (`brb_recover_text_tables`)."""
+    bands = {}
+    for i, x in enumerate(xmids):
+        left = (xmids[i - 1] + x) / 2 if i > 0 else x - pad
+        right = (xmids[i + 1] + x) / 2 if i + 1 < len(xmids) else x + pad
+        bands[i] = (left, right)
+    return bands
+
+
+def brb_recover_text_tables(out: Parsed, doc: Doc, path: Path, pub: dict | None, page, pno: int,
+                            lines: list[dict], anchors: list[int], page_key: str, ctx: BrbContext,
+                            snap: dict, keep_row) -> bool | None:
+    """Reads a page's tables by column position where pdfplumber's grid could not be trusted for
+    them: a table object mixed another notice's heading or a multi-line merged cell into what
+    should be one entity's own rows, and `parse_brb`'s per-table-object loop bailed out of the
+    per-cell read rather than risk it (2016Q1 DODF p.12: the brokerage's closing rows and the
+    finance company's WHOLE notice, header included, land in one table object; pdfplumber cuts a
+    wrapped label cell's own continuation into a spurious extra non-blank cell there, which can
+    defeat `brb_is_total_row`'s one-cell rule for the brokerage's own total row too).
+
+    Two things can need this on one page:
+
+    1. A table that was already open when this page started (`snap`, the state as of page start)
+       and never closes here via the grid. Read by column position using the SAME columns the
+       table's real header already gave it (`snap['col_x']`), never a guess.
+
+    2. A QDD heading on this page whose own table has produced no line and no total anywhere in
+       this run (`ctx.observed`) - an entity the grid never read at all (2016Q1's finance company:
+       its own column header misprints OUTUBRO/NOVEMBRO/DEZEMBRO where JANEIRO/FEVEREIRO/MARCO
+       belong, so months are taken from the heading's own quarter instead, per the user's rule,
+       not from that header). An entity that already has SOME data from elsewhere on the page
+       (Cartao BRB's table, which the grid does read, short of its own total for an unrelated,
+       already-reported reason) is left alone; only a genuinely unread table is registered here.
+
+    Either recovery first finds the table's own closing total row by text
+    (`brb_find_quarter_total_row`); the table is left unobserved and reported, never guessed at,
+    where that row cannot be found or does not print exactly one amount per month plus its own
+    total. Body rows in the table's span are then read the same way `brb_sweep_outside` reads rows
+    outside a detected table (`brb_try_accept_row`, shared), admitting each only through its own
+    TOTAL cell.
+
+    Returns whether every table this call was responsible for on this page is now fully accounted
+    for (closed, or registered and read) - `parse_brb` ORs this into the page's own `complete`, so
+    a page whose grid read bailed out but that this function fully recovers is not reported as
+    unread in `documents.pages_unread` on top of being numerically correct.
+    """
+    wrows = rows_of(page)
+    # `attempted` is set only where this call actually takes responsibility for a table (either
+    # branch below); a page with nothing for either branch to do returns None, so the caller's
+    # `complete` is left exactly as the grid read computed it, never forced True by a call that
+    # did nothing.
+    attempted, ok = False, True
+
+    def span_rows(top: float, bottom: float) -> list[list[dict]]:
+        picked = []
+        for wr in wrows:
+            t = min(w["top"] for w in wr)
+            if top <= t < bottom and not BRB_TEXT_TABLE_FURNITURE.search(fold(row_text(wr))):
+                picked.append(wr)
+        return picked
+
+    def month_amounts(total_row: list[dict], n_months: int) -> tuple[list[int], list[float]] | None:
+        money = sorted((w for w in total_row if brb_is_money_word(w["text"])), key=xmid)
+        if len(money) != n_months + 1:
+            return None
+        return [xmid(w) for w in money], [brb_cell_amount(w["text"]) for w in money]
+
+    # Heading blocks on this page, top to bottom, one per distinct QDD notice: anchors chained
+    # within BRB_ANCHOR_CHAIN belong to the SAME block (brb_heading_at walks back to a chain's own
+    # start from any of its members, so the chain's LAST member is a sufficient representative),
+    # each block's own window bounded by the NEXT block's top so two notices sharing a page are
+    # never read into each other.
+    groups: list[int] = []
+    for i in anchors:
+        if groups and i - groups[-1] <= BRB_ANCHOR_CHAIN:
+            groups[-1] = i
+        else:
+            groups.append(i)
+    blocks = []
+    for gi, g in enumerate(groups):
+        # `brb_heading_at`'s own `stop_top` is meant to be a TIGHT bound - the table it heads, a
+        # few lines down - never a distant next notice's own top: passing the NEXT block's anchor
+        # here let the window run all the way through this notice's own body and signature and
+        # into the FOLLOWING notice's preamble title line ("SECRETARIA DE ESTADO DE FAZENDA /
+        # CARTAO BRB S.A", printed just above Cartao's own heading), which brb_nearest_entity then
+        # read as a conflicting title for THIS heading (financeira vs cartao) - entity resolution
+        # stays capped to a fixed, generous line count a real heading's own prose never exceeds
+        # (2016Q1's longest runs about 6 lines from chain start to its "divulga" sentence).
+        stop = min(lines[groups[gi + 1]]["top"] if gi + 1 < len(groups) else 1e9,
+                  lines[min(g + 20, len(lines) - 1)]["top"] + 1)
+        blocks.append({"top": lines[g]["top"], "head": brb_heading_at(lines, g, stop)})
+
+    # (1) close a table that was already open when this page started, if its own total sits before
+    # this page's first heading (or anywhere on a page with none of its own). An open, unclosed
+    # continuation is completely normal by itself (any multi-page table looks like this until its
+    # own later page closes it on the grid) - gated to 2016Q1, the one quarter this was verified
+    # against page by page, so it is never tried on an ordinary other-year continuation page whose
+    # own later page would have closed it on the grid anyway (see `parse_brb`'s bail-out docstring).
+    # `snap["closed"]` is only ever False here (a continuation is carried across files exactly
+    # because it was NOT closed as of the page it was carried from - see BrbContext.continuations);
+    # it says nothing about whether THIS page's own, ordinary per-cell grid read - which runs
+    # before this function is called, on every tobj that does not bail out - already closed the
+    # table normally a few tobjs later on the SAME page (2016Q1's bank: table0 reads perfectly
+    # clean and closes with its own TOTAL row; table1 is what bails out, over DTVM's heading).
+    # Recovering it again here, by column position, would double every row grid already read
+    # correctly, so this checks THIS page's own `out.totals` for a quarter scope the grid already
+    # closed and skips a table that closed itself that way.
+    already_closed_here = any(t["scope"] == f"{snap.get('scope')}:quarter" for t in out.totals)
+    if (snap.get("scope") and snap.get("col_x") and snap.get("month_cols")
+            and not snap.get("closed") and not already_closed_here
+            and snap.get("year") == 2016 and snap.get("quarter") == 1):
+        first_top = blocks[0]["top"] if blocks else 1e9
+        rows_here = span_rows(0, first_top)
+        total_row = brb_find_quarter_total_row(rows_here)
+        if total_row is None:
+            attempted, ok = True, False
+        elif keep_row(f"{page_key}:qtotal:{snap['scope']}"):
+            attempted = True
+            months = sorted(snap["month_cols"].values())
+            got = month_amounts(total_row, len(months))
+            if got is None:
+                ok = False
                 out.notes.append(
-                    f"{ref['scope']}: a row outside the detected table on p{pno} does not "
-                    f"reconcile with its TOTAL column and was left out ({c['label'][:40]}; "
-                    f"months {sum(c['amounts'].values()):,.2f} vs {shown})")
+                    f"{snap['scope']}: found a 'TOTAL...TRIMESTRE' row on p{pno} by column "
+                    f"position but it does not print exactly {len(months) + 1} amounts; left "
+                    "unobserved rather than guessed")
+            else:
+                _, vals = got
+                out.totals.append({
+                    "scope": f"{snap['scope']}:quarter", "stated": vals[-1],
+                    "label": "quarter total (read by column position)", "_table": snap["scope"],
+                    "_month": None, "content_key": f"{page_key}:qtotal:{snap['scope']}:quarter"})
+                for mo, v in zip(months, vals[:-1]):
+                    out.totals.append({
+                        "scope": f"{snap['scope']}:{mo:02d}", "stated": v,
+                        "label": f"month {mo} (read by column position)", "_table": snap["scope"],
+                        "_month": mo, "content_key": f"{page_key}:qtotal:{snap['scope']}:m{mo:02d}"})
+                out.notes.append(
+                    f"{snap['scope']}: closed by column position on p{pno} (TOTAL column "
+                    f"{vals[-1]:,.2f}); its table object mixed in another notice's text or a "
+                    "multi-line merged cell and could not be read cell by cell")
+            # Body rows are only swept here alongside an ACTUAL close: a page in the middle of a
+            # multi-page continuation, with no closing total of its own, has no bounded span to
+            # read this way (the table's OTHER entity is still to come, not yet on this page), and
+            # sweeping the whole page up to a same-entity running-header match would double up
+            # rows already read correctly on the per-cell grid path.
+            for cl in brb_cluster_rows([wr for wr in rows_here if wr is not total_row]):
+                brb_try_accept_row(out, doc, cl, snap, pno, page_key, keep_row,
+                                   key_ns="text", source="of a table read by column position")
+
+    # (2) each heading on this page whose table the grid never read at all. Gated to 2016Q1 for the
+    # same reason as (1): a heading whose table produced nothing YET on this page can be genuinely
+    # unread (2016Q1's finance company), or it can simply be a table this file has not reached the
+    # body of yet (its detail rows are on a LATER page still to come) - the two are told apart, for
+    # every other quarter, by the existing `entity_rule` logic already on the grid path, which this
+    # round did not re-verify end to end.
+    for gi, b in enumerate(blocks):
+        head = b["head"]
+        entity = head["entity"] or (doc.entity if head["conflict"] and doc.entity in
+                                    (head["conflict"] or ()) else None)
+        if not (entity and head["year"] == 2016 and head["quarter"] == 1):
             continue
-        for k, c in enumerate(accepted):
-            where = "merged from two printed lines" if c is merged and len(cl) > 1 else "one line"
-            row_key = f"{page_key}:sweep{int(round(cl[0][0]))}:{k}"
-            if not keep_row(row_key):
-                continue
-            for mo, v in c["amounts"].items():
-                rec = line(
-                    doc, period=f"{ref['year']}{mo:02d}",
-                    frequency="monthly", period_rule="document month column",
-                    section="PATROCINIOS" if ref["sponsorship"] else "PUBLICIDADE",
-                    category=c["label"][:60], detail=c["label"],
-                    # the recovered row has no separate classification cell, so its label serves as
-                    # both, and brb_group's own rules outrank the table-level guess
-                    category_group=brb_group(c["label"], c["label"], bool(ref["sponsorship"])),
-                    amount_brl=v, amount_kind="total", reversal=v < 0,
-                    total_scope=f"{ref['scope']}:{mo:02d}",
-                    extra_scopes=[f"{ref['scope']}:quarter"],
-                    line_id=f"{row_key}:m{mo:02d}", content_key=f"{row_key}:m{mo:02d}",
-                    table_id=ref["scope"], page_or_sheet=f"p{pno}",
-                    parse_method=f"pdfplumber words, row outside any detected table ({where})")
-                rec["_table"], rec["_month"] = ref["scope"], mo
-                out.lines.append(rec)
-            out.notes.append(f"{ref['scope']}: recovered a row outside the detected table on "
-                             f"p{pno}, {where}, TOTAL column reconciles ({c['label'][:40]})")
+        key = (entity, head["year"], head["quarter"])
+        if key in ctx.observed:
+            continue
+        bottom = blocks[gi + 1]["top"] if gi + 1 < len(blocks) else 1e9
+        rows_here = span_rows(b["top"], bottom)
+        total_row = brb_find_quarter_total_row(rows_here)
+        months = [head["quarter"] * 3 - 2, head["quarter"] * 3 - 1, head["quarter"] * 3]
+        if total_row is None:
+            attempted, ok = True, False
+            out.notes.append(
+                f"{entity} {head['year']}Q{head['quarter']}: no table found on p{pno} by "
+                "find_tables, and no 'TOTAL...TRIMESTRE' row found by column position either; "
+                "left unobserved")
+            continue
+        got = month_amounts(total_row, len(months))
+        if got is None:
+            attempted, ok = True, False
+            out.notes.append(
+                f"{entity} {head['year']}Q{head['quarter']}: its 'TOTAL...TRIMESTRE' row on "
+                f"p{pno} does not print exactly {len(months) + 1} amounts; left unobserved "
+                "rather than guessed")
+            continue
+        new_scope = f"{page_key[:12]}#text{gi}"
+        if not keep_row(f"{page_key}:qtotal:{new_scope}"):
+            continue
+        attempted = True
+        xmids, vals = got
+        body_rows = [wr for wr in rows_here if wr is not total_row]
+        prose = fold(" ".join(w["text"] for wr in body_rows for w in wr))
+        sponsorship = not re.search(r"PROPAGANDA|PUBLICIDADE|PUBLICAC|PROP E PUBL", prose)
+        ref = {"scope": new_scope, "col_x": brb_col_bands(xmids),
+              "month_cols": dict(enumerate(months)), "total_col": len(months),
+              "year": head["year"], "quarter": head["quarter"], "sponsorship": sponsorship}
+        brb_register_table(ctx, new_scope, {
+            "entity": entity, "entity_rule": f"{head['rule']}_text_column_position",
+            "year": head["year"], "quarter": head["quarter"], "heading": head["text"],
+            "published": pub["date"] if pub else None,
+            "publication": pub["label"] if pub else None,
+            "first_read": f"{path.name} p{pno}",
+            "listing_entity": doc.entity, "notice": "", "tails": set(), "basis": None,
+            "total_is_sum": False, "listing_year": doc.year, "listing_quarter": doc.quarter,
+            "file_order": ctx.file_order})
+        out.totals.append({
+            "scope": f"{new_scope}:quarter", "stated": vals[-1],
+            "label": "quarter total (read by column position)", "_table": new_scope,
+            "_month": None, "content_key": f"{page_key}:qtotal:{new_scope}:quarter"})
+        for mo, v in zip(months, vals[:-1]):
+            out.totals.append({
+                "scope": f"{new_scope}:{mo:02d}", "stated": v,
+                "label": f"month {mo} (read by column position)", "_table": new_scope,
+                "_month": mo, "content_key": f"{page_key}:qtotal:{new_scope}:m{mo:02d}"})
+        ctx.observed.add(key)
+        out.notes.append(
+            f"{new_scope}: {entity} {head['year']}Q{head['quarter']} read by column position on "
+            f"p{pno} (TOTAL column {vals[-1]:,.2f}); its table object mixed another notice's "
+            "heading into its own rows and could not be read cell by cell")
+        for cl in brb_cluster_rows(body_rows):
+            brb_try_accept_row(out, doc, cl, ref, pno, page_key, keep_row,
+                               key_ns=f"text{gi}", source="of a table read by column position")
+    return ok if attempted else None
+
+
+def brb_filing_order(meta: dict) -> tuple:
+    """One comparable filing-order key for a table, real date or not.
+
+    The table's own (year, quarter) - read from its QDD heading where the page has one, the
+    listing's claim otherwise (`parse_brb`) - dominates the comparison, so a Q2 filing always
+    outranks a Q1 filing of the same year whether or not either carries a real gazette date - the
+    user's rule that an undated table (a bank-produced extract, an unparsed "1o de <mes>" signature,
+    an "EXTRA" issue the running-header regex does not parse) is ordered by its quarter, not left
+    off the timeline. This must be the HEADING's (year, quarter), never the raw listing's
+    (`meta["listing_year"/"listing_quarter"]`): the listing can point at the wrong gazette issue (a
+    2019Q3 finance-company link that serves the 2018Q3 page - `parse_brb`), and ordering by that
+    raw claim made the mislabelled 2018Q3 copy outrank the genuinely later 2019-01 filing that
+    actually corrects 2018Q3. The real gazette date, where read, then breaks a tie between two
+    filings of the same (year, quarter), ahead of the file-read-order fallback, which breaks a tie
+    between two filings that are ALSO undated."""
+    return (meta.get("year") or 0, meta.get("quarter") or 0,
+            meta.get("published") or "", meta.get("file_order", 0))
 
 
 def brb_register_table(ctx: BrbContext, scope: str, meta: dict) -> None:
     """Record a table's metadata at its start. A table first met in a file that lacks its heading
     (entity 'unknown') takes the heading another file supplies; anything else is fixed at the
-    first reading, because the same printed page gives the same reading."""
+    first reading, because the same printed page gives the same reading.
+
+    A table first met in a file that has no QDD heading anywhere prints its entity from the
+    LISTING instead (`listing_document_without_heading`; see `parse_brb`), which is a guess about
+    what the page holds, not a reading of it. It is treated the same way as 'unknown': a later copy
+    of the SAME page that does carry a heading (or an unambiguous conflict the listing settles)
+    upgrades it, so the listing's guess never outranks the page's own text."""
     have = ctx.tables.get(scope)
     if have is None:
         ctx.tables[scope] = meta
-    elif have["entity"] == "unknown" and meta["entity"] != "unknown":
+        return
+    have_weak = have["entity"] == "unknown" or have["entity_rule"] == "listing_document_without_heading"
+    new_strong = meta["entity"] != "unknown" and meta["entity_rule"] != "listing_document_without_heading"
+    if have_weak and new_strong:
         for k in ("entity", "entity_rule", "year", "quarter", "heading"):
             have[k] = meta[k]
 
@@ -1481,6 +1837,8 @@ def parse_brb(doc: Doc, path: Path, ctx: BrbContext | None = None) -> Parsed:
     `brb_finish`, once every file has been read."""
     import pdfplumber
     ctx = ctx if ctx is not None else BrbContext()
+    ctx.file_order += 1
+    my_file_order = ctx.file_order
     out = Parsed()
     with pdfplumber.open(path) as pdf:
         texts = [p.extract_text() or "" for p in pdf.pages]
@@ -1521,6 +1879,20 @@ def parse_brb(doc: Doc, path: Path, ctx: BrbContext | None = None) -> Parsed:
             pub = brb_publication(texts[pno - 1])
             if pub:
                 out.published.add(pub["label"])
+            # A page can continue a table that a DIFFERENT file left open: BRB's listing links one
+            # gazette page under each entity printed on it, so the page that opened a table (DODF
+            # 127 p.68, printed under the bank's link) and the page that closes it (p.69, printed
+            # under the finance company's and the brokerage's links) are not always the same file.
+            # `state["month_cols"]` empty means this file has nothing of its own to continue from
+            # (it is the first page read here, or the local table already closed); only then is a
+            # table another file left open on the immediately preceding page of the same DODF issue
+            # adopted, so a same-file continuation is never overridden by this.
+            if pub and not state["month_cols"]:
+                prev = ctx.continuations.get(pub["issue"])
+                if prev and prev["page"] == pub["page"] - 1 and prev["state"] is not None:
+                    state = dict(prev["state"])
+                    out.notes.append(f"{state['scope']}: table continues {prev['label']} onto "
+                                     f"{pub['label']} (read from {prev['source']})")
             lines = brb_text_lines(page)
             anchors = [i for i, ln in enumerate(lines) if BRB_ANCHOR.search(ln["stripped"])]
             # A row above this page's first table continues the table that ended on the previous
@@ -1537,9 +1909,14 @@ def parse_brb(doc: Doc, path: Path, ctx: BrbContext | None = None) -> Parsed:
                 # (2021Q4 put it at index 4), and a table whose header is not found is
                 # treated as a headerless continuation -- with no state to continue from,
                 # the whole 2021Q4 advertising table was dropped. Blank rows do not count
-                # against the window, so a real body row still cannot pass as a header.
+                # against the window, so a real body row still cannot pass as a header. The
+                # 2016Q1 bank and brokerage tables run TWO intro sentences plus a split
+                # "FINALIDADE DA ACAO / VALORES REALIZADOS" row and a "BENEFICIARIO /
+                # CLASSIFICACAO DA DESPESA" row before the month row -- 4 non-blank rows on
+                # their own, one more than 2021Q4 -- so a table whose header is not found within
+                # the first 4 still gets one more try before falling back to "no header here".
                 probe = [i for i, r in enumerate(rows)
-                         if any(str(c or "").strip() for c in r)][:4]
+                         if any(str(c or "").strip() for c in r)][:8]
                 hdr = next((i for i in probe if brb_month_cols(rows[i])), None)
                 # A published total row closes its table, so the next table object begins a new
                 # one even where its header is unreadable. Narrow layouts hyphenate the month
@@ -1584,6 +1961,50 @@ def parse_brb(doc: Doc, path: Path, ctx: BrbContext | None = None) -> Parsed:
                         complete = False
                         continue
                     body = rows[1:] if new_table else rows
+                    # A table object that folds a SECOND ENTITY's own QDD notice into what should
+                    # be one entity's continuation rows (2016Q1 DODF p.12: the brokerage's closing
+                    # rows share a table object with the finance company's WHOLE notice, header and
+                    # all) is unreliable for per-cell reading from that point on: pdfplumber cuts a
+                    # wrapped label cell's own continuation ("...DEMONSTRACOES\nFINANCEIRAS") into
+                    # a spurious extra non-blank cell, which can defeat brb_is_total_row's one-cell
+                    # rule for THIS table's own total row too (the brokerage's "TOTAL PAGO NO 1o
+                    # TRIMESTRE" row read as a detail row beside a leftover "S FINANCEIRAS" cell,
+                    # double-counting its quarter). This must NOT fire on a plain mention of
+                    # another entity: BRB's tables routinely cross-reference another entity's
+                    # quarter total in a footer line ("read as a cross-reference to bank Q1 2018"),
+                    # which the existing quarter_cumulative path already handles correctly on the
+                    # grid, and several multi-page notices (the "SUMAR" annual tables) reprint THIS
+                    # SAME table's own title as a running header on every continuation page. Only a
+                    # SECOND entity's own QDD heading actually opening inside the table - its name
+                    # (BRB_ENTITY_NAMES) AND an anchor phrase (BRB_ANCHOR) both present - is
+                    # specific enough to the real defect; bail out of the grid read for the WHOLE
+                    # table object only then, and leave the region unread here so
+                    # `brb_recover_text_tables` can read it by column position instead of forcing a
+                    # per-cell grid that has already proven unreliable on this page. Gated to
+                    # 2016Q1, the one quarter this was verified against page by page: several
+                    # multi-page annual tables elsewhere in the corpus (the "SUMAR"/"GEPUP_GEPAC"
+                    # documents) legitimately name every conglomerate member in their own
+                    # boilerplate AND carry a reprinted anchor phrase, which reads as "foreign" by
+                    # this same test without actually being a second notice folded in, and validating
+                    # a broader trigger safely against the full 2014-2025 corpus is future work, not
+                    # this round's.
+                    own_meta = ctx.tables[state["scope"]]
+                    foreign = False
+                    if own_meta.get("year") == 2016 and own_meta.get("quarter") == 1:
+                        own_entity = own_meta["entity"]
+                        cell_texts = [fold(re.sub(r"\s", "", str(c or "")))
+                                     for r in body for c in r]
+                        foreign = (
+                            any(BRB_ANCHOR.search(t) for t in cell_texts)
+                            and any(e != own_entity and re.search(pat, t)
+                                   for t in cell_texts for e, pat in BRB_ENTITY_NAMES))
+                    if foreign:
+                        out.notes.append(
+                            f"{state['scope']}: table object on p{pno} mixes in another "
+                            "entity's own QDD notice; left for the column-position fallback "
+                            "instead of the per-cell grid read")
+                        complete = False
+                        continue
                 else:
                     # Nothing to continue from: the table's start is on a page this file does not
                     # hold. The page is then only partly read here, so another file that holds the
@@ -1620,7 +2041,12 @@ def parse_brb(doc: Doc, path: Path, ctx: BrbContext | None = None) -> Parsed:
                         "published": pub["date"] if pub else None,
                         "publication": pub["label"] if pub else None,
                         "first_read": f"{path.name} p{pno}", "listing_entity": doc.entity,
-                        "notice": "", "tails": set(), "basis": None, "total_is_sum": False})
+                        "notice": "", "tails": set(), "basis": None, "total_is_sum": False,
+                        # Filing order for a table the gazette never dates (see `brb_finish`):
+                        # the listing's own (year, quarter) for this file, and the order this
+                        # file was read in among the bank's listed documents.
+                        "listing_year": doc.year, "listing_quarter": doc.quarter,
+                        "file_order": my_file_order})
                     state.update(scope=scope, sponsorship=None, basis=None, closed=False)
                 scope, mc, tc = state["scope"], state["month_cols"], state["total_col"]
                 meta = ctx.tables[scope]
@@ -1629,9 +2055,18 @@ def parse_brb(doc: Doc, path: Path, ctx: BrbContext | None = None) -> Parsed:
                 classes = " ".join(fold(" ".join(str(c or "") for c in r[:first_m])) for r in body)
                 if state["sponsorship"] is None:
                     # "PROP E PUBL" is the 2016 files' abbreviation of "Propaganda e Publicidade";
-                    # without it their advertising table was taken for a sponsorship table.
+                    # without it their advertising table was taken for a sponsorship table. This is
+                    # only a fallback for a row whose OWN classification cell is ambiguous
+                    # (`brb_group`): it is not reliable enough on its own to type the whole table
+                    # (a beneficiary can be named "... PUBLICIDADE ... LTDA" in a table with no
+                    # advertising row at all, e.g. "OH! ARTES, PUBLICIDADE, PRODUCAO E EVENTOS
+                    # LTDA" in a 2019Q4 sponsorship table), so `meta["kind"]` (used to keep a
+                    # sponsorship table from being compared against an advertising one as if they
+                    # were vintages of each other) is set in `brb_finish` from the table's ACTUAL
+                    # row classifications instead, once every row has been read.
                     state["sponsorship"] = not re.search(
                         r"PROPAGANDA|PUBLICIDADE|PUBLICAC|P U B L|PROP E PUBL", classes)
+                    meta["sponsorship_guess"] = state["sponsorship"]
                 sponsorship = state["sponsorship"]
                 prev = [""] * first_m
                 month_stated: dict[int, float] = {}
@@ -1639,7 +2074,26 @@ def parse_brb(doc: Doc, path: Path, ctx: BrbContext | None = None) -> Parsed:
                 for ridx, r in enumerate(body, start=offset):
                     row_key = f"{page_key}:t{tidx}:r{ridx}"
                     r = split_merged_amounts(r, amount_cols, BRB_AMOUNT_RE)
+                    # A footnote can print inside the SAME pdfplumber table object as the rows it
+                    # annotates, in a cell of a row that is itself neither a real detail row nor
+                    # recognisable as a total row (3_trimestre_brb_6b445b66.pdf: "*(*) Retificacao
+                    # do valor do 2o Trimestre ..." sits in the label cell of the following row,
+                    # which pdfplumber's layout puts INSIDE the table's bbox, so it never reaches
+                    # `brb_text_between`'s "text below the table" capture). Read every cell, not
+                    # just the label columns, so `meta["notice"]` still sees it either way.
+                    if BRB_RETIFIC_RE.search(fold(" ".join(str(c or "") for c in r))):
+                        meta["notice"] += " " + " ".join(str(c or "").replace("\n", " ") for c in r)
                     labels = [str(r[j] or "").replace("\n", " ").strip() for j in range(first_m)]
+                    if not any(labels):
+                        # A cumulative "TOTAL REALIZADO/PAGO NO No TRIMESTRE" row can print its own
+                        # label inside what the header calls a MONTH column instead of the label
+                        # columns, every true label column landing blank (3_trimestre_brb_
+                        # 6b445b66.pdf: "Total Realizado no 2o Trimestre de 2019*" sits where
+                        # January's amount would be). Read the row's own text cells instead, so
+                        # `brb_is_total_row` and the quarter-reference read below still see it.
+                        shifted = [str(r[j] or "").replace("\n", " ").strip() for j in sorted(mc)
+                                  if j < len(r) and re.search(r"[A-Za-z]", str(r[j] or ""))]
+                        labels = shifted or labels
                     flab = fold(" ".join(labels))
                     amounts = {mo: brb_cell_amount(r[j]) for j, mo in mc.items() if j < len(r)}
                     repaired = brb_shift_repair(r, amounts, mc, tc)
@@ -1652,9 +2106,12 @@ def parse_brb(doc: Doc, path: Path, ctx: BrbContext | None = None) -> Parsed:
                             state["basis"] = "paid"
                         elif "REALIZADO" in flab and state["basis"] is None:
                             state["basis"] = "undocumented"
+                        qv = brb_cell_amount(r[tc]) if tc is not None and tc < len(r) else None
                         if any(v is not None for v in amounts.values()):
                             state["closed"] = True
                             emit = keep_row(row_key)
+                            if emit:
+                                ctx.observed.add((meta["entity"], state["year"], state["quarter"]))
                             for mo, v in amounts.items():
                                 if v is not None:
                                     month_stated[mo] = v
@@ -1663,7 +2120,6 @@ def parse_brb(doc: Doc, path: Path, ctx: BrbContext | None = None) -> Parsed:
                                             "scope": f"{scope}:{mo:02d}", "stated": v,
                                             "label": f"{flab[:30]} month {mo}", "_table": scope,
                                             "_month": mo, "content_key": f"{row_key}:m{mo:02d}"})
-                            qv = brb_cell_amount(r[tc]) if tc is not None and tc < len(r) else None
                             if qv is not None and abs(qv - sum(month_stated.values())) <= 0.05:
                                 if emit:
                                     out.totals.append({
@@ -1674,6 +2130,41 @@ def parse_brb(doc: Doc, path: Path, ctx: BrbContext | None = None) -> Parsed:
                             elif qv is not None and emit:
                                 out.notes.append(f"{scope}: TOTAL column {qv:,.2f} is not the sum "
                                                  "of the months (year-to-date); not used as a check")
+                        elif qv is not None:
+                            # A total row with no month breakdown at all: Cartao BRB's tables close
+                            # with a single "Total Recebido" figure and no per-month split, and the
+                            # cumulative "TOTAL PAGO/REALIZADO NO No TRIMESTRE DE <year>" rows a
+                            # later quarter's table prints for EARLIER quarters carry only one
+                            # number too. Read `flab` for a trimester number: none, or the table's
+                            # OWN quarter, means this row is closing THIS table (its quarter total,
+                            # same as the per-month branch above gives when months are printed);
+                            # a DIFFERENT quarter's number means this is a cross-reference to
+                            # another table, kept on `quarter_cumulative` for
+                            # `brb_apply_quarter_corrections` to read, never as this table's own
+                            # check. "TOTAL ... EM <year>" (the annual figure, no trimester word) is
+                            # neither and is dropped: it would silently pass as a quarter's own
+                            # total otherwise.
+                            qm = re.search(r"(\d)\s*[O\xba\xb0]?\s*TRIMESTRE", flab)
+                            ref_q = int(qm.group(1)) if qm else None
+                            annual_only = ref_q is None and re.search(r"\bEM\s*20\d\d\b", flab)
+                            emit = keep_row(row_key)
+                            if annual_only:
+                                pass
+                            elif ref_q is None or ref_q == state["quarter"]:
+                                state["closed"] = True
+                                if emit:
+                                    ctx.observed.add(
+                                        (meta["entity"], state["year"], state["quarter"]))
+                                    out.totals.append({
+                                        "scope": f"{scope}:quarter", "stated": qv,
+                                        "label": f"{flab[:30]} quarter (no month breakdown)",
+                                        "_table": scope, "_month": None,
+                                        "content_key": f"{row_key}:quarter"})
+                            elif emit:
+                                meta.setdefault("quarter_cumulative", {})[ref_q] = qv
+                                out.notes.append(f"{scope}: read as a cross-reference to "
+                                                 f"{meta['entity']} Q{ref_q} {meta['year']} "
+                                                 f"({qv:,.2f}), not this table's own total")
                         bases[scope] = state["basis"]
                         continue
                     if all(v is None for v in amounts.values()):
@@ -1707,6 +2198,7 @@ def parse_brb(doc: Doc, path: Path, ctx: BrbContext | None = None) -> Parsed:
                         rec["_table"], rec["_month"] = scope, mo
                         out.lines.append(rec)
                         out.periods.add((meta["entity"], rec["period"]))
+                        ctx.observed.add((meta["entity"], state["year"], state["quarter"]))
                 bases.setdefault(scope, state["basis"])
                 # The notice's own text below this part of the table, up to the next heading or
                 # table, carries any republication note ("Retificam-se ...", "Republicado por ...")
@@ -1720,6 +2212,26 @@ def parse_brb(doc: Doc, path: Path, ctx: BrbContext | None = None) -> Parsed:
                     meta["notice"] += " " + brb_text_between(lines, bottom, min(below, default=1e9))
 
             brb_sweep_outside(out, doc, page, pno, state, at_page_start, page_key, keep_row)
+            # Always runs, even where `complete` is already True: it does real work (closing
+            # whatever was left open and registering any heading the grid never reached at all),
+            # never only a completeness check, so it cannot be folded into `complete` through a
+            # short-circuiting `or`. A page whose grid read bailed out is not "partly read" once
+            # this call accounts for everything it was responsible for, so a fully successful
+            # recovery (True, never None's "nothing to do here") sets `complete` the same way a
+            # fully successful grid read would, and `documents.pages_unread` reports what is
+            # actually still missing.
+            recovered = brb_recover_text_tables(out, doc, path, pub, page, pno, lines, anchors,
+                                                page_key, ctx, at_page_start, keep_row)
+            if recovered:
+                complete = True
+            if pub:
+                # Recorded on every visit, including a repeat copy of the same page: the state a
+                # printed page leaves a table in is a fact about that page, not about which file
+                # happened to hold it. `state=None` once the table has closed means the NEXT DODF
+                # page of this issue starts fresh rather than adopting a finished table.
+                ctx.continuations[pub["issue"]] = {
+                    "page": pub["page"], "label": pub["label"], "source": path.name,
+                    "state": dict(state) if state.get("scope") and not state["closed"] else None}
             if anchors:
                 i = anchors[-1]
                 stop = min((t.bbox[1] for t in tobjs if t.bbox[1] > lines[i]["top"]), default=1e9)
@@ -1731,6 +2243,18 @@ def parse_brb(doc: Doc, path: Path, ctx: BrbContext | None = None) -> Parsed:
                     + (f" ({page_flags['suppressed']} rows already emitted)"
                        if not seen["complete"] else ""))
             if not blank:
+                # Provenance for a page cached under more than one file with byte-identical text
+                # (a financeira 2018Q4 page cached under both a DTVM-named and a CFI-named file):
+                # the FIRST file to reach this page_key claims "first" and every line's
+                # `source_file` follows it; a later file's copy is a pure duplicate and never
+                # overwrites it. "First" is deterministic because it follows `bank_docs`'s own
+                # order, which is `discover_brb`'s `by_href` - a dict built by one single,
+                # deterministic left-to-right walk of the bank's listing page (BeautifulSoup's
+                # `find_all_next` always yields the same DOM order for the same cached HTML) - so
+                # the same two files resolve to the same winner on every run against this cache;
+                # `by_href` keys on `href`, so two different files can never tie for the same
+                # listing position, but where a discovery function's order ever could, the file
+                # name is the documented second key to break it by, never left to chance.
                 ctx.pages[page_key] = {"first": seen["first"] if seen else f"{path.name} p{pno}",
                                        "complete": bool(seen and seen["complete"]) or complete}
         for ln in out.lines:
@@ -1744,11 +2268,21 @@ def parse_brb(doc: Doc, path: Path, ctx: BrbContext | None = None) -> Parsed:
             if t["_month"] is None or t["scope"] in ctx.line_scopes:
                 continue
             tscope, mo = t["_table"], t["_month"]
+            table_meta = ctx.tables[tscope]
+            # The row's own label is all this total-only table publishes, so it is read the same
+            # way `brb_group` reads a classification cell: "PATROCINIO" -> sponsorship, "PRODUCAO"
+            # -> production, and so on, instead of being dropped into "other" regardless of what it
+            # says. `sponsorship_guess` (the table-level text heuristic, `parse_brb`) is only the
+            # last-resort fallback within `brb_group` itself, same as for a detail row.
+            label_text = t["label"].split(" month")[0]
+            group = brb_group(label_text, label_text,
+                              bool(table_meta.get("sponsorship_guess")))
             rec = line(
-                doc, period=f"{ctx.tables[tscope]['year']}{mo:02d}", frequency="monthly",
-                period_rule="document month column", section="PUBLICIDADE",
-                category=t["label"].split(" month")[0], detail="total published without detail rows",
-                category_group="other", amount_brl=t["stated"], amount_kind="total",
+                doc, period=f"{table_meta['year']}{mo:02d}", frequency="monthly",
+                period_rule="document month column",
+                section="PATROCINIOS" if group == "sponsorship" else "PUBLICIDADE",
+                category=label_text, detail="total published without detail rows",
+                category_group=group, amount_brl=t["stated"], amount_kind="total",
                 total_scope=t["scope"],
                 # the quarter scope too, or the table's quarter total has nothing to sum and reads
                 # as a failed check although its months are all present
@@ -1783,7 +2317,11 @@ def brb_impute_forced_cells(lines: list[dict], totals: list[dict], gaps: list[di
     while the row's TOTAL (1.782.037,61) and the January column total (1.607.917,39) both imply
     537.258,64, and the published month totals sum to the quarter's 5.425.434,01 to the cent.
     A row that meets (a) alone is reported and kept as printed - including a row whose cell in the
-    short column is malformed ("8.000,000"), since there is no printed amount to correct.
+    short column is malformed ("8.000,000"), since there is no printed amount to correct. Two rows
+    of the same table can each meet (a)-(c) against the SAME month by coincidence (two separate
+    gaps that happen to equal that month's shortfall to the cent); condition (d) requires the
+    shortfall to have exactly one row matching it in the table, so neither is imputed when that
+    happens - there would be no way to tell which row the gazette actually under-printed.
     Returns one record per row that meets (a), with its outcome."""
     stated: dict[tuple[str, int], list[float]] = {}
     for t in totals:
@@ -1795,6 +2333,22 @@ def brb_impute_forced_cells(lines: list[dict], totals: list[dict], gaps: list[di
         sums[k] = sums.get(k, 0.0) + float(ln["amount_brl"])
     by_key = {ln["content_key"]: ln for ln in lines}
     live = {ln["_table"] for ln in lines}
+    # Per table, the month columns that fall short of their own printed total by more than half a
+    # cent - by construction every OTHER month of that table already reconciles within 0.005, since
+    # it is excluded from `short` unless it does not.
+    short_by_table: dict[str, dict[int, float]] = {}
+    for (t, mo), vs in stated.items():
+        if len({round(v, 2) for v in vs}) > 1:
+            continue                              # two different printed totals; handled per-row
+        d = round(vs[0] - sums.get((t, mo), 0.0), 2)
+        if d > 0.005:
+            short_by_table.setdefault(t, {})[mo] = d
+    # How many of the table's own gap rows match each shortfall to the cent.
+    match_count: dict[tuple[str, int], int] = {}
+    for g in gaps:
+        for mo, d in short_by_table.get(g["table"], {}).items():
+            if abs(round(g["gap"], 2) - d) <= 0.005:
+                match_count[(g["table"], mo)] = match_count.get((g["table"], mo), 0) + 1
     report = []
     for g in gaps:
         table = g["table"]
@@ -1809,8 +2363,7 @@ def brb_impute_forced_cells(lines: list[dict], totals: list[dict], gaps: list[di
             rec["outcome"] = "the table states two different totals for one month"
             report.append(rec)
             continue
-        short = {mo: round(vs[0] - sums.get((table, mo), 0.0), 2) for mo, vs in cols.items()}
-        short = {mo: d for mo, d in short.items() if d > 0.005}
+        short = short_by_table.get(table, {})
         if len(short) != 1:
             rec["outcome"] = (f"{len(short)} month columns fall short of their printed totals "
                               f"({ {m: d for m, d in short.items()} })")
@@ -1820,6 +2373,11 @@ def brb_impute_forced_cells(lines: list[dict], totals: list[dict], gaps: list[di
         rec["month"], rec["shortfall"] = mo, d
         if abs(d - g["gap"]) > 0.005:
             rec["outcome"] = f"month {mo} falls short by {d:,.2f}, not by the row's gap"
+            report.append(rec)
+            continue
+        if match_count.get((table, mo), 0) != 1:
+            rec["outcome"] = (f"{match_count.get((table, mo), 0)} rows in the table have a gap "
+                              f"matching month {mo}'s shortfall to the cent; not imputed")
             report.append(rec)
             continue
         cell = by_key.get(f"{g['row_key']}:m{mo:02d}")
@@ -1838,6 +2396,128 @@ def brb_impute_forced_cells(lines: list[dict], totals: list[dict], gaps: list[di
                    outcome="imputed_from_row_total")
         report.append(rec)
     return report
+
+
+BRB_ROW_NO_PAYMENT_RE = re.compile(
+    r"RETIFICANDO O VALOR DISPOSTO NO QDD DO (\d)\s*[O\xba\xb0]?\s*TRIMESTRE"
+    r".{0,400}?(?:NAO HOUVE PAGAMENTO|SEM PAGAMENTO)")
+
+
+def brb_apply_notice_corrections(lines: list[dict], totals: list[dict], ctx: BrbContext,
+                                 note) -> None:
+    """Text-only corrections a LATER table's notice states about an EARLIER quarter, applied per
+    the user's decision of 2026-09-28. Two forms, both seen in the cached gazettes:
+
+    Row-specific ("Retificando o valor disposto no QDD do 2o trimestre da BRB Credito,
+    Financiamento e Investimento S.A., informamos que nao houve pagamento e/ou provisao para a
+    empresa W27 EVENTOS LTDA.", the finance company's 2022Q3 notice about its own 2022Q2 table):
+    every line of the named beneficiary in the TARGET table (same entity, same year, the quarter
+    the sentence names) is zeroed, keeping the printed figure in `amount_as_printed` and naming the
+    correcting notice in `corrected_by`. The beneficiary is matched by searching the notice text for
+    one of the target table's OWN printed beneficiary names, longest first, rather than trying to
+    parse a company name out of free text.
+
+    Total-only (the bank's 2019Q2 table: "TOTAL PAGO NO 1o TRIMESTRE DE 2019* 4.608.331,42" with a
+    footnote "(*) Retificacao do valor do 1o Trimestre publicado no DODF no 65 ..."): a table's own
+    cumulative reference to an earlier quarter (`quarter_cumulative`, from a "TOTAL
+    PAGO/REALIZADO/CONTABILIZADO NO No TRIMESTRE" row with no month breakdown - see `parse_brb`)
+    that differs from that quarter's own printed quarter total, on a table whose notice is marked as
+    a retification or republication. The STATED total used in the checks is replaced; the rows are
+    left exactly as printed, so the existing reconciliation test (`check_totals`) now shows the gap.
+    """
+    by_table: dict[str, list[dict]] = {}
+    for ln in lines:
+        by_table.setdefault(ln["_table"], []).append(ln)
+
+    def find_target(meta: dict, ref_q: int) -> str | None:
+        return next((t for t, m in ctx.tables.items()
+                    if m["entity"] == meta["entity"] and m["year"] == meta["year"]
+                    and m["quarter"] == ref_q), None)
+
+    def find_target_same_kind(meta: dict, ref_q: int) -> str | None:
+        # For a TOTAL correction only: BRB usually files an advertising table and a sponsorship
+        # table each quarter, each with its OWN "TOTAL PAGO NO No TRIMESTRE" cumulative row, and
+        # the two series' cumulative figures for the same quarter are entirely different amounts.
+        # A sponsorship table's reference must correct only a sponsorship table, never the
+        # advertising table that happens to share the entity, year and quarter number. The
+        # row-specific correction has no such constraint - it is looking for one beneficiary's
+        # row, wherever in that quarter's table(s) it was printed - so it keeps `find_target`.
+        return next((t for t, m in ctx.tables.items()
+                    if m["entity"] == meta["entity"] and m["year"] == meta["year"]
+                    and m["quarter"] == ref_q and m.get("kind") == meta.get("kind")), None)
+
+    def filed_later(later: dict, earlier: dict) -> bool:
+        """Whether `later` is a filing `brb_filing_order` actually places AFTER `earlier` - never
+        assumed just because `later`'s own table happens to be titled a later quarter than
+        `earlier`'s. A table's forward references to a quarter it has not reached yet print a
+        placeholder (a CFI 2022Q3 table gives "TOTAL PAGO NO 4o TRIMESTRE DE 2022 R$ 0,00" for the
+        Q4 that had yet to be filed), and without this check that placeholder was read as a
+        correction and overwrote the real Q4 total with zero once it was filed."""
+        return brb_filing_order(later) > brb_filing_order(earlier)
+
+    for scope, meta in ctx.tables.items():
+        said = fold(meta["heading"] + " " + meta["notice"])
+
+        rm = BRB_ROW_NO_PAYMENT_RE.search(said)
+        if rm:
+            ref_q = int(rm.group(1))
+            target = find_target(meta, ref_q)
+            if target and not filed_later(meta, ctx.tables[target]):
+                target = None
+            target_lines = by_table.get(target, []) if target else []
+            candidates = sorted({ln["detail"].split(" | ")[0] for ln in target_lines
+                                 if ln.get("detail")}, key=len, reverse=True)
+            hit = next((b for b in candidates if len(fold(b)) >= 6 and fold(b) in said), None)
+            src = meta["publication"] or meta["first_read"]
+            if target and hit:
+                touched = [ln for ln in target_lines if ln["detail"].split(" | ")[0] == hit
+                          and float(ln["amount_brl"]) != 0]
+                for ln in touched:
+                    ln["amount_as_printed"] = float(ln["amount_brl"])
+                    ln["amount_brl"] = 0.0
+                    ln["reversal"] = False
+                    ln["corrected_by"] = src
+                text = (f"{target}: [{hit}] {len(touched)} line(s) zeroed - {src} says no payment "
+                        f"was made to this beneficiary in {meta['entity']} Q{ref_q} {meta['year']}")
+                log.info("  brb text correction (row): %s", text)
+                note(meta["first_read"].rsplit(" p", 1)[0], "row correction: " + text)
+            elif target:
+                warn = (f"{scope}: notice says no payment to a named beneficiary in "
+                        f"{meta['entity']} Q{ref_q} {meta['year']}, but no line of that table's "
+                        "beneficiaries matches the notice text; not applied")
+                log.warning("  brb text correction (row): %s", warn)
+                note(meta["first_read"].rsplit(" p", 1)[0], warn)
+
+        if not meta.get("republished"):
+            continue
+        # The retification must name the SPECIFIC quarter it corrects ("Retificacao do valor do
+        # 1o Trimestre publicado no DODF..."); a table's own quarter can be a retification of ITS
+        # OWN total (RETIFICACAO_BRB-4o-TRI_c3b2f246.pdf's footnote retifies its Q4, not the Q1-Q3
+        # cumulative references its two tables also print, in a different, larger series - "TOTAL
+        # REALIZADO", not "TOTAL PAGO" - that a blind read otherwise applied as bogus Q1-Q3
+        # corrections). Without a named quarter that matches one of `quarter_cumulative`'s own
+        # keys, nothing here is corrected.
+        qm = re.search(r"RETIFICA\w*\s*DO\s*VALOR\s*DO\s*(\d)\s*[O\xba\xb0]?\s*TRIMESTRE",
+                       meta["republished"] or "")
+        named_q = int(qm.group(1)) if qm else None
+        for ref_q, corrected in meta.get("quarter_cumulative", {}).items():
+            if named_q is not None and ref_q != named_q:
+                continue
+            target = find_target_same_kind(meta, ref_q)
+            if target is None or not filed_later(meta, ctx.tables[target]):
+                continue
+            entry = next((t for t in totals if t.get("_table") == target
+                         and t.get("_month") is None and not t.get("superseded")), None)
+            if entry is None or abs(entry["stated"] - corrected) <= 0.005:
+                continue
+            src = meta["publication"] or meta["first_read"]
+            text = (f"{target}: quarter total {entry['stated']:,.2f} corrected to "
+                    f"{corrected:,.2f} by {src} ({meta['republished']})")
+            entry["stated_before_correction"] = entry["stated"]
+            entry["stated"] = corrected
+            entry["corrected_by"] = src
+            log.info("  brb text correction (total): %s", text)
+            note(ctx.tables[target]["first_read"].rsplit(" p", 1)[0], "total correction: " + text)
 
 
 def brb_finish(lines: list[dict], totals: list[dict], status: list[dict], gaps: list[dict],
@@ -1866,9 +2546,13 @@ def brb_finish(lines: list[dict], totals: list[dict], status: list[dict], gaps: 
         # The sentence itself is kept, not a yes/no: a notice can correct an earlier quarter's
         # cumulative total ("Retificacao do valor do 1o Trimestre ...") without republishing its
         # own table, and the reader should see which.
-        m = re.search(r"[^.*]{0,60}(RETIFIC|REPUBLIC)[^.]{0,140}", said)
+        m = re.search(r"[^.*]{0,60}(RETIFIC|REPUBLICAD|REPUBLICAR|REPUBLICACA)[^.]{0,140}", said)
         meta["republished"] = m.group(0).strip(" *") if m else None
-        meta["basis_final"] = ("accrued" if "REGIMEDECOMPETENCIA" in re.sub(r"\s", "", said)
+        # \w* between the two halves, not a literal concatenation: pdfplumber's word breaks land
+        # inside "COMPETENCIA" as often as between the words, so "REGIME DE COM-\nPETENCIA" and
+        # similar hyphenations still fold to something the exact string "REGIMEDECOMPETENCIA"
+        # would miss.
+        meta["basis_final"] = ("accrued" if BRB_ACCRUAL_RE.search(re.sub(r"\s", "", said))
                                else meta["basis"] or "undocumented")
     for ln in lines:
         meta = ctx.tables[ln["_table"]]
@@ -1876,22 +2560,59 @@ def brb_finish(lines: list[dict], totals: list[dict], status: list[dict], gaps: 
                   entity_cnpj8=BRB_ENTITY_CNPJ8.get(meta["entity"]),
                   period=f"{meta['year']}{ln['_month']:02d}", basis=meta["basis_final"],
                   published=meta["published"], republished=meta["republished"])
+    # A table's kind (used only to keep an advertising table and a sponsorship table that share a
+    # period from being compared as if they were vintages of each other - see `covers` below), from
+    # the classification ITS ROWS actually got, majority rules: reading it off the raw table text
+    # instead false-positives on a beneficiary whose own NAME contains "PUBLICIDADE" (e.g. "OH!
+    # ARTES, PUBLICIDADE, PRODUCAO E EVENTOS LTDA", a beneficiary of a 2019Q4 sponsorship table with
+    # no advertising row at all). A table with no lines (e.g. total-only, no detail rows) gets no
+    # kind, so it is never wrongly matched against a real one.
+    from collections import Counter
+    kind_counts: dict[str, Counter] = {}
+    for ln in lines:
+        kind_counts.setdefault(ln["_table"], Counter())[ln["category_group"]] += 1
+    for scope, meta in ctx.tables.items():
+        c = kind_counts.get(scope)
+        if not c:
+            meta["kind"] = None
+            continue
+        sp, tot = c.get("sponsorship", 0), sum(c.values())
+        meta["kind"] = "sponsorship" if sp * 2 > tot else "advertising"
 
     covers: dict[tuple[str, str], set[str]] = {}
     for ln in lines:
         covers.setdefault((ln["entity"], ln["period"]), set()).add(ln["_table"])
     dropped: dict[tuple[str, str], list[str]] = {}
     for (entity, period), tables in sorted(covers.items()):
-        dated = {t: ctx.tables[t]["published"] for t in tables if ctx.tables[t]["published"]}
-        if len(set(dated.values())) < 2:
-            if len(dated) < len(tables) and len(set(dated.values())) == 1 and len(tables) > 1:
-                log.warning("brb %s %s: tables %s mix gazette and undated pages; no vintage rule "
-                            "applied", entity, period, sorted(tables))
+        if len(tables) < 2:
             continue
-        latest = max(dated.values())
-        for t, d in dated.items():
-            if d < latest:
-                dropped[(t, period)] = sorted(k for k, v in dated.items() if v == latest)
+        # Compared only within its own kind (advertising vs. sponsorship): an advertising table
+        # and a sponsorship table that happen to share an entity and a period are two SECTIONS of
+        # one notice, not two vintages of the same table, and are never superseded against each
+        # other, whichever is dated later. A kind of `None` (a table whose sponsorship flag was
+        # never determined, e.g. it holds no detail rows at all) is its own group too, so it is
+        # never silently matched against a real kind.
+        by_kind: dict[object, set[str]] = {}
+        for t in tables:
+            by_kind.setdefault(ctx.tables[t].get("kind"), set()).add(t)
+        for kind, group in by_kind.items():
+            if len(group) < 2:
+                continue
+            order = {t: brb_filing_order(ctx.tables[t]) for t in group}
+            latest = max(order.values())
+            winners = sorted(t for t, k in order.items() if k == latest)
+            if len(winners) != 1:
+                raise SystemExit(
+                    f"brb {entity} {period} ({kind}): {len(group)} tables of the same kind, from "
+                    "different files, cover this period with no filing order that resolves which "
+                    "to keep ("
+                    f"{sorted(ctx.tables[t].get('publication') or ctx.tables[t]['first_read'] for t in group)}"
+                    "); this is a hard failure by design (MAJOR B, 09-28 review) rather than "
+                    "silently summing two vintages of the same table.")
+            winner = winners[0]
+            for t in group:
+                if t != winner:
+                    dropped[(t, period)] = [winner]
     amounts: dict[tuple[str, str], float] = {}
     for ln in lines:
         k = (ln["_table"], ln["period"])
@@ -1923,6 +2644,8 @@ def brb_finish(lines: list[dict], totals: list[dict], status: list[dict], gaps: 
         periods = ([f"{meta['year']}{t['_month']:02d}"] if t["_month"] is not None
                    else [p for (tt, p) in dropped if tt == t["_table"]])
         t["superseded"] = any((t["_table"], p) in dropped for p in periods)
+
+    brb_apply_notice_corrections(kept, totals, ctx, note)
 
     report = brb_impute_forced_cells(kept, totals, gaps, ctx)
     for rec in report:
@@ -2056,7 +2779,8 @@ def parse_all(docs: dict[str, list[Doc]]) -> tuple[pd.DataFrame, pd.DataFrame, p
                    "role": doc.role, "listing_year": doc.year, "listing_month": doc.month,
                    "listing_quarter": doc.quarter, "entity": doc.entity, "agency": doc.agency,
                    "label": doc.label, "n_lines": 0, "n_totals": 0, "notes": None,
-                   "n_pages": None, "pages_skipped": None, "published": None}
+                   "n_pages": None, "pages_skipped": None, "published": None,
+                   "pages_unread": None}
             if path is None or not path.exists():
                 row["status"] = "missing_file"
                 bank_status.append(row)
@@ -2110,6 +2834,23 @@ def parse_all(docs: dict[str, list[Doc]]) -> tuple[pd.DataFrame, pd.DataFrame, p
             for row in bank_status:
                 if row.get("status") == "parsed":
                     row["n_lines"] = int(kept.get(row["file"], 0))
+            # A page that stayed "partly read" (`Doc.pages[key]["complete"] is False`) after every
+            # file in the listing has been read: no copy ever supplied whatever the page's other
+            # tables needed (a heading, a continuation - see `parse_brb`). Recorded on the FILE
+            # that first read it, so a reader can go straight from the documents table to what is
+            # still missing, quarter by quarter, rather than only learning it from a downstream
+            # total mismatch.
+            unread_by_file: dict[str, list[str]] = {}
+            for key, seen in ctx.pages.items():
+                if not seen["complete"]:
+                    fname, _, pg = seen["first"].rpartition(" p")
+                    unread_by_file.setdefault(fname, []).append("p" + pg)
+            if unread_by_file:
+                log.warning("brb: %d page(s) never fully read by any copy: %s",
+                           sum(len(v) for v in unread_by_file.values()), unread_by_file)
+                for row in bank_status:
+                    if row.get("file") in unread_by_file:
+                        row["pages_unread"] = "; ".join(sorted(unread_by_file[row["file"]]))
         lines += bank_lines
         totals += bank_totals
         status += bank_status
@@ -2273,18 +3014,28 @@ def validate(lines: pd.DataFrame, checks: pd.DataFrame, status: pd.DataFrame,
 
 
 def contained_tables(lines: pd.DataFrame) -> list[tuple[str, str, str, int]]:
-    """Table instances whose multiset of (period, amount, detail) is contained in another
-    instance's multiset for the same bank.
+    """Table instances whose multiset of (period, amount, detail, category, agency) is contained
+    in another instance's multiset for the same bank.
 
     This is the signature of one printed table counted twice - three copies of a BRB gazette page
     gave 19 such instances - whatever the file names or entity labels say. Where two instances are
-    identical, only one of the pair is reported."""
+    identical, only one of the pair is reported.
+
+    Zero-amount lines are dropped from the signature first: a printed "R$ 0,00" cell repeats across
+    many unrelated rows and months (a beneficiary paid in only one of three months still gets a
+    line for each), so two DIFFERENT tables that both carry some zero cells can otherwise share
+    enough of their (period, 0.0, ...) tuples to look contained in each other. `category` and
+    `agency` are added to the key for every bank, not only BRB, so that two distinct single-entity
+    tables whose rows happen to share a period, amount and beneficiary text do not read as one
+    printed table counted twice."""
     from collections import Counter
     found = []
     for bank, grp in lines.groupby("bank_key"):
+        nz = grp[grp["amount_brl"].round(2) != 0]
         ms = {t: Counter(zip(g["period"].astype(str), g["amount_brl"].round(2),
-                             g["detail"].fillna("")))
-              for t, g in grp.groupby("table_id")}
+                             g["detail"].fillna(""), g["category"].fillna(""),
+                             g["agency"].fillna("")))
+              for t, g in nz.groupby("table_id")}
         index: dict[tuple, set[str]] = {}
         for t, c in ms.items():
             for k in c:

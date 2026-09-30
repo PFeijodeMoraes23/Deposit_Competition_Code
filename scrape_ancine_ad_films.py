@@ -88,7 +88,9 @@ quarter by quarter exactly as an own row would.
                    URL or registry fact. Brand decides where the two differ, because awareness is
                    of the brand: Caixa Seguradora is attached to Caixa though CNP controls it
                    (and only while it sold under the Caixa brand), Itau Seguros de Auto e
-                   Residencia to Itau though Porto controls it. Every CRT of the affiliate counts.
+                   Residencia to Itau though Porto controls it. Every CRT of the affiliate counts,
+                   except a film that names another bank and not the affiliate's own (Instituto
+                   Porto Seguro's 'Cinema Itau Teatro' shows), which goes to the review list.
                    A registry root in the table (Redecard, Banco Bradesco Cartoes) is attributed
                    only in the quarters it maps to no code; its other rows stay own.
                    Foundations and institutes (Fundacao Bradesco, Fundacao Itau, Instituto
@@ -515,7 +517,7 @@ PUBLIC_BODY = re.compile(r"\b(?:MUNICIPIO|PREFEITURA|SECRETARIA|GOVERNO|MINISTER
 # the bank's name may be only a naming right (COPA SANTANDER LIBERTADORES, CAIXA CULTURAL,
 # FEIRAO DA CAIXA, ARENA BANCO ORIGINAL, BRADESCO ESPORTES FM).
 EVENT_VENUE = re.compile(
-    r"\b(?:COPA|LIGA|LALIGA|CAMPEONATO|TORNEIO|TROFEU|TACA|CIRCUITO|CORRIDA|MARATONA|IRONMAN|"
+    r"\b(?:COPA|RECOPA|LIGA|LALIGA|CAMPEONATO|TORNEIO|TROFEU|TACA|CIRCUITO|CORRIDA|MARATONA|IRONMAN|"
     r"TRIATHLON|RALLY|TOUR|TURNE|FESTIVAL|FEST|FESTA|FEIRA|FEIRAO|SALAO|EXPO\w*|EVENTO|EVENTOS|"
     r"SHOW|SHOWS|CONCERTO|SINFONIA|ORQUESTRA|TEATRO|CINEMA|CINEMAS|ESPACO|ARENA|ESTADIO|HALL|"
     r"CULTURAL|MUSEU|EXPOSICAO|INSTITUTO|FUNDACAO|PREMIO|OLIMPIADA|RODEIO|CARNAVAL|FM)\b")
@@ -1334,7 +1336,14 @@ def attribute(u: pd.DataFrame, mapper: Mapper, roots: set[str],
         taken: set[str] = set()
         if ft == "affiliate":
             a = AFFILIATES[r.advertiser_key]
-            if a.get("until") is None or r.ym <= a["until"]:
+            # A film of the affiliate that names another bank and not its own promotes that other
+            # brand (Instituto Porto Seguro's 'Cinema Itau Teatro' shows, 21 CRTs of 2018): it is
+            # not advertising for the affiliate's bank, so it goes to the review list below like
+            # any other filer's film naming a bank.
+            names_other_only = bool(named) and a["bank"] not in named
+            if names_other_only:
+                pass
+            elif a.get("until") is None or r.ym <= a["until"]:
                 add("affiliate", a["bank"], a["basis"], a["evidence"], a.get("institute", False),
                     target=a["root"])
                 taken.add(a["bank"])

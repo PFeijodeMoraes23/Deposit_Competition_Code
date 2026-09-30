@@ -32,7 +32,7 @@ provenance note, diag_cf1_franchise_dataonly.py).
 
 CLI
   python bbl_shards.py coverage --dir DIR --key KEY --n-shards N [--validate] [--newer-than EPOCH]
-                                [--expect-starts] [--expect-beta B] [--expect-horizon T]
+                                [--expect-starts | --expect-sidecar] [--expect-beta B] [--expect-horizon T]
                                 [--expect-phi-path P] [--expect-z-path Z] [--expect-rdep-timing R]
                                 [--expect-sim-version V] [--policy-csv CSV]
       exit 0 complete, 1 gaps (MISSING_* lines name them), 2 a problem no re-run can fix
@@ -136,6 +136,17 @@ def file_sha256(path, chunk=1 << 22):
         for blk in iter(lambda: fh.read(chunk), b""):
             h.update(blk)
     return h.hexdigest()
+
+
+def parquet_kv_metadata(path):
+    """The file-level key-value metadata of a parquet file (bbl_fwd_sim.jl writes the 'bbl.<field>'
+    provenance there) as str -> str; {} when pyarrow is unavailable or the footer is unreadable."""
+    try:
+        import pyarrow.parquet as pq
+        kv = pq.ParquetFile(path).metadata.metadata or {}
+        return {k.decode(): v.decode() for k, v in kv.items()}
+    except Exception:   # noqa: BLE001 -- a shard whose footer is unreadable already fails validation
+        return {}
 
 
 def psi_sim_paths(bbl_dir, key):
@@ -304,12 +315,26 @@ def validate_parquet(path, required=()):
 # ==========================================================================
 def coverage_report(bbl_dir, key, n_shards, validate=False, newer_than=None,
                     expect_starts=False, expect_beta=None, expect_horizon=None,
-                    expect_switches=None, expect_sim_version=None, policy_csv=None):
-    """Everything the sweep decides from. `missing` already includes bad and stale indices."""
+                    expect_switches=None, expect_sim_version=None, policy_csv=None,
+                    expect_sidecar=False):
+    """Everything the sweep decides from. `missing` already includes bad and stale indices.
+
+    `expect_starts` (a multi-start run) requires the start_q column and psi_starts_<key>.json;
+    `expect_sidecar` (a single-curve run) requires the sidecar alone. Either way the sidecar's
+    provenance is checked against the other expectations.
+
+    `policy_csv` (with `validate`) is also checked shard by shard: every psi file records the
+    sha256 of the policy CSV it was simulated around (parquet metadata bbl.policy_csv_sha256),
+    and a shard that records another one is re-run (`policy_stale`, counted in `missing`), so the
+    set the solve pools holds ONE policy even when a partial launch put a second one under the
+    tag. A shard that records none is left to the sidecar and version checks."""
     d = Path(bbl_dir)
     n_shards = int(n_shards)
     rep = dict(key=key, n=n_shards, present=[], missing=[], bad=[], stale=[], empty=[],
-               problems=[], eq="ok", starts="n/a", tmp_debris=0)
+               policy_stale=[], problems=[], eq="ok", starts="n/a", tmp_debris=0)
+    policy_sha = None
+    if validate and policy_csv is not None and Path(policy_csv).is_file():
+        policy_sha = file_sha256(policy_csv)
     if not d.is_dir():
         rep["problems"].append(f"no such directory: {d}")
         return rep
@@ -361,6 +386,12 @@ def coverage_report(bbl_dir, key, n_shards, validate=False, newer_than=None,
                 rep["bad"].append((p.name, why))
                 rep["missing"].append(i)
                 continue
+            if policy_sha is not None:
+                rec = parquet_kv_metadata(p).get("bbl.policy_csv_sha256", "")
+                if rec and rec != policy_sha:
+                    rep["policy_stale"].append(i)
+                    rep["missing"].append(i)
+                    continue
             if nrows == 0:
                 rep["empty"].append(i)
         rep["present"].append(i)
@@ -376,7 +407,7 @@ def coverage_report(bbl_dir, key, n_shards, validate=False, newer_than=None,
         ok, why, _ = validate_parquet(eq, EQ_COLS + (("start_q",) if expect_starts else ()))
         if not ok:
             rep["eq"] = f"bad ({why})"
-    if expect_starts:
+    if expect_starts or expect_sidecar:
         sj = d / f"psi_starts_{key}.json"
         if not sj.is_file():
             rep["starts"] = "missing"
@@ -401,12 +432,20 @@ def coverage_report(bbl_dir, key, n_shards, validate=False, newer_than=None,
                         f"psi_starts_{key}.json records T={meta['T']} but this run uses "
                         f"T={expect_horizon}: the shards on disk were simulated under another "
                         f"horizon. Use a new --psi-tag or move the old files aside.")
-                # The model switches, recorded since they exist; a sidecar without them was
-                # written by a frozen / frozen / contemporaneous simulation.
+                # The model switches. A sidecar that records none (a run launched before they
+                # existed: _ms1, _ms979) is refused whatever this run expects -- its psi were
+                # simulated frozen / frozen / contemporaneous under ANOTHER design version, so no
+                # shard this code simulates can complete it.
                 for sw, want in (expect_switches or {}).items():
                     if want is None:
                         continue
-                    got = meta.get(sw, SIM_SWITCH_DEFAULTS[sw])
+                    if sw not in meta:
+                        rep["problems"].append(
+                            f"psi_starts_{key}.json records no {sw}: the run was launched before "
+                            f"the model switches existed, under another design. Launch it again "
+                            f"under a new --psi-tag.")
+                        continue
+                    got = meta[sw]
                     if got != want:
                         rep["problems"].append(
                             f"psi_starts_{key}.json records {sw}={got} but this run uses "
@@ -426,7 +465,8 @@ def coverage_report(bbl_dir, key, n_shards, validate=False, newer_than=None,
                     if not pcsv.is_file():
                         rep["problems"].append(f"policy CSV {policy_csv} not found: no shard can be re-run.")
                     else:
-                        now, then = file_sha256(pcsv), meta.get("policy_csv_sha256", "")
+                        now = policy_sha or file_sha256(pcsv)
+                        then = meta.get("policy_csv_sha256", "")
                         if now != then:
                             rep["problems"].append(
                                 f"{pcsv.name} (sha256 {now[:12]}) is not the policy CSV the psi on disk "
@@ -454,6 +494,8 @@ def _print_report(rep):
     print(f"MISSING_LIST={' '.join(str(i) for i in miss)}")
     for name, why in rep["bad"]:
         print(f"BAD_FILE={name}|{why}")
+    if rep.get("policy_stale"):
+        print(f"POLICY_STALE_SPEC={compress_ranges(rep['policy_stale'])}")
     if rep["stale"]:
         print(f"STALE_SPEC={compress_ranges(rep['stale'])}")
     if rep["eq"] != "ok":
@@ -476,6 +518,8 @@ def main(argv=None):
                    help="epoch seconds: an older file is stale and counts as missing")
     c.add_argument("--expect-starts", action="store_true",
                    help="multi-start run: require start_q and psi_starts_<key>.json")
+    c.add_argument("--expect-sidecar", action="store_true",
+                   help="single-curve run: require psi_starts_<key>.json (no start_q)")
     c.add_argument("--expect-beta", type=float, default=None)
     c.add_argument("--expect-horizon", type=int, default=None)
     c.add_argument("--expect-phi-path", default=None, choices=("evolving", "frozen"))
@@ -516,7 +560,8 @@ def main(argv=None):
                           expect_switches={"phi_path": a.expect_phi_path,
                                            "z_path": a.expect_z_path,
                                            "rdep_timing": a.expect_rdep_timing},
-                          expect_sim_version=a.expect_sim_version, policy_csv=a.policy_csv)
+                          expect_sim_version=a.expect_sim_version, policy_csv=a.policy_csv,
+                          expect_sidecar=a.expect_sidecar)
     _print_report(rep)
     if rep["problems"]:
         return 2

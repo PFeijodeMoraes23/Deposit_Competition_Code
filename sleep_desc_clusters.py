@@ -57,8 +57,14 @@ DRAFTS_DIR = P.drafts_dir()
 # ONE copy, chosen by environment. On the cluster only data/output/sleep/Rout is packaged by
 # cluster_archive.sh, so a fragment written to the skeleton Drafts dir never reaches the
 # download; locally the paper directory is the copy that matters and Rout would just be a
-# second, divergeable one.
-TEX_TARGETS = (OUTPUT_DIR,) if P.on_cluster() else (DRAFTS_DIR,)
+# second, divergeable one. A LOCAL run with SLEEP_OUT_ROOT pointed at a sandbox gets the same
+# treatment: OUTPUT_DIR already follows SLEEP_OUT_ROOT, but DRAFTS_DIR never does, so without
+# this a sandboxed run overwrote the paper's own cluster-imbalance tables with the sandbox's.
+_SANDBOXED = P.sleep_out_root_set() and not P.on_cluster()
+TEX_TARGETS = (OUTPUT_DIR,) if (P.on_cluster() or _SANDBOXED) else (DRAFTS_DIR,)
+if _SANDBOXED:
+    print(f"  [sandbox] SLEEP_OUT_ROOT redirects this run: exhibits go to {TEX_TARGETS[0]}, "
+          f"not Drafts.")
 # The .tex fragments are exhibits and follow TEX_TARGETS. The .csv/.json are the numbers
 # BEHIND the table -- data, not exhibits -- so they stay in Rout on both sides, where the
 # rest of the run's intermediates live and where the archiver already packages them.

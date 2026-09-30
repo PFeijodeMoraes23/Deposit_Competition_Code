@@ -42,7 +42,10 @@ from utils import paths
 
 PROC = paths.AWARENESS_PROC
 MARKET_PANEL = Path(str(paths.market_panel_csv()).replace(".csv", ".parquet"))
-OBSERVED = ("observed_positive", "observed_zero", "observed_negative")
+# A cell the scraper filled in from its own table's arithmetic (BRB: `imputed_from_row_total`,
+# brb_impute_forced_cells) is still a printed figure, not a gap in the record, so it counts as
+# observed here; the diagnostics that print it keep the imputed flag visible in their own output.
+OBSERVED = ("observed_positive", "observed_zero", "observed_negative", "imputed_from_row_total")
 MEASURE = {"cosif_conglomerate": "adv", "cosif_institution": "adv", "cvm": "as_filed",
            "caixa_own": "adv_production", "statebank_own": "adv_production"}
 

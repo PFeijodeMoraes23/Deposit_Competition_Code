@@ -46,7 +46,9 @@ log = logging.getLogger(__name__)
 from utils import paths
 
 PROC = paths.AWARENESS_PROC
-OBSERVED = ("observed_positive", "observed_zero", "observed_negative")
+# See diag_advertising_coverage.py: an imputed cell (BRB `imputed_from_row_total`) counts as
+# observed here too (user decision, 2026-09-28).
+OBSERVED = ("observed_positive", "observed_zero", "observed_negative", "imputed_from_row_total")
 # One canonical measure per source, as in diag_advertising_coverage.py.
 MEASURE = {"cvm": "as_filed", "cosif_conglomerate": "adv", "cosif_institution": "adv",
            "statebank_own": "adv_production", "caixa_own": "adv_production"}

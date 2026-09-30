@@ -40,17 +40,22 @@ builds Dep_Act with `phi_mt` for B rows and `phi_t` for D rows). The path keeps 
 
   B rows  φ_{i,t} = clamp(G(Σ_k θ_k S_{k,i,t}), 0, PHI_SIM_MAX), the row's own link path above.
   D rows  φ_{i,t} = clamp(φ_t^stored(q) + [Φ_q(t) − Φ_q(0)], 0, PHI_SIM_MAX), q = the row's launch
-          quarter, with the national aggregate built as the demand prep builds φ_t:
-              Φ_q(t) = Σ_m w_m G_m(t) / Σ_m w_m,
-          m running over the quarter's distinct (mca_code, time_id, phi_mt, pop_total) tuples with
-          a finite pop_total (the prep's drop_duplicates + dropna, each tuple counted once, the
-          NATIONAL row included), w_m = pop_total AT THE LAUNCH QUARTER, held there along the
-          path, and G_m(t) the tuple's first row's own link value in [0, 1] along its state path.
+          quarter, with the national aggregate built as the sleep side builds its national φ_t
+          (sleep_est_single._calculate_phis, sleep_est_e1.calculate_phis):
+              Φ_q(t) = Σ_m M_m φ̄_m(t) / Σ_m M_m,
+          m running over the quarter's MARKET CELLS, the distinct (mca_code, time_id) pairs of the
+          parquet, each counted ONCE whatever its number of rows; φ̄_m(t) the mean over the cell's
+          rows of their own link value in [0, 1] along their state path; M_m the cell's mean
+          pop_total (a missing pop_total counts 0, as the sleep side's fillna(0)), taken AT THE
+          LAUNCH QUARTER and held there along the path. The cell set is the one the sleep side
+          sums over, the D rows' 'NATIONAL' cell included, restricted to the cells the demand
+          parquet holds.
   The level is the parquet's stored φ_t and the path moves it by the change in the aggregate.
   That is exact at t = 0 (the bracket is formed first and is 0.0), constant when no state moves,
-  and needed because the prep aggregated BEFORE its Dep_Act > 1e-6 row filter: the parquet's
-  own cells reproduce the stored φ_t only to ~2e-3 (0 of 36 quarters exact, measured on
-  demand_{3,4}_*_spec_12), so the aggregate's LEVEL cannot be rebuilt from them, its change can.
+  and needed because the stored φ_t is the demand prep's own aggregate, formed BEFORE its
+  Dep_Act > 1e-6 row filter over its (mca_code, time_id, phi_mt, pop_total) tuples: the parquet's
+  cells reproduce it only to ~3e-3 (0 of 36 quarters exact, demand_{3,4}_*_spec_12), so the
+  aggregate's LEVEL cannot be rebuilt from the parquet, its change can.
 
 The path depends on the states alone — never on a spread — so it is built ONCE per shard as an
 N×T matrix and shared by the equilibrium and every deviation, exactly like the share path.
@@ -172,18 +177,19 @@ The link at native index `v`: clip(numpy.interp(v, vgrid, ggrid), 0, 1), as phi_
 """
     NationalPhi
 
-The national φ_t the D rows follow (see the module docstring): the demand prep's tuples of every
-launch quarter, their launch-quarter weights, the stored φ_t it anchors to, and the aggregate at
-t = 0 that the path's change is measured from.
+The national φ_t the D rows follow (see the module docstring): the market cells of every launch
+quarter, their launch-quarter population weights, the stored φ_t it anchors to, and the aggregate
+at t = 0 that the path's change is measured from.
 """
 struct NationalPhi
-    quarters ::Vector{String}   # launch quarters (time_id) with at least one tuple
-    rep      ::Vector{Int}      # per tuple: its first row, whose link path it follows
-    w        ::Vector{Float64}  # per tuple: pop_total at the launch quarter (held along the path)
-    tq       ::Vector{Int}      # per tuple: its quarter, an index into `quarters`
+    quarters ::Vector{String}   # launch quarters (time_id), in first-occurrence order
+    row_cell ::Vector{Int}      # per row: its (mca_code, time_id) cell
+    cell_n   ::Vector{Int}      # per cell: its number of rows (the φ̄_m denominator)
+    cell_w   ::Vector{Float64}  # per cell: M_m, its mean pop_total at the launch quarter (held)
+    cell_q   ::Vector{Int}      # per cell: its quarter, an index into `quarters`
     row_q    ::Vector{Int}      # per row: its quarter index for a D row, 0 for a B row
     phi_t    ::Vector{Float64}  # per quarter: the parquet's stored φ_t (the level)
-    agg0     ::Vector{Float64}  # per quarter: Φ_q(0) over the parquet's tuples
+    agg0     ::Vector{Float64}  # per quarter: Φ_q(0) over the parquet's cells
 end
 
 struct PhiPathInputs
@@ -272,8 +278,8 @@ the D rows follow (`NationalPhi`, see the module docstring). Every check here is
   * the Selic state must be the parquet's lagged-rate LEVEL in estimation units,
     risk_free_qoq_lag == risk_free_qoq_lag_level / scale − mean (mean 0.0216121875744514 on the
     shipped transform), to 1e-12 on every row — the transform the link applies along the path;
-  * `phi_t` and `pop_total` must be present, `phi_t` one value per quarter, and every D row's
-    quarter must hold at least one tuple.
+  * `phi_t` and `pop_total` must be present, `phi_t` one finite value per quarter, and every D
+    row's quarter must carry a positive population weight.
 """
 function phi_path_inputs(df::DataFrame, L::SleepLink; transitions_path::AbstractString,
                          rho_field::String=get(ENV, "CF_STATE_RHO_FIELD", "rho"),
@@ -321,28 +327,29 @@ function phi_path_inputs(df::DataFrame, L::SleepLink; transitions_path::Abstract
         "max |phi_0 − phi_mt| = $d0 > $t0_tol. The link and the demand parquet are different " *
         "vintages; re-export it (python bbl_sleep_link.py) from the fit the parquet was built with.")
     isB = BitVector(Bool.(coalesce.(df.is_B, false)))
-    nat = _national_phi(df, pm, tid, mca, isB, phi0)
+    nat = _national_phi(df, tid, mca, isB, phi0)
     for n in notes; log_status("  [PHI] $n"); end
     return PhiPathInputs(L, S0, dev, rho, krf, phi0, d0, String(transitions_path), rho_field, isB, nat)
 end
 
 """
-    _national_phi(df, phi_mt, tid, mca, isB, phi0) -> NationalPhi
+    _national_phi(df, tid, mca, isB, phi0) -> NationalPhi
 
-The demand prep's national aggregation (sleep_demand_prep_link.process_specification): the distinct
-(mca_code, time_id, phi_mt, pop_total) tuples with a finite pop_total, in first-occurrence order,
-each weighted by its pop_total, per quarter. A tuple follows the link path of its FIRST row, as
-pandas' drop_duplicates keeps it. Φ_q(0) is taken over those tuples from φ_0, which is the same
-arithmetic phi_at! does at t = 0, so the path's change is exactly 0.0 there.
+The sleep side's national aggregation (sleep_est_single._calculate_phis) over the parquet's rows:
+market cells = the distinct (mca_code, time_id) pairs in first-occurrence order, each counted once;
+a cell's φ̄ is the mean of its rows' link values and its weight M the mean of their pop_total, a
+missing pop_total counting 0 (the sleep side's `pop_total.fillna(0)`). Φ_q(0) is taken over the
+cells from φ_0 by `_national_agg`, the same arithmetic phi_at! does at every t, so the path's
+change is exactly 0.0 at t = 0.
 """
-function _national_phi(df::DataFrame, pm::Vector{Float64}, tid::Vector{String}, mca::Vector{String},
+function _national_phi(df::DataFrame, tid::Vector{String}, mca::Vector{String},
                        isB::BitVector, phi0::Vector{Float64})
-    N = length(pm)
+    N = length(phi0)
     pop = Float64.(coalesce.(df.pop_total, NaN))
     pht = Float64.(coalesce.(df.phi_t, NaN))
-    seen = Set{Tuple{String,String,Float64,Float64}}()
     qidx = Dict{String,Int}(); quarters = String[]; phi_t = Float64[]
-    rep = Int[]; w = Float64[]; tq = Int[]
+    cidx = Dict{Tuple{String,String},Int}()
+    row_cell = Vector{Int}(undef, N); cell_n = Int[]; wsum = Float64[]; cell_q = Int[]
     @inbounds for i in 1:N
         q = get(qidx, tid[i], 0)
         if q == 0
@@ -350,40 +357,48 @@ function _national_phi(df::DataFrame, pm::Vector{Float64}, tid::Vector{String}, 
         elseif !isequal(pht[i], phi_t[q])
             error("the parquet's phi_t is not one value per quarter ($(tid[i]): $(pht[i]) vs $(phi_t[q]))")
         end
-        isfinite(pop[i]) || continue                      # dropna(subset=['pop_total'])
-        key = (mca[i], tid[i], pm[i], pop[i])
-        key in seen && continue                           # drop_duplicates: the first row stays
-        push!(seen, key); push!(rep, i); push!(w, pop[i]); push!(tq, q)
+        c = get(cidx, (mca[i], tid[i]), 0)
+        if c == 0
+            push!(cell_n, 0); push!(wsum, 0.0); push!(cell_q, q)
+            c = length(cell_n); cidx[(mca[i], tid[i])] = c
+        end
+        row_cell[i] = c
+        cell_n[c] += 1
+        wsum[c] += isfinite(pop[i]) ? pop[i] : 0.0            # pop_total.fillna(0)
     end
+    cell_w = wsum ./ cell_n                                    # the cell's mean pop_total
     nq = length(quarters)
-    ntup = zeros(Int, nq); for q in tq; ntup[q] += 1; end
+    den = zeros(nq); for c in eachindex(cell_w); den[cell_q[c]] += cell_w[c]; end
     row_q = zeros(Int, N)
     @inbounds for i in 1:N
         isB[i] && continue
         q = qidx[tid[i]]
-        ntup[q] > 0 || error("D row $i (quarter $(tid[i])): the quarter has no tuple with a finite pop_total")
+        den[q] > 0.0 || error("D row $i (quarter $(tid[i])): the quarter's market cells carry no population weight")
         isfinite(phi_t[q]) || error("D row $i (quarter $(tid[i])): the parquet's phi_t is not finite")
         row_q[i] = q
     end
-    tmp = NationalPhi(quarters, rep, w, tq, row_q, phi_t, zeros(nq))
-    agg0 = _national_agg(tmp, [phi0[r] for r in rep])
-    return NationalPhi(quarters, rep, w, tq, row_q, phi_t, agg0)
+    tmp = NationalPhi(quarters, row_cell, cell_n, cell_w, cell_q, row_q, phi_t, zeros(nq))
+    csum = zeros(length(cell_n))
+    @inbounds for i in 1:N; csum[row_cell[i]] += phi0[i]; end
+    agg0 = _national_agg(tmp, csum)
+    return NationalPhi(quarters, row_cell, cell_n, cell_w, cell_q, row_q, phi_t, agg0)
 end
 
 """
-    _national_agg(nat, g) -> Φ per quarter
+    _national_agg(nat, csum) -> Φ per quarter
 
-Σ_m w_m g_m / Σ_m w_m over each quarter's tuples, in tuple order; the unweighted mean where the
-quarter's weights sum to 0 (the prep's `v.mean() if w.sum() == 0`).
+Σ_m M_m φ̄_m / Σ_m M_m over each quarter's cells in cell order, φ̄_m = csum[m] / (its row count):
+`csum` holds each cell's sum of its rows' link values, accumulated in row order. NaN for a quarter
+whose weights sum to 0 (no D row reads one: `_national_phi` refuses it).
 """
-function _national_agg(nat::NationalPhi, g::AbstractVector{Float64})
+function _national_agg(nat::NationalPhi, csum::AbstractVector{Float64})
     nq = length(nat.quarters)
-    num = zeros(nq); den = zeros(nq); s = zeros(nq); c = zeros(Int, nq)
-    @inbounds for m in eachindex(nat.rep)
-        q = nat.tq[m]
-        num[q] += nat.w[m] * g[m]; den[q] += nat.w[m]; s[q] += g[m]; c[q] += 1
+    num = zeros(nq); den = zeros(nq)
+    @inbounds for m in eachindex(nat.cell_n)
+        q = nat.cell_q[m]
+        num[q] += nat.cell_w[m] * (csum[m] / nat.cell_n[m]); den[q] += nat.cell_w[m]
     end
-    return [den[q] == 0.0 ? s[q] / max(c[q], 1) : num[q] / den[q] for q in 1:nq]
+    return [den[q] > 0.0 ? num[q] / den[q] : NaN for q in 1:nq]
 end
 
 # ==========================================================================
@@ -413,13 +428,16 @@ end
 φ of every row at horizon `t` (t = 0 is the launch quarter), clamped to [0, `hi`]: a B row's own
 link path, a D row's national path (module docstring). The Selic state at t ≥ 1 is `rf_h0[i]`
 for t = 1 (h = 0) and `fwd[row_curve[i], t−1]` after that; `selic = :held` keeps it at its launch
-value instead (the identity check).
+value instead (the identity check). `national`, when given (length = the launch quarters, in
+`inp.nat.quarters` order), receives the national φ_t path at `t` of every quarter, clamped as the
+D rows are: the value a D row of that quarter takes (bbl_phi_path_summary.jl reports it).
 """
 function phi_at!(out::AbstractVector{Float64}, inp::PhiPathInputs, t::Int;
                  rf_h0::Union{Nothing,AbstractVector{Float64}}=nothing,
                  fwd::Union{Nothing,AbstractMatrix{Float64}}=nothing,
                  row_curve::Union{Nothing,AbstractVector{Int}}=nothing,
-                 selic::Symbol=:curve, hi::Float64=PHI_SIM_MAX)
+                 selic::Symbol=:curve, hi::Float64=PHI_SIM_MAX,
+                 national::Union{Nothing,AbstractVector{Float64}}=nothing)
     L = inp.link; N, K = size(inp.S0)
     selic in (:curve, :held) || error("selic must be :curve or :held (got $selic)")
     f = [inp.rho[k] == 1.0 ? 0.0 : inp.rho[k]^t - 1.0 for k in 1:K]   # 0 at t = 0 and ρ = 1
@@ -431,22 +449,26 @@ function phi_at!(out::AbstractVector{Float64}, inp::PhiPathInputs, t::Int;
              size(fwd, 2) >= t - 1) || error("phi_at!: fwd/row_curve do not reach h = $(t - 1)")
         end
     end
+    nat = inp.nat
+    national === nothing || length(national) == length(nat.quarters) ||
+        error("phi_at!: `national` must have one entry per launch quarter ($(length(nat.quarters)))")
+    has_D = !all(inp.isB)
+    agg_on = has_D || national !== nothing
+    csum = agg_on ? zeros(length(nat.cell_n)) : Float64[]
     @inbounds for i in 1:N
-        inp.isB[i] || continue                                   # D rows: the national path below
-        out[i] = clamp(sleep_link_phi(L, _index_at(inp, i, t, f, move_rf, rf_h0, fwd, row_curve)), 0.0, hi)
+        g = sleep_link_phi(L, _index_at(inp, i, t, f, move_rf, rf_h0, fwd, row_curve))   # in [0, 1]
+        agg_on && (csum[nat.row_cell[i]] += g)                    # every row enters its market cell
+        inp.isB[i] && (out[i] = clamp(g, 0.0, hi))                # D rows: the national path below
     end
-    if !all(inp.isB)
-        nat = inp.nat
-        g = Vector{Float64}(undef, length(nat.rep))
-        @inbounds for m in eachindex(nat.rep)
-            g[m] = sleep_link_phi(L, _index_at(inp, nat.rep[m], t, f, move_rf, rf_h0, fwd, row_curve))
-        end
-        agg = _national_agg(nat, g)
+    if agg_on
+        agg = _national_agg(nat, csum)
+        # the anchored national path of quarter q: the stored level moved by the aggregate's change
+        natq(q) = clamp(nat.phi_t[q] + (agg[q] - nat.agg0[q]), 0.0, hi)
         @inbounds for i in 1:N
             inp.isB[i] && continue
-            q = nat.row_q[i]
-            out[i] = clamp(nat.phi_t[q] + (agg[q] - nat.agg0[q]), 0.0, hi)
+            out[i] = natq(nat.row_q[i])
         end
+        national === nothing || (national .= natq.(eachindex(nat.quarters)))
     end
     return out
 end
@@ -509,16 +531,17 @@ function phi_path_report(Φ::AbstractMatrix{Float64}, inp::PhiPathInputs;
     wm(x, m) = w === nothing ? NaN : sum(w[m] .* x) / sum(w[m])
     p0 = phi_launch(inp)
     nat = inp.nat
-    gap = [abs(nat.agg0[k] - nat.phi_t[k]) for k in eachindex(nat.quarters)]
+    gap = filter(isfinite, [abs(nat.agg0[k] - nat.phi_t[k]) for k in eachindex(nat.quarters)])
+    isempty(gap) && (gap = [0.0])
     log_status("  [PHI] evolving φ_t: link $(basename(inp.link.path)) (E$(inp.link.estim), " *
                "sha256 $(first(inp.link.sha256, 12))) | ρ ← $(basename(inp.transitions)) " *
                "($(inp.rho_field)): " * join(["$(inp.link.cols[k])=$(round(inp.rho[k], digits=4))"
                                                for k in eachindex(inp.rho) if inp.link.role[k] == :market], ", "))
     log_status("  [PHI] t=0 reproduces phi_mt: max|Δ| = $(inp.t0_maxdiff) | B rows $(count(inp.isB)) " *
                "on their own link path, D rows $(count(!, inp.isB)) on the national φ_t path " *
-               "($(length(nat.rep)) tuples over $(length(nat.quarters)) quarters; the tuples' own " *
-               "aggregate is off the stored φ_t by max $(round(maximum(gap), sigdigits=3)), which is " *
-               "why the path anchors to the stored level)")
+               "($(length(nat.cell_n)) market cells over $(length(nat.quarters)) quarters, population " *
+               "weights held at launch; the cells' own aggregate is off the stored φ_t by max " *
+               "$(round(maximum(gap), sigdigits=3)), which is why the path anchors to the stored level)")
     for (lab, m) in (("B", inp.isB), ("D", .!inp.isB))
         any(m) || continue
         log_status("  [PHI] $lab   t     mean    dep-wtd     p10      p90      min      max   at $(PHI_SIM_MAX)")

@@ -1014,7 +1014,7 @@ def fit_single_index(df, state_cols, has_cf, logit_res, degree=3, phi_band=False
     # (replaces the earlier conditional clustered-OLS delta-method SE).
     # Under the constrained link every draw is PROJECTED back onto the constraint set, so the
     # bootstrap distribution lives on valid CDFs -- the draw analogue of the estimator itself.
-    _bread = np.linalg.pinv(Xdm_arr.T @ Xdm_arr)
+    _bread = gram_pinv(Xdm_arr.T @ Xdm_arr, "sieve OLS AME")
     _proj = None
     if constrained:
         _XtX = Xdm_arr.T @ Xdm_arr
@@ -1505,7 +1505,7 @@ def _linear_wcb_t(res, B, scheme, seed, restricted, tstats_out=None):
             Q[:, a, c] = v
             Q[:, c, a] = v
     A = Q.sum(axis=0)                            # X'X
-    Ainv = np.linalg.pinv(A)
+    Ainv = gram_pinv(A, "linear WCB-t")
     Xty = Sy.sum(axis=0)                         # X'y
 
     def _crve_diag(S):
@@ -1651,7 +1651,7 @@ def linear_wild_cluster_bootstrap(res, B=999, scheme="webb", seed=0, mode=None,
     cl_u, cl_inv = np.unique(cl, return_inverse=True)
     n_cl = len(cl_u)
     K = X.shape[1]
-    bread = np.linalg.pinv(X.T @ X)
+    bread = gram_pinv(X.T @ X, "linear WCB")
     score = X * u[:, None]                                   # N x K per-obs scores
     s_cl = np.zeros((n_cl, K))
     for k in range(K):
@@ -1693,6 +1693,54 @@ def boot_cfg():
     return B, scheme
 
 
+_GRAM_PINV_SAID: set = set()
+
+
+def gram_pinv(M, label=""):
+    """Inverse of a Gram / Gauss-Newton matrix (X'X, J'J) for a sandwich bread.
+
+    np.linalg.pinv drops every singular value below 1e-15 of the largest. When the columns are in
+    very different units -- a level in R$ beside a squared quarterly rate -- the eigenvalues of X'X
+    span more than 15 orders of magnitude, so that cut drops directions the data DO identify, and
+    their bootstrap draws collapse to ~0 (the policy function's Risk-Free Rate^2, 2026-09-29).
+
+    Returns np.linalg.pinv(M) itself, bit for bit, whenever it keeps full rank. When it does not,
+    the matrix is re-inverted after column equilibration, D M D with D = diag(M)^{-1/2}: rank that
+    reappears there was hidden by the units only, and the equilibrated inverse D pinv(DMD) D keeps
+    it. Directions that are null even after equilibration are genuinely unidentified (an all-zero
+    dummy, a duplicated column) and stay dropped. Both cases print once per label and shape."""
+    M = np.asarray(M, float)
+    P = np.linalg.pinv(M)
+    k = M.shape[0]
+    if k == 0:
+        return P
+    s = np.linalg.svd(M, compute_uv=False)
+    r_p = int((s > 1e-15 * s.max()).sum()) if s.max() > 0 else 0
+    if r_p == k:
+        return P
+    dg = np.sqrt(np.clip(np.diag(M), 0.0, None))
+    dg = np.where(dg > 0, 1.0 / dg, 1.0)
+    A = M * dg[:, None] * dg[None, :]
+    sa = np.linalg.svd(A, compute_uv=False)
+    r_e = int((sa > 1e-15 * sa.max()).sum()) if sa.max() > 0 else 0
+    key = (label, k, r_p, r_e)
+    if key not in _GRAM_PINV_SAID:
+        _GRAM_PINV_SAID.add(key)
+        tag = f"[bread{(' ' + label) if label else ''}]"
+        if r_e > r_p:
+            print(f"  {tag} pinv keeps rank {r_p} of {k} (units span "
+                  f"{np.log10(s.max() / max(s.min(), 1e-300)):.0f} orders); the column-equilibrated "
+                  f"inverse keeps {r_e}"
+                  + (f"; {k - r_e} direction(s) are null even after equilibration "
+                     f"(genuinely unidentified)" if r_e < k else "") + ".")
+        else:
+            print(f"  {tag} RANK-DEFICIENT: {k - r_p} of {k} direction(s) are null even after "
+                  f"column equilibration (genuinely unidentified); the pseudo-inverse is kept.")
+    if r_e > r_p:
+        return dg[:, None] * np.linalg.pinv(A) * dg[None, :]
+    return P
+
+
 def _cluster_if(score, bread, cl_inv, n_cl):
     """Per-cluster influence functions IF_g = sum_{i in g} (bread @ score_i)."""
     IF = score @ bread.T                       # N x p
@@ -1718,7 +1766,7 @@ def nlls_link_wild_bootstrap(res_lsq, X, link, K, G, idx_names, cl_inv, n_cl,
     psi = res_lsq.x
     jac = res_lsq.jac                          # dr/dpsi  (N x p)
     resid = res_lsq.fun                        # N
-    bread = np.linalg.pinv(jac.T @ jac)
+    bread = gram_pinv(jac.T @ jac, "NLLS link")
     score = (-jac) * resid[:, None]            # (df/dpsi)*r  (sign irrelevant for variance)
     IF_cl = _cluster_if(score, bread, cl_inv, n_cl)
     if ame_fn is not None:
@@ -1750,7 +1798,7 @@ def ols_sieve_wild_bootstrap(Xdm, resid, cl_inv, n_cl, b_full, ame_fn, ame_hat,
     if B is None or scheme is None:
         _B, _s = boot_cfg(); B = B if B is not None else _B; scheme = scheme or _s
     Xdm = np.asarray(Xdm, float)
-    bread = np.linalg.pinv(Xdm.T @ Xdm)
+    bread = gram_pinv(Xdm.T @ Xdm, "sieve OLS")
     score = Xdm * np.asarray(resid, float)[:, None]
     IF_cl = _cluster_if(score, bread, cl_inv, n_cl)
     rng = np.random.default_rng(seed)
@@ -1851,7 +1899,7 @@ def linear_phi_t_band(res, Z, coef_names, df_agg, market_key=None, weight="mean"
     cl = pd.Series(np.asarray(res.cov_kwds["groups"])).astype(str).values
     _, cl_inv = np.unique(cl, return_inverse=True)
     n_cl = int(cl_inv.max()) + 1
-    IF_cl = _cluster_if(X * u[:, None], np.linalg.pinv(X.T @ X), cl_inv, n_cl)
+    IF_cl = _cluster_if(X * u[:, None], gram_pinv(X.T @ X, "linear phi_t band"), cl_inv, n_cl)
 
     _B, _scheme = boot_cfg()
     B = _B if B is None else int(B)
@@ -2260,7 +2308,7 @@ def nlls_direction_if(df, state_cols, has_cf, theta_native, loss, link="logit",
     score = J * (rho1 * f)[:, None]
     foc = J.T @ (rho1 * f)
     foc_norm = float(np.linalg.norm(foc) / max(1.0, float(np.linalg.norm(rho1 * f))))
-    bread = np.linalg.pinv((J * w2[:, None]).T @ J)
+    bread = gram_pinv((J * w2[:, None]).T @ J, "NLLS direction")
 
     cl = df_ss[cluster_col].astype(str)
     cl_u, cl_inv = np.unique(cl.values, return_inverse=True)
@@ -2437,7 +2485,7 @@ def unconditional_phi_t_band(df, state_cols, has_cf, si_res, loss, degree=3,
     D0, _ = _design(vs, knots0)
     resid0 = y_dm - D0 @ b_full
     XtX0 = D0.T @ D0
-    bread_b = np.linalg.pinv(XtX0)
+    bread_b = gram_pinv(XtX0, "conditional link")
     IF_b = _cluster_if(D0 * resid0[:, None], bread_b, cl_inv, n_cl)
 
     # --- projections used by the two constrained-draw variants -----------------------------
@@ -3127,7 +3175,7 @@ def twostage_ame_boot(df, state_cols, has_cf, si_res, loss, degree=3, fe_time_co
         qp_A = qp_lb = qp_ub = None
     resid0 = y_dm - D0 @ b_full
     XtX0 = D0.T @ D0
-    bread_link = np.linalg.pinv(XtX0)
+    bread_link = gram_pinv(XtX0, "two-stage link")
     # Fingerprint on the LINK, not on the coefficients: the ramp basis is collinear, so two
     # faithful solves can sit ~1e-3 apart in beta and describe the same function to ~1e-9.
     d_b = float(np.max(np.abs(b_full[:n_basis] - b_stored)))

@@ -89,8 +89,20 @@ which source each came from, and every psi file records all three):
       the launch quarter's own rate, at t = 1), as V_Main eq (9-B) and the demand prep's Dep^Act
       have it. contemporaneous: at horizon t. ψ4 is unaffected either way: the funding cost uses
       the contemporaneous r^f_t (eq 8).
-frozen + frozen + contemporaneous is the simulation this file ran before the switches existed.
-The counterfactual entry points (cf1, cf3, cf4, cf5, cf6) read none of these switches.
+frozen + frozen + contemporaneous reproduces the psi of the runs that record no switches (_ms1,
+_ms979). The switches work alike in both designs. Under --multi-start each row's rate path is its
+launch vintage (h = 0 that vintage's own rate); in the single-curve design (no --multi-start)
+every row shares the one --rf-curve (forward_rf_qoq.csv) for h ≥ 1, and h = 0 is the row's own
+panel rate (rf_h0 below), which the lagged carry and the lagged Selic state of φ read at t = 1.
+Both designs write the psi_starts sidecar the tag guard, the sweep and the solve read.
+
+The counterfactual entry points (cf1, cf3, cf4, cf5, cf6) read none of these switches: they
+simulate frozen φ and Z with a contemporaneous carry, and cf1_franchise.jl (lines ~213-214) and
+cf3_equilibrium.jl (~235) keep a ρ̂/400 fallback markdown. Both need updating to this design
+before any counterfactual run (cf3/cf6 already get the exact markdown through psi_under).
+pipeline_all.sh with routines 1-4 fails bbl_run.sh's preflight under evolving φ: only E3 and E4
+export a sleep link (bbl_sleep_link.py), so run the BBL with --routines "3 4" (the default
+CL_ROUTINES_CF) or with --phi-path frozen.
 
 Usage (write-only here; run only after data is downloaded AND author authorizes):
   julia --project=. --threads=4 bbl_fwd_sim.jl --estim 3 --spec 12 --stage extended --R 300 --time-filter 2024Q4 --shocks 20
@@ -993,8 +1005,10 @@ function main_cost2()
     # single-curve file is then neither read nor required (it would only be an unused vector, and
     # requiring an unread upload on the cluster is a failure mode for nothing).
     ms = a["multi-start"]
+    rf_curve_csv = a["rf-curve"] === nothing ?
+                   joinpath(cf_in_dir(out_dir, "COST_FWD"), "forward_rf_qoq.csv") : String(a["rf-curve"])
     rf_path = ms ? Float64[] :
-              load_forward_rf(a["rf-curve"], out_dir, a["horizon"], ctx; require=a["hpc"])
+              load_forward_rf(rf_curve_csv, out_dir, a["horizon"], ctx; require=a["hpc"])
 
     # Asset return r^j in ψ1 (revenue). A firm-constant r^j is COLLINEAR with the ω (ψ2)
     # regressor, so it mainly RELABELS ω̂ — default 0 (deposit-funding value). A column
@@ -1400,19 +1414,18 @@ function main_cost2()
         log_status("  [BBL] wrote psi_eq_$tag.parquet")
 
         # Provenance sidecar: what the ψ files were simulated under. Written from shard 0 only,
-        # for the same reason psi_eq is — it is shard-invariant.
-        if ms
-            meta = Dict("starts"      => starts,
-                        "sources"     => [get(rf_src, q, "") for q in starts],
-                        "rf_bar_beta" => [get(rf_bar, q, NaN) for q in starts],
-                        "n_firms"     => [get(nfirm_by_start, q, 0) for q in starts],
+        # for the same reason psi_eq is — it is shard-invariant. BOTH designs write it: the tag
+        # guard (bbl_run.sh), the sweep (bbl_shards.py coverage) and the solve (run.beta / run.T,
+        # run.sim_paths) read beta, T, the switches, the design version and the policy hash from
+        # it. A multi-start run lists its launch quarters; a single-curve run names its one curve.
+        begin
+            meta = Dict{String,Any}(
+                        "design"      => ms ? "multi_start" : "single_curve",
                         "beta"        => a["beta"],
                         "T"           => a["horizon"],
-                        "S"           => length(starts),
                         "P"           => n_paths,
                         "seed"        => a["seed"],
                         "psi_tag"     => psi_tag,
-                        "rf_vintages" => basename(vpath),
                         "transitions" => isempty(tpath) ? "" : basename(tpath),
                         # the model switches and their inputs (bbl_run.sh's tag guard reads the
                         # three switches; bbl_solve.py copies all of it into the run record)
@@ -1435,11 +1448,25 @@ function main_cost2()
                         # the deviation grid: psi_dev's shift_pp is shifts[shock] under it
                         "dev_scheme"    => a["dev-scheme"],
                         "perturb_scale" => a["perturb-scale"])
+            if ms
+                meta["starts"]      = starts
+                meta["sources"]     = [get(rf_src, q, "") for q in starts]
+                meta["rf_bar_beta"] = [get(rf_bar, q, NaN) for q in starts]
+                meta["n_firms"]     = [get(nfirm_by_start, q, 0) for q in starts]
+                meta["S"]           = length(starts)
+                meta["rf_vintages"] = basename(vpath)
+            else
+                # the one forward curve every row is simulated on (h = 1…T; h = 0 is each row's
+                # own panel rate, rf_h0)
+                meta["rf_curve"]        = basename(rf_curve_csv)
+                meta["rf_curve_sha256"] = _file_sha256(rf_curve_csv)
+            end
             _atomic_write(joinpath(cost_dir, "psi_starts_$tag.json")) do tmp
                 open(tmp, "w") do f; JSON3.write(f, meta); end
             end
-            log_status("  [BBL] wrote psi_starts_$tag.json (S=$(length(starts)) P=$n_paths " *
-                       "seed=$(a["seed"]))")
+            log_status("  [BBL] wrote psi_starts_$tag.json (" *
+                       (ms ? "multi-start, S=$(length(starts)) P=$n_paths" :
+                        "single curve $(basename(rf_curve_csv))") * " seed=$(a["seed"]))")
         end
     end
 

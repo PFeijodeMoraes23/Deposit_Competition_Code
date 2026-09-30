@@ -1,11 +1,15 @@
 """
 build_advertising_panel.py
 ==========================
-Assembles the collected advertising sources into two panels keyed to the market panel's
-prudential conglomerate codes:
+Assembles the collected advertising sources into panels keyed to the market panel's prudential
+conglomerate codes:
 
   advertising_panel_quarterly   one row per conglomerate x quarter x SOURCE x measure
   advertising_panel_annual      the SEC 20-F series, annual, kept apart from the quarterly panel
+  advertising_ancine_quarterly  ANCINE advertising-film registrations (CRTs) per conglomerate x
+                                quarter. They count films, not reais, so they are kept out of the
+                                amount panels, where the deflator and the deposit intensities
+                                would treat them as money (user decision 2026-09-29).
 
 Sources are stored SEPARATELY and never spliced (user decision 2026-09-20): a source change
 inside a bank's history is a level jump that bank fixed effects cannot absorb, and the measured
@@ -47,7 +51,9 @@ Vintages and values
     in that quarter (from market_panel.parquet, read-only) and, where 2025 COSIF data exists, by
     its administrative expenses.
   - `validated` is False for rows from a source whose own published totals did not reconcile
-    against a 90% floor. Every state bank clears it; BRB, the lowest, matches 96.6% (393 of 407
+    against a 90% floor, and for a Caixa quarter holding a month whose lines do not close against
+    Caixa's printed totals (flag month_totals_do_not_close; the reviewed months are Caixa's own
+    totals disagreeing with its cells, and their amounts still count). Every state bank clears it; BRB, the lowest, matches 96.6% (393 of 407
     published totals, measured 2026-09-24 once duplicate gazette copies were counted once).
   - statebank_own sums only the entities inside the bank's prudential conglomerate: BRB's gazette
     pages also carry Cartao BRB, which the IF.data registry never places in C0080288, so its lines
@@ -60,7 +66,8 @@ Vintages and values
 Inputs (all under paths.AWARENESS_PROC unless noted)
 ----------------------------------------------------
   cosif_advertising_quarterly, cvm_advertising_quarterly, sec_advertising_annual,
-  caixa_advertising_monthly, statebank_advertising_periods, sponsorship_periods,
+  caixa_advertising_monthly, caixa_scan_advertising_monthly, statebank_advertising_periods,
+  sponsorship_periods, ancine_ad_films_monthly,
   advertising_entity_crosswalk{,_periods}; market_panel.parquet for deposits; the IPCA series from
   the central bank's SGS API, cached under paths.AWARENESS_RAW/deflator.
 
@@ -393,19 +400,41 @@ def from_cvm(xw: pd.DataFrame, per: pd.DataFrame, panel_names: dict[str, str]) -
 
 
 def from_caixa(xw: pd.DataFrame, per: pd.DataFrame) -> pd.DataFrame:
-    m = pd.read_parquet(PROC / "caixa_advertising_monthly.parquet")
-    m = m[m["status"].eq("parsed")] if "status" in m.columns else m[m["amount_brl"].notna()]
+    """Caixa's own monthly files, from two builders that read disjoint months: the text-read months
+    (scrape_caixa_advertising.py) and the scanned ones it cannot read, 2013-01..2014-06 and
+    2016-04..05 (scrape_caixa_scan_advertising.py, OCR). A quarter is validated only when every
+    month in it closes against Caixa's printed totals, exactly or within 5 centavos. A month that
+    does not close is still counted - its lines are what Caixa printed; the reviewed cases are
+    Caixa's own totals disagreeing with its cells - and the quarter's flags say so."""
+    cols = ["period", "amount_brl", "validated", "validation_status", "tolerance_flagged"]
+    text = pd.read_parquet(PROC / "caixa_advertising_monthly.parquet")
+    text = text.loc[text["status"].eq("parsed"), cols].assign(read="text")
+    scan = pd.read_parquet(PROC / "caixa_scan_advertising_monthly.parquet")[cols].assign(read="scan")
+    both = set(text["period"].astype(str)) & set(scan["period"].astype(str))
+    if both:
+        raise SystemExit(f"Caixa months read by both builders: {sorted(both)}")
+    m = pd.concat([text, scan], ignore_index=True)
+    m["validated"] = m["validated"].astype(bool)
+    m["tolerance_flagged"] = m["tolerance_flagged"].fillna(False).astype(bool)
     m["year"] = m["period"].astype(str).str[:4].astype(int)
     m["quarter"] = ((m["period"].astype(str).str[4:6].astype(int) - 1) // 3 + 1)
     g = (m.groupby(["year", "quarter"], as_index=False)
-          .agg(amount_brl=("amount_brl", "sum"), n_months_observed=("period", "nunique")))
+          .agg(amount_brl=("amount_brl", "sum"), n_months_observed=("period", "nunique"),
+               validated=("validated", "all"),
+               n_unvalidated=("validated", lambda s: int((~s).sum())),
+               n_tolerance=("tolerance_flagged", "sum"),
+               n_scanned=("read", lambda s: int((s == "scan").sum()))))
     code = code_for(xw, per, "statebank", "caixa", 2020, 1)
     g["panel_code"], g["source_entity"], g["entity_name"] = code, "caixa", "CAIXA ECONOMICA FEDERAL"
     g["source"], g["measure"], g["amount_kind"] = "caixa_own", "adv_production", "custos"
-    g["scope"], g["validated"], g["admin_brl"] = "institution", True, np.nan
-    g["flags"] = np.where(g["n_months_observed"] < 3, "incomplete_quarter", "")
+    g["scope"], g["admin_brl"] = "institution", np.nan
+    g["flags"] = (np.where(g["n_months_observed"] < 3, "incomplete_quarter;", "")
+                  + np.where(g["n_unvalidated"] > 0, "month_totals_do_not_close;", "")
+                  + np.where(g["n_tolerance"] > 0, "month_within_5_centavos;", "")
+                  + np.where(g["n_scanned"] > 0, "month_read_by_ocr;", ""))
+    g["flags"] = g["flags"].str.strip(";")
     g["detail"] = "media, production and services by agency"
-    return g
+    return g.drop(columns=["n_unvalidated", "n_tolerance", "n_scanned"])
 
 
 def brb_with_sponsorship(statebank: pd.DataFrame) -> pd.DataFrame:
@@ -462,7 +491,14 @@ def from_statebanks(xw: pd.DataFrame, per: pd.DataFrame) -> pd.DataFrame:
               .groupby(["bank_key", "year", "quarter"], as_index=False)
               .agg(amount_brl=("v", "sum"), imputed_brl=("imp", "sum"),
                    n_months_observed=("period", "nunique"),
-                   validated=("validated", "all"), basis=("basis", "first")))
+                   validated=("validated", "all"),
+                   # `p["basis"]` already joins a period's distinct bases ("accrued/undocumented",
+                   # from period_table() in the scraper); taking "first" across the quarter's
+                   # months and entities threw that away, so a quarter with one accrued month and
+                   # two undocumented months was labelled by whichever row pandas kept first.
+                   basis=("basis", lambda s: "/".join(sorted(
+                       {b for v in s.dropna() for b in str(v).split("/") if b}))),
+                   n_entities_observed=("entity", "nunique")))
         g["measure"] = measure
         out.append(g)
     df = pd.concat(out, ignore_index=True)
@@ -473,7 +509,15 @@ def from_statebanks(xw: pd.DataFrame, per: pd.DataFrame) -> pd.DataFrame:
     df["source"], df["scope"] = "statebank_own", "institution"
     df["source_entity"], df["entity_name"] = df["bank_key"], df["bank_key"].str.upper()
     df["amount_kind"] = df["basis"].fillna("undocumented")
-    df["flags"] = np.where(df["n_months_observed"] < 3, "incomplete_quarter", "")
+    # BRB's conglomerate publishes three entities (bank, finance company, brokerage); a quarter
+    # where fewer than that were observed (2019Q3: the finance company's listing link serves the
+    # wrong gazette page, see parse_brb) is flagged here rather than left silently under-counted
+    # inside a conglomerate-level sum. Other banks publish for a single entity, so this never fires
+    # for them.
+    brb_incomplete = (df["bank_key"] == "brb") & (df["n_entities_observed"] < 3)
+    df["flags"] = (np.where(df["n_months_observed"] < 3, "incomplete_quarter;", "")
+                   + np.where(brb_incomplete, "entity_missing", ""))
+    df["flags"] = df["flags"].str.strip(";")
     df["detail"] = "published categories summed per measure"
     df["admin_brl"] = np.nan
     return df.drop(columns=["bank_key", "basis"])
@@ -617,6 +661,34 @@ def overlap_ratios(panel: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
+ANCINE_COUNTS = ["n_crt", "n_crt_own", "n_crt_affiliate", "n_crt_holding", "n_crt_media_sponsored",
+                 "n_crt_naming_rights_suspect", "n_crt_coop_system"]
+
+
+def ancine_quarterly() -> pd.DataFrame:
+    """ANCINE film registrations per conglomerate and quarter, from scrape_ancine_ad_films.py's
+    monthly table. n_crt is the bank's total (own + affiliate + holding + media_sponsored), with
+    the components beside it; n_crt_naming_rights_suspect is the part of n_crt whose film only
+    names the bank in an event, venue or institute name, and n_crt_coop_system (Sicoob and Sicredi
+    co-operatives' films, set against their co-operative banks) is not in n_crt. in_panel is False
+    in a quarter with no market-panel rows for the conglomerate, so its zeros there are not
+    observations; partial_quarter marks a quarter with fewer than three months of data or with the
+    file's last, incomplete month."""
+    m = pd.read_parquet(PROC / "ancine_ad_films_monthly.parquet")
+    m["quarter"] = (m["month"] - 1) // 3 + 1
+    g = (m.groupby(["panel_code", "year", "quarter"], as_index=False)
+          .agg(panel_name=("panel_name", "first"), **{c: (c, "sum") for c in ANCINE_COUNTS},
+               n_months=("month", "nunique"), in_panel=("in_panel", "all"),
+               partial_quarter=("partial_month", "any")))
+    if not g[ANCINE_COUNTS].sum().equals(m[ANCINE_COUNTS].sum()):
+        raise SystemExit("ANCINE quarterly counts do not add up to the monthly table")
+    g["partial_quarter"] = g["partial_quarter"] | (g["n_months"] < 3)
+    log.info("ANCINE CRTs: %d conglomerates, %d quarters, n_crt %d (co-operative systems %d apart)",
+             g["panel_code"].nunique(), len(g), int(g["n_crt"].sum()),
+             int(g["n_crt_coop_system"].sum()))
+    return g
+
+
 def deposits_by_quarter() -> pd.Series:
     mp = pd.read_parquet(MARKET_PANEL, columns=["CodConglomeradoPrudencial", "year", "quarter"]
                          + DEP_COLS)
@@ -631,8 +703,10 @@ def main() -> None:
     a = ap.parse_args()
 
     needed = ["cosif_advertising_quarterly", "cvm_advertising_quarterly", "sec_advertising_annual",
-              "caixa_advertising_monthly", "statebank_advertising_periods", "sponsorship_periods",
-              "advertising_entity_crosswalk", "advertising_entity_crosswalk_periods"]
+              "caixa_advertising_monthly", "caixa_scan_advertising_monthly",
+              "statebank_advertising_periods", "sponsorship_periods",
+              "advertising_entity_crosswalk", "advertising_entity_crosswalk_periods",
+              "ancine_ad_films_monthly"]
     missing = [n for n in needed if not (PROC / f"{n}.parquet").exists()]
     if missing:                                                              # check 1
         raise SystemExit(f"missing inputs: {missing}")
@@ -779,7 +853,8 @@ def main() -> None:
     annual = annual.rename(columns={"flags": "flag_notes"})
     for name, frame in (("advertising_panel_quarterly", panel),
                         ("advertising_panel_annual", annual),
-                        ("advertising_overlap_ratios", overlaps)):
+                        ("advertising_overlap_ratios", overlaps),
+                        ("advertising_ancine_quarterly", ancine_quarterly())):
         frame.to_parquet(a.out_dir / f"{name}.parquet", index=False)
         frame.to_csv(a.out_dir / f"{name}.csv", index=False)
         log.info("%s: %d rows -> %s", name, len(frame), a.out_dir / f"{name}.parquet")

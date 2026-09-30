@@ -87,6 +87,9 @@ did not; a run with no record is stated as such, never filled in.
 Also writes markdown twins next to identification_notes.md for the notes document:
   tab_bbl_cost_identified.md, tab_bbl_cbar.md, tab_bbl_ridge_diagnostic.md,
   tab_bbl_ridge_by_start.md, tab_bbl_cbar_design.md, tab_bbl_violated_by_sign.md
+and, into the step folder only, bbl_table_numbers{psi_tag}.json: the unrounded numbers each
+table prints, from the objects it was rendered from, which make_paper_numbers.py reads (see
+_write_numbers). Each pass writes its own sections of that one file.
 
 WHICH PASS PRODUCES THE REPORTED TABLES. Both, and both on the cluster: bbl_job.sh's `tables`
 step runs the default pass and then the --from-psi pass against the shards in ${CF_COST_FWD},
@@ -104,11 +107,15 @@ Usage:
   python make_bbl_cost_tables.py --from-psi            # + the ridge tables, from psi_cost.zip
   python make_bbl_cost_tables.py --from-psi --psi-dir "$CF_COST_FWD"   # on the cluster
   python make_bbl_cost_tables.py --psi-tag _ms8        # pin one multi-start vintage
+  python make_bbl_cost_tables.py --psi-tag _ms981 --compare-single-curve --single-curve-tag _sc981
+                                                       # tab_bbl_cbar_design's single-curve
+                                                       # column from a tagged single-curve solve
 """
 
 from __future__ import annotations
 
 import argparse
+import datetime
 import io
 import json
 import os
@@ -650,6 +657,59 @@ def _discount_report(table: str, entries: list, all_lead=None) -> tuple:
 def _with(note: str, disc: str) -> str:
     """Append the discount sentence to a table's Notes."""
     return note + (" " + disc if disc else "")
+
+
+# bbl_solve.py's two resampling schemes behind the SDs, intervals and stars of Tables 7, 9 and 11.
+# The draw counts are recorded by the solve (run.bootstrap; each block's subsample.n_sub and
+# b_firms). The seeds are neither options nor recorded: bootstrap_kappa and subsample_kappa run
+# with their signature defaults, 42 and 4242, the same in every commit since 0689344b
+# (2026-08-29), so they are restated here and must follow bbl_solve.py if its defaults change.
+SOLVE_BOOT_SEED = 42
+SOLVE_SUB_SEED = 4242
+
+
+def _resampling_parts(costs, md: bool = False) -> dict:
+    """{'boot': '200 draws, seed 42', 'sub': '200 draws of $b=n^{2/3}$ firms, seed 4242'} from the
+    solves' own records; a count a solve did not record is said to be so, and a scheme no solve
+    ran has no key. Table 7 embeds the two clauses where it names the intervals and the SDs;
+    _resampling_note makes the sentence the other tables carry."""
+    costs = [c for c in costs if c]
+    nb = {(c.get("run") or {}).get("bootstrap") for c in costs}
+    subs = [((c.get(k) or {}).get("subsample") or {}) for c in costs for k in ("B", "D")]
+    subs = [s for s in subs if s.get("n_sub")]
+    ns = sorted({int(s["n_sub"]) for s in subs})
+    rule = all(int(s["b_firms"]) == int(np.clip(round(s["n_firms"] ** (2.0 / 3.0)), 5,
+                                                 s["n_firms"] - 1))
+               for s in subs if s.get("n_firms") and s.get("b_firms"))
+    parts = {}
+    if nb - {None, 0}:
+        cnt = "/".join(f"{int(x):,}" for x in sorted(nb - {None, 0}))
+        parts["boot"] = (f"{cnt} draws" + (" (not recorded for every solve)" if None in nb else "")
+                         + f", seed {SOLVE_BOOT_SEED}")
+    elif costs and nb == {None}:
+        parts["boot"] = f"draw count not recorded, seed {SOLVE_BOOT_SEED}"
+    if ns:
+        b = ("b = n^(2/3)" if md else r"$b=n^{2/3}$") if rule else "b"
+        parts["sub"] = (f"{'/'.join(f'{x:,}' for x in ns)} draws of {b} firms, "
+                        f"seed {SOLVE_SUB_SEED}")
+    return parts
+
+
+def _resampling_note(costs, md: bool = False) -> str:
+    """'Firm-block bootstrap: 200 draws, seed 42; subsampling: 200 draws of b = n^(2/3) firms,
+    seed 4242.' from _resampling_parts; empty when neither scheme ran."""
+    p = _resampling_parts(costs, md=md)
+    parts = ([f"firm-block bootstrap: {p['boot']}"] if "boot" in p else []) \
+        + ([f"subsampling: {p['sub']}"] if "sub" in p else [])
+    if not parts:
+        return ""
+    s = "; ".join(parts)
+    return s[0].upper() + s[1:] + "."
+
+
+def _notes_join(*parts) -> str:
+    """Sentences joined by one space, empty ones skipped."""
+    return " ".join(p for p in parts if p)
 
 
 # ── data ─────────────────────────────────────────────────────────────────────
@@ -1529,7 +1589,7 @@ def _num(x, nd=0):
     return f"{x:,.{nd}f}"
 
 
-def _wrap(body, col_fmt, caption, label, header, footnote, ncols):
+def _wrap(body, col_fmt, caption, label, header, footnote, ncols, nobreak=False):
     r"""Emit one \input-ready table in the V_Main house pattern (see polfunc_k4.tex, the sibling
     table in the same section): a \begin{spacing} group, xltabular sized to \textwidth, the
     caption and label INSIDE the table, repeat-header machinery, and the notes as the last
@@ -1560,7 +1620,41 @@ def _wrap(body, col_fmt, caption, label, header, footnote, ncols):
         notes. The two kerns cancel, so a table that fits looks exactly as before. \nobreak ahead
         of them keeps the last row from being split from its own reservation.
     The notes stay in \endlastfoot: the look of the table does not change, only where it breaks.
+
+    NON-BREAKING TABLES (`nobreak=True`, for a table shorter than a page: T8, T9). \\* on every row
+    does not keep an xltabular together: the glue booktabs puts below each \midrule's rule is a
+    legal page break whatever the row penalties are (measured 2026-09-29, 21 of 32 harness
+    variants still split). The table is instead one unbreakable box -- a minipage holding the
+    caption (\captionof, set as a top caption so its skip falls below it, as in the xltabular) and
+    a tabularx with the same columns, rules, body and notes row -- between longtable's own \LTpre
+    and \LTpost skips. It moves to the next page whole when it does not fit and looks the same.
+    The line holding the box is centred on the table, so it leaves \prevdepth at half the table's
+    height; the next paragraph's interline glue then collapses to \lineskip and setspace's closing
+    -\baselineskip eats \LTpost (measured 2026-09-30: 1.8pt below the notes against 16.3pt after an
+    xltabular). \prevdepth=0pt after the box reproduces the xltabular's ending, whose last foot has
+    zero depth, so the following paragraph gets the same gap.
     """
+    if nobreak:
+        return "\n".join([
+            r"\begin{spacing}{1.0}",
+            r"\footnotesize",
+            r"\setlength{\tabcolsep}{3pt}",
+            r"\par\addvspace{\LTpre}\noindent\begin{minipage}{\textwidth}"
+            r"\captionsetup{position=top}",
+            rf"\captionof{{table}}{{{caption}}}\label{{{label}}}",
+            rf"\begin{{tabularx}}{{\textwidth}}{{{col_fmt}}}",
+            r"\toprule",
+            header + r" \\",
+            r"\midrule",
+            *body,
+            r"\bottomrule",
+            rf"\multicolumn{{{ncols}}}{{@{{}}p{{\dimexpr\textwidth-2\tabcolsep\relax}}@{{}}}}"
+            rf"{{\footnotesize {footnote}}} \\",
+            r"\end{tabularx}",
+            r"\end{minipage}\par\prevdepth=0pt\addvspace{\LTpost}",
+            r"\end{spacing}",
+            "",
+        ])
     return "\n".join([
         r"\begin{spacing}{1.0}",
         r"\footnotesize",
@@ -1667,68 +1761,61 @@ def _ridge_rows_note(ridge, md: bool = False) -> str:
                r"Table~\ref{tab:bbl_cost_identified} by the rows with $\Delta\psi_2=0$. "))
 
 
-def build_ridge(ridge, disc=""):
-    # Eleven columns at \footnotesize in a portrait text block: the headers are kept to one short
-    # word each and every symbol is defined in the note, because a spelled-out header like
-    # corr$(\Delta\psi_2,\Delta\psi_4)$ wraps to three lines and collides with its neighbor.
-    # The condition number is "Cond." and NOT $\kappa$ — the paper already spends $\kappa$ on the
-    # firm type (B/D), and this table is read alongside cost estimates indexed by it.
-    # The four ratio statistics sit under one spanner so no single column is read as "the" rate:
-    # the median (the statistic the solve and the by-start table use) and its IQR come first, the
-    # mean and CV after them. 1-R^2 stays last, where the text points to it.
-    # Three decimals on every number make the CV% cell the widest (2,301.766 on _ms1, 3pt more than
-    # an even tenth of the width), so the two short count columns (Firms, #Delta) give up a fifth
-    # of their width to it: tabularx's \hsize weights, which must sum to the number of X columns
-    # (0.8 + 0.8 + 1.4 + 7 = 10).
+def _within_cond_min(blocks: dict | None):
+    """(lowest per-launch-quarter condition index, its quarter) of one routine's ridge_by_start
+    record, or (None, None) without one. The pooled record is not a quarter."""
+    cs = [(s["cond"], q) for q, s in (blocks or {}).items()
+          if q != "pooled" and s.get("cond") is not None and np.isfinite(s["cond"])]
+    return min(cs) if cs else (None, None)
+
+
+def build_ridge(ridge, disc="", by_start=None):
+    # The trimmed ridge table (user, 2026-09-29): per routine, the pooled correlation and
+    # condition index of [dpsi2 dpsi4], the lowest condition index within one launch quarter
+    # when the psi is multi-start (`by_start`), and the median and IQR of dpsi4/dpsi2. The firm
+    # and deviation counts are Table 7's; the mean, CV and 1-R^2 were dropped (the mean and CV
+    # are carried by the ten most extreme rows, and 1-R^2 restates the correlation). The
+    # sidecar still records every statistic of ridge_stats.
+    # Headers are one short word each and every symbol is defined in the note. The condition
+    # number is "Cond." and NOT $\kappa$ -- the paper already spends $\kappa$ on the firm type.
+    within = {E: _within_cond_min((by_start or {}).get(E)) for E in ridge}
+    has_within = any(v[0] is not None for v in within.values())
     X = r">{\centering\arraybackslash}X"
-    Xw = r">{\centering\arraybackslash\hsize=%s\hsize}X"
-    col_fmt = (r">{\raggedright\arraybackslash}p{1.25cm} " + X + " " + Xw % "0.8" + " "
-               + Xw % "0.8" + " " + " ".join([X] * 5) + " " + Xw % "1.4" + " " + X)
-    header = (r" & & & & & & \multicolumn{4}{c}{$\Delta\psi_4/\Delta\psi_2$} & \\ "
-              r"\cmidrule(lr){7-10}" + "\n"
-              r"Routine & $n$ & Firms & $\#\Delta$ & Corr & Cond. & Median & IQR\% & Mean & "
-              r"CV\% & $1-R^2$")
+    ncol = 7 if has_within else 6
+    col_fmt = r">{\raggedright\arraybackslash}p{1.25cm} " + " ".join([X] * (ncol - 1))
+    if has_within:
+        header = (r" & & & \multicolumn{2}{c}{Cond.} & \multicolumn{2}{c}{$\Delta\psi_4/\Delta\psi_2$}"
+                  r" \\ \cmidrule(lr){4-5}\cmidrule(lr){6-7}" + "\n"
+                  r"Routine & $n$ & Corr & Pooled & Min.\ quarter & Median & IQR\%")
+    else:
+        header = (r" & & & & \multicolumn{2}{c}{$\Delta\psi_4/\Delta\psi_2$} \\ "
+                  r"\cmidrule(lr){5-6}" + "\n"
+                  r"Routine & $n$ & Corr & Cond. & Median & IQR\%")
     body = []
     for E in sorted(ridge):
         s = ridge[E]
         w = f"T8 {rc.est_ref(E)}"
-        body.append(" & ".join([
-            rc.est_ref(E), _num(s["n"]), _num(s["n_firms"]), _num(s["n_shock"]),
-            _f(s["corr"], where=f"{w} Corr"), _f(s["cond"], where=f"{w} Cond."),
-            _f(_ann(s["ratio_median"]), where=f"{w} Median"),
-            _f(_iqr_ann(s), where=f"{w} IQR%"),
-            _f(_ann(s["ratio_mean"]), where=f"{w} Mean"), _f(s["cv"], where=f"{w} CV%"),
-            _small_cell(s["one_minus_r2"], where=f"{w} 1-R2"),
-        ]) + r" \\")
-    Es = sorted(ridge)
-    top10 = " and ".join(rf"{ridge[E]['cv_top10_ss_pct']:.1f}\% under {rc.est_ref(E)}"
-                         for E in Es if np.isfinite(ridge[E].get("cv_top10_ss_pct", np.nan)))
-    # #Delta is the number of SIGNED deviations. bbl_fwd_sim.jl deviation_shifts (grid scheme)
-    # builds them as ceil(S/2) magnitudes, each pushed once up and once down, so an even count
-    # is exactly S/2 magnitudes; the note says so only when every routine carries the same even S.
-    shocks = {ridge[E]["n_shock"] for E in Es}
-    s_dev = next(iter(shocks)) if len(shocks) == 1 else None
-    # The user's wording (2026-09-28).
-    if s_dev and s_dev > 0 and s_dev % 2 == 0:
-        dev_clause = (rf"$\#\Delta$ is the number of signed deviations per firm and launch "
-                      rf"quarter, {s_dev // 2} magnitudes applied up and down. ")
-    else:
-        dev_clause = (r"$\#\Delta$ is the number of signed deviations per firm and launch "
-                      r"quarter. ")
-    # Notes held to a few lines (V_Main style guide, 2026-09-28): the rows and n, the column
-    # symbols, and the one caveat on the mean/CV. The design g of eq:16 and the walk from psi rows
-    # to n are in the text and in the .md twin.
+        cells = [rc.est_ref(E), _num(s["n"]), _f(s["corr"], where=f"{w} Corr"),
+                 _f(s["cond"], where=f"{w} Cond.")]
+        if has_within:
+            cells.append(_cond_cell(within[E][0], where=f"{w} Cond. min. quarter"))
+        cells += [_f(_ann(s["ratio_median"]), where=f"{w} Median"),
+                  _f(_iqr_ann(s), where=f"{w} IQR%")]
+        body.append(" & ".join(cells) + r" \\")
+    # Notes held to a few lines (V_Main style guide): the rows and n, then the column symbols. No
+    # resampling is behind any cell here, so there are no draws or seed to state.
     foot = (
-        r"\textit{Notes:} " + _ridge_rows_note(ridge) + dev_clause
+        r"\textit{Notes:} " + _ridge_rows_note(ridge)
         + r"Corr, Cond.: correlation and Belsley--Kuh--Welsch condition index of "
-        r"$[\Delta\psi_2\;\Delta\psi_4]$. Ratio columns: median (within a firm type, the "
-        r"$\bar r^{f,\kappa}$ of Table~\ref{tab:bbl_cbar}) and mean in compounded annual "
-        r"percentage points; IQR\% relative to the median; CV\% of the quarterly ratio"
-        + (r"; the mean and CV\% are dominated by the 10 most extreme rows" if top10 else "")
-        + r". $1-R^2$: share of $\Delta\psi_4$ not explained by $\Delta\psi_2$."
+        r"$[\Delta\psi_2\;\Delta\psi_4]$ over the routine's rows"
+        + (r"; Min.\ quarter: the lowest condition index within a single launch quarter"
+           if has_within else "")
+        + r". Median of the ratio in compounded annual percentage points (within a firm type, "
+        r"the $\bar r^{f,\kappa}$ of Table~\ref{tab:bbl_cbar}); IQR\% relative to the median."
     )
+    # Non-breaking (_wrap): the trimmed table is a few lines tall.
     return _wrap(body, col_fmt, r"$\psi_2/\psi_4$ Ridge",
-                 "tab:bbl_ridge_diagnostic", header, _with(foot, disc), 11)
+                 "tab:bbl_ridge_diagnostic", header, _with(foot, disc), ncol, nobreak=True)
 
 
 def _iqr_ann(s) -> float:
@@ -2470,7 +2557,10 @@ def build_cbar_panels(rows, identified=False, disc=""):
     # One caption for both regimes. c-bar is identified whether or not the omega/zeta split is,
     # and the violation-share row is the criterion health; the Notes carry the regime.
     caption = r"BBL Identified Marginal Cost $\bar c^\kappa$ and Criterion Health"
-    return _wrap(body, col_fmt, caption, "tab:bbl_cbar", header, _with(foot, disc), ncol)
+    # Non-breaking (_wrap): the table is well under a page, and a break left its Panel B header
+    # alone at the foot of a page.
+    return _wrap(body, col_fmt, caption, "tab:bbl_cbar", header, _with(foot, disc), ncol,
+                 nobreak=True)
 
 
 def md_cbar_panels(rows, identified=False, disc=""):
@@ -2513,8 +2603,9 @@ def md_cbar_panels(rows, identified=False, disc=""):
     L += ["",
           lead +
           "SE is a "
-          "firm-block bootstrap SD (200 reps); the CI is the subsampling sqrt(n)-rate quantile "
-          "interval (b = n^(2/3) firms, 200 reps). " + _ci_rbar_note(rows, md=True)
+          "firm-block bootstrap SD; the CI is the subsampling sqrt(n)-rate quantile interval "
+          "(draws and seeds at the end of this note, from the solve's record). "
+          + _ci_rbar_note(rows, md=True)
           + "The last row is the share of the "
           "firm × launch-quarter × deviation revealed-preference inequalities that FAIL at "
           "theta-hat — "
@@ -2534,27 +2625,26 @@ def md_cbar_panels(rows, identified=False, disc=""):
 
 
 def build_cbar_design(rows_single, rows_multi, n_starts=None, disc=""):
-    r"""c-bar and its criterion health under the single-curve and the multi-start design, side by
-    side: one column pair per routine, one panel per firm type.
+    r"""c-bar and its criterion health under the SINGLE-CURVE design: one column per routine, one
+    panel per firm type, from the cost_params the single-curve solve wrote.
 
-    Kept alongside tab_bbl_cbar because it is the one place the reader sees what the redesign
-    changed -- the rate each design evaluates c-bar at, the estimate, and whether the violation
-    share moved off its mechanical 1/2. Both column sets come from cost_params the solve wrote,
-    never recomputed here.
+    The multi-start columns this table used to carry beside them repeated tab_bbl_cbar cell for
+    cell, so they were dropped (user, 2026-09-29): the multi-start numbers are read in
+    tab_bbl_cbar. `rows_multi` and `n_starts` still arrive, from the same --compare-single-curve
+    call, and name the multi-start design the note points to.
     """
     sg = {(r["E"], r["block"]): r for r in rows_single}
-    mu = {(r["E"], r["block"]): r for r in rows_multi}
-    Es = [E for E in ROUTINE_ORDER if any((E, k) in sg or (E, k) in mu for k, _ in BLOCKS)]
-    ncol = 1 + 2 * len(Es)
-    col_fmt = (r">{\raggedright\arraybackslash}p{4.4cm} "
-               rf"*{{{2 * len(Es)}}}{{>{{\centering\arraybackslash}}X}}")
-    rule = "".join(rf"\cmidrule(lr){{{2 + 2 * i}-{3 + 2 * i}}}" for i in range(len(Es)))
-    header = (" & " + " & ".join(rf"\multicolumn{{2}}{{c}}{{{rc.est_ref(E)}}}" for E in Es)
-              + r" \\ " + rule + "\n"
-              + " & " + " & ".join(r"Single curve & Multi-start" for _ in Es))
+    # One column per routine of either design: a routine the single-curve run lacks is dashed,
+    # not silently dropped.
+    have = set(sg) | {(r["E"], r["block"]) for r in rows_multi}
+    Es = [E for E in ROUTINE_ORDER if any((E, k) in have for k, _ in BLOCKS)]
+    ncol = 1 + len(Es)
+    col_fmt = (r">{\raggedright\arraybackslash}p{5.0cm} "
+               rf"*{{{len(Es)}}}{{>{{\centering\arraybackslash}}X}}")
+    header = " & " + " & ".join(rc.est_ref(E) for E in Es)
     body = []
     for pi, (kappa, _lbl) in enumerate(BLOCKS):
-        if not any((E, kappa) in sg or (E, kappa) in mu for E in Es):
+        if not any((E, kappa) in have for E in Es):
             continue
         title = ("Brick-and-Mortar (B) Firms" if kappa == "B" else "Digital (D) Firms")
         if pi:
@@ -2565,9 +2655,8 @@ def build_cbar_design(rows_single, rows_multi, n_starts=None, disc=""):
         def cells(f, dash="---"):
             out = []
             for E in Es:
-                for src in (sg, mu):
-                    r = src.get((E, kappa))
-                    out.append(f(r) if r else dash)
+                r = sg.get((E, kappa))
+                out.append(f(r) if r else dash)
             return " & ".join(out)
 
         body.append(_rbar_label(kappa) + " & "
@@ -2580,49 +2669,38 @@ def build_cbar_design(rows_single, rows_multi, n_starts=None, disc=""):
         body.append(r"\addlinespace[0.4ex]")
         body.append(FRAC_BIND_LABEL + " & " + cells(lambda r: _cell_share(r, "T11")) + r" \\")
     starts = f"{n_starts} launch quarters" if n_starts else "several launch quarters"
-    # A multi-start block that failed the gate is not separated; say so rather than claim it.
-    ms_bad = _unidentified(rows_multi)
-    dead = bool(_dead_by_E(rows_multi))
-    ci_note = _ci_rbar_note(rows_multi)
-    # Notes held to a few lines (V_Main style guide, 2026-09-28): the rows refer to tab_bbl_cbar,
-    # where rbar_f is defined; what the two designs are; the multi-start caveats; the discount
-    # sentence (_design_discount_note, which says when the designs differ in beta/T as well).
+    # Notes held to a few lines (V_Main style guide): what the single-curve design is, that rows
+    # and units follow tab_bbl_cbar (where the multi-start design is reported), and the mechanical
+    # share; the draws and seeds and the discount sentence of the single-curve solve come in `disc`.
     foot = (
-        r"\textit{Notes:} Rows and units as in Table~\ref{tab:bbl_cbar}, whose "
-        r"$\bar r^{f,\kappa}$ runs over firm~$\times$~deviation rows in the single-curve design. "
-        r"\emph{Single curve}: every simulated path is priced off one Focus forward curve, so only "
-        rf"$\bar c^\kappa$ is identified; \emph{{Multi-start}}: each of the {starts} is priced off "
-        r"the Focus curve published at that quarter, which separates $\omega^\kappa$ from "
-        r"$\zeta^\kappa$"
-        + (r" except in the $\ddagger$ block of Table~\ref{tab:bbl_cost_identified}" if ms_bad
-           else "") + r". "
+        r"\textit{Notes:} Single-curve design: every simulated path is priced off one Focus "
+        r"forward curve, so only $\bar c^\kappa$ is identified, and $\bar r^{f,\kappa}$ runs over "
+        r"firm~$\times$~deviation rows. Rows and units as in Table~\ref{tab:bbl_cbar}, which "
+        rf"reports the multi-start design ({starts}, one Focus curve each). "
         + (r"All shares lie within $0.050$ of the mechanical $1/2$. "
-           if _mechanical(list(rows_single) + list(rows_multi)) else "")
-        + ((r"Multi-start: dead firm-quarters excluded"
-            + (r", intervals at the all-row $\bar r^{f,\kappa}$" if ci_note else "") + r". ")
-           if dead else "")
+           if _mechanical(list(rows_single)) else "")
     ).rstrip()
-    return _wrap(body, col_fmt,
-                 r"BBL Marginal Cost $\bar c^\kappa$: Single-Curve and Multi-Start Designs",
+    return _wrap(body, col_fmt, r"BBL Marginal Cost $\bar c^\kappa$: Single-Curve Design",
                  "tab:bbl_cbar_design", header, _with(foot, disc), ncol)
 
 
 def md_cbar_design(rows_single, rows_multi, disc=""):
+    # The markdown twin of build_cbar_design: the single-curve design only (the multi-start
+    # columns repeated the c-bar table). `rows_multi` is kept in the signature for the caller.
     sg = {(r["E"], r["block"]): r for r in rows_single}
-    mu = {(r["E"], r["block"]): r for r in rows_multi}
-    Es = [E for E in ROUTINE_ORDER if any((E, k) in sg or (E, k) in mu for k, _ in BLOCKS)]
-    L = ["| | " + " | ".join(f"E{E} single | E{E} multi" for E in Es) + " |",
-         "|---|" + "---:|" * (2 * len(Es))]
+    have = set(sg) | {(r["E"], r["block"]) for r in rows_multi}
+    Es = [E for E in ROUTINE_ORDER if any((E, k) in have for k, _ in BLOCKS)]
+    L = ["| | " + " | ".join(f"E{E} single curve" for E in Es) + " |",
+         "|---|" + "---:|" * len(Es)]
     for kappa, _ in BLOCKS:
         L.append(f"| **{'Brick-and-Mortar (B)' if kappa == 'B' else 'Digital (D)'}** | "
-                 + " | ".join("" for _ in range(2 * len(Es))) + " |")
+                 + " | ".join("" for _ in range(len(Es))) + " |")
 
         def row(lab, f):
             out = []
             for E in Es:
-                for src in (sg, mu):
-                    r = src.get((E, kappa))
-                    out.append(f(r) if r else "--")
+                r = sg.get((E, kappa))
+                out.append(f(r) if r else "--")
             L.append(f"| {lab} | " + " | ".join(out) + " |")
         row(f"rbar_f^{kappa} (ann. pp)", lambda r: _d3(_ann(r["rbar"])))
         row(f"c-bar^{kappa} (SE), ann. pp", lambda r: f"{_d3(_ann(r['cbar']))} "
@@ -2632,23 +2710,13 @@ def md_cbar_design(rows_single, rows_multi, disc=""):
             if r.get("ci_lo") is not None else "--")
         row("violated share", lambda r: _d3(r["frac_bind"])
             if r.get("frac_bind") is not None else "--")
-    ms_bad = _unidentified(rows_multi)
-    dead = bool(_dead_by_E(rows_multi))
-    L += ["", "c-bar^kappa = omega^kappa + rbar_f^kappa * zeta^kappa, where "
-              + _rbar_def_md(SINGLE_ROWS_MD, dead=dead)
-              + "; computed identically in both designs. Single curve: one Focus forward curve "
-              "for every path (c-bar the only identified cost object). Multi-start: one curve per "
-              "launch quarter (omega and zeta separately identified"
-              + (", except in the ‡ block of the parameter table" if ms_bad else "")
-              + "). Each design evaluates c-bar at its own rbar_f^kappa. "
-              + _ci_rbar_note(rows_multi, md=True).replace("For this run", "For the multi-start run")
+    L += ["", "Single-curve design: one Focus forward curve for every path, so c-bar is the only "
+              "identified cost object. c-bar^kappa = omega^kappa + rbar_f^kappa * zeta^kappa, where "
+              + _rbar_def_md(SINGLE_ROWS_MD, dead=False)
+              + ". Rows and units as in the c-bar table, which reports the multi-start design. "
               + "The violated share's mechanical value is 1/2"
               + ("; every share in the table lies within 0.05 of it, so the row carries no "
-                 "information about fit" if _mechanical(list(rows_single) + list(rows_multi))
-                 else "") + ". "
-              + (_dead_ref(rows_multi, md=True).replace("Dead firm-quarters", "In the multi-start "
-                                                        "design, dead firm-quarters", 1)
-                 if dead else "")
+                 "information about fit" if _mechanical(list(rows_single)) else "") + ". "
               + (disc if disc else "")]
     L[-1] = L[-1].rstrip()
     return "\n".join(L)
@@ -2672,9 +2740,13 @@ def _ci_cell(ci):
     return rf"{{\scriptsize $[{_m3(lo)},{_m3(hi)}]${mark}}}"
 
 
-def build_identified_panels(rows, identified=False, disc=""):
+def build_identified_panels(rows, identified=False, disc="", rs=None):
     r"""Estimates table in the paper's own layout: parameters down the rows, estimation routines
     across the columns as \ref{estimation:*} (rendered (III)-(VI)), and one panel per firm type.
+
+    `rs` is _resampling_parts of the solves behind the table: their draws and seeds are named
+    where the notes name the intervals and the SDs, so this table carries no separate resampling
+    sentence (user, 2026-09-29).
 
     This replaces a routine x type row grid, which needed eight columns and had no room for
     gamma at all. Five columns fit the text block comfortably, standard errors sit under their
@@ -2803,11 +2875,15 @@ def build_identified_panels(rows, identified=False, disc=""):
     # The lag is in every shifter's row label; the units the labels do not carry are stated here.
     # They are the units the cost block's Z enters in: the demand-prep parquets that cf_psi_basis.jl
     # reads carry the cost ratios as fractions of assets and the Basel index x100 (median 16.3).
+    # Trimmed with the user (2026-09-29): the coefficients are per quarter because a linear
+    # coefficient cannot be compounded, which the text says; the note keeps the units only.
     common = (
-        r"\textit{Notes:} Coefficients in native per-quarter units (a linear coefficient cannot "
-        r"be compounded), the Basel one in basis points; cost ratios in fractions of assets, Basel "
-        r"index in percentage points. "
+        r"\textit{Notes:} Coefficients in per-quarter units, the Basel one in basis points; cost "
+        r"ratios in fractions of assets, Basel index in percentage points. "
     )
+    rs = rs or {}
+    sub = f" ({rs['sub']})" if rs.get("sub") else ""
+    boot = f" ({rs['boot']})" if rs.get("boot") else ""
     cond = ""
     if has_cond:
         cond = ((rf"$\ddagger$: condition index of $[\Delta\psi_2\;\Delta\psi_4]$ (last row) "
@@ -2818,21 +2894,23 @@ def build_identified_panels(rows, identified=False, disc=""):
                  r"$[\Delta\psi_2\;\Delta\psi_4]$"
                  + (rf", below {thr:.0f} in every block. " if identified else ". ")))
     if identified:
+        # One sentence for both uncertainty measures, with the draws and seeds of each (user,
+        # 2026-09-29); it restates the user's 2026-09-28 wording: the criterion inversion profiles
+        # (omega, zeta) only, and the loadings gamma carry descriptive firm-block bootstrap SDs.
         foot = (
             common +
             r"Brackets: 95\% intervals inverting \eqref{eq:16} at a subsampled critical value"
+            + sub + r", for $(\omega^\kappa, \zeta^\kappa)$ only"
             + (r"; $\dagger$: profile-window endpoint" if has_dagger else "")
             + (r"; \textit{empty}: never within the critical value" if has_empty else "")
-            + r"; parentheses: bootstrap standard deviations. "
-            # The user's wording (2026-09-28).
-            r"The criterion inversion profiles $(\omega^\kappa, \zeta^\kappa)$ only. The "
-            r"cost-shifter loadings $\gamma^\kappa$ carry firm-block bootstrap standard "
-            r"deviations, which are descriptive. " + cond + _dead_note(rows)
+            + r"; parentheses: firm-block bootstrap standard deviations" + boot
+            + r", descriptive for the loadings $\gamma^\kappa$. " + cond + _dead_note(rows)
         )
     else:
         foot = (
             common +
-            r"Parentheses: firm-block bootstrap SDs; stars use their normal approximation and are "
+            r"Parentheses: firm-block bootstrap SDs" + boot + r"; stars use their normal "
+            r"approximation and are "
             r"shown by convention only, the criterion being kinked "
             r"(Section~\ref{sec:empirical:cost}): *** $p<0.01$, ** $p<0.05$, * $p<0.1$. The "
             r"parameters are not separately identified; the estimand is $\bar c^\kappa$ "
@@ -2923,7 +3001,8 @@ def md_identified_panels(rows, identified=False, disc=""):
         L += ["",
               "Columns are estimation routines. " + units + _dead_note(rows, md=True)
               + "SEs in parentheses are firm-block bootstrap SDs "
-              "(200 reps). **None of these parameters is separately identified** — omega, zeta and "
+              "(draws and seed at the end of this note). **None of these parameters is separately "
+              "identified** — omega, zeta and "
               "gamma slide freely along the ridge (one block returns omega>0 with zeta<0 while c-bar "
               "barely moves); the estimand is c-bar, reported separately. Stars use the normal "
               "approximation to the bootstrap SD and are shown by convention only: the criterion is "
@@ -2933,45 +3012,174 @@ def md_identified_panels(rows, identified=False, disc=""):
     return "\n".join(L)
 
 
-def md_ridge(ridge, disc=""):
-    # Short headers on purpose: pandoc/xelatex renders this at 11pt in a 1in-margin portrait
-    # page, and a header like "corr(dpsi2,dpsi4)" collides with its neighbor. Symbols are
-    # defined in the line below the table instead.
-    L = ["| Routine | n | Firms | #Delta | Corr | Cond. | Median ratio | IQR% | Mean ratio | "
-         "CV% | 1-R2 |",
-         "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|"]
+def md_ridge(ridge, disc="", by_start=None):
+    # The markdown twin of build_ridge, trimmed the same way (user, 2026-09-29). Short headers
+    # on purpose: pandoc/xelatex renders this at 11pt in a portrait page. Symbols are defined in
+    # the line below the table.
+    within = {E: _within_cond_min((by_start or {}).get(E)) for E in ridge}
+    has_within = any(v[0] is not None for v in within.values())
+    L = ["| Routine | n | Corr | Cond. | " + ("Cond. (min. quarter) | " if has_within else "")
+         + "Median ratio | IQR% |",
+         "|---|---:|---:|---:|" + ("---:|" if has_within else "") + "---:|---:|"]
     for E in sorted(ridge):
         s = ridge[E]
-        L.append(f"| E{E} | {s['n']:,} | {s['n_firms']:,} | {s['n_shock']:,} | {_d3(s['corr'])} | "
-                 f"{_d3(s['cond'])} | {_d3(_ann(s['ratio_median']))} | {_d3(_iqr_ann(s))} | "
-                 f"{_d3(_ann(s['ratio_mean']))} | {_d3(s['cv'])} | "
-                 f"{_md_small(s['one_minus_r2'])} |")
-    top10 = " and ".join(f"{_d3(ridge[E]['cv_top10_ss_pct'])}% (E{E})" for E in sorted(ridge)
-                         if np.isfinite(ridge[E].get("cv_top10_ss_pct", np.nan)))
-    shocks = {ridge[E]["n_shock"] for E in ridge}
-    s_dev = next(iter(shocks)) if len(shocks) == 1 else None
-    dev = (f"*#Delta* = number of signed deviations: {s_dev // 2} magnitudes of the choice-spread "
-           f"shift, each applied once up and once down ({s_dev} = 2 × {s_dev // 2}). "
-           if s_dev and s_dev > 0 and s_dev % 2 == 0 else
-           "*#Delta* = number of signed deviations (magnitude and direction). ")
+        wq = (f"{_md_cond(within[E][0])} ({within[E][1]}) | " if within[E][0] is not None
+              else "-- | ") if has_within else ""
+        L.append(f"| E{E} | {s['n']:,} | {_d3(s['corr'])} | {_d3(s['cond'])} | {wq}"
+                 f"{_d3(_ann(s['ratio_median']))} | {_d3(_iqr_ann(s))} |")
     L += ["",
-          _ridge_rows_note(ridge, md=True) + dev +
-          "*Corr* = corr(dpsi_2, dpsi_4); *Cond.* = Belsley-Kuh-Welsch (1980) condition index of "
+          _ridge_rows_note(ridge, md=True)
+          + "*Corr* = corr(dpsi_2, dpsi_4); *Cond.* = Belsley-Kuh-Welsch (1980) condition index of "
           "[dpsi_2 dpsi_4], i.e. with the columns scaled to unit length, so it measures "
-          "collinearity alone and not the columns' units; >30 is the usual threshold. "
-          "*Median ratio* = median dpsi_4/dpsi_2 over the n rows, in compounded annual pp "
-          "((1+x)^4-1)*100 like the *Mean ratio*, as in the by-start table "
-          "(within one firm type it is rbar_f^kappa of the c-bar table); *IQR%* = interquartile "
-          "range as a percent of the median; *Mean ratio* and *CV%* = mean and coefficient of "
-          "variation, dominated by the few rows in which dpsi_2 nearly cancels"
-          + (f" (the 10 rows farthest from the mean carry {top10} of the sum of squares behind "
-             "CV%)" if top10 else "")
-          + "; *1-R2* = share of dpsi_4 **not** explained by dpsi_2 alone."
-          + (" " + disc if disc else "")]
+          "collinearity alone and not the columns' units; >30 is the usual threshold"
+          + ("; *Cond. (min. quarter)* = its lowest value within a single launch quarter, "
+             "with that quarter" if has_within else "")
+          + ". *Median ratio* = median dpsi_4/dpsi_2 over the n rows, in compounded annual pp "
+          "((1+x)^4-1)*100 (within one firm type it is rbar_f^kappa of the c-bar table); "
+          "*IQR%* = interquartile range as a percent of the median. No resampling is behind "
+          "these numbers." + (" " + disc if disc else "")]
     return "\n".join(L)
 
 
-def main_from_json(compare_single=False):
+# ── machine-readable numbers: bbl_table_numbers{psi_tag}.json ────────────────────
+# make_paper_numbers.py reads every BBL number the paper's prose quotes from this file, never from
+# the .tex. Each pass records what it rendered, from the objects it rendered it from (the block
+# rows, the ridge and per-quarter records, the up/down split, the beta/T provenance), and merges
+# only its own sections into the one file of the run's psi tag, in the step folder:
+#   default pass   cost_tables (tab_bbl_cost_identified, tab_bbl_cbar), tab_bbl_cbar_design
+#   --from-psi     tab_bbl_ridge_diagnostic, tab_bbl_ridge_by_start, tab_bbl_violated_by_sign
+# Values are unrounded; a rate level also carries its compounded annual value (the *_ann fields,
+# _ann/_ann_sd), the scale the tables print it on. Every section carries the (omega, zeta) of the
+# blocks it describes (`theta`), so a reader can tell whether two sections describe one solve.
+def _numbers_path(tag: str) -> pathlib.Path:
+    return STEP_DIR / f"bbl_table_numbers{tag or ''}.json"
+
+
+def _numbers_tag(tags) -> str:
+    """The psi tag the numbers file is named after: the one tag every routine carries, or
+    '_mixed' (said on stdout) when the routines of one pass come from different runs."""
+    ts = sorted(set(tags))
+    if len(ts) == 1:
+        return ts[0]
+    print(f"  !!!! [numbers] the routines carry different psi tags {ts}; written to "
+          f"{_numbers_path('_mixed').name} !!!!")
+    return "_mixed"
+
+
+def _jsonable(x):
+    """x with numpy scalars as Python numbers and every non-finite float as None."""
+    if isinstance(x, dict):
+        return {str(k): _jsonable(v) for k, v in x.items()}
+    if isinstance(x, (list, tuple)):
+        return [_jsonable(v) for v in x]
+    if isinstance(x, (bool, np.bool_)):
+        return bool(x)
+    if isinstance(x, (int, np.integer)):
+        return int(x)
+    if isinstance(x, (float, np.floating)):
+        return float(x) if np.isfinite(x) else None
+    return x
+
+
+def _ann_or_none(x):
+    return None if x is None or not np.isfinite(float(x)) else _ann(x)
+
+
+def _ci_numbers(ci):
+    """One profile interval of tab_bbl_cost_identified, the fields _ci_cell renders."""
+    if not ci:
+        return None
+    return {k: ci.get(k) for k in ("ci_lo", "ci_hi", "empty", "truncated_lo", "truncated_hi")}
+
+
+def _row_numbers(r: dict) -> dict:
+    """One block row of collect_json() as the cost tables print it (T7, T9, T11)."""
+    se = r.get("cbar_se")
+    return dict(
+        E=r["E"], block=r["block"], identified=r.get("identified"),
+        cond_pooled=r.get("cond_pooled"), cond_max=r.get("cond_max"),
+        corr_pooled=r.get("corr_pooled"),
+        omega=r["omega"], omega_se=r.get("omega_se"), ci_omega=_ci_numbers(r.get("ci_omega")),
+        zeta=r["zeta"], zeta_se=r.get("zeta_se"), ci_zeta=_ci_numbers(r.get("ci_zeta")),
+        gamma=r.get("gamma"), gamma_se=r.get("gamma_se"), gamma_display_scale=Z_SCALE,
+        n=r.get("n"), n_firms=r.get("n_firms"), n_ratio=r.get("n_ratio"),
+        null_mode=r.get("null_mode"), n_null_fq=r.get("n_null_fq"),
+        n_null_rows=r.get("n_null_rows"),
+        rbar=r["rbar"], rbar_ann=_ann(r["rbar"]), cbar=r["cbar"], cbar_ann=_ann(r["cbar"]),
+        cbar_se=se, cbar_sd_ann=_ann_sd(r["cbar"], se) if se is not None else None,
+        ci_lo=r.get("ci_lo"), ci_hi=r.get("ci_hi"),
+        ci_lo_ann=_ann_or_none(r.get("ci_lo")), ci_hi_ann=_ann_or_none(r.get("ci_hi")),
+        ci_rbar=r.get("ci_rbar"), ci_rbar_ann=_ann_or_none(r.get("ci_rbar")),
+        frac_bind=r.get("frac_bind"))
+
+
+def _cost_file_names(Es, tag) -> dict:
+    """{'E<k>': the cost_params file _cost_path reads for each routine}, without its stdout note."""
+    return {f"E{E}": (c[0].name if (c := _cost_candidates(E, tag)) else None) for E in sorted(Es)}
+
+
+def _blocks_numbers(rows) -> dict:
+    return {f"E{r['E']}_{r['block']}": _row_numbers(r) for r in rows}
+
+
+def _theta_of(rows) -> dict:
+    return {f"E{r['E']}_{r['block']}": [float(r["omega"]), float(r["zeta"])] for r in rows}
+
+
+def _ridge_numbers(s: dict) -> dict:
+    """One ridge_stats record: a tab_bbl_ridge_diagnostic row or a tab_bbl_ridge_by_start row."""
+    out = {k: s[k] for k in ("n", "n_all", "n_nonfinite", "n_d2_zero", "n_firms", "n_shock",
+                             "corr", "cond", "cond_raw", "ratio_median", "ratio_q25",
+                             "ratio_q75", "iqr_pct", "ratio_mean", "cv", "cv_top10_ss_pct",
+                             "one_minus_r2", "across_delta_pct", "n_starts", "n_loaded",
+                             "n_dead_rows", "n_dead_fq", "n_ineq", "null_mode", "n_shards")
+           if k in s}
+    out.update(ratio_median_ann=_ann(s["ratio_median"]), ratio_mean_ann=_ann(s["ratio_mean"]),
+               iqr_pct_ann=_iqr_ann(s))
+    return out
+
+
+def _prov_numbers(prov: dict, tags: dict) -> dict:
+    """{'E<k>': tag, beta, T, beta_annual, coverage, source} for the run behind each routine, as
+    the table's discount sentence states it (None where the run recorded no beta/T)."""
+    out = {}
+    for E in sorted(set(prov) | set(tags)):
+        p = prov.get(E)
+        rec = dict(tag=tags.get(E), beta=None, T=None, source=None)
+        if p is not None:
+            rec.update(beta=float(p["beta"]), T=int(p["T"]), source=p.get("source"),
+                       beta_annual=_disc.annual(p["beta"]),
+                       coverage=_disc.coverage(p["beta"], p["T"]))
+        out[f"E{E}"] = rec
+    return out
+
+
+def _write_numbers(tag: str, sections: dict, source: str) -> None:
+    """Merge this pass's sections into bbl_table_numbers{tag}.json; the other pass's sections
+    already in the file are kept. Written through a temporary file and a rename."""
+    p = _numbers_path(tag)
+    doc = {}
+    if p.is_file():
+        try:
+            doc = json.loads(p.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            print(f"  !!!! [numbers] {p.name} unreadable; rewritten with this pass's sections "
+                  f"only !!!!")
+            doc = {}
+    stamp = datetime.datetime.now().isoformat(timespec="seconds")
+    doc.update(kind="bbl_table_numbers", psi_tag=tag, generator="make_bbl_cost_tables.py")
+    secs = doc.setdefault("sections", {})
+    for name, sec in sections.items():
+        secs[name] = dict(sec, written=stamp, source=source)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    tmp = p.with_name(p.name + ".tmp")
+    with open(tmp, "w", encoding="utf-8", newline="\n") as f:
+        f.write(json.dumps(_jsonable(doc), indent=1, sort_keys=True) + "\n")
+    os.replace(tmp, p)
+    print(f"  wrote {p.name} [{', '.join(sections)}] -> {p.parent}")
+
+
+def main_from_json(compare_single=False, single_tag=""):
     """Build both tables from cost_params alone (default). Vintage-safe by construction: every
     column, ridge diagnostics included, comes from the solve's own record of the psi it used."""
     ZERO_PRINTS.clear()
@@ -3022,44 +3230,75 @@ def main_from_json(compare_single=False):
     # Only the two cost tables come from cost_params. The ridge tables are per-routine over the
     # pooled design and are built from the psi by --from-psi; they are deliberately NOT
     # written here, so a cost-side rebuild cannot restyle or overwrite them.
-    tex = {"tab_bbl_cbar.tex": build_cbar_panels(rows, ident, disc=d9[0]),
-           "tab_bbl_cost_identified.tex": build_identified_panels(rows, ident, disc=d7[0])}
-    md = {"tab_bbl_cbar.md": md_cbar_panels(rows, ident, disc=d9[1]),
-          "tab_bbl_cost_identified.md": md_identified_panels(rows, ident, disc=d7[1])}
+    # The draws and seeds of the solve's bootstrap and subsampling, ahead of the discount sentence;
+    # Table 7's TeX note names them inside its brackets/parentheses sentence instead.
+    rs = (_resampling_note(cost.values()), _resampling_note(cost.values(), md=True))
+    tex = {"tab_bbl_cbar.tex": build_cbar_panels(rows, ident, disc=_notes_join(rs[0], d9[0])),
+           "tab_bbl_cost_identified.tex": build_identified_panels(
+               rows, ident, disc=d7[0], rs=_resampling_parts(cost.values()))}
+    md = {"tab_bbl_cbar.md": md_cbar_panels(rows, ident, disc=_notes_join(rs[1], d9[1])),
+          "tab_bbl_cost_identified.md": md_identified_panels(
+              rows, ident, disc=_notes_join(rs[1], d7[1]))}
     if compare_single:
-        # The single-curve side is pinned to the UNTAGGED files, the multi-start side to this
-        # run's tag; comparing a multi-start run with itself, or with whatever vintage a loose
-        # glob returns first, would produce a table that looks right and says nothing.
+        # The single-curve side is pinned to the files of `single_tag` (--single-curve-tag; the
+        # UNTAGGED files when it is empty), the multi-start side to this run's tag; comparing a
+        # multi-start run with itself, or with whatever vintage a loose glob returns first,
+        # would produce a table that looks right and says nothing.
         if not (PSI_TAG or "").startswith("_ms"):
             raise SystemExit("--compare-single-curve needs the multi-start run pinned, e.g. "
                              "--psi-tag _ms1")
-        single = {}
+        if single_tag == PSI_TAG:
+            raise SystemExit(f"--single-curve-tag {single_tag} is the multi-start run itself")
+        sc_what = f"'{single_tag}'-tagged" if single_tag else "untagged"
+        single, single_files = {}, {}
         for E in cost:
-            p = _cost_path(E, "")
+            p = _cost_path(E, single_tag)
             if p is None:
-                print(f"  [design] E{E}: no single-curve cost_params -- column pair dashed")
+                print(f"  [design] E{E}: no {sc_what} single-curve cost_params -- its column is "
+                      f"dashed")
                 continue
             single[E] = json.loads(p.read_text(encoding="utf-8"))
+            single_files[f"E{E}"] = p.name
             print(f"  [design] single curve E{E}: {p.name}")
         if not single:
-            raise SystemExit("--compare-single-curve: no untagged (single-curve) cost_params "
+            raise SystemExit(f"--compare-single-curve: no {sc_what} (single-curve) cost_params "
                              f"found in {COST_DIR}")
         _, rows_single = collect_json(single)
         n_starts = next((c.get("run", {}).get("n_starts") for c in cost.values()
                          if c.get("run", {}).get("n_starts")), None)
-        prov_single = {E: _run_discount(E, "", single[E]) for E in single}
+        prov_single = {E: _run_discount(E, single_tag, single[E]) for E in single}
         Es11 = [E for E in ROUTINE_ORDER
                 if any(r["E"] == E for r in rows_single) or any(r["E"] == E for r in rows)]
+        # Both runs' provenance is still reported on stdout; the table shows the single-curve
+        # design only, so its discount sentence and its draws and seeds are that solve's own.
         _discount_report("tab_bbl_cbar_design", _design_entries(Es11, prov_single, prov))
-        d11 = (_design_discount_note(Es11, prov_single, prov),
-               _design_discount_note(Es11, prov_single, prov, md=True))
-        tex["tab_bbl_cbar_design.tex"] = build_cbar_design(rows_single, rows, n_starts,
-                                                           disc=d11[0])
-        md["tab_bbl_cbar_design.md"] = md_cbar_design(rows_single, rows, disc=d11[1])
+        d11 = _discount_report("tab_bbl_cbar_design",
+                               _routine_entries([E for E in Es11 if E in prov_single],
+                                                prov_single))
+        rs11 = (_resampling_note(single.values()), _resampling_note(single.values(), md=True))
+        tex["tab_bbl_cbar_design.tex"] = build_cbar_design(
+            rows_single, rows, n_starts, disc=_notes_join(rs11[0], d11[0]))
+        md["tab_bbl_cbar_design.md"] = md_cbar_design(rows_single, rows,
+                                                      disc=_notes_join(rs11[1], d11[1]))
     for name, txt in tex.items():
         _write(name, txt)
     for name, txt in md.items():
         _write(name, txt + "\n")
+    # The numbers these tables print, from the rows and provenance they were rendered from.
+    tags = {E: _cost_tag(cost[E], PSI_TAG) for E in cost}
+    rendered = dict(tag=_numbers_tag(tags.values()), files=_cost_file_names(cost, PSI_TAG),
+                    theta=_theta_of(rows), provenance=_prov_numbers(prov, tags),
+                    blocks=_blocks_numbers(rows))
+    nums = {"cost_tables": dict(rendered, tables=["tab_bbl_cost_identified", "tab_bbl_cbar"],
+                                identified_split=ident)}
+    if compare_single:
+        tags_single = {E: _cost_tag(single[E], single_tag) for E in single}
+        nums["tab_bbl_cbar_design"] = dict(
+            n_starts=n_starts, multi=rendered,
+            single=dict(tag=single_tag, files=single_files, theta=_theta_of(rows_single),
+                        provenance=_prov_numbers(prov_single, tags_single),
+                        blocks=_blocks_numbers(rows_single)))
+    _write_numbers(rendered["tag"], nums, source=f"cost_params in {COST_DIR}")
     # The markdown twins go to stdout as well. Nothing is downloaded from the cluster, so the
     # SLURM log has to BE the deliverable: a table that only exists as a file in the step folder
     # is a table nobody can read without another transfer.
@@ -3097,8 +3336,13 @@ def main():
                          "consumed; verified by check_psi_matches_solve().")
     ap.add_argument("--compare-single-curve", action="store_true",
                     help="also write tab_bbl_cbar_design: c-bar and its criterion health for the "
-                         "single-curve (untagged) solve next to this multi-start run. Needs "
+                         "single-curve solve (untagged, or --single-curve-tag) next to this "
+                         "multi-start run. Needs "
                          "--psi-tag _ms<N> so both sides are pinned.")
+    ap.add_argument("--single-curve-tag", default="",
+                    help="with --compare-single-curve: the psi tag of the single-curve solve "
+                         "whose cost_params fill the Single curve columns, e.g. _sc981. Default: "
+                         "the untagged files.")
     ap.add_argument("--per-quarter-cbar", choices=("keep", "drop"), default="drop",
                     help="with --from-psi: keep or drop the per-quarter c-bar column of "
                          "tab_bbl_ridge_by_start (default drop; the user's decision of "
@@ -3114,7 +3358,8 @@ def main():
     print(f"table dests:     {', '.join(str(d) for d in _dests())}")
 
     if not a.from_psi:
-        return main_from_json(compare_single=a.compare_single_curve)
+        return main_from_json(compare_single=a.compare_single_curve,
+                              single_tag=a.single_curve_tag)
 
     zp = pathlib.Path(a.psi_dir) if a.psi_dir else pathlib.Path(a.psi_zip)
     if not zp.exists():
@@ -3186,13 +3431,13 @@ def render_from_psi(data: dict, zp: pathlib.Path, allow_vintage_mismatch: bool =
             for E, d in sorted(data.items())}
     d8 = _discount_report("tab_bbl_ridge_diagnostic",
                           _routine_entries([E for E in ROUTINE_ORDER if E in ridge], prov))
-    tex = {"tab_bbl_ridge_diagnostic.tex": build_ridge(ridge, disc=d8[0])}
-    md = {"tab_bbl_ridge_diagnostic.md": md_ridge(ridge, disc=d8[1])}
-
     # The by-start table exists only for a multi-start psi: with one forward curve there is no
     # start_q column to group on, and a one-row "pooled" table would restate the table above.
+    # Computed first because the ridge table carries its lowest within-quarter condition index.
     by_start = {E: ridge_by_start(d["psi_eq"], d["psi_dev"]) for E, d in sorted(data.items())}
     by_start = {E: v for E, v in by_start.items() if v}
+    tex = {"tab_bbl_ridge_diagnostic.tex": build_ridge(ridge, disc=d8[0], by_start=by_start)}
+    md = {"tab_bbl_ridge_diagnostic.md": md_ridge(ridge, disc=d8[1], by_start=by_start)}
     if by_start:
         cost = {E: d["cost"] for E, d in data.items()}
         for E, blocks in by_start.items():
@@ -3234,6 +3479,31 @@ def render_from_psi(data: dict, zp: pathlib.Path, allow_vintage_mismatch: bool =
         _write(name, txt)
     for name, txt in md.items():
         _write(name, txt + "\n")
+    # The numbers these tables print, from the records they were rendered from. The Frac. viol.
+    # of a launch quarter is _solve_at's, with the arguments build_ridge_by_start passes it.
+    tags = {E: _cost_tag(d.get("cost_solve") or d["cost"], d.get("psi_tag"))
+            for E, d in data.items()}
+    common = dict(theta=_theta_of(rows), provenance=_prov_numbers(prov, tags))
+    # Every ridge_stats key stays in the record, the columns the trimmed table no longer prints
+    # included; the lowest within-quarter condition index it now prints is added beside them.
+    nums = {"tab_bbl_ridge_diagnostic": dict(
+        common, routines={f"E{E}": dict(_ridge_numbers(s),
+                                        cond_within_min=_within_cond_min(by_start.get(E))[0],
+                                        cond_within_min_quarter=_within_cond_min(
+                                            by_start.get(E))[1])
+                          for E, s in sorted(ridge.items())})}
+    if by_start:
+        nums["tab_bbl_ridge_by_start"] = dict(common, routines={
+            f"E{E}": {q: dict(_ridge_numbers(s),
+                              dead_types=list((dead_q.get(E) or {}).get(q, ())),
+                              frac_viol=_solve_at(cost.get(E) or {}, None if q == "pooled" else q,
+                                                  (dead_q.get(E) or {}).get(q, ()))[0])
+                      for q, s in blocks.items()}
+            for E, blocks in sorted(by_start.items())})
+    if ud:
+        nums["tab_bbl_violated_by_sign"] = dict(common, routines={f"E{E}": v
+                                                                 for E, v in sorted(ud.items())})
+    _write_numbers(_numbers_tag(tags.values()), nums, source=f"psi {zp.name}")
     # Echoed as well as written: on the cluster the SLURM log is the only copy anyone reads.
     for name, txt in md.items():
         print(f"\n----- {name} -----\n{txt}")

@@ -32,10 +32,15 @@ from utils import sleep_notes as _notes
 _DRAFTS_DIR = _paths_mod.drafts_dir()
 # rout_dir/est_dir follow SLEEP_OUT_ROOT, so a sandboxed run exports the fits it just
 # produced instead of whatever sits in the production tree.
-# The paper directory is the ONE destination: the fragments V_Main.tex \input, the
-# standalone wrapper and the preview PDF are all built here, so there is no second copy
-# free to diverge from the one the paper reads.
-TEX_OUT_DIR = _DRAFTS_DIR
+# The paper directory is the destination in production: the fragments V_Main.tex \input, the
+# standalone wrapper and the preview PDF are all built here, so there is no second copy free
+# to diverge from the one the paper reads. drafts_dir() does not itself follow SLEEP_OUT_ROOT,
+# so a locally sandboxed run (the est{N} pickle below redirected, this constant not) would
+# otherwise overwrite the paper's own E3/E4 tables with the sandbox's numbers; on the cluster
+# this stays Drafts exactly as before -- SLEEP_OUT_ROOT is set there too (cl_export_step_dirs),
+# but that is CL_DATA_OUT's case to handle, not this script's, and it has never branched on it.
+_SANDBOXED = _paths_mod.sleep_out_root_set() and not _paths_mod.on_cluster()
+TEX_OUT_DIR = _paths_mod.rout_dir() if _SANDBOXED else _DRAFTS_DIR
 
 
 def stars(p):
@@ -51,7 +56,7 @@ def stars(p):
 _BASE_LABELS = {
     'nr_lagged_dep': 'Lagged Deposits',
     'gdp_per_capita': 'GDP \\textit{per capita}',
-    'cadunico_families_per1000': 'CadUnico Families',
+    'cadunico_families_per1000': r"Cad\'{U}nico Families",
     'fraction_65plus': 'Fraction 65+',
     'fraction_young': 'Fraction Young',
     'risk_free_qoq_lag': 'Lagged Selic Rate',
@@ -163,7 +168,7 @@ TIME_ESTS = {4}
 def _strategy_caption(stage, est_num):
     lbl = EST_LABEL.get(est_num)
     ref = rf"\ref{{estimation:{lbl}}}" if lbl else rf"(Est.\ {est_num})"
-    return rf"{stage} --- Estimation Strategy~{ref}"
+    return rf"{stage}, Estimation Strategy~{ref}"
 
 
 def _panels_for(est_num):
@@ -183,7 +188,7 @@ def build_first_stage_table(results_dict, est_num):
     }
     ivs = [('IV_CostShifters', 'IV Cost'), ('IV_Wholesale', 'IV Wholesale'), ('IV_HausmanFull', 'Hausman')]
     multispan = 4
-    caption = _strategy_caption("First Stage --- Deposit Spread on Instruments", est_num)
+    caption = _strategy_caption("First Stage, Deposit Spread on Instruments", est_num)
     label = f"tab:est{est_num}_first_stage"
     notes = r"\footnotesize \textit{Notes:} " + _notes.first_stage_note(pooled=True)
 
@@ -438,6 +443,9 @@ def export_link_results(est_num, title):
         print(f"Results not found at {results_pickle}. "
               f"Run sleep_est_single.py --est {est_num} first.")
         sys.exit(1)
+    if _SANDBOXED:
+        print(f"  [sandbox] SLEEP_OUT_ROOT redirects this run: est{est_num} fragments go to "
+              f"{TEX_OUT_DIR}, not Drafts.")
     with open(results_pickle, 'rb') as fh:
         results_dict = pickle.load(fh)
 
@@ -450,7 +458,7 @@ def export_link_results(est_num, title):
     fs_name = f"est{est_num}_first_stage_table.tex"
     (TEX_OUT_DIR / fs_name).write_text(fs_frag + "\n", encoding="utf-8")
     print(f" - First-stage table written ({fs_name})")
-    print(f" - Fragments written to {_DRAFTS_DIR}")
+    print(f" - Fragments written to {TEX_OUT_DIR}")
 
     fs_section = r"\section*{First Stage}" + "\n" + rf"\input{{{fs_name}}}" + "\n\n"
     tex_doc = (
@@ -463,7 +471,7 @@ def export_link_results(est_num, title):
     )
     wrapper_name = f"est{est_num}_sleep_results.tex"
     (TEX_OUT_DIR / wrapper_name).write_text(tex_doc, encoding="utf-8")
-    print(f" - Standalone wrapper written to {_DRAFTS_DIR}")
+    print(f" - Standalone wrapper written to {TEX_OUT_DIR}")
 
     print(" - Compiling PDF...")
     try:

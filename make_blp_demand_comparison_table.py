@@ -148,7 +148,10 @@ def build_table(ests, suffix: str = "", show_segments: bool = True,
     ]
 
     # ── Panel A: θ₁ ───────────────────────────────────────────────────────────
-    lines.append(r"    \multicolumn{" + str(ncols + 1) + r"}{l}{\textit{Panel A: Mean Utility ($\theta_1$)}} \\")
+    # Body rows end in \\* (not \\): the table fits on one printed page, and \\* forbids a
+    # page break after that row so longtable/xltabular moves the whole block together instead
+    # of splitting it (the \endfoot "continued" machinery is still there for the rare overflow).
+    lines.append(r"    \multicolumn{" + str(ncols + 1) + r"}{l}{\textit{Panel A: Mean Utility ($\theta_1$)}} \\*")
     lines.append(r"    \addlinespace[0.3ex]")
     for p in theta1_params:
         lbl = rc.THETA1_LABELS.get(p, p.replace("_", r"\_"))
@@ -168,14 +171,14 @@ def build_table(ests, suffix: str = "", show_segments: bool = True,
             else:
                 c, s_ = "-", ""
             cvals.append(c); svals.append(s_)
-        lines.append("    " + " & ".join(cvals) + r" \\")
+        lines.append("    " + " & ".join(cvals) + r" \\*")
         if any(s.strip() for s in svals[1:]):
-            lines.append("    " + " & ".join(svals) + r" \\")
+            lines.append("    " + " & ".join(svals) + r" \\*")
         lines.append(r"    \addlinespace[0.15ex]")
 
     # ── Panel B: θ₂ ───────────────────────────────────────────────────────────
     lines.append(r"    \midrule")
-    lines.append(r"    \multicolumn{" + str(ncols + 1) + r"}{l}{\textit{Panel B: Random Coefficients ($\theta_2$)}} \\")
+    lines.append(r"    \multicolumn{" + str(ncols + 1) + r"}{l}{\textit{Panel B: Random Coefficients ($\theta_2$)}} \\*")
     lines.append(r"    \addlinespace[0.3ex]")
 
     # union of θ₂ labels across strategies, first-appearance order
@@ -198,15 +201,15 @@ def build_table(ests, suffix: str = "", show_segments: bool = True,
             else:
                 c, s_ = "-", ""
             cvals.append(c); svals.append(s_)
-        lines.append("    " + " & ".join(cvals) + r" \\")
+        lines.append("    " + " & ".join(cvals) + r" \\*")
         if any(s.strip() for s in svals[1:]):
-            lines.append("    " + " & ".join(svals) + r" \\")
+            lines.append("    " + " & ".join(svals) + r" \\*")
         lines.append(r"    \addlinespace[0.15ex]")
 
     # ── Footer statistics ─────────────────────────────────────────────────────
     lines.append(r"    \midrule")
     def stat(name, fn):
-        return "    " + name + " & " + " & ".join(fn(e) for e in avail) + r" \\"
+        return "    " + name + " & " + " & ".join(fn(e) for e in avail) + r" \\*"
     def q_of(e):
         q = data[e].get("Q_value");  return f"${rc.fmt3(q)}$" if q is not None else "---"
     def n_of(e):

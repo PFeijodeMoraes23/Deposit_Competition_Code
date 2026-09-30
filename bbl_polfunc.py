@@ -36,6 +36,10 @@ INFERENCE.  Standard errors are a score/multiplier wild cluster bootstrap at the
 level (utils.sleep_links.linear_wild_cluster_bootstrap) — the same scheme and clustering unit as
 the sleepiness and BLP stages, so every SE in the paper is produced one way. G and G* are reported
 as descriptive cluster-paucity statistics, not as the inference. (Previously: CRVE + t(G*).)
+The NATIONAL regressors (the risk-free rate and its square; the `*_natl` demographics of D-Option-B)
+take one value per quarter across all firms, so their rows report the same bootstrap clustered on the
+QUARTER instead (utils.se_national, the convention of the sleepiness tables), marked with a dagger;
+see NATIONAL_BY_NAME.
 
 Usage
 -----
@@ -219,6 +223,8 @@ CFG = {
     'tab_label':   'tab:polfunc',
     'caption':     'Policy Function Estimates for Endogenous Deposit Spreads (BBL Step~1)',
     'lhs_title':   'Deposit Spread',
+    # The regressand's noun in the notes' sentences ("B firms' prepaid spread ...").
+    'lhs_noun':    'spread',
     # Appended to the table caption. Empty for the spread tables (the headline): their caption is
     # just "Policy Function Estimates: <deposit type>".
     'caption_suffix': '',
@@ -248,6 +254,7 @@ _CFG_RATE = {
     'tab_label':   'tab:polfunc_rate',
     'caption':     'Policy Function Estimates for the Annualized Deposit Rate (BBL Step~1)',
     'lhs_title':   'Annualized Deposit Rate',
+    'lhs_noun':    'rate',
     # NON-empty here on purpose: the rate tables are a robustness variant of the same regressions,
     # so without an LHS descriptor their captions would be identical to the spread tables'.
     'caption_suffix': r' --- Annualized Deposit Rate',
@@ -278,6 +285,19 @@ def _lhs_display(k: int, cfg: dict | None = None) -> float:
 def _lhs_unit_name(k: int, cfg: dict | None = None) -> str:
     c = CFG if cfg is None else cfg
     return (c.get('lhs_unit_name_by_k') or {}).get(k, c.get('lhs_unit_name', 'percentage points'))
+
+
+def _unit_clause(k: int) -> str:
+    """The unit the note states for deposit type k. A type shown in a unit other than the
+    variant's default (the k=5 spread, in basis points) also names its sibling table's unit, so
+    the two tables of the same spread are not read as contradictory (reviewer, 2026-09-30):
+    'basis points (Table~\\ref{tab:polfunc_k4}: percentage points)'."""
+    unit = _lhs_unit_name(k)
+    default = CFG.get('lhs_unit_name', 'percentage points')
+    if unit == default:
+        return unit
+    sib = next((j for j in K_ENDOG if j != k and _lhs_unit_name(j) == default), None)
+    return unit if sib is None else unit + rf" (Table~\ref{{{CFG['tab_label']}_k{sib}}}: {default})"
 
 
 # ==============================================================================
@@ -579,6 +599,51 @@ def centering_means(df_w: pd.DataFrame, avail: list) -> dict:
             if c not in NO_CENTER_VARS and not c.endswith('_sq') and c in df_w.columns}
 
 
+# ---- National regressors ---------------------------------------------------------------------
+# Regressors that take ONE value per quarter across all firms: the risk-free rate and its square
+# (rebuilt from the centred base, still a function of the quarter alone) in every column, and the
+# population-weighted national demographics `*_natl` of D-Option-B, merged on (year, quarter) in
+# compute_national_demographics. The pooled Option-C demographics are NOT national: its B rows keep
+# their local MCA values, so they vary within a quarter. Clustering on the conglomerate treats each
+# firm's copy of a national value as independent evidence, so these rows report the wild bootstrap
+# clustered on the QUARTER (utils.se_national.attach_national_ses, the convention of the sleepiness
+# tables), marked with a dagger. utils.se_national.NATIONAL_VARS holds the sleepiness names
+# (pix_exists, risk_free_qoq_lag), so the policy function keeps its own rule here.
+NATIONAL_BY_NAME = {'risk_free_qoq', 'risk_free_qoq_sq'}
+
+
+def _is_national_name(v: str) -> bool:
+    return v in NATIONAL_BY_NAME or v.endswith('_natl')
+
+
+def national_regressors(X: pd.DataFrame, periods, label: str = '') -> list:
+    """The regressors of one estimation sample that are NATIONAL: named so (NATIONAL_BY_NAME or a
+    `_natl` suffix) AND, in this sample, constant within every quarter while varying across
+    quarters. A column constant in both directions (Segment S5 among B firms is all zero) is
+    degenerate, not national. A regressor counts only when the name and the data agree; every
+    disagreement is printed."""
+    per = pd.Series(np.asarray(periods)).astype(str).values
+    out = []
+    for v in X.columns:
+        if v == 'const':
+            continue
+        x = X[v].to_numpy(dtype=float)
+        g = pd.Series(x).groupby(per)
+        within = float((g.max() - g.min()).max())
+        means = g.mean()
+        between = float(means.max() - means.min())
+        tol = 1e-12 * max(1.0, float(np.abs(x).max()))
+        time_only = within <= tol and between > tol
+        named = _is_national_name(v)
+        if named and time_only:
+            out.append(v)
+        elif named != time_only:
+            print(f"    [{label}] national check: {v} is {'' if named else 'not '}named national but "
+                  f"its within-quarter range is {within:.3g} and between-quarter range {between:.3g}"
+                  f"; it keeps conglomerate clustering")
+    return out
+
+
 def run_single_regression(
     df_sub: pd.DataFrame,
     dep_var: str,
@@ -604,6 +669,20 @@ def run_single_regression(
     missing = set(regressors) - set(avail)
     if missing:
         print(f"    [{label}] Regressors not in data (dropped): {missing}")
+
+    # ESTIMATION SAMPLE: rows with a POSITIVE balance of the deposit type. A firm-market-quarter
+    # that holds none of the type offers no product, so its recorded spread is not a price: among
+    # the D firms' k=4 rows two in three had a zero balance, and on those with a zero rate the
+    # "spread" was the risk-free rate itself (2026-09-30). The fit sees priced rows only; the
+    # fitted values are still computed for EVERY row, from these coefficients
+    # (compute_fitted_values), because the forward simulation masks the dead firm-quarters
+    # downstream rather than dropping them. A missing or non-numeric balance counts as not positive.
+    if 'deposit_balance' not in df_sub.columns:
+        raise KeyError(f"[{label}] no deposit_balance column: the estimation sample is the rows "
+                       f"with a positive balance of the type")
+    positive = pd.to_numeric(df_sub['deposit_balance'], errors='coerce') > 0
+    n_nonpositive = int((~positive & df_sub[dep_var].notna()).sum())
+    df_sub = df_sub[positive]
 
     # Working copy with complete cases
     cols_needed = [dep_var] + avail + ['CodConglomeradoPrudencial', 'year']
@@ -642,6 +721,47 @@ def run_single_regression(
     bse, tvals, pvals = linear_wild_cluster_bootstrap(res, B=B, scheme=scheme, seed=0)
 
     coef_names = list(res.params.index)
+    std_errors = {k: float(v) for k, v in bse.items()}
+    pvalues = {k: float(v) for k, v in pvals.items()}
+    se_scheme = {k: 'congl' for k in coef_names}
+    std_errors_dk, n_periods = {}, None
+
+    # NATIONAL ROWS (see NATIONAL_BY_NAME): the same wild bootstrap clustered on the QUARTER, by
+    # utils.se_national.attach_national_ses -- the call sleep_est_e2 makes, with the same B, scheme
+    # and seed -- replaces the conglomerate SE and p-value of these rows only; the conglomerate
+    # numbers of every row stay in std_errors_congl / pvalues_congl. The quarter is read off the
+    # rows that survived dropna, so the estimation sample and every estimate are those of the fit.
+    # BREAD: statsmodels' normalized_cov_params, (X'X)^{-1} from the SVD of X, and not
+    # pinv(X'X). The regressors are in raw panel units (GDP per capita in R$, the squared quarterly
+    # rate ~1e-4), so the eigenvalues of X'X span up to 26 orders of magnitude and pinv's cut-off
+    # (1e-15 of the largest) drops the squared rate's direction: its bootstrap draws collapse to
+    # ~0 whatever the clustering. From X itself the inverse matches a column-equilibrated one to
+    # ~1e-12 on every identified row (measured 2026-09-29).
+    periods = df_sub.loc[df_w.index, 'time_id'].astype(str).values
+    national = national_regressors(X, periods, label)
+    if national:
+        from utils.se_national import attach_national_ses
+        Xa = np.asarray(res.model.exog, float)
+        ua = np.asarray(res.resid, float)
+        attach_national_ses(res, Xa * ua[:, None], np.asarray(res.normalized_cov_params, float),
+                            periods, np.asarray(res.params, float), coef_names,
+                            B=B, scheme=scheme, seed=0, label=label)
+        bse_t, pv_t = getattr(res, 'bse_time', None), getattr(res, 'pvalues_time', None)
+        if bse_t is None or pv_t is None:
+            print(f"    [{label}] quarter-clustered WCB unavailable: the national rows keep "
+                  f"conglomerate clustering (no dagger)")
+        else:
+            n_periods = int(res.n_periods)
+            bse_dk = getattr(res, 'bse_dk', None)
+            for v in national:
+                std_errors[v], pvalues[v], se_scheme[v] = float(bse_t[v]), float(pv_t[v]), 'quarter'
+                if bse_dk is not None:
+                    std_errors_dk[v] = float(bse_dk[v])
+                print(f"    [{label}] national {v}: SE congl {bse[v]:.4g} -> quarter "
+                      f"{std_errors[v]:.4g} (DK {std_errors_dk.get(v, float('nan')):.4g}), "
+                      f"p {pvals[v]:.3g} -> {pvalues[v]:.3g}, T={n_periods}")
+
+    quarter_rows = [v for v in coef_names if se_scheme[v] == 'quarter']
     out = {
         'label': label,
         'res': res,
@@ -652,9 +772,23 @@ def run_single_regression(
         'r_squared_adj': float(res.rsquared_adj),
         'regressors': coef_names,
         'coefficients': res.params.to_dict(),
-        'std_errors': {k: float(v) for k, v in bse.items()},
-        'pvalues': {k: float(v) for k, v in pvals.items()},
-        'se_method': f'wild cluster bootstrap (B={B}, {scheme}); clusters = conglomerate',
+        # The REPORTED standard errors and p-values: conglomerate WCB, quarter WCB on the rows
+        # se_scheme marks 'quarter'.
+        'std_errors': std_errors,
+        'pvalues': pvalues,
+        'se_scheme': se_scheme,
+        # The conglomerate WCB of every row, national ones included; Driscoll-Kraay of the national
+        # rows (a comparison, not reported); the number of quarters the quarter WCB clusters on.
+        'std_errors_congl': {k: float(v) for k, v in bse.items()},
+        'pvalues_congl': {k: float(v) for k, v in pvals.items()},
+        'std_errors_dk': std_errors_dk,
+        'n_periods': n_periods,
+        # Rows with the regressand but a zero, missing or non-numeric balance of the type, left
+        # out of the fit (the estimation sample is the rows with a positive balance).
+        'n_nonpositive_balance': n_nonpositive,
+        'se_method': (f'wild cluster bootstrap (B={B}, {scheme}); clusters = conglomerate'
+                      + (f'; national rows ({", ".join(quarter_rows)}): clusters = quarter '
+                         f'(T={n_periods})' if quarter_rows else '')),
         # Anchor for reading the intercept. The reported constant is the prediction at x=0, which
         # is far outside the support (log assets = 0 means assets of R$1), so it is large and not
         # interpretable on its own -- for B/k=4 it is +170pp purely to offset the log-assets terms
@@ -667,7 +801,8 @@ def run_single_regression(
     }
 
     print(f"    [{label}] N={out['n_obs']:,} | R²={out['r_squared']:.4f} "
-          f"| G={out['n_clusters']} | G*={out['G_star']:.2f}")
+          f"| G={out['n_clusters']} | G*={out['G_star']:.2f} "
+          f"| left out with no positive balance: {n_nonpositive:,}")
 
     return out
 
@@ -900,6 +1035,18 @@ def save_outputs(results: dict, df_fitted: pd.DataFrame) -> None:
             # without it renders a table that looks complete and is missing a statistic.
             'mean_depvar': res_dict.get('mean_depvar'),
             'regressors': res_dict.get('regressors'),
+            # Which rows report the quarter-clustered WCB (the dagger in the tables), and the
+            # conglomerate / Driscoll-Kraay numbers kept beside it (see run_single_regression).
+            'se_scheme': res_dict.get('se_scheme'),
+            'std_errors_congl': res_dict.get('std_errors_congl'),
+            'pvalues_congl': res_dict.get('pvalues_congl'),
+            'std_errors_dk': res_dict.get('std_errors_dk'),
+            'n_periods': res_dict.get('n_periods'),
+            'n_nonpositive_balance': res_dict.get('n_nonpositive_balance'),
+            # Largest |regressand| on the estimation rows (fraction), for the notes' "zero to within"
+            # sentence where only the summary is read (the md twin).
+            'depvar_absmax': _depvar_absmax(res_dict),
+            'se_method': res_dict.get('se_method'),
         }
 
     json_path = OUTPUT_DIR / f"{CFG['out_prefix']}_summary.json"
@@ -938,6 +1085,29 @@ def print_summary_table(results: dict) -> None:
 # ==============================================================================
 DRAFTS_DIR = _paths.drafts_dir()
 
+
+def _polfunc_redirected() -> bool:
+    """True when COST_POLFUNC_DIR points this step's outputs anywhere other than the default
+    polfunc_dir(), ESTIMATION_OUTPUT/COST_POLFUNC: a sandbox, or the cluster's data/output/bbl
+    step folder."""
+    default = _paths.estimation_output() / "COST_POLFUNC"
+    try:
+        return pathlib.Path(OUTPUT_DIR).resolve() != default.resolve()
+    except OSError:
+        return str(OUTPUT_DIR) != str(default)
+
+
+def _fragment_dir() -> pathlib.Path:
+    """Where the paper fragments and the preview are written: drafts_dir() in production, and the
+    step's own output folder (OUTPUT_DIR) whenever COST_POLFUNC_DIR redirects it. drafts_dir()
+    does not follow COST_POLFUNC_DIR, so without this a sandboxed run rewrote the paper's C.10 and
+    C.11 with its own numbers (2026-09-29: a B=19 verification run). The sleepiness exporters
+    follow the same rule through rout_dir() under SLEEP_OUT_ROOT: a redirected run's exhibits go
+    beside its own fits. On the cluster (COST_POLFUNC_DIR = data/output/bbl) the fragments now
+    land in the archived step folder rather than in the unarchived Drafts skeleton."""
+    return OUTPUT_DIR if _polfunc_redirected() else DRAFTS_DIR
+
+
 # Human-readable labels for variable names in LaTeX
 _VAR_LABELS = {
     'const': 'Constant',
@@ -969,14 +1139,14 @@ _VAR_LABELS = {
     # inhabitants (scrape_anatel_mobile.py), not broadband -- the label every other table uses.
     'connections_per100': 'Mobile Lines',
     'branches_per1000': 'Branches',
-    'cadunico_families_per1000': 'CadUnico Families',
+    'cadunico_families_per1000': r"Cad\'{U}nico Families",
     'gdp_per_capita_natl': r'GDP \textit{per capita} (Natl.)',
     'fraction_65plus_natl': 'Fraction 65+ (Natl.)',
     'fraction_young_natl': 'Fraction Young (Natl.)',
     'pix_users_pf_per1000_natl': 'Pix Users (Natl.)',
     'connections_per100_natl': 'Mobile Lines (Natl.)',
     'branches_per1000_natl': 'Branches (Natl.)',
-    'cadunico_families_per1000_natl': 'CadUnico Families (Natl.)',
+    'cadunico_families_per1000_natl': r"Cad\'{U}nico Families (Natl.)",
 }
 
 
@@ -1026,11 +1196,144 @@ _DEMO_BASES = ['gdp_per_capita', 'fraction_65plus', 'fraction_young',
                'pix_users_pf_per1000', 'connections_per100', 'branches_per1000',
                'cadunico_families_per1000']
 
+# The note sentence stating the estimation sample (run_single_regression).
+_SAMPLE_NOTE = r'Estimated on firm--market--quarters with a positive balance of the type.'
+
+# A column whose regressand is zero at the displayed precision: when more than _SMALL_SHARE of its
+# displayed coefficient cells print below _SMALL in absolute value, the note says why (user,
+# 2026-09-30: C.11's B column stays in basis points, explained rather than rescaled). The sentence
+# says the regressand is near zero, so it is emitted only while |regressand| stays below
+# _NEAR_ZERO display units (1 bp for the k=5 spread, 1 pp otherwise).
+_SMALL = 0.010
+_SMALL_SHARE = 0.5
+_NEAR_ZERO = 1.0
+_TYPE_NOUN = {4: 'time-deposit', 5: 'prepaid'}
+_UNIT_ABBR = {'basis points': 'bp', 'percentage points': 'pp'}
+
+
+def _depvar_absmax(res_dict):
+    """Largest |regressand| on the estimation rows, in the regressand's own unit (a fraction): from
+    the stored fit when present (an estimation run, --from-pkl), else the summary's
+    `depvar_absmax`; None when neither is available."""
+    res = res_dict.get('res')
+    if res is not None:
+        try:
+            return float(np.max(np.abs(np.asarray(res.model.endog, float))))
+        except Exception:
+            pass
+    v = res_dict.get('depvar_absmax')
+    return None if v is None else float(v)
+
+
+def _mostly_small(printed) -> bool:
+    """True when more than _SMALL_SHARE of a column's printed coefficient cells are below _SMALL
+    in absolute value (0.000 to 0.009 at three decimals)."""
+    vals = []
+    for s in printed:
+        try:
+            vals.append(abs(float(str(s).replace('{,}', '').replace(',', ''))))
+        except ValueError:
+            continue
+    return bool(vals) and sum(v < _SMALL for v in vals) > _SMALL_SHARE * len(vals)
+
+
+def _small_spread_sentence(res_dict, k, ftype, md=False, cfg=None) -> str:
+    """'B firms' prepaid spread is zero to within 0.013 bp (mean -0.001 bp), so most of their
+    coefficients print below 0.010.' from the fit: the bound is the largest |regressand| on the
+    estimation rows rounded UP to three decimals, the mean is Mean dep. var.; without the bound
+    the sentence states the mean alone. Units and the regressand's noun follow the variant (`cfg`,
+    default CFG). '' when the regressand (the bound, else the mean) reaches _NEAR_ZERO display
+    units, where 'near zero' would not be the reason."""
+    c = CFG if cfg is None else cfg
+    m = _lhs_display(k, c)
+    unit = _UNIT_ABBR.get(_lhs_unit_name(k, c), _lhs_unit_name(k, c))
+    mean, bound = res_dict.get('mean_depvar'), _depvar_absmax(res_dict)
+    level = bound if bound is not None else mean
+    if level is None or abs(level * m) >= _NEAR_ZERO:
+        return ''
+
+    def num(s):
+        return s if md else f'${s}$'
+    head = f"{ftype} firms' {_TYPE_NOUN.get(k, 'deposit')} {c.get('lhs_noun', 'spread')} "
+    if bound is not None:
+        up = float(np.ceil(bound * m * 1000.0 - 1e-9)) / 1000.0
+        s = head + f"is zero to within {num(f'{up:.3f}')} {unit}"
+        if mean is not None:
+            s += f" (mean {num(_fmt3(mean * m))} {unit})"
+    else:
+        s = head + f"averages {num(_fmt3(mean * m))} {unit}"
+    return s + f", so most of their coefficients print below {num(f'{_SMALL:.3f}')}."
+
+
+# The dagger on a quarter-clustered SE cell, and the note sentence explaining it, worded as in the
+# sleepiness comparison table (Table 4). The sentence is emitted only when a displayed cell carries
+# the dagger.
+_NATIONAL_MARK = r'^{\dagger}'
+_NATIONAL_NOTE = (r'$\dagger$: quarter-clustered, national regressors '
+                  r'(Section~\ref{sec:empirical:sleep}). ')
+
+# The seed run_single_regression passes to both of its bootstraps (conglomerate, and quarter for
+# the national rows). The results do not record it, so the notes restate it from here; the draw
+# count and the weights are read from each result's se_method, which records them.
+_POLFUNC_BOOT_SEED = 0
+_WEIGHTS_NAME = {'webb': 'Webb weights', 'rademacher': 'Rademacher weights'}
+
+
+def _boot_settings(results, k):
+    """{(B, scheme)} of the wild bootstrap behind deposit type k's displayed columns, parsed from
+    se_method ('wild cluster bootstrap (B=999, webb); ...'); None for a result that lacks it."""
+    import re
+    got = set()
+    for ck in _polfunc_col_keys(k):
+        if ck in (results or {}):
+            m = re.search(r'B=(\d+),\s*(\w+)', str(results[ck].get('se_method') or ''))
+            got.add((int(m.group(1)), m.group(2).lower()) if m else None)
+    return got
+
+
+def _boot_clause(results, k, md=False):
+    """'$B=999$ draws, Webb weights, seed 0' when every displayed column records the same
+    bootstrap, else '' (the note then keeps its generic wording)."""
+    got = _boot_settings(results, k) if k is not None else set()
+    if len(got) != 1 or None in got:
+        return ''
+    B, scheme = next(iter(got))
+    w = _WEIGHTS_NAME.get(scheme, f'{scheme} weights')
+    n = f'{B:,}'
+    if md:
+        return f'B = {n} draws, {w}, seed {_POLFUNC_BOOT_SEED}'
+    return f'$B={n.replace(",", "{,}")}$ draws, {w}, seed {_POLFUNC_BOOT_SEED}'
+
+
+def _zero_column(res_dict, v) -> bool:
+    """True when regressor v's design column is zero on every row of the estimation sample, read
+    off the stored fit (`res`, present after an estimation run and in the results pickle). Segment
+    S5 among B firms is the case: no B firm is in it, so its coefficient is zero by construction
+    (the minimum-norm solution leaves it at zero up to rounding, and no bootstrap draw can move
+    it), and a t-statistic, hence stars, is meaningless. A result without `res` (the summary JSON)
+    reports False, and its cells print as before."""
+    res = res_dict.get('res')
+    if res is None or v == 'const':
+        return False
+    try:
+        names = list(res.params.index)
+        if v not in names:
+            return False
+        return not np.any(np.asarray(res.model.exog)[:, names.index(v)])
+    except Exception:
+        return False
+
 
 def _polfunc_cell(res_dict, v):
-    """(coef, se, p) for variable v in a regression result dict, or None if absent."""
+    """(coef, se, p, se_scheme) for variable v in a regression result dict, or None if absent.
+    se_scheme is 'quarter' where the SE and p-value are the quarter-clustered WCB of a national
+    regressor (NATIONAL_BY_NAME), 'zero' where the regressor is zero on every row (_zero_column),
+    else 'congl'; a result stored without se_scheme reads 'congl'."""
     if v in res_dict['coefficients']:
-        return res_dict['coefficients'][v], res_dict['std_errors'][v], res_dict['pvalues'][v]
+        scheme = ('zero' if _zero_column(res_dict, v)
+                  else (res_dict.get('se_scheme') or {}).get(v, 'congl'))
+        return (res_dict['coefficients'][v], res_dict['std_errors'][v], res_dict['pvalues'][v],
+                scheme)
     return None
 
 
@@ -1051,6 +1354,9 @@ def _polfunc_variant_cell(res_dict, base):
 # which write_polfunc_fragments reports on stdout.
 _ND = 3
 _ZERO_PRINTS: list = []
+# Cells of all-zero regressors (_zero_column), printed 0.000 by construction rather than rounded;
+# reported on stdout apart from _ZERO_PRINTS.
+_ZERO_COLUMN_CELLS: list = []
 
 
 def _fmt3(x, where: str = '') -> str:
@@ -1063,21 +1369,38 @@ def _fmt3(x, where: str = '') -> str:
     return s
 
 
-def _polfunc_emit_rows(label, cells, rows, mult=1.0, where=''):
+def _polfunc_emit_rows(label, cells, rows, mult=1.0, where='', var=None, zero_cells=None,
+                       col_cells=None):
     """Append a coefficient line + a standard-error line for one regressor across columns.
 
     `mult` = LHS_display · unit_scale rescales coefficient AND standard error together (a pure
-    change of units, so t-stats and stars are unaffected)."""
+    change of units, so t-stats and stars are unaffected). A quarter-clustered SE (a national
+    regressor) carries a dagger, as in the sleepiness tables. A regressor that is zero on every
+    row of a column (scheme 'zero') prints 0.000 (0.000) without stars, and (column header, var)
+    is appended to `zero_cells` for the note. `col_cells`, when a dict, collects each column's
+    printed coefficients (index -> list of text) for _mostly_small."""
     coef_cells, se_cells = [], []
     for j, c in enumerate(cells):
         if c is None:
             coef_cells.append('')
             se_cells.append('')
         else:
-            cf, se, p = c
+            cf, se, p, scheme = c
             w = f'{where} {label} [{_COL_HEADERS[j]}]'
-            coef_cells.append(f"${_fmt3(cf * mult, w).replace(',', '{,}')}^{{{_stars(p)}}}$")
-            se_cells.append(f"$({_fmt3(se * mult, w + ' SE').replace(',', '{,}')})$")
+            if scheme == 'zero':
+                coef_cells.append(f"${0.0:.{_ND}f}^{{}}$")
+                se_cells.append(f"$({0.0:.{_ND}f})$")
+                if zero_cells is not None:
+                    zero_cells.append((_COL_HEADERS[j], var, w))
+                if col_cells is not None:
+                    col_cells.setdefault(j, []).append(f'{0.0:.{_ND}f}')
+                continue
+            mark = _NATIONAL_MARK if scheme == 'quarter' else ''
+            txt = _fmt3(cf * mult, w)
+            if col_cells is not None:
+                col_cells.setdefault(j, []).append(txt)
+            coef_cells.append(f"${txt.replace(',', '{,}')}^{{{_stars(p)}}}$")
+            se_cells.append(f"$({_fmt3(se * mult, w + ' SE').replace(',', '{,}')}){mark}$")
     rows.append(f'{label} & ' + ' & '.join(coef_cells) + r' \\')
     rows.append(' & ' + ' & '.join(se_cells) + r' \\')
 
@@ -1089,13 +1412,15 @@ def _row_label(v):
     return _clean_var(v)
 
 
-def _polfunc_panel_rows(results: dict, k: int, include_segments: bool = False) -> list:
+def _polfunc_panel_rows(results: dict, k: int, include_segments: bool = False,
+                        zero_cells=None, col_cells=None) -> list:
     """LaTeX coefficient rows for one deposit type k across the four columns.
 
     Non-demographic regressors are the ordered union; demographics are merged (local + national
     into one row, each column showing its own variant). Segment dummies are EXCLUDED unless
     `include_segments` — in the main table they collapse to a 'Segment FE: Yes' indicator row.
-    Every coefficient is shown in its display unit (see _DISPLAY_UNITS)."""
+    Every coefficient is shown in its display unit (see _DISPLAY_UNITS). `zero_cells`, when a
+    list, receives the displayed cells of all-zero regressors (see _polfunc_emit_rows)."""
     cols = _polfunc_col_keys(k)
     demo_all = set(_DEMO_BASES) | {d + '_natl' for d in _DEMO_BASES}
     lhs = _lhs_display(k)
@@ -1118,7 +1443,7 @@ def _polfunc_panel_rows(results: dict, k: int, include_segments: bool = False) -
     for v in order:
         cells = [_polfunc_cell(results[ck], v) if ck in results else None for ck in cols]
         _polfunc_emit_rows(_row_label(v), cells, rows, mult=lhs * _display_unit(v)[0],
-                           where=where)
+                           where=where, var=v, zero_cells=zero_cells, col_cells=col_cells)
 
     # Merged demographic rows -- DETAIL ONLY. In the main table they collapse to a
     # 'Demographics' indicator row (Yes/No/Yes: B carries local MCA demographics, D~(no demo.)
@@ -1131,7 +1456,7 @@ def _polfunc_panel_rows(results: dict, k: int, include_segments: bool = False) -
         if all(c is None for c in cells):
             continue
         _polfunc_emit_rows(_row_label(base), cells, demo_rows, mult=lhs * _display_unit(base)[0],
-                           where=where)
+                           where=where, var=base, zero_cells=zero_cells, col_cells=col_cells)
     if demo_rows:
         rows.append(r'\addlinespace[0.3ex]')
         rows.extend(demo_rows)
@@ -1143,7 +1468,8 @@ def _polfunc_stat_row(label, values, fmt) -> str:
     return f'{label} & ' + ' & '.join(cells) + r' \\'
 
 
-def _polfunc_notes(k: int | None = None, results: dict | None = None) -> str:
+def _polfunc_notes(k: int | None = None, results: dict | None = None,
+                   dagger: bool = False, zero_cells=None, small=None) -> str:
     """Table Notes: the inference paragraph, the regressor units, then what the dependent variable is.
 
     Deliberately short. Everything the notes used to carry -- winsorization, centering, the
@@ -1151,6 +1477,7 @@ def _polfunc_notes(k: int | None = None, results: dict | None = None) -> str:
     module\'s comments. What stays is what a reader needs at the table: how the standard errors
     were produced, the units the row labels do not carry, and the exact regressand. For k=5 a D
     column whose regressors explain almost nothing is said to be what it is, a constant near zero.
+    `dagger` (some displayed SE cell is quarter-clustered) adds the sentence that explains the mark.
 
     Citations are real \parencite keys, not typeset-by-hand author strings, so they resolve
     against References.bib and stay correct if an entry changes. The paper uses biblatex/biber
@@ -1160,17 +1487,22 @@ def _polfunc_notes(k: int | None = None, results: dict | None = None) -> str:
     # \footnotesize. The regressor units are stated once here: the ratios, the Basel index included,
     # are fractions in the panel but their coefficients are per percentage point, and the two rates
     # (risk-free, asset return) are quarterly, as their labels say.
+    boot = _boot_clause(results, k)
     note = (
         r'\textit{Notes:} Standard errors in parentheses: score/multiplier wild cluster bootstrap '
-        r'by conglomerate, Webb weights '
+        r'by conglomerate, ' + (boot or 'Webb weights') + ' '
         r'\parencite{cameron2008bootstrap,mackinnon2017wild,webb2023reworking}; $G$ and '
         r'$G^{*}=G/(1+\mathrm{cv}^{2})$ \parencite{imbens2016robust,carter2017asymptotic} '
-        r'measure cluster paucity and are not the inference. *** $p<0.01$, ** $p<0.05$, '
+        r'measure cluster paucity and are not the inference. '
+        + (_NATIONAL_NOTE if dagger else '')
+        + r'*** $p<0.01$, ** $p<0.05$, '
         r'* $p<0.1$. Ratios and rates, the Basel index included, are fractions in the panel; '
         r'their coefficients are per percentage point (per pp$^{2}$ for squares), and the '
         r'risk-free rate and asset return are quarterly. '
         # str.replace, not str.format: the note is LaTeX and full of braces.
-        + CFG['depvar_note'].replace('{unit}', _lhs_unit_name(k if k is not None else 4))
+        + CFG['depvar_note'].replace('{unit}', _unit_clause(k if k is not None else 4))
+        # The estimation sample (run_single_regression).
+        + ' ' + _SAMPLE_NOTE
     )
     if k == 5 and results:
         d_cols = [ck for ck in _polfunc_col_keys(k)[1:] if ck in results]
@@ -1178,6 +1510,19 @@ def _polfunc_notes(k: int | None = None, results: dict | None = None) -> str:
         if r2 and max(r2) < 0.05:
             note += (r' In both D columns the fitted policy is essentially a constant near zero '
                      r'($R^{2}$ of ' + ' and '.join(f'${v:.3f}$' for v in r2) + ').')
+    # A column whose coefficients print mostly below 0.010 (build_polfunc_table, _mostly_small).
+    for ftype, res_dict in (small or []):
+        s = _small_spread_sentence(res_dict, k if k is not None else 4, ftype)
+        if s:
+            note += ' ' + s
+    # One clause per displayed all-zero regressor (_zero_column), printed 0.000 without stars.
+    for head, var in dict.fromkeys((h, v) for h, v, _w in (zero_cells or [])):
+        if var in _SEGMENT_VARS:
+            note += (f' No {head} firm is in segment {var.split("_", 1)[1]}; its coefficient is '
+                     f'zero by construction.')
+        else:
+            note += (f' {_clean_var(var)} is zero for every {head} firm; its coefficient is zero '
+                     f'by construction.')
     return note
 
 
@@ -1230,6 +1575,21 @@ def build_polfunc_table(results: dict, k: int, include_segments: bool = False) -
     caption = 'Policy Function Estimates: ' + _K_TITLE[k] + CFG.get('caption_suffix', '')
     label = CFG['tab_label'] + f'_k{k}' + ('_segment' if include_segments else '')
     cols = _polfunc_col_keys(k)
+    # The body first: the notes explain the dagger, and an all-zero regressor, only if a
+    # displayed cell carries one.
+    zero_cells, col_cells = [], {}
+    body = _polfunc_panel_rows(results, k, include_segments=include_segments,
+                               zero_cells=zero_cells, col_cells=col_cells)
+    # Firm types whose column prints mostly below 0.010 (_mostly_small): B from the first column,
+    # D from the first D column that does.
+    small = []
+    for ftype, js in (('B', (0,)), ('D', (1, 2))):
+        hit = next((j for j in js if j < len(cols) and cols[j] in results
+                    and _mostly_small(col_cells.get(j, []))), None)
+        if hit is not None:
+            small.append((ftype, results[cols[hit]]))
+    dagger = any(_NATIONAL_MARK in r for r in body)
+    _ZERO_COLUMN_CELLS.extend(w for _h, _v, w in zero_cells)
 
     L = [
         r'\begin{spacing}{1.0}',
@@ -1251,12 +1611,13 @@ def build_polfunc_table(results: dict, k: int, include_segments: bool = False) -
         r'\endfoot',
         r'\bottomrule',
         r'\multicolumn{4}{@{}p{\dimexpr\textwidth-2\tabcolsep\relax}@{}}{\footnotesize '
-        + _polfunc_notes(k, results) + r'} \\',
+        + _polfunc_notes(k, results, dagger=dagger, zero_cells=zero_cells, small=small)
+        + r'} \\',
         _LASTFOOT_KERN,
         r'\endlastfoot',
     ]
 
-    L.extend(_polfunc_panel_rows(results, k, include_segments=include_segments))
+    L.extend(body)
     L.append(r'\midrule')
     r2 = [results[ck]['r_squared'] if ck in results else None for ck in cols]
     obs = [results[ck]['n_obs'] if ck in results else None for ck in cols]
@@ -1298,15 +1659,21 @@ def build_polfunc_table(results: dict, k: int, include_segments: bool = False) -
 
 def write_polfunc_fragments(results: dict) -> dict:
     """Write the `\\input`-able fragments: one MAIN table per deposit type (segment dummies
-    collapsed to an FE indicator) plus a `_segment` companion that shows them explicitly."""
-    DRAFTS_DIR.mkdir(parents=True, exist_ok=True)
+    collapsed to an FE indicator) plus a `_segment` companion that shows them explicitly. They go
+    to _fragment_dir(): Drafts in production, the redirected step folder otherwise."""
+    out_dir = _fragment_dir()
+    if out_dir != DRAFTS_DIR:
+        print(f"  [sandbox] COST_POLFUNC_DIR redirects this run: fragments and preview go to "
+              f"{out_dir}, not to Drafts.")
+    out_dir.mkdir(parents=True, exist_ok=True)
     _ZERO_PRINTS.clear()
+    _ZERO_COLUMN_CELLS.clear()
     frags = {}
     for k in K_ENDOG:
         for seg in (False, True):
             frag = build_polfunc_table(results, k, include_segments=seg)
             suffix = '_segment' if seg else ''
-            path = DRAFTS_DIR / f"{CFG['out_prefix']}_k{k}{suffix}.tex"
+            path = out_dir / f"{CFG['out_prefix']}_k{k}{suffix}.tex"
             with open(path, 'w', encoding='utf-8') as f:
                 f.write(frag + '\n')
             print(f"  Wrote fragment: {path.name}  (label {CFG['tab_label']}_k{k}{suffix})")
@@ -1317,21 +1684,28 @@ def write_polfunc_fragments(results: dict) -> dict:
               f"(not rescaled):")
         for where, v in _ZERO_PRINTS:
             print(f"      {where}: {v:.3e}")
+    if _ZERO_COLUMN_CELLS:
+        print(f"  [display] {len(_ZERO_COLUMN_CELLS)} cell(s) of an all-zero regressor print "
+              f"0.000 (0.000) without stars (zero by construction; the note says so):")
+        for where in _ZERO_COLUMN_CELLS:
+            print(f"      {where}")
     return frags
 
 
 def compile_polfunc_preview(frags: dict) -> None:
     """Compile ONE standalone preview PDF holding all deposit-type fragments (one per page),
-    rendered with the paper's own preamble (utils.tex_preamble.wrap_table)."""
+    rendered with the paper's own preamble (utils.tex_preamble.wrap_table), in _fragment_dir()
+    beside the fragments."""
     import subprocess
     try:
         from utils.tex_preamble import wrap_table
     except Exception as exc:
         print(f"  [WARN] utils.tex_preamble not importable ({exc}); fragments saved, preview skipped.")
         return
+    out_dir = _fragment_dir()
     body = '\n\n\\clearpage\n\n'.join(frags[k] for k in sorted(frags))
     name = f"{CFG['out_prefix']}_preview"
-    tex_path = DRAFTS_DIR / f"{name}.tex"
+    tex_path = out_dir / f"{name}.tex"
     with open(tex_path, 'w', encoding='utf-8') as f:
         f.write(wrap_table(body))
     print(f"  Compiling preview PDF ({name}.pdf)...")
@@ -1341,16 +1715,16 @@ def compile_polfunc_preview(frags: dict) -> None:
         # the preview renders the citations as unresolved markers, which reads like a broken table
         # even though the fragment is fine in V_Main.tex, where biber does run.
         subprocess.run(['pdflatex', '-interaction=nonstopmode', f'{name}.tex'],
-                       cwd=str(DRAFTS_DIR), capture_output=True, text=True)
+                       cwd=str(out_dir), capture_output=True, text=True)
         try:
-            subprocess.run(['biber', name], cwd=str(DRAFTS_DIR), capture_output=True, text=True)
+            subprocess.run(['biber', name], cwd=str(out_dir), capture_output=True, text=True)
         except FileNotFoundError:
             print("  [WARN] biber not found; preview citations will render unresolved "
                   "(fragments are unaffected).")
         for _ in range(2):
             subprocess.run(['pdflatex', '-interaction=nonstopmode', f'{name}.tex'],
-                           cwd=str(DRAFTS_DIR), capture_output=True, text=True)
-        pdf_path = DRAFTS_DIR / f"{name}.pdf"
+                           cwd=str(out_dir), capture_output=True, text=True)
+        pdf_path = out_dir / f"{name}.pdf"
         if pdf_path.exists() and pdf_path.stat().st_size > 0:
             print(f"  Preview PDF generated: {pdf_path.name}")
         else:
@@ -1383,7 +1757,7 @@ def render_fragments_from_pkl(spec: str) -> None:
     """Rebuild the paper fragments from a stored fit, estimating nothing.
 
     build_polfunc_table reads plain values only -- regressors, coefficients, std_errors,
-    pvalues, r_squared, n_obs, n_clusters, G_star, mean_depvar -- so refreshing the tables
+    pvalues, se_scheme, r_squared, n_obs, n_clusters, G_star, mean_depvar -- so refreshing the tables
     after a new fit lands does not require re-running the regressions. The identifying
     statistics are printed so the vintage being rendered is visible in the log rather than
     inferred from a file date.

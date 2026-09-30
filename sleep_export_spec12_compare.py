@@ -2,6 +2,9 @@ import os
 import sys
 import shutil
 import pickle
+import json
+import tempfile
+from datetime import datetime, timezone
 
 from utils import paths as _paths_mod
 from utils import routines as _routines
@@ -294,7 +297,7 @@ _IV_WORDS = {'OLS': 'No Instruments (OLS)',
 
 def spec12_title(stage):
     iv, state = (p.strip() for p in _routines.SPEC12.split(" x "))
-    return (rf"{stage} Results by Estimation Strategy --- Specification "
+    return (rf"{stage} Results by Estimation Strategy, Specification "
             rf"({_routines.SPEC12_ID}): {state} State Vector, {_IV_WORDS.get(iv, iv)}")
 
 
@@ -362,8 +365,82 @@ def two_stage_tag(order_keys):
     return rf", two-stage for {_span(lnk)}" if lnk else ""
 
 
+# ---------------------------------------------------------------------------
+# Unrounded sidecar: a JSON record of the exact numbers a comparison table's cells were built
+# from, written by the same loop that formats those cells to 3dp text. Exists because a reader
+# that needs a value to more than 3 decimals (the paper-numbers collector's star-and-interval
+# parser cannot always recover a -0.755-class estimate at 2dp from its printed text) has to get
+# it from the generator rather than by inverting the rounded string.
+# ---------------------------------------------------------------------------
+
+def _empty_cell_record():
+    """The sidecar record for a cell the table prints as '-' (no result, or the row absent
+    from that column's params) -- same shape as a populated cell so a reader need not branch."""
+    return {
+        "estimate": None, "ci_lo": None, "ci_hi": None, "se": None, "pvalue": None,
+        "stars": "", "stars_source": None, "dagger": False, "scheme": None,
+        "printed_estimate": "-", "printed_interval": "-",
+    }
+
+
+def _atomic_json_dump(obj, path):
+    """Write a JSON sidecar that is either complete or absent, never truncated.
+
+    Same scheme as sleep_est_single.py's _atomic_pickle_dump: a temp file in the SAME
+    directory, fsynced, then renamed into place with os.replace, which is atomic on Windows
+    and POSIX alike. Written through os.fdopen(fd, "wb") as encoded UTF-8 bytes rather than
+    opened in Python's text mode, so the LF line endings json.dumps produces are the bytes
+    that reach disk -- text mode on Windows would otherwise rewrite every \\n to \\r\\n."""
+    path = str(path)
+    d = os.path.dirname(path)
+    fd, tmp = tempfile.mkstemp(dir=d, prefix="." + os.path.basename(path) + ".", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "wb") as f:
+            f.write(json.dumps(obj, indent=2).encode("utf-8"))
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
+def _write_table_sidecar(sidecar_path, tex_path, label, order_keys, rows, mean_phi, nobs,
+                         r_squared, clusters, pkl_meta=None):
+    """Write one comparison table's unrounded cell values to `sidecar_path`.
+
+    `rows`, `mean_phi`, `nobs`, `r_squared` and `clusters` are collected by the caller during
+    the same pass that builds the .tex rows, so this cannot describe a table other than the one
+    that was just written. `pkl_meta` carries the input pickles' paths and mtimes, so a reader
+    can tell which vintage of estimation_results.pkl the numbers came from."""
+    payload = {
+        "schema": 1,
+        "generated_utc": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "generator": "sleep_export_spec12_compare.py:build_latex_table",
+        "tex_file": os.path.basename(str(tex_path)),
+        "label": label,
+        "spec": _routines.SPEC12,
+        "columns": list(order_keys),
+        "column_est_id": {k: EST_OF_KEY.get(k) for k in order_keys},
+        "column_ref_label": {k: REF_LABELS.get(k, k) for k in order_keys},
+        "inputs": pkl_meta or {},
+        "rows": rows,
+        "table": {
+            "mean_phi_hat_pp": mean_phi,
+            "observations": nobs,
+            "r_squared": r_squared,
+            "clusters": clusters,
+        },
+    }
+    _atomic_json_dump(payload, sidecar_path)
+    print(f"Exported table sidecar (unrounded values) to {sidecar_path}")
+
+
 def build_latex_table(results_dict, order_keys, target_vars, out_path, title="", label="",
-                      mean_phi=None):
+                      mean_phi=None, sidecar_path=None, pkl_meta=None):
     tex = []
     is_first_stage = ("first_stage" in str(out_path).lower() or "stage1" in str(out_path).lower())
 
@@ -439,6 +516,14 @@ def build_latex_table(results_dict, order_keys, target_vars, out_path, title="",
     _nat_schemes = set()   # what select_se ACTUALLY returned on the national rows
     _sen.reset_ame_se_realised()   # and which AME variance it actually delivered
     _ci_cols = set()       # columns whose second line is an interval rather than an SE
+    # Unrounded companions to the tex rows below, built alongside them regardless of whether
+    # sidecar_path is set (the bookkeeping is a handful of dicts, not another pass over the
+    # results) and written out only if it is.
+    _sidecar_rows: list = []
+    _sidecar_mean_phi: dict = {}
+    _sidecar_nobs: dict = {}
+    _sidecar_r2: dict = {}
+    _sidecar_clusters: dict = {}
 
     if not is_first_stage:
         other_vars = [v for v in vars_to_print if v not in ordered_vars]
@@ -457,11 +542,13 @@ def build_latex_table(results_dict, order_keys, target_vars, out_path, title="",
         label_cell = r"\multirow[t]{2}{0.26\textwidth}{\raggedright " + nice_var_name(v) + r"}"
         row_cf = [label_cell]
         row_se = [""]
+        _row_cells: dict = {}   # this row's unrounded companion, keyed by column
         for col in order_keys:
             res = results_dict.get(col)
             if res is None:
                 row_cf.append("-")
                 row_se.append("-")
+                _row_cells[col] = _empty_cell_record()
                 continue
 
             params = getattr(res, 'params', pd.Series(dtype=float))
@@ -489,19 +576,39 @@ def build_latex_table(results_dict, order_keys, target_vars, out_path, title="",
                 # whose band is missing falls back to the SE and the note says which did.
                 _bd = _band_row(res, v, est=EST_OF_KEY.get(col), spec=_routines.SPEC12)
                 _ci = (_bd[0] * m, _bd[1] * m) if _bd else None
+                # Same selection format_value makes internally (stars=None there falls back to
+                # get_stars(pval)); computed again here, off the same _bd/_pv, so the sidecar's
+                # star string is provably the one that got typeset rather than a second guess.
+                _stars = _bd[2] if _bd else get_stars(_pv)
                 c_str, se_str = format_value(params[v] * m, _se * m, _pv, digits=3, mark=_mark,
                                              ci=_ci, stars=(_bd[2] if _bd else None))
                 if _bd:
                     _ci_cols.add(col)
                 row_cf.append(c_str)
                 row_se.append(se_str)
+                _est_val = params[v] * m
+                _row_cells[col] = {
+                    "estimate": float(_est_val) if pd.notna(_est_val) else None,
+                    "ci_lo": float(_ci[0]) if _ci is not None else None,
+                    "ci_hi": float(_ci[1]) if _ci is not None else None,
+                    "se": float(_se * m) if pd.notna(_se) else None,
+                    "pvalue": float(_pv) if pd.notna(_pv) else None,
+                    "stars": _stars,
+                    "stars_source": "band" if _bd else "pvalue",
+                    "dagger": bool(_sch != "congl"),
+                    "scheme": _sch,
+                    "printed_estimate": c_str,
+                    "printed_interval": se_str,
+                }
             else:
                 row_cf.append("-")
                 row_se.append("-")
+                _row_cells[col] = _empty_cell_record()
 
         tex.append(" & ".join(row_cf) + r" \\*")
         tex.append(" & ".join(row_se) + r" \\")
         tex.append(r"\addlinespace")
+        _sidecar_rows.append({"var": v, "row_label": nice_var_name(v), "cells": _row_cells})
 
     tex.append(r"\midrule")
 
@@ -514,8 +621,12 @@ def build_latex_table(results_dict, order_keys, target_vars, out_path, title="",
         row_meanphi = [r"Mean $\hat{\phi}$ (pp)"]
         for col in order_keys:
             mp = mean_phi.get(col)
-            row_meanphi.append(_fmt3(mp * _st.PHI_DISPLAY)
-                               if mp is not None and pd.notna(mp) else "-")
+            _has_mp = mp is not None and pd.notna(mp)
+            row_meanphi.append(_fmt3(mp * _st.PHI_DISPLAY) if _has_mp else "-")
+            _sidecar_mean_phi[col] = {
+                "unrounded": float(mp * _st.PHI_DISPLAY) if _has_mp else None,
+                "printed": row_meanphi[-1],
+            }
         tex.append(" & ".join(row_meanphi) + r" \\")
 
     row_nobs = ["Observations"]
@@ -531,6 +642,9 @@ def build_latex_table(results_dict, order_keys, target_vars, out_path, title="",
         if res is None:
             row_nobs.append("-"); row_r2.append("-"); row_fstat.append("-")
             row_cluster.append("-")
+            _sidecar_nobs[col] = {"value": None, "printed": "-"}
+            _sidecar_r2[col] = {"unrounded": None, "printed": "-"}
+            _sidecar_clusters[col] = {"value": None, "printed": "-"}
             continue
 
         nobs  = getattr(res, 'nobs', np.nan)
@@ -561,6 +675,12 @@ def build_latex_table(results_dict, order_keys, target_vars, out_path, title="",
         row_r2.append(_fmt3(r2) if pd.notna(r2) else "-")
         row_fstat.append(fstat_str)
         row_cluster.append(clusters)
+        _sidecar_nobs[col] = {"value": float(nobs) if pd.notna(nobs) else None,
+                              "printed": row_nobs[-1]}
+        _sidecar_r2[col] = {"unrounded": float(r2) if pd.notna(r2) else None,
+                            "printed": row_r2[-1]}
+        _sidecar_clusters[col] = {"value": int(clusters) if clusters != "-" else None,
+                                  "printed": clusters}
 
     tex.append(" & ".join(row_nobs) + r" \\")
     tex.append(" & ".join(row_r2) + r" \\")
@@ -583,6 +703,13 @@ def build_latex_table(results_dict, order_keys, target_vars, out_path, title="",
             _sen.NOTE_TOKEN, _sen.national_note(_nat_schemes)).replace(
             AME_CI_TOKEN, ame_ci_note(_ci_cols, results_dict)).replace(
             _sen.AME_SE_TOKEN, _sen.ame_se_note()))
+
+    if sidecar_path is not None:
+        _write_table_sidecar(
+            sidecar_path=sidecar_path, tex_path=out_path, label=label, order_keys=order_keys,
+            rows=_sidecar_rows, mean_phi=_sidecar_mean_phi, nobs=_sidecar_nobs,
+            r_squared=_sidecar_r2, clusters=_sidecar_clusters, pkl_meta=pkl_meta,
+        )
 
 
 def build_latex_table_landscape(results_dict, order_keys, target_vars, out_path,
@@ -759,6 +886,8 @@ def main():
                         # linear estimators (est1/est2) that actually plot from it (see below)
     mean_phi = {}      # implied national mean phi_t level per estimator (the comparable "level" row)
     models_dict = {}
+    pkl_input_meta = {}   # label -> path/mtime/size of the estimation_results.pkl it came from,
+                          # for the stage-2 sidecar's provenance (see build_latex_table)
 
     for label, d in mapping.items():
         pkl_path = d / "estimation_results.pkl"
@@ -781,6 +910,13 @@ def main():
             continue
 
         models_dict[label] = spec_data
+        _st_ = pkl_path.stat()
+        pkl_input_meta[label] = {
+            "path": str(pkl_path),
+            "mtime_utc": datetime.fromtimestamp(_st_.st_mtime, tz=timezone.utc)
+                                 .isoformat(timespec="seconds"),
+            "size_bytes": _st_.st_size,
+        }
 
         if spec_data.get('first_stage') is not None:
             stage1_res[label] = spec_data['first_stage']
@@ -812,8 +948,15 @@ def main():
     # ONE destination, chosen by environment. cluster_archive.sh packages only
     # data/output/sleep/Rout, so on the cluster a fragment written to the skeleton Drafts
     # dir never reaches the download; locally the paper directory is the only copy that
-    # matters and Rout would just be a second one free to diverge from it.
-    out_dir = _paths_mod.rout_dir() if _paths_mod.on_cluster() else _DRAFTS_DIR
+    # matters and Rout would just be a second one free to diverge from it. A LOCAL run with
+    # SLEEP_OUT_ROOT pointed at a sandbox gets the same treatment: rout_dir() already follows
+    # SLEEP_OUT_ROOT, but _DRAFTS_DIR never does, so without this a sandboxed run overwrote the
+    # paper's own tables with the sandbox's numbers.
+    _sandboxed = _paths_mod.sleep_out_root_set() and not _paths_mod.on_cluster()
+    out_dir = _paths_mod.rout_dir() if (_paths_mod.on_cluster() or _sandboxed) else _DRAFTS_DIR
+    if _sandboxed:
+        print(f"  [sandbox] SLEEP_OUT_ROOT redirects this run: exhibits go to {out_dir}, "
+              f"not Drafts.")
     # EXHIBITS vs DATA. .tex/.png are what the paper reads, so they follow out_dir. The
     # .pkl files are intermediates -- a serialized model bundle and the per-routine band
     # pickles -- and they belong in Rout on BOTH sides: they are not exhibits, the paper
@@ -855,6 +998,10 @@ def main():
         title=spec12_title("Second Stage"),
         label="tab:spec12_stage2_comparison",
         mean_phi=mean_phi,
+        # Unrounded companion to this table's cells, written beside the band pickles rather
+        # than into Drafts: it is DATA (a downstream reader's input), not an exhibit.
+        sidecar_path=data_dir / "est1-4_spec12_stage2_comparison.json",
+        pkl_meta=pkl_input_meta,
     )
     # Landscape variants of BOTH stages for V_Main inclusion (7 columns need the rotated
     # page). Same \labels as the portrait versions, so V_Main only switches which file it
@@ -866,6 +1013,9 @@ def main():
         label="tab:spec12_stage1_comparison",
         placement="ht", first_stage=True,
     )
+    # No sidecar here: this reads the same stage2_res through the same select_se/band_row
+    # calls as the portrait table above, so it prints the identical cells under a different
+    # LaTeX wrapper -- the portrait table's sidecar already covers every number in it.
     build_latex_table_landscape(
         stage2_res, order, target_vars,
         out_dir / "est1-4_spec12_stage2_comparison_landscape.tex",

@@ -99,7 +99,9 @@
 #   --psi-tag T        override the artifact tag (default _ms<N> with --multi-start, else empty).
 #                      Keep it of the form _ms<digits>: make_bbl_cost_tables.py recognises only
 #                      that shape. A tag whose psi_starts on disk records another beta or T is
-#                      refused (--force overrides), so a run never overwrites another design.
+#                      refused (--force overrides), so a run never overwrites another design;
+#                      so is one that records another policy CSV (its sha256) than the one a
+#                      --no-polfunc launch reads.
 #   --promote          let the solve copy its tagged cost_params onto the UNTAGGED name the
 #                      counterfactuals read, but ONLY if the identification gate passes
 #   --beta B --horizon T   override bbl_discount.env (env BETA / HORIZON do the same)
@@ -748,7 +750,7 @@ for k in ${ROUTINES}; do
                     'BEGIN{ d = a - b; if (d < 0) d = -d; exit !(d <= 1e-12 && s == t) }'; then
                 cl_err "REFUSING E${k}: $(basename "${_ps}") records beta=${_ob:-?} T=${_oT:-?}, but this run is beta=${BETA} T=${HORIZON}."
                 cl_err "  Those psi belong to another design and this launch would overwrite them. Use a new"
-                cl_err "  --psi-tag of the form _ms<digits> (for example _ms979), or --force to overwrite deliberately."
+                cl_err "  --psi-tag of the form _ms<digits> that no run has used, or --force to overwrite deliberately."
                 exit 1
             fi
             # The design version, then the model switches: a sidecar written by another version
@@ -761,14 +763,38 @@ for k in ${ROUTINES}; do
                 cl_err "REFUSING E${k}: $(basename "${_ps}") records phi_path=${_ophi} z_path=${_oz} rdep_timing=${_ort},"
                 cl_err "  but this run is phi_path=${PHI_PATH} z_path=${Z_PATH} rdep_timing=${RDEP_TIMING}."
                 cl_err "  Those psi belong to another design and this launch would overwrite them. Use a new"
-                cl_err "  --psi-tag of the form _ms<digits> (for example _ms981), or --force to overwrite deliberately."
+                cl_err "  --psi-tag of the form _ms<digits> that no run has used, or --force to overwrite deliberately."
                 exit 1
+            fi
+            # The policy the psi were simulated around (psi_starts records the sha256 of the policy
+            # CSV). With --no-polfunc this run's CSV is known now: another one would put a second
+            # policy under the tag (a --shard-list launch keeps the other shards). When the polfunc
+            # pre-step is in the graph the CSV is refitted later, and the sweep checks every shard
+            # against it then (bbl_shards.py coverage --policy-csv).
+            _opol="$(cl_bbl_json_str "${_ps}" policy_csv_sha256)"
+            if [[ "${DO_POLFUNC}" != "1" && -n "${_opol}" && -n "${POLICY_CSV:-}" && -f "${POLICY_CSV}" ]]; then
+                _npol="$(sha256sum "${POLICY_CSV}" | cut -d' ' -f1)"
+                if [[ "${_opol}" != "${_npol}" ]]; then
+                    cl_err "REFUSING E${k}: $(basename "${_ps}") records policy_csv_sha256 ${_opol:0:12}, but this run reads"
+                    cl_err "  ${POLICY_CSV} (sha256 ${_npol:0:12}). Those psi were simulated around another policy. Use a"
+                    cl_err "  new --psi-tag that no run has used, or --force to overwrite deliberately."
+                    exit 1
+                fi
             fi
         fi
         # A launch context of another version (a run whose shard 0 has not written its sidecar yet).
         if [[ ! -f "${_ps}" && -f "${DD}/context.env" && "${FORCE}" != "1" ]]; then
             cl_bbl_version_guard "${BBL_KEY}" "a launch under this tag" || {
                 cl_err "  (--force launches over it deliberately.)"; exit 1; }
+        fi
+        # A partial --shard-list launch trusts the shards already on disk. With neither a sidecar nor
+        # a context there is no record of the design they were simulated under, so none is trusted.
+        if [[ -n "${SHARD_LIST}" && "${SHARD_PROBE}" != "1" && "${FORCE}" != "1" && ! -f "${_ps}" && ! -f "${DD}/context.env" ]] \
+                && compgen -G "${CL_STEP_BBL}/psi_dev_${BBL_KEY}_shard*of${N_SHARDS}.parquet" > /dev/null; then
+            cl_err "REFUSING --shard-list E${k}: psi_dev_${BBL_KEY}_shard*of${N_SHARDS} is on disk with no psi_starts sidecar"
+            cl_err "  and no launch context, so nothing records the design (sim_version '${BBL_SIM_VERSION}'?) those shards"
+            cl_err "  were simulated under. Launch the whole design under a NEW --psi-tag, or --force."
+            exit 1
         fi
         # A shard probe writes one file per shard and is read by comparison with other tags' files
         # (bbl_probe_compare.py), so it never replaces one silently: a mistyped tag would otherwise

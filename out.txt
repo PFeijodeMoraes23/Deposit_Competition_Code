@@ -1,0 +1,1 @@
+302 {'status': 302, 'from': 'https://approved.example.com/', 'location': '。evil.example.net/x.pdf', 'host': '', 'reason': "UnicodeEncodeError: 'latin-1' codec can't encode character '\\u3002' in position 0: ordinal not in range(256)"}

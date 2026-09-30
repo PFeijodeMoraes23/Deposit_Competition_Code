@@ -19,15 +19,18 @@ Every request this module sends goes through `fetch`, and what that guarantees i
     passes `url_refusal`: its scheme is http or https, its host passes `allowed_host()`, and its
     authority is that host name and nothing else (no user name, no port but the scheme's default),
     so the host urllib connects to is the approved name. A redirect from https down to http is
-    refused as well: no approved bank needs one (no cached manifest or listing has an http URL or
-    a redirect record), and it would send the rest of the exchange in clear text.
-  * a first URL that fails raises before anything is sent (a listing link that fails is skipped by
-    discovery, like a link to another host). A redirect that fails is not followed and not retried,
-    and the manifest records the refused target and its host (`refused_redirect`). With no good
-    copy cached, the document or listing gets status `unapproved_redirect` and the run carries on
-    with everything else; a good cached copy is kept, with the refusal noted beside it (except an
-    unverified one, below). Nothing is ever sent to a refused target; the next run asks the
-    approved URL again.
+    refused as well: no approved bank needs one (no first URL or listed PDF is http, and whether
+    any server redirects down to http is unknown until a --refresh records the redirects), and it
+    would send the rest of the exchange in clear text.
+  * a first URL that fails raises before anything is sent (a listing link whose `urljoin` or
+    `url_refusal` itself raises, or that fails `url_refusal`, is skipped by discovery, like a link
+    to another host). A redirect that fails is not followed and not retried, and the manifest
+    records the refused target and its host (`refused_redirect`); a redirect target urllib itself
+    refuses to follow (a scheme it will not redirect to, a host it cannot encode) is refused the
+    same way, from the exception it raises, rather than requested. With no good copy cached, the
+    document or listing gets status `unapproved_redirect` and the run carries on with everything
+    else; a good cached copy is kept, with the refusal noted beside it (except an unverified one,
+    below). Nothing is ever sent to a refused target; the next run asks the approved URL again.
   * the URL the answer finally came from and every redirect hop are recorded in the bank's
     manifest (`final_url`, `redirects`).
 What it does NOT guarantee: the check is on host NAMES, so where an approved name leads (its DNS
@@ -101,7 +104,37 @@ RE-RUNNING
   python scrape_bank_notes_advertising.py --banks santander    # one bank, merged into the outputs
   python scrape_bank_notes_advertising.py --ref-months 6 12 --out-dir <folder>   # a partial read
   python scrape_bank_notes_advertising.py --download-only      # fill the cache, parse nothing
+  python scrape_bank_notes_advertising.py --offline             # cache only; requests nothing
 Run with the project interpreter (C:/venvs/egan/Scripts/python.exe).
+
+A CONNECTION LOST MID-RUN STOPS AND RESUMES
+A document's cache entry is saved right after that document is fetched (`Cache.save`), never
+batched, so whatever was already fetched is on disk whatever happens next. (One narrow window: a
+run killed between a document's body landing on disk and its entry being saved leaves the file
+unrecorded, so a resumed run fetches that one document again - never lost, never duplicated.)
+Three connection-level fetch failures in a row (every attempt of each got no complete HTTP
+response - a timeout, a reset connection, a DNS failure, a download that stopped mid-body -
+counted apart from an HTTP error status, which means the path to that host works) make `fetch`
+probe connectivity once, with a short timeout, against the first approved host this run already
+reached or `dados.cvm.gov.br` otherwise: an answer, even an HTTP error, means the run's three
+failures were this run's bad luck, and it carries on; a failed probe means the connection itself is
+down, and the run raises `NetworkLost`, stopping before anything more is fetched. `main` catches it,
+logs how many of the run's listed documents are already cached and how many remain, releases every
+lock (`close_caches`, `atexit`) and exits 75 - never reaching `write_outputs`, so every output table
+is exactly what it was before this run; nothing is half-written.
+TO RESUME: run the exact same command again. `Cache.get` already serves a good cached entry from
+disk without a request (`old_problem is None and not refresh`), so a rerun asks only for the
+documents that are still missing or still failed; nothing already cached is requested again. Once
+discovery and parsing reach the end without another `NetworkLost`, the outputs are written once, in
+the same run that resumed them - there is no separate "finalise" step.
+Ctrl-C (`KeyboardInterrupt`) stops the same way - every lock released, no output written, exit 130 -
+because it is a `BaseException` like `NetworkLost`, so the per-document `except Exception` blocks
+that turn one document's failure into one status row never catch it: it is never mistaken for a
+parsing bug in the file being handled when it lands.
+`--offline` serves only what `Cache.get` already judges good on disk and requests nothing at all,
+success or failure: a document with no good cached copy gets the status `not_fetched_offline`
+instead of being requested. Useful to re-run parsing (a code change, a bumped MIN_TOTAL_MATCH) on
+whatever is already cached, without touching the network at all.
 
 What a run may write where. The output file names are fixed, so a partial run written over them
 would silently replace the combined table with its subset. Hence:
@@ -122,12 +155,22 @@ killed run leaves the previous version of each file whole. The output tables are
   * before the first rename every target is probed: opened for writing, which fails for a
     read-only file or a program that denies writes (a csv open in Excel), and on Windows also
     opened for deletion with no sharing, which fails while ANY other handle is open on it (a
-    reader, an indexer, a sync client), exactly the condition under which a rename over it fails.
-    A blocked target is probed again for about ten seconds, then stops the write before any table
-    is replaced. Off Windows only the first probe runs, because a rename there replaces a file
-    that is open. A program that opens a target in the moment between the probe and its rename,
-    or a failure after that point, is logged with the tables already replaced; a run killed during
-    the renames can still leave some tables new and some old.
+    reader, an indexer, a sync client, even one with no read, write or delete access at all -
+    Windows' sharing checks look at the handle, not at what it was opened for), exactly the
+    condition under which a rename over it fails. A blocked target is probed again for about ten
+    seconds, then stops the write before any table is replaced. Off Windows only the first probe
+    runs, because a rename there replaces a file that is open, aside or directly over it alike.
+  * the renames themselves are all-or-nothing: every existing target is first renamed ASIDE (to
+    `<name>.<token>.old`), never overwritten directly, because NTFS still refuses a rename ONTO a
+    target that any such handle has open even though the probe above found it openable; renaming
+    that target ASIDE instead, and moving the new file into the name it frees, succeeds in exactly
+    those cases. Only once every target has been renamed aside and every new file moved into place
+    are the asides deleted for good; a failure at any point during this - on Windows or off - moves
+    every aside already made back to its name, so a run that fails during the renames leaves every
+    table exactly as it was before the run, never a mix of old and new. A run killed outright
+    (SIGKILL, a lost power) before it could do that leaves an aside file the NEXT write moves back
+    before it reads anything on disk, so a merge run right after never mistakes a missing target
+    for a table that never held any rows.
 """
 
 from __future__ import annotations
@@ -138,11 +181,13 @@ import contextlib
 import functools
 import gzip
 import hashlib
+import http.client
 import io
 import json
 import logging
 import os
 import re
+import socket
 import sys
 import time
 import unicodedata
@@ -183,6 +228,12 @@ RAD_DOC = ("https://www.rad.cvm.gov.br/ENET/frmDownloadDocumento.aspx"
 # server gave it, and the cache fetches it again on the next run instead of serving it.
 DOC_KINDS = ("zip", "pdf")
 LISTING_KINDS = ("html",)
+# `fetch`'s defaults. The timeout is PER SOCKET OPERATION (urllib re-arms it on every read), not
+# for the whole request, so a large PDF read in many chunks is not cut off by it however long the
+# download takes in total; it only bounds how long any one read (or the connect) may go silent,
+# which is what actually tells a stalled connection apart from one still receiving bytes.
+FETCH_TIMEOUT = 60
+FETCH_RETRIES = 3
 # The regulator's document host reports "busy" with HTTP 200 and a plain-text body, not with an
 # error status. Fifteen of these were cached as statements in September 2026 (Santander 2, BTG 7,
 # Daycoval 6) and then reported as byte-identical duplicates of one another. They are named
@@ -205,8 +256,15 @@ PDF_PADDING = b"\x00\t\n\f\r "
 FAILED_SUFFIX = ".failed"
 # A statement link on an own-site listing page, exactly as the discovery functions read it.
 PDF_HREF_RE = re.compile(r'href=["\']([^"\'#]+\.pdf)', re.I)
-# A refreshed listing linking fewer than this share of the PDFs its cached copy links is taken for
-# a degraded page (a partial render, a trimmed error page), not for the bank's new listing.
+# PicPay's and PagBank's own name filters (Volkswagen's and Safra's are bank-specific, above):
+# a name that looks like a statement, and is not one of the fixed pages every site also links in
+# its footer or menu (a privacy policy, terms of use, a regulation) on every page including the
+# listing itself.
+STATEMENT_NAME_RE = re.compile(r"DEMONSTRA|FINANCEIR|BALAN|\bDF\b", re.I)
+NON_STATEMENT_NAME_RE = re.compile(r"PRIVACIDADE|POLITICA|TERMO|REGULAMENTO", re.I)
+# A refreshed listing yielding fewer than this share of the statements its cached copy yields (by
+# the bank's own filter, `listing_problem`'s `listed`, not a raw PDF-link count) is taken for a
+# degraded page (a partial render, a trimmed error page), not for the bank's new listing.
 LISTING_MIN_SHARE = 0.5
 
 # The output tables, in the order they are written. Every one carries `bank_key`, which is what a
@@ -338,6 +396,12 @@ COSIF_LEVEL_OF_SCOPE = {"individual": "institution", "consolidated": "conglomera
 
 MIN_TOTAL_MATCH = 0.70          # floor for the note's own arithmetic, per bank
 SCALE_THOUSANDS = 1_000.0
+# USER's parser-health rule (2026-09-30): one document raising an unclassified exception ('error'
+# status - never one of the named per-document outcomes below) is that file's own bad luck and the
+# run goes on; ERROR_STATUS_GATE or more of them means the parser itself, not any one file, so
+# `validate` stops the run before anything is written. Not a share of the run's size: two is two,
+# whether the run parsed two documents or two thousand.
+ERROR_STATUS_GATE = 2
 # The accounts this route is after, as `category_group` names them.
 ADV_CATEGORIES = ("advertising", "adv_promo_publ_bundled", "adv_promo_bundled", "marketing",
                   "promotions", "publications")
@@ -441,9 +505,14 @@ def url_refusal(url: str) -> str | None:
     its authority is that host name alone, with at most the scheme's default port. The last test
     asks urllib itself which host it would connect to (`Request.host`), so a user name
     ("approved@elsewhere", "elsewhere\\@approved") or another port cannot make the connection
-    differ from the name that was approved.
+    differ from the name that was approved. A URL urllib's own parser cannot split at all (a
+    malformed IPv6 host, `https://[not-an-address/x`) is refused the same way, from what the parser
+    raises, rather than left to raise past this function into a caller that does not expect it.
     """
-    parts = urllib.parse.urlsplit(url)
+    try:
+        parts = urllib.parse.urlsplit(url)
+    except ValueError as exc:
+        return f"urllib cannot parse it ({exc})"
     host = (parts.hostname or "").lower()
     try:
         allowed_host(url)
@@ -483,7 +552,10 @@ class UnapprovedRedirect(RuntimeError):
 
     def __init__(self, code: int, source: str, target: str, reason: str):
         self.code, self.source, self.target, self.reason = code, source, target, reason
-        self.host = (urllib.parse.urlsplit(target).hostname or "").lower()
+        try:
+            self.host = (urllib.parse.urlsplit(target).hostname or "").lower()
+        except ValueError:            # target itself is what urllib could not parse; see fetch
+            self.host = ""
         super().__init__(f"{source} redirected (HTTP {code}) to {target}, which was not requested: "
                          f"{reason}")
 
@@ -501,9 +573,43 @@ class _CheckedRedirects(urllib.request.HTTPRedirectHandler):
         super().__init__()
         self.hops = hops
 
+    def http_error_302(self, req, fp, code, msg, headers):
+        # The base implementation resolves the Location header into an absolute URL, quotes it and
+        # checks its scheme BEFORE ever calling `redirect_request` below - and raises there, not
+        # into it, for a target this module never gets a chance to check: a ValueError ("Invalid
+        # IPv6 URL") for a malformed bracket host, a UnicodeError from `quote()` for a host with no
+        # Latin-1 form, or urllib's own HTTPError ("Redirection to url ... is not allowed") for a
+        # scheme it will not redirect to at all (gopher, and others `url_refusal` would refuse too,
+        # just never asked). Each is treated exactly like a refusal `url_refusal` itself gives: the
+        # raw Location header is what the manifest can record, since no parsed, absolute target
+        # exists to check.
+        try:
+            return super().http_error_302(req, fp, code, msg, headers)
+        except UnapprovedRedirect:
+            raise
+        except urllib.error.HTTPError as exc:
+            if not (exc.code in (301, 302, 303, 307, 308) and "redirection" in str(exc).lower()
+                    and "not allowed" in str(exc).lower()):
+                raise
+            location = headers.get("Location") or headers.get("URI") or ""
+            with contextlib.suppress(Exception):
+                fp.close()
+            raise UnapprovedRedirect(int(code), req.full_url, location or exc.filename or req.full_url,
+                                     f"{type(exc).__name__}: {exc}") from exc
+        except (ValueError, UnicodeError) as exc:
+            location = headers.get("Location") or headers.get("URI") or ""
+            with contextlib.suppress(Exception):
+                fp.close()
+            raise UnapprovedRedirect(int(code), req.full_url, location or "(unparseable target)",
+                                     f"{type(exc).__name__}: {exc}") from exc
+
+    http_error_301 = http_error_303 = http_error_307 = http_error_308 = http_error_302
+
     def redirect_request(self, req, fp, code, msg, headers, newurl):
         # urllib calls this with the target already made absolute and before requesting it, so a
-        # refusal here means the target is never contacted.
+        # refusal here means the target is never contacted. `url_refusal` itself never raises (it
+        # catches urllib's own parse failures and returns them as a reason), so nothing here needs
+        # to guard against `newurl` being unparseable.
         why = url_refusal(newurl)
         if why is None and (urllib.parse.urlsplit(req.full_url).scheme.lower() == "https"
                             and urllib.parse.urlsplit(newurl).scheme.lower() == "http"):
@@ -528,7 +634,112 @@ class Fetched:
     refused: dict | None = None
 
 
-def fetch(url: str, timeout: int = 180, retries: int = 3) -> Fetched:
+class CorruptManifest(Exception):
+    """A bank's manifest.json exists but is not valid JSON (`Cache.__init__`). A plain Exception on
+    purpose, not SystemExit: every `open_cache` call site catches it and contains it to the one
+    bank whose cache state this is, the same way a bad document never takes down the rest of a run.
+    A lock another run holds is a different problem (an operator one, not a state this process can
+    route around) and keeps raising SystemExit, which these per-bank wrappers do not catch."""
+
+
+class NetworkLost(BaseException):
+    """The connection itself appears to be down (the connection-loss breaker in `fetch`), not any
+    one host or document. A `BaseException`, not an `Exception`, like `KeyboardInterrupt` and
+    `SystemExit`: every per-document `except Exception` in this module (and every per-bank
+    `except CorruptManifest`, which is an `Exception`) lets it through untouched, so it is never
+    logged as one document's or one bank's problem. Caught once, in `main`, which stops the run
+    cleanly (see the module docstring's NETWORK section): every manifest already on disk stands,
+    every lock this process holds is released (`close_caches`, run in `main`'s `finally`), and no
+    output table is written, because nothing here ever reaches `write_outputs` once this is
+    raised."""
+
+
+# How many connection-level fetch failures in a row (see `_is_connection_level_failure`; any host,
+# any document) mean the connection itself, not the document or the host, before a short probe
+# decides whether to keep going or stop the run. Matches the USER's ask directly: distinguishable
+# from an ordinary HTTP failure (a 404, a blocked host), which says nothing about the connection.
+CONNECTION_FAILURE_GATE = 3
+PROBE_TIMEOUT = 10        # seconds: short on purpose, so a genuinely lost connection is found fast
+# The regulator's own structured-data host (already used by `scrape_cvm_advertising.py`, reachable
+# without authentication): the probe's target when this run has not yet reached any of its approved
+# hosts (NOTE_HOSTS) successfully. The probe is a connectivity check, never a document, so it is not
+# itself run through `fetch`/`approved_url`/NOTE_HOSTS - nothing here is cached or treated as one of
+# this route's outputs.
+PROBE_FALLBACK_HOST = "dados.cvm.gov.br"
+
+# Mutable module state, not function-local: the breaker counts consecutive failures ACROSS fetch
+# calls (any host, any document), which only a value outliving any one call can do. Reset only by a
+# successful probe or a real HTTP response (`_note_reachable`); a fresh process (a fresh run) always
+# starts at 0.
+_net_breaker: dict = {"consecutive": 0, "reached_host": None}
+
+
+def _is_connection_level_failure(exc: BaseException) -> bool:
+    """True when `exc` means no HTTP response came back at all - a timeout, a reset or refused
+    connection, a DNS failure - as against the server answering with an error status, which proves
+    the path to it works. `HTTPError` is a `URLError` subclass but carries a real response, so it is
+    excluded explicitly here rather than relied on being caught by an earlier `except` clause first:
+    this is also called from `fetch`'s single generic `except Exception`, after the dedicated
+    `except urllib.error.HTTPError` above it has already taken every `HTTPError`."""
+    if isinstance(exc, urllib.error.HTTPError):
+        return False
+    # http.client.HTTPException covers IncompleteRead: a response that started (a 200 with its
+    # Content-Length) and then stopped arriving, the usual signature of a connection dying
+    # mid-download, which none of the socket-level types below would catch.
+    return isinstance(exc, (urllib.error.URLError, socket.timeout, TimeoutError, ConnectionError,
+                            socket.gaierror, http.client.HTTPException))
+
+
+def _probe_connectivity(host: str | None) -> bool:
+    """One short, low-cost GET to `host` (or `PROBE_FALLBACK_HOST`), to tell a lost connection apart
+    from `CONNECTION_FAILURE_GATE` requests of ordinary bad luck in a row. Never raises: any failure
+    here - however it fails - IS the answer `_note_connection_failure` needs (the connection looks
+    down), so it is reported back as False rather than left to propagate into a caller not expecting
+    it."""
+    target = f"https://{host or PROBE_FALLBACK_HOST}/"
+    try:
+        req = urllib.request.Request(target, headers={"User-Agent": USER_AGENT})
+        with urllib.request.urlopen(req, timeout=PROBE_TIMEOUT) as resp:
+            resp.read(1)
+        return True
+    except urllib.error.HTTPError:
+        return True          # a response - even an error one - proves the path itself is up
+    except Exception:
+        return False
+
+
+def _note_reachable(url: str) -> None:
+    """Record that `url`'s host just answered with a real HTTP response (success, an error status,
+    or a redirect `fetch` refused) - proof the network path works - and reset the connection-loss
+    counter: consecutive means consecutive, so any real answer, not only a 2xx, breaks the streak."""
+    _net_breaker["consecutive"] = 0
+    if _net_breaker["reached_host"] is None:
+        with contextlib.suppress(ValueError):
+            _net_breaker["reached_host"] = urllib.parse.urlsplit(url).hostname
+
+
+def _note_connection_failure(url: str) -> None:
+    """One more connection-level failure (`_is_connection_level_failure`); probe once every
+    `CONNECTION_FAILURE_GATE`th one in a row, any host. `NetworkLost` propagates straight out of
+    `fetch` (it is a `BaseException`; nothing in this module catches it before `main`)."""
+    _net_breaker["consecutive"] += 1
+    n = _net_breaker["consecutive"]
+    if n < CONNECTION_FAILURE_GATE:
+        return
+    probe_host = _net_breaker["reached_host"] or PROBE_FALLBACK_HOST
+    log.warning("%d connection-level failures in a row (no HTTP response from any host, most "
+               "recently %s); probing connectivity against %s before treating the next one as "
+               "one more document's bad luck", n, url, probe_host)
+    if _probe_connectivity(probe_host):
+        log.info("  the probe answered: the connection is up, so those stay per-document failures")
+        _net_breaker["consecutive"] = 0
+        return
+    raise NetworkLost(
+        f"{n} connection-level failures in a row, and a connectivity probe against {probe_host} "
+        f"also failed: the connection itself looks down, not bad luck on {url} or a few documents.")
+
+
+def fetch(url: str, timeout: int = FETCH_TIMEOUT, retries: int = FETCH_RETRIES) -> Fetched:
     """GET `url`, following redirects only to URLs `url_refusal` accepts. The one network path.
 
     The request is the one `utils.disclosure_common.http_get` sends (its User-Agent and per-host
@@ -538,34 +749,61 @@ def fetch(url: str, timeout: int = 180, retries: int = 3) -> Fetched:
     anything is sent), and each hop's target is checked before it is requested. A refused hop ends
     the request with `Fetched.refused` set: the answer to it would be the same redirect, so it is
     not retried, and it is the caller's to record as one document's failure.
+
+    `timeout` is urllib's per-socket-operation timeout (the connect, and every read on the
+    response), re-armed on each one, not a ceiling on the whole request - a large PDF read over
+    many reads is unaffected by it however long the download itself takes.
+
+    If every one of `retries` attempts for THIS url fails at the connection level
+    (`_is_connection_level_failure`: no HTTP response at all - a timeout, a reset or refused
+    connection, a DNS failure) and none of them got a response of any other kind either, this call
+    counts as one connection-level failure for the connection-loss breaker
+    (`_note_connection_failure`), which may raise `NetworkLost`. A single HTTP response, even a
+    retried error status, proves the path to that host works and clears it instead
+    (`_note_reachable`): the breaker counts failed CALLS (any host, any document), not failed
+    retries of the one call already explained by a slow or flaky single document. `NetworkLost` is
+    not caught here (it is a `BaseException`) and ends this call and every one above it up to
+    `main`.
     """
     approved_url(url)
     headers = {"User-Agent": USER_AGENT, "Accept-Encoding": "gzip", "Accept": "*/*"}
     status: int | None = None
     hops: list = []
+    every_connection_level = True
     for attempt in range(1, retries + 1):
         hops = []
         opener = urllib.request.build_opener(_CheckedRedirects(hops))
         _throttle(url)
+        got_body = False
         try:
             with opener.open(urllib.request.Request(url, headers=headers),
                              timeout=timeout) as resp:
                 body = resp.read()
+                # The whole body arrived, so the path to this host works, whatever happens to
+                # the body next (a gzip error is the server's problem, not the connection's).
+                got_body = True
+                _note_reachable(url)
                 if resp.headers.get("Content-Encoding", "") == "gzip":
                     body = gzip.decompress(body)
                 return Fetched(int(resp.status), body, resp.geturl(), hops)
         except UnapprovedRedirect as exc:
+            _note_reachable(url)             # a redirect IS a response: the path to this host works
             log.warning("  refused a redirect: %s", exc)
             return Fetched(exc.code, None, exc.source, hops, refused=exc.record())
         except urllib.error.HTTPError as exc:
+            _note_reachable(url)             # an error status is still a response from the server
             status = exc.code
             if exc.code in (403, 404, 410):
                 return Fetched(exc.code, None, exc.filename or url, hops)
             log.warning("HTTP %s on %s (attempt %d/%d)", exc.code, url, attempt, retries)
         except Exception as exc:                        # noqa: BLE001 - retried, then reported
+            if got_body or not _is_connection_level_failure(exc):
+                every_connection_level = False
             log.warning("GET failed %s on %s (attempt %d/%d)", type(exc).__name__, url, attempt,
                         retries)
         time.sleep(min(8.0, 0.8 * 2 ** attempt))
+    if status is None and every_connection_level:
+        _note_connection_failure(url)                   # may raise NetworkLost; see its docstring
     return Fetched(status, None, url, hops)
 
 
@@ -863,7 +1101,8 @@ class Cache:
     xls, html, service_error, other). A URL is served from disk only while its entry is GOOD: a 2xx
     status, a file on disk of exactly the recorded size, and a body of the kind the request expects
     (a statement is a zip or a PDF, a listing is HTML), a PDF ending in "%%EOF", and for a listing
-    a page that links PDFs (`listing_problem`). Anything else is a miss and is requested again: no
+    a page from which the bank's own discovery takes at least one statement (`listing_problem`).
+    Anything else is a miss and is requested again: no
     response, a 404, the regulator's "busy" text served with a 200, a file cut short by a killed
     run, a firewall page served as the listing. A transient failure is therefore never frozen into
     the cache, while a good document is still requested once only, so a rerun works from disk.
@@ -882,11 +1121,12 @@ class Cache:
 
     LOCK_NAME = "cache.lock"
 
-    def __init__(self, bank: str, refresh: bool):
+    def __init__(self, bank: str, refresh: bool, offline: bool = False):
         self.dir = RAW_DIR / bank
         self.dir.mkdir(parents=True, exist_ok=True)
         self.path = self.dir / "manifest.json"
         self.refresh = refresh
+        self.offline = offline
         self.entries: dict[str, dict] = {}
         # URLs requested by this process. Each is requested at most once per run, whether it
         # succeeded or not: a failure is retried by the next run, not by the next call.
@@ -899,7 +1139,14 @@ class Cache:
                 self.entries = json.loads(self.path.read_text(encoding="utf-8"))
             except json.JSONDecodeError as exc:
                 self.close()
-                raise SystemExit(
+                # A plain Exception, not SystemExit: unlike another run holding this bank's lock
+                # (FileLock.acquire, above, still raises SystemExit - a BaseException - so it keeps
+                # stopping the whole run, an operator problem no per-bank wrapper should paper
+                # over), a corrupted manifest is this bank's own state, and open_cache's callers
+                # (collect, parse_all, _main's --download-only) each catch CorruptManifest and
+                # contain it to this one bank, the same way any other per-document failure never
+                # takes down a bank it did not happen to.
+                raise CorruptManifest(
                     f"{self.path} is not valid JSON ({exc}). It was probably cut short by a run "
                     f"killed while writing it; restore it from the sync client's version history, "
                     f"or delete it to have every document requested again.") from exc
@@ -990,15 +1237,27 @@ class Cache:
         `reference` the good cached body it would replace (None when there is none); a reason
         returned makes the body a failure like any other. A redirect `fetch` refused is a failure
         too, recorded under `refused_redirect` with the target and its host.
+
+        `self.offline` never calls `fetch`, whether or not `self.refresh` is set: a good cached
+        entry is still served, exactly as it would be online, but a missing or failed one comes
+        back under a `not_fetched_offline` failure rather than being requested - and is not written
+        into the manifest (it says nothing about whether the URL is fetchable, only that this run
+        chose not to try), so an online run right after still requests it like any other miss.
         """
         approved_url(url)                      # authorisation, before anything is sent
         old = self.entries.get(url)
         if url in self._fetched:
             return old                         # one attempt per run; fetch already retries
         old_problem = self.problem(old, expect, content_check)
-        if old_problem is None and not self.refresh:
+        if old_problem is None and (not self.refresh or self.offline):
             return old
-        got = fetch(quote_url(url), timeout=180, retries=3)
+        if self.offline:
+            return {"url": url, "status": None, "file": old.get("file") if old else None,
+                    "bytes": old.get("bytes") if old else None,
+                    "sha256": old.get("sha256") if old else None,
+                    "kind": old.get("kind") if old else None, "final_url": None, "redirects": [],
+                    "retrieved_at": None, "failure": "not_fetched_offline"}
+        got = fetch(quote_url(url), timeout=FETCH_TIMEOUT, retries=FETCH_RETRIES)
         self._fetched.add(url)
         self.lock.assert_held()                # nothing below is written by a run that lost it
         status, body = got.status, got.body
@@ -1080,13 +1339,19 @@ class Cache:
 _OPEN_CACHES: dict[Path, Cache] = {}
 
 
-def open_cache(bank: str, refresh: bool) -> Cache:
+def open_cache(bank: str, refresh: bool, offline: bool = False) -> Cache:
     """The one Cache per bank this process uses. Discovery and parsing share it, because the lock
-    file makes a second Cache on the same folder a conflicting run."""
+    file makes a second Cache on the same folder a conflicting run.
+
+    Raises `CorruptManifest` when the bank's manifest.json exists but is not valid JSON - every
+    caller (`collect`, `parse_all`, `_main`'s --download-only) catches it and contains it to this
+    one bank - and SystemExit (uncaught by those per-bank wrappers) when another run holds its
+    lock.
+    """
     key = RAW_DIR / bank
     cache = _OPEN_CACHES.get(key)
     if cache is None or not cache._locked:
-        cache = _OPEN_CACHES[key] = Cache(bank, refresh)
+        cache = _OPEN_CACHES[key] = Cache(bank, refresh, offline)
     return cache
 
 
@@ -1095,6 +1360,25 @@ def close_caches() -> None:
     for cache in _OPEN_CACHES.values():
         cache.close()
     _OPEN_CACHES.clear()
+
+
+def _fetch_progress(docs: dict) -> str:
+    """'N of M listed documents are already cached ...; K remain' - read from the Cache objects
+    this process already opened (`_OPEN_CACHES`), not from a separate counter of its own, so it can
+    never drift from what those same caches will do on the next run: `cache.problem(...) is None`
+    is exactly `Cache.get`'s own test for serving an entry from disk without a request. Used to log
+    where a `NetworkLost` left things (see the module docstring's NETWORK section)."""
+    total = cached = 0
+    for bank, bank_docs in docs.items():
+        cache = _OPEN_CACHES.get(RAW_DIR / bank)
+        for d in bank_docs:
+            if d.route == "blocked_host":
+                continue
+            total += 1
+            if cache is not None and cache.problem(cache.entries.get(d.url)) is None:
+                cached += 1
+    return (f"{cached} of {total} listed documents are already cached and will not be requested "
+           f"again; {total - cached} remain. Rerun the exact same command to resume.")
 
 
 # ---------------------------------------------------------------------------
@@ -1305,8 +1589,9 @@ class EncryptedPDF(Exception):
 
 
 class DamagedPDF(Exception):
-    """The PDF opens but cannot be what it claims to be: MuPDF finds no page in it, every page is
-    without text while MuPDF reported damage, or pdfplumber cannot read its page tree."""
+    """The PDF opens but cannot be what it claims to be: MuPDF finds no page in it, a page within
+    its own claimed page count still cannot be loaded, every page is without text or an image while
+    MuPDF reported damage, or pdfplumber cannot read its page tree."""
 
 
 @contextlib.contextmanager
@@ -1331,8 +1616,25 @@ def open_pdf(pdf_bytes: bytes):
 def _text_ref_counts(pdf_bytes: bytes, pages: int = REF_TEXT_PAGES) -> dict[str, int]:
     """How often each balance-sheet date introduced by "em" appears on the first pages."""
     counts: dict[str, int] = {}
+    texts: list[str] = []
     with open_pdf(pdf_bytes) as fz:
-        text = fold(" ".join(fz[i].get_text() for i in range(min(pages, fz.page_count))))
+        # `fz.page_count` can overstate how many pages MuPDF can actually load (its `/Count` is
+        # read from the page tree root, not from walking it), so a plain `range(fz.page_count)`
+        # can ask for a page past what exists. `enumerate(fz)` does not: `Document` has no
+        # `__iter__` of its own, so Python falls back to calling `fz[0], fz[1], ...` and stops
+        # cleanly at the first `IndexError` `fz.__getitem__` raises for a page past the real count,
+        # rather than one asked for by a range fixed before any page was read. A page WITHIN that
+        # real count that still cannot be loaded raises the same IndexError, mid-iteration; that is
+        # the document's own damage, not this loop's, so it is wrapped as such below.
+        try:
+            for i, page in enumerate(fz):
+                if i >= pages:
+                    break
+                texts.append(page.get_text())
+        except IndexError as exc:
+            raise DamagedPDF(f"page {len(texts)} raised {type(exc).__name__} while reading the "
+                             f"reference date: {exc}") from exc
+    text = fold(" ".join(texts))
     for m in REF_HEADING_RE.finditer(text):
         d, mo, y = int(m.group(1)), MONTHS_PT[m.group(2).lower()], int(m.group(3))
         if (mo, d) not in BALANCE_SHEET_DAYS:
@@ -1375,14 +1677,28 @@ def _period_from_text(pdf_bytes: bytes, pages: int = REF_TEXT_PAGES) -> tuple[st
 # `html_text`), so a page is judged by the statements discovery would take from it. A link that
 # `url_refusal` refuses (another host, scheme or port) is skipped, except on PagBank's page, where
 # its documents are recorded as `blocked_host`.
+def _join_href(base: str, href: str) -> str | None:
+    """`href` resolved against `base`, or None when even that cannot be done.
+
+    `urllib.parse.urljoin` itself raises on a malformed href - an unbalanced IPv6 bracket, a host
+    `quote()` cannot encode - before `url_refusal` ever sees a URL to refuse it. Each lister skips a
+    link this returns None for, one bad link at a time, rather than letting the exception stop
+    discovery for every bank in the same run.
+    """
+    try:
+        return urllib.parse.urljoin(base, href)
+    except ValueError:
+        return None
+
+
 def _volkswagen_listed(text: str) -> list[Doc]:
     """Banco Volkswagen publishes its half-year and annual statements as PDFs on its own domain.
     Two entities share the page: BVW (the bank) and CNVW (the consortium administrator, a separate
     institution outside the deposit panel), plus IFRS consolidations which are not the measure."""
     docs = []
     for m in PDF_HREF_RE.finditer(text):
-        url = urllib.parse.urljoin(URL_VWFS_LIST, m.group(1))
-        if url_refusal(url):
+        url = _join_href(URL_VWFS_LIST, m.group(1))
+        if url is None or url_refusal(url):
             continue
         name = urllib.parse.unquote(url.rsplit("/", 1)[-1])
         f = fold(name)
@@ -1406,11 +1722,19 @@ def _pagbank_listed(text: str) -> list[Doc]:
     """PagBank's statement list is on an approved host but every PDF it links is served from
     `acq-static-pages.pagseguro.com.br`, which the user has not approved. The documents are
     recorded here with `route='blocked_host'` and never requested, so the block is visible in the
-    documents table instead of only in a report."""
+    documents table instead of only in a report. The page's own footer also links a privacy-policy
+    PDF from the same approved host as the listing itself, which a name filter keeps out: nothing
+    tells `blocked_host` from a footer link by host alone, and it must not be counted or downloaded
+    as a statement."""
     docs = []
     for m in PDF_HREF_RE.finditer(text):
-        url = urllib.parse.urljoin(URL_PAGBANK_LIST, m.group(1))
+        url = _join_href(URL_PAGBANK_LIST, m.group(1))
+        if url is None:
+            continue
         name = urllib.parse.unquote(url.rsplit("/", 1)[-1])
+        f = fold(name)
+        if NON_STATEMENT_NAME_RE.search(f) or not STATEMENT_NAME_RE.search(f):
+            continue
         ref, label, ref_method = _period_from_filename(name)
         why = url_refusal(url)
         route = "blocked_host" if why else "ir_site"
@@ -1422,14 +1746,19 @@ def _pagbank_listed(text: str) -> list[Doc]:
 
 
 def _picpay_listed(text: str) -> list[Doc]:
-    """PicPay's approved host is `www.picpay.com`. Every PDF its press page links there is taken;
-    the page links none today, so PicPay yields no document."""
+    """PicPay's approved host is `www.picpay.com`. Every statement PDF its press page links there
+    is taken; the page links none today, so PicPay yields no document. A name filter keeps out the
+    footer links every page on the host also carries (a privacy policy, terms of use), which
+    `url_refusal` cannot: they sit on the same approved host as any real statement would."""
     docs = []
     for m in PDF_HREF_RE.finditer(text):
-        url = urllib.parse.urljoin(URL_PICPAY_LIST, m.group(1))
-        if url_refusal(url):
+        url = _join_href(URL_PICPAY_LIST, m.group(1))
+        if url is None or url_refusal(url):
             continue
         name = urllib.parse.unquote(url.rsplit("/", 1)[-1])
+        f = fold(name)
+        if NON_STATEMENT_NAME_RE.search(f) or not STATEMENT_NAME_RE.search(f):
+            continue
         ref, label, ref_method = _period_from_filename(name)
         docs.append(Doc(bank_key="picpay", url=url, route="ir_site", doc_kind="statement",
                         ref_date=ref, ref_date_method=ref_method, entity="PicPay Bank",
@@ -1446,8 +1775,8 @@ def _safra_listed(text: str) -> list[Doc]:
     consolidated-titled document still yields the individual column when it prints one."""
     docs, seen = [], set()
     for m in PDF_HREF_RE.finditer(text):
-        url = urllib.parse.urljoin(URL_SAFRA_LIST, m.group(1))
-        if url_refusal(url):
+        url = _join_href(URL_SAFRA_LIST, m.group(1))
+        if url is None or url_refusal(url):
             continue
         name = urllib.parse.unquote(url.rsplit("/", 1)[-1])
         f = fold(name)
@@ -1515,7 +1844,8 @@ def route_of(bank: str) -> str:
 
 
 def collect(bank_keys: tuple[str, ...], refresh: bool, ref_months, from_year, to_year,
-            versions: str, routes: tuple[str, ...]) -> tuple[dict[str, list[Doc]], list[dict]]:
+            versions: str, routes: tuple[str, ...], offline: bool = False
+            ) -> tuple[dict[str, list[Doc]], list[dict]]:
     """Documents per bank, plus one row per bank that yielded none and why."""
     docs: dict[str, list[Doc]] = {b: [] for b in bank_keys}
     blocked: list[dict] = []
@@ -1533,47 +1863,86 @@ def collect(bank_keys: tuple[str, ...], refresh: bool, ref_months, from_year, to
                     docs[d.bank_key].append(d)
 
     if "ir_site" in routes:
-        for bank in bank_keys:
-            if bank in {BANK_OF_PANEL_CODE[t["panel_code"]] for t in targets("cvm_rad")}:
-                continue
-            if bank in unresolved_keys:
-                blocked.append(dict(bank_key=bank, share_2024q4=share_of[bank],
-                                    status="not_authorised",
-                                    notes="no host pinned in utils/note_sources.py: the registry "
-                                          "lists it as unresolved, so it is not authorised"))
-                continue
-            if bank not in IR_DISCOVERY:
-                blocked.append(dict(bank_key=bank, share_2024q4=share_of[bank],
-                                    status="discovery_not_implemented",
-                                    notes=f"approved host {host_of[bank]} did not yield a statement "
-                                          f"listing in the probe; see the report"))
-                continue
-            cache = open_cache(bank, refresh)
-            found = IR_DISCOVERY[bank](cache)
-            docs[bank].extend(found)
-            if found:
-                continue
-            # Why the listing yielded nothing, from its own manifest entry: a refused redirect is
-            # its own status, so a listing moved behind an unapproved host is visible as such.
-            lurl = IR_LISTINGS[bank][0] if bank in IR_LISTINGS else None
-            lent = cache.entries.get(lurl) or {}
-            refused = lent.get("refused_redirect") if lent.get("failure") else None
-            if refused:
-                blocked.append(dict(bank_key=bank, share_2024q4=share_of[bank],
-                                    url=lurl, status="unapproved_redirect",
-                                    notes=f"the listing redirected (HTTP {refused['status']}) to "
-                                          f"{refused['location']}, host {refused['host']}, which "
-                                          f"was not requested: {refused['reason']}"))
-            elif lent.get("failure"):
-                blocked.append(dict(bank_key=bank, share_2024q4=share_of[bank],
-                                    url=lurl, status="no_documents_listed",
-                                    notes=f"the listing on approved host {host_of[bank]} was not "
-                                          f"usable: {lent['failure']}"))
-            else:
-                blocked.append(dict(bank_key=bank, share_2024q4=share_of[bank],
-                                    status="no_documents_listed",
-                                    notes=f"approved host {host_of[bank]} served, but listed no "
-                                          f"statement PDF on it"))
+        ir_banks = [b for b in bank_keys
+                   if b not in {BANK_OF_PANEL_CODE[t["panel_code"]] for t in targets("cvm_rad")}]
+        try:
+            for bank in ir_banks:
+                if bank in unresolved_keys:
+                    blocked.append(dict(bank_key=bank, share_2024q4=share_of[bank],
+                                        status="not_authorised",
+                                        notes="no host pinned in utils/note_sources.py: the "
+                                              "registry lists it as unresolved, so it is not "
+                                              "authorised"))
+                    continue
+                if bank not in IR_DISCOVERY:
+                    blocked.append(dict(bank_key=bank, share_2024q4=share_of[bank],
+                                        status="discovery_not_implemented",
+                                        notes=f"approved host {host_of[bank]} did not yield a "
+                                              f"statement listing in the probe; see the report"))
+                    continue
+                try:
+                    cache = open_cache(bank, refresh, offline)
+                except CorruptManifest as exc:
+                    # Contained to this bank, like every other open_cache call site; see
+                    # CorruptManifest's docstring for why this is a plain Exception, not SystemExit.
+                    blocked.append(dict(bank_key=bank, share_2024q4=share_of[bank],
+                                        status="cache_error",
+                                        notes=f"{bank}'s cache could not be opened: {exc}"))
+                    log.warning("  %-11s cache error, this bank is skipped: %s", bank, exc)
+                    continue
+                try:
+                    found = IR_DISCOVERY[bank](cache)
+                except Exception as exc:
+                    # One bank's listing failing in a way `_<bank>_listed` did not already guard
+                    # against (a bug here, not a malformed link - those are skipped link by link) is
+                    # this bank's discovery failing, not every other bank's: the loop moves on.
+                    blocked.append(dict(bank_key=bank, share_2024q4=share_of[bank],
+                                        url=IR_LISTINGS[bank][0] if bank in IR_LISTINGS else None,
+                                        status="error",
+                                        notes=f"discovery raised {type(exc).__name__}: {exc}"))
+                    log.warning("  %-11s discovery raised %s: %s", bank, type(exc).__name__, exc)
+                    continue
+                docs[bank].extend(found)
+                if found:
+                    continue
+                # Why the listing yielded nothing, from its own manifest entry: a refused redirect
+                # is its own status, so a listing moved behind an unapproved host is visible as
+                # such.
+                lurl = IR_LISTINGS[bank][0] if bank in IR_LISTINGS else None
+                lent = cache.entries.get(lurl) or {}
+                refused = lent.get("refused_redirect") if lent.get("failure") else None
+                if refused:
+                    blocked.append(dict(bank_key=bank, share_2024q4=share_of[bank],
+                                        url=lurl, status="unapproved_redirect",
+                                        notes=f"the listing redirected (HTTP {refused['status']}) "
+                                              f"to {refused['location']}, host {refused['host']}, "
+                                              f"which was not requested: {refused['reason']}"))
+                elif lent.get("failure"):
+                    blocked.append(dict(bank_key=bank, share_2024q4=share_of[bank],
+                                        url=lurl, status="no_documents_listed",
+                                        notes=f"the listing on approved host {host_of[bank]} was "
+                                              f"not usable: {lent['failure']}"))
+                elif cache.offline:
+                    # --offline never calls Cache.get's fetch path, so a listing with no good cached
+                    # copy leaves no entry at all (the synthetic offline result is never persisted,
+                    # see Cache.get) rather than a recorded failure: this branch, not the general one
+                    # below, is what actually fires while offline.
+                    blocked.append(dict(bank_key=bank, share_2024q4=share_of[bank],
+                                        url=lurl, status="not_fetched_offline",
+                                        notes="--offline: no good cached listing, so nothing was "
+                                              "requested"))
+                else:
+                    blocked.append(dict(bank_key=bank, share_2024q4=share_of[bank],
+                                        status="no_documents_listed",
+                                        notes=f"approved host {host_of[bank]} served, but listed no "
+                                              f"statement PDF on it"))
+        except NetworkLost as exc:
+            done = {b["bank_key"] for b in blocked} | {b for b, ds in docs.items() if ds}
+            log.error("stopping: %s", exc)
+            log.error("  listing discovery reached %d of %d ir_site banks before this; a rerun of "
+                      "the same command resumes (every already-cached listing and document is "
+                      "reused, only what is still missing is requested)", len(done), len(ir_banks))
+            raise
 
     for bank, ds in docs.items():
         log.info("%-14s %3d documents", bank, len(ds))
@@ -1729,7 +2098,6 @@ def window_of(header: str, ref_date: str | None) -> tuple[str, str | None, str |
     if len(dates) == 1:
         d = dates[0]
         end = f"{d[2]}-{d[1]}-{d[0]}"
-        mm = int(d[1])
         if SEM2_RE.search(h):
             return "semester_2_stated", f"{d[2]}-07-01", end, "semester"
         if SEM1_RE.search(h):
@@ -1850,23 +2218,53 @@ def parse_pdf_notes(doc: Doc, pdf_bytes: bytes) -> Parsed:
     # scan (images, no text, nothing wrong) from a file whose every content stream is broken.
     fitz.TOOLS.mupdf_warnings(reset=True)
     with open_pdf(pdf_bytes) as fz:
-        n_pages = fz.page_count
-        text_pages, candidates = 0, []
-        for i in range(n_pages):
-            t = fz[i].get_text()
-            if t.strip():
-                text_pages += 1
-            if re.search(r"PROPAGANDA|PUBLICIDADE|MARKETING|PROMOCO", fold(t)):
-                candidates.append(i)
+        claimed_pages = fz.page_count           # before any page access can lower it; see below
+        text_pages, image_pages, candidates = 0, 0, []
+        n_pages = 0
+        # `fz.page_count` (captured above) can OVERSTATE how many pages MuPDF can actually load:
+        # its `/Count` is read from the page tree root, not from walking it, so `range(n_pages)`
+        # fixed before any page is read can ask for one past the real count. `enumerate(fz)` does
+        # not: `Document` has no `__iter__` of its own, so Python falls back to `fz[0], fz[1], ...`
+        # and stops cleanly at the `IndexError` its own `__getitem__` raises once the real count is
+        # reached, rather than raising it here. A page WITHIN the real count that still cannot be
+        # loaded raises the same IndexError mid-iteration; that is the document's own damage.
+        try:
+            for i, page in enumerate(fz):
+                n_pages = i + 1
+                t = page.get_text()
+                if t.strip():
+                    text_pages += 1
+                elif page.get_images():
+                    image_pages += 1
+                if re.search(r"PROPAGANDA|PUBLICIDADE|MARKETING|PROMOCO", fold(t)):
+                    candidates.append(i)
+        except IndexError as exc:
+            raise DamagedPDF(f"page {n_pages} raised {type(exc).__name__} while reading its "
+                             f"text: {exc}") from exc
         repaired = fz.is_repaired
     warnings = [w for w in fitz.TOOLS.mupdf_warnings(reset=True).splitlines() if w.strip()]
+    if claimed_pages > n_pages:
+        out.notes.append(f"page_count_overstated={claimed_pages}>{n_pages}")
     if text_pages == 0:
-        if repaired or warnings:
+        # A scan is defined by EVERY page carrying an image (`image_pages == n_pages`), not by any
+        # one page carrying one: a text-based statement with a letterhead logo or a signature stamp
+        # on some of its pages (8 of the 46 cached Volkswagen pages, none of them scans) still has
+        # NO text once its content streams are corrupted, and would otherwise pass for a scan on
+        # the strength of a logo alone. A real scan can still make MuPDF repair a garbled
+        # cross-reference table or emit warnings while reading it; that is expected of a scan, not
+        # damage, so only a document where at least one page carries NEITHER text NOR an image,
+        # while MuPDF also had to repair the file or warned about it, is treated as damage rather
+        # than as an unreadable scan.
+        if (repaired or warnings) and image_pages < n_pages:
             raise DamagedPDF(
-                f"none of its {n_pages} pages has text, and MuPDF "
-                f"{'repaired the file' if repaired else 'reported damage'} while reading it"
+                f"only {image_pages} of its {n_pages} pages has an image (none has text), and "
+                f"MuPDF {'repaired the file' if repaired else 'reported damage'} while reading it"
                 f"{f' ({len(warnings)} warnings, first: {warnings[0][:120]})' if warnings else ''}")
         out.notes.append("unreadable_no_text_layer")
+        if repaired:
+            out.notes.append("mupdf_repaired")
+        if warnings:
+            out.notes.append(f"mupdf_warnings={len(warnings)}")
         out.notes.append(f"pages={n_pages}")
         return out
     if text_pages < n_pages:
@@ -2050,6 +2448,19 @@ def _parse_page(doc: Doc, out: Parsed, pno: int, rows: list[list[dict]], page) -
         emitted_total = False
         block_recs: list[dict] = []
         block_totals: list[dict] = []
+        # Daycoval (and any bank whose note heading matches DESPESAS_DE_PESSOAL_E_ADMINISTRATIVAS)
+        # prints several stated totals under ONE heading, one per sub-category ("Total de despesas
+        # de pessoal", "Total de despesas tributarias", "Total de outras despesas administrativas"),
+        # each recapping only the items printed since the sub-category above it - not the whole
+        # note. A single running total_scope per column pooled every sub-category's items against
+        # EVERY one of that column's stated totals (Daycoval's own arithmetic then looked broken:
+        # the pooled sum was the SUM of all three sub-totals, about twice any one of them). SEG_OF
+        # counts, per column, how many stated-total rows that column has already passed, so the
+        # items between one total row and the next carry the SAME segment as the total that recaps
+        # them, and never leak into the sum checked against a different sub-category's total. A
+        # note with only one stated total per column (every other bank read here) keeps every item
+        # in segment 0, so this is a no-op for them.
+        seg_of: dict[int, int] = {}
         for r, amts in zip(block, amounts_per_row):
             if not amts:
                 continue
@@ -2060,6 +2471,7 @@ def _parse_page(doc: Doc, out: Parsed, pno: int, rows: list[list[dict]], page) -
                 break
             cat = category_of(lab)
             is_total = bool(TOTAL_RE.match(fold(lab)))
+            row_cols: list[int] = []
             for (x, v, raw, _yearlike) in amts:
                 j = int(np.argmin([abs(x - c) for c in centres]))
                 if abs(x - centres[j]) > 45:
@@ -2072,6 +2484,7 @@ def _parse_page(doc: Doc, out: Parsed, pno: int, rows: list[list[dict]], page) -
                 if scale_src == "milhares_default":
                     flags.append("scale_defaulted_to_thousands")
                 sc = col_scopes[j] if j < len(col_scopes) else "unknown"
+                seg = seg_of.get(j, 0)
                 rec = line(doc, note_number=num, note_heading=head, section_title=section_title,
                            label_as_published=lab, category_group=cat,
                            cosif_concept=COSIF_CONCEPT.get(cat) if cat else None,
@@ -2080,7 +2493,7 @@ def _parse_page(doc: Doc, out: Parsed, pno: int, rows: list[list[dict]], page) -
                            statement_basis=basis, column_header=header,
                            period_rule=rule, window_start=w0, window_end=w1, frequency=freq,
                            amount_raw=raw, scale=scale, amount_brl=v * scale,
-                           is_total=is_total, total_scope=f"{scope_key}|c{j}",
+                           is_total=is_total, total_scope=f"{scope_key}|c{j}|s{seg}",
                            reversal=bool(v < 0), column_index=j, n_columns=len(centres),
                            page=pno, parse_method="pdfplumber_words",
                            flag_notes=";".join(flags) or None)
@@ -2093,10 +2506,16 @@ def _parse_page(doc: Doc, out: Parsed, pno: int, rows: list[list[dict]], page) -
                                              column_header=header, period_rule=rule,
                                              window_start=w0, window_end=w1,
                                              stated=v * scale, label=lab, scale=scale,
-                                             scope_id=f"{scope_key}|c{j}",
+                                             scope_id=f"{scope_key}|c{j}|s{seg}",
                                              source_file=doc.entry.get("file")))
                     emitted_total = True
+                    row_cols.append(j)
                 block_recs.append(rec)
+            if is_total:
+                # The next item row starts a new segment in every column this total row covered, so
+                # it is compared against the NEXT stated total, never this one again.
+                for j in row_cols:
+                    seg_of[j] = seg_of.get(j, 0) + 1
 
         _normalise_signs(block_recs, block_totals)
         for rec in block_recs:
@@ -2161,8 +2580,13 @@ def _resolve_ref_date(doc: Doc, pdf_bytes: bytes) -> str | None:
     return None
 
 
-# Archive damage that only shows when a member is read: a bad CRC or a broken deflate stream.
-ARCHIVE_ERRORS = (zipfile.BadZipFile, zlib.error, EOFError)
+# Archive damage that only shows when a member is read: a bad CRC or a broken deflate stream
+# (BadZipFile, zlib.error, EOFError), a member `zipfile` itself refuses to extract - one flagged
+# encrypted in its own header, `RuntimeError`, or compressed with a method `zipfile` does not
+# implement (Deflate64, method 9; an unknown method), `NotImplementedError`. A `MemoryError` while
+# inflating a member is not archive damage - the machine failed, not the file - and is kept out of
+# this tuple so `parse_all` can tell the two apart and treat it like any other resource error.
+ARCHIVE_ERRORS = (zipfile.BadZipFile, zlib.error, EOFError, RuntimeError, NotImplementedError)
 
 
 def _pdf_errors() -> tuple[type[BaseException], ...]:
@@ -2215,145 +2639,227 @@ def _is_resource_error(exc: BaseException) -> bool:
     return any(isinstance(e, (MemoryError, fitz.mupdf.FzErrorSystem)) for e in _causes(exc))
 
 
+def _is_unsupported_crypt_filter(exc: BaseException, pdf_bytes: bytes) -> bool:
+    """A trailer naming an `/Encrypt` dictionary whose security handler MuPDF does not implement
+    (a crypt filter it lacks, not a bad password): it fails opening the stream at all, before
+    `fz.needs_pass`/`is_encrypted` in `open_pdf` can even be asked, as `FileDataError: Failed to
+    open stream`. The same message can also mean genuine corruption of the object stream, so the
+    trailer's own bytes decide: corruption would not still name `/Encrypt`. The server holds no
+    other copy of either kind, so this is kept, like `encrypted`, not invalidated."""
+    import fitz
+    return (any(isinstance(e, fitz.FileDataError) for e in _causes(exc))
+            and b"/Encrypt" in pdf_bytes)
+
+
 def parse_all(docs: dict[str, list[Doc]], refresh: bool,
-              max_docs: int | None) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+              max_docs: int | None, offline: bool = False
+              ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """(note lines, stated totals, one status row per listed document) for every document.
 
-    A document's failure is its own row, never the run's. The statuses:
+    A document's failure is its own row, never the run's: whatever is raised while fetching,
+    extracting, opening or parsing ONE document is caught here and becomes that document's status,
+    and the loop moves on to the next one. The statuses:
       parsed / no_advertising_line   read; the second found no advertising line in any note
-      unreadable                     every page is an image without text, and MuPDF saw no damage
+      unreadable                     every page is without text (a scan's images are not damage)
       blocked_host                   listed on a host that is not approved; never requested
       unapproved_redirect            the approved URL redirected to a refused target, which was not
                                      requested (`fetch`)
       fetch_failed / unavailable_link   no good body: an HTTP error, no answer, a body of the
                                      wrong kind, or the site's HTML page served in its place
+      not_fetched_offline            --offline and no good cached copy: never requested
+      cache_error                    this bank's manifest.json could not be opened (`CorruptManifest`);
+                                     contained to this bank, whose documents are none of them read
       bad_archive / bad_document     the body passed the cache checks but is damaged; its entry
                                      is marked failed, so the next run downloads it again
-      encrypted                      the PDF needs a password; kept, the server has no other copy
+      encrypted / unsupported        needs a password, or names a security handler these libraries
+                                     do not implement; kept either way, the server has no other copy
       resource_error                 the machine failed while reading it (out of memory, a failed
                                      system call); kept, read again by the next run
       no_pdf_member / duplicate_content   a delivery without a PDF; a byte-identical copy
-      error                          anything else, a fault in this module: `validate` stops the
-                                     run on it, before any output is written
+      error                          an exception this module did not already have a name for. One
+                                     such row is one odd file; `validate` stops the run before
+                                     anything is written once `ERROR_STATUS_GATE` of them pile up,
+                                     which is when they mean the parser itself, not the file.
+    A `NetworkLost` raised while fetching (the connection-loss breaker in `fetch`) is not one
+    document's status: it is not caught by the per-document handling below (it is a
+    `BaseException`, like `KeyboardInterrupt`, precisely so that the `except Exception` blocks here
+    never mistake it for this one document's problem), and it ends the loop, after logging how much
+    of `docs` is already cached and how much still needs a request (see the module docstring).
     """
     lines, totals, status = [], [], []
     pdf_errors = _pdf_errors()
-    for bank, bank_docs in docs.items():
-        if not bank_docs:
-            continue
-        cache = open_cache(bank, refresh)
-        seen_sha: dict[str, str] = {}
-        for i, doc in enumerate(bank_docs):
-            if max_docs is not None and i >= max_docs:
-                break
-            row = {"bank_key": bank, "url": doc.url, "route": doc.route,
-                   "doc_kind": doc.doc_kind, "ref_date": doc.ref_date,
-                   "ref_date_method": doc.ref_date_method, "version": doc.version,
-                   "filed_at": doc.filed_at, "entity": doc.entity, "label": doc.label,
-                   "file": None, "bytes": None, "http_status": None, "kind": None,
-                   "member": None, "n_lines": 0, "n_totals": 0, "notes": doc.note or None,
-                   "status": None}
-            if doc.route == "blocked_host":
-                row["status"] = "blocked_host"
-                status.append(row)
+    try:
+        for bank, bank_docs in docs.items():
+            if not bank_docs:
                 continue
-            entry = cache.get(doc.url, expect=DOC_KINDS)
-            doc.entry = entry
-            row.update(file=entry.get("file"), bytes=entry.get("bytes"),
-                       http_status=entry.get("status"), kind=entry.get("kind"))
-            # The body must be a document before anything else is asked of it. The byte-duplicate
-            # test used to come first, so the regulator's identical "busy" texts were reported as
-            # duplicates of one another, "parsed once", rather than as failed downloads.
-            problem = cache.problem(entry, DOC_KINDS)
-            refused = entry.get("refused_redirect") if entry.get("failure") else None
-            if problem and refused:
-                row.update(status="unapproved_redirect",
-                           notes=(f"redirected (HTTP {refused['status']}) to "
-                                  f"{refused['location']}, host {refused['host']}, which was not "
-                                  f"requested: {refused['reason']}"))
-                status.append(row)
-                continue
-            if problem:
-                html_page = entry.get("kind") == "html" and _is_2xx(entry.get("status"))
-                row.update(status="unavailable_link" if html_page else "fetch_failed",
-                           notes=("HTTP 200 returned the site's HTML page, not the document"
-                                  if html_page else problem))
-                status.append(row)
-                continue
-            path = cache.file(entry)
-            # A damaged delivery is one document's failure, not the run's: it is recorded, and its
-            # cache entry is marked failed so the next run downloads it again.
             try:
-                body, member, note = pdf_bytes_of(doc, path)
-            except ARCHIVE_ERRORS as exc:
-                reason = f"damaged archive: {type(exc).__name__}: {exc}"
-                cache.invalidate(doc.url, reason)
-                row.update(status="bad_archive", notes=reason)
-                status.append(row)
-                log.warning("  %-11s %-10s %s", bank, doc.ref_date, reason)
+                cache = open_cache(bank, refresh, offline)
+            except CorruptManifest as exc:
+                # This bank's cache state is unreadable; every OTHER bank already processed in this
+                # call, or processed after it, is unaffected - contrast a lock held by another run
+                # (FileLock.acquire's SystemExit), which is not caught here (SystemExit is a
+                # BaseException) and stops the whole run, because two runs is an operator problem,
+                # not a state the cache can route around bank by bank.
+                log.warning("  %-11s cache error, this bank is skipped: %s", bank, exc)
+                for i, doc in enumerate(bank_docs):
+                    if max_docs is not None and i >= max_docs:
+                        break
+                    status.append({
+                        "bank_key": bank, "url": doc.url, "route": doc.route,
+                        "doc_kind": doc.doc_kind, "ref_date": doc.ref_date,
+                        "ref_date_method": doc.ref_date_method, "version": doc.version,
+                        "filed_at": doc.filed_at, "entity": doc.entity, "label": doc.label,
+                        "file": None, "bytes": None, "http_status": None, "kind": None,
+                        "member": None, "n_lines": 0, "n_totals": 0,
+                        "notes": f"{bank}'s cache could not be opened: {exc}",
+                        "status": "cache_error"})
                 continue
-            except Exception as exc:                       # recorded, then raised in validate()
-                row.update(status="error", notes=f"{type(exc).__name__}: {exc}")
+            seen_sha: dict[str, str] = {}
+            for i, doc in enumerate(bank_docs):
+                if max_docs is not None and i >= max_docs:
+                    break
+                row = {"bank_key": bank, "url": doc.url, "route": doc.route,
+                       "doc_kind": doc.doc_kind, "ref_date": doc.ref_date,
+                       "ref_date_method": doc.ref_date_method, "version": doc.version,
+                       "filed_at": doc.filed_at, "entity": doc.entity, "label": doc.label,
+                       "file": None, "bytes": None, "http_status": None, "kind": None,
+                       "member": None, "n_lines": 0, "n_totals": 0, "notes": doc.note or None,
+                       "status": None}
+                if doc.route == "blocked_host":
+                    row["status"] = "blocked_host"
+                    status.append(row)
+                    continue
+                try:
+                    entry = cache.get(doc.url, expect=DOC_KINDS)
+                except Exception as exc:                   # fetching this one document failed in
+                    row.update(status="error", notes=f"{type(exc).__name__}: {exc}")  # a way none
+                    status.append(row)                      # of the specific statuses above names
+                    log.warning("  %-11s %-10s error fetching: %s", bank, doc.ref_date,
+                                row["notes"])
+                    continue
+                doc.entry = entry
+                row.update(file=entry.get("file"), bytes=entry.get("bytes"),
+                           http_status=entry.get("status"), kind=entry.get("kind"))
+                # The body must be a document before anything else is asked of it. The byte-duplicate
+                # test used to come first, so the regulator's identical "busy" texts were reported as
+                # duplicates of one another, "parsed once", rather than as failed downloads.
+                problem = cache.problem(entry, DOC_KINDS)
+                refused = entry.get("refused_redirect") if entry.get("failure") else None
+                if problem and refused:
+                    row.update(status="unapproved_redirect",
+                               notes=(f"redirected (HTTP {refused['status']}) to "
+                                      f"{refused['location']}, host {refused['host']}, which was not "
+                                      f"requested: {refused['reason']}"))
+                    status.append(row)
+                    continue
+                if problem == "not_fetched_offline":
+                    row.update(status="not_fetched_offline",
+                               notes="--offline: no good cached copy, so nothing was requested")
+                    status.append(row)
+                    continue
+                if problem:
+                    html_page = entry.get("kind") == "html" and _is_2xx(entry.get("status"))
+                    row.update(status="unavailable_link" if html_page else "fetch_failed",
+                               notes=("HTTP 200 returned the site's HTML page, not the document"
+                                      if html_page else problem))
+                    status.append(row)
+                    continue
+                path = cache.file(entry)
+                # A damaged delivery is one document's failure, not the run's: it is recorded, and its
+                # cache entry is marked failed so the next run downloads it again.
+                try:
+                    body, member, note = pdf_bytes_of(doc, path)
+                except MemoryError as exc:
+                    # The machine failed inflating the member, not the archive itself: kept, like any
+                    # other resource error, and read again by the next run.
+                    reason = f"the machine failed while extracting the archive member: {exc}"
+                    row.update(status="resource_error", notes=reason)
+                    status.append(row)
+                    log.warning("  %-11s %-10s %s", bank, doc.ref_date, reason)
+                    continue
+                except ARCHIVE_ERRORS as exc:
+                    reason = f"damaged archive: {type(exc).__name__}: {exc}"
+                    cache.invalidate(doc.url, reason)
+                    row.update(status="bad_archive", notes=reason)
+                    status.append(row)
+                    log.warning("  %-11s %-10s %s", bank, doc.ref_date, reason)
+                    continue
+                except Exception as exc:                       # one odd document; the run continues
+                    row.update(status="error", notes=f"{type(exc).__name__}: {exc}")
+                    status.append(row)
+                    log.warning("  %-11s %-10s error extracting: %s: %s", bank, doc.ref_date,
+                                type(exc).__name__, exc)
+                    continue
+                if body is None:
+                    row.update(status="no_pdf_member", notes=note)
+                    status.append(row)
+                    continue
+                sha = entry.get("sha256")
+                if sha and sha in seen_sha:
+                    row.update(status="duplicate_content",
+                               notes=f"byte-identical to {seen_sha[sha]}; parsed once")
+                    status.append(row)
+                    continue
+                if sha:
+                    seen_sha[sha] = entry.get("file")
+                doc.member = member
+                row["member"] = member
+                try:
+                    ref_note = _resolve_ref_date(doc, body) if doc.route == "ir_site" else None
+                    row.update(ref_date=doc.ref_date, ref_date_method=doc.ref_date_method)
+                    parsed = parse_pdf_notes(doc, body)
+                except (EncryptedPDF, MemoryError) + pdf_errors as exc:
+                    why = f"{type(exc).__name__}: {exc}"
+                    if not str(exc):         # a bare wrapper: name what it wraps
+                        why = (f"{type(exc).__name__}("
+                               f"{', '.join(type(e).__name__ for e in _causes(exc)[1:])})")
+                    if isinstance(exc, EncryptedPDF) or _is_encryption_error(exc):
+                        # The server holds no other copy, so the entry is kept: downloading it again
+                        # would bring the same locked file.
+                        row.update(status="encrypted", notes=f"needs a password: {why}")
+                    elif _is_resource_error(exc):
+                        # Not the file's fault, so it is not thrown away; the next run reads it again.
+                        row.update(status="resource_error",
+                                   notes=f"the machine failed while reading it: {why}")
+                    elif _is_unsupported_crypt_filter(exc, body):
+                        # A security handler these libraries do not implement, not a bad password and
+                        # not corruption (see `_is_unsupported_crypt_filter`): the server holds no other
+                        # copy either, so this is kept exactly like `encrypted`.
+                        row.update(status="unsupported",
+                                   notes=f"a security handler these libraries cannot open: {why}")
+                    else:
+                        # A PDF the libraries cannot read passed every cache check (it starts as a PDF
+                        # and ends in %%EOF), so without this it would stop every rerun from disk. It
+                        # is one document's failure, like a damaged archive: recorded, and its entry
+                        # marked failed so the next run downloads it again.
+                        why = f"damaged document: {why}"
+                        cache.invalidate(doc.url, why)
+                        row.update(status="bad_document", notes=why)
+                    status.append(row)
+                    log.warning("  %-11s %-10s %-14s %s", bank, doc.ref_date, row["status"],
+                                row["notes"])
+                    continue
+                except Exception as exc:                       # one odd document; the run continues
+                    row.update(status="error", notes=f"{type(exc).__name__}: {exc}")
+                    status.append(row)
+                    log.warning("  %-11s %-10s error parsing: %s: %s", bank, doc.ref_date,
+                                type(exc).__name__, exc)
+                    continue
+                for rec in parsed.lines:
+                    lines.append(rec)
+                for t in parsed.totals:
+                    totals.append(t)
+                note_txt = "; ".join(parsed.notes + ([ref_note] if ref_note else [])) or None
+                row.update(n_lines=len(parsed.lines), n_totals=len(parsed.totals), notes=note_txt,
+                           status=("unreadable" if "unreadable_no_text_layer" in parsed.notes
+                                   else "parsed" if parsed.lines else "no_advertising_line"))
                 status.append(row)
-                continue
-            if body is None:
-                row.update(status="no_pdf_member", notes=note)
-                status.append(row)
-                continue
-            sha = entry.get("sha256")
-            if sha and sha in seen_sha:
-                row.update(status="duplicate_content",
-                           notes=f"byte-identical to {seen_sha[sha]}; parsed once")
-                status.append(row)
-                continue
-            if sha:
-                seen_sha[sha] = entry.get("file")
-            doc.member = member
-            row["member"] = member
-            try:
-                ref_note = _resolve_ref_date(doc, body) if doc.route == "ir_site" else None
-                row.update(ref_date=doc.ref_date, ref_date_method=doc.ref_date_method)
-                parsed = parse_pdf_notes(doc, body)
-            except (EncryptedPDF, MemoryError) + pdf_errors as exc:
-                why = f"{type(exc).__name__}: {exc}"
-                if not str(exc):         # a bare wrapper: name what it wraps
-                    why = (f"{type(exc).__name__}("
-                           f"{', '.join(type(e).__name__ for e in _causes(exc)[1:])})")
-                if isinstance(exc, EncryptedPDF) or _is_encryption_error(exc):
-                    # The server holds no other copy, so the entry is kept: downloading it again
-                    # would bring the same locked file.
-                    row.update(status="encrypted", notes=f"needs a password: {why}")
-                elif _is_resource_error(exc):
-                    # Not the file's fault, so it is not thrown away; the next run reads it again.
-                    row.update(status="resource_error",
-                               notes=f"the machine failed while reading it: {why}")
-                else:
-                    # A PDF the libraries cannot read passed every cache check (it starts as a PDF
-                    # and ends in %%EOF), so without this it would stop every rerun from disk. It
-                    # is one document's failure, like a damaged archive: recorded, and its entry
-                    # marked failed so the next run downloads it again.
-                    why = f"damaged document: {why}"
-                    cache.invalidate(doc.url, why)
-                    row.update(status="bad_document", notes=why)
-                status.append(row)
-                log.warning("  %-11s %-10s %-14s %s", bank, doc.ref_date, row["status"],
-                            row["notes"])
-                continue
-            except Exception as exc:                       # recorded, then raised in validate()
-                row.update(status="error", notes=f"{type(exc).__name__}: {exc}")
-                status.append(row)
-                continue
-            for rec in parsed.lines:
-                lines.append(rec)
-            for t in parsed.totals:
-                totals.append(t)
-            note_txt = "; ".join(parsed.notes + ([ref_note] if ref_note else [])) or None
-            row.update(n_lines=len(parsed.lines), n_totals=len(parsed.totals), notes=note_txt,
-                       status=("unreadable" if "unreadable_no_text_layer" in parsed.notes
-                               else "parsed" if parsed.lines else "no_advertising_line"))
-            status.append(row)
-            log.info("  %-11s %-10s %-11s lines %4d  totals %3d  %s", bank, doc.ref_date,
-                     row["status"], row["n_lines"], row["n_totals"], note_txt or "")
+                log.info("  %-11s %-10s %-11s lines %4d  totals %3d  %s", bank, doc.ref_date,
+                         row["status"], row["n_lines"], row["n_totals"], note_txt or "")
+    except NetworkLost as exc:
+        log.error("stopping: %s", exc)
+        log.error("  %s", _fetch_progress(docs))
+        raise
     return pd.DataFrame(lines), pd.DataFrame(totals), pd.DataFrame(status)
 
 
@@ -2621,9 +3127,24 @@ def validate(lines: pd.DataFrame, checks: pd.DataFrame, status: pd.DataFrame,
     rows are written with validated = False and the shortfall is logged, so nothing passes
     silently."""
     errors = status[status["status"] == "error"] if not status.empty else status
-    if len(errors):                                                            # check 1
-        raise AssertionError(f"{len(errors)} documents raised while parsing:\n"
-                             f"{errors[['bank_key', 'ref_date', 'notes']].to_string(index=False)}")
+    n_parsed = len(status)                                                     # check 1
+    # 'error' is reserved for an exception this module did not already have a name for - a bug, not
+    # a bad file. Every other per-document outcome (bad_document, bad_archive, encrypted,
+    # unsupported, resource_error, unapproved_redirect, fetch_failed, unavailable_link, unreadable,
+    # blocked_host, no_pdf_member, duplicate_content, not_fetched_offline, cache_error, ...) is
+    # counted, logged and its rows are written; never this gate. One 'error' row is one odd file and
+    # the run goes on; ERROR_STATUS_GATE of them piling up means the same failure was not one file's
+    # bad luck (the parser, a broken pymupdf/pdfplumber install, hit the same bug on more than one
+    # file), so the run stops before anything is written rather than writing tables quietly missing
+    # most of what they should hold.
+    if len(errors):
+        for _, r in errors.iterrows():
+            log.error("  %-11s %-10s error: %s", r["bank_key"], r["ref_date"], r["notes"])
+    if len(errors) >= ERROR_STATUS_GATE:
+        raise AssertionError(
+            f"{len(errors)} of {n_parsed} documents raised while parsing, at or past the gate of "
+            f"{ERROR_STATUS_GATE}: that many at once means the parser, not one odd file:\n"
+            f"{errors[['bank_key', 'ref_date', 'notes']].to_string(index=False)}")
     if not status.empty and status["status"].isna().any():
         raise AssertionError("a listed document has no status")
     if not status.empty:
@@ -2741,11 +3262,15 @@ def _same_dir(p: Path, q: Path) -> bool:
 def _windows_delete_blocker(path: Path) -> str | None:
     """On Windows, why `path` cannot be opened with DELETE access and NO sharing now, or None.
 
-    A rename over a file fails while any other handle is open on it, whatever that handle shares:
-    one opened with FILE_SHARE_DELETE (search indexers, antivirus, sync clients) lets a DELETE
-    probe with full sharing through and still makes the rename fail with WinError 5. Asking for no
-    sharing fails, with a sharing violation, exactly while another handle is open, so this probe
-    fails in the same cases as the rename it stands for. The probe handle is closed at once.
+    A handle opened without FILE_SHARE_DELETE (search indexers, antivirus, sync clients) denies
+    deleting the file at all - by a rename aside or a rename directly over it - and this probe's
+    own request for exclusive access fails the same way, with a sharing violation, while such a
+    handle is open: it fails in exactly the cases a rename ASIDE (what `_write_outputs_locked` does)
+    would fail. A handle with no read, write or delete access at all (attribute-only, SYNCHRONIZE)
+    is invisible to Windows' sharing checks altogether, for this probe exactly as for a rename
+    ASIDE, which is why this probe finding nothing is enough - even though a rename directly OVER
+    the target would still fail for that same handle with WinError 5, which is exactly why
+    `_write_outputs_locked` never does that rename. The probe handle is closed at once.
     """
     import ctypes
     from ctypes import wintypes
@@ -2767,12 +3292,13 @@ def _windows_delete_blocker(path: Path) -> str | None:
 
 
 def _replace_blocker(path: Path) -> str | None:
-    """Why `path` could not be replaced by a rename right now, or None when it can or is absent.
+    """Why `path` could not be renamed ASIDE right now, or None when it can or is absent.
 
     Opening it for writing fails where another program holds it with writes denied (Excel on a
-    csv) or the file is read-only. On Windows `_windows_delete_blocker` then fails while any other
-    handle at all is open on it. Elsewhere that second probe is not run: a POSIX rename replaces
-    a file that is open.
+    csv) or the file is read-only. On Windows `_windows_delete_blocker` then predicts the rename
+    ASIDE this run is actually about to do (see `_write_outputs_locked`), not a rename directly
+    over the target. Elsewhere that second probe is not run: a POSIX rename replaces a file that
+    is open, aside or over alike.
     """
     try:
         with open(path, "r+b"):
@@ -2803,9 +3329,14 @@ def write_outputs(out_dir: Path, tables: dict[str, pd.DataFrame], mode: str,
     second run writing into the same folder waits instead of merging into a table the first is
     about to replace, which would drop the first run's rows. Before the first rename every target
     is probed (`_replace_blocker`), so a file held open elsewhere stops the write with every table
-    still whole, and the lock is checked to be still this run's (`FileLock.assert_held`); a failure
-    after that is logged with the files already replaced. Files are staged under names carrying
-    this run's lock token, so a run that finds its lock taken over removes only its own.
+    still whole, and the lock is checked to be still this run's (`FileLock.assert_held`). The
+    renames themselves are then all-or-nothing: every existing target is renamed ASIDE first, never
+    overwritten directly, the staged files are moved into the names this frees, and only once every
+    one of those has succeeded are the asides deleted for good; a failure anywhere in that moves
+    every aside already made back to its name, so a failure ever leaves every table exactly as it
+    was before this call, never a mix of old and new (`_write_outputs_locked`). Files are staged
+    under names carrying this run's lock token, so a run that finds its lock taken over removes
+    only its own.
     """
     out_dir.mkdir(parents=True, exist_ok=True)
     lock = FileLock(out_dir / OUTPUT_LOCK_NAME, f"output folder {out_dir}")
@@ -2834,6 +3365,20 @@ def _write_outputs_locked(out_dir: Path, tables: dict[str, pd.DataFrame], mode: 
             for p in out_dir.glob(f"{name}.{ext}*.tmp"):
                 with contextlib.suppress(OSError):
                     p.unlink()
+    # A killed run's own aside file (see the rename block below): if the real target is missing
+    # and its aside is still there, that IS the previous run's table under the wrong name, not a
+    # table that never existed, so it is moved back before this run reads what is on disk. A run
+    # that fails mid-rename restores its own asides itself; this only covers one killed outright
+    # (SIGKILL, a lost power) before it could.
+    for name in OUTPUT_TABLES:
+        for ext in ("parquet", "csv"):
+            p = out_dir / f"{name}.{ext}"
+            if p.exists():
+                continue
+            for stray in out_dir.glob(f"{name}.{ext}.*.old"):
+                with contextlib.suppress(OSError):
+                    _replace(stray, p)
+                break
     final: dict[str, pd.DataFrame] = {}
     for name in OUTPUT_TABLES:
         new = tables.get(name)
@@ -2898,36 +3443,72 @@ def _write_outputs_locked(out_dir: Path, tables: dict[str, pd.DataFrame], mode: 
         discard_staged()
         raise
 
+    # All-or-nothing: every existing target is renamed ASIDE first (never overwritten in place),
+    # the staged files are moved into the names this frees, and only once every rename below has
+    # succeeded are the asides deleted for good. A rename directly OVER a target fails while ANY
+    # other handle is open on it, even one with no read, write or delete access at all
+    # (`_windows_delete_blocker`), but NTFS still allows renaming that same target ASIDE and moving
+    # a new file into the name it frees (`aside_probe.py`), so this order succeeds in exactly the
+    # cases the probe above was run for. A failure at any point - staging is already done, so only
+    # these renames remain - moves every aside already made back to its name, so this run's outputs
+    # are always either entirely the new set or entirely the set they were before this call, never
+    # a mix of the two.
     done: list[str] = []
+    asided: dict[Path, Path] = {}
+    step = "probing"
     try:
+        for name in OUTPUT_TABLES:
+            for ext in ("parquet", "csv"):
+                p = out_dir / f"{name}.{ext}"
+                if not p.exists():
+                    continue
+                aside = p.with_name(f"{p.name}.{lock.token[:12]}.old")
+                step = f"renaming {p.name} aside"
+                # Recorded BEFORE the rename: Ctrl-C lands between bytecodes, and one landing
+                # between a rename and its record would leave a table renamed aside that the
+                # rollback does not know to move back. The rollback only moves an aside that exists.
+                asided[p] = aside
+                _replace(p, aside)
         for name in staged:
             for ext in ("parquet", "csv"):
-                _replace(staged_path(name, ext), out_dir / f"{name}.{ext}")
+                p = out_dir / f"{name}.{ext}"
+                step = f"moving {name}.{ext} into place"
+                _replace(staged_path(name, ext), p)
                 done.append(f"{name}.{ext}")
             log.info("%s: %d rows -> %s", name, len(final[name]), out_dir / f"{name}.parquet")
         for name, frame in final.items():
             if not frame.empty:
                 continue
-            stale = [p for p in (out_dir / f"{name}.parquet", out_dir / f"{name}.csv")
-                     if p.exists()]
-            for p in stale:
-                p.unlink()
-                done.append(f"{p.name} (removed)")
-            if stale:
+            removed = [f"{name}.{ext}" for ext in ("parquet", "csv")
+                      if (out_dir / f"{name}.{ext}") in asided]
+            done.extend(f"{r} (removed)" for r in removed)
+            if removed:
                 log.warning("%s has no rows in this run; removed the previous run's %s so it does "
-                            "not pass for current", name, " and ".join(p.name for p in stale))
+                            "not pass for current", name, " and ".join(removed))
             else:
                 log.warning("%s has no rows in this run; not written", name)
+        step = "deleting the asides of the tables just replaced"
+        for aside in asided.values():
+            with contextlib.suppress(OSError):
+                aside.unlink()
     except BaseException:
-        pending = [f"{n}.{e}" for n in staged for e in ("parquet", "csv")
-                   if f"{n}.{e}" not in done]
-        log.error("writing the outputs into %s stopped after %d file change(s). Done: %s. Not "
-                  "done: %s. %s", out_dir, len(done), ", ".join(done) or "none",
-                  ", ".join(pending) or "none",
-                  "Nothing was replaced." if not done else
-                  "The folder now mixes this run's tables with the previous run's; rerun to "
-                  "write the set whole.")
+        restore_failed = []
+        for p, aside in asided.items():
+            try:
+                if aside.exists():
+                    _replace(aside, p)
+            except OSError as exc:
+                restore_failed.append(f"{p.name}: {exc}")
         discard_staged()
+        if restore_failed:
+            log.error("writing the outputs into %s failed while %s, and %d file(s) could not be "
+                      "restored to what they were before this call: %s. The output folder may now "
+                      "mix this run's tables with the previous run's.", out_dir, step,
+                      len(restore_failed), "; ".join(restore_failed))
+        else:
+            log.error("writing the outputs into %s failed while %s; every table renamed aside "
+                      "during this call was restored to what it held before this call, so the "
+                      "folder is whole, not a mix of old and new.", out_dir, step)
         raise
 
 
@@ -2937,6 +3518,19 @@ def _write_outputs_locked(out_dir: Path, tables: dict[str, pd.DataFrame], mode: 
 def main() -> None:
     try:
         _main()
+    except NetworkLost as exc:
+        # Already logged (collect/parse_all) how much of the run is cached and how much remains;
+        # this is only the exit code. Nothing below this reaches write_outputs, so every output
+        # table is exactly what it was before this run.
+        log.error("network lost: %s", exc)
+        sys.exit(75)
+    except KeyboardInterrupt:
+        # A BaseException, like NetworkLost: never caught by a per-document `except Exception`, so
+        # it is never logged as one document's or one bank's problem, and, exactly like NetworkLost,
+        # nothing below this reaches write_outputs.
+        log.error("interrupted (Ctrl-C): stopping. No output was written; every document already "
+                 "cached stays cached. Rerun the exact same command to resume.")
+        sys.exit(130)
     finally:
         close_caches()
 
@@ -2960,6 +3554,10 @@ def _main() -> None:
                          "cached copy. Without it, only failed or damaged cache entries are "
                          "requested again")
     ap.add_argument("--download-only", action="store_true")
+    ap.add_argument("--offline", action="store_true",
+                    help="serve only what is already cached; request nothing at all. A document "
+                         "with no good cached copy is reported as not_fetched_offline. For "
+                         "re-parsing (a code change) without touching the network")
     ap.add_argument("--max-docs", type=int, default=None,
                     help="stop after this many documents per bank (for a smoke run)")
     ap.add_argument("--unvalidated", nargs="*", default=[], choices=BANK_KEYS,
@@ -2980,21 +3578,32 @@ def _main() -> None:
             f"runs merge into the default folder.")
     log.info("output mode: %s (%s)", mode,
              "banks processed: " + ", ".join(sorted(processed)) if mode != "full" else "all banks")
+    if a.offline and a.refresh:
+        log.warning("--offline never requests anything, so --refresh has no effect this run")
 
     RAW_DIR.mkdir(parents=True, exist_ok=True)
     docs, blocked = collect(tuple(a.banks), a.refresh, tuple(a.ref_months), a.from_year,
-                            a.to_year, a.versions, tuple(a.routes))
+                            a.to_year, a.versions, tuple(a.routes), a.offline)
     if a.download_only:
-        for bank, ds in docs.items():
-            if not ds:
-                continue
-            cache = open_cache(bank, a.refresh)
-            for d in ds:
-                if d.route != "blocked_host":
-                    cache.get(d.url, expect=DOC_KINDS)
+        try:
+            for bank, ds in docs.items():
+                if not ds:
+                    continue
+                try:
+                    cache = open_cache(bank, a.refresh, a.offline)
+                except CorruptManifest as exc:
+                    log.warning("  %-11s cache error, this bank is skipped: %s", bank, exc)
+                    continue
+                for d in ds:
+                    if d.route != "blocked_host":
+                        cache.get(d.url, expect=DOC_KINDS)
+        except NetworkLost as exc:
+            log.error("stopping: %s", exc)
+            log.error("  %s", _fetch_progress(docs))
+            raise
         return
 
-    lines, totals, status = parse_all(docs, a.refresh, a.max_docs)
+    lines, totals, status = parse_all(docs, a.refresh, a.max_docs, a.offline)
     if not status.empty and blocked:
         status = pd.concat([status, pd.DataFrame(blocked)], ignore_index=True)
     elif blocked:
