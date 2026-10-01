@@ -1438,14 +1438,16 @@ def brb_cluster_rows(wrows: list[list[dict]], gap: float = BRB_SPLIT_GAP
 
 
 def brb_try_accept_row(out: Parsed, doc: Doc, cl: list[tuple[float, list]], ref: dict, pno: int,
-                       page_key: str, keep_row, key_ns: str, source: str) -> bool:
+                       page_key: str, keep_row, key_ns: str, source: str,
+                       method: str | None = None, tidy: bool = False) -> bool:
     """Tries one clustered candidate row against `ref`'s columns, admitting it only through its
     own TOTAL column (`brb_outside_ok`) and emitting its month amounts as lines on success; a
     candidate that does not reconcile is reported in a note and left out, never forced in. Shared
     by `brb_sweep_outside` (rows lying outside every table pdfplumber's finder returns) and
     `brb_recover_text_tables` (a table's own rows, read by column position because its grid never
     gave it a usable header - `key_ns` keeps their row keys from ever colliding). `source` names
-    what is being read, for the notes."""
+    what is being read, for the notes; `method` words it for `parse_method` where that differs
+    (default: `source`). `tidy` drops the dashes of unprinted month cells that trail a label."""
     merged = brb_outside_candidate([w for _, wr in cl for w in wr], ref)
     singles = [brb_outside_candidate(wr, ref) for _, wr in cl] if len(cl) > 1 else []
     accepted = ([merged] if merged and brb_outside_ok(merged)
@@ -1465,21 +1467,22 @@ def brb_try_accept_row(out: Parsed, doc: Doc, cl: list[tuple[float, list]], ref:
         row_key = f"{page_key}:{key_ns}{int(round(cl[0][0]))}:{k}"
         if not keep_row(row_key):
             continue
+        label = re.sub(r"(?:\s+-)+$", "", c["label"]) if tidy else c["label"]
         for mo, v in c["amounts"].items():
             rec = line(
                 doc, period=f"{ref['year']}{mo:02d}",
                 frequency="monthly", period_rule="document month column",
                 section="PATROCINIOS" if ref["sponsorship"] else "PUBLICIDADE",
-                category=c["label"][:60], detail=c["label"],
+                category=label[:60], detail=label,
                 # the recovered row has no separate classification cell, so its label serves as
                 # both, and brb_group's own rules outrank the table-level guess
-                category_group=brb_group(c["label"], c["label"], bool(ref["sponsorship"])),
+                category_group=brb_group(label, label, bool(ref["sponsorship"])),
                 amount_brl=v, amount_kind="total", reversal=v < 0,
                 total_scope=f"{ref['scope']}:{mo:02d}",
                 extra_scopes=[f"{ref['scope']}:quarter"],
                 line_id=f"{row_key}:m{mo:02d}", content_key=f"{row_key}:m{mo:02d}",
                 table_id=ref["scope"], page_or_sheet=f"p{pno}",
-                parse_method=f"pdfplumber words, {source} ({where})")
+                parse_method=f"pdfplumber words, {method or source} ({where})")
             rec["_table"], rec["_month"] = ref["scope"], mo
             out.lines.append(rec)
         out.notes.append(f"{ref['scope']}: recovered a row {source} on p{pno}, {where}, "
@@ -1520,8 +1523,9 @@ def brb_sweep_outside(out: Parsed, doc: Doc, page, pno: int, state: dict, snap: 
         ref = snap if above else state
         if not (ref.get("month_cols") and ref.get("col_x") and ref.get("scope")):
             continue
-        brb_try_accept_row(out, doc, cl, ref, pno, page_key, keep_row,
-                           key_ns="sweep", source="outside the detected table")
+        brb_try_accept_row(out, doc, cl, ref, pno, page_key, keep_row, key_ns="sweep",
+                           source="outside the detected table",
+                           method="row outside any detected table")
 
 
 # A notice's own closing total line, its TABLE'S quarter, never the annual figure a few lines
@@ -1563,6 +1567,115 @@ def brb_col_bands(xmids: list[float], pad: float = 45.0) -> dict[int, tuple[floa
     return bands
 
 
+def brb_total_basis(label: str, basis: str | None) -> str | None:
+    """The basis a total row's own label states: 'TOTAL CONTABILIZADO...' accrued, 'TOTAL
+    PAGO...' paid, 'TOTAL REALIZADO...' undocumented unless the table already has a basis."""
+    f = fold(label)
+    if "CONTABILIZADO" in f:
+        return "accrued"
+    if "PAGO" in f:
+        return "paid"
+    if "REALIZADO" in f and basis is None:
+        return "undocumented"
+    return basis
+
+
+BRB_CID_DASH_RE = re.compile(r"\s*\(cid:177\)\s*")
+
+
+def brb_stacked_records(page, tobj, col_x: dict, first_m: int, amount_cols: list[int],
+                        body_top: float) -> dict | None:
+    """Labels of a table whose records print stacked over several grid rows (the 2016Q1 bank and
+    brokerage tables): the amounts and the purpose cell sit on one printed line, the beneficiary and
+    classification cells start a line above it and finish a line or two below it, and the grid
+    cuts the printed line into rows whose label cells are blank, so a row read alone inherits the
+    previous record's labels.
+
+    A record is the printed line carrying money in the amount columns. The label words between two
+    such lines are split at the widest vertical gap between them (a tie within half a point goes to
+    the cut nearest the midpoint), each side going to its own record, then sorted into the label
+    columns by x position. Returns `tops` (the record lines' y positions), `labels` (one list of
+    `first_m` strings per record, '(cid:177)', a dash whose glyph has no Unicode map, read as a
+    hyphen) and `money` (the amount words, for `brb_stacked_center`)."""
+    x_lo, x_hi = tobj.bbox[0] - 1, tobj.bbox[2] + 1
+    words = [w for w in page.extract_words(x_tolerance=1.5, y_tolerance=2)
+             if body_top - 1 <= w["top"] <= tobj.bbox[3] + 1 and x_lo <= xmid(w) <= x_hi]
+    amt_x = min((col_x[j][0] for j in amount_cols if j in col_x), default=None)
+    if amt_x is None:
+        return None
+    amt_x -= 2
+    lab = [w for w in words if xmid(w) < amt_x]
+    money = sorted((w for w in words if xmid(w) >= amt_x and brb_is_money_word(w["text"])),
+                   key=lambda w: w["top"])
+    lines: list[list[dict]] = []
+    for w in money:
+        if lines and w["top"] - lines[-1][-1]["top"] <= 2.0:
+            lines[-1].append(w)
+        else:
+            lines.append([w])
+    if not lines:
+        return None
+    tops = [sum(w["top"] for w in ln) / len(ln) for ln in lines]
+    positions = sorted({round(w["top"], 1) for w in lab} | {round(t, 1) for t in tops})
+    cuts = []
+    for a, b in zip(tops, tops[1:]):
+        between = [p for p in positions if a - 0.6 <= p <= b + 0.6]
+        gaps = [(q - p, (p + q) / 2) for p, q in zip(between, between[1:])]
+        mid = (a + b) / 2
+        widest = max((g for g, _ in gaps), default=0.0)
+        cuts.append(min((m for g, m in gaps if g >= widest - 0.5), default=mid,
+                        key=lambda m: abs(m - mid)))
+    # label columns: the header's own cells, the one the grid left out (None) filled from its
+    # neighbours
+    bands, lo = [], x_lo
+    for j in range(first_m):
+        if j in col_x:
+            lo_j, hi_j = col_x[j]
+        else:
+            lo_j = lo
+            hi_j = next((col_x[k][0] for k in range(j + 1, first_m) if k in col_x), amt_x)
+        bands.append((lo_j, hi_j))
+        lo = hi_j
+    cells: list[list[list[dict]]] = [[[] for _ in range(first_m)] for _ in tops]
+    for w in lab:
+        k = sum(1 for c in cuts if w["top"] > c)
+        j = next((i for i, (b0, b1) in enumerate(bands) if b0 - 0.5 <= xmid(w) < b1),
+                 min(range(first_m), key=lambda i: abs(xmid(w) - bands[i][0])))
+        cells[k][j].append(w)
+
+    def text_of(ws: list[dict]) -> str:
+        ws = sorted(ws, key=lambda w: w["top"])
+        out, run = [], []
+        for w in ws:
+            if run and w["top"] - run[-1]["top"] > 1.0:
+                out += [x["text"] for x in sorted(run, key=lambda x: x["x0"])]
+                run = []
+            run.append(w)
+        out += [x["text"] for x in sorted(run, key=lambda x: x["x0"])]
+        t = BRB_CID_DASH_RE.sub(" - ", " ".join(out))
+        return re.sub(r"\s*-\s*$", "", t).strip()
+
+    return {"tops": tops, "money": money,
+            "labels": [[text_of(ws) for ws in rec] for rec in cells]}
+
+
+def brb_stacked_center(stack: dict, tobj, ridx: int, row: list, amount_cols: list[int]
+                       ) -> int | None:
+    """Index of the stacked record a grid row's amount cells belong to: the amount word the row's
+    own first non-blank amount cell holds, matched to the nearest record line."""
+    cells = tobj.rows[ridx].cells
+    for j in amount_cols:
+        if j >= len(row) or j >= len(cells) or cells[j] is None or not str(row[j] or "").strip():
+            continue
+        c = cells[j]
+        for w in stack["money"]:
+            mid = (w["top"] + w["bottom"]) / 2
+            if c[0] <= xmid(w) <= c[2] and c[1] - 0.5 <= mid <= c[3] + 0.5:
+                k = min(range(len(stack["tops"])), key=lambda i: abs(stack["tops"][i] - w["top"]))
+                return k if abs(stack["tops"][k] - w["top"]) <= 2.5 else None
+    return None
+
+
 def brb_recover_text_tables(out: Parsed, doc: Doc, path: Path, pub: dict | None, page, pno: int,
                             lines: list[dict], anchors: list[int], page_key: str, ctx: BrbContext,
                             snap: dict, keep_row) -> bool | None:
@@ -1583,15 +1696,15 @@ def brb_recover_text_tables(out: Parsed, doc: Doc, path: Path, pub: dict | None,
     2. A QDD heading on this page whose own table has produced no line and no total anywhere in
        this run (`ctx.observed`) - an entity the grid never read at all (2016Q1's finance company:
        its own column header misprints OUTUBRO/NOVEMBRO/DEZEMBRO where JANEIRO/FEVEREIRO/MARCO
-       belong, so months are taken from the heading's own quarter instead, per the user's rule,
-       not from that header). An entity that already has SOME data from elsewhere on the page
-       (Cartao BRB's table, which the grid does read, short of its own total for an unrelated,
-       already-reported reason) is left alone; only a genuinely unread table is registered here.
+       belong, so months are taken from the heading's own quarter instead, not
+       from that header). An entity that already has SOME data from elsewhere on the page
+       (Cartao BRB's table, which the grid does read) is left alone; only a genuinely unread table is registered here.
 
     Either recovery first finds the table's own closing total row by text
     (`brb_find_quarter_total_row`); the table is left unobserved and reported, never guessed at,
     where that row cannot be found or does not print exactly one amount per month plus its own
-    total. Body rows in the table's span are then read the same way `brb_sweep_outside` reads rows
+    total. The table's basis is the one that row's label states (`brb_total_basis`), the same rule
+    the grid applies to a total row it reads cell by cell. Body rows in the table's span are then read the same way `brb_sweep_outside` reads rows
     outside a detected table (`brb_try_accept_row`, shared), admitting each only through its own
     TOTAL cell.
 
@@ -1682,6 +1795,8 @@ def brb_recover_text_tables(out: Parsed, doc: Doc, path: Path, pub: dict | None,
                     "unobserved rather than guessed")
             else:
                 _, vals = got
+                own = ctx.tables[snap["scope"]]
+                own["basis"] = brb_total_basis(row_text(total_row), own["basis"])
                 out.totals.append({
                     "scope": f"{snap['scope']}:quarter", "stated": vals[-1],
                     "label": "quarter total (read by column position)", "_table": snap["scope"],
@@ -1702,14 +1817,14 @@ def brb_recover_text_tables(out: Parsed, doc: Doc, path: Path, pub: dict | None,
             # rows already read correctly on the per-cell grid path.
             for cl in brb_cluster_rows([wr for wr in rows_here if wr is not total_row]):
                 brb_try_accept_row(out, doc, cl, snap, pno, page_key, keep_row,
-                                   key_ns="text", source="of a table read by column position")
+                                   key_ns="text", source="of a table read by column position",
+                                   tidy=True)
 
     # (2) each heading on this page whose table the grid never read at all. Gated to 2016Q1 for the
     # same reason as (1): a heading whose table produced nothing YET on this page can be genuinely
     # unread (2016Q1's finance company), or it can simply be a table this file has not reached the
     # body of yet (its detail rows are on a LATER page still to come) - the two are told apart, for
-    # every other quarter, by the existing `entity_rule` logic already on the grid path, which this
-    # round did not re-verify end to end.
+    # every other quarter, by the existing `entity_rule` logic already on the grid path.
     for gi, b in enumerate(blocks):
         head = b["head"]
         entity = head["entity"] or (doc.entity if head["conflict"] and doc.entity in
@@ -1755,7 +1870,8 @@ def brb_recover_text_tables(out: Parsed, doc: Doc, path: Path, pub: dict | None,
             "published": pub["date"] if pub else None,
             "publication": pub["label"] if pub else None,
             "first_read": f"{path.name} p{pno}",
-            "listing_entity": doc.entity, "notice": "", "tails": set(), "basis": None,
+            "listing_entity": doc.entity, "notice": "", "tails": set(),
+            "basis": brb_total_basis(row_text(total_row), None),
             "total_is_sum": False, "listing_year": doc.year, "listing_quarter": doc.quarter,
             "file_order": ctx.file_order})
         out.totals.append({
@@ -1774,7 +1890,8 @@ def brb_recover_text_tables(out: Parsed, doc: Doc, path: Path, pub: dict | None,
             "heading into its own rows and could not be read cell by cell")
         for cl in brb_cluster_rows(body_rows):
             brb_try_accept_row(out, doc, cl, ref, pno, page_key, keep_row,
-                               key_ns=f"text{gi}", source="of a table read by column position")
+                               key_ns=f"text{gi}", source="of a table read by column position",
+                               tidy=True)
     return ok if attempted else None
 
 
@@ -1918,6 +2035,7 @@ def parse_brb(doc: Doc, path: Path, ctx: BrbContext | None = None) -> Parsed:
                 probe = [i for i, r in enumerate(rows)
                          if any(str(c or "").strip() for c in r)][:8]
                 hdr = next((i for i in probe if brb_month_cols(rows[i])), None)
+                col_shift = 0
                 # A published total row closes its table, so the next table object begins a new
                 # one even where its header is unreadable. Narrow layouts hyphenate the month
                 # names ("OUTU- BRO"), which defeats header detection, and without this rule the
@@ -1946,6 +2064,7 @@ def parse_brb(doc: Doc, path: Path, ctx: BrbContext | None = None) -> Parsed:
                     # dropped rows (two Metropoles rows of 300,000 in 2025Q1, caught by the
                     # published-total check).
                     shift = len(rows[0]) - state["ncols"]
+                    col_shift = shift
                     if shift and all(j + shift >= 0 for j in state["month_cols"]):
                         state = dict(state,
                                      month_cols={j + shift: mo for j, mo in state["month_cols"].items()},
@@ -1985,9 +2104,7 @@ def parse_brb(doc: Doc, path: Path, ctx: BrbContext | None = None) -> Parsed:
                     # multi-page annual tables elsewhere in the corpus (the "SUMAR"/"GEPUP_GEPAC"
                     # documents) legitimately name every conglomerate member in their own
                     # boilerplate AND carry a reprinted anchor phrase, which reads as "foreign" by
-                    # this same test without actually being a second notice folded in, and validating
-                    # a broader trigger safely against the full 2014-2025 corpus is future work, not
-                    # this round's.
+                    # this same test without actually being a second notice folded in.
                     own_meta = ctx.tables[state["scope"]]
                     foreign = False
                     if own_meta.get("year") == 2016 and own_meta.get("quarter") == 1:
@@ -2071,6 +2188,16 @@ def parse_brb(doc: Doc, path: Path, ctx: BrbContext | None = None) -> Parsed:
                 prev = [""] * first_m
                 month_stated: dict[int, float] = {}
                 offset = len(rows) - len(body)
+                # 2016Q1's three-label-column tables print each record stacked over several grid
+                # rows (`brb_stacked_records`); the other quarters, and Cartao BRB's four-column
+                # table, are read row by row as the grid gives them.
+                stack = None
+                if (meta.get("year") == 2016 and meta.get("quarter") == 1 and first_m == 3
+                        and not col_shift and state.get("col_x") and len(tobj.rows) == len(rows)):
+                    stack = brb_stacked_records(
+                        page, tobj, state["col_x"], first_m, amount_cols,
+                        tobj.rows[hdr].bbox[3] if hdr is not None else top)
+                stacked_rows: dict[int, dict] = {}
                 for ridx, r in enumerate(body, start=offset):
                     row_key = f"{page_key}:t{tidx}:r{ridx}"
                     r = split_merged_amounts(r, amount_cols, BRB_AMOUNT_RE)
@@ -2100,12 +2227,7 @@ def parse_brb(doc: Doc, path: Path, ctx: BrbContext | None = None) -> Parsed:
                     gap = brb_row_total_gap(r, repaired, tc)
                     amounts = repaired
                     if brb_is_total_row(labels):
-                        if "CONTABILIZADO" in flab:
-                            state["basis"] = "accrued"
-                        elif "PAGO" in flab:
-                            state["basis"] = "paid"
-                        elif "REALIZADO" in flab and state["basis"] is None:
-                            state["basis"] = "undocumented"
+                        state["basis"] = brb_total_basis(flab, state["basis"])
                         qv = brb_cell_amount(r[tc]) if tc is not None and tc < len(r) else None
                         if any(v is not None for v in amounts.values()):
                             state["closed"] = True
@@ -2169,7 +2291,12 @@ def parse_brb(doc: Doc, path: Path, ctx: BrbContext | None = None) -> Parsed:
                         continue
                     if all(v is None for v in amounts.values()):
                         continue
-                    labels = [lab or prev[j] for j, lab in enumerate(labels)]
+                    center = (brb_stacked_center(stack, tobj, ridx, rows[ridx], amount_cols)
+                              if stack else None)
+                    if center is not None:
+                        labels = stack["labels"][center]
+                    else:
+                        labels = [lab or prev[j] for j, lab in enumerate(labels)]
                     prev = labels
                     if not keep_row(row_key):
                         continue
@@ -2177,6 +2304,24 @@ def parse_brb(doc: Doc, path: Path, ctx: BrbContext | None = None) -> Parsed:
                     classification = labels[1] if first_m >= 2 else ""
                     purpose = " ".join(labels[2:]) if first_m >= 3 else ""
                     group = brb_group(classification, purpose, sponsorship)
+                    if center is not None:
+                        # Every row of a stacked table that is not propaganda or publicacoes is a
+                        # patrocinio row (Esportes, Negocios, Entretenimento, ...).
+                        group = "sponsorship" if group == "other" else group
+                        # The record's month cells may sit on several grid rows; its TOTAL is
+                        # compared once, against all of them.
+                        rec_sum = stacked_rows.setdefault(center, {
+                            "sum": 0.0, "stated": None, "cells": {}, "row_key": row_key,
+                            "label": f"{beneficiary} | {purpose}".strip(" |")[:60]})
+                        rec_sum["row_key"] = row_key
+                        for mo, v in amounts.items():
+                            if v is not None:
+                                rec_sum["sum"] += v
+                                rec_sum["cells"][mo] = rec_sum["cells"].get(mo, 0.0) + v
+                        qv_row = brb_cell_amount(r[tc]) if tc is not None and tc < len(r) else None
+                        if rec_sum["stated"] is None:
+                            rec_sum["stated"] = qv_row
+                        gap = None
                     if gap is not None:
                         out.gaps.append({"table": scope, "row_key": row_key, "gap": gap,
                                          "label": f"{beneficiary} | {purpose}".strip(" |")[:60],
@@ -2199,6 +2344,14 @@ def parse_brb(doc: Doc, path: Path, ctx: BrbContext | None = None) -> Parsed:
                         out.lines.append(rec)
                         out.periods.add((meta["entity"], rec["period"]))
                         ctx.observed.add((meta["entity"], state["year"], state["quarter"]))
+                for rec_sum in stacked_rows.values():
+                    gap = (None if rec_sum["stated"] is None
+                           else rec_sum["stated"] - rec_sum["sum"])
+                    if gap is not None and abs(gap) > 0.05:
+                        out.gaps.append({"table": scope, "row_key": rec_sum["row_key"],
+                                         "gap": gap, "label": rec_sum["label"],
+                                         "cells": rec_sum["cells"], "file": path.name,
+                                         "page": pno})
                 bases.setdefault(scope, state["basis"])
                 # The notice's own text below this part of the table, up to the next heading or
                 # table, carries any republication note ("Retificam-se ...", "Republicado por ...")
@@ -2253,8 +2406,7 @@ def parse_brb(doc: Doc, path: Path, ctx: BrbContext | None = None) -> Parsed:
                 # `find_all_next` always yields the same DOM order for the same cached HTML) - so
                 # the same two files resolve to the same winner on every run against this cache;
                 # `by_href` keys on `href`, so two different files can never tie for the same
-                # listing position, but where a discovery function's order ever could, the file
-                # name is the documented second key to break it by, never left to chance.
+                # listing position. Only the listing order decides.
                 ctx.pages[page_key] = {"first": seen["first"] if seen else f"{path.name} p{pno}",
                                        "complete": bool(seen and seen["complete"]) or complete}
         for ln in out.lines:

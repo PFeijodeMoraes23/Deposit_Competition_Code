@@ -95,6 +95,7 @@ import make_blp_rc_table as rc          # load_stage, alpha_of, mean_rho_one_min
 from utils import paths as _paths
 from utils import routines as _routines
 from utils import state_transform as _st
+from utils.window import MIN_YEAR, MAX_YEAR
 
 try:
     sys.stdout.reconfigure(encoding="utf-8")
@@ -111,6 +112,7 @@ BLP_STAGE = "ext1"                      # Table 6 (make_blp_demand_comparison_ta
 LOGIT_SUBMODEL = "full"                 # Table 5 (blp_logit.jl COMPARISON_SUBMODEL)
 D6_DIR = EST_OUT / "DIAG_PHI_SEPARATION"
 ROUTINES = tuple(_routines.LINK_ESTS)   # E3, E4
+LINEAR_ROUTINES = tuple(e for e in _routines.ACTIVE if e not in _routines.LINK_ESTS)   # E1, E2
 BLOCKS = ("B", "D")
 PHI_HORIZONS = {0: "t=0", 40: "X (t=40)", 250: "Y (t=250)"}
 
@@ -435,6 +437,12 @@ def collect_bbl(doc: dict, path: pathlib.Path, target: str, sc_target: str, note
     blocks = ct.get("blocks") or {}
     t7 = table(T7)
     thr = next((b.get("cond_max") for b in blocks.values() if b.get("cond_max")), None)
+    if thr is not None:
+        add("bbl.t7.cond_gate", "3.5(a) Table 7", "Condition-index gate of Table 7", thr,
+            "ridge_cond_max: the pooled condition index above which a block's omega and zeta are "
+            "not read separately (bbl_solve.py --ridge-cond-max). A setting of the solve, the "
+            "same for every run", f"{src} sections.cost_tables.blocks.*.cond_max", "ok",
+            display=disp(thr))
     panel = {"B": "(B) Firms", "D": "(D) Firms"}
     # Table 7 prints B and D side by side (columns keyed (routine, firm type), row labels shared)
     # or stacked in panels (columns keyed by routine); both are read.
@@ -877,24 +885,51 @@ def national_mean_phi(E):
     return float(nd[col].mean()), p, col, int(nd[col].notna().sum())
 
 
+def add_mean_phi(E, t4):
+    """Table 4's Mean phi-hat of routine E, in pp and as a fraction. -> (fraction, pp)."""
+    mp, mp_path, mp_col, nq = national_mean_phi(E)
+    mp_pp = mp * _st.PHI_DISPLAY
+    add(f"sleep.meanphi.E{E}", "C (input)", f"Mean phi-hat (pp), Table 4, {rname(E)}", mp_pp,
+        "Population-weighted national phi-hat_t averaged over quarters, in pp (Table 4 row "
+        "'Mean phi-hat (pp)')",
+        f"{mp_path.relative_to(EST_OUT)} mean of {mp_col} ({nq} quarters) x PHI_DISPLAY",
+        "ok", display=disp(mp_pp), unit="pp",
+        checks=[check_cell(T4, f"Mean phi-hat row, {rname(E)}",
+                           t4.cell(t4.find(r"Mean $\hat{\phi}$"), E), [mp_pp])])
+    add(f"sleep.meanphi_frac.E{E}", "C (input)", f"Mean phi-hat as a fraction, {rname(E)}", mp,
+        f"sleep.meanphi.E{E} / 100 (the prose's 'phi = 0.983')",
+        f"{mp_path.relative_to(EST_OUT)} mean of {mp_col} ({nq} quarters)", "ok",
+        display=disp(mp), unit="fraction")
+    if mp < 1.0:
+        awake_pp = _st.PHI_DISPLAY - mp_pp
+        add(f"sleep.awake.E{E}", "C", f"Mean awake share (pp), {rname(E)}", awake_pp,
+            "100 minus Table 4's Mean phi-hat (pp): the share of balances re-optimized in a quarter",
+            f"100 - sleep.meanphi.E{E}", "ok", display=disp(awake_pp), unit="pp")
+        add(f"sleep.awake_frac.E{E}", "C", f"Mean awake share as a fraction, {rname(E)}", 1.0 - mp,
+            f"1 - sleep.meanphi_frac.E{E} (the factor of the on-impact elasticity)",
+            f"1 - sleep.meanphi_frac.E{E}", "ok", display=disp(1.0 - mp), unit="fraction")
+        add(f"sleep.wait.E{E}", "C", f"Average wait until a balance is re-optimized, {rname(E)}",
+            dict(quarters=1.0 / (1.0 - mp), years=0.25 / (1.0 - mp)),
+            "1 / (1 - mean phi-hat), in quarters and in years: the average wait if phi were "
+            "constant at its mean. An illustration of the level of phi-hat, not an estimate",
+            f"1 / (1 - sleep.meanphi_frac.E{E})", "ok",
+            display=f"{fmt3s(1.0 / (1.0 - mp))} quarters")
+    return mp, mp_pp
+
+
 def collect_demand(notes: list):
     t4, t5, t6 = table(T4), table(T5), table(T6)
     summ = json.loads(LOGIT_SUMMARY.read_text(encoding="utf-8")) if LOGIT_SUMMARY.is_file() else {}
+    # The linear routines enter only through this row: their unconstrained link puts the mean
+    # above 100, which is what motivates the constrained link of the single-index routines.
+    for E in LINEAR_ROUTINES:
+        if (_paths.est_dir(E) / "national_phi_t.csv").is_file():
+            add_mean_phi(E, t4)
+        else:
+            notes.append(f"national_phi_t.csv not found for {rname(E)}; sleep.meanphi.E{E} not built.")
     for E in ROUTINES:
         rho = rc.mean_rho_one_minus_s(E)
-        mp, mp_path, mp_col, nq = national_mean_phi(E)
-        mp_pp = mp * _st.PHI_DISPLAY
-        add(f"sleep.meanphi.E{E}", "C (input)", f"Mean phi-hat (pp), Table 4, {rname(E)}", mp_pp,
-            "Population-weighted national phi-hat_t averaged over quarters, in pp (Table 4 row "
-            "'Mean phi-hat (pp)')",
-            f"{mp_path.relative_to(EST_OUT)} mean of {mp_col} ({nq} quarters) x PHI_DISPLAY",
-            "ok", display=disp(mp_pp), unit="pp",
-            checks=[check_cell(T4, f"Mean phi-hat row, {rname(E)}",
-                               t4.cell(t4.find(r"Mean $\hat{\phi}$"), E), [mp_pp])])
-        add(f"sleep.meanphi_frac.E{E}", "C (input)", f"Mean phi-hat as a fraction, {rname(E)}", mp,
-            f"sleep.meanphi.E{E} / 100 (the prose's 'phi = 0.983')",
-            f"{mp_path.relative_to(EST_OUT)} mean of {mp_col} ({nq} quarters)", "ok",
-            display=disp(mp), unit="fraction")
+        mp, mp_pp = add_mean_phi(E, t4)
         ent = summ.get(f"E{E}_{LOGIT_SUBMODEL}") or {}
         names = ent.get("param_names") or []
         a_logit = float(ent["theta1"][names.index("alpha")]) if "alpha" in names else None
@@ -1363,6 +1398,10 @@ def collect_descriptives(notes: list):
             "'doubles')", f"rendered {T2}, row 'Active D Conglomerates' (integers)", "ok",
             display=f"{pre} -> {post} (x{fmt3s(post / pre)})")
 
+    collect_market_structure(notes)
+    collect_table1_spreads(notes)
+    collect_mca_count(notes)
+
     j = rout / "cluster_imbalance.json"
     if not j.is_file():
         notes.append("Rout/cluster_imbalance.json not found; Table 3 and sleep G* entries absent.")
@@ -1391,6 +1430,110 @@ def collect_descriptives(notes: list):
         "estimation sample (the 'about six effective ones' of the prose)",
         f"Rout/{j.name} G_nominal, G_star, coefficient_variation", "ok",
         display=f"G {ci['G_nominal']}, G* {fmt3s(ci['G_star'])}")
+
+
+# Table A.4's columns: (CSV var, id slug, label, rendered panel, column in it, printed as integer).
+TA4 = "Compressed_MarketStructure_by_Year_AB.tex"
+TA4_VARS = (
+    ("n_b_firms", "n_b", "B firms per MCA (mean)", "Panel A", 0, False),
+    ("hhi_b", "hhi_b", "HHI of B deposits within the MCA", "Panel A", 1, True),
+    ("n_d_firms_natl", "n_d", "D firms, national count", "Panel A", 2, True),
+    ("hhi_combined_natl", "hhi_bd", "National HHI, B and D pooled", "Panel A", 3, True),
+    ("risk_free_ann", "selic", "Selic (% p.a.)", "Panel B", 0, False),
+    ("spread_ann_a4_w", "spread4.B", "Time-deposit spread, B firms (pp p.a.)", "Panel B", 1, False),
+    ("spread_ann_a4_d_w", "spread4.D", "Time-deposit spread, D firms (pp p.a.)", "Panel B", 2, False),
+    ("spread_ann_a5_w", "spread5.B", "Prepaid spread, B firms (pp p.a.)", "Panel B", 3, False),
+    ("spread_ann_a5_d_w", "spread5.D", "Prepaid spread, D firms (pp p.a.)", "Panel B", 4, False),
+)
+T1 = "Compressed_BankType_CrossSection.tex"
+TVARS = "Appendix_Variables_Master.tex"
+
+
+def collect_market_structure(notes: list):
+    """Table A.4 (market structure, the Selic and the spreads by year) from the CSV
+    make_desc_compressed_tables.py writes with it: one entry per column, one leaf per year."""
+    p = _paths.rout_dir() / "Compressed_MarketStructure_by_Year_dep_weighted.csv"
+    if not p.is_file():
+        notes.append(f"{p.name} not found in Rout; Table A.4 entries absent.")
+        return
+    df = pd.read_csv(p).set_index("var")
+    ta4 = table(TA4)
+    years = [c for c in df.columns]
+    for var, slug, lab, panel, col, is_int in TA4_VARS:
+        if var not in df.index:
+            continue
+        v, checks = {}, []
+        for y in years:
+            x = pd.to_numeric(df.loc[var, y], errors="coerce")
+            if not _finite(float(x)):
+                continue
+            v[str(y)] = float(x)
+            cells = ta4.find(str(y), panel=panel, exact=True)
+            checks.append(check_cell(TA4, f"{lab}, {y}", cells[col] if cells and col < len(cells) else None,
+                                     [float(f"{float(x):.0f}") if is_int else float(x)]))
+        if not v:
+            continue
+        ys = sorted(v)
+        add(f"desc.a4.{slug}", "H", f"Table A.4, {lab}, by year", v,
+            "Annual mean of the quarterly values, as Table A.4 prints it (deposit-weighted across "
+            "MCA-quarters for the B columns; national for the D columns and the Selic); one leaf "
+            "per year, e.g. " + f"desc.a4.{slug}.{ys[0]}",
+            f"Rout/{p.name} row var={var}", "ok",
+            display=f"{ys[0]}: {fmt3s(v[ys[0]])} -> {ys[-1]}: {fmt3s(v[ys[-1]])}", checks=checks)
+
+
+def collect_table1_spreads(notes: list):
+    """Table 1's spread rows (conglomerate-quarter moments, B and D) from the CSVs
+    make_desc_compressed_tables.py writes with it."""
+    t1 = table(T1)
+    for nth, k in enumerate(BLOCKS):
+        p = _paths.rout_dir() / f"Compressed_BankType_CrossSection_{k}_unweighted.csv"
+        if not p.is_file():
+            notes.append(f"{p.name} not found in Rout; Table 1 spread entries for {k} absent.")
+            continue
+        df = pd.read_csv(p).set_index("var")
+        for a in (4, 5):
+            var = f"spread_ann_a{a}"
+            if var not in df.index:
+                continue
+            r = df.loc[var]
+            v = dict(mean=float(r["Mean"]), sd=float(r["SD"]), median=float(r["p50"]), n=int(r["N"]))
+            cells = t1.find(f"Spread ({a})", nth=nth)
+            cell = lambda i: cells[i] if cells and i < len(cells) else None
+            add(f"desc.t1.spread{a}.{k}", "H", f"Table 1, spread of type {a}, {k} firms", v,
+                "Mean, standard deviation and median over conglomerate-quarters of the "
+                "deposit-weighted annualized spread (pp p.a.), and the number of them",
+                f"Rout/{p.name} row var={var}", "ok", display=f"{fmt3s(v['mean'])} ({fmt3s(v['sd'])})",
+                unit="pp p.a.",
+                checks=[check_cell(T1, f"Spread ({a}) mean, {k}", cell(0), [v["mean"]]),
+                        check_cell(T1, f"Spread ({a}) SD, {k}", cell(1), [v["sd"]]),
+                        check_cell(T1, f"Spread ({a}) median, {k}", cell(4), [v["median"]]),
+                        check_cell(T1, f"Spread ({a}) N, {k}", cell(7), [v["n"]])])
+
+
+def collect_mca_count(notes: list):
+    """The number of local markets: distinct MCAs with a B-firm row in the market panel inside
+    the estimation window, the count the variables table prints."""
+    p = EST_OUT.parent / "market_panel.parquet"
+    if not p.is_file():
+        notes.append(f"{p.name} not found; the MCA count entry is absent.")
+        return
+    df = pd.read_parquet(p, columns=["year", "mca_code"])
+    df = df[df["mca_code"].astype(str) != "NATIONAL"]
+    n_all = int(df["mca_code"].nunique())
+    n_win = int(df.loc[(df["year"] >= MIN_YEAR) & (df["year"] <= MAX_YEAR), "mca_code"].nunique())
+    f = TABLES_DIR / TVARS
+    m = re.search(r"one of ([\d,]+) MCAs", f.read_text(encoding="utf-8", errors="replace")) \
+        if f.is_file() else None
+    printed = int(m.group(1).replace(",", "")) if m else None
+    add("desc.n_mcas", "H", "Number of local markets (MCAs)", n_win,
+        f"Distinct MCAs with a B-firm row in the market panel inside {MIN_YEAR}-{MAX_YEAR}, the "
+        "sample every table describes",
+        f"{p.name}, distinct mca_code other than NATIONAL", "ok", display=fmt_count(n_win),
+        detail=dict(all_panel_years=n_all),
+        checks=[dict(table=TVARS, cell="'one of N MCAs'", expected=[n_win], printed=[printed],
+                     raw=m.group(0) if m else None, ok=printed == n_win,
+                     why=None if printed == n_win else ("text not found" if m is None else "differs"))])
 
 
 # ── I: the policy-function fit (Tables C.10 and C.11) ────────────────────────

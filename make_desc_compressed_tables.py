@@ -367,8 +367,12 @@ def _resolve_is_B(df):
 
 def load_panel() -> pd.DataFrame:
     print(f"Loading {PANEL_CSV.name} ...")
-    df = pd.read_csv(PANEL_CSV, low_memory=False)
+    return prepare_panel(pd.read_csv(PANEL_CSV, low_memory=False))
 
+
+def prepare_panel(df: pd.DataFrame) -> pd.DataFrame:
+    """The sample and derived columns every table here is built on, from raw market-panel rows
+    (all columns, or the subset a caller needs)."""
     # The descriptives must describe the same sample the model is fit on. See utils/window.py.
     df = apply_window(df, label="desc_2 panel")
 
@@ -1174,6 +1178,153 @@ def _t2_series(t2_df: pd.DataFrame, var_name: str, year_cols: list) -> "np.ndarr
                     dtype=float)
 
 
+def ms_series(t2_df: pd.DataFrame) -> dict:
+    """The series the market-structure figure plots, from build_table2's frame (or the CSV
+    main() writes from it): `years` plus one array per plotted line, None when absent."""
+    year_cols = [c for c in t2_df.columns if c != "var"]
+    S = {"years": np.array([int(c) for c in year_cols], dtype=float)}
+    for key, var in (("hhi_b", "hhi_b"), ("hhi_bd", "hhi_combined_natl"),
+                     ("n_d", "n_d_firms_natl"), ("n_b", "n_b_firms"),
+                     ("selic", "risk_free_ann"),
+                     ("sp4_b", "spread_ann_a4_w"), ("sp4_d", "spread_ann_a4_d_w"),
+                     ("sp5_b", "spread_ann_a5_w"), ("sp5_d", "spread_ann_a5_d_w")):
+        S[key] = _t2_series(t2_df, var, year_cols)
+    return S
+
+
+# build_table2 already returns the display units: spreads in annualized percentage
+# points (annualized_spread_pp) and the Selic rate in percent per year.
+MS_SPREAD_YLABEL = "percentage points (annualized)"
+MS_LINE_KW = dict(linewidth=2, solid_capstyle="round", marker="o", markersize=4.5,
+                  markeredgecolor="white", markeredgewidth=1.0, zorder=3)
+
+
+def ms_style(ax, title, ylabel, pix_label=False, fs=1.0, pix_x=PIX_YEAR):
+    """Axis styling shared by every panel. `fs` scales the fonts (1.0 = the paper's grid);
+    `pix_x` places the Pix rule, for an x-axis that is not in whole years."""
+    ax.set_title(title, fontsize=10.5 * fs, loc="left", pad=6, color="#111111")
+    ax.set_ylabel(ylabel, fontsize=9 * fs, color=AXIS_INK)
+    ax.grid(True, axis="y", color=GRID_COLOR, linewidth=0.6, alpha=0.9)
+    ax.set_axisbelow(True)
+    for s in ("top", "right"):
+        ax.spines[s].set_visible(False)
+    for s in ("left", "bottom"):
+        ax.spines[s].set_color(AXIS_INK)
+        ax.spines[s].set_linewidth(0.8)
+    ax.tick_params(labelsize=9 * fs, colors=AXIS_INK, length=3)
+    # Pix is a genuine event threshold, so a dashed rule is correct here
+    # (gridlines stay solid); matches make_margin_figures.py.
+    ax.axvline(pix_x, color="grey", lw=0.8, ls="--", alpha=0.6, zorder=1)
+    if pix_label:
+        # True labels the rule at the top of the panel; a number sets the height instead.
+        pix_y = 0.97 if pix_label is True else float(pix_label)
+        ax.text(pix_x + 0.08, pix_y, "Pix", transform=ax.get_xaxis_transform(),
+                fontsize=8 * fs, color="grey", va="top", ha="left")
+
+
+def ms_endlabel(ax, x, y, text, fs=1.0, dy=0):
+    if y is None or not np.isfinite(y[-1]):
+        return
+    ax.annotate(text, xy=(x[-1], y[-1]), xytext=(5, dy), textcoords="offset points",
+                fontsize=8.5 * fs, color=MUTED_INK, va="center", ha="left")
+
+
+def ms_year_axis(ax, years, fs=1.0):
+    ax.set_xlabel("Year", fontsize=9 * fs, color=MUTED_INK)
+    ax.set_xticks(years)
+    ax.set_xticklabels([f"{int(y)}" for y in years], rotation=0)
+
+
+def _ms_title(letter, text, lettered):
+    return f"({letter}) {text}" if lettered else text
+
+
+# One function per panel, shared by the paper's grid and by make_slide_figures.py, which
+# draws each panel alone. `lettered` keeps the "(a)" prefix of the grid; `pix_label` None
+# keeps the grid's choice of which panels name the Pix rule.
+def _ms_panel_a(ax, S, fs=1.0, lettered=True, pix_label=None):
+    years, hhi_b, hhi_bd = S["years"], S["hhi_b"], S["hhi_bd"]
+    # Reference thresholds, right-aligned: above each line the right-hand side is
+    # empty, so the labels clear both series. Dotted keeps them distinct from the
+    # dashed Pix rule.
+    for thr, lab in ((2500, "2,500  highly concentrated"), (1500, "1,500  moderately conc.")):
+        ax.axhline(thr, color="#C9C9C4", lw=0.7, ls=(0, (1, 3)), zorder=1)
+        ax.text(years[-1] - 0.1, thr + 25, lab, fontsize=7 * fs, color="#9A9A95",
+                va="bottom", ha="right")
+    if hhi_b is not None:
+        ax.plot(years, hhi_b, color=B_COLOR, label="B, local (within MCA)", **MS_LINE_KW)
+        ms_endlabel(ax, years, hhi_b, f"{hhi_b[-1]:,.0f}", fs)
+    if hhi_bd is not None:
+        ax.plot(years, hhi_bd, color=NATL_COLOR, label="B+D, national", **MS_LINE_KW)
+        ms_endlabel(ax, years, hhi_bd, f"{hhi_bd[-1]:,.0f}", fs)
+    ms_style(ax, _ms_title("a", "Deposit concentration", lettered), "HHI (0–10,000)",
+             pix_label=True if pix_label is None else pix_label, fs=fs)
+    ax.legend(fontsize=8.5 * fs, loc="lower left", frameon=False)
+
+
+def _ms_panel_b(ax, S, fs=1.0, lettered=True, pix_label=None):
+    years, selic = S["years"], S["selic"]
+    if selic is not None:
+        ax.plot(years, selic, color=NATL_COLOR, **MS_LINE_KW)
+        ms_endlabel(ax, years, selic, f"{selic[-1]:.1f}%", fs)
+    ms_style(ax, _ms_title("b", "SELIC policy rate", lettered), "% p.a.",
+             pix_label=True if pix_label is None else pix_label, fs=fs)
+
+
+def _ms_panel_c(ax, S, fs=1.0, lettered=True, pix_label=None):
+    years, n_d = S["years"], S["n_d"]
+    if n_d is not None:
+        ax.plot(years, n_d, color=D_COLOR, **MS_LINE_KW)
+        ms_endlabel(ax, years, n_d, f"{n_d[-1]:,.0f}", fs)
+    ms_style(ax, _ms_title("c", "Digital (D) firms, national", lettered), "count",
+             pix_label=pix_label or False, fs=fs)
+
+
+def _ms_panel_d(ax, S, fs=1.0, lettered=True, pix_label=None):
+    years, n_b = S["years"], S["n_b"]
+    if n_b is not None:
+        ax.plot(years, n_b, color=B_COLOR, **MS_LINE_KW)
+        ms_endlabel(ax, years, n_b, f"{n_b[-1]:.1f}", fs)
+    ms_style(ax, _ms_title("d", "B firms per MCA (mean)", lettered), "count",
+             pix_label=pix_label or False, fs=fs)
+
+
+def _ms_panel_e(ax, S, fs=1.0, lettered=True, pix_label=None):
+    years, sp4_b, sp4_d = S["years"], S["sp4_b"], S["sp4_d"]
+    ax.axhline(0, color="#BFBFBA", lw=0.8, zorder=1)
+    if sp4_b is not None:
+        ax.plot(years, sp4_b, color=B_COLOR, label="B (brick-and-mortar)", **MS_LINE_KW)
+    if sp4_d is not None:
+        ax.plot(years, sp4_d, color=D_COLOR, label="D (digital)", **MS_LINE_KW)
+    ms_style(ax, _ms_title("e", "Time-deposit spread (type 4)", lettered), MS_SPREAD_YLABEL,
+             pix_label=pix_label or False, fs=fs)
+    ax.legend(fontsize=8.5 * fs, loc="upper left", frameon=False)
+
+
+def _ms_panel_f(ax, S, fs=1.0, lettered=True, pix_label=None):
+    years = S["years"]
+    ax.axhline(0, color="#BFBFBA", lw=0.8, zorder=1)
+    # Both types sit indistinguishably at zero, so a solid D would hide B entirely.
+    # Dashing D keeps both readable without displacing either value.
+    for arr, col, lab, ls in ((S["sp5_b"], B_COLOR, "B (brick-and-mortar)", "-"),
+                              (S["sp5_d"], D_COLOR, "D (digital)", (0, (5, 2)))):
+        if arr is None:
+            continue
+        m = np.isfinite(arr)
+        if m.any():
+            kw = {**MS_LINE_KW, "linestyle": ls}
+            ax.plot(years[m], arr[m], color=col, label=lab, **kw)
+    ms_style(ax, _ms_title("f", "Prepaid spread (type 5), 2020–", lettered), MS_SPREAD_YLABEL,
+             pix_label=pix_label or False, fs=fs)
+    ax.set_ylim(-1, 1)
+    ax.legend(fontsize=8.5 * fs, loc="upper left", frameon=False)
+
+
+#: Panel letter -> drawing function, in the grid's reading order (row by row).
+MS_PANELS = {"a": _ms_panel_a, "b": _ms_panel_b, "c": _ms_panel_c,
+             "d": _ms_panel_d, "e": _ms_panel_e, "f": _ms_panel_f}
+
+
 def render_market_structure_figure(t2_df: pd.DataFrame, suffix: str = "") -> None:
     """2x3 small-multiple figure summarising Tables 2 and 3.
 
@@ -1184,122 +1335,12 @@ def render_market_structure_figure(t2_df: pd.DataFrame, suffix: str = "") -> Non
     matplotlib.use("Agg")          # venv lives in OneDrive; Agg keeps batch runs safe
     import matplotlib.pyplot as plt
 
-    year_cols = [c for c in t2_df.columns if c != "var"]
-    years = np.array([int(c) for c in year_cols], dtype=float)
-
-    hhi_b   = _t2_series(t2_df, "hhi_b", year_cols)
-    hhi_bd  = _t2_series(t2_df, "hhi_combined_natl", year_cols)
-    n_d     = _t2_series(t2_df, "n_d_firms_natl", year_cols)
-    n_b     = _t2_series(t2_df, "n_b_firms", year_cols)
-    selic   = _t2_series(t2_df, "risk_free_ann", year_cols)
-    sp4_b   = _t2_series(t2_df, "spread_ann_a4_w", year_cols)
-    sp4_d   = _t2_series(t2_df, "spread_ann_a4_d_w", year_cols)
-    sp5_b   = _t2_series(t2_df, "spread_ann_a5_w", year_cols)
-    sp5_d   = _t2_series(t2_df, "spread_ann_a5_d_w", year_cols)
-
-    # build_table2 already returns the display units: spreads in annualized percentage
-    # points (annualized_spread_pp) and the Selic rate in percent per year.
-    spread_ylabel = "percentage points (annualized)"
-
-    line_kw = dict(linewidth=2, solid_capstyle="round", marker="o", markersize=4.5,
-                   markeredgecolor="white", markeredgewidth=1.0, zorder=3)
-
+    S = ms_series(t2_df)
     fig, axes = plt.subplots(3, 2, figsize=(11, 9.5), sharex="col")
-
-    def _style(ax, title, ylabel, pix_label=False):
-        ax.set_title(title, fontsize=10.5, loc="left", pad=6, color="#111111")
-        ax.set_ylabel(ylabel, fontsize=9, color=AXIS_INK)
-        ax.grid(True, axis="y", color=GRID_COLOR, linewidth=0.6, alpha=0.9)
-        ax.set_axisbelow(True)
-        for s in ("top", "right"):
-            ax.spines[s].set_visible(False)
-        for s in ("left", "bottom"):
-            ax.spines[s].set_color(AXIS_INK)
-            ax.spines[s].set_linewidth(0.8)
-        ax.tick_params(labelsize=9, colors=AXIS_INK, length=3)
-        # Pix is a genuine event threshold, so a dashed rule is correct here
-        # (gridlines stay solid); matches make_margin_figures.py.
-        ax.axvline(PIX_YEAR, color="grey", lw=0.8, ls="--", alpha=0.6, zorder=1)
-        if pix_label:
-            ax.text(PIX_YEAR + 0.08, 0.97, "Pix", transform=ax.get_xaxis_transform(),
-                    fontsize=8, color="grey", va="top", ha="left")
-
-    def _endlabel(ax, x, y, text, color, dy=0):
-        if y is None or not np.isfinite(y[-1]):
-            return
-        ax.annotate(text, xy=(x[-1], y[-1]), xytext=(5, dy), textcoords="offset points",
-                    fontsize=8.5, color=MUTED_INK, va="center", ha="left")
-
-    # (a) concentration -------------------------------------------------------
-    ax = axes[0, 0]
-    # Reference thresholds, right-aligned: above each line the right-hand side is
-    # empty, so the labels clear both series. Dotted keeps them distinct from the
-    # dashed Pix rule.
-    for thr, lab in ((2500, "2,500  highly concentrated"), (1500, "1,500  moderately conc.")):
-        ax.axhline(thr, color="#C9C9C4", lw=0.7, ls=(0, (1, 3)), zorder=1)
-        ax.text(years[-1] - 0.1, thr + 25, lab, fontsize=7, color="#9A9A95",
-                va="bottom", ha="right")
-    if hhi_b is not None:
-        ax.plot(years, hhi_b, color=B_COLOR, label="B, local (within MCA)", **line_kw)
-        _endlabel(ax, years, hhi_b, f"{hhi_b[-1]:,.0f}", B_COLOR)
-    if hhi_bd is not None:
-        ax.plot(years, hhi_bd, color=NATL_COLOR, label="B+D, national", **line_kw)
-        _endlabel(ax, years, hhi_bd, f"{hhi_bd[-1]:,.0f}", NATL_COLOR)
-    _style(ax, "(a) Deposit concentration", "HHI (0–10,000)", pix_label=True)
-    ax.legend(fontsize=8.5, loc="lower left", frameon=False)
-
-    # (b) policy rate ---------------------------------------------------------
-    ax = axes[0, 1]
-    if selic is not None:
-        ax.plot(years, selic, color=NATL_COLOR, **line_kw)
-        _endlabel(ax, years, selic, f"{selic[-1]:.1f}%", NATL_COLOR)
-    _style(ax, "(b) SELIC policy rate", "% p.a.", pix_label=True)
-
-    # (c) digital entry -------------------------------------------------------
-    ax = axes[1, 0]
-    if n_d is not None:
-        ax.plot(years, n_d, color=D_COLOR, **line_kw)
-        _endlabel(ax, years, n_d, f"{n_d[-1]:,.0f}", D_COLOR)
-    _style(ax, "(c) Digital (D) firms, national", "count")
-
-    # (d) local entry ---------------------------------------------------------
-    ax = axes[1, 1]
-    if n_b is not None:
-        ax.plot(years, n_b, color=B_COLOR, **line_kw)
-        _endlabel(ax, years, n_b, f"{n_b[-1]:.1f}", B_COLOR)
-    _style(ax, "(d) B firms per MCA (mean)", "count")
-
-    # (e) type-4 spread -------------------------------------------------------
-    ax = axes[2, 0]
-    ax.axhline(0, color="#BFBFBA", lw=0.8, zorder=1)
-    if sp4_b is not None:
-        ax.plot(years, sp4_b, color=B_COLOR, label="B (brick-and-mortar)", **line_kw)
-    if sp4_d is not None:
-        ax.plot(years, sp4_d, color=D_COLOR, label="D (digital)", **line_kw)
-    _style(ax, "(e) Time-deposit spread (type 4)", spread_ylabel)
-    ax.legend(fontsize=8.5, loc="upper left", frameon=False)
-
-    # (f) type-5 spread -------------------------------------------------------
-    ax = axes[2, 1]
-    ax.axhline(0, color="#BFBFBA", lw=0.8, zorder=1)
-    # Both types sit indistinguishably at zero, so a solid D would hide B entirely.
-    # Dashing D keeps both readable without displacing either value.
-    for arr, col, lab, ls in ((sp5_b, B_COLOR, "B (brick-and-mortar)", "-"),
-                              (sp5_d, D_COLOR, "D (digital)", (0, (5, 2)))):
-        if arr is None:
-            continue
-        m = np.isfinite(arr)
-        if m.any():
-            kw = {**line_kw, "linestyle": ls}
-            ax.plot(years[m], arr[m], color=col, label=lab, **kw)
-    _style(ax, "(f) Prepaid spread (type 5), 2020–", spread_ylabel)
-    ax.set_ylim(-1, 1)
-    ax.legend(fontsize=8.5, loc="upper left", frameon=False)
-
+    for ax, key in zip(axes.ravel(), MS_PANELS):
+        MS_PANELS[key](ax, S)
     for ax in axes[2, :]:
-        ax.set_xlabel("Year", fontsize=9, color=MUTED_INK)
-        ax.set_xticks(years)
-        ax.set_xticklabels([f"{int(y)}" for y in years], rotation=0)
+        ms_year_axis(ax, S["years"])
 
     fig.tight_layout(h_pad=1.6, w_pad=2.4)
 
@@ -1732,9 +1773,8 @@ _VARS_MASTER_GROUPS = [
         (r"CodConglomeradoPrudencial", r"Conglomerate $j$ (prudential C-code)", "BCB", "All"),
         (r"CNPJ\_Lider, CNPJ", r"Lead-institution and root-level CNPJ of the conglomerate", "BCB", "All"),
         (r"CODMUN\_IBGE", r"7-digit IBGE municipality code; \texttt{0} = nationally active D institution", "IBGE", "All"),
-        # 3,737 = market_panel.csv mca_code nunique excl. the national code (2026-09-01 rebuild);
-        # refresh after any crosswalk change (the old crosswalk's 468 was stale).
-        (r"mca\_code", r"Market $m$ --- one of 3,737 MCAs, or \texttt{NATIONAL} for D institutions", "Constructed", "All"),
+        # The count is filled in by render_variables_master from the panel (count_mcas).
+        (r"mca\_code", r"Market $m$ --- one of __N_MCAS__ MCAs, or \texttt{NATIONAL} for D institutions", "Constructed", "All"),
         (r"year, quarter, AnoMes", r"Period $t$; \texttt{AnoMes} is the BCB IF-Data code YYYYMM", "BCB", "All"),
         (r"deposit\_type", r"Category $k$: 1 = demand, 2 = savings, 3 = interbank, 4 = time/CDB, 5 = prepaid", "BCB", "All"),
     ]),
@@ -1771,7 +1811,12 @@ _VARS_MASTER_GROUPS = [
 ]
 
 
-def render_variables_master() -> str:
+def count_mcas(df: pd.DataFrame) -> int:
+    """Local markets in the sample: distinct MCAs with a B-firm row in the prepared panel."""
+    return int(df.loc[df["bank_type"] == "B", "mca_code"].nunique())
+
+
+def render_variables_master(n_mcas: int) -> str:
     notes = NOTE_FONT + " " + table_note(
         r"Only variables entering an estimated specification are listed.",
         r"``Sleep'': sleepiness estimation, specification (12), approaches "
@@ -1785,7 +1830,8 @@ def render_variables_master() -> str:
         r"package's data dictionary.",
     )
     rows = _grouped_rows(
-        [(g, [(rf"{n}", d, s, u) for n, d, s, u in rws]) for g, rws in _VARS_MASTER_GROUPS],
+        [(g, [(rf"{n}", d.replace("__N_MCAS__", f"{n_mcas:,}"), s, u) for n, d, s, u in rws])
+         for g, rws in _VARS_MASTER_GROUPS],
         n_cols=4,
     )
     return _master_longtable(
@@ -1956,7 +2002,7 @@ def main():
 
     # --- Appendix: consolidated variable dictionaries (master tables A & B)
     print("\n[Appendix] Consolidated variable dictionaries ...")
-    _write_tex(render_variables_master(),   "Appendix_Variables_Master", "")
+    _write_tex(render_variables_master(count_mcas(df)), "Appendix_Variables_Master", "")
     _write_tex(render_instruments_master(), "Appendix_Instruments_Master", "")
 
     print("\nDone.")

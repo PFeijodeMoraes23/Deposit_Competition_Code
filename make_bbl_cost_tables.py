@@ -107,7 +107,7 @@ Usage:
   python make_bbl_cost_tables.py --from-psi            # + the ridge tables, from psi_cost.zip
   python make_bbl_cost_tables.py --from-psi --psi-dir "$CF_COST_FWD"   # on the cluster
   python make_bbl_cost_tables.py --psi-tag _ms8        # pin one multi-start vintage
-  python make_bbl_cost_tables.py --psi-tag _ms981 --compare-single-curve --single-curve-tag _sc981
+  python make_bbl_cost_tables.py --psi-tag _ms982 --compare-single-curve --single-curve-tag _sc982
                                                        # tab_bbl_cbar_design's single-curve
                                                        # column from a tagged single-curve solve
 """
@@ -1810,7 +1810,7 @@ def build_ridge(ridge, disc="", by_start=None):
         r"$[\Delta\psi_2\;\Delta\psi_4]$ over the routine's rows"
         + (r"; Min.\ quarter: the lowest condition index within a single launch quarter"
            if has_within else "")
-        + r". Median of the ratio in compounded annual percentage points (within a firm type, "
+        + r". Median of the ratio in compounded annual pp (within a firm type, "
         r"the $\bar r^{f,\kappa}$ of Table~\ref{tab:bbl_cbar}); IQR\% relative to the median."
     )
     # Non-breaking (_wrap): the trimmed table is a few lines tall.
@@ -2193,7 +2193,7 @@ def build_violated_by_sign(res: dict, disc="", dead=False):
         + (r", and dead firm-quarters are excluded" if dead else "") + r"."
     )
     return _wrap(body, col_fmt, r"BBL Violated Inequalities by Deviation Direction",
-                 "tab:bbl_violated_by_sign", header, _with(foot, disc), ncol)
+                 "tab:bbl_violated_by_sign", header, _with(foot, disc), ncol, nobreak=True)
 
 
 def md_violated_by_sign(res: dict, disc="", dead=False):
@@ -2452,7 +2452,7 @@ def _cell_share(r, table):
     return f"${_m3(r['frac_bind'], _w(r, 'violated share', table))}$"
 
 
-_ANN_TEX = r"Rates in compounded annual percentage points, $((1+x)^4-1)\times100$. "
+_ANN_TEX = r"Rates in compounded annual pp, $((1+x)^4-1)\times100$. "
 
 
 def _mechanical(rows) -> bool:
@@ -2681,7 +2681,7 @@ def build_cbar_design(rows_single, rows_multi, n_starts=None, disc=""):
            if _mechanical(list(rows_single)) else "")
     ).rstrip()
     return _wrap(body, col_fmt, r"BBL Marginal Cost $\bar c^\kappa$: Single-Curve Design",
-                 "tab:bbl_cbar_design", header, _with(foot, disc), ncol)
+                 "tab:bbl_cbar_design", header, _with(foot, disc), ncol, nobreak=True)
 
 
 def md_cbar_design(rows_single, rows_multi, disc=""):
@@ -2742,7 +2742,8 @@ def _ci_cell(ci):
 
 def build_identified_panels(rows, identified=False, disc="", rs=None):
     r"""Estimates table in the paper's own layout: parameters down the rows, estimation routines
-    across the columns as \ref{estimation:*} (rendered (III)-(VI)), and one panel per firm type.
+    across the columns as \ref{estimation:*} (rendered (III)-(VI)), and the firm types side by
+    side (B's routines, then D's) under a header group each.
 
     `rs` is _resampling_parts of the solves behind the table: their draws and seeds are named
     where the notes name the intervals and the SDs, so this table carries no separate resampling
@@ -2751,8 +2752,8 @@ def build_identified_panels(rows, identified=False, disc="", rs=None):
     This replaces a routine x type row grid, which needed eight columns and had no room for
     gamma at all. Five columns fit the text block comfortably, standard errors sit under their
     estimates as in polfunc_k4.tex, and the type superscript moves out of every cell into the
-    panel title -- V_Main's notation is omega^{\mathrm{B}}, zeta^{\mathrm{B}},
-    (\boldsymbol{\gamma}^{\mathrm{B}})', and \bar c^\kappa for their combination.
+    header group and the row labels' bare kappa -- V_Main's notation is omega^\kappa, zeta^\kappa,
+    (\boldsymbol{\gamma}^\kappa)', and \bar c^\kappa for their combination.
 
     `identified` decides what this table IS. When the solve separated the split, omega and zeta
     are the estimand and each carries the subsampling interval from the inverted criterion; the
@@ -2761,10 +2762,21 @@ def build_identified_panels(rows, identified=False, disc="", rs=None):
     """
     by = {(r["E"], r["block"]): r for r in rows}
     Es = [E for E in ROUTINE_ORDER if any((E, k) in by for k, _ in BLOCKS)]
-    ncol = 1 + len(Es)
-    col_fmt = (r">{\raggedright\arraybackslash}p{5.0cm} "
-               rf"*{{{len(Es)}}}{{>{{\centering\arraybackslash}}X}}")
-    header = " & " + " & ".join(rc.est_ref(E) for E in Es)
+    # Side by side, not stacked (user, 2026-09-30): every column is a (firm type, routine) pair,
+    # B's routines then D's, so the row grid is shared and the firm type moves into the header
+    # group; the row labels take the bare kappa superscript instead of a per-panel B/D.
+    cols = [(kappa, E) for kappa, _ in BLOCKS for E in Es]
+    ncol = 1 + len(cols)
+    col_fmt = (r">{\raggedright\arraybackslash}p{4.6cm} "
+               rf"*{{{len(cols)}}}{{>{{\centering\arraybackslash}}X}}")
+    header = (
+        r" & \multicolumn{" + str(len(Es)) + r"}{c}{Brick-and-Mortar (B)} & \multicolumn{"
+        + str(len(Es)) + r"}{c}{Digital (D)} \\ "
+        r"\cmidrule(lr){2-" + str(1 + len(Es)) + r"}\cmidrule(lr){" + str(2 + len(Es)) + "-"
+        + str(1 + 2 * len(Es)) + "}" + "\n"
+        + " & " + " & ".join(rc.est_ref(E) for E in Es)
+        + " & " + " & ".join(rc.est_ref(E) for E in Es)
+    )
 
     def line(label, get, fmt="{:.3f}", bold=False, se_get=None, se_fmt="{:.3f}", stars=False,
              flag=False):
@@ -2772,7 +2784,7 @@ def build_identified_panels(rows, identified=False, disc="", rs=None):
         `flag` appends the double dagger when this block's solve said the omega/zeta split is
         not identified -- the mark goes on the estimate, where the eye lands."""
         cells = []
-        for E in Es:
+        for kappa, E in cols:
             r = by.get((E, kappa))
             v = get(r) if r else None
             if v is None or (isinstance(v, float) and not np.isfinite(v)):
@@ -2789,12 +2801,12 @@ def build_identified_panels(rows, identified=False, disc="", rs=None):
                     cells.append(f"${s}^{{{_stars(v, se_get(r) if se_get else None)}}}$")
                 else:
                     cells.append(f"${s}{mk}$")
-        # longtable's \\* forbids a page break after the row, so an estimate and the SE row
-        # under it always land on the same page.
+        # \\* forbids a page break after the row; inert now the table cannot break at all
+        # (nobreak=True below), kept so an estimate and its SE row read as one unit in the source.
         out = [label + " & " + " & ".join(cells) + (r" \\*" if se_get is not None else r" \\")]
         if se_get is not None:
             ses = []
-            for E in Es:
+            for kappa, E in cols:
                 r = by.get((E, kappa))
                 sv = se_get(r) if r else None
                 ses.append(f"$({_m3(sv, f'T7 {rc.est_ref(E)} {kappa} {_plain(label)} SD')})$"
@@ -2806,7 +2818,7 @@ def build_identified_panels(rows, identified=False, disc="", rs=None):
         """A subsampling-interval row under an estimate. Only used in the identified branch,
         where the interval and not the SE is the uncertainty statement."""
         cells = []
-        for E in Es:
+        for kappa, E in cols:
             r = by.get((E, kappa))
             cells.append(_ci_cell(r.get(key)) if r else "---")
         return [label + " & " + " & ".join(cells) + r" \\"]
@@ -2815,7 +2827,8 @@ def build_identified_panels(rows, identified=False, disc="", rs=None):
     has_cond = any(r.get("cond_pooled") is not None for r in rows)
     # In the identified branch the symbols the cells carry (the dagger on a profile-window
     # endpoint, the double dagger on a block whose split failed the gate) are defined in the
-    # Notes, like every other symbol of these tables, and the body opens on Panel A.
+    # Notes, like every other symbol of these tables. No panel rows: the firm type lives in the
+    # header group above, and every parameter row runs across both types' columns at once.
     if not identified:
         # The kinked-criterion caveat, in the table itself and not only mid-footnote: the reader
         # meets it before scanning any stars. The full statement stays in the Notes.
@@ -2823,46 +2836,37 @@ def build_identified_panels(rows, identified=False, disc="", rs=None):
             rf"\multicolumn{{{ncol}}}{{@{{}}p{{\dimexpr\textwidth-2\tabcolsep\relax}}@{{}}}}{{\scriptsize\itshape Significance stars are shown by "
             rf"convention only --- the kinked criterion admits no normal reference (see Notes).}} \\")
         body.append(r"\addlinespace[0.4ex]")
-    for pi, (kappa, _lbl) in enumerate(BLOCKS):
-        if not any((E, kappa) in by for E in Es):
-            continue
-        title = ("Brick-and-Mortar (B) Firms" if kappa == "B" else "Digital (D) Firms")
-        if pi:
-            body.append(r"\midrule")
-        body.append(rf"\multicolumn{{{ncol}}}{{l}}{{\textit{{Panel {'AB'[pi]}: {title}}}}} \\")
-        body.append(r"\addlinespace[0.3ex]")
-        body += line(rf"$\hat\omega^{{\mathrm{{{kappa}}}}}$",
-                     lambda r: r["omega"], se_get=lambda r: r.get("omega_se"),
-                     stars=not identified, flag=identified)
-        if identified:
-            body += ci_line(r"\quad 95\% CI", "ci_omega")
-        # Three decimals like every other estimate and SD in the table.
-        body += line(rf"$\hat\zeta^{{\mathrm{{{kappa}}}}}$",
-                     lambda r: r["zeta"],
-                     se_get=lambda r: r.get("zeta_se"),
-                     stars=not identified, flag=identified)
-        if identified:
-            body += ci_line(r"\quad 95\% CI", "ci_zeta")
-        body.append(r"\addlinespace[0.3ex]")
-        # The gamma block is headed by the bare symbol, flush left like the other parameters;
-        # the shifters it loads on are indented beneath it.
-        body.append(rf"$\hat{{\boldsymbol{{\gamma}}}}^{{\mathrm{{{kappa}}}}}$"
-                    + " & " * len(Es) + r" \\")
-        for key, lab in Z_LABELS:
-            body += line(r"\hspace{1em}" + lab,
-                         (lambda k: lambda r: _zscaled((r["gamma"] or {}).get(k), k))(key),
-                         se_get=(lambda k: lambda r: _zscaled((r["gamma_se"] or {}).get(k), k))(key),
-                         stars=not identified)
-        # Regression information, separated from the parameters as in the sleepiness tables.
-        # (rbar^f is not a parameter of eq:8 — it lives with c-bar, which it defines.)
-        body.append(r"\midrule")
-        body += line(r"Firms", lambda r: r["n_firms"], fmt="{:,.0f}")
-        body += line(r"Inequalities $n$", lambda r: r["n"], fmt="{:,.0f}")
-        # The statistic the omega/zeta split is judged on, per block: the pooled condition index
-        # of [dpsi2 dpsi4] the solve's gate reads. Kept here, beside the double dagger it decides,
-        # because the ridge tables pool the two firm types and so never show it.
-        if has_cond:
-            body += line(r"Condition index", lambda r: r.get("cond_pooled"), flag=identified)
+    body += line(r"$\hat\omega^{\kappa}$",
+                 lambda r: r["omega"], se_get=lambda r: r.get("omega_se"),
+                 stars=not identified, flag=identified)
+    if identified:
+        body += ci_line(r"\quad 95\% CI", "ci_omega")
+    # Three decimals like every other estimate and SD in the table.
+    body += line(r"$\hat\zeta^{\kappa}$",
+                 lambda r: r["zeta"],
+                 se_get=lambda r: r.get("zeta_se"),
+                 stars=not identified, flag=identified)
+    if identified:
+        body += ci_line(r"\quad 95\% CI", "ci_zeta")
+    body.append(r"\addlinespace[0.3ex]")
+    # The gamma block is headed by the bare symbol, flush left like the other parameters;
+    # the shifters it loads on are indented beneath it.
+    body.append(r"$\hat{\boldsymbol{\gamma}}^{\kappa}$" + " & " * len(cols) + r" \\")
+    for key, lab in Z_LABELS:
+        body += line(r"\hspace{1em}" + lab,
+                     (lambda k: lambda r: _zscaled((r["gamma"] or {}).get(k), k))(key),
+                     se_get=(lambda k: lambda r: _zscaled((r["gamma_se"] or {}).get(k), k))(key),
+                     stars=not identified)
+    # Regression information, separated from the parameters as in the sleepiness tables.
+    # (rbar^f is not a parameter of eq:8 — it lives with c-bar, which it defines.)
+    body.append(r"\midrule")
+    body += line(r"Firms", lambda r: r["n_firms"], fmt="{:,.0f}")
+    body += line(r"Inequalities $n$", lambda r: r["n"], fmt="{:,.0f}")
+    # The statistic the omega/zeta split is judged on, per block: the pooled condition index
+    # of [dpsi2 dpsi4] the solve's gate reads. Kept here, beside the double dagger it decides,
+    # because the ridge tables pool the two firm types and so never show it.
+    if has_cond:
+        body += line(r"Condition index", lambda r: r.get("cond_pooled"), flag=identified)
 
     # Notes held to a few lines (V_Main style guide, 2026-09-28): sample and units, what the
     # brackets and parentheses hold (the profile covers omega and zeta only), the symbols the cells
@@ -2878,8 +2882,8 @@ def build_identified_panels(rows, identified=False, disc="", rs=None):
     # Trimmed with the user (2026-09-29): the coefficients are per quarter because a linear
     # coefficient cannot be compounded, which the text says; the note keeps the units only.
     common = (
-        r"\textit{Notes:} Coefficients in per-quarter units, the Basel one in basis points; cost "
-        r"ratios in fractions of assets, Basel index in percentage points. "
+        r"\textit{Notes:} Coefficients in per-quarter units, the Basel one in bp; cost "
+        r"ratios in fractions of assets, Basel index in pp. "
     )
     rs = rs or {}
     sub = f" ({rs['sub']})" if rs.get("sub") else ""
@@ -2919,7 +2923,7 @@ def build_identified_panels(rows, identified=False, disc="", rs=None):
     foot = foot.rstrip()
     return _wrap(body, col_fmt,
                  r"BBL Deposit-Servicing Cost Parameters, by Firm Type",
-                 "tab:bbl_cost_identified", header, _with(foot, disc), ncol)
+                 "tab:bbl_cost_identified", header, _with(foot, disc), ncol, nobreak=True)
 
 
 def _md_ci(ci):
@@ -2976,9 +2980,9 @@ def md_identified_panels(rows, identified=False, disc=""):
                 f"{_d3(r['cond_pooled'])}{'‡' if identified and r.get('identified') is False else ''}"))
     units = ("Coefficients in native per-quarter units (a linear coefficient cannot be "
              "compounded); in psi_3 the personnel, administrative and tax cost ratios are "
-             "fractions of total assets and the Basel index is in percentage points, all lagged "
+             "fractions of total assets and the Basel index is in pp, all lagged "
              "one quarter, and each gamma coefficient is per unit of its shifter; the Basel one "
-             "is shown in basis points (bp of quarterly marginal cost per pp of the index). ")
+             "is shown in bp (bp of quarterly marginal cost per pp of the index). ")
     if identified:
         L += ["",
               "Columns are estimation routines. " + units + _dead_note(rows, md=True)
@@ -3341,7 +3345,7 @@ def main():
                          "--psi-tag _ms<N> so both sides are pinned.")
     ap.add_argument("--single-curve-tag", default="",
                     help="with --compare-single-curve: the psi tag of the single-curve solve "
-                         "whose cost_params fill the Single curve columns, e.g. _sc981. Default: "
+                         "whose cost_params fill the Single curve columns, e.g. _sc982. Default: "
                          "the untagged files.")
     ap.add_argument("--per-quarter-cbar", choices=("keep", "drop"), default="drop",
                     help="with --from-psi: keep or drop the per-quarter c-bar column of "

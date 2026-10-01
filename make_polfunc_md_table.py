@@ -32,7 +32,7 @@ ANCHOR = "## 3. The execution plan (easiest → hardest)"   # §2.6/§2.7 are in
 # .md and the .tex fragments can never drift apart. Units are pinned to the sleepiness/demand tables
 # (see the _DISPLAY_UNITS comment in bbl_polfunc.py).
 from bbl_polfunc import (_DISPLAY_UNITS, _SEGMENT_VARS, CFG as _CFG_SPREAD, _CFG_RATE,
-                         _lhs_display, _lhs_unit_name, _boot_clause, _mostly_small,
+                         _UNIT_ABBR, _lhs_display, _lhs_unit_name, _boot_clause, _mostly_small,
                          _small_spread_sentence)
 import sys
 
@@ -188,7 +188,8 @@ def build_table(summary, cfg_units):
     lines = ["| Regressor | " + " | ".join(COL_HEADERS) + " |", "|---|---|---|---|"]
     for k in (4, 5):
         lhs = _lhs_display(k, cfg_units)
-        lines.append(f"| **{K_TITLES[k]}, {_lhs_unit_name(k, cfg_units)}** | | | |")
+        unit = _lhs_unit_name(k, cfg_units)
+        lines.append(f"| **{K_TITLES[k]}, {_UNIT_ABBR.get(unit, unit)}** | | | |")
         lines.extend(_panel_rows(summary, k, lhs))
         seg = ["Yes" if any(v in summary.get(_colkey(k, s), {}).get("coefficients", {})
                             for v in _SEGMENT_VARS) else "No" for s in COLS]
@@ -292,7 +293,7 @@ def _intro(depvar, summary, cfg, dagger=False, small=()):
         head = (
             "The dependent variable is the **compounded annual deposit spread** "
             "ρ = (1+r^f)⁴ − (1+r^dep)⁴ of the quarterly rates, the definition of the demand price "
-            "(the policy fed to BBL Step 2), in percentage points for k=4 and in **basis points for "
+            "(the policy fed to BBL Step 2), in pp for k=4 and in **bp for "
             "k=5**, whose spread is itself about zero. "
             + extra
             + f"The fit is asymmetric — B-firm CDB R²={r2(4,'B'):.2f}, B-firm prepaid R²={r2(5,'B'):.2f}, "

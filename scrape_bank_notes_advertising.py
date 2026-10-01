@@ -329,6 +329,12 @@ LABEL_GROUPS = [
     ("publications", re.compile(r"PUBLICACOES")),
 ]
 TOTAL_RE = re.compile(r"^(TOTAL|TOTAIS|TOTAL\s+GERAL)\b")
+# A row whose words left of its first figure stop on a preposition is a sentence or a column title
+# ("Trimestre findo em 30 de junho", "o montante destas despesas e de R$30.266"): its figures are
+# dates and amounts quoted in prose, not table cells.
+SENTENCE_END_RE = re.compile(r"\b(EM|DE|DO|DA|NO|NA|PARA)$")
+# The filing system's running title at the top of every page ("ITR - Informacoes Trimestrais - ...").
+RUNNING_HEADER_RE = re.compile(r"^(DFP|ITR)\s*-\s*(DEMONSTRACOES|INFORMACOES)")
 # Any numbered note heading. A block runs from one heading to the next, so the Total row of the
 # NEXT note is never added to this one's items.
 # A numbered note heading ("24. Outras Despesas Administrativas") or a lettered sub-item heading
@@ -2005,7 +2011,8 @@ def row_amounts(row: list[dict], max_gap: float = 1.2) -> list[tuple[float, floa
 
     PDF producers split amounts into touching fragments ("3" + "2.557,95" with no gap is 32557.95),
     so fragments closer than max_gap points are rejoined and anything further apart is a separate
-    cell. A bare dash is a published zero.
+    cell. A bare dash is a published zero. Parentheses mark a negative, including when the PDF
+    spaces the opening one from the digits.
 
     The year flag matters because several banks head their columns with a bare "2021" and print the
     heading and the years on one row ("d) Despesas administrativas   2021   2020"). Read as an
@@ -2024,6 +2031,11 @@ def row_amounts(row: list[dict], max_gap: float = 1.2) -> list[tuple[float, floa
         v = brl(text)
         if v is None:
             continue
+        # Accounting parentheses mean a negative however the PDF spaces them: "( 1.317)" arrives as
+        # a lone "(" followed by "1.317)", which `brl` alone reads as positive.
+        before = row[row.index(c[0]) - 1]["text"] if row.index(c[0]) else ""
+        if v > 0 and (text.count("(") != text.count(")") or before.endswith("(")):
+            v = -v
         yearlike = bool(re.fullmatch(r"(19|20)\d{2}", text)) and 1990 <= v <= 2100
         out.append(((c[0]["x0"] + c[-1]["x1"]) / 2, v, text, yearlike))
     return out
@@ -2448,28 +2460,30 @@ def _parse_page(doc: Doc, out: Parsed, pno: int, rows: list[list[dict]], page) -
         emitted_total = False
         block_recs: list[dict] = []
         block_totals: list[dict] = []
-        # Daycoval (and any bank whose note heading matches DESPESAS_DE_PESSOAL_E_ADMINISTRATIVAS)
-        # prints several stated totals under ONE heading, one per sub-category ("Total de despesas
-        # de pessoal", "Total de despesas tributarias", "Total de outras despesas administrativas"),
-        # each recapping only the items printed since the sub-category above it - not the whole
-        # note. A single running total_scope per column pooled every sub-category's items against
-        # EVERY one of that column's stated totals (Daycoval's own arithmetic then looked broken:
-        # the pooled sum was the SUM of all three sub-totals, about twice any one of them). SEG_OF
-        # counts, per column, how many stated-total rows that column has already passed, so the
-        # items between one total row and the next carry the SAME segment as the total that recaps
-        # them, and never leak into the sum checked against a different sub-category's total. A
-        # note with only one stated total per column (every other bank read here) keeps every item
-        # in segment 0, so this is a no-op for them.
+        # A note may print several stated totals per column, each recapping only the items above it
+        # since the previous total (personnel, taxes, other administrative). `seg_of` counts the totals
+        # a column has passed, so an item is checked against the total that recaps it and no other;
+        # a note with one total per column stays in segment 0.
         seg_of: dict[int, int] = {}
-        for r, amts in zip(block, amounts_per_row):
+        for ri, (r, amts) in enumerate(zip(block, amounts_per_row)):
             if not amts:
                 continue
             lab = label_of(r, amts[0][0])
+            if (not lab.strip() and ri + 1 < len(block) and not amounts_per_row[ri + 1]
+                    and sum(1 for (x, _, _, _) in amts
+                            if min(abs(x - c) for c in centres) <= 45) == len(centres)):
+                lab = " ".join(w["text"] for w in block[ri + 1])   # label printed under its figures
             if not lab.strip():
                 continue
             if FOOTER_RE.match(fold(lab)):    # the running footer: the note ends above it
                 break
+            if RUNNING_HEADER_RE.match(fold(" ".join(w["text"] for w in r))):
+                continue                      # the page's running title row is not a note row
             cat = category_of(lab)
+            # An advertising label is never dropped as prose: one that wraps after a preposition
+            # still carries its figures on this row.
+            if not cat and SENTENCE_END_RE.search(fold(lab).rstrip(" (0123456789")):
+                continue                      # prose ("... findo em 31 de dezembro"), not an item
             is_total = bool(TOTAL_RE.match(fold(lab)))
             row_cols: list[int] = []
             for (x, v, raw, _yearlike) in amts:

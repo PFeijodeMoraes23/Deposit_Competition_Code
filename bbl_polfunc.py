@@ -292,12 +292,14 @@ def _unit_clause(k: int) -> str:
     variant's default (the k=5 spread, in basis points) also names its sibling table's unit, so
     the two tables of the same spread are not read as contradictory (reviewer, 2026-09-30):
     'basis points (Table~\\ref{tab:polfunc_k4}: percentage points)'."""
-    unit = _lhs_unit_name(k)
+    name = _lhs_unit_name(k)
     default = CFG.get('lhs_unit_name', 'percentage points')
-    if unit == default:
+    # Rendered abbreviated (the text defines pp and bp once); the full names stay the stored values.
+    unit = _UNIT_ABBR.get(name, name)
+    if name == default:
         return unit
     sib = next((j for j in K_ENDOG if j != k and _lhs_unit_name(j) == default), None)
-    return unit if sib is None else unit + rf" (Table~\ref{{{CFG['tab_label']}_k{sib}}}: {default})"
+    return unit if sib is None else unit + rf" (Table~\ref{{{CFG['tab_label']}_k{sib}}}: {_UNIT_ABBR.get(default, default)})"
 
 
 # ==============================================================================
@@ -1497,7 +1499,7 @@ def _polfunc_notes(k: int | None = None, results: dict | None = None,
         + (_NATIONAL_NOTE if dagger else '')
         + r'*** $p<0.01$, ** $p<0.05$, '
         r'* $p<0.1$. Ratios and rates, the Basel index included, are fractions in the panel; '
-        r'their coefficients are per percentage point (per pp$^{2}$ for squares), and the '
+        r'their coefficients are per pp (per pp$^{2}$ for squares), and the '
         r'risk-free rate and asset return are quarterly. '
         # str.replace, not str.format: the note is LaTeX and full of braces.
         + CFG['depvar_note'].replace('{unit}', _unit_clause(k if k is not None else 4))
