@@ -5,22 +5,24 @@ demand model. This note records where the data can and cannot be found, how each
 checked against the central bank's own accounts, the choices made, and what the collection
 scripts produce.
 
-Last updated: 2026-09-20.
+Last updated: 2026-10-04.
 
 ## Status
 
 | Piece | Script | State |
-|---|---|---|
+|-------|----------|--------|
 | Central bank accounts, 2025 onward | `scrape_cosif_advertising.py` | Built, validated, outputs written |
 | Securities-regulator filings, 2013 onward | `scrape_cvm_advertising.py` | Built, validated, outputs written |
 | SEC annual reports (separate annual panel) | `scrape_sec_advertising.py` | Built, validated, outputs written |
-| Caixa's own disclosures and sponsorship | `scrape_caixa_advertising.py` | Built, validated, outputs written |
-| Banestes, BASA, Banrisul, BRB own disclosures | `scrape_statebank_advertising.py` | Built, validated; three banks at 100% of published totals, BRB at 96.2% |
+| Caixa's own disclosures and sponsorship, text months | `scrape_caixa_advertising.py` | Built; 142 months, 133 validated against their printed totals, 9 recorded as files that do not close |
+| Caixa's 20 scanned months | `scrape_caixa_scan_advertising.py` | Built; 17 validated (one within 5 centavos), 3 not validated |
+| Banestes, BASA, Banrisul, BRB own disclosures | `scrape_statebank_advertising.py` | Built, validated; three banks at 100% of published totals, BRB at 94.2% |
 | Sponsorship robustness series, BB and BNB | `scrape_sponsorship_bb_bnb.py` | Built, validated, outputs written; open questions in 5.4 |
 | Entity crosswalk to market panel codes | `build_advertising_crosswalk.py` | Built, validated, outputs written |
-| Assembly of the quarterly and annual panels | `build_advertising_panel.py` | Built, six checks pass, outputs written |
-| Statement-note extraction, 2013-2024 | not yet written | Approved for after the assembly (section 9) |
-| Freedom-of-information request to the central bank | filed on Fala.BR | Awaiting reply |
+| Registered advertising films (a count, not spend) | `scrape_ancine_ad_films.py` | Built, seven checks pass; kept as a separate quarterly table (5.8) |
+| Assembly of the quarterly and annual panels | `build_advertising_panel.py` | Built, checks pass, outputs written 2026-10-04 |
+| Statement-note extraction | `scrape_bank_notes_advertising.py` | Built; six banks written 2026-10-04, four validated; not yet in the assembled panel (5.9) |
+| Freedom-of-information request to the central bank | filed on Fala.BR | Granted 2026-09-24 without institution names; appeal filed the same day; no reader built (section 4) |
 
 All outputs go to `paths.AWARENESS_PROC` (`Open-Finance/BCB/Awareness/processed`).
 
@@ -201,6 +203,32 @@ one row per reporting institution (the form granted in NUP 18810.029130/2024-31)
   and later; unnamed per-institution monthly rows granted in 18810.029130/2024-31.
 - If only unnamed rows arrive, they give system totals and cross-institution dispersion.
   Matching rows back to named banks would defeat the confidentiality the release rests on.
+
+**Outcome, 2026-09-24: granted in the unnamed form.** One file
+(`BCB/Awareness/raw/lai_bcb_cosif/RDR20261349700.xlsx`), 514,175 rows, January 2013 to December
+2024, the three accounts requested. Each row carries a 10-digit identifier that is neither a tax
+number nor a conglomerate code but is stable over time: 2,353 identifiers, 247 of them present in
+all 144 months of document 4010. So the release is a pseudonymous panel, not only a set of totals.
+Balances are negative and cumulate within each half-year, the convention
+`scrape_cosif_advertising.py` already converts to quarterly flows. There is no 2025 month, so the
+file does not overlap the named accounts.
+
+An appeal filed the same day asks, in order, for named data; failing that, for attributes per
+identifier (segment, control, institution type, conglomerate type) with small cells suppressed;
+and for the meaning of the document codes.
+
+Rules for using the file:
+
+- **Identifiers are never matched to names.** The release rests on the rows being unnamed, and
+  the December 2024 to January 2025 seam against the named accounts, or a ranking by size, would
+  identify the large banks at once. The file serves system totals, dispersion, concentration, the
+  within-institution panel under its pseudonyms, and the coverage of the named series in
+  advertising terms.
+- **Aggregate from document 40605 (prudential) or 4010 (individual), never 40604 on top of
+  40605.** 4,894 keys repeat with different values, almost all in 40604, which holds the
+  individual entities consolidated into a conglomerate. Document 4030 is documented nowhere
+  public.
+- No reader is built yet.
 
 ---
 
@@ -534,28 +562,71 @@ C0080075 throughout and C0084655 over 2017-2022.
 **Outputs.** `advertising_entity_crosswalk.{parquet,csv}` and
 `advertising_entity_crosswalk_periods.{parquet,csv}`.
 
-### 5.6 Caixa and the state banks: `scrape_caixa_advertising.py`, `scrape_statebank_advertising.py`
+### 5.6 Caixa and the state banks: `scrape_caixa_advertising.py`, `scrape_caixa_scan_advertising.py`, `scrape_statebank_advertising.py`
 
 **Caixa.** Monthly outlays from its transparency list (SharePoint list API; plain clients loop on a
-302 without a cookie jar), 2014 onward in the parsed series: the 2013 to January 2014 files are
-image scans and this machine has no text-recognition engine, so those months are recorded as
-unreadable, never estimated. Sponsorship contracts 2019-2026 are a separate file, contracted at
-signing. Its 2025 sums run 1.36 times the COSIF advertising account for the year and 0.66 of all
-three accounts, with a same-month correlation of 0.88.
+302 without a cookie jar), January 2013 to June 2026: 162 months. Two builders read them, and the
+assembly merges their outputs. The two never cover the same month, and the assembly stops if they
+do.
 
-**Four state banks.** 420 listed documents, parsed per bank with published-total checks:
+*Text months.* `scrape_caixa_advertising.py` reads the 142 months that carry a text layer and
+checks each against the totals printed in its own file, in integer centavos:
 
-| Bank | Parsed | Unreadable | Duplicate content | Unavailable link | Published totals matching | Months with lines |
+| Result | Months | Written as |
+|---|---|---|
+| Equal to the printed totals | 132 | `validated_exact` |
+| Within 5 centavos (October 2018, 3 centavos) | 1 | `validated_within_5_centavos`, `tolerance_flagged` |
+| The file's own columns do not add up to its own totals | 9 | `not_validated_document`, `validated = False` |
+
+The nine are July and August 2015, March, June and July 2016, April 2017, July 2023, and May and
+July 2024. Each was confirmed by an independent reading of the page, and each is kept as printed.
+They are a reviewed list held in the script with their exact gaps, and that list is what makes the
+parser-health gate meaningful: a month that fails and is not on the list counts against the
+parser, and the run stops when fewer than 95% of months pass. A gate without the list passed a
+parser that read totals as data and produced 45 such months.
+
+One reading rule is the user's (2026-09-28): a cell printed without decimals, such as `14.250`,
+counts as money only when the printed totals include it.
+
+*Scanned months.* `scrape_caixa_scan_advertising.py` reads the 20 months published as image scans
+with no text layer: all of 2013, January to June 2014, and April and May 2016. It uses the local
+OCR engine benchmarked in 9.1, rebuilds the table from the OCR boxes, and accepts a month on the
+table's own arithmetic. Nothing is sent to an external service.
+
+| Result | Months |
+|---|---|
+| Closes exactly | 16 |
+| Within 5 centavos (May 2014, 4 centavos on the grand total), admitted and flagged | 1 |
+| Does not close: April 2013 (R$2.00), December 2013, June 2014 | 3 |
+
+For May 2014 the arithmetic cannot say whether the print or the reading is off. The three that do
+not close are written with `validated = False`.
+
+*The 5-centavo rule* is the user's and applies to both builders: an exact match is
+`validated_exact`; a gap of at most 5 centavos is `validated_within_5_centavos` and carries
+`tolerance_flagged`; anything larger is not validated.
+
+Sponsorship contracts 2019-2026 are a separate file, contracted at signing. Caixa's 2025 sums run
+1.36 times the COSIF advertising account for the year and 0.66 of all three accounts, with a
+same-month correlation of 0.88.
+
+**Four state banks.** 422 listed documents, parsed per bank with published-total checks:
+
+| Bank | Parsed | Unreadable | Duplicate content | Other statuses | Published totals matching | Months with lines |
 |---|---|---|---|---|---|---|
-| Banestes | 178 | 0 | 2 | 0 | 100.0% | 2016-2026, 12 a year |
-| Banrisul | 52 | 0 | 7 | 1 | 100.0% | 2021H2-2024, 2025-2026 |
-| BASA | 11 | 0 | 4 | 0 | 100.0% | 2012, 2014, 2016-2026 |
-| BRB | 88 | 39 | 4 | 0 | 96.2% | 2014-2025, partial |
+| Banestes | 178 | 0 | 2 | 1 missing file | 100.0% of 327 | 2016-2026, 12 a year |
+| Banrisul | 52 | 0 | 7 | 1 unavailable link, 1 names only, 1 no lines | 100.0% of 161 | 2021H2-2024, 2025-2026 |
+| BASA | 11 | 0 | 4 | 20 no lines, 1 missing file | 100.0% of 156 | 2012, 2014, 2016-2026 |
+| BRB | 83 | 38 | 4 | 6 duplicate pages, 12 missing file | 94.2% of 499 | 2014-2025, partial |
 
-Fourteen defects were found and fixed while validating. Most were caught by the published totals
-rather than by inspection, and they compound: every fix exposed the next one, which is why BRB moved
-86.3% -> 91.5% -> 95.7% -> 96.2% rather than in one step. The last two were caught by a separate
-audit, because no total can find them.
+BRB's 94.2% is 470 of 499 checks, leaving out 18 checks on filings that a later republication
+supersedes; counting those it is 470 of 517, or 90.9%. The first build stood at 96.2% of 422
+checks; the later rounds described below added tables, and with them checks.
+
+Fourteen defects were found and fixed while validating the first build. Most were caught by the
+published totals rather than by inspection, and they compound: every fix exposed the next one,
+which is why BRB moved 86.3% -> 91.5% -> 95.7% -> 96.2% rather than in one step. The last two were
+caught by a separate audit, because no total can find them.
 - Documents linked once per entity arrive as the same file under several names. A repeated content
   hash is now recorded and parsed once; this alone lifted Banestes and Banrisul to 100%.
 - A published total row closes its table, so the next table starts a new one even where its header
@@ -620,27 +691,63 @@ audit, because no total can find them.
   into the advertising table, so the table-level flag is off for them, and 660 rows worth R$39.0m
   whose published classification says Esporte, Arte e Cultura, Entretenimento, Relacionamento
   Institucional or Causas Sociais also fell to "other". Those categories are now recognised by name.
-  BRB's "other" is down from 660 rows and R$39.0m to 30 rows and R$0.74m, the residue being genuinely
-  ambiguous labels (Negocios) and rows whose glyphs interleave into nonsense. After the fix the audit
+  BRB's "other" is down from 660 rows and R$39.0m to 13 rows and R$0.23m. After the fix the audit
   finds no row in any of the four banks whose group contradicts its own label.
 
 The classification audit is clean for the other three banks. Banestes has no unclassified row;
 Banrisul's 104 are all zero-valued; BASA's 98, worth R$9.3m gross, are agency fees
 ("Honorarios/Desconto de Agencia") and creative work ("Criacao"), which belong in neither placement
 nor production and are deliberately left in `other`. BASA's gross equals net plus tax on all 1,172
-fully published lines. BRB clears its 90% floor at
-96.2% and its rows are now written with `validated = True`. Of its 422 published totals, 16 still
-fail, and most of those are defects in the SOURCE rather than in the parse, which is now stated
-rather than assumed: `brb_row_total_gap` reports eight rows whose month cells contradict their own
-printed TOTAL. The clearest is 2018Q1, published in three entity files: a PPR row prints 32.000,00
-for January, while both its own row total and the published January total imply 537.258,64. The
-document's two totals agree with each other to the cent - the row totals sum to the stated quarter,
-and the month totals sum to the stated quarter - so it is the single printed cell that is wrong.
-Those rows are reported and kept as printed, never imputed, because filling them would silently
-rewrite published data. Nine of the sixteen failures are that class; the rest are a table whose TOTAL
-column is year-to-date, a 2014 file whose digits arrive as `(CID:55)` glyph codes, and two files
-short by round amounts with no visible cause. BRB is 0.8% of panel deposits. Its own advertising plus sponsorship equals 0.94 to 1.06 of its COSIF advertising
-account, confirming it books sponsorship inside that account.
+fully published lines. BRB clears its 90% floor at 94.2% and its rows are written with
+`validated = True`. Twenty-nine of its 499 published totals fail. They have not been classified one
+by one since the count stood at 16 (2026-09-20). At that count most were defects in the SOURCE
+rather than in the parse: `brb_row_total_gap` reported eight rows whose month cells contradict
+their own printed TOTAL. The clearest is 2018Q1, published in three entity files: a PPR row prints
+32.000,00 for January, while both its own row total and the published January total imply
+537.258,64. The document's two totals agree with each other to the cent - the row totals sum to the
+stated quarter, and the month totals sum to the stated quarter - so it is the single printed cell
+that is wrong. That cell is now imputed from the row total (+505,258.64), marked `imputed`, and
+counted as observed (user decision, 2026-09-28). A cell is imputed only when the published month
+total falls short by exactly the row's own gap; every other such row is reported and kept as
+printed, because filling it would silently rewrite published data. Nine of the sixteen failures
+were of that class; the rest were a table whose TOTAL column is year-to-date, a 2014 file whose
+digits arrive as `(CID:55)` glyph codes, and two files short by round amounts with no visible
+cause. BRB is 0.8% of panel deposits. Its own advertising plus sponsorship equals 0.94 to 1.06 of
+its COSIF advertising account, confirming it books sponsorship inside that account.
+
+**BRB after the first build (2026-09-24 to 2026-10-04).** Reviews of the BRB series found and closed
+the items below. Banestes, BASA and Banrisul stayed row-for-row identical through all of them.
+
+- *Duplicate copies.* The same table is published in more than one entity's file. The copies are
+  removed: exactly R$13,670,918.65 of double counting.
+- *Cartão BRB* is read but kept out of the conglomerate's series: the registry places it outside
+  prudential conglomerate C0080288.
+- *Republications.* A later filing of a quarter supersedes the earlier one, and filings that carry
+  no date are ordered by their position in the listing. 2018Q2 for the bank is 4,822,250.24, from
+  the January 2019 republication, which prints the detail rows. The 4,815,932.74 that later notices
+  print for that quarter sits in a year-to-date recap with no correction wording, and changes
+  nothing.
+- *Corrections printed as text.* A correction that names a row is applied to that row. A
+  correction that restates only a total is used in the check, and the gap is flagged (2019Q1 and
+  2019Q2).
+- *2016Q1 recovered.* Bank 6,137,786.95, brokerage 117,292.40 and finance company 213,492.70, each
+  equal to its printed "TOTAL PAGO". Three things had hidden the quarter: the header search was one
+  row too short for that quarter's header; one gazette page packs three entities' tables into two
+  table objects; and each record is printed over about three grid rows, so an amount row took the
+  previous record's category. Each amount row now takes its own record's labels. This rule applies
+  to 2016Q1 tables only, and a table that falls back from it writes a note. An independent reading
+  of the PDF checked all 44 bank rows and every brokerage and finance-company row for category,
+  beneficiary, purpose and month. At institution level the quarter is advertising 4,656,904.20,
+  legal notices 992,280.85 and sponsorship 616,500.00.
+- *Basis.* Each table takes its basis from its own total row: paid, accrued, or undocumented when
+  the row prints only "REALIZADO". A quarter whose tables differ carries a combined kind such as
+  `paid/undocumented`. Whatever reads the panel pools the kinds (user decision, 2026-10-01), so no
+  quarter is dropped for its label.
+- *"Negócios" is sponsorship in every year* (user decision, 2026-10-04). BRB's 2014 and 2016 notices
+  print the category as "Patrocínios/Negócios", and the same fair was filed as sponsorship in 2016
+  and 2025 but as "other" in 2018-2020. Six rows, R$539,000, moved from "other" to sponsorship.
+- *Left as is.* Cartão BRB's 2016Q1 labels are misaligned (it is outside the series), and 38
+  scanned gazette files are unread.
 **Two years were recovered after the first pass, one of them from the live site.**
 
 Banrisul's 2024 was never lost. Its detail page lists that year's supplier files and simply omits
@@ -674,22 +781,36 @@ was.
 Two outputs, keyed to market-panel conglomerate codes through the crosswalk, with Pan mapped per
 quarter across its 2021 change.
 
-**`advertising_panel_quarterly`** (10,736 rows): one row per conglomerate, quarter, SOURCE and
+**`advertising_panel_quarterly`** (10,680 rows): one row per conglomerate, quarter, SOURCE and
 measure. Sources are never spliced, by decision: a source change inside a bank's history is a
 level jump that bank fixed effects cannot absorb.
 
 | Source | Conglomerates | Span | Basis |
 |---|---|---|---|
 | cosif_conglomerate | 173 | 2025-2026 | accrued |
-| cosif_institution (members summed) | 109 | 2025-2026 | accrued |
-| cvm | 13 | 2013-2026 | accrued, individual statements summed; Itau consolidated |
-| caixa_own | 1 | 2014-2026 | outlays ("custos") |
-| statebank_own | 4 | 2014-2026 | outlays |
+| cosif_institution (members summed) | 118 | 2025-2026 | accrued |
+| cvm | 12 | 2012-2026 | accrued, individual statements summed; Itau consolidated |
+| caixa_own | 1 | 2013-2026 | outlays ("custos"); text months and scanned months merged |
+| statebank_own | 4 | 2014-2026 | outlays; the basis printed on each table (paid, accrued, undocumented) |
 | sponsorship | 1 | 2020-2026 | paid |
 
+The statement-note series (5.9) and the film counts (5.8) are not sources of this table.
+
 Measures are separate rows: `adv`, `adv_production` (the main own-file measure), `promo`, `publ`,
-`all3`, `legal_notice`, `sponsorship`, plus `adv_production_plus_sponsorship`, a BRB-only extra
-measure because BRB books sponsorship inside its advertising account.
+`all3`, `as_filed` (the filing's own line, with whatever accounts the bank puts in it),
+`legal_notice`, `sponsorship`, plus `adv_production_plus_sponsorship`, a BRB-only extra measure
+because BRB books sponsorship inside its advertising account.
+
+`amount_kind` records the basis as published. For the state banks it can be a combined label such
+as `paid/undocumented`, when the tables of one quarter print different bases. Readers of the panel
+select by source, measure and `value_status` and never filter on `amount_kind` (user decision,
+2026-10-01): a `paid` filter would drop real BRB quarters, 2019Q4, 2020Q3 and 2020Q4 among them.
+Both diagnostics already read it this way.
+
+A Caixa quarter is `validated` only if every month in it is. Eleven Caixa quarters are written with
+`validated = False`: 2013Q2, 2013Q4, 2014Q2, 2015Q3, 2016Q1, 2016Q2, 2016Q3, 2017Q2, 2023Q3, 2024Q2
+and 2024Q3. `flag_notes` says why: `month_totals_do_not_close`, `month_within_5_centavos`,
+`month_read_by_ocr`.
 
 Columns carry nominal amounts and `amount_brl_real`, deflated by the chained IPCA index from the
 central bank's series 433 with the base pinned to 2024Q4, the window's end, so the real series does
@@ -699,15 +820,16 @@ jumps that affect the deposit aggregate), `adv_over_deposits` alongside it with 
 marking the 431 rows whose market-panel deposit denominator jumps by more than half against the
 previous quarter, and `adv_over_admin` where the 2025 accounts give administrative expenses.
 
-`value_status` gives every cell one of four meanings, because a single NaN cannot carry them:
-`observed_positive` (5,220), `observed_zero` (1,301, validated published zeros), `observed_negative`
-(97, reversals and glosas) and `not_observed_in_span` (4,118 rows generated inside a series' own
-span, so a gap inside a bank's history is visible as a row rather than as an absence).
+`value_status` gives every cell one of five meanings, because a single NaN cannot carry them:
+`observed_positive` (5,220), `observed_zero` (1,299, validated published zeros), `observed_negative`
+(97, reversals and glosas), `imputed_from_row_total` (3, the BRB January 2018 cell of 5.6, counted
+as observed) and `not_observed_in_span` (4,061 rows generated inside a series' own span, so a gap
+inside a bank's history is visible as a row rather than as an absence).
 
 `segment_id` increments on any change of source, scope, bundle or key, so every join is legible
 without recomputing it. `registry_code` stores the code the IF.data registry gives the filer in that
 very quarter, beside the panel code, and `code_conflict` marks the 151 rows (10 conglomerates) where
-they disagree (10,492 of 10,736 rows carry one). Every such case is a filer whose acquirer the
+they disagree (10,436 of 10,680 rows carry one). Every such case is a filer whose acquirer the
 registry has already absorbed it into
 while the market panel still carries it as its own entity: Kirton into Bradesco, Alfa into Safra,
 Modal into XP, Traton into Volkswagen, Master BI and Letsbank and Pleno into Master, John Deere into
@@ -724,12 +846,18 @@ a filer has one and the broad sales-and-marketing line otherwise, flagged; plus 
 that is filed by year rather than month (Banco do Nordeste's contract lists, Caixa's contracted
 amounts), kept annual and never spread across quarters.
 
+**`advertising_ancine_quarterly`** (5,995 rows): the film counts of 5.8, one row per conglomerate
+and quarter. It is a separate table by decision (user, 2026-09-29): a count of films is not an
+amount and does not belong among the measures above.
+
 Six checks abort the build: inputs present and every source contributing; every row carrying a
 panel code or being dropped with a counted reason (20 rows, institutions outside the panel); no
 duplicate keys; the deflator covering every quarter; no conglomerate-quarter mixing a consolidated
 filing with an individual filing of an entity inside it; and a printed 2025 reconciliation. That
-reconciliation gives a median ratio to the COSIF conglomerate advertising account of 1.05 for the
-filings, 1.31 for Caixa and 0.74 for the state banks.
+reconciliation gave a median ratio to the COSIF conglomerate advertising account of 1.05 for the
+filings, 1.31 for Caixa and 0.74 for the state banks when it was last read (2026-09-20). The build
+also stops if a Caixa month is read by both builders, or if the quarterly film counts do not add
+up to the monthly table.
 
 Five defects of my own surfaced in the runs and are fixed: institution rows were dropped for want of
 a conglomerate code, then double-counted once mapped, because several institutions sit inside one
@@ -740,6 +868,126 @@ half-billion for Itau in 2013Q3 was the symptom -- in a near-1000 ratio pair the
 keying slip); and the count of unvalidated rows printed negative, because `validated` arrives as
 object-dtype Python booleans where `~True` is -2.
 
+### 5.8 Registered advertising films: `scrape_ancine_ad_films.py`
+
+The audiovisual regulator's open file of advertising-film registrations
+(`crt-obras-publicitarias.csv`, 314 MB, last modified 2026-09-01) has one row per registered film,
+with the advertiser's tax identifier, the product advertised and the registration date. It gives a
+count of campaigns per bank and never a spend measure: the levy per film is a fixed statutory fee.
+It covers banks that disclose nothing else.
+
+9,813 registrations are attributed to a panel bank, each with the basis recorded:
+
+| Class | Registrations | Rule |
+|---|---|---|
+| `own` | 7,088 | the advertiser is the bank or a member of its conglomerate |
+| `affiliate` | 698 | a bank-owned insurer or affiliate, attached when the film carries the bank's brand or the bank's group controls the advertiser |
+| `holding` | 66 | a parent holding (J&F for PicPay, C6 Holding, UOL for PagSeguro), only films whose product or title names the bank |
+| `media_sponsored` | 81 | sponsored content registered by a media company, attributed to the bank that paid, flagged |
+| `coop_system` | 1,880 | Sicoob and Sicredi singles and centrals, counted against the two cooperative banks and never in a bank's total |
+
+The attribution rules were decided by the user on 2026-09-28:
+
+- An affiliate's film that names another bank and not its own goes to the review list, not to
+  either bank (Instituto Porto Seguro's "Cinema Itaú Teatro" films).
+- Multi-bank joint ventures (Elo, Livelo, Alelo, Cielo) stay unattached, with their owners
+  recorded.
+- A brand word alone is not enough when the advertiser's name also carries COMUNICACAO,
+  PUBLICIDADE, DROGARIA, IMOVEIS or OTICA: the agencies and shops so named advertise supermarkets
+  and shoes. SAFRA also means harvest, and INTER, PAN, NEON and XP are generic words.
+- A brand in a film's title may only name a tournament or a venue. 85 such registrations carry
+  `naming_rights_suspect`, so they can be dropped.
+- Outside the registry's span an advertiser takes its nearest code only when that span touches the
+  first or the last registry list; otherwise the film has no code in that quarter.
+
+`advertising_ancine_quarterly`, written by the assembly: 5,995 rows, 109 conglomerates, 2013-2026.
+`n_crt` (6,997 in all) is own plus affiliate plus holding plus media-sponsored, each also in its
+own column. `n_crt_coop_system` (1,818) is apart. `in_panel` marks the 3,960 rows whose
+conglomerate is in the market panel that quarter, and `partial_quarter` the quarters the file does
+not cover in full. Seven checks stop the scraper.
+
+### 5.9 Statement notes: `scrape_bank_notes_advertising.py`
+
+Every bank publishes audited statements whose administrative-expense note itemises advertising. It
+is the same accounting concept as the 2025 COSIF accounts, and it exists for banks whose
+structured filings carry no such line. Santander Brasil is the reason the route exists: 9.5% of
+panel deposits, a filing every quarter, and no advertising line in any structured year.
+
+The script reads the regulator's document system for CVM filers (`cvm_rad`) and each bank's own
+site otherwise (`ir_site`). It contacts only hosts approved by the user: `utils/note_sources.py`
+holds the 23 approved hosts and the eighteen targets, and `allowed_host()` is applied to every URL
+and to every redirect target before it is followed. The targets are the conglomerates in the E3
+spec-12 estimation sample with no quarterly advertising series, 25.9 points of 2024Q4 panel
+deposits.
+
+**The mapping, settled on Santander's ITR at 2025-06-30.** Note 25 states "Propaganda, Promoções e
+Publicidade" of R$223,041 thousand for the first half on the INDIVIDUAL statement and R$299,207
+thousand on the CONSOLIDATED one. Against the COSIF accounts for the same six months:
+
+| note figure | COSIF comparison | ratio |
+|---|---|---|
+| individual, R$223.0m | institution 90400888, advertising account alone, R$146.2m | 1.526 |
+| individual, R$223.0m | institution 90400888, **all three accounts**, R$222.76m | **1.0013** |
+| consolidated, R$299.2m | **conglomerate** C0080185, all three accounts, R$300.1m | **0.997** |
+
+So the bundled note label corresponds to COSIF `all3` (advertising plus promotions plus
+publications) and not to the advertising account alone, which would overstate by about half. And
+the note's individual column corresponds to the INSTITUTION while its consolidated column
+corresponds to the PRUDENTIAL CONGLOMERATE.
+
+**Outputs, written 2026-10-04.** 232 listed documents, 195 parsed; 10,660 lines; 1,200 period rows;
+858 checks of a stated note total against the sum of its items.
+
+| Bank | Route | Parsed | Years with an advertising line | Windows | Stated totals equal to their items | 2025 half-years against COSIF | `validated` |
+|---|---|---|---|---|---|---|---|
+| Santander | cvm_rad | 40 | 2015-2025 | quarter, half-year, nine months, year | 93.7% of 286 | 0.99-1.00 | True |
+| BTG | cvm_rad | 36 | 2015-2025 | quarter, half-year, nine months, year | 99.4% of 158 | 1.14-1.20 | True |
+| Daycoval | cvm_rad | 40 | 2015-2025 | same; one window a year in 2015-2018 | 99.7% of 370 | 1.00 individual, 1.06 consolidated | True |
+| Safra | ir_site | 20 | 2015-2021 | half-year, year | 95.2% of 42 | no 2025 line | True |
+| Volkswagen | ir_site | 37 | 2014-2026 | half-year, year | 0 of 2 | 1.00-1.05 on one set of documents, 0.37-0.71 on another | False |
+| PagBank | ir_site | 22 | 2018, 2019 | year | prints no totals | no 2025 line | False |
+
+`validated` is per bank: at least 70% of its stated note totals must equal the sum of the items
+printed above them. A bank below the floor stops the run unless it is named in `--unvalidated`,
+which writes its rows with `validated = False`. Volkswagen is written that way: its only two
+stated totals come from one two-page 2012 document. PagBank's notes print no total, so nothing can
+be checked. Two further checks pass: advertising never exceeds the note's own administrative
+total (5.1% of it at the median, 782 columns), and 11 of 13 scope-matched 2025 half-years land
+within [0.80, 1.25] of the COSIF sum their label maps to, median 1.0013.
+
+**Reading rules the totals check forced.** Daycoval went from 33.1% to 99.7% through five rules,
+none specific to a bank:
+
+- A note may print several totals per column (personnel, taxes, other administrative). Each is
+  checked against the items since the previous total.
+- A negative printed with a detached bracket, "( 58.930)", is negative. Reading it as positive
+  mixed the signs within a column, and 46 of Daycoval's advertising rows came out negative.
+- A row whose label ends in a preposition is prose ("trimestre findo em 30 de junho") and is
+  skipped, unless the label is an advertising one.
+- A figure row with no label, followed by a text-only row, takes that row as its label.
+- The filing system's running page title is skipped.
+
+**Run behaviour.** One document that raises is recorded as `error` and the run goes on; two stop
+it. A lost connection stops the run cleanly with exit code 75, and the same command resumes from
+the cache. Nothing is written until every check has passed. `--offline` re-parses the cache
+without contacting any host.
+
+**Not done.**
+
+- The series are not in the assembled panel. That needs choices on the scope (individual or
+  consolidated), the line (bundled or advertising alone) and how the cumulative windows become
+  quarters.
+- BTG's note runs 14-20% above the COSIF sum for the accounts its label names. Unexplained.
+- Daycoval has one advertising window a year in 2015-2018. Not yet examined.
+- Safra's statements carry no advertising line after 2021.
+- Volkswagen's listing mixes entities (Banco Volkswagen and Consórcio Nacional Volkswagen) and
+  includes documents dated 2012 and 2026. Its series should not be used before that is sorted.
+- Eleven targets have no document listing implemented: Nu, Citibank, XP, Inter, C6, C6
+  Consignado, Sicredi, Sicoob, Master, Mercado Pago and Agibank. PicPay's press page links no
+  statement PDF.
+- The 70% floor still stops a run when a bank's failures come from a single document. The user's
+  rule (2026-09-30) is that one bad document must not stop a run.
+
 ---
 
 ## 6. Coverage in deposit terms
@@ -747,15 +995,20 @@ object-dtype Python booleans where `~True` is -2.
 `diag_advertising_coverage.py` computes this, so the figures are reproducible rather than
 hand-typed; it writes `advertising_coverage_by_year.csv` and `advertising_coverage_by_source.csv`.
 
-A quarter counts as observed only when all three of its months are filed. Thirteen
-conglomerate-quarters fail that test and are excluded, and the rule matters: Caixa's 2016Q2 rests on
-a single month, which alone moves 2016 from 69.5% to 38.7%.
+A quarter counts as observed only when all three of its months are filed; a quarter short of a
+month is excluded. The rule mattered most for Caixa: until its scanned months were read, 2016Q2
+rested on a single month, which alone held 2016 at 38.7%. With April and May 2016 read, 2016 is
+69.5%, and the 2013 and 2014 rows exist at all.
 
-Share of panel deposits (sum of `dep_a1 + dep_a2 + dep_a4 + dep_a5`, Q4 denominator):
+Share of panel deposits (sum of `dep_a1 + dep_a2 + dep_a4 + dep_a5`, Q4 denominator), from the
+build of 2026-10-01. The statement-note series of 5.9 are not in these figures.
 
 | Year | Quarterly, full year | Any quarter | Plus SEC annual | SEC alone |
 |---|---|---|---|---|
-| 2016 | 38.7% | 81.9% | 58.6% | 32.8% |
+| 2013 | 67.0% | 79.9% | 67.0% | 0.0% |
+| 2014 | 66.6% | 79.8% | 66.6% | 0.0% |
+| 2015 | 66.8% | 78.6% | 86.8% | 30.9% |
+| 2016 | 69.5% | 81.9% | 89.3% | 32.8% |
 | 2017 | 79.2% | 80.8% | 89.6% | 38.2% |
 | 2018 | 78.2% | 79.1% | 89.7% | 42.3% |
 | 2019 | 77.1% | 78.3% | 88.7% | 42.4% |
@@ -766,10 +1019,11 @@ Share of panel deposits (sum of `dep_a1 + dep_a2 + dep_a4 + dep_a5`, Q4 denomina
 | 2024 | 64.6% | 68.1% | 80.3% | 44.6% |
 | 2025 | 98.9% | 99.0% | 98.9% | 45.1% |
 
-Full-year coverage runs 8 to 13 conglomerates before 2025 and 150 in 2025, when the COSIF accounts
-begin. By source, in share of Q4 deposits: the filings carry 38-53%, Caixa's own files 16-31%
-(falling as its deposit share falls), the four state banks 0.5-3.2%, and the COSIF accounts 93-97%
-from 2025. The SEC series alone is 33-47% but annual, so it cannot enter a quarterly regression.
+Full-year coverage runs 7 to 13 conglomerates before 2025 and 150 in 2025, when the COSIF accounts
+begin. By source, in share of Q4 deposits over 2016-2024: the filings carry 38-53%, Caixa's own
+files 16-31% (falling as its deposit share falls), the four state banks 0.2-3.2%, and the COSIF
+accounts 93-97% from 2025. The SEC series alone is 31-47% from 2015 but annual, so it cannot enter
+a quarterly regression.
 
 ### 6.1 Coverage of the estimation sample, and whether it survives fixed effects
 
@@ -778,19 +1032,35 @@ spec-12 demand parquet, merges one source per conglomerate (never spliced: the s
 in-window quarters, kept for the whole window), and writes three CSVs.
 
 Coverage is better inside the estimation sample than in the panel at large, because the sample
-already restricts to banks with the data the demand system needs: 74.8-86.8% of estimation ROWS and
-64.3-81.1% of estimation deposits, on 13 to 16 conglomerates a year. Seventeen conglomerates appear
-in total; 16 have at least 8 in-window quarters and 12 have at least 20.
+already restricts to banks with the data the demand system needs: 80.5-86.8% of estimation ROWS and
+67.1-80.9% of estimation deposits, on 13 to 16 conglomerates a year.
+
+| Year | Conglomerates covered | Share of rows | Share of deposits |
+|---|---|---|---|
+| 2016 | 13 | 80.5% | 74.9% |
+| 2017 | 15 | 86.2% | 80.9% |
+| 2018 | 15 | 84.1% | 79.3% |
+| 2019 | 15 | 83.6% | 77.8% |
+| 2020 | 16 | 84.6% | 75.3% |
+| 2021 | 14 | 83.3% | 71.8% |
+| 2022 | 14 | 86.8% | 71.7% |
+| 2023 | 14 | 85.2% | 69.5% |
+| 2024 | 14 | 85.9% | 67.1% |
+
+Seventeen conglomerates appear in total; 16 have at least 8 in-window quarters and 12 have at least
+20. Reading Caixa's two scanned months of 2016 moved that year's deposit coverage from 64.3% to
+74.9%. The four validated statement-note banks of 5.9 (13.1 points of 2024Q4 panel deposits) would
+add to these figures once they are in the panel.
 
 The identifying variation survives the two-way fixed effects the demand equation carries:
 
 | Variable | After conglomerate FE | After conglomerate and quarter FE | Absorbed |
 |---|---|---|---|
-| log real advertising | 11.1% | 9.0% | 91.0% |
-| advertising / total assets | 37.6% | 34.0% | 66.0% |
+| log real advertising | 10.7% | 8.7% | 91.3% |
+| advertising / total assets | 37.2% | 33.5% | 66.5% |
 
 That is the test `frac_4g5g` failed at 98.9% absorbed. With a median within-bank sd of log real
-advertising of 0.59, the 9.0% surviving leaves about 0.18 log points of within-bank, within-quarter
+advertising of 0.52, the 8.7% surviving leaves about 0.15 log points of within-bank, within-quarter
 variation over roughly 450 conglomerate-quarters. One caveat on the ratio's larger residual: its
 denominator moves too, so part of what survives in `advertising / total assets` is total assets
 rather than advertising. The log measure is the conservative read, and it passes.
@@ -806,8 +1076,8 @@ rather than advertising. The log measure is the conservative read, and it passes
   only; no pipeline file is written or regenerated by any advertising script, and no pipeline
   module is imported (several re-run themselves as scripts when imported outside the project
   interpreter).
-- Parsing constraints on this machine: no OCR engine (Caixa's 2013 to January 2014 scans cannot
-  be read yet) and no ODS reader library (Banco do Nordeste's files).
+- Parsing constraints on this machine: a local OCR engine is installed and reads Caixa's scans
+  (9.1, 5.6); there is no ODS reader library (Banco do Nordeste's files).
 
 ---
 
@@ -857,45 +1127,21 @@ separately. [^kantar]
 
 ## 9. Sources found but not yet collected
 
-- **Statement notes, the priority. Hosts approved by the user on 2026-09-22.** Notes to the audited
-  statements carry an explicit advertising line, the same accounting concept as the 2025 COSIF
-  account, twice a year, and for entities that file nothing structured. Verified by text extraction
-  on two entities: Nu Financeira's 2023 note shows a marketing expense line, PicPay Bank's 2024
-  note 18 shows advertising and publicity for both half-years.
-
-  `utils/note_sources.py` now holds the authorisation surface and the target list, with no fetching
-  logic in it, so what may be contacted is reviewable in one place. Seventeen approved hosts, and
-  `allowed_host()` raises on anything else, which turns a typo or a redirect onto a third-party CDN
-  into an error rather than an unapproved request. Eighteen targets, chosen from the data rather than
-  by reputation: the conglomerates in the E3 spec-12 estimation sample that have NO quarterly
-  advertising series, ranked by their 2024Q4 share of panel deposits. They come to 25.9 points, most
-  of the 31 points now uncovered, and they split into two routes.
-
-  The `cvm_rad` route (3 targets, 11.9 points) takes the full DFP/ITR document, notes included, from
-  the regulator's own document system at `rad.cvm.gov.br`; one host serves every filer, and the CVM
-  codes are verified against the cached DFP 2024 filing set (Santander 20532, BTG 22616, Daycoval
-  20796). **Santander Brasil alone is 9.5 points and is the reason the route exists**: it files every
-  quarter and has no advertising line in any structured year, because its figure is in the notes.
-  The `ir_site` route (15 targets, 14.0 points) uses each bank's own domain, since the central bank
-  requires publication whether or not a bank is listed. Three targets have no source pinned down yet
-  - Nu, Banco XP and Banco Inter, whose groups list abroad - and are listed as unresolved rather than
-  pointed at a guessed domain.
-- **Scanned documents are the largest remaining hole, and nothing is missing: every file is in
-  hand.** Caixa publishes 20 months as image scans with no text layer - all of 2013, January to June
-  2014, and April and May 2016 - and Caixa is 16-31% of panel deposits, so those 20 months are worth
-  more than any other gap. April and May 2016 alone are what pull 2016 coverage from 69.5% to 38.7%.
-  Banrisul's November 2024 PDF has a text layer whose font carries no Unicode map, which fails the
-  same way. BRB has 39 scanned gazette files, the reason its 2024 shows 9 months rather than 12.
-  A local OCR engine was installed and benchmarked on 2026-09-22 and reads these pages at 100%
-  amount accuracy: see 9.1. Nothing has been sent to any external service. What is left is rebuilding
-  the table from the OCR boxes, not reading the characters.
+- **Statement notes for the twelve targets with no usable listing.** The route is built and six
+  banks are written (5.9). Twelve of the eighteen targets, 11.6 points of 2024Q4 panel deposits,
+  still have none: eleven need a document listing written for the bank's own site (Nu, Citibank,
+  XP, Inter, C6, C6 Consignado, Sicredi, Sicoob, Master, Mercado Pago, Agibank), and PicPay's press
+  page links no statement PDF. The `cvm_rad` route covers Santander, BTG and Daycoval from one
+  host, the regulator's document system; everything else is the `ir_site` route, one domain per
+  bank.
+- **Scanned documents still unread.** Caixa's 20 scanned months are read (5.6). What remains is
+  BRB's 38 scanned gazette files, the reason its 2024 shows 9 months rather than 12, and Banrisul's
+  November 2024 PDF, whose text layer has a font with no Unicode map. The OCR engine of 9.1 reads
+  such pages; the work is rebuilding each table from the OCR boxes.
+- **The central bank's unnamed 2013-2024 file** (section 4) is in hand and has no reader.
 - **News and union compilations**: a news series on state-bank advertising 2019-2024, and a union
   study on state-bank sponsorship 2018-2023 (2023: BRB R$129.3m, Banrisul R$81.4m, Banpara R$17.6m,
   Banestes R$6.2m). Useful cross-checks on the banks' own files.
-- **Registered advertising films.** The audiovisual regulator publishes records with the
-  advertiser's own tax identifier, giving campaign counts per bank per month: an extensive-margin
-  measure no other source provides. Never a spend measure, since the levy is a fixed statutory fee.
-  Needs a free key on the government data portal, which is the user's account to create.
 - **Awareness proxies, verified.** Wikipedia article pageviews per bank, monthly from July 2015
   (use the `user` agent filter, chain renamed titles, and note that redirects are not aggregated and
   there is no geography); client counts per conglomerate per quarter from the complaints files,
@@ -958,35 +1204,6 @@ the foot, so it double counts and lands at two to three times the month's true s
 Reproduce with `python diag_ocr_benchmark.py --months 20 --dpi 200` and
 `python diag_ocr_benchmark.py --mode scans`.
 
-### 9.2 Statement-note route, first result: the mapping is settled
-
-`scrape_bank_notes_advertising.py` (1,510 lines) reads the regulator's own document system for CVM
-filers and each bank's site otherwise, through the `allowed_host()` gate in `utils/note_sources.py`.
-One document is parsed so far, and it is the one that matters, because Santander Brasil is 9.5% of
-panel deposits and the reason the route exists.
-
-Santander's ITR at 2025-06-30, note 25, states "Propaganda, Promoções e Publicidade" of R$223,041
-thousand for the first half on the INDIVIDUAL statement and R$299,207 thousand on the CONSOLIDATED
-one. Against the COSIF accounts for the same institution and the same six months:
-
-| note figure | COSIF comparison | ratio |
-|---|---|---|
-| individual, R$223.0m | institution 90400888, advertising account alone, R$146.2m | 1.526 |
-| individual, R$223.0m | institution 90400888, **all three accounts**, R$222.76m | **1.0013** |
-| consolidated, R$299.2m | **conglomerate** C0080185, all three accounts, R$300.1m | **0.997** |
-
-Two mappings fall out of that, and both were needed before this series could be used. The bundled
-note label corresponds to COSIF `all3` - propaganda plus promotions plus publications - and NOT to
-the advertising account alone, so treating it as advertising would overstate by about half. And the
-note's individual column corresponds to the INSTITUTION while its consolidated column corresponds to
-the PRUDENTIAL CONGLOMERATE, which is what makes the decision to read individual statements and
-aggregate afterwards the right one. All six of the document's internal checks reconcile to the cent:
-ten itemised administrative-expense lines summing to the stated total, on each column.
-
-Open: four of the six extracted lines carry an unresolved individual-or-consolidated scope, on a
-second table in the same document, and the back-run over 2013-2024 has not been done. The route was
-interrupted by a session rate limit, not by a problem with the data.
-
 ## 10. Re-running
 
 ```text
@@ -995,15 +1212,28 @@ python scrape_cvm_advertising.py                # 2013 onward from the CVM cache
 python scrape_cvm_advertising.py --refresh      # redownload the CVM yearly zips first
 python scrape_sec_advertising.py                # SEC 20-F instances, cached after the first run
 python scrape_sponsorship_bb_bnb.py             # BB and BNB sponsorship; --refresh redownloads
-python scrape_caixa_advertising.py              # Caixa's own files and its sponsorship
+python scrape_caixa_advertising.py              # Caixa's text months and its sponsorship
+python scrape_caixa_scan_advertising.py         # Caixa's 20 scanned months, by local OCR
 python scrape_statebank_advertising.py          # all four state banks; see the warning below
+python scrape_ancine_ad_films.py                # registered advertising films (a count)
 python build_advertising_crosswalk.py           # after the scrapers; reads their outputs
-python build_advertising_panel.py               # last; assembles both panels from the above
+python build_advertising_panel.py               # last; assembles both panels and the film table
 python diag_advertising_coverage.py            # coverage in deposit terms, section 6
 python diag_advertising_in_estimation.py       # coverage and FE survival in the estimation sample
+
+# Statement notes (5.9); not read by the assembly.
+# First line: fetch from the approved hosts, then parse.
+# Second line: re-parse the cache with no network.
+python scrape_bank_notes_advertising.py
+python scrape_bank_notes_advertising.py --offline --unvalidated volkswagen
 ```
 
-Run these with the project interpreter (`C:/venvs/egan/Scripts/python.exe`).
+Run these with the project interpreter (`C:/venvs/egan/Scripts/python.exe`), with `PYTHONUTF8=1`
+and `MPLBACKEND=Agg` set.
+
+The statement-note run takes about 35 minutes offline. It exits 0 when everything is written, 75
+when the connection is lost (run the same command again to resume), and 1 when a check fails, in
+which case nothing is written. As of 2026-10-04 it needs `--unvalidated volkswagen` to finish.
 
 `scrape_statebank_advertising.py --banks <one>` rewrites the four combined outputs with that bank
 alone, so a single-bank run is for diagnosis only and must be followed by a full run before the

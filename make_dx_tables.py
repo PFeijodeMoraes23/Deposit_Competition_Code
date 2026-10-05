@@ -36,6 +36,33 @@ WHAT IT WRITES
 A column whose source is not on disk yet prints a dash and is listed as pending; the script still
 writes the table (today: the two logit columns and the main RC column).
 
+CHECKS BEFORE A NUMBER IS PRINTED
+  RC + D standard errors   printed only when the variant's result carries JOINT standard errors
+                           (sidecar `se_joint`, and the result itself: se_method wcb | sandwich
+                           with p-values). Otherwise the column shows point estimates alone and
+                           the note gives the reason (parameters outnumber the moments; singular
+                           Jacobian; the joint computation did not complete).
+  main RC column           when the cluster's main-vs-dx record blp_compare_E{k}_spec_12_dx.json
+                           has been ingested, the local main result must be the fit the variant
+                           was compared with (alpha, Q, theta2). A mismatch stops the script;
+                           `--allow-main-mismatch` prints the table with a sentence saying so.
+  BBL, Main against D      the two cost_params files must record the same design: beta, T, launch
+                           quarters, shard count, forward curves, the three model switches, the
+                           simulation version and the sha256 of the policy, the transitions and
+                           the sleep link. A difference stops the script;
+                           `--allow-design-mismatch` prints the table with the differing items in
+                           the note. Items one run did not record are listed, and the note then
+                           no longer says the simulation is the same.
+  cost_params against fit  the suite records the sha256 of the fit each BBL run of the variant was
+                           simulated on (<dx>/blp/blp_bblfit_E{k}_spec_12_extended_dx{tag}.json,
+                           written at the BBL launch). When the variant's cost_params are on disk,
+                           the variant's `extended` fit on disk must be that file. A difference
+                           stops the script before any table is written, demand or BBL: the two
+                           tables would pair demand estimates from one fit with cost estimates
+                           from another. There is no override; re-ingest the two archives of one
+                           run, or move the cost_params out of <dx>/bbl. Without a record, or
+                           without the fit on disk, the console says "not checked".
+
 Usage
 -----
   python make_dx_tables.py                         # both tables, RC stage ext1, BBL tag _ms982
@@ -47,6 +74,7 @@ from utils.venv_guard import ensure_project_venv
 ensure_project_venv(__file__)
 
 import argparse
+import hashlib
 import json
 import math
 import pathlib
@@ -122,9 +150,46 @@ def load_logit(est: int, sub: str):
             "se_method": e.get("se_method"), "source": f"{LOGIT_SUMMARY.name}:E{est}_{sub}"}
 
 
+# Why a variant result has no joint standard errors, as the note words it: the sidecar's
+# `se_status` (blp_dx.jl `dx_stamp!`) starts with one of these.
+SE_REASONS = (("guard: K > L", "the parameters outnumber the moments at this stage"),
+              ("guard: singular", "the moment Jacobian is numerically singular at this stage"),
+              ("failed", "the joint standard-error computation did not complete"),
+              ("not requested", "no standard errors were requested"))
+
+
+def se_state(d: dict, meta: dict):
+    """(ok, reason) for a variant RC result: whether its standard errors are the joint GMM ones.
+
+    The sidecar's `se_joint` decides when it is there; a sidecar written before that field
+    existed is read through its guard verdict. Either way the result itself must agree: a joint
+    method in `se_method` and one p-value per theta1 (the engine's failure branch leaves the
+    p-values empty, and a result without joint SEs is stamped se_method = none)."""
+    dxr = meta.get("dx") or {}
+    guard = dxr.get("se_guard") or {}
+    tripped = bool(guard.get("ran")) and not guard.get("ok")
+    pv = d.get("theta1_pval") or []
+    in_result = d.get("se_method") in ("wcb", "sandwich") and len(pv) == len(d.get("theta1", []))
+    if "se_joint" in dxr:
+        joint = bool(dxr["se_joint"]) and in_result
+        status = str(dxr.get("se_status") or "")
+        if dxr["se_joint"] and not in_result:
+            status = "failed"
+    else:
+        joint = in_result and not tripped
+        status = ("guard: " + str(guard.get("reason", ""))) if tripped else ("" if joint else "failed")
+    if joint:
+        return True, ""
+    for key, txt in SE_REASONS:
+        if status.startswith(key):
+            return False, txt
+    return False, "no joint standard errors were recorded"
+
+
 def load_rc(est: int, stage: str, dx_dir: pathlib.Path, variant: bool):
     """The RC result JSON of a stage: the main one from cluster_raw, the variant's from <dx>/blp.
-    The variant's entry also carries `se_guard`, the verdict in its sidecar (None when absent)."""
+    The variant's entry also carries `se_ok` / `se_reason` (`se_state`) and `se_guard`, the
+    guard's verdict in its sidecar (None when absent)."""
     if not variant:
         p = MAIN_RC_DIR / f"blp_results_E{est}_spec_{SPEC}_{stage}.json"
         d = _load(p)
@@ -141,8 +206,41 @@ def load_rc(est: int, stage: str, dx_dir: pathlib.Path, variant: bool):
                          f"{DX_COL}; found {names}. Not a variant result.")
     meta = _load(dx_dir / "blp" / f"blp_meta_E{est}_spec_{SPEC}_{stage}{DX_SUFFIX}.json") or {}
     d["se_guard"] = ((meta.get("dx") or {}).get("se_guard"))
+    d["se_ok"], d["se_reason"] = se_state(d, meta)
     d["source"] = p.name
     return d
+
+
+def main_rc_check(est: int, stage: str, dx_dir: pathlib.Path, tol: float = 1e-6):
+    """The local main RC result against the main fit the cluster compared the variant with
+    (blp_compare_E{est}_spec_12_dx.json, written by blp_dx_compare.jl at the hand-off).
+    -> {"status": "match" | "MISMATCH" | <why it could not be checked>, "differences": [...]}.
+    The variant's own alpha is checked the same way against the comparison's `alpha_dx`."""
+    cmp_ = _load(dx_dir / "blp" / f"blp_compare_E{est}_spec_{SPEC}{DX_SUFFIX}.json")
+    if not cmp_:
+        return {"status": "not checked: no cluster comparison on disk", "differences": []}
+    st = next((x for x in cmp_.get("stages", []) if x.get("stage") == stage), None)
+    if st is None:
+        return {"status": f"not checked: the cluster comparison has no stage {stage}", "differences": []}
+    loc = load_rc(est, stage, dx_dir, False)
+    if not loc:
+        return {"status": "not checked: no local main result", "differences": []}
+
+    def close(a, b):
+        return (not _nan(a)) and (not _nan(b)) and abs(a - b) <= tol * max(1.0, abs(a), abs(b))
+    diffs = []
+    if not close(rc.alpha_of(loc), st.get("alpha_main")):
+        diffs.append(f"alpha: local {rc.alpha_of(loc)}, cluster {st.get('alpha_main')}")
+    if not close(loc.get("Q_value"), st.get("Q_main")):
+        diffs.append(f"Q: local {loc.get('Q_value')}, cluster {st.get('Q_main')}")
+    t2l, t2c = loc.get("theta2") or [], st.get("theta2_main") or []
+    if len(t2l) != len(t2c) or any(not close(x, y) for x, y in zip(t2l, t2c)):
+        diffs.append(f"theta2: local {t2l}, cluster {t2c}")
+    var = load_rc(est, stage, dx_dir, True)
+    if var and not close(rc.alpha_of(var), st.get("alpha_dx")):
+        diffs.append(f"alpha of the variant: ingested {rc.alpha_of(var)}, cluster comparison {st.get('alpha_dx')}")
+    return {"status": "MISMATCH" if diffs else "match", "differences": diffs,
+            "cluster_main_file": st.get("main_file"), "local_main_file": loc.get("source")}
 
 
 def demand_columns(est: int, stage: str, dx_dir: pathlib.Path):
@@ -162,8 +260,7 @@ def _coef(entry, name):
         return None
     i = names.index(name)
     t1, se, pv = entry.get("theta1", []), entry.get("theta1_se", []), entry.get("theta1_pval", [])
-    guard = entry.get("se_guard")
-    no_se = bool(guard) and guard.get("ran") and not guard.get("ok")
+    no_se = entry.get("se_ok") is False
     return (t1[i] if i < len(t1) else float("nan"),
             0.0 if no_se else (se[i] if i < len(se) else 0.0),
             None if no_se else (pv[i] if i < len(pv) else None))
@@ -184,9 +281,13 @@ def demand_numbers(ests, stage, dx_dir, rows):
                 v = _coef(entry, nm)
                 c["theta1"][nm] = {"coef": v[0], "se": v[1] or None, "pval": v[2]}
             if is_rc:
+                no_se = entry.get("se_ok") is False
                 for lbl, v, se, pv in rc.decode_theta2(entry):
-                    c["theta2"].append({"label": lbl, "coef": v, "se": se or None, "pval": pv})
+                    c["theta2"].append({"label": lbl, "coef": v, "se": None if no_se else (se or None),
+                                        "pval": None if no_se else pv})
                 c["se_guard"] = entry.get("se_guard")
+                c["se_joint"] = entry.get("se_ok", True)
+                c["se_reason"] = entry.get("se_reason", "")
             rho = rc.mean_rho_one_minus_s(e)
             a = rc.alpha_of(entry)
             c["mean_own_price_elasticity"] = (a * rho) if (rho is not None and a is not None) else None
@@ -195,15 +296,25 @@ def demand_numbers(ests, stage, dx_dir, rows):
     return out
 
 
-def build_demand_tex(ests, stage, dx_dir, rows):
+def build_demand_tex(ests, stage, dx_dir, rows, main_mismatch=()):
     data = {e: demand_columns(e, stage, dx_dir) for e in ests}
     ncols = 4
     hdr = " & ".join(h for h, _, _ in data[ests[0]])
     pending = [f"E{e} {h}" for e in ests for h, d, _ in data[e] if not d]
-    guard_bad = [rc.est_ref(e) for e in ests for h, d, r in data[e]
-                 if d and r and (d.get("se_guard") or {}).get("ran") and not (d.get("se_guard") or {}).get("ok")]
+    no_se = {}
+    for e in ests:
+        for h, d, r in data[e]:
+            if d and r and d.get("se_ok") is False:
+                no_se.setdefault(d.get("se_reason") or "no joint standard errors were recorded", []).append(rc.est_ref(e))
+    no_se_txt = "".join(" No standard errors for RC + D in " + ", ".join(v) + ": " + k + "." for k, v in no_se.items())
+    if main_mismatch:
+        no_se_txt += (" The RC column of " + ", ".join(rc.est_ref(e) for e in main_mismatch) + " is the local copy of "
+                      "the main fit, which is not the fit the variant was compared with on the cluster.")
     stage_lbl = rc.STAGE_LABELS.get(stage, stage)
-    methods = {d.get("se_method") for e in ests for _, d, _ in data[e] if d and d.get("se_method")}
+    # The sentence describes the columns that print standard errors. A variant column without
+    # joint ones prints none (its result says se_method "none") and has its own sentence above.
+    methods = {d.get("se_method") for e in ests for _, d, _ in data[e]
+               if d and d.get("se_ok") is not False and d.get("se_method") not in (None, "", "none")}
     se_txt = (r"Wild cluster bootstrap standard errors (conglomerate clusters) in parentheses. "
               if methods <= {"wcb"} else
               r"Cluster-robust standard errors (conglomerate clusters) in parentheses. ")
@@ -220,8 +331,7 @@ def build_demand_tex(ests, stage, dx_dir, rows):
             + se_txt +
             r"$^{\dagger}$ on the bound $\Sigma \geq 0$; the other standard errors of that column "
             r"are conditional on it. $Q$ is the one-step GMM criterion."
-            + (r" No standard errors for RC + D in " + ", ".join(guard_bad) +
-               r": the parameters outnumber the moments at this stage." if guard_bad else "")
+            + no_se_txt
             + r" $^{*}p<0.10$, $^{**}p<0.05$, $^{***}p<0.01$.")
     W = r"\textwidth"
     lines = [
@@ -300,8 +410,7 @@ def build_demand_tex(ests, stage, dx_dir, rows):
                         c, s_ = "", ""
                     else:
                         v, se, pv = dec[lbl]
-                        guard = d.get("se_guard") or {}
-                        if guard.get("ran") and not guard.get("ok"):
+                        if d.get("se_ok") is False:
                             se, pv = 0.0, None
                         ob = lbl.startswith(r"$\Sigma$") and not _nan(v) and abs(v) < rc.SIGMA_BOUND_TOL
                         c, s_ = rc.fmt_coef(v, se, d.get("G_star"), pv, on_bound=ob)
@@ -392,6 +501,87 @@ def load_cost(est: int, tag: str, dx_dir: pathlib.Path, variant: bool):
     return d
 
 
+# What "the same forward simulation" means, read from each solve's own record (bbl_solve.py
+# `run`): these items must agree between the main and the variant cost_params.
+DESIGN_RUN_KEYS = ("beta", "T", "starts", "n_shards_expected", "rf_sources")
+DESIGN_SIM_KEYS = ("phi_path", "z_path", "rdep_timing", "sim_version", "spread_units", "phi_d_rows",
+                   "sleep_link_sha256", "state_transitions_sha256", "policy_csv_sha256")
+
+
+def design_of(d: dict) -> dict:
+    run = (d or {}).get("run") or {}
+    sim = run.get("sim_paths") or {}
+    out = {k: run.get(k) for k in DESIGN_RUN_KEYS}
+    out.update({f"sim_paths.{k}": sim.get(k) for k in DESIGN_SIM_KEYS})
+    return out
+
+
+def design_check(m: dict, v: dict) -> dict:
+    """Main against variant cost_params: which design items agree, differ, or were not recorded
+    by one of the two runs. status: pending | same | same where recorded | DIFFERENT."""
+    if not m or not v:
+        return {"status": "pending", "equal": [], "differ": {}, "not_recorded": []}
+    dm, dv = design_of(m), design_of(v)
+    both = [k for k in dm if dm[k] is not None and dv[k] is not None]
+    differ = {k: {"main": dm[k], "dx": dv[k]} for k in both if dm[k] != dv[k]}
+    missing = [k for k in dm if k not in both]
+    status = "DIFFERENT" if differ else ("same" if not missing else "same where recorded")
+    return {"status": status, "equal": [k for k in both if k not in differ], "differ": differ,
+            "not_recorded": missing}
+
+
+def bbl_design(ests, tag, dx_dir):
+    return {f"E{e}": design_check(load_cost(e, tag, dx_dir, False), load_cost(e, tag, dx_dir, True)) for e in ests}
+
+
+def _sha256(path: pathlib.Path) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 22), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def fit_binding_check(est: int, tag: str, dx_dir: pathlib.Path) -> dict:
+    """The variant's cost_params against the variant's demand fit on disk.
+
+    dx_suite_20261001.sh records the sha256 of the fit a BBL run was simulated on when it submits
+    the launch (blp_bblfit_E{est}_spec_12_extended_dx{tag}.json in the blp folder: the `.jls` the
+    forward simulation reads, and the engine's `.json` of the same stage). Every recorded file
+    that is on disk here must have the recorded sha256.
+    -> {"status": "pending" | "bound" | "MISMATCH" | "not checked: <why>", "differences": [...]}
+    pending = no variant cost_params on disk, so nothing is paired."""
+    key = f"E{est}_spec_{SPEC}_{BBL_STAGE}{DX_SUFFIX}{tag}"
+    if not (dx_dir / "bbl" / f"cost_params_{key}.json").is_file():
+        return {"status": "pending", "differences": []}
+    rec_p = dx_dir / "blp" / f"blp_bblfit_{key}.json"
+    rec = _load(rec_p)
+    if not rec:
+        return {"status": f"not checked: no fit record {rec_p.name} on disk", "differences": []}
+    if rec.get("bbl_key") != key:
+        return {"status": "MISMATCH", "record": rec_p.name,
+                "differences": [f"{rec_p.name} is the record of '{rec.get('bbl_key')}', not of {key}"]}
+    checked, diffs = [], []
+    for name_key, sha_key in (("fit", "fit_sha256"), ("fit_json", "fit_json_sha256")):
+        name, want = rec.get(name_key), rec.get(sha_key)
+        if not name or not want:
+            continue
+        p = dx_dir / "blp" / name
+        if not p.is_file():
+            continue
+        got = _sha256(p)
+        checked.append(name)
+        if got != want:
+            diffs.append(f"{name}: sha256 {got[:12]}... on disk, the BBL was simulated on {want[:12]}... "
+                         f"(recorded {rec.get('recorded')})")
+    if diffs:
+        return {"status": "MISMATCH", "record": rec_p.name, "checked": checked, "differences": diffs}
+    if not checked:
+        return {"status": f"not checked: the recorded fit ({rec.get('fit')}) is not on disk", "differences": []}
+    return {"status": "bound", "record": rec_p.name, "checked": checked, "recorded": rec.get("recorded"),
+            "differences": []}
+
+
 def bbl_block(d, kappa):
     """The numbers the comparison shows for one firm type of one cost_params file."""
     if not d or kappa not in d:
@@ -421,7 +611,7 @@ def bbl_numbers(ests, tag, dx_dir):
     return out
 
 
-def build_bbl_tex(ests, tag, nums):
+def build_bbl_tex(ests, tag, nums, design=None):
     cols = [(e, w) for e in ests for w in ("main", "dx")]
     ncols = len(cols)
     grp = " & ".join(rf"\multicolumn{{2}}{{c}}{{{rc.est_ref(e)}}}" for e in ests)
@@ -429,13 +619,21 @@ def build_bbl_tex(ests, tag, nums):
     hdr = " & ".join("Main" if w == "main" else "D" for _, w in cols)
     pending = sorted({f"E{e} {w}" for e, w in cols for k in ("B", "D") if nums[f"E{e}"][k][w] is None})
     unid = any((nums[f"E{e}"][k][w] or {}).get("identified") is False for e, w in cols for k in ("B", "D"))
+    design = design or {}
+    checked = [x for x in design.values() if x.get("status") != "pending"]
+    all_same = bool(checked) and all(x["status"] == "same" for x in checked)
+    differ = sorted({k for x in checked for k in x.get("differ", {})})
+    same_txt = "; same forward simulation, policy function and launch quarters" if (all_same or not checked) else ""
+    differ_txt = ((" The two runs differ in their recorded design: " + ", ".join(k.replace("_", r"\_") for k in differ) + ".")
+                  if differ else "")
     note = (r"The BBL cost estimation on the main demand fit (\textit{Main}) and on the fit with the "
-            r"D-type dummy in the mean utility (\textit{D}); same forward simulation, policy "
-            r"function and launch quarters. The demand fit enters through the mean utilities, the "
+            r"D-type dummy in the mean utility (\textit{D})" + same_txt + ". "
+            r"The demand fit enters through the mean utilities, the "
             r"price coefficient and the random-coefficient parameters only. "
             r"$\bar{c}$ in compounded annual pp, $((1+x)^4-1)\times100$, with its 95\% subsampling "
             r"interval in brackets; $\omega$ and $\zeta$ with 95\% profile intervals. Violated share "
             r"is the fraction of deviation inequalities violated at the estimate."
+            + differ_txt
             + (r" $^{\ddagger}$ $\omega$ and $\zeta$ are not separately identified in that cell." if unid else ""))
     W = r"\textwidth"
     lines = [
@@ -551,7 +749,8 @@ def main(argv=None):
     ap = argparse.ArgumentParser(description="Tables of the dx demand variant (main vs D).")
     ap.add_argument("--routines", default=_routines.csv(DEFAULT_ESTS))
     ap.add_argument("--only", choices=["demand", "bbl"], default=None)
-    ap.add_argument("--stage", default=SE_STAGE, help="RC stage of the demand table (default ext1)")
+    ap.add_argument("--stage", default=SE_STAGE, choices=list(rc.STAGES),
+                    help="RC stage of the demand table (default ext1)")
     ap.add_argument("--rows", choices=["key", "all"], default="key",
                     help="mean-utility rows of the demand table: the price, D-type and S5 "
                          "coefficients (key) or every coefficient (all)")
@@ -561,24 +760,66 @@ def main(argv=None):
     ap.add_argument("--out-dir", default=None, help="default: <dx-dir>/tables")
     ap.add_argument("--to-drafts", action="store_true",
                     help="also copy the two .tex files into the paper folder")
+    ap.add_argument("--allow-main-mismatch", action="store_true",
+                    help="print the demand table although the local main RC result is not the fit "
+                         "the cluster compared the variant with (the note then says so)")
+    ap.add_argument("--allow-design-mismatch", action="store_true",
+                    help="print the BBL table although the main and the variant run record "
+                         "different designs (the note then lists the differing items)")
     a = ap.parse_args(argv)
     ests = [int(x) for x in a.routines.split(",") if x.strip()]
     dx_dir = pathlib.Path(a.dx_dir)
     out = pathlib.Path(a.out_dir) if a.out_dir else dx_dir / "tables"
     numbers = {"generator": "make_dx_tables.py", "variant": "dx", "suffix": DX_SUFFIX,
                "rc_stage": a.stage, "psi_tag_main": a.psi_tag, "psi_tag_dx": DX_SUFFIX + a.psi_tag}
+    # Before anything is written: the variant's cost_params on disk and the variant's fit on disk
+    # must belong to each other, whichever table is asked for.
+    fit = {f"E{e}": fit_binding_check(e, a.psi_tag, dx_dir) for e in ests}
+    for ek, x in fit.items():
+        print(f"  BBL-to-fit check {ek}: {x['status']}" + "".join("\n      " + d for d in x["differences"]))
+    unbound = [ek for ek, x in fit.items() if x["status"] == "MISMATCH"]
+    if unbound:
+        raise SystemExit("[dx-tables] the variant's cost parameters of " + ", ".join(unbound) + " were not "
+                         "estimated on the variant's demand fit that is on disk (above). The tables would pair "
+                         "demand estimates from one fit with cost estimates from another, so none is written. "
+                         "Ingest the BLP and the BBL archive of the same run (cluster_ingest_dx.py --force), or "
+                         "move the cost_params file out of " + str(dx_dir / "bbl") + " to print the demand table alone.")
+    numbers["bbl_fit_check"] = fit
     written = []
     if a.only in (None, "demand"):
+        checks = {f"E{e}": main_rc_check(e, a.stage, dx_dir) for e in ests}
+        bad = [e for e in ests if checks[f"E{e}"]["status"] == "MISMATCH"]
+        for e in ests:
+            print(f"  main RC check E{e}: {checks[f'E{e}']['status']}"
+                  + ("".join("\n      " + x for x in checks[f"E{e}"]["differences"])))
+        if bad and not a.allow_main_mismatch:
+            raise SystemExit("[dx-tables] the local main RC result of " + ", ".join(f"E{e}" for e in bad) +
+                             " is not the fit the cluster compared the variant with (above). Re-ingest the "
+                             "main BLP results, or pass --allow-main-mismatch to print the table with a "
+                             "sentence saying so.")
+        numbers["main_rc_check"] = checks
         nums = demand_numbers(ests, a.stage, dx_dir, a.rows)
-        tex, pending = build_demand_tex(ests, a.stage, dx_dir, a.rows)
+        tex, pending = build_demand_tex(ests, a.stage, dx_dir, a.rows, main_mismatch=bad)
         _write(out / f"{DEMAND_BASE}.tex", tex); written.append(out / f"{DEMAND_BASE}.tex")
         _write(out / f"{DEMAND_BASE}.md", build_demand_md(nums, a.rows))
         numbers["demand"] = nums
         numbers["demand_pending"] = pending
         print("  demand table: " + ("every column on disk" if not pending else "PENDING columns: " + ", ".join(pending)))
     if a.only in (None, "bbl"):
+        design = bbl_design(ests, a.psi_tag, dx_dir)
+        for ek, x in design.items():
+            print(f"  BBL design check {ek}: {x['status']}"
+                  + (f"; differ: {x['differ']}" if x["differ"] else "")
+                  + (f"; not recorded by one of the runs: {', '.join(x['not_recorded'])}" if x["not_recorded"] else ""))
+        bad = [ek for ek, x in design.items() if x["status"] == "DIFFERENT"]
+        if bad and not a.allow_design_mismatch:
+            raise SystemExit("[dx-tables] the main and the variant BBL runs of " + ", ".join(bad) +
+                             " record different designs (above), so the comparison is not of the demand "
+                             "fit alone. Pass --allow-design-mismatch to print the table with the "
+                             "differing items in the note.")
+        numbers["bbl_design_check"] = design
         nums = bbl_numbers(ests, a.psi_tag, dx_dir)
-        tex, pending = build_bbl_tex(ests, a.psi_tag, nums)
+        tex, pending = build_bbl_tex(ests, a.psi_tag, nums, design)
         _write(out / f"{BBL_BASE}.tex", tex); written.append(out / f"{BBL_BASE}.tex")
         _write(out / f"{BBL_BASE}.md", build_bbl_md(nums, a.psi_tag))
         numbers["bbl"] = nums

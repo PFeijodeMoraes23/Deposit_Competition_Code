@@ -1000,7 +1000,7 @@ AMOUNT_RE = r"-?R?\$?\s?-?\d[\d.]*,\d{2}"
 
 
 BRB_SPONSOR_CATEGORY = re.compile(r"ESPORTE|ESPORTIVO|ARTEECULTURA|ENTRETENIMENTO"
-                                  r"|RELACIONAMENTOINSTITUCIO|CAUSASSOCIAIS|PATROCIN")
+                                  r"|RELACIONAMENTOINSTITUCIO|CAUSASSOCIAIS|NEGOCIO|PATROCIN")
 BRB_ACCRUAL_RE = re.compile(r"REGIME\w*DECOMPETENCIA")
 # A retification or republication marker. Plain "REPUBLIC" also matches "REPUBLICA" the noun
 # ("Aberto da Republica de Tenis", a sponsored tournament's own name, or "Republica Federativa do
@@ -1017,10 +1017,8 @@ def brb_group(classification: str, purpose: str, sponsorship_table: bool) -> str
     none of that, in a table with no propaganda/publicidade/publicacoes row (Esporte, Arte e
     Cultura, Entretenimento, Relacionamento Institucional, ...) -> sponsorship; else other.
 
-    The row's OWN classification outranks the table-level guess. It used to be the other way round,
-    and because the 2016 files abbreviate the classification as 'PROP E PUBL/PROD' - which the
-    table-level test did not recognise either - 158 production and advertising rows of 2016Q2 were
-    published as sponsorship."""
+    The row's OWN classification outranks the table-level guess, so the 2016 files' abbreviation
+    'PROP E PUBL/PROD' is read as production or advertising whatever the table-level test says."""
     c = fold(classification).replace(" ", "")
     f = fold(purpose).replace(" ", "")
     if "PUBLICAC" in c or "LEGAL" in c or "LEGAL" in f:
@@ -1039,8 +1037,8 @@ def brb_group(classification: str, purpose: str, sponsorship_table: bool) -> str
             return "advertising"
     # Named sponsorship categories. The documents mix sponsorship rows into the advertising table,
     # so the table-level flag is off for them and 660 rows worth R$39.0m fell through to "other":
-    # Esporte, Arte e Cultura, Entretenimento, Relacionamento Institucional, Causas Sociais. The
-    # space-stripping above also folds the letter-spaced spellings ("E S P O RT E").
+    # Esporte, Arte e Cultura, Entretenimento, Relacionamento Institucional, Causas Sociais,
+    # Negocios. The space-stripping above also folds the letter-spaced spellings ("E S P O RT E").
     if BRB_SPONSOR_CATEGORY.search(c):
         return "sponsorship"
     if sponsorship_table:
@@ -1594,7 +1592,8 @@ def brb_stacked_records(page, tobj, col_x: dict, first_m: int, amount_cols: list
     A record is the printed line carrying money in the amount columns. The label words between two
     such lines are split at the widest vertical gap between them (a tie within half a point goes to
     the cut nearest the midpoint), each side going to its own record, then sorted into the label
-    columns by x position. Returns `tops` (the record lines' y positions), `labels` (one list of
+    columns by x position. Returns `tie_cuts` (how many of the `len(tops) - 1` boundaries were
+    decided by that tie-break), `tops` (the record lines' y positions), `labels` (one list of
     `first_m` strings per record, '(cid:177)', a dash whose glyph has no Unicode map, read as a
     hyphen) and `money` (the amount words, for `brb_stacked_center`)."""
     x_lo, x_hi = tobj.bbox[0] - 1, tobj.bbox[2] + 1
@@ -1618,13 +1617,15 @@ def brb_stacked_records(page, tobj, col_x: dict, first_m: int, amount_cols: list
     tops = [sum(w["top"] for w in ln) / len(ln) for ln in lines]
     positions = sorted({round(w["top"], 1) for w in lab} | {round(t, 1) for t in tops})
     cuts = []
+    ties = 0
     for a, b in zip(tops, tops[1:]):
         between = [p for p in positions if a - 0.6 <= p <= b + 0.6]
         gaps = [(q - p, (p + q) / 2) for p, q in zip(between, between[1:])]
         mid = (a + b) / 2
         widest = max((g for g, _ in gaps), default=0.0)
-        cuts.append(min((m for g, m in gaps if g >= widest - 0.5), default=mid,
-                        key=lambda m: abs(m - mid)))
+        near = [m for g, m in gaps if g >= widest - 0.5]
+        ties += len(near) > 1
+        cuts.append(min(near, default=mid, key=lambda m: abs(m - mid)))
     # label columns: the header's own cells, the one the grid left out (None) filled from its
     # neighbours
     bands, lo = [], x_lo
@@ -1655,7 +1656,7 @@ def brb_stacked_records(page, tobj, col_x: dict, first_m: int, amount_cols: list
         t = BRB_CID_DASH_RE.sub(" - ", " ".join(out))
         return re.sub(r"\s*-\s*$", "", t).strip()
 
-    return {"tops": tops, "money": money,
+    return {"tops": tops, "tie_cuts": ties, "money": money,
             "labels": [[text_of(ws) for ws in rec] for rec in cells]}
 
 
@@ -1698,7 +1699,8 @@ def brb_recover_text_tables(out: Parsed, doc: Doc, path: Path, pub: dict | None,
        its own column header misprints OUTUBRO/NOVEMBRO/DEZEMBRO where JANEIRO/FEVEREIRO/MARCO
        belong, so months are taken from the heading's own quarter instead, not
        from that header). An entity that already has SOME data from elsewhere on the page
-       (Cartao BRB's table, which the grid does read) is left alone; only a genuinely unread table is registered here.
+       (Cartao BRB's table, which the grid does read) is left alone; only a genuinely unread table
+       is registered here.
 
     Either recovery first finds the table's own closing total row by text
     (`brb_find_quarter_total_row`); the table is left unobserved and reported, never guessed at,
@@ -2191,12 +2193,34 @@ def parse_brb(doc: Doc, path: Path, ctx: BrbContext | None = None) -> Parsed:
                 # 2016Q1's three-label-column tables print each record stacked over several grid
                 # rows (`brb_stacked_records`); the other quarters, and Cartao BRB's four-column
                 # table, are read row by row as the grid gives them.
+                # The gate is driven by the table's heading and shape alone (year 2016, quarter 1,
+                # three label columns, no column shift, a header-derived column map): it assumes
+                # the 2016Q1 layout and applies to any table registered with that heading and shape.
                 stack = None
+                fallback_notes: set[str] = set()
+
+                def stack_fallback(reason: str) -> None:
+                    if reason not in fallback_notes:
+                        fallback_notes.add(reason)
+                        out.notes.append(f"{scope}: stacked 2016Q1 table read row by row, "
+                                         f"labels inherited from the previous row ({reason})")
+
                 if (meta.get("year") == 2016 and meta.get("quarter") == 1 and first_m == 3
-                        and not col_shift and state.get("col_x") and len(tobj.rows) == len(rows)):
-                    stack = brb_stacked_records(
-                        page, tobj, state["col_x"], first_m, amount_cols,
-                        tobj.rows[hdr].bbox[3] if hdr is not None else top)
+                        and not col_shift and state.get("col_x")):
+                    if len(tobj.rows) != len(rows):
+                        stack_fallback("grid rows and extracted rows differ in number")
+                    else:
+                        stack = brb_stacked_records(
+                            page, tobj, state["col_x"], first_m, amount_cols,
+                            tobj.rows[hdr].bbox[3] if hdr is not None else top)
+                        if stack is None:
+                            stack_fallback("no record line found")
+                        elif stack["tie_cuts"]:
+                            out.notes.append(
+                                f"{scope}: {stack['tie_cuts']} of {len(stack['tops']) - 1} "
+                                "record boundaries decided by the near-tie rule (gaps within half "
+                                "a point of the widest; the cut nearest the midpoint of the two "
+                                "record lines)")
                 stacked_rows: dict[int, dict] = {}
                 for ridx, r in enumerate(body, start=offset):
                     row_key = f"{page_key}:t{tidx}:r{ridx}"
@@ -2296,6 +2320,8 @@ def parse_brb(doc: Doc, path: Path, ctx: BrbContext | None = None) -> Parsed:
                     if center is not None:
                         labels = stack["labels"][center]
                     else:
+                        if stack:
+                            stack_fallback("an amount word of a row not matched to a record line")
                         labels = [lab or prev[j] for j, lab in enumerate(labels)]
                     prev = labels
                     if not keep_row(row_key):
@@ -2305,17 +2331,16 @@ def parse_brb(doc: Doc, path: Path, ctx: BrbContext | None = None) -> Parsed:
                     purpose = " ".join(labels[2:]) if first_m >= 3 else ""
                     group = brb_group(classification, purpose, sponsorship)
                     if center is not None:
-                        # Every row of a stacked table that is not propaganda or publicacoes is a
-                        # patrocinio row (Esportes, Negocios, Entretenimento, ...).
-                        group = "sponsorship" if group == "other" else group
                         # The record's month cells may sit on several grid rows; its TOTAL is
                         # compared once, against all of them.
                         rec_sum = stacked_rows.setdefault(center, {
-                            "sum": 0.0, "stated": None, "cells": {}, "row_key": row_key,
+                            "sum": 0.0, "stated": None, "cells": {}, "month_keys": {},
+                            "row_key": row_key,
                             "label": f"{beneficiary} | {purpose}".strip(" |")[:60]})
                         rec_sum["row_key"] = row_key
                         for mo, v in amounts.items():
                             if v is not None:
+                                rec_sum["month_keys"][mo] = row_key
                                 rec_sum["sum"] += v
                                 rec_sum["cells"][mo] = rec_sum["cells"].get(mo, 0.0) + v
                         qv_row = brb_cell_amount(r[tc]) if tc is not None and tc < len(r) else None
@@ -2351,7 +2376,7 @@ def parse_brb(doc: Doc, path: Path, ctx: BrbContext | None = None) -> Parsed:
                         out.gaps.append({"table": scope, "row_key": rec_sum["row_key"],
                                          "gap": gap, "label": rec_sum["label"],
                                          "cells": rec_sum["cells"], "file": path.name,
-                                         "page": pno})
+                                         "page": pno, "month_keys": rec_sum["month_keys"]})
                 bases.setdefault(scope, state["basis"])
                 # The notice's own text below this part of the table, up to the next heading or
                 # table, carries any republication note ("Retificam-se ...", "Republicado por ...")
@@ -2532,7 +2557,8 @@ def brb_impute_forced_cells(lines: list[dict], totals: list[dict], gaps: list[di
                               f"matching month {mo}'s shortfall to the cent; not imputed")
             report.append(rec)
             continue
-        cell = by_key.get(f"{g['row_key']}:m{mo:02d}")
+        # a stacked record's month cells can sit on different grid rows
+        cell = by_key.get(f"{g.get('month_keys', {}).get(mo, g['row_key'])}:m{mo:02d}")
         if cell is None:
             rec["outcome"] = (f"month {mo} falls short by exactly the gap, but the row prints no "
                               "readable amount in that column")

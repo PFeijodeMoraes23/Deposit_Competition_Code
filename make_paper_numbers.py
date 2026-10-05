@@ -940,6 +940,17 @@ def collect_demand(notes: list):
         bn = (blp or {}).get("param_names_theta1") or []
         se_blp = (float(blp["theta1_se"][bn.index("alpha")])
                   if "alpha" in bn and len(blp.get("theta1_se") or []) == len(bn) else None)
+        g_blp = (blp or {}).get("G_star")
+        if _finite(g_blp):
+            from scipy import stats as _stats
+            add(f"demand.t6.tcrit.E{E}", "C", f"95% Student-t critical value at G*, BLP, {rname(E)}",
+                float(_stats.t.ppf(0.975, float(g_blp))),
+                "t_{0.975}(G*): the multiple of the standard error that gives the 95% interval "
+                "implied by the BLP table's inference (stars from Student-t with G* effective "
+                "clusters). The whiskers of the slide coefficient plot",
+                f"BLP_RESULTS/cluster_raw/blp_results_E{E}_spec_12_{BLP_STAGE}.json G_star", "ok",
+                display=disp(float(_stats.t.ppf(0.975, float(g_blp)))),
+                detail=dict(G_star=float(g_blp)))
         ab = {}
         for kind, a, se, tname, src in (
                 ("logit", a_logit, se_logit, T5, f"{LOGIT_SUMMARY.relative_to(EST_OUT)} "
@@ -1401,6 +1412,7 @@ def collect_descriptives(notes: list):
     collect_market_structure(notes)
     collect_table1_spreads(notes)
     collect_mca_count(notes)
+    collect_slide_deposit_types(notes)
 
     j = rout / "cluster_imbalance.json"
     if not j.is_file():
@@ -1534,6 +1546,50 @@ def collect_mca_count(notes: list):
         checks=[dict(table=TVARS, cell="'one of N MCAs'", expected=[n_win], printed=[printed],
                      raw=m.group(0) if m else None, ok=printed == n_win,
                      why=None if printed == n_win else ("text not found" if m is None else "differs"))])
+
+
+def collect_slide_deposit_types(notes: list):
+    """The deposit-types table of the slides, from the sidecar make_slide_figures.py writes with
+    it: per deposit type, the mean spread and the share of balances, each checked against the
+    rendered table. These are slide numbers, not the paper's: the paper prints the spreads by
+    year (Table A.4) and by bank (Table 1), and no balance shares."""
+    p = _paths.rout_dir() / "slide_deposit_types.json"
+    if not p.is_file():
+        notes.append(f"{p.name} not found in Rout; run make_slide_figures.py --only table for the "
+                     "slide.types.* entries.")
+        return
+    sc = json.loads(p.read_text(encoding="utf-8"))
+    t = table(sc.get("tex_file") or "tab_slide_deposit_types.tex")
+    y0, y1 = sc.get("window") or [MIN_YEAR, MAX_YEAR]
+
+    def chk(where, cell, v):
+        nums = cell_numbers(cell) if cell else []
+        got = nums[-1] if nums else None
+        ok = got is not None and fmt3(got) == fmt3(v)
+        return dict(table=t.name, cell=where, expected=[fmt3(v)],
+                    printed=None if got is None else [fmt3(got)], raw=cell, ok=ok,
+                    why=None if ok else ("cell not found" if got is None else "differs"))
+
+    for slug, r in (sc.get("types") or {}).items():
+        lab, sp = r["label"], r["spread"]
+        cells = t.find(lab)
+        cell = lambda i: cells[i] if cells and -len(cells) <= i < len(cells) else None
+        if isinstance(sp, dict):
+            checks = [chk(f"{lab} spread, {k} firms", cell(1 + i), sp[k]) for i, k in enumerate(BLOCKS)]
+            shown = " / ".join(f"{k} {fmt3s(sp[k])}" for k in BLOCKS)
+        else:
+            checks = [chk(f"{lab} spread", cell(1), sp)]
+            shown = fmt3s(sp)
+        checks.append(chk(f"{lab} share of balances", cell(-1), r["share"]))
+        add(f"slide.types.{slug}", "slides", f"Deposit-types slide table, {lab}",
+            dict(spread=sp, share=r["share"]),
+            f"`spread`: mean over {y0}-{y1} of Selic minus the deposit rate, compounded annual pp "
+            "(regulated types: from the quarterly Selic and savings rate; types 4 and 5: the mean "
+            "of Table A.4's annual balance-weighted spreads, B and D). `share`: the type's share "
+            f"of the four types' balances, B and D pooled, mean over the quarters of {y0}-{y1}, "
+            "in percent",
+            f"Rout/{p.name} types.{slug} (written with {t.name} by make_slide_figures.py)", "ok",
+            display=f"spread {shown}; share {fmt3s(r['share'])}%", checks=checks)
 
 
 # ── I: the policy-function fit (Tables C.10 and C.11) ────────────────────────

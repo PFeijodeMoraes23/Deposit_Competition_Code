@@ -69,7 +69,8 @@ function compare_stage(dir::String, k::Int, stage::String)
             t1m=t1m, t1d=t1d, t2m=t2m, t2d=t2d,
             n=length(diff), dmean=mean(diff), dmae=mean(ad), drms=sqrt(mean(abs2, diff)),
             dq50=q(0.5), dq90=q(0.9), dq99=q(0.99), dmax=maximum(ad), dcorr=cor(dm, dd),
-            guard=get(get(d, "dx", Dict()), "se_guard", nothing), files=(basename(pm), basename(pd)))
+            guard=get(get(d, "dx", Dict()), "se_guard", nothing),
+            se_status=get(get(d, "dx", Dict()), "se_status", nothing), files=(basename(pm), basename(pd)))
 end
 
 function print_stage(r)
@@ -87,6 +88,9 @@ function print_stage(r)
             r.n, r.dmean, r.dmae, r.drms, r.dcorr)
     @printf("   |delta_dx - delta_main|: median %.4f | p90 %.4f | p99 %.4f | max %.4f\n",
             r.dq50, r.dq90, r.dq99, r.dmax)
+    if r.se_status !== nothing
+        println("   variant standard errors at this stage: ", r.se_status == "joint" ? "joint GMM" : "NONE ($(r.se_status))")
+    end
     if r.guard !== nothing && get(r.guard, "ran", false)
         println("   variant SE guard at this stage: ", r.guard["ok"] ? "ok (K=$(r.guard["K"]) on L=$(r.guard["L"]))" :
                 "TRIPPED ($(r.guard["reason"])) - no SE at this stage")

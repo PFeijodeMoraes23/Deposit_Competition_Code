@@ -10,6 +10,9 @@ lands them in the variant's own folder, ESTIMATION_OUTPUT/DX_VARIANT.
                 blp_meta_E{k}_spec_12_{stage}_dx.json            SE guard verdict per stage
                 blp_linear_E{k}_spec_12_dx.json                  the theta2 = 0 nesting check
                 blp_compare_E{k}_spec_12_dx.json                 main vs dx (alpha, theta2, delta)
+                blp_bblfit_E{k}_spec_12_extended_dx_ms<S>.json   sha256 of the fit a BBL run was
+                                                                 simulated on (make_dx_tables.py
+                                                                 checks the fit on disk against it)
     <dx>/bbl/   cost_params_E{k}_spec_12_extended_dx_ms<S>.json
                 psi_eq_/psi_starts_E{k}_spec_12_extended_dx_ms<S>.*   (psi_dev shards: --with-psi-dev)
 
@@ -19,14 +22,29 @@ the archive is left alone and counted. Nothing is written outside <dx>: the main
 this script refuses a destination inside any of them. An existing file with other content is kept
 unless --force is given.
 
-The BLP archive of a variant run (blp_outputs_dx_<jobid>.zip) holds the whole blp step folder,
-main results included; run cluster_ingest_blp.py on it as well if the main results should be
-refreshed. That ingest files the `_dx` members under their own names in cluster_raw/ and uses
-none of them.
+WARNING: THE VARIANT'S ARCHIVES CARRY THE MAIN FAMILY'S NAMES.
+cluster_archive.sh names every archive <set>_outputs_<tag>.zip and takes no other prefix, so the
+variant's archives are bbl_outputs_<jobid>_dx.zip and blp_outputs_<jobid>_dx.zip (the suite tags
+them <jobid>_dx). The main ingests find archives by that prefix:
+  * cluster_ingest_bbl_cf.py --kind bbl, and cluster_ingest.py, prefer the archive with the highest
+    NUMERIC job id; the tag <jobid>_dx is not a number, so they pick a variant archive only when no
+    main archive with a job id is in the folders they scan. If one did, it would land the
+    variant's cost_params_*_dx_ms982.json next to the main ones in BBL_OUTPUT/cluster_processed
+    (other names, nothing overwritten, but the variant's files do not belong there).
+  * cluster_ingest_blp.py takes the NEWEST blp_outputs*.zip by modification time in BLP_RESULTS or
+    cluster_raw. A variant BLP archive holds the whole blp step folder, main results included; fed
+    to that ingest it refreshes the main results from the same cluster folder and files the `_dx`
+    members under their own names in cluster_raw/, using none of them.
+The safe routine: keep the variant's archives in a folder of their own (not BLP_RESULTS, not the
+folder the main ingests scan) and always name the archive explicitly.
+
+  the variant:   python cluster_ingest_dx.py --zip <dir>/blp_outputs_<jobid>_dx.zip --zip <dir>/bbl_outputs_<jobid>_dx.zip
+  the main BBL:  python cluster_ingest_bbl_cf.py --kind bbl --zip <dir>/bbl_outputs_<main jobid>.zip
+  the main BLP:  python cluster_ingest_blp.py      (with only the main blp_outputs_<jobid>.zip in BLP_RESULTS)
 
 Usage
 -----
-  python cluster_ingest_dx.py --zip blp_outputs_dx_123.zip --zip bbl_outputs_456.zip
+  python cluster_ingest_dx.py --zip blp_outputs_123_dx.zip --zip bbl_outputs_456_dx.zip
   python cluster_ingest_dx.py --zip <archive> --dry-run
   python cluster_ingest_dx.py --zip <archive> --dx-dir <folder>          # a sandbox
 """
@@ -55,7 +73,8 @@ DX_DIR_DEFAULT = _paths.estimation_output() / "DX_VARIANT"
 BLP_RE = re.compile(
     r"^blp_(?:results|meta)_E\d+_spec_\d+_[A-Za-z0-9]+_dx\.(?:jls|json)$"
     r"|^blp_summary_E\d+_[A-Za-z0-9]+_gpu_ift_dx\.json$"
-    r"|^blp_(?:linear|compare)_E\d+_spec_\d+_dx\.json$")
+    r"|^blp_(?:linear|compare)_E\d+_spec_\d+_dx\.json$"
+    r"|^blp_bblfit_E\d+_spec_\d+_[A-Za-z0-9]+_dx_[A-Za-z0-9]+\.json$")
 BBL_RE = re.compile(
     r"^cost_params_E\d+_spec_\d+_[A-Za-z0-9]+_dx_[A-Za-z0-9]+\.json$"
     r"|^psi_(?:eq|starts)_E\d+_spec_\d+_[A-Za-z0-9]+_dx_[A-Za-z0-9]+\.(?:parquet|json)$")

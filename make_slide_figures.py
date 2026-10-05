@@ -12,6 +12,7 @@ of a paper table. Files go to the paper folder (Drafts/Deposit Competition), whi
   fig_slide_sleep_ame_E3.pdf               Table 4's average marginal effects, 95% intervals
   fig_slide_demand_coef_E3.pdf             Table 6, Panel A: coefficients, Student-t(G*) 95% intervals
   fig_slide_elasticity_wedge_E3.pdf        active against on-impact own-price elasticity
+  fig_slide_bbl_violations.pdf             Table C.14: violated inequalities, up against down
   fig_slide_sleepy_flow.tex                TikZ flow diagram of equation (9-B)
   fig_slide_roadmap.tex                    TikZ strip of the three estimation steps
   tab_slide_deposit_types.tex              the four deposit types: rate setter, spread, share
@@ -67,6 +68,7 @@ MACRO_CSV = mdt.MACRO_RATES_CSV
 T4_SIDECAR = _paths.rout_dir() / "est1-4_spec12_stage2_comparison.json"
 PANEL_PARQUET = mdt.DATA_DIR / "market_panel.parquet"
 SHARES_CSV = mdt.OUTPUT_DIR / "slide_deposit_type_shares.csv"
+TYPES_JSON = mdt.OUTPUT_DIR / "slide_deposit_types.json"
 
 # A beamer 4:3 text block is about 4.3 in wide: one chart per slide at this size keeps the
 # fonts near the deck's footnotesize once the figure is set at \linewidth.
@@ -79,7 +81,8 @@ PIX_X_QUARTERLY = 2020 + 10.5 / 12 - 0.5
 DEP_COLS = ["dep_a1", "dep_a2", "dep_a4", "dep_a5"]
 MINUS = "−"
 
-VISUALS = ("panels", "timedep", "savings", "ame", "coef", "wedge", "flow", "roadmap", "table")
+VISUALS = ("panels", "timedep", "savings", "ame", "coef", "wedge", "violations", "flow", "roadmap",
+           "table")
 
 
 def _save(fig, out: pathlib.Path, stem: str, png: bool):
@@ -365,6 +368,69 @@ def elasticity_bars(out: pathlib.Path, png: bool, E: int):
 
 
 # --------------------------------------------------------------------------------------------
+# Table C.14: violated inequalities by the direction of the deviation
+# --------------------------------------------------------------------------------------------
+UP_COLOR = mdt.NATL_COLOR
+DOWN_COLOR = "#B8B8B3"
+
+
+def violation_bars(out: pathlib.Path, png: bool):
+    """The share of the BBL inequalities violated at theta-hat, upward against downward
+    deviations, per routine and firm type. While the solve behind the numbers is not the paper's
+    target run, the chart says so and prints the discounting it was solved at."""
+    pn, mpn = _paper_numbers()
+    groups, up, down, pending, runs = [], [], [], False, set()
+    for E in mpn.ROUTINES:
+        for k in mpn.BLOCKS:
+            eu, ed = pn.get(f"bbl.ud.up.E{E}.{k}"), pn.get(f"bbl.ud.down.E{E}.{k}")
+            if not eu or not ed or eu.get("value_full") is None or ed.get("value_full") is None:
+                continue
+            groups.append(f"{k} firms\n{_routines.est_roman(E)}")
+            up.append(100.0 * float(eu["value_full"]))
+            down.append(100.0 * float(ed["value_full"]))
+            for e in (eu, ed):
+                pending = pending or e.get("status") != "ok"
+                runs |= {(r.get("beta"), r.get("T")) for r in (e.get("run") or [])}
+    if not groups:
+        sys.exit("paper_numbers.json has no bbl.ud.* entries: run make_paper_numbers.py first")
+
+    x = np.arange(len(groups), dtype=float)
+    w = 0.36
+    fig, ax = plt.subplots(figsize=SLIDE_FIGSIZE)
+    ax.axhline(50, color="#8A8A85", lw=0.8, ls=(0, (1, 3)), zorder=1)
+    ax.text(len(groups) - 0.5, 51.5, "one half", fontsize=7.5 * FS, color=mdt.MUTED_INK,
+            va="bottom", ha="right")
+    for xs, vals, color, label in ((x - w / 2 - 0.01, up, UP_COLOR, "Upward: raise the spread"),
+                                   (x + w / 2 + 0.01, down, DOWN_COLOR, "Downward: lower the spread")):
+        ax.bar(xs, vals, width=w, color=color, label=label, zorder=2)
+        for xi, v in zip(xs, vals):
+            ax.annotate(f"{v:.0f}%", xy=(xi, v), xytext=(0, 2), textcoords="offset points",
+                        fontsize=8 * FS, color=mdt.AXIS_INK, ha="center", va="bottom")
+    ax.set_xticks(x)
+    ax.set_xticklabels(groups, fontsize=8.5 * FS)
+    ax.set_ylim(0, 100)
+    ax.set_ylabel("Inequalities violated (%)", fontsize=9 * FS, color=mdt.AXIS_INK)
+    ax.grid(True, axis="y", color=mdt.GRID_COLOR, linewidth=0.6, alpha=0.9)
+    ax.set_axisbelow(True)
+    for s in ("top", "right"):
+        ax.spines[s].set_visible(False)
+    for s in ("left", "bottom"):
+        ax.spines[s].set_color(mdt.AXIS_INK)
+        ax.spines[s].set_linewidth(0.8)
+    ax.tick_params(axis="y", labelsize=9 * FS, colors=mdt.AXIS_INK, length=3)
+    ax.tick_params(axis="x", length=0, colors=mdt.AXIS_INK)
+    ax.legend(fontsize=8.5 * FS, loc="upper center", bbox_to_anchor=(0.5, -0.20), ncol=2,
+              frameon=False, columnspacing=1.4, handlelength=1.4)
+    if pending:
+        solved = "; ".join(f"β = {b}, T = {t}" for b, t in sorted(runs) if b is not None)
+        design = (f"β = {pn['bbl.design.beta']['value_full']}, "
+                  f"T = {pn['bbl.design.T']['value_full']}")
+        fig.text(0.02, -0.19, f"Provisional: solved at {solved}. The paper's design is {design}.",
+                 fontsize=7.5 * FS, color=mdt.MUTED_INK, ha="left", va="top")
+    _save(fig, out, "fig_slide_bbl_violations", png)
+
+
+# --------------------------------------------------------------------------------------------
 # Estimation roadmap
 # --------------------------------------------------------------------------------------------
 ROADMAP_TEX = r"""% fig_slide_roadmap.tex -- GENERATED by make_slide_figures.py. Do not edit.
@@ -435,8 +501,9 @@ def deposit_type_totals(refresh: bool) -> pd.DataFrame:
 
 TYPES_TEX = r"""% tab_slide_deposit_types.tex -- GENERATED by make_slide_figures.py. Do not edit.
 % Needs booktabs. Spreads: Selic minus the deposit rate, compounded to annual rates, in pp;
-% means over __Y0__--__Y1__ of the annual values of Table A.4 (types 4 and 5, deposit-weighted;
-% type 5 from 2020) and of the quarterly Selic and savings rate (types 1 and 2).
+% means over __Y0__--__Y1__ of the annual values of Table A.4 (types 4 and 5, balance-weighted:
+% the spread on the average real, not Table 1's average bank; type 5 from 2020) and of the
+% quarterly Selic and savings rate (types 1 and 2). The values have keys: \pn{slide.types.*}.
 % Shares: each type's share of the four types' balances, B and D firms pooled, mean over the
 % __NQ__ quarters of __Y0__--__Y1__.
 \begin{tabular}{@{}llrrr@{}}
@@ -452,9 +519,15 @@ __ROWS__
 
 
 def deposit_types_table(out: pathlib.Path, refresh: bool, decimals: int):
+    """The table and, next to the paper's other table inputs, a sidecar of its unrounded values:
+    make_paper_numbers.py turns the sidecar into the slide.types.* keys, so the prose of the
+    slide quotes the numbers the table prints."""
     t2 = pd.read_csv(T2_CSV).set_index("var")
     q = macro_quarterly()
-    f = lambda v: _plain(v, decimals).replace(MINUS, "$-$")
+
+    def f(v):
+        s = _plain(v, decimals)
+        return f"${s.replace(MINUS, '-')}$" if s.startswith(MINUS) else s
 
     def t2_mean(var):
         return float(pd.to_numeric(t2.loc[var], errors="coerce").mean())
@@ -466,19 +539,36 @@ def deposit_types_table(out: pathlib.Path, refresh: bool, decimals: int):
     by_q = tot.groupby(["year", "quarter"])[DEP_COLS].sum()
     share = (by_q.div(by_q.sum(axis=1), axis=0) * 100.0).mean()
 
-    both = lambda v: r"\multicolumn{2}{c}{%s}" % f(v)
-    rows = [
-        ("Demand (1)", "Law: zero rate", both(selic), share["dep_a1"]),
-        ("Savings (2)", "Law: formula", both(savings_spread), share["dep_a2"]),
-        ("Time, CDB (4)", "Bank",
-         f"{f(t2_mean('spread_ann_a4_w'))} & {f(t2_mean('spread_ann_a4_d_w'))}", share["dep_a4"]),
-        ("Prepaid (5)", "Bank",
-         f"{f(t2_mean('spread_ann_a5_w'))} & {f(t2_mean('spread_ann_a5_d_w'))}", share["dep_a5"]),
-    ]
-    body = "\n".join(f"{name} & {who} & {spread} & {f(sh)} \\\\" for name, who, spread, sh in rows)
+    # The time-deposit and prepaid spreads are Table A.4's balance-weighted ones (the spread on
+    # the average real of deposits), which is also what the regulated rows and the share column
+    # measure. Table 1's means over conglomerate-quarters weigh every bank equally.
+    types = {
+        "demand": dict(label="Demand (1)", setter="Law: zero rate", spread=selic,
+                       share=float(share["dep_a1"])),
+        "savings": dict(label="Savings (2)", setter="Law: formula", spread=savings_spread,
+                        share=float(share["dep_a2"])),
+        "time": dict(label="Time, CDB (4)", setter="Bank",
+                     spread=dict(B=t2_mean("spread_ann_a4_w"), D=t2_mean("spread_ann_a4_d_w")),
+                     share=float(share["dep_a4"])),
+        "prepaid": dict(label="Prepaid (5)", setter="Bank",
+                        spread=dict(B=t2_mean("spread_ann_a5_w"), D=t2_mean("spread_ann_a5_d_w")),
+                        share=float(share["dep_a5"])),
+    }
+
+    def spread_cells(sp):
+        if isinstance(sp, dict):
+            return f"{f(sp['B'])} & {f(sp['D'])}"
+        return r"\multicolumn{2}{c}{%s}" % f(sp)
+
+    body = "\n".join(f"{r['label']} & {r['setter']} & {spread_cells(r['spread'])} & {f(r['share'])} \\\\"
+                     for r in types.values())
     tex = (TYPES_TEX.replace("__ROWS__", body).replace("__Y0__", str(MIN_YEAR))
            .replace("__Y1__", str(MAX_YEAR)).replace("__NQ__", str(len(by_q))))
     _dump(out / "tab_slide_deposit_types.tex", tex)
+    _dump(TYPES_JSON, json.dumps(dict(
+        schema=1, generator="make_slide_figures.py:deposit_types_table",
+        tex_file="tab_slide_deposit_types.tex", window=[MIN_YEAR, MAX_YEAR],
+        n_quarters=int(len(by_q)), types=types), indent=2) + "\n")
     # The Selic of the macro file and of Table A.4 are the same series on two routes.
     print(f"  Selic mean {MIN_YEAR}-{MAX_YEAR}: macro file {selic:.3f}, Table A.4 "
           f"{t2_mean('risk_free_ann'):.3f}")
@@ -517,6 +607,8 @@ def main():
         demand_coef_plot(args.out, args.png, args.routine)
     if "wedge" in todo:
         elasticity_bars(args.out, args.png, args.routine)
+    if "violations" in todo:
+        violation_bars(args.out, args.png)
     if "flow" in todo:
         flow_diagram(args.out, args.routine)
     if "roadmap" in todo:
