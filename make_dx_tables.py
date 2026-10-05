@@ -62,6 +62,16 @@ CHECKS BEFORE A NUMBER IS PRINTED
                            from another. There is no override; re-ingest the two archives of one
                            run, or move the cost_params out of <dx>/bbl. Without a record, or
                            without the fit on disk, the console says "not checked".
+                           That ties the fit to the record. The record is tied to the cost_params
+                           through the job id of the BBL archive: the record lists it, and
+                           cluster_ingest_dx.py notes beside the cost_params the archive it landed
+                           them from (cost_params_<key>.ingest.json). A cost_params file from an
+                           archive the record does not list stops the script the same way. Only
+                           when both links hold does the console say "pairing E{k}: bound". When
+                           the second cannot be told (no archive job in the record, cost_params
+                           not landed by the ingest, a renamed archive) it says "pairing E{k}: fit
+                           and record bound; cost params not verifiable", and the BBL table's note
+                           carries the same words; "not checked" goes into the note as well.
 
 Usage
 -----
@@ -542,17 +552,34 @@ def _sha256(path: pathlib.Path) -> str:
     return h.hexdigest()
 
 
-def fit_binding_check(est: int, tag: str, dx_dir: pathlib.Path) -> dict:
-    """The variant's cost_params against the variant's demand fit on disk.
+# What the pairing check reports when the first link holds and the second cannot be told.
+UNVERIFIABLE = "fit and record bound; cost params not verifiable"
 
-    dx_suite_20261001.sh records the sha256 of the fit a BBL run was simulated on when it submits
-    the launch (blp_bblfit_E{est}_spec_12_extended_dx{tag}.json in the blp folder: the `.jls` the
-    forward simulation reads, and the engine's `.json` of the same stage). Every recorded file
-    that is on disk here must have the recorded sha256.
-    -> {"status": "pending" | "bound" | "MISMATCH" | "not checked: <why>", "differences": [...]}
-    pending = no variant cost_params on disk, so nothing is paired."""
+
+def fit_binding_check(est: int, tag: str, dx_dir: pathlib.Path) -> dict:
+    """The variant's cost_params against the variant's demand fit on disk, in two links.
+
+    FIT <-> RECORD. dx_suite_20261001.sh records the sha256 of the fit a BBL run was simulated on
+    when it submits the launch (blp_bblfit_E{est}_spec_12_extended_dx{tag}.json in the blp folder:
+    the `.jls` the forward simulation reads, and the engine's `.json` of the same stage). Every
+    recorded file that is on disk here must have the recorded sha256.
+
+    RECORD <-> COST PARAMS. Nothing inside a BBL archive says which launch it comes from (the cost
+    params and the psi files record no job id, launch time or fit). The tie is the job id of the
+    archive job, which is in the archive's name: the suite lists it in the record
+    (`bbl_archive_jobs`), and cluster_ingest_dx.py notes beside each cost_params file it lands the
+    archive it took it from (cost_params_<key>.ingest.json, with the file's sha256). The cost params
+    on disk must be the file the ingest landed, from an archive the record lists.
+
+    -> {"status": ..., "differences": [...], "why": <for the unverifiable case>}
+       pending                 no variant cost_params on disk, so nothing is paired
+       bound                   both links hold
+       UNVERIFIABLE            the first link holds, the second cannot be told (see "why")
+       not checked: <why>      no record on disk, or the recorded fit is not on disk
+       MISMATCH                a link is broken: the tables are not written"""
     key = f"E{est}_spec_{SPEC}_{BBL_STAGE}{DX_SUFFIX}{tag}"
-    if not (dx_dir / "bbl" / f"cost_params_{key}.json").is_file():
+    cp = dx_dir / "bbl" / f"cost_params_{key}.json"
+    if not cp.is_file():
         return {"status": "pending", "differences": []}
     rec_p = dx_dir / "blp" / f"blp_bblfit_{key}.json"
     rec = _load(rec_p)
@@ -578,8 +605,26 @@ def fit_binding_check(est: int, tag: str, dx_dir: pathlib.Path) -> dict:
         return {"status": "MISMATCH", "record": rec_p.name, "checked": checked, "differences": diffs}
     if not checked:
         return {"status": f"not checked: the recorded fit ({rec.get('fit')}) is not on disk", "differences": []}
-    return {"status": "bound", "record": rec_p.name, "checked": checked, "recorded": rec.get("recorded"),
-            "differences": []}
+    out = {"record": rec_p.name, "checked": checked, "recorded": rec.get("recorded"), "differences": []}
+    jobs = str(rec.get("bbl_archive_jobs") or "").split()
+    src_p = cp.with_name(f"cost_params_{key}.ingest.json")
+    src = _load(src_p)
+    why = None
+    if not jobs:
+        why = f"{rec_p.name} lists no BBL archive job"
+    elif not src:
+        why = f"no {src_p.name} beside the cost params (they were not landed by cluster_ingest_dx.py)"
+    elif src.get("sha256") != _sha256(cp):
+        why = f"{cp.name} is not the file cluster_ingest_dx.py landed (it changed since)"
+    elif not src.get("archive_job"):
+        why = f"the archive {src.get('archive')} carries no job id in its name"
+    elif str(src["archive_job"]) not in jobs:
+        return dict(out, status="MISMATCH", differences=[
+            f"{cp.name} came from the BBL archive of job {src['archive_job']} ({src.get('archive')}); {rec_p.name} "
+            f"lists the archive job(s) {', '.join(jobs)} for the fit it records: another launch"])
+    if why:
+        return dict(out, status=UNVERIFIABLE, why=why)
+    return dict(out, status="bound", archive_job=str(src["archive_job"]))
 
 
 def bbl_block(d, kappa):
@@ -611,7 +656,19 @@ def bbl_numbers(ests, tag, dx_dir):
     return out
 
 
-def build_bbl_tex(ests, tag, nums, design=None):
+def pairing_note(ests, pairing) -> str:
+    """The sentence(s) the BBL table's note carries when the pairing of column D with the demand
+    fit is anything short of bound: the status up to its first colon, per group of routines."""
+    groups = {}
+    for e in ests:
+        st = ((pairing or {}).get(f"E{e}") or {}).get("status")
+        if st and st not in ("bound", "pending"):
+            groups.setdefault(st.split(":")[0], []).append(rc.est_ref(e))
+    return "".join(rf" Pairing of column \textit{{D}} with the demand fit, {', '.join(refs)}: {st}."
+                   for st, refs in groups.items())
+
+
+def build_bbl_tex(ests, tag, nums, design=None, pairing=None):
     cols = [(e, w) for e in ests for w in ("main", "dx")]
     ncols = len(cols)
     grp = " & ".join(rf"\multicolumn{{2}}{{c}}{{{rc.est_ref(e)}}}" for e in ests)
@@ -634,6 +691,7 @@ def build_bbl_tex(ests, tag, nums, design=None):
             r"interval in brackets; $\omega$ and $\zeta$ with 95\% profile intervals. Violated share "
             r"is the fraction of deviation inequalities violated at the estimate."
             + differ_txt
+            + pairing_note(ests, pairing)
             + (r" $^{\ddagger}$ $\omega$ and $\zeta$ are not separately identified in that cell." if unid else ""))
     W = r"\textwidth"
     lines = [
@@ -776,7 +834,8 @@ def main(argv=None):
     # must belong to each other, whichever table is asked for.
     fit = {f"E{e}": fit_binding_check(e, a.psi_tag, dx_dir) for e in ests}
     for ek, x in fit.items():
-        print(f"  BBL-to-fit check {ek}: {x['status']}" + "".join("\n      " + d for d in x["differences"]))
+        print(f"  pairing {ek}: {x['status']}" + (f" ({x['why']})" if x.get("why") else "")
+              + "".join("\n      " + d for d in x["differences"]))
     unbound = [ek for ek, x in fit.items() if x["status"] == "MISMATCH"]
     if unbound:
         raise SystemExit("[dx-tables] the variant's cost parameters of " + ", ".join(unbound) + " were not "
@@ -819,7 +878,7 @@ def main(argv=None):
                              "differing items in the note.")
         numbers["bbl_design_check"] = design
         nums = bbl_numbers(ests, a.psi_tag, dx_dir)
-        tex, pending = build_bbl_tex(ests, a.psi_tag, nums, design)
+        tex, pending = build_bbl_tex(ests, a.psi_tag, nums, design, pairing=fit)
         _write(out / f"{BBL_BASE}.tex", tex); written.append(out / f"{BBL_BASE}.tex")
         _write(out / f"{BBL_BASE}.md", build_bbl_md(nums, a.psi_tag))
         numbers["bbl"] = nums

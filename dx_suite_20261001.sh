@@ -24,6 +24,18 @@
 # whenever files of the run exist (cost parameters, psi files, a launch context). Files of a BBL
 # run with no fit on disk, with no record, or with a record of another fit are REFUSED: nothing is
 # submitted, nothing is deleted, and the message names what to archive and remove.
+# The record also lists the job id of every archive job (dx_bbl_zip) the suite sequenced for the
+# run. That id is in the archive's name (bbl_outputs_<jobid>_dx.zip), and it is the one thing a
+# BBL archive carries that says which launch it comes from: the cost parameters and the psi files
+# record no job id, launch time or fit. The local ingest and the tables use it to tie the cost
+# parameters to the record, as the sha256 ties the record to the fit.
+#
+# NEVER REPAIR THE VARIANT BY HAND WITH bbl_run.sh. bbl_status.sh, the sweep job and bbl_solve.py
+# print a line `bash bbl_run.sh ... --psi-tag '_dx_ms982' --repair` when shards are missing. Run
+# for the variant, that line skips the binding above, submits the tables job (which overwrites the
+# step folder's untagged tab_bbl_* with the variant's tables) and an archive tagged with a bare
+# job id (the kind the main ingests prefer). Run the launch line again instead: the suite's own
+# repair passes --no-tables --no-zip, checks the binding first and archives under <jobid>_dx.
 #
 #   0. CHECK THE TREE. The run executes files this upload does not carry: each must have the md5
 #      pinned below, the one the variant was tested with. A mismatch refuses before anything is
@@ -238,24 +250,51 @@ bbl_psi_list () {   # bbl_psi_list <key>
     ls "${CL_STEP_BBL}" 2>/dev/null | grep -E "^psi_(eq|dev|starts)_$1(_shard[0-9]+of[0-9]+)?\.(parquet|json)$" || true
 }
 
-# The record of the fit a FRESH launch is about to be simulated on. Written before the launch is
-# submitted, and only for a routine with no file of the run on disk (bbl_classify: fresh).
+is_sha256 () { [[ "$1" =~ ^[0-9a-f]{64}$ ]]; }
+
+# The record of the fit a FRESH launch is about to be simulated on. Written before anything of
+# the BBL is submitted, and only for a routine with no file of the run on disk (bbl_classify:
+# fresh). Every hash must be 64 hex characters, when computed and again when read back from the
+# file: a record with an empty or cut hash would bind the run to nothing. Returns 1 otherwise.
 fit_record_write () {   # fit_record_write <routine>
-    local k="$1" f rec js
+    local k="$1" f rec js h hj=""
     f="$(fit_path "${k}")"; rec="$(fit_rec "${k}")"; js="${f%.jls}.json"
+    h="$(sha "${f}")"; is_sha256 "${h}" || return 1
+    if [[ -f "${js}" ]]; then hj="$(sha "${js}")"; is_sha256 "${hj}" || return 1; fi
     {
         printf '{\n'
         printf ' "bbl_key": "%s",\n' "$(bbl_key "${k}")"
         printf ' "fit": "%s",\n' "${f##*/}"
-        printf ' "fit_sha256": "%s",\n' "$(sha "${f}")"
-        if [[ -f "${js}" ]]; then
+        printf ' "fit_sha256": "%s",\n' "${h}"
+        if [[ -n "${hj}" ]]; then
             printf ' "fit_json": "%s",\n' "${js##*/}"
-            printf ' "fit_json_sha256": "%s",\n' "$(sha "${js}")"
+            printf ' "fit_json_sha256": "%s",\n' "${hj}"
         fi
         printf ' "recorded": "%s",\n' "$(date '+%F %T')"
-        printf ' "recorded_by": "%s --handoff%s"\n' "${SELF}" "${SLURM_JOB_ID:+, job ${SLURM_JOB_ID}}"
+        printf ' "recorded_by": "%s --handoff%s",\n' "${SELF}" "${SLURM_JOB_ID:+, job ${SLURM_JOB_ID}}"
+        printf ' "bbl_archive_jobs": ""\n'
         printf '}\n'
-    } > "${rec}.tmp" && mv -f "${rec}.tmp" "${rec}"
+    } > "${rec}.tmp" || return 1
+    mv -f "${rec}.tmp" "${rec}" || return 1
+    [[ "$(json_str "${rec}" fit_sha256)" == "${h}" && "$(json_str "${rec}" bbl_key)" == "$(bbl_key "${k}")" ]] || return 1
+    [[ -z "${hj}" || "$(json_str "${rec}" fit_json_sha256)" == "${hj}" ]]
+}
+
+# The archive job the suite has just sequenced for a run, added to the run's record: its job id
+# is in the name of the archive it will write (bbl_outputs_<jobid>_dx.zip). The hashes stay as
+# they are; a job id already listed is not listed twice. Returns 1 when the record cannot take it.
+fit_record_add_archive () {   # fit_record_add_archive <routine> <archive job id>
+    local rec jobs h
+    rec="$(fit_rec "$1")"
+    [[ -f "${rec}" && "$2" =~ ^[0-9]+$ ]] || return 1
+    grep -q '^ "bbl_archive_jobs": "[0-9 ]*"$' "${rec}" || return 1
+    h="$(json_str "${rec}" fit_sha256)"
+    jobs="$(json_str "${rec}" bbl_archive_jobs)"
+    [[ " ${jobs} " == *" $2 "* ]] && return 0
+    jobs="${jobs:+${jobs} }$2"
+    sed 's/^ "bbl_archive_jobs": "[0-9 ]*"$/ "bbl_archive_jobs": "'"${jobs}"'"/' "${rec}" > "${rec}.tmp" || return 1
+    [[ "$(json_str "${rec}.tmp" fit_sha256)" == "${h}" && "$(json_str "${rec}.tmp" bbl_archive_jobs)" == "${jobs}" ]] || { rm -f "${rec}.tmp"; return 1; }
+    mv -f "${rec}.tmp" "${rec}"
 }
 
 # bbl_classify: per routine, the BBL run on disk and whether it is the run of the fit on disk.
@@ -286,8 +325,8 @@ bbl_classify () {
             BBL_BAD+=("E${k}: files of the BBL run ${key} are on disk (${what}) without the fit record ${rec##*/}, so nothing shows they were simulated on the ${f##*/} now on disk")
         else
             want="$(json_str "${rec}" fit_sha256)"; got="$(sha "${f}")"
-            if [[ "$(json_str "${rec}" bbl_key)" != "${key}" || -z "${want}" ]]; then
-                BBL_BAD+=("E${k}: the fit record ${rec##*/} is not a record of the BBL run ${key} (bbl_key '$(json_str "${rec}" bbl_key)', fit_sha256 '${want:0:12}')")
+            if [[ "$(json_str "${rec}" bbl_key)" != "${key}" ]] || ! is_sha256 "${want}"; then
+                BBL_BAD+=("E${k}: the fit record ${rec##*/} is not a record of the BBL run ${key} (bbl_key '$(json_str "${rec}" bbl_key)', fit_sha256 '${want:0:12}' of ${#want} characters)")
             elif [[ "${want}" != "${got}" ]]; then
                 BBL_BAD+=("E${k}: ${f##*/} on disk has sha256 ${got:0:12}..., but the BBL run ${key} on disk (${what}) was simulated on the fit ${want:0:12}... (${rec##*/}, recorded $(json_str "${rec}" recorded)): the fit was re-estimated or replaced after the BBL was launched")
             elif (( cp )); then BBL_DONE="${BBL_DONE:+${BBL_DONE} }${k}"
@@ -398,6 +437,16 @@ bbl_prechecks () {
 # ══════════════════════════════════════════════════════════════════════════════════════════════
 # THE HAND-OFF
 # ══════════════════════════════════════════════════════════════════════════════════════════════
+# The recovery line the main tools print when shards are missing is the main run's. Printed with
+# every summary of the suite, because for the variant it must not be run by hand (see the header).
+repair_warning () {
+    echo "NEVER, FOR THE VARIANT: the line  bash bbl_run.sh ... --psi-tag '${DX_TAG}' --repair  that bbl_status.sh, the sweep job and"
+    echo "  bbl_solve.py print when shards are missing. Run by hand it skips the check that the shards belong to the demand fit on disk,"
+    echo "  submits the tables job (which overwrites the step folder's untagged tab_bbl_* with the variant's tables) and an archive"
+    echo "  tagged with a bare job id. To repair the variant, run the launch line again: the suite checks the binding, repairs with"
+    echo "  --no-tables --no-zip, and archives as bbl_outputs_<jobid>${DX}.zip."
+}
+
 bbl_submit () {   # bbl_submit <label> <log> <script> <args...>: one live (or dry) bbl launch; adds to SOLVE_IDS; 1 when it failed
     local label="$1" out="$2" script="$3"; shift 3
     say "   submitting the ${label} ..."
@@ -440,7 +489,7 @@ check_fit () {
         exit 1
     fi
     for k in ${BBL_DONE} ${BBL_REPAIR}; do
-        say "   E${k}: $(basename "$(fit_path "${k}")") sha256 $(json_str "$(fit_rec "${k}")" fit_sha256 | cut -c1-12)... is the fit the BBL run $(bbl_key "${k}") was simulated on (recorded $(json_str "$(fit_rec "${k}")" recorded))"
+        say "   E${k}: $(basename "$(fit_path "${k}")") sha256 $(json_str "$(fit_rec "${k}")" fit_sha256 | cut -c1-12)... is the fit the BBL run $(bbl_key "${k}") was simulated on (recorded $(json_str "$(fit_rec "${k}")" recorded); archive job(s) on record: $(json_str "$(fit_rec "${k}")" bbl_archive_jobs))"
     done
     [[ -z "${BBL_FRESH}" ]] || say "   no BBL file on disk for E${BBL_FRESH// /, E}"
     say "DX CHECK-FIT OK"
@@ -513,21 +562,23 @@ handoff () {
     fi
 
     SOLVE_IDS=""
-    local fresh_failed=0
+    local fresh_failed=0 in_archive=""
+    # The fit each fresh routine is about to be simulated on, recorded BEFORE anything of the BBL
+    # is submitted (the repair included): a record that cannot be written whole stops here with
+    # nothing in the queue.
+    for k in ${BBL_FRESH}; do
+        if [[ "${DRY}" == "1" ]]; then say "   [dry-run] would record the sha256 of $(basename "$(fit_path "${k}")") in $(basename "$(fit_rec "${k}")")"
+        else
+            fit_record_write "${k}" || die "the fit record $(fit_rec "${k}") could not be written whole (each sha256 must be 64 hex characters, in the file as computed). No BBL job was submitted."
+            say "   E${k}: fit $(basename "$(fit_path "${k}")") sha256 $(json_str "$(fit_rec "${k}")" fit_sha256 | cut -c1-12)... recorded in $(basename "$(fit_rec "${k}")")"
+        fi
+    done
     if [[ -n "${BBL_REPAIR}" ]]; then
         bbl_submit "repair of ${DX_TAG} (E${BBL_REPAIR// /, E})" "${LOGD}/dx_suite_${STAMP}_bbl_repair.log" bbl_run.sh \
             --routines "${BBL_REPAIR}" "${BBL_REPAIR_FLAGS[@]}" ${EXTRA[@]+"${EXTRA[@]}"} \
             || die "the repair of ${DX_TAG} failed (above). No BBL job of the variant is in the queue."
     fi
     if [[ -n "${BBL_FRESH}" ]]; then
-        # The fit each fresh routine is about to be simulated on, recorded before the launch.
-        for k in ${BBL_FRESH}; do
-            if [[ "${DRY}" == "1" ]]; then say "   [dry-run] would record the sha256 of $(basename "$(fit_path "${k}")") in $(basename "$(fit_rec "${k}")")"
-            else
-                fit_record_write "${k}" || die "cannot write the fit record $(fit_rec "${k}"); no BBL launch was submitted for E${BBL_FRESH// /, E}."
-                say "   E${k}: fit $(basename "$(fit_path "${k}")") sha256 $(json_str "$(fit_rec "${k}")" fit_sha256 | cut -c1-12)... recorded in $(basename "$(fit_rec "${k}")")"
-            fi
-        done
         bbl_submit "launch of ${DX_TAG} (E${BBL_FRESH// /, E}, multi-start)" "${LOGD}/dx_suite_${STAMP}_bbl.log" "${LAUNCHER}" \
             --routines "${BBL_FRESH}" "${BBL_DESIGN[@]}" ${EXTRA[@]+"${EXTRA[@]}"} || fresh_failed=1
     fi
@@ -536,12 +587,23 @@ handoff () {
     fi
 
     bbl_archive
+    # The archive job's id goes into the record of every routine whose cost parameters that
+    # archive will hold: the routines already done, the repaired ones, and the launched ones.
+    in_archive="${BBL_DONE} ${BBL_REPAIR}"; [[ "${fresh_failed}" == "1" ]] || in_archive="${in_archive} ${BBL_FRESH}"
+    if [[ "${DRY}" == "1" ]]; then say "   [dry-run] would add the archive job's id to the fit records of E$(echo ${in_archive} | sed 's/ /, E/g')"
+    elif [[ -n "${ZIP_BBL_JID}" ]]; then
+        for k in ${in_archive}; do
+            if fit_record_add_archive "${k}" "${ZIP_BBL_JID%%;*}"; then say "   E${k}: archive job ${ZIP_BBL_JID%%;*} (bbl_outputs_${ZIP_BBL_JID%%;*}${DX}.zip) added to $(basename "$(fit_rec "${k}")")"
+            else say "   [!] E${k}: the archive job ${ZIP_BBL_JID} could not be added to $(basename "$(fit_rec "${k}")"); the tables will say the cost parameters are not verifiable against the record"; fi
+        done
+    else say "   [!] no archive job was sequenced, so no record names one: the tables will say the cost parameters are not verifiable against the record"; fi
     echo
     if [[ "${fresh_failed}" == "1" ]]; then
         # The repair's jobs are in the queue and their archive is sequenced; only the launch is missing.
         echo "DX BBL PARTLY SUBMITTED: repaired E${BBL_REPAIR// /, E}; the launch for E${BBL_FRESH// /, E} FAILED (${LOGD}/dx_suite_${STAMP}_bbl.log) and submitted nothing."
         echo "  solve job ids: ${SOLVE_IDS:-none}    archive: ${ZIP_BBL_JID:-none} (dx_bbl_zip, on the repair's solves)"
         echo "  When the repair's jobs have left the queue and the cause is fixed, run the launch line again for E${BBL_FRESH// /, E}."
+        repair_warning
         [[ "${DRY}" == "1" ]] && return 0
         exit 5
     fi
@@ -549,6 +611,7 @@ handoff () {
     echo "  solve job ids: ${SOLVE_IDS:-none}    archive: ${ZIP_BBL_JID:-none} (dx_bbl_zip)"
     echo "STATUS (one line):"
     echo "  cd ${HERE} && bash bbl_status.sh --routines \"${ROUTINES}\" --psi-tag ${DX_TAG}"
+    repair_warning
 }
 
 if [[ "${MODE}" == "handoff" ]]; then handoff; exit 0; fi
@@ -757,3 +820,4 @@ echo "STATUS (one line):"
 echo "  squeue -u \$USER -h -o \"%i %j %T %r\" | grep -E 'rc_ift_dx_|dx_next_bbl|dx_blp_zip|dx_bbl_zip|${DX_TAG}'"
 echo "THE COMPARISON AND THE BBL JOB IDS (one line, when dx_next_bbl has run):"
 echo "  cd ${HERE} && cat logs/dx_next_bbl_${HAND_JID}.out"
+repair_warning

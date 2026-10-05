@@ -40,7 +40,10 @@ contraction iterations and the IFT forward passes. No result, checkpoint or side
 the engine does write one empty `blp_summary_E{k}_{stage}_gpu_ift_dx.json` per stage, which the
 real stage overwrites. The engine catches a stage that throws and skips a stage whose result is
 on disk, so the dry run ends with a nonzero status unless every step left positive evidence
-(blp_dx.jl `dx_smoke_verdict`): `[DX SMOKE] PASS` is printed only then.
+(blp_dx.jl `dx_smoke_verdict`): `[DX SMOKE] PASS` is printed only then. The smoke is stricter than
+a real run on one point: it fails when the logit summary has no `full_dtype` sub-model to compare
+the linear step with, which a real rung only reports. That failure is worded apart (`for ONE
+reason that is NOT a fault of the wrappers`), because every wrapper may be working when it occurs.
 
 Usage
 -----
@@ -128,8 +131,25 @@ function dx_run_routine(estim_id::Int; passthrough::Vector{String} = String[])
     end
     if dry
         miss = dx_smoke_verdict(estim_id, stages, rec)
-        isempty(miss) || error("dx smoke: FAIL for E$(estim_id), stage(s) $(join(stages, ", ")). " *
-                               "Not shown by this dry run: " * join(miss, "; ") * ".")
+        if !isempty(miss)
+            # A logit summary without the full_dtype sub-model fails the smoke with every wrapper
+            # working. `others` is the verdict as it would be had the comparison been made.
+            no_logit = !get(rec["dx"], "logit_found", true)
+            others   = no_logit ? dx_smoke_verdict(estim_id, stages, Dict{String,Any}(
+                           "dx" => merge(rec["dx"], Dict{String,Any}("logit_found" => true, "nested" => true)))) : miss
+            (no_logit && isempty(others)) && error(
+                "dx smoke: FAIL for E$(estim_id), for ONE reason that is NOT a fault of the wrappers: the " *
+                "logit summary (logit_summary_spec_$(RC_SPEC).json, logit step folder) has no " *
+                "E$(estim_id)_full_dtype, so the variant's linear step at θ₂ = 0 was compared with nothing. " *
+                "Every other step left its evidence: the self-test, the design with the D column, its rank, " *
+                "the engine's dry run of stage(s) $(join(stages, ", ")). A real rung only reports a missing " *
+                "full_dtype and goes on. Re-run the logit step so that it writes the full_dtype sub-model " *
+                "and smoke again, or launch knowing the nesting will not be compared.")
+            error("dx smoke: FAIL for E$(estim_id), stage(s) $(join(stages, ", ")). " *
+                  "Not shown by this dry run: " * join(miss, "; ") * "." *
+                  (no_logit ? " (The missing logit full_dtype is an input the smoke asks for, not a fault " *
+                              "of the wrappers; the other item(s) are.)" : ""))
+        end
         ev = DX_DRY[stages[1]]
         log_status("[DX SMOKE] PASS E$(estim_id): self-test; nesting against logit full_dtype " *
                    "(max rel. diff $(round(rec["dx"]["max_rel_diff"], sigdigits=3))); stage(s) " *

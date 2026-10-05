@@ -37,9 +37,13 @@
 #     it was given: the simulation does not stop on a missing fit, it warns and runs on
 #     placeholder parameters (cf_demand_eval.jl).
 #
-# Usage: the flags of bbl_run.sh, e.g.
-#   bash dx_bbl_run.sh --routines "3 4" --multi-start --n-paths 1 --psi-tag _dx_ms982 --no-polfunc --no-warmup --no-tables --dry-run
-# dx_suite_20261001.sh calls it from its hand-off.
+# WHO RUNS IT. dx_suite_20261001.sh, from its hand-off, and nobody else for a live launch: the
+# suite first records the sha256 of the demand fit the launch is simulated on, and afterwards
+# refuses any file of a BBL run that has no such record. A live launch made by hand with this
+# script writes no record, so the suite would refuse everything it leaves (psi files, launch
+# context, cost parameters). By hand it is for a DRY RUN only (it submits nothing), with the flags
+# of bbl_run.sh:
+#   bash dx_bbl_run.sh --routines "3 4" --multi-start --n-paths 1 --psi-tag _dx_ms982 --no-polfunc --no-warmup --no-tables --no-zip --dry-run
 # ==============================================================================
 set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
