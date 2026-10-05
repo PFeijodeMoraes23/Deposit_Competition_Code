@@ -77,6 +77,22 @@ the same rows (_overlay_null_fq). The two passes stay order-free once that file 
 All are \input-ready in the V_Main house style (spacing + xltabular at \textwidth + booktabs,
 caption/label inside the table, notes in \endlastfoot) -- see _wrap() and polfunc_k4.tex.
 
+THE COST AT THE MEDIAN COST SHIFTERS. c_bar = omega + rbar_f*zeta is the cost function
+c = omega + zeta*r^f + gamma'Z at Z = 0. Under each c_bar block, tab_bbl_cbar and
+tab_bbl_cbar_design print c_bar + gamma'Zbar, the cost of a firm with median shifters: Zbar_z is
+the median of dpsi3_z/dpsi2 over the rows rbar_f is the median of dpsi4/dpsi2 over. Its SD and
+interval need the joint draws of (omega, zeta, gamma), which cost_params does not store, so they
+are re-drawn from the run's psi with bbl_solve.py's routines and seeds and kept only when they
+reproduce the SD and the interval the solve recorded for c_bar (the section "c-bar at the median
+cost shifters" of this file). The result is a section of bbl_table_numbers{tag}.json. Either pass
+computes it for a solve that has none when it can read the psi: --from-psi from the psi it loads,
+the default pass from --psi-zip / --psi-dir, the step folder, or the archive under
+BBL_OUTPUT/cluster_raw that holds the run's psi (a few minutes of refits, once per solve; the
+two passes stay order-free). --shifter-cost read never computes and compute always does; on the
+cluster (CF_COST_FWD exported) the default, auto, only reads, because the tables job has a short
+wall. Without a record of the solve being rendered the rows are dashes: a record of another solve
+is never printed.
+
 EVERY TABLE STATES THE beta AND T OF THE RUN IT RENDERS. The Notes end with one sentence built by
 _discount_sentence(): the discount factor, its annual equivalent, the forward-simulation horizon
 and the share of the discount weight that horizon carries. The values come from the run's own
@@ -1513,6 +1529,396 @@ def collect(data: dict) -> tuple[dict, list]:
     return ridge, rows
 
 
+# ── c-bar at the median cost shifters ────────────────────────────────────────────
+# c-bar^kappa = omega + rbar_f*zeta is the cost function c = omega + zeta*r^f + gamma'Z at Z = 0.
+# The rows "at median cost shifters" of tab_bbl_cbar and tab_bbl_cbar_design report
+#
+#     c-bar^kappa + gamma^kappa' Zbar^kappa,     Zbar_z^kappa = median( dpsi3_z / dpsi2 ),
+#
+# the median taken shifter by shifter over the rows rbar_f^kappa is the median of dpsi4/dpsi2
+# over: one firm type's inequalities with dpsi2 != 0, every launch quarter and deviation pooled,
+# dead firm-quarters out wherever the tables leave them out. dpsi3_z/dpsi2 = sum_t beta^t Z_zt
+# dDep_t / sum_t beta^t dDep_t is the value of shifter z a deviation's deposits are priced at, in
+# the units psi3 is accumulated in (cf_psi_basis.jl load_Z: the personnel, administrative and tax
+# cost ratios as fractions, the Basel index in percentage points). Those are the units gamma is
+# estimated in, so gamma'Zbar is a quarterly rate like omega; Z_SCALE rescales the Basel
+# coefficient for display only. rbar_f and Zbar are held fixed across resampling draws, as
+# bbl_solve.cbar_stats holds rbar_f.
+#
+# The SD and the interval need the joint draws of (omega, zeta, gamma), which cost_params does
+# not store. They are re-drawn from the psi with bbl_solve.py's own routines at their default
+# seeds (bootstrap_kappa, subsample_kappa), on the rows the solve used, and a block is recorded
+# only when the re-draw reproduces what the solve recorded from the same draws: c_bar_se_boot,
+# omega_se and zeta_se (bootstrap), c_bar_ci_sqrtn (subsampling), and c-bar at a refit. The point
+# estimate is formed from the theta-hat in cost_params, never from the refit.
+#
+# The record is the section SHIFTER_SECTION of bbl_table_numbers{tag}.json: one entry per routine
+# x firm type, with the fingerprint of the solve block it belongs to (_SHIFTER_FP). Either pass
+# writes it when it has the psi; the default pass prints the rows from it, and dashes when the
+# record is absent, belongs to another solve, or was evaluated over other rows than the table's.
+SHIFTER_SECTION = "cbar_at_median_shifters"
+SHIFTER_MODES = ("auto", "compute", "read")
+# Reproduction tolerances. Levels (c-bar, its SD, its interval ends) in quarterly units, where the
+# third decimal of an annual pp is 2.5e-6; the two ridge SDs relative to themselves.
+SHIFTER_ATOL = 1e-6
+SHIFTER_RTOL = 1e-4
+_SHIFTER_FP = ("omega", "zeta", "gamma", "rbar_f", "c_bar", "c_bar_se_boot", "n_rows", "n_firms")
+SHIFTER_HOWTO = ("Run a pass that can read this run's psi: the default pass finds the archive "
+                 "under BBL_OUTPUT/cluster_raw (or takes --psi-zip / --psi-dir), the --from-psi "
+                 "pass uses the psi it loads; --shifter-cost compute forces it.")
+_SOLVE_MOD: dict = {}
+
+
+def _solve_module():
+    """bbl_solve, for build_delta / solve_kappa / bootstrap_kappa / subsample_kappa. Imported on
+    first use with its venv guard switched off: under another interpreter the guard re-executes
+    bbl_solve.py as a script, which from an import would start a solve."""
+    if "m" not in _SOLVE_MOD:
+        guard = "OPEN_FINANCE_VENV_ENFORCED"
+        prev = os.environ.get(guard)
+        os.environ[guard] = "1"
+        try:
+            import bbl_solve
+        finally:
+            if prev is None:
+                os.environ.pop(guard, None)
+            else:
+                os.environ[guard] = prev
+        _SOLVE_MOD["m"] = bbl_solve
+    return _SOLVE_MOD["m"]
+
+
+def _solve_frames(eq: pd.DataFrame, dev: pd.DataFrame):
+    """psi_eq and psi_dev as bbl_solve.main() hands them to build_delta: a start_q label on both
+    ('all' for a single-curve psi) and one row per (firm, start_q, shock)."""
+    eq, dev = eq.copy(), dev.copy()
+    for df in (eq, dev):
+        if "start_q" not in df.columns:
+            df["start_q"] = "all"
+        df["start_q"] = df["start_q"].astype(str)
+    keys = [c for c in ("firm", "start_q", "shock") if c in dev.columns]
+    return eq, dev.drop_duplicates(subset=keys).reset_index(drop=True)
+
+
+def _ratio_medians(blk: dict) -> dict:
+    """rbar_f and Zbar of one build_delta block: the medians of dpsi4/dpsi2 and, shifter by
+    shifter, of dpsi3_z/dpsi2 over the rows with dpsi2 != 0 (bbl_solve.rbar_of_block's rows)."""
+    d2 = np.asarray(blk["d_omega"], float)
+    d4 = np.asarray(blk["d_zeta"], float)
+    d3 = np.asarray(blk["d_gamma"], float)
+    ok = np.isfinite(d2) & np.isfinite(d4) & (d2 != 0.0)
+    if not ok.any():
+        raise ValueError("no row with dpsi2 != 0")
+    zb = np.median(d3[ok] / d2[ok, None], axis=0)
+    if not np.all(np.isfinite(zb)):
+        raise ValueError("a non-finite dpsi3/dpsi2 among the rows with dpsi2 != 0")
+    return dict(rbar=float(np.median(d4[ok] / d2[ok])), n_ratio=int(ok.sum()),
+                zbar={c: float(v) for c, v in zip(blk["gamma_names"], zb)})
+
+
+def _sqrtn_ci(draws, point: float, n: int, b: int, level: float = 0.95) -> tuple:
+    """bbl_solve.cbar_stats's interval for a scalar function of theta: the quantiles of
+    sqrt(b)*(draw - point) over the subsamples of b firms, rescaled by sqrt(n)."""
+    a = 1.0 - level
+    scaled = np.sqrt(b) * (np.asarray(draws, float) - point)
+    return (float(point - np.quantile(scaled, 1.0 - a / 2.0) / np.sqrt(n)),
+            float(point - np.quantile(scaled, a / 2.0) / np.sqrt(n)))
+
+
+def _shifter_block(S, blk_s: dict, blk_t: dict, stored: dict, run: dict, who: str):
+    """One block's record, or None (said on stdout) when the psi does not reproduce the solve.
+
+    blk_s is the Delta-psi block over the rows the solve used (the draws, and every check against
+    the solve's record); blk_t the one over the rows the tables describe (rbar_f and Zbar). They
+    are one object except for a cost_params that predates the dead firm-quarter rule."""
+    names = list(blk_s["gamma_names"])
+    gmap = stored.get("gamma") or {}
+    if sorted(names) != sorted(gmap):
+        print(f"  !!!! [median shifters] {who}: the psi carries the shifters {names}, cost_params "
+              f"{sorted(gmap)} -- not recorded !!!!")
+        return None
+    w, z = float(stored["omega"]), float(stored["zeta"])
+    g = np.array([float(gmap[c]) for c in names])
+    ms, mt = _ratio_medians(blk_s), _ratio_medians(blk_t)
+    r_s, r_t = ms["rbar"], mt["rbar"]
+    zb = np.array([mt["zbar"][c] for c in names])
+    est = w + r_t * z + float(g @ zb)
+    fit = S.solve_kappa(blk_s)
+    gf = np.array([float(fit["gamma"][c]) for c in names])
+    refit = fit["omega"] + r_t * fit["zeta"] + float(gf @ zb)
+    chk = dict(rbar_f=abs(r_s - float(stored["rbar_f"])),
+               refit_c_bar=abs(fit["omega"] + r_s * fit["zeta"] - (w + r_s * z)),
+               refit_at_median_shifters=abs(refit - est))
+    rec = dict(rbar=r_t, zbar=mt["zbar"], zbar_rows=mt["n_ratio"], gamma_zbar=float(g @ zb),
+               estimate=est, sd=None, ci_lo=None, ci_hi=None)
+    if stored.get("c_bar_se_boot") is not None:
+        nb = int(run.get("bootstrap") or 200)        # bbl_solve.py's default where not recorded
+        _sd, draws = S.bootstrap_kappa(blk_s, nb)
+        chk["boot_c_bar_sd"] = abs(float((draws[:, 0] + r_s * draws[:, 1]).std())
+                                   - float(stored["c_bar_se_boot"]))
+        for nm, j in (("omega_se", 0), ("zeta_se", 1)):
+            if stored.get(nm):
+                chk[f"boot_{nm}_rel"] = abs(float(draws[:, j].std()) / float(stored[nm]) - 1.0)
+        rec.update(sd=float((draws[:, 0] + r_t * draws[:, 1] + draws[:, 2:] @ zb).std()),
+                   n_boot=nb, boot_seed=SOLVE_BOOT_SEED)
+    sub_rec = stored.get("subsample") or {}
+    ci_s = (stored.get("c_bar_ci_sqrtn") or {}).get("0.95")
+    if sub_rec.get("n_sub") and ci_s:
+        sub = S.subsample_kappa(blk_s, fit, n_sub=int(sub_rec["n_sub"]),
+                                b_firms=sub_rec.get("b_firms"))
+        if "skipped" in sub:
+            print(f"  !!!! [median shifters] {who}: the solve recorded a subsampling interval but "
+                  f"the psi gives none ({sub['skipped']}) -- not recorded !!!!")
+            return None
+        TH, n, b = sub["_thetas"], int(sub["n_firms"]), int(sub["b_firms"])
+        lo, hi = _sqrtn_ci(TH[:, 0] + r_s * TH[:, 1], w + r_s * z, n, b)
+        chk["sub_c_bar_ci_lo"] = abs(lo - float(ci_s["lo"]))
+        chk["sub_c_bar_ci_hi"] = abs(hi - float(ci_s["hi"]))
+        cf = TH[:, 0] + r_t * TH[:, 1] + TH[:, 2:] @ zb
+        lo, hi = _sqrtn_ci(cf, est, n, b)
+        rec.update(ci_lo=lo, ci_hi=hi, ci_level=0.95,
+                   sd_rate_adj=float(cf.std() * np.sqrt(b / n)), n_sub=int(sub["n_sub"]),
+                   b_firms=b, n_firms=n, sub_seed=SOLVE_SUB_SEED)
+    bad = [f"{k} {v:.1e}" for k, v in chk.items()
+           if not v <= (SHIFTER_RTOL if k.endswith("_rel") else SHIFTER_ATOL)]
+    if bad:
+        print(f"  !!!! [median shifters] {who}: the re-draws from this psi do not reproduce the "
+              f"solve's record ({', '.join(bad)}; tolerances {SHIFTER_ATOL:g} per quarter, "
+              f"{SHIFTER_RTOL:g} relative) -- not recorded !!!!")
+        return None
+    rec.update(checks=chk, solve={k: stored.get(k) for k in _SHIFTER_FP})
+    return rec
+
+
+def shifter_cost_section(data: dict, source: str, Es=None) -> dict:
+    """The SHIFTER_SECTION of one run from its psi. `data` is {routine: load_psi entry} after
+    apply_null_fq, `source` the name of the psi archive or folder, `Es` the routines to compute
+    (default every one). `theta` covers every block of the run, computed or not, so the section
+    can be compared with the others of the file."""
+    S = _solve_module()
+    stamp = datetime.datetime.now().isoformat(timespec="seconds")
+    blocks, theta = {}, {}
+    for E, d in sorted(data.items()):
+        cost = d.get("cost_solve") or d["cost"] or {}
+        for kappa, _lbl in BLOCKS:
+            if cost.get(kappa):
+                theta[f"E{E}_{kappa}"] = [float(cost[kappa]["omega"]), float(cost[kappa]["zeta"])]
+        if Es is not None and E not in Es:
+            continue
+        nf = d.get("null") or {}
+        by_s = S.build_delta(*_solve_frames(d["psi_eq"], d.get("psi_dev_solve", d["psi_dev"])))
+        by_t, rows = by_s, "the rows the solve used"
+        if nf.get("mode") == "table_mask":
+            live = d.get("psi_dev_all", d["psi_dev"]).loc[~nf["dead_mask"]]
+            by_t = S.build_delta(*_solve_frames(d["psi_eq"], live))
+            rows = "the rows the solve used, without the dead firm-quarters"
+        for kappa, _lbl in BLOCKS:
+            stored, who = cost.get(kappa), f"E{E}-{kappa}"
+            if not stored or kappa not in by_s or kappa not in by_t:
+                continue
+            t0 = datetime.datetime.now()
+            try:
+                rec = _shifter_block(S, by_s[kappa], by_t[kappa], stored, cost.get("run") or {},
+                                     who)
+            except (ValueError, KeyError, FloatingPointError) as exc:
+                print(f"  !!!! [median shifters] {who}: {type(exc).__name__}: {exc} -- not "
+                      f"recorded !!!!")
+                rec = None
+            if rec is None:
+                continue
+            rec.update(E=int(E), block=kappa, rows=rows, psi_source=source, computed=stamp)
+            blocks[f"E{E}_{kappa}"] = rec
+            est = rec["estimate"]
+            print(f"  [median shifters] {who}: c-bar + gamma'Zbar = {_ann(est):.3f} pp"
+                  + (f" ({_ann_sd(est, rec['sd']):.3f})" if rec["sd"] is not None else "")
+                  + (f" [{_ann(rec['ci_lo']):.3f}, {_ann(rec['ci_hi']):.3f}]"
+                     if rec["ci_lo"] is not None else "")
+                  + f"; gamma'Zbar = {rec['gamma_zbar']:.6f} per quarter over "
+                  f"{rec['zbar_rows']:,} rows; the solve's c-bar, SD and interval reproduce to "
+                  f"{max(v for k, v in rec['checks'].items() if not k.endswith('_rel')):.1e} "
+                  f"({(datetime.datetime.now() - t0).total_seconds():.0f} s)")
+    return dict(theta=theta, blocks=blocks, psi_source=source,
+                definition=("estimate = omega + rbar*zeta + sum_z gamma_z*zbar_z per quarter (the "
+                            "*_ann fields of the table sections compound it); zbar_z = median of "
+                            "dpsi3_z/dpsi2 over the block's rows with dpsi2 != 0, in psi3's units "
+                            "(cost ratios as fractions, Basel index in pp); sd = firm-block "
+                            "bootstrap SD, ci = subsampling sqrt(n) interval, both of the sum with "
+                            "rbar and zbar held fixed"),
+                tolerances=dict(per_quarter=SHIFTER_ATOL, relative=SHIFTER_RTOL))
+
+
+def _read_shifter_section(tag: str) -> dict:
+    """The SHIFTER_SECTION of bbl_table_numbers{tag}.json, {} when the file or the section is
+    missing or unreadable."""
+    p = _numbers_path(tag)
+    if not p.is_file():
+        return {}
+    try:
+        doc = json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return (doc.get("sections") or {}).get(SHIFTER_SECTION) or {}
+
+
+def _shifter_record(sec: dict, E, kappa: str, stored: dict):
+    """-> (record, '') when the section holds this block's record for THIS solve block (`stored`,
+    as the solve wrote it), else (None, why)."""
+    rec = ((sec or {}).get("blocks") or {}).get(f"E{E}_{kappa}")
+    if not rec:
+        return None, "no record of the cost at the median shifters"
+    fp = rec.get("solve") or {}
+    bad = [k for k in _SHIFTER_FP if _jsonable((stored or {}).get(k)) != _jsonable(fp.get(k))]
+    if bad:
+        return None, f"its record was computed for another solve ({', '.join(bad)} differ)"
+    return rec, ""
+
+
+def _shifter_stale(sec: dict, E, cost: dict) -> bool:
+    """Does any block of one routine's solve lack a record of its own in the section?"""
+    return any(_shifter_record(sec, E, kappa, cost.get(kappa))[0] is None
+               for kappa, _lbl in BLOCKS if (cost or {}).get(kappa))
+
+
+def _shifter_may_compute(mode: str) -> bool:
+    """compute: always; read: never; auto: everywhere but on the cluster, where CF_COST_FWD is
+    exported and the tables job's wall does not cover a few hundred refits."""
+    if mode == "auto":
+        return not os.environ.get("CF_COST_FWD", "").strip()
+    return mode == "compute"
+
+
+def _find_psi_source(tag: str, Es, hint=None):
+    """Where the psi of run `tag` can be read for every routine in `Es`: `hint` (an explicit
+    --psi-dir / --psi-zip), the step folder's loose shards, then the archives under
+    BBL_OUTPUT/cluster_raw, newest first. None when none of them holds it."""
+    cands = [pathlib.Path(hint)] if hint else []
+    cands.append(STEP_DIR)
+    raw = _paths.bbl_output_dir() / "cluster_raw"
+    if raw.is_dir():
+        cands += sorted(raw.glob("*.zip"), key=lambda p: p.stat().st_mtime, reverse=True)
+    for c in cands:
+        if c.is_dir():
+            names = sorted(p.name for p in c.glob("psi_*.parquet"))
+        elif c.is_file():
+            names = _zip_members(c)
+        else:
+            continue
+        if all(all(_psi_names(names, E, tag)[:2]) for E in Es):
+            return c
+    return None
+
+
+def _store_shifter_section(tag: str, old: dict, new: dict, computed, costs: dict,
+                           source: str) -> dict:
+    """Write `new` as the run's section, keeping the records of `old` that still belong to the
+    solves in `costs` for the routines this call did not compute. -> the section written."""
+    keep = {}
+    for key, rec in ((old or {}).get("blocks") or {}).items():
+        E, kappa = rec.get("E"), rec.get("block")
+        if (E in costs and E not in computed
+                and _shifter_record(old, E, kappa, (costs[E] or {}).get(kappa))[0] is not None):
+            keep[key] = rec
+    new["blocks"] = {**keep, **new["blocks"]}
+    _write_numbers(tag, {SHIFTER_SECTION: new}, source=f"psi {source}")
+    return new
+
+
+def update_shifter_cost(data: dict, source: str, mode: str = "auto") -> None:
+    """The --from-psi side: for each run in `data` (psi loaded, masked and checked against its
+    solve), compute the records that are missing or belong to another solve, and write them."""
+    by_tag = {}
+    for E, d in sorted(data.items()):
+        by_tag.setdefault(_cost_tag(d.get("cost_solve") or d["cost"], d.get("psi_tag")),
+                          []).append(E)
+    for tag, Es in by_tag.items():
+        costs = {E: data[E].get("cost_solve") or data[E]["cost"] for E in Es}
+        sec = _read_shifter_section(tag)
+        need = [E for E in Es if mode == "compute" or _shifter_stale(sec, E, costs[E])]
+        name = tag or "(untagged)"
+        if not need:
+            print(f"  [median shifters] {name}: the record in {_numbers_path(tag).name} belongs "
+                  f"to this solve -- kept")
+            continue
+        lst = ", ".join(f"E{E}" for E in need)
+        if not _shifter_may_compute(mode):
+            print(f"  [median shifters] {name}: no record of this solve for {lst}; --shifter-cost "
+                  f"{mode} does not compute here")
+            continue
+        new = shifter_cost_section({E: data[E] for E in Es}, source, Es=need)
+        _store_shifter_section(tag, sec, new, need, costs, source)
+        print(f"  !!!! [median shifters] {name}: wrote the record for {lst} -- run the default "
+              f"pass (without --from-psi) again if it ran before this one, so tab_bbl_cbar / "
+              f"tab_bbl_cbar_design print the rows from it !!!!")
+
+
+def ensure_shifter_cost(tag: str, cost_raw: dict, mode: str, hint=None) -> dict:
+    """The default pass's side. -> the section of run `tag`, after computing the records that
+    are missing or belong to another solve for the routines of `cost_raw` ({routine: cost_params
+    as the solve wrote it}) when `mode` allows it and the run's psi can be found and is the
+    solve's (check_psi_matches_solve)."""
+    sec = _read_shifter_section(tag)
+    need = [E for E in sorted(cost_raw) if mode == "compute" or _shifter_stale(sec, E, cost_raw[E])]
+    if not need:
+        print(f"  [median shifters] {tag or '(untagged)'}: the record in "
+              f"{_numbers_path(tag).name} belongs to this solve (computed from "
+              f"{sec.get('psi_source')}) -- read")
+        return sec
+    name, lst = tag or "(untagged)", ", ".join(f"E{E}" for E in need)
+    if not _shifter_may_compute(mode):
+        print(f"  [median shifters] {name}: no record of this solve for {lst}; --shifter-cost "
+              f"{mode} does not compute here")
+        return sec
+    src = _find_psi_source(tag, need, hint)
+    if src is None:
+        print(f"  [median shifters] {name}: no record of this solve for {lst}, and no psi of the "
+              f"run in {STEP_DIR} or under {_paths.bbl_output_dir() / 'cluster_raw'}")
+        return sec
+    print(f"  [median shifters] {name}: computing {lst} from {src} (bootstrap and subsampling "
+          f"refits with bbl_solve.py's routines; a few minutes)")
+    data = {E: d for E, d in load_psi(src, tag).items() if E in cost_raw}
+    for E, d in data.items():
+        d["cost"] = cost_raw[E]
+    need = [E for E in need if E in data]
+    if not need:
+        print(f"  [median shifters] {name}: {src.name} does not hold the psi of {lst}")
+        return sec
+    apply_null_fq(data)
+    mismatch = check_psi_matches_solve(data)
+    if mismatch:
+        print(f"  !!!! [median shifters] {name}: the psi in {src.name} is not the psi the solve "
+              "used:\n      " + "\n      ".join(mismatch)
+              + "\n    -- nothing computed from it !!!!")
+        return sec
+    new = shifter_cost_section(data, src.name, Es=need)
+    return _store_shifter_section(tag, sec, new, need, cost_raw, src.name)
+
+
+def attach_shifter_cost(rows: list, cost_raw: dict, sec: dict, what: str) -> None:
+    """Set r['shift'] on every block row: the section's record when it belongs to the row's solve
+    and is evaluated at the row's own rbar_f and c-bar, else None (said on stdout, with the reason
+    in r['shift_why']), which the tables print as dashes."""
+    for r in rows:
+        stored = (cost_raw.get(r["E"]) or {}).get(r["block"]) or {}
+        rec, why = _shifter_record(sec, r["E"], r["block"], stored)
+        if rec is not None:
+            g = r.get("gamma") or {}
+            if abs(float(rec["rbar"]) - float(r["rbar"])) > 1e-12 * max(1.0, abs(float(r["rbar"]))):
+                rec, why = None, ("its record is evaluated at another rbar_f than the table's, "
+                                  "i.e. over other rows")
+            elif sorted(g) != sorted(rec["zbar"]):
+                rec, why = None, "its record carries other shifters than cost_params"
+            else:
+                est = float(r["cbar"]) + sum(float(g[c]) * float(v) for c, v in rec["zbar"].items())
+                if abs(est - float(rec["estimate"])) > 1e-12 * max(1.0, abs(est)):
+                    rec, why = None, "its record does not equal c-bar + gamma'Zbar of this row"
+        r["shift"], r["shift_why"] = rec, (why or None)
+        if rec is None:
+            print(f"  !!!! [median shifters] {what} E{r['E']}-{r['block']}: {why} -- its cells "
+                  f"are dashed !!!!")
+    if any(r["shift"] is None for r in rows):
+        print(f"  [median shifters] {what}: {SHIFTER_HOWTO}")
+
+
 # ── number display (V_Main rule, 2026-09-28) ──────────────────────────────────
 # Every displayed number, in the body and in the Notes, has exactly ND = 3 decimals; counts (n,
 # firms, deviations, quarters, rows) are integers with thousands separators. A value that rounds to
@@ -2452,6 +2858,106 @@ def _cell_share(r, table):
     return f"${_m3(r['frac_bind'], _w(r, 'violated share', table))}$"
 
 
+# The block under each c-bar block: c-bar at the median cost shifters (the section "c-bar at the
+# median cost shifters" above), shown like c-bar itself -- the level compounded to annual pp, its
+# bootstrap SD by the delta method, the subsampling interval by its endpoints. r['shift'] is the
+# block's record (attach_shifter_cost); without one for the solve being rendered the estimate and
+# the interval are dashed and the SD cell is empty.
+def _shift_label(kappa: str) -> str:
+    """Row label: c-bar-hat^kappa + gamma-hat^kappa' Zbar^kappa."""
+    return (rf"$\hat{{\bar c}}^{{\mathrm{{{kappa}}}}}+\hat{{\boldsymbol{{\gamma}}}}"
+            rf"^{{\mathrm{{{kappa}}}\prime}}\bar{{\boldsymbol{{Z}}}}^{{\mathrm{{{kappa}}}}}$")
+
+
+# The label cell of the SD row under it: the words for the symbols above.
+SHIFT_GLOSS = r"\quad {\scriptsize at median cost shifters}"
+
+
+def _cell_shift(r, table):
+    s = r.get("shift")
+    if not s:
+        return "---"
+    return f"${_m3(_ann(s['estimate']), _w(r, 'c-bar at median shifters', table))}$"
+
+
+def _cell_shift_sd(r, table):
+    s = r.get("shift")
+    if not s or s.get("sd") is None:
+        return ""
+    return (f"$({_m3(_ann_sd(s['estimate'], s['sd']), _w(r, 'c-bar at median shifters SD', table))}"
+            f")$")
+
+
+def _cell_shift_ci(r, table):
+    s = r.get("shift")
+    if not s or s.get("ci_lo") is None:
+        return "---"
+    return (rf"{{\scriptsize $[{_m3(_ann(s['ci_lo']), _w(r, 'CI lo at median shifters', table))},"
+            rf"{_m3(_ann(s['ci_hi']), _w(r, 'CI hi at median shifters', table))}]$}}")
+
+
+def _md_shift(r) -> str:
+    s = r.get("shift")
+    if not s:
+        return "--"
+    est = _d3(_ann(s["estimate"]))
+    return est if s.get("sd") is None else f"{est} ({_d3(_ann_sd(s['estimate'], s['sd']))})"
+
+
+def _md_shift_ci(r) -> str:
+    s = r.get("shift")
+    if not s or s.get("ci_lo") is None:
+        return "--"
+    return f"[{_d3(_ann(s['ci_lo']))}, {_d3(_ann(s['ci_hi']))}]"
+
+
+# The Notes' sentence for those rows: tab_bbl_cbar defines Zbar where it defines rbar_f, and
+# tab_bbl_cbar_design, whose rows and units refer to that table, names it in one clause.
+_SHIFT_TEX = (r"The rows at median cost shifters add "
+              r"$\hat{\boldsymbol{\gamma}}^{\kappa\prime}\bar{\boldsymbol{Z}}^\kappa$, with "
+              r"$\bar Z^\kappa_z$ the median over the same inequalities of "
+              r"$\Delta\psi_{3,z}/\Delta\psi_2$ (Basel index in pp): the marginal cost of a firm "
+              r"with median shifters, where $\bar c^\kappa$ sets $\boldsymbol{Z}=\boldsymbol{0}$. ")
+_SHIFT_DESIGN_TEX = (r"The rows at median cost shifters add "
+                     r"$\hat{\boldsymbol{\gamma}}^{\kappa\prime}\bar{\boldsymbol{Z}}^\kappa$, with "
+                     r"$\bar{\boldsymbol{Z}}^\kappa$ the median of $\Delta\psi_3/\Delta\psi_2$ "
+                     r"over the same rows. ")
+# The markdown names of the shifters, in Z_LABELS' order.
+_Z_MD = {"psi3_gamma_personnel_cost_ratio_lag": "personnel cost ratio",
+         "psi3_gamma_admin_cost_ratio_lag": "admin cost ratio",
+         "psi3_gamma_tax_cost_ratio_lag": "tax cost ratio",
+         "psi3_gamma_indice_basileia_lag": "Basel index (pp)"}
+
+
+def _shift_def_md(rows, rows_note: str = "") -> str:
+    """The .md twins' definition of the rows at the median cost shifters, with the Zbar each block
+    was evaluated at (three decimals, like every number of the twin) and a sentence for dashes."""
+    s = ("The rows at median cost shifters report c-bar^kappa + gamma^kappa' Zbar^kappa = "
+         "omega^kappa + rbar_f^kappa * zeta^kappa + sum_z gamma_z^kappa * Zbar_z^kappa, the "
+         "marginal cost of a type-kappa firm with median cost shifters; c-bar^kappa is that of a "
+         "firm with Z = 0. Zbar_z^kappa = the median, over the rows rbar_f^kappa is the median "
+         "over" + rows_note + ", of dpsi_3z/dpsi_2 = sum_t beta^t Z_zt dDep_t / sum_t beta^t "
+         "dDep_t, the value of shifter z a deviation's change in deposits is priced at, in the "
+         "units of psi_3: the three cost ratios as fractions and the Basel index in pp, so the "
+         "Basel coefficient enters per pp of the index (the parameter table prints it in bp per "
+         "pp, 1e4 times that). rbar_f and Zbar are held fixed across draws; the SD and the "
+         "interval are the firm-block bootstrap SD and the subsampling interval of the sum, from "
+         "re-draws of (omega, zeta, gamma) with the solve's routines and seeds that reproduce the "
+         "solve's own c-bar SD and interval. ")
+    have = [r for r in rows if r.get("shift")]
+    if have:
+        names = [k for k, _ in Z_LABELS if all(k in r["shift"]["zbar"] for r in have)]
+        s += ("Zbar (" + ", ".join(_Z_MD.get(k, k) for k in names) + "): "
+              + "; ".join(f"E{r['E']} {r['block']} "
+                          + ", ".join(_d3(r["shift"]["zbar"][k],
+                                          f"md Zbar E{r['E']} {r['block']} {_Z_MD.get(k, k)}")
+                                      for k in names) for r in have) + ". ")
+    if len(have) < len(list(rows)):
+        s += ("A dash in those rows: no record computed from the psi of the solve shown (see "
+              "--shifter-cost). ")
+    return s
+
+
 _ANN_TEX = r"Rates in compounded annual pp, $((1+x)^4-1)\times100$. "
 
 
@@ -2530,11 +3036,16 @@ def build_cbar_panels(rows, identified=False, disc=""):
                     + cells(lambda r: _cell_cbar(r, "T9")) + r" \\")
         body.append(" & " + cells(lambda r: _cell_cbar_sd(r, "T9")) + r" \\")
         body.append(r"\quad 95\% CI & " + cells(lambda r: _cell_cbar_ci(r, "T9")) + r" \\")
+        body.append(r"\addlinespace[0.3ex]")
+        body.append(_shift_label(kappa) + " & " + cells(lambda r: _cell_shift(r, "T9")) + r" \\")
+        body.append(SHIFT_GLOSS + " & " + cells(lambda r: _cell_shift_sd(r, "T9")) + r" \\")
+        body.append(r"\quad 95\% CI & " + cells(lambda r: _cell_shift_ci(r, "T9")) + r" \\")
         body.append(r"\addlinespace[0.4ex]")
         body.append(FRAC_BIND_LABEL + " & " + cells(lambda r: _cell_share(r, "T9")) + r" \\")
     # Notes held to a few lines (V_Main style guide, 2026-09-28): what c-bar and rbar_f are (the
-    # one place rbar_f is defined), their compounded annual units, the regime in one clause, what
-    # the parentheses and brackets hold, the last row, and the discount sentence.
+    # one place rbar_f is defined), the regime in one clause, what the rows at median cost shifters
+    # add, the compounded annual units, what the parentheses and brackets hold, the last row, and
+    # the draws and seeds when `disc` carries them.
     ci_note = _ci_rbar_note(rows)
     if identified and _unidentified(rows):
         regime = (r"; in the $\ddagger$ block of Table~\ref{tab:bbl_cost_identified} it is the "
@@ -2548,7 +3059,7 @@ def build_cbar_panels(rows, identified=False, disc=""):
         r"\textit{Notes:} $\bar c^\kappa=\omega^\kappa+\bar r^{f,\kappa}\zeta^\kappa$, excluding "
         r"$\boldsymbol{\gamma}'\boldsymbol{Z}$, where "
         + _rbar_def(dead_ref="dead firm-quarters excluded" if _dead_by_E(rows) else "")
-        + regime + _ANN_TEX
+        + regime + _SHIFT_TEX + _ANN_TEX
         + r"Parentheses: bootstrap standard deviation (delta method); brackets: subsampling 95\% "
         r"interval" + (" " + ci_note if ci_note else "") + r". "
         r"Last row: share of the inequalities of \eqref{eq:16} failing at $\hat\theta$"
@@ -2583,6 +3094,9 @@ def md_cbar_panels(rows, identified=False, disc=""):
             else _d3(_ann(r["cbar"])))
         row("95% CI", lambda r: f"[{_d3(_ann(r['ci_lo']))}, {_d3(_ann(r['ci_hi']))}]"
             if r.get("ci_lo") is not None else "--")
+        row(f"c-bar^{kappa} + gamma^{kappa}'Zbar^{kappa}, at median cost shifters (ann. pp)",
+            _md_shift)
+        row("95% CI", _md_shift_ci)
         row(FRAC_BIND_LABEL_MD, lambda r: _d3(r["frac_bind"]))
     fbs = [r["frac_bind"] for r in rows if r.get("frac_bind") is not None]
     lead = ("c-bar^kappa = omega^kappa + rbar_f^kappa * zeta^kappa, the marginal cost of deposits "
@@ -2600,6 +3114,7 @@ def md_cbar_panels(rows, identified=False, disc=""):
     else:
         lead += ("It is the only cost object this design identifies; omega and zeta separately "
                  "are not (see the ridge table). ")
+    lead += _shift_def_md(rows)
     L += ["",
           lead +
           "SE is a "
@@ -2666,17 +3181,24 @@ def build_cbar_design(rows_single, rows_multi, n_starts=None, disc=""):
                     + cells(lambda r: _cell_cbar(r, "T11")) + r" \\")
         body.append(" & " + cells(lambda r: _cell_cbar_sd(r, "T11"), dash="") + r" \\")
         body.append(r"\quad 95\% CI & " + cells(lambda r: _cell_cbar_ci(r, "T11")) + r" \\")
+        body.append(r"\addlinespace[0.3ex]")
+        body.append(_shift_label(kappa) + " & " + cells(lambda r: _cell_shift(r, "T11")) + r" \\")
+        body.append(SHIFT_GLOSS + " & "
+                    + cells(lambda r: _cell_shift_sd(r, "T11"), dash="") + r" \\")
+        body.append(r"\quad 95\% CI & " + cells(lambda r: _cell_shift_ci(r, "T11")) + r" \\")
         body.append(r"\addlinespace[0.4ex]")
         body.append(FRAC_BIND_LABEL + " & " + cells(lambda r: _cell_share(r, "T11")) + r" \\")
     starts = f"{n_starts} launch quarters" if n_starts else "several launch quarters"
     # Notes held to a few lines (V_Main style guide): what the single-curve design is, that rows
-    # and units follow tab_bbl_cbar (where the multi-start design is reported), and the mechanical
-    # share; the draws and seeds and the discount sentence of the single-curve solve come in `disc`.
+    # and units follow tab_bbl_cbar (where the multi-start design is reported), what the rows at
+    # median cost shifters add, and the mechanical share; the draws and seeds of the single-curve
+    # solve come in `disc`.
     foot = (
         r"\textit{Notes:} Single-curve design: every simulated path is priced off one Focus "
         r"forward curve, so only $\bar c^\kappa$ is identified, and $\bar r^{f,\kappa}$ runs over "
         r"firm~$\times$~deviation rows. Rows and units as in Table~\ref{tab:bbl_cbar}, which "
         rf"reports the multi-start design ({starts}, one Focus curve each). "
+        + _SHIFT_DESIGN_TEX
         + (r"All shares lie within $0.050$ of the mechanical $1/2$. "
            if _mechanical(list(rows_single)) else "")
     ).rstrip()
@@ -2708,12 +3230,16 @@ def md_cbar_design(rows_single, rows_multi, disc=""):
             else _d3(_ann(r["cbar"])))
         row("95% CI", lambda r: f"[{_d3(_ann(r['ci_lo']))}, {_d3(_ann(r['ci_hi']))}]"
             if r.get("ci_lo") is not None else "--")
+        row(f"c-bar^{kappa} + gamma^{kappa}'Zbar^{kappa}, at median cost shifters (SE), ann. pp",
+            _md_shift)
+        row("95% CI", _md_shift_ci)
         row("violated share", lambda r: _d3(r["frac_bind"])
             if r.get("frac_bind") is not None else "--")
     L += ["", "Single-curve design: one Focus forward curve for every path, so c-bar is the only "
               "identified cost object. c-bar^kappa = omega^kappa + rbar_f^kappa * zeta^kappa, where "
               + _rbar_def_md(SINGLE_ROWS_MD, dead=False)
               + ". Rows and units as in the c-bar table, which reports the multi-start design. "
+              + _shift_def_md(list(rows_single))
               + "The violated share's mechanical value is 1/2"
               + ("; every share in the table lies within 0.05 of it, so the row carries no "
                  "information about fit" if _mechanical(list(rows_single)) else "") + ". "
@@ -2871,7 +3397,7 @@ def build_identified_panels(rows, identified=False, disc="", rs=None):
     # Notes held to a few lines (V_Main style guide, 2026-09-28): sample and units, what the
     # brackets and parentheses hold (the profile covers omega and zeta only), the symbols the cells
     # carry -- a dagger or "empty" only when a cell shows one -- the condition-index row with its
-    # double dagger, the dead firm-quarters behind n, and the discount sentence.
+    # double dagger, and the dead firm-quarters behind n.
     cis = [r.get(k) or {} for r in rows for k in ("ci_omega", "ci_zeta")]
     has_dagger = any(c.get("truncated_lo") or c.get("truncated_hi") for c in cis)
     has_empty = any(c.get("empty") for c in cis)
@@ -3052,9 +3578,14 @@ def md_ridge(ridge, disc="", by_start=None):
 # only its own sections into the one file of the run's psi tag, in the step folder:
 #   default pass   cost_tables (tab_bbl_cost_identified, tab_bbl_cbar), tab_bbl_cbar_design
 #   --from-psi     tab_bbl_ridge_diagnostic, tab_bbl_ridge_by_start, tab_bbl_violated_by_sign
+#   either pass    cbar_at_median_shifters (SHIFTER_SECTION), when it computes it from the psi;
+#                  a single-curve run's goes into the file of its own tag
 # Values are unrounded; a rate level also carries its compounded annual value (the *_ann fields,
 # _ann/_ann_sd), the scale the tables print it on. Every section carries the (omega, zeta) of the
 # blocks it describes (`theta`), so a reader can tell whether two sections describe one solve.
+# The rows at median cost shifters as T9 and T11 print them are in each block of cost_tables and
+# of tab_bbl_cbar_design (`cbar_at_median_shifters`: status, estimate, sd, ci_lo, ci_hi, their
+# *_ann values, zbar, gamma_zbar and the provenance of the record).
 def _numbers_path(tag: str) -> pathlib.Path:
     return STEP_DIR / f"bbl_table_numbers{tag or ''}.json"
 
@@ -3114,7 +3645,30 @@ def _row_numbers(r: dict) -> dict:
         ci_lo=r.get("ci_lo"), ci_hi=r.get("ci_hi"),
         ci_lo_ann=_ann_or_none(r.get("ci_lo")), ci_hi_ann=_ann_or_none(r.get("ci_hi")),
         ci_rbar=r.get("ci_rbar"), ci_rbar_ann=_ann_or_none(r.get("ci_rbar")),
-        frac_bind=r.get("frac_bind"))
+        frac_bind=r.get("frac_bind"),
+        cbar_at_median_shifters=_shift_numbers(r))
+
+
+def _shift_numbers(r: dict) -> dict:
+    """The rows at median cost shifters of one block as T9/T11 print them: the record the row
+    carries (r['shift']) with the compounded annual values, or status 'pending' and the reason
+    when its cells are dashed."""
+    s = r.get("shift")
+    if not s:
+        return dict(status="pending", why=r.get("shift_why"))
+    est, sd = float(s["estimate"]), s.get("sd")
+    return dict(
+        status="ok", estimate=est, estimate_ann=_ann(est),
+        sd=sd, sd_ann=_ann_sd(est, sd) if sd is not None else None,
+        ci_lo=s.get("ci_lo"), ci_hi=s.get("ci_hi"), ci_level=s.get("ci_level"),
+        ci_lo_ann=_ann_or_none(s.get("ci_lo")), ci_hi_ann=_ann_or_none(s.get("ci_hi")),
+        sd_rate_adj=s.get("sd_rate_adj"),
+        gamma_zbar=s.get("gamma_zbar"), zbar=s.get("zbar"), zbar_rows=s.get("zbar_rows"),
+        zbar_units="psi3 units: cost ratios as fractions, Basel index in pp",
+        rbar=s.get("rbar"), rows=s.get("rows"),
+        n_boot=s.get("n_boot"), boot_seed=s.get("boot_seed"), n_sub=s.get("n_sub"),
+        b_firms=s.get("b_firms"), n_firms=s.get("n_firms"), sub_seed=s.get("sub_seed"),
+        psi_source=s.get("psi_source"), computed=s.get("computed"))
 
 
 def _cost_file_names(Es, tag) -> dict:
@@ -3183,13 +3737,20 @@ def _write_numbers(tag: str, sections: dict, source: str) -> None:
     print(f"  wrote {p.name} [{', '.join(sections)}] -> {p.parent}")
 
 
-def main_from_json(compare_single=False, single_tag=""):
-    """Build both tables from cost_params alone (default). Vintage-safe by construction: every
-    column, ridge diagnostics included, comes from the solve's own record of the psi it used."""
+def main_from_json(compare_single=False, single_tag="", shifter_mode="read", psi_hint=None):
+    """Build both tables from cost_params (default). Vintage-safe by construction: every column,
+    ridge diagnostics included, comes from the solve's own record of the psi it used. The rows at
+    median cost shifters are the one exception: they come from the run's SHIFTER_SECTION, which
+    is tied to the solve by its fingerprint and, under `shifter_mode` auto or compute, is computed
+    here first from the run's psi (`psi_hint`: an explicit --psi-dir / --psi-zip to look in
+    first). The function default, read, never touches a psi; main() passes --shifter-cost."""
     ZERO_PRINTS.clear()
     cost = load_cost_only()
     if not cost:
         raise SystemExit(f"no cost_params found in {COST_DIR}")
+    # As the solves wrote them: the dead firm-quarter restatement below replaces entries of `cost`
+    # with copies, and a record of the cost at the median shifters is fingerprinted on the solve.
+    cost_raw = dict(cost)
     # Dead firm-quarters (DEAD FIRM-QUARTERS in the module docstring). A solve that applied the
     # rule is read as written; a multi-start cost_params that predates it is restated from the
     # record the --from-psi pass writes, and left as the solve wrote it (said loudly) without one.
@@ -3226,6 +3787,13 @@ def main_from_json(compare_single=False, single_tag=""):
     print(f"  identified_split = {ident}  -> "
           + ("omega/zeta are the estimand; c_bar restates them at one rate." if ident
              else "c_bar is the estimand; the omega/zeta split is reported for completeness."))
+    # The rows at median cost shifters, run by run (one section per psi tag).
+    run_tags = {E: _cost_tag(cost_raw[E], PSI_TAG) for E in cost_raw}
+    for tag in sorted(set(run_tags.values())):
+        solves = {E: c for E, c in cost_raw.items() if run_tags[E] == tag}
+        sec = ensure_shifter_cost(tag, solves, shifter_mode, psi_hint)
+        attach_shifter_cost([r for r in rows if run_tags[r["E"]] == tag], solves, sec,
+                            "tab_bbl_cbar")
     # beta and T as the run behind each routine recorded them (never the registry's).
     prov = {E: _run_discount(E, _cost_tag(cost[E], PSI_TAG), cost[E]) for E in cost}
     Es = [E for E in ROUTINE_ORDER if any(r["E"] == E for r in rows)]
@@ -3237,9 +3805,11 @@ def main_from_json(compare_single=False, single_tag=""):
     # The draws and seeds of the solve's bootstrap and subsampling, ahead of the discount sentence;
     # Table 7's TeX note names them inside its brackets/parentheses sentence instead.
     rs = (_resampling_note(cost.values()), _resampling_note(cost.values(), md=True))
-    tex = {"tab_bbl_cbar.tex": build_cbar_panels(rows, ident, disc=_notes_join(rs[0], d9[0])),
+    # The paper's TeX notes do not state beta and T (the run's design is in the sidecar and the
+    # .md notes), so the TeX tables take the resampling sentence only.
+    tex = {"tab_bbl_cbar.tex": build_cbar_panels(rows, ident, disc=rs[0]),
            "tab_bbl_cost_identified.tex": build_identified_panels(
-               rows, ident, disc=d7[0], rs=_resampling_parts(cost.values()))}
+               rows, ident, disc="", rs=_resampling_parts(cost.values()))}
     md = {"tab_bbl_cbar.md": md_cbar_panels(rows, ident, disc=_notes_join(rs[1], d9[1])),
           "tab_bbl_cost_identified.md": md_identified_panels(
               rows, ident, disc=_notes_join(rs[1], d7[1]))}
@@ -3268,20 +3838,24 @@ def main_from_json(compare_single=False, single_tag=""):
             raise SystemExit(f"--compare-single-curve: no {sc_what} (single-curve) cost_params "
                              f"found in {COST_DIR}")
         _, rows_single = collect_json(single)
+        attach_shifter_cost(rows_single, single,
+                            ensure_shifter_cost(single_tag, single, shifter_mode, psi_hint),
+                            "tab_bbl_cbar_design")
         n_starts = next((c.get("run", {}).get("n_starts") for c in cost.values()
                          if c.get("run", {}).get("n_starts")), None)
         prov_single = {E: _run_discount(E, single_tag, single[E]) for E in single}
         Es11 = [E for E in ROUTINE_ORDER
                 if any(r["E"] == E for r in rows_single) or any(r["E"] == E for r in rows)]
         # Both runs' provenance is still reported on stdout; the table shows the single-curve
-        # design only, so its discount sentence and its draws and seeds are that solve's own.
+        # design only, so its draws and seeds (TeX) and its discount sentence (.md) are that
+        # solve's own.
         _discount_report("tab_bbl_cbar_design", _design_entries(Es11, prov_single, prov))
         d11 = _discount_report("tab_bbl_cbar_design",
                                _routine_entries([E for E in Es11 if E in prov_single],
                                                 prov_single))
         rs11 = (_resampling_note(single.values()), _resampling_note(single.values(), md=True))
         tex["tab_bbl_cbar_design.tex"] = build_cbar_design(
-            rows_single, rows, n_starts, disc=_notes_join(rs11[0], d11[0]))
+            rows_single, rows, n_starts, disc=rs11[0])
         md["tab_bbl_cbar_design.md"] = md_cbar_design(rows_single, rows,
                                                       disc=_notes_join(rs11[1], d11[1]))
     for name, txt in tex.items():
@@ -3354,6 +3928,15 @@ def main():
     ap.add_argument("--allow-vintage-mismatch", action="store_true",
                     help="with --from-psi: emit tables even if the psi archive is not the psi "
                          "the solve used. Only for inspecting a known-mixed pair; not reportable.")
+    ap.add_argument("--shifter-cost", choices=SHIFTER_MODES, default="auto",
+                    help="the rows at median cost shifters of tab_bbl_cbar / tab_bbl_cbar_design "
+                         "(c-bar + gamma'Zbar, with SD and interval re-drawn from the psi). auto: "
+                         "compute the record of a solve that has none when its psi can be read "
+                         "(the psi --from-psi loads; for the default pass --psi-zip / --psi-dir, "
+                         "the step folder, or the archive under BBL_OUTPUT/cluster_raw), except "
+                         "on the cluster (CF_COST_FWD exported), where it only reads; compute: "
+                         "always recompute; read: never compute. Without a record of the solve "
+                         "shown the rows are dashed.")
     a = ap.parse_args()
 
     PSI_TAG = a.psi_tag
@@ -3362,8 +3945,11 @@ def main():
     print(f"table dests:     {', '.join(str(d) for d in _dests())}")
 
     if not a.from_psi:
+        # An explicit psi source is where the default pass looks first for a run's psi.
+        hint = (a.psi_dir if a.psi_dir else a.psi_zip if a.psi_zip != str(PSI_ZIP) else None)
         return main_from_json(compare_single=a.compare_single_curve,
-                              single_tag=a.single_curve_tag)
+                              single_tag=a.single_curve_tag, shifter_mode=a.shifter_cost,
+                              psi_hint=hint)
 
     zp = pathlib.Path(a.psi_dir) if a.psi_dir else pathlib.Path(a.psi_zip)
     if not zp.exists():
@@ -3375,14 +3961,16 @@ def main():
     if not data:
         raise SystemExit("no routines recovered from the psi source.")
     return render_from_psi(data, zp, allow_vintage_mismatch=a.allow_vintage_mismatch,
-                           per_quarter_cbar=(a.per_quarter_cbar == "keep"))
+                           per_quarter_cbar=(a.per_quarter_cbar == "keep"),
+                           shifter_mode=a.shifter_cost)
 
 
 def render_from_psi(data: dict, zp: pathlib.Path, allow_vintage_mismatch: bool = False,
-                    per_quarter_cbar: bool = False):
+                    per_quarter_cbar: bool = False, shifter_mode: str = "read"):
     """The --from-psi pass on psi already loaded ({routine: load_psi entry}); `zp` is where it came
     from, searched for the psi_starts sidecar that records beta/T. Split from main() so the pass
-    can be run on psi held in memory."""
+    can be run on psi held in memory. `shifter_mode` (--shifter-cost; the function default never
+    computes) governs the record of the cost at the median shifters."""
     ZERO_PRINTS.clear()
     # Dead firm-quarters: which rows the solve used, and which the tables describe.
     apply_null_fq(data)
@@ -3404,6 +3992,13 @@ def render_from_psi(data: dict, zp: pathlib.Path, allow_vintage_mismatch: bool =
     # A cost_params that predates the rule is restated without the dead firm-quarters (the rows
     # the tables describe), and the record the default pass restates it from is written.
     restate_table_mask(data, zp.name)
+
+    # The cost at the median shifters (the rows the default pass prints under c-bar): computed from
+    # this psi for a solve that has no record yet, never from a psi that is not the solve's.
+    if mismatch:
+        print("  [median shifters] not computed: this psi is not the psi the solve used")
+    else:
+        update_shifter_cost(data, zp.name, shifter_mode)
 
     ridge, rows = collect(data)
 
@@ -3440,7 +4035,9 @@ def render_from_psi(data: dict, zp: pathlib.Path, allow_vintage_mismatch: bool =
     # Computed first because the ridge table carries its lowest within-quarter condition index.
     by_start = {E: ridge_by_start(d["psi_eq"], d["psi_dev"]) for E, d in sorted(data.items())}
     by_start = {E: v for E, v in by_start.items() if v}
-    tex = {"tab_bbl_ridge_diagnostic.tex": build_ridge(ridge, disc=d8[0], by_start=by_start)}
+    # The paper's TeX notes of the ridge and violated-by-sign tables do not state beta and T;
+    # the .md notes and the by-start table (not in the paper) do.
+    tex = {"tab_bbl_ridge_diagnostic.tex": build_ridge(ridge, disc="", by_start=by_start)}
     md = {"tab_bbl_ridge_diagnostic.md": md_ridge(ridge, disc=d8[1], by_start=by_start)}
     if by_start:
         cost = {E: d["cost"] for E, d in data.items()}
@@ -3475,7 +4072,7 @@ def render_from_psi(data: dict, zp: pathlib.Path, allow_vintage_mismatch: bool =
         dud = _discount_report("tab_bbl_violated_by_sign",
                                _routine_entries([E for E in ROUTINE_ORDER if E in ud], prov))
         dead_any = any((d.get("null") or {}).get("dropped") for d in data.values())
-        tex["tab_bbl_violated_by_sign.tex"] = build_violated_by_sign(ud, disc=dud[0],
+        tex["tab_bbl_violated_by_sign.tex"] = build_violated_by_sign(ud, disc="",
                                                                      dead=dead_any)
         md["tab_bbl_violated_by_sign.md"] = md_violated_by_sign(ud, disc=dud[1], dead=dead_any)
 

@@ -58,6 +58,7 @@ except Exception:
 from utils import paths
 from utils import load_panel_cached
 from utils import state_transform as _st
+from utils import demand_repair as _repair   # the demand-side repair layer; inert unless DEMAND_REPAIR=1
 from sleep_demand_prep_link import build_market_size_and_shares, MAX_YEAR, MIN_YEAR
 # market_panel.csv, NOT the fees variant — see utils/paths.market_panel_csv (USE_FEE_PANEL=1
 # opts back in). The old "fees panel if it exists" fallback silently pinned the pipeline to a
@@ -105,6 +106,9 @@ CF_COST_COLS = ['asset_gross_return_lag', 'asset_return_imputed',
 EXTRA_KEEP_COLS = (X_COLS + D_COLS + IV_BLP_LOO + IV_ESTBAN + IV_COST + IV_CAPITAL + IV_FEE
                    + CF_COST_COLS
                    + ['segment', 'spread_qoq', 'spread_ann'])
+# Under DEMAND_REPAIR=1 the repair layer's flags and its borrowings columns ride into the parquet
+# (utils/demand_repair.py). With the layer off this appends nothing.
+EXTRA_KEEP_COLS = EXTRA_KEEP_COLS + _repair.keep_columns()
 
 def _resolve_runtime_paths() -> tuple[Path, Path, Path]:
     panel_csv = PANEL_CSV
@@ -113,7 +117,8 @@ def _resolve_runtime_paths() -> tuple[Path, Path, Path]:
     # DEMAND_PREP_DIR names a separate step folder (the cluster's data/output/demand_prep),
     # where the fits and the parquets they generate live in different step directories.
     sleep_output_dir = paths.est_dir(1)
-    demand_output_dir = paths.demand_parquet_dir()
+    # Under DEMAND_REPAIR=1 the repaired parquets go to their own folder, never this one.
+    demand_output_dir = _repair.output_dir(paths.demand_parquet_dir())
     return panel_csv, sleep_output_dir, demand_output_dir
 
 class NonLinearResults:
@@ -189,6 +194,7 @@ def _reshape_panel(df_raw: pd.DataFrame) -> pd.DataFrame:
 def build_base_panel(panel_csv: Path) -> pd.DataFrame:
     print(f"Loading {panel_csv}...")
     df_raw = load_panel_cached(panel_csv, dtype={'mca_code': str}, low_memory=False)
+    df_raw = _repair.apply(df_raw)   # returns df_raw itself unless DEMAND_REPAIR=1
     df = _reshape_panel(df_raw)
 
     # fgc_covered: FGC insures types 1 (savings), 2 (demand), 4 (time deposits).
@@ -450,6 +456,7 @@ def main():
 
             if df_spec is not None:
                 out_pkl = demand_output_dir / f"demand_1_spec_{target_id}.parquet"
+                df_spec = _repair.finalize(df_spec, out_pkl, summary)   # returns df_spec itself unless DEMAND_REPAIR=1
                 df_spec.to_parquet(out_pkl, engine='pyarrow')
                 print(f" > Saved Spec {target_id} -> {out_pkl.name} ({len(df_spec)} rows)")
                 spec_summaries[f"1_{target_id}"] = summary

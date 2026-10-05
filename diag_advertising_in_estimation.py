@@ -15,9 +15,10 @@ Three questions, in the order that settles the answer:
     computed by alternating projections.
 
 Sources are NEVER spliced (an assembly decision: a source change inside a bank's history is a
-level jump that bank fixed effects cannot absorb). So ONE source is chosen per conglomerate - the
-one with the most observed in-window quarters - and kept for the whole window, rather than
-preferring a different source in each quarter.
+level jump that bank fixed effects cannot absorb). So ONE source is chosen per conglomerate and
+kept for the whole window, rather than preferring a different source in each quarter: the central
+bank's accounts where they cover the window (member institutions summed, else the conglomerate
+document), and another source only when it covers more than a year of quarters beyond them.
 
 Reads only finished outputs: the advertising panels, the demand-prep parquet and the market panel.
 Nothing in the estimation pipeline is touched.
@@ -52,9 +53,11 @@ OBSERVED = ("observed_positive", "observed_zero", "observed_negative", "imputed_
 # One canonical measure per source, as in diag_advertising_coverage.py.
 MEASURE = {"cvm": "as_filed", "cosif_conglomerate": "adv", "cosif_institution": "adv",
            "statebank_own": "adv_production", "caixa_own": "adv_production"}
-# Tie-break when two sources cover the same number of quarters: the filings first, because they
-# span the whole window; the COSIF accounts last, because they begin in 2025.
-PRIORITY = ["cvm", "caixa_own", "statebank_own", "cosif_conglomerate", "cosif_institution"]
+# The central bank's accounts come first: the member institutions summed are the main measure and
+# the conglomerate document the fallback (user decision 2026-10-05). A source lower in the list
+# is chosen only when it covers more than SLACK quarters beyond every source above it.
+PRIORITY = ["cosif_institution", "cosif_conglomerate", "cvm", "caixa_own", "statebank_own"]
+SLACK = 4
 
 
 def estimation_frame(routine: int) -> pd.DataFrame:
@@ -78,7 +81,8 @@ def advertising_one_source(lo: int, hi: int) -> tuple[pd.DataFrame, pd.DataFrame
     keep = keep[~keep["flag_notes"].fillna("").str.contains("incomplete_quarter")]
     n = keep.groupby(["panel_code", "source"])["quarter"].size().rename("n_quarters").reset_index()
     n["rank"] = n["source"].map({s: i for i, s in enumerate(PRIORITY)})
-    n = n.sort_values(["panel_code", "n_quarters", "rank"], ascending=[True, False, True])
+    best = n.groupby("panel_code")["n_quarters"].transform("max")
+    n = n[n["n_quarters"] >= best - SLACK].sort_values(["panel_code", "rank"])
     chosen = n.groupby("panel_code").first().reset_index()[["panel_code", "source", "n_quarters"]]
     out = keep.merge(chosen[["panel_code", "source"]], on=["panel_code", "source"])
     cols = ["panel_code", "year", "quarter", "source", "amount_brl", "amount_brl_real",

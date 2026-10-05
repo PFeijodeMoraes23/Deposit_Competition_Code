@@ -28,7 +28,8 @@ from utils import state_transform as _st  # noqa: E402
 from utils.sleep_links import band_row as _band_row  # noqa: E402
 from utils import se_national as _sen  # noqa: E402
 from utils import sleep_notes as _notes
-from sleep_export_link import clean_name as _clean_name, fmt3 as _fmt3  # noqa: E402
+from sleep_export_link import (clean_name as _clean_name, fmt3 as _fmt3,  # noqa: E402
+                               eff_f_cell as _eff_f_cell)
 
 # Mock NonLinearResults for unpickling estimation_3_sleep pickles.
 # Must match the real class's __init__ signature so pickle restores __dict__ correctly.
@@ -631,7 +632,10 @@ def build_latex_table(results_dict, order_keys, target_vars, out_path, title="",
 
     row_nobs = ["Observations"]
     row_r2 = ["$R^2$"]
-    row_fstat = ["F-Statistic"]
+    # The two F rows are first-stage rows: the fit's own F over every slope, and under it the
+    # effective F of the excluded instruments read from Rout/sleep_first_stage_strength.json.
+    row_fstat = [_notes.ROW_F_ALL]
+    row_efff = [_notes.ROW_F_EFF]
     row_cluster = ["Clusters ($G$)"]
 
     # E3/E4 (single-index) carry their own nobs/rsquared; no fallback needed.
@@ -641,6 +645,7 @@ def build_latex_table(results_dict, order_keys, target_vars, out_path, title="",
         res = results_dict.get(col)
         if res is None:
             row_nobs.append("-"); row_r2.append("-"); row_fstat.append("-")
+            row_efff.append("")
             row_cluster.append("-")
             _sidecar_nobs[col] = {"value": None, "printed": "-"}
             _sidecar_r2[col] = {"unrounded": None, "printed": "-"}
@@ -674,6 +679,8 @@ def build_latex_table(results_dict, order_keys, target_vars, out_path, title="",
         row_nobs.append(f"{nobs:,.0f}" if pd.notna(nobs) else "-")
         row_r2.append(_fmt3(r2) if pd.notna(r2) else "-")
         row_fstat.append(fstat_str)
+        row_efff.append(_eff_f_cell(EST_OF_KEY.get(col), _routines.SPEC12, math=False)
+                        if is_first_stage else "")
         row_cluster.append(clusters)
         _sidecar_nobs[col] = {"value": float(nobs) if pd.notna(nobs) else None,
                               "printed": row_nobs[-1]}
@@ -686,6 +693,7 @@ def build_latex_table(results_dict, order_keys, target_vars, out_path, title="",
     tex.append(" & ".join(row_r2) + r" \\")
     if is_first_stage:
         tex.append(" & ".join(row_fstat) + r" \\")
+        tex.append(" & ".join(row_efff) + r" \\")
     tex.append(" & ".join(row_cluster) + r" \\")
 
     tex.append(r"\end{xltabular}")
@@ -806,12 +814,14 @@ def build_latex_table_landscape(results_dict, order_keys, target_vars, out_path,
                           if mp is not None and pd.notna(mp) else "-")
         tex.append(" & ".join(row_mp) + r" \\")
 
-    row_nobs = ["Observations"]; row_r2 = ["$R^2$"]; row_fstat = ["F-Statistic"]
+    row_nobs = ["Observations"]; row_r2 = ["$R^2$"]; row_fstat = [_notes.ROW_F_ALL]
+    row_efff = [_notes.ROW_F_EFF]
     row_cl = [r"Clusters ($G$)"]
     for col in order_keys:
         res = results_dict.get(col)
         if res is None:
             for r_ in (row_nobs, row_r2, row_fstat, row_cl): r_.append("-")
+            row_efff.append("")
             continue
         nobs = getattr(res, 'nobs', np.nan); r2 = getattr(res, 'rsquared', np.nan)
         fstat = getattr(res, 'fvalue', np.nan); fpval = getattr(res, 'f_pvalue', np.nan)
@@ -824,8 +834,10 @@ def build_latex_table_landscape(results_dict, order_keys, target_vars, out_path,
         row_nobs.append(f"{nobs:,.0f}" if pd.notna(nobs) else "-")
         row_r2.append(_fmt3(r2) if pd.notna(r2) else "-")
         row_fstat.append(f"{_fmt3(fstat)}{get_stars(fpval)}" if pd.notna(fstat) else "-")
+        row_efff.append(_eff_f_cell(EST_OF_KEY.get(col), _routines.SPEC12, math=False)
+                        if first_stage else "")
         row_cl.append(clusters)
-    diag_rows = [row_nobs, row_r2] + ([row_fstat] if first_stage else []) + [row_cl]
+    diag_rows = [row_nobs, row_r2] + ([row_fstat, row_efff] if first_stage else []) + [row_cl]
     for r_ in diag_rows:
         tex.append(" & ".join(r_) + r" \\")
 

@@ -17,8 +17,15 @@ public files stop at the level-3 total 81700006, so there is nothing to extract 
 
 Files
 -----
-  {YYYYMM}BANCOS.*         document 4010, one row set per institution, keyed by CNPJ
-                           (COD_CONGL is blank on these rows)
+  {YYYYMM}BANCOS.*, SOCIEDADES.*, CONSORCIOS.*, COOPERATIVAS.*, LIQUIDACAO.*
+                           document 4010, one row set per institution, keyed by CNPJ
+                           (COD_CONGL is blank on these rows). The five files are one
+                           universe split by kind of institution: banks; finance, payment,
+                           brokerage and leasing companies; consortium administrators;
+                           cooperatives; institutions in liquidation. A conglomerate's members
+                           are spread across them (Nu Pagamentos is in SOCIEDADES), so all are
+                           read. CONSORCIOS also carries document 4110, the consortium groups,
+                           which is left out.
   {YYYYMM}BLOPRUDENCIAL.*  document 4060, one row set per prudential conglomerate, keyed by
                            COD_CONGL, the same code space as the panel's
                            CodConglomeradoPrudencial
@@ -59,9 +66,11 @@ Validation (any failure aborts before writing)
   2. Every raw balance of the four accounts is negative.
   3. The level-4 children of 8.1.7 sum to the level-3 total for every filer and month.
   4. Reset: across entities, the median adv balance in July is below June's, every year.
-  5. Advertising reporters per month: 4010 in [80, 200], 4060 in [100, 250].
+  5. Advertising reporters per month within the bounds set for each file type
+     (REPORTER_BOUNDS).
   6. Identity anchors: C0080099 is ITAU, C0080738 is CAIXA, C0080329 is BB.
-  7. No duplicate (entity, account, month) rows after vintage selection.
+  7. No duplicate (entity, account, month) rows after vintage selection, and no entity in two
+     file types in the same month.
   8. Within-half falls of the adv, promo and publ running totals stay under 5% of
      consecutive month pairs.
   9. Where all three months of a quarter were filed, the monthly flows sum to the quarter
@@ -102,10 +111,17 @@ AD_FIELDS = ("adv", "promo", "publ")
 ADMIN_TOTAL = "8170000004"
 FIRST_LEVEL4_MONTH = "202501"
 
-FILE_TYPES = {"BANCOS": ("4010", "institution"), "BLOPRUDENCIAL": ("4060", "conglomerate")}
-FILE_RE = re.compile(r"^(\d{6})(BANCOS|BLOPRUDENCIAL)\.(csv\.zip|zip|csv)$", re.IGNORECASE)
+FILE_TYPES = {"BANCOS": ("4010", "institution"), "SOCIEDADES": ("4010", "institution"),
+              "CONSORCIOS": ("4010", "institution"), "COOPERATIVAS": ("4010", "institution"),
+              "LIQUIDACAO": ("4010", "institution"), "BLOPRUDENCIAL": ("4060", "conglomerate")}
+FILE_RE = re.compile(r"^(\d{6})(" + "|".join(FILE_TYPES) + r")\.(csv\.zip|zip|csv)$",
+                     re.IGNORECASE)
 
-REPORTER_BOUNDS = {"institution": (80, 200), "conglomerate": (100, 250)}
+# Advertising reporters per month, by file type. Measured over 2025-01 to 2026-03: BANCOS
+# 96-116, SOCIEDADES 270-351, CONSORCIOS 94-106, COOPERATIVAS 523-583, LIQUIDACAO 0.
+REPORTER_BOUNDS = {"BANCOS": (80, 200), "SOCIEDADES": (200, 500), "CONSORCIOS": (60, 160),
+                   "COOPERATIVAS": (400, 800), "LIQUIDACAO": (0, 20),
+                   "BLOPRUDENCIAL": (100, 250)}
 ANCHORS = {"C0080099": "ITAU", "C0080738": "CAIXA", "C0080329": "BB"}
 MAX_REVERSAL_SHARE = 0.05
 SPIKE_MULTIPLE = 5.0
@@ -227,9 +243,10 @@ def build_monthly(since: str, until: str) -> pd.DataFrame:
         if dup.any():                                                        # check 7
             raise AssertionError(f"{path.name}: {int(dup.sum())} duplicate entity-account rows")
         n_adv = rows.loc[rows["field"] == "adv", "entity_key"].nunique()
-        lo, hi = REPORTER_BOUNDS[level]                                      # check 5
+        lo, hi = REPORTER_BOUNDS[file_type]                                  # check 5
         if not lo <= n_adv <= hi:
-            raise AssertionError(f"{ym} {level}: {n_adv} advertising reporters outside [{lo}, {hi}]")
+            raise AssertionError(f"{ym} {file_type}: {n_adv} advertising reporters outside "
+                                 f"[{lo}, {hi}]")
         for frame in (rows, filers):
             frame["level"] = level
             frame["data_base"] = ym
@@ -240,6 +257,12 @@ def build_monthly(since: str, until: str) -> pd.DataFrame:
 
     long = pd.concat(frames, ignore_index=True)
     filers = pd.concat(filer_frames, ignore_index=True)
+
+    twice = filers.duplicated(KEYS + ["data_base"], keep=False)             # check 7
+    if twice.any():
+        raise AssertionError("an entity files in two file types in the same month:\n"
+                             + filers[twice].head(8)[KEYS + ["data_base", "entity_name"]]
+                             .to_string(index=False))
 
     if (long["v"] >= 0).any():                                               # check 2
         bad = long[long["v"] >= 0].head(5).to_dict("records")

@@ -19,8 +19,16 @@ dummies; nothing is rescaled here.
 
 Source rows
 -----------
-  cosif_conglomerate  accrued expense per prudential conglomerate, 2025-01 onward
-  cosif_institution   accrued expense per institution, 2025-01 onward
+  cosif_conglomerate  accrued expense per prudential conglomerate, from its consolidated
+                      document: 2014-07 onward
+  cosif_institution   accrued expense of the member institutions, summed to the conglomerate:
+                      2013-01 onward. The main measure (user decision 2026-10-05); the
+                      conglomerate document is the alternative and the fallback.
+                      Both come from the central bank's accounts: the file it released for
+                      2013-2024 (`build_cosif_lai_advertising.py`) and the public files from 2025
+                      (`scrape_cosif_advertising.py`). They are one source, the same documents and
+                      accounts. A member's conglomerate is decided quarter by quarter
+                      (`codes_by_quarter`).
   cvm                 securities-filing lines, quarterly 2013-2025, INDIVIDUAL statements summed
                       over the filers mapped to one conglomerate. EXCEPTION: Itau Unibanco
                       Holding uses its CONSOLIDATED statement (its operating bank does not file
@@ -65,7 +73,8 @@ Vintages and values
 
 Inputs (all under paths.AWARENESS_PROC unless noted)
 ----------------------------------------------------
-  cosif_advertising_quarterly, cvm_advertising_quarterly, sec_advertising_annual,
+  cosif_advertising_quarterly, cosif_lai_advertising_quarterly, cvm_advertising_quarterly,
+  sec_advertising_annual,
   caixa_advertising_monthly, caixa_scan_advertising_monthly, statebank_advertising_periods,
   sponsorship_periods, ancine_ad_films_monthly,
   advertising_entity_crosswalk{,_periods}; market_panel.parquet for deposits; the IPCA series from
@@ -288,35 +297,169 @@ def rows_from(frame: pd.DataFrame, **fixed) -> pd.DataFrame:
 # ---------------------------------------------------------------------------
 # Source builders
 # ---------------------------------------------------------------------------
+def panel_quarters() -> tuple[set[tuple[str, int]], int, int]:
+    """(code, YYYYQ) pairs with deposits in the market panel, and its first and last YYYYQ."""
+    dep = deposits_by_quarter().reset_index()
+    yq = dep["year"].astype(int) * 10 + dep["quarter"].astype(int)
+    has = dep["dep"] > 0
+    return (set(zip(dep.loc[has, "CodConglomeradoPrudencial"].astype(str), yq[has])),
+            int(yq.min()), int(yq.max()))
+
+
+# Words too common among institution names to identify one.
+GENERIC_NAME_TOKENS = {
+    "BRASIL", "BANK", "SCD", "CFI", "SCMEPP", "CARD", "INVESTIMENTO", "INVESTIMENTOS",
+    "DISTRIBUIDORA", "VALORES", "MOBILIARIOS", "TITULOS", "CREDITO", "CORRETORA", "DTVM", "CTVM",
+    "CCTVM", "PAGAMENTO", "PAGAMENTOS", "INSTITUICAO", "ADMINISTRADORA", "CONSORCIO",
+    "CONSORCIOS", "SERVICOS", "DIGITAL", "CAPITAL", "SOCIEDADE", "MULTIPLO", "FINANCIAMENTO",
+    "FINANCIAMENTOS", "CAMBIO", "COMPANHIA", "LIQUIDACAO", "EXTRAJUDICIAL"}
+
+
+def shared_name_tokens(name: str, panel_name: str) -> int:
+    """How many distinctive tokens of `name` appear in `panel_name`.
+
+    Tokens of three letters count ("PAN" is the only distinctive token of "BCO PAN S.A."). A
+    token also matches a longer one it begins, from four letters up, because the public files
+    abbreviate names the released file spells out ("BCO C6 CONSIG" for "BANCO C6 CONSIGNADO").
+    """
+    def distinctive(text: str) -> set[str]:
+        return {t for t in _norm_tokens(text) if len(t) >= 3 and t not in GENERIC_NAME_TOKENS}
+
+    def same(x: str, y: str) -> bool:
+        short, long_ = sorted((x, y), key=len)
+        return x == y or (len(short) >= 4 and long_.startswith(short))
+
+    theirs = distinctive(panel_name)
+    return sum(any(same(x, y) for y in theirs) for x in distinctive(name))
+
+
+def codes_by_quarter(rows: pd.DataFrame, per: pd.DataFrame, source: str,
+                     panel_names: dict[str, str] | None = None) -> pd.Series:
+    """The market-panel code of each (entity_key, year, quarter, entity_name) row, or NaN.
+
+    The accounts run from 2013, and a bank can sit in different conglomerates over those years,
+    so the code is decided quarter by quarter:
+      1. Registry rule. The candidate code (present in the market panel) whose registry span
+         holds the quarter. A span runs from the first to the last quarterly list that places
+         the entity under the code, so a list that skips it in between does not break it.
+         Before the registry's first coded quarter the code it gives at that first quarter is
+         used, and likewise after its last. Outside every span the entity belongs to no panel
+         conglomerate that quarter: spending before an acquisition is not the acquirer's, and
+         an institution the registry stops listing leaves its conglomerate even if it still
+         files.
+      2. Own-entity rule, institutions only (`panel_names` given). Where an institution has
+         several candidate codes and its name in that quarter shares distinctive tokens with
+         one of their panel names more than with any other, that code wins in every quarter in
+         which the market panel holds deposits under it: the registry moved Banco Pan into
+         BTG's conglomerate in 2021Q2 while the market panel keeps BANCO PAN SA as its own
+         entity with its own deposits, and attaching Pan's advertising to BTG would contaminate
+         BTG and empty Pan. A code with no deposits in the quarter is not such an entity, and
+         the registry rule decides.
+    A code can be assigned in a quarter the market panel does not carry it (XP's code before
+    2019Q4); those rows match nothing when merged on code and quarter.
+    """
+    cand = per[(per["source"] == source) & per["in_panel"]][
+        ["source_id", "panel_code_candidate", "first_quarter", "last_quarter"]]
+    reg_first, reg_last = per["first_quarter"].min(), per["last_quarter"].max()
+    r = rows[["entity_key", "year", "quarter", "entity_name"]].reset_index()
+    r["ym"] = (r["year"].astype(int) * 100 + r["quarter"].astype(int) * 3).astype(str)
+    m = r.merge(cand, left_on="entity_key", right_on="source_id", how="inner")
+    holds = (m["first_quarter"] <= m["ym"]) & (m["last_quarter"] >= m["ym"])
+    edge = (((m["ym"] < reg_first) & (m["first_quarter"] == reg_first))
+            | ((m["ym"] > reg_last) & (m["last_quarter"] == reg_last)))
+    # Where two spans hold the quarter, the one that started later wins.
+    live = (m[holds | edge]
+            .sort_values(["first_quarter", "panel_code_candidate"], kind="stable")
+            .drop_duplicates("index", keep="last").set_index("index")["panel_code_candidate"])
+    code = live.reindex(rows.index)
+    if panel_names is None:
+        return code
+
+    present, first_yq, last_yq = panel_quarters()
+    several = cand.groupby("source_id")["panel_code_candidate"].agg(lambda s: list(dict.fromkeys(s)))
+    several = several[several.map(len) > 1]
+    own: dict[tuple[str, str], str] = {}
+    names = r[r["entity_key"].isin(several.index)].drop_duplicates(["entity_key", "entity_name"])
+    for n in names.dropna(subset=["entity_name"]).itertuples():
+        scored = sorted(((shared_name_tokens(n.entity_name, panel_names.get(c, "")), c)
+                         for c in several[n.entity_key]), reverse=True)
+        if scored[0][0] and scored[0][0] > scored[1][0]:
+            own[(n.entity_key, n.entity_name)] = scored[0][1]
+            _CODE_CHOICE.setdefault((source, n.entity_key),
+                                    f"own panel entity {scored[0][1]} for the name "
+                                    f"{n.entity_name!r}, among {several[n.entity_key]}")
+    own_code = pd.Series([own.get(k) for k in zip(r["entity_key"], r["entity_name"])],
+                         index=r["index"])
+    yq = (r["year"].astype(int) * 10 + r["quarter"].astype(int)).clip(first_yq, last_yq)
+    carried = pd.Series([(c, q) in present for c, q in zip(own_code, yq)], index=r["index"])
+    return own_code.where(carried, code).reindex(rows.index)
+
+
 def from_cosif(xw: pd.DataFrame, per: pd.DataFrame, panel_names: dict[str, str]) -> pd.DataFrame:
-    q = pd.read_parquet(PROC / "cosif_advertising_quarterly.parquet")
-    q = q[q["n_months_filed"] == 3].copy()
-    q["measure_map"] = None
-    # Institution rows are keyed by CNPJ8, so their conglomerate comes from the crosswalk (a
-    # bank that changed conglomerate is mapped per quarter). Conglomerate rows already carry the
-    # panel code.
-    inst = q[q["level"] == "institution"].drop_duplicates("entity_key")[["entity_key",
-                                                                        "entity_name"]]
-    inst_code = {r.entity_key: code_for(xw, per, "cosif_institution", r.entity_key, 2025, 4,
-                                        panel_names, r.entity_name)
-                 for r in inst.itertuples()}
+    """The central bank's accounts: the released file to 2024 and the public files from 2025.
+
+    They are one source (user decision 2026-10-05): the same documents and the same three
+    accounts, so a bank's series runs from 2013 without a join between sources.
+    """
+    pub = pd.read_parquet(PROC / "cosif_advertising_quarterly.parquet")
+    pub = pub[pub["n_months_filed"] == 3].copy()
+    # In the released file a quarter's flow is known from its quarter-end balances, whether or
+    # not the institution files in the months between.
+    lai = pd.read_parquet(PROC / "cosif_lai_advertising_quarterly.parquet")
+    lai = lai[lai["flow_known"]].copy()
+
+    # Conglomerate rows: the public files carry the prudential code; the released file carries
+    # the leader's CNPJ8, mapped to the code that leader's conglomerate has in that quarter.
+    pub_c = pub[pub["level"] == "conglomerate"].assign(detail=lambda d: d["taxonomia"])
+    pub_c["panel_code"] = pub_c["panel_key"]
+    lai_c = lai[lai["level"] == "conglomerate"].copy()
+    lai_c["panel_code"] = codes_by_quarter(lai_c, per, "cosif_leader")
+    lai_c["detail"] = "leader " + lai_c["entity_key"]
+    lai_c["entity_key"] = lai_c["panel_code"].fillna("LEADER_" + lai_c["entity_key"])
+    twice = lai_c[lai_c["panel_code"].notna()].duplicated(["panel_code", "year", "quarter"],
+                                                          keep=False)
+    if twice.any():
+        raise AssertionError("two leaders file for one conglomerate in the same quarter:\n"
+                             + lai_c[lai_c["panel_code"].notna()][twice]
+                             [["panel_code", "detail", "year", "quarter"]].head(10)
+                             .to_string(index=False))
+
+    # Institution rows are keyed by CNPJ8; their conglomerate is decided quarter by quarter.
+    inst = pd.concat([lai[lai["level"] == "institution"], pub[pub["level"] == "institution"]],
+                     ignore_index=True)
+    inst["panel_code"] = codes_by_quarter(inst, per, "cosif_institution", panel_names)
+    inst["detail"] = inst["taxonomia"]
+    # An institution outside every panel conglomerate in a quarter (most are cooperatives,
+    # brokers and consortium administrators) leaves here, counted.
+    out_of_panel = inst["panel_code"].isna()
+    log.info("  cosif institutions: %d of %d have a panel code in at least one quarter; %d "
+             "institution-quarters outside the panel dropped, %.1f%% of the three accounts' "
+             "total", inst.loc[~out_of_panel, "entity_key"].nunique(),
+             inst["entity_key"].nunique(), int(out_of_panel.sum()),
+             100 * inst.loc[out_of_panel, "all3"].sum() / inst["all3"].sum())
+    inst = inst[~out_of_panel]
+
+    q = pd.concat([lai_c, pub_c, inst], ignore_index=True)
+    # A released-file quarter whose flow rests on a month taken as a zero says so in its flags.
+    q["inferred"] = np.where(q["flow_uses_inferred_zero"].eq(True), "member_zero_inferred", "")
     out = []
     for level, source in (("conglomerate", "cosif_conglomerate"),
                           ("institution", "cosif_institution")):
         sub = q[q["level"] == level]
         for measure, col in (("adv", "adv"), ("promo", "promo"), ("publ", "publ"),
                              ("all3", "all3")):
+            spike = np.where(sub["any_adv_spike"] & (measure in ("adv", "all3")),
+                             "adv_spike", "")
             out.append(pd.DataFrame({
-                "panel_code": (sub["panel_key"] if level == "conglomerate"
-                               else sub["entity_key"].map(inst_code)),
+                "panel_code": sub["panel_code"],
                 "source_entity": sub["entity_key"], "entity_name": sub["entity_name"],
                 "year": sub["year"], "quarter": sub["quarter"], "source": source,
                 "measure": measure, "amount_kind": "accrued", "scope": level,
                 "amount_brl": sub[col], "n_months_observed": 3,
                 "validated": True,
-                "flags": np.where(sub["any_adv_spike"] & (measure in ("adv", "all3")),
-                                  "adv_spike", "") ,
-                "detail": sub["taxonomia"],
+                "flags": [";".join(t for t in pair if t)
+                          for pair in zip(spike, sub["inferred"])],
+                "detail": sub["detail"],
             }))
     df = pd.concat(out, ignore_index=True)
     admin = q.set_index(["level", "entity_key", "year", "quarter"])["admin"]
@@ -331,11 +474,14 @@ def from_cosif(xw: pd.DataFrame, per: pd.DataFrame, panel_names: dict[str, str])
     inst = df[df["scope"] == "institution"]
     keys = ["panel_code", "year", "quarter", "source", "measure", "amount_kind", "scope"]
     inst_agg = (inst.groupby(keys, as_index=False, dropna=False)
-                    .agg(amount_brl=("amount_brl", "sum"), admin_brl=("admin_brl", "sum"),
+                    .agg(amount_brl=("amount_brl", "sum"),
+                         # empty before 2025: the released file has no administrative total
+                         admin_brl=("admin_brl", lambda s: s.sum(min_count=1)),
                          n_entities=("source_entity", "nunique"),
                          source_entity=("source_entity", lambda s: ";".join(sorted(set(s))[:4])),
                          entity_name=("entity_name", "first"),
-                         flags=("flags", lambda s: ";".join(sorted({x for x in s if x}))),
+                         flags=("flags", lambda s: ";".join(sorted({t for x in s if x
+                                                                    for t in x.split(";")}))),
                          detail=("detail", "first"),
                          n_months_observed=("n_months_observed", "max"),
                          validated=("validated", "all")))
@@ -702,7 +848,8 @@ def main() -> None:
     ap.add_argument("--out-dir", type=Path, default=PROC)
     a = ap.parse_args()
 
-    needed = ["cosif_advertising_quarterly", "cvm_advertising_quarterly", "sec_advertising_annual",
+    needed = ["cosif_advertising_quarterly", "cosif_lai_advertising_quarterly",
+              "cvm_advertising_quarterly", "sec_advertising_annual",
               "caixa_advertising_monthly", "caixa_scan_advertising_monthly",
               "statebank_advertising_periods", "sponsorship_periods",
               "advertising_entity_crosswalk", "advertising_entity_crosswalk_periods",

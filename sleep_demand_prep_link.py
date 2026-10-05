@@ -36,6 +36,7 @@ from utils import paths
 from utils import load_panel_cached
 from utils import routines as R
 from utils import state_transform as _st
+from utils import demand_repair as _repair   # the demand-side repair layer; inert unless DEMAND_REPAIR=1
 from utils.sleep_links import NonLinearResults  # noqa: F401 (needed for unpickling)
 
 # market_panel.csv, NOT the fees variant — see utils/paths.market_panel_csv (USE_FEE_PANEL=1).
@@ -112,6 +113,9 @@ from utils.window import MIN_YEAR, MAX_YEAR  # noqa: E402
 EXTRA_KEEP_COLS = (X_COLS + D_COLS + IV_BLP_LOO + IV_ESTBAN + IV_COST + IV_CAPITAL + IV_FEE
                    + CF_COST_COLS
                    + ['segment', 'spread_qoq', 'spread_ann'])
+# Under DEMAND_REPAIR=1 the repair layer's flags and its borrowings columns ride into the parquet
+# (utils/demand_repair.py). With the layer off this appends nothing.
+EXTRA_KEEP_COLS = EXTRA_KEEP_COLS + _repair.keep_columns()
 
 SPEC_MAP = {
     1: 'OLS x Base', 2: 'IV_CostShifters x Base', 3: 'IV_Wholesale x Base', 4: 'IV_HausmanFull x Base',
@@ -186,6 +190,7 @@ def build_base_panel(panel_csv, time_block=False):
     near-zero values in that denominator)."""
     print(f"Loading {panel_csv}...")
     df_raw = load_panel_cached(panel_csv, dtype={'mca_code': str}, low_memory=False)
+    df_raw = _repair.apply(df_raw)   # returns df_raw itself unless DEMAND_REPAIR=1
     df = _reshape_panel(df_raw)
     df['fgc_covered'] = df['deposit_type'].astype('Int64').isin([1, 2, 4]).astype(int)
     if 'has_ip' not in df.columns:
@@ -565,7 +570,8 @@ def run(est_num, link, tag, time_block=False, spec="all"):
     # DEMAND_PREP_DIR names a separate step folder (the cluster's data/output/demand_prep),
     # where the fits and the parquets they generate live in different step directories.
     sleep_output_dir = paths.est_dir(est_num)
-    demand_output_dir = paths.demand_parquet_dir()
+    # Under DEMAND_REPAIR=1 the repaired parquets go to their own folder, never this one.
+    demand_output_dir = _repair.output_dir(paths.demand_parquet_dir())
     demand_output_dir.mkdir(parents=True, exist_ok=True)
 
     print(f"Loading Base Panel {PANEL_CSV}...")
@@ -591,6 +597,7 @@ def run(est_num, link, tag, time_block=False, spec="all"):
         df_spec, summary, _ = process_specification(key, results_dict[key], df_base, link)
         if df_spec is not None:
             out = demand_output_dir / f"demand_{est_num}_{tag}_spec_{sid}.parquet"
+            df_spec = _repair.finalize(df_spec, out, summary)   # returns df_spec itself unless DEMAND_REPAIR=1
             df_spec.to_parquet(out, engine='pyarrow')
             print(f" > Saved Spec {sid} ({tag}) -> {out.name} ({len(df_spec)} rows)")
             spec_summaries[f"{est_num}_{tag}_{sid}"] = summary

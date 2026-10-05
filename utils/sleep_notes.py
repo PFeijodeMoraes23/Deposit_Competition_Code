@@ -96,13 +96,26 @@ def note_open(bands=True, two_stage: str = "") -> str:
             r"$p<0.1/0.05/0.01$; both conglomerate-clustered; " + _NATIONAL + ". ")
 
 
+# The two F rows of every first-stage table, and the sentence that says what each one is. The
+# labels live beside the sentence because the sentence points at them ("Effective $F$", "the
+# row above it"): ROW_F_ALL is the fit's own F, ROW_F_EFF the value sleep_first_stage_strength.py
+# stores for the column.
+ROW_F_ALL = r"$F$, all slopes"
+ROW_F_EFF = r"Effective $F$ (excluded instruments)"
+_FIRST_STAGE_F = (r"Effective $F$ is the weak-instrument statistic for the excluded instruments "
+                  r"\parencite{oleapflueger2013}, conglomerate-clustered; the row above it is the "
+                  r"joint $F$ of all slopes, instruments and state controls together. ")
+
+
 def first_stage_note(pooled: bool = True, extra: str = "") -> str:
-    """The first-stage (deposit-spread) note: dependent variable and units, sample, SEs, stars."""
+    """The first-stage (deposit-spread) note: dependent variable and units, sample, SEs, what
+    the two $F$ rows hold, stars."""
     who = (r"$\mathrm{B}$ and $\mathrm{D}$ firms" if pooled
            else r"$\mathrm{B}$ firms only ($\mathrm{D}$ firms excluded)")
     return (r"Dependent variable: quarterly deposit spread, in pp per row-label unit. "
             rf"Unit: {_unit_obs(pooled)}, endogenously priced types $k=4,5$; {who}{extra}. "
-            r"Parentheses: WCB standard errors, conglomerate-clustered. " + _STARS_P)
+            r"Parentheses: WCB standard errors, conglomerate-clustered. " + _FIRST_STAGE_F
+            + _STARS_P)
 
 
 def reversed_draws_note(fits) -> str:

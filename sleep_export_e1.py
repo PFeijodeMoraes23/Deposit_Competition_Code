@@ -51,7 +51,7 @@ def stars(p):
 # paper -- sleepiness, BBL policy functions, descriptives -- states the same unit for the
 # same variable. There used to be four independent copies of this dict.
 from sleep_export_link import (clean_name, disp, ss_colspec, ss_label_cell,  # noqa: E402
-                               SS_TABCOLSEP, fmt3, pdflatex_clean)
+                               SS_TABCOLSEP, fmt3, pdflatex_clean, eff_f_cell)
 from utils import state_transform as _st  # noqa: E402
 from utils import se_national as _sen  # noqa: E402
 from utils import sleep_notes as _notes
@@ -171,25 +171,27 @@ def build_first_stage_table(results_dict):
                 lines.append(f"    {clean_name(var)} & " + " & ".join(coef_strs) + r" \\*")
                 lines.append("    & " + " & ".join(se_strs) + r" \\")
 
-        obs_l, rsq_l, fstat_l, g_l = [], [], [], []
+        obs_l, rsq_l, fstat_l, efff_l, g_l = [], [], [], [], []
         for ik, _ in ivs:
             res = _get_res(ik, panel)
             if res is None:
                 obs_l.append("---"); rsq_l.append("---"); fstat_l.append("---")
-                g_l.append("---")
+                efff_l.append(""); g_l.append("---")
                 continue
             obs_l.append(f"{int(res.nobs):,}")
             rsq_l.append(fmt3(res.rsquared))
             fv = getattr(res, 'fvalue', None)
             fp = getattr(res, 'f_pvalue', 1.0)
             fstat_l.append(f"${fmt3(fv)}^{{{stars(fp)}}}$" if fv is not None else "---")
+            efff_l.append(eff_f_cell(1, f"{ik} x {panel}"))
             g_l.append(str(getattr(res, 'G_nominal', '---')))
 
         lines += [
             r"    \midrule",
             "    Observations & " + " & ".join(obs_l) + r" \\",
             "    $R^2$ & " + " & ".join(rsq_l) + r" \\",
-            "    F-Statistic & " + " & ".join(fstat_l) + r" \\",
+            f"    {_notes.ROW_F_ALL} & " + " & ".join(fstat_l) + r" \\",
+            f"    {_notes.ROW_F_EFF} & " + " & ".join(efff_l) + r" \\",
             "    Fixed Effects & No & No & No \\\\",
             "    Clusters ($G$) & " + " & ".join(g_l) + r" \\",
             r"    \bottomrule",
@@ -376,6 +378,8 @@ def build_second_stage_table(results_dict):
         _notes.OPEN_TOKEN, _notes.note_open(_bands)).replace(
         _sen.NOTE_TOKEN, _sen.national_note(_nat_schemes, dk_bracket=False))
 
+# \parencite belongs to biblatex, which the preview does not load; the first-stage note cites
+# with it, so the preview prints the citation key in parentheses.
 _STANDALONE_PREAMBLE = r"""\documentclass[12pt]{article}
 \usepackage[letterpaper, margin=1in]{geometry}
 \usepackage[utf8]{inputenc}
@@ -393,6 +397,7 @@ _STANDALONE_PREAMBLE = r"""\documentclass[12pt]{article}
 \renewcommand{\arraystretch}{1.08}
 \usepackage{hyperref}
 \hypersetup{colorlinks=true, linkcolor=blue}
+\providecommand{\parencite}[1]{(#1)}
 """
 
 

@@ -5,13 +5,20 @@ demand model. This note records where the data can and cannot be found, how each
 checked against the central bank's own accounts, the choices made, and what the collection
 scripts produce.
 
-Last updated: 2026-10-04.
+Last updated: 2026-10-05.
+
+**What changed on 2026-10-05.** The central bank answered the appeal with NAMED data: the three
+advertising accounts for every institution, monthly, 2013-2024 (section 4). That file and the
+public accounts from 2025 are now one source and the main measure (section 3). The statement
+notes become a cross-check, and the document listings still missing for twelve banks are no
+longer needed.
 
 ## Status
 
 | Piece | Script | State |
 |-------|----------|--------|
-| Central bank accounts, 2025 onward | `scrape_cosif_advertising.py` | Built, validated, outputs written |
+| Central bank accounts, 2013-2024 (file released on appeal) | `build_cosif_lai_advertising.py` | Built 2026-10-05, validated, independently reviewed, outputs written (5.10) |
+| Central bank accounts, 2025 onward (public files) | `scrape_cosif_advertising.py` | Built, validated; reads all five institution files since 2026-10-05 (5.1) |
 | Securities-regulator filings, 2013 onward | `scrape_cvm_advertising.py` | Built, validated, outputs written |
 | SEC annual reports (separate annual panel) | `scrape_sec_advertising.py` | Built, validated, outputs written |
 | Caixa's own disclosures and sponsorship, text months | `scrape_caixa_advertising.py` | Built; 142 months, 133 validated against their printed totals, 9 recorded as files that do not close |
@@ -20,9 +27,9 @@ Last updated: 2026-10-04.
 | Sponsorship robustness series, BB and BNB | `scrape_sponsorship_bb_bnb.py` | Built, validated, outputs written; open questions in 5.4 |
 | Entity crosswalk to market panel codes | `build_advertising_crosswalk.py` | Built, validated, outputs written |
 | Registered advertising films (a count, not spend) | `scrape_ancine_ad_films.py` | Built, seven checks pass; kept as a separate quarterly table (5.8) |
-| Assembly of the quarterly and annual panels | `build_advertising_panel.py` | Built, checks pass, outputs written 2026-10-04 |
-| Statement-note extraction | `scrape_bank_notes_advertising.py` | Built; six banks written 2026-10-04, four validated; not yet in the assembled panel (5.9) |
-| Freedom-of-information request to the central bank | filed on Fala.BR | Granted 2026-09-24 without institution names; appeal filed the same day; no reader built (section 4) |
+| Assembly of the quarterly and annual panels | `build_advertising_panel.py` | Rebuilt 2026-10-05 with the central bank's accounts from 2013 as the main source; checks pass; the quarter-by-quarter assignment of institutions to conglomerates was independently reviewed and its fixes applied (5.7) |
+| Statement-note extraction | `scrape_bank_notes_advertising.py` | Built; six banks written 2026-10-04; a cross-check only since 2026-10-05, not a panel source (5.9) |
+| Freedom-of-information request to the central bank | filed on Fala.BR | Appeal granted with institution names; file received 2026-10-05 (section 4) |
 
 All outputs go to `paths.AWARENESS_PROC` (`Open-Finance/BCB/Awareness/processed`).
 
@@ -174,7 +181,9 @@ The own files measure outlays, not expense.
 
 ---
 
-## 3. Decisions (all by the user, 2026-09-14)
+## 3. Decisions (all by the user)
+
+**Decisions of 2026-09-14.**
 
 - Sources: all of them - filings (CVM), Caixa's and the other state banks' own files.
 - SEC 20-F figures form a separate annual panel, not interpolated into the quarterly one.
@@ -186,6 +195,20 @@ The own files measure outlays, not expense.
 - Spending spikes are kept flagged and unaltered; their treatment is decided when the
   estimation specification is built.
 - A freedom-of-information request was filed (section 4).
+
+**Decisions of 2026-10-05, after the central bank's named file arrived.**
+
+- The released 2013-2024 file and the public accounts from 2025 are ONE source: the same
+  documents and the same three accounts, with a continuous join. Every bank then has a single
+  series from 2013.
+- The main measure is the SUM OF MEMBER INSTITUTIONS (each institution's own document 4010),
+  which runs from 2013 for everyone. The conglomerate's consolidated document (40605, from
+  2014-07) is the alternative and the fallback.
+- The statement notes are a cross-check only. No further work on their parser, and the document
+  listings for the twelve banks without one are dropped: the file has all twelve.
+- Earlier decisions that still stand: sources are stored apart and never spliced; sponsorship is
+  a separate series; BRB's "Negócios" category is sponsorship in every year (2026-10-04); whoever
+  reads the panel pools the `amount_kind` labels (2026-10-01).
 
 ---
 
@@ -213,22 +236,39 @@ Balances are negative and cumulate within each half-year, the convention
 `scrape_cosif_advertising.py` already converts to quarterly flows. There is no 2025 month, so the
 file does not overlap the named accounts.
 
-An appeal filed the same day asks, in order, for named data; failing that, for attributes per
+An appeal filed the same day asked, in order, for named data; failing that, for attributes per
 identifier (segment, control, institution type, conglomerate type) with small cells suppressed;
 and for the meaning of the document codes.
 
-Rules for using the file:
+**Appeal outcome: named data, received 2026-10-05.** The central bank's monitoring department
+(Desig) replied that the first answer followed the level of detail then available, and sent the
+complementary information requested. The file is
+`BCB/Awareness/raw/lai_bcb_cosif/Contas 81742-45e48 demanda recursal.zip`, one CSV with the
+columns `DATA;CNPJ;INSTITUICAO;DOC;CONTA;SALDO`.
 
-- **Identifiers are never matched to names.** The release rests on the rows being unnamed, and
-  the December 2024 to January 2025 seam against the named accounts, or a ranking by size, would
-  identify the large banks at once. The file serves system totals, dispersion, concentration, the
-  within-institution panel under its pseudonyms, and the coverage of the named series in
-  advertising terms.
-- **Aggregate from document 40605 (prudential) or 4010 (individual), never 40604 on top of
-  40605.** 4,894 keys repeat with different values, almost all in 40604, which holds the
-  individual entities consolidated into a conglomerate. Document 4030 is documented nowhere
-  public.
-- No reader is built yet.
+- The same 514,175 rows as the unnamed file, now with each institution's CNPJ and name: 2,353
+  institutions, January 2013 to December 2024, the three accounts. Names change over time for
+  1,022 of them (Banco Original do Agronegócio became PicPay Bank, Banco Gerador became Agibank).
+- Every kind of institution is in it: banks, payment institutions, finance and brokerage
+  companies, consortium administrators, cooperatives.
+- All twelve banks for which the statement-note route had no document listing are in it.
+- The central bank itself names the institutions, so the file is used with names. The unnamed
+  file is superseded and its identifiers are not linked to anything.
+
+**The file agrees with audited figures where the two can be compared.**
+
+| Bank | Compared with | Result |
+|---|---|---|
+| Banco do Brasil | its securities filing, the advertising account alone, 48 quarters 2013-2024 | median ratio 1.000; all 48 within 3% |
+| Santander | its statement note, individual statement, all three accounts, 10 years 2015-2024 | 0.972 to 1.017 |
+| Banco Volkswagen | its statement note, 6 years between 2018 and 2024 | 1.0000 every year |
+| Bradesco, Banco do Nordeste, BMG, Itaú Holding | their securities filings, all three accounts | median 1.000 to 1.001 |
+
+One rule carries over from the unnamed file: aggregate from document 40605 (the conglomerate's
+consolidated block) or 4010 (the institution), never 40604 on top of 40605. Document 40604 lists
+the individual entities consolidated into a conglomerate and repeats keys 4,894 times.
+
+Section 5.10 describes the reader built from this file.
 
 ---
 
@@ -236,9 +276,28 @@ Rules for using the file:
 
 ### 5.1 Central bank accounts, 2025 onward: `scrape_cosif_advertising.py`
 
-**Inputs.** `{YYYYMM}BANCOS` (document 4010, per institution, keyed by CNPJ8; COD_CONGL is blank)
-and `{YYYYMM}BLOPRUDENCIAL` (document 4060, per prudential conglomerate, keyed by COD_CONGL, the
-panel's `CodConglomeradoPrudencial` code space) under `paths.COSIF_RAW`, 202501-202603.
+**Inputs.** Under `paths.COSIF_RAW`, 202501-202603:
+
+- Document 4010, per institution, keyed by CNPJ8 (COD_CONGL is blank), from FIVE public files:
+  `{YYYYMM}BANCOS`, `SOCIEDADES`, `CONSORCIOS`, `COOPERATIVAS` and `LIQUIDACAO`. They are one
+  universe split by kind of institution, and a conglomerate's members are spread across them: Nu
+  Pagamentos, Mercado Pago, PagSeguro and Stone are in `SOCIEDADES`. Until 2026-10-05 only
+  `BANCOS` was read, which left every non-bank member out of the 2025 member sums and broke the
+  join with the 2013-2024 file (Nu's conglomerate fell from R$853m in 2024 to zero in 2025).
+  `CONSORCIOS` also carries document 4110, the consortium groups, which is left out.
+- Document 4060, per prudential conglomerate, keyed by COD_CONGL (the panel's
+  `CodConglomeradoPrudencial` code space), from `{YYYYMM}BLOPRUDENCIAL`.
+
+| File | Institutions a month | Reporting the advertising account |
+|---|---|---|
+| BANCOS | 170-176 | 96-116 |
+| SOCIEDADES | 672-724 | 270-351 |
+| CONSORCIOS | 121-125 | 94-106 |
+| COOPERATIVAS | 754-779 | 523-583 |
+| LIQUIDACAO | 1-6 | 0 |
+
+No institution appears in two files in the same month. An institution can move between files:
+Avenue Securities is in `SOCIEDADES` until November 2025 and in `BANCOS` from December.
 
 **Rules.**
 - SALDO is reais, stored negative; converted once to positive reais.
@@ -254,22 +313,24 @@ panel's `CodConglomeradoPrudencial` code space) under `paths.COSIF_RAW`, 202501-
 - Running totals fall within a half-year in about 1.5% of month pairs (reclassifications):
   kept, with `is_reversal`.
 
-**Validation (all pass).** No level-4 advertising account in the 24 files of 2024; every raw
+**Validation (all pass).** No level-4 advertising account in the 72 files of 2024; every raw
 balance negative; children sum to the total for every filer and month; July median below June;
-advertising reporters per month within bounds (4010: 96-116; 4060: 111-137); anchors C0080099
-ITAU, C0080738 CAIXA, C0080329 BB; no duplicate entity-account-months; reversal share under 5%;
-monthly flows reproduce quarter flows for all 1,642 complete entity-quarters.
+advertising reporters per month within the bounds set for each file; anchors C0080099 ITAU,
+C0080738 CAIXA, C0080329 BB; no duplicate entity-account-months and no institution in two files
+in a month; reversal share under 5% (0.4-0.8% of month pairs); monthly flows reproduce quarter
+flows for all 9,577 complete entity-quarters.
 
 **Spot checks.** Itau prudential 2025 quarters 298.1 / 346.6 / 299.3 / 358.1 R$m and Banco do
 Brasil institution 2025 total 528.2 R$m, both matching independent figures exactly. 144 of the
 179 conglomerates with an advertising account are panel conglomerate codes.
 
 **Outputs.**
-- `cosif_advertising_monthly.{parquet,csv}` (5,340 rows): `level`, `entity_key`, `entity_name`,
+- `cosif_advertising_monthly.{parquet,csv}` (30,315 rows; 1,842 institutions and 179
+  conglomerates): `level`, `entity_key`, `entity_name`,
   `cnpj_leader`, `taxonomia`, `data_base`, `year`, `month`, `half`, `quarter`, `filed`,
   `{adv,promo,publ,admin}_bal`, `{adv,promo,publ,admin}_flow`, `is_reversal`,
   `adv_flow_spike`, `panel_key`.
-- `cosif_advertising_quarterly.{parquet,csv}` (1,780 rows): flows `adv`, `promo`, `publ`,
+- `cosif_advertising_quarterly.{parquet,csv}` (10,105 rows): flows `adv`, `promo`, `publ`,
   `admin`, `all3`, `adv_share_admin`, `all3_share_admin`, `n_months_filed`, `any_reversal`,
   `any_adv_spike`, `panel_key`.
 
@@ -282,14 +343,19 @@ Brasil institution 2025 total 528.2 R$m, both matching independent figures exact
 | Conglomerate | 2025Q3 | 150 | 2,543.4 | 3,432.7 |
 | Conglomerate | 2025Q4 | 162 | 3,249.8 | 4,552.5 |
 | Conglomerate | 2026Q1 | 160 | 4,161.1 | 5,129.2 |
-| Institution | 2025Q1 | 174 | 1,091.4 | 1,748.8 |
-| Institution | 2025Q2 | 175 | 1,199.3 | 1,846.7 |
-| Institution | 2025Q3 | 171 | 1,187.9 | 1,870.9 |
-| Institution | 2025Q4 | 170 | 1,625.6 | 2,622.8 |
-| Institution | 2026Q1 | 170 | 997.4 | 1,655.8 |
+| Institution | 2025Q1 | 1,745 | 2,534.6 | 3,916.9 |
+| Institution | 2025Q2 | 1,750 | 2,818.4 | 4,245.4 |
+| Institution | 2025Q3 | 1,775 | 2,907.3 | 4,422.9 |
+| Institution | 2025Q4 | 1,779 | 3,645.0 | 5,683.6 |
+| Institution | 2026Q1 | 1,746 | 4,499.2 | 6,046.6 |
+
+The institution rows now include every kind of institution, cooperatives among them, most of
+which belong to no panel conglomerate. For scale, the 2013-2024 file's institutions total
+R$16,370m in the three accounts in 2024, about R$4,090m a quarter.
 
 **Spikes (`adv_flow_spike`, kept unaltered).** A month more than 5x the entity's median positive
-monthly flow and more than R$10m above it. 15 entity-months. The dominant one: NU PAGAMENTOS
+monthly flow and more than R$10m above it. 19 entity-months with all five files read; the list
+below is the 15 found when only `BANCOS` was read. The dominant one: NU PAGAMENTOS
 prudential, 202603, R$1,545.3m in one month (administrative expenses also +R$3,170m that month),
 against about R$60m a month before; it drives most of the 2026Q1 conglomerate jump. Others:
 Honda 202603, Sicoob 202510 (both levels), BNDES 202510 and 202512, Celcoin 202512, Sicoob
@@ -778,23 +844,97 @@ was.
 
 ### 5.7 Assembled panels: `build_advertising_panel.py`
 
-Two outputs, keyed to market-panel conglomerate codes through the crosswalk, with Pan mapped per
-quarter across its 2021 change.
+Outputs keyed to market-panel conglomerate codes through the crosswalk. Rebuilt on 2026-10-05
+with the central bank's accounts running from 2013.
 
-**`advertising_panel_quarterly`** (10,680 rows): one row per conglomerate, quarter, SOURCE and
-measure. Sources are never spliced, by decision: a source change inside a bank's history is a
-level jump that bank fixed effects cannot absorb.
+**`advertising_panel_quarterly`** (83,192 rows; 10,680 before the central bank's file): one row
+per conglomerate, quarter, SOURCE and measure. Sources are never spliced, by decision: a source
+change inside a bank's history is a level jump that bank fixed effects cannot absorb.
 
 | Source | Conglomerates | Span | Basis |
 |---|---|---|---|
-| cosif_conglomerate | 173 | 2025-2026 | accrued |
-| cosif_institution (members summed) | 118 | 2025-2026 | accrued |
+| cosif_institution (members summed) | 522 | 2013-2026 | accrued; THE MAIN MEASURE |
+| cosif_conglomerate (consolidated document) | 210 | 2014-2026 | accrued; the alternative and the fallback |
 | cvm | 12 | 2012-2026 | accrued, individual statements summed; Itau consolidated |
 | caixa_own | 1 | 2013-2026 | outlays ("custos"); text months and scanned months merged |
 | statebank_own | 4 | 2014-2026 | outlays; the basis printed on each table (paid, accrued, undocumented) |
 | sponsorship | 1 | 2020-2026 | paid |
 
-The statement-note series (5.9) and the film counts (5.8) are not sources of this table.
+The two `cosif` sources are the central bank's accounts: the file it released for 2013-2024
+(5.10) and the public files from 2025 (5.1). They are one source by decision (2026-10-05), the
+same documents and accounts on both sides of 2025. The statement-note series (5.9) and the film
+counts (5.8) are not sources of this table.
+
+**Which conglomerate a member institution belongs to is decided quarter by quarter**
+(`codes_by_quarter`), because banks change hands over 2013-2026:
+
+- *Registry rule.* An institution is counted in the conglomerate whose registry span holds the
+  quarter. Before the registry's first coded quarter (2014Q1) the code it gives then is used, and
+  likewise after its last. Outside every span the institution belongs to no panel conglomerate in
+  that quarter. This matters: Órama and Easynvest were bought by BTG and Nu in 2024 and 2021, and
+  a single code per institution would have added their earlier spending (R$145m and R$135m) to
+  BTG and Nu for every year before the purchase.
+- *Own-entity rule.* Where an institution has several candidate codes and its name in that
+  quarter matches one of their panel names better than any other, that code wins in every quarter
+  in which the market panel holds DEPOSITS under it. The registry moved Banco Pan into BTG's
+  conglomerate in 2021Q2 while the market panel keeps Banco Pan as its own entity with about
+  R$20bn of deposits, and attaching Pan's advertising to BTG would contaminate BTG and empty Pan.
+  Where the own code has no deposits in the quarter, the registry rule decides. Three cases show
+  why the deposits matter:
+  - PicPay's own code has no deposits in the market panel until 2022Q2 and R$8bn from 2022Q3,
+    while Banco Original's falls from R$19.5bn to R$12bn in the same step. So PicPay's
+    advertising sits under Original until 2022Q2 (R$659m over six quarters) and under PicPay
+    from 2022Q3: it follows the code that holds its deposits.
+  - Will Financeira's own code has no deposits from 2024Q3, when the registry places it in Banco
+    Master, so its spending goes to Master from then.
+  - Kirton Bank, the former HSBC, goes to Bradesco once the panel stops carrying its code.
+- *Name matching.* Tokens of three letters or more count, common words (Brasil, Bank, Crédito,
+  Investimento and the like) do not, and an abbreviation matches the word it begins, from four
+  letters: the public files write "BCO C6 CONSIG" for the released file's "BANCO C6
+  CONSIGNADO". Without these two refinements PSA Finance matched Santander on "Brasil" alone,
+  and C6 Consignado changed conglomerate at the 2025 join.
+- A conglomerate's consolidated document is filed by its leader, so in the released file it is
+  mapped from the leader's CNPJ to the code that leader leads in that quarter.
+
+808 of the 2,531 institutions that ever file belong to a panel conglomerate in at least one
+quarter. The rest are outside the panel: cooperatives (Sicredi's and Sicoob's singles and
+centrals), BNDES, consortium administrators and independent brokers. Their quarters are dropped
+with a count: 13.7% of the three accounts' total over 2013-2026, rising from 8.5% in 2013 to 16%
+in 2023-2024.
+
+**The cooperatives stay out (user decision, 2026-10-05), to match the deposit panel.** The
+registry lists the bank and its subsidiaries under Banco Sicredi's and Banco Sicoob's codes, and
+no cooperative. The market panel does the same: its deposits for the two come from the banks' own
+branch-level filings and hold what is booked at the bank, mostly savings accounts.
+
+| | Banco Sicredi | Banco Sicoob |
+|---|---|---|
+| Panel deposits, 2024Q4 | R$39.4bn, of which savings R$32.7bn | R$21.9bn, of which savings R$15.4bn |
+| Share of panel deposits | 0.83% | 0.46% |
+| Advertising counted, 2024 (bank and subsidiaries) | R$304m | R$268m |
+| The system's cooperatives, 2024 (not counted) | 134 cooperatives, R$1.02bn | 232 cooperatives, R$239m |
+
+Members' deposits at the individual cooperatives are not in the panel, so adding the
+cooperatives' advertising would set R$1.02bn of spending against deposits that exclude theirs.
+One caveat stays: Banco Sicredi's own spending promotes a brand whose deposits are mostly outside
+the panel, so its advertising per real of deposits is high next to other banks (about 0.8%
+against about 0.1% for Banco do Brasil). Bank fixed effects absorb a constant gap of that kind.
+The film counts (5.8) follow the same choice.
+
+**Independent review of the assignment (2026-10-05).** A reviewer rebuilt the assignment from the
+registry with its own code. It agrees in 98.1% of institution-quarters, and every difference is
+one of the rules above. No institution-quarter is counted in two conglomerates, and no spending
+is attributed to an acquirer before the registry places the institution there. Across the 4,332
+conglomerate-quarters where both central-bank sources are observed, the median ratio of the
+consolidated document to the member sum is 1.000 in every year. Its findings (Will Financeira,
+C6 Consignado, PSA Finance) are the cases described above, fixed the same day.
+
+Known and left as it is: an institution the registry stops listing while it still files leaves
+its conglomerate from then on (22 institutions, R$117m; the largest are Avenue Securities since
+2024Q4 and Caixa Consórcios since 2022Q3).
+
+A member-sum row whose flow rests on a month taken as zero in the released file (5.10) carries
+`member_zero_inferred` in `flag_notes`: 731 of the 12,468 advertising rows.
 
 Measures are separate rows: `adv`, `adv_production` (the main own-file measure), `promo`, `publ`,
 `all3`, `as_filed` (the filing's own line, with whatever accounts the bank puts in it),
@@ -817,26 +957,26 @@ central bank's series 433 with the base pinned to 2024Q4, the window's end, so t
 not move when a new inflation month is published. Intensity is `adv_over_assets` on the
 conglomerate's total assets (the headline: constant within a conglomerate-quarter and free of the
 jumps that affect the deposit aggregate), `adv_over_deposits` alongside it with `deposits_suspect`
-marking the 431 rows whose market-panel deposit denominator jumps by more than half against the
-previous quarter, and `adv_over_admin` where the 2025 accounts give administrative expenses.
+marking the 7,039 rows whose market-panel deposit denominator jumps by more than half against the
+previous quarter, and `adv_over_admin` where the 2025 accounts give administrative expenses (the
+released file has no administrative total, so it is empty before 2025).
 
 `value_status` gives every cell one of five meanings, because a single NaN cannot carry them:
-`observed_positive` (5,220), `observed_zero` (1,299, validated published zeros), `observed_negative`
-(97, reversals and glosas), `imputed_from_row_total` (3, the BRB January 2018 cell of 5.6, counted
-as observed) and `not_observed_in_span` (4,061 rows generated inside a series' own span, so a gap
-inside a bank's history is visible as a row rather than as an absence).
+`observed_positive` (52,322), `observed_zero` (16,607), `observed_negative` (451, reversals and
+glosas), `imputed_from_row_total` (3, the BRB January 2018 cell of 5.6, counted as observed) and
+`not_observed_in_span` (13,809 rows generated inside a series' own span, so a gap inside a bank's
+history is visible as a row rather than as an absence).
 
 `segment_id` increments on any change of source, scope, bundle or key, so every join is legible
 without recomputing it. `registry_code` stores the code the IF.data registry gives the filer in that
-very quarter, beside the panel code, and `code_conflict` marks the 151 rows (10 conglomerates) where
-they disagree (10,436 of 10,680 rows carry one). Every such case is a filer whose acquirer the
-registry has already absorbed it into
-while the market panel still carries it as its own entity: Kirton into Bradesco, Alfa into Safra,
-Modal into XP, Traton into Volkswagen, Master BI and Letsbank and Pleno into Master, John Deere into
-Bradesco, Pan into BTG. The panel wins by design in all of them, since attaching the filer's
-advertising to the acquirer's code would both contaminate the acquirer and empty the filer. The
-column is empty on 244 rows, all of them quarters the registry list does not cover (2026) or
-quarters in which a filer publishes although the registry no longer lists it.
+very quarter, beside the panel code, and `code_conflict` marks the 687 rows (38 conglomerates) where
+they disagree (82,656 of 83,192 rows carry a registry code). When the panel held only 2025-2026
+there were 151 such rows, and every one was a filer whose acquirer the registry had already
+absorbed it into while the market panel still carried it as its own entity: Kirton into Bradesco,
+Alfa into Safra, Modal into XP, Traton into Volkswagen, Master BI and Letsbank and Pleno into
+Master, John Deere into Bradesco, Pan into BTG. The panel wins by design in those, since attaching
+the filer's advertising to the acquirer's code would both contaminate the acquirer and empty the
+filer. The 687 rows of the longer panel have not been listed one by one.
 
 Remaining columns: `validated`, `n_months_observed`, `n_entities` and `flag_notes` (named so because
 `flags` collides with the DataFrame attribute of that name).
@@ -851,13 +991,13 @@ and quarter. It is a separate table by decision (user, 2026-09-29): a count of f
 amount and does not belong among the measures above.
 
 Six checks abort the build: inputs present and every source contributing; every row carrying a
-panel code or being dropped with a counted reason (20 rows, institutions outside the panel); no
-duplicate keys; the deflator covering every quarter; no conglomerate-quarter mixing a consolidated
-filing with an individual filing of an entity inside it; and a printed 2025 reconciliation. That
-reconciliation gave a median ratio to the COSIF conglomerate advertising account of 1.05 for the
-filings, 1.31 for Caixa and 0.74 for the state banks when it was last read (2026-09-20). The build
-also stops if a Caixa month is read by both builders, or if the quarterly film counts do not add
-up to the monthly table.
+panel code or being dropped with a counted reason; no duplicate keys; the deflator covering every
+quarter; no conglomerate-quarter mixing a consolidated filing with an individual filing of an
+entity inside it; and a printed 2025 reconciliation. That reconciliation gives a median ratio to
+the COSIF conglomerate advertising account of 1.05 for the filings, 1.31 for Caixa and 0.74 for
+the state banks (2026-10-05 build). The build also stops if a Caixa month is read by both
+builders, if the quarterly film counts do not add up to the monthly table, or if two leaders
+file a consolidated document for the same conglomerate in the same quarter.
 
 Five defects of my own surfaced in the runs and are fixed: institution rows were dropped for want of
 a conglomerate code, then double-counted once mapped, because several institutions sit inside one
@@ -972,21 +1112,104 @@ it. A lost connection stops the run cleanly with exit code 75, and the same comm
 the cache. Nothing is written until every check has passed. `--offline` re-parses the cache
 without contacting any host.
 
-**Not done.**
+**Status since 2026-10-05: a cross-check, not a panel source.** The central bank's named file
+(5.10) gives every bank the same accounts on one definition from 2013, so the note series are
+not put in the panel, their parser gets no further work, and the eleven missing document
+listings and the search for a PicPay source are dropped (user decision).
 
-- The series are not in the assembled panel. That needs choices on the scope (individual or
-  consolidated), the line (bundled or advertising alone) and how the cumulative windows become
-  quarters.
-- BTG's note runs 14-20% above the COSIF sum for the accounts its label names. Unexplained.
-- Daycoval has one advertising window a year in 2015-2018. Not yet examined.
-- Safra's statements carry no advertising line after 2021.
-- Volkswagen's listing mixes entities (Banco Volkswagen and Consórcio Nacional Volkswagen) and
-  includes documents dated 2012 and 2026. Its series should not be used before that is sorted.
-- Eleven targets have no document listing implemented: Nu, Citibank, XP, Inter, C6, C6
-  Consignado, Sicredi, Sicoob, Master, Mercado Pago and Agibank. PicPay's press page links no
-  statement PDF.
-- The 70% floor still stops a run when a bank's failures come from a single document. The user's
-  rule (2026-09-30) is that one bad document must not stop a run.
+Five checks made on 2026-10-05, each against the named file or the 2025 public accounts:
+
+| Bank | Finding |
+|---|---|
+| BTG | The individual statement tracks BTG's own filing: 1.000 in 2020 and 2021, 1.05 in 2022, 1.06 in 2023, 1.17 in 2024, and 1.13-1.18 in each 2025 quarter. Its note line has grown beyond the three accounts. The consolidated statement does not follow the prudential conglomerate (1.15 to 1.65 by quarter in 2025). |
+| Daycoval | Every filing from 2016 to 2025 carries the advertising line; the one window a year in 2015-2018 is the parser failing to read the column headers of the 2016-2019 quarterly filings. But the note is 2 to 6 times what Daycoval reported to the central bank in 2015-2023, and equal to it in 2025: before 2025 the note line is a different object. |
+| Volkswagen | Good once the entities are separated. Banco Volkswagen's note equals its filing to the thousand (1.0000 in six years), and the bank plus Consórcio Nacional Volkswagen equals the conglomerate in 2025 (0.99-1.00). The bad ratios of the table above compared the consortium administrator with the bank. The 2012 document is not a statement note. |
+| Safra | The document LISTING stops at December 2021; it is not that later statements lack the line. Where it exists the note is 0.90 to 1.07 of the conglomerate's advertising account. |
+| PagBank | "Marketing e publicidade" is parsed in almost every document from 2019 to 2025; only two reach the period table because scope and window are not read on the rest. |
+
+Known limits left as they are: the 70% floor still stops a run when a bank's failures come from a
+single document, so a run needs `--unvalidated volkswagen`; and the Volkswagen, Daycoval, PagBank
+and Safra items above are not fixed.
+
+### 5.10 Central bank accounts, 2013-2024: `build_cosif_lai_advertising.py`
+
+**Input.** The named file of section 4: 514,175 rows, one per month, institution, document and
+account, for the accounts 81745009 (advertising), 81742002 (promotions and public relations) and
+81748006 (publications). These are the 8-digit codes in force until 2024 of the same three
+accounts the public files carry from 2025. The administrative-expense total is not in the file,
+so shares of it are empty before 2025.
+
+**Two levels.**
+
+- *Institution*: document 4010, the institution's own balancete, keyed by CNPJ8. 2,350
+  institutions, from January 2013.
+- *Conglomerate*: document 40605, the consolidated block of the prudential conglomerate's
+  balancete, keyed by the CNPJ8 of the conglomerate's LEADER, from July 2014. 215 leaders. The
+  file carries no prudential code; `cod_congl_2025` gives the code the leader has in the 2025
+  public files (146 of the 157 leaders of 2024 have one), and the crosswalk maps leaders to codes
+  quarter by quarter.
+
+**Flows.** Balances are stored negative and accumulate within each half-year. Monthly and
+quarterly flows come from the same functions as the 2025 script, so one method serves 2013-2026.
+Among institutions with a balance in both June and July the median July/June ratio is 0.16-0.18
+every year, which confirms the reset.
+
+**What an absent row means.** The file holds only non-zero balances, and institutions file at
+different frequencies: banks every month, many small institutions only at quarter ends or
+half-year ends. An absent month is therefore either a zero or a month the institution does not
+file. The rule:
+
+- An institution-year is *monthly* when it has a balance in a month other than March, June,
+  September or December.
+- In a monthly year, a month with no row is taken as a true zero when it precedes the first
+  balance of its half-year, or lies in a half-year with no balance, and falls between the
+  institution's first and last month in the file. 16,621 months are filled this way, and they
+  carry `zero_inferred`.
+- Every other absent month stays missing, and a flow that needs it is missing. 1,699 months
+  (0.87%) are left missing after a balance in the same half-year.
+- **No zero is ever inferred at the conglomerate level.** A conglomerate's document is filed by
+  its leader, and the leader can change: Banco Original led C0080903 until 2023Q2, PicPay from
+  2023Q3 to 2024Q3, Banco Original again from 2024Q4. A first version filled zeros there too and
+  wrote five zero quarters for XP's conglomerate in 2018-2019 while XP's own filing showed about
+  R$55m a quarter.
+
+Quarter flows use quarter-end balances only, so an institution that files at quarter ends still
+gets quarterly flows. 6.8% of the known institution-quarters rest on an inferred zero
+(`flow_uses_inferred_zero`); among the 100 largest institutions the filled months are 101, in 13
+institutions.
+
+**Outputs.**
+
+| Table | Rows | Content |
+|---|---|---|
+| `cosif_lai_advertising_monthly` | 247,706 | balances, monthly flows, `zero_inferred` |
+| `cosif_lai_advertising_quarterly` | 83,935 | quarterly flows in the columns of the 2025 table, plus `flow_known`, `flow_uses_inferred_zero`, `n_months_inferred`, `cod_congl_2025` |
+| `cosif_lai_advertising_halfyear` | 41,873 | the June and December balances, which are the flows of each half |
+| `cosif_lai_advertising_long` | 514,175 | the file as received, every document |
+
+73,763 institution-quarters have a known flow.
+
+**Validation.** Eleven checks stop the run before anything is written: the header, the 144
+months, the CNPJ and account formats, the sign of every balance, no repeated key in the two
+documents used, identity anchors (Banco do Brasil, Caixa, Itaú, Santander), the half-year reset,
+falls of a running total under 5% of month pairs (0.6-0.8% found), monthly flows adding up to
+quarter flows, the share of gaps, and Santander's statement note within 3% of the file in every
+year both have (0.972 to 1.017 over 2015-2024).
+
+An independent review recomputed every quarterly flow from the raw file with its own code, for
+all 2,350 institutions and all 215 leaders, and found no disagreement in any of 68,717
+institution-quarters and 4,984 conglomerate-quarters. It also found the conglomerate zero error
+described above, which is fixed.
+
+**Things the file shows that are worth knowing.**
+
+- Reclassifications inside a half-year are real and are kept, flagged `any_reversal`: PagSeguro's
+  advertising balance falls R$48.7m in December 2024, which leaves its 2024Q4 at R$78.9m against
+  R$170-205m in the three quarters before.
+- An account can be absent in a month between two months where it is positive (80 account-months,
+  mostly Caixa). The file says zero, so the flow falls and recovers; these quarters carry
+  `any_reversal`.
+- Sem Parar, a conglomerate with R$47m in the 2025 public accounts, is not in the file at all.
 
 ---
 
@@ -995,75 +1218,81 @@ without contacting any host.
 `diag_advertising_coverage.py` computes this, so the figures are reproducible rather than
 hand-typed; it writes `advertising_coverage_by_year.csv` and `advertising_coverage_by_source.csv`.
 
-A quarter counts as observed only when all three of its months are filed; a quarter short of a
-month is excluded. The rule mattered most for Caixa: until its scanned months were read, 2016Q2
-rested on a single month, which alone held 2016 at 38.7%. With April and May 2016 read, 2016 is
-69.5%, and the 2013 and 2014 rows exist at all.
+A quarter counts as observed only when all three of its months are known; a quarter short of a
+month is excluded.
 
-Share of panel deposits (sum of `dep_a1 + dep_a2 + dep_a4 + dep_a5`, Q4 denominator), from the
-build of 2026-10-01. The statement-note series of 5.9 are not in these figures.
+Share of panel deposits (sum of `dep_a1 + dep_a2 + dep_a4 + dep_a5`, Q4 denominator) held by
+conglomerates with an observed quarterly series, from the build of 2026-10-05:
 
-| Year | Quarterly, full year | Any quarter | Plus SEC annual | SEC alone |
+| Year | Conglomerates in the panel | With all four quarters | Share of deposits, all four quarters | Share of deposits, any quarter |
 |---|---|---|---|---|
-| 2013 | 67.0% | 79.9% | 67.0% | 0.0% |
-| 2014 | 66.6% | 79.8% | 66.6% | 0.0% |
-| 2015 | 66.8% | 78.6% | 86.8% | 30.9% |
-| 2016 | 69.5% | 81.9% | 89.3% | 32.8% |
-| 2017 | 79.2% | 80.8% | 89.6% | 38.2% |
-| 2018 | 78.2% | 79.1% | 89.7% | 42.3% |
-| 2019 | 77.1% | 78.3% | 88.7% | 42.4% |
-| 2020 | 73.4% | 75.0% | 86.1% | 46.7% |
-| 2021 | 71.0% | 73.4% | 84.3% | 46.5% |
-| 2022 | 71.1% | 71.7% | 85.2% | 45.8% |
-| 2023 | 69.0% | 70.5% | 83.7% | 45.5% |
-| 2024 | 64.6% | 68.1% | 80.3% | 44.6% |
-| 2025 | 98.9% | 99.0% | 98.9% | 45.1% |
+| 2013 | 67 | 63 | 99.97% | 99.97% |
+| 2014 | 83 | 80 | 99.97% | 99.97% |
+| 2015 | 82 | 79 | 100.00% | 100.00% |
+| 2016 | 197 | 156 | 99.79% | 99.79% |
+| 2017 | 203 | 162 | 99.85% | 99.85% |
+| 2018 | 204 | 176 | 99.92% | 99.92% |
+| 2019 | 218 | 177 | 99.93% | 99.93% |
+| 2020 | 248 | 195 | 99.89% | 99.93% |
+| 2021 | 278 | 215 | 99.87% | 99.91% |
+| 2022 | 332 | 238 | 99.60% | 99.86% |
+| 2023 | 384 | 276 | 99.80% | 99.91% |
+| 2024 | 428 | 283 | 99.67% | 99.88% |
+| 2025 | 469 | 436 | 99.88% | 99.95% |
 
-Full-year coverage runs 7 to 13 conglomerates before 2025 and 150 in 2025, when the COSIF accounts
-begin. By source, in share of Q4 deposits over 2016-2024: the filings carry 38-53%, Caixa's own
-files 16-31% (falling as its deposit share falls), the four state banks 0.2-3.2%, and the COSIF
-accounts 93-97% from 2025. The SEC series alone is 31-47% from 2015 but annual, so it cannot enter
-a quarterly regression.
+Before the central bank's named file the same column read 64.6% to 79.2% for 2016-2024, on 9 to
+13 conglomerates a year. The conglomerates still without a full year are small: they hold under
+0.4% of deposits in every year. 2022 is the lowest at 99.60%, because PicPay's own code holds
+deposits only from the third quarter of that year.
+
+By source, in share of Q4 deposits:
+
+| Source | Share of deposits | Years |
+|---|---|---|
+| Central bank accounts, member institutions summed | 99.6% to 100% | 2013-2025 |
+| Central bank accounts, consolidated document | 96.3% to 98.3% | 2015-2025 (the document starts in July 2014) |
+| Securities filings | 37% to 53% | 2013-2025 |
+| Caixa's own files | 16% to 31%, falling as its deposit share falls | 2013-2025 |
+| The four state banks' own files | 0% to 3.2% | 2014-2025 |
+
+The SEC series alone is 31-47% from 2015 but annual, so it cannot enter a quarterly regression.
 
 ### 6.1 Coverage of the estimation sample, and whether it survives fixed effects
 
 `diag_advertising_in_estimation.py` answers the question the design actually poses. It reads the E3
-spec-12 demand parquet, merges one source per conglomerate (never spliced: the source with the most
-in-window quarters, kept for the whole window), and writes three CSVs.
+spec-12 demand parquet, merges ONE source per conglomerate, kept for the whole window and never
+spliced, and writes three CSVs. The source is the central bank's accounts wherever they cover the
+window: the member institutions summed, else the consolidated document. Another source is chosen
+only when it covers more than four quarters beyond them. In this build 269 conglomerates take
+the member sum, one takes the consolidated document, and none takes another source.
 
-Coverage is better inside the estimation sample than in the panel at large, because the sample
-already restricts to banks with the data the demand system needs: 80.5-86.8% of estimation ROWS and
-67.1-80.9% of estimation deposits, on 13 to 16 conglomerates a year.
+| Year | Conglomerates in the sample | Covered | Share of rows | Share of deposits |
+|---|---|---|---|---|
+| 2016 | 112 | 107 | 99.99% | 99.90% |
+| 2017 | 116 | 113 | 99.99% | 100.00% |
+| 2018 | 122 | 119 | 99.99% | 100.00% |
+| 2019 | 120 | 116 | 99.97% | 99.96% |
+| 2020 | 156 | 148 | 99.98% | 99.95% |
+| 2021 | 182 | 175 | 99.97% | 99.94% |
+| 2022 | 210 | 197 | 99.96% | 99.94% |
+| 2023 | 236 | 218 | 99.94% | 99.94% |
+| 2024 | 275 | 236 | 99.85% | 99.77% |
 
-| Year | Conglomerates covered | Share of rows | Share of deposits |
-|---|---|---|---|
-| 2016 | 13 | 80.5% | 74.9% |
-| 2017 | 15 | 86.2% | 80.9% |
-| 2018 | 15 | 84.1% | 79.3% |
-| 2019 | 15 | 83.6% | 77.8% |
-| 2020 | 16 | 84.6% | 75.3% |
-| 2021 | 14 | 83.3% | 71.8% |
-| 2022 | 14 | 86.8% | 71.7% |
-| 2023 | 14 | 85.2% | 69.5% |
-| 2024 | 14 | 85.9% | 67.1% |
-
-Seventeen conglomerates appear in total; 16 have at least 8 in-window quarters and 12 have at least
-20. Reading Caixa's two scanned months of 2016 moved that year's deposit coverage from 64.3% to
-74.9%. The four validated statement-note banks of 5.9 (13.1 points of 2024Q4 panel deposits) would
-add to these figures once they are in the panel.
+Before the named file the sample was covered for 13 to 16 conglomerates a year, 67% to 81% of its
+deposits. Now 270 conglomerates appear in total, 182 with at least 8 in-window quarters, 102 with
+at least 20, and 17 with all 36. That makes 4,304 conglomerate-quarters, against about 450 before.
 
 The identifying variation survives the two-way fixed effects the demand equation carries:
 
 | Variable | After conglomerate FE | After conglomerate and quarter FE | Absorbed |
 |---|---|---|---|
-| log real advertising | 10.7% | 8.7% | 91.3% |
-| advertising / total assets | 37.2% | 33.5% | 66.5% |
+| log real advertising | 13.8% | 13.0% | 87.0% |
+| advertising / total assets | 55.5% | 55.2% | 44.8% |
 
-That is the test `frac_4g5g` failed at 98.9% absorbed. With a median within-bank sd of log real
-advertising of 0.52, the 8.7% surviving leaves about 0.15 log points of within-bank, within-quarter
-variation over roughly 450 conglomerate-quarters. One caveat on the ratio's larger residual: its
-denominator moves too, so part of what survives in `advertising / total assets` is total assets
-rather than advertising. The log measure is the conservative read, and it passes.
+That is the test `frac_4g5g` failed at 98.9% absorbed. The median within-bank standard deviation
+of log real advertising is 0.82. One caveat on the ratio's larger residual: its denominator moves
+too, so part of what survives in `advertising / total assets` is total assets rather than
+advertising. The log measure is the conservative read, and it passes.
 
 ---
 
@@ -1076,6 +1305,10 @@ rather than advertising. The log measure is the conservative read, and it passes
   only; no pipeline file is written or regenerated by any advertising script, and no pipeline
   module is imported (several re-run themselves as scripts when imported outside the project
   interpreter).
+- The market panel has NEGATIVE deposits in 27 rows of 2025 and in none before: Banco Sicredi in
+  2025Q1 and 2025Q2 (about -R$40bn a quarter, positive again from Q3), Banco Sofisa and Banco
+  BMG. Found on 2026-10-05 while checking the cooperative banks. It is in the main data pipeline,
+  which no advertising script touches, and outside the 2016-2024 estimation window.
 - Parsing constraints on this machine: a local OCR engine is installed and reads Caixa's scans
   (9.1, 5.6); there is no ODS reader library (Banco do Nordeste's files).
 
@@ -1127,18 +1360,18 @@ separately. [^kantar]
 
 ## 9. Sources found but not yet collected
 
-- **Statement notes for the twelve targets with no usable listing.** The route is built and six
-  banks are written (5.9). Twelve of the eighteen targets, 11.6 points of 2024Q4 panel deposits,
-  still have none: eleven need a document listing written for the bank's own site (Nu, Citibank,
-  XP, Inter, C6, C6 Consignado, Sicredi, Sicoob, Master, Mercado Pago, Agibank), and PicPay's press
-  page links no statement PDF. The `cvm_rad` route covers Santander, BTG and Daycoval from one
-  host, the regulator's document system; everything else is the `ir_site` route, one domain per
-  bank.
+- **Statement notes for the twelve targets with no usable listing: dropped on 2026-10-05.** The
+  central bank's named file has all twelve (Nu, Citibank, XP, Inter, C6, C6 Consignado, Sicredi,
+  Sicoob, Master, Mercado Pago, Agibank and PicPay), on the same accounts as everyone else, so no
+  listing is written for them.
 - **Scanned documents still unread.** Caixa's 20 scanned months are read (5.6). What remains is
   BRB's 38 scanned gazette files, the reason its 2024 shows 9 months rather than 12, and Banrisul's
   November 2024 PDF, whose text layer has a font with no Unicode map. The OCR engine of 9.1 reads
-  such pages; the work is rebuilding each table from the OCR boxes.
-- **The central bank's unnamed 2013-2024 file** (section 4) is in hand and has no reader.
+  such pages; the work is rebuilding each table from the OCR boxes. With the central bank's
+  accounts as the main measure these files matter only as a cross-check.
+- **The administrative-expense total before 2025.** The named file does not carry it. The public
+  files do, at level 3, for every institution and month since 2013, so shares of administrative
+  expense for 2013-2024 could be added from there.
 - **News and union compilations**: a news series on state-bank advertising 2019-2024, and a union
   study on state-bank sponsorship 2018-2023 (2023: BRB R$129.3m, Banrisul R$81.4m, Banpara R$17.6m,
   Banestes R$6.2m). Useful cross-checks on the banks' own files.
@@ -1208,6 +1441,7 @@ Reproduce with `python diag_ocr_benchmark.py --months 20 --dpi 200` and
 
 ```text
 python scrape_cosif_advertising.py              # 2025 onward; aborts on any failed check
+python build_cosif_lai_advertising.py           # 2013-2024 from the central bank's named file
 python scrape_cvm_advertising.py                # 2013 onward from the CVM cache
 python scrape_cvm_advertising.py --refresh      # redownload the CVM yearly zips first
 python scrape_sec_advertising.py                # SEC 20-F instances, cached after the first run
@@ -1237,6 +1471,7 @@ which case nothing is written. As of 2026-10-04 it needs `--unvalidated volkswag
 
 `scrape_statebank_advertising.py --banks <one>` rewrites the four combined outputs with that bank
 alone, so a single-bank run is for diagnosis only and must be followed by a full run before the
-assembly reads those files. The order matters in one more place: the crosswalk reads every scraper's
-output, and the assembly reads the crosswalk, so a re-scrape of any source needs both rebuilt after
-it.
+assembly reads those files. The order matters in two more places. The crosswalk reads every
+scraper's output, and the assembly reads the crosswalk, so a re-scrape of any source needs both
+rebuilt after it. And `build_cosif_lai_advertising.py` runs after `scrape_cosif_advertising.py`,
+because it takes each conglomerate leader's 2025 code from that script's output.

@@ -28,6 +28,7 @@ from utils import paths as _paths_mod
 from utils import state_transform as _st
 from utils import se_national as _sen
 from utils import sleep_notes as _notes
+import sleep_first_stage_strength as _fss
 
 _DRAFTS_DIR = _paths_mod.drafts_dir()
 # rout_dir/est_dir follow SLEEP_OUT_ROOT, so a sandboxed run exports the fits it just
@@ -136,6 +137,18 @@ def fmt3(x, digits=3):
     return s
 
 
+def eff_f_cell(est_num, spec_key, math=True):
+    """The effective-F cell of routine `est_num` under `spec_key` (e.g. 'IV_HausmanFull x Tech'),
+    read from Rout/sleep_first_stage_strength.json and shown at three decimals. Blank when the
+    file holds no value for the column: a specification without excluded instruments, or a file
+    that has not been written. `math=False` returns the bare number for tables whose cells are
+    not in math mode."""
+    v = _fss.eff_f(est_num, spec_key)
+    if v is None:
+        return ""
+    return f"${fmt3(v)}$" if math else fmt3(v)
+
+
 def pdflatex_clean(stdout: str) -> bool:
     """True unless the pdflatex transcript contains a LaTeX error (a line starting with '!').
     -interaction=nonstopmode keeps going after an error -- inserting placeholders, skipping the
@@ -236,17 +249,21 @@ def build_first_stage_table(results_dict, est_num):
             if has_val:
                 lines.append(f"    {clean_name(var)} & " + " & ".join(coef_strs) + r" \\*")
                 lines.append("    & " + " & ".join(se_strs) + r" \\")
-        obs_l, rsq_l, fstat_l, g_l = [], [], [], []
+        obs_l, rsq_l, fstat_l, efff_l, g_l = [], [], [], [], []
         for ik, _ in ivs:
             res = _get_res(ik, panel)
             if res is None:
-                obs_l.append("---"); rsq_l.append("---"); fstat_l.append("---"); g_l.append("---"); continue
+                obs_l.append("---"); rsq_l.append("---"); fstat_l.append("---"); efff_l.append("")
+                g_l.append("---"); continue
             obs_l.append(f"{int(res.nobs):,}"); rsq_l.append(fmt3(res.rsquared))
             fv = getattr(res, 'fvalue', None); fp = getattr(res, 'f_pvalue', 1.0)
             fstat_l.append(f"${fmt3(fv)}^{{{stars(fp)}}}$" if fv is not None else "---")
+            efff_l.append(eff_f_cell(est_num, f"{ik} x {panel}"))
             g_l.append(str(getattr(res, 'G_nominal', '---')))
         lines += [r"    \midrule", "    Observations & " + " & ".join(obs_l) + r" \\",
-                  "    $R^2$ & " + " & ".join(rsq_l) + r" \\", "    F-Statistic & " + " & ".join(fstat_l) + r" \\",
+                  "    $R^2$ & " + " & ".join(rsq_l) + r" \\",
+                  f"    {_notes.ROW_F_ALL} & " + " & ".join(fstat_l) + r" \\",
+                  f"    {_notes.ROW_F_EFF} & " + " & ".join(efff_l) + r" \\",
                   "    Fixed Effects & No & No & No \\\\", "    Clusters ($G$) & " + " & ".join(g_l) + r" \\",
                   r"    \bottomrule"]
     lines += [r"\end{xltabular}", r"\doublespacing"]
@@ -411,6 +428,8 @@ def build_second_stage_table(results_dict, est_num):
         _sen.AME_SE_TOKEN, _sen.ame_se_note())
 
 
+# \parencite belongs to biblatex, which the preview does not load; the first-stage note cites
+# with it, so the preview prints the citation key in parentheses.
 _STANDALONE_PREAMBLE = r"""\documentclass[12pt]{article}
 \usepackage[letterpaper, margin=1in]{geometry}
 \usepackage[utf8]{inputenc}
@@ -428,6 +447,7 @@ _STANDALONE_PREAMBLE = r"""\documentclass[12pt]{article}
 \renewcommand{\arraystretch}{1.08}
 \usepackage{hyperref}
 \hypersetup{colorlinks=true, linkcolor=blue}
+\providecommand{\parencite}[1]{(#1)}
 """
 
 

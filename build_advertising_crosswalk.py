@@ -9,7 +9,10 @@ Sources covered
 ---------------
   cosif_conglomerate  entity_key is already a prudential code; only its presence in the
                       market panel is checked
-  cosif_institution   CNPJ8 from the BANCOS balancetes
+  cosif_institution   CNPJ8 from the BANCOS balancetes (2025 onward) and from the file the
+                      central bank released for 2013-2024
+  cosif_leader        CNPJ8 of a prudential conglomerate's leader, the key of the conglomerate
+                      documents in the released file. Only the codes it LEADS are candidates.
   cvm                 CNPJ8 of BCB-supervised CVM filers with an advertising-type line
   sec                 SEC filer CIK, through the CNPJ8 of its Brazilian operating institution
   statebank           state-owned banks' own disclosures and sponsorship files
@@ -104,25 +107,32 @@ def load_registry() -> pd.DataFrame:
     reg = pd.concat(frames, ignore_index=True)
     for c in cols:
         reg[c] = reg[c].str.strip()
+    # Only fields that actually hold digits become a CNPJ8: Banco do Brasil's is 00000000, so
+    # zero-filling a blank field would match it to unrelated conglomerates.
+    for col, key in (("CodInst", "inst8"), ("CnpjInstituicaoLider", "leader8")):
+        digits = reg[col].str.fullmatch(r"\d{1,8}", na=False)
+        reg[key] = reg[col].str.zfill(8).where(digits)
     log.info("IF.data lists: %d files, %d rows, %s-%s", len(files), len(reg),
              reg["Data"].min(), reg["Data"].max())
     return reg
 
 
 def registry_name(reg: pd.DataFrame, cnpj8: str) -> str:
-    numeric = reg["CodInst"].str.fullmatch(r"\d{1,8}", na=False)
-    own = reg[numeric & (reg["CodInst"].str.zfill(8) == cnpj8)].sort_values("Data")
+    own = reg[reg["inst8"] == cnpj8].sort_values("Data")
     return own["NomeInstituicao"].iloc[-1] if len(own) else ""
 
 
-def candidates(reg: pd.DataFrame, cnpj8: str) -> pd.DataFrame:
-    # Only fields that actually hold digits are compared: Banco do Brasil's CNPJ8 is 00000000,
-    # so zero-filling a blank field would match it to unrelated conglomerates.
-    numeric = reg["CodInst"].str.fullmatch(r"\d{1,8}", na=False)
-    as_member = reg[numeric & (reg["CodInst"].str.zfill(8) == cnpj8)]
-    has_leader = reg["CnpjInstituicaoLider"].str.fullmatch(r"\d{1,8}", na=False)
-    as_leader = reg[has_leader & (reg["CnpjInstituicaoLider"].str.zfill(8) == cnpj8)]
-    rows = pd.concat([as_member, as_leader]).dropna(subset=["CodConglomeradoPrudencial"])
+def candidates(reg: pd.DataFrame, cnpj8: str, leader_only: bool = False) -> pd.DataFrame:
+    """Every prudential code the registry gives a CNPJ8, with its first and last quarter.
+
+    By default the CNPJ8 counts both as a member and as a leader. `leader_only` keeps the codes
+    it LEADS: a conglomerate's consolidated document is filed under its leader, so a bank that
+    led its own conglomerate and was later absorbed into another's must not carry that
+    document into the second.
+    """
+    as_leader = reg[reg["leader8"] == cnpj8]
+    rows = as_leader if leader_only else pd.concat([reg[reg["inst8"] == cnpj8], as_leader])
+    rows = rows.dropna(subset=["CodConglomeradoPrudencial"])
     return (rows.groupby("CodConglomeradoPrudencial")["Data"].agg(["min", "max"])
                 .reset_index().sort_values("min"))
 
@@ -130,8 +140,9 @@ def candidates(reg: pd.DataFrame, cnpj8: str) -> pd.DataFrame:
 PERIODS: list[dict] = []
 
 
-def map_entity(reg, panel_codes, panel_names, source, source_id, source_name, cnpj8):
-    cand = candidates(reg, cnpj8)
+def map_entity(reg, panel_codes, panel_names, source, source_id, source_name, cnpj8,
+               leader_only: bool = False):
+    cand = candidates(reg, cnpj8, leader_only)
     cand["in_panel"] = cand["CodConglomeradoPrudencial"].isin(panel_codes)
     for r in cand.itertuples():
         PERIODS.append({"source": source, "source_id": source_id, "cnpj8": cnpj8,
@@ -190,6 +201,20 @@ def main() -> None:
         rows.append(map_entity(reg, panel_codes, panel_names, "cosif_institution",
                                r.entity_key, r.entity_name, r.entity_key))
 
+    # The file the central bank released for 2013-2024 is the same source as the public
+    # accounts, so its institutions join `cosif_institution`. Its conglomerate documents are
+    # keyed by the leader's CNPJ8, not by a prudential code, and get their own source.
+    lai = pd.read_parquet(PROC / "cosif_lai_advertising_quarterly.parquet")
+    lai = lai.sort_values(["year", "quarter"]).drop_duplicates(["level", "entity_key"],
+                                                               keep="last")
+    in_2025 = set(cq.loc[cq["level"] == "institution", "entity_key"])
+    for r in lai[(lai["level"] == "institution") & ~lai["entity_key"].isin(in_2025)].itertuples():
+        rows.append(map_entity(reg, panel_codes, panel_names, "cosif_institution",
+                               r.entity_key, r.entity_name, r.entity_key))
+    for r in lai[lai["level"] == "conglomerate"].itertuples():
+        rows.append(map_entity(reg, panel_codes, panel_names, "cosif_leader", r.entity_key,
+                               r.entity_name, r.entity_key, leader_only=True))
+
     cvm = pd.read_parquet(PROC / "cvm_advertising_quarterly.parquet")
     for r in cvm[cvm["bcb_supervised"]].drop_duplicates("CD_CVM").itertuples():
         rows.append(map_entity(reg, panel_codes, panel_names, "cvm", r.CD_CVM, r.DENOM_CIA,
@@ -214,6 +239,9 @@ def main() -> None:
 
     expected = {("cosif_conglomerate", k) for k in cq.loc[cq["level"] == "conglomerate", "entity_key"]}
     expected |= {("cosif_institution", k) for k in cq.loc[cq["level"] == "institution", "entity_key"]}
+    expected |= {("cosif_institution", k)
+                 for k in lai.loc[lai["level"] == "institution", "entity_key"]}
+    expected |= {("cosif_leader", k) for k in lai.loc[lai["level"] == "conglomerate", "entity_key"]}
     expected |= {("cvm", k) for k in cvm.loc[cvm["bcb_supervised"], "CD_CVM"]}
     expected |= {("sec", str(k)) for k in sec["cik"]}
     present = set(zip(xw["source"], xw["source_id"]))

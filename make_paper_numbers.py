@@ -565,10 +565,104 @@ def collect_bbl(doc: dict, path: pathlib.Path, target: str, sc_target: str, note
             checks=[check_cell(T7, f"D firms, zeta 95% CI, {rname(E0)}",
                                t7_cell(t7_row(r"\quad 95\% CI", "D", after=sym["zeta"]), E0, "D"),
                                [lo, hi])])
+    # D firms: the slope and the intercept, per routine (the interval of the first routine's slope
+    # is the entry above).
+    for E in ROUTINES:
+        v, lo, hi, ci = est_ci(E, "D", "zeta")
+        if v is not None:
+            add(f"bbl.t7.zeta.E{E}.D.estimate", "3.5(a) Table 7", f"zeta^D, {rname(E)}", v,
+                "zeta-hat for D firms (native per-quarter units)",
+                f"{src} sections.cost_tables.blocks.E{E}_D.zeta", status,
+                run=run_of("cost_tables", [E]), display=disp(v),
+                checks=[check_cell(T7, f"D firms, zeta, {rname(E)}",
+                                   t7_cell(t7_row(sym["zeta"], "D"), E, "D"), [v])])
+            if E != E0:
+                add(f"bbl.t7.zeta.E{E}.D.ci", "3.5(a) Table 7", f"zeta^D interval, {rname(E)}",
+                    [lo, hi], "95% interval of zeta-hat for D firms from inverting the eq:16 criterion",
+                    f"{src} sections.cost_tables.blocks.E{E}_D.ci_zeta.ci_lo/ci_hi", status,
+                    run=run_of("cost_tables", [E]), display=disp_ci(lo, hi),
+                    checks=[check_cell(T7, f"D firms, zeta 95% CI, {rname(E)}",
+                                       t7_cell(t7_row(r"\quad 95\% CI", "D", after=sym["zeta"]), E, "D"),
+                                       [lo, hi])])
+        v, lo, hi, ci = est_ci(E, "D", "omega")
+        if v is not None:
+            inc0 = (lo <= 0.0 <= hi) if _finite(lo) and _finite(hi) else None
+            add(f"bbl.t7.omega.E{E}.D", "3.5(a) Table 7", f"omega^D, {rname(E)}",
+                dict(estimate=v, ci=[lo, hi], ci_includes_zero=inc0),
+                "omega-hat for D firms (native per-quarter units) and its 95% interval from inverting "
+                "the eq:16 criterion (ci_includes_zero: whether 0 lies in the interval)",
+                f"{src} sections.cost_tables.blocks.E{E}_D.omega, .ci_omega.ci_lo/ci_hi", status,
+                run=run_of("cost_tables", [E]),
+                display=f"{disp(v)} {disp_ci(lo, hi) if _finite(lo) else '--'}"
+                        f"; includes 0: {'yes' if inc0 else 'no'}",
+                checks=[check_cell(T7, f"D firms, omega, {rname(E)}",
+                                   t7_cell(t7_row(sym["omega"], "D"), E, "D"), [v]),
+                        check_cell(T7, f"D firms, omega 95% CI, {rname(E)}",
+                                   t7_cell(t7_row(r"\quad 95\% CI", "D", after=sym["omega"]), E, "D"),
+                                   [lo, hi])])
+
+    def cmed_entry(id_, plan, what, b, tname, tab, pan, k, E, src_field, st, run):
+        """The cost at the median shifters of one block, c-bar + gamma'Z-bar, read from the block's
+        cbar_at_median_shifters record. -> the record when it holds an estimate, else None."""
+        cm = (b or {}).get("cbar_at_median_shifters") or {}
+        mv, msd = cm.get("estimate_ann"), cm.get("sd_ann")
+        mlo, mhi = cm.get("ci_lo_ann"), cm.get("ci_hi_ann")
+        if cm.get("status") != "ok" or not _finite(mv):
+            return None
+        mexcl = (mlo > 0.0 or mhi < 0.0) if _finite(mlo) and _finite(mhi) else None
+        lab = r"$\hat{\bar c}^{\mathrm{%s}}+" % k
+        add(id_, plan, f"{what}, {k} firms, {rname(E)}",
+            dict(estimate=mv, sd=msd, ci=[mlo, mhi], ci_excludes_zero=mexcl),
+            "c-bar + gamma'Z-bar = omega + rbar_f * zeta + gamma'Z-bar, the marginal cost of deposits "
+            "of a firm with median cost shifters: Z-bar is the median, shifter by shifter, of "
+            "dpsi_3/dpsi_2 over the rows rbar_f is taken over. Compounded annual pp; sd: firm-block "
+            "bootstrap (delta method); ci: subsampling 95% interval; ci_excludes_zero: whether the "
+            "interval excludes 0",
+            f"{src} {src_field}.cbar_at_median_shifters.estimate_ann, .sd_ann, .ci_lo_ann/.ci_hi_ann",
+            st, run=run, unit="compounded annual pp",
+            display=f"{disp(mv)} ({disp(msd)}) {disp_ci(mlo, mhi) if _finite(mlo) else '--'}; "
+                    f"excludes 0: {'yes' if mexcl else 'no'}",
+            detail=dict(zbar=cm.get("zbar"), gamma_zbar=cm.get("gamma_zbar"), rbar=cm.get("rbar"),
+                        psi_source=cm.get("psi_source")),
+            checks=[check_cell(tname, f"Panel {k}, cost at median shifters, {rname(E)}",
+                               tab.cell(tab.find(lab, panel=pan), E), [mv]),
+                    check_cell(tname, f"Panel {k}, cost at median shifters SD, {rname(E)}",
+                               tab.cell(tab.find(r"\quad {\scriptsize at median", panel=pan), E),
+                               [msd]),
+                    check_cell(tname, f"Panel {k}, cost at median shifters 95% CI, {rname(E)}",
+                               tab.cell(tab.find(r"\quad 95\% CI", panel=pan, after=lab), E),
+                               [mlo, mhi])])
+        return cm
+
+    def cmed_count(id_, plan, what, recs, src_field, st, run=None):
+        """Signs and intervals of the cost at the median shifters, counted over the blocks."""
+        if not recs:
+            return
+
+        def _x(c, side):
+            lo, hi = c.get("ci_lo_ann"), c.get("ci_hi_ann")
+            return _finite(lo) and _finite(hi) and (lo > 0.0 if side > 0 else hi < 0.0)
+        cnt = dict(total=len(recs), positive=sum(c["estimate_ann"] > 0.0 for c in recs.values()))
+        for k in BLOCKS:
+            of_k = [c for (E, k2), c in recs.items() if k2 == k]
+            cnt[f"{k}_blocks"] = len(of_k)
+            cnt[f"{k}_positive"] = sum(c["estimate_ann"] > 0.0 for c in of_k)
+            cnt[f"{k}_ci_above_zero"] = sum(_x(c, +1) for c in of_k)
+            cnt[f"{k}_ci_below_zero"] = sum(_x(c, -1) for c in of_k)
+        add(id_, plan, f"{what}: signs and intervals, counted", cnt,
+            "Over the routine x firm-type blocks: how many estimates of the cost at the median "
+            "shifters are positive (in all and per firm type), and per firm type how many 95% "
+            "intervals lie entirely above zero and entirely below zero",
+            f"{src} {src_field}.*.cbar_at_median_shifters", st, run=run,
+            display=f"{cnt['positive']} of {cnt['total']} positive; "
+                    + "; ".join(f"{k}: {cnt[f'{k}_ci_above_zero']} above 0, "
+                                f"{cnt[f'{k}_ci_below_zero']} below 0, of {cnt[f'{k}_blocks']}"
+                                for k in BLOCKS))
 
     # ── Table 9 ──
     t9 = table(T9)
     rng = {}
+    cmeds = {}
     for E in ROUTINES:
         for k in BLOCKS:
             b = blocks.get(f"E{E}_{k}")
@@ -609,7 +703,13 @@ def collect_bbl(doc: dict, path: pathlib.Path, target: str, sc_target: str, note
                                    t9.cell(t9.find(r"$\hat{\bar c}", panel=p), E), [cb]),
                         check_cell(T9, f"Panel {k}, c-bar 95% CI, {rname(E)}",
                                    t9.cell(t9.find(r"\quad 95\% CI", panel=p), E), [lo, hi])])
-            for key, val in (("violated", fb), ("rbar", rb), ("cbar", cb)):
+            cm = cmed_entry(f"bbl.t9.cmed.E{E}.{k}", "3.5(d) Table 9", "Cost at median shifters", b,
+                            T9, t9, p, k, E, f"sections.cost_tables.blocks.E{E}_{k}", status,
+                            run_of("cost_tables", [E]))
+            if cm:
+                cmeds[(E, k)] = cm
+            for key, val in (("violated", fb), ("rbar", rb), ("cbar", cb),
+                             ("cmed", cm.get("estimate_ann") if cm else None)):
                 rng.setdefault((key, k), []).append(val)
     fbs = [v for k in BLOCKS for v in rng.get(("violated", k), []) if _finite(v)]
     if fbs:
@@ -617,14 +717,17 @@ def collect_bbl(doc: dict, path: pathlib.Path, target: str, sc_target: str, note
             [min(fbs), max(fbs)], "min and max of the violated share over routine x firm type",
             f"{src} sections.cost_tables.blocks.*.frac_bind", status,
             run=run_of("cost_tables", ROUTINES), display=disp_ci(min(fbs), max(fbs)))
-    for key, what in (("rbar", "rbar_f"), ("cbar", "c-bar")):
+    for key, what in (("rbar", "rbar_f"), ("cbar", "c-bar"),
+                      ("cmed", "cost at median shifters")):
         for k in BLOCKS:
             vals = [v for v in rng.get((key, k), []) if _finite(v)]
             if vals:
                 add(f"bbl.t9.{key}.{k}.range", "3.5(d) Table 9",
                     f"{what}^{k}, range over routines", [min(vals), max(vals)],
                     f"min and max over routines of {what} for {k} firms (compounded annual pp)",
-                    f"{src} sections.cost_tables.blocks.E*_{k}.{key}_ann", status,
+                    f"{src} sections.cost_tables.blocks.E*_{k}."
+                    + ("cbar_at_median_shifters.estimate_ann" if key == "cmed" else f"{key}_ann"),
+                    status,
                     run=run_of("cost_tables", ROUTINES), display=disp_ci(min(vals), max(vals)),
                     unit="compounded annual pp")
                 if key == "rbar":
@@ -656,6 +759,8 @@ def collect_bbl(doc: dict, path: pathlib.Path, target: str, sc_target: str, note
             display=f"{cnt['positive']} of {cnt['total']} positive; "
                     + "; ".join(f"{k}: {cnt[f'{k}_excl_zero']} of {cnt[f'{k}_blocks']} exclude 0"
                                 for k in BLOCKS))
+    cmed_count("bbl.t9.cmed.count", "3.5(d) Table 9", "Cost at median shifters", cmeds,
+               "sections.cost_tables.blocks", status, run_of("cost_tables", ROUTINES))
 
     # ── appendix up/down ──
     ud = (secs.get("tab_bbl_violated_by_sign") or {}).get("routines") or {}
@@ -766,6 +871,12 @@ def collect_bbl(doc: dict, path: pathlib.Path, target: str, sc_target: str, note
         st = "ok" if p.get("tag") == want else f"pending-{want}"
         note = disc_note(tname)
         exp = sorted({(fmt3(q["beta"]), int(q["T"])) for q in designs if q.get("beta") is not None})
+        # A table whose Notes print no discount sentence has nothing to cross-check here.
+        checks = [] if note == [] else [
+            dict(table=tname, cell="discount sentence of the Notes (beta, T)",
+                 expected=[list(x) for x in exp],
+                 printed=None if note is None else [list(x) for x in note], raw=None,
+                 ok=note == exp, why=None if note == exp else "differs")]
         add(id_, "Tables 9/11 columns", label,
             dict(tag=p.get("tag"), beta=p.get("beta"), T=p.get("T")),
             "The psi tag of the run behind the column and the discount factor beta (per quarter) "
@@ -775,10 +886,7 @@ def collect_bbl(doc: dict, path: pathlib.Path, target: str, sc_target: str, note
                                     f"T {p['T']}" if p.get("beta") is not None else
                                     f"tag {_tag_txt(p.get('tag'))}, "
                                     "no beta/T recorded"),
-            checks=[dict(table=tname, cell="discount sentence of the Notes (beta, T)",
-                         expected=[list(x) for x in exp], printed=None if note is None
-                         else [list(x) for x in note], raw=None, ok=note == exp,
-                         why=None if note == exp else "differs")])
+            checks=checks)
 
     for E in ROUTINES:
         col_entry(f"bbl.t9.col.E{E}", f"Table 9 column {rname(E)}", prov("cost_tables", E), target,
@@ -812,6 +920,17 @@ def collect_bbl(doc: dict, path: pathlib.Path, target: str, sc_target: str, note
                                t11.cell(t11.find(r"$\hat{\bar c}", panel=panel[k]), E), [cb]),
                     check_cell(T11, f"Panel {k}, c-bar 95% CI, {rname(E)}",
                                t11.cell(t11.find(r"\quad 95\% CI", panel=panel[k]), E), [lo, hi])])
+    scmeds = {}
+    for (E, k), b in sblocks.items():
+        cm = cmed_entry(f"bbl.t11.cmed.E{E}.{k}", "Table 11", "Cost at median shifters, single curve",
+                        b, T11, t11, panel[k], k, E,
+                        f"sections.tab_bbl_cbar_design.single.blocks.E{E}_{k}", st11,
+                        [dict(routine=rname(E), **{kk: (sc.get("provenance") or {}).get(f"E{E}", {}).get(kk)
+                                                   for kk in ("tag", "beta", "T", "source")})])
+        if cm:
+            scmeds[(E, k)] = cm
+    cmed_count("bbl.t11.cmed.count", "Table 11", "Single-curve cost at median shifters", scmeds,
+               "sections.tab_bbl_cbar_design.single.blocks", st11)
     if sblocks:
         def _x(b):
             lo, hi = b.get("ci_lo_ann"), b.get("ci_hi_ann")
@@ -1592,8 +1711,96 @@ def collect_slide_deposit_types(notes: list):
             display=f"spread {shown}; share {fmt3s(r['share'])}%", checks=checks)
 
 
+# ── K: strength of the sleepiness first stage ────────────────────────────────
+FS_SPEC = "IV_HausmanFull x Tech"   # specification 12
+FS_ROW_EFF = r"Effective $F$ (excluded instruments)"
+FS_ROW_ALL = r"$F$, all slopes"
+
+
+def _tech_panel_cell(tname: str, label: str):
+    """Last cell (the Hausman column) of the row `label` in the Tech panel of a first-stage table;
+    None when the table or the row is absent."""
+    path = TABLES_DIR / tname
+    if not path.is_file():
+        return None
+    in_tech, cell = False, None
+    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        s = line.strip()
+        if s.startswith(r"\multicolumn") and "Panel" in s:
+            in_tech = "Tech" in s
+        elif in_tech and s.startswith(label):
+            cell = re.sub(r"\\\\\*?\s*$", "", s).split("&")[-1].strip()
+    return cell
+
+
+def collect_first_stage_strength(notes: list):
+    """The first stage of the sleepiness estimation under specification 12, per routine, from the
+    sidecar sleep_first_stage_strength.py writes: the effective F of the excluded instruments
+    (Montiel Olea and Pflueger), their joint F, the joint F of all slopes, and the critical values.
+    The two F rows the first-stage tables print are checked against it."""
+    p = _paths.rout_dir() / "sleep_first_stage_strength.json"
+    if not p.is_file():
+        notes.append(f"{p.name} not found in Rout; run sleep_first_stage_strength.py for the "
+                     "sleep.fs.* entries.")
+        return
+    sc = json.loads(p.read_text(encoding="utf-8"))
+    ident = (sc.get("_meta") or {}).get("identity_check") or {}
+    if ident.get("passed") is not True:
+        notes.append(f"{p.name}: its identity check against weak_iv_sleep.json is not recorded as "
+                     "passed; the sleep.fs.* entries are not built.")
+        return
+    src = f"Rout/{p.name} (written by sleep_first_stage_strength.py from the stored fits)"
+    effs = {}
+    for E in _routines.ACTIVE:
+        r = (sc.get(f"E{E}") or {}).get(FS_SPEC)
+        if not r or not _finite(r.get("eff_F")):
+            notes.append(f"{p.name} has no {FS_SPEC} cell for {rname(E)}.")
+            continue
+        tname = f"est{E}_first_stage_table.tex"
+        eff, excl, fall = r["eff_F"], r.get("excl_F"), r.get("F_all_slopes")
+        cv = r.get("mop_cv") or {}
+        effs[E] = eff
+        add(f"sleep.fs.eff_f.E{E}", "sleep first stage", f"Effective F, first stage, {rname(E)}",
+            eff, "Effective F of the seven excluded instruments of specification 12 (Montiel Olea "
+            "and Pflueger), conglomerate-clustered, on the first stage as estimated (types 4 and 5 "
+            "pooled, constant and state controls partialled out)",
+            f"{src} E{E}.{FS_SPEC}.eff_F", "ok", display=disp(eff),
+            detail=dict(N=r.get("N"), G=r.get("G"), n_iv=r.get("n_iv")),
+            checks=[check_cell(tname, f"Tech panel, {FS_ROW_EFF}, Hausman column",
+                               _tech_panel_cell(tname, FS_ROW_EFF), [eff])])
+        if _finite(excl):
+            add(f"sleep.fs.excl_f.E{E}", "sleep first stage",
+                f"F of the excluded instruments, first stage, {rname(E)}", excl,
+                "Cluster-robust joint F of the seven excluded instruments of specification 12 "
+                "(not printed in the tables)",
+                f"{src} E{E}.{FS_SPEC}.excl_F", "ok", display=disp(excl))
+        if _finite(fall):
+            add(f"sleep.fs.f_all.E{E}", "sleep first stage",
+                f"F of all slopes, first stage, {rname(E)}", fall,
+                "Joint F of every slope of the first-stage regression, instruments and state "
+                "controls together (the row '$F$, all slopes' of the first-stage table)",
+                f"{src} E{E}.{FS_SPEC}.F_all_slopes", "ok", display=disp(fall),
+                checks=[check_cell(tname, f"Tech panel, {FS_ROW_ALL}, Hausman column",
+                                   _tech_panel_cell(tname, FS_ROW_ALL), [fall])])
+        if all(_finite(cv.get(k)) for k in ("bias10", "bias20")):
+            add(f"sleep.fs.cv.E{E}", "sleep first stage",
+                f"Critical values of the effective F, {rname(E)}",
+                dict(bias05=cv.get("bias05"), bias10=cv["bias10"], bias20=cv["bias20"],
+                     bias30=cv.get("bias30")),
+                "Montiel Olea and Pflueger critical values (simplified procedure, Nagar bias of "
+                "TSLS, 5% level) for a worst-case bias of 5, 10, 20 and 30 percent",
+                f"{src} E{E}.{FS_SPEC}.mop_cv", "ok",
+                display=f"10%: {disp(cv['bias10'])}; 20%: {disp(cv['bias20'])}")
+    if effs:
+        lo, hi = min(effs.values()), max(effs.values())
+        add("sleep.fs.eff_f.range", "sleep first stage",
+            "Effective F, first stage, range over routines", [lo, hi],
+            "min and max over the routines of the effective F under specification 12",
+            f"{src} E*.{FS_SPEC}.eff_F", "ok", display=disp_ci(lo, hi))
+
+
 # ── I: the policy-function fit (Tables C.10 and C.11) ────────────────────────
-POLFUNC_COLS = (("B", "B"), ("D_optA", "D, national means"), ("D_optB", "D, with demographics"))
+POLFUNC_COLS =(("B", "B"), ("D_optA", "D, national means"), ("D_optB", "D, with demographics"))
 POLFUNC_K = ((4, "k4_Time_CDB", TC10, 100.0, "pp"), (5, "k5_Prepaid", TC11, 1e4, "bp"))
 
 
@@ -2039,6 +2246,7 @@ def main():
     collect_design(notes)
     collect_descriptives(notes)
     collect_polfunc(notes)
+    collect_first_stage_strength(notes)
     add("cf.franchise", "E", "Franchise value of deposit funding (R$ x, R$ y, p, q)", None,
         "Removed from the paper by the user on 2026-09-29.", "--", "dropped", display="dropped")
     for t in _TABLES.values():

@@ -1877,7 +1877,7 @@ _INSTR_MASTER_GROUPS = [
         (r"indice\_basileia\_lag", r"Basel index --- total regulatory capital ratio (COSIF 79664), lagged 1Q", _STAGE_BOTH),
     ]),
     ("Hausman-style", [
-        (r"leave\_one\_out\_mean\_spread", r"Leave-one-out mean spread of rivals in the same deposit type $\times$ quarter", _STAGE_SLEEP),
+        (r"leave\_one\_out\_mean\_spread", r"Mean spread of the other conglomerate $\times$ market rows (MCA; national for D firms) in the same deposit type $\times$ quarter. Only the own row is left out, so the conglomerate's spreads in its other markets stay in", _STAGE_SLEEP),
     ]),
     (r"BLP leave-one-out rival characteristics, group $g=(\text{MCA},\text{quarter})$", [
         (r"loo\_log\_assets, mean\_loo\_log\_assets", r"LOO sum and mean of rival $\ln(\text{Total Assets}_{t-1})$", _STAGE_DEMAND),
@@ -1898,9 +1898,12 @@ def render_instruments_master() -> str:
         r"``Sleep 1st stage'' instruments enter the deposit-spread equation under the nested "
         r"IV sets (cost shifters $\subset$ wholesale $\subset$ Hausman); ``Demand'' instruments "
         r"form the $K=16$ vector $Z_{jt}$ of the logit/BLP moment conditions.",
-        r"Leave-one-out (LOO) instruments are built within group "
+        r"The demand leave-one-out (LOO) instruments are built within group "
         r"$g=(\text{MCA},\text{quarter})$: $\texttt{loo\_x}_j=\sum_{l\in g,\,l\neq j}x_l$ and "
         r"$\texttt{mean\_loo\_x}_j=\texttt{loo\_x}_j/n_{\mathrm{rivals},j}$.",
+        r"The Hausman-style mean spread is built within deposit type and quarter over "
+        r"conglomerate $\times$ market rows (MCA; national for D firms), leaving out only the "
+        r"observation's own row.",
     )
     rows = _grouped_rows(_INSTR_MASTER_GROUPS, n_cols=3)
     return _master_longtable(
