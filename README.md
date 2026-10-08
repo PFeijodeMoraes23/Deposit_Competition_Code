@@ -107,7 +107,7 @@ The repository also contains source-specific scrapers, panel transformations, di
 
 ## References
 
-- Methodological background: Egan, M., Hortaçsu, A., & Matvos, G. (2025). *Deposit Competition and Financial Fragility: Evidence from the U.S. Banking Sector.*
+- Egan, M., Hortaçsu, A., & Matvos, G. (2025). *Dynamic Competition for Sleepy Deposits.* NBER Working Paper No. 34267.
 - Berry, S. T. (1994). “Estimating Discrete-Choice Models of Product Differentiation.” *RAND Journal of Economics*, 25(2), 242–262.
 - Petrin, A., & Train, K. (2010). “A Control Function Approach to Endogeneity in Consumer Choice Models.” *Journal of Marketing Research*, 47(1), 3–13.
 - Conlon, C., & Gortmaker, J. (2020). “Best Practices for Differentiated Products Demand Estimation with PyBLP.” *RAND Journal of Economics*, 51(4), 1108–1161.
