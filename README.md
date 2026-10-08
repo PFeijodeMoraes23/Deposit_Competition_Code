@@ -1,417 +1,96 @@
- Deposit Competition Code
+# Deposit Competition in Brazil
 
-**Author:** Pedro Feijó de Moraes  
-**Affiliation:** Yale University  
-**Project:** Brazilian Open Finance — Deposit Competition & Demand Estimation
+Research code for studying deposit competition in Brazil using Central Bank and Open Finance data. The project builds municipality-level banking panels and estimates deposit supply, demand, and costs, replicating and extending the framework of Egan, Hortaçsu, and Matvos (2025).
 
----
+**Suggested GitHub repository description**
 
-## Overview
+> Research code and data pipelines for analyzing deposit competition in Brazil using Central Bank and Open Finance data, with structural estimation of deposit supply, demand, and costs.
 
-This repository contains the full data pipeline and structural econometric estimation code for a research project studying deposit competition in Brazil's banking sector. The project replicates and extends the framework of **Egan, Hortaçsu & Matvos (2025)** to Brazilian prudential conglomerates, using granular municipality-level deposit data from the Central Bank of Brazil (BCB).
+## What this repository does
 
-The codebase:
+- Collects and processes Brazilian banking, demographic, financial-inclusion, connectivity, and deposit-rate data.
+- Builds panel data at the prudential conglomerate × municipality × quarter level, using Minimum Comparable Areas (MCAs) to account for changes in municipal boundaries.
+- Estimates deposit-supply inertia (“sleepiness”) and demand, including Berry-logit/BLP methods.
+- Recovers marginal costs using Bajari–Benkard–Levin (BBL) forward simulation and supports counterfactual analysis.
 
-1. **Downloads and processes** raw data from multiple Brazilian government APIs (BCB, IBGE, ANATEL, SAGI/CadUnico, INSS).
-2. **Builds panel datasets** at the conglomerate × municipality × quarter level.
-3. **Estimates structural models** of deposit supply (sleepiness) and demand (BLP/Berry 1994).
-4. **Recovers marginal costs** via Bajari-Benkard-Levin (BBL) forward simulation.
+The main data sources include the Central Bank of Brazil (BCB), IBGE, ANATEL, SAGI/CadÚnico, INSS, the Internet Archive, and the World Bank. Raw and generated data are not included in this repository; access to the relevant sources and configured data paths is required to run the pipelines.
 
----
+## Main workflows
 
-## Key Data Sources
+### Build the analysis panel
 
-| Source | Description |
-| ------ | ----------- |
-| **BCB / ESTBAN** | Monthly bank balance sheets by municipality (COSIF format) |
-| **BCB / IF Data (Olinda API)** | Prudential conglomerate reports (deposit stocks, assets, solvency) |
-| **BCB / SGS** | Macro time series: Selic overnight rate, CDI, TR |
-| **BCB / PIX** | PIX instant-payment adoption by municipality |
-| **BCB / Financial Inclusion** | Branch and banking-correspondent counts by municipality |
-| **IBGE / SIDRA** | Municipal population, GDP per capita, age structure |
-| **ANATEL** | Mobile broadband (4G/5G) connections by municipality |
-| **SAGI / CadUnico** | Low-income household registry (poverty indicator) |
-| **INSS** | Retirement/pension beneficiary counts by municipality |
-| **Internet Archive** | Historical deposit-rate disclosures (Wayback Machine CDX API) |
-| **World Bank / Findex** | Banked-population fraction (FX.OWN.TOTL.ZS) |
-
----
-
-## Repository Structure
-
-```text
-.
-├── panel_pipeline.py                  # Master data pipeline runner (stages 0–5)
-├── sleep_pipeline.py                 # Sleepiness estimation pipeline runner (E1–E4 + exports, demand prep, tables)
-│                                         #  removed in a30be201 — call the Julia directly)
-│
-├── ── Stage 0: Raw Data Downloads ──
-├── scrape_bcb_estban_ifdata.py        # ESTBAN monthly CSVs + IF Data via BCB Olinda API
-│
-├── ── Stage 1: Demographics ──
-├── scrape_ibge_demographics.py         # IBGE population, GDP, age structure → MCA-level panel
-│
-├── ── Stage 2: Market Characteristic Panels (parallel) ──
-├── scrape_pix_municipal.py                 # BCB PIX adoption → MCA panel
-├── scrape_anatel_mobile.py                    # ANATEL mobile connections → MCA connectivity panel
-├── scrape_bcb_inclusion.py             # BCB banking access-points (branches + correspondents) → MCA panel
-├── scrape_bcb_banked.py                 # ESTBAN Dec snapshots + WB Findex → MCA banked-fraction proxy panel
-├── scrape_cadunico.py                   # CadUnico low-income families → MCA poverty panel
-├── scrape_bcb_tarifas.py                      # BCB bank fee schedules (PF + PJ) → tarifas conglomerate panel
-├── scrape_inss.py                        # INSS retirees → MCA quarter panel
-│
-├── ── Stage 2c: COSIF Download + Processing ──
-├── scrape_cosif_download.py           # Download missing monthly COSIF ZIPs → shared/COSIF
-├── panel_cosif_extract.py            # Extract COSIF → custos_implicitos_<TAXONOMY>.csv + per-type foundation
-├── panel_cosif_calibrate.py          # Per-bank + segment-shrunk corrected k=4 CDB rate → cosif_cdb_rate_corrected.csv
-│
-├── ── Stage 3: Deposit Panel, Rates & Characteristics (parallel) ──
-├── panel_deposits.py                   # ESTBAN + IF Data → conglomerate × municipality × quarter deposit panel
-├── panel_ip_rates.py                   # Extract IP explicit deposit rates from raw COSIF files
-├── panel_deposit_rates.py         # Compute and append deposit rates/spreads (COSIF + SGS; corrected k=4 CDB rate)
-├── panel_bank_chars.py                 # IF Data → conglomerate bank size & solvency characteristics panel
-├── panel_digital_flags.py               # Identify purely digital banks from ESTBAN → PANEL_INTERMED
-│
-├── ── Stage 4: Master Analysis Panel ──
-├── panel_market.py                     # Merge all MCA panels + deposit panel → master analysis dataset
-├── panel_loo_instruments.py                # Compute LOO instruments and FGC coverage dummy
-├── panel_demographics_sigma.py         # Within-MCA demographic σ for BLP parametric draws → demographics_sigma.parquet
-│
-├── ── Stage 5: Descriptive Statistics (parallel) ──
-├── make_desc_panel_tables.py                             # Summary statistics tables (CSV + LaTeX) by bank type and region
-├── make_desc_compressed_tables.py                             # Compact market-structure / cross-section descriptive tables
-├── sleep_desc_clusters.py                             # Cluster-imbalance & deposit-concentration table (justifies the wild cluster bootstrap). Reads the est7 second-stage sample, so it runs AFTER the sleep estimation (wired as the final step of sleep_pipeline.py).
-│
-├── ── Deposit Rate Scraping (Internet Archive) ──
-├── scrape_deposit_rate_targets.py            # Initialise target domain list for archival rate scraping
-├── scrape_deposit_rate_cdx.py                # Query Wayback Machine CDX API for candidate URLs
-├── scrape_deposit_rate_fetch.py              # Async-fetch HTML/PDF snapshots from Internet Archive
-├── scrape_deposit_rate_parse.py              # NLP extraction of deposit yields from HTML and PDF files
-│
-├── ── Sleepiness Estimation ──
-├── sleep_est_e1.py                 # B-type CFA estimation (Υ); phi_mt and phi_t construction
-├── sleep_est_e2.py                 # Robustness: omit post-2020 structural break dummy
-│
-├── ── Demand Estimation (BLP) ──
-├── sleep_demand_prep.py           # Universal demand prep orchestrator (runs est. 1–5 in parallel)
-├── sleep_demand_prep_e1.py         # Demand prep round 1: active shares and market sizes
-├── sleep_demand_prep_e2.py         # Demand prep round 2
-├── blp_draws.jl                          # Julia: pre-compute Halton/quasi-Monte Carlo simulation draws
-│
-├── ── Cost Estimation (BBL) ──
-├── bbl_polfunc.py           # BBL Step 1: parametric policy functions for endogenous rates (k=4,5)
-├── bbl_fwd_sim.jl           # BBL Step 2a: forward-simulate the ψ value-function basis (Julia)
-├── bbl_solve.py             # BBL Step 2b: recover (ω,ζ,γ) via the eq:17 squared-hinge solve
-│
-├── ── Export & Results ──
-├── sleep_export_all.py                     # Orchestrator: dispatches export_*_sleep_results.py in parallel
-├── sleep_export_e1.py             # Export sleep results for estimation round 1 (tables, plots)
-├── sleep_export_e2.py             # Export sleep results for estimation round 2
-├── sleep_export_spec12_compare.py              # Comparative analysis and plots across specification 1 & 2 variants
-│
-├── ── Tables ──
-│
-├── ── HPC Submission Scripts (Yale HPC / SLURM) ──
-├── submit_blp_E1.sh                      # SLURM: BLP estimation strategy 1
-├── submit_blp_E2.sh                      # SLURM: BLP estimation strategy 2
-├── submit_blp_E3.sh                      # SLURM: BLP estimation strategy 3
-├── submit_blp_E4.sh                      # SLURM: BLP estimation strategy 4
-├── submit_blp_E5.sh                      # SLURM: BLP estimation strategy 5
-│
-├── ── Utilities ──
-├── utils/
-│   ├── venv_guard.py                     # Ensures correct virtual environment is active
-│   ├── toon_parser.py                    # Parses Gemini AI-generated context/configurations
-│   ├── toon_parser_cli.py                # CLI interface for toon_parser
-│   ├── toon_runtime.py                   # Loads TOON runtime context for path resolution
-│   └── tex_preamble.py                   # Shared LaTeX preamble template for export scripts
-│
-├── requirements_venv_full.txt            # Full Python dependency list (with explanations)
-└── requirements_toon.txt                 # Minimal scraping dependencies (beautifulsoup4, lxml)
-```
-
----
-
-## Pipeline Architecture
-
-### Data Pipeline (`panel_pipeline.py`)
-
-Runs all download, processing, and panel-building scripts as subprocesses in dependency order. Independent steps within the same stage run in parallel.
-
-Stage 0  (serial)    : step 1     — Download ESTBAN + IF Data raw files
-Stage 1  (serial)    : step 2     — IBGE demographics → MCA panel
-Stage 2  (parallel)  : steps 3–7  — Market characteristic panels (PIX, ANATEL, Inclusion,
-                                     CadUnico, fees, banked fraction)
-Stage 3  (parallel)  : steps 8–11 — Deposit panel, IP rates, rates/spreads, bank chars,
-                                     digital bank flag
-Stage 4  (serial)    : steps 12–13b — Master merge, LOO instruments, FGC dummy,
-                                       demographic sigma for BLP draws
-Stage 5  (parallel)  : steps 14–15 — Descriptive statistics (unweighted + market-weighted)
-
+`panel_pipeline.py` runs the data-download and panel-construction steps in dependency order, followed by descriptive statistics. Its stages are numbered 0–6. The individual download and transformation steps are serialized to respect source API rate limits.
 
 ```bash
-python panel_pipeline.py                    # Run all stages
-python panel_pipeline.py --from 3           # Resume from stage 3
-python panel_pipeline.py --skip 5b,6        # Skip specific steps
-python panel_pipeline.py --list             # Print all steps and exit
+python panel_pipeline.py --list
+python panel_pipeline.py
+python panel_pipeline.py --from 3
+python panel_pipeline.py --only 4
+python panel_pipeline.py --skip 2b,2e
 ```
 
-### Sleep Pipeline (`sleep_pipeline.py`)
+Use `python panel_pipeline.py --help` for the current options and `--list` for step IDs.
 
-Runs the full sleepiness estimation sequence:
+### Estimate sleepiness and prepare demand inputs
 
-```
-Step 1 : sleep_est_e1.py         B-type CFA + phi construction
-Step 2 : sleep_est_e2.py         Robustness: no break dummy
-Step 6 : sleep_export_all.py             Export 1st/2nd stage summaries
-Step 7 : sleep_demand_prep.py   Demand prep for every active routine
-```
+`sleep_pipeline.py` runs the sleepiness estimators, exports, demand preparation, and post-estimation summaries sequentially.
 
 ```bash
 python sleep_pipeline.py
-python sleep_pipeline.py --only-spec-12    # Run only specification 1 & 2
-python sleep_pipeline.py --skip-sleep      # Skip estimation, run exports only
+python sleep_pipeline.py --only-spec-12
+python sleep_pipeline.py --skip-sleep
+python sleep_pipeline.py --sleep-only
 ```
 
-### BLP stages (call the Julia directly)
+The script’s help text documents `--skip-steps` and the remaining options. Sleepiness estimates can be computationally intensive.
 
-`run_blp_pipeline.py` and `run_local_pipeline.py` were REMOVED in `a30be201` (2026-08-04) with no
-replacement wrapper. Call each stage directly — every script auto-discovers its routines from the
-demand parquets and writes its own LaTeX tables, which is what the wrapper was doing.
+### Run BLP and BBL estimation
+
+BLP estimation uses Julia. The old `run_blp_pipeline.py` and `run_local_pipeline.py` wrappers are not part of the current repository; use the Julia entry points directly for local work. Check each script’s usage header before starting a long estimation.
 
 ```bash
-# Non-RC logit sanity check (fast) — writes est*_spec12_logit.tex to Rout/ and Drafts/
+julia --project=. -e 'using Pkg; Pkg.instantiate()'
 julia --project=. --threads=auto blp_logit.jl
-julia --project=. --threads=auto blp_logit.jl --est 8      # a single routine
-
-# Pre-compute simulation draws
-julia --project=. blp_draws.jl --R 2000 --seed 42
-
-# BLP GMM (one round; see the script header for --stage values)
-julia --project=. --threads=4 blp_engine_cpu.jl --estim 1 --spec 12 --stage sigma --R 50 --seed 42
 ```
 
-> **Verification note.** Only the logit line has been re-verified end-to-end (2026-08-06:
-> clean, 57 result files + 9 tables). The draws and GMM lines are transcribed from each
-> script's own *Usage* header, so read that header before committing to a long run.
+The full cluster workflow is orchestrated by `pipeline_all.sh`. **Submit it with SLURM; do not run it directly on a cluster login node.** For cluster prerequisites, launch instructions, and BBL operations, see [`cluster/RUNBOOK.md`](cluster/RUNBOOK.md) and [`BBL_RUNBOOK.md`](BBL_RUNBOOK.md).
 
-For the end-to-end local sequence: run `panel_pipeline.py`, then `sleep_pipeline.py`
-(estimators → exports → demand prep), which takes `--skip-sleep`, `--sleep-only` and
-`--skip-steps` to resume partway. The full chain — logit, BLP, BBL and the counterfactuals —
-runs on the cluster as a single command via `pipeline_all.sh`.
+## Setup
 
----
-
-## Econometric Model
-
-The project estimates a structural model of deposit supply and demand following **Egan, Hortaçsu & Matvos (2025)**:
-
-### Supply Side (Deposit "Sleepiness")
-
-The structural equation in levels:
-
-```text
-Dep_jkt = φ(S_t, X_jt) · nr_t · Dep_jkt−1 + ε_jkt
-
-where φ(S_t, X_jt) = Υ₁'S_t + Υ₂'X_jt
-      nr_t = 1 + (R^F_{t−1} − ρ_{jkt−1}) / 100
-```
-
-- `Dep_jkt`: deposit balance of bank *j*, type *k*, quarter *t*
-- `S_t`: market-level characteristics (PIX adoption, mobile coverage, poverty, demographics)
-- `X_jt`: bank-level characteristics (assets, solvency ratio)
-- `Υ`: "sleepiness" parameters to be estimated
-
-### Identification
-
-- Deposit types 1-3 (demand, savings, interbank): exogenous rates -> OLS
-- Deposit types 4-5 (CDB, prepaid): endogenous rates -> **Control Function** approach (Petrin & Train 2010)
-  - **Cost-shifter instruments**: lagged COSIF implicit rate, log assets, equity ratio, lagged CDI/Selic
-  - **Hausman IV**: leave-one-out mean deposit spread (same type x quarter)
-
-### Demand Side
-
-Active market shares are constructed after removing the "sleeping" component, then demand is estimated via **Berry (1994)**:
-
-```text
-log(s_active_jkt) = α_k · σ_jkt + δ_j + μ_kt + e_jkt
-```
-
-where `σ_jkt` is the deposit spread (opportunity cost) and `δ_j` is a bank×type fixed effect.
-
-### Cost Estimation (BBL)
-Following Bajari, Benkard & Levin (2007), parametric policy functions for endogenous deposit types (k=4,5) are estimated in `bbl_polfunc.py` (Step 1). The ψ value-function basis is then forward-simulated under the equilibrium and deviating strategies in `bbl_fwd_sim.jl` (Step 2a), and marginal costs `(ω,ζ,γ)` are recovered from the eq:17 squared-hinge minimization in `bbl_solve.py` (Step 2b). On the cluster the stage runs via `bbl_run.sh`; it writes `cost_params_E*_spec_12_*.json`, which the counterfactuals then consume.
-
----
-
-## Geographic Unit
-
-The primary geographic unit is the **MCA (Minimum Comparable Area)** — a time-consistent municipal grouping used to handle Brazilian municipal boundary changes from 2010–2024. Municipality codes follow the 7-digit IBGE standard (`CODMUN_IBGE`).
-
----
-
-## Key Technologies
-
-| Technology | Purpose |
-| ---------- | ------- |
-| **Python 3.x** | All data processing, estimation, and export scripts |
-| **Julia** | BLP GMM demand estimation (`blp_draws.jl`, `blp_engine_cpu.jl`, `blp_logit.jl`) |
-| **pandas** | Data manipulation and panel construction |
-| **numpy** | Numerical arrays and computations |
-| **scipy** | Statistical utilities, NLLS optimisation, Halton draws |
-| **statsmodels** | OLS and panel regression (sleepiness estimation, BBL) |
-| **linearmodels** | Panel OLS with two-way fixed effects and clustered standard errors |
-| **scikit-learn** | PCA for LOO instrument construction |
-| **requests / urllib3** | Synchronous HTTP for BCB, IBGE, ANATEL, and INSS API calls |
-| **aiohttp** | Async HTTP for high-throughput Internet Archive fetching |
-| **beautifulsoup4 / lxml** | HTML parsing for deposit-rate page scraping |
-| **pdfplumber** | PDF text extraction for archival deposit-rate parsing |
-| **geopandas / geobr** | Brazilian geographic data and MCA boundary processing |
-| **matplotlib** | Diagnostic and results plots |
-| **pyarrow** | Parquet I/O (BLP draws and demographics sigma) |
-| **concurrent.futures** | Parallel pipeline execution |
-
----
-
-## Python Dependencies
-
-All Python dependencies are listed in `requirements_venv_full.txt` with inline comments explaining the purpose and which script(s) use each package. Install with:
+Python dependencies are listed in [`requirements_venv_full.txt`](requirements_venv_full.txt):
 
 ```bash
-pip install -r requirements_venv_full.txt
+python -m pip install -r requirements_venv_full.txt
 ```
 
-The `requirements_toon.txt` file contains a minimal subset (beautifulsoup4, lxml) for lightweight scraping tasks only.
+Julia dependencies are declared in [`Project.toml`](Project.toml) and [`Manifest.toml`](Manifest.toml). Instantiate the project as shown above before running Julia scripts.
 
----
+The scripts expect project data directories and may rely on machine-specific paths. Configure the data paths for your environment before running a pipeline; where applicable, `TOON_CONTEXT_PATH` points to a machine-specific TOON context file. Do not commit local credentials or private data. Email notifications in `sleep_pipeline.py` are optional and require `SYS_EMAIL_PWD` in the environment.
 
-## Julia Dependencies
+## Key files
 
-BLP estimation uses Julia with the following packages (defined in `Project.toml`):
+| File | Purpose |
+|---|---|
+| `panel_pipeline.py` | Downloads and builds the analysis panel |
+| `sleep_pipeline.py` | Runs sleepiness estimation, exports, and demand preparation |
+| `blp_logit.jl`, `blp_draws.jl`, `blp_engine_cpu.jl` | Julia demand-estimation entry points |
+| `bbl_run.sh`, `bbl_polfunc.py`, `bbl_fwd_sim.jl`, `bbl_solve.py` | BBL cost-recovery workflow |
+| `pipeline_all.sh` | SLURM orchestration for the cluster estimation and counterfactual workflow |
+| `cluster/RUNBOOK.md`, `BBL_RUNBOOK.md` | Cluster and BBL operating instructions |
+| `requirements_venv_full.txt`, `Project.toml`, `Manifest.toml` | Python and Julia environment specifications |
 
-| Package | Purpose |
-|---------|---------|
-| **Parquet2** | Read Parquet input panels from Python pipeline |
-| **DataFrames** | Panel data manipulation in Julia |
-| **Optim** | Outer GMM optimisation loop |
-| **QuasiMonteCarlo** | Halton sequence draws for simulation |
-| **Distributions** | Random-coefficient draw sampling |
-| **JSON3** | Read/write estimation configuration files |
-| **ArgParse** | CLI argument parsing for BLP scripts |
-| **SparseArrays** | Efficient sparse matrix operations |
+The repository also contains source-specific scrapers, panel transformations, diagnostics, and result-table scripts; their filenames describe their main tasks.
 
----
+## Model at a glance
 
-## Output Files
-
-The pipeline produces CSV, Parquet, and pickle files organised under a `BCB/` directory tree:
-
-| File | Description |
-| ---- | ----------- |
-| `BCB/Panel/deposits_panel.csv` | Conglomerate × municipality × quarter deposit balances |
-| `BCB/Panel/market_panel.csv` | Master analysis dataset (deposits + all market characteristics + instruments) |
-| `BCB/Panel/demographics_sigma.parquet` | Within-MCA demographic σ for BLP parametric draws |
-| `BCB/Egan_et_al_2025_Rep/processed/COSIF_PROCESSED/ip_rates_quarterly.csv` | IP explicit deposit rates (quarterly) |
-| `BCB/Egan_et_al_2025_Rep/processed/PANEL_INTERMED/digital_banks_diagnostic.csv` | Digital bank classification diagnostic |
-| `BCB/Egan_et_al_2025_Rep/processed/ESTIMATION_OUTPUT/SLEEPINESS/` | Sleepiness estimation results (PKL, JSON, TeX tables) |
-| `BCB/Egan_et_al_2025_Rep/processed/ESTIMATION_OUTPUT/DEMAND_PREP/rout_*/` | Active-shares panels ready for BLP (per estimation round) |
-| `BCB/Egan_et_al_2025_Rep/processed/ESTIMATION_OUTPUT/BLP_RESULTS/` | BLP demand estimation outputs (per strategy × spec) |
-| `BCB/Egan_et_al_2025_Rep/processed/ESTIMATION_OUTPUT/COST_FWD/` | BBL cost recovery forward-simulation outputs |
-| `BCB/Egan_et_al_2025_Rep/processed/IP_SCRAPE/` | Archival deposit-rate HTML/PDF snapshots and extracted rates |
-| `BCB/Egan_et_al_2025_Rep/processed/ESTIMATION_OUTPUT/DESCRIPTIVES/` | Descriptive statistics tables (CSV + LaTeX) |
-| `IBGE/mca_demographics_panel.csv` | MCA demographics panel |
-| `ANATEL/anatel_mca_panel.csv` | Mobile connectivity panel |
-| `BCB/PIX/pix_mca_panel.csv` | PIX adoption panel |
-| `BCB/Inclusion/bcb_inclusion_mca_panel.csv` | Banking access-point density panel |
-| `BCB/Banked/banked_fraction_mca_panel.csv` | Banked-population fraction proxy panel |
-
----
-
-## Workflow Tips
-
-### 1. Use `--from` and `--skip` to avoid re-running completed stages
-
-```bash
-python panel_pipeline.py --from 3        # Resume from the deposit panel stage
-python panel_pipeline.py --skip 0a,0b    # Skip downloads if raw files already exist
-python panel_pipeline.py --list          # Print all step names and exit
-```
-
-### 2. Set email credentials once for overnight-run notifications
-
-The sleep pipeline (`sleep_pipeline.py`) sends progress emails between steps if credentials are present in the environment:
-
-```powershell
-$env:SYS_EMAIL_USER = "your-email@gmail.com"
-$env:SYS_EMAIL_PWD  = "your-16-char-app-password"   # Gmail App Password
-```
-
-### 3. Use `TOON_CONTEXT_PATH` to switch between machines without editing scripts
-
-Store a per-machine `toon_context.json` with local paths and point the env var at it:
-
-```powershell
-$env:TOON_CONTEXT_PATH = "C:\Users\pedro\toon_yale.json"
-```
-
-This lets the same scripts resolve data directories correctly on your laptop, on Grace HPC, and in CI — without any code changes.
-
-### 4. Always run the logit sanity check before submitting BLP to HPC
-
-```bash
-julia --project=. --threads=auto blp_logit.jl     # Fast local check (~minutes); catches data issues early
-julia --project=. blp_draws.jl --R 2000           # Pre-compute draws
-sbatch submit_blp_1_E1.sh                           # Only then submit to SLURM
-```
-
-### 5. `venv_guard` must come before all heavy imports
-
-In any new script, call `ensure_project_venv` **before** importing pandas, numpy, or any third-party library. If it is placed after heavy imports the script will crash before it can relaunch into the correct venv:
-
-```python
-from utils.venv_guard import ensure_project_venv
-ensure_project_venv(__file__)   # ← Must be first
-import pandas as pd             # ← Safe now
-```
-
-### 6. Never manually parallelize Stage 2 scrapers
-
-`scrape_5` through `scrape_16` have per-request rate-limit protections. Running them concurrently across multiple terminals will trigger IP bans from the BCB and ANATEL APIs. Let `panel_pipeline.py` manage the controlled parallelism.
-
-### 7. Target a single BLP specification during development
-
-Use `--est` and `--spec` flags to run a single round rather than all 25 combinations:
-
-```bash
-julia --project=. --threads=4 blp_engine_cpu.jl --estim 1 --spec 12 \
-    --stage sigma --R 50 --seed 42                       # Only round 1, spec 12
-```
-
-### 8. Check `pipeline_output.txt` for a record of the last full run
-
-This file captures stdout/stderr from `panel_pipeline.py` and is the fastest way to diagnose failures after an overnight run without re-executing anything.
-
----
-
-## Active Development Branches
-
-### `coherence_fix`
-
-This branch revisits the specification of the sleepiness function φ(·). The planned changes are:
-
-- **Remove bank-level characteristics** (`X_jt`): log total assets and the equity/solvency ratio are dropped from the φ(·) regressors, making sleepiness a function of market-level variables only.
-- **Remove branch count** from the set of market-level regressors (`S_t`).
-- **Remove PIX volume** from the set of market-level regressors (`S_t`).
-
-The motivation is to achieve a cleaner separation between the supply-side inertia equation and the bank-level covariates that enter the demand side, avoiding potential collinearity and improving structural coherence across the two estimation stages.
-
----
+- **Deposit supply:** estimates persistence/inertia in deposit balances as a function of market and bank characteristics. For deposit types with endogenous rates, the estimation uses a control-function approach and instrumental variables.
+- **Deposit demand:** constructs active market shares after accounting for the sleeping component, then estimates demand using Berry-style logit methods and BLP routines.
+- **Marginal costs:** estimates policy functions, forward-simulates value-function terms, and recovers cost parameters using the BBL approach.
 
 ## References
 
 - Egan, M., Hortaçsu, A., & Matvos, G. (2025). *Deposit Competition and Financial Fragility: Evidence from the U.S. Banking Sector.*
-- Berry, S. T. (1994). *Estimating Discrete-Choice Models of Product Differentiation.* RAND Journal of Economics, 25(2), 242–262.
-- Petrin, A., & Train, K. (2010). *A Control Function Approach to Endogeneity in Consumer Choice Models.* Journal of Marketing Research, 47(1), 3–13.
-- Conlon, C., & Gortmaker, J. (2020). *Best Practices for Differentiated Products Demand Estimation with PyBLP.* RAND Journal of Economics, 51(4), 1108–1161.
-- Bajari, P., Benkard, C. L., & Levin, J. (2007). *Estimating Dynamic Models of Imperfect Competition.* Econometrica, 75(5), 1331–1370.
-
+- Berry, S. T. (1994). “Estimating Discrete-Choice Models of Product Differentiation.” *RAND Journal of Economics*, 25(2), 242–262.
+- Petrin, A., & Train, K. (2010). “A Control Function Approach to Endogeneity in Consumer Choice Models.” *Journal of Marketing Research*, 47(1), 3–13.
+- Conlon, C., & Gortmaker, J. (2020). “Best Practices for Differentiated Products Demand Estimation with PyBLP.” *RAND Journal of Economics*, 51(4), 1108–1161.
+- Bajari, P., Benkard, C. L., & Levin, J. (2007). “Estimating Dynamic Models of Imperfect Competition.” *Econometrica*, 75(5), 1331–1370.
