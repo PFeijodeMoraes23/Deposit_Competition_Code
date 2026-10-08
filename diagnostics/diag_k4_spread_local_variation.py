@@ -43,18 +43,21 @@ OUTPUTS (under processed/ESTIMATION_OUTPUT/DIAG_K4_SPREAD/):
   tableC_member_cnpj_ceiling.csv
   fig_k4_local_variation.png
 
-Usage:  python diag_k4_spread_local_variation.py
+Usage:  python diagnostics/diag_k4_spread_local_variation.py
 """
 from __future__ import annotations
 
+import os
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # repo root: utils/ and pipeline modules
 try:
     from utils.venv_guard import ensure_project_venv
     ensure_project_venv(__file__)
 except Exception:
     pass
 
-import os
-import sys
 os.environ.setdefault("MPLBACKEND", "Agg")  # headless / OneDrive-safe
 try:                                          # Windows console defaults to cp1252
     sys.stdout.reconfigure(encoding="utf-8")
@@ -62,7 +65,6 @@ except Exception:
     pass
 
 import logging
-from pathlib import Path
 
 import numpy as np
 import pandas as pd

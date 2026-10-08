@@ -44,7 +44,7 @@ except Exception:
     pass
 
 HERE = Path(__file__).resolve().parent
-STATE = HERE / ".diag_matrix_state.json"
+STATE = HERE / "diagnostics" / ".diag_matrix_state.json"
 
 # unit key -> (script, args template, measured minutes per routine).
 # The minutes are MEASURED, not guessed (2026-08-06 battery log); they drive the "can this finish

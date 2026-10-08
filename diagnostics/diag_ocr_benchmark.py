@@ -28,9 +28,9 @@ benchmark scores the chain that would actually be used, not a proxy for it.
 
 Usage
 -----
-  python diag_ocr_benchmark.py                          # truth mode, 6 months, 3 resolutions
-  python diag_ocr_benchmark.py --months 12 --dpi 200
-  python diag_ocr_benchmark.py --mode scans
+  python diagnostics/diag_ocr_benchmark.py                          # truth mode, 6 months, 3 resolutions
+  python diagnostics/diag_ocr_benchmark.py --months 12 --dpi 200
+  python diagnostics/diag_ocr_benchmark.py --mode scans
 """
 
 from __future__ import annotations
@@ -38,8 +38,10 @@ from __future__ import annotations
 import argparse
 import logging
 import re
+import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # repo root: utils/ and pipeline modules
 from utils.venv_guard import ensure_project_venv
 ensure_project_venv(__file__)
 

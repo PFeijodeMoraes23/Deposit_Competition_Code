@@ -14,15 +14,18 @@ Quality    : null/missing rates; internal consistency (min <= wavg <= max; custo
 
 Usage
 -----
-  python diag_openfinance_coverage.py
-  python diag_openfinance_coverage.py --snapshot 2026-07-22   # a specific data_coleta
+  python diagnostics/diag_openfinance_coverage.py
+  python diagnostics/diag_openfinance_coverage.py --snapshot 2026-07-22   # a specific data_coleta
 """
 
 from __future__ import annotations
 
 import argparse
 import logging
+import sys
+from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # repo root: utils/ and pipeline modules
 from utils.venv_guard import ensure_project_venv
 ensure_project_venv(__file__)
 
@@ -34,7 +37,6 @@ log = logging.getLogger(__name__)
 
 from utils import paths
 import panel_fee_merge as p9
-import sys
 
 # Windows consoles default to cp1252 and raise UnicodeEncodeError on any non-ASCII
 # character in a print (phi, arrows, Upsilon, x). That usually fires on a STATUS line after

@@ -30,17 +30,20 @@ and Q4.  It bundles ALL expenses, so V712 / V432 is not a rate: only the regress
 coefficient is.  One coefficient across all of an institution's municipalities is a
 national number; variation across markets exists only across the groups of Stage B.
 
-Usage:  python diag_estban_expense_rate.py
+Usage:  python diagnostics/diag_estban_expense_rate.py
 """
 from __future__ import annotations
 
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # repo root: utils/ and pipeline modules
 try:
     from utils.venv_guard import ensure_project_venv
     ensure_project_venv(__file__)
 except Exception:
     pass
 
-import sys
 try:                                          # Windows console defaults to cp1252
     sys.stdout.reconfigure(encoding="utf-8")
 except Exception:

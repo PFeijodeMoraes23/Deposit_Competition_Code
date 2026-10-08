@@ -1215,7 +1215,7 @@ described above, which is fixed.
 
 ## 6. Coverage in deposit terms
 
-`diag_advertising_coverage.py` computes this, so the figures are reproducible rather than
+`diagnostics/diag_advertising_coverage.py` computes this, so the figures are reproducible rather than
 hand-typed; it writes `advertising_coverage_by_year.csv` and `advertising_coverage_by_source.csv`.
 
 A quarter counts as observed only when all three of its months are known; a quarter short of a
@@ -1259,7 +1259,7 @@ The SEC series alone is 31-47% from 2015 but annual, so it cannot enter a quarte
 
 ### 6.1 Coverage of the estimation sample, and whether it survives fixed effects
 
-`diag_advertising_in_estimation.py` answers the question the design actually poses. It reads the E3
+`diagnostics/diag_advertising_in_estimation.py` answers the question the design actually poses. It reads the E3
 spec-12 demand parquet, merges ONE source per conglomerate, kept for the whole window and never
 spliced, and writes three CSVs. The source is the central bank's accounts wherever they cover the
 window: the member institutions summed, else the consolidated document. Another source is chosen
@@ -1385,7 +1385,7 @@ separately. [^kantar]
 ### 9.1 OCR benchmark, 2026-09-22: recognition is not the constraint
 
 The scanned months were the largest remaining hole, so the OCR chain was scored before anything was
-trusted, using `diag_ocr_benchmark.py`. `rapidocr-onnxruntime` 1.4.4 was installed into the project
+trusted, using `diagnostics/diag_ocr_benchmark.py`. `rapidocr-onnxruntime` 1.4.4 was installed into the project
 venv (pure pip, no administrator rights, ~15 MB of ONNX models). It ships CHINESE+ENGLISH models
 only - detection, recognition and a classifier - and **no Latin model was needed**: these tables are
 digits and uppercase Latin, and every parser folds diacritics anyway (`VEICULACAO`), so the one thing
@@ -1434,8 +1434,8 @@ available on these pages because the total is printed on them. Note that summing
 page is NOT that gate: the summary is a matrix with per-agency totals along the top and TOTAL rows at
 the foot, so it double counts and lands at two to three times the month's true spend.
 
-Reproduce with `python diag_ocr_benchmark.py --months 20 --dpi 200` and
-`python diag_ocr_benchmark.py --mode scans`.
+Reproduce with `python diagnostics/diag_ocr_benchmark.py --months 20 --dpi 200` and
+`python diagnostics/diag_ocr_benchmark.py --mode scans`.
 
 ## 10. Re-running
 
@@ -1452,8 +1452,8 @@ python scrape_statebank_advertising.py          # all four state banks; see the 
 python scrape_ancine_ad_films.py                # registered advertising films (a count)
 python build_advertising_crosswalk.py           # after the scrapers; reads their outputs
 python build_advertising_panel.py               # last; assembles both panels and the film table
-python diag_advertising_coverage.py            # coverage in deposit terms, section 6
-python diag_advertising_in_estimation.py       # coverage and FE survival in the estimation sample
+python diagnostics/diag_advertising_coverage.py # coverage in deposit terms, section 6
+python diagnostics/diag_advertising_in_estimation.py  # coverage and FE survival in the estimation sample
 
 # Statement notes (5.9); not read by the assembly.
 # First line: fetch from the approved hosts, then parse.

@@ -25,16 +25,18 @@ Nothing in the estimation pipeline is touched.
 
 Usage
 -----
-  python diag_advertising_in_estimation.py
-  python diag_advertising_in_estimation.py --routine 4 --from-year 2016 --to-year 2024
+  python diagnostics/diag_advertising_in_estimation.py
+  python diagnostics/diag_advertising_in_estimation.py --routine 4 --from-year 2016 --to-year 2024
 """
 
 from __future__ import annotations
 
 import argparse
 import logging
+import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # repo root: utils/ and pipeline modules
 from utils.venv_guard import ensure_project_venv
 ensure_project_venv(__file__)
 

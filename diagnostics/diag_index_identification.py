@@ -22,6 +22,10 @@ Scope by routine:
          `fit_single_index` does NOT re-optimise theta, it only fits the link, so whatever
          that NLLS logit lands on is exactly what both reported routines carry.
 """
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # repo root: utils/ and pipeline modules
 from utils.venv_guard import ensure_project_venv
 ensure_project_venv(__file__)
 
@@ -32,7 +36,6 @@ from sleep_est_e2 import (build_pooled_data, define_specifications,
                                 run_pooled_first_stage)
 from utils.sleep_links import fit_nlls_link
 from utils import routines as R
-import sys
 
 # Windows consoles default to cp1252 and raise UnicodeEncodeError on any non-ASCII
 # character in a print (phi, arrows, Upsilon, x). That usually fires on a STATUS line after

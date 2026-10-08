@@ -12,20 +12,21 @@ Outputs:
   prints per-type percentile table + extreme-tail deposit-weight shares.
 
 Usage:
-  python diag_spread_dist.py --estim 6 --spec 12
+  python diagnostics/diag_spread_dist.py --estim 6 --spec 12
 """
-from utils.venv_guard import ensure_project_venv
-ensure_project_venv(__file__)
-
 import argparse
 import os
+import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # repo root: utils/ and pipeline modules
+from utils.venv_guard import ensure_project_venv
+ensure_project_venv(__file__)
 
 os.environ.setdefault("MPLBACKEND", "Agg")  # headless / OneDrive-safe
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-import sys
 
 # Windows consoles default to cp1252 and raise UnicodeEncodeError on any non-ASCII
 # character in a print (phi, arrows, Upsilon, x). That usually fires on a STATUS line after
@@ -36,7 +37,7 @@ try:
 except Exception:
     pass
 
-_ROOT = Path(__file__).resolve().parents[2]
+_ROOT = Path(__file__).resolve().parents[3]
 DATA = _ROOT / "BCB" / "Egan_et_al_2025_Rep" / "processed"
 DEMAND_PREP = DATA / "ESTIMATION_OUTPUT" / "DEMAND_PREP"
 CF_DIR = DATA / "ESTIMATION_OUTPUT" / "CF_FOUNDATION"

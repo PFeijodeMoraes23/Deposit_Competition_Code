@@ -27,7 +27,7 @@ Reported against the tangent-cone band from the same cell. READ-ONLY: writes its
 into <demand_prep_root>/DIAGNOSTICS, beside the vintage it describes, and touches no
 estimation output.
 
-Usage:  python diag_im_phi_t.py [--est 5] [--loss robust] [--q 8] [--qs 6,8,12]
+Usage:  python diagnostics/diag_im_phi_t.py [--est 5] [--loss robust] [--q 8] [--qs 6,8,12]
 """
 import argparse
 import os
@@ -39,7 +39,7 @@ import numpy as np
 import pandas as pd
 from scipy import stats
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from sleep_est_e2 import (build_pooled_data, define_specifications,  # noqa: E402
                                 run_pooled_first_stage)

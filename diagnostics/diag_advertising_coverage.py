@@ -20,16 +20,18 @@ a robustness object, not advertising, so it is excluded.
 
 Usage
 -----
-  python diag_advertising_coverage.py
-  python diag_advertising_coverage.py --years 2016 2020 2024
+  python diagnostics/diag_advertising_coverage.py
+  python diagnostics/diag_advertising_coverage.py --years 2016 2020 2024
 """
 
 from __future__ import annotations
 
 import argparse
 import logging
+import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # repo root: utils/ and pipeline modules
 from utils.venv_guard import ensure_project_venv
 ensure_project_venv(__file__)
 

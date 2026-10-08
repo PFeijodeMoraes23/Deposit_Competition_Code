@@ -31,10 +31,10 @@ opting in would do, in three sections:
            the archived DIAG_PHI_SEPARATION csv values as a replication check.
 
 Usage:
-  python diag_wcb_reference.py --only tier0            # ~20 s, no data needed
-  python diag_wcb_reference.py --only size --reps 400  # ~2 min, synthetic
-  python diag_wcb_reference.py --only battery          # ~6 min, needs the sleep frame
-  python diag_wcb_reference.py                         # all three
+  python diagnostics/diag_wcb_reference.py --only tier0            # ~20 s, no data needed
+  python diagnostics/diag_wcb_reference.py --only size --reps 400  # ~2 min, synthetic
+  python diagnostics/diag_wcb_reference.py --only battery          # ~6 min, needs the sleep frame
+  python diagnostics/diag_wcb_reference.py                         # all three
 
 Outputs: <PROCESSED>/ESTIMATION_OUTPUT/DIAG_PHI_SEPARATION/d_wcb_reference_*.csv
 
@@ -49,15 +49,16 @@ RESULT AS OF 2026-08-03 (re-run to refresh; do not trust this header over the cs
            0.152 under WCU-t but 0.010 under WCR-t -- the two corrected variants
            DISAGREE on it, and the size section says WCR is the one to believe here.
 """
-from utils.venv_guard import ensure_project_venv
-ensure_project_venv(__file__)
-
 import argparse
 import os
 import subprocess
 import sys
 import time
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # repo root: utils/ and pipeline modules
+from utils.venv_guard import ensure_project_venv
+ensure_project_venv(__file__)
 
 os.environ.setdefault("MPLBACKEND", "Agg")
 

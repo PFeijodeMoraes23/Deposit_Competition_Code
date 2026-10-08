@@ -26,19 +26,20 @@ in ΔV, exactly as in the model-based simulator.
 spread response, no re-solve). Not a substitute for the model-based version.
 
 Usage (runs on LOCAL data; needs phî & Dep^Act columns in the parquet):
-  python diag_cf1_franchise_dataonly.py --estim 6 --spec 12 --horizon 50
-  python diag_cf1_franchise_dataonly.py --parquet <path> --beta 0.95
+  python diagnostics/diag_cf1_franchise_dataonly.py --estim 6 --spec 12 --horizon 50
+  python diagnostics/diag_cf1_franchise_dataonly.py --parquet <path> --beta 0.95
 
 β is BBL_BETA from bbl_discount.env (the factor the cost parameters were estimated under) unless
 --beta is given. The horizon (--horizon, default 50) mirrors cf1_franchise.jl's own horizon and
 does not follow the BBL forward-simulation horizon.
 """
-from utils.venv_guard import ensure_project_venv
-ensure_project_venv(__file__)
-
 import argparse
 import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # repo root: utils/ and pipeline modules
+from utils.venv_guard import ensure_project_venv
+ensure_project_venv(__file__)
 
 # Status lines print arrows ("phi <- phi_mt"); Windows consoles default to cp1252 and raise
 # UnicodeEncodeError on them, which kills the script AFTER the data is loaded -- i.e. it
@@ -52,7 +53,7 @@ except Exception:
 import numpy as np
 import pandas as pd
 
-_ROOT = Path(__file__).resolve().parents[2]
+_ROOT = Path(__file__).resolve().parents[3]
 DATA = _ROOT / "BCB" / "Egan_et_al_2025_Rep" / "processed"
 DEMAND_PREP = DATA / "ESTIMATION_OUTPUT" / "DEMAND_PREP"
 CF_DIR = DATA / "ESTIMATION_OUTPUT" / "CF_FOUNDATION"

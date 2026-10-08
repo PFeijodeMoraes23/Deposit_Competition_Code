@@ -23,17 +23,19 @@ them:
 Read-only.  Writes a short text report next to this script.
 
 Usage:
-  python diag_cosif_timeagg.py
+  python diagnostics/diag_cosif_timeagg.py
 """
 from __future__ import annotations
 
 import glob
+import sys
 import zipfile
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # repo root: utils/ and pipeline modules
 try:
     from utils.venv_guard import ensure_project_venv
 except Exception:

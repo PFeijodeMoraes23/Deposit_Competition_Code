@@ -32,7 +32,7 @@ recomputed from the sample. Each of those is a trap that has cost measurable err
 
 READ-ONLY. Writes test_inversion_est{E}_{loss}.csv/.pkl into <demand_prep_root>/DIAGNOSTICS.
 
-Usage:  python diag_test_inversion_band.py [--est 3] [--loss robust] [--nsamp 200]
+Usage:  python diagnostics/diag_test_inversion_band.py [--est 3] [--loss robust] [--nsamp 200]
 """
 import argparse
 import os
@@ -44,7 +44,7 @@ import numpy as np
 import pandas as pd
 from scipy.stats import chi2
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from sleep_est_e2 import (build_pooled_data, define_specifications,  # noqa: E402
                                 run_pooled_first_stage)
