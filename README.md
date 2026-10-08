@@ -1,6 +1,6 @@
 # Deposit Competition in Brazil
 
-Research code for studying deposit competition in Brazil using Central Bank and Open Finance data. The project builds municipality-level banking panels and estimates deposit supply, demand, and costs, replicating and extending the framework of Egan, Hortaçsu, and Matvos (2025).
+Research code for studying deposit competition in Brazil using Central Bank and Open Finance data. The project builds municipality-level banking panels and estimates deposit supply, demand, and costs, extending deposit-competition methods to the Brazilian market, with a focus on the introduction of Pix and the dichotomy between digital and non-digital banks.
 
 **Suggested GitHub repository description**
 
@@ -87,9 +87,27 @@ The repository also contains source-specific scrapers, panel transformations, di
 - **Deposit demand:** constructs active market shares after accounting for the sleeping component, then estimates demand using Berry-style logit methods and BLP routines.
 - **Marginal costs:** estimates policy functions, forward-simulates value-function terms, and recovers cost parameters using the BBL approach.
 
+## Software dependencies
+
+**Python** (see `requirements_venv_full.txt` and `requirements_toon.txt`):
+
+- Data collection: `requests`, `urllib3`, `aiohttp`, `beautifulsoup4`, `lxml`, `pdfplumber`, `PyMuPDF` (`fitz`), `rapidocr_onnxruntime`, `openpyxl`
+- Data handling: `pandas`, `numpy`, `pyarrow`, `polars`
+- Econometrics: `statsmodels`, `linearmodels`, `scipy`
+- Geographic data: `geobr`, `geopandas`
+- Machine learning: `scikit-learn`
+- Visualisation: `matplotlib`
+
+**Julia** (see `Project.toml`; Julia 1.10–1.12):
+
+- Data and I/O: `DataFrames`, `Parquet2`, `JSON3`, `ArgParse`
+- Statistics and optimisation: `Distributions`, `Optim`, `LBFGSB`, `QuasiMonteCarlo`
+- Performance: `MKL`, `LoopVectorization`, `CUDA`, `PackageCompiler`, `SparseArrays`
+- Standard library: `LinearAlgebra`, `Statistics`, `Random`, `Serialization`, `Printf`, `Dates`, `TOML`
+
 ## References
 
-- Egan, M., Hortaçsu, A., & Matvos, G. (2025). *Deposit Competition and Financial Fragility: Evidence from the U.S. Banking Sector.*
+- Egan, M., Hortaçsu, A., & Matvos, G. (2025). *Dynamic Competition for Sleepy Deposits.* NBER Working Paper No. 34267.
 - Berry, S. T. (1994). “Estimating Discrete-Choice Models of Product Differentiation.” *RAND Journal of Economics*, 25(2), 242–262.
 - Petrin, A., & Train, K. (2010). “A Control Function Approach to Endogeneity in Consumer Choice Models.” *Journal of Marketing Research*, 47(1), 3–13.
 - Conlon, C., & Gortmaker, J. (2020). “Best Practices for Differentiated Products Demand Estimation with PyBLP.” *RAND Journal of Economics*, 51(4), 1108–1161.
