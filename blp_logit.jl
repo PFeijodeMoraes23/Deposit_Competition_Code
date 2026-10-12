@@ -60,8 +60,8 @@ Usage
 LaTeX outputs (→ ESTIMATION_OUTPUT/Rout + Drafts/Deposit Competition; data/output/logit on
 the cluster, where the Drafts folder does not exist):
   est{id}_spec12_logit.tex                 per-routine, 4 sub-model columns
-  est1-4_spec12_logit_comparison.tex       cross-routine, `Price + Chars` column each —
-                                           the sub-model whose X matches the BLP X₁
+  est1-4_spec12_logit_comparison.tex       cross-routine, `+ D-Type` (full_dtype) column each —
+                                           the sub-model whose X matches the BLP linear design
                                            (tab:demand_logit_spec12_comparison)
 
 References
@@ -82,6 +82,8 @@ include(joinpath(@__DIR__, "of_root.jl"))
 # The lineup, the \ref map and the demand prefixes come from config/routines.toml, which
 # utils/routines.py reads too. Guarded because several files in one session want the consts.
 isdefined(Main, :ROUTINE_REGISTRY) || include(joinpath(@__DIR__, "routines.jl"))
+# The input rule (missing / non-finite values) and the D-type dummy, shared with the RC engines.
+isdefined(Main, :DemandInputError) || include(joinpath(@__DIR__, "demand_inputs.jl"))
 
 # ==========================================================================
 # 0. Constants
@@ -100,9 +102,12 @@ const CORE_COLS = ["fgc_covered", "has_ip", "log_total_assets_lag"]
 const IV_BLP_LOO = ["loo_log_assets", "mean_loo_log_assets",
                     "loo_equity_ratio", "mean_loo_equity_ratio",
                     "loo_basileia", "mean_loo_basileia",
-                    "loo_credit_assets", "mean_loo_credit_assets",
+                    "loo_borrow_assets", "mean_loo_borrow_assets",
                     "loo_npl_provision", "mean_loo_npl_provision",
                     "n_rivals"]
+# `loo_borrow_assets` / `mean_loo_borrow_assets`: rivals' borrowings and onlendings (IF.data Passivo
+# line 78295) over total assets. A parquet built before the 2026-10 repair names them
+# loo_credit_assets / mean_loo_credit_assets (demand_inputs.jl, BLP_READ_PRE_REPAIR).
 const IV_COST    = ["personnel_cost_ratio_lag", "admin_cost_ratio_lag",
                     "tax_cost_ratio_lag"]
 const IV_CAPITAL = ["indice_basileia_lag"]
@@ -170,14 +175,40 @@ the single DEMAND_PREP entry, and every path resolves as it does with no flag.
 """
 function get_paths(is_hpc::Bool = is_hpc_run())
     if is_hpc
+        (out_dir_override() === nothing && demand_dir_override() === nothing) ||
+            error("--out-dir / --demand-dir are local options; the cluster tree is fixed.")
         return joinpath(@__DIR__, "..", "data", "input"),
                joinpath(@__DIR__, "..", "data", "output")
     end
     data_dir  = joinpath(resolve_of_root(), "BCB", "Egan_et_al_2025_Rep", "processed")
-    input_dir = joinpath(data_dir, "ESTIMATION_OUTPUT", "DEMAND_PREP")
-    output_dir= joinpath(data_dir, "ESTIMATION_OUTPUT", "BLP_RESULTS")
+    input_dir = something(demand_dir_override(),
+                          joinpath(data_dir, "ESTIMATION_OUTPUT", "DEMAND_PREP"))
+    output_dir= something(out_dir_override(),
+                          joinpath(data_dir, "ESTIMATION_OUTPUT", "BLP_RESULTS"))
     return input_dir, output_dir
 end
+
+"""
+Local run options (both off by default, when every path is the one above):
+
+  --demand-dir DIR   read the demand parquets from DIR instead of ESTIMATION_OUTPUT/DEMAND_PREP
+                     (e.g. the repaired DEMAND_PREP_REPAIRED folder).
+  --out-dir DIR      write everything this run produces under DIR: the logit step folder
+                     DIR/logit (δ warm-starts, .jls fits, combined summary) and the LaTeX tables in
+                     DIR/Rout. Nothing is copied to the Drafts folder. DIR must not be named
+                     `output` (that name marks the cluster tree, `is_cluster_out`).
+"""
+function _dir_arg(flag::AbstractString)
+    i = findfirst(==(flag), ARGS)
+    i === nothing && return nothing
+    i < length(ARGS) || error("$flag needs a directory")
+    d = abspath(ARGS[i + 1])
+    flag == "--out-dir" && is_cluster_out(d) &&
+        error("--out-dir $d: a directory named `output` would be read as the cluster tree.")
+    return d
+end
+out_dir_override()    = _dir_arg("--out-dir")
+demand_dir_override() = _dir_arg("--demand-dir")
 
 """Demand-prep search path (`demand_search_dirs`, of_root.jl): one directory in either tree —
 on the cluster the single one the prep step writes, `data/output/demand_prep`; off it the local
@@ -208,8 +239,9 @@ rest of the paper's tables in ESTIMATION_OUTPUT/Rout, a sibling of the results r
 where the exporters mirror from."""
 function tex_out_dir()
     out_dir = get_paths()[2]
-    d = is_cluster_out(out_dir) ? logit_dir(out_dir) :
-                                  joinpath(dirname(out_dir), "Rout")
+    d = is_cluster_out(out_dir)          ? logit_dir(out_dir) :
+        out_dir_override() !== nothing   ? joinpath(out_dir, "Rout") :
+                                           joinpath(dirname(out_dir), "Rout")
     mkpath(d)
     return d
 end
@@ -398,67 +430,47 @@ end
 # ==========================================================================
 # 2. Regressor and IV Construction
 # ==========================================================================
-"""Build spread vector, product-characteristics matrix, and IV matrix."""
+"""
+    build_matrices(df, xcols, add_dtype) -> (spread, X, X_full, Z, iv_avail)
+
+Spread (pp), product characteristics `X` (`xcols`, then the D-type dummy when `add_dtype`),
+X_full = [spread, X], and the instruments that enter the moments. Read under the input rule of
+demand_inputs.jl, the one the RC engines apply: a missing or non-finite price, characteristic or
+instrument stops the run with a `DemandInputError` naming every column's count, unless
+BLP_READ_PRE_REPAIR=1 (then 0.0, with the counts printed). An ABSENT column is an error in every
+case: it used to be dropped (an instrument) or read as zeros (a characteristic) in silence, which
+is how the whole IV_BLP_LOO block vanished when a market_panel rebuild skipped
+panel_loo_instruments.py (it OVERWRITES market_panel.csv with the LOO instruments + FGC dummy).
+"""
 function build_matrices(df::DataFrame, xcols::Vector{String}, add_dtype::Bool)
-    N = nrow(df)
+    all_iv_names = vcat(IV_BLP_LOO, IV_ESTBAN, IV_COST, IV_CAPITAL)
+    s_blk = read_input_block(df, ["spread_ann"], "price")
+    x_blk = read_input_block(df, xcols, "X")
+    z_blk = read_input_block(df, all_iv_names, "instrument")
+    enforce_inputs!([s_blk, x_blk, z_blk]; context="demand parquet")
 
     # Spread in percentage points (÷100 to convert from bps stored in parquet)
-    spread = Float64.(coalesce.(df.spread_ann, 0.0)) ./ 100.0
+    spread = s_blk[1][:, 1] ./ 100.0
 
-    # Product characteristics matrix X. A constant is prepended only under
-    # BLP_LOGIT_INTERCEPT=1 (off by default — see `logit_intercept`), so the reported design
-    # is exactly the RC engines' X₁.
-    use_const = logit_intercept()
-    n_x = length(xcols) + (add_dtype ? 1 : 0) + (use_const ? 1 : 0)
-    X   = zeros(N, n_x)
-    off = 0
-    if use_const
-        X[:, 1] .= 1.0
-        off = 1
-    end
-    for (i, col) in enumerate(xcols)
-        if col in names(df)
-            X[:, off + i] .= Float64.(coalesce.(df[!, col], 0.0))
-        end
-    end
-    if add_dtype
-        # D-type dummy: is_B == false (i.e., national D-type institutions)
-        is_B = Bool.(coalesce.(df.is_B, false))
-        X[:, n_x] .= Float64.(.!is_B)
-    end
+    # Product characteristics matrix X: [constant?, xcols…, dummy_D_type?]. A constant is
+    # prepended only under BLP_LOGIT_INTERCEPT=1 (off by default — see `logit_intercept`), so the
+    # reported design is exactly the RC engines' linear design (X1_COLS = X_COLS + the D dummy for
+    # `full_dtype`).
+    blocks = Matrix{Float64}[]
+    logit_intercept() && push!(blocks, ones(nrow(df), 1))
+    push!(blocks, x_blk[1])
+    add_dtype && push!(blocks, reshape(dtype_column(df), :, 1))   # 1 where is_B is false (D type)
+    X = reduce(hcat, blocks)
 
     # Full regressor matrix: [spread, X]
     X_full = hcat(spread, X)
 
-    # IV matrix
-    all_iv_names = vcat(IV_BLP_LOO, IV_ESTBAN, IV_COST, IV_CAPITAL)
-
-    # A missing instrument COLUMN used to be dropped in silence, which is how the entire IV_BLP_LOO
-    # block vanished when a market_panel rebuild skipped panel_loo_instruments.py (it OVERWRITES
-    # market_panel.csv with the LOO instruments + FGC dummy). The logit then ran on the cost shifters
-    # alone. A missing column is a broken panel, not a modelling choice — say so.
-    _absent = [c for c in all_iv_names if !(c in names(df))]
-    if !isempty(_absent)
-        error("Demand parquet is missing instrument column(s): " * join(_absent, ", ") *
-              ".\nRebuild in order: panel_6 → panel_7 (LOO instruments + FGC; OVERWRITES " *
-              "market_panel.csv) → panel_9 --patch-market, then re-run the demand prep.")
-    end
-
-    # Zero-variance IVs are still dropped (a constant column carries no identifying information and
-    # would make Z'Z singular) — but say WHICH, so a silently-degenerate instrument is visible.
-    _zerovar = [c for c in all_iv_names if
-        std(replace(Float64.(coalesce.(df[!, c], 0.0)), Inf=>0.0, -Inf=>0.0)) <= 1e-10]
-    if !isempty(_zerovar)
-        @warn "Dropping zero-variance instrument(s): " * join(_zerovar, ", ")
-    end
-    iv_avail = [c for c in all_iv_names if !(c in _zerovar)]
-
-    Z = zeros(N, length(iv_avail))
-    for (i, col) in enumerate(iv_avail)
-        v = Float64.(coalesce.(df[!, col], 0.0))
-        replace!(v, Inf=>0.0, -Inf=>0.0)
-        Z[:, i] .= v
-    end
+    # Zero-variance IVs are dropped (a constant column carries no identifying information and would
+    # make Z'Z singular), with a warning naming them.
+    keep = [std(view(z_blk[1], :, j)) > 1e-10 for j in eachindex(all_iv_names)]
+    all(keep) || @warn "Dropping zero-variance instrument(s): " * join(all_iv_names[.!keep], ", ")
+    iv_avail = all_iv_names[keep]
+    Z = z_blk[1][:, keep]
 
     return spread, X, X_full, Z, iv_avail
 end
@@ -610,6 +622,10 @@ function run_strategy(estim)
 
     # Deposit types for first-stage projection
     dep_types = Int.(coalesce.(df.deposit_type, 0))
+
+    # The input rule (demand_inputs.jl) on the widest design, before anything is written: a gap in
+    # the price, a characteristic or an instrument stops the routine here, with its counts.
+    build_matrices(df, X_COLS, true)
 
     # ── Save logit δ checkpoint for BLP σ-stage warm-start ──
     # delta_dir() is the logit step folder, the same `logit_dir(out_dir)` the RC engine
@@ -790,15 +806,15 @@ const TABLE_SUBMODELS = [("priceonly", "Price Only"), ("core", "Price + Core"),
                          ("full", "Price + Chars"), ("full_dtype", "+ D-Type"),
                          ("core_dtype", "Price + Core + D-Type")]
 # Cross-estimator comparison table (est1-4_spec12_logit_comparison.tex): one column per
-# demand routine, each showing its `full` (Price + Chars) sub-model. That sub-model's X is
-# exactly the BLP X₁ (X_COLS, no dummy_D_type), so the published logit column is the literal
-# θ₂ = 0 nest of the RC model in blp_engine_cpu/gpu — the paper's nesting claim depends on
-# this key staying aligned with the engines' X_COLS. The D-type variant (full_dtype) remains
-# in the per-routine tables. Column headers \ref{} the sleepiness-strategy enumerate items
+# demand routine, each showing its `full_dtype` (+ D-Type) sub-model. That sub-model's X is
+# exactly the RC engines' linear design X1_COLS (X_COLS, then dummy_D_type), so the published
+# logit column is the literal θ₂ = 0 nest of the RC model in blp_engine_cpu/gpu — the paper's
+# nesting claim depends on this key staying aligned with the engines' X1_COLS. The other
+# sub-models remain in the per-routine tables. Column headers \ref{} the sleepiness-strategy enumerate items
 # in V_Main §(sec:empirical:sleep) — same convention as est1-4_spec12_stage2_comparison.tex.
 # ESTIMATION_ENUM_REF (routines.jl) carries a \ref for every id listed here; an id absent
 # from it falls back to a plain E<id> header.
-const COMPARISON_SUBMODEL = "full"
+const COMPARISON_SUBMODEL = "full_dtype"
 const COMPARISON_IDS  = LINK_ROUTINES
 # Routines that get a per-routine est{id}_spec12_logit.tex. The routines are AUTO-DISCOVERED from the
 # demand parquets, so this list is what keeps a stray parquet (an exploratory routine, an id outside
@@ -806,13 +822,17 @@ const COMPARISON_IDS  = LINK_ROUTINES
 # `--est N` bypasses the filter, so any discovered routine stays reachable on demand.
 const REPORTED_IDS    = ACTIVE_ROUTINES
 const COMPARISON_ROWS = ["alpha", "fgc_covered", "has_ip", "log_total_assets_lag",
-                         "is_state_owned"]   # seg_S2-S5 included in the spec, not reported
+                         "is_state_owned", "dummy_D_type"]   # seg_S2-S5 included in the spec, not reported
 const COMPARISON_ROWS_SEG = ["alpha", "fgc_covered", "has_ip", "log_total_assets_lag",
-                             "seg_S2", "seg_S3", "seg_S4", "seg_S5", "is_state_owned"]  # segments shown
+                             "seg_S2", "seg_S3", "seg_S4", "seg_S5", "is_state_owned",
+                             "dummy_D_type"]  # segments shown
 # The Effective-F rows/note are suppressed until Table \ref{tab:weakiv_spec12} (the weak-IV
 # battery table) exists; flip to `true` to print them again once it does.
 const PRINT_EFF_F = false
 const DRAFTS_DIR = drafts_dir()
+"Where a LaTeX table goes: `rout_dir`, and the Drafts folder when it exists and --out-dir is not set."
+table_dests(rout_dir) = (isdir(DRAFTS_DIR) && out_dir_override() === nothing) ?
+                        [rout_dir, DRAFTS_DIR] : [rout_dir]
 const TROW = " \\\\"   # LaTeX row terminator ` \\` (a raw " \\" would collapse to one backslash)
 
 map_var(name::AbstractString) = get(VAR_MAP, name, replace(name, "_" => raw"\_"))
@@ -998,7 +1018,7 @@ function _mean_rho_one_minus_s(estim)
 end
 
 """Build est1-4_spec12_logit_comparison.tex: columns = routines (each its COMPARISON_SUBMODEL
-sub-model — `full`, the BLP-X₁-matching spec), rows = COMPARISON_ROWS, stats block =
+sub-model — `full_dtype`, the spec matching the RC engines' linear design X1_COLS), rows = COMPARISON_ROWS, stats block =
 elasticity / N / Q / effective first-stage F (types 4 and 5, from `eff_f`; the two rows and
 their note sentence are omitted when `eff_f` is empty) / G*. The note is assembled from
 config/table_notes.toml (`notes`, see `demand_note`), the wording Table 6 shares.
@@ -1124,7 +1144,7 @@ function write_logit_comparison_table(data::AbstractDict)
     end
     eff_f = PRINT_EFF_F ? first_stage_eff_F(data, ids) : Dict{Int,NTuple{4,Float64}}()
     rout_dir = tex_out_dir()
-    dests = isdir(DRAFTS_DIR) ? [rout_dir, DRAFTS_DIR] : [rout_dir]
+    dests = table_dests(rout_dir)
     # ONLY the segment-suppressed version is emitted. The `_seg` twin was retired: the segment dummies
     # it added are already printed per routine by est{3,4}_spec12_logit.tex (both live in the
     # appendix), so it duplicated four rows and no information while lengthening the appendix. The
@@ -1237,7 +1257,7 @@ function write_logit_tables(ids::Vector{Int}, data::AbstractDict)
     notes = demand_notes()
     notes === nothing && return
     rout_dir = tex_out_dir()                             # ESTIMATION_OUTPUT/Rout, or logit/ on the cluster
-    dests = isdir(DRAFTS_DIR) ? [rout_dir, DRAFTS_DIR] : [rout_dir]
+    dests = table_dests(rout_dir)
     for id in ids
         tex = build_logit_table_tex(id, data, notes)
         for d in dests
@@ -1321,6 +1341,8 @@ function main()
             try
                 merge!(all_results, run_strategy(estim))
             catch e
+                # A gap in the demand inputs stops the build: no table may be written without it.
+                e isa DemandInputError && rethrow()
                 println("  [!] Routine $(estim.label) failed: $e. Skipping.")
             end
         end

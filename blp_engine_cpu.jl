@@ -37,6 +37,8 @@ using JSON3, Serialization, ArgParse, Printf, Dates
 # Shared SE machinery (wild cluster bootstrap + analytical GMM sandwich, BLP_SE_METHOD).
 include(joinpath(@__DIR__, "blp_se_common.jl"))
 include(joinpath(@__DIR__, "of_root.jl"))
+# The input rule (missing / non-finite values) and the D-type dummy, shared with blp_logit.jl.
+isdefined(Main, :DemandInputError) || include(joinpath(@__DIR__, "demand_inputs.jl"))
 # The lineup and the demand prefixes come from config/routines.toml, which utils/routines.py
 # reads too. Guarded because several files in one session want the consts.
 isdefined(Main, :ROUTINE_REGISTRY) || include(joinpath(@__DIR__, "routines.jl"))
@@ -120,9 +122,18 @@ BLAS.set_num_threads(min(8, Threads.nthreads()))
 # ==========================================================================
 # 0. Constants (must match blp_loop.jl and blp_draws.jl)
 # ==========================================================================
+# X_COLS: the product characteristics that carry random coefficients. With the spread they form
+# `prod_vec` (coef_dim = 1 + L_PROD columns), the matrix the ν draws (2000 × 9) multiply, and the
+# π interactions index into it. Adding a column here changes the random-coefficient dimension.
 const X_COLS = ["fgc_covered", "has_ip", "seg_S2", "seg_S3", "seg_S4", "seg_S5",
                 "log_total_assets_lag", "is_state_owned"]
 const L_PROD = length(X_COLS)
+# X1_COLS: the LINEAR design (θ₁ after α), X_COLS then the D-type dummy, built from `is_B`
+# (demand_inputs.jl `dtype_column`). The dummy enters the linear part only: it is not in prod_vec,
+# the draws or the moments. The order is blp_logit.jl's `full_dtype` sub-model, which is therefore
+# the θ₂ = 0 nest of this model.
+const X1_COLS = vcat(X_COLS, [DTYPE_COL])
+const L_X1    = length(X1_COLS)
 const K_TYPES = 4
 const K_LIST  = [1, 2, 4, 5]
 const D_COLS  = ["gdp_per_capita", "fraction_65plus", "fraction_young",
@@ -135,10 +146,13 @@ const D_DIM   = length(D_COLS)
 # `pinv` weight matrix already handles the collinearity, and the linear-logit trim was rejected
 # for weakening α (see blp_logit.jl). Kept consistent with the logit; trimming is a robustness
 # discussion only (review §4).
+# `loo_borrow_assets` / `mean_loo_borrow_assets`: rivals' borrowings and onlendings (IF.data Passivo
+# line 78295) over total assets. A parquet built before the 2026-10 repair names them
+# loo_credit_assets / mean_loo_credit_assets (demand_inputs.jl, BLP_READ_PRE_REPAIR).
 const IV_BLP_LOO = ["loo_log_assets", "mean_loo_log_assets",
                     "loo_equity_ratio", "mean_loo_equity_ratio",
                     "loo_basileia", "mean_loo_basileia",
-                    "loo_credit_assets", "mean_loo_credit_assets",
+                    "loo_borrow_assets", "mean_loo_borrow_assets",
                     "loo_npl_provision", "mean_loo_npl_provision",
                     "n_rivals"]
 const IV_COST    = ["personnel_cost_ratio_lag", "admin_cost_ratio_lag",
@@ -795,40 +809,54 @@ end
 # ==========================================================================
 # 6. Linear IV (Eq-A5)
 # ==========================================================================
+"""
+    build_regressor_matrices(df) -> (spread_cols, x_mat, Z_mat, iv_cols)
+
+The price (spread in pp), the linear design `x_mat` (N × L_X1: the X_COLS columns, then the D-type
+dummy) and every instrument of `iv_cols` (N × L, before the zero-variance filter), read under the
+input rule of demand_inputs.jl: a missing or non-finite value in any of them stops the run with a
+`DemandInputError` that counts it per column and per row, unless BLP_READ_PRE_REPAIR=1 (then 0.0).
+
+A column ABSENT from the parquet is an error in every case. It used to vanish silently: X_COLS fell
+back to a column of zeros and a missing instrument was dropped from Z, which is how the whole
+IV_BLP_LOO block once disappeared after a market_panel rebuild skipped panel_loo_instruments.py,
+leaving the BLP identified off the cost shifters alone and α̂ positive (plan §0B).
+"""
 function build_regressor_matrices(df::DataFrame)
-    N           = nrow(df)
-    spread_cols = coalesce.(df.spread_ann, 0.0) ./ 100.0  # bps → percentage points (÷100)
-
-    # A regressor or instrument that is ABSENT from the parquet used to vanish silently: X_COLS fell
-    # back to a column of zeros, and `iv_cols = [... if c in names(df)]` simply dropped the missing
-    # instrument from Z.  That is how the ENTIRE IV_BLP_LOO block (loo_log_assets, mean_loo_log_assets,
-    # loo_equity_ratio, loo_basileia, leave_one_out_mean_spread) disappeared without a word when a
-    # market_panel rebuild skipped panel_loo_instruments.py — leaving the BLP identified off the cost
-    # shifters alone, and α̂ flipping positive.  Fail loudly instead.  (Missing VALUES are still fine;
-    # they are coalesced to 0 below.  It is a missing COLUMN that is fatal.)  See plan §0B.
-    _absent_x  = [c for c in X_COLS if !(c in names(df))]
-    _absent_iv = [c for c in vcat(IV_BLP_LOO, IV_ESTBAN, IV_COST, IV_CAPITAL) if !(c in names(df))]
-    if !isempty(_absent_x) || !isempty(_absent_iv)
-        msg = "Demand parquet is missing columns the estimator requires.\n"
-        isempty(_absent_x)  || (msg *= "  product characteristics (X_COLS): " * join(_absent_x, ", ") * "\n")
-        isempty(_absent_iv) || (msg *= "  instruments (IV_*): " * join(_absent_iv, ", ") * "\n")
-        msg *= "Rebuild the panel in order — panel_6 → panel_7 (LOO instruments + FGC; it OVERWRITES " *
-               "market_panel.csv) → panel_9 --patch-market — then re-run the demand prep."
-        error(msg)
-    end
-
-    x_mat = zeros(N, L_PROD)
-    for (i, col) in enumerate(X_COLS)
-        x_mat[:, i] .= coalesce.(df[!, col], 0.0)
-    end
     iv_cols = vcat(IV_BLP_LOO, IV_ESTBAN, IV_COST, IV_CAPITAL)
-    Z_mat   = zeros(N, length(iv_cols))
-    for (i, col) in enumerate(iv_cols)
-        v = coalesce.(df[!, col], 0.0)
-        v = replace(v, Inf => 0.0, -Inf => 0.0)
-        Z_mat[:, i] .= v
-    end
-    return spread_cols, x_mat, Z_mat, iv_cols
+    s_blk = read_input_block(df, ["spread_ann"], "price")
+    x_blk = read_input_block(df, X_COLS, "X")
+    z_blk = read_input_block(df, iv_cols, "instrument")
+    enforce_inputs!([s_blk, x_blk, z_blk]; context="demand parquet")
+    spread_cols = s_blk[1][:, 1] ./ 100.0                      # bps → percentage points (÷100)
+    x_mat = hcat(x_blk[1], dtype_column(df))                   # X1_COLS order: X_COLS, then D
+    size(x_mat, 2) == L_X1 || error("linear design has $(size(x_mat, 2)) columns, X1_COLS $(L_X1)")
+    return spread_cols, x_mat, z_blk[1], iv_cols
+end
+
+"""
+    rc_design(spread_cols, x_mat) -> prod_vec
+
+The random-coefficient design, N × coef_dim: the spread, then the X_COLS columns of the linear
+design. The D-type dummy (the last column of `x_mat`) is not part of it.
+"""
+function rc_design(spread_cols::Vector{Float64}, x_mat::Matrix{Float64})::Matrix{Float64}
+    X1_COLS[1:L_PROD] == X_COLS || error("X1_COLS must start with X_COLS")
+    size(x_mat, 2) == L_X1 || error("rc_design: x_mat has $(size(x_mat, 2)) columns, expected $(L_X1)")
+    return hcat(spread_cols, x_mat[:, 1:L_PROD])
+end
+
+"""
+    moment_instruments(Z_mat, iv_cols) -> (Z, iv_avail)
+
+The instruments that enter the GMM moments: the columns of `Z_mat` with non-zero variance, named in
+`iv_avail`. A constant column carries no identifying information and would make Z'Z singular, so it
+is dropped, with a warning naming it.
+"""
+function moment_instruments(Z_mat::Matrix{Float64}, iv_cols::Vector{String})
+    keep = [std(view(Z_mat, :, j)) > 1e-10 for j in 1:size(Z_mat, 2)]
+    all(keep) || @warn "Dropping zero-variance instrument(s): " * join(iv_cols[.!keep], ", ")
+    return Z_mat[:, keep], iv_cols[keep]
 end
 
 function project_endogenous_spreads(spread_cols::Vector{Float64},
@@ -899,10 +927,10 @@ unidentified, and the two estimators hide it differently — a silent false posi
 
 This surfaces the offending column **by name** before any estimation runs. Returns the
 numerical rank; if `abort` and rank < ncols it errors (default), else warns.
-`colnames` must align with the columns of `pc.X_hat` (i.e. `["spread_hat"; X_COLS...]`).
+`colnames` must align with the columns of `pc.X_hat` (i.e. `["spread_hat"; X1_COLS...]`).
 """
 function check_design_rank(pc::Precomp;
-                           colnames::Vector{String}=vcat(["spread_hat"], X_COLS),
+                           colnames::Vector{String}=vcat(["spread_hat"], X1_COLS),
                            abort::Bool=true)::Int
     valid = pc.theta1_valid
     Xv    = pc.X_hat[valid, :]
@@ -1165,6 +1193,10 @@ function load_precomputed_draws(draws_dir::String, R::Int, seed::Int)
     nu_draws   = deserialize(nu_path)::Matrix{Float64}
     draws_3d   = deserialize(demo_path)::Array{Float64,3}
     key_index  = deserialize(key_path)::Dict{Tuple{String,String},Int}
+    # compute_mu! reads ν columns 1:coef_dim inside an @turbo loop, which does not check bounds.
+    size(nu_draws, 2) >= 1 + L_PROD || error(
+        "ν draws have $(size(nu_draws, 2)) columns but the random-coefficient design has " *
+        "$(1 + L_PROD) (spread + X_COLS). Rebuild the draws (blp_draws.jl) for this X_COLS.")
 
     # Normalize each demographic dimension to unit std so that π bounds of ±2
     # are meaningful for all demographics regardless of their natural scale
@@ -1234,6 +1266,9 @@ function run_blp_estimation(estim::Int, spec_id::Int, args,
         delta[.!is_B] .= log.(clamp.(share_D[.!is_B],      1e-15, Inf))
         delta[is_B]   .= log.(clamp.(share_B_cond[is_B],    1e-15, Inf))
 
+        # Read the design first: an input gap stops the run before anything is written.
+        spread_cols, x_mat, Z_mat, iv_cols = build_regressor_matrices(df)
+
         # Save δ as version-agnostic binary — survives Julia version upgrades on cluster.
         # Into the logit step directory, the one place the δ readers (this file's warm start,
         # cf_demand_eval.jl's logit stage) look for it.
@@ -1244,7 +1279,6 @@ function run_blp_estimation(estim::Int, spec_id::Int, args,
             log_status("  [δ BIN] Saved $(basename(_bin)) ($(length(delta)) obs)")
         end
 
-        spread_cols, x_mat, Z_mat, iv_cols = build_regressor_matrices(df)
         H          = hcat(x_mat, Z_mat)
         dep_types  = Int.(coalesce.(df.deposit_type, 0))
         spread_hat = project_endogenous_spreads(spread_cols, H, dep_types)
@@ -1253,15 +1287,7 @@ function run_blp_estimation(estim::Int, spec_id::Int, args,
         valid      = BitVector(all.(isfinite, eachrow(X_hat)))
         # Clustering: CodConglomeradoPrudencial only (matches sleep estimation)
         clusters   = string.(df.CodConglomeradoPrudencial)
-        iv_avail   = [c for c in iv_cols
-                      if std(replace(coalesce.(df[!, c], 0.0),
-                                     Inf=>0.0, -Inf=>0.0)) > 1e-10]
-        Z_clean = zeros(nrow(df), length(iv_avail))
-        for (i, c) in enumerate(iv_avail)
-            v = coalesce.(df[!, c], 0.0)
-            replace!(v, Inf=>0.0, -Inf=>0.0)
-            Z_clean[:, i] .= v
-        end
+        Z_clean, iv_avail = moment_instruments(Z_mat, iv_cols)
         pc_logit = Precomp(Int[], Int[], Tuple{String,String}[], String[], Int[],
                            Float64[],
                            sparse(zeros(0,0)), sparse(zeros(0,0)), sparse(zeros(0,0)),
@@ -1285,7 +1311,7 @@ function run_blp_estimation(estim::Int, spec_id::Int, args,
         results["xi"]                 = xi
         results["Q_value"]            = Q
         results["converged"]          = true
-        results["param_names_theta1"] = vcat(["alpha"], X_COLS)
+        results["param_names_theta1"] = vcat(["alpha"], X1_COLS)
         results["sigma_indices"]      = Int[]
         results["pi_interactions"]    = Tuple{Int,Int}[]
         results["n_clusters"]         = n_cl
@@ -1310,24 +1336,10 @@ function run_blp_estimation(estim::Int, spec_id::Int, args,
     n_mapped  = count(i -> i != pad_idx, obs_key_idx)
     log_status("  Obs mapped to draws: $n_mapped / $N_obs ($(round(100*n_mapped/N_obs, digits=1))%)")
 
-    prod_vec = zeros(N_obs, coef_dim)
-    spreads  = coalesce.(df.spread_ann, 0.0) ./ 100.0  # bps → percentage points (÷100)
     dep_types = Int.(coalesce.(df.deposit_type, 0))
-    prod_vec[:, 1] .= spreads
-    for (i, col) in enumerate(X_COLS)
-        col in names(df) && (prod_vec[:, 1+i] .= coalesce.(df[!, col], 0.0))
-    end
-
     spread_cols, x_mat, Z_mat, iv_cols = build_regressor_matrices(df)
-    iv_avail = [c for c in iv_cols
-                if std(replace(coalesce.(df[!, c], 0.0),
-                               Inf=>0.0, -Inf=>0.0)) > 1e-10]
-    Z = zeros(N_obs, length(iv_avail))
-    for (i, c) in enumerate(iv_avail)
-        v = coalesce.(df[!, c], 0.0)
-        replace!(v, Inf=>0.0, -Inf=>0.0)
-        Z[:, i] .= v
-    end
+    prod_vec = rc_design(spread_cols, x_mat)           # spread + X_COLS (N × coef_dim); D is not in it
+    Z, iv_avail = moment_instruments(Z_mat, iv_cols)
     W = try inv(Z' * Z ./ N_obs) catch; Matrix(I(length(iv_avail)) * 1.0) end
 
     H          = hcat(x_mat, Z_mat)
@@ -1504,7 +1516,7 @@ function run_blp_estimation(estim::Int, spec_id::Int, args,
     results["Q_value"]            = Optim.minimum(result)
     results["converged"]          = Optim.converged(result)
     results["n_outer_iter"]       = Optim.iterations(result)
-    results["param_names_theta1"] = vcat(["alpha"], X_COLS)
+    results["param_names_theta1"] = vcat(["alpha"], X1_COLS)
     results["sigma_indices"]      = sigma_indices
     results["pi_interactions"]    = pi_interactions
     results["n_clusters"]         = n_cl
@@ -1617,6 +1629,8 @@ function main()
             res = try
                 run_blp_estimation(estim, sp, args, nu_draws, draws_3d, key_index)
             catch e
+                # A gap in the demand inputs stops the run: no later stage may start without it.
+                e isa DemandInputError && rethrow()
                 println("  [!] Spec $sp failed: $e"); nothing
             end
             res === nothing && continue

@@ -11,6 +11,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from utils import paths
 from utils import routines
+from utils import demand_repair
 
 _LINK_DEMAND = set(routines.LINK_ESTS)   # config-driven via sleep_demand_prep_link.py --est N
 
@@ -22,10 +23,13 @@ def _count_parquets(est, since):
     report is the point: a child that reads the wrong tree finds no fit, writes nothing and
     still exits 0, and it is these files the demand estimation consumes next.
 
-    Counted in `demand_parquet_dir()` — the same accessor the children write through, so the
-    count cannot be taken in a different directory than the one that was just filled.
+    Counted in `demand_parquet_dir()` passed through `demand_repair.output_dir` — the same
+    accessors the children write through, so the count cannot be taken in a different directory
+    than the one that was just filled. With DEMAND_REPAIR=1 that is the repaired folder
+    (ESTIMATION_OUTPUT/DEMAND_PREP_REPAIRED locally, or DEMAND_REPAIR_OUT); switched off it is
+    `demand_parquet_dir()` itself.
     """
-    root = paths.demand_parquet_dir()
+    root = demand_repair.output_dir(paths.demand_parquet_dir())
     if not root.exists():
         return 0
     return sum(1 for p in root.glob(f"demand_{est}_*spec_*.parquet")
@@ -94,7 +98,7 @@ def main():
             print(f"\n[FAILED] Estimations {failed} had errors.")
         if empty:
             print(f"\n[FAILED] Estimations {empty} produced no demand parquets in "
-                  f"{paths.demand_parquet_dir()}. Check that the sleep estimators wrote "
+                  f"{demand_repair.output_dir(paths.demand_parquet_dir())}. Check that the sleep estimators wrote "
                   f"estimation_results.pkl under {paths.demand_prep_root()} (SLEEP_OUT_ROOT).")
         sys.exit(1)
 

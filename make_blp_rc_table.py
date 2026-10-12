@@ -103,6 +103,7 @@ THETA1_LABELS = {
     "seg_S5":               r"Segment S5",
     "log_total_assets_lag": r"$\ln(\text{Total Assets}_{t-1})$",
     "is_state_owned":       r"State-Owned",
+    "dummy_D_type":         r"D Type",      # linear part only (X1_COLS), no random coefficient
 }
 
 # Characteristic labels for the σ/π parameter names — cover ALL θ₁ characteristics so σ(·) labels
@@ -435,6 +436,15 @@ def build_table(est_id: int, suffix: str = "") -> str:
     if not available:
         print(f"[E{est_id}] No result files found in {RESULTS_DIR}")
         return ""
+
+    # A stage whose joint standard errors were refused by the SE guard (blp_se_common.jl: K > L or a
+    # singular D'WD) or whose SE block failed stores NaN SEs, written as 0 in the JSON, so its
+    # column prints coefficients with no SE row. Say so on the console.
+    for s in available:
+        st = str(stage_results[s].get("se_status", "") or "")
+        if st and st != "ok":
+            print(f"[E{est_id}] WARNING: stage {s} has no joint standard errors ({st}); "
+                  f"its column prints point estimates only.")
 
     ncols    = len(available)
     col_fmt  = equal_col_fmt(ncols, "4.8cm")   # equal-width columns fill the line (no bulging column)

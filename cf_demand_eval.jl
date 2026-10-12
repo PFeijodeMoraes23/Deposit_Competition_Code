@@ -562,21 +562,14 @@ function build_cf_context(estim::Int, spec_id::Int, stage::String;
     pad_idx   = size(draws_3d, 1)
     obs_key_idx = [get(key_index, (mca_codes[i], time_ids[i]), pad_idx) for i in 1:N_obs]
 
-    # ── prod_vec: col 1 = ρ (spread_ann/100), cols 2:1+L_PROD = X_COLS ──────
-    prod_vec = zeros(N_obs, coef_dim)
-    prod_vec[:, 1] .= coalesce.(df.spread_ann, 0.0) ./ 100.0
-    for (i, col) in enumerate(X_COLS)
-        col in names(df) && (prod_vec[:, 1+i] .= coalesce.(df[!, col], 0.0))
-    end
+    # ── Design, as the estimator builds it (blp_engine_cpu.jl, input rule of demand_inputs.jl) ──
+    # prod_vec: col 1 = ρ (spread_ann/100), cols 2:1+L_PROD = X_COLS. x_mat is the linear design
+    # X1_COLS (X_COLS, then the D-type dummy); the dummy is not in prod_vec.
+    spread_cols, x_mat, Z_mat, iv_cols = build_regressor_matrices(df)
+    prod_vec = rc_design(spread_cols, x_mat)
+    Z, _     = moment_instruments(Z_mat, iv_cols)
 
     # ── Precomp (shares aggregation structure) ──────────────────────────────
-    spread_cols, x_mat, Z_mat, iv_cols = build_regressor_matrices(df)
-    iv_avail = [c for c in iv_cols
-                if std(replace(coalesce.(df[!, c], 0.0), Inf=>0.0, -Inf=>0.0)) > 1e-10]
-    Z = zeros(N_obs, length(iv_avail))
-    for (i, c) in enumerate(iv_avail)
-        v = coalesce.(df[!, c], 0.0); replace!(v, Inf=>0.0, -Inf=>0.0); Z[:, i] .= v
-    end
     H          = hcat(x_mat, Z_mat)
     dep_types  = Int.(coalesce.(df.deposit_type, 0))
     spread_hat = project_endogenous_spreads(spread_cols, H, dep_types)
@@ -607,8 +600,9 @@ function build_cf_context(estim::Int, spec_id::Int, stage::String;
     if !placeholder && stage == "logit"
         # LOGIT stage: δ̂ is saved as logit_delta_E{e}_spec_{s}{suffix}.bin
         # (there is no RC-style result dict). θ₂ is empty ⇒ μ=0 ⇒ plain logit shares.
-        # θ₁ is only needed for SPREAD counterfactuals; pull α from the 'full' logit
-        # sub-model if present, else 0 (in-sample share reproduction is unaffected).
+        # θ₁ is only needed for SPREAD counterfactuals; pull α from the 'full_dtype' logit
+        # sub-model (the θ₂ = 0 nest of the RC model: X_COLS and the D-type dummy) if present,
+        # else 0 (in-sample share reproduction is unaffected).
         # input_dir (data/input on the cluster) comes first so a δ̂ supplied as an upload wins
         # over one the logit step produced; otherwise it is the logit step folder, which is the
         # only place blp_logit.jl writes.
@@ -621,12 +615,12 @@ function build_cf_context(estim::Int, spec_id::Int, stage::String;
         delta_hat = all(row_keep) ? dfull : dfull[row_keep]
         theta2 = Float64[]
         theta1 = zeros(coef_dim)
-        lpath  = joinpath(logit_dir(out_dir), "logit_E$(estim)_full_spec_$(spec_id)$(suffix).jls")
+        lpath  = joinpath(logit_dir(out_dir), "logit_E$(estim)_full_dtype_spec_$(spec_id)$(suffix).jls")
         if isfile(lpath)
             lr = deserialize(lpath); t1 = get(lr, "theta1", nothing)
             (t1 !== nothing && !isempty(t1)) && (theta1[1] = Float64(t1[1]))
         else
-            @warn "No logit full sub-model ($(basename(lpath))) — α=0 (in-sample shares OK; spread CFs disabled)."
+            @warn "No logit full_dtype sub-model ($(basename(lpath))) — α=0 (in-sample shares OK; spread CFs disabled)."
         end
     elseif placeholder || !isfile(rpath)
         placeholder || @warn "RC result missing ($(basename(rpath))) — using PLACEHOLDER params (θ₂=0, δ=log-share init). Results are NOT valid until the BLP finishes."

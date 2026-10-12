@@ -39,6 +39,10 @@ number there is read from the output of the generator that renders the exhibit i
   I  policy-function fit (C.10, C.11)      COST_POLFUNC/polfunc_summary.json (bbl_polfunc.py): R^2,
                                            mean spread, N, G, G* per column
   J  entry events (Figure 2)               DIAG_PHI_SEPARATION/d6_entry_paths.csv, n at h = 0
+  K  state vector of phi (appendix table)  Rout/tab_state_vector_map.json, the unrounded sidecar
+                                           make_state_vector_table.py writes with the table, and
+                                           DIAG_STATE_SELECTION/level_by_block.csv
+                                           (diagnostics/diag_state_vector_selection.py)
   G  table rows the prose quotes           Table 4: Rout/est1-4_spec12_stage2_comparison.json, the
                                            unrounded sidecar sleep_export_spec12_compare.py writes
                                            with it; Tables 5-6 as rendered, at their three decimals
@@ -1194,6 +1198,121 @@ def collect_entry(notes: list):
                 unit="fraction")
 
 
+# ── K: the state vector of the sleepiness function ──────────────────────────
+TSV = "tab_state_vector_map.tex"
+SSEL_DIR = EST_OUT / "DIAG_STATE_SELECTION"
+# Block of diagnostics/diag_state_vector_selection.py -> key suffix and Table row label.
+SSEL_BLOCKS = {"S5": ("spec12", "Specification (12)"),
+               "S5+gdp_per_capita": ("gdp", r"+ GDP \textit{per capita}"),
+               "S5+fraction_young": ("young", "+ Fraction Young"),
+               "S7": ("both", "+ both"),
+               "S5+frac_4g5g": ("g4g5", "+ 4G/5G Share")}
+SSEL_STATES = {"cadunico_families_per1000": ("cadunico", r"Cad\'{U}nico Families"),
+               "fraction_65plus": ("age65", "Fraction 65+"),
+               "connections_per100": ("mobile", "Mobile Lines"),
+               "gdp_per_capita": ("gdp", r"GDP \textit{per capita}"),
+               "fraction_young": ("young", "Fraction Young (15--20)"),
+               "frac_4g5g": ("g4g5", "4G/5G Share of Mobile Lines")}
+# The blocks that add a characteristic's moment to specification (12) or swap one: the family the
+# level ranges are taken over. The leave-one-out blocks are not in it.
+SSEL_RANGE_BLOCKS = ("S5", "S5+gdp_per_capita", "S5+fraction_young", "S7", "S5+frac_4g5g",
+                     "S5 mobile->frac_4g5g")
+
+
+def _tsv_cell(label: str, col: int):
+    """Cell `col` (0-based) of the state-vector table's row whose first cell is `label`, with a
+    \\multicolumn wrapper removed; None when the row is absent."""
+    p = TABLES_DIR / TSV
+    if not p.is_file():
+        return None
+    for line in p.read_text(encoding="utf-8").splitlines():
+        cells = [c.strip() for c in re.split(r"(?<!\\)&", re.sub(r"\\\\\*?\s*$", "", line.strip()))]
+        if len(cells) > col and cells[0] == label:
+            m = re.fullmatch(r"\\multicolumn\{\d+\}\{[^}]*\}\{(.*)\}", cells[col])
+            return m.group(1) if m else cells[col]
+    return None
+
+
+def collect_state_selection(notes: list):
+    """The state-vector appendix table (make_state_vector_table.py, from its unrounded sidecar) and
+    the level diagnostics of diagnostics/diag_state_vector_selection.py (level_by_block.csv)."""
+    sc = _paths.rout_dir() / "tab_state_vector_map.json"
+    if not sc.is_file():
+        notes.append(f"{sc.name} not found; run diagnostics/diag_state_vector_selection.py, then "
+                     "make_state_vector_table.py. No sleep.ssel keys built.")
+        return
+    side = json.loads(sc.read_text(encoding="utf-8"))
+    src = f"Rout/{sc.name} (make_state_vector_table.py)"
+    for blk, (key, lab) in SSEL_BLOCKS.items():
+        d = (side.get("design") or {}).get(blk)
+        if d is None:
+            continue
+        for stat, col, what in (("cond", 2, "Condition number"),
+                                ("effdim", 3, "Effective dimension"),
+                                ("max_vif", 4, "Largest VIF")):
+            add(f"sleep.ssel.{stat.replace('_', '')}.{key}", "K",
+                f"{what} of the eq. (13) regressors, block {lab}", d[stat],
+                f"{what} of the two-way-demeaned regressors of eq. (13) under the block "
+                f"(diagnostics/diag_state_vector_selection.py, {blk})", f"{src} design[{blk}]",
+                "ok", display=disp(d[stat]),
+                checks=[check_cell(TSV, f"Panel B, {lab}, {what}", _tsv_cell(lab, col), [d[stat]])])
+    for state, (key, lab) in SSEL_STATES.items():
+        a = (side.get("absorbed_alone") or {}).get(state)
+        if a is None:
+            continue
+        add(f"sleep.ssel.absorbed.{key}", "K", f"Share of {state} absorbed by the fixed effects", a,
+            "One minus the ratio of the state's variance net of entity and quarter fixed effects to "
+            "its raw variance, specification (12) sample", f"{src} absorbed_alone[{state}]", "ok",
+            display=disp(a, "share"),
+            checks=[check_cell(TSV, f"Panel A, {lab}", _tsv_cell(lab, 3), [a])])
+
+    lv_path = SSEL_DIR / "level_by_block.csv"
+    if not lv_path.is_file():
+        notes.append(f"{lv_path.name} not found; no sleep.ssel level keys built.")
+        return
+    lv = pd.read_csv(lv_path)
+    lsrc = f"DIAG_STATE_SELECTION/{lv_path.name}"
+    for E in ("E2", "E3"):
+        sub = lv[(lv["routine"] == E) & lv["block"].isin(SSEL_RANGE_BLOCKS)]
+        prod = lv[(lv["routine"] == E) & (lv["block"] == "S5")]
+        if prod.empty:
+            notes.append(f"{lv_path.name} has no {E} row for S5; its sleep.ssel level keys are not built.")
+            continue
+        p = prod.iloc[0]
+        missing = sorted(set(SSEL_RANGE_BLOCKS) - set(sub["block"]))
+        if missing:
+            notes.append(f"{lv_path.name}: {E} lacks blocks {missing}; its ranges cover the rest.")
+        for col, what in (("phi_at_unweighted_mean", "phi at the unweighted average market"),
+                          ("phi_at_depweighted_mean", "phi at the lagged-deposit-weighted average market"),
+                          ("mean_phi_hat", "Mean phi-hat (population-weighted national phi_t)")):
+            k = {"phi_at_unweighted_mean": "avg", "phi_at_depweighted_mean": "depw",
+                 "mean_phi_hat": "mean"}[col]
+            add(f"sleep.ssel.{E}.{k}", "K", f"{E}, {what}, specification (12)", float(p[col]),
+                f"{what} under the production block", f"{lsrc} routine {E}, block S5, {col}", "ok",
+                display=disp(float(p[col])), unit="fraction")
+            lo, hi = float(sub[col].min()), float(sub[col].max())
+            add(f"sleep.ssel.{E}.{k}_range", "K", f"{E}, {what}: range over the blocks",
+                [lo, hi], f"Min and max of {what} over {', '.join(sorted(sub['block']))}",
+                f"{lsrc} routine {E}, {col}", "ok", display=disp_ci(lo, hi), unit="fraction",
+                detail=dict(width=hi - lo, blocks=sorted(sub["block"])))
+        if E == "E2":
+            for col, k, what in (("se_constant", "se_avg", "SE of phi at the unweighted average market"),
+                                 ("phi_at_min_var_point", "phi_minvar", "phi at the minimum-variance point"),
+                                 ("se_at_min_var_point", "se_minvar", "SE of phi at the minimum-variance point"),
+                                 ("min_var_point_norm_sd", "minvar_dist",
+                                  "Distance of the minimum-variance point from the average market (within-sample SDs)")):
+                add(f"sleep.ssel.E2.{k}", "K", f"E2, {what}, specification (12)", float(p[col]),
+                    f"{what}; conglomerate-clustered sandwich", f"{lsrc} routine E2, block S5, {col}",
+                    "ok", display=disp(float(p[col])))
+        if E == "E3" and "d_row_gap_mean" in p and pd.notna(p["d_row_gap_mean"]):
+            add("sleep.ssel.E3.dgap", "K", "E3, D-row phi minus the B-market aggregate, mean over quarters",
+                float(p["d_row_gap_mean"]),
+                "phi(S_t) at the national population-weighted state, which D rows are estimated at, "
+                "minus the population-weighted average of the B markets' phi_mt; mean over quarters",
+                f"{lsrc} routine E3, block S5, d_row_gap_mean", "ok", display=disp(float(p["d_row_gap_mean"])),
+                unit="fraction", detail=dict(max_abs=float(p["d_row_gap_max_abs"])))
+
+
 # ── F: the discount design and the forward-rate paths ────────────────────────
 CF_SIM_JL = pathlib.Path(__file__).resolve().parent / "cf_deposit_sim.jl"
 
@@ -1532,6 +1651,7 @@ def collect_descriptives(notes: list):
     collect_table1_spreads(notes)
     collect_mca_count(notes)
     collect_slide_deposit_types(notes)
+    collect_slide_motivation(notes)
 
     j = rout / "cluster_imbalance.json"
     if not j.is_file():
@@ -1709,6 +1829,203 @@ def collect_slide_deposit_types(notes: list):
             "in percent",
             f"Rout/{p.name} types.{slug} (written with {t.name} by make_slide_figures.py)", "ok",
             display=f"spread {shown}; share {fmt3s(r['share'])}%", checks=checks)
+
+
+def _span(pair) -> dict:
+    """A [start, end] pair of the motivation sidecar as start, end and end minus start."""
+    a, b = float(pair[0]), float(pair[1])
+    return dict(start=a, end=b, change=b - a)
+
+
+def collect_slide_motivation(notes: list):
+    """The motivation charts of the slides, from the sidecar make_slide_figures.py writes with
+    them (band, pricevol, reprice, dpremium, entrygap). Slide numbers, not the paper's; no rendered
+    table prints them, so there is nothing to cross-check."""
+    p = _paths.rout_dir() / "slide_motivation.json"
+    if not p.is_file():
+        notes.append(f"{p.name} not found in Rout; run make_slide_figures.py --only "
+                     "band,pricevol,reprice,dpremium,entrygap for the slide.motiv.* entries.")
+        return
+    sc = json.loads(p.read_text(encoding="utf-8"))
+    src = f"Rout/{p.name} (written by make_slide_figures.py)"
+    missing = [s for s in ("band", "pricevol", "reprice", "dpremium", "entrygap") if s not in sc]
+    if missing:
+        notes.append(f"{p.name} lacks {', '.join(missing)}; run make_slide_figures.py --only "
+                     f"{','.join(missing)}.")
+
+    if "band" in sc:
+        by = {y: dict(v, iqr=v["p75"] - v["p25"]) for y, v in sc["band"]["by_year"].items()}
+        years = sorted(by)
+        later = years[1:]
+        summ = {f"{s}_{m}": f([by[y][s] for y in ys])
+                for s in ("sd", "iqr") for m, f, ys in (("min", min, years), ("max", max, years),
+                                                        ("min_ex_first", min, later),
+                                                        ("max_ex_first", max, later))}
+        add("slide.motiv.band", "slides", "Slide 2 band: B time-deposit spread across B banks",
+            dict(by_year=by, **summ),
+            "Per year, the distribution of the row-level type-4 spread over B banks and markets "
+            "under Table A.4's weights (a bank's type-4 share of the market-quarter times the "
+            "market-quarter's balance): mean (= Table A.4's B line), sd, p25, p75 and iqr = p75 - "
+            "p25, annual pp. sd_/iqr_min and _max over all years; _ex_first over the years after "
+            f"the first ({years[0]}, whose sd the Bradesco 2016Q3 quarter inflates)",
+            f"{src} band.by_year", "ok",
+            display=f"sd {fmt3s(summ['sd_min_ex_first'])}-{fmt3s(summ['sd_max_ex_first'])}, iqr "
+                    f"{fmt3s(summ['iqr_min_ex_first'])}-{fmt3s(summ['iqr_max_ex_first'])} pp "
+                    f"after {years[0]}")
+
+    if "pricevol" in sc:
+        h, w = sc["pricevol"]["hikes"], sc["pricevol"]["window"]
+        pairs = [k for k in ("selic_target", "spread_demand", "spread_savings", "spread_time_B",
+                             "spread_time_D", "spread_prepaid", "share_demand", "share_savings",
+                             "share_time_B", "share_time_D", "share_prepaid") if k in h]
+        v = dict(start=h["start"], end=h["end"], n_quarters=int(h["n_quarters"]),
+                 **{k: _span(h[k]) for k in pairs}, ci=h.get("ci") or {},
+                 savings_share_per_quarter=dict(
+                     during=h["savings_share_change_per_quarter_pp"],
+                     before=h["savings_share_change_per_quarter_pp_before"],
+                     after=h["savings_share_change_per_quarter_pp_after"]),
+                 demand_share_per_quarter=h["demand_share_change_per_quarter_pp"],
+                 savings_balance_pct=h["savings_balance_change_pct"],
+                 savings_balance_min_pct=h["savings_balance_min_change_pct"])
+        add("slide.motiv.hikes", "slides", "Prices against balances over the Selic hikes", v,
+            "Hiking cycle located from the Selic target: the last quarter at the window's lowest "
+            "target (start) to the first quarter at the highest target after it (end). selic_target "
+            "in % a year; spread_* in compounded annual pp (demand = Selic, savings = Selic minus "
+            "the savings rate, time_B = Table A.4's weights within the quarter); share_* in % of the "
+            "four types' balances, B and D pooled (time split by firm type); each as start, end, "
+            "change. ci.<spread>.<start|end>.<lo|hi>: 95% interval of the bank means (time B, "
+            "time D, prepaid), conglomerate wild cluster bootstrap (Webb, 999 draws, bias-"
+            "corrected). savings_share_per_quarter: pp per quarter during the hikes, from the window's "
+            "first quarter to the start (before), from the end to the window's last quarter (after). "
+            "savings_balance_pct: % change of nominal savings balances start to end; _min_pct: to "
+            "their lowest quarter from the start on",
+            f"{src} pricevol.hikes", "ok",
+            display=f"{h['start']}-{h['end']}: savings spread {fmt3s(v['spread_savings']['start'])}"
+                    f" -> {fmt3s(v['spread_savings']['end'])} pp, share "
+                    f"{fmt3s(v['share_savings']['start'])} -> {fmt3s(v['share_savings']['end'])}%")
+        add("slide.motiv.window", "slides", "Shares of balances by type, first and last quarter",
+            dict(start=w["start"], end=w["end"],
+                 **{k: _span(w[k]) for k in ("share_demand", "share_savings", "share_time_B",
+                                             "share_time_D")}),
+            "Each type's share of the four types' balances (%, B and D pooled, time deposits "
+            "split by firm type) in the window's first and last quarter, and the change",
+            f"{src} pricevol.window", "ok",
+            display=f"savings {fmt3s(w['share_savings'][0])} -> {fmt3s(w['share_savings'][1])}%")
+        pv = sc["pricevol"]
+        if "prepaid" in pv:
+            pp_ = pv["prepaid"]
+            add("slide.motiv.prepaid", "slides", "Prepaid accounts (type 5) in the motivation charts",
+                dict(first=pp_["first"], share=_span(pp_["share"]), spread_mean=pp_["spread_mean"],
+                     spread_abs_max=pp_["spread_abs_max"]),
+                "First quarter with prepaid balances (Pix); prepaid share of the four types' "
+                "balances (%), first and last quarter; the pooled B and D prepaid spread (Table "
+                "A.4's national type-5 line by quarter), its mean and largest absolute value, pp",
+                f"{src} pricevol.prepaid", "ok",
+                display=f"from {pp_['first']}; share {fmt3s(pp_['share'][0])} -> "
+                        f"{fmt3s(pp_['share'][1])}%")
+        if "ci_halfwidth_mean" in pv:
+            add("slide.motiv.spread_ci", "slides", "Width of the intervals on the mean spreads",
+                dict(halfwidth_mean=pv["ci_halfwidth_mean"]),
+                "Mean over the quarters of the half-width of the 95% interval (pp) of each plotted "
+                "bank mean: time deposits of B firms, of D firms, prepaid. " + pv.get("ci_method", ""),
+                f"{src} pricevol.ci_halfwidth_mean", "ok",
+                display=", ".join(f"{k} {fmt3s(x)}" for k, x in pv["ci_halfwidth_mean"].items()))
+
+    if "reprice" in sc:
+        r = sc["reprice"]
+
+        def reg(d):
+            stars = len(d.get("stars") or "")
+            return dict(slope=d["slope"], ci=[d["lo_bc"], d["hi_bc"]], se=d["se_boot"],
+                        p=d["p_bc"], stars=stars, sig_level=SIG_LEVEL[stars], n=int(d["n"]),
+                        banks=int(d["banks"]))
+        m = reg(r["main"])
+        # The sample filters in the order make_slide_figures.py applies them.
+        step_names = ("all", "own_rate", "own_prev", "floor", "ahead", "trimmed")
+        water = {n: dict(rows=int(s["rows"]), banks=int(s["banks"]))
+                 for n, s in zip(step_names, r.get("waterfall") or [])}
+        add("slide.motiv.reprice", "slides", "Repricing and time-deposit growth, B banks",
+            dict(main=m, untrimmed=reg(r["untrimmed"]), same_quarter=reg(r["same_quarter"]),
+                 waterfall=water, bins={k: int(x) for k, x in (r.get("bins") or {}).items()},
+                 n_before_trim=int(r["n_before_trim"]), growth_h=int(r["growth_h"]),
+                 type4_floor_mbrl=int(round(float(r["type4_floor"]) / 1e6)),
+                 within_bank_sd=dict(d_sp=r["within_bank_sd_median"]["d_sp"],
+                                     growth=r["within_bank_sd_median"]["growth_ahead"])),
+            "Slope of B banks' time-deposit growth (100 x log change, in %) on the quarterly change "
+            "in their own type-4 spread (annual pp), bank and quarter fixed effects; conglomerate "
+            "wild cluster bootstrap (Webb, 999 draws), ci = bias-corrected 95% interval, p and stars "
+            "from it. main: growth over the next growth_h quarters, trimmed at the 1st/99th "
+            "percentiles; untrimmed; same_quarter: growth in the quarter of the change (biased "
+            "toward a response: the rate is expense over the lagged balance). Sample: own rate in "
+            "both quarters (no CDI fallback, no 3 x Selic guard), type-4 book of at least "
+            "type4_floor_mbrl R$ million. within_bank_sd: median over banks of the SD of the "
+            "spread change (pp) and of the growth (%). waterfall.<step>.{rows,banks}: B "
+            "conglomerate-quarters with time deposits (all), with an own rate (own_rate), also in "
+            "the previous quarter (own_prev), above the floor (floor), with the balance observed "
+            "growth_h quarters later (ahead), inside the trim (trimmed). bins: number of equal-"
+            "count bins in the chart and their smallest and largest size",
+            f"{src} reprice", "ok",
+            display=f"{fmt3s(m['slope'])}{'*' * m['stars']} {disp_ci(*m['ci'])}, N {m['n']:,}, "
+                    f"{m['banks']} banks")
+
+    if "dpremium" in sc:
+        d = sc["dpremium"]
+        extra = {}
+        if "premium_mean_ci" in d:
+            extra = dict(mean_ci=d["premium_mean_ci"], mean_se=d["premium_mean_se"],
+                         ci_halfwidth_mean=d["premium_ci_halfwidth_mean"],
+                         quarters_excl_zero=int(d["quarters_ci_excludes_zero"]),
+                         n_quarters=int(d["n_quarters"]))
+        add("slide.motiv.dpremium", "slides", "D firms' time-deposit premium and share", dict(
+            mean=d["premium_mean_pp"], **extra, by_year=d["premium_mean_by_year_pp"],
+            d_share_time=_span(d["d_share_time_pct"]),
+            d_share_time_per_year=d["d_share_time_change_pp_per_year"],
+            cdi_balance_share=d["d_balance_share_with_cdi_rate"],
+            cdi_row_share=d["d_rowshare_with_cdi_rate"]),
+            "B type-4 spread minus D type-4 spread (Table A.4's weights within the quarter), annual "
+            "pp: mean over the quarters and by year. mean_ci/mean_se: 95% interval and bootstrap "
+            "SE of that mean (conglomerate wild cluster bootstrap, Webb, 999 draws, bias-corrected, "
+            "one weight per bank across quarters); ci_halfwidth_mean: mean half-width of the "
+            "quarterly intervals; quarters_excl_zero of n_quarters: quarters whose interval "
+            "excludes zero. d_share_time: D firms' share of time-deposit "
+            "balances, %, first and last quarter, and its change in pp a year. cdi_balance_share "
+            "and cdi_row_share: fractions of D type-4 balances and of D bank-quarters whose rate is "
+            "the CDI fallback (use [p1] for percent)",
+            f"{src} dpremium", "ok",
+            display=f"premium {fmt3s(d['premium_mean_pp'])} pp; D share "
+                    f"{fmt3s(d['d_share_time_pct'][0])} -> {fmt3s(d['d_share_time_pct'][1])}%")
+
+    if "entrygap" in sc:
+        e = sc["entrygap"]
+        g = e["b_gap_pp"]
+
+        def path(x):
+            return {f"h{k}": v for k, v in x["median_at_h"].items()} | {"n": int(x["n"])}
+        groups = {k: path(x) for k, x in e["groups"].items()}
+        level = {k: path(x) | {"ci_h12": x["ci_at_h12"]}
+                 for k, x in (e.get("level_pct") or {}).items()}
+        add("slide.motiv.entrygap", "slides", "B entrants' share paths by price at entry", dict(
+            threshold=e["threshold_pp"], kept=int(e["b_events_kept"]),
+            with_gap=int(e["b_events_with_gap"]),
+            gap=dict(mean=g["mean"], median=g["median"], p25=g["p25"], p75=g["p75"],
+                     share_more=g["share_pays_more"], share_1pp_more=g["share_pays_1pp_more"]),
+            groups=groups, level=level,
+            pooled={f"h{k}": v for k, v in e["pooled_median_at_h"].items()},
+            d=dict(events=int(e["d_events"]), gap_median=e["d_gap_vs_b_mean_pp"]["median"],
+                   share_more=e["d_gap_vs_b_mean_pp"]["share_pays_more"])),
+            "Figure 2's B entry events. gap: entrant's type-4 spread minus the incumbents' "
+            "balance-weighted spread in the market and quarter of entry, annual pp (negative = the "
+            "entrant pays more); share_more and share_1pp_more are fractions of events (use [p1]). "
+            "groups: median normalized share (s_h - s_0)/(s_end - s_0) at h = 4, 8, 12 quarters and "
+            "n, for entrants paying at least `threshold` pp more (more) or not (rest), and for a "
+            "median split of the gap (below_median = pays more). level.<more|rest>: the same "
+            "events without normalisation, the median share of the B firms' deposits in the market "
+            "(%) at h = 0, 4, 8, 12, n, and the 95% interval at h = 12 (ci_h12). Every interval: "
+            "bootstrap of the median, events resampled, 999 draws. pooled = all events (Figure 2). d: "
+            "D entries priced against the B firms' balance-weighted spread of the entry quarter",
+            f"{src} entrygap", "ok",
+            display=f"h12: more {fmt3s(groups['more']['h12'])} (n {groups['more']['n']}) vs rest "
+                    f"{fmt3s(groups['rest']['h12'])} (n {groups['rest']['n']})")
 
 
 # ── K: strength of the sleepiness first stage ────────────────────────────────
@@ -2243,6 +2560,7 @@ def main():
     phi_base_check(notes)
     collect_entry(notes)
     collect_entry_counts(notes)
+    collect_state_selection(notes)
     collect_design(notes)
     collect_descriptives(notes)
     collect_polfunc(notes)

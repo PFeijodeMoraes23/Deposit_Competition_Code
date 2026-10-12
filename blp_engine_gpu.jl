@@ -270,22 +270,13 @@ function run_blp_estimation_ift(estim::Int, spec_id::Int, args,
     n_mapped    = count(i -> i != pad_idx, obs_key_idx)
     log_status("  Obs mapped to draws: $n_mapped / $N_obs ($(round(100*n_mapped/N_obs, digits=1))%)")
 
-    prod_vec  = zeros(N_obs, coef_dim)
-    spreads   = coalesce.(df.spread_ann, 0.0) ./ 100.0
+    # The design under the input rule of demand_inputs.jl (blp_engine_cpu.jl `build_regressor_matrices`):
+    # x_mat is the linear design X1_COLS (X_COLS, then the D-type dummy); prod_vec, the
+    # random-coefficient design, is the spread and the X_COLS columns only.
     dep_types = Int.(coalesce.(df.deposit_type, 0))
-    prod_vec[:, 1] .= spreads
-    for (i, col) in enumerate(X_COLS)
-        col in names(df) && (prod_vec[:, 1+i] .= coalesce.(df[!, col], 0.0))
-    end
-
     spread_cols, x_mat, Z_mat, iv_cols = build_regressor_matrices(df)
-    iv_avail = [c for c in iv_cols
-                if std(replace(coalesce.(df[!, c], 0.0), Inf=>0.0, -Inf=>0.0)) > 1e-10]
-    Z = zeros(N_obs, length(iv_avail))
-    for (i, c) in enumerate(iv_avail)
-        v = coalesce.(df[!, c], 0.0); replace!(v, Inf=>0.0, -Inf=>0.0)
-        Z[:, i] .= v
-    end
+    prod_vec = rc_design(spread_cols, x_mat)
+    Z, iv_avail = moment_instruments(Z_mat, iv_cols)
     W = try inv(Z' * Z ./ N_obs) catch; Matrix(I(length(iv_avail)) * 1.0) end
 
     H          = hcat(x_mat, Z_mat)
@@ -449,7 +440,7 @@ function run_blp_estimation_ift(estim::Int, spec_id::Int, args,
     results["Q_value"]            = Optim.minimum(result)
     results["converged"]          = Optim.converged(result)
     results["n_outer_iter"]       = Optim.iterations(result)
-    results["param_names_theta1"] = vcat(["alpha"], X_COLS)
+    results["param_names_theta1"] = vcat(["alpha"], X1_COLS)
     results["sigma_indices"]      = sigma_indices
     results["pi_interactions"]    = pi_interactions
     results["n_clusters"]         = n_cl
@@ -532,6 +523,8 @@ function main()
             res = try
                 run_blp_estimation_ift(estim, sp, args, nu_draws, draws_3d, key_index)
             catch e
+                # A gap in the demand inputs stops the run: no later stage may start without it.
+                e isa DemandInputError && rethrow()
                 println("  [!] Spec $sp failed: $e"); nothing
             end
             res === nothing && continue
@@ -562,6 +555,10 @@ function main()
                     "G_star"             => get(res, "G_star",            0.0),
                     "n_obs"              => get(res, "n_obs",             0),
                 )
+                # What the SEs are (blp_se_common.jl SE GUARD): written when the run recorded it.
+                haskey(res, "se_status") && (json_out["se_status"] = res["se_status"])
+                haskey(res, "theta1_se_linear_iv") && (json_out["theta1_se_linear_iv"] =
+                    replace(round.(res["theta1_se_linear_iv"], sigdigits=8), NaN=>0.0))
                 open(json_path, "w") do f; JSON3.write(f, json_out); end
             catch e
                 println("  [JSON-WARN] $e")
@@ -1584,22 +1581,13 @@ function run_blp_estimation_gpu(estim::Int, spec_id::Int, args,
     log_status("  Obs mapped to draws: $n_mapped / $N_obs ($(round(100*n_mapped/N_obs, digits=1))%)")
 
     # ── Build product characteristics and IV matrices ─────────────────────
-    prod_vec  = zeros(N_obs, coef_dim)
-    spreads   = coalesce.(df.spread_ann, 0.0) ./ 100.0  # bps → percentage points (÷100)
+    # The design under the input rule of demand_inputs.jl (blp_engine_cpu.jl `build_regressor_matrices`):
+    # x_mat is the linear design X1_COLS (X_COLS, then the D-type dummy); prod_vec, the
+    # random-coefficient design, is the spread and the X_COLS columns only.
     dep_types = Int.(coalesce.(df.deposit_type, 0))
-    prod_vec[:, 1] .= spreads
-    for (i, col) in enumerate(X_COLS)
-        col in names(df) && (prod_vec[:, 1+i] .= coalesce.(df[!, col], 0.0))
-    end
-
     spread_cols, x_mat, Z_mat, iv_cols = build_regressor_matrices(df)
-    iv_avail = [c for c in iv_cols
-                if std(replace(coalesce.(df[!, c], 0.0), Inf=>0.0, -Inf=>0.0)) > 1e-10]
-    Z = zeros(N_obs, length(iv_avail))
-    for (i, c) in enumerate(iv_avail)
-        v = coalesce.(df[!, c], 0.0); replace!(v, Inf=>0.0, -Inf=>0.0)
-        Z[:, i] .= v
-    end
+    prod_vec = rc_design(spread_cols, x_mat)
+    Z, iv_avail = moment_instruments(Z_mat, iv_cols)
     W = try inv(Z' * Z ./ N_obs) catch; Matrix(I(length(iv_avail)) * 1.0) end
 
     H          = hcat(x_mat, Z_mat)
@@ -1938,7 +1926,7 @@ function run_blp_estimation_gpu(estim::Int, spec_id::Int, args,
     results["Q_value"]            = Q_min
     results["converged"]          = conv_outer
     results["n_outer_iter"]       = n_outer
-    results["param_names_theta1"] = vcat(["alpha"], X_COLS)
+    results["param_names_theta1"] = vcat(["alpha"], X1_COLS)
     results["sigma_indices"]      = sigma_indices
     results["pi_interactions"]    = pi_interactions
     results["n_clusters"]         = n_cl
@@ -2054,6 +2042,8 @@ function main_gpu_numerical()
             res = try
                 run_blp_estimation_gpu(estim, sp, args, nu_draws, draws_3d, key_index)
             catch e
+                # A gap in the demand inputs stops the run: no later stage may start without it.
+                e isa DemandInputError && rethrow()
                 println("  [!] Spec $sp failed: $e"); nothing
             end
             res === nothing && continue
@@ -2374,22 +2364,13 @@ function run_blp_estimation_ift_gpu(estim::Int, spec_id::Int, args,
     n_mapped    = count(i -> i != pad_idx, obs_key_idx)
     log_status("  Obs mapped to draws: $n_mapped / $N_obs ($(round(100*n_mapped/N_obs, digits=1))%)")
 
-    prod_vec  = zeros(N_obs, coef_dim)
-    spreads   = coalesce.(df.spread_ann, 0.0) ./ 100.0
+    # The design under the input rule of demand_inputs.jl (blp_engine_cpu.jl `build_regressor_matrices`):
+    # x_mat is the linear design X1_COLS (X_COLS, then the D-type dummy); prod_vec, the
+    # random-coefficient design, is the spread and the X_COLS columns only.
     dep_types = Int.(coalesce.(df.deposit_type, 0))
-    prod_vec[:, 1] .= spreads
-    for (i, col) in enumerate(X_COLS)
-        col in names(df) && (prod_vec[:, 1+i] .= coalesce.(df[!, col], 0.0))
-    end
-
     spread_cols, x_mat, Z_mat, iv_cols = build_regressor_matrices(df)
-    iv_avail = [c for c in iv_cols
-                if std(replace(coalesce.(df[!, c], 0.0), Inf=>0.0, -Inf=>0.0)) > 1e-10]
-    Z = zeros(N_obs, length(iv_avail))
-    for (i, c) in enumerate(iv_avail)
-        v = coalesce.(df[!, c], 0.0); replace!(v, Inf=>0.0, -Inf=>0.0)
-        Z[:, i] .= v
-    end
+    prod_vec = rc_design(spread_cols, x_mat)
+    Z, iv_avail = moment_instruments(Z_mat, iv_cols)
     W = try inv(Z' * Z ./ N_obs) catch; Matrix(I(length(iv_avail)) * 1.0) end
 
     H          = hcat(x_mat, Z_mat)
@@ -2658,8 +2639,15 @@ function run_blp_estimation_ift_gpu(estim::Int, spec_id::Int, args,
     # ── θ₁+θ₂ SEs "in the same manner" via BLP_SE_METHOD ("wcb" default | "sandwich") ──────
     # Joint GMM Jacobian D=[−Z'X, Z'∂δ/∂θ₂]; ∂δ/∂θ₂ from the diagonal IFT (same approximation the
     # gradient uses). Overwrites the linear-IV θ₁ SE so θ₁ accounts for θ₂ estimation uncertainty.
+    # `se_status` records what the reported SEs are: "ok" (joint), "refused: ..." (the SE guard of
+    # gmm_cluster_ses: K > L or a singular D'WD, every SE NaN), or "failed: ..." (the block threw;
+    # every SE NaN). The linear-IV θ₁ SEs, which ignore θ₂'s estimation, are kept apart in
+    # `theta1_se_linear_iv` and never stand in for the joint ones.
     _sem = se_method()
+    theta1_se_linear_iv = copy(theta1_se)
+    se_status = "no joint SEs (BLP_SE_METHOD=$(_sem)): theta1_se is the linear-IV one, theta2_se NaN"
     if _sem in ("sandwich", "wcb")
+        theta1_se = fill(NaN, length(theta1_star))
         try
             valid  = pc.theta1_valid .& isfinite.(delta_final)
             compute_model_shares_gpu!(buf, gbuf, delta_final, pc, R)          # shares at (δ*, θ₂*)
@@ -2671,12 +2659,17 @@ function run_blp_estimation_ift_gpu(estim::Int, spec_id::Int, args,
                         delta_final[valid] .- pc.X_full[valid, :] * theta1_star,
                         W, pc.clusters[valid];
                         n_sigma=length(sigma_indices))   # profile out on-bound σ's from the covariance
+            se_status = SE_LAST_STATUS[]
             K1 = length(theta1_star)
             theta1_se   = se_all[1:K1];   theta2_se   = se_all[K1+1:end]
             theta1_pval = pval_all[1:K1]; theta2_pval = pval_all[K1+1:end]
-            println("  SE method: $_sem  |  θ₂ SE: $(round.(theta2_se, sigdigits=3))")
+            println("  SE method: $_sem  |  status: $se_status  |  θ₂ SE: $(round.(theta2_se, sigdigits=3))")
         catch e
-            println("  [!] SE ($_sem) failed: $e — keeping linear θ₁ SE, θ₂_se=NaN (not computed).")
+            se_status = "failed: " * sprint(showerror, e)
+            theta1_se   = fill(NaN, length(theta1_star)); theta2_se = fill(NaN, length(theta2_star))
+            theta1_pval = Float64[]; theta2_pval = Float64[]
+            log_status("  [!] SE ($_sem) FAILED: $(se_status). Every SE is NaN; the linear-IV θ₁ SEs " *
+                       "are in theta1_se_linear_iv.")
         end
     end
 
@@ -2687,12 +2680,14 @@ function run_blp_estimation_ift_gpu(estim::Int, spec_id::Int, args,
     results["theta1_pval"]        = theta1_pval
     results["theta2_pval"]        = theta2_pval
     results["se_method"]          = _sem
+    results["se_status"]          = se_status
+    results["theta1_se_linear_iv"] = theta1_se_linear_iv
     results["delta"]              = delta_final
     results["xi"]                 = xi_star
     results["Q_value"]            = Q_min
     results["converged"]          = conv_outer
     results["n_outer_iter"]       = n_outer
-    results["param_names_theta1"] = vcat(["alpha"], X_COLS)
+    results["param_names_theta1"] = vcat(["alpha"], X1_COLS)
     results["sigma_indices"]      = sigma_indices
     results["pi_interactions"]    = pi_interactions
     results["n_clusters"]         = n_cl
@@ -2790,6 +2785,8 @@ function main_gpu_ift()
             res = try
                 run_blp_estimation_ift_gpu(estim, sp, args, nu_draws, draws_3d, key_index)
             catch e
+                # A gap in the demand inputs stops the run: no later stage may start without it.
+                e isa DemandInputError && rethrow()
                 println("  [!] Spec $sp failed: $e"); nothing
             end
             res === nothing && continue
@@ -2820,6 +2817,10 @@ function main_gpu_ift()
                     "G_star"             => get(res, "G_star",            0.0),
                     "n_obs"              => get(res, "n_obs",             0),
                 )
+                # What the SEs are (blp_se_common.jl SE GUARD): written when the run recorded it.
+                haskey(res, "se_status") && (json_out["se_status"] = res["se_status"])
+                haskey(res, "theta1_se_linear_iv") && (json_out["theta1_se_linear_iv"] =
+                    replace(round.(res["theta1_se_linear_iv"], sigdigits=8), NaN=>0.0))
                 open(json_path, "w") do f; JSON3.write(f, json_out); end
             catch e
                 println("  [JSON-WARN] $e")

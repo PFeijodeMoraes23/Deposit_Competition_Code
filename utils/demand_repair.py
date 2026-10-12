@@ -34,7 +34,10 @@ its argument untouched and the preps produce the frames they produce without thi
     DEMAND_REPAIR_FILE    the repair file (default processed/demand_repair.parquet)
     DEMAND_REPAIR_OUT     where a repaired prep writes its parquets (default
                           ESTIMATION_OUTPUT/DEMAND_PREP_REPAIRED). It can never be the folder
-                          the unrepaired parquets live in: `output_dir` refuses.
+                          the unrepaired parquets live in: `output_dir` refuses. On the cluster
+                          the default is the prep step folder itself (data/output/demand_prep,
+                          `paths.demand_parquet_dir()`), the one folder the estimators read and
+                          one that holds only what this run's prep writes.
 
 Reads   processed/demand_repair.parquet (written by panel_demand_repair.py)
 Writes  nothing, except `<parquet>.repair_audit.json` beside each repaired parquet, from
@@ -42,10 +45,13 @@ Writes  nothing, except `<parquet>.repair_audit.json` beside each repaired parqu
 
 Column names
 ------------
-The repaired ratio and its instruments are `borrow_assets_lag`, `loo_borrow_assets` and
-`mean_loo_borrow_assets`. The estimators' instrument lists name `loo_credit_assets` and
-`mean_loo_credit_assets`, so under stage 4 those two columns carry the same values as the two
-`*_borrow_*` columns: one variable under two names in the repaired parquets.
+The estimators read the borrowings instruments as `loo_borrow_assets` and
+`mean_loo_borrow_assets` (blp_logit.jl, blp_engine_cpu.jl). In a repaired frame those two columns
+carry the pair of the active stages: under stage 4 the re-timed, guarded ratio
+(`borrow_assets_lag`) and its leave-one-out pair; without stage 4 the panel's own pair
+`loo_credit_assets` / `mean_loo_credit_assets` as stages 1-2 left it. `finalize` drops the two
+`*_credit_*` columns from the parquets, so each variable has one name there. An unrepaired
+parquet carries only the `*_credit_*` names; the estimators read it under BLP_READ_PRE_REPAIR=1.
 """
 from __future__ import annotations
 
@@ -87,11 +93,14 @@ ADDED_COLS = DEP_COLS + ["spread_a1", "spread_a2", "spread_a4", "spread_ann_a1",
 FLAG_COLS = ["chars_src", "chars_dist", "basel_imputed", "segment_src", "lag_from_2015q4",
              "lag_dep_src", "estban_lag_src", "borrow_changed", "borrow_den_guarded"]
 
-# What the demand estimators read (blp_logit.jl L.91-112; blp_engine_cpu.jl L.123-150).
+# What the demand estimators read (blp_logit.jl and blp_engine_cpu.jl: X_COLS and the IV_* lists;
+# the D-type dummy they add is built from is_B, not read). The leave-one-out pairs under the names
+# the estimators use: the borrowings pair as `*_borrow_*`.
 X_ENGINE = ["fgc_covered", "has_ip", "seg_S2", "seg_S3", "seg_S4", "seg_S5",
             "log_total_assets_lag", "is_state_owned"]
-IV_ENGINE = LOO_COLS + ["n_rivals", "estban_rival_branches_lag", "personnel_cost_ratio_lag",
-                        "admin_cost_ratio_lag", "tax_cost_ratio_lag", "indice_basileia_lag"]
+LOO_ENGINE = [BORROW_ALIAS.get(c, c) for c in LOO_COLS]
+IV_ENGINE = LOO_ENGINE + ["n_rivals", "estban_rival_branches_lag", "personnel_cost_ratio_lag",
+                          "admin_cost_ratio_lag", "tax_cost_ratio_lag", "indice_basileia_lag"]
 
 CHARS_DROPPED = 9      # chars_src of a firm-quarter with no filing within the maximum distance
 
@@ -126,11 +135,15 @@ def repair_path() -> Path:
 def output_dir(default) -> Path:
     """Where a prep writes its parquets: `default` when the layer is off; when it is on,
     DEMAND_REPAIR_OUT or ESTIMATION_OUTPUT/DEMAND_PREP_REPAIRED, and never `default` itself or
-    the folder of the unrepaired parquets."""
+    the folder of the unrepaired parquets. On the cluster (`paths.on_cluster()`), with no
+    DEMAND_REPAIR_OUT, it is `default`: the prep step folder data/output/demand_prep holds only
+    what this run's prep writes, and it is the one folder the estimators read there."""
     default = Path(default)
     if not enabled():
         return default
     override = os.environ.get(OUT_ENV, "").strip()
+    if paths.on_cluster() and not override:
+        return default
     out = Path(override).expanduser() if override else paths.estimation_output() / OUT_DIRNAME
     stored = {default.resolve(), paths.demand_prep_root().resolve()}
     if out.resolve() in stored:
@@ -226,9 +239,11 @@ def apply(df_raw: pd.DataFrame, explicit_stages=None) -> pd.DataFrame:
         df["segment"] = np.where(in_window, df[H("r__segment")].to_numpy(), df["segment"].to_numpy())
     for c in BORROW_COLS:
         df[c] = df[H(c)].to_numpy()
-    if 4 in st:
+    if 4 not in st:
+        # The estimators read the borrowings pair as `*_borrow_*`: without stage 4 that is the
+        # panel's own pair, as stages 1-2 left it (see "Column names").
         for old, new in BORROW_ALIAS.items():
-            df[old] = np.where(in_window, df[new].to_numpy(), df[old].to_numpy())
+            df[new] = df[old].to_numpy()
     for c in FLAG_COLS:
         df[c] = df[H(c)].fillna(-1).astype("int8").to_numpy()
     df = df.drop(columns=list(helper_names.values()))
@@ -267,7 +282,7 @@ def audit(df: pd.DataFrame) -> dict:
         else:
             xs[c] = -1
     ivs = {}
-    for c in IV_ENGINE + [b for b in BORROW_COLS if b != "borrow_assets_lag"]:
+    for c in IV_ENGINE:
         if c not in df.columns:
             ivs[c] = {"null": -1, "inf": -1}
             continue
@@ -305,6 +320,8 @@ def finalize(df_spec: pd.DataFrame, out_path=None, summary=None, explicit_stages
         is_b = df_spec["is_B"].astype(bool)
         dropped = {"rows": int(gone.sum()), "B": int((gone & is_b).sum()), "D": int((gone & ~is_b).sum())}
         df_spec = df_spec[~gone].copy()
+    # One name per variable: the borrowings pair the estimators read is `*_borrow_*` (apply).
+    df_spec = df_spec.drop(columns=[c for c in BORROW_ALIAS if c in df_spec.columns])
     rep = audit(df_spec)
     rep["stages"] = list(st)
     rep["rows_before_drop"] = int(n_before)

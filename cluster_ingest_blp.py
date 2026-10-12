@@ -792,12 +792,12 @@ def write_summary_md(sub, index, stage, het=None):
         logit_summary = {}
     L += ["", "## Logit vs RC-BLP stages (per routine)", "",
           "Full comparison tables (same content as `Rout/blp_compare_E{k}_spec12.tex`): the non-RC "
-          "logit (`full` sub-model) then each RC-BLP stage. Panel-A cells are coefficient (SE); θ₂ "
+          "logit (`full_dtype` sub-model) then each RC-BLP stage. Panel-A cells are coefficient (SE); θ₂ "
           "are point estimates (no SE). With demographics centered, θ₁ (incl. spread α) is the "
           "average-market coefficient, directly comparable to the logit α.", ""]
     for m in index:
         kk = m["routine"]
-        le = next((logit_summary.get(f"E{kk}_{sm_}") for sm_ in ("full", "full_dtype", "core", "priceonly")
+        le = next((logit_summary.get(f"E{kk}_{sm_}") for sm_ in ("full_dtype", "full", "core", "priceonly")
                    if logit_summary.get(f"E{kk}_{sm_}")), None)
         L += md_compare_table(kk, raw_dir, le or {})
 

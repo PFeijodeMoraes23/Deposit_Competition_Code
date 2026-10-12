@@ -139,7 +139,7 @@ BANK_CHARS = [
 BALANCE_SHEET = [
     'asset_return_qoq_lag',      # realized portfolio yield (profitability / asset-side pricing)
     'npl_provision_ratio_lag',   # credit-risk / provisioning intensity
-    'credit_assets_lag',         # loan intensity (credit / assets)
+    'credit_assets_lag',         # borrowings and onlendings (IF.data 78295) at t / assets at t-1
 ]
 
 # Operating cost shifters (from COSIF DRE report)
@@ -1118,7 +1118,7 @@ _VAR_LABELS = {
     'has_ip': 'Group Contains IP',
     'asset_return_qoq_lag': 'Asset Return (QoQ, $t-1$)',
     'npl_provision_ratio_lag': 'NPL Provisions Ratio ($t-1$)',
-    'credit_assets_lag': 'Credit / Assets ($t-1$)',
+    'credit_assets_lag': 'Borrowings and Onlendings / Assets',
     'seg_S2': 'Segment S2',
     'seg_S3': 'Segment S3',
     'seg_S4': 'Segment S4',
@@ -1500,7 +1500,8 @@ def _polfunc_notes(k: int | None = None, results: dict | None = None,
         + r'*** $p<0.01$, ** $p<0.05$, '
         r'* $p<0.1$. Ratios and rates, the Basel index included, are fractions in the panel; '
         r'their coefficients are per pp (per pp$^{2}$ for squares), and the '
-        r'risk-free rate and asset return are quarterly. '
+        r'risk-free rate and asset return are quarterly. Borrowings and onlendings are '
+        r'measured at $t$ and divided by assets at $t-1$. '
         # str.replace, not str.format: the note is LaTeX and full of braces.
         + CFG['depvar_note'].replace('{unit}', _unit_clause(k if k is not None else 4))
         # The estimation sample (run_single_regression).

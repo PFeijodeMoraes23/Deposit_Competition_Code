@@ -1480,8 +1480,9 @@ def build_table4(df: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
                  "total_assets", "equity_ratio", "dep_a1", "dep_a2", "dep_a4", "dep_a5",
                  "spread_a4", "risk_free_qoq"]].copy()
     df_d["log_total_assets"] = np.log(df_d["total_assets"].where(df_d["total_assets"] > 0))
-    # Total deposits as in Table 1: the sum of the four retail types (1, 2, 4, 5), not the
-    # panel's IF-Data total-deposits account, which also carries other deposit categories.
+    # Total deposits as in Table 1: the sum of the four retail types (1, 2, 4, 5) of the firm-quarter.
+    # The panel's own `total_deposits` column is not used: it is the firm's national four-type total
+    # times the number of municipality rows collapsed into the market row.
     dep_retail = df_d[["dep_a1", "dep_a2", "dep_a4", "dep_a5"]].sum(axis=1, min_count=1)
     df_d["log_dep"]       = np.log(dep_retail.where(dep_retail > 0))
     df_d["log_dep_a4"]       = np.log(df_d["dep_a4"].where(df_d["dep_a4"] > 0))
@@ -1781,7 +1782,7 @@ _VARS_MASTER_GROUPS = [
     ("Outcomes: deposit stocks", [
         (r"dep\_a1--dep\_a5, deposit\_balance", r"Type-$k$ deposit stock $\mathrm{Dep}_{jkmt}$; MCA level for B firms, national for D firms", "ESTBAN, IF-Data", "Sleep; Demand"),
         (r"lagged\_deposits", r"\texttt{deposit\_balance} shifted one quarter within institution $\times$ type", "Constructed", "Sleep"),
-        (r"total\_deposits, lagged\_total\_deposits", r"Sum across the five deposit types, and its one-quarter lag", "Constructed", "Sleep"),
+        (r"total\_deposits", r"Firm-quarter total of deposit types 1, 2, 4 and 5 (interbank deposits excluded), summed from the type columns; no lag", "Constructed", "Descriptive tables"),
         (r"pop\_total", r"Total MCA population $\mathrm{Pop}_{mt}$; scales the market size $M_{mt} = \hat{\bar{d}}_{mt}\cdot\mathrm{Pop}_{mt}$", "IBGE", "Demand (shares)"),
     ]),
     ("Rates and spreads", [
@@ -1865,16 +1866,16 @@ _STAGE_DEMAND = "Demand (logit/BLP)"
 
 _INSTR_MASTER_GROUPS = [
     ("Operating cost shifters (IF-Data DRE)", [
-        (r"personnel\_cost\_ratio\_lag", r"$|\text{personnel expense}|/\text{assets}$ (COSIF 78215), lagged 1Q", _STAGE_BOTH),
-        (r"admin\_cost\_ratio\_lag", r"$|\text{administrative expense}|/\text{assets}$ (COSIF 78214), lagged 1Q", _STAGE_BOTH),
-        (r"tax\_cost\_ratio\_lag", r"$|\text{tax expense}|/\text{assets}$ (COSIF 78220), lagged 1Q", _STAGE_BOTH),
+        (r"personnel\_cost\_ratio\_lag", r"$|\text{personnel expense}|/\text{assets}$ (IF-Data line 78218), lagged 1Q", _STAGE_BOTH),
+        (r"admin\_cost\_ratio\_lag", r"$|\text{administrative expense}|/\text{assets}$ (IF-Data line 78219), lagged 1Q", _STAGE_BOTH),
+        (r"tax\_cost\_ratio\_lag", r"$|\text{tax expense}|/\text{assets}$ (IF-Data line 78220), lagged 1Q", _STAGE_BOTH),
     ]),
     ("Funding mix (IF-Data Passivo)", [
         (r"lci\_lca\_ratio\_lag", r"(LCI 78289 + LCA 78290)$/\text{assets}$, lagged 1Q; alternative funding-source pressure", _STAGE_SLEEP),
         (r"wholesale\_ratio\_lag", r"Wholesale funding accounts$/\text{assets}$, lagged 1Q; aggregate wholesale dependence", _STAGE_SLEEP),
     ]),
     ("Capital adequacy (IF-Data Capital)", [
-        (r"indice\_basileia\_lag", r"Basel index --- total regulatory capital ratio (COSIF 79664), lagged 1Q", _STAGE_BOTH),
+        (r"indice\_basileia\_lag", r"Basel index --- total regulatory capital ratio (IF-Data line 79664), lagged 1Q", _STAGE_BOTH),
     ]),
     ("Hausman-style", [
         (r"leave\_one\_out\_mean\_spread", r"Mean spread of the other conglomerate $\times$ market rows (MCA; national for D firms) in the same deposit type $\times$ quarter. Only the own row is left out, so the conglomerate's spreads in its other markets stay in", _STAGE_SLEEP),
@@ -1883,7 +1884,7 @@ _INSTR_MASTER_GROUPS = [
         (r"loo\_log\_assets, mean\_loo\_log\_assets", r"LOO sum and mean of rival $\ln(\text{Total Assets}_{t-1})$", _STAGE_DEMAND),
         (r"loo\_equity\_ratio, mean\_loo\_equity\_ratio", r"LOO sum and mean of rival equity ratio", _STAGE_DEMAND),
         (r"loo\_basileia, mean\_loo\_basileia", r"LOO sum and mean of rival Basel index", _STAGE_DEMAND),
-        (r"loo\_credit\_assets, mean\_loo\_credit\_assets", r"LOO sum and mean of rival credit-to-assets ratio", _STAGE_DEMAND),
+        (r"loo\_credit\_assets, mean\_loo\_credit\_assets", r"LOO sum and mean of rival borrowings-and-onlendings-to-assets ratio (IF-Data line 78295 at $t$ over total assets at $t-1$)", _STAGE_DEMAND),
         (r"loo\_npl\_provision, mean\_loo\_npl\_provision", r"LOO sum and mean of rival non-performing-loan provisions", _STAGE_DEMAND),
         (r"n\_rivals", r"Number of non-null rivals in the group", _STAGE_DEMAND),
     ]),

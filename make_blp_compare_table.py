@@ -82,12 +82,13 @@ def load_stage(est: int, stage: str) -> dict | None:
 
 
 def load_logit_full(est: int) -> dict | None:
-    """Logit comparator: the 'full' sub-model (α + X_COLS, matches RC θ₁)."""
+    """Logit comparator: the 'full_dtype' sub-model (α + X_COLS + the D-type dummy, the RC
+    engines' linear design X1_COLS, so it matches RC θ₁); earlier sub-models as fallbacks."""
     p = LOGIT_DIR / "logit_summary_spec_12.json"
     if not p.exists():
         return None
     summ = json.load(open(p))
-    for sm in ("full", "full_dtype", "core", "priceonly"):
+    for sm in ("full_dtype", "full", "core", "priceonly"):
         e = summ.get(f"E{est}_{sm}")
         if e:
             return e

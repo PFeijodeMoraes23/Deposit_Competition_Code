@@ -63,6 +63,16 @@ function wcb_se(theta::AbstractVector{Float64}, IF_cl::AbstractMatrix{Float64};
     return se, pval
 end
 
+# SE_LAST_STATUS: verdict of the last `gmm_cluster_ses` call, "ok", or "refused: <reason>" when the
+# routine returned NaN for every standard error (SE GUARD below). Callers record it with their
+# result (`se_status`). Defined once, so a second include of this file keeps it.
+if !isdefined(@__MODULE__, :SE_LAST_STATUS)
+    const SE_LAST_STATUS = Ref{String}("not run")
+end
+
+"Floor on the reciprocal condition number of the unit-diagonal D'WD: below it the matrix is singular in double precision."
+se_rcond_floor(K::Int) = K * eps(Float64)
+
 """Joint cluster-robust SEs for the GMM parameter θ = (θ₁, θ₂), by the analytical sandwich or the
 wild cluster bootstrap (same weights/seed as the logit). All inputs are on the VALID rows.
 
@@ -87,7 +97,17 @@ SE returned for the profiled coordinates — exactly the ones the tables flag wi
 the "SEs blow up when a second on-bound σ enters" pathology (4→5 RC); (b) fixes the same blow-up
 driven by unidentified π's in the ext1/ext2 stages. NOTE: this addresses NUMERICAL degeneracy only —
 a parameter with a genuinely non-zero but small Jacobian is weakly (not un-) identified, and its
-large SE is real and must be reported, not profiled away."""
+large SE is real and must be reported, not profiled away.
+
+SE GUARD. D has L rows (the excluded moments) and one column per kept parameter, so D'WD is
+invertible only if the kept count Kk ≤ L. With the D-type dummy in the linear part K₁ = 10: on
+L = 16 moments ext1 keeps 14 or 15, ext2 15 or 16, and `extended` 16 with σ on its bound and 17 if
+σ leaves it. The routine returns NaN for every SE and p-value, warns, and sets
+`SE_LAST_STATUS[] = "refused: <reason>"` when (a) Kk > L, or (b) D'WD is numerically singular: a
+zero diagonal entry, a reciprocal condition number of D'WD scaled to unit diagonal (λ_min / λ_max)
+below `se_rcond_floor(Kk) = Kk·eps`, or `inv` throwing. It never falls back to a pseudo-inverse.
+Short of that the inverse is used as it is: a badly but not singularly conditioned D'WD gives large
+standard errors, which are reported. The point estimates are not affected either way."""
 function gmm_cluster_ses(method::AbstractString, theta::Vector{Float64},
                          Z::Matrix{Float64}, X::Matrix{Float64}, Ddelta::Matrix{Float64},
                          xi::Vector{Float64}, W::Matrix{Float64}, cl::Vector{String};
@@ -124,6 +144,17 @@ function gmm_cluster_ses(method::AbstractString, theta::Vector{Float64},
     keepidx = vcat(collect(1:K1), [K1 + j for j in θ2keep])      # kept full-param indices, in order
     Kk      = length(keepidx)
 
+    se_full   = fill(NaN, K)                           # profiled σ's stay NaN (dagger in the tables)
+    pval_full = fill(NaN, K)
+    SE_LAST_STATUS[] = "not run"
+    _refuse(reason) = begin
+        SE_LAST_STATUS[] = "refused: " * reason
+        @warn "  [SE GUARD] NO STANDARD ERRORS: $(reason) (K1=$(K1), θ₂ kept $(length(θ2keep)) of $(K2), " *
+              "L=$(L)). Every SE and p-value is NaN; the point estimates are unaffected."
+        (se_full, pval_full)
+    end
+    Kk > L && return _refuse("K > L: $(Kk) estimated parameters on $(L) moments")
+
     D    = hcat(-ZtX, K2 > 0 ? ZtDd[:, θ2keep] : ZtDd)  # (L × Kk), degenerate cols removed
     uc   = unique(cl); G = length(uc)
     Mcl  = zeros(G, L)                                 # cluster meats m_g (rows)
@@ -133,12 +164,20 @@ function gmm_cluster_ses(method::AbstractString, theta::Vector{Float64},
     end
     DtW   = D' * W                                     # (Kk × L)
     DtWD  = DtW * D                                    # (Kk × Kk)
-    bread = try inv(DtWD) catch; pinv(DtWD) end
+    all(isfinite, DtWD) || return _refuse("D'WD ($(Kk)×$(Kk)) has non-finite entries")
+    dd    = sqrt.(abs.(diag(DtWD)))
+    any(iszero, dd) && return _refuse("singular: D'WD ($(Kk)×$(Kk)) has a zero diagonal entry")
+    Asc   = DtWD ./ (dd * dd')                         # unit diagonal
+    ev    = eigvals(Symmetric((Asc .+ Asc') ./ 2))
+    rc    = minimum(ev) / maximum(ev)
+    (isfinite(rc) && rc >= se_rcond_floor(Kk)) || return _refuse(
+        "singular: scaled D'WD ($(Kk)×$(Kk)) has reciprocal condition number $(round(rc, sigdigits=3)) " *
+        "< K·eps = $(round(se_rcond_floor(Kk), sigdigits=3))")
+    bread = try inv(DtWD) catch; nothing end
+    bread === nothing && return _refuse("singular: D'WD ($(Kk)×$(Kk)) has no inverse")
     gstar = effective_clusters(cl)                     # few-cluster t(G*) df (≈7 here, not G≈506)
 
     theta_k   = theta[keepidx]
-    se_full   = fill(NaN, K)                           # profiled σ's stay NaN (dagger in the tables)
-    pval_full = fill(NaN, K)
     if method == "sandwich"
         corr = G > 1 ? (G / (G - 1)) * ((N - 1) / (N - Kk)) : 1.0
         V    = bread * (DtW * (Mcl' * Mcl) * DtW') * bread' .* corr
@@ -151,5 +190,6 @@ function gmm_cluster_ses(method::AbstractString, theta::Vector{Float64},
     end
     se_full[keepidx]   = se_k
     pval_full[keepidx] = pv_k
+    SE_LAST_STATUS[] = "ok"
     return se_full, pval_full
 end

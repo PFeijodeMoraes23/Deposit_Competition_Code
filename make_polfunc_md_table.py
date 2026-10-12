@@ -63,7 +63,7 @@ LABELS = {
     "has_ip": "Group Contains IP",
     "asset_return_qoq_lag": "Asset return (QoQ, t−1)",
     "npl_provision_ratio_lag": "NPL provisions ratio (t−1)",
-    "credit_assets_lag": "Credit / assets (t−1)",
+    "credit_assets_lag": "Borrowings and onlendings / assets",
     "seg_S2": "Segment S2", "seg_S3": "Segment S3", "seg_S4": "Segment S4", "seg_S5": "Segment S5",
     "personnel_cost_ratio_lag": "Personnel cost ratio (t−1)",
     "admin_cost_ratio_lag": "Admin cost ratio (t−1)",
@@ -274,7 +274,7 @@ def _intro(depvar, summary, cfg, dagger=False, small=()):
         f"**G\*≈{_stat(summary,'B','G_star',1)} effective** clusters. Webb weights are used for exactly "
         "this regime; read the B column's inference with that in mind. "
         "The accounting ratios (Basel index, equity ratio, cost ratios, asset return, NPL provisions, "
-        "credit/assets) are **winsorized at 1/99 within firm type** — the reported D-firm balance "
+        "borrowings and onlendings / assets) are **winsorized at 1/99 within firm type** — the reported D-firm balance "
         "sheets contain near-zero-denominator artifacts (Basel index up to 16,070 against a B-firm "
         "max of 7.10) that otherwise drive both the point estimates and the bootstrap SEs. "
         "Coefficients at three decimals, standard errors in parentheses, significance \*\*\*/\*\*/\* at 1/5/10%. "
@@ -282,7 +282,7 @@ def _intro(depvar, summary, cfg, dagger=False, small=()):
         "across the two: GDP *per capita* in 10k R$ and CadÚnico families in 100s per 1k (the two "
         "variables the demand prep rescales), population shares as raw fractions, mobile lines per 100 "
         "inhabitants; Pix users (absent there) per 100 per 1k. **All other ratios are in percentage "
-        "points** — equity, Basel, cost, wholesale, LCI/LCA, asset return, NPL provisions, credit/assets "
+        "points** — equity, Basel, cost, wholesale, LCI/LCA, asset return, NPL provisions, borrowings and onlendings / assets "
         "and the risk-free rate — so a coefficient is the effect of a 1pp move rather than of an "
         "unattainable 0→100% change. "
         "Rescaling is a change of units only: it leaves the fit, t-statistics and stars untouched "

@@ -30,7 +30,11 @@ Two normalisations, exactly as in the paper:
                         flat line at 1 (it is 0/0 in the main normalisation, so it is
                         drawn on the ALT panel only -- same as the paper).
 
-Outputs -> DIAG_PHI_SEPARATION/d6_entry_{events,paths,model_curves}.csv,
+SAMPLE. Entries are dated inside the estimation window of utils/window.py (2016Q1-2024Q4) and
+their share paths are read through its last quarter; earlier panel quarters only establish that
+the entrant had no deposits in the market before (--no-window-only uses every panel quarter).
+
+Outputs ->DIAG_PHI_SEPARATION/d6_entry_{events,paths,model_curves}.csv,
            d6_implied_phi.csv, d6_drop_robustness.{csv,json}, d6_routine_{curves,panel}*.csv,
            d6_meta.json, d6_entry_dynamics.png/.pdf, and fig_entry_dynamics.png/.pdf in Drafts.
 
@@ -70,6 +74,15 @@ import pandas as pd
 from utils import paths as _paths
 from utils import routines as _routines
 from utils import load_panel_cached
+from utils.window import MIN_YEAR as WINDOW_MIN_YEAR, MAX_YEAR as WINDOW_MAX_YEAR
+
+# The entry window is the estimation window (utils/window.py): entries are dated inside it and
+# their share paths are read only up to its last quarter. Quarters before it enter only to show
+# that the entrant held no deposits in the market before its entry quarter; no share from them
+# reaches a path. That also keeps out of every path the market panel's pre-2016 ESTBAN levels,
+# which panel_deposits.py reads twice (each raw file matches both of its glob patterns on Windows).
+WINDOW_Q0 = WINDOW_MIN_YEAR * 4                 # first quarter, as qidx = year*4 + quarter - 1
+WINDOW_Q1 = WINDOW_MAX_YEAR * 4 + 3             # last quarter
 
 OUT_DIR = _paths.PROCESSED / "ESTIMATION_OUTPUT" / "DIAG_PHI_SEPARATION"
 # drafts_dir() is OPEN_FINANCE / "Drafts" / "Deposit Competition" -- the same path this used
@@ -331,15 +344,53 @@ def load_branch_entry(args):
               "(run panel_estban_instrument.py to create it)")
         return None
     br = pd.read_csv(BRANCH_SIDECAR, dtype={"mca_code": str})
-    br = br[br["own_br"] > 0]
     br["qidx"] = br["year"].astype(int) * 4 + br["quarter"].astype(int) - 1
+    q_cover0 = int(br["qidx"].min())
+    br = br[br["own_br"] > 0]
     out = (br.groupby([br["CodConglomeradoPrudencial"].astype(str), "mca_code"])["qidx"]
            .min().rename("q_branch"))
     out.index.names = ["congl", "mkt"]
+    # The sidecar is built from ESTBAN.csv, which starts in 2016Q1, so it dates no branch before
+    # that quarter. build_events judges only entries from this quarter on.
+    out.attrs["q_cover0"] = q_cover0
     ts = pd.Timestamp(BRANCH_SIDECAR.stat().st_mtime, unit="s").strftime("%Y-%m-%d %H:%M")
     print(f"  [branch] sidecar {BRANCH_SIDECAR.name} [{ts}]: {len(out):,} congl-MCA pairs "
-          "with a branch")
+          f"with a branch; branch history from {q_cover0 // 4}Q{q_cover0 % 4 + 1}")
     return out
+
+
+def load_event_frames(args):
+    """(b, d) frames for build_events, from the market panel: deposits of types 1, 2 and 4 by
+    (conglomerate, market, quarter), B rows by MCA and D rows in one national market. With the
+    window on, quarters after WINDOW_Q1 are cut, so no share path runs past the sample, and
+    build_events flags entries before WINDOW_Q0."""
+    usecols = ["CodConglomeradoPrudencial", "CNPJ_Lider", "CODMUN_IBGE", "mca_code",
+               "year", "quarter", "Source"] + DEP_COLS
+    # GOTCHA (hit 2026-08-03): panel_estban_instrument.py rewrites market_panel.csv in
+    # place and takes minutes to do it. Reading concurrently yields a TRUNCATED frame -- the
+    # run looked fine but silently lost half the entry events (B 327 -> 194, D 65 -> 8).
+    # Row count is the cheap tripwire; the panel has ~500k rows.
+    df = load_panel_cached(PANEL_CSV)
+    if len(df) < 400_000:
+        raise SystemExit(f"market_panel has only {len(df):,} rows -- it is probably being "
+                         "rewritten right now (panel_10/panel_6). Re-run once that finishes.")
+    df = df[[c for c in usecols if c in df.columns]].copy()
+    df["qidx"] = df["year"].astype(int) * 4 + df["quarter"].astype(int) - 1
+    args.window_q0 = WINDOW_Q0
+    if args.window_only:
+        df = df[df["qidx"] <= WINDOW_Q1]
+        print(f"  window: entries {WINDOW_MIN_YEAR}Q1-{WINDOW_MAX_YEAR}Q4, paths read through "
+              f"{WINDOW_MAX_YEAR}Q4; earlier quarters only date the entry")
+    df["dep"] = df[DEP_COLS].fillna(0).sum(axis=1)
+    df = df[df["dep"] > 0]
+    df["congl"] = df["CodConglomeradoPrudencial"].astype(str)
+    df["cnpj_root"] = (df["CNPJ_Lider"].astype(str).str.replace(r"\D", "", regex=True)
+                       .str[:8].replace({"": np.nan, "nan": np.nan}))
+    is_d = df["CODMUN_IBGE"].astype(str).str.strip().isin(["0", "0.0"])
+    print(f"  panel rows with positive deposits: {len(df):,}  (D rows {int(is_d.sum()):,})")
+    b = df[~is_d].copy(); b["mkt"] = b["mca_code"].astype(str)
+    d = df[is_d].copy(); d["mkt"] = "NATIONAL"
+    return b, d
 
 
 def build_events(df, kind, args, branch=None):
@@ -415,9 +466,19 @@ def build_events(df, kind, args, branch=None):
     if branch is not None and kind == "B":
         qb = pd.MultiIndex.from_arrays([reg["congl"], reg["mkt"]]).map(branch)
         reg["q_branch"] = pd.to_numeric(pd.Series(qb, index=reg.index), errors="coerce")
-        # deposits >= 2 quarters before the first branch, or never any branch at all
-        reg["f_branch"] = (reg["q_branch"].isna()
-                           | (reg["q_entry"] <= reg["q_branch"] - 2))
+        # Deposits >= 2 quarters before the first branch, or never any branch at all -- judged
+        # only where the branch data cover the entry quarter. An entry before the first covered
+        # quarter would otherwise read as "no branch yet" for want of data (with deposits from
+        # 2013Q1 and branches from 2016Q1, that is every entry from 2014Q1 to 2015Q3). ESTBAN
+        # lists an institution in a municipality only where it has a branch, so an entrant at or
+        # after the first covered quarter had no earlier branch there.
+        covered = reg["q_entry"] >= branch.attrs.get("q_cover0", -np.inf)
+        reg["f_branch"] = covered & (reg["q_branch"].isna()
+                                     | (reg["q_entry"] <= reg["q_branch"] - 2))
+        n_unc = int((~covered).sum())
+        if n_unc:
+            print(f"  [branch] {n_unc:,} candidate entries predate the branch data; their branch "
+                  "timing is unobserved and the screen leaves them to the other screens")
 
     flags = ["f_trunc", "f_mkt_young", "f_short", "f_gappy", "f_jump", "f_big_entry",
              "f_churn", "f_branch"]
@@ -1178,32 +1239,14 @@ def main(args):
         print("  Their model curves are drawn CONVEX (accelerating), which no entrant path can")
         print("  match -- read that as evidence against those phi LEVELS, not as a plot artifact.")
 
-    usecols = ["CodConglomeradoPrudencial", "CNPJ_Lider", "CODMUN_IBGE", "mca_code",
-               "year", "quarter", "Source"] + DEP_COLS
-    # GOTCHA (hit 2026-08-03): panel_estban_instrument.py rewrites market_panel.csv in
-    # place and takes minutes to do it. Reading concurrently yields a TRUNCATED frame -- the
-    # run looked fine but silently lost half the entry events (B 327 -> 194, D 65 -> 8).
-    # Row count is the cheap tripwire; the panel has ~500k rows.
-    df = load_panel_cached(PANEL_CSV)
-    if len(df) < 400_000:
-        raise SystemExit(f"market_panel has only {len(df):,} rows -- it is probably being "
-                         "rewritten right now (panel_10/panel_6). Re-run once that finishes.")
-    df = df[[c for c in usecols if c in df.columns]].copy()
-    df["qidx"] = df["year"].astype(int) * 4 + df["quarter"].astype(int) - 1
-    df["dep"] = df[DEP_COLS].fillna(0).sum(axis=1)
-    df = df[df["dep"] > 0]
-    df["congl"] = df["CodConglomeradoPrudencial"].astype(str)
-    df["cnpj_root"] = (df["CNPJ_Lider"].astype(str).str.replace(r"\D", "", regex=True)
-                       .str[:8].replace({"": np.nan, "nan": np.nan}))
-    is_d = df["CODMUN_IBGE"].astype(str).str.strip().isin(["0", "0.0"])
-    args.window_q0 = 2016 * 4
-    print(f"  panel rows with positive deposits: {len(df):,}  (D rows {int(is_d.sum()):,})")
-
+    b, d = load_event_frames(args)
     branch = load_branch_entry(args)
-    b = df[~is_d].copy(); b["mkt"] = b["mca_code"].astype(str)
-    d = df[is_d].copy(); d["mkt"] = "NATIONAL"
     reg_b, paths_b = build_events(b, "B", args, branch)
     reg_d, paths_d = build_events(d, "D", args)
+    if args.window_only:
+        for reg in (reg_b, reg_d):
+            if not reg.empty and (reg.loc[reg["keep"], "q_entry"] < WINDOW_Q0).any():
+                raise SystemExit("an entry before the window survived the screens")
 
     # Per-event accrual paths, aligned to reg[reg.keep] row order for each kind.
     gmode = args.g_mode
@@ -1757,6 +1800,7 @@ def _write_meta(g, H, plateau_w, vint, imp, args):
         "seed": int(args.seed),
         "inversion_loss": args.inversion_loss,
         "window_only": bool(args.window_only),
+        "window_q": [WINDOW_Q0, WINDOW_Q1] if args.window_only else None,
         "routine_curves": list(args.routine_curves) if args.routine_curves else None,
         "implied_phi_kinds": sorted(imp.keys()) if imp else [],
     }
@@ -1866,26 +1910,8 @@ def run_robustness_only(args):
     print(f"  horizon={H}  plateau_w={plateau_w}  boot={args.boot}  seed={args.seed}  "
          f"window_only={args.window_only}")
 
-    usecols = (["CodConglomeradoPrudencial", "CNPJ_Lider", "CODMUN_IBGE", "mca_code",
-               "year", "quarter", "Source"] + DEP_COLS)
-    df = load_panel_cached(PANEL_CSV)
-    if len(df) < 400_000:
-        raise SystemExit(f"market_panel has only {len(df):,} rows -- it is probably being "
-                         "rewritten right now (panel_10/panel_6). Re-run once that finishes.")
-    df = df[[c for c in usecols if c in df.columns]].copy()
-    df["qidx"] = df["year"].astype(int) * 4 + df["quarter"].astype(int) - 1
-    df["dep"] = df[DEP_COLS].fillna(0).sum(axis=1)
-    df = df[df["dep"] > 0]
-    df["congl"] = df["CodConglomeradoPrudencial"].astype(str)
-    df["cnpj_root"] = (df["CNPJ_Lider"].astype(str).str.replace(r"\D", "", regex=True)
-                       .str[:8].replace({"": np.nan, "nan": np.nan}))
-    is_d = df["CODMUN_IBGE"].astype(str).str.strip().isin(["0", "0.0"])
-    args.window_q0 = 2016 * 4
-    print(f"  panel rows with positive deposits: {len(df):,}  (D rows {int(is_d.sum()):,})")
-
+    b, d = load_event_frames(args)
     branch = load_branch_entry(args)
-    b = df[~is_d].copy(); b["mkt"] = b["mca_code"].astype(str)
-    d = df[is_d].copy(); d["mkt"] = "NATIONAL"
     reg_b, paths_b = build_events(b, "B", args, branch)
     reg_d, paths_d = build_events(d, "D", args)
 
@@ -1952,8 +1978,10 @@ if __name__ == "__main__":
                     help="drop events with a post-entry share jump above this (acquisition)")
     ap.add_argument("--max-entry-share", type=float, default=0.10,
                     help="drop events entering above this share (mechanical booking)")
-    ap.add_argument("--window-only", action="store_true",
-                    help="restrict to entries from 2016Q1 (the estimation window)")
+    ap.add_argument("--window-only", action=argparse.BooleanOptionalAction, default=True,
+                    help="entries dated inside the estimation window (utils/window.py) and share "
+                         "paths read through its last quarter (default); --no-window-only uses "
+                         "every quarter of the panel")
     ap.add_argument("--routine-curves", nargs="+", default=None,
                     help="per-routine model paths from each routine's own fitted phi_m (D4c --routine-bands analogue), e.g. --routine-curves 1 2 3 4")
     ap.add_argument("--no-branch-screen", action="store_true",
