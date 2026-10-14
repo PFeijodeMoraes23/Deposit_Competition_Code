@@ -106,8 +106,9 @@ const IV_BLP_LOO = ["loo_log_assets", "mean_loo_log_assets",
                     "loo_npl_provision", "mean_loo_npl_provision",
                     "n_rivals"]
 # `loo_borrow_assets` / `mean_loo_borrow_assets`: rivals' borrowings and onlendings (IF.data Passivo
-# line 78295) over total assets. A parquet built before the 2026-10 repair names them
-# loo_credit_assets / mean_loo_credit_assets (demand_inputs.jl, BLP_READ_PRE_REPAIR).
+# line 78295) over total assets, the ratio of utils/demand_chars.py. Their column names in the stored
+# parquets, loo_credit_assets / mean_loo_credit_assets, are read only under BLP_ZERO_FILL_MISSING
+# (demand_inputs.jl).
 const IV_COST    = ["personnel_cost_ratio_lag", "admin_cost_ratio_lag",
                     "tax_cost_ratio_lag"]
 const IV_CAPITAL = ["indice_basileia_lag"]
@@ -192,7 +193,7 @@ end
 Local run options (both off by default, when every path is the one above):
 
   --demand-dir DIR   read the demand parquets from DIR instead of ESTIMATION_OUTPUT/DEMAND_PREP
-                     (e.g. the repaired DEMAND_PREP_REPAIRED folder).
+                     (e.g. a scratch folder written by the demand preps' --out-dir).
   --out-dir DIR      write everything this run produces under DIR: the logit step folder
                      DIR/logit (δ warm-starts, .jls fits, combined summary) and the LaTeX tables in
                      DIR/Rout. Nothing is copied to the Drafts folder. DIR must not be named
@@ -437,7 +438,7 @@ Spread (pp), product characteristics `X` (`xcols`, then the D-type dummy when `a
 X_full = [spread, X], and the instruments that enter the moments. Read under the input rule of
 demand_inputs.jl, the one the RC engines apply: a missing or non-finite price, characteristic or
 instrument stops the run with a `DemandInputError` naming every column's count, unless
-BLP_READ_PRE_REPAIR=1 (then 0.0, with the counts printed). An ABSENT column is an error in every
+BLP_ZERO_FILL_MISSING=1 (then 0.0, with the counts printed). An ABSENT column is an error in every
 case: it used to be dropped (an instrument) or read as zeros (a characteristic) in silence, which
 is how the whole IV_BLP_LOO block vanished when a market_panel rebuild skipped
 panel_loo_instruments.py (it OVERWRITES market_panel.csv with the LOO instruments + FGC dummy).
@@ -624,8 +625,10 @@ function run_strategy(estim)
     dep_types = Int.(coalesce.(df.deposit_type, 0))
 
     # The input rule (demand_inputs.jl) on the widest design, before anything is written: a gap in
-    # the price, a characteristic or an instrument stops the routine here, with its counts.
+    # the price, a characteristic, an instrument, a share or the deposit type stops the routine
+    # here, with its counts.
     build_matrices(df, X_COLS, true)
+    check_shares_and_types(df)
 
     # ── Save logit δ checkpoint for BLP σ-stage warm-start ──
     # delta_dir() is the logit step folder, the same `logit_dir(out_dir)` the RC engine

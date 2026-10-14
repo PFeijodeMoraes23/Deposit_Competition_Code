@@ -136,7 +136,9 @@ def map_foundation_to_congl(found, df_map):
 
 def load_segment_map():
     """conglomerate -> prudential segment (S1-S5), latest known.  Prefer
-    market_panel.csv; fall back to bank_chars_panel.csv; else empty."""
+    market_panel.csv; fall back to bank_chars_panel.csv when market_panel.csv
+    is absent or has no segment column.  Raises if a source cannot be read or
+    if neither source carries a segment."""
     for path, code_col, ym_cols in [
         (MARKET_PANEL, "CodConglomeradoPrudencial", ("year", "quarter")),
         (BANK_CHARS, "CodConglPrud", ("AnoMes",)),
@@ -161,9 +163,17 @@ def load_segment_map():
                      len(seg), os.path.basename(path))
             return seg
         except Exception as e:   # noqa: BLE001
-            log.warning("Could not read segment from %s: %s", path, e)
-    log.warning("No segment source found -- all banks use the global profile.")
-    return pd.DataFrame(columns=["CodConglomeradoPrudencial", "segment"])
+            # A segment source that exists but cannot be read must stop the
+            # calibration: the shrinkage targets depend on it, and an empty map
+            # would put every bank on the global profile without notice.
+            raise RuntimeError(
+                f"Could not read the segment map from {path}: {e!r}. "
+                "Fix the read before calibrating; every bank would otherwise "
+                "fall back to the global profile.") from e
+    raise RuntimeError(
+        "No segment source found (neither market_panel.csv nor "
+        "bank_chars_panel.csv carries a 'segment' column); every bank would "
+        "fall back to the global profile. Rebuild the segment column first.")
 
 
 def strip_cdb_expense(d, repo_ratio, bills_ratio):

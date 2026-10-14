@@ -66,6 +66,9 @@ Pipeline stages
     4d. panel_fee_merge.py --patch-market  Fee columns -> market_panel_with_fees.csv (MUST follow 4b).
                                               OPTIONAL since 2026-08-04: the estimators read
                                               market_panel.csv unless USE_FEE_PANEL=1.
+    4e. panel_demand_chars.py              Corrected characteristics, segments and balances for the
+                                              demand preps -> processed/demand_chars.parquet (MUST follow every
+                                              stage-4 step that writes market_panel)
 
   Stage 5 - Descriptive statistics
     5a. make_desc_panel_tables.py                        Generate unweighted overview descriptive tables
@@ -297,6 +300,13 @@ STEPS = [
     (4, "22", "panel_fee_merge.py --patch-market",
      "COSIF/Tarifas fee columns -> market_panel_with_fees.csv (MUST follow panel_7/panel_10/panel_12). "
      "Optional for estimation: the estimators read market_panel.csv unless USE_FEE_PANEL=1"),
+    # The demand preps (sleep_demand_prep_*.py) apply this file through utils/demand_chars.py and
+    # fail without it. It keys on market_panel rows and reads the final panel, bank_chars_panel,
+    # deposits_panel, the corrected COSIF k=4 rate and the raw IF.data / ESTBAN files, so it is
+    # rebuilt after the last step that writes market_panel (panel_6/7/10/12).
+    (4, "39", "panel_demand_chars.py",
+     "Corrected characteristics, segments and balances for the demand preps -> demand_chars.parquet "
+     "(MUST follow panel_6/panel_7/panel_10/panel_12)"),
 
     # Stage 5 -- descriptive statistics
     (5, "23", "make_desc_panel_tables.py",
@@ -476,6 +486,7 @@ WAVES: list[list[str]] = [
                                               #         + demographics sigma (panel_8, independent)
     ["36"],                                   # Wave 6b: ESTBAN rival-branch IV (panel_10) — after panel_7 overwrite
     ["37"],                                   # Wave 6c: LOCAL CDB spread patch (panel_12) — after panel_10, before panel_9
+    ["39"],                                   # Wave 6d: demand_chars.parquet — after the final market_panel
     ["22"],                                   # Wave 7: panel_9 fee patch — MUST follow panel_7/panel_10/panel_12
     ["23", "24", "25", "26"],                 # Wave 8: descriptives (desc_1/desc_2 x {unweighted, weighted})
                                               #         desc_3 + export_analyze_spec12 are post-estimation

@@ -147,8 +147,9 @@ const D_DIM   = length(D_COLS)
 # for weakening α (see blp_logit.jl). Kept consistent with the logit; trimming is a robustness
 # discussion only (review §4).
 # `loo_borrow_assets` / `mean_loo_borrow_assets`: rivals' borrowings and onlendings (IF.data Passivo
-# line 78295) over total assets. A parquet built before the 2026-10 repair names them
-# loo_credit_assets / mean_loo_credit_assets (demand_inputs.jl, BLP_READ_PRE_REPAIR).
+# line 78295) over total assets, the ratio of utils/demand_chars.py. Their column names in the stored
+# parquets, loo_credit_assets / mean_loo_credit_assets, are read only under BLP_ZERO_FILL_MISSING
+# (demand_inputs.jl).
 const IV_BLP_LOO = ["loo_log_assets", "mean_loo_log_assets",
                     "loo_equity_ratio", "mean_loo_equity_ratio",
                     "loo_basileia", "mean_loo_basileia",
@@ -194,6 +195,21 @@ function save_delta_bin(path::String, delta::Vector{Float64})
         write(io, Int64(length(delta)))
         write(io, delta)
     end
+end
+
+"""
+    json_se_values(v, se_status, fill; sigdigits=8) -> Vector
+
+Standard errors or p-values as a result JSON stores them. A stage whose joint SEs exist
+(`se_status` "ok", or "" for a result that records no status) keeps the encoding every reader
+knows: a NaN entry, a σ profiled out at its bound, is written as `fill` (0.0 for an SE, 1.0 for a
+p-value) and the tables print it with a dagger. A stage WITHOUT joint SEs (any other status:
+refused by the SE guard of blp_se_common.jl, failed, or not computed) writes every non-finite
+entry as null, never as a number, so no reader can take a missing SE for a zero one.
+"""
+function json_se_values(v::AbstractVector, se_status::AbstractString, fill; sigdigits::Int=8)
+    se_status in ("", "ok") && return replace(round.(Float64.(v), sigdigits=sigdigits), NaN => fill)
+    return Any[isfinite(x) ? round(x, sigdigits=sigdigits) : nothing for x in Float64.(v)]
 end
 
 """Load a Float64 vector from a raw binary file saved by save_delta_bin.
@@ -340,6 +356,245 @@ function unpack_theta2(theta2::Vector{Float64}, sigma_indices, pi_interactions)
     n_p = length(pi_interactions)
     return theta2[1:n_s], theta2[n_s+1:n_s+n_p]
 end
+
+# ==========================================================================
+# 1b. Two-start stages
+# ==========================================================================
+"""
+Stages solved from two starting points, keeping the lower re-evaluated Q (rule in `solve_two_starts`).
+Per stage: which start runs first (the start the stage used before; it wins a tie), where the warm
+start's δ comes from, and the offset added to the run's `--seed` for the cold start.
+
+  ext1      first: cold = the θ₂₀ the engine builds, `randn(MersenneTwister(seed), 5) .* 0.01`
+            (seed 42 by default). Second: warm_rc4 = rc4's θ₂* padded with a zero for
+            π(ln assets × gdp), with rc4's δ*. rc4's θ₂ is the first four entries of ext1's, so the
+            ext1 objective there equals rc4's minimum.
+  extended  first: warm_ext2 = the θ₂₀ the engine builds, ext2's θ₂* padded with a zero, from the
+            stage's δ start (the logit δ̂). Second: cold = `randn(MersenneTwister(seed + 1), 7) .* 0.01`
+            (seed 43 by default), clamped to the box.
+
+The warm start's checkpoint is the stage's entry in each engine's `prev_stages`. An explicit
+BLP_THETA2_INIT_FILE seed, in the engines that read one, replaces both starts.
+"""
+const TWO_START_STAGES = Dict(
+    "ext1"     => (first = :cold, warm_delta = :checkpoint, cold_seed_offset = 0),
+    "extended" => (first = :warm, warm_delta = :stage,      cold_seed_offset = 1),
+)
+
+"""Key under which a two-start stage records its starts: in the result Dict, the .json and the checkpoint."""
+two_start_key(stage::AbstractString) = "$(stage)_start"
+
+"""
+BLP_TWO_START_ALLOW_SINGLE=1 lets a two-start stage run its cold start alone when the warm start's
+checkpoint is missing or unusable, and lets ext2 start cold without the ext1 checkpoint
+(`require_prev_checkpoint`); the log says so loudly and the record carries the reason. Unset (the
+default), the stage throws a `TwoStartError`, which every stage loop rethrows: the job ends nonzero and
+no later stage starts from a one-start estimate.
+"""
+two_start_allow_single()::Bool = get(ENV, "BLP_TWO_START_ALLOW_SINGLE", "0") == "1"
+
+"""A two-start stage could not run both of its starts (see `two_start_allow_single`)."""
+struct TwoStartError <: Exception
+    msg::String
+end
+Base.showerror(io::IO, e::TwoStartError) = print(io, "TwoStartError: ", e.msg)
+
+"""
+    two_start_list(stage, prev_stage, theta2_0, warm_path, n_params, N_obs, lo, hi, seed)
+        -> (starts, record)
+
+The starts of a two-start stage in the order they run, each `(name, θ₀, δ₀, δ₀ description)`, δ₀ =
+nothing meaning the δ the stage loaded. `theta2_0` is the θ₂₀ the engine built, the stage's first start
+(cold for ext1, warm for extended), and is used unchanged. The other start is built here: the cold one
+as `clamp.(randn(MersenneTwister(seed + cold_seed_offset), n_params) .* 0.01, lo, hi)`, the warm one as
+the checkpoint's θ₂* padded with zeros and clamped to [lo, hi], with the checkpoint's δ* (its .bin,
+else `delta_star`) when the stage takes the warm δ from there. The checkpoint at `warm_path` is read in
+both cases: when it is missing or unusable this throws a `TwoStartError`, unless
+`two_start_allow_single()`, in which case the cold start runs alone and `record` says why.
+"""
+function two_start_list(stage::AbstractString, prev_stage::AbstractString,
+                        theta2_0::Vector{Float64}, warm_path::AbstractString,
+                        n_params::Int, N_obs::Int, lo::Vector{Float64}, hi::Vector{Float64},
+                        seed::Int)
+    cfg       = TWO_START_STAGES[stage]
+    warm_name = "warm_$(prev_stage)"
+    cold_seed = seed + cfg.cold_seed_offset
+    record    = Dict{String,Any}("cold_seed" => cold_seed, "warm_checkpoint" => basename(warm_path))
+    t2w = nothing; dw = nothing; why = ""
+    if !isfile(warm_path)
+        why = "checkpoint missing: $warm_path"
+    else
+        try
+            ck  = deserialize(warm_path)
+            t2p = get(ck, "theta2_star", nothing)
+            if t2p === nothing || length(t2p) > n_params
+                why = "checkpoint has no theta2_star of length <= $n_params: $warm_path"
+            else
+                t2w = zeros(n_params)
+                t2w[1:length(t2p)] .= t2p
+                t2w .= clamp.(t2w, lo, hi)
+                if cfg.warm_delta == :checkpoint
+                    d = load_delta_bin(replace(warm_path, r"\.jls$" => ".bin"))
+                    (d === nothing || length(d) != N_obs) && (d = get(ck, "delta_star", nothing))
+                    dw = (d !== nothing && length(d) == N_obs) ? collect(Float64, d) : nothing
+                end
+            end
+        catch e
+            t2w = nothing
+            why = "checkpoint unreadable: $warm_path ($(sprint(showerror, e)))"
+        end
+    end
+    cold = ("cold",
+            cfg.first == :cold ? copy(theta2_0) :
+                                 clamp.(randn(MersenneTwister(cold_seed), n_params) .* 0.01, lo, hi),
+            nothing, "the stage's δ start")
+    if t2w === nothing
+        msg = "stage $stage: the $warm_name start is unavailable ($why)"
+        two_start_allow_single() || throw(TwoStartError(msg * ". Run $prev_stage first, or set " *
+            "BLP_TWO_START_ALLOW_SINGLE=1 to run the cold start alone."))
+        log_status("  [!!] [TWO-START] $msg. BLP_TWO_START_ALLOW_SINGLE=1: the COLD START RUNS ALONE.")
+        record[warm_name] = Dict{String,Any}("status" => "not run: $why")
+        return Any[cold], record
+    end
+    warm = cfg.first == :warm ?
+        (warm_name, copy(theta2_0), nothing, "the stage's δ start") :
+        (warm_name, t2w, dw, dw === nothing ?
+            "the stage's δ start (no δ* of length $N_obs in the checkpoint)" :
+            "δ* of $(basename(warm_path))")
+    return (cfg.first == :cold ? Any[cold, warm] : Any[warm, cold]), record
+end
+
+"""
+    solve_two_starts(solve_from, starts, record, delta_work; contract, objective, reeval_note = "")
+        -> (theta2_star, Q_min, n_outer, converged, record)
+
+Runs `solve_from(name, θ₀)` from each start of `two_start_list`, in order. `solve_from` is one bounded
+minimisation that returns (θ₂*, Q, n_outer, converged[, n_evals]) and leaves its last δ in
+`delta_work`; n_evals defaults to n_outer (on the L-BFGS-B path n_outer already counts objective
+evaluations). Each start's δ₀, or the δ the stage loaded, is copied into `delta_work` before it runs.
+
+After each start its Q is re-evaluated at its θ₂*: `contract(θ₂*)` sets μ and runs the inner
+contraction from that start's last δ to the re-evaluation tolerance (`reeval_tol`, `reeval_cap`) and
+returns whether it converged; `objective(θ₂*)` then returns the engine's own objective from that δ
+without touching the optimiser's one-point caches. The choice uses this re-evaluated Q ("Q_reeval"),
+not the optimiser's ("Q_opt"):
+  - eligible: the starts whose re-evaluation converged with a finite Q_reeval. The lowest wins, the
+    earlier start in `order` on a tie;
+  - if no re-evaluation converged, the lowest finite Q_reeval wins and the record says so;
+  - if no start has a finite Q_reeval, this throws a `TwoStartError`.
+Q_min is the kept start's Q_reeval. `delta_work` is left holding the kept start's re-evaluated δ, so the
+final contraction, the SE step and the checkpoint see the chosen solution only. `record` gains one
+entry per start that ran (status, θ₀, θ₂*, Q_opt, Q_reeval, Q (= Q_reeval), reeval_converged, n_outer,
+n_evals, converged, δ₀) and "reeval", "order", "tie_rule", "choice_basis", "chosen", "n_starts" and,
+when both ran, "dQ_warm_minus_cold" (on Q_reeval).
+"""
+function solve_two_starts(solve_from::Function, starts, record::Dict{String,Any},
+                          delta_work::Vector{Float64}; contract::Function, objective::Function,
+                          reeval_note::AbstractString = "")
+    delta_stage = copy(delta_work)
+    sols = Dict{String,Any}()
+    ends = Dict{String,Vector{Float64}}()
+    for (name, th0, d0, d0_note) in starts
+        copyto!(delta_work, d0 === nothing ? delta_stage : d0)
+        log_status("  [TWO-START] start '$name': theta2_0 = $(round.(th0, digits=4)) | delta_0 = $d0_note")
+        sol = solve_from(name, copy(th0))
+        t, Q_opt, n_outer, conv = sol[1], sol[2], sol[3], sol[4]
+        n_evals = length(sol) >= 5 ? sol[5] : n_outer
+        reeval_conv = contract(t)
+        Q = objective(t)
+        ends[name] = copy(delta_work)
+        sols[name] = (t, Q, n_outer, conv, reeval_conv)
+        record[name] = Dict{String,Any}("status" => "ran", "theta2_start" => copy(th0),
+                                        "theta2" => copy(t), "Q_opt" => Q_opt, "Q_reeval" => Q,
+                                        "Q" => Q, "reeval_converged" => reeval_conv,
+                                        "n_outer" => n_outer, "n_evals" => n_evals,
+                                        "converged" => conv, "delta_start" => d0_note)
+        log_status("  [TWO-START] start '$name' done: Q_opt = $(round(Q_opt, sigdigits=8)) | " *
+                   "Q_reeval = $(round(Q, sigdigits=8)) (inner converged = $reeval_conv) | " *
+                   "evals = $n_evals | converged = $conv | theta2* = $(round.(t, digits=4))")
+    end
+    order = String[s[1] for s in starts]
+    pool  = String[n for n in order if isfinite(sols[n][2]) && sols[n][5]]
+    basis = "converged re-evaluated Q"
+    if isempty(pool)
+        pool  = String[n for n in order if isfinite(sols[n][2])]
+        basis = "re-evaluated Q; NO re-evaluation converged"
+        isempty(pool) || log_status("  [!!] [TWO-START] no re-evaluation converged: the choice uses " *
+                                    "the unconverged re-evaluated Q (see the record).")
+    end
+    isempty(pool) && throw(TwoStartError("no start reached a finite Q (" * join(order, ", ") * ")"))
+    chosen = pool[1]
+    for n in pool
+        sols[n][2] < sols[chosen][2] && (chosen = n)
+    end
+    copyto!(delta_work, ends[chosen])
+    record["reeval"]       = reeval_note
+    record["order"]        = order
+    record["tie_rule"]     = "lowest eligible Q_reeval; on a tie the first start in `order`"
+    record["choice_basis"] = basis
+    record["chosen"]       = chosen
+    record["n_starts"]     = length(starts)
+    if length(order) == 2
+        w = startswith(order[1], "warm_") ? order[1] : order[2]
+        record["dQ_warm_minus_cold"] = sols[w][2] - sols["cold"][2]
+    end
+    log_status("  [TWO-START] chosen: '$chosen' (Q_reeval = $(round(sols[chosen][2], sigdigits=8)); " *
+               "basis: $basis)" *
+               (length(order) == 2 ? " | Q_warm - Q_cold = $(round(record["dQ_warm_minus_cold"], sigdigits=4))" :
+                                     " | ONE start only, see the record"))
+    t, Q, n_outer, conv, _ = sols[chosen]
+    return t, Q, n_outer, conv, record
+end
+
+"""(θ₂*, Q, iterations, converged, objective evaluations) of an Optim result, as `solve_two_starts` takes it."""
+optim_tuple(r) = (Optim.minimizer(r), Optim.minimum(r), Optim.iterations(r), Optim.converged(r),
+                  Optim.f_calls(r))
+
+"""Copy of a nested Dict/Vector with every non-finite float as `nothing` (JSON has no NaN); the .jls keeps the floats."""
+json_finite(x::AbstractFloat) = isfinite(x) ? x : nothing
+json_finite(x::AbstractVector) = Any[json_finite(v) for v in x]
+json_finite(x::AbstractDict) = Dict{String,Any}(string(k) => json_finite(v) for (k, v) in x)
+json_finite(x) = x
+
+"""μ at θ₂ (`compute_mu!` after `unpack_theta2`), so a closure can set it without assigning locals."""
+function mu_at!(buf, prod_vec, nu_draws, theta2::Vector{Float64}, sigma_indices, pi_interactions,
+                R::Int, coef_dim::Int)
+    sigma_vals, pi_vals = unpack_theta2(theta2, sigma_indices, pi_interactions)
+    compute_mu!(buf, prod_vec, nu_draws, sigma_vals, sigma_indices, pi_vals, R, coef_dim)
+    return nothing
+end
+
+"""
+The re-evaluation of each start's Q in `solve_two_starts`: the inner contraction runs from that start's
+last δ to `reeval_tol(args)` = tol_inner / 10 with at most `reeval_cap(args)` = 10 × max_inner
+iterations. The contraction's norm is a max-abs norm, so tol_inner / 10 (1e-11 in production) is still
+about three orders of magnitude above the Float64 rounding of δ.
+"""
+reeval_tol(args) = args["tol_inner"] / 10
+reeval_cap(args) = 10 * args["max_inner"]
+reeval_rule(args) = "inner contraction from each start's last δ to tol $(reeval_tol(args)) with at " *
+                    "most $(reeval_cap(args)) iterations"
+
+"""
+    require_prev_checkpoint(stage, prev_stage, prev_path) -> Dict
+
+A stage that follows a two-start stage (ext2 after ext1) starts only from that stage's checkpoint. The
+engines call this, in the optimisation block, when that checkpoint was not loaded: it throws a
+`TwoStartError` unless `two_start_allow_single()`, in which case it logs loudly and returns the record
+of the cold start, which the engine stores under `two_start_key(stage)`.
+"""
+function require_prev_checkpoint(stage::AbstractString, prev_stage::AbstractString,
+                                 prev_path::AbstractString)
+    msg = "stage $stage: the $prev_stage checkpoint it starts from is unavailable ($prev_path)"
+    two_start_allow_single() || throw(TwoStartError(msg * ". Run $prev_stage first, or set " *
+        "BLP_TWO_START_ALLOW_SINGLE=1 to start $stage cold."))
+    log_status("  [!!] [TWO-START] $msg. BLP_TWO_START_ALLOW_SINGLE=1: $stage STARTS COLD.")
+    return Dict{String,Any}("status" => "cold start: the $prev_stage checkpoint is unavailable",
+                            "prev_checkpoint" => prev_path, "chosen" => "cold", "n_starts" => 1)
+end
+
+"""Keys of a result that hold a start record (`two_start_key`): the two-start stages, and ext2 when it starts cold under the override."""
+start_record_keys(res) = [k for k in keys(res) if k isa AbstractString && endswith(k, "_start")]
 
 # ==========================================================================
 # 2. HotBuffers — pre-allocated workspace for the inner loop
@@ -815,7 +1070,7 @@ end
 The price (spread in pp), the linear design `x_mat` (N × L_X1: the X_COLS columns, then the D-type
 dummy) and every instrument of `iv_cols` (N × L, before the zero-variance filter), read under the
 input rule of demand_inputs.jl: a missing or non-finite value in any of them stops the run with a
-`DemandInputError` that counts it per column and per row, unless BLP_READ_PRE_REPAIR=1 (then 0.0).
+`DemandInputError` that counts it per column and per row, unless BLP_ZERO_FILL_MISSING=1 (then 0.0).
 
 A column ABSENT from the parquet is an error in every case. It used to vanish silently: X_COLS fell
 back to a column of zeros and a missing instrument was dropped from Z, which is how the whole
@@ -828,6 +1083,7 @@ function build_regressor_matrices(df::DataFrame)
     x_blk = read_input_block(df, X_COLS, "X")
     z_blk = read_input_block(df, iv_cols, "instrument")
     enforce_inputs!([s_blk, x_blk, z_blk]; context="demand parquet")
+    check_shares_and_types(df)                                 # shares and deposit type (same rule)
     spread_cols = s_blk[1][:, 1] ./ 100.0                      # bps → percentage points (÷100)
     x_mat = hcat(x_blk[1], dtype_column(df))                   # X1_COLS order: X_COLS, then D
     size(x_mat, 2) == L_X1 || error("linear design has $(size(x_mat, 2)) columns, X1_COLS $(L_X1)")
@@ -1367,16 +1623,20 @@ function run_blp_estimation(estim::Int, spec_id::Int, args,
     # through blp_dir, the logit δ̂ through logit_dir, each family in the one directory its
     # producer writes.
     in_dir, _, out_dir = get_paths(args["hpc"])
-    # Warm-start chain. NOTE `ext1` now warm-starts from `rc4`, NOT `full`: since σ(ln assets) was
-    # dropped from θ₂, `full` has the SAME θ₂ structure as `rc4` and reproduces it exactly (verified
-    # in job 18689035 — identical Q, α, SE and every θ₂ across all link routines), so it is a redundant
-    # rung and is no longer part of the default sequence. Its entry is kept so `--stage full` still
-    # works if requested explicitly.
+    # Warm-start chain. `ext1` reads `rc4`, not `full`: since σ(ln assets) was dropped from θ₂,
+    # `full` has the SAME θ₂ structure as `rc4` and reproduces it exactly (verified in job 18689035 —
+    # identical Q, α, SE and every θ₂ across all link routines), so it is a redundant rung and is no
+    # longer part of the default sequence. Its entry is kept so `--stage full` still works if
+    # requested explicitly. ext1 and extended are two-start stages (TWO_START_STAGES): ext1 keeps the
+    # cold θ₂₀ below as its first start and takes the rc4 checkpoint as its second; extended keeps
+    # this ext2 warm start as its first and adds a cold one. Both run in the optimisation block.
     prev_stages = Dict("rc2" => "sigma", "rc3" => "rc2", "rc4" => "rc3",
                        "full" => "rc4", "ext1" => "rc4", "ext2" => "ext1",
                        "extended" => "ext2")
     theta2_0 = nothing
-    if args["stage"] in keys(prev_stages)
+    two_start = haskey(TWO_START_STAGES, args["stage"])
+    if args["stage"] in keys(prev_stages) &&
+       !(two_start && TWO_START_STAGES[args["stage"]].first == :cold)
         prev_path = joinpath(blp_dir(out_dir),
             "blp_checkpoint_E$(estim)_spec_$(spec_id)_$(prev_stages[args["stage"]]).jls")
         if isfile(prev_path)
@@ -1393,6 +1653,10 @@ function run_blp_estimation(estim::Int, spec_id::Int, args,
             end
         end
     end
+    # A stage that follows a two-start stage (ext2 after ext1) starts only from that stage's result:
+    # without its checkpoint the optimisation block refuses it (require_prev_checkpoint).
+    prev_missing = theta2_0 === nothing && haskey(prev_stages, args["stage"]) &&
+                   haskey(TWO_START_STAGES, prev_stages[args["stage"]])
     theta2_0 === nothing && (theta2_0 = randn(MersenneTwister(seed), n_params) .* 0.01)
 
     # ── Bounds: ±2 in pp units keeps σ×ν×spread O(1) for typical spreads ──
@@ -1488,13 +1752,38 @@ function run_blp_estimation(estim::Int, spec_id::Int, args,
         return val
     end
 
-    result = optimize(obj_fn, lo, hi, theta2_0, Fminbox(LBFGS()),
-                      Optim.Options(iterations=500, f_reltol=args["tol_outer"],
-                                    show_trace=false))
-
-    theta2_star = Optim.minimizer(result)
-    println("  Optimiser converged: $(Optim.converged(result))")
-    println("  Q(theta2*) = $(round(Optim.minimum(result), sigdigits=6))")
+    # One bounded minimisation from θ₀; a two-start stage runs it once per start.
+    solve_from = (name, theta2_start) -> begin
+        outer_iter[] = 0
+        optim_tuple(optimize(obj_fn, lo, hi, theta2_start, Fminbox(LBFGS()),
+                             Optim.Options(iterations=500, f_reltol=args["tol_outer"],
+                                           show_trace=false)))
+    end
+    if two_start
+        starts, start_rec = two_start_list(args["stage"], prev_stages[args["stage"]], theta2_0,
+            joinpath(blp_dir(out_dir),
+                     "blp_checkpoint_E$(estim)_spec_$(spec_id)_$(prev_stages[args["stage"]]).jls"),
+            n_params, N_obs, lo, hi, seed)
+        theta2_star, Q_min, n_outer, conv_outer, start_rec =
+            solve_two_starts(solve_from, starts, start_rec, delta_work;
+                # Q is re-evaluated at each start's θ₂* (reeval_rule): the contraction, then the objective.
+                contract  = t -> (mu_at!(buf, prod_vec, nu_draws, t, sigma_indices, pi_interactions, R, coef_dim);
+                                  blp_contraction!(buf, delta_work, pc, R; tol = reeval_tol(args),
+                                                   max_iter = reeval_cap(args))[1]),
+                objective = t -> gmm_objective!(buf, t, prod_vec, nu_draws, sigma_indices, pi_interactions,
+                                                R, coef_dim, W, args["tol_inner"], args["max_inner"],
+                                                delta_work, pc),
+                reeval_note = reeval_rule(args))
+        results[two_start_key(args["stage"])] = start_rec
+    else
+        prev_missing && (results[two_start_key(args["stage"])] = require_prev_checkpoint(
+            args["stage"], prev_stages[args["stage"]],
+            joinpath(blp_dir(out_dir),
+                     "blp_checkpoint_E$(estim)_spec_$(spec_id)_$(prev_stages[args["stage"]]).jls")))
+        theta2_star, Q_min, n_outer, conv_outer, _ = solve_from("single", theta2_0)
+    end
+    println("  Optimiser converged: $(conv_outer)")
+    println("  Q(theta2*) = $(round(Q_min, sigdigits=6))")
     println("  theta2* = $theta2_star")
 
     # Final contraction at optimum
@@ -1511,11 +1800,13 @@ function run_blp_estimation(estim::Int, spec_id::Int, args,
     results["theta1_se"]          = theta1_se
     results["theta2"]             = theta2_star
     results["theta2_se"]          = fill(NaN, length(theta2_star))
+    # This engine computes no joint (θ₁, θ₂) SEs: θ₁'s are the linear-IV ones, θ₂'s are not computed.
+    results["se_status"]          = "no joint SEs (CPU engine): theta1_se linear-IV, theta2_se not computed"
     results["delta"]              = delta_final
     results["xi"]                 = xi_star
-    results["Q_value"]            = Optim.minimum(result)
-    results["converged"]          = Optim.converged(result)
-    results["n_outer_iter"]       = Optim.iterations(result)
+    results["Q_value"]            = Q_min
+    results["converged"]          = conv_outer
+    results["n_outer_iter"]       = n_outer
     results["param_names_theta1"] = vcat(["alpha"], X1_COLS)
     results["sigma_indices"]      = sigma_indices
     results["pi_interactions"]    = pi_interactions
@@ -1531,8 +1822,11 @@ function run_blp_estimation(estim::Int, spec_id::Int, args,
     chk_path = joinpath(_res_dir,
         "blp_checkpoint_E$(estim)_spec_$(spec_id)_$(args["stage"]).jls")
     try
-        serialize(chk_path, Dict("theta2_star" => theta2_star,
-                                  "delta_star"  => delta_final))
+        # A two-start stage's record travels with its checkpoint (the GPU IFT --se-only reads it back).
+        _ts_ck = Dict("theta2_star" => theta2_star, "delta_star" => delta_final)
+        _ts_k  = two_start_key(args["stage"])
+        haskey(results, _ts_k) && (_ts_ck = Dict{String,Any}(_ts_ck..., _ts_k => results[_ts_k]))
+        serialize(chk_path, _ts_ck)
         println("  [CHECKPOINT] Saved $(basename(chk_path))")
     catch e
         println("  [CHECKPOINT-WARN] $e")
@@ -1631,6 +1925,12 @@ function main()
             catch e
                 # A gap in the demand inputs stops the run: no later stage may start without it.
                 e isa DemandInputError && rethrow()
+                # So does a two-start stage that cannot run both of its starts, and any failure while a
+                # two-start stage (ext1, extended) runs: the stages after it must not start without it.
+                if e isa TwoStartError || haskey(TWO_START_STAGES, current_stage)
+                    println("  [!] Spec $sp failed in stage '$current_stage': $e. Stopping the job.")
+                    rethrow()
+                end
                 println("  [!] Spec $sp failed: $e"); nothing
             end
             res === nothing && continue
@@ -1646,9 +1946,10 @@ function main()
                     "spec_id"            => get(res, "spec_id", sp),
                     "stage"              => get(res, "stage", current_stage),
                     "theta1"             => round.(get(res, "theta1",    Float64[]), sigdigits=8),
-                    "theta1_se"          => replace(round.(get(res, "theta1_se", Float64[]), sigdigits=8), NaN=>0.0),
+                    "theta1_se"          => json_se_values(get(res, "theta1_se", Float64[]), get(res, "se_status", ""), 0.0),
                     "theta2"             => round.(get(res, "theta2",    Float64[]), sigdigits=8),
-                    "theta2_se"          => replace(round.(get(res, "theta2_se", Float64[]), sigdigits=8), NaN=>0.0),
+                    "theta2_se"          => json_se_values(get(res, "theta2_se", Float64[]), get(res, "se_status", ""), 0.0),
+                    "se_status"          => get(res, "se_status", ""),
                     "Q_value"            => get(res, "Q_value",   0.0),
                     "converged"          => get(res, "converged", false),
                     "param_names_theta1" => get(res, "param_names_theta1", String[]),
@@ -1657,6 +1958,11 @@ function main()
                     "n_clusters"         => get(res, "n_clusters",        0),
                     "G_star"             => get(res, "G_star",            0.0),
                 )
+                # A start record (two-start stages; ext2 when it starts cold under the override),
+                # non-finite values as null.
+                for _ts_k in start_record_keys(res)
+                    haskey(res, _ts_k) && (json_out[_ts_k] = json_finite(res[_ts_k]))
+                end
                 open(json_path, "w") do f; JSON3.write(f, json_out); end
             catch e
                 println("  [JSON-WARN] $e")

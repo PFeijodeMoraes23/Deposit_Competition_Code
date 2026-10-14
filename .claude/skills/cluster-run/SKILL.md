@@ -26,7 +26,6 @@ code edits, syntax checks, internet fetches, tables and small smokes, one heavy 
 | A driver's flags | the header of the script, which is what `-h` prints |
 | Defaults: modules, routine sets, memory, partitions, walls | `cluster_lib.sh` |
 | Which inputs are uploaded and which the run produces | `cluster/upload_manifest.txt` |
-| The `dx` demand variant | `dx_suite_20261001.sh`, `dx_bbl_run.sh`, `blp_dx*.jl` |
 
 Flags and defaults move between runs. Build each command from the current file, never from memory
 or from a command quoted in an old note. The sections below hold what is expensive to rediscover.
@@ -55,6 +54,13 @@ If a runbook disagrees with this file, the runbook is right, and this file shoul
 6. **One command per code block**, each complete without the others.
 7. **Mark each claim** as locally tested or cluster-only, so the user knows what the first real
    run is still proving.
+8. **Never hold the terminal.** A submission is a plain `sbatch --parsable ...` that returns the
+   job id at once: no `--wait`, no `{ j=$(sbatch --wait ...); cat ...; }` wrapper, no `tail -f`.
+   Checking is a separate one-line command run later: `squeue -u $USER ...`, `sacct -j <id> ...`,
+   or `tail -n 40 <log>`. The user asked for this on 2026-10-13, after a `--wait` launch line held
+   the terminal while the job sat in the queue. The stage C launch package's documented lines
+   (`UPLOAD_AND_LAUNCH.md`, the wrapper's header) used the `--wait` form; rewrite them before
+   reusing them.
 
 ## Designs, tags and shard counts (BBL)
 

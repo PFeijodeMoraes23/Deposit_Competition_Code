@@ -1061,8 +1061,15 @@ def collect_demand(notes: list):
         blp = rc.load_stage(E, BLP_STAGE)
         a_blp = rc.alpha_of(blp) if blp else None
         bn = (blp or {}).get("param_names_theta1") or []
-        se_blp = (float(blp["theta1_se"][bn.index("alpha")])
-                  if "alpha" in bn and len(blp.get("theta1_se") or []) == len(bn) else None)
+        _se_raw = (blp["theta1_se"][bn.index("alpha")]
+                   if "alpha" in bn and len(blp.get("theta1_se") or []) == len(bn) else None)
+        if "alpha" in bn and _se_raw is None and len(blp.get("theta1_se") or []) == len(bn):
+            # A stage without joint SEs stores them as null; se_status (the results JSON) says why.
+            _msg = (f"BLP E{E} {BLP_STAGE}: no joint standard error for alpha (se_status: "
+                    f"{blp.get('se_status', 'not recorded')}); demand.alpha.blp.E{E} carries no SE.")
+            print(f"[paper-numbers] {_msg}")
+            notes.append(_msg)
+        se_blp = float(_se_raw) if _se_raw is not None else None
         g_blp = (blp or {}).get("G_star")
         if _finite(g_blp):
             from scipy import stats as _stats
@@ -1876,7 +1883,8 @@ def collect_slide_motivation(notes: list):
     if "pricevol" in sc:
         h, w = sc["pricevol"]["hikes"], sc["pricevol"]["window"]
         pairs = [k for k in ("selic_target", "spread_demand", "spread_savings", "spread_time_B",
-                             "spread_time_D", "spread_prepaid", "share_demand", "share_savings",
+                             "spread_time_D", "spread_prepaid", "spread_prepaid_B", "spread_prepaid_D",
+                             "share_demand", "share_savings",
                              "share_time_B", "share_time_D", "share_prepaid") if k in h]
         v = dict(start=h["start"], end=h["end"], n_quarters=int(h["n_quarters"]),
                  **{k: _span(h[k]) for k in pairs}, ci=h.get("ci") or {},
@@ -1931,8 +1939,11 @@ def collect_slide_motivation(notes: list):
                 f"{src} pricevol.ci_halfwidth_mean", "ok",
                 display=", ".join(f"{k} {fmt3s(x)}" for k, x in pv["ci_halfwidth_mean"].items()))
 
-    if "reprice" in sc:
-        r = sc["reprice"]
+    # The repricing chart for B banks (reprice) and for the D firms with an own rate (reprice_d).
+    for sec, kind in (("reprice", "B"), ("reprice_d", "D")):
+        if sec not in sc:
+            continue
+        r = sc[sec]
 
         def reg(d):
             stars = len(d.get("stars") or "")
@@ -1944,14 +1955,14 @@ def collect_slide_motivation(notes: list):
         step_names = ("all", "own_rate", "own_prev", "floor", "ahead", "trimmed")
         water = {n: dict(rows=int(s["rows"]), banks=int(s["banks"]))
                  for n, s in zip(step_names, r.get("waterfall") or [])}
-        add("slide.motiv.reprice", "slides", "Repricing and time-deposit growth, B banks",
+        add(f"slide.motiv.{sec}", "slides", f"Repricing and time-deposit growth, {kind} firms",
             dict(main=m, untrimmed=reg(r["untrimmed"]), same_quarter=reg(r["same_quarter"]),
                  waterfall=water, bins={k: int(x) for k, x in (r.get("bins") or {}).items()},
                  n_before_trim=int(r["n_before_trim"]), growth_h=int(r["growth_h"]),
                  type4_floor_mbrl=int(round(float(r["type4_floor"]) / 1e6)),
                  within_bank_sd=dict(d_sp=r["within_bank_sd_median"]["d_sp"],
                                      growth=r["within_bank_sd_median"]["growth_ahead"])),
-            "Slope of B banks' time-deposit growth (100 x log change, in %) on the quarterly change "
+            f"Slope of {kind} firms' time-deposit growth (100 x log change, in %) on the quarterly change "
             "in their own type-4 spread (annual pp), bank and quarter fixed effects; conglomerate "
             "wild cluster bootstrap (Webb, 999 draws), ci = bias-corrected 95% interval, p and stars "
             "from it. main: growth over the next growth_h quarters, trimmed at the 1st/99th "
@@ -1959,12 +1970,12 @@ def collect_slide_motivation(notes: list):
             "toward a response: the rate is expense over the lagged balance). Sample: own rate in "
             "both quarters (no CDI fallback, no 3 x Selic guard), type-4 book of at least "
             "type4_floor_mbrl R$ million. within_bank_sd: median over banks of the SD of the "
-            "spread change (pp) and of the growth (%). waterfall.<step>.{rows,banks}: B "
+            f"spread change (pp) and of the growth (%). waterfall.<step>.{{rows,banks}}: {kind} "
             "conglomerate-quarters with time deposits (all), with an own rate (own_rate), also in "
             "the previous quarter (own_prev), above the floor (floor), with the balance observed "
             "growth_h quarters later (ahead), inside the trim (trimmed). bins: number of equal-"
             "count bins in the chart and their smallest and largest size",
-            f"{src} reprice", "ok",
+            f"{src} {sec}", "ok",
             display=f"{fmt3s(m['slope'])}{'*' * m['stars']} {disp_ci(*m['ci'])}, N {m['n']:,}, "
                     f"{m['banks']} banks")
 
@@ -2004,12 +2015,16 @@ def collect_slide_motivation(notes: list):
         groups = {k: path(x) for k, x in e["groups"].items()}
         level = {k: path(x) | {"ci_h12": x["ci_at_h12"]}
                  for k, x in (e.get("level_pct") or {}).items()}
+        bankboot = {nk: {k: dict(n=int(x["n"]), banks=int(x["banks"]),
+                                 **{f"ci_h{h}": ci for h, ci in x["ci_at_h"].items()})
+                         for k, x in g.items()}
+                    for nk, g in (e.get("bankboot") or {}).items()}
         add("slide.motiv.entrygap", "slides", "B entrants' share paths by price at entry", dict(
             threshold=e["threshold_pp"], kept=int(e["b_events_kept"]),
             with_gap=int(e["b_events_with_gap"]),
             gap=dict(mean=g["mean"], median=g["median"], p25=g["p25"], p75=g["p75"],
                      share_more=g["share_pays_more"], share_1pp_more=g["share_pays_1pp_more"]),
-            groups=groups, level=level,
+            groups=groups, level=level, bankboot=bankboot,
             pooled={f"h{k}": v for k, v in e["pooled_median_at_h"].items()},
             d=dict(events=int(e["d_events"]), gap_median=e["d_gap_vs_b_mean_pp"]["median"],
                    share_more=e["d_gap_vs_b_mean_pp"]["share_pays_more"])),
@@ -2020,12 +2035,69 @@ def collect_slide_motivation(notes: list):
             "n, for entrants paying at least `threshold` pp more (more) or not (rest), and for a "
             "median split of the gap (below_median = pays more). level.<more|rest>: the same "
             "events without normalisation, the median share of the B firms' deposits in the market "
-            "(%) at h = 0, 4, 8, 12, n, and the 95% interval at h = 12 (ci_h12). Every interval: "
+            "(%) at h = 0, 4, 8, 12, n, and the 95% interval at h = 12 (ci_h12). bankboot.<main|level>"
+            ".<more|rest>: the same medians' 95% intervals at h = 4, 8, 12 (ci_h4...) from resampling "
+            "banks (conglomerates) instead of events, with the number of distinct banks. Other intervals: "
             "bootstrap of the median, events resampled, 999 draws. pooled = all events (Figure 2). d: "
             "D entries priced against the B firms' balance-weighted spread of the entry quarter",
             f"{src} entrygap", "ok",
             display=f"h12: more {fmt3s(groups['more']['h12'])} (n {groups['more']['n']}) vs rest "
                     f"{fmt3s(groups['rest']['h12'])} (n {groups['rest']['n']})")
+
+    if "anova" in sc:
+        an = sc["anova"]
+
+        def strip_stars(x):
+            if isinstance(x, dict):
+                return {k: (len(v) if k == "stars" else strip_stars(v)) for k, v in x.items()}
+            return x
+        add("slide.motiv.anova", "slides", "Variance and co-movement of prices, shares and volumes",
+            strip_stars(an),
+            "B and D firms, weighted by type-4 balances. levels.<B|D>.<var>: order-free (Shapley) "
+            "shares of variance for quarter effects (a), bank effects (b) and the rest, plus the "
+            "sequential a_first and b_after_a, n, banks; var in sp_pp, pcdi, log_dep, log_share, "
+            "growth. comove.<B|D>.h<k>: change in the spread gap against the change in the log share "
+            "(%) over k quarters, net of quarter effects: corr, slope, lo, hi (conglomerate WCB), "
+            "stars, n, banks. covdecomp.<B|D>: covariance of gap and quarter-demeaned log share, "
+            "between and within banks, correlations. local.<lshare|ldep|lgap>: B bank-market-quarter "
+            "variance shares for market, bank, bank_in_market and rest, added in sequence",
+            f"{src} anova", "ok",
+            display=f"B log share: bank {fmt3s(an['levels']['B']['log_share']['b'])}")
+
+    if "relprice" in sc:
+        rp = sc["relprice"]
+
+        def reg2(d):
+            stars = len(d.get("stars") or "")
+            return dict(slope=d["slope"], ci=[d["lo"], d["hi"]], p=d["p"], stars=stars,
+                        sig_level=SIG_LEVEL[stars], n=int(d["n"]), banks=int(d["banks"]))
+        dec = rp["decomposition"]
+        add("slide.motiv.relprice", "slides", "Relative prices across B banks", dict(
+            decomp=dec, sample={k: int(x) for k, x in rp["sample"].items()},
+            decomp_d=rp.get("decomposition_d") or {},
+            decomp_period={k: {p.replace("-", "_"): v for p, v in g.items()}
+                           for k, g in (rp.get("decomposition_by_period") or {}).items()},
+            top5_share=rp["top5_share_of_B_time_deposits"],
+            persist={k: reg2(x) for k, x in rp["persistence"].items()},
+            share={k: reg2(x) for k, x in rp["share"].items()}),
+            "B banks with an own type-4 rate, balance-weighted. decomp.<pp|pcdi>: shares (fractions, "
+            "use [p0]) of the variance of the spread (pp) or of the rate as % of CDI that are common "
+            "to all banks in the quarter, the bank's persistent position (bank effect after the "
+            "quarter effect) and the rest; decomp.local: the local gap (own spread minus the other "
+            "B banks' in the market) split into the bank-quarter part (national) and the part across "
+            "a bank's markets (rival_mix). decomp_d: the same split for D firms with an own rate, with n "
+            "and banks; decomp_period.<B|D>.<2016_2018|2019_2021|2022_2024>: the same within each "
+            "period. top5_share: the five largest B banks' share of B time "
+            "deposits. persist.<pp|pcdi|local>: slope of the gap 4 quarters later on the gap now. "
+            "share.<xs_pp|xs_pcdi>: one point per bank, average gap against the yearly log change in "
+            "its share of B time deposits (%), weighted by size; share.<panel_pp|panel_pcdi>: gap now "
+            "against the log share change over 4 quarters, bank and quarter effects; share.local_raw "
+            "and share.local_fe: local gap against the local share change, without and with bank x "
+            "quarter and market effects. Every slope: conglomerate wild cluster bootstrap (Webb, "
+            "999 draws), bias-corrected 95% interval, 1st-99th percentile trim",
+            f"{src} relprice", "ok",
+            display=f"common {fmt3s(dec['pp']['common'])}, bank {fmt3s(dec['pp']['bank'])}; "
+                    f"xs_pp {fmt3s(rp['share']['xs_pp']['slope'])}")
 
 
 # ── K: strength of the sleepiness first stage ────────────────────────────────

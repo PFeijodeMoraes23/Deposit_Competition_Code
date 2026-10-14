@@ -440,6 +440,9 @@ def main():
             "theta2_se": rj.get("theta2_se"),
             "theta2_pval": rj.get("theta2_pval"),
             "se_method": rj.get("se_method"),
+            # What the SEs are: "ok" = joint (θ₁, θ₂) SEs; anything else (refused by the SE guard,
+            # failed, not computed) = none, and the SE / p-value entries above are null.
+            "se_status": rj.get("se_status"),
             "param_names_theta1": rj.get("param_names_theta1"),
             "sigma_indices": rj.get("sigma_indices"),
             "pi_interactions": rj.get("pi_interactions"),

@@ -117,6 +117,8 @@ def build_table(est: int) -> str:
         return ""
     logit = load_logit_full(est)
     rc_sem = rc.se_note(stage_data.get("extended"))       # RC SE-method sentence (method-aware)
+    # A stage without joint SEs prints "(n.i.)" in its SE cells; the note then says what it means.
+    ni_note = (" " + rc.NI_NOTE) if any(rc.joint_se_status(stage_data[s]) for s in avail) else ""
 
     cols = (["logit"] if logit else []) + avail          # column keys, left→right
     ncols = len(cols)
@@ -141,7 +143,8 @@ def build_table(est: int) -> str:
                 if p in names:
                     i = names.index(p)
                     t1se = d.get("theta1_se", []); t1pv = d.get("theta1_pval", [])
-                    cc, ss = rc.fmt_coef(d["theta1"][i],
+                    # fmt_cell: a stage without joint SEs (se_status) prints "(n.i.)", no stars.
+                    cc, ss = rc.fmt_cell(d, d["theta1"][i],
                                          t1se[i] if i < len(t1se) else 0.0,
                                          d.get("G_star"),
                                          t1pv[i] if i < len(t1pv) else None)
@@ -165,7 +168,7 @@ def build_table(est: int) -> str:
                 v, se, pv = decoded[lbl]
                 ob = is_sigma and v is not None and not (isinstance(v, float) and math.isnan(v)) \
                     and abs(v) < rc.SIGMA_BOUND_TOL
-                cc, ss = rc.fmt_coef(v, se, stage_data[c].get("G_star"), pv, on_bound=ob)
+                cc, ss = rc.fmt_cell(stage_data[c], v, se, stage_data[c].get("G_star"), pv, on_bound=ob)
             else:
                 cc, ss = "-", ""
             cvals.append(cc); svals.append(ss)
@@ -197,7 +200,7 @@ def build_table(est: int) -> str:
         r"    \bottomrule",
         r"    \multicolumn{" + str(ncols + 1) + r"}{p{\dimexpr\linewidth-2\tabcolsep\relax}}{\scriptsize "  # \linewidth = landscape line width (pdflscape clamps \textheight→\textwidth)
         r"\textit{Notes:} The estimation strategy is enumerated in "
-        r"Section~\ref{sec:empirical:sleep}. Column 1 is the non-RC logit (`full' sub-model); "
+        r"Section~\ref{sec:empirical:sleep}. Column 1 is the non-RC logit (`full\_dtype' sub-model); "
         r"the remaining columns are the RC-BLP stages run on the cluster, each freeing one more random "
         r"coefficient (1 RC $\to$ 5 RC). The logit column reports wild cluster "
         rf"bootstrap standard errors (conglomerate clusters); for the RC columns, {rc_sem}. "
@@ -208,7 +211,7 @@ def build_table(est: int) -> str:
         r"logit/RC boundary --- different moment counts). Mean own-price elasticity is the "
         r"average-market plug-in $\hat\alpha\cdot\overline{\rho(1-s)}$ "
         r"(cf.\ the logit comparison, Table~\ref{tab:demand_logit_spec12_comparison}). "
-        r"Spread in percentage points."
+        r"Spread in percentage points." + ni_note +
         r"} \\",
         r"    \endlastfoot",
         r"    \multicolumn{" + str(ncols + 1) + r"}{l}{\textit{Panel A: Mean utility ($\theta_1$)}} \\",

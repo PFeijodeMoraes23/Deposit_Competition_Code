@@ -1,0 +1,417 @@
+# Switch-cost investigation copy of utils/se_national.py (copied 2026-10-13 19:01, source md5 150109ce33e298a1fd1fbcf6f865fb15).
+# It imports the switch-cost sleepiness library; the original is untouched.
+"""utils/se_national.py -- inference for the NATIONAL regressors in the sleepiness model.
+
+Author: Pedro Feijó de Moraes
+
+`pix_exists` and `risk_free_qoq_lag` take the SAME value for all ~506 conglomerates within a
+quarter. Clustering on the conglomerate therefore treats each firm's copy of a national value
+as independent evidence, so the standard error is formed as if there were ~1.1M observations of
+Pix when the regressor really has only T=35 quarters of variation. That understates uncertainty
+on exactly the two rows with the largest headline coefficients.
+
+Nothing here touches a point estimate. theta-hat minimises the objective; the clustering scheme
+enters only the variance. So these are recomputations of SEs, never re-estimations -- which is
+why they can run off a saved fit instead of a full re-search.
+
+Two alternatives, which fail in OPPOSITE directions. Both are computed; the TABLES report the
+quarter-clustered bootstrap and show/quote Driscoll-Kraay alongside (see `select_se` for why the
+reported cell is not a per-cell maximum of the two):
+
+  time_clustered_wcb   Clusters on the quarter. Allows ARBITRARY dependence within a quarter
+                       (exactly what a national shock is) but assumes quarters are INDEPENDENT.
+                       Keeps the wild bootstrap's small-sample refinement, which matters at
+                       T=35. Optimistic if the regressor is persistent -- and Selic is.
+
+  driscoll_kraay       Aggregates the scores across the cross-section within each period, then
+                       applies a Bartlett/Newey-West HAC to that T-length series. Robust to
+                       within-quarter dependence AND to serial correlation across quarters, so
+                       it handles the persistence that time-clustering assumes away. But its
+                       asymptotics are in T, and T=35 is modest; and it is analytic, so it gets
+                       no bootstrap refinement.
+
+Reference: Driscoll & Kraay (1998); Newey & West (1987); Cameron-Gelbach-Miller (2008) and
+MacKinnon-Webb (2017) for the wild cluster bootstrap already used elsewhere in this repo.
+"""
+from __future__ import annotations
+
+import numpy as np
+import pandas as pd
+
+# Regressors with NO cross-sectional variation: identical across all firms within a quarter,
+# so conglomerate clustering cannot see their real sampling variation. Measured on the panel:
+# pix_exists is a pure function of the quarter; risk_free_qoq_lag has only 32 distinct values
+# over the 35 quarters. NOT gdp_growth_yoy -- that is built per entity from its own gdp lag.
+NATIONAL_VARS = {"pix_exists", "risk_free_qoq_lag"}
+
+
+def is_national(name: str) -> bool:
+    """True for a parameter whose regressor varies only over time (accepts the
+    'interaction_<var>' form the second stage uses)."""
+    return str(name).replace("interaction_", "") in NATIONAL_VARS
+
+
+def bartlett_lags(n_periods: int) -> int:
+    """Newey-West bandwidth by the usual rule L = floor(4 (T/100)^(2/9)); T=35 -> 3."""
+    if n_periods < 3:
+        return 0
+    return max(1, int(np.floor(4.0 * (n_periods / 100.0) ** (2.0 / 9.0))))
+
+
+def _period_scores(score: np.ndarray, bread: np.ndarray, t_inv: np.ndarray,
+                   n_t: int) -> np.ndarray:
+    """Influence functions aggregated to one row per period: h_t = sum_{i in t} bread @ score_i.
+    This cross-sectional aggregation is the step that makes both estimators below robust to
+    arbitrary dependence WITHIN a period."""
+    IF = score @ bread.T                             # N x p
+    out = np.zeros((n_t, IF.shape[1]))
+    for k in range(IF.shape[1]):
+        out[:, k] = np.bincount(t_inv, weights=IF[:, k], minlength=n_t)
+    return out
+
+
+def driscoll_kraay(score: np.ndarray, bread: np.ndarray, periods, lags: int | None = None
+                   ) -> tuple[np.ndarray, int, int]:
+    """Driscoll-Kraay SEs. Returns (se, n_periods, lags_used).
+
+    V = Gamma_0 + sum_{l=1..L} (1 - l/(L+1)) (Gamma_l + Gamma_l'),  Gamma_l = sum_t h_t h_{t-l}'
+    with h_t the period-aggregated influence functions. The Bartlett weights guarantee V is
+    positive semi-definite, which a truncated sum alone does not."""
+    per = pd.Series(np.asarray(periods)).astype(str).values
+    # sort periods so that lag l genuinely means l quarters apart
+    uniq = np.array(sorted(np.unique(per)))
+    t_index = {p: i for i, p in enumerate(uniq)}
+    t_inv = np.array([t_index[p] for p in per], dtype=int)
+    n_t = len(uniq)
+    h = _period_scores(score, bread, t_inv, n_t)     # T x p
+    L = bartlett_lags(n_t) if lags is None else int(lags)
+
+    V = h.T @ h                                      # Gamma_0
+    for l in range(1, L + 1):
+        G = h[l:].T @ h[:-l]
+        w = 1.0 - l / (L + 1.0)
+        V = V + w * (G + G.T)
+    return np.sqrt(np.abs(np.diag(V))), n_t, L
+
+
+def time_clustered_wcb(score: np.ndarray, bread: np.ndarray, periods, beta: np.ndarray,
+                       names, B: int = 999, scheme: str = "webb", seed: int = 0,
+                       band_out=None):
+    """Wild cluster bootstrap with the QUARTER as the cluster. Reuses the same
+    cluster_wild_bootstrap the rest of the repo uses, so the only thing that changes versus the
+    reported SEs is which dimension is resampled.
+
+    `band_out`, when given a dict, additionally receives `band` -- the bias-corrected
+    percentile interval per coefficient, built by the same `_ame_band_from_draws` the
+    single-index AMEs use. It is read off the draws already taken, so it cannot move an SE."""
+    from utils.switch_cost_sleep_links import cluster_wild_bootstrap, _ame_band_from_draws
+    per = pd.Series(np.asarray(periods)).astype(str).values
+    uniq, t_inv = np.unique(per, return_inverse=True)
+    n_t = len(uniq)
+    IF_t = _period_scores(score, bread, t_inv, n_t)
+    nm = list(names)
+    ame_hat = {n: float(b) for n, b in zip(nm, beta)}
+    ame_fn = lambda th: {n: float(th[i]) for i, n in enumerate(nm)}
+    _draws = {} if band_out is not None else None
+    bse, pvals = cluster_wild_bootstrap(np.asarray(beta, float), IF_t, ame_fn, ame_hat,
+                                        B=B, scheme=scheme, rng=np.random.default_rng(seed),
+                                        draws_out=_draws)
+    if band_out is not None:
+        _M = np.column_stack([_draws[n] for n in nm])
+        band_out["band"] = _ame_band_from_draws(nm, ame_hat, _M, label="quarter-wcb")
+        band_out["n_t"] = n_t
+    return (pd.Series({n: bse[n] for n in nm}),
+            pd.Series({n: pvals[n] for n in nm}), n_t)
+
+
+def _aggregate_if_by_period(IF_rows: np.ndarray, periods):
+    """Row-level influence functions -> one row per period. The nonlinear fits build IF
+    themselves (bread already applied), so they enter here rather than via (score, bread)."""
+    per = pd.Series(np.asarray(periods)).astype(str).values
+    uniq, t_inv = np.unique(per, return_inverse=True)
+    n_t = len(uniq)
+    out = np.zeros((n_t, IF_rows.shape[1]))
+    for k in range(IF_rows.shape[1]):
+        out[:, k] = np.bincount(t_inv, weights=IF_rows[:, k], minlength=n_t)
+    return out, n_t
+
+
+def attach_national_ses_nonlinear(res, IF_rows: np.ndarray, periods, theta, ame_fn, ame_hat,
+                                  B: int = 999, scheme: str = "webb", seed: int = 0,
+                                  label: str = ""):
+    """Quarter-clustered WCB for the M-estimators (E3/E4).
+
+    Identical machinery to the reported SEs -- same `cluster_wild_bootstrap`, same `ame_fn`
+    mapping parameters to AMEs -- with the influence functions aggregated by QUARTER instead
+    of by conglomerate. So the only thing that changes is which dimension is resampled.
+
+    Driscoll-Kraay is deliberately NOT produced here: DK is analytic and would need a
+    delta-method push through `ame_fn` to reach the AME scale, which is a different (and more
+    fragile) calculation than the bootstrap already does exactly. DK is reported for the linear
+    columns, where the parameters ARE the coefficients."""
+    try:
+        from utils.switch_cost_sleep_links import cluster_wild_bootstrap
+        IF_t, n_t = _aggregate_if_by_period(IF_rows, periods)
+        bse, pvals = cluster_wild_bootstrap(np.asarray(theta, float), IF_t, ame_fn, ame_hat,
+                                            B=B, scheme=scheme,
+                                            rng=np.random.default_rng(seed))
+        res.bse_time = pd.Series(bse)
+        res.pvalues_time = pd.Series(pvals)
+        res.n_periods = n_t
+        nat = [n for n in bse if is_national(n)]
+        if nat:
+            base = getattr(res, "bse", None)
+            msg = ", ".join(
+                f"{n.replace('interaction_','')}: congl="
+                f"{(float(base[n]) if base is not None and n in getattr(base,'index',[]) else float('nan')):.4g}"
+                f" / quarter={float(bse[n]):.4g}" for n in nat)
+            print(f"  [national-SE{(' ' + label) if label else ''}] T={n_t} | {msg}")
+    except Exception as exc:
+        print(f"  [national-SE] nonlinear path skipped ({type(exc).__name__}: {exc})")
+    return res
+
+
+def _normal_two_sided(t: float) -> float:
+    """Two-sided normal p-value. Driscoll-Kraay is analytic, so unlike the bootstrap schemes it
+    carries no p-value of its own and one has to be formed from the t-ratio."""
+    import math
+    return float(math.erfc(abs(float(t)) / math.sqrt(2.0)))
+
+
+# Reporting policy for the tables. Decided 2026-07-30: for the two NATIONAL regressors the table
+# LEADS with a time-robust standard error rather than the conglomerate one, because conglomerate
+# clustering cannot see a shock common to every firm in a quarter and is therefore
+# anti-conservative on exactly those rows. Measured on the appendix grid, the phi equation's
+# national SEs are ~1.6-1.9x wider under quarter clustering and ~1.9-2.2x wider under DK.
+#
+# The reported cell is the QUARTER-CLUSTERED WCB, not max(quarter, DK). Three reasons:
+#   1. DK exists only for the LINEAR columns (E1/E2). Taking a per-cell max would report DK in
+#      the E1/E2 columns and quarter-WCB in the E3/E4 columns OF THE SAME ROW, so a reader
+#      comparing across columns could not tell whether a gap is the scheme or the estimator.
+#   2. max() of two variance estimators is not itself an estimator of the sampling variance --
+#      it is upward-biased by construction, and the bias depends on the noise in both.
+#   3. Quarter-WCB is the SAME bootstrap as the reported SEs with only the resampled dimension
+#      changed, keeps the small-sample refinement that matters at T=35, and has a genuine
+#      bootstrap p-value, so stars need no invented reference distribution.
+# DK is still computed and stored (`bse_dk`); it is reported alongside on the all-linear tables
+# and quoted in the footnote, rather than silently swapped into a mixed row.
+SE_MARK = r"\dagger"
+SCHEME_LABEL = {"congl": "conglomerate WCB", "quarter": "quarter-clustered WCB",
+                "dk": "Driscoll-Kraay"}
+
+
+#: Which AME variance each select_se call actually delivered, for the run in progress.
+#: Populated by select_se, read by ame_se_note. Same discipline as _nat_schemes: the FOOTNOTE
+#: is what has to be honest, because select_se degrades silently by design.
+_AME_SE_REALISED: set = set()
+
+
+def reset_ame_se_realised() -> None:
+    """Clear the realised-mode record. Call once before building a table body."""
+    _AME_SE_REALISED.clear()
+
+
+def twostage_se_enabled() -> bool:
+    """Whether the E3/E4 rows report the TWO-STAGE (direction + link) bootstrap.
+
+    Default 'twostage' (adopted 2026-08-24). The conditional numbers hold the index direction
+    theta fixed as though it were known rather than estimated, which understates uncertainty by
+    construction -- and, because theta_j cancels from AME_j/se(AME_j), collapses every continuous
+    row onto ONE shared |t|. SLEEP_AME_SE=conditional restores the link-only numbers.
+
+    The env var survives the default flip because it is how a table is reproduced against an
+    older vintage; it is no longer the safety gate. Safety now lives in ame_se_note(), which
+    states which variance the table in hand actually carries -- a pickle with no bse_2s
+    attached still falls back silently here, and the note is what makes that visible."""
+    import os
+    return os.environ.get("SLEEP_AME_SE", "twostage").lower() == "twostage"
+
+
+def ame_se_note(realised=None) -> str:
+    """LaTeX sentence naming the AME variance the table body ACTUALLY used.
+
+    Never asserts two-stage merely because it was requested: a fit whose pickle predates the
+    attach falls back to the conditional numbers row by row, and a mixed table has to say so."""
+    s = {x for x in (realised if realised is not None else _AME_SE_REALISED)}
+    if not s or s == {"na"}:
+        return ""
+    if s == {"twostage"}:
+        return (r"Standard errors on the average marginal effects are the two-stage wild cluster "
+                r"bootstrap: each draw perturbs the index direction by its cluster influence "
+                r"functions and re-profiles the link, so they include direction-estimation "
+                r"uncertainty and each row carries its own test. ")
+    if s == {"conditional"}:
+        return (r"Standard errors on the average marginal effects are conditional on the "
+                r"estimated index direction, which is held fixed across bootstrap draws; they "
+                r"therefore understate uncertainty, and the continuous rows share a common "
+                r"$t$-statistic by construction. ")
+    return (r"Standard errors on the average marginal effects are two-stage (direction + link) "
+            r"where that bootstrap is available and conditional on the estimated direction "
+            r"otherwise; the conditional rows understate uncertainty and share a common "
+            r"$t$-statistic by construction. ")
+
+
+def select_se(res, name, lead_time_robust: bool = True):
+    """Return ``(se, pvalue, scheme)`` for ONE parameter of a fitted result.
+
+    Firm-level regressors keep the conglomerate wild cluster bootstrap -- unchanged, and correct
+    for them. National regressors (``pix_exists``, ``risk_free_qoq_lag``) get the WIDER of the
+    quarter-clustered WCB and Driscoll-Kraay, when those are present.
+
+    Degrades silently: any pickle written before ``attach_national_ses`` existed simply has no
+    ``bse_time``/``bse_dk``, and every row then reports ``('congl')`` exactly as before. That
+    matters because the tables must keep building off older fits.
+
+    `scheme` is one of 'congl' | 'quarter' | 'dk' and drives the dagger in the table body.
+
+    SLEEP_AME_SE='twostage' switches the E3/E4 single-index rows to the two-stage (direction +
+    link) wild cluster bootstrap of ``sleep_ame_twostage.py``, where it has been attached
+    (``bse_2s`` / ``bse_time_2s``). The gate is an explicit env opt-in rather than attribute
+    presence, so attaching numbers to a pickle cannot silently change a published table. The
+    scheme labels returned are the EXISTING ones: the dagger keeps meaning 'quarter-clustered',
+    so no exporter's dagger logic changes and two-stage-ness belongs in the table note.
+    """
+    def _get(attr):
+        s = getattr(res, attr, None)
+        if s is None:
+            return None
+        try:
+            return float(pd.Series(s)[name])
+        except Exception:
+            return None
+
+    if twostage_se_enabled():
+        nat = lead_time_robust and is_national(name)
+        s2, p2 = ((_get("bse_time_2s"), _get("pvalues_time_2s")) if nat
+                  else (_get("bse_2s"), _get("pvalues_2s")))
+        if s2 is not None and np.isfinite(s2) and s2 > 0:
+            _AME_SE_REALISED.add("twostage")
+            return (s2, p2, "quarter" if nat else "congl")
+        # Requested but absent: this fit predates the attach. Fall through to the conditional
+        # numbers and RECORD it, so ame_se_note cannot claim a bootstrap that never ran.
+        _AME_SE_REALISED.add("conditional")
+
+    se_c = _get("bse")
+    p_c = _get("pvalues")
+    if se_c is None or not np.isfinite(se_c):
+        return (float("nan"), float("nan"), "congl")
+    if not (lead_time_robust and is_national(name)):
+        return (se_c, p_c, "congl")
+
+    beta = _get("params")
+    # Preference order, NOT a max: quarter-WCB is available for every estimator, so choosing it
+    # first keeps one estimator per row across all columns. DK is the fallback only where the
+    # bootstrap is somehow absent but the analytic SE is present (linear columns).
+    se_q, p_q = _get("bse_time"), _get("pvalues_time")
+    if se_q is not None and se_q > 0:
+        pv = p_q
+        if pv is None or not np.isfinite(pv):
+            pv = (_normal_two_sided(beta / se_q)
+                  if beta is not None and np.isfinite(beta) else p_c)
+        return (se_q, pv, "quarter")
+
+    se_d = _get("bse_dk")
+    if se_d is not None and se_d > 0:
+        pv = (_normal_two_sided(beta / se_d)
+              if beta is not None and np.isfinite(beta) else p_c)
+        return (se_d, pv, "dk")
+
+    return (se_c, p_c, "congl")
+
+
+NOTE_TOKEN = "%%NATIONAL_SE_NOTE%%"
+AME_SE_TOKEN = "%%AME_SE_NOTE%%"     # substituted from ame_se_note() at each write site
+
+
+def national_note(schemes, dk_bracket: bool = False) -> str:
+    """LaTeX sentence describing the scheme ACTUALLY used on the national rows of one table.
+
+    Added 2026-07-30 after an adversarial review caught the previous unconditional wording
+    asserting a quarter-clustered bootstrap on tables where every national cell had in fact
+    fallen back to conglomerate clustering (E5/E6/E8, whose pickles predated the
+    `fit_single_index` / joint-sieve quarter blocks). `select_se` degrades silently by design --
+    so the FOOTNOTE, not the fallback, is what has to be honest about it.
+
+    `schemes` is the set of scheme tags select_se returned for national rows while the body was
+    being built. Pass `dk_bracket=True` on all-linear tables that print a bracketed DK line.
+    """
+    s = {x for x in (schemes or set())}
+    if not s:
+        return ""                                   # no national rows in this table
+
+    lead = (r"Rows marked $\dagger$ are national regressors: Pix Available and the "
+            r"lagged Selic rate take a common value across all conglomerates within a quarter, "
+            r"so clustering on the conglomerate treats each firm's copy of a national value as "
+            r"independent evidence and understates their sampling uncertainty. ")
+
+    if s == {"congl"}:
+        # Nothing time-robust was available anywhere: say so plainly rather than describe a
+        # calculation that never ran.
+        return (r"Pix Available and the lagged Selic rate are national regressors, "
+                r"constant across conglomerates within a quarter, so conglomerate clustering "
+                r"understates their sampling uncertainty; a time-robust standard error is not "
+                r"available for them in this table. ")
+
+    if "congl" in s:
+        # MIXED -- the honest, and unfortunately verbose, case.
+        body = (r"Where marked, those rows report a WCB clustered on the "
+                r"\emph{quarter}, with stars computed from it; unmarked national cells "
+                r"retain conglomerate clustering, so standard errors are not comparable across "
+                r"columns within those rows. ")
+    else:
+        body = (r"Those rows report a wild bootstrap clustered on the \emph{quarter} -- the same "
+                r"bootstrap, resampling the only dimension along which the regressor varies -- "
+                r"with stars computed from it, applied uniformly across columns. ")
+
+    if dk_bracket:
+        body += (r"The figure in square brackets is the corresponding Driscoll--Kraay "
+                 r"heteroskedasticity- and autocorrelation-consistent standard error "
+                 r"(\textcite{driscoll1998consistent}, \textcite{newey1987simple}), with a "
+                 r"Bartlett bandwidth chosen by the usual rule. ")
+    elif "dk" in s:
+        body += (r"Cells marked $\dagger$ without an available bootstrap use the Driscoll--Kraay "
+                 r"standard error (\textcite{driscoll1998consistent}). ")
+    return lead + body
+
+
+def dk_se(res, name):
+    """Driscoll-Kraay SE for one parameter, or None. Used by the all-linear tables to show DK as
+    a supplementary bracketed line without displacing the reported quarter-clustered cell."""
+    s = getattr(res, "bse_dk", None)
+    if s is None:
+        return None
+    try:
+        v = float(pd.Series(s)[name])
+    except Exception:
+        return None
+    return v if np.isfinite(v) and v > 0 else None
+
+
+def attach_national_ses(res, score: np.ndarray, bread: np.ndarray, periods, beta, names,
+                        B: int = 999, scheme: str = "webb", seed: int = 0, label: str = ""):
+    """Compute both national-regressor SE variants and hang them on a fitted result as
+    `bse_time` / `pvalues_time` / `bse_dk`, leaving `bse` (conglomerate WCB) untouched.
+
+    Storing both means the exporters can choose PER ROW -- conglomerate clustering for the
+    firm-level regressors, quarter clustering / DK for the national ones -- without a second
+    estimation pass. Failures are swallowed: alternative SEs are a reporting refinement and
+    must never take down a fit."""
+    try:
+        bse_t, pv_t, n_t = time_clustered_wcb(score, bread, periods, beta, names,
+                                              B=B, scheme=scheme, seed=seed)
+        se_dk, n_t2, L = driscoll_kraay(score, bread, periods)
+        res.bse_time = bse_t
+        res.pvalues_time = pv_t
+        res.bse_dk = pd.Series(se_dk, index=list(names))
+        res.n_periods = n_t
+        res.dk_lags = L
+        nat = [n for n in names if is_national(n)]
+        if nat:
+            msg = ", ".join(
+                f"{n.replace('interaction_','')}: congl={float(pd.Series(res.bse, index=list(names))[n]):.4g}"
+                f" / quarter={float(bse_t[n]):.4g} / DK={float(res.bse_dk[n]):.4g}"
+                for n in nat if n in bse_t.index)
+            print(f"  [national-SE{(' ' + label) if label else ''}] T={n_t}, DK lags={L} | {msg}")
+    except Exception as exc:                      # never fail a fit over reporting SEs
+        print(f"  [national-SE] skipped ({type(exc).__name__}: {exc})")
+    return res

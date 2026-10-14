@@ -180,8 +180,6 @@ merged 1:1 on the same row order, e.g. the demand-prep parquet that carries φ̂
 Dep^Act if the BLP input parquet does not). Column names are resolved against
 candidate lists; missing essentials raise a clear error.
 """
-
-
 function load_sim_state(ctx::CFDemandCtx; dbar::Union{Float64,AbstractVector{<:Real}}=1.0,
                         sidecar::Union{Nothing,DataFrame}=nothing)
     df = sidecar === nothing ? ctx.df : hcat(ctx.df, sidecar; makeunique=true)

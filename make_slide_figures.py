@@ -29,6 +29,14 @@ Rout/slide_motivation.json:
   fig_slide_motiv_dfirm_premium.pdf        D firms' rate premium over B firms and their share
   fig_slide_motiv_entry_by_gap.pdf         B entrants' share paths, by price at entry
                                            (_level: the share of B deposits, not normalised)
+                                           (_bankboot: bands from resampling banks)
+  fig_slide_motiv_reprice_binscatter_d.pdf the repricing chart for D firms with an own rate
+  fig_slide_phi_entry_robustness.pdf       Figure 2's entry-implied sleeping share under the
+                                           concentration checks (diag_entry_concentration.csv)
+  fig_slide_relprice_*.pdf                 relative prices across B banks: decomposition,
+                                           paths of the five largest, persistence, share change
+  tab_motiv_*.tex                          the motivation note's eleven tables, booktabs bodies
+                                           built from the sidecar (--only motivtables)
 
 SOURCES
   Rout/Compressed_MarketStructure_by_Year_dep_weighted.csv   Table A.4 and Figure 1
@@ -98,7 +106,8 @@ DEP_COLS = ["dep_a1", "dep_a2", "dep_a4", "dep_a5"]
 MINUS = "−"
 
 VISUALS = ("panels", "timedep", "savings", "ame", "coef", "wedge", "violations", "flow", "roadmap",
-           "table", "band", "pricevol", "reprice", "dpremium", "entrygap")
+           "table", "band", "pricevol", "reprice", "dpremium", "entrygap", "relprice", "entryrobust", "anova",
+           "motivtables")
 
 
 def _save(fig, out: pathlib.Path, stem: str, png: bool):
@@ -336,6 +345,11 @@ def demand_coef_plot(out: pathlib.Path, png: bool, E: int):
         if name not in names:
             continue
         i = names.index(name)
+        if blp["theta1_se"][i] is None:
+            # A stage without joint SEs stores them as null (se_status says why); the chart's
+            # intervals cannot be drawn from it.
+            sys.exit(f"no joint standard error for {name} in routine E{E}, stage {mpn.BLP_STAGE} "
+                     f"(se_status: {blp.get('se_status', 'not recorded')}): the coefficient chart needs it")
         b, s = float(blp["theta1"][i]), float(blp["theta1_se"][i])
         stars = "*" * int(((pn.get(f"demand.t6.{slug}.E{E}") or {}).get("value_full") or {})
                           .get("stars") or 0)
@@ -668,12 +682,13 @@ def d_spread(df: pd.DataFrame, by: list) -> pd.Series:
 def spread_cells(df: pd.DataFrame, kind: str) -> pd.DataFrame:
     """Rows behind one plotted mean spread, with the bank (conglomerate) as the cluster:
     time_B, Table A.4's B cells; time_D, D firms weighted by type-4 balance; prepaid, B and D
-    pooled, weighted by type-5 balance (Table A.4's national type-5 line)."""
+    pooled, weighted by type-5 balance (Table A.4's national type-5 line); prepaid_B and
+    prepaid_D, the same for one firm type."""
     if kind == "time_B":
         c = b_spread_cells(df)
         return pd.DataFrame({"year": c["year"], "quarter": c["quarter"], "congl": c["congl"],
                              "x": c["sp4"], "w": c["w"]})
-    d = df[df["bank_type"] == "D"] if kind == "time_D" else df
+    d = df if kind == "prepaid" else df[df["bank_type"] == kind[-1]]
     x, dep = ("sp4", "dep_a4") if kind == "time_D" else ("sp5", "dep_a5")
     return pd.DataFrame({"year": d["year"], "quarter": d["quarter"],
                          "congl": d["CodConglomeradoPrudencial"], "x": d[x],
@@ -807,7 +822,8 @@ def quarterly_motivation() -> pd.DataFrame:
         return _MOTIV_CACHE["q"]
     df = motiv_panel()
     q = macro_quarterly()
-    for name, kind in (("sp4_b", "time_B"), ("sp4_d", "time_D"), ("sp5", "prepaid")):
+    for name, kind in (("sp4_b", "time_B"), ("sp4_d", "time_D"), ("sp5", "prepaid"),
+                       ("sp5_b", "prepaid_B"), ("sp5_d", "prepaid_D")):
         ci = quarterly_ci(q, [(spread_cells(df, kind), 1)])
         q[name] = ci["mean"]
         for c in ("lo", "hi", "se"):
@@ -968,17 +984,21 @@ def pricevol_charts(out: pathlib.Path, png: bool):
     pct1 = lambda v: f"{_plain(v, 1)}%"
     charts = (
         ("fig_slide_motiv_spreads_by_type", "Spread by deposit type", "pp p.a.", spread,
-         spread_ci, lambda v: _plain(v, 1), True, False),
+         spread_ci, lambda v: _plain(v, 1), True, False, True),
         ("fig_slide_motiv_shares_by_type", "Share of balances by deposit type", "% of balances",
-         lambda s: col(s[6]), None, lambda v: f"{v:.0f}%", False, False),
+         lambda s: col(s[6]), None, lambda v: f"{v:.0f}%", False, False, True),
         ("fig_slide_motiv_rates_by_type", "Deposit rate by type", "% p.a.", rate, rate_ci, pct1,
-         True, True),
+         True, True, True),
+        # Selic is drawn in this chart, so the cycle can be read without the shading.
+        ("fig_slide_motiv_rates_by_type_noshade", "Deposit rate by type", "% p.a.", rate,
+         rate_ci, pct1, True, True, False),
     )
-    for stem, title, ylabel, value, ci, fmt, zero, with_selic in charts:
+    for stem, title, ylabel, value, ci, fmt, zero, with_selic, shade in charts:
         fig, ax = plt.subplots(figsize=SLIDE_FIGSIZE)
         if zero:
             ax.axhline(0, color="#BFBFBA", lw=0.8, zorder=1)
-        _shade(ax, q, i0, i1)
+        if shade:
+            _shade(ax, q, i0, i1)
         ends = []
         if with_selic:
             ax.plot(x, selic, color=mdt.NATL_COLOR, label="Selic", **kw)
@@ -990,9 +1010,6 @@ def pricevol_charts(out: pathlib.Path, png: bool):
                 ax.fill_between(x, lo, hi, color=s[1], alpha=0.16, linewidth=0, zorder=2)
             ax.plot(x, y, color=s[1], label=s[3], **{**kw, "linestyle": s[2]})
             ends.append((y[-1], fmt(y[-1])))
-        if ci is not None:
-            ax.fill_between([], [], [], color=mdt.NATL_COLOR, alpha=0.16, linewidth=0,
-                            label="95% interval, bank means")
         _style_no_pix(ax, title, ylabel, "")
         _end_labels(ax, x[-1], ends)
         _quarter_axis(ax)
@@ -1022,9 +1039,12 @@ def pricevol_charts(out: pathlib.Path, png: bool):
             "share_time_B": [at("sh_time_B", i0), at("sh_time_B", i1)],
             "share_time_D": [at("sh_time_D", i0), at("sh_time_D", i1)],
             "share_prepaid": [at("sh_prepaid", i0), at("sh_prepaid", i1)],
+            "spread_prepaid_B": [at("sp5_b", i0), at("sp5_b", i1)],
+            "spread_prepaid_D": [at("sp5_d", i0), at("sp5_d", i1)],
             "ci": {k: {"start": ci_at(c, i0), "end": ci_at(c, i1)}
                    for k, c in (("spread_time_B", "sp4_b"), ("spread_time_D", "sp4_d"),
-                                ("spread_prepaid", "sp5"))},
+                                ("spread_prepaid", "sp5"), ("spread_prepaid_B", "sp5_b"),
+                                ("spread_prepaid_D", "sp5_d"))},
             "savings_share_change_per_quarter_pp":
                 (at("sh_savings", i1) - at("sh_savings", i0)) / n_q,
             "savings_share_change_per_quarter_pp_before":
@@ -1072,10 +1092,15 @@ def pricevol_charts(out: pathlib.Path, png: bool):
 
 
 def bank_quarter_b() -> pd.DataFrame:
-    """B conglomerates by quarter: type-4 balance summed over markets and the bank's national
-    type-4 spread, flagged when the rate is the CDI fallback or the 3 x Selic guard."""
+    return bank_quarter("B")
+
+
+def bank_quarter(kind: str) -> pd.DataFrame:
+    """Conglomerates of one firm type (B or D) by quarter: type-4 balance summed over markets
+    and the bank's national type-4 spread, flagged when the rate is the CDI fallback or the
+    3 x Selic guard."""
     df = motiv_panel()
-    b = df[df["bank_type"] == "B"]
+    b = df[df["bank_type"] == kind]
     bq = b.groupby(["CodConglomeradoPrudencial", "year", "quarter"], as_index=False).agg(
         dep_a4=("dep_a4", "sum"), sp=("spread_a4_national", "first"),
         r4=("rate_a4_national", "first"), guard=("rate_a4_guarded", "first"),
@@ -1119,11 +1144,18 @@ def _fe_slope(d: pd.DataFrame, ycol: str, xcol: str, seed: int = 0) -> dict:
 
 
 def reprice_binscatter(out: pathlib.Path, png: bool):
-    """B banks: the change in a bank's own type-4 spread from one quarter to the next against
+    """The repricing chart for B banks and, on the D firms that have an own rate, for D."""
+    _reprice_one(out, png, "B")
+    _reprice_one(out, png, "D")
+
+
+def _reprice_one(out: pathlib.Path, png: bool, kind: str):
+    """One firm type: the change in a bank's own type-4 spread from one quarter to the next against
     the growth of its time deposits over the following four quarters. The rate is interest
     expense over the lagged balance, so growth within the quarter of the change would move the
     measured rate itself; reading growth from that quarter onward avoids it."""
-    bq = bank_quarter_b().sort_values(["CodConglomeradoPrudencial", "t"]).reset_index(drop=True)
+    sfx, color = ("", mdt.B_COLOR) if kind == "B" else ("_d", mdt.D_COLOR)
+    bq = bank_quarter(kind).sort_values(["CodConglomeradoPrudencial", "t"]).reset_index(drop=True)
     prev = bq.groupby("CodConglomeradoPrudencial")[["t", "sp_pp", "own_rate", "dep_a4"]].shift(1)
     consecutive = prev["t"] == bq["t"] - 1
     bq["d_sp"] = np.where(consecutive, bq["sp_pp"] - prev["sp_pp"], np.nan)
@@ -1157,7 +1189,7 @@ def reprice_binscatter(out: pathlib.Path, png: bool):
     win = bq[bq["year"].between(MIN_YEAR, MAX_YEAR)]
     steps = []
     for label, d in (
-            ("B conglomerate-quarters with time deposits", win[win["dep_a4"] > 0]),
+            (f"{kind} conglomerate-quarters with time deposits", win[win["dep_a4"] > 0]),
             ("own rate this quarter (no CDI fallback, no 3 x Selic guard)",
              win[(win["dep_a4"] > 0) & win["own_rate"]]),
             ("own rate in the previous quarter too (spread change defined)",
@@ -1180,22 +1212,22 @@ def reprice_binscatter(out: pathlib.Path, png: bool):
     by = pd.Series(yr).groupby(bins).mean().to_numpy()
     per_bin = pd.Series(xr).groupby(bins).size()
 
-    for stem, points in (("fig_slide_motiv_reprice_binscatter", False),
-                         ("fig_slide_motiv_reprice_binscatter_points", True)):
+    for stem, points in ((f"fig_slide_motiv_reprice_binscatter{sfx}", False),
+                         (f"fig_slide_motiv_reprice_binscatter_points{sfx}", True)):
         fig, ax = plt.subplots(figsize=SLIDE_FIGSIZE)
         ax.axvline(0, color="#BFBFBA", lw=0.8, zorder=1)
         if points:
-            ax.scatter(xr, yr, s=6, color=mdt.B_COLOR, alpha=0.18, linewidth=0, zorder=2,
+            ax.scatter(xr, yr, s=6, color=color, alpha=0.18, linewidth=0, zorder=2,
                        label="Each bank-quarter")
         xx = np.array([bx.min(), bx.max()])
         # The statistics ride in the legend under the plot: any spot inside it can hold a bin.
-        ax.scatter(bx, by, s=34, color=mdt.B_COLOR, edgecolor="white", linewidth=0.8, zorder=3,
+        ax.scatter(bx, by, s=34, color=color, edgecolor="white", linewidth=0.8, zorder=3,
                    label=f"{r['n']:,} bank-quarters of {r['banks']} banks, in {len(bx)} "
                          f"bins of about {int(round(per_bin.mean()))}")
         ax.plot(xx, yr.mean() + r["slope"] * (xx - xr.mean()), color=mdt.NATL_COLOR, lw=1.6,
                 zorder=4, label=f"Slope {_plain(r['slope'], 3)}{r['stars']} % per pp, 95% "
                                 f"interval [{_plain(r['lo_bc'], 3)}, {_plain(r['hi_bc'], 3)}]")
-        _style_no_pix(ax, "Repricing and deposit growth, B banks",
+        _style_no_pix(ax, f"Repricing and deposit growth, {kind} {'banks' if kind == 'B' else 'firms'}",
                       f"Time-deposit growth, next {GROWTH_H} quarters (%)",
                       "Change in own time-deposit spread (pp p.a.)")
         ax.legend(fontsize=8.5 * FS, loc="upper center", bbox_to_anchor=(0.5, -0.2), ncol=1,
@@ -1204,8 +1236,8 @@ def reprice_binscatter(out: pathlib.Path, png: bool):
 
     def clean(d):
         return {k: v for k, v in d.items() if k not in ("xr", "yr")}
-    _store("reprice", {
-        "sample": "B conglomerate-quarters with an own type-4 rate in both quarters (not the CDI "
+    _store("reprice" + sfx, {
+        "sample": f"{kind} conglomerate-quarters with an own type-4 rate in both quarters (not the CDI "
                   "fallback, not the 3 x Selic guard), type-4 balance at least TYPE4_FLOOR",
         "type4_floor": TYPE4_FLOOR, "trim_pct": list(TRIM_PCT), "growth_h": GROWTH_H,
         "units": "slope in percent of time deposits per pp of annual spread",
@@ -1219,7 +1251,7 @@ def reprice_binscatter(out: pathlib.Path, png: bool):
             "d_sp": float(main.groupby("bank")["d_sp"].std().median()),
             "growth_ahead": float(main.groupby("bank")["growth_ahead"].std().median())},
     })
-    print(f"  repricing slope {r['slope']:.4f} [{r['lo_bc']:.4f}, {r['hi_bc']:.4f}] "
+    print(f"  repricing ({kind}) slope {r['slope']:.4f} [{r['lo_bc']:.4f}, {r['hi_bc']:.4f}] "
           f"N={r['n']} banks={r['banks']}; untrimmed {r_untrim['slope']:.4f} "
           f"(N={r_untrim['n']}); same quarter {r_now['slope']:.4f}")
     for s in steps:
@@ -1287,6 +1319,21 @@ def dpremium_chart(out: pathlib.Path, png: bool):
           f"{int(((ci['lo'] > 0) | (ci['hi'] < 0)).sum())} of {len(q)}; D share of time deposits "
           f"{share[0]:.3f}% -> {share[-1]:.3f}%; D type-4 balance at the CDI rate "
           f"{100 * w[fallback].sum() / w.sum():.3f}%")
+
+
+def _cluster_median_ci(M: np.ndarray, clusters, boot: int, seed: int):
+    """Median of each column of M over its finite rows, with a 95% percentile interval from a
+    bootstrap that resamples clusters (banks) with replacement and keeps all their rows."""
+    cl = np.asarray(clusters)
+    ids = np.unique(cl)
+    rows_of = {c: np.flatnonzero(cl == c) for c in ids}
+    rng = np.random.default_rng(seed)
+    draws = np.full((boot, M.shape[1]), np.nan)
+    for b in range(boot):
+        pick = rng.choice(ids, len(ids), replace=True)
+        draws[b] = np.nanmedian(M[np.concatenate([rows_of[c] for c in pick])], axis=0)
+    return (np.nanmedian(M, axis=0), np.nanpercentile(draws, 2.5, axis=0),
+            np.nanpercentile(draws, 97.5, axis=0))
 
 
 def entry_gap_chart(out: pathlib.Path, png: bool):
@@ -1403,6 +1450,47 @@ def entry_gap_chart(out: pathlib.Path, png: bool):
               frameon=False, handlelength=1.8)
     _save(fig, out, "fig_slide_motiv_entry_by_gap_level", png)
 
+    # The same medians with the bootstrap resampling banks instead of events: one bank entering
+    # several markets contributes correlated paths, which the event bootstrap treats as
+    # independent. The medians are the event charts' own (checked); only the bands change.
+    bankboot = {}
+    for norm_key, stem, ylabel, title, scale in (
+            ("main", "fig_slide_motiv_entry_by_gap_bankboot", "Normalized market share",
+             "B entrants' market share, by price at entry", 1.0),
+            ("level", "fig_slide_motiv_entry_by_gap_level_bankboot",
+             "Share of B deposits in the market (%)",
+             "B entrants' share of B deposits, by price at entry", 100.0)):
+        fig, ax = plt.subplots(figsize=SLIDE_FIGSIZE)
+        for k, (color, ls, label) in style.items():
+            reg = groups[k].assign(keep=True)
+            Mn, rows = sed._path_matrix(reg, paths, H, "main", plateau_w, want_rows=True)
+            ev_rows = reg.iloc[rows]
+            if norm_key == "main":
+                M = Mn
+            else:
+                M = np.vstack([np.pad(paths[(e["congl"], e["mkt"])].astype(float).to_numpy()[:H + 1],
+                                      (0, max(0, H + 1 - len(paths[(e["congl"], e["mkt"])]))),
+                                      constant_values=np.nan) for _, e in ev_rows.iterrows()]) * scale
+            med, lo, hi = _cluster_median_ci(M, ev_rows["congl"].to_numpy(), boot, seed)
+            ref = (res[k] if norm_key == "main" else level[k])["median"].to_numpy()
+            gap = float(np.nanmax(np.abs(med - ref)))
+            if not gap < 1e-12:
+                sys.exit(f"entrygap: bank-bootstrap medians differ from the event medians by {gap:.3e}")
+            h = np.arange(H + 1)
+            ax.fill_between(h, lo, hi, color=color, alpha=0.15, linewidth=0, zorder=1)
+            ax.plot(h, med, color=color, linestyle=ls, linewidth=2, marker="o", markersize=4,
+                    markeredgecolor="white", markeredgewidth=0.8, zorder=3,
+                    label=f"{label} (n = {len(ev_rows)}, {ev_rows['congl'].nunique()} banks)")
+            bankboot.setdefault(norm_key, {})[k] = dict(
+                n=int(len(ev_rows)), banks=int(ev_rows["congl"].nunique()),
+                ci_at_h={str(x): [float(lo[x]), float(hi[x])] for x in (4, 8, 12)})
+        _style_no_pix(ax, title, ylabel, "Quarters since entry")
+        ax.set_xticks(range(0, H + 1, 2))
+        if norm_key == "level":
+            ax.set_ylim(bottom=0)
+        _legend_under(ax)
+        _save(fig, out, stem, png)
+
     def at_h(p, hs=(4, 8, 12)):
         return {str(h): float(p.loc[p["h"] == h, "median"].iloc[0]) for h in hs
                 if (p["h"] == h).any()}
@@ -1430,6 +1518,7 @@ def entry_gap_chart(out: pathlib.Path, png: bool):
                             "firm in the market (MCA) and quarter, from the panel's balances",
         "bands": "95% bootstrap interval of the median: events resampled with replacement, "
                  "999 draws, seed 0 (sleep_ident_entry_dynamics.event_paths)",
+        "bankboot": bankboot,
         "groups": {k: {"n": int(p["n"].iloc[0]), "median_at_h": at_h(p)} for k, p in res.items()},
         "pooled_median_at_h": at_h(pooled),
         "level_pct": {k: {"n": int(p["n"].iloc[0]), "median_at_h": at_h(p, (0, 4, 8, 12)),
@@ -1445,6 +1534,877 @@ def entry_gap_chart(out: pathlib.Path, png: bool):
     for k, p in level.items():
         print(f"  entrygap level {k}: n={int(p['n'].iloc[0])}, median share (%) at h=0/4/8/12: "
               + ", ".join(f"{v:.3f}" for v in at_h(p, (0, 4, 8, 12)).values()))
+
+
+# --------------------------------------------------------------------------------------------
+# Relative prices across B banks
+# --------------------------------------------------------------------------------------------
+# The five largest B banks are drawn by size rank, darkest = largest: size is ordered, so one
+# hue in steps of lightness, with an end label on every line.
+RANK_COLORS = ("#2a78d6", "#e34948", "#008300", "#eda100", "#1baf7a")
+# Second encoding for the five lines: aqua and yellow are below 3:1 against the surface, and the
+# closest pair under deuteranopia (red and aqua) is 6.9 apart, so every rank also has its own dash.
+RANK_STYLES = ("-", (0, (6, 2)), (0, (2, 1.5)), (0, (6, 2, 1.5, 2)), (0, (1, 1.2)))
+# Periods of the decomposition over time: easing (2016-2018), low rates and the turn (2019-2021),
+# high rates (2022-2024).
+DECOMP_PERIODS = ((2016, 2018), (2019, 2021), (2022, 2024))
+N_TOP = 5
+RELPRICE_NOTE = ("The rate is interest expense over each bank's stock of time deposits, so part "
+                 "of any gap between banks is book composition and accounting noise.")
+
+
+def relprice_frames():
+    """B bank-quarters with an own type-4 rate (no CDI fallback, no 3 x Selic guard), each with
+    three prices: the spread (pp p.a.), the rate as % of CDI, and their gaps to the balance-
+    weighted B mean of the quarter; the bank's share of all B time deposits. And B bank x market
+    x quarter cells with the local gap: own spread minus the time-deposit-weighted spread of the
+    other own-rate B banks in the market, and the bank's share of the market's B time deposits.
+    Weights are type-4 balances throughout. Memoised."""
+    if "rel" in _MOTIV_CACHE:
+        return _MOTIV_CACHE["rel"]
+    allb = bank_quarter_b()
+    tot = allb.groupby("t")["dep_a4"].sum()
+    bq = allb[allb["own_rate"] & (allb["dep_a4"] > 0)].copy()
+    bq["pcdi"] = 100.0 * bq["r4"] / (bq["cdi_qoq"] / 100.0)
+    for c in ("sp_pp", "pcdi"):
+        sw = (bq[c] * bq["dep_a4"]).groupby(bq["t"]).transform("sum")
+        bq[f"{c}_gap"] = bq[c] - sw / bq["dep_a4"].groupby(bq["t"]).transform("sum")
+    bq["share"] = bq["dep_a4"] / bq["t"].map(tot)
+    bq["bank"] = bq["CodConglomeradoPrudencial"]
+
+    df = motiv_panel()
+    b = df[df["bank_type"] == "B"]
+    b = pd.DataFrame({"bank": b["CodConglomeradoPrudencial"], "mkt": b["mca_code"].astype(str),
+                      "t": b["year"] * 4 + b["quarter"] - 1, "dep": b["dep_a4"], "sp": b["sp4"]})
+    b = b[b["dep"] > 0]
+    mkt_tot = b.groupby(["mkt", "t"])["dep"].transform("sum")
+    b["lshare"] = b["dep"] / mkt_tot
+    own = pd.MultiIndex.from_frame(bq[["bank", "t"]])
+    v = b[pd.MultiIndex.from_frame(b[["bank", "t"]]).isin(own) & np.isfinite(b["sp"])].copy()
+    keys = [v["mkt"], v["t"]]
+    W = v["dep"].groupby(keys).transform("sum")
+    SW = (v["sp"] * v["dep"]).groupby(keys).transform("sum")
+    riv_w = W - v["dep"]
+    v["lgap"] = np.where(riv_w > 0, v["sp"] - (SW - v["sp"] * v["dep"]) / riv_w.where(riv_w > 0),
+                         np.nan)
+    cells = v[np.isfinite(v["lgap"])].copy()
+    _MOTIV_CACHE["rel"] = (bq, cells)
+    return bq, cells
+
+
+def _wdemean(cols: pd.DataFrame, groups, w, iters=200, tol=1e-11) -> pd.DataFrame:
+    """Weighted within transformation over one or more sets of fixed effects (alternating
+    projections); with no groups, the weighted mean is removed."""
+    out = cols.astype(float).copy()
+    w = np.asarray(w, dtype=float)
+    if not groups:
+        return out - (out.mul(w, axis=0).sum() / w.sum())
+    for _ in range(iters):
+        before = out.to_numpy().copy()
+        for g in groups:
+            m = out.mul(w, axis=0).groupby(g).transform("sum").div(
+                pd.Series(w, index=out.index).groupby(g).transform("sum"), axis=0)
+            out = out - m
+        if np.max(np.abs(out.to_numpy() - before)) < tol:
+            break
+    return out
+
+
+def _wls_slope(d: pd.DataFrame, x: str, y: str, w: str, cl: str, fe=()) -> dict:
+    """Slope of y on x weighted by w, net of the fixed effects in `fe` (column names; tuples are
+    interacted), with the conglomerate wild cluster bootstrap (Webb, BOOT_B draws) and its
+    bias-corrected 95% interval. Returns the residualised x and y for a binned plot."""
+    import statsmodels.api as sm
+    from utils.sleep_links import linear_wild_cluster_bootstrap
+
+    d = d.reset_index(drop=True)
+    groups = [d[f[0]].astype(str) + "|" + d[f[1]].astype(str) if isinstance(f, tuple) else d[f]
+              for f in fe]
+    r = _wdemean(d[[x, y]], groups, d[w])
+    sw = np.sqrt(d[w].to_numpy(dtype=float))
+    X = pd.DataFrame({x: r[x].to_numpy() * sw})
+    res = sm.OLS(r[y].to_numpy() * sw, X).fit(cov_type="cluster",
+                                             cov_kwds={"groups": d[cl].to_numpy()})
+    band = {}
+    linear_wild_cluster_bootstrap(res, B=BOOT_B, scheme="webb", seed=0, mode="normal",
+                                  band_out=band)
+    row = band["band"].set_index("name").loc[x]
+    return dict(slope=float(res.params[x]), lo=float(row["lo_bc"]), hi=float(row["hi_bc"]),
+                p=float(row["p_bc"]), stars=str(row["stars"]), n=int(len(d)),
+                banks=int(d[cl].nunique()), xr=r[x].to_numpy(), yr=r[y].to_numpy(),
+                w=d[w].to_numpy(dtype=float))
+
+
+def _trim(d: pd.DataFrame, cols) -> pd.DataFrame:
+    d = d[np.isfinite(d[list(cols)]).all(axis=1)]
+    keep = np.ones(len(d), dtype=bool)
+    for c in cols:
+        lo, hi = np.percentile(d[c], TRIM_PCT)
+        keep &= d[c].between(lo, hi).to_numpy()
+    return d[keep]
+
+
+def _binned(ax, r: dict, xmean: float, ymean: float, color=mdt.B_COLOR, points=False,
+            label_n="observations"):
+    """Bins of equal count along the residualised x (weighted means within a bin), the fitted
+    line, and the slope in the legend."""
+    xr, yr, w = r["xr"] + xmean, r["yr"] + ymean, r["w"]
+    if points:
+        ax.scatter(xr, yr, s=6, color=color, alpha=0.15, linewidth=0, zorder=2)
+    bins = pd.qcut(pd.Series(xr).rank(method="first"), N_BINS, labels=False)
+    wx = pd.Series(xr * w).groupby(bins).sum() / pd.Series(w).groupby(bins).sum()
+    wy = pd.Series(yr * w).groupby(bins).sum() / pd.Series(w).groupby(bins).sum()
+    ax.scatter(wx, wy, s=34, color=color, edgecolor="white", linewidth=0.8, zorder=3,
+               label=f"{r['n']:,} {label_n} of {r['banks']} banks, {N_BINS} bins")
+    xx = np.array([wx.min(), wx.max()])
+    ax.plot(xx, ymean + r["slope"] * (xx - xmean), color=mdt.NATL_COLOR, lw=1.6, zorder=4,
+            label=f"Slope {_plain(r['slope'], 3)}{r['stars']}, 95% interval "
+                  f"[{_plain(r['lo'], 3)}, {_plain(r['hi'], 3)}]")
+
+
+def _legend_under(ax):
+    ax.legend(fontsize=8.5 * FS, loc="upper center", bbox_to_anchor=(0.5, -0.2), ncol=1,
+              frameon=False, handlelength=1.8)
+
+
+def _wr2(y, w, groups) -> float:
+    """Weighted R2 of y on the fixed effects in `groups`."""
+    d = pd.DataFrame({"y": y})
+    r = _wdemean(d, groups, w)["y"].to_numpy()
+    w = np.asarray(w, dtype=float)
+    yc = np.asarray(y, dtype=float) - np.average(y, weights=w)
+    return float(1.0 - np.sum(w * r ** 2) / np.sum(w * yc ** 2))
+
+
+def _decomp_bars(out, png, stem, title, rows, tint):
+    """Stacked bars of a variance decomposition: common to all banks (grey), the bank's
+    persistent position and the rest, in the firm type's colour and its light tint. rows:
+    (label, {common, bank, rest}, firm type)."""
+    fig, ax = plt.subplots(figsize=(SLIDE_FIGSIZE[0], 0.9 + 0.42 * len(rows)))
+    seen = set()
+    for i, (lab, vals, kind) in enumerate(rows):
+        left = 0.0
+        dark, light = tint[kind]
+        parts = (("common", "Common to all banks", mdt.NATL_COLOR),
+                 ("bank", f"Bank's persistent position, {kind} firms", dark),
+                 ("rest", f"Rest, {kind} firms", light))
+        for k, name, color in parts:
+            v = 100.0 * vals[k]
+            ax.barh(i, v, left=left, color=color, edgecolor="white", height=0.6,
+                    label=None if name in seen else name)
+            seen.add(name)
+            if v >= 8:
+                ax.text(left + v / 2, i, f"{v:.0f}%", ha="center", va="center",
+                        fontsize=8.5 * FS, color="white" if color != light else "#111111")
+            left += v
+    ax.set_yticks(range(len(rows)))
+    ax.set_yticklabels([r[0] for r in rows])
+    ax.invert_yaxis()
+    ax.set_xlim(0, 100)
+    _style_no_pix(ax, title, "", "Share of balance-weighted variance (%)")
+    ax.grid(False)
+    _legend_under(ax)
+    _save(fig, out, stem, png)
+
+
+def relprice_charts(out: pathlib.Path, png: bool):
+    """Relative prices across B banks: A, how much of the spread is common to all banks; B, the
+    five largest banks' relative positions; C, whether a relative position persists a year
+    later; D, whether a bank's deposit share follows its relative price, nationally and across
+    the markets one bank serves. Three prices: the gap in pp, the rate as % of CDI, the local
+    gap. RELPRICE_NOTE states the measurement caveat that goes with every chart."""
+    bq, cells = relprice_frames()
+    q = macro_quarterly()
+    xq = dict(zip(q["year"] * 4 + q["quarter"] - 1, q["x"]))
+    payload = {"note": RELPRICE_NOTE}
+
+    # A. Variance decomposition -------------------------------------------------------------
+    dec = {}
+    for key, col in (("pp", "sp_pp"), ("pcdi", "pcdi")):
+        r2q = _wr2(bq[col], bq["dep_a4"], [bq["t"]])
+        r2qb = _wr2(bq[col], bq["dep_a4"], [bq["t"], bq["bank"]])
+        dec[key] = dict(common=r2q, bank=r2qb - r2q, rest=1.0 - r2qb)
+    r2 = _wr2(cells["lgap"], cells["dep"], [cells["bank"].astype(str) + "|" + cells["t"].astype(str)])
+    dec["local"] = dict(national=r2, rival_mix=1.0 - r2)
+    payload["decomposition"] = dec
+    payload["sample"] = dict(bank_quarters=int(len(bq)), banks=int(bq["bank"].nunique()),
+                             cells=int(len(cells)), cell_banks=int(cells["bank"].nunique()),
+                             markets=int(cells["mkt"].nunique()))
+    fig, ax = plt.subplots(figsize=SLIDE_FIGSIZE)
+    # One legend for the three bars: blue is the bank's own position (persistent across quarters
+    # for the spread; its national position for the local gap), light blue the remainder (for
+    # the local gap, which rivals the bank meets in each market).
+    common = ("common", "Common to all banks", mdt.NATL_COLOR)
+    bank = "Bank's own position (local gap: national)"
+    rest = "Rest (local gap: rival mix across markets)"
+    rows = (("Spread, pp", (common, ("bank", bank, mdt.B_COLOR), ("rest", rest, "#BBDEFB")),
+             dec["pp"]),
+            ("% of CDI", (common, ("bank", bank, mdt.B_COLOR), ("rest", rest, "#BBDEFB")),
+             dec["pcdi"]),
+            ("Local gap, pp", (("national", bank, mdt.B_COLOR), ("rival_mix", rest, "#BBDEFB")),
+             dec["local"]))
+    seen = set()
+    for i, (lab, parts, vals) in enumerate(rows):
+        left = 0.0
+        for k, name, color in parts:
+            v = 100.0 * vals[k]
+            ax.barh(i, v, left=left, color=color, edgecolor="white", height=0.6,
+                    label=None if name in seen else name)
+            seen.add(name)
+            if v >= 8:
+                ax.text(left + v / 2, i, f"{v:.0f}%", ha="center", va="center", fontsize=8.5 * FS,
+                        color="white" if color != "#BBDEFB" else "#111111")
+            left += v
+    ax.set_yticks(range(len(rows)))
+    ax.set_yticklabels([r[0] for r in rows])
+    ax.invert_yaxis()
+    ax.set_xlim(0, 100)
+    _style_no_pix(ax, "Where spread differences come from, B banks", "",
+                  "Share of balance-weighted variance (%)")
+    ax.grid(False)
+    _legend_under(ax)
+    _save(fig, out, "fig_slide_relprice_decomp", png)
+
+    # A'. The same decomposition for D firms, and for B and D by period ------------------------
+    def own_rate_frame(kind):
+        f = bank_quarter(kind)
+        f = f[f["own_rate"] & (f["dep_a4"] > 0)].copy()
+        f["pcdi"] = 100.0 * f["r4"] / (f["cdi_qoq"] / 100.0)
+        f["bank"] = f["CodConglomeradoPrudencial"]
+        return f
+
+    def decomp(f):
+        res = {}
+        for key, col in (("pp", "sp_pp"), ("pcdi", "pcdi")):
+            r2q = _wr2(f[col], f["dep_a4"], [f["t"]])
+            r2qb = _wr2(f[col], f["dep_a4"], [f["t"], f["bank"]])
+            res[key] = dict(common=r2q, bank=r2qb - r2q, rest=1.0 - r2qb)
+        res["n"] = int(len(f))
+        res["banks"] = int(f["bank"].nunique())
+        return res
+
+    frames = {"B": own_rate_frame("B"), "D": own_rate_frame("D")}
+    chk = decomp(frames["B"])["pp"]["common"]
+    if not abs(chk - dec["pp"]["common"]) < 1e-12:
+        sys.exit(f"relprice: B decomposition rebuilt differs ({chk} vs {dec['pp']['common']})")
+    dec_d = decomp(frames["D"])
+    dec_t = {k: {f"{a}-{b}": decomp(f[f["year"].between(a, b)]) for a, b in DECOMP_PERIODS}
+             for k, f in frames.items()}
+    payload["decomposition_d"] = dec_d
+    payload["decomposition_by_period"] = dec_t
+    tint = {"B": (mdt.B_COLOR, "#BBDEFB"), "D": (mdt.D_COLOR, "#FFCCBC")}
+    _decomp_bars(out, png, "fig_slide_relprice_decomp_d",
+                 "Where spread differences come from, D firms",
+                 [("Spread, pp", dec_d["pp"], "D"), ("% of CDI", dec_d["pcdi"], "D")], tint)
+    _decomp_bars(out, png, "fig_slide_relprice_decomp_time",
+                 "Spread differences by period, B and D firms",
+                 [(f"{k}, {p.replace('-', '–')}", dec_t[k][p]["pp"], k)
+                  for k in ("B", "D") for p in dec_t[k]], tint)
+
+    # B. Paths of the five largest B banks ---------------------------------------------------
+    size = bank_quarter_b().groupby("CodConglomeradoPrudencial")["dep_a4"].sum().sort_values(
+        ascending=False)
+    top = list(size.index[:N_TOP])
+    payload["top5_share_of_B_time_deposits"] = float(size.iloc[:N_TOP].sum() / size.sum())
+    lcell = cells.copy()
+    lcell["lw"] = lcell["lgap"] * lcell["dep"]
+    lbank = (lcell.groupby(["bank", "t"])["lw"].sum() / lcell.groupby(["bank", "t"])["dep"].sum()
+             ).rename("lgap_bank").reset_index()
+    paths = bq.merge(lbank, on=["bank", "t"], how="left")
+    bmean_pcdi = ((bq["pcdi"] * bq["dep_a4"]).groupby(bq["t"]).sum()
+                  / bq["dep_a4"].groupby(bq["t"]).sum())
+    tt = np.array(sorted(xq))
+    for key, col, title, ylabel in (
+            ("pp", "sp_pp_gap", "Spread gap to the B average", "pp p.a."),
+            ("pcdi", "pcdi", "Rate as % of CDI", "% of CDI"),
+            ("local", "lgap_bank", "Gap to local rivals, averaged over markets", "pp p.a.")):
+        fig, ax = plt.subplots(figsize=SLIDE_FIGSIZE)
+        ax.axhline(100 if key == "pcdi" else 0, color="#BFBFBA", lw=0.8, zorder=1)
+        if key == "pcdi":
+            ax.plot([xq[t] for t in bmean_pcdi.index], bmean_pcdi.to_numpy(),
+                    color=mdt.NATL_COLOR, lw=1.4, ls=(0, (4, 2)), zorder=2, label="B average")
+        ends = []
+        for rank, (bank, color, ls) in enumerate(zip(top, RANK_COLORS, RANK_STYLES), start=1):
+            p = paths[paths["bank"] == bank].set_index("t")[col].reindex(tt)
+            ax.plot([xq[t] for t in tt], p.to_numpy(), color=color, lw=1.8, ls=ls, zorder=3,
+                    label=f"{_ordinal(rank)} largest")
+            last = p.dropna()
+            if len(last):
+                ends.append((float(last.iloc[-1]), _ordinal(rank)))
+        _style_no_pix(ax, title, ylabel, "")
+        _end_labels(ax, xq[tt[-1]], ends)
+        _quarter_axis(ax)
+        _legend_below(ax, 3)
+        _save(fig, out, f"fig_slide_relprice_paths_{key}", png)
+
+    # C. Persistence, t against t + 4 --------------------------------------------------------
+    pers = {}
+    nxt = bq[["bank", "t", "sp_pp_gap", "pcdi_gap"]].copy()
+    nxt["t"] -= GROWTH_H
+    pq = bq.merge(nxt, on=["bank", "t"], suffixes=("", "_4"))
+    lnxt = cells[["bank", "mkt", "t", "lgap"]].copy()
+    lnxt["t"] -= GROWTH_H
+    pl = cells.merge(lnxt, on=["bank", "mkt", "t"], suffixes=("", "_4"))
+    for key, d, x, y, w, unit, lab in (
+            ("pp", pq, "sp_pp_gap", "sp_pp_gap_4", "dep_a4", "pp", "bank-quarters"),
+            ("pcdi", pq, "pcdi_gap", "pcdi_gap_4", "dep_a4", "CDI points", "bank-quarters"),
+            ("local", pl, "lgap", "lgap_4", "dep", "pp", "bank-market-quarters")):
+        d = _trim(d, [x, y])
+        r = _wls_slope(d, x, y, w, "bank")
+        xm, ym = np.average(d[x], weights=d[w]), np.average(d[y], weights=d[w])
+        fig, ax = plt.subplots(figsize=SLIDE_FIGSIZE)
+        _binned(ax, r, xm, ym, points=(key != "local"), label_n=lab)
+        lim = np.array(ax.get_xlim())
+        ax.plot(lim, lim, color="#BFBFBA", lw=0.9, ls=(0, (4, 2)), zorder=1,
+                label="45-degree line: gaps never close")
+        _style_no_pix(ax, f"Does a bank's relative price persist? ({unit})",
+                      f"Gap {GROWTH_H} quarters later", "Gap this quarter")
+        _legend_under(ax)
+        _save(fig, out, f"fig_slide_relprice_persist_{key}", png)
+        pers[key] = {k: v for k, v in r.items() if k not in ("xr", "yr", "w")}
+    payload["persistence"] = pers
+
+    # D. Price against share change -----------------------------------------------------------
+    shr = {}
+    # Cross-section: one point per bank, average gap against the yearly log change in share.
+    xs = []
+    for bank, g in bq.sort_values("t").groupby("bank"):
+        if g["t"].iloc[-1] - g["t"].iloc[0] < 8:
+            continue
+        yrs = (g["t"].iloc[-1] - g["t"].iloc[0]) / 4.0
+        xs.append(dict(bank=bank, pp=float(g["sp_pp_gap"].mean()), pcdi=float(g["pcdi_gap"].mean()),
+                       dshare=100.0 * np.log(g["share"].iloc[-1] / g["share"].iloc[0]) / yrs,
+                       size=float(g["dep_a4"].mean())))
+    xs = pd.DataFrame(xs)
+    for key, unit in (("pp", "pp"), ("pcdi", "CDI points")):
+        d = _trim(xs, [key, "dshare"])
+        r = _wls_slope(d, key, "dshare", "size", "bank")
+        fig, ax = plt.subplots(figsize=SLIDE_FIGSIZE)
+        ax.axvline(0, color="#BFBFBA", lw=0.8, zorder=1)
+        ax.axhline(0, color="#BFBFBA", lw=0.8, zorder=1)
+        ax.scatter(d[key], d["dshare"], s=8 + 300 * d["size"] / d["size"].max(),
+                   color=mdt.B_COLOR, alpha=0.55, edgecolor="white", linewidth=0.6, zorder=3,
+                   label=f"{r['n']} B banks, dot size = time deposits")
+        xm, ym = np.average(d[key], weights=d["size"]), np.average(d["dshare"], weights=d["size"])
+        xx = np.array([d[key].min(), d[key].max()])
+        ax.plot(xx, ym + r["slope"] * (xx - xm), color=mdt.NATL_COLOR, lw=1.6, zorder=4,
+                label=f"Weighted slope {_plain(r['slope'], 3)}{r['stars']}, 95% interval "
+                      f"[{_plain(r['lo'], 3)}, {_plain(r['hi'], 3)}]")
+        _style_no_pix(ax, "Relative price and share growth, by bank",
+                      "Share growth (% a year)",
+                      f"Average gap to the B average ({unit})")
+        _legend_under(ax)
+        _save(fig, out, f"fig_slide_relprice_share_xs_{key}", png)
+        shr[f"xs_{key}"] = {k: v for k, v in r.items() if k not in ("xr", "yr", "w")}
+    # Panel: gap at t against the log change in share from t to t + 4, bank and quarter effects.
+    nx = bq[["bank", "t", "share"]].copy()
+    nx["t"] -= GROWTH_H
+    pn = bq.merge(nx, on=["bank", "t"], suffixes=("", "_4"))
+    pn["dshare"] = 100.0 * np.log(pn["share_4"] / pn["share"])
+    for key, col, unit in (("pp", "sp_pp_gap", "pp"), ("pcdi", "pcdi_gap", "CDI points")):
+        d = _trim(pn, [col, "dshare"])
+        r = _wls_slope(d, col, "dshare", "dep_a4", "bank", fe=("bank", "t"))
+        fig, ax = plt.subplots(figsize=SLIDE_FIGSIZE)
+        _binned(ax, r, np.average(d[col], weights=d["dep_a4"]),
+                np.average(d["dshare"], weights=d["dep_a4"]), label_n="bank-quarters")
+        _style_no_pix(ax, "Relative price and share growth, bank-quarters",
+                      f"Change in share, next {GROWTH_H} quarters (%)",
+                      f"Gap to B average ({unit}), net of fixed effects")
+        _legend_under(ax)
+        _save(fig, out, f"fig_slide_relprice_share_panel_{key}", png)
+        shr[f"panel_{key}"] = {k: v for k, v in r.items() if k not in ("xr", "yr", "w")}
+    # Local: gap to local rivals at t against the log change in the local share.
+    ln = cells[["bank", "mkt", "t", "lshare"]].copy()
+    ln["t"] -= GROWTH_H
+    pc = cells.merge(ln, on=["bank", "mkt", "t"], suffixes=("", "_4"))
+    pc["dshare"] = 100.0 * np.log(pc["lshare_4"] / pc["lshare"])
+    d = _trim(pc, ["lgap", "dshare"])
+    for key, fe, xlab in (("local_raw", (), "Gap to local rivals (pp)"),
+                          ("local_fe", (("bank", "t"), "mkt"),
+                           "Gap to local rivals (pp), net of fixed effects")):
+        r = _wls_slope(d, "lgap", "dshare", "dep", "bank", fe=fe)
+        fig, ax = plt.subplots(figsize=SLIDE_FIGSIZE)
+        _binned(ax, r, np.average(d["lgap"], weights=d["dep"]),
+                np.average(d["dshare"], weights=d["dep"]), label_n="bank-market-quarters")
+        _style_no_pix(ax, "Local relative price and local share growth"
+                      + (", within bank" if key == "local_fe" else ""),
+                      f"Change in local share, next {GROWTH_H} quarters (%)", xlab)
+        _legend_under(ax)
+        _save(fig, out, f"fig_slide_relprice_share_{key}", png)
+        shr[key] = {k: v for k, v in r.items() if k not in ("xr", "yr", "w")}
+    payload["share"] = shr
+    _store("relprice", payload)
+    print("  decomposition (%): " + "; ".join(
+        f"{k} " + ", ".join(f"{n} {100 * v:.1f}" for n, v in d_.items()) for k, d_ in dec.items()))
+    print(f"  top {N_TOP} B banks hold {100 * payload['top5_share_of_B_time_deposits']:.1f}% of "
+          "B time deposits")
+    for k, r in {**{f"persist_{k}": v for k, v in pers.items()}, **shr}.items():
+        print(f"  {k}: slope {r['slope']:.3f} [{r['lo']:.3f}, {r['hi']:.3f}] N={r['n']} "
+              f"banks={r['banks']}")
+
+
+def _ordinal(n: int) -> str:
+    return {1: "1st", 2: "2nd", 3: "3rd"}.get(n, f"{n}th")
+
+
+# --------------------------------------------------------------------------------------------
+# Figure 2's entry-implied sleeping share under the concentration checks
+# --------------------------------------------------------------------------------------------
+ENTRY_CONC_CSV = D6_DIR / "diag_entry_concentration.csv"
+# Figure 2's colours for the routines' mean fitted sleeping share (sleep_ident_entry_dynamics).
+ROUTINE_COLORS = {"E3": "#6A1B9A", "E4": "#00838F"}
+
+
+def entry_robust_chart(out: pathlib.Path, png: bool):
+    """The entry-implied sleeping share of Figure 2 and its 95% interval, re-estimated with the
+    bootstrap resampling banks, without Santander, with one vote per bank and on Santander
+    alone (diagnostics/diag_entry_concentration.py), against the routines' mean fitted share
+    that Figure 2 draws as model lines (d6_meta.json)."""
+    r = pd.read_csv(ENTRY_CONC_CSV)
+    meta = json.loads((D6_DIR / "d6_meta.json").read_text(encoding="utf-8"))
+    labels = {("paper (all entries)", "events"): "All entries (Figure 2)",
+              ("all entries", "banks"): "All, banks resampled",
+              ("without Santander", "events"): "No Santander",
+              ("without Santander", "banks"): "No Santander, banks resampled",
+              ("one vote per bank", "banks"): "One vote per bank",
+              ("Santander only", "events"): "Santander only"}
+    r["label"] = [labels[(s, i)] for s, i in zip(r["spec"], r["interval"])]
+    y = np.arange(len(r))[::-1].astype(float)
+    # The estimates and intervals are printed in the note's table, so the chart carries none.
+    fig, ax = plt.subplots(figsize=(SLIDE_FIGSIZE[0], SLIDE_FIGSIZE[1] * 1.15))
+    for lab, phi, _ in meta["vintages"]:
+        if lab in ROUTINE_COLORS:
+            ax.axvline(phi, color=ROUTINE_COLORS[lab], lw=1.2, ls=(0, (4, 2)), zorder=1,
+                       label=f"Mean fitted share, routine {_routines.est_roman(int(lab[1:]))}: "
+                             f"{phi:.3f}")
+    ax.errorbar(r["phi"], y, xerr=[r["phi"] - r["lo"], r["hi"] - r["phi"]], fmt="o",
+                color=mdt.B_COLOR, ecolor=mdt.B_COLOR, elinewidth=1.6, capsize=3, markersize=6,
+                markeredgecolor="white", zorder=3, label="Estimate and 95% interval")
+    ax.set_yticks(y)
+    ax.set_yticklabels(r["label"])
+    ax.set_xlim(0.76, 1.0)
+    _style_no_pix(ax, "Entry-implied sleeping share, B firms", "",
+                  "Sleeping share per quarter (grid ends at 0.9985)")
+    ax.grid(True, axis="x", color=mdt.GRID_COLOR, linewidth=0.6)
+    ax.grid(False, axis="y")
+    _legend_under(ax)
+    _save(fig, out, "fig_slide_phi_entry_robustness", png)
+
+
+# --------------------------------------------------------------------------------------------
+# Variance and co-movement tables for relative prices, shares and volumes
+# --------------------------------------------------------------------------------------------
+ANOVA_MD = mdt.OUTPUT_DIR / "slide_anova_tables.md"
+COMOVE_H = (1, 4, 8, 12)
+
+
+def _shapley2(y, w, ga, gb) -> dict:
+    """Two-factor split of the weighted variance of y: factor a (e.g. quarter), factor b (e.g.
+    bank), each with the order-free Shapley share, the sequential share with a first, and the
+    rest."""
+    ra, rb = _wr2(y, w, [ga]), _wr2(y, w, [gb])
+    rab = _wr2(y, w, [ga, gb])
+    return dict(a=0.5 * (ra + rab - rb), b=0.5 * (rb + rab - ra), rest=1.0 - rab,
+                a_first=ra, b_after_a=rab - ra)
+
+
+def _bank_panel(kind: str) -> pd.DataFrame:
+    """Conglomerate-quarters of one firm type with time deposits: prices where the bank has an own
+    rate (gap to the firm type's balance-weighted mean, pp and points of CDI), log balance, log
+    share of the firm type's time deposits, and quarterly growth."""
+    f = bank_quarter(kind)
+    f = f[f["dep_a4"] > 0].copy()
+    f["bank"] = f["CodConglomeradoPrudencial"]
+    f["share"] = f["dep_a4"] / f.groupby("t")["dep_a4"].transform("sum")
+    f["log_dep"] = np.log(f["dep_a4"])
+    f["log_share"] = np.log(f["share"])
+    f = f.sort_values(["bank", "t"])
+    prev = f.groupby("bank")[["t", "dep_a4"]].shift(1)
+    f["growth"] = np.where(prev["t"] == f["t"] - 1, 100 * np.log(f["dep_a4"] / prev["dep_a4"]),
+                           np.nan)
+    f["pcdi"] = 100.0 * f["r4"] / (f["cdi_qoq"] / 100.0)
+    own = f["own_rate"]
+    for c in ("sp_pp", "pcdi"):
+        g = f[own]
+        m = (g[c] * g["dep_a4"]).groupby(g["t"]).sum() / g["dep_a4"].groupby(g["t"]).sum()
+        f[f"{c}_gap"] = np.where(own, f[c] - f["t"].map(m), np.nan)
+    return f.reset_index(drop=True)
+
+
+def anova_tables(out: pathlib.Path, png: bool):
+    """Four tables, B and D firms, balance-weighted (type-4 balances):
+    1. variance of prices and volumes split into common to all banks (quarter), persistent by
+       bank, and the rest, order-free (Shapley);
+    2. co-movement of the change in a bank's relative price and in its log share over 1, 4, 8 and
+       12 quarters (correlation, and the slope with the conglomerate wild bootstrap);
+    3. the covariance of the relative price and the log share split into between-bank and
+       within-bank parts;
+    4. for B firms' local positions (bank x market x quarter), the variance of the log local
+       share, the log local balance and the local gap split into market, bank, the bank's
+       persistent position in that market, and the rest."""
+    payload, md = {}, []
+
+    # 1. Levels -----------------------------------------------------------------------------
+    rows1 = []
+    variables = (("sp_pp", "Spread, pp", True), ("pcdi", "Rate, % of CDI", True),
+                 ("log_dep", "Log time deposits", False), ("log_share", "Log share of time deposits", False),
+                 ("growth", "Quarterly growth of time deposits, %", False))
+    panels = {k: _bank_panel(k) for k in ("B", "D")}
+    for kind, f in panels.items():
+        for col, label, price in variables:
+            d = f[f["own_rate"]] if price else f
+            d = d[np.isfinite(d[col])]
+            s = _shapley2(d[col], d["dep_a4"], d["t"], d["bank"])
+            payload.setdefault("levels", {}).setdefault(kind, {})[col] = dict(
+                s, n=int(len(d)), banks=int(d["bank"].nunique()))
+            rows1.append(f"| {kind} | {label} | {s['a']:.3f} | {s['b']:.3f} | {s['rest']:.3f} | "
+                         f"{len(d):,} | {d['bank'].nunique()} |")
+    md += ["Table: Sources of variation in prices and volumes, share of the balance-weighted "
+           "variance (order-free split).", "",
+           "| Firms | Variable | Common to all banks | Persistent by bank | Rest | Obs. | Banks |",
+           "| --------- | ---------------------------------------- | ------------ | ------------ | --------- | ----------- | -------- |",
+           *rows1, ""]
+
+    # 2. Co-movement by horizon ---------------------------------------------------------------
+    rows2 = []
+    for kind, f in panels.items():
+        g = f[f["own_rate"]][["bank", "t", "sp_pp_gap", "log_share", "dep_a4"]]
+        for k in COMOVE_H:
+            lag = g[["bank", "t", "sp_pp_gap", "log_share"]].copy()
+            lag["t"] += k
+            d = g.merge(lag, on=["bank", "t"], suffixes=("", "_k"))
+            d["dgap"] = d["sp_pp_gap"] - d["sp_pp_gap_k"]
+            d["dshare"] = 100 * (d["log_share"] - d["log_share_k"])
+            d = _trim(d, ["dgap", "dshare"])
+            r = _wls_slope(d, "dgap", "dshare", "dep_a4", "bank", fe=("t",))
+            corr = float(np.corrcoef(r["xr"], r["yr"])[0, 1])
+            payload.setdefault("comove", {}).setdefault(kind, {})[f"h{k}"] = dict(
+                corr=corr, slope=r["slope"], lo=r["lo"], hi=r["hi"], stars=r["stars"],
+                n=r["n"], banks=r["banks"])
+            rows2.append(f"| {kind} | {k} | {_plain(corr, 3)} | {_plain(r['slope'], 3)}{r['stars']} | "
+                         f"[{_plain(r['lo'], 3)}, {_plain(r['hi'], 3)}] | {r['n']:,} | {r['banks']} |")
+    md += ["Table: Co-movement of relative price and share over different horizons. Change in the "
+           "spread gap (pp) against the change in the log share of time deposits (percent), net of "
+           "quarter effects.", "",
+           "| Firms | Horizon, quarters | Correlation | Slope | 95% interval | Obs. | Banks |",
+           "| --------- | ---------- | ------------ | ------------ | --------------------- | ----------- | -------- |",
+           *rows2, ""]
+
+    # 3. Covariance decomposition ---------------------------------------------------------------
+    rows3 = []
+    for kind, f in panels.items():
+        d = f[f["own_rate"] & np.isfinite(f["sp_pp_gap"])].copy()
+        w = d["dep_a4"].to_numpy(float)
+        # Quarter-demeaned log share (the gap is already relative to the quarter's mean).
+        d["ls"] = _wdemean(d[["log_share"]], [d["t"]], w)["log_share"]
+        tot = _wdemean(d[["sp_pp_gap", "ls"]], [], w)
+        cov = float(np.average(tot["sp_pp_gap"] * tot["ls"], weights=w))
+        within = _wdemean(d[["sp_pp_gap", "ls"]], [d["bank"]], w)
+        cov_w = float(np.average(within["sp_pp_gap"] * within["ls"], weights=w))
+        between = tot - within
+        cov_b = cov - cov_w
+
+        def corr(a, b):
+            return float(np.average(a * b, weights=w)
+                         / np.sqrt(np.average(a ** 2, weights=w) * np.average(b ** 2, weights=w)))
+        res = dict(cov=cov, between=cov_b, within=cov_w,
+                   corr=corr(tot["sp_pp_gap"], tot["ls"]),
+                   corr_between=corr(between["sp_pp_gap"], between["ls"]),
+                   corr_within=corr(within["sp_pp_gap"], within["ls"]),
+                   n=int(len(d)), banks=int(d["bank"].nunique()))
+        payload.setdefault("covdecomp", {})[kind] = res
+        rows3.append(f"| {kind} | {_plain(cov, 3)} | {_plain(cov_b, 3)} | {_plain(cov_w, 3)} | "
+                     f"{cov_b / cov:.3f} | {_plain(res['corr'], 3)} | "
+                     f"{_plain(res['corr_between'], 3)} | {_plain(res['corr_within'], 3)} | "
+                     f"{res['n']:,} | {res['banks']} |")
+    md += ["Table: Covariance of the spread gap (pp) and the log share of time deposits "
+           "(quarter-demeaned), split into a between-bank part (persistent differences) and a "
+           "within-bank part (changes over time).", "",
+           "| Firms | Cov. | Between | Within | Share between | Corr. | Corr. between | Corr. within | Obs. | Banks |",
+           "| --------- | -------- | ------------ | --------- | ------------ | -------- | ------------ | ---------- | --------- | --------- |",
+           *rows3, ""]
+
+    # 4. Local nested variance (B firms) ------------------------------------------------------
+    _, cells = relprice_frames()
+    df = motiv_panel()
+    b = df[df["bank_type"] == "B"]
+    loc = pd.DataFrame({"bank": b["CodConglomeradoPrudencial"], "mkt": b["mca_code"].astype(str),
+                        "t": b["year"] * 4 + b["quarter"] - 1, "dep": b["dep_a4"]})
+    loc = loc[loc["dep"] > 0].copy()
+    loc["lshare"] = np.log(loc["dep"] / loc.groupby(["mkt", "t"])["dep"].transform("sum"))
+    loc["ldep"] = np.log(loc["dep"])
+    loc = loc.merge(cells[["bank", "mkt", "t", "lgap"]], on=["bank", "mkt", "t"], how="left")
+    loc["pair"] = loc["bank"].astype(str) + "|" + loc["mkt"]
+    rows4 = []
+    for col, label in (("lshare", "Log local share of B time deposits"),
+                       ("ldep", "Log local time deposits"), ("lgap", "Gap to local rivals, pp")):
+        d = loc[np.isfinite(loc[col])]
+        w = d["dep"]
+        r_m = _wr2(d[col], w, [d["mkt"]])
+        r_mb = _wr2(d[col], w, [d["mkt"], d["bank"]])
+        r_p = _wr2(d[col], w, [d["pair"]])
+        res = dict(market=r_m, bank=r_mb - r_m, bank_in_market=r_p - r_mb, rest=1.0 - r_p,
+                   n=int(len(d)), banks=int(d["bank"].nunique()), markets=int(d["mkt"].nunique()))
+        payload.setdefault("local", {})[col] = res
+        rows4.append(f"| {label} | {res['market']:.3f} | {res['bank']:.3f} | "
+                     f"{res['bank_in_market']:.3f} | {res['rest']:.3f} | {res['n']:,} |")
+    md += ["Table: Sources of variation in B firms' local positions (bank by market by quarter), "
+           "share of the balance-weighted variance, added in sequence.", "",
+           "| Variable | Market | Bank | Bank in that market | Rest (over time) | Obs. |",
+           "| ------------------------------------------ | ---------- | ---------- | ------------ | ------------ | ------------ |",
+           *rows4, ""]
+
+    _store("anova", payload)
+    _dump(ANOVA_MD, "\n".join(md))
+    print("\n".join(md))
+
+
+# --------------------------------------------------------------------------------------------
+# The motivation note's tables as LaTeX inputs
+# --------------------------------------------------------------------------------------------
+def _tn(v: float, d: int = 3) -> str:
+    """A number for a LaTeX table: negative values in math mode, so the minus is a true minus."""
+    s = _plain(v, d)
+    return f"${s.replace(MINUS, '-')}$" if s.startswith(MINUS) else s
+
+
+def _tci(lo: float, hi: float, d: int = 3) -> str:
+    return f"[{_tn(lo, d)}, {_tn(hi, d)}]"
+
+
+def _tstars(s: str) -> str:
+    return f"$^{{{s}}}$" if s else ""
+
+
+def _panel_row(text: str, ncol: int) -> str:
+    return r"\multicolumn{%d}{@{}l}{\textit{%s}} \\" % (ncol, text)
+
+
+def _tab_tex(name: str, comment: list, colspec: str, header: list, body: list) -> str:
+    head = [f"% {name}.tex -- GENERATED by make_slide_figures.py (--only motivtables). Do not edit.",
+            "% Needs booktabs. Table body only: \\input it inside your own table environment."]
+    head += [f"% {c}" for c in comment]
+    return "\n".join(head + [r"\begin{tabular}{%s}" % colspec, r"\toprule", *header, r"\midrule",
+                             *body, r"\bottomrule", r"\end{tabular}", ""])
+
+
+def motivation_tables(out: pathlib.Path):
+    """The motivation note's eleven tables (motivation_figures_review.md) as booktabs bodies,
+    tab_motiv_*.tex, built from the unrounded values of Rout/slide_motivation.json and of
+    DIAG_PHI_SEPARATION/diag_entry_concentration.csv. Nothing is re-estimated: run the charts
+    first (band, pricevol, relprice, anova, reprice, entrygap, entryrobust)."""
+    s = json.loads(MOTIV_JSON.read_text(encoding="utf-8"))
+    src = f"Values: {MOTIV_JSON.name}"
+    tabs = {}
+
+    # Dispersion of the B-firm time-deposit spread by year ------------------------------------
+    rows = [f"{y} & {_tn(v['mean'])} & {_tn(v['sd'])} & {_tn(v['p25'])} & {_tn(v['p75'])} & "
+            f"{_tn(v['p75'] - v['p25'])} \\\\" for y, v in s["band"]["by_year"].items()]
+    tabs["tab_motiv_spread_dispersion"] = (
+        [f"{src}, band.by_year; keys \\pn{{slide.motiv.band.*}}. Time-deposit spread across B",
+         "firms, pp a year, weighted as in Table A.4 (the mean is Table A.4's B line)."],
+        "@{}lrrrrr@{}",
+        [r"Year & Mean & Std.\ dev. & 25th pct. & 75th pct. & Interquartile range \\"], rows)
+
+    # Prices and balances over the tightening ------------------------------------------------
+    h = s["pricevol"]["hikes"]
+    ci = h["ci"]
+
+    def two(key, scale=1.0, interval=True):
+        out_ = f"{_tn(h[key][0] * scale)} & {_tn(h[key][1] * scale)} \\\\"
+        if interval and key in ci:
+            c = ci[key]
+            out_ += (f"\n & {_tci(c['start'][0] * scale, c['start'][1] * scale)} & "
+                     f"{_tci(c['end'][0] * scale, c['end'][1] * scale)} \\\\")
+        return out_
+    bp = 100.0     # pp to basis points
+    rows = [_panel_row("Panel A. Spreads", 3),
+            r"\quad Demand (equal to Selic), pp & " + two("spread_demand"),
+            r"\quad Savings, pp & " + two("spread_savings"),
+            r"\quad Time deposits, B firms, pp & " + two("spread_time_B"),
+            r"\quad Time deposits, D firms, pp & " + two("spread_time_D"),
+            r"\quad Prepaid accounts, B firms, bp & " + two("spread_prepaid_B", bp),
+            r"\quad Prepaid accounts, D firms, bp & " + two("spread_prepaid_D", bp),
+            r"\addlinespace",
+            _panel_row(r"Panel B. Share of total balances, \%", 3),
+            r"\quad Demand deposits & " + two("share_demand"),
+            r"\quad Savings deposits & " + two("share_savings"),
+            r"\quad Time deposits, B firms & " + two("share_time_B"),
+            r"\quad Time deposits, D firms & " + two("share_time_D"),
+            r"\quad Prepaid accounts & " + two("share_prepaid")]
+    tabs["tab_motiv_tightening"] = (
+        [f"{src}, pricevol.hikes; keys \\pn{{slide.motiv.hikes.*}}. Brackets: 95% intervals of the",
+         "balance-weighted bank means (conglomerate wild cluster bootstrap, Webb, 999 draws, bias-",
+         "corrected percentile). Prepaid spreads in basis points (pp x 100)."],
+        "@{}lrr@{}", [f" & {h['start']} & {h['end']} \\\\"], rows)
+
+    # Relative prices and share changes -------------------------------------------------------
+    sh = s["relprice"]["share"]
+
+    def slope_row(label, r):
+        return (f"\\quad {label} & {_tn(r['slope'])} & {_tci(r['lo'], r['hi'])} & {r['n']:,} & "
+                f"{r['banks']} \\\\")
+    rows = [_panel_row("Per bank: average gap, yearly change in share", 5),
+            slope_row("Gap in pp", sh["xs_pp"]), slope_row("Gap in CDI points", sh["xs_pcdi"]),
+            r"\addlinespace",
+            _panel_row("Bank-quarter: gap, change in share over 4 quarters", 5),
+            slope_row("Gap in pp", sh["panel_pp"]), slope_row("Gap in CDI points", sh["panel_pcdi"]),
+            r"\addlinespace",
+            _panel_row("Local: gap to rivals (pp), change in local share", 5),
+            slope_row("All variation", sh["local_raw"]),
+            slope_row("Within bank-quarter and market", sh["local_fe"])]
+    tabs["tab_motiv_relprice_share"] = (
+        [f"{src}, relprice.share; keys \\pn{{slide.motiv.relprice.share.*}}. Slopes in percent of",
+         "the share per unit of gap; 95% intervals from the conglomerate wild cluster bootstrap."],
+        "@{}lrcrr@{}", [r" & Slope & 95\% interval & Obs. & Banks \\"], rows)
+
+    # Analysis of variance: levels ------------------------------------------------------------
+    a = s["anova"]
+    labels = {"sp_pp": "Spread, pp", "pcdi": r"Rate, \% of CDI", "log_dep": "Log time deposits",
+              "log_share": "Log share of time deposits",
+              "growth": r"Quarterly growth of time deposits, \%"}
+    rows = []
+    for kind in ("B", "D"):
+        if rows:
+            rows.append(r"\addlinespace")
+        rows.append(_panel_row(f"{kind} firms", 6))
+        for col, lab in labels.items():
+            v = a["levels"][kind][col]
+            rows.append(f"\\quad {lab} & {v['a']:.3f} & {v['b']:.3f} & {v['rest']:.3f} & "
+                        f"{v['n']:,} & {v['banks']} \\\\")
+    tabs["tab_motiv_anova_levels"] = (
+        [f"{src}, anova.levels; keys \\pn{{slide.motiv.anova.levels.*}}. Shares of the",
+         "balance-weighted variance, order-free (Shapley) split between quarter and bank effects."],
+        "@{}lrrrrr@{}",
+        [r" & Common & Persistent & & & \\",
+         r"Variable & to all banks & by bank & Rest & Obs. & Banks \\"], rows)
+
+    # Co-movement by horizon ------------------------------------------------------------------
+    rows = []
+    for kind in ("B", "D"):
+        if rows:
+            rows.append(r"\addlinespace")
+        rows.append(_panel_row(f"{kind} firms", 6))
+        for k in COMOVE_H:
+            v = a["comove"][kind][f"h{k}"]
+            rows.append(f"\\quad {k} & {_tn(v['corr'])} & {_tn(v['slope'])}{_tstars(v['stars'])} & "
+                        f"{_tci(v['lo'], v['hi'])} & {v['n']:,} & {v['banks']} \\\\")
+    tabs["tab_motiv_anova_comove"] = (
+        [f"{src}, anova.comove; keys \\pn{{slide.motiv.anova.comove.*}}. Change in the spread gap",
+         "(pp) against the change in the log share (percent) over k quarters, net of quarter",
+         "effects; stars from the conglomerate wild cluster bootstrap (* 10%, ** 5%, *** 1%)."],
+        "@{}lrrcrr@{}",
+        [r"Horizon, quarters & Correlation & Slope & 95\% interval & Obs. & Banks \\"], rows)
+
+    # Covariance between and within banks -----------------------------------------------------
+    rows = []
+    for kind in ("B", "D"):
+        v = a["covdecomp"][kind]
+        rows.append(f"{kind} & {_tn(v['cov'])} & {_tn(v['between'])} & {_tn(v['within'])} & "
+                    f"{_tn(v['between'] / v['cov'])} & {_tn(v['corr'])} & {_tn(v['corr_between'])} & "
+                    f"{_tn(v['corr_within'])} & {v['n']:,} & {v['banks']} \\\\")
+    tabs["tab_motiv_anova_covdecomp"] = (
+        [f"{src}, anova.covdecomp; keys \\pn{{slide.motiv.anova.covdecomp.*}}. Spread gap (pp)",
+         "and quarter-demeaned log share of time deposits; between = bank means, within = deviations."],
+        "@{}lrrrrrrrrr@{}",
+        [r" & \multicolumn{3}{c}{Covariance} & Between & \multicolumn{3}{c}{Correlation} & & \\",
+         r"\cmidrule(lr){2-4}\cmidrule(lr){6-8}",
+         r"Firms & Total & Between & Within & share & Total & Between & Within & Obs. & Banks \\"],
+        rows)
+
+    # Local positions of B firms --------------------------------------------------------------
+    rows = []
+    for col, lab in (("lshare", "Log local share of B time deposits"),
+                     ("ldep", "Log local time deposits"), ("lgap", "Gap to local rivals, pp")):
+        v = a["local"][col]
+        rows.append(f"{lab} & {v['market']:.3f} & {v['bank']:.3f} & {v['bank_in_market']:.3f} & "
+                    f"{v['rest']:.3f} & {v['n']:,} \\\\")
+    tabs["tab_motiv_anova_local"] = (
+        [f"{src}, anova.local; keys \\pn{{slide.motiv.anova.local.*}}. Bank by market by quarter,",
+         "B firms; shares of the balance-weighted variance, added in sequence."],
+        "@{}lrrrrr@{}",
+        [r" & & & Bank in & Rest & \\",
+         r"Variable & Market & Bank & that market & (over time) & Obs. \\"], rows)
+
+    # Own repricing ---------------------------------------------------------------------------
+    rows = []
+    for kind, sec in (("B", "reprice"), ("D", "reprice_d")):
+        r = s[sec]
+        if rows:
+            rows.append(r"\addlinespace")
+        rows.append(_panel_row(f"{kind} firms", 5))
+        for key, lab in (("main", f"Next {r['growth_h']} quarters"),
+                         ("untrimmed", f"Next {r['growth_h']} quarters, untrimmed"),
+                         ("same_quarter", "The same quarter")):
+            v = r[key]
+            rows.append(f"\\quad {lab} & {_tn(v['slope'])} & {_tci(v['lo_bc'], v['hi_bc'])} & "
+                        f"{v['n']:,} & {v['banks']} \\\\")
+    tabs["tab_motiv_reprice"] = (
+        [f"{src}, reprice and reprice_d; keys \\pn{{slide.motiv.reprice.*}} and",
+         "\\pn{slide.motiv.reprice_d.*}. Percent of time deposits per pp of spread change; bank and",
+         "quarter effects; conglomerate wild cluster bootstrap. The same-quarter slope is",
+         "mechanically biased (the rate is expense over the lagged stock)."],
+        "@{}lrcrr@{}",
+        [r"Growth measured over & Slope & 95\% interval & Obs. & Banks \\"], rows)
+
+    # Entrants by price at entry --------------------------------------------------------------
+    e = s["entrygap"]
+    thr = e["threshold_pp"]
+    rows = []
+    for title, groups, boot in (("Normalized share path", e["groups"], e["bankboot"]["main"]),
+                                (r"Share of B deposits, \%", e["level_pct"], e["bankboot"]["level"])):
+        if rows:
+            rows.append(r"\addlinespace")
+        rows.append(_panel_row(title, 7))
+        for g, lab in (("more", f"Pays at least {thr:g} pp more"), ("rest", "The rest")):
+            m, b = groups[g]["median_at_h"], boot[g]
+            rows.append(f"\\quad {lab} & {_tn(m['4'])} & {_tn(m['8'])} & {_tn(m['12'])} & "
+                        f"{_tci(*b['ci_at_h']['12'])} & {b['n']} & {b['banks']} \\\\")
+    tabs["tab_motiv_entry_by_gap"] = (
+        [f"{src}, entrygap; keys \\pn{{slide.motiv.entrygap.*}}. Medians of the entrants' share",
+         "paths; the interval resamples banks (999 draws). Normalization (s_h - s_0)/(s_end - s_0)."],
+        "@{}lrrrcrr@{}",
+        [r" & \multicolumn{3}{c}{Median at quarter} & 95\% interval & & \\",
+         r"\cmidrule(lr){2-4}",
+         r" & 4 & 8 & 12 & at quarter 12 & Entries & Banks \\"], rows)
+
+    # Entry-implied sleeping share under the concentration checks ------------------------------
+    r = pd.read_csv(ENTRY_CONC_CSV)
+    labels = {("paper (all entries)", "events"): "All entries, entries resampled (paper)",
+              ("all entries", "banks"): "All entries, banks resampled",
+              ("without Santander", "events"): "Without Santander, entries resampled",
+              ("without Santander", "banks"): "Without Santander, banks resampled",
+              ("one vote per bank", "banks"): "One vote per bank, banks resampled",
+              ("Santander only", "events"): "Santander only, entries resampled"}
+    rows = [f"{labels[(x.spec, x.interval)]} & {_tn(x.phi)} & {_tci(x.lo, x.hi)} & {x.n_events} & "
+            f"{x.n_banks} \\\\" for x in r.itertuples()]
+    tabs["tab_motiv_phi_entry_robustness"] = (
+        [f"Values: {ENTRY_CONC_CSV.name} (diagnostics/diag_entry_concentration.py). Grid of the",
+         "sleeping share ends at 0.9985, so upper bounds printed 0.999 are censored there."],
+        "@{}lrcrr@{}", [r"Variant & Estimate & 95\% interval & Entries & Banks \\"], rows)
+
+    # Construction of the repricing samples ---------------------------------------------------
+    wb, wd = s["reprice"]["waterfall"], s["reprice_d"]["waterfall"]
+    assert len(wb) == len(wd) == 6, "the repricing waterfall changed: update the row labels"
+    y0, y1 = (str(x)[:4] for x in s["window"])
+    floor = s["reprice"]["type4_floor"] / 1e6
+    lo_p, hi_p = s["reprice"]["trim_pct"]
+    steps = (f"Holds time deposits, {y0}--{y1}", "Own measured rate",
+             "Own rate in the previous quarter too", f"Book of at least R\\$ {floor:,.0f} million",
+             f"Balance observed {s['reprice']['growth_h']} quarters later",
+             f"Inside the {lo_p:g}st--{hi_p:g}th percentiles")
+    rows = [f"{lab} & {b['rows']:,} & {b['banks']} & {d['rows']:,} & {d['banks']} \\\\"
+            for lab, b, d in zip(steps, wb, wd)]
+    tabs["tab_motiv_reprice_samples"] = (
+        [f"{src}, reprice.waterfall and reprice_d.waterfall. Each row applies one more filter;",
+         "observations are conglomerate-quarters."],
+        "@{}lrrrr@{}",
+        [r" & \multicolumn{2}{c}{B firms} & \multicolumn{2}{c}{D firms} \\",
+         r"\cmidrule(lr){2-3}\cmidrule(lr){4-5}",
+         r"Filter & Obs. & Banks & Obs. & Firms \\"], rows)
+
+    for name, (comment, colspec, header, body) in tabs.items():
+        _dump(out / f"{name}.tex", _tab_tex(name, comment, colspec, header, body))
 
 
 def main():
@@ -1497,6 +2457,14 @@ def main():
         dpremium_chart(args.out, args.png)
     if "entrygap" in todo:
         entry_gap_chart(args.out, args.png)
+    if "relprice" in todo:
+        relprice_charts(args.out, args.png)
+    if "entryrobust" in todo:
+        entry_robust_chart(args.out, args.png)
+    if "anova" in todo:
+        anova_tables(args.out, args.png)
+    if "motivtables" in todo:
+        motivation_tables(args.out)
 
 
 if __name__ == "__main__":

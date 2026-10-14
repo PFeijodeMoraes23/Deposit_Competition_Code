@@ -70,6 +70,29 @@ Things a re-run does not do by itself:
 - `scrape_ifdata_aggregate.py` leaves one timestamped backup of about 8 GB per rebuild. That is
   by design; mention it so the user can reclaim the space.
 - `make_margin_figures.py` reads the panel and is not a step of the runner. Run it after a rebuild.
+- Step 39, `panel_demand_chars.py`, writes `processed/demand_chars.parquet`: the corrections the
+  demand prep applies (2016Q1 lags from 2015Q4, nearest-filing fills, segment back-fill, the
+  re-timed borrowings ratio). The file records the md5 of the market panel it was built from, and
+  the demand prep refuses to run on any other panel. So after any change to the panel, step 39
+  must run again.
+
+## Due at the next full rebuild (decided 2026-10-13; each changes numbers downstream)
+
+- **The ESTBAN double read.** `panel_deposits.py` (L.624–626) lists the pre-2016 raw ESTBAN files
+  with `glob("*.CSV") + glob("*.csv")`, and Windows matches each file twice, so 2013–2015 balances
+  are doubled. `panel_demand_chars.py` currently halves the 2015Q4 balances to offset it. The two
+  must change TOGETHER: read each file once, remove the halving, and update check T1 of
+  `panel_demand_chars_checks.py`, which asserts the factor is exactly 2 in 2015-12.
+- **The k calibration** (`panel_cosif_calibrate.py`, the type-4 rate's de-bias factor).
+  `load_segment_map` now raises instead of silently putting every bank on the global profile. In
+  the project venv, `pd.read_csv(market_panel.csv, usecols=...)` raises
+  `IndexError('list index out of range')`, so fix that read first. Three more bugs, from
+  `checkpoints_20260928/estban_local_rate_20261013/K_AUDIT.md`:
+  - n_i counts 2026Q1, which has no CDI;
+  - 59 of 116 banks with 2025 leaf data get no own k;
+  - k is estimated with each bank's own repo/bills ratios but applied with the shrunk ones.
+
+  Fixing these moves the 2016–2024 type-4 rate, so treat the result as a new vintage.
 
 ## After: the audits
 
@@ -95,6 +118,8 @@ Run these before any estimation. Each exists because the failure it catches was 
 5. The sidecar: every writer of `market_panel.csv` refreshes `market_panel.parquet` and logs
    `panel cache refreshed`. The freshness gate compares the recorded source-CSV size as well as
    the dates, because OneDrive can move dates.
+6. `python panel_demand_chars_checks.py`, after step 39: 29 checks of the demand corrections file
+   against its sources. It exits non-zero if any fails.
 
 ## Known oddities that are not new defects
 
@@ -112,6 +137,8 @@ Run these before any estimation. Each exists because the failure it catches was 
 Name these in the report; re-estimating is the user's decision, not a step of the rebuild.
 
 - The demand parquets in `DEMAND_PREP`, until the sleepiness estimators and the demand prep run again.
+- `processed/demand_chars.parquet`, until step 39 runs again. The demand prep refuses a
+  corrections file built from another panel.
 - The state-centering means (`state_centering_means.json`, written only by
   `sleep_est_e2.py --write-centers`); `sleep_audit_state_centering.py --tier0` verifies them.
 - The policy function, which is fitted on the panel, and everything simulated from it.

@@ -407,6 +407,32 @@ def fmt_coef(val: float, se: float, G_star: float | None = None,
     return f"${coef_str}$", se_str
 
 
+# A stage without joint (θ₁, θ₂) standard errors: the engine's SE guard refused them (more
+# parameters than moments, or a singular moment Jacobian), their computation failed, or the
+# engine computes none. Its JSON says so in `se_status` and stores those SEs as null. The SE cell
+# then carries this marker, never a blank, and the note says what it means.
+NI_CELL = r"(\textit{n.i.})"
+NI_NOTE = (r"n.i.: no joint standard error at this stage (the GMM Jacobian has more parameters "
+           r"than moments or is singular, or the standard errors were not computed).")
+
+
+def joint_se_status(d: dict | None) -> str:
+    """'' when the stage has joint standard errors (`se_status` "ok", or no status recorded);
+    otherwise the recorded status."""
+    st = str((d or {}).get("se_status", "") or "")
+    return "" if st in ("", "ok") else st
+
+
+def fmt_cell(d: dict | None, val, se, G_star=None, pval=None, on_bound: bool = False) -> tuple[str, str]:
+    """`fmt_coef` for a stage with joint standard errors; for one without, the point estimate
+    (no stars) and NI_CELL in place of the standard error."""
+    if not joint_se_status(d):
+        return fmt_coef(val, se, G_star, pval, on_bound)
+    if val is None or (isinstance(val, float) and math.isnan(val)):
+        return "-", NI_CELL
+    return (rf"${fmt3(val)}^{{\dagger}}$" if on_bound else f"${fmt3(val)}$"), NI_CELL
+
+
 def se_note(data: dict | None) -> str:
     """SE-method sentence from the stage's `se_method` field. WCB (default) / sandwich name the
     method used on the cluster (BLP_SE_METHOD); 'none' means θ₂ SEs were not computed."""
@@ -441,10 +467,10 @@ def build_table(est_id: int, suffix: str = "") -> str:
     # singular D'WD) or whose SE block failed stores NaN SEs, written as 0 in the JSON, so its
     # column prints coefficients with no SE row. Say so on the console.
     for s in available:
-        st = str(stage_results[s].get("se_status", "") or "")
-        if st and st != "ok":
+        st = joint_se_status(stage_results[s])
+        if st:
             print(f"[E{est_id}] WARNING: stage {s} has no joint standard errors ({st}); "
-                  f"its column prints point estimates only.")
+                  f"its column prints point estimates with the n.i. marker.")
 
     ncols    = len(available)
     col_fmt  = equal_col_fmt(ncols, "4.8cm")   # equal-width columns fill the line (no bulging column)
@@ -459,6 +485,8 @@ def build_table(est_id: int, suffix: str = "") -> str:
     note_body  = demand_note(
         "rc_routine", se_method=(stage_results.get(available[-1]) or rep).get("se_method", "none"),
         skip=() if sigma_on_bound(stage_results[s] for s in available) else ("boundary",))
+    if any(joint_se_status(stage_results[s]) for s in available):
+        note_body += " " + NI_NOTE
 
     lines = [
         r"\begin{spacing}{1.0}",
@@ -522,7 +550,7 @@ def build_table(est_id: int, suffix: str = "") -> str:
                 v  = t1[i]    if i < len(t1)    else float("nan")
                 se = t1_se[i] if i < len(t1_se) else 0.0
                 pv = t1_pv[i] if i < len(t1_pv) else None
-                c, s_ = fmt_coef(v, se, G, pv)
+                c, s_ = fmt_cell(d, v, se, G, pv)
                 cvals.append(c); svals.append(s_)
             else:
                 cvals.append("-"); svals.append("")
@@ -548,7 +576,7 @@ def build_table(est_id: int, suffix: str = "") -> str:
                 v, se, pv = decoded[lbl]
                 ob = is_sigma and v is not None and not (isinstance(v, float) and math.isnan(v)) \
                     and abs(v) < SIGMA_BOUND_TOL
-                c, s_ = fmt_coef(v, se, G, pv, on_bound=ob)
+                c, s_ = fmt_cell(stage_results[s], v, se, G, pv, on_bound=ob)
                 cvals.append(c); svals.append(s_)
             else:
                 cvals.append("-"); svals.append("")

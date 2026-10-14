@@ -302,11 +302,17 @@ function run_blp_estimation_ift(estim::Int, spec_id::Int, args,
     # warm-start would live); out_dir is the output ROOT — checkpoints resolve through blp_dir,
     # the logit δ̂ through logit_dir, each family in the one directory its producer writes.
     in_dir, _, out_dir = get_paths(args["hpc"])
+    # ext1 reads rc4: `full` reproduces rc4 exactly and the grouped ladder never writes it. ext1 and
+    # extended are two-start stages (TWO_START_STAGES, blp_engine_cpu.jl): ext1 keeps the cold θ₂₀
+    # below as its first start and takes the rc4 checkpoint as its second; extended keeps this ext2
+    # warm start as its first and adds a cold one. Both run in the optimisation block.
     prev_stages   = Dict("rc2" => "sigma", "rc3" => "rc2", "rc4" => "rc3",
-                         "full" => "rc4", "ext1" => "full", "ext2" => "ext1",
+                         "full" => "rc4", "ext1" => "rc4", "ext2" => "ext1",
                          "extended" => "ext2")
     theta2_0 = nothing
-    if args["stage"] in keys(prev_stages)
+    two_start = haskey(TWO_START_STAGES, args["stage"])
+    if args["stage"] in keys(prev_stages) &&
+       !(two_start && TWO_START_STAGES[args["stage"]].first == :cold)
         prev_path = joinpath(blp_dir(out_dir),
             "blp_checkpoint_E$(estim)_spec_$(spec_id)_$(prev_stages[args["stage"]]).jls")
         if isfile(prev_path)
@@ -323,6 +329,10 @@ function run_blp_estimation_ift(estim::Int, spec_id::Int, args,
             end
         end
     end
+    # A stage that follows a two-start stage (ext2 after ext1) starts only from that stage's result:
+    # without its checkpoint the optimisation block refuses it (require_prev_checkpoint).
+    prev_missing = theta2_0 === nothing && haskey(prev_stages, args["stage"]) &&
+                   haskey(TWO_START_STAGES, prev_stages[args["stage"]])
     theta2_0 === nothing && (theta2_0 = randn(MersenneTwister(seed), n_params) .* 0.01)
 
     lo = fill(-2.0, n_params)
@@ -410,15 +420,40 @@ function run_blp_estimation_ift(estim::Int, spec_id::Int, args,
         copyto!(cache_t2, t2)
     end
 
-    result = optimize(
-        t2 -> (ift_compute!(t2); cache_Q[]),
-        (G, t2) -> (ift_compute!(t2); G .= cache_grad),
-        lo, hi, theta2_0, Fminbox(LBFGS()),
-        Optim.Options(iterations=500, f_reltol=args["tol_outer"], show_trace=false))
-
-    theta2_star = Optim.minimizer(result)
-    println("  Optimizer converged: $(Optim.converged(result))")
-    println("  Q(θ₂*) = $(round(Optim.minimum(result), sigdigits=6))")
+    # One bounded minimisation from θ₀; a two-start stage runs it once per start.
+    solve_from = (name, theta2_start) -> begin
+        fill!(cache_t2, NaN); outer_iter[] = 0     # a fresh one-point cache and log counter per start
+        optim_tuple(optimize(
+            t2 -> (ift_compute!(t2); cache_Q[]),
+            (G, t2) -> (ift_compute!(t2); G .= cache_grad),
+            lo, hi, theta2_start, Fminbox(LBFGS()),
+            Optim.Options(iterations=500, f_reltol=args["tol_outer"], show_trace=false)))
+    end
+    if two_start
+        starts, start_rec = two_start_list(args["stage"], prev_stages[args["stage"]], theta2_0,
+            joinpath(blp_dir(out_dir),
+                     "blp_checkpoint_E$(estim)_spec_$(spec_id)_$(prev_stages[args["stage"]]).jls"),
+            n_params, N_obs, lo, hi, seed)
+        theta2_star, Q_min, n_outer, conv_outer, start_rec =
+            solve_two_starts(solve_from, starts, start_rec, delta_work;
+                # Q is re-evaluated at each start's θ₂* (reeval_rule): the contraction, then the objective.
+                contract  = t -> (mu_at!(buf, prod_vec, nu_draws, t, sigma_indices, pi_interactions, R, coef_dim);
+                                  blp_contraction!(buf, delta_work, pc, R; tol = reeval_tol(args),
+                                                   max_iter = reeval_cap(args))[1]),
+                objective = t -> (fill!(cache_t2, NaN);
+                                  gmm_fg!(nothing, t, buf, prod_vec, nu_draws, sigma_indices, pi_interactions,
+                                          R, coef_dim, W, args["tol_inner"], args["max_inner"], delta_work, pc)),
+                reeval_note = reeval_rule(args))
+        results[two_start_key(args["stage"])] = start_rec
+    else
+        prev_missing && (results[two_start_key(args["stage"])] = require_prev_checkpoint(
+            args["stage"], prev_stages[args["stage"]],
+            joinpath(blp_dir(out_dir),
+                     "blp_checkpoint_E$(estim)_spec_$(spec_id)_$(prev_stages[args["stage"]]).jls")))
+        theta2_star, Q_min, n_outer, conv_outer, _ = solve_from("single", theta2_0)
+    end
+    println("  Optimizer converged: $(conv_outer)")
+    println("  Q(θ₂*) = $(round(Q_min, sigdigits=6))")
     println("  theta2* = $theta2_star")
 
     # ── Final contraction at optimum ──────────────────────────────────────
@@ -435,11 +470,13 @@ function run_blp_estimation_ift(estim::Int, spec_id::Int, args,
     results["theta1_se"]          = theta1_se
     results["theta2"]             = theta2_star
     results["theta2_se"]          = fill(NaN, length(theta2_star))   # CPU-IFT path: θ₂ SEs not computed (sentinel)
+    # No joint (θ₁, θ₂) SEs on this path: the tables must not read theta1_se as joint (json_se_values).
+    results["se_status"]          = "no joint SEs (CPU-IFT engine): theta1_se linear-IV, theta2_se not computed"
     results["delta"]              = delta_final
     results["xi"]                 = xi_star
-    results["Q_value"]            = Optim.minimum(result)
-    results["converged"]          = Optim.converged(result)
-    results["n_outer_iter"]       = Optim.iterations(result)
+    results["Q_value"]            = Q_min
+    results["converged"]          = conv_outer
+    results["n_outer_iter"]       = n_outer
     results["param_names_theta1"] = vcat(["alpha"], X1_COLS)
     results["sigma_indices"]      = sigma_indices
     results["pi_interactions"]    = pi_interactions
@@ -455,8 +492,11 @@ function run_blp_estimation_ift(estim::Int, spec_id::Int, args,
     chk_path = joinpath(_res_dir,
         "blp_checkpoint_E$(estim)_spec_$(spec_id)_$(args["stage"]).jls")
     try
-        serialize(chk_path, Dict("theta2_star" => theta2_star,
-                                  "delta_star"  => delta_final))
+        # A two-start stage's record travels with its checkpoint (the GPU IFT --se-only reads it back).
+        _ts_ck = Dict("theta2_star" => theta2_star, "delta_star" => delta_final)
+        _ts_k  = two_start_key(args["stage"])
+        haskey(results, _ts_k) && (_ts_ck = Dict{String,Any}(_ts_ck..., _ts_k => results[_ts_k]))
+        serialize(chk_path, _ts_ck)
         println("  [CHECKPOINT] Saved $(basename(chk_path))")
     catch e
         println("  [CHECKPOINT-WARN] $e")
@@ -525,6 +565,12 @@ function main()
             catch e
                 # A gap in the demand inputs stops the run: no later stage may start without it.
                 e isa DemandInputError && rethrow()
+                # So does a two-start stage that cannot run both of its starts, and any failure while a
+                # two-start stage (ext1, extended) runs: the stages after it must not start without it.
+                if e isa TwoStartError || haskey(TWO_START_STAGES, current_stage)
+                    println("  [!] Spec $sp failed in stage '$current_stage': $e. Stopping the job.")
+                    rethrow()
+                end
                 println("  [!] Spec $sp failed: $e"); nothing
             end
             res === nothing && continue
@@ -540,11 +586,11 @@ function main()
                     "spec_id"            => get(res, "spec_id", sp),
                     "stage"              => get(res, "stage",   current_stage),
                     "theta1"             => round.(get(res, "theta1",    Float64[]), sigdigits=8),
-                    "theta1_se"          => replace(round.(get(res, "theta1_se", Float64[]), sigdigits=8), NaN=>0.0),
+                    "theta1_se"          => json_se_values(get(res, "theta1_se", Float64[]), get(res, "se_status", ""), 0.0),
                     "theta2"             => round.(get(res, "theta2",    Float64[]), sigdigits=8),
-                    "theta2_se"          => replace(round.(get(res, "theta2_se", Float64[]), sigdigits=8), NaN=>0.0),
-                    "theta1_pval"        => replace(round.(get(res, "theta1_pval", Float64[]), sigdigits=6), NaN=>1.0),
-                    "theta2_pval"        => replace(round.(get(res, "theta2_pval", Float64[]), sigdigits=6), NaN=>1.0),
+                    "theta2_se"          => json_se_values(get(res, "theta2_se", Float64[]), get(res, "se_status", ""), 0.0),
+                    "theta1_pval"        => json_se_values(get(res, "theta1_pval", Float64[]), get(res, "se_status", ""), 1.0; sigdigits=6),
+                    "theta2_pval"        => json_se_values(get(res, "theta2_pval", Float64[]), get(res, "se_status", ""), 1.0; sigdigits=6),
                     "se_method"          => get(res, "se_method", "none"),
                     "Q_value"            => get(res, "Q_value",   0.0),
                     "converged"          => get(res, "converged", false),
@@ -555,10 +601,16 @@ function main()
                     "G_star"             => get(res, "G_star",            0.0),
                     "n_obs"              => get(res, "n_obs",             0),
                 )
-                # What the SEs are (blp_se_common.jl SE GUARD): written when the run recorded it.
+                # What the SEs are (blp_se_common.jl SE GUARD): "ok" = joint SEs; anything else =
+                # none, and the SE / p-value entries above are null. Written when the run recorded it.
                 haskey(res, "se_status") && (json_out["se_status"] = res["se_status"])
                 haskey(res, "theta1_se_linear_iv") && (json_out["theta1_se_linear_iv"] =
-                    replace(round.(res["theta1_se_linear_iv"], sigdigits=8), NaN=>0.0))
+                    json_se_values(res["theta1_se_linear_iv"], "no joint", nothing))
+                # A start record (two-start stages; ext2 when it starts cold under the override),
+                # non-finite values as null.
+                for _ts_k in start_record_keys(res)
+                    haskey(res, _ts_k) && (json_out[_ts_k] = json_finite(res[_ts_k]))
+                end
                 open(json_path, "w") do f; JSON3.write(f, json_out); end
             catch e
                 println("  [JSON-WARN] $e")
@@ -1625,8 +1677,9 @@ function run_blp_estimation_gpu(estim::Int, spec_id::Int, args,
     # in_dir = data/input on HPC (an uploaded logit_delta warm-start); out_dir = the output ROOT:
     # checkpoints resolve through blp_dir, the logit δ̂ through logit_dir.
     in_dir, _, out_dir = get_paths(args["hpc"])
+    # ext1 reads rc4: `full` reproduces rc4 exactly and the grouped ladder never writes it.
     prev_stages  = Dict("rc2" => "sigma", "rc3" => "rc2", "rc4" => "rc3",
-                        "full" => "rc4", "ext1" => "full", "ext2" => "ext1",
+                        "full" => "rc4", "ext1" => "rc4", "ext2" => "ext1",
                         "extended" => "ext2")
     theta2_0     = nothing
     # Explicit cross-engine seed: BLP_THETA2_INIT_FILE points at a checkpoint (e.g. the
@@ -1649,7 +1702,14 @@ function run_blp_estimation_gpu(estim::Int, spec_id::Int, args,
             println("  [WARM-START] BLP_THETA2_INIT_FILE set but MISSING: $_init")
         end
     end
-    if theta2_0 === nothing && args["stage"] in keys(prev_stages)
+    # ext1 and extended are two-start stages (TWO_START_STAGES, blp_engine_cpu.jl): ext1 keeps the
+    # cold θ₂₀ below as its first start and takes the rc4 checkpoint as its second; extended keeps
+    # this ext2 warm start as its first and adds a cold one. Both run in the optimisation block.
+    # An explicit BLP_THETA2_INIT_FILE seed, loaded above, replaces both starts.
+    init_seeded = theta2_0 !== nothing
+    two_start   = !init_seeded && haskey(TWO_START_STAGES, args["stage"])
+    if theta2_0 === nothing && args["stage"] in keys(prev_stages) &&
+       !(two_start && TWO_START_STAGES[args["stage"]].first == :cold)
         prev_path = joinpath(blp_dir(out_dir),
             "blp_checkpoint_E$(estim)_spec_$(spec_id)_$(prev_stages[args["stage"]])$(output_suffix()).jls")
         if isfile(prev_path)
@@ -1666,6 +1726,10 @@ function run_blp_estimation_gpu(estim::Int, spec_id::Int, args,
             end
         end
     end
+    # A stage that follows a two-start stage (ext2 after ext1) starts only from that stage's result:
+    # without its checkpoint the optimisation block refuses it (require_prev_checkpoint).
+    prev_missing = theta2_0 === nothing && haskey(prev_stages, args["stage"]) &&
+                   haskey(TWO_START_STAGES, prev_stages[args["stage"]])
     theta2_0 === nothing &&
         (theta2_0 = randn(MersenneTwister(seed), n_params) .* 0.01)
 
@@ -1865,9 +1929,37 @@ function run_blp_estimation_gpu(estim::Int, spec_id::Int, args,
         end
     end
 
-    theta2_star, Q_min, n_outer, conv_outer = solve_box_lbfgsb(
-        obj_fn, grad_fn!, theta2_0, lo, hi;
-        tol_outer = args["tol_outer"], maxiter = 500)
+    if two_start
+        starts, start_rec = two_start_list(args["stage"], prev_stages[args["stage"]], theta2_0,
+            joinpath(blp_dir(out_dir),
+                     "blp_checkpoint_E$(estim)_spec_$(spec_id)_$(prev_stages[args["stage"]])$(output_suffix()).jls"),
+            n_params, N_obs, lo, hi, seed)
+        theta2_star, Q_min, n_outer, conv_outer, start_rec = solve_two_starts(
+            (name, theta2_start) -> begin
+                fill!(fd_t2, NaN); outer_iter[] = 0     # a fresh one-point cache and log counter per start
+                solve_box_lbfgsb(obj_fn, grad_fn!, theta2_start, lo, hi;
+                                 tol_outer = args["tol_outer"], maxiter = 500)
+            end, starts, start_rec, delta_work;
+            # Q is re-evaluated at each start's θ₂* (reeval_rule): the contraction, then the objective.
+            contract  = t -> (mu_at!(buf, prod_vec, nu_draws, t, sigma_indices, pi_interactions, R, coef_dim);
+                              blp_contraction_gpu!(buf, gbuf, delta_work, pc, R; tol = reeval_tol(args),
+                                                   max_iter = reeval_cap(args))[1]),
+            objective = t -> (fill!(fd_t2, NaN); _raw_obj(t)),
+            reeval_note = reeval_rule(args))
+        results[two_start_key(args["stage"])] = start_rec
+    else
+        init_seeded && haskey(TWO_START_STAGES, args["stage"]) &&
+            (results[two_start_key(args["stage"])] = Dict{String,Any}(
+                "chosen" => "BLP_THETA2_INIT_FILE", "n_starts" => 1,
+                "init_file" => get(ENV, "BLP_THETA2_INIT_FILE", ""), "theta2_start" => copy(theta2_0)))
+        prev_missing && (results[two_start_key(args["stage"])] = require_prev_checkpoint(
+            args["stage"], prev_stages[args["stage"]],
+            joinpath(blp_dir(out_dir),
+                     "blp_checkpoint_E$(estim)_spec_$(spec_id)_$(prev_stages[args["stage"]])$(output_suffix()).jls")))
+        theta2_star, Q_min, n_outer, conv_outer = solve_box_lbfgsb(
+            obj_fn, grad_fn!, theta2_0, lo, hi;
+            tol_outer = args["tol_outer"], maxiter = 500)
+    end
 
     println("  Optimiser converged: $(conv_outer)")
     println("  Q(theta2*) = $(round(Q_min, sigdigits=6))")
@@ -1921,6 +2013,10 @@ function run_blp_estimation_gpu(estim::Int, spec_id::Int, args,
     results["theta1_se"]          = theta1_se
     results["theta2"]             = theta2_star
     results["theta2_se"]          = fill(NaN, length(theta2_star))
+    # No joint (θ₁, θ₂) SEs on this path (θ₁'s are the linear 2SLS or CUE ones at fixed θ₂).
+    results["se_status"]          = use_cue ?
+        "no joint SEs (CUE engine): theta1_se cue_linear_se at fixed theta2, theta2_se not computed" :
+        "no joint SEs (numerical engine): theta1_se linear-IV, theta2_se not computed"
     results["delta"]              = delta_final
     results["xi"]                 = xi_star
     results["Q_value"]            = Q_min
@@ -1940,8 +2036,11 @@ function run_blp_estimation_gpu(estim::Int, spec_id::Int, args,
     chk_path = joinpath(_res_dir,
         "blp_checkpoint_E$(estim)_spec_$(spec_id)_$(args["stage"])$(output_suffix()).jls")
     try
-        serialize(chk_path, Dict("theta2_star" => theta2_star,
-                                  "delta_star"  => delta_final))
+        # A two-start stage's record travels with its checkpoint (the GPU IFT --se-only reads it back).
+        _ts_ck = Dict("theta2_star" => theta2_star, "delta_star" => delta_final)
+        _ts_k  = two_start_key(args["stage"])
+        haskey(results, _ts_k) && (_ts_ck = Dict{String,Any}(_ts_ck..., _ts_k => results[_ts_k]))
+        serialize(chk_path, _ts_ck)
         println("  [CHECKPOINT] Saved $(basename(chk_path))")
     catch e
         println("  [CHECKPOINT-WARN] $e")
@@ -2044,6 +2143,12 @@ function main_gpu_numerical()
             catch e
                 # A gap in the demand inputs stops the run: no later stage may start without it.
                 e isa DemandInputError && rethrow()
+                # So does a two-start stage that cannot run both of its starts, and any failure while a
+                # two-start stage (ext1, extended) runs: the stages after it must not start without it.
+                if e isa TwoStartError || haskey(TWO_START_STAGES, current_stage)
+                    println("  [!] Spec $sp failed in stage '$current_stage': $e. Stopping the job.")
+                    rethrow()
+                end
                 println("  [!] Spec $sp failed: $e"); nothing
             end
             res === nothing && continue
@@ -2059,9 +2164,10 @@ function main_gpu_numerical()
                     "spec_id"            => get(res, "spec_id", sp),
                     "stage"              => get(res, "stage",   current_stage),
                     "theta1"             => round.(get(res, "theta1",    Float64[]), sigdigits=8),
-                    "theta1_se"          => round.(get(res, "theta1_se", Float64[]), sigdigits=8),
+                    "theta1_se"          => json_se_values(get(res, "theta1_se", Float64[]), get(res, "se_status", ""), 0.0),
                     "theta2"             => round.(get(res, "theta2",    Float64[]), sigdigits=8),
-                    "theta2_se"          => round.(get(res, "theta2_se", Float64[]), sigdigits=8),
+                    "theta2_se"          => json_se_values(get(res, "theta2_se", Float64[]), get(res, "se_status", ""), 0.0),
+                    "se_status"          => get(res, "se_status", ""),
                     "Q_value"            => get(res, "Q_value",   0.0),
                     "converged"          => get(res, "converged", false),
                     "param_names_theta1" => get(res, "param_names_theta1", String[]),
@@ -2076,6 +2182,11 @@ function main_gpu_numerical()
                           "cue_witer_itmax", "hansen_J", "hansen_J_df",
                           "cue_omega_eig_min", "cue_omega_eig_max", "Q_scale", "se_method_theta1")
                     haskey(res, k) && (json_out[k] = res[k])
+                end
+                # A start record (two-start stages; ext2 when it starts cold under the override),
+                # non-finite values as null.
+                for _ts_k in start_record_keys(res)
+                    haskey(res, _ts_k) && (json_out[_ts_k] = json_finite(res[_ts_k]))
                 end
                 open(json_path, "w") do f; JSON3.write(f, json_out); end
             catch e
@@ -2401,8 +2512,9 @@ function run_blp_estimation_ift_gpu(estim::Int, spec_id::Int, args,
     # in_dir = data/input on HPC (an uploaded logit_delta warm-start); out_dir = the output ROOT:
     # checkpoints resolve through blp_dir, the logit δ̂ through logit_dir.
     in_dir, _, out_dir = get_paths(args["hpc"])
+    # ext1 reads rc4: `full` reproduces rc4 exactly and the grouped ladder never writes it.
     prev_stages   = Dict("rc2" => "sigma", "rc3" => "rc2", "rc4" => "rc3",
-                         "full" => "rc4", "ext1" => "full", "ext2" => "ext1",
+                         "full" => "rc4", "ext1" => "rc4", "ext2" => "ext1",
                          "extended" => "ext2")
     theta2_0 = nothing
     # Explicit cross-engine seed: BLP_THETA2_INIT_FILE points at a checkpoint (e.g. the
@@ -2425,7 +2537,14 @@ function run_blp_estimation_ift_gpu(estim::Int, spec_id::Int, args,
             println("  [WARM-START] BLP_THETA2_INIT_FILE set but MISSING: $_init")
         end
     end
-    if theta2_0 === nothing && args["stage"] in keys(prev_stages)
+    # ext1 and extended are two-start stages (TWO_START_STAGES, blp_engine_cpu.jl): ext1 keeps the
+    # cold θ₂₀ below as its first start and takes the rc4 checkpoint as its second; extended keeps
+    # this ext2 warm start as its first and adds a cold one. Both run in the optimisation block.
+    # An explicit BLP_THETA2_INIT_FILE seed, loaded above, replaces both starts.
+    init_seeded = theta2_0 !== nothing
+    two_start   = !init_seeded && haskey(TWO_START_STAGES, args["stage"])
+    if theta2_0 === nothing && args["stage"] in keys(prev_stages) &&
+       !(two_start && TWO_START_STAGES[args["stage"]].first == :cold)
         prev_path = joinpath(blp_dir(out_dir),
             "blp_checkpoint_E$(estim)_spec_$(spec_id)_$(prev_stages[args["stage"]])$(output_suffix()).jls")
         if isfile(prev_path)
@@ -2442,6 +2561,10 @@ function run_blp_estimation_ift_gpu(estim::Int, spec_id::Int, args,
             end
         end
     end
+    # A stage that follows a two-start stage (ext2 after ext1) starts only from that stage's result:
+    # without its checkpoint the optimisation block refuses it (require_prev_checkpoint).
+    prev_missing = theta2_0 === nothing && haskey(prev_stages, args["stage"]) &&
+                   haskey(TWO_START_STAGES, prev_stages[args["stage"]])
     theta2_0 === nothing &&
         (theta2_0 = randn(MersenneTwister(seed), n_params) .* 0.01)
 
@@ -2611,9 +2734,41 @@ function run_blp_estimation_ift_gpu(estim::Int, spec_id::Int, args,
             println("  [SE-ONLY] no usable δ* — contracting from the existing warm start.")
         end
         println("  [SE-ONLY] θ₂* loaded from $(basename(chk)); outer optimisation SKIPPED.")
+        # A two-start stage's record travels in its checkpoint, so the rewritten result keeps it.
+        haskey(ck, two_start_key(args["stage"])) &&
+            (results[two_start_key(args["stage"])] = ck[two_start_key(args["stage"])])
         ift_compute_gpu!(theta2_star)      # one evaluation: converges δ + fills the GPU buffers
         Q_min = cache_Q[]; n_outer = 0; conv_outer = true
+    elseif two_start
+        starts, start_rec = two_start_list(args["stage"], prev_stages[args["stage"]], theta2_0,
+            joinpath(blp_dir(out_dir),
+                     "blp_checkpoint_E$(estim)_spec_$(spec_id)_$(prev_stages[args["stage"]])$(output_suffix()).jls"),
+            n_params, N_obs, lo, hi, seed)
+        theta2_star, Q_min, n_outer, conv_outer, start_rec = solve_two_starts(
+            (name, theta2_start) -> begin
+                fill!(cache_t2, NaN); outer_iter[] = 0     # a fresh one-point cache and log counter per start
+                solve_box_lbfgsb(f_obj, g_obj!, theta2_start, lo, hi;
+                                 tol_outer = args["tol_outer"], maxiter = 500)
+            end, starts, start_rec, delta_work;
+            # Q is re-evaluated at each start's θ₂* (reeval_rule): the contraction, then the objective.
+            contract  = t -> (mu_at!(buf, prod_vec, nu_draws, t, sigma_indices, pi_interactions, R, coef_dim);
+                              blp_contraction_gpu!(buf, gbuf, delta_work, pc, R; tol = reeval_tol(args),
+                                                   max_iter = reeval_cap(args))[1]),
+            objective = t -> (fill!(cache_t2, NaN);
+                              gmm_fg_gpu!(nothing, t, buf, gbuf, prod_vec, nu_draws, sigma_indices,
+                                          pi_interactions, R, coef_dim, W, args["tol_inner"],
+                                          args["max_inner"], delta_work, pc)),
+            reeval_note = reeval_rule(args))
+        results[two_start_key(args["stage"])] = start_rec
     else
+        init_seeded && haskey(TWO_START_STAGES, args["stage"]) &&
+            (results[two_start_key(args["stage"])] = Dict{String,Any}(
+                "chosen" => "BLP_THETA2_INIT_FILE", "n_starts" => 1,
+                "init_file" => get(ENV, "BLP_THETA2_INIT_FILE", ""), "theta2_start" => copy(theta2_0)))
+        prev_missing && (results[two_start_key(args["stage"])] = require_prev_checkpoint(
+            args["stage"], prev_stages[args["stage"]],
+            joinpath(blp_dir(out_dir),
+                     "blp_checkpoint_E$(estim)_spec_$(spec_id)_$(prev_stages[args["stage"]])$(output_suffix()).jls")))
         theta2_star, Q_min, n_outer, conv_outer = solve_box_lbfgsb(
             f_obj, g_obj!, theta2_0, lo, hi;
             tol_outer = args["tol_outer"], maxiter = 500)
@@ -2702,8 +2857,11 @@ function run_blp_estimation_ift_gpu(estim::Int, spec_id::Int, args,
     chk_path = joinpath(_res_dir,
         "blp_checkpoint_E$(estim)_spec_$(spec_id)_$(args["stage"])$(output_suffix()).jls")
     try
-        serialize(chk_path, Dict("theta2_star" => theta2_star,
-                                  "delta_star"  => delta_final))
+        # A two-start stage's record travels with its checkpoint (the GPU IFT --se-only reads it back).
+        _ts_ck = Dict("theta2_star" => theta2_star, "delta_star" => delta_final)
+        _ts_k  = two_start_key(args["stage"])
+        haskey(results, _ts_k) && (_ts_ck = Dict{String,Any}(_ts_ck..., _ts_k => results[_ts_k]))
+        serialize(chk_path, _ts_ck)
         println("  [CHECKPOINT] Saved $(basename(chk_path))")
     catch e
         println("  [CHECKPOINT-WARN] $e")
@@ -2787,6 +2945,12 @@ function main_gpu_ift()
             catch e
                 # A gap in the demand inputs stops the run: no later stage may start without it.
                 e isa DemandInputError && rethrow()
+                # So does a two-start stage that cannot run both of its starts, and any failure while a
+                # two-start stage (ext1, extended) runs: the stages after it must not start without it.
+                if e isa TwoStartError || haskey(TWO_START_STAGES, current_stage)
+                    println("  [!] Spec $sp failed in stage '$current_stage': $e. Stopping the job.")
+                    rethrow()
+                end
                 println("  [!] Spec $sp failed: $e"); nothing
             end
             res === nothing && continue
@@ -2802,11 +2966,11 @@ function main_gpu_ift()
                     "spec_id"            => get(res, "spec_id", sp),
                     "stage"              => get(res, "stage",   current_stage),
                     "theta1"             => round.(get(res, "theta1",    Float64[]), sigdigits=8),
-                    "theta1_se"          => replace(round.(get(res, "theta1_se", Float64[]), sigdigits=8), NaN=>0.0),
+                    "theta1_se"          => json_se_values(get(res, "theta1_se", Float64[]), get(res, "se_status", ""), 0.0),
                     "theta2"             => round.(get(res, "theta2",    Float64[]), sigdigits=8),
-                    "theta2_se"          => replace(round.(get(res, "theta2_se", Float64[]), sigdigits=8), NaN=>0.0),
-                    "theta1_pval"        => replace(round.(get(res, "theta1_pval", Float64[]), sigdigits=6), NaN=>1.0),
-                    "theta2_pval"        => replace(round.(get(res, "theta2_pval", Float64[]), sigdigits=6), NaN=>1.0),
+                    "theta2_se"          => json_se_values(get(res, "theta2_se", Float64[]), get(res, "se_status", ""), 0.0),
+                    "theta1_pval"        => json_se_values(get(res, "theta1_pval", Float64[]), get(res, "se_status", ""), 1.0; sigdigits=6),
+                    "theta2_pval"        => json_se_values(get(res, "theta2_pval", Float64[]), get(res, "se_status", ""), 1.0; sigdigits=6),
                     "se_method"          => get(res, "se_method", "none"),
                     "Q_value"            => get(res, "Q_value",   0.0),
                     "converged"          => get(res, "converged", false),
@@ -2817,10 +2981,16 @@ function main_gpu_ift()
                     "G_star"             => get(res, "G_star",            0.0),
                     "n_obs"              => get(res, "n_obs",             0),
                 )
-                # What the SEs are (blp_se_common.jl SE GUARD): written when the run recorded it.
+                # What the SEs are (blp_se_common.jl SE GUARD): "ok" = joint SEs; anything else =
+                # none, and the SE / p-value entries above are null. Written when the run recorded it.
                 haskey(res, "se_status") && (json_out["se_status"] = res["se_status"])
                 haskey(res, "theta1_se_linear_iv") && (json_out["theta1_se_linear_iv"] =
-                    replace(round.(res["theta1_se_linear_iv"], sigdigits=8), NaN=>0.0))
+                    json_se_values(res["theta1_se_linear_iv"], "no joint", nothing))
+                # A start record (two-start stages; ext2 when it starts cold under the override),
+                # non-finite values as null.
+                for _ts_k in start_record_keys(res)
+                    haskey(res, _ts_k) && (json_out[_ts_k] = json_finite(res[_ts_k]))
+                end
                 open(json_path, "w") do f; JSON3.write(f, json_out); end
             catch e
                 println("  [JSON-WARN] $e")

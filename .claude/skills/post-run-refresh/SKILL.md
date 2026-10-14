@@ -59,9 +59,6 @@ Things that have gone wrong here:
   beyond the two inert relics `blp__blp_summary_E{3,4}_sigma_gpu_ift.json`. Compare one flat
   result json with its zip member. An earlier version of the flattening kept the old file on every
   name collision, and the tables showed the previous run for ten days.
-- **The `dx` variant.** `python cluster_ingest_dx.py --zip <blp archive> --zip <bbl archive>`,
-  both archives of one run in the same call, under the names they were downloaded with. The
-  demand fit, its record and the cost parameters land together or not at all.
 - Source archives are only read or copied. Never move or delete one: some are the only copy.
 
 ### 3. Check the run before rendering it
@@ -81,7 +78,6 @@ Things that have gone wrong here:
 | Policy function | `bbl_polfunc.py --from-pkl`. It renders from the stored fit. Never re-fit to refresh a table |
 | BBL costs | `make_bbl_cost_tables.py --psi-tag <ms tag> --compare-single-curve --single-curve-tag <sc tag>`; then `make_bbl_cost_tables.py --from-psi --psi-tag <ms tag> --psi-zip <that run's archive in BBL_OUTPUT/cluster_raw>`; then `make_bbl_ratio_figure.py --tag <ms tag>` |
 | Counterfactuals | `make_cf1_franchise_table.py` |
-| `dx` variant | `make_dx_tables.py` (its tables stay in the variant's folder unless `--to-drafts`) |
 
 Read each generator's stdout. `make_bbl_cost_tables.py` lists under `ZERO_PRINTS` every nonzero
 value that prints as 0.000; pass that list on rather than rescaling.

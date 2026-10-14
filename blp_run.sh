@@ -28,9 +28,9 @@
 #
 #   --layout grouped (default)   HEAD(sigma+rc2+rc3+rc4+ext1) -> ext2 -> extended
 #   --layout all                 sigma -> rc2 -> rc3 -> rc4 -> full -> ext1 -> ext2 -> extended
-#   Both are afterok chains, so every stage warm-starts theta2 from the previous
-#   stage's on-disk checkpoint and a wall-kill is resumable by plain resubmission
-#   (the engine skips stages already on disk). ext1 warm-starts from rc4.
+#   Both are afterok chains; each stage reads theta2 from the previous stage's checkpoint, and a
+#   wall-kill is resumable by plain resubmission (the engine skips stages already on disk). ext1
+#   and extended run two starts and keep the lower Q (blp_engine_cpu.jl TWO_START_STAGES).
 #
 # Usage
 #   bash blp_run.sh --dry-run                 # print every sbatch line + the graph
@@ -171,11 +171,10 @@ SSET_GRID="${SSET_GRID:--1.5:0.125:1.5}"
 
 GENERIC="${CL_ROOT}/blp_stage_job.sh"
 STAGES_ALL=(sigma rc2 rc3 rc4 full ext1 ext2 extended)
-# `full` is in the 'all' ladder and NOT in 'grouped': blp_engine_cpu.jl:1334
-# documents it as reproducing rc4 exactly since sigma(ln assets) was dropped, and
-# ext1 warm-starts from rc4, not from full. Which of the two is right is a
-# computational-semantics call belonging to the .jl author, so both are preserved
-# exactly as they stand and 'grouped' (the default) simply avoids the cost.
+# `full` is in the 'all' ladder and NOT in 'grouped': blp_engine_cpu.jl documents it
+# as reproducing rc4 exactly since sigma(ln assets) was dropped, and every engine
+# reads ext1's warm start from rc4, not from full, so both layouts give ext1 the same
+# two starts and 'grouped' (the default) simply avoids the cost of the redundant rung.
 HEAD_STAGES="sigma+rc2+rc3+rc4+ext1"
 ALL_STAGES="sigma+rc2+rc3+rc4+ext1+ext2+extended"    # --se-only: one job, no chain
 WALL_HEAD="${WALL_HEAD:-2-00:00:00}"

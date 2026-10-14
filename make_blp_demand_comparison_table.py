@@ -73,6 +73,35 @@ STAGE_SPECS = {
 }
 
 
+class TableRefused(Exception):
+    """`build_table` will not print this table (the reason is the message). `main` then writes a
+    placeholder in its place, so the paper cannot input an earlier vintage, and exits non-zero."""
+
+
+def _tex_escape(text: str) -> str:
+    """Plain text for a LaTeX paragraph."""
+    for a, b in (("\\", r"\textbackslash{}"), ("&", r"\&"), ("%", r"\%"), ("$", r"\$"), ("#", r"\#"),
+                 ("_", r"\_"), ("{", r"\{"), ("}", r"\}"), ("~", r"\textasciitilde{}"),
+                 ("^", r"\textasciicircum{}"), (">", r"$>$"), ("<", r"$<$")):
+        text = text.replace(a, b)
+    return text
+
+
+def placeholder_tex(label: str, caption_tail: str, reason: str) -> str:
+    """A compilable stand-in for a refused table: the same label, a caption, and a framed
+    statement of why the table is not printed."""
+    return "\n".join([
+        r"\begin{table}[htbp]",
+        r"\centering",
+        rf"\caption{{BLP Demand Estimation{caption_tail} --- NOT AVAILABLE}}",
+        rf"\label{{{label}}}",
+        r"\fbox{\parbox{0.9\textwidth}{\textbf{Table not printed.} " + _tex_escape(reason)
+        + r" (make\_blp\_demand\_comparison\_table.py)}}",
+        r"\end{table}",
+        "",
+    ])
+
+
 def build_table(ests, suffix: str = "", show_segments: bool = True,
                 stage: str = "extended", file_lbl: str = "",
                 caption_tail: str = "") -> str:
@@ -95,8 +124,17 @@ def build_table(ests, suffix: str = "", show_segments: bool = True,
     # columns misdescribes at least one of them, so refuse instead.
     _methods = {e: (data[e] or {}).get("se_method", "none") for e in avail}
     if len(set(_methods.values())) > 1:
-        raise SystemExit(f"[demand-comparison] mixed se_method across routines {_methods} — "
-                         "stale checkpoint vintage; re-run/ingest the missing routine first.")
+        raise TableRefused(f"Mixed standard-error methods across routines at stage {stage}: "
+                           + ", ".join(f"E{e} {m}" for e, m in _methods.items())
+                           + " (results of different runs); re-run or ingest the missing routine.")
+    # The note states joint WCB standard errors for θ₁ and θ₂. A routine whose stage has none (its
+    # JSON's `se_status` is not "ok": refused by the engine's SE guard, failed, or not computed;
+    # those SEs are null there) would print coefficients without them under that note, so the
+    # table is refused instead.
+    _no_se = {e: rc.joint_se_status(data[e]) for e in avail if rc.joint_se_status(data[e])}
+    if _no_se:
+        raise TableRefused(f"Joint standard errors are not available at stage {stage} for "
+                           + "; ".join(f"E{e} (se_status: {st})" for e, st in _no_se.items()) + ".")
     lbl_suffix = "" if show_segments else "_noseg"
     # The note is the wording shared with the logit comparison (config/table_notes.toml, read by
     # blp_logit.jl too). The headline table (`rc_comparison`) leaves the omitted segment dummies to
@@ -246,6 +284,7 @@ def main():
     suffix = rc.ENGINE_SUFFIX[args.engine]
     ests   = [int(x) for x in args.routines.split(",") if x.strip()]
     want   = [s.strip() for s in args.stages.split(",") if s.strip()]
+    refused = []
 
     for key in want:
         spec = STAGE_SPECS.get(key)
@@ -258,16 +297,28 @@ def main():
         # comparison note). Pass show_segments=True to build_table if a referee ever wants the
         # with-segments layout back.
         for show_seg, seg_lbl in ((False, "_noseg"),):
-            tex = build_table(ests, suffix, show_segments=show_seg,
-                              stage=spec["stage"], file_lbl=spec["file_lbl"],
-                              caption_tail=spec["caption_tail"])
+            fname = f"blp_demand_comparison{spec['file_lbl']}{seg_lbl}_spec12{suffix}.tex"
+            try:
+                tex = build_table(ests, suffix, show_segments=show_seg,
+                                  stage=spec["stage"], file_lbl=spec["file_lbl"],
+                                  caption_tail=spec["caption_tail"])
+            except TableRefused as why:
+                # The earlier file must not survive a refusal: V_Main inputs it. A placeholder
+                # with the same label takes its place and says why.
+                refused.append(f"{fname}: {why}")
+                print(f"[demand-comparison] REFUSED [{key}]: {why}")
+                tex = placeholder_tex(f"tab:blp_demand_comparison{spec['file_lbl']}{seg_lbl}_spec12",
+                                      spec["caption_tail"], str(why))
             if not tex:
                 continue
-            fname = f"blp_demand_comparison{spec['file_lbl']}{seg_lbl}_spec12{suffix}.tex"
             for dest in (rc.DRAFTS_DIR,):
                 dest.mkdir(parents=True, exist_ok=True)
                 (dest / fname).write_text(tex, encoding="utf-8")
                 print(f"  saved [{key}]: {dest / fname}")
+    if refused:
+        # Non-zero exit: the placeholders keep V_Main compiling, but the tables were not produced.
+        raise SystemExit("[demand-comparison] placeholder written instead of the table for: "
+                         + " | ".join(refused))
     print("\nDone. \\input needs \\usepackage{longtable,booktabs,setspace}.")
 
 
