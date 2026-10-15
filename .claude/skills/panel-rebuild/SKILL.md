@@ -44,13 +44,17 @@ The rest of this file is for a task that is explicitly a rebuild.
 - `python panel_audit_firm_class.py --baseline <scratchpad>/firm_class_before.json`.
 - Record the panel's shape and a few totals: rows, firms, MCAs, columns, rows by `is_B`, and the
   sum of each deposit column. The CSV is about 760 MB; record numbers rather than copying it.
-- Say which upstream sources will be re-fetched. The scrapers re-download only the trailing year.
+- Say which upstream sources will be re-fetched. The scrapers of stages 0 to 2 re-download only
+  the trailing year; stage 6, when opted in, re-scrapes everything.
 
 ## Running
 
 `panel_pipeline.py --from N`, `--only N`, `--to N`, `--skip <step ids>`. Stages: 0 raw downloads,
 1 demographics, 2 market characteristics and COSIF, 3 deposits, rates, bank characteristics and
-the digital verdict, 4 the master panel, 5 descriptive tables, 6 disclosures.
+the digital verdict, 4 the master panel, 5 descriptive tables. Stage 6, the extensive-margin
+disclosures frozen in `extensive_margin/` (2026-10-14), runs only with `--extensive-margin` or
+`--only 6`; nothing in the paper reads it. The BCB tariff scrapers are frozen in `fees/` and are
+not a step; `panel_fee_merge.py` reads their last outputs.
 
 **Stage 4's order is load-bearing.** `panel_market.py` builds the panel; `panel_loo_instruments.py`
 overwrites it with the leave-one-out instruments and the FGC dummy, after cleaning the accounting
@@ -62,13 +66,19 @@ identified off the cost shifters alone. After any change to the base panel, run 
 
 Things a re-run does not do by itself:
 
-- `scrape_ibge_demographics.py`, `scrape_anatel_mobile.py`, `scrape_bcb_inclusion.py` and
-  `scrape_bcb_tarifas.py` return at the top of `main()` when their output exists, with no flag to
-  override. A fix to one of them appears to run and changes nothing until the old output is moved
-  aside. Ask before moving it. The demographics step also keeps an existing crosswalk, which
-  preserves the set of markets and is what you want.
-- `scrape_ifdata_aggregate.py` leaves one timestamped backup of about 8 GB per rebuild. That is
-  by design; mention it so the user can reclaim the space.
+- `scrape_ibge_demographics.py`, `scrape_anatel_mobile.py` and `scrape_bcb_inclusion.py` return
+  at the top of `main()` when their output exists. The pipeline never passes `--force`, so a fix
+  to one of them appears to run and changes nothing until that script is run by hand with
+  `--force`. Ask before forcing one. The demographics step keeps an existing crosswalk even with
+  `--force`, which preserves the set of markets and is what you want.
+- `scrape_ifdata_aggregate.py` builds only the type-1 reports 1-5 that `panel_bank_chars.py` and
+  `panel_deposits.py` read (`--all` builds every type x report) and leaves one timestamped backup
+  of the reports it overwrites, about 2 GB. Mention it so the user can reclaim the space.
+- `scrape_bcb_estban_ifdata.py` (step 1) and `scrape_cosif_download.py` (step 11) exit 1 when a
+  download fails, write nothing for it and list the failures, so the pipeline stops there. A BCB
+  outage therefore stops a rebuild at step 1; rerun later, or `--skip` the step to keep the cached
+  files. Step 1 fetches IF-Data types 1 and 3 only (`--if-types 1,2,3` adds type 2, which nothing
+  reads) and no per-branch ESTBAN files.
 - `make_margin_figures.py` reads the panel and is not a step of the runner. Run it after a rebuild.
 - Step 39, `panel_demand_chars.py`, writes `processed/demand_chars.parquet`: the corrections the
   demand prep applies (2016Q1 lags from 2015Q4, nearest-filing fills, segment back-fill, the
@@ -143,6 +153,9 @@ Name these in the report; re-estimating is the user's decision, not a step of th
   `sleep_est_e2.py --write-centers`); `sleep_audit_state_centering.py --tier0` verifies them.
 - The policy function, which is fitted on the panel, and everything simulated from it.
 - The copy of `market_panel.parquet` on the cluster.
+- `DEMAND_PREP/demographics_sigma.parquet` (step 21) is an upload: the RC-BLP draws on the cluster
+  are built from it, so when it changes, upload it and rebuild the draws (`blp_run.sh --draws`; a
+  bare run skips them because the old ones exist).
 - The descriptive tables, unless stage 5 ran, and the paper numbers built from them (the
   `post-run-refresh` skill).
 

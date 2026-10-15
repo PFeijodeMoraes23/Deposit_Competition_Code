@@ -57,10 +57,6 @@ if ensure_project_venv is not None:
 import pandas as pd
 import pdfplumber
 
-try:
-    from utils.toon_runtime import resolve_script_paths
-except Exception:
-    resolve_script_paths = None
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
@@ -76,18 +72,6 @@ ROSTER_ENTRY  = os.path.join(PIX_DIR, "pix_roster_entry.csv")
 TIMELINE_CSV  = os.path.join(PIX_DIR, "pix_participant_timeline.csv")
 KEYS_ENTRY    = os.path.join(PIX_DIR, "pix_participant_entry.csv")  # produced by 3b
 
-if resolve_script_paths is not None:
-    _paths = resolve_script_paths(
-        "scrape_23_pix_roster",
-        {"pix_dir": PIX_DIR, "cache_dir": CACHE_DIR, "history_csv": HISTORY_CSV,
-         "roster_entry": ROSTER_ENTRY, "timeline_csv": TIMELINE_CSV, "keys_entry": KEYS_ENTRY},
-        script_dir=os.path.dirname(os.path.abspath(__file__)),
-    )
-    PIX_DIR, CACHE_DIR   = _paths["pix_dir"], _paths["cache_dir"]
-    HISTORY_CSV          = _paths["history_csv"]
-    ROSTER_ENTRY         = _paths["roster_entry"]
-    TIMELINE_CSV         = _paths["timeline_csv"]
-    KEYS_ENTRY           = _paths["keys_entry"]
 
 CDX = "http://web.archive.org/cdx/search/cdx"
 WB_RAW = "http://web.archive.org/web/{ts}id_/{url}"

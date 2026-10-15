@@ -1,0 +1,11 @@
+#!/bin/bash
+# stub sbatch: records the call, dumps the caller's environment per job name, prints a job id.
+# STUB_FAIL_RE=<regex>: refuse (exit 1, no id) a submission whose arguments match it.
+d="${STUB_DIR:?}"
+if [[ -n "${STUB_FAIL_RE:-}" && " $* " =~ ${STUB_FAIL_RE} ]]; then echo "sbatch: error: (stub) refused: $*" >&2; exit 1; fi
+n=$(( $(cat "$d/n" 2>/dev/null || echo 0) + 1 )); echo "$n" > "$d/n"
+printf '%s\n' "$*" >> "$d/sbatch.log"
+name=""; prev=""
+for a in "$@"; do [[ "${prev}" == "-J" ]] && name="${a}"; prev="${a}"; done
+[[ -n "${name}" ]] && env | sort > "$d/sbatch_env_${name}.txt"
+echo $(( 7000000 + n ))

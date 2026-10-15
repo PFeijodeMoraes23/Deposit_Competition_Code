@@ -56,10 +56,6 @@ if ensure_project_venv is not None:
 import numpy as np
 import pandas as pd
 
-try:
-    from utils.toon_runtime import resolve_script_paths
-except Exception:
-    resolve_script_paths = None
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
@@ -67,6 +63,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 ## 1) PATHS & CONSTANTS
 ## ─────────────────────────────────────────────────────────────────────────────
 from utils import paths
+from utils import mca
 BASE         = str(paths.OPEN_FINANCE)
 INCL_DIR     = str(paths.INCLUSION_DIR)
 IBGE_DIR     = str(paths.IBGE_DIR)
@@ -82,23 +79,6 @@ PANEL_END_YEAR   = 2025
 # ESTBAN CSV — BCB "Estatística Bancária por Município" (already downloaded)
 ESTBAN_CSV = str(paths.ESTBAN_CSV)
 
-if resolve_script_paths is not None:
-    _paths = resolve_script_paths(
-        "scrape_bcb_inclusion",
-        {
-            "inclusion_dir": INCL_DIR,
-            "mca_csv": MCA_CSV,
-            "demo_csv": DEMO_CSV,
-            "estban_csv": ESTBAN_CSV,
-            "output_csv": OUTPUT_CSV,
-        },
-        script_dir=os.path.dirname(os.path.abspath(__file__)),
-    )
-    INCL_DIR = _paths["inclusion_dir"]
-    MCA_CSV = _paths["mca_csv"]
-    DEMO_CSV = _paths["demo_csv"]
-    ESTBAN_CSV = _paths["estban_csv"]
-    OUTPUT_CSV = _paths["output_csv"]
 
 # Quarter-end months → quarter number
 QUARTER_MONTHS = {3: 1, 6: 2, 9: 3, 12: 4}
@@ -158,9 +138,7 @@ def build_branch_panel() -> pd.DataFrame:
 ## ─────────────────────────────────────────────────────────────────────────────
 
 def load_mca_crosswalk() -> pd.DataFrame:
-    return pd.read_csv(MCA_CSV,
-                      usecols=["municipality_code", "mca_code", "year"],
-                      dtype={"municipality_code": int, "mca_code": str, "year": int})
+    return mca.load_mca_crosswalk(MCA_CSV)
 
 
 def aggregate_to_mca_year(incl: pd.DataFrame,
@@ -205,25 +183,18 @@ def aggregate_to_mca_year(incl: pd.DataFrame,
 
 
 def merge_population(panel: pd.DataFrame) -> pd.DataFrame:
-    if not os.path.exists(DEMO_CSV):
+    demo = mca.load_mca_population(DEMO_CSV)
+    if demo is None:
         logging.warning("Demographics panel not found; per-1000 rates will be NaN.")
         for col in ("branches_per1000", "correspondents_per1000", "access_points_per1000"):
             panel[col] = np.nan
         return panel
 
-    demo = pd.read_csv(DEMO_CSV,
-                       usecols=["mca_code", "year", "pop_total"],
-                       dtype={"mca_code": str, "year": int})
     panel = panel.merge(demo, on=["mca_code", "year"], how="left")
-
     for raw_col, rate_col in [("branches_total",       "branches_per1000"),
                                ("correspondents_total", "correspondents_per1000"),
                                ("access_points_total",  "access_points_per1000")]:
-        panel[rate_col] = np.where(
-            panel["pop_total"] > 0,
-            panel[raw_col] / (panel["pop_total"] / 1000),
-            np.nan,
-        )
+        panel[rate_col] = mca.per1000(panel[raw_col], panel["pop_total"])
     panel.drop(columns=["pop_total"], inplace=True)
     return panel
 
@@ -232,12 +203,12 @@ def merge_population(panel: pd.DataFrame) -> pd.DataFrame:
 ## 6) MAIN
 ## ─────────────────────────────────────────────────────────────────────────────
 
-def main():
-    # Early exit: if output already exists AND muni intermediate exists, skip
+def main(force: bool = False):
+    # Early exit: if output already exists AND muni intermediate exists, skip (--force rebuilds)
     muni_csv = os.path.join(INCL_DIR, "bcb_inclusion_muni_panel.csv")
-    if (os.path.exists(OUTPUT_CSV) and os.path.getsize(OUTPUT_CSV) > 0
+    if (not force and os.path.exists(OUTPUT_CSV) and os.path.getsize(OUTPUT_CSV) > 0
             and os.path.exists(muni_csv) and os.path.getsize(muni_csv) > 0):
-        print(f"Output already exists, skipping: {OUTPUT_CSV}")
+        print(f"Output already exists, skipping (pass --force to rebuild): {OUTPUT_CSV}")
         logging.info(f"Output already exists -- skipping rebuild: {OUTPUT_CSV}")
         return
 
@@ -278,4 +249,5 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    import sys
+    main(force="--force" in sys.argv[1:])

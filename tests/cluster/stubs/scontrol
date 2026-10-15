@@ -1,0 +1,5 @@
+#!/bin/bash
+# STUB_SCONTROL_FAIL=1 makes `scontrol release` fail (a sweep that stays HELD).
+echo "scontrol $*" >> "${STUB_DIR:?}/scontrol.log"
+if [[ "${1:-}" == "release" && "${STUB_SCONTROL_FAIL:-0}" == "1" ]]; then echo "scontrol: error: (stub) release refused" >&2; exit 1; fi
+exit 0

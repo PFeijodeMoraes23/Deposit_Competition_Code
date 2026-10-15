@@ -450,6 +450,59 @@ cl_gpu_gate () {
     exit 1
 }
 
+# cl_require_sysimage_gated TARGET [n]: cl_require_sysimage + cl_gpu_gate in ONE Julia launch.
+# The static provenance verdict first (no Julia), then a single `julia --sysimage <img>` that loads
+# CUDA, runs the trivial kernel on every visible device (at least n, as cl_gpu_gate) and prints
+# Sys.CPU_NAME, which is compared with the sidecar's cpu_target (the probe cl_require_sysimage runs
+# in a launch of its own). Same refusals, same messages, same ALLOW_SYSIMAGE_FALLBACK escape; on
+# success CL_JULIA_SYS=(--sysimage <img>). Only for a job that holds a GPU. Opt-in: no existing
+# caller uses it (stagec_suite_20261012.sh --gpu does); cl_require_sysimage and cl_gpu_gate are
+# unchanged.
+cl_require_sysimage_gated () {
+    local tgt="${1:-gpu}" need="${2:-$(_cl_visible_gpus)}" img side want got out rc t="${CL_GPU_GATE_TIMEOUT:-300}"
+    CL_JULIA_SYS=()
+    img="$(cl_sysimage_for "${tgt}")" || return 2
+    side="${img}.json"
+    if ! cl_sysimage_verdict "${tgt}"; then
+        _cl_sysimage_refuse "${tgt}" "static provenance check failed"; return $?
+    fi
+    echo "── sysimage load + CUDA gate in one launch (fatal, ${t}s budget, ${need} device(s)) ──"
+    out="$(CL_GPU_GATE_NEED="${need}" timeout "${t}" julia --project="${CL_ROOT}" --sysimage "${img}" -e '
+        using CUDA
+        CUDA.functional() || (println(stderr, "CUDA.functional() == false"); exit(3))
+        need = parse(Int, get(ENV, "CL_GPU_GATE_NEED", "1"))
+        devs = collect(CUDA.devices())
+        length(devs) >= need || (println(stderr, "only ", length(devs), " CUDA device(s) visible, the job needs ", need); exit(4))
+        for d in devs
+            CUDA.device!(d)
+            s = sum(CUDA.ones(Float32, 1024))
+            s == 1024f0 || (println(stderr, "device ", CUDA.deviceid(d), " failed a trivial kernel"); exit(5))
+            println("CUDA OK: device ", CUDA.deviceid(d), " ", CUDA.name(d), "  driver ", CUDA.driver_version())
+        end
+        println("CL_CPU_NAME=", Sys.CPU_NAME)' 2>&1)"; rc=$?
+    printf '%s\n' "${out}" | grep -v '^CL_CPU_NAME=' || true
+    got="$(sed -n 's/^CL_CPU_NAME=//p' <<< "${out}" | tail -1)"
+    if [[ ${rc} -eq 3 || ${rc} -eq 4 || ${rc} -eq 5 ]]; then
+        echo "" >&2
+        echo "REFUSING TO RUN: this job holds a GPU but CUDA is not functional." >&2
+        echo "  Almost always a sysimage/CPU-target mismatch:" >&2
+        echo "      $(cl_sysimage_build_cmd gpu)" >&2
+        echo "  ALLOW_SYSIMAGE_FALLBACK=1 continues on CPU anyway." >&2
+        [[ "${ALLOW_SYSIMAGE_FALLBACK:-0}" == "1" ]] && { echo "  (set — continuing on CPU)" >&2; return 0; }
+        exit 1
+    fi
+    if [[ ${rc} -ne 0 || -z "${got}" ]]; then
+        _cl_sysimage_refuse "${tgt}" "the image does not LOAD on $(hostname) (rc ${rc})"; return $?
+    fi
+    want="$(_cl_json_get "${side}" cpu_target 2>/dev/null || true)"
+    if [[ -n "${want}" && "${want}" != "${got}" ]]; then
+        _cl_sysimage_refuse "${tgt}" "built for cpu_target=${want}, this node is ${got}"; return $?
+    fi
+    CL_JULIA_SYS=(--sysimage "${img}")
+    echo "sysimage OK: $(basename "${img}")  (cpu_target=${got}; CUDA gate passed in the same launch)"
+    return 0
+}
+
 # ── 5. ROUTINE DEFAULTS — one site, replacing six that disagree ──────────────
 # The lineup is E1,E2,E3,E4 and all four go through EVERY phase — sleep, demand prep,
 # logit, RC-BLP, BBL, CF — which is why the three lists hold the same value. They stay

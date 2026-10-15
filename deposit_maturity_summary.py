@@ -6,11 +6,16 @@ within 90 and within 360 days, and the share beyond 360 days.
 - Buckets that straddle a cut-off are split linearly in days.
 - Only series whose buckets add up to the printed total within 0.5 percent are used.
 - When a year has several tables with a time-deposit line, the largest is kept (the all-client
-  table rather than a sub-portfolio), and `n_tables` records the ambiguity.
+  table rather than a sub-portfolio), and `n_tables` records the ambiguity. The CVM extraction
+  already selects one table per bank-year, so for it `n_tables` is always 1.
+- Banco do Brasil's "Sem vencimento" bucket is judicial deposits, not time deposits with daily
+  liquidity: the note's footnote keeps CDBs with a liquidity clause in their original-maturity
+  buckets, and the bucket's size matches the "Judiciais" line of the deposits note (user decision
+  of 2026-10-14). It leaves the total; its amount is kept in `excluded_judicial`.
 
 Reads  raw/DEPOSIT_MATURITY/deposit_maturity_sec.csv and deposit_maturity_cvm.csv.
 Writes raw/DEPOSIT_MATURITY/deposit_maturity_summary.csv, the input of the deposit-type notes'
-Section 4 and of switch_cost_r4_locked.py (the upper bound of the locked CDB share).
+Section 4 and of `switch_cost_tools.py locked` (the upper bound of the locked CDB share).
 
 usage: python deposit_maturity_summary.py [FOLDER] [--out FILE]
 """
@@ -26,6 +31,8 @@ import pandas as pd
 from utils import paths
 
 DEFAULT_DIR = paths.RAW / "DEPOSIT_MATURITY"
+# Banks whose no-maturity bucket is judicial deposits, dropped from the time-deposit total.
+JUDICIAL_NO_MATURITY = {"bb"}
 
 
 def load(folder: Path) -> tuple[pd.DataFrame, pd.DataFrame]:
@@ -38,16 +45,21 @@ def load(folder: Path) -> tuple[pd.DataFrame, pd.DataFrame]:
         num = pd.to_numeric(d["sum_check"], errors="coerce")
         for c in ("lo_days", "hi_days", "value"):
             d[c] = pd.to_numeric(d[c], errors="coerce")
-        # SEC stores the relative gap; CVM stores "ok"/"fail" against the same 0.5% rule.
+        # The relative gap between the buckets and the printed total (both sources); "ok" is
+        # also accepted.
         d["ok"] = (num <= 0.005) | (sc == "ok")
         d["table_id"] = d[[c for c in ("doc_url", "page", "table_title") if c in d.columns]].astype(str).agg("|".join, axis=1)
     return sec, cvm
 
 
-def shares(g: pd.DataFrame) -> pd.Series:
-    tot = g["value"].sum()
-    out = {"total": tot, "n_buckets": len(g)}
+def shares(g: pd.DataFrame, drop_no_maturity: bool = False) -> pd.Series:
     nomat_rows = (g["lo_days"].fillna(-1) == 0) & (g["hi_days"].fillna(-1) == 0)
+    excluded = 0.0
+    if drop_no_maturity:
+        excluded = float(g.loc[nomat_rows, "value"].sum())
+        g, nomat_rows = g[~nomat_rows], nomat_rows[~nomat_rows]
+    tot = g["value"].sum()
+    out = {"total": tot, "n_buckets": len(g), "excluded_judicial": excluded}
     nomat = g.loc[nomat_rows, "value"].sum()
     out["share_no_maturity"] = nomat / tot if tot else np.nan
     rest = g[~nomat_rows]
@@ -72,11 +84,11 @@ def summarise(sec: pd.DataFrame, cvm: pd.DataFrame) -> pd.DataFrame:
         for (f, y), gg in d.groupby(["firm_key", "fiscal_year"]):
             tables = gg.groupby("table_id")["value"].sum()
             g = gg[gg["table_id"] == tables.idxmax()]
-            s = shares(g)
+            s = shares(g, drop_no_maturity=f in JUDICIAL_NO_MATURITY)
             s["n_tables"] = len(tables)
             s["firm_key"], s["fiscal_year"], s["source"], s["unit"] = f, y, src, g["unit"].iloc[0]
             rows.append(s)
-    out = pd.DataFrame(rows)[["firm_key", "fiscal_year", "source", "unit", "total", "n_buckets", "n_tables",
+    out = pd.DataFrame(rows)[["firm_key", "fiscal_year", "source", "unit", "total", "excluded_judicial", "n_buckets", "n_tables",
                               "share_no_maturity", "share_le90", "share_le360", "share_gt360"]]
     return out.sort_values(["firm_key", "fiscal_year", "source"])
 

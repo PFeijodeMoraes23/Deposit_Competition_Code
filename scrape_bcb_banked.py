@@ -75,10 +75,6 @@ import urllib.request
 import numpy as np
 import pandas as pd
 
-try:
-    from utils.toon_runtime import resolve_script_paths
-except Exception:
-    resolve_script_paths = None
 
 logging.basicConfig(
     level=logging.INFO,
@@ -92,6 +88,7 @@ log = logging.getLogger(__name__)
 ###────────────────────────────────────────────────────────────────────────────
 
 from utils import paths
+from utils import mca
 BASE      = str(paths.OPEN_FINANCE)
 INCL_DIR  = str(paths.INCLUSION_DIR)
 IBGE_DIR  = str(paths.IBGE_DIR)
@@ -119,26 +116,6 @@ FINDEX_FALLBACK = {
     2021: 84.036,
     2024: 86.381,
 }
-
-if resolve_script_paths is not None:
-    _paths = resolve_script_paths(
-        "scrape_8_bcb_banked",
-        {
-            "incl_dir":  INCL_DIR,
-            "ibge_dir":  IBGE_DIR,
-            "estban_dir": ESTBAN_DIR,
-            "mca_csv":   MCA_CSV,
-            "demo_csv":  DEMO_CSV,
-            "output_csv": OUTPUT_CSV,
-        },
-        script_dir=os.path.dirname(os.path.abspath(__file__)),
-    )
-    INCL_DIR   = _paths["incl_dir"]
-    IBGE_DIR   = _paths["ibge_dir"]
-    ESTBAN_DIR = _paths["estban_dir"]
-    MCA_CSV    = _paths["mca_csv"]
-    DEMO_CSV   = _paths["demo_csv"]
-    OUTPUT_CSV = _paths["output_csv"]
 
 
 ###────────────────────────────────────────────────────────────────────────────
@@ -342,11 +319,7 @@ def build_estban_panel() -> pd.DataFrame:
 
 def load_mca_crosswalk() -> pd.DataFrame:
     """Load municipality → MCA crosswalk. Keeps only relevant columns."""
-    df = pd.read_csv(
-        MCA_CSV,
-        usecols=["municipality_code", "mca_code", "year"],
-        dtype={"municipality_code": int, "mca_code": str, "year": int},
-    )
+    df = mca.load_mca_crosswalk(MCA_CSV)
     log.info(f"Crosswalk: {len(df):,} municipality-year rows.")
     return df
 

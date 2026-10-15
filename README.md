@@ -65,7 +65,7 @@ python -m pip install -r requirements_venv_full.txt
 
 Julia dependencies are declared in [`Project.toml`](Project.toml) and [`Manifest.toml`](Manifest.toml). Instantiate the project as shown above before running Julia scripts.
 
-The scripts expect project data directories and may rely on machine-specific paths. Configure the data paths for your environment before running a pipeline; where applicable, `TOON_CONTEXT_PATH` points to a machine-specific TOON context file. Do not commit local credentials or private data. Email notifications in `sleep_pipeline.py` are optional and require `SYS_EMAIL_PWD` in the environment.
+The scripts expect project data directories and may rely on machine-specific paths. Every data path comes from `utils/paths.py`; set `OPEN_FINANCE_ROOT` to point the whole tree at another machine's data root. Do not commit local credentials or private data. Email notifications in `sleep_pipeline.py` are optional and require `SYS_EMAIL_PWD` in the environment.
 
 ## Key files
 
@@ -89,9 +89,9 @@ The repository also contains source-specific scrapers, panel transformations, di
 
 ## Software dependencies
 
-**Python** (see `requirements_venv_full.txt` and `requirements_toon.txt`):
+**Python** (see `requirements_venv_full.txt`):
 
-- Data collection: `requests`, `urllib3`, `aiohttp`, `beautifulsoup4`, `lxml`, `pdfplumber`, `PyMuPDF` (`fitz`), `rapidocr_onnxruntime`, `openpyxl`
+- Data collection: `requests`, `urllib3`, `beautifulsoup4`, `lxml`, `pdfplumber`, `PyMuPDF` (`fitz`), `rapidocr_onnxruntime`, `openpyxl`
 - Data handling: `pandas`, `numpy`, `pyarrow`, `polars`
 - Econometrics: `statsmodels`, `linearmodels`, `scipy`
 - Geographic data: `geobr`, `geopandas`

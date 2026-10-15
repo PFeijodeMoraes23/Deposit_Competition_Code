@@ -32,7 +32,8 @@
 #   Route c (bank investor-relations sites) is not implemented; source "ir_site"
 #   is reserved in the output schema.
 #   Each DFP covers the current and the prior year, so a fiscal year is seen in up
-#   to two filings (filing years Y and Y+1); the latest filing's values are kept
+#   to two filings (filing years Y and Y+1); among equally ranked tables the filing
+#   of fiscal year Y itself is kept over the comparative column of the Y+1 filing,
 #   and the discrepancy between the two is written to the QA file. DFP filings are
 #   read for filing years first_year .. last_year+1 for that reason.
 #
@@ -57,14 +58,18 @@
 #        negative, or below 10% of the same bank's total deposits (the total_deposits row
 #        of the same table, else the sum of the table's deposit rows, else a table of the
 #        same document and statement), is flagged ("FLAG ..." in notes, status FLAGGED and
-#        flagged=True in the log) and ranked below every unflagged candidate.
+#        flagged=True in the log) and ranked below every unflagged candidate. So is a table
+#        with fewer than three nonzero time-deposit buckets, or one below 1% of the firm's
+#        median level in the neighbouring years (under both the stated unit and the raw
+#        figures).
 #   Layouts handled: instruments as rows and buckets as columns, bucket columns wrapped
 #   over several header lines ("Sem" / "vencimento"), the total in the first column (BTG),
 #   unitless day ranges ("0-30", "31-180", "Acima de 365"), rows named only "A Prazo" /
 #   "À Vista" under a "Depósitos" heading (Banrisul, Itaú), and notes whose tables are
 #   dated only by a bare year above the header (Daycoval, "2017" over "Banco" or
-#   "Consolidado"). The statement of each table is read from the short row above it
-#   ("BB Consolidado", "BB Banco Múltiplo", "Banco", "Consolidado") before the page text.
+#   "Consolidado"). The statement of each table is read from its own header block or the
+#   short row above it ("BB Consolidado", "BB Banco Múltiplo", "Banco", "Consolidado") before
+#   the page text (order below).
 #   Unit cross-check: units not stated on the table's page are inherited from earlier
 #   pages and can be wrong; a firm-year whose stated unit lies more than 30x from the
 #   firm's median level over its R$-thousand years while R$ thousand lies within 30x is
@@ -74,13 +79,30 @@
 #   interest) rank below balance tables of the deposits note.
 #   Tables with maturity buckets as ROWS and instruments as columns (Banco BMG's
 #   "Vencimento de depósitos interfinanceiros e a prazo") are read by rowwise_tables(),
-#   which needs a header row of four or more bare years and a "prazo" column title.
+#   which needs a header row of four or more bare years and exactly one "prazo" column
+#   title in the title row; each year token takes the title whose x-span covers it.
 #   One table is kept per firm and fiscal year across ALL documents that report it:
-#   candidates with a time-deposit row, then unflagged, then statement priority
-#   consolidated > prudential > ifrs > individual, then a passing sum check, then the
-#   number of buckets, then the latest filing. Output column table_id (pdf | page |
-#   statement | as-of | header text) identifies the chosen table; the QA file compares only
-#   tables of the same statement across filings.
+#   candidates with a time-deposit row, then unflagged, then balance tables before
+#   undiscounted flows, then statement priority (STMT_ORDER: consolidated > prudential >
+#   ifrs > individual by default; individual first for ABC and BTG, whose consolidated
+#   statements lack buckets in some years or, from 2021, include Banco Pan; prudential
+#   first for BMG, whose "Conglomerado Financeiro" table is its group table), then a passing
+#   sum check, then the filing of the fiscal year itself over a later filing's comparative
+#   column, then the number of buckets. Output column table_id (pdf | page | statement |
+#   as-of | header text) identifies the chosen table; the QA file compares, after the unit
+#   correction, only balance tables of the same statement across filings.
+#   Several tables on one page (a "Banco" and a "Consolidado" block with identical headers)
+#   are kept apart by the vertical position of their header. A table's statement is read
+#   from its own header block (first cell "Banco" / "Consolidado", or a short heading row
+#   inside the block), then from the nearest heading above it on the page, then from the
+#   last heading on the previous page (stacked year blocks continuing on the next page),
+#   then from the page text. "Conglomerado Financeiro" / "Prudencial" headings are prudential.
+#   Bucket integrity: every value column left of the last bucket needs its own bucket header
+#   (a wrapped header such as "De 90 a 365" / "dias" is joined over its lines), otherwise the
+#   table fails; and a row with a printed total is kept only when its buckets add to that
+#   total within rounding (one unit per printed number, or 0.01% of the total if larger).
+#   A heading row naming both "Banco" and "Consolidado" gives the statement whose word sits
+#   nearest the bucket columns; a joint "Banco e Consolidado" heading is individual.
 #   Brazilian numbers: "1.234.567" thousands, "(1.234)" negative, "-"/"--" zero.
 #   Units are read from explicit statements ("em milhares", "R$ mil", "(Reais Mil)", "em
 #   milhões") on the page and carried forward through the document when a page does
@@ -111,6 +133,7 @@ import csv
 import io
 import json
 import logging
+import math
 import os
 import re
 import sys
@@ -162,8 +185,18 @@ FIRMS = {  # firm_key -> (CNPJ root, display)
     "daycoval": ("62232889", "Daycoval"),
 }
 MONTH_D, YEAR_D = 30, 360
-PARSER_VERSION = 16   # bump when page parsing changes; cached parses of other versions are redone
-STMT_RANK = {"consolidated": 0, "prudential": 1, "ifrs": 2, "individual": 3, "unknown": 4}
+PARSER_VERSION = 19   # bump when page parsing changes; cached parses of other versions are redone
+STMT_ORDER_DEFAULT = ("consolidated", "prudential", "ifrs", "individual", "unknown")
+STMT_ORDER = {   # firm-specific statement priority (user's decisions of 2026-10-14)
+    "abc": ("individual", "consolidated", "prudential", "ifrs", "unknown"),
+    "btg": ("individual", "consolidated", "prudential", "ifrs", "unknown"),
+    "bmg": ("prudential", "consolidated", "ifrs", "individual", "unknown"),
+}
+
+
+def stmt_rank(firm, stmt):
+    order = STMT_ORDER.get(firm, STMT_ORDER_DEFAULT)
+    return order.index(stmt) if stmt in order else len(order)
 
 _last_req = [0.0]
 _jar = http.cookiejar.CookieJar()
@@ -362,21 +395,29 @@ def split_label_values(r):
     return " ".join(label_parts).strip(), vals
 
 
-def segment_header(words):
-    """Reading-order header words -> list of (kind, lo, hi, text) phrases."""
-    phrases, cur = [], []
+def segment_header(words, with_x=False):
+    """Reading-order header words -> list of (kind, lo, hi, text) phrases. `words` are
+    strings, or word tuples (x0, y0, x1, y1, text) when with_x is True; then each phrase
+    also carries its x-centre as a fifth element."""
+    phrases, cur, cur_x = [], [], []
     closers = re.compile(r"^(dias?|mes|meses|ano|anos|vencimento|total|%|vista|geral)$")
     for w in words:
-        f = _fold(w)
-        if not (_VOCAB.match(w) or _VOCAB.match(f)):
-            cur = []
+        t = w[4] if with_x else w
+        f = _fold(t)
+        if not (_VOCAB.match(t) or _VOCAB.match(f)):
+            cur, cur_x = [], []
             continue
         cur.append(f)
+        if with_x:
+            cur_x.append((w[0], w[2]))
         if closers.match(f) or (f == "prazo" and len(cur) >= 2 and cur[-2] == "sem"):
             pb = parse_bucket(" ".join(cur))
             if pb:
-                phrases.append(pb + (" ".join(cur),))
-            cur = []
+                ph = pb + (" ".join(cur),)
+                if with_x:
+                    ph += ((cur_x[0][0] + cur_x[-1][1]) / 2,)
+                phrases.append(ph)
+            cur, cur_x = [], []
     return phrases
 
 
@@ -436,17 +477,33 @@ def header_columns(rows, ri, val_x):
     block, anchor, top = hi_["block"], hi_["anchor"], hi_["top"]
     ctx = " ".join(row_text(r) for r in rows[max(top - 8, 0):anchor + 1])
     # 1. reading order on the anchor row
-    seq = segment_header([w[4] for w in rows[anchor]])
+    seq = [p for p in segment_header(rows[anchor], with_x=True) if p[0] != "pct"]
     nb = sum(1 for p in seq if p[0] == "bucket")
-    n_seq = sum(1 for p in seq if p[0] != "pct")
+    n_seq = len(seq)
     if nb >= 2 and len(val_x) >= nb and len(val_x) - n_seq <= 2:
         # the phrases cover every value column but at most the total and a prior-year
-        # total; fewer phrases means a wrapped header word ("Sem" / "vencimento") was lost
-        cols = [p for p in seq if p[0] != "pct"]
-        cols = cols[:len(val_x)]
-        while len(cols) < len(val_x):
-            cols.append(("total", None, None, "inferred total") if len(cols) == nb else None)
-        return cols, ctx
+        # total. Each phrase goes to the value column nearest its centre; when that
+        # assignment is one-to-one and in order, a value column left of the last bucket
+        # without a phrase means a wrapped bucket header ("De 90 a 365" / "dias") whose
+        # first line is not on the anchor row: the wrapped-header pass below reads it.
+        near = [min(range(len(val_x)), key=lambda q: abs(val_x[q] - p[4])) for p in seq]
+        positional = all(b > a for a, b in zip(near, near[1:]))
+        last_b = max(i for i, p in enumerate(seq) if p[0] == "bucket")
+        if positional:
+            cols = [None] * len(val_x)
+            for p, j in zip(seq, near):
+                cols[j] = p[:4]
+            hole = any(c is None for c in cols[:near[last_b]])
+            if not hole:
+                j = near[last_b] + 1
+                if j < len(cols) and cols[j] is None:
+                    cols[j] = ("total", None, None, "inferred total")
+                return cols, ctx
+        else:
+            cols = [p[:4] for p in seq][:len(val_x)]
+            while len(cols) < len(val_x):
+                cols.append(("total", None, None, "inferred total") if len(cols) == nb else None)
+            return cols, ctx
     # 2. horizontal assignment for headers wrapped over several rows
     cols = [[] for _ in val_x]
     for r in block:
@@ -556,19 +613,32 @@ def year_tokens(rows, lo, hi):
     return out
 
 
-def stmt_above(rows, lo, hi):
+def stmt_above(rows, lo, hi, bx=None):
     """Statement named by a short row just above a table ("BB Consolidado", "Banco",
-    "BB Banco Múltiplo", "Conglomerado Financeiro"); None when there is none."""
+    "BB Banco Múltiplo", "Conglomerado Financeiro"); None when there is none. A heading row
+    naming both statements over different columns (ABC: "Banco" over the buckets and the
+    Banco totals, "Consolidado" over two more total columns) gives the statement whose word
+    lies nearest `bx`, the x-centre of the table's bucket columns."""
     found = None
     for rr in rows[max(lo, 0):hi]:
+        if bx is not None:
+            wb = [w for w in rr if _fold(w[4]) == "banco"]
+            wc = [w for w in rr if _fold(w[4]).startswith("consolidad")]
+            if wb and wc and len(rr) <= 8:
+                d = lambda w: abs((w[0] + w[2]) / 2 - bx)   # noqa: E731
+                joint = any(0 <= c[0] - b_[2] < 25 for b_ in wb for c in wc)   # "Banco e Consolidado"
+                found = ("individual" if joint or min(map(d, wb)) < min(map(d, wc)) else "consolidated")
+                continue
         t = re.sub(r"\d{1,2}[./]\d{1,2}[./]\d{4}|\b20[12]\d\b", " ", _fold(row_text(rr)))   # dates, bare years
         t = re.sub(r"\s+", " ", t).strip(" :-")
         toks = t.split()
         if len(toks) > 14:
             continue
-        if "prudencial" in t:
+        if "prudencial" in t or "conglomerado financeiro" in t:
             found = "prudential"
-        elif "consolidad" in t or "conglomerado financeiro" in t:
+        elif re.search(r"banco e consolidado", t):
+            found = "individual"     # one table for both (ABC): the Banco statement
+        elif "consolidad" in t:
             found = "consolidated"
         elif re.fullmatch(r"(bb )?banco( multiplo)?|controladora|individual|banco [a-z ]+", t) or (
                 toks and toks[0] == "banco" and len(toks) <= 4
@@ -578,7 +648,48 @@ def stmt_above(rows, lo, hi):
     return found
 
 
+_OWN_STMT = (("conglomerado prudencial", "prudential"), ("conglomerado financeiro", "prudential"),
+             ("prudencial", "prudential"), ("consolidado", "consolidated"), ("controladora", "individual"),
+             ("individual", "individual"), ("banco", "individual"), ("bb banco", "individual"))
+
+
+def stmt_own(rows, top, ri, bx=None):
+    """Statement named inside a table's own header block (rows top .. ri-1 that are not data
+    rows): the first cell of a header row ("Banco  Até 30 dias ...", "Consolidado
+    31/12/2019" on a header line below the anchor, Pan), i.e. the words before the first
+    maturity word, date or number, or a short heading row inside the block. The row nearest
+    the data row wins; None otherwise."""
+    found = None
+    for rr in rows[max(top, 0):ri]:
+        if is_data_row(rr):
+            continue
+        lead = []
+        for w in rr:
+            if _VOCAB.match(w[4]) or _VOCAB.match(_fold(w[4])) or re.search(r"\d", w[4]):
+                break
+            lead.append(w[4])
+        f = re.sub(r"\s+", " ", _fold(" ".join(lead))).strip(" :-")
+        hit = None
+        for key, st in _OWN_STMT:
+            if f == key or f.startswith(key + " ") and len(f.split()) <= 3:
+                hit = st
+                break
+        if hit is None:
+            hit = stmt_above([rr], 0, 1, bx) if len(rr) <= 4 else None
+        if hit:
+            found = hit
+    return found
+
+
 _SEC_ROW = re.compile(r"^(a prazo|prazo|a vista|vista|poupanca|de poupanca|interfinanceiros?|outros depositos)$")
+
+
+def foots(s, total, n):
+    """True when a bucket sum `s` equals the printed `total` within rounding: one unit per
+    printed number (n buckets and the total), or 0.01% of the total when that is larger
+    (BB 2022 prints buckets that add to 10 thousand more than its 431.6 billion total). A
+    lost bucket is far larger (BTG 2022: 49,004 of 88.6 million, 0.055%)."""
+    return abs(s - total) <= max(n + 1, 1e-4 * abs(total))
 
 
 def rowwise_tables(rows, stmt, unit, method, undisc):
@@ -592,17 +703,41 @@ def rowwise_tables(rows, stmt, unit, method, undisc):
         ys = [w for w in yr if _BARE_YEAR.match(w[4])]
         if len(ys) < 4 or len(ys) != len(yr):
             continue
-        above = [w for rr in rows[max(yi - 4, 0):yi] for w in rr]
-        if not any("prazo" in _fold(w[4]) for w in above) or not any(_fold(w[4]).startswith("deposito") for w in above):
+        # the title row: the nearest short row above the years that names time deposits, its
+        # "Depósitos" possibly wrapped onto the line above (prose above it, such as "...
+        # depósitos a prazo e interfinanceiros:", is not read)
+        trow = None
+        for k in range(yi - 1, max(yi - 4, -1), -1):
+            fk_ = _fold(row_text(rows[k]))
+            up = _fold(row_text(rows[k - 1])) if k >= 1 and len(rows[k - 1]) <= 6 else ""
+            if len(rows[k]) <= 12 and "prazo" in fk_ and ("deposito" in fk_ or "deposito" in up):
+                trow = rows[k]
+                break
+        if trow is None:
             continue   # the header must name time deposits, not (say) a loan-portfolio maturity table
+        # title phrases: words of the title row split at wide gaps ("Depósitos a prazo(i)")
+        phrases, cur = [], []
+        for w in trow + [None]:
+            if cur and (w is None or w[0] - cur[-1][2] > 12):
+                ft = re.sub(r"\(.*?\)", "", _fold(" ".join(q[4] for q in cur)))   # footnote "prazo(i)"
+                kind = ("prazo" if "prazo" in ft else "interfinanceiros" if "interfinanc" in ft
+                        else "total" if "total" in ft else "vista" if "vista" in ft else "?")
+                phrases.append((cur[0][0], cur[-1][2], kind))
+                cur = []
+            if w is not None:
+                cur.append(w)
+        if sum(1 for p in phrases if p[2] == "prazo") != 1:
+            continue   # exactly one time-deposit title over one year pair
         cols = []
         for w in ys:
             xc = (w[0] + w[2]) / 2
-            # a footnote marker may be glued to the title ("prazo(i)")
-            near = [(abs((a_[0] + a_[2]) / 2 - xc), re.sub(r"\(.*?\)", "", _fold(a_[4]))) for a_ in above
-                    if re.sub(r"\(.*?\)", "", _fold(a_[4])) in ("interfinanceiros", "prazo", "total", "vista")]
-            title = min(near)[1] if near else "?"
-            cols.append((xc, title, w[4]))
+            # the title whose x-span covers the year token; else the nearest span edge
+            # (a right-aligned "Total" title spans only the last of its two year columns)
+            cover = [p for p in phrases if p[0] - 4 <= xc <= p[1] + 4]
+            p = cover[0] if cover else min(phrases, key=lambda p: min(abs(xc - p[0]), abs(xc - p[1])))
+            cols.append((xc, p[2], w[4]))
+        if sum(1 for c in cols if c[1] == "prazo") != 2:
+            continue
         data = []
         for rr in rows[yi + 1:yi + 16]:
             xmin = min(c[0] for c in cols) - 35
@@ -627,7 +762,10 @@ def rowwise_tables(rows, stmt, unit, method, undisc):
             if title != "prazo":
                 continue
             bks = [dict(label=d[4], lo=d[1], hi=d[2], value=at(d[3], xc)) for d in data[:-1]]
-            out.append(dict(row_y=rows[yi][0][1], label="Depósitos a prazo (maturity rows)", asof=f"{yr_s}-12-31",
+            if not foots(sum(b["value"] for b in bks), at(data[-1][3], xc), len(bks)):
+                continue
+            out.append(dict(row_y=rows[yi][0][1], hdr_y=rows[yi][0][1],
+                            label="Depósitos a prazo (maturity rows)", asof=f"{yr_s}-12-31",
                             stmt=stmt_t, unit=unit, buckets=bks, total=at(data[-1][3], xc),
                             ctx=" ".join(row_text(r_) for r_ in rows[max(yi - 6, 0):yi + 1])[-160:],
                             method=method, undisc=undisc))
@@ -691,9 +829,26 @@ def parse_page(page, words, page_text, ctx_state, method):
                     if _DATE.match(w[4]) and asof_from(w[4]):
                         date_toks.append(((w[0] + w[2]) / 2, asof_from(w[4])))
         yr_toks = year_tokens(rows, top - 3, anc + 1) if hi_ else []
-        # the statement heading ("Banco" / "Consolidado") sits above the FIRST table of a note
-        # that stacks several year blocks under it; the nearest heading above wins
-        stmt_t = stmt_above(rows, top - 4, ri) or stmt_above(rows, top - 60, top - 4) or stmt
+        # statement: the table's own header block ("Banco  Até 30 dias", a "Consolidado" row
+        # inside the block), then the nearest heading above it on the page (a heading sits above
+        # the FIRST of several stacked year blocks), then the last heading of the previous page
+        # (stacked blocks continuing on the next page), then the page text
+        bxs = [xc for h, (xc, _) in zip(hdr, vals_h) if h and h[0] == "bucket"]
+        bx = sum(bxs) / len(bxs) if bxs else None
+        stmt_t = (stmt_own(rows, top, ri, bx) or stmt_above(rows, top - 4, top, bx)
+                  or stmt_above(rows, top - 60, top - 4, bx))
+        if stmt_t:
+            ctx_state["heading"] = (stmt_t, ctx_state.get("page"))
+        else:
+            hd = ctx_state.get("heading")
+            carry = hd and hd[1] is not None and ctx_state.get("page") is not None \
+                and ctx_state["page"] - hd[1] in (0, 1)
+            stmt_t = hd[0] if carry else stmt
+        # a total column standing alone after the bucket group is a prior-year total, not a
+        # second year block
+        n_bgroups = sum(1 for g in groups if sum(1 for h, _, _ in g if h[0] == "bucket") >= 2)
+        if n_bgroups == 1:
+            groups = [g for g in groups if sum(1 for h, _, _ in g if h[0] == "bucket") >= 2]
         for gi, g in enumerate(groups):
             buckets = [(h, v) for h, _, v in g if h[0] == "bucket"]
             if len(buckets) < 2:
@@ -720,7 +875,11 @@ def parse_page(page, words, page_text, ctx_state, method):
                         break
                 if not asof and yr_toks:
                     asof = max(t[1] for t in yr_toks)
-            tables.append(dict(row_y=rows[ri][0][1], label=label, asof=asof, stmt=stmt_t, unit=unit,
+            tot_v = total[0] if total else None
+            if tot_v is not None and not foots(sum(v for _, v in buckets), tot_v, len(buckets)):
+                continue   # buckets do not add to the printed total: a lost or shifted column
+            tables.append(dict(row_y=rows[ri][0][1], hdr_y=rows[anc][0][1], label=label, asof=asof,
+                               stmt=stmt_t, unit=unit,
                                buckets=[dict(label=h[3], lo=h[1], hi=h[2], value=v) for h, v in buckets],
                                total=total[0] if total else None, ctx=ctx[-160:], method=method,
                                undisc=undisc))
@@ -754,10 +913,11 @@ def parse_pdf(path):
     n = len(doc)
     sample = [len(doc[i].get_text()) for i in range(0, n, max(n // 25, 1))]
     scanned = sum(1 for c in sample if c < 80) > 0.6 * len(sample)
-    state = {"stmt": "unknown", "unit": None}
+    state = {"stmt": "unknown", "unit": None, "heading": None, "page": None}
     out = []
     for i in range(n):
         page = doc[i]
+        state["page"] = i
         if scanned:
             if i >= 400:
                 break
@@ -789,10 +949,13 @@ def parse_pdf(path):
 
 # ── table selection, validation ─────────────────────────────────────────────
 def group_tables(tables):
-    """Collapse per-row detections into tables: same page, asof, bucket labels."""
+    """Collapse per-row detections into tables: same page, header position, asof, bucket
+    labels and statement. The header's vertical position keeps apart two blocks with
+    identical headers on one page (a "Banco" and a "Consolidado" table)."""
     groups = {}
     for t in tables:
-        sig = (t["page"], t["asof"], tuple((b["label"]) for b in t["buckets"]), t["stmt"])
+        sig = (t["page"], round(t.get("hdr_y", 0.0), 1), t["asof"], tuple((b["label"]) for b in t["buckets"]),
+               t["stmt"])
         g = groups.setdefault(sig, dict(page=t["page"], asof=t["asof"], stmt=t["stmt"], unit=t["unit"],
                                         method=t["method"], rows=[], ctx=t["ctx"],
                                         undisc=t.get("undisc", False)))
@@ -869,11 +1032,14 @@ def plausibility(x, doc_tables):
     return ""
 
 
-def table_score(g, flagged=False):
+def table_score(firm, fy, x):
+    """Sort key of a candidate x (dict with g, doc_year, flag); smaller is better."""
+    g = x["g"]
     td = [r for r in g["rows"] if r["instrument"] == "time_deposits"]
     td_ok = any((check_row(r)[0] is not None and check_row(r)[0] <= SUM_TOL) for r in td)
     nb = max(len(r["buckets"]) for r in g["rows"])
-    return (not td, flagged, g.get("undisc", False), STMT_RANK.get(g["stmt"], 4), not td_ok, -nb)
+    return (not td, bool(x["flag"]), g.get("undisc", False), stmt_rank(firm, g["stmt"]), not td_ok,
+            x["doc_year"] != fy, -nb, x["doc_year"], g["page"])
 
 
 def table_id(x):
@@ -1028,18 +1194,59 @@ def main():
             if has_td((fk, fy)):
                 break
 
-    # selection: one table per (firm, fy) over all documents. Candidates with a
-    # time-deposit row come first, then plausible ones, statement priority, passing sum
-    # check, number of buckets, and finally the latest filing.
-    out_rows, qa_rows, log_rows = [], [], []
+    # selection: one table per (firm, fy) over all documents, ranked by table_score():
+    # a time-deposit row, plausible, balances before undiscounted flows, the firm's statement
+    # priority, a passing sum check, the fiscal year's own filing over a later comparative,
+    # the number of buckets.
+    def has_td_row(x):
+        return any(r["instrument"] == "time_deposits" for r in x["g"]["rows"])
+
+    def td_row(x):
+        rs = [r for r in x["g"]["rows"] if r["instrument"] == "time_deposits"]
+        return rs[0] if rs else None
+
+    def neighbour_ref(fk, fy):
+        """Median time-deposit level of the balance tables of years fy-1 and fy+1: (raw, in
+        R$ thousand by the stated unit), or None. Both readings are kept because a stated unit
+        can be wrong (corrected only later)."""
+        raw, thou = [], []
+        for y in (fy - 1, fy + 1):
+            for x in results.get((fk, y), []):
+                r = td_row(x)
+                if r is None or x["g"].get("undisc") or row_value(r) <= 0:
+                    continue
+                raw.append(row_value(r))
+                thou.append(row_value(r) * _UNIT_SCALE.get(x["g"]["unit"] or "", 1.0))
+        if not raw:
+            return None
+        return sorted(raw)[len(raw) // 2], sorted(thou)[len(thou) // 2]
+
+    def size_flag(fk, fy, x):
+        """Guard against small unrelated tables (Daycoval 2020 p.60, total 131): fewer than
+        three nonzero buckets, or a level below 1% of the neighbouring years' median under
+        both the raw and the unit-scaled reading."""
+        r = td_row(x)
+        if r is None:
+            return ""
+        nz = sum(1 for b in r["buckets"] if b["value"])
+        if nz < 3:
+            return f"implausible: only {nz} nonzero time-deposit buckets"
+        ref = neighbour_ref(fk, fy)
+        v = row_value(r)
+        if ref and v > 0:
+            vs = v * _UNIT_SCALE.get(x["g"]["unit"] or "", 1.0)
+            if v < 0.01 * ref[0] and vs < 0.01 * ref[1]:
+                return (f"implausible: time deposits {v:,.0f} are below 1% of the neighbouring years' "
+                        f"median {ref[0]:,.0f}")
+        return ""
+
+    chosen, log_rows = {}, []   # (firm, fy) -> (best, ranked candidates with a time-deposit row)
     for fk in firms:
         for fy in range(y0, y1 + 1):
             cand = results.get((fk, fy), [])
             for x in cand:
-                x["flag"] = plausibility(x, [y for y in cand if y["pdf"] == x["pdf"]])
-
-            def has_td_row(x):
-                return any(r["instrument"] == "time_deposits" for r in x["g"]["rows"])
+                x["flag"] = (plausibility(x, [y for y in cand if y["pdf"] == x["pdf"]])
+                             or size_flag(fk, fy, x))
             tds = [x for x in cand if has_td_row(x)]
             if not tds:
                 dfp_ok = [status.get((fk, ry), (False, "")) for ry in (fy, fy + 1)]
@@ -1049,12 +1256,55 @@ def main():
                                      status="no time-deposit maturity table: " + msg,
                                      table_id="", sum_check="", flagged=""))
                 continue
-            tds.sort(key=lambda x: (table_score(x["g"], bool(x["flag"])), -x["doc_year"]))
-            best = tds[0]
+            tds.sort(key=lambda x: table_score(fk, fy, x))
+            chosen[(fk, fy)] = (tds[0], tds)
+
+    # unit cross-check, before the QA comparison: a page without an explicit unit inherits the
+    # last one stated in the document, which can be wrong (a "R$ milhões" page earlier in the
+    # filing). Each firm's reference level is the median time-deposit total of its chosen
+    # tables stated in R$ thousand (three or more years); a table whose stated unit puts it more
+    # than 30x away from that level while R$ thousand lands within 30x is read in R$ thousand.
+    # Applied to the chosen table (written to notes and the log) and to every QA candidate.
+    def td_level(x):
+        rs = [r for r in x["g"]["rows"] if r["instrument"] == "time_deposits"]
+        return row_value(rs[0]) if rs else None
+
+    med = {}
+    for fk in firms:
+        thou = sorted(td_level(b) for (f, _), (b, _) in chosen.items()
+                      if f == fk and b["g"]["unit"] == "R$ thousand" and td_level(b) and td_level(b) > 0)
+        if len(thou) >= 3:
+            med[fk] = thou[len(thou) // 2]
+
+    def unit_fix(fk, x):
+        """Corrected unit for candidate x, or None when its stated unit stands."""
+        u, v = x["g"]["unit"], td_level(x)
+        if fk not in med or u == "R$ thousand" or v is None or v <= 0:
+            return None
+        if (abs(math.log(v * _UNIT_SCALE.get(u or "", 1.0) / med[fk])) > math.log(30)
+                and abs(math.log(v / med[fk])) <= math.log(30)):
+            return "R$ thousand"
+        return None
+
+    def eff_unit(fk, x):
+        return unit_fix(fk, x) or x["g"]["unit"]
+
+    out_rows, qa_rows = [], []
+    for fk in firms:
+        for fy in range(y0, y1 + 1):
+            if (fk, fy) not in chosen:
+                continue
+            best, tds = chosen[(fk, fy)]
             g = best["g"]
             stmt = g["stmt"]
             note_flag = best["flag"]
             tid = table_id(best)
+            fix = unit_fix(fk, best)
+            unit_note = (f"; UNIT CORRECTED {g['unit']} -> {fix} (stated unit inconsistent with the firm's series)"
+                         if fix else "")
+            pref = STMT_ORDER.get(fk, STMT_ORDER_DEFAULT)[0]
+            stmt_note = (f"; statement {stmt} used: no {pref} table with a time-deposit row"
+                         if stmt != pref and pref != "consolidated" else "")
             for r in g["rows"]:
                 chk, tot = check_row(r)
                 for b in r["buckets"]:
@@ -1063,12 +1313,12 @@ def main():
                         source=best["source"], doc_url=best["url"], page=g["page"], statement=stmt,
                         table_id=tid,
                         table_title=g["ctx"].strip(), instrument=r["instrument"], bucket_label=b["label"],
-                        lo_days=b["lo"], hi_days=b["hi"], value=b["value"], unit=g["unit"] or "unknown",
+                        lo_days=b["lo"], hi_days=b["hi"], value=b["value"], unit=(fix or g["unit"] or "unknown"),
                         extraction_method=g["method"], total_reported=tot,
                         sum_check="" if chk is None else round(chk, 6),
                         notes=f"row={r['label']}; filing_year={best['doc_year']}; pdf={best['pdf']}"
                               + ("; as_of inferred from filing year" if g.get("_asof_inferred") else "")
-                              + (f"; FLAG {note_flag}" if note_flag else "")))
+                              + (f"; FLAG {note_flag}" if note_flag else "") + stmt_note + unit_note))
             td = [r for r in g["rows"] if r["instrument"] == "time_deposits"][0]
             gap = check_row(td)[0]
             gap_s = "no_total" if gap is None else f"{gap:.6f}"
@@ -1076,21 +1326,23 @@ def main():
                                  method=g["method"],
                                  status=(f"{'FLAGGED' if note_flag else 'ok'}; {best['source']} filing "
                                          f"{best['doc_year']} p.{g['page']} {stmt}; time-deposit sum_check={gap_s}"
-                                         + (f"; {note_flag}" if note_flag else "")),
+                                         + (f"; {note_flag}" if note_flag else "") + stmt_note
+                                         + (f"; UNIT CORRECTED {g['unit']} -> {fix}" if fix else "")),
                                  table_id=tid, sum_check="" if gap is None else round(gap, 6),
                                  flagged=bool(note_flag)))
-            # QA across filings: same statement, one table per document
+            # QA across filings: same statement, balance tables only (undiscounted cash flows
+            # add future interest), one table per document, in R$ thousand after the unit fix
             by_doc = {}
             for x in tds:
-                if x["g"]["stmt"] != stmt or bool(x["g"].get("undisc")) != bool(g.get("undisc")):
-                    continue   # like with like: same statement, same kind of table (balances vs undiscounted flows)
+                if x["g"]["stmt"] != stmt or x["g"].get("undisc"):
+                    continue
                 k = (x["source"], x["doc_year"], x["pdf"])
                 if k not in by_doc:
                     by_doc[k] = x
 
             def key_vals(x):
                 rs = [r for r in x["g"]["rows"] if r["instrument"] == "time_deposits"]
-                sc_ = _UNIT_SCALE.get(x["g"]["unit"] or "", 1.0)   # compare in R$ thousand
+                sc_ = _UNIT_SCALE.get(eff_unit(fk, x) or "", 1.0)   # compare in R$ thousand
                 return {(b["lo"], b["hi"]): b["value"] * sc_ for b in rs[0]["buckets"]} if rs else {}
             vals = [key_vals(x) for x in by_doc.values() if key_vals(x)]
             mx = 0.0
@@ -1101,37 +1353,7 @@ def main():
                         mx = max(mx, (max(xs) - min(xs)) / max(abs(q) for q in xs))
             qa_rows.append(dict(firm=fk, fiscal_year=fy, n_sources=len(vals),
                                 max_rel_diff=round(mx, 6) if len(vals) > 1 else ""))
-
-    # unit cross-check: a page without an explicit unit inherits the last one stated in the
-    # document, which can be wrong (a "R$ milhões" page earlier in the filing). Each firm's
-    # time-deposit series is compared across years in R$ thousand; where the stated unit
-    # puts a year more than 30x away from the firm's median and another unit lands within
-    # 30x, the unit is corrected and the correction is written to notes and the log.
-    import math
-    td_tot = {}
-    for r in out_rows:
-        if r["instrument"] == "time_deposits" and r["total_reported"] not in (None, ""):
-            td_tot[(r["firm_key"], r["fiscal_year"])] = (r["total_reported"], r["unit"])
-    corrected = {}
-    for fk in firms:
-        thou = sorted(v for (f, fy), (v, u) in td_tot.items() if f == fk and v > 0 and u == "R$ thousand")
-        if len(thou) < 3:
-            continue
-        med = thou[len(thou) // 2]   # reference level: the years stated in R$ thousand
-        for (f, fy), (v, u) in td_tot.items():
-            if f != fk or v <= 0 or u == "R$ thousand":
-                continue
-            if abs(math.log(v * _UNIT_SCALE.get(u, 1.0) / med)) > math.log(30) and                     abs(math.log(v / med)) <= math.log(30):
-                corrected[(fk, fy)] = (u, "R$ thousand")
-    for r in out_rows:
-        k = (r["firm_key"], r["fiscal_year"])
-        if k in corrected:
-            r["notes"] += f"; UNIT CORRECTED {corrected[k][0]} -> {corrected[k][1]} (stated unit inconsistent with the firm's series)"
-            r["unit"] = corrected[k][1]
-    for r in log_rows:
-        k = (r["firm"], r["year"])
-        if k in corrected:
-            r["status"] += f"; UNIT CORRECTED {corrected[k][0]} -> {corrected[k][1]}"
+    log_rows.sort(key=lambda r: (firms.index(r["firm"]), r["year"]))
 
     cols = ["firm_key", "cnpj_root", "fiscal_year", "as_of", "source", "doc_url", "page", "statement",
             "table_id", "table_title", "instrument", "bucket_label", "lo_days", "hi_days", "value", "unit",

@@ -13,10 +13,6 @@ import numpy as np
 import pandas as pd
 from pathlib import Path
 
-try:
-    from utils.toon_runtime import resolve_script_paths
-except Exception:
-    resolve_script_paths = None
 
 from utils import paths
 
@@ -28,19 +24,6 @@ IF_LIST_DIR = paths.IF_DATA_LIST   # Path object; List files have IPs, Prudentia
 OUTPUT_DIR  = str(paths.PROCESSED)
 OUT_CSV     = os.path.join(OUTPUT_DIR, 'bank_chars_panel.csv')
 
-if resolve_script_paths is not None:
-    _paths = resolve_script_paths(
-        'bank_chars_panel_build',
-        {
-            'if_agg_dir': IF_AGG_DIR,
-            'output_dir': OUTPUT_DIR,
-            'out_csv': OUT_CSV,
-        },
-        script_dir=os.path.dirname(os.path.abspath(__file__)),
-    )
-    IF_AGG_DIR = _paths['if_agg_dir']
-    OUTPUT_DIR = _paths['output_dir']
-    OUT_CSV = _paths['out_csv']
 
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 

@@ -1,23 +1,22 @@
-## if_data_scrape_1.py
+## scrape_bcb_estban_ifdata.py
 # Authors: Pedro Feijó de Moraes
 #
-# Last edited on 2026_03_06
+# Pipeline step 1. Downloads:
+#   * IF-Data List (institution registry) and Values from the BCB Olinda API, for institution
+#     types 1 (prudential conglomerates) and 3 (individual institutions) by default. Type 2
+#     (financial conglomerates) has no reader and is fetched only with --if-types 1,2,3.
+#   * ESTBAN municipality-level monthly files from the BCB content server (listing API below).
+#     If a download fails, the files can be fetched by hand from
+#     https://www.bcb.gov.br/estatisticas/estatisticabancariamunicipios
 #
-# Purpose: this script fetches data from BCB IF Data API (Olinda endpoint)
-#          and from BCB's ESTBAN static file server (COSIF).
-#
-# ESTBAN files are hosted by BCB at (primary URL pattern):
-#   https://www4.bcb.gov.br/fis/cosif/estban/{YYYYMM}_ESTBAN.csv      (municipality level)
-#   https://www4.bcb.gov.br/fis/cosif/estban/{YYYYMM}_ESTBAN_AG.csv   (municipality + agency level)
-# If the automated download fails, files can be manually downloaded from:
-#   https://www.bcb.gov.br/estatisticas/estabilidadefinanceira/estban
-#
-# Attention: before running this script, make sure to install the required packages.
+# A failed download is never cached: nothing is written for it, any earlier good copy stays,
+# the failure is listed at the end and the script exits 1, so the pipeline stops here.
 ###--------------------------------------------------------------------------------------------------------------------
 
 ## 1) Load packages
 import os
 import io
+import sys
 import zipfile
 try:
     from utils.venv_guard import ensure_project_venv
@@ -31,18 +30,13 @@ import requests
 import time
 import logging
 import random
-import pandas as pd
-import threading
 from concurrent.futures import ThreadPoolExecutor
 from logging.handlers import RotatingFileHandler
 
-try:
-    from utils.toon_runtime import resolve_script_paths
-except Exception:
-    resolve_script_paths = None
 
 from utils import paths
 from utils import refresh
+from utils import bcb_http
 
 ## 2) Set up logging
 log_file = 'if_data_scrape.log'
@@ -55,58 +49,30 @@ logging.basicConfig(handlers=[handler], level=logging.INFO, format='%(asctime)s 
 base_url_list = "https://olinda.bcb.gov.br/olinda/servico/IFDATA/versao/v1/odata/IfDataCadastro(AnoMes=@AnoMes)?@AnoMes={year_month}&$top=10000&$format=text/csv&$select=CodInst,Data,NomeInstituicao,DataInicioAtividade,Tcb,Td,Tc,SegmentoTb,Atividade,Uf,Municipio,Sr,CodConglomeradoFinanceiro,CodConglomeradoPrudencial,CnpjInstituicaoLider,Situacao"
 base_url_values = "https://olinda.bcb.gov.br/olinda/servico/IFDATA/versao/v1/odata/IfDataValores(AnoMes=@AnoMes,TipoInstituicao=@TipoInstituicao,Relatorio=@Relatorio)?@AnoMes={year_quarter}&@TipoInstituicao={tipo}&@Relatorio='T'&$top=100000000&$format=text/csv&$select=CodInst,AnoMes,NomeRelatorio,NumeroRelatorio,Grupo,Conta,NomeColuna,Saldo"
 
-# IF Data output directories (canonical locations in utils/paths.py)
+# IF Data output directories (canonical locations in utils/paths.py); created on first write
 output_dir = str(paths.IF_DATA_LIST)
-os.makedirs(output_dir, exist_ok=True)
-
 output_type_1 = str(paths.IF_DATA_PRUDENTIAL)
-os.makedirs(output_type_1, exist_ok=True)
 output_type_2 = str(paths.IF_DATA_FINANCIAL)
-os.makedirs(output_type_2, exist_ok=True)
 output_type_3 = str(paths.IF_DATA_INDIVIDUAL)
-os.makedirs(output_type_3, exist_ok=True)
 
 # --- ESTBAN (BCB new content server) ---
 # BCB migrated ESTBAN files to a new URL structure in late 2024.
 # New page:  https://www.bcb.gov.br/estatisticas/estatisticabancariamunicipios
 # New files: https://www.bcb.gov.br/content/estatisticas/estatistica_bancaria_estban/{pasta}/{Nome}
 # Files are delivered as ZIP archives.  Naming convention:
-#   2023-02+:  {YYYYMM}_ESTBAN.csv.zip  /  {YYYYMM}_ESTBAN_AG.csv.zip
-#   pre-2023:  {YYYYMM}_ESTBAN.ZIP      /  {YYYYMM}_ESTBAN_AG.ZIP
+#   2023-02+:  {YYYYMM}_ESTBAN.csv.zip
+#   pre-2023:  {YYYYMM}_ESTBAN.ZIP
 # The listing API exposes all available files (back to 1988), keyed by a stable guidLista.
+# The same listing also serves the per-branch files (pasta "agencia", {YYYYMM}_ESTBAN_AG); no
+# script reads them, so they are not downloaded.
 ESTBAN_API_BASE   = "https://www.bcb.gov.br"
 ESTBAN_GUID_MUN   = "f6391806-fd85-43af-acf1-c86d5b8dd6df"   # guidLista for municipio + agencia files
-ESTBAN_CONTENT_ROOT = ESTBAN_API_BASE + "/content/estatisticas/estatistica_bancaria_estban"
 
-ESTBAN_DATA_ROOT = str(paths.ESTBAN_DIR)
 output_estban_mun = str(paths.ESTBAN_RAW_MUN)
-output_estban_ag  = str(paths.ESTBAN_RAW_AG)
-
-if resolve_script_paths is not None:
-    _paths = resolve_script_paths(
-        "if_data_scrape_1",
-        {
-            "if_list_output_dir": output_dir,
-            "if_type1_output_dir": output_type_1,
-            "if_type2_output_dir": output_type_2,
-            "if_type3_output_dir": output_type_3,
-            "estban_mun_output_dir": output_estban_mun,
-            "estban_ag_output_dir": output_estban_ag,
-        },
-        script_dir=os.path.dirname(os.path.abspath(__file__)),
-    )
-    output_dir = _paths["if_list_output_dir"]
-    output_type_1 = _paths["if_type1_output_dir"]
-    output_type_2 = _paths["if_type2_output_dir"]
-    output_type_3 = _paths["if_type3_output_dir"]
-    output_estban_mun = _paths["estban_mun_output_dir"]
-    output_estban_ag = _paths["estban_ag_output_dir"]
-
 os.makedirs(output_estban_mun, exist_ok=True)
-os.makedirs(output_estban_ag, exist_ok=True)
 
-# flag to stop events:
-stop_event = threading.Event()
+# Every download that failed in this run; main() lists them and exits 1 when any exist.
+FAILURES: list[str] = []
 
 ## 4) User-defined functions:
 def download_list(year,month, retries_number):
@@ -131,30 +97,25 @@ def download_list(year,month, retries_number):
         try:
             response = requests.get(url, timeout = 180) # send GET request
             response.raise_for_status() # check for errors
-            
+
             if not response.content or len(response.text) < 500:
-                logging.warning(f"No data (or only stub) received for {year}--{month}. Skipping.")
-                print(f"No data received for {year}--{month}. Skipping.")
+                logging.error(f"No data (or only a stub) received for List {year}-{month}.")
+                print(f"No data received for List {year}-{month}.")
+                FAILURES.append(f"IF-Data List {year}-{month}: empty response")
                 return False
 
-            file_path = os.path.join(output_dir, f"IF_DATA_List_{year}_{month}.csv") # file path
+            os.makedirs(output_dir, exist_ok=True)
             with open(file_path, "wb") as file:
                 file.write(response.content)
             logging.info(f"Downloaded data for {year}-{month}")
             print(f"Downloaded data for {year}-{month}")
             return True  # network request made
-            break # to stop the retries if successful
         except requests.exceptions.HTTPError as err:
-            with open(file_path, "w") as f:
-                f.write("CodInst,Data,NomeInstituicao\n" + "SKIP_DUMMY\n" * 50)
-            if response.status_code == 500:
-                logging.error(f"Server error 500 for {year}--{month}. Treating as unavailable and skipping.")
-                print(f"Server error 500 for {year}--{month}. Treating as unavailable and skipping.")
-                return False
-            else:
-                logging.error(f"HTTP error for {year}--{month}: {err}")
-                print(f"HTTP error for {year}--{month}: {err}")
-                break
+            sc = err.response.status_code if err.response is not None else None
+            logging.error(f"HTTP {sc} for List {year}-{month}: {err}")
+            print(f"HTTP {sc} for List {year}-{month}: {err}")
+            FAILURES.append(f"IF-Data List {year}-{month}: HTTP {sc}")
+            return False
         except requests.exceptions.RequestException as err:
             logging.error(f"Failed to download data for {year_month}: {err}")
             print(f"Failed to download data for {year_month}: {err}")
@@ -164,18 +125,13 @@ def download_list(year,month, retries_number):
                 print(f"Waiting {wait_time} seconds before retrying...")
                 time.sleep(wait_time)
             else:
-                logging.error(f"Failed to download data for {year}-{month} after {retries} attempts. Skipping...")
-                print(f"Failed to download data for {year}-{month} after {retries} attempts. Skipping...")
-                with open(file_path, "w") as f:
-                    f.write("CodInst,Data,NomeInstituicao\n" + "SKIP_DUMMY\n" * 50)
-                break
-        
+                logging.error(f"Failed to download data for {year}-{month} after {retries} attempts.")
+                print(f"Failed to download data for {year}-{month} after {retries} attempts.")
+                FAILURES.append(f"IF-Data List {year}-{month}: {err}")
+                return False
+
 def download_values(year, quarter, tipo, retries_number):
     """Downloand institutional values data for a specific year, quarter and type"""
-    global stop_event
-    if stop_event.is_set():
-        return # stop the function if the stop event is set
-    
     # Skip if file already exists and is non-empty
     if tipo == '1':
         output_dir = output_type_1
@@ -206,49 +162,36 @@ def download_values(year, quarter, tipo, retries_number):
                 logging.warning(f"No data received for {year}-{quarter} (Type {tipo}). Skipping.")
                 print(f"No data received for {year}-{quarter} (Type {tipo}). Skipping.")
                 return False
-        
-            file_path = os.path.join(output_dir, f"IF_DATA_Values_{year}_{quarter}.csv") # file path
+
+            os.makedirs(output_dir, exist_ok=True)
             with open(file_path, "w") as file:
                 file.write(response.text)
-                
-            # check if file is empty (contains only headers)
-            df = pd.read_csv(file_path, sep = ",", encoding = "latin1")
-            if df.empty or len(df) == 0:
-                logging.warning(f"Empty data for {year}-{quarter} (Type {tipo}) – treating as unavailable. Skipping further retries.")
+
+            # A header-only body is a genuine empty (e.g. type 1 before the prudential
+            # conglomerate existed, 2013): kept on disk, reported, not a failure.
+            _head = response.text.split("\n", 2)
+            if len(_head) < 2 or not _head[1].strip():
+                logging.warning(f"Empty data for {year}-{quarter} (Type {tipo}) – treating as unavailable.")
                 print(f"Empty data for {year}-{quarter} (Type {tipo}). Skipping.")
                 return False
-                
+
             print(f"Downloaded data for {year}-{quarter} (Type {tipo})")
             logging.info(f"Downloaded data for {year}-{quarter} (Type {tipo})")
             return True  # network request made
-            break # to stop the retries if successful
         except requests.exceptions.HTTPError as err:
-            sc = getattr(response, "status_code", None)
+            sc = err.response.status_code if err.response is not None else None
             # 502/503/504 are transient gateway/timeout errors (large @Relatorio='T'
             # queries); retry with backoff instead of giving up immediately.
-            if sc in (502, 503, 504):
-                logging.warning(f"Transient HTTP {sc} for {year}-{quarter} (Type {tipo}).")
-                print(f"Transient HTTP {sc} for {year}-{quarter} (Type {tipo}).")
-                if i < retries - 1:
-                    wait_time = 30 * (2 ** i)
-                    print(f"Waiting {wait_time}s before retrying...")
-                    time.sleep(wait_time)
-                    continue
-                with open(file_path, "w") as f:
-                    f.write("CodInst,AnoMes,NomeRelatorio,NumeroRelatorio,Grupo,Conta,NomeColuna,Saldo\nSKIP_DUMMY\n")
-                logging.error(f"HTTP {sc} persisted for {year}-{quarter} (Type {tipo}) after {retries} attempts. Skipping.")
-                print(f"HTTP {sc} persisted for {year}-{quarter} (Type {tipo}) after {retries} attempts. Skipping.")
-                return False
-            with open(file_path, "w") as f:
-                f.write("CodInst,AnoMes,NomeRelatorio,NumeroRelatorio,Grupo,Conta,NomeColuna,Saldo\nSKIP_DUMMY\n")
-            if sc == 500:
-                logging.error(f"Server error 500 for {year}-{quarter} (Type {tipo}). Treating as unavailable and skipping.")
-                print(f"Server error 500 for {year}-{quarter} (Type {tipo}). Treating as unavailable and skipping.")
-                return False
-            else:
-                logging.error(f"HTTP error for {year}-{quarter} (Type {tipo}): {err}")
-                print(f"HTTP error for {year}-{quarter} (Type {tipo}): {err}")
-                break
+            if sc in (502, 503, 504) and i < retries - 1:
+                wait_time = 30 * (2 ** i)
+                logging.warning(f"Transient HTTP {sc} for {year}-{quarter} (Type {tipo}); retry in {wait_time}s.")
+                print(f"Transient HTTP {sc} for {year}-{quarter} (Type {tipo}). Waiting {wait_time}s before retrying...")
+                time.sleep(wait_time)
+                continue
+            logging.error(f"HTTP {sc} for {year}-{quarter} (Type {tipo}): {err}")
+            print(f"HTTP {sc} for {year}-{quarter} (Type {tipo}): {err}")
+            FAILURES.append(f"IF-Data Values {year}-{quarter} type {tipo}: HTTP {sc}")
+            return False
         except requests.exceptions.RequestException as err:
             logging.error(f"Failed to download data for {year_quarter} (Type {tipo}): {err}")
             print(f"Failed to download data for {year_quarter} (Type {tipo}): {err}")
@@ -258,20 +201,15 @@ def download_values(year, quarter, tipo, retries_number):
                 logging.info(f"Waiting {wait_time} seconds before retrying...")
                 time.sleep(wait_time)
             else:
-                logging.error(f"Failed to download data for {year}-{quarter} (Type {tipo}) after {retries} attempts. Skipping...")
-                print(f"Failed to download data for {year}-{quarter} (Type {tipo}) after {retries} attempts. Skipping...")
-                with open(file_path, "w") as f:
-                    f.write("CodInst,AnoMes,NomeRelatorio,NumeroRelatorio,Grupo,Conta,NomeColuna,Saldo\nSKIP_DUMMY\n")
-                break
-   
-def download_all_values(year, quarter, retries_number, if_types=('1', '2', '3')):
+                logging.error(f"Failed to download data for {year}-{quarter} (Type {tipo}) after {retries} attempts.")
+                print(f"Failed to download data for {year}-{quarter} (Type {tipo}) after {retries} attempts.")
+                FAILURES.append(f"IF-Data Values {year}-{quarter} type {tipo}: {err}")
+                return False
+
+def download_all_values(year, quarter, retries_number, if_types=('1', '3')):
     """Download values for the requested institution types in a given year and quarter in parallel.
     Returns True if any type was actually downloaded (network request made).
     Types: 1 = Prudential Conglomerates, 2 = Financial Conglomerates, 3 = Individual Institutions."""
-    global stop_event
-    if stop_event.is_set():
-        return False
-
     any_fetched = False
     with ThreadPoolExecutor() as executor:
         futures = [executor.submit(download_values, year, quarter, tipo, retries_number) for tipo in if_types]
@@ -284,59 +222,38 @@ def download_all_values(year, quarter, retries_number, if_types=('1', '2', '3'))
                 logging.error(f"Error parallel-downloading values: {e}")
                 print(f"Error parallel-downloading values: {e}")
     return any_fetched
-                
-def open_log_file():
-    """Open log file in the default text editor."""
-    log_path = os.path.abspath(log_file)
-    print(f"Opening log file.")
-    os.system(f"notepad.exe {log_path}")
-    
+
+
 def fetch_estban_listing(pasta, retries_number=3):
     """Fetch the full ESTBAN file listing from BCB's API for the given pasta ('municipio' or 'agencia').
 
-    Returns a dict mapping YYYYMM -> {Nome, Url} for all available files, or {} on failure.
+    Returns a dict mapping YYYYMM -> {Nome, Url} for all available files, or {} on failure
+    (recorded in FAILURES).
     """
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-        "Accept": "application/json",
-        "Accept-Language": "pt-BR,pt;q=0.9",
-        "Referer": ESTBAN_API_BASE + "/estatisticas/estatisticabancariamunicipios",
-    }
-    url = (
-        ESTBAN_API_BASE
-        + "/api/servico/sitebcb/Documentos/byListGuid"
-        + "?tronco=estatisticas"
-        + "&guidLista=" + ESTBAN_GUID_MUN
-        + "&ordem=DataDocumento%20desc"
-        + "&pasta=" + pasta
-    )
-    for attempt in range(retries_number):
-        try:
-            r = requests.get(url, headers=headers, timeout=180)
-            r.raise_for_status()
-            items = r.json().get("conteudo", [])
-            result = {}
-            for item in items:
-                nome = item["Nome"]
-                # Extract YYYYMM from filename like 202412_ESTBAN.csv.zip
-                import re
-                m = re.match(r"(\d{6})_ESTBAN", nome, re.IGNORECASE)
-                if m:
-                    result[m.group(1)] = {"Nome": nome, "Url": item["Url"]}
-            logging.info(f"ESTBAN listing ({pasta}): {len(result)} files found")
-            print(f"ESTBAN listing ({pasta}): {len(result)} files available on BCB")
-            return result
-        except Exception as err:
-            wait = 2 ** attempt
-            logging.warning(f"ESTBAN listing fetch failed (attempt {attempt+1}): {err}")
-            print(f"  Listing fetch failed: {err}. Retry in {wait}s")
-            time.sleep(wait)
-    logging.error(f"Could not fetch ESTBAN listing for pasta={pasta}")
-    return {}
+    import re
+    try:
+        items = bcb_http.cms_documents(
+            bcb_http.retry_session(total=retries_number), "estatisticas", ESTBAN_GUID_MUN, pasta,
+            timeout=180, referer=ESTBAN_API_BASE + "/estatisticas/estatisticabancariamunicipios")
+    except Exception as err:
+        logging.error(f"Could not fetch ESTBAN listing for pasta={pasta}: {err}")
+        print(f"  Listing fetch failed: {err}")
+        FAILURES.append(f"ESTBAN listing ({pasta}): {err}")
+        return {}
+    result = {}
+    for item in items:
+        nome = item["Nome"]
+        # Extract YYYYMM from filename like 202412_ESTBAN.csv.zip
+        m = re.match(r"(\d{6})_ESTBAN", nome, re.IGNORECASE)
+        if m:
+            result[m.group(1)] = {"Nome": nome, "Url": item["Url"]}
+    logging.info(f"ESTBAN listing ({pasta}): {len(result)} files found")
+    print(f"ESTBAN listing ({pasta}): {len(result)} files available on BCB")
+    return result
 
 
 def download_estban(yyyymm, url_path, out_dir, csv_fname, retries_number):
-    """Download a single ESTBAN file (municipality or agency level) for a given YYYYMM.
+    """Download a single municipality-level ESTBAN file for a given YYYYMM.
 
     url_path  -- the Url field from the BCB listing (e.g. /content/.../202412_ESTBAN.csv.zip)
     csv_fname -- the target CSV filename on disk (e.g. 202412_ESTBAN.CSV)
@@ -364,8 +281,10 @@ def download_estban(yyyymm, url_path, out_dir, csv_fname, retries_number):
         try:
             response = requests.get(full_url, timeout=120, headers=headers)
             if response.status_code == 404:
-                logging.warning(f"ESTBAN 404: {full_url}")
+                # The listing advertised this file, so a 404 is a failure, not an absence.
+                logging.error(f"ESTBAN 404: {full_url}")
                 print(f"  404 – file not available")
+                FAILURES.append(f"ESTBAN {yyyymm}: HTTP 404")
                 return False
             response.raise_for_status()
 
@@ -395,10 +314,6 @@ def download_estban(yyyymm, url_path, out_dir, csv_fname, retries_number):
             return True  # success
 
         except requests.exceptions.HTTPError as err:
-            if response.status_code == 500:
-                logging.error(f"Server error 500 for ESTBAN {yyyymm}. Treating as unavailable and skipping.")
-                print(f"  Server 500. Treating as unavailable and skipping.")
-                return False
             logging.error(f"HTTP error ESTBAN {yyyymm}: {err}")
             print(f"  HTTP error: {err}")
             break
@@ -416,8 +331,7 @@ def download_estban(yyyymm, url_path, out_dir, csv_fname, retries_number):
         f"  FAILED: {yyyymm}. Download manually from: "
         f"https://www.bcb.gov.br/estatisticas/estatisticabancariamunicipios"
     )
-    with open(file_path, "w") as f:
-        f.write("CO_CNPJ,CO_MUNICIPIO\nSKIP_DUMMY\n")
+    FAILURES.append(f"ESTBAN {yyyymm}")
     return False
 
 
@@ -425,7 +339,7 @@ def download_estban(yyyymm, url_path, out_dir, csv_fname, retries_number):
 quarters = [3, 6, 9, 12]
 
 
-def run_if_data(start_year, end_year, retries_number, if_types=('1', '2', '3'), skip_list=False):
+def run_if_data(start_year, end_year, retries_number, if_types=('1', '3'), skip_list=False):
     """Download IF-Data List + Values for the given years and institution types."""
     for year in range(start_year, end_year + 1):
         # IF Data only publishes the institution registry (List) for quarter-end
@@ -447,11 +361,10 @@ def run_if_data(start_year, end_year, retries_number, if_types=('1', '2', '3'), 
 
 
 def run_estban(retries_number, estban_start_year=2013):
-    """Fetch the BCB ESTBAN listing and download any missing municipality/agency files."""
+    """Fetch the BCB ESTBAN listing and download any missing municipality-level files."""
     import datetime
     print("\n--- Starting ESTBAN downloads ---")
     listing_mun = fetch_estban_listing("municipio", retries_number)
-    listing_ag = fetch_estban_listing("agencia", retries_number)
     current_ym = int(datetime.date.today().strftime("%Y%m"))
 
     for yyyymm_key, info in listing_mun.items():
@@ -462,21 +375,14 @@ def run_estban(retries_number, estban_start_year=2013):
                             f"{yyyymm_key}_ESTBAN.CSV", retries_number):
             time.sleep(5 + random.uniform(0, 2))
 
-    for yyyymm_key, info in listing_ag.items():
-        ym_int = int(yyyymm_key)
-        if ym_int < estban_start_year * 100 + 1 or ym_int > current_ym:
-            continue
-        if download_estban(yyyymm_key, info["Url"], output_estban_ag,
-                            f"{yyyymm_key}_ESTBAN_AG.CSV", retries_number):
-            time.sleep(5 + random.uniform(0, 2))
-
 
 def main():
     import argparse
     ap = argparse.ArgumentParser(description="Download BCB IF-Data + ESTBAN.")
-    ap.add_argument("--if-types", default="1,2,3",
+    ap.add_argument("--if-types", default="1,3",
                     help="Comma list of IF-Data institution types to fetch "
-                         "(1=Prudential, 2=Financial, 3=Individual). Default: 1,2,3.")
+                         "(1=Prudential, 2=Financial, 3=Individual). Default: 1,3; "
+                         "type 2 has no reader in the pipeline.")
     # 2013 matches the ESTBAN/deposits start (run_estban(..., estban_start_year=2013)),
     # so bank characteristics cover the same years as the deposit panel. Existing files
     # are skipped, so widening the window is idempotent.
@@ -496,6 +402,13 @@ def main():
         run_if_data(args.start_year, args.end_year, retries_number, if_types, args.skip_list)
     if not args.skip_estban:
         run_estban(retries_number)
+
+    if FAILURES:
+        print(f"\n{len(FAILURES)} download(s) FAILED (nothing was written for them):")
+        for f in FAILURES:
+            print(f"  - {f}")
+        logging.error(f"{len(FAILURES)} download(s) failed: {FAILURES}")
+        sys.exit(1)
 
 
 if __name__ == "__main__":

@@ -1,26 +1,24 @@
 # scrape_ifdata_aggregate.py
-# Last edited: 2026-06-02
 # -----------------------------------------------------------------------------
-# Build the IF-Data "Aggregated Data" reports (IF_DATA_type_<t>_report_<r>.csv)
-# from the per-period IF_DATA_Values_<YYYY>_<Q>.csv files that scrape_1 downloads
-# into the Prudential/Financial/Individual subfolders.
+# Pipeline step 3. Build the IF-Data "Aggregated Data" reports
+# (IF_DATA_type_<t>_report_<r>.csv) from the per-period IF_DATA_Values_<YYYY>_<Q>.csv files
+# that scrape_bcb_estban_ifdata.py downloads into the Prudential/Financial/Individual subfolders.
 #
-# This is a faithful port of the now-DEPRECATED Code/if_data_process_1.py (which
-# was a standalone script hardcoded to 2016-2024 and not part of the pipeline).
-# The transform functions are copied verbatim; only the driver changed:
-#   * paths derived from the repo BASE (../../BCB/IF Data) instead of absolute;
-#   * the year range auto-detects the latest available period (2016..max), so
-#     the reports extend automatically as scrape_1 pulls new quarters;
-#   * the existing "Aggregated Data" folder is backed up once before overwrite;
-#   * --verify compares the regenerated type-1 reports against the backup on the
+#   * the year range auto-detects the latest available period, so the reports extend
+#     automatically as new quarters arrive;
+#   * the report files about to be overwritten are backed up first (one timestamped
+#     backup is kept);
+#   * --verify compares the regenerated type-1 reports against that backup on the
 #     overlapping (Year,Month) cells and reports ADDED periods vs CHANGED values.
 #
-# Consumers: panel_deposits.py and panel_bank_chars.py read
-#   Aggregated Data/IF_DATA_type_1_report_<r>.csv  (type 1 = Prudential Cong.).
-# (panel_deposit_rates.py reads the per-period Prudential files directly, not these.)
+# Consumers: panel_bank_chars.py reads Aggregated Data/IF_DATA_type_1_report_<1..5>.csv and
+# panel_deposits.py reads report 3 (type 1 = Prudential Conglomerates). Only those are built
+# (BUILD below); --all builds every type x report. (panel_deposit_rates.py and
+# panel_demand_chars.py read the per-period Values files directly, not these.)
 #
 # Usage:
-#     python scrape_ifdata_aggregate.py            # rebuild Aggregated Data
+#     python scrape_ifdata_aggregate.py            # rebuild the reports in BUILD
+#     python scrape_ifdata_aggregate.py --all      # every type x report
 #     python scrape_ifdata_aggregate.py --verify   # rebuild + overlap report
 # -----------------------------------------------------------------------------
 import argparse
@@ -54,8 +52,22 @@ MAIN_FOLDER = str(paths.IF_DATA_ROOT)
 # empty for 2013 — so type-1 reports legitimately start in 2014 while types 2/3 start 2013.
 START_YEAR = 2013
 
+# The reports the pipeline reads: {institution type: report numbers}. --all builds every
+# type x report in Reports_List.csv instead.
+BUILD = {1: (1, 2, 3, 4, 5)}
 
-# ===== Transform functions (verbatim from if_data_process_1.py) ==============
+
+def _map_unique(col: pd.Series, f) -> pd.Series:
+    """col.map(f), evaluating f once per distinct value instead of once per row.
+
+    Missing values map to missing, which is what both normalisers below return for them, so
+    the result equals col.map(f), dtype included (checked on the 2024-12 List and Values
+    files, 2026-10-14).
+    """
+    return col.map({u: f(u) for u in col.dropna().unique()})
+
+
+# ===== Transform functions ====================================================
 
 def normalize_string(s):
     """Normalize strings by removing accents, special characters, and spaces."""
@@ -105,7 +117,7 @@ def process_list_dataframe(df):
     df['Month_Inicio'] = df['DataInicioAtividade'].dt.month
     df['merge_key'] = create_merge_key(df)
     text_columns = ['NomeInstituicao', 'SegmentoTb', 'Atividade', 'Municipio']
-    df[text_columns] = df[text_columns].apply(lambda col: col.map(normalize_string))
+    df[text_columns] = df[text_columns].apply(lambda col: _map_unique(col, normalize_string))
     return df
 
 
@@ -149,7 +161,7 @@ def process_values_dataframe(df, list_quarterly):
         df['Value'] = df['Value'].str.replace(',', '.', regex=False)
         df['Value'] = pd.to_numeric(df['Value'], errors='coerce', downcast='float')
     text_columns = ['NomeRelatorio', 'NomeColuna']
-    df[text_columns] = df[text_columns].apply(lambda col: col.map(normalize_string_parentheses))
+    df[text_columns] = df[text_columns].apply(lambda col: _map_unique(col, normalize_string_parentheses))
     # Defensive: BCB's Olinda API occasionally returns the same row multiple times
     # (e.g. Financial 2025_9 came back ~3x). Drop exact-duplicate value rows so the
     # aggregates are never inflated, regardless of which type/period is affected.
@@ -246,6 +258,8 @@ def main():
     ap = argparse.ArgumentParser(description="Rebuild IF-Data Aggregated Data reports.")
     ap.add_argument("--verify", action="store_true",
                     help="After writing, compare type-1 reports vs the backup on the overlap.")
+    ap.add_argument("--all", action="store_true",
+                    help="Build every institution type x report, not only the ones the pipeline reads.")
     args = ap.parse_args()
 
     folder_names = {'list': 'List', 'fin_cong': 'Financial Conglomerates',
@@ -266,8 +280,15 @@ def main():
                                sep=",", encoding='utf-8')['NumeroRelatorio'].tolist()
     reports_list = [r for r in reports_list if r != 15]
 
-    type_report_frames = process_main_loop(
-        [1, 2, 3], reports_list, list_quarterly, folders, START_YEAR, end_year)
+    if args.all:
+        type_report_frames = process_main_loop(
+            [1, 2, 3], reports_list, list_quarterly, folders, START_YEAR, end_year)
+    else:
+        type_report_frames = {}
+        for inst_type, wanted in BUILD.items():
+            type_report_frames.update(process_main_loop(
+                [inst_type], [r for r in reports_list if r in wanted],
+                list_quarterly, folders, START_YEAR, end_year))
 
     # Hygiene: warn about stale report files with no current-input source, and
     # back up only the reports we are about to overwrite (timestamped).

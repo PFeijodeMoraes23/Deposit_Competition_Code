@@ -1,9 +1,12 @@
 """
 scrape_cosif_download.py
 ============================
-Download missing COSIF balancete CSV ZIPs (BANCOS, SOCIEDADES, COOPERATIVAS,
-and optionally the other categories) for months not already on disk, then
-re-run scrape_12 to extend the fee panel.
+Pipeline step 11. Download missing COSIF balancete CSV ZIPs (BANCOS, SOCIEDADES,
+COOPERATIVAS, BLOPRUDENCIAL, and with --all-types the other categories) for months not
+already on disk. Readers: panel_cosif_extract.py, panel_ip_rates.py (SOCIEDADES and
+BLOPRUDENCIAL), scrape_cosif_service_fees.py and the advertising scrapers.
+
+A failed listing or download is reported at the end and the script exits 1.
 
 DOWNLOAD MECHANISM (resolved 2026-06-02)
 ----------------------------------------
@@ -35,11 +38,10 @@ from __future__ import annotations
 import argparse
 import logging
 import re
+import sys
 import time
 from pathlib import Path
 from datetime import date
-
-import requests
 
 logging.basicConfig(
     level=logging.INFO,
@@ -50,22 +52,21 @@ log = logging.getLogger(__name__)
 
 from utils import paths
 from utils import refresh
-_REPO     = Path(__file__).resolve().parents[2]
+from utils import bcb_http
 COSIF_RAW = paths.COSIF_RAW
 
-API      = "https://www.bcb.gov.br/api/servico/sitebcb/Documentos/byListGuid"
 GUID     = "a11917e4-c729-4259-bd4e-0266827b6acd"
-SITE     = "https://www.bcb.gov.br"
+SITE     = bcb_http.BCB_SITE
 
-# CMS folder -> COSIF document TYPE (filename suffix). The first three are the
-# ones scrape_12 consumes; the rest are downloaded only with --all-types.
+# CMS folder -> COSIF document TYPE (filename suffix). The core three are downloaded on every
+# run; the rest only with --all-types.
 FOLDERS_CORE = {
-    "/Bancos":                  "BANCOS",
-    "/Sociedades":              "SOCIEDADES",
-    "/Cooperativas-de-credito": "COOPERATIVAS",
+    "/Bancos":                    "BANCOS",
+    "/Sociedades":                "SOCIEDADES",
+    "/Cooperativas-de-credito":   "COOPERATIVAS",
+    "/Conglomerados-prudenciais": "BLOPRUDENCIAL",   # read by panel_ip_rates.py (step 15)
 }
 FOLDERS_EXTRA = {
-    "/Conglomerados-prudenciais":    "BLOPRUDENCIAL",
     "/Conglomerados-financeiros":    "COMBINADOS",
     "/Administradoras-de-consorcios": "CONSORCIOS",
     "/Instituicoes-em-regime-especial": "LIQUIDACAO",
@@ -76,29 +77,22 @@ FOLDERS_EXTRA = {
 _NAME_RE = re.compile(r"^(\d{6})[A-Z]+\.csv\.zip$", re.I)
 
 
-def _list_folder(session: requests.Session, folder: str) -> list[dict]:
-    r = session.get(API, params={
-        "tronco": "estabilidadefinanceira", "guidLista": GUID,
-        "ordem": "DataDocumento desc", "pasta": folder}, timeout=60)
-    r.raise_for_status()
-    return r.json().get("conteudo", [])
-
-
 def main(from_ym: str, to_ym: str, dry_run: bool = False, all_types: bool = False) -> None:
     COSIF_RAW.mkdir(parents=True, exist_ok=True)
     folders = dict(FOLDERS_CORE)
     if all_types:
         folders.update(FOLDERS_EXTRA)
 
-    session = requests.Session()
-    session.headers.update({"User-Agent": "Mozilla/5.0"})
+    session = bcb_http.retry_session()
+    failures: list[str] = []
 
     to_download: list[tuple[str, Path, str]] = []
     for folder in folders:
         try:
-            items = _list_folder(session, folder)
+            items = bcb_http.cms_documents(session, "estabilidadefinanceira", GUID, folder)
         except Exception as exc:
-            log.warning("Could not list %s: %s", folder, exc)
+            log.error("Could not list %s: %s", folder, exc)
+            failures.append(f"listing {folder}: {exc}")
             continue
         for it in items:
             nome = it.get("Nome", "")
@@ -127,15 +121,22 @@ def main(from_ym: str, to_ym: str, dry_run: bool = False, all_types: bool = Fals
             r = session.get(url, timeout=300)
             r.raise_for_status()
             if r.content[:2] != b"PK":
-                log.warning("  not a ZIP, skipping: %s", nome)
+                log.error("  not a ZIP: %s", nome)
+                failures.append(f"{nome}: not a ZIP")
                 continue
             dest.write_bytes(r.content)
             log.info("  -> %d KB", dest.stat().st_size // 1024)
         except Exception as exc:
-            log.warning("  FAILED: %s", exc)
+            log.error("  FAILED: %s", exc)
+            failures.append(f"{nome}: {exc}")
         time.sleep(0.5)
 
-    log.info("Done. Re-run scrape_cosif_service_fees.py to rebuild the fee panel.")
+    if failures:
+        log.error("%d COSIF listing/download(s) FAILED (nothing was written for them):", len(failures))
+        for f in failures:
+            log.error("  - %s", f)
+        sys.exit(1)
+    log.info("Done.")
 
 
 if __name__ == "__main__":
@@ -148,6 +149,6 @@ if __name__ == "__main__":
     parser.add_argument("--dry-run", action="store_true",
                         help="Show what would be downloaded without downloading")
     parser.add_argument("--all-types", action="store_true",
-                        help="Also download BLOPRUDENCIAL/COMBINADOS/CONSORCIOS/LIQUIDACAO")
+                        help="Also download COMBINADOS/CONSORCIOS/LIQUIDACAO")
     args = parser.parse_args()
     main(from_ym=args.from_ym, to_ym=args.to_ym, dry_run=args.dry_run, all_types=args.all_types)

@@ -59,10 +59,6 @@ import requests
 import numpy as np
 import pandas as pd
 
-try:
-    from utils.toon_runtime import resolve_script_paths
-except Exception:
-    resolve_script_paths = None
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
@@ -70,6 +66,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 ## 1) PATHS & CONSTANTS
 ## ─────────────────────────────────────────────────────────────────────────────
 from utils import paths
+from utils import mca
 BASE       = str(paths.OPEN_FINANCE)
 ANATEL_DIR = str(paths.ANATEL_DIR)   # processed anatel_*_panel outputs (kept in place)
 RAW_DIR    = str(paths.ANATEL_RAW)   # raw acessos_* downloads (consolidated under raw/)
@@ -78,23 +75,6 @@ MCA_CSV    = os.path.join(IBGE_DIR, "muni_mca_regions_2010_2024_panel.csv")
 DEMO_CSV   = os.path.join(IBGE_DIR, "mca_demographics_panel.csv")
 OUTPUT_CSV = os.path.join(ANATEL_DIR, "anatel_mca_panel.csv")
 
-if resolve_script_paths is not None:
-    _paths = resolve_script_paths(
-        "scrape_anatel",
-        {
-            "anatel_dir": ANATEL_DIR,
-            "raw_dir": RAW_DIR,
-            "mca_csv": MCA_CSV,
-            "demo_csv": DEMO_CSV,
-            "output_csv": OUTPUT_CSV,
-        },
-        script_dir=os.path.dirname(os.path.abspath(__file__)),
-    )
-    ANATEL_DIR = _paths["anatel_dir"]
-    RAW_DIR = _paths["raw_dir"]
-    MCA_CSV = _paths["mca_csv"]
-    DEMO_CSV = _paths["demo_csv"]
-    OUTPUT_CSV = _paths["output_csv"]
 
 os.makedirs(RAW_DIR, exist_ok=True)
 os.makedirs(ANATEL_DIR, exist_ok=True)
@@ -400,9 +380,7 @@ def add_quarter_and_fast(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def load_mca_crosswalk() -> pd.DataFrame:
-    return pd.read_csv(MCA_CSV,
-                       usecols=["municipality_code", "mca_code", "year"],
-                       dtype={"municipality_code": int, "mca_code": str, "year": int})
+    return mca.load_mca_crosswalk(MCA_CSV)
 
 
 def aggregate_to_mca_quarter(anatel: pd.DataFrame,
@@ -429,11 +407,12 @@ def aggregate_to_mca_quarter(anatel: pd.DataFrame,
     anatel = anatel.dropna(subset=["mca_code"])
     anatel["acessos_fast"] = anatel["acessos"].where(anatel["is_fast"] == 1, 0)
 
-    # Save municipality-level intermediate for within-MCA σ computation
+    # Municipality x quarter totals for the within-MCA σ (panel_demographics_sigma.py).
+    # The rows here are raw ANATEL records (provider x technology x access type), so sum them.
     if _muni_frames is not None:
         _muni_frames.append(
-            anatel[["mun_code", "mca_code", "year", "quarter",
-                    "acessos", "acessos_fast"]].copy()
+            anatel.groupby(["mun_code", "mca_code", "year", "quarter"], as_index=False)
+                  [["acessos", "acessos_fast"]].sum()
         )
 
     agg = (
@@ -450,23 +429,16 @@ def aggregate_to_mca_quarter(anatel: pd.DataFrame,
 
 def merge_population_for_per100(panel: pd.DataFrame) -> pd.DataFrame:
     """Add connections_per100 using MCA population from the demographics panel."""
-    if not os.path.exists(DEMO_CSV):
+    demo = mca.load_mca_population(DEMO_CSV)
+    if demo is None:
         logging.warning(f"Demographics panel not found at {DEMO_CSV}. "
                         "connections_per100 will be NaN.")
         panel["connections_per100"] = np.nan
         panel["frac_4g5g"]          = np.nan
         return panel
 
-    demo = pd.read_csv(DEMO_CSV,
-                       usecols=["mca_code", "year", "pop_total"],
-                       dtype={"mca_code": str, "year": int})
-
     panel = panel.merge(demo, on=["mca_code", "year"], how="left")
-    panel["connections_per100"] = np.where(
-        panel["pop_total"] > 0,
-        panel["connections_total"] / panel["pop_total"] * 100,
-        np.nan,
-    )
+    panel["connections_per100"] = mca.per100(panel["connections_total"], panel["pop_total"])
     panel["frac_4g5g"] = np.where(
         panel["connections_total"] > 0,
         panel["connections_4g5g"] / panel["connections_total"],
@@ -824,12 +796,12 @@ def _download_and_parse(year: int) -> pd.DataFrame | None:
         return pd.concat(frames, ignore_index=True)
 
 
-def main():
-    # Early exit: if output already exists AND muni intermediate exists, skip
+def main(force: bool = False):
+    # Early exit: if output already exists AND muni intermediate exists, skip (--force rebuilds)
     muni_csv = os.path.join(ANATEL_DIR, "anatel_muni_panel.csv")
-    if (os.path.exists(OUTPUT_CSV) and os.path.getsize(OUTPUT_CSV) > 0
+    if (not force and os.path.exists(OUTPUT_CSV) and os.path.getsize(OUTPUT_CSV) > 0
             and os.path.exists(muni_csv) and os.path.getsize(muni_csv) > 0):
-        print(f"Output already exists, skipping: {OUTPUT_CSV}")
+        print(f"Output already exists, skipping (pass --force to rebuild): {OUTPUT_CSV}")
         logging.info(f"Output already exists -- skipping rebuild: {OUTPUT_CSV}")
         return
 
@@ -909,4 +881,5 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    import sys
+    main(force="--force" in sys.argv[1:])

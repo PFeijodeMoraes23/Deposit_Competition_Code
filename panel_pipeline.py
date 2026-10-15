@@ -31,9 +31,9 @@ Pipeline stages
   Stage 0 - Raw data downloads
     0a. scrape_bcb_estban_ifdata.py          ESTBAN monthly files + IF Data via Olinda API
     0b. scrape_estban_concat.py              Concatenate raw ESTBAN monthlies -> processed ESTBAN.csv
-                                                  (Python port of the deprecated ESTBAN_Process_1.R; auto-extends as new months arrive)
+                                                  (auto-extends as new months arrive)
     0c. scrape_ifdata_aggregate.py           Aggregate per-period IF_DATA_Values_* -> Aggregated Data type/report CSVs
-                                                  (Python port of the deprecated if_data_process_1.py; consumed by panel_1 & panel_4)
+                                                  (consumed by panel_deposits & panel_bank_chars)
 
   Stage 1 - IBGE demographics
     1a. scrape_ibge_demographics.py           Municipal population, GDP, age structure -> MCA demographics panel
@@ -41,10 +41,9 @@ Pipeline stages
   Stage 2 - Market characteristic panels
     2a. scrape_pix_municipal.py                   Process BCB PIX municipality files -> MCA PIX adoption panel
     2b. scrape_anatel_mobile.py                      Download ANATEL mobile connections -> MCA connectivity panel
-    2d. scrape_bcb_inclusion.py               BCB banking access-points (branches + correspondents) -> MCA inclusion panel
+    2d. scrape_bcb_inclusion.py               ESTBAN branch counts -> MCA inclusion panel
     2d2. scrape_bcb_banked.py                  BCB ESTBAN deposit balances (Dec snapshot) + WB Findex -> MCA banked-fraction proxy panel
     2e. scrape_cadunico.py                     CadUnico low-income families -> MCA poverty panel
-    2f. scrape_bcb_tarifas.py                        BCB bank fee schedules (PF + PJ) -> tarifas conglomerate panel + fee summary
 
   Stage 2c - COSIF download + processing (feeds deposit-rate panels)
     2k. scrape_cosif_download.py             COSIF ZIP downloader for missing months (and future updates) -> shared/COSIF
@@ -78,27 +77,32 @@ Pipeline stages
     (sleep_desc_clusters.py and sleep_export_spec12_compare.py are POST-ESTIMATION — they read the sleep's
      market_panel_phis.csv — and live in sleep_pipeline.py steps 11-12, not here.)
 
-  Stage 6 - Firm-disclosure & count data (extensive-vs-intensive margin)
-    6a. scrape_edgar_disclosures.py        SEC EDGAR firm customers + deposits
-    6b. scrape_parent_disclosures.py      Mercado Pago MAU (MELI 8-K); C6/PicPay template
-    6c. scrape_incumbent_clients.py       CVM-IPE earnings PDFs -> client counts (Tier-2/4 cascade)
-    6d. scrape_bcb_accounts.py            BCB account-count report archival + template
-    6e. scrape_worldbank_findex.py        Findex national demographic ownership
-    6f. scrape_fgc_statistics.py          FGC bracket template + report archival
-    6g. scrape_cvm_deposits.py         CVM deposits in BRL (incl. Banco do Brasil)
-    6h.  panel_disclosure_join.py       Join disclosures -> account-vs-volume table
+  Stage 6 - Extensive-margin disclosures (OPT-IN: --extensive-margin)
+    Frozen 2026-10-14 in extensive_margin/. Firm customer counts and deposits from SEC, CVM,
+    MELI filings, earnings PDFs and World Bank Findex, joined into an account-vs-volume table.
+    No estimator, table or paper exhibit reads it, so a full run skips it unless asked.
+    6a. extensive_margin/scrape_edgar_disclosures.py    SEC EDGAR firm customers + deposits
+    6b. extensive_margin/scrape_parent_disclosures.py   Mercado Pago MAU (MELI 8-K); C6/PicPay template
+    6c. extensive_margin/scrape_incumbent_clients.py    CVM-IPE earnings PDFs -> client counts (Tier-2/4 cascade)
+    6d. extensive_margin/scrape_worldbank_findex.py     Findex national demographic ownership
+    6e. extensive_margin/scrape_cvm_deposits.py         CVM deposits in BRL (incl. Banco do Brasil)
+    6f. extensive_margin/panel_disclosure_join.py       Join disclosures -> account-vs-volume table
+    (extensive_margin/make_account_vs_volume_figure.py and make_margin_figures.py draw its figures.)
 
-  NOTE: the non-pipeline scrapers scrape_18_cosif_service_fees, scrape_19_openfinance_fees,
-  scrape_20_bcb_tariff_vigencia, scrape_22_pix_participants, scrape_23_pix_roster,
-  scrape_24_cvm_fee_income, scrape_inss and the fee-merge panel_9_cosif_fees are run
-  outside this master runner.
+  Outside this runner: scrape_cosif_service_fees.py, the frozen BCB tariff scrapers in fees/
+  (inputs of panel_fee_merge.py), scrape_cvm_fee_income.py, scrape_pix_participants.py, scrape_pix_roster.py,
+  scrape_bcb_complaints.py, scrape_bcb_pilar3_liq2.py, scrape_fgc_censo.py, the
+  scrape_deposit_maturity_* scrapers, scrape_forward_rf.py and the advertising scrapers.
 
 Usage
 -----
-  python panel_pipeline.py                   # run all stages
-  python panel_pipeline.py --from 2          # restart from stage 2 onward
-  python panel_pipeline.py --only 3          # run only stage 3
-  python panel_pipeline.py --skip 2b,2e      # skip specific sub-steps
+  python panel_pipeline.py                     # run stages 0-5
+  python panel_pipeline.py --from 2            # restart from stage 2 onward
+  python panel_pipeline.py --only 3            # run only stage 3
+  python panel_pipeline.py --to 4              # run up to and including stage 4
+  python panel_pipeline.py --skip 5,6          # skip specific step IDs
+  python panel_pipeline.py --extensive-margin  # also run stage 6
+  python panel_pipeline.py --list              # print the steps (with IDs) and the waves
 
 Notes
 -----
@@ -110,55 +114,6 @@ Notes
   * Stage 4 requires ALL panels to exist.  If some stage-2 downloads failed
     (data source unavailable), panel_market.py handles missing files
     gracefully (those columns will be NaN).
-
-CLI Options:
-------------
-usage: panel_pipeline.py [-h] [--from N] [--only N] [--skip IDs] [--list]
-
-Run the full Brazilian Open Finance data pipeline.
-
-options:
-  -h, --help  show this help message and exit
-  --from N    Start from this stage number (0-6). Skips all earlier stages.
-  --only N    Run only this stage number (0-6). All others are skipped.
-  --skip IDs  Comma-separated list of step IDs to skip (e.g. '9,12').
-  --list      Print the pipeline steps and exit.
-
-Scripts called by the data pipeline (contiguous step IDs in execution order):
------------------------------------------------------------------------------
-[1] scrape_bcb_estban_ifdata.py
-[2] scrape_estban_concat.py
-[3] scrape_ifdata_aggregate.py
-[4] scrape_ibge_demographics.py
-[5] scrape_pix_municipal.py
-[6] scrape_anatel_mobile.py
-[7] scrape_bcb_inclusion.py
-[8] scrape_bcb_banked.py
-[9] scrape_cadunico.py
-[10] scrape_bcb_tarifas.py
-[11] scrape_cosif_download.py
-[12] panel_cosif_extract.py
-[13] panel_cosif_calibrate.py
-[14] panel_deposits.py
-[15] panel_ip_rates.py
-[16] panel_deposit_rates.py
-[17] panel_bank_chars.py
-[18] panel_digital_flags.py
-[19] panel_market.py
-[20] panel_loo_instruments.py
-[21] panel_demographics_sigma.py
-[22] make_desc_panel_tables.py
-[23] make_desc_panel_tables.py --weight-col pop_total
-[24] make_desc_compressed_tables.py
-[25] make_desc_compressed_tables.py --weight-col pop_total
-[26] scrape_edgar_disclosures.py
-[27] scrape_parent_disclosures.py
-[28] scrape_incumbent_clients.py
-[29] scrape_bcb_accounts.py
-[30] scrape_worldbank_findex.py
-[31] scrape_fgc_statistics.py
-[32] scrape_cvm_deposits.py
-[33] panel_disclosure_join.py
 """
 
 import argparse
@@ -170,7 +125,6 @@ import sys
 import threading
 import time
 import contextlib
-from pathlib import Path
 try:
     from utils.venv_guard import ensure_project_venv
 except Exception:
@@ -178,15 +132,6 @@ except Exception:
 
 if ensure_project_venv is not None:
     ensure_project_venv(__file__)
-
-
-
-try:
-    from utils.toon_parser import dump_context_json, get_script_config, load_default_toon_context
-except Exception:
-    dump_context_json = None
-    get_script_config = None
-    load_default_toon_context = None
 
 # Force the console encoding to match the terminal (CP1252 / Latin-1 on Windows)
 # so that printed characters are never garbled.  All print strings use plain ASCII.
@@ -202,27 +147,18 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 PYTHON     = sys.executable
 
 
-def _load_toon_runtime_context() -> dict:
-    """Load optional TOON runtime context from local Gemini exports."""
-    if load_default_toon_context is None:
-        return {}
-
-    try:
-        return load_default_toon_context(Path(SCRIPT_DIR) / "utils", quiet=True)
-    except Exception:
-        return {}
-
 # -- Pipeline definition --------------------------------------------------------
-# Each entry: (stage_int, step_id_str, script_filename, description)
-# Step IDs are contiguous 1..N in execution order.
+# Each entry: (stage_int, step_id_str, script_path, description). script_path is relative to this
+# folder. Step IDs are stable labels for --skip; they are not contiguous, and WAVES (below) sets
+# the run order. `python panel_pipeline.py --list` prints both.
 STEPS = [
     # Stage 0 -- raw downloads
     (0, "1", "scrape_bcb_estban_ifdata.py",
      "ESTBAN monthly files + IF Data (Olinda API)"),
     (0, "2", "scrape_estban_concat.py",
-     "Concatenate raw ESTBAN monthlies -> processed ESTBAN.csv (Python port of deprecated R)"),
+     "Concatenate raw ESTBAN monthlies -> processed ESTBAN.csv"),
     (0, "3", "scrape_ifdata_aggregate.py",
-     "Aggregate per-period IF_DATA_Values -> Aggregated Data reports (Python port of deprecated if_data_process_1.py)"),
+     "Aggregate per-period IF_DATA_Values -> Aggregated Data reports"),
 
     # Stage 1 -- IBGE demographics
     (1, "4", "scrape_ibge_demographics.py",
@@ -234,17 +170,15 @@ STEPS = [
     (2, "6", "scrape_anatel_mobile.py",
      "Download ANATEL mobile connections -> MCA connectivity panel"),
     (2, "7", "scrape_bcb_inclusion.py",
-     "BCB banking access-points (branches + correspondents) -> MCA inclusion panel"),
+     "ESTBAN branch counts -> MCA inclusion panel"),
     (2, "8", "scrape_bcb_banked.py",
      "BCB ESTBAN deposit balances (Dec snapshot) + WB Findex -> MCA banked-fraction proxy panel"),
     (2, "9", "scrape_cadunico.py",
      "CadUnico low-income families -> MCA poverty panel"),
-    (2, "10", "scrape_bcb_tarifas.py",
-     "BCB bank fee schedules (PF + PJ) -> tarifas conglomerate panel + fee summary"),
 
-    # Stage 2c -- COSIF download + processing (feeds panel_2/panel_3 deposit rates)
+    # Stage 2c -- COSIF download + processing (feeds panel_ip_rates and panel_deposit_rates)
     (2, "11", "scrape_cosif_download.py",
-     "Download missing monthly COSIF ZIPs (BANCOS) into shared/COSIF"),
+     "Download missing monthly COSIF ZIPs (BANCOS, SOCIEDADES, COOPERATIVAS, BLOPRUDENCIAL) into shared/COSIF"),
     (2, "12", "panel_cosif_extract.py",
      "Extract COSIF -> custos_implicitos_<TAXONOMY>.csv (canonical) + per-type foundation"),
     (2, "13", "panel_cosif_calibrate.py",
@@ -261,27 +195,28 @@ STEPS = [
      "IF Data -> conglomerate x quarter bank size and solvency characteristics panel"),
     (3, "38", "scrape_bcb_access_points.py",
      "BCB Informes -> per-institution agencias/postos/correspondentes by municipality "
-     "(physical-network evidence; MUST precede panel_5)"),
+     "(physical-network evidence; MUST precede panel_digital_flags)"),
     (3, "18", "panel_digital_flags.py",
      "Deposit booking + physical network -> brick-and-mortar vs digital verdict -> PANEL_INTERMED"),
 
     # Stage 4 -- master analysis panel
     #
     # ORDER IS LOAD-BEARING, and two steps were missing here until 2026-07-14:
-    #   * panel_7 OVERWRITES market_panel.csv with the LOO instruments (IV_BLP_LOO) + the FGC dummy.
-    #     Rebuilding panel_6 without then re-running panel_7 leaves market_panel with NO
-    #     loo_log_assets / mean_loo_log_assets / loo_equity_ratio / loo_basileia /
-    #     leave_one_out_mean_spread -- and blp_1_estimation's build_regressor_matrices SILENTLY drops
+    #   * panel_loo_instruments OVERWRITES market_panel.csv with the LOO instruments (IV_BLP_LOO) +
+    #     the FGC dummy. Rebuilding panel_market without then re-running panel_loo_instruments leaves
+    #     market_panel with NO loo_log_assets / mean_loo_log_assets / loo_equity_ratio / loo_basileia /
+    #     leave_one_out_mean_spread -- and the BLP engines' build_regressor_matrices SILENTLY drops
     #     any instrument not present, so the BLP ends up identified off the cost shifters alone.
-    #   * panel_9 builds market_panel_with_fees.csv. It must still run LAST in this stage, after
-    #     panel_7's overwrite, so the fee panel is not built from a half-finished base.
+    #   * panel_fee_merge builds market_panel_with_fees.csv. It must still run LAST in this stage,
+    #     after panel_loo_instruments' overwrite, so the fee panel is not built from a half-finished base.
     #     RESOLVED 2026-08-04 — the shadowing hazard this warning described actually fired.
     #     Estimation scripts USED to prefer with_fees whenever it existed, so a stale copy
     #     silently shadowed a freshly rebuilt market_panel. Run-order discipline was the only
-    #     guard and it failed: panel_7/10/12 overwrote market_panel.csv on 08-03, panel_9 was
-    #     not re-run, and every downstream estimate was built from the 07-28 fee panel. The
-    #     preference is now gone (utils/paths.market_panel_csv reads market_panel.csv; opt in
-    #     with USE_FEE_PANEL=1), so a stale fee panel can no longer shadow anything.
+    #     guard and it failed: panel_loo_instruments / panel_estban_instrument / panel_local_cdb_spread
+    #     overwrote market_panel.csv on 08-03, panel_fee_merge was not re-run, and every downstream
+    #     estimate was built from the 07-28 fee panel. The preference is now gone
+    #     (utils/paths.market_panel_csv reads market_panel.csv; opt in with USE_FEE_PANEL=1), so a
+    #     stale fee panel can no longer shadow anything.
     # See counterfactuals_plan.md §0B.
     (4, "19", "panel_market.py",
      "Merge all MCA panels + deposit panel -> master analysis dataset"),
@@ -289,24 +224,28 @@ STEPS = [
      "Compute LOO instruments and FGC dummy -> overwrites market_panel.csv"),
     (4, "21", "panel_demographics_sigma.py",
      "Within-MCA demographic σ for BLP parametric draws -> demographics_sigma.parquet"),
-    # panel_10 (ESTBAN rival-branch IV) and panel_12 (local CDB spread) were manual-only
-    # until 2026-07-23. A full panel_6 rebuild wipes market_panel, so estban_rival_branches_lag
-    # and the local spread must be re-applied here, AFTER panel_7's overwrite and BEFORE panel_9.
+    # panel_estban_instrument (ESTBAN rival-branch IV) and panel_local_cdb_spread (local CDB spread)
+    # were manual-only until 2026-07-23. A full panel_market rebuild wipes market_panel, so
+    # estban_rival_branches_lag and the local spread must be re-applied here, AFTER
+    # panel_loo_instruments' overwrite and BEFORE panel_fee_merge.
     (4, "36", "panel_estban_instrument.py",
-     "ESTBAN rival-branch instrument -> market_panel.csv (estban_rival_branches_lag; MUST follow panel_7)"),
+     "ESTBAN rival-branch instrument -> market_panel.csv (estban_rival_branches_lag; "
+     "MUST follow panel_loo_instruments)"),
     (4, "37", "panel_local_cdb_spread.py",
      "Member-CNPJ LOCAL type-4 (CDB) spread patch, toggle LOCAL_CDB_SPREAD (default ON) -> "
-     "market_panel.csv (MUST follow panel_10, precede panel_9)"),
+     "market_panel.csv (MUST follow panel_estban_instrument, precede panel_fee_merge)"),
     (4, "22", "panel_fee_merge.py --patch-market",
-     "COSIF/Tarifas fee columns -> market_panel_with_fees.csv (MUST follow panel_7/panel_10/panel_12). "
+     "COSIF/BCB-listed fee columns -> market_panel_with_fees.csv (MUST follow panel_loo_instruments/"
+     "panel_estban_instrument/panel_local_cdb_spread). "
      "Optional for estimation: the estimators read market_panel.csv unless USE_FEE_PANEL=1"),
     # The demand preps (sleep_demand_prep_*.py) apply this file through utils/demand_chars.py and
     # fail without it. It keys on market_panel rows and reads the final panel, bank_chars_panel,
     # deposits_panel, the corrected COSIF k=4 rate and the raw IF.data / ESTBAN files, so it is
-    # rebuilt after the last step that writes market_panel (panel_6/7/10/12).
+    # rebuilt after the last step that writes market_panel (panel_market, panel_loo_instruments,
+    # panel_estban_instrument, panel_local_cdb_spread).
     (4, "39", "panel_demand_chars.py",
      "Corrected characteristics, segments and balances for the demand preps -> demand_chars.parquet "
-     "(MUST follow panel_6/panel_7/panel_10/panel_12)"),
+     "(MUST follow every step that writes market_panel.csv)"),
 
     # Stage 5 -- descriptive statistics
     (5, "23", "make_desc_panel_tables.py",
@@ -320,30 +259,29 @@ STEPS = [
     # NB: sleep_desc_clusters.py and sleep_export_spec12_compare.py are NOT here. They read market_panel_phis.csv, which
     # is a SLEEP output — so they are POST-ESTIMATION steps and live in sleep_pipeline.py (steps
     # 11-12), which runs after the estimators. Putting them in this data pipeline would silently read
-    # whatever the last sleep happened to leave on disk. desc_1/desc_2 belong here: they read
-    # market_panel.csv, which this pipeline builds.
+    # whatever the last sleep happened to leave on disk. make_desc_panel_tables /
+    # make_desc_compressed_tables belong here: they read market_panel.csv, which this pipeline builds.
 
-    # Stage 6 -- firm-disclosure & count data (extensive-vs-intensive margin diagnostic)
-    # External-API scrapers, serialized (one per wave) to respect SEC/CVM/WB rate
-    # limits, mirroring the Stage-2 convention. The join depends on BOTH the firm
-    # disclosures and the Stage-4 market_panel.csv, so it runs last.
-    (6, "28", "scrape_edgar_disclosures.py",
+    # Stage 6 -- extensive-margin disclosures, frozen in extensive_margin/ and OPT-IN
+    # (--extensive-margin; see OPT_IN_STAGES). External-API scrapers, serialized (one per wave) to
+    # respect SEC/CVM/WB rate limits. The join depends on BOTH the firm disclosures and the
+    # Stage-4 market_panel.csv, so it runs last.
+    (6, "28", "extensive_margin/scrape_edgar_disclosures.py",
      "SEC EDGAR: firm customers (BR/consolidated) + deposits (XBRL)"),
-    (6, "29", "scrape_parent_disclosures.py",
+    (6, "29", "extensive_margin/scrape_parent_disclosures.py",
      "MELI 8-K: Mercado Pago fintech MAU; C6/PicPay manual template"),
-    (6, "30", "scrape_incumbent_clients.py",
+    (6, "30", "extensive_margin/scrape_incumbent_clients.py",
      "CVM-IPE earnings PDFs -> client counts (Pan/BMG/Banrisul/BB); vision fallback"),
-    (6, "31", "scrape_bcb_accounts.py",
-     "BCB RCF/REB report archival + account-count manual template"),
-    (6, "32", "scrape_worldbank_findex.py",
+    (6, "32", "extensive_margin/scrape_worldbank_findex.py",
      "World Bank Findex: national demographic account ownership"),
-    (6, "33", "scrape_fgc_statistics.py",
-     "FGC: bracket manual template + report archival"),
-    (6, "34", "scrape_cvm_deposits.py",
+    (6, "34", "extensive_margin/scrape_cvm_deposits.py",
      "CVM DFP/ITR: deposits in BRL (incl. Banco do Brasil)"),
-    (6, "35", "panel_disclosure_join.py",
+    (6, "35", "extensive_margin/panel_disclosure_join.py",
      "Join disclosures -> conglomerate x quarter account-vs-volume table"),
 ]
+
+# Stages that run only when asked for: {stage: the flag that enables it}. --only <stage> also runs it.
+OPT_IN_STAGES = {6: "--extensive-margin"}
 
 
 # -- Runner helpers -------------------------------------------------------------
@@ -405,8 +343,6 @@ def run_step(step_id: str, script: str, description: str) -> float:
     # the work is done, so the step reports failure for a computation that succeeded. One
     # env var here covers every child this pipeline launches. See sleep_pipeline.py.
     env["PYTHONIOENCODING"] = "utf-8"
-    if toon_ctx_path := os.environ.get("TOON_CONTEXT_PATH", "").strip():
-        env["TOON_CONTEXT_PATH"] = toon_ctx_path
 
     proc = subprocess.Popen(
         [PYTHON, path] + script_args[1:], cwd=SCRIPT_DIR,
@@ -456,8 +392,8 @@ def run_step(step_id: str, script: str, description: str) -> float:
 #             starting until IBGE finishes. 1a has no dependency on 0a.
 #   Wave 2 -- After 0a completes: all characteristic panels run in stages.
 #             1a=IBGE SIDRA (long, ~700s but independent of 0a),
-#             2a=PIX (local files), 2b=ANATEL, 2d=BCB Olinda inclusion,
-#             2e=SAGI CadUnico, 2f=BCB tarifas, 3a=deposits (reads 0a output),
+#             2a=PIX (local files), 2b=ANATEL, 2d=ESTBAN branch counts,
+#             2e=SAGI CadUnico, 3a=deposits (reads 0a output),
 #             and 3b=IP rates (reads raw COSIF).
 #             These are mutually independent -> run in stages.
 #   Wave 3 -- 3c (deposit rates) runs after 3a constructs the deposit panel and 3b extracts IP rates.
@@ -472,29 +408,29 @@ WAVES: list[list[str]] = [
     ["7"],                                     # Wave 2d: BCB inclusion
     ["8"],                                    # Wave 2d2: BCB ESTBAN banked-fraction proxy
     ["9"],                                     # Wave 2e: CadUnico
-    ["10"],                                     # Wave 2f: fees
-    # Stage 2c: COSIF download -> extract -> calibrate (strict serial chain;
-    # must finish before panel_2/panel_3 consume the COSIF processed output).
+    # Stage 2c: COSIF download -> extract -> calibrate (strict serial chain; must finish
+    # before panel_ip_rates / panel_deposit_rates consume the COSIF processed output).
     ["11"],                                    # Wave 2g: COSIF download
     ["12"],                                    # Wave 2h: COSIF extract (custos_implicitos + foundation)
     ["13"],                                    # Wave 2i: COSIF calibrate (corrected k=4 CDB rate)
     ["14", "15"],                               # Wave 3: deposits + IP rates
-    ["38"],                                   # Wave 3b: per-institution access points (panel_5 reads them)
+    ["38"],                                   # Wave 3b: per-institution access points (panel_digital_flags reads them)
     ["16", "17", "18"],                         # Wave 4: deposit rates/spreads + bank chars + digital verdict (parallel)
-    ["19"],                                    # Wave 5: master merge (panel_6)
-    ["20", "21"],                             # Wave 6: LOO instruments (panel_7, OVERWRITES market_panel)
-                                              #         + demographics sigma (panel_8, independent)
-    ["36"],                                   # Wave 6b: ESTBAN rival-branch IV (panel_10) — after panel_7 overwrite
-    ["37"],                                   # Wave 6c: LOCAL CDB spread patch (panel_12) — after panel_10, before panel_9
+    ["19"],                                    # Wave 5: master merge (panel_market)
+    ["20", "21"],                             # Wave 6: LOO instruments (panel_loo_instruments, OVERWRITES market_panel)
+                                              #         + demographics sigma (panel_demographics_sigma, independent)
+    ["36"],                                   # Wave 6b: ESTBAN rival-branch IV — after the LOO overwrite
+    ["37"],                                   # Wave 6c: LOCAL CDB spread patch — after 36, before the fee merge
     ["39"],                                   # Wave 6d: demand_chars.parquet — after the final market_panel
-    ["22"],                                   # Wave 7: panel_9 fee patch — MUST follow panel_7/panel_10/panel_12
-    ["23", "24", "25", "26"],                 # Wave 8: descriptives (desc_1/desc_2 x {unweighted, weighted})
-                                              #         desc_3 + export_analyze_spec12 are post-estimation
+    ["22"],                                   # Wave 7: fee merge — MUST follow 20/36/37
+    ["23", "24", "25", "26"],                 # Wave 8: descriptives (make_desc_panel_tables / make_desc_compressed_tables
+                                              #         x {unweighted, weighted}); sleep_desc_clusters and
+                                              #         sleep_export_spec12_compare are post-estimation
                                               #         -> sleep_pipeline.py steps 11-12
-    # Stage 6: firm-disclosure scrapers, one per wave (serial) to respect external
+    # Stage 6 (opt-in): firm-disclosure scrapers, one per wave (serial) to respect external
     # rate limits (EDGAR/parent both hit SEC), then the join once all are present.
-    ["28"], ["29"], ["30"], ["31"], ["32"], ["33"], ["34"],  # Wave 9-15: disclosure scrapers
-    ["35"],                                                          # Wave 16: disclosure join
+    ["28"], ["29"], ["30"], ["32"], ["34"],   # Waves 9-13: disclosure scrapers
+    ["35"],                                   # Wave 14: disclosure join
 ]
 
 def run_wave(
@@ -565,38 +501,23 @@ def run_wave(
 
 # -- Argument parsing -----------------------------------------------------------
 
+def _steps_in_run_order() -> str:
+    """The STEPS, one line each, in WAVES order (the epilog of --help)."""
+    by_id = {sid: (stage, script) for stage, sid, script, _ in STEPS}
+    lines = []
+    for wave in WAVES:
+        for sid in wave:
+            stage, script = by_id[sid]
+            opt = f"   (opt-in: {OPT_IN_STAGES[stage]})" if stage in OPT_IN_STAGES else ""
+            lines.append(f"[{sid}] stage {stage}  {script}{opt}")
+    return "\n".join(lines)
+
+
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(
         description="Run the full Brazilian Open Finance data pipeline.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Scripts called by the data pipeline (contiguous step IDs in execution order):
------------------------------------------------------------------------------
-[1] scrape_bcb_estban_ifdata.py
-[2] scrape_estban_concat.py
-[3] scrape_ifdata_aggregate.py
-[4] scrape_ibge_demographics.py
-[5] scrape_pix_municipal.py
-[6] scrape_anatel_mobile.py
-[7] scrape_bcb_inclusion.py
-[8] scrape_bcb_banked.py
-[9] scrape_cadunico.py
-[10] scrape_bcb_tarifas.py
-[11] scrape_cosif_download.py
-[12] panel_cosif_extract.py
-[13] panel_cosif_calibrate.py
-[14] panel_deposits.py
-[15] panel_ip_rates.py
-[16] panel_deposit_rates.py
-[17] panel_bank_chars.py
-[18] panel_digital_flags.py
-[19] panel_market.py
-[20] panel_loo_instruments.py
-[21] panel_demographics_sigma.py
-[22] make_desc_panel_tables.py / [24] make_desc_compressed_tables.py (each x2: unweighted + --weight-col pop_total)
-[26] scrape_edgar_disclosures.py ... [32] scrape_cvm_deposits.py
-[33] panel_disclosure_join.py
-"""
+        epilog="Steps in run order ([step ID] stage script):\n" + _steps_in_run_order(),
     )
     p.add_argument(
         "--from", dest="from_stage", type=int, default=0, metavar="N",
@@ -604,15 +525,19 @@ Scripts called by the data pipeline (contiguous step IDs in execution order):
     )
     p.add_argument(
         "--only", dest="only_stage", type=int, default=None, metavar="N",
-        help="Run only this stage number (0-6).  All others are skipped.",
+        help="Run only this stage number (0-6), opt-in stages included.  All others are skipped.",
     )
     p.add_argument(
         "--to", "--max-stage", dest="max_stage", type=int, default=None, metavar="N",
-        help="Run only up to and including this stage number (e.g. '--to 5' skips Stage 6).",
+        help="Run only up to and including this stage number.",
     )
     p.add_argument(
         "--skip", dest="skip_steps", type=str, default="", metavar="IDs",
         help="Comma-separated list of step IDs to skip (e.g. '9,12').",
+    )
+    p.add_argument(
+        "--extensive-margin", dest="extensive_margin", action="store_true",
+        help="Also run stage 6, the frozen extensive-margin disclosure scrapers in extensive_margin/.",
     )
     p.add_argument(
         "--list", action="store_true",
@@ -674,22 +599,6 @@ def send_notification_email(finished_step: str, elapsed_seconds: float, next_ste
 def main() -> None:
     args = parse_args()
 
-    toon_ctx = _load_toon_runtime_context()
-    if toon_ctx and get_script_config is not None:
-        cfg = get_script_config(toon_ctx, "run_data_pipeline")
-        note = cfg.get("note") if isinstance(cfg, dict) else None
-        if isinstance(note, str) and note.strip():
-            _banner(f"TOON note: {note.strip()}", "=")
-
-    if toon_ctx and dump_context_json is not None:
-        toon_ctx_file = Path(SCRIPT_DIR) / "utils" / "toon_context.json"
-        try:
-            dump_context_json(toon_ctx, toon_ctx_file)
-            os.environ["TOON_CONTEXT_PATH"] = str(toon_ctx_file)
-            print(f"[TOON] Runtime context exported to: {toon_ctx_file}")
-        except Exception as exc:
-            print(f"[TOON] Warning: failed to export runtime context ({exc}).")
-
     # Build step lookup: {step_id: (script, description)}
     steps_dict: dict[str, tuple[str, str]] = {
         step_id: (script, desc) for _, step_id, script, desc in STEPS
@@ -698,7 +607,8 @@ def main() -> None:
     if args.list:
         _banner("Pipeline steps", "=")
         for stage, step_id, script, desc in STEPS:
-            print(f"  [{step_id}]  Stage {stage}  {script:<40}  {desc}")
+            opt = f"  (opt-in: {OPT_IN_STAGES[stage]})" if stage in OPT_IN_STAGES else ""
+            print(f"  [{step_id}]  Stage {stage}  {script:<40}  {desc}{opt}")
         print("=" * _W)
         print("\nExecution waves (steps within each wave run in parallel):")
         for i, wave in enumerate(WAVES, 1):
@@ -707,16 +617,24 @@ def main() -> None:
 
     skip_set = {s.strip() for s in args.skip_steps.split(",") if s.strip()}
 
-    # Determine which stage numbers are active
+    # Determine which stage numbers are active. An opt-in stage runs only with its flag or --only.
     stage_of   = {step_id: stage for stage, step_id, *_ in STEPS}
     all_stages = sorted({stage for stage, *_ in STEPS})
+    opted_in   = {s for s, flag in OPT_IN_STAGES.items()
+                  if getattr(args, flag.lstrip("-").replace("-", "_"))}
     if args.only_stage is not None:
         active_stages: set[int] = {args.only_stage}
     else:
         active_stages = {
             s for s in all_stages
             if s >= args.from_stage and (args.max_stage is None or s <= args.max_stage)
+            and (s not in OPT_IN_STAGES or s in opted_in)
         }
+        if skipped_opt_in := sorted(s for s in all_stages if s in OPT_IN_STAGES and s not in opted_in
+                                    and s >= args.from_stage
+                                    and (args.max_stage is None or s <= args.max_stage)):
+            print("  Opt-in stages not run: "
+                  + ", ".join(f"{s} ({OPT_IN_STAGES[s]})" for s in skipped_opt_in))
 
     # Filter WAVES to only include steps whose stage is active
     filtered_waves: list[list[str]] = []

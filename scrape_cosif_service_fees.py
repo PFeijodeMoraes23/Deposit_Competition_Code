@@ -139,6 +139,8 @@ def _process_zip(zip_path: str) -> list[dict]:
     try:
         df = pd.read_csv(src, sep=";", encoding="latin1", dtype=str, skiprows=3)
     except Exception:
+        if isinstance(src, BytesIO):
+            src.seek(0)   # the first attempt consumed the buffer
         try:
             df = pd.read_csv(src, sep=";", encoding="latin1", dtype=str)
         except Exception as exc:
@@ -295,12 +297,22 @@ def main(workers: int | None = None, test: bool = False) -> None:
     #   Pre-2023:  {YYYYMM}TYPE.ZIP
     #   2023+:     {YYYYMM}TYPE.csv.zip  (same inner structure, different extension)
     def _gather(pattern_upper: str) -> list[Path]:
-        return sorted(set(
+        found = set(
             list(COSIF_RAW.glob(f"*{pattern_upper}.ZIP")) +
             list(COSIF_RAW.glob(f"*{pattern_upper}.zip")) +
             list(COSIF_RAW.glob(f"*{pattern_upper}.csv.zip")) +
             list(COSIF_RAW.glob(f"*{pattern_upper}.csv"))   # plain CSV (unzipped)
-        ))
+        )
+        # ONE file per month: a month can sit on disk both zipped and as a plain CSV
+        # (202508/202509 BANCOS, 202302 SOCIEDADES), and _build_panel SUMS rows, so reading
+        # both doubles the month. Prefer the zip, as panel_cosif_extract.discover_bancos_files does.
+        by_month: dict[str, tuple[int, Path]] = {}
+        for p in found:
+            ym = p.name[:6]
+            rank = 0 if p.name.lower().endswith(".zip") else 1
+            if ym not in by_month or rank < by_month[ym][0]:
+                by_month[ym] = (rank, p)
+        return sorted(v[1] for v in by_month.values())
 
     bancos       = _gather("BANCOS")
     sociedades   = _gather("SOCIEDADES")

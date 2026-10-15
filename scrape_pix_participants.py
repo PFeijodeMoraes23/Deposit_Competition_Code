@@ -69,10 +69,6 @@ if ensure_project_venv is not None:
 
 import pandas as pd
 
-try:
-    from utils.toon_runtime import resolve_script_paths
-except Exception:
-    resolve_script_paths = None
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
@@ -87,15 +83,6 @@ PIX_RAW    = str(paths.PIX_RAW)   # raw ChavesPix_* inputs
 PANEL_CSV  = os.path.join(PIX_DIR, "pix_participant_keys_panel.csv")
 ENTRY_CSV  = os.path.join(PIX_DIR, "pix_participant_entry.csv")
 
-if resolve_script_paths is not None:
-    _paths = resolve_script_paths(
-        "scrape_22_pix_participants",
-        {"pix_dir": PIX_DIR, "panel_csv": PANEL_CSV, "entry_csv": ENTRY_CSV},
-        script_dir=os.path.dirname(os.path.abspath(__file__)),
-    )
-    PIX_DIR   = _paths["pix_dir"]
-    PANEL_CSV = _paths["panel_csv"]
-    ENTRY_CSV = _paths["entry_csv"]
 
 OLINDA_BASE = ("https://olinda.bcb.gov.br/olinda/servico/Pix_DadosAbertos/"
                "versao/v1/odata/ChavesPix(Data=@Data)")

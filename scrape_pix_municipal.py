@@ -64,10 +64,6 @@ if ensure_project_venv is not None:
 import numpy as np
 import pandas as pd
 
-try:
-    from utils.toon_runtime import resolve_script_paths
-except Exception:
-    resolve_script_paths = None
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
@@ -76,6 +72,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 ## ─────────────────────────────────────────────────────────────────────────────
 from utils import paths
 from utils import refresh
+from utils import mca
 BASE       = str(paths.OPEN_FINANCE)
 PIX_DIR    = str(paths.PIX_DIR)   # processed pix_*_panel outputs
 PIX_RAW    = str(paths.PIX_RAW)   # raw TransacoesPixMunicipio_* inputs
@@ -84,21 +81,6 @@ MCA_CSV    = os.path.join(IBGE_DIR, "muni_mca_regions_2010_2024_panel.csv")
 DEMO_CSV   = os.path.join(IBGE_DIR, "mca_demographics_panel.csv")
 OUTPUT_CSV = os.path.join(PIX_DIR, "pix_mca_panel.csv")
 
-if resolve_script_paths is not None:
-    _paths = resolve_script_paths(
-        "scrape_pix_panel",
-        {
-            "pix_dir": PIX_DIR,
-            "mca_csv": MCA_CSV,
-            "demo_csv": DEMO_CSV,
-            "output_csv": OUTPUT_CSV,
-        },
-        script_dir=os.path.dirname(os.path.abspath(__file__)),
-    )
-    PIX_DIR = _paths["pix_dir"]
-    MCA_CSV = _paths["mca_csv"]
-    DEMO_CSV = _paths["demo_csv"]
-    OUTPUT_CSV = _paths["output_csv"]
 
 # PIX launch: November 2020
 PIX_LAUNCH_YYYYMM = 202011
@@ -281,9 +263,7 @@ def load_mca_crosswalk() -> pd.DataFrame:
     Load the MCA crosswalk. Returns DataFrame:
       municipality_code (int), mca_code (str), year (int)
     """
-    return pd.read_csv(MCA_CSV,
-                      usecols=["municipality_code", "mca_code", "year"],
-                      dtype={"municipality_code": int, "mca_code": str, "year": int})
+    return mca.load_mca_crosswalk(MCA_CSV)
 
 
 def merge_mca(pix: pd.DataFrame, crosswalk: pd.DataFrame) -> pd.DataFrame:
@@ -385,7 +365,8 @@ def merge_population(panel: pd.DataFrame) -> pd.DataFrame:
     Merge MCA-level annual population from the demographics panel to compute
     pix_users_pf_per1000 = pix_users_pf / (pop_total / 1000).
     """
-    if not os.path.exists(DEMO_CSV):
+    demo = mca.load_mca_population(DEMO_CSV)
+    if demo is None:
         logging.warning(
             f"Demographics panel not found at {DEMO_CSV}. "
             "Run scrape_ibge_demographics.py first. "
@@ -394,17 +375,8 @@ def merge_population(panel: pd.DataFrame) -> pd.DataFrame:
         panel["pix_users_pf_per1000"] = np.nan
         return panel
 
-    demo = pd.read_csv(DEMO_CSV,
-                       usecols=["mca_code", "year", "pop_total"],
-                       dtype={"mca_code": str, "year": int})
-
     panel = panel.merge(demo, on=["mca_code", "year"], how="left")
-
-    panel["pix_users_pf_per1000"] = np.where(
-        panel["pop_total"] > 0,
-        panel["pix_users_pf"] / (panel["pop_total"] / 1000),
-        np.nan,
-    )
+    panel["pix_users_pf_per1000"] = mca.per1000(panel["pix_users_pf"], panel["pop_total"])
     panel.drop(columns=["pop_total"], inplace=True)
     return panel
 

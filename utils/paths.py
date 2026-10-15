@@ -22,9 +22,7 @@ panels, BCB Inclusion panels, PIX ``pix_*_panel``) stay in their historical
 per-source directories and are exposed below as ``<SOURCE>_DIR``.
 
 The anchor can be overridden with the ``OPEN_FINANCE_ROOT`` environment variable
-(useful on HPC / a different machine).  This is independent of, and composes
-with, the per-script ``resolve_script_paths`` (TOON) override layer: scripts
-pass the constants below as *defaults*, which TOON context may still override.
+(useful on HPC / a different machine).
 
 All values are :class:`pathlib.Path`.  ``os.path.join`` accepts Path objects, so
 both ``os.path``-style and ``pathlib``-style call sites keep working.
@@ -246,7 +244,6 @@ IBGE_RAW: Path     = RAW / "IBGE"        # raw IBGE downloads (zips + census raw
 # ESTBAN sub-paths
 ESTBAN_CSV: Path     = ESTBAN_DIR / "ESTBAN.csv"
 ESTBAN_RAW_MUN: Path = ESTBAN_DIR / "Relatório por município"
-ESTBAN_RAW_AG: Path  = ESTBAN_DIR / "Relatório por município e agência"
 
 # IF-Data sub-paths
 IF_DATA_LIST: Path       = IF_DATA_ROOT / "List"
@@ -359,7 +356,7 @@ __all__ = [
     "demand_prep_root", "demand_parquet_dir", "estimation_output", "est_dir", "rout_dir",
     "drafts_dir", "blp_results_dir", "bbl_output_dir", "cf_foundation_dir", "cost_fwd_dir",
     "polfunc_dir", "diag_dir", "on_cluster", "sleep_out_root_set",
-    "ESTBAN_DIR", "ESTBAN_CSV", "ESTBAN_RAW_MUN", "ESTBAN_RAW_AG",
+    "ESTBAN_DIR", "ESTBAN_CSV", "ESTBAN_RAW_MUN",
     "IF_DATA_ROOT", "IF_DATA_LIST", "IF_DATA_PRUDENTIAL", "IF_DATA_FINANCIAL", "IF_DATA_INDIVIDUAL", "IF_DATA_AGG",
     "COSIF_RAW", "SGS_RAW",
     "ANATEL_RAW", "CADUNICO_RAW", "PIX_RAW", "IBGE_RAW",

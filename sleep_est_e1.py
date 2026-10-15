@@ -70,12 +70,6 @@ warnings.filterwarnings("ignore", message="covariance of constraints does not ha
 from scipy import stats
 
 try:
-    from utils.toon_parser import get_script_config, load_default_toon_context
-except Exception:
-    get_script_config = None
-    load_default_toon_context = None
-
-try:
     from utils import load_panel_cached
 except Exception:
     load_panel_cached = None
@@ -85,24 +79,10 @@ from utils import paths as _paths_mod
 def _resolve_runtime_paths() -> tuple[Path, Path]:
     DATA_DIR = _paths_mod.PROCESSED
     # market_panel.csv, NOT the fees variant — see utils/paths.market_panel_csv
-    # (USE_FEE_PANEL=1 opts back in). A per-script `panel_csv` in the TOON config still wins.
+    # (USE_FEE_PANEL=1 opts back in).
     PANEL_CSV = _paths_mod.market_panel_csv()
     # SLEEP_OUT_ROOT-aware (utils.paths.demand_prep_root); unset => the historical path.
     OUTPUT_DIR = _paths_mod.demand_prep_root() / "est1"
-
-    if load_default_toon_context is None or get_script_config is None:
-        return PANEL_CSV, OUTPUT_DIR
-
-    try:
-        context = load_default_toon_context(Path(__file__).resolve().parent / "utils", quiet=True)
-        cfg = get_script_config(context, "estimation_1_sleep")
-        if isinstance(cfg, dict):
-            if isinstance(cfg.get("panel_csv"), str) and cfg["panel_csv"].strip():
-                PANEL_CSV = Path(cfg["panel_csv"]).expanduser()
-            if isinstance(cfg.get("output_dir"), str) and cfg["output_dir"].strip():
-                OUTPUT_DIR = Path(cfg["output_dir"]).expanduser()
-    except Exception:
-        pass
     return PANEL_CSV, OUTPUT_DIR
 
 def apply_imbalanced_cluster_correction(res, cluster_series, periods=None):

@@ -123,9 +123,9 @@ def generate_mca_main():
     END_YEAR = 2025
     MCA_REFERENCE = 2010
     YEARS = list(range(START_YEAR, END_YEAR + 1))
-    # NOTE: the filename is pinned to the legacy "2010_2024" label so the 9
-    # downstream consumers (panel_6, panel_9, scrape_5/4/5/6/8, scrape_inss)
-    # keep finding the crosswalk; the CONTENT now spans 2010..END_YEAR. The
+    # NOTE: the filename keeps the "2010_2024" label so its 16 readers (panel_market,
+    # panel_demand_chars, panel_demographics_sigma, the MCA-panel scrapers, ...) keep
+    # finding the crosswalk; the CONTENT now spans 2010..END_YEAR. The
     # hardcoded reader in rectangularize_mca_main() reads this same name.
     final_json_file = output_dir / "muni_mca_regions_2010_2024.json"
     
@@ -529,10 +529,6 @@ import requests
 import pandas as pd
 import numpy as np
 
-try:
-    from utils.toon_runtime import resolve_script_paths
-except Exception:
-    resolve_script_paths = None
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
@@ -559,19 +555,6 @@ END_YEAR   = 2025
 # Required columns: municipio_code (int), age_label (str), value (float)
 AGE_CACHE_DIR = str(paths.IBGE_RAW)
 
-if resolve_script_paths is not None:
-    _paths = resolve_script_paths(
-        "ibge_demographics_panel",
-        {
-            "mca_csv": MCA_CSV,
-            "output_csv": OUTPUT,
-            "age_cache_dir": AGE_CACHE_DIR,
-        },
-        script_dir=os.path.dirname(os.path.abspath(__file__)),
-    )
-    MCA_CSV = _paths["mca_csv"]
-    OUTPUT = _paths["output_csv"]
-    AGE_CACHE_DIR = _paths["age_cache_dir"]
 
 # Specific SIDRA category IDs for each census age table.
 # Requesting only needed categories avoids the HTTP 500 that SIDRA returns
@@ -1304,12 +1287,12 @@ def aggregate_to_mca(pop: pd.DataFrame, gdp: pd.DataFrame,
 ## 7) MAIN
 ## -----------------------------------------------------------------------------
 
-def main():
-    # Early exit: if output already exists AND muni intermediate exists, skip
+def main(force: bool = False):
+    # Early exit: if output already exists AND muni intermediate exists, skip (--force rebuilds)
     muni_csv = os.path.join(IBGE_DIR, "muni_demographics_panel.csv")
-    if (os.path.exists(OUTPUT) and os.path.getsize(OUTPUT) > 0
+    if (not force and os.path.exists(OUTPUT) and os.path.getsize(OUTPUT) > 0
             and os.path.exists(muni_csv) and os.path.getsize(muni_csv) > 0):
-        print(f"Output already exists, skipping: {OUTPUT}")
+        print(f"Output already exists, skipping (pass --force to rebuild): {OUTPUT}")
         logging.info(f"Output already exists -- skipping rebuild: {OUTPUT}")
         return
 
@@ -1356,7 +1339,6 @@ def main():
     print(panel.head(10).to_string(index=False))
 
 
-
 # --- MAIN FUNCTIONS ---
 
 
@@ -1383,8 +1365,8 @@ def rectangularize_mca_main():
     else:
         print("State lookup failed. Panel DataFrame not created.")
 
-def ibge_demographics_main():
-    main()
+def ibge_demographics_main(force: bool = False):
+    main(force=force)
 
 
 _UF = {"11": ("RO", "Rondonia"), "12": ("AC", "Acre"), "13": ("AM", "Amazonas"), "14": ("RR", "Roraima"),
@@ -1473,4 +1455,5 @@ if __name__ == "__main__":
         build_mca_crosswalk_direct()
 
     print("\n--- BUILDING DEMOGRAPHICS PANEL ---")
-    ibge_demographics_main()
+    # --force rebuilds the demographics panel; the crosswalk above is kept either way.
+    ibge_demographics_main(force="--force" in sys.argv[1:])

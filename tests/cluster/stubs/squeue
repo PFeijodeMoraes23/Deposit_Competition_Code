@@ -1,0 +1,2 @@
+#!/bin/bash
+cat "${STUB_DIR:?}/squeue.txt" 2>/dev/null; exit 0

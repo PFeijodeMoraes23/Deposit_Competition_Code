@@ -28,12 +28,12 @@ writes the same parquet layout into its own folder, switch_cost_demand_<arm>:
   F3lo    beta_k is the type-shift phi_k). Choosing pool
               P_mt = (1 - phi_0,mt) (M_mt - sum_{k=4 rows} r_4 (1+r) Dep_{t-1}),
           with r_4 the locked share of the bank's time deposits: contractual maturity beyond
-          90 days (F3hi) or NSFR withdrawal after 6+ months (F3lo); switch_cost_r4_locked.py.
+          90 days (F3hi) or NSFR withdrawal after 6+ months (F3lo); `switch_cost_tools.py locked`.
 
 In every arm the market sizes M_mt and M_nat are the pooled construction's (user decision of
 2026-10-13), phi_0 is the pooled fit's phi, and the national market (D firms) uses the
 population-weighted national phi_k,t and all rows' lagged balances. With phi_k = phi_0 (F1) or
-r_4 = 0 (F3) every arm returns the pooled parquet exactly; switch_cost_prep_checks.py tests it.
+r_4 = 0 (F3) every arm returns the pooled parquet exactly; `switch_cost_tools.py prep` tests it.
 The share columns keep their meaning: share = Dep_Act / pool, and `_1mphi` is pool / M.
 """
 import os
@@ -889,7 +889,7 @@ if __name__ == "__main__":
     p.add_argument("--pooled-fits-dir", default=None,
                    help="F1/F3: folder of the pooled fit (phi_0, market sizes). Default: switch_cost_pooled.")
     p.add_argument("--locked-csv", default=None,
-                   help="F3: r4_locked_bank_year.csv (switch_cost_r4_locked.py). Default: switch_cost_inputs.")
+                   help="F3: r4_locked_bank_year.csv (switch_cost_tools.py locked). Default: switch_cost_inputs.")
     p.add_argument("--out-dir", default=None,
                    help="Parquet folder; its name must contain 'switch_cost'. "
                         "Default: SWITCH_COST/switch_cost_demand_<arm>.")

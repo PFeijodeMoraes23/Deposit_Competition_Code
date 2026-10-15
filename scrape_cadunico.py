@@ -67,10 +67,6 @@ import requests
 import numpy as np
 import pandas as pd
 
-try:
-    from utils.toon_runtime import resolve_script_paths
-except Exception:
-    resolve_script_paths = None
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
@@ -79,6 +75,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 ## ─────────────────────────────────────────────────────────────────────────────
 from utils import paths
 from utils import refresh
+from utils import mca
 BASE       = str(paths.OPEN_FINANCE)
 CAD_DIR    = str(paths.CADUNICO_DIR)   # processed cadunico_*_panel outputs (kept in place)
 RAW_DIR    = str(paths.CADUNICO_RAW)   # raw cadunico_YYYYMM.csv downloads (consolidated)
@@ -87,23 +84,6 @@ MCA_CSV    = os.path.join(IBGE_DIR, "muni_mca_regions_2010_2024_panel.csv")
 DEMO_CSV   = os.path.join(IBGE_DIR, "mca_demographics_panel.csv")
 OUTPUT_CSV = os.path.join(CAD_DIR, "cadunico_mca_panel.csv")
 
-if resolve_script_paths is not None:
-    _paths = resolve_script_paths(
-        "scrape_cadunico",
-        {
-            "cadunico_dir": CAD_DIR,
-            "raw_dir": RAW_DIR,
-            "mca_csv": MCA_CSV,
-            "demo_csv": DEMO_CSV,
-            "output_csv": OUTPUT_CSV,
-        },
-        script_dir=os.path.dirname(os.path.abspath(__file__)),
-    )
-    CAD_DIR = _paths["cadunico_dir"]
-    RAW_DIR = _paths["raw_dir"]
-    MCA_CSV = _paths["mca_csv"]
-    DEMO_CSV = _paths["demo_csv"]
-    OUTPUT_CSV = _paths["output_csv"]
 
 os.makedirs(RAW_DIR, exist_ok=True)
 os.makedirs(CAD_DIR, exist_ok=True)
@@ -297,12 +277,10 @@ def download_all_periods() -> pd.DataFrame:
 
 def load_mca_crosswalk() -> pd.DataFrame:
     """Load MCA crosswalk; normalise municipality code to 6 digits."""
-    mca = pd.read_csv(MCA_CSV,
-                      usecols=["municipality_code", "mca_code", "year"],
-                      dtype={"municipality_code": int, "mca_code": str, "year": int})
+    xwalk = mca.load_mca_crosswalk(MCA_CSV)
     # IBGE 7-digit → 6-digit (drop check digit) for match with SAGI data
-    mca["cod_ibge6"] = mca["municipality_code"] // 10
-    return mca[["cod_ibge6", "mca_code", "year"]]
+    xwalk["cod_ibge6"] = xwalk["municipality_code"] // 10
+    return xwalk[["cod_ibge6", "mca_code", "year"]]
 
 
 def aggregate_to_mca_quarter(cad: pd.DataFrame,
@@ -333,20 +311,14 @@ def aggregate_to_mca_quarter(cad: pd.DataFrame,
 
 
 def merge_population(panel: pd.DataFrame) -> pd.DataFrame:
-    if not os.path.exists(DEMO_CSV):
+    demo = mca.load_mca_population(DEMO_CSV)
+    if demo is None:
         logging.warning("Demographics panel not found; cadunico_families_per1000 will be NaN.")
         panel["cadunico_families_per1000"] = np.nan
         return panel
 
-    demo = pd.read_csv(DEMO_CSV,
-                       usecols=["mca_code", "year", "pop_total"],
-                       dtype={"mca_code": str, "year": int})
     panel = panel.merge(demo, on=["mca_code", "year"], how="left")
-    panel["cadunico_families_per1000"] = np.where(
-        panel["pop_total"] > 0,
-        panel["cadunico_families"] / (panel["pop_total"] / 1000),
-        np.nan,
-    )
+    panel["cadunico_families_per1000"] = mca.per1000(panel["cadunico_families"], panel["pop_total"])
     panel.drop(columns=["pop_total"], inplace=True)
     return panel
 

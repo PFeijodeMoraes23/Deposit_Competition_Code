@@ -55,10 +55,6 @@ if ensure_project_venv is not None:
 import pandas as pd
 import numpy as np
 
-try:
-    from utils.toon_runtime import resolve_script_paths
-except Exception:
-    resolve_script_paths = None
 
 from utils import paths
 
@@ -73,23 +69,6 @@ IF_AGG_DIR       = str(paths.IF_DATA_AGG)
 IF_LIST_DIR      = str(paths.IF_DATA_LIST)
 OUTPUT_DIR       = str(paths.PROCESSED)
 
-if resolve_script_paths is not None:
-    _paths = resolve_script_paths(
-        "deposits_panel_build",
-        {
-            "estban_proc_csv": ESTBAN_PROC_CSV,
-            "estban_raw_mun_dir": ESTBAN_RAW_MUN,
-            "if_agg_dir": IF_AGG_DIR,
-            "if_list_dir": IF_LIST_DIR,
-            "output_dir": OUTPUT_DIR,
-        },
-        script_dir=os.path.dirname(os.path.abspath(__file__)),
-    )
-    ESTBAN_PROC_CSV = _paths["estban_proc_csv"]
-    ESTBAN_RAW_MUN = _paths["estban_raw_mun_dir"]
-    IF_AGG_DIR = _paths["if_agg_dir"]
-    IF_LIST_DIR = _paths["if_list_dir"]
-    OUTPUT_DIR = _paths["output_dir"]
 
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 

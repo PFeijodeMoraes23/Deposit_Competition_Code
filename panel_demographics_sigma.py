@@ -186,7 +186,17 @@ def compute_anatel_sigma() -> pd.DataFrame:
         logging.warning(f"ANATEL municipality intermediate not found: {ANATEL_MUNI}")
         return pd.DataFrame()
 
-    anatel = pd.read_csv(ANATEL_MUNI, dtype={"mca_code": str})
+    # The intermediate can hold several rows per municipality-quarter (one per ANATEL record:
+    # provider x technology x access type). Sum them to municipality x quarter first, as
+    # compute_pix_sigma does, so the ratios and the sigma below are across MUNICIPALITIES.
+    # Read in chunks: the record-level file is ~1.6 GB.
+    keys = ["mun_code", "mca_code", "year", "quarter"]
+    parts = [
+        chunk.groupby(keys, as_index=False)[["acessos", "acessos_fast"]].sum()
+        for chunk in pd.read_csv(ANATEL_MUNI, dtype={"mca_code": str}, chunksize=5_000_000)
+    ]
+    anatel = (pd.concat(parts, ignore_index=True)
+                .groupby(keys, as_index=False)[["acessos", "acessos_fast"]].sum())
 
     # Need population to compute per-100 at municipality level
     muni_pop = load_population_by_muni()

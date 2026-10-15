@@ -81,10 +81,6 @@ if ensure_project_venv is not None:
 import numpy as np
 import pandas as pd
 
-try:
-    from utils.toon_runtime import resolve_script_paths
-except Exception:
-    resolve_script_paths = None
 
 logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s %(levelname)s %(message)s")
@@ -124,34 +120,6 @@ OUTPUT_CSV     = os.path.join(PANEL_DIR,                  "market_panel.csv")
 # further, but everything after 2025-Q4 is dropped for a fixed end point.
 PANEL_END_YEAR    = 2025
 PANEL_END_QUARTER = 4
-
-if resolve_script_paths is not None:
-    _paths = resolve_script_paths(
-        "build_market_panel",
-        {
-            "deposits_csv": DEPOSITS_CSV,
-            "mca_xwalk_csv": MCA_XWALK_CSV,
-            "demo_csv": DEMO_CSV,
-            "pix_csv": PIX_CSV,
-            "anatel_csv": ANATEL_CSV,
-            "inss_csv": INSS_CSV,
-            "inclusion_csv": INCLUSION_CSV,
-            "cadunico_csv": CADUNICO_CSV,
-            "bank_chars_csv": BANK_CHARS_CSV,
-            "output_csv": OUTPUT_CSV,
-        },
-        script_dir=os.path.dirname(os.path.abspath(__file__)),
-    )
-    DEPOSITS_CSV = _paths["deposits_csv"]
-    MCA_XWALK_CSV = _paths["mca_xwalk_csv"]
-    DEMO_CSV = _paths["demo_csv"]
-    PIX_CSV = _paths["pix_csv"]
-    ANATEL_CSV = _paths["anatel_csv"]
-    INSS_CSV = _paths["inss_csv"]
-    INCLUSION_CSV = _paths["inclusion_csv"]
-    CADUNICO_CSV = _paths["cadunico_csv"]
-    BANK_CHARS_CSV = _paths["bank_chars_csv"]
-    OUTPUT_CSV = _paths["output_csv"]
 
 
 ## -----------------------------------------------------------------------------
@@ -854,7 +822,6 @@ _COL_ORDER = [
     "total_assets", "log_total_assets", "equity", "equity_ratio",
     "has_ip", "is_coop", "is_state_owned", "is_captive", "segment", "seg_S2", "seg_S3", "seg_S4", "seg_S5",
 ]
-
 
 
 def save(panel: pd.DataFrame) -> None:

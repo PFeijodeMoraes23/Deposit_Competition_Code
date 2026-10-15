@@ -47,6 +47,7 @@
 #   bash switch_cost_sleep_run.sh
 #   bash switch_cost_sleep_run.sh --prep                          # fits, then the four arms
 #   bash switch_cost_sleep_run.sh --skip-est --prep --arms "F1"    # an arm against fits on disk
+#   bash switch_cost_sleep_run.sh --collect                       # zip the results for download
 #
 # Flags
 #   --routines "3 4"        routine set (default "3 4"; only 3 and 4 exist in this copy)
@@ -62,6 +63,11 @@
 #   --after <jid>           make every FIRST-TIER submission --dependency=afterok this job id
 #   --skip-preflight        skip sc_preflight
 #   --dry-run               print every sbatch line, submit nothing
+#   --collect               submit nothing: zip the switch-cost outputs, gates and logs into
+#                           data/output/switch_cost_download/switch_cost_results_<stamp>[_<tag>].zip
+#                           (+ .sha256). COPY MODE: it never moves or deletes anything and reads
+#                           no main-project folder. With --with-phis it adds the about 2 GB
+#                           market_panel_phis.csv per fit; --tag NAME suffixes the zip name.
 #   -h                      this header
 # ==============================================================================
 set -uo pipefail
@@ -95,6 +101,48 @@ EST_TIME="${EST_TIME:-10:00:00}";   EST_CPUS="${EST_CPUS:-64}";   EST_MEM="${EST
 PREP_TIME="${PREP_TIME:-06:00:00}"; PREP_CPUS="${PREP_CPUS:-4}";  PREP_MEM="${PREP_MEM:-64G}"
 GATE_TIME="${GATE_TIME:-00:10:00}"; GATE_CPUS="${GATE_CPUS:-2}";  GATE_MEM="${GATE_MEM:-8G}"
 
+DO_COLLECT=0; WITH_PHIS=0; COLLECT_TAG=""
+
+# --collect: one zip of the switch-cost results for download, then exit. Copy mode only.
+sc_collect () {
+    local root dl stamp zipf list n D V E F
+    root="$(cd "${CL_DIR}/.." && pwd)"
+    dl="${root}/data/output/switch_cost_download"
+    stamp="$(date +%Y%m%d_%H%M)"
+    zipf="${dl}/switch_cost_results_${stamp}${COLLECT_TAG}.zip"
+    command -v zip >/dev/null || { echo "zip not found on PATH" >&2; return 2; }
+    mkdir -p "${dl}"
+    [[ -e "${zipf}" ]] && { echo "${zipf} exists; not overwriting" >&2; return 2; }
+    list="$(mktemp)"
+    (
+        cd "${root}"
+        for V in pooled typeshift; do
+            D="data/output/switch_cost_sleep_${V}"
+            [[ -d "${D}" ]] || continue
+            for E in 3 4; do
+                for F in estimation_results.pkl national_phi_t.csv; do
+                    [[ -f "${D}/est${E}/${F}" ]] && echo "${D}/est${E}/${F}" >> "${list}"
+                done
+                [[ "${WITH_PHIS}" == 1 && -f "${D}/est${E}/market_panel_phis.csv" ]] && echo "${D}/est${E}/market_panel_phis.csv" >> "${list}"
+            done
+            [[ -d "${D}/Rout" ]] && find "${D}/Rout" -type f >> "${list}"
+        done
+        for D in data/output/switch_cost_demand_* data/output/switch_cost_gates scripts/switch_cost_logs; do
+            [[ -d "${D}" ]] && find "${D}" -type f >> "${list}"
+        done
+        n=$(wc -l < "${list}")
+        [[ "${n}" -gt 0 ]] || { echo "nothing to collect" >&2; exit 1; }
+        # float payloads stored, text deflated (as the main archive does)
+        zip -q -n .pkl:.parquet "${zipf}" -@ < "${list}"
+        zip -T -q "${zipf}"
+        ( cd "${dl}" && sha256sum "$(basename "${zipf}")" > "$(basename "${zipf}").sha256" )
+        echo "collected ${n} files -> ${zipf} ($(du -h "${zipf}" | cut -f1))"
+    )
+    local rc=$?
+    rm -f "${list}"
+    return ${rc}
+}
+
 refuse_flag () {
     echo "switch_cost_sleep_run.sh: $1 is not an option of the switch-cost copy -- $2 (see -h)." >&2
     exit 2
@@ -113,16 +161,24 @@ while [[ $# -gt 0 ]]; do
         --skip-est)       DO_EST=0 ;;
         --skip-preflight) SKIP_PREFLIGHT=1 ;;
         --dry-run)        CL_DRYRUN=1 ;;
+        --collect)        DO_COLLECT=1 ;;
+        --with-phis)      WITH_PHIS=1 ;;
+        --tag)            COLLECT_TAG="_$2"; shift ;;
         --spec-array|--no-spec-array|--spec-ids)
                           refuse_flag "$1" "this copy runs spec 12 only, one job per routine (--spec12)" ;;
         --no-ame)         refuse_flag "$1" "the two-stage AME is the reason for this run; SLEEP_AME_TWOSTAGE=1 is always submitted" ;;
         --no-wcb|--no-weakiv|--no-upsilon|--no-entry)
                           refuse_flag "$1" "that step is disabled in this copy" ;;
-        -h|--help)        sed -n '2,65p' "${BASH_SOURCE[0]}"; exit 0 ;;
+        -h|--help)        sed -n '2,/^# =====/p' "${BASH_SOURCE[0]}"; exit 0 ;;
         *) echo "unknown option: $1 (see -h)" >&2; exit 2 ;;
     esac
     shift
 done
+
+if [[ "${DO_COLLECT}" == 1 ]]; then
+    sc_collect
+    exit $?
+fi
 
 for k in ${ROUTINES}; do
     case "${k}" in 3|4) ;; *) echo "--routines: '${k}' is outside this copy's scope (3 4)" >&2; exit 2 ;; esac

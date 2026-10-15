@@ -1584,7 +1584,7 @@ function run_blp_estimation(estim::Int, spec_id::Int, args,
     N_obs     = nrow(df)
     mca_codes = string.(df.mca_code)
     time_ids  = string.(df.time_id)
-    pad_idx   = size(draws_3d, 1)  # padding row (all zeros)
+    pad_idx   = 1  # the zero padding row: blp_draws.jl writes it at index 1, markets at 2..n+1
 
     obs_key_idx = [get(key_index, (mca_codes[i], time_ids[i]), pad_idx)
                    for i in 1:N_obs]
