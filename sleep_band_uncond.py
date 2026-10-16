@@ -61,7 +61,7 @@ def _prep_frame(time_block):
     df = build_pooled_data(time_block=time_block)
     _, iv_specs, state_blocks = define_specifications(time_block=time_block)
     s_cols = state_blocks["Tech"]
-    iv_act = [c for c in iv_specs["IV_HausmanFull"]
+    iv_act = [c for c in iv_specs["IV_RivalSpread"]
               if c in df.columns and df[c].notnull().sum() > 0]
     exog_act = [c for c in s_cols if c in df.columns and df[c].notnull().sum() > 0]
     df_t, _ = run_pooled_first_stage(df, iv_act, exog_act)

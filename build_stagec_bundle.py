@@ -1,7 +1,7 @@
 """build_stagec_bundle.py -- the stage C upload for a FRESH Bouchet tree, computed at build time.
 
-    python -I build_stagec_bundle.py --prep-dir DIR --logit-summary FILE                # REPORT only
-    python -I build_stagec_bundle.py --prep-dir DIR --logit-summary FILE --stage OUTDIR # + the upload
+    python -I build_stagec_bundle.py                    # REPORT only
+    python -I build_stagec_bundle.py --stage OUTDIR     # + the upload
 
 The cluster is empty, so everything the chain executes and everything it reads ships from here.
 
@@ -18,19 +18,17 @@ The cluster is empty, so everything the chain executes and everything it reads s
          blp_dx*.jl, dx_*.sh.
   DATA   every input the chain reads, listed explicitly below (never globbed), sha256 recorded:
          the 12 data rows of cluster/upload_manifest.txt (cluster_preflight.sh blocks on any one
-         missing), the demand-characteristics file, the policy (sha256 must be fd208b5f...), and
-         the four SLIM sleepiness estimates the --skip-est prep reads (the spec-12 entry, its
-         first stage dropped: slim_estimates/; installed into data/output/sleep/est{k}/ by the
-         wrapper's install job, each with its slim.json beside it as the SLIM marker). Never shipped: demand_repair*, blp_dx*, dx_*, and the weak-IV
-         battery (EXCLUDE: not in the chain, old instrument names).
-  EXPECT the local prep's row counts (--prep-dir, refused when older than the prep code) and the
-         local logit's alphas (--logit-summary), which the cluster's gates compare with.
+         missing), the demand-characteristics file and the policy (sha256 must be fd208b5f...).
+         No sleepiness estimate ships: the chain estimates E1-E4 on the cluster (Pedro, 10-15).
+         Never shipped: demand_repair*, blp_dx*, dx_*, and the weak-IV battery (EXCLUDE: not in
+         the chain, old instrument names). No local reference values ship either: the cluster's
+         gates are automatic sanity checks.
   PYTHON the third-party modules the executed Python imports; the wrapper probes them, and its
          refusal prints a conda create line pinned to this machine's versions.
 
 Upload (--stage OUTDIR):
   stagec_code_<stamp>.zip   scripts/... (with scripts/stagec_arrival_<stamp>.sha256 and the pin file)
-  stagec_data_<stamp>.zip   data/input/... (every input, the slim estimates included; ~0.7 GB)
+  stagec_data_<stamp>.zip   data/input/... (every input; ~0.15 GB)
   stagec_upload_<stamp>.md5 md5 of both zips, for `md5sum -c` in the project root
 Exit 0 = ready; 1 = refused (reasons printed).
 """
@@ -87,21 +85,7 @@ DATA = {
     CHARS_NAME:                        PROCESSED / "demand_chars.parquet",
     POLICY_UPLOAD:                     EO / "COST_POLFUNC" / "polfunc_fitted.csv",
 }
-# The four sleepiness estimates (the production 5-state block at spec 12): the SLIM files the
-# demand prep reads (slim_estimates/make_slim_estimates.py: the spec-12 key only, its first stage
-# dropped, the second stage untouched; proof of identical prep output in slim_estimates/). Each
-# slim.json names the production original and its sha256, re-checked here.
-# The slim estimates are data, not code: they stay in the stage C folder (STAGEC_SLIM_DIR overrides).
-SC_DIR = Path.home() / ".claude" / "projects" / "c--Users-pedro-OneDrive-Documentos-Yale-Year-3--2024---2025--Open-Finance-Open-Finance-Code-Egan-et-al-2025-Rep" / "checkpoints_20260928" / "stageC_launch_20261012"
-SLIM_DIR = Path(__import__("os").environ.get("STAGEC_SLIM_DIR", str(SC_DIR / "slim_estimates" / "s" / "e")))
-EST = {k: (f"sleep_est_E{k}_spec12_slim.pkl", SLIM_DIR / f"est{k}" / "estimation_results.pkl",
-           EO / "DEMAND_PREP" / f"est{k}" / "estimation_results.pkl") for k in (1, 2, 3, 4)}
 CHARS_REPORT = PROCESSED / "demand_chars_report.json"
-
-
-def marker_name(k: int) -> str:
-    """The SLIM marker upload of routine k (its slim.json; installed beside the pickle)."""
-    return f"sleep_est_E{k}_spec12_slim.json"
 
 
 # Hard pins (coordinator, 10-13 15:04). utils/demand_chars.apply refuses any market panel but this
@@ -110,10 +94,13 @@ PANEL_MD5 = "6613228b2fe6b0ba95d0f16d1d5a743c"
 CHARS_SHA256 = "55fa8698f76341d3d7a8937af2b9d5cfaa23bed022e5ec485be46df75d6c9c72"
 # The demographic sigma file the draws read (blp_draws.jl; nothing else in the bundle reads it or
 # derives from it). panel_demographics_sigma.py rebuilt it on 2026-10-14 20:11 (the two ANATEL
-# sigma columns, connections_per100_sigma and frac_4g5g_sigma); its level columns equal the
-# market panel's exactly. The file the 10-13 bundle shipped (08-26) is refused by name.
+# sigma columns, connections_per100_sigma and frac_4g5g_sigma) and again on 2026-10-15 16:09,
+# which dropped the 8 demographic mean columns the draws never read (they take the means from
+# the demand panels). The 10-14 file (sha256 9e0cfc96...) has the same keys and bit-identical
+# sigma columns, so it gives the same draws; the pin is the 10-15 file. The file the 10-13
+# bundle shipped (08-26) is refused by name.
 SIGMA_NAME = "demographics_sigma.parquet"
-SIGMA_SHA256 = "9e0cfc962ea5f780c1303a83644a822e0b6a665cb14f9925cd365ae4a8fe1e4e"
+SIGMA_SHA256 = "d96c647298a94c8b3428302132524558c28c1a35577f746d0833fb49f7cd21e6"
 SIGMA_STALE_SHA256 = {"6506ecc7012041b95957d4e89733b6147f393e9da9150c61b48e8b1d225343d8": "the 08-26 file the 10-13 bundle shipped"}
 # md5 each BBL input had in the _ms982 run (bbl_relaunch / dx pins, verified on the cluster). A
 # local file that differs changes the BBL for a reason other than stage C: refused unless
@@ -260,12 +247,8 @@ def third_party(py_files):
 def main() -> int:
     global STAMP, CHARS_NAME
     ap = argparse.ArgumentParser()
-    ap.add_argument("--prep-dir", required=True, help="the local prep's output folder (the final demand parquets)")
-    ap.add_argument("--logit-summary", required=True, help="the local logit_summary_spec_12.json on those parquets")
     ap.add_argument("--stage", default=None)
     ap.add_argument("--accept-input-change", nargs="*", default=[])
-    ap.add_argument("--accept-older-prep", default="", help="the reason the local prep parquets, older than the "
-                    "prep code, still hold the final code's values (recorded in the report)")
     ap.add_argument("--stamp", default=None, help="the bundle stamp (default: today). A rebuild of a bundle whose data "
                     "zip is already uploaded keeps that bundle's stamp (the chars file name carries it)")
     ap.add_argument("--reuse-data-zip", default=None, help="a data zip already built (and maybe uploaded): every member "
@@ -337,24 +320,10 @@ def main() -> int:
     if data_sha.get(SIGMA_NAME) in SIGMA_STALE_SHA256:
         refuse.append(f"{SIGMA_NAME}: STALE ({SIGMA_STALE_SHA256[data_sha[SIGMA_NAME]]}); rebuild it with panel_demographics_sigma.py")
     elif data_sha.get(SIGMA_NAME) != SIGMA_SHA256:
-        refuse.append(f"{SIGMA_NAME}: sha256 {data_sha.get(SIGMA_NAME)}, not the pinned {SIGMA_SHA256} (the 10-14 rebuild); "
+        refuse.append(f"{SIGMA_NAME}: sha256 {data_sha.get(SIGMA_NAME)}, not the pinned {SIGMA_SHA256} (the 10-15 rebuild); "
                       f"a newer rebuild needs SIGMA_SHA256 updated here after the user confirms it")
     if data_sha.get(POLICY_UPLOAD) and data_sha[POLICY_UPLOAD] != POLICY_SHA256:
         refuse.append(f"the policy has sha256 {data_sha[POLICY_UPLOAD]}, not the pinned {POLICY_SHA256}")
-    est_sha, marker_sha = {}, {}
-    for k, (name, src, orig) in EST.items():
-        side = src.parent / "slim.json"
-        if not (src.is_file() and side.is_file()):
-            refuse.append(f"E{k}: slim estimates or slim.json missing in {src.parent} (run slim_estimates/make_slim_estimates.py)"); continue
-        info = json.loads(side.read_text(encoding="utf-8"))
-        marker_sha[k] = h(side.read_bytes())
-        est_sha[k] = hfile(src)
-        if info.get("slim_sha256") != est_sha[k]:
-            refuse.append(f"E{k}: {src.name} does not hash to the slim_sha256 its slim.json records")
-        if info.get("original_sha256") != hfile(orig):
-            refuse.append(f"E{k}: the production estimates {orig} changed since the slim file was made: rebuild it")
-        if info.get("subkeys_dropped") != ["first_stage"] or "IV_HausmanFull x Tech" not in str(info.get("key_kept")):
-            refuse.append(f"E{k}: slim.json does not describe the spec-12 key with only first_stage dropped")
     # The prep's own check (utils/demand_chars.check_panel_md5): the side file's schema metadata
     # must record the md5 of the panel the prep reads -- on the cluster, the shipped panel.
     import pyarrow.parquet as _pq
@@ -377,63 +346,21 @@ def main() -> int:
     else:
         refuse.append(f"no {CHARS_REPORT}: the demand-characteristics file cannot be tied to the panel")
 
-    # ── expectations ──
-    rows, alphas = {}, {}
-    prep_dir = Path(a.prep_dir)
-    code_t = max((REPO / f).stat().st_mtime for f in ["utils/demand_chars.py", "sleep_demand_prep_link.py",
-                                                      "sleep_demand_prep_e1.py", "sleep_demand_prep_e2.py"])
-    import pyarrow.parquet as pq
-    for k in (1, 2, 3, 4):
-        hits = [p for p in sorted(prep_dir.glob(f"demand_{k}*_spec_12.parquet")) if "_final_" not in p.name
-                and re.match(rf"^demand_{k}(?:_.*)?_spec_12\.parquet$", p.name)]
-        if len(hits) != 1:
-            refuse.append(f"E{k}: {len(hits)} spec-12 demand parquets in {prep_dir}"); continue
-        if hits[0].stat().st_mtime < code_t:
-            if a.accept_older_prep:
-                notes.append(f"E{k}: {hits[0].name} is older than the prep code; ACCEPTED (--accept-older-prep: {a.accept_older_prep})")
-            else:
-                refuse.append(f"E{k}: {hits[0].name} is older than the prep code: rebuild it with the final code, "
-                              f"or --accept-older-prep '<why its values are still those of the final code>'")
-        if not Path(str(hits[0]) + ".chars_audit.json").is_file():
-            refuse.append(f"E{k}: {hits[0].name} has no .chars_audit.json (not built by the final prep)")
-        rows[k] = pq.ParquetFile(str(hits[0])).metadata.num_rows
-    lp = Path(a.logit_summary)
-    if not lp.is_file():
-        refuse.append(f"no local logit summary {lp}")
-    else:
-        s = json.loads(lp.read_text(encoding="utf-8"))
-        for key, v in s.items():
-            if isinstance(v, dict) and "theta1" in v and "param_names" in v:
-                alphas[key] = float(v["theta1"][list(v["param_names"]).index("alpha")])
-        if not any(k.endswith("_full_dtype") for k in alphas):
-            refuse.append(f"{lp.name}: no *_full_dtype sub-model")
-        if lp.stat().st_mtime < min((p.stat().st_mtime for p in prep_dir.glob("demand_*_spec_12.parquet")), default=0):
-            refuse.append(f"{lp.name} is older than the demand parquets: re-run the local logit on them")
-
     # ── report ──
     csize = sum(len(b) for b in code.values()); dsize = sum(len(b) for b in data_members.values())
-    esize = sum(src.stat().st_size for _, src, _o in EST.values() if src.is_file())
     print(f"CODE: {len(code)} files, {csize/1e6:.1f} MB (closure of {len(ENTRIES)} entries)")
     for m in sorted(code):
         print(f"  {m}   <- {why.get(m[len('scripts/'):], 'wrapper')}")
-    print(f"DATA: {len(data_members)} files, {dsize/1e6:.1f} MB; SLIM ESTIMATES: 4 files, {esize/1e6:.1f} MB "
-          f"(the production originals: {sum(o.stat().st_size for _, _s, o in EST.values())/1e9:.2f} GB)")
+    print(f"DATA: {len(data_members)} files, {dsize/1e6:.1f} MB (no sleepiness estimate: made on the cluster)")
     for n in sorted(data_members):
         print(f"  {n}  {len(data_members[n]):>12,}  sha256 {data_sha[n[len('data/input/'):]][:12]}")
-    for k, (name, src, orig) in EST.items():
-        if src.is_file():
-            print(f"  data/input/{name}  {src.stat().st_size:>12,}  sha256 {est_sha.get(k, '?')[:12]}  <- {src} (from {orig.name} of est{k})")
     for r, by in sorted(EXCLUDED_REACHED.items()):
         print(f"EXCLUDED (not in the chain, not shipped): {r}  (named by {by})")
     print(f"PYTHON ({CONDA_ENV}): imports {', '.join(req)}")
     print(f"  create line: {conda_create}")
-    print(f"EXPECT rows: {rows}")
-    print(f"EXPECT alpha: { {k: round(v, 10) for k, v in sorted(alphas.items())} }")
     if a.reuse_data_zip:
         rz = Path(a.reuse_data_zip)
         want = {m: h(b) for m, b in data_members.items()}
-        want.update({f"data/input/{EST[k][0]}": est_sha.get(k, "") for k in EST})
-        want.update({f"data/input/{marker_name(k)}": marker_sha.get(k, "") for k in EST})
         if rz.name != f"stagec_data_{STAMP}.zip":
             refuse.append(f"--reuse-data-zip {rz.name}: not stagec_data_{STAMP}.zip (pass --stamp)")
         with zipfile.ZipFile(rz) as zf:
@@ -466,21 +393,15 @@ def main() -> int:
         print(f"REFUSED: forbidden or excluded files among the members: {bad_members}"); return 1
     arrival = {m: h(b) for m, b in code.items()}
     arrival.update({m: h(b) for m, b in data_members.items()})
-    arrival.update({f"data/input/{EST[k][0]}": est_sha[k] for k in EST})
-    arrival.update({f"data/input/{marker_name(k)}": marker_sha[k] for k in EST})
     pins_txt = "\n".join([
         "# stagec_pins_20261012.env -- written by build_stagec_bundle.py; sourced by stagec_suite_20261012.sh",
         f"ARRIVAL_LIST=stagec_arrival_{STAMP}.sha256",
         f"CHARS_NAME={CHARS_NAME}", f"CHARS_SHA256={data_sha[CHARS_NAME]}",
         f"SIGMA_SHA256={data_sha[SIGMA_NAME]}",
         f"POLICY_UPLOAD={POLICY_UPLOAD}",
-        "EST_UPLOADS=(" + " ".join(f"{k}:{EST[k][0]}:{est_sha[k]}" for k in EST) + ")",
-        "EST_MARKERS=(" + " ".join(f"{k}:{marker_name(k)}:{marker_sha[k]}" for k in EST) + ")",
         f"JL_MANIFEST_SHA256={JL_MANIFEST_SHA256}",
         f'PY_REQ="{", ".join(req)}"',
-        f'CONDA_CREATE="{conda_create}"',
-        "EXPECT_ROWS=(" + " ".join(f"{k}:{n}" for k, n in sorted(rows.items())) + ")",
-        "EXPECT_ALPHA=(" + " ".join(f"{k}:{v:.12g}" for k, v in sorted(alphas.items())) + ")", ""]).encode()
+        f'CONDA_CREATE="{conda_create}"', ""]).encode()
     code[f"scripts/{PINS_NAME}"] = pins_txt
     arrival[f"scripts/{PINS_NAME}"] = h(pins_txt)
     arr_txt = "".join(f"{v}  {m}\n" for m, v in sorted(arrival.items())).encode()
@@ -497,9 +418,6 @@ def main() -> int:
         with zipfile.ZipFile(targets[1], "w", zipfile.ZIP_STORED, allowZip64=True) as zf:
             for m, b in sorted(data_members.items()):
                 zf.writestr(m, b)
-            for k, (name, src, _o) in EST.items():
-                zf.write(src, f"data/input/{name}")
-                zf.write(src.parent / "slim.json", f"data/input/{marker_name(k)}")
     up = [*targets]
     md5_txt = "".join(f"{hfile(p, 'md5')}  {p.name}\n" for p in up)
     (out / f"stagec_upload_{STAMP}.md5").write_text(md5_txt, encoding="utf-8", newline="\n")

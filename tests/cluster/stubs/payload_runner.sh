@@ -5,7 +5,9 @@
 # payload's outputs so the next step has something to read. Scenario knobs:
 #   RUNNER_FAIL="<tag> ..."   these payloads exit 1
 #   RUNNER_ROWS="10 10 10 10" rows of the four demand parquets the prep writes
-#   RUNNER_ALPHA=-0.0628      E3_full_dtype alpha of the logit summary
+#   RUNNER_ALPHA=-0.0628      E3_full_dtype alpha of the logit summary (NaN: not finite)
+#   RUNNER_PHI=0.95           the phi_t / phi_mt values the sleep estimators write
+#   RUNNER_SLEEP_SKIP="<k> .." these routines' estimators write nothing
 #   RUNNER_SMOKE=pass | gap:<k> | missing:<k> | error:<k> | cold:<k>   the one-process smoke log
 #   RUNNER_PY                 python with pandas/pyarrow (the venv)
 tag="${STAGEC_PAYLOAD_TAG:?}"; d="${STUB_DIR:?}"
@@ -20,6 +22,20 @@ printf '%s\n' "${args[*]}" > "${d}/payload_cmd_${tag}.txt"
 if [[ " ${RUNNER_FAIL:-} " == *" ${tag} "* ]]; then echo "payload_runner: ${tag} FAILS (RUNNER_FAIL)"; exit 1; fi
 OUT="${CL_DATA_ROOT:-${DATA_ROOT:?}}/output"
 case "${tag}" in
+    sleep_e[0-9])
+        k="${tag#sleep_e}"
+        [[ " ${RUNNER_SLEEP_SKIP:-} " == *" ${k} "* ]] && exit 0
+        SC_DIR="${OUT}/sleep/est${k}" "${RUNNER_PY:?}" - "${RUNNER_PHI:-0.95}" <<'PYS'
+import os, pickle, sys
+import pandas as pd
+d = os.environ["SC_DIR"]; os.makedirs(d, exist_ok=True)
+phi = float(sys.argv[1]); key = "IV_RivalSpread x Tech"; safe = "IV_RivalSpread_x_Tech"
+ss = pd.DataFrame({"coef": [0.5, -0.2], "se": [0.1, 0.05]}, index=["rival_mean_spread_hat", "pix_exists"])
+pickle.dump({key: {"second_stage": ss, "first_stage": {"effective_F": 13.4}}}, open(os.path.join(d, "estimation_results.pkl"), "wb"))
+pd.DataFrame({"year_quarter": [1, 2, 3], f"phi_t_{safe}": [phi] * 3}).to_csv(os.path.join(d, "national_phi_t.csv"), index=False)
+pd.DataFrame({"mca_code": [1, 2], f"phi_mt_{safe}": [phi] * 2}).to_csv(os.path.join(d, "market_panel_phis.csv"), index=False)
+PYS
+        ;;
     prep)
         SC_DIR="${OUT}/demand_prep" "${RUNNER_PY:?}" - ${RUNNER_ROWS:-10 10 10 10} <<'PY'
 import json, os, sys
@@ -40,7 +56,7 @@ PY
         printf '{\n  "gate": "%s",\n  "checks": [{"check": "x", "ok": true}],\n  "ok": true\n}\n' "${g}" > "${OUT}/.gate_${g}.json" ;;
     logit)
         mkdir -p "${OUT}/logit"
-        printf '{"E3_full_dtype": {"param_names": ["alpha", "fgc_covered", "dummy_D_type"], "theta1": [%s, 1.0, -5.4]}, "E4_full_dtype": {"param_names": ["alpha", "dummy_D_type"], "theta1": [-0.0567, -5.5]}}\n' "${RUNNER_ALPHA:--0.0628}" > "${OUT}/logit/logit_summary_spec_12.json" ;;
+        printf '{"E1_full_dtype": {"param_names": ["alpha", "dummy_D_type"], "theta1": [-0.06, -5.4], "se": [0.01, 0.1], "n_obs": 10}, "E2_full_dtype": {"param_names": ["alpha", "dummy_D_type"], "theta1": [-0.06, -5.4], "se": [0.01, 0.1], "n_obs": 10}, "E3_full_dtype": {"param_names": ["alpha", "fgc_covered", "dummy_D_type"], "theta1": [%s, 1.0, -5.4], "se": [0.01, 0.2, 0.1], "n_obs": 10}, "E4_full_dtype": {"param_names": ["alpha", "dummy_D_type"], "theta1": [-0.0567, -5.5], "se": [0.01, 0.1], "n_obs": 10}}\n' "${RUNNER_ALPHA:--0.0628}" > "${OUT}/logit/logit_summary_spec_12.json" ;;
     draws)
         mkdir -p "${OUT}/blp/draws"
         for f in demo_draws demo_key_index halton_nu; do echo d > "${OUT}/blp/draws/${f}_R2000_seed42.jls"; done ;;

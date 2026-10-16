@@ -293,7 +293,7 @@ EST_OF_KEY = {k: e for e, k in EST_KEYS.items()}
 _IV_WORDS = {'OLS': 'No Instruments (OLS)',
              'IV_CostShifters': 'Cost-Shifter Instruments',
              'IV_Wholesale': 'Cost-Shifter and Wholesale Instruments',
-             'IV_HausmanFull': 'Hausman Instruments'}
+             'IV_RivalSpread': 'Rival Mean Spread'}
 
 
 def spec12_title(stage):
@@ -995,7 +995,7 @@ def main():
     first_stage_target_vars = [
         'tax_cost_ratio_lag', 'personnel_cost_ratio_lag', 'admin_cost_ratio_lag',
         'indice_basileia_lag', 'lci_lca_ratio_lag', 'wholesale_ratio_lag',
-        'leave_one_out_mean_spread',
+        'rival_mean_spread',
     ]
 
     build_latex_table(
@@ -1135,7 +1135,7 @@ def main():
             pastelize_color(c),
         ))
 
-    ax.set_title(r"Implied National $\hat{\phi}_t$ — Spec 12 (IV Hausman $\times$ Tech)", fontsize=14, pad=12)
+    ax.set_title(r"Implied National $\hat{\phi}_t$ — Spec 12 (IV rival mean spread $\times$ Tech)", fontsize=14, pad=12)
     ax.set_ylabel(r"National $\hat{\phi}_t$")
     ax.set_ylim(0, 1.05)
     ax.axhline(1.0, color='gray', linestyle=':', linewidth=1.2, alpha=0.7)

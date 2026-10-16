@@ -3,8 +3,8 @@
 Sleepiness by deposit type, routines III and IV (E3, E4), spec 12. Two fit variants: `pooled`
 (the production specification re-estimated by the copies) and `typeshift` (deposit-type shifts
 in the phi index). The cluster runs both with the two-stage AME bootstrap (B = 999), which is
-the inference the local runs could not do. Full notes: `CLUSTER_SCRIPTS.md` and the local report
-`switch_cost_local_report_2026-10-13.md`.
+the inference the local runs could not do. Full notes: `CLUSTER_SCRIPTS.md` and the report
+`deposit_types_report_2026-10-15.md` (Section 6 and Appendix A).
 
 **Nothing here may be unpacked before the user has described the cluster layout.** The commands
 below are the proposal.

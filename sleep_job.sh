@@ -308,23 +308,11 @@ DEMAND = Path(os.environ.get("DEMAND_PREP_DIR") or (OUT / "demand_prep"))
 SPEC = os.environ.get("SPEC", "12")
 KS = [int(x) for x in os.environ.get("SLEEP_GATE_ROUTINES", "1 2 3 4").replace(",", " ").split()]
 AME_KS = [k for k in KS if k in (3, 4)] or [3, 4]
-SPEC_KEY = "IV_HausmanFull x Tech"
+SPEC_KEY = "IV_RivalSpread x Tech"
 
-# The promoted local vintage, in percentage points; each is exactly
-# mean(phi_t_IV_HausmanFull_x_Tech) * 100 over that routine's national_phi_t.csv.
-#
-# A MATCH IS THE EXPECTED OUTCOME, so a mismatch is worth investigating rather than
-# shrugging at. The cluster does NOT widen the search: sleep_est_single.py
-# hardcodes NLLS_N_STARTS=4, so a 128-core `day` node runs the same multistart from
-# the same starts as the local machine and should land in the same basin.
-#
-# It stays REPORT-ONLY all the same. If the cluster fit really does differ, the
-# cluster vintage is the one that supersedes -- every downstream object in this
-# chain is rebuilt from it -- and a gate that stopped the run would be stopping it
-# for succeeding.
-PROMOTED_PHI_PP = {1: 99.9945, 2: 99.5400, 3: 96.5627, 4: 96.6814}
-PHI_TOL_PP = 0.05
-PHI_COL = "phi_t_IV_HausmanFull_x_Tech"
+# The measured national phi-hat is REPORTED (G1), never compared: the estimates are made on the
+# cluster from the current panel and instrument, and no local vintage is a reference (Pedro, 10-15).
+PHI_COL = "phi_t_IV_RivalSpread_x_Tech"
 
 # Columns the RC-BLP engine and every CF read out of the demand parquet. A parquet
 # that is missing one of them fails ~14 h downstream, inside Julia, as a KeyError.
@@ -394,10 +382,10 @@ def g1():
         ss = cell.get("second_stage") if hasattr(cell, "get") else getattr(cell, "second_stage", None)
         chk(f"E{k}: '{SPEC_KEY}'.second_stage is not None", ss is not None)
 
-        # REPORT-ONLY basin comparison.
+        # REPORT-ONLY: the measured national phi-hat.
         natl = d / "national_phi_t.csv"
         if not natl.is_file():
-            note(f"E{k}: phi-hat", f"no national_phi_t.csv at {natl} — no comparison made")
+            note(f"E{k}: phi-hat", f"no national_phi_t.csv at {natl}")
             continue
         try:
             import pandas as pd
@@ -406,20 +394,9 @@ def g1():
                 note(f"E{k}: phi-hat", f"{natl.name} has no column {PHI_COL}")
                 continue
             got = float(nd[PHI_COL].mean()) * 100.0
-            want = PROMOTED_PHI_PP.get(k)
-            verdict = "no promoted value on file"
-            if want is not None:
-                verdict = ("same basin (the expected outcome)"
-                           if abs(got - want) <= PHI_TOL_PP else
-                           "NEW BASIN — cluster vintage supersedes, but the multistart is "
-                           "IDENTICAL here (8 threads, 4 starts), so a move is a red flag "
-                           "worth investigating, not routine")
-            note(f"E{k}: phi-hat",
-                 f"mean({PHI_COL})*100 = {got:.4f} pp vs promoted {want} pp "
-                 f"(tol {PHI_TOL_PP} pp): {verdict}")
+            note(f"E{k}: phi-hat", f"mean({PHI_COL})*100 = {got:.4f} pp")
             report.setdefault("phi_hat_pp", {})[str(k)] = {
-                "measured_pp": got, "promoted_pp": want,
-                "tol_pp": PHI_TOL_PP, "verdict": verdict,
+                "measured_pp": got,
                 "statistic": f"unweighted mean of {PHI_COL} over national_phi_t.csv, x100",
             }
         except Exception as exc:

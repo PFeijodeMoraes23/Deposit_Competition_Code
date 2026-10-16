@@ -421,7 +421,6 @@ def build_firm_quarters(panel: pd.DataFrame, bc: pd.DataFrame, memb: pd.Series, 
     # 2015 holds co-operatives only; a 2015 row under a bank's code is not that bank)
     src_rows = bc[(bc["total_assets"] > 0) & (bc["year"] >= 2016)]
     by_firm = {c: g for c, g in src_rows.groupby(C)}
-    level_cols = sorted(set(LEVEL_OF.values()))
 
     q1_spliced = is_q1 & need & fq[C].isin(spl.index[spl_ok])
     codes = fq.loc[q1_spliced, C]
@@ -544,7 +543,7 @@ def rival_branches(yyyymm: str) -> pd.DataFrame:
     """Rival branch count per (conglomerate, market) at one month, as panel_estban_instrument.py
     builds it from ESTBAN.csv: branches summed to the conglomerate (time-varying List crosswalk)
     and the market (latest crosswalk row of the municipality), rivals = market total minus own."""
-    import panel_cosif_calibrate as cc
+    from utils import conglomerates as cc
     est = read_raw_estban(yyyymm, {"AGEN_PROCESSADAS": "AGEN_PROCESSADAS"})
     est["AGEN_PROCESSADAS"] = est["AGEN_PROCESSADAS"].fillna(0.0)
     est["AnoMes"] = int(yyyymm)

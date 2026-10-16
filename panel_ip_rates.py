@@ -1,5 +1,4 @@
 import sys
-import os
 import glob
 import zipfile
 import logging
@@ -22,15 +21,28 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 from utils import paths
 _ROOT = Path(__file__).resolve().parents[2]
 # Raw COSIF zips resolve via the shared dataset path (utils.paths), matching
-# scrape_15 and panel_3; the old BCB/.../raw/COSIF_RAW location is empty.
+# panel_cosif_extract.py.
 RAW_DIR = Path(paths.COSIF_RAW)
 OUT_DIR = _ROOT / "BCB" / "Egan_et_al_2025_Rep" / "processed" / "COSIF_PROCESSED"
 OUT_CSV = OUT_DIR / "ip_rates_quarterly.csv"
 
+# COSIF account codes (raw CONTA has no dots/dashes).  Before the 2025 recode the
+# payment-institution rows carry 8-digit PARENT accounts only; from 2025 they
+# carry 10-digit parent AND child rows, each parent equal to the sum of its
+# children.  Only the parent codes are kept, as in panel_cosif_extract.py (do
+# NOT sum children).
+# Stock = 411 Depositos a Vista + 419 Outros Depositos (419 includes the prepaid
+# payment account, 4193000009 from 2025).  499 Diversas (other liabilities) is
+# not a deposit and is excluded.
+STOCK_CODES = {
+    "41100000", "4110000006",   # Depositos a Vista
+    "41900004", "4190000002",   # Outros Depositos
+}
+# Expense = 811 (-) Despesas de Captacao (cumulative within the semester).
+EXPENSE_CODES = {"81100008", "8110000002"}
+
 def process_file(fpath):
     """ Extract IP rows and summarize accounts. """
-    records = []
-    
     with zipfile.ZipFile(fpath) as zf:
         # Some zips might have multiple files, but usually one. Take the first.
         fname = zf.namelist()[0]
@@ -38,7 +50,7 @@ def process_file(fpath):
             # We skip 3 rows (standard BCB header format)
             try:
                 df = pd.read_csv(f, sep=';', encoding='latin1', dtype=str, skiprows=3)
-            except Exception as e:
+            except Exception:
                 # Some files might not have 3 header rows, try without skiprows
                 f.seek(0)
                 try:
@@ -72,37 +84,25 @@ def process_file(fpath):
     df_ip['SALDO'] = df_ip['SALDO'].astype(str).str.replace('.', '', regex=False).str.replace(',', '.', regex=False)
     df_ip['SALDO'] = pd.to_numeric(df_ip['SALDO'], errors='coerce').fillna(0.0)
     
-    # Extract Stock vs Expense
-    # Stocks: 419 (Outros Depósitos), 499 (Diversas), 411 (Depósitos à Vista)
-    # Expenses: 811 (Despesas de Captação)
-    
-    df_ip['is_stock'] = df_ip['CONTA'].str.startswith('4', na=False)
-    df_ip['is_expense'] = df_ip['CONTA'].str.startswith('811', na=False)
-    
-    # Group by CNPJ, DATA_BASE
-    # To reduce noise, we only sum the specific sub-accounts that matter
-    stock_mask = df_ip['CONTA'].str.startswith(('419', '499', '411', '41900004'), na=False)
-    expense_mask = df_ip['CONTA'].str.startswith('811', na=False)
-    
-    # Filter to only relevant accounts before grouping to avoid excessive sums of irrelevant liabilities
-    df_relevant = df_ip[stock_mask | expense_mask].copy()
+    # Keep the parent stock and expense accounts (STOCK_CODES, EXPENSE_CODES).
+    conta = df_ip['CONTA'].astype(str).str.strip()
+    df_relevant = df_ip[conta.isin(STOCK_CODES | EXPENSE_CODES)].copy()
     if df_relevant.empty:
         return pd.DataFrame()
-        
-    df_relevant['Account_Type'] = np.where(df_relevant['CONTA'].str.startswith('811', na=False), 'Expense', 'Stock')
-    
+
+    df_relevant['Account_Type'] = np.where(
+        conta[df_relevant.index].isin(EXPENSE_CODES), 'Expense', 'Stock')
+
     agg = df_relevant.groupby(['CNPJ', 'DATA_BASE', 'Account_Type'])['SALDO'].sum().reset_index()
-    
-    # Pivot
-    piv = agg.pivot(index=['CNPJ', 'DATA_BASE'], columns='Account_Type', values='SALDO').reset_index()
-    
-    # Ensure columns exist
-    if 'Stock' not in piv.columns: piv['Stock'] = 0.0
-    if 'Expense' not in piv.columns: piv['Expense'] = 0.0
-    
-    # Fill NAs
-    piv['Stock'] = piv['Stock'].fillna(0.0)
-    piv['Expense'] = piv['Expense'].fillna(0.0)
+
+    # COSIF omits zero-balance accounts, so a missing Stock or Expense is a zero
+    # balance.  The zero keeps the within-semester expense differencing in main()
+    # telescoping, and it never produces a rate: a zero lagged stock becomes NaN
+    # in the denominator and a zero expense gives a zero rate, which is set to NaN.
+    piv = (agg.pivot(index=['CNPJ', 'DATA_BASE'], columns='Account_Type', values='SALDO')
+              .reindex(columns=['Stock', 'Expense'])
+              .fillna(0.0)
+              .reset_index())
 
     # In COSIF, Expenses are often reported as negative numbers since they are "Despesas" (-)
     piv['Expense'] = piv['Expense'].abs()

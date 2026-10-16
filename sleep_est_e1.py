@@ -299,7 +299,7 @@ def define_specifications():
 
     iv_specs = {'OLS': [], 'IV_CostShifters': ['personnel_cost_ratio_lag', 'admin_cost_ratio_lag', 'tax_cost_ratio_lag'],
                'IV_Wholesale': ['personnel_cost_ratio_lag', 'admin_cost_ratio_lag', 'tax_cost_ratio_lag', 'lci_lca_ratio_lag', 'wholesale_ratio_lag', 'indice_basileia_lag'],
-               'IV_HausmanFull': ['personnel_cost_ratio_lag', 'admin_cost_ratio_lag', 'tax_cost_ratio_lag', 'lci_lca_ratio_lag', 'wholesale_ratio_lag', 'indice_basileia_lag', 'leave_one_out_mean_spread']}
+               'IV_RivalSpread': ['personnel_cost_ratio_lag', 'admin_cost_ratio_lag', 'tax_cost_ratio_lag', 'lci_lca_ratio_lag', 'wholesale_ratio_lag', 'indice_basileia_lag', 'rival_mean_spread']}
     state_blocks = {'Base': s_base, 'Macro': s_macro, 'Tech': s_tech}
     return s_tech, iv_specs, state_blocks
 
@@ -319,7 +319,7 @@ def do_estimation():
     for col in s_tech_finance:
         if col != 'constant' and col in df.columns: df[col] = df[col].fillna(df[col].median())
     
-    iv_order = ['OLS', 'IV_CostShifters', 'IV_Wholesale', 'IV_HausmanFull']
+    iv_order = ['OLS', 'IV_CostShifters', 'IV_Wholesale', 'IV_RivalSpread']
     state_order = ['Base', 'Macro', 'Tech']
 
     import itertools
@@ -382,7 +382,7 @@ def calculate_phis(df, res_dict, state_blocks):
         df['market_size'] = 1.0
 
     for spec_name, s_cols in state_blocks.items():
-        model_key = f"IV_HausmanFull x {spec_name}"
+        model_key = f"IV_RivalSpread x {spec_name}"
         # We need to search effectively because of how the dict string is named (might have spec prefix)
         actual_key = next((k for k in res_dict.keys() if model_key in k), None)
         if not actual_key: continue
@@ -401,7 +401,7 @@ def calculate_phis(df, res_dict, state_blocks):
                 phi_mt += c * z
                 Zcols.append(z); coef_names.append(col_name)
 
-        key = f"IV_HausmanFull_x_{spec_name}"   # match the E2-E4 phi column naming convention
+        key = f"IV_RivalSpread_x_{spec_name}"   # match the E2-E4 phi column naming convention
         df[f'phi_mt_{key}'] = phi_mt
         # phi_t = sum_m phi_mt*M_mt / sum_m M_mt over MARKETS m (V_Main eq. below sec.4:
         # a market is an MCA, not a municipality).

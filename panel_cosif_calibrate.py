@@ -18,19 +18,17 @@
 #        pre-2025: rate_a4 = k_shrunk * strip_cdb_rate(repo_shrunk, bills_shrunk)
 #        2025+   : rate_a4 = |8113000009| / lag(time-deposit stock)   (direct leaf)
 #
-# Inputs  : custos_implicitos_v2_foundation.csv      (cosif_process_1_extract)
-#           PANEL_INTERMED/quarterly_macro_rates.csv  (macro; written by panel_3)
-#           market_panel.csv  (segment per conglomerate; read-only)  -- with a
-#           bank_chars_panel.csv fallback for the segment if market_panel absent.
-#           IF-Data List  (CNPJ<->conglomerate merge_asof crosswalk)
+# Inputs  : custos_implicitos_v2_foundation.csv      (panel_cosif_extract.py, step 12)
+#           SGS_RAW/macro_series_full.csv  (quarterly macro rates computed here through
+#             utils.macro_rates, as fractions; step 16 writes the same rates in percent)
+#           IF-Data List  (CNPJ<->conglomerate merge_asof crosswalk, utils.conglomerates,
+#             keyed as deposits_panel.csv files each CNPJ; and the segment Sr per conglomerate)
 # Output  : COSIF_PROCESSED/cosif_cdb_rate_corrected.csv
 #             columns: CodConglomeradoPrudencial, AnoMes, rate_a4_corrected_qoq,
 #                      rate_a4_corrected_ann, tier
 #
-# NOTE: macro *_qoq in quarterly_macro_rates.csv are stored in PERCENT; this
-# module converts them to fractions internally.  rate_a4_corrected_qoq is a
-# fraction (e.g. 0.025 = 2.5% per quarter), matching panel_3's internal qoq scale
-# BEFORE its final *100 conversion.
+# NOTE: rate_a4_corrected_qoq is a fraction (e.g. 0.025 = 2.5% per quarter), the scale
+# panel_deposit_rates.py uses internally.
 ## ---------------------------------------------------------------------------
 
 import os
@@ -45,16 +43,16 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 if SCRIPT_DIR not in sys.path:
     sys.path.insert(0, SCRIPT_DIR)
 from utils import paths  # noqa: E402
+from utils.conglomerates import (build_cnpj_to_congl, map_foundation_to_congl,  # noqa: E402
+                                 canonicalize_codes, deposit_panel_codes)
+from utils.macro_rates import load_macro_series, make_quarterly_macro  # noqa: E402
 
 PROCESSED = str(paths.PROCESSED)
 COSIF_PROC = os.path.join(PROCESSED, "COSIF_PROCESSED")
-PANEL_INTERMED = os.path.join(PROCESSED, "PANEL_INTERMED")
-LIST_DIR = str(paths.IF_DATA_LIST)
 
 FOUNDATION = os.path.join(COSIF_PROC, "custos_implicitos_v2_foundation.csv")
-MACRO = os.path.join(PANEL_INTERMED, "quarterly_macro_rates.csv")
-MARKET_PANEL = os.path.join(PROCESSED, "market_panel.csv")
-BANK_CHARS = os.path.join(PROCESSED, "bank_chars_panel.csv")
+IF_LIST_DIR = str(paths.IF_DATA_LIST)
+SEGMENTS = ["S1", "S2", "S3", "S4", "S5"]
 OUT_CORRECTED = os.path.join(COSIF_PROC, "cosif_cdb_rate_corrected.csv")
 
 N0 = 2                  # precision-shrinkage prior count
@@ -85,95 +83,44 @@ def wmean(s, w):
 
 
 def load_macro_fraction():
-    m = pd.read_csv(MACRO)
-    for c in ["cdi_qoq", "selic_qoq", "savings_rate_qoq"]:
-        if c in m.columns:
-            m[c] = m[c] / 100.0
-    return m
-
-
-def build_cnpj_to_congl():
-    """CNPJ(=CodInst for Td=='I') -> CodConglomeradoPrudencial, time-varying."""
-    files = sorted(glob.glob(os.path.join(LIST_DIR, "IF_DATA_List_*.csv")))
-    if not files:
-        raise FileNotFoundError(f"No IF-Data List files in {LIST_DIR}")
-    frames = []
-    for fp in files:
-        try:
-            df = pd.read_csv(fp, dtype=str, encoding="latin-1")
-        except Exception:
-            df = pd.read_csv(fp, dtype=str, encoding="utf-8")
-        df.columns = [c.strip() for c in df.columns]
-        mask = (df["Td"] == "I") & (df["Situacao"] == "A")
-        sub = df.loc[mask, ["CodInst", "Data", "CodConglomeradoPrudencial"]].copy()
-        standalone = (sub["CodConglomeradoPrudencial"].isna()
-                      | (sub["CodConglomeradoPrudencial"] == "null"))
-        sub.loc[standalone, "CodConglomeradoPrudencial"] = sub.loc[standalone, "CodInst"]
-        sub.rename(columns={"CodInst": "CNPJ", "Data": "AnoMes_list"}, inplace=True)
-        frames.append(sub)
-    m = pd.concat(frames, ignore_index=True)
-    m["AnoMes_list"] = pd.to_numeric(m["AnoMes_list"], errors="coerce").astype("Int64")
-    m["CNPJ"] = m["CNPJ"].str.strip().str.zfill(8)
-    return m.drop_duplicates(subset=["CNPJ", "AnoMes_list"])
-
-
-def map_foundation_to_congl(found, df_map):
-    """As-of merge: each (CNPJ, quarter) -> nearest List snapshot (backward,
-    then earliest-forward for pre-2016 quarters)."""
-    f = found.sort_values(["AnoMes", "CNPJ"]).copy()
-    dm = df_map.dropna(subset=["AnoMes_list"]).copy()
-    dm["AnoMes_list"] = dm["AnoMes_list"].astype(int)
-    dm = dm.sort_values(["AnoMes_list", "CNPJ"])
-    back = pd.merge_asof(f, dm, left_on="AnoMes", right_on="AnoMes_list",
-                         by="CNPJ", direction="backward")
-    fwd = pd.merge_asof(f, dm, left_on="AnoMes", right_on="AnoMes_list",
-                        by="CNPJ", direction="forward")
-    merged = back.copy()
-    fill = merged["CodConglomeradoPrudencial"].isna()
-    merged.loc[fill, "CodConglomeradoPrudencial"] = fwd.loc[fill, "CodConglomeradoPrudencial"]
-    return merged.dropna(subset=["CodConglomeradoPrudencial"])
+    """Quarterly macro rates as fractions, computed from the staged SGS series. Step 16 writes
+    the same rates, in percent, to PANEL_INTERMED/quarterly_macro_rates.csv; computing them
+    here keeps this step from reading the output of a later step."""
+    return make_quarterly_macro(load_macro_series())
 
 
 def load_segment_map():
-    """conglomerate -> prudential segment (S1-S5), latest known.  Prefer
-    market_panel.csv; fall back to bank_chars_panel.csv when market_panel.csv
-    is absent or has no segment column.  Raises if a source cannot be read or
-    if neither source carries a segment."""
-    for path, code_col, ym_cols in [
-        (MARKET_PANEL, "CodConglomeradoPrudencial", ("year", "quarter")),
-        (BANK_CHARS, "CodConglPrud", ("AnoMes",)),
-    ]:
-        if not os.path.exists(path):
+    """conglomerate -> prudential segment (S1-S5), from the IF-Data List files: for each
+    canonical code, the modal Sr over the rows of its latest snapshot that carry a valid Sr
+    (ties -> the lower segment number).  The List files are a raw input, so this step reads
+    no later pipeline output.  On the 2026-10-15 panel this agrees with the market panel's
+    latest segment for 385 of the 386 conglomerates both carry.  Raises if no List file has
+    an Sr column: every bank would otherwise fall back to the global profile."""
+    files = sorted(glob.glob(os.path.join(IF_LIST_DIR, "IF_DATA_List_*.csv")))
+    frames = []
+    for f in files:
+        if os.path.getsize(f) <= 500:          # headers-only stub
             continue
-        try:
-            cols = pd.read_csv(path, nrows=0).columns
-            if "segment" not in cols or code_col not in cols:
-                continue
-            use = [code_col, "segment"] + [c for c in ym_cols if c in cols]
-            df = pd.read_csv(path, usecols=use, dtype={code_col: str})
-            df = df.dropna(subset=["segment"])
-            if len(ym_cols) == 2 and all(c in df.columns for c in ym_cols):
-                df = df.sort_values(list(ym_cols))
-            elif ym_cols[0] in df.columns:
-                df = df.sort_values(ym_cols[0])
-            seg = (df.drop_duplicates(code_col, keep="last")
-                   [[code_col, "segment"]]
-                   .rename(columns={code_col: "CodConglomeradoPrudencial"}))
-            log.info("Segment map: %d conglomerates from %s",
-                     len(seg), os.path.basename(path))
-            return seg
-        except Exception as e:   # noqa: BLE001
-            # A segment source that exists but cannot be read must stop the
-            # calibration: the shrinkage targets depend on it, and an empty map
-            # would put every bank on the global profile without notice.
-            raise RuntimeError(
-                f"Could not read the segment map from {path}: {e!r}. "
-                "Fix the read before calibrating; every bank would otherwise "
-                "fall back to the global profile.") from e
-    raise RuntimeError(
-        "No segment source found (neither market_panel.csv nor "
-        "bank_chars_panel.csv carries a 'segment' column); every bank would "
-        "fall back to the global profile. Rebuild the segment column first.")
+        if "Sr" not in pd.read_csv(f, nrows=0, encoding="latin1").columns:
+            continue
+        frames.append(pd.read_csv(f, encoding="latin1", dtype=str,
+                                  usecols=["Data", "CodConglomeradoPrudencial", "Sr"]))
+    if not frames:
+        raise RuntimeError(
+            f"No IF-Data List file in {IF_LIST_DIR} carries an Sr column; every bank "
+            "would fall back to the global profile.")
+    lf = pd.concat(frames, ignore_index=True).dropna(subset=["CodConglomeradoPrudencial"])
+    lf["Sr"] = lf["Sr"].astype(str).str.strip().str.upper()
+    lf = lf[lf["Sr"].isin(SEGMENTS)].copy()
+    lf["Data"] = pd.to_numeric(lf["Data"], errors="coerce")
+    lf["CodConglomeradoPrudencial"] = canonicalize_codes(lf["CodConglomeradoPrudencial"])
+    tail = lf[lf["Data"] == lf.groupby("CodConglomeradoPrudencial")["Data"].transform("max")]
+    seg = (tail.groupby(["CodConglomeradoPrudencial", "Sr"]).size().rename("n").reset_index()
+               .sort_values(["CodConglomeradoPrudencial", "n", "Sr"], ascending=[True, False, True])
+               .drop_duplicates("CodConglomeradoPrudencial")
+               .rename(columns={"Sr": "segment"})[["CodConglomeradoPrudencial", "segment"]])
+    log.info("Segment map: %d conglomerates from %d IF-Data List files", len(seg), len(frames))
+    return seg
 
 
 def strip_cdb_expense(d, repo_ratio, bills_ratio):
@@ -195,6 +142,8 @@ def strip_cdb_expense(d, repo_ratio, bills_ratio):
 
 def build_congl_panel(found, macro):
     df_map = build_cnpj_to_congl()
+    # key each CNPJ by the code deposits_panel.csv files its deposits under
+    df_map["CodConglomeradoPrudencial"] = deposit_panel_codes(df_map["CNPJ"], df_map["CodConglomeradoPrudencial"])
     merged = map_foundation_to_congl(found, df_map)
     agg_cols = [c for c in STOCK_COLS + EXPENSE_COLS if c in merged.columns]
     congl = (merged.groupby(["CodConglomeradoPrudencial", "AnoMes"])[agg_cols]
@@ -247,7 +196,7 @@ def estimate_perbank(post):
 
 def main():
     if not os.path.exists(FOUNDATION):
-        log.error("Foundation not found: %s -- run cosif_process_1_extract first.",
+        log.error("Foundation not found: %s -- run panel_cosif_extract.py first.",
                   FOUNDATION)
         sys.exit(1)
 
@@ -273,12 +222,12 @@ def main():
     seg_prof = (pb.dropna(subset=["segment"]).groupby("segment")
                 .apply(seg_profile, include_groups=False))
     gall = pb[pb["n_i"] > 0]
-    glob = {"repo": wmean(gall["repo_ratio_i"], gall["dep_w"]),
+    glob_fb = {"repo": wmean(gall["repo_ratio_i"], gall["dep_w"]),
             "bills": wmean(gall["bills_ratio_i"], gall["dep_w"]),
             "k": wmean(gall["k_i"], gall["dep_w"])}
     log.info("Segment profiles:\n%s", seg_prof.to_string())
     log.info("Global fallback: repo=%.3f bills=%.3f k=%.3f",
-             glob["repo"], glob["bills"], glob["k"])
+             glob_fb["repo"], glob_fb["bills"], glob_fb["k"])
 
     def seg_val(seg, col, fallback):
         if seg in seg_prof.index and pd.notna(seg_prof.loc[seg, col]):
@@ -286,9 +235,9 @@ def main():
         return fallback
 
     # ---- shrinkage (w_i = n_i/(n_i+N0)); per-component fallback to segment ----
-    pb["repo_seg"] = pb["segment"].apply(lambda s: seg_val(s, "repo_ratio_seg", glob["repo"]))
-    pb["bills_seg"] = pb["segment"].apply(lambda s: seg_val(s, "bills_ratio_seg", glob["bills"]))
-    pb["k_segt"] = pb["segment"].apply(lambda s: seg_val(s, "k_seg", glob["k"]))
+    pb["repo_seg"] = pb["segment"].apply(lambda s: seg_val(s, "repo_ratio_seg", glob_fb["repo"]))
+    pb["bills_seg"] = pb["segment"].apply(lambda s: seg_val(s, "bills_ratio_seg", glob_fb["bills"]))
+    pb["k_segt"] = pb["segment"].apply(lambda s: seg_val(s, "k_seg", glob_fb["k"]))
     pb["w_i"] = pb["n_i"] / (pb["n_i"] + N0)
     for own, segc, out in [("repo_ratio_i", "repo_seg", "repo_shrunk"),
                            ("bills_ratio_i", "bills_seg", "bills_shrunk"),
@@ -305,13 +254,13 @@ def main():
     params["n_i"] = params["n_i"].fillna(0)
     params["repo_shrunk"] = params.apply(
         lambda r: r["repo_shrunk"] if pd.notna(r["repo_shrunk"])
-        else seg_val(r["segment"], "repo_ratio_seg", glob["repo"]), axis=1)
+        else seg_val(r["segment"], "repo_ratio_seg", glob_fb["repo"]), axis=1)
     params["bills_shrunk"] = params.apply(
         lambda r: r["bills_shrunk"] if pd.notna(r["bills_shrunk"])
-        else seg_val(r["segment"], "bills_ratio_seg", glob["bills"]), axis=1)
+        else seg_val(r["segment"], "bills_ratio_seg", glob_fb["bills"]), axis=1)
     params["k_shrunk"] = params.apply(
         lambda r: r["k_shrunk"] if pd.notna(r["k_shrunk"])
-        else seg_val(r["segment"], "k_seg", glob["k"]), axis=1)
+        else seg_val(r["segment"], "k_seg", glob_fb["k"]), axis=1)
 
     def tier(r):
         if r["n_i"] >= 2:

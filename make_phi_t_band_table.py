@@ -134,7 +134,7 @@ def build_tex(cells):
         r"\bottomrule",
         r"\end{tabular}",
         r"\begin{tablenotes}[flushleft]\footnotesize",
-        r"\item \textit{Notes:} Spec 12 (\texttt{IV\_HausmanFull} $\times$ Tech), "
+        r"\item \textit{Notes:} Spec 12 (\texttt{IV\_RivalSpread} $\times$ Tech), "
         r"Cauchy-robust loss. $\hat{\phi}_t$ is the population-weighted mean of $\phi_{mt}$ "
         r"across markets, as in the definition of $\phi_t$ in Section~\ref{sec:model}. The "
         r"link is estimated under its shape constraints ($\beta \ge 0$, $\sum\beta \le 1$), "

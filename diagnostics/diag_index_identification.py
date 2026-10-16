@@ -56,7 +56,7 @@ def main(n_random: int, seed: int, time_block: bool) -> int:
     df = build_pooled_data(time_block=time_block)
     _, ivs, blocks = define_specifications(time_block=time_block)
     s_cols = blocks["Tech"]
-    df, _ = run_pooled_first_stage(df, ivs["IV_HausmanFull"],
+    df, _ = run_pooled_first_stage(df, ivs["IV_RivalSpread"],
                                    [c for c in s_cols if c != "constant"])
     K = len(s_cols)
     G = 1                                    # v_hat_x_lagged_dep (has_cf=True)

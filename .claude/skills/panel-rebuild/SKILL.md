@@ -122,7 +122,7 @@ Run these before any estimation. Each exists because the failure it catches was 
    `market_panel_with_fees.csv` directly, on purpose.
 4. By hand, against the "before" numbers: shape and totals; the instrument columns are present
    (`loo_log_assets`, `mean_loo_log_assets`, `loo_equity_ratio`, `loo_basileia`,
-   `leave_one_out_mean_spread`, `estban_rival_branches_lag`); the Basel ratio columns
+   `rival_mean_spread`, `estban_rival_branches_lag`); the Basel ratio columns
    (`indice_basileia*`) lie in [-1, 2], the validity bound applied before the 1/99 winsorization
    within firm type.
 5. The sidecar: every writer of `market_panel.csv` refreshes `market_panel.parquet` and logs

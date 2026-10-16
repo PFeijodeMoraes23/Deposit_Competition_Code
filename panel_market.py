@@ -1,16 +1,14 @@
-## build_market_panel.py
+## panel_market.py
 # Author: Pedro Feijó de Moraes
 #
-# Last edited: 2026-03-06
+# Pipeline step 19. Merge all MCA-level characteristic panels with the conglomerate
+# deposit panel to produce the analysis dataset for the deposit competition / BLP
+# demand model.
 #
-# Purpose: Merge all MCA-level characteristic panels with the conglomerate
-#          deposit panel to produce a single analysis-ready dataset for
-#          the deposit competition / BLP demand model.
-#
-#   Inputs  (all built by earlier pipeline scripts):
-#     A. BCB/Panel/deposits_panel.csv
+#   Inputs  (all built by earlier pipeline steps):
+#     A. processed/deposits_panel.csv          (panel_deposits.py + panel_deposit_rates.py)
 #          Conglomerate x CODMUN_IBGE (7-digit) x Year x Quarter
-#          Core left-hand-side data (deposit balances by type, source)
+#          Core left-hand-side data (deposit balances by type, rates, spreads, source)
 #
 #     B. IBGE/muni_mca_regions_2010_2024_panel.csv
 #          Municipality -> MCA crosswalk used to map CODMUN_IBGE -> mca_code
@@ -18,34 +16,32 @@
 #     C. IBGE/mca_demographics_panel.csv
 #          MCA x Year : pop_total, gdp_per_capita, fraction_65plus, fraction_young
 #
-#     D. BCB/PIX/pix_mca_panel.csv
+#     D. PIX_DIR/pix_mca_panel.csv
 #          MCA x Year x Quarter : pix_active, pix_users_pf_per1000, pix_txns_pf, ...
 #
 #     E. ANATEL/anatel_mca_panel.csv
 #          MCA x Year x Quarter : connections_per100, frac_4g5g
 #
-#     F. INSS/inss_mca_panel.csv
-#          MCA x Year x Quarter : retirees_per1000
+#     F. BCB/Inclusion/bcb_inclusion_mca_panel.csv
+#          MCA x Year : branches_per1000 (correspondents/access points are carried but constant)
 #
-#     G. BCB/Inclusion/bcb_inclusion_mca_panel.csv
-#          MCA x Year : branches_per1000, correspondents_per1000, access_points_per1000
-#
-#     H. CadUnico/cadunico_mca_panel.csv
+#     G. CadUnico/cadunico_mca_panel.csv
 #          MCA x Year x Quarter : cadunico_families_per1000, cadunico_extreme_poverty
 #
+#     plus processed/bank_chars_panel.csv and PANEL_INTERMED/digital_banks_diagnostic.csv.
+#
 #   Output:
-#     BCB/Panel/market_panel.csv
+#     processed/market_panel.csv (and its parquet sidecar)
 #       Unit of observation: CodConglomeradoPrudencial x mca_code x Year x Quarter
 #
 #       Deposit columns (from A):
 #         dep_a1, dep_a2, dep_a3, dep_a4, dep_outros, dep_a5
 #
-#       Market-level columns (from C-H):
+#       Market-level columns (from C-G):
 #         pop_total, gdp_per_capita
 #         fraction_65plus, fraction_young, age_interpolated
 #         pix_active, pix_users_pf_per1000, pix_txns_pf, pix_value_pf_r1000
 #         connections_per100, frac_4g5g
-#         retirees_per1000
 #         branches_per1000, correspondents_per1000, access_points_per1000
 #         cadunico_families_per1000, cadunico_extreme_poverty
 #
@@ -55,20 +51,17 @@
 #         mca_code, Year, Quarter, Source (ESTBAN | IF_DATA)
 #
 # Notes:
-#   * Tier-1 rows (ESTBAN, CODMUN_IBGE ≠ 0) are merged to market characteristics
-#     via the MCA crosswalk.  Tier-2 rows (IF Data only, CODMUN_IBGE = 0) are
-#     kept as-is; their market-characteristic columns are left NaN (they appear
-#     only in the aggregation-moment equation, not the local-market equations).
-#   * Annual-frequency panels (C = demographics, G = BCB inclusion) are broadcast
+#   * Tier-1 rows (ESTBAN, CODMUN_IBGE != 0) are merged to market characteristics
+#     via the MCA crosswalk.  Tier-2 rows (IF Data only, mca_code = 'NATIONAL') get
+#     population-weighted national averages of every characteristic (section 7).
+#   * Annual-frequency panels (C = demographics, F = BCB inclusion) are broadcast
 #     to all four quarters of each year before merging.
-#   * Missing panel files are handled gracefully; their columns are filled with NaN
-#     and logged as warnings.  This lets the panel be built incrementally as
-#     downloads complete.
+#   * A missing characteristic panel stops the build (FileNotFoundError): every one of
+#     them feeds the demand-side demographics.
 ###-----------------------------------------------------------------------------
 
 import concurrent.futures
 import os
-import sys
 import logging
 try:
     from utils.venv_guard import ensure_project_venv
@@ -97,7 +90,6 @@ BASE = str(paths.OPEN_FINANCE)
 BCB_DIR    = str(paths.BCB)
 IBGE_DIR   = str(paths.IBGE_DIR)
 ANATEL_DIR = str(paths.ANATEL_DIR)
-INSS_DIR   = os.path.join(BASE, "INSS")
 CAD_DIR    = str(paths.CADUNICO_DIR)
 PIX_DIR    = str(paths.PIX_DIR)
 
@@ -109,7 +101,6 @@ MCA_XWALK_CSV  = os.path.join(IBGE_DIR,                   "muni_mca_regions_2010
 DEMO_CSV       = os.path.join(IBGE_DIR,                   "mca_demographics_panel.csv")
 PIX_CSV        = os.path.join(PIX_DIR,                    "pix_mca_panel.csv")
 ANATEL_CSV     = os.path.join(ANATEL_DIR,                 "anatel_mca_panel.csv")
-INSS_CSV       = os.path.join(INSS_DIR,                   "inss_mca_panel.csv")
 INCLUSION_CSV  = os.path.join(BCB_DIR, "Inclusion",       "bcb_inclusion_mca_panel.csv")
 CADUNICO_CSV   = os.path.join(CAD_DIR,                    "cadunico_mca_panel.csv")
 BANK_CHARS_CSV = os.path.join(PANEL_DIR,                  "bank_chars_panel.csv")
@@ -185,16 +176,16 @@ def load_digital_conglomerates(digital_flags_csv: str) -> tuple[set, pd.DataFram
     C0080460 led by the Omni CFI. Keying the flag on the leader CNPJ therefore misses
     them, and keying it on "any member is a candidate" would flag Bradesco (via Bradesco
     Financiamentos) or Safra (via J. Safra). The rule used here: a conglomerate is digital
-    iff EVERY ESTBAN bank that panel_1 maps into it is a digital candidate, i.e. the
+    iff EVERY ESTBAN bank that panel_deposits maps into it is a digital candidate, i.e. the
     conglomerate's whole ESTBAN deposit footprint is single-municipality.
 
-    Bank -> conglomerate uses panel_1's build_cnpj_conglomerate_map, the same lookup that
+    Bank -> conglomerate uses utils.conglomerates.build_cnpj_conglomerate_map, the same lookup that
     built deposits_panel.csv (latest List spell wins; unmapped banks fall back to
-    'CNPJ_<cnpj>' exactly as panel_1 does), so the two sides of the join agree.
+    'CNPJ_<cnpj>' exactly as panel_deposits does), so the two sides of the join agree.
 
     Returns (set of digital CodConglomeradoPrudencial, member table for logging).
     """
-    from panel_deposits import build_cnpj_conglomerate_map
+    from utils.conglomerates import build_cnpj_conglomerate_map
 
     flags = pd.read_csv(digital_flags_csv)
     flags = flags[flags["Inst_Total_Dep"] > 0].copy()
@@ -331,7 +322,7 @@ def attach_mca_code(dep: pd.DataFrame) -> pd.DataFrame:
     tier2_sentinel = (dep["CODMUN_IBGE"].isna() | (dep["CODMUN_IBGE"] == 0)).fillna(True).astype(bool)
 
     # Digital conglomerates (see load_digital_conglomerates): every ESTBAN bank in the
-    # conglomerate is a panel_5 digital candidate. Their ESTBAN rows carry a real
+    # conglomerate is a panel_digital_flags digital candidate. Their ESTBAN rows carry a real
     # CODMUN_IBGE (the single municipality the bank books all deposits in) and are
     # re-keyed to the Tier-2 sentinel so they become NATIONAL like the IF-Data fintechs.
     mask_dig = pd.Series(False, index=dep.index)
@@ -520,17 +511,6 @@ def load_anatel() -> pd.DataFrame | None:
     return df[[c for c in keep if c in df.columns]]
 
 
-def load_inss() -> pd.DataFrame | None:
-    """Quarterly MCA panel: retirement beneficiaries."""
-    df = _try_load(INSS_CSV, "INSS retirees panel",
-                  dtype={"mca_code": str, "year": int, "quarter": int})
-    if df is None:
-        return None
-    keep = ["mca_code", "year", "quarter",
-            "retirees_total", "retirees_per1000"]
-    return df[[c for c in keep if c in df.columns]]
-
-
 def load_bcb_inclusion() -> pd.DataFrame | None:
     """Annual MCA panel: banking access-points (broadcast to quarters)."""
     df = _try_load(INCLUSION_CSV, "BCB inclusion panel",
@@ -567,12 +547,11 @@ def merge_characteristics(dep: pd.DataFrame) -> pd.DataFrame:
         ("demographics",  load_demographics),
         ("PIX",           load_pix),
         ("ANATEL",        load_anatel),
-        ("INSS",          load_inss),
         ("BCB inclusion", load_bcb_inclusion),
         ("CadUnico",      load_cadunico),
     ]
 
-    # Load all six characteristic panels concurrently (all are local CSV reads)
+    # Load the characteristic panels concurrently (all are local CSV reads)
     loaded: dict[str, pd.DataFrame | None] = {}
     with concurrent.futures.ThreadPoolExecutor(max_workers=6) as pool:
         future_map = {pool.submit(fn): name for name, fn in loaders}
@@ -589,9 +568,8 @@ def merge_characteristics(dep: pd.DataFrame) -> pd.DataFrame:
 
     # A missing source used to degrade silently to all-NaN columns, which is how
     # market_panel.csv was once rebuilt with no PIX columns at all.  Every source
-    # below feeds the demand-side demographics, so a miss is fatal.  INSS is the
-    # sole exception: its panel has never been built and nothing consumes it.
-    missing = [n for n, d in panels if d is None and n != "INSS"]
+    # below feeds the demand-side demographics, so a miss is fatal.
+    missing = [n for n, d in panels if d is None]
     if missing:
         raise FileNotFoundError(
             "Required characteristic panel(s) not found: " + ", ".join(missing) +
@@ -632,13 +610,12 @@ def merge_characteristics(dep: pd.DataFrame) -> pd.DataFrame:
 # they need well-defined market-characteristic controls and instruments.
 # We assign each variable a population-weighted national average computed from
 # Tier-1 (ESTBAN) rows for the same (year, quarter), using MCA pop_total as
-# weights.  Two exceptions use sums instead of weighted means:
+# weights.  One exception uses a sum instead of a weighted mean:
 #   * pop_total      -> national population (sum of all MCAs)
-#   * retirees_total -> national retiree count (sum of all MCAs)
 # -----------------------------------------------------------------------------
 
 # Columns aggregated as national total (sum)
-_NATL_SUM_COLS: list[str] = ["pop_total", "retirees_total"]
+_NATL_SUM_COLS: list[str] = ["pop_total"]
 
 # Columns aggregated as population-weighted mean
 _NATL_RATE_COLS: list[str] = [
@@ -646,7 +623,6 @@ _NATL_RATE_COLS: list[str] = [
     "fraction_65plus", "fraction_young",
     "pix_users_pf_per1000", "pix_txns_pf", "pix_value_pf_r1000", "pix_users_pj",
     "connections_per100", "frac_4g5g",
-    "retirees_per1000",
     "branches_per1000", "correspondents_per1000", "access_points_per1000",
     "cadunico_families_per1000", "cadunico_extreme_poverty", "cadunico_poverty",
 ]
@@ -667,7 +643,7 @@ def fill_national_averages(panel: pd.DataFrame) -> pd.DataFrame:
 
     Aggregation rules
     -----------------
-    * pop_total, retirees_total  -> sum across all MCAs  (true national total)
+    * pop_total                  -> sum across all MCAs  (true national total)
     * all rate / per-X columns   -> population-weighted mean across MCAs
     """
     nat_mask = panel["mca_code"] == "NATIONAL"
@@ -776,17 +752,33 @@ def merge_bank_chars(panel: pd.DataFrame, bank_chars: pd.DataFrame | None) -> pd
 ## 8) FINAL COLUMN ORDERING & SAVE
 ## -----------------------------------------------------------------------------
 
-def calculate_hausman_iv_wide(panel: pd.DataFrame) -> pd.DataFrame:
-    """Calculate the leave-one-out mean spread for each deposit type (a1 through a5)."""
+def calculate_rival_mean_spread_wide(panel: pd.DataFrame) -> pd.DataFrame:
+    """Rival mean spread for each deposit type k (a1 through a5).
+
+    For a row of conglomerate j in market m (mca_code) and quarter t:
+        rival_mean_spread_a{k} = (S_mt - S_jmt) / (N_mt - N_jmt)
+    where S_mt, N_mt are the sum and count of non-null spread_a{k} over the rows of market m in
+    quarter t, and S_jmt, N_jmt the same over conglomerate j's rows there. So the instrument is
+    the mean spread of the other conglomerates present in j's market, each with weight 1. D firms
+    sit under the single national code, so their rivals are the other D firms. NaN when no other
+    conglomerate in the market has a non-null spread that quarter.
+
+    The rival set is the market, not the country: with a quarter fixed effect absorbed, a
+    national leave-j-out mean equals minus j's own mean spread times N_jt/(N_t - N_jt), so its
+    identifying variation would be the endogenous spread itself."""
+    mt_keys = [panel['mca_code'], panel['year'], panel['quarter']]
+    jmt_keys = [panel['CodConglomeradoPrudencial'], panel['mca_code'], panel['year'], panel['quarter']]
     for k in [1, 2, 3, 4, 5]:
         spread_col = f'spread_a{k}'
-        iv_col = f'leave_one_out_mean_spread_a{k}'
+        iv_col = f'rival_mean_spread_a{k}'
         if spread_col in panel.columns:
-            group_cols = ['year', 'quarter']
-            g_count = panel.groupby(group_cols)[spread_col].transform(lambda x: x.notnull().sum())
-            g_sum = panel.groupby(group_cols)[spread_col].transform(lambda x: x.sum())
-            panel[iv_col] = (g_sum - panel[spread_col].fillna(0)) / (g_count - panel[spread_col].notnull().astype(int)).clip(lower=1)
-            panel.loc[g_count <= 1, iv_col] = float('nan')
+            s = panel[spread_col]
+            present = s.notna().astype(int)
+            n_rival = (present.groupby(mt_keys).transform('sum')
+                       - present.groupby(jmt_keys).transform('sum'))
+            s_rival = (s.groupby(mt_keys).transform('sum')
+                       - s.groupby(jmt_keys).transform('sum'))
+            panel[iv_col] = (s_rival / n_rival.where(n_rival > 0)).astype(float)
     return panel
 
 _COL_ORDER = [
@@ -800,9 +792,9 @@ _COL_ORDER = [
     # Deposit balances
     "dep_a1", "dep_a2", "dep_a3", "dep_a4", "dep_outros", "dep_a5", "total_deposits",
     "spread_a1", "spread_a2", "spread_a3", "spread_a4", "spread_a5",
-    "leave_one_out_mean_spread_a1", "leave_one_out_mean_spread_a2",
-    "leave_one_out_mean_spread_a3", "leave_one_out_mean_spread_a4",
-    "leave_one_out_mean_spread_a5",
+    "rival_mean_spread_a1", "rival_mean_spread_a2",
+    "rival_mean_spread_a3", "rival_mean_spread_a4",
+    "rival_mean_spread_a5",
     # Market size
     "pop_total", "gdp_per_capita", "gdp_imputed",
     # Demographics
@@ -812,8 +804,6 @@ _COL_ORDER = [
     "pix_users_pj",
     # Mobile connectivity
     "connections_per100", "frac_4g5g",
-    # Retirees (elderly income dependency)
-    "retirees_total", "retirees_per1000",
     # Banking access
     "branches_per1000", "correspondents_per1000", "access_points_per1000",
     # Poverty / unbanked proxy
@@ -938,7 +928,7 @@ def main() -> None:
     # B2. Collapse municipalities -> MCA (the documented unit of observation). Must run
     # BEFORE the merges: fill_national_averages() pop-weights by MCA pop_total (repeated
     # municipality rows would over-weight multi-municipality MCAs by their municipality
-    # count) and calculate_hausman_iv_wide() builds a leave-one-out mean over MARKETS.
+    # count) and calculate_rival_mean_spread_wide() averages over market rows.
     dep = aggregate_to_mca(dep)
 
     # C. Merge all market characteristic panels
@@ -975,8 +965,8 @@ def main() -> None:
     if before_drop > after_drop:
         logging.info(f"Dropped {before_drop - after_drop} observations belonging to Captive Financiers.")
 
-    # D4. Calculate the Leave-One-Out Mean Spread (Hausman IV) natively over wide format deposit columns
-    panel = calculate_hausman_iv_wide(panel)
+    # D4. Rival mean spread instrument, per deposit type, over the wide deposit columns
+    panel = calculate_rival_mean_spread_wide(panel)
 
     # E. Enforce Global Data Exclusions
     # 1. D-type firms (digital, without physical branch network) should launch strictly > 2013
@@ -1009,8 +999,8 @@ def main() -> None:
     tier2 = panel[panel["mca_code"] == "NATIONAL"]
 
     def _nn(col: str) -> str:
-        # Non-null count for a column that may be absent (e.g. PIX/INSS panels
-        # missing on disk) -- keep the summary from crashing the whole step.
+        # Non-null count for a column that may be absent -- keep the summary from
+        # crashing the whole step.
         return f"{panel[col].notna().sum():,}" if col in panel.columns else "n/a (column absent)"
 
     print(

@@ -214,7 +214,7 @@ paths are relative to `Open-Finance/`.
 Total about 62 MB. Checks made now (read only): `demand_chars.parquet` records the market-panel
 md5 `6613228b2fe6b0ba95d0f16d1d5a743c` in its schema metadata, equal to the local
 `market_panel.parquet`, so the two must travel as this pair (the prep raises otherwise). The
-"Hausman" instruments are panel columns (`leave_one_out_mean_spread_a*`), not a separate file.
+"Hausman" instruments are panel columns (`rival_mean_spread_a*`), not a separate file.
 Without `bcb_banked_mca_panel.csv` the prep would fall back to a constant banked correction with a
 warning; the bootstrap refuses instead.
 

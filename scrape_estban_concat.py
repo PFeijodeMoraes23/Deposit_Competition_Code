@@ -44,7 +44,8 @@ if ensure_project_venv is not None:
     ensure_project_venv(__file__)
 
 # Reuse the proven per-file transform from the deposits builder.
-from panel_deposits import process_raw_estban_csv, coerce_cnpj
+from utils.estban import process_raw_estban_csv
+from utils.conglomerates import coerce_cnpj
 from utils import paths
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")

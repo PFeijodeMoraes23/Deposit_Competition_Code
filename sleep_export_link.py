@@ -19,6 +19,7 @@ import pickle
 import subprocess
 import shutil
 import warnings
+from pathlib import Path
 import numpy as np
 import pandas as pd
 warnings.filterwarnings("ignore", message="covariance of constraints does not have full rank")
@@ -73,7 +74,7 @@ _BASE_LABELS = {
     'indice_basileia_lag': 'Basel Index ($t-1$)',
     'lci_lca_ratio_lag': 'LCI/LCA Ratio ($t-1$)',
     'wholesale_ratio_lag': 'Wholesale Ratio ($t-1$)',
-    'leave_one_out_mean_spread': 'Leave-out Mean Spread',
+    'rival_mean_spread': 'Rival Mean Spread',
     'v_hat_x_lagged_dep': 'CF: $\\hat{v} \\times$ Lagged Deposits',
     'time_trend': 'Time Trend',
     'gdp_growth_yoy': 'GDP Growth',
@@ -138,7 +139,7 @@ def fmt3(x, digits=3):
 
 
 def eff_f_cell(est_num, spec_key, math=True):
-    """The effective-F cell of routine `est_num` under `spec_key` (e.g. 'IV_HausmanFull x Tech'),
+    """The effective-F cell of routine `est_num` under `spec_key` (e.g. 'IV_RivalSpread x Tech'),
     read from Rout/sleep_first_stage_strength.json and shown at three decimals. Blank when the
     file holds no value for the column: a specification without excluded instruments, or a file
     that has not been written. `math=False` returns the bare number for tables whose cells are
@@ -155,6 +156,29 @@ def pdflatex_clean(stdout: str) -> bool:
     offending construct -- and can still leave a non-empty PDF behind, so checking only that the
     PDF exists and has a nonzero size calls a page of cascading errors a success."""
     return not any(line.startswith('!') for line in stdout.splitlines())
+
+
+def compile_check_wrapper(out_dir, wrapper_name: str) -> None:
+    """Compile the standalone wrapper twice to check that the table fragments build, then delete
+    the wrapper and every pdflatex by-product (.pdf/.aux/.log/.out). Nothing includes the wrapper:
+    the paper reads the fragments. On failure the files stay in out_dir for inspection."""
+    out_dir = Path(out_dir)
+    stem = Path(wrapper_name).stem
+    print(" - Compiling PDF...")
+    try:
+        for _ in range(2):
+            res_final = subprocess.run(["pdflatex", "-interaction=nonstopmode", wrapper_name],
+                                       cwd=str(out_dir), capture_output=True, text=True)
+        pdf_path = out_dir / f"{stem}.pdf"
+        if pdf_path.exists() and pdf_path.stat().st_size > 0 and pdflatex_clean(res_final.stdout):
+            for f in out_dir.glob(f"{stem}.*"):
+                f.unlink()
+            print("\n *** WRAPPER COMPILED CLEANLY; wrapper files deleted. ***\n")
+        else:
+            print(f"\n *** PDF GENERATION FAILED (files kept in {out_dir}). Log tail:\n"
+                  f"{res_final.stdout[-800:]}\n ***\n")
+    except Exception as e:
+        print(f"\n *** COMPILATION ERROR: {e} ***\n")
 
 
 # Appendix caption = stage + a reference to the estimation strategy enumerated in V_Main
@@ -195,11 +219,11 @@ def build_first_stage_table(results_dict, est_num):
     panel_labels = {'Base': 'Base Specifications', 'Macro': 'Macro Specifications', 'Tech': 'Tech Specifications'}
     panel_letters = ['A', 'B', 'C']
     fs_spec_numbers = {
-        ('Base', 'IV_CostShifters'): 2, ('Base', 'IV_Wholesale'): 3, ('Base', 'IV_HausmanFull'): 4,
-        ('Macro', 'IV_CostShifters'): 6, ('Macro', 'IV_Wholesale'): 7, ('Macro', 'IV_HausmanFull'): 8,
-        ('Tech', 'IV_CostShifters'): 10, ('Tech', 'IV_Wholesale'): 11, ('Tech', 'IV_HausmanFull'): 12,
+        ('Base', 'IV_CostShifters'): 2, ('Base', 'IV_Wholesale'): 3, ('Base', 'IV_RivalSpread'): 4,
+        ('Macro', 'IV_CostShifters'): 6, ('Macro', 'IV_Wholesale'): 7, ('Macro', 'IV_RivalSpread'): 8,
+        ('Tech', 'IV_CostShifters'): 10, ('Tech', 'IV_Wholesale'): 11, ('Tech', 'IV_RivalSpread'): 12,
     }
-    ivs = [('IV_CostShifters', 'IV Cost'), ('IV_Wholesale', 'IV Wholesale'), ('IV_HausmanFull', 'Hausman')]
+    ivs = [('IV_CostShifters', 'IV Cost'), ('IV_Wholesale', 'IV Wholesale'), ('IV_RivalSpread', 'Rival mean spread')]
     multispan = 4
     caption = _strategy_caption("First Stage, Deposit Spread on Instruments", est_num)
     label = f"tab:est{est_num}_first_stage"
@@ -225,7 +249,7 @@ def build_first_stage_table(results_dict, est_num):
         r"    \bottomrule", rf"    \multicolumn{{{multispan}}}{{p{{\dimexpr\textwidth-2\tabcolsep\relax}}}}{{{notes}}} \\", r"    \endlastfoot", "",
     ]
     all_vars_fs = ['tax_cost_ratio_lag', 'personnel_cost_ratio_lag', 'admin_cost_ratio_lag',
-                   'indice_basileia_lag', 'lci_lca_ratio_lag', 'wholesale_ratio_lag', 'leave_one_out_mean_spread']
+                   'indice_basileia_lag', 'lci_lca_ratio_lag', 'wholesale_ratio_lag', 'rival_mean_spread']
     for pi, panel in enumerate(panels):
         letter = panel_letters[pi]
         iv_nums = [(il, fs_spec_numbers[(panel, ik)]) for ik, il in ivs]
@@ -306,11 +330,11 @@ def build_second_stage_table(results_dict, est_num):
     panel_labels = {'Base': 'Base Specifications', 'Macro': 'Macro Specifications', 'Tech': 'Tech Specifications'}
     panel_letters = ['A', 'B', 'C']
     ss_spec_numbers = {
-        ('Base', 'OLS'): 1, ('Base', 'IV_CostShifters'): 2, ('Base', 'IV_Wholesale'): 3, ('Base', 'IV_HausmanFull'): 4,
-        ('Macro', 'OLS'): 5, ('Macro', 'IV_CostShifters'): 6, ('Macro', 'IV_Wholesale'): 7, ('Macro', 'IV_HausmanFull'): 8,
-        ('Tech', 'OLS'): 9, ('Tech', 'IV_CostShifters'): 10, ('Tech', 'IV_Wholesale'): 11, ('Tech', 'IV_HausmanFull'): 12,
+        ('Base', 'OLS'): 1, ('Base', 'IV_CostShifters'): 2, ('Base', 'IV_Wholesale'): 3, ('Base', 'IV_RivalSpread'): 4,
+        ('Macro', 'OLS'): 5, ('Macro', 'IV_CostShifters'): 6, ('Macro', 'IV_Wholesale'): 7, ('Macro', 'IV_RivalSpread'): 8,
+        ('Tech', 'OLS'): 9, ('Tech', 'IV_CostShifters'): 10, ('Tech', 'IV_Wholesale'): 11, ('Tech', 'IV_RivalSpread'): 12,
     }
-    estimators = [('OLS', 'OLS'), ('IV_CostShifters', 'IV Cost'), ('IV_Wholesale', 'IV Wholesale'), ('IV_HausmanFull', 'Hausman')]
+    estimators = [('OLS', 'OLS'), ('IV_CostShifters', 'IV Cost'), ('IV_Wholesale', 'IV Wholesale'), ('IV_RivalSpread', 'Rival mean spread')]
     multispan = 5
     label = f"tab:est{est_num}_second_stage"
     caption = _strategy_caption("Second Stage", est_num)
@@ -493,18 +517,7 @@ def export_link_results(est_num, title):
     (TEX_OUT_DIR / wrapper_name).write_text(tex_doc, encoding="utf-8")
     print(f" - Standalone wrapper written to {TEX_OUT_DIR}")
 
-    print(" - Compiling PDF...")
-    try:
-        for _ in range(2):
-            res_final = subprocess.run(["pdflatex", "-interaction=nonstopmode", wrapper_name],
-                                       cwd=str(TEX_OUT_DIR), capture_output=True, text=True)
-        pdf_path = TEX_OUT_DIR / f"est{est_num}_sleep_results.pdf"
-        if pdf_path.exists() and pdf_path.stat().st_size > 0 and pdflatex_clean(res_final.stdout):
-            print("\n *** PDF SUCCESSFULLY GENERATED. ***\n")
-        else:
-            print(f"\n *** PDF GENERATION FAILED. Log tail:\n{res_final.stdout[-800:]}\n ***\n")
-    except Exception as e:
-        print(f"\n *** COMPILATION ERROR: {e} ***\n")
+    compile_check_wrapper(TEX_OUT_DIR, wrapper_name)
     print("Done.")
 
 

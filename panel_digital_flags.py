@@ -15,8 +15,6 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 
 from utils import paths
 
-BASE = str(paths.OPEN_FINANCE)
-
 # Read directly from the consolidated ESTBAN.csv to avoid any repo logic contamination
 ESTBAN_CSV = str(paths.ESTBAN_CSV)
 INTERMED_DIR = os.path.join(str(paths.PROCESSED), "PANEL_INTERMED")
@@ -90,12 +88,7 @@ def main():
         else:
             logging.warning(f"Column '{c}' not found in ESTBAN.csv.")
             
-    # Load just one recent cross-section to avoid memory issues (e.g. 2024 December)
-    # If we read the whole file, it's huge. We'll read it in chunks unless we use usecols
-    logging.info(f"Scanning for the latest available YEAR and MONTH in ESTBAN...")
-    max_year = sample['YEAR'].iloc[0] if 'YEAR' in sample.columns else 2024
-    
-    # We will just load the full CSV specifically selecting the valid cols
+    # The full CSV, valid columns only
     df = pd.read_csv(ESTBAN_CSV, usecols=valid_cols, encoding="latin1", low_memory=False)
     
     if df.empty:

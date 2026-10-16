@@ -7,13 +7,13 @@ Unpacks both zips into BUNDLE_DIR/verify/ (the project root as on the cluster) a
   V1 the upload md5 list (md5sum -c of the two zips)
   V2 the arrival list: sha256 of every member it names (what the wrapper checks at launch)
   V3 every code member byte-equals the LF-normalised repo file (or the wrapper of this folder);
-     every data member equals its local source (the slim estimates: their slim folder)
+     every data member equals its local source; no sleepiness estimate ships (made on the cluster)
   V4 no CR in .sh/.jl/.py/.env members; bash -n on every .sh member
   V5 required members present (the chain's job scripts, engines, preps, config, Project/Manifest)
   V6 no forbidden (demand_repair*, blp_dx*, dx_*) or excluded (weak-IV battery) member
-  V7 the pin file: CHARS_SHA256, SIGMA_SHA256 (the 10-14 sigma rebuild, never the 08-26 file), the four slim estimates' and SLIM markers' sha256,
-     JL_MANIFEST_SHA256 = the shipped Manifest-v1.11.toml (= the validated one), EXPECT rows/alpha
-     present, the conda create line conda-forge only; the shipped panel md5 6613228b...; the chars
+  V7 the pin file: CHARS_SHA256, SIGMA_SHA256 (the 10-15 sigma rebuild, never the 08-26 file),
+     JL_MANIFEST_SHA256 = the shipped Manifest-v1.11.toml (= the validated one); no sleepiness
+     estimate and no EXPECT value ships, the conda create line conda-forge only; the shipped panel md5 6613228b...; the chars
      parquet schema metadata records that panel md5
 Exit 0 only when every check passes.
 """
@@ -30,7 +30,7 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 import build_stagec_bundle as B  # noqa: E402  (the same lists and sources the build used)
 
-REQUIRED = ["stagec_suite_20261012.sh", "stagec_pins_20261012.env", "cluster_lib.sh", "env_job.sh",
+REQUIRED = ["stagec_suite_20261012.sh", "stagec_pins_20261012.env", "stagec_requests.env", "blp_smoke.jl", "cluster_lib.sh", "env_job.sh",
             "cluster_preflight.sh", "sleep_run.sh", "sleep_job.sh", "logit_job.sh", "blp_draws_job.sh",
             "blp_run.sh", "blp_stage_job.sh", "bbl_run.sh", "bbl_job.sh", "cluster_archive.sh",
             "bbl_cancel.sh", "bbl_status.sh", "bbl_discount.env", "Project.toml", "Manifest.toml", "Manifest-v1.11.toml",
@@ -97,8 +97,7 @@ def main() -> int:
                 diff.append(m)
         elif m.startswith("data/input/"):
             name = m[len("data/input/"):]
-            src_p = (B.DATA.get(name) or next((s for _k, (n, s, _o) in B.EST.items() if n == name), None)
-                     or next((s.parent / "slim.json" for k, (_n, s, _o) in B.EST.items() if B.marker_name(k) == name), None))
+            src_p = B.DATA.get(name)
             if src_p is None or src_p.read_bytes() != b:
                 diff.append(m)
     chk("V3 every member equals its local source (code LF-normalised)", not diff, diff[:5])
@@ -119,19 +118,15 @@ def main() -> int:
     # V7
     pins = members.get("scripts/stagec_pins_20261012.env", b"").decode()
     chk("V7 pin CHARS_SHA256 = the pinned chars file", f"CHARS_SHA256={B.CHARS_SHA256}" in pins)
-    for k, (name, src, _o) in B.EST.items():
-        chk(f"V7 pin of {name}", f"{k}:{name}:{sha(members.get('data/input/' + name, b''))}" in pins)
-    for k in B.EST:
-        mk = B.marker_name(k)
-        chk(f"V7 pin of the SLIM marker {mk}", f"{k}:{mk}:{sha(members.get('data/input/' + mk, b''))}" in pins and f"data/input/{mk}" in members)
+    chk("V7 no sleepiness estimate and no local reference value ships (Pedro 10-15)",
+        not any("sleep_est_" in m for m in members) and "EST_UPLOADS" not in pins and "EXPECT_" not in pins)
     jm = members.get(f"scripts/{B.JL_MANIFEST}", b"")
     chk("V7 JL_MANIFEST_SHA256 = the shipped Manifest-v1.11.toml = the validated set",
         f"JL_MANIFEST_SHA256={sha(jm)}" in pins and sha(jm) == B.JL_MANIFEST_SHA256 and b'julia_version = "1.11.4"' in jm)
     sig = sha(members.get(f"data/input/{B.SIGMA_NAME}", b""))
-    chk("V7 demographics_sigma.parquet = the pinned 10-14 rebuild, pinned in the pin file, not the stale 08-26 file",
+    chk("V7 demographics_sigma.parquet = the pinned 10-15 rebuild, pinned in the pin file, not the stale 08-26 file",
         sig == B.SIGMA_SHA256 and f"SIGMA_SHA256={sig}" in pins and sig not in B.SIGMA_STALE_SHA256)
     chk("V7 conda create line: conda-forge only", "--override-channels --strict-channel-priority -c conda-forge" in pins)
-    chk("V7 EXPECT_ROWS / EXPECT_ALPHA present", "EXPECT_ROWS=(1:" in pins and "E3_full_dtype:" in pins)
     chk("V7 shipped panel md5 = 6613228b...", sha(members.get("data/input/market_panel.parquet", b""), "md5") == B.PANEL_MD5)
     import pyarrow.parquet as pq, io
     meta = pq.ParquetFile(io.BytesIO(members[f"data/input/{B.CHARS_NAME}"])).schema_arrow.metadata or {}

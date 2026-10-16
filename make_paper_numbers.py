@@ -1861,23 +1861,21 @@ def collect_slide_motivation(notes: list):
                      f"{','.join(missing)}.")
 
     if "band" in sc:
-        by = {y: dict(v, iqr=v["p75"] - v["p25"]) for y, v in sc["band"]["by_year"].items()}
+        by = {y: {k: v[k] for k in ("mean", "sd")} for y, v in sc["band"]["by_year"].items()}
         years = sorted(by)
         later = years[1:]
-        summ = {f"{s}_{m}": f([by[y][s] for y in ys])
-                for s in ("sd", "iqr") for m, f, ys in (("min", min, years), ("max", max, years),
-                                                        ("min_ex_first", min, later),
-                                                        ("max_ex_first", max, later))}
+        summ = {f"sd_{m}": f([by[y]["sd"] for y in ys])
+                for m, f, ys in (("min", min, years), ("max", max, years),
+                                 ("min_ex_first", min, later), ("max_ex_first", max, later))}
         add("slide.motiv.band", "slides", "Slide 2 band: B time-deposit spread across B banks",
             dict(by_year=by, **summ),
             "Per year, the distribution of the row-level type-4 spread over B banks and markets "
             "under Table A.4's weights (a bank's type-4 share of the market-quarter times the "
-            "market-quarter's balance): mean (= Table A.4's B line), sd, p25, p75 and iqr = p75 - "
-            "p25, annual pp. sd_/iqr_min and _max over all years; _ex_first over the years after "
+            "market-quarter's balance): mean (= Table A.4's B line) and sd, annual pp. sd_min "
+            "and sd_max over all years; _ex_first over the years after "
             f"the first ({years[0]}, whose sd the Bradesco 2016Q3 quarter inflates)",
             f"{src} band.by_year", "ok",
-            display=f"sd {fmt3s(summ['sd_min_ex_first'])}-{fmt3s(summ['sd_max_ex_first'])}, iqr "
-                    f"{fmt3s(summ['iqr_min_ex_first'])}-{fmt3s(summ['iqr_max_ex_first'])} pp "
+            display=f"sd {fmt3s(summ['sd_min_ex_first'])}-{fmt3s(summ['sd_max_ex_first'])} pp "
                     f"after {years[0]}")
 
     if "pricevol" in sc:
@@ -2101,13 +2099,13 @@ def collect_slide_motivation(notes: list):
 
 
 # ── K: strength of the sleepiness first stage ────────────────────────────────
-FS_SPEC = "IV_HausmanFull x Tech"   # specification 12
+FS_SPEC = "IV_RivalSpread x Tech"   # specification 12
 FS_ROW_EFF = r"Effective $F$ (excluded instruments)"
 FS_ROW_ALL = r"$F$, all slopes"
 
 
 def _tech_panel_cell(tname: str, label: str):
-    """Last cell (the Hausman column) of the row `label` in the Tech panel of a first-stage table;
+    """Last cell (the rival-mean-spread column) of the row `label` in the Tech panel of a first-stage table;
     None when the table or the row is absent."""
     path = TABLES_DIR / tname
     if not path.is_file():
@@ -2155,7 +2153,7 @@ def collect_first_stage_strength(notes: list):
             "pooled, constant and state controls partialled out)",
             f"{src} E{E}.{FS_SPEC}.eff_F", "ok", display=disp(eff),
             detail=dict(N=r.get("N"), G=r.get("G"), n_iv=r.get("n_iv")),
-            checks=[check_cell(tname, f"Tech panel, {FS_ROW_EFF}, Hausman column",
+            checks=[check_cell(tname, f"Tech panel, {FS_ROW_EFF}, rival-mean-spread column",
                                _tech_panel_cell(tname, FS_ROW_EFF), [eff])])
         if _finite(excl):
             add(f"sleep.fs.excl_f.E{E}", "sleep first stage",
@@ -2169,7 +2167,7 @@ def collect_first_stage_strength(notes: list):
                 "Joint F of every slope of the first-stage regression, instruments and state "
                 "controls together (the row '$F$, all slopes' of the first-stage table)",
                 f"{src} E{E}.{FS_SPEC}.F_all_slopes", "ok", display=disp(fall),
-                checks=[check_cell(tname, f"Tech panel, {FS_ROW_ALL}, Hausman column",
+                checks=[check_cell(tname, f"Tech panel, {FS_ROW_ALL}, rival-mean-spread column",
                                    _tech_panel_cell(tname, FS_ROW_ALL), [fall])])
         if all(_finite(cv.get(k)) for k in ("bias10", "bias20")):
             add(f"sleep.fs.cv.E{E}", "sleep first stage",

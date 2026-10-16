@@ -391,7 +391,7 @@ def build_label_crosswalk() -> dict:
     Labels the registry does not cover stay unresolved on purpose -- roughly 300 small
     institutions whose identity would otherwise rest on a guess.
     """
-    from panel_deposits import build_cnpj_conglomerate_map
+    from utils.conglomerates import build_cnpj_conglomerate_map
     from utils.firm_registry import FIRMS
 
     cmap = build_cnpj_conglomerate_map()

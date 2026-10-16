@@ -314,7 +314,7 @@ if __name__ == "__main__":
     ap.add_argument("--tier0", action="store_true", help="oracle: no re-run needed")
     ap.add_argument("--gate", metavar="BACKUP_DIR", help="diff gate vs a pre-change backup")
     ap.add_argument("--est", default="1-8", help="estimators, e.g. '2' or '1-8' (default all)")
-    ap.add_argument("--spec", default="", help="substring filter, e.g. 'IV_HausmanFull x Tech'")
+    ap.add_argument("--spec", default="", help="substring filter, e.g. 'IV_RivalSpread x Tech'")
     a = ap.parse_args()
 
     if "-" in a.est:

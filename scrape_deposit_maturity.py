@@ -1,5 +1,592 @@
 ###─────────────────────────────────────────────────────────────────────────────
-# scrape_deposit_maturity_cvm.py
+# scrape_deposit_maturity.py
+#
+# Author: Pedro Feijó de Moraes
+#
+# PURPOSE
+#   Time deposits by remaining maturity bucket, from the banks' own filings, 2016-2024, in
+#   three subcommands that share nothing but this file:
+#     sec      SEC Form 20-F filings (Itaú, Bradesco, Santander Brasil, Nu, Inter, XP)
+#     cvm      CVM DFP statements (ten listed Brazilian banks), text layer with OCR fallback
+#     summary  one bank-year summary of the two extractions, the input of Section 4 of
+#              deposit_types_report_2026-10-15.md and of switch_cost_tools.py locked
+#   The two extractors keep their own conventions; for instance, the SEC part converts months
+#   to days with a 365-day year and the CVM part with a 360-day year.
+#
+# CLI
+#   python scrape_deposit_maturity.py sec [--firms itau,bradesco] [--refresh]
+#   python scrape_deposit_maturity.py cvm [--firms bb,banrisul] [--years 2016-2024] [--refresh]
+#   python scrape_deposit_maturity.py summary [FOLDER] [--out FILE]
+#   python scrape_deposit_maturity.py <subcommand> -h
+###─────────────────────────────────────────────────────────────────────────────
+from __future__ import annotations
+
+import argparse
+import csv
+import http.cookiejar
+import io
+import json
+import logging
+import math
+import os
+import re
+import sys
+import time
+import unicodedata
+import urllib.request
+import zipfile
+from pathlib import Path
+
+try:
+    from utils.venv_guard import ensure_project_venv
+except Exception:  # pragma: no cover
+    ensure_project_venv = None
+if ensure_project_venv is not None:
+    ensure_project_venv(__file__)
+
+import fitz  # PyMuPDF
+import numpy as np
+import pandas as pd
+from lxml import html as lhtml
+
+from utils import paths
+from utils.disclosure_common import get_json, http_get
+from utils.firm_registry import FIRMS
+from utils.paths import RAW
+
+
+# ================================================================================ sec
+###─────────────────────────────────────────────────────────────────────────────
+# sec: SEC Form 20-F filings
+#
+# Author: Pedro Feijó de Moraes
+#
+# PURPOSE
+#   Time deposits (and, where the same table prints them, demand, savings and total
+#   deposits) by remaining maturity bucket, read from the SEC Form 20-F filings of
+#   the Brazilian banks and the SEC-listed digital platforms, as of each fiscal year
+#   end 2016-2024. The maturity profile is the observable counterpart of how much of
+#   the deposit base can leave within a quarter (deposit_types_report_2026-10-15.md).
+#
+# DATA SOURCE
+#   SEC EDGAR. Filing lists: https://data.sec.gov/submissions/CIK##########.json
+#   (plus the older-filings pages it points to). Main document of each 20-F and
+#   20-F/A: https://www.sec.gov/Archives/edgar/data/<cik>/<accession>/<document>.
+#   Requests go through utils.disclosure_common.http_get (SEC fair-access user agent
+#   and throttle). Firms and CIKs come from utils.firm_registry: Itaú Unibanco,
+#   Bradesco, Santander Brasil, Nu Holdings, Inter & Co, XP Inc.
+#
+# TABLE KINDS (column table_kind)
+#   all_time_deposits         time deposits by remaining maturity ("Deposits by
+#                             maturity", contractual-obligation and maturity tables)
+#   guide3_large              SEC Industry Guide 3 table: time deposits of US$100,000
+#                             or more by remaining maturity (large deposits only)
+#   s1405_uninsured           Regulation S-K Item 1405 table: uninsured deposits by
+#                             remaining maturity (uninsured deposits only)
+#   ifrs_liabilities_maturity IFRS liquidity-risk note: financial liabilities (deposit
+#                             lines) by remaining contractual maturity, often
+#                             undiscounted flows and with different bucket edges
+#   other                     any other deposit-by-maturity table
+#   Buckets are converted to days with 1 month = 30 days and 1 year = 365 days;
+#   lo_days/hi_days follow the printed edges, hi_days is empty for open-ended buckets
+#   and "no maturity"/"on demand" buckets are lo 0, hi 0. A table is kept once per
+#   filing for each distinct bucket set; the instrument is normalized (time_deposits,
+#   total_deposits, demand, savings, interbank, uninsured_deposits, other_deposits)
+#   and the printed row label is kept in notes.
+#
+# COVERAGE
+#   Fiscal years 2016-2024 for each filer, limited to the filings that exist: Nu
+#   Holdings from FY2021, Inter & Co from FY2021, XP Inc from FY2019, Itaú, Bradesco
+#   and Santander Brasil from FY2016. The FY2025 20-F is read as well because its
+#   prior-year columns repeat FY2024. Where several filings report the same year the
+#   latest filing wins in the main table (among the filings whose buckets add up to
+#   the printed total within 0.5%, when any do) and the agreement is recorded in the
+#   QA table.
+#
+# OUTPUTS (raw data area, nothing in the estimation pipeline reads them)
+#   RAW/DEPOSIT_MATURITY/sec/<cik>_<accession>.html   main document of each filing
+#   RAW/DEPOSIT_MATURITY/deposit_maturity_sec.csv     one row per firm x fiscal year x
+#                                                     table x instrument x bucket
+#   RAW/DEPOSIT_MATURITY/deposit_maturity_sec_qa.csv  firm, fiscal_year, n_sources,
+#                                                     max relative difference across
+#                                                     filings reporting the same year
+#
+# CLI
+#   python scrape_deposit_maturity.py sec                       # all firms
+#   python scrape_deposit_maturity.py sec --firms itau,bradesco # subset
+#   python scrape_deposit_maturity.py sec --refresh             # re-download filings
+###─────────────────────────────────────────────────────────────────────────────
+sec_log = logging.getLogger("deposit_maturity_sec")
+OUT = paths.RAW / "DEPOSIT_MATURITY"
+HTML_DIR = OUT / "sec"
+FIRM_KEYS = ["itau", "bradesco", "santander_br", "nubank", "inter", "xp"]
+FY_MIN, FY_MAX = 2016, 2024
+FILING_YEARS = (2016, 2025)   # report-date years whose 20-F is downloaded
+SEC_SUM_TOL = 0.005             # buckets must add up to the printed total within 0.5%
+MIN_DOC_CHARS = 200_000      # shorter documents are cover-page amendments
+
+MONTHS = {m: i + 1 for i, m in enumerate(
+    ["january", "february", "march", "april", "may", "june", "july", "august",
+     "september", "october", "november", "december"])}
+WORDNUM = {"one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7,
+           "eight": 8, "nine": 9, "ten": 10, "twelve": 12, "eighteen": 18}
+UNIT_DAYS = {"day": 1, "month": 30, "year": 365}
+DASHES = set("-–—−�")
+YEAR_CELL = re.compile(r"(19|20)\d\d")
+
+
+# ───────────────────────── filings ─────────────────────────
+def registry_ciks() -> dict[str, str]:
+    return {f["firm_key"]: str(int(f["sec_cik"])) for f in FIRMS
+            if f.get("firm_key") in FIRM_KEYS and f.get("sec_cik")}
+
+
+def list_filings(cik: str) -> list[dict]:
+    """20-F and 20-F/A filings with report dates 2016-2025, from the recent list and
+    the older-filings pages of the submissions API."""
+    code, j = get_json(f"https://data.sec.gov/submissions/CIK{int(cik):010d}.json")
+    if j is None:
+        sec_log.warning("submissions unavailable for %s (HTTP %s)", cik, code)
+        return []
+    blocks = [j["filings"]["recent"]]
+    for f in j["filings"].get("files", []):
+        _, jj = get_json("https://data.sec.gov/submissions/" + f["name"])
+        if jj:
+            blocks.append(jj)
+    rows = []
+    for b in blocks:
+        for i, form in enumerate(b["form"]):
+            rep = b["reportDate"][i]
+            if form.startswith("20-F") and rep and FILING_YEARS[0] <= int(rep[:4]) <= FILING_YEARS[1]:
+                acc, doc = b["accessionNumber"][i], b["primaryDocument"][i]
+                rows.append(dict(form=form, filed=b["filingDate"][i], report_date=rep, accession=acc, doc=doc,
+                                 url=f"https://www.sec.gov/Archives/edgar/data/{int(cik)}/"
+                                     f"{acc.replace('-', '')}/{doc}"))
+    return rows
+
+
+def fetch_filing(cik: str, fl: dict, refresh: bool) -> str | None:
+    fn = HTML_DIR / f"{cik}_{fl['accession']}.html"
+    if fn.exists() and not refresh:
+        return fn.read_text(encoding="utf-8", errors="replace")
+    code, body = http_get(fl["url"], timeout=180)
+    if not body:
+        sec_log.warning("download failed %s (HTTP %s)", fl["url"], code)
+        return None
+    fn.write_text(body, encoding="utf-8")
+    return body
+
+
+# ───────────────────────── numbers, dates, buckets ─────────────────────────
+def sec_parse_num(s: str):
+    """'1,234' -> 1234; '(1,234)' -> -1234; dashes -> 0; anything else -> None."""
+    t = s.replace("\xa0", " ").strip()
+    if t and all(c in DASHES or c in " ()" for c in t):
+        return 0.0
+    t = re.sub(r"\s*\(\d\)$", "", t)                       # footnote marker after a number
+    m = re.fullmatch(r"\(?\s*(-?)\s*(\d{1,3}(?:,\d{3})+|\d+)(\.\d+)?\s*\)?", t)
+    if not m:
+        return None
+    v = float((m.group(2) + (m.group(3) or "")).replace(",", ""))
+    return -v if (m.group(1) or t.startswith("(")) else v
+
+
+def find_dates(s: str) -> list[str]:
+    out = []
+    for m in re.finditer(r"(\d{1,2})/(\d{1,2})/(\d{4})", s):
+        out.append(f"{int(m.group(3))}-{int(m.group(1)):02d}-{int(m.group(2)):02d}")
+    for m in re.finditer(r"(january|february|march|april|may|june|july|august|september|october|"
+                         r"november|december)\s+(\d{1,2}),?\s+(\d{4})", s.lower()):
+        out.append(f"{int(m.group(3))}-{MONTHS[m.group(1)]:02d}-{int(m.group(2)):02d}")
+    return out
+
+
+def _n(tok: str) -> int | None:
+    tok = tok.lower().strip()
+    return WORDNUM.get(tok, int(tok) if tok.isdigit() else None)
+
+
+NUM_RE = r"(\d+|one|two|three|four|five|six|seven|eight|nine|ten|twelve|eighteen)"
+UNIT_RE = r"(days?|months?|years?)"
+
+
+def _days(n: int, unit: str) -> int:
+    u = unit.lower().rstrip("s")
+    return 365 if (u == "month" and n == 12) else n * UNIT_DAYS[u]
+
+
+def sec_parse_bucket(label: str):
+    """Printed bucket label -> (lo_days, hi_days|None), or None when it is not a bucket."""
+    s = re.sub("[–—−�]", "-", label.lower().replace("\xa0", " "))
+    s = re.sub(r"\(\d\)|\*", "", s)
+    s = re.sub(r"\s+", " ", s).strip(" :.")
+    if s.startswith("total") or "average" in s:
+        return None
+    if re.search(r"indefinite|no stated maturity|no maturity|on demand|not sensitive|without maturity|"
+                 r"^demand|no contractual", s):
+        return (0, 0)
+    m = re.search(rf"(?:from |after |over |between )?{NUM_RE}\s*{UNIT_RE}?\s*(?:-|to|through|and)\s*{NUM_RE}\s*{UNIT_RE}?", s)
+    if m:
+        a, ua, b, ub = _n(m.group(1)), m.group(2), _n(m.group(3)), m.group(4)
+        ub = ub or ua or ("days" if max(a, b) > 12 else None)
+        if ub:
+            return (_days(a, ua or ub), _days(b, ub))
+    m = re.search(rf"(?:up to|within|under|less than|not more than|maturity in|due in)\s*{NUM_RE}\s*{UNIT_RE}", s) \
+        or re.search(rf"{NUM_RE}\s*{UNIT_RE}\s*or less", s)
+    if m:
+        return (0, _days(_n(m.group(1)), m.group(2)))
+    m = re.search(rf"(?:over|more than|after|greater than|beyond|>)\s*{NUM_RE}\s*{UNIT_RE}?", s) \
+        or re.search(rf"{NUM_RE}\s*{UNIT_RE}?\s*or more", s)
+    if m:
+        a = _n(m.group(1))
+        u = m.group(2) or ("days" if a > 12 else None)
+        if u:
+            return (_days(a, u), None)
+    return None
+
+
+def sec_instrument_of(label: str, deposits_table: bool = False):
+    s = re.sub(r"\(\d\)|\*", "", label.lower()).strip(" :")
+    if re.search(r"compulsory|central bank|from banks|credit institutions|guarantee|escrow|judicial", s):
+        return None
+    if "time deposit" in s or "term deposit" in s or re.search(r"certificates? of deposit", s):
+        return "time_deposits"
+    if "uninsured" in s:
+        return "uninsured_deposits"
+    if re.search(r"non-?\s?interest[- ]bearing", s):
+        return "non_interest_bearing_deposits"
+    if re.search(r"interest[- ]bearing", s):
+        return "interest_bearing_deposits"
+    if "savings" in s:
+        return "savings"
+    if "demand deposit" in s:
+        return "demand"
+    if "interbank" in s:
+        return "interbank"
+    if re.fullmatch(r"(total )?(customer )?deposits?( from customers)?|deposits? from customers|customer deposits?", s):
+        return "total_deposits"
+    if "deposit" in s:
+        return "other_deposits"
+    if deposits_table and s == "total":
+        return "total_deposits"
+    return None
+
+
+# ───────────────────────── table reading ─────────────────────────
+def cell_texts(tr) -> list[str]:
+    out = []
+    for c in tr.xpath("./td|./th"):
+        t = re.sub(r"\s+", " ", c.text_content().replace("\xa0", " ")).strip()
+        if t and t not in ("$", "R$", "US$", ")", "%", "("):
+            out.append(t)
+    return out
+
+
+def detect_unit(text: str) -> str:
+    s = text.lower()
+    cur = "US$" if re.search(r"us\$|u\.s\. dollars", s) and not re.search(r"r\$|reais", s) else "R$"
+    if re.search(r"in millions|millions of|r\$ million|million of reais|millions\)|\bmillions\b", s):
+        return f"{cur} million"
+    if re.search(r"in thousands|thousands of|r\$ thousand|thousand of reais|thousands\)|\bthousand\b", s):
+        return f"{cur} thousand"
+    if re.search(r"in billions|billions of", s):
+        return f"{cur} billion"
+    return ""
+
+
+def classify(ctx: str, as_of_year: int | None) -> str:
+    s = ctx.lower()
+    if "100,000" in s:
+        return "guide3_large"
+    if re.search(r"uninsured|exceed\w* the (maximum )?insured|exceeding the maximum insured", s):
+        return "s1405_uninsured" if (as_of_year or 2021) >= 2021 else "guide3_large"
+    if re.search(r"undiscounted|contractual maturit|liquidity risk|residual maturity|"
+                 r"financial assets and liabilities|schedule of (financial|assets)", s):
+        return "ifrs_liabilities_maturity"
+    if re.search(r"deposits by maturity|contractual obligations|maturities of|time deposits|maturity of", s):
+        return "all_time_deposits"
+    return "other"
+
+
+def extract_tables(doc: str, fy_filing: int, meta: dict) -> list[dict]:
+    root = lhtml.fromstring(doc.encode("utf-8", "replace"))
+    recs = []
+    for ti, t in enumerate(root.iter("table")):
+        txt = t.text_content()
+        if not re.search(r"deposit", txt, re.I) or not re.search(r"days|months|year|maturit|demand", txt, re.I):
+            continue
+        rows = [r for r in (cell_texts(tr) for tr in t.xpath(".//tr")) if r]
+        if not 3 <= len(rows) <= 60:
+            continue
+        if re.search(r"yield|average (interest )?rate|accounts subject to interest|interest rate sensitiv", txt, re.I):
+            continue
+        if re.search(r"not sensitive|\bgap\b|repric", txt, re.I) and not re.search(r"deposits? by maturity", txt, re.I):
+            continue
+        prev = " ".join(x.strip() for x in t.xpath(
+            "preceding::*[self::p or self::div or self::span][normalize-space(text())!=''][position()<=10]/text()")[-10:])
+        recs += parse_table(rows, prev, ti, fy_filing, meta)
+    return recs
+
+
+def parse_table(rows, prev, ti, fy_filing, meta) -> list[dict]:
+    full = " ".join(" ".join(r) for r in rows)
+    unit = detect_unit(" ".join(" ".join(r) for r in rows[:6])) or detect_unit(prev) or detect_unit(full)
+    if not unit:
+        unit = "unit not printed"
+    title_row = next((" ".join(r) for r in rows if not any(sec_parse_num(x) is not None for x in r)
+                      and not find_dates(" ".join(r)) and len(" ".join(r)) > 8
+                      and not any(sec_parse_bucket(x) for x in r)), "")
+    ctx_title = title_row or prev[-160:]
+    ctx = f"{title_row} {prev[-300:]} {' '.join(rows[0])}"
+    deposits_table = bool(re.search(r"deposits by maturity|maturity of deposits", ctx.lower()))
+    recs: list[dict] = []
+    pending: list[str] = []
+    header = None
+    brows = []
+    section = ""
+    for r in rows:
+        dates = find_dates(" ".join(r)) + [f"{c}-12-31" for c in r if YEAR_CELL.fullmatch(c)]
+        bcells = [sec_parse_bucket(x) for x in r]
+        numeric = [sec_parse_num(x) is not None and not YEAR_CELL.fullmatch(x) for x in r[1:]]
+        if sum(b is not None for b in bcells) >= 3 and not any(numeric):
+            cols = []
+            for x, b in zip(r, bcells):
+                if b is not None:
+                    cols.append(("b", x, b))
+                elif cols:
+                    cols.append(("t" if x.lower().startswith("total") else "o", x, None))
+            header = cols
+            if dates:
+                pending = list(dict.fromkeys(dates))
+            continue
+        if dates and not any(numeric):
+            pending = list(dict.fromkeys(dates))
+            continue
+        if len(r) == 1 and re.search(r"domestic|international|foreign", r[0], re.I):
+            section = "_international" if re.search(r"international|foreign", r[0], re.I) else "_domestic"
+            continue
+        vals = [sec_parse_num(x) for x in r[1:]]
+        ok = bool(vals) and all(v is not None for v in vals)
+        instr = sec_instrument_of(r[0], deposits_table)
+        if header and instr and ok and not any(v < 0 for v in vals):
+            recs += emit_header_row(r[0], instr + section, vals, header, pending, ctx, ctx_title, unit, ti, fy_filing, meta)
+        elif ok and sec_parse_bucket(r[0]) is not None:
+            brows.append((r, vals))
+        elif ok and brows and r[0].lower().startswith("total"):
+            brows.append((r, vals))
+    if not recs and sum(sec_parse_bucket(r[0]) is not None for r, _ in brows) >= 3:
+        recs += emit_bucket_rows(brows, pending, ctx, ctx_title, unit, ti, fy_filing, meta, full)
+    return recs
+
+
+def base_rec(meta, as_of, ctx, ctx_title, unit, ti, note):
+    return dict(firm_key=meta["firm_key"], cik=meta["cik"], fiscal_year=int(as_of[:4]), as_of=as_of,
+                source="sec_20f", doc_url=meta["url"], table_title=ctx_title[:200], _ctx=ctx, unit=unit,
+                extraction_method="html_table", notes=note, _table=ti, _filing=meta["accession"],
+                _filed=meta["filed"])
+
+
+def emit_header_row(label, instr, vals, header, pending, ctx, ctx_title, unit, ti, fy_filing, meta):
+    """Buckets in the column header, instruments in the row labels. A header holding
+    several 'bucket ... Total' groups (one per year) is split at each Total column."""
+    segs, cur = [], []
+    for c in header:
+        cur.append(c)
+        if c[0] == "t":
+            segs.append(cur)
+            cur = []
+    if cur:
+        segs.append(cur)
+    if len(segs) <= 1:
+        segs = [header]
+    out, pos = [], 0
+    for si, seg in enumerate(segs):
+        buckets = [c for c in seg if c[0] == "b"]
+        h = len(buckets)
+        chunk = vals if len(segs) == 1 else vals[pos:pos + len(seg)]
+        pos += len(seg)
+        total = None
+        if len(chunk) == len(seg):
+            bvals = [v for v, c in zip(chunk, seg) if c[0] == "b"]
+            tv = [v for v, c in zip(chunk, seg) if c[0] == "t"]
+            total = tv[0] if tv else None
+        elif len(chunk) > h:
+            lead = chunk[0]
+            if lead and abs(sum(chunk[1:h + 1]) - lead) / abs(lead) < 0.005 and abs(sum(chunk[:h]) - lead) / abs(lead) >= 0.005:
+                total, bvals = lead, chunk[1:h + 1]
+            else:
+                bvals, total = chunk[:h], chunk[h]
+        elif len(chunk) == h:
+            bvals = chunk
+        else:
+            continue
+        note = ""
+        if len(segs) > 1 and len(pending) == len(segs):
+            as_of = pending[si]
+        elif len(segs) == 1 and pending:
+            as_of = pending[-1]
+        elif len(segs) == 1 and find_dates(ctx):
+            as_of = find_dates(ctx)[-1]
+        elif si == 0:
+            as_of, note = f"{fy_filing}-12-31", "as_of assumed = filing fiscal year end"
+        else:
+            continue
+        chk = abs(sum(bvals) - total) / abs(total) if total else None
+        for (_, lab, (lo, hi)), v in zip(buckets, bvals):
+            rec = base_rec(meta, as_of, ctx, ctx_title, unit, ti,
+                           "; ".join(x for x in [note, f"row label: {label}"] if x))
+            rec.update(instrument=instr, bucket_label=lab, lo_days=lo, hi_days=hi, value=v,
+                       total_reported=total, sum_check=chk)
+            out.append(rec)
+    return out
+
+
+def emit_bucket_rows(brows, pending, ctx, ctx_title, unit, ti, fy_filing, meta, full):
+    """Buckets as row labels (time deposits in uninsured accounts, Guide 3 tables). Where
+    each year has Domestic/Foreign/Total columns the Total column is read."""
+    s = (ctx_title + " " + ctx + " " + full[:400]).lower()
+    instr = "time_deposits" if "time deposit" in s else "total_deposits"
+    buckets = [(r, v) for r, v in brows if sec_parse_bucket(r[0]) is not None]
+    totals = [(r, v) for r, v in brows if r[0].lower().startswith("total")]
+    k, n = len(pending), len(buckets[0][1])
+    if k and n == 3 * k:
+        idx = list(range(2, n, 3))
+    elif k and n == k:
+        idx = list(range(n))
+    elif not k and n == 1:
+        idx = [0]
+    elif not k and n == 3:
+        idx = [2]
+    else:
+        return []
+    years = pending if k else [f"{fy_filing}-12-31"]
+    out = []
+    for j, ci in enumerate(idx):
+        vals = [v[ci] for _, v in buckets]
+        total = totals[0][1][ci] if totals and len(totals[0][1]) > ci else None
+        chk = abs(sum(vals) - total) / abs(total) if total else None
+        note = "" if k else "as_of assumed = filing fiscal year end"
+        for (r, _), val in zip(buckets, vals):
+            lo, hi = sec_parse_bucket(r[0])
+            rec = base_rec(meta, years[j], ctx, ctx_title, unit, ti, note)
+            rec.update(instrument=instr, bucket_label=r[0], lo_days=lo, hi_days=hi, value=val,
+                       total_reported=total, sum_check=chk)
+            out.append(rec)
+    return out
+
+
+# ───────────────────────── assembly ─────────────────────────
+COLS = ["firm_key", "cik", "fiscal_year", "as_of", "source", "doc_url", "table_title", "table_kind",
+        "instrument", "bucket_label", "lo_days", "hi_days", "value", "unit", "extraction_method",
+        "total_reported", "sum_check", "notes"]
+
+
+UNIT_SCALE = {"thousand": 1e-3, "million": 1.0, "billion": 1e3}
+
+
+def infer_units(df: pd.DataFrame) -> pd.DataFrame:
+    """Tables whose unit is not printed take the unit of the same filing's printed-unit
+    tables (same instrument first) that puts their printed total closest in size."""
+    df = df.copy()
+    for fil, g in df.groupby("_filing"):
+        known = g[g["unit"] != "unit not printed"].drop_duplicates(["_table", "fiscal_year", "instrument"])
+        units = sorted(known["unit"].unique())
+        if not len(known):
+            continue
+        for key, h in g[g["unit"] == "unit not printed"].groupby(["_table", "fiscal_year", "instrument"]):
+            tot = h["total_reported"].dropna()
+            if not len(tot) or tot.iloc[0] <= 0:
+                continue
+            same = known[known["instrument"] == key[2]]
+            ref = same if len(same) else known
+            best, best_d = None, 1e9
+            for u in units:
+                sc = UNIT_SCALE[u.split()[-1]]
+                for _, k in ref.iterrows():
+                    if not k["total_reported"] or k["total_reported"] <= 0:
+                        continue
+                    d = abs(np.log(tot.iloc[0] * sc / (k["total_reported"] * UNIT_SCALE[k["unit"].split()[-1]])))
+                    if d < best_d:
+                        best, best_d = u, d
+            if best:
+                m = (df["_filing"] == fil) & (df["_table"] == key[0]) & (df["fiscal_year"] == key[1]) \
+                    & (df["instrument"] == key[2])
+                df.loc[m, "unit"] = best
+                df.loc[m, "notes"] = df.loc[m, "notes"].map(lambda n: f"{n}; " if n else "") + "unit inferred from the filing's other tables"
+    return df
+
+
+def assemble(allrecs: list[dict]) -> tuple[pd.DataFrame, pd.DataFrame]:
+    df = infer_units(pd.DataFrame(allrecs))
+    df["table_kind"] = [classify(c, int(a[:4])) for c, a in zip(df["_ctx"], df["as_of"])]
+    grp = ["_filing", "_table", "fiscal_year", "instrument"]
+    df["hi_key"] = df["hi_days"].fillna(-1).astype(int)
+    bset = df.groupby(grp).apply(lambda g: str(sorted(zip(g["lo_days"], g["hi_key"]))), include_groups=False)
+    df = df.merge(bset.rename("bset").reset_index(), on=grp)
+    ser = ["firm_key", "fiscal_year", "table_kind", "instrument", "bset"]
+    # a filing can hold the same series in two tables: keep the first
+    df = df[df["_table"] == df.groupby(["_filing"] + ser)["_table"].transform("min")].copy()
+    df = df[(df["fiscal_year"] >= FY_MIN) & (df["fiscal_year"] <= FY_MAX)]
+    qa_rows = []
+    for k, g in df.groupby(ser + ["lo_days", "hi_key"]):
+        if g["_filing"].nunique() > 1 and g["value"].abs().max() > 0:
+            qa_rows.append(dict(firm=k[0], fiscal_year=k[1], n=g["_filing"].nunique(),
+                                d=(g["value"].max() - g["value"].min()) / g["value"].abs().max(),
+                                worst=f"{k[2]}|{k[3]}|{k[5]}-{k[6]}"))
+    n_src = df.groupby(ser)["_filing"].transform("nunique")
+    # latest filing wins, among the filings whose buckets add up to the printed total
+    bad = df.groupby(ser + ["_filing"])["sum_check"].transform("max").fillna(0) > SEC_SUM_TOL
+    best = df["_filed"].where(~bad).groupby([df[c] for c in ser]).transform("max")
+    best = best.fillna(df.groupby(ser)["_filed"].transform("max"))
+    df = df[df["_filed"] == best].copy()
+    df["notes"] = [f"{n}{'; ' if n else ''}reported in {c} filings" if c > 1 else n
+                   for n, c in zip(df["notes"], n_src[df.index])]
+    df = df.sort_values(["firm_key", "fiscal_year", "table_kind", "instrument", "bset", "lo_days", "hi_key"])
+    qa = pd.DataFrame(qa_rows, columns=["firm", "fiscal_year", "n", "d", "worst"])
+    if len(qa):
+        top = qa.sort_values("d").groupby(["firm", "fiscal_year"]).tail(1).set_index(["firm", "fiscal_year"])["worst"]
+        qa = qa.groupby(["firm", "fiscal_year"]).agg(n_sources=("n", "max"), max_rel_diff=("d", "max")).reset_index()
+        qa["worst_series"] = [top[(f, y)] for f, y in zip(qa["firm"], qa["fiscal_year"])]
+    else:
+        qa = pd.DataFrame(columns=["firm", "fiscal_year", "n_sources", "max_rel_diff", "worst_series"])
+    return df[COLS], qa
+
+
+def sec_main() -> None:
+    ap = argparse.ArgumentParser(description="Deposit maturity buckets from SEC 20-F filings")
+    ap.add_argument("--refresh", action="store_true", help="re-download every filing")
+    ap.add_argument("--firms", default=",".join(FIRM_KEYS), help="comma-separated firm keys")
+    args = ap.parse_args()
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
+    HTML_DIR.mkdir(parents=True, exist_ok=True)
+    ciks = registry_ciks()
+    allrecs: list[dict] = []
+    for fk in [x.strip() for x in args.firms.split(",") if x.strip()]:
+        cik = ciks.get(fk)
+        if not cik:
+            sec_log.warning("firm %s not in registry", fk)
+            continue
+        for fl in sorted(list_filings(cik), key=lambda d: d["filed"]):
+            doc = fetch_filing(cik, fl, args.refresh)
+            if not doc or len(doc) < MIN_DOC_CHARS:
+                sec_log.info("%s %s %s: skipped (%d chars)", fk, fl["form"], fl["report_date"], len(doc or ""))
+                continue
+            meta = dict(firm_key=fk, cik=cik, url=fl["url"], accession=fl["accession"], filed=fl["filed"])
+            recs = extract_tables(doc, int(fl["report_date"][:4]), meta)
+            sec_log.info("%s %s FY%s: %d rows", fk, fl["form"], fl["report_date"][:4], len(recs))
+            allrecs += recs
+    if not allrecs:
+        sec_log.warning("no rows extracted")
+        return
+    df, qa = assemble(allrecs)
+    df.to_csv(OUT / "deposit_maturity_sec.csv", index=False, encoding="utf-8", lineterminator="\n")
+    qa.to_csv(OUT / "deposit_maturity_sec_qa.csv", index=False, encoding="utf-8", lineterminator="\n")
+    sec_log.info("wrote %d rows and %d QA rows to %s", len(df), len(qa), OUT)
+
+
+# ================================================================================ cvm
+###─────────────────────────────────────────────────────────────────────────────
+# cvm: CVM DFP statements
 #
 # Author: Pedro Feijó de Moraes
 #
@@ -123,39 +710,11 @@
 #   RAW/DEPOSIT_MATURITY/deposit_maturity_cvm_log.csv     per firm-year status
 #
 # CLI
-#   python scrape_deposit_maturity_cvm.py                       # all firms, 2016-2024
-#   python scrape_deposit_maturity_cvm.py --firms bb,banrisul --years 2020-2022
-#   python scrape_deposit_maturity_cvm.py --refresh             # re-download and re-parse
+#   python scrape_deposit_maturity.py cvm                       # all firms, 2016-2024
+#   python scrape_deposit_maturity.py cvm --firms bb,banrisul --years 2020-2022
+#   python scrape_deposit_maturity.py cvm --refresh             # re-download and re-parse
 ###─────────────────────────────────────────────────────────────────────────────
-
-import argparse
-import csv
-import io
-import json
-import logging
-import math
-import os
-import re
-import sys
-import time
-import unicodedata
-import urllib.request
-import http.cookiejar
-import zipfile
-
-try:
-    from utils.venv_guard import ensure_project_venv
-except Exception:
-    ensure_project_venv = None
-if ensure_project_venv is not None:
-    ensure_project_venv(__file__)
-
-import fitz  # PyMuPDF
-from utils.paths import RAW
-
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s",
-                    stream=sys.stdout)
-log = logging.getLogger("scrape_deposit_maturity_cvm")
+cvm_log = logging.getLogger("scrape_deposit_maturity_cvm")
 
 OUT_DIR = RAW / "DEPOSIT_MATURITY"
 CACHE = OUT_DIR / "cvm"
@@ -172,7 +731,7 @@ ENET_DFP = ("https://www.rad.cvm.gov.br/ENET/frmDownloadDocumento.aspx"
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0 Safari/537.36"
 THROTTLE_S = 2.0
 
-FIRMS = {  # firm_key -> (CNPJ root, display)
+CVM_FIRMS = {  # firm_key -> (CNPJ root, display)
     "bb": ("00000000", "Banco do Brasil"),
     "banrisul": ("92702067", "Banrisul"),
     "btg": ("30306294", "BTG Pactual"),
@@ -221,7 +780,7 @@ def fetch(url, timeout=180, retries=3):
             with _opener.open(req, timeout=timeout) as r:
                 return r.read()
         except Exception as e:  # noqa: BLE001
-            log.warning(f"GET failed ({a}/{retries}) {url[:110]}: {e}")
+            cvm_log.warning(f"GET failed ({a}/{retries}) {url[:110]}: {e}")
             time.sleep(3 * a)
     return None
 
@@ -239,7 +798,7 @@ def load_index(kind, year, refresh):
             name = [n for n in z.namelist() if re.fullmatch(rf"(dfp|ipe)_cia_aberta_{year}\.csv", n)][0]
             p.write_bytes(z.read(name))
         except Exception as e:  # noqa: BLE001
-            log.warning(f"{kind} {year} index unreadable: {e}")
+            cvm_log.warning(f"{kind} {year} index unreadable: {e}")
             return []
     with open(p, encoding="latin-1", newline="") as fh:
         return list(csv.DictReader(fh, delimiter=";"))
@@ -262,7 +821,7 @@ _DASH = re.compile(r"^(?:-{1,3}|—|–)$")
 _DATE = re.compile(r"^\d{1,2}[./]\d{1,2}[./]\d{2,4}$")
 
 
-def parse_num(tok):
+def cvm_parse_num(tok):
     """Brazilian number token -> float, None if not a value token."""
     t = tok.strip()
     if _DASH.match(t):
@@ -278,7 +837,7 @@ def parse_num(tok):
     return -v if neg else v
 
 
-def parse_bucket(label):
+def cvm_parse_bucket(label):
     """Header text -> ('total'|'pct'|'bucket', lo_days, hi_days) or None."""
     s = _fold(label).strip(" :-")
     s = re.sub(r"\s+", " ", s)
@@ -328,7 +887,7 @@ _VOCAB = re.compile(
 _DEPO = re.compile(r"dep[oó]sitos?", re.I)
 
 
-def instrument_of(label):
+def cvm_instrument_of(label):
     f = _fold(label)
     if "interfinanc" in f:
         return "interbank"
@@ -383,7 +942,7 @@ def split_label_values(r):
     """A data row -> (label, [(xc, value)]) with value tokens after the label."""
     label_parts, vals = [], []
     for w in r:
-        v = parse_num(w[4])
+        v = cvm_parse_num(w[4])
         if v is not None and (label_parts or vals):
             if not vals and re.fullmatch(r"\(?\d{1,2}\)?", w[4]) and len(w[4]) <= 3 and w[4].startswith("("):
                 continue  # footnote marker
@@ -411,7 +970,7 @@ def segment_header(words, with_x=False):
         if with_x:
             cur_x.append((w[0], w[2]))
         if closers.match(f) or (f == "prazo" and len(cur) >= 2 and cur[-2] == "sem"):
-            pb = parse_bucket(" ".join(cur))
+            pb = cvm_parse_bucket(" ".join(cur))
             if pb:
                 ph = pb + (" ".join(cur),)
                 if with_x:
@@ -432,7 +991,7 @@ def is_data_row(r):
             if len(nb) == 2 and all(re.fullmatch(r"\d{1,3}", q) for q in nb):
                 continue  # range dash in a header such as "0 - 30"
             n += 1
-        elif parse_num(t) is not None and re.search(r"[.,()]", t):
+        elif cvm_parse_num(t) is not None and re.search(r"[.,()]", t):
             n += 1
     return n >= 2
 
@@ -526,7 +1085,7 @@ def header_columns(rows, ri, val_x):
         text = " ".join(t for _, _, t in c)
         if len(re.findall(r"\d+", text)) > 2 or sum(1 for q in segment_header(text.split()) if q[0] == "bucket") > 1:
             return None, ctx   # one column collected several bucket phrases: header from another table
-        pb = parse_bucket(text)
+        pb = cvm_parse_bucket(text)
         out.append(pb + (text,) if pb else None)
     last = max((j for j, c in enumerate(out) if c and c[0] == "bucket"), default=-1)
     if last < 0 or any(c is None for c in out[:last]):
@@ -742,14 +1301,14 @@ def rowwise_tables(rows, stmt, unit, method, undisc):
         for rr in rows[yi + 1:yi + 16]:
             xmin = min(c[0] for c in cols) - 35
             label = " ".join(w[4] for w in rr if (w[0] + w[2]) / 2 < xmin)
-            vals = [((w[0] + w[2]) / 2, parse_num(w[4])) for w in rr
-                    if (w[0] + w[2]) / 2 >= xmin and parse_num(w[4]) is not None]
+            vals = [((w[0] + w[2]) / 2, cvm_parse_num(w[4])) for w in rr
+                    if (w[0] + w[2]) / 2 >= xmin and cvm_parse_num(w[4]) is not None]
             lf = _fold(label).strip()
             if lf.startswith("total"):
                 data.append(("total", None, None, vals))
                 break
             if vals and "circulante" not in lf:
-                pb = parse_bucket(label)
+                pb = cvm_parse_bucket(label)
                 if pb and pb[0] == "bucket":
                     data.append(("bucket", pb[1], pb[2], vals, label))
         if len(data) < 4 or data[-1][0] != "total":
@@ -959,14 +1518,14 @@ def group_tables(tables):
         g = groups.setdefault(sig, dict(page=t["page"], asof=t["asof"], stmt=t["stmt"], unit=t["unit"],
                                         method=t["method"], rows=[], ctx=t["ctx"],
                                         undisc=t.get("undisc", False)))
-        instr = instrument_of(t["label"])
+        instr = cvm_instrument_of(t["label"])
         if any(r["instrument"] == instr for r in g["rows"]):
             continue  # a second block under the same header (e.g. compulsory-deposit deductions)
         g["rows"].append(dict(label=t["label"], instrument=instr, buckets=t["buckets"], total=t["total"]))
     return list(groups.values())
 
 
-SUM_TOL = 0.005       # buckets must add to the printed total within 0.5%
+CVM_SUM_TOL = 0.005       # buckets must add to the printed total within 0.5%
 PLAUS_FLOOR = 0.10    # time deposits below 10% of the bank's total deposits are implausible
 _UNIT_SCALE = {"R$": 1e-3, "R$ thousand": 1.0, "R$ million": 1e3}
 
@@ -1036,7 +1595,7 @@ def table_score(firm, fy, x):
     """Sort key of a candidate x (dict with g, doc_year, flag); smaller is better."""
     g = x["g"]
     td = [r for r in g["rows"] if r["instrument"] == "time_deposits"]
-    td_ok = any((check_row(r)[0] is not None and check_row(r)[0] <= SUM_TOL) for r in td)
+    td_ok = any((check_row(r)[0] is not None and check_row(r)[0] <= CVM_SUM_TOL) for r in td)
     nb = max(len(r["buckets"]) for r in g["rows"])
     return (not td, bool(x["flag"]), g.get("undisc", False), stmt_rank(firm, g["stmt"]), not td_ok,
             x["doc_year"] != fy, -nb, x["doc_year"], g["page"])
@@ -1114,10 +1673,11 @@ def parsed_for(pdf, firm, refresh):
     return res
 
 
-def main():
+def cvm_main():
+    logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s', stream=sys.stdout)
     ap = argparse.ArgumentParser()
     ap.add_argument("--refresh", action="store_true")
-    ap.add_argument("--firms", default=",".join(FIRMS))
+    ap.add_argument("--firms", default=",".join(CVM_FIRMS))
     ap.add_argument("--years", default="2016-2024")
     a = ap.parse_args()
     firms = [f.strip() for f in a.firms.split(",") if f.strip()]
@@ -1130,7 +1690,7 @@ def main():
     for fy_file, rows in dfp.items():
         for r in rows:
             for fk in firms:
-                if cnpj_root(r["CNPJ_CIA"]) == FIRMS[fk][0] and r["DT_REFER"].endswith("12-31"):
+                if cnpj_root(r["CNPJ_CIA"]) == CVM_FIRMS[fk][0] and r["DT_REFER"].endswith("12-31"):
                     k = (fk, int(r["DT_REFER"][:4]))
                     if k not in filings or int(r["VERSAO"]) > int(filings[k]["VERSAO"]):
                         filings[k] = r
@@ -1150,7 +1710,7 @@ def main():
                 continue
             res = parsed_for(pdf, fk, a.refresh)
             status[(fk, ref)] = (True, res["error"] or ("scanned" if res["scanned"] else "ok"))
-            log.info(f"[{fk}] DFP {ref}: {len(res['tables'])} candidate tables"
+            cvm_log.info(f"[{fk}] DFP {ref}: {len(res['tables'])} candidate tables"
                      f"{' (scanned)' if res['scanned'] else ''}")
             for g in res["tables"]:
                 fy = int(g["asof"][:4]) if g["asof"] else None
@@ -1169,7 +1729,7 @@ def main():
     for fk, fy in need:
         for fil_year in (fy, fy + 1):
             rows = ipe_cache.setdefault(fil_year, load_index("ipe", fil_year, a.refresh))
-            cands = [r for r in rows if cnpj_root(r["CNPJ_Companhia"]) == FIRMS[fk][0]
+            cands = [r for r in rows if cnpj_root(r["CNPJ_Companhia"]) == CVM_FIRMS[fk][0]
                      and r["Data_Referencia"] == f"{fy}-12-31"
                      and r["Categoria"].startswith("Dados Econ")
                      and _fold(r["Tipo"]).startswith("demonstracoes financeiras")
@@ -1183,7 +1743,7 @@ def main():
                 seen.add(key.group(1) if key else r["Protocolo_Entrega"])
                 pdf, err = download_ipe_pdf(fk, r, a.refresh)
                 if pdf is None:
-                    log.warning(f"[{fk}] IPE {fy}: {err}")
+                    cvm_log.warning(f"[{fk}] IPE {fy}: {err}")
                     continue
                 res = parsed_for(pdf, fk, a.refresh)
                 for g in res["tables"]:
@@ -1309,7 +1869,7 @@ def main():
                 chk, tot = check_row(r)
                 for b in r["buckets"]:
                     out_rows.append(dict(
-                        firm_key=fk, cnpj_root=FIRMS[fk][0], fiscal_year=fy, as_of=f"{fy}-12-31",
+                        firm_key=fk, cnpj_root=CVM_FIRMS[fk][0], fiscal_year=fy, as_of=f"{fy}-12-31",
                         source=best["source"], doc_url=best["url"], page=g["page"], statement=stmt,
                         table_id=tid,
                         table_title=g["ctx"].strip(), instrument=r["instrument"], bucket_label=b["label"],
@@ -1366,7 +1926,124 @@ def main():
             w = csv.DictWriter(fh, fieldnames=cs)
             w.writeheader()
             w.writerows(rows)
-        log.info(f"wrote {path} ({len(rows)} rows)")
+        cvm_log.info(f"wrote {path} ({len(rows)} rows)")
+
+
+# ================================================================================ summary
+###─────────────────────────────────────────────────────────────────────────────
+# summary: one bank-year summary of the two extractions
+#
+#   from the two statement extractions (the sec and cvm subcommands).
+#
+#   For each bank and fiscal year: the total, the share with no stated maturity, the shares maturing
+#   within 90 and within 360 days, and the share beyond 360 days.
+#   - Buckets that straddle a cut-off are split linearly in days.
+#   - Only series whose buckets add up to the printed total within 0.5 percent are used.
+#   - When a year has several tables with a time-deposit line, the largest is kept (the all-client
+#     table rather than a sub-portfolio), and `n_tables` records the ambiguity. The CVM extraction
+#     already selects one table per bank-year, so for it `n_tables` is always 1.
+#   - Banco do Brasil's "Sem vencimento" bucket is judicial deposits, not time deposits with daily
+#     liquidity: the note's footnote keeps CDBs with a liquidity clause in their original-maturity
+#     buckets, and the bucket's size matches the "Judiciais" line of the deposits note (user decision
+#     of 2026-10-14). It leaves the total; its amount is kept in `excluded_judicial`.
+#
+#   Reads  raw/DEPOSIT_MATURITY/deposit_maturity_sec.csv and deposit_maturity_cvm.csv.
+#   Writes raw/DEPOSIT_MATURITY/deposit_maturity_summary.csv, the input of the deposit-type notes'
+#   Section 4 and of `switch_cost_tools.py locked` (the upper bound of the locked CDB share).
+#
+#   usage: python scrape_deposit_maturity.py summary [FOLDER] [--out FILE]
+###─────────────────────────────────────────────────────────────────────────────
+DEFAULT_DIR = paths.RAW / "DEPOSIT_MATURITY"
+# Banks whose no-maturity bucket is judicial deposits, dropped from the time-deposit total.
+JUDICIAL_NO_MATURITY = {"bb"}
+
+
+def load(folder: Path) -> tuple[pd.DataFrame, pd.DataFrame]:
+    sec = pd.read_csv(folder / "deposit_maturity_sec.csv")
+    cvm = pd.read_csv(folder / "deposit_maturity_cvm.csv")
+    sec = sec[(sec["instrument"] == "time_deposits") & (sec["table_kind"] == "all_time_deposits")].copy()
+    cvm = cvm[cvm["instrument"] == "time_deposits"].copy()
+    for d in (sec, cvm):
+        sc = d["sum_check"].astype(str).str.strip().str.lower()
+        num = pd.to_numeric(d["sum_check"], errors="coerce")
+        for c in ("lo_days", "hi_days", "value"):
+            d[c] = pd.to_numeric(d[c], errors="coerce")
+        # The relative gap between the buckets and the printed total (both sources); "ok" is
+        # also accepted.
+        d["ok"] = (num <= 0.005) | (sc == "ok")
+        d["table_id"] = d[[c for c in ("doc_url", "page", "table_title") if c in d.columns]].astype(str).agg("|".join, axis=1)
+    return sec, cvm
+
+
+def shares(g: pd.DataFrame, drop_no_maturity: bool = False) -> pd.Series:
+    nomat_rows = (g["lo_days"].fillna(-1) == 0) & (g["hi_days"].fillna(-1) == 0)
+    excluded = 0.0
+    if drop_no_maturity:
+        excluded = float(g.loc[nomat_rows, "value"].sum())
+        g, nomat_rows = g[~nomat_rows], nomat_rows[~nomat_rows]
+    tot = g["value"].sum()
+    out = {"total": tot, "n_buckets": len(g), "excluded_judicial": excluded}
+    nomat = g.loc[nomat_rows, "value"].sum()
+    out["share_no_maturity"] = nomat / tot if tot else np.nan
+    rest = g[~nomat_rows]
+    for cut in (90, 360):
+        v = 0.0
+        for _, r in rest.iterrows():
+            lo = 0 if pd.isna(r["lo_days"]) else r["lo_days"]
+            hi = np.inf if pd.isna(r["hi_days"]) else r["hi_days"]
+            if hi <= cut:
+                v += r["value"]
+            elif lo < cut < hi and np.isfinite(hi):
+                v += r["value"] * (cut - lo) / (hi - lo)
+        out[f"share_le{cut}"] = v / tot if tot else np.nan
+    out["share_gt360"] = 1 - out["share_no_maturity"] - out["share_le360"]
+    return pd.Series(out)
+
+
+def summarise(sec: pd.DataFrame, cvm: pd.DataFrame) -> pd.DataFrame:
+    rows = []
+    for src, d in (("sec_20f", sec), ("cvm", cvm)):
+        d = d[d["ok"]]
+        for (f, y), gg in d.groupby(["firm_key", "fiscal_year"]):
+            tables = gg.groupby("table_id")["value"].sum()
+            g = gg[gg["table_id"] == tables.idxmax()]
+            s = shares(g, drop_no_maturity=f in JUDICIAL_NO_MATURITY)
+            s["n_tables"] = len(tables)
+            s["firm_key"], s["fiscal_year"], s["source"], s["unit"] = f, y, src, g["unit"].iloc[0]
+            rows.append(s)
+    out = pd.DataFrame(rows)[["firm_key", "fiscal_year", "source", "unit", "total", "excluded_judicial", "n_buckets", "n_tables",
+                              "share_no_maturity", "share_le90", "share_le360", "share_gt360"]]
+    return out.sort_values(["firm_key", "fiscal_year", "source"])
+
+
+def summary_main() -> None:
+    sys.stdout.reconfigure(encoding="utf-8")
+    p = argparse.ArgumentParser(description="Bank-year summary of time deposits by remaining maturity")
+    p.add_argument("folder", nargs="?", default=str(DEFAULT_DIR))
+    p.add_argument("--out", default=None, help="write here instead of FOLDER/deposit_maturity_summary.csv")
+    a = p.parse_args()
+    folder = Path(a.folder)
+    out = summarise(*load(folder))
+    dest = Path(a.out) if a.out else folder / "deposit_maturity_summary.csv"
+    out.to_csv(dest, index=False, encoding="utf-8")
+    pd.set_option("display.width", 220)
+    print(out.round(3).to_string(index=False))
+    print(f"-> {dest}")
+
+
+# ==================================================================================== CLI
+SUBCOMMANDS = {"sec": sec_main, "cvm": cvm_main, "summary": summary_main}
+
+
+def main() -> None:
+    if len(sys.argv) < 2 or sys.argv[1] not in SUBCOMMANDS:
+        print("usage: python scrape_deposit_maturity.py {sec,cvm,summary} [options]  (-h after a "
+              "subcommand for its options)")
+        raise SystemExit(0 if len(sys.argv) > 1 and sys.argv[1] in ("-h", "--help") else 2)
+    cmd = sys.argv[1]
+    # each subcommand parses its own options, as the three scripts did
+    sys.argv = [f"scrape_deposit_maturity.py {cmd}"] + sys.argv[2:]
+    SUBCOMMANDS[cmd]()
 
 
 if __name__ == "__main__":

@@ -119,14 +119,14 @@ COSIF_BREAK_YEAR = 2025
 #     large fee revenue.
 #
 # Such values are not fee ratios and are treated as MISSING, exactly as
-# panel_3_master_panel_build NaNs rate_a4 above RATE_A4_MAX_MULT x Selic and
+# panel_deposit_rates NaNs rate_a4 above RATE_A4_MAX_MULT x Selic and
 # cosif_implicit_rate above 0.5.  Negative ratios (from svc_revenue_inc within-
 # semester reversals) are likewise implausible for a fee ratio and NaN'd.
-# The ceiling is env-overridable (mirrors panel_3's RATE_A4_MAX_MULT); the
+# The ceiling is env-overridable (mirrors panel_deposit_rates' RATE_A4_MAX_MULT); the
 # default 1.0 = "quarterly fees cannot exceed 100% of the deposit base" leaves
 # the entire clean central distribution (p95 <= 0.57) untouched while removing
 # every explosion.  A cosif_fee_guarded flag marks affected cong-quarters,
-# mirroring panel_3's rate_a4_guarded.
+# mirroring panel_deposit_rates' rate_a4_guarded.
 COSIF_FEE_RATIO_MAX = float(os.environ.get("COSIF_FEE_RATIO_MAX", 1.0))
 
 
@@ -196,7 +196,7 @@ def load_nonbank_ip_conglomerates() -> set:
     A firm that acquires a bank charter mid-sample (PicPay Bank, 2023) is therefore
     unmasked over its whole history, including the years it was an IP alone.
     """
-    from panel_deposits import build_conglomerate_canonical_map
+    from utils.conglomerates import build_conglomerate_canonical_map
 
     def _norm(s: str) -> str:
         return (unicodedata.normalize("NFKD", str(s))
@@ -264,7 +264,7 @@ def build_cnpj_cong_map() -> pd.DataFrame:
     rename failed to join, and firms that exited before the last snapshot joined
     nowhere at all.
     """
-    from panel_deposits import build_cnpj_conglomerate_map
+    from utils.conglomerates import build_cnpj_conglomerate_map
 
     mapping = build_cnpj_conglomerate_map()
     if not mapping:

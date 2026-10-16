@@ -18,7 +18,6 @@ from utils import paths
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
 
-BASE = str(paths.OPEN_FINANCE)
 IF_AGG_DIR  = str(paths.IF_DATA_AGG)
 IF_LIST_DIR = paths.IF_DATA_LIST   # Path object; List files have IPs, Prudential report does not
 OUTPUT_DIR  = str(paths.PROCESSED)
@@ -187,16 +186,30 @@ def load_and_pivot(report_num, accounts_dict):
         else:
             df['segment_raw'] = np.nan
 
+        key = ['CodConglomeradoPrudencial', 'Year', 'Quarter']
         cat_agg = (
-            df.groupby(['CodConglomeradoPrudencial', 'Year', 'Quarter'])
-            .agg(has_ip=('is_ip', 'max'), 
+            df.groupby(key)
+            .agg(has_ip=('is_ip', 'max'),
                  is_coop=('is_coop', 'max'),
                  is_state_owned=('is_state_owned', 'max'),
-                 is_captive=('is_captive', 'max'),
-                 segment=('segment_raw', 'first'))
+                 is_captive=('is_captive', 'max'))
             .reset_index()
         )
-        pivot = pivot.merge(cat_agg, on=['CodConglomeradoPrudencial', 'Year', 'Quarter'], how='right')
+        # A code-quarter spans several rows: one per account line (NumeroConta) of each member
+        # institution (CNPJ), all from the same quarter-end snapshot, so no date orders them.
+        # Segment = the modal non-missing Sr across member institutions; ties go to the lowest
+        # tier label (S1 before S5). Codes with no valid Sr get NaN.
+        seg = (
+            df.dropna(subset=['segment_raw'])
+            .drop_duplicates(key + ['CNPJ', 'segment_raw'])
+            .groupby(key + ['segment_raw']).size().rename('n_inst').reset_index()
+            .sort_values(key + ['n_inst', 'segment_raw'],
+                         ascending=[True] * len(key) + [False, True])
+            .drop_duplicates(key)
+            .rename(columns={'segment_raw': 'segment'})[key + ['segment']]
+        )
+        cat_agg = cat_agg.merge(seg, on=key, how='left')
+        pivot = pivot.merge(cat_agg, on=key, how='right')
 
     return pivot
 
@@ -294,15 +307,6 @@ def build_panel() -> pd.DataFrame:
     # 5. Capital (Informacoes de Capital) — report 5 was NOT renumbered in 2025.
     p5 = load_and_pivot(5, {79664: 'indice_basileia_raw'})
 
-    # Merge everything
-    panel = p1
-    if not p2.empty: panel = panel.merge(p2, on=['CodConglomeradoPrudencial', 'Year', 'Quarter'], how='left')
-    if not p3.empty: panel = panel.merge(p3, on=['CodConglomeradoPrudencial', 'Year', 'Quarter'], how='left')
-    if not p4.empty: panel = panel.merge(p4, on=['CodConglomeradoPrudencial', 'Year', 'Quarter'], how='left')
-    if not p5.empty: panel = panel.merge(p5, on=['CodConglomeradoPrudencial', 'Year', 'Quarter'], how='left')
-
-    panel.sort_values(['CodConglomeradoPrudencial', 'Year', 'Quarter'], inplace=True)
-
     # The IF-Data DRE is cumulative WITHIN EACH SEMESTER, not within the calendar year: the
     # series RESETS in July.  A large bank's 2022 admin expenses run
     #     Q1 -5.79bn   Q2 -12.10bn   Q3 -6.77bn   Q4 -14.06bn
@@ -316,16 +320,34 @@ def build_panel() -> pd.DataFrame:
     #     Q1 = M03            Q2 = M06 - M03            Q3 = M09            Q4 = M12 - M09
     # The first quarter of each semester keeps its reported (already single-quarter) value; the
     # second is a within-semester difference.  Same defect class as the COSIF semester-cumulative
-    # bug fixed in panel_2/panel_3.
+    # bug fixed in panel_deposits.py / panel_deposit_rates.py.
+    #
+    # The predecessor is located by calendar on the full report-4 pivot (same conglomerate and year,
+    # quarter − 1), and nothing is filled before differencing: a Q2/Q4 whose Q1/Q3 is absent or NaN
+    # gets NaN, never the semester-cumulative value; a flow the bank does not report stays NaN.
     if not p4.empty:
-        semester = np.where(panel['Quarter'] <= 2, 1, 2)
+        key = ['CodConglomeradoPrudencial', 'Year', 'Quarter']
+        p4 = p4.set_index(key)
+        semester_start = p4.index.get_level_values('Quarter').isin([1, 3])
+        pred_idx = pd.MultiIndex.from_arrays(
+            [p4.index.get_level_values('CodConglomeradoPrudencial'),
+             p4.index.get_level_values('Year'),
+             p4.index.get_level_values('Quarter') - 1], names=key)
         for cost_col in ['personnel_expenses', 'admin_expenses', 'tax_expenses', 'fin_income']:
-            if cost_col in panel.columns:
-                panel[cost_col] = panel[cost_col].fillna(0)
-                val_diff = panel.groupby(
-                    ['CodConglomeradoPrudencial', 'Year', semester])[cost_col].diff()
-                # NaN = first quarter present in that semester (normally Q1/Q3) -> keep as reported.
-                panel[cost_col] = val_diff.fillna(panel[cost_col])
+            if cost_col in p4.columns:
+                level = p4[cost_col].to_numpy()
+                pred = p4[cost_col].reindex(pred_idx).to_numpy()
+                p4[cost_col] = np.where(semester_start, level, level - pred)
+        p4 = p4.reset_index()
+
+    # Merge everything
+    panel = p1
+    if not p2.empty: panel = panel.merge(p2, on=['CodConglomeradoPrudencial', 'Year', 'Quarter'], how='left')
+    if not p3.empty: panel = panel.merge(p3, on=['CodConglomeradoPrudencial', 'Year', 'Quarter'], how='left')
+    if not p4.empty: panel = panel.merge(p4, on=['CodConglomeradoPrudencial', 'Year', 'Quarter'], how='left')
+    if not p5.empty: panel = panel.merge(p5, on=['CodConglomeradoPrudencial', 'Year', 'Quarter'], how='left')
+
+    panel.sort_values(['CodConglomeradoPrudencial', 'Year', 'Quarter'], inplace=True)
 
     # Core characteristics
     total_assets_no0 = panel['total_assets'].replace(0, np.nan)
@@ -383,9 +405,9 @@ def build_panel() -> pd.DataFrame:
         panel['earning_assets'] = panel[ea_cols].sum(axis=1, min_count=1)
         ea_lag = panel.groupby('CodConglomeradoPrudencial')['earning_assets'].shift(1)
         ea_lag = ea_lag.where(ea_lag > 0)                      # guard: no yield off a zero/neg base
-        # The DRE differencing above fillna(0)s missing flows. A bank with NO reported income would
-        # then get r^j = 0 and hence an asset margin of −r^f (≈ −10.5pp/yr) — reintroducing exactly
-        # the pathology this column exists to remove. So only trust a strictly positive income, and
+        # A zero or negative income would give r^j ≤ 0 and hence an asset margin of −r^f or below
+        # (≈ −10.5pp/yr) — reintroducing exactly the pathology this column exists to remove. So
+        # only trust a strictly positive income (missing income is NaN from the differencing), and
         # impute the rest from the cross-sectional median for that quarter (r^j is a bank
         # characteristic; the quarter median is the natural fallback and keeps the sign right).
         raw = panel['fin_income'].where(panel['fin_income'] > 0) / ea_lag

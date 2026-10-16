@@ -6,8 +6,6 @@ of a paper table. Files go to the paper folder (Drafts/Deposit Competition), whi
 
   fig_market_structure_by_year_{a..f}.pdf  each panel of the paper's Figure 1, drawn alone
   fig_slide_selic_timedep_all.pdf          Selic, the B time-deposit rate and its spread
-  fig_slide_selic_timedep_spread.pdf       Selic and the B time-deposit spread
-  fig_slide_selic_timedep_rate.pdf         Selic and the B time-deposit rate
   fig_slide_selic_savings.pdf              Selic and the savings (type 2) rate, by quarter
   fig_slide_sleep_ame_E3.pdf               Table 4's average marginal effects, 95% intervals
   fig_slide_demand_coef_E3.pdf             Table 6, Panel A: coefficients, Student-t(G*) 95% intervals
@@ -19,8 +17,8 @@ of a paper table. Files go to the paper folder (Drafts/Deposit Competition), whi
 
 Motivation charts (prices against balances); their unrounded numbers go to
 Rout/slide_motivation.json:
-  fig_slide_selic_timedep_all_{sd,iqr}.pdf the Selic chart with a band across B banks around the
-                                           B spread: +/-1 SD, or the interquartile range
+  fig_slide_selic_timedep_all_sd.pdf       the Selic chart with a band of +/-1 SD across B banks
+                                           around the B spread
   fig_slide_motiv_spreads_by_type.pdf      spread of each deposit type, by quarter
   fig_slide_motiv_shares_by_type.pdf       each deposit type's share of balances, by quarter
   fig_slide_motiv_rates_by_type.pdf        each deposit type's rate next to Selic, by quarter
@@ -31,11 +29,9 @@ Rout/slide_motivation.json:
                                            (_level: the share of B deposits, not normalised)
                                            (_bankboot: bands from resampling banks)
   fig_slide_motiv_reprice_binscatter_d.pdf the repricing chart for D firms with an own rate
-  fig_slide_phi_entry_robustness.pdf       Figure 2's entry-implied sleeping share under the
-                                           concentration checks (diag_entry_concentration.csv)
   fig_slide_relprice_*.pdf                 relative prices across B banks: decomposition,
                                            paths of the five largest, persistence, share change
-  tab_motiv_*.tex                          the motivation note's eleven tables, booktabs bodies
+  tab_motiv_*.tex                          the motivation note's ten tables, booktabs bodies
                                            built from the sidecar (--only motivtables)
 
 SOURCES
@@ -106,7 +102,7 @@ DEP_COLS = ["dep_a1", "dep_a2", "dep_a4", "dep_a5"]
 MINUS = "−"
 
 VISUALS = ("panels", "timedep", "savings", "ame", "coef", "wedge", "violations", "flow", "roadmap",
-           "table", "band", "pricevol", "reprice", "dpremium", "entrygap", "relprice", "entryrobust", "anova",
+           "table", "band", "pricevol", "reprice", "dpremium", "entrygap", "relprice", "anova",
            "motivtables")
 
 
@@ -177,27 +173,21 @@ def _timedep_lines(S: dict) -> dict:
 
 
 def timedep_charts(out: pathlib.Path, png: bool):
-    """Three versions of one chart, from Table A.4's annual series."""
+    """Slide 2's chart without a band, from Table A.4's annual series (the 10-06 and 10-19 decks
+    include it; band_charts draws the version with the band)."""
     S = mdt.ms_series(pd.read_csv(T2_CSV))
     years = S["years"]
     lines = _timedep_lines(S)
-    variants = {
-        "all":    (("selic", "rate", "spread"), "Selic and B time deposits", "% p.a. (spread: pp p.a.)"),
-        "spread": (("selic", "spread"), "Selic and the B time-deposit spread", "% p.a. (spread: pp p.a.)"),
-        "rate":   (("selic", "rate"), "Selic and the B time-deposit rate", "% p.a."),
-    }
-    for name, (keys, title, ylabel) in variants.items():
-        fig, ax = plt.subplots(figsize=SLIDE_FIGSIZE)
-        if "spread" in keys:
-            ax.axhline(0, color="#BFBFBA", lw=0.8, zorder=1)
-        for k in keys:
-            y, color, ls, label, fmt = lines[k]
-            ax.plot(years, y, color=color, label=label, **{**mdt.MS_LINE_KW, "linestyle": ls})
-            mdt.ms_endlabel(ax, years, y, fmt.format(y[-1]), FS)
-        mdt.ms_style(ax, title, ylabel, pix_label=True, fs=FS)
-        mdt.ms_year_axis(ax, years, fs=FS)
-        _legend_below(ax, len(keys))
-        _save(fig, out, f"fig_slide_selic_timedep_{name}", png)
+    fig, ax = plt.subplots(figsize=SLIDE_FIGSIZE)
+    ax.axhline(0, color="#BFBFBA", lw=0.8, zorder=1)
+    for k in ("selic", "rate", "spread"):
+        y, color, ls, label, fmt = lines[k]
+        ax.plot(years, y, color=color, label=label, **{**mdt.MS_LINE_KW, "linestyle": ls})
+        mdt.ms_endlabel(ax, years, y, fmt.format(y[-1]), FS)
+    mdt.ms_style(ax, "Selic and B time deposits", "% p.a. (spread: pp p.a.)", pix_label=True, fs=FS)
+    mdt.ms_year_axis(ax, years, fs=FS)
+    _legend_below(ax, 3)
+    _save(fig, out, "fig_slide_selic_timedep_all", png)
 
 
 # --------------------------------------------------------------------------------------------
@@ -758,8 +748,7 @@ def average_ci(q: pd.DataFrame, parts) -> dict:
 
 
 def _wstats(x, w) -> dict:
-    return dict(mean=mdt._weighted_mean(x, w), sd=mdt._weighted_std(x, w),
-                p25=mdt._weighted_quantile(x, 0.25, w), p75=mdt._weighted_quantile(x, 0.75, w))
+    return dict(mean=mdt._weighted_mean(x, w), sd=mdt._weighted_std(x, w))
 
 
 def _store(section: str, payload: dict):
@@ -772,9 +761,9 @@ def _store(section: str, payload: dict):
 
 
 def band_charts(out: pathlib.Path, png: bool):
-    """Slide 2's Selic chart with a band across B banks around the B spread. The band and the
-    line share Table A.4's weights, so the weighted mean of the band's distribution is the line
-    itself (checked)."""
+    """Slide 2's Selic chart with a band of +/-1 standard deviation across B banks around the B
+    spread. The band and the line share Table A.4's weights, so the weighted mean of the band's
+    distribution is the line itself (checked)."""
     S = mdt.ms_series(pd.read_csv(T2_CSV))
     years = S["years"]
     cells = b_spread_cells(motiv_panel())
@@ -787,26 +776,20 @@ def band_charts(out: pathlib.Path, png: bool):
     print(f"  band: weighted mean = Table A.4 B spread (max |diff| {gap:.1e})")
     spread = S["sp4_b"]
     sd = np.array([st[int(y)]["sd"] for y in years])
-    variants = {
-        "sd": (spread - sd, spread + sd, "±1 SD across B banks"),
-        "iqr": (np.array([st[int(y)]["p25"] for y in years]),
-                np.array([st[int(y)]["p75"] for y in years]), "25th–75th percentile, B banks"),
-    }
     lines = _timedep_lines(S)
-    for name, (lo, hi, band_label) in variants.items():
-        fig, ax = plt.subplots(figsize=SLIDE_FIGSIZE)
-        ax.axhline(0, color="#BFBFBA", lw=0.8, zorder=1)
-        for k in ("selic", "rate", "spread"):
-            y, color, ls, label, fmt = lines[k]
-            ax.plot(years, y, color=color, label=label, **{**mdt.MS_LINE_KW, "linestyle": ls})
-            mdt.ms_endlabel(ax, years, y, fmt.format(y[-1]), FS)
-        ax.fill_between(years, lo, hi, color=mdt.B_COLOR, alpha=0.13, linewidth=0, zorder=2,
-                        label=band_label)
-        mdt.ms_style(ax, "Selic and B time deposits", "% p.a. (spread: pp p.a.)",
-                     pix_label=True, fs=FS)
-        mdt.ms_year_axis(ax, years, fs=FS)
-        _legend_below(ax, 2)
-        _save(fig, out, f"fig_slide_selic_timedep_all_{name}", png)
+    fig, ax = plt.subplots(figsize=SLIDE_FIGSIZE)
+    ax.axhline(0, color="#BFBFBA", lw=0.8, zorder=1)
+    for k in ("selic", "rate", "spread"):
+        y, color, ls, label, fmt = lines[k]
+        ax.plot(years, y, color=color, label=label, **{**mdt.MS_LINE_KW, "linestyle": ls})
+        mdt.ms_endlabel(ax, years, y, fmt.format(y[-1]), FS)
+    ax.fill_between(years, spread - sd, spread + sd, color=mdt.B_COLOR, alpha=0.13, linewidth=0,
+                    zorder=2, label="±1 SD across B banks")
+    mdt.ms_style(ax, "Selic and B time deposits", "% p.a. (spread: pp p.a.)",
+                 pix_label=True, fs=FS)
+    mdt.ms_year_axis(ax, years, fs=FS)
+    _legend_below(ax, 2)
+    _save(fig, out, "fig_slide_selic_timedep_all_sd", png)
     _store("band", {"weights": "Table A.4 (build_table2): bank's type-4 share of the "
                                "market-quarter times the market-quarter's balance",
                     "by_year": {str(y): v for y, v in st.items()}})
@@ -1948,50 +1931,6 @@ def _ordinal(n: int) -> str:
 
 
 # --------------------------------------------------------------------------------------------
-# Figure 2's entry-implied sleeping share under the concentration checks
-# --------------------------------------------------------------------------------------------
-ENTRY_CONC_CSV = D6_DIR / "diag_entry_concentration.csv"
-# Figure 2's colours for the routines' mean fitted sleeping share (sleep_ident_entry_dynamics).
-ROUTINE_COLORS = {"E3": "#6A1B9A", "E4": "#00838F"}
-
-
-def entry_robust_chart(out: pathlib.Path, png: bool):
-    """The entry-implied sleeping share of Figure 2 and its 95% interval, re-estimated with the
-    bootstrap resampling banks, without Santander, with one vote per bank and on Santander
-    alone (diagnostics/diag_entry_concentration.py), against the routines' mean fitted share
-    that Figure 2 draws as model lines (d6_meta.json)."""
-    r = pd.read_csv(ENTRY_CONC_CSV)
-    meta = json.loads((D6_DIR / "d6_meta.json").read_text(encoding="utf-8"))
-    labels = {("paper (all entries)", "events"): "All entries (Figure 2)",
-              ("all entries", "banks"): "All, banks resampled",
-              ("without Santander", "events"): "No Santander",
-              ("without Santander", "banks"): "No Santander, banks resampled",
-              ("one vote per bank", "banks"): "One vote per bank",
-              ("Santander only", "events"): "Santander only"}
-    r["label"] = [labels[(s, i)] for s, i in zip(r["spec"], r["interval"])]
-    y = np.arange(len(r))[::-1].astype(float)
-    # The estimates and intervals are printed in the note's table, so the chart carries none.
-    fig, ax = plt.subplots(figsize=(SLIDE_FIGSIZE[0], SLIDE_FIGSIZE[1] * 1.15))
-    for lab, phi, _ in meta["vintages"]:
-        if lab in ROUTINE_COLORS:
-            ax.axvline(phi, color=ROUTINE_COLORS[lab], lw=1.2, ls=(0, (4, 2)), zorder=1,
-                       label=f"Mean fitted share, routine {_routines.est_roman(int(lab[1:]))}: "
-                             f"{phi:.3f}")
-    ax.errorbar(r["phi"], y, xerr=[r["phi"] - r["lo"], r["hi"] - r["phi"]], fmt="o",
-                color=mdt.B_COLOR, ecolor=mdt.B_COLOR, elinewidth=1.6, capsize=3, markersize=6,
-                markeredgecolor="white", zorder=3, label="Estimate and 95% interval")
-    ax.set_yticks(y)
-    ax.set_yticklabels(r["label"])
-    ax.set_xlim(0.76, 1.0)
-    _style_no_pix(ax, "Entry-implied sleeping share, B firms", "",
-                  "Sleeping share per quarter (grid ends at 0.9985)")
-    ax.grid(True, axis="x", color=mdt.GRID_COLOR, linewidth=0.6)
-    ax.grid(False, axis="y")
-    _legend_under(ax)
-    _save(fig, out, "fig_slide_phi_entry_robustness", png)
-
-
-# --------------------------------------------------------------------------------------------
 # Variance and co-movement tables for relative prices, shares and volumes
 # --------------------------------------------------------------------------------------------
 ANOVA_MD = mdt.OUTPUT_DIR / "slide_anova_tables.md"
@@ -2077,7 +2016,12 @@ def anova_tables(out: pathlib.Path, png: bool):
             d["dshare"] = 100 * (d["log_share"] - d["log_share_k"])
             d = _trim(d, ["dgap", "dshare"])
             r = _wls_slope(d, "dgap", "dshare", "dep_a4", "bank", fe=("t",))
-            corr = float(np.corrcoef(r["xr"], r["yr"])[0, 1])
+            # Balance-weighted, like the slope, so the two share a sign.
+            c = np.cov(r["xr"], r["yr"], aweights=r["w"])
+            corr = float(c[0, 1] / np.sqrt(c[0, 0] * c[1, 1]))
+            if np.sign(corr) != np.sign(r["slope"]):
+                sys.exit(f"anova: weighted correlation {corr:.3f} and slope {r['slope']:.3f} "
+                         f"differ in sign ({kind}, h={k})")
             payload.setdefault("comove", {}).setdefault(kind, {})[f"h{k}"] = dict(
                 corr=corr, slope=r["slope"], lo=r["lo"], hi=r["hi"], stars=r["stars"],
                 n=r["n"], banks=r["banks"])
@@ -2189,22 +2133,20 @@ def _tab_tex(name: str, comment: list, colspec: str, header: list, body: list) -
 
 
 def motivation_tables(out: pathlib.Path):
-    """The motivation note's eleven tables (motivation_figures_review.md) as booktabs bodies,
-    tab_motiv_*.tex, built from the unrounded values of Rout/slide_motivation.json and of
-    DIAG_PHI_SEPARATION/diag_entry_concentration.csv. Nothing is re-estimated: run the charts
-    first (band, pricevol, relprice, anova, reprice, entrygap, entryrobust)."""
+    """The motivation note's ten tables (motivation_figures_review.md) as booktabs bodies,
+    tab_motiv_*.tex, built from the unrounded values of Rout/slide_motivation.json. Nothing is
+    re-estimated: run the charts first (band, pricevol, relprice, anova, reprice, entrygap)."""
     s = json.loads(MOTIV_JSON.read_text(encoding="utf-8"))
     src = f"Values: {MOTIV_JSON.name}"
     tabs = {}
 
     # Dispersion of the B-firm time-deposit spread by year ------------------------------------
-    rows = [f"{y} & {_tn(v['mean'])} & {_tn(v['sd'])} & {_tn(v['p25'])} & {_tn(v['p75'])} & "
-            f"{_tn(v['p75'] - v['p25'])} \\\\" for y, v in s["band"]["by_year"].items()]
+    rows = [f"{y} & {_tn(v['mean'])} & {_tn(v['sd'])} \\\\"
+            for y, v in s["band"]["by_year"].items()]
     tabs["tab_motiv_spread_dispersion"] = (
         [f"{src}, band.by_year; keys \\pn{{slide.motiv.band.*}}. Time-deposit spread across B",
          "firms, pp a year, weighted as in Table A.4 (the mean is Table A.4's B line)."],
-        "@{}lrrrrr@{}",
-        [r"Year & Mean & Std.\ dev. & 25th pct. & 75th pct. & Interquartile range \\"], rows)
+        "@{}lrr@{}", [r"Year & Mean & Std.\ dev. \\"], rows)
 
     # Prices and balances over the tightening ------------------------------------------------
     h = s["pricevol"]["hikes"]
@@ -2368,21 +2310,6 @@ def motivation_tables(out: pathlib.Path):
          r"\cmidrule(lr){2-4}",
          r" & 4 & 8 & 12 & at quarter 12 & Entries & Banks \\"], rows)
 
-    # Entry-implied sleeping share under the concentration checks ------------------------------
-    r = pd.read_csv(ENTRY_CONC_CSV)
-    labels = {("paper (all entries)", "events"): "All entries, entries resampled (paper)",
-              ("all entries", "banks"): "All entries, banks resampled",
-              ("without Santander", "events"): "Without Santander, entries resampled",
-              ("without Santander", "banks"): "Without Santander, banks resampled",
-              ("one vote per bank", "banks"): "One vote per bank, banks resampled",
-              ("Santander only", "events"): "Santander only, entries resampled"}
-    rows = [f"{labels[(x.spec, x.interval)]} & {_tn(x.phi)} & {_tci(x.lo, x.hi)} & {x.n_events} & "
-            f"{x.n_banks} \\\\" for x in r.itertuples()]
-    tabs["tab_motiv_phi_entry_robustness"] = (
-        [f"Values: {ENTRY_CONC_CSV.name} (diagnostics/diag_entry_concentration.py). Grid of the",
-         "sleeping share ends at 0.9985, so upper bounds printed 0.999 are censored there."],
-        "@{}lrcrr@{}", [r"Variant & Estimate & 95\% interval & Entries & Banks \\"], rows)
-
     # Construction of the repricing samples ---------------------------------------------------
     wb, wd = s["reprice"]["waterfall"], s["reprice_d"]["waterfall"]
     assert len(wb) == len(wd) == 6, "the repricing waterfall changed: update the row labels"
@@ -2459,8 +2386,6 @@ def main():
         entry_gap_chart(args.out, args.png)
     if "relprice" in todo:
         relprice_charts(args.out, args.png)
-    if "entryrobust" in todo:
-        entry_robust_chart(args.out, args.png)
     if "anova" in todo:
         anova_tables(args.out, args.png)
     if "motivtables" in todo:

@@ -11,7 +11,7 @@ CF correction: v_hat x lagged_deposits (linear in residual, interacted with lagg
 Outputs are directed to ESTIMATION_OUTPUT/DEMAND_PREP/est2
 
 CLI Options:
-  --spec12          Only run spec 12 (Tech x IV_HausmanFull)
+  --spec12          Only run spec 12 (Tech x IV_RivalSpread)
   --write-centers   Rebuild ESTIMATION_OUTPUT/DEMAND_PREP/state_centering_means.json
                     (the grand means of the state block) and exit. THE ONLY WRITER --
                     every other caller, including E1 and all three demand preps, only
@@ -192,7 +192,7 @@ def define_specifications(time_block=False):
         'OLS': [],
         'IV_CostShifters': ['personnel_cost_ratio_lag', 'admin_cost_ratio_lag', 'tax_cost_ratio_lag'],
         'IV_Wholesale': ['personnel_cost_ratio_lag', 'admin_cost_ratio_lag', 'tax_cost_ratio_lag', 'lci_lca_ratio_lag', 'wholesale_ratio_lag', 'indice_basileia_lag'],
-        'IV_HausmanFull': ['personnel_cost_ratio_lag', 'admin_cost_ratio_lag', 'tax_cost_ratio_lag', 'lci_lca_ratio_lag', 'wholesale_ratio_lag', 'indice_basileia_lag', 'leave_one_out_mean_spread'],
+        'IV_RivalSpread': ['personnel_cost_ratio_lag', 'admin_cost_ratio_lag', 'tax_cost_ratio_lag', 'lci_lca_ratio_lag', 'wholesale_ratio_lag', 'indice_basileia_lag', 'rival_mean_spread'],
     }
     state_blocks = {'Base': s_base, 'Macro': s_macro, 'Tech': s_tech}
     return s_tech, iv_specs, state_blocks
@@ -241,8 +241,8 @@ def build_pooled_data(time_block=False, center=True):
                 "The municipality->MCA aggregation (panel_6_market.aggregate_to_mca) is missing or "
                 "stale -- rebuild the panel; do NOT de-duplicate here."
             )
-        df = pd.wide_to_long(df_raw, stubnames=['dep_a', 'spread_a', 'spread_ann_a', 'leave_one_out_mean_spread_a'], i=id_vars, j='deposit_type').reset_index()
-        df = df.rename(columns={'dep_a': 'deposit_balance', 'spread_a': 'spread_qoq', 'spread_ann_a': 'spread_ann', 'leave_one_out_mean_spread_a': 'leave_one_out_mean_spread'})
+        df = pd.wide_to_long(df_raw, stubnames=['dep_a', 'spread_a', 'spread_ann_a', 'rival_mean_spread_a'], i=id_vars, j='deposit_type').reset_index()
+        df = df.rename(columns={'dep_a': 'deposit_balance', 'spread_a': 'spread_qoq', 'spread_ann_a': 'spread_ann', 'rival_mean_spread_a': 'rival_mean_spread'})
     else:
         df = df_raw.copy()
 
@@ -258,8 +258,8 @@ def build_pooled_data(time_block=False, center=True):
     df['lagged_deposits'] = df.groupby('entity_id')['deposit_balance'].shift(1)
     df['nr_lagged_dep'] = (1 + df['risk_free_qoq_lag'] - df['spread_qoq_lag']) * df['lagged_deposits']
 
-    if 'leave_one_out_mean_spread' not in df.columns:
-        df['leave_one_out_mean_spread'] = np.nan
+    if 'rival_mean_spread' not in df.columns:
+        df['rival_mean_spread'] = np.nan
 
     df['bank_year'] = df['CodConglomeradoPrudencial'].astype(str) + "_" + df['year'].astype(str)
     df = df.dropna(subset=['deposit_balance', 'nr_lagged_dep', 'spread_qoq', 'entity_id', 'time_id'])
@@ -483,11 +483,11 @@ def run_pooled_phase(spec12_only=False):
     _, iv_specs, state_blocks = define_specifications()
 
     if spec12_only:
-        tasks = [(df, 'IV_HausmanFull', iv_specs['IV_HausmanFull'], 'Tech', state_blocks['Tech'])]
+        tasks = [(df, 'IV_RivalSpread', iv_specs['IV_RivalSpread'], 'Tech', state_blocks['Tech'])]
     else:
         tasks = [(df, iv_name, iv_specs[iv_name], s_name, state_blocks[s_name])
                  for s_name in state_blocks.keys()
-                 for iv_name in ['OLS', 'IV_CostShifters', 'IV_Wholesale', 'IV_HausmanFull']]
+                 for iv_name in ['OLS', 'IV_CostShifters', 'IV_Wholesale', 'IV_RivalSpread']]
 
     results_dict = {}
     _nw = min(4, max(1, (os.cpu_count() or 4) // max(1, int(os.environ.get('SLEEP_PIPELINE_NSLOTS', '1')))))
@@ -545,7 +545,7 @@ def run_plotting_phase(spec12_only=False):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Estimation 2: Pooled B+D Sleepiness (Linear)")
-    parser.add_argument('--spec12', action='store_true', help='Only run spec 12 (Tech x IV_HausmanFull)')
+    parser.add_argument('--spec12', action='store_true', help='Only run spec 12 (Tech x IV_RivalSpread)')
     parser.add_argument('--write-centers', action='store_true',
                         help='Rebuild state_centering_means.json from the pooled frame and exit')
     args = parser.parse_args()

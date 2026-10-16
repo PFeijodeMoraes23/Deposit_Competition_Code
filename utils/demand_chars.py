@@ -90,6 +90,11 @@ IV_ENGINE = LOO_ENGINE + ["n_rivals", "estban_rival_branches_lag", "personnel_co
                           "admin_cost_ratio_lag", "tax_cost_ratio_lag", "indice_basileia_lag"]
 
 CHARS_DROPPED = 9      # chars_src of a firm-quarter with no filing within the maximum distance
+ESTBAN_DROP_MAX_SHARE = 0.01   # B rows that may leave for want of the ESTBAN instrument (finalize)
+# The cost-shifter instruments: null where the bank's DRE flow for the quarter is unknown
+# (panel_bank_chars leaves a semester total filed as one quarter null). Such rows leave in finalize.
+COST_IV = ["personnel_cost_ratio_lag", "admin_cost_ratio_lag", "tax_cost_ratio_lag"]
+COST_DROP_MAX_SHARE = 0.005    # rows that may leave for want of a cost shifter (finalize)
 
 
 def chars_path() -> Path:
@@ -310,11 +315,15 @@ def audit(df: pd.DataFrame) -> dict:
 def finalize(df_spec: pd.DataFrame, out_path=None, summary=None) -> pd.DataFrame:
     """Last step of a prep, on the frame it is about to write.
 
-    The rows of a firm-quarter with no filing within the maximum distance (chars_src == 9) leave
-    here, after the shares were formed, so no other row's share moves. The panel's pair of the
-    earlier borrowings ratio is dropped. A null X or a null or infinite instrument left after that
-    is an error. `summary` (the prep's own per-spec dict) gets the row counts after the drop and
-    the counts; `out_path` gets a `.chars_audit.json` twin.
+    Three kinds of row leave here, after the shares were formed, so no other row's share moves:
+    a firm-quarter with no filing within the maximum distance (chars_src == 9); a B row the
+    ESTBAN screen could not match, whose branch-competition instrument is null
+    (panel_estban_instrument.py; D rows carry 0 by construction); and a row with a null cost
+    shifter (COST_IV). The last two are a few hundred rows and a few dozen; more than
+    ESTBAN_DROP_MAX_SHARE of the B rows, or COST_DROP_MAX_SHARE of all rows, means a broken
+    merge and is refused. The panel's pair of the earlier borrowings ratio is dropped. A null X or a null or infinite
+    instrument left after that is an error. `summary` (the prep's own per-spec dict) gets the row
+    counts after the drops and the counts; `out_path` gets a `.chars_audit.json` twin.
     """
     n_before = len(df_spec)
     dropped = {"rows": 0, "B": 0, "D": 0}
@@ -323,13 +332,42 @@ def finalize(df_spec: pd.DataFrame, out_path=None, summary=None) -> pd.DataFrame
         is_b = df_spec["is_B"].astype(bool)
         dropped = {"rows": int(gone.sum()), "B": int((gone & is_b).sum()), "D": int((gone & ~is_b).sum())}
         df_spec = df_spec[~gone].copy()
+    dropped_estban = {"rows": 0, "B": 0, "D": 0}
+    if "estban_rival_branches_lag" in df_spec.columns:
+        is_b = df_spec["is_B"].astype(bool)
+        gone = df_spec["estban_rival_branches_lag"].isna()
+        dropped_estban = {"rows": int(gone.sum()), "B": int((gone & is_b).sum()),
+                          "D": int((gone & ~is_b).sum())}
+        n_b = int(is_b.sum())
+        if dropped_estban["D"] or dropped_estban["B"] > ESTBAN_DROP_MAX_SHARE * max(n_b, 1):
+            raise AssertionError(
+                f"demand chars: {dropped_estban} rows have no ESTBAN instrument, against {n_b:,} B rows "
+                f"(at most {ESTBAN_DROP_MAX_SHARE:.1%} of B rows, and no D row, may leave for this). "
+                "The instrument's merge is broken: rebuild panel_estban_instrument.py's output.")
+        df_spec = df_spec[~gone].copy()
+    dropped_cost = {"rows": 0, "B": 0, "D": 0}
+    cost_cols = [c for c in COST_IV if c in df_spec.columns]
+    if cost_cols:
+        is_b = df_spec["is_B"].astype(bool)
+        gone = df_spec[cost_cols].isna().any(axis=1)
+        dropped_cost = {"rows": int(gone.sum()), "B": int((gone & is_b).sum()), "D": int((gone & ~is_b).sum())}
+        if dropped_cost["rows"] > COST_DROP_MAX_SHARE * max(len(df_spec), 1):
+            raise AssertionError(
+                f"demand chars: {dropped_cost} rows have a null cost shifter ({cost_cols}), out of "
+                f"{len(df_spec):,} (at most {COST_DROP_MAX_SHARE:.1%} may leave for this). The bank "
+                "characteristics' merge is broken: rebuild panel_bank_chars.py's output.")
+        df_spec = df_spec[~gone].copy()
     df_spec = df_spec.drop(columns=[c for c in PANEL_BORROW_PAIR if c in df_spec.columns])
     rep = audit(df_spec)
     rep["rows_before_drop"] = int(n_before)
     rep["dropped_no_characteristics"] = dropped
+    rep["dropped_no_estban"] = dropped_estban
+    rep["dropped_no_cost_shifter"] = dropped_cost
     rep["chars_file"] = str(chars_path())
     print(f"  [demand chars] {n_before:,} rows, {dropped['rows']} dropped for want of characteristics "
-          f"(B {dropped['B']}, D {dropped['D']}); rows with a null X {rep['x_null_rows']:,}; rows with a "
+          f"(B {dropped['B']}, D {dropped['D']}), {dropped_estban['rows']} B rows for want of the ESTBAN "
+          f"instrument, {dropped_cost['rows']} for want of a cost shifter (B {dropped_cost['B']}, "
+          f"D {dropped_cost['D']}); rows with a null X {rep['x_null_rows']:,}; rows with a "
           f"null or infinite instrument {rep['iv_bad_rows']:,}")
     if rep["x_null_rows"] or rep["iv_bad_rows"]:
         bad_x = {k: v for k, v in rep["x_null"].items() if v}
@@ -342,7 +380,8 @@ def finalize(df_spec: pd.DataFrame, out_path=None, summary=None) -> pd.DataFrame
         summary["Rows"] = int(len(df_spec))
         summary["B_firms"] = int(is_b.sum())
         summary["D_firms"] = int((~is_b).sum())
-        summary["demand_chars"] = {"dropped_no_characteristics": dropped,
+        summary["demand_chars"] = {"dropped_no_characteristics": dropped, "dropped_no_estban": dropped_estban,
+                                   "dropped_no_cost_shifter": dropped_cost,
                                    "x_null_rows": rep["x_null_rows"], "iv_bad_rows": rep["iv_bad_rows"]}
     if out_path is not None:
         p = Path(str(out_path) + ".chars_audit.json")

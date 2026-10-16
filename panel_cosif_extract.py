@@ -2,39 +2,34 @@
 # Author: Pedro Feijo de Moraes
 # Objective: CANONICAL COSIF extractor for the deposit-rate pipeline.  Reads the
 #            shared monthly COSIF *BANCOS* files and writes the processed
-#            custos_implicitos_*.csv that panel_3_master_panel_build consumes via
+#            custos_implicitos_*.csv that panel_deposit_rates.py consumes via
 #            load_cosif_processed(), PLUS the per-type FOUNDATION table that
-#            cosif_process_2_calibrate consumes to build the corrected k=4 rate.
-#
-# This is the modern replacement for the stale cosif_process_1.py (which read an
-# empty raw/COSIF_RAW and summed 4010+4016 indiscriminately).
+#            panel_cosif_calibrate.py consumes to build the corrected k=4 rate.
 #
 # TWO OUTPUTS (single read pass):
 #
 #  (1) CANONICAL monthly per-taxonomy files  custos_implicitos_<TAXONOMY>.csv
-#      Drop-in compatible with the existing pipeline contract:
+#      The contract panel_deposit_rates.load_cosif_processed reads:
 #        * one file per COSIF TAXONOMIA (filename suffix -> cosif_taxonomy),
 #        * monthly DATA_BASE,
 #        * Estoque_Total / Estoque_Prepago: total-deposit / prepaid STOCK.  These
 #          intentionally retain the Jun/Dec 4010+4016 double-count and the
 #          group-8 SEMESTER-CUMULATIVE Despesa_Captacao_Marginal, BECAUSE
-#          panel_3_master_panel_build._correct_cosif_time_aggregation expects raw
-#          values and applies its own halving + disaccumulation.  Keeping the
-#          legacy semantics here leaves the existing blended-rate path byte-stable.
-#        * Estoque_Total_Lag, Custo_Efetivo_Blended, Custo_Efetivo_Prepago as before.
-#      ADDS new per-type monthly columns (stk_time/stk_repos/stk_bills/stk_savings/
-#      stk_interb from DOC 4010 only, and the 2025+ exp_* expense leaves).  These
-#      are EXTRA columns; load_cosif_processed ignores ones it doesn't use, while
-#      cosif_process_2_calibrate reads them.
+#          panel_deposit_rates._correct_cosif_time_aggregation expects raw
+#          values and applies its own halving + disaccumulation.
+#        * Estoque_Total_Lag, Custo_Efetivo_Blended, Custo_Efetivo_Prepago.
+#      Plus per-type monthly columns (stk_time/stk_repos/stk_bills/stk_savings/
+#      stk_interb from DOC 4010 only, and the 2025+ exp_* expense leaves).
+#      load_cosif_processed ignores them; panel_cosif_calibrate reads them.
 #
 #  (2) FOUNDATION table  custos_implicitos_v2_foundation.csv
 #      CNPJ x quarter, DOC 4010 only, per-type stocks + disaccumulated expense +
 #      2025+ leaves, already collapsed to quarterly.  Convenience input for the
 #      calibration module / diagnostics.
 #
-# WHY the k=4 fix: the old blended LUMPED expense (8.1.1, code 81100008) / TOTAL
-# deposits produced a CDB rate far outside the plausible 90-115%-of-CDI band.
-# cosif_process_2_calibrate uses the per-type detail emitted here to build a
+# WHY the per-type detail: the blended LUMPED expense (8.1.1, code 81100008) / TOTAL
+# deposits gives a CDB rate far outside the plausible 90-115%-of-CDI band.
+# panel_cosif_calibrate uses the per-type detail emitted here to build a
 # per-bank, segment-shrunk corrected CDB rate.
 #
 # Raw input : shared/COSIF/*BANCOS* monthly (201301-202603).
@@ -43,7 +38,6 @@
 import os
 import re
 import sys
-import glob
 import zipfile
 import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -59,7 +53,6 @@ from utils import paths  # noqa: E402
 COSIF_RAW_DIR = str(paths.COSIF_RAW)                       # shared/COSIF
 PROCESSED_PATH = str(paths.PROCESSED)
 COSIF_PROCESSED_PATH = os.path.join(PROCESSED_PATH, "COSIF_PROCESSED")
-PANEL_INTERMED_PATH = os.path.join(PROCESSED_PATH, "PANEL_INTERMED")
 os.makedirs(COSIF_PROCESSED_PATH, exist_ok=True)
 
 OUT_FOUNDATION = os.path.join(
@@ -199,7 +192,7 @@ def read_month(args):
     DOC distinguishes 4010 (balancete; the only series with group-8 expenses and
     the clean per-type detail) from 4016 (semester balanco; duplicates group-4
     stocks at Jun/Dec).  Both are kept here so the CANONICAL Estoque_Total can
-    retain the legacy 4010+4016 Jun/Dec double-count that panel_3 halves, while
+    retain the 4010+4016 Jun/Dec double-count that panel_deposit_rates halves, while
     the per-type detail columns are taken from 4010 only downstream."""
     ym, filepath = args
     try:
@@ -251,7 +244,7 @@ def read_month(args):
 
 
 # ---------------------------------------------------------------------------
-# Disaccumulation (reuse old builder / panel_3_master_panel_build lines ~677-725 logic)
+# Disaccumulation (the rule panel_deposit_rates._correct_cosif_time_aggregation applies)
 # ---------------------------------------------------------------------------
 def disaccumulate_within_semester(df, value_col, id_cols, date_col="DATA_BASE"):
     """COSIF group-8 result accounts accumulate within the SEMESTER (reset Jan &
@@ -308,17 +301,17 @@ def read_all():
 # (1) CANONICAL monthly per-taxonomy custos_implicitos_<TAXONOMY>.csv
 # ---------------------------------------------------------------------------
 def build_canonical_taxonomy_files(long):
-    """Emit the legacy-compatible custos_implicitos_<TAXONOMY>.csv files that
-    panel_3_master_panel_build.load_cosif_processed() consumes.
+    """Emit the custos_implicitos_<TAXONOMY>.csv files that
+    panel_deposit_rates.load_cosif_processed() consumes.
 
-    Canonical columns keep their legacy semantics so panel_3's own
+    The canonical columns are raw, so panel_deposit_rates'
     _correct_cosif_time_aggregation (Jun/Dec halving + within-semester
-    disaccumulation) still applies correctly:
+    disaccumulation) applies correctly:
       * Estoque_Total / Estoque_Prepago : total / prepaid STOCK summed over
         DOC 4010+4016 (retains the Jun/Dec double-count),
       * Despesa_Captacao_Marginal / Desp_Prepago_Marginal : group-8 expense from
-        DOC 4010 only, left SEMESTER-CUMULATIVE (panel_3 disaccumulates it).
-    Plus EXTRA per-type detail columns (DOC 4010 only) for cosif_process_2.
+        DOC 4010 only, left SEMESTER-CUMULATIVE (panel_deposit_rates disaccumulates it).
+    Plus per-type detail columns (DOC 4010 only) for panel_cosif_calibrate.
     """
     # ---- canonical totals: 4010+4016 for stocks, 4010-only for expenses ----
     stock_cols_canon = {"stk_total": "Estoque_Total", "stk_prepaid": "Estoque_Prepago"}
@@ -336,7 +329,7 @@ def build_canonical_taxonomy_files(long):
            .sum().unstack("col").reset_index().rename(columns=exp_cols_canon))
 
     # EXTRA per-type detail (DOC 4010 only): all stk_*/exp_* except the two
-    # canonical stocks (already covered) -- kept raw-monthly for cosif_process_2.
+    # canonical stocks (already covered) -- kept raw-monthly for panel_cosif_calibrate.
     detail_cols = [c for c in (STOCK_COLS + EXPENSE_COLS)
                    if c not in ("stk_total", "stk_prepaid")]
     det = (long[(long["DOC"] == "4010") & long["col"].isin(detail_cols)]

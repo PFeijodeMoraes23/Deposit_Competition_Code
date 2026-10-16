@@ -8,7 +8,7 @@
 #   Longo Prazo") of the S1 banks, from the BCB open-data catalogue. LIQ2 splits
 #   each bank's funding by residual maturity, which is the closest public proxy for
 #   how much of the deposit base can leave within a quarter (the maturity share mu
-#   in deposit_type_heterogeneity_notes.md, Section 4).
+#   in deposit_types_report_2026-10-15.md, Section 4).
 #
 # DATA SOURCE
 #   Catalogue (BCB, OData):

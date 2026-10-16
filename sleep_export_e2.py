@@ -5,7 +5,6 @@ import os
 import sys
 import json
 import pickle
-import subprocess
 import shutil
 import warnings
 warnings.filterwarnings("ignore", message="covariance of constraints does not have full rank")
@@ -48,7 +47,7 @@ def stars(p):
 # paper -- sleepiness, BBL policy functions, descriptives -- states the same unit for the
 # same variable. There used to be four independent copies of this dict.
 from sleep_export_link import (clean_name, disp, ss_colspec, ss_label_cell,  # noqa: E402
-                               SS_TABCOLSEP, fmt3, pdflatex_clean, eff_f_cell)
+                               SS_TABCOLSEP, fmt3, compile_check_wrapper, eff_f_cell)
 from utils import state_transform as _st  # noqa: E402
 from utils import se_national as _sen  # noqa: E402
 from utils import sleep_notes as _notes
@@ -60,11 +59,11 @@ def build_first_stage_table(results_dict):
     panel_labels = {'Base': 'Base Specifications', 'Macro': 'Macro Specifications', 'Tech': 'Tech Specifications'}
     panel_letters = ['A', 'B', 'C']
     fs_spec_numbers = {
-        ('Base', 'IV_CostShifters'): 2, ('Base', 'IV_Wholesale'): 3, ('Base', 'IV_HausmanFull'): 4,
-        ('Macro', 'IV_CostShifters'): 6, ('Macro', 'IV_Wholesale'): 7, ('Macro', 'IV_HausmanFull'): 8,
-        ('Tech', 'IV_CostShifters'): 10, ('Tech', 'IV_Wholesale'): 11, ('Tech', 'IV_HausmanFull'): 12,
+        ('Base', 'IV_CostShifters'): 2, ('Base', 'IV_Wholesale'): 3, ('Base', 'IV_RivalSpread'): 4,
+        ('Macro', 'IV_CostShifters'): 6, ('Macro', 'IV_Wholesale'): 7, ('Macro', 'IV_RivalSpread'): 8,
+        ('Tech', 'IV_CostShifters'): 10, ('Tech', 'IV_Wholesale'): 11, ('Tech', 'IV_RivalSpread'): 12,
     }
-    ivs = [('IV_CostShifters', 'IV Cost'), ('IV_Wholesale', 'IV Wholesale'), ('IV_HausmanFull', 'Hausman')]
+    ivs = [('IV_CostShifters', 'IV Cost'), ('IV_Wholesale', 'IV Wholesale'), ('IV_RivalSpread', 'Rival mean spread')]
     multispan = 4
     # SHARED first stage.  The first stage is the deposit-spread (price) equation and does not
     # depend on the second-stage link, so it is numerically identical to E3's (same pooled
@@ -116,7 +115,7 @@ def build_first_stage_table(results_dict):
 
     all_vars_fs = [
         'tax_cost_ratio_lag', 'personnel_cost_ratio_lag', 'admin_cost_ratio_lag',
-        'indice_basileia_lag', 'lci_lca_ratio_lag', 'wholesale_ratio_lag', 'leave_one_out_mean_spread',
+        'indice_basileia_lag', 'lci_lca_ratio_lag', 'wholesale_ratio_lag', 'rival_mean_spread',
     ]
 
     for pi, panel in enumerate(panels):
@@ -186,11 +185,11 @@ def build_second_stage_table(results_dict):
     panel_labels = {'Base': 'Base Specifications', 'Macro': 'Macro Specifications', 'Tech': 'Tech Specifications'}
     panel_letters = ['A', 'B', 'C']
     ss_spec_numbers = {
-        ('Base', 'OLS'): 1, ('Base', 'IV_CostShifters'): 2, ('Base', 'IV_Wholesale'): 3, ('Base', 'IV_HausmanFull'): 4,
-        ('Macro', 'OLS'): 5, ('Macro', 'IV_CostShifters'): 6, ('Macro', 'IV_Wholesale'): 7, ('Macro', 'IV_HausmanFull'): 8,
-        ('Tech', 'OLS'): 9, ('Tech', 'IV_CostShifters'): 10, ('Tech', 'IV_Wholesale'): 11, ('Tech', 'IV_HausmanFull'): 12,
+        ('Base', 'OLS'): 1, ('Base', 'IV_CostShifters'): 2, ('Base', 'IV_Wholesale'): 3, ('Base', 'IV_RivalSpread'): 4,
+        ('Macro', 'OLS'): 5, ('Macro', 'IV_CostShifters'): 6, ('Macro', 'IV_Wholesale'): 7, ('Macro', 'IV_RivalSpread'): 8,
+        ('Tech', 'OLS'): 9, ('Tech', 'IV_CostShifters'): 10, ('Tech', 'IV_Wholesale'): 11, ('Tech', 'IV_RivalSpread'): 12,
     }
-    estimators = [('OLS', 'OLS'), ('IV_CostShifters', 'IV Cost'), ('IV_Wholesale', 'IV Wholesale'), ('IV_HausmanFull', 'Hausman')]
+    estimators = [('OLS', 'OLS'), ('IV_CostShifters', 'IV Cost'), ('IV_Wholesale', 'IV Wholesale'), ('IV_RivalSpread', 'Rival mean spread')]
     multispan = 5
     caption = f"Second Stage, Estimation Strategy~{_routines.est_ref(2)}"
     label = "tab:est2_second_stage"
@@ -409,20 +408,7 @@ def main():
     with open(wrapper_path, 'w', encoding='utf-8') as fh: fh.write(tex_doc)
     print(f" - Standalone wrapper written to {TEX_OUT_DIR}")
 
-    print(" - Compiling PDF...")
-    try:
-        subprocess.run(["pdflatex", "-interaction=nonstopmode", "est2_sleep_results.tex"],
-                       cwd=OUT_DIR, capture_output=True, text=True)
-        res_final = subprocess.run(["pdflatex", "-interaction=nonstopmode", "est2_sleep_results.tex"],
-                                   cwd=OUT_DIR, capture_output=True, text=True)
-        pdf_path = os.path.join(OUT_DIR, "est2_sleep_results.pdf")
-        if (os.path.exists(pdf_path) and os.path.getsize(pdf_path) > 0
-                and pdflatex_clean(res_final.stdout)):
-            print("\n *** PDF SUCCESSFULLY GENERATED. ***\n")
-        else:
-            print(f"\n *** PDF GENERATION FAILED. Log tail:\n{res_final.stdout[-800:]}\n ***\n")
-    except Exception as e:
-        print(f"\n *** COMPILATION ERROR: {e} ***\n")
+    compile_check_wrapper(OUT_DIR, "est2_sleep_results.tex")
 
     print("Done.")
 

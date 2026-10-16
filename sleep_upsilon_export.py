@@ -102,7 +102,7 @@ def _discover_demand_parquet(estim: int, spec: int) -> Path:
 
 
 def _phicol_to_pklkey(phi_col: str) -> str:
-    """'phi_mt_IV_HausmanFull_x_Tech' -> 'IV_HausmanFull x Tech' (the results_dict key)."""
+    """'phi_mt_IV_RivalSpread_x_Tech' -> 'IV_RivalSpread x Tech' (the results_dict key)."""
     body = phi_col[len("phi_mt_"):]
     iv, block = body.rsplit("_x_", 1)
     return f"{iv} x {block}"

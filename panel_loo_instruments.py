@@ -21,7 +21,6 @@ Specifically, it computes:
 The augmented panel is saved back to market_panel.csv.
 """
 
-import os
 import sys
 import logging
 from pathlib import Path
@@ -42,7 +41,6 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 
 from utils import paths
 from utils.winsorize import apply_validity_bounds, winsorize_within_type
-_ROOT = Path(__file__).resolve().parents[2]
 PANEL_CSV = paths.PROCESSED / "market_panel.csv"
 
 # ---- Outlier control, applied ONCE here so every consumer inherits the same columns -------

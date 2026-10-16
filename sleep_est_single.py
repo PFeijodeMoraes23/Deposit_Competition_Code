@@ -62,7 +62,7 @@ from utils import routines as R
 # ("index_sieve") from the cubic ("index") within the same kind.
 LINK_OF = {"logit": "logit", "single_index": "index"}
 
-_IV_ORDER = ["OLS", "IV_CostShifters", "IV_Wholesale", "IV_HausmanFull"]
+_IV_ORDER = ["OLS", "IV_CostShifters", "IV_Wholesale", "IV_RivalSpread"]
 
 # Two-way fixed effects: the sleepiness model now carries BOTH an entity FE
 # (bank x deposit-type x market) and a quarter time FE (time_id). The time FE
@@ -131,7 +131,7 @@ def _out_dir(est_num):
 # order the serial runner visits them in (_exec_block over block_tasks, _IV_ORDER inside),
 # and numbering it 1-based reproduces the repo-wide spec ids of
 # estimation_demand_link_common.SPEC_MAP -- 1-4 Base, 5-8 Macro, 9-12 Tech, so "spec 12" is
-# IV_HausmanFull x Tech everywhere: here, in the demand parquets, and in the CF exports.
+# IV_RivalSpread x Tech everywhere: here, in the demand parquets, and in the CF exports.
 # _check_spec_ids() enforces that agreement rather than trusting it.
 #
 # The single-index kinds do not estimate the Base block (a constant-only index has no
@@ -174,7 +174,7 @@ def _check_spec_ids():
 def resolve_spec_id(token, kind, time_block=False):
     """Accept a 1-based spec id OR a spec name -> (spec_id, iv_name, s_name, spec_name).
 
-    Names may be given in any case and with loose spacing ("iv_hausmanfull x tech")."""
+    Names may be given in any case and with loose spacing ("iv_rivalspread x tech")."""
     _check_spec_ids()
     grid = spec_grid(kind, time_block=time_block)
     by_id = {sid: (sid, iv, s) for sid, iv, s in grid}
@@ -236,8 +236,8 @@ def _exec_spec(args):
     has_cf = len(iv_cols) > 0
     spec_name = f"{iv_name} x {s_name}"
     # The single-index link comparison in the time-series report uses spec 12
-    # (IV_HausmanFull x Tech); compute its national phi_t CI band in the main routine.
-    is_spec12 = (iv_name == "IV_HausmanFull" and s_name == "Tech")
+    # (IV_RivalSpread x Tech); compute its national phi_t CI band in the main routine.
+    is_spec12 = (iv_name == "IV_RivalSpread" and s_name == "Tech")
     # SLEEP_PHI_BAND_ALL=1: compute the national phi_t bootstrap band for EVERY spec, not just
     # spec 12. Off by default because the band costs min(boot_B,400) extra draws per spec and
     # only spec 12 is reported; on when a full CI grid is wanted.
@@ -653,7 +653,7 @@ def run_sleep_estimator(est_num, kind, time_block=False, spec12_only=False, n_jo
             results = []
         else:
             results = [_exec_spec(
-                (df, "IV_HausmanFull", iv_specs["IV_HausmanFull"], "Tech",
+                (df, "IV_RivalSpread", iv_specs["IV_RivalSpread"], "Tech",
                  state_blocks["Tech"], kind))]
     else:
         # Opt 3: parallelise over the 3 state blocks; within each block the 4 instrument
@@ -745,11 +745,11 @@ if __name__ == "__main__":
     p = argparse.ArgumentParser(description="Pooled sleepiness estimators E3/E4 (config-driven).")
     p.add_argument("--est", type=int, required=True, choices=sorted(EST_CONFIG),
                    help="Estimator id 3 or 4 (single-index, without / with the Time block)")
-    p.add_argument("--spec12", action="store_true", help="Only run spec 12 (Tech[+Time] x IV_HausmanFull)")
+    p.add_argument("--spec12", action="store_true", help="Only run spec 12 (Tech[+Time] x IV_RivalSpread)")
     p.add_argument("--spec-id", metavar="S",
                    help="Run ONE spec into est{N}/_specs/spec_{S}.pkl and touch nothing else. "
                         "S is a 1-based grid id (SPEC_MAP numbering: 1-4 Base, 5-8 Macro, "
-                        "9-12 Tech) or a spec name such as 'IV_HausmanFull x Tech'.")
+                        "9-12 Tech) or a spec name such as 'IV_RivalSpread x Tech'.")
     p.add_argument("--merge-specs", action="store_true",
                    help="Fold est{N}/_specs/spec_*.pkl into estimation_results.pkl and rebuild "
                         "the band + phi CSVs. The only writer of those files.")

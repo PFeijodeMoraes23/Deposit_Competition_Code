@@ -22,7 +22,7 @@ estimators exhaust Windows' non-paged pool.
 r_4 is the share of a bank's time-deposit balances that cannot move within the quarter. Two
 bounds, both reported (user decision of 2026-10-13):
   r4_hi  CONTRACTUAL: time deposits with remaining maturity beyond 90 days, from the statement
-         notes (raw/DEPOSIT_MATURITY/deposit_maturity_summary.csv, deposit_maturity_summary.py):
+         notes (raw/DEPOSIT_MATURITY/deposit_maturity_summary.csv, `scrape_deposit_maturity.py summary`):
          1 - share_no_maturity - share_le90. An upper bound: a long CDB with daily liquidity
          counts here although it can be redeemed at any time.
   r4_lo  EARLIEST WITHDRAWAL: retail funding withdrawable only after six months or more, as a
@@ -87,7 +87,7 @@ from utils.switch_cost_sleep_links import NonLinearResults  # noqa: F401 (unpick
 REPO = Path(__file__).resolve().parent
 BASE = switch_cost_sandbox.LOCAL_BASE
 LOGS = BASE / "logs"
-SPEC12 = "IV_HausmanFull x Tech"
+SPEC12 = "IV_RivalSpread x Tech"
 TYPES = {1: "demand", 2: "savings", 4: "time", 5: "prepaid"}
 ARMS = ["pooled", "F1", "F3hi", "F3lo"]
 TAG = {3: "index", 4: "index_time"}

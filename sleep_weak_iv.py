@@ -36,8 +36,8 @@ This module therefore reports FOUR non-redundant objects per instrument spec x d
      generated-regressor correction vanishes, so the WCB t-test of gamma = 0 is a valid few-cluster
      endogeneity test; for gamma != 0 the interval understates uncertainty (v_hat treated as data).
 
-  4. (phi) "DO WE NEED IT" MATERIALITY TEST (spec 12 = IV_HausmanFull x Tech) -- reconstruct the
-     national deposit-weighted phi_t under OLS (no CF) vs IV_HausmanFull (CF) on BOTH link shapes
+  4. (phi) "DO WE NEED IT" MATERIALITY TEST (spec 12 = IV_RivalSpread x Tech) -- reconstruct the
+     national deposit-weighted phi_t under OLS (no CF) vs IV_RivalSpread (CF) on BOTH link shapes
      the estimator can carry -- the logit and the shape-constrained monotone sieve (the reported
      E3/E4 link) -- on the COMMON sample (rows where the instruments exist); report
      Pearson/Spearman correlation, mean|delta|, and trend direction.
@@ -54,7 +54,7 @@ code -- reads/calls only.
 Writes cluster_processed/weak_iv_sleep.json and a methodology note under DIAG_WEAK_IV_SLEEP/.
 
 Run:  python sleep_weak_iv.py [BLP_RESULTS_dir]
-        [--specs IV_CostShifters,IV_Wholesale,IV_HausmanFull] [--subsamples type45,type4,type5]
+        [--specs IV_CostShifters,IV_Wholesale,IV_RivalSpread] [--subsamples type45,type4,type5]
         [--skip-sieve] [--phi-only]
 """
 import os
@@ -92,17 +92,17 @@ from utils import routines as R
 CLUSTER_KEY = "CodConglomeradoPrudencial"
 ENDOG_TYPES = [4, 5]
 SUBSAMPLES = ["type45", "type4", "type5"]
-SPEC_ORDER = ["IV_CostShifters", "IV_Wholesale", "IV_HausmanFull"]   # OLS has no instruments -> skipped
+SPEC_ORDER = ["IV_CostShifters", "IV_Wholesale", "IV_RivalSpread"]   # OLS has no instruments -> skipped
 HEADLINE_STATE = "Tech"                                              # spec 12 state block
 
 # Named instrument GROUPS for the leave-one-group-out sensitivity (swapped into wiv.IV_GROUPS).
-# `hausman` = the Hausman leave-one-out mean spread (the single strongest instrument);
+# `rival` = the rival mean spread (the other conglomerates in the same market, type and quarter);
 # `wholesale` = the wholesale-funding block; `cost` = the cost shifters; `capital` = Basileia.
 SLEEP_IV_GROUPS = {
     "cost":      ["personnel_cost_ratio_lag", "admin_cost_ratio_lag", "tax_cost_ratio_lag"],
     "wholesale": ["lci_lca_ratio_lag", "wholesale_ratio_lag"],
     "capital":   ["indice_basileia_lag"],
-    "hausman":   ["leave_one_out_mean_spread"],
+    "rival":     ["rival_mean_spread"],
 }
 
 
@@ -391,7 +391,7 @@ def _print_cell(report, spec, sub, rec):
 
 
 def _print_phi(report, phi_block):
-    _say(report, "\n--- phi \"do we need it?\" (spec 12 = IV_HausmanFull x Tech; deposit-weighted, common sample) ---")
+    _say(report, "\n--- phi \"do we need it?\" (spec 12 = IV_RivalSpread x Tech; deposit-weighted, common sample) ---")
     for link in ("logit", "sieve"):
         s = phi_block.get(link)
         if not s:
@@ -408,7 +408,7 @@ def _print_phi(report, phi_block):
 # ---------------------------------------------------------------------------
 def _write_markdown(out, diag_dir, report_lines):
     diag_dir.mkdir(parents=True, exist_ok=True)
-    h = out.get("IV_HausmanFull", {}).get("type45", {})
+    h = out.get("IV_RivalSpread", {}).get("type45", {})
     fs_p = h.get("first_stage_strength", {}).get("pooled", {})
     fs_t = h.get("first_stage_strength", {}).get("twoway", {})
     phi = out.get("phi_need_test", {})
@@ -435,7 +435,7 @@ def _write_markdown(out, diag_dir, report_lines):
         "3. **phi materiality**: does instrumenting move the reconstructed national deposit-weighted "
         "phi_t path (logit and shape-constrained monotone sieve links, common sample)?",
         "",
-        "## Headline numbers (spec 12 = IV_HausmanFull x Tech, types 4+5)",
+        "## Headline numbers (spec 12 = IV_RivalSpread x Tech, types 4+5)",
     ]
     def g(d, k, fmt="{:.2f}"):
         v = d.get(k)
@@ -518,7 +518,7 @@ def analyze(df, iv_specs, state_blocks, specs, subsamples, report):
 
 
 def run_phi_tests(df, iv_specs, state_blocks, skip_sieve, report):
-    iv12 = iv_specs["IV_HausmanFull"]
+    iv12 = iv_specs["IV_RivalSpread"]
     state_full = state_blocks[HEADLINE_STATE]
     phi = {}
     _say(report, "\n[sleep-IV] phi \"do we need it\" test (spec 12) -- fitting logit ...")

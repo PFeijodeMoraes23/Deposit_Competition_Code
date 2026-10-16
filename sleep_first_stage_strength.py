@@ -18,7 +18,7 @@ Nothing is estimated. Each stored first stage is taken as it was run -- the spre
 constant and state controls, the excluded instruments and the conglomerate clusters are read
 off the fit object -- and handed to blp_weak_iv._fs_F, the function sleep_weak_iv.py uses for
 its "pooled" first-stage strength. Per routine (E1, E2, ...) and specification
-("IV_HausmanFull x Tech", ...) the file holds
+("IV_RivalSpread x Tech", ...) the file holds
 
   eff_F         effective F of the excluded instruments (Montiel Olea and Pflueger 2013),
                 conglomerate-clustered, after partialling out the constant and the controls
@@ -91,7 +91,7 @@ def load() -> dict:
 
 def eff_f(est, spec_key):
     """Effective F of routine `est` under specification `spec_key`
-    (e.g. 'IV_HausmanFull x Tech'), or None when the file holds no finite value for it."""
+    (e.g. 'IV_RivalSpread x Tech'), or None when the file holds no finite value for it."""
     try:
         cell = load().get(routine_key(est), {}).get(spec_key, {})
     except (TypeError, ValueError):       # `est` is not a routine id

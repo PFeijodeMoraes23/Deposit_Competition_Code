@@ -14,17 +14,27 @@ local-competition shifter of the deposit markdown that is plausibly excluded fro
 (BLP rival-characteristic logic) and, unlike the accounting instruments, is independent (own VIF ~5)
 and relevant (own cluster-robust first-stage F ~10 for demand deposits). See scratchpad diagnostics.
 
-CONSTRUCTION (matches the validated diagnostic).  For each firm i in local market cell (mca, quarter):
-    estban_rival_branches_lag = log1p( Σ_{j≠i} branches_j )   (rivals in the same MCA, lagged one qtr)
+CONSTRUCTION.  For each firm i in local market cell (mca, quarter t):
+    estban_rival_branches_lag = log1p( Σ_{j≠i} branches_j at t-1 )   (rivals in the same MCA)
 Branches are summed to (conglomerate, mca, quarter); CNPJ→conglomerate via the IF-Data List
 crosswalk (cosif_process_2_calibrate helpers); CODMUN_IBGE→mca via the IBGE MCA crosswalk. The
-instrument is LAGGED one quarter (predetermined branch network → strengthens the exclusion argument)
-and log1p-transformed (branch counts are right-skewed).
+instrument is LAGGED one CALENDAR quarter (predetermined branch network → strengthens the exclusion
+argument): the value on (i, mca, t) is the rival count ESTBAN reports for (i, mca, t-1) exactly, so
+a gap in the source never pulls in an earlier quarter. log1p because branch counts are right-skewed.
+
+B-ONLY INSTRUMENT.  This is a branch-network instrument, defined for brick-and-mortar firms
+(is_B == 1). Digital firms (is_B == 0) have no branch network, so their rows carry 0 by
+construction, not because data are missing.
+
+MISSING B ROWS.  A B row whose (conglomerate, mca, t-1) has no ESTBAN record has no measured rival
+count: it is left NaN and flagged estban_rival_branches_missing = 1 (0 on every other row, D rows
+included). A NaN here is missing data, never "no rival branches".
 
 PIPELINE PLACEMENT.  Run AFTER panel_loo_instruments.py (which overwrites market_panel.csv with the LOO
 instruments) and BEFORE panel_fee_merge.py --patch-market (which passes all columns through to
-market_panel_with_fees.csv). Adds ONE column, keyed on (CodConglomeradoPrudencial, mca_code, year,
-quarter); the merge is 1:1 with the wide market panel. Idempotent: re-running overwrites the column.
+market_panel_with_fees.csv). Adds TWO columns (the instrument and its missing flag), keyed on
+(CodConglomeradoPrudencial, mca_code, year, quarter); the merge is 1:1 with the wide market panel.
+Idempotent: re-running overwrites both columns.
 
 Usage:  python panel_estban_instrument.py
 """
@@ -34,21 +44,21 @@ import numpy as np
 import pandas as pd
 
 from utils import paths
-import panel_cosif_calibrate as cc
-
+from utils import conglomerates as cc
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
 PANEL_CSV = paths.PROCESSED / "market_panel.csv"
 ESTBAN_CSV = paths.ESTBAN_CSV
 MCA_XWALK = paths.IBGE_DIR / "muni_mca_regions_2010_2024_panel.csv"
 INSTRUMENT = "estban_rival_branches_lag"
+MISSING_FLAG = "estban_rival_branches_missing"   # 1 = B row with no ESTBAN record at t-1
 KEYS = ["CodConglomeradoPrudencial", "mca_code", "year", "quarter"]
 # Own branch counts per (conglomerate, MCA, quarter). Computed here anyway as the input to the
 # leave-one-out rival count; persisted as a sidecar because it is the only branch-network
 # series at market granularity in the project. sleep_ident_entry_dynamics.py uses it to date entry
 # by BRANCHES rather than by deposits, which screens out markets where deposits are booked
 # before any branch exists (the analogue of Egan et al.'s Summary-of-Deposits caveat).
-# Sidecar only -- market_panel.csv keeps exactly the one instrument column it had before.
+# Sidecar only -- own_br is not added to market_panel.csv.
 OWN_BRANCH_SIDECAR = paths.PROCESSED / "PANEL_INTERMED" / "estban_own_branches.csv"
 
 
@@ -101,17 +111,41 @@ def build_estban_rival_branches() -> pd.DataFrame:
         logging.warning(f"branch sidecar not written ({e}); step_entry_dynamics will "
                         "fall back to --no-branch-screen")
 
-    # Lag one quarter within (conglomerate, mca); log1p.
-    own = own.sort_values([C, M, "year", Q])
-    lagged = own.groupby([C, M])["rival_br"].shift(1)
-    own[INSTRUMENT] = np.log1p(lagged.fillna(0.0))
-    own[C] = own[C].astype(str)
-    out = own[[C, M, "year", Q]].copy()
-    out.columns = KEYS
-    out[INSTRUMENT] = own[INSTRUMENT].to_numpy()
+    # Calendar lag: every (conglomerate, mca, quarter s) record is re-keyed to the next calendar
+    # quarter s+1, so the value on key t is the rival count observed at t-1 exactly. A key t
+    # exists only if ESTBAN reports (conglomerate, mca) at t-1; the panel merge leaves the rest
+    # unmatched. log1p.
+    q_next = own["year"].astype(int) * 4 + (own[Q].astype(int) - 1) + 1
+    out = pd.DataFrame({C: own[C].astype(str).to_numpy(), M: own[M].to_numpy(),
+                        "year": (q_next // 4).to_numpy(), Q: (q_next % 4 + 1).to_numpy(),
+                        INSTRUMENT: np.log1p(own["rival_br"].to_numpy(dtype=float))})
+    out.columns = KEYS + [INSTRUMENT]
     logging.info(f"Built {INSTRUMENT}: {len(out):,} conglomerate-mca-quarters, "
-                 f"years {int(own['year'].min())}-{int(own['year'].max())}")
+                 f"years {int(out['year'].min())}-{int(out['year'].max())} (t-1 source "
+                 f"{int(own['year'].min())}-{int(own['year'].max())})")
     return out
+
+
+def attach_instrument(panel: pd.DataFrame, inst: pd.DataFrame) -> pd.DataFrame:
+    """Merge the instrument onto the panel; set D rows to 0, leave unmatched B rows NaN + flagged."""
+    panel = panel.drop(columns=[c for c in (INSTRUMENT, MISSING_FLAG) if c in panel.columns])
+    merged = panel.merge(inst, on=KEYS, how="left", validate="many_to_one")
+    is_b = pd.to_numeric(merged["is_B"], errors="coerce")
+    b_rows, d_rows = (is_b == 1).to_numpy(), (is_b == 0).to_numpy()
+    n_match_b = int((b_rows & merged[INSTRUMENT].notna().to_numpy()).sum())
+    # B-only instrument: D firms have no branch network, so 0 on D rows is by construction
+    # (whether or not ESTBAN lists a branch for the D conglomerate in that MCA).
+    merged.loc[d_rows, INSTRUMENT] = 0.0
+    # A B row with no ESTBAN record at t-1 has no measured rival count: NaN, flagged 1.
+    miss = b_rows & merged[INSTRUMENT].isna().to_numpy()
+    merged[MISSING_FLAG] = miss.astype("int8")
+    n_other_nan = int((~b_rows & ~d_rows & merged[INSTRUMENT].isna().to_numpy()).sum())
+    logging.info(f"Merged {INSTRUMENT} onto {len(merged):,} panel rows: B {int(b_rows.sum()):,} "
+                 f"({n_match_b:,} matched ESTBAN at t-1, {int(miss.sum()):,} NaN + "
+                 f"{MISSING_FLAG}=1); D {int(d_rows.sum()):,} set to 0 by construction")
+    if n_other_nan:
+        logging.warning(f"{n_other_nan:,} rows with is_B neither 0 nor 1 hold a NaN {INSTRUMENT}")
+    return merged
 
 
 def main() -> None:
@@ -126,13 +160,7 @@ def main() -> None:
     inst["CodConglomeradoPrudencial"] = inst["CodConglomeradoPrudencial"].astype(str)
     inst["mca_code"] = inst["mca_code"].astype(str)
 
-    if INSTRUMENT in panel.columns:                       # idempotent re-run
-        panel = panel.drop(columns=[INSTRUMENT])
-    merged = panel.merge(inst, on=KEYS, how="left")
-    n_match = merged[INSTRUMENT].notna().sum()
-    merged[INSTRUMENT] = merged[INSTRUMENT].fillna(0.0)   # rows without ESTBAN match → 0 rival branches
-    logging.info(f"Merged {INSTRUMENT} onto {len(merged):,} panel rows "
-                 f"({n_match:,} = {n_match / len(merged):.1%} matched ESTBAN)")
+    merged = attach_instrument(panel, inst)                # drops both columns first: idempotent
 
     merged.to_csv(PANEL_CSV, index=False)
     # Keep the Parquet sidecar in step with the CSV. estimation_1_sleep reads the panel

@@ -90,7 +90,7 @@ def main():
     df = build_pooled_data(time_block=tb)
     _, iv_specs, state_blocks = define_specifications(time_block=tb)
     s_cols = state_blocks["Tech"]
-    iv_act = [c for c in iv_specs["IV_HausmanFull"]
+    iv_act = [c for c in iv_specs["IV_RivalSpread"]
               if c in df.columns and df[c].notnull().sum() > 0]
     exog = [c for c in s_cols if c in df.columns and df[c].notnull().sum() > 0]
     dft, _ = run_pooled_first_stage(df, iv_act, exog)

@@ -20,7 +20,7 @@ Two kinds of output, kept apart on purpose:
       absorb. This is the selection evidence.
 
   (b) LEVEL -- reported sensitivity, not selection. Per block, the linear routine E2 and the
-      single-index routine E3 at spec 12 (Hausman instruments): phi at the unweighted average
+      single-index routine E3 at spec 12 (rival-spread instruments): phi at the unweighted average
       market, phi at the lagged-deposit-weighted average market, the population-weighted
       national mean phi (the paper's "Mean phi-hat"), the minimum-variance point of the E2
       level and the shares of phi_mt above 1 and of phi * g at or above 1. E3 adds its AMEs and
@@ -71,7 +71,7 @@ from utils.sleep_links import fit_nlls_link, fit_single_index, phi_from_native
 OUT = _paths.diag_dir("STATE_SELECTION")
 SPEC12 = R.SPEC12
 SPEC12_TAG = R.SPEC12_TAG
-INSTRUMENTS = define_specifications()[1]["IV_HausmanFull"]
+INSTRUMENTS = define_specifications()[1]["IV_RivalSpread"]
 
 # Candidate states. Every block below is the constant plus a subset of these.
 PROD = ["pix_exists", "cadunico_families_per1000", "fraction_65plus",

@@ -212,7 +212,7 @@ PREP = Path(os.environ["SLEEP_OUT_ROOT"])
 DEMAND = Path(os.environ["DEMAND_PREP_DIR"]) if os.environ.get("DEMAND_PREP_DIR") else None
 SPEC = os.environ.get("SPEC", "12")
 KS = [int(x) for x in os.environ.get("SLEEP_GATE_ROUTINES", "3 4").replace(",", " ").split()]
-SPEC_KEY = "IV_HausmanFull x Tech"
+SPEC_KEY = "IV_RivalSpread x Tech"
 EXPECT_2S = os.environ.get("SLEEP_AME_TWOSTAGE", "0") == "1"
 NAME = f"{GATE}_{VARIANT}" if GATE == "G1" else f"{GATE}_{ARM}"
 
@@ -221,13 +221,13 @@ for _p in [PREP] + ([DEMAND] if DEMAND else []):
         raise SystemExit(f"gate: {_p} is not a switch-cost folder; refusing to read it.")
 
 # The LOCAL switch-cost fits of 2026-10-13, in percentage points: exactly
-# mean(phi_t_IV_HausmanFull_x_Tech) * 100 over each variant's national_phi_t.csv (same code, same
+# mean(phi_t_IV_RivalSpread_x_Tech) * 100 over each variant's national_phi_t.csv (same code, same
 # data). The local pooled values equal the local production files to four decimals. For the
 # typeshift variant this national path averages the four types' phi with equal weight per market
 # row, so it is a check value, not an estimand. REPORT-ONLY either way.
 PROMOTED_PHI_PP = {"pooled": {3: 98.2638, 4: 98.1471}, "typeshift": {3: 92.0371, 4: 91.1434}}
 PHI_TOL_PP = 0.05
-PHI_COL = "phi_t_IV_HausmanFull_x_Tech"
+PHI_COL = "phi_t_IV_RivalSpread_x_Tech"
 
 # Columns the RC-BLP engine and every CF read out of the demand parquet.
 DEMAND_COLS = ["phi_mt", "pix_exists", "entity_id", "time_id", "spread_ann",

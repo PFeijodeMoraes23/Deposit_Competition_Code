@@ -45,12 +45,13 @@ active = [1, 2, 3, 4]
 # routine set for the cluster BLP and BBL runs and for every table built from their artifacts.
 link_ests = [3, 4]
 
-# The headline specification: Tech block x the full Hausman instrument set.
+# The headline specification: Tech block x the full instrument set, the one that adds the
+# rival mean spread (the mean spread of the other conglomerates in the same market, type and quarter).
 # `spec12`     the key the estimation pickles and results dicts are stored under
 # `spec12_tag` the same name made column-safe, as in phi_mt_{spec12_tag} / phi_t_{spec12_tag}
 # `spec12_id`  its 1-based id in the spec grid (SPEC_MAP numbering: 1-4 Base, 5-8 Macro, 9-12 Tech)
-spec12     = 'IV_HausmanFull x Tech'
-spec12_tag = 'IV_HausmanFull_x_Tech'
+spec12     = 'IV_RivalSpread x Tech'
+spec12_tag = 'IV_RivalSpread_x_Tech'
 spec12_id  = 12
 
 # The panel's quarter identifier, passed as `fe_time_col` to every two-way-FE fit.

@@ -65,7 +65,7 @@ def fit_cell(df, s_cols, loss, tb):
     """One full estimation of the constrained single index: first stage, logit direction,
     shape-constrained link. Mirrors estimation_sleep_common._exec_spec's single_index path."""
     _, iv_specs, _ = define_specifications(time_block=tb)
-    iv_act = [c for c in iv_specs["IV_HausmanFull"]
+    iv_act = [c for c in iv_specs["IV_RivalSpread"]
               if c in df.columns and df[c].notnull().sum() > 0]
     exog_act = [c for c in s_cols if c in df.columns and df[c].notnull().sum() > 0]
     dft, _ = run_pooled_first_stage(df, iv_act, exog_act)

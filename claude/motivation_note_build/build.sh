@@ -2,8 +2,9 @@
 # Build motivation_figures_review.pdf from its md (Git Bash; pandoc + MiKTeX xelatex on PATH).
 # Usage: bash build.sh [build_dir]. The build dir defaults to a folder under $TEMP, outside
 # OneDrive. Figure PDFs are copied there from the note's folder, Drafts/Deposit Competition
-# (prof.lua swaps each PNG in the md for its PDF twin by bare name). Stops if xelatex reports
-# an overfull line.
+# (prof.lua swaps each PNG in the md for its PDF twin by bare name). The md's sections start at
+# ## because its YAML title is the document's one level-1 heading (markdownlint MD025), so pandoc
+# shifts every heading up one level. Stops if xelatex reports an overfull line.
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 OF="$(cd "$HERE/../../../.." && pwd)"
@@ -19,6 +20,7 @@ grep -o '](<[^>]*\.png>)' "$NOTE_DIR/motivation_figures_review.md" \
 cd "$NOTE_DIR"
 pandoc motivation_figures_review.md -o "$B/note.tex" \
   --from markdown-implicit_figures-raw_tex --lua-filter "$HERE/prof.lua" \
+  --shift-heading-level-by=-1 \
   --standalone --number-sections --toc --toc-depth=2 -H "$HERE/prof_header.tex" \
   -V documentclass=article -V geometry:margin=2.5cm -V fontsize=11pt -V linestretch=1.15 \
   -V colorlinks=true -V linkcolor=black -V urlcolor=blue \

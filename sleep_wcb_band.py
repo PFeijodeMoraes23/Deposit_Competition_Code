@@ -54,7 +54,7 @@ from utils import se_national as _sen                                  # noqa: E
 from utils.sleep_links import boot_cfg, linear_wild_cluster_bootstrap  # noqa: E402
 
 SPEC = _routines.SPEC12
-IV_NAME, S_NAME = "IV_HausmanFull", "Tech"
+IV_NAME, S_NAME = "IV_RivalSpread", "Tech"
 PARAM_TOL = 1e-10
 
 

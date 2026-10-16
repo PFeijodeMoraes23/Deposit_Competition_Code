@@ -5,6 +5,12 @@
 evidence: interpret it, stress-test it, reconcile it with the model, and propose what to do next;
 (b) a session that resumes the work (section 9 lists the state, the files and what is pending).
 
+**UPDATE 2026-10-15 (read first):** Pedro removed the Figure 2 robustness analysis (evidence G,
+the note's section 4.8, Figure 15, Table 10, `diagnostics/diag_entry_concentration.py` and its
+outputs) and the interquartile-range version of Figure 1 (Figure 1 is now the +/-1 SD band). G is
+kept below as a record only: its files no longer exist. The current state of the note, with the
+construction of every exhibit, is in `claude/motivation_note_writing_handoff_2026-10-15.md`.
+
 **Rules:** V_Main.tex is edited by the author only. The deck
 (`Drafts/Presentations/Deposit Competition/2026-10-06/Presentation-2026-10-06.tex`) is open in
 TeXstudio and is never edited. The data pipeline is read-only. Use
@@ -14,13 +20,13 @@ Do not mention or use git unless Pedro asks. Bring open choices to Pedro as ques
 **Reader-facing write-up of everything below:**
 `Drafts/Deposit Competition/motivation_figures_review.pdf` (37 pages, written for professors; md
 source next to it; moved there from `Drafts/Presentations/Deposit Competition` at 18:00 on
-Pedro's request). Its eleven tables also exist as LaTeX bodies, `tab_motiv_*.tex`, in the same
+Pedro's request). Its ten tables also exist as LaTeX bodies, `tab_motiv_*.tex`, in the same
 folder (section 9). Every number below is also a `\pn` key under `slide.motiv.*` in
 `paper_numbers_macros.tex`; `PAPER_NUMBERS/paper_numbers.md` lists them with definitions.
 
 ## 0. Basis
 
-```
+```text
 files[15]{file,role,saved}:
   BCB/.../processed/market_panel.parquet,all inputs (08-26 build; not rebuilt since),08-26 18:23
   Code/.../make_slide_figures.py,every chart + the sidecar + the tab_motiv_*.tex tables,10-13 18:15
@@ -34,7 +40,7 @@ files[15]{file,role,saved}:
   .../DIAG_PHI_SEPARATION/d6_implied_phi.csv,paper's phi_entry,10-12 18:33
   .../PAPER_NUMBERS/paper_numbers_macros.tex,slide.motiv.* keys (1,521 values; only additions),10-13 17:09
   Drafts/Deposit Competition/motivation_figures_review.{md,pdf},professor-facing note (37 pp),10-13 18:26
-  Drafts/Deposit Competition/tab_motiv_*.tex,the note's 11 tables as booktabs bodies,10-13 18:16
+  Drafts/Deposit Competition/tab_motiv_*.tex,the note's 10 tables as booktabs bodies,10-13 18:16
   Code/.../claude/motivation_note_build/,build.sh + splice_anova.py + prof.lua + prof_header.tex,10-13 18:05
   Code/.../claude/entry_paths_handoff_2026-10-12.md,the Figure 2 session's handoff,10-12 19:02
 ```
@@ -46,7 +52,7 @@ differs from this brief.
 ## 1. Ground truth (what the code does)
 
 | Element | What the code does | Where |
-|---|---|---|
+| --- | --- | --- |
 | Sample | 2016Q1–2024Q4 (`utils/window.py`), paper sample via `mdt.prepare_panel` (no dep_a5/spread_a5 before 2020Q4) | `make_slide_figures.motiv_panel` L.643 |
 | Firm types | B = branch banks, balances by municipality (ESTBAN) aggregated to MCAs; D = digital, national rows (IF.Data, `mca_code` NATIONAL) | `is_B` column, panel_6 |
 | Spread | Selic minus deposit rate, compounded: 100·[(1+rf)^4 − (1+r)^4], pp | `mdt.annualized_spread_pp` |
@@ -60,7 +66,7 @@ differs from this brief.
 
 ## 2. Methods by analysis (one line each)
 
-```
+```text
 analyses[9]{id,question,method,chart}:
   A,dispersion across B banks,Table A.4-weighted SD and P25-P75 of the type-4 spread by year,fig_slide_selic_timedep_all_{sd,iqr}
   B,prices vs balances,quarterly spreads/rates by type (bank means with WCB bands) and shares of balances; hiking cycle from the Selic target,fig_slide_motiv_{spreads,shares,rates}_by_type
@@ -81,7 +87,7 @@ quarter, 2016Q3, spread −34 pp).
 
 **B. Prices vs balances, hiking cycle 2020Q4 → 2022Q3 (Selic target 2.00 → 13.75).**
 
-```
+```text
 hikes[9]{series,2020Q4,2022Q3}:
   demand spread (= Selic) pp,1.961,14.145
   savings spread pp,0.552,5.570
@@ -100,7 +106,7 @@ half-width of the quarterly bank means: B 1.905 pp, D 2.130 pp.
 
 **C. Relative prices across B banks (B firms with an own rate; top 5 hold 81.3% of B time deposits).**
 
-```
+```text
 decomposition[3]{price,common,bank_persistent,rest}:
   spread pp,0.308,0.325,0.367
   rate % of CDI,0.385,0.251,0.364
@@ -119,7 +125,7 @@ relprice_slopes[9]{test,slope,ci95,n,banks}:
 
 **D. Own repricing (slope = % of time deposits per pp of spread change).**
 
-```
+```text
 reprice[6]{firms,growth_window,slope,ci95,n,banks}:
   B,next 4 quarters (main),-0.536,[-1.110 0.066],1349,63
   B,next 4 quarters untrimmed,-0.133,[-0.576 0.345],1408,63
@@ -138,7 +144,7 @@ quarterly intervals exclude zero; D share of time deposits 4.1 → 15.1% (1.2 pp
 **F. Entrants by price at entry (window rule: 201 kept B entries, 198 followed 12 quarters).**
 Entrants paying more than incumbents: 62.2% (median gap 1.26 pp); at least 1 pp more: 53.7%.
 
-```
+```text
 entry[4]{group,h4,h8,h12,ci_h12_bank_bootstrap}:
   normalized pays>=1pp more (107 entries 9 banks),0.505,0.808,1.044,[0.919 1.050]
   normalized rest (91 entries 14 banks),0.457,0.770,1.058,[0.966 1.097]
@@ -151,7 +157,7 @@ suggested a difference. The bank bootstrap erases it. Six banks sit in both grou
 
 **G. Figure 2 robustness (paper's own estimator, reproduced exactly first).**
 
-```
+```text
 phi_entry[6]{variant,estimate,ci95,entries,banks}:
   all entries / events resampled (paper),0.914,[0.891 0.937],198,17
   all entries / banks resampled,0.914,[0.882 0.9985],198,17
@@ -172,7 +178,7 @@ variance and co-movement tables** (`make_slide_figures.py --only relprice,anova`
 sections `relprice.decomposition_d`, `relprice.decomposition_by_period`, `anova`; tables written to
 `Rout/slide_anova_tables.md`).
 
-```
+```text
 decomp_more[8]{sample,common,bank_persistent,rest,n,banks}:
   D firms spread pp,0.232,0.282,0.487,1526,85
   B 2016-2018,0.148,0.391,0.461,654,59
@@ -193,7 +199,7 @@ comove_by_horizon[4]{firms,h1,h4,h8,h12}:
   B slope % per pp,-0.305***,0.345,1.453*,2.301***
   D slope,-0.098,0.452,1.606*,6.115***
   (change in gap vs change in log share over k quarters; quarter FE; h1 mechanically negative),,,,
-  B correlation,-0.208,-0.114,-0.068,-0.089
+  B correlation (balance-weighted since 10-15),-0.109,0.051,0.146,0.188
 covdecomp[2]{firms,cov,between_share,corr,corr_between,corr_within}:
   B,1.109,0.881,0.284,0.375,0.249
   D,0.760,0.733,0.124,0.159,0.134
@@ -213,7 +219,7 @@ paths now use a validated categorical palette with per-rank dashes.
 
 ## 4. Conclusions as I read them (with confidence)
 
-```
+```text
 conclusions[7]{claim,confidence,main_threat}:
   relative prices vary a lot and mostly at the national level,high,stock-rate measurement inflates idiosyncratic variance
   balances drift slowly against large price swings (savings share drift ~0.5-0.75 pp/q),high,drift predates the hikes; after-tax gap not computed
@@ -274,11 +280,12 @@ conclusions[7]{claim,confidence,main_threat}:
 
 ## 7. Open decisions for Pedro (not yours)
 
-```
+```text
 decisions[7]{item,status}:
   framing of the motivation slides (relative prices at ~1%/yr per pp vs not with price; now also the positive 12-quarter co-movement),open
   paper's Figure 2: bank-level interval and/or without-Santander robustness,open
   Figure 2 caption L.755 (other session's T1 replacement text),open; user pastes
+  V_Main L.739 s_end = average over quarters 10-12 (code: observed quarters only; 14 of 198 stop before q12),user edits himself (10-15)
   deck speaker-note comments with stale typed numbers (L.556 557 992 993),optional; user pastes
   which slides use which figure or table; Slide 3 reword,open
   prepaid spreads,DECIDED 10-13: basis points in Table 2
@@ -287,10 +294,9 @@ decisions[7]{item,status}:
 
 ## 8. Reproduce
 
-```
-commands[6]{what,command}:
-  Figure 2 robustness (first: entryrobust reads it),C:/venvs/egan/Scripts/python.exe diagnostics/diag_entry_concentration.py
-  every motivation chart + sidecar + tables,C:/venvs/egan/Scripts/python.exe make_slide_figures.py --only band,pricevol,reprice,dpremium,entrygap,relprice,entryrobust,anova,motivtables --png
+```text
+commands[5]{what,command}:
+  every motivation chart + sidecar + tables,C:/venvs/egan/Scripts/python.exe make_slide_figures.py --only band,pricevol,reprice,dpremium,entrygap,relprice,anova,motivtables --png
   keys (back up paper_numbers_macros.tex and diff after),C:/venvs/egan/Scripts/python.exe make_paper_numbers.py
   Tables 4-7 into the note's md,C:/venvs/egan/Scripts/python.exe claude/motivation_note_build/splice_anova.py
   the note's PDF (Git Bash; stops on any overfull line),bash claude/motivation_note_build/build.sh
@@ -321,8 +327,8 @@ booktabs body per table of the note, written by `make_slide_figures.py --only mo
 `tab_slide_deposit_types.tex`: no float, no caption, `\input` inside your own `table`. Needs
 `booktabs` only. Captions and notes stay in the note's md.
 
-```
-tables[11]{note_table,file,sidecar_section}:
+```text
+tables[10]{note_table,file,sidecar_section}:
   1 spread dispersion by year,tab_motiv_spread_dispersion.tex,band.by_year
   2 tightening (panels A spreads incl. prepaid bp / B shares),tab_motiv_tightening.tex,pricevol.hikes
   3 relative prices and share changes,tab_motiv_relprice_share.tex,relprice.share
@@ -332,8 +338,7 @@ tables[11]{note_table,file,sidecar_section}:
   7 local nested variance (B),tab_motiv_anova_local.tex,anova.local
   8 own repricing B and D,tab_motiv_reprice.tex,reprice + reprice_d
   9 entrants by price at entry (bank-bootstrap interval),tab_motiv_entry_by_gap.tex,entrygap
-  10 entry-implied sleeping share robustness,tab_motiv_phi_entry_robustness.tex,diag_entry_concentration.csv
-  11 (appendix) repricing sample construction,tab_motiv_reprice_samples.tex,reprice.waterfall + reprice_d.waterfall
+  10 (appendix) repricing sample construction,tab_motiv_reprice_samples.tex,reprice.waterfall + reprice_d.waterfall
 ```
 
 **Pending for Pedro (not for an agent):** the decisions in section 7. (The deprecated internal

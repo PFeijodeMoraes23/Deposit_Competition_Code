@@ -1857,8 +1857,7 @@ def render_variables_master(n_mcas: int) -> str:
 # the estimated sets exactly: the sleepiness first stage (nested IV sets in
 # estimation_2_sleep.define_specifications) and the K=16 demand vector
 # vcat(IV_BLP_LOO, IV_ESTBAN, IV_COST, IV_CAPITAL) in blp_engine_cpu.jl /
-# blp_logit.jl. leave_one_out_mean_spread (the Hausman IV) was previously
-# undocumented; the LOO lci/wholesale pairs listed in the old BLP-LOO table are
+# blp_logit.jl. The LOO lci/wholesale pairs are
 # NOT in the estimated demand vector and are therefore not printed.
 _STAGE_BOTH   = "Sleep 1st stage; Demand"
 _STAGE_SLEEP  = "Sleep 1st stage"
@@ -1877,8 +1876,8 @@ _INSTR_MASTER_GROUPS = [
     ("Capital adequacy (IF-Data Capital)", [
         (r"indice\_basileia\_lag", r"Basel index --- total regulatory capital ratio (IF-Data line 79664), lagged 1Q", _STAGE_BOTH),
     ]),
-    ("Hausman-style", [
-        (r"leave\_one\_out\_mean\_spread", r"Mean spread of the other conglomerate $\times$ market rows (MCA; national for D firms) in the same deposit type $\times$ quarter. Only the own row is left out, so the conglomerate's spreads in its other markets stay in", _STAGE_SLEEP),
+    ("Rival mean spread", [
+        (r"rival\_mean\_spread", r"Mean spread of the other conglomerates present in the same market (MCA; for D firms, the other D firms nationally), same deposit type $\times$ quarter", _STAGE_SLEEP),
     ]),
     (r"BLP leave-one-out rival characteristics, group $g=(\text{MCA},\text{quarter})$", [
         (r"loo\_log\_assets, mean\_loo\_log\_assets", r"LOO sum and mean of rival $\ln(\text{Total Assets}_{t-1})$", _STAGE_DEMAND),
@@ -1897,14 +1896,14 @@ _INSTR_MASTER_GROUPS = [
 def render_instruments_master() -> str:
     notes = NOTE_FONT + " " + table_note(
         r"``Sleep 1st stage'' instruments enter the deposit-spread equation under the nested "
-        r"IV sets (cost shifters $\subset$ wholesale $\subset$ Hausman); ``Demand'' instruments "
+        r"IV sets (cost shifters $\subset$ wholesale $\subset$ rival mean spread); ``Demand'' instruments "
         r"form the $K=16$ vector $Z_{jt}$ of the logit/BLP moment conditions.",
         r"The demand leave-one-out (LOO) instruments are built within group "
         r"$g=(\text{MCA},\text{quarter})$: $\texttt{loo\_x}_j=\sum_{l\in g,\,l\neq j}x_l$ and "
         r"$\texttt{mean\_loo\_x}_j=\texttt{loo\_x}_j/n_{\mathrm{rivals},j}$.",
-        r"The Hausman-style mean spread is built within deposit type and quarter over "
-        r"conglomerate $\times$ market rows (MCA; national for D firms), leaving out only the "
-        r"observation's own row.",
+        r"The rival mean spread is the mean spread of the other conglomerates present in the same "
+        r"market (MCA; national for D firms), deposit type and quarter; it is missing when the "
+        r"conglomerate has no rival in its market.",
     )
     rows = _grouped_rows(_INSTR_MASTER_GROUPS, n_cols=3)
     return _master_longtable(

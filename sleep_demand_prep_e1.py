@@ -376,9 +376,9 @@ def process_specification(args):
     df_spec = build_market_size_and_shares(df_spec)
 
     SPEC_MAP = {
-        'OLS x Base': 1, 'IV_CostShifters x Base': 2, 'IV_Wholesale x Base': 3, 'IV_HausmanFull x Base': 4,
-        'OLS x Macro': 5, 'IV_CostShifters x Macro': 6, 'IV_Wholesale x Macro': 7, 'IV_HausmanFull x Macro': 8,
-        'OLS x Tech': 9, 'IV_CostShifters x Tech': 10, 'IV_Wholesale x Tech': 11, 'IV_HausmanFull x Tech': 12
+        'OLS x Base': 1, 'IV_CostShifters x Base': 2, 'IV_Wholesale x Base': 3, 'IV_RivalSpread x Base': 4,
+        'OLS x Macro': 5, 'IV_CostShifters x Macro': 6, 'IV_Wholesale x Macro': 7, 'IV_RivalSpread x Macro': 8,
+        'OLS x Tech': 9, 'IV_CostShifters x Tech': 10, 'IV_Wholesale x Tech': 11, 'IV_RivalSpread x Tech': 12
     }
     spec_id = SPEC_MAP.get(spec_name, spec_name)
     df_spec['Spec_ID'] = spec_id
@@ -428,9 +428,9 @@ def main():
     spec_summaries = {}
 
     SPEC_MAP = {
-        1: 'OLS x Base', 2: 'IV_CostShifters x Base', 3: 'IV_Wholesale x Base', 4: 'IV_HausmanFull x Base',
-        5: 'OLS x Macro', 6: 'IV_CostShifters x Macro', 7: 'IV_Wholesale x Macro', 8: 'IV_HausmanFull x Macro',
-        9: 'OLS x Tech', 10: 'IV_CostShifters x Tech', 11: 'IV_Wholesale x Tech', 12: 'IV_HausmanFull x Tech'
+        1: 'OLS x Base', 2: 'IV_CostShifters x Base', 3: 'IV_Wholesale x Base', 4: 'IV_RivalSpread x Base',
+        5: 'OLS x Macro', 6: 'IV_CostShifters x Macro', 7: 'IV_Wholesale x Macro', 8: 'IV_RivalSpread x Macro',
+        9: 'OLS x Tech', 10: 'IV_CostShifters x Tech', 11: 'IV_Wholesale x Tech', 12: 'IV_RivalSpread x Tech'
     }
 
     results_pickle = sleep_output_dir / "estimation_results.pkl"

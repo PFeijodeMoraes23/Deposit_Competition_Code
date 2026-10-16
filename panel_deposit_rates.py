@@ -7,7 +7,8 @@
 #
 # Inputs:
 #   processed/deposits_panel.csv                    panel_deposits.py (step 14)
-#   SGS_RAW/macro_series_full.csv                   SGS series in SGS_CODES; staged out of band
+#   SGS_RAW/macro_series_full.csv                   SGS 11 Selic over, 432 Selic target, 4389 CDI,
+#                                                   226 TR; staged out of band (utils/macro_rates.py)
 #   IF-Data List files                              CNPJ -> prudential conglomerate
 #   COSIF_PROCESSED/custos_implicitos_*.csv         panel_cosif_extract.py (step 12)
 #   COSIF_PROCESSED/cosif_cdb_rate_corrected.csv    panel_cosif_calibrate.py (step 13)
@@ -26,7 +27,7 @@
 ## ---------------------------------------------------------------------------
 
 
-## 1) Load necesary packages and set folders up:
+## 1) Load necessary packages and set folders up:
 
 # Packages
 try:
@@ -45,29 +46,22 @@ import glob
 import time
 import pyarrow as pa
 import pyarrow.csv as pa_csv
-from logging.handlers import RotatingFileHandler
 
 # Folders
 from utils import paths
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-PARENT_DIR = os.path.abspath(os.path.join(SCRIPT_DIR, "..", ".."))
-BCB_PATH   = os.path.join(PARENT_DIR, "BCB")
+from utils.macro_rates import load_macro_series, make_quarterly_macro
+from utils.conglomerates import deposit_panel_codes
 
 # IF-Data List files: CNPJ -> Conglomerate mapping (monthly snapshots)
 IF_DATA_LIST_DIR = str(paths.IF_DATA_LIST)
 
 # Egan replication I/O paths
-EGAN_PATH      = os.path.join(BCB_PATH, "Egan_et_al_2025_Rep")
-RAW_PATH       = os.path.join(EGAN_PATH, "raw")
-SGS_PATH       = os.path.join(RAW_PATH, "SGS_RAW")
-PROCESSED_PATH = os.path.join(EGAN_PATH, "processed")
+PROCESSED_PATH = str(paths.PROCESSED)
 OUTPUT_PATH    = os.path.join(PROCESSED_PATH, "PANEL_INTERMED")
+DEPOSITS_CSV   = os.path.join(PROCESSED_PATH, "deposits_panel.csv")
 
 # COSIF processed output (from panel_cosif_extract.py)
 COSIF_PROCESSED_PATH = os.path.join(PROCESSED_PATH, "COSIF_PROCESSED")
-
-for _p in [RAW_PATH, SGS_PATH, PROCESSED_PATH, OUTPUT_PATH, COSIF_PROCESSED_PATH]:
-    os.makedirs(_p, exist_ok=True)
 
 # rate_a4 (type-4 / CDB) plausibility band, as a multiple of the CONTEMPORANEOUS Selic.  A CDB pays
 # ~90-115% of CDI; past a few multiples of Selic the implicit expense/stock ratio is broken, not a
@@ -75,63 +69,11 @@ for _p in [RAW_PATH, SGS_PATH, PROCESSED_PATH, OUTPUT_PATH, COSIF_PROCESSED_PATH
 # resort already in the rate_a4 chain).  See the guard near the rate_a4 assembly.
 RATE_A4_MAX_MULT = float(os.environ.get("RATE_A4_MAX_MULT", 3.0))
 
-# Logging
-_log_file = os.path.join(SCRIPT_DIR, "master_panel_build.log")
-_handler  = RotatingFileHandler(
-    _log_file, maxBytes=5 * 1024 * 1024, backupCount=3, encoding="utf-8"
-)
-logging.basicConfig(
-    handlers=[_handler],
-    level=logging.INFO,
-    format="%(asctime)s - %(levelname)s - %(message)s",
-)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
-## 2) Reference constants:
+## 2) User-defined functions:
 
-# -- BCB SGS series codes --
-SGS_CODES = {
-    "Selic_Over":     11,     # Overnight Selic (% per business day)
-    "Meta_Selic":     432,    # Selic target    (% per year)
-    "CDI_Anualizado": 4389,   # CDI annualized  (% per year)
-    "TR":             226,    # Taxa Referencial (% per month)
-}
-
-## 3) User-defined functions:
-
-# 3.1) Helper functions: 
-
-# 3.2) Data loading functions:
-
-def load_macro_series() -> pd.DataFrame:
-    """
-    Load daily macro series from the pre-downloaded SGS_RAW/macro_series_full.csv
-    (staged out of band; no script in this repo produces it).
-
-    Returns a DataFrame indexed by date with columns:
-        Selic_Over, Meta_Selic, CDI_Anualizado, TR
-    """
-    macro_file = os.path.join(SGS_PATH, "macro_series_full.csv")
-
-    if not os.path.exists(macro_file):
-        raise FileNotFoundError(
-            f"Macro series file not found: {macro_file}\n"
-            "No script in this repo downloads it: stage the SGS macro series there."
-        )
-
-    df = pd.read_csv(macro_file, index_col=0, parse_dates=True)
-
-    if df.empty:
-        raise ValueError(
-            f"Macro series file is empty: {macro_file}\n"
-            "Re-stage the SGS macro series; no in-repo script regenerates it."
-        )
-
-    # Ensure the index is a proper DatetimeIndex (handles CSV round-trip issues)
-    if not isinstance(df.index, pd.DatetimeIndex):
-        df.index = pd.to_datetime(df.index)
-
-    logging.info(f"Macro series loaded from {macro_file} ({len(df)} days)")
-    return df
+# 2.1) Data loading functions:
 
 def load_conglomerate_mapping(list_dir: str = IF_DATA_LIST_DIR) -> pd.DataFrame:
     """
@@ -239,6 +181,12 @@ def load_conglomerate_mapping(list_dir: str = IF_DATA_LIST_DIR) -> pd.DataFrame:
             "Payment Institutions"
         )
 
+    # Key each CNPJ by the code deposits_panel.csv files its deposits under
+    # (utils.conglomerates.deposit_panel_codes): an ESTBAN bank's static code in every quarter,
+    # otherwise the reported code, canonicalised. Any other key leaves quarters of a firm's
+    # deposits without their COSIF rate.
+    df_map["CodConglomeradoPrudencial"] = deposit_panel_codes(df_map["CNPJ"], df_map["CodConglomeradoPrudencial"])
+
     # Log coverage breakdown
     is_ccode = df_map["CodConglomeradoPrudencial"].str.startswith("C", na=False)
     n_congl = df_map.loc[is_ccode, "CodConglomeradoPrudencial"].nunique()
@@ -308,7 +256,7 @@ def load_cosif_processed(cosif_dir: str = COSIF_PROCESSED_PATH) -> pd.DataFrame:
     return df_cosif
 
 def load_ip_rates_processed(cosif_dir: str = COSIF_PROCESSED_PATH) -> pd.DataFrame:
-    """Load IP rates generated by cosif_process_2_ip_rates.py"""
+    """Load the payment-institution rates written by panel_ip_rates.py (step 15)."""
     fpath = os.path.join(cosif_dir, "ip_rates_quarterly.csv")
     if not os.path.exists(fpath):
         logging.warning("ip_rates_quarterly.csv not found. Re-run panel_ip_rates.py.")
@@ -629,7 +577,7 @@ def aggregate_cosif_to_conglomerates(
     else:
         df_agg["has_ip"] = 0
 
-    # Expose raw expense so build_panel can apply the residual method for Type 4
+    # Expose raw expense so append_rates_to_panel can apply the residual method for Type 4
     df_agg["cosif_desp_captacao"] = df_agg["Despesa_Captacao_Marginal"].abs()
 
     keep = [
@@ -645,80 +593,9 @@ def aggregate_cosif_to_conglomerates(
     )
     return result
 
-# 3.4) Macro rates:
-
-def make_quarterly_macro(df_macro: pd.DataFrame) -> pd.DataFrame:
-    """
-    Compound daily macro rates into quarter-over-quarter aggregates aligned
-    with IF-Data quarter-end months (3, 6, 9, 12).
-
-    Returns one row per quarter with:
-        AnoMes, selic_qoq, cdi_qoq, savings_rate_qoq, meta_selic
-    """
-    df = df_macro.copy()
-    df["year"]    = df.index.year
-    df["month"]   = df.index.month
-    df["q_month"] = ((df["month"] - 1) // 3 + 1) * 3   # 3, 6, 9, 12
-
-    rows = []
-    for (yr, qm), grp in df.groupby(["year", "q_month"]):
-        ano_mes = yr * 100 + qm
-
-        # ---- 1) Selic QoQ: compound daily overnight rates ----
-        selic = grp["Selic_Over"].dropna()
-        selic_qoq = (1 + selic / 100).prod() - 1 if len(selic) else np.nan
-
-        # ---- 2) CDI QoQ ----
-        # CDI_Anualizado is % p.a.  ->  daily rate = (1 + r_aa)^(1/252) - 1
-        cdi = grp["CDI_Anualizado"].dropna()
-        if len(cdi):
-            cdi_daily = (1 + cdi / 100) ** (1 / 252) - 1
-            cdi_qoq = (1 + cdi_daily).prod() - 1
-        else:
-            cdi_qoq = np.nan
-
-        # ---- 3) Meta Selic (end-of-quarter policy rate) ----
-        meta = grp["Meta_Selic"].dropna()
-        meta_selic = meta.iloc[-1] if len(meta) else np.nan
-
-        # ---- 4) TR (Taxa Referencial, % per month) ----
-        tr_col = "TR" if "TR" in grp.columns else "TR_Diaria"
-        tr = grp[tr_col].dropna() if tr_col in grp.columns else pd.Series(dtype=float)
-        avg_tr_monthly = tr.mean() if len(tr) else 0.0
-
-        # ---- 5) Savings-deposit rate (poupança) ----
-        #   Old rule (Selic > 8.5 %): TR + 0.5 % per month
-        #   New rule (Selic <= 8.5 %): TR + 70 % x Selic_target / 12
-        if pd.notna(meta_selic):
-            if meta_selic > 8.5:
-                monthly_component = 0.005               # fixed 0.5 % p.m.
-            else:
-                monthly_component = 0.70 * (meta_selic / 100) / 12
-            monthly_savings = avg_tr_monthly / 100 + monthly_component
-            savings_qoq = (1 + monthly_savings) ** 3 - 1
-        else:
-            savings_qoq = np.nan
-
-        rows.append({
-            "AnoMes":           ano_mes,
-            "selic_qoq":        selic_qoq,
-            "cdi_qoq":          cdi_qoq,
-            "savings_rate_qoq": savings_qoq,
-            "meta_selic":       meta_selic,
-        })
-
-    df_rates = pd.DataFrame(rows)
-    logging.info(f"Quarterly macro rates computed: {len(df_rates)} quarters")
-    return df_rates
-
-## 4) Append rates and spreads to the deposit panel:
-
-# Paths (anchored to project root, two levels above this script)
-BASE         = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))
-DEPOSITS_CSV = os.path.join(BASE, "BCB", "Egan_et_al_2025_Rep", "processed", "deposits_panel.csv")
+## 3) Append rates and spreads to the deposit panel:
 
 def append_rates_to_panel():
-    logging.basicConfig(level=logging.INFO, format="%(message)s")
     logging.info(f"Adding rates and spreads to {DEPOSITS_CSV}...")
 
     df = pd.read_csv(DEPOSITS_CSV, low_memory=False)
@@ -747,18 +624,17 @@ def append_rates_to_panel():
     for col in ["selic_qoq", "cdi_qoq", "savings_rate_qoq"]:
         if col in _macro_pct.columns:
             _macro_pct[col] = _macro_pct[col] * 100
+    os.makedirs(OUTPUT_PATH, exist_ok=True)
     _macro_pct.to_csv(os.path.join(OUTPUT_PATH, "quarterly_macro_rates.csv"), index=False)
     
     # 4. COSIF
     df_congl_map = load_conglomerate_mapping()
     df_cosif = load_cosif_processed()
     df_cosif_q = aggregate_cosif_to_conglomerates(df_cosif, df_congl_map)
-    
-    # The output of aggregate_cosif_to_conglomerates has 'year' and 'quarter', we need AnoMes inside it
-    if "AnoMes" not in df_cosif_q.columns and "year" in df_cosif_q.columns and "quarter" in df_cosif_q.columns:
-        df_cosif_q["AnoMes"] = df_cosif_q["year"] * 100 + df_cosif_q["quarter"] * 3
-        
-    aux = nat_stocks.merge(df_macro_q[["AnoMes", "selic_qoq", "cdi_qoq", "savings_rate_qoq", "meta_selic"]], on="AnoMes", how="left")
+
+    # df_cosif_q carries AnoMes, cosif_implicit_rate, cosif_desp_captacao, ip_prepaid_rate and
+    # has_ip (the keep list of aggregate_cosif_to_conglomerates).
+    aux =nat_stocks.merge(df_macro_q[["AnoMes", "selic_qoq", "cdi_qoq", "savings_rate_qoq", "meta_selic"]], on="AnoMes", how="left")
     aux = aux.merge(df_cosif_q, on=["CodConglomeradoPrudencial", "AnoMes"], how="left")
     
     # 4b. Inject NEW IP rates
@@ -773,18 +649,10 @@ def append_rates_to_panel():
         congl_ip.rename(columns={'ip_implicit_rate': 'new_ip_rate'}, inplace=True)
         
         aux = aux.merge(congl_ip, on=['CodConglomeradoPrudencial', 'AnoMes'], how='left')
-        # Overwrite legacy ip_prepaid_rate
-        if 'ip_prepaid_rate' in aux.columns:
-            aux['ip_prepaid_rate'] = aux['new_ip_rate'].fillna(aux['ip_prepaid_rate'])
-        else:
-            aux['ip_prepaid_rate'] = aux['new_ip_rate']
-            
+        # The panel_ip_rates rate takes precedence over the COSIF prepaid rate
+        aux['ip_prepaid_rate'] = aux['new_ip_rate'].fillna(aux['ip_prepaid_rate'])
         aux.drop(columns=['new_ip_rate'], inplace=True)
-    
-    for col in ["cosif_desp_captacao", "cosif_implicit_rate", "ip_prepaid_rate"]:
-        if col not in aux.columns:
-            aux[col] = np.nan
-            
+
     # T2 & T3 imputed expenses
     _imputed_t2 = aux["savings_rate_qoq"].fillna(0.0) * aux["lag_dep_a2"]
     _imputed_t3 = aux["cdi_qoq"].fillna(0.0)          * aux["lag_dep_a3"]
@@ -798,28 +666,14 @@ def append_rates_to_panel():
     _type4_raw.loc[_type4_raw > 0.5] = np.nan
     aux["cosif_type4_rate"] = _type4_raw
     
-    # Median IP
-    if "has_ip" not in aux.columns:
-        if "is_ip" in df_congl_map.columns:
-            ip_check = df_congl_map[df_congl_map["is_ip"] == 1]["CodConglomeradoPrudencial"].unique()
-            aux["has_ip"] = aux["CodConglomeradoPrudencial"].isin(ip_check).astype(int)
-        else:
-            aux["has_ip"] = 0
+    # Median IP rate per quarter, over quarters with at least 2 positive IP rates
+    _ip_mask = aux["ip_prepaid_rate"].notna() & (aux["ip_prepaid_rate"] > 0)
+    valid_ip = aux[_ip_mask].copy()
+    sizes = valid_ip.groupby("AnoMes").size()
+    valid_anomes = sizes[sizes >= 2].index
+    medians = valid_ip[valid_ip["AnoMes"].isin(valid_anomes)].groupby("AnoMes")["ip_prepaid_rate"].median()
+    aux = aux.merge(medians.rename("median_ip_rate"), on="AnoMes", how="left")
 
-    if "ip_prepaid_rate" in aux.columns:
-        _ip_mask = aux["ip_prepaid_rate"].notna() & (aux["ip_prepaid_rate"] > 0)
-        # Apply median directly over AnoMes
-        valid_ip = aux[_ip_mask].copy()
-        
-        # We need groups that have at least 2 entries.
-        sizes = valid_ip.groupby("AnoMes").size()
-        valid_anomes = sizes[sizes >= 2].index
-        
-        medians = valid_ip[valid_ip["AnoMes"].isin(valid_anomes)].groupby("AnoMes")["ip_prepaid_rate"].median()
-        aux = aux.merge(medians.rename("median_ip_rate"), on="AnoMes", how="left")
-    else:
-        aux["median_ip_rate"] = np.nan
-        
     # Prefer the CORRECTED per-bank CDB rate from panel_cosif_calibrate.py
     # (cosif_cdb_rate_corrected.csv). Falls back to residual -> blended -> CDI where the
     # corrected rate is absent.
@@ -832,12 +686,12 @@ def append_rates_to_panel():
         aux["CodConglomeradoPrudencial"] = aux["CodConglomeradoPrudencial"].astype(str)
         aux = aux.merge(_corr, on=["CodConglomeradoPrudencial", "AnoMes"], how="left")
         logging.info(
-            f"[wide] Corrected CDB rate merged: "
+            f"Corrected CDB rate merged: "
             f"{aux['cosif_cdb_rate_corrected'].notna().sum():,} cells"
         )
     else:
         aux["cosif_cdb_rate_corrected"] = np.nan
-        logging.info(f"[wide] Corrected CDB rate not found ({_corr_path}); using residual.")
+        logging.info(f"Corrected CDB rate not found ({_corr_path}); using residual.")
 
     aux["rate_a1"] = 0.0
     aux["rate_a2"] = aux["savings_rate_qoq"]
@@ -874,19 +728,16 @@ def append_rates_to_panel():
     aux.loc[_bad, "rate_a4"] = np.nan
     aux["rate_a4"] = aux["rate_a4"].fillna(aux["cdi_qoq"])
     logging.info(
-        f"[wide] rate_a4 plausibility guard (> {RATE_A4_MAX_MULT:g}x Selic): "
+        f"rate_a4 plausibility guard (> {RATE_A4_MAX_MULT:g}x Selic): "
         f"{int(_bad.sum()):,} of {len(aux):,} bank-quarters ({100*_bad.mean():.2f}%) -> cdi_qoq"
     )
 
-    if "ip_prepaid_rate" in aux.columns:
-        aux["rate_a5"] = np.where(
-            aux["has_ip"] == 1,
-            aux["ip_prepaid_rate"].fillna(aux["median_ip_rate"]).fillna(aux["cdi_qoq"]),
-            aux["median_ip_rate"].fillna(aux["cdi_qoq"])
-        )
-    else:
-        aux["rate_a5"] = aux["median_ip_rate"].fillna(aux["cdi_qoq"])
-        
+    aux["rate_a5"] = np.where(
+        aux["has_ip"] == 1,
+        aux["ip_prepaid_rate"].fillna(aux["median_ip_rate"]).fillna(aux["cdi_qoq"]),
+        aux["median_ip_rate"].fillna(aux["cdi_qoq"])
+    )
+
     aux["risk_free_qoq"] = aux["selic_qoq"]
     aux["risk_free_ann"] = (1 + aux["risk_free_qoq"]) ** 4 - 1
 

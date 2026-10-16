@@ -154,7 +154,7 @@ def conglomerate_map() -> dict[str, str]:
     Firms the IF Data List files do not place in a conglomerate get the panel's
     'CNPJ_<int>' fallback (see panel_fee_merge.cnpj_fallback_key).
     """
-    from panel_deposits import build_cnpj_conglomerate_map
+    from utils.conglomerates import build_cnpj_conglomerate_map
 
     cmap = build_cnpj_conglomerate_map()
     out: dict[str, str] = {}

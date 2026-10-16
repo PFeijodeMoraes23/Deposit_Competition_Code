@@ -9,7 +9,7 @@ standard errors.
 Everything is computed on the EXACT specification-12 second-stage estimation sample we
 report (the pooled single-index estimator, E3): the raw
     ESTIMATION_OUTPUT/DEMAND_PREP/est3/market_panel_phis.csv
-minus the type-4/5 rows whose IV_HausmanFull instruments are missing (load_sample), so the
+minus the type-4/5 rows whose IV_RivalSpread instruments are missing (load_sample), so the
 table's Observations / Clusters match the estimation tables (1,141,234 / 453). That match is
 enforced, not just asserted in this docstring: assert_matches_pkl hard-fails if the sample
 built from the CSV ever disagrees with estimation_results.pkl.
@@ -124,7 +124,7 @@ def _display_name(cnpj_lider, fallback):
 
 def load_sample(est):
     """Spec-12 second-stage estimation sample: the raw CSV minus type-4/5 rows whose
-    IV_HausmanFull instruments are missing. Those rows have an undefined control-function
+    IV_RivalSpread instruments are missing. Those rows have an undefined control-function
     residual (v_hat) and are excluded from the second stage by
     utils.sleep_links.fit_nlls_link's `df.dropna(subset=cols + CF_cols)`, CF_cols =
     ['v_hat_x_lagged_dep']. v_hat itself isn't a column of this CSV, but a row's v_hat is
@@ -136,10 +136,10 @@ def load_sample(est):
     if not path.exists():
         raise FileNotFoundError(f"Second-stage sample not found: {path} (run the sleep estimation first).")
     _, iv_specs, _ = define_specifications()
-    hausman_cols = iv_specs["IV_HausmanFull"]
+    rival_cols = iv_specs["IV_RivalSpread"]
     df = pd.read_csv(path, usecols=[CLUSTER_VAR, "NomeInstituicao", "CNPJ_Lider",
-                                    "deposit_balance", "time_id", "deposit_type"] + hausman_cols)
-    drop = df["deposit_type"].isin([4, 5]) & df[hausman_cols].isna().any(axis=1)
+                                    "deposit_balance", "time_id", "deposit_type"] + rival_cols)
+    drop = df["deposit_type"].isin([4, 5]) & df[rival_cols].isna().any(axis=1)
     n_dropped = int(drop.sum())
     df = df.loc[~drop].reset_index(drop=True)
     return df, path, n_dropped
@@ -260,7 +260,7 @@ def render_panel_b(st):
           r"\item \textit{Notes:} Specification-12 second-stage estimation sample ("
           + f"{st['G_nominal']:,}"
           + r" conglomerates), which excludes "
-          + f"{st['n_dropped_hausman']:,}"
+          + f"{st['n_dropped_rival']:,}"
           + r" type-4/5 cells lacking the instruments of the control-function correction. "
           r"Conglomerates are ranked by their time-averaged national share of "
           r"total deposits (``Dep.\ share''). ``Obs.\ share'' is a conglomerate's share of estimation "
@@ -278,11 +278,11 @@ def main():
     print(f"Loading spec-12 second-stage sample (est{args.est})...")
     df, path, n_dropped = load_sample(args.est)
     print(f"  rows={len(df):,}  clusters={df[CLUSTER_VAR].nunique()}  ({path.name}; "
-          f"{n_dropped:,} type-4/5 rows dropped for missing IV_HausmanFull instruments)")
+          f"{n_dropped:,} type-4/5 rows dropped for missing IV_RivalSpread instruments)")
     assert_matches_pkl(df, args.est)
 
     st, sizes = build_stats(df, top_n=args.top_n)
-    st["n_dropped_hausman"] = n_dropped
+    st["n_dropped_rival"] = n_dropped
     print(f"  G={st['G_nominal']}  G*={st['G_star']:.2f}  CV={st['cv']:.2f}  HHI={st['hhi']:.3f} (1/HHI={st['inv_hhi']:.2f})")
     for i, r in enumerate(st["top_n"], 1):
         print(f"   {i}. {r['name']:<28s} dep={100*r['dep_share']:5.1f}%  cum={100*r['cum_share']:5.1f}%  obs={100*r['obs_share']:5.1f}%")

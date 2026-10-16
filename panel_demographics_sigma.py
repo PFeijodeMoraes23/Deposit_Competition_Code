@@ -1,7 +1,7 @@
 """
 panel_demographics_sigma.py
 =============================
-Pipeline Step 4c — Compute within-MCA demographic dispersion for BLP draws.
+Pipeline step 21 — within-MCA demographic dispersion for the RC-BLP draws.
 
 For each of the 8 BLP demographic interaction columns (D_COLS), this script
 computes the **population-weighted within-MCA standard deviation** of the
@@ -9,29 +9,29 @@ municipality-level values.  The output is a lightweight Parquet file:
 
     BCB/Egan_et_al_2025_Rep/processed/ESTIMATION_OUTPUT/DEMAND_PREP/demographics_sigma.parquet
 
-Columns:  mca_code, year, quarter,
+Columns:  mca_code, year, quarter, time_id,
           gdp_per_capita_sigma, fraction_65plus_sigma, fraction_young_sigma,
           pix_users_pf_per1000_sigma, connections_per100_sigma, frac_4g5g_sigma,
           branches_per1000_sigma, cadunico_families_per1000_sigma
 
-This file is consumed by blp_draws.jl to replace the ad-hoc 0.1 × σ_national
-scaling with market-specific parametric draws:  d_im ~ N(μ_m, σ_m).
+blp_draws.jl reads the sigmas (the draw means come from the demand panels):
+d_im ~ N(mu_m, sigma_m).
 
 Inputs (municipality-level intermediates saved by the scrapers):
-  1. IBGE/muni_demographics_panel.csv           (scrape_4)
-  2. BCB/PIX/pix_muni_panel.csv                 (scrape_5)
-  3. ANATEL/anatel_muni_panel.csv                (scrape_8)
-  4. BCB/Inclusion/bcb_inclusion_muni_panel.csv  (scrape_9)
-  5. CadUnico/cadunico_muni_panel.csv            (scrape_10)
-  6. IBGE/mca_demographics_panel.csv             (for pop_total denominators)
+  1. IBGE/muni_demographics_panel.csv            (scrape_ibge_demographics.py)
+  2. PIX_DIR/pix_muni_panel.csv                  (scrape_pix_municipal.py)
+  3. ANATEL/anatel_muni_panel.csv                (scrape_anatel_mobile.py)
+  4. BCB/Inclusion/bcb_inclusion_muni_panel.csv  (scrape_bcb_inclusion.py)
+  5. CadUnico/cadunico_muni_panel.csv            (scrape_cadunico.py)
+  6. IBGE/mca_demographics_panel.csv             (the MCA x year skeleton)
 
-Strategy for single-municipality MCAs (53 of 466, ~11%):
-  Within-MCA σ is undefined (n=1).  We impute using the median σ from MCAs
-  in the **same state** (via state_code from the crosswalk).  If the state
-  has no multi-municipality MCAs, we fall back to the national median.
+Single-municipality MCAs (5,426 of 5,476, ~99%, in the 2010-2024 comparable-area crosswalk):
+  within-MCA sigma is undefined (n=1). They take the median sigma of the multi-municipality
+  MCAs in the same state (11 states have one), else the national median, pooled over all
+  years. So for ~99% of market-quarters the draw scale is one of about 12 constants per
+  variable; only the 50 multi-municipality MCAs carry a measured sigma.
 """
 
-import os
 import sys
 import logging
 from pathlib import Path
@@ -107,13 +107,19 @@ def _weighted_std(values: pd.Series, weights: pd.Series) -> float:
 
 def _compute_sigma_by_mca(df: pd.DataFrame, val_col: str, pop_col: str,
                             group_cols: list[str]) -> pd.DataFrame:
-    """Compute population-weighted within-MCA σ for a single variable."""
+    """Compute population-weighted within-MCA σ for a single variable.
+
+    Groups with one municipality row cannot have a σ (_weighted_std returns NaN), so they are
+    skipped; the skeleton merge in main() leaves them NaN either way, and
+    impute_single_muni_mcas fills them. That is ~99% of groups, so skipping them is the speed.
+    """
+    multi = df[df.groupby(group_cols)[val_col].transform("size") >= 2]
     result = (
-        df.groupby(group_cols)
-          .apply(lambda g: _weighted_std(g[val_col], g[pop_col]),
-                 include_groups=False)
-          .rename(f"{val_col}_sigma")
-          .reset_index()
+        multi.groupby(group_cols)
+             .apply(lambda g: _weighted_std(g[val_col], g[pop_col]),
+                    include_groups=False)
+             .rename(f"{val_col}_sigma")
+             .reset_index()
     )
     return result
 
@@ -397,35 +403,10 @@ def main():
     # Build time_id to match BLP prep format: "{year}Q{quarter}"
     skeleton["time_id"] = skeleton["year"].astype(str) + "Q" + skeleton["quarter"].astype(str)
 
-    # ── Demographic MEANS, alongside the sigmas ──────────────────────────
-    # blp_draws.jl builds each draw as  mean + sigma * nu, so it needs BOTH per market-quarter.
-    # It used to take the MEANS off a demand parquet (--estim), which was a bad key reference: the
-    # routines' key sets are NOT identical (each sleep stage filters Dep_Act differently, so they
-    # differ by up to ~25 market-quarters), and any single reference left the other routines' extra
-    # markets with no draw row — silently falling back to the pad row at estimation time.
-    # Emitting the means HERE, on the same 24,260-key skeleton as the sigmas, lets the draws key off
-    # this one file and decouples them from the demand panels entirely.
-    mp = MARKET_PANEL_CSV if 'MARKET_PANEL_CSV' in globals() else (
-        BASE / "BCB" / "Egan_et_al_2025_Rep" / "processed" / "market_panel.csv")
-    mean_cols = []
-    if Path(mp).exists():
-        _m = pd.read_csv(mp, usecols=lambda c: c in (["mca_code", "year", "quarter"] + D_COLS),
-                         dtype={"mca_code": str}, low_memory=False)
-        _have = [c for c in D_COLS if c in _m.columns]
-        if _have:
-            _m = (_m.groupby(["mca_code", "year", "quarter"], as_index=False)[_have].first())
-            skeleton["mca_code"] = skeleton["mca_code"].astype(str)
-            skeleton = skeleton.merge(_m, on=["mca_code", "year", "quarter"], how="left")
-            mean_cols = _have
-            _cov = 100 * skeleton[_have].notna().all(axis=1).mean()
-            logging.info(f"Merged {len(_have)} demographic MEAN columns from market_panel "
-                         f"({_cov:.1f}% of market-quarters complete)")
-    else:
-        logging.warning(f"market_panel.csv not found at {mp}; demographic MEANS not emitted — "
-                        f"blp_draws.jl will have to fall back to a demand parquet.")
-
+    # The draws (blp_draws.jl) take the demographic MEANS from the demand panels and only the
+    # sigmas from this file, so this file carries sigmas only.
     sigma_cols = [f"{c}_sigma" for c in D_COLS]
-    col_order = ["mca_code", "year", "quarter", "time_id"] + mean_cols + sigma_cols
+    col_order = ["mca_code", "year", "quarter", "time_id"] + sigma_cols
     col_order = [c for c in col_order if c in skeleton.columns]
     skeleton = skeleton[col_order]
     skeleton.sort_values(["mca_code", "year", "quarter"], inplace=True)

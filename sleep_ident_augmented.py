@@ -22,7 +22,7 @@ Arms (--arm):
 
   blpelast    D5: implied-vs-observed spread response, using the cluster BLP alpha-hat.
 
-Sample note: the production spec 12 (IV_HausmanFull x Tech) second stage is restricted to
+Sample note: the production spec 12 (IV_RivalSpread x Tech) second stage is restricted to
 deposit types 4,5 because v_hat is NaN elsewhere (sleep_est_e2.py:299-301). Every
 arm therefore reports BOTH spec 12 and OLS x Tech (full k in {1,2,4,5} sample).
 """
@@ -117,7 +117,7 @@ def load_sleep_frame(time_block=False):
     df = build_pooled_data(time_block=time_block)
     _, ivs, blocks = define_specifications(time_block=time_block)
     s_cols = blocks["Tech"]
-    df, _ = run_pooled_first_stage(df, ivs["IV_HausmanFull"],
+    df, _ = run_pooled_first_stage(df, ivs["IV_RivalSpread"],
                                    [c for c in s_cols if c != "constant"])
     df["qidx"] = df["year"].astype(int) * 4 + (df["quarter"].astype(int) - 1)
     return df, s_cols

@@ -16,7 +16,7 @@ style of make_iv_tables.py:
                                   benchmark, NOT phi, and flags the G* ~ 5-7 precision caveat.
   3. tab_phi_need_sleep.tex     -- The phi "do we need it" materiality test (spec 12): the logit
                                   link vs the shape-constrained monotone sieve link E3/E4 report,
-                                  national deposit-weighted phi_t OLS vs IV_HausmanFull.
+                                  national deposit-weighted phi_t OLS vs IV_RivalSpread.
 
 Reads BLP_RESULTS/cluster_processed/weak_iv_sleep.json; writes to Drafts/
 Deposit Competition/. Reuses make_iv_tables' formatting helpers (_wrap/_num/_F/_tf/_alpha_se).
@@ -40,10 +40,10 @@ WEAK_IV    = _paths.estimation_output() / "BLP_RESULTS" / "cluster_processed" / 
 TABLES_DIR = _paths.estimation_output() / "Rout"   # cluster-derived, not per-vintage
 DRAFTS_DIR = rc.DRAFTS_DIR
 
-SPEC_ORDER = ["IV_CostShifters", "IV_Wholesale", "IV_HausmanFull"]
+SPEC_ORDER = ["IV_CostShifters", "IV_Wholesale", "IV_RivalSpread"]
 SPEC_LABEL = {"IV_CostShifters": r"Cost shifters (3)",
               "IV_Wholesale":    r"+ Wholesale (6)",
-              "IV_HausmanFull":  r"+ Hausman LOO (7)"}
+              "IV_RivalSpread":  r"+ Rival mean spread (7)"}
 SUBS = [("type45", "4+5"), ("type4", "4"), ("type5", "5")]
 
 
@@ -175,8 +175,8 @@ def build_phi(wiv):
     if not body:
         body = [r"    \multicolumn{8}{c}{\textit{phi test not available}} \\"]
     foot = (r"\textit{Notes:} National \emph{deposit-weighted} $\hat\phi_t$ reconstructed under OLS "
-            r"(no control function) vs.\ IV\_HausmanFull (control function), spec~12 "
-            r"(IV\_HausmanFull\,$\times$\,Tech), on the common sample where the instruments exist. "
+            r"(no control function) vs.\ IV\_RivalSpread (control function), spec~12 "
+            r"(IV\_RivalSpread\,$\times$\,Tech), on the common sample where the instruments exist. "
             r"$\hat\phi$ is built from the native index $\times$ link via \texttt{phi\_from\_native} "
             r"under the two link forms \texttt{weak\_iv\_sleep\_analysis.py} fits for this "
             r"diagnostic: the logit that supplies the index direction, and the shape-constrained "

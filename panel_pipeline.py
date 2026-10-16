@@ -91,8 +91,8 @@ Pipeline stages
 
   Outside this runner: scrape_cosif_service_fees.py, the frozen BCB tariff scrapers in fees/
   (inputs of panel_fee_merge.py), scrape_cvm_fee_income.py, scrape_pix_participants.py, scrape_pix_roster.py,
-  scrape_bcb_complaints.py, scrape_bcb_pilar3_liq2.py, scrape_fgc_censo.py, the
-  scrape_deposit_maturity_* scrapers, scrape_forward_rf.py and the advertising scrapers.
+  scrape_bcb_complaints.py, scrape_bcb_pilar3_liq2.py, scrape_fgc_censo.py,
+  scrape_deposit_maturity.py, scrape_forward_rf.py and the advertising scrapers.
 
 Usage
 -----
@@ -204,8 +204,8 @@ STEPS = [
     # ORDER IS LOAD-BEARING, and two steps were missing here until 2026-07-14:
     #   * panel_loo_instruments OVERWRITES market_panel.csv with the LOO instruments (IV_BLP_LOO) +
     #     the FGC dummy. Rebuilding panel_market without then re-running panel_loo_instruments leaves
-    #     market_panel with NO loo_log_assets / mean_loo_log_assets / loo_equity_ratio / loo_basileia /
-    #     leave_one_out_mean_spread -- and the BLP engines' build_regressor_matrices SILENTLY drops
+    #     market_panel with NO loo_log_assets / mean_loo_log_assets / loo_equity_ratio / loo_basileia
+    #     -- and the BLP engines' build_regressor_matrices SILENTLY drops
     #     any instrument not present, so the BLP ends up identified off the cost shifters alone.
     #   * panel_fee_merge builds market_panel_with_fees.csv. It must still run LAST in this stage,
     #     after panel_loo_instruments' overwrite, so the fee panel is not built from a half-finished base.

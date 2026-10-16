@@ -71,7 +71,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 
 from utils import paths
-import panel_cosif_calibrate as cc
+from utils import conglomerates as cc
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("diag_k4")

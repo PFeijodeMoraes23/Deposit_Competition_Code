@@ -337,7 +337,7 @@ DISPLAY = {
     'wholesale_ratio_lag':       _PP,
     'lci_lca_ratio_lag':         _PP,
     'indice_basileia_lag':       _PP,
-    'leave_one_out_mean_spread': _PP,
+    'rival_mean_spread': _PP,
     'estban_rival_branches_lag': (1.0,   'log pt'),
     # ---- BBL policy-function regressors (migrated from estimation_bbl_1_polfunc) --
     'branches_per1000':          (1.0,   'per 1k'),
