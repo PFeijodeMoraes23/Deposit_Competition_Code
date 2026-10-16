@@ -53,13 +53,16 @@ The rest of this file is for a task that is explicitly a rebuild.
 1 demographics, 2 market characteristics and COSIF, 3 deposits, rates, bank characteristics and
 the digital verdict, 4 the master panel, 5 descriptive tables. Stage 6, the extensive-margin
 disclosures frozen in `extensive_margin/` (2026-10-14), runs only with `--extensive-margin` or
-`--only 6`; nothing in the paper reads it. The BCB tariff scrapers are frozen in `fees/` and are
-not a step; `panel_fee_merge.py` reads their last outputs.
+`--only 6`; nothing in the paper reads it. The fee branch lives in `fees/`: the fee merge
+`fees/panel_fee_merge.py --patch-market` is opt-in stage 7 (`--fees` or `--only 7`), and the BCB
+tariff scrapers and `fees/scrape_cosif_service_fees.py` are not steps; the merge reads their last
+outputs.
 
 **Stage 4's order is load-bearing.** `panel_market.py` builds the panel; `panel_loo_instruments.py`
 overwrites it with the leave-one-out instruments and the FGC dummy, after cleaning the accounting
-ratios; `panel_estban_instrument.py` and `panel_local_cdb_spread.py` patch it; `panel_fee_merge.py
---patch-market` writes the separate fee panel last. Re-running `panel_market.py` alone wipes the
+ratios; `panel_estban_instrument.py` and `panel_local_cdb_spread.py` patch it; `panel_demand_chars.py`
+comes last. The separate fee panel is built after the whole stage, by opt-in stage 7
+(`fees/panel_fee_merge.py --patch-market`). Re-running `panel_market.py` alone wipes the
 instruments and the local spread, and the BLP then drops the missing instruments silently and is
 identified off the cost shifters alone. After any change to the base panel, run the whole stage
 (`--only 4`).
@@ -79,7 +82,13 @@ Things a re-run does not do by itself:
   outage therefore stops a rebuild at step 1; rerun later, or `--skip` the step to keep the cached
   files. Step 1 fetches IF-Data types 1 and 3 only (`--if-types 1,2,3` adds type 2, which nothing
   reads) and no per-branch ESTBAN files.
-- `make_margin_figures.py` reads the panel and is not a step of the runner. Run it after a rebuild.
+- `make_slide_figures.py` (the deck's and the motivation note's visuals) reads the panel and is not
+  a step of the runner. After a rebuild, run its panel-only keys:
+  `--only panels,timedep,savings,table --refresh-shares` and
+  `--only band,pricevol,reprice,dpremium,entrygap,relprice,anova,motivtables --png`.
+  Then refresh the macros (`post-run-refresh`). The paper's Figure 1 is drawn by stage 5 itself.
+  `extensive_margin/make_margin_figures.py` belongs to the opt-in stage 6, and V_Main uses none of its
+  figures.
 - Step 39, `panel_demand_chars.py`, writes `processed/demand_chars.parquet`: the corrections the
   demand prep applies (2016Q1 lags from 2015Q4, nearest-filing fills, segment back-fill, the
   re-timed borrowings ratio). The file records the md5 of the market panel it was built from, and
@@ -88,21 +97,37 @@ Things a re-run does not do by itself:
 
 ## Due at the next full rebuild (decided 2026-10-13; each changes numbers downstream)
 
-- **The ESTBAN double read.** `panel_deposits.py` (L.624–626) lists the pre-2016 raw ESTBAN files
-  with `glob("*.CSV") + glob("*.csv")`, and Windows matches each file twice, so 2013–2015 balances
-  are doubled. `panel_demand_chars.py` currently halves the 2015Q4 balances to offset it. The two
-  must change TOGETHER: read each file once, remove the halving, and update check T1 of
-  `panel_demand_chars_checks.py`, which asserts the factor is exactly 2 in 2015-12.
-- **The k calibration** (`panel_cosif_calibrate.py`, the type-4 rate's de-bias factor).
-  `load_segment_map` now raises instead of silently putting every bank on the global profile. In
-  the project venv, `pd.read_csv(market_panel.csv, usecols=...)` raises
-  `IndexError('list index out of range')`, so fix that read first. Three more bugs, from
-  `checkpoints_20260928/estban_local_rate_20261013/K_AUDIT.md`:
-  - n_i counts 2026Q1, which has no CDI;
-  - 59 of 116 banks with 2025 leaf data get no own k;
-  - k is estimated with each bank's own repo/bills ratios but applied with the shrunk ones.
-
-  Fixing these moves the 2016–2024 type-4 rate, so treat the result as a new vintage.
+- **The ESTBAN double read: code fixed 2026-10-16, takes effect at the next rebuild.**
+  `panel_deposits.load_estban_raw_pre2016` now keeps one path per file (Windows listed each raw
+  file under both glob patterns, so 2013–2015 balances were doubled). `panel_demand_chars.py`
+  measures the stored/raw factor per quarter and divides by it, and its check T1 compares with
+  the measured factor, so nothing else changes. After rerunning step 14 (`panel_deposits.py`),
+  stage 4 and step 39, `demand_chars_report.json` records a factor of 1 for 2013–2015, and the
+  pre-2016 balances in the panel halve to the raw scale.
+- **The k calibration: code fixed 2026-10-16, takes effect at the next rebuild.**
+  `panel_cosif_calibrate.py` (step 13, the type-4 rate's de-bias factor) reads segments from the
+  IF-Data List (no `market_panel.csv` read). n_i counts only quarters with a CDI. k is estimated
+  with the shrunk repo/bills ratios it is applied with. Own k still requires both own ratios:
+  extending it to banks without them was measured and rejected (k from 0.19 to 13.3). Measured
+  on 2016–2024 against the 10-15 rates: median −0.08 pp, +0.01 pp weighted by 2025 time stock.
+  The change takes effect after rerunning step 13, step 16 (`panel_deposit_rates.py`), stage 4
+  and step 39.
+- **The SOCIEDADES gap: code fixed 2026-10-16, takes effect at the next rebuild.**
+  `panel_cosif_extract.py` (step 12) also reads the credit-finance companies (SCFI) of the
+  monthly SOCIEDADES files into the foundation table, tagged `src` per CNPJ-quarter. In a month
+  where a CNPJ files in both, only its BANCOS rows count. The per-taxonomy files step 16 reads
+  stay BANCOS-only. `panel_cosif_calibrate.py` uses SCFI rows only for a conglomerate-quarter
+  with no BANCOS member, and pure-SCFI conglomerates stay out of the segment profiles.
+  Measured: type-4 volume of 2016–2024 without a corrected rate goes from 2.57% to 0.03% (Nubank,
+  Mercado Pago, Neon, Facta, Will and about 55 more). Every bank conglomerate's rate is unchanged,
+  except one quarter of C0087298 (a CNPJ that switched from SCFI to bank mid-quarter). Nubank
+  comes out at 0.92 of CDI. Takes effect after rerunning steps 12, 13 and 16, stage 4 and step 39.
+- **The 2025+ prepaid rate: code fixed 2026-10-16, takes effect at the next rebuild.**
+  `panel_ip_rates.py` uses the exact pair from 2025: 8119800007 (prepaid-account expense) over
+  4193000009 (prepaid accounts), instead of all of 811 over 411 + 419. Before 2025 the 8-digit
+  parents are unchanged. Measured: where both exist the rates are identical (31 IP-quarters).
+  15 quarter-rates of 5 institutions drop out, because their expense or stock was other funding;
+  they take the fallback. This affects 2025+ only, outside the estimation window.
 
 ## After: the audits
 
@@ -118,7 +143,7 @@ Run these before any estimation. Each exists because the failure it catches was 
    market tier, identity (no institution under two conglomerate codes in one quarter) and booking
    stability. `is_B` is the one stored verdict (1 = brick-and-mortar, 0 = digital), written by
    `panel_market.py`; downstream code reads it and never re-derives firm type from `CODMUN_IBGE`.
-3. `python panel_audit_fee_coverage.py --strict`, when the fee panel was rebuilt. It reads
+3. `python fees/panel_audit_fee_coverage.py --strict`, when the fee panel was rebuilt. It reads
    `market_panel_with_fees.csv` directly, on purpose.
 4. By hand, against the "before" numbers: shape and totals; the instrument columns are present
    (`loo_log_assets`, `mean_loo_log_assets`, `loo_equity_ratio`, `loo_basileia`,
@@ -128,7 +153,7 @@ Run these before any estimation. Each exists because the failure it catches was 
 5. The sidecar: every writer of `market_panel.csv` refreshes `market_panel.parquet` and logs
    `panel cache refreshed`. The freshness gate compares the recorded source-CSV size as well as
    the dates, because OneDrive can move dates.
-6. `python panel_demand_chars_checks.py`, after step 39: 29 checks of the demand corrections file
+6. `python panel_demand_chars.py --check`, after step 39: 29 checks of the demand corrections file
    against its sources. It exits non-zero if any fails.
 
 ## Known oddities that are not new defects

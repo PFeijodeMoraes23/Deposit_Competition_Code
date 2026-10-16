@@ -25,9 +25,9 @@
 #   Cache:  FirmDisclosures/CVM/raw/<doc>_<year>.zip  (shared with scrape_23)
 #
 #   CLI:
-#     python scrape_cvm_fee_income.py                 # 2018..current, DFP+ITR
-#     python scrape_cvm_fee_income.py --since 2015 --docs DFP
-#     python scrape_cvm_fee_income.py --firms bb,itau,bradesco --dump-accounts
+#     python fees/scrape_cvm_fee_income.py                 # 2018..current, DFP+ITR
+#     python fees/scrape_cvm_fee_income.py --since 2015 --docs DFP
+#     python fees/scrape_cvm_fee_income.py --firms bb,itau,bradesco --dump-accounts
 #
 #   --dump-accounts: instead of saving the panel, print all unique DRE account
 #   descriptions found for the matched firms (for exploratory mapping).
@@ -43,6 +43,8 @@ import argparse
 import logging
 import datetime as dt
 import unicodedata
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # repo root: utils/
 
 try:
     from utils.venv_guard import ensure_project_venv

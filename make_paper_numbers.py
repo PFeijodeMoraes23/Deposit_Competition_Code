@@ -239,8 +239,9 @@ class Rendered:
         self.name, self.path = name, TABLES_DIR / name
         self.ok = self.path.is_file()
         self.cols, self.rows = [], []
+        self.text = self.path.read_text(encoding="utf-8", errors="replace") if self.ok else ""
         if self.ok:
-            self._parse(self.path.read_text(encoding="utf-8", errors="replace").splitlines())
+            self._parse(self.text.splitlines())
 
     @staticmethod
     def _split(line: str) -> list:
@@ -1717,15 +1718,21 @@ def collect_market_structure(notes: list):
     df = pd.read_csv(p).set_index("var")
     ta4 = table(TA4)
     years = [c for c in df.columns]
+    # The type-5 spread columns are left out of the table when the spread is the common CDI
+    # fallback (utils/prepaid.py); their keys still come from the CSV, with no cell to check.
+    printed5 = "Spread (5)" in ta4.text
     for var, slug, lab, panel, col, is_int in TA4_VARS:
         if var not in df.index:
             continue
+        check = printed5 or not slug.startswith("spread5")
         v, checks = {}, []
         for y in years:
             x = pd.to_numeric(df.loc[var, y], errors="coerce")
             if not _finite(float(x)):
                 continue
             v[str(y)] = float(x)
+            if not check:
+                continue
             cells = ta4.find(str(y), panel=panel, exact=True)
             checks.append(check_cell(TA4, f"{lab}, {y}", cells[col] if cells and col < len(cells) else None,
                                      [float(f"{float(x):.0f}") if is_int else float(x)]))
@@ -1758,6 +1765,7 @@ def collect_table1_spreads(notes: list):
             v = dict(mean=float(r["Mean"]), sd=float(r["SD"]), median=float(r["p50"]), n=int(r["N"]))
             cells = t1.find(f"Spread ({a})", nth=nth)
             cell = lambda i: cells[i] if cells and i < len(cells) else None
+            printed = a != 5 or "Spread (5)" in t1.text
             add(f"desc.t1.spread{a}.{k}", "H", f"Table 1, spread of type {a}, {k} firms", v,
                 "Mean, standard deviation and median over conglomerate-quarters of the "
                 "deposit-weighted annualized spread (pp p.a.), and the number of them",
@@ -1766,7 +1774,8 @@ def collect_table1_spreads(notes: list):
                 checks=[check_cell(T1, f"Spread ({a}) mean, {k}", cell(0), [v["mean"]]),
                         check_cell(T1, f"Spread ({a}) SD, {k}", cell(1), [v["sd"]]),
                         check_cell(T1, f"Spread ({a}) median, {k}", cell(4), [v["median"]]),
-                        check_cell(T1, f"Spread ({a}) N, {k}", cell(7), [v["n"]])])
+                        check_cell(T1, f"Spread ({a}) N, {k}", cell(7), [v["n"]])]
+                if printed else [])
 
 
 def collect_mca_count(notes: list):
@@ -2122,21 +2131,22 @@ def _tech_panel_cell(tname: str, label: str):
 
 def collect_first_stage_strength(notes: list):
     """The first stage of the sleepiness estimation under specification 12, per routine, from the
-    sidecar sleep_first_stage_strength.py writes: the effective F of the excluded instruments
+    sidecar Rout/sleep_first_stage_strength.json: the effective F of the excluded instruments
     (Montiel Olea and Pflueger), their joint F, the joint F of all slopes, and the critical values.
-    The two F rows the first-stage tables print are checked against it."""
+    The two F rows the first-stage tables print are checked against it. The effective F waits for
+    the weak-instrument battery."""
     p = _paths.rout_dir() / "sleep_first_stage_strength.json"
     if not p.is_file():
-        notes.append(f"{p.name} not found in Rout; run sleep_first_stage_strength.py for the "
-                     "sleep.fs.* entries.")
+        notes.append(f"{p.name} not found in Rout; the sleep.fs.* entries wait for the "
+                     "weak-instrument battery.")
         return
     sc = json.loads(p.read_text(encoding="utf-8"))
     ident = (sc.get("_meta") or {}).get("identity_check") or {}
     if ident.get("passed") is not True:
-        notes.append(f"{p.name}: its identity check against weak_iv_sleep.json is not recorded as "
-                     "passed; the sleep.fs.* entries are not built.")
+        notes.append(f"{p.name}: its identity check is not recorded as passed; the sleep.fs.* "
+                     "entries are not built.")
         return
-    src = f"Rout/{p.name} (written by sleep_first_stage_strength.py from the stored fits)"
+    src = f"Rout/{p.name} (from the stored fits)"
     effs = {}
     for E in _routines.ACTIVE:
         r = (sc.get(f"E{E}") or {}).get(FS_SPEC)

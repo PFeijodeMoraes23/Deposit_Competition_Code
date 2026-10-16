@@ -7,8 +7,9 @@
 # and Python tables carry the same words in the same order.
 #
 # Literal strings ('...') keep LaTeX backslashes verbatim. @NAME@ tokens are filled by the
-# generators: @CV4@ / @CV5@ = the Montiel Olea-Pflueger 10% worst-case-bias critical values, read
-# from weak_iv.json with the F's.
+# generators: @CV4@ / @CV5@ = the Montiel Olea-Pflueger 10% worst-case-bias critical values. Only
+# the dormant eff_f sentence carries them; no generator fills them until the weak-instrument
+# battery and its table exist.
 #
 # `alpha` and `boundary` are the author's wording, verbatim. `alpha` names the wild cluster
 # bootstrap, the method every reported demand table uses (se_method = wcb). Under either method
@@ -24,12 +25,12 @@ note_size   = '\footnotesize'
 unit        = 'Unit: institution--deposit type--market--quarter, 2016Q1--2024Q4.'
 se_wcb      = 'Parentheses: WCB standard errors, conglomerate clusters; stars from Student-$t(G^*)$: *** 1\%, ** 5\%, * 10\%.'
 se_sandwich = 'Parentheses: cluster-robust sandwich standard errors, conglomerate clusters; stars from Student-$t(G^*)$: *** 1\%, ** 5\%, * 10\%.'
-# Not in any [demand.order] list below: no table prints the alpha sentence until Table
-# \ref{tab:weakiv_spec12} exists. Restore by adding 'alpha' back to the lists that had it.
+# Dormant: not in any [demand.order] list below. It is printed only once the weak-instrument
+# battery and its table exist; add 'alpha' to the lists that carry it then.
 alpha       = 'The stars on $\alpha$ use the conventional wild-cluster-bootstrap standard error and are shown by convention only. Inference on $\alpha$ that is robust to weak instruments is in Table \ref{tab:weakiv_spec12}.'
 spread      = 'Spread $\rho$ in pp, instrumented for types 4 and 5 only.'
-# Not in any [demand.order] list below: no table prints the eff_f sentence until Table
-# \ref{tab:weakiv_spec12} exists. Restore by adding 'eff_f' back to logit_comparison.
+# Dormant: not in any [demand.order] list below. It is printed only once the weak-instrument
+# battery and its table exist; add 'eff_f' to logit_comparison then.
 eff_f       = 'Effective $F$: \textcite{oleapflueger2013}, 10\% worst-case-bias critical values @CV4@ and @CV5@.'
 boundary    = 'Standard errors on $\theta_1$ are conditional on $\Sigma$ at its boundary value of zero.'
 pi_units    = '$\Pi$ per standard deviation of the demographic.'
@@ -39,8 +40,8 @@ segments    = 'Segment dummies S2--S5 included, not shown.'
 
 # Sentence order per table. `se` resolves to se_wcb / se_sandwich by the stored se_method;
 # `boundary` is dropped when no Sigma is on its bound, `segments` when the table prints the
-# segment rows. `alpha` and `eff_f` are withheld from every list (see their comments above)
-# until Table \ref{tab:weakiv_spec12} exists.
+# segment rows. `alpha` and `eff_f` are dormant and appear in no list (see their comments
+# above).
 [demand.order]
 logit_comparison = ['unit', 'se', 'spread', 'q', 'elasticity']
 logit_routine    = ['unit', 'se', 'spread', 'q']

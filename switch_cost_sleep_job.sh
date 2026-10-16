@@ -36,7 +36,7 @@
 #            G2  exactly one parquet per routine in SC_ARM's folder, with the columns
 #
 # DISABLED in this copy, refused with exit 2 and a message naming what the step writes:
-#   merge, ame_gate, ame, wcb_band, weakiv, entry, upsilon.
+#   merge, ame_gate, ame, wcb_band, entry, upsilon.
 #
 # Env vars: SLEEP_STEP SLEEP_EST SC_VARIANT SC_ARM SLEEP_GATE SLEEP_GATE_ROUTINES SPEC
 #           SLEEP_AME_TWOSTAGE SLEEP_BOOT_B SLEEP_AME_BOOT_JOBS SC_BLAS_THREADS
@@ -70,7 +70,6 @@ case "${SLEEP_STEP}" in
     ame_gate) DISABLED_WHAT="sleep_ame_twostage.py --theta-off: the off-path AME regression guard against the stored production numbers (no switch-cost copy)" ;;
     ame)      DISABLED_WHAT="sleep_ame_twostage.py: Rout/ame_twostage_est{K}_robust_if.pkl (no switch-cost copy). Here the two-stage AME runs inside est (SLEEP_AME_TWOSTAGE=1)" ;;
     wcb_band) DISABLED_WHAT="sleep_wcb_band.py: Rout/wcb_band_est{1,2}.pkl, the E1/E2 linear bands (E1/E2 are outside this copy's scope)" ;;
-    weakiv)   DISABLED_WHAT="sleep_weak_iv.py: BLP_RESULTS/cluster_processed/weak_iv_sleep.json and DIAG_WEAK_IV_SLEEP/ (the BLP family)" ;;
     entry)    DISABLED_WHAT="sleep_ident_entry_dynamics.py --compute-only: DIAG_PHI_SEPARATION/ and figure fragments; reads CF_FOUNDATION/phi_nopix_E{k}" ;;
     upsilon)  DISABLED_WHAT="sleep_upsilon_export.py: upsilon_pix_E{k}_spec_12.json and phi_nopix_E{k}_spec_12.parquet in CF_FOUNDATION_DIR (the counterfactual family)" ;;
     *) echo "Unknown SLEEP_STEP='${SLEEP_STEP}' (est|prep|gate)." >&2; exit 2 ;;

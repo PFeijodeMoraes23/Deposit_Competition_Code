@@ -33,8 +33,8 @@ Output
 
 Usage
 -----
-  python panel_fee_merge.py
-  python panel_fee_merge.py --patch-market
+  python fees/panel_fee_merge.py
+  python fees/panel_fee_merge.py --patch-market
 
 Note
 ----
@@ -58,6 +58,9 @@ from pathlib import Path
 import pandas as pd
 import numpy as np
 
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # repo root: utils/
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s  %(levelname)-7s  %(message)s",
@@ -69,7 +72,7 @@ log = logging.getLogger(__name__)
 # Paths
 # ---------------------------------------------------------------------------
 from utils import paths
-_REPO           = Path(__file__).resolve().parents[2]
+_REPO           = Path(__file__).resolve().parents[3]
 PANEL_DIR       = paths.PROCESSED
 TARIF_DIR       = paths.TARIFAS_PROC
 

@@ -97,7 +97,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s  %(levelname)-7s  %(
                     datefmt="%H:%M:%S")
 log = logging.getLogger(__name__)
 
-RAW_DIR = paths.FIRM_DISCLOSURES / "CVM" / "raw"       # shared with scrape_cvm_fee_income.py
+RAW_DIR = paths.FIRM_DISCLOSURES / "CVM" / "raw"       # shared with fees/scrape_cvm_fee_income.py
 IF_DATA_LIST = paths.IF_DATA_LIST
 OUT_DIR = paths.AWARENESS_PROC
 CVM_URL = "https://dados.cvm.gov.br/dados/CIA_ABERTA/DOC/{doc}/DADOS/{doc_l}_cia_aberta_{year}.zip"

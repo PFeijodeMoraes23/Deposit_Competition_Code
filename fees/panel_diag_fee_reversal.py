@@ -41,8 +41,10 @@ import matplotlib.patches as mpatches
 warnings.filterwarnings("ignore", category=FutureWarning)
 
 # ── paths ─────────────────────────────────────────────────────────────────────
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # repo root: utils/
 from utils import paths
-_REPO     = Path(__file__).resolve().parents[2]
+_REPO     = Path(paths.OPEN_FINANCE)
 TARIF_DIR = paths.TARIFAS_PROC
 OUT_DIR   = _REPO / "Drafts" / "Deposit Competition"
 OUT_DIR.mkdir(parents=True, exist_ok=True)

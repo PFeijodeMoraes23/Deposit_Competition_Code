@@ -55,9 +55,9 @@ Design
 
 Usage
 -----
-  python scrape_cosif_service_fees.py
-  python scrape_cosif_service_fees.py --workers 4   # override CPU count
-  python scrape_cosif_service_fees.py --test        # first 5 ZIPs only
+  python fees/scrape_cosif_service_fees.py
+  python fees/scrape_cosif_service_fees.py --workers 4   # override CPU count
+  python fees/scrape_cosif_service_fees.py --test        # first 5 ZIPs only
 """
 
 from __future__ import annotations
@@ -73,6 +73,9 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # repo root: utils/
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s  %(levelname)-7s  %(message)s",
@@ -84,7 +87,7 @@ log = logging.getLogger(__name__)
 # Paths
 # ---------------------------------------------------------------------------
 from utils import paths
-_REPO = Path(__file__).resolve().parents[2]
+_REPO = Path(__file__).resolve().parents[3]
 COSIF_RAW = paths.COSIF_RAW
 OUT_DIR   = paths.TARIFAS_PROC
 
@@ -305,7 +308,7 @@ def main(workers: int | None = None, test: bool = False) -> None:
         )
         # ONE file per month: a month can sit on disk both zipped and as a plain CSV
         # (202508/202509 BANCOS, 202302 SOCIEDADES), and _build_panel SUMS rows, so reading
-        # both doubles the month. Prefer the zip, as panel_cosif_extract.discover_bancos_files does.
+        # both doubles the month. Prefer the zip, as panel_cosif_extract.discover_files does.
         by_month: dict[str, tuple[int, Path]] = {}
         for p in found:
             ym = p.name[:6]

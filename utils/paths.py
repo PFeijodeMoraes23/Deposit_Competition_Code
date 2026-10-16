@@ -317,7 +317,7 @@ def market_panel_csv(processed: Path | None = None) -> Path:
         if not fees.exists():
             raise FileNotFoundError(
                 f"USE_FEE_PANEL=1 but {fees} does not exist. Build it with "
-                "`python panel_fee_merge.py --patch-market` (it must run AFTER "
+                "`python fees/panel_fee_merge.py --patch-market` (it must run AFTER "
                 "panel_7/panel_10/panel_12), or unset USE_FEE_PANEL to use market_panel.csv.")
         return fees
     return base

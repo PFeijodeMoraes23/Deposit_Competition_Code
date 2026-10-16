@@ -31,15 +31,18 @@ OUT_CSV = OUT_DIR / "ip_rates_quarterly.csv"
 # carry 10-digit parent AND child rows, each parent equal to the sum of its
 # children.  Only the parent codes are kept, as in panel_cosif_extract.py (do
 # NOT sum children).
-# Stock = 411 Depositos a Vista + 419 Outros Depositos (419 includes the prepaid
-# payment account, 4193000009 from 2025).  499 Diversas (other liabilities) is
-# not a deposit and is excluded.
+# Before 2025 the accounts are 8-digit parents only: stock = 411 Depositos a Vista + 419 Outros
+# Depositos (419 holds the prepaid payment account), expense = 811 (-) Despesas de Captacao.
+# From 2025 the 10-digit plan names the prepaid account itself, so the rate is the exact pair:
+# 8119800007 (-) Despesas de Contas de Pagamento Pre-Pagas over 4193000009 Contas de Pagamento
+# Pre-Pagas.  499 Diversas (other liabilities) is not a deposit and is excluded.  Expenses are
+# cumulative within the semester.
 STOCK_CODES = {
-    "41100000", "4110000006",   # Depositos a Vista
-    "41900004", "4190000002",   # Outros Depositos
+    "41100000",                 # Depositos a Vista (pre-2025)
+    "41900004",                 # Outros Depositos (pre-2025)
+    "4193000009",               # Contas de Pagamento Pre-Pagas (2025+)
 }
-# Expense = 811 (-) Despesas de Captacao (cumulative within the semester).
-EXPENSE_CODES = {"81100008", "8110000002"}
+EXPENSE_CODES = {"81100008", "8119800007"}
 
 def process_file(fpath):
     """ Extract IP rows and summarize accounts. """

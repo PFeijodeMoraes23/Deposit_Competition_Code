@@ -252,10 +252,12 @@ case "${BBL_STEP}" in
         # the only way this run does not need it (bbl_run.sh always passes the flag).
         if [[ "${BBL_EXTRA}" != *"--phi-path frozen"* ]]; then
             SLINK="$(sed -n 's/.*--sleep-link[ =]\([^ ]*\).*/\1/p' <<< "${BBL_EXTRA}")"
-            SLINK="${SLINK:-${CL_DATA_IN}/sleep_link_E${BBL_ROUTINE}_spec_12.json}"
+            # PRODUCED on the cluster (bbl_sleep_link.py after the demand prep) into the bbl step
+            # folder, which is where bbl_fwd_sim.jl looks too; never an upload.
+            SLINK="${SLINK:-${CL_STEP_BBL}/sleep_link_E${BBL_ROUTINE}_spec_12.json}"
             if [[ ! -f "${SLINK}" ]]; then
                 echo "ERROR: sleepiness link missing: ${SLINK}" >&2
-                echo "  Generate locally and upload to data/input/:  python bbl_sleep_link.py --est ${BBL_ROUTINE}" >&2
+                echo "  Produce it on the cluster after the demand prep:  python bbl_sleep_link.py --est ${BBL_ROUTINE} --out-dir ${CL_STEP_BBL} --transitions ${CL_DATA_IN}/bbl_transitions.json" >&2
                 echo "  Refusing to run: --phi-path evolving re-evaluates phi from it every period." >&2
                 exit 1
             fi

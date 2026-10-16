@@ -39,7 +39,7 @@
 #   L4 THE PYTHON ENV (MAJOR-1): CONDA_ENV (dep_comp_blp unless exported) imports the stack the
 #      sleepiness estimators and the prep need; else it prints the pinned create line.
 #   L5 a dry run of the submissions.
-#   L6 THE INSTALL (P8): the policy (sha256 fd208b5f...) copied from data/input, re-hashed, never
+#   L6 THE INSTALL (P8): the policy (sha256 beb0bb2f..., refit on the 10-15 panel) copied from data/input, re-hashed, never
 #      overwritten; the frozen-set record (policy, panel, chars, sigma).
 #   L7 THE JULIA ENVIRONMENT (P8): the shipped Manifest-v1.11.toml instantiated, NEVER resolved, no
 #      precompile (pkgimages are CPU-specific: each node precompiles for itself); refuses if it changed.
@@ -57,10 +57,17 @@
 #           with its second stage; phi_t and phi_mt finite and in [0,1], rows > 0. Then the
 #           BOOTSTRAPS are submitted as separate jobs, off the critical path (REQ_BOOT_*,
 #           REQ_WCB/AMEG/AME_*): E1/E2 percentile bands, the E3/E4 AME guard and AME bootstraps,
-#           and their own archive (set sleep). Nothing waits on them.
+#           and their own archive (set sleep); and the FULL E2-E4 grids (REQ_GRID_*), under their
+#           own root data/output/sleep_grid (never the chain's), each compared report-only with
+#           the chain's spec-12 phi_t (--grid-check: max |dphi_t|) and archived as set sleep_grid.
+#           Nothing waits on any of them.
 #   prep    sleep_job.sh SLEEP_STEP=prep (spec 12, step 6 only, DEMAND_CHARS_FILE), reading the
 #           estimates just made -> gate G2
 #   gate-prep  automatic: one parquet per routine, rows > 0, the instrument columns, .chars_audit.json
+#   link    THE SLEEP LINKS on the cluster (Pedro, 10-15): bbl_sleep_link.py --est 3 4 on the chain's
+#           own fits and demand parquets, into data/output/bbl (where every BBL reader looks; never an
+#           upload). Its own t=0 check (max |phi0 - phi_mt| <= 1e-10) is the gate: a failure stops
+#           the chain; the result goes into the summary block.
 #   logit   logit_job.sh || blp_draws_job.sh (8 Julia threads each, as their own jobs had) -> gate G4
 #   gate-logit automatic: every sub-model's alpha finite, D in the full design; then THE SUMMARY
 #           BLOCK per routine (first-stage effective F, second-stage rows, mean phi_t, logit alpha
@@ -86,10 +93,9 @@
 #   blp_sysimage_cpu.so built when missing or invalid (env_job.sh ENV_STEP=sysimage_cpu: build + load
 #   proof), then loaded once more here (cl_require_sysimage cpu: provenance + CPU target), then the
 #   gate .gate_SC_cpu_image.json. Only the BBL needs it (bbl_job.sh loads it in every CPU solve job).
-#   A failed sanity check STOPS the chain before any GPU job. Every stop prints its
-#   one-line resume (m10): --resume chain [--from sleep|gate-sleep|prep|gate-prep|logit|gate-logit] | gpu | next-blp |
-#   blp | next-bbl [tag] | cpu-image; --export=ALL,STAGEC_ALLOW_MISMATCH_STEP=gate-prep (or gate-logit) with
-#   --resume chain --from that step accepts a mismatch at that step only.
+#   A failed sanity check STOPS the chain before any GPU job. Every stop prints its one-line
+#   resume (m10): --resume chain [--from sleep|gate-sleep|prep|gate-prep|link|logit|gate-logit] |
+#   gpu | next-blp | blp | next-bbl [tag] | cpu-image.
 # THE BBL HAND-OFF (stagec_next_bbl)
 #   the CPU image must have passed (.gate_SC_cpu_image.json ok, and the image passes its static
 #   provenance check here: the solve jobs refuse without it), E3/E4 ext1 must say se_status "ok" (joint SEs REQUIRED), the policy sha256, fresh launches only,
@@ -104,11 +110,10 @@
 #   _ms983 / _sc983 (it skips the fit binding); Pkg.resolve on the cluster (env_job.sh ENV_STEP=resolve).
 # Modes: (none) launch | --chain [--from <step>] | --gpu | --cpu-image | --install | --julia-env | --julia-fetch
 #        (login node) | --next-blp | --check-blp [routines] | --next-bbl [tag] | --check-bbl <tag> |
-#        --repair-bbl <tag> | --final | --collect-logs | --resume <point> [--from <step>]
+#        --repair-bbl <tag> | --final | --collect-logs | --resume <point> [--from <step>] |
+#        --grid-check (stagec_grid_zip: report only)
 #        (--smoke-verdict <k> <log>: the smoke's per-routine verdict on a log, for the local test)
-# Environment: CL_DRYRUN=1; STAGEC_ALLOW_MISMATCH=1 (every gate of a launch);
-#   STAGEC_ALLOW_MISMATCH_STEP=gate-prep|gate-logit (one step of a resumed chain);
-#   STAGEC_JULIA_OFFLINE=1 (variant ii); STAGEC_BBL_EXTRA / STAGEC_BLP_EXTRA (extra flags; the local
+# Environment: CL_DRYRUN=1; STAGEC_JULIA_OFFLINE=1 (variant ii); STAGEC_BBL_EXTRA / STAGEC_BLP_EXTRA (extra flags; the local
 #   test passes --skip-preflight); STAGEC_LOG_DIR; STAGEC_CUDA_MAJORS (--julia-fetch, default "12 13");
 #   STAGEC_LOCAL_TEST=1 with STAGEC_ASSUME_SYSIMAGE=1 / STAGEC_SKIP_PYPROBE=1 / STAGEC_PAYLOAD_RUNNER /
 #   STAGEC_PAYLOAD_REAL
@@ -136,6 +141,7 @@ case "${1:-}" in
     --check-bbl) MODE=check-bbl; MODE_ARG="${2:-}" ;;
     --resume) MODE=resume; MODE_ARG="${2:-}"; [[ "${3:-}" == "--from" ]] && RESUME_FROM="${4:-}" ;;
     --smoke-verdict) MODE=smoke-verdict; MODE_ARG="${2:-} ${3:-}" ;;   # the local test only
+    --grid-check) MODE=grid-check ;;   # stagec_grid_zip: the full grids vs the chain's spec 12, report only
     --repair-bbl) MODE=repair-bbl; MODE_ARG="${2:-}" ;;
     *) echo "unknown option: $1 (see the header)" >&2; exit 2 ;;
 esac
@@ -148,7 +154,7 @@ REQ_FILE="${HERE}/stagec_requests.env"
 
 ROUTINES_ALL="1 2 3 4"; BBL_ROUTINES="3 4"
 MS_TAG="_ms983"; SC_TAG="_sc983"; BBL_STAGE="extended"; SE_STAGE="ext1"
-POLICY_SHA256="fd208b5fc57b9697eefc010ed4a1076af776d9510b89f3bbc1edca009dc29728"
+POLICY_SHA256="beb0bb2f00334cd64f1f5f68fc54f4cfaf918ef9a3c7db785c13c543f282a429"   # the policy refit on the 10-15 panel (Pedro, 10-16)
 POLICY_CSV="${CL_STEP_BBL}/polfunc_fitted.csv"
 FROZEN_REC="${CL_DATA_OUT}/.stagec_frozen_20261012.sha256"
 SMOKE_STAGES="sigma,ext1,extended"
@@ -192,19 +198,16 @@ gate_json () {   # gate_json <name> <true|false> <detail>: data/output/.gate_SC_
     printf '{\n "gate": "SC_%s",\n "ok": %s,\n "detail": "%s",\n "slurm_job_id": "%s",\n "written": "%s"\n}\n' \
         "$1" "$2" "$(printf '%s' "$3" | tr '"\n' "' ")" "${SLURM_JOB_ID:-}" "$(date '+%F %T')" > "${CL_DATA_OUT}/.gate_SC_$1.json"
 }
-# resume_line "<point> [--from <step>]" [<gate step>]: the ONE line that continues from <point>
-# (m10). With a gate step (gate-prep | gate-logit), the line accepts a row/alpha mismatch at that
-# step of the resumed chain only (STAGEC_ALLOW_MISMATCH_STEP, logged loudly). The line returns at
-# once (sbatch --parsable); the request is REQ_HANDOFF_*.
+# resume_line "<point> [--from <step>]": the ONE line that continues from <point> (m10). It returns
+# at once (sbatch --parsable); the request is REQ_HANDOFF_*.
 launch_line () {   # THE launch line (the header documents the same one; the tests compare them)
     printf 'cd %s && mkdir -p logs && sbatch --parsable%s -p %s -t %s -c %s --mem=%s%s -J stagec_launch -o logs/stagec_launch_%%j.out --wrap "bash %s"' \
         "${HERE}" "$([[ "${STAGEC_JULIA_OFFLINE:-0}" == "1" ]] && echo " --export=ALL,STAGEC_JULIA_OFFLINE=1")" \
         "${REQ_LAUNCH_PART}" "${REQ_LAUNCH_TIME}" "${REQ_LAUNCH_CPUS}" "${REQ_LAUNCH_MEM}" "${REQ_LAUNCH_PIN:+ --constraint=${REQ_LAUNCH_PIN}}" "${SELF}"
 }
 resume_line () {
-    printf 'cd %s && sbatch --parsable -p %s -t %s -c %s --mem=%s -J stagec_resume -o logs/stagec_resume_%%j.out%s --wrap "bash %s --resume %s"' \
-        "${HERE}" "${REQ_HANDOFF_PART}" "${REQ_HANDOFF_TIME}" "${REQ_HANDOFF_CPUS}" "${REQ_HANDOFF_MEM}" \
-        "$([[ -n "${2:-}" ]] && echo " --export=ALL,STAGEC_ALLOW_MISMATCH_STEP=$2")" "${SELF}" "$1"
+    printf 'cd %s && sbatch --parsable -p %s -t %s -c %s --mem=%s -J stagec_resume -o logs/stagec_resume_%%j.out --wrap "bash %s --resume %s"' \
+        "${HERE}" "${REQ_HANDOFF_PART}" "${REQ_HANDOFF_TIME}" "${REQ_HANDOFF_CPUS}" "${REQ_HANDOFF_MEM}" "${SELF}" "$1"
 }
 
 # ── D12: the environment. Every job inherits the submitting shell (sbatch --export=ALL), so a
@@ -218,8 +221,7 @@ SC_REFUSE="SLEEP_STATE_BLOCK SLEEP_CENTER_STATES SLEEP_BOOT_B SLEEP_BOOT_SCHEME 
 SC_REFUSE_AT_LAUNCH="DEMAND_CHARS_FILE SLEEP_PREP_EXTRA SLEEP_ACTIVE_ESTS DEMAND_PREP_DIR SLEEP_OUT_ROOT CF_COST_FWD
   COST_POLFUNC_DIR CF_FOUNDATION_DIR STATE_CENTERING_JSON OPEN_FINANCE_ROOT POLICY_CSV"
 SC_PRINT="PARTITION MEM CL_MEM_DEFAULT CL_MEM_BIG CL_WALL_DEEP ZIP_PARTITION SLEEP_PARTITION CONDA_ENV PY_MODULE
-  JULIA_MODULE STAGEC_SLEEP_EXTRA STAGEC_BLP_EXTRA STAGEC_BBL_EXTRA STAGEC_LOG_DIR STAGEC_ALLOW_MISMATCH
-  STAGEC_ALLOW_MISMATCH_STEP STAGEC_JULIA_OFFLINE"
+  JULIA_MODULE STAGEC_SLEEP_EXTRA STAGEC_BLP_EXTRA STAGEC_BBL_EXTRA STAGEC_LOG_DIR STAGEC_JULIA_OFFLINE"
 same_dir () { [[ "$(cd "$1" 2>/dev/null && pwd -P)" == "$(cd "$2" 2>/dev/null && pwd -P)" ]]; }
 in_env0 () { [[ "${SC_ENV0}" == *" $1 "* ]]; }   # exported when this job started (not set by this script)
 env_check () {   # env_check launch|chain
@@ -299,16 +301,19 @@ queue_check () {   # queue_check [regex] [exclude regex]: no live job whose name
 # ── THE OUTPUT GUARD (M3): nothing of this chain may already be in data/output ────────────
 output_guard () {   # output_guard <where> [after]: dies naming every file of an earlier run
     # after = what may already exist because it passed: "" (nothing: launch, --resume chain),
-    # prep (--resume chain --from gate-prep|logit), logit (--from gate-logit: + the logit and the
-    # draws), smoke (the GPU job and --resume gpu). The stage C gates of the resumed step and later must be absent,
+    # sleep (+ the estimates), prep (+ the demand parquets: --from gate-prep|link), link (+ the
+    # sleep links: --from logit), logit (--from gate-logit: + the logit and the draws), smoke (the
+    # GPU job and --resume gpu). The stage C gates of the resumed step and later must be absent,
     # except the failed gate being resumed, which its job rewrites.
-    local found="" a="${2:-}" gates='G2|G4|SC_(sleep|prep|logit|smoke|blp|blp_E34|blp_e12|bbl|final)'
-    case "${a}" in sleep) gates='G2|G4|SC_(prep|logit|smoke|blp|blp_E34|blp_e12|bbl|final)' ;; prep) gates='G4|SC_(logit|smoke|blp|blp_E34|blp_e12|bbl|final)' ;; logit) gates='SC_(smoke|blp|blp_E34|blp_e12|bbl|final)' ;; smoke) gates='SC_(blp|blp_E34|blp_e12|bbl|final)' ;; esac
+    local found="" a="${2:-}" gates='G2|G4|SC_(sleep|prep|link|logit|smoke|blp|blp_E34|blp_e12|bbl|final)'
+    case "${a}" in sleep) gates='G2|G4|SC_(prep|link|logit|smoke|blp|blp_E34|blp_e12|bbl|final)' ;; prep) gates='G4|SC_(link|logit|smoke|blp|blp_E34|blp_e12|bbl|final)' ;; link) gates='G4|SC_(logit|smoke|blp|blp_E34|blp_e12|bbl|final)' ;; logit) gates='SC_(smoke|blp|blp_E34|blp_e12|bbl|final)' ;; smoke) gates='SC_(blp|blp_E34|blp_e12|bbl|final)' ;; esac
     found="$( { [[ -z "${a}" ]] && ls -A "${CL_STEP_SLEEP}" 2>/dev/null | sed "s|^|output/sleep/|"
+               [[ -z "${a}" ]] && ls -A "${CL_DATA_OUT}/sleep_grid" 2>/dev/null | sed "s|^|output/sleep_grid/|"
                [[ -z "${a}" || "${a}" == "sleep" ]] && ls -A "${CL_STEP_DEMAND}" 2>/dev/null | sed "s|^|output/demand_prep/|"
-               [[ -z "${a}" || "${a}" == "sleep" || "${a}" == "prep" ]] && ls -A "${CL_STEP_LOGIT}" 2>/dev/null | sed "s|^|output/logit/|"
+               [[ -z "${a}" || "${a}" == "sleep" || "${a}" == "prep" ]] && ls -A "${CL_STEP_BBL}" 2>/dev/null | grep -E '^sleep_link_E[0-9]+_spec_12\.json$' | sed "s|^|output/bbl/|"
+               [[ -z "${a}" || "${a}" == "sleep" || "${a}" == "prep" || "${a}" == "link" ]] && ls -A "${CL_STEP_LOGIT}" 2>/dev/null | sed "s|^|output/logit/|"
                ls -A "${CL_STEP_BLP}" 2>/dev/null | grep -v '^draws$' | sed "s|^|output/blp/|"
-               [[ -z "${a}" || "${a}" == "sleep" || "${a}" == "prep" ]] && ls -A "${CL_STEP_DRAWS}" 2>/dev/null | sed "s|^|output/blp/draws/|"
+               [[ -z "${a}" || "${a}" == "sleep" || "${a}" == "prep" || "${a}" == "link" ]] && ls -A "${CL_STEP_DRAWS}" 2>/dev/null | sed "s|^|output/blp/draws/|"
                ls -A "${CL_STEP_BBL}" 2>/dev/null | grep -E "(${MS_TAG}|${SC_TAG})(\.|_|$)" | sed "s|^|output/bbl/|"
                ls -A "${CL_STEP_BBL}/.dispatch" 2>/dev/null | grep -E "(${MS_TAG}|${SC_TAG})$" | sed "s|^|output/bbl/.dispatch/|"
                ls -A "${CL_DATA_OUT}" 2>/dev/null | grep -E "^\.gate_(${gates})\.json$" | sed "s|^|output/|"
@@ -392,6 +397,7 @@ py_check () {   # py_check <sleep|prep|logit>: 0 ok / 1 broken
     export OPEN_FINANCE_VENV_ENFORCED=1 PYTHONUTF8=1
     cl_setup_python "${CL_PY_REQ_SLEEP}" >/dev/null || return 1
     export SC_KIND="$1" SC_ROUTINES="${ROUTINES_ALL}" SC_KEY="${SLEEP_KEY}" SC_SUMMARY="${SLEEP_SUMMARY}"
+    export SC_ROUTINES_TOML="${HERE}/config/routines.toml"
     "${PYBIN}" - <<'PY'
 import json, math, os, pickle, re, sys
 from pathlib import Path
@@ -399,6 +405,15 @@ kind = os.environ["SC_KIND"]; out = Path(os.environ["CL_DATA_OUT"])
 ks = [int(k) for k in os.environ["SC_ROUTINES"].split()]
 key = os.environ["SC_KEY"]; summ = Path(os.environ["SC_SUMMARY"])
 broken = []
+# phi lies in [0,1] by construction only for the shape-constrained (single-index) routines,
+# config/routines.toml link_ests; the others use an unconstrained linear link, whose phi
+# leaves [0,1] in some markets (it did on every earlier vintage), so for them phi must be finite.
+try:
+    import tomllib
+    BOUNDED = set(tomllib.load(open(os.environ["SC_ROUTINES_TOML"], "rb")).get("link_ests", []))
+except Exception as e:
+    BOUNDED = set()
+    broken.append(f"config/routines.toml unreadable ({e}): the shape-constrained routines are unknown")
 
 def num(x):
     try:
@@ -407,8 +422,13 @@ def num(x):
     except Exception:
         return None
 
+EFF_LABEL = "effective F"
+ALLSLOPES_LABEL = "first-stage F, all slopes (not the effective F)"
+
 def find_eff_f(fs):
-    """the first stage's effective F, wherever the estimator stored it (printed, not gated)"""
+    """(label, value) of the first stage's F, wherever the estimator stored it (printed, not
+    gated). The label is "effective F" for an effective-F field; the statsmodels attribute
+    fvalue is the F of ALL slopes, so it gets its own label."""
     cands = []
     if isinstance(fs, dict):
         cands = [(k, v) for k, v in fs.items() if re.search(r"eff", str(k), re.I) and re.search(r"f", str(k), re.I)]
@@ -421,8 +441,8 @@ def find_eff_f(fs):
                 cands.append((a, getattr(fs, a)))
     for name, v in cands:
         if num(v) is not None:
-            return f"{num(v):.3f} ({name})"
-    return "n/a (no effective-F field found in the stored first stage)"
+            return (ALLSLOPES_LABEL if name == "fvalue" else EFF_LABEL), f"{num(v):.3f} ({name})"
+    return EFF_LABEL, "n/a (no effective-F field found in the stored first stage)"
 
 if kind == "sleep":
     import pandas as pd
@@ -458,8 +478,12 @@ if kind == "sleep":
                 nq = int(v.notna().sum())
                 if nq == 0: broken.append(f"E{k}: {col} has no rows")
                 elif not v.dropna().map(math.isfinite).all(): broken.append(f"E{k}: {col} not finite")
-                elif v.min() < 0 or v.max() > 1: broken.append(f"E{k}: {col} outside [0,1] (min {v.min():.4f}, max {v.max():.4f})")
-                else: phi_mean = float(v.mean())
+                elif k in BOUNDED and (v.min() < 0 or v.max() > 1):
+                    broken.append(f"E{k}: {col} outside [0,1] (min {v.min():.4f}, max {v.max():.4f})")
+                else:
+                    phi_mean = float(v.mean())
+                    if k not in BOUNDED:
+                        print(f"  E{k}: {col} range [{v.min():.4f}, {v.max():.4f}] (unconstrained link: not bounded to [0,1])")
         mp = d / "market_panel_phis.csv"
         if not mp.is_file():
             broken.append(f"E{k}: no {mp.name}")
@@ -468,14 +492,23 @@ if kind == "sleep":
             try:
                 v = pd.to_numeric(pd.read_csv(mp, usecols=[col])[col], errors="coerce").dropna()
                 if len(v) == 0: broken.append(f"E{k}: {col} has no rows")
-                elif v.min() < 0 or v.max() > 1 or not v.map(math.isfinite).all():
-                    broken.append(f"E{k}: {col} outside [0,1] or not finite (min {v.min():.4f}, max {v.max():.4f})")
+                elif not v.map(math.isfinite).all(): broken.append(f"E{k}: {col} not finite")
+                elif k in BOUNDED and (v.min() < 0 or v.max() > 1):
+                    broken.append(f"E{k}: {col} outside [0,1] (min {v.min():.4f}, max {v.max():.4f})")
+                elif k not in BOUNDED:
+                    print(f"  E{k}: {col} range [{v.min():.4f}, {v.max():.4f}] (unconstrained link: not bounded to [0,1])")
             except ValueError:
                 broken.append(f"E{k}: {mp.name} has no {col}")
-        ss_txt = ss.to_string(max_rows=20) if hasattr(ss, "to_string") else str(ss)[:1500]
-        summary[str(k)] = {"key": str(mk), "eff_F": find_eff_f(ent.get("first_stage")), "second_stage": ss_txt,
+        # both result types (statsmodels, utils.sleep_links.NonLinearResults) carry params/bse/tvalues
+        try:
+            tab = pd.DataFrame({"coef": ss.params, "se": ss.bse, "t": getattr(ss, "tvalues", None)})
+            ss_txt = tab.round(4).to_string(max_rows=20)
+        except Exception:
+            ss_txt = ss.to_string(max_rows=20) if hasattr(ss, "to_string") else str(ss)[:1500]
+        f_kind, f_val = find_eff_f(ent.get("first_stage"))
+        summary[str(k)] = {"key": str(mk), "eff_F": f_val, "F_kind": f_kind, "second_stage": ss_txt,
                            "mean_phi_t": phi_mean, "n_quarters": nq}
-        print(f"  E{k}: '{mk}': second stage present; phi_t over {nq} quarters, mean {phi_mean}; first-stage effective F {summary[str(k)]['eff_F']}")
+        print(f"  E{k}: '{mk}': second stage present; phi_t over {nq} quarters, mean {phi_mean}; {f_kind} {f_val}")
     summ.write_text(json.dumps(summary, indent=1))
 elif kind == "prep":
     import pyarrow.parquet as pq
@@ -496,7 +529,8 @@ elif kind == "prep":
         if au.get("x_null_rows") != 0 or au.get("iv_bad_rows") != 0:
             broken.append(f"E{k}: x_null_rows={au.get('x_null_rows')} iv_bad_rows={au.get('iv_bad_rows')}")
         print(f"  E{k}: {p.name} rows {n:,}; dropped (no characteristics) {au.get('dropped_no_characteristics')}; "
-              f"dropped (no ESTBAN rival branches) {au.get('dropped_no_estban')}; chars file {au.get('chars_file')}")
+              f"dropped (no ESTBAN rival branches) {au.get('dropped_no_estban')}; "
+              f"dropped (no cost shifter) {au.get('dropped_no_cost_shifter')}; chars file {au.get('chars_file')}")
 else:
     j = out / "logit" / "logit_summary_spec_12.json"
     s = json.loads(j.read_text()) if j.is_file() else None
@@ -519,11 +553,18 @@ else:
             lines.append(f"    logit {m}: alpha {a if a is None else f'{a:.6f}'} (SE {se if se is None else f'{se:.6f}'}), rows {nobs if nobs is not None else 'n/a'}")
         e = sl.get(str(k), {})
         print(f"\n=== STAGE C SUMMARY E{k} (spec 12; read while the BLP runs) ===")
-        print(f"    sleepiness first stage ({e.get('key', key)}, rival_mean_spread): effective F {e.get('eff_F', 'n/a')}")
+        print(f"    sleepiness first stage ({e.get('key', key)}, rival_mean_spread): {e.get('F_kind', 'effective F')} {e.get('eff_F', 'n/a')}")
         print(f"    mean phi_t {e.get('mean_phi_t')} over {e.get('n_quarters')} quarters")
         print("    sleepiness second stage:")
         for ln in str(e.get("second_stage", "n/a")).splitlines()[:20]:
             print("      " + ln)
+        lk = out / "bbl" / f"sleep_link_E{k}_spec_12.json"
+        if lk.is_file():
+            tc = json.loads(lk.read_text()).get("t0_check") or {}
+            print(f"    sleep link (BBL): t=0 check max|phi0 - phi_mt| {tc.get('max_abs_diff')} over {tc.get('n_rows')} rows "
+                  f"(tol {tc.get('tol')}): {'PASS' if tc.get('pass') else 'FAIL'}")
+        elif k in (3, 4):
+            broken.append(f"E{k}: no sleep link {lk.name} (the link step did not run)")
         for ln in lines: print(ln)
         print(f"=== END SUMMARY E{k} ===")
 for b in broken: print("  [BROKEN] " + b)
@@ -541,15 +582,14 @@ gate_mode () {   # gate_mode sleep|prep|logit
 # the point estimates passed their gate; they read only those estimates and the panel; nothing waits
 # on them, and a refused submission is reported, not a stop. Their own archive (set sleep, tag
 # <chain id>_boot) runs afterany all of them. Sizes: sleep_run.sh's production requests (no sacct
-# record of a cluster sleepiness run exists locally); cpugen:turin like the chain. The phi weak-IV
-# battery (sleep_weak_iv.py) is not among them: it is a deferred task and the bundle excludes it.
-OFFPATH_RE='^(stagec_cpu_image|stagec_boot_zip|sleep_(wcb_band|ame_gate|ame_E[0-9]+))$'
+# record of a cluster sleepiness run exists locally); cpugen:turin like the chain.
+OFFPATH_RE='^(stagec_cpu_image|stagec_boot_zip|stagec_grid_zip|sleep_(wcb_band|ame_gate|ame_E[0-9]+|grid_E[0-9]+))$'
 submit_sleep_boot () {
     local j ids="" ameg="" k bsub
     bsub () { local n="$1" dep="$2" c="$3" m="$4" w="$5"; shift 5
         sub "${n}" "${dep}" --partition="${REQ_BOOT_PART}" --time="${w}" --nodes=1 --ntasks=1 --cpus-per-task="${c}" --mem="${m}" \
             ${REQ_BOOT_PIN:+--constraint="${REQ_BOOT_PIN}"} "$@"; }
-    say "   bootstraps, off the critical path (nothing waits on them):"
+    say "   bootstraps and the full grids, off the critical path (nothing waits on them):"
     if j=$(bsub sleep_wcb_band "" "${REQ_WCB_CPUS}" "${REQ_WCB_MEM}" "${REQ_WCB_TIME}" \
             --export=ALL,SLEEP_STEP=wcb_band,SPEC=12,SLEEP_WCB_ROUTINES="1 2" "${HERE}/sleep_job.sh"); then ids="${j}"; say "      sleep_wcb_band (E1/E2 percentile bands) -> ${j}"
     else say "   [!] sleep_wcb_band was refused (the chain goes on)"; fi
@@ -563,6 +603,24 @@ submit_sleep_boot () {
             else say "   [!] sleep_ame_E${k} was refused (the chain goes on)"; fi
         done
     else say "   [!] sleep_ame_gate was refused (the chain goes on; no AME)"; fi
+    # The FULL E2-E4 grids (Pedro 10-15): spec 12 stays on the critical path (the sleep step); the
+    # grids run beside it, under their own root (SLEEP_GRID_ROOT: never data/output/sleep), and
+    # are compared report-only with the chain's spec 12 (--grid-check) before their archive.
+    # E1 runs its full grid in the chain already.
+    local gids="" gk
+    for gk in 2 3 4; do
+        if j=$(bsub "sleep_grid_E${gk}" "" "${REQ_GRID_CPUS}" "${REQ_GRID_MEM}" "${REQ_GRID_TIME}" \
+                --export=ALL,SLEEP_STEP=est,SLEEP_EST=${gk},SLEEP_EST_EXTRA=,SPEC=12,SLEEP_GRID_ROOT=${CL_DATA_OUT}/sleep_grid "${HERE}/sleep_job.sh"); then
+            gids="${gids:+${gids}:}${j}"; say "      sleep_grid_E${gk} (full grid, under output/sleep_grid) -> ${j}"
+        else say "   [!] sleep_grid_E${gk} was refused (the chain goes on)"; fi
+    done
+    if [[ -n "${gids}" ]]; then
+        if j=$(sub stagec_grid_zip "afterany:${gids}" --partition="${REQ_ZIP_PART}" --time="${REQ_ZIP_TIME}" --nodes=1 --ntasks=1 \
+                --cpus-per-task="${REQ_ZIP_CPUS}" --mem="${REQ_ZIP_MEM}" ${REQ_ZIP_PIN:+--constraint="${REQ_ZIP_PIN}"} \
+                --wrap "cd '${HERE}' && bash ${SELF} --grid-check; bash cluster_archive.sh --set sleep_grid --copy --tag \"\${SLURM_JOB_ID}_grid\""); then
+            say "      stagec_grid_zip (--grid-check, report only; archive set sleep_grid; afterany ${gids//:/, }) -> ${j}"
+        else say "   [!] stagec_grid_zip was refused (compare and archive the grids by hand when they end)"; fi
+    fi
     if [[ -n "${ids}" ]]; then
         if j=$(sub stagec_boot_zip "afterany:${ids}" --partition="${REQ_ZIP_PART}" --time="${REQ_ZIP_TIME}" --nodes=1 --ntasks=1 \
                 --cpus-per-task="${REQ_ZIP_CPUS}" --mem="${REQ_ZIP_MEM}" ${REQ_ZIP_PIN:+--constraint="${REQ_ZIP_PIN}"} \
@@ -628,7 +686,7 @@ smoke_split () {
 # ══════════════════════════════════════════════════════════════════════════════════════════
 read -r -a SLEEP_EXTRA <<< "${STAGEC_SLEEP_EXTRA:-}"   # accepted for the record; the chain calls sleep_job.sh directly
 prep_env () { export DEMAND_CHARS_FILE="${CHARS_FILE}" SLEEP_PREP_EXTRA="--skip-steps 5 7 8 --only-spec-12" SLEEP_ACTIVE_ESTS="${ROUTINES_ALL}"; }
-CHAIN_STEPS="sleep gate-sleep prep gate-prep logit gate-logit"
+CHAIN_STEPS="sleep gate-sleep prep gate-prep link logit gate-logit"
 step_index () { local i=0 s; for s in ${CHAIN_STEPS}; do [[ "${s}" == "$1" ]] && { echo "${i}"; return 0; }; i=$((i + 1)); done; return 1; }
 chain_log () { printf '%s/stagec_chain_%s_%s.log' "${LOGD}" "${SLURM_JOB_ID:-local}" "$1"; }
 # step 0 (always): this node's precompile caches (pkgimages are CPU-specific, so T1's node may not
@@ -643,6 +701,15 @@ chain_precompile () {
         using MKL, LoopVectorization, LinearAlgebra, DataFrames, Optim, ArgParse, Parquet2, JSON3, Distributions, QuasiMonteCarlo, LBFGSB, CUDA
         println("  every project package loads; BLAS: ", BLAS.get_config(), "; threads ", Threads.nthreads())
     ' || die "the project packages do not load (above)"
+}
+# the sleep links (Pedro 10-15): the BBL's evolving phi from the chain's OWN fits and demand
+# parquets, written where every BBL reader looks (data/output/bbl); bbl_sleep_link.py exits 1 when
+# the link does not reproduce phi_mt at t=0 (1e-10). A subshell: its exports stay out of the chain.
+chain_link () {
+    cl_bootstrap_tree >/dev/null; cl_export_step_dirs
+    export OPEN_FINANCE_VENV_ENFORCED=1 PYTHONUTF8=1 PYTHONUNBUFFERED=1
+    cl_setup_python "${CL_PY_REQ_SLEEP}" || die "the Python env does not load (above)"
+    cd "${HERE}" && "${PYBIN}" "${HERE}/bbl_sleep_link.py" --est 3 4 --out-dir "${CL_STEP_BBL}" --transitions "${CL_DATA_IN}/bbl_transitions.json"
 }
 # chain_step <step>: one step of the chain, its own log; returns the step's code.
 chain_step () {
@@ -671,6 +738,10 @@ chain_step () {
                 bash "${HERE}/sleep_job.sh" > "$(chain_log g2)" 2>&1 || { tail -30 "$(chain_log g2)"; return 1; } ;;
         gate-prep)
             ( gate_mode prep ) ;;
+        link)
+            say "   sleep links: bbl_sleep_link.py --est 3 4 -> data/output/bbl (its t=0 check is the gate) -> $(basename "$(chain_log link)")"
+            ( run_payload link chain_link ) > "$(chain_log link)" 2>&1 || { tail -30 "$(chain_log link)"; return 1; }
+            gate_json link true "sleep links E3/E4 exported; t=0 check passed (bbl_sleep_link.py)" ;;
         logit)
             say "   logit || draws, ${REQ_CHAIN_JULIA_THREADS} Julia threads each (as the two separate jobs had) -> $(basename "$(chain_log logit)"), $(basename "$(chain_log draws)")"
             ( run_payload logit env SLEEP_ACTIVE_ESTS="${ROUTINES_ALL}" SPEC=12 SLURM_CPUS_PER_TASK="${REQ_CHAIN_JULIA_THREADS}" \
@@ -696,6 +767,7 @@ chain_advice () {   # chain_advice <failed step> <code>: the one-line resume aft
         gate-sleep) echo "Once the cause is fixed: $(resume_line "chain --from gate-sleep")" ;;
         prep) echo "Once the cause is fixed, move data/output/demand_prep and .gate_G2.json aside (mkdir -p ${CL_DATA_OUT}/_stagec_attempt_${STAMP} and mv them there), then: $(resume_line chain)" ;;
         gate-prep) echo "Once the cause is fixed: $(resume_line "chain --from gate-prep")" ;;
+        link) echo "The link does not reproduce the demand parquet's phi_mt at t=0, or did not run (above). Once the cause is fixed, move data/output/bbl/sleep_link_E*_spec_12.json aside, then: $(resume_line "chain --from link")" ;;
         logit) echo "Once the cause is fixed, move data/output/logit, data/output/blp/draws and .gate_G4.json aside, then: $(resume_line "chain --from logit")" ;;
         gate-logit) echo "Once the cause is fixed: $(resume_line "chain --from gate-logit")" ;;
     esac
@@ -834,6 +906,33 @@ cpu_image_mode () {
     gate_json cpu_image true "blp_sysimage_cpu.so loads on $(hostname) (provenance + CPU target)"
     say "CPU IMAGE: PASS"
 }
+# --grid-check (stagec_grid_zip, after the grids): REPORT ONLY. Each full grid's spec-12 phi_t
+# against the chain's (the one the prep read); prints max |dphi_t| per routine; never stops.
+grid_check_mode () {
+    say "stage C grid check (report only): the full grids' spec 12 vs the chain's"
+    cl_bootstrap_tree >/dev/null; cl_export_step_dirs
+    export OPEN_FINANCE_VENV_ENFORCED=1 PYTHONUTF8=1
+    cl_setup_python "${CL_PY_REQ_SLEEP}" >/dev/null || { say "   [!] no Python env: no comparison"; return 0; }
+    SC_KEY="${SLEEP_KEY}" "${PYBIN}" - <<'PY' || true
+import os
+from pathlib import Path
+import pandas as pd
+out = Path(os.environ["CL_DATA_OUT"]); key = os.environ["SC_KEY"]
+col = "phi_t_" + key.replace(" ", "_").replace(".", "")
+for k in (2, 3, 4):
+    a, b = out / "sleep" / f"est{k}" / "national_phi_t.csv", out / "sleep_grid" / f"est{k}" / "national_phi_t.csv"
+    if not (a.is_file() and b.is_file()):
+        print(f"  E{k}: no comparison ({'chain' if not a.is_file() else 'grid'} national_phi_t.csv missing)"); continue
+    da, db = pd.read_csv(a), pd.read_csv(b)
+    if col not in da.columns or col not in db.columns:
+        print(f"  E{k}: no comparison ({col} missing)"); continue
+    m = da[["year_quarter", col]].merge(db[["year_quarter", col]], on="year_quarter", suffixes=("_chain", "_grid"))
+    d = (m[col + "_chain"] - m[col + "_grid"]).abs()
+    print(f"  E{k}: spec 12 full grid vs chain: max |dphi_t| = {d.max():.3e} over {len(m)} quarters "
+          f"({'identical' if d.max() == 0 else 'DIFFERENT -- report only'})")
+PY
+    say "GRID CHECK DONE (report only)"
+}
 cpu_image_gate_or_die () {   # cpu_image_gate_or_die <what refuses> <its rerun line>: T4 passed, and the image still checks
     local f="${CL_DATA_OUT}/.gate_SC_cpu_image.json"
     if [[ ! -f "${f}" ]] || grep -Eq '"ok"[[:space:]]*:[[:space:]]*false' "${f}" || ! grep -Eq '"ok"[[:space:]]*:[[:space:]]*true' "${f}"; then
@@ -916,15 +1015,7 @@ need_draws () {   # the draws the smoke and the ladders read
 resume_mode () {
     local p="${MODE_ARG}" from="${RESUME_FROM:-sleep}"
     say "stage C resume from '${p}'$([[ "${p}" == "chain" ]] && echo " --from ${from}"): data root ${CL_DATA_ROOT}$([[ "${DRY}" == "1" ]] && echo '  [DRY RUN]')"
-    case "${p}" in chain|gpu|next-blp|blp|next-bbl|cpu-image) ;; *) die "--resume takes chain [--from sleep|gate-sleep|prep|gate-prep|logit|gate-logit], gpu, next-blp, blp, next-bbl or cpu-image (got '${p}')" ;; esac
-    if [[ "${STAGEC_ALLOW_MISMATCH:-0}" == "1" ]]; then
-        die "STAGEC_ALLOW_MISMATCH=1 opens every gate of a job; a resume opens ONE: use --export=ALL,STAGEC_ALLOW_MISMATCH_STEP=gate-prep (or gate-logit) with --resume chain --from that step"
-    fi
-    if [[ -n "${STAGEC_ALLOW_MISMATCH_STEP:-}" ]]; then
-        [[ "${p}" == "chain" && "${STAGEC_ALLOW_MISMATCH_STEP}" == "${from}" && "${from}" == gate-* ]] \
-            || die "STAGEC_ALLOW_MISMATCH_STEP=${STAGEC_ALLOW_MISMATCH_STEP} applies to --resume chain --from that gate step only (got ${p}${from:+ --from ${from}})"
-        say "   !!!!! the ${from} step of the resumed chain accepts a mismatch (STAGEC_ALLOW_MISMATCH_STEP, that step only) !!!!!"
-    fi
+    case "${p}" in chain|gpu|next-blp|blp|next-bbl|cpu-image) ;; *) die "--resume takes chain [--from sleep|gate-sleep|prep|gate-prep|link|logit|gate-logit], gpu, next-blp, blp, next-bbl or cpu-image (got '${p}')" ;; esac
     env_check chain; check_arrival code; frozen_check; input_delta_guard
     case "${p}" in
         blp)
@@ -953,8 +1044,9 @@ resume_mode () {
                 gate-sleep) output_guard "resume chain --from ${from}" sleep ;;
                 prep)       need_gate SC_sleep; output_guard "resume chain --from ${from}" sleep ;;
                 gate-prep)  need_gate SC_sleep; need_gate G2; output_guard "resume chain --from ${from}" prep ;;
-                logit)      need_gate SC_prep; output_guard "resume chain --from ${from}" prep ;;
-                gate-logit) need_gate SC_prep; need_gate G4; need_draws; output_guard "resume chain --from ${from}" logit ;;
+                link)       need_gate SC_prep; output_guard "resume chain --from ${from}" prep ;;
+                logit)      need_gate SC_prep; need_gate SC_link; output_guard "resume chain --from ${from}" link ;;
+                gate-logit) need_gate SC_prep; need_gate SC_link; need_gate G4; need_draws; output_guard "resume chain --from ${from}" logit ;;
             esac
             dry_then_submit main "${from}" ;;
         gpu)
@@ -967,7 +1059,7 @@ resume_mode () {
     esac
     if [[ "${DRY}" == "1" ]]; then echo "STAGE C RESUME DRY RUN COMPLETE (${p})"; return 0; fi
     echo
-    echo "STAGE C RESUMED FROM ${p}$([[ "${p}" == "chain" ]] && echo " --from ${from}")$([[ -n "${STAGEC_ALLOW_MISMATCH_STEP:-}" ]] && echo " (the ${STAGEC_ALLOW_MISMATCH_STEP} step accepts the mismatch)")"
+    echo "STAGE C RESUMED FROM ${p}$([[ "${p}" == "chain" ]] && echo " --from ${from}")"
     print_watch_lines
 }
 
@@ -1415,6 +1507,7 @@ case "${MODE}" in
     chain)      chain_mode; exit 0 ;;
     gpu)        gpu_mode; exit 0 ;;
     cpu-image)  cpu_image_mode; exit 0 ;;
+    grid-check) grid_check_mode; exit 0 ;;
     next-blp)   next_blp; exit 0 ;;
     check-blp)  check_blp "${MODE_ARG}"; exit 0 ;;
     next-bbl)   next_bbl; exit 0 ;;

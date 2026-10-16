@@ -365,7 +365,7 @@ BancoSeguro 202506, RCI Brasil 202508, 202511 and 202512.
 ### 5.2 Securities-regulator filings, 2013 onward: `scrape_cvm_advertising.py`
 
 **Inputs.** CVM DFP and ITR yearly zips 2013-2026, members DVA and DRE, individual and
-consolidated, from the cache shared with `scrape_cvm_fee_income.py`
+consolidated, from the cache shared with `fees/scrape_cvm_fee_income.py`
 (`FirmDisclosures/CVM/raw`, downloaded 2026-06-01; `--refresh` redownloads). IF.data lists
 (`paths.IF_DATA_LIST`, 52 quarters) mark BCB-supervised filers.
 

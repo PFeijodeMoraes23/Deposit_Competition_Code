@@ -910,8 +910,8 @@ function _parse_cost2_args()
         "--phi-path";      arg_type = String;  default = nothing # evolving | frozen   (CF_PHI_PATH)
         "--z-path";        arg_type = String;  default = nothing # mean_reverting | frozen (CF_Z_PATH)
         "--rdep-timing";   arg_type = String;  default = nothing # lagged | contemporaneous (CF_RDEP_TIMING)
-        # sleep_link_E{estim}_spec_{spec}.json (bbl_sleep_link.py); default: data/input, then the
-        # bbl step folder (cf_in_dir / cf_out_dir of COST_FWD). Read only under --phi-path evolving.
+        # sleep_link_E{estim}_spec_{spec}.json (bbl_sleep_link.py); default: the bbl step folder
+        # (cf_out_dir of COST_FWD), where the cluster produces it. Read only under --phi-path evolving.
         "--sleep-link";    arg_type = String;  default = nothing
     end
     return parse_args(s)
@@ -947,16 +947,12 @@ function resolve_sim_switches!(a::AbstractDict)
     return a
 end
 
-# The sleep link of routine `estim`: --sleep-link, else the upload (data/input), else the bbl
-# step folder, where bbl_sleep_link.py writes it when it runs on the cluster.
+# The sleep link of routine `estim`: --sleep-link, else the bbl step folder, where
+# bbl_sleep_link.py writes it on the cluster from the cluster's own fit and demand parquet. Never
+# data/input: the link is produced, not uploaded, so an upload could only be a stale vintage.
 function _sleep_link_path(a::AbstractDict, out_dir::String)
     a["sleep-link"] !== nothing && return String(a["sleep-link"])
-    leaf = "sleep_link_E$(a["estim"])_spec_$(a["spec"]).json"
-    for d in (cf_in_dir(out_dir, "COST_FWD"), cf_out_dir(out_dir, "COST_FWD"))
-        p = joinpath(d, leaf)
-        isfile(p) && return p
-    end
-    return joinpath(cf_in_dir(out_dir, "COST_FWD"), leaf)
+    return joinpath(cf_out_dir(out_dir, "COST_FWD"), "sleep_link_E$(a["estim"])_spec_$(a["spec"]).json")
 end
 
 function main_cost2()

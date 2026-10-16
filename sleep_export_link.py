@@ -29,7 +29,6 @@ from utils import paths as _paths_mod
 from utils import state_transform as _st
 from utils import se_national as _sen
 from utils import sleep_notes as _notes
-import sleep_first_stage_strength as _fss
 
 _DRAFTS_DIR = _paths_mod.drafts_dir()
 # rout_dir/est_dir follow SLEEP_OUT_ROOT, so a sandboxed run exports the fits it just
@@ -139,15 +138,11 @@ def fmt3(x, digits=3):
 
 
 def eff_f_cell(est_num, spec_key, math=True):
-    """The effective-F cell of routine `est_num` under `spec_key` (e.g. 'IV_RivalSpread x Tech'),
-    read from Rout/sleep_first_stage_strength.json and shown at three decimals. Blank when the
-    file holds no value for the column: a specification without excluded instruments, or a file
-    that has not been written. `math=False` returns the bare number for tables whose cells are
-    not in math mode."""
-    v = _fss.eff_f(est_num, spec_key)
-    if v is None:
-        return ""
-    return f"${fmt3(v)}$" if math else fmt3(v)
+    """The effective-F cell of routine `est_num` under `spec_key` (e.g. 'IV_RivalSpread x Tech').
+    The effective F of the excluded instruments belongs to the weak-instrument battery, which
+    has no calculator yet, so the cell is blank in every table. The signature stays so the
+    first-stage exporters keep one call site for it."""
+    return ""
 
 
 def pdflatex_clean(stdout: str) -> bool:

@@ -13,7 +13,7 @@ Unpacks both zips into BUNDLE_DIR/verify/ (the project root as on the cluster) a
   V6 no forbidden (demand_repair*, blp_dx*, dx_*) or excluded (weak-IV battery) member
   V7 the pin file: CHARS_SHA256, SIGMA_SHA256 (the 10-15 sigma rebuild, never the 08-26 file),
      JL_MANIFEST_SHA256 = the shipped Manifest-v1.11.toml (= the validated one); no sleepiness
-     estimate and no EXPECT value ships, the conda create line conda-forge only; the shipped panel md5 6613228b...; the chars
+     estimate and no EXPECT value ships, the conda create line conda-forge only; the shipped panel md5 = build_stagec_bundle.PANEL_MD5; the chars
      parquet schema metadata records that panel md5
 Exit 0 only when every check passes.
 """
@@ -113,13 +113,14 @@ def main() -> int:
     # V5, V6
     missing = [r for r in REQUIRED if f"scripts/{r}" not in members]
     chk(f"V5 {len(REQUIRED)} required members present", not missing, missing)
-    forb = [m for m in members if B.FORBIDDEN.search(m) or Path(m).name in B.EXCLUDE]
-    chk("V6 no forbidden or excluded member", not forb, forb)
+    forb = [m for m in members if B.FORBIDDEN.search(m)]
+    chk("V6 no forbidden member", not forb, forb)
     # V7
     pins = members.get("scripts/stagec_pins_20261012.env", b"").decode()
     chk("V7 pin CHARS_SHA256 = the pinned chars file", f"CHARS_SHA256={B.CHARS_SHA256}" in pins)
-    chk("V7 no sleepiness estimate and no local reference value ships (Pedro 10-15)",
-        not any("sleep_est_" in m for m in members) and "EST_UPLOADS" not in pins and "EXPECT_" not in pins)
+    chk("V7 nothing the chain produces ships (no sleepiness estimate, no sleep link), no tier0 audit, no local reference value (Pedro 10-15)",
+        not any(x in m for m in members if m.startswith("data/input/") for x in ("sleep_est_", "sleep_link_", "state_centering_tier0"))
+        and "EST_UPLOADS" not in pins and "EXPECT_" not in pins)
     jm = members.get(f"scripts/{B.JL_MANIFEST}", b"")
     chk("V7 JL_MANIFEST_SHA256 = the shipped Manifest-v1.11.toml = the validated set",
         f"JL_MANIFEST_SHA256={sha(jm)}" in pins and sha(jm) == B.JL_MANIFEST_SHA256 and b'julia_version = "1.11.4"' in jm)
@@ -127,7 +128,7 @@ def main() -> int:
     chk("V7 demographics_sigma.parquet = the pinned 10-15 rebuild, pinned in the pin file, not the stale 08-26 file",
         sig == B.SIGMA_SHA256 and f"SIGMA_SHA256={sig}" in pins and sig not in B.SIGMA_STALE_SHA256)
     chk("V7 conda create line: conda-forge only", "--override-channels --strict-channel-priority -c conda-forge" in pins)
-    chk("V7 shipped panel md5 = 6613228b...", sha(members.get("data/input/market_panel.parquet", b""), "md5") == B.PANEL_MD5)
+    chk(f"V7 shipped panel md5 = the pinned {B.PANEL_MD5[:8]}...", sha(members.get("data/input/market_panel.parquet", b""), "md5") == B.PANEL_MD5)
     import pyarrow.parquet as pq, io
     meta = pq.ParquetFile(io.BytesIO(members[f"data/input/{B.CHARS_NAME}"])).schema_arrow.metadata or {}
     chk("V7 chars parquet records the shipped panel md5", meta.get(b"demand_chars.market_panel_md5", b"").decode() == B.PANEL_MD5)

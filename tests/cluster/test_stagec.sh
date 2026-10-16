@@ -43,7 +43,16 @@ checke () { local what="$1"; shift; if eval "$1"; then ok "${what}"; else bad "$
 has () { grep -q -- "$1" "$2"; }
 hasn () { ! grep -q -- "$1" "$2"; }
 
-POLICY_SRC="${EO}/COST_POLFUNC/polfunc_fitted.csv"
+# the policy: the 10-16 refit under its upload name (the wrapper pins its sha256); the deployed
+# 10-13 wrapper of section P pins the 09-30 file, taken from the 10-13 data zip (old_policy)
+POLICY_SRC="${EO}/COST_POLFUNC/polfunc_fitted.csv"; POLICY_NAME="polfunc_fitted_20261016.csv"
+OLD_DATA_ZIP="/c/Users/pedro/.claude/projects/c--Users-pedro-OneDrive-Documentos-Yale-Year-3--2024---2025--Open-Finance-Open-Finance-Code-Egan-et-al-2025-Rep/checkpoints_20260928/stageC_launch_20261012/bundle_final_20261013/stagec_data_20261013.zip"
+old_policy () {   # old_policy -> the path of the 09-30 policy (sha256 fd208b5f...), extracted once
+    local f="${SBX}/fixtures/polfunc_fitted_liverows_20260930.csv"
+    [[ -s "${f}" ]] || { mkdir -p "${SBX}/fixtures"; "${PYW}" -c 'import sys, zipfile
+z = zipfile.ZipFile(sys.argv[1]); open(sys.argv[2], "wb").write(z.read("data/input/polfunc_fitted_liverows_20260930.csv"))' "${OLD_DATA_ZIP}" "${f}"; }
+    printf '%s' "${f}"
+}
 # build_sandbox [src scripts dir] [wrapper]: the repo's scripts (default) or the deployed ones (P)
 build_sandbox () {
     local SRC="${1:-${REPO}}" WR="${2:-${REPO}/stagec_suite_20261012.sh}" f
@@ -61,21 +70,35 @@ build_sandbox () {
     echo "panel" > "${D}/input/market_panel.parquet"
     echo "chars" > "${D}/input/demand_chars_T.parquet"
     echo "sigma 10-14" > "${D}/input/demographics_sigma.parquet"
-    cp "${POLICY_SRC}" "${D}/input/polfunc_fitted_liverows_20260930.csv"
-    for f in forward_rf_qoq.csv forward_rf_vintages.csv bbl_transitions.json sleep_link_E3_spec_12.json sleep_link_E4_spec_12.json; do
+    cp "${POLICY_SRC}" "${D}/input/${POLICY_NAME}"
+    for f in forward_rf_qoq.csv forward_rf_vintages.csv bbl_transitions.json; do
         cp "${EO}/COST_FWD/${f}" "${D}/input/${f}"
     done
+    if [[ "${SRC}" != "${REPO}" ]]; then   # the deployed 10-13 design (section P) shipped slim estimates + markers
+        for k in 1 2 3 4; do
+            echo "slim E${k}" > "${D}/input/sleep_est_E${k}_estimation_results.pkl"
+            printf '{"routine": %s}\n' "${k}" > "${D}/input/sleep_est_E${k}_spec12_slim.json"
+        done
+    fi
     ( cd "${SB}" && sha256sum scripts/cluster_lib.sh scripts/sleep_run.sh scripts/stagec_suite_20261012.sh scripts/Manifest.toml scripts/Manifest-v1.11.toml data/input/* ) > "${S}/stagec_arrival_T.sha256"
     cat > "${S}/stagec_pins_20261012.env" <<EOF
 ARRIVAL_LIST=stagec_arrival_T.sha256
 CHARS_NAME=demand_chars_T.parquet
 CHARS_SHA256=$(sha256sum "${D}/input/demand_chars_T.parquet" | cut -d' ' -f1)
 SIGMA_SHA256=$(sha256sum "${D}/input/demographics_sigma.parquet" | cut -d' ' -f1)
-POLICY_UPLOAD=polfunc_fitted_liverows_20260930.csv
+POLICY_UPLOAD=${POLICY_NAME}
 JL_MANIFEST_SHA256=$(sha256sum "${S}/Manifest-v1.11.toml" | cut -d' ' -f1)
 PY_REQ="numpy, pandas"
 CONDA_CREATE="module load miniconda && conda create -y -n dep_comp_blp --override-channels --strict-channel-priority -c conda-forge python=3.11 numpy pandas"
 EOF
+    if [[ "${SRC}" != "${REPO}" ]]; then   # ... and its pin file named them, with the local expectations
+        local est="" mk="" k
+        for k in 1 2 3 4; do
+            est="${est} ${k}:sleep_est_E${k}_estimation_results.pkl:$(sha256sum "${D}/input/sleep_est_E${k}_estimation_results.pkl" | cut -d' ' -f1)"
+            mk="${mk} ${k}:sleep_est_E${k}_spec12_slim.json:$(sha256sum "${D}/input/sleep_est_E${k}_spec12_slim.json" | cut -d' ' -f1)"
+        done
+        printf 'EST_UPLOADS=(%s)\nEST_MARKERS=(%s)\nEXPECT_ROWS=(1:10 2:10 3:10 4:10)\nEXPECT_ALPHA=(E3_full_dtype:-0.0628 E4_full_dtype:-0.0567)\n' "${est# }" "${mk# }" >> "${S}/stagec_pins_20261012.env"
+    fi
 }
 reset_stubs () { rm -rf "${STATE}"; mkdir -p "${STATE}"; : > "${STATE}/squeue.txt"; }
 run () {   # run <log> <mode-args...> [-- env...]: the wrapper in the sandbox, stubs first on PATH
@@ -214,13 +237,14 @@ echo "== C1 --chain, every step passes (the sleepiness estimates first, on the c
 build_sandbox; reset_stubs; run "${T}/c0.log" --install
 run "${T}/c1.log" --chain; rc=$?
 check "C1 exit 0" test ${rc} -eq 0 || tail -25 "${T}/c1.log"
-check "C1 payload order: precompile g0, sleep E1-E4, prep g2, logit/draws g4, archive x2" bash -c "[[ '$(tags | sed 's/draws logit/logit draws/')' == 'precompile g0 sleep_e1 sleep_e2 sleep_e3 sleep_e4 prep g2 logit draws g4 archive archive ' ]]"
+check "C1 payload order: precompile g0, sleep E1-E4, prep g2, link, logit/draws g4, archive x2" bash -c "[[ '$(tags | sed 's/draws logit/logit draws/')' == 'precompile g0 sleep_e1 sleep_e2 sleep_e3 sleep_e4 prep g2 link logit draws g4 archive archive ' ]]"
 check "C1 G0 excuses the images and the draws (T2 builds the GPU image)" has 'PF_WILL_BUILD=draws sysimage' "${PLOG}"
-check "C1 the gates written ok (SC_sleep, SC_prep, SC_logit)" bash -c "grep -q '\"ok\": true' '${D}/output/.gate_SC_sleep.json' && grep -q '\"ok\": true' '${D}/output/.gate_SC_prep.json' && grep -q '\"ok\": true' '${D}/output/.gate_SC_logit.json'"
+check "C1 the gates written ok (SC_sleep, SC_prep, SC_link, SC_logit)" bash -c "grep -q '\"ok\": true' '${D}/output/.gate_SC_sleep.json' && grep -q '\"ok\": true' '${D}/output/.gate_SC_prep.json' && grep -q '\"ok\": true' '${D}/output/.gate_SC_link.json' && grep -q '\"ok\": true' '${D}/output/.gate_SC_logit.json'"
 check "C1 archives: demand_prep and logit, tag = the job id" bash -c "grep -q 'cluster_archive.sh --set demand_prep --copy --tag local' '${PLOG}' && grep -q 'cluster_archive.sh --set logit --copy --tag local' '${PLOG}'"
 check "C1 PASSED line" has "STAGE C CHAIN: PASSED" "${T}/c1.log"
-check "C1 the chain submits only the bootstraps (5 jobs), nothing else" test "$(grep -c . "${SBL}")" -eq 5 -a "$(grep -c -- '-J stagec_gpu \|-J stagec_chain ' "${SBL}")" -eq 0
+check "C1 the chain submits only the off-path jobs (4 bootstraps + zip, 3 grids + zip), nothing else" test "$(grep -c . "${SBL}")" -eq 9 -a "$(grep -c -- '-J stagec_gpu \|-J stagec_chain ' "${SBL}")" -eq 0
 check "C1 no local reference values anywhere (no EXPECT, no 'local' comparison)" bash -c "! grep -qi 'local [0-9]\|vs local\|MISMATCH' '${T}/c1.log'"
+check "C1 the prep gate prints both new drop counts (ESTBAN rival branches, cost shifter)" bash -c "grep -q 'dropped (no ESTBAN rival branches) {.rows.: 193' '${T}/c1.log' && grep -q 'dropped (no cost shifter) {.rows.: 36' '${T}/c1.log'"
 
 echo "== C2 a demand parquet with no rows: the prep gate refuses (exit 1), the archive still runs"
 build_sandbox; reset_stubs; run "${T}/c0.log" --install
@@ -256,6 +280,7 @@ echo "== C6 --chain --from gate-logit: the logit gate and the archive only"
 build_sandbox; reset_stubs; run "${T}/c0.log" --install; mkparquets 10 10 10 10; mkdraws
 mkdir -p "${D}/output/logit"; printf '{"E1_full_dtype": {"param_names": ["alpha", "dummy_D_type"], "theta1": [-0.06, -5.4], "se": [0.01, 0.1], "n_obs": 10}, "E2_full_dtype": {"param_names": ["alpha", "dummy_D_type"], "theta1": [-0.06, -5.4], "se": [0.01, 0.1], "n_obs": 10}, "E3_full_dtype": {"param_names": ["alpha", "dummy_D_type"], "theta1": [-0.0628, -5.4], "se": [0.01, 0.1], "n_obs": 10}, "E4_full_dtype": {"param_names": ["alpha", "dummy_D_type"], "theta1": [-0.0567, -5.5], "se": [0.01, 0.1], "n_obs": 10}}\n' > "${D}/output/logit/logit_summary_spec_12.json"
 : > "${PLOG}"
+mkdir -p "${D}/output/bbl"; for k in 3 4; do printf '{"t0_check": {"n_rows": 10, "max_abs_diff": 0.0, "tol": 1e-10, "pass": true}}\n' > "${D}/output/bbl/sleep_link_E${k}_spec_12.json"; done
 run "${T}/c6.log" --chain --from gate-logit; rc=$?
 check "C6 exit 0; payloads: precompile g0 archive archive" test ${rc} -eq 0 -a "$(tags)" == "precompile g0 archive archive "
 
@@ -286,6 +311,9 @@ grep -- "-J sleep_ame_E3 " "${SBL}" | grep -q -- "--dependency=afterok:$(id_of s
 check "L3 wcb and the AME guard depend on nothing (only the point estimates on disk)" test -z "$(dep_of sleep_wcb_band)" -a -z "$(dep_of sleep_ame_gate)"
 check "L3 their archive: set sleep, afterany all four" bash -c "grep -- '-J stagec_boot_zip ' '${SBL}' | grep -q -- '--dependency=afterany:$(id_of sleep_wcb_band):$(id_of sleep_ame_gate):$(id_of sleep_ame_E3):$(id_of sleep_ame_E4) .*cluster_archive.sh --set sleep --copy'"
 check "L3 nothing of the chain or the GPU job depends on them" bash -c "! grep -E -- '-J (stagec_gpu|stagec_chain|rc_ift_)' '${SBL}' | grep -q -- 'dependency'"
+check "L3 three full grids E2-E4 (none for E1: its grid runs in the chain), REQ_GRID_*, turin, no dependency" bash -c "for k in 2 3 4; do grep -- \"-J sleep_grid_E\${k} \" '${SBL}' | grep -q -- '--partition=day --time=$(REQ REQ_GRID_TIME) --nodes=1 --ntasks=1 --cpus-per-task=$(REQ REQ_GRID_CPUS) --mem=$(REQ REQ_GRID_MEM) --constraint=cpugen:turin' || exit 1; done; [[ \$(grep -c -- '-J sleep_grid_E1 ' '${SBL}') -eq 0 ]] && ! grep -- '-J sleep_grid_E' '${SBL}' | grep -q -- '--dependency'"
+check "L3 each grid writes under its own root (SLEEP_GRID_ROOT=data/output/sleep_grid), the full grid (no --spec12)" bash -c "for k in 2 3 4; do grep -- \"-J sleep_grid_E\${k} \" '${SBL}' | grep -q -- \"SLEEP_STEP=est,SLEEP_EST=\${k},SLEEP_EST_EXTRA=,SPEC=12,SLEEP_GRID_ROOT=${D}/output/sleep_grid \" || exit 1; done"
+check "L3 the grid archive: --grid-check (report only), then set sleep_grid, afterany the three grids" bash -c "grep -- '-J stagec_grid_zip ' '${SBL}' | grep -q -- '--dependency=afterany:$(id_of sleep_grid_E2):$(id_of sleep_grid_E3):$(id_of sleep_grid_E4) .*--grid-check; bash cluster_archive.sh --set sleep_grid --copy'"
 echo "== L4 a refused bootstrap does not stop the chain"
 build_sandbox; reset_stubs; run "${T}/l0.log" --install
 run "${T}/l4.log" --chain -- STUB_FAIL_RE=sleep_ame_gate; rc=$?
@@ -293,13 +321,31 @@ checke "L4 the guard refused: no AME jobs, a [!] line, the chain still PASSED (e
 echo "== L5 the automatic sleep gate fails closed"
 build_sandbox; reset_stubs; run "${T}/l0.log" --install
 run "${T}/l5.log" --chain -- RUNNER_PHI=1.2; rc=$?
-checke "L5 phi_t outside [0,1]: refused at gate-sleep, exit 1, no prep, no bootstrap submitted" 'test ${rc} -eq 1 && has "\[BROKEN\] E1: phi_t_IV_RivalSpread_x_Tech outside \[0,1\]" "${T}/l5.log" && hasn "^prep	" "${PLOG}" && test ! -s "${SBL}" && has "\"ok\": false" "${D}/output/.gate_SC_sleep.json"'
+checke "L5 phi outside [0,1]: the shape-constrained E3/E4 refused at gate-sleep (exit 1, no prep, no bootstrap); the unconstrained E1 reported, not refused" 'test ${rc} -eq 1 && has "\[BROKEN\] E3: phi_t_IV_RivalSpread_x_Tech outside \[0,1\]" "${T}/l5.log" && hasn "\[BROKEN\] E1: phi" "${T}/l5.log" && has "E1: phi_t_IV_RivalSpread_x_Tech range .*unconstrained link" "${T}/l5.log" && hasn "^prep	" "${PLOG}" && test ! -s "${SBL}" && has "\"ok\": false" "${D}/output/.gate_SC_sleep.json"'
 build_sandbox; reset_stubs; run "${T}/l0.log" --install
 run "${T}/l6.log" --chain -- RUNNER_SLEEP_SKIP=3; rc=$?
 checke "L6 a routine without its estimate: refused, the [BROKEN] line names it" 'test ${rc} -eq 1 && has "\[BROKEN\] E3: no .*est3.estimation_results.pkl" "${T}/l6.log"'
 build_sandbox; reset_stubs; run "${T}/l0.log" --install
 run "${T}/l7.log" --chain -- RUNNER_FAIL=sleep_e2; rc=$?
 checke "L7 an estimator fails: the chain stops at the sleep step, advice moves data/output/sleep aside" 'test ${rc} -eq 1 && hasn "^sleep_e3	" "${PLOG}" && has "move data/output/sleep aside" "${T}/l7.log"'
+echo "== L8 the sleep links on the cluster (Pedro 10-15)"
+build_sandbox; reset_stubs; run "${T}/l0.log" --install
+run "${T}/l8.log" --chain; rc=$?
+checke "L8 link payload, SC_link true, the link JSONs in data/output/bbl (none in data/input)" 'test ${rc} -eq 0 && grep -qx "link	chain_link" "${PLOG}" && has "\"ok\": true" "${D}/output/.gate_SC_link.json" && test -f "${D}/output/bbl/sleep_link_E3_spec_12.json" -a -f "${D}/output/bbl/sleep_link_E4_spec_12.json" && ! ls "${D}"/input/ | grep -q sleep_link'
+for k in 3 4; do checke "L8 E${k}: the summary block carries the link's t=0 check" "grep -A40 '=== STAGE C SUMMARY E${k} ' '${T}/l8.log' | grep -q 'sleep link (BBL): t=0 check max|phi0 - phi_mt| 0 over 10 rows (tol 1e-10): PASS'"; done
+build_sandbox; reset_stubs; run "${T}/l0.log" --install
+run "${T}/l9.log" --chain -- RUNNER_LINK_DIFF=1e-6; rc=$?
+checke "L9 a link that does not reproduce phi_mt: the chain stops at link (exit 1), no logit, the resume --from link" 'test ${rc} -eq 1 && hasn "^logit	" "${PLOG}" && has "move data/output/bbl/sleep_link_E\*_spec_12.json aside" "${T}/l9.log" && grep -qF -- "--wrap \"bash stagec_suite_20261012.sh --resume chain --from link\"" "${T}/l9.log"'
+echo "== L10 --grid-check: report only"
+build_sandbox; reset_stubs; mkdir -p "${D}/output"
+"${PYW}" -c 'import os, sys, pandas as pd
+o = sys.argv[1]; c = "phi_t_IV_RivalSpread_x_Tech"
+for root, shift in (("sleep", 0.0), ("sleep_grid", 1e-7)):
+    for k in (2, 3, 4):
+        d = os.path.join(o, root, f"est{k}"); os.makedirs(d, exist_ok=True)
+        pd.DataFrame({"year_quarter": [1, 2, 3], c: [0.9 + (shift if k == 3 else 0.0)] * 3}).to_csv(os.path.join(d, "national_phi_t.csv"), index=False)' "${D}/output"
+run "${T}/l10.log" --grid-check; rc=$?
+checke "L10 prints max |dphi_t| per routine (E3 differs by 1e-7, E2/E4 identical) and exits 0" 'test ${rc} -eq 0 && has "E2: spec 12 full grid vs chain: max |dphi_t| = 0.000e+00 over 3 quarters (identical)" "${T}/l10.log" && has "E3: spec 12 full grid vs chain: max |dphi_t| = 1.000e-07 over 3 quarters (DIFFERENT -- report only)" "${T}/l10.log" && has "GRID CHECK DONE (report only)" "${T}/l10.log"'
 fi
 
 # ─────────────────────────────────────────────────────────────────────────────────────────
@@ -313,14 +359,15 @@ check "R2 --from gate-prep needs the passed sleep gate first" has ".gate_SC_slee
 okgate SC_sleep; run "${T}/r2b.log" --resume chain --from gate-prep
 check "R2b ... then .gate_G2.json" has ".gate_G2.json is missing" "${T}/r2b.log"
 okgate G2; reset_stubs
-run "${T}/r3.log" --resume chain --from gate-prep -- STAGEC_ALLOW_MISMATCH_STEP=gate-prep; rc=$?
+run "${T}/r3.log" --resume chain --from gate-prep; rc=$?
 check "R3 exit 0" test ${rc} -eq 0 || tail -20 "${T}/r3.log"
 check "R3 T3 with --from gate-prep, T2 afterok it" bash -c "grep -q -- '-J stagec_chain .*--chain --from gate-prep$' '${SBL}' && [[ '$(dep_of stagec_gpu)' == '--dependency=afterok:$(id_of stagec_chain)' ]]"
-check "R3 the override travels in the environment of T3 only for that step" has "the gate-prep step accepts the mismatch" "${T}/r3.log"
-reset_stubs; run "${T}/r4.log" --resume chain --from logit -- STAGEC_ALLOW_MISMATCH_STEP=gate-prep
-check "R4 the step override is refused on another --from" has "applies to --resume chain --from that gate step only" "${T}/r4.log"
-reset_stubs; run "${T}/r5.log" --resume chain --from gate-prep -- STAGEC_ALLOW_MISMATCH=1
-check "R5 STAGEC_ALLOW_MISMATCH=1 is refused at a resume (it opens every gate)" has "a resume opens ONE" "${T}/r5.log"
+check "R3 no mismatch override exists any more (no --export of one in any printed line)" bash -c "! grep -q 'ALLOW_MISMATCH' '${T}/r3.log'"
+reset_stubs; run "${T}/r4.log" --resume chain --from link
+check "R4 --from link needs the passed prep gate" has ".gate_SC_prep.json is missing" "${T}/r4.log"
+okgate SC_prep; reset_stubs; run "${T}/r5.log" --resume chain --from logit
+check "R5 --from logit needs the passed link step" has ".gate_SC_link.json is missing" "${T}/r5.log"
+okgate SC_link
 okgate SC_prep; okgate G4; reset_stubs
 run "${T}/r6.log" --resume chain --from gate-logit
 check "R6 --from gate-logit needs the draws" has "the draws are not on disk" "${T}/r6.log"
@@ -332,7 +379,7 @@ run "${T}/r8.log" --resume next-blp; rc=$?
 check "R8 resume next-blp: one job" test ${rc} -eq 0 -a "$(grep -c . "${SBL}")" -eq 1 -a -n "$(id_of stagec_next_blp)"
 checke "R8 ... its watch line names logs/stagec_next_blp_<id>.out, not a GPU log (m3)" 'grep -qF "logs/stagec_next_blp_$(id_of stagec_next_blp).out" "${T}/r8.log" && hasn "stagec_gpu_" "${T}/r8.log"'
 reset_stubs; run "${T}/r9.log" --resume smoke
-check "R9 a retired resume point is refused with the list" has "--resume takes chain \[--from sleep|gate-sleep|prep|gate-prep|logit|gate-logit\], gpu, next-blp, blp, next-bbl or cpu-image" "${T}/r9.log"
+check "R9 a retired resume point is refused with the list" has "--resume takes chain \[--from sleep|gate-sleep|prep|gate-prep|link|logit|gate-logit\], gpu, next-blp, blp, next-bbl or cpu-image" "${T}/r9.log"
 fi
 
 # ─────────────────────────────────────────────────────────────────────────────────────────
@@ -443,7 +490,7 @@ gold_run () {   # gold_run <log> <mode args...> [-- env...]: the deployed wrappe
 }
 # ── the deployed run: the launch (env_julia, both images, install, G0, the prep hand-off), the install
 #    job, the prep hand-off job (every chain payload), then the BLP hand-off job (the ladders) ──
-build_sandbox "${DEPLOYED_SCRIPTS}" "${DEPLOYED_SCRIPTS}/stagec_suite_20261012.sh"; reset_stubs
+POLICY_SRC="$(old_policy)" POLICY_NAME="polfunc_fitted_liverows_20260930.csv" build_sandbox "${DEPLOYED_SCRIPTS}" "${DEPLOYED_SCRIPTS}/stagec_suite_20261012.sh"; reset_stubs
 gold_run "${T}/p_gold_launch.log" -- STAGEC_SKIP_PYPROBE=1
 mapfile -t IH < <(inherit "${STATE}/sbatch_env_stagec_install.txt"); gold_run "${T}/p_gold_install.log" --install -- "${IH[@]}"
 mapfile -t IH < <(inherit "${STATE}/sbatch_env_stagec_next_prep.txt"); gold_run "${T}/p_gold_prep.log" --next-prep -- "${IH[@]}"
@@ -561,6 +608,7 @@ mkfits () {   # mkfits <se_status for E3 ext1>
         # se_status read must take the top-level key only
         printf '{"%s_start": {"cold": {"status": "ran", "Q_opt": 0.15, "Q_reeval": 0.15, "Q": 0.15, "reeval_converged": true, "converged": true}, "warm_rc4": {"status": "ran", "Q_opt": 0.2, "Q_reeval": null, "reeval_converged": false}, "choice_basis": "converged re-evaluations", "chosen": "cold", "n_starts": 2}, "theta1": [-0.06], "Q_value": 0.15, "se_status": "%s"}\n' "${st}" "$([[ ${k} == 3 && ${st} == ext1 ]] && echo "$1" || echo ok)" > "${D}/output/blp/blp_results_E${k}_spec_12_${st}.json"
     done; done
+    mkdir -p "${D}/output/bbl"; for k in 3 4; do cp "${EO}/COST_FWD/sleep_link_E${k}_spec_12.json" "${D}/output/bbl/sleep_link_E${k}_spec_12.json"; done   # the chain's link step ran
     okgate SC_cpu_image   # T4 passed (the BBL hand-off and the repair check it at B0; section I tests the refusals)
 }
 if [[ " ${SECTIONS} " == *" D "* ]]; then

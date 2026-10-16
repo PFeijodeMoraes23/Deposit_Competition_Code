@@ -47,7 +47,7 @@ with desc_*/cosif_*.  rival_mean_spread_a4 IS a sleep IV_RivalSpread instrument
 (specs 4/8/12), so it is updated to reflect the new spread.
 
 PIPELINE PLACEMENT.  Run AFTER panel_estban_instrument.py (so estban_rival_branches_lag
-is present) and BEFORE panel_fee_merge.py --patch-market (so the local spread propagates
+is present) and BEFORE fees/panel_fee_merge.py --patch-market (so the local spread propagates
 into market_panel_with_fees.csv, the file the estimators actually read).  Keyed
 (CodConglomeradoPrudencial, mca_code, year, quarter); the merge is 1:1 with the wide panel.
 

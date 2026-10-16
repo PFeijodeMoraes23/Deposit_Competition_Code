@@ -85,7 +85,7 @@
 #   bash bbl_run.sh --routines "3 4" --fwd-gpu --multi-partition --shards 300 --multi-start --n-paths 1 --psi-tag _ms979 --no-warmup --no-polfunc --mem-h200 240G --mem-h100 230G --pack-h200 4 --pack-h100 4 --shard-time 01:45:00
 #   bash bbl_run.sh --shard-probe --routines 3 --shards 300 --array-spec 1 --multi-start --n-paths 1 --psi-tag _probe250cap --partitions gpu_h100
 #   bash bbl_run.sh --routines 3 --shards 300 --psi-tag _ms979 --repair
-#   (always submitted through sbatch --wrap on ONE line: BBL_RUNBOOK.md "MORNING LAUNCH")
+#   (always submitted through sbatch --wrap on ONE line: BBL_RUNBOOK.md "Submitting and watching")
 #
 # Flags
 #   --routines "3 4"   routine set (default from cluster_lib.sh)
@@ -107,7 +107,7 @@
 #   --beta B --horizon T   override bbl_discount.env (env BETA / HORIZON do the same)
 #   --phi-path P       evolving (default) | frozen: the sleepy share re-evaluated each period from
 #                      the sleepiness link, or held at the launch phi_mt (env CF_PHI_PATH).
-#                      evolving needs data/input/sleep_link_E{k}_spec_12.json (bbl_sleep_link.py)
+#                      evolving needs data/output/bbl/sleep_link_E{k}_spec_12.json (bbl_sleep_link.py, run on the cluster)
 #   --z-path Z         mean_reverting (default) | frozen: the cost shifters in psi3 (env CF_Z_PATH)
 #   --rdep-timing R    lagged (default) | contemporaneous: the sleeper carry accrues at horizon
 #                      t-1 (eq 9-B) or t (env CF_RDEP_TIMING). All three are passed to the sim

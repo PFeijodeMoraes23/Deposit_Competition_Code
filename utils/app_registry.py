@@ -152,7 +152,7 @@ def conglomerate_map() -> dict[str, str]:
     {firm_key: CodConglomeradoPrudencial}, resolved through the same canonical map the
     market panel and the fee sources use, so the quality panel joins their key space.
     Firms the IF Data List files do not place in a conglomerate get the panel's
-    'CNPJ_<int>' fallback (see panel_fee_merge.cnpj_fallback_key).
+    'CNPJ_<int>' fallback (see fees/panel_fee_merge.cnpj_fallback_key).
     """
     from utils.conglomerates import build_cnpj_conglomerate_map
 

@@ -633,7 +633,8 @@ def build_latex_table(results_dict, order_keys, target_vars, out_path, title="",
     row_nobs = ["Observations"]
     row_r2 = ["$R^2$"]
     # The two F rows are first-stage rows: the fit's own F over every slope, and under it the
-    # effective F of the excluded instruments read from Rout/sleep_first_stage_strength.json.
+    # effective F of the excluded instruments from sleep_export_link.eff_f_cell, which is blank
+    # until the weak-instrument battery has a calculator.
     row_fstat = [_notes.ROW_F_ALL]
     row_efff = [_notes.ROW_F_EFF]
     row_cluster = ["Clusters ($G$)"]

@@ -6,7 +6,7 @@
 #   1. gate G0 green — sbatch --export=ALL,ENV_STEP=preflight env_job.sh. Run standalone,
 #      this script runs cluster_preflight.sh itself instead (--skip-preflight opts out);
 #      under pipeline_all.sh, G0 has already run and its id arrives through --after.
-#   2. SIX uploaded inputs, all tracked in cluster/upload_manifest.txt:
+#   2. FIVE uploaded inputs, all tracked in cluster/upload_manifest.txt:
 #        data/input/market_panel.parquet   (the panel travels as parquet, 39 MB not 724 MB;
 #                                           utils.load_panel_cached reads it as the source
 #                                           because no market_panel.csv exists here)
@@ -14,7 +14,6 @@
 #        data/input/estban_own_branches.csv   (the D6 entry step's branch-timing screen)
 #        data/input/bcb_banked_mca_panel.csv
 #        data/input/state_centering_means.json
-#        data/input/state_centering_tier0.csv
 #   3. a Python env carrying CL_PY_REQ_SLEEP (numpy pandas scipy pyarrow
 #      statsmodels matplotlib). The default, dep_comp_blp, already imports all six
 #      — verified on the login node; there is nothing to create or install.
@@ -76,8 +75,6 @@
 #   --no-ame              skip the AME off-path guard, both AME jobs and G3
 #   --no-wcb              skip the linear percentile bands (E1/E2); their columns then
 #                         fall back to standard errors and the note says so
-#   --no-weakiv           skip the phi first-stage weak-IV battery; make_iv_sleep_tables.py
-#                         then renders whatever weak_iv_sleep.json is already on disk
 #   --no-upsilon          skip the CF4 upsilon export and G7
 #   --no-entry            skip the D6 entry moment; the entry figures then render from
 #                         whatever DIAG_PHI_SEPARATION already holds
@@ -94,7 +91,7 @@ ROUTINES_SRC=default
 if [[ -n "${ROUTINES+set}" ]]; then ROUTINES_SRC=env; fi
 ROUTINES="${ROUTINES:-${CL_ROUTINES_ALL}}"
 SPEC="${SPEC:-12}"
-DO_EST=1; DO_AME=1; DO_UPSILON=1; DO_WCB=1; DO_WEAKIV=1; DO_ENTRY=1; SKIP_PREFLIGHT=0
+DO_EST=1; DO_AME=1; DO_UPSILON=1; DO_WCB=1; DO_ENTRY=1; SKIP_PREFLIGHT=0
 # AFTER_JID: the job every first-tier submission waits on. Empty means "start now".
 AFTER_JID=""
 # Spec-level fan-out is the DEFAULT. sleep_est_single.py's --spec-id/--merge-specs
@@ -125,11 +122,6 @@ UPS_TIME="${UPS_TIME:-01:00:00}";   UPS_CPUS="${UPS_CPUS:-4}";    UPS_MEM="${UPS
 # functions -- no refit, no parallel draw loop. The memory is a full market panel per routine,
 # the same reason the est array asks for 128 G; the wall clock is the panel read.
 WCB_TIME="${WCB_TIME:-01:30:00}";   WCB_CPUS="${WCB_CPUS:-8}";    WCB_MEM="${WCB_MEM:-128G}"
-# The phi weak-IV battery: an IV ladder and an AR/LM grid inversion per IV spec x deposit-type
-# subsample, each with its own 999-draw bootstrap, plus the sieve-link phi materiality test that
-# refits the link. Wall clock is dominated by the sieve refits, not the panel read, so it gets
-# more time than the bands and the same memory -- it holds the pooled B+D panel.
-WIV_TIME="${WIV_TIME:-04:00:00}";   WIV_CPUS="${WIV_CPUS:-8}";    WIV_MEM="${WIV_MEM:-128G}"
 # D6: one market-panel read, the event screens, and a 999-draw resample of a few hundred
 # events -- cheap next to the estimators. The memory is the panel plus one phi_nopix parquet
 # per routine held while the per-event curves are built.
@@ -156,7 +148,6 @@ while [[ $# -gt 0 ]]; do
         --skip-est)       DO_EST=0 ;;
         --no-ame)         DO_AME=0 ;;
         --no-wcb)         DO_WCB=0 ;;
-        --no-weakiv)      DO_WEAKIV=0 ;;
         --no-entry)       DO_ENTRY=0 ;;
         --no-upsilon)     DO_UPSILON=0 ;;
         --skip-preflight) SKIP_PREFLIGHT=1 ;;
@@ -207,7 +198,7 @@ fi
 cl_banner "Sleepiness A-phase$([[ "${CL_DRYRUN}" == "1" ]] && echo '  [DRY RUN — nothing is submitted]')" \
           "$(cl_routines_provenance "${ROUTINES}" "${ROUTINES_SRC}" "${CL_ROUTINES_ALL}")" \
           "spec=${SPEC}  est=${DO_EST} (spec-array=${SPEC_ARRAY})  ame=${DO_AME} (routines '${AME_ROUTINES:-none}')" \
-          "wcb=${DO_WCB} (routines '${WCB_ROUTINES:-none}')  weakiv=${DO_WEAKIV}" \
+          "wcb=${DO_WCB} (routines '${WCB_ROUTINES:-none}')" \
           "upsilon=${DO_UPSILON} (routines '${UPSILON_ROUTINES}')  entry=${DO_ENTRY}" \
           "SLEEP_OUT_ROOT = ${CL_STEP_SLEEP}   DEMAND_PREP_DIR = ${CL_STEP_DEMAND}" \
           "${AFTER_JID:+first-tier jobs wait afterok ${AFTER_JID}}"
@@ -336,22 +327,6 @@ else
     cl_log "-- WCB band branch skipped (--no-wcb)."
 fi
 
-# ── phi first-stage weak-IV battery: afterok G2, gated by nothing ────────────
-# Routine-independent: it rebuilds the first stage from the pooled panel rather than reading
-# any est{k} output, so it needs G2 for the panel and nothing else, and no gate consumes it.
-# That makes it a LEAF, which is why the terminal below names it explicitly.
-weakiv_jid=""
-if [[ "${DO_WEAKIV}" == "1" ]]; then
-    weakiv_jid=$(sub "sleep_weakiv" "${WIV_TIME}" "${WIV_CPUS}" "${WIV_MEM}" \
-        --dependency=afterok:"${g2_jid}" \
-        --export=ALL,SLEEP_STEP=weakiv,SPEC=${SPEC} \
-        "${JOB}")
-    cl_say "  sleep_weakiv (phi first-stage instrument battery) -> ${weakiv_jid}  (afterok ${g2_jid})"
-    add_jid "${weakiv_jid}"
-else
-    cl_log "-- phi weak-IV branch skipped (--no-weakiv)."
-fi
-
 # ── AME branch: the off-path guard, then one full bootstrap per routine ──────
 g3_jid=""
 if [[ "${DO_AME}" == "1" && -n "${AME_ROUTINES}" ]]; then
@@ -436,9 +411,8 @@ echo "SLEEP_ALL_JOBIDS=${ALL_JIDS}"
 # afterok this never packages a half-written tree. G3 covers the AME jobs AND, through
 # ame_dep, the band job -- but only when the AME branch ran at all. `--no-ame`, or a ROUTINES
 # list of "1 2", leaves G3 empty and makes the band job a leaf of its own, so it is named here
-# exactly when G3 is not there to cover it. The weak-IV battery is always a leaf: no gate reads
-# its output. Building the list instead of joining two names is what keeps the sed from having
-# to guess where the empty slots are.
+# exactly when G3 is not there to cover it. Building the list instead of joining two names
+# is what keeps the sed from having to guess where the empty slots are.
 term=""
 _term () { [[ -n "$1" ]] && term="${term:+${term}:}$1"; return 0; }
 _term "${g3_jid}"
@@ -446,7 +420,6 @@ _term "${g7_jid}"
 # An `[[ ... ]] && _term ...` one-liner would end the script under `set -e` on the common
 # path, where the test is FALSE and the whole AND-list returns nonzero.
 if [[ -z "${g3_jid}" ]]; then _term "${wcb_jid}"; fi
-_term "${weakiv_jid}"
 # The entry job runs AFTER G7, so naming G7 alone would let the archive start while D6 is
 # still writing DIAG_PHI_SEPARATION.
 _term "${entry_jid}"

@@ -31,7 +31,7 @@ count: it is left NaN and flagged estban_rival_branches_missing = 1 (0 on every 
 included). A NaN here is missing data, never "no rival branches".
 
 PIPELINE PLACEMENT.  Run AFTER panel_loo_instruments.py (which overwrites market_panel.csv with the LOO
-instruments) and BEFORE panel_fee_merge.py --patch-market (which passes all columns through to
+instruments) and BEFORE fees/panel_fee_merge.py --patch-market (which passes all columns through to
 market_panel_with_fees.csv). Adds TWO columns (the instrument and its missing flag), keyed on
 (CodConglomeradoPrudencial, mca_code, year, quarter); the merge is 1:1 with the wide market panel.
 Idempotent: re-running overwrites both columns.

@@ -29,12 +29,14 @@ panel_audit_mca_coverage's rule on purpose: the columns audited here EXIST only 
 fees panel, so resolving through market_panel_csv() would audit a file with no fee
 columns whenever USE_FEE_PANEL is unset -- which is the default.
 """
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # repo root: utils/
 from utils.venv_guard import ensure_project_venv
 ensure_project_venv(__file__)
 
 import argparse
 import os
-import sys
 from datetime import datetime
 
 import numpy as np
@@ -114,10 +116,10 @@ def block_integrity(df: pd.DataFrame, fails: list) -> None:
     if fee_t and base_t and fee_t < base_t:
         fails.append(f"{FEE_PANEL_CSV.name} is OLDER than {BASE_PANEL_CSV.name} -- it was "
                      f"built from a previous vintage of the base panel; re-run "
-                     f"panel_fee_merge.py --patch-market")
+                     f"fees/panel_fee_merge.py --patch-market")
     if fee_t and cosif_t and fee_t < cosif_t:
         fails.append(f"{FEE_PANEL_CSV.name} is OLDER than {COSIF_SOURCE.name} -- the COSIF "
-                     f"source has been refreshed since; re-run panel_fee_merge.py")
+                     f"source has been refreshed since; re-run fees/panel_fee_merge.py")
     print()
 
 
@@ -199,7 +201,7 @@ def block_inversion(df: pd.DataFrame, cells: pd.DataFrame) -> None:
         print("    conglomerate reports a deposit sub-total but no 410 header. Check the")
         print("    deposit aggregation in panel_fee_merge.aggregate_cosif_to_")
         print("    conglomerate_quarter and the 410 extraction in "
-              "scrape_cosif_service_fees.py.")
+              "fees/scrape_cosif_service_fees.py.")
     else:
         print("  No matched row has ratio_all without ratio_total_deposits.")
     print()
@@ -308,7 +310,7 @@ def block_assertions(df: pd.DataFrame, fails: list) -> None:
 def main(strict: bool) -> int:
     if not FEE_PANEL_CSV.exists() and not FEE_PANEL_CSV.with_suffix(".parquet").exists():
         print(f"FAIL: {FEE_PANEL_CSV} not found.\n"
-              f"Build it with: python panel_fee_merge.py --patch-market")
+              f"Build it with: python fees/panel_fee_merge.py --patch-market")
         return 1
 
     df = load_panel_cached(FEE_PANEL_CSV, dtype={"CodConglomeradoPrudencial": str})
@@ -319,7 +321,7 @@ def main(strict: bool) -> int:
     if missing:
         print(f"FAIL: fee columns absent from the panel: {missing}\n"
               f"This file was built before those columns existed -- re-run "
-              f"panel_fee_merge.py --patch-market.")
+              f"fees/panel_fee_merge.py --patch-market.")
         return 1
 
     # A panel built before the payment-institution mask has no such column. Auditing it

@@ -11,7 +11,7 @@ as ``make_desc_panel_tables.py`` (``_weighted_by_<col>`` or ``_unweighted`` suff
 
   1.  ``Compressed_BankType_CrossSection``
         Firm-quarter cross-section, Panel A = type B, Panel B = type D.
-        Columns: Mean, SD, p10, p50, p90, N.  Following the bank-level
+        Columns: Mean, SD, p10, p25, p50, p75, p90, N.  Following the bank-level
         cross-sections of Egan, Hortaçsu & Matvos (2017 AER) and Drechsler et
         al. (2021 JF).
 
@@ -22,7 +22,8 @@ as ``make_desc_panel_tables.py`` (``_weighted_by_<col>`` or ``_unweighted`` suff
         (2011 IJIO), Drechsler et al. (2017 QJE).
 
   3.  ``Compressed_LocalEnvironment_by_Region``
-        Population-weighted MCA averages by the five Brazilian macro-regions:
+        MCA averages by the five Brazilian macro-regions (the .tex is written by the
+        population-weighted run; the unweighted moments go to the suffixed CSV):
         population, GDP/cap, age structure, social-register coverage,
         branch density, mobile lines, PIX adoption.  Motivated by Joaquim & van
         Doornik (2019), Fonseca & Matray (2024 JFE), Van Doornik et al.
@@ -63,6 +64,7 @@ from scipy import stats
 
 from utils.window import apply_window, MIN_YEAR, MAX_YEAR
 from utils import paths as _paths
+from utils import prepaid as _prepaid
 
 warnings.filterwarnings("ignore")
 
@@ -386,13 +388,14 @@ def prepare_panel(df: pd.DataFrame) -> pd.DataFrame:
         | ((df["year"] == PIX_POST_START[0]) & (df["quarter"] >= PIX_POST_START[1]))
     ).astype(int)
 
-    # Type-5 deposits did not exist pre-Pix: force dep_a5 = 0 and spread_a5 = NaN
-    # for pre-period rows so they do not pollute pooled means or weighted spreads.
-    pre_mask = df["post"] == 0
+    # The type-5 balance is reported from 2020Q2 (utils/prepaid.py). Before that quarter
+    # dep_a5 = 0 and spread_a5 = NaN, so the placeholder spread does not enter pooled means
+    # or weighted spreads.
     if "dep_a5" in df.columns:
+        pre_mask = _prepaid.before_start(df)
         df.loc[pre_mask, "dep_a5"] = 0.0
-    if "spread_a5" in df.columns:
-        df.loc[pre_mask, "spread_a5"] = np.nan
+        if "spread_a5" in df.columns:
+            df.loc[pre_mask, "spread_a5"] = np.nan
 
     # Forward-fill COSIF balance-sheet variables within each conglomerate to cover periods
     # where COSIF reporting has not yet been ingested (e.g. most-recent year after panel
@@ -579,7 +582,7 @@ def build_table1(df: pd.DataFrame, weight_col: str | None) -> tuple[pd.DataFrame
     return moments_b, moments_d, moments_all, meta
 
 
-def render_table1(moments_b, moments_d, moments_all, meta, weight_col, suffix) -> str:
+def render_table1(moments_b, moments_d, moments_all, meta, weight_col, suffix, t5) -> str:
     name      = "Compressed_BankType_CrossSection"
     tab_label = f"tab:{name}"
     weight_lbl = "(Population Weighted)" if weight_col else ""
@@ -599,6 +602,8 @@ def render_table1(moments_b, moments_d, moments_all, meta, weight_col, suffix) -
         ]
         for _, r in moments.iterrows():
             vb  = r["var"]
+            if t5["omit"] and vb == "spread_ann_a5":
+                continue
             lbl = _row_label(vb)
             lines.append(
                 f"{lbl} & "
@@ -632,9 +637,10 @@ def render_table1(moments_b, moments_d, moments_all, meta, weight_col, suffix) -
             NOTE_MONEY,
             r"Zero balances (product not offered) are excluded, so $N$ varies by row; "
             f"{meta['n_firms_B_no_savings']} of {meta['n_firms_B']} B conglomerates never offer "
-            r"savings. Type 5 from 2020Q4.",
+            f"savings. Type 5 from {t5['start']}.",
             r"Spreads are deposit-weighted within firm-quarter and type.",
             NOTE_SPREAD,
+            t5["spread_note"],
             f"Panel B includes {meta['n_firms_D_no_deposits']} D conglomerates that never take "
             r"deposits (credit, finance and leasing firms); they enter only the assets and "
             r"equity rows.",
@@ -981,7 +987,7 @@ def render_table2(t2_df, weight_col, suffix) -> str:
     return tex
 
 
-def render_table2a(t2_df, weight_col, suffix) -> str:
+def render_table2a(t2_df, weight_col, suffix, t5) -> str:
     """Market structure, policy rate and deposit spreads by year -- years as rows.
 
     Panel A: B-firm counts and local HHI (MCA level), the D-firm count and the pooled
@@ -999,9 +1005,12 @@ def render_table2a(t2_df, weight_col, suffix) -> str:
     n_row_data = t2_df[t2_df["var"] == "N_obs"]
 
     VARS_A = ["n_b_firms", "hhi_b", "n_d_firms_natl", "hhi_combined_natl"]
-    VARS_B = ["risk_free_ann", "spread_ann_a4_w", "spread_ann_a4_d_w",
-              "spread_ann_a5_w", "spread_ann_a5_d_w"]
+    VARS_B = ["risk_free_ann", "spread_ann_a4_w", "spread_ann_a4_d_w"]
+    if not t5["omit"]:
+        VARS_B += ["spread_ann_a5_w", "spread_ann_a5_d_w"]
     PRE2020_BLANK = {"spread_ann_a5_w", "spread_ann_a5_d_w"}
+    # Panel A sets the tabular's six columns; Panel B pads its rows to them.
+    pad_b = 6 - 1 - len(VARS_B)
 
     def _val(v, yr):
         return t2_idx.loc[v, yr] if v in t2_idx.index else np.nan
@@ -1018,20 +1027,33 @@ def render_table2a(t2_df, weight_col, suffix) -> str:
         for v in VARS_B:
             cells.append("" if (v in PRE2020_BLANK and int(yr) < 2020)
                          else _fmt_val(_val(v, yr), v))
-        rows_b.append(" & ".join(cells) + r" \\")
+        rows_b.append(" & ".join(cells + [""] * pad_b) + r" \\")
 
     unit_b = f"({SPREAD_UNIT})"
     notes = NOTE_FONT + " " + table_note(
-        f"Annual means of quarterly values, {MIN_YEAR}--{MAX_YEAR}.",
+        f"Annual means of quarterly values, {MIN_YEAR}--{MAX_YEAR}, except where stated.",
         r"Panel A: No.\ B Firms counts conglomerates with positive deposits in the MCA-quarter "
         r"and HHI (B) is the within-MCA HHI of B deposits, both averaged across MCA-quarters "
-        r"weighted by MCA deposits; No.\ D Firms counts D conglomerates with positive deposits; "
-        r"HHI (B+D) is national; $N$ counts MCA-quarters with B presence.",
+        r"weighted by MCA deposits; No.\ D Firms counts the distinct D conglomerates with "
+        r"positive deposits in any quarter of the year; HHI (B+D) is the national HHI of "
+        r"deposits summed over the year; $N$ counts MCA-quarters with B presence.",
         r"Panel B: SELIC is the mean quarterly rate compounded to an annual rate.",
         NOTE_SPREAD,
         r"B spreads are deposit-weighted within and across MCA-quarters, D spreads across "
-        r"firm-quarters. Type 5 from 2020Q4 (2020 covers Q4 only).",
+        r"firm-quarters.",
+        t5["spread_note"] if t5["omit"] else
+        f"Type 5 from {t5['start']} ({t5['year']} covers {t5['year_span']}). {t5['fallback']}",
     )
+    if t5["omit"]:
+        head_b = [r" & & \multicolumn{2}{c}{\textit{Spread (4)}} & & \\",
+                  r"\cmidrule(lr){3-4}",
+                  r"Year & SELIC & B Firms & D Firms & & \\",
+                  r" & (\% p.a.) & " + " & ".join([unit_b] * 2) + r" & & \\"]
+    else:
+        head_b = [r" & & \multicolumn{2}{c}{\textit{Spread (4)}} & \multicolumn{2}{c}{\textit{Spread (5)}} \\",
+                  r"\cmidrule(lr){3-4} \cmidrule(lr){5-6}",
+                  r"Year & SELIC & B Firms & D Firms & B Firms & D Firms \\",
+                  r" & (\% p.a.) & " + " & ".join([unit_b] * 4) + r" \\"]
 
     tex = "\n".join([
         r"\begin{table}[htbp]",
@@ -1054,10 +1076,7 @@ def render_table2a(t2_df, weight_col, suffix) -> str:
         r"\midrule",
         r"\multicolumn{6}{@{}l}{\textit{Panel B: Policy rate and deposit spreads}} \\",
         r"\addlinespace[0.2em]",
-        r" & & \multicolumn{2}{c}{\textit{Spread (4)}} & \multicolumn{2}{c}{\textit{Spread (5)}} \\",
-        r"\cmidrule(lr){3-4} \cmidrule(lr){5-6}",
-        r"Year & SELIC & B Firms & D Firms & B Firms & D Firms \\",
-        r" & (\% p.a.) & " + " & ".join([unit_b] * 4) + r" \\",
+        *head_b,
         r"\midrule",
         *rows_b,
         r"\bottomrule",
@@ -1072,7 +1091,7 @@ def render_table2a(t2_df, weight_col, suffix) -> str:
     return tex
 
 
-def render_table2b(t2_df, weight_col, suffix) -> str:
+def render_table2b(t2_df, weight_col, suffix, t5) -> str:
     """Deposit spreads by firm type and year — years as rows."""
     name      = "Compressed_MarketStructure_by_Year_C"
     tab_label = f"tab:{name}"
@@ -1138,7 +1157,8 @@ def render_table2b(t2_df, weight_col, suffix) -> str:
         r"\item " + NOTE_FONT + " " + table_note(
             r"SELIC is the mean quarterly rate compounded to an annual rate.",
             NOTE_SPREAD,
-            r"Spread\,(5) from 2020Q4; blank before 2020."),
+            f"Spread\\,(5) from {t5['start']}; blank before {t5['year']}.",
+            t5["fallback"]),
         r"\end{tablenotes}",
         r"\end{threeparttable}",
         r"\end{table}",
@@ -1236,6 +1256,10 @@ def ms_year_axis(ax, years, fs=1.0):
 
 
 def _ms_title(letter, text, lettered):
+    """`lettered`: True prefixes the panel's own letter, a string prefixes that letter instead
+    (the paper's figure shows a subset of the panels, lettered in order), False none."""
+    if isinstance(lettered, str):
+        return f"({lettered}) {text}"
     return f"({letter}) {text}" if lettered else text
 
 
@@ -1320,29 +1344,33 @@ def _ms_panel_f(ax, S, fs=1.0, lettered=True, pix_label=None):
     ax.legend(fontsize=8.5 * fs, loc="upper left", frameon=False)
 
 
-#: Panel letter -> drawing function, in the grid's reading order (row by row).
+#: Panel letter -> drawing function. make_slide_figures.py draws every panel alone.
 MS_PANELS = {"a": _ms_panel_a, "b": _ms_panel_b, "c": _ms_panel_c,
              "d": _ms_panel_d, "e": _ms_panel_e, "f": _ms_panel_f}
+#: The panels of the paper's figure, in order: market structure only. The Selic and the
+#: time-deposit spreads are in the motivation figure and the deposit-types table, and the
+#: prepaid spread is the Selic-CDI gap by construction (utils/prepaid.py).
+MS_PAPER_PANELS = ("a", "c", "d")
 
 
 def render_market_structure_figure(t2_df: pd.DataFrame, suffix: str = "") -> None:
-    """2x3 small-multiple figure summarising Tables 2 and 3.
-
-    Left column  - market structure: concentration, digital entry, local entry.
-    Right column - deposit pricing:  type-4 spread, the SELIC policy rate, type-5 spread.
-    """
+    """One-row figure of Table A.4's market structure: concentration, digital entry and local
+    entry (MS_PAPER_PANELS), lettered (a)-(c) in that order."""
     import matplotlib
     matplotlib.use("Agg")          # venv lives in OneDrive; Agg keeps batch runs safe
     import matplotlib.pyplot as plt
 
     S = ms_series(t2_df)
-    fig, axes = plt.subplots(3, 2, figsize=(11, 9.5), sharex="col")
-    for ax, key in zip(axes.ravel(), MS_PANELS):
-        MS_PANELS[key](ax, S)
-    for ax in axes[2, :]:
+    fig, axes = plt.subplots(1, len(MS_PAPER_PANELS), figsize=(11, 3.6))
+    for ax, key, letter in zip(axes, MS_PAPER_PANELS, "abcdef"):
+        # Panel (a)'s Pix label sits below its 2,500 threshold label, as on the slides.
+        MS_PANELS[key](ax, S, lettered=letter, pix_label=0.86 if key == "a" else None)
         ms_year_axis(ax, S["years"])
+        # A third of the text width per panel: every year keeps its tick, every other one
+        # its label, so the labels do not run into each other.
+        ax.set_xticklabels([f"{int(y)}" if int(y) % 2 == 0 else "" for y in S["years"]])
 
-    fig.tight_layout(h_pad=1.6, w_pad=2.4)
+    fig.tight_layout(w_pad=2.4)
 
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     DRAFTS_DIR.mkdir(parents=True, exist_ok=True)
@@ -1570,7 +1598,8 @@ def render_table4(t4_df, meta, suffix) -> str:
         r"$p$-values from $t(G^{\star})$; $G$: clusters; $G^{\star}$: "
         r"\textcite{carter2017asymptotic} effective clusters.",
         f"Composition changes: {meta['n_d_firms_pre']:,} active D conglomerates pre, "
-        f"{meta['n_d_firms_post']:,} post.",
+        f"{meta['n_d_firms_post']:,} post (active: positive total assets in some quarter "
+        r"of the period).",
         r"Log Deposits sums types 1, 2, 4 and 5, as in "
         r"Table~\ref{tab:Compressed_BankType_CrossSection}.",
         f"Spread row: firm-quarters with time deposits only ({meta['n_fq_dep4']:,} of "
@@ -1661,11 +1690,14 @@ def render_appendix_rates(df: pd.DataFrame) -> str:
 
     notes = (
         NOTE_FONT + r" \textit{Notes:} "
-        r"SELIC overnight, CDI, and savings rates are quarterly rates compounded to annual: "
-        r"$(1 + r_{\text{qoq}})^{4} - 1$, then averaged over the four quarters of each year. "
-        r"COPOM Target is the last policy rate set by the Monetary Policy Committee within the year. "
-        r"The SELIC overnight rate is used as the risk-free benchmark in the deposit spread construction "
-        r"(see Table~\ref{tab:Compressed_MarketStructure_by_Year_C})."
+        r"Source: BCB time-series system (SGS), daily SELIC overnight, CDI, SELIC target and "
+        r"reference rate (TR). Quarterly rates compound the daily rates of the quarter; each is "
+        r"compounded to an annual rate, $(1 + r_{\text{qoq}})^{4} - 1$, then averaged over the "
+        r"four quarters of each year. The savings rate is imputed from the statutory rule: TR "
+        r"plus 0.5\% a month when the SELIC target exceeds 8.5\%, TR plus 70\% of the target "
+        r"otherwise. COPOM Target is the last policy rate set by the Monetary Policy Committee "
+        r"within the year. The SELIC overnight rate is the risk-free benchmark in the deposit "
+        r"spreads."
     )
 
     # Non-floating: use \captionof so the table sits exactly in the text flow
@@ -1786,7 +1818,7 @@ _VARS_MASTER_GROUPS = [
         (r"pop\_total", r"Total MCA population $\mathrm{Pop}_{mt}$; scales the market size $M_{mt} = \hat{\bar{d}}_{mt}\cdot\mathrm{Pop}_{mt}$", "IBGE", "Demand (shares)"),
     ]),
     ("Rates and spreads", [
-        (r"selic\_qoq, risk\_free\_qoq", r"SELIC overnight compounded QoQ, $(1+r_{\text{daily}})^{63}-1$; the risk-free benchmark", "BCB SGS", "Sleep; Demand"),
+        (r"selic\_qoq, risk\_free\_qoq", r"SELIC overnight compounded over the daily rates of the quarter, $\prod_{d}(1+r_d)-1$; the risk-free benchmark", "BCB SGS", "Sleep; Demand"),
         (r"deposit\_rate\_qoq", r"Type-specific deposit rate, QoQ decimal", "BCB, COSIF", "Sleep; Demand"),
         (r"spread\_qoq", r"$r^{\mathrm{f}}_t - r^{\mathrm{dep}}_{jkmt}$, QoQ decimal; the endogenous price in the sleepiness estimation", "Constructed", "Sleep"),
         (r"risk\_free\_ann, deposit\_rate\_ann", r"Annualized counterparts, $(1+x)^4-1$", "Constructed", "Demand"),
@@ -1888,7 +1920,7 @@ _INSTR_MASTER_GROUPS = [
         (r"n\_rivals", r"Number of non-null rivals in the group", _STAGE_DEMAND),
     ]),
     ("Branch competition (ESTBAN)", [
-        (r"estban\_rival\_branches\_lag", r"Log of one plus the count of rival bank branches in the MCA, lagged 1Q", _STAGE_DEMAND),
+        (r"estban\_rival\_branches\_lag", r"Log of one plus the count of rival bank branches in the MCA, lagged one calendar quarter; B firms only (0 on D rows); missing, and the row dropped from the demand sample, where ESTBAN has no record for the firm-MCA in the previous quarter", _STAGE_DEMAND),
     ]),
 ]
 
@@ -1959,6 +1991,13 @@ def main():
 
     suffix = f"_weighted_by_{args.weight_col}" if args.weight_col else "_unweighted"
     df = load_panel()
+    t5_year, t5_q = _prepaid.start_quarter(df)
+    t5 = {"start": f"{t5_year}Q{t5_q}", "year": t5_year,
+          "year_span": f"Q{t5_q}--Q4" if t5_q < 4 else "Q4 only",
+          "fallback": _prepaid.fallback_note(df), "omit": _prepaid.omit_spread(df)}
+    # Tables 1 and A.4 leave the type-5 spread out when it is the common CDI fallback, and say
+    # so once; the CSVs (and the desc.* keys read from them) keep it.
+    t5["spread_note"] = _prepaid.OMITTED_NOTE if t5["omit"] else t5["fallback"]
 
     # --- Table 1 (always unweighted)
     print("\n[Table 1] Bank-conglomerate cross-section ...")
@@ -1966,7 +2005,7 @@ def main():
     _write_csv(mom_b.assign(panel="B"),     "Compressed_BankType_CrossSection_B",   "_unweighted")
     _write_csv(mom_d.assign(panel="D"),     "Compressed_BankType_CrossSection_D",   "_unweighted")
     _write_csv(mom_all.assign(panel="All"), "Compressed_BankType_CrossSection_All", "_unweighted")
-    tex1 = render_table1(mom_b, mom_d, mom_all, meta1, None, "_unweighted")
+    tex1 = render_table1(mom_b, mom_d, mom_all, meta1, None, "_unweighted", t5)
     _write_tex(tex1, "Compressed_BankType_CrossSection", "")
 
     # --- Table 2 (always deposit-weighted)
@@ -1976,8 +2015,8 @@ def main():
     # Landscape version (kept for reference):
     # tex2 = render_table2(t2, "dep_total_mq", "_dep_weighted")
     # _write_tex(tex2, "Compressed_MarketStructure_by_Year", "")
-    tex2a = render_table2a(t2, "dep_total_mq", "_dep_weighted")
-    tex2b = render_table2b(t2, "dep_total_mq", "_dep_weighted")
+    tex2a = render_table2a(t2, "dep_total_mq", "_dep_weighted", t5)
+    tex2b = render_table2b(t2, "dep_total_mq", "_dep_weighted", t5)
     _write_tex(tex2a, "Compressed_MarketStructure_by_Year_AB", "")
     _write_tex(tex2b, "Compressed_MarketStructure_by_Year_C", "")
     render_market_structure_figure(t2, "")
@@ -1988,7 +2027,10 @@ def main():
     t3 = build_table3(df, args.weight_col)
     _write_csv(t3, "Compressed_LocalEnvironment_by_Region", suffix)
     tex3 = render_table3(t3, args.weight_col, suffix, latest_year)
-    _write_tex(tex3, "Compressed_LocalEnvironment_by_Region", "")
+    # The paper's version is population-weighted: only the weighted run writes the .tex
+    # (the unweighted moments stay in the suffixed CSV).
+    if args.weight_col:
+        _write_tex(tex3, "Compressed_LocalEnvironment_by_Region", "")
 
     # --- Table 4
     print("\n[Table 4] D-firm Pre/Post Pix ...")

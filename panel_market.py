@@ -763,9 +763,10 @@ def calculate_rival_mean_spread_wide(panel: pd.DataFrame) -> pd.DataFrame:
     sit under the single national code, so their rivals are the other D firms. NaN when no other
     conglomerate in the market has a non-null spread that quarter.
 
-    The rival set is the market, not the country: with a quarter fixed effect absorbed, a
-    national leave-j-out mean equals minus j's own mean spread times N_jt/(N_t - N_jt), so its
-    identifying variation would be the endogenous spread itself."""
+    The rival set is the market, not the country. The deposit equation absorbs entity and quarter
+    fixed effects, so the instrument identifies through its part net of a quarter effect; for a
+    national leave-j-out mean that part is exactly minus j's own mean spread (net of the quarter
+    mean) times N_jt/(N_t - N_jt), the endogenous spread itself."""
     mt_keys = [panel['mca_code'], panel['year'], panel['quarter']]
     jmt_keys = [panel['CodConglomeradoPrudencial'], panel['mca_code'], panel['year'], panel['quarter']]
     for k in [1, 2, 3, 4, 5]:
@@ -952,7 +953,7 @@ def main() -> None:
     panel = fill_national_averages(panel)
 
     # Fee columns live in market_panel_with_fees.csv, built by
-    # `python panel_fee_merge.py --patch-market` after this script.
+    # `python fees/panel_fee_merge.py --patch-market` after this script.
 
     # D3. Merge bank characteristics (total assets, etc.)
     bank_chars = load_bank_chars()
@@ -964,9 +965,6 @@ def main() -> None:
     after_drop = len(panel)
     if before_drop > after_drop:
         logging.info(f"Dropped {before_drop - after_drop} observations belonging to Captive Financiers.")
-
-    # D4. Rival mean spread instrument, per deposit type, over the wide deposit columns
-    panel = calculate_rival_mean_spread_wide(panel)
 
     # E. Enforce Global Data Exclusions
     # 1. D-type firms (digital, without physical branch network) should launch strictly > 2013
@@ -990,6 +988,11 @@ def main() -> None:
     after_wholesale_drop = len(panel)
     if before_wholesale_drop > after_wholesale_drop:
         logging.info(f"Dropped {before_wholesale_drop - after_wholesale_drop} observations belonging to strictly wholesale/investment/asset-management firms.")
+
+    # E4. Rival mean spread instrument, per deposit type, over the wide deposit columns. Built
+    # after the exclusions, so a row's rivals are exactly the conglomerates of the analysis
+    # panel in its market: an excluded wholesale firm or an early D-type row is nobody's rival.
+    panel = calculate_rival_mean_spread_wide(panel)
 
     # F. Save
     save(panel)

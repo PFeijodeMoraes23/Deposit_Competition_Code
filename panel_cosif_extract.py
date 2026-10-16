@@ -24,15 +24,16 @@
 #
 #  (2) FOUNDATION table  custos_implicitos_v2_foundation.csv
 #      CNPJ x quarter, DOC 4010 only, per-type stocks + disaccumulated expense +
-#      2025+ leaves, already collapsed to quarterly.  Convenience input for the
-#      calibration module / diagnostics.
+#      2025+ leaves, already collapsed to quarterly, with `src` (BANCOS or SOCIEDADES).
+#      It also holds the credit-finance companies (SCFI) of the SOCIEDADES files, the
+#      deposit-taking entity of conglomerates with no bank.  Input of the calibration.
 #
 # WHY the per-type detail: the blended LUMPED expense (8.1.1, code 81100008) / TOTAL
 # deposits gives a CDB rate far outside the plausible 90-115%-of-CDI band.
 # panel_cosif_calibrate uses the per-type detail emitted here to build a
 # per-bank, segment-shrunk corrected CDB rate.
 #
-# Raw input : shared/COSIF/*BANCOS* monthly (201301-202603).
+# Raw input : shared/COSIF/*BANCOS* and *SOCIEDADES* (SCFI rows) monthly (201301-202603).
 ## ---------------------------------------------------------------------------
 
 import os
@@ -148,17 +149,22 @@ STOCK_COLS = [
 # ---------------------------------------------------------------------------
 # Raw file reading
 # ---------------------------------------------------------------------------
-# Filename: YYYYMMBANCOS.{ZIP|zip|csv.zip|CSV|csv}.  Skip the " (1)" duplicates.
-FILE_RE = re.compile(r"^(\d{6})BANCOS\.(zip|csv\.zip|csv|ZIP|CSV)$", re.IGNORECASE)
+# Filename: YYYYMM<KIND>.{ZIP|zip|csv.zip|CSV|csv}, KIND = BANCOS or SOCIEDADES.  Skip the " (1)"
+# duplicates.  From the SOCIEDADES files only the credit-finance companies (SCFI) are kept: they are
+# the deposit-taking entity of conglomerates with no bank (Nu Financeira, Mercado Credito, Neon,
+# Will, Facta, ...), whose time deposits the market panel carries from IF.data.
+SOURCES = ("BANCOS", "SOCIEDADES")
+SCFI_TAXONOMY = "FINANCIAMENTO E INVESTIMENTO"     # "SOC. DE CREDITO, FINANCIAMENTO E INVESTIMENTO"
 
 
-def discover_bancos_files(raw_dir):
-    """Return {YYYYMM: filepath}, preferring one canonical file per month.
+def discover_files(raw_dir, kind="BANCOS"):
+    """Return {YYYYMM: filepath} of the `kind` files, preferring one canonical file per month.
     Preference order: .csv.zip / .zip  >  .CSV / .csv (plain).  Skips the
     duplicate ' (1)' copies entirely."""
+    file_re = re.compile(rf"^(\d{{6}}){kind}\.(zip|csv\.zip|csv|ZIP|CSV)$", re.IGNORECASE)
     by_month = {}
     for fname in os.listdir(raw_dir):
-        m = FILE_RE.match(fname)
+        m = file_re.match(fname)
         if not m:
             continue
         ym = m.group(1)
@@ -186,15 +192,15 @@ def _read_raw(filepath):
 
 
 def read_month(args):
-    """Read ONE BANCOS month, keep only parent rows for the codes we need, parse
-    SALDO (reais).  Returns a tidy long frame:
-        [CNPJ, TAXONOMIA, DATA_BASE, DOC, col, SALDO]
+    """Read ONE month of one source (BANCOS, or the SCFI rows of SOCIEDADES), keep only parent
+    rows for the codes we need, parse SALDO (reais).  Returns a tidy long frame:
+        [CNPJ, TAXONOMIA, SRC, DATA_BASE, DOC, col, SALDO]
     DOC distinguishes 4010 (balancete; the only series with group-8 expenses and
     the clean per-type detail) from 4016 (semester balanco; duplicates group-4
     stocks at Jun/Dec).  Both are kept here so the CANONICAL Estoque_Total can
     retain the 4010+4016 Jun/Dec double-count that panel_deposit_rates halves, while
     the per-type detail columns are taken from 4010 only downstream."""
-    ym, filepath = args
+    ym, filepath, kind = args
     try:
         df = _read_raw(filepath)
         if df.empty:
@@ -202,8 +208,13 @@ def read_month(args):
         df.columns = [c.upper().lstrip("#").strip() for c in df.columns]
         need = {"DOCUMENTO", "CNPJ", "CONTA", "SALDO"}
         if not need.issubset(df.columns):
-            log.warning("%s missing columns %s", ym, need - set(df.columns))
+            log.warning("%s %s missing columns %s", ym, kind, need - set(df.columns))
             return pd.DataFrame()
+        if kind == "SOCIEDADES":
+            if "TAXONOMIA" not in df.columns:
+                log.warning("%s SOCIEDADES has no TAXONOMIA column: SCFI rows cannot be told apart", ym)
+                return pd.DataFrame()
+            df = df[df["TAXONOMIA"].astype(str).str.upper().str.contains(SCFI_TAXONOMY, regex=False)]
 
         df["DOC"] = df["DOCUMENTO"].astype(str).str.strip()
         df = df[df["DOC"].isin(["4010", "4016"])]
@@ -235,11 +246,12 @@ def read_month(args):
         if "TAXONOMIA" in df.columns:
             df["TAXONOMIA"] = df["TAXONOMIA"].astype(str)
         else:
-            df["TAXONOMIA"] = "BANCOS"
+            df["TAXONOMIA"] = kind
+        df["SRC"] = kind
 
-        return df[["CNPJ", "TAXONOMIA", "DATA_BASE", "DOC", "col", "SALDO"]]
+        return df[["CNPJ", "TAXONOMIA", "SRC", "DATA_BASE", "DOC", "col", "SALDO"]]
     except Exception as e:   # noqa: BLE001
-        log.error("read %s failed: %s", ym, e)
+        log.error("read %s %s failed: %s", ym, kind, e)
         return pd.DataFrame()
 
 
@@ -269,14 +281,14 @@ def disaccumulate_within_semester(df, value_col, id_cols, date_col="DATA_BASE"):
 # Read all months once into a single long frame.
 # ---------------------------------------------------------------------------
 def read_all():
-    files = discover_bancos_files(COSIF_RAW_DIR)
-    if not files:
-        log.error("No BANCOS files under %s", COSIF_RAW_DIR)
-        sys.exit(1)
-    log.info("Reading %d BANCOS months (%s..%s)",
-             len(files), min(files), max(files))
-
-    tasks = list(files.items())
+    tasks = []
+    for kind in SOURCES:
+        files = discover_files(COSIF_RAW_DIR, kind)
+        if not files:
+            log.error("No %s files under %s", kind, COSIF_RAW_DIR)
+            sys.exit(1)
+        log.info("Reading %d %s months (%s..%s)", len(files), kind, min(files), max(files))
+        tasks += [(ym, fp, kind) for ym, fp in files.items()]
     frames = []
     with ThreadPoolExecutor(max_workers=8) as pool:
         futs = {pool.submit(read_month, t): t for t in tasks}
@@ -370,6 +382,12 @@ def build_canonical_taxonomy_files(long):
 # ---------------------------------------------------------------------------
 def build_foundation(long):
     sub = long[long["DOC"] == "4010"]
+    # The source is a property of the CNPJ-month: an institution can file as an SCFI for years and
+    # as a bank afterwards.  In a month where it appears in both files only its BANCOS rows count
+    # (summing the two would count it twice).
+    in_bancos = (sub["SRC"] == "BANCOS").groupby([sub["CNPJ"], sub["DATA_BASE"]]).transform("any")
+    sub = sub[(sub["SRC"] == "BANCOS") | ~in_bancos]
+    src_month = sub.groupby(["CNPJ", "DATA_BASE"])["SRC"].first().reset_index()
     # Pivot CNPJ x month x col.  Sum handles the multi-leaf 'exp_bills' column.
     wide = (
         sub.groupby(["CNPJ", "DATA_BASE", "col"])["SALDO"]
@@ -402,6 +420,16 @@ def build_foundation(long):
     )
     found = stocks_q.merge(exp_q, on=["CNPJ", "AnoMes"], how="outer")
     found = found.sort_values(["CNPJ", "AnoMes"]).reset_index(drop=True)
+    # src of a CNPJ-quarter: BANCOS if any of its months is read from the BANCOS files, else
+    # SOCIEDADES (the SCFI rows).  panel_cosif_calibrate uses SCFI rows only for a
+    # conglomerate-quarter without a BANCOS member.
+    src_month["AnoMes"] = (src_month["DATA_BASE"].dt.year * 100
+                           + ((src_month["DATA_BASE"].dt.month - 1) // 3 + 1) * 3)
+    src_q = (src_month.assign(_bank=src_month["SRC"] == "BANCOS")
+             .groupby(["CNPJ", "AnoMes"])["_bank"].any().reset_index())
+    found = found.merge(src_q, on=["CNPJ", "AnoMes"], how="left")
+    found["src"] = np.where(found["_bank"].fillna(False).astype(bool), "BANCOS", "SOCIEDADES")
+    found = found.drop(columns=["_bank"])
 
     # Lagged stocks (previous quarter) per CNPJ for rate denominators.
     for c in STOCK_COLS:
@@ -416,7 +444,8 @@ def build_foundation(long):
 
 def main():
     long = read_all()
-    build_canonical_taxonomy_files(long)
+    # the per-taxonomy files panel_deposit_rates reads stay on the BANCOS files
+    build_canonical_taxonomy_files(long[long["SRC"] == "BANCOS"])
     build_foundation(long)
 
 

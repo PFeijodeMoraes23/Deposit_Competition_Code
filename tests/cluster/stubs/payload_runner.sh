@@ -8,6 +8,7 @@
 #   RUNNER_ALPHA=-0.0628      E3_full_dtype alpha of the logit summary (NaN: not finite)
 #   RUNNER_PHI=0.95           the phi_t / phi_mt values the sleep estimators write
 #   RUNNER_SLEEP_SKIP="<k> .." these routines' estimators write nothing
+#   RUNNER_LINK_DIFF=0        the sleep links' t=0 max|phi0 - phi_mt| (> 1e-10: the export refuses, exit 1)
 #   RUNNER_SMOKE=pass | gap:<k> | missing:<k> | error:<k> | cold:<k>   the one-process smoke log
 #   RUNNER_PY                 python with pandas/pyarrow (the venv)
 tag="${STAGEC_PAYLOAD_TAG:?}"; d="${STUB_DIR:?}"
@@ -48,9 +49,20 @@ for k in (1, 2, 3, 4):
                        "chars_src": [0] * n, "segment_src": [0] * n})
     p = os.path.join(d, names[k] + ".parquet"); df.to_parquet(p)
     json.dump({"rows": n, "x_null_rows": 0, "iv_bad_rows": 0, "chars_file": "x",
-               "dropped_no_characteristics": {"rows": 96, "B": 61, "D": 35}}, open(p + ".chars_audit.json", "w"))
+               "dropped_no_characteristics": {"rows": 96, "B": 61, "D": 35},
+               "dropped_no_estban": {"rows": 193, "B": 193, "D": 0},
+               "dropped_no_cost_shifter": {"rows": 36, "B": 0, "D": 36}}, open(p + ".chars_audit.json", "w"))
 PY
         ;;
+    link)
+        # bbl_sleep_link.py --est 3 4 --out-dir <bbl> : one JSON per link routine with its t=0 check;
+        # like the real export, it writes the JSON and THEN refuses (exit 1) a failing check.
+        diff="${RUNNER_LINK_DIFF:-0}"; mkdir -p "${OUT}/bbl"
+        for k in 3 4; do
+            printf '{"t0_check": {"parquet": "demand_%s_spec_12.parquet", "n_rows": 10, "max_abs_diff": %s, "tol": 1e-10, "pass": %s}}\n' \
+                "${k}" "${diff}" "$(awk -v d="${diff}" 'BEGIN { print (d <= 1e-10) ? "true" : "false" }')" > "${OUT}/bbl/sleep_link_E${k}_spec_12.json"
+        done
+        awk -v d="${diff}" 'BEGIN { exit !(d <= 1e-10) }' || { echo "REFUSING: E3's link does not reproduce phi_mt at t=0 (stub)"; exit 1; } ;;
     g2|g4)
         g="G${tag#g}"
         printf '{\n  "gate": "%s",\n  "checks": [{"check": "x", "ok": true}],\n  "ok": true\n}\n' "${g}" > "${OUT}/.gate_${g}.json" ;;

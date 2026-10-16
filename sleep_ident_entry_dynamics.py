@@ -1442,13 +1442,12 @@ def _draw_entry_panel(ax, norm, paths_df, curves_df, vint, g, H, imp=None, title
     it) pass larger values here so the text is still legible once placed.
 
     `legend_kwargs` overrides DEFAULT_LEGEND_KWARGS (loc/bbox_to_anchor/ncol/spacing/frame);
-    the print-size panels need this because a legend sized to be READABLE at that scale covers
-    a much bigger fraction of a small axes than the same legend did on the large drawing
-    canvas, so 'lower right' at the old padding can reach into the data.
+    the print-size panels use it to place the legend below the axes, where a legend readable at
+    that scale cannot cover the paths.
 
     `compact_labels`: shortens the legend's own text (not the caption, which keeps the full
-    wording) so the print-size legend can sit inside the axes without widening past its empty
-    corner. Same numbers (n, phi) as the verbose labels, read from the same variables."""
+    wording) so two legend columns fit the print-size panel's width. Same numbers (n, phi) as
+    the verbose labels, read from the same variables."""
     fs = {**DEFAULT_FONTSIZES, **(fontsizes or {})}
     lk = {**DEFAULT_LEGEND_KWARGS, **(legend_kwargs or {})}
     from matplotlib.patches import Patch
@@ -1654,31 +1653,17 @@ def _panel_tex(norm, vint, imp, gmode, n_b, stem="fig_entry_dynamics", per_routi
 # it, keeps tick/axis/legend text at roughly 8-9pt on the page; drawing it big (as the
 # combined exhibit and the per-routine panels still do) and letting LaTeX shrink it by ~2x
 # is what a reviewer flagged as illegible.
-ENTRY_DYN_PRINT_FIGSIZE = (3.19, 2.55)
-# legend=8 (axis label=10, tick=9 -- both up from the previous 9/8.5): the model-curve row no
-# longer prints phi values (just "Model (III), (IV)"; the phi's moved to V_Main's figure note),
-# which is what makes legend=8 possible with genuinely relaxed padding below -- measured
-# (legend.get_window_extent(), not eyeballed) against d6_entry_paths.csv's ci_lo and
-# d6_model_curves.csv. legend=8.5 was tried first (the target) and rejected: at
-# handlelength=1.8 with tight padding it JUST clears panel "main" (margin +0.0015, a sliver),
-# and every more relaxed padding at 8.5 overlaps -- not a comfortable fit at the size this
-# reviewer asked for. legend=8 clears both panels with room at the SAME padding, so that is
-# what ships; see the caller's report for the exact margins.
+ENTRY_DYN_PRINT_FIGSIZE = (3.19, 2.95)
 ENTRY_DYN_PRINT_FONTSIZES = dict(title=10, label=10, tick=9, legend=8)
-# Per-panel again: panel "main" keeps the fully relaxed padding this reviewer originally
-# suggested (handlelength~1.5, handletextpad~0.4, borderpad~0.3, labelspacing~0.25) -- it
-# clears its data with room (see the caller's report for the exact margin). Panel "alt" grew
-# a fifth row ("No sleepiness", naming the benchmark rule) AND a taller y-range (the y-limit
-# fix below shows the full CI band, up to ~1.83 instead of the old fixed 1.65 ceiling), so the
-# same box now spans more data-units vertically and reaches into the D-firm curve at the old
-# padding. Tightened just enough to clear again (handlelength unchanged at 1.5, so the B/D
-# swatches still read as solid lines; textpad/borderpad/labelspacing pulled in).
-ENTRY_DYN_LEGEND_KWARGS = {
-    "main": dict(loc="lower right", framealpha=0.85, handlelength=1.5, handletextpad=0.4,
-                borderpad=0.3, labelspacing=0.25, borderaxespad=0.15),
-    "alt": dict(loc="lower right", framealpha=0.85, handlelength=1.5, handletextpad=0.3,
-               borderpad=0.2, labelspacing=0.15, borderaxespad=0.15),
-}
+# The legend sits below the x-axis label, in two columns and without a frame: at print size
+# any box inside the axes covers part of the paths (panel "alt" has five rows and its band
+# spans the whole height). Both panels share one legend placement and one axes position
+# (ENTRY_DYN_PANEL_ADJUST), and are saved uncropped, so side by side in V_Main their axes line
+# up even though panel "alt" has one legend row more than panel "main".
+ENTRY_DYN_LEGEND_KWARGS = dict(loc="upper center", bbox_to_anchor=(0.5, -0.27), ncol=2,
+                               frameon=False, handlelength=1.5, handletextpad=0.4,
+                               columnspacing=1.0, labelspacing=0.3, borderaxespad=0.0)
+ENTRY_DYN_PANEL_ADJUST = dict(left=0.19, right=0.97, top=0.967, bottom=0.35)
 
 
 def make_figure(paths_df, curves_df, vint, g, args, imp=None):
@@ -1690,13 +1675,15 @@ def make_figure(paths_df, curves_df, vint, g, args, imp=None):
                        panel_figsize=ENTRY_DYN_PRINT_FIGSIZE,
                        panel_fontsizes=ENTRY_DYN_PRINT_FONTSIZES,
                        panel_legend_kwargs=ENTRY_DYN_LEGEND_KWARGS,
-                       panel_compact_labels=True)
+                       panel_compact_labels=True,
+                       panel_adjust=ENTRY_DYN_PANEL_ADJUST)
 
 
 def make_panel_figures(paths_df, curves_df, vint, g, args, imp=None,
                        stem="fig_entry_dynamics", out_stem=None, suptitle="",
                        per_routine=False, panel_figsize=(6.4, 4.6), panel_fontsizes=None,
-                       panel_legend_kwargs=None, panel_compact_labels=False):
+                       panel_legend_kwargs=None, panel_compact_labels=False,
+                       panel_adjust=None):
     import matplotlib.pyplot as plt
     if paths_df.empty:
         print("  [fig] no paths to plot")
@@ -1743,12 +1730,17 @@ def make_panel_figures(paths_df, curves_df, vint, g, args, imp=None,
                           phi_label=phi_label, fontsizes=panel_fontsizes,
                           legend_kwargs=norm_legend_kwargs,
                           compact_labels=panel_compact_labels)
-        f1.tight_layout()
+        # A fixed layout (panel_adjust) is saved uncropped, so every panel keeps the same size
+        # and axes position; otherwise each is cropped to its own content.
+        if panel_adjust:
+            f1.subplots_adjust(**panel_adjust)
+        else:
+            f1.tight_layout()
         pstem = f"{stem}_{PANEL_STEM[norm]}"
         try:
             for ext in ("png", "pdf"):
-                f1.savefig(DRAFTS / f"{pstem}.{ext}", dpi=300, bbox_inches="tight",
-                           facecolor="white")
+                f1.savefig(DRAFTS / f"{pstem}.{ext}", dpi=300,
+                           bbox_inches=None if panel_adjust else "tight", facecolor="white")
             (DRAFTS / f"{pstem}.tex").write_text(
                 _panel_tex(norm, vint, imp, args.g_mode, n_b, stem, per_routine, n_by),
                 encoding="utf-8")

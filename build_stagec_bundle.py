@@ -17,12 +17,11 @@ The cluster is empty, so everything the chain executes and everything it reads s
          endings. Superseded files are refused: utils/demand_repair.py, panel_demand_repair*.py,
          blp_dx*.jl, dx_*.sh.
   DATA   every input the chain reads, listed explicitly below (never globbed), sha256 recorded:
-         the 12 data rows of cluster/upload_manifest.txt (cluster_preflight.sh blocks on any one
-         missing), the demand-characteristics file and the policy (sha256 must be fd208b5f...).
+         the data rows of cluster/upload_manifest.txt (cluster_preflight.sh blocks on any one
+         missing), the demand-characteristics file and the policy (sha256 must be POLICY_SHA256: the 10-16 refit).
          No sleepiness estimate ships: the chain estimates E1-E4 on the cluster (Pedro, 10-15).
-         Never shipped: demand_repair*, blp_dx*, dx_*, and the weak-IV battery (EXCLUDE: not in
-         the chain, old instrument names). No local reference values ship either: the cluster's
-         gates are automatic sanity checks.
+         Never shipped: demand_repair*, blp_dx*, dx_*. No local reference values ship either:
+         the cluster's gates are automatic sanity checks.
   PYTHON the third-party modules the executed Python imports; the wrapper probes them, and its
          refusal prints a conda create line pinned to this machine's versions.
 
@@ -53,8 +52,8 @@ WRAPPER = HERE / "stagec_suite_20261012.sh"
 PINS_NAME = "stagec_pins_20261012.env"
 STAMP = dt.date.today().strftime("%Y%m%d")
 CHARS_NAME = f"demand_chars_{STAMP}.parquet"
-POLICY_UPLOAD = "polfunc_fitted_liverows_20260930.csv"
-POLICY_SHA256 = "fd208b5fc57b9697eefc010ed4a1076af776d9510b89f3bbc1edca009dc29728"
+POLICY_UPLOAD = "polfunc_fitted_20261016.csv"
+POLICY_SHA256 = "beb0bb2f00334cd64f1f5f68fc54f4cfaf918ef9a3c7db785c13c543f282a429"
 PART_BYTES = 1 << 30
 CONDA_ENV = "dep_comp_blp"          # cluster_lib.sh's CONDA_ENV default
 # The Julia 1.11 package set (D7, user 10-13): resolved under Julia 1.11.4 from the 1.12.6 manifest
@@ -69,29 +68,31 @@ JL_MANIFEST = "Manifest-v1.11.toml"
 JL_MANIFEST_SHA256 = "781049148b0e82809180f072799e94e07220080e9b6cf2483f071158fb50a4e9"
 
 # ── DATA: destination name in data/input -> local source. Explicit; never a glob. ──────────
+# Not here, by design (Pedro, 10-15): the sleepiness estimates and the sleep links
+# (sleep_link_E3/E4_spec_12.json), which the chain PRODUCES on the cluster from its own fit and
+# demand parquets into data/output, and state_centering_tier0.csv (an audit no cluster job reads).
 DATA = {
     "market_panel.parquet":            PROCESSED / "market_panel.parquet",
     "digital_banks_diagnostic.csv":    PROCESSED / "PANEL_INTERMED" / "digital_banks_diagnostic.csv",
     "estban_own_branches.csv":         PROCESSED / "PANEL_INTERMED" / "estban_own_branches.csv",
     "bcb_banked_mca_panel.csv":        OF / "BCB" / "Inclusion" / "bcb_banked_mca_panel.csv",
     "state_centering_means.json":      EO / "DEMAND_PREP" / "state_centering_means.json",
-    "state_centering_tier0.csv":       EO / "DEMAND_PREP" / "state_centering_tier0.csv",
     "demographics_sigma.parquet":      EO / "DEMAND_PREP" / "demographics_sigma.parquet",
     "forward_rf_qoq.csv":              EO / "COST_FWD" / "forward_rf_qoq.csv",
     "forward_rf_vintages.csv":         EO / "COST_FWD" / "forward_rf_vintages.csv",
     "bbl_transitions.json":            EO / "COST_FWD" / "bbl_transitions.json",
-    "sleep_link_E3_spec_12.json":      EO / "COST_FWD" / "sleep_link_E3_spec_12.json",
-    "sleep_link_E4_spec_12.json":      EO / "COST_FWD" / "sleep_link_E4_spec_12.json",
     CHARS_NAME:                        PROCESSED / "demand_chars.parquet",
     POLICY_UPLOAD:                     EO / "COST_POLFUNC" / "polfunc_fitted.csv",
 }
 CHARS_REPORT = PROCESSED / "demand_chars_report.json"
 
 
-# Hard pins (coordinator, 10-13 15:04). utils/demand_chars.apply refuses any market panel but this
-# one, and the side file was rebuilt with the panel md5 in its schema metadata. Never overridable.
-PANEL_MD5 = "6613228b2fe6b0ba95d0f16d1d5a743c"
-CHARS_SHA256 = "55fa8698f76341d3d7a8937af2b9d5cfaa23bed022e5ec485be46df75d6c9c72"
+# Hard pins: the panel of the 2026-10-15 22:31 stage-4 rebuild (same-market rival mean spread,
+# built after the exclusions; panel fixes D1-D4, D6) and the demand_chars side file step 39 built
+# from it. utils/demand_chars.apply refuses any market panel but this one, and the side file
+# records the panel md5 in its schema metadata. Never overridable.
+PANEL_MD5 = "cac0a0c7b72aacda7853ee00281a7212"
+CHARS_SHA256 = "72dbbae2cc5f75f5fd36e32c74ba59abc7322075c8dc6edf2f5e800a00f1b082"
 # The demographic sigma file the draws read (blp_draws.jl; nothing else in the bundle reads it or
 # derives from it). panel_demographics_sigma.py rebuilt it on 2026-10-14 20:11 (the two ANATEL
 # sigma columns, connections_per100_sigma and frac_4g5g_sigma) and again on 2026-10-15 16:09,
@@ -109,8 +110,6 @@ MS982_MD5 = {
     "forward_rf_qoq.csv": "e544d34079c60c8169f0995faa171873",
     "forward_rf_vintages.csv": "13f321168f7bbd6e29f76b2b3f6e3b37",
     "bbl_transitions.json": "621c621f40f9f615fa0864259bc4f60d",
-    "sleep_link_E3_spec_12.json": "14b73a495175b282226a23e14713649b",
-    "sleep_link_E4_spec_12.json": "ef594035f1d0b21a04e878415265be3b",
     "market_panel.parquet": "6613228b2fe6b0ba95d0f16d1d5a743c",
 }
 
@@ -135,10 +134,6 @@ EXECUTED_PY = ["sleep_pipeline.py", "sleep_demand_prep.py", "sleep_demand_prep_l
                "sleep_demand_prep_e1.py", "sleep_demand_prep_e2.py", "bbl_solve.py", "bbl_shards.py",
                "make_bbl_cost_tables.py"]
 FORBIDDEN = re.compile(r"(^|/)(demand_repair\.py|panel_demand_repair[^/]*\.py|blp_dx[^/]*|dx_[^/]*\.sh)$")
-# Not in the chain and not shipped: the demand weak-IV battery (old instrument names) and its job,
-# and the sleepiness battery that imports it. Never followed by the crawl; reported if reached.
-EXCLUDE = {"blp_weakiv_job.sh", "blp_weak_iv.py", "blp_cue_linear.py", "blp_moment_reduction.py",
-           "blp_diag_degeneracy.py", "sleep_weak_iv.py"}
 NEVER_FOLLOW = re.compile(r"^(diagnostics/|scratch/|tests?/)")   # mentioned in comments, never run
 TEXT_SUFFIXES = {".sh", ".jl", ".py", ".env", ".toml", ".txt", ".md"}
 PIP_TO_CONDA = {"sklearn": "scikit-learn", "yaml": "pyyaml", "bs4": "beautifulsoup4"}
@@ -216,16 +211,10 @@ def crawl(entries, literals=True):
                 found.append(f"{parent.as_posix()}/__init__.py")
         for f in found:
             r = repo_file(f)
-            if r in EXCLUDE:
-                EXCLUDED_REACHED.setdefault(r, rel)
-                continue
             if r and r not in seen:
                 why.setdefault(r, rel)
                 todo.append(r)
     return seen, why
-
-
-EXCLUDED_REACHED: dict = {}
 
 
 def third_party(py_files):
@@ -354,8 +343,6 @@ def main() -> int:
     print(f"DATA: {len(data_members)} files, {dsize/1e6:.1f} MB (no sleepiness estimate: made on the cluster)")
     for n in sorted(data_members):
         print(f"  {n}  {len(data_members[n]):>12,}  sha256 {data_sha[n[len('data/input/'):]][:12]}")
-    for r, by in sorted(EXCLUDED_REACHED.items()):
-        print(f"EXCLUDED (not in the chain, not shipped): {r}  (named by {by})")
     print(f"PYTHON ({CONDA_ENV}): imports {', '.join(req)}")
     print(f"  create line: {conda_create}")
     if a.reuse_data_zip:
@@ -388,9 +375,9 @@ def main() -> int:
     targets = [out / f"stagec_code_{STAMP}.zip", out / f"stagec_data_{STAMP}.zip"]
     if any(t.exists() for t in targets):
         print(f"REFUSED: {out} already holds a bundle of {STAMP}"); return 1
-    bad_members = [m for m in code if FORBIDDEN.search(m) or Path(m).name in EXCLUDE]
+    bad_members = [m for m in code if FORBIDDEN.search(m)]
     if bad_members:
-        print(f"REFUSED: forbidden or excluded files among the members: {bad_members}"); return 1
+        print(f"REFUSED: forbidden files among the members: {bad_members}"); return 1
     arrival = {m: h(b) for m, b in code.items()}
     arrival.update({m: h(b) for m, b in data_members.items()})
     pins_txt = "\n".join([

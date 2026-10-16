@@ -140,7 +140,10 @@ def load_estban_raw_pre2016() -> pd.DataFrame:
     """
     pattern_upper = os.path.join(ESTBAN_RAW_MUN, "*.CSV")
     pattern_lower = os.path.join(ESTBAN_RAW_MUN, "*.csv")
-    all_files = sorted(glob.glob(pattern_upper) + glob.glob(pattern_lower))
+    # On Windows the match is case-insensitive, so both patterns list every file: keep one path
+    # per file, or each month's balances are read, and summed, twice.
+    found = glob.glob(pattern_upper) + glob.glob(pattern_lower)
+    all_files = sorted({os.path.normcase(os.path.abspath(p)): p for p in found}.values())
 
     pre2016_files = []
     for fp in all_files:

@@ -586,10 +586,12 @@ cl_need_transitions () {
         "carries rate.process (focus_mean_plus_horizon_shock), cost_shifters and market_states"
 }
 # cl_need_sleep_link <routine>: the sleepiness link the evolving-phi forward simulation evaluates
-# (bbl_fwd_sim.jl --phi-path evolving). Exported locally from the est{k} fit and uploaded.
+# (bbl_fwd_sim.jl --phi-path evolving). PRODUCED on the cluster (10-15): bbl_sleep_link.py runs
+# after the demand prep, on the cluster's own fit and parquet, into the bbl step folder
+# (data/output/bbl); it is never uploaded (input = uploaded, output = produced).
 cl_need_sleep_link () {   # cl_need_sleep_link <routine>
-    cl_need_file "${CL_DATA_IN}/sleep_link_E$1_spec_12.json" "sleepiness link E$1 (evolving phi)" \
-        "build locally then upload: python bbl_sleep_link.py --est $1" \
+    cl_need_file "${CL_STEP_BBL}/sleep_link_E$1_spec_12.json" "sleepiness link E$1 (evolving phi)" \
+        "produce it on the cluster after the demand prep: python bbl_sleep_link.py --est $1 --out-dir ${CL_STEP_BBL} --transitions ${CL_DATA_IN}/bbl_transitions.json (stage C: the chain's link step)" \
         "or run the sim with --phi-path frozen (phi held at the launch phi_mt)"
 }
 # cl_need_rc_jls <routine>: the RC result the CF/BBL stack opens. It tests the exact file

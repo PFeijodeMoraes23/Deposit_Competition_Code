@@ -98,7 +98,7 @@ const CORE_COLS = ["fgc_covered", "has_ip", "log_total_assets_lag"]
 # 2026-07-09 and REJECTED: dropping the aggregates roughly doubled the logit α SE and made it
 # insignificant (t −2.2→−0.75), even though the subsample eff-F rose (13→21, a mechanical dilution
 # effect) — the `mean_loo_` contribute identifying variation despite their collinearity. Kept only
-# as a robustness discussion (review §4). See blp_weak_iv.py PARSIMONIOUS_IV for the diagnostic.
+# as a robustness discussion (review §4).
 const IV_BLP_LOO = ["loo_log_assets", "mean_loo_log_assets",
                     "loo_equity_ratio", "mean_loo_equity_ratio",
                     "loo_basileia", "mean_loo_basileia",
@@ -829,9 +829,6 @@ const COMPARISON_ROWS = ["alpha", "fgc_covered", "has_ip", "log_total_assets_lag
 const COMPARISON_ROWS_SEG = ["alpha", "fgc_covered", "has_ip", "log_total_assets_lag",
                              "seg_S2", "seg_S3", "seg_S4", "seg_S5", "is_state_owned",
                              "dummy_D_type"]  # segments shown
-# The Effective-F rows/note are suppressed until Table \ref{tab:weakiv_spec12} (the weak-IV
-# battery table) exists; flip to `true` to print them again once it does.
-const PRINT_EFF_F = false
 const DRAFTS_DIR = drafts_dir()
 "Where a LaTeX table goes: `rout_dir`, and the Drafts folder when it exists and --out-dir is not set."
 table_dests(rout_dir) = (isdir(DRAFTS_DIR) && out_dir_override() === nothing) ?
@@ -901,8 +898,7 @@ end
     demand_note(notes, which; se_method="wcb", subs=Dict()) -> String
 
 The note body for table `which` (a key of `[demand.order]`): its sentences in the listed order,
-with `se` resolved by `se_method`, every key in `skip` left out (e.g. `eff_f` when no F is
-printed) and `@NAME@` tokens filled from `subs`.
+with `se` resolved by `se_method`, every key in `skip` left out (e.g. `segments`) and `@NAME@` tokens filled from `subs`.
 """
 function demand_note(notes::AbstractDict, which::AbstractString;
                      se_method::AbstractString="wcb", skip=String[],
@@ -923,70 +919,6 @@ end
 """`\\footnotesize \\textit{Notes:} <body>` in the size the notes file sets."""
 note_cell(notes::AbstractDict, body::AbstractString) =
     notes["note_size"] * raw" \textit{Notes:} " * body
-
-"""Path of the demand weak-IV battery written by blp_weak_iv.py: `cluster_processed/weak_iv.json`
-under the BLP results directory (`data/output/BLP_RESULTS` on the cluster)."""
-function weak_iv_path()
-    out_dir = get_paths()[2]
-    res_dir = is_cluster_out(out_dir) ? joinpath(out_dir, "BLP_RESULTS") : out_dir
-    return joinpath(res_dir, "cluster_processed", "weak_iv.json")
-end
-
-"""
-    first_stage_eff_F(data, ids) -> Dict{Int, NTuple{4,Float64}}
-
-Effective first-stage F of the spread for each routine, read from the weak-IV battery
-(blp_weak_iv.py): the Montiel Olea–Pflueger cluster-robust F on the excluded instruments within
-deposit type 4 and within type 5 — the two blocks `project_spreads` instruments, each with its
-own first stage — after partialling out a constant and X_COLS. Those controls are the `full`
-sub-model's X, so the values belong to the comparison table only.
-
-A routine is kept only when the battery's full-sample block has the logit fit's observation
-count, i.e. both were computed on the same demand parquet; otherwise it is skipped with a
-warning and its cells print '---'. Returns id => (F type 4, F type 5, critical value type 4,
-critical value type 5), the critical values being the stored Montiel Olea–Pflueger 10%
-worst-case-bias thresholds (`mop_cv.bias10`); NaN for a missing entry.
-"""
-function first_stage_eff_F(data::AbstractDict, ids::Vector{Int})
-    out = Dict{Int,NTuple{4,Float64}}()
-    p = weak_iv_path()
-    if !isfile(p)
-        println("    [table] no weak-IV battery at $p — first-stage F rows omitted")
-        return out
-    end
-    wk = try
-        copy(JSON3.read(read(p, String), Dict{String,Any}))
-    catch _e
-        println("    [table] WARN: could not read $(basename(p)) — $_e"); return out
-    end
-    for id in ids
-        blk = get(wk, string(id), nothing)
-        blk === nothing && continue
-        n_fit = get(get(data, "E$(id)_$(COMPARISON_SUBMODEL)", Dict{String,Any}()), "n_obs", nothing)
-        n_bat = get(get(blk, "all", Dict{String,Any}()), "n_obs", nothing)
-        if n_fit === nothing || n_bat === nothing || Int(n_fit) != Int(n_bat)
-            println("    [table] WARN: E$id weak-IV battery N=$(n_bat) ≠ logit N=$(n_fit) — " *
-                    "different demand-prep vintage; first-stage F omitted for E$id")
-            continue
-        end
-        effF(t) = (v = get(get(blk, t, Dict{String,Any}()), "effective_F", nothing);
-                   v === nothing ? NaN : Float64(v))
-        cv10(t) = (v = get(get(get(blk, t, Dict{String,Any}()), "mop_cv", Dict{String,Any}()),
-                           "bias10", nothing);
-                   v === nothing ? NaN : Float64(v))
-        out[id] = (effF("type4"), effF("type5"), cv10("type4"), cv10("type5"))
-    end
-    return out
-end
-
-"""Critical value `k` (3 = type 4, 4 = type 5) of `eff_f` across the printed routines, rounded
-to an integer for the note: one number when they agree, `lo--hi` when they do not, '---' if none."""
-function _cv_text(eff_f::AbstractDict, ids::Vector{Int}, k::Int)
-    v = sort(unique([round(Int, eff_f[id][k]) for id in ids
-                     if haskey(eff_f, id) && isfinite(eff_f[id][k])]))
-    isempty(v) && return "---"
-    return length(v) == 1 ? string(v[1]) : "$(v[1])--$(v[end])"
-end
 
 # ── plain-text formatting (comparison table matches est1-4_spec12_stage2_comparison.tex,
 #    which prints `-0.1494***` / `(0.0677)` without math mode) ──────────────────────────
@@ -1022,15 +954,13 @@ end
 
 """Build est1-4_spec12_logit_comparison.tex: columns = routines (each its COMPARISON_SUBMODEL
 sub-model — `full_dtype`, the spec matching the RC engines' linear design X1_COLS), rows = COMPARISON_ROWS, stats block =
-elasticity / N / Q / effective first-stage F (types 4 and 5, from `eff_f`; the two rows and
-their note sentence are omitted when `eff_f` is empty) / G*. The note is assembled from
+elasticity / N / Q / G*. The note is assembled from
 config/table_notes.toml (`notes`, see `demand_note`), the wording Table 6 shares.
 Layout and label conventions mirror est1-4_spec12_stage2_comparison.tex."""
 function build_logit_comparison_tex(data::AbstractDict, ids::Vector{Int},
                                     elas::AbstractDict, notes::AbstractDict;
                                     rows::Vector{String}=COMPARISON_ROWS,
-                                    with_seg::Bool=false,
-                                    eff_f::AbstractDict=Dict{Int,NTuple{4,Float64}}())::String
+                                    with_seg::Bool=false)::String
     n    = length(ids)
     hdr  = "Variable & " * join([get(ESTIMATION_ENUM_REF, id, "E$id") for id in ids], " & ") * TROW
     # The segment dummies are nuisance controls already printed IN FULL, per routine, by the appendix
@@ -1038,12 +968,9 @@ function build_logit_comparison_tex(data::AbstractDict, ids::Vector{Int},
     # twin of this table (four extra rows, no information).
     skip = String[]
     with_seg && push!(skip, "segments")
-    isempty(eff_f) && push!(skip, "eff_f")
     sem  = String(get(get(data, "E$(ids[1])_$(COMPARISON_SUBMODEL)", Dict{String,Any}()),
                       "se_method", "wcb"))
-    body = demand_note(notes, "logit_comparison"; se_method=sem, skip=skip,
-                       subs=Dict("CV4" => _cv_text(eff_f, ids, 3),
-                                 "CV5" => _cv_text(eff_f, ids, 4)))
+    body = demand_note(notes, "logit_comparison"; se_method=sem, skip=skip)
     note = raw"\multicolumn{" * string(n + 1) *
         raw"}{p{\dimexpr\textwidth-2\tabcolsep\relax}}{" * note_cell(notes, body) *
         "}"   # no trailing TROW (matches stage2 template)
@@ -1086,8 +1013,6 @@ function build_logit_comparison_tex(data::AbstractDict, ids::Vector{Int},
     end
     push!(lines, raw"\midrule")
     elas_l = String[]; obs_l = String[]; q_l = String[]; gstar_l = String[]
-    f4_l = String[]; f5_l = String[]
-    _fcell(v) = isfinite(v) ? fmt3(v) : "---"
     for id in ids
         entry = get(data, "E$(id)_$(COMPARISON_SUBMODEL)", Dict{String,Any}())
         ev = get(elas, id, NaN)
@@ -1096,8 +1021,6 @@ function build_logit_comparison_tex(data::AbstractDict, ids::Vector{Int},
         push!(obs_l, (obs === nothing || obs == 0) ? "---" : _commas(Int(obs)))
         qv = get(entry, "Q_value", nothing)
         push!(q_l, qv === nothing ? "---" : fmt3(Float64(qv)))
-        f4, f5 = get(eff_f, id, (NaN, NaN, NaN, NaN))[1:2]
-        push!(f4_l, _fcell(f4)); push!(f5_l, _fcell(f5))
         gs = get(entry, "G_star", nothing)
         push!(gstar_l, gs === nothing ? "---" : fmt3(Float64(gs)))
     end
@@ -1105,10 +1028,6 @@ function build_logit_comparison_tex(data::AbstractDict, ids::Vector{Int},
         "Mean own-price elasticity & " * join(elas_l, " & ") * TROW,
         "Observations & " * join(obs_l, " & ") * TROW,
         Q_ROW_LABEL * " & " * join(q_l, " & ") * TROW,
-    ])
-    isempty(eff_f) || append!(lines, [
-        "Effective \$F\$, Type 4 & " * join(f4_l, " & ") * TROW,
-        "Effective \$F\$, Type 5 & " * join(f5_l, " & ") * TROW,
     ])
     append!(lines, [
         "Effective Clusters (\$G^*\$) & " * join(gstar_l, " & ") * TROW,
@@ -1120,8 +1039,7 @@ end
 
 """Write est1-4_spec12_logit_comparison.tex (COMPARISON_IDS × COMPARISON_SUBMODEL) to
 Rout + Drafts. Computes the mean own-price elasticity per routine from its demand parquet
-(skipped with a '---' cell if the parquet is unavailable) and reads the effective first-stage F
-from the weak-IV battery (`first_stage_eff_F`)."""
+(skipped with a '---' cell if the parquet is unavailable)."""
 function write_logit_comparison_table(data::AbstractDict)
     ids = [id for id in COMPARISON_IDS if haskey(data, "E$(id)_$(COMPARISON_SUBMODEL)")]
     if length(ids) < 2
@@ -1145,7 +1063,6 @@ function write_logit_comparison_table(data::AbstractDict)
             println("    [table] WARN: E$id elasticity failed — $_e"); NaN
         end
     end
-    eff_f = PRINT_EFF_F ? first_stage_eff_F(data, ids) : Dict{Int,NTuple{4,Float64}}()
     rout_dir = tex_out_dir()
     dests = table_dests(rout_dir)
     # ONLY the segment-suppressed version is emitted. The `_seg` twin was retired: the segment dummies
@@ -1154,7 +1071,7 @@ function write_logit_comparison_table(data::AbstractDict)
     # footnote now cross-references those tables. Re-add the COMPARISON_ROWS_SEG/`true` tuple here if a
     # referee ever wants the with-segments layout back.
     for (rws, wseg, fn) in ((COMPARISON_ROWS, false, "est1-4_spec12_logit_comparison.tex"),)
-        tex = build_logit_comparison_tex(data, ids, elas, notes; rows=rws, with_seg=wseg, eff_f=eff_f)
+        tex = build_logit_comparison_tex(data, ids, elas, notes; rows=rws, with_seg=wseg)
         for d in dests
             path = joinpath(d, fn)
             try

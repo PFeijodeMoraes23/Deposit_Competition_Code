@@ -479,7 +479,7 @@ def load_panel(cols: list[str]) -> pd.DataFrame:
     if missing:
         raise SystemExit(
             "market panel is missing column(s): " + ", ".join(missing) +
-            "\nRebuild the panel (panel_market -> panel_loo_instruments -> panel_fee_merge)."
+            "\nRebuild the panel (panel_market -> panel_loo_instruments -> fees/panel_fee_merge)."
         )
     df["t"] = df["year"].astype(int) * 4 + df["quarter"].astype(int)
     return df

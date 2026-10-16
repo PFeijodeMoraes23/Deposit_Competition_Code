@@ -126,27 +126,17 @@ digital_flags      | data | sleep      | PANEL_INTERMED| digital_banks_diagnosti
 estban_branches    | data | sleep      | PANEL_INTERMED| estban_own_branches.csv        | data/input | python panel_estban_instrument.py                             | -         | -
 banked_mca         | data | sleep      | INCLUSION     | bcb_banked_mca_panel.csv       | data/input | python scrape_bcb_banked.py                                  | -         | -
 # The persisted state transform. STATE_CENTERING_JSON points every cluster job at the uploaded
-# copy, so theta0 keeps meaning "phi-hat at the average market" and the fits stay comparable
-# with the promoted local ones. tier0 is the coverage audit sleep_audit_state_centering.py reads.
+# copy, so theta0 keeps meaning "phi-hat at the average market".
 #
-# NO PARENT ON EITHER ROW, DELIBERATELY -- they are checked for PRESENCE, never for mtime.
-# state_centering_means.json is VERSION-pinned, not mtime-derived: it carries
-# "version": "2026-07-28.1", utils/state_transform.py:73 pins STATE_TRANSFORM_VERSION to the
-# same string, and load_transform() RAISES on any mismatch. Upload it AS IS.
-#
-# Giving it market_panel.csv as a parent would make the stager call it STALE and tell the
-# reader to run --write-centers. That instruction destroys the validation baseline: the means
-# are recomputed from the CURRENT panel, the centering shifts, theta0 shifts, and phi-hat with
-# it -- so the promoted 99.9945 / 99.5400 / 96.5627 / 96.6814 that gate G1 compares against
-# would no longer describe the same estimator. The cluster would diverge from the local vintage
-# for a reason that has nothing to do with this migration, and G1 -- the one end-to-end check on
-# the whole port -- would report a spurious NEW BASIN. load_transform's own error text says the
-# same thing: rebuilding it means rebuilding every demand parquet too.
-#
-# Regenerating these is a deliberate RE-CENTERING decision (new panel vintage promoted on
-# purpose, or STATE_TRANSFORM_VERSION bumped), never routine freshness maintenance.
+# NO PARENT ON THE ROW, DELIBERATELY -- it is checked for PRESENCE, never for mtime.
+# state_centering_means.json is VERSION-pinned, not mtime-derived: it carries a "version" that
+# utils/state_transform.py pins as STATE_TRANSFORM_VERSION, and load_transform() RAISES on any
+# mismatch. Upload it AS IS. Regenerating it (python sleep_est_e2.py --write-centers) is a
+# deliberate RE-CENTERING decision, made LOCALLY after a panel rebuild (Pedro, 10-15) and shipped
+# here: the cluster re-estimates the sleepiness fits from it, so the means and every fit move
+# together. state_centering_tier0.csv (the coverage audit of the old fits) is no longer uploaded:
+# no cluster job reads it.
 state_centering    | data | sleep      | SIGMA_DIR     | state_centering_means.json     | data/input | python sleep_est_e2.py --write-centers   (RE-CENTERING ONLY) | - | -
-state_tier0        | data | sleep      | SIGMA_DIR     | state_centering_tier0.csv      | data/input | python sleep_audit_state_centering.py                (RE-CENTERING ONLY) | - | -
 
 # --- 1. demand parquets: the estimation sample the BLP, BBL and CF all read ---------------
 #        PRODUCED ON THE CLUSTER: sleep_job.sh SLEEP_STEP=prep writes them into
@@ -213,13 +203,14 @@ bbl_transitions    | data | bbl,cf     | COST_FWD      | bbl_transitions.json   
 # --- 4c. the SLEEPINESS LINK of each BBL routine (bbl_fwd_sim.jl --phi-path evolving, the default) -
 #        The forward simulation re-evaluates the sleepy share every period from the routine's own
 #        spec-12 fit: index direction, the monotone link as a grid, state roles and the centring
-#        constants, exported by bbl_sleep_link.py from the est{k} pickle (~15 kB each). The export
-#        refuses to write a link that does not reproduce the demand parquet's phi_mt at t = 0, and
-#        the sim repeats that check on the cluster. One row per routine: only the link routines
-#        (3, 4) have one, so a {k} row would expand over routines that never do.
+#        constants, exported by bbl_sleep_link.py from the est{k} pickle (~15 kB each). PRODUCED on
+#        the cluster (10-15): the sleepiness fit is made there, so the link is too, after the demand
+#        prep (stage C: the chain's link step), into data/output/bbl. The export refuses a link
+#        that does not reproduce the demand parquet's phi_mt at t = 0, and the sim repeats that
+#        check. One row per routine: only the link routines (3, 4) have one.
 #        --phi-path frozen is the only run that does not read it.
-sleep_link_E3      | data | bbl        | COST_FWD      | sleep_link_E3_spec_12.json     | data/input | python bbl_sleep_link.py --est 3                                   | EST3      | estimation_results.pkl
-sleep_link_E4      | data | bbl        | COST_FWD      | sleep_link_E4_spec_12.json     | data/input | python bbl_sleep_link.py --est 4                                   | EST4      | estimation_results.pkl
+sleep_link_E3      | produced | bbl     | COST_FWD      | sleep_link_E3_spec_12.json     | data/output/bbl | bbl_sleep_link.py --est 3 (stage C link step)            | -         | -
+sleep_link_E4      | produced | bbl     | COST_FWD      | sleep_link_E4_spec_12.json     | data/output/bbl | bbl_sleep_link.py --est 4 (stage C link step)            | -         | -
 
 # --- 5. fitted BBL policy function (deviations are formed around it, not observed spreads) -
 polfunc            | produced | bbl      | COST_POLFUNC  | polfunc_fitted.csv           | data/output/bbl | bbl_run.sh (BBL_STEP=polfunc, default)                       | -         | -

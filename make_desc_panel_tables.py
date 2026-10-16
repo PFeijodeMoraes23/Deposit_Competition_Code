@@ -35,6 +35,7 @@ import numpy as np
 
 from utils.window import apply_window, MIN_YEAR, MAX_YEAR
 from utils import paths as _paths
+from utils import prepaid as _prepaid
 # One definition of the spread unit for every descriptive table: annualized, compounded,
 # percentage points (see make_desc_compressed_tables.annualized_spread_pp).
 from make_desc_compressed_tables import (annualized_spread_pp, SPREAD_UNIT, NOTE_FONT,
@@ -244,8 +245,12 @@ def main():
 
     # Shared note sentences: what the spread rows average over, and where the type-5 and
     # Pix rows are defined (see the blanking above).
+    # The type-5 spread is left out of every table when it is the common CDI fallback
+    # (utils/prepaid.py); the CSVs keep it.
+    TEX_OMIT = {"spread_pp_a5"} if _prepaid.omit_spread(df) else set()
     PERIOD_NOTE = ("Spread rows include market-quarters without deposits of that type. "
-                   "Type-5 rows from 2020Q2, Pix rows from 2020Q4.")
+                   f"Type-5 rows from {_prepaid.start_label(df)}, Pix rows from 2020Q4. "
+                   + (_prepaid.OMITTED_NOTE if TEX_OMIT else _prepaid.fallback_note(df))).strip()
     BLANK_NOTE = "Blank: undefined in that year (Pix and type 5 before 2020)."
     WEIGHT_NOTE = ("Population-weighted (\\texttt{" + args.weight_col.replace("_", "\\_") + "})."
                    if args.weight_col else "Unweighted.")
@@ -370,7 +375,7 @@ def main():
                 if mean_row is None:
                     return True
                 return all(pd.isna(mean_row[2][g]) for g in groups)
-            var_order = [vb for vb in var_order if not _all_missing(vb)]
+            var_order = [vb for vb in var_order if not _all_missing(vb) and vb not in TEX_OMIT]
 
             # Build data row strings
             row_lines = []
@@ -521,7 +526,7 @@ def main():
         def _all_missing(vb):
             col = f"{vb}_Mean"
             return col not in gset.columns or gset[col].isna().all()
-        var_order = [v for v in vars_to_include if not _all_missing(v)]
+        var_order = [v for v in vars_to_include if not _all_missing(v) and v not in TEX_OMIT]
 
         body = []
         for i, vb in enumerate(var_order):
@@ -673,7 +678,7 @@ def main():
                 if col in df_s.columns and not df_s[col].isna().all():
                     return False
             return True
-        var_order = [v for v in vars_to_include if not _all_missing(v)]
+        var_order = [v for v in vars_to_include if not _all_missing(v) and v not in TEX_OMIT]
 
         def _build_panel_rows(summary_df):
             gset = summary_df.set_index("Group")
@@ -837,7 +842,7 @@ def main():
         def _all_missing(vb):
             col = f"{vb}_Mean"
             return col not in gset.columns or gset[col].isna().all()
-        var_order = [v for v in vars_to_include if not _all_missing(v)]
+        var_order = [v for v in vars_to_include if not _all_missing(v) and v not in TEX_OMIT]
 
         body = []
         for i, vb in enumerate(var_order):
@@ -995,7 +1000,7 @@ def main():
         def _all_missing(vb):
             col = f"{vb}_Mean"
             return col not in summary_df.columns or summary_df[col].isna().all()
-        var_order = [v for v in vars_to_include if not _all_missing(v)]
+        var_order = [v for v in vars_to_include if not _all_missing(v) and v not in TEX_OMIT]
 
         def _panel_rows(region_df):
             gset = region_df.set_index("_year")

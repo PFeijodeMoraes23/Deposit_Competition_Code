@@ -33,6 +33,8 @@ Rout/slide_motivation.json:
                                            paths of the five largest, persistence, share change
   tab_motiv_*.tex                          the motivation note's ten tables, booktabs bodies
                                            built from the sidecar (--only motivtables)
+  fig_paper_*.pdf                          paper copies of four motivation charts, drawn at a
+                                           0.49\textwidth panel's printed size (--only paper)
 
 SOURCES
   Rout/Compressed_MarketStructure_by_Year_dep_weighted.csv   Table A.4 and Figure 1
@@ -76,6 +78,7 @@ import pandas as pd
 import make_desc_compressed_tables as mdt
 from utils import paths as _paths
 from utils import routines as _routines
+from utils import prepaid as _prepaid
 from utils.window import apply_window, MIN_YEAR, MAX_YEAR
 
 try:
@@ -103,14 +106,60 @@ MINUS = "−"
 
 VISUALS = ("panels", "timedep", "savings", "ame", "coef", "wedge", "violations", "flow", "roadmap",
            "table", "band", "pricevol", "reprice", "dpremium", "entrygap", "relprice", "anova",
-           "motivtables")
+           "motivtables", "paper")
+
+# Paper copies of four motivation charts, for a 2x2 figure of 0.49\textwidth panels in V_Main
+# (12pt, letterpaper, 1in margins: 0.49 * 6.5in = 3.19in). As with fig_entry_dynamics_a/b, each
+# panel is drawn AT its printed width with fonts sized for it, not shrunk from the slide size.
+# `--only paper` redraws the four charts with these settings; every other chart the same
+# functions draw is discarded, and the sidecar is not rewritten.
+PAPER_FIGSIZE = (3.19, 2.45)   # starting size; _save fits the saved panel to PAPER_PRINT
+PAPER_PRINT = (3.19, 2.9)
+PAPER_FS = 0.9
+PAPER_STEMS = {
+    "fig_slide_motiv_rates_by_type_noshade": "fig_paper_motiv_rates_by_type",   # panel (a)
+    "fig_slide_relprice_share_xs_pp": "fig_paper_relprice_share_xs",            # panel (b)
+    "fig_slide_motiv_entry_by_gap_bankboot": "fig_paper_entry_by_gap",          # panel (c)
+    "fig_slide_motiv_dfirm_premium": "fig_paper_dfirm_premium",                 # panel (d)
+}
+PAPER = False
+MARK = 1.0       # scatter-area multiplier (dot sizes scale with the figure's area)
+
+
+def paper_figures(out: pathlib.Path, png: bool):
+    global SLIDE_FIGSIZE, FS, PAPER, MARK
+    SLIDE_FIGSIZE, FS, PAPER = PAPER_FIGSIZE, PAPER_FS, True
+    MARK = (PAPER_FIGSIZE[0] * PAPER_FIGSIZE[1]) / (5.2 * 3.3)
+    pricevol_charts(out, png)
+    relprice_charts(out, png)
+    entry_gap_chart(out, png)
+    dpremium_chart(out, png)
 
 
 def _save(fig, out: pathlib.Path, stem: str, png: bool):
+    pad = 0.1
+    if PAPER:
+        if stem not in PAPER_STEMS:
+            plt.close(fig)
+            return
+        stem = PAPER_STEMS[stem]
+        # The tight crop adds the legend and end labels outside the axes. Shrink the figure by
+        # that excess (text keeps its size) until the saved panel is exactly PAPER_PRINT inches,
+        # so all four print at 100% and share one height in the 2x2 grid.
+        pad = 0.02
+        _wrap_legend(fig)
+        for _ in range(4):
+            if len(fig.axes) > 1:
+                fig.tight_layout(h_pad=1.0)
+            bb = fig.get_tightbbox(fig.canvas.get_renderer())
+            w, h = fig.get_size_inches()
+            fig.set_size_inches(w - (bb.width + 2 * pad - PAPER_PRINT[0]),
+                                h - (bb.height + 2 * pad - PAPER_PRINT[1]))
     p = out / f"{stem}.pdf"
-    fig.savefig(p, bbox_inches="tight", facecolor="white")
+    fig.savefig(p, bbox_inches="tight", pad_inches=pad, facecolor="white")
     if png:
-        fig.savefig(out / f"{stem}.png", dpi=200, bbox_inches="tight", facecolor="white")
+        fig.savefig(out / f"{stem}.png", dpi=200, bbox_inches="tight", pad_inches=pad,
+                    facecolor="white")
     plt.close(fig)
     print(f"  wrote {p}")
 
@@ -127,8 +176,28 @@ def _legend_below(ax, ncol: int):
     """Legend under the plot, in place of the 'Year' label: these lines cross the whole panel,
     so no corner inside it is free."""
     ax.set_xlabel("")
+    if PAPER:   # a 3.19in panel holds two legend columns, not three
+        ncol = min(ncol, 2)
     ax.legend(fontsize=8.5 * FS, loc="upper center", bbox_to_anchor=(0.5, -0.11), ncol=ncol,
               frameon=False, columnspacing=1.4, handlelength=1.8)
+
+
+def _wrap_legend(fig, width=34):
+    """Paper panels: a legend entry longer than `width` characters breaks into two lines at the
+    ', ' or ' (' nearest its middle, so no entry is wider than the panel."""
+    for ax in fig.axes:
+        leg = ax.get_legend()
+        if leg is None:
+            continue
+        for t in leg.get_texts():
+            s = t.get_text()
+            if len(s) <= width or "\n" in s:
+                continue
+            cuts = [i + 1 for i in range(len(s) - 1) if s[i:i + 2] == ", "]
+            cuts += [i for i in range(len(s) - 1) if s[i:i + 2] == " ("]
+            if cuts:
+                c = min(cuts, key=lambda i: abs(i - len(s) / 2))
+                t.set_text(s[:c].rstrip() + "\n" + s[c:].lstrip())
 
 
 def _plain(v: float, d: int) -> str:
@@ -526,7 +595,7 @@ def deposit_type_totals(refresh: bool) -> pd.DataFrame:
 TYPES_TEX = r"""% tab_slide_deposit_types.tex -- GENERATED by make_slide_figures.py. Do not edit.
 % Needs booktabs. Spreads: Selic minus the deposit rate, compounded to annual rates, in pp;
 % means over __Y0__--__Y1__ of the annual values of Table A.4 (types 4 and 5, balance-weighted:
-% the spread on the average real, not Table 1's average bank; type 5 from 2020) and of the
+% the spread on the average real, not Table 1's average bank; type 5 from __T5__) and of the
 % quarterly Selic and savings rate (types 1 and 2). The values have keys: \pn{slide.types.*}.
 % Shares: each type's share of the four types' balances, B and D firms pooled, mean over the
 % __NQ__ quarters of __Y0__--__Y1__.
@@ -538,7 +607,7 @@ Deposit type & Rate set by & B firms & D firms & balances (\%) \\
 \midrule
 __ROWS__
 \bottomrule
-\end{tabular}
+__NOTE__\end{tabular}
 """
 
 
@@ -561,6 +630,7 @@ def deposit_types_table(out: pathlib.Path, refresh: bool, decimals: int):
 
     tot = deposit_type_totals(refresh)
     by_q = tot.groupby(["year", "quarter"])[DEP_COLS].sum()
+    pf = prepaid_facts()
     share = (by_q.div(by_q.sum(axis=1), axis=0) * 100.0).mean()
 
     # The time-deposit and prepaid spreads are Table A.4's balance-weighted ones (the spread on
@@ -574,7 +644,7 @@ def deposit_types_table(out: pathlib.Path, refresh: bool, decimals: int):
         "time": dict(label="Time, CDB (4)", setter="Bank",
                      spread=dict(B=t2_mean("spread_ann_a4_w"), D=t2_mean("spread_ann_a4_d_w")),
                      share=float(share["dep_a4"])),
-        "prepaid": dict(label="Prepaid (5)", setter="Bank",
+        "prepaid": dict(label="Prepaid (5)", setter="Bank" + (r"$^{\dagger}$" if pf["fallback"] else ""),
                         spread=dict(B=t2_mean("spread_ann_a5_w"), D=t2_mean("spread_ann_a5_d_w")),
                         share=float(share["dep_a5"])),
     }
@@ -587,7 +657,9 @@ def deposit_types_table(out: pathlib.Path, refresh: bool, decimals: int):
     body = "\n".join(f"{r['label']} & {r['setter']} & {spread_cells(r['spread'])} & {f(r['share'])} \\\\"
                      for r in types.values())
     tex = (TYPES_TEX.replace("__ROWS__", body).replace("__Y0__", str(MIN_YEAR))
-           .replace("__Y1__", str(MAX_YEAR)).replace("__NQ__", str(len(by_q))))
+           .replace("__Y1__", str(MAX_YEAR)).replace("__NQ__", str(len(by_q)))
+           .replace("__T5__", pf["start"])
+           .replace("__NOTE__", PREPAID_TYPES_NOTE if pf["fallback"] else ""))
     _dump(out / "tab_slide_deposit_types.tex", tex)
     _dump(TYPES_JSON, json.dumps(dict(
         schema=1, generator="make_slide_figures.py:deposit_types_table",
@@ -633,10 +705,24 @@ ENTRY_GAP_PP = 1.0
 _MOTIV_CACHE: dict = {}
 
 
+PREPAID_TYPES_NOTE = (r"\multicolumn{5}{@{}l}{\scriptsize $^{\dagger}$No bank-level prepaid rate is "
+                      r"observed: the CDI fallback, so the spread is Selic $-$ CDI.} \\" + "\n")
+
+
+def prepaid_facts() -> dict:
+    """Type-5 start quarter and whether every in-window type-5 rate is the common CDI fallback
+    (utils/prepaid.py), from the panel. Read once per run."""
+    if "prepaid" not in _MOTIV_CACHE:
+        d = apply_window(pd.read_parquet(PANEL_PARQUET, columns=["year", "quarter", "dep_a5", "rate_a5"]),
+                         label="slide prepaid", verbose=False)
+        _MOTIV_CACHE["prepaid"] = dict(start=_prepaid.start_label(d), fallback=_prepaid.common_rate(d))
+    return _MOTIV_CACHE["prepaid"]
+
+
 def motiv_panel() -> pd.DataFrame:
     """The paper's sample (prepare_panel) with the columns the motivation charts read, and the
     row-level type-4 and type-5 spreads annualized as build_table2 does it. prepare_panel leaves
-    no type-5 balance or spread before Pix. Read once per run."""
+    no type-5 balance or spread before the first reported type-5 balance. Read once per run."""
     if "df" not in _MOTIV_CACHE:
         print(f"Loading {PANEL_PARQUET.name} (motivation columns) ...")
         df = mdt.prepare_panel(pd.read_parquet(PANEL_PARQUET, columns=MOTIV_COLS))
@@ -753,6 +839,8 @@ def _wstats(x, w) -> dict:
 
 def _store(section: str, payload: dict):
     """Merge one chart's numbers into the motivation sidecar, keeping the other charts'."""
+    if PAPER:
+        return
     data = json.loads(MOTIV_JSON.read_text(encoding="utf-8")) if MOTIV_JSON.is_file() else {}
     data.update(schema=1, generator="make_slide_figures.py (motivation charts)",
                 window=[MIN_YEAR, MAX_YEAR])
@@ -857,8 +945,8 @@ def quarterly_motivation() -> pd.DataFrame:
     sh_sum = q[["sh_demand", "sh_savings", "sh_time_B", "sh_time_D", "sh_prepaid"]].sum(axis=1)
     if not float(np.max(np.abs(sh_sum - 100.0))) < 1e-9:
         sys.exit("pricevol: shares do not sum to 100")
-    # Prepaid balances exist only from Pix on (prepare_panel); before that the share is undefined
-    # for the chart, not zero.
+    # Prepaid balances are reported from 2020Q2 (prepare_panel); before that the share is
+    # undefined for the chart, not zero.
     q["sh_prepaid_plot"] = q["sh_prepaid"].where(q["dep_a5_B"] + q["dep_a5_D"] > 0)
     _MOTIV_CACHE["q"] = q
     return q
@@ -881,7 +969,11 @@ def _shade(ax, q, i0, i1, label=True):
 
 
 def _quarter_axis(ax):
-    mdt.ms_year_axis(ax, np.arange(MIN_YEAR, MAX_YEAR + 1, dtype=float), fs=FS)
+    years = np.arange(MIN_YEAR, MAX_YEAR + 1, dtype=float)
+    mdt.ms_year_axis(ax, years, fs=FS)
+    if PAPER:   # nine year labels do not fit a 3.19in panel: label every other year
+        ax.set_xticks(years[::2])
+        ax.set_xticklabels([str(int(y)) for y in years[::2]])
 
 
 def _end_labels(ax, x_end, items, min_gap=0.07):
@@ -944,7 +1036,7 @@ def pricevol_charts(out: pathlib.Path, png: bool):
         ("savings", SAVINGS_COLOR, "-", "Savings", "sp_savings", False, "sh_savings"),
         ("time_B", mdt.B_COLOR, "-", "Time, B firms", "sp4_b", True, "sh_time_B"),
         ("time_D", mdt.D_COLOR, (0, (5, 2)), "Time, D firms", "sp4_d", True, "sh_time_D"),
-        ("prepaid", PREPAID_COLOR, PREPAID_LS, "Prepaid (from 2020Q4)", "sp5", True,
+        ("prepaid", PREPAID_COLOR, PREPAID_LS, f"Prepaid (from {prepaid_facts()['start']})", "sp5", True,
          "sh_prepaid_plot"),
     )
 
@@ -1138,6 +1230,7 @@ def _reprice_one(out: pathlib.Path, png: bool, kind: str):
     expense over the lagged balance, so growth within the quarter of the change would move the
     measured rate itself; reading growth from that quarter onward avoids it."""
     sfx, color = ("", mdt.B_COLOR) if kind == "B" else ("_d", mdt.D_COLOR)
+    unit = "bank" if kind == "B" else "firm"
     bq = bank_quarter(kind).sort_values(["CodConglomeradoPrudencial", "t"]).reset_index(drop=True)
     prev = bq.groupby("CodConglomeradoPrudencial")[["t", "sp_pp", "own_rate", "dep_a4"]].shift(1)
     consecutive = prev["t"] == bq["t"] - 1
@@ -1201,16 +1294,16 @@ def _reprice_one(out: pathlib.Path, png: bool, kind: str):
         ax.axvline(0, color="#BFBFBA", lw=0.8, zorder=1)
         if points:
             ax.scatter(xr, yr, s=6, color=color, alpha=0.18, linewidth=0, zorder=2,
-                       label="Each bank-quarter")
+                       label=f"Each {unit}-quarter")
         xx = np.array([bx.min(), bx.max()])
         # The statistics ride in the legend under the plot: any spot inside it can hold a bin.
         ax.scatter(bx, by, s=34, color=color, edgecolor="white", linewidth=0.8, zorder=3,
-                   label=f"{r['n']:,} bank-quarters of {r['banks']} banks, in {len(bx)} "
+                   label=f"{r['n']:,} {unit}-quarters of {r['banks']} {unit}s, in {len(bx)} "
                          f"bins of about {int(round(per_bin.mean()))}")
         ax.plot(xx, yr.mean() + r["slope"] * (xx - xr.mean()), color=mdt.NATL_COLOR, lw=1.6,
                 zorder=4, label=f"Slope {_plain(r['slope'], 3)}{r['stars']} % per pp, 95% "
                                 f"interval [{_plain(r['lo_bc'], 3)}, {_plain(r['hi_bc'], 3)}]")
-        _style_no_pix(ax, f"Repricing and deposit growth, {kind} {'banks' if kind == 'B' else 'firms'}",
+        _style_no_pix(ax, f"Repricing and deposit growth, {kind} {unit}s",
                       f"Time-deposit growth, next {GROWTH_H} quarters (%)",
                       "Change in own time-deposit spread (pp p.a.)")
         ax.legend(fontsize=8.5 * FS, loc="upper center", bbox_to_anchor=(0.5, -0.2), ncol=1,
@@ -1264,7 +1357,8 @@ def dpremium_chart(out: pathlib.Path, png: bool):
     a1.fill_between(x, ci["lo"], ci["hi"], color=mdt.D_COLOR, alpha=0.16, linewidth=0, zorder=2,
                     label="95% interval")
     a1.plot(x, prem, **kw)
-    a1.legend(fontsize=8 * FS, loc="upper right", frameon=False)
+    if not PAPER:   # the paper's caption states the band
+        a1.legend(fontsize=8 * FS, loc="upper right", frameon=False)
     mdt.ms_endlabel(a1, x, prem, f"{_plain(prem[-1], 1)} pp", FS)
     mdt.ms_style(a1, "D firms' time-deposit premium over B firms", "pp p.a.", pix_label=True,
                  fs=FS, pix_x=PIX_X_QUARTERLY)
@@ -1865,7 +1959,7 @@ def relprice_charts(out: pathlib.Path, png: bool):
         fig, ax = plt.subplots(figsize=SLIDE_FIGSIZE)
         ax.axvline(0, color="#BFBFBA", lw=0.8, zorder=1)
         ax.axhline(0, color="#BFBFBA", lw=0.8, zorder=1)
-        ax.scatter(d[key], d["dshare"], s=8 + 300 * d["size"] / d["size"].max(),
+        ax.scatter(d[key], d["dshare"], s=MARK * (8 + 300 * d["size"] / d["size"].max()),
                    color=mdt.B_COLOR, alpha=0.55, edgecolor="white", linewidth=0.6, zorder=3,
                    label=f"{r['n']} B banks, dot size = time deposits")
         xm, ym = np.average(d[key], weights=d["size"]), np.average(d["dshare"], weights=d["size"])
@@ -2160,13 +2254,14 @@ def motivation_tables(out: pathlib.Path):
                      f"{_tci(c['end'][0] * scale, c['end'][1] * scale)} \\\\")
         return out_
     bp = 100.0     # pp to basis points
+    pmark = " (CDI rate)" if prepaid_facts()["fallback"] else ""
     rows = [_panel_row("Panel A. Spreads", 3),
             r"\quad Demand (equal to Selic), pp & " + two("spread_demand"),
             r"\quad Savings, pp & " + two("spread_savings"),
             r"\quad Time deposits, B firms, pp & " + two("spread_time_B"),
             r"\quad Time deposits, D firms, pp & " + two("spread_time_D"),
-            r"\quad Prepaid accounts, B firms, bp & " + two("spread_prepaid_B", bp),
-            r"\quad Prepaid accounts, D firms, bp & " + two("spread_prepaid_D", bp),
+            rf"\quad Prepaid accounts, B firms, bp{pmark} & " + two("spread_prepaid_B", bp),
+            rf"\quad Prepaid accounts, D firms, bp{pmark} & " + two("spread_prepaid_D", bp),
             r"\addlinespace",
             _panel_row(r"Panel B. Share of total balances, \%", 3),
             r"\quad Demand deposits & " + two("share_demand"),
@@ -2177,7 +2272,8 @@ def motivation_tables(out: pathlib.Path):
     tabs["tab_motiv_tightening"] = (
         [f"{src}, pricevol.hikes; keys \\pn{{slide.motiv.hikes.*}}. Brackets: 95% intervals of the",
          "balance-weighted bank means (conglomerate wild cluster bootstrap, Webb, 999 draws, bias-",
-         "corrected percentile). Prepaid spreads in basis points (pp x 100)."],
+         "corrected percentile). Prepaid spreads in basis points (pp x 100). (CDI rate): no",
+         "institution-level prepaid rate is observed, so the prepaid spread is the Selic-CDI gap."],
         "@{}lrr@{}", [f" & {h['start']} & {h['end']} \\\\"], rows)
 
     # Relative prices and share changes -------------------------------------------------------
@@ -2390,6 +2486,9 @@ def main():
         anova_tables(args.out, args.png)
     if "motivtables" in todo:
         motivation_tables(args.out)
+    # Last: it switches the figure size and fonts for the rest of the run.
+    if "paper" in todo:
+        paper_figures(args.out, args.png)
 
 
 if __name__ == "__main__":

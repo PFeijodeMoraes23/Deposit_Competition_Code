@@ -7,8 +7,10 @@ Estimates parametric policy functions for endogenous deposit types k=4,5
 Following Egan, Hortacsu & Matvos (2025, NBER), Ryan (2012, Econometrica),
 and Matvos & Seru (2014, AER), we estimate flexible parametric mappings from
 state variables to equilibrium deposit spreads for deposit types whose rates
-are set endogenously by banking institutions (k=4: time/CDB deposits;
-k=5: prepaid accounts).
+banking institutions set (k=4: time/CDB deposits; k=5: prepaid accounts). In the
+2016-2024 sample no institution-level prepaid rate is observed, so every k=5 row
+carries the same CDI fallback rate and its regressand is the Selic-CDI gap
+(utils/prepaid.py); the k=5 note says so.
 
 Coefficients are allowed to differ by firm type (B = brick-and-mortar,
 D = digital/national) and by deposit type. For D-type firms, which operate
@@ -791,12 +793,10 @@ def run_single_regression(
         'se_method': (f'wild cluster bootstrap (B={B}, {scheme}); clusters = conglomerate'
                       + (f'; national rows ({", ".join(quarter_rows)}): clusters = quarter '
                          f'(T={n_periods})' if quarter_rows else '')),
-        # Anchor for reading the intercept. The reported constant is the prediction at x=0, which
-        # is far outside the support (log assets = 0 means assets of R$1), so it is large and not
-        # interpretable on its own -- for B/k=4 it is +170pp purely to offset the log-assets terms
-        # (-375pp linear, +209pp quadratic, netting ~+3pp at the median). OLS with an intercept
-        # forces mean(fitted) == mean(y), so the fitted value AT THE SAMPLE MEAN state is exactly
-        # this number; reporting it gives the reader the scale anchor the constant does not.
+        # Scale anchor. OLS with an intercept forces mean(fitted) == mean(y), so this is the
+        # average fitted spread. The constant is the prediction at the centering means with every
+        # dummy at its reference category (see the centering block); the two differ by the mean
+        # contribution of the dummies and of the squares, which are not centered.
         'mean_depvar': float(y.mean()),
         # The estimation-sample means used to center; compute_fitted_values MUST reuse these.
         'center_means': center_means,
@@ -1239,6 +1239,22 @@ def _mostly_small(printed) -> bool:
     return bool(vals) and sum(v < _SMALL for v in vals) > _SMALL_SHARE * len(vals)
 
 
+_PREPAID_FALLBACK: dict = {}
+
+
+def _prepaid_fallback() -> bool:
+    """True when every in-window type-5 rate is the common CDI fallback (utils/prepaid.py). Read
+    from the panel once, so a --from-pkl render states it too."""
+    if "v" not in _PREPAID_FALLBACK:
+        from utils import prepaid as _prepaid
+        pq = PANEL_CSV.with_suffix(".parquet")
+        cols = ["year", "quarter", "dep_a5", "rate_a5"]
+        d = pd.read_parquet(pq, columns=cols) if pq.is_file() else pd.read_csv(PANEL_CSV, usecols=cols)
+        d = d[(d["year"] >= POLFUNC_MIN_YEAR) & (d["year"] <= POLFUNC_MAX_YEAR)]
+        _PREPAID_FALLBACK["v"] = _prepaid.common_rate(d)
+    return _PREPAID_FALLBACK["v"]
+
+
 def _small_spread_sentence(res_dict, k, ftype, md=False, cfg=None) -> str:
     """'B firms' prepaid spread is zero to within 0.013 bp (mean -0.001 bp), so most of their
     coefficients print below 0.010.' from the fit: the bound is the largest |regressand| on the
@@ -1507,6 +1523,10 @@ def _polfunc_notes(k: int | None = None, results: dict | None = None,
         # The estimation sample (run_single_regression).
         + ' ' + _SAMPLE_NOTE
     )
+    if k == 5 and _prepaid_fallback():
+        note += (r' No institution-level prepaid rate is observed in the sample, so every '
+                 r'institution carries the same CDI-based rate and the regressand is the '
+                 r'Selic--CDI gap, a function of the quarter alone, not a price set by banks.')
     if k == 5 and results:
         d_cols = [ck for ck in _polfunc_col_keys(k)[1:] if ck in results]
         r2 = [float(results[ck]['r_squared']) for ck in d_cols]
@@ -1514,7 +1534,9 @@ def _polfunc_notes(k: int | None = None, results: dict | None = None,
             note += (r' In both D columns the fitted policy is essentially a constant near zero '
                      r'($R^{2}$ of ' + ' and '.join(f'${v:.3f}$' for v in r2) + ').')
     # A column whose coefficients print mostly below 0.010 (build_polfunc_table, _mostly_small).
-    for ftype, res_dict in (small or []):
+    # For k=5 under the CDI fallback the sentence above already explains why, so the note
+    # carries that one sentence only.
+    for ftype, res_dict in ([] if k == 5 and _prepaid_fallback() else (small or [])):
         s = _small_spread_sentence(res_dict, k if k is not None else 4, ftype)
         if s:
             note += ' ' + s
@@ -1640,9 +1662,8 @@ def build_polfunc_table(results: dict, k: int, include_segments: bool = False) -
                                                         for v in _demo_all)) else 'No'
                         for ck in cols]
         L.append('Demographics & ' + ' & '.join(demo_present) + r' \\')
-    # Scale anchor for the intercept: the constant is the prediction at x=0 (assets of R$1), which
-    # is out of support and therefore large; mean(fitted) == mean(y) under OLS, so this row IS the
-    # fitted value at the average state and is what the reader should read the levels against.
+    # Scale anchor: mean(fitted) == mean(y) under OLS, so this row is the average fitted spread,
+    # the level the coefficients are read against.
     _lhs = _lhs_display(k)
     mdv = [results[ck]['mean_depvar'] * _lhs if ck in results and 'mean_depvar' in results[ck]
            else None for ck in cols]

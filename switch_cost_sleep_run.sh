@@ -39,7 +39,7 @@
 # LOG AT ALL. A missing prep log means "read the gate json and the est job's .err".
 #
 # DISABLED (the main project's A-phase steps outside this scope): the E1/E2 routine array,
-# the spec fan-out and merge, ame_gate, ame (the post-hoc AME driver), wcb_band, weakiv,
+# the spec fan-out and merge, ame_gate, ame (the post-hoc AME driver), wcb_band,
 # upsilon (G7), entry. Their flags are refused, and switch_cost_sleep_job.sh refuses the steps.
 #
 # Usage
@@ -167,7 +167,7 @@ while [[ $# -gt 0 ]]; do
         --spec-array|--no-spec-array|--spec-ids)
                           refuse_flag "$1" "this copy runs spec 12 only, one job per routine (--spec12)" ;;
         --no-ame)         refuse_flag "$1" "the two-stage AME is the reason for this run; SLEEP_AME_TWOSTAGE=1 is always submitted" ;;
-        --no-wcb|--no-weakiv|--no-upsilon|--no-entry)
+        --no-wcb|--no-upsilon|--no-entry)
                           refuse_flag "$1" "that step is disabled in this copy" ;;
         -h|--help)        sed -n '2,/^# =====/p' "${BASH_SOURCE[0]}"; exit 0 ;;
         *) echo "unknown option: $1 (see -h)" >&2; exit 2 ;;
@@ -315,7 +315,7 @@ else
     cl_log "-- demand prep not submitted (no --prep): the local prep builds the parquets."
 fi
 
-cl_say "  DISABLED in this copy (not submitted): E1/E2, the spec fan-out + merge, ame_gate, ame, wcb_band, weakiv, upsilon (G7), entry."
+cl_say "  DISABLED in this copy (not submitted): E1/E2, the spec fan-out + merge, ame_gate, ame, wcb_band, upsilon (G7), entry."
 
 echo
 cl_banner "Switch-cost run submitted. Track:  squeue -u \$USER -n <name>   (names start with switch_cost_)" \

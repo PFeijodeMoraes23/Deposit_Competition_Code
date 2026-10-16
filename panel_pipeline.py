@@ -62,10 +62,7 @@ Pipeline stages
     4a. panel_market.py                   Merge all MCA panels + deposit panel -> master analysis dataset
     4b. panel_loo_instruments.py       Compute LOO instruments and FGC dummy -> OVERWRITES market_panel.csv
     4c. panel_demographics_sigma.py        Within-MCA demographic sigma for BLP parametric draws
-    4d. panel_fee_merge.py --patch-market  Fee columns -> market_panel_with_fees.csv (MUST follow 4b).
-                                              OPTIONAL since 2026-08-04: the estimators read
-                                              market_panel.csv unless USE_FEE_PANEL=1.
-    4e. panel_demand_chars.py              Corrected characteristics, segments and balances for the
+    4d. panel_demand_chars.py              Corrected characteristics, segments and balances for the
                                               demand preps -> processed/demand_chars.parquet (MUST follow every
                                               stage-4 step that writes market_panel)
 
@@ -89,8 +86,14 @@ Pipeline stages
     6f. extensive_margin/panel_disclosure_join.py       Join disclosures -> account-vs-volume table
     (extensive_margin/make_account_vs_volume_figure.py and make_margin_figures.py draw its figures.)
 
-  Outside this runner: scrape_cosif_service_fees.py, the frozen BCB tariff scrapers in fees/
-  (inputs of panel_fee_merge.py), scrape_cvm_fee_income.py, scrape_pix_participants.py, scrape_pix_roster.py,
+  Stage 7 - Fee panel (OPT-IN: --fees)
+    7a. fees/panel_fee_merge.py --patch-market   COSIF + BCB-listed fee columns -> market_panel_with_fees.csv
+    The fee branch lives in fees/. No estimator reads the fee panel unless USE_FEE_PANEL=1, so a
+    full run skips it. Its inputs, fees/scrape_cosif_service_fees.py and the frozen BCB tariff
+    scrapers, are outside this runner, and fees/panel_audit_fee_coverage.py audits its output.
+
+  Outside this runner: fees/scrape_cosif_service_fees.py, the frozen BCB tariff scrapers in fees/,
+  fees/scrape_cvm_fee_income.py, scrape_pix_participants.py, scrape_pix_roster.py,
   scrape_bcb_complaints.py, scrape_bcb_pilar3_liq2.py, scrape_fgc_censo.py,
   scrape_deposit_maturity.py, scrape_forward_rf.py and the advertising scrapers.
 
@@ -102,6 +105,7 @@ Usage
   python panel_pipeline.py --to 4              # run up to and including stage 4
   python panel_pipeline.py --skip 5,6          # skip specific step IDs
   python panel_pipeline.py --extensive-margin  # also run stage 6
+  python panel_pipeline.py --fees              # also run stage 7
   python panel_pipeline.py --list              # print the steps (with IDs) and the waves
 
 Notes
@@ -207,9 +211,9 @@ STEPS = [
     #     market_panel with NO loo_log_assets / mean_loo_log_assets / loo_equity_ratio / loo_basileia
     #     -- and the BLP engines' build_regressor_matrices SILENTLY drops
     #     any instrument not present, so the BLP ends up identified off the cost shifters alone.
-    #   * panel_fee_merge builds market_panel_with_fees.csv. It must still run LAST in this stage,
-    #     after panel_loo_instruments' overwrite, so the fee panel is not built from a half-finished base.
-    #     RESOLVED 2026-08-04 — the shadowing hazard this warning described actually fired.
+    #   * fees/panel_fee_merge builds market_panel_with_fees.csv in the opt-in stage 7, which runs
+    #     after every stage-4 step, so the fee panel is not built from a half-finished base.
+    #     The shadowing hazard fired once: it was resolved on 2026-08-04.
     #     Estimation scripts USED to prefer with_fees whenever it existed, so a stale copy
     #     silently shadowed a freshly rebuilt market_panel. Run-order discipline was the only
     #     guard and it failed: panel_loo_instruments / panel_estban_instrument / panel_local_cdb_spread
@@ -227,17 +231,13 @@ STEPS = [
     # panel_estban_instrument (ESTBAN rival-branch IV) and panel_local_cdb_spread (local CDB spread)
     # were manual-only until 2026-07-23. A full panel_market rebuild wipes market_panel, so
     # estban_rival_branches_lag and the local spread must be re-applied here, AFTER
-    # panel_loo_instruments' overwrite and BEFORE panel_fee_merge.
+    # panel_loo_instruments' overwrite and BEFORE the stage-7 fee merge.
     (4, "36", "panel_estban_instrument.py",
      "ESTBAN rival-branch instrument -> market_panel.csv (estban_rival_branches_lag; "
      "MUST follow panel_loo_instruments)"),
     (4, "37", "panel_local_cdb_spread.py",
      "Member-CNPJ LOCAL type-4 (CDB) spread patch, toggle LOCAL_CDB_SPREAD (default ON) -> "
-     "market_panel.csv (MUST follow panel_estban_instrument, precede panel_fee_merge)"),
-    (4, "22", "panel_fee_merge.py --patch-market",
-     "COSIF/BCB-listed fee columns -> market_panel_with_fees.csv (MUST follow panel_loo_instruments/"
-     "panel_estban_instrument/panel_local_cdb_spread). "
-     "Optional for estimation: the estimators read market_panel.csv unless USE_FEE_PANEL=1"),
+     "market_panel.csv (MUST follow panel_estban_instrument, precede the stage-7 fee merge)"),
     # The demand preps (sleep_demand_prep_*.py) apply this file through utils/demand_chars.py and
     # fail without it. It keys on market_panel rows and reads the final panel, bank_chars_panel,
     # deposits_panel, the corrected COSIF k=4 rate and the raw IF.data / ESTBAN files, so it is
@@ -278,10 +278,18 @@ STEPS = [
      "CVM DFP/ITR: deposits in BRL (incl. Banco do Brasil)"),
     (6, "35", "extensive_margin/panel_disclosure_join.py",
      "Join disclosures -> conglomerate x quarter account-vs-volume table"),
+
+    # Stage 7 -- fee panel, in fees/ and OPT-IN (--fees; see OPT_IN_STAGES). It reads the stage-4
+    # market_panel.csv after panel_loo_instruments, panel_estban_instrument and
+    # panel_local_cdb_spread have written it, so it runs after every stage-4 wave. The estimators
+    # read market_panel.csv unless USE_FEE_PANEL=1.
+    (7, "22", "fees/panel_fee_merge.py --patch-market",
+     "COSIF/BCB-listed fee columns -> market_panel_with_fees.csv (MUST follow panel_loo_instruments/"
+     "panel_estban_instrument/panel_local_cdb_spread)"),
 ]
 
 # Stages that run only when asked for: {stage: the flag that enables it}. --only <stage> also runs it.
-OPT_IN_STAGES = {6: "--extensive-margin"}
+OPT_IN_STAGES = {6: "--extensive-margin", 7: "--fees"}
 
 
 # -- Runner helpers -------------------------------------------------------------
@@ -422,15 +430,19 @@ WAVES: list[list[str]] = [
     ["36"],                                   # Wave 6b: ESTBAN rival-branch IV — after the LOO overwrite
     ["37"],                                   # Wave 6c: LOCAL CDB spread patch — after 36, before the fee merge
     ["39"],                                   # Wave 6d: demand_chars.parquet — after the final market_panel
-    ["22"],                                   # Wave 7: fee merge — MUST follow 20/36/37
-    ["23", "24", "25", "26"],                 # Wave 8: descriptives (make_desc_panel_tables / make_desc_compressed_tables
-                                              #         x {unweighted, weighted}); sleep_desc_clusters and
-                                              #         sleep_export_spec12_compare are post-estimation
-                                              #         -> sleep_pipeline.py steps 11-12
+    ["23", "24", "25"],                       # Wave 8: descriptives (make_desc_panel_tables x {unweighted,
+                                              #         weighted}, make_desc_compressed_tables unweighted);
+                                              #         sleep_desc_clusters and sleep_export_spec12_compare
+                                              #         are post-estimation -> sleep_pipeline.py steps 11-12
+    ["26"],                                   # Wave 8b: make_desc_compressed_tables weighted. Steps 25 and 26
+                                              #         write the same unsuffixed .tex files, so they never
+                                              #         share a wave (two writers interleave one file).
     # Stage 6 (opt-in): firm-disclosure scrapers, one per wave (serial) to respect external
     # rate limits (EDGAR/parent both hit SEC), then the join once all are present.
     ["28"], ["29"], ["30"], ["32"], ["34"],   # Waves 9-13: disclosure scrapers
     ["35"],                                   # Wave 14: disclosure join
+    # Stage 7 (opt-in): fee merge, after every stage-4 wave (MUST follow 20/36/37/39).
+    ["22"],                                   # Wave 15: fee merge
 ]
 
 def run_wave(
@@ -521,11 +533,11 @@ def parse_args() -> argparse.Namespace:
     )
     p.add_argument(
         "--from", dest="from_stage", type=int, default=0, metavar="N",
-        help="Start from this stage number (0-6).  Skips all earlier stages.",
+        help="Start from this stage number (0-7).  Skips all earlier stages.",
     )
     p.add_argument(
         "--only", dest="only_stage", type=int, default=None, metavar="N",
-        help="Run only this stage number (0-6), opt-in stages included.  All others are skipped.",
+        help="Run only this stage number (0-7), opt-in stages included.  All others are skipped.",
     )
     p.add_argument(
         "--to", "--max-stage", dest="max_stage", type=int, default=None, metavar="N",
@@ -538,6 +550,10 @@ def parse_args() -> argparse.Namespace:
     p.add_argument(
         "--extensive-margin", dest="extensive_margin", action="store_true",
         help="Also run stage 6, the frozen extensive-margin disclosure scrapers in extensive_margin/.",
+    )
+    p.add_argument(
+        "--fees", dest="fees", action="store_true",
+        help="Also run stage 7, the fee merge in fees/ (builds market_panel_with_fees.csv).",
     )
     p.add_argument(
         "--list", action="store_true",

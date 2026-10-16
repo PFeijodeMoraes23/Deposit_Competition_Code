@@ -4,7 +4,7 @@ scrape_cosif_download.py
 Pipeline step 11. Download missing COSIF balancete CSV ZIPs (BANCOS, SOCIEDADES,
 COOPERATIVAS, BLOPRUDENCIAL, and with --all-types the other categories) for months not
 already on disk. Readers: panel_cosif_extract.py, panel_ip_rates.py (SOCIEDADES and
-BLOPRUDENCIAL), scrape_cosif_service_fees.py and the advertising scrapers.
+BLOPRUDENCIAL), fees/scrape_cosif_service_fees.py and the advertising scrapers.
 
 A failed listing or download is reported at the end and the script exits 1.
 

@@ -4,7 +4,7 @@ From the main thread, Pedro's decision at 20:0x. **It replaces the construction 
 
 ## Why
 
-The sleepiness first stage absorbs quarter fixed effects (and entity FE). The national version is
+Correction (10-16 00:45): the sleepiness FIRST stage has no fixed effects (plain OLS on a constant, the instruments and the state vector, as V_Main says). It is the deposit equation, the control-function second stage, that absorbs entity and quarter fixed effects. Conditional on v̂, the spread variation that identifies it is the instrument-predicted part, net of those effects. The argument below therefore applies through the second stage. The national version is
 
   R_jt = (S_t − S_jt)/(N_t − N_jt) = s̄_t − w_jt · (s̄_jt − s̄_t),  w_jt = N_jt/(N_t − N_jt).
 

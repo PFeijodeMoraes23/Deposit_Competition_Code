@@ -98,8 +98,8 @@ def note_open(bands=True, two_stage: str = "") -> str:
 
 # The two F rows of every first-stage table, and the sentence that says what each one is. The
 # labels live beside the sentence because the sentence points at them ("Effective $F$", "the
-# row above it"): ROW_F_ALL is the fit's own F, ROW_F_EFF the value sleep_first_stage_strength.py
-# stores for the column.
+# row above it"): ROW_F_ALL is the fit's own F, ROW_F_EFF the effective F of the excluded
+# instruments (blank until the weak-instrument battery has a calculator).
 ROW_F_ALL = r"$F$, all slopes"
 ROW_F_EFF = r"Effective $F$ (excluded instruments)"
 _FIRST_STAGE_F = (r"Effective $F$ is the weak-instrument statistic for the excluded instruments "

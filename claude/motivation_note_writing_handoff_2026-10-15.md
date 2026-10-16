@@ -12,6 +12,10 @@ exhibits as rebuilt on 10-15 (section 9 lists files and times).
   change a number by hand. Every number traces to a generated file (section 5).
 - Bring open choices to Pedro as questions. Do not decide framing on his behalf (section 8).
 
+**Data vintage (10-16):** all numbers here and in the note are on the panel rebuilt by the main
+thread on 10-15 at 22:35 (exhibits regenerated 10-16 00:16). Earlier drafts of this handoff
+quoted the previous panel.
+
 ## 1. The document
 
 `Drafts/Deposit Competition/motivation_figures_review.md`, rendered to `motivation_figures_review.pdf`
@@ -109,7 +113,7 @@ The md shows the same tables as pipe tables.
 - **Spread.** Selic minus the deposit rate, both compounded to annual rates, in pp.
 - **Time-deposit rate.** Interest expense over the lagged stock (COSIF), one national rate per
   conglomerate. It falls back to the CDI when there is no own rate or when the rate exceeds three
-  times Selic. This happens in 11% of B and 61% of D bank-quarters. Analyses of relative prices
+  times Selic. This happens in 11% of B and 60% of D bank-quarters. Analyses of relative prices
   use only quarters with an own measured rate.
 - **Weights.** Means are balance-weighted. The B-firm weights reproduce the paper's Table A.4
   exactly.
@@ -125,8 +129,8 @@ claims[8]{claim,evidence,strength,main_caveat}:
   prices differ across banks,Fig 1 + Table 1 (SD 1.8-3.4 pp 2017-2024),high,imputed stock rate adds book-composition noise
   prices moved a lot while balances drifted slowly,Figs 2-4 + Table 2,high,savings drift predates the hikes; after-tax gap not computed
   relative prices vary but shares are fixed,Fig 5-5c + Table 4 (spread ~1/3 common; B share 96.5% bank-fixed),high,
-  relative position persists about half a year-on-year,Fig 6 (0.577),medium-high,noise attenuates the slope
-  deposits follow relative prices slowly,Figs 7-9 + Table 3 (-1%/yr panel; -3%/yr cross-section; local within-bank n.s.),medium,correlations; reverse causality vs attenuation
+  relative position persists about half a year-on-year,Fig 6 (0.573),medium-high,noise attenuates the slope
+  deposits follow relative prices slowly,Figs 7-9 + Table 3 (-1.1%/yr panel; -2.5%/yr cross-section; local within-bank n.s.),medium,correlations; reverse causality vs attenuation
   own repricing does not detectably move deposits,Figs 10-11 + Table 8,medium,stock rate cannot date a posted repricing
   long-horizon co-movement is positive (harvesting or measurement),Table 5 + Table 6,medium,the two readings are not separable here
   entrants that pay more do not grow faster,Figs 13-14 + Table 9,medium,17 banks; one bank makes 122 of 201 entries
@@ -143,7 +147,7 @@ claims[8]{claim,evidence,strength,main_caveat}:
   Only the forward (t to t+4) slopes are evidence.
 - Prepaid spreads (−0.006 bp) carry no pricing information. Nearly all prepaid balances are
   priced at the CDI fallback.
-- D-firm prices are weak (61% CDI fallback), so the D premium (2.503 pp) is probably
+- D-firm prices are weak (60% CDI fallback), so the D premium (2.701 pp) is probably
   understated.
 - Entry evidence rests on 17 banks, and Santander makes 122 of the 201 entries. That is why
   Figure 14's bank-resampled bands are wide. These sentences stay. Only the separate sleeping-share
@@ -192,7 +196,7 @@ each one against the code and fixed the text. No number changed.
 ```text
 fixes[8]{where,old_text_said,code_does_and_text_now_says}:
   Methods Intervals,all intervals are bias-corrected WCB,entry bands (Figs 13 14 A11 A12; Table 9) are plain percentile intervals of the median; banks (or events in the appendix) resampled
-  Section 4.4 intro + Table 5,all four decompositions weighted on the same bank-quarters,samples differ by table; Table 5's correlation was unweighted -> made balance-weighted in the code (Pedro 10-15); only that column changed (B h12 now 0.188; D h12 0.384) and each correlation now has its slope's sign
+  Section 4.4 intro + Table 5,all four decompositions weighted on the same bank-quarters,samples differ by table; Table 5's correlation was unweighted -> made balance-weighted in the code (Pedro 10-15); only that column changed (B h12 0.151; D h12 0.317 on the 10-15 panel) and each correlation now has its slope's sign
   Methods Entry events + 4.7 + Fig 13 caption,entries 2016Q1-2024Q4 followed 12 quarters,kept entries date 2016Q1-2022Q4 (8-quarter screen); 198 observed through q10; 190 through q11; 184 through q12
   Why Fig 14 differs,Figure 14 resamples the 17 banks,banks resampled separately within each group (9 and 14 banks)
   Fig 8 and Fig 9 captions,own measured rate,own rate (Fig 9: defined local gap) at both t and t+4
