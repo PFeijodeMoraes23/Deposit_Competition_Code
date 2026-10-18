@@ -817,7 +817,18 @@ _cl_submit_record () {   # _cl_submit_record <jobid> <the sbatch args>
 }
 
 cl_sbatch () {
-    local _cg; _cg="$(_cl_cpugen_args "$@")"
+    local _cg _ex=""; _cg="$(_cl_cpugen_args "$@")"
+    # CL_EXCLUDE_NODES: nodes no job of this pipeline may start on, as a comma-separated SLURM node
+    # list (a node whose GPUs are held by something else fails every job it gets within minutes,
+    # and the scheduler keeps refilling it). Jobs inherit it with the rest of the environment
+    # (--export=ALL), so a sweep's re-submissions exclude the same nodes.
+    if [[ -n "${CL_EXCLUDE_NODES:-}" ]]; then
+        if [[ ! "${CL_EXCLUDE_NODES}" =~ ^[A-Za-z0-9,._-]+$ ]]; then
+            cl_err "REFUSING to submit: CL_EXCLUDE_NODES='${CL_EXCLUDE_NODES}' is not a plain node list."
+            return 1
+        fi
+        _ex="--exclude=${CL_EXCLUDE_NODES}"
+    fi
     if [[ "${CL_DRYRUN}" == "1" ]]; then
         local n jid
         n=$(( $(cat "${CL_FAKE_COUNTER}" 2>/dev/null || echo 0) + 1 ))
@@ -828,7 +839,7 @@ cl_sbatch () {
         # stderr because every caller runs cl_sbatch inside $( ) — anything on stdout
         # but the job id lands in the caller's jobid variable and poisons the
         # dependency it is about to build.
-        { cl_log "[dry-run] sbatch --parsable --kill-on-invalid-dep=yes$(_cl_q ${_cg:+"${_cg}"} "$@")"
+        { cl_log "[dry-run] sbatch --parsable --kill-on-invalid-dep=yes$(_cl_q ${_cg:+"${_cg}"} ${_ex:+"${_ex}"} "$@")"
           cl_log "          -> job id ${jid}"; } >&2
         _cl_submit_record "${jid}" "$@"
         printf '%s\n' "${jid}"
@@ -864,10 +875,10 @@ cl_sbatch () {
         esac
     done
     local _out _rc
-    _out="$(unset ${_CL_PARENT_JOB_VARS}; sbatch --parsable --kill-on-invalid-dep=yes ${_cg:+"${_cg}"} "$@")"; _rc=$?
+    _out="$(unset ${_CL_PARENT_JOB_VARS}; sbatch --parsable --kill-on-invalid-dep=yes ${_cg:+"${_cg}"} ${_ex:+"${_ex}"} "$@")"; _rc=$?
     if (( _rc != 0 )) || [[ -z "${_out}" ]]; then
         cl_err "sbatch REFUSED this submission (rc=${_rc}); sbatch's own message is above."
-        cl_err "  args:$(_cl_q ${_cg:+"${_cg}"} "$@")"
+        cl_err "  args:$(_cl_q ${_cg:+"${_cg}"} ${_ex:+"${_ex}"} "$@")"
         return 1
     fi
     _cl_submit_record "${_out}" "$@"
@@ -1154,7 +1165,7 @@ BBL_SHARD_TIME_DEFAULT="${BBL_SHARD_TIME_DEFAULT:-01:45:00}"
 # another version, or none (every run launched before 2026-09-29: _ms1, _ms979, the probes), is
 # never extended, swept or repaired by this code (cl_bbl_version_guard): its missing shards would be
 # simulated under a different design and pooled with the old ones. Not taken from the environment.
-BBL_SIM_VERSION="2026-09-29.1"
+BBL_SIM_VERSION="2026-10-16.1"
 BBL_MEM_DEFAULT="${BBL_MEM_DEFAULT:-240G}"
 BBL_MEM_DEFAULT_H100="${BBL_MEM_DEFAULT_H100:-230G}"
 # The horizon the defaults were measured at: a launch beyond it that names no memory is warned.

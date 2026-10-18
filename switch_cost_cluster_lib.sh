@@ -1224,7 +1224,7 @@ BBL_SHARD_TIME_DEFAULT="${BBL_SHARD_TIME_DEFAULT:-01:45:00}"
 # another version, or none (every run launched before 2026-09-29: _ms1, _ms979, the probes), is
 # never extended, swept or repaired by this code (cl_bbl_version_guard): its missing shards would be
 # simulated under a different design and pooled with the old ones. Not taken from the environment.
-BBL_SIM_VERSION="2026-09-29.1"
+BBL_SIM_VERSION="2026-10-16.1"
 BBL_MEM_DEFAULT="${BBL_MEM_DEFAULT:-240G}"
 BBL_MEM_DEFAULT_H100="${BBL_MEM_DEFAULT_H100:-230G}"
 # The horizon the defaults were measured at: a launch beyond it that names no memory is warned.

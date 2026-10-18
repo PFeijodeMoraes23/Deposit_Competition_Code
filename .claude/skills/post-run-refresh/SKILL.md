@@ -39,6 +39,7 @@ each family:
 | Family | Lands in | Written by |
 |---|---|---|
 | `sleep` | `DEMAND_PREP/` (`est{k}/`, `Rout/`, `DIAGNOSTICS/`) | `cluster_ingest.py` |
+| `sleep_grid` | `SLEEP_GRID/` (the stage C full specification grids, kept apart from the chain's spec-12 estimates) | `cluster_ingest.py` |
 | `demand_prep` | `DEMAND_PREP/` | `cluster_ingest.py` |
 | `logit` | `BLP_RESULTS/logit/`, the `.tex` exhibits into Drafts | `cluster_ingest.py` |
 | `blp` | `BLP_RESULTS/cluster_raw/`, then `cluster_processed/` | `cluster_ingest_blp.py` |
@@ -72,7 +73,7 @@ Things that have gone wrong here:
 
 | Family | Commands, in order |
 |---|---|
-| Sleepiness | `sleep_export_all.py`; `sleep_desc_clusters.py`. `sleep_export_spec12_compare.py` loads four 1 GB pickles: ask first |
+| Sleepiness | First attach the cluster's AME bands to the E3/E4 fits: `sleep_ame_twostage.py --est {3,4} --loss robust --attach-from DEMAND_PREP/Rout/ame_twostage_est{k}_robust_if.pkl` (the cluster saves the band but never attaches it; without this the E3/E4 columns print standard errors, and `make_paper_numbers.py` stops on the missing interval). Then `sleep_export_all.py --estimation all`; `sleep_desc_clusters.py`. `sleep_export_spec12_compare.py` loads four 1 GB pickles: ask first |
 | Logit | Nothing: its `.tex` exhibits arrive with the ingest |
 | BLP | `make_blp_demand_comparison_table.py`; `make_blp_rc_table.py` |
 | Policy function | `bbl_polfunc.py --from-pkl`. It renders from the stored fit. Never re-fit to refresh a table |

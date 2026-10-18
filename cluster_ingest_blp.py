@@ -533,14 +533,18 @@ def write_summary_md(sub, index, stage, het=None):
                 names, t1, se = (m.get("param_names_theta1") or []), (m.get("theta1") or []), (m.get("theta1_se") or [])
                 if nm in names and names.index(nm) < len(t1):
                     i = names.index(nm)
-                    cells.append(f"{t1[i]:.3f}" + (f" ({se[i]:.3f})" if i < len(se) else ""))
+                    cells.append(f"{t1[i]:.3f}" + (f" ({se[i]:.3f})" if i < len(se) and se[i] is not None else ""))
                 else:
                     cells.append("—")
             L.append("| " + " | ".join(cells) + " |")
     labels = _theta2_labels(ref.get("sigma_indices"), ref.get("pi_interactions"))
     if labels:
         se_meth = next((m.get("se_method") for m in index if m.get("se_method")), None)
-        has_t2se = any(m.get("theta2_se") for m in index)
+        # A routine whose SE step refused (se_status other than ok, e.g. "refused: K > L") carries
+        # a θ₂ SE list of nulls: it has no SEs at all, so none of its σ is marked as profiled out.
+        se_ok = {m["routine"]: str(m.get("se_status") or "ok") == "ok" for m in index}
+        has_t2se = any(se_ok[m["routine"]] and any(v is not None for v in (m.get("theta2_se") or []))
+                       for m in index)
         head = (f"point estimate (SE), SEs by {se_meth or 'cluster'}. A dagger (†) marks a σ "
                 "**profiled out** of the SE computation because it sits on the σ ≥ 0 boundary, where "
                 "∂δ/∂σ ≈ 0 leaves it locally unidentified and would otherwise inflate every SE"
@@ -556,12 +560,16 @@ def write_summary_md(sub, index, stage, het=None):
                     cells.append("—")
                     continue
                 cell = f"{t2[k]:.4f}"
-                if k < len(se2):
+                if se_ok[m["routine"]] and k < len(se2):
                     v = se2[k]
                     bad = v is None or (isinstance(v, float) and math.isnan(v)) or v == 0
                     cell += " †" if bad else f" ({v:.4f})"
                 cells.append(cell)
             L.append("| " + " | ".join(cells) + " |")
+    refused = [(m["routine"], m.get("se_status")) for m in index if str(m.get("se_status") or "ok") != "ok"]
+    if refused:
+        L += ["", "No standard errors at this stage for "
+              + "; ".join(f"E{r} (se_status: {s})" for r, s in refused) + "."]
 
     if het:
         L += ["", "## Coefficient heterogeneity across markets", "",

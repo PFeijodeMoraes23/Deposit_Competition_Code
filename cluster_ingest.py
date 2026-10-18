@@ -2,11 +2,11 @@
 """
 cluster_ingest.py -- the ONE front door for a finished cluster run.
 
-cluster_archive.sh packages the Bouchet run into data/output/download as eight
+cluster_archive.sh packages the Bouchet run into data/output/download as nine
 archives, one per step folder plus gates and logs:
 
-    sleep_outputs  demand_prep_outputs  logit_outputs  blp_outputs
-    bbl_outputs    counterfactuals_outputs            gates   logs
+    sleep_outputs  sleep_grid_outputs  demand_prep_outputs  logit_outputs
+    blp_outputs    bbl_outputs    counterfactuals_outputs    gates   logs
 
 Each is either <BASE>[_<tag>].zip or, over SPLIT_BYTES, a run of
 <BASE>[_<tag>].zip.part.NN pieces plus a <BASE>[_<tag>].zip.sha256 of the whole
@@ -27,6 +27,8 @@ WHAT IT DOES
         sleep            -> DEMAND_PREP/            (est{k}/, Rout/, DIAGNOSTICS/)
                             ESTIMATION_OUTPUT/      (DIAG_PHI_SEPARATION/ — see
                                                      SLEEP_ESTOUT_DIRS)
+        sleep_grid       -> ESTIMATION_OUTPUT/SLEEP_GRID/ (the full specification grids,
+                            kept apart from the chain's spec-12 estimates in DEMAND_PREP)
         demand_prep      -> DEMAND_PREP/            (the demand_*_spec_*.parquet)
         logit            -> BLP_RESULTS/logit/  (.tex exhibits -> Drafts/Deposit Competition)
         blp              -> BLP_RESULTS/cluster_raw/ then process_blp_outputs
@@ -35,7 +37,7 @@ WHAT IT DOES
         gates            -> ESTIMATION_OUTPUT/CLUSTER_META/<tag>/
         logs             -> ESTIMATION_OUTPUT/CLUSTER_META/<tag>/logs/
 
-A checksum MISMATCH refuses THAT FAMILY ONLY: the other seven still ingest and the
+A checksum MISMATCH refuses THAT FAMILY ONLY: the other families still ingest and the
 run exits 1. A missing checksum is reported, not fatal -- an archive can legitimately
 arrive without its sha256SUMS line (a hand-made single-set zip, a partial download of
 the folder), and refusing it would make the common case need a flag.
@@ -44,9 +46,9 @@ IT WRAPS THE TWO CONSOLIDATORS, it does not reimplement them. cluster_ingest_blp
 (zip -> cluster_raw + cluster_processed/blp_E{k}_spec_12.jls + INDEX.json) and
 cluster_ingest_bbl_cf.py (--kind bbl | cf) stay the authority on what a BLP/BBL/CF
 artifact is and where it goes; both remain callable on their own. process_blp_outputs
-writes its own SUMMARY.md next to the paper draft -- that is its behaviour, unchanged,
-and the only thing in this path that touches Drafts. Nothing here writes there:
-promotion into the draft stays a separate reviewed step.
+writes its own SUMMARY.md next to the paper draft, and the logit family's .tex exhibits
+go to the paper directory, where the table generators write theirs (member_dest). Nothing
+else here writes into Drafts.
 
 SOURCE ARCHIVES ARE ONLY EVER READ OR COPIED -- never moved, never deleted. Some of
 them are the only copy of a cluster artifact (the cluster is scratch), and leaving
@@ -95,7 +97,7 @@ if str(REPO) not in sys.path:
 
 from utils import paths                                      # noqa: E402
 
-# ── The eight families, in ingest order ──────────────────────────────────────────
+# ── The nine families, in ingest order ───────────────────────────────────────────
 # The order is the pipeline's own: sleep feeds demand_prep feeds logit feeds blp, and
 # a run that refuses one family still ingests the rest, so ingesting upstream first
 # means the tree is never left with a later step's outputs and not the earlier ones.
@@ -105,6 +107,7 @@ from utils import paths                                      # noqa: E402
 # the same edit -- the names are the whole contract between the two scripts.
 FAMILY_BASE = {
     "sleep":           "sleep_outputs",
+    "sleep_grid":      "sleep_grid_outputs",
     "demand_prep":     "demand_prep_outputs",
     "logit":           "logit_outputs",
     "blp":             "blp_outputs",
@@ -123,6 +126,7 @@ BASE_FAMILY = {b: f for f, b in FAMILY_BASE.items()}
 # member that carries the domain but not the step dir.
 STRIP_PREFIXES = {
     "sleep":           ("output/sleep/",),
+    "sleep_grid":      ("output/sleep_grid/",),
     "demand_prep":     ("output/demand_prep/",),
     "logit":           ("output/logit/",),
     "blp":             ("output/blp/",),
@@ -520,6 +524,8 @@ def dest_root(family, tag):
     so a redirected tree (OPEN_FINANCE_ROOT, SLEEP_OUT_ROOT) carries the ingest with it."""
     if family == "sleep":
         return paths.demand_prep_root()
+    if family == "sleep_grid":
+        return paths.estimation_output() / "SLEEP_GRID"
     if family == "demand_prep":
         return paths.demand_parquet_dir()
     if family == "logit":
@@ -642,7 +648,7 @@ def call_main(mod, argv):
 def route(arc: Archive, zip_path, opener, dry: bool, backup: Backup, note):
     """-> (n_files, destination). Raises Refused when a wrapped consolidator fails."""
     fam = arc.family
-    if fam in ("sleep", "demand_prep", "logit", "gates", "logs"):
+    if fam in ("sleep", "sleep_grid", "demand_prep", "logit", "gates", "logs"):
         root = dest_root(fam, meta_tag(arc))
         same_before = backup.n_same
         n, nbytes, nbak = extract(opener, fam, root, backup, dry, note)

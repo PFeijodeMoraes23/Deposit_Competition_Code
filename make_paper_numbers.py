@@ -10,8 +10,8 @@ number there is read from the output of the generator that renders the exhibit i
                                            make_bbl_cost_tables.py from the objects it renders the
                                            tables from (default pass: T7, T9, T11; --from-psi: T8,
                                            T10, up/down). One file per run tag; the multi-start run
-                                           the plan targets is --bbl-target (_ms982), the tagged
-                                           single-curve run of T11 is --sc-target (_sc982).
+                                           the plan targets is --bbl-target (_ms983), the tagged
+                                           single-curve run of T11 is --sc-target (_sc983).
   B  phi along the simulated path          COST_FWD/phi_path_summary_E{k}_spec_12.json
                                            (bbl_phi_path_summary.jl): pooled over launch quarters,
                                            pop weighting (headline), h = 0, 40, 250.
@@ -54,9 +54,10 @@ CROSS-CHECK. Every number that a rendered table also prints (Drafts/Deposit Comp
 compared with the printed cell after rounding to three decimals; a cell that differs or cannot be
 found is a MISMATCH, listed in both outputs, and makes the script exit with status 1.
 
-STATUS of an entry: ok; pending-_ms982 (a BBL number of a run other than the target multi-start
-run); pending-_sc982 (T11's single-curve column from a run other than the target single-curve
-run); pending-phi-summary (the phi path summary is not written yet); dropped.
+STATUS of an entry: ok; pending-_ms983 (a BBL number of a run other than the target multi-start
+run); pending-_sc983 (T11's single-curve column from a run other than the target single-curve
+run); pending-phi-summary (the phi path summary is not written yet); pending-blp-ext1 (every
+BLP-derived number, until --blp-final); dropped.
 
 MACROS. Every run also writes paper_numbers_macros.tex, to PAPER_NUMBERS and to Drafts next to the
 tables, so the paper quotes a number as \pn{<id>[.<leaf>]} (\input the file in the preamble,
@@ -69,9 +70,9 @@ warning; \PNshowpendingtrue shows a pending number's provisional value in red. N
 math minus in text and math alike; \pn is robust in captions and falls back to the 3-decimal
 value in PDF bookmarks.
 
-After the _ms982 (and _sc982) solves are ingested, one line each, from the repo folder:
-  python make_bbl_cost_tables.py --psi-tag _ms982 --compare-single-curve --single-curve-tag _sc982
-  python make_bbl_cost_tables.py --psi-tag _ms982 --from-psi --psi-zip <the run's bbl_outputs zip>
+After the _ms983 (and _sc983) solves are ingested, one line each, from the repo folder:
+  python make_bbl_cost_tables.py --psi-tag _ms983 --compare-single-curve --single-curve-tag _sc983
+  python make_bbl_cost_tables.py --psi-tag _ms983 --from-psi --psi-zip <the run's bbl_outputs zip>
   python make_paper_numbers.py
 
 Usage:
@@ -113,7 +114,11 @@ TABLES_DIR = DRAFTS                     # where the cross-check reads the render
 OUT_DIR = EST_OUT / "PAPER_NUMBERS"
 LOGIT_SUMMARY = _paths.blp_results_dir() / "logit" / "logit_summary_spec_12.json"
 BLP_STAGE = "ext1"                      # Table 6 (make_blp_demand_comparison_table STAGE_SPECS)
-LOGIT_SUBMODEL = "full"                 # Table 5 (blp_logit.jl COMPARISON_SUBMODEL)
+# Status of every BLP-derived entry (Table 6 rows, the BLP price coefficient, elasticities and
+# ratios). Pending while the ext1 fit is re-estimated from several starting points: the 10-16 run's
+# ext1 sits at rc4's solution, alpha about 0. --blp-final makes them ok.
+BLP_STATUS = "pending-blp-ext1"
+LOGIT_SUBMODEL = "full_dtype"           # Table 5 (blp_logit.jl COMPARISON_SUBMODEL)
 D6_DIR = EST_OUT / "DIAG_PHI_SEPARATION"
 ROUTINES = tuple(_routines.LINK_ESTS)   # E3, E4
 LINEAR_ROUTINES = tuple(e for e in _routines.ACTIVE if e not in _routines.LINK_ESTS)   # E1, E2
@@ -1079,7 +1084,7 @@ def collect_demand(notes: list):
                 "t_{0.975}(G*): the multiple of the standard error that gives the 95% interval "
                 "implied by the BLP table's inference (stars from Student-t with G* effective "
                 "clusters). The whiskers of the slide coefficient plot",
-                f"BLP_RESULTS/cluster_raw/blp_results_E{E}_spec_12_{BLP_STAGE}.json G_star", "ok",
+                f"BLP_RESULTS/cluster_raw/blp_results_E{E}_spec_12_{BLP_STAGE}.json G_star", BLP_STATUS,
                 display=disp(float(_stats.t.ppf(0.975, float(g_blp)))),
                 detail=dict(G_star=float(g_blp)))
         ab = {}
@@ -1095,7 +1100,7 @@ def collect_demand(notes: list):
                 f"Price coefficient alpha and its SE, {'Table 5 (logit)' if kind == 'logit' else 'Table 6 (BLP)'}, "
                 f"{rname(E)}", dict(estimate=a, se=se),
                 "alpha-hat, the average-market price coefficient, and its WCB standard error",
-                src, "ok", display=f"{disp(a)} ({disp(se)})",
+                src, "ok" if kind == "logit" else BLP_STATUS, display=f"{disp(a)} ({disp(se)})",
                 checks=[check_cell(tname, f"alpha, {rname(E)}", t.cell(est_cells, E), [a]),
                         check_cell(tname, f"alpha SE, {rname(E)}", t.cell(se_cells, E), [se])])
             el = a * rho if (a is not None and rho is not None) else None
@@ -1106,7 +1111,8 @@ def collect_demand(notes: list):
                 "and s = share_B_cond (B rows) or share_D (D rows), 0 <= s < 1: the "
                 f"average-market own-price elasticity of the {tab} row",
                 f"{src} x mean rho(1-s) of the newest demand_{E}_*spec_12.parquet in DEMAND_PREP",
-                "ok", display=disp(el), detail=dict(alpha=a, mean_rho_1ms=rho),
+                "ok" if kind == "logit" else BLP_STATUS, display=disp(el),
+                detail=dict(alpha=a, mean_rho_1ms=rho),
                 checks=[check_cell(tname, f"Mean own-price elasticity row, {rname(E)}",
                                    t.cell(t.find("Mean own-price elasticity"), E), [el])])
             imp = el * (1.0 - mp) if el is not None else None
@@ -1114,7 +1120,8 @@ def collect_demand(notes: list):
                 f"On-impact market elasticity, {tab.split(' ')[2].strip('()')}, {rname(E)}", imp,
                 "The active elasticity times the share of depositors who respond on impact: "
                 "elasticity x (1 - mean phi-hat), mean phi-hat as a fraction (Table 4 row / 100)",
-                f"demand.elast.{kind}.E{E} x (1 - sleep.meanphi.E{E} / 100)", "ok",
+                f"demand.elast.{kind}.E{E} x (1 - sleep.meanphi.E{E} / 100)",
+                "ok" if kind == "logit" else BLP_STATUS,
                 display=disp(imp),
                 detail=dict(formula="elasticity * (1 - mean_phi_pp / 100)", elasticity=el,
                             mean_phi_pp=mp_pp, one_minus_phi=1.0 - mp))
@@ -1125,7 +1132,7 @@ def collect_demand(notes: list):
             add(f"demand.ratio.{what}.E{E}", "C", f"BLP {word} over the logit's, {rname(E)}", r,
                 f"Table 6's {word} divided by Table 5's (the 'about six times' and 'eleven times' "
                 "of the prose)", f"demand.alpha.blp.E{E} / demand.alpha.logit.E{E}, "
-                f"{'estimate' if what == 'alpha' else 'se'}", "ok", display=disp(r))
+                f"{'estimate' if what == 'alpha' else 'se'}", BLP_STATUS, display=disp(r))
 
 
 def phi_base_check(notes: list):
@@ -1568,7 +1575,8 @@ def collect_table_rows(notes: list):
                     + ("95% interval (quarter_clustered: marked with a dagger)" if second == "ci"
                        else "standard error")
                     + ", stars and the significance level they mark (1, 5, 10 percent, or none)",
-                    f"rendered {tname} (3 dp; the generator exports no unrounded values)", "ok",
+                    f"rendered {tname} (3 dp; the generator exports no unrounded values)",
+                    BLP_STATUS if tname == T6 else "ok",
                     rounded3=True, display=f"{fmt3s(nums[0])}{'*' * stars} {shown}".strip())
         for prefix, slug, is_count in stats:
             cells, _ = t.find_row(prefix)
@@ -1581,7 +1589,8 @@ def collect_table_rows(notes: list):
                     continue
                 v = int(round(nums[0])) if is_count else nums[0]
                 add(f"{stem}.{slug}.E{E}", "G", f"{tlab}, {prefix}, {rname(E)}", v,
-                    f"{tlab} row '{prefix}', column {rname(E)}", f"rendered {tname}", "ok",
+                    f"{tlab} row '{prefix}', column {rname(E)}", f"rendered {tname}",
+                    BLP_STATUS if tname == T6 else "ok",
                     rounded3=not is_count, display=fmt_count(v) if is_count else fmt3s(v))
     for E in ROUTINES:
         if E not in pix:
@@ -2361,12 +2370,12 @@ def write_outputs(meta: dict, notes: list):
     for e in ENTRIES:
         L.append(f"- `{e['id']}` ({e['plan']}). {e['definition']} Source: {e['source']}."
                  + (f" Unit: {e['unit']}." if e.get("unit") else ""))
-    L += ["", "## Refresh after `_ms982` (and `_sc982`) are ingested", "",
+    L += ["", "## Refresh after `_ms983` (and `_sc983`) are ingested", "",
           "One line each, from the repo folder:", "",
           "```",
-          "python make_bbl_cost_tables.py --psi-tag _ms982 --compare-single-curve "
-          "--single-curve-tag _sc982",
-          "python make_bbl_cost_tables.py --psi-tag _ms982 --from-psi --psi-zip "
+          "python make_bbl_cost_tables.py --psi-tag _ms983 --compare-single-curve "
+          "--single-curve-tag _sc983",
+          "python make_bbl_cost_tables.py --psi-tag _ms983 --from-psi --psi-zip "
           "<the run's bbl_outputs zip>",
           "julia --project=. bbl_phi_path_summary.jl",
           "python make_paper_numbers.py",
@@ -2611,20 +2620,24 @@ def main():
     ap.add_argument("--bbl-tag", default=None,
                     help="read bbl_table_numbers{tag}.json for this psi tag (e.g. _ms1). Default: "
                          "the target run's file when present, else the newest multi-start file.")
-    ap.add_argument("--bbl-target", default="_ms982",
+    ap.add_argument("--bbl-target", default="_ms983",
                     help="the multi-start run the paper will quote (status ok only for it)")
     ap.add_argument("--tables-dir", default=None,
                     help="where the cross-check reads the rendered tables (default: Drafts)")
-    ap.add_argument("--sc-target", default="_sc982",
+    ap.add_argument("--sc-target", default="_sc983",
                     help="the single-curve run Table 11's single-curve columns will come from")
     ap.add_argument("--no-tex", action="store_true",
                     help="skip paper_numbers_macros.tex (written by default to PAPER_NUMBERS and "
                          "to Drafts, next to the tables V_Main inputs)")
     ap.add_argument("--tex", action="store_true", help=argparse.SUPPRESS)
+    ap.add_argument("--blp-final", action="store_true",
+                    help="mark the BLP-derived entries ok (default: pending-blp-ext1, see BLP_STATUS)")
     a = ap.parse_args()
-    global TABLES_DIR
+    global TABLES_DIR, BLP_STATUS
     if a.tables_dir:
         TABLES_DIR = pathlib.Path(a.tables_dir)
+    if a.blp_final:
+        BLP_STATUS = "ok"
 
     notes: list = []
     path, why = bbl_file(a.bbl_tag, a.bbl_target)

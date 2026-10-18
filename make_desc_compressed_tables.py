@@ -176,8 +176,8 @@ LABEL_MAP = {
     "branches_per1000":          ("Bank Branches",           "per 1{,}000",  None),
     # ANATEL active mobile-telephony accesses, all technologies (scrape_anatel_mobile.py).
     "connections_per100":        ("Mobile Lines",            "per 100 inhabitants", None),
-    "pix_users_pf_per1000":      ("PIX Users (PF)",          "per 1{,}000",  None),
-    "pix_txns_pf":               ("PIX Transactions (PF)",   "Millions",     1e6),
+    "pix_users_pf_per1000":      ("Pix Users (PF)",          "payer-months per 1{,}000", None),
+    "pix_txns_pf":               ("Pix Transactions (PF)",   "Millions",     1e6),
 }
 
 # LEVELS (a monetary amount, an HHI on the 0-10,000 concentration-index scale, or a

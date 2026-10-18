@@ -27,7 +27,7 @@ se_wcb      = 'Parentheses: WCB standard errors, conglomerate clusters; stars fr
 se_sandwich = 'Parentheses: cluster-robust sandwich standard errors, conglomerate clusters; stars from Student-$t(G^*)$: *** 1\%, ** 5\%, * 10\%.'
 # Dormant: not in any [demand.order] list below. It is printed only once the weak-instrument
 # battery and its table exist; add 'alpha' to the lists that carry it then.
-alpha       = 'The stars on $\alpha$ use the conventional wild-cluster-bootstrap standard error and are shown by convention only. Inference on $\alpha$ that is robust to weak instruments is in Table \ref{tab:weakiv_spec12}.'
+alpha       = 'The stars on $\alpha$ use the conventional wild-cluster-bootstrap standard error and are shown by convention only.'
 spread      = 'Spread $\rho$ in pp, instrumented for types 4 and 5 only.'
 # Dormant: not in any [demand.order] list below. It is printed only once the weak-instrument
 # battery and its table exist; add 'eff_f' to logit_comparison then.

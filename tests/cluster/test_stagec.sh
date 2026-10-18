@@ -340,12 +340,13 @@ echo "== L10 --grid-check: report only"
 build_sandbox; reset_stubs; mkdir -p "${D}/output"
 "${PYW}" -c 'import os, sys, pandas as pd
 o = sys.argv[1]; c = "phi_t_IV_RivalSpread_x_Tech"
-for root, shift in (("sleep", 0.0), ("sleep_grid", 1e-7)):
+for root, on in (("sleep", False), ("sleep_grid", True)):
     for k in (2, 3, 4):
         d = os.path.join(o, root, f"est{k}"); os.makedirs(d, exist_ok=True)
-        pd.DataFrame({"year_quarter": [1, 2, 3], c: [0.9 + (shift if k == 3 else 0.0)] * 3}).to_csv(os.path.join(d, "national_phi_t.csv"), index=False)' "${D}/output"
+        shift = {2: 0.0, 3: 1e-7, 4: 1e-3}[k] if on else 0.0
+        pd.DataFrame({"year_quarter": [1, 2, 3], c: [0.9 + shift] * 3}).to_csv(os.path.join(d, "national_phi_t.csv"), index=False)' "${D}/output"
 run "${T}/l10.log" --grid-check; rc=$?
-checke "L10 prints max |dphi_t| per routine (E3 differs by 1e-7, E2/E4 identical) and exits 0" 'test ${rc} -eq 0 && has "E2: spec 12 full grid vs chain: max |dphi_t| = 0.000e+00 over 3 quarters (identical)" "${T}/l10.log" && has "E3: spec 12 full grid vs chain: max |dphi_t| = 1.000e-07 over 3 quarters (DIFFERENT -- report only)" "${T}/l10.log" && has "GRID CHECK DONE (report only)" "${T}/l10.log"'
+checke "L10 prints max |dphi_t| per routine (E2 identical, E3 within the 1e-6 tolerance, E4 beyond it) and exits 0" 'test ${rc} -eq 0 && has "E2: spec 12 full grid vs chain: max |dphi_t| = 0.000e+00 over 3 quarters (identical)" "${T}/l10.log" && has "E3: spec 12 full grid vs chain: max |dphi_t| = 1.000e-07 over 3 quarters (agree within 1e-06)" "${T}/l10.log" && has "E4: spec 12 full grid vs chain: max |dphi_t| = 1.000e-03 over 3 quarters (DIFFERENT -- report only)" "${T}/l10.log" && has "GRID CHECK DONE (report only)" "${T}/l10.log"'
 fi
 
 # ─────────────────────────────────────────────────────────────────────────────────────────
@@ -665,7 +666,7 @@ reset_stubs; mkfits "refused: K > L (17 > 16)"
 run "${T}/d3a.log" --next-bbl; rc=$?
 checke "D3a E3 ext1 without joint SEs: the BBL is refused" 'test ${rc} -ne 0 && has "E3 ext1 has no joint standard errors: se_status .refused: K > L (17 > 16)." "${T}/d3a.log"'
 check "D3a ... with the resume line" has "bash stagec_suite_20261012.sh --resume next-bbl" "${T}/d3a.log"
-check "D3a nothing submitted, no fit record" test ! -s "${SBL}" -a ! -e "${D}/output/blp/stagec_bblfit_E3_spec_12_extended_ms983.json"
+check "D3a nothing submitted, no fit record" test ! -s "${SBL}" -a ! -e "${D}/output/blp/stagec_bblfit_E3_spec_12_ext1_ms983.json"
 mkfits ok; sed -i 's/, "se_status": "ok"//' "${D}/output/blp/blp_results_E4_spec_12_ext1.json"
 run "${T}/d3b.log" --next-bbl
 check "D3b an absent se_status is refused too" has "E4 ext1 has no joint standard errors: se_status '<absent>'" "${T}/d3b.log"
@@ -673,24 +674,36 @@ mkfits ok; reset_stubs
 run "${T}/d3c.log" --next-bbl -- STUB_SCONTROL_FAIL=1; rc=$?
 check "D3c B0: T4's gate and the image's provenance check passed (cpu_verdict_loaded: Julia loaded, then cl_sysimage_verdict cpu)" bash -c "grep -q 'gate_SC_cpu_image.json: ok; blp_sysimage_cpu.so passes its provenance check' '${T}/d3c.log' && grep -qx 'cpu_verdict	cpu_verdict_loaded' '${PLOG}'"
 check "D3c exit 0" test ${rc} -eq 0 || tail -30 "${T}/d3c.log"
-check "D3c four fit records" test "$(ls "${D}"/output/blp/stagec_bblfit_E*_spec_12_extended_*983.json | wc -l)" -eq 4
-check "D3c fit record = sha256 of the extended fit" test "$(grep -o '"fit_sha256": "[0-9a-f]*"' "${D}/output/blp/stagec_bblfit_E3_spec_12_extended_ms983.json" | cut -d'"' -f4)" == "$(sha256sum "${D}/output/blp/blp_results_E3_spec_12_extended.jls" | cut -d' ' -f1)"
-grep -- "-J bbl_solve_E3_ms983 " "${SBL}" | grep -q -- "--promote" && ok "D3c _ms983 solve carries --promote" || bad "D3c promote on _ms983"
-grep -- "-J bbl_solve_E3_sc983 " "${SBL}" | grep -q -- "--promote" && bad "D3c _sc983 must not promote" || ok "D3c _sc983 not promoted"
+check "D3c four fit records" test "$(ls "${D}"/output/blp/stagec_bblfit_E*_spec_12_ext1_*983.json | wc -l)" -eq 4
+check "D3c fit record = sha256 of the ext1 fit" test "$(grep -o '"fit_sha256": "[0-9a-f]*"' "${D}/output/blp/stagec_bblfit_E3_spec_12_ext1_ms983.json" | cut -d'"' -f4)" == "$(sha256sum "${D}/output/blp/blp_results_E3_spec_12_ext1.jls" | cut -d' ' -f1)"
+grep -- "-J bbl_solve_E3_ext1_ms983 " "${SBL}" | grep -q -- "--promote" && ok "D3c _ms983 solve carries --promote" || bad "D3c promote on _ms983"
+grep -- "-J bbl_solve_E3_ext1_sc983 " "${SBL}" | grep -q -- "--promote" && bad "D3c _sc983 must not promote" || ok "D3c _sc983 not promoted"
 check "D3c no tables job for either tag (D3: --no-tables on both)" test "$(grep -c -- '-J bbl_tables_' "${SBL}")" -eq 0
 check "D3c no bbl_run.sh archive (the suite archives)" bash -c "! grep -q -- '-J bbl_zip' '${SBL}'"
-grep -- "-J bbl_fwd_E3_ms983" "${SBL}" | head -1 | grep -q -- "--partition=gpu_h100" && ok "D3c fwd on gpu_h100" || bad "D3c fwd partition"
+grep -- "-J bbl_fwd_E3_ext1_ms983" "${SBL}" | head -1 | grep -q -- "--partition=gpu_h100" && ok "D3c fwd on gpu_h100" || bad "D3c fwd partition"
 check "D3c no polfunc job (never refit)" bash -c "! grep -q -- '-J bbl_polfunc' '${SBL}'"
-ms="$(id_of bbl_solve_E3_ms983):$(id_of bbl_solve_E4_ms983)"; sc="$(id_of bbl_solve_E3_sc983):$(id_of bbl_solve_E4_sc983)"
+ms="$(id_of bbl_solve_E3_ext1_ms983):$(id_of bbl_solve_E4_ext1_ms983)"; sc="$(id_of bbl_solve_E3_ext1_sc983):$(id_of bbl_solve_E4_ext1_sc983)"
 check "D3c _ms983 archive afterANY its solves" test "$(dep_of stagec_bbl_zip_ms983)" == "--dependency=afterany:${ms}"
 check "D3c _sc983 archive afterANY its solves" test "$(dep_of stagec_bbl_zip_sc983)" == "--dependency=afterany:${sc}"
 check "D3c the _ms983 archive is submitted before any _sc983 job (m2/D10)" test "$(ln_of '-J stagec_bbl_zip_ms983 ')" -lt "$(ln_of '_sc983')"
 grep -- "-J stagec_bbl_zip_ms983 " "${SBL}" | grep -q -- "--check-bbl _ms983 && bash cluster_archive.sh --set bbl --copy --slim --psi-tag '_ms983'" && ok "D3c archive checks the binding first" || bad "D3c archive wrap"
 check "D3c final afterany both archives" test "$(dep_of stagec_final)" == "--dependency=afterany:$(id_of stagec_bbl_zip_ms983):$(id_of stagec_bbl_zip_sc983)"
 grep -- "-J stagec_final " "${SBL}" | grep -q -- "--collect-logs; bash cluster_archive.sh --set logs" && ok "D3c final collects the logs first (m6)" || bad "D3c final collect"
-check "D3c archive job id recorded in the fit record" has "\"bbl_archive_jobs\": \"$(id_of stagec_bbl_zip_ms983)\"" "${D}/output/blp/stagec_bblfit_E3_spec_12_extended_ms983.json"
+check "D3c archive job id recorded in the fit record" has "\"bbl_archive_jobs\": \"$(id_of stagec_bbl_zip_ms983)\"" "${D}/output/blp/stagec_bblfit_E3_spec_12_ext1_ms983.json"
 check "D3c a sweep that stays HELD is surfaced with its release line (m8)" has "stay HELD (bbl_run.sh could not release them).*scontrol release" "${T}/d3c.log"
 check "D3c ... and in the summary" has "HELD SWEEPS (release them" "${T}/d3c.log"
+check "D3c the BBL runs on the ext1 fit: BBL_STAGE=ext1 in the fwd and the solve submissions" bash -c "grep -- '-J bbl_fwd_E3_ext1_ms983' '${SBL}' | head -1 | grep -q -- 'BBL_STAGE=ext1' && grep -- '-J bbl_solve_E3_ext1_ms983 ' '${SBL}' | grep -q -- 'BBL_STAGE=ext1' && ! grep -q -- 'BBL_STAGE=extended' '${SBL}'"
+echo "== D3x CL_EXCLUDE_NODES (cl_sbatch)"
+reset_stubs
+( cd "${S}" && env PATH="${STUBS}:${PATH}" STUB_DIR="${STATE}" CL_ROOT="${S}" DATA_ROOT="${D}" CL_EXCLUDE_NODES=a1127u05n01 \
+    bash -c '. ./cluster_lib.sh >/dev/null 2>&1; cl_sbatch -J xtest --partition=gpu_h100 --wrap true' ) > "${T}/d3x1.log" 2>&1
+check "D3x1 CL_EXCLUDE_NODES puts --exclude on the submission" bash -c "grep -- '-J xtest' '${SBL}' | grep -q -- '--exclude=a1127u05n01'"
+( cd "${S}" && env PATH="${STUBS}:${PATH}" STUB_DIR="${STATE}" CL_ROOT="${S}" DATA_ROOT="${D}" CL_EXCLUDE_NODES='a1127u05n01 x' \
+    bash -c '. ./cluster_lib.sh >/dev/null 2>&1; cl_sbatch -J xbad --wrap true' ) > "${T}/d3x2.log" 2>&1; rc=$?
+checke "D3x2 a malformed CL_EXCLUDE_NODES refuses and submits nothing" 'test ${rc} -ne 0 && ! grep -q -- "-J xbad" "${SBL}" && has "not a plain node list" "${T}/d3x2.log"'
+( cd "${S}" && env PATH="${STUBS}:${PATH}" STUB_DIR="${STATE}" CL_ROOT="${S}" DATA_ROOT="${D}" \
+    bash -c 'unset CL_EXCLUDE_NODES; . ./cluster_lib.sh >/dev/null 2>&1; cl_sbatch -J xnone --wrap true' ) > "${T}/d3x3.log" 2>&1
+check "D3x3 unset: no --exclude" bash -c "grep -- '-J xnone' '${SBL}' | grep -vq -- '--exclude'"
 reset_stubs; run "${T}/d3d.log" --next-bbl
 check "D3d a second hand-off refuses (files of the run on disk)" has "are already on disk" "${T}/d3d.log"
 check "D3d nothing submitted" test ! -s "${SBL}"
@@ -700,30 +713,30 @@ echo "== D3e an _sc983 launch failure: _ms983 keeps its archive and gets the fin
 build_sandbox; reset_stubs; run "${T}/d0.log" --install; mkfits ok
 run "${T}/d3e.log" --next-bbl -- STUB_FAIL_RE=sc983; rc=$?
 check "D3e exit nonzero" test ${rc} -ne 0
-check "D3e _ms983 submitted with its archive" test -n "$(id_of stagec_bbl_zip_ms983)" -a -n "$(id_of bbl_solve_E3_ms983)"
+check "D3e _ms983 submitted with its archive" test -n "$(id_of stagec_bbl_zip_ms983)" -a -n "$(id_of bbl_solve_E3_ext1_ms983)"
 check "D3e stagec_final afterany the _ms983 archive" test "$(dep_of stagec_final)" == "--dependency=afterany:$(id_of stagec_bbl_zip_ms983)"
 check "D3e no _sc983 job left" test "$(grep -c -- '_sc983' "${SBL}")" -eq 0
 check "D3e the one line that launches _sc983 alone" has "--wrap \"bash stagec_suite_20261012.sh --next-bbl _sc983\"" "${T}/d3e.log"
 check "D3e the bbl gate says false" has '"ok": false' "${D}/output/.gate_SC_bbl.json"
 check "D3e the refused launch's dispatch folders are moved aside (D3f fix)" has "moved aside to bbl/_stagec_failed_launch_sc983_" "${T}/d3e.log"
-check "D3e ... none is left under .dispatch" test ! -d "${D}/output/bbl/.dispatch/E3_spec_12_extended_sc983" -a ! -d "${D}/output/bbl/.dispatch/E4_spec_12_extended_sc983"
+check "D3e ... none is left under .dispatch" test ! -d "${D}/output/bbl/.dispatch/E3_spec_12_ext1_sc983" -a ! -d "${D}/output/bbl/.dispatch/E4_spec_12_ext1_sc983"
 reset_stubs; run "${T}/d3f.log" --next-bbl _sc983; rc=$?
-check "D3f the recovery launches _sc983 alone" test ${rc} -eq 0 -a -n "$(id_of bbl_solve_E3_sc983)" -a "$(grep -c -- '_ms983' "${SBL}")" -eq 0 || tail -25 "${T}/d3f.log"
+check "D3f the recovery launches _sc983 alone" test ${rc} -eq 0 -a -n "$(id_of bbl_solve_E3_ext1_sc983)" -a "$(grep -c -- '_ms983' "${SBL}")" -eq 0 || tail -25 "${T}/d3f.log"
 check "D3f ... with its archive and a final job" test "$(dep_of stagec_final)" == "--dependency=afterany:$(id_of stagec_bbl_zip_sc983)"
 
 fi
 if [[ -z "${T2_D_ONLY:-}" || "${T2_D_ONLY}" == "456" ]]; then
 echo "== D4 --check-bbl"
 build_sandbox; reset_stubs; run "${T}/d0.log" --install; mkfits ok; run "${T}/d4z.log" --next-bbl
-for k in 3 4; do printf '{"run": {"n_shards_expected": 300, "n_shards_found": 300}, "identification": {"promoted": false}}\n' > "${D}/output/bbl/cost_params_E${k}_spec_12_extended_ms983.json"; done
+for k in 3 4; do printf '{"run": {"n_shards_expected": 300, "n_shards_found": 300}, "identification": {"promoted": false}}\n' > "${D}/output/bbl/cost_params_E${k}_spec_12_ext1_ms983.json"; done
 run "${T}/d4a.log" --check-bbl _ms983
 check "D4a bound fit + whole cost params: OK" has "STAGE C CHECK-BBL _ms983 OK" "${T}/d4a.log"
-sed -i 's/"n_shards_found": 300/"n_shards_found": 299/' "${D}/output/bbl/cost_params_E4_spec_12_extended_ms983.json"
+sed -i 's/"n_shards_found": 300/"n_shards_found": 299/' "${D}/output/bbl/cost_params_E4_spec_12_ext1_ms983.json"
 run "${T}/d4b.log" --check-bbl _ms983
 check "D4b a missing shard refuses the archive" has "n_shards_found 299 != n_shards_expected 300" "${T}/d4b.log"
-echo replaced > "${D}/output/blp/blp_results_E3_spec_12_extended.jls"
+echo replaced > "${D}/output/blp/blp_results_E3_spec_12_ext1.jls"
 run "${T}/d4c.log" --check-bbl _ms983
-check "D4c a replaced fit refuses the archive" has "is not the fit stagec_bblfit_E3_spec_12_extended_ms983.json records" "${T}/d4c.log"
+check "D4c a replaced fit refuses the archive" has "is not the fit stagec_bblfit_E3_spec_12_ext1_ms983.json records" "${T}/d4c.log"
 run "${T}/d4d.log" --check-bbl _ms982
 check "D4d another tag refused" has "takes _ms983 or _sc983" "${T}/d4d.log"
 
@@ -731,17 +744,17 @@ echo "== D5 --repair-bbl (the bound repair)"
 build_sandbox; reset_stubs; run "${T}/d0.log" --install; mkfits ok
 run "${T}/d5a.log" --next-bbl; check "D5a launch for the repair test" has "STAGE C BBL SUBMITTED" "${T}/d5a.log"
 z0="$(id_of stagec_bbl_zip_ms983)"
-printf '{"run": {"n_shards_expected": 300, "n_shards_found": 300}}\n' > "${D}/output/bbl/cost_params_E3_spec_12_extended_ms983.json"
+printf '{"run": {"n_shards_expected": 300, "n_shards_found": 300}}\n' > "${D}/output/bbl/cost_params_E3_spec_12_ext1_ms983.json"
 reset_stubs
 run "${T}/d5b.log" --repair-bbl _ms983; rc=$?
 check "D5b exit 0" test ${rc} -eq 0 || tail -25 "${T}/d5b.log"
 check "D5b E3 (cost params on disk) left alone" has "E3: cost params on disk; nothing to repair" "${T}/d5b.log"
-check "D5b only E4 repaired: a sweep and a solve, no fwd launch" test "$(grep -c -- '-J bbl_sweep_E4_ms983 ' "${SBL}")" -eq 1 -a "$(grep -c -- '-J bbl_solve_E4_ms983 ' "${SBL}")" -eq 1 -a "$(grep -c -- '-J bbl_fwd_' "${SBL}")" -eq 0 -a "$(grep -c -- '_E3_ms983 ' "${SBL}")" -eq 0
-grep -- "-J bbl_solve_E4_ms983 " "${SBL}" | grep -q -- "--promote" && ok "D5b the repaired _ms983 solve still promotes" || bad "D5b promote lost"
+check "D5b only E4 repaired: a sweep and a solve, no fwd launch" test "$(grep -c -- '-J bbl_sweep_E4_ext1_ms983 ' "${SBL}")" -eq 1 -a "$(grep -c -- '-J bbl_solve_E4_ext1_ms983 ' "${SBL}")" -eq 1 -a "$(grep -c -- '-J bbl_fwd_' "${SBL}")" -eq 0 -a "$(grep -c -- '_E3_ms983 ' "${SBL}")" -eq 0
+grep -- "-J bbl_solve_E4_ext1_ms983 " "${SBL}" | grep -q -- "--promote" && ok "D5b the repaired _ms983 solve still promotes" || bad "D5b promote lost"
 check "D5b no tables, no bare archive" bash -c "! grep -Eq -- '-J (bbl_tables|bbl_zip)' '${SBL}'"
-check "D5b suite archive afterany the repair solve" test "$(dep_of stagec_bbl_zip_ms983)" == "--dependency=afterany:$(id_of bbl_solve_E4_ms983)"
-check "D5b both archive ids in the record" has "\"bbl_archive_jobs\": \"${z0} $(id_of stagec_bbl_zip_ms983)\"" "${D}/output/blp/stagec_bblfit_E4_spec_12_extended_ms983.json"
-reset_stubs; echo replaced > "${D}/output/blp/blp_results_E4_spec_12_extended.jls"
+check "D5b suite archive afterany the repair solve" test "$(dep_of stagec_bbl_zip_ms983)" == "--dependency=afterany:$(id_of bbl_solve_E4_ext1_ms983)"
+check "D5b both archive ids in the record" has "\"bbl_archive_jobs\": \"${z0} $(id_of stagec_bbl_zip_ms983)\"" "${D}/output/blp/stagec_bblfit_E4_spec_12_ext1_ms983.json"
+reset_stubs; echo replaced > "${D}/output/blp/blp_results_E4_spec_12_ext1.jls"
 run "${T}/d5c.log" --repair-bbl _ms983
 check "D5c a replaced fit is never repaired onto" has "were simulated on another fit" "${T}/d5c.log"
 check "D5c nothing submitted" test ! -s "${SBL}"

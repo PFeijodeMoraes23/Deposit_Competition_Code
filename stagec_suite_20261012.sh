@@ -153,7 +153,13 @@ REQ_FILE="${HERE}/stagec_requests.env"
 . "${REQ_FILE}"
 
 ROUTINES_ALL="1 2 3 4"; BBL_ROUTINES="3 4"
-MS_TAG="_ms983"; SC_TAG="_sc983"; BBL_STAGE="extended"; SE_STAGE="ext1"
+# BBL_STAGE: the demand fit the BBL simulates on. ext1 (10 + 5 parameters on 16 moments) is also
+# the stage with the joint standard errors; the extended fit of E3/E4 carries 17 parameters on the
+# same 16 moments (its SE step refuses: K > L). bbl_run.sh reads it as CF_STAGE.
+MS_TAG="_ms983"; SC_TAG="_sc983"; BBL_STAGE="ext1"; SE_STAGE="ext1"
+# LADDER_STAGE: the last rung of every BLP ladder. A ladder is complete when SE_STAGE and
+# LADDER_STAGE are on disk (check-blp, the resumes), whatever stage the BBL reads.
+LADDER_STAGE="extended"
 POLICY_SHA256="beb0bb2f00334cd64f1f5f68fc54f4cfaf918ef9a3c7db785c13c543f282a429"   # the policy refit on the 10-15 panel (Pedro, 10-16)
 POLICY_CSV="${CL_STEP_BBL}/polfunc_fitted.csv"
 FROZEN_REC="${CL_DATA_OUT}/.stagec_frozen_20261012.sha256"
@@ -221,7 +227,8 @@ SC_REFUSE="SLEEP_STATE_BLOCK SLEEP_CENTER_STATES SLEEP_BOOT_B SLEEP_BOOT_SCHEME 
 SC_REFUSE_AT_LAUNCH="DEMAND_CHARS_FILE SLEEP_PREP_EXTRA SLEEP_ACTIVE_ESTS DEMAND_PREP_DIR SLEEP_OUT_ROOT CF_COST_FWD
   COST_POLFUNC_DIR CF_FOUNDATION_DIR STATE_CENTERING_JSON OPEN_FINANCE_ROOT POLICY_CSV"
 SC_PRINT="PARTITION MEM CL_MEM_DEFAULT CL_MEM_BIG CL_WALL_DEEP ZIP_PARTITION SLEEP_PARTITION CONDA_ENV PY_MODULE
-  JULIA_MODULE STAGEC_SLEEP_EXTRA STAGEC_BLP_EXTRA STAGEC_BBL_EXTRA STAGEC_LOG_DIR STAGEC_JULIA_OFFLINE"
+  JULIA_MODULE STAGEC_SLEEP_EXTRA STAGEC_BLP_EXTRA STAGEC_BBL_EXTRA STAGEC_LOG_DIR STAGEC_JULIA_OFFLINE
+  CL_EXCLUDE_NODES"
 same_dir () { [[ "$(cd "$1" 2>/dev/null && pwd -P)" == "$(cd "$2" 2>/dev/null && pwd -P)" ]]; }
 in_env0 () { [[ "${SC_ENV0}" == *" $1 "* ]]; }   # exported when this job started (not set by this script)
 env_check () {   # env_check launch|chain
@@ -907,7 +914,9 @@ cpu_image_mode () {
     say "CPU IMAGE: PASS"
 }
 # --grid-check (stagec_grid_zip, after the grids): REPORT ONLY. Each full grid's spec-12 phi_t
-# against the chain's (the one the prep read); prints max |dphi_t| per routine; never stops.
+# against the chain's (the one the prep read); prints max |dphi_t| per routine; never stops. Up to
+# TOL the two agree: the 10-16 run read 4.4e-16 (E2), 1.9e-7 (E3) and 3.0e-7 (E4), the
+# optimiser's stopping tolerance on phi_t values near 1.
 grid_check_mode () {
     say "stage C grid check (report only): the full grids' spec 12 vs the chain's"
     cl_bootstrap_tree >/dev/null; cl_export_step_dirs
@@ -919,6 +928,7 @@ from pathlib import Path
 import pandas as pd
 out = Path(os.environ["CL_DATA_OUT"]); key = os.environ["SC_KEY"]
 col = "phi_t_" + key.replace(" ", "_").replace(".", "")
+TOL = 1e-6
 for k in (2, 3, 4):
     a, b = out / "sleep" / f"est{k}" / "national_phi_t.csv", out / "sleep_grid" / f"est{k}" / "national_phi_t.csv"
     if not (a.is_file() and b.is_file()):
@@ -928,8 +938,10 @@ for k in (2, 3, 4):
         print(f"  E{k}: no comparison ({col} missing)"); continue
     m = da[["year_quarter", col]].merge(db[["year_quarter", col]], on="year_quarter", suffixes=("_chain", "_grid"))
     d = (m[col + "_chain"] - m[col + "_grid"]).abs()
+    verdict = ("identical" if d.max() == 0 else f"agree within {TOL:g}" if d.max() <= TOL
+               else "DIFFERENT -- report only")
     print(f"  E{k}: spec 12 full grid vs chain: max |dphi_t| = {d.max():.3e} over {len(m)} quarters "
-          f"({'identical' if d.max() == 0 else 'DIFFERENT -- report only'})")
+          f"({verdict})")
 PY
     say "GRID CHECK DONE (report only)"
 }
@@ -1084,7 +1096,7 @@ ladder_resume_check () {
 }
 routines_unfinished () {   # routines_unfinished <routines>: those without both ext1 and extended on disk
     local k out=""
-    for k in $1; do [[ -f "$(res_jls "${k}" "${SE_STAGE}")" && -f "$(res_jls "${k}" "${BBL_STAGE}")" ]] || out="${out:+${out} }${k}"; done
+    for k in $1; do [[ -f "$(res_jls "${k}" "${SE_STAGE}")" && -f "$(res_jls "${k}" "${LADDER_STAGE}")" ]] || out="${out:+${out} }${k}"; done
     printf '%s' "${out}"
 }
 run_ladders () {   # run_ladders <routines> <log tag>: blp_run.sh; prints the terminal ids (empty on a refusal)
@@ -1146,7 +1158,7 @@ check_blp () {   # check_blp [routines]: ext1 (the joint SEs) and extended on di
     local k st miss="" ks="${1:-${ROUTINES_ALL}}" g
     [[ "${ks}" =~ ^[1-4]( [1-4])*$ ]] || die "--check-blp takes routines like '3 4' (got '${ks}')"
     g="blp"; [[ "${ks}" != "${ROUTINES_ALL}" ]] && g="blp_E${ks// /}"
-    for k in ${ks}; do for st in ${SE_STAGE} ${BBL_STAGE}; do
+    for k in ${ks}; do for st in ${SE_STAGE} ${LADDER_STAGE}; do
         [[ -f "$(res_jls "${k}" "${st}")" ]] || miss="${miss} $(basename "$(res_jls "${k}" "${st}")")"
     done; done
     if [[ -n "${miss}" ]]; then
@@ -1196,7 +1208,7 @@ bbl_launch_tag () {   # bbl_launch_tag <tag> -> sets SOLVES; the launch, its arc
     local t="$1" lg z k
     if [[ "${t}" == "${MS_TAG}" ]]; then set -- "${MS_FLAGS[@]}"; lg="${LOGD}/stagec_bbl_ms_${STAMP}.log"; else set -- "${SC_FLAGS[@]}"; lg="${LOGD}/stagec_bbl_sc_${STAMP}.log"; fi
     SOLVES=""
-    env POLICY_CSV="${POLICY_CSV}" CL_DRYRUN="${DRY}" CL_VERBOSE=1 bash "${HERE}/bbl_run.sh" "$@" > "${lg}" 2>&1 || { tail -40 "${lg}"; return 1; }
+    env POLICY_CSV="${POLICY_CSV}" CF_STAGE="${BBL_STAGE}" CL_DRYRUN="${DRY}" CL_VERBOSE=1 bash "${HERE}/bbl_run.sh" "$@" > "${lg}" 2>&1 || { tail -40 "${lg}"; return 1; }
     SOLVES="$(sed -n 's/^BBL_SOLVE_JOBIDS=//p' "${lg}" | tail -1)"
     say "   ${t}: $(sed -n 's/^BBL_JOB_NAMES=//p' "${lg}" | tail -1); ids $(sed -n 's/^BBL_ALL_JOBIDS=//p' "${lg}" | tail -1)"
     [[ -n "${SOLVES}" ]] || { say "   ${t}: the launch returned no solve job id (${lg})"; return 2; }
@@ -1276,7 +1288,7 @@ next_bbl () {   # next_bbl [tag]: both tags (the hand-off), or one of them (a la
     for t in ${tags}; do
         lg="${LOGD}/stagec_bbl_dry${t}_${STAMP}.log"
         if [[ "${t}" == "${MS_TAG}" ]]; then set -- "${MS_FLAGS[@]}"; else set -- "${SC_FLAGS[@]}"; fi
-        env POLICY_CSV="${POLICY_CSV}" CL_DRYRUN=1 CL_VERBOSE=1 bash "${HERE}/bbl_run.sh" "$@" > "${lg}" 2>&1 \
+        env POLICY_CSV="${POLICY_CSV}" CF_STAGE="${BBL_STAGE}" CL_DRYRUN=1 CL_VERBOSE=1 bash "${HERE}/bbl_run.sh" "$@" > "${lg}" 2>&1 \
             || { tail -25 "${lg}"; die "the dry run of the ${t} launch was refused (${lg}). No BBL job was submitted."; }
         say "   ${t}: dry run OK ($(grep -c '\[dry-run\] sbatch' "${lg}") jobs: $(sed -n 's/^BBL_JOB_NAMES=//p' "${lg}" | tail -1))"
     done
@@ -1302,7 +1314,7 @@ next_bbl () {   # next_bbl [tag]: both tags (the hand-off), or one of them (a la
     echo "STAGE C BBL SUBMITTED$([[ "${DRY}" == "1" ]] && echo ' [DRY RUN]'):${LAUNCHED} (${MS_TAG}: multi-start, --promote; ${SC_TAG}: single curve; both --no-tables: render the cost tables locally)"
     if [[ -n "${HELD}" ]]; then echo "!!!!! HELD SWEEPS (release them, or nothing of those tags runs):${HELD}  -> scontrol release <id>"; fi
     echo "STATUS (one line):"
-    echo "  cd ${HERE} && for t in ${tags}; do bash bbl_status.sh --routines \"${BBL_ROUTINES}\" --psi-tag \$t; done"
+    echo "  cd ${HERE} && for t in ${tags}; do bash bbl_status.sh --routines \"${BBL_ROUTINES}\" --psi-tag \$t --stage ${BBL_STAGE}; done"
     echo "NEVER run the 'bbl_run.sh ... --repair' line the BBL tools print for these tags: it skips the fit binding. To repair:"
     echo "  cd ${HERE} && sbatch --parsable -p ${REQ_HANDOFF_PART} -t ${REQ_HANDOFF_TIME} -c ${REQ_HANDOFF_CPUS} --mem=${REQ_HANDOFF_MEM} -J stagec_repair -o logs/stagec_repair_%j.out --wrap \"bash ${SELF} --repair-bbl <tag>\""
 }
@@ -1345,7 +1357,7 @@ repair_bbl () {
     [[ "${t}" == "${MS_TAG}" ]] && flags+=(--promote)
     flags+=(${BBL_EXTRA[@]+"${BBL_EXTRA[@]}"})
     lg="${LOGD}/stagec_bbl_repair${t}_${STAMP}.log"
-    env POLICY_CSV="${POLICY_CSV}" CL_DRYRUN="${DRY}" CL_VERBOSE=1 bash "${HERE}/bbl_run.sh" "${flags[@]}" > "${lg}" 2>&1 \
+    env POLICY_CSV="${POLICY_CSV}" CF_STAGE="${BBL_STAGE}" CL_DRYRUN="${DRY}" CL_VERBOSE=1 bash "${HERE}/bbl_run.sh" "${flags[@]}" > "${lg}" 2>&1 \
         || { tail -30 "${lg}"; die "the repair of ${t} was refused (${lg}); bbl_run.sh withdrew what it had submitted."; }
     solves="$(sed -n 's/^BBL_SOLVE_JOBIDS=//p' "${lg}" | tail -1)"
     say "   repair of E${todo// /, E}: $(sed -n 's/^BBL_JOB_NAMES=//p' "${lg}" | tail -1)"

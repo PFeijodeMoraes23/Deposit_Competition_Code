@@ -5,7 +5,7 @@ BBL Step 1, second half: the STATE TRANSITION PROCESSES.
 
 Bajari, Benkard & Levin (2007) need two first-stage objects before the forward simulation:
 a policy function AND a law of motion for the state. `bbl_polfunc.py` estimates the policy
-(the pricing rule for k=4,5). This file estimates the transitions, which until 2026-09 did
+(the pricing rule for k=4). This file estimates the transitions, which until 2026-09 did
 not exist anywhere in the pipeline: the forward simulation held every state except the
 deposit stock frozen at its starting value, and moved the risk-free rate along a single
 deterministic Focus curve that never even reached the deposit path.

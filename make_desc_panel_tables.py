@@ -240,6 +240,28 @@ def main():
     sum_reg = generate_summary(df_b, ['region'], vars_to_summarize, args.weight_col)
     sum_reg_yr = generate_summary(df_b, ['region', 'year'], vars_to_summarize, args.weight_col)
 
+    # Market characteristics: ONE row per MCA x quarter. The panel has a row per firm in each
+    # market, so a mean over panel rows counts a market once per firm present in it; the market
+    # table collapses to market-quarters first. B rows only: the D firms' single national market
+    # is not an MCA. Every variable below is a market (or national) quantity, constant within an
+    # MCA-quarter; the market-quarter mean is taken, and any variable that is not constant there
+    # is named on the console.
+    print("  -> Market characteristics (one row per MCA-quarter)")
+    MKT_VARS = [v for v in ('gdp_per_capita', 'pop_total', 'fraction_65plus',
+                            'cadunico_families_per1000', 'pix_users_pf_per1000', 'pix_txns_pf',
+                            'connections_per100', 'branches_per1000', 'spread_pp_a1', 'spread_pp_a2')
+                if v in df.columns]
+    mkt_key = ['mca_code', 'year', 'quarter']
+    mkt_cols = MKT_VARS + ([args.weight_col] if args.weight_col and args.weight_col not in MKT_VARS else [])
+    g_mkt = df_b.groupby(mkt_key)[mkt_cols]
+    within = (g_mkt.max() - g_mkt.min()).max()
+    within = within[within > 1e-9]
+    if len(within):
+        print("     [!] not constant within an MCA-quarter (the market-quarter mean is used): "
+              + ", ".join(f"{k} (max range {v:.6g})" for k, v in within.items()))
+    df_mkt = g_mkt.mean().reset_index()
+    sum_mkt = generate_summary(df_mkt, None, MKT_VARS, args.weight_col)
+
     DRAFTS_DIR = _paths.drafts_dir()
     DRAFTS_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -277,8 +299,10 @@ def main():
         # sleepiness / BBL tables (utils/state_transform.DISPLAY: fraction_65plus = (0.01,'pp')).
         'fraction_65plus':            ('Share Aged 65+',              'pp',           0.01),
         'cadunico_families_per1000':  ('CadÚnico Families',           'per 1,000',    None),
-        'pix_users_pf_per1000':       ('PIX Users (PF)',              'per 1,000',    None),
-        'pix_txns_pf':                ('PIX Transactions (PF)',       'Millions',     1e6),
+        # Monthly counts of individuals paying by Pix, summed over the quarter's months
+        # (scrape_pix_municipal.py): payer-months, so a resident paying every month counts three times.
+        'pix_users_pf_per1000':       ('Pix Users (PF)',              'payer-months per 1,000', None),
+        'pix_txns_pf':                ('Pix Transactions (PF)',       'Millions',     1e6),
         'has_ip':                     ('Has IP Rate',                 'Indicator',    None),
         # ANATEL active mobile-telephony accesses, all technologies (scrape_anatel_mobile.py).
         'connections_per100':         ('Mobile Lines',                'per 100 inhabitants', None),
@@ -1104,6 +1128,99 @@ def main():
                 f.write(latex_str)
         print(f"  Saved per-region landscape table: {tex_path.name}")
 
+    def save_market_characteristics(summary_df, mkt):
+        """Market characteristics over MCA-quarters, one column: the market environment (the
+        sleepiness state variables, with population) and the regulated spreads of types 1 and 2.
+        The bank-side variables are in the conglomerate cross-section (make_desc_compressed_tables)."""
+        name      = "Summary_Market_Characteristics"
+        tab_label = f"tab:{name}{weight_str}"
+        summary_df.to_csv(OUTPUT_DIR / f"{name}{weight_str}.csv", index=False)
+        row = summary_df.iloc[0]
+        blocks = (("Market environment", [v for v in MKT_VARS if not v.startswith("spread_pp_a")]),
+                  ("Regulated spreads", [v for v in MKT_VARS if v.startswith("spread_pp_a")]))
+        body = []
+        for b_i, (title, vbs) in enumerate(blocks):
+            vbs = [v for v in vbs if not pd.isna(row.get(f"{v}_Mean"))]
+            if not vbs:
+                continue
+            if b_i:
+                body.append(r"    \addlinespace[0.6em]")
+            body.append(f"    \\multicolumn{{2}}{{l}}{{\\textit{{{title}}}}} \\\\")
+            for i, vb in enumerate(vbs):
+                lbl, unit, _ = LABEL_MAP[vb]
+                body.append(f"    {lbl}" + (f" ({unit})" if unit else "")
+                            + f" & {_fmt_val(row[f'{vb}_Mean'], vb)} \\\\*")
+                body.append(f"    & ({_fmt_val(row[f'{vb}_SD'], vb)}) \\\\")
+                if i < len(vbs) - 1:
+                    body.append(r"    \addlinespace[0.3em]")
+        body.append(r"    \midrule")
+        body.append(f"    Observations & {int(row['N_obs']):,} \\\\")
+
+        table_w  = r"0.70\textwidth"
+        col_spec = "l@{\\hspace{0.35em}}>{\\centering\\arraybackslash}X"
+        full_caption = "Market Characteristics" + (" (Population Weighted)" if args.weight_col
+                                                   else " (Unweighted)")
+        # Coverage: an MCA-quarter exists only where a B firm reports deposits, so MCAs that lose
+        # (or gain) their last branch drop out of (or enter) the panel.
+        n_mca = mkt["mca_code"].nunique()
+        n_q = mkt[["year", "quarter"]].drop_duplicates().shape[0]
+        per_year = mkt.groupby("year").size() / mkt.groupby("year")["quarter"].nunique()
+        coverage = (f"An MCA enters a quarter when at least one B firm reports deposits there; their "
+                    f"number falls from {per_year.iloc[0]:,.0f} in {per_year.index[0]} to "
+                    f"{per_year.iloc[-1]:,.0f} in {per_year.index[-1]} (quarterly averages), so the "
+                    f"{n_mca:,} MCAs average {len(mkt) / n_mca:.0f} of the {n_q} quarters.")
+        notes_text = NOTE_FONT + " " + table_note(
+            f"MCA-quarters, {MIN_YEAR}--{MAX_YEAR}, one observation per market and quarter: means, "
+            "standard deviations in parentheses.",
+            coverage,
+            WEIGHT_NOTE + (" The population row is thus the population of the market the average "
+                           "resident lives in." if args.weight_col else ""),
+            "Spreads: Selic minus the regulated deposit rate (zero on demand deposits, type 1; the "
+            "savings rate on savings deposits, type 2), both compounded to annual rates, in pp; they "
+            "vary across quarters only.",
+            "Pix users: residents who made a Pix payment in a month, summed over the months of the "
+            "quarter, per 1,000 inhabitants, so a resident who pays in every month counts three times. "
+            "Pix rows from 2020Q4.",
+            "Unweighted version available upon request." if args.weight_col else "")
+        lines = [
+            r"\setstretch{1.0}",
+            r"\setlength{\LTleft}{\fill}",
+            r"\setlength{\LTright}{\fill}",
+            r"\begingroup",
+            r"\footnotesize",
+            r"\setlength{\tabcolsep}{6pt}",
+            f"\\begin{{xltabular}}{{{table_w}}}{{{col_spec}}}",
+            f"    \\caption{{{full_caption}}}\\label{{{tab_label}}} \\\\",
+            r"    \toprule",
+            r"    & MCA-quarters \\",
+            r"    \midrule",
+            r"    \endfirsthead",
+            "",
+            r"    \multicolumn{2}{c}{{\bfseries Table \thetable\ continued from previous page}} \\",
+            r"    \toprule",
+            r"    & MCA-quarters \\",
+            r"    \midrule",
+            r"    \endhead",
+            "",
+            r"    \midrule",
+            r"    \multicolumn{2}{r}{\textit{Continued on next page}} \\",
+            r"    \endfoot",
+            "",
+            r"    \bottomrule",
+            f"    \\multicolumn{{2}}{{p{{\\dimexpr{table_w}-2\\tabcolsep\\relax}}}}{{{notes_text}}} \\\\",
+            r"    \endlastfoot",
+            "",
+            *body,
+            "",
+            r"\end{xltabular}",
+            r"\endgroup",
+            r"\doublespacing",
+        ]
+        tex_path = DRAFTS_DIR / f"{name}{weight_str}.tex"
+        with open(tex_path, "w", encoding="utf-8") as f:
+            f.write("\n".join(lines))
+        print(f"  Saved market characteristics table: {tex_path.name}")
+
     # Note: Summary_National (pooled), Summary_National_byYear_B, and
     # Summary_National_byYear_D are intentionally NOT saved as standalone tables.
     # They are fully redundant with (a) the "All" column of Summary_BankType and
@@ -1117,6 +1234,7 @@ def main():
     save_banktype_by_year_combined(sum_nat_yr_b, sum_nat_yr_d)
     save_output(sum_reg,        "Summary_Region",             "Summary Statistics by Region (B-Type Firms)")
     save_region_by_year_panels(sum_reg_yr)
+    save_market_characteristics(sum_mkt, df_mkt)
 
     print("Generating D-Type firm summary...")
     d_firms = df[~df["is_B"]].copy()

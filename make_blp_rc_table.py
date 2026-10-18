@@ -131,7 +131,7 @@ DEMO_LABELS = {
     "gdp_per_capita":            r"GDP \textit{per capita}",
     "fraction_65plus":           r"Fraction 65+",
     "fraction_young":            r"Fraction Young",
-    "pix_users_pf_per1000":      r"PIX Users",
+    "pix_users_pf_per1000":      r"Pix Users",
     "connections_per100":        r"Mobile Lines",
     "frac_4g5g":                 r"4G/5G Share",
     "branches_per1000":          r"Bank Branches",

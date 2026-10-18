@@ -18,8 +18,14 @@ Pipeline
                                                      data/output/bbl; local COST_FWD/)
   bbl_solve.py reads these and minimizes Σ min{g,0}² (eq:17).
 
+CHOICE TYPE: the time deposits, k = `BBL_CHOICE_TYPE` = 4, are the only spread the BBL treats as a
+  firm's choice. The prepaid accounts (k=5) keep their observed spread in every simulation, as the
+  regulated types k∈{1,2} do: before 2025 no prepaid rate is measured and the k=5 spread is the CDI
+  fallback (≈ 0), not a price. A firm with no time deposits therefore never deviates, and its
+  firm-quarters are dead in bbl_solve.py.
+
 DEVIATING STRATEGY σ̃ (`--dev-scheme`, default `grid`):
-  σ̃ shifts the CHOICE spreads (k∈{4,5}) by Δ and holds the perturbed policy for the
+  σ̃ shifts the CHOICE spreads (k=4) by Δ and holds the perturbed policy for the
   whole horizon (a stationary deviation, as in BBL forward simulation). `grid`: Δ takes
   a symmetric grid over [−scale,+scale] excluding 0, so both raising AND lowering are
   probed at graduated magnitudes — the eq:17 objective Σ min{g,0}² is only informative
@@ -27,8 +33,8 @@ DEVIATING STRATEGY σ̃ (`--dev-scheme`, default `grid`):
   tiny symmetric normals (`normal`, legacy) they replace. `--perturb-scale` is the grid
   half-width in annualized-ρ units (ρ=spread_ann/100).
 
-  UNILATERAL: Δ moves ONE firm's own k∈{4,5} rows; every rival holds σ̂. The loop runs one
-  forward simulation per (firm j × Δ) pair (~300 choice firms × S ⇒ shard it), and keeps only
+  UNILATERAL: Δ moves ONE firm's own k=4 rows; every rival holds σ̂. The loop runs one
+  forward simulation per (firm j × Δ) pair (~165 choice firms × S ⇒ shard it), and keeps only
   the deviator's ψ. Rivals' mean utilities stay at equilibrium — their shares still move, via
   the share denominator, which IS the business stealing eq:17 prices. A common industry-wide
   shift is the collusive direction and would certify a false inequality; see the loop comment.
@@ -108,7 +114,8 @@ Usage (write-only here; run only after data is downloaded AND author authorizes)
   julia --project=. --threads=4 bbl_fwd_sim.jl --estim 3 --spec 12 --stage extended --R 300 --time-filter 2024Q4 --shocks 20
 
 VERSION. `BBL_SIM_VERSION` names the forward-simulation design this file implements (the three
-switches, the national φ_t path of the D rows, compounded spreads throughout). Every psi file and
+switches, the national φ_t path of the D rows, compounded spreads throughout, the time deposits as
+the only choice type). Every psi file and
 sidecar records it, and bbl_run.sh / the sweep refuse to add shards to, or repair, a tag whose
 psi record another version or none: cluster_lib.sh carries the same value, which a test checks.
 """
@@ -120,9 +127,11 @@ using DataFrames, Random, Serialization, Statistics
 
 # The design of the simulation (see VERSION in the module docstring). Bump it with any change that
 # moves the psi, and bump cluster_lib.sh's BBL_SIM_VERSION with it.
-const BBL_SIM_VERSION = "2026-09-29.1"
+const BBL_SIM_VERSION = "2026-10-16.1"
 # Every spread is the compounded annual spread (ρ̂ units); recorded next to the version.
 const BBL_SPREAD_UNITS = "compounded"
+# The one deposit type whose spread is a choice in the BBL (see CHOICE TYPE in the docstring).
+const BBL_CHOICE_TYPE = 4
 
 # ==========================================================================
 # Spread scenarios
@@ -159,13 +168,14 @@ _polkey(firm, mca, k::Int, tid) = string(firm, '\x1f', mca, '\x1f', k, '\x1f', t
     _load_policy_map(path) -> Dict{String,Float64}
 
 Parse the BBL Step-1 fitted-policy CSV (`polfunc_fitted.csv` from
-bbl_polfunc.py) into `(firm,mca,k,time) → fitted spread (annual pp)`, keeping only
-k∈{4,5} rows with a finite fitted value. Per firm type we take that type's OWN Step-1 regression: B
-firms → the `_B` column, D firms → the `_D_optB` column (national pop-weighted demographics — the
-best-fitting D spec). The fitted values are COMPOUNDED annual spreads as a fraction, which every row
-must state (`lhs_unit` == `_POLFUNC_LHS_UNIT`, else the file is refused); ×`_POLFUNC_ANN_FRAC_TO_PP`
-takes them to ρ̂'s percentage points. Uses a minimal comma split (no CSV.jl dependency; the file's
-fields never contain commas or quotes).
+bbl_polfunc.py) into `(firm,mca,k,time) → fitted spread (annual pp)`, keeping only the
+k=`BBL_CHOICE_TYPE` rows with a finite fitted value; other deposit types' rows and columns (a CSV
+that also carries `fitted_k5_*`) are ignored. Per firm type we take that type's OWN Step-1
+regression: B firms → the `_B` column, D firms → the `_D_optB` column (national pop-weighted
+demographics — the best-fitting D spec). The fitted values are COMPOUNDED annual spreads as a
+fraction, which every row must state (`lhs_unit` == `_POLFUNC_LHS_UNIT`, else the file is refused);
+×`_POLFUNC_ANN_FRAC_TO_PP` takes them to ρ̂'s percentage points. Uses a minimal comma split (no
+CSV.jl dependency; the file's fields never contain commas or quotes).
 """
 function _load_policy_map(path::String)::Dict{String,Float64}
     lines = readlines(path)
@@ -179,8 +189,7 @@ function _load_policy_map(path::String)::Dict{String,Float64}
         "policy-csv $(basename(path)) has no `lhs_unit` column: it predates the compounded-spread " *
         "policy function, and its fitted values are not in ρ̂'s units. " * regen)
     need = ["CodConglomeradoPrudencial", "mca_code", "deposit_type", "is_B", "time_id",
-            "fitted_k4_Time_CDB_B", "fitted_k4_Time_CDB_D_optB",
-            "fitted_k5_Prepaid_B", "fitted_k5_Prepaid_D_optB"]
+            "fitted_k4_Time_CDB_B", "fitted_k4_Time_CDB_D_optB"]
     for c in need
         haskey(ci, c) || error("policy-csv missing column '$c' in $(basename(path)). " *
                                "Re-run bbl_polfunc.py --spec <spec>.")
@@ -188,7 +197,6 @@ function _load_policy_map(path::String)::Dict{String,Float64}
     i_firm = ci["CodConglomeradoPrudencial"]; i_mca = ci["mca_code"]; i_k = ci["deposit_type"]
     i_isB = ci["is_B"]; i_t = ci["time_id"]; i_u = ci["lhs_unit"]
     i_k4B = ci["fitted_k4_Time_CDB_B"]; i_k4D = ci["fitted_k4_Time_CDB_D_optB"]
-    i_k5B = ci["fitted_k5_Prepaid_B"]; i_k5D = ci["fitted_k5_Prepaid_D_optB"]
     ncol = length(hdr)
     m = Dict{String,Float64}()
     n_bad_unit = 0; first_bad = ""
@@ -202,10 +210,9 @@ function _load_policy_map(path::String)::Dict{String,Float64}
             continue
         end
         k = tryparse(Int, strip(String(f[i_k])))
-        (k === nothing || !(k == 4 || k == 5)) && continue
+        (k === nothing || k != BBL_CHOICE_TYPE) && continue
         isB = strip(String(f[i_isB])) == "True"
-        col = k == 4 ? (isB ? i_k4B : i_k4D) : (isB ? i_k5B : i_k5D)
-        raw = strip(String(f[col]))
+        raw = strip(String(f[isB ? i_k4B : i_k4D]))
         isempty(raw) && continue                       # missing fitted (NaN written blank) → skip
         v = tryparse(Float64, raw)
         (v === nothing || !isfinite(v)) && continue
@@ -216,7 +223,7 @@ function _load_policy_map(path::String)::Dict{String,Float64}
     n_bad_unit == 0 || error(
         "policy-csv $(basename(path)): $n_bad_unit row(s) with lhs_unit ≠ '$(_POLFUNC_LHS_UNIT)' " *
         "(first: '$first_bad'). " * regen)
-    isempty(m) && error("policy-csv parsed 0 usable k∈{4,5} fitted rows: $path")
+    isempty(m) && error("policy-csv parsed 0 usable k=$(BBL_CHOICE_TYPE) fitted rows: $path")
     return m
 end
 
@@ -227,10 +234,11 @@ The equilibrium choice-spread vector σ̂ (annualized pp, ρ = spread_ann/100). 
 spreads ρ̂ — the data IS the equilibrium, so every row passes through unchanged.
 
 If `policy_csv` is given (the BBL Step-1 fitted policy, `polfunc_fitted.csv`), the CHOICE rows
-k∈{4,5} are replaced by the FITTED policy so that Step-2 deviations perturb the smoothed policy rather
-than raw noisy spreads (author decision 2026-07-16 — observed-spread deviations make frac_bind≈0.5
-mechanically, since σ̂ is not then a turning point of the simulated value). Regulated types k∈{1,2}
-always keep their observed (exogenous) spread. Matching is on
+k=`BBL_CHOICE_TYPE` are replaced by the FITTED policy so that Step-2 deviations perturb the smoothed
+policy rather than raw noisy spreads (author decision 2026-07-16 — observed-spread deviations make
+frac_bind≈0.5 mechanically, since σ̂ is not then a turning point of the simulated value). Every other
+type keeps its observed spread: the regulated types k∈{1,2}, and the prepaid accounts k=5, whose
+spread before 2025 is the CDI fallback. Matching is on
 (CodConglomeradoPrudencial × mca_code × deposit_type × time_id); the fitted values are compounded
 annual fractions, ×`_POLFUNC_ANN_FRAC_TO_PP` → ρ̂'s percentage points (see `_load_policy_map`).
 
@@ -261,14 +269,14 @@ function equilibrium_spreads(ctx::CFDemandCtx; policy_csv::Union{Nothing,String}
     mca   = string.(ctx.df.mca_code)
     tid   = string.(ctx.df.time_id)
     kvec  = Int.(coalesce.(ctx.df.deposit_type, 0))
-    endog = (kvec .== 4) .| (kvec .== 5)
-    n_endog = count(endog)
-    n_endog == 0 && error("no k∈{4,5} rows in ctx.df — cannot apply the fitted policy.")
+    choice = kvec .== BBL_CHOICE_TYPE
+    n_choice = count(choice)
+    n_choice == 0 && error("no k=$(BBL_CHOICE_TYPE) rows in ctx.df — cannot apply the fitted policy.")
 
     n_matched = 0; n_adopted = 0
     fit_adopt = Float64[]; obs_adopt = Float64[]
     @inbounds for i in eachindex(σ̂)
-        endog[i] || continue
+        choice[i] || continue
         key = _polkey(firm[i], mca[i], kvec[i], tid[i])
         haskey(polmap, key) || continue                # unmatched → keep observed
         f = polmap[key]
@@ -281,19 +289,19 @@ function equilibrium_spreads(ctx::CFDemandCtx; policy_csv::Union{Nothing,String}
         end                                            # else: implausible fitted → keep observed
     end
 
-    match_rate  = n_matched / n_endog
+    match_rate  = n_matched / n_choice
     n_untrusted = n_matched - n_adopted
-    n_unmatched = n_endog - n_matched
+    n_unmatched = n_choice - n_matched
     log_status("  [BBL] policy-csv ← $(basename(policy_csv)); lhs_unit=$(_POLFUNC_LHS_UNIT): " *
                "fitted compounded annual fraction × $(_POLFUNC_ANN_FRAC_TO_PP) → pp (ρ̂ units)")
-    log_status("  [BBL] k∈{4,5}: $n_endog rows | matched $n_matched " *
+    log_status("  [BBL] k=$(BBL_CHOICE_TYPE): $n_choice rows | matched $n_matched " *
                "($(round(100 * match_rate, digits=1))%) | adopted $n_adopted | " *
                "fell back to observed: $n_unmatched unmatched + $n_untrusted implausible " *
                "(|fit|>$(_POLFUNC_SANE_CAP_PP)pp)")
 
     # ── SANITY GATE (throws on a units or key bug) ──────────────────────────────────────────────
     match_rate < 0.95 && error(
-        "policy-csv match rate $(round(100 * match_rate, digits=1))% < 95% on k∈{4,5} — key mismatch " *
+        "policy-csv match rate $(round(100 * match_rate, digits=1))% < 95% on k=$(BBL_CHOICE_TYPE) — key mismatch " *
         "(matched on CodConglomeradoPrudencial×mca_code×deposit_type×time_id; check the CSV keys).")
     n_adopted == 0 && error(
         "policy-csv: 0 adopted rows (every matched fitted value non-finite or |fit|>$(_POLFUNC_SANE_CAP_PP)pp) — units or upstream-fit bug.")
@@ -312,14 +320,14 @@ function equilibrium_spreads(ctx::CFDemandCtx; policy_csv::Union{Nothing,String}
                "$(round(lvl_slope, digits=4)) (band $(_POLFUNC_LEVEL_BAND)) | median(σ̂/ρ̂ | |ρ̂|≥0.5pp) = " *
                "$(round(med_ratio, digits=4)) (reference only)")
     if n_untrusted > 0
-        @warn "  [BBL] $n_untrusted/$n_endog matched k∈{4,5} fitted spreads exceeded " *
+        @warn "  [BBL] $n_untrusted/$n_choice matched k=$(BBL_CHOICE_TYPE) fitted spreads exceeded " *
               "$(_POLFUNC_SANE_CAP_PP)pp and fell back to observed. Cause: " *
               "bbl_polfunc.py::compute_fitted_values fills missing regressors with 0, " *
               "pinning early-panel rows at the regression intercept. Restrict that prediction to " *
               "complete cases to adopt the fitted policy on those rows too."
     end
     ρcorr < 0.3 && error(
-        "policy-csv sanity: corr(fitted,observed)=$(round(ρcorr, digits=3)) < 0.3 on adopted k∈{4,5} " *
+        "policy-csv sanity: corr(fitted,observed)=$(round(ρcorr, digits=3)) < 0.3 on adopted k=$(BBL_CHOICE_TYPE) " *
         "rows — likely a units or key bug (the fitted policy should track observed spreads).")
     med_gap > med_spread && error(
         "policy-csv sanity: median|fit−obs|=$(round(med_gap, digits=3))pp > median|obs|=" *
@@ -327,7 +335,7 @@ function equilibrium_spreads(ctx::CFDemandCtx; policy_csv::Union{Nothing,String}
         "fraction→pp conversion and lhs_unit).")
     (_POLFUNC_LEVEL_BAND[1] <= lvl_slope <= _POLFUNC_LEVEL_BAND[2]) || error(
         "policy-csv LEVEL: the slope of ρ̂ on the fitted σ̂ through the origin is " *
-        "$(round(lvl_slope, digits=4)), outside $(_POLFUNC_LEVEL_BAND) on $n_adopted adopted k∈{4,5} " *
+        "$(round(lvl_slope, digits=4)), outside $(_POLFUNC_LEVEL_BAND) on $n_adopted adopted k=$(BBL_CHOICE_TYPE) " *
         "rows. The fitted policy and ρ̂ are not in the same units (a simple ×400 annualisation of the " *
         "quarterly spread reads ≈1.08 here); both must be the COMPOUNDED annual spread.")
     return σ̂
@@ -358,17 +366,19 @@ function deviation_shifts(S::Int, scale::Float64, scheme::String, seed::Int)
 end
 
 """
-    firm_endog_rows(ctx, st, firms) -> Vector{Vector{Int}}
+    firm_choice_rows(ctx, st, firms) -> Vector{Vector{Int}}
 
-Row indices of each firm's OWN choice spreads (k∈{4,5}), aligned to `firms`. Needed for the
-unilateral deviation: firm j moves only its own rows, rivals stay at σ̂.
+Row indices of each firm's OWN choice spreads (k=`BBL_CHOICE_TYPE`), aligned to `firms`. Needed for
+the unilateral deviation: firm j moves only its own rows, rivals stay at σ̂. A firm with no such row
+gets an empty list and is not a deviator. The test is on `st.dep_type`, not `st.endog`: the
+counterfactuals share that mask and re-price k∈{4,5}.
 """
-function firm_endog_rows(ctx::CFDemandCtx, st::DepositSimState, firms::Vector{String})
+function firm_choice_rows(ctx::CFDemandCtx, st::DepositSimState, firms::Vector{String})
     key = string.(ctx.df.CodConglomeradoPrudencial)
     idx = Dict(f => j for (j, f) in enumerate(firms))
     rows = [Int[] for _ in 1:length(firms)]
     @inbounds for i in eachindex(key)
-        st.endog[i] || continue
+        st.dep_type[i] == BBL_CHOICE_TYPE || continue
         j = get(idx, key[i], 0)
         j > 0 && push!(rows[j], i)
     end
@@ -378,7 +388,7 @@ end
 """
     apply_shift_firm(σ̂, rows_j, Δ) -> Vector{Float64}
 
-UNILATERAL deviation: add Δ to firm j's own k∈{4,5} spreads only; every rival stays at σ̂.
+UNILATERAL deviation: add Δ to firm j's own k=4 spreads only; every rival stays at σ̂.
 This is the perturbation eq:17 requires (a Nash/MPE no-profitable-deviation condition).
 Shifting every firm at once instead would be a coordinated (collusive) move and must NOT be
 used to build the eq:17 moments — `rows_j` is what keeps the move firm-specific.
@@ -1316,7 +1326,7 @@ function main_cost2()
     # −0.10/pp instead of α≈−0.19/pp), and ω̂ runs to ≈ −0.8/quarter. See counterfactuals_plan.md §9.
     # The @assert below is the cheap standing guard on exactly that.
     # COST: one forward sim per (firm, Δ) instead of per Δ — so shard over the PAIR grid.
-    # With ~300 choice firms × 50 Δ that is ~15k sims: use N_SHARDS ≫ 10 on the cluster.
+    # With ~165 choice firms × 50 Δ that is ~8k sims: use N_SHARDS ≫ 10 on the cluster.
     # `uf` is the UNIQUE firms; `keys_of_firm[j]` the ψ rows that belong to firm uf[j]. Without
     # --multi-start there is exactly one ψ row per firm and this is the identity map (keys_eq is
     # already the sorted unique firm list), so the pair grid, the sharding and every ψ row this
@@ -1337,7 +1347,7 @@ function main_cost2()
     shifts = deviation_shifts(S, a["perturb-scale"], a["dev-scheme"], a["seed"])
     log_status("  [BBL] σ̃ scheme=$(a["dev-scheme"]) scale=$(a["perturb-scale"]) → " *
                "Δ∈[$(round(minimum(shifts), sigdigits=3)), $(round(maximum(shifts), sigdigits=3))]")
-    rows_by_firm = firm_endog_rows(ctx, st, uf)
+    rows_by_firm = firm_choice_rows(ctx, st, uf)
     # No panel row may be claimed by two firms: a shared row would move more than the deviator
     # and the moment would stop being unilateral.
     let seen = falses(length(σ̂))

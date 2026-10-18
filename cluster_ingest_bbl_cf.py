@@ -180,7 +180,7 @@ def classify(kind, member):
     if kind == "bbl":
         # Two families land in cluster_processed: cost_params, which make_bbl_cost_tables.py
         # reads, and polfunc_fitted.* (csv/pkl/json/tex), which the forward simulation takes
-        # as --policy-csv and make_polfunc_tables.py reads. psi_eq / psi_dev shards stay
+        # as --policy-csv and `bbl_polfunc.py --from-pkl` renders. psi_eq / psi_dev shards stay
         # archived -- see the module docstring.
         if base.startswith("cost_params_") and base.endswith(".json"):
             return base, None

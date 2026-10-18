@@ -66,8 +66,8 @@ that leaves the ridge tables' n below the inequality count n_rows of tab_bbl_cos
 counts are printed in the notes so the two reconcile on the page.
 
 DEAD FIRM-QUARTERS. A (firm, start_q) of a multi-start psi is dead when none of its deviations
-moves psi2 beyond round-off (max |dpsi2| <= 1e-12 |psi2_eq|): the firm has no time-deposit or
-prepaid product that quarter, so its rows are rounding noise. bbl_solve.py drops them before the
+moves psi2 beyond round-off (max |dpsi2| <= 1e-12 |psi2_eq|): the firm has no time-deposit
+product that quarter, so its rows are rounding noise. bbl_solve.py drops them before the
 Delta-psi blocks and records the counts; every table follows what the solve did (_null_fq_mode):
 the ratio statistics, rbar_f, the violation share and every n are over the remaining rows, and
 the notes state the count. A multi-start cost_params written before the rule has no record: the
@@ -170,7 +170,9 @@ COST_DIR = _paths.bbl_output_dir() / "cluster_processed"
 
 ROUTINES = tuple(_routines.LINK_ESTS)
 BLOCKS = (("B", r"Brick \& mortar"), ("D", "Digital"))
-SPEC, STAGE = _routines.SPEC12_ID, "extended"
+# STAGE: the demand fit the BBL simulates on (stagec_suite_20261012.sh BBL_STAGE), part of every
+# BBL file name.
+SPEC, STAGE = _routines.SPEC12_ID, "ext1"
 
 # The psi tag that bbl_fwd_sim.jl appends to every artifact of a multi-start run:
 # tag = E{estim}_spec_{spec}_{stage}{suffix}{psi_tag}, psi_tag = "_ms{S}" with S rate paths and
@@ -825,8 +827,8 @@ DEAD_FQ_TOL = 1e-12          # bbl_solve.DEAD_FQ_TOL: |dpsi2| <= tol * |psi2_eq|
 # so the tolerance lives in the .md twins and the code, and the notes give the economic content.
 DEAD_FQ_DEF = r"firm and launch-quarter pairs with no deposits of the deviated type"
 DEAD_FQ_DEF_MD = ("a firm × launch quarter is dead when none of its deviations moves psi_2 by more "
-                  "than 1e-12 |psi_2|, i.e. the firm has no time-deposit (k=4) or prepaid (k=5) "
-                  "product that quarter, so no spread deviation reaches its deposits and its "
+                  "than 1e-12 |psi_2|, i.e. the firm has no time-deposit (k=4) product that "
+                  "quarter, so no spread deviation reaches its deposits and its "
                   "inequalities are rounding noise")
 
 

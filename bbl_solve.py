@@ -52,7 +52,7 @@ alignment, diagnostics and the promotion gate are all organised around it.
 DEAD FIRM-QUARTERS (multi-start psi only).  A (firm, start_q) is dropped before the Δψ blocks
 are built (drop_dead_fq) when none of its deviations moves the deposit-side sum ψ₂ beyond
 round-off: max over its deviations of |Δψ₂| ≤ 1e-12·|ψ₂_eq|.  These are firms with no
-deposit_type 4/5 product in that launch quarter, so no spread deviation reaches their deposits
+deposit_type 4 product in that launch quarter, so no spread deviation reaches their deposits
 and every Δψ of theirs is floating-point noise with g ≈ 0.  They carry ~1e-33 of the criterion,
 so θ̂ does not move, but kept they would count in n_rows and frac_bind and put noise ratios into
 r̄^f and the per-start lines (measured on the _ms1 archive: E3 601 firm-quarters / 30,050 rows,
