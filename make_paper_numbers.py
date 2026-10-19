@@ -1669,6 +1669,8 @@ def collect_descriptives(notes: list):
     collect_mca_count(notes)
     collect_slide_deposit_types(notes)
     collect_slide_motivation(notes)
+    collect_xi_diagnostics(notes)
+    collect_dep_anova(notes)
 
     j = rout / "cluster_imbalance.json"
     if not j.is_file():
@@ -1860,6 +1862,96 @@ def _span(pair) -> dict:
     """A [start, end] pair of the motivation sidecar as start, end and end minus start."""
     a, b = float(pair[0]), float(pair[1])
     return dict(start=a, end=b, change=b - a)
+
+
+def collect_dep_anova(notes: list):
+    """The variance split of B firms' log deposits (tab_dep_anova.tex), from the unrounded
+    sidecar make_dep_anova.py writes with the table."""
+    p = _paths.rout_dir() / "dep_anova.json"
+    if not p.is_file():
+        notes.append(f"{p.name} not found in Rout; run make_dep_anova.py for desc.dep_anova.*.")
+        return
+    sc = json.loads(p.read_text(encoding="utf-8"))
+    src = f"Rout/{p.name} (written by make_dep_anova.py with tab_dep_anova.tex)"
+    base, inter, m = sc["B"]["base"], sc["B"]["int"], sc["_meta"]
+    add("desc.dep_anova.B", "descriptives", "Variance split of B firms' log deposits",
+        dict(**base, int=inter),
+        "Order-free (Shapley) shares of the balance-weighted variance of log deposits of B firms "
+        "(conglomerate x deposit type x MCA x quarter cells, positive balances, types 1, 2, 4, 5) "
+        "among bank, market, product (deposit type) and time (quarter) effects and the rest; int: "
+        "with bank x product and market x product effects added",
+        f"{src} B", "ok", display=", ".join(f"{k} {fmt3s(v)}" for k, v in base.items()),
+        detail=dict(n_cells=m["n_cells"], n_banks=m["n_banks"]))
+
+
+def collect_xi_diagnostics(notes: list):
+    """The demand-residual diagnostics of tab_xi_diagnostics.tex, from the unrounded sidecar
+    make_xi_diagnostics.py writes with the table: the order-free variance split, the persistence
+    slopes, the slopes on incumbency and own branches, per routine and deposit-type set, and the
+    share of B cells (14-B) truncates."""
+    p = _paths.rout_dir() / "xi_diagnostics.json"
+    if not p.is_file():
+        notes.append(f"{p.name} not found in Rout; run make_xi_diagnostics.py for the demand.xi.* "
+                     "and demand.flows.* entries.")
+        return
+    sc = json.loads(p.read_text(encoding="utf-8"))
+    src = f"Rout/{p.name} (written by make_xi_diagnostics.py with tab_xi_diagnostics.tex)"
+    sets = {"k4": "time deposits", "all": "all deposit types"}
+
+    def slope(r):
+        return dict(slope=r["slope"], ci=dict(lo=r["lo"], hi=r["hi"]), p=r["p"])
+
+    for E in _routines.LINK_ESTS:
+        res = sc.get(f"E{E}")
+        if not res:
+            notes.append(f"{p.name} has no E{E}; run make_xi_diagnostics.py --routines "
+                         f"{' '.join(map(str, _routines.LINK_ESTS))}.")
+            continue
+        for s, lab in sets.items():
+            r = res[s]
+            a = r["anova"]
+            add(f"demand.xi.anova.E{E}.{s}", "demand residuals",
+                f"Variance split of xi-hat, {rname(E)}, {lab}", dict(a),
+                "Order-free (Shapley) shares of the balance-weighted variance of the demand "
+                "residual among quarter, bank, bank x type and market effects, and the rest; B cells "
+                "of the demand sample; bank x type is the bank share's gain when bank effects differ "
+                "by deposit type", f"{src} E{E}.{s}.anova", "ok",
+                display=", ".join(f"{k} {fmt3s(v)}" for k, v in a.items()))
+            ar = r["ar1"]
+            add(f"demand.xi.ar1.E{E}.{s}", "demand residuals",
+                f"Persistence of xi-hat, {rname(E)}, {lab}",
+                dict(within=slope(ar["within"]), raw=slope(ar["raw"]), n_cells=ar["n_cells"],
+                     n_pairs=ar["n_pairs"]),
+                "Slope of xi-hat on its value in the previous quarter, balance-weighted: within bank "
+                "x type x market cells (cell-demeaned) and without demeaning; 95% interval from the "
+                "conglomerate wild cluster bootstrap (Webb, 999 draws, bias-corrected); n_cells = "
+                "cells with at least two pairs of consecutive quarters",
+                f"{src} E{E}.{s}.ar1", "ok",
+                display=f"within {fmt3s(ar['within']['slope'])} "
+                        f"{disp_ci(ar['within']['lo'], ar['within']['hi'])}, raw "
+                        f"{fmt3s(ar['raw']['slope'])}")
+            c = r["corr"]
+            add(f"demand.xi.corr.E{E}.{s}", "demand residuals",
+                f"xi-hat on variables outside the model, {rname(E)}, {lab}",
+                {v: dict(**slope(c[v]), r2=c[v]["r2"],
+                         **({"censored": c[v]["censored_share"]} if v == "incumbency" else {}))
+                 for v in ("incumbency", "own_branches")},
+                "One balance-weighted regression per variable with quarter effects: incumbency "
+                "(years since the conglomerate's first ESTBAN branch quarter in the MCA, from "
+                "2013Q1; censored = weighted share of cells whose first quarter is 2013Q1) and own "
+                "branches (log of one plus the lagged ESTBAN branch count); r2 is the partial R2; "
+                "intervals from the conglomerate wild cluster bootstrap",
+                f"{src} E{E}.{s}.corr", "ok",
+                display=", ".join(f"{v} {fmt3s(c[v]['slope'])} R2 {fmt3s(c[v]['r2'])}"
+                                  for v in ("incumbency", "own_branches")))
+        add(f"demand.flows.trunc_share.E{E}", "demand residuals",
+            f"Share of B cells truncated at zero in (14-B), {rname(E)}", res["trunc_share_B"],
+            "B cells (all deposit types) of the specification-12 demand prep whose active balance "
+            "(the balance minus the carried-forward stock) is at most zero, over all B cells "
+            "before the cut; they are not in the demand sample",
+            f"{src} E{E}.trunc_share_B", "ok", display=disp(res["trunc_share_B"], "share"),
+            detail=dict(k4=res["k4"]["trunc_share"], dropped=res["all"]["trunc_dropped"],
+                        cells=res["all"]["trunc_cells"]))
 
 
 def collect_slide_motivation(notes: list):

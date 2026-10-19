@@ -995,7 +995,7 @@ def main():
     ap = argparse.ArgumentParser(description="BBL Step 2 cost solver (V_Main eq:17).")
     ap.add_argument("--estim", type=int, default=6)
     ap.add_argument("--spec", type=int, default=12)
-    ap.add_argument("--stage", type=str, default="extended")
+    ap.add_argument("--stage", type=str, default="ext1")
     ap.add_argument("--suffix", type=str, default="")
     ap.add_argument("--psi-tag", type=str, default="",
                     help="marker the forward sim stamped on the psi filenames for a multi-start "

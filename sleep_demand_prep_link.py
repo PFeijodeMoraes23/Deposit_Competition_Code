@@ -469,7 +469,10 @@ def build_market_size_and_shares(df_spec: pd.DataFrame) -> pd.DataFrame:
     return df_spec
 
 
-def process_specification(spec_name, spec_res, df_base, link):
+def process_specification(spec_name, spec_res, df_base, link, pre_cut=False):
+    """The demand frame of one specification. pre_cut=True returns, instead, every cell before
+    the (14-B) floor and cut, with the native index (`phi_index`) and the active balance before
+    the floor (`active_raw`), for diagnostics; the prep itself never sets it."""
     res_ss = spec_res.get('second_stage')
     if res_ss is None:
         return None, None, spec_name
@@ -501,6 +504,7 @@ def process_specification(spec_name, spec_res, df_base, link):
         df_spec['phi_mt'] += beta * df_spec[sv_name]
 
     df_spec = df_spec.dropna(subset=['phi_mt', 'spread_qoq'])
+    index_native = df_spec['phi_mt'].copy()
     # NATIVE index -> phi via the estimator's link (AMEs are NOT used here).
     df_spec['phi_mt'] = _apply_link(df_spec['phi_mt'], link, res_ss)
 
@@ -519,6 +523,16 @@ def process_specification(spec_name, spec_res, df_base, link):
     df_spec.loc[df_spec['is_B'], 'Dep_Act'] = np.maximum(0.0, val_B[df_spec['is_B']]).astype(float).values
     val_D = df_spec['deposit_balance'] - df_spec['phi_t'] * df_spec['gross_return_lag'] * df_spec['lagged_deposits']
     df_spec.loc[~df_spec['is_B'], 'Dep_Act'] = np.maximum(0.0, val_D[~df_spec['is_B']]).astype(float).values
+    # Cells where the carried-forward stock is at least the balance: (14-B) floors them at zero
+    # and they leave the demand sample below. Counted per firm type and deposit type for the
+    # summary: [cells dropped, cells].
+    if pre_cut:
+        return (df_spec.assign(phi_index=index_native,
+                               active_raw=np.where(df_spec['is_B'], val_B, val_D)),
+                None, spec_name)
+    _trunc = ~(df_spec['Dep_Act'] > 1e-6)
+    active_truncated = {f"{'B' if b else 'D'}_k{int(k)}": [int(g.sum()), int(len(g))]
+                        for (b, k), g in _trunc.groupby([df_spec['is_B'], df_spec['deposit_type']])}
     df_spec = df_spec.dropna(subset=['Dep_Act'])
     df_spec = df_spec[df_spec['Dep_Act'] > 1e-6]
 
@@ -548,6 +562,7 @@ def process_specification(spec_name, spec_res, df_base, link):
         "Mean_phi_mt": float(df_spec['phi_mt'].mean()), "Mean_phi_t": float(df_spec['phi_t'].mean()),
         "B_Cond_Share_NaNs": int(df_spec[df_spec['is_B']]['share_B_cond'].isna().sum()),
         "D_Share_NaNs": int(df_spec[~df_spec['is_B']]['share_D'].isna().sum()),
+        "Active_truncated": active_truncated,
     }
     return df_spec, summary, spec_id
 

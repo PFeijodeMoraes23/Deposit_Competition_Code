@@ -40,7 +40,8 @@ sources (user decision of 2026-10-13).
             the first stage, and the national phi_t path.
   parquet   two demand parquets row by row on (entity_id, time_id): row sets, column sets and
             the largest absolute and relative gap of every common numeric column.
-`prep` runs: C2 the pooled arm on the PRODUCTION fits vs DEMAND_PREP_20261013 (code identity);
+`prep` runs: C2 the pooled arm on the PRODUCTION fits vs the production parquet (--c2-ref,
+default DEMAND_PREP; code identity);
 C3 F1 fed the pooled fit as its type-shift fit vs the pooled arm; C4 F3hi with r_4 = 0 vs the
 pooled arm. Reports go to SWITCH_COST/switch_cost_checks/.
 
@@ -231,7 +232,7 @@ def cmd_prep(a) -> None:
         # C2: the copied prep on the production fits reproduces the production parquet
         rc = _prep(e, "C2_prodfits", "--arm", "pooled", "--fits-dir", str(eo / "DEMAND_PREP"),
                    "--out-dir", str(BASE / "switch_cost_check_prodfits"))
-        bad += _parquet_check(f"C2_est{e}", BASE / "switch_cost_check_prodfits" / f, eo / "DEMAND_PREP_20261013" / f, rc)
+        bad += _parquet_check(f"C2_est{e}", BASE / "switch_cost_check_prodfits" / f, eo / a.c2_ref / f, rc)
         # the pooled arm on the re-estimated pooled fit: the reference of every arm
         if _prep(e, "pooled", "--arm", "pooled"):
             bad.append(f"pooled E{e}")
@@ -630,6 +631,10 @@ def main() -> None:
     for nm in ("fits", "prep"):
         s = sub.add_parser(nm, help=f"run the {nm} for the routines given")
         s.add_argument("--ests", type=int, nargs="+", default=[3, 4], choices=[3, 4])
+        if nm == "prep":
+            s.add_argument("--c2-ref", default="DEMAND_PREP",
+                           help="ESTIMATION_OUTPUT folder of the production parquets C2 compares with; "
+                                "they must come from the production fits in DEMAND_PREP/est{N}")
     c = sub.add_parser("check", help="one identity check")
     csub = c.add_subparsers(dest="what", required=True)
     cf = csub.add_parser("fit")

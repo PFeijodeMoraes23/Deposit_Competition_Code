@@ -60,7 +60,7 @@ case "${BBL_STEP}" in warmup|polfunc|fwd_sim|sweep|solve|tables|report) ;;
     *) echo "Unknown BBL_STEP='${BBL_STEP}' (warmup|polfunc|fwd_sim|sweep|solve|tables|report)" >&2; exit 2 ;;
 esac
 BBL_ROUTINE="${BBL_ROUTINE:-3}"
-BBL_STAGE="${BBL_STAGE:-extended}"
+BBL_STAGE="${BBL_STAGE:-ext1}"
 R="${R:-2000}"; SEED="${SEED:-42}"
 BBL_EXTRA="${BBL_EXTRA:-}"
 # The multi-start artifact tag, exported by bbl_run.sh. Empty for a single-start run, which is

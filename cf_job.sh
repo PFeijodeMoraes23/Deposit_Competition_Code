@@ -56,7 +56,7 @@ case "${CF_STEP}" in
     *) echo "Unknown CF_STEP='${CF_STEP}' — see the header for all thirteen." >&2; exit 2 ;;
 esac
 CF_ROUTINE="${CF_ROUTINE:-3}"
-CF_STAGE="${CF_STAGE:-extended}"
+CF_STAGE="${CF_STAGE:-ext1}"
 R="${R:-2000}"; SEED="${SEED:-42}"
 CF_EXTRA="${CF_EXTRA:-}"
 

@@ -371,7 +371,7 @@ fi
 # own submit time, when its absence actually means something.
 echo "  RC results dir: ${CL_STEP_BLP}"
 for k in ${ROUTINES}; do
-    [[ -f "${CL_STEP_BLP}/blp_results_E${k}_spec_12_${CF_STAGE:-extended}.jls" ]] \
+    [[ -f "${CL_STEP_BLP}/blp_results_E${k}_spec_12_${CF_STAGE:-ext1}.jls" ]] \
         && echo "    E${k} ok" \
         || echo "    E${k} --  (produced by the BLP phase:  bash blp_run.sh --routines ${k})"
 done

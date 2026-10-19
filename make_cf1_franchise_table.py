@@ -126,7 +126,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--estim", type=int, default=6)
     ap.add_argument("--spec", type=int, default=12)
-    ap.add_argument("--stage", type=str, default="extended")
+    ap.add_argument("--stage", type=str, default="ext1")
     ap.add_argument("--suffix", type=str, default="")
     ap.add_argument("--in", type=str, default=None, help="explicit input parquet")
     ap.add_argument("--kind", choices=["gross", "net", "dataonly", "auto"],

@@ -30,7 +30,7 @@ set -uo pipefail
 CL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "${CL_DIR}/cluster_lib.sh"
 
-TAG=""; TAG_SET=0; STAGE="${CF_STAGE:-extended}"; LAUNCH_TAG="${LAUNCH_TAG:-_ms2}"; LROUTINES="3 4"
+TAG=""; TAG_SET=0; STAGE="${CF_STAGE:-ext1}"; LAUNCH_TAG="${LAUNCH_TAG:-_ms2}"; LROUTINES="3 4"
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --psi-tag)    TAG="$2"; TAG_SET=1; shift ;;

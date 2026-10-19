@@ -26,7 +26,7 @@ set -uo pipefail
 CL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "${CL_DIR}/cluster_lib.sh"
 
-ROUTINES=""; STAGE="${CF_STAGE:-extended}"; TAG=""; TAG_SET=0; SHARED=0; DRY=0
+ROUTINES=""; STAGE="${CF_STAGE:-ext1}"; TAG=""; TAG_SET=0; SHARED=0; DRY=0
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --routines)    ROUTINES="$2"; shift ;;

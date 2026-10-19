@@ -173,7 +173,7 @@ done
 ROUTINES_SRC=default
 if [[ -n "${ROUTINES+set}" ]]; then ROUTINES_SRC=env; fi
 ROUTINES="${ROUTINES:-${CL_ROUTINES_CF}}"
-CF_STAGE="${CF_STAGE:-extended}"
+CF_STAGE="${CF_STAGE:-ext1}"
 R="${R:-2000}"; SEED="${SEED:-42}"
 SHOCKS="${SHOCKS:-50}"; N_SHARDS="${N_SHARDS:-100}"
 PERTURB_SCALE="${PERTURB_SCALE:-2.0}"; DEV_SCHEME="${DEV_SCHEME:-grid}"

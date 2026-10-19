@@ -143,7 +143,7 @@ function _parse_cf3_args()
     @add_arg_table! s begin
         "--estim";       arg_type = Int;     default = 6
         "--spec";        arg_type = Int;     default = 12
-        "--stage";       arg_type = String;  default = "extended"
+        "--stage";       arg_type = String;  default = "ext1"
         "--R";           arg_type = Int;     default = 2000
         "--seed";        arg_type = Int;     default = 42
         "--hpc";         action   = :store_true

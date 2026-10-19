@@ -51,7 +51,7 @@ set -e
 ROUTINES_SRC=default
 if [[ -n "${ROUTINES+set}" ]]; then ROUTINES_SRC=env; fi
 ROUTINES="${ROUTINES:-${CL_ROUTINES_CF}}"
-CF_STAGE="${CF_STAGE:-extended}"
+CF_STAGE="${CF_STAGE:-ext1}"
 R="${R:-2000}"; SEED="${SEED:-42}"
 # beta is the one the cost parameters were estimated under: BBL_BETA from bbl_discount.env unless
 # BETA is set (cl_bbl_discount_fill, after the flags). HORIZON is the counterfactuals' OWN

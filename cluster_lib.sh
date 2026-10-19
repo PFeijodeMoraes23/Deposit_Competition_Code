@@ -598,10 +598,10 @@ cl_need_sleep_link () {   # cl_need_sleep_link <routine>
 # blp_dir(out_dir) names in cf_demand_eval.jl's _result_path, in the exact place
 # the RC job writes it — the ladder persists its results in the blp step folder and nothing
 # stages or renames them afterwards, so preflight and run resolve one path by construction.
-# CF_STAGE picks which rung (the CF/BBL default is the deepest, `extended`).
+# CF_STAGE picks which rung (the CF/BBL default is `ext1`, the rung with joint standard errors).
 cl_need_rc_jls () { # cl_need_rc_jls <routine>
-    cl_need_file "${CL_STEP_BLP}/blp_results_E$1_spec_12_${CF_STAGE:-extended}.jls" \
-        "RC result E$1 (stage ${CF_STAGE:-extended})" \
+    cl_need_file "${CL_STEP_BLP}/blp_results_E$1_spec_12_${CF_STAGE:-ext1}.jls" \
+        "RC result E$1 (stage ${CF_STAGE:-ext1})" \
         "run the RC ladder first:  bash blp_run.sh --routines $1"
 }
 cl_need_costs () {  # cl_need_costs <routine> <stage>
