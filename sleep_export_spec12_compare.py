@@ -632,9 +632,9 @@ def build_latex_table(results_dict, order_keys, target_vars, out_path, title="",
 
     row_nobs = ["Observations"]
     row_r2 = ["$R^2$"]
-    # The two F rows are first-stage rows: the fit's own F over every slope, and under it the
-    # effective F of the excluded instruments from sleep_export_link.eff_f_cell, which is blank
-    # until the weak-instrument battery has a calculator.
+    # The F rows are first-stage rows: the fit's own F over every slope, and under it the
+    # effective F of the excluded instruments from sleep_export_link.eff_f_cell, printed only
+    # when sleep_notes.SHOW_F_EFF is on.
     row_fstat = [_notes.ROW_F_ALL]
     row_efff = [_notes.ROW_F_EFF]
     row_cluster = ["Clusters ($G$)"]
@@ -694,7 +694,7 @@ def build_latex_table(results_dict, order_keys, target_vars, out_path, title="",
     tex.append(" & ".join(row_r2) + r" \\")
     if is_first_stage:
         tex.append(" & ".join(row_fstat) + r" \\")
-        tex.append(" & ".join(row_efff) + r" \\")
+        tex += _notes.f_eff_rows(row_efff[1:], indent="")
     tex.append(" & ".join(row_cluster) + r" \\")
 
     tex.append(r"\end{xltabular}")
@@ -838,7 +838,9 @@ def build_latex_table_landscape(results_dict, order_keys, target_vars, out_path,
         row_efff.append(_eff_f_cell(EST_OF_KEY.get(col), _routines.SPEC12, math=False)
                         if first_stage else "")
         row_cl.append(clusters)
-    diag_rows = [row_nobs, row_r2] + ([row_fstat, row_efff] if first_stage else []) + [row_cl]
+    diag_rows = ([row_nobs, row_r2]
+                 + ([row_fstat] + ([row_efff] if _notes.SHOW_F_EFF else []) if first_stage else [])
+                 + [row_cl])
     for r_ in diag_rows:
         tex.append(" & ".join(r_) + r" \\")
 

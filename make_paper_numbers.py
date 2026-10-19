@@ -57,7 +57,7 @@ found is a MISMATCH, listed in both outputs, and makes the script exit with stat
 STATUS of an entry: ok; pending-_ms983 (a BBL number of a run other than the target multi-start
 run); pending-_sc983 (T11's single-curve column from a run other than the target single-curve
 run); pending-phi-summary (the phi path summary is not written yet); pending-blp-ext1 (every
-BLP-derived number, until --blp-final); dropped.
+BLP-derived number, with --blp-pending); dropped.
 
 MACROS. Every run also writes paper_numbers_macros.tex, to PAPER_NUMBERS and to Drafts next to the
 tables, so the paper quotes a number as \pn{<id>[.<leaf>]} (\input the file in the preamble,
@@ -115,9 +115,9 @@ OUT_DIR = EST_OUT / "PAPER_NUMBERS"
 LOGIT_SUMMARY = _paths.blp_results_dir() / "logit" / "logit_summary_spec_12.json"
 BLP_STAGE = "ext1"                      # Table 6 (make_blp_demand_comparison_table STAGE_SPECS)
 # Status of every BLP-derived entry (Table 6 rows, the BLP price coefficient, elasticities and
-# ratios). Pending while the ext1 fit is re-estimated from several starting points: the 10-16 run's
-# ext1 sits at rc4's solution, alpha about 0. --blp-final makes them ok.
-BLP_STATUS = "pending-blp-ext1"
+# ratios): ok for the adopted ext1 fits (the best-Q multi-start solutions of 2026-10-18).
+# --blp-pending marks them pending-blp-ext1 while a new ext1 fit is being estimated.
+BLP_STATUS = "ok"
 LOGIT_SUBMODEL = "full_dtype"           # Table 5 (blp_logit.jl COMPARISON_SUBMODEL)
 D6_DIR = EST_OUT / "DIAG_PHI_SEPARATION"
 ROUTINES = tuple(_routines.LINK_ESTS)   # E3, E4
@@ -2630,14 +2630,14 @@ def main():
                     help="skip paper_numbers_macros.tex (written by default to PAPER_NUMBERS and "
                          "to Drafts, next to the tables V_Main inputs)")
     ap.add_argument("--tex", action="store_true", help=argparse.SUPPRESS)
-    ap.add_argument("--blp-final", action="store_true",
-                    help="mark the BLP-derived entries ok (default: pending-blp-ext1, see BLP_STATUS)")
+    ap.add_argument("--blp-pending", action="store_true",
+                    help="mark the BLP-derived entries pending-blp-ext1 (default: ok, see BLP_STATUS)")
     a = ap.parse_args()
     global TABLES_DIR, BLP_STATUS
     if a.tables_dir:
         TABLES_DIR = pathlib.Path(a.tables_dir)
-    if a.blp_final:
-        BLP_STATUS = "ok"
+    if a.blp_pending:
+        BLP_STATUS = "pending-blp-ext1"
 
     notes: list = []
     path, why = bbl_file(a.bbl_tag, a.bbl_target)

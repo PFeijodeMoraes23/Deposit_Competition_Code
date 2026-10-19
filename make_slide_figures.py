@@ -106,7 +106,7 @@ MINUS = "−"
 
 VISUALS = ("panels", "timedep", "savings", "ame", "coef", "wedge", "violations", "flow", "roadmap",
            "table", "band", "pricevol", "reprice", "dpremium", "entrygap", "relprice", "anova",
-           "motivtables", "paper", "slidesize")
+           "motivtables", "paper", "slidesize", "slidesize2", "slidesize3")
 
 # Paper copies of four motivation charts, for a 2x2 figure of 0.49\textwidth panels in V_Main
 # (12pt, letterpaper, 1in margins: 0.49 * 6.5in = 3.19in). As with fig_entry_dynamics_a/b, each
@@ -144,6 +144,32 @@ SLIDE_STEMS = {
 SLIDE_FS = 1.18
 SLIDE_PT = dict(title=10.5, label=10.0, tick=9.5)
 SLIDE = False
+# Second deck layout (`_slide2`, `--only slidesize2`): the same fonts in the room a slide leaves
+# beside one or two lines of text (at most 10.8 x 5.0 cm). Layout changes, set where each chart
+# is drawn: the cross-section keeps only the fitted line in its legend, inside the plot; the
+# entry chart hangs its legend to the right; the D-premium panels sit side by side; and
+# Figure 1's panels (a), (c), (d) form one strip.
+SLIDE2_STEMS = {
+    "fig_slide_relprice_share_xs_pp": ("fig_slide_relprice_share_xs_pp_slide2",
+                                       (6.2 / 2.54, 5.0 / 2.54)),
+    "fig_slide_motiv_entry_by_gap_bankboot": ("fig_slide_motiv_entry_by_gap_bankboot_slide2",
+                                              (10.8 / 2.54, 5.0 / 2.54)),
+    "fig_slide_motiv_dfirm_premium": ("fig_slide_motiv_dfirm_premium_slide2",
+                                      (10.8 / 2.54, 4.6 / 2.54)),
+    "fig_market_structure_by_year": ("fig_market_structure_by_year_slide2",
+                                     (10.8 / 2.54, 4.4 / 2.54)),
+}
+SLIDE2 = False
+# Third deck layout (`--only slidesize3`): Figure 1's panels (a), (c), (d) one per file, each
+# 8.0 x 4.6 cm, for a slide that shows one panel per click beside its bullet.
+SLIDE3_STEMS = {
+    "fig_market_structure_hhi": ("fig_market_structure_hhi_slide", (8.0 / 2.54, 4.6 / 2.54)),
+    "fig_market_structure_dcount": ("fig_market_structure_dcount_slide",
+                                    (8.0 / 2.54, 4.6 / 2.54)),
+    "fig_market_structure_bmca": ("fig_market_structure_bmca_slide", (8.0 / 2.54, 4.6 / 2.54)),
+}
+SLIDE3 = False
+SLIDE_MIN_PT = 9.0   # no text in a deck copy prints smaller
 
 
 def paper_figures(out: pathlib.Path, png: bool):
@@ -173,6 +199,95 @@ def slide_size_figures(out: pathlib.Path, png: bool):
         draw(out, png)
 
 
+def slide2_figures(out: pathlib.Path, png: bool):
+    """The `_slide2` layouts (SLIDE2_STEMS), at the `_slide` fonts. Same data, samples,
+    weights, intervals and colours as the charts they copy."""
+    global SLIDE_FIGSIZE, FS, PAPER, SLIDE, SLIDE2, MARK
+    FS, PAPER, SLIDE, SLIDE2 = SLIDE_FS, False, True, True
+    for draw, stem in ((relprice_charts, "fig_slide_relprice_share_xs_pp"),
+                       (entry_gap_chart, "fig_slide_motiv_entry_by_gap_bankboot"),
+                       (dpremium_chart, "fig_slide_motiv_dfirm_premium"),
+                       (market_structure_strip, "fig_market_structure_by_year")):
+        SLIDE_FIGSIZE = SLIDE2_STEMS[stem][1]
+        MARK = (SLIDE_FIGSIZE[0] * SLIDE_FIGSIZE[1]) / (5.2 * 3.3)
+        draw(out, png)
+    SLIDE2 = False
+
+
+def market_structure_strip(out: pathlib.Path, png: bool):
+    """Figure 1's panels (a), (c) and (d) side by side, with short titles, years at the ends
+    and the middle of the window, and the HHI legend inside its panel."""
+    S = mdt.ms_series(pd.read_csv(T2_CSV))
+    # The HHI panel is a little wider: its legend lives inside it.
+    fig, axes = plt.subplots(1, 3, figsize=SLIDE_FIGSIZE,
+                             gridspec_kw={"width_ratios": [1.25, 1, 1]})
+    titles = {"a": "Deposit HHI", "c": "Digital firms", "d": "B firms per MCA"}
+    yrs = S["years"]
+    ticks = [yrs[0], yrs[len(yrs) // 2], yrs[-1]]
+    for ax, key in zip(axes, ("a", "c", "d")):
+        mdt.MS_PANELS[key](ax, S, fs=FS, lettered=False, pix_label=key == "a")
+        ax.set_title(titles[key], loc="left", fontsize=SLIDE_PT["title"], color="#111111")
+        ax.set_xticks(ticks)
+        # Three year labels touch at this width: the ends are labelled, 2020 is the Pix rule.
+        ax.set_xticklabels([str(int(ticks[0])), "", str(int(ticks[-1]))])
+        # A third of the slide holds the plot only: the titles name each series, so the y
+        # labels go, and so do the end-of-line values (the y axis gives the levels).
+        ax.set_ylabel("")
+        for t in list(ax.texts):
+            if isinstance(t, matplotlib.text.Annotation):
+                t.remove()
+    a = axes[0]
+    # The threshold names do not fit either; the dotted rules stay at their levels.
+    for t in list(a.texts):
+        if t.get_text().startswith(("2,500", "1,500")):
+            t.remove()
+    # Room under both lines for the legend, inside the panel.
+    lo_, hi_ = a.get_ylim()
+    a.set_ylim(lo_ - 0.55 * (hi_ - lo_), hi_)
+    handles, _ = a.get_legend_handles_labels()
+    leg = a.legend(handles, ["B, local", "B+D, national"], fontsize=SLIDE_MIN_PT,
+                   loc="lower left", frameon=False, handlelength=0.8, handletextpad=0.3,
+                   borderaxespad=0.2, labelspacing=0.2)
+    # It sits inside the panel, so the layout should not reserve room for it beside the plot.
+    leg.set_in_layout(False)
+    _save(fig, out, "fig_market_structure_by_year", png)
+
+
+def slide3_figures(out: pathlib.Path, png: bool):
+    """The single market-structure panels (SLIDE3_STEMS), at the `_slide` fonts."""
+    global SLIDE_FIGSIZE, FS, PAPER, SLIDE, SLIDE3, MARK
+    FS, PAPER, SLIDE, SLIDE3 = SLIDE_FS, False, True, True
+    SLIDE_FIGSIZE = SLIDE3_STEMS["fig_market_structure_hhi"][1]
+    MARK = (SLIDE_FIGSIZE[0] * SLIDE_FIGSIZE[1]) / (5.2 * 3.3)
+    S = mdt.ms_series(pd.read_csv(T2_CSV))
+    for key, stem, title in (("a", "fig_market_structure_hhi", "Deposit concentration (HHI)"),
+                             ("c", "fig_market_structure_dcount", "Digital (D) firms, national"),
+                             ("d", "fig_market_structure_bmca", "B firms per MCA (mean)")):
+        fig, ax = plt.subplots(figsize=SLIDE_FIGSIZE)
+        # Pix label: at the top of the rule, except in the HHI panel, where it sits in the gap
+        # between the two lines (the top holds the B line and the 2,500 rule).
+        mdt.MS_PANELS[key](ax, S, fs=FS, lettered=False, pix_label=0.72 if key == "a" else True)
+        ax.set_title(title, loc="left", fontsize=SLIDE_PT["title"], color="#111111")
+        mdt.ms_year_axis(ax, S["years"], fs=FS)
+        ax.set_xticks(S["years"][::2])
+        ax.set_xticklabels([str(int(y)) for y in S["years"][::2]])
+        ax.set_xlabel("")
+        if key == "a":
+            # Short names for the two thresholds, and room under both lines for the legend.
+            for t in ax.texts:
+                if t.get_text().startswith("2,500"):
+                    t.set_text("2,500 high")
+                elif t.get_text().startswith("1,500"):
+                    t.set_text("1,500 moderate")
+            lo_, hi_ = ax.get_ylim()
+            ax.set_ylim(lo_ - 0.5 * (hi_ - lo_), hi_)
+            handles, labels = ax.get_legend_handles_labels()
+            ax.legend(handles, labels, fontsize=8.5 * FS, loc="lower left", frameon=False,
+                      handlelength=1.2, handletextpad=0.4, borderaxespad=0.2, labelspacing=0.2)
+        _save(fig, out, stem, png)
+    SLIDE3 = False
+
+
 def _slide_text(fig, target):
     """Deck copies: titles, axis labels and ticks at SLIDE_PT; every title, x label or legend
     entry wider than the slot, and every y label taller than about half of it, broken at the
@@ -190,16 +305,21 @@ def _slide_text(fig, target):
             c = min(cuts, key=lambda i: abs(i - len(s) / 2))
             t.set_text(s[:c] + "\n" + s[c + 1:])
 
+    # Panels side by side share the width, panels stacked share the height.
+    n_cols = len({round(ax.get_position().x0, 2) for ax in fig.axes})
+    n_rows = len({round(ax.get_position().y0, 2) for ax in fig.axes})
     for ax in fig.axes:
         # The charts title with loc="left", which matplotlib keeps apart from ax.title. A left
         # title runs from the axes' left edge, so it gets the slot less the y-axis margin.
         for t in (ax.title, ax._left_title, ax._right_title):
-            fit(t, SLIDE_PT["title"], 0.85 * width_in)
-        fit(ax.xaxis.label, SLIDE_PT["label"], 0.9 * width_in)
-        fit(ax.yaxis.label, SLIDE_PT["label"], 0.5 * height_in / max(len(fig.axes), 1),
-            vertical=True)
+            fit(t, SLIDE_PT["title"], 0.85 * width_in / n_cols)
+        fit(ax.xaxis.label, SLIDE_PT["label"], 0.9 * width_in / n_cols)
+        fit(ax.yaxis.label, SLIDE_PT["label"], 0.5 * height_in / n_rows, vertical=True)
         ax.tick_params(labelsize=SLIDE_PT["tick"])
     _wrap_legend(fig, width=int(width_in * 72 / (0.52 * 8.5 * FS)))
+    for t in fig.findobj(matplotlib.text.Text):
+        if t.get_text() and t.get_fontsize() < SLIDE_MIN_PT:
+            t.set_fontsize(SLIDE_MIN_PT)
 
 
 def _clear_legends(fig, gap_pt: float = 4.0):
@@ -218,11 +338,12 @@ def _clear_legends(fig, gap_pt: float = 4.0):
 def _save(fig, out: pathlib.Path, stem: str, png: bool):
     pad = 0.1
     if PAPER or SLIDE:
-        stems = PAPER_STEMS if PAPER else {k: v[0] for k, v in SLIDE_STEMS.items()}
+        table = SLIDE3_STEMS if SLIDE3 else SLIDE2_STEMS if SLIDE2 else SLIDE_STEMS
+        stems = PAPER_STEMS if PAPER else {k: v[0] for k, v in table.items()}
         if stem not in stems:
             plt.close(fig)
             return
-        target = PAPER_PRINT if PAPER else SLIDE_STEMS[stem][1]
+        target = PAPER_PRINT if PAPER else table[stem][1]
         stem = stems[stem]
         # The tight crop adds the legend and end labels outside the axes. Shrink the figure by
         # that excess (text keeps its size) until the saved file is exactly `target` inches,
@@ -1070,7 +1191,11 @@ def _shade(ax, q, i0, i1, label=True):
 def _quarter_axis(ax):
     years = np.arange(MIN_YEAR, MAX_YEAR + 1, dtype=float)
     mdt.ms_year_axis(ax, years, fs=FS)
-    if PAPER or SLIDE:   # nine year labels do not fit a ~3in panel: label every other year
+    if SLIDE2:   # half a slide's width per panel: the window's ends and middle
+        ticks = years[[0, len(years) // 2, -1]]
+        ax.set_xticks(ticks)
+        ax.set_xticklabels([str(int(y)) for y in ticks])
+    elif PAPER or SLIDE:   # nine year labels do not fit a ~3in panel: label every other year
         ax.set_xticks(years[::2])
         ax.set_xticklabels([str(int(y)) for y in years[::2]])
 
@@ -1457,8 +1582,11 @@ def dpremium_chart(out: pathlib.Path, png: bool):
     avg = average_ci(q, parts)
     share = q["d_share_time"].to_numpy(dtype=float)
     kw = dict(linewidth=2, solid_capstyle="round", zorder=3, color=mdt.D_COLOR)
-    fig, (a1, a2) = plt.subplots(2, 1, figsize=(SLIDE_FIGSIZE[0], SLIDE_FIGSIZE[1] * 1.25),
-                                 sharex=True)
+    if SLIDE2:   # a full-width, short slot: the two panels side by side
+        fig, (a1, a2) = plt.subplots(1, 2, figsize=SLIDE_FIGSIZE)
+    else:
+        fig, (a1, a2) = plt.subplots(2, 1, figsize=(SLIDE_FIGSIZE[0], SLIDE_FIGSIZE[1] * 1.25),
+                                     sharex=True)
     a1.axhline(0, color="#BFBFBA", lw=0.8, zorder=1)
     a1.fill_between(x, ci["lo"], ci["hi"], color=mdt.D_COLOR, alpha=0.16, linewidth=0, zorder=2,
                     label="95% interval")
@@ -1477,6 +1605,10 @@ def dpremium_chart(out: pathlib.Path, png: bool):
                  pix_x=PIX_X_QUARTERLY)
     a2.set_ylim(bottom=0)
     _quarter_axis(a2)
+    if SLIDE2:   # side by side, each panel carries its own year axis
+        _quarter_axis(a1)
+        a1.set_xlabel("")
+        a2.set_xlabel("")
     fig.tight_layout(h_pad=1.0)
     _save(fig, out, "fig_slide_motiv_dfirm_premium", png)
 
@@ -1669,7 +1801,9 @@ def entry_gap_chart(out: pathlib.Path, png: bool):
                      "rest": f"Pays < {ENTRY_GAP_PP:.0f} pp more"}[k]
             ax.plot(h, med, color=color, linestyle=ls, linewidth=2, marker="o", markersize=4,
                     markeredgecolor="white", markeredgewidth=0.8, zorder=3,
-                    label=(f"{short}: {len(ev_rows)} entries, {ev_rows['congl'].nunique()} banks"
+                    label=(f"{short}:\n{len(ev_rows)} entries, {ev_rows['congl'].nunique()} banks"
+                           if SLIDE2 else
+                           f"{short}: {len(ev_rows)} entries, {ev_rows['congl'].nunique()} banks"
                            if SLIDE else
                            f"{label} (n = {len(ev_rows)}, {ev_rows['congl'].nunique()} banks)"))
             bankboot.setdefault(norm_key, {})[k] = dict(
@@ -1679,7 +1813,12 @@ def entry_gap_chart(out: pathlib.Path, png: bool):
         ax.set_xticks(range(0, H + 1, 2))
         if norm_key == "level":
             ax.set_ylim(bottom=0)
-        _legend_under(ax)
+        if SLIDE2:   # a full-width slide: the legend beside the plot, entries stacked
+            ax.legend(fontsize=8.5 * FS, loc="center left", bbox_to_anchor=(1.02, 0.5),
+                      frameon=False, handlelength=1.4, handletextpad=0.4, labelspacing=0.8,
+                      borderaxespad=0.0)
+        else:
+            _legend_under(ax)
         _save(fig, out, stem, png)
 
     def at_h(p, hs=(4, 8, 12)):
@@ -2081,12 +2220,15 @@ def relprice_charts(out: pathlib.Path, png: bool):
         # The deck copy breaks both entries by hand to fit half the slide's width.
         ax.scatter(d[key], d["dshare"], s=MARK * (8 + 300 * d["size"] / d["size"].max()),
                    color=mdt.B_COLOR, alpha=0.55, edgecolor="white", linewidth=0.6, zorder=3,
-                   label=(f"{r['n']} B banks,\ndot size = time deposits" if SLIDE else
+                   label=("_nolegend_" if SLIDE2 else
+                          f"{r['n']} B banks,\ndot size = time deposits" if SLIDE else
                           f"{r['n']} B banks, dot size = time deposits"))
         xm, ym = np.average(d[key], weights=d["size"]), np.average(d["dshare"], weights=d["size"])
         xx = np.array([d[key].min(), d[key].max()])
         ax.plot(xx, ym + r["slope"] * (xx - xm), color=mdt.NATL_COLOR, lw=1.6, zorder=4,
-                label=(f"Weighted slope {_plain(r['slope'], 3)}{r['stars']},\n95% CI "
+                label=(f"Slope {_plain(r['slope'], 2)},\n95% CI "
+                       f"[{_plain(r['lo'], 2)}, {_plain(r['hi'], 2)}]" if SLIDE2 else
+                       f"Weighted slope {_plain(r['slope'], 3)}{r['stars']},\n95% CI "
                        f"[{_plain(r['lo'], 3)}, {_plain(r['hi'], 3)}]" if SLIDE else
                        f"Weighted slope {_plain(r['slope'], 3)}{r['stars']}, 95% interval "
                        f"[{_plain(r['lo'], 3)}, {_plain(r['hi'], 3)}]"))
@@ -2097,7 +2239,18 @@ def relprice_charts(out: pathlib.Path, png: bool):
                       "Share growth (% a year)",
                       f"Pays less than the B average ({unit})" if SLIDE and key == "pp"
                       else f"Average gap to the B average ({unit})")
-        _legend_under(ax)
+        if SLIDE2:
+            # Headroom at the top, so the legend sits above every bank's dot.
+            lo_, hi_ = ax.get_ylim()
+            ax.set_ylim(lo_, hi_ + 0.45 * (hi_ - lo_))
+            # 9 pt (the deck copies' floor) and a short swatch keep the entry inside the plot.
+            ax.legend(fontsize=SLIDE_MIN_PT, loc="upper right", frameon=False,
+                      handlelength=0.8, handletextpad=0.3, borderaxespad=0.2)
+            # One line of title is wider than the plot: it starts left of the axes, over the
+            # y-axis label.
+            ax._left_title.set_x(-0.32)
+        else:
+            _legend_under(ax)
         _save(fig, out, f"fig_slide_relprice_share_xs_{key}", png)
         shr[f"xs_{key}"] = {k: v for k, v in r.items() if k not in ("xr", "yr", "w")}
     # Panel: gap at t against the log change in share from t to t + 4, bank and quarter effects.
@@ -2618,6 +2771,10 @@ def main():
         paper_figures(args.out, args.png)
     if "slidesize" in todo:
         slide_size_figures(args.out, args.png)
+    if "slidesize2" in todo:
+        slide2_figures(args.out, args.png)
+    if "slidesize3" in todo:
+        slide3_figures(args.out, args.png)
 
 
 if __name__ == "__main__":

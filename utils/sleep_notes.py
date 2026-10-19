@@ -96,15 +96,28 @@ def note_open(bands=True, two_stage: str = "") -> str:
             r"$p<0.1/0.05/0.01$; both conglomerate-clustered; " + _NATIONAL + ". ")
 
 
-# The two F rows of every first-stage table, and the sentence that says what each one is. The
+# The F rows of every first-stage table, and the sentence that says what each one is. The
 # labels live beside the sentence because the sentence points at them ("Effective $F$", "the
 # row above it"): ROW_F_ALL is the fit's own F, ROW_F_EFF the effective F of the excluded
-# instruments (blank until the weak-instrument battery has a calculator).
+# instruments. The effective F belongs to the weak-instrument battery, which has no calculator,
+# so SHOW_F_EFF is False: no table prints that row, and the note describes the F row alone.
 ROW_F_ALL = r"$F$, all slopes"
 ROW_F_EFF = r"Effective $F$ (excluded instruments)"
-_FIRST_STAGE_F = (r"Effective $F$ is the weak-instrument statistic for the excluded instruments "
-                  r"\parencite{oleapflueger2013}, conglomerate-clustered; the row above it is the "
-                  r"joint $F$ of all slopes, instruments and state controls together. ")
+SHOW_F_EFF = False
+_FIRST_STAGE_F = ((r"Effective $F$ is the weak-instrument statistic for the excluded instruments "
+                   r"\parencite{oleapflueger2013}, conglomerate-clustered; the row above it is the "
+                   r"joint $F$ of all slopes, instruments and state controls together. ")
+                  if SHOW_F_EFF else
+                  (rf"{ROW_F_ALL}: the joint $F$ of all slopes, instruments and state controls "
+                   r"together. "))
+
+
+def f_eff_rows(cells, indent: str = "    ") -> list:
+    """The effective-F row of a first-stage table as a one-line list, or [] while SHOW_F_EFF is
+    False; `cells` are the column cells after the label."""
+    if not SHOW_F_EFF:
+        return []
+    return [f"{indent}{ROW_F_EFF} & " + " & ".join(cells) + r" \\"]
 
 
 def first_stage_note(pooled: bool = True, extra: str = "") -> str:

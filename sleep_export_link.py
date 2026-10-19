@@ -282,7 +282,7 @@ def build_first_stage_table(results_dict, est_num):
         lines += [r"    \midrule", "    Observations & " + " & ".join(obs_l) + r" \\",
                   "    $R^2$ & " + " & ".join(rsq_l) + r" \\",
                   f"    {_notes.ROW_F_ALL} & " + " & ".join(fstat_l) + r" \\",
-                  f"    {_notes.ROW_F_EFF} & " + " & ".join(efff_l) + r" \\",
+                  *_notes.f_eff_rows(efff_l),
                   "    Fixed Effects & No & No & No \\\\", "    Clusters ($G$) & " + " & ".join(g_l) + r" \\",
                   r"    \bottomrule"]
     lines += [r"\end{xltabular}", r"\doublespacing"]
