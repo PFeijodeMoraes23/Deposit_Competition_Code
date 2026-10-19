@@ -22,7 +22,9 @@ set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJ="$(cd "${HERE}/.." && pwd)"
 REAL="${PROJ}/data"
-DIAG="${PROJ}/diag_ext1_20261018"
+# EXT1_DIAG_ROOT: where the sandboxes live (default: the project folder). Any file system works: a
+# sandbox only links to the real data, so a faster one (scratch) can hold them.
+DIAG="${EXT1_DIAG_ROOT:-${PROJ}}/diag_ext1_20261018"
 STARTS="${HERE}/blp_ext1_starts_20261018.csv"
 HASHES="${DIAG}/production_ext1.sha256"
 
@@ -80,14 +82,22 @@ check_sandbox () {
 }
 
 if [[ "${MODE}" != "--submit-built" ]]; then
-    [[ ! -e "${DIAG}" ]] || { echo "REFUSING: ${DIAG} exists (a launch already ran). Use --submit-built or --report." >&2; exit 1; }
+    # Resumable: a build cut short (a slow file system, a job's time limit) is completed by running
+    # it again. The production hashes are taken once, before any job; a sandbox that passed its
+    # check carries built.ok and is skipped.
     mkdir -p "${DIAG}"
-    sha256sum "${REAL}"/output/blp/blp_results_E{3,4}_spec_12_ext1.json \
-              "${REAL}"/output/blp/blp_results_E{3,4}_spec_12_ext1.jls > "${HASHES}"
-    echo "production ext1 hashed -> ${HASHES}"
+    if [[ -s "${HASHES}" ]]; then
+        echo "production ext1 hashes kept from the first build: ${HASHES}"
+    else
+        sha256sum "${REAL}"/output/blp/blp_results_E{3,4}_spec_12_ext1.json \
+                  "${REAL}"/output/blp/blp_results_E{3,4}_spec_12_ext1.jls > "${HASHES}.tmp"
+        mv -f "${HASHES}.tmp" "${HASHES}"
+        echo "production ext1 hashed -> ${HASHES}"
+    fi
     while IFS=, read -r k st s p1 p2 p3 p4; do
         [[ -n "${k}" ]] || continue
         SB="${DIAG}/E${k}_${st}"
+        if [[ -f "${SB}/built.ok" ]]; then echo "  ${SB##*/}: already built"; continue; fi
         mkdir -p "${SB}/data/output/blp"
         # The code the stage job runs: every top-level file of scripts/ (the .jl it includes, the
         # .sh it sources, Project/Manifest, the sysimage stamps) and the small config/ and utils/
@@ -96,19 +106,28 @@ if [[ "${MODE}" != "--submit-built" ]]; then
         mkdir -p "${SB}/scripts/logs"
         find "${HERE}" -maxdepth 1 -type f ! -name '*.so' ! -name '*.zip' -exec cp -p -t "${SB}/scripts/" {} +
         for sub in config utils; do
-            if [[ -d "${HERE}/${sub}" ]]; then cp -rp "${HERE}/${sub}" "${SB}/scripts/${sub}"; fi
+            if [[ -d "${HERE}/${sub}" ]]; then
+                mkdir -p "${SB}/scripts/${sub}"
+                cp -rp "${HERE}/${sub}/." "${SB}/scripts/${sub}/"
+            fi
         done
-        [[ ! -e "${SB}/scripts/.julia_depot" ]] || { echo "REFUSING: ${SB}/scripts/.julia_depot was copied" >&2; exit 2; }
-        ln -s "${HERE}/.julia_depot" "${SB}/scripts/.julia_depot"
-        for so in "${HERE}"/*.so; do [[ -e "${so}" ]] && ln -sfn "${so}" "${SB}/scripts/$(basename "${so}")"; done
-        ln -s "${REAL}/input" "${SB}/data/input"
+        # Links, never copies; ln -sfn replaces a link a cut-short build left behind.
+        if [[ -e "${SB}/scripts/.julia_depot" && ! -L "${SB}/scripts/.julia_depot" ]]; then
+            echo "REFUSING: ${SB}/scripts/.julia_depot is a copy, not a link" >&2; exit 2
+        fi
+        ln -sfn "${HERE}/.julia_depot" "${SB}/scripts/.julia_depot"
+        for so in "${HERE}"/*.so; do
+            if [[ -e "${so}" ]]; then ln -sfn "${so}" "${SB}/scripts/$(basename "${so}")"; fi
+        done
+        ln -sfn "${REAL}/input" "${SB}/data/input"
         for d in "${REAL}"/output/*; do
             b="$(basename "${d}")"
             [[ "${b}" == "blp" ]] && continue
-            ln -s "${d}" "${SB}/data/output/${b}"
+            ln -sfn "${d}" "${SB}/data/output/${b}"
         done
-        ln -s "${REAL}/output/blp/draws" "${SB}/data/output/blp/draws"
+        ln -sfn "${REAL}/output/blp/draws" "${SB}/data/output/blp/draws"
         check_sandbox "${SB}" || exit 2
+        touch "${SB}/built.ok"
     done < <(tail -n +2 "${STARTS}")
     if [[ "${MODE}" == "--build-only" ]]; then
         echo "built, nothing submitted. Submit with: bash blp_ext1_starts.sh --submit-built"
@@ -122,10 +141,13 @@ while IFS=, read -r k st s p1 p2 p3 p4; do
     [[ -d "${SB}" ]] || { echo "REFUSING: ${SB} was never built" >&2; exit 2; }
     if [[ -f "${SB}/submitted.jid" ]]; then echo "E${k} ${st}: already submitted ($(cat "${SB}/submitted.jid"))"; continue; fi
     check_sandbox "${SB}" >/dev/null || exit 2
-    jid=$(cd "${SB}/scripts" && env -u CL_ROOT -u DATA_ROOT -u CL_DATA_ROOT -u CL_DATA_OUT -u CL_DATA_IN \
+    # Run inside a batch job (the overnight launch), this shell carries that job's SLURM_* settings
+    # (1 cpu, 2G), which --export=ALL would hand to the GPU job: they are dropped first.
+    jid=$(cd "${SB}/scripts" && for v in $(compgen -v SLURM_ || true); do unset "${v}"; done \
+          && env -u CL_ROOT -u DATA_ROOT -u CL_DATA_ROOT -u CL_DATA_OUT -u CL_DATA_IN \
           sbatch --parsable -J "ext1s_E${k}_${st}" \
                  -o "${SB}/scripts/logs/%x_%j.out" -e "${SB}/scripts/logs/%x_%j.err" \
-                 --export=ALL,RC_ROUTINE="${k}",EXT1_START="${s}:${p1}:${p2}:${p3}:${p4}" \
+                 --export=ALL,RC_ROUTINE="${k}",EXT1_START="${s}:${p1}:${p2}:${p3}:${p4}",EXT1_PROD_BLP="${PROD_BLP}" \
                  "${SB}/scripts/blp_ext1_start_job.sh")
     echo "${jid}" > "${SB}/submitted.jid"
     echo "E${k} ${st}: start ${s}, ${p1}, ${p2}, ${p3}, ${p4} -> job ${jid}"

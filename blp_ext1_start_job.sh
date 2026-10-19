@@ -13,7 +13,8 @@
 # SLURM_SUBMIT_DIR is the sandbox's code and every path below resolves inside the sandbox: the
 # engine writes to ../data relative to its own folder, never to the production data/output/blp.
 #
-# Reads: RC_ROUTINE (3 or 4) and EXT1_START (the five ext1 theta2 values, colon-separated:
+# Reads: RC_ROUTINE (3 or 4), EXT1_PROD_BLP (the production data/output/blp, which this job must
+# never write) and EXT1_START (the five ext1 theta2 values, colon-separated:
 # sigma_spread, pi spread x gdp, pi spread x 65+, pi spread x mobile, pi assets x gdp).
 # Writes the starting point as <sandbox>/init_theta2.jls (BLP_THETA2_INIT_FILE, which replaces
 # ext1's two built-in starts), then runs blp_stage_job.sh unchanged with the production settings.
@@ -31,7 +32,7 @@ for v in CL_ROOT CL_DATA_ROOT DATA_ROOT CL_DATA_OUT CL_DATA_IN OPEN_FINANCE_ROOT
 done
 for v in $(compgen -v CL_STEP_ || true); do unset "${v}"; done
 export CL_ROOT="${SBS}" DATA_ROOT="${SB}/data"
-PROD_BLP="$(readlink -f "${SB}/../../data/output/blp" 2>/dev/null || true)"
+PROD_BLP="${EXT1_PROD_BLP:?EXT1_PROD_BLP (the production data/output/blp) is required}"
 if [[ ! -d "${SB}/data/output/blp" || -L "${SB}/data/output/blp" \
       || "$(readlink -f "${SB}/data/output/blp")" == "${PROD_BLP}" ]]; then
     echo "REFUSING: ${SB}/data/output/blp is not this sandbox's own folder." >&2
