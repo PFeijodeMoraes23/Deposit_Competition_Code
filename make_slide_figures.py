@@ -106,7 +106,7 @@ MINUS = "−"
 
 VISUALS = ("panels", "timedep", "savings", "ame", "coef", "wedge", "violations", "flow", "roadmap",
            "table", "band", "pricevol", "reprice", "dpremium", "entrygap", "relprice", "anova",
-           "motivtables", "paper")
+           "motivtables", "paper", "slidesize")
 
 # Paper copies of four motivation charts, for a 2x2 figure of 0.49\textwidth panels in V_Main
 # (12pt, letterpaper, 1in margins: 0.49 * 6.5in = 3.19in). As with fig_entry_dynamics_a/b, each
@@ -125,6 +125,26 @@ PAPER_STEMS = {
 PAPER = False
 MARK = 1.0       # scatter-area multiplier (dot sizes scale with the figure's area)
 
+# Deck copies (`_slide`) of five motivation charts, each drawn AT its printed size in the
+# 10pt beamer deck (text block 307.29 x 244.69 pt = 4.27 x 3.40 in), so text prints at its
+# nominal size. FS 1.18 sets legends and end labels to 10.0 pt; _save then sets titles to
+# SLIDE_PT["title"], axis labels and ticks to theirs, and wraps titles and legend entries to
+# the slot. `--only slidesize` redraws the five; every other chart the same functions draw is
+# discarded, and the sidecar is not rewritten. Printed size per file (in):
+DECK_TW, DECK_TH = 307.29 / 72, 244.69 / 72
+SLOT = (8.0 / 2.54, 5.5 / 2.54)
+SLIDE_STEMS = {
+    "fig_slide_motiv_rates_by_type_noshade": ("fig_slide_motiv_rates_by_type_slide", SLOT),
+    "fig_slide_motiv_shares_by_type": ("fig_slide_motiv_shares_by_type_slide", SLOT),
+    "fig_slide_relprice_share_xs_pp": ("fig_slide_relprice_share_xs_pp_slide",
+                                       (5.8 / 2.54, 7.0 / 2.54)),
+    "fig_slide_motiv_entry_by_gap_bankboot": ("fig_slide_motiv_entry_by_gap_bankboot_slide", SLOT),
+    "fig_slide_motiv_dfirm_premium": ("fig_slide_motiv_dfirm_premium_slide", SLOT),
+}
+SLIDE_FS = 1.18
+SLIDE_PT = dict(title=10.5, label=10.0, tick=9.5)
+SLIDE = False
+
 
 def paper_figures(out: pathlib.Path, png: bool):
     global SLIDE_FIGSIZE, FS, PAPER, MARK
@@ -136,25 +156,99 @@ def paper_figures(out: pathlib.Path, png: bool):
     dpremium_chart(out, png)
 
 
+def slide_size_figures(out: pathlib.Path, png: bool):
+    """The `_slide` copies (SLIDE_STEMS). Same data, samples, weights, intervals and colours as
+    the charts they copy; the rates chart drops the prepaid line and the bands, the shares chart
+    the prepaid line."""
+    global SLIDE_FIGSIZE, FS, PAPER, SLIDE, MARK
+    FS, PAPER, SLIDE = SLIDE_FS, False, True
+    # Each chart starts at its slot size; _save trims the margins to fit the slot exactly.
+    for draw, stem in ((pricevol_charts, "fig_slide_motiv_shares_by_type"),
+                       (relprice_charts, "fig_slide_relprice_share_xs_pp"),
+                       (entry_gap_chart, "fig_slide_motiv_entry_by_gap_bankboot"),
+                       (dpremium_chart, "fig_slide_motiv_dfirm_premium")):
+        w, h = SLIDE_STEMS[stem][1]
+        SLIDE_FIGSIZE = (w, h / 1.25) if draw is dpremium_chart else (w, h)
+        MARK = (w * h) / (5.2 * 3.3)
+        draw(out, png)
+
+
+def _slide_text(fig, target):
+    """Deck copies: titles, axis labels and ticks at SLIDE_PT; every title, x label or legend
+    entry wider than the slot, and every y label taller than about half of it, broken at the
+    space (or ', ') nearest its middle."""
+    width_in, height_in = target
+    r = fig.canvas.get_renderer()
+
+    def fit(t, size, room_in, vertical=False):
+        t.set_fontsize(size)
+        s = t.get_text()
+        ext = t.get_window_extent(r)
+        span = (ext.height if vertical else ext.width) / fig.dpi
+        if s and "\n" not in s and " " in s and span > room_in:
+            cuts = [i for i, c in enumerate(s) if c == " "]
+            c = min(cuts, key=lambda i: abs(i - len(s) / 2))
+            t.set_text(s[:c] + "\n" + s[c + 1:])
+
+    for ax in fig.axes:
+        # The charts title with loc="left", which matplotlib keeps apart from ax.title. A left
+        # title runs from the axes' left edge, so it gets the slot less the y-axis margin.
+        for t in (ax.title, ax._left_title, ax._right_title):
+            fit(t, SLIDE_PT["title"], 0.85 * width_in)
+        fit(ax.xaxis.label, SLIDE_PT["label"], 0.9 * width_in)
+        fit(ax.yaxis.label, SLIDE_PT["label"], 0.5 * height_in / max(len(fig.axes), 1),
+            vertical=True)
+        ax.tick_params(labelsize=SLIDE_PT["tick"])
+    _wrap_legend(fig, width=int(width_in * 72 / (0.52 * 8.5 * FS)))
+
+
+def _clear_legends(fig, gap_pt: float = 4.0):
+    """A legend hung below its axes (loc 'upper center', anchored under the x-axis) is placed
+    with its top `gap_pt` under the tick labels and the x label."""
+    r = fig.canvas.get_renderer()
+    for ax in fig.axes:
+        leg = ax.get_legend()
+        if leg is None or leg._loc != 9:   # 9 = 'upper center'
+            continue
+        floor = ax.xaxis.get_tightbbox(r).y0 - gap_pt * fig.dpi / 72
+        leg.set_bbox_to_anchor((0.5, (floor - ax.bbox.y0) / ax.bbox.height),
+                               transform=ax.transAxes)
+
+
 def _save(fig, out: pathlib.Path, stem: str, png: bool):
     pad = 0.1
-    if PAPER:
-        if stem not in PAPER_STEMS:
+    if PAPER or SLIDE:
+        stems = PAPER_STEMS if PAPER else {k: v[0] for k, v in SLIDE_STEMS.items()}
+        if stem not in stems:
             plt.close(fig)
             return
-        stem = PAPER_STEMS[stem]
+        target = PAPER_PRINT if PAPER else SLIDE_STEMS[stem][1]
+        stem = stems[stem]
         # The tight crop adds the legend and end labels outside the axes. Shrink the figure by
-        # that excess (text keeps its size) until the saved panel is exactly PAPER_PRINT inches,
-        # so all four print at 100% and share one height in the 2x2 grid.
+        # that excess (text keeps its size) until the saved file is exactly `target` inches,
+        # so it prints at 100%: the paper's four share one height in the 2x2 grid, and each
+        # deck copy fills its slot at its nominal font sizes.
         pad = 0.02
-        _wrap_legend(fig)
-        for _ in range(4):
+        if SLIDE:
+            _slide_text(fig, target)
+        else:
+            _wrap_legend(fig)
+        for _ in range(8 if SLIDE else 4):
             if len(fig.axes) > 1:
                 fig.tight_layout(h_pad=1.0)
+            if SLIDE:
+                _clear_legends(fig)
             bb = fig.get_tightbbox(fig.canvas.get_renderer())
             w, h = fig.get_size_inches()
-            fig.set_size_inches(w - (bb.width + 2 * pad - PAPER_PRINT[0]),
-                                h - (bb.height + 2 * pad - PAPER_PRINT[1]))
+            w, h = w - (bb.width + 2 * pad - target[0]), h - (bb.height + 2 * pad - target[1])
+            if w <= 0 or h <= 0:
+                sys.exit(f"{stem}: the text outside the axes is larger than the {target[0]:.2f} x "
+                         f"{target[1]:.2f} in slot")
+            fig.set_size_inches(w, h)
+        if SLIDE:   # the last resize moved the axes: hang the legends again
+            if len(fig.axes) > 1:
+                fig.tight_layout(h_pad=1.0)
+            _clear_legends(fig)
     p = out / f"{stem}.pdf"
     fig.savefig(p, bbox_inches="tight", pad_inches=pad, facecolor="white")
     if png:
@@ -178,6 +272,11 @@ def _legend_below(ax, ncol: int):
     ax.set_xlabel("")
     if PAPER:   # a 3.19in panel holds two legend columns, not three
         ncol = min(ncol, 2)
+    if SLIDE:   # 10pt entries in a 3.15in slot: two columns with short swatches
+        ax.legend(fontsize=8.5 * FS, loc="upper center", bbox_to_anchor=(0.5, -0.13),
+                  ncol=min(ncol, 2), frameon=False, columnspacing=1.0, handlelength=1.4,
+                  handletextpad=0.4, labelspacing=0.25, borderaxespad=0.0, borderpad=0.0)
+        return
     ax.legend(fontsize=8.5 * FS, loc="upper center", bbox_to_anchor=(0.5, -0.11), ncol=ncol,
               frameon=False, columnspacing=1.4, handlelength=1.8)
 
@@ -839,7 +938,7 @@ def _wstats(x, w) -> dict:
 
 def _store(section: str, payload: dict):
     """Merge one chart's numbers into the motivation sidecar, keeping the other charts'."""
-    if PAPER:
+    if PAPER or SLIDE:
         return
     data = json.loads(MOTIV_JSON.read_text(encoding="utf-8")) if MOTIV_JSON.is_file() else {}
     data.update(schema=1, generator="make_slide_figures.py (motivation charts)",
@@ -971,7 +1070,7 @@ def _shade(ax, q, i0, i1, label=True):
 def _quarter_axis(ax):
     years = np.arange(MIN_YEAR, MAX_YEAR + 1, dtype=float)
     mdt.ms_year_axis(ax, years, fs=FS)
-    if PAPER:   # nine year labels do not fit a 3.19in panel: label every other year
+    if PAPER or SLIDE:   # nine year labels do not fit a ~3in panel: label every other year
         ax.set_xticks(years[::2])
         ax.set_xticklabels([str(int(y)) for y in years[::2]])
 
@@ -982,6 +1081,8 @@ def _end_labels(ax, x_end, items, min_gap=0.07):
     already prints (two lines ending at the same value) is printed once. `items`: (y_end, text)."""
     lo, hi = ax.get_ylim()
     h_pts = ax.figure.get_size_inches()[1] * 72 * ax.get_position().height
+    if SLIDE:   # 10pt labels on a short axis: keep a line height between them once _save trims
+        min_gap = max(min_gap, 1.2 * 8.5 * FS / (0.65 * h_pts))
     pts = sorted({t: (float(y), t) for y, t in items if np.isfinite(y)}.values())
     fr = [(y - lo) / (hi - lo) for y, _ in pts]
     adj = list(fr)
@@ -1079,13 +1180,18 @@ def pricevol_charts(out: pathlib.Path, png: bool):
             ax.plot(x, selic, color=mdt.NATL_COLOR, label="Selic", **kw)
             ends.append((selic[-1], fmt(selic[-1])))
         for s in series:
+            if SLIDE and s[0] == "prepaid":   # the deck copies show the four other types
+                continue
             y = value(s)
-            if ci is not None and s[5]:
+            if ci is not None and s[5] and not SLIDE:
                 lo, hi = ci(s)
                 ax.fill_between(x, lo, hi, color=s[1], alpha=0.16, linewidth=0, zorder=2)
             ax.plot(x, y, color=s[1], label=s[3], **{**kw, "linestyle": s[2]})
             ends.append((y[-1], fmt(y[-1])))
         _style_no_pix(ax, title, ylabel, "")
+        if SLIDE and shade:   # headroom so the 'Selic hikes' label clears the top line
+            lo_, hi_ = ax.get_ylim()
+            ax.set_ylim(lo_, hi_ + 0.15 * (hi_ - lo_))
         _end_labels(ax, x[-1], ends)
         _quarter_axis(ax)
         _legend_below(ax, 3)
@@ -1357,14 +1463,17 @@ def dpremium_chart(out: pathlib.Path, png: bool):
     a1.fill_between(x, ci["lo"], ci["hi"], color=mdt.D_COLOR, alpha=0.16, linewidth=0, zorder=2,
                     label="95% interval")
     a1.plot(x, prem, **kw)
-    if not PAPER:   # the paper's caption states the band
+    if not PAPER and not SLIDE:   # the paper's caption and the deck copy's title state the band
         a1.legend(fontsize=8 * FS, loc="upper right", frameon=False)
     mdt.ms_endlabel(a1, x, prem, f"{_plain(prem[-1], 1)} pp", FS)
-    mdt.ms_style(a1, "D firms' time-deposit premium over B firms", "pp p.a.", pix_label=True,
-                 fs=FS, pix_x=PIX_X_QUARTERLY)
+    # The deck copy keeps each title on one line, so the two short panels keep their height.
+    mdt.ms_style(a1, ("D premium over B, with 95% band" if SLIDE
+                      else "D firms' time-deposit premium over B firms"), "pp p.a.",
+                 pix_label=True, fs=FS, pix_x=PIX_X_QUARTERLY)
     a2.plot(x, share, **kw)
     mdt.ms_endlabel(a2, x, share, f"{share[-1]:.1f}%", FS)
-    mdt.ms_style(a2, "D firms' share of time-deposit balances", "%", fs=FS,
+    mdt.ms_style(a2, ("D firms' share of time deposits" if SLIDE
+                      else "D firms' share of time-deposit balances"), "%", fs=FS,
                  pix_x=PIX_X_QUARTERLY)
     a2.set_ylim(bottom=0)
     _quarter_axis(a2)
@@ -1555,9 +1664,14 @@ def entry_gap_chart(out: pathlib.Path, png: bool):
                 sys.exit(f"entrygap: bank-bootstrap medians differ from the event medians by {gap:.3e}")
             h = np.arange(H + 1)
             ax.fill_between(h, lo, hi, color=color, alpha=0.15, linewidth=0, zorder=1)
+            # The deck copy's legend: two short lines, same groups and counts.
+            short = {"more": f"Pays ≥ {ENTRY_GAP_PP:.0f} pp more",
+                     "rest": f"Pays < {ENTRY_GAP_PP:.0f} pp more"}[k]
             ax.plot(h, med, color=color, linestyle=ls, linewidth=2, marker="o", markersize=4,
                     markeredgecolor="white", markeredgewidth=0.8, zorder=3,
-                    label=f"{label} (n = {len(ev_rows)}, {ev_rows['congl'].nunique()} banks)")
+                    label=(f"{short}: {len(ev_rows)} entries, {ev_rows['congl'].nunique()} banks"
+                           if SLIDE else
+                           f"{label} (n = {len(ev_rows)}, {ev_rows['congl'].nunique()} banks)"))
             bankboot.setdefault(norm_key, {})[k] = dict(
                 n=int(len(ev_rows)), banks=int(ev_rows["congl"].nunique()),
                 ci_at_h={str(x): [float(lo[x]), float(hi[x])] for x in (4, 8, 12)})
@@ -1740,6 +1854,11 @@ def _binned(ax, r: dict, xmean: float, ymean: float, color=mdt.B_COLOR, points=F
 
 
 def _legend_under(ax):
+    if SLIDE:   # deck copies: short swatches, and the scatter's biggest dot scaled down
+        ax.legend(fontsize=8.5 * FS, loc="upper center", bbox_to_anchor=(0.5, -0.22), ncol=1,
+                  frameon=False, handlelength=1.0, handletextpad=0.4, markerscale=0.5,
+                  labelspacing=0.3, borderaxespad=0.0, borderpad=0.0)
+        return
     ax.legend(fontsize=8.5 * FS, loc="upper center", bbox_to_anchor=(0.5, -0.2), ncol=1,
               frameon=False, handlelength=1.8)
 
@@ -1959,17 +2078,25 @@ def relprice_charts(out: pathlib.Path, png: bool):
         fig, ax = plt.subplots(figsize=SLIDE_FIGSIZE)
         ax.axvline(0, color="#BFBFBA", lw=0.8, zorder=1)
         ax.axhline(0, color="#BFBFBA", lw=0.8, zorder=1)
+        # The deck copy breaks both entries by hand to fit half the slide's width.
         ax.scatter(d[key], d["dshare"], s=MARK * (8 + 300 * d["size"] / d["size"].max()),
                    color=mdt.B_COLOR, alpha=0.55, edgecolor="white", linewidth=0.6, zorder=3,
-                   label=f"{r['n']} B banks, dot size = time deposits")
+                   label=(f"{r['n']} B banks,\ndot size = time deposits" if SLIDE else
+                          f"{r['n']} B banks, dot size = time deposits"))
         xm, ym = np.average(d[key], weights=d["size"]), np.average(d["dshare"], weights=d["size"])
         xx = np.array([d[key].min(), d[key].max()])
         ax.plot(xx, ym + r["slope"] * (xx - xm), color=mdt.NATL_COLOR, lw=1.6, zorder=4,
-                label=f"Weighted slope {_plain(r['slope'], 3)}{r['stars']}, 95% interval "
-                      f"[{_plain(r['lo'], 3)}, {_plain(r['hi'], 3)}]")
-        _style_no_pix(ax, "Relative price and share growth, by bank",
+                label=(f"Weighted slope {_plain(r['slope'], 3)}{r['stars']},\n95% CI "
+                       f"[{_plain(r['lo'], 3)}, {_plain(r['hi'], 3)}]" if SLIDE else
+                       f"Weighted slope {_plain(r['slope'], 3)}{r['stars']}, 95% interval "
+                       f"[{_plain(r['lo'], 3)}, {_plain(r['hi'], 3)}]"))
+        # The gap is the bank's spread minus the B average, so a positive gap means the bank pays
+        # less; the deck copy says so on the axis (same values).
+        _style_no_pix(ax, ("Price gap and share growth" if SLIDE
+                           else "Relative price and share growth, by bank"),
                       "Share growth (% a year)",
-                      f"Average gap to the B average ({unit})")
+                      f"Pays less than the B average ({unit})" if SLIDE and key == "pp"
+                      else f"Average gap to the B average ({unit})")
         _legend_under(ax)
         _save(fig, out, f"fig_slide_relprice_share_xs_{key}", png)
         shr[f"xs_{key}"] = {k: v for k, v in r.items() if k not in ("xr", "yr", "w")}
@@ -2486,9 +2613,11 @@ def main():
         anova_tables(args.out, args.png)
     if "motivtables" in todo:
         motivation_tables(args.out)
-    # Last: it switches the figure size and fonts for the rest of the run.
+    # Last: each switches the figure size and fonts for the rest of the run, and sets its own.
     if "paper" in todo:
         paper_figures(args.out, args.png)
+    if "slidesize" in todo:
+        slide_size_figures(args.out, args.png)
 
 
 if __name__ == "__main__":
