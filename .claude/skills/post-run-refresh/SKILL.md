@@ -14,7 +14,8 @@ simply keeps quoting the previous vintage. Run only the families that changed, b
   import, and under any other interpreter they re-launch themselves as scripts. Set
   `MPLBACKEND=Agg` for anything that draws.
 - Never edit a `.tex` file. A wrong exhibit is fixed in its generator and re-rendered (the
-  `paper-tables` skill has the conventions). `V_Main.tex` and the deck are the user's: give
+  `paper-tables` skill has the conventions). The papers (`V_Full.tex`, `V_Friction.tex`) and the
+  deck are the user's: give
   paste-ready lines instead. The deck is usually open in TeXstudio and saved every few minutes.
 - Judge provenance by values or hashes, never by modification times. OneDrive touches mtimes.
 - Before generators overwrite tables in `Drafts/Deposit Competition`, keep a copy of the ones
@@ -97,9 +98,12 @@ matching the rendered tables. It writes `paper_numbers_macros.tex` (the `\pn[fmt
 
 ### 6. Compile, then equations
 
-The user compiles `V_Main.tex`. To check page breaks or overfull boxes yourself, compile a copy in
-the scratchpad. Then `python make_paper_equations.py`: it takes equation numbers and labels from
-`V_Main.aux`, so it must follow the compile, and it never writes the paper.
+The user compiles `V_Full.tex` and `V_Friction.tex`. Both sit in `Drafts/Deposit Competition` and
+input the same generated tables, figures and `paper_numbers_macros.tex`, so every generator writes
+into that one folder. To check page breaks or overfull boxes yourself, compile a copy in the
+scratchpad. Then `python make_paper_equations.py`: it takes equation numbers and labels from the
+.aux of the paper chosen in `config/paper.toml` (V_Full or V_Friction; `--paper` overrides for one
+run), so it must follow that paper's compile, and it never writes the paper.
 
 ### 7. Slide visuals
 
@@ -128,5 +132,5 @@ archive's prefix. A direct call to the helper proves nothing about whether it is
 ## The advertising register PDF
 
 `ADVERTISING_DATA.md` in this folder is the master. Copies of the md and a compiled PDF sit next
-to `V_Main.tex`, and go stale after any edit of the master. The build recipe and its checks are in
+to the papers in `Drafts/Deposit Competition`, and go stale after any edit of the master. The build recipe and its checks are in
 `references/register-pdf.md`; the pandoc filter it needs is `scripts/breaks.lua`.

@@ -106,7 +106,7 @@ MINUS = "−"
 
 VISUALS = ("panels", "timedep", "savings", "ame", "coef", "wedge", "violations", "flow", "roadmap",
            "table", "band", "pricevol", "reprice", "dpremium", "entrygap", "relprice", "anova",
-           "motivtables", "paper", "slidesize", "slidesize2", "slidesize3", "slidesize4", "xi", "slidesize5", "slidesize6", "depanova", "ref")
+           "motivtables", "paper", "slidesize", "slidesize2", "slidesize3", "slidesize4", "xi", "slidesize5", "slidesize6", "depanova", "ref", "followups", "refame", "pixexposure")
 
 # Paper copies of four motivation charts, for a 2x2 figure of 0.49\textwidth panels in V_Main
 # (12pt, letterpaper, 1in margins: 0.49 * 6.5in = 3.19in). As with fig_entry_dynamics_a/b, each
@@ -217,7 +217,17 @@ REF_STEMS = {
                                        (10.8 / 2.54, 4.6 / 2.54)),
     "fig_slide_motiv_entry_by_gap_bankboot": ("fig_slide_motiv_entry_by_gap_bankboot_ref",
                                               (10.8 / 2.54, 3.9 / 2.54)),
+    # The 2026-10-20 follow-ups (`--only followups`, Rout/followups_1020.json).
+    "fig_slide_phi_anova": ("fig_slide_phi_anova_ref", (8.0 / 2.54, 4.6 / 2.54)),
+    "fig_slide_entry_carry": ("fig_slide_entry_carry_ref", (10.8 / 2.54, 4.6 / 2.54)),
+    "fig_slide_fee_ratio": ("fig_slide_fee_ratio_ref", (10.8 / 2.54, 4.6 / 2.54)),
+    # `--only refame`: the routine (III) AME chart, thin whiskers and a dot, no bars.
+    "fig_slide_sleep_ame_E3": ("fig_slide_sleep_ame_E3_ref", (10.8 / 2.54, 4.6 / 2.54)),
+    # Pix usage on pre-launch exposure (`--only pixexposure`, Rout/pix_exposure.json).
+    "fig_slide_pix_exposure": ("fig_slide_pix_exposure_ref", (10.8 / 2.54, 4.6 / 2.54)),
 }
+FOLLOWUPS_JSON = mdt.OUTPUT_DIR / "followups_1020.json"
+PIX_EXPOSURE_JSON = mdt.OUTPUT_DIR / "pix_exposure.json"
 REF = False
 REF_FS = 1.0
 REF_MIN_PT = 8.0
@@ -391,6 +401,133 @@ def ref_figures(out: pathlib.Path, png: bool):
         SLIDE_FIGSIZE = (w, h / 1.25) if draw is dpremium_chart else (w, h)
         MARK = (w * h) / (5.2 * 3.3)
         draw(out, png)
+    REF = False
+
+
+def followups_ref(out: pathlib.Path, png: bool, E: int):
+    """The 2026-10-20 follow-up charts in the reference style (REF_STEMS), from
+    Rout/followups_1020.json (make_followups_1020.py): the variance split of phi-hat_mt for
+    routine E (bars, as fig_slide_xi_anova_slide); entry and the incumbents' carry (event
+    study, all entries and without Santander's); the fee ratio of incumbents and D firms."""
+    global SLIDE_FIGSIZE, FS, PAPER, SLIDE, REF, MARK
+    if not FOLLOWUPS_JSON.is_file():
+        sys.exit(f"{FOLLOWUPS_JSON} not found: run make_followups_1020.py first")
+    sc = json.loads(FOLLOWUPS_JSON.read_text(encoding="utf-8"))
+    FS, PAPER, SLIDE, REF = REF_FS, False, False, True
+
+    # Variance split of phi-hat_mt.
+    c1 = sc[f"E{E}"]["C1"]
+    SLIDE_FIGSIZE = REF_STEMS["fig_slide_phi_anova"][1]
+    MARK = (SLIDE_FIGSIZE[0] * SLIDE_FIGSIZE[1]) / (5.2 * 3.3)
+    parts = (("quarter", "Quarter", mdt.NATL_COLOR), ("market", "Market (MCA)", SAVINGS_COLOR),
+             ("rest", "Rest", "#E0E0E0"))
+    rows = (("Population\nweights", c1["pop"]), ("Deposit\nweights", c1["dep"]),
+            ("Without\n" + r"$\hat{\phi}=1$", c1["pop_noceil"]))
+    fig, ax = plt.subplots(figsize=SLIDE_FIGSIZE)
+    for i, (_lab, vals) in enumerate(rows):
+        left = 0.0
+        for k, name, color in parts:
+            v = 100.0 * vals[k]
+            ax.barh(i, v, left=left, color=color, edgecolor="white", height=0.6,
+                    label=name if i == 0 else None)
+            if v >= 7:
+                ax.text(left + v / 2, i, f"{v:.0f}", ha="center", va="center", fontsize=8.5 * FS,
+                        color="#111111" if color == "#E0E0E0" else "white")
+            left += v
+    ax.set_yticks(range(len(rows)))
+    ax.set_yticklabels([r[0] for r in rows])
+    ax.invert_yaxis()
+    ax.set_xlim(0, 100)
+    _style_no_pix(ax, "Variance of the sleepy share, %", "", "")
+    ax.grid(False)
+    ax.legend(fontsize=8.5 * FS, loc="upper center", bbox_to_anchor=(0.5, -0.18), ncol=3,
+              frameon=False, handlelength=1.0, handletextpad=0.4, columnspacing=0.8)
+    _save(fig, out, "fig_slide_phi_anova", png)
+
+    # Entry and the incumbents' carry.
+    c2 = sc["C2"]
+    SLIDE_FIGSIZE = REF_STEMS["fig_slide_entry_carry"][1]
+    fig, ax = plt.subplots(figsize=SLIDE_FIGSIZE)
+    for tag, lab, color, dx in (("all", f"All entries ({c2['all']['n_markets']} markets)",
+                                 mdt.B_COLOR, -0.12),
+                                ("no_santander", "Without Santander's "
+                                 f"({c2['no_santander']['n_markets']} markets)", mdt.D_COLOR, 0.12)):
+        hs = sorted(c2[tag]["h"], key=int)
+        x = np.array([int(h) for h in hs]) + dx
+        est = np.array([c2[tag]["h"][h]["estimate"] for h in hs])
+        lo = np.array([c2[tag]["h"][h]["ci"]["lo"] for h in hs])
+        hi = np.array([c2[tag]["h"][h]["ci"]["hi"] for h in hs])
+        ax.errorbar(x, est, yerr=[est - lo, hi - est], fmt="o", ms=2.5, lw=0.8, capsize=0,
+                    color=color, label=lab)
+    ax.axhline(0, color=mdt.AXIS_INK, lw=0.6)
+    ax.axvline(-0.5, color=mdt.MUTED_INK, lw=0.6, ls="--")
+    _style_no_pix(ax, "Incumbents' carry around entry", "Change in carry",
+                  "Quarters since entry (8 = 8 or later; omitted: 5 or more before)")
+    ax.legend(fontsize=8.5 * FS, loc="upper center", bbox_to_anchor=(0.5, -0.3), ncol=2,
+              frameon=False, handlelength=1.0)
+    _save(fig, out, "fig_slide_entry_carry", png)
+
+    # Fee ratio.
+    c6 = sc["C6"]
+    SLIDE_FIGSIZE = REF_STEMS["fig_slide_fee_ratio"][1]
+    fig, ax = plt.subplots(figsize=SLIDE_FIGSIZE)
+    for key, lab, color in (("incumbent", "Incumbents", mdt.B_COLOR),
+                            ("digital", "D firms", mdt.D_COLOR)):
+        ys = sorted(c6[key], key=int)
+        x = np.array([int(y) for y in ys])
+        v = np.array([c6[key][y] for y in ys])
+        ax.plot(x, v, color=color, lw=1.2)
+        ax.text(x[-1] + 0.15, v[-1], lab, color=color, fontsize=8.5 * FS, va="center")
+    ax.axvline(2020 + 10.5 / 12, color=mdt.MUTED_INK, lw=0.6, ls="--")
+    ax.set_xlim(2015.7, 2026.3)
+    ax.set_xticks(range(2016, 2025, 2))
+    _style_no_pix(ax, "Fee revenue over deposits, median, pp a year", "", "")
+    # The note for the slide (no room in the slot): the effective price of a deposit is the
+    # spread plus fees, and the demand model's price omits fee changes.
+    _save(fig, out, "fig_slide_fee_ratio", png)
+    REF = False
+
+
+def ref_ame(out: pathlib.Path, png: bool):
+    """The routine (III) AME chart in the reference style (REF_STEMS)."""
+    global SLIDE_FIGSIZE, FS, PAPER, SLIDE, REF
+    FS, PAPER, SLIDE, REF = REF_FS, False, False, True
+    SLIDE_FIGSIZE = REF_STEMS["fig_slide_sleep_ame_E3"][1]
+    ame_chart(out, png, 3)
+    REF = False
+
+
+def pix_exposure_ref(out: pathlib.Path, png: bool, measure: str = "payers"):
+    """Yearly first-stage slopes of Pix usage (distinct individual payers per inhabitant) on each
+    standardized 2019 exposure, with 95% intervals (MCA clusters), in the reference style
+    (Rout/pix_exposure.json, written by make_pix_exposure.py with tab_pix_exposure_fs.tex)."""
+    global SLIDE_FIGSIZE, FS, PAPER, SLIDE, REF, MARK
+    if not PIX_EXPOSURE_JSON.is_file():
+        sys.exit(f"{PIX_EXPOSURE_JSON} not found: run make_pix_exposure.py first")
+    fs = json.loads(PIX_EXPOSURE_JSON.read_text(encoding="utf-8"))["fs"][measure]
+    FS, PAPER, SLIDE, REF = REF_FS, False, False, True
+    SLIDE_FIGSIZE = REF_STEMS["fig_slide_pix_exposure"][1]
+    MARK = (SLIDE_FIGSIZE[0] * SLIDE_FIGSIZE[1]) / (5.2 * 3.3)
+    fig, ax = plt.subplots(figsize=SLIDE_FIGSIZE)
+    for (e, lab, color), dx in zip((("mandated", "Mandated share", mdt.B_COLOR),
+                                    ("mobile", "Mobile lines", SAVINGS_COLOR),
+                                    ("g45", "4G/5G share", mdt.D_COLOR)), (-0.15, 0.0, 0.15)):
+        ys = sorted(fs[e]["yearly"], key=int)
+        x = np.array([int(y) for y in ys]) + dx
+        v = fs[e]["yearly"]
+        est = np.array([v[y]["slope"] for y in ys])
+        lo = np.array([v[y]["lo"] for y in ys])
+        hi = np.array([v[y]["hi"] for y in ys])
+        ax.errorbar(x, est, yerr=[est - lo, hi - est], fmt="o", ms=2.5, lw=0.8, capsize=0,
+                    color=color, label=lab)
+    ax.axhline(0, color=mdt.AXIS_INK, lw=0.6)
+    ys = sorted(fs["mandated"]["yearly"], key=int)
+    ax.set_xticks([int(y) for y in ys])
+    ax.set_xticklabels(["2020Q4" if y == "2020" else y for y in ys])
+    _style_no_pix(ax, "Pix payers per inhabitant on 2019 exposure", "Slope, 1 SD", "")
+    ax.legend(fontsize=8.5 * FS, loc="upper center", bbox_to_anchor=(0.5, -0.2), ncol=3,
+              frameon=False, handlelength=1.0)
+    _save(fig, out, "fig_slide_pix_exposure", png)
     REF = False
 
 
@@ -764,7 +901,7 @@ def ame_chart(out: pathlib.Path, png: bool, E: int):
         dagger = "†" if c.get("dagger") else ""
         texts.append(f"{_signed(c['estimate'], d)}{c.get('stars') or ''}  "
                      f"[{_plain(c['ci_lo'], d)}, {_plain(c['ci_hi'], d)}]{dagger}")
-    if SLIDE5:   # label column at the left, values on one line at the right, no footnote
+    if SLIDE5 or REF:   # label column at the left, values on one line at the right, no footnote
         keep = [v for v, _ in AME_ROWS if v in cells and cells[v].get("estimate") is not None]
         vals = []
         for v in keep:
@@ -806,20 +943,23 @@ def _forest(out, png, stem, labels, est, lo, hi, texts, xlabel, note):
     and the fonts keep their size on the slide."""
     est, lo, hi = (np.asarray(a, dtype=float) for a in (est, lo, hi))
     ypos = np.arange(len(labels))[::-1].astype(float)
-    fig, ax = plt.subplots(figsize=SLIDE_FIGSIZE if SLIDE5 else (5.6, 3.1))
+    fig, ax = plt.subplots(figsize=SLIDE_FIGSIZE if SLIDE5 or REF else (5.6, 3.1))
     fig.subplots_adjust(left=0.27, right=0.63, top=0.98, bottom=0.27)
     ax.axvline(0, color="#8A8A85", lw=0.9, zorder=1)
-    ax.barh(ypos, est, height=0.42, color=mdt.NATL_COLOR, zorder=2)
-    lw = 2.0 if SLIDE5 else 1.1
+    if REF:   # the reference look: the estimate as a dot on a thin whisker, no bar
+        ax.plot(est, ypos, "o", color=mdt.NATL_COLOR, markersize=4, zorder=4)
+    else:
+        ax.barh(ypos, est, height=0.42, color=mdt.NATL_COLOR, zorder=2)
+    lw = 1.0 if REF else 2.0 if SLIDE5 else 1.1
     ax.errorbar(est, ypos, xerr=np.vstack([est - lo, hi - est]), fmt="none", ecolor="#111111",
                 elinewidth=lw, capsize=3, capthick=lw, zorder=3)
     ax.set_yticks(ypos)
     ax.set_yticklabels(labels, fontsize=8 * FS, linespacing=0.95)
     ax.set_ylim(-0.6, len(labels) - 0.4)
     for y, t in zip(ypos, texts):
-        ax.text(1.03 if SLIDE5 else 1.04, y, t, transform=ax.get_yaxis_transform(),
-                fontsize=SLIDE_MIN_PT if SLIDE5 else 8 * FS, color=mdt.AXIS_INK, va="center",
-                ha="left")
+        ax.text(1.03 if SLIDE5 or REF else 1.04, y, t, transform=ax.get_yaxis_transform(),
+                fontsize=SLIDE_MIN_PT if SLIDE5 else 8.5 * FS if REF else 8 * FS,
+                color=mdt.AXIS_INK, va="center", ha="left")
     ax.set_xlabel(xlabel, fontsize=8.5 * FS, color=mdt.AXIS_INK)
     ax.grid(True, axis="x", color=mdt.GRID_COLOR, linewidth=0.6, alpha=0.9)
     ax.set_axisbelow(True)
@@ -3145,6 +3285,12 @@ def main():
         slide6_figures(args.out, args.png)
     if "ref" in todo:
         ref_figures(args.out, args.png)
+    if "refame" in todo:
+        ref_ame(args.out, args.png)
+    if "followups" in todo:
+        followups_ref(args.out, args.png, args.routine)
+    if "pixexposure" in todo:
+        pix_exposure_ref(args.out, args.png)
 
 
 if __name__ == "__main__":

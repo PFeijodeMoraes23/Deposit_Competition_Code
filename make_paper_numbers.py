@@ -97,6 +97,7 @@ import numpy as np
 import pandas as pd
 
 import make_blp_rc_table as rc          # load_stage, alpha_of, mean_rho_one_minus_s
+from utils import paper as _paper
 from utils import paths as _paths
 from utils import routines as _routines
 from utils import state_transform as _st
@@ -125,7 +126,7 @@ LINEAR_ROUTINES = tuple(e for e in _routines.ACTIVE if e not in _routines.LINK_E
 BLOCKS = ("B", "D")
 PHI_HORIZONS = {0: "t=0", 40: "X (t=40)", 250: "Y (t=250)"}
 
-# The rendered tables the cross-check reads (V_Main's \input names).
+# The rendered tables the cross-check reads (the \input names of V_Full and V_Friction).
 T4 = "est1-4_spec12_stage2_comparison.tex"
 T5 = "est1-4_spec12_logit_comparison.tex"
 T6 = "blp_demand_comparison_noseg_spec12.tex"
@@ -177,11 +178,14 @@ def _finite(x) -> bool:
 
 # ── routine labels as the paper prints them ──────────────────────────────────
 def roman_of() -> dict:
-    r"""{routine: '(III)'}: the position of each \item\label{estimation:*} in V_Main's
-    enumerate(label=(\Roman*)), matched to est_ref. Falls back to the routine number."""
+    r"""{routine: '(III)'}: the position of each \item\label{estimation:*} in the paper's
+    enumerate(label=(\Roman*)), matched to est_ref. Falls back to the routine number. The paper
+    is the one of config/paper.toml or $DEPOSIT_PAPER (utils/paper.py); this runs at import, so
+    there is no flag. On 2026-10-21 V_Full and V_Friction list the same four labels in the same
+    order, so either gives the same names."""
     romans = ["I", "II", "III", "IV", "V", "VI", "VII", "VIII"]
     out = {E: f"({romans[E - 1]})" for E in _routines.ACTIVE if 0 < E <= len(romans)}
-    vm = DRAFTS / "V_Main.tex"
+    vm = _paper.tex()
     try:
         labels = re.findall(r"\\item\s*\\label\{estimation:([A-Za-z_]+)\}",
                             vm.read_text(encoding="utf-8", errors="replace"))
@@ -1671,6 +1675,10 @@ def collect_descriptives(notes: list):
     collect_slide_motivation(notes)
     collect_xi_diagnostics(notes)
     collect_dep_anova(notes)
+    collect_followups_1020(notes)
+    collect_pix_exposure(notes)
+    collect_type5_robustness(notes)
+    collect_branch_estban(notes)
 
     j = rout / "cluster_imbalance.json"
     if not j.is_file():
@@ -1862,6 +1870,211 @@ def _span(pair) -> dict:
     """A [start, end] pair of the motivation sidecar as start, end and end minus start."""
     a, b = float(pair[0]), float(pair[1])
     return dict(start=a, end=b, change=b - a)
+
+
+def collect_branch_estban(notes: list):
+    """Branch-level ESTBAN of B firms (make_branch_estban.py --stage keys, Rout/branch_estban.json):
+    branches, openings and closings by year (an acquisition's renumbered branches excluded), the
+    share of the gross time-deposit change from existing branches, and the within-branch
+    correlation of the checking and time-deposit changes. Every value spans Santander's default
+    sweep from 2022-05."""
+    p = _paths.rout_dir() / "branch_estban.json"
+    if not p.is_file():
+        notes.append(f"{p.name} not found in Rout; run make_branch_estban.py --stage keys.")
+        return
+    sc = json.loads(p.read_text(encoding="utf-8"))
+    src = f"Rout/{p.name} (written by make_branch_estban.py)"
+    for k, lab in (("n_branches", "B branches at year end"), ("n_open", "B branch openings"),
+                   ("n_close", "B branch closings")):
+        add(f"desc.branch.{k}", "branch ESTBAN", f"{lab}, by year", {y: int(v) for y, v in sc[k].items()},
+            "ESTBAN by branch, B firms, quarter-end months 2016Q1-2024Q4; a branch is its AGENCIA "
+            "CNPJ; openings and closings exclude the branches an acquisition renumbers (HSBC to "
+            "Bradesco, 2016Q4)", f"{src} {k}", "ok",
+            display=", ".join(f"{y}: {v}" for y, v in sc[k].items()))
+    add("desc.branch.share_existing_dtime", "branch ESTBAN",
+        "Share of the gross time-deposit change from existing branches", sc["share_existing_dtime"],
+        "Bank x MCA x quarter change in time deposits split into existing branches, new branches "
+        "(level) and closed branches (minus the lagged level); sum of absolute existing over the "
+        "sum of absolute components, 2016Q1-2024Q4, acquisition quarter left out",
+        f"{src} share_existing_dtime", "ok", display=disp(sc["share_existing_dtime"], "share"),
+        detail=sc["share_existing_dtime_detail"])
+    add("desc.branch.corr_dcheck_dtime", "branch ESTBAN",
+        "Within-branch correlation of the checking and time-deposit changes", sc["corr_dcheck_dtime"],
+        "Correlation of the quarterly change in checking and in time deposits, both demeaned by "
+        "branch, over branches present at both quarter-ends, 2016Q1-2024Q4",
+        f"{src} corr_dcheck_dtime", "ok", display=fmt3s(sc["corr_dcheck_dtime"]),
+        detail=sc["corr_detail"])
+
+
+def collect_type5_robustness(notes: list):
+    """The prepaid (type 5) sample robustness (brief C8): rows and balances each variant drops
+    (DEMAND_PREP_VARIANTS/type5_variants.json) and the logit benchmark on each variant against
+    production (type5_logit_compare.json), both from make_demand_type5_variants.py. no5: type 5
+    dropped; d5only: type 5 kept for D firms only. The RC (Table 6) variants run on the cluster
+    (blp_type5_variants.sh) and are not here yet."""
+    root = _paths.demand_parquet_dir().parent / "DEMAND_PREP_VARIANTS"
+    pv, pc = root / "type5_variants.json", root / "type5_logit_compare.json"
+    if not (pv.is_file() and pc.is_file()):
+        notes.append("DEMAND_PREP_VARIANTS/type5_*.json missing; run make_demand_type5_variants.py "
+                     "(then the variant logits and --logit-compare) for demand.t5.no5.*.")
+        return
+    var, cmp_ = json.loads(pv.read_text(encoding="utf-8")), json.loads(pc.read_text(encoding="utf-8"))
+    src = "DEMAND_PREP_VARIANTS (make_demand_type5_variants.py)"
+    for E in _routines.LINK_ESTS:
+        v = var.get(f"E{E}")
+        c = cmp_.get(f"E{E}", {})
+        if not v:
+            continue
+        add(f"demand.type5.E{E}", "type-5 robustness", f"Rows the type-5 variants drop, {rname(E)}",
+            {k: dict(dropped=v[k]["dropped"], rows=v[k]["rows"],
+                     dropped_balance_share=v[k]["dropped_balance_share"]) for k in ("no5", "d5only")},
+            "Specification-12 demand rows dropped by each variant (no5: every type-5 row; d5only: "
+            "B firms' type-5 rows), rows kept, and the share of balances dropped",
+            f"{src} type5_variants.json E{E}", "ok",
+            display=f"no5 drops {v['no5']['dropped']:,} rows ({fmt3s(100 * v['no5']['dropped_balance_share'])}% of balances)")
+        for tag in ("no5", "d5only"):
+            if tag not in c:
+                continue
+            r = c[tag]
+            add(f"demand.t5.{tag}.E{E}", "type-5 robustness",
+                f"Logit benchmark on the {tag} sample, {rname(E)}",
+                dict(alpha=dict(estimate=r["alpha"], se=r["se"]), elast=r["elast"], n_obs=r["n_obs"],
+                     alpha_change=r["alpha"] - c["prod"]["alpha"], elast_change=r["elast"] - c["prod"]["elast"]),
+                "Price coefficient (full_dtype logit), its standard error, the mean own-price "
+                "elasticity alpha x mean(rho (1 - s)) on the variant sample, and the changes from "
+                "production", f"{src} type5_logit_compare.json E{E}.{tag}", "ok",
+                display=f"alpha {fmt3s(r['alpha'])} (prod {fmt3s(c['prod']['alpha'])})")
+
+
+def collect_pix_exposure(notes: list):
+    """Pix usage on pre-launch exposure (tab_pix_exposure_fs.tex), from the unrounded sidecar
+    make_pix_exposure.py writes with the table: exposure moments and correlations, the pooled
+    and yearly first-stage slopes with 95% intervals and F, the joint F."""
+    p = _paths.rout_dir() / "pix_exposure.json"
+    if not p.is_file():
+        notes.append(f"{p.name} not found in Rout; run make_pix_exposure.py for pix.exposure.*.")
+        return
+    sc = json.loads(p.read_text(encoding="utf-8"))
+    src = f"Rout/{p.name} (written by make_pix_exposure.py with tab_pix_exposure_fs.tex)"
+    mom, fs = sc["moments"], sc["fs"]
+
+    def sl(r):
+        return dict(slope=r["slope"], ci=dict(lo=r["lo"], hi=r["hi"]), f=r["f"])
+
+    for e in ("mandated", "mobile", "g45"):
+        add(f"pix.exposure.{e}", "pix exposure", f"Pix exposure '{e}' and its first stage",
+            dict(mean=mom[e]["mean"], sd=mom[e]["sd"], corr=dict(mom[e]["corr"]),
+                 fs={k: dict(**sl(fs[k][e]),
+                             **{f"y{y}": dict(slope=v["slope"], ci=dict(lo=v["lo"], hi=v["hi"]))
+                                for y, v in fs[k][e]["yearly"].items()},
+                             no_cad=sl(fs[k][e]["no_cad"]), f_state=fs[k][e]["state_cl"]["f"])
+                     for k in ("tx", "payers", "value")}),
+            "2019 exposure across MCAs (population-weighted mean, sd, correlations) and the "
+            "cross-market first stage of Pix usage per inhabitant (tx: transactions, payers: mean "
+            "monthly distinct payers, value: 2024Q4 reais) on the exposure per one sd, 2020Q4-2024Q4, "
+            "quarter effects, 2019 Cadunico x quarter effects, log population, population weights, "
+            "MCA clusters (F = t^2); y<year>: yearly slopes; no_cad: without Cadunico x quarter; "
+            "f_state: state clusters", f"{src} {e}", "ok",
+            display=f"sd {fmt3s(mom[e]['sd'])}; payers F {fmt3s(fs['payers'][e]['f'])}")
+    add("pix.exposure.fs.joint", "pix exposure", "Joint first-stage F of the three exposures",
+        {k: dict(f=fs[k]["joint_f"], f_state=fs[k]["joint_f_state"]) for k in ("tx", "payers", "value")},
+        "Wald F of the three standardized exposures in one first-stage regression, MCA clusters "
+        "(f_state: state clusters)", f"{src} fs.<measure>.joint_f", "ok",
+        display=", ".join(f"{k} {fmt3s(fs[k]['joint_f'])}" for k in ("tx", "payers", "value")))
+    add("pix.usage", "pix exposure", "Pix usage panel size",
+        dict(n_mca=sc["sample"]["n_mca"], n_quarters=sc["sample"]["n_quarters"],
+             unmapped_share=sc["coverage"]["unmapped_share"]),
+        "MCAs and quarters (2020Q4-2024Q4) in the first stage; share of municipality-months of "
+        "the Pix statistics that do not map to an MCA", f"{src} sample", "ok",
+        display=f"{sc['sample']['n_mca']} MCAs x {sc['sample']['n_quarters']} quarters")
+
+
+def collect_followups_1020(notes: list):
+    """The 2026-10-20 follow-ups (make_followups_1020.py, Rout/followups_1020.json): the variance
+    split of phi-hat_mt and of its index (C1), entry and the incumbents' carry (C2), cells (14-B)
+    truncates and the market bound (C3), Pix exposure (C4), the D-share decomposition (C5), fees
+    (C6). Event-time keys: hm4..hm1 for h = -4..-1, h0..h8 (h8 = 8 or later)."""
+    p = _paths.rout_dir() / "followups_1020.json"
+    if not p.is_file():
+        notes.append(f"{p.name} not found in Rout; run make_followups_1020.py --only C1,C2,C3,C4,C5,C6.")
+        return
+    sc = json.loads(p.read_text(encoding="utf-8"))
+    src = f"Rout/{p.name} (written by make_followups_1020.py)"
+    for E in _routines.LINK_ESTS:
+        r = sc.get(f"E{E}", {})
+        c1 = r.get("C1")
+        if c1:
+            add(f"sleep.phi_anova.E{E}", "follow-ups", f"Variance split of phi-hat_mt, {rname(E)}",
+                {k: dict(market=c1[k]["market"], quarter=c1[k]["quarter"], rest=c1[k]["rest"])
+                 for k in ("pop", "dep", "pop_noceil", "dep_noceil")},
+                "Order-free (Shapley) shares of the variance of phi-hat over MCA-quarters among MCA "
+                "and quarter effects and the rest; pop: population weights, dep: lagged-deposit "
+                "weights; _noceil: without the cells at phi-hat = 1",
+                f"{src} E{E}.C1", "ok",
+                display=f"pop market {fmt3s(c1['pop']['market'])}, quarter {fmt3s(c1['pop']['quarter'])}",
+                detail=dict(n_cells=c1["n_cells"], n_cells_varying=c1["n_cells_varying"]))
+            add(f"sleep.phi_index.E{E}", "follow-ups", f"Covariance split of the phi index, {rname(E)}",
+                dict(c1["index"]),
+                "Upsilon_k cov(S_k, index) / var(index) over MCA-quarters, population weights; sums "
+                "to one", f"{src} E{E}.C1.index", "ok",
+                display=", ".join(f"{k} {fmt3s(v)}" for k, v in c1["index"].items()))
+            add(f"sleep.phi_ceiling.E{E}", "follow-ups", f"MCA-quarters at phi-hat = 1, {rname(E)}",
+                dict(c1["ceiling"]), "Share of MCA-quarters with phi-hat at the ceiling (unweighted; "
+                "_pop, _dep weighted)", f"{src} E{E}.C1.ceiling", "ok",
+                display=disp(c1["ceiling"]["share"], "share"))
+        c3 = r.get("C3")
+        if c3:
+            def sh(s):
+                return dict(share_cells=s["share_cells"], share_bal=s["share_bal"])
+            add(f"demand.flows.neg.E{E}", "follow-ups", f"Cells (14-B) truncates, {rname(E)}",
+                dict(**sh(c3), bound_violation=dict(min=c3["bound_violation"]["min"],
+                                                    p10=c3["bound_violation"]["p10"]),
+                     by_firm={k: sh(v) for k, v in c3["by_firm"].items()},
+                     by_type={k: sh(v) for k, v in c3["by_type"].items()},
+                     by_size={k: sh(v) for k, v in c3["by_size_B"].items()},
+                     by_year={f"y{k}": sh(v) for k, v in c3["by_year"].items()},
+                     phig_ge1=dict(**sh(c3["phig_ge1"]), share_rows=c3["phig_ge1"]["share_rows"])),
+                "Cells whose active balance in (14-B) is at most zero: shares of cells and of "
+                "balances, overall and by firm type, deposit type, B market population quintile, "
+                "year (by_year.y<year>), and among rows with phi-hat g >= 1; bound_violation: share "
+                "of B market-quarters where phi-hat exceeds min_j (p10: the 10th percentile of) "
+                "Dep / (g Dep_lag)", f"{src} E{E}.C3", "ok",
+                display=f"cells {fmt3s(c3['share_cells'])}, balances {fmt3s(c3['share_bal'])}")
+    c2 = sc.get("C2")
+    if c2:
+        def hk(h):
+            h = int(h)
+            return f"hm{-h}" if h < 0 else f"h{h}"
+        for tag, base in (("all", "entry.carry"), ("no_santander", "entry.carry.no_santander")):
+            v = c2[tag]
+            add(base, "follow-ups", f"Entry and incumbents' carry ({tag})",
+                dict(**{hk(h): dict(estimate=x["estimate"], ci=dict(lo=x["ci"]["lo"], hi=x["ci"]["hi"]))
+                        for h, x in v["h"].items()}, n_markets=v["n_markets"]),
+                "Event-time x carry coefficients for B incumbents of markets with a kept B entry, "
+                "relative to h <= -5, E1 frame with the Tech states x carry, bank x type x market "
+                "and quarter effects, OLS, conglomerate wild cluster bootstrap 95% intervals",
+                f"{src} C2.{tag}", "ok",
+                display=f"{v['n_markets']} markets; h0 {fmt3s(v['h']['0']['estimate'])}")
+    # C4 (Pix exposure) is collect_pix_exposure's, from make_pix_exposure.py.
+    c5 = sc.get("C5")
+    if c5:
+        add("desc.dshare_decomp", "follow-ups", "D-share change 2016-2024, two-fold split",
+            dict(between=c5["between"], within=c5["within"], total=c5["total"]),
+            "Change in the D firms' national deposit share (annual means of quarterly balances, "
+            "types 1, 2, 4, 5) split into the deposit-type mix (between) and within-type gains, "
+            "with 2016 and 2024 type weights", f"{src} C5", "ok",
+            display=f"total {fmt3s(c5['total'])}")
+    c6 = sc.get("C6")
+    if c6:
+        add("desc.fees", "follow-ups", "Fee revenue over deposits, incumbents and D firms",
+            dict(incumbent=dict(**{f"y{k}": v for k, v in c6["incumbent"].items()},
+                                change_2019_2024=c6["incumbent_change_2019_2024"]),
+                 digital=dict(**{f"y{k}": v for k, v in c6["digital"].items()},
+                              change_2019_2024=c6["digital_change_2019_2024"])),
+            "COSIF fee revenue over total deposits, December quarter x 400 (pp a year): median of "
+            "BB, Caixa, Bradesco, Itau, Santander and of the D firms, 2016-2024 (2025 dropped)",
+            f"{src} C6", "ok",
+            display=f"incumbents {fmt3s(c6['incumbent']['2019'])} -> {fmt3s(c6['incumbent']['2024'])}")
 
 
 def collect_dep_anova(notes: list):
@@ -2720,7 +2933,7 @@ def main():
                     help="the single-curve run Table 11's single-curve columns will come from")
     ap.add_argument("--no-tex", action="store_true",
                     help="skip paper_numbers_macros.tex (written by default to PAPER_NUMBERS and "
-                         "to Drafts, next to the tables V_Main inputs)")
+                         "to Drafts, next to the tables V_Full and V_Friction input)")
     ap.add_argument("--tex", action="store_true", help=argparse.SUPPRESS)
     ap.add_argument("--blp-pending", action="store_true",
                     help="mark the BLP-derived entries pending-blp-ext1 (default: ok, see BLP_STATUS)")

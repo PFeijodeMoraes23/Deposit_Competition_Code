@@ -239,7 +239,7 @@ def main() -> int:
     plt.close(fig)
 
     print(f"  -> {OUT_DIR / 'tab_d2_3_cross_routine.md'}")
-    print(f"  -> {OUT_DIR / 'tab_d2_3_cross_routine.tex'}  (+ copy next to V_Main.tex)")
+    print(f"  -> {OUT_DIR / 'tab_d2_3_cross_routine.tex'}  (+ copy next to V_Full.tex and V_Friction.tex)")
     print(f"  -> {fp}")
     print("\n" + "\n".join(md))
     return 0

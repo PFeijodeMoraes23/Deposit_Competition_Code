@@ -1,8 +1,8 @@
 # Building the advertising register PDF
 
 Master: `ADVERTISING_DATA.md` in the code folder. Copies: `Drafts/Deposit Competition/ADVERTISING_DATA.md`
-and `ADVERTISING_DATA.pdf`, next to `V_Main.tex`. After any edit of the master, recopy the md and
-rebuild the pdf. Never touch `V_Main.tex`.
+and `ADVERTISING_DATA.pdf`, next to `V_Full.tex` and `V_Friction.tex`. After any edit of the
+master, recopy the md and rebuild the pdf. Never touch either paper.
 
 Tools: pandoc and MiKTeX's xelatex, both installed.
 

@@ -1,12 +1,14 @@
-"""Paper equations and cross-references as LaTeX macros, for documents other than V_Main.
+"""Paper equations and cross-references as LaTeX macros, for documents other than the paper.
 
-Reads Drafts/Deposit Competition/V_Main.tex and V_Main.aux (it never writes either) and writes
-paper_equations_macros.tex next to them. A document that \\input's that file (slides, notes) gets:
+Reads the paper chosen in config/paper.toml (V_Full or V_Friction, in Drafts/Deposit Competition)
+and its .aux; --paper picks the other one for a run, --main any .tex file. It never writes either,
+and writes paper_equations_macros.tex next to them. A document that \\input's that file (slides,
+notes) gets:
 
   \\papereq{eq:4}       the paper's equation, displayed, tagged with the paper's number
   \\papereq*{eq:4}      the same without the number
   \\papereqbody{eq:4}   the equation as one math box, for your own math environment
-  \\ref / \\eqref       every label of V_Main resolves to the paper's number, e.g.
+  \\ref / \\eqref       every label of the paper resolves to the paper's number, e.g.
                        \\ref{estimation:single_idx} -> (III), so the generated tables, whose headers
                        and notes use those labels, render as they do in the paper. In beamer the
                        number is plain text (beamer would link it to a destination the deck lacks)
@@ -20,11 +22,13 @@ over several lines stays whole; rows after the last label go to that label. Comm
 environments are skipped. \\label, \\tag, \\nonumber and \\notag are dropped, and so is the sentence
 punctuation that closes the equation (--keep-punct keeps it).
 
-NUMBERS. Equation numbers and label texts come from V_Main.aux, so they are those of the last
-compile of the paper. Recompile V_Main, then rerun this script, after the numbering changes.
+NUMBERS. Equation numbers and label texts come from the paper's .aux, so they are those of the
+last compile of the paper. Recompile the paper, then rerun this script, after the numbering
+changes. The output's header line and its \\PEQpaperpdf default name the paper it was read from.
 
 Usage:
-  python make_paper_equations.py
+  python make_paper_equations.py                     # the paper of config/paper.toml
+  python make_paper_equations.py --paper V_Friction
   python make_paper_equations.py --keep-punct
 """
 from utils.venv_guard import ensure_project_venv
@@ -37,14 +41,13 @@ import pathlib
 import re
 import sys
 
-from utils import paths as _paths
+from utils import paper as _paper
 
 try:
     sys.stdout.reconfigure(encoding="utf-8")
 except Exception:
     pass
 
-DRAFTS = _paths.drafts_dir()
 OUT_NAME = "paper_equations_macros.tex"
 
 MATH_ENVS = ("equation", "align", "gather", "multline", "flalign", "alignat")
@@ -282,7 +285,7 @@ def equations(body: str, keep_punct: bool):
 # Labels of the compiled paper
 # --------------------------------------------------------------------------------------------
 def aux_labels(aux: str):
-    """{label: (text, page, anchor)} from the \\newlabel lines of V_Main.aux."""
+    """{label: (text, page, anchor)} from the \\newlabel lines of the paper's .aux."""
     out = {}
     for m in re.finditer(r"\\newlabel\{([^}]*)\}", aux):
         key = m.group(1)
@@ -405,13 +408,20 @@ def _dump(path: pathlib.Path, text: str):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    ap.add_argument("--main", type=pathlib.Path, default=DRAFTS / "V_Main.tex",
-                    help="the paper's main .tex (read only); its .aux is read from the same folder")
+    ap.add_argument("--paper", choices=_paper.PAPERS, default=None,
+                    help="the paper to read for this run (default: config/paper.toml, or $DEPOSIT_PAPER)")
+    ap.add_argument("--main", type=pathlib.Path, default=None,
+                    help="any main .tex to read instead (read only); its .aux is read from the same folder")
     ap.add_argument("--out", type=pathlib.Path, default=None,
                     help=f"output file (default: {OUT_NAME} next to the paper)")
     ap.add_argument("--keep-punct", action="store_true",
                     help="keep the sentence punctuation that closes an equation")
     args = ap.parse_args()
+    if args.main is None:
+        args.main = _paper.tex(args.paper)
+    elif args.paper is not None:
+        sys.exit("give --paper or --main, not both")
+    print(f"  reading {args.main.name}")
 
     src = args.main.read_text(encoding="utf-8")
     pre, sep, body = src.partition("\\begin{document}")
@@ -423,8 +433,10 @@ def main():
     aux = args.main.with_suffix(".aux")
     labels = aux_labels(aux.read_text(encoding="utf-8", errors="replace")) if aux.exists() else {}
     if not labels:
-        print(f"  WARNING: no labels read from {aux}; equations carry no number and \\ref will not "
-              "resolve. Compile the paper, then rerun.")
+        # Every deck inputs the one output file, so a label-less file would strip every equation
+        # number and \ref from all of them: keep the last good file instead.
+        sys.exit(f"  no labels read from {aux} (missing or empty: the paper is not compiled, or its "
+                 f"auxiliary files were cleaned). Nothing written; compile {aux.stem}, then rerun.")
 
     eqs, skipped = equations(body, args.keep_punct)
     out = args.out or args.main.with_name(OUT_NAME)

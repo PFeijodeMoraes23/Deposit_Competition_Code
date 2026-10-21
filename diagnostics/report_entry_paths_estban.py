@@ -1,16 +1,18 @@
 """
 report_entry_paths_estban.py
 ============================
-Writes entry_paths_estban_report.tex next to V_Main.tex and compiles it to PDF.
+Writes entry_paths_estban_report.tex next to the papers (Drafts/Deposit Competition) and compiles
+it to PDF.
 
 Every number in the report is read from the outputs of sleep_ident_entry_dynamics.py
-(DIAG_PHI_SEPARATION, with the previous vintage in PREV_DIR), diagnostics/diag_entry_dynamics_estban.py
+(DIAG_PHI_SEPARATION), diagnostics/diag_entry_dynamics_estban.py
 (DIAG_ENTRY_ESTBAN), the demand-preparation parquet and the code itself (the estimator's grid,
-the type-4 rate ceiling); none is typed here.  V_Main.aux supplies the figure's number and page.
+the type-4 rate ceiling); none is typed here.  The paper's .aux supplies the figure's number and
+page: the paper of config/paper.toml (utils/paper.py), or the one --paper names for this run.
 pdflatex runs twice in a build folder and only the PDF is copied back, so the Drafts folder
 receives the .tex and the .pdf.
 
-Usage:  python diagnostics/report_entry_paths_estban.py [--build-dir DIR] [--no-compile]
+Usage:  python diagnostics/report_entry_paths_estban.py [--paper V_Full|V_Friction] [--build-dir DIR] [--no-compile]
 """
 from __future__ import annotations
 
@@ -41,11 +43,11 @@ import tempfile
 
 import pandas as pd
 
+from utils import paper as _paper
 from utils import paths
 import sleep_ident_entry_dynamics as d6
 
 D6_DIR = d6.OUT_DIR
-PREV_DIR = D6_DIR / "_D6_PREWINDOW_20261012"     # the figure's outputs before the window rule
 EST_DIR = paths.PROCESSED / "ESTIMATION_OUTPUT" / "DIAG_ENTRY_ESTBAN"
 DRAFTS = paths.drafts_dir()
 STEM = "entry_paths_estban_report"
@@ -105,11 +107,12 @@ def pct(x: float) -> str:
 
 
 # ----------------------------------------------------------------------------- inputs
-def figure_ref() -> tuple[str, str]:
-    aux = (DRAFTS / "V_Main.aux").read_text(encoding="utf-8", errors="replace")
+def figure_ref(paper: str | None = None) -> tuple[str, str]:
+    aux_path = _paper.aux(paper)
+    aux = aux_path.read_text(encoding="utf-8", errors="replace")
     m = re.search(r"\\newlabel\{" + re.escape(FIG_LABEL) + r"\}\{\{(\d+)\}\{(\d+)\}", aux)
     if not m:
-        raise SystemExit(f"{FIG_LABEL} not found in V_Main.aux; compile V_Main first")
+        raise SystemExit(f"{FIG_LABEL} not found in {aux_path.name}; compile {aux_path.stem} first")
     return m.group(1), m.group(2)
 
 
@@ -186,7 +189,7 @@ def table_screens(ev6, evR) -> str:
     return "\n".join(rows)
 
 
-def table_phi(imp6, impR, impP) -> str:
+def table_phi(imp6, impR) -> str:
     def row(label, r):
         return (f"{label} & {ni(r['n_events'])} & {f3(r['phi_entry'])} & "
                 f"{ci(r['lo'], r['hi'])} & {f3(r['phi_g'])} & {f3(r['phi_pooled_abs'])} \\\\")
@@ -196,7 +199,6 @@ def table_phi(imp6, impR, impP) -> str:
         row("\\quad Paper: market panel, per-entrant $g$", imp6.loc["B"]),
         row("\\quad Same entries, fixed $g$ (control)", impR.loc["panel_fixed_g"]),
         row("\\quad Raw ESTBAN, fixed $g$", impR.loc["window"]),
-        row("\\quad Paper, previous sample rule", impP.loc["B"]),
         "\\addlinespace",
         "\\multicolumn{6}{l}{\\textit{D firms, national market}} \\\\",
         (f"\\quad Paper: market panel, per-entrant $g$ & {ni(d['n_events'])} & "
@@ -220,23 +222,21 @@ def table_paths(paths6, pathsR, H) -> tuple[str, float]:
     return "\n".join(rows), dmax
 
 
-def table_cohorts(evP, ev6, evR) -> str:
+def table_cohorts(ev6, evR) -> str:
     year = lambda df: (df["q_entry"] // 4).astype(int)
-    kp = year(evP[evP["keep"]]).value_counts()
-    bp = year(only_branch(evP)).value_counts()
+    b6 = year(only_branch(ev6)).value_counts()
     k6 = year(ev6[ev6["keep"]]).value_counts()
     kr = year(evR[evR["keep"]]).value_counts()
-    years = sorted(set(kp.index) | set(bp.index) | set(k6.index) | set(kr.index))
-    rows = [f"{y} & {ni(kp.get(y, 0))} & {ni(bp.get(y, 0))} & {ni(k6.get(y, 0))} & "
-            f"{ni(kr.get(y, 0))} \\\\" for y in years]
-    rows += ["\\midrule", f"Total & {ni(kp.sum())} & {ni(bp.sum())} & {ni(k6.sum())} & "
-             f"{ni(kr.sum())} \\\\"]
+    years = sorted(set(b6.index) | set(k6.index) | set(kr.index))
+    rows = [f"{y} & {ni(k6.get(y, 0))} & {ni(b6.get(y, 0))} & {ni(kr.get(y, 0))} \\\\" for y in years]
+    rows += ["\\midrule", f"Total & {ni(k6.sum())} & {ni(b6.sum())} & {ni(kr.sum())} \\\\"]
     return "\n".join(rows)
 
 
 def table_continuity(cont) -> str:
-    return "\n".join(f"{r.quarter} & {ni(r.raw_all / 1e9)} & {ni(r.panel / 1e9)} & "
-                     f"{f3(r.panel_over_raw_with_mun)} \\\\" for r in cont.itertuples())
+    return "\n".join(f"{r.quarter} & {ni(r.raw_all / 1e9)} & {ni(r.raw_panel_universe / 1e9)} & "
+                     f"{ni(r.panel / 1e9)} & {f3(r.panel_over_raw_panel_universe)} \\\\"
+                     for r in cont.itertuples())
 
 
 # ----------------------------------------------------------------------------- document
@@ -274,8 +274,8 @@ TEMPLATE = r"""\documentclass[11pt]{article}
 \begin{itemize}
 \item Figure @@fignum@@ of the current draft compares the median share path of entrants with the path the sleepiness model implies. Its data paths and the entry-implied sleeping share use deposit balances and a constructed deposit rate only. The one estimated input is the level of $\hat\phi$ behind the two model curves, taken from the sleepiness stage. Nothing comes from the demand (logit or BLP) stage.
 \item The figure's $\mathrm{B}$-firm share is a conditional share: the entrant's ESTBAN deposits over the ESTBAN deposits of all branch-network institutions in the market. $\mathrm{D}$ firms are booked nationally and enter neither the numerator nor the denominator.
-\item Entries are now dated inside the estimation sample, @@win_lo@@ to @@win_hi@@, and share paths are read through @@win_hi@@. The $\mathrm{B}$-firm paths imply a sleeping share of @@phi_paper@@ (95\% CI @@ci_paper@@, @@n_paper@@ entries), against @@phi_prev@@ (@@ci_prev@@, @@n_prev@@ entries) under the previous rule.
-\item The branch-timing screen now judges an entry only where the branch data cover it, and drops @@n_branch_new@@. Under the previous rule it dropped @@n_branch_prev@@, of which @@n_branch_early@@ were entries from 2014Q1 to 2015Q3 that had no branch data at all.
+\item Entries are dated inside the estimation sample, @@win_lo@@ to @@win_hi@@, and share paths are read through @@win_hi@@. The $\mathrm{B}$-firm paths imply a sleeping share of @@phi_paper@@ (95\% CI @@ci_paper@@, @@n_paper@@ entries).
+\item The branch-timing screen judges an entry only where the branch data cover it, and drops @@n_branch_new@@.
 \item The accrual factor $g$ is constructed, not estimated: one plus last quarter's deposit rate, averaged over the entrant's own mix of deposit types (Section~\ref{sec:g}).
 \item Rebuilt from the raw ESTBAN files under the same rule, the median paths stay within @@dmax@@ of the paper's and imply @@phi_raw@@ (@@ci_raw@@, @@n_raw@@ entries).
 \item The market panel still holds pre-2016 ESTBAN balances at about twice their raw level, a problem known since the demand repair of October 5. Under the new rule no pre-2016 quarter enters any share path, so the figure is unaffected.
@@ -287,7 +287,7 @@ Figure @@fignum@@ of the current draft (page @@figpage@@, label \texttt{fig:phi\
 
 The figure, and the entry-implied share the text quotes (macro \texttt{phi.entry.point}), come from \texttt{sleep\_ident\_entry\_dynamics.py}. The current outputs were computed on @@date_paths@@ from the market panel built on @@date_panel@@.
 
-\paragraph{Sample rule.} Entries are dated inside the estimation window of \texttt{utils/window.py}, @@win_lo@@ to @@win_hi@@, the bounds every estimation stage uses, and share paths are read only through @@win_hi@@. The panel's earlier quarters, from 2013Q1, enter only to show that an entrant had no deposits in the market before its entry quarter. An entry needs eight observed quarters after it, and is plotted only if at least one of quarters @@plat_lo@@ to @@plat_hi@@ is observed, so the latest plotted entries date from @@last_plotted@@. Under the previous rule, entries ran from 2014 and paths through the panel's last quarter, @@prev_qmax@@.
+\paragraph{Sample rule.} Entries are dated inside the estimation window of \texttt{utils/window.py}, @@win_lo@@ to @@win_hi@@, the bounds every estimation stage uses, and share paths are read only through @@win_hi@@. The panel's earlier quarters, from 2013Q1, enter only to show that an entrant had no deposits in the market before its entry quarter. An entry needs eight observed quarters after it, and is plotted only if at least one of quarters @@plat_lo@@ to @@plat_hi@@ is observed, so the latest plotted entries date from @@last_plotted@@.
 
 \section{Inputs}
 
@@ -424,7 +424,7 @@ Table~\ref{tab:phi} reports the implied sleeping share, Figure~\ref{fig:raw} ove
 @@table_phi@@
 \bottomrule
 \end{tabular}
-\tnote{\textit{Notes:} $\hat\phi$ minimizes the squared distance between the median model path and the median data path over quarters 1 to @@fit_hi@@ (Section~\ref{sec:est}); the interval resamples entries @@n_draws@@ times. ``Absolute loss'' instead minimizes summed absolute deviations over every entry and horizon. $\hat\phi g$ is evaluated at the median accrual of the entries. The fixed accrual is the sample median, @@g_fixed@@. The control row rebuilds the paper's entries from the market panel; its median path matches the published one to @@control_dev@@. The previous sample rule dated entries from 2014 and read paths through @@prev_qmax@@. The grid runs from @@grid_lo@@ to @@grid_hi@@.}
+\tnote{\textit{Notes:} $\hat\phi$ minimizes the squared distance between the median model path and the median data path over quarters 1 to @@fit_hi@@ (Section~\ref{sec:est}); the interval resamples entries @@n_draws@@ times. ``Absolute loss'' instead minimizes summed absolute deviations over every entry and horizon. $\hat\phi g$ is evaluated at the median accrual of the entries. The fixed accrual is the sample median, @@g_fixed@@. The control row rebuilds the paper's entries from the market panel; its median path matches the published one to @@control_dev@@. The grid runs from @@grid_lo@@ to @@grid_hi@@.}
 \end{table}
 
 \begin{figure}[htbp]
@@ -452,16 +452,16 @@ $h$ & Paper & Raw ESTBAN & Paper & Raw ESTBAN \\
 \section{What changed, and what remains in the data}
 
 \subsection{The sample rule and the branch screen}
-The branch screen flags an entrant whose deposits appear two or more quarters before its first branch in the market. It reads the first branch from \texttt{estban\_own\_branches.csv}, built from \texttt{ESTBAN.csv}, which starts in @@branch_cover@@, while the panel's ESTBAN deposits start in 2013Q1. Under the previous rule every entry from 2014Q1 to 2015Q3 therefore had no recorded branch before 2016 and was dropped: @@n_branch_early@@ of the screen's @@n_branch_prev@@ drops. The screen now judges an entry only from the first quarter its branch data cover. ESTBAN lists an institution in a municipality only where it has a branch, so an entrant from that quarter on had no earlier branch there and is judged correctly; the screen now drops @@n_branch_new@@ (Table~\ref{tab:screens}). With entries dated from @@win_lo@@, every entry is covered. Table~\ref{tab:cohorts} shows the entries by year under both rules.
+The branch screen flags an entrant whose deposits appear two or more quarters before its first branch in the market. It reads the first branch from \texttt{estban\_own\_branches.csv}, built from \texttt{ESTBAN.csv}, which starts in @@branch_cover@@, while the panel's ESTBAN deposits start in 2013Q1. The screen judges an entry only from the first quarter its branch data cover. ESTBAN lists an institution in a municipality only where it has a branch, so an entrant from that quarter on had no earlier branch there and is judged correctly. The screen drops @@n_branch_new@@ (Table~\ref{tab:screens}). With entries dated from @@win_lo@@, every entry is covered. Table~\ref{tab:cohorts} shows the entries by year.
 
 \begin{table}[htbp]
 \centering
 \caption{$\mathrm{B}$-firm entries kept, by year of entry}\label{tab:cohorts}
-\begin{tabular}{@{}lrrrr@{}}
+\begin{tabular}{@{}lrrr@{}}
 \toprule
- & \multicolumn{2}{c}{Previous rule} & \multicolumn{2}{c}{Current rule} \\
-\cmidrule(lr){2-3}\cmidrule(l){4-5}
-Year & Kept & Branch-screen drops & Paper & Raw ESTBAN \\
+ & \multicolumn{2}{c}{Paper} & \\
+\cmidrule(lr){2-3}
+Year & Kept & Branch-screen drops & Raw ESTBAN \\
 \midrule
 @@table_cohorts@@
 \bottomrule
@@ -470,30 +470,29 @@ Year & Kept & Branch-screen drops & Paper & Raw ESTBAN \\
 \end{table}
 
 \subsection{Pre-2016 ESTBAN balances are doubled in the market panel}
-\texttt{panel\_deposits.py} lists the raw ESTBAN files for 2013--2015 with two patterns, \texttt{*.CSV} and \texttt{*.csv}. File names are case-insensitive on Windows, so both patterns match every file and each file is read twice; the conglomerate $\times$ municipality $\times$ quarter sum doubles every pre-2016 balance. From 2016 the panel reads \texttt{ESTBAN.csv}, once. Table~\ref{tab:cont} shows the break: the panel's national ESTBAN deposits run at @@ratio_pre@@ times the raw files in 2015 and at @@ratio_post@@ times from 2016Q1. The problem was traced during the demand repair of October 5. The demand repair halves the 2015Q4 balance in its own repair file, and the one-line source fix was deferred to the next full rebuild; applied now, it would halve that balance a second time.
+\texttt{panel\_deposits.py} lists the raw ESTBAN files for 2013--2015 with two patterns, \texttt{*.CSV} and \texttt{*.csv}. File names are case-insensitive on Windows, so both patterns match every file and each file is read twice; the conglomerate $\times$ municipality $\times$ quarter sum doubles every pre-2016 balance. From 2016 the panel reads \texttt{ESTBAN.csv}, once. Table~\ref{tab:cont} shows the break: the panel's national ESTBAN deposits run at @@ratio_pre@@ times the raw files of the same conglomerates in 2015 and at @@ratio_post@@ times from 2016Q1. The problem was traced during the demand repair of October 5. The demand repair halves the 2015Q4 balance in its own repair file, and the one-line source fix was deferred to the next full rebuild; applied now, it would halve that balance a second time.
 
 The figure does not depend on it. Within ESTBAN the doubling is uniform, so local shares are unchanged; and under the current rule no pre-2016 quarter enters any path, so the pre-2016 rows only date entries, which doubling cannot change. That second point also covers $\mathrm{D}$ firms, whose pre-2016 shares would be distorted: the $\mathrm{D}$ firms that report to ESTBAN carry doubled balances, while those sourced from IF.Data do not.
 
-The panel's ESTBAN total after 2016 is about @@pct_post@@ percent below the raw files. This is not traced here: \texttt{ESTBAN.csv} matches the raw files, and raw rows without a municipality carry no deposits in these quarters, so the loss happens inside the panel build.
+Against every raw ESTBAN reporter, the panel's total after 2016 is about @@pct_post_all@@ percent lower. The difference is the panel's design: \texttt{panel\_market.py} drops the conglomerates whose IF.Data activity and segment mark them as purely wholesale or investment banks (among them J.P.~Morgan, BofA Merrill Lynch, Deutsche Bank, Morgan Stanley, UBS and BOCOM BBM), which hold deposits in ESTBAN but no retail franchise. Table~\ref{tab:cont} therefore compares the panel with the raw files of the same conglomerates.
 
 \begin{table}[htbp]
 \centering
 \caption{National ESTBAN deposits around the 2016 break (R\$ billion)}\label{tab:cont}
-\begin{tabular}{@{}lrrc@{}}
+\begin{tabular}{@{}lrrrc@{}}
 \toprule
-Quarter & Raw files & Market panel & Panel / raw \\
+Quarter & Raw, all reporters & Raw, panel's conglomerates & Market panel & Panel / raw \\
 \midrule
 @@table_cont@@
 \bottomrule
 \end{tabular}
-\tnote{\textit{Notes:} Demand, savings and time deposits of every ESTBAN reporter, summed nationally. The market panel total includes the ESTBAN rows it moves to national booking.}
+\tnote{\textit{Notes:} Demand, savings and time deposits, summed nationally. ``Panel's conglomerates'' leaves out the purely wholesale and investment conglomerates the market panel drops (institutions mapped to conglomerates by the IF.Data lists); the last column compares the panel with it. The market panel total includes the ESTBAN rows it moves to national booking.}
 \end{table}
 
 \section{Open items}
 \begin{enumerate}
 \item \textbf{V\_Main text.} The figure, its counts and the quoted share update through the macros. Two phrases of the caption are typed and no longer hold (the entrants ``of 2023Q3'', and the plural for the $\mathrm{D}$-firm entrants without a plateau path); replacement lines are supplied separately.
 \item \textbf{Double read.} Apply the source fix in \texttt{panel\_deposits.py} at the next full rebuild, and remove the repair file's 2015Q4 halving in the same step.
-\item \textbf{Post-2016 shortfall.} Trace the @@pct_post@@ percent gap between the panel's ESTBAN total and the raw files.
 \item \textbf{D-firm accrual.} @@gD_nat@@ percent of $\mathrm{D}$ entrants' quarters use the national median $g$; the paper does not quote the $\mathrm{D}$-firm share.
 \item \textbf{Reporting.} Whether to cite the raw-ESTBAN check in the paper.
 \end{enumerate}
@@ -514,13 +513,12 @@ From the code folder, with the project environment:
 """
 
 
-def build() -> str:
+def build(paper: str | None = None) -> str:
     meta6 = json.loads((D6_DIR / "d6_meta.json").read_text(encoding="utf-8"))
     metaR = json.loads((EST_DIR / "estban_meta.json").read_text(encoding="utf-8"))
     imp6 = pd.read_csv(D6_DIR / "d6_implied_phi.csv").set_index("kind")
-    impP = pd.read_csv(PREV_DIR / "d6_implied_phi.csv").set_index("kind")
     paths6 = pd.read_csv(D6_DIR / "d6_entry_paths.csv")
-    ev6, evP = events(D6_DIR, "B"), events(PREV_DIR, "B")
+    ev6 = events(D6_DIR, "B")
     ev6D = events(D6_DIR, "D")
     impR = pd.read_csv(EST_DIR / "estban_implied_phi.csv").set_index("variant")
     pathsR = pd.read_csv(EST_DIR / "estban_entry_paths.csv")
@@ -537,24 +535,24 @@ def build() -> str:
     grid_lo, grid_hi, grid_n = float(gm.group(1)), float(gm.group(2)), int(gm.group(3))
     draw_cap = int(re.search(r"min\(boot,\s*(\d+)\)", src).group(1))
     g_fixed = float(metaR["g"])
-    fignum, figpage = figure_ref()
+    fignum, figpage = figure_ref(paper)
     vint = {lab: (phi, s) for lab, phi, s in meta6["vintages"]}
     nq = re.search(r"over (\d+) quarters", vint["E3"][1]).group(1)
 
-    b, d, bP = imp6.loc["B"], imp6.loc["D"], impP.loc["B"]
+    b, d = imp6.loc["B"], imp6.loc["D"]
     raw, ctl = impR.loc["window"], impR.loc["panel_fixed_g"]
     paths_tex, dmax = table_paths(paths6, pathsR, H)
     alt6 = paths6[(paths6["kind"] == "B") & (paths6["norm"] == "alt")].set_index("h")["median"]
     model_alt_h0 = d6.model_curve(float(b["phi_entry"]), float(b["g_e_median"]), H, "alt",
                                   plateau_w)[0]
-    pre = cont[cont["qidx"] < 2016 * 4]["panel_over_raw_with_mun"]
-    post = cont[cont["qidx"] >= 2016 * 4]["panel_over_raw_with_mun"]
+    pre = cont[cont["qidx"] < 2016 * 4]["panel_over_raw_panel_universe"]
+    post = cont[cont["qidx"] >= 2016 * 4]["panel_over_raw_panel_universe"]
+    post_all = cont[cont["qidx"] >= 2016 * 4]["panel_over_raw_with_mun"]
     n_local = pd.read_parquet(paths.PROCESSED / "market_panel.parquet",
                               columns=["CODMUN_IBGE"])["CODMUN_IBGE"]
     n_local = int((~n_local.isin(["0", "0.0"])).sum())
     branch_cover = int(pd.read_csv(d6.BRANCH_SIDECAR, usecols=["year", "quarter"])
                        .eval("year * 4 + quarter - 1").min())
-    obP = only_branch(evP)
     _, steps6, _ = waterfall(ev6)
     n_branch_new = dict(steps6)["f_branch"]
     kept6 = ev6[ev6["keep"]]
@@ -565,8 +563,6 @@ def build() -> str:
     gd = g_frame()
     gt = g_by_type(gd)
     own0 = own_cell_at_entry(gd, ev6)
-    prev_qmax = int(pd.read_csv(PREV_DIR / "d6_entry_events.csv", low_memory=False,
-                                usecols=["q_entry", "n_obs_post"]).eval("q_entry + n_obs_post - 1").max())
     accrual = abs(float(b["phi_entry"]) - float(ctl["phi_entry"]))
     fig_path = os.path.relpath(EST_DIR / "fig_entry_estban_window.pdf", DRAFTS).replace("\\", "/")
     if " " in fig_path:
@@ -575,7 +571,7 @@ def build() -> str:
     v = {
         "today": f"{dt.date.today():%B} {dt.date.today().day}, {dt.date.today().year}",
         "fignum": fignum, "figpage": figpage, "H": str(H), "H1": str(H + 1),
-        "win_lo": yq(win_lo), "win_hi": yq(win_hi), "prev_qmax": yq(prev_qmax),
+        "win_lo": yq(win_lo), "win_hi": yq(win_hi),
         "last_plotted": yq(win_hi - plateau_w[0]),
         "date_paths": day(D6_DIR / "d6_entry_paths.csv"),
         "date_panel": day(paths.PROCESSED / "market_panel.parquet"),
@@ -584,13 +580,10 @@ def build() -> str:
         "kept_paper": ni(len(kept6)), "n_cens_B": ni(len(cens)),
         "cens_B": " and ".join(cens_q) if cens_q else "none",
         "branch_cover": yq(branch_cover),
-        "n_branch_new": ni(n_branch_new), "n_branch_prev": ni(len(obP)),
-        "n_branch_early": ni(int((obP["q_entry"] < win_lo).sum())),
+        "n_branch_new": ni(n_branch_new),
         "phi_paper": f3(b["phi_entry"]), "ci_paper": ci(b["lo"], b["hi"]),
         "n_paper": ni(b["n_events"]), "phi_paper_pooled": f3(b["phi_pooled_abs"]),
         "phig_paper": f3(b["phi_g"]), "w_paper": f3(b["hi"] - b["lo"]),
-        "phi_prev": f3(bP["phi_entry"]), "ci_prev": ci(bP["lo"], bP["hi"]),
-        "n_prev": ni(bP["n_events"]),
         "phi_raw": f3(raw["phi_entry"]), "ci_raw": ci(raw["lo"], raw["hi"]),
         "n_raw": ni(raw["n_events"]), "w_raw": f3(raw["hi"] - raw["lo"]),
         "phi_control": f3(ctl["phi_entry"]), "n_control": ni(ctl["n_events"]),
@@ -617,12 +610,12 @@ def build() -> str:
         "n_inst": ni(metaR["n_institutions"]), "n_mca": ni(metaR["n_mca"]),
         "n_no_mca": ni(metaR["n_rows_no_mca"]),
         "pct_no_mca": pct(metaR["share_deposits_no_mca"]),
-        "ratio_pre": span(pre), "ratio_post": span(post), "pct_post": pct(1 - post.mean()),
+        "ratio_pre": span(pre), "ratio_post": span(post), "pct_post_all": pct(1 - post_all.mean()),
         "fig_path": fig_path,
         "table_screens": table_screens(ev6, evR),
-        "table_phi": table_phi(imp6, impR, impP),
+        "table_phi": table_phi(imp6, impR),
         "table_paths": paths_tex,
-        "table_cohorts": table_cohorts(evP, ev6, evR),
+        "table_cohorts": table_cohorts(ev6, evR),
         "table_cont": table_continuity(cont),
     }
 
@@ -662,11 +655,14 @@ def compile_pdf(tex_path: Path, build_dir: Path | None) -> None:
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--paper", choices=_paper.PAPERS, default=None,
+                    help="the paper whose .aux gives the figure's number and page "
+                         "(default: config/paper.toml, or $DEPOSIT_PAPER)")
     ap.add_argument("--build-dir", default=None)
     ap.add_argument("--no-compile", action="store_true")
     a = ap.parse_args()
     tex_path = DRAFTS / f"{STEM}.tex"
-    tex_path.write_text(build(), encoding="utf-8", newline="\n")
+    tex_path.write_text(build(a.paper), encoding="utf-8", newline="\n")
     print(f"  -> {tex_path}")
     if not a.no_compile:
         compile_pdf(tex_path, a.build_dir)

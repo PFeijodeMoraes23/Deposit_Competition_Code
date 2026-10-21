@@ -74,7 +74,8 @@ def pre_cut(est: int, refresh: bool) -> tuple[pd.DataFrame, dict, dict]:
     gc.collect()
     keep = ["CodConglomeradoPrudencial", "mca_code", "year", "quarter", "time_id", "deposit_type",
             "is_B", "deposit_balance", "lagged_deposits", "gross_return_lag", "pop_total",
-            "phi_mt", "phi_t", "phi_index", "active_raw", *STATES.values()]
+            "phi_mt", "phi_t", "phi_index", "active_raw", *STATES.values(),
+            *(k for k in ups if k != "constant")]
     d = d[[c for c in dict.fromkeys(keep) if c in d.columns]].reset_index(drop=True)
     d["mca_code"] = d["mca_code"].astype(str)
     d.to_parquet(out)
@@ -83,16 +84,29 @@ def pre_cut(est: int, refresh: bool) -> tuple[pd.DataFrame, dict, dict]:
 
 
 # ── C1 ───────────────────────────────────────────────────────────────────────
+def _terms(ups: dict) -> dict:
+    """Index terms: the five states under their short names, then any other term of the fit
+    (E4's time block) under its own column name."""
+    t = dict(STATES)
+    t.update({k: k for k in ups if k != "constant" and k not in STATES.values()})
+    return t
+
+
 def c1(d: pd.DataFrame, ups: dict) -> dict:
+    terms = _terms(ups)
     b = d[d["is_B"].astype(bool)]
     g = b.groupby(["mca_code", "time_id"])
-    mq = g.agg(phi=("phi_mt", "first"), phi_sd=("phi_mt", "std"), index=("phi_index", "first"),
-               pop=("pop_total", "first"), dep=("lagged_deposits", "sum"),
-               **{k: (v, "first") for k, v in STATES.items()}).reset_index()
-    if float(mq["phi_sd"].fillna(0).max()) > 1e-9:
-        sys.exit("phi-hat varies within an MCA-quarter: it is not a market-quarter object")
+    # phi-hat is a market-quarter object except where the lagged Selic is lagged within a
+    # bank x type x market series that skips a quarter (it then holds an older Selic): the
+    # market-quarter takes the median, and the count of such cells is recorded.
+    mq = g.agg(phi=("phi_mt", "median"), phi_rng=("phi_mt", lambda x: x.max() - x.min()),
+               index=("phi_index", "median"), pop=("pop_total", "first"),
+               dep=("lagged_deposits", "sum"),
+               **{k: (v, "median") for k, v in terms.items()}).reset_index()
+    vary = mq["phi_rng"] > 1e-9
     out = dict(n_cells=int(len(mq)), n_mca=int(mq["mca_code"].nunique()),
-               n_quarters=int(mq["time_id"].nunique()))
+               n_quarters=int(mq["time_id"].nunique()), n_cells_varying=int(vary.sum()),
+               max_within_range=float(mq["phi_rng"].max()))
     at_ceiling = mq["phi"] >= CEIL
     out["ceiling"] = dict(share=float(at_ceiling.mean()),
                           share_pop=float(np.average(at_ceiling, weights=mq["pop"])),
@@ -108,19 +122,21 @@ def c1(d: pd.DataFrame, ups: dict) -> dict:
     f = mq[mq["pop"] > 0]
     w = f["pop"].to_numpy().astype(float)
     idx = f["index"].to_numpy()
-    rebuilt = ups.get("constant", 0.0) + sum(ups[v] * f[k].to_numpy() for k, v in
-                                             ((k, v) for k, v in STATES.items()))
-    if float(np.max(np.abs(rebuilt - idx))) > 1e-8:
-        sys.exit("the index is not constant + sum of the five states: the state list differs")
-    ic = idx - np.average(idx, weights=w)
+    rebuilt = ups.get("constant", 0.0) + sum(ups[v] * f[k].to_numpy() for k, v in terms.items())
+    exact = ~(f["phi_rng"] > 1e-9).to_numpy()
+    if float(np.max(np.abs(rebuilt - idx)[exact])) > 1e-8:
+        sys.exit("the index is not constant + sum of its terms: the term list differs")
+    # Split the index rebuilt from the market-quarter medians of the terms, which is exactly
+    # linear in them (equal to the fitted index wherever no term varies within the cell).
+    ic = rebuilt - np.average(rebuilt, weights=w)
     var = float(np.average(ic ** 2, weights=w))
     split = {}
-    for k, v in STATES.items():
+    for k, v in terms.items():
         s = f[k].to_numpy() - np.average(f[k].to_numpy(), weights=w)
         split[k] = float(ups[v] * np.average(s * ic, weights=w) / var)
     assert abs(sum(split.values()) - 1.0) < 1e-9, split
     out["index"] = split
-    out["upsilon"] = {k: ups[v] for k, v in STATES.items()}
+    out["upsilon"] = {k: ups[v] for k, v in terms.items()}
     return out
 
 
@@ -202,22 +218,22 @@ def table_negative(res: dict) -> str:
     rules = " ".join(rf"\cmidrule(lr){{{2 + 2 * i}-{3 + 2 * i}}}" for i in range(len(ests)))
     head2 = " & " + " & ".join("Cells & Balances" for _ in ests)
     note = (r"\textit{Notes:} Cells (conglomerate $\times$ deposit type $\times$ minimum comparable "
-            r"area (MCA) $\times$ quarter, specification 12) whose active balance in "
-            r"\eqref{eq:14-B}, the balance minus the carried-forward stock $\hat{\phi}\,g\,"
-            r"\text{Dep}_{t-1}$, is at most zero. \eqref{eq:14-B} truncates them at zero and they "
-            r"leave the demand sample. Shares of all cells and of all balances in each group. "
+            r"area (MCA) $\times$ quarter, specification 12) whose active balance in the "
+            r"active-deposit construction, the balance minus the carried-forward stock "
+            r"$\hat{\phi}\,g\,\text{Dep}_{t-1}$, is at most zero. The construction truncates them at "
+            r"zero and they leave the demand sample. Shares of all cells and of all balances in each group. "
             r"$\hat{\phi}$ is $\hat{\phi}_{mt}$ for brick-and-mortar (B) firms and the national "
             r"$\hat{\phi}_t$ for digital (D) firms. Market population quintiles: B firms' MCAs by "
             r"mean population. Last panel: share of B market-quarters where $\hat{\phi}_{mt}$ "
             r"exceeds the bound the model implies, $\min_j \text{Dep}_{jkmt}/(g_{jkm,t-1}\,"
             r"\text{Dep}_{jkm,t-1})$ across the market's B cells, and the same share with the "
             r"10th percentile in place of the minimum. Diagnostic only: the demand estimation "
-            r"keeps \eqref{eq:14-B} as it is.")
+            r"keeps the active-deposit construction as it is.")
     return "\n".join([
         "% tab_negative_active.tex -- GENERATED by make_followups_1020.py. Do not edit.",
         r"\begin{spacing}{1.0}", r"\footnotesize", r"\setlength{\tabcolsep}{3pt}",
         r"\par\addvspace{\LTpre}\noindent\begin{minipage}{\textwidth}\captionsetup{position=top}",
-        r"\captionof{table}{Cells with Negative Active Demand in \eqref{eq:14-B}}"
+        r"\captionof{table}{Cells with Negative Active Demand}"
         r"\label{tab:negative_active}",
         r"\begin{tabularx}{\textwidth}{@{}X"
         + r">{\raggedleft\arraybackslash}p{1.7cm}" * (2 * len(ests)) + r"@{}}",
@@ -349,6 +365,72 @@ def c4() -> dict:
     return out
 
 
+# ── C2 ───────────────────────────────────────────────────────────────────────
+EVENTS = _paths.rout_dir().parent / "DIAG_PHI_SEPARATION" / "d6_entry_events.csv"
+SANTANDER = "C0080185"
+H_MIN, H_MAX = -4, 8          # event times reported; h <= -5 omitted, h >= 8 pooled into 8
+TECH = ["pix_exists", "cadunico_families_per1000", "fraction_65plus", "risk_free_qoq_lag",
+        "connections_per100"]
+
+
+def c2() -> dict:
+    """Entry and the incumbents' carry: on the E1 frame (sleep_est_e2.build_pooled_data), B
+    incumbents of markets with a kept B entry (d6 window rule), deposit balance on the carry
+    (gross return x lagged balance), the five Tech states x carry, and event-time dummies alone
+    and x carry (h = t - first entry quarter, -4..8 with 8 = 8 or later, omitted h <= -5), with
+    bank x type x market and quarter effects, OLS (no control function), conglomerate wild
+    cluster bootstrap. Incumbents: conglomerates in the market before the entry that are not
+    themselves entrants there. All events, and without Santander's entries."""
+    import statsmodels.api as sm
+    from utils.sleep_links import linear_wild_cluster_bootstrap
+    from sleep_est_e2 import build_pooled_data
+    ev = pd.read_csv(EVENTS, dtype={"congl": str, "mkt": str})
+    ev = ev[ev["keep"].astype(bool) & (ev["kind"] == "B")]
+    df = build_pooled_data()
+    df = df[df["is_B"] == 1] if "is_B" in df.columns else df
+    df["mca_code"] = df["mca_code"].astype(str)
+    df["t"] = df["year"].astype(int) * 4 + df["quarter"].astype(int) - 1
+    out = {}
+    for tag, e in (("all", ev), ("no_santander", ev[ev["congl"] != SANTANDER])):
+        first = e.groupby("mkt")["q_entry"].min()
+        entrants = e.groupby("mkt")["congl"].agg(set)
+        d = df[df["mca_code"].isin(first.index)].copy()
+        d["q0"] = d["mca_code"].map(first)
+        d = d[[c not in entrants[m] for c, m in zip(d["CodConglomeradoPrudencial"], d["mca_code"])]]
+        pre = d[d["t"] < d["q0"]].groupby(["CodConglomeradoPrudencial", "mca_code"]).size()
+        inc = set(pre.index)
+        d = d[[k in inc for k in zip(d["CodConglomeradoPrudencial"], d["mca_code"])]]
+        h = (d["t"] - d["q0"]).clip(upper=H_MAX)
+        carry = d["nr_lagged_dep"].to_numpy()
+        X = {"carry": carry}
+        for s in TECH:
+            X[f"{s}_x_carry"] = d[s].to_numpy() * carry
+        hs = list(range(H_MIN, H_MAX + 1))
+        for k in hs:
+            ind = (h == k).to_numpy().astype(float)
+            X[f"h{k}"] = ind
+            X[f"h{k}_x_carry"] = ind * carry
+        Xd = pd.DataFrame(X)
+        cols = list(Xd.columns)
+        Y = np.column_stack([d["deposit_balance"].to_numpy(), Xd.to_numpy()])
+        w = np.ones(len(d))
+        R = _resid_fe(Y, w, [_codes(d["entity_id"]), _codes(d["t"])])
+        res = sm.OLS(R[:, 0], pd.DataFrame(R[:, 1:], columns=cols)).fit(
+            cov_type="cluster", cov_kwds={"groups": d["CodConglomeradoPrudencial"].to_numpy()})
+        band = {}
+        linear_wild_cluster_bootstrap(res, B=999, scheme="webb", seed=0, mode="normal",
+                                      band_out=band)
+        bb = band["band"].set_index("name")
+        r = {str(k): dict(estimate=float(res.params[f"h{k}_x_carry"]),
+                          ci=dict(lo=float(bb.loc[f"h{k}_x_carry", "lo_bc"]),
+                                  hi=float(bb.loc[f"h{k}_x_carry", "hi_bc"])),
+                          stars=str(bb.loc[f"h{k}_x_carry", "stars"])) for k in hs}
+        out[tag] = dict(h=r, carry=float(res.params["carry"]), n_markets=int(d["mca_code"].nunique()),
+                        n_events=int(len(e)), n_obs=int(len(d)),
+                        n_banks=int(d["CodConglomeradoPrudencial"].nunique()))
+    return out
+
+
 def _resid_fe(Y, w, groups):
     from make_xi_diagnostics import _resid
     return _resid(Y, w, groups)
@@ -383,6 +465,13 @@ def main():
         res["C5"] = c5()
         print("C5", {k: res["C5"][k] for k in ("total", "between", "within")})
         meta["C5_panel"] = _stamp(PANEL)
+    if "C2" in todo:
+        res["C2"] = c2()
+        meta["C2_events"] = _stamp(EVENTS)
+        for tag, v in res["C2"].items():
+            print(f"C2 {tag}: carry {v['carry']:.3f}, {v['n_markets']} markets, {v['n_obs']:,} obs, "
+                  f"{v['n_banks']} banks")
+            print("   " + ", ".join(f"h{k} {x['estimate']:+.3f}{x['stars']}" for k, x in v["h"].items()))
     if "C6" in todo:
         res["C6"] = c6()
         meta["C6_fees"] = _stamp(FEES)

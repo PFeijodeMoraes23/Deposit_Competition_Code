@@ -139,27 +139,41 @@ def mca_crosswalk() -> pd.Series:
 def continuity_check(e: pd.DataFrame) -> pd.DataFrame:
     """National ESTBAN deposits around 2016Q1, raw vs market panel.  The raw series should be
     continuous; the panel's pre-2016 quarters are on twice the scale.  Raw rows without a
-    municipality code are shown separately because the panel drops them."""
+    municipality code are shown separately because the panel drops them.  The panel also drops
+    the pure wholesale and investment conglomerates (panel_market.get_pure_wholesale_cnpjs), so
+    raw_panel_universe sums the raw rows of every other conglomerate (institution CNPJ to
+    conglomerate by the IF-Data List as-of map), the like-for-like comparison."""
+    from panel_market import get_pure_wholesale_cnpjs
+    from utils import conglomerates as cc
     mp = pd.read_parquet(paths.PROCESSED / "market_panel.parquet",
                          columns=["year", "quarter", "Source", "dep_a1", "dep_a2", "dep_a4"])
     mp = mp[mp["Source"] == "ESTBAN"]
     mp["qidx"] = mp["year"] * 4 + mp["quarter"] - 1
     mp["dep"] = mp[["dep_a1", "dep_a2", "dep_a4"]].fillna(0).sum(axis=1)
     win = range(2015 * 4 + 1, 2016 * 4 + 2)
+    r = e[e["qidx"].isin(win)].dropna(subset=["CODMUN_IBGE"]).copy()
+    r["CNPJ"] = pd.to_numeric(r["CNPJ"], errors="coerce").astype("Int64").astype(str).str.zfill(8)
+    r["AnoMes"] = (r["qidx"] // 4) * 100 + (r["qidx"] % 4 + 1) * 3
+    cmap = cc.map_foundation_to_congl(r[["CNPJ", "AnoMes"]].drop_duplicates(), cc.build_cnpj_to_congl())
+    r = r.merge(cmap[["CNPJ", "AnoMes", "CodConglomeradoPrudencial"]], on=["CNPJ", "AnoMes"], how="left")
+    wholesale = r["CodConglomeradoPrudencial"].astype(str).isin(get_pure_wholesale_cnpjs())
     out = pd.DataFrame({
         "raw_all": e.groupby("qidx")["dep"].sum(),
         "raw_with_mun": e.dropna(subset=["CODMUN_IBGE"]).groupby("qidx")["dep"].sum(),
+        "raw_panel_universe": r[~wholesale].groupby("qidx")["dep"].sum(),
         "panel": mp.groupby("qidx")["dep"].sum(),
     }).reindex(win)
     out["panel_over_raw_with_mun"] = out["panel"] / out["raw_with_mun"]
+    out["panel_over_raw_panel_universe"] = out["panel"] / out["raw_panel_universe"]
     out.index.name = "qidx"
     out = out.reset_index()
     out["quarter"] = out["qidx"].map(lambda q: f"{q // 4}Q{q % 4 + 1}")
     print("\n  national ESTBAN deposits (R$ bn), raw files vs market panel:")
-    for _, r in out.iterrows():
-        print(f"    {r['quarter']}  raw {r['raw_all'] / 1e9:9.1f}  raw with municipality "
-              f"{r['raw_with_mun'] / 1e9:9.1f}   panel {r['panel'] / 1e9:9.1f}"
-              f"   panel/raw {r['panel_over_raw_with_mun']:.4f}")
+    for _, row in out.iterrows():
+        print(f"    {row['quarter']}  raw {row['raw_all'] / 1e9:9.1f}  raw, panel's conglomerates "
+              f"{row['raw_panel_universe'] / 1e9:9.1f}   panel {row['panel'] / 1e9:9.1f}"
+              f"   panel/raw {row['panel_over_raw_with_mun']:.4f}"
+              f"   panel/raw (same conglomerates) {row['panel_over_raw_panel_universe']:.4f}")
     return out
 
 

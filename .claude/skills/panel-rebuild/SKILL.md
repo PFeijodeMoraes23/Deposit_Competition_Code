@@ -87,8 +87,8 @@ Things a re-run does not do by itself:
   `--only panels,timedep,savings,table --refresh-shares` and
   `--only band,pricevol,reprice,dpremium,entrygap,relprice,anova,motivtables --png`.
   Then refresh the macros (`post-run-refresh`). The paper's Figure 1 is drawn by stage 5 itself.
-  `extensive_margin/make_margin_figures.py` belongs to the opt-in stage 6, and V_Main uses none of its
-  figures.
+  `extensive_margin/make_margin_figures.py` belongs to the opt-in stage 6, and neither
+  paper (V_Full, V_Friction) uses its figures.
 - Step 39, `panel_demand_chars.py`, writes `processed/demand_chars.parquet`: the corrections the
   demand prep applies (2016Q1 lags from 2015Q4, nearest-filing fills, segment back-fill, the
   re-timed borrowings ratio). The file records the md5 of the market panel it was built from, and

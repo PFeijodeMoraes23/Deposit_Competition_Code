@@ -191,7 +191,7 @@ def copy_figures():
             n += 1
         else:
             print(f"  !! figure missing at source: {f}")
-    print(f"  -> {n} notes-referenced figures copied beside V_Main.tex")
+    print(f"  -> {n} notes-referenced figures copied beside V_Full.tex and V_Friction.tex")
 
 
 if __name__ == "__main__":

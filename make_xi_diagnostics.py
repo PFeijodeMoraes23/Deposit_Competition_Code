@@ -450,11 +450,11 @@ def write_table(res: dict, ests: list) -> str:
         r"\midrule",
         row("Observations", lambda r: f"{r['n_obs']:,}"),
         row("Conglomerates", lambda r: f"{r['n_banks']:,}"),
-        row(r"Share of cells truncated in \eqref{eq:14-B}", lambda r: f3(r["trunc_share"])),
+        row(r"Share of cells truncated at zero", lambda r: f3(r["trunc_share"])),
     ]
     note = (
-        r"\textit{Notes:} $\hat{\xi}$ is the demand residual of the random-coefficients model of "
-        r"Table~\ref{tab:blp_demand_comparison_noseg_spec12}, specification 12. Sample: the "
+        r"\textit{Notes:} $\hat{\xi}$ is the demand residual of the random-coefficients demand "
+        r"model, specification 12. Sample: the "
         r"brick-and-mortar (B) firms' conglomerate $\times$ deposit type $\times$ minimum comparable "
         r"area (MCA) $\times$ quarter cells of the demand sample. Digital (D) firms are left out "
         r"because their market is national. Weights: the cell's deposit balance. Panel A: "
@@ -462,11 +462,11 @@ def write_table(res: dict, ests: list) -> str:
         r"and MCA (market) effects. Bank $\times$ type is what the bank share gains when bank "
         r"effects differ by deposit type, so it is zero for time deposits alone. Panel B: slope of "
         r"$\hat{\xi}$ on its value in the previous quarter, within bank $\times$ type $\times$ "
-        r"market cells and without demeaning. Active balances come from \eqref{eq:14-B}, the "
-        r"balance minus the carried-forward stock, so errors in the sleepy share enter "
-        r"$\hat{\xi}$ and are themselves persistent. Panel B is therefore an upper bound on the "
-        r"persistence of demand shocks. Cells that \eqref{eq:14-B} truncates at zero (last row) "
-        r"are not in the demand sample, so no panel uses them and they break the lag. Panel C: one "
+        r"market cells and without demeaning. Active balances come from the B-firm active-deposit "
+        r"construction, the balance minus the carried-forward stock, so errors in the sleepy share "
+        r"enter $\hat{\xi}$ and are themselves persistent. Panel B is therefore an upper bound on "
+        r"the persistence of demand shocks. Cells that this construction truncates at zero (last "
+        r"row) are not in the demand sample, so no panel uses them and they break the lag. Panel C: one "
         r"regression per variable, with quarter effects. Incumbency: years since the "
         r"conglomerate's first quarter with a branch in the MCA in the branch counts of the "
         r"Estat\'istica Banc\'aria Mensal (ESTBAN), which start in 2013Q1, so earlier entry is "

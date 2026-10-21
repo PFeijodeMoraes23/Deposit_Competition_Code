@@ -125,8 +125,8 @@ def render(design, per_var) -> tuple[str, dict]:
             cell = "--"
         body.append(f"{lab} & {trait} & {analogue} & {cell} & {reason} \\\\")
     body += [r"\midrule",
-             r"\multicolumn{5}{@{}l}{\textit{Panel B. Conditioning of the regressors of eq.~"
-             r"\eqref{eq:13}}} \\*",
+             r"\multicolumn{5}{@{}l}{\textit{Panel B. Conditioning of the regressors of the second "
+             r"stage of the sleepiness estimation}} \\*",
              r"\addlinespace[0.2em]",
              r"Block & Adds & \multicolumn{1}{c}{Condition number} & Effective dimension & "
              r"\multicolumn{1}{c}{Largest VIF} \\*",
@@ -145,18 +145,21 @@ def render(design, per_var) -> tuple[str, dict]:
     note = (
         r"\textit{Notes:} Panel A: the states at specification (12) and the collected candidates "
         r"left out. Common states move the stakes of shopping or the cost of moving funds for "
-        r"every depositor; each composition state is the market share of one depositor "
+        r"every depositor. Each composition state is the market share of one depositor "
         r"characteristic. Analogue: the common state, or the county-level variable to which "
         r"\textcite{egan2025dynamic} map the depositor characteristic, in their sleepiness "
         r"function. Absorbed by FE: one minus the ratio of the state's variance net of bank "
         r"$\times$ type $\times$ market and quarter fixed effects to its raw variance, on the "
-        r"specification (12) sample; a national state is identified only through its product with "
-        r"lagged deposits. Laws of motion as in the forward simulation (Appendix "
-        r"\ref{app:estimation:bbl:implementation}). Panel B: the two-way-demeaned regressors of "
-        r"eq.~\eqref{eq:13}, lagged deposits and the control-function term included. Condition "
-        r"number: square root of the ratio of the extreme eigenvalues of their correlation matrix; "
-        r"effective dimension: $(\sum_i\lambda_i)^2/\sum_i\lambda_i^2$ over those eigenvalues; VIF: "
-        r"variance inflation factor. Both panels use the regressors only, not the deposit outcome."
+        r"specification (12) sample. A national state is identified only through its product with "
+        r"lagged deposits. Laws of motion: first-order autoregressions within market, on "
+        r"consecutive quarters of the market panel, for the composition states, the Focus forward "
+        r"curve lagged one quarter for the Selic rate, and Pix held at its launch value. Panel B: "
+        r"the two-way-demeaned regressors of the second stage of the sleepiness estimation, "
+        r"lagged deposits and the "
+        r"control-function term included. Condition number: square root of the ratio of the "
+        r"extreme eigenvalues of their correlation matrix. Effective dimension: "
+        r"$(\sum_i\lambda_i)^2/\sum_i\lambda_i^2$ over those eigenvalues. VIF: variance "
+        r"inflation factor. Both panels use the regressors only, not the deposit outcome."
     )
     head = (r"\textbf{Variable} & \textbf{Depositor trait} & \textbf{Analogue in Egan et al.} & "
             r"\textbf{Absorbed by FE} & \textbf{Law of motion, or reason left out}")

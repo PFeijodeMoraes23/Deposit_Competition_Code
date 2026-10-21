@@ -1,0 +1,16 @@
+# config/paper.toml — which paper the generators read: V_Full or V_Friction.
+#
+# Both papers sit in Drafts/Deposit Competition and input the same generated tables, figures
+# and paper_numbers_macros.tex, so this choice does NOT decide where anything is written. It
+# decides which paper's .tex and .aux are READ, by (utils/paper.py):
+#   make_paper_equations.py                    equations, labels and \PEQpaperpdf of
+#                                               paper_equations_macros.tex (the decks)
+#   make_paper_numbers.py                      the routine names (I)-(IV), from the paper's
+#                                               estimation enumerate
+#   diagnostics/report_entry_paths_estban.py   the entry figure's number and page
+#
+# To switch, change the line below. For one run only, pass --paper V_Friction to the first or
+# the third script, or set the environment variable DEPOSIT_PAPER=V_Friction (which every one
+# of the three honours, make_paper_numbers.py included). Order: --paper, then DEPOSIT_PAPER,
+# then this file.
+paper = "V_Friction"
