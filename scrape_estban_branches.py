@@ -25,7 +25,7 @@
 #   A download is accepted only if its size equals the listing's Tamanho and it is a valid
 #   zip (zip names) or starts with the ESTBAN header (plain CSV).
 #
-# OUTPUT  (default OPEN_FINANCE/DATA_RAW/estban_agencia/, or --out)
+# OUTPUT  (default utils.raw_paths.BCB_ESTBAN_AGENCIA, or --out)
 #   listing_<date>.json   the listing as served
 #   <Nome>                one zip per month, as served
 #   manifest.csv          yyyymm, nome, url, accessed, bytes, sha256, status
@@ -48,13 +48,13 @@ import re
 import time
 import zipfile
 
-from utils import paths
+from utils import raw_paths
 from utils import bcb_http
 
 BCB_SITE = "https://www.bcb.gov.br"
 ESTBAN_GUID = "f6391806-fd85-43af-acf1-c86d5b8dd6df"   # guidLista for municipio + agencia files
 REFERER = BCB_SITE + "/estatisticas/estatisticabancariamunicipios"
-DEFAULT_OUT = paths.OPEN_FINANCE / "DATA_RAW" / "estban_agencia"
+DEFAULT_OUT = raw_paths.BCB_ESTBAN_AGENCIA
 
 
 def valid(path: str, item: dict) -> bool:

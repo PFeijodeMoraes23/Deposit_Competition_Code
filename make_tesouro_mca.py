@@ -3,7 +3,7 @@ make_tesouro_mca.py
 ===================
 Tesouro Direto investor registrations by MCA and quarter, 2016Q1-2024Q4 (scraping task S8a).
 
-Source: DATA_RAW/breakfast_followups_2026-10-21/S8_outside_options/tesouro/live_manual/
+Source: DATA_RAW/TesouroNacional/investidores_td/live_manual/
 investidorestesourodireto{ate2017,2018..2026}.zip (Tesouro Nacional open data, downloaded by hand),
 read directly and never modified. One row per investor and institution: Codigo do Investidor,
 Data de Adesao, UF do Investidor, Cidade do Investidor (free text), Pais do Investidor, and the
@@ -13,7 +13,7 @@ account status at extraction (not a history, so not used).
      record's state and city; investors abroad are left out.
   2. City to IBGE municipality: state plus the city name, upper case, accents and punctuation
      removed, against the official municipality names of the BCB Pix statistics by municipality
-     (DATA_RAW/devo_followups_2026-10-20/S3_pix_municipal); the state of a municipality code is
+     (DATA_RAW/BCB/pix_municipal); the state of a municipality code is
      its first two digits. The match rate is reported, unmatched names listed.
   3. Municipality to MCA with the panel's IBGE crosswalk (each municipality's latest MCA).
   4. Per MCA and quarter: new investors (first registration in the quarter) and the stock of
@@ -37,11 +37,11 @@ import numpy as np
 import pandas as pd
 
 from utils import paths as _paths
+from utils import raw_paths
 from make_xi_diagnostics import _stamp
 
-RAW = (_paths.OPEN_FINANCE / "DATA_RAW" / "breakfast_followups_2026-10-21" / "S8_outside_options"
-       / "tesouro" / "live_manual")
-PIX = _paths.OPEN_FINANCE / "DATA_RAW" / "devo_followups_2026-10-20" / "S3_pix_municipal" / "raw"
+RAW = raw_paths.TESOURO_INVESTIDORES_LIVE
+PIX = raw_paths.BCB_PIX_MUNICIPAL_RAW
 XWALK = _paths.IBGE_DIR / "muni_mca_regions_2010_2024_panel.csv"
 PANEL = _paths.PROCESSED / "market_panel.parquet"
 OUT = _paths.rout_dir() / "tesouro_investors_mca_quarter.parquet"

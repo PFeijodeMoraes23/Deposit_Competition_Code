@@ -4,8 +4,8 @@ make_pix_exposure.py
 Pix usage by MCA and quarter, three pre-launch exposures, and the cross-market first stage of
 usage on each exposure (brief C4, 2026-10-20).
 
-Usage (C4a). The BCB Pix statistics by municipality (DATA_RAW/devo_followups_2026-10-20/
-S3_pix_municipal/raw/pix_mun_YYYYMM.csv) mapped to MCAs with the IBGE crosswalk the panel uses
+Usage (C4a). The BCB Pix statistics by municipality (DATA_RAW/BCB/pix_municipal/
+raw/pix_mun_YYYYMM.csv) mapped to MCAs with the IBGE crosswalk the panel uses
 (each municipality's latest MCA), per MCA and quarter, over the panel's population:
   tx      transactions sent by individuals (QT_PagadorPF), summed over the quarter's months
   payers  distinct individual payers (QT_PES_PagadorPF): monthly counts cannot be summed across
@@ -49,9 +49,10 @@ import numpy as np
 import pandas as pd
 
 from utils import paths as _paths
+from utils import raw_paths
 from make_xi_diagnostics import _stamp, f3, compile_check
 
-RAW = _paths.OPEN_FINANCE / "DATA_RAW" / "devo_followups_2026-10-20" / "S3_pix_municipal" / "raw"
+RAW = raw_paths.BCB_PIX_MUNICIPAL_RAW
 PANEL = _paths.PROCESSED / "market_panel.parquet"
 XWALK = _paths.IBGE_DIR / "muni_mca_regions_2010_2024_panel.csv"
 MANDATORY = _paths.OPEN_FINANCE / "shared" / "PIX" / "pix_mandatory_institutions.csv"

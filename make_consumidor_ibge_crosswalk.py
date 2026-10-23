@@ -16,7 +16,8 @@
 #   1 exact_normalised  (UF, normalised name) equals an IBGE municipality; normalising =
 #                       strip accents, upper case, every non-alphanumeric run -> one space
 #                       ("D'OESTE" and "D OESTE" agree)
-#   2 wildcard_unique   the source lost accented letters to '?' ("Ibirit?" for Ibirité):
+#   2 wildcard_unique   the source lost accented letters to '?' or to U+FFFD ("Ibirit?" for
+#                       Ibirité; U+FFFD in the files of 2019-05 to 2021-11):
 #                       '?' = any one letter, accepted only if EXACTLY one municipality of
 #                       the UF fits
 #   3 district          the name is an IBGE district, not a municipality ("Bonfim Paulista",
@@ -27,9 +28,9 @@
 #
 # INPUT   DATA_RAW/consumidor_gov/data/*.zip            (one CSV inside each, ';'-separated;
 #                                                        UTF-8 in recent years, Latin-1 earlier)
-#         DATA_RAW/consumidor_gov/docs/ibge_localidades_municipios_<date>.json
+#         DATA_RAW/IBGE/localidades/ibge_localidades_municipios_<date>.json
 #         (https://servicodados.ibge.gov.br/api/v1/localidades/municipios)
-#         DATA_RAW/consumidor_gov/docs/ibge_localidades_distritos_<date>.json
+#         DATA_RAW/IBGE/localidades/ibge_localidades_distritos_<date>.json
 #         (https://servicodados.ibge.gov.br/api/v1/localidades/distritos)
 # OUTPUT  DATA_RAW/consumidor_gov/crosswalk/consumidor_cidade_ibge.csv
 #           uf, cidade, cidade_norm, n_complaints, first_file, last_file, ibge_code,
@@ -52,9 +53,9 @@ import zipfile
 
 import pandas as pd
 
-from utils import paths
+from utils import raw_paths
 
-BASE = paths.OPEN_FINANCE / "DATA_RAW" / "consumidor_gov"
+BASE = raw_paths.CONSUMIDOR_GOV
 
 
 def norm(s: str) -> str:
@@ -63,8 +64,8 @@ def norm(s: str) -> str:
 
 
 def norm_wild(s: str) -> str:
-    """norm() that keeps '?' (a letter the source lost) as a wildcard."""
-    s = unicodedata.normalize("NFKD", str(s)).encode("ascii", "ignore").decode("ascii")
+    """norm() that keeps '?' or U+FFFD (a letter the source lost) as a wildcard."""
+    s = unicodedata.normalize("NFKD", str(s).replace("�", "?")).encode("ascii", "ignore").decode("ascii")
     return re.sub(r"[^A-Z0-9?]+", " ", s.upper()).strip()
 
 
@@ -128,11 +129,12 @@ def read_zip(path: str) -> pd.DataFrame:
 def main() -> None:
     ap = argparse.ArgumentParser(description="IBGE codes for consumidor.gov.br city names")
     ap.add_argument("--base", default=str(BASE))
+    ap.add_argument("--ibge", default=str(raw_paths.IBGE_LOCALIDADES), help="folder with the IBGE localidades JSONs")
     args = ap.parse_args()
 
-    ibge_json = sorted(glob.glob(os.path.join(args.base, "docs", "ibge_localidades_municipios_*.json")))[-1]
+    ibge_json = sorted(glob.glob(os.path.join(args.ibge, "ibge_localidades_municipios_*.json")))[-1]
     ibge = ibge_table(ibge_json)
-    dist_json = sorted(glob.glob(os.path.join(args.base, "docs", "ibge_localidades_distritos_*.json")))[-1]
+    dist_json = sorted(glob.glob(os.path.join(args.ibge, "ibge_localidades_distritos_*.json")))[-1]
     dist = district_table(dist_json)
     files = sorted(glob.glob(os.path.join(args.base, "data", "*.zip")))
     print(f"{len(files)} complaint files; IBGE list {os.path.basename(ibge_json)} ({len(ibge)} usable names)")
@@ -173,7 +175,8 @@ def main() -> None:
     um = out[out["match"] == "unmatched"]
     print(f"pairs {len(out):,}; matched {len(out) - len(um):,}; complaints matched "
           f"{100 * (1 - um['n_complaints'].sum() / tot):.2f}% of {tot:,}")
-    print("largest unmatched:", um.nlargest(15, "n_complaints")[["uf", "cidade", "n_complaints"]].values.tolist())
+    top = um.nlargest(15, "n_complaints")[["uf", "cidade", "n_complaints"]].values.tolist()
+    print("largest unmatched:", ascii(top))
     print("written:", target)
 
 

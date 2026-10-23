@@ -9,8 +9,8 @@
 #   however many institutions they use. Brazil, the five macro-regions and six age bands,
 #   2006 onward, plus the share of adults with a relationship.
 #
-#   Not a pipeline step. Raw files are saved untouched for the devo follow-ups (task S1 of
-#   DATA_RAW/devo_followups_2026-10-20, whose NOTES.md documents the series and their gaps).
+#   Not a pipeline step. Raw files are saved untouched (request S1; its NOTES.md, in
+#   DATA_RAW/_requests/devo_2026-10-20/S1_accounts_per_person/, documents the series and gaps).
 #
 # DATA SOURCE
 #   BCB SGS API, one series per call:
@@ -19,7 +19,7 @@
 #   Values: millions of adults (counts) or percent (25126); ';'-separated, comma decimals,
 #   dates dd/mm/yyyy (one observation per year, dated 01/01).
 #
-# OUTPUT  (default OPEN_FINANCE/DATA_RAW/bcb_ccs_relationships/, or --out)
+# OUTPUT  (default utils.raw_paths.BCB_CCS_RELATIONSHIPS, or --out)
 #   sgs_<code>.csv   the series exactly as served
 #   manifest.csv     code, label, url, accessed, status, n_obs, first, last, sha256
 #
@@ -41,7 +41,7 @@ import hashlib
 import os
 import time
 
-from utils import paths
+from utils import raw_paths
 from utils.bcb_http import retry_session
 
 SGS_URL = "https://api.bcb.gov.br/dados/serie/bcdata.sgs.{code}/dados?formato=csv"
@@ -63,7 +63,7 @@ SERIES = {
     25132: "adults with a banking relationship, Sul",
 }
 
-DEFAULT_OUT = paths.OPEN_FINANCE / "DATA_RAW" / "bcb_ccs_relationships"
+DEFAULT_OUT = raw_paths.BCB_CCS_RELATIONSHIPS
 
 
 def fetch(session, code: int) -> tuple[str, bytes | None, str]:

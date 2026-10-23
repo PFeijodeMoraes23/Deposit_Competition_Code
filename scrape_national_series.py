@@ -4,8 +4,8 @@
 # Author: Pedro Feijó de Moraes
 #
 # PURPOSE
-#   Download national return series for households' outside options (task S8(c) of
-#   DATA_RAW/breakfast_followups_2026-10-21, whose NOTES.md documents them):
+#   Download national return series for households' outside options (request S8(c); notes in
+#   DATA_RAW/_requests/breakfast_2026-10-21/S8_outside_options/NOTES.md):
 #     Ibovespa   Ipeadata GM366_IBVSP366 (daily close, points) and GM12_IBVSP12 (monthly %
 #                change of the close), full history, plus each series' metadata
 #     Selic      BCB SGS 11 (daily rate, % per business day), 4390 (accumulated in the
@@ -26,16 +26,17 @@
 #   The monthly series (GM12_IBVSP12, SGS 4390, SGS 4189) carry the CURRENT month as a
 #   partial value until the month closes; re-run after month end for the final value.
 #
-# OUTPUT  (default OPEN_FINANCE/DATA_RAW/national_series/, or --out)
-#   ipeadata_<code>.json, ipeadata_meta_<code>.json
-#   sgs_<code>_<firstyear>-<lastyear or "">.json   one file per request block
-#   manifest.csv   file, url, accessed, status, n_obs, first, last, sha256
+# OUTPUT  one folder per source (DATA_RAW is organised by source; utils.raw_paths):
+#   --out-ipea (default raw_paths.IPEADATA_IBOVESPA): ipeadata_<code>.json, ipeadata_meta_<code>.json
+#   --out-sgs  (default raw_paths.BCB_SELIC_SGS):     sgs_<code>_<firstyear>-<lastyear or "">.json,
+#                                                       one file per request block
+#   each folder: manifest.csv   file, url, accessed, status, n_obs, first, last, sha256
 #   A response that is not the expected JSON is recorded as a failure and never overwrites
 #   a good file from an earlier run.
 #
 # USAGE
 #   python scrape_national_series.py
-#   python scrape_national_series.py --start 2013 --out <dir>
+#   python scrape_national_series.py --start 2013 --out-ipea <dir> --out-sgs <dir>
 ###─────────────────────────────────────────────────────────────────────────────
 
 from __future__ import annotations
@@ -48,7 +49,7 @@ import json
 import os
 import time
 
-from utils import paths
+from utils import raw_paths
 from utils.bcb_http import retry_session
 
 IPEA = "http://www.ipeadata.gov.br/api/odata4"
@@ -63,7 +64,6 @@ SGS_SERIES = {   # code: (label, daily?)
     4390: ("Selic accumulated in the month (% per month)", False),
     4189: ("Selic accumulated in the month, annualised (% per year)", False),
 }
-DEFAULT_OUT = paths.OPEN_FINANCE / "DATA_RAW" / "national_series"
 
 
 def parse(body: bytes, kind: str):
@@ -113,21 +113,23 @@ def main() -> None:
     ap.add_argument("--start", type=int, default=2016, help="first year of the SGS series")
     ap.add_argument("--block-years", type=int, default=8,
                     help="calendar years per request for daily SGS series (API limit: 10)")
-    ap.add_argument("--out", default=str(DEFAULT_OUT))
+    ap.add_argument("--out-ipea", default=str(raw_paths.IPEADATA_IBOVESPA))
+    ap.add_argument("--out-sgs", default=str(raw_paths.BCB_SELIC_SGS))
     args = ap.parse_args()
     if not 1 <= args.block_years <= 10:
         ap.error("--block-years must be between 1 and 10 (the SGS limit for daily series)")
 
-    os.makedirs(args.out, exist_ok=True)
+    for d in (args.out_ipea, args.out_sgs):
+        os.makedirs(d, exist_ok=True)
     session = retry_session(total=4, backoff=3.0)
     today = dt.date.today()
-    rows = []
+    rows = {args.out_ipea: [], args.out_sgs: []}
 
     for code in IPEA_SERIES:
-        rows.append(fetch_save(session, f"{IPEA}/ValoresSerie(SERCODIGO='{code}')",
-                               os.path.join(args.out, f"ipeadata_{code}.json"), "ipea", today.isoformat()))
-        rows.append(fetch_save(session, f"{IPEA}/Metadados('{code}')",
-                               os.path.join(args.out, f"ipeadata_meta_{code}.json"), "ipea_meta", today.isoformat()))
+        rows[args.out_ipea].append(fetch_save(session, f"{IPEA}/ValoresSerie(SERCODIGO='{code}')",
+                               os.path.join(args.out_ipea, f"ipeadata_{code}.json"), "ipea", today.isoformat()))
+        rows[args.out_ipea].append(fetch_save(session, f"{IPEA}/Metadados('{code}')",
+                               os.path.join(args.out_ipea, f"ipeadata_meta_{code}.json"), "ipea_meta", today.isoformat()))
         time.sleep(1)
 
     for code, (_label, daily) in SGS_SERIES.items():
@@ -139,17 +141,18 @@ def main() -> None:
             if not last_block:
                 y1 = y0 + args.block_years - 1
                 url += f"&dataFinal=31/12/{y1}"
-            rows.append(fetch_save(session, url, os.path.join(args.out, f"sgs_{code}_{y0}-{y1}.json"),
+            rows[args.out_sgs].append(fetch_save(session, url, os.path.join(args.out_sgs, f"sgs_{code}_{y0}-{y1}.json"),
                                    "sgs", today.isoformat()))
             time.sleep(1)
 
-    with open(os.path.join(args.out, "manifest.csv"), "w", encoding="utf-8", newline="") as f:
-        w = csv.DictWriter(f, fieldnames=list(rows[0]))
-        w.writeheader()
-        w.writerows(rows)
-    bad = [r["file"] for r in rows if r["status"] != "ok"]
-    print(f"{len(rows) - len(bad)} of {len(rows)} files saved to {args.out}"
-          + (f"; FAILED: {bad}" if bad else ""))
+    for out, rr in rows.items():
+        with open(os.path.join(out, "manifest.csv"), "w", encoding="utf-8", newline="") as f:
+            w = csv.DictWriter(f, fieldnames=list(rr[0]))
+            w.writeheader()
+            w.writerows(rr)
+        bad = [r["file"] for r in rr if r["status"] != "ok"]
+        print(f"{len(rr) - len(bad)} of {len(rr)} files saved to {out}"
+              + (f"; FAILED: {bad}" if bad else ""))
 
 
 if __name__ == "__main__":

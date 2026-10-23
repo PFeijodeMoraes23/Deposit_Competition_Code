@@ -7,8 +7,8 @@
 #   Download the consumidor.gov.br open data: complaints finalised on the platform, one row
 #   per complaint, with the consumer's UF and city and the company's trade name. It is the
 #   only public source found that crosses a named financial institution with the consumer's
-#   municipality (a usage proxy, not a customer count; task S4 of
-#   DATA_RAW/devo_followups_2026-10-20, whose NOTES.md documents the fields).
+#   municipality (a usage proxy, not a customer count; request S4, whose NOTES.md in
+#   DATA_RAW/_requests/devo_2026-10-20/S4_digital_local_presence/ documents the fields).
 #
 #   Not a pipeline step. Files are saved exactly as served; nothing is merged or recoded.
 #
@@ -18,14 +18,15 @@
 #   download  https://www.consumidor.gov.br/pages/publicacao/externo/<codigo>/download
 #   The complaint files are the entries titled "Dados - ...": monthly zips from 2019
 #   (finalizadas_YYYY-MM.zip, or YYYY-MM.zip before 2021), semester/annual zips for 2014-2018.
-#   Encodings differ by year (UTF-8 recently, Latin-1 in 2019); separator ';'.
+#   Encodings differ by year (UTF-8 recently, Latin-1 in 2019); separator ';'. The file
+#   list itself is served as UTF-8 or as cp1252 (both seen), so both are accepted.
 #   The site's firewall answers HTTP 503 to roughly one request in three: retried.
 #
 # FIELDS (dictionary v2, checked on 2019-09 and 2026-09): Regiao, UF, Cidade (city NAME, no
 #   IBGE code), Sexo, Faixa Etaria, Data Finalizacao, Tempo Resposta, Nome Fantasia (trade
 #   name, no CNPJ), Segmento de Mercado, Area, Assunto, Grupo Problema, Problema, ...
 #
-# OUTPUT  (default OPEN_FINANCE/DATA_RAW/consumidor_gov/, or --out)
+# OUTPUT  (default utils.raw_paths.CONSUMIDOR_GOV, or --out)
 #   publicacoes_<date>.json   the file list as served
 #   manifest.csv              codigo, titulo, nomeArquivo, period, size, dates, url
 #   data/<nomeArquivo>        complaint files requested with --periods or --all
@@ -50,13 +51,13 @@ import re
 import time
 import zipfile
 
-from utils import paths
+from utils import raw_paths
 from utils.bcb_http import retry_session
 
 SITE = "https://www.consumidor.gov.br/pages/publicacao/externo"
 LIST_URL = SITE + "/publicacoes.json?indicadorTipoPublicacao=2"
 DOWNLOAD_URL = SITE + "/{codigo}/download"
-DEFAULT_OUT = paths.OPEN_FINANCE / "DATA_RAW" / "consumidor_gov"
+DEFAULT_OUT = raw_paths.CONSUMIDOR_GOV
 
 
 def period_of(nome: str) -> str:
@@ -114,7 +115,10 @@ def main() -> None:
     raw = get(session, LIST_URL).content
     with open(os.path.join(args.out, f"publicacoes_{today}.json"), "wb") as f:
         f.write(raw)
-    entries = json.loads(raw)
+    try:
+        entries = json.loads(raw.decode("utf-8"))
+    except UnicodeDecodeError:
+        entries = json.loads(raw.decode("cp1252"))
 
     data = [e for e in entries if str(e.get("titulo", "")).startswith("Dados")]
     docs = [e for e in entries if e["nomeArquivo"].lower().endswith(".pdf")]

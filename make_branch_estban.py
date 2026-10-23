@@ -3,7 +3,7 @@ make_branch_estban.py
 =====================
 ESTBAN by branch (agencia) for B firms: feasibility (brief K2) and descriptive keys (K3).
 
-Source: DATA_RAW/estban_agencia/YYYYMM_ESTBAN_AG.{ZIP,csv.zip,csv} (BCB, "ESTBAN (Documento
+Source: DATA_RAW/BCB/estban_agencia/YYYYMM_ESTBAN_AG.{ZIP,csv.zip,csv} (BCB, "ESTBAN (Documento
 4500) por agencia"), read directly and never modified. One row per branch and month, the
 municipal files' columns plus AGENCIA, the branch's 14-digit CNPJ (institution root, 4-digit
 sequence, check digits), and CODMUN_IBGE. Deposit lines are named with the pipeline's own map
@@ -33,10 +33,11 @@ import numpy as np
 import pandas as pd
 
 from utils import paths as _paths
+from utils import raw_paths
 from utils.estban import _PRE2022_RENAME, _POST2022_RENAME, _rename_verbete_cols, _FORMAT_CHANGE_DATE
 from make_xi_diagnostics import _stamp
 
-RAW = _paths.OPEN_FINANCE / "DATA_RAW" / "estban_agencia"
+RAW = raw_paths.BCB_ESTBAN_AGENCIA
 MUNI = _paths.ESTBAN_CSV
 XWALK = _paths.IBGE_DIR / "muni_mca_regions_2010_2024_panel.csv"
 CACHE = _paths.rout_dir() / "branch_estban_cache"

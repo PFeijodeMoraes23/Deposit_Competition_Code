@@ -1,0 +1,31 @@
+{
+ "file": "C:\\Users\\pedro\\OneDrive\\Documentos\\Yale\\Year 3 (2024 - 2025)\\Open Finance\\Open-Finance\\BCB\\Egan_et_al_2025_Rep\\processed\\market_panel.parquet",
+ "rows": 500186,
+ "cols": 131,
+ "firms": 536,
+ "mcas": 3738,
+ "rows_by_isB": {
+  "1": 491291,
+  "0": 8895
+ },
+ "dep_sums": {
+  "dep_a1": 13826865522640.309,
+  "dep_a2": 50136952150419.0,
+  "dep_a4": 94528097046552.55,
+  "dep_a5": 1095487867263.44
+ },
+ "dep_sums_2013_2015": {
+  "dep_a1": 4356394974430.0,
+  "dep_a2": 14653987225030.0,
+  "dep_a4": 17036528136196.0,
+  "dep_a5": 0.0
+ },
+ "instruments_present": {
+  "loo_log_assets": true,
+  "mean_loo_log_assets": true,
+  "loo_equity_ratio": true,
+  "loo_basileia": true,
+  "rival_mean_spread": false,
+  "estban_rival_branches_lag": true
+ }
+}
