@@ -89,8 +89,11 @@ Pipeline stages
   Stage 7 - Fee panel (OPT-IN: --fees)
     7a. fees/panel_fee_merge.py --patch-market   COSIF + BCB-listed fee columns -> market_panel_with_fees.csv
     The fee branch lives in fees/. No estimator reads the fee panel unless USE_FEE_PANEL=1, so a
-    full run skips it. Its inputs, fees/scrape_cosif_service_fees.py and the frozen BCB tariff
-    scrapers, are outside this runner, and fees/panel_audit_fee_coverage.py audits its output.
+    full run skips it. The listed-price and stickiness columns are quarterly, 2015Q1-2024Q4, from
+    the BCB's monthly tariff census (BCB/Tarifas/processed/tariff_history_bcb_monthly.csv and
+    account_fee_listed_history.csv). Their producers, fees/scrape_bcb_tarifas_monthly.py,
+    fees/build_account_fee_history.py and fees/scrape_cosif_service_fees.py, are outside this
+    runner, and fees/panel_audit_fee_coverage.py audits its output.
 
   Outside this runner: fees/scrape_cosif_service_fees.py, the frozen BCB tariff scrapers in fees/,
   fees/scrape_cvm_fee_income.py, scrape_pix_participants.py, scrape_pix_roster.py,
@@ -104,6 +107,7 @@ Usage
   python panel_pipeline.py --only 3            # run only stage 3
   python panel_pipeline.py --to 4              # run up to and including stage 4
   python panel_pipeline.py --skip 5,6          # skip specific step IDs
+  python panel_pipeline.py --workers 1         # one step at a time within a wave (lower peak memory)
   python panel_pipeline.py --extensive-margin  # also run stage 6
   python panel_pipeline.py --fees              # also run stage 7
   python panel_pipeline.py --list              # print the steps (with IDs) and the waves
@@ -284,8 +288,8 @@ STEPS = [
     # panel_local_cdb_spread have written it, so it runs after every stage-4 wave. The estimators
     # read market_panel.csv unless USE_FEE_PANEL=1.
     (7, "22", "fees/panel_fee_merge.py --patch-market",
-     "COSIF/BCB-listed fee columns -> market_panel_with_fees.csv (MUST follow panel_loo_instruments/"
-     "panel_estban_instrument/panel_local_cdb_spread)"),
+     "COSIF fees + dated BCB-listed prices from the monthly tariff census -> market_panel_with_fees.csv "
+     "(MUST follow panel_loo_instruments/panel_estban_instrument/panel_local_cdb_spread)"),
 ]
 
 # Stages that run only when asked for: {stage: the flag that enables it}. --only <stage> also runs it.
@@ -318,6 +322,9 @@ def _banner(text: str, char: str = "-") -> None:
 
 
 _print_lock = threading.Lock()  # serialize console output across parallel workers
+# Steps of one wave run at once, at most this many: 6 keeps 4-6 GB of headroom on a 32 GB machine.
+# --workers lowers it when other programs need the memory.
+MAX_WORKERS = 6
 
 
 import shlex
@@ -480,8 +487,7 @@ def run_wave(
 
     with _print_lock:
         ids_str = ", ".join(sid for sid, *_ in active)
-        # Cap workers to 6 to safely parallelize heavily across 32GB RAM machines, keeping 4-6GB headroom for TeXStudio
-        workers = min(len(active), 6)
+        workers = min(len(active), MAX_WORKERS)
         print(f"\n  Wave (concurrency: {workers}): {ids_str}", flush=True)
 
     errors: list[str] = []
@@ -542,6 +548,11 @@ def parse_args() -> argparse.Namespace:
     p.add_argument(
         "--to", "--max-stage", dest="max_stage", type=int, default=None, metavar="N",
         help="Run only up to and including this stage number.",
+    )
+    p.add_argument(
+        "--workers", dest="workers", type=int, default=MAX_WORKERS, metavar="N",
+        help=f"Run at most N steps of a wave at once (default {MAX_WORKERS}); 1 runs one step at a "
+             "time, for a lower memory peak.",
     )
     p.add_argument(
         "--skip", dest="skip_steps", type=str, default="", metavar="IDs",
@@ -613,7 +624,11 @@ def send_notification_email(finished_step: str, elapsed_seconds: float, next_ste
 # -- Main -----------------------------------------------------------------------
 
 def main() -> None:
+    global MAX_WORKERS
     args = parse_args()
+    if args.workers < 1:
+        sys.exit("--workers must be at least 1")
+    MAX_WORKERS = args.workers
 
     # Build step lookup: {step_id: (script, description)}
     steps_dict: dict[str, tuple[str, str]] = {

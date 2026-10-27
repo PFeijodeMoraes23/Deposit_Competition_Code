@@ -53,6 +53,7 @@ from utils import paths
 from utils import load_panel_cached
 from utils import state_transform as _st
 from utils import demand_chars   # corrected characteristics, segments and balances (always applied)
+from utils import deposit_types  # TR5 deposit-type variant (default: every type kept)
 from sleep_demand_prep_link import build_market_size_and_shares, MAX_YEAR, MIN_YEAR
 # market_panel.csv, NOT the fees variant — see utils/paths.market_panel_csv (USE_FEE_PANEL=1
 # opts back in). The old "fees panel if it exists" fallback silently pinned the pipeline to a
@@ -81,7 +82,8 @@ IV_FEE = [
     'cosif_fee_ratio_all',
     'cosif_fee_ratio_total_deposits',
     'cosif_fee_valid',
-    'listed_fee_atm_withdrawal_pf',
+    'listed_fee_pkg1_pf',
+    'listed_fee_withdrawal_atm_pf',
     'listed_fee_statement_pf',
     'tarifa_stickiness_yrs',
     'tarifa_stickiness_n',
@@ -187,7 +189,7 @@ def build_base_panel(panel_csv: Path) -> pd.DataFrame:
     print(f"Loading {panel_csv}...")
     df_raw = load_panel_cached(panel_csv, dtype={'mca_code': str}, low_memory=False)
     df_raw = demand_chars.apply(df_raw)
-    df = _reshape_panel(df_raw)
+    df = deposit_types.apply_variant(_reshape_panel(df_raw), "sleep_demand_prep_e1")
 
     # fgc_covered: FGC insures types 1 (savings), 2 (demand), 4 (time deposits).
     # Type 5 (prepaid) is NOT FGC-covered (BCB Res. 80/2021; CMN 4.678/2018).

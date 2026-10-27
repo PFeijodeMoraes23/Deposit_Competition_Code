@@ -14,17 +14,32 @@ Three fee sources
      not deposit-account tariffs; --patch-market NaNs their ratios and marks them
      with cosif_fee_ip_masked=1.
 
-2. BCB Tarifas listed maximum prices  (scrape_bcb_tariff_vigencia.py)
-   - Static snapshot, no time variation  |  ~1,090 conglomerates
-   - Key priority services (PF)          |  listed_fee_<name>_pf columns
-   - Useful as cross-sectional instruments for BLP identification
-   - Rolled up here from tariff_vigencia_history.csv, not from the scraper's own
-     conglomerate summary, so every fee source shares one CNPJ->conglomerate map
+2. BCB listed maximum prices, dated  (build_account_fee_history.py)
+   - Conglomerate × quarter  |  2015-Q1 → 2024-Q4 from the BCB monthly census of listed
+     tariffs (scrape_bcb_tarifas_monthly.py); 2025-Q1 on from the Olinda snapshot of
+     2026-06-22 alone (scrape_bcb_tariff_vigencia.py); 2013-2014 NaN
+   - 13 services, labelled by code (LISTED_FEE_SERVICES): Pacotes Padronizados I-IV, PJ
+     account maintenance, and seven PF services
+   - listed_fee_<name>: the head institution's price in force on the quarter's last day;
+     when the head does not list the service, the median of the members' positive prices
+     (0.00 when every listing is 0.00); listed_fee_n_inst_<name>: members with a price
+   - A price is in force on a date when the date lies in [vigência, in_force_to] of one of
+     its versions (account_fee_listed_history.csv for the six account-keeping services,
+     build_account_fee_history.load_versions() for the others); the version with the
+     latest vigência wins
+   - Institutions are placed in conglomerates as the market panel places their deposits
+     (utils.conglomerates.deposit_panel_codes): an ESTBAN bank under its static code in
+     every quarter, any other institution by the IF Data List of that quarter
+   - Listed is a ceiling, not the price charged.  An institution absent from the census
+     lists nothing for that service: NaN, not zero.  The bridge across consecutive census
+     files (bridged versions) carries under 1% of known months.
 
-3. DataVigencia price-stickiness instrument  (scrape_bcb_tariff_vigencia.py)
-   - Time-varying, conglomerate × quarter  |  2013-Q1 → latest
-   - Mean years since last tariff change across BCB priority services
-   - tarifa_stickiness_yrs: grows until a price change, resets to 0 at change
+3. Price stickiness, from the same dated versions
+   - Conglomerate × quarter  |  2015-Q1 → 2024-Q4, NaN elsewhere
+   - tarifa_stickiness_yrs: years from the vigência of the price in force to the quarter
+     end, averaged over the head institution's PF services of LISTED_FEE_SERVICES (over
+     every member's when the head has none); grows until a price change and resets at it
+   - tarifa_stickiness_n: the institution × service pairs averaged
 
 Output
 ------
@@ -79,6 +94,8 @@ TARIF_DIR       = paths.TARIFAS_PROC
 COSIF_INST_PARQUET  = TARIF_DIR / "cosif_service_fees_institution.parquet"
 COSIF_INST_CSV      = TARIF_DIR / "cosif_service_fees_institution.csv"
 VIGENCIA_HIST_CSV   = TARIF_DIR / "tariff_vigencia_history.csv"
+CENSUS_HISTORY_CSV  = TARIF_DIR / "tariff_history_bcb_monthly.csv"
+ACCOUNT_FEE_HISTORY_CSV = TARIF_DIR / "account_fee_listed_history.csv"
 MARKET_PANEL_CSV    = PANEL_DIR / "market_panel.csv"
 OUTPUT_CSV          = TARIF_DIR / "cosif_fee_quarterly_conglomerate.csv"
 
@@ -91,15 +108,31 @@ FEE_COLS = [
     "fee_ratio_total_deposits",
 ]
 
-# BCB priority services (Resolucao CMN 3.919/2010 basket + ATM)
-PRIORITY_SERVICES = {
-    1101: "acct_reg",        # Cadastro para inicio de relacionamento
-    1201: "card_2nd_debit",  # 2a via cartao debito
-    1203: "cheque_stop",     # Contra-ordem de cheque
-    1204: "cheque_countermand",  # Oposicao cheque
-    1213: "statement",       # Extrato periodo anterior
-    1501: "atm_withdrawal",  # Saque em terminal (ATM)
+# BCB listed services carried into the panel, keyed (pessoa, codigo_servico) as in the census.
+# Each code has exactly one description in the 2015-2024 census, so the label follows the code.
+LISTED_FEE_SERVICES = {
+    ("F", "1501"): "pkg1_pf",                # Pacote Padronizado de Serviços I
+    ("F", "1502"): "pkg2_pf",                # Pacote Padronizado de Serviços II
+    ("F", "1503"): "pkg3_pf",                # Pacote Padronizado de Serviços III
+    ("F", "1504"): "pkg4_pf",                # Pacote Padronizado de Serviços IV
+    ("J", "0402"): "maint_active_pj",        # Manutenção de conta ativa
+    ("J", "0403"): "maint_inactive_pj",      # Manutenção de conta inativa
+    ("F", "1101"): "acct_reg_pf",            # Confecção de cadastro para início de relacionamento
+    ("F", "1201"): "card_2nd_debit_pf",      # 2a via de cartão com função débito
+    ("F", "1203"): "ccf_exclusion_pf",       # Exclusão do Cadastro de Emitentes de Cheques sem Fundo
+    ("F", "1204"): "cheque_countermand_pf",  # Contra-ordem e oposição ao pagamento de cheque
+    ("F", "1209"): "withdrawal_teller_pf",   # Saque pessoal
+    ("F", "1210"): "withdrawal_atm_pf",      # Saque em terminal
+    ("F", "1213"): "statement_pf",           # Extrato de um período
 }
+LISTED_PRICE_COLS = [f"listed_fee_{v}" for v in LISTED_FEE_SERVICES.values()]
+LISTED_COUNT_COLS = [f"listed_fee_n_inst_{v}" for v in LISTED_FEE_SERVICES.values()]
+# Stickiness averages over the PF services above (1101-1213 and the four packages).
+STICKINESS_SERVICES = {k for k in LISTED_FEE_SERVICES if k[0] == "F"}
+# The census covers 2015-01..2024-12; from 2025 only the snapshot dates a price.
+LISTED_FIRST_YEAR = 2015
+CENSUS_LAST_YEAR = 2024
+_VERSION_KEY = ["cnpj8", "pessoa", "codigo_servico"]
 
 # Year of the COSIF structural break; rows with year >= this value get cosif_fee_valid=0
 COSIF_BREAK_YEAR = 2025
@@ -417,145 +450,339 @@ def aggregate_cosif_to_conglomerate_quarter(
 
 
 # ---------------------------------------------------------------------------
-# 4. BCB Tarifas: static listed max prices (cross-sectional instrument)
+# 4. BCB listed prices: dated versions -> institution x service x quarter
 # ---------------------------------------------------------------------------
 
-def load_tarifa_listed_prices(cmap: pd.DataFrame | None = None) -> pd.DataFrame:
+def _in_listed_services(pessoa: pd.Series, codigo: pd.Series) -> np.ndarray:
+    return np.array([(p, s) in LISTED_FEE_SERVICES for p, s in zip(pessoa, codigo)], dtype=bool)
+
+
+def _log_non_real_rows() -> None:
+    """Log the listed rows left out because they are not prices in R$.
+
+    About 2% of the census's listed rows carry moeda "Percentual", a share rather than a
+    price.  load_versions() and account_fee_listed_history.csv keep moeda == "Real" (in the
+    snapshot, tipo_valor == "Real") only, and so does every listed_fee_* column."""
+    c = pd.read_csv(CENSUS_HISTORY_CSV, dtype=str, usecols=["pessoa", "codigo_servico", "moeda"])
+    scope = _in_listed_services(c["pessoa"], c["codigo_servico"])
+    not_real = (c["moeda"] != "Real").to_numpy()
+    log.info("Listed prices in R$ only. Census price spells dropped (moeda != Real): %d of %d "
+             "in the %d listed services; %d of %d (%.1f%%) over every service.",
+             int((scope & not_real).sum()), int(scope.sum()), len(LISTED_FEE_SERVICES),
+             int(not_real.sum()), len(c), 100 * not_real.mean())
+    s = pd.read_csv(VIGENCIA_HIST_CSV, dtype=str,
+                    usecols=["customer_type", "codigo_servico", "tipo_valor"])
+    s_scope = _in_listed_services(s["customer_type"], s["codigo_servico"].str.zfill(4))
+    s_not_real = (s["tipo_valor"] != "Real").to_numpy()
+    log.info("Snapshot rows dropped (tipo_valor != Real): %d of %d in the listed services.",
+             int((s_scope & s_not_real).sum()), int(s_scope.sum()))
+
+
+def load_listed_fee_versions() -> pd.DataFrame:
+    """Dated price versions of every LISTED_FEE_SERVICES service, one row per version.
+
+    The six account-keeping services (F 1501-1504, J 0402/0403) are read from
+    account_fee_listed_history.csv, which fees/build_account_fee_history.py writes; the
+    other services go through the same build_account_fee_history.load_versions() here:
+    census spells and snapshot rows joined, prices in R$ only.
+
+    A version proves its price over [vigencia, seen_to].  in_force_to extends a census
+    version to the day before the next vigência when the next version first appears in the
+    immediately following monthly file (bridged=True); otherwise in_force_to = seen_to.
+
+    Columns: cnpj8, pessoa, codigo_servico, vigencia, valor_maximo, source, seen_to,
+    in_force_to, bridged.
     """
-    Load BCB Tarifas listed maximum prices for key priority services (PF only).
-    Returns a conglomerate-level DataFrame (static — no time variation).
+    from fees.build_account_fee_history import SERVICES as ACCOUNT_SERVICES, load_versions
 
-    Columns added:
-      listed_fee_<name>_pf  (median listed ceiling per conglomerate × service)
+    cols = _VERSION_KEY + ["vigencia", "valor_maximo", "source", "seen_to", "in_force_to",
+                           "bridged"]
+    _log_non_real_rows()
 
-    Built from tariff_vigencia_history.csv, which is keyed on the institution's CNPJ,
-    rather than from tariff_vigencia_summary.csv, which is already rolled up to a
-    conglomerate by scrape_bcb_tariff_vigencia's own private CNPJ map.  That map is the
-    one this module used to have -- latest List snapshot, raw codes, bare zero-padded
-    CNPJ for anything unmapped -- so reading its output would reintroduce both key bugs
-    on the listed-price side alone, and firms outside the prudential framework would
-    compare against OFB prices filed under a different spelling of the same key.
+    if not ACCOUNT_FEE_HISTORY_CSV.exists():
+        raise FileNotFoundError(f"{ACCOUNT_FEE_HISTORY_CSV} not found: run "
+                                f"python fees/build_account_fee_history.py first.")
+    acct = pd.read_csv(ACCOUNT_FEE_HISTORY_CSV, dtype=str)
+    acct["cnpj8"] = acct["cnpj8"].str.zfill(8)
+    acct["codigo_servico"] = acct["codigo_servico"].str.zfill(4)
+    acct = acct[_in_listed_services(acct["pessoa"], acct["codigo_servico"])].copy()
+    for col in ("vigencia", "seen_to", "in_force_to"):
+        acct[col] = pd.to_datetime(acct[col], errors="coerce")
+    acct["valor_maximo"] = pd.to_numeric(acct["valor_maximo"], errors="coerce")
+
+    other = {k: v for k, v in LISTED_FEE_SERVICES.items() if k not in ACCOUNT_SERVICES}
+    rest = load_versions(services=other)
+
+    v = pd.concat([acct[cols], rest[cols]], ignore_index=True)
+    v["bridged"] = v["bridged"].astype(str) == "True"
+    log.info("Listed-price versions: %d (%d from %s, %d built for %d other services) | "
+             "%d institutions | %d bridged",
+             len(v), len(acct), ACCOUNT_FEE_HISTORY_CSV.name, len(rest), len(other),
+             v["cnpj8"].nunique(), int(v["bridged"].sum()))
+    return v
+
+
+def _quarter_index(ts: pd.Series) -> np.ndarray:
+    """year * 4 + (quarter - 1) of each date."""
+    return (ts.dt.year * 4 + (ts.dt.month - 1) // 3).to_numpy(dtype="int64")
+
+
+def _quarter_end(qi) -> np.ndarray:
+    """Last calendar day of each quarter index (datetime64)."""
+    qi = np.asarray(qi, dtype="int64")
+    first = pd.to_datetime(pd.DataFrame({"year": qi // 4, "month": (qi % 4) * 3 + 3, "day": 1}))
+    return (first + pd.offsets.MonthEnd(0)).to_numpy(dtype="datetime64[ns]")
+
+
+def listed_prices_by_quarter(versions: pd.DataFrame) -> pd.DataFrame:
+    """Institution × service × quarter: the listed price in force on the quarter's last day.
+
+    The rule of build_account_fee_history.evaluate(), at quarter ends: the price on date d
+    is the version with the latest vigência (then the latest in_force_to) among those with
+    vigência <= d <= in_force_to.  A version listed with a vigência after its last sighting
+    (an announced price) proves nothing and is skipped.  Quarters start in 2015-Q1, the
+    first census month; 2013-2014 are not filled.  After CENSUS_LAST_YEAR only versions
+    the 2026-06-22 snapshot shows can be in force, and only from their vigência on: a
+    snapshot price is never used for a date before its data_vigencia.
+
+    Returns cnpj8, pessoa, codigo_servico, year, quarter, quarter_end, price, vigencia,
+    source (census, snapshot, census+snapshot, or census_bridged when the quarter end falls
+    after the version was last seen), conflict (versions with different prices in force on
+    the same day).  Only institution-quarters with a price in force are returned: a service
+    the institution does not list is absent, not zero.
     """
-    if not VIGENCIA_HIST_CSV.exists():
-        log.warning("tariff_vigencia_history.csv not found — skipping listed prices.")
-        return pd.DataFrame(columns=["cod_cong_prudencial"])
+    v = versions[versions["vigencia"].notna() & versions["in_force_to"].notna()
+                 & (versions["vigencia"] <= versions["seen_to"])].reset_index(drop=True)
+    start = np.maximum(_quarter_index(v["vigencia"]), LISTED_FIRST_YEAR * 4)
+    q_last = _quarter_index(v["in_force_to"])
+    end = np.where(v["in_force_to"].to_numpy(dtype="datetime64[ns]") >= _quarter_end(q_last),
+                   q_last, q_last - 1)
+    n = np.clip(end - start + 1, 0, None)
+    row = np.repeat(np.arange(len(v)), n)
+    offset = np.arange(int(n.sum())) - np.repeat(np.cumsum(n) - n, n)
 
-    vh = pd.read_csv(VIGENCIA_HIST_CSV, low_memory=False)
-    vh["cnpj"] = vh["cnpj"].astype(str).str.zfill(8)
-    if cmap is None:
-        cmap = build_cnpj_cong_map()
-    vh = vh.merge(cmap, on="cnpj", how="left")
-    vh["cod_cong_prudencial"] = (vh["cod_cong_prudencial"]
-                                 .fillna(cnpj_fallback_key(vh["cnpj"]))
-                                 .astype(str).str.strip())
+    x = v.iloc[row].reset_index(drop=True)
+    x["qi"] = start[row] + offset
+    x = x.sort_values(_VERSION_KEY + ["qi", "vigencia", "in_force_to"], kind="mergesort")
+    x["conflict"] = (x.groupby(_VERSION_KEY + ["qi"])["valor_maximo"].transform("nunique") > 1)
+    x = x.drop_duplicates(_VERSION_KEY + ["qi"], keep="last").copy()
 
-    pf_rows = vh[
-        (vh["customer_type"] == "F") &
-        (vh["codigo_servico"].isin(PRIORITY_SERVICES))
-    ].copy()
-    pf_rows["valor_maximo"] = pd.to_numeric(pf_rows["valor_maximo"], errors="coerce")
-    pf_rows["col_name"] = pf_rows["codigo_servico"].map(
-        {k: f"listed_fee_{v}_pf" for k, v in PRIORITY_SERVICES.items()}
-    )
+    x["year"] = x["qi"] // 4
+    x["quarter"] = x["qi"] % 4 + 1
+    x["quarter_end"] = _quarter_end(x["qi"].to_numpy())
+    x["source"] = np.where(x["quarter_end"] > x["seen_to"], "census_bridged",
+                           x["source"].astype(str))
+    late = ((x["year"] > CENSUS_LAST_YEAR) & ~x["source"].str.contains("snapshot")).to_numpy()
+    if late.any():
+        log.warning("%d institution-quarters after %d rest on a census version alone; "
+                    "dropped (after the census only the snapshot dates a price).",
+                    int(late.sum()), CENSUS_LAST_YEAR)
+        x = x[~late]
+    x = x.rename(columns={"valor_maximo": "price"})
+    return x[_VERSION_KEY + ["year", "quarter", "quarter_end", "price", "vigencia", "source",
+                             "conflict"]].reset_index(drop=True)
 
-    # Median across the conglomerate's member institutions and their price-change
-    # history, matching what tariff_vigencia_summary reports per conglomerate.
-    wide = pf_rows.pivot_table(
-        index="cod_cong_prudencial",
-        columns="col_name",
-        values="valor_maximo",
-        aggfunc="median",
-    ).reset_index()
-    wide.columns.name = None
 
-    log.info(
-        "Listed price columns: %s | %d conglomerates",
-        [c for c in wide.columns if c.startswith("listed_")],
-        len(wide),
-    )
+def build_dated_cnpj_cong_map(keys: pd.DataFrame) -> pd.DataFrame:
+    """Conglomerate of each institution in each quarter, keyed the way the market panel keys
+    that institution's deposits (utils.conglomerates.deposit_panel_codes).
+
+    keys holds cnpj8, year, quarter.
+
+    * An ESTBAN bank keeps its build_cnpj_conglomerate_map code ('CNPJ_<int>' when that map
+      lacks it) in every quarter, as its branch deposits do in the panel.  A bank that joins
+      an acquirer's conglomerate (Kirton into Bradesco in 2016, Banco Pan into BTG from
+      2021) keeps its own code, where its panel rows are.
+    * Every other institution takes the CodConglomeradoPrudencial of that quarter's IF Data
+      List file (build_cnpj_to_congl: individual institutions in activity), canonicalised.
+      A CNPJ missing from that quarter's file takes the nearest earlier file that lists it,
+      else the nearest later one.  A member that moves between conglomerates counts toward
+      the one it belongs to that quarter.
+    * An institution the List files place in no prudential conglomerate (a standalone,
+      listed without a code), or never list, is keyed by cnpj_fallback_key(): 'CNPJ_<int>',
+      the market panel's convention.
+
+    Returns cnpj8, year, quarter, cod_cong_prudencial, cong_map_source (estban_static,
+    list_quarter, list_nearest, fallback).
+    """
+    from utils.conglomerates import build_cnpj_to_congl, deposit_panel_codes, estban_bank_cnpjs
+
+    lists = build_cnpj_to_congl().dropna(subset=["AnoMes_list"])
+    lists = lists[lists["CNPJ"].astype(str).str.fullmatch(r"\d+")].copy()
+    code = lists["CodConglomeradoPrudencial"].astype(str).str.strip()
+    prudential = code.str.fullmatch(r"C\d+").to_numpy()
+    # As reported; deposit_panel_codes canonicalises.
+    lists["code"] = cnpj_fallback_key(lists["CNPJ"]).to_numpy(dtype=object)
+    lists.loc[prudential, "code"] = code[prudential].to_numpy(dtype=object)
+    lists["AnoMes_list"] = lists["AnoMes_list"].astype("int64")
+    dm = (lists[["CNPJ", "AnoMes_list", "code"]].astype({"CNPJ": object, "code": object})
+          .sort_values("AnoMes_list").reset_index(drop=True))
+
+    f = keys[["cnpj8", "year", "quarter"]].drop_duplicates().astype({"cnpj8": object}).copy()
+    f["AnoMes"] = (f["year"].astype("int64") * 100 + f["quarter"].astype("int64") * 3)
+    f = f.sort_values("AnoMes").reset_index(drop=True)
+    asof = dict(left_on="AnoMes", right_on="AnoMes_list", left_by="cnpj8", right_by="CNPJ")
+    back = pd.merge_asof(f, dm, direction="backward", **asof)
+    fwd = pd.merge_asof(f, dm, direction="forward", **asof)
+
+    code_q = back["code"].where(back["code"].notna(), fwd["code"])
+    reported = code_q.where(code_q.notna(), cnpj_fallback_key(f["cnpj8"])).astype(str)
+    f["cod_cong_prudencial"] = (deposit_panel_codes(f["cnpj8"].astype(str), reported)
+                                .astype(str).str.strip())
+    estban = f["cnpj8"].isin(estban_bank_cnpjs()).to_numpy(dtype=bool)
+    exact = (back["AnoMes_list"] == f["AnoMes"]).fillna(False).to_numpy(dtype=bool)
+    f["cong_map_source"] = np.select([estban, exact, code_q.notna().to_numpy()],
+                                     ["estban_static", "list_quarter", "list_nearest"],
+                                     "fallback")
+    return f[["cnpj8", "year", "quarter", "cod_cong_prudencial", "cong_map_source"]]
+
+
+def conglomerate_heads(codes: pd.Series) -> pd.Series:
+    """8-digit CNPJ of each conglomerate's head institution.
+
+    For a prudential code, the canonical_lider of utils.conglomerates.
+    build_conglomerate_canonical_map(): the lead institution (CnpjInstituicaoLider) on the
+    member-institution rows of the code's last IF Data List snapshot.  The market panel's
+    CNPJ_Lider is built from the same map.  For a 'CNPJ_<int>' key, the institution itself.
+    Empty string when the code has no leader."""
+    from utils.conglomerates import build_conglomerate_canonical_map
+
+    _, lider = build_conglomerate_canonical_map()
+    lut = {}
+    for c in pd.unique(codes.astype(str)):
+        if c.startswith("CNPJ_"):
+            lut[c] = c[len("CNPJ_"):].zfill(8)
+        elif c in lider and pd.notna(lider[c]):
+            lut[c] = str(int(lider[c])).zfill(8)
+        else:
+            lut[c] = ""
+    return codes.astype(str).map(lut)
+
+
+def _flag_heads(d: pd.DataFrame) -> np.ndarray:
+    """True on the rows of d that belong to their conglomerate's head institution."""
+    heads = conglomerate_heads(d["cod_cong_prudencial"]).fillna("").astype(str)
+    return (d["cnpj8"].astype(str) == heads).to_numpy(dtype=bool)
+
+
+def listed_fee_institution_quarters() -> pd.DataFrame:
+    """listed_prices_by_quarter() with each institution-quarter's conglomerate attached
+    (build_dated_cnpj_cong_map).  The one frame both the listed prices and the stickiness
+    are aggregated from."""
+    iq = listed_prices_by_quarter(load_listed_fee_versions())
+    iq = iq.merge(build_dated_cnpj_cong_map(iq), on=["cnpj8", "year", "quarter"], how="left")
+    known = iq["price"].notna()
+    log.info("Listed prices by institution x service x quarter: %d rows (%d-Q1 to %d-Q%d) | "
+             "%d institutions | %d conflicting overlaps | source %s",
+             len(iq), iq["year"].min(), iq["year"].max(),
+             iq.loc[iq["year"] == iq["year"].max(), "quarter"].max(),
+             iq["cnpj8"].nunique(), int(iq["conflict"].sum()),
+             iq.loc[known, "source"].value_counts().to_dict())
+    log.info("Conglomerate placement of institution-quarters: %s",
+             iq.drop_duplicates(["cnpj8", "year", "quarter"])["cong_map_source"]
+               .value_counts().to_dict())
+    return iq
+
+
+def load_tarifa_listed_prices(inst_q: pd.DataFrame | None = None) -> pd.DataFrame:
+    """Conglomerate × quarter listed prices of LISTED_FEE_SERVICES.
+
+    listed_fee_<name>         the head institution's price in force on the quarter's last
+                              day (listed_prices_by_quarter; head = conglomerate_heads).
+                              When the head does not list the service that quarter, the
+                              median of the members' positive prices; a conglomerate whose
+                              only listings are R$0.00 gets 0.00.
+    listed_fee_n_inst_<name>  member institutions with a price for the service that quarter
+                              (0.00 included)
+
+    Members are placed by build_dated_cnpj_cong_map.  2015-Q1..2024-Q4 come from the monthly
+    census, with a snapshot version counting from its vigência on; 2025-Q1 on, from the
+    2026-06-22 snapshot alone, where its vigência is on or before the quarter end.  No row
+    before 2015.
+
+    Listed is a maximum (a ceiling), not what clients pay; many hold only the free
+    essential services.  A member that does not list the service is left out: not listed is
+    not a zero price.  A listed 0.00 is a price: the head's 0.00 is used as it stands, and
+    only the fallback median leaves zeros out (BB Banco de Investimento lists Package I at
+    0.00; the Banco do Brasil conglomerate takes BB's own price).
+    """
+    if inst_q is None:
+        inst_q = listed_fee_institution_quarters()
+    keys = ["cod_cong_prudencial", "year", "quarter"]
+    cell = keys + ["name"]
+    names = list(LISTED_FEE_SERVICES.values())
+    d = inst_q[inst_q["price"].notna()].copy()
+    d["name"] = [LISTED_FEE_SERVICES[(p, s)] for p, s in zip(d["pessoa"], d["codigo_servico"])]
+    d["is_head"] = _flag_heads(d)
+
+    n_inst = d.groupby(cell)["price"].size()
+    head = d[d["is_head"]].groupby(cell)["price"].first().reindex(n_inst.index)
+    positive = d[d["price"] > 0].groupby(cell)["price"].median().reindex(n_inst.index)
+    value = head.fillna(positive).fillna(0.0)
+    rule = np.select([head.notna().to_numpy(), positive.notna().to_numpy()],
+                     ["head", "positive_median"], "all_zero")
+
+    price = value.unstack("name").reindex(columns=names)
+    count = n_inst.unstack("name").reindex(columns=names).fillna(0).astype("int64")
+    price.columns = LISTED_PRICE_COLS
+    count.columns = LISTED_COUNT_COLS
+    wide = price.join(count).reset_index()
+
+    log.info("Listed prices: %d conglomerate-quarters | %d conglomerates | %d-%d | "
+             "conglomerate-quarter-service cells by rule %s",
+             len(wide), wide["cod_cong_prudencial"].nunique(), wide["year"].min(),
+             wide["year"].max(), pd.Series(rule).value_counts().to_dict())
     return wide
 
 
 # ---------------------------------------------------------------------------
-# 5. DataVigencia stickiness: time-varying instrument
+# 5. Price stickiness, from the same dated versions
 # ---------------------------------------------------------------------------
 
-def build_stickiness_panel(cmap: pd.DataFrame) -> pd.DataFrame:
+def build_stickiness_panel(inst_q: pd.DataFrame | None = None) -> pd.DataFrame:
+    """Conglomerate × quarter price stickiness, 2015-Q1..2024-Q4.
+
+    For one institution × service: years (days / 365.25) from the vigência of the version
+    in force on the quarter's last day to that day, over the PF services of
+    LISTED_FEE_SERVICES (1101-1213 and the packages 1501-1504).
+
+    tarifa_stickiness_yrs = the mean over the head institution's PF services
+                            (conglomerate_heads), the same head rule as listed_fee_*; when
+                            the head has none in force that quarter, the mean over every
+                            member's PF services
+    tarifa_stickiness_n   = the institution × service pairs in that mean
+
+    It grows quarter by quarter until a price change and resets at the change.  vigência is
+    the institution's own date for its last change.  Only pairs with a listed price in
+    force count; quarters outside the census window have no row (NaN after the merge).
     """
-    For each conglomerate × (year, quarter), compute:
-      tarifa_stickiness_yrs = mean years since last tariff change,
-                              averaged across BCB priority services and
-                              all member institutions.
-
-    Time-varying: stickiness grows quarter-by-quarter until a price change
-    resets it. Computed from data_vigencia snapshots in tariff_vigencia_history.csv.
-
-    Note: stickiness is NaN for quarters before a tariff's data_vigencia
-    (i.e., where we have no evidence the tariff existed).
-    """
-    if not VIGENCIA_HIST_CSV.exists():
-        log.warning("tariff_vigencia_history.csv not found — skipping stickiness.")
-        return pd.DataFrame(columns=["cod_cong_prudencial", "year", "quarter"])
-
-    vh = pd.read_csv(VIGENCIA_HIST_CSV, low_memory=False)
-    vh["cnpj"] = vh["cnpj"].astype(str).str.zfill(8)
-
-    # Filter to priority services PF only
-    vh_pf = vh[
-        (vh["customer_type"] == "F") &
-        (vh["codigo_servico"].isin(PRIORITY_SERVICES))
-    ].copy()
-
-    vh_pf["data_vigencia"] = pd.to_datetime(vh_pf["data_vigencia"], errors="coerce")
-    vh_pf = vh_pf.dropna(subset=["data_vigencia"])
-
-    # Map CNPJ -> conglomerate
-    vh_pf = vh_pf.merge(cmap, on="cnpj", how="left")
-    vh_pf["cod_cong_prudencial"] = vh_pf["cod_cong_prudencial"].fillna(cnpj_fallback_key(vh_pf["cnpj"]))
-    vh_pf["cod_cong_prudencial"] = vh_pf["cod_cong_prudencial"].astype(str).str.strip()
-
-    # One data_vigencia per (conglomerate, service) — take the earliest date
-    # across member institutions (most conservative: when the conglomerate first set the price)
-    cong_svc = (
-        vh_pf.groupby(["cod_cong_prudencial", "codigo_servico"])["data_vigencia"]
-        .min()
-        .reset_index()
-    )
-    cong_svc.columns = ["cod_cong_prudencial", "codigo_servico", "data_vigencia"]
-
-    # Quarter end dates: 2013-Q1 through 2026-Q1
-    quarters = []
-    for yr in range(2013, 2027):
-        for q, (m, d) in enumerate([(3, 31), (6, 30), (9, 30), (12, 31)], start=1):
-            if yr == 2026 and q > 1:
-                break
-            quarters.append({"year": yr, "quarter": q,
-                              "quarter_end": pd.Timestamp(yr, m, d)})
-    qdf = pd.DataFrame(quarters)
-
-    # Vectorised cross-join: cong_svc x quarters -> filter -> aggregate
-    # cong_svc has ~6K rows, qdf has 53 rows -> cross is ~318K rows (manageable)
-    cong_svc["_key"] = 1
-    qdf["_key"] = 1
-    cross = cong_svc.merge(qdf, on="_key").drop(columns="_key")
-
-    cross = cross[cross["quarter_end"] >= cross["data_vigencia"]].copy()
-    cross["stickiness_yrs"] = (
-        (cross["quarter_end"] - cross["data_vigencia"]).dt.days / 365.25
-    )
+    if inst_q is None:
+        inst_q = listed_fee_institution_quarters()
+    keys = ["cod_cong_prudencial", "year", "quarter"]
+    pf = np.array([(p, s) in STICKINESS_SERVICES
+                   for p, s in zip(inst_q["pessoa"], inst_q["codigo_servico"])], dtype=bool)
+    d = inst_q[pf & inst_q["price"].notna().to_numpy()
+               & inst_q["year"].between(LISTED_FIRST_YEAR, CENSUS_LAST_YEAR).to_numpy()].copy()
+    d["stickiness_yrs"] = (d["quarter_end"] - d["vigencia"]).dt.days / 365.25
+    d["is_head"] = _flag_heads(d)
+    head_present = d.groupby(keys)["is_head"].transform("any").to_numpy(dtype=bool)
+    use = d[~head_present | d["is_head"].to_numpy()]
 
     stick = (
-        cross.groupby(["cod_cong_prudencial", "year", "quarter"], as_index=False)
+        use.groupby(keys, as_index=False)
         .agg(
             tarifa_stickiness_yrs=("stickiness_yrs", "mean"),
             tarifa_stickiness_n=("stickiness_yrs", "count"),
         )
     )
+    n_head = int(d[d["is_head"]].groupby(keys).ngroups)
     log.info(
-        "Stickiness panel: %d rows | %d conglomerates | %d year-quarters",
-        len(stick),
+        "Stickiness panel: %d rows (%d from the head's services, %d from all members) | "
+        "%d conglomerates | %d year-quarters | mean %.2f yrs",
+        len(stick), n_head, len(stick) - n_head,
         stick["cod_cong_prudencial"].nunique(),
         stick[["year", "quarter"]].drop_duplicates().__len__(),
+        float(stick["tarifa_stickiness_yrs"].mean()) if len(stick) else float("nan"),
     )
     return stick
 
@@ -577,14 +804,31 @@ def patch_market_panel(
       cosif_fee_valid       1 if year < COSIF_BREAK_YEAR (2025), else 0
       cosif_fee_ip_masked   1 if the firm is a payment institution (has_ip), whose
                             COSIF ratios are NOT deposit-account fees (see 6a-bis)
-      listed_fee_*_pf       BCB Tarifas listed max prices (static)
-      tarifa_stickiness_yrs DataVigencia stickiness instrument (time-varying)
-      tarifa_stickiness_n   Number of priority services observed (data quality)
+      listed_fee_<name>     BCB listed maximum price in force on the quarter's last day,
+                            the head institution's (fallback: median of the members'
+                            positive prices; 0.00 if all are 0.00), for the 13 services of
+                            LISTED_FEE_SERVICES (pkg1_pf..pkg4_pf, maint_active_pj,
+                            maint_inactive_pj, acct_reg_pf, card_2nd_debit_pf,
+                            ccf_exclusion_pf, cheque_countermand_pf, withdrawal_teller_pf,
+                            withdrawal_atm_pf, statement_pf); 2015-Q1 on, NaN before
+      listed_fee_n_inst_<name>  member institutions with that price (0 from 2015 when none
+                            lists the service, NaN before 2015)
+      tarifa_stickiness_yrs years since the vigência of the price in force, mean over the
+                            head's PF listed services (fallback: every member's);
+                            2015-Q1..2024-Q4
+      tarifa_stickiness_n   institution × service pairs in that mean (0 in 2015-2024
+                            when none, NaN outside)
+
+    Every group joins on CodConglomeradoPrudencial × year × quarter.  Listed prices are
+    ceilings, not prices charged, and a service no member lists is NaN, not zero.
 
     The three quality flags are orthogonal and each marks a different defect:
     cosif_fee_valid the 2025 chart-of-accounts break, cosif_fee_guarded a
     small-denominator explosion in one cong-quarter, cosif_fee_ip_masked an
     institution type the 717xxx accounts do not measure the intended object for.
+
+    Writes market_panel_with_fees.csv (and its parquet sidecar) only, and only when the
+    row count is unchanged by the merges.
     """
     if not MARKET_PANEL_CSV.exists():
         log.error("market_panel.csv not found at %s", MARKET_PANEL_CSV)
@@ -594,6 +838,14 @@ def patch_market_panel(
                          low_memory=False)
     log.info("market_panel: %d rows x %d cols", len(market), len(market.columns))
     n_orig = len(market)
+    # The columns this function adds are rebuilt from scratch: any copy already in the base
+    # panel would come back from the merges as _x/_y pairs.
+    fee_prefixes = ("cosif_fee_", "listed_fee_", "tarifa_stickiness_")
+    carried = [c for c in market.columns if c.startswith(fee_prefixes)]
+    if carried:
+        log.warning("market_panel.csv already carries %d fee columns; dropped before the "
+                    "merge: %s", len(carried), carried)
+        market = market.drop(columns=carried)
 
     def _norm(df, col):
         df[col] = df[col].astype(str).str.strip()
@@ -622,9 +874,8 @@ def patch_market_panel(
     # Nubank's thin deposit stock puts Nubank at ~112 pp/yr in 2024 against 2-4 pp/yr
     # for the incumbents, i.e. the fee measure ranks the digital entrants as the most
     # expensive banks in the system, inverting their actual positioning.  The listed-
-    # price and stickiness columns are left in place -- those are per-event BRL prices
-    # from the BCB tariff tables and mean what they say for any institution that files
-    # them.
+    # price and stickiness columns are left in place -- those are listed BRL prices from
+    # the BCB tariff census and mean what they say for any institution that files them.
     #
     # This is the type rule from service_fees_notes.md section 3, with the licence test
     # of load_nonbank_ip_conglomerates rather than that section's literal has_ip (see
@@ -646,23 +897,35 @@ def patch_market_panel(
         n_masked_obs,
     )
 
-    # ── 6b. Listed prices (static — join on conglomerate only) ─────────────
+    # ── 6b. Listed prices (conglomerate × quarter) ──────────────────────────
+    keys = ["CodConglomeradoPrudencial", "year", "quarter"]
     if not listed_prices.empty and "cod_cong_prudencial" in listed_prices.columns:
         lp = listed_prices.copy()
         lp = _norm(lp, "cod_cong_prudencial")
         lp = lp.rename(columns={"cod_cong_prudencial": "CodConglomeradoPrudencial"})
-        merged = merged.merge(lp, on="CodConglomeradoPrudencial", how="left")
-        listed_cols = [c for c in merged.columns if c.startswith("listed_fee_")]
-        matched_listed = merged[listed_cols[0]].notna().sum() if listed_cols else 0
-        log.info("Listed prices: %d cols | %d/%d rows matched", len(listed_cols),
-                 matched_listed, n_orig)
+        merged = merged.merge(lp, on=keys, how="left")
+        # A conglomerate-quarter of the census or snapshot years with no member listing the
+        # service has zero listing members; before 2015 the count is unknown and stays NaN.
+        in_window = (merged["year"] >= LISTED_FIRST_YEAR).to_numpy()
+        for c in LISTED_COUNT_COLS:
+            merged.loc[in_window, c] = merged.loc[in_window, c].fillna(0)
+        log.info("Listed prices: %d price cols + %d count cols | %d/%d rows with "
+                 "listed_fee_pkg1_pf", len(LISTED_PRICE_COLS), len(LISTED_COUNT_COLS),
+                 int(merged["listed_fee_pkg1_pf"].notna().sum()), n_orig)
+        win = merged[merged["year"].between(2016, CENSUS_LAST_YEAR)]
+        log.info("Share of rows with listed_fee_pkg1_pf, by year: %s",
+                 {int(y): round(float(s), 3) for y, s in
+                  win.groupby("year")["listed_fee_pkg1_pf"].apply(lambda x: x.notna().mean()).items()})
 
-    # ── 6c. Stickiness time-varying ─────────────────────────────────────────
+    # ── 6c. Stickiness (conglomerate × quarter) ─────────────────────────────
     if not stickiness.empty and "cod_cong_prudencial" in stickiness.columns:
         st = stickiness.copy()
         st = _norm(st, "cod_cong_prudencial")
         st = st.rename(columns={"cod_cong_prudencial": "CodConglomeradoPrudencial"})
-        merged = merged.merge(st, on=["CodConglomeradoPrudencial", "year", "quarter"], how="left")
+        merged = merged.merge(st, on=keys, how="left")
+        in_census = merged["year"].between(LISTED_FIRST_YEAR, CENSUS_LAST_YEAR).to_numpy()
+        merged.loc[in_census, "tarifa_stickiness_n"] = (
+            merged.loc[in_census, "tarifa_stickiness_n"].fillna(0))
         matched_stick = merged["tarifa_stickiness_yrs"].notna().sum()
         log.info("Stickiness: %d/%d rows matched", matched_stick, n_orig)
 
@@ -702,11 +965,12 @@ def main(patch_market: bool = False) -> None:
     cosif_panel.to_csv(OUTPUT_CSV, index=False)
     log.info("Saved COSIF conglomerate panel: %s (%d rows)", OUTPUT_CSV.name, len(cosif_panel))
 
-    # 5. BCB Tarifas listed prices (static)
-    listed_prices = load_tarifa_listed_prices(cmap)
+    # 5. BCB listed prices, conglomerate x quarter (members placed quarter by quarter)
+    inst_q = listed_fee_institution_quarters()
+    listed_prices = load_tarifa_listed_prices(inst_q)
 
-    # 6. DataVigencia stickiness (time-varying)
-    stickiness = build_stickiness_panel(cmap)
+    # 6. Price stickiness from the same dated versions
+    stickiness = build_stickiness_panel(inst_q)
 
     # 7. Patch market panel with all fee sources
     if patch_market:
@@ -717,7 +981,7 @@ def main(patch_market: bool = False) -> None:
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
-        description="Fee panel builder: COSIF + BCB Tarifas listed prices + DataVigencia stickiness"
+        description="Fee panel builder: COSIF + dated BCB listed prices + price stickiness"
     )
     parser.add_argument("--patch-market", action="store_true",
                         help="Merge all fee columns onto market_panel.csv -> market_panel_with_fees.csv")

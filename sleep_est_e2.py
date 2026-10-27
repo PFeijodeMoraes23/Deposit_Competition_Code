@@ -54,6 +54,7 @@ warnings.filterwarnings("ignore", message="covariance of constraints does not ha
 # ==============================================================================
 from utils import paths as _paths_mod
 from utils import state_transform as _st
+from utils import deposit_types  # TR5 deposit-type variant (default: every type kept)
 DATA_DIR = _paths_mod.PROCESSED
 # market_panel.csv, NOT the fees variant — see utils/paths.market_panel_csv (USE_FEE_PANEL=1).
 PANEL_CSV = _paths_mod.market_panel_csv()
@@ -234,6 +235,7 @@ def build_pooled_data(time_block=False, center=True):
 
     if 'deposit_type' in df.columns:
         df = df[df['deposit_type'] != 3].copy()
+        df = deposit_types.apply_variant(df, "build_pooled_data")
 
     df['entity_id'] = df['CodConglomeradoPrudencial'].astype(str) + "_" + df['deposit_type'].astype(str) + "_" + df['mca_code'].astype(str)
     df['time_id'] = df['year'].astype(str) + "Q" + df['quarter'].astype(str)

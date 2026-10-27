@@ -36,6 +36,7 @@ from utils import paths
 from utils import load_panel_cached
 from utils import routines as R
 from utils import state_transform as _st
+from utils import deposit_types  # TR5 deposit-type variant (default: every type kept)
 from utils import demand_chars   # corrected characteristics, segments and balances (always applied)
 from utils.sleep_links import NonLinearResults  # noqa: F401 (needed for unpickling)
 
@@ -61,7 +62,7 @@ IV_CAPITAL = ['indice_basileia_lag']
 # (across the conglomerate's municipalities) and is independent + relevant for demand-deposit spreads.
 IV_ESTBAN = ['estban_rival_branches_lag']
 IV_FEE = ['cosif_fee_ratio_all', 'cosif_fee_ratio_total_deposits', 'cosif_fee_valid',
-          'listed_fee_atm_withdrawal_pf', 'listed_fee_statement_pf',
+          'listed_fee_pkg1_pf', 'listed_fee_withdrawal_atm_pf', 'listed_fee_statement_pf',
           'tarifa_stickiness_yrs', 'tarifa_stickiness_n']
 # CF2 needs the bank's ASSET return r^j (V_Main eq 16, ψ1 row): the return on what deposits fund.
 # `asset_gross_return_lag` = 1 + lagged quarterly asset yield (built in panel_bank_chars.py).
@@ -190,7 +191,7 @@ def build_base_panel(panel_csv, time_block=False):
     print(f"Loading {panel_csv}...")
     df_raw = load_panel_cached(panel_csv, dtype={'mca_code': str}, low_memory=False)
     df_raw = demand_chars.apply(df_raw)
-    df = _reshape_panel(df_raw)
+    df = deposit_types.apply_variant(_reshape_panel(df_raw), "sleep_demand_prep_link")
     df['fgc_covered'] = df['deposit_type'].astype('Int64').isin([1, 2, 4]).astype(int)
     if 'has_ip' not in df.columns:
         df['has_ip'] = 0

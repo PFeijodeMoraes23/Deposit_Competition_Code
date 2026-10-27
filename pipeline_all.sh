@@ -100,6 +100,8 @@
 #   --cfeq-modes "cf3" which equilibrium CFs to run (cf3 cf5 cf6; cf6 needs CF_MERGE)
 #   --blp-args "..."   extra flags forwarded verbatim to blp_run.sh (e.g. "--draws --sysimage");
 #                      blp_run.sh builds what is missing without them
+#   --sleep-args "..." extra flags forwarded verbatim to sleep_run.sh (e.g. "--no-ame --no-upsilon
+#                      --no-entry"); empty by default
 #   --skip-preflight   do not submit gate G0
 #   --resumed          internal: set by the continuation jobs; skips G0
 #   --dry-run          print every sbatch line, submit nothing
@@ -143,6 +145,7 @@ CF_STAGE="${CF_STAGE:-ext1}"
 R="${R:-2000}"; SEED="${SEED:-42}"
 CFEQ_MODES="${CFEQ_MODES:-cf3}"
 BLP_ARGS="${BLP_ARGS:-}"
+SLEEP_ARGS="${SLEEP_ARGS:-}"
 SKIP_EST=""; SKIP_PF=""; RESUMED=0; DRY=""
 DO_SLEEP=1; DO_LOGIT=1; DO_BLP=1; DO_BBL=1; DO_CF=1
 # The equilibrium CFs are OFF by default. They are days of GPU array time and nothing
@@ -177,6 +180,7 @@ while [[ $# -gt 0 ]]; do
         --no-cfeq)        DO_CFEQ=0 ;;          # names the default; kept so old command lines still parse
         --cfeq-modes)     CFEQ_MODES="$2"; shift ;;
         --blp-args)       BLP_ARGS="$2"; shift ;;
+        --sleep-args)     SLEEP_ARGS="$2"; shift ;;
         --skip-preflight) SKIP_PF="--skip-preflight" ;;
         --resumed)        RESUMED=1 ;;
         --dry-run)        CL_DRYRUN=1; DRY="--dry-run" ;;
@@ -412,7 +416,7 @@ if want_phase sleep && [[ "${DO_SLEEP}" == "1" ]]; then
     # --skip-preflight: G0 IS the preflight, and running a second one here would put
     # it back on the login node, which is the thing this design removes.
     run_child "Phase sleep: sleep_run.sh" \
-        bash "${CL_ROOT}/sleep_run.sh" --routines "${SLEEP_ROUTINES}" ${SKIP_EST} ${DRY} \
+        bash "${CL_ROOT}/sleep_run.sh" --routines "${SLEEP_ROUTINES}" ${SKIP_EST} ${SLEEP_ARGS} ${DRY} \
              --skip-preflight ${G0_JID:+--after} ${G0_JID:+${G0_JID}}
     [[ ${CHILD_RC} -eq 0 ]] || die_child "sleep_run.sh" "${CHILD_RC}"
     G2_JID="$(child_field SLEEP_G2_JOBID)"

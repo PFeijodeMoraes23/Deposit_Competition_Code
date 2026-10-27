@@ -1,6 +1,0 @@
-# local path	path inside the zip (unpacked into data/input/switch_cost/)
-C:/Users/pedro/OneDrive/Documentos/Yale/Year 3 (2024 - 2025)/Open Finance/Open-Finance/BCB/Egan_et_al_2025_Rep/processed/market_panel.parquet	market_panel.parquet
-C:/Users/pedro/OneDrive/Documentos/Yale/Year 3 (2024 - 2025)/Open Finance/Open-Finance/BCB/Egan_et_al_2025_Rep/processed/ESTIMATION_OUTPUT/DEMAND_PREP/state_centering_means.json	state_centering_means.json
-C:/Users/pedro/OneDrive/Documentos/Yale/Year 3 (2024 - 2025)/Open Finance/Open-Finance/BCB/Egan_et_al_2025_Rep/processed/demand_chars.parquet	demand_chars.parquet
-C:/Users/pedro/OneDrive/Documentos/Yale/Year 3 (2024 - 2025)/Open Finance/Open-Finance/BCB/Inclusion/bcb_banked_mca_panel.csv	bcb_banked_mca_panel.csv
-C:/Users/pedro/OneDrive/Documentos/Yale/Year 3 (2024 - 2025)/Open Finance/Open-Finance/BCB/Egan_et_al_2025_Rep/processed/ESTIMATION_OUTPUT/SWITCH_COST/switch_cost_inputs/r4_locked_bank_year.csv	r4_locked_bank_year.csv

@@ -58,6 +58,11 @@ cached settings (g, horizon, plateau_w, window_only, ...) d6_meta.json records f
 that produced everything else, rather than this invocation's own CLI defaults, so a partial
 rebuild cannot caption or compute a result under a construction the rest of the outputs were
 not built under.
+
+--out-dir moves every d6_* file this run reads or writes to another folder (a relative path sits
+under DIAG_PHI_SEPARATION); --g-fallback chooses what fills an event-quarter with neither an own
+nor an entity accrual (build_g_paths): the national median (default) or the firm-type x
+deposit-type median.
 """
 from utils.venv_guard import ensure_project_venv
 ensure_project_venv(__file__)
@@ -67,6 +72,7 @@ import json
 import os
 os.environ.setdefault("MPLBACKEND", "Agg")
 import shutil
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -179,6 +185,16 @@ def median_g():
 # phi_m); g was the only input still collapsed, which made the model path a median over events
 # in phi but a constant in g while the data path is a median over events in everything.
 GMODE_CHOICES = ("path", "event", "scalar")
+# The step before the national median in build_g_paths' chain (--g-fallback). The demand frame
+# keeps a cell only where (14-B) leaves a positive active balance, so an entrant's own g is
+# missing exactly in its weak-inflow quarters -- for D entrants about 30% of event-quarters, and
+# the entity step cannot fill them because a D firm has no other market. The national median
+# pools every firm and deposit type and, on the D entrants' OBSERVED quarters, sits 66 bp a
+# quarter below their own g (holdout on the 2026-10-18 spec-12 parquet: bias -66, MAE 113 bp);
+# the median of the same firm type and deposit type that quarter, weighted by the event's own
+# type mix, misses it by -5 (MAE 61). 'national' leaves the chain as it was; 'firmtype' inserts
+# that median before the national step, which then remains only as the last resort.
+G_FALLBACK_CHOICES = ("national", "firmtype")
 # One suffix map for every phi-resolution artifact -- CSVs and figures alike, so a cell
 # of the aggregation 2x2 can never write over another.
 PHI_SFX = {"path": "_phipath", "market": "", "time": "_phitime",
@@ -193,16 +209,22 @@ G_TYPES = (1, 2, 4)          # event deposits are dep_a1+dep_a2+dep_a4; type 5 (
                              # is in the parquet but NEVER entered the path being modelled.
 
 
-def build_g_paths(reg, H, mode, scalar_g):
+def build_g_paths(reg, H, mode, scalar_g, fallback="national"):
     """(g_matrix, diagnostics) for the kept events, aligned to reg[reg.keep] row order.
 
     g_matrix is (n_kept, H+1): the gross accrual each event faces at horizon h, i.e. at
-    calendar quarter q_entry + h. Sources, in order, each a deposit-weighted mean of
-    `gross_return_lag` over types 1/2/4:
+    calendar quarter q_entry + h. Sources, in order, over `gross_return_lag` of types 1/2/4:
 
-      own      the event's own (congl, mkt, quarter) cells -- the deposits actually modelled
-      entity   the conglomerate's cells across all its markets, same quarter
-      national all cells that quarter
+      own      the event's own (congl, mkt, quarter) cells -- the deposits actually modelled;
+               deposit-weighted mean
+      entity   the conglomerate's cells across all its markets, same quarter; deposit-weighted
+               mean
+      firmtype (fallback='firmtype' only) for each deposit type, the median over every cell of
+               the event's firm type (the parquet's is_B) and that type that quarter, averaged
+               with the event's own balances by type over its cells in q_entry..q_entry+H as
+               weights. An event with no own cell in that span has no mix and goes on to the
+               national step.
+      national median over all cells that quarter
 
     Quarters outside the parquet's 2016Q1-2024Q4 window (late entrants' tails, and the
     2015Q4 cohort's first quarters) take the event's nearest observed value, carried flat.
@@ -215,8 +237,11 @@ def build_g_paths(reg, H, mode, scalar_g):
         return np.full((n, H + 1), float(scalar_g)), None
 
     fp = _paths.demand_parquet_dir() / "demand_2_spec_12.parquet"
-    d = pd.read_parquet(fp, columns=["CodConglomeradoPrudencial", "mca_code", "deposit_type",
-                                     "year", "quarter", "gross_return_lag", "deposit_balance"])
+    cols = ["CodConglomeradoPrudencial", "mca_code", "deposit_type",
+            "year", "quarter", "gross_return_lag", "deposit_balance"]
+    if fallback == "firmtype":
+        cols.append("is_B")
+    d = pd.read_parquet(fp, columns=cols)
     d = d[d["deposit_type"].astype(int).isin(G_TYPES)].copy()
     d["congl"] = d["CodConglomeradoPrudencial"].astype(str)
     d["mkt"] = d["mca_code"].astype(str)
@@ -236,8 +261,22 @@ def build_g_paths(reg, H, mode, scalar_g):
     mkt = kept["mkt"].astype(str).to_numpy()
     q0 = kept["q_entry"].astype(int).to_numpy()
 
+    if fallback == "firmtype":
+        d["t"] = d["deposit_type"].astype(int)
+        d["B"] = d["is_B"].astype(bool)
+        ftq = d.groupby(["B", "t", "q"], observed=True)["gross_return_lag"].median()
+        # The event's balances by deposit type over its own cells in q_entry..q_entry+H.
+        ev = pd.DataFrame({"i": np.arange(n), "congl": congl, "mkt": mkt, "q0": q0})
+        cw = (d.groupby(["congl", "mkt", "t", "q"], observed=True)["w"].sum().reset_index()
+              .merge(ev, on=["congl", "mkt"]))
+        cw = cw[(cw["q"] >= cw["q0"]) & (cw["q"] <= cw["q0"] + H)]
+        mix = (cw.pivot_table(index="i", columns="t", values="w", aggfunc="sum")
+               .reindex(index=range(n), columns=list(G_TYPES)).fillna(0.0).to_numpy(float))
+        ev_b = (kept["kind"] == "B").to_numpy()
+
     G = np.full((n, H + 1), np.nan)
-    src = np.zeros((n, H + 1), dtype=np.int8)          # 1 own, 2 entity, 3 national, 0 none
+    # 1 own, 2 entity, 4 firm type x deposit type (fallback='firmtype'), 3 national, 0 none
+    src = np.zeros((n, H + 1), dtype=np.int8)
     for h in range(H + 1):
         q = q0 + h
         # copy=True: a reindex that misses nothing hands back a read-only view of the
@@ -249,6 +288,19 @@ def build_g_paths(reg, H, mode, scalar_g):
             e = ent.reindex(pd.MultiIndex.from_arrays([congl[m], q[m]])).to_numpy(float)
             v[m] = e
             src[m, h] = np.where(np.isfinite(e), 2, 0)
+        m = ~np.isfinite(v)
+        if fallback == "firmtype" and m.any():
+            num = np.zeros(int(m.sum()))
+            den = np.zeros(int(m.sum()))
+            for j, t in enumerate(G_TYPES):
+                tv = ftq.reindex(pd.MultiIndex.from_arrays(
+                    [ev_b[m], np.full(int(m.sum()), t), q[m]])).to_numpy(float)
+                ok = np.isfinite(tv) & (mix[m, j] > 0)
+                num += np.where(ok, mix[m, j] * tv, 0.0)
+                den += np.where(ok, mix[m, j], 0.0)
+            fv = np.where(den > 0, num / np.where(den > 0, den, 1.0), np.nan)
+            v[m] = fv
+            src[m, h] = np.where(np.isfinite(fv), 4, 0)
         m = ~np.isfinite(v)
         if m.any():
             nv = nat.reindex(q[m]).to_numpy(float)
@@ -269,18 +321,22 @@ def build_g_paths(reg, H, mode, scalar_g):
         ge = np.where(den > 0, num / np.maximum(den, 1), float(scalar_g))
         Gf = np.repeat(ge[:, None], H + 1, axis=1)
 
+    counts = {"n_g_cells_own": (src == 1).sum(axis=1),
+              "n_g_fallback_entity": (src == 2).sum(axis=1)}
+    if fallback == "firmtype":
+        counts["n_g_fallback_firmtype"] = (src == 4).sum(axis=1)
+    counts.update({"n_g_fallback_national": (src == 3).sum(axis=1),
+                   "n_g_extrapolated": (src == 0).sum(axis=1)})
     diag = pd.DataFrame({
         "congl": congl, "mkt": mkt, "q_entry": q0,
         "g_e_mean": Gf.mean(axis=1),
         "g_e_min": Gf.min(axis=1), "g_e_max": Gf.max(axis=1),
-        "n_g_cells_own": (src == 1).sum(axis=1),
-        "n_g_fallback_entity": (src == 2).sum(axis=1),
-        "n_g_fallback_national": (src == 3).sum(axis=1),
-        "n_g_extrapolated": (src == 0).sum(axis=1),
+        **counts,
     })
     tot = src.size
+    ft_txt = (f"firm type {100*(src==4).sum()/tot:.1f}%, " if fallback == "firmtype" else "")
     print(f"  [g:{mode}] {n} events x {H+1} horizons: own {100*(src==1).sum()/tot:.1f}%, "
-          f"entity {100*(src==2).sum()/tot:.1f}%, national {100*(src==3).sum()/tot:.1f}%, "
+          f"entity {100*(src==2).sum()/tot:.1f}%, {ft_txt}national {100*(src==3).sum()/tot:.1f}%, "
           f"carried {100*n_extrap/tot:.1f}%")
     print(f"  [g:{mode}] g_e mean over events {Gf.mean():.5f}  "
           f"p10 {np.percentile(Gf.mean(axis=1), 10):.5f}  "
@@ -1250,8 +1306,10 @@ def main(args):
 
     # Per-event accrual paths, aligned to reg[reg.keep] row order for each kind.
     gmode = args.g_mode
-    G_b, gdiag_b = build_g_paths(reg_b, H, gmode, g)
-    G_d, gdiag_d = build_g_paths(reg_d, H, gmode, g)
+    if args.g_fallback != "national":
+        print(f"  [g] fallback before the national median: {args.g_fallback}")
+    G_b, gdiag_b = build_g_paths(reg_b, H, gmode, g, args.g_fallback)
+    G_d, gdiag_d = build_g_paths(reg_d, H, gmode, g, args.g_fallback)
     if args.g_selftest and gmode != "scalar":
         G_b = np.full_like(G_b, g)
         G_d = np.full_like(G_d, g)
@@ -1747,7 +1805,7 @@ def make_panel_figures(paths_df, curves_df, vint, g, args, imp=None,
         except OSError as e:
             print(f"  [fig] panel save failed: {e}")
         plt.close(f1)
-    print(f"  figure -> {out_stem}.png (+ Drafts/{stem}.*, "
+    print(f"  figure -> {out_stem}.png (+ {DRAFTS.name}/{stem}.*, "
           f"per-panel {stem}_{{a,b}}.{{png,pdf,tex}})")
 
 
@@ -1796,6 +1854,10 @@ def _write_meta(g, H, plateau_w, vint, imp, args):
         "routine_curves": list(args.routine_curves) if args.routine_curves else None,
         "implied_phi_kinds": sorted(imp.keys()) if imp else [],
     }
+    # Recorded only when it is not the national median, so a default run writes the same meta
+    # as before the option existed; readers take a missing key as "national".
+    if args.g_fallback != "national":
+        meta["g_fallback"] = args.g_fallback
     (OUT_DIR / META_NAME).write_text(json.dumps(meta, indent=2), encoding="utf-8")
     print(f"  -> {META_NAME}")
 
@@ -1841,7 +1903,7 @@ def rebuild_curves_only(args):
                              "first.")
         events = pd.read_csv(ev_path)
         reg_b = events[events["kind"] == "B"].copy()
-        gB, _ = build_g_paths(reg_b, H, gmode, g)
+        gB, _ = build_g_paths(reg_b, H, gmode, g, meta.get("g_fallback", "national"))
         print(f"  [g] rebuilt the per-event g path for {len(reg_b):,} B candidates "
               f"({int(reg_b['keep'].sum()):,} kept) from {ev_path.name} + the demand parquet "
               "-- deterministic, no resampling")
@@ -1955,7 +2017,7 @@ def render_figures(args):
     if pn.exists():
         _routine_panel_figure(paths_df, pd.read_csv(pn), g, args, imp)
     make_figure(paths_df, curves_df, vint, g, args, imp)
-    print(f"\nfigures -> {OUT_DIR}  (+ Drafts)")
+    print(f"\nfigures -> {OUT_DIR}" + ("" if DRAFTS == OUT_DIR else f"  (+ {DRAFTS})"))
     return 0
 
 
@@ -1995,6 +2057,18 @@ if __name__ == "__main__":
     ap.add_argument("--g-selftest", action="store_true",
                     help="force every per-event g to the scalar median; 'path' must then "
                          "reproduce '--g-mode scalar'")
+    ap.add_argument("--g-fallback", choices=G_FALLBACK_CHOICES, default="national",
+                    help="where an event-quarter has neither an own nor an entity g: "
+                         "'national' = the national median that quarter (default); "
+                         "'firmtype' = the median of the event's firm type (B/D) by deposit "
+                         "type that quarter, weighted by the event's own type mix, with the "
+                         "national median as the last resort. See G_FALLBACK_CHOICES.")
+    ap.add_argument("--out-dir", default=None,
+                    help="folder for every d6_* file this run reads or writes (default: "
+                         "ESTIMATION_OUTPUT/DIAG_PHI_SEPARATION). A relative path is taken "
+                         "under that default folder, so the cluster archive picks it up with "
+                         "the rest of DIAG_PHI_SEPARATION. With a non-default folder, figures "
+                         "that would go to Drafts go to the same folder instead.")
     # The compute/render split. The moment and its bootstrap read the full market panel and
     # every routine's phi_nopix export and resample events 999 times, so they run on the
     # cluster (sleep_job.sh SLEEP_STEP=entry); the figures are a read of the CSVs that run
@@ -2024,6 +2098,15 @@ if __name__ == "__main__":
                               "d6_entry_paths.csv and refuses to write on a mismatch. Touches "
                               "no other d6_* file.")
     _args = ap.parse_args()
+    if _args.out_dir:
+        # Module scope: rebinds the OUT_DIR / DRAFTS every function reads. A side run never
+        # writes the paper's figures.
+        _od = Path(_args.out_dir)
+        OUT_DIR = (_od if _od.is_absolute() else OUT_DIR / _od).resolve()
+        if OUT_DIR != (_paths.PROCESSED / "ESTIMATION_OUTPUT" / "DIAG_PHI_SEPARATION").resolve():
+            DRAFTS = OUT_DIR
+        OUT_DIR.mkdir(parents=True, exist_ok=True)
+        print(f"  [out] d6_* files -> {OUT_DIR}")
     if _args.figures_only:
         raise SystemExit(render_figures(_args))
     elif _args.curves_only:

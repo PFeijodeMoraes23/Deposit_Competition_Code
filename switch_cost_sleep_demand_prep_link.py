@@ -85,7 +85,7 @@ IV_CAPITAL = ['indice_basileia_lag']
 # (across the conglomerate's municipalities) and is independent + relevant for demand-deposit spreads.
 IV_ESTBAN = ['estban_rival_branches_lag']
 IV_FEE = ['cosif_fee_ratio_all', 'cosif_fee_ratio_total_deposits', 'cosif_fee_valid',
-          'listed_fee_atm_withdrawal_pf', 'listed_fee_statement_pf',
+          'listed_fee_pkg1_pf', 'listed_fee_withdrawal_atm_pf', 'listed_fee_statement_pf',
           'tarifa_stickiness_yrs', 'tarifa_stickiness_n']
 # CF2 needs the bank's ASSET return r^j (V_Main eq 16, ψ1 row): the return on what deposits fund.
 # `asset_gross_return_lag` = 1 + lagged quarterly asset yield (built in panel_bank_chars.py).

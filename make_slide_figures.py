@@ -217,7 +217,7 @@ REF_STEMS = {
                                        (10.8 / 2.54, 4.6 / 2.54)),
     "fig_slide_motiv_entry_by_gap_bankboot": ("fig_slide_motiv_entry_by_gap_bankboot_ref",
                                               (10.8 / 2.54, 3.9 / 2.54)),
-    # The 2026-10-20 follow-ups (`--only followups`, Rout/followups_1020.json).
+    # `--only followups`: Rout/phi_variance.json, entry_carry.json, fee_ratio.json.
     "fig_slide_phi_anova": ("fig_slide_phi_anova_ref", (8.0 / 2.54, 4.6 / 2.54)),
     "fig_slide_entry_carry": ("fig_slide_entry_carry_ref", (10.8 / 2.54, 4.6 / 2.54)),
     "fig_slide_fee_ratio": ("fig_slide_fee_ratio_ref", (10.8 / 2.54, 4.6 / 2.54)),
@@ -226,7 +226,9 @@ REF_STEMS = {
     # Pix usage on pre-launch exposure (`--only pixexposure`, Rout/pix_exposure.json).
     "fig_slide_pix_exposure": ("fig_slide_pix_exposure_ref", (10.8 / 2.54, 4.6 / 2.54)),
 }
-FOLLOWUPS_JSON = mdt.OUTPUT_DIR / "followups_1020.json"
+PHI_VARIANCE_JSON = mdt.OUTPUT_DIR / "phi_variance.json"
+ENTRY_CARRY_JSON = mdt.OUTPUT_DIR / "entry_carry.json"
+FEE_RATIO_JSON = mdt.OUTPUT_DIR / "fee_ratio.json"
 PIX_EXPOSURE_JSON = mdt.OUTPUT_DIR / "pix_exposure.json"
 REF = False
 REF_FS = 1.0
@@ -405,18 +407,20 @@ def ref_figures(out: pathlib.Path, png: bool):
 
 
 def followups_ref(out: pathlib.Path, png: bool, E: int):
-    """The 2026-10-20 follow-up charts in the reference style (REF_STEMS), from
-    Rout/followups_1020.json (make_followups_1020.py): the variance split of phi-hat_mt for
-    routine E (bars, as fig_slide_xi_anova_slide); entry and the incumbents' carry (event
-    study, all entries and without Santander's); the fee ratio of incumbents and D firms."""
+    """Three charts in the reference style (REF_STEMS): the variance split of phi-hat_mt for
+    routine E (bars, as fig_slide_xi_anova_slide; Rout/phi_variance.json, make_phi_variance.py);
+    entry and the incumbents' carry (event study, all entries and without Santander's;
+    Rout/entry_carry.json, make_entry_carry.py); the fee ratio of incumbents and D firms
+    (Rout/fee_ratio.json, make_fee_ratio.py)."""
     global SLIDE_FIGSIZE, FS, PAPER, SLIDE, REF, MARK
-    if not FOLLOWUPS_JSON.is_file():
-        sys.exit(f"{FOLLOWUPS_JSON} not found: run make_followups_1020.py first")
-    sc = json.loads(FOLLOWUPS_JSON.read_text(encoding="utf-8"))
+    for p, script in ((PHI_VARIANCE_JSON, "make_phi_variance.py"),
+                      (ENTRY_CARRY_JSON, "make_entry_carry.py"), (FEE_RATIO_JSON, "make_fee_ratio.py")):
+        if not p.is_file():
+            sys.exit(f"{p} not found: run {script} first")
     FS, PAPER, SLIDE, REF = REF_FS, False, False, True
 
     # Variance split of phi-hat_mt.
-    c1 = sc[f"E{E}"]["C1"]
+    c1 = json.loads(PHI_VARIANCE_JSON.read_text(encoding="utf-8"))[f"E{E}"]
     SLIDE_FIGSIZE = REF_STEMS["fig_slide_phi_anova"][1]
     MARK = (SLIDE_FIGSIZE[0] * SLIDE_FIGSIZE[1]) / (5.2 * 3.3)
     parts = (("quarter", "Quarter", mdt.NATL_COLOR), ("market", "Market (MCA)", SAVINGS_COLOR),
@@ -445,7 +449,7 @@ def followups_ref(out: pathlib.Path, png: bool, E: int):
     _save(fig, out, "fig_slide_phi_anova", png)
 
     # Entry and the incumbents' carry.
-    c2 = sc["C2"]
+    c2 = json.loads(ENTRY_CARRY_JSON.read_text(encoding="utf-8"))
     SLIDE_FIGSIZE = REF_STEMS["fig_slide_entry_carry"][1]
     fig, ax = plt.subplots(figsize=SLIDE_FIGSIZE)
     for tag, lab, color, dx in (("all", f"All entries ({c2['all']['n_markets']} markets)",
@@ -468,7 +472,7 @@ def followups_ref(out: pathlib.Path, png: bool, E: int):
     _save(fig, out, "fig_slide_entry_carry", png)
 
     # Fee ratio.
-    c6 = sc["C6"]
+    c6 = json.loads(FEE_RATIO_JSON.read_text(encoding="utf-8"))
     SLIDE_FIGSIZE = REF_STEMS["fig_slide_fee_ratio"][1]
     fig, ax = plt.subplots(figsize=SLIDE_FIGSIZE)
     for key, lab, color in (("incumbent", "Incumbents", mdt.B_COLOR),

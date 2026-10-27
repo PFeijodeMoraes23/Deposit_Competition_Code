@@ -11,12 +11,39 @@ The fee branch of the panel pipeline. No estimator reads it: estimators read `ma
 The two BCB scrapers for the listed (published) bank fees were frozen on 2026-10-14. Both call the same Olinda service (`Informes_ListaTarifasPorInstituicaoFinanceira`):
 
 - `scrape_bcb_tarifas.py` gets the current schedules. It was pipeline step 10, but its outputs are two `--test` runs and the step never ran a full scrape.
-- `scrape_bcb_tariff_vigencia.py` gets the last price-change date and price per service. `panel_fee_merge.py` reads its `tariff_vigencia_history.csv`, which is the source of `listed_fee_*`.
+- `scrape_bcb_tariff_vigencia.py` gets the last price-change date and price per service (`tariff_vigencia_history.csv`, the Olinda snapshot of 2026-06-22). It dates a price only from its vigência on, and it is the only source after 2024.
 
-No estimator reads the fee columns. Before any fee specification uses them, fix the service-code labels in `panel_fee_merge.py`:
+The listed-price history comes from two scripts outside the runner. Stage 7 reads their outputs, so run them before `panel_fee_merge.py`.
 
-- code 1501 is "PACOTE PADRONIZADO DE SERVIÇOS I", not an ATM withdrawal;
-- the withdrawal codes are 1209 and 1210;
-- code 1203 is the CCF exclusion.
+- `scrape_bcb_tarifas_monthly.py` downloads the BCB's monthly census of listed tariffs (`<YYYYMM>TARINST.ZIP`, every institution × service, PF and PJ, with the date in force) into `DATA_RAW/BCB/tarifas_monthly`.
+  - 2015-01..2024-12 is collected: 120 files.
+  - The archived listing names the months to 2018-07; later months follow the same name pattern (`--unlisted`).
+  - The script writes `tariff_history_bcb_monthly.csv`, one row per price spell.
+- `build_account_fee_history.py` joins that census with the Olinda snapshot for the account-keeping services: Pacotes Padronizados I–IV (1501–1504) and PJ account maintenance (0402, 0403). It writes:
+  - `account_fee_listed_history.csv`, the dated versions;
+  - `account_fee_listed_by_year.csv`, months known per institution and year 2016–2024, with the reason a month is unknown;
+  - `account_fee_listed_coverage.csv`, the shares known.
+
+`panel_fee_merge.py` turns these into quarterly listed-price columns, joined on conglomerate × year × quarter:
+
+- **Services**, labelled by code (`LISTED_FEE_SERVICES`): Pacotes Padronizados I–IV (`listed_fee_pkg1_pf`..`pkg4_pf`, codes 1501–1504), PJ account maintenance (`maint_active_pj` 0402, `maint_inactive_pj` 0403), cadastro (`acct_reg_pf` 1101), 2nd debit card (`card_2nd_debit_pf` 1201), CCF exclusion (`ccf_exclusion_pf` 1203), cheque countermand (`cheque_countermand_pf` 1204), withdrawals at the teller (`withdrawal_teller_pf` 1209) and at a terminal (`withdrawal_atm_pf` 1210), statement (`statement_pf` 1213).
+- **Price:** for each institution, the version in force on the quarter's last day. For the six account-keeping services it comes from `account_fee_listed_history.csv`; the other seven go through the same `load_versions()` rule. Prices are in R$ only; percentage listings are dropped and logged.
+- **Window:**
+  - 2015-Q1..2024-Q4 from the census;
+  - 2025-Q1 on, from the snapshot alone, where its vigência is on or before the quarter end;
+  - 2013–2014 NaN.
+- **Conglomerate:**
+  - `listed_fee_<name>` is the head institution's price: the canonical leader, the same leader as the panel's `CNPJ_Lider`.
+  - When the head does not list the service, it is the median of the members' positive prices; it is 0.00 when every listing is 0.00.
+  - `listed_fee_n_inst_<name>` counts the members with a price.
+  - Members are placed the way the panel places their deposits (`utils.conglomerates.deposit_panel_codes`). An ESTBAN bank keeps its static code in every quarter; every other institution follows the IF Data List of that quarter.
+- **Stickiness:** `tarifa_stickiness_yrs` is the years since the vigência of the price in force, for 2015–2024. It is averaged over the head's PF services, or over every member's when the head has none. `tarifa_stickiness_n` counts the pairs averaged.
+- **Cautions:**
+  - Listed is a ceiling, not the price charged.
+  - An institution absent from the census lists nothing: NaN, not zero.
+  - A listed R$0.00 is a price. A head's 0.00 is used as it stands, but the fallback median leaves zeros out. For example, BB Banco de Investimento lists Package I at 0.00, which does not affect Banco do Brasil's value.
+  - Bridged prices carry under 1% of known months.
+
+No estimator reads the fee columns.
 
 Run any script by hand from the repo root, for example `python fees/scrape_bcb_tariff_vigencia.py`. Each finds `utils/` through a `sys.path` line that points at the repo root.

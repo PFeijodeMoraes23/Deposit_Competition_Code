@@ -53,6 +53,12 @@ RATIO_COLS = ["cosif_fee_ratio_demand", "cosif_fee_ratio_savings", "cosif_fee_ra
               "cosif_fee_ratio_all", "cosif_fee_ratio_total_deposits"]
 FLAG_COLS = ["cosif_fee_valid", "cosif_fee_guarded", "cosif_fee_ip_masked"]
 STICK_COLS = ["tarifa_stickiness_yrs", "tarifa_stickiness_n"]
+# The listed-price column the coverage tables report: Pacote Padronizado de Serviços I, the
+# account package every bank must offer, with the widest coverage of the account-keeping fees.
+LISTED_HEADLINE = "listed_fee_pkg1_pf"
+# panel_fee_merge dates listed prices from 2015 (census start) and stickiness over 2015-2024.
+LISTED_FIRST_YEAR = 2015
+STICKINESS_YEARS = (2015, 2024)
 
 # service_fees_notes.md section 2.3: fee_ratio_total_deposits divides by the COSIF header
 # total (account 41000007), which is never a thin sliver for any institution type, so it
@@ -134,7 +140,7 @@ def block_coverage(df: pd.DataFrame, cells: pd.DataFrame) -> None:
            f"{'ratio_totdep':>14s}{'listed':>9s}{'sticky':>9s}{'guarded':>9s}{'masked':>9s}")
     print(hdr)
     print("-" * len(hdr))
-    listed_col = next((c for c in df.columns if c.startswith("listed_fee_")), None)
+    listed_col = LISTED_HEADLINE if LISTED_HEADLINE in df.columns else None
     for is_b, g_type in df.groupby("_type", sort=True):
         for year, g in g_type.groupby("year", sort=True):
             n = len(g)
@@ -261,7 +267,7 @@ def block_ip_mask(df: pd.DataFrame, fails: list, pre_mask: bool) -> None:
     print("\n  Named firms (these must appear as MATCHED, not silently absent):")
     print(f"    {'firm':<20s}{'rows':>8s}{'matched':>9s}{'masked':>8s}{'expect':>8s}"
           f"{'ratio_all':>10s}{'listed':>8s}")
-    listed_col = next((c for c in df.columns if c.startswith("listed_fee_")), None)
+    listed_col = LISTED_HEADLINE if LISTED_HEADLINE in df.columns else None
     for firm, expect_masked in SPOT_FIRMS.items():
         sel = df["_name"].str.contains(firm, case=False, na=False)
         if not sel.any():
@@ -307,6 +313,43 @@ def block_assertions(df: pd.DataFrame, fails: list) -> None:
     print()
 
 
+def block_listed(df: pd.DataFrame, fails: list) -> None:
+    print("=" * 78)
+    print("7. LISTED PRICES AND STICKINESS (BCB tariff census), BY YEAR")
+    print("=" * 78)
+    print(f"  Share of rows with {LISTED_HEADLINE} (price in force on the quarter's last day,")
+    print("  head institution's, else members' positive median) and with")
+    print("  tarifa_stickiness_yrs.  Panel rows, so")
+    print("  the denominator differs from the institution-level shares of")
+    print("  fees/build_account_fee_history.py (December price known, snapshot institutions).\n")
+    lo, hi = MATCH_WINDOW
+    win = df[(df["year"] >= lo) & (df["year"] <= hi)]
+    hdr = f"{'year':>6s}{'rows':>9s}{'listed':>9s}{'B':>9s}{'D':>9s}{'sticky':>9s}"
+    print(hdr)
+    print("-" * len(hdr))
+    for year, g in win.groupby("year", sort=True):
+        listed = g[LISTED_HEADLINE].notna()
+        print(f"{year:>6d}{len(g):>9,}{_fmt_share(listed.mean()):>9s}"
+              f"{_fmt_share(listed[g['_type'] == 'B'].mean()):>9s}"
+              f"{_fmt_share(listed[g['_type'] == 'D'].mean()):>9s}"
+              f"{_fmt_share(g['tarifa_stickiness_yrs'].notna().mean()):>9s}")
+    print()
+
+    listed_cols = [c for c in df.columns if c.startswith("listed_fee_")]
+    early = int(df.loc[df["year"] < LISTED_FIRST_YEAR, listed_cols].notna().any(axis=1).sum())
+    s_lo, s_hi = STICKINESS_YEARS
+    outside = ~df["year"].between(s_lo, s_hi)
+    stray = int(df.loc[outside, "tarifa_stickiness_yrs"].notna().sum())
+    print(f"  rows before {LISTED_FIRST_YEAR} with a listed_fee_* value: {early:,} (expect 0)")
+    print(f"  rows outside {s_lo}-{s_hi} with tarifa_stickiness_yrs: {stray:,} (expect 0)")
+    if early:
+        fails.append(f"{early:,} rows before {LISTED_FIRST_YEAR} carry a listed_fee_* value; "
+                     f"the census starts in 2015-01")
+    if stray:
+        fails.append(f"{stray:,} rows outside {s_lo}-{s_hi} carry tarifa_stickiness_yrs")
+    print()
+
+
 def main(strict: bool) -> int:
     if not FEE_PANEL_CSV.exists() and not FEE_PANEL_CSV.with_suffix(".parquet").exists():
         print(f"FAIL: {FEE_PANEL_CSV} not found.\n"
@@ -316,7 +359,8 @@ def main(strict: bool) -> int:
     df = load_panel_cached(FEE_PANEL_CSV, dtype={"CodConglomeradoPrudencial": str})
     print(f"panel: {FEE_PANEL_CSV.name}  {len(df):,} rows x {len(df.columns)} cols\n")
 
-    missing = [c for c in RATIO_COLS + STICK_COLS + ["cosif_fee_valid", "cosif_fee_guarded"]
+    missing = [c for c in RATIO_COLS + STICK_COLS
+               + ["cosif_fee_valid", "cosif_fee_guarded", LISTED_HEADLINE]
                if c not in df.columns]
     if missing:
         print(f"FAIL: fee columns absent from the panel: {missing}\n"
@@ -353,6 +397,7 @@ def main(strict: bool) -> int:
     block_keyspace(df, fails)
     block_ip_mask(df, fails, pre_mask)
     block_assertions(df, fails)
+    block_listed(df, fails)
 
     print("=" * 78)
     if fails:

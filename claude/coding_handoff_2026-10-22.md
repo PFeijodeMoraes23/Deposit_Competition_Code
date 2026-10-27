@@ -1,11 +1,11 @@
-# Handoff: coding tasks for 2026-10-23 (merged)
+# Handoff: open coding tasks (merged; updated 2026-10-26 19:10 after your reply of 18:20, extended 18:47)
 
-**To:** the coding agent (next session). **From:** main thread, for Pedro. **Written:** 2026-10-22, about 20:35.
+**To:** the coding agent (next session). **From:** main thread, for Pedro.
 
-**Merges and replaces:**
-- your self-handoff `coding_handoff_2026-10-23.md` (20:28), deleted after this merge. Its content is kept below;
-- the scraping agent's reply `scraping_reply_2026-10-22_type5_rates.md` (about 20:00), deleted. It is now task T5;
-- the main thread's earlier coding handoffs of 10-21 and 10-22, deleted at Pedro's request. Everything still open from them is below, and in your memory `resume-2026-10-22-handoff`.
+**Folds in:**
+- your reply `coding_reply_2026-10-26c.md` (18:20, extended 18:47): Pedro's decisions of 18:10 and 18:40, M1b, DC1, TR5 code and K8 done;
+- your note `claude/dc1_original_2022q3_type5_note.md` (18:11), kept as the DC1 record;
+- your reply of 17:30 (T5a, M1 and FP done, R2 staged) and the earlier merges: your replies and self-handoffs of 10-22 to 10-26, the scraping agent's type-5 reply, and the Fees agent's fee-panel handoff.
 
 ## Rules
 
@@ -21,222 +21,177 @@
 ## Decisions
 
 ```
-decisions[10]{time,item,decision}:
-  10-22,Panel rebuild,"before any cluster run; the four pending fixes only"
-  10-22,Timing,"R1 on 10-23 morning, machine to itself"
+decisions[25]{time,item,decision}:
   10-22,Cluster scope,"Sleep + Logit + RC-BLP only (--no-bbl --no-cf); no policy function, BBL or counterfactuals"
-  10-22,K4,"after R2, against the new production"
   10-22,Renames,"allowed for code and artefacts; papers and deck stay author-only"
-  10-22,Macros (PROPOSED; Pedro to confirm),"one paper_numbers_macros.tex and one writer; generalise --blp-pending to a cluster-pending flag"
-  10-22 19:35,Type-5 D1,"a stated or implied zero = nominal 0% balance rate: Stone, C6, Alelo, Cora, PayPal; every other issuer keeps 100% of CDI"
-  10-22 19:35,Type-5 D2,"the zeros run from 2020-01 (or the issuer's first type-5 quarter) through 2024Q4"
-  10-22 19:35,Type-5 D3,"Banco Original C0080903 type-5 = PicPay's rows, 2020Q2-2024Q3; then C0088022 from 2024Q4"
-  10-22 20:21,Type-5 D4 (iti after mid-2023),"evidence first (scraping agent); keep 100% for C0080099 until a follow-up note"
+  10-22,Macros design,"one paper_numbers_macros.tex and one writer; families panel / cluster / bbl"
+  10-22 19:35,Type-5 D1,"stated or implied zero = nominal 0% balance rate; every other issuer keeps 100% of CDI"
+  10-22 19:35,Type-5 D2,"the zeros run from 2020-01 (or the first type-5 quarter) through 2024Q4"
+  10-22 19:35,Type-5 D3,"Banco Original C0080903 type-5 = PicPay's rows 2020Q2-2024Q3; C0088022 from 2024Q4 (DC1 confirms it from 2020Q4)"
+  10-23 11:25,Type-5 D4 FINAL,"Itau/iti C0080099 keeps 100% of CDI throughout: no rule"
+  10-23 ~12:00,Type-5 zeros extended,"ShopeePay C0086275 and Ame C0086488 join the D1 zeros"
+  10-26,PicPay promotional rules,"keep the headline rates; END the 150% offer on 2021-05-05 (done, T5a)"
+  10-26 18:10,Other posted type-5 rules,"Mercado Pago 'ate 105%', Nubank's 30-day rule, bitz's R$10 floor stay at 100% of CDI; documented in config/type5_balance_rates.csv"
+  10-26,M1 mode,"--cluster-pending until R2 returns; rerun plain after R2"
+  10-26 18:10,TR5 = C8 + K4 + K9,"one question: how much do the main estimates depend on type 5? Built end to end: sleepiness without type-5 rows -> demand prep -> logit -> RC-BLP, one variant run of the whole chain in a cluster sandbox after R2. Replaces the separate K4 design and K9"
+  10-26 18:10,TR5 variants,"no5 (every type-5 row dropped) and d5only (type 5 kept for D firms only), each against production"
+  10-26 18:40,TR5 inference,"full sleepiness inference: the AME two-stage bootstrap runs, so the variants' E3/E4 sleepiness carries intervals comparable to Table 4"
+  10-26 18:40,TR5 order,"after R2: FP3 first, then stage TR5, so the overlay carries FP3"
+  10-26 18:10,K8,"runs: preview now; closer fallback coded as an option (default unchanged); final numbers on the new panel after R2"
+  10-26 18:10,C2 no-Santander,dropped (moot)
+  10-26 18:10,C7,"covered by K2/K3: desc.branch.* keys (n_branches/n_open/n_close by year, share_existing_dtime, corr_dcheck_dtime) answer every item of the C7 brief; closed"
+  10-26,FP IV_FEE columns,"listed_fee_pkg1_pf AND listed_fee_withdrawal_atm_pf replace listed_fee_atm_withdrawal_pf; listed_fee_statement_pf stays"
+  10-26,FP 2013-2014,"not filled"
+  10-26,FP old static columns,dropped
+  10-26,FP conglomerate map,"hybrid: banks in ESTBAN keep their static code every quarter (as deposit_panel_codes); every other institution follows the dated IF.data list"
+  10-26,FP conglomerate value,"the head institution's price; if the head lists nothing, the median of the members' positive prices"
+  10-23,One rebuild,"R1 and T5 in a single rebuild (done 10-26)"
+  10-22 20:35,T5 timing,"T5 before R2 (done)"
 ```
 
-**D1 to D3 are the type-5 decision your R2 gate was waiting for.**
+**C7, main-thread answer to your 18:20 question.** The deleted brief asked for nothing beyond what K2/K3 delivered:
+- branch-level ESTBAN feasibility;
+- `desc.branch.{n_branches,n_open,n_close}.{year}`;
+- `desc.branch.share_existing_dtime`;
+- `desc.branch.corr_dcheck_dtime`.
+
+All exist in the macros. Its one flag was that quarter-end stocks hide flows within a quarter. C7 is closed.
+
+## Done
+
+```
+done[12]{id,result}:
+  R1 + T5,"one rebuild 10-26 14:54-15:11; panel md5 4abf639a; K7, k calibration, SOCIEDADES fix; 17 type-5 rules on 9 conglomerates"
+  R1 command,"panel_pipeline.py --from 2 --skip 5,6,7,8,9,11,38 --workers 1 (--from takes a STAGE, not a step)"
+  T5a,"PicPay 150% rule ends 2021-05-05; only C0080903 2021Q2 changes; type-5 spread (vw) 2.210 -> 2.215 pp; panel md5 0c47f30a"
+  Step-16 fix,"panel_deposit_rates.py drops every column it merges, and any _x/_y copy, before the merge"
+  M1,"--cluster-pending (17:13): crosscheck 155 match, 0 mismatch; panel family 19 changed values; bbl 122 unchanged"
+  M1b,"18:18: collect_type5_rules: type5.rules.n_zero = 7, share_posted = 0.258, share_zero = 0.200; 359 -> 362 entries, nothing else moved"
+  cdi_balance_share,"confirmed: D-firm time-deposit balances 2016-2024 whose national type-4 rate equals the CDI; of 499 D quarters at the CDI, 435 are guard replacements (> 3x Selic), 64 a missing rate; 21.0% of D quarters with time deposits"
+  DC1,"no balance leaves the panel: 2022Q3 R$7.66 bn left PicPay's wallet (C0080903 type 5) and R$8.16 bn of CDBs appeared at PicPay Bank (C0088022 dep_a4); nothing counted twice; D3 holds from 2020Q4"
+  TR5 code,"18:28: utils/deposit_types.py (DEPOSIT_TYPE_VARIANT or config/deposit_type_variant.txt); one line each in sleep_est_e2.build_pooled_data and the three demand preps; pipeline_all.sh --sleep-args; 13 lines in 5 production files; default output identical (1,142,105 rows, fingerprint c483a6652b53); tr5_variants.sh and make_tr5_upload.py"
+  K8 preview,"18:43: D entrant-quarters on the national median g 29.9% (245 of 819), B 0.5%; --g-fallback firmtype (D median by deposit type and quarter): holdout bias -5 bp, MAE 61 bp vs -66 / 113 bp national; default output byte-identical (11 d6_* files); phi_entry B unchanged 0.9144 [0.8909, 0.9369]; D 0.9864 [0.8879, 0.9985] -> 0.9857 [0.8865, 0.9985], upper end at the grid cap"
+  FP1/FP2/FP4/FP5,"stage-7 fee panel with dated listed prices, 13 services, census stickiness; every check passes"
+  R2 staged,"processed/CLUSTER_STAGE/20261026/ (code 7e930f2f..., data 7674adf4...); handed to Pedro 17:03"
+```
+
+**Main-thread use of M1b and the definition.** Pedro's type-5 text blocks now resolve with no red `??`. The "a third" sentence now reads "missing or implausibly high", following your nuance. A new appendix block states the 3x-Selic guard. Source: `Drafts/Deposit Competition/paper_edits_type5_2026-10-26.tex`, 19 blocks.
 
 ## Tasks, in order
 
 ```
-tasks[7]{id,what,when}:
-  R1,"panel rebuild + audits",10-23 morning
-  T1,"runners, cluster-pending flag, split of make_followups_1020.py (code only)",while R1 runs
-  T5,"type-5 balance rates under D1-D3",after R1 and before the R2 upload
-  R2,"cluster Sleep + Logit + RC-BLP, ingest, refresh",after T5
-  K4,"RC-BLP without type 5",after R2
-  K8,"D entrant-quarters on the national median g",optional (Pedro to confirm)
-  K9,"C8(c) sleepiness without type 5",on hold
+tasks[4]{id,what,when}:
+  R2,"Pedro launches (do NOT set SLEEP_ENTRY_EXTRA); then download, ingest, exhibits_post_cluster.py --run, M1 plain, report every changed key",when the cluster run returns
+  FP3,"IV_FEE rename in the four prep scripts",first after R2
+  TR5 run,"make_tr5_upload.py --stage; Pedro builds and submits; --pack; unzip to ESTIMATION_OUTPUT/TR5/<v>/; collect_tr5",after FP3
+  K8 final,"local: sleep_ident_entry_dynamics.py --compute-only --g-fallback firmtype --out-dir g_fallback_firmtype on the new demand files; footnote keys",after R2
 ```
 
-### R1. Panel rebuild
+### R2. Cluster: Sleep + Logit + RC-BLP (Pedro launches)
 
-**Command:** `panel_pipeline.py --from 12 --skip 38`.
-- It runs steps 12–18, 19–21, 36, 37 and 39, then stage 5. Stages 6 and 7 stay off.
-- No step reads `DATA_RAW`.
-- It applies the four fixes: the ESTBAN double read (K7), the k calibration, the SOCIEDADES gap, and the 2025+ prepaid rate.
+- **Launch line** (yours, 17:03): `sbatch pipeline_all.sh --no-bbl --no-cf --blp-args "--draws"`. The draws are rebuilt because their demographic means come from the new demand parquets.
+- **Do not set `SLEEP_ENTRY_EXTRA`.** The R2 bundle was staged before K8, so the uploaded script does not know `--g-fallback`.
+- **Expect** G1 to report that φ̂ moved against the promoted values (new panel).
+- **When it returns:** download, ingest, `exhibits_post_cluster.py --run` (then `--after-compile` once Pedro compiles), and `make_paper_numbers.py` plain.
+- **Report:** every key whose value changes, old against new, in both papers and the deck. Group them by family and flag any sign change or any significance crossing 5 or 10 percent.
+- **Stale until R2 returns:** the demand parquets on the cluster, the logit and RC-BLP results and the numbers built from them, `upload_type5_20261021.zip` (do not upload it).
+- **One number to flag at R2:** V_Full line 1459 explains the cost-estimation simulation with `sleep.meanphi_frac.E3`. After R2 that key reports the new sleepiness fit, not the one the cost estimation used. Say whether a `bbl`-family copy of the old value exists, or can be added, so Pedro can choose.
 
-**Baseline:** `claude/rebuild_baseline_2026-10-22/`.
-- `firm_class_before.json`;
-- `panel_before.json`: 500,186 rows, 131 columns, 536 conglomerates, 3,738 MCAs.
-- `rival_mean_spread` exists only per type (`_a1` to `_a5`). It is not missing.
+### FP3. IV_FEE rename (first after R2)
 
-**Audits:**
-- `panel_audit_mca_coverage.py --strict`;
-- `panel_audit_firm_class.py --compare claude/rebuild_baseline_2026-10-22/firm_class_before.json`;
-- shape and totals against `panel_before.json`;
-- `panel_demand_chars.py --check`.
+- **Where:** `IV_FEE` of `sleep_demand_prep_e1.py`, `sleep_demand_prep_e2.py`, `sleep_demand_prep_link.py` and `switch_cost_sleep_demand_prep_link.py`.
+- **Change:** replace `listed_fee_atm_withdrawal_pf` with both `listed_fee_pkg1_pf` and `listed_fee_withdrawal_atm_pf`, and keep `listed_fee_statement_pf`. In `switch_cost_*` the rename is text only.
+- **TR5 edited the same preps** (one line after the reshape, `IV_FEE` untouched). Check that the FP3 edit leaves the TR5 line in place.
 
-**Report:**
-- each audit's verdict;
-- the 2013–2015 deposit totals, which should halve;
-- the type-4 volume without a corrected rate, expected to fall from 2.57% to 0.03%.
+**Consequences of Pedro's FP decisions (record):**
+- **Itaú:** its price comes from the fallback (the head is the holding), but equals Itaú Unibanco's own.
+- **BB:** stickiness falls from 3.0–7.5 to 0.6–2.5 years.
+- **Membership changes:** 45 institutions change conglomerate over 2016–2024, holding 1.1% of listed-price rows.
 
-Then refresh the panel-only exhibits (T1 runner, or the list under "Exhibit map").
+**FP flags:**
+- **Listed is not charged.** These are ceilings, and the Open Finance sample put charged prices near 0.30 of the ceiling.
+- **Not listed is not zero.** D rows are covered at 12–20%. Digital and prepaid issuers that charge nothing are in `DATA_RAW/issuers/posted_rates/account_fees.csv`.
 
-### T1. Code to write during R1 (it does not load the machine)
+### TR5. How much do the main estimates depend on type 5? (after FP3)
 
-1. **`exhibits_local.py`:** the panel-only branch, in order, with a staleness check against the panel md5.
-   - `make_dep_anova.py`, `make_pix_exposure.py`, `make_state_vector_table.py`;
-   - `make_slide_figures.py --only panels,timedep,savings,table --refresh-shares`;
-   - `make_slide_figures.py --only band,pricevol,reprice,dpremium,entrygap,relprice,anova,motivtables --png`;
-   - plus the local parts of `make_followups_1020.py`.
-2. **`exhibits_post_cluster.py`:** the post-run-refresh chain.
-   - sleepiness exports (`sleep_ame_twostage.py --attach-from` first), `sleep_desc_clusters.py`;
-   - the BLP tables, `make_xi_diagnostics.py`, `sleep_ident_entry_dynamics.py`;
-   - `make_paper_numbers.py`, then (after Pedro compiles) `make_paper_equations.py`;
-   - the cluster keys of `make_slide_figures.py`.
-3. **A cluster-pending flag in `make_paper_numbers.py`,** generalising `--blp-pending`. It marks the cluster-family collectors as pending, so stale estimates print as a red ?? (or as their old value in red with `\PNshowpendingtrue`). **Only if Pedro confirms the macros design.**
-4. **Split `make_followups_1020.py` by topic.** Its docstring lists only C1, C3 and C5 and is stale.
-   - C1 → `make_phi_variance`, C3 → `make_active_truncation`: both cluster.
-   - C2 → `make_entry_carry`: verify its inputs.
-   - C5 → `make_dshare_decomp`, C6 → `make_fee_ratio`.
-   - C4 merges into `make_pix_exposure`.
-   - Update `collect_followups_1020` and the `followups` visual of `make_slide_figures.py`, and keep the quoted keys aliased.
+**Scope (Pedro, 18:10 and 18:40):**
+- whole chain per variant: sleepiness, then demand prep, logit and RC-BLP;
+- `no5` and `d5only`, each against production;
+- full sleepiness inference: the AME two-stage bootstrap runs, so the E3/E4 intervals are comparable to Table 4.
 
-### T5. Type-5 balance rates from posted evidence (D1–D3)
+**Rows dropped** (pooled sleepiness sample, 2016–2024, production 1,142,105):
+- `no5`: 981,084 (−161,021 type-5 rows);
+- `d5only`: 985,525 (−156,580 B-firm type-5 rows; the 4,441 D-firm type-5 rows stay).
 
-**Basis:**
+**Launcher:** `tr5_variants.sh` gives each variant its own sandbox and runs:
 
-```
-files[3]{file,role}:
-  DATA_RAW/issuers/posted_rates/posted_rates.csv,"140 rows; new columns conglomerate (C00... code) and entity_cnpj, filled for the new rows; rate_rule starts with the verdict"
-  DATA_RAW/issuers/posted_rates/NOTES.md,"section 'Type-5 follow-up (2026-10-22)': findings by issuer, exact quotes"
-  DATA_RAW/issuers/posted_rates/evidence/ + _capture_index.tsv,"every file a row cites, with Wayback timestamps"
-```
+`pipeline_all.sh --no-bbl --no-cf --routines "3 4" --sleep-routines "3 4" --sleep-args "--no-upsilon --no-entry --no-wcb" --blp-args "--draws"`
 
-- **`rate_rule` verdicts:** `ZERO (stated)`, `ZERO to the client implied` (Stone's 20-F), `GAP` (nothing found), `Not the balance` (an opt-in product), `out of window`.
-- `valid_from` and `valid_to` are the first and last captures showing a rule. They are not its true start and end dates.
-
-**The finding:**
-- No target issuer has a positive rate rule on the balance itself in 2020–2024.
-- Where an issuer pays interest, it is on an opt-in product (Stone's Reserva/Guardar, Baú do Ton, Stark's "conta remunerada").
-- No act forbids paying on a prepaid balance. Res. BCB 80/2021 art. 22 §8 allows passing the float's yield to the holder. So a zero has to come from the issuer.
-
-**D1. A nominal balance rate of 0% a year** (not "CDI + 0"). The type-5 spread is then the risk-free rate in full, under the panel's own spread convention.
-
-```
-zero_rate[5]{conglomerate,issuer,share of type-5 balances,evidence}:
-  C0084686,Stone IP,7.21%,"20-F FY2021-23: 'We also collect yield on clients' outstanding balance'"
-  C0084844,Banco C6,6.64%,"'O saldo na sua conta C6 nao tem rendimento automatico' (captured 2024)"
-  C0087580,Alelo IP,1.97%,"terms: no 'correcao monetaria, juros ou qualquer outro rendimento'"
-  C0085317,Cora SCFI,1.93%,"blog 2024-01: 'Ainda nao oferecemos a funcao de conta PJ com rendimento'"
-  C0085018,PayPal do Brasil IP,1.22%,"user agreement 2020-2024: no 'juros ou outros rendimentos'"
-```
-
-- Every other issuer without a rule keeps the 100%-of-CDI fallback. That includes every GAP row, EBANX (C0085094, whose 2020 EBANX GO line belongs to a different entity) and Stark.
-
-**D2. The zeros run from 2020-01** (or the issuer's first type-5 quarter) through 2024Q4: C6 before 2024-03, Cora before 2024-01, and Stone over 2020–2024.
-
-**D3. Banco Original's type-5 balances are PicPay's.**
-- Apply PicPay's balance rows to **C0080903 from 2020Q2 to 2024Q3**, and to **C0088022 (PicPay Bank) from 2024Q4**.
-- The panel supports the link:
-  - Original's type-5 balance appears in 2020Q2 and reaches R$8.4 bn by 2022Q2;
-  - it falls to about R$0.7 bn in 2022Q3, when C0088022 starts reporting about R$8 bn;
-  - the remaining R$0.76 bn moves to C0088022 in 2024Q4.
-- The link rests on a Moody's report. Check it in IF.data if the conglomerate membership is there.
-- PicPay's rows run from 100% of CDI to a promotional 102–210% (2020-12 to 2022), some with balance tiers. Apply each row's headline rate, and list the tiered or promotional rows separately in the diff table so Pedro can confirm them.
-
-**Not in T5 (Pedro has not decided):**
-- **Itaú / iti (C0080099, 9.07%) after mid-2023:** keep 100% (D4).
-- **The other positive dated rules:** Mercado Pago "até 105%" from 2024-04, Nubank's 30-day rule from 2022-07-25, and bitz's R$10 floor. Keep these issuers at the fallback. Each rule is 100% of CDI or close to it.
-
-**How:**
-- **First locate the fallback.** A grep of `panel_ip_rates.py` and `panel_deposit_rates.py` found no type-5 fallback. Find where the type-5 rate is set to the CDI, and report it before changing anything.
-- Make the change in that step, reading the rules from a small config or CSV keyed by `conglomerate`, not hard-coded.
-- Touch no other deposit type.
-- T5 goes after R1 and before the R2 upload. If it needs more than re-running the steps that set type-5 rates, ask Pedro first.
-
-**Acceptance:**
-- A diff table by conglomerate × quarter, with the old and new type-5 rate and spread, and the number of rows changed.
-- Nothing changes outside type 5 and the seven conglomerates above: the five zeros, plus C0080903 and C0088022.
-- The PicPay mapping holds: C0080903 carries PicPay's rows only for 2020Q2–2024Q3, and C0088022 only from 2024Q4.
-- The coverage reproduces the scraping agent's shares of 2016–2024 type-5 balances, computed at 20:13 on the current panel. Report them again after the change.
-
-| Status | Share |
-|---|---|
-| Positive rate, dated rule | 57.0% |
-| Zero (D1) | 19.0% |
-| Researched, silent (fallback) | 13.4% |
-| Not researched, about 170 small issuers (fallback) | 10.6% |
-
-**Report, without acting on it:**
-- **Type 5 gains price variation across issuers.** K4 (demand without type 5) and the C8 headline decision change meaning.
-- **Paper text goes stale.** Both papers' data appendix and Section 3.2 say that no prepaid rate is observed and that every institution carries the CDI. Once T5 is in production, tell the main thread, which drafts the edits for Pedro.
-
-### R2. Cluster: Sleep + Logit + RC-BLP
-
-**Gate:** T5 is in the panel, or Pedro chose to run R2 on the fallback.
-
-**Steps:**
-1. Locally: `cluster_upload.py --stage --stages sleep,blp`. On 10-22 the pre-flight refused only on `demographics_sigma.parquet`, which R1's step 21 refreshes.
-2. On the cluster:
+**Steps after FP3:**
+1. Stage: `make_tr5_upload.py --stage` (zip in `CLUSTER_OUT`).
+2. Pedro runs:
    - unzip and check the sha256;
-   - resolve the Julia manifest, alone, after any code-bundle upload (`cluster/LAUNCH_SEQUENCE.txt` step 3);
-   - `bash pipeline_all.sh --dry-run --no-bbl --no-cf`;
-   - `sbatch pipeline_all.sh --no-bbl --no-cf`.
-   
-   On an empty cluster, the BLP phase builds the sysimages and the draws itself.
-3. Download, ingest, then refresh with the post-run-refresh skill.
+   - `TR5_ROOT=$HOME/scratch_pi_mf2263/pf382 bash tr5_variants.sh --build-only`;
+   - then `--submit-built`.
+3. `--pack`, and unzip into `ESTIMATION_OUTPUT/TR5/<v>/`. **Not through `cluster_ingest.py`**, which routes into production folders.
+4. Add collector `collect_tr5` (cluster family): `tr5.<v>.E{3,4}.{alpha, alpha_se, elast, q, converged, n_obs, sample_ratio, phi_mean, d_alpha}`.
 
-**Local dry run (10-22):** it stopped at a 90-second limit. The continuation scheduled after Logit carries `--no-bbl --no-cf`, so the flags propagate. This is only partly verified.
+**Before staging, check against Pedro's 18:40 decision:**
+- The sleepiness flags drop the wild cluster bootstrap (`--no-wcb`). Confirm that the AME two-stage bootstrap still runs, and that the variants' intervals are built the same way as Table 4's.
+- If Table 4's intervals are wild-cluster, say so before staging. Pedro asked for comparable intervals.
 
-**Report:** every paper key whose value changes, old against new, in both papers.
+**Report, per variant against production:**
+- price coefficient, elasticity and their change (`d_alpha`);
+- mean sleepy share with its interval;
+- rows and balance share dropped, by firm type;
+- convergence.
 
-### K4. RC-BLP without type 5 (after R2)
+**Flags:**
+- **Type 5 now has price variation** (about 20% of its balances at a zero rate). TR5 asks how much the estimates rest on that product, not on a no-variation fallback.
+- **Untested locally:** the symlinks, the variant reaching every job, the sleepiness flags in the sandbox, the gates, the run time and the pack contents. Have `--status` show the variant in each job's log before the long stages.
+- **Old keys.** `demand.type5.*` and `demand.t5.no5.*` exist in the macros from the earlier design. No paper or deck quotes them. Say whether `collect_tr5` retires them.
 
-- **Do not upload `upload_type5_20261021.zip`:** it is stale. It sits in `BCB/Egan_et_al_2025_Rep/processed/ESTIMATION_OUTPUT/CLUSTER_OUT/`.
-- Rebuild the variants from the new parquets: `make_demand_type5_variants.py`, then `--logit-compare`, then `--stage-upload`.
-- Give Pedro the three handoff commands with the new zip name.
-- Build `demand.t6.{no5,d5only}.{E3,E4}.*`. Report the price coefficient, the elasticities and the change in the sample.
-- **Flag:** this changes the sample, not the model.
+### K8. Entry-path g fallback (final run after R2)
 
-### K8 and K9
-
-- **K8 (optional):** only if Pedro confirms.
-- **K9 (on hold):** `sleep_est_e2.py:236` drops only type 3, hard-coded. Do nothing until Pedro decides.
+- **Run, local:** `sleep_ident_entry_dynamics.py --compute-only --g-fallback firmtype --out-dir g_fallback_firmtype` on the new demand files. Production stays on the national fallback (the default).
+- **Keys for a possible footnote** (cluster family, `phi.entry` block; adjust the names to your convention):
+  - `phi.entry.gfb.share_national.{B,D}` (share of entrant-quarters on the national median; 0.005 and 0.299 in the preview);
+  - `phi.entry.gfb.firmtype.{B,D}.{point,lo,hi}`;
+  - `phi.entry.gfb.holdout.{national,firmtype}.{bias_bp,mae_bp}`.
+- **Flag:** the D interval's upper end sits at the grid cap (0.9985) under both fallbacks. Report the cap and whether it binds in the bootstrap.
 
 ## Decisions waiting for Pedro
 
-1. **T5 timing:** confirm that T5 goes after R1 and before R2, so the cluster run uses the new type-5 spreads. The alternative is R2 on the fallback, with T5 in a later run.
-2. **The other positive type-5 rules:** apply Mercado Pago's "até 105%", Nubank's 30-day rule and bitz's R$10 floor, or keep them at 100% of CDI? Also confirm PicPay's headline rates under D3.
-3. **D4 (iti after mid-2023):** waits on the scraping agent's evidence.
-4. **The macros design** (Decisions table, the PROPOSED row).
-5. **Other open items:**
-   - the C8 headline sample, after K4;
-   - K8;
-   - C2: re-verify without Santander;
-   - C6, the fee source. The incumbent median is 5.23 → 3.88, against 5.18 → 3.00 in the notes. Account fees now belong to the Fees agent (`claude/fees_handoff_2026-10-22.md`). The tariff-history LAI (18810.025439/2026-13) was denied on 10-22, and Pedro filed the appeal the same day.
+1. **K8 headline.** The paper does not yet say that 29.9% of D entrant-quarters borrow the national median g. Main-thread default: keep the national fallback as the headline, since B is unchanged and D moves by 0.0007. Add a footnote with the firm-type fallback as a robustness check once the keys exist.
+2. **From DC1, the PicPay 102% rule after 2022-08.** On C0080903 it now prices a leftover wallet balance of about R$0.5–0.8 bn. Main-thread default: keep it, since the wallet is still a prepaid balance and the rule is the only evidence on its rate.
+3. **From DC1, the product switch.** In 2022Q3 the demand model sees C0080903 leave type 5 and C0088022 enter type 4, as two separate firms. Main-thread default: leave it as data. Linking the two codes would be a model change.
+4. **From DC1, 2020Q2–Q3:** PicPay's payment institution did not yet file on its own. Its rule then equalled the fallback. Record only.
+5. **C6:** fees, with the Fees agent.
 
-## Exhibit map (10-22; details in memory `pipeline-structure-exhibits`)
+## Exhibit map (10-22, with your 10-26 corrections)
 
 - **V_Friction**, 27 inputs: the macros file, 15 local exhibits and 11 cluster exhibits.
   - Cluster: the E3/E4 first- and second-stage tables, `est1-4_spec12_stage2_comparison`, `est1-4_spec12_logit_comparison`, `blp_demand_comparison_noseg_spec12`, `tab_xi_diagnostics`, `cluster_imbalance_panelB` and `fig_entry_dynamics_a/b`.
-  - The entry figures read the cluster's demand parquet.
-- **Deck**, 19 inputs: 10 local and 6 cluster. The inputs of `fig_slide_sleepy_flow` were not checked.
-- **None uses the policy function, BBL or counterfactuals.** V_Full still does, on the old panel.
-- **The 23 collectors of `make_paper_numbers.py`:**
-  - panel (10): `descriptives` (it also reads `cluster_imbalance.json`), `market_structure`, `table1_spreads`, `mca_count`, `slide_deposit_types`, `branch_estban`, `pix_exposure`, `dep_anova`, `slide_motivation`, `state_selection` (inputs not verified);
-  - cluster (9): `demand`, `table_rows`, `table4_sidecar`, `type5_robustness`, `xi_diagnostics`, `first_stage_strength`, `entry`, `entry_counts`, `followups_1020`;
-  - BBL (4): `bbl`, `polfunc`, `phi_path`, `design`.
+- **Deck**, 19 inputs: 10 local and 6 cluster.
+- **None uses the policy function, BBL or counterfactuals.** V_Full still does, on the pre-R1, pre-T5 panel. Its `bbl`-family keys are not marked pending.
+- **Collector families of `make_paper_numbers.py`:**
+  - **panel:** `descriptives` (with `collect_type5_rules`), `market_structure`, `table1_spreads`, `mca_count`, `slide_deposit_types`, `branch_estban`, `pix_exposure`, `dep_anova`, `slide_motivation`, and the panel part of the former `state_selection`;
+  - **cluster:** `demand`, `table_rows`, `table4_sidecar`, `type5_robustness`, `xi_diagnostics`, `first_stage_strength`, `entry`, `entry_counts`, the split follow-ups, `collect_state_levels`, C2 `make_entry_carry`, and `collect_tr5` once TR5 returns;
+  - **BBL:** `bbl`, `polfunc`, `phi_path`, `design`.
 
-## Done on 10-22
+## Housekeeping (for Pedro)
 
-- **Bibliography:** `References.bib` 896 → 901 entries.
-  - `santander_condicoes_pf_2022` (form 1614-S06, 05/2022);
-  - `bradesco_investfacil_2015` and `bradesco_investfacil_2020`;
-  - `bcb_circular_3569_2011` and `bcb_circular_3916_2018`. On 10-22 the main thread also updated the 3569 entry's annotation and link to the consolidated text.
-  - Biber: 0 warnings and 0 errors on both papers. Pedro has applied C3.
-- **R0:** the `raw_paths` switch gives outputs identical to 10-21.
-- **Rebuild baseline** recorded.
-- **LAI request for BB Rende Fácil** filed: NUP 18882.002114/2026-19.
-- **Type-5 rates:** the scraping round is delivered and Pedro has decided D1–D3, giving task T5.
+- **Your FP subagent's scratch** (`unit_patch_out\`, `iq.pkl`, `wide.pkl`, `stick.pkl`, `account_fee_listed_history_check.csv`): give the `Remove-Item -LiteralPath` lines in your next reply.
+- **An empty folder can go:**
+  `Remove-Item -LiteralPath "C:\Users\pedro\OneDrive\Documentos\Yale\Year 3 (2024 - 2025)\Open Finance\Open-Finance\BCB\Egan_et_al_2025_Rep\processed\ESTIMATION_OUTPUT\Rout\followups_cache"`
+- **Pre-R1 copies** (old panel, old CDB-rate file, old demand corrections) sit in your scratchpad (`r1_before/`), for a before/after comparison if needed.
 
 ## Flags to keep visible
 
 - **Silence is not zero.** The GAP issuers keep the fallback because nothing says what their balance earns.
+- **"CDI rate" on D time deposits is mostly the guard.** 435 of 499 D quarters at the CDI are measured rates above 3x the Selic rate, replaced. A change to that guard moves the digital premium and the D type-4 spreads.
 - **Santander's default sweep** covers new individual accounts from 05/2022. Whether existing clients were migrated is undocumented. It spans every K3 result.
 - **The mandated Pix exposure** varies across only a few large markets.
 - **Tesouro Direto values** are registrations, not holdings.
-- **`DATA_RAW` is now organised by source.** The sweep evidence is in `DATA_RAW/issuers/sweep_programs/`.
-- **Account-fee panel columns** (`listed_fee_*`, stage 7) are mislabelled and repeat the 2026 snapshot. They belong to the Fees agent. Do not fix them under T5.
+- **Paper text on type 5 is stale** until Pedro applies `paper_edits_type5_2026-10-26.tex`. All 19 blocks can go in now.
+- **V_Full's cost section** (policy function, BBL, counterfactuals) runs on the pre-R1, pre-T5 panel.

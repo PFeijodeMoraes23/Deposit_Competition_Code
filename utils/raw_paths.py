@@ -19,6 +19,8 @@ BCB_CCS_RELATIONSHIPS = DATA_RAW / "BCB" / "ccs_relationships" / "current"   # s
 BCB_ESTBAN_AGENCIA = DATA_RAW / "BCB" / "estban_agencia"                       # scrape_estban_branches.py
 BCB_PIX_MUNICIPAL_RAW = DATA_RAW / "BCB" / "pix_municipal" / "raw"             # pix_mun_YYYYMM.csv
 BCB_SELIC_SGS = DATA_RAW / "BCB" / "selic_sgs"                                 # scrape_national_series.py (SGS)
+BCB_TARIFAS_MONTHLY = DATA_RAW / "BCB" / "tarifas_monthly"                     # fees/scrape_bcb_tarifas_monthly.py
+BCB_TARIFAS_WAYBACK = DATA_RAW / "BCB" / "tarifas_wayback"                     # old tariff pages: CDX list, sample
 
 # Ipeadata
 IPEADATA_IBOVESPA = DATA_RAW / "Ipeadata" / "ibovespa"                         # scrape_national_series.py (Ipeadata)

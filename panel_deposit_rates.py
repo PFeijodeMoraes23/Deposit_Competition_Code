@@ -13,6 +13,7 @@
 #   COSIF_PROCESSED/custos_implicitos_*.csv         panel_cosif_extract.py (step 12)
 #   COSIF_PROCESSED/cosif_cdb_rate_corrected.csv    panel_cosif_calibrate.py (step 13)
 #   COSIF_PROCESSED/ip_rates_quarterly.csv          panel_ip_rates.py (step 15)
+#   config/type5_balance_rates.csv                  posted type-5 balance rules (utils/type5_rates.py)
 #
 # Quarterly rate by deposit type (fractions), assembled in append_rates_to_panel:
 #   1 demand     0
@@ -21,9 +22,13 @@
 #   4 time/CDB   corrected per-bank CDB rate, else the COSIF residual type-4 rate, else the
 #                blended COSIF implicit rate, else cdi_qoq; a rate above RATE_A4_MAX_MULT x Selic
 #                is replaced by cdi_qoq and flagged in rate_a4_guarded
-#   5 prepaid    the conglomerate's payment-institution rate if it has one, else the quarterly
-#                median of those rates, else cdi_qoq
+#   5 prepaid    the issuer's posted rule (config/type5_balance_rates.csv, a percent of the CDI,
+#                compounded over the days it covers) where one covers the quarter, flagged in
+#                rate_a5_posted; otherwise the conglomerate's payment-institution rate if it has
+#                one, else the quarterly median of those rates, else cdi_qoq
 # Spreads are Selic minus the rate, quarterly and annualised by compounding.
+# PANEL_INTERMED/type5_rate_rules_applied.csv lists every conglomerate-quarter a posted rule changed,
+# with the chain's rate and the posted one.
 ## ---------------------------------------------------------------------------
 
 
@@ -51,6 +56,7 @@ import pyarrow.csv as pa_csv
 from utils import paths
 from utils.macro_rates import load_macro_series, make_quarterly_macro
 from utils.conglomerates import deposit_panel_codes
+from utils import type5_rates
 
 # IF-Data List files: CNPJ -> Conglomerate mapping (monthly snapshots)
 IF_DATA_LIST_DIR = str(paths.IF_DATA_LIST)
@@ -738,6 +744,20 @@ def append_rates_to_panel():
         aux["median_ip_rate"].fillna(aux["cdi_qoq"])
     )
 
+    # Posted balance rules replace the chain above for the days an issuer's own documents cover.
+    aux, _t5 = type5_rates.apply_rules(aux)
+    _t5 = _t5.merge(aux[["CodConglomeradoPrudencial", "AnoMes", "selic_qoq"]].drop_duplicates(),
+                    on=["CodConglomeradoPrudencial", "AnoMes"], how="left")
+    _t5["spread_chain"] = _t5["selic_qoq"] - _t5["rate_chain"]
+    _t5["spread_posted"] = _t5["selic_qoq"] - _t5["rate_posted"]
+    os.makedirs(OUTPUT_PATH, exist_ok=True)
+    _t5.to_csv(os.path.join(OUTPUT_PATH, "type5_rate_rules_applied.csv"), index=False)
+    logging.info(
+        f"type-5 posted rules: {len(_t5):,} conglomerate-quarters changed across "
+        f"{_t5['CodConglomeradoPrudencial'].nunique() if len(_t5) else 0} conglomerates "
+        f"(PANEL_INTERMED/type5_rate_rules_applied.csv)"
+    )
+
     aux["risk_free_qoq"] = aux["selic_qoq"]
     aux["risk_free_ann"] = (1 + aux["risk_free_qoq"]) ** 4 - 1
 
@@ -757,20 +777,19 @@ def append_rates_to_panel():
     # rate_a4_guarded rides along so downstream code (and the paper) can see WHICH bank-quarters had
     # an implausible CDB implicit rate replaced by cdi_qoq — otherwise the substitution is invisible.
     cols_to_merge = ["CodConglomeradoPrudencial", "AnoMes", "risk_free_qoq", "risk_free_ann",
-                     "total_deposits", "rate_a4_guarded"] + \
+                     "total_deposits", "rate_a4_guarded", "rate_a5_posted"] + \
                     [f"rate_a{t}" for t in range(1, 6)] + \
                     [f"spread_a{t}" for t in range(1, 6)] + \
                     [f"spread_ann_a{t}" for t in range(1, 6)]
                     
     df["AnoMes"] = df["Year"].astype(int) * 100 + df["Quarter"].astype(int) * 3
 
-    # aux carries the canonical total_deposits (it is in cols_to_merge). Drop ANY total_deposits column
-    # already on df BEFORE the merge — including the total_deposits_x / total_deposits_y that a prior
-    # (buggy) run left inside deposits_panel.csv, which would otherwise make pandas raise
-    # "suffixes cause duplicate columns". After the drop the merge supplies a single clean
-    # total_deposits, so the duplicate never reaches market_panel.
-    df = df.drop(columns=[c for c in ("total_deposits", "total_deposits_x", "total_deposits_y")
-                          if c in df.columns], errors="ignore")
+    # Every column this step merges is dropped from df first, with any _x / _y copy of it, so the step
+    # can run again on a deposits_panel.csv that already carries its output (a re-run of step 16
+    # without step 14) and the merge still yields one clean column of each name.
+    merged = [c for c in cols_to_merge if c not in ("CodConglomeradoPrudencial", "AnoMes")]
+    stale = [c for c in df.columns if c in merged or (c[-2:] in ("_x", "_y") and c[:-2] in merged)]
+    df = df.drop(columns=stale)
     df = df.merge(aux[cols_to_merge], on=["CodConglomeradoPrudencial", "AnoMes"], how="left")
     df = df.drop(columns=["AnoMes"])
 

@@ -31,9 +31,15 @@ population weights, MCA clusters (state clusters as a robustness check). The yea
 replaces beta * z_m with sum_y beta_y z_m 1{year = y}. F: the squared t of beta (one exposure),
 or the Wald F of the three betas together. Also without the Cadunico x quarter effects.
 
+Pooled post-launch first stage (pooled_post_fs, a check on the panel's own Pix series): Pix payer
+transactions per inhabitant from the market panel on each 2019 exposure x post (2020Q4 on), with
+MCA and quarter effects and the 2019 Cadunico rate x post, unweighted, MCA clusters; its mandated
+share uses the same 34 institutions mandated at launch as the exposure above. Nothing reads it yet.
+
 Outputs: Rout/pix_usage_mca_quarter.parquet,
 Rout/pix_exposure.json (read by make_paper_numbers.py, pix.exposure.* and pix.usage.*, and by
-make_slide_figures.py --only pixexposure), Drafts/Deposit Competition/tab_pix_exposure_fs.tex.
+make_slide_figures.py --only pixexposure; key pooled_post_fs as above),
+Drafts/Deposit Competition/tab_pix_exposure_fs.tex.
 
 Usage:  python make_pix_exposure.py
 """
@@ -206,6 +212,65 @@ def first_stage(d: pd.DataFrame, zs: list, measure: str, yearly: bool, cad: bool
     return out
 
 
+def pooled_post_fs() -> dict:
+    """The pooled post-launch first stage on the market panel's own Pix series: Pix payer
+    transactions per inhabitant (pix_txns_pf / pop_total, MCA x quarter) on each standardized 2019
+    exposure x post (2020Q4 on), with MCA and quarter effects and the 2019 Cadunico rate x post,
+    unweighted, clustered by MCA (F = t squared, one excluded instrument). Exposures are
+    standardized with unweighted moments across MCAs. The mandated share counts the institutions
+    mandated at launch (mandatory_since <= PIX_LAUNCH), mapped with the 2019 IF-Data lists, as in
+    exposures(). Also the unweighted mean and SD of each exposure and its correlation with the
+    mandated share."""
+    import statsmodels.api as sm
+    from utils import conglomerates as cc
+    from make_xi_diagnostics import _codes, _resid
+    cols = ["CodConglomeradoPrudencial", "mca_code", "is_B", "year", "quarter", "dep_a1", "dep_a2",
+            "dep_a4", "dep_a5", "connections_per100", "frac_4g5g", "cadunico_families_per1000",
+            "pop_total", "pix_txns_pf"]
+    p = pd.read_parquet(PANEL, columns=cols)
+    p = p[p["is_B"] == 1]
+    p["mca_code"] = p["mca_code"].astype(str)
+    p["dep"] = p[["dep_a1", "dep_a2", "dep_a4", "dep_a5"]].fillna(0).sum(axis=1)
+    mand = pd.read_csv(MANDATORY, dtype=str)
+    mand = mand[pd.to_datetime(mand["mandatory_since"]) <= PIX_LAUNCH]
+    roots = set(mand["cnpj"].str.replace(r"\D", "", regex=True).str.zfill(14).str[:8])
+    m = cc.build_cnpj_to_congl()
+    m = m[m["AnoMes_list"].astype(float).between(201901, 201912)] if "AnoMes_list" in m else m
+    mand_congl = set(m.loc[m["CNPJ"].astype(str).str.zfill(8).isin(roots), "CodConglomeradoPrudencial"])
+    y19 = p[p["year"] == 2019]
+    mq = y19.groupby(["mca_code"]).agg(mobile=("connections_per100", "mean"),
+                                        g45=("frac_4g5g", "mean"),
+                                        cad=("cadunico_families_per1000", "mean"),
+                                        pop=("pop_total", "mean"))
+    dm = y19.assign(mand=y19["CodConglomeradoPrudencial"].isin(mand_congl))
+    sh = (dm[dm["mand"]].groupby("mca_code")["dep"].sum() / dm.groupby("mca_code")["dep"].sum())
+    mq["mandated"] = sh.reindex(mq.index).fillna(0.0)
+    mq = mq.dropna()
+    out = dict(n_mandated_institutions=int(len(mand)), n_mandated_congl=int(len(mand_congl)),
+               n_mca=int(len(mq)))
+    # MCA-quarter panel of Pix payer transactions per inhabitant.
+    pq_ = (p.groupby(["mca_code", "year", "quarter"])
+           .agg(txns=("pix_txns_pf", "first"), pop=("pop_total", "first")).reset_index())
+    pq_ = pq_[pq_["mca_code"].isin(mq.index) & (pq_["pop"] > 0)]
+    pq_["t"] = pq_["year"] * 4 + pq_["quarter"] - 1
+    pq_["post"] = (pq_["t"] >= 2020 * 4 + 3).astype(float)
+    pq_["y"] = pq_["txns"] / pq_["pop"]
+    for k in ("mobile", "g45", "mandated"):
+        z = (mq[k] - mq[k].mean()) / mq[k].std()
+        r = dict(sd=float(mq[k].std()), mean=float(mq[k].mean()),
+                 corr_mandated=float(np.corrcoef(mq[k], mq["mandated"])[0, 1]))
+        f = pq_.assign(x=pq_["mca_code"].map(z) * pq_["post"],
+                       c=pq_["mca_code"].map(mq["cad"]) * pq_["post"]).dropna(subset=["y", "x", "c"])
+        w = np.ones(len(f))
+        R = _resid(f[["y", "x", "c"]].to_numpy(), w, [_codes(f["mca_code"]), _codes(f["t"])])
+        res = sm.OLS(R[:, 0], R[:, 1:]).fit(cov_type="cluster",
+                                            cov_kwds={"groups": f["mca_code"].to_numpy()})
+        r["fs"] = dict(slope=float(res.params[0]), se=float(res.bse[0]),
+                       f=float(res.tvalues[0] ** 2), n=int(len(f)))
+        out[k] = r
+    return out
+
+
 def run() -> dict:
     est, cov = usage_panel()
     est.to_parquet(OUT)
@@ -232,6 +297,7 @@ def run() -> dict:
                 sample=dict(n_mca=int(d["mca_code"].nunique()), n_quarters=int(d["t"].nunique()),
                             n_obs=int(len(d)), n_states=int(d["state"].nunique()),
                             n_mca_exposure=int(len(x)), **x.attrs),
+                pooled_post_fs=pooled_post_fs(),
                 _meta=dict(written=datetime.datetime.now().isoformat(timespec="seconds"),
                            raw=str(RAW), raw_last=_stamp(sorted(RAW.glob("pix_mun_*.csv"))[-1]),
                            panel=_stamp(PANEL), xwalk=_stamp(XWALK), mandatory=_stamp(MANDATORY)))

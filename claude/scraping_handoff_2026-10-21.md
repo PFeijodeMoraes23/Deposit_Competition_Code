@@ -1,70 +1,131 @@
-# Handoff: open scraping tasks (merged, 2026-10-21)
+# Handoff: open scraping tasks (merged; updated 2026-10-26 after the B3 and Pix LAI answers and your status of 15:00)
 
 **To:** scraping agent. **From:** main thread, for Pedro.
 
-**Replaces:**
-- `breakfast_followups_scraping_handoff_2026-10-21.md` (S6 to S10)
-- your reply `breakfast_followups_scraping_reply_2026-10-21.md`
-
-Both rounds (S1 to S5 and S6 to S10) are delivered. Their status files stay the record:
-- `DATA_RAW/devo_followups_2026-10-20/STATUS.md`
-- `DATA_RAW/breakfast_followups_2026-10-21/STATUS.md`
+**This version folds in** your updates of 10-21 (17:50) and 10-22 (16:10 and 19:55), B3's answer to request B3PF0031927, and the BCB's denial of the Pix LAI 18810.025656/2026-11. The earlier round records stay in `DATA_RAW/_requests/`.
 
 **Rule:** V_Full.tex, V_Friction.tex and the decks are edited by the author only. Deliver raw files, documentation and source-log rows, with no analysis.
 
-## Rules (unchanged)
+## Rules
 
 - Official sources first. No guessed endpoints.
-- Raw files untouched, one folder per task, each with `NOTES.md` and its source-log rows.
+- **`DATA_RAW` is organised by source** (`DATA_RAW/<source>/<dataset>/`, index `DATA_RAW/README.md`, one master `DATA_RAW/source_log.csv`). Scripts read it through `utils/raw_paths.py`.
+- Raw files stay untouched. Each dataset has its own `NOTES.md` and its source-log rows. Files that an agent compiles are labelled as such and are not raw.
 - If a source does not exist or is not public, say so.
 - **Bot walls and terms of use are respected.**
-  - Tesouro Direto is collected by hand, by Pedro.
-  - B3 forbids automated collection.
-  - Latinobarómetro files stay internal.
+  - Tesouro Direto and B3 are collected by hand, by Pedro. B3 forbids automated collection.
+  - Latinobarómetro and Findex files stay internal.
+- The analysis window ends 2024Q4. Later months come along with downloads but are never re-run or gap-filled.
 
-## Delivered
+## Delivered (record)
 
 ```
-delivered[6]{task,where}:
-  S1-S5,DATA_RAW/devo_followups_2026-10-20/
-  S6-S10,DATA_RAW/breakfast_followups_2026-10-21/
-  ESTBAN per branch,DATA_RAW/estban_agencia/ (2013-01..2026-06)
-  national series,DATA_RAW/national_series/ (Ibovespa; Selic SGS 11/4390/4189)
-  scrapers,"scrape_national_series.py, scrape_estban_branches.py, scrape_bcb_ccs_relationships.py, scrape_consumidor_gov.py"
-  Tesouro Direto,S8_outside_options/tesouro/live_manual/ (Pedro's manual download)
+delivered[9]{round,content}:
+  S1-S5 (10-20),"CCS adults with a bank relationship; household surveys; Pix by municipality; usage proxies; DOC/TED/Pix fee rules"
+  S6-S10 (10-21),"posted rates; sweep programs; outside options (Tesouro Direto, B3, national series); trust in banks; PNAD TIC and POF"
+  ESTBAN per branch,"BCB/estban_agencia/ (2013-01..2026-06)"
+  Holds H1-H4 (10-22),"posted rates extended (Nubank RDB, big banks' prepaid); sweeps (no June-2021 norm found); trust (Findex fin11f = 4.069, Latinobarometro, Edelman); SGS 25109-25132, consumidor.gov.br crosswalk, Findex microdata"
+  Type-5 rates (10-22),"issuers/posted_rates/posted_rates.csv, 140 rows; Pedro's decisions D1-D3 are now coding task T5"
+  consumidor.gov.br,"2016-2024, 78 files, 99.84% of complaints matched to an IBGE code"
+  Edelman,"Brazil trust in financial services, 2012-2025"
+  Findex,"2014 and 2024 verified"
+  10-23 (S12, H6),"iti evidence -> D4 final (100% of CDI); Shopee stated zero, Ame implied zero (now in T5); Neon, Stark, Safra, MagaluPay, FitBank, Celcoin GAP; bitz 2020-09..2021-05 press only (= fallback); posted_rates.csv now 162 rows; master source log 258 rows"
 ```
+
+Account fees moved to the Fees agent (`claude/fees_handoff_2026-10-22.md`) on 10-22.
 
 ## Tasks
 
 ```
-tasks[2]{id,agent,target,when}:
-  P1,scraping,"Pix by municipality: re-download 2026-10 once the month closes",early November 2026
-  P2,scraping,"re-run scrape_national_series.py for final monthly values",after each month end
+tasks[2]{id,target,order}:
+  S13,"Pix by participant institution: the public route only",first (item 1 needs no one else)
+  S11,"B3 individual investors by state: the two sources B3 pointed to",second (step 1 needs Pedro's hand download)
 ```
 
-**P1.** 2026-10 is partial in the current files, and the last full month is 2026-09. Replace only that month's file, and log the new capture.
+### S11. B3 individual investors: follow B3's two pointers
 
-**P2.** The current month is partial in the monthly series. Re-run after the month closes, and log it.
+**B3's answer to request B3PF0031927** (Atendimento ao Investidor, shared by Pedro on 10-26):
+- B3 will not produce the custom extraction. The investor profile on b3.com.br "possui uma limitação de datas".
+- It points to two sources:
+  1. **MUB3, Museu da B3, reference collection:** https://mub3.org.br/centro-referencia/acervo. Search "pessoa física"; the site lists historical "books" on individual investors.
+  2. **B3 investor relations:** https://ri.b3.com.br/pt-br/, then *Kit do Investidor > Banco de Dados*. This downloads a spreadsheet of historical data, with the tabs **"Depositária"** and **"Listados"**.
 
-## On hold: Pedro decides
+**What we already hold** (S8(b); paths in `DATA_RAW/README.md`):
+- by-UF snapshots for 2026-09 (Pedro's manual CSVs), 2023-09 (Wayback) and 2020-03 (study PDF);
+- regional annual counts 2018–2025 from the quarterly Books (chart labels only);
+- national annual counts 2016–2026.
 
-None of these runs until Pedro says yes.
+**The target:** individual investors (CPF counts) by state × year, ideally by quarter, 2016–2024, with custody value where available. It measures a local outside option for depositors.
 
-```
-hold[4]{id,question}:
-  H1,"S6: are dated rules enough, or is a monthly series per firm needed? Chase Nubank RDB rates by maturity, Inter CDB (JS-rendered, needs a browser) and the big banks' digital accounts?"
-  H2,"S7: chase Itau's own regulamento and the June 2021 BCB norm that ended automatic fund sweeps? Draft a LAI request for BB Rende Facil terms?"
-  H3,"S9: fill the WVS download form, and download Edelman through a browser? Clarify whether the Findex 2024 trust value (5.672) is a share of all adults or of the unbanked."
-  H4,"From 10-20: a Findex World Bank account; IBGE codes and full history for consumidor.gov.br; SGS series 25105-25119; monthly snapshots of the branch and correspondent registers."
-```
+**Step 1, the RI spreadsheet (by Pedro).**
+- Give Pedro the exact click path and the file name to save.
+- Pedro downloads it by hand, because of the B3 automation rule.
+- Save it under `DATA_RAW/B3/ri_banco_de_dados/` with its download date.
+- Then document the "Depositária" and "Listados" tabs in `NOTES.md`:
+  - each series, its unit (accounts, CPFs, custody value in R$), frequency, first and last date;
+  - the individual / institutional split;
+  - any state or regional breakdown.
+
+**Step 2, the MUB3 collection.**
+- First read MUB3's terms of use and `robots.txt`. If automated access is not allowed, list what Pedro should download by hand instead.
+- Search "pessoa física" and catalogue every result: title, date, type, URL, and whether it can be downloaded.
+- For the items dated 2016–2024, especially the "books" on individual investors, record which pages carry state or regional tables.
+- Save the files with a state table under `DATA_RAW/B3/mub3_acervo/`.
+- **Optional, labelled as agent-compiled:** transcribe each state table into one CSV, one row per state × date × measure, with the source page.
+
+**Step 3, the coverage table.**
+- Lay out every B3 source we hold, plus the new ones: source × year × geography (national, region, state) × measure (CPF counts, accounts, custody value).
+- State plainly whether state × year counts for 2016–2024 are now reachable, and which years remain missing.
+
+**Acceptance:**
+- Raw files saved, with their `NOTES.md` and source-log rows.
+- The catalogue and the coverage table exist.
+- Nothing collected by automation from b3.com.br or ri.b3.com.br.
+
+### S13. Pix by participant institution: public sources only
+
+**Why.** The BCB denied LAI 18810.025656/2026-11 (aggregate Pix statistics by participant institution) after the appeal.
+- **Grounds:** secrecy (Lei 12.527, art. 22, with Decreto 7.724, art. 5, § 2) and additional work (art. 13, III).
+- **Pedro's decision (10-26):** no further appeal. Take only what the BCB publishes.
+- **Use in the papers:** a bank-level measure of Pix adoption would let Pix intensity vary by institution. V_Friction 7.1.2 proposes intensity interacted with deposit and firm type, the convenience channel.
+
+**What to collect:**
+
+1. **`ChavesPix`** (Olinda `Pix_DadosAbertos`, the official API; scripting it is allowed).
+   - **Content:** month-end stock of Pix keys by participant, with the fields `Data`, `ISPB`, `Nome`, `NaturezaUsuario` (PF/PJ), `TipoChave` and `qtdChaves`, per the open-data documentation.
+   - **Request:** every month-end from 2020-11 to 2024-12, one request per month with the `Data` parameter.
+   - **Report:** the first month the API actually serves, and any month it refuses.
+2. **`EstatisticasTransacoesPix` and `EstatisticasFraudesPix`:**
+   - check whether either has any participant dimension (ISPB or name);
+   - as documented, `EstatisticasTransacoesPix` breaks down by payer and receiver type, region, age, initiation method and nature, with no participant field.
+   - Collect them only if a participant field exists. Otherwise say so in the notes.
+3. **The BCB Pix statistics pages** (estatísticas do Pix on bcb.gov.br) and any downloadable file or dashboard they link:
+   - look for transactions or users by participant, such as rankings or shares;
+   - if only the current version is published, look for Wayback captures across 2020-11 to 2024-12.
+   - No guessed endpoints, and no scraping of a dashboard that its terms forbid.
+4. **Linking participants to conglomerates:**
+   - map ISPB to CNPJ and to the panel's conglomerate code (`C00…`);
+   - use the Pix participant rosters already held (`pix_roster_history.csv`, from `scrape_pix_roster.py`) and the BCB's institution registers;
+   - report the share of keys that map to a conglomerate in the panel.
+
+**Deliver:**
+- the raw files under `DATA_RAW/BCB/pix_participantes/` (or a name that fits the layout), with `NOTES.md` and source-log rows;
+- a repo script for item 1, in the style of `scrape_national_series.py`;
+- a coverage note: which per-participant Pix measures are public, for which months, and what is not public (transactions by participant, if none is).
+
+**Flags:**
+- **Keys are a stock of registrations, not usage.** One person can hold keys at several institutions, and a CPF key sits at one institution only.
+- **The roster gives participation, not intensity.**
+
+## On hold
+
+Nothing. H6 was done on 10-23 and H7 (the WVS form) was closed by Pedro on 10-22.
 
 ## Waiting on outside answers (track only)
 
 ```
-pending[8]{request,protocol,subject}:
-  B3,B3PF0031927,"individual investors by state x month or quarter from 2016, municipality if available, by product, with custody value"
+pending[6]{request,protocol,subject}:
   LAI,18810.025400/2026-04,"CCS relationships by institution x municipality (still open)"
-  LAI appeal,18810.025656/2026-11,appeal filed
   Ouvidoria,18810026133202684,request about the open LAI 18810.025400/2026-04
   LAI,18810.025399/2026-18,CDB/RDB registry (B3/Cetip) by institution
   LAI appeal,18810.025439/2026-13,"tariff history per institution: denied 10-22 (Decreto 7.724, art. 13, III); first-instance appeal filed by Pedro 10-22"
@@ -72,81 +133,20 @@ pending[8]{request,protocol,subject}:
   LAI,18882.002114/2026-19,BB Rende Facil terms (filed 10-22)
 ```
 
-When an answer arrives, save it under the matching task folder and add a source-log row.
+```
+closed[3]{request,protocol,outcome}:
+  LAI appeal,18810.025656/2026-11,"Pix statistics by participant institution: denied (Lei 12.527 art. 22 + Decreto 7.724 art. 5 para. 2; art. 13 III); Pedro will not appeal again (10-26); public route = task S13"
+  B3,B3PF0031927,"answered (shared 10-26): no custom extraction; pointers to MUB3 and the RI Banco de Dados (task S11)"
+  LAI,Pix (NUP not recorded),"dropped by Pedro on 10-22"
+```
+
+When an answer arrives, save it under the matching source folder and add a source-log row.
+
+## Housekeeping (for Pedro)
+
+- **Junk file:** `DATA_RAW/issuers/posted_rates/evidence/iti_termo_20201125.html` is an icon URL saved by mistake. No row cites it, so it can be deleted.
+- **Agent scratch** under `C:\Users\pedro\AppData\Local\Temp\claude\`: `scrape_T5`, `scrape_E2`, `edel_check` and `findex_check` can go. Keep `fee_probe` until the Fees agent's F0 has copied the CDX list and the sample page.
 
 ## Open questions for Pedro
 
-1. Record the missing protocol numbers (the Pix LAI, and the CDB registry, tariff and CDB-by-state requests) so they can be tracked here.
-
-## Response from the scraping agent (2026-10-21 17:50)
-
-- **P1 and P2 are DROPPED, per Pedro (2026-10-21):** "No need for 2026, recall I need only until 2024." The analysis window ends 2024Q4. October 2026 and later months come along with downloads but are never re-run or gap-filled. Nothing is scheduled.
-- **Three of the "not recorded" protocols are recorded** (the 10-21 reply omitted them by mistake):
-
-  ```
-  pending_resolved[3]{request,protocol}:
-    LAI CDB/RDB registry (B3/Cetip) by institution,18810.025399/2026-18
-    LAI tariff history per institution,18810.025439/2026-13
-    LAI CDB/RDB by issuer x investor state + ESTBAN verbete 907,18810.025440/2026-48
-  ```
-
-  Only the Pix LAI NUP is still unrecorded, so question 1 reduces to that one number.
-- **Recorded:** the LAI appeal 18810.025656/2026-11 and the Ouvidoria request 18810026133202684 (on LAI 18810.025400/2026-04).
-- Holds H1–H4 are untouched until Pedro says yes.
-
-## Update from the scraping agent (2026-10-22 16:10)
-
-### DATA_RAW is now organised BY SOURCE (Pedro's decision; moved 16:04)
-
-- **Layout:** `DATA_RAW/<source>/<dataset>/`. The index is `DATA_RAW/README.md`; the one master log is `DATA_RAW/source_log.csv` (207 rows, with `round`, `task` and a `location` column that exists on disk for every row); the old → new map is `DATA_RAW/_move_plan_2026-10-22.csv`.
-- **Round records** (STATUS, BRIEFS, each task's NOTES) are in `DATA_RAW/_requests/`. The paths inside them are historical.
-- **Code:** every script reads `DATA_RAW` through `utils/raw_paths.py`. With Pedro's OK, the path lines (only) of your three scripts were switched: `make_branch_estban.py` → `raw_paths.BCB_ESTBAN_AGENCIA`; `make_pix_exposure.py` and `make_tesouro_mca.py` → `raw_paths.BCB_PIX_MUNICIPAL_RAW` and `raw_paths.TESOURO_INVESTIDORES_LIVE`. Each target exists and holds the same files (Pix 72 months, ESTBAN 164 items, Tesouro 11 files). Re-run them at your convenience to confirm.
-- The new locations of what you use:
-  - `BCB/pix_municipal/raw/`
-  - `BCB/estban_agencia/`
-  - `TesouroNacional/investidores_td/live_manual/`
-  - `issuers/posted_rates/` (S6 + H1 + H1b)
-  - `issuers/sweep_programs/` (S7 + H2)
-  - `IBGE/pnadc_tic/`, `IBGE/pof/`
-  - `Latinobarometro/` (INTERNAL)
-  - `WorldBank/findex/` (INTERNAL)
-  - `Ipeadata/ibovespa/`, `BCB/selic_sgs/`
-
-### Holds, now run (Pedro approved 10-21)
-
-- **H1 + H1b (posted rates, `issuers/posted_rates/posted_rates.csv`, 99 rows):**
-  - **Nubank RDB:** launched June 2019. The F-1/A gives 102–126% of CDI for 3–36 months (2020–21); 20-F weighted averages run 104–107% for 2021–2024. There is no public per-maturity table.
-  - **Big banks' CHECKING balances:** they cannot be remunerated by law, so that is not a finding.
-  - **Big banks' PREPAID accounts:**
-    - Bradesco **bitz** paid 100% of CDI on balances above R$10 (2022; closed 2023-04).
-    - Santander **Superdigital:** no rate on any saved page (closed 2024-11).
-    - Itaú **iti:** 100% of CDI until between 2023-07 and 2023-09.
-    - BB: the Ourocard prepaid contracts have no remuneration clause.
-    - Caixa: no general prepaid account.
-- **H2 (sweeps):**
-  - The June-2021 "end of automatic fund sweeps" norm was NOT found in a full scan of BCB/CMN acts; it may be Santander-specific.
-  - Itaú's % of CDI band table is not public in any Itaú document 2016–2024.
-- **H3 (trust):**
-  - **Findex correction:** lack of trust is **fin11f = 4.069** (2024, % of all adults ≈ 30% of the unbanked). 5.672 is fin11d = insufficient funds.
-  - **Latinobarómetro:** confidence in banks in 2015, 2018, 2020, 2023; the UF is derivable in 2015, 2017 and 2018.
-  - **Edelman:** an annual Brazil financial-services trust series for 2012–2021, charts only.
-- **H4:**
-  - SGS 25109–25132 are in `BCB/ccs_relationships/current`; 25105–25108 are not served by the API.
-  - The IBGE crosswalk script for consumidor.gov.br is ready (99.81% match on samples). The site was down (HTTP 504) from 10-21 18:00 through 10-22.
-  - Findex microdata 2017/2021 are in and verified; 2014/2024 come from Pedro.
-
-## Update from the scraping agent (2026-10-22 19:55)
-
-- **Type-5 balance rates (the coding agent's request of 16:40) are DELIVERED.** The reply is `claude/scraping_reply_2026-10-22_type5_rates.md`, addressed to the coding agent. It carries Pedro's decisions D1-D3 (19:35):
-  - D1: a stated or implied zero is a nominal 0% rate (Stone, C6, Alelo, Cora, PayPal); every other issuer keeps the 100%-of-CDI fallback;
-  - D2: the zeros extend back to 2020;
-  - D3: Banco Original's type-5 balances are PicPay's (2020Q2-2024Q3, then C0088022).
-  Data: `DATA_RAW/issuers/posted_rates/posted_rates.csv` (140 rows; new columns `conglomerate`, `entity_cnpj`).
-- **Also done today:**
-  - consumidor.gov.br 2016-2024 (78 files; 99.84% of complaints matched to an IBGE code);
-  - Edelman Brazil trust in financial services, 2012-2025;
-  - Findex 2014 and 2024 verified;
-  - BB Rende Fácil LAI filed by Pedro (18882.002114/2026-19);
-  - master source log at 240 rows.
-- **Started: account fees** (Pedro, 19:38). The note is `claude/account_fees_data_2026-10-22.md`: what we hold, the binding gap (BCB listed tariffs exist only as a 2026 snapshot with last-change dates), and expansion routes A-H.
-- **Pix LAI NUP:** Pedro dropped it ("don't worry about that"); remove it from the tracking list.
+1. **S11 step 1:** download the B3 RI spreadsheet yourself when the agent gives you the click path.

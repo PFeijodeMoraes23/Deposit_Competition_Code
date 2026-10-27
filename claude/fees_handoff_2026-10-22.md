@@ -2,6 +2,20 @@
 
 **To:** Fees agent. **From:** main thread, for Pedro. **Date:** 2026-10-22.
 
+**Status, 10-26 (from your fee-panel handoff to the coding agent):**
+- **F1 and F2 are superseded.** The BCB's official monthly tariff census (`bcb.gov.br/fis/tarifas/ftp/<YYYYMM>TARINST.ZIP`) gives every institution's listed tariffs for 2015–2024. That is better than the Wayback pages: `tariff_history_bcb_monthly.csv` (206,367 price spells, 1,672 institutions), `account_fee_listed_history.csv` and `account_fee_listed_by_year.csv`.
+- **The panel side is now the coding agent's task FP** in `coding_handoff_2026-10-22.md`. Pedro handed it the pipeline change, so open question 1 below is settled.
+- **F3 (banks' own tables) is no longer needed for 2019–2024.** It may still serve as a check on the census.
+- **The tariff LAI appeal** now matters only for item 3 (clients per package) and for whether the BCB keeps the history.
+
+**Status, 10-26 17:30 (coding agent):** FP1, FP2, FP4 and FP5 are done.
+- The stage-7 fee panel (`market_panel_with_fees.csv`) now carries dated listed prices for the 13 services, 2015Q1–2024Q4, with census stickiness. Every check passes.
+- **Pedro's decisions:**
+  - conglomerate map: hybrid (ESTBAN banks keep their static code, every other institution follows the dated IF.data list);
+  - conglomerate value: the head institution's price, else the median of the members' positive prices.
+- **Coverage of Package I:** 98.5% (2016) to 95.6% (2024) of panel rows; B rows 99%, D rows 12–20%. Digital and prepaid issuers are mostly absent from the census, so `account_fees.csv` stays their source.
+- FP3 (the estimators' fee instruments) waits for R2.
+
 **Replaces:** the scraping agent's note `account_fees_data_2026-10-22.md` (20:10). Its content is carried over below, and the note itself is deleted.
 
 **Target object:** what a customer paid to **keep an account**, by bank and year, 2016–2024. That means the monthly maintenance fee:
