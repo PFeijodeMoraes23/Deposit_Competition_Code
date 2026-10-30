@@ -98,6 +98,7 @@ import pyarrow.parquet as pq
 
 from utils import paths
 from utils import demand_chars as dc
+from utils import estban as estban_cells
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("panel_demand_chars")
@@ -272,9 +273,16 @@ def splice_back(own_T: pd.DataFrame, mem_prev: pd.DataFrame, mem_T: pd.DataFrame
 
 
 # ----------------------------------------------------------------------------- 1a balances
-def read_raw_estban(yyyymm: str, cols: dict) -> pd.DataFrame:
+GAP_COLS = {"dep_a1": "V400_401", "dep_a2": "V420", "dep_a3": "V431", "dep_a4": "V432"}
+
+
+def read_raw_estban(yyyymm: str, cols: dict, with_gaps: bool = False) -> pd.DataFrame:
     """One raw monthly ESTBAN file with the read options of panel_deposits.process_raw_estban_csv.
-    `cols` maps an output name to a substring of the raw header."""
+    `cols` maps an output name to a substring of the raw header. With `with_gaps` (balances only),
+    the cells panel_deposits filled at that month carry the balances it gave them: such a cell did not
+    file, so the raw file has it blank while the panel holds the same cell's nearest filed month of
+    the quarter (utils/estban.py, PANEL_INTERMED/estban_unfiled_cells.csv). The comparison with the
+    panel is then cell for cell."""
     fp = paths.ESTBAN_RAW_MUN / f"{yyyymm}_ESTBAN.CSV"
     d = pd.read_csv(fp, sep=";", decimal=",", encoding="latin1", skiprows=2, low_memory=False,
                     dtype={"CNPJ": str})
@@ -288,6 +296,17 @@ def read_raw_estban(yyyymm: str, cols: dict) -> pd.DataFrame:
         out[name] = pd.to_numeric(d[hit[0]], errors="coerce")
     out = out[out["CODMUN_IBGE"].notna() & (out["CODMUN_IBGE"] != 0)].copy()
     out["CODMUN_IBGE"] = out["CODMUN_IBGE"].astype(int)
+    if with_gaps:
+        if set(cols) - set(GAP_COLS):
+            raise KeyError(f"with_gaps applies to balances only, not {sorted(set(cols) - set(GAP_COLS))}")
+        g = estban_cells.load_unfiled_gaps(int(yyyymm[:4]), int(yyyymm[4:]))
+        if len(g):
+            g = pd.DataFrame({"CNPJ": g["CNPJ"].astype("int64").astype(str).str.zfill(8),
+                              "CODMUN_IBGE": g["CODMUN_IBGE"].astype(int),
+                              **{name: g[GAP_COLS[name]].to_numpy() for name in cols}})
+            filled = pd.MultiIndex.from_frame(g[["CNPJ", "CODMUN_IBGE"]])
+            out = out[~pd.MultiIndex.from_frame(out[["CNPJ", "CODMUN_IBGE"]]).isin(filled)]
+            out = pd.concat([out, g], ignore_index=True)
     return out
 
 
@@ -304,7 +323,7 @@ def pre2016_scale(report: dict) -> dict:
     scale, detail = {}, {}
     quarters = [(y, q) for y in (2013, 2014, 2015) for q in (1, 2, 3, 4)] + [(2016, 1)]
     for (y, q) in quarters:
-        raw = read_raw_estban(f"{y}{3 * q:02d}", DEP_SUBSTR).groupby("CODMUN_IBGE")[dc.DEP_COLS].sum()
+        raw = read_raw_estban(f"{y}{3 * q:02d}", DEP_SUBSTR, with_gaps=True).groupby("CODMUN_IBGE")[dc.DEP_COLS].sum()
         pan = dp[(dp["Year"] == y) & (dp["Quarter"] == q)].groupby("CODMUN_IBGE")[dc.DEP_COLS].sum()
         j = raw.join(pan, lsuffix="_raw", rsuffix="_pan", how="outer")
         ratios = []
@@ -811,7 +830,7 @@ def run_checks() -> int:
     fac = {k: float(v["factor"]) for k, v in
            json.loads(OUT_REPORT.read_text(encoding="utf-8"))["pre2016_balance_scale"].items()}
     for ym, (y, q), want in (("201512", (2015, 4), fac["2015Q4"]), ("201603", (2016, 1), 1.0)):
-        raw = read_raw_estban(ym, DEP_SUBSTR).groupby("CODMUN_IBGE")[dc.DEP_COLS].sum()
+        raw = read_raw_estban(ym, DEP_SUBSTR, with_gaps=True).groupby("CODMUN_IBGE")[dc.DEP_COLS].sum()
         pan = dp[(dp["Year"] == y) & (dp["Quarter"] == q)].groupby("CODMUN_IBGE")[dc.DEP_COLS].sum()
         j = raw.join(pan, lsuffix="_raw", rsuffix="_pan", how="outer")
         r = np.concatenate([(j.loc[j[f"{c}_raw"] > 0, f"{c}_pan"] / j.loc[j[f"{c}_raw"] > 0, f"{c}_raw"]).to_numpy()
@@ -824,8 +843,8 @@ def run_checks() -> int:
     check("T1 corrected balance = stored / measured factor", len(pre) == int((panel["year"] < 2016).sum()) and worst == 0.0,
           f"{len(pre):,} rows of 2013-2015, every one; factors {sorted(set(f_row.tolist()))}; "
           f"largest |factor x corrected - stored| = {worst:g}")
-    raw15 = read_raw_estban("201512", DEP_SUBSTR)[dc.DEP_COLS].sum()
-    raw16 = read_raw_estban("201603", DEP_SUBSTR)[dc.DEP_COLS].sum()
+    raw15 = read_raw_estban("201512", DEP_SUBSTR, with_gaps=True)[dc.DEP_COLS].sum()
+    raw16 = read_raw_estban("201603", DEP_SUBSTR, with_gaps=True)[dc.DEP_COLS].sum()
     p15 = pre[(pre["year"] == 2015) & (pre["quarter"] == 4)]
     p16 = panel[(panel["year"] == 2016) & (panel["quarter"] == 1) & (panel["Source"] == "ESTBAN")]
     r15 = {c: float(p15["r__" + c].sum() / raw15[c]) for c in dc.DEP_COLS}

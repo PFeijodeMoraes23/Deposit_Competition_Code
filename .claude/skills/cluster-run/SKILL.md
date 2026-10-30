@@ -136,6 +136,16 @@ on cluster code, say this explicitly and ask it to label each claim.
 - After a solve: in `cost_params_*.json`, `n_shards_found` equals `n_shards_expected`, and the
   `run` block records the beta and T the psi was simulated under. A cost estimate without that
   equality is not to be used.
+- RC-BLP ext1: the pipeline's two starts (cold, and rc4's solution with the added pi at zero) can
+  stop at rc4's solution, a local optimum. The sign is ext1's Q equal to rc4's and the last pi at
+  exactly 0 (10-16 and R3 on 10-29). The remedy is the sandboxed multi-start
+  `blp_ext1_starts.sh` (`EXT1_TAG`, starts in `blp_ext1_starts_<tag>.csv`), then
+  `blp_ext1_adopt.sh <k> <start>` for the lowest converged Q with `se_status` ok. Adopting is the
+  user's call.
+- `pipe_download` packs every set of the phases a chain ran, also when `--no-bbl`, `--no-cf` or
+  `--no-blp` end it early, so one submit brings sleep, logit and gates home. Before the 10-29 fix a
+  `--no-bbl --no-cf` run packed only demand_prep and blp (and logs); its other sets need
+  `cluster_archive.sh --set <name> --copy` by hand.
 - Once the archive job has finished, the `post-run-refresh` skill covers download and ingest.
 
 ## Decisions that belong to the user

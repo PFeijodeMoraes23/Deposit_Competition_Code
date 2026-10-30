@@ -1,8 +1,14 @@
-"""utils/estban.py — reader for one raw ESTBAN municipality-level CSV (monthly BCB file).
+"""utils/estban.py — reader for one raw ESTBAN municipality-level CSV (monthly BCB file), and the
+treatment of cells that did not file.
 
 process_raw_estban_csv(path) returns standardised V-code columns (pre- and post-July-2022
 layouts), CNPJ (Int64), CODMUN_IBGE (Int64), YEAR, MONTH. Moved verbatim from panel_deposits.py
 (2026-10-15). Readers: panel_deposits (pre-2016 balances), scrape_estban_concat (ESTBAN.csv).
+
+fill_unfiled_quarter_ends(monthly, ...) classifies and fills the quarter-end cells whose branch did
+not file (AGEN_ESPERADAS > 0, AGEN_PROCESSADAS = 0, every balance blank); UNFILED_CELLS_CSV is the
+record panel_deposits writes and panel_demand_chars reads back to compare the panel with the raw
+files.
 """
 from __future__ import annotations
 
@@ -10,9 +16,14 @@ import logging
 import os
 import re
 
+import numpy as np
 import pandas as pd
 
+from utils import paths
 from utils.conglomerates import coerce_cnpj
+
+# One row per unfiled quarter-end cell, written by panel_deposits.build_estban_panel.
+UNFILED_CELLS_CSV = paths.PROCESSED / "PANEL_INTERMED" / "estban_unfiled_cells.csv"
 
 
 # Column rename map for the pre-July-2022 ESTBAN format.
@@ -204,3 +215,95 @@ def process_raw_estban_csv(filepath: str) -> pd.DataFrame | None:
 
     logging.info(f"Processed raw ESTBAN: {os.path.basename(filepath)} ({len(df)} rows)")
     return df
+
+
+# ── Cells that did not file ─────────────────────────────────────────────────────────────────────
+# ESTBAN lists every branch cell (institution x municipality) the BCB expects each month. A cell
+# whose branches were expected but not processed (AGEN_ESPERADAS > 0, AGEN_PROCESSADAS = 0) comes
+# with every balance blank: the bank did not file, it did not hold zero. Summed as zero, the cell
+# vanished for the quarter -- C6 in 2024-03 (R$24.9 bn), BTG Pactual in 2019-12 (R$8.5 bn) -- and the
+# panel read an exit and a re-entry. Each unfiled quarter-end cell is now one of:
+#   gap      it filed in an earlier month of the same quarter and files again later: it takes the
+#            balances of the nearest filed month of the quarter (one month back, then two). ESTBAN is
+#            monthly, so these are the bank's own reported balances, not an interpolation.
+#   closure  it never files again in any month the files hold: the branch closed. An exit; no row.
+#   nodonor  it files again later, but no month of the quarter was filed: the quarter stays missing
+#            (no row) and is logged.
+# Later months, 2025-2026 included, only decide whether a cell files again; no balance ever comes
+# from a later month.
+UNFILED_KEY = ["CNPJ", "CODMUN"]
+
+
+def unfiled_mask(df: pd.DataFrame, dep_cols: list) -> pd.Series:
+    """Cells whose expected branches were not processed and whose balances are all blank."""
+    exp = pd.to_numeric(df["AGEN_ESPERADAS"], errors="coerce").fillna(0)
+    pro = pd.to_numeric(df["AGEN_PROCESSADAS"], errors="coerce").fillna(0)
+    return (exp > 0) & (pro == 0) & df[dep_cols].isna().all(axis=1)
+
+
+def fill_unfiled_quarter_ends(monthly: pd.DataFrame, dep_cols: list,
+                              quarter_end_months) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Classify every unfiled quarter-end cell of `monthly` (all months, the columns of UNFILED_KEY,
+    CODMUN_IBGE, YEAR, MONTH, the two AGEN columns and `dep_cols`) and fill the gaps.
+
+    Returns (frame, cells). `frame` is `monthly` with each gap cell's balances (and, where its own is
+    blank, the donor's CODMUN_IBGE) filled, and the closure and nodonor quarter-end cells removed.
+    `cells` has one row per unfiled quarter-end cell: CNPJ, CODMUN, CODMUN_IBGE, NOME_INSTITUICAO,
+    YEAR, MONTH, kind, donor (YYYYMM, 0 if none), next_filed (YYYYMM, 0 if never), whole_bank (every
+    cell of the CNPJ that month unfiled) and the balances the cell received."""
+    df = monthly.copy()
+    df["_t"] = df["YEAR"].astype(int) * 12 + df["MONTH"].astype(int) - 1
+    unf = unfiled_mask(df, dep_cols)
+    qe = df["MONTH"].isin(list(quarter_end_months))
+
+    filed = df.loc[~unf, UNFILED_KEY + ["_t", "CODMUN_IBGE"] + dep_cols]
+    donors = filed.groupby(UNFILED_KEY + ["_t"]).agg(
+        {**{c: "sum" for c in dep_cols}, "CODMUN_IBGE": "first"})
+
+    tg = df.loc[unf & qe, UNFILED_KEY + ["_t"]].copy()
+    tg["donor"] = 0
+    for lag in (1, 2):
+        open_ = tg["donor"] == 0
+        idx = pd.MultiIndex.from_arrays([tg.loc[open_, c] for c in UNFILED_KEY] + [tg.loc[open_, "_t"] - lag])
+        hit = donors.reindex(idx)
+        ok = hit["CODMUN_IBGE"].notna().to_numpy() | hit[dep_cols].notna().any(axis=1).to_numpy()
+        rows = tg.index[open_][ok]
+        for c in dep_cols:
+            tg.loc[rows, c] = hit[c].to_numpy()[ok]
+        tg.loc[rows, "CODMUN_IBGE_donor"] = hit["CODMUN_IBGE"].to_numpy()[ok]
+        t_d = tg.loc[rows, "_t"] - lag
+        tg.loc[rows, "donor"] = (t_d // 12) * 100 + t_d % 12 + 1
+
+    later = filed[UNFILED_KEY + ["_t"]].drop_duplicates()
+    nxt = (tg[UNFILED_KEY + ["_t"]].reset_index()
+           .merge(later, on=UNFILED_KEY, how="left", suffixes=("", "_f")))
+    nxt = nxt[nxt["_t_f"] > nxt["_t"]].groupby("index")["_t_f"].min()
+    tg["next_filed"] = 0
+    tg.loc[nxt.index, "next_filed"] = ((nxt // 12) * 100 + nxt % 12 + 1).astype(int)
+    tg["kind"] = np.where(tg["next_filed"] == 0, "closure", np.where(tg["donor"] > 0, "gap", "nodonor"))
+
+    gap = tg.index[tg["kind"] == "gap"]
+    df.loc[gap, dep_cols] = tg.loc[gap, dep_cols].to_numpy(dtype=float)
+    own = df.loc[gap, "CODMUN_IBGE"]
+    df.loc[gap, "CODMUN_IBGE"] = own.where(own.notna(), tg.loc[gap, "CODMUN_IBGE_donor"]).astype("Int64")
+
+    n_cells = df.loc[qe].groupby(["CNPJ", "_t"]).size()
+    n_unf = tg.groupby(["CNPJ", "_t"]).size()
+    whole = (n_unf == n_cells.reindex(n_unf.index)).rename("whole_bank")
+    cells = df.loc[tg.index, UNFILED_KEY + ["CODMUN_IBGE", "NOME_INSTITUICAO", "YEAR", "MONTH", "_t"]].join(
+        tg[["kind", "donor", "next_filed"] + dep_cols])
+    cells = cells.join(whole, on=["CNPJ", "_t"]).drop(columns="_t")
+    cells.loc[cells["kind"] != "gap", dep_cols] = np.nan
+
+    drop = tg.index[tg["kind"] != "gap"]
+    out = df.drop(index=drop).drop(columns="_t")
+    return out, cells.sort_values(["YEAR", "MONTH", "CNPJ", "CODMUN"]).reset_index(drop=True)
+
+
+def load_unfiled_gaps(year: int, month: int) -> pd.DataFrame:
+    """The gap cells panel_deposits filled at one month (UNFILED_CELLS_CSV), for comparisons of the
+    panel with a raw file: the raw file has those balances blank, the panel holds the donor's."""
+    if not UNFILED_CELLS_CSV.exists():
+        raise FileNotFoundError(f"{UNFILED_CELLS_CSV} does not exist: run panel_deposits.py first")
+    c = pd.read_csv(UNFILED_CELLS_CSV)
+    return c[(c["kind"] == "gap") & (c["YEAR"] == year) & (c["MONTH"] == month)].copy()

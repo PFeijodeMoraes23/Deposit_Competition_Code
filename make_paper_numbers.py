@@ -25,7 +25,10 @@ number there is read from the output of the generator that renders the exhibit i
        Mean phi-hat (Table 4)              DEMAND_PREP/est{k}/national_phi_t.csv, the mean of
                                            phi_t_<SPEC12_TAG> (sleep_export_spec12_compare.py)
   D  entry-path interval                   DIAG_PHI_SEPARATION/d6_phi_in_interval.csv (lo, hi) and
-                                           d6_implied_phi.csv (phi_entry of the B events)
+                                           d6_implied_phi.csv (phi_entry of the B events); the
+                                           firm-type g fallback (footnote) from the run in
+                                           DIAG_PHI_SEPARATION/g_fallback_firmtype/ (d6_implied_phi,
+                                           d6_g_holdout) and the production d6_entry_events.csv
   E  franchise-value counterfactual        dropped from the paper (user, 2026-09-29)
   F  discount design and rate paths        bbl_discount.env (utils/bbl_discount.py): beta, T and the
                                            mean rate beta comes from; cf_deposit_sim.jl
@@ -1887,6 +1890,42 @@ def collect_mca_count(notes: list):
 
 TYPE5_RULES_CSV = pathlib.Path(__file__).resolve().parent / "config" / "type5_balance_rates.csv"
 
+# The Fees agent's sidecar (fees/build_fee_paper_numbers.py): the ten fees.* keys of V_Friction 7.2
+# with their definitions. Shares print as [p0], R$ amounts as [2], counts as [0].
+FEE_SIDECAR = _paths.TARIFAS_PROC / "fee_paper_numbers.json"
+FEE_KEYS = ("fees.pof.acct.share_paying", "fees.pof.acct.mean_payer", "fees.pof.acct.mean_family",
+            "fees.disputes.acct_share.big5", "fees.disputes.acct_share.big5.n",
+            "fees.disputes.acct_share.digital", "fees.disputes.acct_share.digital.n",
+            "fees.disputes.acct_share.big5.2024",
+            "fees.listed.pkg1.big5.median.2016", "fees.listed.pkg1.big5.median.2024")
+
+
+def collect_fees(notes: list):
+    """The fee keys: copied from the Fees agent's sidecar, value and definition as written there.
+    Local, so never pending on the cluster."""
+    if not FEE_SIDECAR.is_file():
+        notes.append(f"{FEE_SIDECAR.name} not found in {FEE_SIDECAR.parent}; run "
+                     "fees/build_fee_paper_numbers.py for the fees.* entries.")
+        return
+    side = json.loads(FEE_SIDECAR.read_text(encoding="utf-8"))
+    missing = [k for k in FEE_KEYS if k not in side]
+    if missing:
+        notes.append(f"{FEE_SIDECAR.name} lacks {missing}; those fees.* entries are absent.")
+    for k in FEE_KEYS:
+        if k not in side:
+            continue
+        e = side[k]
+        v, unit = e["value"], str(e.get("unit", ""))
+        if unit.startswith("share"):
+            display, u = disp(v, "share"), "fraction"
+        elif k.endswith(".n"):
+            display, u = disp(v, "count"), "count"
+        else:
+            display, u = f"R$ {fmt3s(v)}", "BRL"
+        add(k, "FEES", e["definition"].split(";")[0], v,
+            f"{e['definition']} ({unit})", f"{e.get('source', '')} via {FEE_SIDECAR.name} "
+            f"({e.get('script', '')}, {e.get('run_at', '')})", "ok", display=display, unit=u)
+
 
 def collect_type5_rules(notes: list):
     """The posted type-5 balance rules (config/type5_balance_rates.csv, applied in step 16): the
@@ -2801,6 +2840,66 @@ def collect_entry_counts(notes: list):
                      "--robustness-only.")
 
 
+# The entry run with the firm-type g fallback (a footnote; production keeps the national one):
+# sleep_ident_entry_dynamics.py --compute-only --g-fallback firmtype --out-dir g_fallback_firmtype.
+GFB_DIR = D6_DIR / "g_fallback_firmtype"
+PHI_GRID_CAP = 0.9985          # the top of sleep_ident_entry_dynamics.py's inversion grid
+
+
+def collect_entry_gfb(notes: list):
+    ip, ho = GFB_DIR / "d6_implied_phi.csv", GFB_DIR / "d6_g_holdout.csv"
+    if not ip.is_file():
+        notes.append(f"{GFB_DIR.name}/{ip.name} not found; run sleep_ident_entry_dynamics.py "
+                     "--compute-only --g-fallback firmtype --out-dir g_fallback_firmtype.")
+        return
+    imp = pd.read_csv(ip).set_index("kind")
+    for kind in ("B", "D"):
+        if kind not in imp.index:
+            continue
+        r = imp.loc[kind]
+        v = {"point": float(r["phi_entry"]), "lo": float(r["lo"]), "hi": float(r["hi"])}
+        add(f"phi.entry.gfb.firmtype.{kind}", "D",
+            f"Entry-dynamics phi of {kind} entrants, firm-type g fallback: point and 95% interval", v,
+            f"Sleepy share implied by the {kind}-firm entry paths when an event-quarter with no own "
+            "or conglomerate g takes the median g of its firm type and deposit type that quarter, "
+            "weighted by the event's own deposit-type mix, before the national median",
+            f"DIAG_PHI_SEPARATION/{GFB_DIR.name}/{ip.name} kind {kind}: phi_entry, lo, hi", "ok",
+            display=f"{fmt3s(v['point'])} {disp_ci(v['lo'], v['hi'])}",
+            detail=dict(n_events=int(r["n_events"]), hi_at_grid_cap=v["hi"] >= PHI_GRID_CAP - 1e-9))
+    ev = D6_DIR / "d6_entry_events.csv"
+    meta = D6_DIR / "d6_meta.json"
+    if ev.is_file() and meta.is_file():
+        e = pd.read_csv(ev)
+        e = e[e["keep"].astype(bool)]
+        n_h = int(json.loads(meta.read_text(encoding="utf-8"))["horizon"]) + 1
+        share = {k: float(g["n_g_fallback_national"].sum()) / (len(g) * n_h)
+                 for k, g in e.groupby("kind") if "n_g_fallback_national" in g}
+        if share:
+            add("phi.entry.gfb.share_national", "D",
+                "Share of entry event-quarters whose g is the national median, by firm type", share,
+                "Event-quarters (kept events, h = 0..H) with no own and no conglomerate g, filled with "
+                "the national median g of the quarter, over all event-quarters; production run "
+                "(national fallback)",
+                f"DIAG_PHI_SEPARATION/{ev.name} n_g_fallback_national over kept events x "
+                f"{n_h} horizons ({meta.name} horizon)", "ok",
+                display=", ".join(f"{k} {fmt3s(100 * s)}%" for k, s in share.items()), unit="share")
+    if not ho.is_file():
+        notes.append(f"{GFB_DIR.name}/{ho.name} not found: the firm-type run predates the g holdout.")
+        return
+    h = pd.read_csv(ho)
+    v = {fb: {k: {"bias_bp": float(r["bias_bp"]), "mae_bp": float(r["mae_bp"])}
+              for k, r in g.set_index("kind").iterrows()} for fb, g in h.groupby("fallback")}
+    add("phi.entry.gfb.holdout", "D",
+        "Holdout of the g fallbacks: bias and mean absolute error against the own g, bp a quarter", v,
+        "On the event-quarters that have their own g, the value each fallback (the national median; "
+        "the firm-type median) would have put there minus the own g, in basis points of gross "
+        "return a quarter: mean (bias_bp) and mean absolute value (mae_bp), by firm type",
+        f"DIAG_PHI_SEPARATION/{GFB_DIR.name}/{ho.name}", "ok",
+        display="; ".join(f"{fb} {k}: {fmt3s(x['bias_bp'])} / {fmt3s(x['mae_bp'])}"
+                          for fb, d in v.items() for k, x in d.items()),
+        detail={fb: {k: int(n) for k, n in zip(g["kind"], g["n"])} for fb, g in h.groupby("fallback")})
+
+
 # ── output ───────────────────────────────────────────────────────────────────
 def _tag_txt(tag) -> str:
     return "(untagged)" if tag == "" else "(none)" if tag is None else tag
@@ -3127,11 +3226,12 @@ FAMILIES = {
               "collect_dep_anova", "collect_pix_exposure", "collect_branch_estban", "collect_type5_rules",
               "collect_state_selection", "collect_dshare_decomp", "collect_fee_ratio"),
     "cluster": ("collect_demand", "collect_table_rows", "collect_table4_sidecar", "phi_base_check",
-                "collect_entry", "collect_entry_counts", "collect_state_levels",
+                "collect_entry", "collect_entry_counts", "collect_entry_gfb", "collect_state_levels",
                 "collect_first_stage_strength", "collect_xi_diagnostics", "collect_phi_variance",
                 "collect_active_truncation", "collect_entry_carry",
                 "collect_type5_robustness", "collect_cluster_imbalance", "collect_tr5"),
     "bbl": ("collect_bbl", "collect_polfunc", "collect_phi_path", "collect_design"),
+    "local": ("collect_fees",),   # side files outside the panel; never pending
 }
 for _fam, _names in FAMILIES.items():
     for _name in _names:
@@ -3187,6 +3287,7 @@ def main():
     phi_base_check(notes)
     collect_entry(notes)
     collect_entry_counts(notes)
+    collect_entry_gfb(notes)
     collect_state_selection(notes)
     collect_state_levels(notes)
     collect_design(notes)
@@ -3194,6 +3295,7 @@ def main():
     collect_polfunc(notes)
     collect_first_stage_strength(notes)
     collect_tr5(notes)
+    collect_fees(notes)
     add("cf.franchise", "E", "Franchise value of deposit funding (R$ x, R$ y, p, q)", None,
         "Removed from the paper by the user on 2026-09-29.", "--", "dropped", display="dropped")
     for t in _TABLES.values():

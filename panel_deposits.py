@@ -16,8 +16,9 @@
 #   TIER 2 – IF Data (BCB prudential conglomerate reports):
 #            Source: BCB/IF Data/Aggregated Data/IF_DATA_type_1_report_3.csv
 #            Granularity: conglomerate × quarter (national total only).
-#            Only institutions NOT represented in ESTBAN are included here; for them
-#            CODMUN_IBGE is set to 0 (a code that matches no real municipality).
+#            Only institutions with no ESTBAN row in 2016-2024 are included here, and only in
+#            quarters where they have no ESTBAN row; for them CODMUN_IBGE is set to 0 (a code
+#            that matches no real municipality).
 #            Deposit columns: dep_a1 (NumeroConta 78282), dep_a2 (78283), dep_a3 (78284),
 #                             dep_a4 (78286), dep_outros (78285), dep_a5 (110560).
 #
@@ -32,6 +33,10 @@
 #     Secondary key: numeric CodInst values (where CodInst == institution's own CNPJ).
 #   • Quarter = last month of the quarter as reported in ESTBAN (March=Q1, June=Q2,
 #     September=Q3, December=Q4).  These are stock (balance-sheet) quantities.
+#   • A quarter-end cell whose branch did not file (AGEN_PROCESSADAS = 0, balances blank) is not
+#     zero: a gap takes the same cell's nearest filed month of the quarter, a closure (the cell
+#     never files again) is an exit, and a cell with no filed month in the quarter stays missing.
+#     Every such cell is listed in PANEL_INTERMED/estban_unfiled_cells.csv (utils/estban.py).
 ###-------------------------------------------------------------------------------------------
 
 
@@ -57,7 +62,8 @@ import numpy as np
 from utils import paths
 from utils.conglomerates import (normalize_str, coerce_cnpj, build_conglomerate_canonical_map,
                                  build_cnpj_conglomerate_map)
-from utils.estban import process_raw_estban_csv
+from utils.estban import UNFILED_CELLS_CSV, fill_unfiled_quarter_ends, process_raw_estban_csv
+from utils import firm_remaps
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
@@ -92,6 +98,9 @@ ACCT_A5_NEW     = 140226  # Conta de Pagamento PrePaga
 # Quarter-end months: use these ESTBAN months to represent each quarter
 QUARTER_END_MONTHS = {3: 1, 6: 2, 9: 3, 12: 4}   # month → quarter number
 
+# The analysis window on which a firm's tier (ESTBAN or IF Data national) is decided (main, step 3).
+TIER_WINDOW = (2016, 2024)
+
 # Sentinel municipality code for institutions with no geographic breakdown
 NO_MUN_CODE = 0
 
@@ -110,33 +119,40 @@ PANEL_END_QUARTER = 4
 
 ESTBAN_DEPOSIT_COLS = ["V400_401", "V420", "V431", "V432"]   # a1, a2, a3, a4
 ESTBAN_KEEP_COLS    = ["CNPJ", "NOME_INSTITUICAO", "CODMUN_IBGE", "YEAR", "MONTH"] + ESTBAN_DEPOSIT_COLS
+# Every month is read, not only the quarter-ends: an unfiled quarter-end cell takes the balances of
+# the same cell's nearest filed month in the quarter (utils.estban.fill_unfiled_quarter_ends), and the
+# months after it decide whether the branch closed. CODMUN (the BCB municipality code) is the cell key,
+# because ESTBAN.csv leaves CODMUN_IBGE blank on an unfiled cell.
+ESTBAN_MONTHLY_COLS = ESTBAN_KEEP_COLS + ["CODMUN", "AGEN_ESPERADAS", "AGEN_PROCESSADAS"]
 
-def load_estban_processed() -> pd.DataFrame:
-    """Load the pre-processed ESTBAN.csv (2016–present; built by scrape_estban_concat.py)."""
-    logging.info("Loading ESTBAN.csv …")
-    df = pd.read_csv(ESTBAN_PROC_CSV, encoding="latin1", low_memory=False)
 
-    # Keep only quarter-end months
-    df = df[df["MONTH"].isin(QUARTER_END_MONTHS)].copy()
-
-    # Ensure deposit columns exist
-    for col in ESTBAN_DEPOSIT_COLS:
+def _standardise_monthly(df: pd.DataFrame) -> pd.DataFrame:
+    """ESTBAN_MONTHLY_COLS with their types: CNPJ, CODMUN and CODMUN_IBGE Int64, balances numeric."""
+    for col in ESTBAN_MONTHLY_COLS:
         if col not in df.columns:
             df[col] = np.nan
-
-    # Standardise types
+    df = df[ESTBAN_MONTHLY_COLS].copy()
     df["CNPJ"] = coerce_cnpj(df["CNPJ"])
-    df["CODMUN_IBGE"] = pd.to_numeric(df.get("CODMUN_IBGE"), errors="coerce").astype("Int64")
-    for col in ESTBAN_DEPOSIT_COLS:
+    for col in ("CODMUN", "CODMUN_IBGE"):
+        df[col] = pd.to_numeric(df[col], errors="coerce").astype("Int64")
+    for col in ESTBAN_DEPOSIT_COLS + ["AGEN_ESPERADAS", "AGEN_PROCESSADAS"]:
         df[col] = pd.to_numeric(df[col], errors="coerce")
+    return df
 
-    available = [c for c in ESTBAN_KEEP_COLS if c in df.columns]
-    return df[available].copy()
+
+def load_estban_processed() -> pd.DataFrame:
+    """Every month of the pre-processed ESTBAN.csv (2016–present; built by scrape_estban_concat.py),
+    in ESTBAN_MONTHLY_COLS."""
+    logging.info("Loading ESTBAN.csv …")
+    head = pd.read_csv(ESTBAN_PROC_CSV, encoding="latin1", nrows=0).columns
+    df = pd.read_csv(ESTBAN_PROC_CSV, encoding="latin1", low_memory=False,
+                     usecols=[c for c in ESTBAN_MONTHLY_COLS if c in head])
+    return _standardise_monthly(df)
 
 def load_estban_raw_pre2016() -> pd.DataFrame:
     """
     Process raw ESTBAN CSVs for any year < 2016 found in the raw folder.
-    Returns a DataFrame with the same columns as load_estban_processed().
+    Returns every month, with the same columns as load_estban_processed().
     """
     pattern_upper = os.path.join(ESTBAN_RAW_MUN, "*.CSV")
     pattern_lower = os.path.join(ESTBAN_RAW_MUN, "*.csv")
@@ -155,7 +171,7 @@ def load_estban_raw_pre2016() -> pd.DataFrame:
 
     if not pre2016_files:
         logging.info("No pre-2016 raw ESTBAN files found. Skipping raw processing.")
-        return pd.DataFrame(columns=ESTBAN_KEEP_COLS)
+        return pd.DataFrame(columns=ESTBAN_MONTHLY_COLS)
 
     logging.info(f"Processing {len(pre2016_files)} raw pre-2016 ESTBAN files …")
     frames = []
@@ -163,28 +179,13 @@ def load_estban_raw_pre2016() -> pd.DataFrame:
         df = process_raw_estban_csv(fp)
         if df is None or df.empty:
             continue
-        # Keep only quarter-end months
-        df = df[df["MONTH"].isin(QUARTER_END_MONTHS)].copy()
-        if df.empty:
-            continue
-        # Ensure required columns
-        for col in ESTBAN_DEPOSIT_COLS:
-            if col not in df.columns:
-                df[col] = np.nan
-        if "CODMUN_IBGE" not in df.columns:
-            df["CODMUN_IBGE"] = pd.NA
-        if "NOME_INSTITUICAO" not in df.columns:
-            df["NOME_INSTITUICAO"] = pd.NA
-        available = [c for c in ESTBAN_KEEP_COLS if c in df.columns]
-        frames.append(df[available].copy())
+        frames.append(_standardise_monthly(df))
 
     if not frames:
-        return pd.DataFrame(columns=ESTBAN_KEEP_COLS)
+        return pd.DataFrame(columns=ESTBAN_MONTHLY_COLS)
 
     raw_df = pd.concat(frames, ignore_index=True)
-    raw_df["CNPJ"] = coerce_cnpj(raw_df["CNPJ"])
-    raw_df["CODMUN_IBGE"] = pd.to_numeric(raw_df["CODMUN_IBGE"], errors="coerce").astype("Int64")
-    logging.info(f"Raw pre-2016 ESTBAN: {len(raw_df)} total rows after quarter filter")
+    logging.info(f"Raw pre-2016 ESTBAN: {len(raw_df)} rows, every month")
     return raw_df
 
 def build_estban_panel(cnpj_map: dict) -> pd.DataFrame:
@@ -200,11 +201,29 @@ def build_estban_panel(cnpj_map: dict) -> pd.DataFrame:
     # --- Load data ---
     proc = load_estban_processed()
     raw  = load_estban_raw_pre2016()
-    estban = pd.concat([proc, raw], ignore_index=True)
+    monthly = pd.concat([proc, raw], ignore_index=True)
 
-    if estban.empty:
+    if monthly.empty:
         logging.error("No ESTBAN data loaded. Check paths.")
         return pd.DataFrame()
+
+    # --- Cells that did not file: fill the gaps, drop the closures (utils.estban) ---
+    monthly, cells = fill_unfiled_quarter_ends(monthly, ESTBAN_DEPOSIT_COLS, QUARTER_END_MONTHS)
+    os.makedirs(os.path.dirname(UNFILED_CELLS_CSV), exist_ok=True)
+    cells.to_csv(UNFILED_CELLS_CSV, index=False)
+    kinds = cells["kind"].value_counts().to_dict()
+    logging.info(f"Unfiled quarter-end cells: {len(cells)} {kinds} -> {UNFILED_CELLS_CSV}")
+    gap = cells[cells["kind"] == "gap"]
+    if not gap.empty:
+        by_bank = (gap.assign(bn=gap[ESTBAN_DEPOSIT_COLS].fillna(0).sum(axis=1) / 1e9)
+                      .groupby(["YEAR", "MONTH", "CNPJ", "NOME_INSTITUICAO"], dropna=False)
+                      .agg(cells=("CODMUN", "size"), whole_bank=("whole_bank", "all"), bn=("bn", "sum")))
+        for (y, m, cnpj, name), r in by_bank[by_bank["bn"] >= 0.05].iterrows():
+            logging.info(f"  filled {y}-{m:02d} {cnpj} {str(name).strip()}: {r['cells']} cell(s), "
+                         f"R$ {r['bn']:.2f} bn{' (whole bank)' if r['whole_bank'] else ''}")
+
+    # Keep only quarter-end months
+    estban = monthly[monthly["MONTH"].isin(QUARTER_END_MONTHS)][ESTBAN_KEEP_COLS].copy()
 
     logging.info(f"ESTBAN combined: {len(estban)} rows ({estban['YEAR'].min()}–{estban['YEAR'].max()})")
 
@@ -471,9 +490,16 @@ def main():
     # Step 2: Build ESTBAN panel
     estban_panel = build_estban_panel(cnpj_map)
 
-    # Step 3: Identify conglomerates in the ESTBAN panel
+    # Step 3: Identify conglomerates in the ESTBAN panel. The tier is decided per firm on the analysis
+    # window: a firm with ESTBAN rows in 2016-2024 is ESTBAN tier; one whose ESTBAN rows all fall
+    # outside the window (Rodobens, Randon, Andbank before 2016; Travelex from 2025) keeps its IF Data
+    # national rows in every quarter where it has no ESTBAN row, instead of vanishing from the window.
     estban_conglomerates = set(estban_panel["CodConglomeradoPrudencial"].dropna().unique())
-    logging.info(f"ESTBAN panel covers {len(estban_conglomerates)} distinct conglomerates")
+    estban_window = set(estban_panel.loc[estban_panel["Year"].between(*TIER_WINDOW),
+                                         "CodConglomeradoPrudencial"].dropna().unique())
+    estban_cq = set(zip(estban_panel["CodConglomeradoPrudencial"], estban_panel["Year"], estban_panel["Quarter"]))
+    logging.info(f"ESTBAN panel covers {len(estban_conglomerates)} distinct conglomerates, "
+                 f"{len(estban_window)} with ESTBAN rows in {TIER_WINDOW[0]}-{TIER_WINDOW[1]}")
 
     # Step 4: Build IF Data full panel
     ifdata_full = build_ifdata_panel()
@@ -487,6 +513,14 @@ def main():
     if_a5 = ifdata_full[["CodConglomeradoPrudencial", "Year", "Quarter", "dep_a5"]].copy()
     if_a5.rename(columns={"dep_a5": "national_a5"}, inplace=True)
     if_a5 = if_a5.dropna(subset=["national_a5"])
+    # PicPay is one firm, C0088022 (utils/firm_remaps.py): Banco Original's conglomerate prepaid
+    # balance of 2019Q4-2024Q3 is PicPay's wallet and is spread over PicPay's own cells.
+    _pp = (if_a5["CodConglomeradoPrudencial"] == firm_remaps.PICPAY_FROM) & \
+        firm_remaps.picpay_window(if_a5["Year"], if_a5["Quarter"])
+    logging.info(f"PicPay re-map: {int(_pp.sum())} quarters of {firm_remaps.PICPAY_FROM} prepaid "
+                 f"(R$ {if_a5.loc[_pp, 'national_a5'].sum() / 1e9:.2f} bn-quarters) -> {firm_remaps.PICPAY_TO}")
+    if_a5.loc[_pp, "CodConglomeradoPrudencial"] = firm_remaps.PICPAY_TO
+    if_a5 = if_a5.groupby(["CodConglomeradoPrudencial", "Year", "Quarter"], as_index=False)["national_a5"].sum()
     
     # 2. Merge into ESTBAN.  ifdata_full holds one row per conglomerate-quarter, so
     #    this left join cannot multiply ESTBAN rows; assert it rather than assume it,
@@ -510,23 +544,41 @@ def main():
     )
     
     # 4. Calculate local weights and distribute a5
-    # If a1 total > 0, weight = a1 / total_a1
-    # If a1 total == 0 but we have a5, distribute uniformly (though unlikely for banks)
+    # Weight = the municipality's share of the conglomerate-quarter's demand deposits (a1). A
+    # conglomerate with no ESTBAN demand deposits that quarter is weighted by its total ESTBAN
+    # deposits (a1 + a2 + a4) instead, and one with no ESTBAN deposits at all equally over its ESTBAN
+    # rows: weighting by a1 alone gave every municipality zero, and the whole prepaid balance dropped
+    # out (PagBank, R$1-2.3 bn a quarter in 2020-2024; PicPay's wallet in 2020Q3-2022Q2, when PicPay
+    # Bank's one ESTBAN row held no deposits).
+    _tot = estban_panel[["dep_a1", "dep_a2", "dep_a4"]].fillna(0).sum(axis=1)
+    estban_panel["_tot"] = _tot
+    _grp = estban_panel.groupby(["CodConglomeradoPrudencial", "Year", "Quarter"])
+    national_tot = _grp["_tot"].transform("sum")
+    n_rows = _grp["_tot"].transform("size")
     estban_panel["a1_weight"] = np.where(
         estban_panel["national_estban_a1"] > 0,
         estban_panel["dep_a1"] / estban_panel["national_estban_a1"],
-        0  # Or equal weight: 1.0 / num_municipalities_for_that_bank... keep 0 for simplicity/safety
+        np.where(national_tot > 0, estban_panel["_tot"] / national_tot, 1.0 / n_rows)
     )
-    
+    for _lab, _m in (("total ESTBAN deposits (no demand deposits)",
+                      (estban_panel["national_estban_a1"] <= 0) & (national_tot > 0)),
+                     ("equal weights over the ESTBAN rows (no ESTBAN deposits)", national_tot <= 0)):
+        _m = _m & (estban_panel["national_a5"] > 0)
+        if _m.any():
+            _cq = estban_panel.loc[_m].drop_duplicates(["CodConglomeradoPrudencial", "Year", "Quarter"])
+            logging.info(f"a5 spread by {_lab}: {len(_cq)} conglomerate-quarters, "
+                         f"R$ {_cq['national_a5'].sum() / 1e9:.2f} bn; conglomerates "
+                         f"{sorted(_cq['CodConglomeradoPrudencial'].astype(str).unique())}")
+
     # Apply weight. Only override dep_a5 if we actually have national_a5 to allocate.
     estban_panel["dep_a5"] = np.where(
         estban_panel["national_a5"].notna(),
         estban_panel["national_a5"] * estban_panel["a1_weight"],
         np.nan
     )
-    
+
     # Clean up working columns
-    estban_panel.drop(columns=["national_a5", "national_estban_a1", "a1_weight"], inplace=True)
+    estban_panel.drop(columns=["national_a5", "national_estban_a1", "a1_weight", "_tot"], inplace=True)
 
     # Step 4c: Filter IF Data panel to strictly Non-ESTBAN conglomerates (Tier-2)
     #
@@ -550,7 +602,7 @@ def main():
     # exit events in the two markets involved.
     _collapsed_codes = {c for c, keep in canonical_code.items() if c != keep}
     for _keep in sorted({canonical_code[c] for c in _collapsed_codes}):
-        if _keep not in estban_conglomerates:
+        if _keep not in estban_window:
             continue
         _n_est = int((estban_panel["CodConglomeradoPrudencial"] == _keep).sum())
         _n_ifd = int((ifdata_full["CodConglomeradoPrudencial"] == _keep).sum())
@@ -563,13 +615,23 @@ def main():
             f"its ESTBAN booking municipality, not its service network."
         )
 
-    ifdata_panel = ifdata_full[~ifdata_full["CodConglomeradoPrudencial"].isin(estban_conglomerates)].copy()
+    _in_estban_q = pd.Series([cq in estban_cq for cq in zip(ifdata_full["CodConglomeradoPrudencial"],
+                                                             ifdata_full["Year"], ifdata_full["Quarter"])],
+                             index=ifdata_full.index)
+    ifdata_panel = ifdata_full[~(ifdata_full["CodConglomeradoPrudencial"].isin(estban_window) | _in_estban_q)].copy()
+    _kept = ifdata_panel[ifdata_panel["CodConglomeradoPrudencial"].isin(estban_conglomerates)]
+    if not _kept.empty:
+        logging.info(f"Tier per firm on {TIER_WINDOW[0]}-{TIER_WINDOW[1]}: {len(_kept)} IF Data national rows kept "
+                     f"for {_kept['CodConglomeradoPrudencial'].nunique()} firms whose ESTBAN rows lie outside "
+                     f"the window: {sorted(_kept['CodConglomeradoPrudencial'].astype(str).unique())}")
 
-    # Every firm must now sit in exactly one tier and hold exactly one code.
-    _both = (set(estban_panel["CodConglomeradoPrudencial"].dropna())
-             & set(ifdata_panel["CodConglomeradoPrudencial"].dropna()))
-    if _both:
-        raise ValueError(f"{len(_both)} conglomerates survive in both tiers: {sorted(_both)[:10]}")
+    # Every firm-quarter must now sit in exactly one tier, and every firm with ESTBAN rows in the
+    # window in the ESTBAN tier only.
+    _both_q = set(zip(ifdata_panel["CodConglomeradoPrudencial"], ifdata_panel["Year"], ifdata_panel["Quarter"])) & estban_cq
+    _both = set(ifdata_panel["CodConglomeradoPrudencial"].dropna()) & estban_window
+    if _both_q or _both:
+        raise ValueError(f"{len(_both_q)} conglomerate-quarters survive in both tiers "
+                         f"({sorted(_both_q)[:5]}); {len(_both)} window ESTBAN firms keep IF rows ({sorted(_both)[:10]})")
     _codes_per_lider = (pd.concat([estban_panel, ifdata_panel])
                           .dropna(subset=["CNPJ_Lider"])
                           .groupby("CNPJ_Lider")["CodConglomeradoPrudencial"].nunique())

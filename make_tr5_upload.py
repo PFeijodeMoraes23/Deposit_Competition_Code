@@ -4,7 +4,8 @@ make_tr5_upload.py
 The cluster upload for TR5 (tr5_variants.sh): one zip that unzips from the project root into
     upload_tr5/scripts/   the TR5 code the sandboxes overlay on their copy of scripts/
                           (utils/deposit_types.py, the sleepiness sample builder, the three demand
-                          preps, pipeline_all.sh with --sleep-args)
+                          preps, pipeline_all.sh with --sleep-args and --no-download, and the RC
+                          engine with ext1's extra starts and config/blp_ext1_extra_starts.csv)
     scripts/tr5_variants.sh   the launcher (a new file in the production scripts/; the production
                           tree's other files are untouched)
 and a sha256 list of every member for `sha256sum -c` from the project root. Scripts are written
@@ -28,7 +29,8 @@ from utils import paths as _paths
 
 HERE = Path(__file__).resolve().parent
 OVERLAY = ["utils/deposit_types.py", "sleep_est_e2.py", "sleep_demand_prep_e1.py",
-           "sleep_demand_prep_e2.py", "sleep_demand_prep_link.py", "pipeline_all.sh"]
+           "sleep_demand_prep_e2.py", "sleep_demand_prep_link.py", "pipeline_all.sh",
+           "blp_engine_cpu.jl", "config/blp_ext1_extra_starts.csv"]
 LAUNCHER = "tr5_variants.sh"
 
 
@@ -43,7 +45,7 @@ def members():
 
 def data_of(p: Path) -> bytes:
     b = p.read_bytes()
-    return b.replace(b"\r\n", b"\n") if p.suffix in (".py", ".sh") else b
+    return b.replace(b"\r\n", b"\n") if p.suffix in (".py", ".sh", ".jl", ".csv") else b
 
 
 def main():

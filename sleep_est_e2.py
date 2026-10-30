@@ -55,6 +55,7 @@ warnings.filterwarnings("ignore", message="covariance of constraints does not ha
 from utils import paths as _paths_mod
 from utils import state_transform as _st
 from utils import deposit_types  # TR5 deposit-type variant (default: every type kept)
+from utils import calendar_lags  # lags by calendar quarter (a missing quarter gives no lag)
 DATA_DIR = _paths_mod.PROCESSED
 # market_panel.csv, NOT the fees variant — see utils/paths.market_panel_csv (USE_FEE_PANEL=1).
 PANEL_CSV = _paths_mod.market_panel_csv()
@@ -138,11 +139,12 @@ def add_time_variables(df):
     """Add the two time-series state variables in place and return df.
     time_trend     : continuous years since the first sample quarter.
     gdp_growth_yoy : within-entity year-over-year growth of gdp_per_capita
-                     (scale-invariant ratio; first 4 obs/entity and inf -> 0)."""
+                     (scale-invariant ratio over the same entity four quarters earlier, a
+                     calendar lag; no row four quarters back, or inf -> 0)."""
     df.sort_values(by=['entity_id', 'year', 'quarter'], inplace=True)
     df['time_trend'] = (df['year'] - int(df['year'].min())) + (df['quarter'] - 1) / 4.0
     gpc = df['gdp_per_capita']
-    growth = df.groupby('entity_id')['gdp_per_capita'].transform(lambda s: s / s.shift(4) - 1.0)
+    growth = df['gdp_per_capita'] / calendar_lags.lag(df, 'gdp_per_capita', 4) - 1.0
     growth = growth.replace([np.inf, -np.inf], np.nan).fillna(0.0)
     df['gdp_growth_yoy'] = growth.where(gpc.notna(), 0.0)
     return df
@@ -241,9 +243,9 @@ def build_pooled_data(time_block=False, center=True):
     df['time_id'] = df['year'].astype(str) + "Q" + df['quarter'].astype(str)
 
     df.sort_values(by=['entity_id', 'year', 'quarter'], inplace=True)
-    df['spread_qoq_lag'] = df.groupby('entity_id')['spread_qoq'].shift(1)
-    df['risk_free_qoq_lag'] = df.groupby('entity_id')['risk_free_qoq'].shift(1)
-    df['lagged_deposits'] = df.groupby('entity_id')['deposit_balance'].shift(1)
+    df['spread_qoq_lag'] = calendar_lags.lag(df, 'spread_qoq')
+    df['risk_free_qoq_lag'] = calendar_lags.lag(df, 'risk_free_qoq')
+    df['lagged_deposits'] = calendar_lags.lag(df, 'deposit_balance')
     df['nr_lagged_dep'] = (1 + df['risk_free_qoq_lag'] - df['spread_qoq_lag']) * df['lagged_deposits']
 
     if 'rival_mean_spread' not in df.columns:
@@ -302,7 +304,7 @@ def build_pooled_data(time_block=False, center=True):
     # GRAND-MEAN CENTERING -- must be the LAST thing that touches the state block.
     #   * after the :207 dropna, or S_bar is not the estimation-sample mean;
     #   * after both imputations above, or the persisted mean is an unfilled-sample mean;
-    #   * after add_time_variables, because gdp_growth_yoy = gpc/gpc.shift(4) - 1 is
+    #   * after add_time_variables, because gdp_growth_yoy = gpc / gpc four quarters back - 1 is
     #     scale-invariant but NOT shift-invariant -- centering gdp_per_capita first puts
     #     near-zero values in that denominator and corrupts the whole time block.
     # Pure reparametrisation: slopes/AMEs/phi unchanged, theta_0 -> theta_0 + sum_k theta_k S_bar_k,

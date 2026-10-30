@@ -18,8 +18,11 @@ DATA_RAW = paths.OPEN_FINANCE / "DATA_RAW"
 BCB_CCS_RELATIONSHIPS = DATA_RAW / "BCB" / "ccs_relationships" / "current"   # scrape_bcb_ccs_relationships.py
 BCB_ESTBAN_AGENCIA = DATA_RAW / "BCB" / "estban_agencia"                       # scrape_estban_branches.py
 BCB_PIX_MUNICIPAL_RAW = DATA_RAW / "BCB" / "pix_municipal" / "raw"             # pix_mun_YYYYMM.csv
+BCB_PIX_PARTICIPANTS = DATA_RAW / "BCB" / "pix_participants"                   # Pix by participant (ISPB)
+BCB_PIX_KEYS = BCB_PIX_PARTICIPANTS / "chaves"                                 # scrape_pix_keys.py
 BCB_SELIC_SGS = DATA_RAW / "BCB" / "selic_sgs"                                 # scrape_national_series.py (SGS)
 BCB_TARIFAS_MONTHLY = DATA_RAW / "BCB" / "tarifas_monthly"                     # fees/scrape_bcb_tarifas_monthly.py
+BCB_TARIFAS_LAI = DATA_RAW / "BCB" / "tarifas_lai_18810_025439" / "raw"        # LAI delivery 2026-10-27 (same files)
 BCB_TARIFAS_WAYBACK = DATA_RAW / "BCB" / "tarifas_wayback"                     # old tariff pages: CDX list, sample
 
 # Ipeadata
@@ -33,3 +36,4 @@ CONSUMIDOR_GOV = DATA_RAW / "consumidor_gov"                                   #
 
 # IBGE
 IBGE_LOCALIDADES = DATA_RAW / "IBGE" / "localidades"                           # municipality and district lists
+IBGE_POF_2017_18 = DATA_RAW / "IBGE" / "pof" / "pof2017_18"                    # POF microdata + tables; fees/build_pof_bank_fees.py

@@ -15,6 +15,7 @@ from pathlib import Path
 
 
 from utils import paths
+from utils import firm_remaps
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
 
@@ -433,6 +434,22 @@ def build_panel() -> pd.DataFrame:
             .fillna(panel.get('has_ip', 0))
             .astype(int)
         )
+
+    # PicPay is one firm, C0088022 (utils/firm_remaps.py). Through 2024Q3 its balance sheet was
+    # consolidated in Banco Original's conglomerate, so C0088022 takes that filing for every quarter
+    # of the window in which it has none of its own; Original keeps it too. Appended before the lags,
+    # and the stable sort keeps every other conglomerate's row order, so its lags are unchanged.
+    _have = set(zip(panel.loc[panel['CodConglomeradoPrudencial'] == firm_remaps.PICPAY_TO, 'Year'],
+                    panel.loc[panel['CodConglomeradoPrudencial'] == firm_remaps.PICPAY_TO, 'Quarter']))
+    _src = panel[(panel['CodConglomeradoPrudencial'] == firm_remaps.PICPAY_FROM)
+                 & firm_remaps.picpay_window(panel['Year'], panel['Quarter'], first=firm_remaps.PICPAY_BANK_FIRST)]
+    _src = _src[[(y, q) not in _have for y, q in zip(_src['Year'], _src['Quarter'])]].copy()
+    if not _src.empty:
+        _src['CodConglomeradoPrudencial'] = firm_remaps.PICPAY_TO
+        panel = pd.concat([panel, _src], ignore_index=True)
+        panel = panel.sort_values(['CodConglomeradoPrudencial', 'Year', 'Quarter'], kind='stable').reset_index(drop=True)
+        logging.info(f"PicPay re-map: {len(_src)} quarters of {firm_remaps.PICPAY_FROM}'s filing copied to "
+                     f"{firm_remaps.PICPAY_TO}")
 
     # FINALLY, Lag all variables to be used cleanly in regressions
     lag_cols = ['total_assets', 'equity', 'equity_ratio', 'log_total_assets',

@@ -55,6 +55,7 @@ from utils import load_panel_cached
 from utils import state_transform as _st
 from utils import demand_chars   # corrected characteristics, segments and balances (always applied)
 from utils import deposit_types  # TR5 deposit-type variant (default: every type kept)
+from utils import calendar_lags  # lags by calendar quarter (a missing quarter gives no lag)
 from sleep_demand_prep_link import build_market_size_and_shares, MAX_YEAR, MIN_YEAR
 # market_panel.csv, NOT the fees variant — see utils/paths.market_panel_csv (USE_FEE_PANEL=1).
 # The frame is read through load_panel_cached, which serves the .parquet twin of this path
@@ -206,9 +207,9 @@ def build_base_panel(panel_csv: Path) -> pd.DataFrame:
     df['time_id'] = df['year'].astype(str) + "Q" + df['quarter'].astype(str)
     df.sort_values(by=['entity_id', 'year', 'quarter'], inplace=True)
 
-    df['spread_qoq_lag'] = df.groupby('entity_id')['spread_qoq'].shift(1)
-    df['risk_free_qoq_lag'] = df.groupby('entity_id')['risk_free_qoq'].shift(1)
-    df['lagged_deposits'] = df.groupby('entity_id')['deposit_balance'].shift(1)
+    df['spread_qoq_lag'] = calendar_lags.lag(df, 'spread_qoq')
+    df['risk_free_qoq_lag'] = calendar_lags.lag(df, 'risk_free_qoq')
+    df['lagged_deposits'] = calendar_lags.lag(df, 'deposit_balance')
 
     df['deposit_rate_lag'] = df['risk_free_qoq_lag'] - df['spread_qoq_lag']
     df['gross_return_lag'] = 1 + df['deposit_rate_lag']

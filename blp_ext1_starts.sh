@@ -1,9 +1,9 @@
 #!/bin/bash
 # ==============================================================================
 # blp_ext1_starts.sh — re-fit the ext1 rung of E3/E4 from several explicit starting points, each
-# in its own sandbox, and compare the solutions. The 10-16 run's ext1 sits at rc4's solution
-# (alpha about 0, Q 0.0873 / 0.0936); the 10-05 run's ext1 reached alpha about -0.43 from
-# another start. This tests whether a lower-Q ext1 solution exists for the current data.
+# in its own sandbox, and compare the solutions. The pipeline's own two ext1 starts (cold, and
+# rc4's solution with the added pi at zero) can stop at rc4's solution, a local optimum; this
+# tests whether a lower-Q ext1 solution exists for the current data.
 #
 # Run from scripts/ on the login node:
 #   bash blp_ext1_starts.sh --build-only   build and check the sandboxes, submit nothing
@@ -11,8 +11,9 @@
 #   bash blp_ext1_starts.sh                both steps at once
 #   bash blp_ext1_starts.sh --report    the solutions side by side, and the production check
 #
-# Starting points: blp_ext1_starts_20261018.csv (routine, start, the five ext1 theta2 values).
-# Each start gets <proj>/diag_ext1_20261018/E<k>_<start>/ with scripts/ (a copy of its top-level files, config/, utils/;
+# EXT1_TAG (default 20261029) names the run: starting points blp_ext1_starts_<tag>.csv (routine,
+# start, the five ext1 theta2 values) and sandboxes under diag_ext1_<tag>/.
+# Each start gets <proj>/diag_ext1_<tag>/E<k>_<start>/ with scripts/ (a copy of its top-level files, config/, utils/;
 # the sysimages and the Julia depot are linked) and data/ (links to the real input/ and to every
 # output/ step folder except blp/, which is its own, with the draws linked in). The engine writes
 # to ../data relative to its own code, so its results land in the sandbox. The production ext1
@@ -24,8 +25,9 @@ PROJ="$(cd "${HERE}/.." && pwd)"
 REAL="${PROJ}/data"
 # EXT1_DIAG_ROOT: where the sandboxes live (default: the project folder). Any file system works: a
 # sandbox only links to the real data, so a faster one (scratch) can hold them.
-DIAG="${EXT1_DIAG_ROOT:-${PROJ}}/diag_ext1_20261018"
-STARTS="${HERE}/blp_ext1_starts_20261018.csv"
+TAG="${EXT1_TAG:-20261029}"
+DIAG="${EXT1_DIAG_ROOT:-${PROJ}}/diag_ext1_${TAG}"
+STARTS="${HERE}/blp_ext1_starts_${TAG}.csv"
 HASHES="${DIAG}/production_ext1.sha256"
 
 if [[ "${1:-}" == "--report" ]]; then

@@ -36,6 +36,7 @@ the entrant had no deposits in the market before (--no-window-only uses every pa
 
 Outputs ->DIAG_PHI_SEPARATION/d6_entry_{events,paths,model_curves}.csv,
            d6_implied_phi.csv, d6_drop_robustness.{csv,json}, d6_routine_{curves,panel}*.csv,
+           d6_g_holdout.csv (the g fallbacks against the own g where it is observed),
            d6_meta.json, d6_entry_dynamics.png/.pdf, and fig_entry_dynamics.png/.pdf in Drafts.
 
 d6_drop_robustness.{csv,json}: does event_paths()'s |den|<1e-6 guard, which drops two D-firm
@@ -230,6 +231,10 @@ def build_g_paths(reg, H, mode, scalar_g, fallback="national"):
     2015Q4 cohort's first quarters) take the event's nearest observed value, carried flat.
     That is a horizon-edge convention, not an estimate: those h feed the plateau or the
     pinned h=0 rather than the fitted horizons.
+
+    diagnostics.attrs["holdout"]: per kind and fallback (national; firmtype under
+    fallback='firmtype'), n, bias_bp and mae_bp of the fallback's value against the own g on
+    the event-quarters that have an own cell.
     """
     kept = reg[reg["keep"]]
     n = len(kept)
@@ -333,6 +338,37 @@ def build_g_paths(reg, H, mode, scalar_g, fallback="national"):
         "g_e_min": Gf.min(axis=1), "g_e_max": Gf.max(axis=1),
         **counts,
     })
+    # Holdout of the fallbacks on the event-quarters that HAVE an own cell: what the national
+    # median (and, under fallback='firmtype', the firm-type median) would have put there, against
+    # the own g, in bp a quarter. The caller writes it to d6_g_holdout.csv.
+    cands = {"national": np.column_stack([nat.reindex(q0 + h).to_numpy(float)
+                                          for h in range(H + 1)])}
+    if fallback == "firmtype":
+        ftv = np.full((n, H + 1), np.nan)
+        for h in range(H + 1):
+            num = np.zeros(n)
+            den = np.zeros(n)
+            for j, t in enumerate(G_TYPES):
+                tv = ftq.reindex(pd.MultiIndex.from_arrays(
+                    [ev_b, np.full(n, t), q0 + h])).to_numpy(float)
+                ok = np.isfinite(tv) & (mix[:, j] > 0)
+                num += np.where(ok, mix[:, j] * tv, 0.0)
+                den += np.where(ok, mix[:, j], 0.0)
+            ftv[:, h] = np.where(den > 0, num / np.where(den > 0, den, 1.0), np.nan)
+        cands["firmtype"] = ftv
+    kinds = kept["kind"].astype(str).to_numpy()
+    holdout = []
+    for kind in sorted(set(kinds)):
+        for name, cv in cands.items():
+            sel = (src == 1) & (kinds == kind)[:, None] & np.isfinite(cv)
+            diff = (cv[sel] - G[sel]) * 1e4
+            holdout.append({"kind": kind, "fallback": name, "n": int(sel.sum()),
+                            "bias_bp": float(diff.mean()) if diff.size else np.nan,
+                            "mae_bp": float(np.abs(diff).mean()) if diff.size else np.nan})
+            print(f"  [g:{mode}] holdout {kind} {name}: n {int(sel.sum())}, bias "
+                  f"{holdout[-1]['bias_bp']:+.1f} bp, MAE {holdout[-1]['mae_bp']:.1f} bp")
+    diag.attrs["holdout"] = holdout
+
     tot = src.size
     ft_txt = (f"firm type {100*(src==4).sum()/tot:.1f}%, " if fallback == "firmtype" else "")
     print(f"  [g:{mode}] {n} events x {H+1} horizons: own {100*(src==1).sum()/tot:.1f}%, "
@@ -1325,6 +1361,9 @@ def main(args):
             all_paths.update(paths)
     reg_all = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
     gdiag = [x for x in (gdiag_b, gdiag_d) if x is not None]
+    holdout = [r for x in gdiag for r in x.attrs.pop("holdout", [])]
+    if holdout:
+        pd.DataFrame(holdout).to_csv(OUT_DIR / "d6_g_holdout.csv", index=False)
     if gdiag:
         gd = pd.concat(gdiag, ignore_index=True)
         reg_all = reg_all.merge(gd, on=["congl", "mkt", "q_entry"], how="left")

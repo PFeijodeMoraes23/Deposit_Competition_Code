@@ -62,6 +62,11 @@
 #   cf_run.sh (phase 2) ........ cf1 + cf1_net + cf4 re-eval, --cost-afterok the solves
 #   pipe_download .............. afterANY the CF jobs and the BBL solves: every set
 #                                into data/output/download, --copy
+#
+#   pipe_download goes out from whichever invocation ENDS the chain. When --no-cf,
+#   --no-bbl or --no-blp stop it before the CF phase, the blp (or sleep/logit)
+#   invocation submits it, afterANY that phase's last jobs, without the sets of the
+#   phases switched off.
 #     |
 #   =====  continuation job (--cfeq only), afterok the CF results  =======
 #   cf_eq_run.sh ....... the firm-sharded Jacobi equilibria
@@ -104,10 +109,15 @@
 #                      --no-entry"); empty by default
 #   --skip-preflight   do not submit gate G0
 #   --resumed          internal: set by the continuation jobs; skips G0
+#   --no-download      submit no pipe_download (for a caller that packs its own results,
+#                      as tr5_variants.sh --pack does)
+#   --download-after   internal: earlier invocations' last job ids, which pipe_download
+#                      also waits on
 #   --dry-run          print every sbatch line, submit nothing
 #   -h                 this header
 #
-# Env: DOWNLOAD_SETS names what pipe_download packages (default: every step).
+# Env: DOWNLOAD_SETS names what pipe_download packages (default: every step), less the
+#      sets of a phase switched off with --no-<phase>.
 #      CL_VERBOSE=1 restores each child orchestrator's full output.
 # ==============================================================================
 set -uo pipefail
@@ -147,6 +157,9 @@ CFEQ_MODES="${CFEQ_MODES:-cf3}"
 BLP_ARGS="${BLP_ARGS:-}"
 SLEEP_ARGS="${SLEEP_ARGS:-}"
 SKIP_EST=""; SKIP_PF=""; RESUMED=0; DRY=""
+# The download's dependencies. DL_PRIOR: earlier invocations' last job ids; DL_HERE: this
+# invocation's.
+DL_PRIOR=""; DL_HERE=""; DO_DOWNLOAD=1
 DO_SLEEP=1; DO_LOGIT=1; DO_BLP=1; DO_BBL=1; DO_CF=1
 # The equilibrium CFs are OFF by default. They are days of GPU array time and nothing
 # in the headline results reads them; --cfeq opts in, and --no-cfeq names the default.
@@ -183,8 +196,10 @@ while [[ $# -gt 0 ]]; do
         --sleep-args)     SLEEP_ARGS="$2"; shift ;;
         --skip-preflight) SKIP_PF="--skip-preflight" ;;
         --resumed)        RESUMED=1 ;;
+        --download-after) DL_PRIOR="$2"; shift ;;
+        --no-download)    DO_DOWNLOAD=0 ;;
         --dry-run)        CL_DRYRUN=1; DRY="--dry-run" ;;
-        -h|--help)        sed -n '2,88p' "${BASH_SOURCE[0]}"; exit 0 ;;
+        -h|--help)        awk 'NR > 1 && /^set -uo pipefail/ { exit } NR > 1' "${BASH_SOURCE[0]}"; exit 0 ;;
         *) echo "unknown option: $1 (see -h)" >&2; exit 2 ;;
     esac
     shift
@@ -259,6 +274,42 @@ done
 ALL_JIDS=""
 add_jid () { [[ -n "$1" ]] && ALL_JIDS="${ALL_JIDS:+${ALL_JIDS}:}$1"; return 0; }
 
+# dl_add <ids>: jobs of this invocation that pipe_download must wait on.
+dl_add () { [[ -n "$1" ]] && DL_HERE="${DL_HERE:+${DL_HERE}:}$1"; return 0; }
+
+# live_jobs <a:b:c>: the ids SLURM still knows. An earlier invocation's job that has
+# finished and been purged cannot be a dependency (sbatch refuses the submission), and
+# having finished it needs no waiting on. A dry run keeps every id.
+live_jobs () {
+    local id out=""
+    for id in ${1//:/ }; do
+        if [[ "${CL_DRYRUN}" == "1" ]] || [[ -n "$(squeue -h -o %i -j "${id}" 2>/dev/null || true)" ]]; then
+            out="${out:+${out}:}${id}"
+        fi
+    done
+    printf '%s\n' "${out}"
+}
+
+# chain_sets: the DOWNLOAD_SETS less those of a phase switched off with --no-<phase>. A
+# switched-off phase's folder holds an earlier run's files, and the ingest would lay them
+# over the local tree as new. A phase that is merely before --from keeps its set: a chain
+# resumed by hand after a failure has not packaged it yet.
+chain_sets () {
+    local s on out=""
+    for s in ${DOWNLOAD_SETS}; do
+        case "${s}" in
+            sleep|sleep_grid|demand_prep) on="${DO_SLEEP}" ;;
+            logit) on="${DO_LOGIT}" ;;
+            blp) on="${DO_BLP}" ;;
+            bbl) on="${DO_BBL}" ;;
+            counterfactuals) on="${DO_CF}" ;;
+            *) on=1 ;;
+        esac
+        [[ "${on}" == "1" ]] && out="${out} ${s}"
+    done
+    printf '%s\n' "${out# }"
+}
+
 # Capture a child WITHOUT letting set -e abort before its output is shown. The
 # child's preflight prints its MISSING diagnostics on stdout, and dying on the
 # $(...) assignment swallows them entirely. Same pattern at every capture site.
@@ -306,6 +357,14 @@ continue_at () {   # continue_at <phase> <dep_ids> -> job id
     # for. The other three are opt-OUT and carry their negation instead.
     [[ "${DO_CFEQ}" == "1" ]] && wrap="${wrap} --cfeq"
     [[ -n "${BLP_ARGS}" ]] && wrap="${wrap} --blp-args '${BLP_ARGS}'"
+    # For whichever invocation ends the chain and submits pipe_download: the phases
+    # switched off (their sets stay home) and the jobs still to wait on.
+    [[ "${DO_SLEEP}" == "1" ]] || wrap="${wrap} --no-sleep"
+    [[ "${DO_LOGIT}" == "1" ]] || wrap="${wrap} --no-logit"
+    [[ "${DO_DOWNLOAD}" == "1" ]] || wrap="${wrap} --no-download"
+    local after
+    after="$(echo "${DL_PRIOR}:${DL_HERE}" | sed 's/^://; s/:$//')"
+    [[ -n "${after}" ]] && wrap="${wrap} --download-after '${after}'"
     # 30 minutes, not 10: the resumed invocation runs the next phase's FULL preflight
     # (and the bbl+cf group runs three of them), each of which loads the Julia module
     # and probes both sysimages. It submits and exits; the wall is slack, not work.
@@ -422,6 +481,7 @@ if want_phase sleep && [[ "${DO_SLEEP}" == "1" ]]; then
     G2_JID="$(child_field SLEEP_G2_JOBID)"
     SLEEP_TERM="$(child_field SLEEP_RESULT_JOBIDS)"
     add_jid "$(child_field SLEEP_ALL_JOBIDS)"
+    dl_add "${G2_JID}"; dl_add "${SLEEP_TERM}"
     if [[ -z "${G2_JID}" ]]; then
         echo "ERROR: sleep_run.sh emitted no SLEEP_G2_JOBID — nothing downstream can be chained." >&2
         exit 1
@@ -469,6 +529,7 @@ if want_phase logit && [[ "${DO_LOGIT}" == "1" ]]; then
         "${CL_ROOT}/sleep_job.sh")
     cl_say "  gate G4 -> ${G4_JID}  (afterok ${lj})"
     add_jid "${G4_JID}"
+    dl_add "${lj}"; dl_add "${G4_JID}"
 fi
 
 # ── Hand-off A -> B. The RC ladders read the demand parquets AND warm-start from
@@ -496,6 +557,7 @@ if want_phase blp && [[ "${DO_BLP}" == "1" ]]; then
     [[ ${CHILD_RC} -eq 0 ]] || die_child "blp_run.sh" "${CHILD_RC}"
     BLP_TERM="$(child_field BLP_TERM_JOBIDS)"
     add_jid "${BLP_TERM}"
+    dl_add "${BLP_TERM}"
     cl_log "  -> RC terminals = ${BLP_TERM:-<none>}"
 fi
 
@@ -527,6 +589,7 @@ if want_phase bbl && [[ "${DO_BBL}" == "1" ]]; then
     [[ ${CHILD_RC} -eq 0 ]] || die_child "bbl_run.sh" "${CHILD_RC}"
     COST_AFTEROK="$(child_field BBL_SOLVE_JOBIDS)"
     add_jid "$(child_field BBL_ALL_JOBIDS)"
+    dl_add "${COST_AFTEROK}"
     cl_log "  -> BBL solve jobs for the CF1-net afterok: ${COST_AFTEROK:-<none>}"
 fi
 
@@ -566,25 +629,31 @@ if want_phase cf && [[ "${DO_CF}" == "1" ]]; then
     [[ ${CHILD_RC} -eq 0 ]] || die_child "cf_run.sh (phase 2)" "${CHILD_RC}"
     capture_cf
     cl_log "  -> CF result jobs = ${CF_JOBIDS:-<none>}"
+    dl_add "${CF_JOBIDS}"
 fi
 
-# ── THE DOWNLOAD: one job, every set, afterANY ──────────────────────────────
-# It belongs to the CF phase, not to the equilibrium phase, because group C is where
-# the run ends by default. Hanging it off --cfeq would mean a default run finished
-# with nothing packaged and the whole point of a complete download lost.
+# ── THE DOWNLOAD: one job, afterANY the chain's last jobs ───────────────────
+# Submitted by whichever invocation ENDS the chain. On a default run that is the CF
+# phase (group C); when --no-cf, --no-bbl or --no-blp stop the chain earlier, it is the
+# blp or the sleep/logit invocation. A live invocation that hands off to a later group
+# has already exited in defer_to, so reaching this line means no later invocation will
+# package. Group D (--cfeq) re-packages its own sets below.
 #
-# afterANY the CF jobs AND the BBL solves: a wall-killed CF still packages, and the
-# bbl set is only complete once the solves have written cost_params. The sha256SUMS
-# the archiver writes prove TRANSPORT, not completeness — which is why the gates and
-# logs sets travel alongside, so the local side can tell a short zip from a short run.
+# afterANY this invocation's last jobs (the CF jobs and the BBL solves on a default run,
+# so a wall-killed CF still packages and the bbl set holds cost_params), and those of
+# earlier invocations that SLURM still holds: the sleepiness leaves (AME, upsilon, the
+# entry step) can outlast the RC ladders. The sha256SUMS the archiver writes prove
+# TRANSPORT, not completeness — which is why the gates and logs sets travel alongside,
+# so the local side can tell a short zip from a short run.
 #
 # Chained with && rather than ;: one failing set then fails the job, visibly, instead
 # of leaving a silently missing family to be discovered after the allocation is gone.
-if want_phase cf && [[ "${DO_CF}" == "1" ]]; then
-    dl_dep="$(echo "${CF_JOBIDS}:${COST_AFTEROK}" | sed 's/^://; s/:$//; s/::/:/g')"
-    if [[ -n "${dl_dep}" ]]; then
+if [[ "${FROM_GROUP}" != "D" && "${DO_DOWNLOAD}" == "1" ]]; then
+    dl_dep="$(echo "${DL_HERE}:$(live_jobs "${DL_PRIOR}")" | sed 's/^://; s/:$//; s/::/:/g')"
+    dl_sets="$(chain_sets)"
+    if [[ -n "${DL_HERE}" && -n "${dl_dep}" && -n "${dl_sets}" ]]; then
         cmd="cd '${CL_ROOT}'"
-        for s in ${DOWNLOAD_SETS}; do
+        for s in ${dl_sets}; do
             cmd="${cmd} && bash cluster_archive.sh --set ${s} --copy --tag \"\${SLURM_JOB_ID}\""
         done
         dj=$(cl_sbatch --dependency=afterany:"${dl_dep}" \
@@ -593,10 +662,10 @@ if want_phase cf && [[ "${DO_CF}" == "1" ]]; then
             -o "${LOGD}/pipe_download_%j.out" -e "${LOGD}/pipe_download_%j.err" \
             --wrap "${cmd}")
         cl_say "  pipe_download -> ${dj}  (afterANY ${dl_dep})"
-        cl_say "     sets: ${DOWNLOAD_SETS}  -> data/output/download"
+        cl_say "     sets: ${dl_sets}  -> data/output/download"
         add_jid "${dj}"
     else
-        cl_say "  pipe_download skipped: no CF or BBL job was submitted in this invocation."
+        cl_say "  pipe_download skipped: no job of this invocation to wait on, or no set to package."
     fi
 fi
 

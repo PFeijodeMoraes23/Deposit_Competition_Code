@@ -7,6 +7,7 @@
 # Run from scripts/ on the login node, once per routine (one line each):
 #   EXT1_DIAG_ROOT=$HOME/scratch_pi_mf2263/pf382 bash blp_ext1_adopt.sh 3 rand1
 #   EXT1_DIAG_ROOT=$HOME/scratch_pi_mf2263/pf382 bash blp_ext1_adopt.sh 4 rand1
+# EXT1_TAG (default 20261029) picks the multi-start run, as in blp_ext1_starts.sh.
 #
 # Refuses when a BLP or BBL job is live, when the sandbox result is missing or not converged, or
 # when its standard errors were not computed (the BBL hand-off requires ext1's joint SEs).
@@ -19,12 +20,15 @@ ST="${2:?usage: bash blp_ext1_adopt.sh <routine 3|4> <start, e.g. rand1>}"
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJ="$(cd "${HERE}/.." && pwd)"
 PROD="${PROJ}/data/output/blp"
-SBB="${EXT1_DIAG_ROOT:-${PROJ}}/diag_ext1_20261018/E${K}_${ST}/data/output/blp"
+SBB="${EXT1_DIAG_ROOT:-${PROJ}}/diag_ext1_${EXT1_TAG:-20261029}/E${K}_${ST}/data/output/blp"
 STAMP="$(date +%Y%m%d_%H%M%S)"
 BACKUP="${PROD}/_superseded_ext1_E${K}_${STAMP}"
 
 [[ -d "${SBB}" ]] || { echo "REFUSING: no sandbox ${SBB}" >&2; exit 1; }
-live="$(squeue -h -u "${USER}" -o '%j' 2>/dev/null | grep -E '^(rc_|blp_|bbl_|stagec_|ext1s_)' || true)"
+# A job running from a TR5 sandbox (tr5_variants.sh: <root>/tr5/<variant>/scripts) writes only to its
+# own data/output, so it does not block the swap.
+live="$(squeue -h -u "${USER}" -o '%j|%Z' 2>/dev/null \
+        | awk -F'|' '$1 ~ /^(rc_|blp_|bbl_|stagec_|ext1s_)/ && $2 !~ /\/tr5\// { print $1 }' || true)"
 [[ -z "${live}" ]] || { echo "REFUSING: live jobs: $(tr '\n' ' ' <<< "${live}")" >&2; exit 1; }
 
 python3 - "${SBB}/blp_results_E${K}_spec_12_ext1.json" <<'PY'

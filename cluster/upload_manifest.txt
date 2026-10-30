@@ -119,7 +119,12 @@
 #        not match the local market_panel.csv, and gate G0 re-opens the uploaded file and counts
 #        its rows before any estimator starts.
 market_panel       | data | sleep      | PROCESSED     | market_panel.parquet           | data/input | python panel_pipeline.py                                    | -         | -
-digital_flags      | data | sleep      | PANEL_INTERMED| digital_banks_diagnostic.csv   | data/input | python panel_digital_flags.py                                 | -         | -
+# The demand corrections every demand prep applies (utils/demand_chars.py). The prep refuses to run
+# without it, and refuses a copy built from another panel: its schema metadata records the md5 of
+# market_panel.parquet, which must equal the md5 of the panel shipped beside it. cl_bootstrap_tree
+# links it into processed/, where utils.demand_chars.chars_path() looks for it.
+demand_chars       | data | sleep      | PROCESSED     | demand_chars.parquet           | data/input | python panel_demand_chars.py                                | PROCESSED | market_panel.parquet
+digital_flags     | data | sleep      | PANEL_INTERMED| digital_banks_diagnostic.csv   | data/input | python panel_digital_flags.py                                 | -         | -
 # The D6 entry step's branch-timing screen reads this (sleep_ident_entry_dynamics.py
 # BRANCH_SIDECAR); cl_bootstrap_tree links it into processed/PANEL_INTERMED. Unstaged, the
 # screen is skipped silently and the cluster D6 moment is built on a larger event set.
@@ -255,6 +260,9 @@ routines_config    | code | all        | REPO          | config/routines.toml   
 # make_blp_rc_table.py <scripts>/config/table_notes.toml, so it lands beside routines.toml. Without it
 # blp_logit.jl skips its .tex output.
 table_notes_config | code | blp        | REPO          | config/table_notes.toml        | scripts/config | -                                                         | -         | -
+# ext1's extra starts (blp_engine_cpu.jl EXTRA_STARTS_CSV, read as @__DIR__/config). Without it
+# ext1 runs its two built-in starts only, which can stop at rc4's solution.
+ext1_starts_config | code | blp        | REPO          | config/blp_ext1_extra_starts.csv | scripts/config | -                                                       | -         | -
 # The manifest ships ITSELF: cluster_preflight.sh section (7) reads
 # ${CL_ROOT}/cluster/upload_manifest.txt to verify the staged inputs. Without this row
 # it silently degrades to a reduced core check -- it still runs, but it stops checking

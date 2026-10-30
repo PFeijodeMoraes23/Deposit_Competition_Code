@@ -374,12 +374,51 @@ start's δ comes from, and the offset added to the run's `--seed` for the cold s
             (seed 43 by default), clamped to the box.
 
 The warm start's checkpoint is the stage's entry in each engine's `prev_stages`. An explicit
-BLP_THETA2_INIT_FILE seed, in the engines that read one, replaces both starts.
+BLP_THETA2_INIT_FILE seed, in the engines that read one, replaces every start.
+
+ext1 also runs the extra starts of `EXTRA_STARTS_CSV` after these two (`extra_starts`).
 """
 const TWO_START_STAGES = Dict(
     "ext1"     => (first = :cold, warm_delta = :checkpoint, cold_seed_offset = 0),
     "extended" => (first = :warm, warm_delta = :stage,      cold_seed_offset = 1),
 )
+
+"""
+Extra starts per stage, run after the two of `TWO_START_STAGES`: one per row of the file (a header,
+then the start's name and the stage's θ₂ values). ext1's two built-in starts can both end at rc4's
+solution (the added π at zero, Q equal to rc4's), a local optimum: so in the 10-16 and 10-29 runs,
+while the sandboxed multi-start of 10-19 reached a lower Q from the random starts rand1-rand3, which
+this file holds.
+"""
+const EXTRA_STARTS_CSV = Dict("ext1" => joinpath(@__DIR__, "config", "blp_ext1_extra_starts.csv"))
+
+"""
+    extra_starts(stage, n_params, lo, hi) -> (starts, source)
+
+The extra starts of `stage`, each `(name, θ₀ clamped to [lo, hi], nothing, "the stage's δ start")`,
+and a note of where they came from. A stage without a file, or a file that is missing, adds none and
+the note says so. A row with the wrong number of values or a repeated name throws a `TwoStartError`.
+"""
+function extra_starts(stage::AbstractString, n_params::Int, lo::Vector{Float64}, hi::Vector{Float64})
+    path = get(EXTRA_STARTS_CSV, stage, "")
+    isempty(path) && return Any[], "none for this stage"
+    isfile(path) || return Any[], "none: $path missing"
+    starts = Any[]
+    names  = String[]
+    for (i, ln) in enumerate(eachline(path))
+        s = strip(ln)
+        (i == 1 || isempty(s)) && continue
+        f = strip.(split(s, ","))
+        name = String(f[1])
+        v = parse.(Float64, f[2:end])
+        length(v) == n_params || throw(TwoStartError("$(basename(path)) row '$name' has " *
+            "$(length(v)) values; stage $stage has $n_params"))
+        name in names && throw(TwoStartError("$(basename(path)) repeats the start '$name'"))
+        push!(names, name)
+        push!(starts, (name, clamp.(v, lo, hi), nothing, "the stage's δ start"))
+    end
+    return starts, basename(path)
+end
 
 """Key under which a two-start stage records its starts: in the result Dict, the .json and the checkpoint."""
 two_start_key(stage::AbstractString) = "$(stage)_start"
@@ -410,7 +449,8 @@ as `clamp.(randn(MersenneTwister(seed + cold_seed_offset), n_params) .* 0.01, lo
 the checkpoint's θ₂* padded with zeros and clamped to [lo, hi], with the checkpoint's δ* (its .bin,
 else `delta_star`) when the stage takes the warm δ from there. The checkpoint at `warm_path` is read in
 both cases: when it is missing or unusable this throws a `TwoStartError`, unless
-`two_start_allow_single()`, in which case the cold start runs alone and `record` says why.
+`two_start_allow_single()`, in which case the cold start runs alone and `record` says why. The stage's
+`extra_starts` follow, and `record["extra_starts"]` names their source.
 """
 function two_start_list(stage::AbstractString, prev_stage::AbstractString,
                         theta2_0::Vector{Float64}, warm_path::AbstractString,
@@ -448,20 +488,23 @@ function two_start_list(stage::AbstractString, prev_stage::AbstractString,
             cfg.first == :cold ? copy(theta2_0) :
                                  clamp.(randn(MersenneTwister(cold_seed), n_params) .* 0.01, lo, hi),
             nothing, "the stage's δ start")
+    extra, extra_src = extra_starts(stage, n_params, lo, hi)
+    record["extra_starts"] = extra_src
     if t2w === nothing
         msg = "stage $stage: the $warm_name start is unavailable ($why)"
         two_start_allow_single() || throw(TwoStartError(msg * ". Run $prev_stage first, or set " *
             "BLP_TWO_START_ALLOW_SINGLE=1 to run the cold start alone."))
-        log_status("  [!!] [TWO-START] $msg. BLP_TWO_START_ALLOW_SINGLE=1: the COLD START RUNS ALONE.")
+        log_status("  [!!] [TWO-START] $msg. BLP_TWO_START_ALLOW_SINGLE=1: the COLD START RUNS " *
+                   "without it" * (isempty(extra) ? ", ALONE." : ", with $(length(extra)) extra start(s)."))
         record[warm_name] = Dict{String,Any}("status" => "not run: $why")
-        return Any[cold], record
+        return vcat(Any[cold], extra), record
     end
     warm = cfg.first == :warm ?
         (warm_name, copy(theta2_0), nothing, "the stage's δ start") :
         (warm_name, t2w, dw, dw === nothing ?
             "the stage's δ start (no δ* of length $N_obs in the checkpoint)" :
             "δ* of $(basename(warm_path))")
-    return (cfg.first == :cold ? Any[cold, warm] : Any[warm, cold]), record
+    return vcat(cfg.first == :cold ? Any[cold, warm] : Any[warm, cold], extra), record
 end
 
 """
@@ -486,7 +529,7 @@ Q_min is the kept start's Q_reeval. `delta_work` is left holding the kept start'
 final contraction, the SE step and the checkpoint see the chosen solution only. `record` gains one
 entry per start that ran (status, θ₀, θ₂*, Q_opt, Q_reeval, Q (= Q_reeval), reeval_converged, n_outer,
 n_evals, converged, δ₀) and "reeval", "order", "tie_rule", "choice_basis", "chosen", "n_starts" and,
-when both ran, "dQ_warm_minus_cold" (on Q_reeval).
+when the cold and the warm start both ran, "dQ_warm_minus_cold" (on Q_reeval).
 """
 function solve_two_starts(solve_from::Function, starts, record::Dict{String,Any},
                           delta_work::Vector{Float64}; contract::Function, objective::Function,
@@ -534,14 +577,15 @@ function solve_two_starts(solve_from::Function, starts, record::Dict{String,Any}
     record["choice_basis"] = basis
     record["chosen"]       = chosen
     record["n_starts"]     = length(starts)
-    if length(order) == 2
-        w = startswith(order[1], "warm_") ? order[1] : order[2]
-        record["dQ_warm_minus_cold"] = sols[w][2] - sols["cold"][2]
+    w = findfirst(n -> startswith(n, "warm_"), order)
+    if w !== nothing && "cold" in order
+        record["dQ_warm_minus_cold"] = sols[order[w]][2] - sols["cold"][2]
     end
     log_status("  [TWO-START] chosen: '$chosen' (Q_reeval = $(round(sols[chosen][2], sigdigits=8)); " *
-               "basis: $basis)" *
-               (length(order) == 2 ? " | Q_warm - Q_cold = $(round(record["dQ_warm_minus_cold"], sigdigits=4))" :
-                                     " | ONE start only, see the record"))
+               "basis: $basis) | $(length(order)) start(s)" *
+               (haskey(record, "dQ_warm_minus_cold") ?
+                    " | Q_warm - Q_cold = $(round(record["dQ_warm_minus_cold"], sigdigits=4))" : "") *
+               (length(order) == 1 ? " | ONE start only, see the record" : ""))
     t, Q, n_outer, conv, _ = sols[chosen]
     return t, Q, n_outer, conv, record
 end

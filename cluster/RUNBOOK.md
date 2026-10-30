@@ -261,8 +261,12 @@ cf6_E{k}_{stage}/{base,merged}/
 
 ## 4. Archive and download
 
-`pipeline_all.sh` submits `pipe_download` itself, `afterANY` the CF jobs and the BBL solves, and it
-packages **all eight sets**. By hand:
+`pipeline_all.sh` submits `pipe_download` itself, from whichever invocation ends the chain. On a
+default run that is the CF phase: `afterANY` the CF jobs and the BBL solves, **all eight sets**. When
+`--no-cf`, `--no-bbl` or `--no-blp` stop the chain earlier, the blp (or sleep/logit) invocation
+submits it, `afterANY` that phase's last jobs and any earlier job still in the queue, and leaves out
+the sets of the phases switched off (`--no-bbl --no-cf`: sleep, demand_prep, logit, blp, gates,
+logs). `--no-download` submits none; `tr5_variants.sh` passes it and packs with `--pack`. By hand:
 
 ```
 bash cluster_archive.sh --set blp --copy

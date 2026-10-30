@@ -1059,7 +1059,8 @@ cl_bootstrap_tree () {
         echo "[dry-run] would build the Open-Finance skeleton at ${root}"
         echo "[dry-run]   dirs:  shared/, Drafts/Deposit Competition/, BCB/Inclusion/,"
         echo "[dry-run]          BCB/Egan_et_al_2025_Rep/processed/PANEL_INTERMED/"
-        echo "[dry-run]   links: processed/market_panel.parquet, PANEL_INTERMED/digital_banks_diagnostic.csv,"
+        echo "[dry-run]   links: processed/market_panel.parquet, processed/demand_chars.parquet,"
+        echo "[dry-run]          PANEL_INTERMED/digital_banks_diagnostic.csv,"
         echo "[dry-run]          PANEL_INTERMED/estban_own_branches.csv,"
         echo "[dry-run]          BCB/Inclusion/bcb_banked_mca_panel.csv  <- ${CL_DATA_IN}"
         echo "[dry-run]          processed/ESTIMATION_OUTPUT -> ${CL_DATA_OUT}"
@@ -1094,6 +1095,11 @@ cl_bootstrap_tree () {
         echo "      with a CSV present the loader validates the parquet against THAT file"
         echo "      and may re-read it instead. Move it aside unless you put it there on purpose."
     fi
+    # The demand corrections side file. Every demand prep reads it from processed/ (the default
+    # of utils.demand_chars.chars_path(); DEMAND_CHARS_FILE overrides) and raises without it, so
+    # the sleep prep job fails within seconds and takes G2, the logit and the BLP down with it.
+    _cl_link "${CL_DATA_IN}/demand_chars.parquet" \
+             "${proc}/demand_chars.parquet"                        "demand corrections"
     _cl_link "${CL_DATA_IN}/digital_banks_diagnostic.csv" \
              "${proc}/PANEL_INTERMED/digital_banks_diagnostic.csv" "digital-bank flags"
     _cl_link "${CL_DATA_IN}/bcb_banked_mca_panel.csv" \

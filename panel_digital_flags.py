@@ -45,6 +45,20 @@ ACCESS_POINTS_CSV = os.path.join(str(paths.INCLUSION_DIR), "bcb_access_points_by
 _max_own = os.environ.get("DIGITAL_MAX_OWN_MUNS", "").strip()
 DIGITAL_MAX_OWN_MUNS = int(_max_own) if _max_own else None
 
+# The month whose ESTBAN cross-section decides the verdict (YYYYMM): the last month of the analysis
+# window (Pedro, 2026-10-27), so every firm of the window is judged, including those that left ESTBAN
+# afterwards (Letsbank, liquidated in 2025). None means the latest month ESTBAN.csv holds.
+# DIGITAL_SNAPSHOT_YM overrides it for one run.
+SNAPSHOT_YM = 202412
+_snap = os.environ.get("DIGITAL_SNAPSHOT_YM", "").strip()
+if _snap:
+    SNAPSHOT_YM = int(_snap)
+
+# The concentration test alone decides the candidates (Pedro, 2026-10-27): an institution booking at
+# least 95% of its deposits in at most 3 municipalities, above the 25th size percentile, and not
+# filtered as wholesale by its IF.data activity or segment. There is no retail-deposit test: one that
+# counted only demand and savings deposits sent PagBank (CDBs and prepaid accounts, no checking) to B.
+
 
 def load_access_points() -> pd.DataFrame:
     """Per-institution own-network reach, keyed on the 8-digit CNPJ root.
@@ -66,11 +80,8 @@ def load_access_points() -> pd.DataFrame:
     return ap
 
 
-def main():
-    if not os.path.exists(ESTBAN_CSV):
-        logging.error(f"Raw ESTBAN data not found at: {ESTBAN_CSV}")
-        return
-
+def load_estban() -> pd.DataFrame:
+    """ESTBAN.csv: CNPJ, name, municipality, month and the four deposit lines, with Total_Dep."""
     logging.info("Loading RAW ESTBAN file...")
     # ESTBAN has columns CNPJ, NOME_INSTITUICAO, CODMUN_IBGE, YEAR, MONTH, and many V_cols
     # Depositos a vista (V400_401), poupanca (V420), interfinanceiros (V431), a prazo (V432)
@@ -91,28 +102,31 @@ def main():
     # The full CSV, valid columns only
     df = pd.read_csv(ESTBAN_CSV, usecols=valid_cols, encoding="latin1", low_memory=False)
     
-    if df.empty:
-        logging.error("ESTBAN was empty.")
-        return
-        
     for col in v_cols:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
         else:
             df[col] = 0.0
-            
+
     df["Total_Dep"] = df["V400_401"] + df["V420"] + df["V431"] + df["V432"]
-    
-    # Find latest period
+    return df
+
+
+def snapshot(df: pd.DataFrame) -> tuple[int, int]:
+    """(year, month) of the cross-section: SNAPSHOT_YM, else the latest month in ESTBAN.csv."""
+    if SNAPSHOT_YM is not None:
+        return SNAPSHOT_YM // 100, SNAPSHOT_YM % 100
     latest_year = df["YEAR"].max()
-    latest_month = df[df["YEAR"] == latest_year]["MONTH"].max()
-    logging.info(f"Analyzing cross-section from {latest_year}-{latest_month}")
-    
-    current_period = df[(df["YEAR"] == latest_year) & (df["MONTH"] == latest_month)].copy()
-    
+    return int(latest_year), int(df[df["YEAR"] == latest_year]["MONTH"].max())
+
+
+def classify(df: pd.DataFrame, year: int, month: int) -> pd.DataFrame:
+    """The verdict per ESTBAN institution (CNPJ root) at one month: the diagnostic table that
+    main() writes, with `is_digital_candidate`."""
+    logging.info(f"Analyzing cross-section from {year}-{month}")
+    current_period = df[(df["YEAR"] == year) & (df["MONTH"] == month)].copy()
     if current_period.empty:
-        logging.error("No data for the latest period.")
-        return
+        raise ValueError(f"ESTBAN.csv has no rows for {year}-{month:02d}")
 
     # Clean Name
     current_period["NOME_INSTITUICAO"] = current_period["NOME_INSTITUICAO"].astype(str).str.strip().str.upper()
@@ -156,12 +170,7 @@ def main():
     # Vectorised flag_digital (replaces row-wise apply)
     large_enough = metrics["Inst_Total_Dep"] > p25
     geo_flag = (metrics["N_mun"] > 0) & (metrics["N_mun"] <= 3) & (metrics["Max_Share"] > 0.95) & large_enough
-    has_retail = metrics["Retail_Dep"] > 0
-    metrics["Flag"] = np.select(
-        [geo_flag & has_retail, geo_flag & ~has_retail],
-        ["Retail Digital Bank (Geo-Heuristic)", "Pure Investment/Wholesale Bank (Geo-Heuristic)"],
-        default="Traditional / Other"
-    )
+    metrics["Flag"] = np.where(geo_flag, "Digital Bank (Geo-Heuristic)", "Traditional / Other")
     
     # Enhance heuristic with BCB Regulatory Categorization
     import glob
@@ -196,8 +205,8 @@ def main():
     metrics['_seg']  = metrics['Cnpj_str_8'].map(lambda k: str(cnpj_map.get(k, {}).get('SegmentoTb',  '')).strip().lower())
     metrics['_nome'] = metrics['NOME_INSTITUICAO'].str.lower()
 
-    # Only modify the geo-flagged retail digital candidates
-    is_candidate = metrics['Flag'] == 'Retail Digital Bank (Geo-Heuristic)'
+    # Only modify the geo-flagged digital candidates
+    is_candidate = metrics['Flag'] == 'Digital Bank (Geo-Heuristic)'
     in_whitelist = is_candidate & metrics['_nome'].apply(lambda n: any(w in n for w in whitelist_names))
     in_bl_ativ   = is_candidate & metrics['_ativ'].apply(lambda a: any(b in a for b in blacklist_ativ))
     in_bl_seg    = is_candidate & metrics['_seg'].apply(lambda s: any(b in s for b in blacklist_seg))
@@ -251,7 +260,19 @@ def main():
     out_df = metrics[out_cols].sort_values(by=["is_digital_candidate", "Inst_Total_Dep"], ascending=[False, False])
     
     # Drop zero-deposit ones visually to clear noise
-    out_df = out_df[out_df["Inst_Total_Dep"] > 0]
+    return out_df[out_df["Inst_Total_Dep"] > 0]
+
+
+def main():
+    if not os.path.exists(ESTBAN_CSV):
+        logging.error(f"Raw ESTBAN data not found at: {ESTBAN_CSV}")
+        return
+    df = load_estban()
+    if df.empty:
+        logging.error("ESTBAN was empty.")
+        return
+    year, month = snapshot(df)
+    out_df = classify(df, year, month)
 
     import pyarrow as pa
     import pyarrow.csv as pa_csv

@@ -2,7 +2,8 @@
 # ==============================================================================
 # tr5_variants.sh — TR5, the type-5 robustness of the whole estimation chain: the sleepiness
 # estimators, the demand prep, the logit and the RC-BLP ladder re-run without the prepaid product,
-# each variant in its own sandbox, through pipeline_all.sh --no-bbl --no-cf.
+# each variant in its own sandbox, through pipeline_all.sh --no-bbl --no-cf --no-download (--pack
+# below packages each sandbox's results).
 #   no5     every type-5 row dropped
 #   d5only  the type-5 rows of brick-and-mortar firms dropped; the digital firms' kept
 # The variant reaches every job through config/deposit_type_variant.txt inside the sandbox's copy
@@ -55,6 +56,9 @@ check_sandbox () {
     [[ "$(cat "${sb}/scripts/config/deposit_type_variant.txt" 2>/dev/null)" == "${v}" ]] || bad="${bad} config/deposit_type_variant.txt is not '${v}';"
     [[ -f "${sb}/scripts/utils/deposit_types.py" ]] || bad="${bad} utils/deposit_types.py missing (TR5 overlay not applied);"
     grep -q -- "--sleep-args" "${sb}/scripts/pipeline_all.sh" || bad="${bad} pipeline_all.sh has no --sleep-args (TR5 overlay not applied);"
+    grep -q -- "--no-download" "${sb}/scripts/pipeline_all.sh" || bad="${bad} pipeline_all.sh has no --no-download (TR5 overlay not applied);"
+    { grep -q "EXTRA_STARTS_CSV" "${sb}/scripts/blp_engine_cpu.jl" && [[ -f "${sb}/scripts/config/blp_ext1_extra_starts.csv" ]]; } \
+        || bad="${bad} blp_engine_cpu.jl has no ext1 extra starts, or their config is missing (TR5 overlay not applied);"
     [[ -L "${sb}/scripts/.julia_depot" ]] || bad="${bad} .julia_depot not linked;"
     [[ -L "${sb}/scripts/blp_sysimage.so" ]] || bad="${bad} blp_sysimage.so not linked;"
     [[ "$(readlink -f "${sb}/data/input")" == "$(readlink -f "${REAL}/input")" ]] || bad="${bad} data/input not linked to production;"
@@ -99,7 +103,7 @@ if [[ "${MODE}" == "--submit-built" ]]; then
               DEPOSIT_TYPE_VARIANT="${v}" \
               sbatch --parsable -J "tr5_${v}" -o "${SB}/scripts/logs/%x_%j.out" -e "${SB}/scripts/logs/%x_%j.err" \
                      --export=ALL,DEPOSIT_TYPE_VARIANT="${v}" \
-                     pipeline_all.sh --no-bbl --no-cf --routines "${ROUTINES}" --sleep-routines "${ROUTINES}" \
+                     pipeline_all.sh --no-bbl --no-cf --no-download --routines "${ROUTINES}" --sleep-routines "${ROUTINES}" \
                      --sleep-args "${SLEEP_ARGS}" --blp-args "--draws")
         echo "${jid}" > "${SB}/submitted.jid"
         echo "${v} -> pipeline_all job ${jid} (routines '${ROUTINES}', sleep args '${SLEEP_ARGS}')"

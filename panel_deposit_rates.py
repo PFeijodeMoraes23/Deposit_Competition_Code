@@ -57,6 +57,7 @@ from utils import paths
 from utils.macro_rates import load_macro_series, make_quarterly_macro
 from utils.conglomerates import deposit_panel_codes
 from utils import type5_rates
+from utils import firm_remaps
 
 # IF-Data List files: CNPJ -> Conglomerate mapping (monthly snapshots)
 IF_DATA_LIST_DIR = str(paths.IF_DATA_LIST)
@@ -658,6 +659,16 @@ def append_rates_to_panel():
         # The panel_ip_rates rate takes precedence over the COSIF prepaid rate
         aux['ip_prepaid_rate'] = aux['new_ip_rate'].fillna(aux['ip_prepaid_rate'])
         aux.drop(columns=['new_ip_rate'], inplace=True)
+
+    # 4c. PicPay is one firm, C0088022 (utils/firm_remaps.py): the prepaid rate of Banco Original's
+    # conglomerate in 2019Q4-2024Q3 is PicPay's wallet rate, and the wallet balance now sits on C0088022.
+    if 'ip_prepaid_rate' in aux.columns:
+        _src = aux[(aux['CodConglomeradoPrudencial'] == firm_remaps.PICPAY_FROM)
+                   & firm_remaps.picpay_window_anomes(aux['AnoMes'])].set_index('AnoMes')['ip_prepaid_rate'].dropna()
+        _dst = (aux['CodConglomeradoPrudencial'] == firm_remaps.PICPAY_TO) & aux['AnoMes'].isin(_src.index)
+        aux.loc[_dst, 'ip_prepaid_rate'] = aux.loc[_dst, 'AnoMes'].map(_src)
+        logging.info(f"PicPay re-map: prepaid rate of {firm_remaps.PICPAY_FROM} -> {firm_remaps.PICPAY_TO} "
+                     f"on {int(_dst.sum())} quarters ({len(_src)} available)")
 
     # T2 & T3 imputed expenses
     _imputed_t2 = aux["savings_rate_qoq"].fillna(0.0) * aux["lag_dep_a2"]

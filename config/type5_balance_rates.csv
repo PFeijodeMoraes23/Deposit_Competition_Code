@@ -3,7 +3,7 @@
 # Rules of one conglomerate may not overlap. Days no rule covers keep the chain rate (own payment-institution rate, quarter median, CDI).
 # Evidence: DATA_RAW/issuers/posted_rates/ (posted_rates.csv, NOTES.md section Type-5 follow-up 2026-10-22, evidence/).
 # D1-D2 (Pedro, 2026-10-22): a stated or implied zero is a nominal 0 percent balance rate from 2020-01 through 2024Q4.
-# D3 (Pedro, 2026-10-22): PicPay's rules apply to C0080903 for 2020Q2-2024Q3 and to C0088022 from 2024Q4, at each rule's headline rate (decision D3-promo or D3-tiered marks a promotional or balance-tiered rule).
+# D3 (Pedro, 2026-10-22; re-mapped 2026-10-27): PicPay is one firm, C0088022, in every quarter (utils/firm_remaps.py), so all of PicPay's rules apply to C0088022 (until 2026-10-27 they sat on Banco Original's C0080903 through 2024Q3), at each rule's headline rate (decision D3-promo or D3-tiered marks a promotional or balance-tiered rule).
 # D3 dating (Pedro, 2026-10-23): a rule starts on the first Wayback capture that shows it and runs to the day before the next rule is first seen; the last rule observed (102 percent, last capture 2023-06-03) is carried forward to 2024-12-31.
 # Exception (Pedro, 2026-10-26): the 150 percent offer ends on its stated validity date, 2021-05-05; the days until the next rule is first seen keep the chain rate.
 # Other posted rules (Pedro, 2026-10-26): no rows, so they keep the chain's 100 percent of CDI: Mercado Pago C0084820 'ate 105% do CDI' (from 2024-04; conditions not in the saved text), Nubank's rule from 2022-07-25 (new deposits earn 100 percent of CDI only from day 30, paid retroactively), bitz (Bradesco) with its R$10 balance floor. Each is at or close to 100 percent of CDI.
@@ -16,13 +16,13 @@ C0085317,Cora SCFI,2020-01-01,2024-12-31,0,D1,"blog 2024-01: 'Ainda nao oferecem
 C0085018,PayPal do Brasil IP,2020-01-01,2024-12-31,0,D1,"user agreement 2020-2024: no 'juros ou outros rendimentos'"
 C0086275,SHPP Brasil IP (ShopeePay),2020-01-01,2024-12-31,0,D1,"prepaid-account terms v1 cl. 4.6.1 (2022-05-27, 2023-05-31): 'nem havera o pagamento de qualquer remuneracao ao Usuario'; v2 cl. 2.9 (2024-11-12)"
 C0086488,Ame Digital Brasil IP,2020-01-01,2024-12-31,0,D1,"terms 2020-10-01 to 2024-08-29: 'A Ame Digital reserva-se o direito de receber juros ou rendimentos sobre os valores' (zero to the client implied)"
-C0080903,PicPay (in Banco Original's conglomerate),2020-04-01,2020-12-02,100,D3,"'Aqui seu saldo rende automaticamente a 100% do CDI' (picpay.com/site, captures 2020-01-03 to 2020-11-01)"
-C0080903,PicPay (in Banco Original's conglomerate),2020-12-03,2021-04-22,210,D3-promo,"'seu dinheiro rende todos os dias 210% do CDI' (rendimentos.picpay.com, captures 2020-12-03 and 2021-01-16; fine print not captured)"
-C0080903,PicPay (in Banco Original's conglomerate),2021-04-23,2021-05-05,150,D3-promo,"150% do CDI (rendimentos.picpay.com, capture 2021-04-23; ends on its stated date: 'Oferta valida ate 05/05/2021 ... podendo ou nao ser estendidas'); 2021-05-06 to 2021-06-24 keep the chain rate"
-C0080903,PicPay (in Banco Original's conglomerate),2021-06-25,2021-12-04,130,D3,"130% do CDI (rendimentos.picpay.com, capture 2021-06-25)"
-C0080903,PicPay (in Banco Original's conglomerate),2021-12-05,2022-01-24,120,D3-tiered,"120% do CDI; from R$250,000 the balance earns 100% (rendimentos.picpay.com, capture 2021-12-05)"
-C0080903,PicPay (in Banco Original's conglomerate),2022-01-25,2022-06-24,110,D3-tiered,"110% do CDI; from R$100,000 the balance earns 100% (rendimentos.picpay.com, capture 2022-01-25)"
-C0080903,PicPay (in Banco Original's conglomerate),2022-06-25,2022-10-02,102,D3-tiered,"102% do CDI daily; from R$100,000 the balance earns 100% (picpay.com/rendimento-online, captures 2022-06-25 to 2022-08-11)"
-C0080903,PicPay (in Banco Original's conglomerate),2022-10-03,2023-01-31,102,D3,"'todo o saldo da sua carteira rende todos os dias uteis 102% do CDI' (picpay.com/rendimento-online, captures 2022-10-03 and 2022-11-26)"
-C0080903,PicPay (in Banco Original's conglomerate),2023-02-01,2024-09-30,102,D3,"102% do CDI on the whole balance from R$1; 'melhor rendimento automatico em conta apos 30 dias' (picpay.com/rendimento-online, captures 2023-02-01 to 2023-06-03; carried forward)"
+C0088022,PicPay,2020-04-01,2020-12-02,100,D3,"'Aqui seu saldo rende automaticamente a 100% do CDI' (picpay.com/site, captures 2020-01-03 to 2020-11-01)"
+C0088022,PicPay,2020-12-03,2021-04-22,210,D3-promo,"'seu dinheiro rende todos os dias 210% do CDI' (rendimentos.picpay.com, captures 2020-12-03 and 2021-01-16; fine print not captured)"
+C0088022,PicPay,2021-04-23,2021-05-05,150,D3-promo,"150% do CDI (rendimentos.picpay.com, capture 2021-04-23; ends on its stated date: 'Oferta valida ate 05/05/2021 ... podendo ou nao ser estendidas'); 2021-05-06 to 2021-06-24 keep the chain rate"
+C0088022,PicPay,2021-06-25,2021-12-04,130,D3,"130% do CDI (rendimentos.picpay.com, capture 2021-06-25)"
+C0088022,PicPay,2021-12-05,2022-01-24,120,D3-tiered,"120% do CDI; from R$250,000 the balance earns 100% (rendimentos.picpay.com, capture 2021-12-05)"
+C0088022,PicPay,2022-01-25,2022-06-24,110,D3-tiered,"110% do CDI; from R$100,000 the balance earns 100% (rendimentos.picpay.com, capture 2022-01-25)"
+C0088022,PicPay,2022-06-25,2022-10-02,102,D3-tiered,"102% do CDI daily; from R$100,000 the balance earns 100% (picpay.com/rendimento-online, captures 2022-06-25 to 2022-08-11)"
+C0088022,PicPay,2022-10-03,2023-01-31,102,D3,"'todo o saldo da sua carteira rende todos os dias uteis 102% do CDI' (picpay.com/rendimento-online, captures 2022-10-03 and 2022-11-26)"
+C0088022,PicPay,2023-02-01,2024-09-30,102,D3,"102% do CDI on the whole balance from R$1; 'melhor rendimento automatico em conta apos 30 dias' (picpay.com/rendimento-online, captures 2023-02-01 to 2023-06-03; carried forward)"
 C0088022,PicPay Bank,2024-10-01,2024-12-31,102,D3,"PicPay's last observed rule, 102% do CDI (last capture 2023-06-03), carried forward"
