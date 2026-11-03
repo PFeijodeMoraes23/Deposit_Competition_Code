@@ -25,6 +25,7 @@ Output
 from utils.venv_guard import ensure_project_venv
 from utils import paths as _paths
 from utils import routines as _routines
+from utils import blp_status as _blp_status
 ensure_project_venv(__file__)
 
 import argparse
@@ -342,12 +343,17 @@ def demand_notes() -> dict:
 def demand_note(which: str, se_method: str = "wcb", skip=(), subs: dict | None = None) -> str:
     """Note body for table `which` (a key of `[demand.order]`): its sentences in order, `se`
     resolved by `se_method` (a method with no stored standard errors falls back to `se_note`),
-    keys in `skip` left out and `@NAME@` tokens filled from `subs`. blp_logit.jl `demand_note`
-    assembles the logit notes the same way."""
+    keys in `skip` left out and `@NAME@` tokens filled from `subs`. `provisional` prints only while
+    config/blp_status.toml says pending. blp_logit.jl `demand_note` assembles the logit notes the
+    same way."""
     notes = demand_notes()
     parts = []
     for k in notes["order"][which]:
         if k in skip:
+            continue
+        if k == "provisional":
+            if _blp_status.pending():
+                parts.append(notes[k])
             continue
         if k == "se":
             if se_method in ("wcb", "sandwich"):

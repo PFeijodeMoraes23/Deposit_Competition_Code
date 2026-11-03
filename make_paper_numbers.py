@@ -60,8 +60,8 @@ found is a MISMATCH, listed in both outputs, and makes the script exit with stat
 STATUS of an entry: ok; pending-_ms983 (a BBL number of a run other than the target multi-start
 run); pending-_sc983 (T11's single-curve column from a run other than the target single-curve
 run); pending-phi-summary (the phi path summary is not written yet); pending-blp-ext1 (every
-BLP-derived number, with --blp-pending); pending-cluster (every number of the cluster family, with
---cluster-pending); dropped.
+BLP-derived number, while config/blp_status.toml says pending or with --blp-pending);
+pending-cluster (every number of the cluster family, with --cluster-pending); dropped.
 
 FAMILY of an entry, by what its collector reads: panel (the market panel and local side data),
 cluster (the cluster's sleepiness, logit and BLP outputs) or bbl (BBL costs, the policy function
@@ -111,6 +111,7 @@ import numpy as np
 import pandas as pd
 
 import make_blp_rc_table as rc          # load_stage, alpha_of, mean_rho_one_minus_s
+from utils import blp_status as _blp_status
 from utils import paper as _paper
 from utils import paths as _paths
 from utils import routines as _routines
@@ -130,9 +131,10 @@ OUT_DIR = EST_OUT / "PAPER_NUMBERS"
 LOGIT_SUMMARY = _paths.blp_results_dir() / "logit" / "logit_summary_spec_12.json"
 BLP_STAGE = "ext1"                      # Table 6 (make_blp_demand_comparison_table STAGE_SPECS)
 # Status of every BLP-derived entry (Table 6 rows, the BLP price coefficient, elasticities and
-# ratios): ok for the adopted ext1 fits (the best-Q multi-start solutions of 2026-10-18).
-# --blp-pending marks them pending-blp-ext1 while a new ext1 fit is being estimated.
-BLP_STATUS = "ok"
+# ratios, and the demand.xi.* diagnostics of the ext1 residual xi-hat): config/blp_status.toml,
+# "ok" for final fits or pending-blp-ext1 while they are provisional. --blp-pending forces
+# pending-blp-ext1 for one run.
+BLP_STATUS = _blp_status.status()
 # --cluster-pending: every ok entry of the cluster family becomes pending-cluster (see FAMILY).
 CLUSTER_PENDING = False
 _FAMILY: list = []                      # the families of the collectors running, innermost last
@@ -1287,7 +1289,7 @@ def _tsv_cell(label: str, col: int):
     for line in p.read_text(encoding="utf-8").splitlines():
         cells = [c.strip() for c in re.split(r"(?<!\\)&", re.sub(r"\\\\\*?\s*$", "", line.strip()))]
         if len(cells) > col and cells[0] == label:
-            m = re.fullmatch(r"\\multicolumn\{\d+\}\{[^}]*\}\{(.*)\}", cells[col])
+            m = re.fullmatch(r"\\multicolumn\{\d+\}\{(?:[^{}]|\{(?:[^{}]|\{[^{}]*\})*\})*\}\{(.*)\}", cells[col])
             return m.group(1) if m else cells[col]
     return None
 
@@ -1323,7 +1325,7 @@ def collect_state_selection(notes: list):
             "One minus the ratio of the state's variance net of entity and quarter fixed effects to "
             "its raw variance, specification (12) sample", f"{src} absorbed_alone[{state}]", "ok",
             display=disp(a, "share"),
-            checks=[check_cell(TSV, f"Panel A, {lab}", _tsv_cell(lab, 3), [a])])
+            checks=[check_cell(TSV, f"Panel A, {lab}", _tsv_cell(lab, 2), [a])])
 
 
 def collect_state_levels(notes: list):
@@ -1729,6 +1731,8 @@ def collect_descriptives(notes: list):
     collect_slide_deposit_types(notes)
     collect_slide_motivation(notes)
     collect_xi_diagnostics(notes)
+    collect_share_cap(notes)
+    collect_phi_cap(notes)
     collect_dep_anova(notes)
     collect_phi_variance(notes)
     collect_active_truncation(notes)
@@ -1925,6 +1929,106 @@ def collect_fees(notes: list):
         add(k, "FEES", e["definition"].split(";")[0], v,
             f"{e['definition']} ({unit})", f"{e.get('source', '')} via {FEE_SIDECAR.name} "
             f"({e.get('script', '')}, {e.get('run_at', '')})", "ok", display=display, unit=u)
+
+
+CCS_MONTHLY = _paths.rout_dir() / "ccs_flows_institution_month_mapped.csv"   # make_ccs_flows_conglomerate.py
+CCS_EVENTS = _paths.rout_dir() / "ccs_flow_events_pf_top25.csv"              # its flagged institution-months
+CCS_ITAUCARD = "17192451"               # Banco Itaucard: a card issuer inside Itaú Unibanco (B)
+
+
+def _ccs_pf_stats(x: pd.DataFrame) -> dict:
+    """D's share of PF gross openings in 2016 and 2024, and B's 2024 PF flows (millions)."""
+    g = x.groupby(["year", "group"])[["opened_gross", "closed", "event_closed", "event_sourced"]].sum()
+    tot = x.groupby("year")["opened_gross"].sum()
+    out = {f"dshare_open_{y}": float(g.loc[(y, "D"), "opened_gross"] / tot[y]) for y in (2016, 2024)}
+    b = g.loc[(2024, "B")] / 1e6
+    out.update(b_gross_2024=float(b["opened_gross"]), b_closed_2024=float(b["closed"]),
+               b_event_closed_2024=float(b["event_closed"]),
+               b_event_closed_sourced_2024=float(b["event_sourced"]),
+               b_net_2024=float(b["opened_gross"] - b["closed"]),
+               b_net_2024_excl_events=float(b["opened_gross"] - b["closed"] + b["event_closed"]),
+               b_net_2024_excl_sourced_events=float(b["opened_gross"] - b["closed"] + b["event_sourced"]))
+    return out
+
+
+def _ccs_main_shares(x: pd.DataFrame) -> dict:
+    """D's share of PF gross openings by year with each conglomerate counted at its main entity only:
+    the institution with the most opened-and-active PF relationships over 2016-2024, fixed for every
+    month (ties: more gross openings, then the lower CNPJ root). An unmapped institution is its own
+    conglomerate (root_<cnpj8>). Also the two cross bounds: D at its main entities against B and the
+    rest at every institution (low), D at every institution against B and the rest at their main
+    entities (high). The rule of diagnostics/diag_ccs_main_entity.py (CCS1)."""
+    x = x[x["year"].between(2016, 2024)]
+    inst = (x.groupby(["conglomerate", "cnpj8"])[["opened_active", "opened_gross"]].sum().reset_index()
+            .sort_values(["opened_active", "opened_gross", "cnpj8"], ascending=[False, False, True]))
+    main = inst.drop_duplicates("conglomerate").set_index("conglomerate")["cnpj8"]
+    is_main = x["cnpj8"].eq(x["conglomerate"].map(main))
+    cols = ["B", "D", "not in panel"]
+    a = x.groupby(["year", "group"])["opened_gross"].sum().unstack("group").reindex(columns=cols).fillna(0)
+    m = (x[is_main].groupby(["year", "group"])["opened_gross"].sum().unstack("group")
+         .reindex(columns=cols).fillna(0))
+    rest = ["B", "not in panel"]
+    return {"main": m["D"] / m.sum(axis=1), "low": m["D"] / (m["D"] + a[rest].sum(axis=1)),
+            "high": a["D"] / (a["D"] + m[rest].sum(axis=1))}
+
+
+def collect_ccs(notes: list):
+    """The CCS relationship flows of individuals (LAI 18810.025400/2026-04, make_ccs_flows*.py) for
+    the Sec. 3 sentence: D's share of PF gross openings in 2016 and 2024, every institution in the
+    denominator, and B's net PF flow in 2024 without the closures of the flagged institution-months
+    (the 25 largest PF closures, event_closed; sourced or not). Groups as in make_ccs_flows_report.py:
+    B and D are panel firms by is_B, the rest "not in panel". Each detail carries two sensitivities:
+    without Banco Itaucard, and with one institution per conglomerate and month (the one with the
+    most openings), a lower bound on counting a client once per institution of a conglomerate.
+    ccs.pf.dshare_open_main.2024 gives the 2024 share with every conglomerate at its main entity
+    only (_ccs_main_shares), the stricter figure for the footnote."""
+    if not CCS_MONTHLY.is_file():
+        notes.append(f"{CCS_MONTHLY.name} not found in {CCS_MONTHLY.parent}; run "
+                     "make_ccs_flows_conglomerate.py for the ccs.* entries.")
+        return
+    d = pd.read_csv(CCS_MONTHLY, dtype={"cnpj8": str})
+    d = d[d["type"] == "PF"].copy()
+    d["year"] = d["ym"].str[:4].astype(int)
+    d["group"] = np.select([(d["in_panel"] == 1) & (d["is_B"] == 1), (d["in_panel"] == 1) & (d["is_B"] == 0)],
+                           ["B", "D"], "not in panel")
+    sourced = set()
+    if CCS_EVENTS.is_file():
+        ev = pd.read_csv(CCS_EVENTS, dtype={"cnpj8": str})
+        ev = ev[ev["event"].fillna("unknown") != "unknown"]
+        sourced = set(zip(ev["cnpj8"], ev["ym"]))
+    else:
+        notes.append(f"{CCS_EVENTS.name} not found; ccs.* details count no flagged event as sourced.")
+    d["event_sourced"] = np.where([k in sourced for k in zip(d["cnpj8"], d["ym"])], d["event_closed"], 0)
+    one = (d.sort_values(["opened_gross", "cnpj8"], ascending=[False, True], kind="mergesort")
+           .drop_duplicates(["conglomerate", "ym"]))
+    v = {"all": _ccs_pf_stats(d), "without_itaucard": _ccs_pf_stats(d[d["cnpj8"] != CCS_ITAUCARD]),
+         "one_institution_per_conglomerate_month": _ccs_pf_stats(one)}
+    src = (f"{CCS_MONTHLY.name} (make_ccs_flows_conglomerate.py; LAI 18810.025400/2026-04, "
+           f"raw_paths.BCB_CCS_LAI), PF rows; flagged months and their sources in {CCS_EVENTS.name}")
+    for y in (2016, 2024):
+        k = f"dshare_open_{y}"
+        add(f"ccs.pf.dshare_open.{y}", "CCS", f"D share of PF gross openings (CCS), {y}", v["all"][k],
+            f"Relationships with individuals opened in {y} at D institutions over those opened at every "
+            "institution in the CCS file (B, D and not in the panel); a relationship is one CPF at one "
+            "institution", src, "ok", display=disp(v["all"][k], "share"), unit="fraction",
+            detail={name: s[k] for name, s in v.items()})
+    ms = _ccs_main_shares(d)
+    add("ccs.pf.dshare_open_main.2024", "CCS", "D share of PF gross openings (CCS), 2024, main "
+        "entities only", float(ms["main"][2024]),
+        "Relationships with individuals opened in 2024 at D institutions over those opened at every "
+        "institution in the CCS file, each conglomerate counted at its main entity only (the "
+        "institution with the most opened-and-active PF relationships over 2016-2024); a lower bound "
+        "on the new clients of conglomerates with several institutions", src, "ok",
+        display=disp(float(ms["main"][2024]), "share"), unit="fraction",
+        detail={"main_entities_2016": float(ms["main"][2016]),
+                "cross_low_2024": float(ms["low"][2024]), "cross_high_2024": float(ms["high"][2024])})
+    a = v["all"]
+    add("ccs.pf.bnet.2024.excl_events", "CCS", "B net PF relationship flow in 2024 without flagged "
+        "event months (CCS), millions", a["b_net_2024_excl_events"],
+        "PF gross openings minus closures at B institutions in 2024, adding back the closures of the "
+        "flagged institution-months (the 25 largest PF closures of 2016-2024, sourced or not); millions "
+        "of relationships", src, "ok", display=f"{fmt3s(a['b_net_2024_excl_events'])} m",
+        unit="millions", detail={name: {k: s[k] for k in s if k.startswith("b_")} for name, s in v.items()})
 
 
 def collect_type5_rules(notes: list):
@@ -2333,6 +2437,108 @@ def collect_dep_anova(notes: list):
         detail=dict(n_cells=m["n_cells"], n_banks=m["n_banks"]))
 
 
+SHARE_CAP_TYPES = {1: "demand", 2: "savings", 4: "time", 5: "prepaid"}
+
+
+def collect_share_cap(notes: list):
+    """Where the cap on the total inside share binds (TOTAL_SHARE_CAP of sleep_demand_prep_link.py).
+    The demand prep floors each B market's size (mca_code x time_id) so that its share_B_cond sum to
+    at most the cap, and the national D market's size per quarter likewise for share_D; a market
+    where the floor binds sums to the cap exactly. Counted on the newest demand_{k}_*spec_12.parquet
+    of each routine, the parquet the elasticity rows read. A B market whose only B row sits at the
+    cap is where the BLP contraction's residual stalls at |ln cap|."""
+    import sleep_demand_prep_link as _prep
+    cap, tol = float(_prep.TOTAL_SHARE_CAP), 1e-9
+    for E in ROUTINES:
+        fs = sorted(rc.DEMAND_PREP_DIR.glob(f"demand_{E}_*spec_12.parquet"), key=lambda p: p.stat().st_mtime)
+        if not fs:
+            notes.append(f"no demand_{E}_*spec_12.parquet in {rc.DEMAND_PREP_DIR}; "
+                         f"demand.sharecap.*.E{E} not built.")
+            continue
+        d = pd.read_parquet(fs[-1], columns=["mca_code", "time_id", "deposit_type", "is_B",
+                                             "share_B_cond", "share_D"])
+        is_b = d["is_B"].fillna(False).astype(bool)
+        b = d[is_b]
+        sums = b.groupby(["mca_code", "time_id"])["share_B_cond"].sum()
+        if (sums > cap + tol).any():
+            notes.append(f"E{E}: {int((sums > cap + tol).sum())} B market-quarters sum above the cap "
+                         f"{cap}; the parquet is not the one the prep floored.")
+        at = sums.index[(sums - cap).abs() < tol]
+        n_rows = b.groupby(["mca_code", "time_id"]).size()
+        b_at = b.set_index(["mca_code", "time_id"]).index.isin(at)
+        d_sums = d[~is_b].groupby("time_id")["share_D"].sum()
+        d_at = d_sums.index[(d_sums - cap).abs() < tol]
+        rows_at = pd.Series(b_at, index=b.index).reindex(d.index, fill_value=False) \
+            | (~is_b & d["time_id"].isin(d_at))
+        by_type = {SHARE_CAP_TYPES.get(int(t), str(t)): dict(rows=int(len(g)), rows_at_cap=int(rows_at[g.index].sum()),
+                                                             share=float(rows_at[g.index].mean()))
+                   for t, g in d.groupby("deposit_type")}
+        src = (f"{fs[-1].name} in DEMAND_PREP: B market-quarters (mca_code x time_id) whose share_B_cond "
+               f"sum to TOTAL_SHARE_CAP = {cap} (sleep_demand_prep_link.py), and national D quarters "
+               f"whose share_D do")
+        detail = dict(cap=cap, b_market_quarters=int(len(sums)), b_market_quarters_at_cap=int(len(at)),
+                      b_single_row_at_cap=int((n_rows.reindex(at) == 1).sum()),
+                      d_quarters=int(len(d_sums)), d_quarters_at_cap=int(len(d_at)),
+                      d_max_quarter_sum=float(d_sums.max()), rows=int(len(d)),
+                      rows_at_cap=int(rows_at.sum()), by_deposit_type=by_type)
+        mk = len(at) / len(sums) if len(sums) else None
+        add(f"demand.sharecap.mkts.E{E}", "C", f"Share of B market-quarters at the inside-share cap, "
+            f"{rname(E)}", mk,
+            f"B market-quarters whose inside shares sum to the cap {cap}: there the market size is "
+            "the floor that keeps the outside share positive, not the population anchor d-bar x Pop",
+            src, "ok", display=disp(mk, "share"), unit="fraction", detail=detail)
+        rs = float(rows_at.mean())
+        add(f"demand.sharecap.rows.E{E}", "C", f"Share of demand rows in markets at the inside-share "
+            f"cap, {rname(E)}", rs,
+            f"Demand rows (bank x market x deposit type x quarter) in a market at the cap {cap}; the "
+            "detail splits them by deposit type", src, "ok", display=disp(rs, "share"),
+            unit="fraction", detail=detail)
+
+
+def collect_phi_cap(notes: list):
+    """Where the cap on phi binds (PHI_CAP of sleep_demand_prep_link.py). The demand prep forms the
+    active market (1 - phi) M with phi capped at PHI_CAP: in the anchor of the market size, in its
+    floor and in the share denominators, for B rows with phi_mt and for D rows with phi_t. The
+    active balance of (14-B) uses phi uncapped. Counted on the newest demand_{k}_*spec_12.parquet of
+    each routine: the share of B demand rows whose phi_mt is at or above the cap, unweighted and
+    weighted by the deposit balance."""
+    import sleep_demand_prep_link as _prep
+    cap = float(_prep.PHI_CAP)
+    for E in ROUTINES:
+        fs = sorted(rc.DEMAND_PREP_DIR.glob(f"demand_{E}_*spec_12.parquet"), key=lambda p: p.stat().st_mtime)
+        if not fs:
+            notes.append(f"no demand_{E}_*spec_12.parquet in {rc.DEMAND_PREP_DIR}; "
+                         f"demand.phicap.*.E{E} not built.")
+            continue
+        d = pd.read_parquet(fs[-1], columns=["mca_code", "time_id", "deposit_type", "is_B", "phi_mt",
+                                             "phi_t", "deposit_balance"])
+        is_b = d["is_B"].fillna(False).astype(bool)
+        b = d[is_b]
+        at = (b["phi_mt"] >= cap).to_numpy()
+        w = b["deposit_balance"].astype(float).to_numpy()
+        rows, dep = float(at.mean()), float(np.average(at, weights=w))
+        mq = b.assign(_at=at).groupby(["mca_code", "time_id"])["_at"].max()
+        d_q = d.loc[~is_b].groupby("time_id")["phi_t"].first()
+        by_type = {SHARE_CAP_TYPES.get(int(t), str(t)): dict(rows=int(g.size), share=float(g.mean()))
+                   for t, g in pd.Series(at, index=b.index).groupby(b["deposit_type"])}
+        detail = dict(cap=cap, b_rows=int(len(b)), b_rows_at_cap=int(at.sum()),
+                      b_rows_phi_one=int((b["phi_mt"] >= 1.0 - 1e-12).sum()),
+                      b_market_quarters=int(len(mq)), b_market_quarters_at_cap=int(mq.sum()),
+                      d_quarters=int(len(d_q)), d_quarters_at_cap=int((d_q >= cap).sum()),
+                      by_deposit_type=by_type)
+        src = (f"{fs[-1].name} in DEMAND_PREP: B rows whose phi_mt >= PHI_CAP = {cap} "
+               f"(sleep_demand_prep_link.py), over all B rows of the demand sample")
+        add(f"demand.phicap.rows.E{E}", "C", f"Share of B demand rows with phi at the cap, {rname(E)}",
+            rows, f"B demand rows (bank x market x deposit type x quarter) whose sleepiness phi_mt is "
+            f"at least the cap {cap}, so the active market (1 - phi) M is formed at 1 - {cap}; "
+            "the detail counts market-quarters, D quarters and deposit types",
+            src, "ok", display=disp(rows, "share"), unit="fraction", detail=detail)
+        add(f"demand.phicap.dep.E{E}", "C", f"Balance-weighted share of B demand rows with phi at the "
+            f"cap, {rname(E)}", dep,
+            f"As demand.phicap.rows.E{E}, each row weighted by its deposit balance",
+            src, "ok", display=disp(dep, "share"), unit="fraction", detail=detail)
+
+
 def collect_xi_diagnostics(notes: list):
     """The demand-residual diagnostics of tab_xi_diagnostics.tex, from the unrounded sidecar
     make_xi_diagnostics.py writes with the table: the order-free variance split, the persistence
@@ -2364,7 +2570,7 @@ def collect_xi_diagnostics(notes: list):
                 "Order-free (Shapley) shares of the balance-weighted variance of the demand "
                 "residual among quarter, bank, bank x type and market effects, and the rest; B cells "
                 "of the demand sample; bank x type is the bank share's gain when bank effects differ "
-                "by deposit type", f"{src} E{E}.{s}.anova", "ok",
+                "by deposit type", f"{src} E{E}.{s}.anova", BLP_STATUS,
                 display=", ".join(f"{k} {fmt3s(v)}" for k, v in a.items()))
             ar = r["ar1"]
             add(f"demand.xi.ar1.E{E}.{s}", "demand residuals",
@@ -2375,7 +2581,7 @@ def collect_xi_diagnostics(notes: list):
                 "x type x market cells (cell-demeaned) and without demeaning; 95% interval from the "
                 "conglomerate wild cluster bootstrap (Webb, 999 draws, bias-corrected); n_cells = "
                 "cells with at least two pairs of consecutive quarters",
-                f"{src} E{E}.{s}.ar1", "ok",
+                f"{src} E{E}.{s}.ar1", BLP_STATUS,
                 display=f"within {fmt3s(ar['within']['slope'])} "
                         f"{disp_ci(ar['within']['lo'], ar['within']['hi'])}, raw "
                         f"{fmt3s(ar['raw']['slope'])}")
@@ -2390,7 +2596,7 @@ def collect_xi_diagnostics(notes: list):
                 "2013Q1; censored = weighted share of cells whose first quarter is 2013Q1) and own "
                 "branches (log of one plus the lagged ESTBAN branch count); r2 is the partial R2; "
                 "intervals from the conglomerate wild cluster bootstrap",
-                f"{src} E{E}.{s}.corr", "ok",
+                f"{src} E{E}.{s}.corr", BLP_STATUS,
                 display=", ".join(f"{v} {fmt3s(c[v]['slope'])} R2 {fmt3s(c[v]['r2'])}"
                                   for v in ("incumbency", "own_branches")))
         add(f"demand.flows.trunc_share.E{E}", "demand residuals",
@@ -3227,11 +3433,13 @@ FAMILIES = {
               "collect_state_selection", "collect_dshare_decomp", "collect_fee_ratio"),
     "cluster": ("collect_demand", "collect_table_rows", "collect_table4_sidecar", "phi_base_check",
                 "collect_entry", "collect_entry_counts", "collect_entry_gfb", "collect_state_levels",
-                "collect_first_stage_strength", "collect_xi_diagnostics", "collect_phi_variance",
+                "collect_first_stage_strength", "collect_xi_diagnostics", "collect_share_cap",
+                "collect_phi_cap",
+                "collect_phi_variance",
                 "collect_active_truncation", "collect_entry_carry",
                 "collect_type5_robustness", "collect_cluster_imbalance", "collect_tr5"),
     "bbl": ("collect_bbl", "collect_polfunc", "collect_phi_path", "collect_design"),
-    "local": ("collect_fees",),   # side files outside the panel; never pending
+    "local": ("collect_fees", "collect_ccs"),   # side files outside the panel; never pending
 }
 for _fam, _names in FAMILIES.items():
     for _name in _names:
@@ -3261,7 +3469,8 @@ def main():
                          "to Drafts, next to the tables V_Full and V_Friction input)")
     ap.add_argument("--tex", action="store_true", help=argparse.SUPPRESS)
     ap.add_argument("--blp-pending", action="store_true",
-                    help="mark the BLP-derived entries pending-blp-ext1 (default: ok, see BLP_STATUS)")
+                    help="mark the BLP-derived entries pending-blp-ext1 for this run "
+                         "(default: config/blp_status.toml)")
     ap.add_argument("--cluster-pending", action="store_true",
                     help="mark every ok entry of the cluster family pending-cluster: the panel was "
                          "rebuilt and the cluster's estimates are not yet re-run (see FAMILY)")
@@ -3296,6 +3505,7 @@ def main():
     collect_first_stage_strength(notes)
     collect_tr5(notes)
     collect_fees(notes)
+    collect_ccs(notes)
     add("cf.franchise", "E", "Franchise value of deposit funding (R$ x, R$ y, p, q)", None,
         "Removed from the paper by the user on 2026-09-29.", "--", "dropped", display="dropped")
     for t in _TABLES.values():

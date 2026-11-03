@@ -74,7 +74,7 @@ Things that have gone wrong here:
 
 | Family | Commands, in order |
 |---|---|
-| Sleepiness | First attach the cluster's AME bands to the E3/E4 fits: `sleep_ame_twostage.py --est {3,4} --loss robust --attach-from DEMAND_PREP/Rout/ame_twostage_est{k}_robust_if.pkl` (the cluster saves the band but never attaches it; without this the E3/E4 columns print standard errors, and `make_paper_numbers.py` stops on the missing interval). Then `sleep_export_all.py --estimation all`; `sleep_desc_clusters.py`. `sleep_export_spec12_compare.py` loads four 1 GB pickles: ask first |
+| Sleepiness | First attach the cluster's AME bands to the E3/E4 fits: `sleep_ame_twostage.py --est {3,4} --loss robust --attach-from DEMAND_PREP/Rout/ame_twostage_est{k}_robust_if.pkl` (the cluster saves the band but never attaches it; without this the E3/E4 columns print standard errors, and `make_paper_numbers.py` stops on the missing interval). Then `sleep_export_all.py --estimation all`; `sleep_desc_clusters.py`; `sleep_export_spec12_compare.py --tables-only` (Table 4 and the sidecar `make_paper_numbers.py` reads; step 4 of `exhibits_post_cluster.py`, about 2 minutes, four 1 GB fits). Without `--tables-only` it also draws two uncited φ_t PNGs and reads two ~2 GB `market_panel_phis.csv`: ask first |
 | Logit | Nothing: its `.tex` exhibits arrive with the ingest |
 | BLP | `make_blp_demand_comparison_table.py`; `make_blp_rc_table.py` |
 | Policy function | `bbl_polfunc.py --from-pkl`. It renders from the stored fit. Never re-fit to refresh a table |
@@ -95,6 +95,14 @@ matching the rendered tables. It writes `paper_numbers_macros.tex` (the `\pn[fmt
 - A number the prose should quote gets a key in the collector, never a typed value.
 - If the deposit-types table changed, run `make_slide_figures.py --only table` before this step:
   it writes the json the `slide.types.*` keys are read from.
+- `config/blp_status.toml` says whether the random-coefficients fits are final. While it says
+  `pending-blp-ext1` (since 2026-10-31: the engine's diagonal-IFT gradient, re-estimation under
+  way), every run keeps the BLP entries and the `demand.xi.*` entries `pending-blp-ext1` by
+  design, and every other entry must be ok. Release only once corrected fits are adopted:
+  1. set `status = "ok"`;
+  2. rerun `make_blp_demand_comparison_table.py`, `make_blp_rc_table.py --ests 3 4` and
+     `make_xi_diagnostics.py`, which drop the provisional note sentence;
+  3. rerun this script.
 
 ### 6. Compile, then equations
 
@@ -118,6 +126,15 @@ touched, re-render the paper figure and compare pixels with the previous one.
 - Which claims in the paper or the deck no longer match. Those edits are the user's; list them
   with line references rather than making them.
 - The `ZERO_PRINTS` list, anything the ingest refused, and every step skipped with the reason.
+- While `config/blp_status.toml` says pending, name as provisional every exhibit built from the
+  random-coefficients fits:
+  - Table 6 (`blp_demand_comparison*`), the per-routine tables (`blp_rc_E*`) and
+    `tab_xi_diagnostics`, whose notes carry the provisional sentence of `config/table_notes.toml`;
+    the ingest's `Rout/blp_compare_E*` tables, which carry none;
+  - the slide figures, which carry no marker: `fig_slide_demand_coef_E<k>` (`demand_coef_plot`, Table 6 Panel A),
+    `fig_slide_elasticity_wedge_E<k>` and its `_slide` copy (`elasticity_bars`, which reads the
+    provisional `value_full` of `demand.elast.blp.*` and `demand.impact.blp.*`), and
+    `fig_slide_xi_anova` and its `_slide` copy (`xi_anova_slide`, the ext1 xi-hat).
 
 ## Routing a new cluster output
 

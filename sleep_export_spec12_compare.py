@@ -973,10 +973,8 @@ def main():
         print(f"  [sandbox] SLEEP_OUT_ROOT redirects this run: exhibits go to {out_dir}, "
               f"not Drafts.")
     # EXHIBITS vs DATA. .tex/.png are what the paper reads, so they follow out_dir. The
-    # .pkl files are intermediates -- a serialized model bundle and the per-routine band
-    # pickles -- and they belong in Rout on BOTH sides: they are not exhibits, the paper
-    # never \input's them, and the band pickles are READ back below, so pointing them at
-    # the paper directory both misfiles ~1.1 GB and makes the read miss.
+    # serialized model bundle (.pkl, ~1.1 GB) is an intermediate and belongs in Rout on BOTH
+    # sides: it is not an exhibit and the paper never \input's it.
     data_dir = _paths_mod.rout_dir()
     data_dir.mkdir(parents=True, exist_ok=True)
 
@@ -1059,11 +1057,25 @@ def main():
     #     phi_mt_{safe_key}: SPEC12 -> phi_mt_{SPEC12_TAG} (utils/routines.py).
     #   * Single-index E3/E4: plot the bootstrap point path and
     #     the score/multiplier wild-cluster-bootstrap CI band cached in
-    #     Rout/ts_link_band_est{N}.pkl (cols time_id, phi_t, lo, hi, _d). Point and
+    #     ts_link_band_est{N}.pkl (cols time_id, phi_t, lo, hi, _d). Point and
     #     band come from the SAME fit, so the line sits inside its band by
     #     construction; national_phi_t.csv tracks the same *level* (means agree to
     #     ~1e-3) but its per-quarter wiggle is not what the tight band bounds.
     phi_col_map = {k: f'phi_mt_{_routines.SPEC12_TAG}' for k in mapping}
+
+    # sleep_est_single.py writes each band pickle to the rout_dir() of the run that fitted it.
+    # For a cluster fit that is data/output/sleep/Rout, which the download brings to
+    # demand_prep_root()/Rout, beside the est{k} fits read above; rout_dir() here is the local
+    # exhibits folder. So demand_prep_root()/Rout is read first and rout_dir() is the fallback.
+    # On the cluster and under SLEEP_OUT_ROOT the two are one folder.
+    band_dirs = list(dict.fromkeys([_paths_mod.demand_prep_root() / "Rout", data_dir]))
+
+    def band_pkl_path(est_num):
+        found = [p for p in (d / f"ts_link_band_est{est_num}.pkl" for d in band_dirs) if p.exists()]
+        if len(found) == 2 and found[0].read_bytes() != found[1].read_bytes():
+            print(f"  [Warning] two different band pickles for est{est_num}: using {found[0]}, "
+                  f"not {found[1]}")
+        return found[0] if found else data_dir / f"ts_link_band_est{est_num}.pkl"
 
     base_colors = plt.rcParams['axes.prop_cycle'].by_key()['color']
     color_map = {lbl: base_colors[i % len(base_colors)] for i, lbl in enumerate(mapping.keys())}
@@ -1089,7 +1101,7 @@ def main():
         ls = linestyle_map.get(label, '-')
         plot_label = label_rename.get(label, label)
 
-        band_pkl = data_dir / f"ts_link_band_est{est_num}.pkl"
+        band_pkl = band_pkl_path(est_num)
         if est_num >= 3 and band_pkl.exists():
             # Single-index: bootstrap point path + wild-cluster band.
             try:
@@ -1169,7 +1181,7 @@ def main():
         drew = False
         for est_num, lab, col, lstyle in ((nt_est, nt_label, "tab:blue", "-"),
                                           (t_est, t_label, "tab:red", "--")):
-            bpkl = data_dir / f"ts_link_band_est{est_num}.pkl"
+            bpkl = band_pkl_path(est_num)
             if not bpkl.exists():
                 print(f"  [Warning] no band pkl for est{est_num}; skipping in {out_name}")
                 continue

@@ -20,6 +20,8 @@
 if !isdefined(Main, :X_COLS)
     Base.include(Main, joinpath(@__DIR__, "blp_engine_cpu.jl"))
 end
+# The exact implicit-function Jacobian of δ* (CPU), shared by the CPU and GPU IFT paths below.
+isdefined(Main, :ExactGroups) || Base.include(Main, joinpath(@__DIR__, "blp_exact_ift.jl"))
 
 # The three entry points below resolve their demand parquet through `demand_parquet_path`,
 # defined in blp_engine_cpu.jl alongside `get_paths`/`input_filename` and pulled in by the
@@ -38,30 +40,25 @@ blp_1 computes ∂Q/∂θ₂ via Optim's built-in numerical finite differences, 
 requires (n_params + 1) full inner-loop evaluations per outer L-BFGS step.
 
 blp_2 computes ∂Q/∂θ₂ analytically: after the inner contraction converges to
-δ*(θ₂), each parameter requires ONE forward share pass (no contraction), giving:
+δ*(θ₂), each parameter requires two forward share passes (no contraction) and one
+exact linear solve shares them all:
 
   blp_1: (n_params + 1) × full_inner_loop  per outer iter
-  blp_2: 1 × full_inner_loop + n_params × one_forward_pass  per outer iter
-
-For extended stage (n_params = 8) with ~200 SQUAREM iters per full solve:
-  blp_1 ≈ 9 × 200 = 1 800 SQUAREM steps per outer iter
-  blp_2 ≈ 1 × 200 + 8 × 1 =  208 SQUAREM steps per outer iter
-  → ~8.7× cheaper per outer iteration; L-BFGS also converges in fewer iters.
+  blp_2: 1 × full_inner_loop + 2·n_params forward passes + the exact solve  per outer iter
 
 IFT gradient derivation
 -----------------------
-The BLP contraction T(δ, θ₂) = δ + ln s_data − ln s(δ, θ₂) has fixed point δ*.
-Differentiating T(δ*(θ₂), θ₂) = δ*(θ₂) w.r.t. θ₂_k:
+The BLP contraction T(δ, θ₂) = δ + ln s_data − ln s(δ, θ₂) has fixed point δ*, where
+ln s(δ*(θ₂), θ₂) = ln s_data. Differentiating w.r.t. θ₂_k:
 
-  (I − ∂T/∂δ) ∂δ*/∂θ₂_k = ∂T/∂θ₂_k = −∂ ln s/∂θ₂_k
+  (∂ ln s/∂δ) ∂δ*/∂θ₂_k = −∂ ln s/∂θ₂_k
 
-Diagonal approximation: ∂T_i/∂δ_i ≈ s_i  (own-share derivative of logit T),
-so (1 − s_i) ∂δ*_i/∂θ₂_k ≈ −∂ ln s_i/∂θ₂_k
+∂ ln s/∂θ₂_k comes from central differences of the shares at fixed δ*; the log-share
+Jacobian ∂ ln s/∂δ is formed and solved exactly, one quarter at a time, by
+`exact_delta_jacobian` (blp_exact_ift.jl): a B market's choice set holds the quarter's
+D products, so the B and D products of a quarter form one coupled system.
 
-Forward-difference estimate:
-  ∂δ*_i/∂θ₂_k ≈ −[log s_i(δ*, θ₂+ε·eₖ) − log s_i(δ*, θ₂)] / ε / (1 − s_i)
-
-Projection to ∂Q/∂θ₂_k:
+Projection to ∂Q/∂θ₂_k (`ift_gradient_from_jacobian!`):
   θ₁* = X̂[valid] \\ δ*[valid]           (2SLS on converged δ*)
   ∂θ₁*/∂θ₂_k = X̂[valid] \\ d_k[valid]  (QR reuse, O(N·K) per k)
   ∂ξ/∂θ₂_k   = d_k − X_full · ∂θ₁/∂θ₂_k
@@ -109,21 +106,77 @@ function collect_model_shares(buf::HotBuffers, pc::Precomp, N::Int)::Vector{Floa
 end
 
 
+"""The exact-Jacobian groups of `pc` (`build_exact_groups`), built once per Precomp."""
+const _EXACT_GROUPS_CACHE = Ref{Any}(nothing)
+function exact_groups(pc::Precomp)::ExactGroups
+    c = _EXACT_GROUPS_CACHE[]
+    (c !== nothing && c[1] === pc) && return c[2]
+    G = build_exact_groups(pc.b_mask, pc.b_mkt_idx, pc.d_time_enc, pc.pair_time_enc, pc.pop_weights)
+    _EXACT_GROUPS_CACHE[] = (pc, G)
+    return G
+end
+
+"""∂ln s/∂θ₂ at fixed δ* (N × n_params) by central differences of the shares, `shares!()` filling
+buf.s_B / buf.s_D at the μ in buf; restores μ to θ₂."""
+function dlns_dtheta(shares!, theta2::Vector{Float64}, buf, prod_vec, nu_draws, sigma_indices,
+                     pi_interactions, R::Int, coef_dim::Int, pc::Precomp, N::Int; ε::Float64=1e-5)
+    D = Matrix{Float64}(undef, N, length(theta2))
+    for k in eachindex(theta2)
+        tp = copy(theta2); tp[k] += ε
+        tm = copy(theta2); tm[k] -= ε
+        mu_at!(buf, prod_vec, nu_draws, tp, sigma_indices, pi_interactions, R, coef_dim)
+        shares!(); lsp = log.(collect_model_shares(buf, pc, N))
+        mu_at!(buf, prod_vec, nu_draws, tm, sigma_indices, pi_interactions, R, coef_dim)
+        shares!(); lsm = log.(collect_model_shares(buf, pc, N))
+        D[:, k] = (lsp .- lsm) ./ (2ε)
+    end
+    mu_at!(buf, prod_vec, nu_draws, theta2, sigma_indices, pi_interactions, R, coef_dim)
+    return D
+end
+
+"""The exact ∂δ*/∂θ₂ (`exact_delta_jacobian`) from ∂ln s/∂θ₂, with buf.mu at θ₂. Rows of a singular
+block (a market whose outside share has vanished at a far trial point) come back non-finite; they are
+set to zero, with a warning, so the optimizer's line search can still reject that point."""
+function exact_jacobian_from_dlns(delta_star::Vector{Float64}, buf, dlns::Matrix{Float64}, pc::Precomp)
+    Jδ, info = exact_delta_jacobian(delta_star, buf.mu, dlns, exact_groups(pc))
+    bad = .!isfinite.(Jδ)
+    if any(bad)
+        println("  [!] exact IFT: $(count(any(bad; dims=2))) row(s) non-finite " *
+                "($(info["n_singular_blocks"]) singular block(s)); set to zero")
+        Jδ[bad] .= 0.0
+    end
+    return Jδ
+end
+
+"""∂Q/∂θ₂ from a Jacobian of δ* in θ₂: θ₁ is the 2SLS projection of δ on X̂, so
+∂θ₁/∂θ₂_k = X̂[valid] \\ Jδ[valid, k], ∂ξ/∂θ₂_k = Jδ[:, k] − X_full ∂θ₁/∂θ₂_k,
+∂g/∂θ₂_k = mean(Z ⊙ ∂ξ/∂θ₂_k) and ∂Q/∂θ₂_k = 2 (Wg)ᵀ ∂g/∂θ₂_k."""
+function ift_gradient_from_jacobian!(grad::Vector{Float64}, Jδ::Matrix{Float64},
+                                     delta_star::Vector{Float64}, g_moments::Vector{Float64},
+                                     W::Matrix{Float64}, pc::Precomp)
+    valid   = pc.theta1_valid .& isfinite.(delta_star)
+    Wg      = W * g_moments
+    Xhat_qr = qr(pc.X_hat[valid, :])
+    for k in eachindex(grad)
+        d_k       = Jδ[:, k]
+        dtheta1_k = Xhat_qr \ d_k[valid]
+        dxi_k     = d_k - pc.X_full * dtheta1_k
+        dg_k      = vec(Statistics.mean(dxi_k .* pc.Z_moments; dims=1))
+        grad[k]   = 2.0 * dot(Wg, dg_k)
+    end
+    return grad
+end
+
 """
-    compute_ift_gradient!(grad, g_moments, delta_star, s_base, theta2,
-                          buf, prod_vec, nu_draws, sigma_indices, pi_interactions,
-                          R, coef_dim, W, pc; ε=1e-5)
+    compute_ift_gradient!(grad, g_moments, delta_star, theta2, buf, prod_vec, nu_draws,
+                          sigma_indices, pi_interactions, R, coef_dim, W, pc)
 
-Fill `grad[k] = ∂Q/∂θ₂_k` for k = 1..n_params using the diagonal IFT
-approximation.  Each k requires ONE forward share computation — no inner
-contraction — so cost is O(n_params × one_forward_pass).
-
-After returning, `buf.mu` is restored to the base θ₂ values.
+Fill `grad[k] = ∂Q/∂θ₂_k` with the exact IFT Jacobian of δ* (CPU share passes). After returning,
+`buf.mu` is at θ₂.
 """
 function compute_ift_gradient!(grad::Vector{Float64},
                                 g_moments::Vector{Float64},
                                 delta_star::Vector{Float64},
-                                s_base::Vector{Float64},
                                 theta2::Vector{Float64},
                                 buf::HotBuffers,
                                 prod_vec::Matrix{Float64},
@@ -132,51 +185,83 @@ function compute_ift_gradient!(grad::Vector{Float64},
                                 pi_interactions::Vector{Tuple{Int,Int}},
                                 R::Int, coef_dim::Int,
                                 W::Matrix{Float64},
-                                pc::Precomp;
-                                ε::Float64=1e-5)
-    n_params = length(theta2)
-    N        = length(delta_star)
-    valid    = pc.theta1_valid .& isfinite.(delta_star)
-
-    Wg      = W * g_moments                         # precompute W·g (reused for all k)
-    X_hat_v = pc.X_hat[valid, :]
-    Xhat_qr = qr(X_hat_v)                          # QR factored once; O(N·K) per k solve
-
-    for k in 1:n_params
-        # ── Perturb θ₂_k ──────────────────────────────────────────────────
-        theta2_k     = copy(theta2)
-        theta2_k[k] += ε
-        sv_k, pv_k   = unpack_theta2(theta2_k, sigma_indices, pi_interactions)
-
-        # ── ONE forward share pass at fixed δ* (NO inner contraction) ─────
-        compute_mu!(buf, prod_vec, nu_draws, sv_k, sigma_indices, pv_k, R, coef_dim)
-        compute_model_shares!(buf, delta_star, pc, R)
-        s_k = collect_model_shares(buf, pc, N)
-
-        # ── Diagonal IFT: ∂δ*_i/∂θ₂_k ≈ −Δln(sᵢ)/ε/(1−sᵢ) ─────────────
-        # Sign: (1−sᵢ)∂δ*ᵢ/∂θₖ = ∂Tᵢ/∂θₖ = −∂ln sᵢ/∂θₖ  →  NEGATIVE.
-        d_k = Vector{Float64}(undef, N)
-        @inbounds for i in 1:N
-            s_b         = s_base[i]
-            one_minus_s = max(1.0 - s_b, 1e-4)     # clamp: avoids ÷0 when sᵢ ≈ 1
-            d_k[i]      = -(log(max(s_k[i], 1e-15)) - log(s_b)) / ε / one_minus_s
-        end
-
-        # ── Project: ∂θ₁/∂θ₂_k = X̂[valid] \ d_k[valid] ──────────────────
-        dtheta1_k = Xhat_qr \ d_k[valid]
-
-        # ── ∂ξ/∂θ₂_k = d_k − X_full · ∂θ₁/∂θ₂_k ─────────────────────────
-        dxi_k = d_k - pc.X_full * dtheta1_k
-
-        # ── ∂g/∂θ₂_k = mean(Z ⊙ ∂ξ, dims=1); ∂Q/∂θ₂_k = 2·Wgᵀ·∂g ────────
-        dg_k    = vec(Statistics.mean(dxi_k .* pc.Z_moments; dims=1))
-        grad[k] = 2.0 * dot(Wg, dg_k)
-    end
-
-    # ── Restore buf.mu to base θ₂ so subsequent optimizer calls are consistent
-    sv_base, pv_base = unpack_theta2(theta2, sigma_indices, pi_interactions)
-    compute_mu!(buf, prod_vec, nu_draws, sv_base, sigma_indices, pv_base, R, coef_dim)
+                                pc::Precomp)
+    N    = length(delta_star)
+    dlns = dlns_dtheta(() -> compute_model_shares!(buf, delta_star, pc, R), theta2, buf, prod_vec,
+                       nu_draws, sigma_indices, pi_interactions, R, coef_dim, pc, N)
+    Jδ   = exact_jacobian_from_dlns(delta_star, buf, dlns, pc)
+    ift_gradient_from_jacobian!(grad, Jδ, delta_star, g_moments, W, pc)
     return nothing
+end
+
+"""
+    fd_check(Qfun, theta2, lo, hi; h=1e-4, steps=(1e-2, 1e-3, 1e-4)) → Dict
+
+The convergence report of a fit: the finite-difference gradient of the objective at θ₂ (central; a
+forward step where the lower bound binds), its projection on the box (a coordinate at a bound whose
+derivative points out of the box is zeroed), its norm, and the change in Q along the projected
+descent direction at each step. `Qfun(θ)` returns Q with δ contracted tightly from δ*. A report,
+not a gate: the optimizer's own `converged` only says it stopped before its iteration cap.
+"""
+function fd_check(Qfun, theta2::Vector{Float64}, lo::Vector{Float64}, hi::Vector{Float64};
+                  h::Float64=1e-4, steps=(1e-2, 1e-3, 1e-4))
+    t0 = time()
+    Q0 = Qfun(theta2)
+    K  = length(theta2)
+    g  = zeros(K); side = String[]
+    for k in 1:K
+        tp = copy(theta2); tp[k] = min(theta2[k] + h, hi[k])
+        tm = copy(theta2); tm[k] = theta2[k] - h
+        if tm[k] < lo[k]
+            g[k] = (Qfun(tp) - Q0) / (tp[k] - theta2[k]); push!(side, "forward")
+        else
+            g[k] = (Qfun(tp) - Qfun(tm)) / (tp[k] - tm[k]); push!(side, "central")
+        end
+    end
+    pg = copy(g)
+    for k in 1:K
+        (theta2[k] <= lo[k] + 1e-10 && pg[k] > 0) && (pg[k] = 0.0)
+        (theta2[k] >= hi[k] - 1e-10 && pg[k] < 0) && (pg[k] = 0.0)
+    end
+    npg  = norm(pg)
+    scan = Dict{String,Any}[]
+    if npg > 0
+        d = -pg ./ npg
+        for s in steps
+            push!(scan, Dict{String,Any}("t" => s, "dQ" => Qfun(clamp.(theta2 .+ s .* d, lo, hi)) - Q0))
+        end
+    end
+    return Dict{String,Any}("Q" => Q0, "h" => h, "grad_fd" => g, "side" => side,
+                            "grad_fd_projected" => pg, "grad_fd_projected_norm" => npg,
+                            "scan" => scan,
+                            "best_dQ" => isempty(scan) ? 0.0 : minimum(x["dQ"] for x in scan),
+                            "seconds" => time() - t0)
+end
+
+"""The fd_check report of a fit, with the exact IFT gradient (`gradfun()`) and its projected norm,
+never failing the stage: an error comes back as the report's "error" entry. BLP_FD_CHECK=0 skips it."""
+function fd_check_report(Qfun, gradfun, theta2::Vector{Float64},
+                         lo::Vector{Float64}, hi::Vector{Float64})
+    get(ENV, "BLP_FD_CHECK", "1") == "0" && return Dict{String,Any}("skipped" => "BLP_FD_CHECK=0")
+    try
+        rep = fd_check(Qfun, theta2, lo, hi)
+        grad_exact = gradfun()
+        ge = copy(grad_exact)
+        for k in eachindex(ge)
+            (theta2[k] <= lo[k] + 1e-10 && ge[k] > 0) && (ge[k] = 0.0)
+            (theta2[k] >= hi[k] - 1e-10 && ge[k] < 0) && (ge[k] = 0.0)
+        end
+        rep["grad_exact"] = grad_exact
+        rep["grad_exact_projected_norm"] = norm(ge)
+        log_status("  [FD-CHECK] projected FD gradient norm $(round(rep["grad_fd_projected_norm"], sigdigits=4)) " *
+                   "(exact IFT $(round(rep["grad_exact_projected_norm"], sigdigits=4))); best dQ along the FD " *
+                   "descent direction $(round(rep["best_dQ"], sigdigits=4)); $(round(rep["seconds"], digits=0)) s")
+        return rep
+    catch e
+        msg = sprint(showerror, e)
+        log_status("  [FD-CHECK] failed: $msg")
+        return Dict{String,Any}("error" => msg)
+    end
 end
 
 
@@ -184,8 +269,8 @@ end
     gmm_fg!(G, theta2, ...) → Float64
 
 Compute GMM objective Q and, when `G` is not nothing, fill the analytical
-gradient ∇Q via the diagonal IFT approximation.  Both share a single inner
-contraction solve — ~n_params× cheaper per outer iter than numerical gradients.
+gradient ∇Q from the exact IFT Jacobian.  Both share a single inner
+contraction solve.
 """
 function gmm_fg!(G,
                   theta2::Vector{Float64},
@@ -211,12 +296,7 @@ function gmm_fg!(G,
     Q          = dot(g_moments, W * g_moments)
 
     if G !== nothing
-        # Recompute shares at δ* to ensure buf.s_B/s_D are consistent.
-        # (SQUAREM may exit after an accelerated step that displaced buf from δ*.)
-        compute_model_shares!(buf, delta, pc, R)
-        s_base = collect_model_shares(buf, pc, length(delta))
-
-        compute_ift_gradient!(G, g_moments, delta, s_base, theta2,
+        compute_ift_gradient!(G, g_moments, delta, theta2,
                                buf, prod_vec, nu_draws,
                                sigma_indices, pi_interactions,
                                R, coef_dim, W, pc)
@@ -466,6 +546,22 @@ function run_blp_estimation_ift(estim::Int, spec_id::Int, args,
     theta1_star, xi_star   = estimate_theta1(delta_final, pc)
     theta1_se, n_cl, G_s   = compute_cluster_se(theta1_star, delta_final, pc)
 
+    # ── Convergence report: FD gradient of Q (tight contractions from δ*) and the exact one ──
+    Qfun_cpu = t -> begin
+        mu_at!(buf, prod_vec, nu_draws, t, sigma_indices, pi_interactions, R, coef_dim)
+        d = copy(delta_final)
+        blp_contraction!(buf, d, pc, R; tol = 1e-12, max_iter = 20000)
+        _, xi_t = estimate_theta1(d, pc)
+        g_t = compute_gmm_moments(xi_t, pc)
+        dot(g_t, W * g_t)
+    end
+    grad_cpu = () -> (G = zeros(length(theta2_star));
+                      gmm_fg!(G, theta2_star, buf, prod_vec, nu_draws, sigma_indices, pi_interactions,
+                              R, coef_dim, W, args["tol_inner"], args["max_inner"], copy(delta_final), pc);
+                      G)
+    results["fd_check"] = fd_check_report(Qfun_cpu, grad_cpu, theta2_star, lo, hi)
+    mu_at!(buf, prod_vec, nu_draws, theta2_star, sigma_indices, pi_interactions, R, coef_dim)
+
     results["theta1"]             = theta1_star
     results["theta1_se"]          = theta1_se
     results["theta2"]             = theta2_star
@@ -604,6 +700,8 @@ function main()
                 # What the SEs are (blp_se_common.jl SE GUARD): "ok" = joint SEs; anything else =
                 # none, and the SE / p-value entries above are null. Written when the run recorded it.
                 haskey(res, "se_status") && (json_out["se_status"] = res["se_status"])
+                # The convergence report (fd_check_report), non-finite values as null.
+                haskey(res, "fd_check") && (json_out["fd_check"] = json_finite(res["fd_check"]))
                 haskey(res, "theta1_se_linear_iv") && (json_out["theta1_se_linear_iv"] =
                     json_se_values(res["theta1_se_linear_iv"], "no joint", nothing))
                 # A start record (two-start stages; ext2 when it starts cold under the override),
@@ -2226,17 +2324,17 @@ GpuBuffers, blp_contraction_gpu!, compute_model_shares_gpu!, …).
 
 IFT extension for GPU
 ---------------------
-After the inner contraction on GPU, the IFT gradient requires n_params forward
-share passes.  On the H200 each forward pass (compute_model_shares_gpu!) takes
-~1-2 ms vs ~200 ms for a full contraction, so the overhead is negligible.
+After the inner contraction on GPU, the IFT gradient takes 2·n_params forward
+share passes on the GPU (central differences of ln s at fixed δ*; ~1-2 ms each on
+the H200) and the exact Jacobian solve on the CPU threads (blp_exact_ift.jl).
 
   blp_1_gpu: (n_params+1) × full_inner_loop (Optim numerical gradient)
-  blp_2_gpu: 1 × full_inner_loop + n_params × one_GPU_forward_pass
+  blp_2_gpu: 1 × full_inner_loop + 2·n_params GPU forward passes + the exact solve
 
 GPU memory note
 ---------------
-The IFT gradient computes n_params forward passes sequentially — no extra VRAM
-is needed.  All perturbation passes reuse the same GpuBuffers.
+The forward passes run sequentially and reuse the same GpuBuffers; the exact solve
+works on host memory, one quarter per thread.
 
 Usage (Bouchet H200 cluster)
 -----------------------------
@@ -2280,25 +2378,32 @@ function collect_model_shares(buf::HotBuffers, pc::Precomp, N::Int)::Vector{Floa
 end
 
 
+"""The exact IFT Jacobian ∂δ*/∂θ₂ (N × dim θ₂) at (δ*, θ₂): ∂ln s/∂θ₂ from 2·dim θ₂ GPU forward
+passes at fixed δ*, then `exact_delta_jacobian` on the CPU threads. The raw columns (before the θ₁
+projection) are the θ₂ block of the moment Jacobian D = [−Z'X, Z'∂δ/∂θ₂] for the standard errors,
+and `ift_gradient_from_jacobian!` turns them into ∇Q. buf.mu is at θ₂ on exit."""
+function compute_delta_jacobian_gpu(delta_star::Vector{Float64},
+                                    theta2::Vector{Float64}, buf::HotBuffers, gbuf::GpuBuffers,
+                                    prod_vec::Matrix{Float64}, nu_draws::Matrix{Float64},
+                                    sigma_indices::Vector{Int},
+                                    pi_interactions::Vector{Tuple{Int,Int}},
+                                    R::Int, coef_dim::Int, pc::Precomp)
+    N    = length(delta_star)
+    dlns = dlns_dtheta(() -> compute_model_shares_gpu!(buf, gbuf, delta_star, pc, R), theta2, buf,
+                       prod_vec, nu_draws, sigma_indices, pi_interactions, R, coef_dim, pc, N)
+    return exact_jacobian_from_dlns(delta_star, buf, dlns, pc)
+end
+
 """
-    compute_ift_gradient_gpu!(grad, g_moments, delta_star, s_base, theta2,
-                               buf, gbuf, prod_vec, nu_draws,
-                               sigma_indices, pi_interactions,
-                               R, coef_dim, W, pc; ε=1e-5)
+    compute_ift_gradient_gpu!(grad, g_moments, delta_star, theta2, buf, gbuf, prod_vec,
+                               nu_draws, sigma_indices, pi_interactions, R, coef_dim, W, pc)
 
-GPU version of the IFT gradient.  Each of the n_params perturbations runs
-`compute_model_shares_gpu!` — a single GPU forward pass (~1-2 ms on H200),
-much faster than a full blp_contraction_gpu! (~200+ ms).
-
-CPU handles: μ computation (MKL, tiny k-dim), d_k scaling, linear projection.
-GPU handles: the n_params share forward passes (logsumexp + GEMM).
-
-After returning, `buf.mu` is restored to the base θ₂.
+Fill `grad[k] = ∂Q/∂θ₂_k` with the exact IFT Jacobian (`compute_delta_jacobian_gpu`). After
+returning, `buf.mu` is at θ₂.
 """
 function compute_ift_gradient_gpu!(grad::Vector{Float64},
                                     g_moments::Vector{Float64},
                                     delta_star::Vector{Float64},
-                                    s_base::Vector{Float64},
                                     theta2::Vector{Float64},
                                     buf::HotBuffers,
                                     gbuf::GpuBuffers,
@@ -2308,77 +2413,11 @@ function compute_ift_gradient_gpu!(grad::Vector{Float64},
                                     pi_interactions::Vector{Tuple{Int,Int}},
                                     R::Int, coef_dim::Int,
                                     W::Matrix{Float64},
-                                    pc::Precomp;
-                                    ε::Float64=1e-5)
-    n_params = length(theta2)
-    N        = length(delta_star)
-    valid    = pc.theta1_valid .& isfinite.(delta_star)
-
-    Wg      = W * g_moments
-    X_hat_v = pc.X_hat[valid, :]
-    Xhat_qr = qr(X_hat_v)
-
-    for k in 1:n_params
-        # ── Perturb θ₂_k ──────────────────────────────────────────────────
-        theta2_k     = copy(theta2)
-        theta2_k[k] += ε
-        sv_k, pv_k   = unpack_theta2(theta2_k, sigma_indices, pi_interactions)
-
-        # ── ONE GPU forward pass at fixed δ* (NO inner contraction) ───────
-        # compute_mu! stays on CPU (MKL GEMM over small k-dim)
-        compute_mu!(buf, prod_vec, nu_draws, sv_k, sigma_indices, pv_k, R, coef_dim)
-        compute_model_shares_gpu!(buf, gbuf, delta_star, pc, R)
-        s_k = collect_model_shares(buf, pc, N)
-
-        # ── Diagonal IFT: ∂δ*_i/∂θ₂_k ≈ −Δln(sᵢ)/ε/(1−sᵢ)  (NEGATIVE sign)
-        # (1−sᵢ)∂δ*ᵢ/∂θₖ = ∂Tᵢ/∂θₖ = −∂ln sᵢ/∂θₖ — see blp_2_estimation.jl docstring.
-        d_k = Vector{Float64}(undef, N)
-        @inbounds for i in 1:N
-            s_b         = s_base[i]
-            one_minus_s = max(1.0 - s_b, 1e-4)
-            d_k[i]      = -(log(max(s_k[i], 1e-15)) - log(s_b)) / ε / one_minus_s
-        end
-
-        # ── Project ───────────────────────────────────────────────────────
-        dtheta1_k = Xhat_qr \ d_k[valid]
-        dxi_k     = d_k - pc.X_full * dtheta1_k
-        dg_k      = vec(Statistics.mean(dxi_k .* pc.Z_moments; dims=1))
-        grad[k]   = 2.0 * dot(Wg, dg_k)
-    end
-
-    # Restore buf.mu to base θ₂
-    sv_base, pv_base = unpack_theta2(theta2, sigma_indices, pi_interactions)
-    compute_mu!(buf, prod_vec, nu_draws, sv_base, sigma_indices, pv_base, R, coef_dim)
+                                    pc::Precomp)
+    Jδ = compute_delta_jacobian_gpu(delta_star, theta2, buf, gbuf, prod_vec, nu_draws,
+                                    sigma_indices, pi_interactions, R, coef_dim, pc)
+    ift_gradient_from_jacobian!(grad, Jδ, delta_star, g_moments, W, pc)
     return nothing
-end
-
-"""Collect the raw diagonal-IFT Jacobian ∂δ*/∂θ₂ (N × dim θ₂) at the optimum, for standard errors.
-Same per-column forward pass as `compute_ift_gradient_gpu!`, but returns the raw `d_k` columns
-(BEFORE the θ₁ projection) — the θ₂ block of the moment Jacobian D=[−Z'X, Z'∂δ/∂θ₂]. Restores
-buf.mu to base θ₂ on exit. Inherits the diagonal-IFT + forward-difference approximation."""
-function compute_delta_jacobian_gpu(delta_star::Vector{Float64}, s_base::Vector{Float64},
-                                    theta2::Vector{Float64}, buf::HotBuffers, gbuf::GpuBuffers,
-                                    prod_vec::Matrix{Float64}, nu_draws::Matrix{Float64},
-                                    sigma_indices::Vector{Int},
-                                    pi_interactions::Vector{Tuple{Int,Int}},
-                                    R::Int, coef_dim::Int, pc::Precomp; ε::Float64=1e-5)
-    n_params = length(theta2)
-    N        = length(delta_star)
-    Ddelta   = Matrix{Float64}(undef, N, n_params)
-    for k in 1:n_params
-        theta2_k     = copy(theta2); theta2_k[k] += ε
-        sv_k, pv_k   = unpack_theta2(theta2_k, sigma_indices, pi_interactions)
-        compute_mu!(buf, prod_vec, nu_draws, sv_k, sigma_indices, pv_k, R, coef_dim)
-        compute_model_shares_gpu!(buf, gbuf, delta_star, pc, R)
-        s_k = collect_model_shares(buf, pc, N)
-        @inbounds for i in 1:N
-            one_minus_s   = max(1.0 - s_base[i], 1e-4)
-            Ddelta[i, k]  = -(log(max(s_k[i], 1e-15)) - log(s_base[i])) / ε / one_minus_s
-        end
-    end
-    sv_base, pv_base = unpack_theta2(theta2, sigma_indices, pi_interactions)
-    compute_mu!(buf, prod_vec, nu_draws, sv_base, sigma_indices, pv_base, R, coef_dim)
-    return Ddelta
 end
 
 
@@ -2413,11 +2452,7 @@ function gmm_fg_gpu!(G,
     Q          = dot(g_moments, W * g_moments)
 
     if G !== nothing
-        # Recompute shares at δ* on GPU to ensure buf.s_B/s_D are consistent
-        compute_model_shares_gpu!(buf, gbuf, delta, pc, R)
-        s_base = collect_model_shares(buf, pc, length(delta))
-
-        compute_ift_gradient_gpu!(G, g_moments, delta, s_base, theta2,
+        compute_ift_gradient_gpu!(G, g_moments, delta, theta2,
                                    buf, gbuf, prod_vec, nu_draws,
                                    sigma_indices, pi_interactions,
                                    R, coef_dim, W, pc)
@@ -2464,7 +2499,7 @@ function run_blp_estimation_ift_gpu(estim::Int, spec_id::Int, args,
     results = Dict{String,Any}("spec_id" => spec_id, "estim" => estim,
                                 "stage" => args["stage"])
     println("  Stage: $(uppercase(args["stage"])) ($n_params parameters)")
-    println("  IFT: 1 GPU inner loop + $n_params GPU forward pass(es) per outer iter")
+    println("  IFT: 1 GPU inner loop + $(2n_params) GPU forward passes + the exact Jacobian solve per outer iter")
 
     N_obs     = nrow(df)
     mca_codes = string.(df.mca_code)
@@ -2667,21 +2702,14 @@ function run_blp_estimation_ift_gpu(estim::Int, spec_id::Int, args,
         println("  [DRY RUN GPU] 10 iters: $(round(elapsed, digits=2))s " *
                 "($(round(elapsed/10, digits=3)) s/iter)")
 
-        println("  [DRY RUN GPU] Timing $n_params IFT forward pass(es)...")
-        compute_model_shares_gpu!(buf, gbuf, delta_work, pc, R)
-        s_base = collect_model_shares(buf, pc, N_obs)
-        g_dummy = zeros(n_params)
+        println("  [DRY RUN GPU] Timing the IFT Jacobian ($(2n_params) forward passes + the exact solve)...")
         t1 = time()
-        for k in 1:n_params
-            theta2_k = copy(theta2_0); theta2_k[k] += 1e-5
-            sv_k, pv_k = unpack_theta2(theta2_k, sigma_indices, pi_interactions)
-            compute_mu!(buf, prod_vec, nu_draws, sv_k, sigma_indices, pv_k, R, coef_dim)
-            compute_model_shares_gpu!(buf, gbuf, delta_work, pc, R)
-        end
+        compute_delta_jacobian_gpu(delta_work, theta2_0, buf, gbuf, prod_vec, nu_draws,
+                                   sigma_indices, pi_interactions, R, coef_dim, pc)
         CUDA.synchronize()
         elapsed_ift = time() - t1
-        println("  [DRY RUN GPU] $n_params forward passes: $(round(elapsed_ift*1000, digits=1)) ms " *
-                "($(round(elapsed_ift/n_params*1000, digits=2)) ms/pass)")
+        println("  [DRY RUN GPU] IFT Jacobian: $(round(elapsed_ift, digits=2)) s " *
+                "($(Threads.nthreads()) threads)")
         return Dict("dry_run" => true)
     end
 
@@ -2792,8 +2820,8 @@ function run_blp_estimation_ift_gpu(estim::Int, spec_id::Int, args,
     theta1_pval = Float64[]; theta2_pval = Float64[]
 
     # ── θ₁+θ₂ SEs "in the same manner" via BLP_SE_METHOD ("wcb" default | "sandwich") ──────
-    # Joint GMM Jacobian D=[−Z'X, Z'∂δ/∂θ₂]; ∂δ/∂θ₂ from the diagonal IFT (same approximation the
-    # gradient uses). Overwrites the linear-IV θ₁ SE so θ₁ accounts for θ₂ estimation uncertainty.
+    # Joint GMM Jacobian D=[−Z'X, Z'∂δ/∂θ₂]; ∂δ/∂θ₂ is the exact IFT Jacobian the gradient uses
+    # (compute_delta_jacobian_gpu). Overwrites the linear-IV θ₁ SE so θ₁ accounts for θ₂ estimation uncertainty.
     # `se_status` records what the reported SEs are: "ok" (joint), "refused: ..." (the SE guard of
     # gmm_cluster_ses: K > L or a singular D'WD, every SE NaN), or "failed: ..." (the block threw;
     # every SE NaN). The linear-IV θ₁ SEs, which ignore θ₂'s estimation, are kept apart in
@@ -2805,9 +2833,7 @@ function run_blp_estimation_ift_gpu(estim::Int, spec_id::Int, args,
         theta1_se = fill(NaN, length(theta1_star))
         try
             valid  = pc.theta1_valid .& isfinite.(delta_final)
-            compute_model_shares_gpu!(buf, gbuf, delta_final, pc, R)          # shares at (δ*, θ₂*)
-            s_base = collect_model_shares(buf, pc, N_obs)
-            Ddelta = compute_delta_jacobian_gpu(delta_final, s_base, theta2_star, buf, gbuf,
+            Ddelta = compute_delta_jacobian_gpu(delta_final, theta2_star, buf, gbuf,
                         prod_vec, nu_draws, sigma_indices, pi_interactions, R, coef_dim, pc)
             se_all, pval_all = gmm_cluster_ses(_sem, vcat(theta1_star, theta2_star),
                         pc.Z_moments[valid, :], pc.X_full[valid, :], Ddelta[valid, :],
@@ -2827,6 +2853,23 @@ function run_blp_estimation_ift_gpu(estim::Int, spec_id::Int, args,
                        "are in theta1_se_linear_iv.")
         end
     end
+
+    # ── Convergence report: FD gradient of Q (tight contractions from δ*) and the exact one ──
+    Qfun_gpu = t -> begin
+        mu_at!(buf, prod_vec, nu_draws, t, sigma_indices, pi_interactions, R, coef_dim)
+        d = copy(delta_final)
+        blp_contraction_gpu!(buf, gbuf, d, pc, R; tol = 1e-12, max_iter = 20000)
+        _, xi_t = estimate_theta1(d, pc)
+        g_t = compute_gmm_moments(xi_t, pc)
+        dot(g_t, W * g_t)
+    end
+    grad_gpu = () -> (G = zeros(length(theta2_star));
+                      gmm_fg_gpu!(G, theta2_star, buf, gbuf, prod_vec, nu_draws, sigma_indices,
+                                  pi_interactions, R, coef_dim, W, args["tol_inner"], args["max_inner"],
+                                  copy(delta_final), pc);
+                      G)
+    results["fd_check"] = fd_check_report(Qfun_gpu, grad_gpu, theta2_star, lo, hi)
+    mu_at!(buf, prod_vec, nu_draws, theta2_star, sigma_indices, pi_interactions, R, coef_dim)
 
     results["theta1"]             = theta1_star
     results["theta1_se"]          = theta1_se
@@ -2984,6 +3027,8 @@ function main_gpu_ift()
                 # What the SEs are (blp_se_common.jl SE GUARD): "ok" = joint SEs; anything else =
                 # none, and the SE / p-value entries above are null. Written when the run recorded it.
                 haskey(res, "se_status") && (json_out["se_status"] = res["se_status"])
+                # The convergence report (fd_check_report), non-finite values as null.
+                haskey(res, "fd_check") && (json_out["fd_check"] = json_finite(res["fd_check"]))
                 haskey(res, "theta1_se_linear_iv") && (json_out["theta1_se_linear_iv"] =
                     json_se_values(res["theta1_se_linear_iv"], "no joint", nothing))
                 # A start record (two-start stages; ext2 when it starts cold under the override),

@@ -37,6 +37,10 @@ pi_units    = '$\Pi$ per standard deviation of the demographic.'
 q           = '$Q$: GMM criterion, a fit measure, not an overidentification test.'
 elasticity  = 'Elasticity: $\hat\alpha\,\overline{\rho(1-s)}$.'
 segments    = 'Segment dummies S2--S5 included, not shown.'
+# Printed only while config/blp_status.toml says pending (utils/blp_status.py): the rc_* lists
+# below end with it, and make_xi_diagnostics.py adds it to the residual table's note.
+# blp_logit.jl reads only the logit_* lists, so it never prints it.
+provisional = 'Provisional: the random-coefficients fits behind this table will be replaced by a re-estimation in progress.'
 
 # Sentence order per table. `se` resolves to se_wcb / se_sandwich by the stored se_method;
 # `boundary` is dropped when no Sigma is on its bound, `segments` when the table prints the
@@ -45,6 +49,6 @@ segments    = 'Segment dummies S2--S5 included, not shown.'
 [demand.order]
 logit_comparison = ['unit', 'se', 'spread', 'q', 'elasticity']
 logit_routine    = ['unit', 'se', 'spread', 'q']
-rc_comparison    = ['unit', 'se', 'spread', 'boundary', 'pi_units', 'q', 'elasticity']
-rc_full          = ['unit', 'segments', 'se', 'spread', 'boundary', 'pi_units', 'q', 'elasticity']
-rc_routine       = ['unit', 'se', 'spread', 'boundary', 'pi_units', 'q', 'elasticity']
+rc_comparison    = ['unit', 'se', 'spread', 'boundary', 'pi_units', 'q', 'elasticity', 'provisional']
+rc_full          = ['unit', 'segments', 'se', 'spread', 'boundary', 'pi_units', 'q', 'elasticity', 'provisional']
+rc_routine       = ['unit', 'se', 'spread', 'boundary', 'pi_units', 'q', 'elasticity', 'provisional']

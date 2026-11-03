@@ -16,6 +16,7 @@ DATA_RAW = paths.OPEN_FINANCE / "DATA_RAW"
 
 # BCB
 BCB_CCS_RELATIONSHIPS = DATA_RAW / "BCB" / "ccs_relationships" / "current"   # scrape_bcb_ccs_relationships.py
+BCB_CCS_LAI = DATA_RAW / "BCB" / "ccs_lai_18810_025400" / "raw"               # LAI delivery 2026-10-30 (make_ccs_flows.py)
 BCB_ESTBAN_AGENCIA = DATA_RAW / "BCB" / "estban_agencia"                       # scrape_estban_branches.py
 BCB_PIX_MUNICIPAL_RAW = DATA_RAW / "BCB" / "pix_municipal" / "raw"             # pix_mun_YYYYMM.csv
 BCB_PIX_PARTICIPANTS = DATA_RAW / "BCB" / "pix_participants"                   # Pix by participant (ISPB)

@@ -10,31 +10,35 @@ Run it after the cluster download has been ingested (cluster_ingest.py). Ordered
       reported MISSING)
    2  sleep_export_all.py --estimation all
    3  sleep_desc_clusters.py
-   4  make_blp_demand_comparison_table.py
-   5  make_blp_rc_table.py
-   6  make_xi_diagnostics.py
-   7  sleep_ident_entry_dynamics.py --figures-only
+   4  sleep_export_spec12_compare.py --tables-only
+      (Table 4, stage 1 and stage 2, portrait and landscape, from the est{k} fits and
+      national_phi_t.csv, plus the Rout sidecar est1-4_spec12_stage2_comparison.json that step 12
+      reads; --tables-only skips the two phi_t PNGs)
+   5  make_blp_demand_comparison_table.py
+   6  make_blp_rc_table.py --ests 3 4
+   7  make_xi_diagnostics.py
+   8  sleep_ident_entry_dynamics.py --figures-only
       (draws fig_entry_dynamics_a/b and the other D6 exhibits from the CSVs that the cluster's
       --compute-only run left in DIAG_PHI_SEPARATION; computes nothing)
-   8  make_entry_carry.py
+   9  make_entry_carry.py
       (reads DIAG_PHI_SEPARATION/d6_entry_events.csv, written by the cluster's entry-dynamics run)
-   9  make_phi_variance.py
-  10  make_active_truncation.py
-  11  make_paper_numbers.py
-  12  make_slide_figures.py --only ame,coef,wedge,flow,xi,slidesize4,slidesize5,refame,followups
+  10  make_phi_variance.py
+  11  make_active_truncation.py
+  12  make_paper_numbers.py
+  13  make_slide_figures.py --only ame,coef,wedge,flow,xi,slidesize4,slidesize5,refame,followups
 
-Step 11 keys (every make_slide_figures.py visual outside the panel-only list of
+Step 13 keys (every make_slide_figures.py visual outside the panel-only list of
 exhibits_local.py, kept when its function reads estimation outputs and nothing from BBL):
   ame         reads the routine's AME table sidecar (T4_SIDECAR, from sleep_export_all.py)
   coef        reads the BLP results of the routine (make_blp_rc_table.load_stage) and paper_numbers.json
   wedge       reads paper_numbers.json demand.elast.blp and demand.impact.blp (BLP elasticities)
   flow        TikZ of equation (9-B); its text quotes the sleep.meanphi paper number
-  xi          reads Rout/xi_diagnostics.json written by step 6
+  xi          reads Rout/xi_diagnostics.json written by step 7
   slidesize4  deck-size ame and wedge charts (both above)
   slidesize5  deck-size ame chart (above) plus the D-premium panel
   refame      reference-style ame chart (above)
   followups   the phi-hat variance, entry-carry and fee-ratio charts: it reads the sidecars of
-              steps 8-9 and of exhibits_local.py's step 5 (fee ratio), so exhibits_local.py runs
+              steps 9-10 and of exhibits_local.py's step 5 (fee ratio), so exhibits_local.py runs
               first
 Left out: violations (reads the bbl.ud.* paper numbers: BBL) and roadmap (static TikZ text).
 exhibits_local.py step 9 draws the panel-only keys depanova, pixexposure, paper, slidesize,
@@ -98,8 +102,9 @@ STEPS = [
     [_attach(3), _attach(4)],
     [("sleep_export_all.py", ["--estimation", "all"], [])],
     [("sleep_desc_clusters.py", [], [])],
+    [("sleep_export_spec12_compare.py", ["--tables-only"], [])],
     [("make_blp_demand_comparison_table.py", [], [])],
-    [("make_blp_rc_table.py", [], [])],
+    [("make_blp_rc_table.py", ["--ests", "3", "4"], [])],
     [("make_xi_diagnostics.py", [], [])],
     [("sleep_ident_entry_dynamics.py", ["--figures-only"], [])],
     [("make_entry_carry.py", [], [])],

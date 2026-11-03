@@ -191,6 +191,12 @@ def build_base_panel(panel_csv, time_block=False):
     near-zero values in that denominator)."""
     print(f"Loading {panel_csv}...")
     df_raw = load_panel_cached(panel_csv, dtype={'mca_code': str}, low_memory=False)
+    # The market GDP series of the time block, from every year of the panel as loaded (the same
+    # series the sleepiness estimation reads): taken before the window cut so 2016 keeps its lag.
+    gdp_series = None
+    if time_block:
+        from sleep_est_e2 import market_gdp_series
+        gdp_series = market_gdp_series(df_raw)
     df_raw = demand_chars.apply(df_raw)
     df = deposit_types.apply_variant(_reshape_panel(df_raw), "sleep_demand_prep_link")
     df['fgc_covered'] = df['deposit_type'].astype('Int64').isin([1, 2, 4]).astype(int)
@@ -262,7 +268,7 @@ def build_base_panel(panel_csv, time_block=False):
 
     if time_block:
         from sleep_est_e2 import add_time_variables
-        df = add_time_variables(df)
+        df = add_time_variables(df, gdp_series)
         print("  [+Time] added time_trend + gdp_growth_yoy to the demand frame")
 
     # GRAND-MEAN CENTERING -- last, after the time block is built, and by the SAME

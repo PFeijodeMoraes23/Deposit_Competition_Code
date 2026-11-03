@@ -6,10 +6,10 @@ Renders tab_state_vector_map.tex (label tab:state_vector_map), one non-breaking 
 panels:
 
   Panel A  every state of the specification (12) block and every collected candidate left out:
-           the depositor trait it measures, its analogue in the county-level sleepiness
-           specification of Egan et al. (2025), the share of its variance the entity and quarter
+           the depositor trait it measures, the share of its variance the entity and quarter
            fixed effects absorb, and its law of motion in the forward simulation (or the reason it
-           is left out).
+           is left out). Four columns, laid on the five-column grid of Panel B: the law of motion
+           spans the last two.
   Panel B  the conditioning of the two-way-demeaned regressors of eq. (13) when a second moment
            of a characteristic already in the block is added.
 
@@ -42,32 +42,32 @@ BASENAME = "tab_state_vector_map"
 LABEL = "tab:state_vector_map"
 PROD_BLOCK = "S5"
 
-# Panel A. (state, label, trait, Egan et al. analogue, block whose design row carries the state,
+# Panel A. (state, label, trait, block whose design row carries the state,
 # law of motion or reason left out). Labels follow sleep_export_link._BASE_LABELS; the laws of
 # motion are those of bbl_sleep_link.ROLE_OF and bbl_transitions.S_COLS.
 IN_ROWS = [
     ("risk_free_qoq_lag", "Lagged Selic Rate", "Common: stakes of shopping",
-     "Lagged federal funds rate", PROD_BLOCK, "Focus forward curve, lagged one quarter"),
+     PROD_BLOCK, "Focus forward curve, lagged one quarter"),
     ("pix_exists", "Pix Available", "Common: cost of moving funds",
-     "--", PROD_BLOCK, "Held at the launch quarter"),
+     PROD_BLOCK, "Held at the launch quarter"),
     ("cadunico_families_per1000", r"Cad\'{U}nico Families", "Composition: income",
-     r"Share with income above \$50k", PROD_BLOCK, "AR(1) within market"),
+     PROD_BLOCK, "AR(1) within market"),
     ("fraction_65plus", "Fraction 65+", "Composition: age",
-     "Share aged over 65", PROD_BLOCK, "AR(1) within market"),
+     PROD_BLOCK, "AR(1) within market"),
     ("connections_per100", "Mobile Lines", "Composition: digital access",
-     "Share with internet access", PROD_BLOCK, "AR(1) within market"),
+     PROD_BLOCK, "AR(1) within market"),
 ]
 OUT_ROWS = [
     ("gdp_per_capita", r"GDP \textit{per capita}", "Composition: income",
-     "--", "S7", "Second income moment; enters demand ($\\pi$)"),
+     "S7", "Second income moment; enters demand ($\\pi$)"),
     ("fraction_young", "Fraction Young (15--20)", "Composition: age",
-     "--", "S7", "Second age moment"),
+     "S7", "Second age moment"),
     ("frac_4g5g", "4G/5G Share of Mobile Lines", "Composition: digital access",
-     "--", "S5+frac_4g5g", "Second digital-access moment"),
+     "S5+frac_4g5g", "Second digital-access moment"),
     (None, "Pix Users and Transactions", "Pix usage intensity",
-     "--", None, "Equilibrium object: adoption responds to attention"),
+     None, "Equilibrium object: adoption responds to attention"),
     (None, "Branch and Access-Point Density", "Institutions' networks",
-     "--", None, "Chosen by the institutions"),
+     None, "Chosen by the institutions"),
 ]
 
 # Panel B. (block, row label, what it adds).
@@ -78,6 +78,20 @@ DESIGN_ROWS = [
     ("S7", "+ both", "Second income and age moments"),
     ("S5+frac_4g5g", "+ 4G/5G Share", "Second digital-access moment"),
 ]
+
+
+# Panel A has four columns on the five-column grid of the table: the absorbed share sits in the
+# third (centred, as wide as it) and the law of motion spans the fourth and fifth.
+_ABS_W = r"3.1cm"
+_MOTION_W = r"\dimexpr 3.5cm+1.8cm+2\tabcolsep\relax"
+
+
+def _abs(cell: str) -> str:
+    return (r"\multicolumn{1}{>{\centering\arraybackslash}p{" + _ABS_W + "}}{" + cell + "}")
+
+
+def _motion(cell: str) -> str:
+    return (r"\multicolumn{2}{>{\raggedright\arraybackslash}p{" + _MOTION_W + "}}{" + cell + "}")
 
 
 def f3(x) -> str:
@@ -110,20 +124,20 @@ def render(design, per_var) -> tuple[str, dict]:
     body = [r"\multicolumn{5}{@{}l}{\textit{Panel A. States of the sleepiness function}} \\*",
             r"\addlinespace[0.2em]",
             r"\multicolumn{5}{@{}l}{In the state vector} \\*"]
-    for state, lab, trait, analogue, blk, motion in IN_ROWS:
+    for state, lab, trait, blk, motion in IN_ROWS:
         a = absorbed(per_var, blk, state)
         side["absorbed_alone"][state] = a
-        body.append(f"{lab} & {trait} & {analogue} & {f3(a)} & {motion} \\\\")
+        body.append(f"{lab} & {trait} & {_abs(f3(a))} & {_motion(motion)} \\\\")
     body += [r"\addlinespace[0.3em]",
              r"\multicolumn{5}{@{}l}{Collected, not in the state vector} \\*"]
-    for state, lab, trait, analogue, blk, reason in OUT_ROWS:
+    for state, lab, trait, blk, reason in OUT_ROWS:
         if state is not None and blk in set(per_var["block"]):
             a = absorbed(per_var, blk, state)
             side["absorbed_alone"][state] = a
             cell = f3(a)
         else:
             cell = "--"
-        body.append(f"{lab} & {trait} & {analogue} & {cell} & {reason} \\\\")
+        body.append(f"{lab} & {trait} & {_abs(cell)} & {_motion(reason)} \\\\")
     body += [r"\midrule",
              r"\multicolumn{5}{@{}l}{\textit{Panel B. Conditioning of the regressors of the second "
              r"stage of the sleepiness estimation}} \\*",
@@ -144,25 +158,15 @@ def render(design, per_var) -> tuple[str, dict]:
                     f"\\multicolumn{{1}}{{c}}{{{f1c(d['max_vif'])}}} \\\\")
     note = (
         r"\textit{Notes:} Panel A: the states at specification (12) and the collected candidates "
-        r"left out. Common states move the stakes of shopping or the cost of moving funds for "
-        r"every depositor. Each composition state is the market share of one depositor "
-        r"characteristic. Analogue: the common state, or the county-level variable to which "
-        r"\textcite{egan2025dynamic} map the depositor characteristic, in their sleepiness "
-        r"function. Absorbed by FE: one minus the ratio of the state's variance net of bank "
-        r"$\times$ type $\times$ market and quarter fixed effects to its raw variance, on the "
-        r"specification (12) sample. A national state is identified only through its product with "
-        r"lagged deposits. Laws of motion: first-order autoregressions within market, on "
-        r"consecutive quarters of the market panel, for the composition states, the Focus forward "
-        r"curve lagged one quarter for the Selic rate, and Pix held at its launch value. Panel B: "
-        r"the two-way-demeaned regressors of the second stage of the sleepiness estimation, "
-        r"lagged deposits and the "
-        r"control-function term included. Condition number: square root of the ratio of the "
-        r"extreme eigenvalues of their correlation matrix. Effective dimension: "
-        r"$(\sum_i\lambda_i)^2/\sum_i\lambda_i^2$ over those eigenvalues. VIF: variance "
-        r"inflation factor. Both panels use the regressors only, not the deposit outcome."
+        r"left out. Absorbed by FE: the share of the state's variance absorbed by bank $\times$ "
+        r"type $\times$ market and quarter fixed effects, on the specification (12) sample. "
+        r"Panel B: the two-way-demeaned regressors of the second stage of the sleepiness "
+        r"estimation. VIF: variance inflation factor. Definitions: Appendix "
+        r"\ref{app:empirical:sleep}."
     )
-    head = (r"\textbf{Variable} & \textbf{Depositor trait} & \textbf{Analogue in Egan et al.} & "
-            r"\textbf{Absorbed by FE} & \textbf{Law of motion, or reason left out}")
+    head = (r"\textbf{Variable} & \textbf{Depositor trait} & "
+            + _abs(r"\textbf{Absorbed by FE}") + " & "
+            + _motion(r"\textbf{Law of motion, or reason left out}"))
     col_fmt = (r">{\raggedright\arraybackslash}p{3.4cm} >{\raggedright\arraybackslash}X "
                r">{\raggedright\arraybackslash}p{3.1cm} >{\centering\arraybackslash}p{1.8cm} "
                r">{\raggedright\arraybackslash}p{3.5cm}")

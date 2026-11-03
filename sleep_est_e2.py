@@ -131,22 +131,49 @@ def demean_variables_2way(df, cols, entity_col, time_col, n_iter=15, tol=1e-9):
 # Time block (the E4 "+Time" variant). time_trend was DROPPED: with quarter
 # fixed effects (delta_t) now absorbing aggregate time additively, a pure-time
 # linear trend in the index is redundant/collinear with the time FE. The block
-# keeps only gdp_growth_yoy (a genuine entity-time business-cycle covariate).
+# keeps only gdp_growth_yoy (a market-time business-cycle covariate).
 TIME_VARS = ['gdp_growth_yoy']
 
 
-def add_time_variables(df):
+def market_gdp_series(df: pd.DataFrame) -> pd.DataFrame:
+    """gdp_per_capita once per market (mca_code; the D rows' national code is one market) and
+    quarter, over every year of `df`. The source of gdp_growth_yoy: a caller takes it from the
+    panel as loaded, before cutting its year window, so the window's first year keeps its lag."""
+    s = df[['mca_code', 'year', 'quarter', 'gdp_per_capita']].dropna(subset=['gdp_per_capita'])
+    s = s.assign(mca_code=s['mca_code'].astype(str), year=s['year'].astype(int),
+                 quarter=s['quarter'].astype(int))
+    n = s.groupby(['mca_code', 'year', 'quarter'])['gdp_per_capita'].nunique()
+    if (n > 1).any():
+        raise ValueError(f"gdp_per_capita takes {int(n.max())} values within a market-quarter in "
+                         f"{int((n > 1).sum())} market-quarters; gdp_growth_yoy needs one per market")
+    return s.drop_duplicates(['mca_code', 'year', 'quarter']).reset_index(drop=True)
+
+
+def add_time_variables(df, gdp_series=None):
     """Add the two time-series state variables in place and return df.
     time_trend     : continuous years since the first sample quarter.
-    gdp_growth_yoy : within-entity year-over-year growth of gdp_per_capita
-                     (scale-invariant ratio over the same entity four quarters earlier, a
-                     calendar lag; no row four quarters back, or inf -> 0)."""
+    gdp_growth_yoy : year-over-year growth of the market's gdp_per_capita: the ratio to the same
+                     market's value four quarters earlier (a calendar lag; scale-invariant) minus
+                     one, from `gdp_series` (market_gdp_series of the panel before the year cut)
+                     or, without it, from df itself. Every product of a market-quarter carries the
+                     same value. 0 where the market has no value four quarters back, or the row
+                     no gdp_per_capita; the first count is printed."""
     df.sort_values(by=['entity_id', 'year', 'quarter'], inplace=True)
     df['time_trend'] = (df['year'] - int(df['year'].min())) + (df['quarter'] - 1) / 4.0
+    s = market_gdp_series(df if gdp_series is None else gdp_series)
+    s['growth'] = (s['gdp_per_capita'] / calendar_lags.lag(s, 'gdp_per_capita', 4, entity='mca_code')
+                   - 1.0).replace([np.inf, -np.inf], np.nan)
+    by_mq = pd.Series(s['growth'].to_numpy(),
+                      index=pd.MultiIndex.from_arrays([s['mca_code'], s['year'], s['quarter']]))
+    growth = pd.Series(by_mq.reindex(pd.MultiIndex.from_arrays(
+        [df['mca_code'].astype(str), df['year'].astype(int), df['quarter'].astype(int)])).to_numpy(),
+        index=df.index)
     gpc = df['gdp_per_capita']
-    growth = df['gdp_per_capita'] / calendar_lags.lag(df, 'gdp_per_capita', 4) - 1.0
-    growth = growth.replace([np.inf, -np.inf], np.nan).fillna(0.0)
-    df['gdp_growth_yoy'] = growth.where(gpc.notna(), 0.0)
+    n_nolag = int((growth.isna() & gpc.notna()).sum())
+    if n_nolag:
+        print(f"  [+Time] gdp_growth_yoy: {n_nolag:,} rows whose market has no gdp_per_capita four "
+              "quarters back -> 0")
+    df['gdp_growth_yoy'] = growth.fillna(0.0).where(gpc.notna(), 0.0)
     return df
 
 
@@ -207,6 +234,9 @@ def build_pooled_data(time_block=False, center=True):
     scaled-but-uncentred units to compute the grand means in the first place."""
     df_raw = load_panel_cached(PANEL_CSV) if load_panel_cached else pd.read_csv(PANEL_CSV, dtype={'mca_code': str}, low_memory=False)
     df_raw = df_raw.copy()  # defragment: market_panel_with_fees has many columns from merges
+    # The market GDP series of the time block, from every year of the panel: taken before the
+    # window cut so the first sample year keeps its four-quarter lag.
+    gdp_series = market_gdp_series(df_raw) if time_block else None
 
     # Restrict the whole sleep estimation to the [SLEEP_MIN_YEAR, SLEEP_MAX_YEAR] window (see note above).
     if 'year' in df_raw.columns:
@@ -299,7 +329,7 @@ def build_pooled_data(time_block=False, center=True):
         if col in df.columns: df[col] = df[col].fillna(df[col].median())
 
     if time_block:
-        df = add_time_variables(df)
+        df = add_time_variables(df, gdp_series)
 
     # GRAND-MEAN CENTERING -- must be the LAST thing that touches the state block.
     #   * after the :207 dropna, or S_bar is not the estimation-sample mean;
