@@ -185,18 +185,11 @@ def build_base_panel(panel_csv, time_block=False):
     """The E3-E9 demand frame.
 
     `time_block` is handled HERE rather than by the caller so that the ordering
-    constraint lives in one place: gdp_growth_yoy is a RATIO of gdp_per_capita to
-    its own 4-quarter lag, so it must be built BEFORE the state block is centred
-    (a ratio is scale-invariant but not shift-invariant -- centring first puts
-    near-zero values in that denominator)."""
+    constraint lives in one place: gdp_growth_yoy (real growth of the year before, read
+    by add_time_variables) must exist BEFORE the state block is centred, since the
+    persisted centring means include it."""
     print(f"Loading {panel_csv}...")
     df_raw = load_panel_cached(panel_csv, dtype={'mca_code': str}, low_memory=False)
-    # The market GDP series of the time block, from every year of the panel as loaded (the same
-    # series the sleepiness estimation reads): taken before the window cut so 2016 keeps its lag.
-    gdp_series = None
-    if time_block:
-        from sleep_est_e2 import market_gdp_series
-        gdp_series = market_gdp_series(df_raw)
     df_raw = demand_chars.apply(df_raw)
     df = deposit_types.apply_variant(_reshape_panel(df_raw), "sleep_demand_prep_link")
     df['fgc_covered'] = df['deposit_type'].astype('Int64').isin([1, 2, 4]).astype(int)
@@ -268,7 +261,7 @@ def build_base_panel(panel_csv, time_block=False):
 
     if time_block:
         from sleep_est_e2 import add_time_variables
-        df = add_time_variables(df, gdp_series)
+        df = add_time_variables(df)
         print("  [+Time] added time_trend + gdp_growth_yoy to the demand frame")
 
     # GRAND-MEAN CENTERING -- last, after the time block is built, and by the SAME
@@ -370,6 +363,12 @@ def build_market_size_and_shares(df_spec: pd.DataFrame) -> pd.DataFrame:
     else:
         if BC_RULE == 'findex_gdp':
             _x = pd.to_numeric(df_spec['gdp_per_capita'], errors='coerce')
+            # Every caller (this prep, E1's and E2's) passes a frame whose state block its
+            # build_base_panel has CENTRED (utils.state_transform), so gdp_per_capita arrives as a
+            # deviation from the grand mean. The access ratio needs the level: add the persisted
+            # mean back (scaled units; the 1e4 scale cancels in the ratio).
+            if _st.centering_enabled():
+                _x = _x + _st.load_transform().mean_scaled['gdp_per_capita']
             _med = _x.groupby(df_spec['year']).transform('median')
             _acc = (_x / _med).replace([np.inf, -np.inf], np.nan).fillna(1.0).clip(ACCESS_LO, ACCESS_HI)
         elif BC_RULE == 'findex':
@@ -575,6 +574,26 @@ def process_specification(spec_name, spec_res, df_base, link, pre_cut=False):
     return df_spec, summary, spec_id
 
 
+def window_quarters() -> list:
+    """Every quarter of the estimation window [MIN_YEAR, MAX_YEAR], as time_id strings."""
+    return [f"{y}Q{q}" for y in range(MIN_YEAR, MAX_YEAR + 1) for q in (1, 2, 3, 4)]
+
+
+def assert_one_quarter_set(df_spec, est_num, label):
+    """The demand frame, the sleepiness fit's national phi path (est{k}/national_phi_t.csv) and the
+    window cover the same quarters, so the phi-hat of every demand quarter comes from a quarter of
+    the sleepiness sample. A fit estimated on another window stops the prep here."""
+    have = set(df_spec['time_id'].astype(str))
+    natl = set(pd.read_csv(paths.est_dir(est_num) / "national_phi_t.csv")['year_quarter'].astype(str))
+    want = set(window_quarters()) if MIN_YEAR is not None and MAX_YEAR is not None else have
+    if not (have == want == natl):
+        raise AssertionError(
+            f"{label}: quarter sets differ. Window {len(want)}; demand frame {len(have)} (missing "
+            f"{sorted(want - have)[:4]}, extra {sorted(have - want)[:4]}); est{est_num}/national_phi_t.csv "
+            f"{len(natl)} (missing {sorted(want - natl)[:4]}, extra {sorted(natl - want)[:4]}). Re-estimate "
+            f"the sleepiness fit on this window before the demand prep.")
+
+
 def run(est_num, link, tag, time_block=False, spec="all"):
     """Demand prep for Est{est_num} with the given link. spec = 'all' | 'N' | 'a-b'.
     time_block=True (E4) adds the time block (time_trend + gdp_growth_yoy)
@@ -619,6 +638,7 @@ def run(est_num, link, tag, time_block=False, spec="all"):
         if df_spec is not None:
             out = demand_output_dir / f"demand_{est_num}_{tag}_spec_{sid}.parquet"
             df_spec = demand_chars.finalize(df_spec, out, summary)
+            assert_one_quarter_set(df_spec, est_num, f"E{est_num} spec {sid}")
             df_spec.to_parquet(out, engine='pyarrow')
             print(f" > Saved Spec {sid} ({tag}) -> {out.name} ({len(df_spec)} rows)")
             spec_summaries[f"{est_num}_{tag}_{sid}"] = summary

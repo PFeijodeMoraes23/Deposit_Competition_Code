@@ -92,8 +92,12 @@ NEW = {
     "dep_savings": "4120000003",
     "dep_interb":  "4130000000",
     "dep_time":    "4150000004",  # Depositos a Prazo (parent total > 4151 child)
+    "dep_judicial": "4155000009", # 4.1.5.50 Depositos judiciais e administrativos mantidos na
+                                  # instituicao, inside dep_time; published from 2025 only
     "repos":       "4200000002",
     "bills":       "4300000005",  # Outros Instrumentos de Divida (group 4.3 parent)
+    "sub":         "4390000008",  # 4.3.9 Instrumentos de divida com clausulas de subordinacao,
+                                  # inside "bills" from 2025 (before, outside 4.3)
     "prepaid":     "4193000009",
 }
 # 2025+ EXPENSE leaves:
@@ -102,7 +106,11 @@ NEW_EXP = {
     "savings":  "8111000001",
     "interb":   "8112000000",
     "cdb":      "8113000009",  # (-) Despesas de Depositos a Prazo  == EXACT CDB cost
+    "judicial": "8114000008",  # (-) Despesas de depositos judiciais e administrativos (the cost
+                               # of dep_judicial; inside the lump, outside exp_cdb)
     "repos":    "8115000007",
+    "sub":      "8119100006",  # (-) Despesas de instrumentos com clausulas de subordinacao (the
+                               # cost of 4.3.9; inside the lump, outside exp_bills)
 }
 NEW_EXP_BILLS = ["8116500001", "8117500000", "8117700006", "8118200000"]  # LCA/LCI/LIG/LF
 NEW_EXP_PREPAID = "8119800007"
@@ -125,24 +133,28 @@ CODE2COL = {
     PRE["repos"]: "stk_repos",      NEW["repos"]: "stk_repos",
     PRE["bills"]: "stk_bills",      NEW["bills"]: "stk_bills",
     NEW["prepaid"]: "stk_prepaid",
+    NEW["dep_judicial"]: "stk_judicial",
+    NEW["sub"]: "stk_sub",
     # expense
     PRE_EXP_LUMP: "exp_lump",       NEW_EXP["lump"]: "exp_lump",
     NEW_EXP["savings"]: "exp_savings",
     NEW_EXP["interb"]: "exp_interb",
     NEW_EXP["cdb"]: "exp_cdb",
+    NEW_EXP["judicial"]: "exp_judicial",
     NEW_EXP["repos"]: "exp_repos",
+    NEW_EXP["sub"]: "exp_sub",
     NEW_EXP_PREPAID: "exp_prepaid",
 }
 for _c in NEW_EXP_BILLS:
     CODE2COL[_c] = "exp_bills"  # several leaves sum into one column
 
 EXPENSE_COLS = [
-    "exp_lump", "exp_savings", "exp_interb", "exp_cdb",
-    "exp_repos", "exp_bills", "exp_prepaid",
+    "exp_lump", "exp_savings", "exp_interb", "exp_cdb", "exp_judicial",
+    "exp_repos", "exp_bills", "exp_sub", "exp_prepaid",
 ]
 STOCK_COLS = [
     "stk_total", "stk_demand", "stk_savings", "stk_interb",
-    "stk_time", "stk_repos", "stk_bills", "stk_prepaid",
+    "stk_time", "stk_judicial", "stk_repos", "stk_bills", "stk_sub", "stk_prepaid",
 ]
 
 

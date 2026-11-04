@@ -25,7 +25,10 @@
 #   OUTPUT: BCB/Panel/deposits_panel.csv
 #           Columns: CodConglomeradoPrudencial, CNPJ_Lider, NomeInstituicao,
 #                    CODMUN_IBGE, Year, Quarter,
-#                    dep_a1, dep_a2, dep_a3, dep_a4, dep_outros, dep_a5, Source
+#                    dep_a1, dep_a2, dep_a3, dep_a4, dep_outros, dep_a5, Source,
+#                    dep_a4_incl_judicial, judicial_src, judicial_cap_flag
+#           dep_a4 excludes judicial deposits (Cosif 4.1.5.50; utils/judicial_deposits.py):
+#           dep_a4_incl_judicial is verbete 432 / account 78286 as reported.
 #
 # Notes:
 #   • CNPJ → conglomerate mapping is built from IF Data List files (quarterly snapshots).
@@ -64,6 +67,7 @@ from utils.conglomerates import (normalize_str, coerce_cnpj, build_conglomerate_
                                  build_cnpj_conglomerate_map)
 from utils.estban import UNFILED_CELLS_CSV, fill_unfiled_quarter_ends, process_raw_estban_csv
 from utils import firm_remaps
+from utils import judicial_deposits
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
@@ -682,6 +686,10 @@ def main():
     panel.reset_index(drop=True, inplace=True)
     if (_dropped := _n_before - len(panel)):
         logging.info(f"Capped panel at {PANEL_END_YEAR}-Q{PANEL_END_QUARTER}: dropped {_dropped:,} later-quarter rows.")
+
+    # Judicial deposits (Cosif 4.1.5.50) leave the type-4 stock: dep_a4 becomes ordinary time
+    # deposits; dep_a4_incl_judicial, judicial_src and judicial_cap_flag record the removal.
+    panel = judicial_deposits.remove_from_dep_a4(panel)
 
     # Save
     out_path = os.path.join(OUTPUT_DIR, "deposits_panel.csv")

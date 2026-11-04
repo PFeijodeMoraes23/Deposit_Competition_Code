@@ -2,11 +2,12 @@
 panel_demand_chars.py
 ======================
 Writes `processed/demand_chars.parquet`, the corrected bank characteristics, segments and
-balances that `utils/demand_chars.py` applies inside the three demand preps (always).
+balances that `utils/demand_chars.py` applies inside the three demand preps and the sleepiness
+frame (`sleep_est_e2.build_pooled_data`), always.
 
 It WRITES NO EXISTING FILE. market_panel.csv / .parquet, bank_chars_panel.csv and
-deposits_panel.csv are read and left as they are, so the sleepiness estimators and the policy
-function, which read the panel directly, are unaffected by this step.
+deposits_panel.csv are read and left as they are, so the policy function, which reads the panel
+directly, is unaffected by this step.
 
 What the file corrects (each value carries a flag; see FLAGS below)
 -----------------------------------------------------------------
@@ -25,7 +26,10 @@ What the file corrects (each value carries a flag; see FLAGS below)
       (a difference in logs for assets): the level from the prudential basis, the one-quarter
       change from the member institutions, members fixed at the List of 2016-03. Flow ratios use
       quarterly flows (the statement is cumulative within the semester: Q4 = December minus
-      September). The Basel index exists on no basis for 2015Q4: the firm's own 2016Q1 value.
+      September). The two funding ratios the sleepiness instruments use (LCI and LCA, and
+      wholesale funding: repos, LCI, LCA, letras financeiras, borrowings and onlendings, each over
+      total assets, as panel_bank_chars.py defines them) are stock ratios spliced the same way.
+      The Basel index exists on no basis for 2015Q4: the firm's own 2016Q1 value.
    d. The rival-branch count of 2015Q4 (estban_rival_branches_lag of 2016Q1) from the raw
       2015-12 ESTBAN file, with panel_estban_instrument.py's own mapping.
 2. The other firm-quarters with no lagged characteristics (and those whose lagged total assets
@@ -117,11 +121,13 @@ MAX_DISTANCE = 4            # quarters, nearest-filing rule
 RATE_A4_MAX_MULT = 3.0      # panel_deposit_rates.py's plausibility band for the type-4 rate
 MIN_YEAR, MAX_YEAR = 2016, 2024
 WINSORIZED = ["personnel_cost_ratio_lag", "admin_cost_ratio_lag", "tax_cost_ratio_lag",
-              "indice_basileia_lag"]          # clipped in the panel (panel_loo_instruments.py)
+              "indice_basileia_lag", "lci_lca_ratio_lag",
+              "wholesale_ratio_lag"]          # clipped in the panel (panel_loo_instruments.py)
 BASEL_BOUNDS = (-1.0, 2.0)                    # utils/winsorize.VALIDITY_BOUNDS
 
 # IF.data lines (reports 1-4), as panel_bank_chars.py and panel_deposits.py read them.
 LINES = {78182: "total_assets", 78186: "equity", 78192: "npl_provision",
+         78288: "repos", 78289: "lci", 78290: "lca", 78291: "letras_financeiras",
          78295: "emprestimos_repasses", 78218: "personnel_expenses", 78219: "admin_expenses",
          78220: "tax_expenses", 78282: "dep_a1", 78283: "dep_a2", 78286: "dep_a4"}
 FLOWS = ["personnel_expenses", "admin_expenses", "tax_expenses"]
@@ -129,7 +135,8 @@ FLOWS = ["personnel_expenses", "admin_expenses", "tax_expenses"]
 LEVEL_OF = {"log_total_assets_lag": "log_total_assets", "equity_ratio_lag": "equity_ratio",
             "personnel_cost_ratio_lag": "personnel_cost_ratio", "admin_cost_ratio_lag": "admin_cost_ratio",
             "tax_cost_ratio_lag": "tax_cost_ratio", "indice_basileia_lag": "indice_basileia",
-            "npl_provision_ratio_lag": "npl_provision_ratio", "total_assets_lag": "total_assets"}
+            "npl_provision_ratio_lag": "npl_provision_ratio", "total_assets_lag": "total_assets",
+            "lci_lca_ratio_lag": "lci_lca_ratio", "wholesale_ratio_lag": "wholesale_ratio"}
 LOO_CHARS = {"log_assets": "log_total_assets_lag", "equity_ratio": "equity_ratio_lag",
              "basileia": "indice_basileia_lag", "credit_assets": "credit_assets_lag",
              "npl_provision": "npl_provision_ratio_lag"}
@@ -234,11 +241,16 @@ def member_chars(w: pd.DataFrame) -> pd.DataFrame:
     o["tax_cost_ratio"] = w["tax_expenses"].abs() / a
     o["npl_provision_ratio"] = w["npl_provision"].abs() / a
     o["borrow_assets"] = w["emprestimos_repasses"] / a
+    # The funding ratios as panel_bank_chars.py builds them: the lines summed with a missing line
+    # counting as zero, over total assets.
+    o["lci_lca_ratio"] = w[["lci", "lca"]].sum(axis=1) / a
+    o["wholesale_ratio"] = w[["repos", "lci", "lca", "letras_financeiras", "emprestimos_repasses"]].sum(axis=1) / a
     return o
 
 
 SPLICED = ["log_total_assets", "equity_ratio", "personnel_cost_ratio", "admin_cost_ratio",
-           "tax_cost_ratio", "npl_provision_ratio", "borrow_assets"]
+           "tax_cost_ratio", "npl_provision_ratio", "borrow_assets", "lci_lca_ratio",
+           "wholesale_ratio"]
 
 
 def splice_back(own_T: pd.DataFrame, mem_prev: pd.DataFrame, mem_T: pd.DataFrame):
@@ -316,10 +328,13 @@ DEP_SUBSTR = {"dep_a1": "VERBETE_401_", "dep_a2": "VERBETE_420_", "dep_a4": "VER
 def pre2016_scale(report: dict) -> dict:
     """Stored balance over raw balance for each quarter-end of 2013-2015, measured municipality by
     municipality on deposits_panel.csv (Source == ESTBAN). Every municipality of a quarter must give
-    the same integer (2 where the raw file was read twice, 1 where it was read once)."""
+    the same integer (2 where the raw file was read twice, 1 where it was read once). The type-4
+    balance compared is dep_a4_incl_judicial, verbete 432 as reported: dep_a4 nets out judicial
+    deposits (utils/judicial_deposits.py), which the raw file does not separate."""
     dp = pd.read_csv(DEPOSITS_CSV, low_memory=False,
-                     usecols=["CODMUN_IBGE", "Year", "Quarter", "Source"] + dc.DEP_COLS)
-    dp = dp[(dp["Source"] == "ESTBAN") & (dp["Year"] <= 2016)]
+                     usecols=["CODMUN_IBGE", "Year", "Quarter", "Source", "dep_a4_incl_judicial"] + dc.DEP_COLS)
+    dp = dp[(dp["Source"] == "ESTBAN") & (dp["Year"] <= 2016)].copy()
+    dp["dep_a4"] = dp["dep_a4_incl_judicial"]
     scale, detail = {}, {}
     quarters = [(y, q) for y in (2013, 2014, 2015) for q in (1, 2, 3, 4)] + [(2016, 1)]
     for (y, q) in quarters:

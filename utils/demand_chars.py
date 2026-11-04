@@ -1,13 +1,17 @@
-"""utils/demand_chars.py -- the bank characteristics, segments and balances the demand preps use.
+"""utils/demand_chars.py -- the bank characteristics, segments and balances the demand preps and the
+sleepiness frame use.
 
 What it is
 ----------
 The three demand preps (sleep_demand_prep_e1.py, sleep_demand_prep_e2.py,
 sleep_demand_prep_link.py) read market_panel.csv and pass the frame through `apply` before they
-build anything, and through `finalize` before they write a parquet. `panel_demand_chars.py` builds
-the values `apply` writes, in ONE side file, `processed/demand_chars.parquet`; the panel itself is
-never written, so every other consumer of it -- the sleepiness estimators, the policy function, the
-descriptive tables -- reads exactly what it reads without this module.
+build anything, and through `finalize` before they write a parquet. The sleepiness frame
+(sleep_est_e2.build_pooled_data, which every sleepiness routine reads) passes it through `apply`
+too, so both stages see the same characteristics and 2016Q1 has its lagged instruments.
+`panel_demand_chars.py` builds the values `apply` writes, in ONE side file,
+`processed/demand_chars.parquet`; the panel itself is never written, so every other consumer of
+it -- the policy function, the descriptive tables -- reads exactly what it reads without this
+module.
 
 The four corrections, each a function below:
 
@@ -61,7 +65,8 @@ KEYS = ["CodConglomeradoPrudencial", "mca_code", "year", "quarter"]
 # The lagged characteristics a corrected firm-quarter receives (all from ONE source filing).
 CHAR_COLS = ["log_total_assets_lag", "equity_ratio_lag", "personnel_cost_ratio_lag",
              "admin_cost_ratio_lag", "tax_cost_ratio_lag", "indice_basileia_lag",
-             "npl_provision_ratio_lag", "total_assets_lag"]
+             "npl_provision_ratio_lag", "total_assets_lag", "lci_lca_ratio_lag",
+             "wholesale_ratio_lag"]
 SEG_COLS = ["seg_S2", "seg_S3", "seg_S4", "seg_S5"]
 # The leave-one-out pairs the panel carries (panel_loo_instruments.compute_loo_instruments).
 LOO_COLS = ["loo_log_assets", "mean_loo_log_assets", "loo_equity_ratio", "mean_loo_equity_ratio",

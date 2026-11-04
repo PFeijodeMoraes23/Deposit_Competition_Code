@@ -1,9 +1,12 @@
-"""utils/macro_rates.py — quarterly macro rates (Selic, CDI, savings, Selic target) from the
-staged SGS file raw/SGS_RAW/macro_series_full.csv (no script in the repo downloads it).
+"""utils/macro_rates.py — quarterly macro rates (Selic, CDI, Selic target) from the staged SGS
+file raw/SGS_RAW/macro_series_full.csv (no script in the repo downloads it), and the savings
+rates from the credited yields in raw/SGS_RAW/savings_yields/ (scrape_bcb_savings_yields.py).
 
-load_macro_series()        daily series, DatetimeIndex
-make_quarterly_macro(df)   one row per quarter: AnoMes, selic_qoq, cdi_qoq, savings_rate_qoq,
-                           meta_selic (rates as FRACTIONS)
+load_macro_series()          daily series, DatetimeIndex
+make_quarterly_macro(df)     one row per quarter: AnoMes, selic_qoq, cdi_qoq, meta_selic,
+                             savings_rate_qoq, savings_old_qoq (rates as FRACTIONS)
+quarterly_savings_yields()   the two savings columns alone
+savings_cost_qoq(d, share)   a bank's savings cost rate given its old-rule share
 
 Moved verbatim from panel_deposit_rates.py (2026-10-15). Readers: panel_deposit_rates (step 16,
 which also writes PANEL_INTERMED/quarterly_macro_rates.csv in percent) and panel_cosif_calibrate
@@ -58,7 +61,8 @@ def make_quarterly_macro(df_macro: pd.DataFrame) -> pd.DataFrame:
     with IF-Data quarter-end months (3, 6, 9, 12).
 
     Returns one row per quarter with:
-        AnoMes, selic_qoq, cdi_qoq, savings_rate_qoq, meta_selic
+        AnoMes, selic_qoq, cdi_qoq, meta_selic, savings_rate_qoq, savings_old_qoq
+    The savings columns come from quarterly_savings_yields().
     """
     df = df_macro.copy()
     df["year"]    = df.index.year
@@ -86,32 +90,59 @@ def make_quarterly_macro(df_macro: pd.DataFrame) -> pd.DataFrame:
         meta = grp["Meta_Selic"].dropna()
         meta_selic = meta.iloc[-1] if len(meta) else np.nan
 
-        # ---- 4) TR (Taxa Referencial, % per month) ----
-        tr_col = "TR" if "TR" in grp.columns else "TR_Diaria"
-        tr = grp[tr_col].dropna() if tr_col in grp.columns else pd.Series(dtype=float)
-        avg_tr_monthly = tr.mean() if len(tr) else 0.0
-
-        # ---- 5) Savings-deposit rate (poupança) ----
-        #   Old rule (Selic > 8.5 %): TR + 0.5 % per month
-        #   New rule (Selic <= 8.5 %): TR + 70 % x Selic_target / 12
-        if pd.notna(meta_selic):
-            if meta_selic > 8.5:
-                monthly_component = 0.005               # fixed 0.5 % p.m.
-            else:
-                monthly_component = 0.70 * (meta_selic / 100) / 12
-            monthly_savings = avg_tr_monthly / 100 + monthly_component
-            savings_qoq = (1 + monthly_savings) ** 3 - 1
-        else:
-            savings_qoq = np.nan
-
         rows.append({
             "AnoMes":           ano_mes,
             "selic_qoq":        selic_qoq,
             "cdi_qoq":          cdi_qoq,
-            "savings_rate_qoq": savings_qoq,
             "meta_selic":       meta_selic,
         })
 
-    df_rates = pd.DataFrame(rows)
-    logging.info(f"Quarterly macro rates computed: {len(df_rates)} quarters")
+    df_rates = pd.DataFrame(rows).merge(quarterly_savings_yields(), on="AnoMes", how="left")
+    logging.info(f"Quarterly macro rates computed: {len(df_rates)} quarters "
+                 f"({int(df_rates['savings_rate_qoq'].notna().sum())} with savings yields)")
     return df_rates
+
+
+# Share of a bank's savings stock deposited up to 03.05.2012, which keeps the old rule (0.5% a
+# month + TR; Lei 12.703/2012, withdrawals drain the new-rule balance first).  No source gives it
+# by bank, so the rate steps use 0; where a bank's statements give its savings expense,
+# panel_cosif_calibrate's statement benchmark replaces the imputed savings cost and needs no share.
+OLD_RULE_SHARE = 0.0
+
+
+def savings_cost_qoq(d: pd.DataFrame, old_rule_share) -> pd.Series:
+    """The savings cost rate of a bank whose savings stock holds old_rule_share (scalar or
+    Series) of deposits made up to 03.05.2012: savings_rate_qoq plus that share of the old-rule
+    premium (savings_old_qoq - savings_rate_qoq, zero when the Selic target is above 8.5%)."""
+    premium = (d["savings_old_qoq"] - d["savings_rate_qoq"]).fillna(0.0)
+    return d["savings_rate_qoq"] + old_rule_share * premium
+
+
+SAVINGS_YIELDS_DIR = paths.SGS_RAW / "savings_yields"
+SAVINGS_SGS = {195: "savings_rate_qoq", 25: "savings_old_qoq"}
+
+
+def quarterly_savings_yields() -> pd.DataFrame:
+    """Quarterly savings rates (fractions) from the credited yields scrape_bcb_savings_yields.py
+    saves: savings_rate_qoq from SGS 195 (deposits from 04.05.2012, the rate a new deposit
+    earns, which is the panel's type-2 price) and savings_old_qoq from SGS 25 (deposits up to
+    03.05.2012, kept at 0.5% a month + TR by Lei 12.703/2012).
+
+    A month's yield is the mean over its anniversary dates of the yield credited on that date;
+    a quarter compounds its three months, and a quarter missing a month is NaN."""
+    frames = []
+    for code, col in SAVINGS_SGS.items():
+        files = sorted(SAVINGS_YIELDS_DIR.glob(f"sgs_{code}_*.json"))
+        if not files:
+            raise FileNotFoundError(f"No SGS {code} file in {SAVINGS_YIELDS_DIR}: "
+                                    "run scrape_bcb_savings_yields.py")
+        d = pd.concat([pd.read_json(f, dtype={"valor": str}) for f in files], ignore_index=True)
+        d["date"] = pd.to_datetime(d["data"], dayfirst=True)
+        d = d.drop_duplicates("date")
+        d["y"] = pd.to_numeric(d["valor"], errors="coerce") / 100
+        m = d.groupby(d["date"].dt.to_period("M"))["y"].mean().dropna()
+        q = pd.DataFrame({"g": 1 + m.to_numpy(),
+                          "AnoMes": [p.year * 100 + ((p.month - 1) // 3 + 1) * 3 for p in m.index]})
+        g = q.groupby("AnoMes")["g"]
+        frames.append((g.prod() - 1).where(g.count() == 3).rename(col))
+    return pd.concat(frames, axis=1).rename_axis("AnoMes").reset_index()

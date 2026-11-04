@@ -18,8 +18,11 @@ Three fee sources
    - Conglomerate × quarter  |  2015-Q1 → 2024-Q4 from the BCB monthly census of listed
      tariffs (scrape_bcb_tarifas_monthly.py); 2025-Q1 on from the Olinda snapshot of
      2026-06-22 alone (scrape_bcb_tariff_vigencia.py); 2013-2014 NaN
-   - 13 services, labelled by code (LISTED_FEE_SERVICES): Pacotes Padronizados I-IV, PJ
-     account maintenance, and seven PF services
+   - 17 services, labelled by code (LISTED_FEE_SERVICES): Pacotes Padronizados I-IV, PJ
+     account maintenance, seven PF account services, and PF TED and DOC by internet and at
+     the branch
+   - listed_fee_ted_pf / listed_fee_doc_pf: the internet price where the conglomerate lists
+     one that quarter, else the branch price
    - listed_fee_<name>: the head institution's price in force on the quarter's last day;
      when the head does not list the service, the median of the members' positive prices
      (0.00 when every listing is 0.00); listed_fee_n_inst_<name>: members with a price
@@ -37,8 +40,8 @@ Three fee sources
 3. Price stickiness, from the same dated versions
    - Conglomerate × quarter  |  2015-Q1 → 2024-Q4, NaN elsewhere
    - tarifa_stickiness_yrs: years from the vigência of the price in force to the quarter
-     end, averaged over the head institution's PF services of LISTED_FEE_SERVICES (over
-     every member's when the head has none); grows until a price change and resets at it
+     end, averaged over the head institution's STICKINESS_SERVICES (over every member's when
+     the head has none); grows until a price change and resets at it
    - tarifa_stickiness_n: the institution × service pairs averaged
 
 Output
@@ -124,11 +127,22 @@ LISTED_FEE_SERVICES = {
     ("F", "1209"): "withdrawal_teller_pf",   # Saque pessoal
     ("F", "1210"): "withdrawal_atm_pf",      # Saque em terminal
     ("F", "1213"): "statement_pf",           # Extrato de um período
+    ("F", "1315"): "ted_internet_pf",        # Transferência por meio de TED - TED internet
+    ("F", "1313"): "ted_branch_pf",          # Transferência por meio de TED - TED pessoal
+    ("F", "1312"): "doc_internet_pf",        # Transferência por meio de DOC - DOC internet
+    ("F", "1310"): "doc_branch_pf",          # Transferência por meio de DOC - DOC Pessoal
 }
 LISTED_PRICE_COLS = [f"listed_fee_{v}" for v in LISTED_FEE_SERVICES.values()]
 LISTED_COUNT_COLS = [f"listed_fee_n_inst_{v}" for v in LISTED_FEE_SERVICES.values()]
-# Stickiness averages over the PF services above (1101-1213 and the four packages).
-STICKINESS_SERVICES = {k for k in LISTED_FEE_SERVICES if k[0] == "F"}
+# One price per transfer type: the internet channel where the conglomerate lists it, else the
+# branch (load_tarifa_listed_prices).
+TRANSFER_FEE_CHANNELS = {"listed_fee_ted_pf": ("listed_fee_ted_internet_pf", "listed_fee_ted_branch_pf"),
+                         "listed_fee_doc_pf": ("listed_fee_doc_internet_pf", "listed_fee_doc_branch_pf")}
+# Stickiness averages over the PF account services: 1101-1213 and the four packages. TED and DOC
+# are priced per transfer and stay out of it.
+STICKINESS_SERVICES = {("F", "1501"), ("F", "1502"), ("F", "1503"), ("F", "1504"),
+                       ("F", "1101"), ("F", "1201"), ("F", "1203"), ("F", "1204"),
+                       ("F", "1209"), ("F", "1210"), ("F", "1213")}
 # The census covers 2015-01..2024-12; from 2025 only the snapshot dates a price.
 LISTED_FIRST_YEAR = 2015
 CENSUS_LAST_YEAR = 2024
@@ -694,6 +708,9 @@ def load_tarifa_listed_prices(inst_q: pd.DataFrame | None = None) -> pd.DataFram
                               only listings are R$0.00 gets 0.00.
     listed_fee_n_inst_<name>  member institutions with a price for the service that quarter
                               (0.00 included)
+    listed_fee_ted_pf,        TRANSFER_FEE_CHANNELS: listed_fee_ted_internet_pf where the
+    listed_fee_doc_pf         conglomerate has it that quarter, else listed_fee_ted_branch_pf
+                              (DOC the same way)
 
     Members are placed by build_dated_cnpj_cong_map.  2015-Q1..2024-Q4 come from the monthly
     census, with a snapshot version counting from its vigência on; 2025-Q1 on, from the
@@ -727,6 +744,8 @@ def load_tarifa_listed_prices(inst_q: pd.DataFrame | None = None) -> pd.DataFram
     price.columns = LISTED_PRICE_COLS
     count.columns = LISTED_COUNT_COLS
     wide = price.join(count).reset_index()
+    for col, (internet, branch) in TRANSFER_FEE_CHANNELS.items():
+        wide[col] = wide[internet].fillna(wide[branch])
 
     log.info("Listed prices: %d conglomerate-quarters | %d conglomerates | %d-%d | "
              "conglomerate-quarter-service cells by rule %s",
@@ -743,8 +762,8 @@ def build_stickiness_panel(inst_q: pd.DataFrame | None = None) -> pd.DataFrame:
     """Conglomerate × quarter price stickiness, 2015-Q1..2024-Q4.
 
     For one institution × service: years (days / 365.25) from the vigência of the version
-    in force on the quarter's last day to that day, over the PF services of
-    LISTED_FEE_SERVICES (1101-1213 and the packages 1501-1504).
+    in force on the quarter's last day to that day, over STICKINESS_SERVICES (1101-1213 and
+    the packages 1501-1504).
 
     tarifa_stickiness_yrs = the mean over the head institution's PF services
                             (conglomerate_heads), the same head rule as listed_fee_*; when
@@ -806,11 +825,13 @@ def patch_market_panel(
                             COSIF ratios are NOT deposit-account fees (see 6a-bis)
       listed_fee_<name>     BCB listed maximum price in force on the quarter's last day,
                             the head institution's (fallback: median of the members'
-                            positive prices; 0.00 if all are 0.00), for the 13 services of
+                            positive prices; 0.00 if all are 0.00), for the 17 services of
                             LISTED_FEE_SERVICES (pkg1_pf..pkg4_pf, maint_active_pj,
                             maint_inactive_pj, acct_reg_pf, card_2nd_debit_pf,
                             ccf_exclusion_pf, cheque_countermand_pf, withdrawal_teller_pf,
-                            withdrawal_atm_pf, statement_pf); 2015-Q1 on, NaN before
+                            withdrawal_atm_pf, statement_pf, ted_internet_pf, ted_branch_pf,
+                            doc_internet_pf, doc_branch_pf), and listed_fee_ted_pf /
+                            listed_fee_doc_pf (internet, else branch); 2015-Q1 on, NaN before
       listed_fee_n_inst_<name>  member institutions with that price (0 from 2015 when none
                             lists the service, NaN before 2015)
       tarifa_stickiness_yrs years since the vigência of the price in force, mean over the

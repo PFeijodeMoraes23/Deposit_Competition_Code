@@ -9,6 +9,8 @@
 #   processed/deposits_panel.csv                    panel_deposits.py (step 14)
 #   SGS_RAW/macro_series_full.csv                   SGS 11 Selic over, 432 Selic target, 4389 CDI,
 #                                                   226 TR; staged out of band (utils/macro_rates.py)
+#   SGS_RAW/savings_yields/                         SGS 195 and 25 savings yields
+#                                                   (scrape_bcb_savings_yields.py)
 #   IF-Data List files                              CNPJ -> prudential conglomerate
 #   COSIF_PROCESSED/custos_implicitos_*.csv         panel_cosif_extract.py (step 12)
 #   COSIF_PROCESSED/cosif_cdb_rate_corrected.csv    panel_cosif_calibrate.py (step 13)
@@ -19,9 +21,12 @@
 #   1 demand     0
 #   2 savings    savings_rate_qoq
 #   3 interbank  cdi_qoq
-#   4 time/CDB   corrected per-bank CDB rate, else the COSIF residual type-4 rate, else the
-#                blended COSIF implicit rate, else cdi_qoq; a rate above RATE_A4_MAX_MULT x Selic
-#                is replaced by cdi_qoq and flagged in rate_a4_guarded
+#   4 time/CDB   corrected per-bank CDB rate where panel_cosif_calibrate attempted one, else the
+#                COSIF residual type-4 rate, else the blended COSIF implicit rate; a rate above
+#                RATE_A4_MAX_MULT x the highest Selic of t-7..t is dropped (rate_a4_guarded); a
+#                quarter without a measured rate takes the bank's carried rate (median rate/CDI of
+#                its measured quarters within +-4, x CDI; rate_a4_carried) or stays missing;
+#                rate_a4_fallback gives the reason, rate_a4_vintage_src the savings-cost source
 #   5 prepaid    the issuer's posted rule (config/type5_balance_rates.csv, a percent of the CDI,
 #                compounded over the days it covers) where one covers the quarter, flagged in
 #                rate_a5_posted; otherwise the conglomerate's payment-institution rate if it has
@@ -54,7 +59,7 @@ import pyarrow.csv as pa_csv
 
 # Folders
 from utils import paths
-from utils.macro_rates import load_macro_series, make_quarterly_macro
+from utils.macro_rates import load_macro_series, make_quarterly_macro, savings_cost_qoq, OLD_RULE_SHARE
 from utils.conglomerates import deposit_panel_codes
 from utils import type5_rates
 from utils import firm_remaps
@@ -70,10 +75,9 @@ DEPOSITS_CSV   = os.path.join(PROCESSED_PATH, "deposits_panel.csv")
 # COSIF processed output (from panel_cosif_extract.py)
 COSIF_PROCESSED_PATH = os.path.join(PROCESSED_PATH, "COSIF_PROCESSED")
 
-# rate_a4 (type-4 / CDB) plausibility band, as a multiple of the CONTEMPORANEOUS Selic.  A CDB pays
-# ~90-115% of CDI; past a few multiples of Selic the implicit expense/stock ratio is broken, not a
-# deposit rate.  Rates above the band are treated as MISSING and fall through to cdi_qoq (the last
-# resort already in the rate_a4 chain).  See the guard near the rate_a4 assembly.
+# rate_a4 (type-4 / CDB) plausibility band, as a multiple of the highest quarterly Selic of the last
+# eight quarters.  A CDB pays ~90-115% of CDI; past a few multiples of Selic the implicit
+# expense/stock ratio is broken, not a deposit rate.  See the rate_a4 assembly.
 RATE_A4_MAX_MULT = float(os.environ.get("RATE_A4_MAX_MULT", 3.0))
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -624,11 +628,10 @@ def append_rates_to_panel():
     df_macro_q = make_quarterly_macro(df_macro)
 
     # PANEL_INTERMED/quarterly_macro_rates.csv: the same quarterly rates in PERCENT, read by
-    # panel_cosif_calibrate.py, make_desc_compressed_tables.py, make_slide_figures.py and the
-    # diag_cosif_k4_validate* diagnostics. Step 13 runs before this step, so a rebuild's step 13
-    # reads the copy written by the previous run (the SGS input changes only when restaged).
+    # make_desc_compressed_tables.py, make_slide_figures.py and the diag_cosif_k4_validate*
+    # diagnostics (panel_cosif_calibrate.py computes its own copy with make_quarterly_macro).
     _macro_pct = df_macro_q.copy()
-    for col in ["selic_qoq", "cdi_qoq", "savings_rate_qoq"]:
+    for col in ["selic_qoq", "cdi_qoq", "savings_rate_qoq", "savings_old_qoq"]:
         if col in _macro_pct.columns:
             _macro_pct[col] = _macro_pct[col] * 100
     os.makedirs(OUTPUT_PATH, exist_ok=True)
@@ -641,7 +644,7 @@ def append_rates_to_panel():
 
     # df_cosif_q carries AnoMes, cosif_implicit_rate, cosif_desp_captacao, ip_prepaid_rate and
     # has_ip (the keep list of aggregate_cosif_to_conglomerates).
-    aux =nat_stocks.merge(df_macro_q[["AnoMes", "selic_qoq", "cdi_qoq", "savings_rate_qoq", "meta_selic"]], on="AnoMes", how="left")
+    aux =nat_stocks.merge(df_macro_q[["AnoMes", "selic_qoq", "cdi_qoq", "savings_rate_qoq", "savings_old_qoq", "meta_selic"]], on="AnoMes", how="left")
     aux = aux.merge(df_cosif_q, on=["CodConglomeradoPrudencial", "AnoMes"], how="left")
     
     # 4b. Inject NEW IP rates
@@ -671,18 +674,19 @@ def append_rates_to_panel():
                      f"on {int(_dst.sum())} quarters ({len(_src)} available)")
 
     # T2 & T3 imputed expenses
-    _imputed_t2 = aux["savings_rate_qoq"].fillna(0.0) * aux["lag_dep_a2"]
+    _imputed_t2 = savings_cost_qoq(aux, OLD_RULE_SHARE).fillna(0.0) * aux["lag_dep_a2"]
     _imputed_t3 = aux["cdi_qoq"].fillna(0.0)          * aux["lag_dep_a3"]
-    _residual = (aux["cosif_desp_captacao"] - _imputed_t2 - _imputed_t3).clip(lower=0.0)
-    
+    _residual_raw = aux["cosif_desp_captacao"] - _imputed_t2 - _imputed_t3
+    _residual = _residual_raw.where(_residual_raw > 0)      # a residual <= 0 measures nothing
+
     _denom_t45 = aux["lag_dep_a4"] + aux["lag_dep_a5"]
     _denom_t45 = _denom_t45.replace(0.0, np.nan)
-    
+
     _type4_raw = _residual.astype(float) / _denom_t45.astype(float)
     _type4_raw.loc[~np.isfinite(_type4_raw)] = np.nan
     _type4_raw.loc[_type4_raw > 0.5] = np.nan
     aux["cosif_type4_rate"] = _type4_raw
-    
+
     # Median IP rate per quarter, over quarters with at least 2 positive IP rates
     _ip_mask = aux["ip_prepaid_rate"].notna() & (aux["ip_prepaid_rate"] > 0)
     valid_ip = aux[_ip_mask].copy()
@@ -691,62 +695,89 @@ def append_rates_to_panel():
     medians = valid_ip[valid_ip["AnoMes"].isin(valid_anomes)].groupby("AnoMes")["ip_prepaid_rate"].median()
     aux = aux.merge(medians.rename("median_ip_rate"), on="AnoMes", how="left")
 
-    # Prefer the CORRECTED per-bank CDB rate from panel_cosif_calibrate.py
-    # (cosif_cdb_rate_corrected.csv). Falls back to residual -> blended -> CDI where the
-    # corrected rate is absent.
+    # The CORRECTED per-bank CDB rate from panel_cosif_calibrate.py (cosif_cdb_rate_corrected.csv):
+    # one row per conglomerate-quarter calibrate attempted, with the rate (missing when the attempt
+    # failed) and its rate_flag.
     _corr_path = os.path.join(COSIF_PROCESSED_PATH, "cosif_cdb_rate_corrected.csv")
     if os.path.exists(_corr_path):
         _corr = pd.read_csv(_corr_path, dtype={"CodConglomeradoPrudencial": str})
-        _corr = _corr.rename(columns={"rate_a4_corrected_qoq": "cosif_cdb_rate_corrected"})[
-            ["CodConglomeradoPrudencial", "AnoMes", "cosif_cdb_rate_corrected"]
+        _corr = _corr.rename(columns={"rate_a4_corrected_qoq": "cosif_cdb_rate_corrected",
+                                      "rate_flag": "cosif_cdb_flag"})[
+            ["CodConglomeradoPrudencial", "AnoMes", "cosif_cdb_rate_corrected", "cosif_cdb_flag",
+             "rate_a4_vintage_src"]
         ]
         aux["CodConglomeradoPrudencial"] = aux["CodConglomeradoPrudencial"].astype(str)
         aux = aux.merge(_corr, on=["CodConglomeradoPrudencial", "AnoMes"], how="left")
         logging.info(
-            f"Corrected CDB rate merged: "
-            f"{aux['cosif_cdb_rate_corrected'].notna().sum():,} cells"
+            f"Corrected CDB rate merged: {aux['cosif_cdb_flag'].notna().sum():,} attempted cells, "
+            f"{aux['cosif_cdb_rate_corrected'].notna().sum():,} measured"
         )
     else:
         aux["cosif_cdb_rate_corrected"] = np.nan
+        aux["cosif_cdb_flag"] = np.nan
+        aux["rate_a4_vintage_src"] = np.nan
         logging.info(f"Corrected CDB rate not found ({_corr_path}); using residual.")
+    aux["rate_a4_vintage_src"] = aux["rate_a4_vintage_src"].fillna("none")
 
     aux["rate_a1"] = 0.0
     aux["rate_a2"] = aux["savings_rate_qoq"]
     aux["rate_a3"] = aux["cdi_qoq"]
-    aux["rate_a4"] = (
-        aux["cosif_cdb_rate_corrected"]
-        .fillna(aux["cosif_type4_rate"])
-        .fillna(aux["cosif_implicit_rate"])
-        .fillna(aux["cdi_qoq"])
-    )
 
-    # ---- rate_a4 plausibility guard -------------------------------------------------------------
-    # The type-4 (CDB) implicit rate carries a tail out to 0.49/quarter (~370%/yr).  Annualised by
-    # (1+r)^4 below, that produces spreads down to -357 pp, which then dominate the BLP.  A CDB pays
-    # ~90-115% of CDI; anything past a few multiples of Selic is not a deposit rate, it is a broken
-    # expense/stock ratio.  Diagnosed (2026-07-14): 0.78% of rows, 86.5% of them from ten
-    # conglomerates, P(bad | bad last quarter) = 95%.  It is NOT a small-denominator artifact (the
-    # flagged share RISES with the CDB book) and NOT a semester-cumulation bug (ex-Bradesco the
-    # flagged rows are flat across quarters).  Bradesco alone is 57% of flags, all in 2016, its book
-    # halving -49% in Q1 and recovering +62% in Q4 (the HSBC Brasil year) -- a bad filing, not bad
-    # code.  The rest are CFIs/SCFIs/leasing/asset-manager entities with a near-zero CDB book.
-    #
-    # So: treat an implausible rate as MISSING and let it fall through to cdi_qoq, the last resort
-    # already in the chain above.  This never rewrites a rate that was actually measured.
-    #
-    # Precedent: this tightens a device the pipeline already uses -- cosif_implicit_rate > 0.5 is
-    # NaN'd above ("a quarterly deposit rate above 50% is economically implausible") and the
-    # residual type-4 rate is capped at 0.5 above.  Those bounds are far too loose AND, critically,
-    # were never applied to cosif_cdb_rate_corrected -- which is where the tail actually lives
-    # (100% coverage, median 0.026, but 3.8% above 0.10/qtr).  See counterfactuals_plan.md §0B.
-    _band = RATE_A4_MAX_MULT * aux["selic_qoq"]
-    _bad = (aux["rate_a4"] > _band) & aux["rate_a4"].notna() & aux["selic_qoq"].notna()
+    # ---- rate_a4 --------------------------------------------------------------------------------
+    # (1) The corrected rate where calibrate attempted one; a failed attempt stays missing (strip or
+    #     leaf <= 0, or above its cap).  Where calibrate has no row, the residual type-4 rate, then
+    #     the blended COSIF implicit rate.
+    # (2) The plausibility band: a CDB pays ~90-115% of CDI, so a rate above RATE_A4_MAX_MULT x the
+    #     highest quarterly Selic of the last eight quarters (t-7..t) is a broken expense/stock ratio,
+    #     not a deposit rate.  The band looks back because a quarter's funding expense prices a stock
+    #     raised over the previous two years, at the rates of the day: against the current Selic alone
+    #     the band binds on legacy funding whenever the Selic falls (2019-2021).
+    # (3) A quarter left without a measured rate takes the bank's carried rate: its median rate/CDI
+    #     over its measured quarters within four quarters either side, times this quarter's CDI
+    #     (rate_a4_carried = 1).  With no measured neighbour it stays missing, and the row leaves
+    #     every sample that needs the type-4 spread.
+    # rate_a4_fallback records why a quarter has no measured rate: 0 measured, 1 above the band,
+    # 2 strip or leaf <= 0, 3 above calibrate's cap, 4 residual <= 0, 5 nothing to measure (no
+    # lagged stock or no expense).
+    _has_corr = aux["cosif_cdb_flag"].notna()
+    _fallback = aux["cosif_type4_rate"].fillna(aux["cosif_implicit_rate"])
+    aux["rate_a4"] = aux["cosif_cdb_rate_corrected"].where(_has_corr, _fallback)
+    _code = pd.Series(0, index=aux.index, dtype="int8")
+    _code[_has_corr & (aux["cosif_cdb_flag"] == 2)] = 2
+    _code[_has_corr & (aux["cosif_cdb_flag"] == 3)] = 3
+    _code[~_has_corr & aux["rate_a4"].isna() & (_residual_raw <= 0)] = 4
+    _code[aux["rate_a4"].isna() & (_code == 0)] = 5
+
+    _selic_max = (df_macro_q.sort_values("AnoMes").set_index("AnoMes")["selic_qoq"]
+                  .rolling(8, min_periods=1).max())
+    _band = RATE_A4_MAX_MULT * aux["AnoMes"].map(_selic_max)
+    _bad = aux["rate_a4"].notna() & _band.notna() & (aux["rate_a4"] > _band)
     aux["rate_a4_guarded"] = _bad.astype(int)
     aux.loc[_bad, "rate_a4"] = np.nan
-    aux["rate_a4"] = aux["rate_a4"].fillna(aux["cdi_qoq"])
+    _code[_bad] = 1
+
+    _qi = (aux["AnoMes"] // 100) * 4 + (aux["AnoMes"] % 100) // 3
+    _ratio = (aux["rate_a4"] / aux["cdi_qoq"]).where(_code == 0)
+    _carried = pd.Series(np.nan, index=aux.index)
+    for _, g in aux[["CodConglomeradoPrudencial"]].groupby(aux["CodConglomeradoPrudencial"]):
+        need = g.index[_code[g.index] != 0]
+        if not len(need):
+            continue
+        r, q = _ratio[g.index], _qi[g.index]
+        for i in need:
+            near = r[(q - q[i]).abs().between(1, 4) & r.notna()]
+            if len(near):
+                _carried[i] = near.median() * aux.at[i, "cdi_qoq"]
+    _fill = (_code != 0) & _carried.notna()
+    aux.loc[_fill, "rate_a4"] = _carried[_fill]
+    aux["rate_a4_carried"] = _fill.astype("int8")
+    aux["rate_a4_fallback"] = _code
+    _why = {int(k): int(v) for k, v in _code[_code != 0].value_counts().sort_index().items()}
     logging.info(
-        f"rate_a4 plausibility guard (> {RATE_A4_MAX_MULT:g}x Selic): "
-        f"{int(_bad.sum()):,} of {len(aux):,} bank-quarters ({100*_bad.mean():.2f}%) -> cdi_qoq"
+        f"rate_a4: {int((_code == 0).sum()):,} measured of {len(aux):,} bank-quarters; no measured rate "
+        f"{_why} (1 band > {RATE_A4_MAX_MULT:g}x max Selic t-7..t, 2 strip/leaf <= 0, 3 cap, "
+        f"4 residual <= 0, 5 nothing to measure); carried {int(_fill.sum()):,}, "
+        f"left missing {int(((_code != 0) & ~_fill).sum()):,}"
     )
 
     aux["rate_a5"] = np.where(
@@ -785,10 +816,11 @@ def append_rates_to_panel():
                  "spread_ann_a1", "spread_ann_a2", "spread_ann_a3", "spread_ann_a4", "spread_ann_a5"]
     df = df.drop(columns=[c for c in drop_cols if c in df.columns], errors='ignore')
 
-    # rate_a4_guarded rides along so downstream code (and the paper) can see WHICH bank-quarters had
-    # an implausible CDB implicit rate replaced by cdi_qoq — otherwise the substitution is invisible.
+    # The rate_a4 flags ride along so downstream code (and the paper) can see which bank-quarters
+    # have no measured type-4 rate, why, and which carry an imputed one.
     cols_to_merge = ["CodConglomeradoPrudencial", "AnoMes", "risk_free_qoq", "risk_free_ann",
-                     "total_deposits", "rate_a4_guarded", "rate_a5_posted"] + \
+                     "total_deposits", "rate_a4_guarded", "rate_a4_fallback", "rate_a4_carried",
+                     "rate_a4_vintage_src", "rate_a5_posted"] + \
                     [f"rate_a{t}" for t in range(1, 6)] + \
                     [f"spread_a{t}" for t in range(1, 6)] + \
                     [f"spread_ann_a{t}" for t in range(1, 6)]

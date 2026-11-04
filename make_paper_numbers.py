@@ -132,9 +132,14 @@ LOGIT_SUMMARY = _paths.blp_results_dir() / "logit" / "logit_summary_spec_12.json
 BLP_STAGE = "ext1"                      # Table 6 (make_blp_demand_comparison_table STAGE_SPECS)
 # Status of every BLP-derived entry (Table 6 rows, the BLP price coefficient, elasticities and
 # ratios, and the demand.xi.* diagnostics of the ext1 residual xi-hat): config/blp_status.toml,
-# "ok" for final fits or pending-blp-ext1 while they are provisional. --blp-pending forces
-# pending-blp-ext1 for one run.
-BLP_STATUS = _blp_status.status()
+# per routine, "ok" for final fits or pending-blp-ext1 while they are provisional. An entry of
+# routine E takes blp_status(E). --blp-pending forces pending-blp-ext1 for one run.
+BLP_FORCE_PENDING = False
+
+
+def blp_status(E=None) -> str:
+    """The status of a BLP-derived entry of routine E (None: an entry spanning routines)."""
+    return _blp_status.PENDING if BLP_FORCE_PENDING else _blp_status.status(E)
 # --cluster-pending: every ok entry of the cluster family becomes pending-cluster (see FAMILY).
 CLUSTER_PENDING = False
 _FAMILY: list = []                      # the families of the collectors running, innermost last
@@ -1130,7 +1135,7 @@ def collect_demand(notes: list):
                 "t_{0.975}(G*): the multiple of the standard error that gives the 95% interval "
                 "implied by the BLP table's inference (stars from Student-t with G* effective "
                 "clusters). The whiskers of the slide coefficient plot",
-                f"BLP_RESULTS/cluster_raw/blp_results_E{E}_spec_12_{BLP_STAGE}.json G_star", BLP_STATUS,
+                f"BLP_RESULTS/cluster_raw/blp_results_E{E}_spec_12_{BLP_STAGE}.json G_star", blp_status(E),
                 display=disp(float(_stats.t.ppf(0.975, float(g_blp)))),
                 detail=dict(G_star=float(g_blp)))
         ab = {}
@@ -1146,7 +1151,7 @@ def collect_demand(notes: list):
                 f"Price coefficient alpha and its SE, {'Table 5 (logit)' if kind == 'logit' else 'Table 6 (BLP)'}, "
                 f"{rname(E)}", dict(estimate=a, se=se),
                 "alpha-hat, the average-market price coefficient, and its WCB standard error",
-                src, "ok" if kind == "logit" else BLP_STATUS, display=f"{disp(a)} ({disp(se)})",
+                src, "ok" if kind == "logit" else blp_status(E), display=f"{disp(a)} ({disp(se)})",
                 checks=[check_cell(tname, f"alpha, {rname(E)}", t.cell(est_cells, E), [a]),
                         check_cell(tname, f"alpha SE, {rname(E)}", t.cell(se_cells, E), [se])])
             el = a * rho if (a is not None and rho is not None) else None
@@ -1157,7 +1162,7 @@ def collect_demand(notes: list):
                 "and s = share_B_cond (B rows) or share_D (D rows), 0 <= s < 1: the "
                 f"average-market own-price elasticity of the {tab} row",
                 f"{src} x mean rho(1-s) of the newest demand_{E}_*spec_12.parquet in DEMAND_PREP",
-                "ok" if kind == "logit" else BLP_STATUS, display=disp(el),
+                "ok" if kind == "logit" else blp_status(E), display=disp(el),
                 detail=dict(alpha=a, mean_rho_1ms=rho),
                 checks=[check_cell(tname, f"Mean own-price elasticity row, {rname(E)}",
                                    t.cell(t.find("Mean own-price elasticity"), E), [el])])
@@ -1167,7 +1172,7 @@ def collect_demand(notes: list):
                 "The active elasticity times the share of depositors who respond on impact: "
                 "elasticity x (1 - mean phi-hat), mean phi-hat as a fraction (Table 4 row / 100)",
                 f"demand.elast.{kind}.E{E} x (1 - sleep.meanphi.E{E} / 100)",
-                "ok" if kind == "logit" else BLP_STATUS,
+                "ok" if kind == "logit" else blp_status(E),
                 display=disp(imp),
                 detail=dict(formula="elasticity * (1 - mean_phi_pp / 100)", elasticity=el,
                             mean_phi_pp=mp_pp, one_minus_phi=1.0 - mp))
@@ -1178,7 +1183,7 @@ def collect_demand(notes: list):
             add(f"demand.ratio.{what}.E{E}", "C", f"BLP {word} over the logit's, {rname(E)}", r,
                 f"Table 6's {word} divided by Table 5's (the 'about six times' and 'eleven times' "
                 "of the prose)", f"demand.alpha.blp.E{E} / demand.alpha.logit.E{E}, "
-                f"{'estimate' if what == 'alpha' else 'se'}", BLP_STATUS, display=disp(r))
+                f"{'estimate' if what == 'alpha' else 'se'}", blp_status(E), display=disp(r))
 
 
 def phi_base_check(notes: list):
@@ -1637,7 +1642,7 @@ def collect_table_rows(notes: list):
                        else "standard error")
                     + ", stars and the significance level they mark (1, 5, 10 percent, or none)",
                     f"rendered {tname} (3 dp; the generator exports no unrounded values)",
-                    BLP_STATUS if tname == T6 else "ok",
+                    blp_status(E) if tname == T6 else "ok",
                     rounded3=True, display=f"{fmt3s(nums[0])}{'*' * stars} {shown}".strip())
         for prefix, slug, is_count in stats:
             cells, _ = t.find_row(prefix)
@@ -1651,7 +1656,7 @@ def collect_table_rows(notes: list):
                 v = int(round(nums[0])) if is_count else nums[0]
                 add(f"{stem}.{slug}.E{E}", "G", f"{tlab}, {prefix}, {rname(E)}", v,
                     f"{tlab} row '{prefix}', column {rname(E)}", f"rendered {tname}",
-                    BLP_STATUS if tname == T6 else "ok",
+                    blp_status(E) if tname == T6 else "ok",
                     rounded3=not is_count, display=fmt_count(v) if is_count else fmt3s(v))
     for E in ROUTINES:
         if E not in pix:
@@ -2570,7 +2575,7 @@ def collect_xi_diagnostics(notes: list):
                 "Order-free (Shapley) shares of the balance-weighted variance of the demand "
                 "residual among quarter, bank, bank x type and market effects, and the rest; B cells "
                 "of the demand sample; bank x type is the bank share's gain when bank effects differ "
-                "by deposit type", f"{src} E{E}.{s}.anova", BLP_STATUS,
+                "by deposit type", f"{src} E{E}.{s}.anova", blp_status(E),
                 display=", ".join(f"{k} {fmt3s(v)}" for k, v in a.items()))
             ar = r["ar1"]
             add(f"demand.xi.ar1.E{E}.{s}", "demand residuals",
@@ -2581,7 +2586,7 @@ def collect_xi_diagnostics(notes: list):
                 "x type x market cells (cell-demeaned) and without demeaning; 95% interval from the "
                 "conglomerate wild cluster bootstrap (Webb, 999 draws, bias-corrected); n_cells = "
                 "cells with at least two pairs of consecutive quarters",
-                f"{src} E{E}.{s}.ar1", BLP_STATUS,
+                f"{src} E{E}.{s}.ar1", blp_status(E),
                 display=f"within {fmt3s(ar['within']['slope'])} "
                         f"{disp_ci(ar['within']['lo'], ar['within']['hi'])}, raw "
                         f"{fmt3s(ar['raw']['slope'])}")
@@ -2596,7 +2601,7 @@ def collect_xi_diagnostics(notes: list):
                 "2013Q1; censored = weighted share of cells whose first quarter is 2013Q1) and own "
                 "branches (log of one plus the lagged ESTBAN branch count); r2 is the partial R2; "
                 "intervals from the conglomerate wild cluster bootstrap",
-                f"{src} E{E}.{s}.corr", BLP_STATUS,
+                f"{src} E{E}.{s}.corr", blp_status(E),
                 display=", ".join(f"{v} {fmt3s(c[v]['slope'])} R2 {fmt3s(c[v]['r2'])}"
                                   for v in ("incumbency", "own_branches")))
         add(f"demand.flows.trunc_share.E{E}", "demand residuals",
@@ -3475,11 +3480,11 @@ def main():
                     help="mark every ok entry of the cluster family pending-cluster: the panel was "
                          "rebuilt and the cluster's estimates are not yet re-run (see FAMILY)")
     a = ap.parse_args()
-    global TABLES_DIR, BLP_STATUS, CLUSTER_PENDING
+    global TABLES_DIR, BLP_FORCE_PENDING, CLUSTER_PENDING
     if a.tables_dir:
         TABLES_DIR = pathlib.Path(a.tables_dir)
     if a.blp_pending:
-        BLP_STATUS = "pending-blp-ext1"
+        BLP_FORCE_PENDING = True
     CLUSTER_PENDING = a.cluster_pending
 
     notes: list = []

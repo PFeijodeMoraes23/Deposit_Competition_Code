@@ -1,16 +1,23 @@
-# config/blp_status.toml — whether the random-coefficients (BLP) results are final.
+# config/blp_status.toml — whether the random-coefficients (BLP) results are final, per routine.
 #
 # "pending-blp-ext1": the fits are provisional. make_paper_numbers.py marks every BLP-derived
-# entry pending-blp-ext1 (the Table 6 rows, the BLP price coefficient, the elasticities and
-# ratios, and the demand.xi.* diagnostics of the ext1 residual), so the paper prints them as a red
-# ?? (their value in red with \PNshowpendingtrue). The random-coefficients tables
-# (make_blp_rc_table.py, make_blp_demand_comparison_table.py, make_xi_diagnostics.py) add the
+# entry of that routine pending-blp-ext1 (the Table 6 rows, the BLP price coefficient, the
+# elasticities and ratios, and the demand.xi.* diagnostics of the ext1 residual), so the paper
+# prints them as a red ?? (their value in red with \PNshowpendingtrue). The random-coefficients
+# tables (make_blp_rc_table.py, make_blp_demand_comparison_table.py, make_xi_diagnostics.py) add the
 # `provisional` sentence of config/table_notes.toml to their notes.
 # "ok": the adopted fits are final.
 #
-# Read by utils/blp_status.py. Set "ok" only when corrected fits are adopted, then rerun those
-# three generators and make_paper_numbers.py. make_paper_numbers.py --blp-pending forces pending
-# for one run whatever this file says.
+# `status` is the default; [routines] gives each routine its own value (a routine not listed takes
+# the default). A table or entry that spans routines is pending while any of them is.
+#
+# Read by utils/blp_status.py. Set a routine "ok" only when its corrected fits are adopted, then
+# rerun those three generators and make_paper_numbers.py. make_paper_numbers.py --blp-pending
+# forces pending for one run whatever this file says.
 status = "pending-blp-ext1"
 since  = "2026-10-31"
-reason = "the engine's diagonal-IFT gradient points uphill, so no random-coefficients fit is a minimum; re-estimation with the exact Jacobian"
+reason = "the engine's diagonal-IFT gradient points uphill, so no random-coefficients fit is a minimum; re-estimation with the exact Jacobian, then the full rerun from 2016Q1 (11-03)"
+
+[routines]
+E3 = "pending-blp-ext1"
+E4 = "pending-blp-ext1"

@@ -391,6 +391,11 @@ def build_market_size_and_shares(df_spec: pd.DataFrame) -> pd.DataFrame:
     else:
         if BC_RULE == 'findex_gdp':
             _x = pd.to_numeric(df_spec['gdp_per_capita'], errors='coerce')
+            # build_base_panel has CENTRED the state block (utils.state_transform), so
+            # gdp_per_capita arrives as a deviation from the grand mean. The access ratio needs
+            # the level: add the persisted mean back (scaled units; the scale cancels in the ratio).
+            if _st.centering_enabled():
+                _x = _x + _st.load_transform().mean_scaled['gdp_per_capita']
             _med = _x.groupby(df_spec['year']).transform('median')
             _acc = (_x / _med).replace([np.inf, -np.inf], np.nan).fillna(1.0).clip(ACCESS_LO, ACCESS_HI)
         elif BC_RULE == 'findex':

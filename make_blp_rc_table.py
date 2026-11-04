@@ -340,19 +340,20 @@ def demand_notes() -> dict:
         return tomllib.load(fh)["demand"]
 
 
-def demand_note(which: str, se_method: str = "wcb", skip=(), subs: dict | None = None) -> str:
+def demand_note(which: str, se_method: str = "wcb", skip=(), subs: dict | None = None,
+                routine=None) -> str:
     """Note body for table `which` (a key of `[demand.order]`): its sentences in order, `se`
     resolved by `se_method` (a method with no stored standard errors falls back to `se_note`),
     keys in `skip` left out and `@NAME@` tokens filled from `subs`. `provisional` prints only while
-    config/blp_status.toml says pending. blp_logit.jl `demand_note` assembles the logit notes the
-    same way."""
+    config/blp_status.toml says `routine` is pending (no routine: a table spanning routines, pending
+    while any is). blp_logit.jl `demand_note` assembles the logit notes the same way."""
     notes = demand_notes()
     parts = []
     for k in notes["order"][which]:
         if k in skip:
             continue
         if k == "provisional":
-            if _blp_status.pending():
+            if _blp_status.pending(routine):
                 parts.append(notes[k])
             continue
         if k == "se":
@@ -490,7 +491,8 @@ def build_table(est_id: int, suffix: str = "") -> str:
     # when some column has a Σ on the bound.
     note_body  = demand_note(
         "rc_routine", se_method=(stage_results.get(available[-1]) or rep).get("se_method", "none"),
-        skip=() if sigma_on_bound(stage_results[s] for s in available) else ("boundary",))
+        skip=() if sigma_on_bound(stage_results[s] for s in available) else ("boundary",),
+        routine=est_id)
     if any(joint_se_status(stage_results[s]) for s in available):
         note_body += " " + NI_NOTE
 

@@ -1,6 +1,75 @@
 # Shared memory for every Claude instance on Pedro's machine
 
-Read this before any task that touches the paper. Newest entries first.
+Read this before any task that touches the paper. Newest entries first. Entries older than the top one are the record of how things got here; where they conflict with the top entry, the top entry wins.
+
+## 2026-11-03, 22:10. D10 adopted; the rebuild waits for B8 (main thread)
+
+D10 (Pedro, 22:10): for statement banks the annual CDB expense is anchored to the statements' time-deposit line net of its scope items, Cosif giving the quarterly shape, with `rate_a4_src` recording the source; the component benchmark is the fallback. The BB agent has B8 (domestic subordinated and hybrid lines, `subordinated_in_lump.csv`, `time_deposit_scope.csv`, Itaú's line); the coding thread adds D10 and runs one rebuild after B8. 2025 is outside the sample and serves only as the calibration window.
+
+## 2026-11-03, 22:00. B7 in; K2's gate failed and changed the design (main thread)
+
+B7 complete (eight banks' statement funding-expense lines; judicial share file from 2015Q4), so the coding thread starts the panel rebuild (I6, I8, I9 with D6, D7, D9; loader rules in `impr_handoff_2026-11-03.md`, Update 11-03i). The BB agent has no open task. K2 (Kappa agent) step 2: on the paper's $\hat\delta$ and $\widehat M$ the outside option is 87 percent of the median menu (an awake real stays with probability 0.11; 84 percent of entry comes from the outside pool), the linearized regression recovers nothing about $\kappa$, and the multiplicative form recovers it to within 0.03 when the scale is bank $\times$ market plus market $\times$ quarter. The design note (twenty-third version) restates A2 as a common denominator (the outside-dominated case operative), drops quality weights, writes the exit as a market-quarter coefficient on the awake stock, and estimates by nonlinear least squares; next for the Kappa agent: a converging solver, then K2b (the Pix change simulated). The note records that the paper's gross flows (0.11 stay, 1.2 percent awake) and the data's net flows (9 percent of stock) disagree; the design uses the data.
+
+## 2026-11-03, 22:50. Decisions on the rebuild; one BB task left before it starts (main thread)
+
+Pedro decided (impr_handoff_2026-11-03.md, Update 11-03g): fallback rates by the max-Selic guard band then a carried rate, missing-and-drop as robustness (D1); judicial deposits removed proportionally in levels with a capital flag, `dep_a4` overwritten and `dep_a4_incl_judicial` kept (D2); savings rate from the BCB's credited yields, SGS 195 and 25 (D3); no hold for the old-rule share, which no source gives (verified: Lei 12.703/2012 applies only to deposits made from 4 May 2012, and withdrawals drain the new-rule balance first), `s = 0` flagged where no statement line exists (D4); the I9 rate base with DFP benchmarking adopted (D6); the bills-ratio scope error fixed (D7); the switch-cost tree copy of the market-size bug fixed (D5); request logs left alone (D8). **The rebuild starts when the BB agent's B7 lands** (the DFP funding-expense lines for Caixa, BRB, Banese, Banestes, Banrisul, Bradesco, Itaú, Santander; the 2015-12 judicial values; BB's 2023 to 2024 quarterly judicial stock). Pix: P1 to P3 delivered and accepted; nothing open but the P3 rerun at the new md5. Kappa: K2 running. I10 (Pedro, 11-03): once the other agents are done, the coding thread moves every adopted diagnostic into the panel build or the estimation routine (map in Update 11-03g). Handoffs: `impr_handoff_2026-11-03.md`, `bb_handoff_2026-11-03.md`, `pix_handoff_2026-11-03c.md` (one file now), `kappa_handoff_2026-11-03.md`. All reply files processed and removed.
+
+## 2026-11-03, 21:30. Four agents; where everything stands (main thread)
+
+```
+agents[4]{agent,handoff,reply_to_write,open}:
+  coding (I),"impr_handoff_2026-11-03.md","IMPR_REPLY_2026-11-03c.md","I1 market size, I6 fallbacks, I8 old-rule premium, I9 judicial deposits: four change summaries, one panel rebuild, new md5; then I2 (FR3) on Pedro's go, I3, I4, I5, I7"
+  Pix (P),"pix_handoff_2026-11-03c.md (rules in pix_handoff_2026-11-03.md)","PIX_REPLY_2026-11-03c.md","P1 Pix-use dose and exposures at the MCA; P2 advertising and branches; P3 the stakes (rebuilt at the new md5)"
+  BB (B),"bb_handoff_2026-11-03.md","BB_REPLY_2026-11-03c.md","B4 stage the 025439 second-instance decision; B5 old-rule savings stock by bank; B6 timing of Caixa's 2024 judicial fall. B1, B2, B3 done"
+  Kappa (K, new 11-03),"kappa_handoff_2026-11-03.md","KAPPA_REPLY_2026-11-03.md","K2 the simulation test now (current panel); K1 the regression after the rebuild and P1 to P3"
+```
+
+The design note is at its seventeenth version (`Drafts/Deposit Competition/kappa_design_2026-11-02.md`, 37 pages): model (Section 3), why the reduced form (4), derivation (5), identification (6), tests (7), order of work (8), then the dead ends (10), the record of every task with its result (11) and the data requests (12). Judicial deposits: Caixa's 2016 to 2024 shares are in (0.33 to 0.71); the five downloads Pedro was asked for are not needed.
+
+## 2026-11-03, 19:30. Labels rebooted; three findings from K0 (main thread)
+
+**Labels (Pedro, 11-03).** Tasks are numbered by agent: **I** coding thread (`impr_handoff_2026-11-03.md`), **B** BB agent (`bb_handoff_2026-11-03.md`), **P** Pix agent's own tasks, **K** the switching-cost design, run by the Pix agent (`pix_handoff_2026-11-03b.md`). Map: FR3→I2, FR4→I3, FR5+M5→I4, PC1→I5, RT1→I6, SL1→I7; BB5→B1, BB6→B2, JD1→B3; SIM1→K2. New: I1, I8, I9, B4, B5, B6.
+
+**Three findings from K0 (`Rout/k0_report.md`), each with an owner:**
+1. **The market size $\widehat M_{mt}$ has its access index inverted** (I1, before I2): `build_market_size_and_shares` computes access on grand-mean-centred GDP per capita, so richer markets get the larger outside option (Spearman −0.992 in 2019), 56 percent of B markets sit at the 0.35 floor in 2023–24, and the median market's $\widehat M$ per capita jumps 6.7× from 2022 to 2023. Touches shares, $\hat\xi$, `demand.sharecap.*` and every counterfactual. Fix proposed: add the persisted grand mean back before the ratio. Pedro decides.
+2. **The old-rule savings premium is booked as time-deposit expense** (I8 mechanics; B5 old-rule stock from the DFP notes): the panel's savings rate is the regulated new-rule rate for every bank; Cosif splits savings expense only from 2025-01; so in 2017Q4–2021Q3 a bank's type-4 rate is overstated by (old-rule share) × premium × savings/time deposits: per unit of share, Caixa 4.6 pp a year, BB 2.3, Itaú 1.6, Bradesco 1.5 (2018–2020). A paper-level fact about $\rho_{j4}$ of the big banks.
+3. **Cell-level flows against the sleepiness fit:** the median type-4 cell moves 9 percent of its carried stock in a quarter while the adopted $\hat\phi$ leaves 1.2 percent awake, so outflows exceed the whole awake stock in 86 percent of outflow cells (the reason (11-B) truncates 40.5 percent of cells); 41 percent of the gross churn nets within the bank across municipalities (booking, not choice). The ratio design is free of $\phi$; the left side of K1 needs a rule (Pedro's decision).
+
+Also: the rate fallbacks are 186 B conglomerate-quarters, not seven (I6); LAI 18810.025439's second-instance appeal was granted 11-03 (package client counts by institution; Deati has 30 days; staged as B4).
+
+**4. Judicial deposits (B3, 20:00).** `dep_a4` (ESTBAN verbete 432) contains Cosif 4.1.5.50, the court-ordered deposits, for every bank and year: BB 51 to 76 percent of its type-4 stock, Caixa about 40 percent, BRB, Banese, Banestes 20 to 56 percent, Banrisul 12 percent from 2024Q2 (reclassification; its `dep_a4` jumps 16 percent for accounting reasons). The rate chain divides CDB expense (8113, judicial excluded) by the 4.1.5 total (judicial included) in the 2025+ rate and in the de-bias factor $k_i$ that rescales every pre-2025 rate, so BB's measured CDB rate is about half the true one. ESTBAN books the balances at the branch by the court, so local type-4 shares are distorted where courts sit. **Pedro (11-03): fix it.** Task I9: judicial stock out of `dep_a4` and out of the rate base; one panel rebuild together with I8 (old-rule premium) and I1 (market size), then I2. Caixa's 2016 to 2024 shares need its statements (B6, Pedro downloads five).
+
+## 2026-11-03, 17:30. State of every workstream (main thread)
+
+**Handoffs in force** (all in `Code/Egan_et_al_2025_Rep/claude/`; one file per agent; replies go next to them with the names given):
+
+```
+handoffs[3]{agent,handoff,reply_to_write,open_items}:
+  coding (IMPR),"impr_handoff_2026-11-03.md (the master; replaces coding_handoff_2026-11-02.md and impr_handoff_2026-11-02.md)","IMPR_REPLY_2026-11-03b.md","FR3 (WAIT for Pedro's go), FR4, FR5, M5, PC1 after FR3, RT1 (rate fallbacks), SL1 (source-log builder inputs)"
+  Pix,"pix_handoff_2026-11-03.md","PIX_REPLY_2026-11-03b.md","K0 (the objects of the net-flow regression; no regression)"
+  BB,"bb_handoff_2026-11-03.md (one file)","BB_REPLY_2026-11-03b.md","BB5 (Santander sweep booking), BB6 (bib entry into References.bib), JD1 (judicial deposits inside Cosif 4.1.5)"
+```
+
+**Estimation.**
+- **The RC-BLP engine had a wrong gradient:** the diagonal IFT Jacobian pointed uphill (cos −0.91 to −0.99 against finite differences). Fixed on 11-02 with the exact log-share Jacobian (`blp_exact_ift.jl`; `compute_ift_gradient!`, `compute_ift_gradient_gpu!`, `compute_delta_jacobian_gpu`), verified on the cluster (cos 1.0; engine SEs = FD SEs). Every RC-based number in the papers is **provisional** until refit: `config/blp_status.toml` is pending per routine, tables carry a "Provisional" note, and the "imprecisely estimated" clauses on $\bar\alpha$ are out of the 11-02 edit plan because the old SEs were overstated 2.4 to 4.3 times.
+- **Adoption thresholds for any new RC fit (Pedro, 11-02):** T1 projected FD gradient norm ≤ 1e-3; T2 best dQ along the FD descent direction ≥ −1e-7; T3 se_status ok. Lowest Q among passing starts is adopted.
+- **The 11-02 ladder (M3b) was cancelled (FR0)**; its outputs sit in `CLUSTER_IN/20261102/` as an archive. The full rerun from 2016Q1 is the FR plan: FR1 (sleep frame now 36 quarters, 2016Q1 to 2024Q4; funding-ratio instruments spliced to 2015Q4; real per-capita GDP growth with t−1 timing for E4; re-centring; per-routine BLP status) and FR2 (local sizing) are done; **FR3 (full cluster chain) waits for Pedro's go**; FR4 is the RC ladder and multi-start under T1 to T3; FR5 keys against R3, then M5.
+- **FR2 findings to carry:** the φ̂ path tilts (2016–17 lower, 2023–24 higher), level averages unchanged; sign flips only in AMEs R3 found insignificant; E4's share of rows at φ̂ = 1 doubles to 33.4 percent (E3 16.8).
+- Panel `d01b8bae` (10-27) is unchanged by FR1. The paper's window becomes 36 quarters.
+
+**Paper text.** `V_Friction.tex` only; Pedro applies every edit. All blocks of `Drafts/Deposit Competition/paper_edits_V_Friction_2026-11-02.tex` are applied (save of 11-02 18:28). Held until M5: the Section 5.2 rewrites and the removal of the red provisional note. Held until BB3's follow-up: the 7.2 sweep sentence on BB. Numbers come from `\pn` keys only.
+
+**The switching-cost design** (`Drafts/Deposit Competition/kappa_design_2026-11-02.md` and `.pdf`, fourteenth version, 11-03): the structural model is the paper's with four additions (source-bank state and $\kappa$; consideration probability; stakes in $\phi$; the tax clock), and the reduced form is a regression of the **net flow** into a bank's time deposits, $\mathrm{NF}_{j4mt}=\mathrm{Dep}_{j4mt}-(1+r_{t-1}-\rho_{j4m,t-1})\mathrm{Dep}_{j4m,t-1}$ (no $\hat\phi$, no truncation), on the bank's own time-deposit spread gap interacted with observed pool weights; $e^{-\kappa}$ is the slope on rivals' pools over the slope on own pools. Settled by data: R1 (no off-Pix bank holds savings, so the bank-pair design is dead), TED1 (listed TED fees do not vary where savings are, so there is no fee dose), AW1 (openings at B banks did not jump at the Pix launch: 0.15 [−0.24, 0.55] with trends), R1b (2019 savings at non-mandated banks were zero). The Pix change in $\kappa$ is read before-after with the within-bank margin as control, and Pix use by market (instrumented by 2019 mobile access) as the dose.
+
+**Data facts found this week.**
+- CCS: a relationship is not a person; D firms' share of PF openings 0.747 (0.704 main entity); key `ccs.pf.dshare_open_main.2024`. CC1 to CC5 done.
+- BB Rende Fácil (LAI 18882.002114): opt-in sweep; V1 from March 2022 (10/20/30/50/100 percent of the DI by holding period), V2 from May 2026; instrument not named; follow-up on items 3 to 5 sent 11-03. Not material for BB's type-4 stock or rate (BB3). **Judicial deposits are 48 to 60 percent of BB's type-4 stock**, inside `dep_a4` and its rate (JD1 sizes them for every bank).
+- Seven rate fallbacks in the 10-27 panel: `rate_a4_national` equals the Selic (Itaú 2020Q1, Q2, 2021Q1; Santander 2020Q1, 2021Q1) or zero (both, 2021Q2) with `rate_a4_guarded` 0 (RT1).
+- The master source log `DATA_RAW/source_log.csv` is appended by hand since 10-30 (CC1, S4 edit, BB1 rows); do not rebuild it until SL1 has moved those into the builder's inputs.
+- LAI status: 025400 answered and processed; 025439 granted (byte-identical to the public census); 023084 in use; 025656 denied twice, not appealed; 025399 and 025440 (CDB registry) due 11-13; 18882.002114 (BB) answered in part.
+- Bib entry `bb_rendefacil_termo_2022`: the BB agent pastes it into `References.bib` (BB6) and reports the diff.
+
+**Rules (unchanged):** Claude never edits the paper or the decks; Pedro owns git and deletions (agents give `Remove-Item -LiteralPath` lines); raw files stay untouched; Python is `C:/venvs/egan/Scripts/python.exe -I` with `MPLBACKEND=Agg`; one heavy process at a time, and read `market_panel.parquet` through pyarrow; summarize before editing any existing script and wait for Pedro's OK; timestamp every update; "wait" means stop.
 
 ## 2026-10-27, 17:45. E1 rebuild done, R3 running (coding reply of 17:40)
 

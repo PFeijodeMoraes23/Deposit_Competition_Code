@@ -29,6 +29,9 @@ BCB_TARIFAS_WAYBACK = DATA_RAW / "BCB" / "tarifas_wayback"                     #
 # Ipeadata
 IPEADATA_IBOVESPA = DATA_RAW / "Ipeadata" / "ibovespa"                         # scrape_national_series.py (Ipeadata)
 
+# Issuers (compiled from their statements)
+ISSUERS_FUNDING_EXPENSE = DATA_RAW / "issuers" / "funding_expense"             # compiled/dfp_funding_expense*.csv; panel_cosif_calibrate.py
+
 # Tesouro Nacional
 TESOURO_INVESTIDORES_LIVE = DATA_RAW / "TesouroNacional" / "investidores_td" / "live_manual"
 

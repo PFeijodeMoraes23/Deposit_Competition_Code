@@ -56,7 +56,7 @@ from utils import state_transform as _st
 from utils import demand_chars   # corrected characteristics, segments and balances (always applied)
 from utils import deposit_types  # TR5 deposit-type variant (default: every type kept)
 from utils import calendar_lags  # lags by calendar quarter (a missing quarter gives no lag)
-from sleep_demand_prep_link import build_market_size_and_shares, MAX_YEAR, MIN_YEAR
+from sleep_demand_prep_link import build_market_size_and_shares, MAX_YEAR, MIN_YEAR, assert_one_quarter_set
 # market_panel.csv, NOT the fees variant — see utils/paths.market_panel_csv (USE_FEE_PANEL=1).
 # The frame is read through load_panel_cached, which serves the .parquet twin of this path
 # whenever that is the authoritative copy. On the cluster it always is: the data bundle ships
@@ -453,6 +453,7 @@ def main():
             if df_spec is not None:
                 out_pkl = demand_output_dir / f"demand_2_spec_{target_id}.parquet"
                 df_spec = demand_chars.finalize(df_spec, out_pkl, summary)
+                assert_one_quarter_set(df_spec, 2, f"E2 spec {target_id}")
                 df_spec.to_parquet(out_pkl, engine='pyarrow')
                 print(f" > Saved Spec {target_id} -> {out_pkl.name} ({len(df_spec)} rows)")
                 spec_summaries[f"2_{target_id}"] = summary

@@ -1062,6 +1062,7 @@ cl_bootstrap_tree () {
         echo "[dry-run]   links: processed/market_panel.parquet, processed/demand_chars.parquet,"
         echo "[dry-run]          PANEL_INTERMED/digital_banks_diagnostic.csv,"
         echo "[dry-run]          PANEL_INTERMED/estban_own_branches.csv,"
+        echo "[dry-run]          PANEL_INTERMED/mca_gdp_real_growth.csv,"
         echo "[dry-run]          BCB/Inclusion/bcb_banked_mca_panel.csv  <- ${CL_DATA_IN}"
         echo "[dry-run]          processed/ESTIMATION_OUTPUT -> ${CL_DATA_OUT}"
         echo "[dry-run]          => estimation_output() == ${CL_DATA_OUT}, the step dirs under it"
@@ -1110,6 +1111,10 @@ cl_bootstrap_tree () {
     # a different kept-event set, so a different D6 moment, with nothing in the log saying why.
     _cl_link "${CL_DATA_IN}/estban_own_branches.csv" \
              "${proc}/PANEL_INTERMED/estban_own_branches.csv"       "ESTBAN own-branch timing"
+    # E4's time block: real GDP per capita growth by MCA and year (scrape_ibge_gdp_real.py), read
+    # by sleep_est_e2.add_time_variables. Absent, every E4 frame build and --write-centers raise.
+    _cl_link "${CL_DATA_IN}/mca_gdp_real_growth.csv" \
+             "${proc}/PANEL_INTERMED/mca_gdp_real_growth.csv"       "real GDP growth by market"
     # A REAL directory here would shadow the link and split the tree in half, so
     # refuse rather than overwrite: only an absent path or an existing symlink is
     # replaced. (ln -sfn on a real directory silently creates the link INSIDE it.)

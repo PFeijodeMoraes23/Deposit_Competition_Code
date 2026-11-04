@@ -39,7 +39,7 @@ import pandas as pd
 # Regressors with NO cross-sectional variation: identical across all firms within a quarter,
 # so conglomerate clustering cannot see their real sampling variation. Measured on the panel:
 # pix_exists is a pure function of the quarter; risk_free_qoq_lag has only 32 distinct values
-# over the 35 quarters. NOT gdp_growth_yoy -- that is built per market from its own gdp lag.
+# over the 35 quarters. NOT gdp_growth_yoy -- that is each market's own real GDP growth.
 NATIONAL_VARS = {"pix_exists", "risk_free_qoq_lag"}
 
 

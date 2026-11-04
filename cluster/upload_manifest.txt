@@ -98,11 +98,12 @@
 
 # --- 0. the panels the SLEEPINESS estimators read. Sleepiness now runs ON the cluster, so ---
 #        these are inputs to the run rather than something that only ever existed locally.
-#        cl_bootstrap_tree (cluster_lib.sh) symlinks all four into the Open-Finance skeleton
+#        cl_bootstrap_tree (cluster_lib.sh) symlinks all five into the Open-Finance skeleton
 #        it builds under data/root, which is what OPEN_FINANCE_ROOT points the Python stack at:
 #            processed/market_panel.parquet                   -> data/input/market_panel.parquet
 #            processed/PANEL_INTERMED/digital_banks_diagnostic.csv -> data/input/...
 #            processed/PANEL_INTERMED/estban_own_branches.csv      -> data/input/...
+#            processed/PANEL_INTERMED/mca_gdp_real_growth.csv      -> data/input/...
 #            BCB/Inclusion/bcb_banked_mca_panel.csv           -> data/input/...
 #
 #        THE PANEL TRAVELS AS PARQUET. market_panel.parquet is 39 MB against the CSV's 724 MB
@@ -125,6 +126,10 @@ market_panel       | data | sleep      | PROCESSED     | market_panel.parquet   
 # links it into processed/, where utils.demand_chars.chars_path() looks for it.
 demand_chars       | data | sleep      | PROCESSED     | demand_chars.parquet           | data/input | python panel_demand_chars.py                                | PROCESSED | market_panel.parquet
 digital_flags     | data | sleep      | PANEL_INTERMED| digital_banks_diagnostic.csv   | data/input | python panel_digital_flags.py                                 | -         | -
+# E4's time block (sleep_est_e2.add_time_variables reads it; cl_bootstrap_tree links it into
+# processed/PANEL_INTERMED): real GDP per capita growth by MCA and year. Without it every E4 frame
+# build raises at the read.
+gdp_real_growth   | data | sleep      | PANEL_INTERMED| mca_gdp_real_growth.csv        | data/input | python scrape_ibge_gdp_real.py                                | -         | -
 # The D6 entry step's branch-timing screen reads this (sleep_ident_entry_dynamics.py
 # BRANCH_SIDECAR); cl_bootstrap_tree links it into processed/PANEL_INTERMED. Unstaged, the
 # screen is skipped silently and the cluster D6 moment is built on a larger event set.

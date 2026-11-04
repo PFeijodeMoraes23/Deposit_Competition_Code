@@ -26,8 +26,9 @@ The listed-price history comes from two scripts outside the runner. Stage 7 read
 
 `panel_fee_merge.py` turns these into quarterly listed-price columns, joined on conglomerate × year × quarter:
 
-- **Services**, labelled by code (`LISTED_FEE_SERVICES`): Pacotes Padronizados I–IV (`listed_fee_pkg1_pf`..`pkg4_pf`, codes 1501–1504), PJ account maintenance (`maint_active_pj` 0402, `maint_inactive_pj` 0403), cadastro (`acct_reg_pf` 1101), 2nd debit card (`card_2nd_debit_pf` 1201), CCF exclusion (`ccf_exclusion_pf` 1203), cheque countermand (`cheque_countermand_pf` 1204), withdrawals at the teller (`withdrawal_teller_pf` 1209) and at a terminal (`withdrawal_atm_pf` 1210), statement (`statement_pf` 1213).
-- **Price:** for each institution, the version in force on the quarter's last day. For the six account-keeping services it comes from `account_fee_listed_history.csv`; the other seven go through the same `load_versions()` rule. Prices are in R$ only; percentage listings are dropped and logged.
+- **Services**, labelled by code (`LISTED_FEE_SERVICES`): Pacotes Padronizados I–IV (`listed_fee_pkg1_pf`..`pkg4_pf`, codes 1501–1504), PJ account maintenance (`maint_active_pj` 0402, `maint_inactive_pj` 0403), cadastro (`acct_reg_pf` 1101), 2nd debit card (`card_2nd_debit_pf` 1201), CCF exclusion (`ccf_exclusion_pf` 1203), cheque countermand (`cheque_countermand_pf` 1204), withdrawals at the teller (`withdrawal_teller_pf` 1209) and at a terminal (`withdrawal_atm_pf` 1210), statement (`statement_pf` 1213), and PF transfers: TED by internet (`ted_internet_pf` 1315) and at the branch (`ted_branch_pf` 1313), DOC by internet (`doc_internet_pf` 1312) and at the branch (`doc_branch_pf` 1310).
+- **Transfer fees:** `listed_fee_ted_pf` and `listed_fee_doc_pf` take the internet price where the conglomerate lists one that quarter, else the branch price. TED and DOC stay out of the stickiness average.
+- **Price:** for each institution, the version in force on the quarter's last day. For the six account-keeping services it comes from `account_fee_listed_history.csv`; the other eleven go through the same `load_versions()` rule. Prices are in R$ only; percentage listings are dropped and logged.
 - **Window:**
   - 2015-Q1..2024-Q4 from the census;
   - 2025-Q1 on, from the snapshot alone, where its vigência is on or before the quarter end;
