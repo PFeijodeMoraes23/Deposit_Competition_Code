@@ -25,8 +25,13 @@
 #                COSIF residual type-4 rate, else the blended COSIF implicit rate; a rate above
 #                RATE_A4_MAX_MULT x the highest Selic of t-7..t is dropped (rate_a4_guarded); a
 #                quarter without a measured rate takes the bank's carried rate (median rate/CDI of
-#                its measured quarters within +-4, x CDI; rate_a4_carried) or stays missing;
-#                rate_a4_fallback gives the reason, rate_a4_vintage_src the savings-cost source
+#                its measured quarters within +-4, x CDI; rate_a4_carried) or stays missing; an
+#                uncorrected rate of exactly 0, or equal to the Selic, on a positive type-4 stock
+#                is a fill, not a measurement, and goes to the carry too, as does a benchmarked
+#                rate outside 0.5-1.5 x CDI (calibrate's rate_flag 4);
+#                rate_a4_fallback gives the reason, rate_a4_vintage_src the savings-cost source,
+#                rate_a4_src where the rate comes from (statement, benchmarked, imputed, leaf,
+#                carried)
 #   5 prepaid    the issuer's posted rule (config/type5_balance_rates.csv, a percent of the CDI,
 #                compounded over the days it covers) where one covers the quarter, flagged in
 #                rate_a5_posted; otherwise the conglomerate's payment-institution rate if it has
@@ -79,6 +84,10 @@ COSIF_PROCESSED_PATH = os.path.join(PROCESSED_PATH, "COSIF_PROCESSED")
 # eight quarters.  A CDB pays ~90-115% of CDI; past a few multiples of Selic the implicit
 # expense/stock ratio is broken, not a deposit rate.  See the rate_a4 assembly.
 RATE_A4_MAX_MULT = float(os.environ.get("RATE_A4_MAX_MULT", 3.0))
+# The rate/CDI range a measured quarter must lie in to lend its ratio to a neighbour's carry (I12,
+# Pedro 2026-11-04): a CDB pays about 0.9-1.15 x CDI, and a neighbour far outside that is an
+# imputation artefact that the carry would spread.
+CARRY_DONOR_RANGE = (0.5, 1.5)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
@@ -704,7 +713,7 @@ def append_rates_to_panel():
         _corr = _corr.rename(columns={"rate_a4_corrected_qoq": "cosif_cdb_rate_corrected",
                                       "rate_flag": "cosif_cdb_flag"})[
             ["CodConglomeradoPrudencial", "AnoMes", "cosif_cdb_rate_corrected", "cosif_cdb_flag",
-             "rate_a4_vintage_src"]
+             "rate_a4_vintage_src", "rate_a4_src"]
         ]
         aux["CodConglomeradoPrudencial"] = aux["CodConglomeradoPrudencial"].astype(str)
         aux = aux.merge(_corr, on=["CodConglomeradoPrudencial", "AnoMes"], how="left")
@@ -716,6 +725,7 @@ def append_rates_to_panel():
         aux["cosif_cdb_rate_corrected"] = np.nan
         aux["cosif_cdb_flag"] = np.nan
         aux["rate_a4_vintage_src"] = np.nan
+        aux["rate_a4_src"] = np.nan
         logging.info(f"Corrected CDB rate not found ({_corr_path}); using residual.")
     aux["rate_a4_vintage_src"] = aux["rate_a4_vintage_src"].fillna("none")
 
@@ -734,19 +744,34 @@ def append_rates_to_panel():
     #     the band binds on legacy funding whenever the Selic falls (2019-2021).
     # (3) A quarter left without a measured rate takes the bank's carried rate: its median rate/CDI
     #     over its measured quarters within four quarters either side, times this quarter's CDI
-    #     (rate_a4_carried = 1).  With no measured neighbour it stays missing, and the row leaves
-    #     every sample that needs the type-4 spread.
+    #     (rate_a4_carried = 1).  A neighbour counts only if its rate/CDI lies in CARRY_DONOR_RANGE,
+    #     which also keeps out an uncorrected rate of exactly 0 where the quarter holds no type-4
+    #     deposits.  With no such neighbour it stays missing, and the row leaves every sample that
+    #     needs the type-4 spread.
     # rate_a4_fallback records why a quarter has no measured rate: 0 measured, 1 above the band,
-    # 2 strip or leaf <= 0, 3 above calibrate's cap, 4 residual <= 0, 5 nothing to measure (no
-    # lagged stock or no expense).
+    # 2 strip or leaf <= 0, 3 above calibrate's cap or in its RATE_FAIL, 4 residual <= 0 or an
+    # uncorrected rate of exactly 0, 5 nothing to measure (no lagged stock or no expense), 6 an
+    # uncorrected rate equal to the Selic to 1e-6 (4 and 6 on a positive type-4 stock, where the
+    # blended or residual rate returns a fill, not a price), 7 a benchmarked rate outside
+    # calibrate's BENCH_RANGE x CDI (its rate_flag 4).  rate_a4_src records where a rate
+    # comes from: calibrate's source (statement, benchmarked, imputed, leaf) for a corrected rate,
+    # imputed for the residual or blended rate, carried for a carried one; missing where the
+    # quarter has no rate.
     _has_corr = aux["cosif_cdb_flag"].notna()
     _fallback = aux["cosif_type4_rate"].fillna(aux["cosif_implicit_rate"])
     aux["rate_a4"] = aux["cosif_cdb_rate_corrected"].where(_has_corr, _fallback)
     _code = pd.Series(0, index=aux.index, dtype="int8")
     _code[_has_corr & (aux["cosif_cdb_flag"] == 2)] = 2
     _code[_has_corr & (aux["cosif_cdb_flag"] == 3)] = 3
+    _code[_has_corr & (aux["cosif_cdb_flag"] == 4)] = 7
     _code[~_has_corr & aux["rate_a4"].isna() & (_residual_raw <= 0)] = 4
     _code[aux["rate_a4"].isna() & (_code == 0)] = 5
+    _pos4 = aux["dep_a4"].fillna(0) > 0
+    _zero = ~_has_corr & _pos4 & (_code == 0) & (aux["rate_a4"] == 0)
+    _at_selic = ~_has_corr & _pos4 & (_code == 0) & ((aux["rate_a4"] - aux["selic_qoq"]).abs() < 1e-6)
+    _code[_zero] = 4
+    _code[_at_selic] = 6
+    aux.loc[_zero | _at_selic, "rate_a4"] = np.nan
 
     _selic_max = (df_macro_q.sort_values("AnoMes").set_index("AnoMes")["selic_qoq"]
                   .rolling(8, min_periods=1).max())
@@ -757,7 +782,8 @@ def append_rates_to_panel():
     _code[_bad] = 1
 
     _qi = (aux["AnoMes"] // 100) * 4 + (aux["AnoMes"] % 100) // 3
-    _ratio = (aux["rate_a4"] / aux["cdi_qoq"]).where(_code == 0)
+    _r_cdi = aux["rate_a4"] / aux["cdi_qoq"]
+    _ratio = _r_cdi.where((_code == 0) & _r_cdi.between(*CARRY_DONOR_RANGE))
     _carried = pd.Series(np.nan, index=aux.index)
     for _, g in aux[["CodConglomeradoPrudencial"]].groupby(aux["CodConglomeradoPrudencial"]):
         need = g.index[_code[g.index] != 0]
@@ -772,11 +798,16 @@ def append_rates_to_panel():
     aux.loc[_fill, "rate_a4"] = _carried[_fill]
     aux["rate_a4_carried"] = _fill.astype("int8")
     aux["rate_a4_fallback"] = _code
+    _src = aux["rate_a4_src"].where(_has_corr, "imputed").where(_code == 0)
+    _src[_fill] = "carried"
+    aux["rate_a4_src"] = _src
     _why = {int(k): int(v) for k, v in _code[_code != 0].value_counts().sort_index().items()}
     logging.info(
         f"rate_a4: {int((_code == 0).sum()):,} measured of {len(aux):,} bank-quarters; no measured rate "
         f"{_why} (1 band > {RATE_A4_MAX_MULT:g}x max Selic t-7..t, 2 strip/leaf <= 0, 3 cap, "
-        f"4 residual <= 0, 5 nothing to measure); carried {int(_fill.sum()):,}, "
+        f"4 residual <= 0 or exactly 0, 5 nothing to measure, 6 equal to the Selic, "
+        f"7 benchmarked outside 0.5-1.5 x CDI); "
+        f"carried {int(_fill.sum()):,}, "
         f"left missing {int(((_code != 0) & ~_fill).sum()):,}"
     )
 
@@ -820,7 +851,7 @@ def append_rates_to_panel():
     # have no measured type-4 rate, why, and which carry an imputed one.
     cols_to_merge = ["CodConglomeradoPrudencial", "AnoMes", "risk_free_qoq", "risk_free_ann",
                      "total_deposits", "rate_a4_guarded", "rate_a4_fallback", "rate_a4_carried",
-                     "rate_a4_vintage_src", "rate_a5_posted"] + \
+                     "rate_a4_vintage_src", "rate_a4_src", "rate_a5_posted"] + \
                     [f"rate_a{t}" for t in range(1, 6)] + \
                     [f"spread_a{t}" for t in range(1, 6)] + \
                     [f"spread_ann_a{t}" for t in range(1, 6)]

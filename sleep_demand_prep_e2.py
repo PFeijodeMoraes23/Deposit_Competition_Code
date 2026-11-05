@@ -454,7 +454,7 @@ def main():
                 out_pkl = demand_output_dir / f"demand_2_spec_{target_id}.parquet"
                 df_spec = demand_chars.finalize(df_spec, out_pkl, summary)
                 assert_one_quarter_set(df_spec, 2, f"E2 spec {target_id}")
-                df_spec.to_parquet(out_pkl, engine='pyarrow')
+                demand_chars.write_parquet(df_spec, out_pkl)
                 print(f" > Saved Spec {target_id} -> {out_pkl.name} ({len(df_spec)} rows)")
                 spec_summaries[f"2_{target_id}"] = summary
                 total_saved += 1

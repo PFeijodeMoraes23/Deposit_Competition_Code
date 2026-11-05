@@ -793,7 +793,7 @@ _COL_ORDER = [
     # Deposit balances
     "dep_a1", "dep_a2", "dep_a3", "dep_a4", "dep_outros", "dep_a5", "total_deposits",
     "dep_a4_incl_judicial", "judicial_src", "judicial_cap_flag",
-    "rate_a4_guarded", "rate_a4_fallback", "rate_a4_carried", "rate_a4_vintage_src",
+    "rate_a4_guarded", "rate_a4_fallback", "rate_a4_carried", "rate_a4_vintage_src", "rate_a4_src",
     "spread_a1", "spread_a2", "spread_a3", "spread_a4", "spread_a5",
     "rival_mean_spread_a1", "rival_mean_spread_a2",
     "rival_mean_spread_a3", "rival_mean_spread_a4",

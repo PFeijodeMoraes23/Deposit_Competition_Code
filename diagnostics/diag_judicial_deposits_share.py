@@ -8,6 +8,8 @@ Before 2025 the public balancetes publish 4.1.5 only as a total, so the judicial
 DFP notes (year-ends, transcribed with the page in DATA_RAW/issuers/judicial_deposits/compiled/
 dfp_judicial_extracts.csv). The judicial LEVEL is interpolated linearly between year-ends and divided by the
 actual quarter-end 4.1.5 total, so movements of the total (for example BB's 2022 jump) are not smoothed away.
+BRB prints no judicial line in 2018-2021: its path runs from the 2017-12 note to a management-report level at
+2021-12 (REPORT_ANCHORS), and the 2022 block inflow from the Bahia court is a step at 2022Q1 (STEPS).
 From 2025-01 the share is observed in Cosif (4155000009 over the 4.1.5 total).
 
 Booking: Banrisul kept its judicial deposits outside 4.1.5 until the IN BCB 459/2024 reclassification
@@ -37,6 +39,18 @@ COSIF = OUT / "cosif_415_subaccounts_monthly.csv"
 DFP_BANKS = {"00000000": "BB", "00000208": "BRB", "28127603": "Banestes", "13009717": "Banese", "92702067": "Banrisul",
              "00360305": "Caixa"}
 RECLASS = 202405          # IN BCB 459/2024 data-base: Banrisul's judicial deposits enter 4.1.5
+
+# Year-end levels that no note prints but a management report states; they act as interpolation points.
+REPORT_ANCHORS = {
+    ("00000208", 202112): (3.0e9, "DFP 2021 management report p34: TJDFT and PCDF portfolio 'acima de R$ 3 bilhões' "
+                                  "at 4T21 (a lower bound)", "management-report anchor (lower bound)"),
+}
+# A block inflow dated by the 4.1.5 total: from this quarter to the next year-end the level is held back
+# from that year-end instead of interpolated.
+STEPS = {
+    "00000208": (202203, "BRB won the TJBA tender, R$6 bn of judicial deposits (DFP 2021 p34); its 4.1.5 total "
+                         "rises R$6.6 bn in 2022-03"),
+}
 
 
 def extracts_path():
@@ -90,6 +104,8 @@ def main():
         pts = {}
         for ym, r in e.iterrows():
             pts[ym] = r["j"] if (r["inside_cosif_415"] == "yes" or ym >= RECLASS) else 0.0
+        anchors = {ym: (v, s, f) for (cc, ym), (v, s, f) in REPORT_ANCHORS.items() if cc == c}
+        pts.update({ym: v for ym, (v, _, _) in anchors.items()})
         for ym in qe:
             tot = g["stk_415_total"].get(ym, np.nan)
             ctot = cg.get((code, ym), np.nan)
@@ -101,6 +117,8 @@ def main():
                 j, src, flag = np.nan, "", "not computed before 2025 (2025 share below 10%)"
             elif name == "Banrisul" and ym < RECLASS:
                 j, src, flag = 0.0, "DFP 2024 (restated) and Cosif step 2024-05", "zero: booked outside 4.1.5 before IN 459/2024"
+            elif ym in anchors:
+                j, src, flag = anchors[ym]
             elif ym in pts:
                 j = pts[ym]
                 r = e.loc[ym]
@@ -119,6 +137,10 @@ def main():
                         j = e.loc[a, "j"] + w * (e.loc[b, "j"] - e.loc[a, "j"])   # level, now inside
                     src = f"linear between {a // 100}-12 and {b // 100}-12"
                     flag = "interpolated" if (ib - ia) == 4 else f"interpolated across missing year-ends ({a // 100 + 1}-{b // 100 - 1})"
+                    step = STEPS.get(c)
+                    if step and a < step[0] <= ym < b:
+                        j = pts[b]
+                        src, flag = f"held back from {b // 100}-12 to {step[0] // 100}Q{(step[0] % 100) // 3}: {step[1]}", "step"
                 elif after:
                     j = pts[min(after)]
                     src, flag = f"held from {min(after) // 100}-12", "held back from the first year-end"

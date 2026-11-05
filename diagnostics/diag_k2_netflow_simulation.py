@@ -13,8 +13,10 @@ The simulated world (equation numbers are the note's):
     and the outside pool O_mt = M_hat_mt - sum of the B lagged stocks (K0 (d)). D firms are on the
     menu of every market, as in the paper's market structure, and their depositors sit in O.
   - Mean utilities: the stored logit deltas of E3 spec 12 (blp_logit.jl berry_inversion, the
-    10-29 local prep; checked here against the closed form), A0 (no mu), one phi_mt (the stored
-    phi-hat), A = 1, no clock (omega = 1, lambda = 0, so nothing is locked).
+    10-29 local prep; checked here against the closed form) when the prep's metadata names the
+    binary's panel (DELTA_BIN_PANEL_MD5), else the closed form itself (read_menu records which),
+    A0 (no mu), one phi_mt (the stored phi-hat), A = 1, no clock (omega = 1, lambda = 0, so
+    nothing is locked).
   - The share of money sitting at bank j' is (6): exp(delta_lk - kappa 1{l != j'}) over
     1 + sum of the same over the market's menu; the outside pool pays no kappa. The awake flow
     into (j,4) is (1 - phi) e_j4 [W_j/D_j + e^-kappa sum_{j' != j} W_j'/D_j' + O/D_0], with W the
@@ -67,7 +69,7 @@ Inputs (read only):
     with K0's columns plus spread_a5; the 2013-2015 balances from processed/demand_chars.parquet.
   - ESTIMATION_OUTPUT/DEMAND_PREP/demand_3_index_spec_12.parquet (phi_mt, M_mt, the menu).
   - ESTIMATION_OUTPUT/BLP_RESULTS/logit/logit_delta_E3_spec_12.bin (Int64 n, then n Float64, the
-    prep's row order; blp_logit.jl).
+    prep's row order; blp_logit.jl), read only for a prep whose metadata names its panel.
 Outputs (Rout): k2_recovery.csv, k2_recovery_decomposition.csv, k2_break_a1.csv,
   k2_break_linear.csv, k2_sorting.csv, k2_outside.csv, k2_numbers.json. Standard errors are clustered by conglomerate; the simulation has
   no sampling noise, so they measure how much of the simulated net flow (30) leaves unexplained,
@@ -90,6 +92,7 @@ import pandas as pd
 import pyarrow.parquet as pq
 import scipy.sparse as sp
 
+from utils import demand_chars
 from utils import paths
 import diag_k0_netflow_objects as k0
 
@@ -108,6 +111,7 @@ assert A_AWARE == 1.0 and OMEGA == 1.0 and LAMBDA == 0.0, "the simulator impleme
 
 DEMAND = paths.demand_parquet_dir() / "demand_3_index_spec_12.parquet"
 DELTA_BIN = paths.PROCESSED / "ESTIMATION_OUTPUT" / "BLP_RESULTS" / "logit" / "logit_delta_E3_spec_12.bin"
+DELTA_BIN_PANEL_MD5 = "d01b8bae"   # the 10-27 panel, which the prep behind DELTA_BIN was built on
 OUT = paths.rout_dir()
 T0, T1 = k0.T0, k0.T1
 TYPES5 = (1, 2, 4, 5)
@@ -310,16 +314,21 @@ def ppml_fe(y, g, X, names, a, b, cl, maxit=200, tol=1e-9):
 
 # ------------------------------------------------------------------------------------------ inputs
 def read_menu():
+    """The prep's menu with each product's mean utility delta, and a record of where delta came from.
+
+    The key is the prep's schema metadata demand_chars.market_panel_md5, the md5 of the panel the
+    prep was built on. When it starts with DELTA_BIN_PANEL_MD5 (the panel the stored binary's prep
+    was built on), delta is the stored logit binary (DELTA_BIN), which must have the prep's row count
+    and equal the closed form of blp_logit.jl berry_inversion, computed here from the prep's shares,
+    to 1e-8. Otherwise (another panel's prep, such as the interim frames on a rebuilt panel, or a
+    prep without the key), delta is that closed form, which must be finite on every row. The record
+    (delta_source, frame_panel_md5, delta_binary_panel_md5, delta_binary_rows, prep_rows,
+    delta_vs_closed_form_max_abs) goes into the callers' numbers."""
     cols = ["CodConglomeradoPrudencial", "mca_code", "time_id", "deposit_type", "is_B", "share_B_cond",
             "share_D", "pop_total", "banked_correction", "phi_mt", "Dep_Act"]
     d = pq.read_table(DEMAND, columns=cols).to_pandas()
-    raw = DELTA_BIN.read_bytes()
-    n = int(np.frombuffer(raw[:8], "<i8")[0])
-    delta = np.frombuffer(raw[8:], "<f8")
-    if n != len(d) or len(delta) != n:
-        raise SystemExit(f"delta binary has {n} rows ({len(delta)} values); the prep has {len(d)}")
-    d["delta"] = delta
-    # The closed form of blp_logit.jl berry_inversion, to confirm the binary belongs to this prep.
+    frame_md5 = (pq.read_schema(DEMAND).metadata or {}).get(demand_chars.PANEL_MD5_KEY, b"").decode() or None
+    # The closed form of blp_logit.jl berry_inversion.
     B = d["is_B"].to_numpy(bool)
     db = d[B].assign(pair=(d.loc[B, "mca_code"].astype(str) + "|" + d.loc[B, "time_id"].astype(str)).to_numpy())
     SB = db.groupby("pair")["share_B_cond"].sum()
@@ -333,13 +342,32 @@ def read_menu():
     chk[B] = np.log(db["share_B_cond"].clip(lower=1e-15)).to_numpy() - np.log(gmt.reindex(db["pair"]).to_numpy())
     dd = d[~B]
     chk[~B] = np.log(dd["share_D"].clip(lower=1e-15)).to_numpy() - np.log(G.reindex(dd["time_id"]).to_numpy())
-    err = float(np.nanmax(np.abs(chk - delta)))
-    if err > 1e-8:
-        raise SystemExit(f"stored delta differs from the closed form by {err:g}: not this prep's binary")
+    rec = {"frame_panel_md5": frame_md5, "delta_binary_panel_md5": DELTA_BIN_PANEL_MD5, "prep_rows": len(d)}
+    if frame_md5 is not None and frame_md5.startswith(DELTA_BIN_PANEL_MD5):
+        raw = DELTA_BIN.read_bytes()
+        n = int(np.frombuffer(raw[:8], "<i8")[0])
+        delta = np.frombuffer(raw[8:], "<f8")
+        if len(delta) != n or n != len(d):
+            raise SystemExit(f"delta binary has {n} rows ({len(delta)} values); the prep, built on the binary's "
+                             f"panel {DELTA_BIN_PANEL_MD5}, has {len(d)}")
+        err = float(np.nanmax(np.abs(chk - delta)))
+        if err > 1e-8:
+            raise SystemExit(f"stored delta differs from the closed form by {err:g}: not this prep's binary")
+        d["delta"] = delta
+        rec.update(delta_source="binary", delta_binary_rows=n, delta_vs_closed_form_max_abs=err)
+        note = f"frame panel {frame_md5[:8]}: delta binary = closed form to {err:.1e}"
+    else:
+        bad = int((~np.isfinite(chk)).sum())
+        if bad:
+            raise SystemExit(f"the closed form is not finite on {bad:,} prep rows")
+        d["delta"] = chk
+        rec.update(delta_source="closed form", delta_binary_rows=None, delta_vs_closed_form_max_abs=None)
+        note = (f"frame panel {frame_md5[:8] if frame_md5 else 'not recorded'}, the binary's {DELTA_BIN_PANEL_MD5}: "
+                "delta from the closed form")
     d = d.rename(columns={"CodConglomeradoPrudencial": "j", "mca_code": "m", "time_id": "t", "deposit_type": "k"})
     d["j"], d["m"], d["t"] = d["j"].astype(str), d["m"].astype(str), d["t"].astype(str)
-    stamp(f"menu: {len(d):,} products ({int(B.sum()):,} B); delta binary = closed form to {err:.1e}")
-    return d, err
+    stamp(f"menu: {len(d):,} products ({int(B.sum()):,} B); {note}")
+    return d, rec
 
 
 def build(df, flags, mk, menu):
@@ -904,13 +932,13 @@ def main():
     df = k0.load_panel()
     flags = k0.rate_flags(df[df["is_B"] == 1])
     mk = k0.load_demand()
-    menu, err = read_menu()
+    menu, menu_rec = read_menu()
     U, MT, SD, SD4, info = build(df, flags, mk, menu)
     K, kinfo = k1_rows(U, MT, df, flags, mk)
     N = {"seed": SEED, "alpha_bar": ALPHA_BAR, "kappas": KAPPAS, "kappa_base": KAPPA_BASE, "A": A_AWARE,
          "omega": OMEGA, "lambda": LAMBDA, "panel_md5": k0.PANEL_MD5, "panel_columns": k0.COLS,
          "demand_parquet": DEMAND.name, "delta_binary": str(DELTA_BIN.relative_to(paths.PROCESSED)),
-         "delta_vs_closed_form_max_abs": err, **info, **kinfo, "steps": steps}
+         **menu_rec, **info, **kinfo, "steps": steps}
     ctx = {"U": U, "MT": MT, "SD": SD, "SD4": SD4, "K": K, "N": N}
     stamp(f"units {len(U):,}; market-quarters {len(MT):,}; K1 rows {len(K):,}")
     checks(ctx)

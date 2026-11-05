@@ -42,6 +42,8 @@ number there is read from the output of the generator that renders the exhibit i
   I  policy-function fit (C.10, C.11)      COST_POLFUNC/polfunc_summary.json (bbl_polfunc.py): R^2,
                                            mean spread, N, G, G* per column
   J  entry events (Figure 2)               DIAG_PHI_SEPARATION/d6_entry_paths.csv, n at h = 0
+  T  tax clock (tab_tax_clock.tex)         Rout/tax_clock.json, the unrounded sidecar
+                                           make_tax_clock_table.py writes with the table
   K  state vector of phi (appendix table)  Rout/tab_state_vector_map.json, the unrounded sidecar
                                            make_state_vector_table.py writes with the table, and
                                            DIAG_STATE_SELECTION/level_by_block.csv
@@ -2308,6 +2310,281 @@ def _rout_sidecar(name: str, script: str, notes: list):
     return json.loads(p.read_text(encoding="utf-8")), f"Rout/{name} (written by {script})"
 
 
+TTC = "tab_tax_clock.tex"
+
+
+def collect_tax_clock(notes: list):
+    """The tax-clock table (tab_tax_clock.tex), from the unrounded sidecar make_tax_clock_table.py
+    writes with it. clock.t3: per (age a, horizon h) cell at the main CDI, the min (lo) and max
+    (hi) over the six cells, and the same ranges at the other CDI levels (cdi1375, cdi650). Each
+    printed Panel A cell and Panel B range is checked against the table at its printed decimals."""
+    sc, src = _rout_sidecar("tax_clock.json", "make_tax_clock_table.py", notes)
+    if sc is None:
+        return
+    meta, cells = sc["_meta"], sc["cells"]
+    dec = meta["decimals"]
+    measures = (("cost", "cost", dec["cost"]), ("premium", "premium_pp", dec["premium_pp"]),
+                ("premium_cdi", "premium_pct_cdi", dec["premium_pct_cdi"]))
+
+    def shown(x, d):
+        return float(f"{x:.{d}f}")
+    t = table(TTC)
+    value, checks, nth = {}, [], {}
+    main = cells[meta["main_cdi"]]
+    for c in main:
+        cid = f"a{c['age']}_h{c['horizon']}"
+        k = nth.get(c["age"], 0)
+        nth[c["age"]] = k + 1
+        row = t.find(str(c["age"]), panel="Panel A", nth=k, exact=True)
+        for i, (slug, field, d) in enumerate(measures, start=1):
+            value.setdefault(slug, {})[cid] = c[field]
+            checks.append(check_cell(TTC, f"{slug}, age {c['age']}, horizon {c['horizon']}",
+                                     row[i] if row and i < len(row) else None,
+                                     [shown(c[field], d)]))
+    for cdi, rows in cells.items():
+        rng = {slug: dict(lo=min(r[field] for r in rows), hi=max(r[field] for r in rows))
+               for slug, field, _ in measures}
+        if cdi == meta["main_cdi"]:
+            for slug in rng:
+                value[slug].update(rng[slug])
+        else:
+            value[f"cdi{round(float(cdi) * 100)}"] = rng
+        if meta.get("panel_b"):
+            row = t.find(f"CDI {cdi} percent", panel="Panel B", exact=True)
+            for i, (slug, _, d) in enumerate(measures, start=1):
+                checks.append(check_cell(TTC, f"{slug} range, CDI {cdi}",
+                                         row[i] if row and i < len(row) else None,
+                                         [shown(rng[slug]["lo"], d), shown(rng[slug]["hi"], d)]))
+    add("clock.t3", "T", "Tax clock: cost of moving a time deposit before maturity", value,
+        "Moving a CDI-paying time deposit to another bank at the same rate: cost per R$100 of "
+        "principal (cost), break-even premium the new bank must pay in pp a year (premium) and as "
+        "percent of the CDI (premium_cdi), per cell a<age days>_h<horizon days> at a CDI of "
+        f"{meta['main_cdi']} percent, min (lo) and max (hi) over the six cells, and the same ranges "
+        "at the other CDI levels (cdi1375, cdi650); withholding of Lei 11.033/2004, IOF of Decreto "
+        "6.306/2007", src, "ok", checks=checks,
+        display=f"cost {fmt3s(value['cost']['lo'])} to {fmt3s(value['cost']['hi'])} per R$100; "
+                f"premium {fmt3s(value['premium']['lo'])} to {fmt3s(value['premium']['hi'])} pp")
+
+
+# The four K2b fits of k2b_pix_change.csv (Kappa agent, diag_k2_nls_simulation.py): key suffix ->
+# (world, version). Each is the pooled-weight, split-model row; the weight=none row is D2's
+# own-savings variant, kept for the text.
+K2B_FITS = {"fe_ba": ("fe", "before_after"), "fe_dose": ("fe", "dose"),
+            "ideal_ba": ("ideal", "before_after"), "ideal_dose": ("ideal", "dose")}
+
+
+def collect_k2b(notes: list):
+    """kappa.k2b: recovery of the switching cost by source pair in simulated data
+    (Rout/k2b_pix_change.csv; the gate from Rout/k2_nls_numbers.json, key k2b_gate). A pair whose
+    level and change sit at the optimizer's box (column at_box) is flagged in chk.at_bound."""
+    p = _paths.rout_dir() / "k2b_pix_change.csv"
+    if not p.is_file():
+        notes.append(f"{p.name} not found in Rout; kappa.k2b.* entries absent.")
+        return
+    d = pd.read_csv(p)
+    gate, _ = _rout_sidecar("k2_nls_numbers.json", "diag_k2_nls_simulation.py", notes)
+    rows = {}
+    for key, (world, version) in K2B_FITS.items():
+        r = d[(d["world"] == world) & (d["version"] == version) & (d["weight"] == "pool")
+              & (d["model"] == "split")]
+        if len(r) != 1:
+            notes.append(f"{p.name}: {len(r)} rows for {world}/{version}/pool/split; kappa.k2b "
+                         f"{key} absent.")
+            continue
+        rows[key] = r.iloc[0]
+    if not rows:
+        return
+
+    def num(x):
+        return None if pd.isna(x) else float(x)
+    v = dict(sav=dict(level={}, change={}, level_se={}, change_se={}, dose={}, dose_se={}),
+             chk=dict(level={}, change={}, at_bound={}), td=dict(level={}, change={}, dose={}),
+             alpha={}, n={}, markets={}, converged={})
+    for key, r in rows.items():
+        dose = key.endswith("_dose")
+        boxed = set(str(r.get("at_box", "")).split(";")) if pd.notna(r.get("at_box")) else set()
+        v["sav"]["level"][key], v["sav"]["change"][key] = num(r["kappa"]), num(r["dkappa"])
+        v["sav"]["level_se"][key] = num(r["se_kappa"])
+        v["sav"]["change_se"][key] = num(r["se_dkappa"])
+        v["chk"]["level"][key], v["chk"]["change"][key] = num(r["kappa_chk"]), num(r["dkappa_chk"])
+        v["chk"]["at_bound"][key] = int(bool({"kappa_chk", "dkappa_chk"} & boxed))
+        v["td"]["level"][key], v["td"]["change"][key] = num(r["kappa_td"]), num(r["dkappa_td"])
+        if dose:
+            v["sav"]["dose"][key], v["sav"]["dose_se"][key] = num(r["kappa_U"]), num(r["se_kappa_U"])
+            v["td"]["dose"][key] = num(r["kappa_U_td"])
+        else:
+            v["alpha"][key] = num(r["alpha"])
+        v["n"][key], v["markets"][key] = int(r["n"]), int(r["markets"])
+        v["converged"][key] = int(bool(r["converged"]))
+    # The world-level counts the brief names: each world's before-after fit (the dose fit of the
+    # ideal world drops 18 rows and 2 markets; its own counts are under n.ideal_dose).
+    for w in ("fe", "ideal"):
+        if f"{w}_ba" in rows:
+            v["n"][w], v["markets"][w] = v["n"][f"{w}_ba"], v["markets"][f"{w}_ba"]
+    v["alpha_P"] = dict(max=max(abs(float(r["alpha_P"])) for r in rows.values()))
+    r0 = next(iter(rows.values()))
+    v["truth"] = dict(level=float(r0["kappa0_true"]), change=float(r0["dkappa_true"]),
+                      dose=float(d.loc[d["version"] == "dose", "kappa_U_true"].iloc[0]))
+    own = d[(d["world"] == "fe") & (d["version"] == "before_after") & (d["weight"] == "none")]
+    if len(own) == 1:
+        v["own_savings"] = dict(sav=dict(level=float(own.iloc[0]["kappa"]),
+                                         change=float(own.iloc[0]["dkappa"])))
+    if gate and "k2b_gate" in gate:
+        v["gate"] = dict(error=float(gate["k2b_gate"]["abs_error"]))
+    add("kappa.k2b", "T", "Switching cost recovered by source pair in simulated data (K2b)", v,
+        "Per fit (fe_ba, fe_dose, ideal_ba, ideal_dose: world x before-after or dose, pooled "
+        "weights, split model): kappa level and Pix change (dkappa) with standard errors for the "
+        "savings pair, the dose coefficient kappa_U, the checking (chk) and time-deposit (td) pairs, "
+        "alpha, n, markets, converged (1/0); chk.at_bound = 1 when the checking pair sits at the "
+        "optimizer's box; truth = the simulated values; own_savings = the weight=none variant (D2); "
+        "gate.error = |dkappa - truth| of fe_ba (k2_nls_numbers.json k2b_gate)",
+        f"Rout/{p.name} (diag_k2_nls_simulation.py)", "ok",
+        display=f"fe_ba savings {fmt3s(v['sav']['level'].get('fe_ba', float('nan')))} / "
+                f"{fmt3s(v['sav']['change'].get('fe_ba', float('nan')))}")
+
+
+def collect_k0(notes: list):
+    """kappa.k0: the net-flow objects of K0 (Rout/k0_numbers.json, k0_netflow_summary.csv,
+    k0_outside_pool.csv, k0_logR2_variance_decomposition.csv), and the outside option's share of
+    the median market's menu from the K2 world (Rout/k2_numbers.json)."""
+    k0, src = _rout_sidecar("k0_numbers.json", "diag_k0_netflow.py", notes)
+    rout = _paths.rout_dir()
+    need = [rout / f for f in ("k0_netflow_summary.csv", "k0_outside_pool.csv",
+                               "k0_logR2_variance_decomposition.csv")]
+    if k0 is None or not all(f.is_file() for f in need):
+        notes.append("K0 files incomplete in Rout; kappa.k0.* entries absent.")
+        return
+    nf = pd.read_csv(need[0], dtype={"year": str})
+    allyr = nf[nf["year"] == "all"].set_index("k")
+    out = pd.read_csv(need[1], usecols=["O_over_M"])
+    lr = pd.read_csv(need[2]).set_index("variable")
+    one_b = k0["b_one_B_bank"]
+    v = dict(moving=dict(median=dict(k4=float(allyr.loc[4, "moving_median"]),
+                                     k2=float(allyr.loc[2, "moving_median"]))),
+             outside=dict(share_Mhat=dict(median=float(out["O_over_M"].median()))),
+             logR2=dict(between_share=float(lr.loc["log R2", "share_between_cells"])),
+             rows=dict(K1=int(k0["b_K1_rows"])),
+             no_own_savings=dict(share=float(k0["b_no_own_savings"]["share_rows"])),
+             one_B_bank=dict(share=one_b["n_market_quarters"] / one_b["n_market_quarters_total"]))
+    k2, _ = _rout_sidecar("k2_numbers.json", "diag_k2_simulation.py", notes)
+    if k2 and "pool_fate_kappa_base" in k2:
+        v["outside"]["menu_share"] = dict(
+            median=float(k2["pool_fate_kappa_base"]["outside_share_D0_p05_p50_p95"][1]))
+    add("kappa.k0", "T", "Net-flow objects of the K0 design", v,
+        "moving.median.k4/k2: median over all years of the net flow over the carried stock, time "
+        "deposits and savings (k0_netflow_summary.csv, year = all); outside.share_Mhat.median: "
+        "median O / M-hat over market-quarters (k0_outside_pool.csv); logR2.between_share: share "
+        "of the variance of log R2 between bank x market cells; rows.K1: b_K1_rows; "
+        "no_own_savings.share: rows with no own savings pool; one_B_bank.share: market-quarters "
+        "with one B bank over all; outside.menu_share.median: the outside option's share of the "
+        "median market's menu on the paper's delta-hat (k2_numbers.json pool_fate_kappa_base)",
+        src, "ok", display=f"moving k4 {fmt3s(v['moving']['median']['k4'])}")
+
+
+def collect_k2_world(notes: list):
+    """kappa.k2.world: the simulated world built on the paper's estimates at the base kappa
+    (Rout/k2_numbers.json; stay_prob is the money-weighted share, as k2_report.md states)."""
+    k2, src = _rout_sidecar("k2_numbers.json", "diag_k2_simulation.py", notes)
+    if k2 is None:
+        return
+    pf = k2.get("pool_fate_kappa_base", {})
+    ec = k2.get("simulated_entry_composition_kappa_base", {})
+    if "stay_at_own_bank" not in pf or "outside_pool" not in ec:
+        notes.append("k2_numbers.json lacks pool_fate/entry composition; kappa.k2.world absent.")
+        return
+    add("kappa.k2.world", "T", "The simulated world on the paper's estimates (K2)",
+        dict(stay_prob=dict(median=float(pf["stay_at_own_bank"])),
+             outside_entry_share=float(ec["outside_pool"])),
+        "stay_prob.median: share of awake pool money that re-chooses its own bank, money-weighted "
+        "at the base kappa (pool_fate_kappa_base.stay_at_own_bank; the key name says median, the "
+        "value is the money-weighted share k2_report.md quotes); outside_entry_share: share of "
+        "simulated entry into the K1 destinations from the outside pool", src, "ok",
+        display=f"stay {fmt3s(pf['stay_at_own_bank'])}, outside entry {fmt3s(ec['outside_pool'])}")
+
+
+def collect_pix_adv(notes: list):
+    """pix.adv: openings on advertising (P4) and its IV and placebos (P5), from
+    Rout/p4_openings_advertising.json (diagnostics/diag_p4_openings_advertising.py). The rest and
+    big-five elasticities come from the joint regression with both groups (groups_B); the price
+    term and n from the main B regression (main_B)."""
+    j, src = _rout_sidecar("p4_openings_advertising.json", "diag_p4_openings_advertising.py", notes)
+    if j is None:
+        return
+    g, m, lg, p5 = j["groups_B"], j["main_B"], j["lags_B"], j["p5"]
+    iv = p5["iv_B"]["iv"]
+    ar = iv["ar_wcr_set95"]["pieces"]
+    # rest.elast is the interval here (.lo, .hi); its point estimate is the entry
+    # pix.adv.rest.elast below, since one leaf cannot also be the parent of two.
+    v = dict(rest=dict(elast=list(g["adv_rest"]["ci95_wcr"]), elast_p=g["adv_rest"]["wcr_p0"],
+                       sum_lags=lg["rest"]["sum"]["b"]),
+             big5=dict(elast=g["adv_big5"]["b"], elast_p=g["adv_big5"]["wcr_p0"],
+                       sum_lags=lg["big5"]["sum"]["b"]),
+             iv=dict(elast=iv["b"], fs_f=p5["iv_B"]["first_stage"]["F_cr1"]),
+             group_placebo=dict(coef=p5["placebo_group"]["coef"]["riv_group"]["b"],
+                                p=p5["placebo_group"]["coef"]["riv_group"]["wcr_p0"]),
+             D=dict(elast=j["D_main"]["coef"]["x"]["b"], elast_p=j["D_main"]["coef"]["x"]["wcr_p0"]),
+             n=dict(B=int(m["n_obs"])),
+             price=dict(coef=m["coef"]["rho_lag_pp"]["b"], p=m["coef"]["rho_lag_pp"]["wcr_p0"]))
+    if len(ar) == 1 and None not in ar[0]:
+        v["iv"]["ar"] = dict(lo=ar[0][0], hi=ar[0][1])
+    else:
+        notes.append(f"p4: the IV's AR set is {ar}, not one interval; pix.adv.iv.ar absent.")
+    add("pix.adv", "T", "Account openings on advertising (P4, P5)", v,
+        "Elasticity of openings to log advertising, B banks outside the big five (rest) and the big "
+        "five, same quarter, from one regression (groups_B); elast_p: wild cluster bootstrap p; "
+        "rest.elast.lo/hi: its 95 percent bootstrap interval; sum_lags: sum over t to t-2 "
+        "(lags_B); iv: by the four-quarter lag (P5), first-stage F (CR1) and AR 95 percent set; "
+        "group_placebo: the other banks of the group's advertising; D: D firms; n.B and price: "
+        "the main B regression (main_B), the price term per pp of the lagged national spread",
+        src, "ok", display=f"rest {fmt3s(g['adv_rest']['b'])}, big5 {fmt3s(g['adv_big5']['b'])}")
+    add("pix.adv.rest.elast", "T", "Openings on advertising, rest, point estimate",
+        float(g["adv_rest"]["b"]), "Same-quarter elasticity of openings to log advertising, B "
+        "banks outside the big five (groups_B)", src, "ok")
+
+
+# The three first-stage F statistics of P3 exist only in p3_note.md's table, in the column of the
+# panel the stakes file records. Row label (start of the row) -> key.
+P3_F_ROWS = {"log sd on log sd~, F": "f", "same, $\\tilde\\rho$ shuffled (placebo), F": "f_placebo",
+             "same, net of lagged HHI and number of banks, F": "f_net"}
+
+
+def collect_pix_stakes(notes: list):
+    """pix.stakes: the stakes S_mt of P3 (median from Rout/p3_stakes_mca_quarter.csv) and the
+    first stage of log S on the cost shifters (F statistics read from Rout/p3_note.md, the column
+    of the panel the CSV records; no CSV carries them)."""
+    rout = _paths.rout_dir()
+    csv, note = rout / "p3_stakes_mca_quarter.csv", rout / "p3_note.md"
+    if not csv.is_file():
+        notes.append(f"{csv.name} not found in Rout; pix.stakes.* entries absent.")
+        return
+    s = pd.read_csv(csv, usecols=["S", "panel_md5"])
+    md5 = str(s["panel_md5"].dropna().iloc[0])
+    v = dict(median=float(s["S"].median()))
+    if note.is_file():
+        lines = note.read_text(encoding="utf-8").splitlines()
+        head = next((l for l in lines if l.startswith("|") and f"`{md5}`" in l), None)
+        if head is None:
+            notes.append(f"p3_note.md has no table column for panel {md5}; pix.stakes.fs absent.")
+        else:
+            col = [c.strip() for c in head.strip("|").split("|")].index(f"`{md5}`")
+            fs = {}
+            for l in lines:
+                cells = [c.strip() for c in l.strip().strip("|").split("|")]
+                if cells and cells[0] in P3_F_ROWS and col < len(cells):
+                    fs[P3_F_ROWS[cells[0]]] = int(cells[col].strip("*").replace(",", ""))
+            if len(fs) == len(P3_F_ROWS):
+                v["fs"] = fs
+            else:
+                notes.append(f"p3_note.md: found {sorted(fs)} of the three F rows; pix.stakes.fs "
+                             "absent.")
+    add("pix.stakes", "T", "Stakes S_mt (P3)", v,
+        "median: median of S_mt, R$ a year, over market-quarters; fs.f / f_placebo / f_net: F of "
+        "log S on the cost shifters, with the shifter shuffled (placebo), and net of lagged market "
+        "structure (read from p3_note.md, column of the panel the stakes file records)",
+        f"Rout/{csv.name} and Rout/{note.name} (panel {md5}, diag_p3)", "ok",
+        display=f"median {fmt3s(v['median'])}")
+
+
 def collect_phi_variance(notes: list):
     """How phi-hat_mt spreads across markets and quarters (make_phi_variance.py,
     Rout/phi_variance.json): its variance split, the covariance split of its index, the ceiling."""
@@ -3435,7 +3712,9 @@ FAMILIES = {
     "panel": ("collect_descriptives", "collect_market_structure", "collect_table1_spreads",
               "collect_mca_count", "collect_slide_deposit_types", "collect_slide_motivation",
               "collect_dep_anova", "collect_pix_exposure", "collect_branch_estban", "collect_type5_rules",
-              "collect_state_selection", "collect_dshare_decomp", "collect_fee_ratio"),
+              "collect_state_selection", "collect_dshare_decomp", "collect_fee_ratio",
+              "collect_k2b", "collect_k0", "collect_k2_world", "collect_pix_adv",
+              "collect_pix_stakes"),
     "cluster": ("collect_demand", "collect_table_rows", "collect_table4_sidecar", "phi_base_check",
                 "collect_entry", "collect_entry_counts", "collect_entry_gfb", "collect_state_levels",
                 "collect_first_stage_strength", "collect_xi_diagnostics", "collect_share_cap",
@@ -3444,7 +3723,7 @@ FAMILIES = {
                 "collect_active_truncation", "collect_entry_carry",
                 "collect_type5_robustness", "collect_cluster_imbalance", "collect_tr5"),
     "bbl": ("collect_bbl", "collect_polfunc", "collect_phi_path", "collect_design"),
-    "local": ("collect_fees", "collect_ccs"),   # side files outside the panel; never pending
+    "local": ("collect_fees", "collect_ccs", "collect_tax_clock"),   # side files outside the panel; never pending
 }
 for _fam, _names in FAMILIES.items():
     for _name in _names:
@@ -3511,6 +3790,12 @@ def main():
     collect_tr5(notes)
     collect_fees(notes)
     collect_ccs(notes)
+    collect_tax_clock(notes)
+    collect_k2b(notes)
+    collect_k0(notes)
+    collect_k2_world(notes)
+    collect_pix_adv(notes)
+    collect_pix_stakes(notes)
     add("cf.franchise", "E", "Franchise value of deposit funding (R$ x, R$ y, p, q)", None,
         "Removed from the paper by the user on 2026-09-29.", "--", "dropped", display="dropped")
     for t in _TABLES.values():

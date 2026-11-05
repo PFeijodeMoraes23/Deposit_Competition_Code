@@ -108,8 +108,9 @@ def chars_path() -> Path:
     return Path(override).expanduser() if override else paths.PROCESSED / "demand_chars.parquet"
 
 
-# Schema-metadata key under which panel_demand_chars.py stores the md5 of the market panel the
-# side file was built from.
+# Schema-metadata key under which the md5 of the market panel a file was built from is stored: by
+# panel_demand_chars.py in the side file, and by the demand preps in each demand parquet
+# (write_parquet).
 PANEL_MD5_KEY = b"demand_chars.market_panel_md5"
 
 
@@ -156,6 +157,16 @@ def check_panel_md5() -> str:
             f"panel (python panel_demand_chars.py, panel_pipeline.py step 39), or point "
             f"{FILE_ENV} at the side file built from this panel.")
     return actual
+
+
+def write_parquet(df: pd.DataFrame, out) -> None:
+    """Write a demand frame with the md5 of the market panel the prep read (`panel_path()`) in its
+    schema metadata under PANEL_MD5_KEY, so that a reader compares md5s rather than dates."""
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+    t = pa.Table.from_pandas(df)
+    t = t.replace_schema_metadata({**(t.schema.metadata or {}), PANEL_MD5_KEY: _md5(panel_path()).encode()})
+    pq.write_table(t, out)
 
 
 _CACHE = {}

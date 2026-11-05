@@ -639,7 +639,7 @@ def run(est_num, link, tag, time_block=False, spec="all"):
             out = demand_output_dir / f"demand_{est_num}_{tag}_spec_{sid}.parquet"
             df_spec = demand_chars.finalize(df_spec, out, summary)
             assert_one_quarter_set(df_spec, est_num, f"E{est_num} spec {sid}")
-            df_spec.to_parquet(out, engine='pyarrow')
+            demand_chars.write_parquet(df_spec, out)
             print(f" > Saved Spec {sid} ({tag}) -> {out.name} ({len(df_spec)} rows)")
             spec_summaries[f"{est_num}_{tag}_{sid}"] = summary
             total += 1

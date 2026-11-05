@@ -811,7 +811,8 @@ def run_checks() -> int:
 
     T1  balances of 2013-2015: the stored balance over the raw ESTBAN file equals, in every
         municipality of 2015-12, the factor the build measured (demand_chars_report.json; 1 when
-        each raw file is read once), and exactly 1 in 2016-03; every corrected balance is the stored
+        each raw file is read once), and exactly 1 in 2016-03 (type 4 with its judicial deposits,
+        dep_a4_incl_judicial, since the raw file includes them); every corrected balance is the stored
         one divided by its quarter's factor; the corrected 2015Q4 total sits on the raw file's scale
     T2  2015Q4 characteristics: each spliced value times the members' one-quarter change returns the
         firm's 2016Q1 filing; the back-test (2016Q1 predicted from 2016Q2) stays within the error
@@ -839,9 +840,12 @@ def run_checks() -> int:
     cuts = stored_cutoffs(panel)
 
     # ---------------------------------------------------------------- T1
+    j4 = [c for c in pd.read_csv(DEPOSITS_CSV, nrows=0).columns if c == "dep_a4_incl_judicial"]
     dp = pd.read_csv(DEPOSITS_CSV, low_memory=False,
-                     usecols=["CODMUN_IBGE", "Year", "Quarter", "Source"] + dc.DEP_COLS)
+                     usecols=["CODMUN_IBGE", "Year", "Quarter", "Source"] + dc.DEP_COLS + j4)
     dp = dp[dp["Source"] == "ESTBAN"]
+    if j4:   # dep_a4 is net of the judicial deposits the raw file counts (utils/judicial_deposits)
+        dp["dep_a4"] = dp["dep_a4_incl_judicial"]
     fac = {k: float(v["factor"]) for k, v in
            json.loads(OUT_REPORT.read_text(encoding="utf-8"))["pre2016_balance_scale"].items()}
     for ym, (y, q), want in (("201512", (2015, 4), fac["2015Q4"]), ("201603", (2016, 1), 1.0)):

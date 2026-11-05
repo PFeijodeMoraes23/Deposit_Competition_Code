@@ -1,0 +1,360 @@
+% paper_edits_2026-11-04.tex -- edit plan for V_Friction.tex: the four frictions, the net-flow equation, the evidence so far, three appendices.
+% Written by the main thread, 2026-11-04 (evening), for the advisor meeting of 2026-11-05. Pedro applies each block by hand (Ctrl+F the SEARCH text, paste the REPLACE text).
+%
+% BASIS
+%   V_Friction.tex                 save 2026-11-04 19:46 (Eastern): W0 to W4 applied, your own 6.1 heading, opening paragraph and the first
+%                                  line of the utility, your \iffalse (line 644) and \fi (line 693) around the old subsections
+%   paper_numbers_macros.tex       regenerated 2026-11-04 19:38 by the tables agent (clock.t3.*, kappa.k2b.*, kappa.k0.*, kappa.k2.world.*,
+%                                  pix.adv.*, pix.stakes.* in; 64 desc.* keys moved with the rebuilt tables at 18:54)
+%   tab_tax_clock.tex              18:50; tab_k2b_pairs.tex 19:41 (tables agent)
+%   References.bib (Drafts)        every key cited below exists (checked 19:10)
+%   kappa_design_2026-11-02.md     thirty-second version (the source of every equation and number below)
+%
+% TEST (20:20, sandbox with a biblatex stub, since biber is not installed there): (a) and (b) of W5 inserted at your line 641, then W7 and
+% F1 to F6 applied to the 19:46 save. Every SEARCH unique. 0 errors beyond the stub's two refcontext lines, 0 overfull boxes, 0 undefined
+% references, 0 missing \pn keys, 88 pages. The K2b table and the figure checked visually.
+%
+% THIS ROUND. Section 6 (Disentangling the Sources of Inertia) rewritten around the four-friction model: 6.1 the model, 6.2 the net-flow
+% equation with its shifters and the margins (Pix, advertising, stakes, fees and sweeps), 6.3 the evidence so far. The old subsections
+% stay in the file inside your \iffalse ... \fi until after the meeting. Three appendices follow the existing ones: the tax clock, the
+% net-flow equation, the simulation. Every number is a \pn key except kappa.k2.world.awake_share (two places), which prints its value
+% in red through \PNpending until the Kappa agent writes it to k2_numbers.json. Notation: i is the depositor of Section 3, with a state
+% (j'(i), k'(i)) for her balance; the switching cost is \kappa (the type function was renamed in W0); the clock premium is \Delta^{c},
+% indexed by the source bank, since \pi is profits.
+%
+% YOUR NUMBERS, CHECKED (not blocks). Regenerating the macros moved four keys the text quotes: desc.a4.hhi_bd.2016 (1,837 -> 1,659),
+% desc.a4.hhi_bd.2024 (1,138 -> 1,075), desc.t1.spread4.B.mean (-0.04 -> -1.13). Reread the sentence that quotes the B time-deposit
+% spread (Section 2) before the meeting; its reading may have changed.
+%
+% Pending: W5 (content only, see its header), W7, F1 to F6. Applied by you and removed from this file: W0, W1, W2, W3, W4, W6.
+% After applying: compile with biber; python make_paper_equations.py (deck macros).
+
+% ============================================================================================================================
+% W5. Section 6.1, content only (no SEARCH): you are writing 6.1 yourself (19:46 save: \subsection{Model with Frictions}, your opening
+%     paragraph, your align at lines 638 to 641, then \iffalse at 644 and \fi at 693, so W6 is done). Two things to paste:
+%     (a) the second line of your align, in your notation, with the label the later text cites;
+%     (b) the body below, between your \end{align} (line 641) and the \iffalse (line 644). It starts right after the equation
+%     and runs through 6.1, 6.2 and 6.3. Your equation's first line is kept; the clock premium is \Delta^{c} (not \pi, which is profits),
+%     indexed by the source bank j'(i), since the premium depends on the source's own rate. Required.
+% ============================================================================================================================
+% (a) second line of the align, replacing your '& + \bar{\alpha}':
+	& + \bar{\alpha}\,\Delta^{c}_{j^\prime(i)t}\,\indicator{k^\prime(i)=4,\ \text{movable}}\,\indicator{(j,k)\neq(j^\prime(i),4)} + \varepsilon_{ijkmt}, \label{eq:fr_util}
+
+% (b) body, paste after \end{align}:
+with $u_{i\varnothing mt}=0$. The first cost, $\kappa$, in the units of $\delta$, is paid when the balance is placed at an institution other than its source. It falls on the bank boundary only. Moving across types inside a bank pays the cost of leaving the source type, the same whichever bank receives the money, so $\kappa$ is the increment from crossing the boundary holding the type move fixed. It is the switching cost of \textcite{klemperer1987markets} and \textcite{farrell2007coordination}, written as a utility penalty on every option other than the incumbent, which is how \textcite{dube2010state} put state dependence into a random-coefficients logit. The second cost is the tax clock of Section \ref{sec:inst_setting:deposits}, a cost of moving out of a time deposit before maturity. A time-deposit balance that is movable, before maturity and with daily liquidity, pays $-\bar{\alpha}\Delta^{c}_{j'(i)t}>0$ on every destination other than staying, where $\Delta^{c}_{j'(i)t}$, the clock premium, is the rate above the source's own that a destination must pay for the move to break even under the withholding schedule, priced in Appendix \ref{app:clock}. Moving into a time deposit from savings pays no clock. That balance pays the savings anniversary, the exit cost of its source type.
+
+Institution $j$ is in the depositor's consideration set with probability $A_{jmt}$, independent across institutions, and the incumbent is always considered, $A_{j'mt}=1$. Write $v_{ijkmt}=u_{ijkmt}-\varepsilon_{ijkmt}$ for the deterministic part of \eqref{eq:fr_util}. The share of awake money in pool $p=(j',k')$ that chooses $(j,k)$ averages the logit share over consideration sets $\mathcal{C}$, the form of \textcite{goeree2008limited},
+\begin{gather}
+	s_{jk\mid p} = \sum_{\mathcal{C}:\, j\in\mathcal{C}} \Bigl[\prod_{l\in\mathcal{C}}A_{lmt}\prod_{l\notin\mathcal{C}}(1-A_{lmt})\Bigr] \int \frac{\exp\left\{v_{ijkmt}\right\}}{1+\sum_{l\in\mathcal{C}}\sum_{k''\in K_{lmt}}\exp\left\{v_{ilk''mt}\right\}}\,\text{d}F(d_{imt},\nu_{imt}), \label{eq:fr_share}
+\end{gather}
+with
+\begin{gather}
+	A_{jmt} = \Lambda\left(\gamma_0+\gamma_1\,\mathrm{adv}_{jt}+\gamma_2\,\mathrm{branches}_{jmt-1}\right), \label{eq:fr_aware}
+\end{gather}
+where $\Lambda$ is the logistic function, $\mathrm{adv}_{jt}$ is the institution's advertising expense and $\mathrm{branches}_{jmt-1}$ its lagged branches in the market. With $A\equiv1$ every institution is considered and \eqref{eq:fr_share} is the mixed logit with a source state. For new money no term carries $\kappa$ or the clock, and the share is \eqref{eq:4}.
+
+Sleepiness gains the stakes. The single index of Section \ref{sec:model:depositors} takes one more market state,
+\begin{gather}
+	\mathrm{S}_{mt} = \mathrm{sd}_{w}\left(\rho_{j4mt}\right)\times\overline{\mathrm{bal}}_{mt}, \label{eq:fr_stakes}
+\end{gather}
+the balance-weighted standard deviation of time-deposit spreads across the market's institutions times the mean balance $\overline{\mathrm{bal}}_{mt}$, with coefficient $\tau_1$. Time deposits only, because they are the only type with cross-bank rate dispersion. Both sleepiness and attention are a quarter without re-optimizing. Sleepiness is the part of that probability that does not respond to the gain from acting, attention the part that does, and $\tau_1$ is the response. Parametrically, the cost of paying attention falls with the stakes,
+\begin{gather}
+	\tau_{mt} = \tau_0 \exp\left\{-\tau_1 \cdot \mathrm{S}_{mt}\right\}, \label{eq:12}
+\end{gather}
+the rational inattention logic of \textcite{matvejka2015rational} made state-dependent, and $\tau_1=0$ is the model of Section \ref{sec:model}. \textcite{heiss2021inattention} find the response in Part D, where attention rises with the cost of keeping the default.
+
+Of an institution's time deposits, a share $\omega_{jt}$ matures in the quarter and lands in the checking account, a share $(1-\omega_{jt})\lambda_{jt}$ has daily liquidity and pays the clock to move, and the rest, $\ell_{jt}=(1-\omega_{jt})(1-\lambda_{jt})$, is locked and cannot move even when awake (Appendix \ref{app:clock}). The balance of $(j,k)$ in a $\mathrm{B}$ market is then
+\begin{gather}
+	\begin{aligned}
+		\mathrm{Dep}_{jkmt}^{\mathrm{B}} = {} & \left[\phi_{mt}+(1-\phi_{mt})\,\ell_{jt}\,\indicator{k=4}\right]\left(1+r_{jkmt-1}^{\mathrm{dep}}\right)\mathrm{Dep}_{jkmt-1}^{\mathrm{B}} \\
+		& + (1-\phi_{mt})\Bigl[\sum_{p}\left(1+r_{p,t-1}^{\mathrm{dep}}\right)\mathrm{Dep}_{p,t-1}\,s_{jk\mid p}+\mathrm{Out}_{mt}\,s_{jk\mid\varnothing}\Bigr],
+	\end{aligned} \label{eq:fr_balance}
+\end{gather}
+with $p=(j',k')$ running over the movable part of every pool in the market, $\mathrm{Out}_{mt}=M_{mt}-\sum_{l,k}\mathrm{Dep}_{lkmt-1}$ the outside pool, and $s_{jk\mid p}$ the share \eqref{eq:fr_share}. This is the installed-base construction of \textcite{nosal2012estimating} and \textcite{shcherbakov2016measuring}. Last period's stock by state is the population at risk, the conditional share is the transition rate, and the awake share in front is the first stage of \textcite{hortacsu2017power}. The own pool is inside the sum, so awake money already at $(j,k)$ that chooses $(j,k)$ again is part of the awake flow, as in \eqref{eq:7-B}. With $\kappa=0$, $A\equiv1$, $\tau_1=0$ and $\ell\equiv0$, every pool has the same share, the pools add up to $M_{mt}$, and \eqref{eq:fr_balance} is \eqref{eq:7-B}.
+
+Each friction now has its own parameter: $\tau_1$ for attention, $\kappa$ for the switching cost, $\gamma$ for awareness, and the clock's $\Delta^{c}_{jt}$ with the stock's composition $(\omega_{jt},\lambda_{jt})$ read from the statements and the registry. Preferences, $\delta_{jkmt}$ and the random coefficients, are unchanged in form. What changes is their reading, since part of what the fit of Section \ref{sec:estimation:demand} calls a small $|\bar{\alpha}|$ and a large $\mathrm{D}$-type penalty is $\kappa$ and $1-A$. Equation \eqref{eq:fr_balance} can be estimated by the contraction of Appendix \ref{app:estimation:blp:contraction} with one share evaluation per source pool, the precedent of \textcite{shcherbakov2016measuring} and \textcite{luco2019switching}. We do not start there. The next subsection derives from \eqref{eq:fr_balance} an equation that identifies $\kappa$ with the balances alone and says which of the four frictions earns a place in that estimation.
+
+\subsection{The Net-Flow Equation}\label{sec:disentangle:netflow}
+
+Take \eqref{eq:fr_balance} for $(j,4)$. The awake, movable money at $(j,4)$ either chooses $(j,4)$ again or leaves. Write $L_{jmt}$ for the probability that an awake holder leaves. Adding the stayers to the carry terms gives the whole stock, accrued, less the leavers, so
+\begin{gather}
+	\begin{aligned}
+		\mathrm{NF}_{j4mt} \equiv {} & \mathrm{Dep}_{j4mt}-\left(1+r_{j4mt-1}^{\mathrm{dep}}\right)\mathrm{Dep}_{j4mt-1} \\
+		= {} & (1-\phi_{mt})\Bigl[\sum_{p\neq(j,4)}\left(1+r_{p,t-1}^{\mathrm{dep}}\right)\mathrm{Dep}_{p,t-1}\,s_{j4\mid p}+\mathrm{Out}_{mt}\,s_{j4\mid\varnothing}\Bigr] \\
+		& -(1-\phi_{mt})(1-\ell_{jt})\left(1+r_{j4mt-1}^{\mathrm{dep}}\right)\mathrm{Dep}_{j4mt-1}\,L_{jmt}.
+	\end{aligned} \label{eq:fr_nf}
+\end{gather}
+This is an identity. The net flow into $j$'s time deposits, beyond what the carried stock accrues, is the awake entry from every other pool minus the awake exit, and $\phi_{mt}$ appears only as the scale $(1-\phi_{mt})$ of both. The outcome is built from the balance, its lag and the lagged rate, so no generated regressor enters the left side, and entry and exit are one equation.
+
+Two approximations turn the shares into observables (Appendix \ref{app:netflow}). The first evaluates \eqref{eq:fr_share} at the mean utility, so the equation needs no $\theta_2$. The second gives every pool in a market the same denominator. It holds if the stay option dominates the denominator or if the outside option does, and the data say which. On the estimates of Section \ref{sec:estimation:demand}, the outside option is \pn[p0]{kappa.k0.outside.menu_share.median} percent of the median market's denominator, so the inside terms are small and every pool faces the same menu to first order.
+Under the two, the probability that a real of awake money in pool $(j',k')$ enters $j$'s time deposits is $e^{a_{k'}}e^{\delta_{j4mt}}/D_{mt}$ for $j'=j$ and $e^{-\kappa}$ times that for $j'\neq j$, where $e^{a_{k'}}$ is the cost of leaving the source type, the same whichever institution receives the money, and $D_{mt}$ is the common denominator. The source product's own utility drops out. What a real of awake money does depends on where it can go and on whether it crosses a bank boundary, not on where it sits.
+
+Savings pays the regulated rate and checking pays nothing, so no source type carries a price, and the time deposit is the one retail product whose rate the institution sets. Write the price as the gap $g_{jmt}\equiv\rho_{2mt}-\rho_{j4mt}$, the savings spread minus the institution's own time-deposit spread. Divide \eqref{eq:fr_nf} by $j$'s own lagged savings stock and write the pool weights
+\begin{gather}
+	Q^{k}_{jmt-1}=\frac{\mathrm{Dep}_{jkmt-1}}{\mathrm{Dep}_{j2mt-1}},\qquad
+	R^{k}_{jmt-1}=\frac{\sum_{j'\neq j}\mathrm{Dep}_{j'kmt-1}}{\mathrm{Dep}_{j2mt-1}},\qquad
+	\mathrm{Out}_{jmt}=\frac{\mathrm{Out}_{mt}}{\mathrm{Dep}_{j2mt-1}}, \label{eq:fr_pools}
+\end{gather}
+with the time-deposit pools weighted by the clock factor $c_{jt}=\omega_{jt}+(1-\omega_{jt})\lambda_{jt}E_c$ of Appendix \ref{app:clock}, where $E_c$ is the average discount the clock puts on the leaving probability of the movable part. The estimating equation is
+\begin{gather}
+	\begin{aligned}
+		\frac{\mathrm{NF}_{j4mt}}{\mathrm{Dep}_{j2mt-1}} = {} & e^{\lambda_{jm}+\lambda_{mt}}\,e^{-\alpha g_{jmt}}\Bigl\{\bigl[1+e^{a}Q^{1}+c_{jt}Q^{4}\bigr]+e^{-\tilde{\kappa}}\bigl[R^{2}+e^{a}R^{1}+R^{4}\bigr]+e^{a_{\varnothing}}\mathrm{Out}_{jmt}\Bigr\} \\
+		& -e^{\gamma_{mt}}\left(1+r_{j4mt-1}^{\mathrm{dep}}\right)\bigl[\omega_{jt}+(1-\omega_{jt})\lambda_{jt}\bigr]Q^{4}_{jmt-1}+u_{jmt},
+	\end{aligned} \label{eq:fr_reg}
+\end{gather}
+with every pool weight lagged and $u_{jmt}$ the error. The entry scale, $(1-\phi_{mt})e^{x_j'\bar{\beta}+\xi_{j4mt}}/D_{mt}$, becomes bank $\times$ market and market $\times$ quarter effects, $e^{\lambda_{jm}+\lambda_{mt}}$. The exit scale becomes a market-quarter coefficient $e^{\gamma_{mt}}$ on the awake movable stock. The price coefficient $\alpha$ is estimated here, in the units of the net flow, not borrowed from Section \ref{sec:estimation:demand}. The source-type scales $a$, checking against savings, and $a_{\varnothing}$, new money against savings, are the only costs of moving across types the equation identifies. The level of the savings-to-time-deposit cost is absorbed in the effects. Equation \eqref{eq:fr_reg} is estimated as it stands, nonlinear in the price, since the gaps are not small enough to linearize.
+
+What identifies $\tilde{\kappa}$ is one comparison. An institution's time-deposit rate pulls money from every pool in the market. It pulls less, by the factor $e^{-\tilde{\kappa}}$, per real sitting at another institution. The pool weights are observed, so $e^{-\tilde{\kappa}}$ is read from how much less a real of rivals' money responds to $j$'s rate than a real of own money, at one price and inside one market-quarter. The rival pools identify $\tilde{\kappa}=\kappa-\ln A_{jmt}-\ln h_{jmt}$, where $A_{jmt}$ is the awareness of $j$ among rivals' depositors and $h_{jmt}$ is the sorting of tastes toward the incumbent \parencite{heckman1981heterogeneity}. The estimate is therefore an upper bound on $\kappa$, and the shifters below are what separate the three. The remaining assumptions are that the cost of leaving a source type does not depend on the destination, that $\kappa$ is one number per market or the estimate is its pool-weighted mean, that the market size of Appendix \ref{app:estimation:blp:marketsize} measures the outside pool, and that an institution's entry scale is the same for every pool that feeds it and does not move within a bank $\times$ market cell beyond the market-quarter effect. Appendix \ref{app:netflow} states each, what it buys, and what it costs if false. The equation runs by source pair, savings, checking and time deposits, with the savings pair as the headline, since the simulation of Section \ref{sec:disentangle:evidence} shows the checking pair is weakly identified. The spread enters through a control function from the cost shifters of Section \ref{sec:empirical:sleep}, and standard errors are a wild cluster bootstrap by conglomerate \parencite{cameron2008bootstrap}.
+
+\subsubsection{Pix}\label{sec:disentangle:attention:pix}
+
+Pix lowered the cost of moving money across institutions and not within them, so it moves $\kappa$ and nothing else in \eqref{eq:fr_reg}. Let $\kappa$ be $\kappa_0$ before the launch and $\kappa_1$ after. Every $\mathrm{B}$ conglomerate that holds savings was mandated into Pix from the launch quarter, so a comparison of source pools on and off Pix within a market is empty. The comparison is the rival factor before against after, with the own pools as the control for everything else that changed at the launch, and the test is that the own-pool response did not change, $\alpha^{P}=0$. A second comparison uses the intensity of use. Usage is an equilibrium object, since attentive markets adopt Pix faster, so it needs an instrument. The leading candidate is a single-shock exposure design following the share-as-exposure framework of \textcite{goldsmithpinkham2020bartik}. Participation in Pix was mandatory at launch for institutions with more than 500,000 active accounts \parencite{bcb_resolucao_1_2020}. Let then $s_{jm,2019}$ denote institution $j$'s share of deposits in market $m$ in 2019. The instrument is thus
+\begin{align}
+	Z_{mt}^{\mathrm{Pix}} & = \mathrm{Exposure}_m\cdot\indicator{t \geq 2020\mathrm{Q}4} = \nonumber \\
+	&  \left(\sum_{j}{s_{jm,2019}\cdot\indicator{j \text{ mandated at launch}}}\right)\cdot\indicator{t \geq 2020\mathrm{Q}4} \label{eq:13}.
+\end{align}
+We freeze the mandated set at launch, so that exposure is fixed before Pix and does not respond to later adoption. By construction, exposure varies only where institutions that were not mandated held deposits in 2019. This variation is small: the population-weighted mean of exposure is \pn{pix.exposure.mandated.mean}, with a standard deviation of \pn{pix.exposure.mandated.sd} (Table \ref{tab:pix_exposure_fs}). The institutions that were not mandated are mid-size private and foreign banks, located mostly in large cities, and no state-owned bank is among them. Exposure therefore equals one in almost every market and varies only across a few large ones. Credit cooperatives do not report to ESTBAN, so the exposure is silent on the markets where they dominate. A second exposure uses access rather than institutions, interacting the market's 2019 mobile access with the same post-launch indicator. Mobile lines are already a state in $\boldsymbol{S}_{mt}$, so this exposure identifies a Pix effect that varies with access. It is valid only if 2019 access is unrelated to other post-2020 shocks. Since the emergency aid went mostly to poorer markets, the design controls for Cad\'{U}nico registration interacted with the post-launch indicator. \textcite{sarkisyan2024instant} relates the deposits of small relative to large banks in a municipality to local Pix use, and uses high-speed internet access, through fourth- and fifth-generation (4G/5G) mobile networks, as an alternative instrument. One specification follows him, with the same outcome and the 2019 4G/5G share as exposure, so that our estimates can be compared with his.
+
+Table \ref{tab:pix_exposure_fs} reports the first stage. Usage is the number of distinct individuals who send Pix transfers, per inhabitant, by MCA and quarter from 2020Q4 to 2024Q4. Each exposure is fixed at 2019 levels and scaled by its standard deviation. The regressions include quarter effects, 2019 Cad\'{U}nico registration interacted with quarter effects, and log population, with population weights. Despite its small spread, the mandate exposure has a first-stage $F$ statistic of \pn[1]{pix.exposure.mandated.fs.payers.f}. Mobile access gives an $F$ of \pn[1]{pix.exposure.mobile.fs.payers.f} with clusters by MCA, which falls to \pn[1]{pix.exposure.mobile.fs.payers.f_state} with clusters by state. The 4G/5G share is weaker, at \pn[1]{pix.exposure.g45.fs.payers.f}. Together, the three exposures give a joint $F$ of \pn[1]{pix.exposure.fs.joint.payers.f}, and \pn[1]{pix.exposure.fs.joint.payers.f_state} with clusters by state. In \eqref{eq:fr_reg} the rival factor then takes the dose, $\tilde{\kappa}_{mt}=\tilde{\kappa}_0+(\tilde{\kappa}_1-\tilde{\kappa}_0)\,\indicator{t\geq 2020\mathrm{Q}4}+\tilde{\kappa}_U\,\indicator{t\geq 2020\mathrm{Q}4}\,z_{m}$, with $z_m$ the market's Pix use instrumented by its 2019 mobile and 4G/5G access, and the before-after change and the dose are two readings of the same object.
+
+\input{tab_pix_exposure_fs.tex} % Label: tab:pix_exposure_fs
+
+\subsubsection{Advertising and the Opening Margin}\label{sec:disentangle:awareness}
+
+If a saver at $j'$ considers $j$ only with probability $A_{jmt}$, the rival factor of \eqref{eq:fr_reg} is $A_{jmt}e^{-\kappa}$, and a cost $\kappa$ and an awareness $A=e^{-\kappa}$ produce the same entry. Awareness is identified from shifters excluded from conditional utility. \textcite{agarwal2026demand} show that demand is identified when choice sets are latent and may correlate with preferences, given one shifter of preferences only and one of choice sets only. Here spreads, moved by cost shifters, are the first, and advertising the second, the exclusion \textcite{honka2017advertising} use for retail bank accounts: advertising enters $A$ in \eqref{eq:fr_aware} and not $\delta$. The five largest conglomerates are known everywhere, so their $\tilde{\kappa}$ is $\kappa$ up to sorting, and the gap between the other institutions' $\tilde{\kappa}$ and theirs reads $-\ln A$. The register of client relationships (CCS) gives a second moment, since opening a relationship at $j$ needs awareness of $j$ and moves no money. With $N_{jt}$ the stock of relationships at $j$, $\mathrm{Adults}_t$ the adult population and $\mathrm{Openings}_{jt}$ the new relationships,
+\begin{gather}
+	\frac{\mathrm{Openings}_{jt}}{\mathrm{Adults}_t-N_{jt-1}}=(1-\phi_t)\,A_{jt}\,P(j\mid\text{aware}), \label{eq:fr_openings}
+\end{gather}
+so openings respond to advertising through $A$ and to spreads through $P(j\mid\text{aware})$, the choice probability of $j$ among depositors who consider it. Advertising data for this route are in hand. The BCB released, upon request, the advertising accounts of every institution it supervises, monthly from 2013 (Appendix \ref{app:data:advertising}). Summed over each conglomerate's member institutions, they give a quarterly series for nearly every conglomerate in the estimation sample, digital entrants included, and a substantial part of its variation survives conglomerate and quarter fixed effects. The model of Section \ref{sec:model} is nested as the full-awareness limit, in which depositors are not always awake, but aware of every available option.
+
+\subsubsection{The Stakes}\label{sec:disentangle:attention}\label{sec:disentangle:attention:stakes}
+
+Attention that responds to the stakes of shopping predicts that sleepiness falls when the policy rate rises. The lagged Selic coefficient of Section \ref{sec:estimation:sleep} has that sign, but it is not significant, so the current estimates neither support nor reject this channel. In \eqref{eq:fr_reg} the stakes enter the scale through $(1-\phi_{mt})$, so the test is whether the scale rises with the stakes of \eqref{eq:fr_stakes}, with an elasticity $\eta$ in the market-quarter effect. The stakes are endogenous to the same shocks as the price, so they enter instrumented by the cost shifters of Section \ref{sec:empirical:sleep}, which move the dispersion of spreads, with the lagged market structure as controls. The same elasticity can be read in the sleepiness step itself, with the stakes as one more market state in \eqref{eq:6}, and the two readings should agree. Identification leans on cross-market within-quarter variation, rather than on the Selic time series alone, which is confounded with the aggregate cycle.
+
+\subsubsection{Fees, Sweeps, and the Within-Bank Margin}\label{sec:disentangle:switching}
+
+Account fees are the explicit cost of keeping an account, and they fall mostly on incumbents. In the 2017 to 2018 Household Budget Survey (\textit{Pesquisa de Or\c{c}amentos Familiares}, POF), \pn[p0]{fees.pof.acct.share_paying} percent of families paid an account-keeping fee, R\$\pn[2]{fees.pof.acct.mean_payer} a month on average among those who paid, at January 2018 prices \parencite{ibge_pof2017_2019}. At the five largest banks (Banco do Brasil, Bradesco, Caixa, Ita\'{u}, and Santander), the median listed price of the first standardized service package rose from R\$\pn[2]{fees.listed.pkg1.big5.median.2016} in 2016 to R\$\pn[2]{fees.listed.pkg1.big5.median.2024} in 2024, in nominal terms \parencite{bcb_tarifas_mensal}. These are listed ceilings, not the prices clients pay.
+
+On the public complaints platform \texttt{consumidor.gov.br}, fee disputes make up \pn[p0]{fees.disputes.acct_share.big5} percent of account complaints against the same five banks over 2016 to 2024, and \pn[p0]{fees.disputes.acct_share.digital} percent against Nubank, Inter, and C6 \parencite{senacon_consumidor_dados}. At the five banks the share falls to \pn[p0]{fees.disputes.acct_share.big5.2024} percent in 2024. Fees therefore make an incumbent account costly to keep and a digital account nearly free. They push balances toward digital banks, so they cannot explain why balances drift toward those banks slowly. A switching cost that slows the drift would be a hassle or an information cost rather than a fee.
+
+Three features of the data bear on the comparison. Balances are quarter-end stocks, so only net flows are observed, which is why \eqref{eq:fr_reg} is written on the net flow. The within-bank margin is not frictionless either, since moving a time deposit before maturity restarts its tax clock (Appendix \ref{app:clock}) and a new product may require onboarding at the bank. Automatic sweeps work the other way, since they move balances within a bank without a decision. Since 2022, Santander's general conditions for new individual accounts make its sweep from checking accounts into certificates of deposit a default feature \parencite{santander_condicoes_pf_2022}, while Bradesco's sweep requires the client to opt in \parencite{bradesco_investfacil_2015,bradesco_investfacil_2020}. The checking pools enter \eqref{eq:fr_reg} with their own scale $e^{a}$ for that reason, and the dates of the default sweeps are known. ESTBAN is also published by branch, monthly from 2013, so moves between a bank's own branches can be followed as well.
+
+\subsection{Evidence So Far}\label{sec:disentangle:evidence}
+
+Three facts of the net-flow panel set the scene. At the median time-deposit cell, the net flow is \pn[p0]{kappa.k0.moving.median.k4} percent of the carried stock, so the margin \eqref{eq:fr_reg} explains is not small.
+The outside pool is \pn[p0]{kappa.k0.outside.share_Mhat.median} percent of the market size at the median market-quarter, so new money is the largest source of entry and the outside pool cannot be left out of the equation.
+And \pn[p0]{kappa.k0.logR2.between_share} percent of the variance of the log rival-savings weight is between bank $\times$ market cells, so the rival factor is read from the price and the shifters within cells, not from the level of the weights.
+One discrepancy is recorded rather than resolved. In the world the estimates of Section \ref{sec:estimation} imply, an awake real re-chooses its own product with probability \pn[2]{kappa.k2.world.stay_prob.median} and awake money is \PNpending{kappa.k2.world.awake_share}{1.8} percent of deposits, against a net flow of \pn[p0]{kappa.k0.moving.median.k4} percent of the carried stock in the data. % PROVISIONAL
+The design is built on the net flow, which is observed. The discrepancy is a fact about the market size and the sleepiness fit, to be revisited with the random-coefficients refit.
+
+Appendix \ref{app:simulation} simulates \eqref{eq:fr_balance} on the panel's pools with the estimates of Section \ref{sec:estimation} as the data-generating process, with $\kappa$ equal to 1 before 2020Q4 and 0.5 after, a dose of $-0.15$ per unit of exposure, and the price coefficient of Section \ref{sec:estimation:demand}.
+Table \ref{tab:k2b_pairs} reports what \eqref{eq:fr_reg} recovers, in a world where every pool has the same denominator and in one where the denominators differ as they do in the data. The savings pair recovers the level, the change and the dose in both: the change is \pn{kappa.k2b.sav.change.fe_dose} and \pn{kappa.k2b.sav.change.ideal_dose} against $-0.5$, and the dose is \pn{kappa.k2b.sav.dose.fe_dose} and \pn{kappa.k2b.sav.dose.ideal_dose} against $-0.15$.
+The price coefficient is recovered (\pn{kappa.k2b.alpha.fe_ba} and \pn{kappa.k2b.alpha.ideal_ba}) and the own-pool response does not change at the launch, with $|\alpha^{P}|$ at most \pn{kappa.k2b.alpha_P.max} to three decimals.
+The checking pair is not pinned down even where the common denominator holds, and the time-deposit pair recovers the level and the change but not the dose, so neither is a second estimate. Two further findings shape the estimator. A linearized version of \eqref{eq:fr_reg} recovers nothing about $\kappa$ once the entry scale varies across cells, which is why the equation is estimated nonlinear in the price. And a world in which the entry scale moves within a bank $\times$ market cell loses $\kappa$ altogether, which is what the entry-scale assumption guards and what the Pix comparisons, which difference the same cells before and after a date, do not need.
+
+On the opening margin, advertising moves openings at the $\mathrm{B}$ institutions outside the five largest, \pn{pix.adv.rest.elast} per log unit in the quarter (bootstrap $p$ \pn{pix.adv.rest.elast_p}) and \pn{pix.adv.rest.sum_lags} over three quarters, and not distinguishably at the five largest (\pn{pix.adv.big5.elast}, $p$ \pn[2]{pix.adv.big5.elast_p}), which is what full awareness of the largest institutions predicts.
+Instrumented by its own four-quarter lag, the elasticity is \pn{pix.adv.iv.elast} (first-stage $F$ \pn[1]{pix.adv.iv.fs_f}, Anderson and Rubin confidence set \pn{pix.adv.iv.ar.lo} to \pn{pix.adv.iv.ar.hi}), so same-quarter simultaneity does not overstate it, and the advertising of the other institutions in a conglomerate's group lowers the institution's own openings (\pn{pix.adv.group_placebo.coef}), as rivals' awareness should.
+Branches move too little within a cell to identify $\gamma_2$, so awareness rests on advertising. The stakes of \eqref{eq:fr_stakes} have a median of R\$\pn[0]{pix.stakes.median} a year, and the cost shifters predict their log with an $F$ of \pn{pix.stakes.fs.f}, against \pn{pix.stakes.fs.f_placebo} for a shuffled placebo and \pn{pix.stakes.fs.f_net} net of the lagged market structure, so the instrument for the stakes exists.
+
+The switching-cost equation itself runs next, on the rebuilt panel, by source pair and with the Pix and advertising shifters. The clock's $E_c$ waits for the registry's split of time deposits by liquidity, requested from the BCB. The random-coefficients refit with the source state follows once \eqref{eq:fr_reg} has said which frictions to carry.
+
+% ============================================================================================================================
+% W7. End of file. required. Three appendices after Additional Empirical Results.
+% ============================================================================================================================
+% SEARCH
+\end{document}
+% REPLACE
+\section{The Tax Clock}\label{app:clock}
+
+Section \ref{sec:inst_setting:deposits} says that moving a time deposit before maturity restarts the tax clock. This appendix prices the clock from the law and says how it enters the model of Section \ref{sec:disentangle:model} and the equation of Section \ref{sec:disentangle:netflow}. Let $\tau(d)$ be the withholding rate on income at age $d$ days, the regressive schedule of \textcite{brasil_lei11033_2004},
+\begin{gather}
+	\tau(d)=\begin{cases}0.225 & d\le 180\\ 0.20 & 180<d\le 360\\ 0.175 & 360<d\le 720\\ 0.15 & d>720,\end{cases} \label{eq:app_tau}
+\end{gather}
+and $\iota(d)$ the share of income taken by the tax on financial operations (IOF), 0.96 on day 1 falling to 0 on day 30 \parencite{brasil_decreto6306_2007}. Let $r$ be the application's annual gross rate, the institution's own time-deposit rate (in this appendix only, since elsewhere $r_t^f$ is the risk-free rate), $a$ the application's age in days when the decision is taken, and $h$ the horizon in days the money then stays invested. Staying and redeeming at age $a+h$ gives
+\begin{gather}
+	W_s(a,h)=1+\bigl[1-\tau(a+h)\bigr]\Bigl[(1+r)^{(a+h)/365}-1\Bigr]. \label{eq:app_Ws}
+\end{gather}
+Moving now to an institution paying $r'$ means redeeming, paying the clock, reinvesting the net proceeds $P(a)$, and redeeming at the new application's age $h$,
+\begin{gather}
+	P(a)=1+\bigl[1-\tau(a)\bigr]\bigl[1-\iota(a)\bigr]\Bigl[(1+r)^{a/365}-1\Bigr], \label{eq:app_P} \\
+	W_m(a,h;r')=P(a)\Bigl\{1+\bigl[1-\tau(h)\bigr]\Bigl[(1+r')^{h/365}-1\Bigr]\Bigr\}. \label{eq:app_Wm}
+\end{gather}
+The cost of the clock, evaluated at $r'=r$, the break-even rate $r^{*}$ at which moving pays, and the clock premium $\Delta^{c}$ are
+\begin{gather}
+	c(a,h)=W_s(a,h)-W_m(a,h;r), \qquad W_m(a,h;r^{*})=W_s(a,h), \qquad \Delta^{c}(a,h)=r^{*}-r. \label{eq:app_cost}
+\end{gather}
+Table \ref{tab:tax_clock} computes both with $r$ at the CDI, 10 percent a year, so a deposit paying the CDI moved to an institution paying the same. The cost runs from \pn[2]{clock.t3.cost.lo} to \pn[2]{clock.t3.cost.hi} reais per hundred and the premium from \pn[2]{clock.t3.premium.lo} to \pn[2]{clock.t3.premium.hi} percentage points a year, or \pn[1]{clock.t3.premium_cdi.lo} to \pn[1]{clock.t3.premium_cdi.hi} percent of the CDI, over six cells of age and horizon. A deposit paying less than the CDI behaves like a lower level of the CDI, with a smaller cost and premium in points but a similar premium as a percent of its rate. Ages and horizons are illustrative cells, not the distribution of the stock, which the registry request to the BCB would give.
+
+\begin{table}[H]
+	\centering
+	\begin{threeparttable}
+		\caption{The Cost of Moving a Time Deposit Before Maturity}\label{tab:tax_clock}
+		\input{tab_tax_clock.tex}
+		\begin{tablenotes}[flushleft]
+			\item \footnotesize \textit{Notes:} A daily-liquidity time deposit paying the CDI is redeemed at the age shown and reinvested at another bank paying the same rate for the horizon shown. Cost: after-tax wealth lost per R\$100 of principal relative to staying. Income is taxed at 22.5 percent up to 180 days, 20 percent up to 360, 17.5 percent up to 720 and 15 percent beyond \parencite{brasil_lei11033_2004}, and redemptions within 30 days also pay the tax on financial operations (IOF) \parencite{brasil_decreto6306_2007}, which does not bind at these ages. Break-even premium: the rate above the CDI the new bank must pay over the horizon for moving to leave the depositor where staying would, in percentage points a year and as a percent of the CDI. Panel B gives the range of the six cells at three levels of the CDI. A deposit paying less than the CDI behaves like a lower level of the CDI, with a smaller cost and premium in points but a similar premium as a percent of its rate. Ages and horizons are illustrative, not the distribution of the stock. At maturity the clock restarts whether the money stays or moves \parencite{cmn_resolucao_5005_2022}, so the cost is zero on that date.
+		\end{tablenotes}
+	\end{threeparttable}
+\end{table}
+
+\paragraph{In the model.} The clock is a cost on leaving a time deposit before maturity, whatever the destination, so it enters the utility of every option other than staying. In the units of $\delta$ the cost is $-\bar{\alpha}\,\Delta^{c}(a,h)$, a positive number since $\bar{\alpha}<0$, the premium that makes moving pay times the utility per percentage point. That is the second cost in \eqref{eq:fr_util}. Of the type-4 stock an institution carries into a quarter, three parts face different costs. A share $\omega_{jt}$ matures in the quarter and lands in the checking account, since a time deposit cannot renew automatically \parencite{cmn_resolucao_5005_2022}, and pays nothing to move. A share $(1-\omega_{jt})\lambda_{jt}$ has daily liquidity and pays $c(a,h)$ to move. The rest, $\ell_{jt}=(1-\omega_{jt})(1-\lambda_{jt})$, is locked and cannot move even when awake, which is the lock in the carry term of \eqref{eq:fr_balance}.
+
+\paragraph{In the net-flow equation.} The equation of Section \ref{sec:disentangle:netflow} never uses $\tau(d)$ or $\iota(d)$. It collapses the clock into the stock's composition, $\omega_{jt}$ and $\lambda_{jt}$, which are data, and one number, the average discount the clock puts on the leaving probability of the movable part,
+\begin{gather}
+	c_{jt}=\omega_{jt}+(1-\omega_{jt})\,\lambda_{jt}\,E_c, \qquad E_c\equiv\mathbb{E}\bigl[e^{\bar{\alpha}\,\Delta^{c}(a,h)}\bigr], \label{eq:app_clockfactor}
+\end{gather}
+where the expectation is over the ages and horizons of the stock and the exponential is what the cost does inside a logit. $c_{jt}$ weights the own time-deposit pool on the entry side of \eqref{eq:fr_reg}, and the same factor weights rivals' time deposits. The exit side uses the movable stock, $\omega_{jt}+(1-\omega_{jt})\lambda_{jt}$, with the lock absorbed in the market-quarter scale. $E_c$ is identified from institutions and quarters with different $\omega$ and $\lambda$ at a given stock. The law gives a check: with $\bar{\alpha}$ of Section \ref{sec:estimation:demand} and $\Delta^{c}$ of \pn[2]{clock.t3.premium.lo} to \pn[2]{clock.t3.premium.hi} percentage points, $E_c$ should sit near $e^{\bar{\alpha}\Delta^{c}}$. $\omega_{jt}$ comes from the statements' 90-day maturity bucket, annual for the institutions that publish it and imputed by firm type for the rest. $\lambda_{jt}$ comes from a registry request to the BCB, due in November 2026, or until then is set to one for digital institutions and read from the no-maturity line of the statements for the others. The same request asks for early against at-maturity redemptions, which would give the exit flow split by clock status directly.
+
+\section{The Net-Flow Equation}\label{app:netflow}
+
+This appendix derives \eqref{eq:fr_reg} from \eqref{eq:fr_nf}, names each assumption, and says what each buys and what it costs if false. Throughout, a pool is a source product $p=(j',k')$ in a market, and $D_p$ is the denominator of its conditional share.
+
+\paragraph{A1, evaluation at the mean utility.} Set $\mu_{ijkmt}=0$ in \eqref{eq:fr_share}, so the conditional share is the plain logit of \textcite{berry1994estimating}. The exact object is an integral over the tastes of the holders of pool $p$,
+\begin{gather}
+	P(j4\mid p)=\int\frac{\exp\bigl\{\delta_{j4mt}+\mu_{ij4mt}-\kappa\,\indicator{j'\neq j}\bigr\}}{D_{p}(\mu_i)}\,\text{d}F_{p}(d_{imt},\nu_{imt}), \label{eq:app_Pexact}
+\end{gather}
+with $F_p$ their distribution of demographics and draws and $D_p(\mu_i)$ the pool's denominator at the depositor's tastes. What A1 buys is an equation that needs no $\theta_2$. Without it, \eqref{eq:app_Pexact} is a function of $\theta_2$, and the estimates of Section \ref{sec:estimation:demand} cannot stand in, since they were estimated at $\kappa=0$. Dropping A1 means refitting the share system with $\kappa$. The size of the error is what the simulation of Appendix \ref{app:simulation} measures with the random coefficients of Section \ref{sec:estimation:demand} as the data-generating process.
+
+\paragraph{A2, a common denominator.} Under A1, $D_p=1+\sum_{(l,k)}\exp\{\delta_{lkmt}-\kappa\,\indicator{l\neq j'}\}$ differs across pools only through which institution's products carry no $\kappa$. A2 says that difference is negligible, $D_p\approx D_{mt}$ for every pool in the market. Two conditions are each sufficient. The stay option dominates, $D_p\approx\exp\{\delta_{j'k'}\}$, the aggregate counterpart of the low switching rates of \textcite{hortacsu2017power} and \textcite{heiss2021inattention}. Or the outside option dominates, $D_p\approx 1+\sum_{(l,k)}\exp\{\delta_{lk}\}$ with the inside terms small, so every pool faces the same menu to first order. Which holds is an empirical fact about the menu. On the estimates of Section \ref{sec:estimation:demand}, the outside option is \pn[p0]{kappa.k0.outside.menu_share.median} percent of the median market's denominator, an awake real re-chooses its own product with probability \pn[2]{kappa.k2.world.stay_prob.median}, and \pn[p0]{kappa.k2.world.outside_entry_share} percent of simulated entry comes from the outside pool, so the outside option dominates and the stay option does not.
+Under either condition,
+\begin{gather}
+	P(j4\mid p)\approx\frac{e^{\delta_{j4mt}-e_{k'}}}{D_{mt}}\,e^{-\kappa\,\indicator{j'\neq j}}, \label{eq:app_logit}
+\end{gather}
+where $e_{k'}$ is the cost of leaving the source type. What A2 buys is separability: the entry from a pool is the pool's size times $e^{-\kappa\indicator{j'\neq j}}$ times a function of the destination alone, which is what makes the rival factor read as $e^{-\kappa}$ and the equation estimable with fixed effects. What it costs if false: the rival-to-own ratio is $e^{-\kappa}D_{j}/D_{j'}$, so the error in $\kappa$ is $\ln(D_{j'}/D_{j})$. On the menus of Section \ref{sec:estimation:demand} the simulation finds the implied ratio 0.003 to 0.016 above $e^{-\kappa}$ for the savings pair. The error is pool-specific, which is why one $\tilde{\kappa}$ shared across the savings, checking and time-deposit pairs comes out biased while the savings pair alone does not. Awake money at $(j,4)$ chooses $(j,4)$ again with probability $e^{\delta_{j4mt}-e_4}/D_{mt}$, like any other own pool, and otherwise leaves. In the world the estimates imply that probability is small, so the exit is nearly the whole awake movable stock, and the stayers re-enter through the own time-deposit pool on the entry side.
+
+\paragraph{A3, the cost of leaving a source type does not depend on the destination.} The savings anniversary forfeits the month's interest whether the money goes to the own institution's time deposit or to a rival's. Checking costs nothing to leave in either case. The clock on a time deposit is the same tax whichever institution receives the money. So $e_{k'}$ in \eqref{eq:app_logit} is a source-type scale, and
+\begin{gather}
+	P(j4\mid j,k')=e^{a_{k'}}\,\frac{e^{\delta_{j4mt}}}{D_{mt}},\qquad
+	P(j4\mid j',k')=e^{-\kappa}\,e^{a_{k'}}\,\frac{e^{\delta_{j4mt}}}{D_{mt}},\qquad j'\neq j, \label{eq:app_Pown}
+\end{gather}
+with $e^{a_{k'}}=e^{-e_{k'}}$: $a_2$ normalized into the destination scale, $a$ for checking, $c_{jt}$ of \eqref{eq:app_clockfactor} for time deposits.
+
+\paragraph{The pools and the price.} The destination is an institution's time deposits. The sources are every pool in the market: own savings, at weight one; rivals' savings, at weight $R^2$ and cost $\kappa$; own checking, at weight $Q^1$ and scale $e^{a}$, where a default sweep moves money into the own time deposit without a decision; rivals' checking, at weight $R^1$ and cost $\kappa$; own time deposits, the re-entry of the awake stock at weight $c_{jt}Q^4$ and the exit; rivals' time deposits, at weight $R^4$ clock-weighted and cost $\kappa$; and the outside pool, with no incumbent and no $\kappa$, at weight $\mathrm{Out}$. The rivals' pools enter with one $\kappa$ for the market (A4): a single cost for every pair of institutions, or, if the cost differs by pair, the estimate is its pool-weighted mean. The outside pool is the market size of Appendix \ref{app:estimation:blp:marketsize} less last quarter's deposits (A5). New money has no incumbent and pays no $\kappa$. Its weight loads on the own and the rival pools alike, so leaving it out biases $\kappa$ down, and it is not small: \pn[p0]{kappa.k0.outside.share_Mhat.median} percent of the market size at the median market-quarter.
+$\mathrm{B}$ institutions only, because the pools are local. $\mathrm{D}$ institutions hold one national stock, so $\mathrm{D}$ sources drop out of the rival pools, a small omission and the same for every destination in a market, and $\mathrm{D}$ destinations get their own equation at the national level. With a common denominator, the only product-specific object in \eqref{eq:app_logit} is the destination's mean utility. The characteristics $x_j$ are slow and go to the bank $\times$ market effects. What varies across institutions within a market-quarter is the institution's own time-deposit spread and its unobserved quality, so the price is the gap $g_{jmt}$ of Section \ref{sec:disentangle:netflow}, and $e^{-\bar{\alpha}g}$ is the price part of $e^{\delta_{j4}}$ up to a market-quarter constant.
+
+\paragraph{From the identity to the estimator.} Substitute \eqref{eq:app_Pown} into \eqref{eq:fr_nf}, divide by the own savings pool, and write the weights \eqref{eq:fr_pools}, with the accrual factors of the entry pools absorbed into the scales. The entry is every pool in the market, own pools at weight one and rivals' pools at weight $e^{-\kappa}$, times one destination-specific factor, the share of the menu that $j$'s time deposit takes. The exit is the whole awake movable stock of $j$'s time deposits, with a market-quarter scale. Three things then turn it into \eqref{eq:fr_reg}. The entry scale $(1-\phi_{mt})e^{x_j'\bar{\beta}+\xi_{j4mt}}/D_{mt}$ becomes $e^{\lambda_{jm}+\lambda_{mt}}$ (A6: an institution's scale is the same for every pool that feeds it, and it does not move within a bank $\times$ market cell beyond the market-quarter effect). The exit scale becomes $e^{\gamma_{mt}}$, which also absorbs the unknown part of $\ell_{jt}$. And the rival factor is written $e^{-\tilde{\kappa}}$, which equals $e^{-\kappa}$ only if savers at rival institutions are aware of $j$ (A7) and tastes are not sorted toward the incumbent.
+
+\paragraph{Estimation.} Nonlinear least squares on \eqref{eq:fr_reg}, with each row divided by its total pool $1+Q^{1}+Q^{4}+R^{1}+R^{2}+R^{4}+\mathrm{Out}$. The weighting changes no parameter and is what makes the fit converge: divided by own savings alone, the rows of institutions with almost no savings carry the whole sum of squares, in simulated and real data alike. The effects are kept in levels and solved exactly by market, and the structural parameters by Levenberg and Marquardt's method on the projected Jacobian, from two starts. The one endogenous regressor is $\rho_{j4mt}$ inside $g$, handled as Section \ref{sec:empirical:sleep} handles the spread, by a control function: the first stage of the spread on the own cost shifters, with the residual in the exponent. Standard errors come from the wild cluster bootstrap by conglomerate \parencite{cameron2008bootstrap}, which also carries the imputed $\omega$ and $\lambda$ and the market size inside $\mathrm{Out}$. The savings pair has eighteen destination conglomerates, so the bootstrap is the only inference to trust there.
+
+\paragraph{Heterogeneity, and why $\tilde{\kappa}$ is an upper bound.} A saver who prefers her institution is already there. If preferences for institutions are persistent and heterogeneous, savers at $j'$ have on average a lower $\delta_{j4}$ than savers at $j$ do, so they move to $j$ less for the same gap. In \eqref{eq:fr_reg} that is a lower response of the rivals' pools for the same price, which raises $\tilde{\kappa}$ and looks like $\kappa$. It is the state dependence against unobserved heterogeneity problem of \textcite{heckman1981heterogeneity}, the same as in Panel B of Table \ref{tab:xi_diagnostics}. The fixed effects absorb the market-level mean of $\delta_{j4}$ but not the sorting of savers across institutions within a market. So $\tilde{\kappa}$ is an upper bound on $\kappa$ once the outside pool is controlled for. The change in $\kappa$ comes from the Pix comparisons, which difference the sorting out, and the level from the awareness shifter.
+
+\section{Simulation Evidence}\label{app:simulation}
+
+The simulation generates data from \eqref{eq:fr_balance} on the panel's own pools, with the mean utilities, the random coefficients, the sleepy shares and the market sizes of Section \ref{sec:estimation} as the data-generating process, used for nothing else. The switching cost is 1 before 2020Q4 and 0.5 after, so the true change is $-0.5$. In the dose version $\kappa$ also takes $-0.15$ per unit of the market's Pix-use exposure, so post-launch $\kappa$ spans about 0.16 to 0.88 across markets. The price coefficient is that of Section \ref{sec:estimation:demand} and the own-pool response does not change at the launch.
+Two worlds are simulated. In the first, every institution offers time deposits and the common denominator of A2 holds exactly. In the second, an institution's time deposits count as a destination only where it holds them in the data, and the denominators differ across pools as A2's error implies. A third world, in which the entry scale moves within a bank $\times$ market cell, fails A6 by construction and is reported only as the case the assumption guards. Each fit uses the per-pair form of \eqref{eq:fr_reg} with total-pool weighting, from two starts, and the gate is that the savings pair's change lies within 0.05 of $-0.5$ in the second world.
+
+\begin{table}[H]
+	\centering
+	\begin{threeparttable}
+		\caption{Recovery of the Switching Cost by Source Pair in Simulated Data}\label{tab:k2b_pairs}
+		\IfFileExists{tab_k2b_pairs.tex}{\input{tab_k2b_pairs.tex}}{%
+		\footnotesize\setlength{\tabcolsep}{4pt}
+		\begin{tabular}{@{}l r r r r r r r@{}}
+			\toprule
+			& \multicolumn{3}{c}{Savings pair} & \multicolumn{2}{c}{Checking pair} & \multicolumn{2}{c}{Time-deposit pair} \\
+			\cmidrule(lr){2-4}\cmidrule(lr){5-6}\cmidrule(lr){7-8}
+			World, version & Level & Change & Dose & Level & Change & Level & Change \\
+			\midrule
+			\multicolumn{8}{l}{\textcolor{red}{Provisional values (2026-11-04 18:22). The generated table replaces this block.}} \\
+			Pool-specific, before-after & \textcolor{red}{1.006} & \textcolor{red}{$-0.501$} & & \textcolor{red}{0.479} & \textcolor{red}{$-0.220$} & \textcolor{red}{0.953} & \textcolor{red}{$-0.486$} \\
+			 & \textcolor{red}{(0.042)} & \textcolor{red}{(0.040)} & & & & & \\
+			Pool-specific, dose & \textcolor{red}{0.934} & \textcolor{red}{$-0.484$} & \textcolor{red}{$-0.142$} & \textcolor{red}{at bound} & \textcolor{red}{at bound} & \textcolor{red}{0.931} & \textcolor{red}{$-0.516$} \\
+			 & \textcolor{red}{(0.037)} & \textcolor{red}{(0.032)} & \textcolor{red}{(0.005)} & & & & \\
+			Common, before-after & \textcolor{red}{0.974} & \textcolor{red}{$-0.490$} & & \textcolor{red}{0.654} & \textcolor{red}{$-0.298$} & \textcolor{red}{1.040} & \textcolor{red}{$-0.508$} \\
+			 & \textcolor{red}{(0.012)} & \textcolor{red}{(0.008)} & & & & & \\
+			Common, dose & \textcolor{red}{0.979} & \textcolor{red}{$-0.492$} & \textcolor{red}{$-0.147$} & \textcolor{red}{0.621} & \textcolor{red}{$-0.284$} & \textcolor{red}{1.042} & \textcolor{red}{$-0.504$} \\
+			 & \textcolor{red}{(0.016)} & \textcolor{red}{(0.011)} & \textcolor{red}{(0.002)} & & & & \\
+			\midrule
+			Truth & 1.000 & $-0.500$ & $-0.150$ & 1.000 & $-0.500$ & 1.000 & $-0.500$ \\
+			\bottomrule
+		\end{tabular}}
+		\begin{tablenotes}[flushleft]
+			\item \footnotesize \textit{Notes:} Estimates of \eqref{eq:fr_reg} on data simulated from \eqref{eq:fr_balance} with the estimates of Section \ref{sec:estimation} as the data-generating process, by source pair. Level: the switching cost before the launch of Pix. Change: its shift at the launch. Dose: its coefficient on the market's Pix-use exposure after the launch. Ideal: every institution offers time deposits and the common denominator of Appendix \ref{app:netflow} holds exactly. FE: the world with the paper's fixed effects, in which time deposits count as a destination only where the institution holds them in the data, so the denominators differ across pools. Conv.: whether the fit converged. Standard errors in parentheses for the savings pair are the cluster sandwich by conglomerate, a rough guide only. The FE dose fit stopped at the iteration cap because the checking pair ran to the edge of its range, printed as at bound. Its two starts agree on the savings pair to $10^{-5}$.
+		\end{tablenotes}
+	\end{threeparttable}
+\end{table}
+
+Three results carry into the design. First, the savings pair recovers the level, the change and the dose in both worlds: the level runs from \pn{kappa.k2b.sav.level.fe_dose} to \pn{kappa.k2b.sav.level.fe_ba} against \pn{kappa.k2b.truth.level}, the change from \pn{kappa.k2b.sav.change.fe_dose} to \pn{kappa.k2b.sav.change.fe_ba} against \pn{kappa.k2b.truth.change}, and the dose is \pn{kappa.k2b.sav.dose.fe_dose} and \pn{kappa.k2b.sav.dose.ideal_dose} against \pn{kappa.k2b.truth.dose}, while the checking pair misses even where A2 holds and runs to its bounds once the dose term is added, which is the weak identification of its scale rather than A2's error, and the time-deposit pair's dose misses by several standard errors in opposite directions in the two worlds.
+Second, a linearized form of \eqref{eq:fr_reg} recovers nothing about $\kappa$ once the entry scale varies across cells, and dividing each row by its own savings pool instead of the total pool leaves the fit to a handful of rows and sends every parameter to its bound. Third, the gross flows of the simulated world and of the data disagree: an awake real stays with probability \pn[2]{kappa.k2.world.stay_prob.median} and awake money is \PNpending{kappa.k2.world.awake_share}{1.8} percent of deposits in the simulation, against a net flow of \pn[p0]{kappa.k0.moving.median.k4} percent of the carried stock at the median time-deposit cell. % PROVISIONAL
+The design is built on the net flow, which is observed. Breaking the assumptions one at a time, scaling the gaps, adding sorting, dropping the outside pool, and the error of A1 with the random coefficients, is in progress.
+
+\end{document}
+
+% ============================================================================================================================
+% Part I-b. Figure 2 (Motivating Facts): keep panels (a), (c), (d); drop (b), the cross-section of relative spread against share change.
+% ============================================================================================================================
+
+
+% ========================================================================================================================
+% F1. Figure 2 (fig:motiv_facts), lines 327 to 343. required. Drop panel (b); the entrant paths move up beside panel (a); the D-firm panel sits alone, centered, on the second row.
+% ========================================================================================================================
+% SEARCH
+\end{subfigure}\hfill
+	\begin{subfigure}{0.49\textwidth}
+		\centering
+		\includegraphics[width=\linewidth]{fig_slide_relprice_share_xs_pp.pdf}
+		\caption{Relative spread and yearly share change, one dot per $\mathrm{B}$ bank}
+	\end{subfigure}
+
+	\medskip
+
+	\begin{subfigure}{0.49\textwidth}
+		\centering
+		\includegraphics[width=\linewidth]{fig_slide_motiv_entry_by_gap_bankboot.pdf}
+		\caption{Normalized entrant share paths, by price at entry}
+	\end{subfigure}\hfill
+	\begin{subfigure}{0.49\textwidth}
+		\centering
+		
+% REPLACE
+\end{subfigure}\hfill
+	\begin{subfigure}{0.49\textwidth}
+		\centering
+		\includegraphics[width=\linewidth]{fig_slide_motiv_entry_by_gap_bankboot.pdf}
+		\caption{Normalized entrant share paths, by price at entry}
+	\end{subfigure}
+
+	\medskip
+
+	\begin{subfigure}{0.49\textwidth}
+		\centering
+		
+
+% ========================================================================================================================
+% F2. Figure 2 notes, line 348. required. Relabel the panels in the notes.
+% ========================================================================================================================
+% SEARCH
+Panel (b): per $\mathrm{B}$ conglomerate, the average spread gap to the $\mathrm{B}$-firm mean against the yearly change in its log share of $\mathrm{B}$-firm time deposits, weighted by average balance, trimmed at the 1\textsuperscript{st} and 99\textsuperscript{th} percentiles. Panel (c): median normalized share path
+% REPLACE
+Panel (b): median normalized share path
+
+% ========================================================================================================================
+% F3. Figure 2 notes, line 348. required.
+% ========================================================================================================================
+% SEARCH
+Panel (d): $\mathrm{B}$-firm minus $\mathrm{D}$-firm time-deposit spread
+% REPLACE
+Panel (c): $\mathrm{B}$-firm minus $\mathrm{D}$-firm time-deposit spread
+
+% ========================================================================================================================
+% F4. Section 2.3, line 297. required. The cross-section slope stays in the text with its key; the figure no longer shows it.
+% ========================================================================================================================
+% SEARCH
+[\pn[2]{slide.motiv.relprice.share.xs_pp.ci.lo},\pn[2]{slide.motiv.relprice.share.xs_pp.ci.hi}] (Figure \ref{fig:motiv_facts}, panel b).
+% REPLACE
+[\pn[2]{slide.motiv.relprice.share.xs_pp.ci.lo},\pn[2]{slide.motiv.relprice.share.xs_pp.ci.hi}].
+
+% ========================================================================================================================
+% F5. Section 2.3, line 301. required.
+% ========================================================================================================================
+% SEARCH
+entries, Figure \ref{fig:motiv_facts}, panel c).
+% REPLACE
+entries, Figure \ref{fig:motiv_facts}, panel b).
+
+% ========================================================================================================================
+% F6. Section 2.3, line 303. required.
+% ========================================================================================================================
+% SEARCH
+percent (panel d).
+% REPLACE
+percent (Figure \ref{fig:motiv_facts}, panel c).

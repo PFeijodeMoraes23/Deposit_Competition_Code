@@ -62,11 +62,17 @@ Nothing in the pipeline is edited and nothing here is a paper number.
       quarter effects, MCA clusters, in levels and logs, and log sd_w on log sd_w(rho~) alone,
       since S and S~ share the mean balance; and the same with rho~ shuffled across conglomerates
       within the quarter (a placebo that keeps the lagged weights and drops the cost shifters).
+      Measured-rate variant (D1's missing-and-drop robustness), when the panel has
+      rate_a4_carried: S_measured_mt = sd_w over the banks whose type-4 rate is measured that
+      quarter (rate_a4_carried = 0) x bal_mt; its instrument S~_measured_mt takes rho~ from the
+      cost fit on measured bank-quarters only, over the same banks and lagged weights as S~;
+      carried_weight_share is the type-4 weight on carried rates. Without the column they are empty.
       S uses type-4 stocks and spreads, so it changes with the rebuild (I1, I6, I8, I9). Rerun
       `--only p3` when the new panel lands; the md5 of the panel used is written in every row.
 
 Inputs (read only): processed/market_panel.parquet, read once with pyarrow, only the columns the
-selected tasks need (load_panel_cached may rewrite its sidecar, so it is not used); for 2015 rows,
+selected tasks need, plus OPTIONAL's where the panel has them (load_panel_cached may rewrite its
+sidecar, so it is not used); for 2015 rows,
 processed/demand_chars.parquet's r__dep_a1/2/4 (the raw-ESTBAN scale the preps use for 2016Q1's
 lag, utils/demand_chars.restore_2016q1_lags), only when it was built from the same panel;
 Rout/pix_usage_mca_quarter.parquet; Awareness/processed/advertising_panel_quarterly.parquet;
@@ -121,6 +127,8 @@ COLS = {
            "dep_a4", "spread_ann_a4", "spread_ann_a4_national", "rate_a4_national",
            "risk_free_qoq", *COST],
 }
+# Read only where the panel has them: the rate-source columns of the I6 rebuild.
+OPTIONAL = {"p3": ["rate_a4_carried", "rate_a4_src"]}
 
 
 def stamp(msg):
@@ -441,21 +449,47 @@ def p3(df, got):
         columns={"mean": "mean_spread", "sd": "sd_spread", "n": "n_banks4"})
     sd["fallback_weight_share"] = (c4.groupby(["m", "qi"])["fallback_w"].sum()
                                    / c4.groupby(["m", "qi"])["dep4"].sum())
+    # The measured-rate variant: the same dispersion over the banks whose type-4 rate is measured
+    # that quarter, and the type-4 weight on carried rates.
+    meas = "rate_a4_carried" in b
+    if meas:
+        car = c4["rate_a4_carried"].fillna(0) == 1
+        sd["carried_weight_share"] = ((c4["dep4"] * car).groupby([c4["m"], c4["qi"]]).sum()
+                                      / c4.groupby(["m", "qi"])["dep4"].sum())
+        sdm = wsd_by(c4[~car], ["m", "qi"], "spread_ann_a4", "dep4")
+        sd["sd_spread_measured"] = sdm["sd"]
+        sd["n_banks4_measured"] = sdm["n"].reindex(sd.index).fillna(0)
+    else:
+        sd["carried_weight_share"] = sd["sd_spread_measured"] = sd["n_banks4_measured"] = np.nan
 
     # rho~_jt from the cost shifters, conglomerate x quarter.
-    cqv = b.groupby(["j", "qi"]).agg(spread=("spread_ann_a4_national", "first"),
-                                     dep4=("dep4", "sum"),
-                                     **{c: (c, "first") for c in COST}).reset_index()
+    agg = dict(spread=("spread_ann_a4_national", "first"), dep4=("dep4", "sum"),
+               **{c: (c, "first") for c in COST})
+    if meas:
+        agg["carried"] = ("rate_a4_carried", "max")
+    cqv = b.groupby(["j", "qi"]).agg(**agg).reset_index()
     fit = cqv[(cqv["qi"] >= qi(*T0)) & (cqv["qi"] <= qi(*T1)) & (cqv["dep4"] > 0)].dropna(
         subset=["spread", *COST])
-    X = pd.concat([fit[COST], pd.get_dummies(fit["qi"], prefix="q", dtype=float)], axis=1)
-    res = sm.WLS(fit["spread"], X, weights=fit["dep4"]).fit(
-        cov_type="cluster", cov_kwds={"groups": pd.factorize(fit["j"])[0]})
-    R = np.zeros((len(COST), len(res.params)))
-    for i, c in enumerate(COST):
-        R[i, list(res.params.index).index(c)] = 1.0
+
+    def cost_fit(f):
+        X = pd.concat([f[COST], pd.get_dummies(f["qi"], prefix="q", dtype=float)], axis=1)
+        r = sm.WLS(f["spread"], X, weights=f["dep4"]).fit(
+            cov_type="cluster", cov_kwds={"groups": pd.factorize(f["j"])[0]})
+        R = np.zeros((len(COST), len(r.params)))
+        for i, c in enumerate(COST):
+            R[i, list(r.params.index).index(c)] = 1.0
+        return r, dict(n=int(r.nobs), n_congl=int(f["j"].nunique()),
+                       coef={c: dict(b=float(r.params[c]), se=float(r.bse[c])) for c in COST},
+                       joint_f=float(np.squeeze(r.f_test(R).fvalue)))
+
+    res, fitstats = cost_fit(fit)
     beta = res.params[COST]
     cqv["rho_fit"] = cqv[COST].to_numpy() @ beta.to_numpy()
+    cqv["rho_fit_measured"] = np.nan
+    if meas:
+        res_m, fitstats["measured"] = cost_fit(fit[fit["carried"].fillna(0) == 0])
+        fitstats["measured"]["n_carried_dropped"] = int((fit["carried"].fillna(0) == 1).sum())
+        cqv["rho_fit_measured"] = cqv[COST].to_numpy() @ res_m.params[COST].to_numpy()
     # Placebo: rho~ shuffled across conglomerates within the quarter. Its dispersion keeps the
     # market's lagged weights and loses the cost shifters, so what it predicts is market structure.
     rng = np.random.default_rng(SEED)
@@ -467,16 +501,15 @@ def p3(df, got):
         return pd.Series(v, index=s.index)
 
     cqv["rho_perm"] = cqv.groupby("qi", group_keys=False)["rho_fit"].apply(shuffle)
-    fitstats = dict(n=int(res.nobs), n_congl=int(fit["j"].nunique()),
-                    coef={c: dict(b=float(res.params[c]), se=float(res.bse[c])) for c in COST},
-                    joint_f=float(np.squeeze(res.f_test(R).fvalue)))
-    pd.DataFrame({"shifter": COST, "coef": beta.to_numpy(), "se": res.bse[COST].to_numpy()}).to_csv(
+    pd.DataFrame({"shifter": COST, "coef": beta.to_numpy(), "se": res.bse[COST].to_numpy(),
+                  "coef_measured": res_m.params[COST].to_numpy() if meas else np.nan,
+                  "se_measured": res_m.bse[COST].to_numpy() if meas else np.nan}).to_csv(
         OUT / "p3_cost_shifter_fit.csv", index=False)
 
     # S~: dispersion of rho~ and of each shifter across the market's B banks, weights Dep_j4m,t-1.
     lag4 = b[["j", "m", "qi", "dep4"]].assign(qi=b["qi"] + 1).rename(columns={"dep4": "dep4_lag"})
     t = b[["j", "m", "qi"]].merge(lag4, on=["j", "m", "qi"], how="left").merge(
-        cqv[["j", "qi", "rho_fit", "rho_perm", *COST]], on=["j", "qi"], how="left")
+        cqv[["j", "qi", "rho_fit", "rho_fit_measured", "rho_perm", *COST]], on=["j", "qi"], how="left")
     t = t[t["dep4_lag"] > 0]
     tw = t.dropna(subset=["rho_fit"])
     sdt = wsd_by(tw, ["m", "qi"], "rho_fit", "dep4_lag").rename(
@@ -486,6 +519,8 @@ def p3(df, got):
     for c in COST:
         sdt[f"disp_{c}"] = wsd_by(t.dropna(subset=[c]), ["m", "qi"], c, "dep4_lag")["sd"]
     sdt["sd_rho_perm"] = wsd_by(t.dropna(subset=["rho_perm"]), ["m", "qi"], "rho_perm", "dep4_lag")["sd"]
+    sdt["sd_rho_fit_measured"] = wsd_by(t.dropna(subset=["rho_fit_measured"]), ["m", "qi"],
+                                        "rho_fit_measured", "dep4_lag")["sd"]
     sh = t["dep4_lag"] / t.groupby(["m", "qi"])["dep4_lag"].transform("sum")
     sdt["hhi4_lag"] = (sh ** 2).groupby([t["m"], t["qi"]]).sum()
 
@@ -496,15 +531,21 @@ def p3(df, got):
     out["S"] = np.where(two, out["sd_spread"] * out["bal"], np.nan)
     out["S_cell"] = np.where(two, out["sd_spread"] * out["bal_cell"], np.nan)
     out["S_tilde"] = np.where(out["n_banks4_lag"] >= 2, out["sd_rho_fit"] * out["bal_lag"], np.nan)
+    out["S_measured"] = np.where(out["n_banks4_measured"] >= 2,
+                                 out["sd_spread_measured"] * out["bal"], np.nan)
+    out["S_tilde_measured"] = np.where(out["n_banks4_lag"] >= 2,
+                                       out["sd_rho_fit_measured"] * out["bal_lag"], np.nan)
     out = out[(out["qi"] >= qi(*T0)) & (out["qi"] <= qi(*T1))].copy()
     out["year"], out["quarter"] = out["qi"] // 4, out["qi"] % 4 + 1
     out["sd_spread_pp"] = 100 * out["sd_spread"]
     out["sd_rho_fit_pp"] = 100 * out["sd_rho_fit"]
+    out["sd_spread_measured_pp"] = 100 * out["sd_spread_measured"]
     out["panel_md5"] = got[:8]
     cols = ["m", "year", "quarter", "n_banks", "n_banks4", "sd_spread_pp", "mean_spread", "bal",
             "bal_imputed_share", "S", "bal_cell", "S_cell", "fallback_weight_share",
             "n_banks4_lag", "hhi4_lag", "bal_lag", "sd_rho_fit_pp", "rho_fit_weight_share", "S_tilde",
-            *(f"disp_{c}" for c in COST), "panel_md5"]
+            *(f"disp_{c}" for c in COST), "carried_weight_share", "n_banks4_measured",
+            "sd_spread_measured_pp", "S_measured", "S_tilde_measured", "panel_md5"]
     out = out.rename(columns={"m": "mca_code"})
     cols[0] = "mca_code"
     out[cols].sort_values(["mca_code", "year", "quarter"]).to_csv(OUT / "p3_stakes_mca_quarter.csv", index=False)
@@ -512,14 +553,20 @@ def p3(df, got):
     # Diagnostic: S on S~, MCA and quarter effects, MCA clusters (levels and logs); and the
     # dispersion alone (log sd on log sd~), since S and S~ share the mean balance.
     # The last spec adds the lagged market structure (log HHI of type-4 balances, log number of
-    # banks) as controls: what the cost shifters add beyond it.
+    # banks) as controls: what the cost shifters add beyond it. The measured-rate variant repeats
+    # the last two specs on its own sample.
+    specs = [("level", ("S", "S_tilde", lambda v: v, False)), ("log", ("S", "S_tilde", np.log, False)),
+             ("sd_only_log", ("sd_spread", "sd_rho_fit", np.log, False)),
+             ("sd_only_log_placebo", ("sd_spread", "sd_rho_perm", np.log, False)),
+             ("sd_only_log_ctrl_structure", ("sd_spread", "sd_rho_fit", np.log, True))]
+    if meas:
+        specs += [("measured_sd_only_log", ("sd_spread_measured", "sd_rho_fit_measured", np.log, False)),
+                  ("measured_sd_only_log_ctrl_structure",
+                   ("sd_spread_measured", "sd_rho_fit_measured", np.log, True))]
     diag = {}
-    for lab, (a_, b_, f, ctrl) in (
-            ("level", ("S", "S_tilde", lambda v: v, False)), ("log", ("S", "S_tilde", np.log, False)),
-            ("sd_only_log", ("sd_spread", "sd_rho_fit", np.log, False)),
-            ("sd_only_log_placebo", ("sd_spread", "sd_rho_perm", np.log, False)),
-            ("sd_only_log_ctrl_structure", ("sd_spread", "sd_rho_fit", np.log, True))):
-        d = out[(out[a_] > 0) & (out[b_] > 0) & (out["S"] > 0) & (out["S_tilde"] > 0)]
+    for lab, (a_, b_, f, ctrl) in specs:
+        pair = ("S_measured", "S_tilde_measured") if lab.startswith("measured") else ("S", "S_tilde")
+        d = out[(out[a_] > 0) & (out[b_] > 0) & (out[pair[0]] > 0) & (out[pair[1]] > 0)]
         y, z = f(d[a_].to_numpy()), f(d[b_].to_numpy())
         cols_ = [y, z] + ([np.log(d["hhi4_lag"].to_numpy()), np.log(d["n_banks4_lag"].to_numpy())]
                           if ctrl else [])
@@ -555,6 +602,28 @@ def p3(df, got):
           f"{diag['sd_only_log']['f']:.2f} (log sd on log sd~), "
           f"{diag['sd_only_log_placebo']['f']:.2f} (placebo, rho~ shuffled), "
           f"{diag['sd_only_log_ctrl_structure']['f']:.2f} (controlling for HHI and n banks at t-1)")
+    if not meas:
+        stats["measured"] = "panel has no rate_a4_carried: variant not built"
+        stamp("P3: no rate_a4_carried in this panel; the measured-rate columns are empty")
+        return stats
+    okm = out[out["S_measured"].notna()]
+    w4 = c4[(c4["qi"] >= qi(*T0)) & (c4["qi"] <= qi(*T1))]
+    by_src = (w4.groupby(w4["rate_a4_src"].fillna("missing"))["dep4"].sum() / w4["dep4"].sum()
+              if "rate_a4_src" in w4 else pd.Series(dtype=float))
+    stats["measured"] = dict(
+        n_mq_S_measured=int(len(okm)), S_measured_quantiles=q(okm["S_measured"]),
+        carried_weight_share_mean=float(ok["carried_weight_share"].mean()),
+        mq_with_carried_weight=int((ok["carried_weight_share"] > 0).sum()),
+        type4_weight_by_src={str(k): float(v) for k, v in by_src.items()},
+        corr_log_S_S_measured=float(np.corrcoef(
+            np.log(okm.loc[(okm["S"] > 0) & (okm["S_measured"] > 0), "S"]),
+            np.log(okm.loc[(okm["S"] > 0) & (okm["S_measured"] > 0), "S_measured"]))[0, 1]))
+    stamp(f"P3 measured: {len(okm):,} market-quarters with S_measured; carried weight share mean "
+          f"{stats['measured']['carried_weight_share_mean']:.4f}; measured cost fit joint F "
+          f"{fitstats['measured']['joint_f']:.2f} ({fitstats['measured']['n_carried_dropped']} "
+          f"carried bank-quarters dropped); log sd on log sd~ F "
+          f"{diag['measured_sd_only_log']['f']:.2f}, "
+          f"{diag['measured_sd_only_log_ctrl_structure']['f']:.2f} with structure")
     return stats
 
 
@@ -566,6 +635,8 @@ def main():
     if not tasks or set(tasks) - set(COLS):
         raise SystemExit(f"--only takes a comma list of {sorted(COLS)}")
     cols = list(dict.fromkeys(c for t in tasks for c in COLS[t]))
+    have = set(pq.read_schema(PANEL).names)
+    cols += [c for t in tasks for c in OPTIONAL.get(t, []) if c in have and c not in cols]
     df, got = load_panel(cols)
     prev = json.loads(JSON.read_text(encoding="utf-8")) if JSON.exists() else {}
     if "p1" in tasks:

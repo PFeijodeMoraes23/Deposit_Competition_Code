@@ -26,7 +26,17 @@
 #   4. Apply, over the ORDINARY time-deposit stock (4.1.5 minus judicial deposits):
 #        pre-2025: rate_a4 = k_shrunk * strip / lag(ordinary stock)
 #        2025+   : rate_a4 = |8113000009| / lag(ordinary stock)        (direct leaf)
-#      A failed rate (strip or leaf <= 0, above RATE_Q_CAP) stays missing with rate_flag.
+#      A failed rate (strip or leaf <= 0, above RATE_Q_CAP) stays missing with rate_flag.  A bank
+#      whose strip has a component rescaled to a statement (benchmarked) keeps each semester's
+#      total and spreads it over the two quarters in proportion to CDI x lagged ordinary stock.
+#   5. Statement banks (statement_cdb_expense): before 2025, a year (or semester) whose statement
+#      prints a time-deposit line takes it as its CDB expense.  A bank that also prints a 2025 line
+#      takes lambda_i x the line net of its judicial cost, lambda_i = Cosif 8113 over the 2025 line
+#      so netted (td_lambda); a bank without one takes the line net of the scope items it
+#      includes, where the scope is resolved.  Items a note prints inside the line are netted
+#      first (DFP_NET, DFP_INLINE).  The expense is spread over the period's quarters in
+#      proportion to CDI x lagged ordinary stock, so rate/CDI is constant within the period, and
+#      k does not enter.  The other bank-years keep step 4.
 #
 # Inputs  : custos_implicitos_v2_foundation.csv      (panel_cosif_extract.py, step 12; BANCOS
 #             members, and the SCFI members used only where a conglomerate has no bank)
@@ -36,11 +46,17 @@
 #           IF-Data List  (CNPJ<->conglomerate merge_asof crosswalk, utils.conglomerates,
 #             keyed as deposits_panel.csv files each CNPJ; and the segment Sr per conglomerate)
 #           Rout/judicial_deposits_share.csv  (utils.judicial_deposits)
-#           DATA_RAW/issuers/funding_expense/compiled/dfp_funding_expense*.csv  (statements)
+#           DATA_RAW/issuers/funding_expense/compiled/  (statements: dfp_funding_expense.csv and
+#             dfp_funding_expense_bb.csv; time_deposit_scope*.csv, what each time-deposit line
+#             includes; subordinated_in_lump.csv)
 # Output  : COSIF_PROCESSED/cosif_cdb_rate_corrected.csv
 #             columns: CodConglomeradoPrudencial, AnoMes, rate_a4_corrected_qoq,
 #                      rate_a4_corrected_ann, tier, rate_flag (0 measured, 2 strip or leaf
-#                      <= 0, 3 above RATE_Q_CAP), rate_a4_vintage_src (statement or none)
+#                      <= 0, 3 above RATE_Q_CAP or marked failed in RATE_FAIL, 4 a
+#                      benchmarked rate outside BENCH_RANGE x CDI),
+#                      rate_a4_vintage_src (statement or none),
+#                      rate_a4_src (statement: the time-deposit line; benchmarked: strip x k with
+#                      a component rescaled to a statement; imputed: strip x k; leaf: 2025+)
 #
 # NOTE: rate_a4_corrected_qoq is a fraction (e.g. 0.025 = 2.5% per quarter), the scale
 # panel_deposit_rates.py uses internally.
@@ -273,6 +289,65 @@ DFP_BILLS_PARTS = ["bills_lca", "bills_lci", "bills_lf", "bills_other"]
 # without this cost in 2016-2021 and with it from 2022).
 DFP_SUB_LINES = {"subordinated": ["subordinated", "hybrid"]}
 SUB_IN_LUMP_DEFAULT = 2022
+# Pedro's rules on the statement lines (2026-11-03, 21:50; 2026-11-04, N2).  Left out: BB's
+# savings line in 2018-19 (it exceeds any lawful remuneration of the stock, so it is not pure
+# savings cost; BB's savings cost stays at the official yield in those years); Banrisul's 2023
+# judicial line (inferred, not printed); Santander's 2024 time-deposit, repo and bills lines,
+# which carry R$42.2 bn of exchange-rate effects the note does not split by line.  Also left out,
+# from the BB agent's B8 notes, rows that are part of another line or outside the lump, so that
+# no strip component counts them: Caixa's subordinated rows (inside bills_lf, 2020-24) and its
+# IHCD (hybrid; outside Cosif 8.1.1 in every year), and Santander's subordinated rows (interest on
+# capital instruments, inside its time-deposit line, which DFP_INLINE nets them from).
+DFP_EXCLUDE = [  # (cnpj, lines, years; None = every year)
+    ("00000000", ["savings"], [2018, 2019]),
+    ("92702067", ["judicial"], [2023]),
+    ("90400888", ["time_deposits", "repo", "bills_total"] + DFP_BILLS_PARTS, [2024]),
+    ("00360305", ["subordinated", "hybrid"], None),
+    ("90400888", ["subordinated"], None),
+]
+# Netted: the exchange-rate variation Santander's notes print inside a line.  Its 2020 bills line
+# (footnote 3), and its time-deposit line every year (footnote 2; N5, Pedro 2026-11-04): an expense
+# except 2016; 2019 as DFP 2020 labels it, where DFP 2019 calls the same amount an income.  The
+# 2025 footnote (an income of R$478,899 thousand) is shared with repo and bills and not split, so
+# the 2025 line keeps it.
+DFP_NET = [  # (cnpj, line, year, R$ taken out of the printed value; negative: an income added back)
+    ("90400888", "bills_total", 2020, 22_189_857_000),
+    ("90400888", "time_deposits", 2016, -2_416_234_000),  # DFP 2017 p104, the 2016 comparative
+    ("90400888", "time_deposits", 2017, 494_178_000),     # DFP 2017 p104
+    ("90400888", "time_deposits", 2018, 2_514_803_000),   # DFP 2018 p101
+    ("90400888", "time_deposits", 2019, 1_207_360_000),   # DFP 2020 p105 (DFP 2019 p94: income)
+    ("90400888", "time_deposits", 2020, 9_586_000),       # DFP 2020 p105
+    ("90400888", "time_deposits", 2021, 1_528_068_000),   # DFP 2021 p89
+    ("90400888", "time_deposits", 2022, 5_414_167_000),   # DFP 2022 p82
+    ("90400888", "time_deposits", 2023, 6_460_243_000),   # DFP 2023 p77
+]
+# Rows that sit inside another line of the same bank, year and period, netted from it: footnote
+# (1) to Santander's 'Depósitos a Prazo', the interest on its capital instruments (the external
+# rows 2016-23, the subordinated rows 2024-25; N5).
+DFP_INLINE = [("90400888", "time_deposits", ["external", "subordinated"])]
+# What each statement's time-deposit line includes beyond ordinary domestic CDBs (D10): the BB
+# agent's file for the eight banks, the coding thread's for BB.
+TD_SCOPE_FILES = ["time_deposit_scope.csv", "time_deposit_scope_bb.csv"]
+# The scope items netted out of a time-deposit line, with the cost each is netted at.  For a bank
+# without a lambda_i, a line that includes any other item (special or foreign-currency deposits,
+# interest on capital instruments, exchange-rate effects), or leaves one undetermined, is not used.
+TD_NETTED = {"judicial": "exp_judicial_used"}
+# The year whose Cosif CDB leaf measures lambda_i, the CDB share of a bank's time-deposit line (N1,
+# Pedro 2026-11-04).
+TD_LAMBDA_YEAR = 2025
+# Scope items read as not included: inside the line, negligible, and with no expense line of their
+# own.  BRB's special deposits ('Obrigações para depósitos específicos e de fundos e programas',
+# then consignment deposits) are R$3-8 m against a time-deposit class of R$7-34 bn
+# (brb_deposit_balances.csv).
+TD_NEGLIGIBLE = [("00000208", "special")]
+# Bank-years whose pre-2025 rate is marked failed (rate_flag 3) and left to panel_deposit_rates'
+# carry (N3, Pedro 2026-11-04): Santander 2024, whose lump carries exchange-rate effects the note
+# does not split by line.
+RATE_FAIL = [("90400888", [2024])]
+# The rate/CDI range a benchmarked pre-2025 rate must lie in to count as measured (I14, Pedro
+# 2026-11-04): outside it the rate is marked failed (rate_flag 4) and panel_deposit_rates carries
+# it.  Itau's semesters at 2-3.6 x CDI (2016, 2018, 2020) are the case.
+BENCH_RANGE = (0.5, 1.5)
 
 
 def load_sub_in_lump():
@@ -293,6 +368,31 @@ def _cnpj_to_code():
     jmap = pd.read_csv(judicial_deposits.JUDICIAL_CSV, dtype={"CodConglomeradoPrudencial": str})
     return (jmap.assign(cnpj=jmap["cnpj"].astype(int))
                 .drop_duplicates("cnpj").set_index("cnpj")["CodConglomeradoPrudencial"])
+
+
+def _apply_statement_rules(d):
+    """DFP_NET, DFP_INLINE and DFP_EXCLUDE on the transcribed lines (columns as read, with
+    period), before any line is used.  The netting reads every row, the excluded ones included."""
+    cnpj = d["cnpj"].astype(int)
+    drop = pd.Series(False, index=d.index)
+    for c, lines, years in DFP_EXCLUDE:
+        m = (cnpj == int(c)) & d["line"].isin(lines)
+        drop |= m & d["year"].isin(years) if years is not None else m
+    d = d.copy()
+    for c, line, year, amount in DFP_NET:
+        m = (cnpj == int(c)) & (d["line"] == line) & (d["year"] == year)
+        d.loc[m, "value_brl"] = d.loc[m, "value_brl"] - amount
+    for c, line, inner in DFP_INLINE:
+        part = d[(cnpj == int(c)) & d["line"].isin(inner)].groupby(["year", "period"])["value_brl"].sum()
+        m = (cnpj == int(c)) & (d["line"] == line)
+        take = part.reindex(pd.MultiIndex.from_frame(d.loc[m, ["year", "period"]])).fillna(0).to_numpy()
+        d.loc[m, "value_brl"] = d.loc[m, "value_brl"] - take
+        log.info("Netted from %s's %s: %s (DFP_INLINE), R$ bn by year %s", c, line, inner,
+                 {int(y): round(v / 1e9, 3) for (y, _), v in part.items()})
+    if drop.any():
+        log.info("Statement lines left out (DFP_EXCLUDE): %s",
+                 d[drop].groupby(["bank", "line"])["year"].apply(lambda y: sorted(set(y))).to_dict())
+    return d[~drop]
 
 
 def load_dfp_benchmarks(component_lines=None):
@@ -317,7 +417,7 @@ def load_dfp_benchmarks(component_lines=None):
     unmapped = sorted(d.loc[d["CodConglomeradoPrudencial"].isna(), "bank"].unique())
     if unmapped:
         log.warning("Statement benchmarks: no conglomerate for %s (dropped)", unmapped)
-    d = d.dropna(subset=["CodConglomeradoPrudencial"])
+    d = _apply_statement_rules(d.dropna(subset=["CodConglomeradoPrudencial"]))
     # bills: bills_total where the note gives it, else the sum of its parts
     parts = (d[d["line"].isin(DFP_BILLS_PARTS)]
              .groupby(["CodConglomeradoPrudencial", "year", "period"], as_index=False)["value_brl"].sum()
@@ -346,6 +446,13 @@ def load_dfp_benchmarks(component_lines=None):
     return b
 
 
+def _period_keys(congl):
+    """Conglomerate, year and semester (H1, H2) of each row: the keys a statement period matches."""
+    month = congl["AnoMes"] % 100
+    return pd.DataFrame({"CodConglomeradoPrudencial": congl["CodConglomeradoPrudencial"].astype(str),
+                         "year": congl["year"], "H": np.where(month <= 6, "H1", "H2")}, index=congl.index)
+
+
 def strip_components(congl):
     """The imputed costs the strip removes from the lump, per conglomerate-quarter (R$), at the
     bank's shrunk ratios: repo at ratio x CDI x lagged stock, bills at ratio x CDI x lagged
@@ -355,7 +462,8 @@ def strip_components(congl):
     judicial cost exp_judicial_used.  Where the bank's statements give a component's total for a
     year or semester, the component is rescaled to that total over the period's quarters (the
     statements fix the level, the imputation the quarterly shape); an observed 2025+ judicial
-    leaf is kept as it is.  rate_a4_vintage_src records how the savings cost was obtained."""
+    leaf is kept as it is.  rate_a4_vintage_src records how the savings cost was obtained, and
+    strip_benchmarked marks the rows where any component comes from a statement."""
     cdi = congl["cdi_qoq"]
     sub_leaf = congl["exp_sub"].abs() if "exp_sub" in congl.columns else pd.Series(np.nan, index=congl.index)
     comp = pd.DataFrame({
@@ -369,10 +477,9 @@ def strip_components(congl):
     }, index=congl.index)
 
     bench = load_dfp_benchmarks()
-    month = congl["AnoMes"] % 100
-    keyframe = pd.DataFrame({"CodConglomeradoPrudencial": congl["CodConglomeradoPrudencial"].astype(str),
-                             "year": congl["year"], "H": np.where(month <= 6, "H1", "H2")}, index=congl.index)
+    keyframe = _period_keys(congl)
     vintage = pd.Series("none", index=congl.index)
+    benchmarked = pd.Series(False, index=congl.index)
     observed_jud = (congl["year"] >= 2025) & congl.get("exp_judicial", pd.Series(np.nan, index=congl.index)).notna()
     for c in DFP_COMPONENT_LINES:
         bc = bench[bench["component"] == c]
@@ -397,6 +504,7 @@ def strip_components(congl):
             nq = comp.loc[idx, c].groupby(grp).transform("size")
             use = (tot > 0) & (nq == n_q)
             comp.loc[idx[use], c] = comp.loc[idx[use], c] * target[idx[use]] / tot[use]
+            benchmarked.loc[idx[use]] = True
             if c == "savings":
                 vintage.loc[idx[use]] = "statement"
     congl["rate_a4_vintage_src"] = vintage
@@ -431,6 +539,8 @@ def strip_components(congl):
             nq = w.groupby(grp).transform("size")
             use = (wsum > 0) & (nq == n_q)
             comp.loc[idx[use], "subordinated"] = target[idx[use]] * w[use] / wsum[use]
+            benchmarked.loc[idx[use]] = True
+    congl["strip_benchmarked"] = benchmarked
     return comp
 
 
@@ -459,6 +569,185 @@ def strip_k(post, eligible):
         strip_x = (cdbq["strip"] / cdbq["cdi_qoq"]).sum()
         k[code] = true_x / strip_x if (np.isfinite(strip_x) and strip_x > 0) else np.nan
     return pd.Series(k, name="k_i", dtype=float)
+
+
+def load_td_scope():
+    """What each statement's time-deposit line includes beyond ordinary domestic CDBs, per
+    conglomerate and year, from compiled/time_deposit_scope*.csv (cnpj, year_from, year_to,
+    includes_judicial, includes_special, includes_foreign, page, note; any further includes_<item>
+    column is read the same way; an empty year_to runs to the current year).  true/false, yes/no
+    or 1/0; anything else is undetermined (NaN).  A frame indexed by (CodConglomeradoPrudencial,
+    year), one column per item, or None when no scope file exists.  A year that two rows of a bank
+    cover stops the step.  The TD_NEGLIGIBLE items are read as not included."""
+    files = [f for f in (os.path.join(DFP_FUNDING_DIR, n) for n in TD_SCOPE_FILES) if os.path.exists(f)]
+    if not files:
+        return None
+    s = pd.concat([pd.read_csv(f, dtype={"cnpj": str}) for f in files], ignore_index=True)
+    items = [c for c in s.columns if c.startswith("includes_")]
+    truth = {"true": True, "yes": True, "y": True, "1": True, "1.0": True,
+             "false": False, "no": False, "n": False, "0": False, "0.0": False}
+    s["CodConglomeradoPrudencial"] = s["cnpj"].astype(int).map(_cnpj_to_code())
+    rows = []
+    for r in s.dropna(subset=["CodConglomeradoPrudencial"]).to_dict("records"):
+        last = int(r["year_to"]) if pd.notna(r["year_to"]) else pd.Timestamp.today().year
+        for y in range(int(r["year_from"]), last + 1):
+            rows.append({"CodConglomeradoPrudencial": r["CodConglomeradoPrudencial"], "year": y,
+                         **{c[len("includes_"):]: truth.get(str(r[c]).strip().lower(), np.nan) for c in items}})
+    sc = pd.DataFrame(rows)
+    dup = sc.duplicated(["CodConglomeradoPrudencial", "year"], keep=False)
+    if dup.any():
+        raise ValueError("time_deposit_scope: a year is covered twice for "
+                         f"{sc.loc[dup, ['CodConglomeradoPrudencial', 'year']].drop_duplicates().head(10).to_dict('records')}")
+    for c, item in TD_NEGLIGIBLE:
+        m = sc["CodConglomeradoPrudencial"].eq(_cnpj_to_code().get(int(c))) & sc[item].eq(True)
+        if m.any():
+            sc.loc[m, item] = False
+            log.info("Time-deposit scope: %s's %s read as not included (negligible, no expense line) in %s",
+                     c, item, sorted(sc.loc[m, "year"]))
+    log.info("Time-deposit scope: %d conglomerates, %d bank-years, items %s, from %s",
+             sc["CodConglomeradoPrudencial"].nunique(), len(sc), [c[len("includes_"):] for c in items],
+             [os.path.basename(f) for f in files])
+    return sc.set_index(["CodConglomeradoPrudencial", "year"])
+
+
+def _netted_cost(congl, scope, rows):
+    """The cost of the TD_NETTED items the scope includes, per row of `rows` (the quarters' keys:
+    CodConglomeradoPrudencial, year); 0 where the scope excludes an item, leaves it undetermined
+    or has no row."""
+    sc = scope.reindex(pd.MultiIndex.from_frame(rows[["CodConglomeradoPrudencial", "year"]]))
+    sc.index = rows.index
+    net = pd.Series(0.0, index=rows.index)
+    for item, col in TD_NETTED.items():
+        if item in sc.columns:
+            net += congl.loc[rows.index, col].fillna(0) * sc[item].eq(True)
+    return net, sc
+
+
+def td_lambda(congl, td, scope):
+    """N1 (Pedro, 2026-11-04): lambda_i, the share of a bank's statement time-deposit line that is
+    domestic CDB expense, for each bank whose statements print a TD_LAMBDA_YEAR line: sum |8113|
+    over that year's four quarters over the year's line net of the judicial cost where the scope
+    includes judicial deposits.  Items a note prints inside the line are netted before
+    (DFP_NET, DFP_INLINE); those it does not print (special and foreign deposits) leave through
+    lambda_i at their TD_LAMBDA_YEAR share.  A share that moves is the method's limit, measured on
+    BB, whose special and foreign deposits can be imputed item by item: 2018-19, when their share
+    was larger, sit +0.14 and +0.17 x CDI above that imputation.  A Series indexed by
+    conglomerate."""
+    y = TD_LAMBDA_YEAR
+    line = td[td["year"] == y].groupby("CodConglomeradoPrudencial")["value"].sum()
+    g = congl[(congl["year"] == y) & congl["CodConglomeradoPrudencial"].astype(str).isin(line.index)]
+    keys = _period_keys(g)
+    net, _ = _netted_cost(g, scope, keys)
+    by = keys["CodConglomeradoPrudencial"]
+    leaf = g["exp_cdb"].abs().groupby(by).sum(min_count=1)
+    n_leaf = g["exp_cdb"].notna().groupby(by).sum()
+    base = line - net.groupby(by).sum().reindex(line.index).fillna(0)
+    lam = (leaf.reindex(line.index) / base).where(n_leaf.reindex(line.index).eq(4) & (base > 0))
+    if lam.isna().any():
+        log.warning("lambda_i: no value for %s (fewer than four %d quarters with the CDB leaf, or a "
+                    "line net of judicial <= 0); their lines follow the scope rule", sorted(lam.index[lam.isna()]), y)
+    lam = lam.dropna()
+    log.info("lambda_i (Cosif 8113 over the %d time-deposit line net of judicial): %s.  It holds the line's "
+             "non-CDB share at its %d value; measured limit: BB 2018-19 at +0.14 and +0.17 x CDI against "
+             "the item-by-item imputation of its special and foreign deposits", y,
+             {c: round(v, 3) for c, v in lam.items()}, y)
+    return lam
+
+
+def statement_cdb_expense(congl):
+    """D10 and N1 (Pedro, 2026-11-03 and 11-04): before 2025, a statement bank's CDB expense for a
+    period (FY, or H1 and H2 where the note prints the second semester) comes from its
+    time-deposit line.  A bank with a lambda_i (td_lambda) takes lambda_i x (the line - the cost
+    of the TD_NETTED items its scope includes).  A bank without one takes the line net of that
+    cost where its scope row (load_td_scope) has every item determined, with none included beyond
+    those in TD_NETTED.  Used where every quarter of the period is present and the expense is
+    positive.  It is spread over the quarters in proportion to CDI x lagged ordinary stock (N4,
+    Pedro 2026-11-04), so the rate is a constant multiple of the CDI within the period: the
+    statement fixes the period's level, and the strip's quarterly profile carries the lump's noise
+    (exchange-rate effects, accrual timing).  Returns the quarterly expense (R$), NaN where no line
+    is used, and logs the bank-years on this shape and why each statement period with a line is
+    not used."""
+    out = pd.Series(np.nan, index=congl.index)
+    td = load_dfp_benchmarks({"time_deposits": ["time_deposits"]})
+    if td.empty:
+        return out
+    scope = load_td_scope()
+    if scope is None:
+        log.warning("No time-deposit scope file in %s: no statement time-deposit line is used.", DFP_FUNDING_DIR)
+        return out
+    lam = td_lambda(congl, td, scope)
+    keyframe = _period_keys(congl)
+    shape = (congl["cdi_qoq"] * congl["stk_time_ord_lag"]).fillna(0)
+    status = []
+    for period, n_q in (("H1", 2), ("H2", 2), ("FY", 4)):
+        bp = td[td["period"] == period].set_index(["CodConglomeradoPrudencial", "year"])["value"]
+        if bp.empty:
+            continue
+        in_p = keyframe["H"].eq(period) if period != "FY" else pd.Series(True, index=congl.index)
+        k = keyframe[in_p & (keyframe["year"] < 2025)]
+        key = pd.MultiIndex.from_frame(k[["CodConglomeradoPrudencial", "year"]])
+        target = pd.Series(bp.reindex(key).to_numpy(), index=k.index).dropna()
+        if target.empty:
+            continue
+        k = k.loc[target.index]
+        grp = [k["CodConglomeradoPrudencial"], k["year"]]
+        net, sc = _netted_cost(congl, scope, k)
+        lam_k = k["CodConglomeradoPrudencial"].map(lam)
+        scoped = lam_k.isna()
+        has_row = sc.notna().any(axis=1)
+        determined = sc.notna().all(axis=1)
+        others = [c for c in sc.columns if c not in TD_NETTED]
+        inc = sc[others].eq(True)
+        other_in = inc.any(axis=1)
+        inc_label = (inc.apply(lambda r: "includes " + "+".join(c for c in others if r[c]), axis=1)
+                     if others else pd.Series("", index=k.index))
+        expense = (target - net.groupby(grp).transform("sum")) * lam_k.fillna(1.0)
+        w = shape.loc[k.index]
+        wsum = w.groupby(grp).transform("sum")
+        nq = target.groupby(grp).transform("size")
+        why = np.select([scoped & ~has_row, scoped & ~determined, scoped & other_in, nq != n_q,
+                         expense <= 0, wsum <= 0],
+                        ["no scope row", "scope undetermined", inc_label.to_numpy(dtype=object),
+                         "incomplete period", "net expense <= 0", "no shape"], "used")
+        use = why == "used"
+        out.loc[k.index[use]] = (expense * w / wsum)[use]
+        status.append(pd.DataFrame({"code": k["CodConglomeradoPrudencial"], "year": k["year"],
+                                    "period": period, "why": why,
+                                    "rule": np.where(scoped, "scope", "lambda")}).drop_duplicates())
+    if status:
+        st = pd.concat(status, ignore_index=True)
+        used = st[st["why"] == "used"]
+        log.info("Statement time-deposit lines: %d bank-periods used of %d with a line (lambda %d, scope %d)",
+                 len(used), len(st), int((used["rule"] == "lambda").sum()), int((used["rule"] == "scope").sum()))
+        log.info("Shape: CDI x lagged ordinary stock for the statement bank-years %s; every other "
+                 "pre-2025 bank-year is strip x k", used.groupby("code")["year"].apply(lambda y: sorted(set(y))).to_dict())
+        for (why, code), g in st[st["why"] != "used"].groupby(["why", "code"]):
+            log.info("  not used (%s): %s %s", why, code, sorted(set(g["year"])))
+    return out
+
+
+def benchmarked_semester_shape(congl, pre):
+    """I12 (Pedro, 2026-11-04): before 2025, a benchmarked bank's CDB expense (strip x k with a
+    component rescaled to a statement) keeps each semester's total and is spread over its two
+    quarters in proportion to CDI x lagged ordinary stock, as a statement period is (N4): at these
+    banks the strip's quarterly profile follows the semester accounts' uneven booking, not
+    pricing (Itau 2016-2020).  Applied where both quarters of the semester are benchmarked, with
+    an expense, a positive total and a positive shape; elsewhere `pre` is returned unchanged."""
+    keys = _period_keys(congl)
+    m = (congl["rate_a4_src"] == "benchmarked") & (congl["year"] < 2025) & pre.notna()
+    k = keys[m]
+    grp = [k["CodConglomeradoPrudencial"], k["year"], k["H"]]
+    w = congl.loc[m, "cdi_qoq"] * congl.loc[m, "stk_time_ord_lag"]
+    tot = pre[m].groupby(grp).transform("sum")
+    wsum = w.groupby(grp).transform("sum")
+    whole = (pre[m].groupby(grp).transform("size") == 2) & w.notna().groupby(grp).transform("all")
+    use = whole & (tot > 0) & (wsum > 0)
+    out = pre.copy()
+    out.loc[use.index[use]] = (tot * w / wsum)[use]
+    log.info("Benchmarked semesters on the CDI x stock shape: %s",
+             (k[use].drop_duplicates(["CodConglomeradoPrudencial", "year", "H"])
+              .groupby("CodConglomeradoPrudencial").size().to_dict()))
+    return out
 
 
 def build_corrected():
@@ -519,6 +808,7 @@ def build_corrected():
     # ---- the strip, with the judicial cost and the statement benchmarks ----
     congl = judicial_expense(congl, seg_map)
     congl["strip"] = strip_cdb_expense(congl)
+    congl["stmt_cdb"] = statement_cdb_expense(congl)
     post = congl[congl["year"] >= 2025]
 
     # k is measured on the strip it is applied to (strip_k), then shrunk like the ratios
@@ -553,26 +843,45 @@ def build_corrected():
     congl = congl.merge(all_codes[["CodConglomeradoPrudencial", "k_shrunk", "tier"]],
                         on="CodConglomeradoPrudencial", how="left")
 
-    # ---- apply: pre-2025 strip*k ; 2025+ direct leaf; both over the ORDINARY stock ----
+    # ---- apply: pre-2025 the statement line (D10) or strip*k; 2025+ direct leaf; all over the
+    #      ORDINARY stock ----
     # A row is attempted where the lagged ordinary stock is positive and the expense exists; the
     # rows that are not attempted are absent from the output, so panel_deposit_rates falls back
     # to its residual for them.  An attempted rate that fails is kept as missing with rate_flag
-    # (2: strip or leaf <= 0; 3: above RATE_Q_CAP), and panel_deposit_rates does not replace it.
+    # (2: strip or leaf <= 0; 3: above RATE_Q_CAP, or a bank-year in RATE_FAIL; 4: a benchmarked
+    # rate outside BENCH_RANGE x CDI), and panel_deposit_rates does not replace it.
     is_post = congl["year"] >= 2025
     den = congl["stk_time_ord_lag"]
-    num = np.where(is_post, congl["exp_cdb"].abs(), congl["strip"] * congl["k_shrunk"])
-    num = pd.Series(num, index=congl.index)
+    congl["rate_a4_src"] = np.select([is_post, congl["stmt_cdb"].notna(), congl["strip_benchmarked"]],
+                                     ["leaf", "statement", "benchmarked"], "imputed")
+    pre = congl["stmt_cdb"].where(congl["stmt_cdb"].notna(), congl["strip"] * congl["k_shrunk"])
+    pre = benchmarked_semester_shape(congl, pre)
+    num = pd.Series(np.where(is_post, congl["exp_cdb"].abs(), pre), index=congl.index)
     attempted = (den > 0) & num.notna() & np.where(is_post, congl["exp_cdb"].notna(), congl["exp_lump"].notna())
     rate = num / den
     congl["rate_flag"] = 0
     congl.loc[attempted & (num <= 0), "rate_flag"] = 2
     congl.loc[attempted & (num > 0) & (~np.isfinite(rate) | (rate > RATE_Q_CAP)), "rate_flag"] = 3
+    fail = pd.Series(False, index=congl.index)
+    for c, years in RATE_FAIL:
+        fail |= congl["CodConglomeradoPrudencial"].eq(_cnpj_to_code().get(int(c))) & congl["year"].isin(years)
+    congl.loc[attempted & fail & ~is_post, "rate_flag"] = 3
+    log.info("Marked failed (RATE_FAIL): %d conglomerate-quarters", int((attempted & fail & ~is_post).sum()))
+    bench_out = (attempted & ~is_post & (congl["rate_a4_src"] == "benchmarked") & (congl["rate_flag"] == 0)
+                 & ~(rate / congl["cdi_qoq"]).between(*BENCH_RANGE))
+    congl.loc[bench_out, "rate_flag"] = 4
+    log.info("Benchmarked rates outside %s x CDI (rate_flag 4): %s", BENCH_RANGE,
+             {c: sorted(f"{a // 100}Q{(a % 100) // 3}" for a in g)
+              for c, g in congl.loc[bench_out].groupby("CodConglomeradoPrudencial")["AnoMes"]})
     congl["rate_a4_corrected_qoq"] = rate.where(congl["rate_flag"] == 0)
     congl["rate_a4_corrected_ann"] = annualize(congl["rate_a4_corrected_qoq"])
     out = congl.loc[attempted, ["CodConglomeradoPrudencial", "AnoMes", "rate_a4_corrected_qoq",
-                                "rate_a4_corrected_ann", "tier", "rate_flag", "rate_a4_vintage_src"]].copy()
-    log.info("Corrected rate: %d attempted conglomerate-quarters; strip or leaf <= 0: %d; above cap: %d",
-             len(out), int((out["rate_flag"] == 2).sum()), int((out["rate_flag"] == 3).sum()))
+                                "rate_a4_corrected_ann", "tier", "rate_flag", "rate_a4_vintage_src",
+                                "rate_a4_src"]].copy()
+    log.info("Corrected rate: %d attempted conglomerate-quarters; strip or leaf <= 0: %d; above cap: %d; "
+             "benchmarked out of range: %d; source %s", len(out), int((out["rate_flag"] == 2).sum()),
+             int((out["rate_flag"] == 3).sum()), int((out["rate_flag"] == 4).sum()),
+             out["rate_a4_src"].value_counts().to_dict())
     return out, pb
 
 

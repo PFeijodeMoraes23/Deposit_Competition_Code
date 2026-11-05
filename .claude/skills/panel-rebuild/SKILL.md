@@ -147,7 +147,8 @@ Run these before any estimation. Each exists because the failure it catches was 
    `market_panel_with_fees.csv` directly, on purpose.
 4. By hand, against the "before" numbers: shape and totals; the instrument columns are present
    (`loo_log_assets`, `mean_loo_log_assets`, `loo_equity_ratio`, `loo_basileia`,
-   `rival_mean_spread`, `estban_rival_branches_lag`); the Basel ratio columns
+   `estban_rival_branches_lag`, and the rival spread, stored wide as `rival_mean_spread_a1/_a2/_a4/_a5`;
+   the sleep frame reshapes it to `rival_mean_spread`); the Basel ratio columns
    (`indice_basileia*`) lie in [-1, 2], the validity bound applied before the 1/99 winsorization
    within firm type.
 5. The sidecar: every writer of `market_panel.csv` refreshes `market_panel.parquet` and logs
@@ -166,6 +167,13 @@ Run these before any estimation. Each exists because the failure it catches was 
 - A date gap between two panel files proves nothing. To claim the data changed, re-estimate or
   diff the values.
 - Large percentage swings in a near-zero mean (a spread of 0.0001) are noise.
+- After a full stage-4 run, `cluster_upload.py`'s pre-flight flags `demographics_sigma` STALE:
+  step 21 runs in the wave with step 20, and steps 36 and 37 rewrite `market_panel.csv` after it.
+  Its content reads only demographics and the market set, so rerunning
+  `panel_demographics_sigma.py` alone gives a byte-identical file with a fresh date (2026-11-04).
+- `panel_demand_chars.py --check` T1 compares `deposits_panel.csv`'s `dep_a4` with raw ESTBAN.
+  Since I9 (judicial deposits out of `dep_a4`, from 2015Q4) it fails in 2015-12 and 2016-03 on
+  `dep_a4` alone; against `dep_a4_incl_judicial` the identity is exact (2026-11-04).
 
 ## What a rebuild leaves stale
 
