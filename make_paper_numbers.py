@@ -2492,14 +2492,261 @@ def collect_k2_world(notes: list):
     if "stay_at_own_bank" not in pf or "outside_pool" not in ec:
         notes.append("k2_numbers.json lacks pool_fate/entry composition; kappa.k2.world absent.")
         return
-    add("kappa.k2.world", "T", "The simulated world on the paper's estimates (K2)",
-        dict(stay_prob=dict(median=float(pf["stay_at_own_bank"])),
-             outside_entry_share=float(ec["outside_pool"])),
+    v = dict(stay_prob=dict(median=float(pf["stay_at_own_bank"])),
+             outside_entry_share=float(ec["outside_pool"]))
+    if "awake_money_share_of_deposits" in pf:
+        v["awake_share"] = float(pf["awake_money_share_of_deposits"])
+    else:
+        notes.append("k2_numbers.json lacks pool_fate_kappa_base.awake_money_share_of_deposits; "
+                     "kappa.k2.world.awake_share absent.")
+    awake_def = pf.get("awake_money_share_of_deposits_definition")
+    add("kappa.k2.world", "T", "The simulated world on the paper's estimates (K2)", v,
         "stay_prob.median: share of awake pool money that re-chooses its own bank, money-weighted "
         "at the base kappa (pool_fate_kappa_base.stay_at_own_bank; the key name says median, the "
         "value is the money-weighted share k2_report.md quotes); outside_entry_share: share of "
-        "simulated entry into the K1 destinations from the outside pool", src, "ok",
-        display=f"stay {fmt3s(pf['stay_at_own_bank'])}, outside entry {fmt3s(ec['outside_pool'])}")
+        "simulated entry into the K1 destinations from the outside pool; awake_share: the "
+        "money-weighted awake share of the movable deposits, sum of (1 - phi_mt) W over sum of W "
+        "(pool_fate_kappa_base.awake_money_share_of_deposits; its full definition in "
+        "detail.awake_share_definition)", src, "ok",
+        detail=dict(awake_share_definition=awake_def) if awake_def else None,
+        display=f"stay {fmt3s(pf['stay_at_own_bank'])}, outside entry {fmt3s(ec['outside_pool'])}"
+                + (f", awake {fmt3s(v['awake_share'])}" if "awake_share" in v else ""))
+
+
+# Step 7 of diag_k2_nls_simulation.py (the paper's random coefficients as the data-generating
+# process, fitted under A1) on the 52ea6495 panel snapshot, written with --out to this folder.
+K2_STEP7_DIR = "k2_step7_52ea6495"
+
+
+def collect_k2_rc(notes: list):
+    """kappa.k2.rc: step 7 of the K2 simulation (Rout/k2_step7_52ea6495/k2_rc.csv and its
+    k2_nls_numbers.json). Per true kappa (k05: 0.5, k10: 1.0), the single-kappa fit on data
+    simulated with the random coefficients (rc) and on the same world's logit data (logit): kappa,
+    its standard error, bias, alpha and convergence (1/0); inflow_ratio: p10, p50, p90 of the
+    random-coefficient awake inflow over the logit one across K1 units."""
+    d7 = _paths.rout_dir() / K2_STEP7_DIR
+    p = d7 / "k2_rc.csv"
+    if not p.is_file():
+        notes.append(f"{K2_STEP7_DIR}/k2_rc.csv not found in Rout; kappa.k2.rc.* entries absent.")
+        return
+    d = pd.read_csv(p)
+    nj = d7 / "k2_nls_numbers.json"
+    meta = json.loads(nj.read_text(encoding="utf-8")) if nj.is_file() else {}
+    if "7" not in [str(s) for s in meta.get("last_run", {}).get("steps", [])]:
+        notes.append(f"{K2_STEP7_DIR}/k2_nls_numbers.json does not record a finished step 7; "
+                     "kappa.k2.rc.* entries absent.")
+        return
+    is_rc = d["dgp"].str.startswith("random coefficients")
+    v, fits = {}, {}
+    for kp, slug in ((0.5, "k05"), (1.0, "k10")):
+        rows = {}
+        for dgp, mask in (("rc", is_rc), ("logit", ~is_rc)):
+            r = d[mask & (d["kappa_true"] == kp)]
+            if len(r) != 1:
+                notes.append(f"k2_rc.csv: {len(r)} {dgp} rows at kappa {kp}; kappa.k2.rc.{slug} absent.")
+                break
+            rows[dgp] = r.iloc[0]
+        else:
+            v[slug] = {dgp: dict(kappa=float(r["kappa"]), se=float(r["se_kappa"]),
+                                 bias=float(r["bias_kappa"]), alpha=float(r["alpha"]),
+                                 converged=int(bool(r["converged"])))
+                       for dgp, r in rows.items()}
+            v[slug]["truth"] = float(kp)
+            v[slug]["inflow_ratio"] = {q: float(rows["rc"][f"rc_over_base_inflow_{q}"])
+                                       for q in ("p10", "p50", "p90")}
+            fits[slug] = rows
+    if not v:
+        return
+    r0 = next(iter(fits.values()))["rc"]
+    v.update(n=int(r0["n"]), markets=int(r0["markets"]), draws=int(meta["rc"]["draws_used"]))
+    add("kappa.k2.rc", "T", "Switching cost under the random-coefficient world, fitted under A1 (K2 "
+        "step 7)", v,
+        "Per true kappa (k05: 0.5; k10: 1.0) in the fe world: the single-kappa (note) fit on net "
+        "flows simulated with the E3 spec-12 random coefficients (rc) and on the same world's logit "
+        "flows (logit, refit): kappa, se (cluster sandwich by conglomerate; the simulation has no "
+        "sampling noise, so it measures misfit), bias = kappa - truth, alpha, converged (1/0; 0 "
+        "when the fit stopped at its iteration limit); inflow_ratio: p10/p50/p90 over K1 units of the "
+        "random-coefficient awake inflow over the logit one; n, markets: the fit's rows and "
+        f"markets; draws: consumers per market. Panel snapshot {meta.get('panel_md5')}, demand "
+        f"frames {str(meta.get('frame_panel_md5', ''))[:8]}, delta {meta.get('delta_source')}",
+        f"Rout/{K2_STEP7_DIR}/k2_rc.csv and k2_nls_numbers.json (diag_k2_nls_simulation.py --steps "
+        f"7, finished {meta['last_run'].get('finished')})", "ok",
+        display=", ".join(f"{s}: rc {fmt3s(x['rc']['kappa'])} ({fmt3s(x['rc']['se'])}), logit "
+                          f"{fmt3s(x['logit']['kappa'])}" for s, x in v.items()
+                          if isinstance(x, dict) and "rc" in x))
+
+
+# Steps 5 and 6 of diag_k2_nls_simulation.py (Appendix C, tab:k2_breaks panels B and C): key
+# codes of the true kappa and of the sorting factor h.
+K2_KAPPA_CODES = {"k00": 0.0, "k05": 0.5, "k10": 1.0, "k20": 2.0}
+K2_H_CODES = {"h10": 1.0, "h09": 0.9, "h07": 0.7, "h05": 0.5}
+
+
+def _lf_md5(p: pathlib.Path) -> str:
+    import hashlib
+    return hashlib.md5(p.read_bytes().replace(b"\r\n", b"\n")).hexdigest()
+
+
+def collect_k2_steps56(notes: list):
+    """kappa.k2.sort (step 5, Rout/k2_sorting.csv) and kappa.k2.outside (step 6,
+    Rout/k2_outside.csv): the savings pair's kappa-tilde, its standard error, the truth and the
+    converged flag per cell, each cell one CSV row of the fe world, pooled weights. Sorting: model
+    split, by true kappa and h, truth = kappa - ln h (kappa_tilde_true). Outside: by true kappa,
+    the outside pool in the estimation (model split) or left out (split_no_outside)."""
+    rout = _paths.rout_dir()
+    ps, po = rout / "k2_sorting.csv", rout / "k2_outside.csv"
+    if not (ps.is_file() and po.is_file()):
+        notes.append("k2_sorting.csv or k2_outside.csv not found in Rout; kappa.k2.sort/outside absent.")
+        return
+
+    def one(d, name, **sel):
+        m = (d["world"] == "fe") & (d["weight"] == "pool")
+        for c, x in sel.items():
+            m &= np.isclose(d[c], x) if isinstance(x, float) else (d[c] == x)
+        r = d[m]
+        if len(r) != 1:
+            notes.append(f"{name}: {len(r)} rows for {sel}; that kappa.k2 cell is absent.")
+            return None
+        return r.iloc[0]
+
+    def cell(r, truth=False):
+        out = dict(kappa=float(r["kappa"]), se=float(r["se_kappa"]))
+        if truth:
+            out["truth"] = float(r["kappa_tilde_true"])
+        out["converged"] = int(bool(r["converged"]))
+        return out
+    s = pd.read_csv(ps)
+    sort, excess = {}, []
+    for kc, k in (("k00", 0.0), ("k05", 0.5)):
+        for hc, h in K2_H_CODES.items():
+            r = one(s, ps.name, kappa_true=k, h=h, model="split")
+            if r is not None:
+                sort.setdefault(kc, {})[hc] = cell(r, truth=True)
+                if kc == "k05":
+                    excess.append(float(r["bias_vs_kappa_tilde"]))
+    if len(excess) == len(K2_H_CODES):
+        sort["k05"]["max_excess"] = max(excess)
+    for hc, h in K2_H_CODES.items():
+        vals = s.loc[np.isclose(s["h"], h), "h"].unique()
+        if len(vals) == 1:
+            sort[hc] = float(vals[0])
+        else:
+            notes.append(f"{ps.name}: the h={h} world carries {len(vals)} values of h; "
+                         f"kappa.k2.sort.{hc} absent.")
+    if sort:
+        add("kappa.k2.sort", "T12", "K2 step 5: sorting, kappa-tilde against its truth", sort,
+            "Savings pair's kappa-tilde (kappa), its cluster-sandwich se and converged (1/0) per true "
+            "kappa (k00: 0, k05: 0.5) and sorting factor h (h10: 1, h09: 0.9, h07: 0.7, h05: 0.5; "
+            "exp(delta_l4) times h for money at any other bank); truth: kappa - ln h "
+            "(kappa_tilde_true); k05.max_excess: the largest kappa-tilde minus truth over h at "
+            "kappa = 0.5 (bias_vs_kappa_tilde); h10/h09/h07/h05: the h of each world (column h, "
+            "one value per world); fe world, pooled weights, split model",
+            f"Rout/{ps.name} (LF md5 {_lf_md5(ps)[:8]}; diag_k2_nls_simulation.py step 5)", "ok",
+            display=f"k05 max excess {fmt3s(sort.get('k05', {}).get('max_excess', float('nan')))}")
+    o = pd.read_csv(po)
+    outside, srcs = {}, {}
+    for kc, k in K2_KAPPA_CODES.items():
+        for side, model in (("in", "split"), ("out", "split_no_outside")):
+            r = one(o, po.name, kappa_true=k, model=model)
+            if r is None:
+                continue
+            c = cell(r)
+            if kc == "k20" and side == "in":
+                c["at_box"] = int(pd.notna(r["at_box"]) and str(r["at_box"]).strip() != "")
+            outside.setdefault(kc, {})[side] = c
+            if pd.notna(r.get("source")):
+                srcs[f"{kc}.{side}"] = str(r["source"])
+    vals = o.loc[np.isclose(o["kappa_true"], K2_KAPPA_CODES["k20"]), "kappa_true"].unique()
+    if len(vals) == 1 and "k20" in outside:
+        outside["k20"]["truth"] = float(vals[0])
+    else:
+        notes.append(f"{po.name}: the kappa = 2 world carries {len(vals)} values of kappa_true; "
+                     "kappa.k2.outside.k20.truth absent.")
+    if outside:
+        add("kappa.k2.outside", "T12", "K2 step 6: the outside pool in and out of the estimation", outside,
+            "Savings pair's kappa-tilde (kappa), its cluster-sandwich se and converged (1/0) per true "
+            "kappa (k00: 0, k05: 0.5, k10: 1, k20: 2) with the outside pool in the estimation (in, "
+            "model split) or left out while it stays in the simulation (out, split_no_outside); "
+            "k20.in.at_box: 1 if that fit ran to the optimizer's box; k20.truth: the true kappa of "
+            "that world (column kappa_true); fe world, pooled weights",
+            f"Rout/{po.name} (LF md5 {_lf_md5(po)[:8]}; diag_k2_nls_simulation.py step 6"
+            + (f"; rows from other steps: {srcs}" if srcs else "") + ")", "ok",
+            detail=dict(row_sources=srcs) if srcs else None,
+            display=", ".join(f"{kc} in {fmt3s(x['in']['kappa'])} / out {fmt3s(x['out']['kappa'])}"
+                              for kc, x in outside.items() if "in" in x and "out" in x))
+
+
+# K1's run folders (None: make_k1_table.default_dirs(), Rout/k1 and Rout/k1_lambda_one). A smoke run is
+# read only when K1_ALLOW_SMOKE is set, which a test harness that writes nothing may do.
+K1_RUN_DIRS = None
+K1_ALLOW_SMOKE = False
+
+
+def collect_k1(notes: list):
+    """kappa.k1: the net-flow equation on the observed net flows (K1, kappa/k1_netflow_nls.py), the
+    cells of tab_k1_netflow.tex (make_k1_table.py). Registered only when every run folder passes
+    make_k1_table's guard (a real-data fit on the final panel); otherwise no key and a note with the
+    reason. Each estimate is a key with .lo/.hi (the bootstrap interval) and .p where K1 runs the
+    null-imposed score test. The headline time-deposit pair gets no key when K1 records it as not
+    estimable."""
+    import make_k1_table as k1t
+    try:
+        rows = k1t.load_runs(K1_RUN_DIRS, allow_smoke=K1_ALLOW_SMOKE)
+    except k1t.K1Refused as e:
+        notes.append(f"kappa.k1.* absent: {e}")
+        return
+    head, dose, l1 = k1t.pick(rows, "before_after"), k1t.pick(rows, "dose"), k1t.pick(rows, "before_after", True)
+    groups = {}
+
+    def put(prefix, name, r, p, test=None):
+        e = k1t.est(r, p)
+        if e is None:
+            return
+        pv = r.get(f"p_{test}") if test else None
+        groups.setdefault(prefix, {})[name] = (e[0], dict(lo=e[1], hi=e[2], **(
+            {"p": float(pv)} if pv is not None and pd.notna(pv) else {})))
+    for code, suf, _ in k1t.PAIRS:
+        put(f"kappa.k1.{code}", "change", head, f"dkappa{suf}", "dkappa" if code == "sav" else None)
+        put(f"kappa.k1.{code}", "level", head, f"kappa{suf}")
+        put(f"kappa.k1.{code}", "dose", dose, f"kappa_U{suf}", "kappa_U" if code == "sav" else None)
+        if l1 is not None:
+            put(f"kappa.k1.l1.{code}", "change", l1, f"dkappa{suf}")
+            put(f"kappa.k1.l1.{code}", "level", l1, f"kappa{suf}")
+    put("kappa.k1", "theta_w", head, "theta_w")
+    if l1 is not None:
+        put("kappa.k1.l1", "ln_Ec", l1, "ln_Ec")
+    for sample, _ in k1t.ROBUSTNESS:
+        put(f"kappa.k1.rob.{sample}.sav", "change", k1t.pick(rows, f"before_after+{sample}"), "dkappa")
+    if k1t.est(head, "kappa_td") is None:
+        notes.append(f"kappa.k1: the headline time-deposit pair is not estimable "
+                     f"({head.get('kappa_td_note')}); no kappa.k1.td key.")
+    groups.setdefault("kappa.k1", {})
+    def gstar(r):
+        """G* = G / (1 + cv^2) of the per-cluster row counts, as K1 writes it (column Gstar)."""
+        return {"Gstar": float(r["Gstar"])} if "Gstar" in r and pd.notna(r["Gstar"]) else {}
+    extra = {"kappa.k1": dict(n=int(head["n"]), markets=int(head["markets"]), G=int(head["G"]), **gstar(head),
+                              converged=int(bool(head["converged"])), panel=str(head["_panel"]))}
+    if l1 is not None:
+        extra["kappa.k1.l1"] = dict(G=int(l1["G"]), **gstar(l1), converged=int(bool(l1["converged"])))
+    src = (f"K1 runs {sorted({r['_folder'] for r in rows.values()})} (kappa/k1_netflow_nls.py, "
+           f"run {head['_run']}, panel {head['_panel']})")
+    defn = ("Net-flow equation on the observed net flows (K1): one switching cost kappa-tilde per pair "
+            "(sav: savings, the headline pair; chk: checking with matured time deposits; td: "
+            "daily-liquidity time deposits); change: the Pix change dkappa from 2020Q4 (the headline, "
+            "D3); level: kappa-tilde before Pix, an upper bound on kappa; dose: kappa_U, the change per "
+            "unit of fitted Pix use (dose spec); theta_w: the matured exit coefficient, a check; l1: "
+            "the lambda = 1 run, with ln_Ec = kappa_sav - kappa_td; rob.<sample>: the headline spec on "
+            "K1's robustness samples. lo/hi: 95 percent score wild cluster bootstrap interval by "
+            "destination conglomerate (Webb weights, symmetric percentile-t); p: the null-imposed score "
+            "test")
+    for prefix in sorted(set(groups) | set(extra)):
+        g = groups.get(prefix, {})
+        for name, (v, _) in g.items():
+            add(f"{prefix}.{name}", "T9", f"K1 {prefix}.{name}", v, defn, src, "ok")
+        val = {name: iv for name, (_, iv) in g.items()}
+        val.update(extra.get(prefix, {}))
+        if val:
+            add(prefix, "T9", f"K1 {prefix}: intervals and run facts", val, defn, src, "ok")
 
 
 def collect_pix_adv(notes: list):
@@ -2542,47 +2789,210 @@ def collect_pix_adv(notes: list):
         "banks outside the big five (groups_B)", src, "ok")
 
 
-# The three first-stage F statistics of P3 exist only in p3_note.md's table, in the column of the
-# panel the stakes file records. Row label (start of the row) -> key.
-P3_F_ROWS = {"log sd on log sd~, F": "f", "same, $\\tilde\\rho$ shuffled (placebo), F": "f_placebo",
-             "same, net of lagged HHI and number of banks, F": "f_net"}
+# The P3 first-stage F statistics the paper quotes, fields of an entry of Rout/p3_numbers.json.
+# f_placebo is the median F over the entry's placebo_shuffles draws (one draw where the field is
+# absent or 1: the entries filed before the 99-shuffle placebo).
+P3_F_FIELDS = {"f": "f", "f_placebo": "f_placebo", "f_net": "f_net"}
 
 
 def collect_pix_stakes(notes: list):
-    """pix.stakes: the stakes S_mt of P3 (median from Rout/p3_stakes_mca_quarter.csv) and the
-    first stage of log S on the cost shifters (F statistics read from Rout/p3_note.md, the column
-    of the panel the CSV records; no CSV carries them)."""
+    """pix.stakes: the stakes S_mt of P3 and the first stage of log S on the cost shifters, from
+    Rout/p3_numbers.json (diagnostics/diag_p3_numbers.py), entry panels[<md5>] for the panel that
+    Rout/p3_stakes_mca_quarter.csv records; the CSV's median of S must equal the entry's. The F
+    statistics are keyed as integers (half up), so \\pn{} prints them without decimals; their
+    unrounded values are in the entry's detail. With more than one placebo shuffle, f_placebo is
+    the shuffles' median F and fs.placebo_share_above the share of shuffles whose F is at or
+    above the real one (placebo_share_ge)."""
     rout = _paths.rout_dir()
-    csv, note = rout / "p3_stakes_mca_quarter.csv", rout / "p3_note.md"
+    csv = rout / "p3_stakes_mca_quarter.csv"
     if not csv.is_file():
         notes.append(f"{csv.name} not found in Rout; pix.stakes.* entries absent.")
         return
-    s = pd.read_csv(csv, usecols=["S", "panel_md5"])
+    nums, _ = _rout_sidecar("p3_numbers.json", "diagnostics/diag_p3_numbers.py", notes)
+    if nums is None:
+        return
+    s = pd.read_csv(csv, usecols=["S", "panel_md5"], dtype={"panel_md5": str})
     md5 = str(s["panel_md5"].dropna().iloc[0])
-    v = dict(median=float(s["S"].median()))
-    if note.is_file():
-        lines = note.read_text(encoding="utf-8").splitlines()
-        head = next((l for l in lines if l.startswith("|") and f"`{md5}`" in l), None)
-        if head is None:
-            notes.append(f"p3_note.md has no table column for panel {md5}; pix.stakes.fs absent.")
-        else:
-            col = [c.strip() for c in head.strip("|").split("|")].index(f"`{md5}`")
-            fs = {}
-            for l in lines:
-                cells = [c.strip() for c in l.strip().strip("|").split("|")]
-                if cells and cells[0] in P3_F_ROWS and col < len(cells):
-                    fs[P3_F_ROWS[cells[0]]] = int(cells[col].strip("*").replace(",", ""))
-            if len(fs) == len(P3_F_ROWS):
-                v["fs"] = fs
-            else:
-                notes.append(f"p3_note.md: found {sorted(fs)} of the three F rows; pix.stakes.fs "
-                             "absent.")
+    e = nums.get("panels", {}).get(md5)
+    if e is None:
+        notes.append(f"p3_numbers.json has no entry for panel {md5}, the panel of {csv.name}; "
+                     "pix.stakes.* entries absent.")
+        return
+    med = float(s["S"].median())
+    if abs(med - float(e["median_S"])) > 1e-9:
+        notes.append(f"{csv.name}'s median S {med} is not p3_numbers.json panels.{md5}.median_S "
+                     f"{e['median_S']}; pix.stakes.* entries absent.")
+        return
+    fs_full = {k: float(e[f]) for k, f in P3_F_FIELDS.items()}
+    v = dict(median=float(e["median_S"]), fs={k: _half_up(x) for k, x in fs_full.items()})
+    shuffles = int(e.get("placebo_shuffles", 1))
+    if shuffles > 1:
+        v["fs"]["placebo_share_above"] = float(e["placebo_share_ge"])
+        placebo = (f"the median F over {shuffles} draws with rho~ shuffled across conglomerates "
+                   f"within the quarter (seed {e.get('placebo_seed')}); fs.placebo_share_above: "
+                   "share of those draws with F at or above fs.f")
+    else:
+        notes.append(f"p3_numbers.json panels.{md5} has one placebo shuffle; pix.stakes.fs.f_placebo "
+                     "is that draw and fs.placebo_share_above is absent.")
+        placebo = "F with rho~ shuffled once across conglomerates within the quarter"
     add("pix.stakes", "T", "Stakes S_mt (P3)", v,
-        "median: median of S_mt, R$ a year, over market-quarters; fs.f / f_placebo / f_net: F of "
-        "log S on the cost shifters, with the shifter shuffled (placebo), and net of lagged market "
-        "structure (read from p3_note.md, column of the panel the stakes file records)",
-        f"Rout/{csv.name} and Rout/{note.name} (panel {md5}, diag_p3)", "ok",
-        display=f"median {fmt3s(v['median'])}")
+        "median: median of S_mt, R$ a year, over market-quarters; fs.f / f_net: F of log sd on "
+        "log sd~ (the cost shifters), and net of lagged HHI and number of banks; fs.f_placebo: "
+        f"{placebo}; MCA and quarter effects, MCA clusters; F rounded half up to an integer "
+        "(unrounded in detail.fs)",
+        f"Rout/p3_numbers.json panels.{md5} (diagnostics/diag_p3_numbers.py; panel "
+        f"{e['panel_md5']}, P3 run {e['written']}), the panel of Rout/{csv.name}", "ok",
+        detail=dict(fs=fs_full, placebo_shuffles=shuffles, panel_md5=e["panel_md5"],
+                    written=e["written"]),
+        display=f"median {fmt3s(v['median'])}; F {v['fs']['f']}, placebo {v['fs']['f_placebo']}"
+                + (f" ({shuffles} draws, share above {fmt3s(v['fs']['placebo_share_above'])})"
+                   if shuffles > 1 else " (one draw)") + f", net {v['fs']['f_net']}")
+
+
+# The B versus D type-4 gap of T10b (diagnostics/diag_t10b_rate_gap.py): the panel its keys read
+# (I17) and the panel before I17's imputed-tail rule, as the CSVs record them.
+GAP4_PANEL, GAP4_BEFORE = "fa38794d", "0b9385b5"
+# Posted against measured type-4 rates: key -> (issuer, kind, first year, last year) of the rows of
+# t10b_posted_vs_panel.csv compared, and the number of issuer-quarters expected. Nubank's basis is
+# the posted 100 percent of the CDI (account and daily-liquidity RDB): its 20-F weighted average
+# (104-105 percent) covers only the RDBs with a defined future maturity date (20-F FY2024, p. F-88).
+GAP4_POSTED = {"nubank": ("Nubank", "posted", 2022, 2024, 12),
+               "pagbank": ("PagBank", "stock average", 2020, 2023, 4),
+               "c6": ("C6", "posted", 2024, 2024, 2)}
+
+
+def collect_gap4(notes: list):
+    """desc.gap4: the B versus D type-4 rate gap (Rout/t10b_rate_gap.csv; D minus B on a D
+    indicator with quarter effects, one row per conglomerate-quarter, WCB intervals and p) and the
+    digital issuers' posted CDB rates against the panel's (Rout/t10b_posted_vs_panel.csv). Each gap
+    number is one CSV row, (panel, block, type 4, measure, weight, year); a selector that does not
+    match exactly one row leaves its key out with a note."""
+    rout = _paths.rout_dir()
+    p_gap, p_pv = rout / "t10b_rate_gap.csv", rout / "t10b_posted_vs_panel.csv"
+    if not (p_gap.is_file() and p_pv.is_file()):
+        notes.append("t10b_rate_gap.csv or t10b_posted_vs_panel.csv not found in Rout; run "
+                     "diagnostics/diag_t10b_rate_gap.py for desc.gap4.*.")
+        return
+    g = pd.read_csv(p_gap, dtype={"panel": str, "type": str, "year": str})
+    src = f"Rout/{p_gap.name} (diagnostics/diag_t10b_rate_gap.py)"
+
+    def row(panel, block, measure, weight, year="all"):
+        r = g[(g["panel"] == panel) & (g["block"] == block) & (g["type"] == "4")
+              & (g["measure"] == measure) & (g["weight"] == weight) & (g["year"] == year)]
+        if len(r) != 1:
+            notes.append(f"{p_gap.name}: {len(r)} rows for {panel}/{block}/4/{measure}/{weight}/"
+                         f"{year}; the desc.gap4 key it feeds is absent.")
+            return None
+        return r.iloc[0]
+
+    unw, w = row(GAP4_PANEL, "pooled", "pct_cdi", "none"), row(GAP4_PANEL, "pooled", "pct_cdi", "stock")
+    sp, before = row(GAP4_PANEL, "pooled", "spread_pp", "none"), row(GAP4_BEFORE, "pooled", "pct_cdi", "none")
+    eq = row(GAP4_PANEL, "joint_equal", "pct_cdi", "none", "2016-2024")
+    years = {str(y): row(GAP4_PANEL, "by_year", "pct_cdi", "none", str(y)) for y in range(2016, 2025)}
+    defn = ("D minus B type-4 rate, regression on a D indicator with quarter effects, one row per "
+            "conglomerate-quarter holding time deposits with a panel rate, 2016-2024; standard errors "
+            "by conglomerate; lo/hi and p from the restricted wild cluster bootstrap (Webb, 999 draws, "
+            "null imposed; interval by test inversion)")
+    for key, r, what in (("cdi.unw", unw, "pp of the CDI (rate as a percent of the CDI), unweighted"),
+                         ("cdi.w", w, "pp of the CDI, weighted by the type-4 stock"),
+                         ("spread.unw", sp, "spread over the Selic, pp a year, unweighted")):
+        if r is None:
+            continue
+        add(f"desc.gap4.{key}", "T10b", f"B versus D type-4 gap, {what}", float(r["coef"]),
+            f"{defn}; {what}", f"{src} panel {GAP4_PANEL}", "ok",
+            display=f"{fmt3s(r['coef'])} [{fmt3s(r['ci_lo'])}, {fmt3s(r['ci_hi'])}], p {fmt3s(r['p_wcb'])}")
+    for stem, pairs in (("cdi", (("unw", unw), ("w", w))), ("spread", (("unw", sp),))):
+        v = {k: dict(lo=float(r["ci_lo"]), hi=float(r["ci_hi"]), **({"p": float(r["p_wcb"])} if stem == "cdi" else {}))
+             for k, r in pairs if r is not None}
+        if stem == "cdi" and before is not None:
+            v["unw_before_i17"] = float(before["coef"])
+        if v:
+            add(f"desc.gap4.{stem}", "T10b", f"B versus D type-4 gap ({stem}): intervals and p",
+                v, f"{defn}. lo/hi: the WCB 95 percent interval; p: the WCB p value (cdi only); "
+                "unw_before_i17: the unweighted gap in pp of the CDI on the panel before I17's "
+                f"imputed-tail rule ({GAP4_BEFORE})",
+                f"{src} panels {GAP4_PANEL} and {GAP4_BEFORE} (unw_before_i17)", "ok")
+    v = {}
+    if unw is not None:
+        v.update(G=int(unw["G"]), Gstar=float(unw["G_star"]))
+    by = {y: float(r["coef"]) for y, r in years.items() if r is not None}
+    if by:
+        v["byyear"] = by
+    if eq is not None:
+        v.setdefault("byyear", {})["p_equal"] = float(eq["p_wcb"])
+    if v:
+        add("desc.gap4", "T10b", "B versus D type-4 gap: clusters and the gap by year", v,
+            "G, Gstar: conglomerate clusters and effective clusters G / (1 + cv^2) of the cluster "
+            "sizes in the unweighted gap; byyear.<yyyy>: the D minus B gap in pp of the CDI in that "
+            "year (D x year indicators, quarter effects, unweighted); byyear.p_equal: WCB p of the "
+            "Wald test that the yearly gaps are equal", f"{src} panel {GAP4_PANEL}", "ok",
+            display=f"G {v.get('G')}, G* {fmt3s(v.get('Gstar', float('nan')))}")
+    pv = pd.read_csv(p_pv, dtype={"type": str})
+    pv = pv[(pv["table"] == "posted_vs_panel") & (pv["type"] == "4")]
+    col = f"panel_pcdi4_{GAP4_PANEL}"
+    out, rows_used = {}, {}
+    for key, (issuer, kind, y0, y1, n_exp) in GAP4_POSTED.items():
+        x = pv[(pv["issuer"] == issuer) & (pv["kind"] == kind) & pv["year"].between(y0, y1)]
+        if len(x) != n_exp or x[col].isna().any():
+            notes.append(f"{p_pv.name}: {len(x)} {issuer} '{kind}' quarters {y0}-{y1} (expected "
+                         f"{n_exp}, all with a panel rate); desc.gap4.posted.{key} absent.")
+            continue
+        posted = (x["posted_lo"] + x["posted_hi"]) / 2.0
+        out[key] = dict(measured=float(x[col].mean()), posted=float(posted.mean()))
+        rows_used[key] = [f"{int(r.year)}Q{int(r.quarter)} row {int(r.row)}" for r in x.itertuples()]
+    if out:
+        add("desc.gap4.posted", "T10b", "Digital issuers' posted CDB rates against the panel's type-4 rate",
+            out, "Per issuer, mean over the issuer-quarters compared in T10b: measured, the panel's "
+            "type-4 rate as a percent of the CDI (compounded annual rates); posted, the issuer's "
+            "rate as a percent of the CDI, a range at its midpoint. nubank: the posted 100 percent "
+            "on the account and the daily-liquidity RDB, 2022Q1-2024Q4 (the 20-F's 104-105 percent "
+            "average covers only RDBs with a defined maturity date); pagbank: CDB stock averages at the "
+            "2020-2023 year-ends (20-F); c6: posted daily-liquidity CDB rates in 2024 (issuer blog). "
+            "Descriptive; no inference", f"Rout/{p_pv.name} (diagnostics/diag_t10b_rate_gap.py; "
+            f"posted rules from DATA_RAW/issuers/posted_rates/posted_rates.csv) panel {GAP4_PANEL}",
+            "ok", detail=dict(quarters=rows_used),
+            display="; ".join(f"{k} {fmt3s(v['measured'])} vs {fmt3s(v['posted'])}" for k, v in out.items()))
+
+
+def collect_pix_roster(notes: list):
+    """pix.roster.B: the B conglomerates against the Pix roster (R1,
+    Rout/pix_participation_conglomerate_quarter.csv; one row per conglomerate-quarter, 2020Q4-2024Q4,
+    balances already summed over the conglomerate's markets). n_mandated: B conglomerates with
+    mandated = 1 (constant within a conglomerate); sav_total_brl_bn.2020Q4: B savings (dep_a2_brl_mn)
+    in 2020Q4, R$ billion; sav_nonmandated_brl_mn.2020Q4: the same at the mandated = 0
+    conglomerates, R$ million; sav_offpix_brl_mn.max: the largest quarterly sum of B savings at
+    conglomerates with on_pix = 0, R$ million, and its quarter (max_quarter)."""
+    p = _paths.rout_dir() / "pix_participation_conglomerate_quarter.csv"
+    if not p.is_file():
+        notes.append(f"{p.name} not found in Rout; pix.roster.* absent.")
+        return
+    d = pd.read_csv(p, dtype={"conglomerate": str})
+    if d.duplicated(["conglomerate", "year", "quarter"]).any():
+        notes.append(f"{p.name}: conglomerate-quarters repeat; pix.roster.* absent.")
+        return
+    b = d[d["is_B"] == 1]
+    m = b.groupby("conglomerate")["mandated"].nunique()
+    if (m > 1).any():
+        notes.append(f"{p.name}: mandated varies within {int((m > 1).sum())} B conglomerates; pix.roster.* absent.")
+        return
+    q4 = b[(b["year"] == 2020) & (b["quarter"] == 4)]
+    off = b[b["on_pix"] == 0].groupby(["year", "quarter"])["dep_a2_brl_mn"].sum()
+    v = dict(n_mandated=int(b.loc[b["mandated"] == 1, "conglomerate"].nunique()),
+             sav_total_brl_bn={"2020Q4": float(q4["dep_a2_brl_mn"].sum()) / 1000.0},
+             sav_nonmandated_brl_mn={"2020Q4": float(q4.loc[q4["mandated"] == 0, "dep_a2_brl_mn"].sum())})
+    if len(off):
+        (y, q), mx = off.idxmax(), float(off.max())
+        v["sav_offpix_brl_mn"] = dict(max=mx, max_quarter=f"{int(y)}Q{int(q)}")
+    add("pix.roster.B", "T14", "B conglomerates and the Pix roster (R1)", v,
+        "B conglomerates (is_B = 1) of R1's conglomerate-quarter file, 2020Q4-2024Q4: n_mandated, "
+        "the number with mandated = 1 (Pix participation mandatory); sav_total_brl_bn.2020Q4, their "
+        "savings balance (dep_a2_brl_mn) in 2020Q4 in R$ billion; sav_nonmandated_brl_mn.2020Q4, "
+        "the savings of the mandated = 0 conglomerates in 2020Q4 in R$ million; "
+        "sav_offpix_brl_mn.max, the largest quarterly sum of savings at conglomerates not on Pix "
+        "(on_pix = 0) in R$ million, and max_quarter, its quarter",
+        f"Rout/{p.name} (LF md5 {_lf_md5(p)[:8]}; R1, make_pix_participation.py)", "ok",
+        display=f"mandated {v['n_mandated']}; 2020Q4 savings R$ {fmt3s(v['sav_total_brl_bn']['2020Q4'])} bn, "
+                f"non-mandated R$ {fmt3s(v['sav_nonmandated_brl_mn']['2020Q4'])} mn")
 
 
 def collect_phi_variance(notes: list):
@@ -3713,8 +4123,9 @@ FAMILIES = {
               "collect_mca_count", "collect_slide_deposit_types", "collect_slide_motivation",
               "collect_dep_anova", "collect_pix_exposure", "collect_branch_estban", "collect_type5_rules",
               "collect_state_selection", "collect_dshare_decomp", "collect_fee_ratio",
-              "collect_k2b", "collect_k0", "collect_k2_world", "collect_pix_adv",
-              "collect_pix_stakes"),
+              "collect_k2b", "collect_k0", "collect_k2_world", "collect_k2_rc", "collect_k2_steps56", "collect_k1",
+              "collect_pix_adv",
+              "collect_pix_stakes", "collect_gap4", "collect_pix_roster"),
     "cluster": ("collect_demand", "collect_table_rows", "collect_table4_sidecar", "phi_base_check",
                 "collect_entry", "collect_entry_counts", "collect_entry_gfb", "collect_state_levels",
                 "collect_first_stage_strength", "collect_xi_diagnostics", "collect_share_cap",
@@ -3794,8 +4205,13 @@ def main():
     collect_k2b(notes)
     collect_k0(notes)
     collect_k2_world(notes)
+    collect_k2_rc(notes)
+    collect_k2_steps56(notes)
+    collect_k1(notes)
     collect_pix_adv(notes)
     collect_pix_stakes(notes)
+    collect_gap4(notes)
+    collect_pix_roster(notes)
     add("cf.franchise", "E", "Franchise value of deposit funding (R$ x, R$ y, p, q)", None,
         "Removed from the paper by the user on 2026-09-29.", "--", "dropped", display="dropped")
     for t in _TABLES.values():

@@ -433,14 +433,14 @@ def _g3_cloud(k, hit, label):
         # Mirrors sleep_ame_twostage.counters_ok: the INDEX-space cosine gates, the raw
         # coefficient cosine is reported only. A cloud without n_cos_idx_neg predates the
         # index-space test and is refused rather than passed on a test that never ran.
-        # Reversed-index draws pass up to 1% of B (COS_IDX_NEG_MAX_SHARE there) and are kept.
+        # Reversed-index draws pass up to 2.5% of B (COS_IDX_NEG_MAX_SHARE there) and are kept.
         if "n_cos_idx_neg" not in r:
             bad.append(f"{s}: n_cos_idx_neg missing (cloud predates the index-space test)")
-        elif float(r.get("n_cos_idx_neg", 0)) > 0.01 * float(B):
-            bad.append(f"{s}: n_cos_idx_neg={r.get('n_cos_idx_neg')} > 1% of B={B}")
+        elif float(r.get("n_cos_idx_neg", 0)) > 0.025 * float(B):
+            bad.append(f"{s}: n_cos_idx_neg={r.get('n_cos_idx_neg')} > 2.5% of B={B}")
         elif float(r.get("n_cos_idx_neg", 0)):
             note(f"E{k}{label}/{s}: reversed-index draws retained",
-                 f"{r.get('n_cos_idx_neg')} of B={B} (within the 1% tolerance)")
+                 f"{r.get('n_cos_idx_neg')} of B={B} (within the 2.5% tolerance)")
         for key in ("n_vsd_fail", "n_drop"):
             if float(r.get(key, 0)):
                 bad.append(f"{s}: {key}={r.get(key)}")

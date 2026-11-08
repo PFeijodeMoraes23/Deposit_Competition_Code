@@ -14,10 +14,10 @@
 # Read by utils/blp_status.py. Set a routine "ok" only when its corrected fits are adopted, then
 # rerun those three generators and make_paper_numbers.py. make_paper_numbers.py --blp-pending
 # forces pending for one run whatever this file says.
-status = "pending-blp-ext1"
-since  = "2026-10-31"
-reason = "the engine's diagonal-IFT gradient points uphill, so no random-coefficients fit is a minimum; re-estimation with the exact Jacobian, then the full rerun from 2016Q1 (11-03)"
+status = "ok"
+since  = "2026-11-06"
+reason = "I2 fa38794d: ext1 passes the FD check in all four routines; global optimum not proven (I10)"
 
 [routines]
-E3 = "pending-blp-ext1"
-E4 = "pending-blp-ext1"
+E3 = "ok"
+E4 = "ok"

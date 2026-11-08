@@ -60,8 +60,11 @@ Nothing in the pipeline is edited and nothing here is a paper number.
       cells whose type-4 rate is a fallback (RT1: national rate equal to the Selic to 1e-6, or
       zero) is carried as a flag. A diagnostic, not a K1 coefficient: S on S~ with market and
       quarter effects, MCA clusters, in levels and logs, and log sd_w on log sd_w(rho~) alone,
-      since S and S~ share the mean balance; and the same with rho~ shuffled across conglomerates
-      within the quarter (a placebo that keeps the lagged weights and drops the cost shifters).
+      since S and S~ share the mean balance, and the same net of the lagged structure (log HHI and
+      log number of banks at t-1). The placebo shuffles rho~ across conglomerates within the
+      quarter (it keeps the lagged weights and drops the cost shifters), N_SHUFFLES = 99 draws in
+      sequence from one generator seeded SEED, and refits both of those specifications on each
+      draw: the median F and the share of draws with F at or above the real F, for each.
       Measured-rate variant (D1's missing-and-drop robustness), when the panel has
       rate_a4_carried: S_measured_mt = sd_w over the banks whose type-4 rate is measured that
       quarter (rate_a4_carried = 0) x bal_mt; its instrument S~_measured_mt takes rho~ from the
@@ -117,6 +120,7 @@ COST = list(demand_chars.COST_IV)
 OBSERVED = ("observed_positive", "observed_zero", "observed_negative", "imputed_from_row_total")
 EXPOSURES = ("mobile", "g45")
 SEED = 20261103
+N_SHUFFLES = 99   # P3's placebo draws
 KEYS_OUT = {"j": "CodConglomeradoPrudencial", "m": "mca_code"}   # the panel's names, in the files
 COLS = {
     "p1": ["mca_code", "is_B", "year", "connections_per100", "frac_4g5g",
@@ -490,8 +494,9 @@ def p3(df, got):
         res_m, fitstats["measured"] = cost_fit(fit[fit["carried"].fillna(0) == 0])
         fitstats["measured"]["n_carried_dropped"] = int((fit["carried"].fillna(0) == 1).sum())
         cqv["rho_fit_measured"] = cqv[COST].to_numpy() @ res_m.params[COST].to_numpy()
-    # Placebo: rho~ shuffled across conglomerates within the quarter. Its dispersion keeps the
-    # market's lagged weights and loses the cost shifters, so what it predicts is market structure.
+    # Placebo: rho~ shuffled across conglomerates within the quarter, N_SHUFFLES draws in sequence
+    # from one generator. Its dispersion keeps the market's lagged weights and loses the cost
+    # shifters, so what it predicts is market structure. The draws are taken below.
     rng = np.random.default_rng(SEED)
 
     def shuffle(s):
@@ -500,7 +505,6 @@ def p3(df, got):
         v[k] = rng.permutation(v[k])
         return pd.Series(v, index=s.index)
 
-    cqv["rho_perm"] = cqv.groupby("qi", group_keys=False)["rho_fit"].apply(shuffle)
     pd.DataFrame({"shifter": COST, "coef": beta.to_numpy(), "se": res.bse[COST].to_numpy(),
                   "coef_measured": res_m.params[COST].to_numpy() if meas else np.nan,
                   "se_measured": res_m.bse[COST].to_numpy() if meas else np.nan}).to_csv(
@@ -508,8 +512,10 @@ def p3(df, got):
 
     # S~: dispersion of rho~ and of each shifter across the market's B banks, weights Dep_j4m,t-1.
     lag4 = b[["j", "m", "qi", "dep4"]].assign(qi=b["qi"] + 1).rename(columns={"dep4": "dep4_lag"})
+    # cq_row: the row of cqv each bank-market row takes its rho~ from (the placebo's map).
     t = b[["j", "m", "qi"]].merge(lag4, on=["j", "m", "qi"], how="left").merge(
-        cqv[["j", "qi", "rho_fit", "rho_fit_measured", "rho_perm", *COST]], on=["j", "qi"], how="left")
+        cqv[["j", "qi", "rho_fit", "rho_fit_measured", *COST]].assign(cq_row=np.arange(len(cqv))),
+        on=["j", "qi"], how="left")
     t = t[t["dep4_lag"] > 0]
     tw = t.dropna(subset=["rho_fit"])
     sdt = wsd_by(tw, ["m", "qi"], "rho_fit", "dep4_lag").rename(
@@ -518,7 +524,6 @@ def p3(df, got):
                                    / t.groupby(["m", "qi"])["dep4_lag"].sum())
     for c in COST:
         sdt[f"disp_{c}"] = wsd_by(t.dropna(subset=[c]), ["m", "qi"], c, "dep4_lag")["sd"]
-    sdt["sd_rho_perm"] = wsd_by(t.dropna(subset=["rho_perm"]), ["m", "qi"], "rho_perm", "dep4_lag")["sd"]
     sdt["sd_rho_fit_measured"] = wsd_by(t.dropna(subset=["rho_fit_measured"]), ["m", "qi"],
                                         "rho_fit_measured", "dep4_lag")["sd"]
     sh = t["dep4_lag"] / t.groupby(["m", "qi"])["dep4_lag"].transform("sum")
@@ -557,25 +562,59 @@ def p3(df, got):
     # the last two specs on its own sample.
     specs = [("level", ("S", "S_tilde", lambda v: v, False)), ("log", ("S", "S_tilde", np.log, False)),
              ("sd_only_log", ("sd_spread", "sd_rho_fit", np.log, False)),
-             ("sd_only_log_placebo", ("sd_spread", "sd_rho_perm", np.log, False)),
              ("sd_only_log_ctrl_structure", ("sd_spread", "sd_rho_fit", np.log, True))]
     if meas:
         specs += [("measured_sd_only_log", ("sd_spread_measured", "sd_rho_fit_measured", np.log, False)),
                   ("measured_sd_only_log_ctrl_structure",
                    ("sd_spread_measured", "sd_rho_fit_measured", np.log, True))]
-    diag = {}
-    for lab, (a_, b_, f, ctrl) in specs:
-        pair = ("S_measured", "S_tilde_measured") if lab.startswith("measured") else ("S", "S_tilde")
-        d = out[(out[a_] > 0) & (out[b_] > 0) & (out[pair[0]] > 0) & (out[pair[1]] > 0)]
-        y, z = f(d[a_].to_numpy()), f(d[b_].to_numpy())
+
+    def first_stage(d, y, z, ctrl):
+        """y on z with MCA and quarter effects, MCA clusters; ctrl adds the lagged log HHI and log
+        number of banks."""
         cols_ = [y, z] + ([np.log(d["hhi4_lag"].to_numpy()), np.log(d["n_banks4_lag"].to_numpy())]
                           if ctrl else [])
         w = np.ones(len(d))
         Rr = _resid(np.column_stack(cols_), w, [_codes(d["mca_code"]), _codes(d["qi"])])
         r = sm.OLS(Rr[:, 0], Rr[:, 1:]).fit(cov_type="cluster",
                                             cov_kwds={"groups": pd.factorize(d["mca_code"])[0]})
-        diag[lab] = dict(slope=float(r.params[0]), se=float(r.bse[0]), f=float(r.tvalues[0] ** 2),
-                         n=int(len(d)), corr_raw=float(np.corrcoef(y, z)[0, 1]))
+        return dict(slope=float(r.params[0]), se=float(r.bse[0]), f=float(r.tvalues[0] ** 2),
+                    n=int(len(d)), corr_raw=float(np.corrcoef(y, z)[0, 1]))
+
+    diag = {}
+    for lab, (a_, b_, f, ctrl) in specs:
+        pair = ("S_measured", "S_tilde_measured") if lab.startswith("measured") else ("S", "S_tilde")
+        d = out[(out[a_] > 0) & (out[b_] > 0) & (out[pair[0]] > 0) & (out[pair[1]] > 0)]
+        diag[lab] = first_stage(d, f(d[a_].to_numpy()), f(d[b_].to_numpy()), ctrl)
+
+    # The placebo draws: rho~ shuffled, its dispersion over the market's B banks with the lagged
+    # type-4 weights (as S~), then log sd on it alone and net of the structure, on the
+    # market-quarters where both dispersions and S, S~ are positive (the real fit's rule).
+    mq = pd.MultiIndex.from_arrays([out["mca_code"].to_numpy(), out["qi"].to_numpy()])
+    has = t["cq_row"].notna().to_numpy()
+    row = t["cq_row"].fillna(0).to_numpy(dtype=int)
+    base = ((out["sd_spread"] > 0) & (out["S"] > 0) & (out["S_tilde"] > 0)).to_numpy()
+    draws = []
+    for k in range(N_SHUFFLES):
+        perm = cqv.groupby("qi", group_keys=False)["rho_fit"].apply(shuffle).reindex(cqv.index).to_numpy()
+        tp = t[["m", "qi", "dep4_lag"]].assign(rho_perm=np.where(has, perm[row], np.nan))
+        sdp = wsd_by(tp.dropna(subset=["rho_perm"]), ["m", "qi"], "rho_perm", "dep4_lag")["sd"]
+        sdp = sdp.reindex(mq).to_numpy()
+        keep = base & (sdp > 0)
+        d = out[keep]
+        y, z = np.log(d["sd_spread"].to_numpy()), np.log(sdp[keep])
+        r0, r1 = first_stage(d, y, z, False), first_stage(d, y, z, True)
+        draws.append(dict(draw=k + 1, n=r0["n"], slope=r0["slope"], f=r0["f"],
+                          slope_net=r1["slope"], f_net=r1["f"]))
+    fp, fn = np.array([x["f"] for x in draws]), np.array([x["f_net"] for x in draws])
+    f_real, f_net_real = diag["sd_only_log"]["f"], diag["sd_only_log_ctrl_structure"]["f"]
+    qs = lambda v: {str(p): float(np.quantile(v, p)) for p in (0.0, 0.1, 0.5, 0.9, 1.0)}
+    placebo = dict(n_shuffles=N_SHUFFLES, seed=SEED, f_real=f_real, f_net_real=f_net_real,
+                   f_median=float(np.median(fp)), f_net_median=float(np.median(fn)),
+                   n_ge=int((fp >= f_real).sum()), n_ge_net=int((fn >= f_net_real).sum()),
+                   share_ge=float((fp >= f_real).mean()), share_ge_net=float((fn >= f_net_real).mean()),
+                   p_perm=float((1 + (fp >= f_real).sum()) / (1 + N_SHUFFLES)),
+                   p_perm_net=float((1 + (fn >= f_net_real).sum()) / (1 + N_SHUFFLES)),
+                   f_quantiles=qs(fp), f_net_quantiles=qs(fn), draws=draws)
     q = lambda s: {str(p): float(s.quantile(p)) for p in (0.1, 0.25, 0.5, 0.75, 0.9)}
     ok = out[out["S"].notna()]
     by_year = {int(y): dict(sd_spread_pp_median=float(g["sd_spread_pp"].median()),
@@ -595,13 +634,15 @@ def p3(df, got):
                  fallback_weight_share_mean=float(ok["fallback_weight_share"].mean()),
                  mq_with_fallback_weight=int((ok["fallback_weight_share"] > 0).sum()),
                  rho_fit_weight_share_mean=float(out["rho_fit_weight_share"].mean()),
-                 by_year=by_year, cost_fit=fitstats, S_on_S_tilde=diag)
+                 by_year=by_year, cost_fit=fitstats, S_on_S_tilde=diag, placebo=placebo)
     stamp(f"P3: {stats['n_mq_S']:,} of {stats['n_mq']:,} market-quarters with S; median S "
           f"R$ {stats['S_quantiles']['0.5']:.1f}/yr; cost fit joint F {fitstats['joint_f']:.2f}; "
           f"S on S~ F {diag['level']['f']:.2f} (level), {diag['log']['f']:.2f} (log), "
           f"{diag['sd_only_log']['f']:.2f} (log sd on log sd~), "
-          f"{diag['sd_only_log_placebo']['f']:.2f} (placebo, rho~ shuffled), "
           f"{diag['sd_only_log_ctrl_structure']['f']:.2f} (controlling for HHI and n banks at t-1)")
+    stamp(f"P3 placebo, {N_SHUFFLES} shuffles of rho~ (seed {SEED}): median F {placebo['f_median']:.2f}, "
+          f"{placebo['n_ge']} at or above the real {f_real:.2f}; net of structure median "
+          f"{placebo['f_net_median']:.2f}, {placebo['n_ge_net']} at or above the real {f_net_real:.2f}")
     if not meas:
         stats["measured"] = "panel has no rate_a4_carried: variant not built"
         stamp("P3: no rate_a4_carried in this panel; the measured-rate columns are empty")

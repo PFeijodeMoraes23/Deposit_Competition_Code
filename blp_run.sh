@@ -194,8 +194,9 @@ cl_banner "RC-BLP sweep${CL_DRYRUN:+ }$([[ "${CL_DRYRUN}" == "1" ]] && echo '[DR
 # Whether either is submitted was decided above, from disk or from an explicit flag.
 sys_dep=""
 if [[ "${DO_SYSIMAGE}" == "1" ]]; then
+    # gpu_h200 admits at most 6 CPUs per GPU (Bouchet; sbatch rejects more).
     j=$(cl_sbatch --partition=gpu_h200 --gpus=h200:1 --time=04:00:00 \
-        --cpus-per-task=8 --mem=64G -J blp_build_sysimg \
+        --cpus-per-task=6 --mem=64G -J blp_build_sysimg \
         -o "${LOGD}/blp_build_sysimg_%j.out" -e "${LOGD}/blp_build_sysimg_%j.err" \
         --export=ALL,ENV_STEP=sysimage_gpu "${CL_ROOT}/env_job.sh")
     sys_dep="${j}"

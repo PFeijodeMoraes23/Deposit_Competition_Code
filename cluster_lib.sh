@@ -264,7 +264,7 @@ cl_sysimage_for () {   # cl_sysimage_for gpu|cpu -> path
 
 cl_sysimage_build_cmd () {  # the exact command that rebuilds this target
     case "$1" in
-        gpu) printf '%s' "sbatch --partition=gpu_h200 --gpus=h200:1 --time=04:00:00 --cpus-per-task=8 --mem=64G --export=ALL,ENV_STEP=sysimage_gpu env_job.sh" ;;
+        gpu) printf '%s' "sbatch --partition=gpu_h200 --gpus=h200:1 --time=04:00:00 --cpus-per-task=6 --mem=64G --export=ALL,ENV_STEP=sysimage_gpu env_job.sh" ;;
         cpu) printf '%s' "sbatch --partition=day --constraint=cpugen:turin --time=04:00:00 --cpus-per-task=8 --mem=64G --export=ALL,ENV_STEP=sysimage_cpu env_job.sh" ;;
     esac
 }

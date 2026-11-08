@@ -11,9 +11,14 @@ block of an earlier copy too (how the d01b8bae and 45dbfc58 entries were seeded)
 
   current       the panel of the p3 files now in Rout (checked against p3_stakes_mca_quarter.csv)
   panels.<md5>  median_S: median of S_mt over market-quarters, R$ a year (the CSV's median)
-                f, f_placebo, f_net: F of log sd on log sd~ (MCA and quarter effects, MCA
-                  clusters), with rho~ shuffled within the quarter, and net of lagged HHI and
-                  number of banks; f_level, f_log: S on S~ in levels and logs; n_first_stage
+                f, f_net: F of log sd on log sd~ (MCA and quarter effects, MCA clusters), and the
+                  same net of lagged HHI and number of banks
+                placebo (rho~ shuffled across conglomerates within the quarter), placebo_shuffles
+                  draws: f_placebo, f_net_placebo the median F of the draws, placebo_share_ge,
+                  placebo_share_ge_net the share of draws with F at or above f, f_net;
+                  placebo_seed. Entries with placebo_shuffles 1 (the p3 blocks written before the
+                  99 draws) hold one draw in f_placebo, seed 20261103, and no net placebo
+                f_level, f_log: S on S~ in levels and logs; n_first_stage
                 n_mq, n_mq_S, sd_spread_pp_median, cost_fit_joint_f
                 median_S_measured, f_measured, f_net_measured, carried_weight_share_mean: the
                   measured-rate variant, where the panel has rate_a4_carried
@@ -42,16 +47,27 @@ STAKES = OUT / "p3_stakes_mca_quarter.csv"
 DST = OUT / "p3_numbers.json"
 DOC = ("P3 first-stage numbers by panel (8-character md5, as p3_stakes_mca_quarter.csv's panel_md5); "
        "written by diagnostics/diag_p3_numbers.py from the p3 block of p_shifters.json. median_S in R$ "
-       "a year; f = F of log sd on log sd~, f_placebo = rho~ shuffled, f_net = net of lagged HHI and "
-       "number of banks (MCA and quarter effects, MCA clusters).")
+       "a year; f = F of log sd on log sd~, f_net = the same net of lagged HHI and number of banks "
+       "(MCA and quarter effects, MCA clusters). Placebo, rho~ shuffled across conglomerates within "
+       "the quarter, placebo_shuffles draws: f_placebo and f_net_placebo = median F of the draws, "
+       "placebo_share_ge and placebo_share_ge_net = share of draws with F at or above f and f_net. "
+       "Where placebo_shuffles is 1, f_placebo is a single draw (seed 20261103) and there is no net "
+       "placebo.")
 
 
 def entry(p3: dict) -> dict:
-    d = p3["S_on_S_tilde"]
+    d, pl = p3["S_on_S_tilde"], p3.get("placebo")
     e = dict(panel_md5=p3["_meta"]["panel_md5"], written=p3["_meta"]["written"],
              median_S=p3["S_quantiles"]["0.5"], f=d["sd_only_log"]["f"],
-             f_placebo=d["sd_only_log_placebo"]["f"], f_net=d["sd_only_log_ctrl_structure"]["f"],
-             f_level=d["level"]["f"], f_log=d["log"]["f"], n_first_stage=d["sd_only_log"]["n"],
+             f_placebo=pl["f_median"] if pl else d["sd_only_log_placebo"]["f"],
+             f_net=d["sd_only_log_ctrl_structure"]["f"])
+    if pl:
+        e.update(f_net_placebo=pl["f_net_median"], placebo_share_ge=pl["share_ge"],
+                 placebo_share_ge_net=pl["share_ge_net"], placebo_shuffles=pl["n_shuffles"],
+                 placebo_seed=pl["seed"])
+    else:
+        e.update(placebo_shuffles=1)
+    e.update(f_level=d["level"]["f"], f_log=d["log"]["f"], n_first_stage=d["sd_only_log"]["n"],
              n_mq=p3["n_mq"], n_mq_S=p3["n_mq_S"],
              sd_spread_pp_median=p3["sd_spread_pp_quantiles"]["0.5"],
              cost_fit_joint_f=p3["cost_fit"]["joint_f"])
@@ -70,11 +86,17 @@ def main():
                     help="an earlier p_shifters.json whose p3 block is filed too")
     args = ap.parse_args()
     panels = json.loads(DST.read_text(encoding="utf-8"))["panels"] if DST.exists() else {}
+    for v in panels.values():   # entries filed before the draws hold a single shuffle
+        v.setdefault("placebo_shuffles", 1)
     for src in [*args.add, SRC]:
         e = entry(json.loads(src.read_text(encoding="utf-8"))["p3"])
         panels[e["panel_md5"][:8]] = e
-        print(f"{e['panel_md5'][:8]}: median S {e['median_S']:.1f}, F {e['f']:.2f}, placebo "
-              f"{e['f_placebo']:.2f}, net {e['f_net']:.2f}  ({src})")
+        pl = (f"placebo median {e['f_placebo']:.2f} (share at or above {e['placebo_share_ge']:.3f}), "
+              f"net {e['f_net']:.2f}, placebo median {e['f_net_placebo']:.2f} (share at or above "
+              f"{e['placebo_share_ge_net']:.3f}), {e['placebo_shuffles']} draws"
+              if e["placebo_shuffles"] > 1 else
+              f"placebo {e['f_placebo']:.2f} (one draw), net {e['f_net']:.2f}")
+        print(f"{e['panel_md5'][:8]}: median S {e['median_S']:.1f}, F {e['f']:.2f}, {pl}  ({src})")
     cur = entry(json.loads(SRC.read_text(encoding="utf-8"))["p3"])
     s = pd.read_csv(STAKES, usecols=["S", "panel_md5"])
     if str(s["panel_md5"].iloc[0]) != cur["panel_md5"][:8] or abs(s["S"].median() - cur["median_S"]) > 1e-9:

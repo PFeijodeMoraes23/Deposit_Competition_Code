@@ -53,7 +53,8 @@
 #             columns: CodConglomeradoPrudencial, AnoMes, rate_a4_corrected_qoq,
 #                      rate_a4_corrected_ann, tier, rate_flag (0 measured, 2 strip or leaf
 #                      <= 0, 3 above RATE_Q_CAP or marked failed in RATE_FAIL, 4 a
-#                      benchmarked rate outside BENCH_RANGE x CDI),
+#                      benchmarked rate outside BENCH_RANGE x CDI, 5 an imputed rate more than
+#                      IMPUTED_GAP_PP above the CDI or below IMPUTED_FLOOR x CDI),
 #                      rate_a4_vintage_src (statement or none),
 #                      rate_a4_src (statement: the time-deposit line; benchmarked: strip x k with
 #                      a component rescaled to a statement; imputed: strip x k; leaf: 2025+)
@@ -348,6 +349,15 @@ RATE_FAIL = [("90400888", [2024])]
 # 2026-11-04): outside it the rate is marked failed (rate_flag 4) and panel_deposit_rates carries
 # it.  Itau's semesters at 2-3.6 x CDI (2016, 2018, 2020) are the case.
 BENCH_RANGE = (0.5, 1.5)
+# The band an imputed pre-2025 rate (strip x k, no statement behind it) must lie in to count as
+# measured (I17; Pedro, D1 2026-11-05): at most IMPUTED_GAP_PP percentage points a year above the
+# CDI, both compounded annual, and at least IMPUTED_FLOOR x CDI.  Outside it the rate is marked
+# failed (rate_flag 5) and panel_deposit_rates carries it.  The excess at the foreign, wholesale and
+# fixed-rate issuers is a level above the CDI (4.5-11 pp a year), so the upper bound is in points,
+# not a multiple: a multiple would bite only when the CDI is low.  panel_deposit_rates applies the
+# same band to its own uncorrected rate.
+IMPUTED_GAP_PP = 4.0
+IMPUTED_FLOOR = 0.5
 
 
 def load_sub_in_lump():
@@ -849,7 +859,8 @@ def build_corrected():
     # rows that are not attempted are absent from the output, so panel_deposit_rates falls back
     # to its residual for them.  An attempted rate that fails is kept as missing with rate_flag
     # (2: strip or leaf <= 0; 3: above RATE_Q_CAP, or a bank-year in RATE_FAIL; 4: a benchmarked
-    # rate outside BENCH_RANGE x CDI), and panel_deposit_rates does not replace it.
+    # rate outside BENCH_RANGE x CDI; 5: an imputed rate outside the IMPUTED_* band), and
+    # panel_deposit_rates does not replace it.
     is_post = congl["year"] >= 2025
     den = congl["stk_time_ord_lag"]
     congl["rate_a4_src"] = np.select([is_post, congl["stmt_cdb"].notna(), congl["strip_benchmarked"]],
@@ -870,6 +881,14 @@ def build_corrected():
     bench_out = (attempted & ~is_post & (congl["rate_a4_src"] == "benchmarked") & (congl["rate_flag"] == 0)
                  & ~(rate / congl["cdi_qoq"]).between(*BENCH_RANGE))
     congl.loc[bench_out, "rate_flag"] = 4
+    gap_pp = 100 * ((1 + rate) ** 4 - (1 + congl["cdi_qoq"]) ** 4)
+    imp_out = (attempted & ~is_post & (congl["rate_a4_src"] == "imputed") & (congl["rate_flag"] == 0)
+               & ((gap_pp > IMPUTED_GAP_PP) | (rate < IMPUTED_FLOOR * congl["cdi_qoq"])))
+    congl.loc[imp_out, "rate_flag"] = 5
+    log.info("Imputed rates more than %g pp a year above the CDI or below %g x CDI (rate_flag 5): %d "
+             "conglomerate-quarters at %d conglomerates (above %d, below %d)", IMPUTED_GAP_PP, IMPUTED_FLOOR,
+             int(imp_out.sum()), congl.loc[imp_out, "CodConglomeradoPrudencial"].nunique(),
+             int((imp_out & (gap_pp > IMPUTED_GAP_PP)).sum()), int((imp_out & (gap_pp <= IMPUTED_GAP_PP)).sum()))
     log.info("Benchmarked rates outside %s x CDI (rate_flag 4): %s", BENCH_RANGE,
              {c: sorted(f"{a // 100}Q{(a % 100) // 3}" for a in g)
               for c, g in congl.loc[bench_out].groupby("CodConglomeradoPrudencial")["AnoMes"]})
@@ -879,8 +898,9 @@ def build_corrected():
                                 "rate_a4_corrected_ann", "tier", "rate_flag", "rate_a4_vintage_src",
                                 "rate_a4_src"]].copy()
     log.info("Corrected rate: %d attempted conglomerate-quarters; strip or leaf <= 0: %d; above cap: %d; "
-             "benchmarked out of range: %d; source %s", len(out), int((out["rate_flag"] == 2).sum()),
-             int((out["rate_flag"] == 3).sum()), int((out["rate_flag"] == 4).sum()),
+             "benchmarked out of range: %d; imputed out of band: %d; source %s", len(out),
+             int((out["rate_flag"] == 2).sum()), int((out["rate_flag"] == 3).sum()),
+             int((out["rate_flag"] == 4).sum()), int((out["rate_flag"] == 5).sum()),
              out["rate_a4_src"].value_counts().to_dict())
     return out, pb
 

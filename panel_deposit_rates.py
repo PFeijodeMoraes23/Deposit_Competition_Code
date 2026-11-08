@@ -28,7 +28,9 @@
 #                its measured quarters within +-4, x CDI; rate_a4_carried) or stays missing; an
 #                uncorrected rate of exactly 0, or equal to the Selic, on a positive type-4 stock
 #                is a fill, not a measurement, and goes to the carry too, as does a benchmarked
-#                rate outside 0.5-1.5 x CDI (calibrate's rate_flag 4);
+#                rate outside 0.5-1.5 x CDI (calibrate's rate_flag 4) and an imputed rate more
+#                than 4 pp a year above the CDI or below 0.5 x CDI (calibrate's rate_flag 5, or
+#                the uncorrected rate here on a positive type-4 stock);
 #                rate_a4_fallback gives the reason, rate_a4_vintage_src the savings-cost source,
 #                rate_a4_src where the rate comes from (statement, benchmarked, imputed, leaf,
 #                carried)
@@ -88,6 +90,12 @@ RATE_A4_MAX_MULT = float(os.environ.get("RATE_A4_MAX_MULT", 3.0))
 # Pedro 2026-11-04): a CDB pays about 0.9-1.15 x CDI, and a neighbour far outside that is an
 # imputation artefact that the carry would spread.
 CARRY_DONOR_RANGE = (0.5, 1.5)
+# The band an imputed rate must lie in (I17; Pedro, D1 2026-11-05): at most IMPUTED_GAP_PP points a
+# year above the CDI, compounded annual, and at least IMPUTED_FLOOR x CDI.  panel_cosif_calibrate
+# applies the same band to its strip x k rate (rate_flag 5); here it applies to the uncorrected
+# residual or blended rate on a positive type-4 stock (code 9).  Keep the two in step.
+IMPUTED_GAP_PP = 4.0
+IMPUTED_FLOOR = 0.5
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
@@ -753,7 +761,9 @@ def append_rates_to_panel():
     # uncorrected rate of exactly 0, 5 nothing to measure (no lagged stock or no expense), 6 an
     # uncorrected rate equal to the Selic to 1e-6 (4 and 6 on a positive type-4 stock, where the
     # blended or residual rate returns a fill, not a price), 7 a benchmarked rate outside
-    # calibrate's BENCH_RANGE x CDI (its rate_flag 4).  rate_a4_src records where a rate
+    # calibrate's BENCH_RANGE x CDI (its rate_flag 4), 8 an imputed strip x k rate outside
+    # calibrate's IMPUTED_* band (its rate_flag 5), 9 an uncorrected rate outside the same band on a
+    # positive type-4 stock.  rate_a4_src records where a rate
     # comes from: calibrate's source (statement, benchmarked, imputed, leaf) for a corrected rate,
     # imputed for the residual or blended rate, carried for a carried one; missing where the
     # quarter has no rate.
@@ -764,6 +774,7 @@ def append_rates_to_panel():
     _code[_has_corr & (aux["cosif_cdb_flag"] == 2)] = 2
     _code[_has_corr & (aux["cosif_cdb_flag"] == 3)] = 3
     _code[_has_corr & (aux["cosif_cdb_flag"] == 4)] = 7
+    _code[_has_corr & (aux["cosif_cdb_flag"] == 5)] = 8
     _code[~_has_corr & aux["rate_a4"].isna() & (_residual_raw <= 0)] = 4
     _code[aux["rate_a4"].isna() & (_code == 0)] = 5
     _pos4 = aux["dep_a4"].fillna(0) > 0
@@ -772,6 +783,11 @@ def append_rates_to_panel():
     _code[_zero] = 4
     _code[_at_selic] = 6
     aux.loc[_zero | _at_selic, "rate_a4"] = np.nan
+    _gap_pp = 100 * ((1 + aux["rate_a4"]) ** 4 - (1 + aux["cdi_qoq"]) ** 4)
+    _unc_out = (~_has_corr & _pos4 & (_code == 0) & aux["rate_a4"].notna()
+                & ((_gap_pp > IMPUTED_GAP_PP) | (aux["rate_a4"] < IMPUTED_FLOOR * aux["cdi_qoq"])))
+    _code[_unc_out] = 9
+    aux.loc[_unc_out, "rate_a4"] = np.nan
 
     _selic_max = (df_macro_q.sort_values("AnoMes").set_index("AnoMes")["selic_qoq"]
                   .rolling(8, min_periods=1).max())
@@ -806,7 +822,8 @@ def append_rates_to_panel():
         f"rate_a4: {int((_code == 0).sum()):,} measured of {len(aux):,} bank-quarters; no measured rate "
         f"{_why} (1 band > {RATE_A4_MAX_MULT:g}x max Selic t-7..t, 2 strip/leaf <= 0, 3 cap, "
         f"4 residual <= 0 or exactly 0, 5 nothing to measure, 6 equal to the Selic, "
-        f"7 benchmarked outside 0.5-1.5 x CDI); "
+        f"7 benchmarked outside 0.5-1.5 x CDI, 8 imputed strip x k outside the band, "
+        f"9 uncorrected outside the band); "
         f"carried {int(_fill.sum()):,}, "
         f"left missing {int(((_code != 0) & ~_fill).sum()):,}"
     )

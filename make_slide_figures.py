@@ -1818,7 +1818,7 @@ def bank_quarter(kind: str) -> pd.DataFrame:
         rf=("risk_free_qoq", "first"))
     mq = macro_quarterly()[["year", "quarter", "cdi_qoq"]]
     bq = bq.merge(mq, on=["year", "quarter"], how="left")
-    bq["own_rate"] = ~(np.abs(bq["r4"] - bq["cdi_qoq"] / 100.0) < 1e-9) & (bq["guard"] != 1)
+    bq["own_rate"] = bq["r4"].notna() & ~(np.abs(bq["r4"] - bq["cdi_qoq"] / 100.0) < 1e-9) & (bq["guard"] != 1)
     bq["sp_pp"] = mdt.annualized_spread_pp(bq["sp"], bq["rf"])
     bq["t"] = bq["year"] * 4 + bq["quarter"] - 1
     return bq
