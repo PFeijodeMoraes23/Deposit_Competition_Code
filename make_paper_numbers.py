@@ -2514,12 +2514,14 @@ def collect_k2_world(notes: list):
 
 
 # Step 7 of diag_k2_nls_simulation.py (the paper's random coefficients as the data-generating
-# process, fitted under A1) on the 52ea6495 panel snapshot, written with --out to this folder.
-K2_STEP7_DIR = "k2_step7_52ea6495"
+# process, fitted under A1) on the fa38794d panel, written with --out to this folder. Step 7 reads
+# the extended stage of BLP_RESULTS/cluster_processed/blp_E3_spec_12.json as its data-generating
+# process.
+K2_STEP7_DIR = "k2_fa38794d"
 
 
 def collect_k2_rc(notes: list):
-    """kappa.k2.rc: step 7 of the K2 simulation (Rout/k2_step7_52ea6495/k2_rc.csv and its
+    """kappa.k2.rc: step 7 of the K2 simulation (Rout/<K2_STEP7_DIR>/k2_rc.csv and its
     k2_nls_numbers.json). Per true kappa (k05: 0.5, k10: 1.0), the single-kappa fit on data
     simulated with the random coefficients (rc) and on the same world's logit data (logit): kappa,
     its standard error, bias, alpha and convergence (1/0); inflow_ratio: p10, p50, p90 of the
@@ -2747,6 +2749,111 @@ def collect_k1(notes: list):
         val.update(extra.get(prefix, {}))
         if val:
             add(prefix, "T9", f"K1 {prefix}: intervals and run facts", val, defn, src, "ok")
+
+
+# K1 option (iii) (main thread, 11-08 21:27): the paper reports no K1 estimate, only the range of the
+# Pix change across the pilot fits and the savings-only interval. The pilots are kappa/k1_netflow_nls.py
+# runs on 300 drawn markets (seed 3), before_after, --exit-by-cell, --trim p99, four kappa-tilde starts,
+# cap 500, on the final panel; one folder per form under Rout/K1_PILOT_DIR (k1_estimates.csv and
+# k1_numbers.json, copied from the Kappa agent's scratch). The flags each form's run must carry:
+K1_PILOT_DIR = "k1_pilots_fa38794d"
+K1_PILOT_FORMS = {"headline": dict(matured_scale=False, savings_only=False),
+                  "matured_scale": dict(matured_scale=True, savings_only=False),
+                  "savings_only": dict(matured_scale=False, savings_only=True)}
+K1_PILOT_ARGS = dict(spec="before_after", markets=300, exit_by_cell=True, trim="p99", starts="0,0.5,1,1.5",
+                     maxit=500, lambda_one=False, allow_interim=False)
+
+
+def collect_k1_pilots(notes: list):
+    """kappa.k1.pilot: the K1 pilots (Rout/k1_pilots_fa38794d/<form>/). markets: the markets in the
+    pilot fits (the 300 drawn less those the p99 trim and the informative-rows rule empty);
+    dk.min/dk.max: the smallest and largest savings-pair change dkappa (after minus before) over every
+    pilot fit, i.e. each form's four kappa-tilde starts (start_dkappas; the interior and boundary
+    optima are two of them); so: the savings-only form's interior optimum, its dkappa, the cluster
+    sandwich standard error by destination conglomerate (se_dkappa) and the 95 percent score wild
+    cluster bootstrap interval (ci_lo/ci_hi_dkappa). Registered only when every folder is a pilot
+    run on make_k1_table.FINAL_PANEL with the flags of K1_PILOT_ARGS and K1_PILOT_FORMS."""
+    import make_k1_table as k1t
+    d0 = _paths.rout_dir() / K1_PILOT_DIR
+    fits, rows, bad = [], {}, []
+    for form, flags in K1_PILOT_FORMS.items():
+        d = d0 / form
+        pe, pn = d / "k1_estimates.csv", d / "k1_numbers.json"
+        if not (pe.is_file() and pn.is_file()):
+            notes.append(f"{K1_PILOT_DIR}/{form}: k1_estimates.csv or k1_numbers.json missing; "
+                         "kappa.k1.pilot absent.")
+            return
+        n = json.loads(pn.read_text(encoding="utf-8"))
+        g, a = n.get("guard") or {}, n.get("args") or {}
+        for k in ("context_panel", "frame_panel", "k0_numbers_panel"):
+            if not str(g.get(k, "")).startswith(k1t.FINAL_PANEL):
+                bad.append(f"{form}: guard.{k} = {g.get(k)}")
+        if not g.get("final_inputs") or not str((n.get("inputs") or {}).get("panel_md5", "")).startswith(k1t.FINAL_PANEL):
+            bad.append(f"{form}: not on the final inputs")
+        for k, want in {**K1_PILOT_ARGS, **flags}.items():
+            if bool(a.get(k)) != want if isinstance(want, bool) else a.get(k) != want:
+                bad.append(f"{form}: args.{k} = {a.get(k)}, not {want}")
+        e = pd.read_csv(pe)
+        if set(e["spec"].astype(str)) != {"before_after"}:
+            bad.append(f"{form}: specs {sorted(set(e['spec'].astype(str)))}")
+            continue
+        r0 = e.iloc[0]
+        cols = ("starts", "start_dkappas", "start_ssr", "start_converged", "start_reasons", "start_at_box")
+        if any(c not in e.columns for c in cols):
+            bad.append(f"{form}: start columns missing")
+            continue
+        per = {c: str(r0[c]).split(";") for c in cols}
+        if len({len(v) for v in per.values()}) != 1 or len(per["starts"]) != 4:
+            bad.append(f"{form}: the start columns do not hold four starts")
+            continue
+        for i, s in enumerate(per["starts"]):
+            fits.append(dict(form=form, start=float(s), dkappa=float(per["start_dkappas"][i]),
+                             ssr_over_yy=float(per["start_ssr"][i]),
+                             converged=int(per["start_converged"][i] == "True"),
+                             reason=per["start_reasons"][i], at_box=per["start_at_box"][i]))
+        for _, r in e.iterrows():
+            i = per["starts"].index(f"{float(r['solution_start']):g}")
+            if abs(float(r["dkappa"]) - float(per["start_dkappas"][i])) > 1e-5 * max(1.0, abs(float(r["dkappa"]))):
+                bad.append(f"{form}: the {r['solution']} row's dkappa does not match its start")
+        rows[form] = (n, e)
+    if bad:
+        notes.append("kappa.k1.pilot absent: " + "; ".join(bad))
+        return
+    nm = {int(e["markets"].iloc[0]) for _, e in rows.values()}
+    if len(nm) != 1:
+        notes.append(f"kappa.k1.pilot absent: the forms fit {sorted(nm)} markets")
+        return
+    so = rows["savings_only"][1]
+    so = so[so["solution"] == "interior"]
+    if len(so) != 1:
+        notes.append(f"kappa.k1.pilot absent: {len(so)} interior savings-only rows")
+        return
+    so = so.iloc[0]
+    lo = min(fits, key=lambda f: f["dkappa"])
+    hi = max(fits, key=lambda f: f["dkappa"])
+    v = dict(markets=nm.pop(), dk=dict(min=lo["dkappa"], max=hi["dkappa"]),
+             so=dict(dk=float(so["dkappa"]), se=float(so["se_dkappa"]),
+                     ci=dict(lo=float(so["ci_lo_dkappa"]), hi=float(so["ci_hi_dkappa"]))))
+    n_so, _ = rows["savings_only"]
+    src = (f"Rout/{K1_PILOT_DIR}/<form>/k1_estimates.csv and k1_numbers.json (kappa/k1_netflow_nls.py; "
+           + "; ".join(f"{f} LF md5 {_lf_md5(_paths.rout_dir() / K1_PILOT_DIR / f / 'k1_estimates.csv')[:8]}, "
+                       f"run {rows[f][0].get('run')}" for f in K1_PILOT_FORMS) + ")")
+    add("kappa.k1.pilot", "T", "K1 pilots: the range of the Pix change and the savings-only interval", v,
+        "K1 pilot fits (option iii): 300 drawn markets (seed 3), before_after, exit by cell, p99, four "
+        "kappa-tilde starts, cap 500, on the final panel, in three forms (headline; headline with "
+        "--matured-scale; --savings-only). markets: markets in the fits; dk.min/dk.max: smallest and "
+        "largest savings-pair dkappa over the twelve fits (four starts per form, end points as recorded, "
+        "converged or not; detail.fits lists them); so: the savings-only interior optimum's dkappa, its "
+        "cluster-sandwich se by destination conglomerate (se_dkappa) and its 95 percent score wild "
+        "cluster bootstrap interval (Webb weights, symmetric percentile-t; ci_lo/ci_hi_dkappa)", src, "ok",
+        detail=dict(markets_drawn=n_so.get("smoke_test_markets"), rows=int(so["n"]), G=int(so["G"]),
+                    so_se_bootstrap=float(so["se_boot_dkappa"]), so_converged=int(bool(so["converged"])),
+                    so_reason=str(so["reason"]), so_start=float(so["solution_start"]),
+                    fits_converged=sum(f["converged"] for f in fits),
+                    dk_min_fit=f"{lo['form']}, start {lo['start']:g}",
+                    dk_max_fit=f"{hi['form']}, start {hi['start']:g}", fits=fits),
+        display=f"dk [{fmt3s(lo['dkappa'])}, {fmt3s(hi['dkappa'])}] over {len(fits)} fits; savings-only "
+                f"{fmt3s(v['so']['dk'])} ({fmt3s(v['so']['se'])}) {disp_ci(v['so']['ci']['lo'], v['so']['ci']['hi'])}")
 
 
 def collect_pix_adv(notes: list):
@@ -2994,6 +3101,61 @@ def collect_pix_roster(notes: list):
         display=f"mandated {v['n_mandated']}; 2020Q4 savings R$ {fmt3s(v['sav_total_brl_bn']['2020Q4'])} bn, "
                 f"non-mandated R$ {fmt3s(v['sav_nonmandated_brl_mn']['2020Q4'])} mn")
 
+
+# The five largest conglomerates (Banco do Brasil, Bradesco, Caixa, Itau, Santander) by code.
+BIG5_CODES = {"C0080329": "Banco do Brasil", "C0080075": "Bradesco", "C0080738": "Caixa",
+              "C0080099": "Itau", "C0080185": "Santander"}
+
+
+def collect_big5_branches(notes: list):
+    """desc.big5.branch.any: the share of MCAs where at least one of the five largest
+    conglomerates has a branch in 2019Q4, over every MCA of the market panel in that quarter (its
+    market list; the D firms' NATIONAL row is not a market), unweighted (mca_share) and weighted by
+    MCA population (pop_share, pop_total; an MCA without population weighs zero). Branches: ESTBAN's
+    own branch counts by conglomerate, MCA and quarter (PANEL_INTERMED/estban_own_branches.csv,
+    panel_estban_instrument.py; AGEN_PROCESSADAS), own_br > 0. The panel is read by pyarrow column
+    subsets."""
+    import hashlib
+    import pyarrow.parquet as pq
+    panel = _paths.PROCESSED / "market_panel.parquet"
+    side = _paths.PROCESSED / "PANEL_INTERMED" / "estban_own_branches.csv"
+    if not (panel.is_file() and side.is_file()):
+        notes.append("market_panel.parquet or estban_own_branches.csv not found; desc.big5.branch absent.")
+        return
+    t = pq.read_table(panel, columns=["CodConglomeradoPrudencial", "mca_code", "is_B", "year", "quarter",
+                                      "pop_total"]).to_pandas()
+    q = t[(t["year"] == 2019) & (t["quarter"] == 4) & (t["mca_code"].astype(str) != "NATIONAL")]
+    if q.groupby("mca_code")["pop_total"].nunique().max() > 1:
+        notes.append("pop_total varies within an MCA in 2019Q4; desc.big5.branch absent.")
+        return
+    mk = q.groupby("mca_code")["pop_total"].first()
+    missing = sorted(set(BIG5_CODES) - set(t["CodConglomeradoPrudencial"]))
+    if missing:
+        notes.append(f"big-five codes {missing} not in the panel; desc.big5.branch absent.")
+        return
+    o = pd.read_csv(side, dtype={"CodConglomeradoPrudencial": str, "mca_code": str})
+    o = o[(o["year"] == 2019) & (o["quarter"] == 4) & (o["own_br"] > 0)]
+    big = mk.index.isin(o.loc[o["CodConglomeradoPrudencial"].isin(list(BIG5_CODES)), "mca_code"])
+    b_codes = set(t.loc[t["is_B"] == 1, "CodConglomeradoPrudencial"])
+    any_b = mk.index.isin(o.loc[o["CodConglomeradoPrudencial"].isin(b_codes), "mca_code"])
+    pop = mk.fillna(0.0)
+    # The parquet is binary: its id is the md5 of the raw bytes (the panel id used everywhere).
+    panel_md5 = hashlib.md5(panel.read_bytes()).hexdigest()[:8]
+    v = dict(mca_share={"2019Q4": float(big.mean())},
+             pop_share={"2019Q4": float(pop[big].sum() / pop.sum())})
+    add("desc.big5.branch.any", "T15", "MCAs with a branch of the five largest conglomerates, 2019Q4", v,
+        "Share of the market panel's MCAs in 2019Q4 where at least one of Banco do Brasil "
+        "(C0080329), Bradesco (C0080075), Caixa (C0080738), Itau (C0080099) or Santander (C0080185) "
+        "has an own branch (ESTBAN own_br > 0): mca_share unweighted, pop_share weighted by MCA "
+        "population (pop_total)",
+        f"{panel.name} (md5 {panel_md5}, columns by pyarrow) and "
+        f"PANEL_INTERMED/{side.name} (panel_estban_instrument.py)", "ok",
+        detail=dict(panel_md5=panel_md5, mcas=int(len(mk)), mcas_with_big5=int(big.sum()),
+                    mcas_without_b_branch=int((~any_b).sum()),
+                    without_b_branch=sorted(mk.index[~any_b].astype(str))[:20],
+                    mcas_without_population=int(mk.isna().sum())),
+        display=f"{fmt3s(v['mca_share']['2019Q4'])} of {len(mk):,} MCAs; population "
+                f"{fmt3s(v['pop_share']['2019Q4'])}")
 
 def collect_phi_variance(notes: list):
     """How phi-hat_mt spreads across markets and quarters (make_phi_variance.py,
@@ -4124,8 +4286,9 @@ FAMILIES = {
               "collect_dep_anova", "collect_pix_exposure", "collect_branch_estban", "collect_type5_rules",
               "collect_state_selection", "collect_dshare_decomp", "collect_fee_ratio",
               "collect_k2b", "collect_k0", "collect_k2_world", "collect_k2_rc", "collect_k2_steps56", "collect_k1",
+              "collect_k1_pilots",
               "collect_pix_adv",
-              "collect_pix_stakes", "collect_gap4", "collect_pix_roster"),
+              "collect_pix_stakes", "collect_gap4", "collect_pix_roster", "collect_big5_branches"),
     "cluster": ("collect_demand", "collect_table_rows", "collect_table4_sidecar", "phi_base_check",
                 "collect_entry", "collect_entry_counts", "collect_entry_gfb", "collect_state_levels",
                 "collect_first_stage_strength", "collect_xi_diagnostics", "collect_share_cap",
@@ -4208,10 +4371,12 @@ def main():
     collect_k2_rc(notes)
     collect_k2_steps56(notes)
     collect_k1(notes)
+    collect_k1_pilots(notes)
     collect_pix_adv(notes)
     collect_pix_stakes(notes)
     collect_gap4(notes)
     collect_pix_roster(notes)
+    collect_big5_branches(notes)
     add("cf.franchise", "E", "Franchise value of deposit funding (R$ x, R$ y, p, q)", None,
         "Removed from the paper by the user on 2026-09-29.", "--", "dropped", display="dropped")
     for t in _TABLES.values():

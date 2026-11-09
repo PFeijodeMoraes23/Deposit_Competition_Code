@@ -208,3 +208,58 @@ The paper prints them as `\pn[w]`, `\pn[0]`, `\pn[1]` and `\pn[1]`. Until the ke
 **Acceptance.** rc 0, 0 MISMATCH, both keys ok. Post the values here.
 
 **Noted, no action.** The K1-S recheck: step (a) passed, and step (b) is running. The extended E4 fit is adopted, and SUMMARY.md and `coef_heterogeneity.json` now show the extended stage (α −0.700). The paper reads ext1 only. Item 10, cleanup round 2, is Pedro's to run.
+
+## Update 11-08 21:27 (main thread): 1e to 1i read, and K1 option (iii) needs seven pilot keys
+
+**Read and used.** 1f (94 and 99 percent), 1g (gfb on I2), 1h (state-vector diagnostic; the D gap is now +0.001) and 1i (K2 on I2, including the refreshed RC rows on the extended-stage DGP). The plan now has:
+- V1, "below" becomes "above" at VF 466;
+- V2, the D-firm wording at VF 574;
+- Appendix C's RC paragraph says the DGP is a richer demand specification, with K > L and not the paper's estimate, and that the RC fits are far above the truth and uninformative;
+- the outside-pool paragraph reports κ 2 as 2.008 (0.443), converged, and says the κ 1 fit stopped at the cap;
+- the second-start claim and the table's literal "box" are removed.
+
+The VF 764 key typo is fixed by the plan's Y2. The outside-pool two-start check is not needed now, since the text no longer cites it.
+
+**K1, option (iii) (item 3, closed).** The paper now says that the pilots do not pin down the change, gives the range of the change across the pilot fits and the savings-only interval, and reports no estimate. It needs seven keys. Today the numbers exist only in the scratch files of `kappa_1105` and in the kappa note.
+1. **Promote the pilot outputs first.** Copy the pilot result files (headline four starts, `--matured-scale`, savings-only; 300 markets, seed 3, p99, exit by cell, on `fa38794d`) from scratch to `Rout/k1_pilots_fa38794d/`, with md5s. Make no reruns.
+2. **Key them in `make_paper_numbers.py`** (family "kappa"):
+
+| key | definition | kappa note's value |
+|---|---|---|
+| `kappa.k1.pilot.markets` | markets in the pilot sample | 300 |
+| `kappa.k1.pilot.dk.min` | smallest d$\tilde\kappa$ (savings pair, after minus before) over every pilot fit (all forms, starts, interior and boundary optima) | about −12 |
+| `kappa.k1.pilot.dk.max` | the largest, same set | about +0.3 |
+| `kappa.k1.pilot.so.dk` | savings-only interior fit, d$\tilde\kappa$ | −0.34 |
+| `kappa.k1.pilot.so.se` | its standard error | 2.1 |
+| `kappa.k1.pilot.so.ci.lo`, `.ci.hi` | its 95 percent interval | −3.4, 2.7 |
+
+3. **Report alongside the keys:**
+   - the list of fits that enter the min and max, each with its form, start, converged flag and SSR;
+   - whether the savings-only standard error is the wild cluster bootstrap or the sandwich.
+
+**Acceptance.** rc 0, 0 MISMATCH, seven keys ok, values posted here. No text change by the agents.
+
+## Update 11-08 21:30 (main thread): Pedro's go on TR5 and cleanup round 2
+
+**Pedro (11-08):** "I am ok doing the cleanup and start the TR5 on the cluster."
+
+1. **Cleanup round 2.** Pedro runs `scratchpad\cleanup_round2.ps1` (23 targets, 33.9 GB) himself. Afterwards, confirm that nothing the current paper numbers read was removed: run `make_paper_numbers.py`, expect rc 0, 0 MISMATCH and ok 332 or more, and post the free space on C:.
+2. **TR5 on I2.**
+   - Pedro submits your four cluster lines (item 1i): the no-op overlay, the new scratch root, and the `cmp` of the eight overlay files after the build. Post the job IDs here when he has.
+   - When the packs are back, back up the R3 files, unzip them into `ESTIMATION_OUTPUT/TR5/<v>/`, and rebuild the paper numbers.
+   - Then report, for VF 827:
+     - old → new for `tr5.no5.E3.phi_mean`, `tr5.d5only.E3.phi_mean`, `tr5.no5.E3.alpha_logit` and `tr5.d5only.E3.alpha_logit`, against production's `tr5.no5.E3.phi_mean_prod` and `demand.t5.alpha.E3`;
+     - whether the footnote's comparison still reads as written. No text change by the agents.
+3. **Not needed.** The outside-pool two-start check (item 1i, offer). The plan no longer cites it.
+4. **Still open from 21:28.** The K1 pilot outputs moved into `Rout/k1_pilots_fa38794d/`, and the seven `kappa.k1.pilot.*` keys.
+
+## Update 11-08 21:47 (main thread): K1 keys received; what to check after the K2b rerun
+
+**Received.** The seven `kappa.k1.pilot.*` keys. The text uses `markets` (142) as "a pilot sample of 142 markets", which is right, so keep 142 as the key. It also now says that none of the fits converges and that the interval is a wild cluster bootstrap interval. TR5 jobs 32619398 and 32619399 are noted. The cleanup is noted (106 GB free).
+
+**K2b on I2 (Kappa agent).** When step 2b, `tab_k2b_pairs` and the `kappa.k2b.*` keys are rebuilt, report old → new for each key, and say whether each of these sentences still holds:
+1. Section 7.3 (plan E3c): "The headline object is recovered"; the savings-pair change lies between two fits; the price coefficient is recovered; "the level is less secure… in three of the four fits it lies below the truth by more than its standard error"; "the dose fit with pool-specific denominators stopped at its iteration cap"; "the checking pair is not pinned down even where the common denominator holds"; the time-deposit pair's dose lies "on opposite sides of the truth".
+2. Appendix C (plan E4): the same claims in "Three results carry into the design", and the table notes of `tab:k2b_pairs`, including the FE dose fit "printed as at bound".
+3. Whether step 2b's true α is now I2's, and which demand stage it reads.
+
+No text change by the agents.

@@ -2,6 +2,10 @@
 
 **To:** the IMPR session (the main agent). **From:** the main thread, for Pedro; written 11-04 23:05, consolidated 11-05 00:10. **Scope.** On 11-05 Pedro sends you one command and you run everything below, spawning one subagent per thread (Kappa, Pix, tables) briefed from the thread section here. The four thread handoffs (`impr_handoff_2026-11-03.md`, `kappa_handoff_2026-11-03.md`, `pix_handoff_2026-11-04.md`, `tables_handoff_2026-11-04.md`) were deleted on 11-05 at Pedro's instruction; this brief is self-contained. Their rules are in Section 0, their approved script changes (with LF md5s) in each thread section, the I10 map in Section 2, and their decisions in `SHARED_MEMORY.md`. `SHARED_MEMORY.md` entries 11-04 19:00 to 23:00 are the record of last evening. Nothing below edits `V_Friction.tex`.
 
+## Update 11-08 21:30 (main thread): Pedro's go on TR5 (cluster) and cleanup round 2; K1 pilot keys still open. See the section of the same time at the end of `MAIN_REPLY_2026-11-05.md`.
+
+## Update 11-08 21:27 (main thread): K1 option (iii), promote the pilot outputs and add seven kappa.k1.pilot keys. See the section of the same time at the end of `MAIN_REPLY_2026-11-05.md`.
+
 ## Update 11-08 00:35 (main thread): two keys on the five largest conglomerates' branch presence (2019Q4). See the section of the same time at the end of `MAIN_REPLY_2026-11-05.md`.
 
 ## Update 11-08 00:11 (main thread): four paper keys from R1 (Pix mandate and B savings). See the section of the same time at the end of `MAIN_REPLY_2026-11-05.md`.
